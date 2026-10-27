@@ -715,6 +715,8 @@ type
     procedure ResolveFrameLocations(const AFrames: TGocciaCallFrameArray;
       const ACount: Integer; var ALocations: TGocciaFrameLocationArray);
     procedure InternExecutionSourcePath(const ASourcePath: string);
+    procedure NoteFrameEntry(const ATemplate: TGocciaFunctionTemplate;
+      var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
       const AArgCount: Integer; const APushExecutionContext: Boolean;
@@ -851,6 +853,7 @@ uses
   Goccia.Arithmetic,
   Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
+  Goccia.Bytecode.Debug,
   Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
@@ -8257,8 +8260,8 @@ end;
   A growth is decided inside call setup, which can neither collect nor throw.
   It cannot collect because the callee, the receiver and the arguments of a
   call made from native code are still held only in Pascal locals there
-  (SetupNewFrame copies them into the argument window before anything can
-  collect). It cannot throw because the caller's frame is already saved and
+  (SetupNewFrame copies them into the argument window, or for a callee that
+  never reads one into its registers, before anything can collect). It cannot throw because the caller's frame is already saved and
   the callee's is not yet set up, and unwinding from between the two would
   tear down a frame that does not exist. So a growth that does not fit takes
   only the entries its frame needs, uncharged, and the next instruction
@@ -16027,71 +16030,164 @@ procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
   out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
 var
-  I, RegisterWindow: Integer;
+  I, RegisterWindow, CellWindow, NewRegisterBase, NewArgumentBase: Integer;
+  Template: TGocciaFunctionTemplate;
+  DebugInfo: TGocciaDebugInfo;
   ExecutionRealm: TGocciaRealm;
   FunctionValue: TGocciaValue;
   HasOwnSourceFile: Boolean;
+  Registers: PGocciaRegister;
 begin
   // The collector does not mark the registers of closed numeric frames, which
   // relies on no other frame running above them.
   Assert(FClosedNumericFrameStackCount = 0,
     'A frame was set up above a closed numeric frame');
+  // The template is read through a local: the out parameter is a pointer,
+  // and every read of it would load the pointer again.
+  Template := AClosure.Template;
+  ATemplate := Template;
   AProfileTimestamp := 0;
-  ATemplate := AClosure.Template;
+  APrevCovLine := 0;
   if FShimLoad^.Depth > 0 then
-    NoteShimLoadFrame(ATemplate);
+    NoteShimLoadFrame(Template);
   // The frame's source path is the template's own source file, or the running
   // module's path when it has none. This procedure runs on every call and must
   // not hold that string: a managed local costs an implicit exception frame.
-  HasOwnSourceFile := Assigned(ATemplate.DebugInfo) and
-    (ATemplate.DebugInfo.SourceFile <> '');
+  DebugInfo := Template.DebugInfo;
+  HasOwnSourceFile := Assigned(DebugInfo) and (DebugInfo.SourceFile <> '');
 
-  // Acquire the argument window on the arena (sets FArgumentBase/FArgCount and
-  // FArguments) and store every slot of it straight away: the window is not
-  // cleared, and nothing between here and the last store can collect.
-  AcquireArgumentWindow(AArgCount);
-  for I := 0 to AArgCount - 1 do
-    FArguments[I] := AArguments[I];
   // The register window holds `this` and one register per argument even when
   // the callee declares fewer registers than it is passed arguments.
-  RegisterWindow := ATemplate.MaxRegisters;
+  RegisterWindow := Template.MaxRegisters;
   if RegisterWindow < 1 then
     RegisterWindow := 1;
-  AcquireLocalCells(RegisterWindow);
+  CellWindow := RegisterWindow;
   if RegisterWindow <= AArgCount then
     RegisterWindow := AArgCount + 1;
-  AcquireRegisters(RegisterWindow);
+  NewRegisterBase := FRegisterBase + FRegisterCount;
+  NewArgumentBase := FArgumentBase + FArgCount;
+  if Template.ArgumentWindowUnread and
+     (NewRegisterBase + RegisterWindow <= Length(FRegisterStack)) and
+     (NewArgumentBase < Length(FArgumentStack)) then
+  begin
+    // Nothing reads this frame's argument window, so it gets an empty one
+    // and the arguments go straight into their registers. Neither the
+    // register nor the argument arena grows here, so AArguments still points
+    // at them (the local-cell arena may grow below, after the copy, and
+    // nothing points into it); it can point into this very
+    // register arena, at the caller's registers or, on a tail call, at the
+    // frame being replaced, whose window starts where this one does. There
+    // every argument sits above the register it is copied to, so `this`,
+    // which a tail call's arguments never overlap, is stored first and the
+    // arguments in ascending order. The rest of the window is cleared, as
+    // AcquireRegisters clears it, before anything can collect. FillChar
+    // clears it: a loop of two Int64 stores per register ran fewer
+    // instructions but made native callbacks (Array.prototype.map) about 3%
+    // slower.
+    FArgumentBase := NewArgumentBase;
+    FArgCount := 0;
+    FArguments := @FArgumentStack[NewArgumentBase];
+    Registers := @FRegisterStack[NewRegisterBase];
+    Registers[0] := AThisValue;
+    for I := 0 to AArgCount - 1 do
+      Registers[I + 1] := AArguments[I];
+    if RegisterWindow > AArgCount + 1 then
+      FillChar(Registers[AArgCount + 1],
+        (RegisterWindow - AArgCount - 1) * SizeOf(TGocciaRegister), 0);
+    FRegisterBase := NewRegisterBase;
+    FRegisterCount := RegisterWindow;
+    FRegisters := Registers;
+    AcquireLocalCells(CellWindow);
+  end
+  else
+  begin
+    // Acquire the argument window on the arena (sets FArgumentBase/FArgCount
+    // and FArguments) and store every slot of it straight away: the window is
+    // not cleared, and nothing between here and the last store can collect.
+    AcquireArgumentWindow(AArgCount);
+    for I := 0 to AArgCount - 1 do
+      FArguments[I] := AArguments[I];
+    AcquireLocalCells(CellWindow);
+    AcquireRegisters(RegisterWindow);
+    // Both windows were acquired above and are still as acquired: the
+    // registers exist and no local slot has a cell yet, so these are plain
+    // stores.
+    FRegisters[0] := AThisValue;
+    for I := 0 to AArgCount - 1 do
+      FRegisters[I + 1] := FArguments[I];
+  end;
   FCurrentClosure := AClosure;
-  if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
+  if Assigned(AClosure.GlobalScope) then
     FGlobalScope := AClosure.GlobalScope;
   FCurrentExecutionContextPushed := False;
   Inc(FFrameDepth);
   // Push a deferred frame: store the template pointer and (only when the
   // template has no own source file) the module-path fallback, so an ordinary
   // call performs no per-call stack-trace string work. The resolver registered
-  // in the constructor reproduces ATemplate.Name and the frame's source path
-  // at capture time, keeping Error.stack output byte-identical.
+  // in the constructor reproduces the template's name and the frame's source
+  // path at capture time, keeping Error.stack output byte-identical.
   if Assigned(FCallStack) then
   begin
     if FCallStack.Count >= FCallStack.Capacity then
       GrowCallStack;
     if HasOwnSourceFile then
-      FCallStack.PushTemplate(Pointer(ATemplate), '')
+      FCallStack.PushTemplate(Pointer(Template), '')
     else
-      FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
+      FCallStack.PushTemplate(Pointer(Template), FCurrentModuleSourcePath);
   end;
 
   // The dispatch loop's frame record carries only the instruction pointer and
   // the template; its other fields exist for the entries PushFrame saves and
   // are never read from this record, so they are not cleared here.
   AFrame.IP := 0;
-  AFrame.Template := ATemplate;
+  AFrame.Template := Template;
 
-  if not ATemplate.IsArrow then
+  if Template.IsArrow then
+    FCurrentNewTarget := AClosure.NewTarget
+  else
     FCurrentNewTarget := nil;
-  if ATemplate.IsArrow and Assigned(AClosure) then
-    FCurrentNewTarget := AClosure.NewTarget;
 
+  // BytecodeClosureExecutionRealm, with the class of a bytecode function
+  // compared first: it is what almost every closure belongs to, and an exact
+  // class comparison is one load where `is` is a call.
+  ExecutionRealm := FRealm;
+  FunctionValue := AClosure.FunctionValue;
+  if Assigned(FunctionValue) and
+     ((FunctionValue.ClassType = TGocciaBytecodeFunctionValue) or
+      (FunctionValue is TGocciaFunctionBase)) and
+     Assigned(TGocciaFunctionBase(FunctionValue).CreationRealm) then
+    ExecutionRealm := TGocciaFunctionBase(FunctionValue).CreationRealm;
+
+  if APushExecutionContext and Assigned(ExecutionRealm) then
+  begin
+    // Consecutive calls almost always run code from one source file, so the
+    // interned reference of the last path is reused while the path is the
+    // same string.
+    if HasOwnSourceFile then
+    begin
+      if Pointer(DebugInfo.SourceFile) <> Pointer(FExecutionSourcePath) then
+        InternExecutionSourcePath(DebugInfo.SourceFile);
+    end
+    else if Pointer(FCurrentModuleSourcePath) <>
+            Pointer(FExecutionSourcePath) then
+      InternExecutionSourcePath(FCurrentModuleSourcePath);
+    if TGocciaExecutionContextStack.FunctionContextsFull(
+         FExecutionContextThread) then
+      GrowExecutionContextStack;
+    TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
+      ExecutionRealm, FGlobalScope, FunctionValue, FExecutionSourcePathRef);
+    FCurrentExecutionContextPushed := True;
+  end;
+
+  if FCoverageEnabled or FProfilingFunctions then
+    NoteFrameEntry(Template, APrevCovLine, AProfileTimestamp);
+end;
+
+{ The coverage and profiler records of a frame SetupNewFrame has set up, out
+  of line: neither runs unless asked for. }
+procedure TGocciaVM.NoteFrameEntry(const ATemplate: TGocciaFunctionTemplate;
+  var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
+begin
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
      (ATemplate.DebugInfo.LineMapCount > 0) and not ATemplate.IsGenerator then
@@ -16125,49 +16221,9 @@ begin
       ATemplate.ProfileIndex, AProfileTimestamp);
   end;
 
-  // Both windows were acquired above and are still as acquired: the registers
-  // exist and no local slot has a cell yet, so these are plain stores.
-  FRegisters[0] := AThisValue;
-  for I := 0 to AArgCount - 1 do
-    FRegisters[I + 1] := FArguments[I];
-  // BytecodeClosureExecutionRealm, with the class of a bytecode function
-  // compared first: it is what almost every closure belongs to, and an exact
-  // class comparison is one load where `is` is a call.
-  ExecutionRealm := FRealm;
-  FunctionValue := AClosure.FunctionValue;
-  if Assigned(FunctionValue) and
-     ((FunctionValue.ClassType = TGocciaBytecodeFunctionValue) or
-      (FunctionValue is TGocciaFunctionBase)) and
-     Assigned(TGocciaFunctionBase(FunctionValue).CreationRealm) then
-    ExecutionRealm := TGocciaFunctionBase(FunctionValue).CreationRealm;
-
-  if APushExecutionContext and Assigned(ExecutionRealm) then
-  begin
-    // Consecutive calls almost always run code from one source file, so the
-    // interned reference of the last path is reused while the path is the
-    // same string.
-    if HasOwnSourceFile then
-    begin
-      if Pointer(ATemplate.DebugInfo.SourceFile) <>
-         Pointer(FExecutionSourcePath) then
-        InternExecutionSourcePath(ATemplate.DebugInfo.SourceFile);
-    end
-    else if Pointer(FCurrentModuleSourcePath) <>
-            Pointer(FExecutionSourcePath) then
-      InternExecutionSourcePath(FCurrentModuleSourcePath);
-    if TGocciaExecutionContextStack.FunctionContextsFull(
-         FExecutionContextThread) then
-      GrowExecutionContextStack;
-    TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
-      ExecutionRealm, FGlobalScope, FunctionValue, FExecutionSourcePathRef);
-    FCurrentExecutionContextPushed := True;
-  end;
-
   if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and
      (ATemplate.DebugInfo.LineMapCount > 0) then
-    APrevCovLine := ATemplate.DebugInfo.GetLineMapEntry(0).Line
-  else
-    APrevCovLine := 0;
+    APrevCovLine := ATemplate.DebugInfo.GetLineMapEntry(0).Line;
 end;
 
 procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
@@ -16992,8 +17048,8 @@ end;
   callback from Array.prototype.map, a getter, a comparator. The arguments are
   converted on the stack, which keeps this procedure free of a managed local
   (and so of an implicit exception frame, an allocation and a release per
-  call); SetupNewFrame copies them into the callee's argument window before
-  anything can collect. A call with more arguments than the buffer holds
+  call); SetupNewFrame copies them into the callee's argument window, or into
+  its registers when it never reads one, before anything can collect. A call with more arguments than the buffer holds
   stages them on the heap. }
 function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection;

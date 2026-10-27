@@ -300,6 +300,12 @@ type
     Recorded: Boolean;
   end;
 
+  // Whether a frame of a template reads its argument window (the arguments
+  // as passed, apart from the registers they are copied into): found by
+  // scanning the code on the first call, since only the instructions that
+  // read the window and the kinds of function that keep it do.
+  TGocciaArgumentWindowUse = (awuUnknown, awuRead, awuUnread);
+
   TGocciaFunctionTemplate = class
   private
     FName: string;
@@ -402,6 +408,10 @@ type
     // Phase 4). A TGocciaDirectEvalCodeCache, typed as TObject to keep the VM
     // out of this unit; owned here. Not serialised to .gbc.
     FDirectEvalCodeCaches: array of TObject;
+    // Runtime-only: what ArgumentWindowUnread found. Reset whenever the code
+    // changes. Not serialised to .gbc.
+    FArgumentWindowUse: TGocciaArgumentWindowUse;
+    function ScanArgumentWindowUse: TGocciaArgumentWindowUse;
     function PropertyReadSlot(const AConstIndex: Integer): Integer;
     function PropertyWriteSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
@@ -412,6 +422,12 @@ type
     function EmitInstruction(const AInstruction: UInt64;
       const AForceWide: Boolean = False): Integer;
     procedure PatchInstruction(const AIndex: Integer; const AInstruction: UInt64);
+    { True when no frame of this template reads its argument window: the code
+      has no instruction that reads it (OP_ARG_COUNT, OP_LOAD_ARGUMENT,
+      OP_PACK_ARGS, OP_CREATE_ARGUMENTS) and no direct eval, and the function
+      is neither async nor a generator, whose continuations keep the window.
+      Such a frame's arguments live only in its registers. }
+    function ArgumentWindowUnread: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     { Records the callee of the call/construct instruction that starts at APC.
       APC must be the value CodeCount had immediately before the instruction
       was emitted, which is what the VM sees as the instruction's start IP
@@ -731,6 +747,7 @@ begin
   FCode[FCodeCount] := UInt32(AInstruction and $FFFFFFFF);
   Result := FCodeCount;
   Inc(FCodeCount);
+  FArgumentWindowUse := awuUnknown;
 end;
 
 procedure TGocciaFunctionTemplate.AddCallSite(const APC: UInt32;
@@ -816,6 +833,32 @@ begin
       (((HighOperands shr 16) and $FF) shl 24);
   end;
   FCode[AIndex] := UInt32(AInstruction and $FFFFFFFF);
+  FArgumentWindowUse := awuUnknown;
+end;
+
+function TGocciaFunctionTemplate.ArgumentWindowUnread: Boolean;
+begin
+  if FArgumentWindowUse = awuUnknown then
+    FArgumentWindowUse := ScanArgumentWindowUse;
+  Result := FArgumentWindowUse = awuUnread;
+end;
+
+{ Every word is read as an instruction, an OP_WIDE prefix included, so a
+  word that is not one can only make the answer awuRead, never hide a read. }
+function TGocciaFunctionTemplate.ScanArgumentWindowUse: TGocciaArgumentWindowUse;
+var
+  I: Integer;
+begin
+  Result := awuRead;
+  if FIsAsync or FIsGenerator then
+    Exit;
+  for I := 0 to FCodeCount - 1 do
+    case DecodeOp(FCode[I]) of
+      Ord(OP_ARG_COUNT), Ord(OP_LOAD_ARGUMENT), Ord(OP_PACK_ARGS),
+      Ord(OP_CREATE_ARGUMENTS), Ord(OP_DIRECT_EVAL):
+        Exit;
+    end;
+  Result := awuUnread;
 end;
 
 function TGocciaFunctionTemplate.AddConstantNil: UInt16;
