@@ -183,7 +183,7 @@ console.log("Function parameter-list early errors...");
   for (const [source, args] of [
     [`const f = (${names}) => 0;\n`, []],
     [`class C { m(${names}, ...rest) {} }\n`, []],
-    [`function f({ ${names} }, [b0], b1 = 1) { "use strict"; }\n`, ["--compat-function"]],
+    [`function f({ ${names} }, [b0], b1 = 1) {}\n`, ["--compat-function"]],
     [`function f(${names}, a0) { return a0; }\n`, ["--compat-function", "--compat-non-strict-mode"]],
   ] as const) {
     const { exitCode, json } = runLoaderJson(source, [...args]);
