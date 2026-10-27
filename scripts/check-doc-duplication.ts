@@ -186,11 +186,11 @@ const tokenise = (content: string, file: string): WordEntry[] => {
 
 // ── Suffix array + LCP ────────────────────────────────────────────────
 
-// Cap suffix comparison depth. For MIN_WORDS=35, we only need to compare
-// enough words to distinguish suffixes for clone detection. Comparing beyond
-// this depth doesn't change which clones we find, but dramatically reduces
-// sort time from O(n² log n) to O(n · CAP · log n).
-const SUFFIX_CMP_CAP = 64;
+// Cap suffix comparison depth. A clone needs MIN_WORDS matching words, so
+// comparing at least that deep finds every clone; comparing further doesn't
+// change which clones we find, but dramatically reduces sort time from
+// O(n² log n) to O(n · CAP · log n).
+const SUFFIX_CMP_CAP = Math.max(64, MIN_WORDS);
 const CMP_RANGE = range(SUFFIX_CMP_CAP);
 
 const buildSuffixArray = (words: string[]): Int32Array => {
