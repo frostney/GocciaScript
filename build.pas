@@ -21,6 +21,12 @@ var
     compiled into its own unit caches and written to build/gc-stress/ so it
     never mixes with, or replaces, the ordinary binaries. }
   GCStressBuild: Boolean = False;
+  { --layout-probe: a production build with -dGOCCIA_VM_LAYOUT_PROBE, which
+    moves the VM's hot code by a few hundred bytes and changes nothing else,
+    compiled into its own unit caches and written to build/layout-probe/.
+    Benchmarked against the ordinary production build, it shows how much code
+    placement alone moves a benchmark (issue #1917). }
+  LayoutProbeBuild: Boolean = False;
   CleanRequested: Boolean = False;
   GVersion, GCommit, GBuildDate: string;
 
@@ -253,14 +259,21 @@ begin
   Result := 'build' + DirectorySeparator + 'gc-stress';
 end;
 
-{ Root of the unit caches. The GC-stress build keeps its own, because FPC does
-  not recompile a unit when only the defines change: a shared cache would hand
-  stress-compiled units to an ordinary build, or the reverse. }
+function LayoutProbeExecutableDirectory: string;
+begin
+  Result := 'build' + DirectorySeparator + 'layout-probe';
+end;
+
+{ Root of the unit caches. The GC-stress and layout-probe builds keep their
+  own, because FPC does not recompile a unit when only the defines change: a
+  shared cache would hand their units to an ordinary build, or the reverse. }
 function CompiledRootDirectory: string;
 begin
   Result := 'build' + DirectorySeparator + 'compiled';
   if GCStressBuild then
-    Result := Result + DirectorySeparator + 'gc-stress';
+    Result := Result + DirectorySeparator + 'gc-stress'
+  else if LayoutProbeBuild then
+    Result := Result + DirectorySeparator + 'layout-probe';
 end;
 
 function FPCArgs(const ASource: string;
@@ -295,6 +308,11 @@ begin
       Args.Add('-CX');
       Args.Add('-XX');
       Args.Add('-B');
+      if LayoutProbeBuild then
+      begin
+        Args.Add('-dGOCCIA_VM_LAYOUT_PROBE');
+        Args.Add('-FE' + LayoutProbeExecutableDirectory);
+      end;
     end else
     begin
       Args.Add('-O-');
@@ -667,6 +685,8 @@ begin
       BuildMode := bmProd
     else if ParamStr(I) = '--gc-stress' then
       GCStressBuild := True
+    else if ParamStr(I) = '--layout-probe' then
+      LayoutProbeBuild := True
     else if ParamStr(I) = '--clean' then
       CleanRequested := True
     else
@@ -680,7 +700,21 @@ begin
     Halt(1);
   end;
 
-  if BuildMode = bmProd then
+  if LayoutProbeBuild and (BuildMode <> bmProd) then
+  begin
+    WriteLn('--layout-probe measures production code placement; it needs ' +
+      '--prod');
+    Halt(1);
+  end;
+
+  if LayoutProbeBuild then
+  begin
+    WriteLn('Build mode: production, layout probe (binaries in ',
+      LayoutProbeExecutableDirectory, ')');
+    if not DirectoryExists(LayoutProbeExecutableDirectory) then
+      CreateDir(LayoutProbeExecutableDirectory);
+  end
+  else if BuildMode = bmProd then
     WriteLn('Build mode: production')
   else if GCStressBuild then
   begin

@@ -12,6 +12,9 @@ pre-commit:
     check-vm-stack-stores:
       glob: "**/*.{pas,inc,dpr}"
       run: npx tsx scripts/check-vm-stack-stores.ts
+    check-vm-dispatch-layout:
+      glob: "source/units/Goccia.VM{.pas,.DispatchCase.inc}"
+      run: npx tsx scripts/check-vm-dispatch-layout.ts
     lint-markdown:
       glob: "**/*.md"
       run: npx markdownlint-cli2 {staged_files}
