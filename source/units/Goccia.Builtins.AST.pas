@@ -84,6 +84,8 @@ type
     FirstChild: Integer;
     LastChild: Integer;
     NextSibling: Integer;
+    HasTypeOnly: Boolean;
+    TypeOnly: Boolean;
   end;
 
   { Flattens a TGocciaProgram into the node records the JavaScript view is
@@ -130,6 +132,40 @@ type
     property Count: Integer read FCount;
   end;
 
+{ A type-level declaration reaches the tree as the empty statement the parser
+  erased it into, and is reported as what it was written as. }
+function ErasedTypeKindName(const AKind: TGocciaErasedTypeKind): string;
+begin
+  case AKind of
+    etkTypeAlias: Result := 'TypeAliasDeclaration';
+    etkInterface: Result := 'InterfaceDeclaration';
+    etkExportTypeAlias: Result := 'ExportTypeAliasDeclaration';
+    etkExportInterface: Result := 'ExportInterfaceDeclaration';
+    etkImport: Result := 'ImportDeclaration';
+    etkExport: Result := 'ExportDeclaration';
+    etkReExport: Result := 'ReExportDeclaration';
+  else
+    Result := 'EmptyStatement';
+  end;
+end;
+
+{ Whether a node of this statement's kind carries `typeOnly`, and its value.
+  The module forms carry it either way, because the same kind is both a
+  runtime and an erased statement; the type declarations always carry true. }
+function StatementTypeOnly(const AStatement: TGocciaStatement;
+  out ATypeOnly: Boolean): Boolean;
+begin
+  if AStatement is TGocciaEmptyStatement then
+  begin
+    ATypeOnly := TGocciaEmptyStatement(AStatement).ErasedTypeKind <> etkNone;
+    Exit(ATypeOnly);
+  end;
+  ATypeOnly := False;
+  Result := (AStatement is TGocciaImportDeclaration) or
+    (AStatement is TGocciaExportDeclaration) or
+    (AStatement is TGocciaReExportDeclaration);
+end;
+
 function StatementKind(const AStatement: TGocciaStatement): string;
 begin
   // Ordered so a subclass is tested before its base.
@@ -164,7 +200,8 @@ begin
   else if AStatement is TGocciaBreakStatement then Result := 'BreakStatement'
   else if AStatement is TGocciaContinueStatement then Result := 'ContinueStatement'
   else if AStatement is TGocciaUsingDeclaration then Result := 'UsingDeclaration'
-  else if AStatement is TGocciaEmptyStatement then Result := 'EmptyStatement'
+  else if AStatement is TGocciaEmptyStatement then
+    Result := ErasedTypeKindName(TGocciaEmptyStatement(AStatement).ErasedTypeKind)
   else Result := 'Statement';
 end;
 
@@ -232,6 +269,8 @@ begin
   FNodes[Result].FirstChild := -1;
   FNodes[Result].LastChild := -1;
   FNodes[Result].NextSibling := -1;
+  FNodes[Result].HasTypeOnly := False;
+  FNodes[Result].TypeOnly := False;
 
   { Children are kept in source order, which for the three kinds that own a
     statement list is also the order the walk produces them in. It is not for
@@ -608,6 +647,8 @@ begin
 
   Inc(FDepth);
   Index := Emit(StatementKind(AStatement), AStatement.Span);
+  FNodes[Index].HasTypeOnly := StatementTypeOnly(AStatement,
+    FNodes[Index].TypeOnly);
   SavedParent := FParent;
   Push(Index);
   try
@@ -799,6 +840,11 @@ begin
       TGocciaNumberLiteralValue.Create(Node.EndOffset));
     Result.AssignProperty('loc', CreateLocObject(Node.StartLine,
       Node.StartColumn, Node.EndLine, Node.EndColumn));
+    if Node.HasTypeOnly then
+      if Node.TypeOnly then
+        Result.AssignProperty('typeOnly', TGocciaBooleanLiteralValue.TrueValue)
+      else
+        Result.AssignProperty('typeOnly', TGocciaBooleanLiteralValue.FalseValue);
 
     Position := 0;
     ChildIndex := Node.FirstChild;

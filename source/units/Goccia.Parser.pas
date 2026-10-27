@@ -5447,7 +5447,8 @@ begin
     Column := Peek.Column;
     Advance;
     SkipUntilSemicolon;
-    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column));
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkTypeAlias);
   end
   else if CheckUnescapedIdentifierKeyword(KEYWORD_INTERFACE) and IsTypeDeclaration then
   begin
@@ -5456,7 +5457,8 @@ begin
     Advance;
     Advance;
     SkipInterfaceDeclaration;
-    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column));
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkInterface);
   end
   else if IsLexicalDeclarationStart then
   begin
@@ -7684,7 +7686,8 @@ begin
   begin
     Advance;
     SkipUntilSemicolon;
-    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column));
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkImport);
     Exit;
   end;
 
@@ -7925,8 +7928,36 @@ var
   NameToken: TGocciaToken;
   IsReExport: Boolean;
   IsTypeOnlyBinding: Boolean;
+  ErasedTypeKind: TGocciaErasedTypeKind;
+  ErasedListStart: Integer;
   AsyncLine, AsyncColumn: Integer;
   I: Integer;
+
+  { `export type` is followed by a specifier list, a wildcard re-export, or
+    the name of an alias. Called with the token after `type` current. }
+  function ExportedErasedTypeKind: TGocciaErasedTypeKind;
+  begin
+    if Check(gttLeftBrace) then
+      Result := etkExport
+    else if Check(gttStar) then
+      Result := etkReExport
+    else
+      Result := etkExportTypeAlias;
+  end;
+
+  { Reads only tokens the skip has already consumed, so it lexes nothing
+    ahead and cannot change how the erased statement was tokenized. }
+  function HasFromClauseAfterErasedList: Boolean;
+  var
+    ScanIndex: Integer;
+  begin
+    ScanIndex := ErasedListStart;
+    while (ScanIndex < FCurrent) and
+      (FTokens[ScanIndex].TokenType <> gttRightBrace) do
+      Inc(ScanIndex);
+    Result := (ScanIndex + 1 < FCurrent) and
+      (FTokens[ScanIndex + 1].TokenType = gttFrom);
+  end;
 
   function HasFromClauseAfterNamedExports: Boolean;
   var
@@ -7988,8 +8019,13 @@ begin
   if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) then
   begin
     Advance;
+    ErasedListStart := FCurrent;
+    ErasedTypeKind := ExportedErasedTypeKind;
     SkipUntilSemicolon;
-    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column));
+    if (ErasedTypeKind = etkExport) and HasFromClauseAfterErasedList then
+      ErasedTypeKind := etkReExport;
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      ErasedTypeKind);
     Exit;
   end;
 
@@ -7998,7 +8034,8 @@ begin
     Advance;
     Advance;
     SkipInterfaceDeclaration;
-    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column));
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkExportInterface);
     Exit;
   end;
 

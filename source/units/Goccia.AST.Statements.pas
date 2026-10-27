@@ -557,9 +557,29 @@ type
     property NamespaceName: string read FNamespaceName;
   end;
 
+  { The type-level declaration an empty statement was erased from. Types are
+    comments at run time, so the evaluator and the compiler treat every one of
+    these as the empty statement it is; the kind exists for tools that report
+    on the source text, which must not mistake a type declaration for a stray
+    `;`. }
+  TGocciaErasedTypeKind = (
+    etkNone,             // `;`, or a statement erased for a reason other than types
+    etkTypeAlias,        // type T = ...;
+    etkInterface,        // interface I {}
+    etkExportTypeAlias,  // export type T = ...;
+    etkExportInterface,  // export interface I {}
+    etkImport,           // import type ... from "...";
+    etkExport,           // export type { A };
+    etkReExport          // export type { A } from "...";  export type * from "...";
+  );
+
   TGocciaEmptyStatement = class(TGocciaStatement)
+  private
+    FErasedTypeKind: TGocciaErasedTypeKind;
   public
-    constructor Create(const ASpan: TGocciaSourceSpan);
+    constructor Create(const ASpan: TGocciaSourceSpan;
+      const AErasedTypeKind: TGocciaErasedTypeKind = etkNone);
+    property ErasedTypeKind: TGocciaErasedTypeKind read FErasedTypeKind;
   end;
 
   TGocciaCaseClause = class(TGocciaASTNode)
@@ -1056,9 +1076,11 @@ end;
 
   { TGocciaEmptyStatement }
 
-  constructor TGocciaEmptyStatement.Create(const ASpan: TGocciaSourceSpan);
+  constructor TGocciaEmptyStatement.Create(const ASpan: TGocciaSourceSpan;
+    const AErasedTypeKind: TGocciaErasedTypeKind = etkNone);
   begin
     inherited Create(ASpan);
+    FErasedTypeKind := AErasedTypeKind;
   end;
 
   { TGocciaWhileStatement }

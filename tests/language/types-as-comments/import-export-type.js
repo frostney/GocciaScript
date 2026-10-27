@@ -9,6 +9,13 @@ import { type as kind } from "./helpers/type-value-export.js";
 import { value } from "./helpers/mixed-type-export.js";
 import { kind as exportedKind } from "./helpers/type-renamed-export.js";
 import { answer } from "./helpers/exported-interface.js";
+import type * as MissingNamespace from "./helpers/nonexistent-namespace.js";
+
+// None of these modules exists. Each statement is erased whole, so this file
+// loads without trying to resolve any of them.
+export type { MissingValueType } from "./helpers/nonexistent-re-export.js";
+export type * from "./helpers/nonexistent-star.js";
+export type * as MissingStar from "./helpers/nonexistent-star.js";
 
 test("import type is skipped", () => {
   import type { Foo } from './nonexistent.js';
@@ -44,4 +51,25 @@ test("type named export can still be re-exported as a value binding", () => {
 
 test("export interface is skipped while value exports remain available", () => {
   expect(answer).toBe(42);
+});
+
+test("type-only namespace imports and type-only re-exports load nothing", () => {
+  expect(typeof MissingNamespace).toBe("undefined");
+  expect(typeof MissingStar).toBe("undefined");
+});
+
+test("type declarations in a block or a switch case bind nothing", () => {
+  {
+    type InBlock = number;
+    interface AlsoInBlock {}
+    expect(typeof InBlock).toBe("undefined");
+    expect(typeof AlsoInBlock).toBe("undefined");
+  }
+  const kind = 1;
+  switch (kind) {
+    case 1:
+      type InCase = string;
+      expect(typeof InCase).toBe("undefined");
+      break;
+  }
 });
