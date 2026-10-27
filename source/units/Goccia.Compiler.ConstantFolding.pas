@@ -5,16 +5,10 @@ unit Goccia.Compiler.ConstantFolding;
 interface
 
 uses
-  Generics.Collections,
-
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Context;
-
-type
-  // The operands a failed constant evaluation found not to be constants.
-  TGocciaNotConstantPath = TList<TGocciaExpression>;
 
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression;
@@ -27,7 +21,7 @@ function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   first, without AExpr itself. }
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue;
-  const ANotConstant: TGocciaNotConstantPath): Boolean; overload;
+  const ANotConstant: TGocciaExpressionList): Boolean; overload;
 function TryEmitConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; const ADest: UInt16): Boolean;
 { Under strict types, compiles AExpr as a simpler expression its operand
@@ -468,7 +462,7 @@ end;
 
 function TryEvaluateUnaryExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaUnaryExpression; out AValue: TGocciaCompileTimeValue;
-  const ANotConstant: TGocciaNotConstantPath): Boolean;
+  const ANotConstant: TGocciaExpressionList): Boolean;
 var
   Operand: TGocciaCompileTimeValue;
   NumberValue: Double;
@@ -541,7 +535,7 @@ end;
 
 function TryEvaluateBinaryExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; out AValue: TGocciaCompileTimeValue;
-  const ANotConstant: TGocciaNotConstantPath): Boolean;
+  const ANotConstant: TGocciaExpressionList): Boolean;
 var
   LeftValue, RightValue: TGocciaCompileTimeValue;
 
@@ -692,7 +686,7 @@ end;
 
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue;
-  const ANotConstant: TGocciaNotConstantPath): Boolean;
+  const ANotConstant: TGocciaExpressionList): Boolean;
 begin
   ResetCompileTimeValue(AValue, ctvkUnknown);
   if not (ACtx.OptimizationOptions.EnableConstantFolding or

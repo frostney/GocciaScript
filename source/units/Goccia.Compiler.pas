@@ -73,8 +73,8 @@ type
     // known while the template emits nothing but folded constants, which
     // change nothing a constant depends on (CompileExpressionNode).
     // FNotConstantScratch holds the operands of a try that is under way.
-    FNotConstantPath: TList<TGocciaExpression>;
-    FNotConstantScratch: TList<TGocciaExpression>;
+    FNotConstantPath: TGocciaExpressionList;
+    FNotConstantScratch: TGocciaExpressionList;
     FNotConstantPending: Integer;
     FNotConstantTemplate: TGocciaFunctionTemplate;
     FNotConstantCodeCount: Integer;
@@ -250,8 +250,8 @@ begin
   FBlockFunctionVarBindings := TBlockFunctionVarBindingSet.Create;
   FEnteredTemplates := TList<TGocciaFunctionTemplate>.Create;
   FFarBranchFunctions := TDictionary<string, Boolean>.Create;
-  FNotConstantPath := TList<TGocciaExpression>.Create;
-  FNotConstantScratch := TList<TGocciaExpression>.Create;
+  FNotConstantPath := TGocciaExpressionList.Create;
+  FNotConstantScratch := TGocciaExpressionList.Create;
   FDerivedConstructorThisGuard := False;
   FModule := nil;
   FCurrentTemplate := nil;
@@ -459,7 +459,7 @@ procedure TGocciaCompiler.CompileExpressionNode(
 var
   Ctx: TGocciaCompilationContext;
   Value: TGocciaCompileTimeValue;
-  Known, Swap: TList<TGocciaExpression>;
+  Known, Swap: TGocciaExpressionList;
   NextNotConstant: TGocciaExpression;
   CodeCount: Integer;
   Simplified: Boolean;
