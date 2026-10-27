@@ -409,8 +409,7 @@ type
     function Unary: TGocciaExpression;
     function Call: TGocciaExpression;
     function ParseTaggedTemplate(const ATag: TGocciaExpression;
-      const ATemplateToken: TGocciaToken;
-      const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
+      const ATemplateToken: TGocciaToken): TGocciaTaggedTemplateExpression;
     function ParseTemplateLiteral(const AToken: TGocciaToken): TGocciaExpression;
     function ConsumeTemplateContinuation: TGocciaToken;
     function ParseImportCallExpression(const AToken: TGocciaToken;
@@ -2718,9 +2717,7 @@ begin
               'Optional chains cannot be used as unparenthesized template tags',
               Peek.Line, Peek.Column, FFileName, FSourceLines);
           Token := Advance;
-          Line := Token.Line;
-          Column := Token.Column;
-          Result := ParseTaggedTemplate(Result, Token, Line, Column);
+          Result := ParseTaggedTemplate(Result, Token);
           CountChainLink;
         end;
       gttLess:
@@ -2877,8 +2874,7 @@ end;
 // TC39 Template Literal Revision: malformed escapes produce undefined cooked
 // values for tagged templates while preserving each raw segment.
 function TGocciaParser.ParseTaggedTemplate(const ATag: TGocciaExpression;
-  const ATemplateToken: TGocciaToken;
-  const ALine, AColumn: Integer): TGocciaTaggedTemplateExpression;
+  const ATemplateToken: TGocciaToken): TGocciaTaggedTemplateExpression;
 var
   CookedStrings, RawStrings: TGocciaTemplateStrings;
   CookedValid: TGocciaTemplateCookedValid;
@@ -2908,8 +2904,11 @@ begin
     raise;
   end;
 
+  { From the template's first character. A template token's Line is the line
+    it ends on, so a position built from Line and Column does not name its
+    start once the template spans lines. }
   Result := TGocciaTaggedTemplateExpression.Create(ATag, CookedStrings, RawStrings,
-    CookedValid, Expressions, SourceSpanAtPosition(ALine, AColumn));
+    CookedValid, Expressions, SourceSpanFromToken(ATemplateToken));
 end;
 
 // ES2026 §13.2.8 Template Literals
@@ -3276,7 +3275,7 @@ begin
         while Check(gttTemplate) or Check(gttTemplateHead) do
         begin
           Token := Advance;
-          Expr := ParseTaggedTemplate(Expr, Token, Token.Line, Token.Column);
+          Expr := ParseTaggedTemplate(Expr, Token);
           CountChainLink;
         end;
         LeaveNesting;

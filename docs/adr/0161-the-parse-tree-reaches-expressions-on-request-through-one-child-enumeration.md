@@ -88,6 +88,9 @@ start where a diagnostic reads it unless the start itself was wrong:
 
 - A template literal with substitutions spanned only its first segment;
   `import.meta`, `new.target` and `import(...)` spanned only their keyword.
+- A tagged template whose template spans lines lost its template: its
+  position was built from the line the template ends on. It now starts at the
+  template's first character, so such a call is also located there.
 - An object literal containing a spread took its position from the spread.
 - An async arrow function started at its `(`; it starts at `async`, on the
   same line, so only the column its debug position records moves. Its
@@ -149,15 +152,16 @@ reported as usual.
 
 ### What this does not add
 
-- **A flat `tokens` array.** A separate request, delivered separately.
+- **A flat `tokens` array.** A separate request ([#1923](https://github.com/frostney/GocciaScript/issues/1923)), delivered separately.
 - **Type annotation, type literal and type argument ranges.** Types are erased
   before the tree exists; recording their spans is a parser change of the kind
-  ADR 0118 made for statements, and its own slice.
+  ADR 0118 made for statements, and its own slice
+  ([#1929](https://github.com/frostney/GocciaScript/issues/1929)).
 - **Variable declarators, object-pattern properties and their keys, labels,
   the patterns of `match`, and JSX attributes and text.** Each needs a range
   the parser does not record yet. Until then a declaration's initializers, a
   pattern's targets and an element's braces are reported directly beneath the
-  node around them.
+  node around them ([#1928](https://github.com/frostney/GocciaScript/issues/1928)).
 
 ## Consequences
 

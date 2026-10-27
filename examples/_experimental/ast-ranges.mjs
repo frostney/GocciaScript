@@ -95,7 +95,7 @@ const expressionWrapperFor = (kind, slice) => {
   }
 
   if (kind === "Parameter") {
-    return { prefix: "const __probe = (", suffix: ") => 0;\n" };
+    return { prefix: "class __Probe {\nprobe(", suffix: ") {}\n}\n" };
   }
 
   if (CLASS_MEMBER_KINDS.includes(kind)) {

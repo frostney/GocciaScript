@@ -113,7 +113,9 @@ declaration.
 Not yet in the view: type annotations (erased before the tree is built),
 variable declarators, the properties of an object pattern, labels, the
 patterns of `match`, and JSX attributes and text. What they contain is
-reported directly beneath the node around them.
+reported directly beneath the node around them
+([#1928](https://github.com/frostney/GocciaScript/issues/1928),
+[#1929](https://github.com/frostney/GocciaScript/issues/1929)).
 
 ## JSX sources
 

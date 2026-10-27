@@ -338,6 +338,14 @@ describe("ast.parse with expressions", () => {
     expect(kinds(tagged)).toEqual(["Identifier", "Identifier"]);
   });
 
+  test("a tagged template that spans lines covers its whole template", () => {
+    const result = parseExpressions("x = String.raw`\nfirst\nsecond`;\n");
+
+    expect(text(result, find(result.root, "TaggedTemplateExpression"))).toBe(
+      "String.raw`\nfirst\nsecond`",
+    );
+  });
+
   test("new, this, sequence and await are reported", () => {
     const result = parseExpressions(
       "x = new Foo(this, 1);\ny = (a, b);\nawait z;\n",
