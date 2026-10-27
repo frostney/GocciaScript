@@ -95,3 +95,29 @@ describe.runIf(typeof Goccia !== "undefined")("Math.pow across a collection", ()
     expect(Math.pow(base, exponent)).toBe(8);
   });
 });
+
+describe("Math.pow precision", () => {
+  test("returns the same Number as the ** operator", () => {
+    const bases = [1e20, 9, 10, 1.1, 27, -3, -2, 0.9, 1.0000001, 5e-324, 1e308];
+    const exponents = [0.5, 2, -5, 30, 1 / 3, 33, 2 ** 31, 1000, 1e7, -0.5, 7.89];
+    for (const x of bases) {
+      for (const y of exponents) {
+        expect(Object.is(Math.pow(x, y), x ** y)).toBe(true);
+      }
+    }
+  });
+
+  test("is correctly rounded where a power and logarithm lose precision", () => {
+    expect(Math.pow(1e20, 0.5)).toBe(10000000000);
+    expect(Math.pow(10, -5)).toBe(0.00001);
+    expect(Math.pow(10, 308)).toBe(1e308);
+    expect(Math.pow(1.1, 30)).toBe(17.44940226888645);
+    expect(Math.pow(5, -3)).toBe(0.008);
+  });
+
+  test("keeps the sign of a negative base for large integral exponents", () => {
+    expect(Math.pow(-2, 2 ** 31)).toBe(Infinity);
+    expect(Math.pow(-3, 2 ** 31 + 1)).toBe(-Infinity);
+    expect(Math.pow(-1, 1e300)).toBe(1);
+  });
+});

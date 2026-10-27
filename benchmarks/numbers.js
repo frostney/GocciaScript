@@ -16,6 +16,9 @@ const ToStringNonIntegerSamples = [
   5.7016275775556e-8,
 ];
 
+// Read through an array so the exponentiations run instead of folding.
+const PowerBases = [1.5, 3, 10, 0.75, 1e20, 7.25];
+
 group("number creation", () => {
   bench("integer arithmetic", () => {
     const a = 42;
@@ -101,5 +104,27 @@ group("number static methods", () => {
     const a = Number.parseInt("42");
     const b = Number.parseFloat("3.14");
     const c = Number.parseInt("ff", 16);
+  });
+});
+
+group("exponentiation", () => {
+  bench("** with integer exponents", () => {
+    let sum = 0;
+    for (const x of PowerBases) sum += x ** 3 + x ** -2 + x ** 10;
+  });
+
+  bench("** with fractional exponents", () => {
+    let sum = 0;
+    for (const x of PowerBases) sum += x ** 0.3 + x ** 1.7 + x ** -0.25;
+  });
+
+  bench("** 2 and ** 0.5", () => {
+    let sum = 0;
+    for (const x of PowerBases) sum += x ** 2 + x ** 0.5;
+  });
+
+  bench("Math.pow", () => {
+    let sum = 0;
+    for (const x of PowerBases) sum += Math.pow(x, 3) + Math.pow(x, 0.3);
   });
 });
