@@ -96,7 +96,7 @@ const COMPILE_COUNTERS = [
   "nodesCompiled", "constantEmitAttempts", "constantEvaluationVisits",
   "expressionTypeVisits", "numberProofVisits", "localLookups",
   "localLookupProbes", "upvalueResolutions", "upvalueListProbes",
-  "depthResetScans", "parameterNameProbes", "bindingNameLookups",
+  "localListScans", "parameterNameProbes", "bindingNameLookups",
   "bindingNameProbes",
 ];
 

@@ -54,9 +54,11 @@ type
     // entries scanned for an existing capture.
     ccUpvalueResolutions,
     ccUpvalueListProbes,
-    // Locals visited by the per-depth resets of a block or case clause
-    // (ClearInitializedAtDepth, ClearConstantValuesAtDepth).
-    ccDepthResetScans,
+    // Locals visited by walks over a function scope's list of locals: the
+    // reset of what earlier case clauses settled (ForgetCaseClauseFacts),
+    // relinking the names after a rename (RelinkLocalNames), and suspending
+    // the bindings a finally block must not see (SuspendBindingsDeeperThan).
+    ccLocalListScans,
     // Parameter names examined when a function records its parameters.
     ccParameterNameProbes,
     // Lookups in a list of unique binding names (collecting a pattern's or a
@@ -174,7 +176,7 @@ const
     'localLookupProbes',
     'upvalueResolutions',
     'upvalueListProbes',
-    'depthResetScans',
+    'localListScans',
     'parameterNameProbes',
     'bindingNameLookups',
     'bindingNameProbes');
@@ -189,7 +191,7 @@ const
     'Local lookup probes',
     'Upvalue resolutions',
     'Upvalue list probes',
-    'Depth-reset local scans',
+    'Local-list scans',
     'Parameter-name probes',
     'Binding-name lookups',
     'Binding-name probes');
