@@ -59,9 +59,8 @@ const LOOP_SUFFIX = `\n}${FUNCTION_SUFFIX}`;
 const SWITCH_PREFIX = `${FUNCTION_PREFIX}switch (0) {\n`;
 const SWITCH_SUFFIX = `\n}${FUNCTION_SUFFIX}`;
 
-// Expression-level kinds that a re-parse cannot place on their own: a
-// pattern means something else outside a binding, and a template's or a
-// match's inner nodes are checked through the expression around them.
+// Expression-level kinds that a re-parse cannot place on their own: the
+// patterns, which mean something else outside a binding or assignment target.
 const UNREPARSABLE_EXPRESSION_KINDS = [
   "ArrayPattern",
   "ObjectPattern",

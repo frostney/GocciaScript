@@ -42,8 +42,10 @@ const INDENT = "  ";
 
 // A fix can make another rule apply (a wrapped call is now a multi-line
 // argument list) or can overlap another fix, which then waits for the next
-// pass. Two passes settle everything these rules do; the third is a margin.
-const MAX_PASSES = 3;
+// pass, and each pass wraps one more level of nested calls. Fixing repeats
+// until a pass finds nothing. The cap only stops rules that undo each other:
+// a file that reaches it is reported and left as it was.
+const MAX_PASSES = 100;
 
 const RULES = {
   singleQuotes: "a string literal should use single quotes",
@@ -129,6 +131,19 @@ const quoteEdits = (source, nodes) =>
 
 // -- Rule 2: trailing commas -----------------------------------------------------
 
+// `set` as a whole word, followed by the start of a key rather than by the
+// `(` of a method named `set`: a name after a space, or a `[`, `#` or quote.
+const SETTER_HEAD = /(?:^|[^\w$.@#'"`])set(?:\s+[\w$#'"[]|[#'"[])/;
+
+/**
+ * Whether an object property or class member is a setter. The view carries
+ * no accessor flag, so this reads the text from the member's start (its
+ * decorators and modifiers included) up to its first parameter.
+ */
+const isSetter = (source, node, firstParameter) =>
+  (node.kind === "Property" || node.kind === "MethodDefinition") &&
+  SETTER_HEAD.test(source.slice(node.start, firstParameter.start));
+
 /**
  * The lists a node owns, as { items, close }: the elements in order and the
  * offset of the delimiter that closes them. Null when the node has no list
@@ -160,7 +175,14 @@ const listOf = (source, commentEnds, node) => {
         ? nextSignificant(source, commentEnds, after.offset + 1)
         : after;
 
-    return close.char === ")" ? { items, close: close.offset } : null;
+    if (close.char !== ")") {
+      return null;
+    }
+
+    // A setter takes exactly one parameter and no comma after it.
+    return isSetter(source, node, items[0])
+      ? null
+      : { items, close: close.offset };
   }
 
   return null;
@@ -187,9 +209,7 @@ const commaEdits = (source, commentEnds, nodes) =>
     }
 
     // Multi-line means the closing delimiter is not on the last item's line.
-    const closeLine = source.slice(0, list.close).split("\n").length;
-
-    if (closeLine === last.loc.end.line) {
+    if (!source.slice(last.end, list.close).includes("\n")) {
       return [];
     }
 
@@ -308,8 +328,12 @@ const fixFile = (file, source) => {
   const findings = editsIn(file, source);
 
   const settle = (text, edits, pass) => {
-    if (edits.length === 0 || pass > MAX_PASSES) {
+    if (edits.length === 0) {
       return text;
+    }
+
+    if (pass > MAX_PASSES) {
+      throw new Error(`fixes did not settle after ${MAX_PASSES} passes`);
     }
 
     const next = applied(text, disjoint(edits));
@@ -369,7 +393,7 @@ all.forEach((line) => {
 });
 
 failures.forEach((failure) => {
-  console.log(`PARSE FAILURE ${failure}`);
+  console.log(`FAILURE ${failure}`);
 });
 
 console.log(
