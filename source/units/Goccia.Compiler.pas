@@ -67,11 +67,16 @@ type
     // The innermost expression or statement being compiled, where a
     // bytecode limit is reported (RaiseBytecodeLimit).
     FCurrentNode: TGocciaASTNode;
+    // Every template the compile has switched to, with repeats: a compile
+    // that raises frees those no other template owns yet
+    // (FreeUnattachedTemplates).
+    FEnteredTemplates: TList<TGocciaFunctionTemplate>;
     procedure EnterNesting(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
     procedure RaiseNestingLimitExceeded(const ANode: TGocciaASTNode);
     procedure RaiseBytecodeLimit(const AError: EGocciaBytecodeLimit;
       const AProgram: TGocciaProgram);
     function CompileProgram(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    procedure FreeUnattachedTemplates(const ATopLevel: TGocciaFunctionTemplate);
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt16);
     procedure CompileExpressionNode(const AExpr: TGocciaExpression;
@@ -226,6 +231,7 @@ begin
   // so compiling a script with no functions skips both dictionaries.
   FNumberBindingProofs := TNumberBindingProofMap.Create;
   FBlockFunctionVarBindings := TBlockFunctionVarBindingSet.Create;
+  FEnteredTemplates := TList<TGocciaFunctionTemplate>.Create;
   FDerivedConstructorThisGuard := False;
   FModule := nil;
   FCurrentTemplate := nil;
@@ -237,6 +243,7 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FEnteredTemplates.Free;
   FBlockFunctionVarBindings.Free;
   FNumberBindingProofs.Free;
   FNumericParameterProofs.Free;
@@ -333,6 +340,8 @@ begin
       FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
+  if Assigned(ATemplate) and not ATemplate.Attached then
+    FEnteredTemplates.Add(ATemplate);
   if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
     FCurrentScope.AttachTemplate(FCurrentTemplate);
   if not Assigned(FCurrentTemplate) or
@@ -2230,12 +2239,46 @@ begin
     Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
     FCompletionRegister := -1;
     FreeAndNil(FCurrentScope);
-    FTopLevelTemplate := nil;
     if Assigned(FModule) then
     begin
-      FreeAndNil(FCurrentTemplate);
+      FreeUnattachedTemplates(FTopLevelTemplate);
+      FCurrentTemplate := nil;
       FreeAndNil(FModule);
     end;
+    FTopLevelTemplate := nil;
+    FEnteredTemplates.Clear;
+  end;
+end;
+
+// A compile that raised: the top level and every function template whose
+// compile had started but that was not added to its parent yet belong to no
+// one else. A template that was added is freed with the template that owns
+// it.
+procedure TGocciaCompiler.FreeUnattachedTemplates(
+  const ATopLevel: TGocciaFunctionTemplate);
+var
+  Unattached: TList<TGocciaFunctionTemplate>;
+  Template: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  Unattached := TList<TGocciaFunctionTemplate>.Create;
+  try
+    if Assigned(FCurrentTemplate) then
+      FEnteredTemplates.Add(FCurrentTemplate);
+    if Assigned(ATopLevel) then
+      FEnteredTemplates.Add(ATopLevel);
+    // Read every flag before freeing any template.
+    for I := 0 to FEnteredTemplates.Count - 1 do
+    begin
+      Template := FEnteredTemplates[I];
+      if not Template.Attached and (Unattached.IndexOf(Template) < 0) then
+        Unattached.Add(Template);
+    end;
+    for I := 0 to Unattached.Count - 1 do
+      Unattached[I].Free;
+  finally
+    Unattached.Free;
+    FEnteredTemplates.Clear;
   end;
 end;
 

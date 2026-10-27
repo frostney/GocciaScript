@@ -19,6 +19,11 @@ describe("long array binding patterns", () => {
     expect(bound[2]).toEqual([300, 301, 302, 303, 304, 305, 306, 307, 308, 309]);
   });
 
+  test("let bindings and an assignment pattern of 300 elements", () => {
+    const bound = new Function("arr", `let [${names("a", 300).join(", ")}] = arr; let ${names("b", 300).join(", ")}; [${names("b", 300).join(", ")}] = arr; return [a299, b0, b299];`)(range(300));
+    expect(bound).toEqual([299, 0, 299]);
+  });
+
   test("255 bindings without a rest element", () => {
     const bound = new Function("arr", `const [${names("a", 255).join(", ")}] = arr; return [a0, a254];`)(range(300));
     expect(bound).toEqual([0, 254]);

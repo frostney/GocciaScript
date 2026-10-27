@@ -4670,8 +4670,8 @@ begin
     // Operand C encoding (UInt8):
     //   0..254   = exact bound (0 means "consume zero elements" — empty
     //              array pattern `const [] = iter` per spec);
-    //   255      = unbounded (rest pattern present, or pattern length
-    //              exceeds what C can represent).
+    //   255      = unbounded (rest pattern present); a longer pattern
+    //              steps the iterator instead (below).
     // The 255 sentinel separates "empty fixed pattern" from "unbounded";
     // collapsing both to 0 would silently drain the iterator on
     // `const [] = iter` instead of consuming nothing then closing.

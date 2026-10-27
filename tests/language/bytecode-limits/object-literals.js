@@ -42,6 +42,12 @@ describe("object literals and the constant limit", () => {
     expect(error.message.includes(CONSTANT_LIMIT)).toBe(true);
   });
 
+  test("70,000 distinct property names inside a function are a SyntaxError", () => {
+    const error = compileError(`const make = () => ({ ${list(70000, (i) => `p${i}: ${i}`)} }); make()`);
+    expect(error instanceof SyntaxError).toBe(true);
+    expect(error.message.includes(CONSTANT_LIMIT)).toBe(true);
+  });
+
   test("the SyntaxError can be caught around new Function", () => {
     let caught;
     try {

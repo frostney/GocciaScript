@@ -51,9 +51,24 @@ describe("branch length limit", () => {
     expectJumpLimit(`const g = (k) => { switch (k) { ${cases(20000)} } return -1; }; g(0)`);
   });
 
-  test("for...of and try over 70,000 statements are a SyntaxError", () => {
-    expectJumpLimit(`const g = (a) => { let r = 0; for (const v of a) { ${statements(70000)} } return r; }; g([])`);
-    expectJumpLimit(`const g = () => { let r = 0; try { ${statements(70000)} } catch (e) { r = -1; } return r; }; g()`);
+  test("a for...of over 20,000 statements is a SyntaxError", () => {
+    expectJumpLimit(`const g = (a) => { let r = 0; for (const v of a) { ${statements(20000)} } return r; }; g([])`);
+  });
+
+  test("a try over 20,000 statements runs and one over 40,000 is a SyntaxError", () => {
+    expect(realm.evaluate(`const g = () => { let r = 0; try { ${statements(20000)} } catch (e) { r = -1; } return r; }; g()`)).toBe(20000);
+    expectJumpLimit(`const g = () => { let r = 0; try { ${statements(40000)} } catch (e) { r = -1; } return r; }; g()`);
+  });
+
+  test("the SyntaxError can be caught around new Function", () => {
+    let caught;
+    try {
+      new Function("k", `let r = 0; if (k) { ${statements(40000)} } return r;`);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught instanceof SyntaxError).toBe(true);
+    expect(caught.message.includes(JUMP_LIMIT)).toBe(true);
   });
 
   test("a do...while over 40,000 statements is a SyntaxError", () => {

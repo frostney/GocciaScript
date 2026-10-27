@@ -39,7 +39,6 @@ uses
   Goccia.Scope.BindingMap,
   Goccia.Token;
 
-
 // Loads a count or index of a list pattern: OP_LOAD_INT holds a signed 16-bit
 // immediate, so a larger one is a constant.
 procedure EmitLoadCount(const ACtx: TGocciaCompilationContext;

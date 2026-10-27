@@ -308,6 +308,8 @@ type
     FConstants: array of TGocciaBytecodeConstant;
     FConstantCount: Integer;
     FFunctions: TObjectList<TGocciaFunctionTemplate>;
+    // Set once another template owns this one (AddFunction).
+    FAttached: Boolean;
     FUpvalueDescriptors: array of TGocciaUpvalueDescriptor;
     FDirectEvalEnvironments: array of TGocciaDirectEvalEnvironment;
     FDirectEvalEnvironmentCount: Integer;
@@ -523,6 +525,10 @@ type
     // function itself.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property ParameterPreambleSize: UInt16 read FParameterPreambleSize write FParameterPreambleSize;
+    { Whether another template owns this one: a function template the
+      compiler created and has not added to its parent yet is the compiler's
+      to free when the compile raises. }
+    property Attached: Boolean read FAttached;
     property TypeCheckPreambleSize: UInt16 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property DerivedThisInitializedSlot: Integer read FDerivedThisInitializedSlot write FDerivedThisInitializedSlot;
@@ -1165,6 +1171,7 @@ begin
       [High(UInt16) + 1]);
   Result := UInt16(FFunctions.Count);
   FFunctions.Add(AFunction);
+  AFunction.FAttached := True;
 end;
 
 procedure TGocciaFunctionTemplate.AddUpvalueDescriptor(
