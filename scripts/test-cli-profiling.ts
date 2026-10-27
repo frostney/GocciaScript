@@ -194,9 +194,11 @@ export function verifyCompileProfiles(): void {
   }
 }
 
-/** Each counter grows with the source shape that exercises it: a shape at
- * twice the size must at least nearly double every counter, so a refactor
- * that stops counting an operation fails here. */
+/** Each counter grows with the source shape that exercises it, so a
+ * refactor that stops counting an operation fails here. The shapes are
+ * compiled at three sizes, each twice the last: a counter linear in the
+ * size (or faster) grows by at least about twice as much over the second
+ * step as over the first, whatever constant work it also counts. */
 export function verifyCompileCounterGrowth(): void {
   const tmp = mkdtemp("goccia-compile-counters-");
   try {
@@ -223,9 +225,9 @@ export function verifyCompileCounterGrowth(): void {
       ].join("\n");
     };
     const totals: Record<string, number>[] = [];
-    // Both sizes keep more than 64 locals in a scope, past the point where
+    // Every size keeps more than 64 locals in a scope, past the point where
     // lookups switch from a scan to a hashed index.
-    for (const n of [80, 160]) {
+    for (const n of [80, 160, 320]) {
       const source = join(tmp, `shapes-${n}.js`);
       const output = join(tmp, `shapes-${n}.json`);
       writeFileSync(source, shapes(n));
@@ -236,9 +238,10 @@ export function verifyCompileCounterGrowth(): void {
       totals.push(JSON.parse(readFileSync(output, "utf-8")).compile.counters);
     }
     for (const counter of COMPILE_COUNTERS) {
-      const [small, large] = [totals[0][counter], totals[1][counter]];
-      if (!(small > 0) || large < small * 1.8)
-        throw new Error(`${counter} must count its operation and grow with the source: ${small} -> ${large}`);
+      const [small, medium, large] = totals.map((total) => total[counter]);
+      const [first, second] = [medium - small, large - medium];
+      if (!(first > 0) || second < first * 1.8)
+        throw new Error(`${counter} must count its operation and grow with the source: ${small} -> ${medium} -> ${large}`);
     }
 
     // The benchmark runner profiles the compile of a benchmark file too.

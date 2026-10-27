@@ -133,7 +133,7 @@ One record per source function, keyed by its file and the line and column of its
 | Counter | JSON key | Counts |
 |---|---|---|
 | Nodes compiled | `nodesCompiled` | Expressions and statements compiled (`CompileExpressionNode`, `CompileStatementNode`) |
-| Constant-emit attempts | `constantEmitAttempts` | `TryEmitConstantExpression`, tried for every expression and again by the binary and unary folds |
+| Constant-emit attempts | `constantEmitAttempts` | Constant-folding attempts: the one `CompileExpressionNode` makes for an expression, unless an earlier attempt already showed it is not constant, and those of `TryEmitConstantExpression` (the unary fold, strict-type simplification) |
 | Constant-evaluation visits | `constantEvaluationVisits` | Steps of the constant-evaluation walk over an operand subtree (`TryEvaluateConstantExpression`) |
 | Expression-type visits | `expressionTypeVisits` | Steps of type inference over an expression subtree (`ExpressionType`) |
 | Number-proof visits | `numberProofVisits` | `HasExactNumberProof` checks of an operand |

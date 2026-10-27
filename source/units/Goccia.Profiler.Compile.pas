@@ -34,8 +34,8 @@ type
     // Expressions and statements compiled (CompileExpressionNode,
     // CompileStatementNode): the size the other counters are compared with.
     ccNodesCompiled,
-    // TryEmitConstantExpression: the constant-folding attempt made for every
-    // expression node, and again by the binary and unary folds.
+    // Constant-folding attempts: the one made for every expression node
+    // (CompileExpressionNode), and those of TryEmitConstantExpression.
     ccConstantEmitAttempts,
     // TryEvaluateConstantExpression, counting each recursive step: the walk
     // a constant-folding attempt makes over an operand subtree.

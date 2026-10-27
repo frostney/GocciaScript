@@ -284,14 +284,15 @@ begin
     Result := InferLocalType(AExpr);
 end;
 
-function HasExactNumberProof(const AScope: TGocciaCompilerScope;
-  const AExpr: TGocciaExpression): Boolean;
+// HasExactNumberProof for AExpr whose ExpressionType is AType.
+function HasExactNumberProofOfType(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression; const AType: TGocciaLocalType): Boolean;
 var
   LocalIndex: Integer;
 begin
   if Assigned(AScope.CompileProfile) then
     AScope.CompileProfile.Count(ccNumberProofVisits);
-  if IsKnownNumeric(ExpressionType(AScope, AExpr)) then
+  if IsKnownNumeric(AType) then
     Exit(True);
   if AExpr is TGocciaIdentifierExpression then
   begin
@@ -301,6 +302,13 @@ begin
       Exit(AScope.GetLocal(LocalIndex).IsCallProvenNumeric);
   end;
   Result := False;
+end;
+
+function HasExactNumberProof(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression): Boolean;
+begin
+  Result := HasExactNumberProofOfType(AScope, AExpr,
+    ExpressionType(AScope, AExpr));
 end;
 
 function TrySignedInt16NumberLiteral(const AExpr: TGocciaExpression;
@@ -2808,14 +2816,26 @@ procedure CompileBinary(const ACtx: TGocciaCompilationContext;
 var
   RegB, RegC: UInt16;
   Op, IntOp, FloatOp: TGocciaOpCode;
-  JumpIdx, JumpIdx2: Integer;
+  JumpIdx: Integer;
   LeftType, RightType: TGocciaLocalType;
   PrivateExpr: TGocciaPrivateMemberExpression;
   Immediate: Int16;
-  OwnsRegB, OwnsRegC: Boolean;
+  OwnsRegB, OwnsRegC, LeftCompiled, LeftTypeKnown, RightTypeKnown: Boolean;
+
+  // Compiles AOperand as CompileOperand does, and reports whether it was a
+  // binary expression that handed over the type of its value.
+  function CompileTypedOperand(const AOperand: TGocciaExpression;
+    out ARegister: UInt16; const AEvaluatedLater: TGocciaExpression;
+    out AOwnsRegister: Boolean; out AType: TGocciaLocalType): Boolean;
+  begin
+    ACtx.Scope.ForgetBinaryResultType;
+    AOwnsRegister := CompileOperand(ACtx, AOperand, ARegister,
+      AEvaluatedLater, nil, ADest);
+    Result := ACtx.Scope.TakeBinaryResultType(AOperand, AType);
+  end;
+
 begin
-  if TryFoldBinary(ACtx, AExpr, ADest) then
-    Exit;
+  // CompileExpressionNode has already tried to fold AExpr to a constant.
 
   if AExpr.Operator = gttAnd then
   begin
@@ -2860,47 +2880,74 @@ begin
     Exit;
   end;
 
-  if (AExpr.Operator = gttMinus) and
-     HasExactNumberProof(ACtx.Scope, AExpr.Left) and
+  LeftCompiled := False;
+  LeftTypeKnown := False;
+  LeftType := sltUntyped;
+
+  // `x - 1` and `x + 1` on a Number x. The left operand is compiled before
+  // its type is asked for, so that a binary operator there hands its type
+  // over instead of having its subtree walked again (ExpressionType). The
+  // right operand is a literal, which no operand can be evaluated after in a
+  // way that matters, so the left one compiles as the general path below
+  // compiles it.
+  if (AExpr.Operator in [gttMinus, gttPlus]) and
      TrySignedInt16NumberLiteral(AExpr.Right, Immediate) then
   begin
-    OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB, nil, nil, ADest);
-    EmitInstruction(ACtx, EncodeABC(OP_SUB_NUM_IMM, ADest, RegB,
-      UInt16(Immediate)));
-    if OwnsRegB then
-      ACtx.Scope.FreeRegister;
-    Exit;
-  end;
-
-  if AExpr.Operator = gttPlus then
-  begin
-    if HasExactNumberProof(ACtx.Scope, AExpr.Left) and
-       TrySignedInt16NumberLiteral(AExpr.Right, Immediate) then
+    LeftTypeKnown := CompileTypedOperand(AExpr.Left, RegB, AExpr.Right,
+      OwnsRegB, LeftType);
+    LeftCompiled := True;
+    if not LeftTypeKnown then
     begin
-      OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB, nil, nil, ADest);
-      EmitInstruction(ACtx, EncodeABC(OP_ADD_NUM_IMM, ADest, RegB,
-        UInt16(Immediate)));
+      LeftType := ExpressionType(ACtx.Scope, AExpr.Left);
+      LeftTypeKnown := True;
+    end;
+    if HasExactNumberProofOfType(ACtx.Scope, AExpr.Left, LeftType) then
+    begin
+      if AExpr.Operator = gttMinus then
+        EmitInstruction(ACtx, EncodeABC(OP_SUB_NUM_IMM, ADest, RegB,
+          UInt16(Immediate)))
+      else
+        EmitInstruction(ACtx, EncodeABC(OP_ADD_NUM_IMM, ADest, RegB,
+          UInt16(Immediate)));
       if OwnsRegB then
         ACtx.Scope.FreeRegister;
+      ACtx.Scope.NoteBinaryResultType(AExpr,
+        BinaryExpressionType(AExpr.Operator, LeftType, sltFloat));
       Exit;
     end;
-    if HasExactNumberProof(ACtx.Scope, AExpr.Right) and
-       TrySignedInt16NumberLiteral(AExpr.Left, Immediate) then
+  end
+  else if (AExpr.Operator = gttPlus) and
+          TrySignedInt16NumberLiteral(AExpr.Left, Immediate) then
+  begin
+    // `1 + x`: x is compiled only on this path, so its type is asked for
+    // first.
+    RightType := ExpressionType(ACtx.Scope, AExpr.Right);
+    if HasExactNumberProofOfType(ACtx.Scope, AExpr.Right, RightType) then
     begin
       OwnsRegB := CompileOperand(ACtx, AExpr.Right, RegB, nil, nil, ADest);
       EmitInstruction(ACtx, EncodeABC(OP_ADD_NUM_IMM, ADest, RegB,
         UInt16(Immediate)));
       if OwnsRegB then
         ACtx.Scope.FreeRegister;
+      ACtx.Scope.NoteBinaryResultType(AExpr,
+        BinaryExpressionType(gttPlus, sltFloat, RightType));
       Exit;
     end;
   end;
 
-  OwnsRegB := CompileOperand(ACtx, AExpr.Left, RegB, AExpr.Right, nil, ADest);
-  OwnsRegC := CompileOperand(ACtx, AExpr.Right, RegC, nil, nil, ADest);
+  if not LeftCompiled then
+    LeftTypeKnown := CompileTypedOperand(AExpr.Left, RegB, AExpr.Right,
+      OwnsRegB, LeftType);
+  RightTypeKnown := CompileTypedOperand(AExpr.Right, RegC, nil, OwnsRegC,
+    RightType);
 
-  LeftType := ExpressionType(ACtx.Scope, AExpr.Left);
-  RightType := ExpressionType(ACtx.Scope, AExpr.Right);
+  // A binary operand's value is in its register already, and has the type it
+  // handed over. Any other operand is asked for its type now that both are
+  // compiled, the left one first.
+  if not LeftTypeKnown then
+    LeftType := ExpressionType(ACtx.Scope, AExpr.Left);
+  if not RightTypeKnown then
+    RightType := ExpressionType(ACtx.Scope, AExpr.Right);
 
   if (LeftType = sltInteger) and (RightType = sltInteger) and
      TryIntegerOp(AExpr.Operator, IntOp) then
@@ -2921,6 +2968,8 @@ begin
     ACtx.Scope.FreeRegister;
   if OwnsRegB then
     ACtx.Scope.FreeRegister;
+  ACtx.Scope.NoteBinaryResultType(AExpr,
+    BinaryExpressionType(AExpr.Operator, LeftType, RightType));
 end;
 
 procedure CompileDelete(const ACtx: TGocciaCompilationContext;
