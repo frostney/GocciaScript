@@ -73,6 +73,8 @@ Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs
 
 **Full standard compliance** — all standard constants and methods are available.
 
+**`Math.pow` and `**`** — both compute ES2026 §6.1.6.1.3 `Number::exponentiate` with one implementation, `Goccia.NumberExponentiation`, a port of the `pow` of Arm's optimized-routines (the algorithm of glibc and musl). A finite result is within 0.54 ULP of the exact value. A result that is exactly representable, such as `10 ** 22` or `2 ** -1074`, comes out exact, and every platform returns the same bits. As in V8, `x ** 2` is `x * x` and `x ** 0.5` is `Math.sqrt(x)`.
+
 **Extras:**
 
 | Method | Description |
@@ -885,9 +887,7 @@ assigned to a `const` is a child of that declaration. Three kinds own a
 statement *list*, whose children are siblings of one another: `Program`,
 `BlockStatement`, and `SwitchCase`.
 
-Type-level declarations do nothing at run time ([Type Annotations](type-annotations.md)), but each keeps a kind of its own and its whole text, wherever it appears: `type T = ...` is a `TypeAliasDeclaration`, `interface I {}` an `InterfaceDeclaration`, and their exported forms `ExportTypeAliasDeclaration` and `ExportInterfaceDeclaration`. `import type ... from`, `export type { A }`, and `export type { A } from` or `export type * from` are the `ImportDeclaration`, `ExportDeclaration` and `ReExportDeclaration` they look like, with `typeOnly: true`. `import type from "m"`, `import type, { y } from "m"` and `import type, * as ns from "m"` are value imports that bind `type`,, so they report `typeOnly: false`.
-
-Those three kinds carry `typeOnly: false` when the statement runs, including `import { type C, D } from "..."`, where `type` marks one specifier rather than the statement. The four type declaration kinds always carry `typeOnly: true`, no other kind carries it, and `EmptyStatement` is only ever a lone `;`. A type-level node has no children and withholds its names. See [ADR 0161](adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
+Type-level declarations do nothing at run time ([Type Annotations](type-annotations.md)), but each keeps a kind of its own and its whole text, wherever it appears: `type T = ...` is a `TypeAliasDeclaration`, `interface I {}` an `InterfaceDeclaration`, and their exported forms `ExportTypeAliasDeclaration` and `ExportInterfaceDeclaration`. `import type ... from`, `export type { A }`, and `export type { A } from` or `export type * from` are the `ImportDeclaration`, `ExportDeclaration` and `ReExportDeclaration` they look like, with `typeOnly: true`. `import type from "m"`, `import type, { y } from "m"` and `import type, * as ns from "m"` are value imports that bind `type`, so they report `typeOnly: false`. Those three kinds carry `typeOnly: false` when the statement runs, including `import { type C, D } from "..."`, where `type` marks one specifier rather than the statement. The four type declaration kinds always carry `typeOnly: true`, no other kind carries it, and `EmptyStatement` is only ever a lone `;`. A type-level node has no children and withholds its names. See [ADR 0161](adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
 
 A syntax error in the parsed text is a `SyntaxError` naming its position; it
 does not abort the caller's own run unless the caller lets it.

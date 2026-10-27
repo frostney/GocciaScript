@@ -554,6 +554,18 @@ resourcestring
   // An expression or statement whose syntax tree, counting each link of its
   // operator, member and call chains, is taller than MAX_TREE_HEIGHT.
   SErrorTreeHeightExceeded = 'Nesting, counting each link of operator and call chains, exceeds the supported limit of %d levels';
+  // A function whose bytecode passes an operand width of the bytecode format
+  // (EGocciaBytecodeLimit, reported as a SyntaxError).
+  SErrorBytecodeConstantLimit = 'Too many constants in one function: more than %d property names, strings and numbers';
+  SErrorBytecodeFunctionLimit = 'Too many functions defined directly in one function: more than %d';
+  SErrorBytecodeRegisterLimit = 'Too many registers needed by one function: more than %d';
+  SErrorBytecodeLocalLimit = 'Too many local bindings in one function: more than %d';
+  SErrorBytecodeUpvalueLimit = 'Too many outer bindings captured by one function: more than %d';
+  SErrorBytecodeArgumentLimit = 'Too many arguments in one call: more than %d';
+  SErrorBytecodeSubstitutionLimit = 'Too many substitutions in one tagged template: more than %d';
+  SErrorBytecodeDirectEvalLimit = 'Too many direct eval calls in one function: more than %d';
+  SErrorBytecodePreambleLimit = 'Parameter initialization of one function is longer than %d instructions';
+  SErrorBytecodeJumpLimit = 'A branch jumps over more than %d instructions';
 
   // Module loading errors
   // Names no module address on purpose: the only address available where this

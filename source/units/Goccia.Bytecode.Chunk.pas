@@ -6,6 +6,7 @@ interface
 
 uses
   Generics.Collections,
+  SysUtils,
 
   CriticalSections,
   HashMap,
@@ -32,6 +33,12 @@ const
   PARAMETER_EVAL_VAR_OBJECT_LOCAL = '`#eval-parameter-var-object`:';
 
 type
+  { A function needs more of something than an operand of the bytecode
+    format can encode (constants, functions, registers, locals, upvalues,
+    arguments, jump offsets). The compiler reports it as a SyntaxError at the
+    source it was compiling (TGocciaCompiler.Compile). }
+  EGocciaBytecodeLimit = class(Exception);
+
   TGocciaBytecodeConstantKind = (
     bckNil,
     bckTrue,
@@ -307,6 +314,12 @@ type
     FConstants: array of TGocciaBytecodeConstant;
     FConstantCount: Integer;
     FFunctions: TObjectList<TGocciaFunctionTemplate>;
+    // Set once another template owns this one (AddFunction).
+    FAttached: Boolean;
+    // Compile-time only, never serialized: see the properties.
+    FFarBranches: Boolean;
+    FNeedsFarBranches: Boolean;
+    FFarBranchKey: string;
     FUpvalueDescriptors: array of TGocciaUpvalueDescriptor;
     FDirectEvalEnvironments: array of TGocciaDirectEvalEnvironment;
     FDirectEvalEnvironmentCount: Integer;
@@ -532,6 +545,18 @@ type
     // function itself.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property ParameterPreambleSize: UInt16 read FParameterPreambleSize write FParameterPreambleSize;
+    { Whether another template owns this one: a function template the
+      compiler created and has not added to its parent yet is the compiler's
+      to free when the compile raises. }
+    property Attached: Boolean read FAttached;
+    { Compile time: the function's forward conditional jumps take their long
+      form, and a conditional jump of it did not fit its offset without it. }
+    property FarBranches: Boolean read FFarBranches write FFarBranches;
+    property NeedsFarBranches: Boolean read FNeedsFarBranches
+      write FNeedsFarBranches;
+    { Compile time: names the function across the two passes of a compile
+      (its first name and source position). }
+    property FarBranchKey: string read FFarBranchKey write FFarBranchKey;
     property TypeCheckPreambleSize: UInt16 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property DerivedThisInitializedSlot: Integer read FDerivedThisInitializedSlot write FDerivedThisInitializedSlot;
@@ -570,11 +595,10 @@ function IsBodyEvalVarObjectName(const AName: string): Boolean;
 implementation
 
 uses
-  SysUtils,
-
   NumberBits,
 
   Goccia.Bytecode,
+  Goccia.Error.Messages,
   Goccia.GarbageCollector;
 
 function IsEvalVarObjectName(const AName: string): Boolean;
@@ -846,7 +870,8 @@ begin
       Exit(UInt16(I));
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckNil;
@@ -870,7 +895,8 @@ begin
       Exit(UInt16(I));
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := Target;
@@ -888,7 +914,8 @@ begin
       Exit(UInt16(I));
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckInteger;
@@ -912,7 +939,8 @@ begin
     Exit;
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckFloat;
@@ -929,7 +957,8 @@ begin
     Exit;
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckString;
@@ -946,7 +975,8 @@ begin
     Exit;
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckPrivateName;
@@ -969,7 +999,8 @@ function TGocciaFunctionTemplate.AddConstantBigInt(
   const AValue: string): UInt16;
 begin
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckBigInt;
@@ -989,7 +1020,8 @@ begin
     raise Exception.Create(
       'Template payload length mismatch: cooked vs raw');
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckTemplateObject;
@@ -1018,7 +1050,8 @@ function TGocciaFunctionTemplate.AddConstantRegExpLiteral(
   const APattern, AFlags: string): UInt16;
 begin
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckRegExpLiteral;
@@ -1189,16 +1222,19 @@ function TGocciaFunctionTemplate.AddFunction(
   const AFunction: TGocciaFunctionTemplate): UInt16;
 begin
   if FFunctions.Count > High(UInt16) then
-    raise Exception.Create('Function pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeFunctionLimit,
+      [High(UInt16) + 1]);
   Result := UInt16(FFunctions.Count);
   FFunctions.Add(AFunction);
+  AFunction.FAttached := True;
 end;
 
 procedure TGocciaFunctionTemplate.AddUpvalueDescriptor(
   const AIsLocal: Boolean; const AIndex: UInt16; const AName: string);
 begin
   if FUpvalueCount >= High(UInt16) then
-    raise Exception.Create('Upvalue descriptor overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeUpvalueLimit,
+      [High(UInt16)]);
   if FUpvalueCount >= Length(FUpvalueDescriptors) then
     SetLength(FUpvalueDescriptors, FUpvalueCount * 2 + 4);
   FUpvalueDescriptors[FUpvalueCount].Name := AName;
@@ -1218,7 +1254,8 @@ var
   I: Integer;
 begin
   if FDirectEvalEnvironmentCount >= High(UInt16) then
-    raise Exception.Create('Direct eval environment overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeDirectEvalLimit,
+      [High(UInt16)]);
   if FDirectEvalEnvironmentCount >= Length(FDirectEvalEnvironments) then
     SetLength(FDirectEvalEnvironments, FDirectEvalEnvironmentCount * 2 + 4);
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PC := APC;
