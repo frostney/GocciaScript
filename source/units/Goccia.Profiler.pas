@@ -23,8 +23,14 @@ type
     Line: Integer;
     CallCount: Int64;
     SelfTimeNanoseconds: Int64;
+    // Inclusive time, counted once per outermost activation: a frame that
+    // starts while the function already has one on the timing stack
+    // (direct or mutual recursion, re-entry through a callback) adds
+    // nothing here, since the outer frame's time already contains it.
     TotalTimeNanoseconds: Int64;
     Allocations: Int64;
+    // Frames of this function on the timing stack right now.
+    ActiveFrames: Integer;
   end;
 
   TGocciaProfilingStackEntry = record
@@ -176,6 +182,8 @@ begin
     FFunctionProfiles[I].SelfTimeNanoseconds := 0;
     FFunctionProfiles[I].TotalTimeNanoseconds := 0;
     FFunctionProfiles[I].Allocations := 0;
+    // The timing stack was emptied above, so no frame is active any more.
+    FFunctionProfiles[I].ActiveFrames := 0;
   end;
 end;
 
@@ -228,6 +236,7 @@ begin
   FFunctionProfiles[Result].SelfTimeNanoseconds := 0;
   FFunctionProfiles[Result].TotalTimeNanoseconds := 0;
   FFunctionProfiles[Result].Allocations := 0;
+  FFunctionProfiles[Result].ActiveFrames := 0;
   Inc(FFunctionProfileCount);
 end;
 
@@ -242,6 +251,7 @@ begin
   FTimingStack[FTimingStackCount].ChildTimeAccumulated := 0;
   Inc(FTimingStackCount);
   Inc(FFunctionProfiles[AProfileIndex].CallCount);
+  Inc(FFunctionProfiles[AProfileIndex].ActiveFrames);
 end;
 
 procedure TGocciaProfiler.PopFunction(const AProfileIndex: Integer;
@@ -259,7 +269,9 @@ begin
   if (PoppedIndex < 0) or (PoppedIndex >= FFunctionProfileCount) then Exit;
   Elapsed := ATimestamp - FTimingStack[FTimingStackCount].EntryTimestamp;
   SelfTime := Elapsed - FTimingStack[FTimingStackCount].ChildTimeAccumulated;
-  Inc(FFunctionProfiles[PoppedIndex].TotalTimeNanoseconds, Elapsed);
+  Dec(FFunctionProfiles[PoppedIndex].ActiveFrames);
+  if FFunctionProfiles[PoppedIndex].ActiveFrames = 0 then
+    Inc(FFunctionProfiles[PoppedIndex].TotalTimeNanoseconds, Elapsed);
   Inc(FFunctionProfiles[PoppedIndex].SelfTimeNanoseconds, SelfTime);
   if FTimingStackCount > 0 then
     Inc(FTimingStack[FTimingStackCount - 1].ChildTimeAccumulated, Elapsed);
