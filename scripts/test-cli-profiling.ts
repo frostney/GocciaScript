@@ -178,6 +178,26 @@ export function verifyCompileProfiles(): void {
     if (units.length !== 6)
       throw new Error(`each Function-constructor source must be its own unit: ${JSON.stringify(units)}`);
 
+    // The validation parses of the parameters and the body are units of their
+    // own: a nested function keeps one record in the wrapper's unit, at the
+    // wrapper's position, even after multi-line parameters.
+    const nested = join(tmp, "nested.js");
+    const nestedOutput = join(tmp, "nested.json");
+    writeFileSync(nested, 'const h = new Function("x\\n", "return () => x;");\nconsole.log(h(4)());\n');
+    const nest = Bun.spawnSync([resolve(RUNNER), nested, "--unsafe-function-constructor",
+      "--profile=compile", `--profile-output=${nestedOutput}`],
+      { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+    if (nest.exitCode !== 0) throw new Error(`nested dynamic profiling exited ${nest.exitCode}: ${nest.stderr.toString()}`);
+    const nestedProfile = JSON.parse(readFileSync(nestedOutput, "utf-8")).compile;
+    const wrapperUnit = nestedProfile.files.find((file: { sourceFile: string }) => file.sourceFile.startsWith("<Function>#"));
+    const arrows = nestedProfile.functions.filter((fn: CompileFunction) =>
+      fn.sourceFile === wrapperUnit?.sourceFile && fn.name !== "<module>" && fn.name !== "anonymous");
+    if (arrows.length !== 1 || !(arrows[0].parseTimeNs > 0) || !(arrows[0].compileTimeNs > 0))
+      throw new Error(`the nested arrow must be one record with its parse and compile: ${JSON.stringify(arrows)}`);
+    for (const kind of ["<Function:params>#", "<Function:body>#"])
+      if (!nestedProfile.files.some((file: { sourceFile: string }) => file.sourceFile.startsWith(kind)))
+        throw new Error(`the validation parse ${kind} must be its own unit: ${JSON.stringify(nestedProfile.files)}`);
+
     // `all` stays opcodes and functions: the compile section is present and empty.
     const source = join(tmp, "n50", "main.mjs");
     const output = join(tmp, "all.json");

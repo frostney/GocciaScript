@@ -58,6 +58,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Packages.Address,
+  Goccia.Profiler.Compile,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -394,9 +395,10 @@ type
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
-    function CompileDynamicFunctionCode(const AParamsSources: array of string;
-      const ABodySource: string;
-      const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
+    function CompileDynamicFunctionCode(const AParamStr, ABodySource: string;
+      const AKind: TGocciaDynamicFunctionKind;
+      const ACompileProfile: TGocciaCompileProfiler;
+      const AProfileSource: string): TGocciaFunctionBase;
     procedure InjectModulesFromValue(const AValue: TGocciaValue;
       const ABaseAddress, AProvenance: string);
   public
@@ -725,7 +727,6 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Platform,
   Goccia.Profiler,
-  Goccia.Profiler.Compile,
   Goccia.Scope.Declarations,
   Goccia.Scope.Redeclaration,
   Goccia.Spec,
@@ -5549,40 +5550,43 @@ function TGocciaEngine.CompileDynamicFunction(
 var
   CompileProfile: TGocciaCompileProfiler;
   UnitDepth, I: Integer;
-  ProfileSource: string;
+  ParamStr, ProfileSource: string;
 begin
-  CompileProfile := TGocciaCompileProfiler.Instance;
-  if not Assigned(CompileProfile) then
-    Exit(CompileDynamicFunctionCode(AParamsSources, ABodySource, AKind));
-  UnitDepth := CompileProfile.UnitDepth;
-  // The kind, the parameters as the wrapper joins them, and the body: the
-  // same function source is the same unit, whatever its arguments' split.
-  ProfileSource := '';
+  ParamStr := '';
   for I := 0 to High(AParamsSources) do
   begin
     if I > 0 then
-      ProfileSource := ProfileSource + ',';
-    ProfileSource := ProfileSource + AParamsSources[I];
+      ParamStr := ParamStr + ',';
+    ParamStr := ParamStr + AParamsSources[I];
   end;
+  CompileProfile := TGocciaCompileProfiler.Instance;
+  if not Assigned(CompileProfile) then
+    Exit(CompileDynamicFunctionCode(ParamStr, ABodySource, AKind, nil, ''));
+  UnitDepth := CompileProfile.UnitDepth;
+  // The kind, the parameters as the wrapper joins them, and the body: the
+  // same function source is the same unit, whatever its arguments' split.
   // The parameters are length-prefixed: no character they or the body may
   // hold can move text from one field to the other.
-  ProfileSource := IntToStr(Ord(AKind)) + ':' +
-    IntToStr(Length(ProfileSource)) + ':' + ProfileSource + ABodySource;
+  ProfileSource := IntToStr(Ord(AKind)) + ':' + IntToStr(Length(ParamStr)) +
+    ':' + ParamStr + ABodySource;
   CompileProfile.BeginUnit('<Function>', ProfileSource);
   try
-    Result := CompileDynamicFunctionCode(AParamsSources, ABodySource, AKind);
+    Result := CompileDynamicFunctionCode(ParamStr, ABodySource, AKind,
+      CompileProfile, ProfileSource);
   finally
     CompileProfile.EndUnitTo(UnitDepth);
   end;
 end;
 
-function TGocciaEngine.CompileDynamicFunctionCode(
-  const AParamsSources: array of string;
-  const ABodySource: string;
-  const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
+{ ACompileProfile, when the compile profile is on, gets the parameter and
+  body validation parses as units of their own beside the wrapper's
+  (AProfileSource identifies them): their positions are not the wrapper's. }
+function TGocciaEngine.CompileDynamicFunctionCode(const AParamStr,
+  ABodySource: string; const AKind: TGocciaDynamicFunctionKind;
+  const ACompileProfile: TGocciaCompileProfiler;
+  const AProfileSource: string): TGocciaFunctionBase;
 var
-  ParamStr: string;
-  I: Integer;
+  UnitDepth: Integer;
   BodyParseResult: TGocciaFunctionBodyParseResult;
   FunctionExpression: TGocciaFunctionExpression;
   PipelineOptions: TGocciaSourcePipelineOptions;
@@ -5597,14 +5601,6 @@ begin
   // This prevents injection: a crafted body that tries to close the method
   // wrapper will fail validation because it will have unmatched braces when
   // parsed as a standalone function body.
-  ParamStr := '';
-  for I := 0 to High(AParamsSources) do
-  begin
-    if I > 0 then
-      ParamStr := ParamStr + ',';
-    ParamStr := ParamStr + AParamsSources[I];
-  end;
-
   // Validate params: must parse as a valid parameter list.
   // If params contain tokens that escape the signature, this will throw.
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
@@ -5616,22 +5612,36 @@ begin
     FExperimentalJSModuleSourceEnabled;
   PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
   PipelineOptions.SourceType := stScript;
-  if not TGocciaSourcePipeline.ParseFunctionParameters(ParamStr,
+  // A raise leaves these units open; CompileDynamicFunction closes them.
+  UnitDepth := -1;
+  if Assigned(ACompileProfile) then
+  begin
+    UnitDepth := ACompileProfile.UnitDepth;
+    ACompileProfile.BeginUnit('<Function:params>', AProfileSource);
+  end;
+  if not TGocciaSourcePipeline.ParseFunctionParameters(AParamStr,
     '<Function:params>', PipelineOptions, AKind) then
     ThrowSyntaxError('Invalid parameter list for Function constructor');
 
   // Validate body: must parse as a valid function body.
   // An arrow wrapper ensures the body is enclosed in matching braces.
+  if Assigned(ACompileProfile) then
+  begin
+    ACompileProfile.EndUnitTo(UnitDepth);
+    ACompileProfile.BeginUnit('<Function:body>', AProfileSource);
+  end;
   BodyParseResult := TGocciaSourcePipeline.ParseFunctionBodyWrapper(
     ABodySource, '<Function:body>', PipelineOptions, AKind);
   if not BodyParseResult.IsValid then
     ThrowSyntaxError('Invalid body for Function constructor');
+  if Assigned(ACompileProfile) then
+    ACompileProfile.EndUnitTo(UnitDepth);
 
   // Both pieces validated — safe to assemble the wrapper
   WrapperOptions := PipelineOptions;
   if BodyParseResult.HasUseStrictDirective then
     WrapperOptions.InheritedStrictMode := True;
-  ProgramNode := TGocciaSourcePipeline.ParseDynamicFunctionWrapper(ParamStr,
+  ProgramNode := TGocciaSourcePipeline.ParseDynamicFunctionWrapper(AParamStr,
     ABodySource, '<Function>', WrapperOptions, AKind);
   try
     FunctionExpression := nil;

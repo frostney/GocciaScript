@@ -167,9 +167,10 @@ type
 
     // Code compiled at run time (eval, the Function constructor) is parsed
     // and compiled as a file of its own, AKind followed by the ordinal of
-    // ASource among the distinct sources seen, instead of the file of its
-    // caller: its functions do not merge with that file's, nor with another
-    // source's, and the same source compiled again adds to its own records.
+    // ASource among the distinct sources seen (of every kind), instead of
+    // the file of its caller: its functions do not merge with that file's,
+    // nor with another source's, and the same source compiled again adds to
+    // its own records.
     procedure BeginUnit(const AKind, ASource: string);
     // Ends the units begun since UnitDepth read ADepth; a second call ends
     // none.
@@ -476,8 +477,10 @@ var
   Identity: string;
   Ordinal: Integer;
 begin
-  // The whole text is the identity, so two sources never share a unit.
-  Identity := AKind + #0 + ASource;
+  // The whole text is the identity, so two sources never share a unit; the
+  // units of one source (a Function constructor's validation parses and
+  // its wrapper) share its ordinal.
+  Identity := ASource;
   if not FUnitIdentities.TryGetValue(Identity, Ordinal) then
   begin
     Ordinal := FUnitIdentities.Count + 1;
