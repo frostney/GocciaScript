@@ -5,11 +5,13 @@
 //      change to its escaping: `"a"` becomes `'a'`, but `"it's"` and
 //      `"say \"hi\""` stay as they are.
 //   2. A multi-line array, object, argument list or parameter list ends with
-//      a trailing comma, except after a rest parameter, where one is a
-//      syntax error.
+//      a trailing comma, except after a rest parameter or a setter's
+//      parameter, where one is a syntax error.
 //   3. A call that sits on one line longer than WIDTH puts its arguments one
 //      per line, indented one step past the line it starts on, with a
-//      trailing comma.
+//      trailing comma. A call inside a template literal's `${}` is left
+//      alone: the long line is the template's, and it is shortened by
+//      changing the template, not by spreading a call across its text.
 //
 // Each rule dispatches on the tree: a node's `kind`, its flags (`rest` on a
 // parameter), and its range. What the tree does not hold — the text of a
@@ -235,6 +237,12 @@ const wrapEdits = (source, comments, lineStarts, nodes) => {
     comments.some(
       (comment) => comment.start >= call.children[1].start && comment.end <= call.end,
     );
+  // The only expressions inside a template literal are its substitutions.
+  const templates = nodes.filter((node) => node.kind === "TemplateLiteral");
+  const inTemplate = (call) =>
+    templates.some(
+      (template) => template.start < call.start && call.end < template.end,
+    );
   const calls = nodes.filter(
     (node) =>
       CALL_KINDS.includes(node.kind) &&
@@ -242,7 +250,8 @@ const wrapEdits = (source, comments, lineStarts, nodes) => {
       source[node.end - 1] === ")" &&
       node.loc.start.line === node.loc.end.line &&
       lineText(source, lineStarts, node.loc.start.line).length > WIDTH &&
-      !holdsComment(node),
+      !holdsComment(node) &&
+      !inTemplate(node),
   );
 
   // Only the outermost call on a line: wrapping it shortens the line, and a
