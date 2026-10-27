@@ -18,7 +18,7 @@ describe("long conditional branches", () => {
 
   test("&&, || and ?: over 40,000 operands", () => {
     expect(realm.evaluate(`const g = (k) => k && (${operands(40000)}, 1); g(1) + ":" + g(0)`)).toBe("1:0");
-    expect(realm.evaluate(`const g = (k) => k || (${operands(40000)}, 1); g(1) + ":" + g(0)`)).toBe("1:1");
+    expect(realm.evaluate(`const g = (k) => k || (${operands(40000)}, 2); g(1) + ":" + g(0)`)).toBe("1:2");
     expect(realm.evaluate(`const g = (k) => k ? (${operands(40000)}, 1) : 2; g(1) + ":" + g(0)`)).toBe("1:2");
   });
 
