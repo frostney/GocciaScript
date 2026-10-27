@@ -5,32 +5,39 @@ unit Goccia.Compiler.ConstantFolding;
 interface
 
 uses
+  Generics.Collections,
+
   Goccia.AST.Expressions,
   Goccia.AST.Node,
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Context;
 
+type
+  // The operands a failed constant evaluation found not to be constants.
+  TGocciaNotConstantPath = TList<TGocciaExpression>;
+
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression;
   out AValue: TGocciaCompileTimeValue): Boolean; overload;
-{ The same. When AExpr is a binary expression that does not evaluate because
-  its left operand does not, ALeftFailures counts the expressions this call
-  found not to evaluate going down the left operands from that operand: 1
-  for the operand alone, 2 when its own left operand did not evaluate
-  either, and so on. Otherwise it is 0. }
+{ The same. When AExpr does not evaluate because one of its operands does
+  not (a binary expression's left one, or its right one after a left one
+  that does; a unary expression's operand), adds that operand to
+  ANotConstant, after the operands it found not to evaluate in turn below
+  it: the path down to the first expression that is not a constant, deepest
+  first, without AExpr itself. }
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue;
-  out ALeftFailures: Integer): Boolean; overload;
+  const ANotConstant: TGocciaNotConstantPath): Boolean; overload;
 function TryEmitConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; const ADest: UInt16): Boolean;
 { Under strict types, compiles AExpr as a simpler expression its operand
   types allow (`b && true` as `b`, `s + ""` as `s`, `x ** 1` as `x`) and
-  returns True; otherwise emits nothing. ALeftNotConstant says the caller
-  knows AExpr's left operand does not evaluate to a constant, which saves
-  evaluating it. }
+  returns True; otherwise emits nothing. ALeftNotConstant and
+  ARightNotConstant say the caller knows that AExpr's left or right operand
+  does not evaluate to a constant, which saves evaluating it. }
 function TryEmitStrictTypeSimplification(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; const ADest: UInt16;
-  const ALeftNotConstant: Boolean): Boolean;
+  const ALeftNotConstant, ARightNotConstant: Boolean): Boolean;
 procedure EmitCompileTimeValue(const ACtx: TGocciaCompilationContext;
   const AValue: TGocciaCompileTimeValue; const ADest: UInt16);
 function CompileTimeValueToBoolean(
@@ -38,8 +45,6 @@ function CompileTimeValueToBoolean(
 function CompileTimeValueIsNullish(
   const AValue: TGocciaCompileTimeValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
-function TryFoldUnary(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaUnaryExpression; const ADest: UInt16): Boolean;
 function IsNegativeZeroFloat(const AValue: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
@@ -462,8 +467,8 @@ begin
 end;
 
 function TryEvaluateUnaryExpression(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaUnaryExpression;
-  out AValue: TGocciaCompileTimeValue): Boolean;
+  const AExpr: TGocciaUnaryExpression; out AValue: TGocciaCompileTimeValue;
+  const ANotConstant: TGocciaNotConstantPath): Boolean;
 var
   Operand: TGocciaCompileTimeValue;
   NumberValue: Double;
@@ -473,8 +478,13 @@ begin
   if AExpr.Operator = gttDelete then
     Exit(False);
 
-  if not TryEvaluateConstantExpression(ACtx, AExpr.Operand, Operand) then
+  if not TryEvaluateConstantExpression(ACtx, AExpr.Operand, Operand,
+       ANotConstant) then
+  begin
+    if Assigned(ANotConstant) then
+      ANotConstant.Add(AExpr.Operand);
     Exit(False);
+  end;
 
   Result := True;
   case AExpr.Operator of
@@ -531,18 +541,27 @@ end;
 
 function TryEvaluateBinaryExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaBinaryExpression; out AValue: TGocciaCompileTimeValue;
-  out ALeftFailures: Integer): Boolean;
+  const ANotConstant: TGocciaNotConstantPath): Boolean;
 var
   LeftValue, RightValue: TGocciaCompileTimeValue;
-  LeftFailures: Integer;
+
+  // Evaluates the right operand, which the left one did not decide.
+  function TryEvaluateRight: Boolean;
+  begin
+    Result := TryEvaluateConstantExpression(ACtx, AExpr.Right, RightValue,
+      ANotConstant);
+    if not Result and Assigned(ANotConstant) then
+      ANotConstant.Add(AExpr.Right);
+  end;
+
 begin
   ResetCompileTimeValue(AValue, ctvkUnknown);
-  ALeftFailures := 0;
 
   if not TryEvaluateConstantExpression(ACtx, AExpr.Left, LeftValue,
-       LeftFailures) then
+       ANotConstant) then
   begin
-    ALeftFailures := LeftFailures + 1;
+    if Assigned(ANotConstant) then
+      ANotConstant.Add(AExpr.Left);
     Exit(False);
   end;
 
@@ -554,7 +573,7 @@ begin
           AValue := LeftValue;
           Exit(True);
         end;
-        if TryEvaluateConstantExpression(ACtx, AExpr.Right, RightValue) then
+        if TryEvaluateRight then
         begin
           AValue := RightValue;
           Exit(True);
@@ -568,7 +587,7 @@ begin
           AValue := LeftValue;
           Exit(True);
         end;
-        if TryEvaluateConstantExpression(ACtx, AExpr.Right, RightValue) then
+        if TryEvaluateRight then
         begin
           AValue := RightValue;
           Exit(True);
@@ -582,7 +601,7 @@ begin
           AValue := LeftValue;
           Exit(True);
         end;
-        if TryEvaluateConstantExpression(ACtx, AExpr.Right, RightValue) then
+        if TryEvaluateRight then
         begin
           AValue := RightValue;
           Exit(True);
@@ -591,7 +610,7 @@ begin
       end;
   end;
 
-  if not TryEvaluateConstantExpression(ACtx, AExpr.Right, RightValue) then
+  if not TryEvaluateRight then
     Exit(False);
 
   Result := TryFoldBinaryConstants(AExpr.Operator, LeftValue, RightValue, AValue);
@@ -667,18 +686,15 @@ end;
 
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue): Boolean;
-var
-  LeftFailures: Integer;
 begin
-  Result := TryEvaluateConstantExpression(ACtx, AExpr, AValue, LeftFailures);
+  Result := TryEvaluateConstantExpression(ACtx, AExpr, AValue, nil);
 end;
 
 function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue;
-  out ALeftFailures: Integer): Boolean;
+  const ANotConstant: TGocciaNotConstantPath): Boolean;
 begin
   ResetCompileTimeValue(AValue, ctvkUnknown);
-  ALeftFailures := 0;
   if not (ACtx.OptimizationOptions.EnableConstantFolding or
           ACtx.OptimizationOptions.EnableConstPropagation or
           ACtx.OptimizationOptions.EnableDeadBranchElimination) then
@@ -697,10 +713,11 @@ begin
   else if AExpr is TGocciaIdentifierExpression then
     Result := TryEvaluateIdentifier(ACtx, TGocciaIdentifierExpression(AExpr), AValue)
   else if AExpr is TGocciaUnaryExpression then
-    Result := TryEvaluateUnaryExpression(ACtx, TGocciaUnaryExpression(AExpr), AValue)
+    Result := TryEvaluateUnaryExpression(ACtx, TGocciaUnaryExpression(AExpr),
+      AValue, ANotConstant)
   else if AExpr is TGocciaBinaryExpression then
     Result := TryEvaluateBinaryExpression(ACtx, TGocciaBinaryExpression(AExpr),
-      AValue, ALeftFailures)
+      AValue, ANotConstant)
   else if AExpr is TGocciaSequenceExpression then
     Result := TryEvaluateSequenceExpression(ACtx, TGocciaSequenceExpression(AExpr), AValue)
   else if AExpr is TGocciaConditionalExpression then
@@ -747,7 +764,7 @@ end;
 
 function TryEmitStrictTypeSimplification(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; const ADest: UInt16;
-  const ALeftNotConstant: Boolean): Boolean;
+  const ALeftNotConstant, ARightNotConstant: Boolean): Boolean;
 var
   Unary: TGocciaUnaryExpression;
   InnerUnary: TGocciaUnaryExpression;
@@ -783,8 +800,9 @@ begin
     // An operand's type is asked for only once the operator and a constant
     // on the other side make it matter: ExpressionType walks the operand's
     // whole subtree, and doing so at every operator of a chain took time
-    // quadratic in its length.
-    if (Binary.Operator = gttAnd) and
+    // quadratic in its length. An operand the caller knows is not a
+    // constant is not evaluated again, for the same reason.
+    if (Binary.Operator = gttAnd) and not ARightNotConstant and
        IsBooleanConstant(ACtx, Binary.Right, True) and
        (ExpressionType(ACtx.Scope, Binary.Left) = sltBoolean) then
     begin
@@ -792,7 +810,7 @@ begin
       Exit(True);
     end;
 
-    if (Binary.Operator = gttOr) and
+    if (Binary.Operator = gttOr) and not ARightNotConstant and
        IsBooleanConstant(ACtx, Binary.Right, False) and
        (ExpressionType(ACtx.Scope, Binary.Left) = sltBoolean) then
     begin
@@ -800,7 +818,7 @@ begin
       Exit(True);
     end;
 
-    if (Binary.Operator = gttPlus) and
+    if (Binary.Operator = gttPlus) and not ARightNotConstant and
        IsEmptyStringConstant(ACtx, Binary.Right) and
        (ExpressionType(ACtx.Scope, Binary.Left) = sltString) then
     begin
@@ -816,7 +834,7 @@ begin
       Exit(True);
     end;
 
-    if (Binary.Operator = gttPower) and
+    if (Binary.Operator = gttPower) and not ARightNotConstant and
        IsNumberConstant(ACtx, Binary.Right, 1.0) and
        IsKnownNumeric(ExpressionType(ACtx.Scope, Binary.Left)) then
     begin
@@ -824,7 +842,7 @@ begin
       Exit(True);
     end;
 
-    if (Binary.Operator = gttPower) and
+    if (Binary.Operator = gttPower) and not ARightNotConstant and
        IsNumberConstant(ACtx, Binary.Right, 0.0) and
        IsKnownNumeric(ExpressionType(ACtx.Scope, Binary.Left)) then
     begin
@@ -846,13 +864,8 @@ begin
     Exit(True);
   end;
 
-  Result := TryEmitStrictTypeSimplification(ACtx, AExpr, ADest, False);
-end;
-
-function TryFoldUnary(const ACtx: TGocciaCompilationContext;
-  const AExpr: TGocciaUnaryExpression; const ADest: UInt16): Boolean;
-begin
-  Result := TryEmitConstantExpression(ACtx, AExpr, ADest);
+  Result := TryEmitStrictTypeSimplification(ACtx, AExpr, ADest, False,
+    False);
 end;
 
 end.

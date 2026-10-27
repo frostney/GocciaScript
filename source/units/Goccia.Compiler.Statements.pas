@@ -96,6 +96,12 @@ function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
 function StripArrayLayer(const AAnnotation: string): string;
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
+{ ExpressionType, answering for the binary expressions in AExpr from AMemo
+  and recording there the ones it walks (TGocciaCompilerScope's
+  ExpressionTypeMemo). }
+function ExpressionTypeRecorded(const AScope: TGocciaCompilerScope;
+  const AMemo: TGocciaExpressionTypeMemo;
+  const AExpr: TGocciaExpression): TGocciaLocalType;
 // The type ExpressionType gives a binary expression with operator AOperator
 // whose operands have the types ALeftType and ARightType.
 function BinaryExpressionType(const AOperator: TGocciaTokenType;
@@ -630,8 +636,9 @@ begin
   end;
 end;
 
-function ExpressionType(const AScope: TGocciaCompilerScope;
-  const AExpr: TGocciaExpression): TGocciaLocalType;
+function ExpressionTypeOf(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression;
+  const AMemo: TGocciaExpressionTypeMemo): TGocciaLocalType;
 var
   Bin: TGocciaBinaryExpression;
   Sequence: TGocciaSequenceExpression;
@@ -697,13 +704,13 @@ begin
       Exit(sltString);
     if BinaryTypeDependsOnOperands(Bin.Operator) then
     begin
-      LeftType := ExpressionType(AScope, Bin.Left);
+      LeftType := ExpressionTypeRecorded(AScope, AMemo, Bin.Left);
       // A bitwise operator with a Number on the left yields an integer
       // whatever its right operand is, which is then not asked: asking
       // resolves its names, and a name of an enclosing function resolved
       // here is captured although no code reads it.
       if IsArithmeticOp(Bin.Operator) or not IsKnownNumeric(LeftType) then
-        RightType := ExpressionType(AScope, Bin.Right);
+        RightType := ExpressionTypeRecorded(AScope, AMemo, Bin.Right);
     end;
     Result := BinaryExpressionType(Bin.Operator, LeftType, RightType);
   end
@@ -717,11 +724,13 @@ begin
         Result := sltFloat;
       // §13.5.5: ToNumeric keeps a Number a Number (-0 included).
       gttMinus:
-        if IsKnownNumeric(ExpressionType(AScope, Unary.Operand)) then
+        if IsKnownNumeric(ExpressionTypeRecorded(AScope, AMemo,
+             Unary.Operand)) then
           Result := sltFloat;
       // §13.5.6: Number::bitwiseNOT of a Number is an int32.
       gttBitwiseNot:
-        if IsKnownNumeric(ExpressionType(AScope, Unary.Operand)) then
+        if IsKnownNumeric(ExpressionTypeRecorded(AScope, AMemo,
+             Unary.Operand)) then
           Result := sltInteger;
       // §13.5.7 and §13.5.3: a Boolean and a String.
       gttNot:
@@ -743,7 +752,7 @@ begin
   begin
     Sequence := TGocciaSequenceExpression(AExpr);
     if Sequence.Expressions.Count > 0 then
-      Result := ExpressionType(AScope,
+      Result := ExpressionTypeRecorded(AScope, AMemo,
         Sequence.Expressions[Sequence.Expressions.Count - 1]);
   end
   // Any other call expression stays untyped. ES2026 §13.3.6.2 EvaluateCall
@@ -753,9 +762,9 @@ begin
   // checks, nor a skipped strict-types check on the receiving binding.
   else if AExpr is TGocciaConditionalExpression then
   begin
-    LeftType := ExpressionType(AScope,
+    LeftType := ExpressionTypeRecorded(AScope, AMemo,
       TGocciaConditionalExpression(AExpr).Consequent);
-    RightType := ExpressionType(AScope,
+    RightType := ExpressionTypeRecorded(AScope, AMemo,
       TGocciaConditionalExpression(AExpr).Alternate);
     if LeftType = RightType then
       Result := LeftType
@@ -786,6 +795,27 @@ begin
     Result := sltReference
   else if AExpr is TGocciaFunctionExpression then
     Result := sltReference;
+end;
+
+function ExpressionTypeRecorded(const AScope: TGocciaCompilerScope;
+  const AMemo: TGocciaExpressionTypeMemo;
+  const AExpr: TGocciaExpression): TGocciaLocalType;
+begin
+  if Assigned(AMemo) and (AExpr is TGocciaBinaryExpression) then
+  begin
+    if AMemo.TryGetValue(AExpr, Result) then
+      Exit;
+    Result := ExpressionTypeOf(AScope, AExpr, AMemo);
+    AMemo.AddOrSetValue(AExpr, Result);
+  end
+  else
+    Result := ExpressionTypeOf(AScope, AExpr, AMemo);
+end;
+
+function ExpressionType(const AScope: TGocciaCompilerScope;
+  const AExpr: TGocciaExpression): TGocciaLocalType;
+begin
+  Result := ExpressionTypeOf(AScope, AExpr, nil);
 end;
 
 function InferredExpressionType(const AScope: TGocciaCompilerScope;
