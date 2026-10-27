@@ -94,11 +94,24 @@ Permute, Towers, Sieve and Richards and rise by 7-16% in Bounce, DeltaBlue and
 NBody. The layout moved by each of eleven distances from 64 to 3072 bytes kept
 every benchmark within 1.9% of its other layouts.
 
+The driver itself (`--counters --fresh-copies --alternate-order --cpu
+--warmup 1`, twelve repetitions, eleven benchmarks, wall time), on this layout
+merged with `main` at `2fcffb67`:
+
+| Pair | Largest benchmark difference | Geomean |
+| --- | ---: | ---: |
+| `main` and its layout probe | 1.31% (DeltaBlue) | +0.12% |
+| this layout and its layout probe | 1.79% (List) | +0.16% |
+| this layout against `main` | 1.96% (Storage, faster), 1.39% (Bounce) | +0.10% |
+
+Each probe pair executes the same instructions to within 0.001%; this layout
+executes 0.0-0.7% more than `main`.
+
 ## Consequences
 
 - This is not a speed-up. Against `main` the layout is 0.06-0.35% slower on
-  geometric mean in three comparisons, Bounce 1.2-1.8% slower and Storage
-  1.2-1.7% faster each time, within the spread of the layouts measured.
+  geometric mean in four comparisons, Bounce 1.2-1.8% slower and Storage
+  1.2-2.0% faster each time, within the spread of the layouts measured.
 - An edit to a cold arm leaves the hot arms where they are, and a time delta
   it shows is noise. An edit to a hot arm still moves the hot arms after it,
   by whole lines.
