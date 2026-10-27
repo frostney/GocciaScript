@@ -44,6 +44,11 @@ describe("long branches", () => {
     expect(realm.evaluate(`const g = (n) => { let r = 0; let i = 0; do { i = i + 1; ${statements(40000)} } while (i < n); return r; }; g(2) + ":" + g(0)`)).toBe("80000:40000");
   });
 
+  test("a do...while whose condition sits in a register past 255", () => {
+    const lets = Array.from({ length: 300 }, (_, i) => `let v${i} = ${i};`).join(" ");
+    expect(realm.evaluate(`const g = (n) => { ${lets} let i = 0; let r = 0; do { i = i + 1; r = r + v299; } while (i < n); return r; }; g(1) + ":" + g(3)`)).toBe("299:897");
+  });
+
   test("try blocks over 70,000 statements", () => {
     expect(realm.evaluate(`const g = (k) => { let r = 0; try { ${statements(70000)} if (k) throw 1; } catch (e) { r = -r; } finally { r = r + 0.5; } return r; }; g(1) + ":" + g(0)`)).toBe("-69999.5:70000.5");
   });

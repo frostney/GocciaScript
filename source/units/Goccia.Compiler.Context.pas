@@ -317,6 +317,10 @@ var
   Offset: Integer;
 begin
   Offset := ATarget - CurrentCodePosition(ACtx) - 1;
+  // A register past 255 puts an OP_WIDE prefix before the jump, which is then
+  // one instruction further from ATarget.
+  if AReg > High(UInt8) then
+    Dec(Offset);
   if Offset >= Low(Int16) then
   begin
     EmitInstruction(ACtx, EncodeAsBx(AOp, AReg, Int16(Offset)));
