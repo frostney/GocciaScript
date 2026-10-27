@@ -504,7 +504,10 @@ change did more or less work. Four driver options separate the two:
 
 `scripts/awfy-comment.js` turns such a report into the PR comment's table, with
 `Instructions` and `L1i misses` columns next to the time delta when both
-Goccia binaries were counted.
+Goccia binaries were counted. The PR workflow runs its AWFY report with
+`--counters`, but GitHub's hosted runners cannot count hardware events, so its
+comment has no counter columns and its footnote says why; the numbers come
+from a local run on a machine that can count them.
 
 ```bash
 node scripts/awfy-driver.js \

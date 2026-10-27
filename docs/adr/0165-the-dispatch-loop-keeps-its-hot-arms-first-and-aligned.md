@@ -61,8 +61,11 @@ function, as a placement control.
 
 **A benchmark A/B can tell work from placement.** The AWFY driver records
 instructions retired, cycles and branch, L1i and iTLB misses for every Goccia
-sample with `--counters`, where Linux `perf_event` allows, and the PR comment
-shows the instruction and L1i-miss deltas next to the time delta.
+sample with `--counters`, where Linux `perf_event` allows, and its comment
+table shows the instruction and L1i-miss deltas next to the time delta. The PR
+workflow asks for counters too, but GitHub's hosted runners cannot count them,
+so there the comment only says why; on a machine that can, the same report
+and comment carry them.
 `--fresh-copies`, `--cpu`, `--alternate-order` and `--warmup` sample placements
 and keep the comparison balanced. They extend the driver and the report of
 ADR 0087 rather than adding another path.

@@ -350,6 +350,7 @@ console.log('awfy-driver: hardware counters...');
     spawn: () => ({ status: 255, stderr: 'Error:\nAccess to performance monitoring and observability operations is limited.\n' }),
   });
   assertEqual(forbidden.available, false, 'counters are unavailable when perf_event is not permitted');
+  assert(forbidden.reason.includes('Access to performance monitoring'), 'the reason includes the line after perf\'s bare "Error:"');
 
   const partial = probeCounters({
     platform: 'linux',

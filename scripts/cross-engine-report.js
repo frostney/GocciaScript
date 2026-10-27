@@ -133,8 +133,10 @@ function probeCounters({ perf = 'perf', platform = process.platform, spawn = spa
     return { available: false, reason: `${perf} could not be run (${proc.error.code || proc.error.message})`, events: [] };
   }
   if (proc.status !== 0) {
-    const firstLine = (proc.stderr || '').split(/\r?\n/).find((line) => line.trim() !== '') || `exit ${proc.status}`;
-    return { available: false, reason: `${perf} stat failed: ${firstLine.trim()}`, events: [] };
+    // perf's first line is often just `Error:`; the next one says why.
+    const message = (proc.stderr || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      .slice(0, 2).join(' ').slice(0, 240) || `exit ${proc.status}`;
+    return { available: false, reason: `${perf} stat failed: ${message}`, events: [] };
   }
   const { counters } = parsePerfStat(proc.stderr || '');
   const events = COUNTER_EVENTS.filter((entry) => typeof counters[entry.key] === 'number');
