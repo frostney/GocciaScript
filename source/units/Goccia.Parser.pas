@@ -9896,6 +9896,11 @@ end;
 // call in a `.ts` file. tsc, esbuild and bun all draw the line at the file
 // extension, and so does the Type Annotations proposal, which leaves generic
 // call syntax out for this exact reason.
+//
+// A probe that fails has seen what the probes from the '<' tokens it passed
+// would see, and decides those that would fail too
+// (RememberNotTypeArguments), so a chain such as `a < b < c < ...` is scanned
+// once rather than once per operator.
 function TGocciaParser.TryCollectCallExpressionTypeArguments: Boolean;
 var
   BracketDepth, Depth: Integer;

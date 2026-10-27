@@ -155,6 +155,7 @@ type
     procedure TestOperatorChainsCompileInLinearTime;
     procedure TestOperatorChainsFoldTheirConstantStart;
     procedure TestSwitchCaseDeclarationsCompileInLinearTime;
+    procedure TestTypeScriptComparisonChainsParseInLinearTime;
     procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
@@ -310,6 +311,8 @@ begin
     TestOperatorChainsFoldTheirConstantStart);
   Test('A switch with a declaration in each case clause compiles in linear time',
     TestSwitchCaseDeclarationsCompileInLinearTime);
+  Test('TypeScript comparison chains parse in time linear in the code after them',
+    TestTypeScriptComparisonChainsParseInLinearTime);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
@@ -1228,6 +1231,96 @@ begin
   ExpectFolded('const k = 4; const f = (p) => k * 2 + k + p + k;', 12, 2);
   ExpectFolded('const f = (p) => 1 + 2 + p + 3 + 4;', 3, 3);
   ExpectFolded('const f = (p) => 2 * 3 * 4 + p + p + p + p;', 24, 4);
+end;
+
+{ In TypeScript, a '<' after a callee may open call-site type arguments,
+  and the parser scans ahead to see whether it does. In `p < p < p` the
+  depth of '<' never comes back to zero, so each scan went on to the bracket
+  around the chain, or to the end of the file, and lexed those tokens again:
+  40 chains of 120 terms took 5 s to lex and parse. A failed scan now decides
+  the '<' tokens after it as well. Four times the source parses in at most 8
+  times the time, where linear growth gives 4 and quadratic 16. }
+procedure TTestCompiler.TestTypeScriptComparisonChainsParseInLinearTime;
+const
+  GROWTH_RATIO = 8;
+
+  // ALines statements, each `const yN = ` and ATerms terms joined by '<', in
+  // the body of an arrow function or at the top level.
+  function ChainsSource(const ALines, ATerms: Integer;
+    const AInFunction: Boolean): string;
+  var
+    Source: TStringBuffer;
+    Line, Term: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    if AInFunction then
+      Source.Append('const f = (p: number) => {' + LineEnding)
+    else
+      Source.Append('const p = 1;' + LineEnding);
+    for Line := 0 to ALines - 1 do
+    begin
+      Source.Append(Format('const y%d = p', [Line]));
+      for Term := 1 to ATerms - 1 do
+        Source.Append(' < p');
+      Source.Append(';' + LineEnding);
+    end;
+    if AInFunction then
+      Source.Append('return p; };' + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  function ParseNanoseconds(const ASource: string): Int64;
+  var
+    Lexer: TGocciaLexer;
+    Parser: TGocciaParser;
+    ProgramNode: TGocciaProgram;
+    SourceLines: TStringList;
+    Start, Elapsed: Int64;
+    Trial: Integer;
+  begin
+    Result := High(Int64);
+    for Trial := 1 to LINEAR_TRIALS do
+    begin
+      Lexer := TGocciaLexer.Create(ASource, '<test>.ts');
+      SourceLines := CreateTextLines(ASource);
+      Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>.ts', SourceLines);
+      ProgramNode := nil;
+      try
+        Start := GetNanoseconds;
+        ProgramNode := Parser.Parse;
+        Elapsed := GetNanoseconds - Start;
+      finally
+        ProgramNode.Free;
+        Parser.Free;
+        SourceLines.Free;
+        Lexer.Free;
+      end;
+      if Elapsed < Result then
+        Result := Elapsed;
+    end;
+  end;
+
+  procedure ExpectChainsParseLinear(const ALines, ATerms: Integer;
+    const AInFunction: Boolean);
+  var
+    Small, Large: Int64;
+  begin
+    Small := ParseNanoseconds(ChainsSource(ALines, ATerms, AInFunction));
+    Large := ParseNanoseconds(ChainsSource(4 * ALines, ATerms, AInFunction));
+    if Large > GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d chains of %d terms took %d ms to parse against %d ms ' +
+        'for %d', [4 * ALines, ATerms, Large div 1000000, Small div 1000000,
+        ALines]));
+    Expect<Boolean>(Large <=
+      GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  // The shape the slowdown was seen in: long chains in a function body.
+  ExpectChainsParseLinear(8, 120, True);
+  // Short chains at the top level, where each scan ran to the end of the
+  // file.
+  ExpectChainsParseLinear(250, 3, False);
 end;
 
 { The case clauses of a switch share one scope, so the compiler forgets
