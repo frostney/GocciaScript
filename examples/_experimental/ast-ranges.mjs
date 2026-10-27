@@ -9,10 +9,14 @@
 //   2. Children nest inside their parent, and siblings do not overlap.
 //   3. `loc` is the line and column of `start` and `end` in that same
 //      source — one coordinate system, not two that agree by luck.
-//   4. Re-parsing the text the range selects yields a statement of the same
+//   4. Re-parsing the text the range selects yields a node of the same
 //      kind covering exactly that text. This is the one that catches an
 //      offset that is merely plausible: a range one character wide of the
 //      truth still passes 1-3 and fails here.
+//
+// Each file is checked twice: once as the statement tree `parse` returns by
+// default, and once with `expressions: true`, where every expression,
+// object property and parameter is a node as well.
 //
 // Run:
 //   ./build.pas runner
@@ -55,6 +59,49 @@ const LOOP_SUFFIX = `\n}${FUNCTION_SUFFIX}`;
 const SWITCH_PREFIX = `${FUNCTION_PREFIX}switch (0) {\n`;
 const SWITCH_SUFFIX = `\n}${FUNCTION_SUFFIX}`;
 
+// Expression-level kinds that a re-parse cannot place on their own: a
+// pattern means something else outside a binding, and a template's or a
+// match's inner nodes are checked through the expression around them.
+const UNREPARSABLE_EXPRESSION_KINDS = [
+  "ArrayPattern",
+  "ObjectPattern",
+  "RestElement",
+  "AssignmentPattern",
+];
+
+// Expression-level kinds, and the text to re-parse each one inside. An
+// expression goes in parentheses inside an async generator method, which
+// accepts `await`, `yield`, `new.target` and `super.x`; `super()` needs a
+// derived constructor.
+const EXPRESSION_PREFIX = "class __Probe extends Object {\nasync *probe() {\n(";
+const EXPRESSION_SUFFIX = ");\n}\n}\n";
+const SUPER_PREFIX = "class __Probe extends Object {\nconstructor() {\n(";
+const SUPER_SUFFIX = ");\n}\n}\n";
+
+const expressionWrapperFor = (kind, slice) => {
+  if (kind === "Property") {
+    return { prefix: `${EXPRESSION_PREFIX}{`, suffix: `}${EXPRESSION_SUFFIX}` };
+  }
+
+  if (kind === "SpreadElement") {
+    return { prefix: `${EXPRESSION_PREFIX}[`, suffix: `]${EXPRESSION_SUFFIX}` };
+  }
+
+  if (kind === "Parameter") {
+    return { prefix: "const __probe = (", suffix: ") => 0;\n" };
+  }
+
+  if (kind === "MethodDefinition") {
+    return { prefix: "class __Probe {\n", suffix: "\n}\n" };
+  }
+
+  if (slice.startsWith("super(")) {
+    return { prefix: SUPER_PREFIX, suffix: SUPER_SUFFIX };
+  }
+
+  return { prefix: EXPRESSION_PREFIX, suffix: EXPRESSION_SUFFIX };
+};
+
 const isJsxPath = (path) => path.endsWith(".tsx") || path.endsWith(".jsx");
 
 /** Line and column of an offset, counted the way the engine counts them. */
@@ -80,7 +127,19 @@ const nodesOf = (root) => {
   return all;
 };
 
-const wrapperFor = (kind) => {
+// A statement kind, as opposed to one the expression view adds.
+const isStatementKind = (kind) =>
+  kind === "Program" ||
+  kind === "SwitchCase" ||
+  kind === "Statement" ||
+  kind.endsWith("Statement") ||
+  kind.endsWith("Declaration");
+
+const wrapperFor = (kind, slice) => {
+  if (!isStatementKind(kind)) {
+    return expressionWrapperFor(kind, slice);
+  }
+
   if (TOP_LEVEL_KINDS.includes(kind)) {
     return { prefix: "", suffix: "" };
   }
@@ -100,16 +159,16 @@ const wrapperFor = (kind) => {
  * The range says the node covers this text. Parse that text on its own and
  * see whether the same node comes back out of it, at the same width.
  */
-const roundTrip = (file, text, node) => {
+const roundTrip = (file, text, node, expressions) => {
   const slice = text.slice(node.start, node.end);
-  const wrapper = wrapperFor(node.kind);
+  const wrapper = wrapperFor(node.kind, slice);
   const wrapped = wrapper.prefix + slice + wrapper.suffix;
   const start = wrapper.prefix.length;
   const end = start + slice.length;
   let reparsed = null;
 
   try {
-    reparsed = parse(wrapped, { jsx: isJsxPath(file), fileName: file });
+    reparsed = parse(wrapped, { jsx: isJsxPath(file), fileName: file, expressions });
   } catch (error) {
     return `re-parsing the range's text failed: ${error.message}`;
   }
@@ -168,13 +227,13 @@ const checkNode = (file, text, node, parent) => {
 
 const extensionOf = (file) => file.slice(file.lastIndexOf("."));
 
-const checkFile = (file, counts) => {
+const checkFile = (file, counts, expressions) => {
   const text = fs.readFileSync(file, "utf8");
   const problems = [];
   let result = null;
 
   try {
-    result = parse(text, { jsx: isJsxPath(file), fileName: file });
+    result = parse(text, { jsx: isJsxPath(file), fileName: file, expressions });
   } catch (error) {
     return [`${file}  parse failed: ${error.message}`];
   }
@@ -189,10 +248,13 @@ const checkFile = (file, counts) => {
     counts[extension] = (counts[extension] ?? 0) + 1;
     problems.push(...checkNode(file, text, node, parent));
 
-    if (UNREPARSABLE_KINDS.includes(node.kind)) {
+    if (
+      UNREPARSABLE_KINDS.includes(node.kind) ||
+      UNREPARSABLE_EXPRESSION_KINDS.includes(node.kind)
+    ) {
       counts.skipped = counts.skipped + 1;
     } else {
-      const failure = roundTrip(file, text, node);
+      const failure = roundTrip(file, text, node, expressions);
 
       if (failure) {
         problems.push(`${file}:${node.loc.start.line} ${node.kind}  ${failure}`);
@@ -226,26 +288,30 @@ const sourceFiles = (dir) => {
 };
 
 const files = sourceFiles(ROOT).sort();
-const counts = { nodes: 0, roundTripped: 0, skipped: 0 };
 const extensions = [".ts", ".tsx"];
-const problems = [];
 
-files.forEach((file) => {
-  problems.push(...checkFile(file, counts));
-});
+[false, true].forEach((expressions) => {
+  const counts = { nodes: 0, roundTripped: 0, skipped: 0 };
+  const problems = [];
+  const view = expressions ? "expressions" : "statements";
 
-problems.forEach((problem) => {
-  console.log(problem);
-});
+  files.forEach((file) => {
+    problems.push(...checkFile(file, counts, expressions));
+  });
 
-extensions.forEach((extension) => {
-  const matching = files.filter((file) => extensionOf(file) === extension);
+  problems.forEach((problem) => {
+    console.log(`${view}  ${problem}`);
+  });
+
+  extensions.forEach((extension) => {
+    const matching = files.filter((file) => extensionOf(file) === extension);
+
+    console.log(
+      `${view}  ${extension}: ${counts[extension] ?? 0} node(s) in ${matching.length} file(s)`,
+    );
+  });
 
   console.log(
-    `${extension}: ${counts[extension] ?? 0} node(s) in ${matching.length} file(s)`,
+    `${view}  ${counts.nodes} node(s) in ${files.length} file(s): ${counts.roundTripped} round-tripped, ${counts.skipped} not re-parsable on their own, ${problems.length} problem(s)`,
   );
 });
-
-console.log(
-  `${counts.nodes} node(s) in ${files.length} file(s): ${counts.roundTripped} round-tripped, ${counts.skipped} not re-parsable on their own, ${problems.length} problem(s)`,
-);

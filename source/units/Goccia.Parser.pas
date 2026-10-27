@@ -122,6 +122,10 @@ type
     FActiveLabels: TUnicodeStringList;
     FActiveIterationLabels: TUnicodeStringList;
     FDirectLabelStart: Integer;
+    { Where the last module specifier consumed was, for the declaration that
+      is built after it (RecordModuleSpecifier). }
+    FModuleSpecifierStart: Integer;
+    FModuleSpecifierEnd: Integer;
     FSkipPrivateNameValidation: Integer;
     FAutomaticSemicolonInsertion: Boolean;
     FVarDeclarationsEnabled: Boolean;
@@ -242,6 +246,8 @@ type
     function Consume(const ATokenType: TGocciaTokenType; const AMessage: string): TGocciaToken; overload;
     function Consume(const ATokenType: TGocciaTokenType; const AMessage, ASuggestion: string): TGocciaToken; overload;
     procedure ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
+    function ConsumeModuleSpecifier(const AMessage: string): string;
+    procedure RecordModuleSpecifier(const ADeclaration: TGocciaStatement);
     procedure ConsumeDoWhileSemicolonOrASI(
       const AMessage, ASuggestion: string);
     function CheckSemicolonOrASI: Boolean;
@@ -1522,6 +1528,28 @@ begin
 end;
 
 // ES2026 §12.10 Automatic Semicolon Insertion
+{ The module path of an import or re-export, remembering where it was. }
+function TGocciaParser.ConsumeModuleSpecifier(const AMessage: string): string;
+var
+  Token: TGocciaToken;
+begin
+  Token := Consume(gttString, AMessage, SSuggestProvideModulePath);
+  FModuleSpecifierStart := Token.Span.StartOffset;
+  FModuleSpecifierEnd := Token.Span.EndOffset;
+  Result := Token.Lexeme;
+end;
+
+procedure TGocciaParser.RecordModuleSpecifier(
+  const ADeclaration: TGocciaStatement);
+begin
+  if ADeclaration is TGocciaImportDeclaration then
+    TGocciaImportDeclaration(ADeclaration).SetModuleSpecifierRange(
+      FModuleSpecifierStart, FModuleSpecifierEnd)
+  else if ADeclaration is TGocciaReExportDeclaration then
+    TGocciaReExportDeclaration(ADeclaration).SetModuleSpecifierRange(
+      FModuleSpecifierStart, FModuleSpecifierEnd);
+end;
+
 procedure TGocciaParser.ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
 begin
   if Check(gttSemicolon) then
@@ -2935,7 +2963,10 @@ begin
     raise;
   end;
 
-  Result := TGocciaTemplateWithInterpolationExpression.Create(Parts, AToken.Span);
+  { From the head to the tail, so the node's span is the whole template and
+    not only its first segment. }
+  Result := TGocciaTemplateWithInterpolationExpression.Create(Parts,
+    AToken.Span.Cover(TemplateToken.Span));
 end;
 
 // ES2026 §13.3.10 ImportCall — import(specifier [, options] [,])
@@ -3354,6 +3385,8 @@ begin
           Parameters[0].IsRest := False;
           Parameters[0].IsOptional := False;
           Parameters[0].TypeAnnotation := '';
+          Parameters[0].StartOffset := Token.Span.StartOffset;
+          Parameters[0].EndOffset := Token.Span.EndOffset;
 
           if HasUseStrictDirective(ArrowBody) then
             ValidateParameterEarlyErrors(Parameters, Line, Column, True,
@@ -3422,7 +3455,7 @@ begin
       end;
     gttLeftParen:
       begin
-        Advance;
+        Token := Advance;
         // The expression inside counts as a level of nesting (Assignment);
         // an arrow function's body does too.
         // Check for arrow function by looking for pattern: () => or (id) => or (id, id) =>
@@ -3433,7 +3466,8 @@ begin
           Expr := ExpressionAllowIn;
           Consume(gttRightParen, 'Expected ")" after expression',
             SSuggestCloseParenExpression);
-          Expr.Parenthesized := True;
+          Expr.MarkParenthesized(Token.Span.StartOffset,
+            Previous.Span.EndOffset);
           if ExpressionContainsOptionalChain(Expr) then
             Result := WrapOptionalChainParentheses(Expr)
           else
@@ -4346,6 +4380,8 @@ var
   SetterExpression: TGocciaSetterExpression;
   ComputedCount, SourceOrderCount: Integer;
   MemberStartLine, MemberStartColumn: Integer;
+  MemberStartOffset: Integer;
+  KeyIdentifier: TGocciaExpression;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -4374,6 +4410,7 @@ begin
       CanBeShorthand := False;
       MemberStartLine := Peek.Line;
       MemberStartColumn := Peek.Column;
+      MemberStartOffset := Peek.Span.StartOffset;
 
       // Check for async method syntax. ES2026 §15.8 / §15.6: AsyncMethod and
       // AsyncGeneratorMethod are `async [no LineTerminator here] ...`; after a
@@ -4413,11 +4450,10 @@ begin
           // Handle spread syntax: ...obj
       if not IsGetter and not IsSetter and Match(gttSpread) then
       begin
-        // Create a spread expression
-        Line := Previous.Line;
-        Column := Previous.Column;
+        // Create a spread expression. Its span starts at the `...`; Line
+        // and Column stay the object's.
         KeyExpression := TGocciaSpreadExpression.Create(AssignmentAllowIn,
-          SourceSpanAtPosition(Line, Column));
+          SourceSpanAtPosition(MemberStartLine, MemberStartColumn));
         ComputedProperties.Add(KeyExpression, nil); // nil value for spread
 
         // Track in source order
@@ -4432,6 +4468,10 @@ begin
         PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := ComputedCount - 1;
         PropertySourceOrder[SourceOrderCount - 1].StaticKey := '';
         PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
+        PropertySourceOrder[SourceOrderCount - 1].StartOffset :=
+          MemberStartOffset;
+        PropertySourceOrder[SourceOrderCount - 1].EndOffset :=
+          Previous.Span.EndOffset;
 
         // For spread expressions, no further processing is needed
         if not Match(gttComma) then
@@ -4509,6 +4549,7 @@ begin
           PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
           PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
           PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
+          PropertySourceOrder[SourceOrderCount - 1].Accessor := GetterExpression;
         end;
       end
       else if IsSetter then
@@ -4544,6 +4585,7 @@ begin
           PropertySourceOrder[SourceOrderCount - 1].StaticKey := Key;
           PropertySourceOrder[SourceOrderCount - 1].ComputedIndex := -1;
           PropertySourceOrder[SourceOrderCount - 1].Expression := nil;
+          PropertySourceOrder[SourceOrderCount - 1].Accessor := SetterExpression;
         end;
       end
       // Check for method shorthand syntax: methodName() { ... } or [expr]() { ... }
@@ -4595,8 +4637,10 @@ begin
           if Match(gttAssign) then
           begin
             // This creates an assignment expression for use in destructuring patterns
+            KeyIdentifier := Value;
             Value := TGocciaAssignmentExpression.Create(Key, AssignmentAllowIn,
               Previous.Span);
+            TGocciaAssignmentExpression(Value).Target := KeyIdentifier;
           end;
         end;
       end;
@@ -4646,6 +4690,11 @@ begin
         end;
       end;
 
+      PropertySourceOrder[SourceOrderCount - 1].StartOffset :=
+        MemberStartOffset;
+      PropertySourceOrder[SourceOrderCount - 1].EndOffset :=
+        Previous.Span.EndOffset;
+
       if not Match(gttComma) then
         Break;
     end;
@@ -4687,6 +4736,7 @@ begin
       Result[ParamCount].IsRest := False;
       Result[ParamCount].IsOptional := False;
       Result[ParamCount].TypeAnnotation := '';
+      Result[ParamCount].StartOffset := Peek.Span.StartOffset;
 
       if Match(gttSpread) then
       begin
@@ -4712,6 +4762,7 @@ begin
           Advance;
           Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttRightParen, gttComma], '', '', False, True);
         end;
+        Result[ParamCount].EndOffset := Previous.Span.EndOffset;
         Inc(ParamCount);
         Break;
       end
@@ -4759,6 +4810,7 @@ begin
           Result[ParamCount].DefaultValue := nil;
       end;
 
+        Result[ParamCount].EndOffset := Previous.Span.EndOffset;
         Inc(ParamCount);
       until not Match(gttComma) or Check(gttRightParen);
     end;
@@ -5061,6 +5113,7 @@ end;
 
 function TGocciaParser.ArrowFunction(const AIsAsync: Boolean): TGocciaExpression;
 var
+  SpanStart: TGocciaToken;
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
   Line, Column: Integer;
@@ -5075,6 +5128,12 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+  { An async arrow begins at `async`, which the caller consumed before the
+    `(` that Previous is. The diagnostics below keep reporting the `(`. }
+  SpanStart := Previous;
+  if AIsAsync and (FCurrent >= 2) and
+     (FTokens[FCurrent - 2].Lexeme = KEYWORD_ASYNC) then
+    SpanStart := FTokens[FCurrent - 2];
 
   SavedInAsyncFunction := FInAsyncFunction;
   SavedInGeneratorFunction := FInGeneratorFunction;
@@ -5130,7 +5189,8 @@ begin
     Dec(FFunctionDepth);
   end;
 
-  ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, Body, SourceSpanAtPosition(Line, Column));
+  ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, Body,
+    SourceSpanFromToken(SpanStart));
   ArrowFn.ReturnType := FnReturnType;
   ArrowFn.SourceText := ExtractSourceRange(Line, Column);
   ArrowFn.DirectEvalUsage := ArrowDirectEvalUsage;
@@ -5198,6 +5258,8 @@ begin
       Parameters[0].IsRest := False;
       Parameters[0].IsOptional := False;
       Parameters[0].TypeAnnotation := '';
+      Parameters[0].StartOffset := Left.Span.StartOffset;
+      Parameters[0].EndOffset := Left.Span.EndOffset;
       Advance; // consume =>
       SavedInAsyncFunction := FInAsyncFunction;
       SavedInGeneratorFunction := FInGeneratorFunction;
@@ -5323,6 +5385,8 @@ begin
     else
       raise TGocciaSyntaxError.Create('Invalid assignment target', Left.Line, Left.Column, FFileName, FSourceLines,
         SSuggestValidAssignmentTarget);
+    if Result is TGocciaTargetedAssignmentExpression then
+      TGocciaTargetedAssignmentExpression(Result).Target := Left;
   end
   else
     Result := Left;
@@ -7698,8 +7762,7 @@ begin
       Imports.Add(LocalName, KEYWORD_DEFAULT);
       Consume(gttFrom, 'Expected "from" after source import binding',
         SSuggestAddFromAfterImport);
-      ModulePath := Consume(gttString, 'Expected module path',
-        SSuggestProvideModulePath).Lexeme;
+      ModulePath := ConsumeModuleSpecifier('Expected module path');
       AttributeType := ParseImportAttributeTypeIfPresent;
       ConsumeSemicolonOrASI('Expected ";" after import declaration',
         SSuggestAddSemicolon);
@@ -7708,6 +7771,7 @@ begin
       raise;
     end;
     Result := TGocciaImportDeclaration.Create(Imports, ModulePath, SourceSpanAtPosition(Line, Column), '', icpSource, AttributeType);
+    RecordModuleSpecifier(Result);
     Exit;
   end;
 
@@ -7723,13 +7787,13 @@ begin
       SSuggestProvideLocalName).Lexeme;
     Consume(gttFrom, 'Expected "from" after namespace import',
       SSuggestAddFromAfterImport);
-    ModulePath := Consume(gttString, 'Expected module path',
-      SSuggestProvideModulePath).Lexeme;
+    ModulePath := ConsumeModuleSpecifier('Expected module path');
     AttributeType := ParseImportAttributeTypeIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after import declaration',
       SSuggestAddSemicolon);
     Result := TGocciaImportDeclaration.Create(TStringStringMap.Create,
       ModulePath, SourceSpanAtPosition(Line, Column), NamespaceName, icpDefer, AttributeType);
+    RecordModuleSpecifier(Result);
     Exit;
   end;
 
@@ -7743,13 +7807,13 @@ begin
       SSuggestProvideLocalName).Lexeme;
     Consume(gttFrom, 'Expected "from" after namespace import',
       SSuggestAddFromAfterImport);
-    ModulePath := Consume(gttString, 'Expected module path',
-      SSuggestProvideModulePath).Lexeme;
+    ModulePath := ConsumeModuleSpecifier('Expected module path');
     AttributeType := ParseImportAttributeTypeIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after import declaration',
       SSuggestAddSemicolon);
     Result := TGocciaImportDeclaration.Create(TStringStringMap.Create,
       ModulePath, SourceSpanAtPosition(Line, Column), NamespaceName, icpEvaluation, AttributeType);
+    RecordModuleSpecifier(Result);
     Exit;
   end;
 
@@ -7773,12 +7837,12 @@ begin
             SSuggestProvideLocalName).Lexeme;
           Consume(gttFrom, 'Expected "from" after namespace import',
             SSuggestAddFromAfterImport);
-          ModulePath := Consume(gttString, 'Expected module path',
-            SSuggestProvideModulePath).Lexeme;
+          ModulePath := ConsumeModuleSpecifier('Expected module path');
           AttributeType := ParseImportAttributeTypeIfPresent;
           ConsumeSemicolonOrASI('Expected ";" after import declaration',
             SSuggestAddSemicolon);
           Result := TGocciaImportDeclaration.Create(Imports, ModulePath, SourceSpanAtPosition(Line, Column), NamespaceName, icpEvaluation, AttributeType);
+          RecordModuleSpecifier(Result);
           Exit;
         end;
 
@@ -7819,8 +7883,7 @@ begin
 
       Consume(gttFrom, 'Expected "from" after import binding',
         SSuggestAddFromAfterImport);
-      ModulePath := Consume(gttString, 'Expected module path',
-        SSuggestProvideModulePath).Lexeme;
+      ModulePath := ConsumeModuleSpecifier('Expected module path');
       AttributeType := ParseImportAttributeTypeIfPresent;
       ConsumeSemicolonOrASI('Expected ";" after import declaration',
         SSuggestAddSemicolon);
@@ -7830,6 +7893,7 @@ begin
     end;
     Result := TGocciaImportDeclaration.Create(Imports, ModulePath, SourceSpanAtPosition(Line, Column),
       '', icpEvaluation, AttributeType);
+    RecordModuleSpecifier(Result);
     TGocciaImportDeclaration(Result).DuplicateBinding := DuplicateBinding;
     Exit;
   end;
@@ -7839,6 +7903,8 @@ begin
     Imports := TStringStringMap.Create;
     try
       ModulePath := Advance.Lexeme;
+      FModuleSpecifierStart := Previous.Span.StartOffset;
+      FModuleSpecifierEnd := Previous.Span.EndOffset;
       AttributeType := ParseImportAttributeTypeIfPresent;
       ConsumeSemicolonOrASI('Expected ";" after import declaration',
         SSuggestAddSemicolon);
@@ -7847,6 +7913,7 @@ begin
       raise;
     end;
     Result := TGocciaImportDeclaration.Create(Imports, ModulePath, SourceSpanAtPosition(Line, Column), '', icpEvaluation, AttributeType);
+    RecordModuleSpecifier(Result);
     Exit;
   end;
 
@@ -7888,14 +7955,14 @@ begin
       SSuggestCloseImportList);
     Consume(gttFrom, 'Expected "from" after imports',
       SSuggestAddFromAfterImportList);
-    ModulePath := Consume(gttString, 'Expected module path',
-      SSuggestProvideModulePath).Lexeme;
+    ModulePath := ConsumeModuleSpecifier('Expected module path');
     AttributeType := ParseImportAttributeTypeIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after import declaration',
       SSuggestAddSemicolon);
 
     Result := TGocciaImportDeclaration.Create(Imports, ModulePath, SourceSpanAtPosition(Line, Column),
       '', icpEvaluation, AttributeType);
+    RecordModuleSpecifier(Result);
   except
     Imports.Free;
     raise;
@@ -8168,14 +8235,14 @@ begin
         SSuggestProvideExportedName).Lexeme;
     Consume(gttFrom, 'Expected "from" after wildcard export',
       SSuggestAddFromAfterImportList);
-    ModulePath := Consume(gttString, 'Expected module path after "from"',
-      SSuggestProvideModulePath).Lexeme;
+    ModulePath := ConsumeModuleSpecifier('Expected module path after "from"');
     AttributeType := ParseReExportAttributeTypeIfPresent;
     ConsumeSemicolonOrASI('Expected ";" after re-export declaration',
       SSuggestAddSemicolon);
     ExportsTable := TStringStringMap.Create;
     Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath,
       SourceSpanAtPosition(Line, Column), True, NamespaceName, AttributeType);
+    RecordModuleSpecifier(Result);
     Exit;
   end;
 
@@ -8239,13 +8306,13 @@ begin
 
     if Match(gttFrom) then
     begin
-      ModulePath := Consume(gttString, 'Expected module path after "from"',
-        SSuggestProvideModulePath).Lexeme;
+      ModulePath := ConsumeModuleSpecifier('Expected module path after "from"');
       AttributeType := ParseReExportAttributeTypeIfPresent;
       ConsumeSemicolonOrASI('Expected ";" after re-export declaration',
         SSuggestAddSemicolon);
       Result := TGocciaReExportDeclaration.Create(ExportsTable, ModulePath,
         SourceSpanAtPosition(Line, Column), False, '', AttributeType);
+      RecordModuleSpecifier(Result);
     end
     else
     begin
@@ -8259,8 +8326,36 @@ begin
   end;
 end;
 
+{ Gives the members added since the marks the range from AStart to the last
+  token consumed, and moves the marks past them. A member is closed when the
+  next one begins, because a member ends in more ways than it begins. }
+procedure CloseClassMemberRanges(var AElements: TGocciaClassElementArray;
+  var AFieldOrder: TGocciaFieldOrderEntryArray;
+  var AElementMark, AFieldMark: Integer;
+  const AStart, AEnd: Integer);
+var
+  I: Integer;
+begin
+  if AStart >= 0 then
+  begin
+    for I := AElementMark to High(AElements) do
+    begin
+      AElements[I].StartOffset := AStart;
+      AElements[I].EndOffset := AEnd;
+    end;
+    for I := AFieldMark to High(AFieldOrder) do
+    begin
+      AFieldOrder[I].StartOffset := AStart;
+      AFieldOrder[I].EndOffset := AEnd;
+    end;
+  end;
+  AElementMark := Length(AElements);
+  AFieldMark := Length(AFieldOrder);
+end;
+
 function TGocciaParser.ParseClassBody(const AClassName: string): TGocciaClassDefinition;
 var
+  MemberRangeStart, ElementMark, FieldMark: Integer;
   SuperClass: string;
   SuperClassExpression: TGocciaExpression;
   Methods: TGocciaClassMethodMap;
@@ -8370,15 +8465,23 @@ begin
   FStrictModeActive := True;
   FStrictModeSourceActive := True;
   BodyParsed := False;
+  MemberRangeStart := -1;
+  ElementMark := 0;
+  FieldMark := 0;
   try
     while not Check(gttRightBrace) and not IsAtEnd do
     begin
+      CloseClassMemberRanges(Elements, FieldOrder, ElementMark, FieldMark,
+        MemberRangeStart, Previous.Span.EndOffset);
+      MemberRangeStart := -1;
       if Check(gttSemicolon) then
       begin
         Advance;
         Continue;
       end;
 
+      // A member's range starts at its first decorator.
+      MemberRangeStart := Peek.Span.StartOffset;
       MemberDecorators := ParseDecorators;
       IsAccessor := False;
       MemberStartLine := Peek.Line;
@@ -8892,6 +8995,8 @@ begin
           Peek.Line, Peek.Column, FFileName, FSourceLines,
           SSuggestClassMemberExpectedSyntax);
     end;
+    CloseClassMemberRanges(Elements, FieldOrder, ElementMark, FieldMark,
+      MemberRangeStart, Previous.Span.EndOffset);
 
     Consume(gttRightBrace, 'Expected "}" after class body',
       SSuggestCloseClassBody);

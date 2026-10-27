@@ -10540,6 +10540,97 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
   }
 });
 
+await section("goccia:ast expression-style example: fixes quotes, trailing commas and long calls, keeping them only under --copy-rw...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const example = join(dirname(fileURLToPath(import.meta.url)), "..", "examples", "_experimental", "expression-style.mjs");
+    const tree = join(tmp, "tree");
+    mkdirSync(tree, { recursive: true });
+    const original = [
+      'import { join } from "./paths.js";',
+      'const quoted = "it\'s";',
+      'const list = [',
+      '  "one",',
+      '  2',
+      '];',
+      'const sum = (',
+      '  first,',
+      '  second',
+      ') => first + second;',
+      'const spread = (',
+      '  head,',
+      '  ...tail',
+      ') => head;',
+      'report("a message long enough to push this line past eighty columns", first, second);',
+      '',
+    ].join("\n");
+    const expected = [
+      "import { join } from './paths.js';",
+      'const quoted = "it\'s";',
+      'const list = [',
+      "  'one',",
+      '  2,',
+      '];',
+      'const sum = (',
+      '  first,',
+      '  second,',
+      ') => first + second;',
+      'const spread = (',
+      '  head,',
+      '  ...tail',
+      ') => head;',
+      'report(',
+      "  'a message long enough to push this line past eighty columns',",
+      '  first,',
+      '  second,',
+      ');',
+      '',
+    ].join("\n");
+    writeFileSync(join(tree, "sample.js"), original);
+
+    const readOnly = Bun.spawnSync(
+      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const report = normalizeLineEndings(readOnly.stdout.toString());
+    if (readOnly.exitCode !== 0)
+      throw new Error(`expression-style under --copy should exit 0, got ${readOnly.exitCode}: ${readOnly.stderr.toString()}`);
+    for (const line of [
+      "/src/sample.js:1:22  a string literal should use single quotes",
+      "/src/sample.js:4:3  a string literal should use single quotes",
+      "/src/sample.js:5:3  a multi-line list should end with a trailing comma",
+      "/src/sample.js:9:3  a multi-line list should end with a trailing comma",
+      "/src/sample.js:15:1  a call on a line over 80 columns should put one argument per line",
+      "/src/sample.js:15:8  a string literal should use single quotes",
+      "6 finding(s) in 1 file(s), 1 rewritten",
+    ]) {
+      if (!report.includes(line))
+        throw new Error(`expression-style should report "${line}", got:\n${report}`);
+    }
+    if (readFileSync(join(tree, "sample.js"), "utf-8") !== original)
+      throw new Error("expression-style under --copy changed the host file");
+
+    const readWrite = Bun.spawnSync(
+      [RUNNER, example, "--experimental-ast", "--copy-rw", `${tree}=/src`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (readWrite.exitCode !== 0)
+      throw new Error(`expression-style under --copy-rw should exit 0, got ${readWrite.exitCode}: ${readWrite.stderr.toString()}`);
+    const fixed = normalizeLineEndings(readFileSync(join(tree, "sample.js"), "utf-8"));
+    if (fixed !== expected)
+      throw new Error(`expression-style under --copy-rw should write the fixed file, got:\n${fixed}`);
+
+    const again = Bun.spawnSync(
+      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (!normalizeLineEndings(again.stdout.toString()).includes("0 finding(s) in 1 file(s), 0 rewritten"))
+      throw new Error(`expression-style should find nothing in a file it fixed, got:\n${again.stdout.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: --copy-rw keeps nothing from a run that failed...", async () => {
   const tmp = makeNativeTmp();
   try {

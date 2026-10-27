@@ -68,6 +68,43 @@ type
     property Count: Integer read GetCount;
   end;
 
+  TGocciaASTNode = class;
+
+  { A piece of syntax that has a range but no node of its own: the parser
+    keeps an object literal's members in maps, a function's parameters in
+    records, and an import's module path as a string, so none of them is a
+    TGocciaASTNode. ForEachChild reports one between EnterPart and
+    LeavePart, with the nodes inside it in between. }
+  TGocciaASTPartKind = (
+    apkProperty,        // A member of an object literal
+    apkParameter,       // A function's parameter
+    apkModuleSpecifier, // The module path of an import or re-export
+    apkClassMethod,     // A class's method, getter or setter
+    apkClassField,      // A class's field
+    apkClassAccessor,   // A class's `accessor` field
+    apkStaticBlock      // A class's `static { }` block
+  );
+
+  TGocciaASTPartFlag = (
+    apfComputed,  // Property, class member: `[key]`
+    apfShorthand, // Property: `{ key }`
+    apfMethod,    // Property: `key() {}`, `get key() {}`, `set key(v) {}`
+    apfRest,      // Parameter: `...rest`
+    apfStatic     // Class member: `static`
+  );
+  TGocciaASTPartFlags = set of TGocciaASTPartFlag;
+
+  { Receives a node's children from TGocciaASTNode.ForEachChild. }
+  TGocciaASTChildVisitor = class
+  public
+    { ANode may be nil; a visitor ignores it. }
+    procedure VisitChild(const ANode: TGocciaASTNode); virtual; abstract;
+    procedure EnterPart(const AKind: TGocciaASTPartKind;
+      const AStartOffset, AEndOffset: Integer;
+      const AFlags: TGocciaASTPartFlags); virtual; abstract;
+    procedure LeavePart; virtual; abstract;
+  end;
+
   TGocciaASTNode = class(TGocciaASTObject)
   private
     FSpan: TGocciaSourceSpan;
@@ -75,6 +112,12 @@ type
     function GetColumn: Integer;
   public
     constructor Create(const ASpan: TGocciaSourceSpan);
+    { Reports the nodes nested immediately beneath this one, in source order,
+      to AVisitor (ADR 0161). The one walk over the tree's syntax that a tool
+      outside the evaluator and the compiler shares, so that a new node class
+      describes its own children here rather than in every such tool. A node
+      with no children keeps the default, which reports none. }
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); virtual;
     property Span: TGocciaSourceSpan read FSpan;
     property Line: Integer read GetLine;
     property Column: Integer read GetColumn;
@@ -83,8 +126,20 @@ type
   TGocciaExpression = class(TGocciaASTNode)
   private
     FParenthesized: Boolean;
+    FParenStartOffset: Integer;
+    FParenEndOffset: Integer;
   public
+    { Records the outermost pair of parentheses around this expression, as
+      offsets into the parsed text. The parser drops the parentheses from the
+      tree, so this is the only place their extent survives. }
+    procedure MarkParenthesized(const AStartOffset, AEndOffset: Integer);
+    { True when MarkParenthesized recorded where the parentheses are. An
+      expression can be Parenthesized without it: the parser also marks
+      synthesized wrappers. }
+    function HasParenRange: Boolean;
     property Parenthesized: Boolean read FParenthesized write FParenthesized;
+    property ParenStartOffset: Integer read FParenStartOffset;
+    property ParenEndOffset: Integer read FParenEndOffset;
   end;
 
   TGocciaStatement = class(TGocciaASTNode)
@@ -115,6 +170,7 @@ type
     destructor Destroy; override;
     { Takes ownership of the arena holding this program's nodes. }
     procedure AdoptArena(const AArena: TGocciaASTArena);
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     property Body: TObjectList<TGocciaStatement> read FBody;
     property HasTopLevelAwait: Boolean read FHasTopLevelAwait write FHasTopLevelAwait;
     property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
@@ -259,6 +315,27 @@ begin
   FSpan := ASpan;
 end;
 
+procedure TGocciaASTNode.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+end;
+
+{ TGocciaExpression }
+
+procedure TGocciaExpression.MarkParenthesized(const AStartOffset,
+  AEndOffset: Integer);
+begin
+  FParenthesized := True;
+  { `((x))` marks the inner pair first; the outer pair, seen last, wins. }
+  FParenStartOffset := AStartOffset;
+  FParenEndOffset := AEndOffset;
+end;
+
+function TGocciaExpression.HasParenRange: Boolean;
+begin
+  Result := FParenEndOffset > FParenStartOffset;
+end;
+
 function TGocciaASTNode.GetLine: Integer;
 begin
   Result := FSpan.StartLine;
@@ -328,6 +405,14 @@ end;
 procedure TGocciaProgram.AdoptArena(const AArena: TGocciaASTArena);
 begin
   FNodeArena := AArena;
+end;
+
+procedure TGocciaProgram.ForEachChild(const AVisitor: TGocciaASTChildVisitor);
+var
+  I: Integer;
+begin
+  for I := 0 to FBody.Count - 1 do
+    AVisitor.VisitChild(FBody[I]);
 end;
 
 end.

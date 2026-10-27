@@ -33,6 +33,7 @@ type
   private
     FExpression: TGocciaExpression;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AExpression: TGocciaExpression; const ASpan: TGocciaSourceSpan);
     property Expression: TGocciaExpression read FExpression;
   end;
@@ -43,6 +44,7 @@ type
     FIsConst: Boolean;
     FIsVar: Boolean;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
       const AIsConst: Boolean; const ASpan: TGocciaSourceSpan;
       const AIsVar: Boolean = False);
@@ -56,6 +58,7 @@ type
     FName: string;
     FFunctionExpression: TGocciaFunctionExpression;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AName: string;
       const AFunctionExpression: TGocciaFunctionExpression;
       const ASpan: TGocciaSourceSpan);
@@ -71,6 +74,7 @@ type
     FIsVar: Boolean;
     FTypeAnnotation: string;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const APattern: TGocciaDestructuringPattern; const AInitializer: TGocciaExpression; const AIsConst: Boolean; const ASpan: TGocciaSourceSpan; const AIsVar: Boolean = False);
     property Pattern: TGocciaDestructuringPattern read FPattern;
     property Initializer: TGocciaExpression read FInitializer;
@@ -83,6 +87,7 @@ type
   private
     FNodes: TObjectList<TGocciaASTNode>;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ANodes: TObjectList<TGocciaASTNode>;
       const ASpan: TGocciaSourceSpan);
     destructor Destroy; override;
@@ -95,6 +100,7 @@ type
     FConsequent: TGocciaStatement;
     FAlternate: TGocciaStatement;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ACondition: TGocciaExpression;
       const AConsequent, AAlternate: TGocciaStatement; const ASpan: TGocciaSourceSpan);
     property Condition: TGocciaExpression read FCondition;
@@ -109,6 +115,7 @@ type
     FUpdate: TGocciaExpression;     // Update expression
     FBody: TGocciaStatement;        // Loop body
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AInit: TGocciaStatement; const ACondition: TGocciaExpression;
       const AUpdate: TGocciaExpression; const ABody: TGocciaStatement; const ASpan: TGocciaSourceSpan);
     property Init: TGocciaStatement read FInit;
@@ -122,6 +129,7 @@ type
     FCondition: TGocciaExpression;  // Loop condition
     FBody: TGocciaStatement;        // Loop body
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ACondition: TGocciaExpression; const ABody: TGocciaStatement; const ASpan: TGocciaSourceSpan);
     property Condition: TGocciaExpression read FCondition;
     property Body: TGocciaStatement read FBody;
@@ -132,6 +140,7 @@ type
     FBody: TGocciaStatement;        // Loop body (executed first)
     FCondition: TGocciaExpression;  // Loop condition (checked after body)
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ABody: TGocciaStatement; const ACondition: TGocciaExpression; const ASpan: TGocciaSourceSpan);
     property Body: TGocciaStatement read FBody;
     property Condition: TGocciaExpression read FCondition;
@@ -142,6 +151,7 @@ type
     FObjectExpression: TGocciaExpression;
     FBody: TGocciaStatement;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AObjectExpression: TGocciaExpression;
       const ABody: TGocciaStatement; const ASpan: TGocciaSourceSpan);
     property ObjectExpression: TGocciaExpression read FObjectExpression;
@@ -161,6 +171,7 @@ type
     FIsUsing: Boolean;
     FIsAwaitUsing: Boolean;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AIsConst: Boolean; const ABindingName: string;
       const ABindingPattern: TGocciaDestructuringPattern; const AIterable: TGocciaExpression;
       const ABody: TGocciaStatement; const ASpan: TGocciaSourceSpan;
@@ -190,6 +201,7 @@ type
     FObjectExpression: TGocciaExpression;
     FBody: TGocciaStatement;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AIsConst: Boolean; const ABindingName: string;
       const ABindingPattern: TGocciaDestructuringPattern;
       const AObjectExpression: TGocciaExpression; const ABody: TGocciaStatement;
@@ -213,6 +225,7 @@ type
     FValue: TGocciaExpression;
     FHasExpression: Boolean;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
     property HasExpression: Boolean read FHasExpression;
     property Value: TGocciaExpression read FValue;
@@ -222,6 +235,7 @@ type
   private
     FValue: TGocciaExpression;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AValue: TGocciaExpression; const ASpan: TGocciaSourceSpan);
     property Value: TGocciaExpression read FValue;
   end;
@@ -236,6 +250,7 @@ type
     FCatchPattern: TGocciaMatchPattern;
     FCatchBindingPattern: TGocciaDestructuringPattern;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ABlock: TGocciaBlockStatement; const ACatchParam: string;
       const ACatchBlock, AFinallyBlock: TGocciaBlockStatement; const ASpan: TGocciaSourceSpan;
       const ACatchPattern: TGocciaMatchPattern = nil;
@@ -263,6 +278,7 @@ type
     FSourceText: string;
     FDirectEvalUsage: TGocciaDirectEvalUsage;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AName: string; const AParameters: TGocciaParameterArray;
       const ABody: TGocciaASTNode; const AIsStatic: Boolean; const ASpan: TGocciaSourceSpan);
     property Name: string read FName write FName;
@@ -326,6 +342,10 @@ type
       auto-accessor stores it under its own name; a public one under a name
       no source text can spell (see TGocciaParser.AutoAccessorStorageName). }
     AccessorStorageName: string;
+    { The member's extent in the parsed text, from its first decorator to its
+      last token. Equal offsets mean the parser did not record one. }
+    StartOffset: Integer;
+    EndOffset: Integer;
   end;
 
   TGocciaFieldOrderEntry = record
@@ -338,6 +358,10 @@ type
     { The entry stores an auto-accessor's value; ElementIndex names the
       accessor, whose own name is the one its initializer is named after. }
     IsAutoAccessorStorage: Boolean;
+    { As TGocciaClassElement.StartOffset and EndOffset, for a field the
+      element array does not hold (ElementIndex < 0). }
+    StartOffset: Integer;
+    EndOffset: Integer;
   end;
 
   TGocciaClassElementArray = array of TGocciaClassElement;
@@ -409,6 +433,7 @@ type
   private
     FClassDefinition: TGocciaClassDefinition;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AClassDefinition: TGocciaClassDefinition; const ASpan: TGocciaSourceSpan);
     property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
@@ -417,6 +442,7 @@ type
   private
     FClassDefinition: TGocciaClassDefinition;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AClassDefinition: TGocciaClassDefinition; const ASpan: TGocciaSourceSpan);
     property ClassDefinition: TGocciaClassDefinition read FClassDefinition;
   end;
@@ -432,6 +458,7 @@ type
     FName: string;
     FMembers: TArray<TGocciaEnumMember>;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AName: string; const AMembers: TArray<TGocciaEnumMember>;
       const ASpan: TGocciaSourceSpan);
     property Name: string read FName;
@@ -442,6 +469,7 @@ type
   private
     FDeclaration: TGocciaEnumDeclaration;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ADeclaration: TGocciaEnumDeclaration;
       const ASpan: TGocciaSourceSpan);
     property Declaration: TGocciaEnumDeclaration read FDeclaration;
@@ -450,6 +478,8 @@ type
   // Modules
   TGocciaImportDeclaration = class(TGocciaStatement)
   private
+    FModuleSpecifierStart: Integer;
+    FModuleSpecifierEnd: Integer;
     FImports: TStringStringMap; // local name -> imported name
     FAttributeType: string;
     FDuplicateBinding: string;
@@ -457,6 +487,9 @@ type
     FNamespaceName: string;
     FPhase: TGocciaImportCallPhase;
   public
+    { Where the module path's string literal is, in the parsed text. }
+    procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AImports: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
       const ANamespaceName: string = '';
@@ -492,6 +525,7 @@ type
     FIsDirectDeclaration: Boolean;
     FLocalName: string;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AExpression: TGocciaExpression;
       const ALocalName: string; const AIsDirectDeclaration: Boolean;
       const ASpan: TGocciaSourceSpan);
@@ -504,6 +538,7 @@ type
   private
     FDeclaration: TGocciaVariableDeclaration;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ADeclaration: TGocciaVariableDeclaration;
       const ASpan: TGocciaSourceSpan);
     property Declaration: TGocciaVariableDeclaration read FDeclaration;
@@ -513,6 +548,7 @@ type
   private
     FDeclaration: TGocciaDestructuringDeclaration;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ADeclaration: TGocciaDestructuringDeclaration;
       const ASpan: TGocciaSourceSpan);
     property Declaration: TGocciaDestructuringDeclaration read FDeclaration;
@@ -522,6 +558,7 @@ type
   private
     FDeclaration: TGocciaFunctionDeclaration;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ADeclaration: TGocciaFunctionDeclaration;
       const ASpan: TGocciaSourceSpan);
     property Declaration: TGocciaFunctionDeclaration read FDeclaration;
@@ -531,6 +568,7 @@ type
   private
     FDeclaration: TGocciaClassDeclaration;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ADeclaration: TGocciaClassDeclaration;
       const ASpan: TGocciaSourceSpan);
     property Declaration: TGocciaClassDeclaration read FDeclaration;
@@ -538,12 +576,17 @@ type
 
   TGocciaReExportDeclaration = class(TGocciaStatement)
   private
+    FModuleSpecifierStart: Integer;
+    FModuleSpecifierEnd: Integer;
     FAttributeType: string;
     FExportsTable: TStringStringMap; // exported name -> source name
     FIsStarExport: Boolean;
     FModulePath: string;
     FNamespaceName: string;
   public
+    { Where the module path's string literal is, in the parsed text. }
+    procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AExportsTable: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
       const AIsStarExport: Boolean = False;
@@ -567,6 +610,7 @@ type
     FTest: TGocciaExpression;  // Case value expression (nil for default case)
     FConsequent: TObjectList<TGocciaStatement>;  // Statements to execute
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ATest: TGocciaExpression; const AConsequent: TObjectList<TGocciaStatement>; const ASpan: TGocciaSourceSpan);
     destructor Destroy; override;
     property Test: TGocciaExpression read FTest;
@@ -578,6 +622,7 @@ type
     FDiscriminant: TGocciaExpression;  // Expression to switch on
     FCases: TObjectList<TGocciaCaseClause>;  // List of case clauses
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ADiscriminant: TGocciaExpression; const ACases: TObjectList<TGocciaCaseClause>; const ASpan: TGocciaSourceSpan);
     destructor Destroy; override;
     property Discriminant: TGocciaExpression read FDiscriminant;
@@ -607,6 +652,7 @@ type
     FVariables: TArray<TGocciaVariableInfo>;
     FIsAwait: Boolean;
   public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AVariables: TArray<TGocciaVariableInfo>;
       const AIsAwait: Boolean; const ASpan: TGocciaSourceSpan);
     property Variables: TArray<TGocciaVariableInfo> read FVariables;
@@ -1179,5 +1225,361 @@ end;
     FExportsTable.Free;
     inherited;
   end;
+
+
+{ ForEachChild }
+
+procedure VisitVariables(const AVisitor: TGocciaASTChildVisitor;
+  const AVariables: TArray<TGocciaVariableInfo>);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AVariables) do
+  begin
+    AVisitor.VisitChild(AVariables[I].Pattern);
+    AVisitor.VisitChild(AVariables[I].Initializer);
+  end;
+end;
+
+procedure VisitDecorators(const AVisitor: TGocciaASTChildVisitor;
+  const ADecorators: TGocciaDecoratorList);
+var
+  I: Integer;
+begin
+  for I := 0 to High(ADecorators) do
+    AVisitor.VisitChild(ADecorators[I]);
+end;
+
+function MemberPartKind(const AKind: TGocciaClassElementKind): TGocciaASTPartKind;
+begin
+  case AKind of
+    cekField: Result := apkClassField;
+    cekAccessor: Result := apkClassAccessor;
+    cekStaticBlock: Result := apkStaticBlock;
+  else
+    Result := apkClassMethod;
+  end;
+end;
+
+{ A class's children are its decorators, its heritage, and its members in
+  source order, each member a part around its decorators, its computed key
+  and its value. The element array holds every member but a plain instance
+  field, which only the field order holds; the per-kind maps hold the same
+  members again, grouped by kind, for the evaluator. The two lists are each
+  in source order and are merged by position. }
+procedure ForEachClassChild(const AVisitor: TGocciaASTChildVisitor;
+  const ADefinition: TGocciaClassDefinition);
+var
+  ElementIndex, FieldIndex, I: Integer;
+  Flags: TGocciaASTPartFlags;
+
+  procedure NextField;
+  begin
+    while (FieldIndex <= High(ADefinition.FFieldOrder)) and
+          (ADefinition.FFieldOrder[FieldIndex].ElementIndex >= 0) do
+      Inc(FieldIndex);
+  end;
+
+  function FieldComesFirst: Boolean;
+  begin
+    if FieldIndex > High(ADefinition.FFieldOrder) then
+      Exit(False);
+    if ElementIndex > High(ADefinition.FElements) then
+      Exit(True);
+    Result := ADefinition.FFieldOrder[FieldIndex].StartOffset <
+      ADefinition.FElements[ElementIndex].StartOffset;
+  end;
+
+begin
+  if not Assigned(ADefinition) then
+    Exit;
+  VisitDecorators(AVisitor, ADefinition.Decorators);
+  AVisitor.VisitChild(ADefinition.SuperClassExpression);
+
+  ElementIndex := 0;
+  FieldIndex := 0;
+  NextField;
+  while (ElementIndex <= High(ADefinition.FElements)) or
+        (FieldIndex <= High(ADefinition.FFieldOrder)) do
+  begin
+    if FieldComesFirst then
+    begin
+      with ADefinition.FFieldOrder[FieldIndex] do
+      begin
+        Flags := [];
+        if IsComputed then
+          Include(Flags, apfComputed);
+        AVisitor.EnterPart(apkClassField, StartOffset, EndOffset, Flags);
+        AVisitor.VisitChild(ComputedKeyExpression);
+        AVisitor.VisitChild(FieldInitializer);
+        AVisitor.LeavePart;
+      end;
+      Inc(FieldIndex);
+      NextField;
+    end
+    else
+    begin
+      with ADefinition.FElements[ElementIndex] do
+      begin
+        Flags := [];
+        if IsStatic then
+          Include(Flags, apfStatic);
+        if IsComputed then
+          Include(Flags, apfComputed);
+        AVisitor.EnterPart(MemberPartKind(Kind), StartOffset, EndOffset, Flags);
+        for I := 0 to High(Decorators) do
+          AVisitor.VisitChild(Decorators[I]);
+        AVisitor.VisitChild(ComputedKeyExpression);
+        AVisitor.VisitChild(MethodNode);
+        AVisitor.VisitChild(GetterNode);
+        AVisitor.VisitChild(SetterNode);
+        AVisitor.VisitChild(FieldInitializer);
+        AVisitor.VisitChild(StaticBlockBody);
+        AVisitor.LeavePart;
+      end;
+      Inc(ElementIndex);
+    end;
+  end;
+end;
+
+procedure TGocciaExpressionStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FExpression);
+end;
+
+procedure TGocciaVariableDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  VisitVariables(AVisitor, FVariables);
+end;
+
+procedure TGocciaUsingDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  VisitVariables(AVisitor, FVariables);
+end;
+
+procedure TGocciaFunctionDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FFunctionExpression);
+end;
+
+procedure TGocciaDestructuringDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FPattern);
+  AVisitor.VisitChild(FInitializer);
+end;
+
+procedure TGocciaBlockStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+var
+  I: Integer;
+begin
+  for I := 0 to FNodes.Count - 1 do
+    AVisitor.VisitChild(FNodes[I]);
+end;
+
+procedure TGocciaIfStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FCondition);
+  AVisitor.VisitChild(FConsequent);
+  AVisitor.VisitChild(FAlternate);
+end;
+
+procedure TGocciaForStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FInit);
+  AVisitor.VisitChild(FCondition);
+  AVisitor.VisitChild(FUpdate);
+  AVisitor.VisitChild(FBody);
+end;
+
+procedure TGocciaWhileStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FCondition);
+  AVisitor.VisitChild(FBody);
+end;
+
+procedure TGocciaDoWhileStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FBody);
+  AVisitor.VisitChild(FCondition);
+end;
+
+procedure TGocciaWithStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FObjectExpression);
+  AVisitor.VisitChild(FBody);
+end;
+
+procedure TGocciaForOfStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FBindingPattern);
+  AVisitor.VisitChild(FAssignmentTarget);
+  AVisitor.VisitChild(FMatchPattern);
+  AVisitor.VisitChild(FIterable);
+  AVisitor.VisitChild(FBody);
+end;
+
+procedure TGocciaForInStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FBindingPattern);
+  AVisitor.VisitChild(FAssignmentTarget);
+  AVisitor.VisitChild(FObjectExpression);
+  AVisitor.VisitChild(FBody);
+end;
+
+procedure TGocciaReturnStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FValue);
+end;
+
+procedure TGocciaThrowStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FValue);
+end;
+
+procedure TGocciaTryStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FBlock);
+  AVisitor.VisitChild(FCatchBindingPattern);
+  AVisitor.VisitChild(FCatchPattern);
+  AVisitor.VisitChild(FCatchBlock);
+  AVisitor.VisitChild(FFinallyBlock);
+end;
+
+procedure TGocciaClassMethod.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  ForEachParameterChild(AVisitor, FParameters);
+  AVisitor.VisitChild(FBody);
+end;
+
+procedure TGocciaClassDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  ForEachClassChild(AVisitor, FClassDefinition);
+end;
+
+procedure TGocciaClassExpression.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  ForEachClassChild(AVisitor, FClassDefinition);
+end;
+
+procedure TGocciaEnumDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+var
+  I: Integer;
+begin
+  for I := 0 to High(FMembers) do
+    AVisitor.VisitChild(FMembers[I].Initializer);
+end;
+
+procedure TGocciaExportEnumDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FDeclaration);
+end;
+
+procedure TGocciaExportDefaultDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FExpression);
+end;
+
+procedure TGocciaExportVariableDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FDeclaration);
+end;
+
+procedure TGocciaExportDestructuringDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FDeclaration);
+end;
+
+procedure TGocciaExportFunctionDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FDeclaration);
+end;
+
+procedure TGocciaExportClassDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FDeclaration);
+end;
+
+procedure TGocciaCaseClause.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+var
+  I: Integer;
+begin
+  AVisitor.VisitChild(FTest);
+  for I := 0 to FConsequent.Count - 1 do
+    AVisitor.VisitChild(FConsequent[I]);
+end;
+
+procedure TGocciaSwitchStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+var
+  I: Integer;
+begin
+  AVisitor.VisitChild(FDiscriminant);
+  for I := 0 to FCases.Count - 1 do
+    AVisitor.VisitChild(FCases[I]);
+end;
+
+
+procedure TGocciaImportDeclaration.SetModuleSpecifierRange(const AStartOffset,
+  AEndOffset: Integer);
+begin
+  FModuleSpecifierStart := AStartOffset;
+  FModuleSpecifierEnd := AEndOffset;
+end;
+
+procedure TGocciaImportDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  if FModuleSpecifierEnd > FModuleSpecifierStart then
+  begin
+    AVisitor.EnterPart(apkModuleSpecifier, FModuleSpecifierStart,
+      FModuleSpecifierEnd, []);
+    AVisitor.LeavePart;
+  end;
+end;
+
+procedure TGocciaReExportDeclaration.SetModuleSpecifierRange(
+  const AStartOffset, AEndOffset: Integer);
+begin
+  FModuleSpecifierStart := AStartOffset;
+  FModuleSpecifierEnd := AEndOffset;
+end;
+
+procedure TGocciaReExportDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  if FModuleSpecifierEnd > FModuleSpecifierStart then
+  begin
+    AVisitor.EnterPart(apkModuleSpecifier, FModuleSpecifierStart,
+      FModuleSpecifierEnd, []);
+    AVisitor.LeavePart;
+  end;
+end;
 
 end.
