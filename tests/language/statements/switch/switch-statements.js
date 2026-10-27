@@ -219,6 +219,71 @@ test("switch shared lexical prelude initializes selected case binding", () => {
   expect(result).toBe(42);
 });
 
+// A let and an inner switch, read from clauses entered directly or reached
+// by falling through. The clauses share one scope (ES2026 §14.12.4,
+// BlockDeclarationInstantiation of the CaseBlock), so each binding is in its
+// TDZ until its own declaration runs.
+const readLets = (which) => {
+  const seen = [];
+  switch (which) {
+    case 0:
+      let a = 1;
+      a += 1;
+      seen.push(a);
+    case 1:
+      let b = 10;
+      seen.push(b);
+    case 2:
+      seen.push(b + a);
+  }
+  return seen;
+};
+
+test("a let updated in its clause keeps its value through fall-through", () => {
+  expect(readLets(0)).toEqual([2, 10, 12]);
+});
+
+test("a clause entered directly sees an earlier clause's let in TDZ", () => {
+  expect(() => readLets(2)).toThrow(ReferenceError);
+});
+
+const readNested = (outer, inner) => {
+  switch (outer) {
+    case 0:
+      const a = 1;
+      switch (inner) {
+        case 0:
+          const b = 2;
+          return a + b;
+        case 1:
+          return b;
+        case 2:
+          const c = 3;
+      }
+      const after = a + 10;
+    case 1:
+      return after;
+    case 2:
+      return a;
+  }
+};
+
+test("an inner switch's clause reads the const of the outer clause around it", () => {
+  expect(readNested(0, 0)).toBe(3);
+});
+
+test("an inner switch's clause entered directly sees an earlier inner const in TDZ", () => {
+  expect(() => readNested(0, 1)).toThrow(ReferenceError);
+});
+
+test("leaving an inner switch keeps the outer clause's bindings for the clauses after it", () => {
+  expect(readNested(0, 2)).toBe(11);
+});
+
+test("an outer clause entered directly sees in TDZ a const declared before an inner switch", () => {
+  expect(() => readNested(2, 0)).toThrow(ReferenceError);
+});
+
 test("switch with null and boolean discriminants", () => {
   let nullResult;
   switch (null) {
