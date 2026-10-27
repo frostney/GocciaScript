@@ -15204,7 +15204,7 @@ begin
   if Assigned(CompileProfile) then
   begin
     CompileProfileUnitDepth := CompileProfile.UnitDepth;
-    CompileProfile.BeginUnit('<eval>');
+    CompileProfile.BeginUnit('<eval>', ASourceText);
   end;
   try
     PrivateNames.CaseSensitive := True;

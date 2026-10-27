@@ -154,6 +154,26 @@ export function verifyCompileProfiles(): void {
     if (nodes[1] < nodes[0] * 1.8)
       throw new Error(`nodes compiled must grow with the source: ${nodes.join(" -> ")}`);
 
+    // Function-constructor code is a unit of its own per source: two
+    // sources stay apart even at the same positions, and a repeated source
+    // adds to its own records.
+    const dynamic = join(tmp, "dynamic.js");
+    const dynamicOutput = join(tmp, "dynamic.json");
+    writeFileSync(dynamic, [
+      'const a = new Function("return 1;");',
+      'const b = new Function("return 2 + 3;");',
+      'const c = new Function("return 1;");',
+      "console.log(a() + b() + c());",
+    ].join("\n"));
+    const dyn = Bun.spawnSync([resolve(RUNNER), dynamic, "--unsafe-function-constructor",
+      "--profile=compile", `--profile-output=${dynamicOutput}`],
+      { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+    if (dyn.exitCode !== 0) throw new Error(`dynamic profiling exited ${dyn.exitCode}: ${dyn.stderr.toString()}`);
+    const units: string[] = JSON.parse(readFileSync(dynamicOutput, "utf-8")).compile.files
+      .map((file: { sourceFile: string }) => file.sourceFile).filter((name: string) => name.startsWith("<Function>#"));
+    if (units.length !== 2)
+      throw new Error(`each Function-constructor source must be its own unit: ${JSON.stringify(units)}`);
+
     // `all` stays opcodes and functions: the compile section is present and empty.
     const source = join(tmp, "n50", "main.mjs");
     const output = join(tmp, "all.json");

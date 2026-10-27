@@ -164,9 +164,11 @@ type
       const AName: string; const AInstructions: Integer);
 
     // Code compiled at run time (eval, the Function constructor) is parsed
-    // and compiled under AName instead of the file of its caller, so its
-    // functions do not merge with that file's.
-    procedure BeginUnit(const AName: string);
+    // and compiled as a file of its own, AKind followed by a hash of
+    // ASource, instead of the file of its caller: its functions do not
+    // merge with that file's, nor with another source's, and the same
+    // source compiled again adds to its own records.
+    procedure BeginUnit(const AKind, ASource: string);
     // Ends the units begun since UnitDepth read ADepth; a second call ends
     // none.
     procedure EndUnitTo(const ADepth: Integer);
@@ -465,11 +467,20 @@ begin
   Restore;
 end;
 
-procedure TGocciaCompileProfiler.BeginUnit(const AName: string);
+procedure TGocciaCompileProfiler.BeginUnit(const AKind, ASource: string);
+var
+  Hash: Cardinal;
+  I: Integer;
 begin
+  // FNV-1a over the source's characters.
+  Hash := 2166136261;
+  // Multiplied in 64 bits and masked, so a checked build does not overflow.
+  for I := 1 to Length(ASource) do
+    Hash := Cardinal(((UInt64(Hash) xor UInt64(Ord(ASource[I]))) *
+      16777619) and $FFFFFFFF);
   if FUnitCount >= Length(FUnitNames) then
     SetLength(FUnitNames, FUnitCount * 2 + 4);
-  FUnitNames[FUnitCount] := AName;
+  FUnitNames[FUnitCount] := AKind + '#' + IntToHex(Hash, 8);
   Inc(FUnitCount);
 end;
 

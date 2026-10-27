@@ -3383,7 +3383,7 @@ begin
   if Assigned(CompileProfile) then
   begin
     CompileProfileUnitDepth := CompileProfile.UnitDepth;
-    CompileProfile.BeginUnit('<eval>');
+    CompileProfile.BeginUnit('<eval>', ASourceText);
   end;
   VarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
@@ -5548,13 +5548,17 @@ function TGocciaEngine.CompileDynamicFunction(
   const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
 var
   CompileProfile: TGocciaCompileProfiler;
-  UnitDepth: Integer;
+  UnitDepth, I: Integer;
+  ProfileSource: string;
 begin
   CompileProfile := TGocciaCompileProfiler.Instance;
   if not Assigned(CompileProfile) then
     Exit(CompileDynamicFunctionCode(AParamsSources, ABodySource, AKind));
   UnitDepth := CompileProfile.UnitDepth;
-  CompileProfile.BeginUnit('<Function>');
+  ProfileSource := ABodySource;
+  for I := 0 to High(AParamsSources) do
+    ProfileSource := AParamsSources[I] + ',' + ProfileSource;
+  CompileProfile.BeginUnit('<Function>', ProfileSource);
   try
     Result := CompileDynamicFunctionCode(AParamsSources, ABodySource, AKind);
   finally

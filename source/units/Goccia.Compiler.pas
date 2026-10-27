@@ -2219,6 +2219,7 @@ var
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
   SavedFinally: TObject;
+  CallerScope: TGocciaCompilerScope;
 begin
   // A compile that raised left the levels it had entered open; this one
   // starts at the top of the tree.
@@ -2261,6 +2262,14 @@ begin
   if Assigned(FCompileProfile) then
   begin
     FCurrentScope.CompileProfile := FCompileProfile;
+    // A direct eval's caller scopes are rebuilt for this compile, before it
+    // took the profile: lookups that climb into them count too.
+    CallerScope := FDirectEvalCallerScope;
+    while Assigned(CallerScope) do
+    begin
+      CallerScope.CompileProfile := FCompileProfile;
+      CallerScope := CallerScope.Parent;
+    end;
     FCompileProfile.EnterTemplate('', -1, FCurrentTemplate.Name,
       FSourcePath, 0, 0);
   end;
