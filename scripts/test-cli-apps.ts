@@ -41,7 +41,7 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
-import { verifyAllocationProfiles } from "./test-cli-profiling";
+import { verifyAllocationProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
@@ -8234,6 +8234,8 @@ await section("Bundler: constants folding to Infinity, NaN and -0 compile + roun
 await section("Bundler: source and precompiled module graphs agree...", verifyAotModules);
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
+
+await section("Function profiling: recursive totals stay within <module>'s...", verifyRecursiveTotals);
 
 await section("BenchmarkRunner: results are reported under a polluted Array.prototype...", async () => {
   // The results array is new, so its elements are made with
