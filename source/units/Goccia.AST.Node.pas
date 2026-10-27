@@ -113,7 +113,7 @@ type
   public
     constructor Create(const ASpan: TGocciaSourceSpan);
     { Reports the nodes nested immediately beneath this one, in source order,
-      to AVisitor (ADR 0161). The one walk over the tree's syntax that a tool
+      to AVisitor (ADR 0162). The one walk over the tree's syntax that a tool
       outside the evaluator and the compiler shares, so that a new node class
       describes its own children here rather than in every such tool. A node
       with no children keeps the default, which reports none. }

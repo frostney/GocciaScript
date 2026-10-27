@@ -6,7 +6,7 @@ unit Goccia.Builtins.AST;
   a JavaScript-visible tree.
 
   What is exposed and why is [ADR 0117](../../docs/adr/0117-javascript-visible-ast-module.md)
-  for the statement view and [ADR 0161](../../docs/adr/0161-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md)
+  for the statement view and [ADR 0162](../../docs/adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md)
   for the expression view `expressions: true` adds. By default the tree holds
   statements, the three kinds that own a statement list (`Program`,
   `BlockStatement`, `SwitchCase`), their offsets and positions, and comment
@@ -75,7 +75,7 @@ const
 
 type
   { The flags a layout rule dispatches on. Each kind carries the ones that
-    mean something for it and no others (ADR 0161). }
+    mean something for it and no others (ADR 0162). }
   TASTNodeFlag = (anfComputed, anfOptional, anfAsync, anfGenerator,
     anfDelegate, anfPrefix, anfShorthand, anfMethod, anfRest, anfStatic);
   TASTNodeFlags = set of TASTNodeFlag;

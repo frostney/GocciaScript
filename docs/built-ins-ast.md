@@ -137,7 +137,7 @@ in `source`.
 See [ADR 0117](adr/0117-javascript-visible-ast-module.md) for what the module
 exposes, what it withholds, and why,
 [ADR 0118](adr/0118-original-file-source-ranges.md) for the one coordinate
-system, and [ADR 0161](adr/0161-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md)
+system, and [ADR 0162](adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md)
 for the expression view. `examples/_experimental/` has a blank-line lint
 rule, a range checker, and a formatter-style program
 (`expression-style.mjs`) written against it.
