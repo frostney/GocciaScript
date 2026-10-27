@@ -369,7 +369,15 @@ begin
   else if ANode is TGocciaNewExpression then
     Result := 'NewExpression'
   else if ANode is TGocciaThisExpression then
-    Result := 'ThisExpression'
+  begin
+    { `#x in o` has no receiver in the source: the parser puts a `this` at
+      the `#` so the brand check has an object to test. }
+    if (AParent is TGocciaPrivateMemberExpression) and
+       (ANode.Span.StartOffset = AParent.Span.StartOffset) then
+      Result := ''
+    else
+      Result := 'ThisExpression';
+  end
   else if ANode is TGocciaSuperExpression then
     Result := 'Super'
   else if (ANode is TGocciaImportMetaExpression) or

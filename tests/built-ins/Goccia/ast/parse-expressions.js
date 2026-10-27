@@ -103,6 +103,20 @@ describe("ast.parse with expressions", () => {
     expect(member.computed).toBe(false);
   });
 
+  test("a brand check's private name has no receiver", () => {
+    const result = parseExpressions(
+      "class K {\n  #x;\n  static has(o) { return #x in o; }\n}\n",
+    );
+    const check = find(result.root, "BinaryExpression");
+    const name = check.children[0];
+
+    expect(text(result, check)).toBe("#x in o");
+    expect(name.kind).toBe("MemberExpression");
+    expect(text(result, name)).toBe("#x");
+    expect(name.children).toEqual([]);
+    expect(findAll(result.root, "ThisExpression")).toEqual([]);
+  });
+
   test("an arrow function reports async and its body kind", () => {
     const result = parseExpressions(
       "const f = async (a) => a;\nconst g = () => {\n  return 1;\n};\n",

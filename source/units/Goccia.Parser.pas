@@ -2249,6 +2249,7 @@ var
   TypeAnnotation: string;
   PrivateToken: TGocciaToken;
   PrivateName: string;
+  PrivateNameSpan: TGocciaSourceSpan;
 
   procedure ParseIsExpressions;
   begin
@@ -2273,12 +2274,13 @@ begin
       'Expected private field name after "#"',
       SSuggestPrivateFieldMustFollow).Lexeme;
     RecordPrivateNameReference(PrivateName, Previous.Line, Previous.Column);
+    PrivateNameSpan := PrivateToken.Span.Cover(Previous.Span);
     Consume(gttIn, 'Expected "in" after private field name',
       SSuggestExpressionExpected);
     Result := TGocciaBinaryExpression.Create(
       TGocciaPrivateMemberExpression.Create(
         TGocciaThisExpression.Create(PrivateToken.Span),
-        PrivateName, PrivateToken.Span),
+        PrivateName, PrivateNameSpan),
       gttIn, Shift, PrivateToken.Span);
     Exit;
   end;
@@ -2405,7 +2407,7 @@ begin
       RecordPrivateNameReference(PrivateName, Previous.Line, Previous.Column);
       Right := TGocciaPrivateMemberExpression.Create(
         TGocciaThisExpression.Create(PrivateToken.Span),
-        PrivateName, PrivateToken.Span);
+        PrivateName, PrivateToken.Span.Cover(Previous.Span));
     end
     else
       Right := NestedUnary;
