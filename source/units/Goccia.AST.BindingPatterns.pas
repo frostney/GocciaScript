@@ -82,7 +82,7 @@ procedure AddBindingName(const ANames: TUnicodeStringList;
 begin
   if AName = '' then
     Exit;
-  if (not AUnique) or (ANames.IndexOf(AName) < 0) then
+  if (not AUnique) or not ANames.HasString(AName) then
     ANames.Add(AName);
 end;
 
@@ -153,7 +153,7 @@ begin
       Names := TUnicodeStringList.Create;
       try
         CollectPatternBindingNames(AParameters[I].Pattern, Names, True);
-        if Names.IndexOf(AName) >= 0 then
+        if Names.HasString(AName) then
           Exit(True);
       finally
         Names.Free;
@@ -176,7 +176,7 @@ var
   begin
     if AName = '' then
       Exit(False);
-    if Names.IndexOf(AName) >= 0 then
+    if Names.HasString(AName) then
       Exit(True);
     Names.Add(AName);
     Result := False;

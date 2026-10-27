@@ -137,6 +137,31 @@ console.log("Function parameter-list early errors...");
   for (const { desc, source, args } of cases) {
     assertSyntaxError(source, desc, [...args]);
   }
+
+  // A duplicate far from the name it repeats, in a list of thousands.
+  const names = Array.from({ length: 5000 }, (_, i) => `a${i}`).join(", ");
+  const longCases = [
+    { desc: "long arrow list repeating its first name last", source: `const f = (${names}, a0) => 0;\n`, args: [] },
+    { desc: "long object method list repeating a name", source: `const o = { m(${names}, a4999) {} };\n`, args: [] },
+    { desc: "long class method list repeating a name", source: `class C { m(a0, ${names}) {} }\n`, args: [] },
+    { desc: "long function list repeating a name", source: `function f(${names}, a2500) {}\n`, args: ["--compat-function"] },
+    { desc: "long list whose pattern repeats a name", source: `const f = (${names}, { x: [a4999] }) => 0;\n`, args: [] },
+    { desc: "long object pattern parameter repeating a name", source: `const f = ({ ${names} }, a0) => 0;\n`, args: [] },
+    {
+      desc: "long non-simple non-strict function list repeating a name",
+      source: `function f(${names}, a0 = 1) {}\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "long non-strict function list repeating a name under use strict",
+      source: `function f(${names}, a0) { "use strict"; }\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+  ] as const;
+
+  for (const { desc, source, args } of longCases) {
+    assertSyntaxError(source, desc, [...args], { messageIncludes: "Duplicate parameter name" });
+  }
 }
 
 console.log("Strict mode code rejects static as a pattern or for-head binding...");

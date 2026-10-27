@@ -176,7 +176,9 @@ type
     FIsSloppyEvalCode: Boolean;
     FEvalCodeVarEnvironment: TGocciaDirectEvalVarEnvironment;
     FParametersInVarEnvironment: Boolean;
-    FParameterNames: array of string;
+    // A hash map, so recording thousands of parameters is linear in them;
+    // nil until the first name.
+    FParameterNames: TOrderedStringMap<Boolean>;
     FTemplate: TGocciaFunctionTemplate;
     FUpvaluesSeeded: Boolean;
     // The join of the types this function returns (zeroed by InitInstance:
@@ -552,6 +554,7 @@ begin
   inherited Create;
   FParent := AParent;
   FLocalIndex := nil;
+  FParameterNames := nil;
   FLocalCount := 0;
   FUpvalueCount := 0;
   FDepth := ADepth;
@@ -587,6 +590,7 @@ end;
 destructor TGocciaCompilerScope.Destroy;
 begin
   FLocalIndex.Free;
+  FParameterNames.Free;
   inherited;
 end;
 
@@ -1037,20 +1041,17 @@ end;
 
 procedure TGocciaCompilerScope.AddParameterName(const AName: string);
 begin
-  if (AName = '') or HasParameterName(AName) then
+  if AName = '' then
     Exit;
-  SetLength(FParameterNames, Length(FParameterNames) + 1);
-  FParameterNames[High(FParameterNames)] := AName;
+  if not Assigned(FParameterNames) then
+    FParameterNames := TOrderedStringMap<Boolean>.Create;
+  FParameterNames.Add(AName, True);
 end;
 
 function TGocciaCompilerScope.HasParameterName(const AName: string): Boolean;
-var
-  I: Integer;
 begin
-  for I := 0 to High(FParameterNames) do
-    if FParameterNames[I] = AName then
-      Exit(True);
-  Result := False;
+  Result := Assigned(FParameterNames) and
+    FParameterNames.ContainsKey(AName);
 end;
 
 procedure TGocciaCompilerScope.ClearInitializedAtDepth(const ADepth: Integer);
