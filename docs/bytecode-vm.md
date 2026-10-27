@@ -165,30 +165,43 @@ addresses, so moving code that never runs changes the speed of code that does.
 Most layouts land within about 1% of each other, but some are far off: one
 measured order of the arms made AWFY Towers, Queens, Permute and Richards 10-13%
 slower with the same instructions, through op-cache and instruction-cache
-misses in four of the 64 cache sets, and moving it by 64 bytes undid that. Two
-layout rules keep this under control:
+misses in four of the 64 cache sets, and moving that code by 128 to 3072 bytes
+undid that. Two layout rules keep this under control:
 
 - **Hot arms first.** FPC lays out a case statement's arms in source order. The
-  49 arms the AWFY workloads execute most open the case in
-  `source/units/Goccia.VM.DispatchCase.inc`, highest share of executed opcodes first, and
-  every other arm follows them, so an edit to one of those cannot move a hot
-  arm. A new opcode's arm goes after the `Cold arms` comment.
+  arms the AWFY workloads execute most, at least 0.1% of their executed opcodes
+  on average, open the case in `source/units/Goccia.VM.DispatchCase.inc`,
+  highest share first, and every other arm follows them, so an edit to one of
+  those cannot move a hot arm. A new opcode's arm goes after the `Cold arms`
+  comment.
 - **Arms on 64-byte boundaries.** The dispatch function is compiled with
-  `{$CODEALIGN JUMP=64}`, which aligns every case arm in it, so no arm shares
-  a cache line or an op-cache window with the end of the arm before it. That
-  costs about 74 KB of padding and lowers the op-cache misses of the
-  dispatch-bound AWFY workloads by a fifth to two fifths.
+  `{$CODEALIGN JUMP=64}`, so no arm shares a cache line or an op-cache window
+  with the end of the arm before it. FPC also aligns the labels where a case
+  statement ends and where an `if` without an `else` rejoins, which is most of
+  the 74 KB of padding; code that falls through to such a label executes it,
+  0.0-0.7% more instructions on AWFY.
+
+Together, on a Zen 5 core, the two lower the op-cache misses of the
+dispatch-bound AWFY workloads (List, Queens, Permute, Towers, Sieve, Richards)
+by a fifth to two fifths and raise those of Bounce, DeltaBlue and NBody by
+7-16%. Times stay within 1.8% of the previous layout per benchmark and are
+0.06-0.35% slower on geometric mean: the layout makes measurement steadier,
+not the VM faster. An edit to a cold arm no longer changes the hot arms'
+op-cache misses.
 
 `scripts/check-vm-dispatch-layout.ts` (CI and the pre-commit hook) fails when
-the hot arms are no longer first or in order, or the alignment is gone. A change
-to either rule changes the layout of every arm and needs the measurement below;
-then update the script's `HOT_ARMS` with it.
+the hot arms are no longer first or in order, or the alignment is gone. Its
+`--rank` option ranks the arms from opcode profiles and prints the list it
+keeps, with the command that made it. A change to either rule changes the
+layout of every arm and needs the measurement below; then update the script's
+`HOT_ARMS` with it.
 
 To see how much a benchmark moves when code placement alone changes, build
 the layout probe, `./build.pas --prod --layout-probe runner`. It is the
 production build with a few hundred bytes of code that never runs ahead of the
-dispatch function, written to `build/layout-probe/`. Compare it with the
-ordinary build as [Judging a change by work and placement](benchmarks.md#judging-a-change-by-work-and-placement)
+dispatch function, so the dispatch function and everything after it sit
+further along, written to `build/layout-probe/`. Compare it with the ordinary
+build as [Judging a change by work and placement](benchmarks.md#judging-a-change-by-work-and-placement)
 describes: both run the same instructions, so any time difference between them
 is placement. A change whose time delta stays within that difference, with no
 change in instructions, has not been shown to do anything.

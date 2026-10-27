@@ -20,12 +20,27 @@
  *   - Goccia.VM.pas no longer wraps ExecuteClosureRegistersInternal in
  *     {$PUSH}{$CODEALIGN JUMP=64} ... {$POP}.
  *
+ * --rank ranks the arms from opcode profiles, one JSON file per workload, as
+ * the AWFY driver writes them, and prints the arms whose mean share of executed
+ * opcodes is at least --threshold (default 0.001), highest first, in HOT_ARMS
+ * form. HOT_ARMS is that list for twelve pinned AWFY benchmarks, all but CD,
+ * which GocciaScript does not parse, and Havlak:
+ *
+ *   node scripts/awfy-driver.js --awfy-dir <awfy>/benchmarks/JavaScript \
+ *     --engines goccia --repetitions 1 --profile opcodes --profile-dir <dir> \
+ *     --benchmark Bounce:200 --benchmark DeltaBlue:5000 --benchmark Json:20 \
+ *     --benchmark List:500 --benchmark Mandelbrot:500 --benchmark NBody:50000 \
+ *     --benchmark Permute:200 --benchmark Queens:400 --benchmark Richards:10 \
+ *     --benchmark Sieve:1000 --benchmark Storage:100 --benchmark Towers:150
+ *   npx tsx scripts/check-vm-dispatch-layout.ts --rank <dir>
+ *
  * Usage:
  *   npx tsx scripts/check-vm-dispatch-layout.ts
  *   npx tsx scripts/check-vm-dispatch-layout.ts --self-test
+ *   npx tsx scripts/check-vm-dispatch-layout.ts --rank <dir> [--threshold <share>]
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -100,26 +115,30 @@ export const caseItems = (source: string): Item[] => {
   const lines = source.split(/\r?\n/);
   const start = lines.findIndex((line) => /^\s*case TGocciaOpCode\(Op\) of\s*$/.test(line));
   if (start < 0) throw new Error("dispatch case `case TGocciaOpCode(Op) of` not found");
-  // The case's own else is its last line that is `else` alone at its indent;
-  // the arms hold other ones.
-  let end = lines.length;
-  for (let index = lines.length - 1; index > start; index--) {
-    if (lines[index] === "        else") {
+  // The case's own else is the line `else` alone at its indent that the
+  // OP_CALL_SELF comment follows; the arms hold other such lines.
+  let end = -1;
+  for (let index = start + 1; index < lines.length - 1; index++) {
+    if (lines[index] === "        else" && /^\s*\/\/ OP_CALL_SELF /.test(lines[index + 1])) {
       end = index;
       break;
     }
   }
+  if (end < 0) throw new Error("the dispatch case's else, followed by the OP_CALL_SELF comment, not found");
   const items: Item[] = [];
   let pending: string[] | null = null;
   for (let index = start + 1; index < end; index++) {
     const line = lines[index];
     if (line.startsWith(`      ${HOT_MARKER}`)) items.push({ kind: "hot", line: index + 1 });
     else if (line.startsWith(`      ${COLD_MARKER}`)) items.push({ kind: "cold", line: index + 1 });
-    const label = /^ {6}((?:OP_[A-Z0-9_]+\s*,?\s*)+)(:?)/.exec(line);
-    if (!label) {
+    if (!/^ {6}OP_/.test(line)) {
       pending = null;
       continue;
     }
+    // A label list, ending in `,` when it goes on, or in `:` and maybe the
+    // arm's statement.
+    const label = /^ {6}((?:OP_[A-Z0-9_]+\s*,\s*)*OP_[A-Z0-9_]+)\s*(,\s*$|:(?!=))/.exec(line);
+    if (!label) throw new Error(`line ${index + 1}: arm label not understood: ${line.trim()}`);
     const names = label[1].split(",").map((name) => name.trim()).filter(Boolean);
     pending = pending ? pending.concat(names) : names;
     if (label[2] === ":") {
@@ -176,10 +195,33 @@ export const checkAlignment = (source: string): string[] => {
   return [];
 };
 
+// The case's arms by mean share of executed opcodes over the profiles, each a
+// `{ opcodes: [{ opcode, count }] }` report, highest first.
+export const rankArms = (
+  source: string,
+  profiles: Array<{ opcodes: Array<{ opcode: string; count: number }> }>,
+): Array<{ arm: string; share: number }> => {
+  const shares = new Map<string, number>();
+  for (const profile of profiles) {
+    const total = profile.opcodes.reduce((sum, entry) => sum + entry.count, 0);
+    if (total === 0) continue;
+    for (const entry of profile.opcodes) {
+      shares.set(entry.opcode, (shares.get(entry.opcode) ?? 0) + entry.count / total / profiles.length);
+    }
+  }
+  return caseItems(source)
+    .filter((item): item is Extract<Item, { kind: "arm" }> => item.kind === "arm")
+    .map((item) => ({
+      arm: item.labels.join(", "),
+      share: item.labels.reduce((sum, label) => sum + (shares.get(label) ?? 0), 0),
+    }))
+    .sort((left, right) => right.share - left.share);
+};
+
 const selfTest = (): void => {
   const hotArms = ["OP_A, OP_B", "OP_C"];
   const caseText = (body: string[]): string =>
-    ["          case TGocciaOpCode(Op) of", ...body, "        else", "          ;", "        end;"].join("\n");
+    ["          case TGocciaOpCode(Op) of", ...body, "        else", "          // OP_CALL_SELF is dispatched here.", "          ;", "        end;"].join("\n");
   const good = [
     `      ${HOT_MARKER} Measured.`,
     "      OP_A,",
@@ -203,6 +245,21 @@ const selfTest = (): void => {
     ["a label used twice", [...good, "      OP_C:", "        X := 4;"], false],
   ];
   let failed = 0;
+  const ranked = rankArms(caseText(good), [
+    { opcodes: [{ opcode: "OP_C", count: 6 }, { opcode: "OP_A", count: 1 }, { opcode: "OP_B", count: 3 }] },
+    { opcodes: [{ opcode: "OP_D", count: 1 }, { opcode: "OP_C", count: 1 }] },
+  ]);
+  if (ranked.map((entry) => entry.arm).join("; ") !== "OP_C; OP_D; OP_A, OP_B" || Math.abs(ranked[0].share - 0.55) > 1e-9) {
+    failed++;
+    console.error(`self-test: ranking: got ${JSON.stringify(ranked)}`);
+  }
+  try {
+    checkCase(caseText([...good, "      OP_E..OP_F:", "        X := 5;"]), hotArms);
+    failed++;
+    console.error("self-test: a label the check does not understand: expected an error");
+  } catch {
+    // expected
+  }
   for (const [name, body, ok] of cases) {
     const problems = checkCase(caseText(body), hotArms);
     if ((problems.length === 0) !== ok) {
@@ -230,11 +287,26 @@ const selfTest = (): void => {
     }
   }
   if (failed > 0) process.exit(1);
-  console.log(`${cases.length + alignmentCases.length} self-test case(s) passed.`);
+  console.log(`${cases.length + alignmentCases.length + 2} self-test case(s) passed.`);
+};
+
+const argValue = (name: string): string | undefined => {
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
 };
 
 if (process.argv.includes("--self-test")) {
   selfTest();
+} else if (argValue("--rank") !== undefined) {
+  const dir = argValue("--rank") as string;
+  const threshold = Number(argValue("--threshold") ?? "0.001");
+  const profiles = readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => JSON.parse(readFileSync(join(dir, name), "utf8")));
+  if (profiles.length === 0) throw new Error(`no opcode profiles (*.json) in ${dir}`);
+  const ranked = rankArms(readFileSync(DISPATCH_CASE, "utf8"), profiles).filter((entry) => entry.share >= threshold);
+  console.log(`// ${ranked.length} arms with a mean share of at least ${threshold} over ${profiles.length} profiles`);
+  for (const { arm, share } of ranked) console.log(`  "${arm}", // ${(share * 100).toFixed(2)}%`);
 } else {
   const problems = [
     ...checkCase(readFileSync(DISPATCH_CASE, "utf8")),

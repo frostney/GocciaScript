@@ -3,6 +3,7 @@
 const fs = require('fs');
 
 const MARKER = '<!-- awfy-results -->';
+const COMPARISON_PAIR = 'goccia-candidate_over_goccia-baseline';
 const LEGACY_MARKER = '<!-- awfy-smoke -->';
 const DEFAULT_COMMENT_ENGINES = ['goccia', 'qjs', 'node'];
 const COMPARISON_COMMENT_ENGINES = ['goccia-baseline', 'goccia-candidate', 'qjs', 'node'];
@@ -137,7 +138,7 @@ function gocciaComparisonClassification(target) {
 }
 
 function deltaCell(target) {
-  const ratio = target.summary?.ratios?.['goccia-candidate_over_goccia-baseline'];
+  const ratio = target.summary?.ratios?.[COMPARISON_PAIR];
   if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0) return '-';
   const delta = (1 - ratio) * 100;
   const formatted = formatDeltaPercent(delta);
@@ -148,27 +149,27 @@ function deltaCell(target) {
   return formatted;
 }
 
-const COUNTER_PAIR = 'goccia-candidate_over_goccia-baseline';
-
 // Whether the report has perf_event counters for both Goccia binaries.
 function reportHasCounterComparison(report) {
-  return (report?.targets || []).some((target) => target.summary?.counterRatios?.[COUNTER_PAIR]);
+  return (report?.targets || []).some((target) => target.summary?.counterRatios?.[COMPARISON_PAIR]);
 }
 
 // The PR's change in a counter's median against main: negative is fewer
 // instructions (less work) or fewer misses.
 function counterDeltaCell(target, key) {
-  const ratio = target.summary?.counterRatios?.[COUNTER_PAIR]?.[key];
+  const ratio = target.summary?.counterRatios?.[COMPARISON_PAIR]?.[key];
   if (!finiteNumber(ratio) || ratio <= 0) return '-';
   return formatDeltaPercent((ratio - 1) * 100);
 }
 
-function counterNote(report) {
+function counterNote(report, hasCounters) {
   const counters = report?.metadata?.counters;
   if (!counters) return '';
-  if (!counters.available) return `Hardware counters were requested but not recorded: ${counters.reason}. `;
-  return 'Instructions and L1i misses are the PR\'s change in the median perf_event count against main (negative is fewer): '
-    + 'instructions do not depend on code placement, so a time Δ with no instruction Δ and a moved L1i miss count is layout, not work. ';
+  if (!counters.available) return `Hardware counters were requested but not recorded: ${String(counters.reason).replace(/\.$/, '')}. `;
+  if (!hasCounters) return 'Hardware counters were requested but no sample of both Goccia binaries recorded them. ';
+  return 'The Instructions and L1i misses columns are the PR\'s change in the median perf_event count against main, '
+    + 'so there negative is fewer (Δ PR vs main is the time saved, so there positive is faster). Instructions do not depend '
+    + 'on code placement: a time Δ with no instruction Δ and a moved L1i miss count is layout, not work. ';
 }
 
 function buildGeomeanTable(geomean, labels = ENGINE_LABELS, engines = DEFAULT_COMMENT_ENGINES) {
@@ -231,7 +232,7 @@ function buildAwfyReportComment(report) {
   if (sampleCount !== null) body += `Medians from ${plural(sampleCount, 'interleaved sample')} per engine; `;
   body += 'raw JSON includes min/max/CV and is attached as the `awfy-report` artifact. ';
   if (hasComparison) body += 'Δ compares PR Goccia median against the same-runner main Goccia median; overlapping min/max ranges are treated as unchanged noise. ';
-  if (hasComparison) body += counterNote(report);
+  if (hasComparison) body += counterNote(report, hasCounters);
   body += 'Rows below 0.5ms are timer-floor sensitive.</sub>\n';
   return body;
 }

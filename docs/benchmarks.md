@@ -521,11 +521,9 @@ node scripts/awfy-comment.js tmp/ab.json
 
 Read the instruction delta first. A per-opcode change that removes work shows
 fewer instructions in the benchmarks that run the opcode and none elsewhere;
-its time deltas elsewhere are placement. To see how large placement deltas are
-on the machine at hand, run the same comparison between `build/GocciaRunner`
-and the layout probe, `./build.pas --prod --layout-probe runner`
-(`build/layout-probe/GocciaRunner`): the two execute the same instructions, so
-every time delta between them is placement ([Dispatch layout](bytecode-vm.md#dispatch-layout)).
+its time deltas elsewhere are placement. The layout probe
+([Dispatch layout](bytecode-vm.md#dispatch-layout)) measures how large
+placement deltas are on the machine at hand.
 
 ### Issue Acceptance Criteria
 

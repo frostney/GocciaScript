@@ -22,8 +22,9 @@ var
     never mixes with, or replaces, the ordinary binaries. }
   GCStressBuild: Boolean = False;
   { --layout-probe: a production build with -dGOCCIA_VM_LAYOUT_PROBE, which
-    moves the VM's hot code by a few hundred bytes and changes nothing else,
-    compiled into its own unit caches and written to build/layout-probe/.
+    adds a few hundred bytes of code that never runs ahead of the VM's
+    dispatch function, so that function and all code after it sit further
+    along, compiled into its own unit caches and written to build/layout-probe/.
     Benchmarked against the ordinary production build, it shows how much code
     placement alone moves a benchmark (issue #1917). }
   LayoutProbeBuild: Boolean = False;

@@ -557,8 +557,7 @@
             GetRegister(C));
 
       // A register compared with a signed Int16 immediate, one arm for the
-      // six opcodes, placed last so the dispatch loop stays small and the arms
-      // before it keep their addresses; the comparison is in
+      // six opcodes, so the dispatch loop stays small; the comparison is in
       // ImmediateComparisonJumps.
       OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM,
       OP_JUMP_IF_NOT_GTE_IMM, OP_JUMP_IF_NOT_STRICT_EQ_IMM,

@@ -16370,12 +16370,12 @@ end;
 {$ENDIF}
 
 { Every case arm of the dispatch loop starts on a 64-byte boundary (issue
-  #1917). An arm then never shares a cache line, or an op-cache window, with
-  the end of the arm before it: on the Zen 5 machine measured, the
-  dispatch-bound AWFY workloads miss the op cache 20-40% less often, and an
-  edit that leaves the hot arms alone leaves their misses where they were.
-  The alignment applies to every case statement compiled into this function,
-  and to nothing outside it. }
+  #1917), so no arm shares a cache line, or an op-cache window, with the end
+  of the arm before it. FPC also aligns the labels where a case statement
+  ends and where an if statement without an else rejoins, in this function
+  and the routines nested in it, and to nothing outside them; code that falls
+  through to such a label executes the padding. See "Dispatch layout" in
+  docs/bytecode-vm.md for what it measured. }
 {$IFDEF FPC}{$PUSH}{$CODEALIGN JUMP=64}{$ENDIF}
 function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;

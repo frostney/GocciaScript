@@ -496,6 +496,7 @@ function main(argv = process.argv.slice(2)) {
     }
   }
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goccia-awfy-'));
+  options.counterDir = tempDir;
   const targetReports = [];
 
   try {
@@ -527,7 +528,8 @@ function main(argv = process.argv.slice(2)) {
             target,
             fileName: bundleFile,
             repetition,
-            options,
+            // A warm-up sample is not recorded, so it writes no profile.
+            options: warmup ? { ...options, profile: '' } : options,
           });
           const label = warmup ? `warm-up ${round + 1}/${options.warmup}` : `rep ${repetition + 1}/${options.repetitions}`;
           console.error(`${target.name} ${engine.name} ${label}: ${sample.outcome}${sample.durationMicros ? ` ${sample.durationMicros}us` : ''}${sample.counters ? ` ${sample.counters.instructions} instructions` : ''}`);

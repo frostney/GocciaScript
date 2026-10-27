@@ -94,6 +94,9 @@ const COUNTER_EVENTS = [
 const COUNTER_KEYS = COUNTER_EVENTS.map((entry) => entry.key);
 
 // Parses `perf stat -x,` output: value, unit, event, running time, percentage.
+// On a hybrid CPU perf reports an event once per core type, as
+// `cpu_core/instructions:u/` and `cpu_atom/instructions:u/`; those lines add
+// up to the process's count.
 function parsePerfStat(text, events = COUNTER_EVENTS) {
   const byEvent = new Map(events.map((entry) => [entry.event, entry.key]));
   const counters = {};
@@ -101,14 +104,15 @@ function parsePerfStat(text, events = COUNTER_EVENTS) {
   for (const line of text.split(/\r?\n/)) {
     const fields = line.split(',');
     if (fields.length < 3) continue;
-    const key = byEvent.get(fields[2]);
+    const name = fields[2].replace(/^[a-z_]+\/(.+)\/$/, '$1');
+    const key = byEvent.get(name);
     if (!key) continue;
     const value = Number(fields[0]);
     if (fields[0] === '' || !Number.isFinite(value)) {
-      counters[key] = null;
+      if (!(key in counters)) counters[key] = null;
       continue;
     }
-    counters[key] = value;
+    counters[key] = (typeof counters[key] === 'number' ? counters[key] : 0) + value;
     const percentage = Number(fields[4]);
     if (Number.isFinite(percentage) && percentage < 100) multiplexed = true;
   }
@@ -122,7 +126,7 @@ function probeCounters({ perf = 'perf', platform = process.platform, spawn = spa
   if (platform !== 'linux') {
     return { available: false, reason: `hardware counters need Linux perf_event (platform ${platform})`, events: [] };
   }
-  const proc = spawn(perf, ['stat', '-x,', '-e', COUNTER_EVENTS.map((entry) => entry.event).join(','), '--', process.execPath, '-e', ''], {
+  const proc = spawn(perf, ['stat', '-x,', '-e', COUNTER_EVENTS.map((entry) => entry.event).join(','), '--', 'timeout', '60', process.execPath, '-e', ''], {
     encoding: 'utf8',
   });
   if (proc.error) {
@@ -140,11 +144,32 @@ function probeCounters({ perf = 'perf', platform = process.platform, spawn = spa
   return { available: true, reason: null, events, perf };
 }
 
-function counterCommand(command, args, counterSetup, outputFile) {
+// perf runs the sample as its child and does not end it when it is killed
+// itself, so the time limit is enforced under perf by coreutils `timeout`:
+// TERM at the limit (exit 124), KILL a second later. Its own few instructions
+// are counted with the sample's, the same in every sample.
+function counterCommand(command, args, counterSetup, outputFile, timeoutMs) {
+  const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
   return {
     command: counterSetup.perf || 'perf',
-    args: ['stat', '-x,', '-o', outputFile, '-e', counterSetup.events.map((entry) => entry.event).join(','), '--', command, ...args],
+    args: ['stat', '-x,', '-o', outputFile, '-e', counterSetup.events.map((entry) => entry.event).join(','), '--',
+      'timeout', '--kill-after=1', String(seconds), command, ...args],
   };
+}
+
+// The process result of a sample run under perf and `timeout`, as if the
+// sample had run alone: `timeout` exits 124 when it stopped the sample, and a
+// sample killed by a signal makes them exit 128 + its number.
+function uncountedProcess(proc) {
+  if (proc.error || typeof proc.status !== 'number') return proc;
+  if (proc.status === 124) {
+    return { ...proc, error: Object.assign(new Error('sample timed out'), { code: 'ETIMEDOUT' }) };
+  }
+  if (proc.status > 128) {
+    const signal = Object.entries(os.constants.signals).find(([, number]) => number === proc.status - 128);
+    if (signal) return { ...proc, status: null, signal: signal[0] };
+  }
+  return proc;
 }
 
 function readCounters(outputFile, counterSetup) {
@@ -197,24 +222,30 @@ function runEngineSample({ engine, target, fileName, repetition, options, marker
   }
   const executable = engine.sampleCommand || engine.command;
   const counting = engine.kind === 'goccia' && options.counterSetup?.available;
+  const ownCounterDir = counting && !options.counterDir
+    ? fs.mkdtempSync(path.join(os.tmpdir(), 'goccia-counters-'))
+    : null;
   const counterFile = counting
-    ? path.join(os.tmpdir(), `goccia-counters-${process.pid}-${engine.name}-${repetition}.csv`)
+    ? path.join(options.counterDir || ownCounterDir, `${engine.name}-${repetition}.csv`)
     : null;
   let invocation = counting
-    ? counterCommand(executable, args, options.counterSetup, counterFile)
+    ? counterCommand(executable, args, options.counterSetup, counterFile, options.timeoutMs)
     : { command: executable, args };
   invocation = pinnedCommand(invocation.command, invocation.args, options.cpu);
   const startedAt = new Date().toISOString();
-  const proc = spawnSync(invocation.command, invocation.args, {
+  const spawned = spawnSync(invocation.command, invocation.args, {
     encoding: 'utf8',
-    timeout: options.timeoutMs,
+    // Under perf, `timeout` ends the sample; this only catches perf itself.
+    timeout: counting ? options.timeoutMs + 5000 : options.timeoutMs,
     maxBuffer: 16 * 1024 * 1024,
   });
+  const proc = counting ? uncountedProcess(spawned) : spawned;
   const stdout = proc.stdout || '';
   const stderr = proc.stderr || '';
   const parsed = parseMarkedResult(stdout, marker);
   const outcome = classifyProcessOutcome(proc, parsed, stdout, stderr);
   const counters = counting ? readCounters(counterFile, options.counterSetup) : null;
+  if (ownCounterDir) fs.rmSync(ownCounterDir, { recursive: true, force: true });
   return {
     engine: engine.name,
     repetition,
@@ -392,10 +423,12 @@ module.exports = {
   iqrFiltered,
   median,
   parseMarkedResult,
+  counterCommand,
   parsePerfStat,
   probeCounters,
   resolveEngines,
   runEngineSample,
   summarizeCounters,
   summarizeMetric,
+  uncountedProcess,
 };

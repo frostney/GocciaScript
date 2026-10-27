@@ -3,7 +3,7 @@
 **Date:** 2026-10-27
 **Area:** `bytecode VM`, `benchmarking`
 **Issue:** [#1917](https://github.com/frostney/GocciaScript/issues/1917)
-**Related:** [ADR 0076](0076-same-runner-benchmark-comparison.md), [ADR 0087](0087-awfy-cross-engine-benchmark-methodology.md), [ADR 0154](0154-the-vm-dispatch-loop-uses-no-goto.md), [Bytecode VM § Dispatch layout](../bytecode-vm.md#dispatch-layout)
+**Related:** [ADR 0003](0003-opcode-layout-by-hotness.md), [ADR 0076](0076-same-runner-benchmark-comparison.md), [ADR 0087](0087-awfy-cross-engine-benchmark-methodology.md), [ADR 0154](0154-the-vm-dispatch-loop-uses-no-goto.md), [Bytecode VM § Dispatch layout](../bytecode-vm.md#dispatch-layout)
 
 ## Context
 
@@ -48,9 +48,10 @@ cannot move a hot one.
 
 **Every arm starts on a 64-byte boundary.** The dispatch function is compiled
 with `{$CODEALIGN JUMP=64}` between `{$PUSH}` and `{$POP}`, so no arm shares a
-cache line or an op-cache window with the end of the one before it. FPC applies
-the alignment to every case statement in the function, those of inlined
-helpers included, and to nothing outside it.
+cache line or an op-cache window with the end of the one before it. FPC also
+aligns the labels where a case statement ends and where an `if` without an
+`else` rejoins, in the function, the helpers inlined into it and the routines
+nested in it, and nothing outside them.
 
 `scripts/check-vm-dispatch-layout.ts`, run by CI and the pre-commit hook, holds
 the hot arms and fails when they are no longer first and in order, or when the
@@ -71,7 +72,10 @@ ADR 0087 rather than adding another path.
 Same machine and builds, four copies per binary, each copied afresh or with
 its page cache dropped before every round, rounds in alternating order on one
 core whose SMT sibling stayed idle, the first round discarded. Medians of user
-cycles over twelve AWFY benchmarks.
+cycles over twelve AWFY benchmarks. These runs used a measurement script
+outside the repository that does what the driver's `--fresh-copies
+--alternate-order --cpu --warmup` do, and also counted the AMD op-cache event
+`op_cache_hit_miss.op_cache_miss`, which `--counters` does not record.
 
 | Pair | Largest benchmark difference | Geomean |
 | --- | ---: | ---: |
@@ -92,14 +96,20 @@ every benchmark within 1.9% of its other layouts.
 
 ## Consequences
 
+- This is not a speed-up. Against `main` the layout is 0.06-0.35% slower on
+  geometric mean in three comparisons, Bounce 1.2-1.8% slower and Storage
+  1.2-1.7% faster each time, within the spread of the layouts measured.
 - An edit to a cold arm leaves the hot arms where they are, and a time delta
   it shows is noise. An edit to a hot arm still moves the hot arms after it,
   by whole lines.
-- The dispatch function grows from 237 KB to 310 KB, and the padding before
-  aligned labels that code falls through to costs 0.0-0.7% more instructions
-  (List 0.7%, the others below 0.3%).
+- The dispatch function grows from 237 KB to 310 KB, mostly through the
+  aligned `if` joins, and the padding before aligned labels that code falls
+  through to costs 0.0-0.7% more instructions (List 0.7%, the others below
+  0.3%).
 - A different hot set, or another order, is a measured change: it is laid out
-  differently everywhere after its first arm.
+  differently everywhere after its first arm. `check-vm-dispatch-layout.ts
+  --rank` derives the list from opcode profiles, with the command that made
+  it.
 - The alignment and the order were measured on one x86-64 core; other
   processors cache code differently. The layout probe and `--counters` measure
   them where they run.
