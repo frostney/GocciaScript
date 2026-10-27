@@ -7937,7 +7937,6 @@ var
     the name of an alias. Called with the token after `type` current. }
   function ExportedErasedTypeKind: TGocciaErasedTypeKind;
   begin
-    ErasedListStart := FCurrent;
     if Check(gttLeftBrace) then
       Result := etkExport
     else if Check(gttStar) then
@@ -8020,6 +8019,7 @@ begin
   if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) then
   begin
     Advance;
+    ErasedListStart := FCurrent;
     ErasedTypeKind := ExportedErasedTypeKind;
     SkipUntilSemicolon;
     if (ErasedTypeKind = etkExport) and HasFromClauseAfterErasedList then

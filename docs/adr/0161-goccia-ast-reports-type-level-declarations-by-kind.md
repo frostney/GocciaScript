@@ -13,9 +13,7 @@ declaration (`type`, `interface`, `import type`, `export type`,
 thing a rule dispatches on, and `goccia:ast` reported all of these as
 `EmptyStatement`. A rule could not tell a type declaration from a stray `;`.
 An import-rewriting codemod that walked `ImportDeclaration` nodes skipped 58
-`import type` lines in a 123-file tree, and one 1,819-file TypeScript repository
-came back with 4,075 `EmptyStatement` nodes, nearly all of them type
-declarations.
+`import type` lines in a 123-file tree.
 
 ADR 0117 also said of type annotations that there was nothing to expose,
 because they are gone before the tree exists. The open question was whether
@@ -81,12 +79,15 @@ class in places: `Goccia.Compiler.OperandSafety` and
 - `typeOnly` extends the node shape ADR 0117 fixed at
   `{ kind, start, end, loc, children }`. It is present on seven kinds only, so
   the properties a node has still depend on nothing but its kind.
-- `import type from "./x"`, a default import whose binding is named `type`, is
-  erased by the parser today and is therefore reported as a type-only import.
-  The report matches what the engine runs, but the erasure itself is wrong.
+- `import type from "./x"` and `import type, { y } from "./x"` are value
+  imports, the first binding named `type`, but the parser erases both today, so
+  neither `type` nor `y` is bound. They are therefore reported as type-only
+  imports. The report matches what the engine runs; the erasure itself is
+  wrong.
 - `declare` forms ([#1527](https://github.com/frostney/GocciaScript/issues/1527))
   and `export default interface` are still syntax errors and have no kind.
 - `examples/_experimental/ast-ranges.mjs` re-parses the exported type kinds at
-  the top level, as it does the other module kinds. Over `website/src`, every
-  node round-trips except the `Program` nodes, and the one file that does not
-  parse fails on `declare global`.
+  the top level, as it does the other module kinds. Over `website/src`, run with
+  the nine `--compat-*` flags its code needs, every node round-trips except the
+  `Program` nodes, and the one file that does not parse fails on
+  `declare global`.

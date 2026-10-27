@@ -67,6 +67,26 @@ describe("ast.parse type-level declarations", () => {
     ]);
   });
 
+  test("empty lists, import attributes and comments between tokens do not change the kind", () => {
+    const lines = [
+      "export type {};",
+      'export type {} from "./a.ts";',
+      'export type { A } from "./a.json" with { type: "json" };',
+      'import type { A } from "./a.json" with { type: "json" };',
+      'export /* why */ type /* not */ { A } /* here */ from /* x */ "./a.ts";',
+      "export type /* alias */ T = A;",
+    ];
+
+    expect(topLevel(lines.join("\n") + "\n")).toEqual([
+      { kind: "ExportDeclaration", typeOnly: true, text: lines[0] },
+      { kind: "ReExportDeclaration", typeOnly: true, text: lines[1] },
+      { kind: "ReExportDeclaration", typeOnly: true, text: lines[2] },
+      { kind: "ImportDeclaration", typeOnly: true, text: lines[3] },
+      { kind: "ReExportDeclaration", typeOnly: true, text: lines[4] },
+      { kind: "ExportTypeAliasDeclaration", typeOnly: true, text: lines[5] },
+    ]);
+  });
+
   test("a lone semicolon is the only empty statement, and it carries no typeOnly", () => {
     const source = "type A = 1;\n;\nconst b = 2;\n";
     const [alias, empty, declaration] = parse(source).root.children;
