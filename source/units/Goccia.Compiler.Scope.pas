@@ -188,6 +188,10 @@ type
     FReturnSeen: Boolean;
     FReturnConflict: Boolean;
     FLastChildReturnType: TGocciaLocalType;
+    // The binary expression this function's code compiled last, and the type
+    // of the value its instruction produces (see NoteBinaryResultType).
+    FLastBinaryExpression: TGocciaExpression;
+    FLastBinaryResultType: TGocciaLocalType;
     // While the case clauses of a switch statement are compiled, the locals
     // marked initialized or given a constant value, in that order, and where
     // each open switch's next clause starts reading them (BeginCaseClauses).
@@ -324,6 +328,22 @@ type
     function InferredReturnType: TGocciaLocalType;
     property LastChildReturnType: TGocciaLocalType read FLastChildReturnType
       write FLastChildReturnType;
+    { A binary operator hands the type of the value it computed to the
+      operator whose operand it is, which would otherwise work the type out
+      again from the operand's whole subtree: in a chain of k operators that
+      is k walks, each as long as the chain so far. The operand's value is
+      computed into a register before anything after it runs, so its type is
+      the one it had when its instruction was chosen.
+      NoteBinaryResultType records it as the last act of compiling AExpr;
+      TakeBinaryResultType, called right after the operand is compiled, gives
+      it back once, and only for that operand: a nested operator recorded
+      later, or an operand compiled another way (folded to a constant, or
+      simplified), leaves no record of AExpr. }
+    procedure ForgetBinaryResultType;
+    procedure NoteBinaryResultType(const AExpr: TGocciaExpression;
+      const AType: TGocciaLocalType);
+    function TakeBinaryResultType(const AExpr: TGocciaExpression;
+      out AType: TGocciaLocalType): Boolean;
     procedure SetLocalTypeAnnotation(const AIndex: Integer;
       const AAnnotation: string);
     procedure SetLocalElementTypeAnnotation(const AIndex: Integer;
@@ -596,6 +616,7 @@ begin
   FParametersInVarEnvironment := False;
   FUpvaluesSeeded := False;
   FTemplate := nil;
+  FLastBinaryExpression := nil;
   FSettledLocalCount := 0;
   FCaseClauseMarkCount := 0;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
@@ -1316,6 +1337,29 @@ begin
     else
       FReturnConflict := True;
   end;
+end;
+
+procedure TGocciaCompilerScope.ForgetBinaryResultType;
+begin
+  FLastBinaryExpression := nil;
+end;
+
+procedure TGocciaCompilerScope.NoteBinaryResultType(
+  const AExpr: TGocciaExpression; const AType: TGocciaLocalType);
+begin
+  FLastBinaryExpression := AExpr;
+  FLastBinaryResultType := AType;
+end;
+
+function TGocciaCompilerScope.TakeBinaryResultType(
+  const AExpr: TGocciaExpression; out AType: TGocciaLocalType): Boolean;
+begin
+  Result := Assigned(AExpr) and (FLastBinaryExpression = AExpr);
+  if Result then
+    AType := FLastBinaryResultType
+  else
+    AType := sltUntyped;
+  FLastBinaryExpression := nil;
 end;
 
 function TGocciaCompilerScope.InferredReturnType: TGocciaLocalType;

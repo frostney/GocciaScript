@@ -67,6 +67,15 @@ type
     // The innermost expression or statement being compiled, where a
     // bytecode limit is reported (RaiseBytecodeLimit).
     FCurrentNode: TGocciaASTNode;
+    // Expressions an attempt to fold an expression to a constant has just
+    // found not to be one: FNotConstantExpression, and the next
+    // FNotConstantCount - 1 expressions down its left operands. They stay
+    // known only while the next expression compiled is the first of them and
+    // no instruction has been emitted since (CompileExpressionNode).
+    FNotConstantExpression: TGocciaExpression;
+    FNotConstantCount: Integer;
+    FNotConstantTemplate: TGocciaFunctionTemplate;
+    FNotConstantCodeCount: Integer;
     // Every template the compile has switched to, with repeats: a compile
     // that raises frees those no other template owns yet
     // (FreeUnattachedTemplates).
@@ -430,15 +439,49 @@ begin
     FSourcePath, nil, SSuggestBytecodeLimit);
 end;
 
+// Every expression is first tried as a constant. A binary operator's
+// operands are evaluated left first, so a failed try walks down the left
+// operands to the first one that is not constant, and in a chain such as
+// `a + b + c + ...` the operator compiled next is the left operand of the
+// one before: trying each of them again walked the chain once per operator,
+// in time quadratic in its length. The failed try counts the left operands
+// it found not constant, and the next compiles skip their tries, as long as
+// nothing was emitted in between that a constant could depend on.
 procedure TGocciaCompiler.CompileExpressionNode(
   const AExpr: TGocciaExpression; const ADest: UInt16);
 var
   Ctx: TGocciaCompilationContext;
+  Value: TGocciaCompileTimeValue;
+  LeftFailures: Integer;
 begin
   Ctx := BuildContext;
   EmitLineMapping(Ctx, AExpr.Line, AExpr.Column);
 
-  if TryEmitConstantExpression(Ctx, AExpr, ADest) then
+  if Assigned(FNotConstantExpression) and (AExpr = FNotConstantExpression) and
+     (Ctx.Template = FNotConstantTemplate) and
+     (Ctx.Template.CodeCount = FNotConstantCodeCount) then
+    LeftFailures := FNotConstantCount - 1
+  else if TryEvaluateConstantExpression(Ctx, AExpr, Value, LeftFailures) then
+  begin
+    FNotConstantExpression := nil;
+    EmitCompileTimeValue(Ctx, Value, ADest);
+    Exit;
+  end;
+
+  if (LeftFailures > 0) and (AExpr is TGocciaBinaryExpression) then
+  begin
+    FNotConstantExpression := TGocciaBinaryExpression(AExpr).Left;
+    FNotConstantCount := LeftFailures;
+    FNotConstantTemplate := Ctx.Template;
+    FNotConstantCodeCount := Ctx.Template.CodeCount;
+  end
+  else
+  begin
+    FNotConstantExpression := nil;
+    LeftFailures := 0;
+  end;
+
+  if TryEmitStrictTypeSimplification(Ctx, AExpr, ADest, LeftFailures > 0) then
     Exit;
 
   if AExpr is TGocciaLiteralExpression then
@@ -2097,6 +2140,9 @@ begin
   // A compile that raised left the levels it had entered open; this one
   // starts at the top of the tree.
   FNestingDepth := 0;
+  // A template of an earlier pass or compile may share an address with one
+  // of this compile.
+  FNotConstantExpression := nil;
   if Assigned(FNumericParameterProofs) then
     FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
