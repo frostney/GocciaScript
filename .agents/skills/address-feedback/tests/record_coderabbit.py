@@ -7,7 +7,8 @@
 For each pull request it keeps only what `coderabbit_adapter.py` reads:
 
 - CodeRabbit's statuses on every head the branch had (state, description,
-  created_at);
+  created_at), and its check runs there (status, conclusion, start and
+  completion, title, and the summary's "Result:" line);
 - CodeRabbit's reviews (`commit_id`, `submitted_at`, and the lines that
   count findings);
 - every version of CodeRabbit's comments from their edit history, each
@@ -63,6 +64,8 @@ ABOUT = (
 )
 COMMAND = re.compile(r"@coderabbitai\s+[a-z][a-z ]*", re.IGNORECASE)
 # Kept whatever wording the adapter reads, so a changed notice stays replayable.
+# The two lines of CodeRabbit's notice that it skipped a bot author.
+BOT_SKIP_LINE = re.compile(r"^>\s*(?:## Review skipped|Bot user detected\.)\s*$")
 WAIT_SENTENCE = re.compile(r"(?:available in|please wait)\D{0,20}\d", re.IGNORECASE)
 
 PULL_QUERY = """query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
@@ -171,6 +174,7 @@ def keeps(line: str) -> bool:
         or ADAPTER.COVERAGE_MARKER.search(line)
         or WAIT_SENTENCE.search(line)
         or ADAPTER.NO_CAPACITY.search(line)
+        or BOT_SKIP_LINE.match(line)
         or ADAPTER.NO_ACTIONABLE in line
         or ADAPTER.ACTIONABLE.search(line)
         or ADAPTER.REVIEW_FINDINGS.search(line)
@@ -327,10 +331,20 @@ def record(repo: str, number: int) -> dict[str, Any]:
                     for status in rest_items(f"repos/{repo}/commits/{sha}/statuses?per_page=100")
                     if ADAPTER.is_coderabbit(status)
                 ]
+            runs = []
+            if commit["checkSuites"]["totalCount"]:
+                runs = [
+                    reduce_check_run(run)
+                    for page in gh("api", "--paginate", "--slurp",
+                                   f"repos/{repo}/commits/{sha}/check-runs?check_name=CodeRabbit&filter=all&per_page=100")
+                    for run in page["check_runs"]
+                    if ADAPTER.is_coderabbit_run(run)
+                ]
             heads[sha] = {
                 "parents": [parent["oid"] for parent in commit["parents"]["nodes"]],
                 "checkSuites": sorted(suites, key=lambda suite: suite["created_at"]),
                 "statuses": sorted(statuses, key=lambda status: (status["created_at"], status["id"])),
+                "checkRuns": sorted(runs, key=lambda run: (run["started_at"], run["id"])),
             }
     initial_draft = next(
         (event["type"] == "ready" for event in events if event["type"] in {"ready", "draft"}),
@@ -352,9 +366,26 @@ def record(repo: str, number: int) -> dict[str, Any]:
     }
 
 
+def reduce_check_run(run: dict[str, Any]) -> dict[str, Any]:
+    """The fields of a CodeRabbit check run the adapter reads; its summary keeps only its "Result:" line."""
+    output = run.get("output") or {}
+    result = ADAPTER.CHECK_RESULT.search(str(output.get("summary") or ""))
+    return {
+        "id": run["id"],
+        "name": run["name"],
+        "app": {"slug": run["app"]["slug"]},
+        "status": run["status"],
+        "conclusion": run.get("conclusion"),
+        "started_at": run["started_at"],
+        "completed_at": run.get("completed_at"),
+        "output": {"title": output.get("title"), "summary": result.group(0).strip() if result else ""},
+    }
+
+
 def coderabbit_activity(pull: dict[str, Any]) -> list[str]:
-    """When CodeRabbit posted a status, comment version or review on the pull request."""
+    """When CodeRabbit posted a status, check run, comment version or review on the pull request."""
     times = [status["created_at"] for head in pull["heads"].values() for status in head["statuses"]]
+    times += [run["started_at"] for head in pull["heads"].values() for run in head.get("checkRuns", [])]
     times += [version[0] for item in pull["comments"] if is_bot(item["user"]["login"]) for version in item["versions"]]
     times += [review["submitted_at"] for review in pull["reviews"]]
     return sorted(times)

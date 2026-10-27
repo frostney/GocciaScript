@@ -94,6 +94,17 @@ class ReplayTest(unittest.TestCase):
         self.assertEqual(sorted(found - pinned), [], "unpinned invariant violations")
         self.assertEqual(sorted(pinned - found), [], "pinned violations that no longer occur")
 
+    def test_every_recorded_coderabbit_event_is_one_the_adapter_recognizes(self) -> None:
+        # CodeRabbit changes its wording and channels; a re-recorded corpus shows the drift here.
+        unknown = sorted(
+            f"{pull['repo']}#{pull['number']} {status['created_at']} {status.get('description')!r}"
+            for pull in self.pulls
+            for head in pull["heads"].values()
+            for status in REPLAY.head_statuses(head)
+            if REPLAY.ADAPTER.status_kind(status, pull.get("user")) == "unrecognized"
+        )
+        self.assertEqual(unknown, [])
+
     def test_without_repository_evidence_only_known_late_first_activity_is_not_active(self) -> None:
         # GocciaScript#1225: CodeRabbit started its own review about 58 minutes after the pull
         # request opened. GocciaScript#1237: CodeRabbit first commented 7 days after its push. With
