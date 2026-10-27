@@ -1,6 +1,6 @@
 /*---
 description: Destructuring patterns with thousands of bindings bind every name, in functions and at the top level of a script
-features: [compat-function, compat-non-strict-mode, compat-var, ShadowRealm]
+features: [compat-function, compat-non-strict-mode, compat-var, compat-traditional-for-loop, ShadowRealm]
 ---*/
 
 const COUNT = 3000;
@@ -43,6 +43,18 @@ describe("a pattern with thousands of bindings", () => {
     expect(forOf([source])).toEqual([0, COUNT - 1]);
     const caught = new Function("o", `try { throw o; } catch ({ ${list} }) { return [b0, ${last}]; }`);
     expect(caught(source)).toEqual([0, COUNT - 1]);
+  });
+
+  test("a static block and a for statement's let bind every name", () => {
+    const C = new Function("o", `return class { static { const { ${list} } = o; this.ends = [b0, ${last}]; } };`)(source);
+    expect(C.ends).toEqual([0, COUNT - 1]);
+    const loop = new Function("o", `for (let { ${list} } = o; ; ) { return [b0, ${last}]; }`);
+    expect(loop(source)).toEqual([0, COUNT - 1]);
+  });
+
+  test("a name a static block or for statement's let declares twice is a SyntaxError", () => {
+    expect(() => new Function(`return class { static { const { ${list} } = {}; let ${last}; } };`)).toThrow(SyntaxError);
+    expect(() => new Function(`for (let { ${list} } = {}, b0 = 1; ; ) {}`)).toThrow(SyntaxError);
   });
 
   test("a top-level pattern of a script binds every name", () => {

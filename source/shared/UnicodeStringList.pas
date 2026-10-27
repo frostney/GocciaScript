@@ -77,7 +77,7 @@ var
 begin
   FCounts := TOrderedStringMap<Integer>.Create(Count * 2);
   for I := 0 to Count - 1 do
-    CountAdded(FItems[I]);
+    CountAdded(Items[I]);
 end;
 
 procedure TUnicodeStringList.Notify(
@@ -88,9 +88,12 @@ begin
   inherited Notify(AValue, ACollectionNotification);
   if not Assigned(FCounts) then
     Exit;
+  // Only an addition, removal or extraction changes the counts; any other
+  // notification a compiler's RTL sends leaves them.
   if ACollectionNotification = cnAdded then
     CountAdded(AValue)
-  else
+  else if (ACollectionNotification = cnRemoved) or
+          (ACollectionNotification = cnExtracted) then
     CountRemoved(AValue);
 end;
 
@@ -106,7 +109,7 @@ begin
     Exit(FCounts.ContainsKey(AValue));
   end;
   for I := 0 to Count - 1 do
-    if FItems[I] = AValue then
+    if Items[I] = AValue then
       Exit(True);
   Result := False;
 end;

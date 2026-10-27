@@ -1145,6 +1145,7 @@ procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
       ParserOptions := Parser.Options;
       ParserOptions.VarDeclarationsEnabled := True;
       ParserOptions.FunctionDeclarationsEnabled := True;
+      ParserOptions.TraditionalForLoopsEnabled := True;
       Parser.ApplyOptions(ParserOptions);
       Start := GetNanoseconds;
       ProgramNode := Parser.Parse;
@@ -1222,7 +1223,9 @@ begin
 end;
 
 { The compiler collects a pattern's bound names, each once, wherever it
-  declares them (ES2026 §8.2.1 BoundNames). }
+  declares them (ES2026 §8.2.1 BoundNames), and the parse checks them
+  against each other in a static block and a for statement's let or const
+  (§15.7.1, §14.7.4.1). }
 procedure TTestCompiler.TestDestructuringPatternsCompileInLinearTime;
 begin
   ExpectNameListLinear('const g = (o) => { const { %s } = o; return b0; };',
@@ -1238,6 +1241,8 @@ begin
     'const g = () => { try { g(); } catch ({ %s }) { return b0; } };', 'b%d');
   ExpectNameListLinear(
     'const g = (o) => { const { %s } = o; return b0; };', 'k%0:d: [b%0:d = %0:d]');
+  ExpectNameListLinear('class C { static { const { %s } = {}; } }', 'b%d');
+  ExpectNameListLinear('for (let { %s } = {}; false;) {}', 'b%d');
 end;
 
 procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;

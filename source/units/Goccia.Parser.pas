@@ -1093,8 +1093,8 @@ begin
       CollectLexicallyDeclaredNames(Node, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if (LexicalNames.IndexOf(StatementNames[J]) >= 0) or
-           (VarNames.IndexOf(StatementNames[J]) >= 0) then
+        if LexicalNames.HasString(StatementNames[J]) or
+           VarNames.HasString(StatementNames[J]) then
           RaiseAlreadyDeclared(StatementNames[J]);
         LexicalNames.Add(StatementNames[J]);
       end;
@@ -1102,7 +1102,7 @@ begin
       CollectVarBindingNamesFromNode(Node, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if LexicalNames.IndexOf(StatementNames[J]) >= 0 then
+        if LexicalNames.HasString(StatementNames[J]) then
           RaiseAlreadyDeclared(StatementNames[J]);
         VarNames.Add(StatementNames[J]);
       end;
@@ -6945,7 +6945,7 @@ begin
           CollectVariableInfoBindingNames(Variables[I], VariableBindingNames);
           for J := 0 to VariableBindingNames.Count - 1 do
           begin
-            if BindingNames.IndexOf(VariableBindingNames[J]) >= 0 then
+            if BindingNames.HasString(VariableBindingNames[J]) then
               raise TGocciaSyntaxError.Create(
                 'Duplicate lexical binding in for-loop initializer',
                 DeclLine, DeclColumn, FFileName, FSourceLines);
