@@ -17,6 +17,23 @@ test("a tail call that rotates its arguments passes each to the right parameter"
   expect(rotate(3000, "a", "b", "c")).toBe("abc");
 });
 
+test("a tail call that passes more arguments than its caller has registers copies each to the right parameter", () => {
+  // The caller's argument registers overlap the callee's parameter registers,
+  // which start at the same place, so each argument moves down onto a slot
+  // that an earlier argument may have occupied.
+  const show = (a, b, c, d) => [a, b, c, d].join("");
+  const none = () => {
+    return show("a", "b", "c", "d");
+  };
+  const one = (x) => show(x, x + 1, x + 2, x + 3);
+  const count = (n, a, b, c, d) => (n === 0 ? [a, b, c, d].join("") : again(n - 1));
+  const again = (n) => count(n, "w", "x", "y", "z");
+
+  expect(none()).toBe("abcd");
+  expect(one(1)).toBe("1234");
+  expect(again(3000)).toBe("wxyz");
+});
+
 test("a method tail call passes its receiver and arguments on", () => {
   class Counter {
     constructor(base) {
