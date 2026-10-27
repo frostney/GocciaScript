@@ -681,7 +681,12 @@ begin
     if BinaryTypeDependsOnOperands(Bin.Operator) then
     begin
       LeftType := ExpressionType(AScope, Bin.Left);
-      RightType := ExpressionType(AScope, Bin.Right);
+      // A bitwise operator with a Number on the left yields an integer
+      // whatever its right operand is, which is then not asked: asking
+      // resolves its names, and a name of an enclosing function resolved
+      // here is captured although no code reads it.
+      if IsArithmeticOp(Bin.Operator) or not IsKnownNumeric(LeftType) then
+        RightType := ExpressionType(AScope, Bin.Right);
     end;
     Result := BinaryExpressionType(Bin.Operator, LeftType, RightType);
   end

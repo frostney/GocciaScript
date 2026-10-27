@@ -152,6 +152,7 @@ type
     procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
     procedure TestTopLevelCallsCompileInLinearTime;
     procedure TestOperatorChainsCompileInLinearTime;
+    procedure TestOperatorChainsFoldTheirConstantStart;
     procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
@@ -303,6 +304,8 @@ begin
     TestTopLevelCallsCompileInLinearTime);
   Test('Chains of binary operators compile in time linear in their length',
     TestOperatorChainsCompileInLinearTime);
+  Test('Chains of binary operators fold the constants they start with',
+    TestOperatorChainsFoldTheirConstantStart);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
@@ -1184,6 +1187,35 @@ begin
   ExpectChainsCompileLinear('x0', '+', 'x%d', True);
   // Strict types try to simplify every operator by its operand types.
   ExpectChainsCompileLinear('p', '+', 'p', False, True);
+end;
+
+{ CompileExpressionNode skips the constant tries of the left operands a
+  failed try already found not constant. The constant part at the start of a
+  chain is still a left operand of every operator above it, and must still
+  be folded when its turn comes. }
+procedure TTestCompiler.TestOperatorChainsFoldTheirConstantStart;
+
+  procedure ExpectFolded(const ASource: string; const AFolded: Int16;
+    const AOperators: Integer);
+  var
+    Module: TGocciaBytecodeModule;
+    Chain: TGocciaFunctionTemplate;
+  begin
+    Module := CompileSource(ASource);
+    try
+      Chain := Module.TopLevel.GetFunction(0);
+      Expect<Boolean>(HasLoadInt(Chain, AFolded)).ToBe(True);
+      Expect<Integer>(CountArithmeticOps(Chain)).ToBe(AOperators);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // `k * 2 + k` is 12; the operators with p and the last k remain.
+  ExpectFolded('const k = 4; const f = (p) => k * 2 + k + p + k;', 12, 2);
+  ExpectFolded('const f = (p) => 1 + 2 + p + 3 + 4;', 3, 3);
+  ExpectFolded('const f = (p) => 2 * 3 * 4 + p + p + p + p;', 24, 4);
 end;
 
 procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;

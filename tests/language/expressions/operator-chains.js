@@ -1,6 +1,6 @@
 /*---
 description: A chain of binary operators keeps each operator's value, its type and its constant folding, whichever way the chain nests
-features: [let, const, arrow-functions, addition-operator, template-literals]
+features: [let, const, arrow-functions, closures, for-of, addition-operator]
 ---*/
 
 // ES2026 §13.15.3 ApplyStringOrNumericBinaryOperator: every operator of a
