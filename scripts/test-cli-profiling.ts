@@ -170,9 +170,80 @@ export function verifyCompileProfiles(): void {
   }
 }
 
+/** Each counter grows with the source shape that exercises it: a shape at
+ * twice the size must at least nearly double every counter, so a refactor
+ * that stops counting an operation fails here. */
+export function verifyCompileCounterGrowth(): void {
+  const tmp = mkdtemp("goccia-compile-counters-");
+  try {
+    const shapes = (n: number): string => {
+      const range = Array.from({ length: n }, (_, i) => i);
+      return [
+        `const chain = (p) => ${range.map(() => "p").join(" + ")};`,
+        `const params = (${range.map((i) => `a${i}`).join(", ")}) => a0;`,
+        `const pattern = () => { const { ${range.map((i) => `b${i}`).join(", ")} } = {}; return b0; };`,
+        "const outer = (p) => {",
+        ...range.map((i) => `  let x${i} = p + ${i};`),
+        "  const inner = () => {",
+        ...range.map((i) => `    const y${i} = x${i};`),
+        "    return y0;",
+        "  };",
+        "  return inner;",
+        "};",
+        "const sw = (d) => {",
+        "  switch (d) {",
+        ...range.map((i) => `    case ${i}: const s${i} = ${i}; break;`),
+        "  }",
+        "};",
+        "console.log(chain(1), params(1), pattern(), outer(1)(), sw(1));",
+      ].join("\n");
+    };
+    const totals: Record<string, number>[] = [];
+    // Both sizes keep more than 64 locals in a scope, past the point where
+    // lookups switch from a scan to a hashed index.
+    for (const n of [80, 160]) {
+      const source = join(tmp, `shapes-${n}.js`);
+      const output = join(tmp, `shapes-${n}.json`);
+      writeFileSync(source, shapes(n));
+      const proc = Bun.spawnSync([resolve(RUNNER), source, "--profile=compile", `--profile-output=${output}`],
+        { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+      if (proc.exitCode !== 0)
+        throw new Error(`counter shapes exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      totals.push(JSON.parse(readFileSync(output, "utf-8")).compile.counters);
+    }
+    for (const counter of COMPILE_COUNTERS) {
+      const [small, large] = [totals[0][counter], totals[1][counter]];
+      if (!(small > 0) || large < small * 1.8)
+        throw new Error(`${counter} must count its operation and grow with the source: ${small} -> ${large}`);
+    }
+
+    // The benchmark runner profiles the compile of a benchmark file too.
+    const bench = join(tmp, "bench.mjs");
+    const output = join(tmp, "bench.json");
+    writeFileSync(bench, [
+      'import { bench } from "goccia:microbench";',
+      "const work = (n) => n * 2;",
+      'bench("work", () => work(2));',
+    ].join("\n"));
+    const proc = Bun.spawnSync([resolve(BENCHRUNNER), bench, "--profile=compile",
+      `--profile-output=${output}`, "--no-progress", "--format=compact-json"],
+      { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+    if (proc.exitCode !== 0)
+      throw new Error(`benchmark compile profiling exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const work = JSON.parse(readFileSync(output, "utf-8")).compile.functions
+      .find((fn: CompileFunction) => fn.name === "work");
+    if (!work || !(work.compileTimeNs > 0) || !(work.parseTimeNs > 0))
+      throw new Error(`the benchmark runner must profile the benchmark's functions: ${JSON.stringify(work)}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 if (import.meta.main) {
   verifyAllocationProfiles();
   console.log("Allocation profiling checks passed (loader, benchmark, nested calls, exceptions, async, generators).");
   verifyCompileProfiles();
   console.log("Compile profiling checks passed (per-function records, imported modules, shims excluded, all unchanged).");
+  verifyCompileCounterGrowth();
+  console.log("Compile counter checks passed (every counter grows with its shape, benchmark runner).");
 }

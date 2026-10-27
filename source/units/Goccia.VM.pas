@@ -882,6 +882,7 @@ uses
   Goccia.PatternMatching,
   Goccia.PrivateNames,
   Goccia.Profiler,
+  Goccia.Profiler.Compile,
   Goccia.RegExp.Runtime,
   Goccia.Scope.Redeclaration,
   Goccia.SourcePipeline,
@@ -15187,6 +15188,8 @@ var
   CompatibilityNonStrictMode, StrictEval: Boolean;
   EvalTemplate: TGocciaFunctionTemplate;
   I: Integer;
+  CompileProfile: TGocciaCompileProfiler;
+  CompileProfileUnitDepth: Integer;
 begin
   EvalSource := CreateECMAScriptSourceLines(ASourceText);
   PrivateNames := TStringList.Create;
@@ -15194,6 +15197,15 @@ begin
   StandardVarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   DeclaredVarNames := TUnicodeStringList.Create;
+  // The eval code is profiled as a compile unit of its own, not as
+  // functions of the caller's file (Goccia.Profiler.Compile).
+  CompileProfile := TGocciaCompileProfiler.Instance;
+  CompileProfileUnitDepth := -1;
+  if Assigned(CompileProfile) then
+  begin
+    CompileProfileUnitDepth := CompileProfile.UnitDepth;
+    CompileProfile.BeginUnit('<eval>');
+  end;
   try
     PrivateNames.CaseSensitive := True;
     for I := 0 to High(ASite.PrivateNames) do
@@ -15258,6 +15270,8 @@ begin
       PipelineResult.Free;
     end;
   finally
+    if Assigned(CompileProfile) then
+      CompileProfile.EndUnitTo(CompileProfileUnitDepth);
     DeclaredVarNames.Free;
     FunctionNames.Free;
     StandardVarNames.Free;

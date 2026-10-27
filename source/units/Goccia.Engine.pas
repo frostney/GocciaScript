@@ -394,6 +394,9 @@ type
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
+    function CompileDynamicFunctionCode(const AParamsSources: array of string;
+      const ABodySource: string;
+      const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
     procedure InjectModulesFromValue(const AValue: TGocciaValue;
       const ABaseAddress, AProvenance: string);
   public
@@ -3369,8 +3372,19 @@ var
   SavedGlobalScope: TGocciaScope;
   SavedGlobalBackedTopLevel: Boolean;
   FloatingPointState: TGocciaFloatingPointState;
+  CompileProfile: TGocciaCompileProfiler;
+  CompileProfileUnitDepth: Integer;
 begin
   AStage := gesCompile;
+  // The eval code's parse and compile are profiled as a unit of their own,
+  // not as functions of the caller's file; its run is not part of it.
+  CompileProfile := TGocciaCompileProfiler.Instance;
+  CompileProfileUnitDepth := -1;
+  if Assigned(CompileProfile) then
+  begin
+    CompileProfileUnitDepth := CompileProfile.UnitDepth;
+    CompileProfile.BeginUnit('<eval>');
+  end;
   VarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   DeclaredVarNames := TUnicodeStringList.Create;
@@ -3428,6 +3442,8 @@ begin
             Compiler.Free;
           end;
           FRetainedModules.Add(Module);
+          if Assigned(CompileProfile) then
+            CompileProfile.EndUnitTo(CompileProfileUnitDepth);
 
           // §19.2.1.3 EvalDeclarationInstantiation checks the global object
           // first; then the template binds the eval's functions and vars and
@@ -3461,6 +3477,8 @@ begin
       OptionsScope.Free;
     end;
   finally
+    if Assigned(CompileProfile) then
+      CompileProfile.EndUnitTo(CompileProfileUnitDepth);
     LeaveGocciaFloatingPointScope(FloatingPointState);
     SourceLines.Free;
     DeclaredVarNames.Free;
@@ -5522,7 +5540,29 @@ begin
   end;
 end;
 
+// The Function constructor's code is profiled as a compile unit of its own,
+// not as functions of the caller's file. Its run creates only the function.
 function TGocciaEngine.CompileDynamicFunction(
+  const AParamsSources: array of string;
+  const ABodySource: string;
+  const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
+var
+  CompileProfile: TGocciaCompileProfiler;
+  UnitDepth: Integer;
+begin
+  CompileProfile := TGocciaCompileProfiler.Instance;
+  if not Assigned(CompileProfile) then
+    Exit(CompileDynamicFunctionCode(AParamsSources, ABodySource, AKind));
+  UnitDepth := CompileProfile.UnitDepth;
+  CompileProfile.BeginUnit('<Function>');
+  try
+    Result := CompileDynamicFunctionCode(AParamsSources, ABodySource, AKind);
+  finally
+    CompileProfile.EndUnitTo(UnitDepth);
+  end;
+end;
+
+function TGocciaEngine.CompileDynamicFunctionCode(
   const AParamsSources: array of string;
   const ABodySource: string;
   const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;

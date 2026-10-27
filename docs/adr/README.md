@@ -172,3 +172,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0160 — Concise arrow bodies make proper tail calls, and closed numeric frames give way to them](0160-concise-arrow-bodies-make-proper-tail-calls.md)
 - [0161 — goccia:ast reports type-level declarations by kind, with no parse switch](0161-goccia-ast-reports-type-level-declarations-by-kind.md)
 - [0163 — goccia:ast reports the committed token stream, as typed ranges, on request](0163-goccia-ast-reports-the-committed-token-stream.md)
+- [0164 — A compile profile reports lex, parse and compile time and the compiler's work per source function](0164-compile-phase-profile.md)

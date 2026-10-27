@@ -80,6 +80,10 @@ type
     Tokens: Int64;
     Instructions: Int64;
     Counters: TGocciaCompileCounters;
+    // Nodes compiled by kind, indexed like the profiler's node kinds.
+    NodeKinds: array of Int64;
+    // The compile that last named the function (NameFunction).
+    Generation: Integer;
   end;
 
   TGocciaCompilePhase = (cphNone, cphParse, cphCompile);
@@ -114,6 +118,11 @@ type
     // What each open parse function or compile interrupted.
     FSaved: array of TGocciaCompileProfileFrame;
     FSavedCount: Integer;
+    // Names that stand in for the file while code compiled at run time is
+    // parsed and compiled (BeginUnit).
+    FUnitNames: array of string;
+    FUnitCount: Integer;
+    FGeneration: Integer;
     function FunctionFor(const AFile: string; const ALine,
       AColumn: Integer): Integer;
     procedure Switch(const ALexNanoseconds, ATokens: Int64);
@@ -153,6 +162,15 @@ type
     // A function's final name and instruction count, once its compile ended.
     procedure NameFunction(const AFile: string; const ALine, AColumn: Integer;
       const AName: string; const AInstructions: Integer);
+
+    // Code compiled at run time (eval, the Function constructor) is parsed
+    // and compiled under AName instead of the file of its caller, so its
+    // functions do not merge with that file's.
+    procedure BeginUnit(const AName: string);
+    // Ends the units begun since UnitDepth read ADepth; a second call ends
+    // none.
+    procedure EndUnitTo(const ADepth: Integer);
+    property UnitDepth: Integer read FUnitCount;
 
     // Engine code (bootstrap shims) is left out of the report.
     procedure ExcludeFile(const AFile: string);
@@ -302,21 +320,40 @@ begin
     FNodeKindIndex.Add(AKind, Index);
   end;
   Inc(FNodeKindCounts[Index]);
+  // Nodes are counted only while a template is open, so the target is the
+  // function the node belongs to.
+  if FTarget >= 0 then
+  begin
+    if Length(FFunctions[FTarget].NodeKinds) <= Index then
+      SetLength(FFunctions[FTarget].NodeKinds, FNodeKindCount);
+    Inc(FFunctions[FTarget].NodeKinds[Index]);
+  end;
 end;
 
+// The compiler keeps a function's column in 16 bits (its debug information),
+// the parser in full: the key wraps it as the compiler does, and the record
+// keeps the full column the parser saw.
 function TGocciaCompileProfiler.FunctionFor(const AFile: string;
   const ALine, AColumn: Integer): Integer;
 var
-  Key: string;
+  Key, FileName: string;
 begin
-  Key := IntToStr(ALine) + ':' + IntToStr(AColumn) + ':' + AFile;
+  if FUnitCount > 0 then
+    FileName := FUnitNames[FUnitCount - 1]
+  else
+    FileName := AFile;
+  Key := IntToStr(ALine) + ':' + IntToStr(AColumn and $FFFF) + ':' + FileName;
   if FFunctionIndex.TryGetValue(Key, Result) then
+  begin
+    if AColumn > FFunctions[Result].Column then
+      FFunctions[Result].Column := AColumn;
     Exit;
+  end;
   if FFunctionCount >= Length(FFunctions) then
     SetLength(FFunctions, FFunctionCount * 2 + 16);
   Result := FFunctionCount;
   FFunctions[Result] := Default(TGocciaCompileFunctionProfile);
-  FFunctions[Result].SourceFile := AFile;
+  FFunctions[Result].SourceFile := FileName;
   FFunctions[Result].Line := ALine;
   FFunctions[Result].Column := AColumn;
   if (ALine = 0) and (AColumn = 0) then
@@ -428,8 +465,23 @@ begin
   Restore;
 end;
 
+procedure TGocciaCompileProfiler.BeginUnit(const AName: string);
+begin
+  if FUnitCount >= Length(FUnitNames) then
+    SetLength(FUnitNames, FUnitCount * 2 + 4);
+  FUnitNames[FUnitCount] := AName;
+  Inc(FUnitCount);
+end;
+
+procedure TGocciaCompileProfiler.EndUnitTo(const ADepth: Integer);
+begin
+  if (ADepth >= 0) and (ADepth < FUnitCount) then
+    FUnitCount := ADepth;
+end;
+
 procedure TGocciaCompileProfiler.BeginCompile;
 begin
+  Inc(FGeneration);
   Switch(FLastLexNanoseconds, FLastTokens);
   Save;
   FTarget := -1;
@@ -475,6 +527,14 @@ var
   Index: Integer;
 begin
   Index := FunctionFor(AFile, ALine, AColumn);
+  // Templates that share a position (a class's field initializers and
+  // static blocks) add up; the first one names the record.
+  if FFunctions[Index].Generation = FGeneration then
+  begin
+    Inc(FFunctions[Index].Instructions, AInstructions);
+    Exit;
+  end;
+  FFunctions[Index].Generation := FGeneration;
   if AName <> '' then
     FFunctions[Index].Name := AName;
   FFunctions[Index].Instructions := AInstructions;
@@ -509,6 +569,8 @@ end;
 { Report }
 
 type
+  TNodeKindCounts = array of Int64;
+
   TCompileFileSummary = record
     SourceFile: string;
     LexNanoseconds: Int64;
@@ -518,6 +580,7 @@ type
     Tokens: Int64;
     Instructions: Int64;
     Counters: TGocciaCompileCounters;
+    NodeKinds: TNodeKindCounts;
   end;
 
   TCompileReport = record
@@ -532,13 +595,70 @@ begin
     AProfile.CompileNanoseconds;
 end;
 
+// A stable merge sort of AOrder by descending AKeys: O(n log n), so a file of
+// many thousands of functions reports as fast as it compiles.
+procedure SortByDescendingKey(var AOrder: array of Integer;
+  const AKeys: array of Int64);
+var
+  Scratch: array of Integer;
+  Width, Low, Middle, High, Left, Right, Index: Integer;
+begin
+  SetLength(Scratch, Length(AOrder));
+  Width := 1;
+  while Width < Length(AOrder) do
+  begin
+    Low := 0;
+    while Low < Length(AOrder) do
+    begin
+      Middle := Low + Width;
+      if Middle > Length(AOrder) then
+        Middle := Length(AOrder);
+      High := Low + 2 * Width;
+      if High > Length(AOrder) then
+        High := Length(AOrder);
+      Left := Low;
+      Right := Middle;
+      for Index := Low to High - 1 do
+        if (Left < Middle) and ((Right >= High) or
+           (AKeys[AOrder[Left]] >= AKeys[AOrder[Right]])) then
+        begin
+          Scratch[Index] := AOrder[Left];
+          Inc(Left);
+        end
+        else
+        begin
+          Scratch[Index] := AOrder[Right];
+          Inc(Right);
+        end;
+      Low := High;
+    end;
+    for Index := 0 to System.High(AOrder) do
+      AOrder[Index] := Scratch[Index];
+    Width := Width * 2;
+  end;
+end;
+
+procedure AddNodeKinds(var ATotal: TNodeKindCounts;
+  const AKinds: array of Int64);
+var
+  I: Integer;
+begin
+  if Length(ATotal) < Length(AKinds) then
+    SetLength(ATotal, Length(AKinds));
+  for I := 0 to System.High(AKinds) do
+    Inc(ATotal[I], AKinds[I]);
+end;
+
 // The functions of the files not excluded, by descending self time, and the
 // per-file sums in the order the files were first seen.
 function BuildCompileReport(
   const AProfiler: TGocciaCompileProfiler): TCompileReport;
 var
   I, J, FileCount, FunctionCount: Integer;
-  Profile, Temp: TGocciaCompileFunctionProfile;
+  Profile: TGocciaCompileFunctionProfile;
+  Included: array of TGocciaCompileFunctionProfile;
+  Order: array of Integer;
+  Keys: array of Int64;
   FileIndex: TOrderedStringMap<Integer>;
   Counter: TGocciaCompileCounter;
 begin
@@ -550,7 +670,7 @@ begin
 
   FileIndex := TOrderedStringMap<Integer>.Create;
   try
-    SetLength(Result.Functions, AProfiler.FunctionCount);
+    SetLength(Included, AProfiler.FunctionCount);
     FunctionCount := 0;
     FileCount := 0;
     for I := 0 to AProfiler.FunctionCount - 1 do
@@ -558,7 +678,7 @@ begin
       Profile := AProfiler.GetFunction(I);
       if AProfiler.IsExcluded(Profile.SourceFile) then
         Continue;
-      Result.Functions[FunctionCount] := Profile;
+      Included[FunctionCount] := Profile;
       Inc(FunctionCount);
       if not FileIndex.TryGetValue(Profile.SourceFile, J) then
       begin
@@ -575,30 +695,28 @@ begin
       Inc(Result.Files[J].Functions);
       Inc(Result.Files[J].Tokens, Profile.Tokens);
       Inc(Result.Files[J].Instructions, Profile.Instructions);
+      AddNodeKinds(Result.Files[J].NodeKinds, Profile.NodeKinds);
       for Counter := Low(TGocciaCompileCounter) to High(TGocciaCompileCounter) do
       begin
         Inc(Result.Files[J].Counters[Counter], Profile.Counters[Counter]);
         Inc(Result.Totals[Counter], Profile.Counters[Counter]);
       end;
     end;
-    SetLength(Result.Functions, FunctionCount);
   finally
     FileIndex.Free;
   end;
 
-  // Insertion sort by descending self time: the order is stable for ties.
-  for I := 1 to High(Result.Functions) do
+  SetLength(Order, FunctionCount);
+  SetLength(Keys, FunctionCount);
+  for I := 0 to FunctionCount - 1 do
   begin
-    Temp := Result.Functions[I];
-    J := I - 1;
-    while (J >= 0) and
-          (SelfNanoseconds(Result.Functions[J]) < SelfNanoseconds(Temp)) do
-    begin
-      Result.Functions[J + 1] := Result.Functions[J];
-      Dec(J);
-    end;
-    Result.Functions[J + 1] := Temp;
+    Order[I] := I;
+    Keys[I] := SelfNanoseconds(Included[I]);
   end;
+  SortByDescendingKey(Order, Keys);
+  SetLength(Result.Functions, FunctionCount);
+  for I := 0 to FunctionCount - 1 do
+    Result.Functions[I] := Included[Order[I]];
 end;
 
 function FunctionLocation(const AProfile: TGocciaCompileFunctionProfile): string;
@@ -751,6 +869,27 @@ begin
   ABuffer.AppendChar('}');
 end;
 
+// The kinds counted, as {"Kind": count}, leaving out kinds never counted.
+procedure AppendNodeKinds(var ABuffer: TStringBuffer;
+  const AProfiler: TGocciaCompileProfiler; const AKinds: array of Int64);
+var
+  I: Integer;
+  First: Boolean;
+begin
+  ABuffer.AppendChar('{');
+  First := True;
+  for I := 0 to System.High(AKinds) do
+    if AKinds[I] > 0 then
+    begin
+      if not First then
+        ABuffer.Append(', ');
+      First := False;
+      ABuffer.Append(Format('"%s": %d', [
+        EscapeJSONString(AProfiler.NodeKindName(I)), AKinds[I]]));
+    end;
+  ABuffer.AppendChar('}');
+end;
+
 procedure AppendCompileProfileJSON(var ABuffer: TStringBuffer;
   const AProfiler: TGocciaCompileProfiler);
 var
@@ -776,6 +915,8 @@ begin
       Report.Files[I].Tokens,
       Report.Files[I].Instructions]));
     AppendCounters(ABuffer, Report.Files[I].Counters);
+    ABuffer.Append(', "nodeKinds": ');
+    AppendNodeKinds(ABuffer, AProfiler, Report.Files[I].NodeKinds);
     ABuffer.AppendChar('}');
   end;
   ABuffer.Append(#10'    ],');
@@ -798,6 +939,8 @@ begin
       Report.Functions[I].Tokens,
       Report.Functions[I].Instructions]));
     AppendCounters(ABuffer, Report.Functions[I].Counters);
+    ABuffer.Append(', "nodeKinds": ');
+    AppendNodeKinds(ABuffer, AProfiler, Report.Functions[I].NodeKinds);
     ABuffer.AppendChar('}');
   end;
   ABuffer.Append(#10'    ],');

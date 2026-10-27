@@ -41,7 +41,7 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
-import { verifyAllocationProfiles, verifyCompileProfiles } from "./test-cli-profiling";
+import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
@@ -8235,6 +8235,7 @@ await section("Bundler: source and precompiled module graphs agree...", verifyAo
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
 await section("Compile profiling: per-function parse and compile records...", verifyCompileProfiles);
+await section("Compile profiling: every counter grows with its shape...", verifyCompileCounterGrowth);
 
 await section("BenchmarkRunner: results are reported under a polluted Array.prototype...", async () => {
   // The results array is new, so its elements are made with
