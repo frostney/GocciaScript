@@ -91,7 +91,9 @@ Counts the times an object's layout could not be fully interned in the shape sys
 
 ### Function Profile (`--profile=functions`)
 
-Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive), call count, and allocation count (heap-allocated `TGocciaValue` instances created during that function's execution).
+Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive — time in the function and its callees), call count, and allocation count (heap-allocated `TGocciaValue` instances created during that function's execution).
+
+Total time counts each outermost activation once. A call that starts while the same function already has a frame on the profiling stack (direct or mutual recursion, or a re-entry through a callback such as `arr.map(f)` inside `f`) adds nothing to the function's total, because the outer frame's time already contains it. The self times add up to the profiled time, and no function's total exceeds it; when all the work runs inside `<module>`, no total exceeds `<module>`'s. Work that runs after `<module>` returns, such as a promise job or a host callback, is outside `<module>`'s total. Calls counts every frame, including each resumption of a generator or async function after a `yield` or `await`. A proper tail call ends the caller's frame before the callee's starts: the caller's row keeps the time up to the call, the callee's work is not in the caller's total, and the flame graph shows the callee in the caller's place.
 
 Allocation counts belong to the active profiled function, including allocations
 made by native built-ins on its behalf. Collection follows each native entry
@@ -105,19 +107,26 @@ registration and executes each registered benchmark once. The resulting
 function allocation counts describe that benchmark execution, including its
 setup and teardown, rather than the discarded registration phase.
 
+For this script:
+
+```js
+const fib = (n) => n < 2 ? n : fib(n - 1) + fib(n - 2);
+[26, 27, 28, 29, 30].forEach((n) => { fib(n); });
+```
+
 ```text
 Function Profile:
   Self Time    Total Time      Calls     Allocs  Function                       Location
-  19.78s       443.42s      43959011   13584073  fib                            script.js:1
-  91.00µs     19.78s              1         22  <module>                       script.js:1
-  7.00µs      19.78s              5          8  <arrow>                        script.js:2
+  4782.60ms    4782.60ms     6413529          0  fib                            script.js:1
+  64.14µs     4782.68ms           1         13  <module>                       script.js:1
+  10.35µs     4782.61ms           5          0  <arrow>                        script.js:2
 ```
 
-**How to read it:** Sort by self-time to find the functions where the VM spends the most time. The `Allocs` column shows GC pressure per function — high allocation counts relative to call counts indicate boxing overhead (register values being unnecessarily converted to heap objects). Functions named `<module>` are top-level script code; `<arrow>` and `<anonymous>` are unnamed callbacks.
+**How to read it:** Sort by self-time to find the functions where the VM spends the most time. `fib` calls only itself, so its self and total times are equal; both stay within `<module>`'s total. The `Allocs` column shows GC pressure per function — high allocation counts relative to call counts indicate boxing overhead (register values being unnecessarily converted to heap objects). Functions named `<module>` are top-level script code; `<arrow>` and `<anonymous>` are unnamed callbacks.
 
 ## JSON Export
 
-`--profile-output=path.json` writes the profiling data as JSON. Every key is always present, but only the enabled modes collect data: `opcodes`, `opcodePairs`, and `scalarFastPath` stay empty or zero without `--profile=opcodes` or `all`, and `functions` stays empty without `--profile=functions` or `all`. `scalarFastPath` leaves out `hitRate` when its `total` is 0:
+`--profile-output=path.json` writes the profiling data as JSON. Every key is always present, but only the enabled modes collect data: `opcodes`, `opcodePairs`, and `scalarFastPath` stay empty or zero without `--profile=opcodes` or `all`, and `functions` stays empty without `--profile=functions` or `all`. `scalarFastPath` leaves out `hitRate` when its `total` is 0. A function's `selfTimeNs` and `totalTimeNs` have the console report's meaning, so `totalTimeNs` counts each outermost activation once:
 
 ```json
 {
@@ -132,8 +141,8 @@ Function Profile:
   "scalarFastPath": {"hits": 109897525, "misses": 0, "total": 109897525, "hitRate": 100.0},
   "shapeSaturation": {"depthLimitPrefixes": 0, "tableCapacityEvents": 0},
   "functions": [
-    {"name": "fib", "sourceFile": "script.js", "line": 1, "calls": 43959011,
-     "selfTimeNs": 19780000000, "totalTimeNs": 443420000000, "allocations": 13584073},
+    {"name": "fib", "sourceFile": "script.js", "line": 1, "calls": 6413529,
+     "selfTimeNs": 4782600948, "totalTimeNs": 4782600948, "allocations": 0},
     ...
   ]
 }
@@ -143,6 +152,9 @@ Function Profile:
 
 Full-corpus test262 profile reports reuse the bytecode profiler data described
 above, but the report contract lives in [test262 Harness Contract](test262.md#profile-report-contract).
+Like the benchmark profile aggregate ([Benchmarks — CI Integration](benchmarks.md#ci-integration)),
+it adds up each function's calls, self time, total time and allocations over
+the runs it covers; each run's total counts every outermost activation once.
 Review the aggregate report before opening detailed profiles, and use the
 trend to propose compiler, bytecode, AST, parser, allocation, property-access,
 or call-frame improvements.
@@ -161,12 +173,12 @@ open https://speedscope.app  # drag flamegraph.txt into the page
 flamegraph.pl flamegraph.txt > flamegraph.svg
 ```
 
-Each line is a semicolon-separated call stack with a self-time weight in microseconds:
+Each line is a semicolon-separated call stack with a self-time weight in whole microseconds (a stack with less than 1 µs is left out). The weights are self times, never total times, so a recursive function's time is counted once however deep it recurses. For the script in [Function Profile](#function-profile---profilefunctions), the three shallowest stacks are:
 
 ```text
-<module>;fib;fib;fib 4170
-<module>;fib;fib 1
-<module>;fib 1
+<module>;<arrow>;fib 4
+<module>;<arrow>;fib;fib 8
+<module>;<arrow>;fib;fib;fib 14
 ```
 
 This shows the JS function call hierarchy that external profilers like `sample` cannot see — `sample` would show all these as the same recursive `ExecuteClosureRegistersInternal` frame.
@@ -214,6 +226,6 @@ The profiler's allocation count per function tells you *which JS function* drive
 | `Goccia.Profiler.Report.pas` | Console output, JSON export, and collapsed stack export |
 | `Goccia.Bytecode.OpCodeNames.pas` | Opcode ordinal to human-readable name (cold path, report generation only) |
 
-The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag. The instance is per-thread, so parallel workers never share profiler state. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack for correct self-time calculation across recursive calls. Allocation tracking hooks into `TGocciaValue.AfterConstruction` via `GThreadPolls.ProfilingAllocations`, a flag in the per-thread poll word ([Thread Variables on Hot Paths](core-patterns.md#thread-variables-on-hot-paths)), attributing each allocation to the function on top of the profiler's timing stack.
+The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag. The instance is per-thread, so parallel workers never share profiler state. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack for correct self-time calculation across recursive calls, and counts each function's frames on that stack so that only its outermost frame adds to its total time. Allocation tracking hooks into `TGocciaValue.AfterConstruction` via `GThreadPolls.ProfilingAllocations`, a flag in the per-thread poll word ([Thread Variables on Hot Paths](core-patterns.md#thread-variables-on-hot-paths)), attributing each allocation to the function on top of the profiler's timing stack.
 
 When profiling is disabled, the remaining cost is small but not zero: each allocation reads the per-thread poll word `GThreadPolls.Any`, which it reads anyway for the timeout and the instruction limit, and each native VM entry (`ExecuteClosureRegistersInternal`) saves that flag, sets it from the VM's function-profiling state, and restores it on exit. A callback-heavy A/B run (6M `map`/`reduce` callbacks) put that save/restore within run-to-run noise.
