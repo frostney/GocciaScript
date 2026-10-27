@@ -13,7 +13,8 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope,
-  Goccia.Compiler.TypeRules;
+  Goccia.Compiler.TypeRules,
+  Goccia.Token;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
@@ -95,6 +96,10 @@ function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
 function StripArrayLayer(const AAnnotation: string): string;
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
+// The type ExpressionType gives a binary expression with operator AOperator
+// whose operands have the types ALeftType and ARightType.
+function BinaryExpressionType(const AOperator: TGocciaTokenType;
+  const ALeftType, ARightType: TGocciaLocalType): TGocciaLocalType;
 function CharToLocalType(const ACh: Char): TGocciaLocalType;
 function StatementIsIteration(const AStmt: TGocciaStatement): Boolean;
 function StatementAlwaysAbrupt(const AStmt: TGocciaStatement): Boolean; overload;
@@ -139,7 +144,6 @@ uses
   Goccia.Modules,
   Goccia.PrivateNames,
   Goccia.ThreadCleanupRegistry,
-  Goccia.Token,
   Goccia.Types.Enforcement,
   Goccia.Values.Primitives;
 
@@ -567,6 +571,65 @@ begin
     Result := Upvalue.ReturnTypeHint;
 end;
 
+// A string literal or a template without substitutions: its type needs no
+// name resolved.
+function IsStringLiteralOperand(const AExpr: TGocciaExpression): Boolean;
+begin
+  Result := ((AExpr is TGocciaLiteralExpression) and
+    (TGocciaLiteralExpression(AExpr).Value is TGocciaStringLiteralValue)) or
+    (AExpr is TGocciaTemplateLiteralExpression);
+end;
+
+function BinaryTypeDependsOnOperands(
+  const AOperator: TGocciaTokenType): Boolean;
+begin
+  Result := IsArithmeticOp(AOperator) or
+    (AOperator in [gttBitwiseAnd, gttBitwiseOr, gttBitwiseXor, gttLeftShift,
+      gttRightShift]);
+end;
+
+function BinaryExpressionType(const AOperator: TGocciaTokenType;
+  const ALeftType, ARightType: TGocciaLocalType): TGocciaLocalType;
+begin
+  Result := sltUntyped;
+  if IsComparisonOp(AOperator) then
+    Result := sltBoolean
+  else if IsArithmeticOp(AOperator) then
+  begin
+    // The integer type comes only from results that are int32 or uint32 by
+    // specification (the bitwise operators, ~ and >>>). Arithmetic on
+    // integers is not closed over them: a sum can pass 2^1024 and become
+    // Infinity (and Infinity - Infinity is NaN), a quotient can have a
+    // fraction, and a remainder by zero is NaN. So every arithmetic result
+    // is a Number, whatever its operands.
+    if IsKnownNumeric(ALeftType) and IsKnownNumeric(ARightType) then
+      Result := sltFloat
+    // ES2026 §13.15.3
+    // ApplyStringOrNumericBinaryOperator: apart from +, both operands go
+    // through ToNumeric, and a Number with a BigInt throws a TypeError, so
+    // one Number operand makes the result a Number.
+    else if (AOperator <> gttPlus) and
+            (IsKnownNumeric(ALeftType) or IsKnownNumeric(ARightType)) then
+      Result := sltFloat
+    // + with a String primitive on either side: ToPrimitive leaves it a
+    // String (step 1.c), so the result is the concatenation (1.d).
+    else if (AOperator = gttPlus) and
+            ((ALeftType = sltString) or (ARightType = sltString)) then
+      Result := sltString;
+  end
+  // The bitwise operators yield an int32 or a uint32 Number unless both
+  // operands are BigInts (§13.15.3 with Number::bitwiseAND and friends,
+  // §6.1.6.1.9-11); >>> throws for BigInts.
+  else if AOperator = gttUnsignedRightShift then
+    Result := sltInteger
+  else if AOperator in [gttBitwiseAnd, gttBitwiseOr, gttBitwiseXor,
+    gttLeftShift, gttRightShift] then
+  begin
+    if IsKnownNumeric(ALeftType) or IsKnownNumeric(ARightType) then
+      Result := sltInteger;
+  end;
+end;
+
 function ExpressionType(const AScope: TGocciaCompilerScope;
   const AExpr: TGocciaExpression): TGocciaLocalType;
 var
@@ -622,45 +685,27 @@ begin
   else if AExpr is TGocciaBinaryExpression then
   begin
     Bin := TGocciaBinaryExpression(AExpr);
-    if IsComparisonOp(Bin.Operator) then
-      Result := sltBoolean
-    else if IsArithmeticOp(Bin.Operator) then
+    LeftType := sltUntyped;
+    RightType := sltUntyped;
+    // + with a String literal on either side yields a String whatever the
+    // other operand is (§13.15.3 step 1.c-d), so the other one is not
+    // walked: under strict types a chain such as `s + "" + ""` asks this of
+    // every prefix of the chain.
+    if (Bin.Operator = gttPlus) and
+       (IsStringLiteralOperand(Bin.Left) or
+        IsStringLiteralOperand(Bin.Right)) then
+      Exit(sltString);
+    if BinaryTypeDependsOnOperands(Bin.Operator) then
     begin
       LeftType := ExpressionType(AScope, Bin.Left);
-      RightType := ExpressionType(AScope, Bin.Right);
-      // The integer type comes only from results that are int32 or uint32 by
-      // specification (the bitwise operators, ~ and >>>). Arithmetic on
-      // integers is not closed over them: a sum can pass 2^1024 and become
-      // Infinity (and Infinity - Infinity is NaN), a quotient can have a
-      // fraction, and a remainder by zero is NaN. So every arithmetic result
-      // is a Number, whatever its operands.
-      if IsKnownNumeric(LeftType) and IsKnownNumeric(RightType) then
-        Result := sltFloat
-      // ES2026 §13.15.3
-      // ApplyStringOrNumericBinaryOperator: apart from +, both operands go
-      // through ToNumeric, and a Number with a BigInt throws a TypeError, so
-      // one Number operand makes the result a Number.
-      else if (Bin.Operator <> gttPlus) and
-              (IsKnownNumeric(LeftType) or IsKnownNumeric(RightType)) then
-        Result := sltFloat
-      // + with a String primitive on either side: ToPrimitive leaves it a
-      // String (step 1.c), so the result is the concatenation (1.d).
-      else if (Bin.Operator = gttPlus) and
-              ((LeftType = sltString) or (RightType = sltString)) then
-        Result := sltString;
-    end
-    // The bitwise operators yield an int32 or a uint32 Number unless both
-    // operands are BigInts (§13.15.3 with Number::bitwiseAND and friends,
-    // §6.1.6.1.9-11); >>> throws for BigInts.
-    else if Bin.Operator = gttUnsignedRightShift then
-      Result := sltInteger
-    else if Bin.Operator in [gttBitwiseAnd, gttBitwiseOr, gttBitwiseXor,
-      gttLeftShift, gttRightShift] then
-    begin
-      if IsKnownNumeric(ExpressionType(AScope, Bin.Left)) or
-         IsKnownNumeric(ExpressionType(AScope, Bin.Right)) then
-        Result := sltInteger;
+      // A bitwise operator with a Number on the left yields an integer
+      // whatever its right operand is, which is then not asked: asking
+      // resolves its names, and a name of an enclosing function resolved
+      // here is captured although no code reads it.
+      if IsArithmeticOp(Bin.Operator) or not IsKnownNumeric(LeftType) then
+        RightType := ExpressionType(AScope, Bin.Right);
     end;
+    Result := BinaryExpressionType(Bin.Operator, LeftType, RightType);
   end
   // Unary operators (ES2026 §13.5).
   else if AExpr is TGocciaUnaryExpression then
