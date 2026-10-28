@@ -1935,7 +1935,7 @@ begin
         SetLength(Dropped, Length(Dropped) + 1);
         Dropped[High(Dropped)] := Declaration;
       end
-      else if KeptNames.IndexOf(Name) < 0 then
+      else if not KeptNames.HasString(Name) then
         KeptNames.Add(Name);
     end;
     for I := 0 to High(Dropped) do
@@ -1944,8 +1944,8 @@ begin
       Exit;
     CollectVarBindingNamesFromStatements(AStatements, StandardVarNames);
     for I := FDirectEvalDeclaredVarNames.Count - 1 downto 0 do
-      if (StandardVarNames.IndexOf(FDirectEvalDeclaredVarNames[I]) < 0) and
-         (KeptNames.IndexOf(FDirectEvalDeclaredVarNames[I]) < 0) then
+      if (not StandardVarNames.HasString(FDirectEvalDeclaredVarNames[I])) and
+         (not KeptNames.HasString(FDirectEvalDeclaredVarNames[I])) then
         FDirectEvalDeclaredVarNames.Delete(I);
   finally
     StandardVarNames.Free;
