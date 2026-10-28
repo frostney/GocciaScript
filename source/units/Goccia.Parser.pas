@@ -133,6 +133,9 @@ type
       is built after it (RecordModuleSpecifier). }
     FModuleSpecifierStart: Integer;
     FModuleSpecifierEnd: Integer;
+    { Where each specifier of the import or export being parsed was, for the
+      declaration that is built after them (RecordSpecifierRanges). }
+    FSpecifierRanges: TGocciaASTPartRangeArray;
     FSkipPrivateNameValidation: Integer;
     FAutomaticSemicolonInsertion: Boolean;
     FVarDeclarationsEnabled: Boolean;
@@ -255,6 +258,12 @@ type
     procedure ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
     function ConsumeModuleSpecifier(const AMessage: string): string;
     procedure RecordModuleSpecifier(const ADeclaration: TGocciaStatement);
+    procedure AddSpecifierRange(const AKind: TGocciaASTPartKind;
+      const AStartOffset, AEndOffset: Integer; const ATypeOnly: Boolean);
+    procedure RecordSpecifierRanges(const ADeclaration: TGocciaStatement);
+    procedure RecordErasedModuleParts(const AStatement: TGocciaEmptyStatement;
+      const AFirstToken: Integer);
+    function KeyRangeAtPrevious(const APrivate: Boolean): TGocciaASTPartRange;
     procedure RecordTypeAssertion(const AExpression: TGocciaExpression;
       const AKind: TGocciaTypeAssertionKind; const AStartOffset,
       AEndOffset: Integer);
@@ -1584,6 +1593,163 @@ begin
   else if ADeclaration is TGocciaReExportDeclaration then
     TGocciaReExportDeclaration(ADeclaration).SetModuleSpecifierRange(
       FModuleSpecifierStart, FModuleSpecifierEnd);
+  RecordSpecifierRanges(ADeclaration);
+end;
+
+{ A specifier's range runs from its first token, `type` included, to its
+  last. The names stay out: a rule slices them from the source. }
+procedure TGocciaParser.AddSpecifierRange(const AKind: TGocciaASTPartKind;
+  const AStartOffset, AEndOffset: Integer; const ATypeOnly: Boolean);
+var
+  Flags: TGocciaASTPartFlags;
+begin
+  Flags := [];
+  if ATypeOnly then
+    Include(Flags, apfTypeOnly);
+  AppendPartRange(FSpecifierRanges, AKind, AStartOffset, AEndOffset, Flags);
+end;
+
+procedure TGocciaParser.RecordSpecifierRanges(
+  const ADeclaration: TGocciaStatement);
+begin
+  if ADeclaration is TGocciaImportDeclaration then
+    TGocciaImportDeclaration(ADeclaration).SetSpecifierRanges(FSpecifierRanges)
+  else if ADeclaration is TGocciaReExportDeclaration then
+    TGocciaReExportDeclaration(ADeclaration).SetSpecifierRanges(
+      FSpecifierRanges)
+  else if ADeclaration is TGocciaExportDeclaration then
+    TGocciaExportDeclaration(ADeclaration).SetSpecifierRanges(
+      FSpecifierRanges);
+  FSpecifierRanges := nil;
+end;
+
+{ What the skip of an erased `import type` or `export type` statement
+  consumed, read back from the tokens it passed over: the specifiers and the
+  module path. It reads only consumed tokens, so it lexes nothing ahead, and
+  it never raises, because it runs on text the parser does not otherwise look
+  at. A shape that is not an import or export clause (`import type A =
+  require("m")`) records nothing. }
+procedure TGocciaParser.RecordErasedModuleParts(
+  const AStatement: TGocciaEmptyStatement; const AFirstToken: Integer);
+var
+  Parts: TGocciaASTPartRangeArray;
+  I, Last, ClauseStart, SpecifierStart, SpecifierEnd: Integer;
+  IsImport: Boolean;
+  ListKind: TGocciaASTPartKind;
+
+  procedure AddPart(const AKind: TGocciaASTPartKind;
+    const AStartOffset, AEndOffset: Integer; const ATypeOnly: Boolean);
+  var
+    Flags: TGocciaASTPartFlags;
+  begin
+    Flags := [];
+    if ATypeOnly then
+      Include(Flags, apfTypeOnly);
+    AppendPartRange(Parts, AKind, AStartOffset, AEndOffset, Flags);
+  end;
+
+  function At(const AIndex: Integer): TGocciaTokenType;
+  begin
+    if AIndex <= Last then
+      Result := FTokens[AIndex].TokenType
+    else
+      Result := gttEOF;
+  end;
+
+begin
+  IsImport := AStatement.ErasedTypeKind = etkImport;
+  if IsImport then
+    ListKind := apkImportSpecifier
+  else
+    ListKind := apkExportSpecifier;
+  Last := FCurrent - 1;
+  I := AFirstToken;
+
+  // An import's default binding, then the comma before a clause.
+  if IsImport and not (At(I) in [gttLeftBrace, gttStar, gttEOF]) then
+  begin
+    AddPart(apkImportDefaultSpecifier, FTokens[I].Span.StartOffset,
+      FTokens[I].Span.EndOffset, True);
+    Inc(I);
+    if At(I) = gttComma then
+      Inc(I)
+    else if At(I) <> gttFrom then
+      Exit;
+  end;
+
+  if IsImport and (At(I) = gttFrom) then
+  begin
+    // A default binding alone: no clause follows it.
+  end
+  else if At(I) = gttStar then
+  begin
+    // `* as ns`; `export type * from` and `export type * as ns from` have no
+    // specifier node.
+    ClauseStart := I;
+    Inc(I);
+    if At(I) = gttAs then
+    begin
+      Inc(I);
+      if At(I) = gttEOF then
+        Exit;
+      if IsImport then
+        AddPart(apkImportNamespaceSpecifier,
+          FTokens[ClauseStart].Span.StartOffset, FTokens[I].Span.EndOffset,
+          True);
+      Inc(I);
+    end
+    else if IsImport then
+      Exit;
+  end
+  else if At(I) = gttLeftBrace then
+  begin
+    Inc(I);
+    while not (At(I) in [gttRightBrace, gttEOF]) do
+    begin
+      SpecifierStart := FTokens[I].Span.StartOffset;
+      SpecifierEnd := SpecifierStart;
+      while not (At(I) in [gttComma, gttRightBrace, gttEOF]) do
+      begin
+        SpecifierEnd := FTokens[I].Span.EndOffset;
+        Inc(I);
+      end;
+      if SpecifierEnd > SpecifierStart then
+        AddPart(ListKind, SpecifierStart, SpecifierEnd, True);
+      if At(I) = gttComma then
+        Inc(I);
+    end;
+    if At(I) = gttRightBrace then
+      Inc(I);
+  end
+  else
+    Exit;
+
+  if (At(I) = gttFrom) and (At(I + 1) = gttString) then
+    AddPart(apkModuleSpecifier, FTokens[I + 1].Span.StartOffset,
+      FTokens[I + 1].Span.EndOffset, False);
+
+  AStatement.SetModuleParts(Parts);
+end;
+
+{ The key just consumed, as a range. The key is one token, preceded by the
+  `#` token of a private name; `get`, `static`, `async` and `*` before it are
+  not part of it. }
+function TGocciaParser.KeyRangeAtPrevious(
+  const APrivate: Boolean): TGocciaASTPartRange;
+begin
+  Result.Flags := [];
+  Result.StartOffset := Previous.Span.StartOffset;
+  Result.EndOffset := Previous.Span.EndOffset;
+  case Previous.TokenType of
+    gttString: Result.Kind := apkKeyString;
+    gttNumber: Result.Kind := apkKeyNumeric;
+    gttBigInt: Result.Kind := apkKeyBigInt;
+  else
+    Result.Kind := apkKeyIdentifier;
+  end;
+  if APrivate and (FCurrent >= 2) and
+     (FTokens[FCurrent - 2].TokenType = gttHash) then
+    Result.StartOffset := FTokens[FCurrent - 2].Span.StartOffset;
 end;
 
 procedure TGocciaParser.ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
@@ -4436,6 +4602,7 @@ var
   MemberStartLine, MemberStartColumn: Integer;
   MemberStartOffset: Integer;
   KeyIdentifier: TGocciaExpression;
+  KeyRange: TGocciaASTPartRange;
 begin
   Line := Previous.Line;
   Column := Previous.Column;
@@ -4465,6 +4632,8 @@ begin
       MemberStartLine := Peek.Line;
       MemberStartColumn := Peek.Column;
       MemberStartOffset := Peek.Span.StartOffset;
+      KeyRange.StartOffset := 0;
+      KeyRange.EndOffset := 0;
 
       // Check for async method syntax. ES2026 §15.8 / §15.6: AsyncMethod and
       // AsyncGeneratorMethod are `async [no LineTerminator here] ...`; after a
@@ -4568,6 +4737,11 @@ begin
       else
         raise TGocciaSyntaxError.Create('Expected property name', Peek.Line, Peek.Column, FFileName, FSourceLines,
           SSuggestPropertyKeysFormat);
+
+      // The key is the token just consumed; `get`, `async` and `*` before it
+      // are not part of it.
+      if not IsComputed then
+        KeyRange := KeyRangeAtPrevious(False);
 
       // Handle getter/setter syntax
       if IsGetter then
@@ -4748,6 +4922,8 @@ begin
         MemberStartOffset;
       PropertySourceOrder[SourceOrderCount - 1].EndOffset :=
         Previous.Span.EndOffset;
+      if not IsComputed then
+        PropertySourceOrder[SourceOrderCount - 1].Key := KeyRange;
 
       if not Match(gttComma) then
         Break;
@@ -7776,6 +7952,7 @@ var
   ImportedNameToken: TGocciaToken;
   Line, Column: Integer;
   IsTypeOnlyBinding: Boolean;
+  SpecifierStart, ErasedFirstToken: Integer;
 
   { Imports keys on the local name, so a second binding of one name would
     replace the first unseen: note it for the Module early error. }
@@ -7852,6 +8029,7 @@ var
   end;
 begin
   DuplicateBinding := '';
+  FSpecifierRanges := nil;
   Line := Previous.Line;
   Column := Previous.Column;
 
@@ -7859,9 +8037,11 @@ begin
      not IsTypeDefaultBindingStart then
   begin
     Advance;
+    ErasedFirstToken := FCurrent;
     SkipUntilSemicolon;
     Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
       etkImport);
+    RecordErasedModuleParts(TGocciaEmptyStatement(Result), ErasedFirstToken);
     Exit;
   end;
 
@@ -7872,6 +8052,8 @@ begin
     try
       LocalName := ConsumeIdentifierBinding('Expected local name after "import source"',
         SSuggestProvideLocalName).Lexeme;
+      AddSpecifierRange(apkImportDefaultSpecifier, Previous.Span.StartOffset,
+        Previous.Span.EndOffset, False);
       Imports.Add(LocalName, KEYWORD_DEFAULT);
       Consume(gttFrom, 'Expected "from" after source import binding',
         SSuggestAddFromAfterImport);
@@ -7892,12 +8074,15 @@ begin
      CheckNext(gttStar) then
   begin
     Advance;
+    SpecifierStart := Peek.Span.StartOffset;
     Advance;
     Consume(gttAs, 'Expected "as" after "*" in namespace import',
       SSuggestNamespaceImportAs);
     NamespaceName := Consume(gttIdentifier,
       'Expected local name after "as"',
       SSuggestProvideLocalName).Lexeme;
+    AddSpecifierRange(apkImportNamespaceSpecifier, SpecifierStart,
+      Previous.Span.EndOffset, False);
     Consume(gttFrom, 'Expected "from" after namespace import',
       SSuggestAddFromAfterImport);
     ModulePath := ConsumeModuleSpecifier('Expected module path');
@@ -7912,12 +8097,15 @@ begin
 
   if Check(gttStar) then
   begin
+    SpecifierStart := Peek.Span.StartOffset;
     Advance;
     Consume(gttAs, 'Expected "as" after "*" in namespace import',
       SSuggestNamespaceImportAs);
     NamespaceName := ConsumeIdentifierBinding(
       'Expected local name after "as"',
       SSuggestProvideLocalName).Lexeme;
+    AddSpecifierRange(apkImportNamespaceSpecifier, SpecifierStart,
+      Previous.Span.EndOffset, False);
     Consume(gttFrom, 'Expected "from" after namespace import',
       SSuggestAddFromAfterImport);
     ModulePath := ConsumeModuleSpecifier('Expected module path');
@@ -7936,18 +8124,23 @@ begin
     try
       LocalName := ConsumeIdentifierBinding('Expected import binding',
         SSuggestProvideLocalName).Lexeme;
+      AddSpecifierRange(apkImportDefaultSpecifier, Previous.Span.StartOffset,
+        Previous.Span.EndOffset, False);
       Imports.Add(LocalName, KEYWORD_DEFAULT);
 
       if Match(gttComma) then
       begin
         if Check(gttStar) then
         begin
+          SpecifierStart := Peek.Span.StartOffset;
           Advance;
           Consume(gttAs, 'Expected "as" after "*" in namespace import',
             SSuggestNamespaceImportAs);
           NamespaceName := ConsumeIdentifierBinding(
             'Expected local name after "as"',
             SSuggestProvideLocalName).Lexeme;
+          AddSpecifierRange(apkImportNamespaceSpecifier, SpecifierStart,
+            Previous.Span.EndOffset, False);
           Consume(gttFrom, 'Expected "from" after namespace import',
             SSuggestAddFromAfterImport);
           ModulePath := ConsumeModuleSpecifier('Expected module path');
@@ -7963,6 +8156,7 @@ begin
           SSuggestOpenBraceImportList);
         while not Check(gttRightBrace) and not IsAtEnd do
         begin
+          SpecifierStart := Peek.Span.StartOffset;
           IsTypeOnlyBinding := IsTypeOnlySpecifierModifier;
           if IsTypeOnlyBinding then
             Advance;
@@ -7983,6 +8177,8 @@ begin
           else
             LocalName := ImportedName;
 
+          AddSpecifierRange(apkImportSpecifier, SpecifierStart,
+            Previous.Span.EndOffset, IsTypeOnlyBinding);
           if not IsTypeOnlyBinding then
             AddNamedImport(LocalName, ImportedName);
 
@@ -8037,6 +8233,7 @@ begin
   try
     while not Check(gttRightBrace) and not IsAtEnd do
     begin
+      SpecifierStart := Peek.Span.StartOffset;
       IsTypeOnlyBinding := IsTypeOnlySpecifierModifier;
       if IsTypeOnlyBinding then
         Advance;
@@ -8057,6 +8254,8 @@ begin
       else
         LocalName := ImportedName;
 
+      AddSpecifierRange(apkImportSpecifier, SpecifierStart,
+        Previous.Span.EndOffset, IsTypeOnlyBinding);
       if not IsTypeOnlyBinding then
         AddNamedImport(LocalName, ImportedName);
 
@@ -8107,6 +8306,7 @@ var
   IsTypeOnlyBinding: Boolean;
   ErasedTypeKind: TGocciaErasedTypeKind;
   ErasedListStart: Integer;
+  SpecifierStart: Integer;
   AsyncLine, AsyncColumn: Integer;
   I: Integer;
 
@@ -8190,6 +8390,7 @@ var
       SSuggestCloseImportList);
   end;
 begin
+  FSpecifierRanges := nil;
   Line := Previous.Line;
   Column := Previous.Column;
 
@@ -8203,6 +8404,8 @@ begin
       ErasedTypeKind := etkReExport;
     Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
       ErasedTypeKind);
+    if ErasedTypeKind in [etkExport, etkReExport] then
+      RecordErasedModuleParts(TGocciaEmptyStatement(Result), ErasedListStart);
     Exit;
   end;
 
@@ -8401,6 +8604,7 @@ begin
 
   while not Check(gttRightBrace) and not IsAtEnd do
   begin
+    SpecifierStart := Peek.Span.StartOffset;
     IsTypeOnlyBinding := IsTypeOnlySpecifierModifier;
     if IsTypeOnlyBinding then
       Advance;
@@ -8415,6 +8619,8 @@ begin
         SSuggestProvideExportedName).Lexeme
     else
       ExportedName := LocalName;
+    AddSpecifierRange(apkExportSpecifier, SpecifierStart,
+      Previous.Span.EndOffset, IsTypeOnlyBinding);
 
     if not IsTypeOnlyBinding then
     begin
@@ -8466,6 +8672,7 @@ begin
       ConsumeSemicolonOrASI('Expected ";" after export declaration',
         SSuggestAddSemicolon);
       Result := TGocciaExportDeclaration.Create(ExportsTable, SourceSpanAtPosition(Line, Column));
+      RecordSpecifierRanges(Result);
     end;
   except
     ExportsTable.Free;
@@ -8479,7 +8686,7 @@ end;
 procedure CloseClassMemberRanges(var AElements: TGocciaClassElementArray;
   var AFieldOrder: TGocciaFieldOrderEntryArray;
   var AElementMark, AFieldMark: Integer;
-  const AStart, AEnd: Integer);
+  const AStart, AEnd: Integer; const AKey: TGocciaASTPartRange);
 var
   I: Integer;
 begin
@@ -8489,11 +8696,13 @@ begin
     begin
       AElements[I].StartOffset := AStart;
       AElements[I].EndOffset := AEnd;
+      AElements[I].Key := AKey;
     end;
     for I := AFieldMark to High(AFieldOrder) do
     begin
       AFieldOrder[I].StartOffset := AStart;
       AFieldOrder[I].EndOffset := AEnd;
+      AFieldOrder[I].Key := AKey;
     end;
   end;
   AElementMark := Length(AElements);
@@ -8503,6 +8712,7 @@ end;
 function TGocciaParser.ParseClassBody(const AClassName: string): TGocciaClassDefinition;
 var
   MemberRangeStart, ElementMark, FieldMark: Integer;
+  MemberKey: TGocciaASTPartRange;
   SuperClass: string;
   SuperClassExpression: TGocciaExpression;
   Methods: TGocciaClassMethodMap;
@@ -8613,14 +8823,18 @@ begin
   FStrictModeSourceActive := True;
   BodyParsed := False;
   MemberRangeStart := -1;
+  MemberKey.StartOffset := 0;
+  MemberKey.EndOffset := 0;
   ElementMark := 0;
   FieldMark := 0;
   try
     while not Check(gttRightBrace) and not IsAtEnd do
     begin
       CloseClassMemberRanges(Elements, FieldOrder, ElementMark, FieldMark,
-        MemberRangeStart, Previous.Span.EndOffset);
+        MemberRangeStart, Previous.Span.EndOffset, MemberKey);
       MemberRangeStart := -1;
+      MemberKey.StartOffset := 0;
+      MemberKey.EndOffset := 0;
       if Check(gttSemicolon) then
       begin
         Advance;
@@ -8816,6 +9030,11 @@ begin
         MemberName := ConsumeLiteralPropertyName(
           'Expected method or property name', SSuggestClassMemberSyntax);
       end;
+
+      // The key is the token just consumed, with the `#` of a private name;
+      // `static`, `async`, `get` and `*` before it are not part of it.
+      if not IsComputed then
+        MemberKey := KeyRangeAtPrevious(IsPrivate);
 
       FieldType := '';
       if Check(gttQuestion) then
@@ -9143,7 +9362,7 @@ begin
           SSuggestClassMemberExpectedSyntax);
     end;
     CloseClassMemberRanges(Elements, FieldOrder, ElementMark, FieldMark,
-      MemberRangeStart, Previous.Span.EndOffset);
+      MemberRangeStart, Previous.Span.EndOffset, MemberKey);
 
     Consume(gttRightBrace, 'Expected "}" after class body',
       SSuggestCloseClassBody);

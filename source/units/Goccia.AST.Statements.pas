@@ -346,6 +346,9 @@ type
       last token. Equal offsets mean the parser did not record one. }
     StartOffset: Integer;
     EndOffset: Integer;
+    { Where the static key is, for a member that is not computed; its kind
+      says what the key is. The parser keeps the name as a string. }
+    Key: TGocciaASTPartRange;
   end;
 
   TGocciaFieldOrderEntry = record
@@ -362,6 +365,7 @@ type
       element array does not hold (ElementIndex < 0). }
     StartOffset: Integer;
     EndOffset: Integer;
+    Key: TGocciaASTPartRange;
   end;
 
   TGocciaClassElementArray = array of TGocciaClassElement;
@@ -486,9 +490,13 @@ type
     FModulePath: string;
     FNamespaceName: string;
     FPhase: TGocciaImportCallPhase;
+    FSpecifierRanges: TGocciaASTPartRangeArray;
   public
     { Where the module path's string literal is, in the parsed text. }
     procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
+    { Where each binding is, in source order: the default binding, the
+      namespace, and each named import. }
+    procedure SetSpecifierRanges(const ARanges: TGocciaASTPartRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AImports: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
@@ -512,7 +520,11 @@ type
   TGocciaExportDeclaration = class(TGocciaStatement)
   private
     FExportsTable: TStringStringMap; // exported name -> local name
+    FSpecifierRanges: TGocciaASTPartRangeArray;
   public
+    { Where each specifier is, in source order. }
+    procedure SetSpecifierRanges(const ARanges: TGocciaASTPartRangeArray);
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AExportsTable: TStringStringMap;
       const ASpan: TGocciaSourceSpan);
     destructor Destroy; override;
@@ -583,9 +595,12 @@ type
     FIsStarExport: Boolean;
     FModulePath: string;
     FNamespaceName: string;
+    FSpecifierRanges: TGocciaASTPartRangeArray;
   public
     { Where the module path's string literal is, in the parsed text. }
     procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
+    { Where each specifier is, in source order. }
+    procedure SetSpecifierRanges(const ARanges: TGocciaASTPartRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AExportsTable: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
@@ -619,9 +634,16 @@ type
   TGocciaEmptyStatement = class(TGocciaStatement)
   private
     FErasedTypeKind: TGocciaErasedTypeKind;
+    FModuleParts: TGocciaASTPartRangeArray;
   public
     constructor Create(const ASpan: TGocciaSourceSpan;
       const AErasedTypeKind: TGocciaErasedTypeKind = etkNone);
+    { The ranges the parser saw while it skipped an erased `import type` or
+      `export type` statement: each specifier and the module path, in source
+      order. Offsets only: no name is kept, and neither the evaluator nor the
+      compiler reads them. }
+    procedure SetModuleParts(const AParts: TGocciaASTPartRangeArray);
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     property ErasedTypeKind: TGocciaErasedTypeKind read FErasedTypeKind;
   end;
 
@@ -1347,6 +1369,7 @@ begin
         if IsComputed then
           Include(Flags, apfComputed);
         AVisitor.EnterPart(apkClassField, StartOffset, EndOffset, Flags);
+        VisitPartRange(AVisitor, Key);
         AVisitor.VisitChild(ComputedKeyExpression);
         AVisitor.VisitChild(FieldInitializer);
         AVisitor.LeavePart;
@@ -1366,6 +1389,7 @@ begin
         AVisitor.EnterPart(MemberPartKind(Kind), StartOffset, EndOffset, Flags);
         for I := 0 to High(Decorators) do
           AVisitor.VisitChild(Decorators[I]);
+        VisitPartRange(AVisitor, Key);
         AVisitor.VisitChild(ComputedKeyExpression);
         AVisitor.VisitChild(MethodNode);
         { An auto-accessor's getter and setter are written by the parser,
@@ -1595,9 +1619,16 @@ begin
   FModuleSpecifierEnd := AEndOffset;
 end;
 
+procedure TGocciaImportDeclaration.SetSpecifierRanges(
+  const ARanges: TGocciaASTPartRangeArray);
+begin
+  FSpecifierRanges := ARanges;
+end;
+
 procedure TGocciaImportDeclaration.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
+  VisitPartRanges(AVisitor, FSpecifierRanges);
   if FModuleSpecifierEnd > FModuleSpecifierStart then
   begin
     AVisitor.EnterPart(apkModuleSpecifier, FModuleSpecifierStart,
@@ -1613,15 +1644,46 @@ begin
   FModuleSpecifierEnd := AEndOffset;
 end;
 
+procedure TGocciaReExportDeclaration.SetSpecifierRanges(
+  const ARanges: TGocciaASTPartRangeArray);
+begin
+  FSpecifierRanges := ARanges;
+end;
+
 procedure TGocciaReExportDeclaration.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
+  VisitPartRanges(AVisitor, FSpecifierRanges);
   if FModuleSpecifierEnd > FModuleSpecifierStart then
   begin
     AVisitor.EnterPart(apkModuleSpecifier, FModuleSpecifierStart,
       FModuleSpecifierEnd, []);
     AVisitor.LeavePart;
   end;
+end;
+
+procedure TGocciaExportDeclaration.SetSpecifierRanges(
+  const ARanges: TGocciaASTPartRangeArray);
+begin
+  FSpecifierRanges := ARanges;
+end;
+
+procedure TGocciaExportDeclaration.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  VisitPartRanges(AVisitor, FSpecifierRanges);
+end;
+
+procedure TGocciaEmptyStatement.SetModuleParts(
+  const AParts: TGocciaASTPartRangeArray);
+begin
+  FModuleParts := AParts;
+end;
+
+procedure TGocciaEmptyStatement.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  VisitPartRanges(AVisitor, FModuleParts);
 end;
 
 end.

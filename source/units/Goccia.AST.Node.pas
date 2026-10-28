@@ -82,7 +82,18 @@ type
     apkClassMethod,     // A class's method, getter or setter
     apkClassField,      // A class's field
     apkClassAccessor,   // A class's `accessor` field
-    apkStaticBlock      // A class's `static { }` block
+    apkStaticBlock,     // A class's `static { }` block
+    { A module specifier: the whole `b as bb`, `type C`, or `* as ns`. }
+    apkImportDefaultSpecifier,   // `d` in `import d from "m"`
+    apkImportNamespaceSpecifier, // `* as ns`
+    apkImportSpecifier,          // `b as bb` in `import { b as bb }`
+    apkExportSpecifier,          // `f as g` in `export { f as g }`
+    { A static key of an object property or class member, by what it is. The
+      parser keeps the key as a string, so its range is the only record. }
+    apkKeyIdentifier,   // `k`, `#p`, or a reserved word used as a name
+    apkKeyString,       // `"k-1"`
+    apkKeyNumeric,      // `2`
+    apkKeyBigInt        // `2n`
   );
 
   TGocciaASTPartFlag = (
@@ -90,9 +101,21 @@ type
     apfShorthand, // Property: `{ key }`
     apfMethod,    // Property: `key() {}`, `get key() {}`, `set key(v) {}`
     apfRest,      // Parameter: `...rest`
-    apfStatic     // Class member: `static`
+    apfStatic,    // Class member: `static`
+    apfTypeOnly   // Module specifier: written with `type`, or in a type-only statement
   );
   TGocciaASTPartFlags = set of TGocciaASTPartFlag;
+
+  { A part the parser measured and that holds nothing, as a leaf: a module
+    specifier or a static key. Equal offsets mean the parser did not record
+    one. }
+  TGocciaASTPartRange = record
+    Kind: TGocciaASTPartKind;
+    StartOffset: Integer;
+    EndOffset: Integer;
+    Flags: TGocciaASTPartFlags;
+  end;
+  TGocciaASTPartRangeArray = array of TGocciaASTPartRange;
 
   { Receives a node's children from TGocciaASTNode.ForEachChild. }
   TGocciaASTChildVisitor = class
@@ -206,6 +229,19 @@ type
       write FDirectEvalUsage;
   end;
 
+{ Reports a recorded leaf part, if the parser recorded one. }
+procedure VisitPartRange(const AVisitor: TGocciaASTChildVisitor;
+  const ARange: TGocciaASTPartRange);
+
+{ Reports each recorded leaf part, in the order given. }
+procedure VisitPartRanges(const AVisitor: TGocciaASTChildVisitor;
+  const ARanges: TGocciaASTPartRangeArray);
+
+{ Adds one leaf part to the end of ARanges. }
+procedure AppendPartRange(var ARanges: TGocciaASTPartRangeArray;
+  const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+  const AFlags: TGocciaASTPartFlags);
+
 { The arena AST objects created on this thread join, or nil. }
 function ActiveASTArena: TGocciaASTArena;
 { Makes AArena the active arena and returns the one it replaces, which the
@@ -238,6 +274,39 @@ implementation
 
 threadvar
   GActiveASTArena: TGocciaASTArena;
+
+procedure VisitPartRange(const AVisitor: TGocciaASTChildVisitor;
+  const ARange: TGocciaASTPartRange);
+begin
+  if ARange.EndOffset <= ARange.StartOffset then
+    Exit;
+  AVisitor.EnterPart(ARange.Kind, ARange.StartOffset, ARange.EndOffset,
+    ARange.Flags);
+  AVisitor.LeavePart;
+end;
+
+procedure VisitPartRanges(const AVisitor: TGocciaASTChildVisitor;
+  const ARanges: TGocciaASTPartRangeArray);
+var
+  I: Integer;
+begin
+  for I := 0 to High(ARanges) do
+    VisitPartRange(AVisitor, ARanges[I]);
+end;
+
+procedure AppendPartRange(var ARanges: TGocciaASTPartRangeArray;
+  const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+  const AFlags: TGocciaASTPartFlags);
+var
+  Index: Integer;
+begin
+  Index := Length(ARanges);
+  SetLength(ARanges, Index + 1);
+  ARanges[Index].Kind := AKind;
+  ARanges[Index].StartOffset := AStartOffset;
+  ARanges[Index].EndOffset := AEndOffset;
+  ARanges[Index].Flags := AFlags;
+end;
 
 function ActiveASTArena: TGocciaASTArena;
 begin
