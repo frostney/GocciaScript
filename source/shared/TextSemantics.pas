@@ -822,6 +822,10 @@ end;
 
 function NormalizeNewlinesToLF(const AText: string): string;
 begin
+  // StringReplace converts the text to and from the system code page, so
+  // text with no CR, which is most text, is returned as it was given.
+  if Pos(#13, AText) = 0 then
+    Exit(AText);
   Result := StringReplace(AText, #13#10, #10, [rfReplaceAll]);
   Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
 end;
