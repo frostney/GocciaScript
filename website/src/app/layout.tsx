@@ -1,37 +1,11 @@
 import type { Metadata } from "next";
-import {
-  IBM_Plex_Sans,
-  Instrument_Serif,
-  JetBrains_Mono,
-} from "next/font/google";
 import { Suspense } from "react";
 import { Analytics } from "@/components/analytics";
 import { SiteShell } from "@/components/site-shell";
 import { WebMcpTools } from "@/components/webmcp-tools";
+import "@/lib/fonts";
 import { getSiteUrlObject, SITE_DESCRIPTION, SITE_TITLE } from "@/lib/site-url";
 import "./globals.css";
-
-const instrumentSerif = Instrument_Serif({
-  variable: "--font-instrument-serif",
-  subsets: ["latin"],
-  weight: "400",
-  style: ["normal", "italic"],
-  display: "swap",
-});
-
-const ibmPlexSans = IBM_Plex_Sans({
-  variable: "--font-ibm-plex-sans",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  display: "swap",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: "--font-jetbrains-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-  display: "swap",
-});
 
 const SITE_URL = getSiteUrlObject();
 
@@ -89,12 +63,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="en"
-      data-accent="amber"
-      className={`${instrumentSerif.variable} ${ibmPlexSans.variable} ${jetbrainsMono.variable}`}
-      suppressHydrationWarning
-    >
+    <html lang="en" data-accent="amber" suppressHydrationWarning>
       <body data-grain="true">
         <SiteShell>{children}</SiteShell>
         {/* `<Analytics>` reads `useSearchParams()` for page-view URLs,

@@ -17,7 +17,7 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 Edit route UI under `src/app/` and `src/components/`. Edit documentation in the repository root; `source.config.ts` defines the collection and generated routes update automatically.
 
-Fonts (Instrument Serif, IBM Plex Sans, and JetBrains Mono) are loaded through `next/font` in `src/app/layout.tsx`; the OG image generator (`src/app/opengraph-image.tsx`) embeds the matching display and body fonts.
+Fonts (Instrument Serif, IBM Plex Sans, and JetBrains Mono) are self-hosted: the font files live in `src/fonts` and are loaded through `next/font/local` in `src/lib/fonts.ts`, so builds make no requests to Google Fonts. The OG image generator (`src/app/opengraph-image.tsx`) reads the matching display and body fonts from `src/fonts/og`. See `src/fonts/README.md`.
 
 ## Playground engines
 
