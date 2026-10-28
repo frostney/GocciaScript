@@ -152,6 +152,7 @@ One record per source function, keyed by its file and the line and column of its
 | Parameter-name probes | `parameterNameProbes` | Lookups in a function's hashed set of parameter names: one per name it records and one per test of a name |
 | Binding-name lookups, probes | `bindingNameLookups`, `bindingNameProbes` | Lookups in a list of unique binding names (a pattern's or a declaration's names in the compiler, the duplicate-parameter and match-pattern checks in the parser, and direct-eval compiler names), and the names each compared: 1 once the list is hashed (16 names or more), the names scanned below that; match-pattern maps count actual bucket probes |
 | Parameter-initializer visits | `parameterInitializerVisits` | Parameters visited by the accumulating proof that a default initializer cannot reach its own binding |
+| Parameter-initializer source checks | `parameterInitializerSourceChecks` | Earlier closure source texts checked for a simple parameter with a default; ordinary parameters and pattern destinations require no such check |
 
 Match-pattern nodes are not compiled expression/statement nodes. Compare parser binding work against pattern bindings or tokens; the compiled-node denominator can be very small for a large pattern.
 

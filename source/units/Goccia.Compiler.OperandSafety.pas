@@ -593,6 +593,10 @@ begin
       PrefixAccepted := PrefixAccepted and
         (not AParams[I].IsPattern or ScanPattern(Scan, AParams[I].Pattern)) and
         ScanNode(Scan, AParams[I].DefaultValue);
+      // Only a simple default can use its parameter register as a destination.
+      // Other parameters still contribute references to later defaults.
+      if AParams[I].IsPattern or not Assigned(AParams[I].DefaultValue) then
+        Continue;
       Result[I] := PrefixAccepted and (AParams[I].Name <> '') and
         not Scan.SeenNames.HasString(AParams[I].Name);
       if not Result[I] then
@@ -600,11 +604,15 @@ begin
       // Keep the existing conservative source-text rule for closures. Earlier
       // initializers may create a closure which a later initializer calls.
       for J := 0 to Scan.FunctionSources.Count - 1 do
+      begin
+        if Assigned(AProfile) then
+          AProfile.Count(ccParameterInitializerSourceChecks);
         if SourceTextMayReachName(Scan.FunctionSources[J], AParams[I].Name) then
         begin
           Result[I] := False;
           Break;
         end;
+      end;
     end;
   finally
     Scan.FunctionSources.Free;

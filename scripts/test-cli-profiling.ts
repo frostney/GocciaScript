@@ -97,7 +97,7 @@ const COMPILE_COUNTERS = [
   "expressionTypeVisits", "numberProofVisits", "localLookups",
   "localLookupProbes", "upvalueResolutions", "upvalueListProbes",
   "localListScans", "parameterNameProbes", "bindingNameLookups",
-  "bindingNameProbes", "parameterInitializerVisits",
+  "bindingNameProbes", "parameterInitializerVisits", "parameterInitializerSourceChecks",
 ];
 
 /** --profile=compile: one record per source function and file, parse and
@@ -230,6 +230,7 @@ export function verifyCompileCounterGrowth(): void {
         `const chain = (p) => ${range.map(() => "p").join(" + ")};`,
         `const params = (${range.map((i) => `a${i}`).join(", ")}) => a0;`,
         `const defaults = (${range.map((i) => `d${i} = 1`).join(", ")}) => d0;`,
+        ...range.map((i) => `const closureDefault${i} = (f = () => 1, plain) => plain;`),
         `const pattern = () => { const { ${range.map((i) => `b${i}`).join(", ")} } = {}; return b0; };`,
         "const outer = (p) => {",
         ...range.map((i) => `  let x${i} = p + ${i};`),

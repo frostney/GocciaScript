@@ -69,7 +69,9 @@ type
     ccBindingNameLookups,
     ccBindingNameProbes,
     // Parameters visited by the accumulating default-initializer proof.
-    ccParameterInitializerVisits);
+    ccParameterInitializerVisits,
+    // Closure source checks for a simple parameter default destination.
+    ccParameterInitializerSourceChecks);
 
   TGocciaCompileCounters = array[TGocciaCompileCounter] of Int64;
 
@@ -207,7 +209,8 @@ const
     'parameterNameProbes',
     'bindingNameLookups',
     'bindingNameProbes',
-    'parameterInitializerVisits');
+    'parameterInitializerVisits',
+    'parameterInitializerSourceChecks');
 
   COMPILE_COUNTER_LABELS: array[TGocciaCompileCounter] of string = (
     'Nodes compiled',
@@ -223,7 +226,8 @@ const
     'Parameter-name probes',
     'Binding-name lookups',
     'Binding-name probes',
-    'Parameter-initializer visits');
+    'Parameter-initializer visits',
+    'Parameter-initializer source checks');
 
 procedure PrintCompileProfile(const AProfiler: TGocciaCompileProfiler);
 { The "compile" section of the profile JSON, without a trailing comma: empty

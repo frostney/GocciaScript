@@ -181,6 +181,7 @@ type
     procedure TestDestructuringPatternsCompileInLinearTime;
     procedure TestMatchBindingsParseInLinearTime;
     procedure TestDefaultParameterListsCompileInLinearTime;
+    procedure TestOrdinaryParametersSkipInitializerSourceChecks;
     procedure TestDirectEvalNameChecksScale;
     procedure TestLargeSwitchLookupProbesScale;
     procedure TestOperatorChainsCompileInLinearTime;
@@ -353,6 +354,8 @@ begin
     TestDefaultParameterListsCompileInLinearTime);
   Test('Large switches keep local lookup probes proportional to clauses',
     TestLargeSwitchLookupProbesScale);
+  Test('Ordinary parameters do not repeat closure-source destination proofs',
+    TestOrdinaryParametersSkipInitializerSourceChecks);
   Test('Direct eval string-name checks scale with the bindings',
     TestDirectEvalNameChecksScale);
   Test('Chains of binary operators compile in time linear in their length',
@@ -1444,6 +1447,44 @@ procedure TTestCompiler.TestDefaultParameterListsCompileInLinearTime;
 begin
   ExpectNameListLinear('const g = (%s) => 1;', 'p%d = 1', 2000, 0);
   ExpectNameListLinear('const g = (%s) => 1;', 'p%d = seed', 2000, 0);
+end;
+
+procedure TTestCompiler.TestOrdinaryParametersSkipInitializerSourceChecks;
+
+  function SourceChecks(const ACount: Integer): Int64;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+    Module: TGocciaBytecodeModule;
+    Profile: TGocciaCompileProfiler;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const f = (first = () => 1');
+    for I := 0 to ACount - 1 do
+      Source.Append(Format(', p%d', [I]));
+    Source.Append(') => 1;');
+    TGocciaCompileProfiler.Initialize;
+    try
+      Profile := TGocciaCompileProfiler.Instance;
+      Module := CompileSource(Source.ToString);
+      Module.Free;
+      Result := 0;
+      for I := 0 to Profile.FunctionCount - 1 do
+        Inc(Result, Profile.GetFunction(I).Counters[ccParameterInitializerSourceChecks]);
+    finally
+      TGocciaCompileProfiler.Shutdown;
+    end;
+  end;
+
+var
+  ShortChecks, LongChecks: Int64;
+begin
+  ShortChecks := SourceChecks(128);
+  LongChecks := SourceChecks(256);
+  // Only the first parameter has a default destination to prove safe.
+  // Adding ordinary parameters must not add closure-source searches.
+  Expect<Boolean>(ShortChecks > 0).ToBe(True);
+  Expect<Int64>(LongChecks).ToBe(ShortChecks);
 end;
 
 procedure TTestCompiler.TestLargeSwitchLookupProbesScale;
