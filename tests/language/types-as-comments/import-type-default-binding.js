@@ -13,6 +13,14 @@ import {
   boundY as namespaceY,
 } from "./helpers/type-default-namespace-import.js";
 import { boundType as escapedType } from "./helpers/type-default-escaped-import.js";
+import {
+  boundType as namespaceFromType,
+  boundY as namespaceFromY,
+} from "./helpers/type-default-namespace-from-alias.js";
+import {
+  boundType as namedFromType,
+  boundY as namedFromY,
+} from "./helpers/type-default-named-from-alias.js";
 import { kinds } from "./helpers/type-only-from-binding.js";
 
 describe("import type with a default binding named type", () => {
@@ -28,6 +36,16 @@ describe("import type with a default binding named type", () => {
   test("import type, * as ns from \"m\" binds type and the namespace", () => {
     expect(namespaceType).toBe("the default");
     expect(namespaceY).toBe("named y");
+  });
+
+  test("a namespace alias may be a contextual keyword such as from", () => {
+    expect(namespaceFromType).toBe("the default");
+    expect(namespaceFromY).toBe("named y");
+  });
+
+  test("a named import alias may be a contextual keyword such as from", () => {
+    expect(namedFromType).toBe("the default");
+    expect(namedFromY).toBe("named y");
   });
 
   test("an escaped type stays a plain default binding", () => {

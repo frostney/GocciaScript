@@ -7788,7 +7788,7 @@ begin
           Advance;
           Consume(gttAs, 'Expected "as" after "*" in namespace import',
             SSuggestNamespaceImportAs);
-          NamespaceName := Consume(gttIdentifier,
+          NamespaceName := ConsumeIdentifierBinding(
             'Expected local name after "as"',
             SSuggestProvideLocalName).Lexeme;
           Consume(gttFrom, 'Expected "from" after namespace import',
@@ -7815,7 +7815,7 @@ begin
           ImportedName := ImportedNameToken.Lexeme;
 
           if Match(gttAs) then
-            LocalName := Consume(gttIdentifier, 'Expected local name after "as"',
+            LocalName := ConsumeIdentifierBinding('Expected local name after "as"',
               SSuggestProvideLocalName).Lexeme
           else if ImportedNameToken.TokenType = gttString then
             raise TGocciaSyntaxError.Create(
