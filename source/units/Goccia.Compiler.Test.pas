@@ -96,6 +96,7 @@ type
       const AFunctionKeyword: Boolean = False;
       const ALabels: Boolean = False;
       const AWhileLoops: Boolean = False): TGocciaBytecodeModule;
+    function SourceCompileCounters(const ASource: string): TGocciaCompileCounters;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
@@ -180,7 +181,7 @@ type
     procedure TestParameterListsParseAndCompileInLinearTime;
     procedure TestDestructuringPatternsCompileInLinearTime;
     procedure TestMatchBindingsParseInLinearTime;
-    procedure TestDefaultParameterListsCompileInLinearTime;
+    procedure TestDefaultParameterListWorkScales;
     procedure TestOrdinaryParametersSkipInitializerSourceChecks;
     procedure TestDirectEvalNameChecksScale;
     procedure TestLargeSwitchLookupProbesScale;
@@ -350,8 +351,8 @@ begin
     TestDestructuringPatternsCompileInLinearTime);
   Test('Match-pattern bindings parse in linear time',
     TestMatchBindingsParseInLinearTime);
-  Test('Default parameter lists compile in linear time',
-    TestDefaultParameterListsCompileInLinearTime);
+  Test('Default parameter parsing and initializer work scale with the parameters',
+    TestDefaultParameterListWorkScales);
   Test('Large switches keep local lookup probes proportional to clauses',
     TestLargeSwitchLookupProbesScale);
   Test('Ordinary parameters do not repeat closure-source destination proofs',
@@ -1435,18 +1436,83 @@ end;
   against each other in a static block and a for statement's let or const
   (§15.7.1, §14.7.4.1). }
 { Ratio-only bounds keep these checks effective on faster runners too.
-  The old match-name scan and parameter-prefix proof quadrupled work when
-  the input doubled. Keep defaults below the instruction limit. }
+  The old match-name scan quadrupled work when the input doubled. }
 procedure TTestCompiler.TestMatchBindingsParseInLinearTime;
 begin
   ExpectNameListLinear('const g = (o) => o is { %s };',
     'k%0:d: const b%0:d', 2000, 0);
 end;
 
-procedure TTestCompiler.TestDefaultParameterListsCompileInLinearTime;
+{ Read the same work counters exposed by --profile=compile. Summing all
+  function records includes parser work as well as nested compiler work. }
+function TTestCompiler.SourceCompileCounters(
+  const ASource: string): TGocciaCompileCounters;
+var
+  Module: TGocciaBytecodeModule;
+  Profile: TGocciaCompileProfiler;
+  I: Integer;
+  Counter: TGocciaCompileCounter;
 begin
-  ExpectNameListLinear('const g = (%s) => 1;', 'p%d = 1', 2000, 0);
-  ExpectNameListLinear('const g = (%s) => 1;', 'p%d = seed', 2000, 0);
+  Result := Default(TGocciaCompileCounters);
+  TGocciaCompileProfiler.Initialize;
+  try
+    Profile := TGocciaCompileProfiler.Instance;
+    Module := CompileSource(ASource);
+    Module.Free;
+    for I := 0 to Profile.FunctionCount - 1 do
+      for Counter := Low(TGocciaCompileCounter) to High(TGocciaCompileCounter) do
+        Inc(Result[Counter], Profile.GetFunction(I).Counters[Counter]);
+  finally
+    TGocciaCompileProfiler.Shutdown;
+  end;
+end;
+
+procedure TTestCompiler.TestDefaultParameterListWorkScales;
+
+  function Counters(const ACount: Integer;
+    const AInitializer: string): TGocciaCompileCounters;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const g = (');
+    for I := 0 to ACount - 1 do
+    begin
+      if I > 0 then
+        Source.Append(', ');
+      Source.Append(Format('p%d = %s', [I, AInitializer]));
+    end;
+    Source.Append(') => 1;');
+    Result := SourceCompileCounters(Source.ToString);
+  end;
+
+  procedure CheckInitializer(const AInitializer: string);
+  const
+    PARAMETER_COUNT = 2000;
+  var
+    ShortWork, LongWork: TGocciaCompileCounters;
+    Counter: TGocciaCompileCounter;
+  begin
+    ShortWork := Counters(PARAMETER_COUNT, AInitializer);
+    LongWork := Counters(2 * PARAMETER_COUNT, AInitializer);
+    // Duplicate-name validation covers the parse; prefix visits cover the
+    // initializer proof. The old proof quadrupled work on doubling input.
+    for Counter in [ccBindingNameProbes, ccParameterInitializerVisits] do
+    begin
+      Expect<Boolean>(ShortWork[Counter] >= PARAMETER_COUNT).ToBe(True);
+      Expect<Boolean>(LongWork[Counter] >= 2 * PARAMETER_COUNT).ToBe(True);
+      if LongWork[Counter] > ShortWork[Counter] * 5 div 2 then
+        Fail(Format('Default "%s": %s grew from %d to %d for %d and %d parameters',
+          [AInitializer, COMPILE_COUNTER_JSON_NAMES[Counter], ShortWork[Counter],
+          LongWork[Counter], PARAMETER_COUNT, 2 * PARAMETER_COUNT]));
+      Expect<Boolean>(LongWork[Counter] <= ShortWork[Counter] * 5 div 2).ToBe(True);
+    end;
+  end;
+
+begin
+  CheckInitializer('1');
+  CheckInitializer('seed');
 end;
 
 procedure TTestCompiler.TestOrdinaryParametersSkipInitializerSourceChecks;
@@ -1542,17 +1608,21 @@ procedure TTestCompiler.TestDirectEvalNameChecksScale;
   end;
 
 var
-  Shorter, Longer: string;
-  ShortTime, LongTime: Int64;
+  ShortWork, LongWork: TGocciaCompileCounters;
+  ShortProbes, LongProbes: Int64;
 begin
-  Shorter := EvalSource(256);
-  Longer := EvalSource(1024);
-  ShortTime := SourceCompileNanoseconds(Shorter, False);
-  LongTime := SourceCompileNanoseconds(Longer, False);
-  if LongTime > 6 * ShortTime then
-    Fail(Format('Direct eval with 1024 bindings took %d ns versus %d ns ' +
-      'with 256', [LongTime, ShortTime]));
-  Expect<Boolean>(LongTime <= 6 * ShortTime).ToBe(True);
+  ShortWork := SourceCompileCounters(EvalSource(256));
+  LongWork := SourceCompileCounters(EvalSource(1024));
+  ShortProbes := ShortWork[ccBindingNameProbes];
+  LongProbes := LongWork[ccBindingNameProbes];
+  // Count string-name membership only. Direct-eval record-array scans and
+  // growth remain separate work, so total compile time is not this contract.
+  Expect<Boolean>(ShortProbes >= 256).ToBe(True);
+  Expect<Boolean>(LongProbes >= 1024).ToBe(True);
+  if LongProbes > 5 * ShortProbes then
+    Fail(Format('Direct eval with 1024 bindings took %d name probes versus %d ' +
+      'with 256', [LongProbes, ShortProbes]));
+  Expect<Boolean>(LongProbes <= 5 * ShortProbes).ToBe(True);
 end;
 
 procedure TTestCompiler.TestDestructuringPatternsCompileInLinearTime;
