@@ -1748,17 +1748,6 @@ var
   IsImport: Boolean;
   ListKind: TGocciaASTPartKind;
 
-  procedure AddPart(const AKind: TGocciaASTPartKind;
-    const AStartOffset, AEndOffset: Integer; const ATypeOnly: Boolean);
-  var
-    Flags: TGocciaASTPartFlags;
-  begin
-    Flags := [];
-    if ATypeOnly then
-      Include(Flags, apfTypeOnly);
-    AppendPartRange(Parts, AKind, AStartOffset, AEndOffset, Flags);
-  end;
-
   function At(const AIndex: Integer): TGocciaTokenType;
   begin
     if AIndex <= Last then
@@ -1779,8 +1768,8 @@ begin
   // An import's default binding, then the comma before a clause.
   if IsImport and not (At(I) in [gttLeftBrace, gttStar, gttEOF]) then
   begin
-    AddPart(apkImportDefaultSpecifier, FTokens[I].Span.StartOffset,
-      FTokens[I].Span.EndOffset, True);
+    AppendPartRange(Parts, apkImportDefaultSpecifier,
+      FTokens[I].Span.StartOffset, FTokens[I].Span.EndOffset, [apfTypeOnly]);
     Inc(I);
     if At(I) = gttComma then
       Inc(I)
@@ -1804,9 +1793,9 @@ begin
       if At(I) = gttEOF then
         Exit;
       if IsImport then
-        AddPart(apkImportNamespaceSpecifier,
+        AppendPartRange(Parts, apkImportNamespaceSpecifier,
           FTokens[ClauseStart].Span.StartOffset, FTokens[I].Span.EndOffset,
-          True);
+          [apfTypeOnly]);
       Inc(I);
     end
     else if IsImport then
@@ -1825,7 +1814,8 @@ begin
         Inc(I);
       end;
       if SpecifierEnd > SpecifierStart then
-        AddPart(ListKind, SpecifierStart, SpecifierEnd, True);
+        AppendPartRange(Parts, ListKind, SpecifierStart, SpecifierEnd,
+          [apfTypeOnly]);
       if At(I) = gttComma then
         Inc(I);
     end;
@@ -1836,8 +1826,8 @@ begin
     Exit;
 
   if (At(I) = gttFrom) and (At(I + 1) = gttString) then
-    AddPart(apkModuleSpecifier, FTokens[I + 1].Span.StartOffset,
-      FTokens[I + 1].Span.EndOffset, False);
+    AppendPartRange(Parts, apkModuleSpecifier,
+      FTokens[I + 1].Span.StartOffset, FTokens[I + 1].Span.EndOffset, []);
 
   AStatement.SetModuleParts(Parts);
 end;
