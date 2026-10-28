@@ -1,5 +1,5 @@
 /*---
-description: Operator, member and call chains taller than the supported tree height are a catchable SyntaxError
+description: Operator, member, call and type assertion chains taller than the supported tree height are a catchable SyntaxError
 features: [ShadowRealm, Goccia]
 ---*/
 
@@ -34,6 +34,9 @@ const chains = {
   "optional calls": [(d) => `const f = () => f; typeof f${"?.()".repeat(d)}`, () => "function"],
   "tagged templates": [(d) => `const tag = () => tag; typeof tag${"`x`".repeat(d)}`, () => "function"],
   "tagged member access": [(d) => `const o = () => o; o.o = o; typeof o${".o".repeat(d)}\`x\``, () => "function"],
+  "non-null assertions": [(d) => `const n = 1; n${"!".repeat(d)}`, () => 1],
+  "as assertions": [(d) => `1${" as number".repeat(d)}`, () => 1],
+  "satisfies assertions": [(d) => `1${" satisfies number".repeat(d)}`, () => 1],
 };
 
 describe("chain length limit", () => {

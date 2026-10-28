@@ -73,6 +73,8 @@ Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs
 
 **Full standard compliance** — all standard constants and methods are available.
 
+**`Math.pow` and `**`** — both compute ES2026 §6.1.6.1.3 `Number::exponentiate` with one implementation, `Goccia.NumberExponentiation`, a port of the `pow` of Arm's optimized-routines (the algorithm of glibc and musl). A finite result is within 0.54 ULP of the exact value. A result that is exactly representable, such as `10 ** 22` or `2 ** -1074`, comes out exact, and every platform returns the same bits. As in V8, `x ** 2` is `x * x` and `x ** 0.5` is `Math.sqrt(x)`.
+
 **Extras:**
 
 | Method | Description |
@@ -841,62 +843,9 @@ Shell `goccia` takes `goccia [--sandbox] [--copy <from[=to]>]... [--diff[=json|u
 
 ### AST — experimental (`Goccia.Builtins.AST.pas`)
 
-Only available when the host passes `--experimental-ast`. `goccia:ast` makes
-the parse result reachable from JavaScript, so a tool that asks questions
-about source — a lint rule, a codemod, a metric — can be a GocciaScript
-program instead of a Pascal one. It is a read: there is no write-back.
-
-```javascript
-import { parse } from "goccia:ast";
-
-const { source, root, comments } = parse(text, { jsx: true, fileName: "App.tsx" });
-```
-
-| Option | Meaning |
-|--------|---------|
-| `jsx` | Run the JSX preprocessor before parsing (default `false`) |
-| `module` | Parse as module source rather than script source (default `true`) |
-| `fileName` | File name the parser sees; its extension decides JSX handling, so a `.ts` name skips the JSX preprocessor (default `<source>`). A syntax error reports only `(line:column)`, not the file name ([#1277](https://github.com/frostney/GocciaScript/issues/1277)) |
-
-The *language* is the host's, not a second one configured here: the
-compatibility flags in force for the run are the ones `parse` accepts, exactly
-as `eval` and the `Function` constructor inherit them. A file that needs
-`--compat-asi` to parse needs the host to have been given `--compat-asi`.
-
-`parse` returns `{ source, root, comments }`:
-
-| Property | Description |
-|----------|-------------|
-| `source` | The text that was passed, returned unchanged. Every offset and position in the result indexes it |
-| `root` | The `Program` node |
-| `comments` | Every comment, in source order |
-
-Every node is `{ kind, start, end, loc, children }`, and every comment is
-`{ kind, start, end, loc }` with `kind` either `"Line"` or `"Block"`.
-`start` and `end` are zero-based offsets into `source`, `end` exclusive;
-`loc.start` and `loc.end` are `{ line, column }` with one-based lines.
-
-The tree holds statements only — no expressions, names, or literal values.
-`children` are the statements nested immediately beneath a node, reached
-through expressions where it has to be, so the block of an arrow function
-assigned to a `const` is a child of that declaration. Three kinds own a
-statement *list*, whose children are siblings of one another: `Program`,
-`BlockStatement`, and `SwitchCase`.
-
-A syntax error in the parsed text is a `SyntaxError` naming its position; it
-does not abort the caller's own run unless the caller lets it.
-
-With `jsx` on, the text is rewritten before it is parsed, but nothing in the
-result is measured in that rewrite: offsets and positions alike are mapped back
-to the file as written, so `source.slice(node.start, node.end)` is the node's
-own text. Comments the transformer removes — one between JSX attributes, or a
-child container holding nothing else — are not in `comments`, because the
-parser never sees them.
-
-See [ADR 0117](adr/0117-javascript-visible-ast-module.md) for what the module
-exposes, what it withholds, and why, and
-[ADR 0118](adr/0118-original-file-source-ranges.md) for the one coordinate
-system.
+See [AST Built-ins](built-ins-ast.md) for `goccia:ast`: the statement view,
+the expression view, options, node kinds and flags, and how ranges map back
+to a `.tsx` file.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 

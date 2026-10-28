@@ -26,7 +26,8 @@ interface
 
 uses
   Goccia.AST.Expressions,
-  Goccia.AST.Node;
+  Goccia.AST.Node,
+  Goccia.AST.Statements;
 
 // True when running ANode cannot create a closure and cannot call direct eval.
 // ANode is a loop statement. Function, method, accessor and class forms are
@@ -66,14 +67,35 @@ function ParameterInitializerAvoidsOwnBinding(
 function InitializerAvoidsOwnBinding(const AInitializer: TGocciaExpression;
   const AName: string): Boolean;
 
+// Whether ANames holds AName.
+function NameListContains(const ANames: TArray<string>;
+  const AName: string): Boolean;
+
+// The let and const bindings declared by the statements that open a function
+// body or a block, up to the first statement of another kind, whose TDZ hole
+// nothing can observe: no initializer evaluated before a binding's own
+// declaration has completed can reach it, by InitializerAvoidsOwnBinding. The
+// caller rules out a body or block with hoisted function declarations, which
+// exist from its entry and could reach the binding from a call in an
+// initializer, and coverage. Such a binding needs no hole on entry, because
+// its declaration initializes it before anything can read it. A block is
+// entered afresh on each iteration of a loop around it, and a closure an
+// earlier iteration created reaches that iteration's binding, never the new
+// one. Only the first LEADING_LEXICAL_HOLE_LIMIT bindings are considered.
+function LeadingLexicalsWithUnobservableHole(
+  const ABlock: TGocciaBlockStatement): TArray<string>;
+
 implementation
 
 uses
-  Generics.Collections,
-
-  Goccia.AST.Statements;
+  Generics.Collections;
 
 const
+  // LeadingLexicalsWithUnobservableHole checks every earlier initializer for
+  // each binding, so it looks at this many leading bindings at most; the
+  // rest keep their TDZ hole. That keeps a body that opens with thousands of
+  // declarations, as generated code can, from compiling in quadratic time.
+  LEADING_LEXICAL_HOLE_LIMIT = 16;
   // An operand is checked once per enclosing operator, so a deeply nested
   // right-leaning expression would otherwise be walked a quadratic number of
   // times. A subtree larger than this keeps the copy.
@@ -557,6 +579,62 @@ begin
   if AName = '' then
     Exit(False);
   Result := ScanNode(Scan, AInitializer);
+end;
+
+function NameListContains(const ANames: TArray<string>;
+  const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(ANames) do
+    if ANames[I] = AName then
+      Exit(True);
+  Result := False;
+end;
+
+function LeadingLexicalsWithUnobservableHole(
+  const ABlock: TGocciaBlockStatement): TArray<string>;
+var
+  I, J, K, Count, InitCount: Integer;
+  Decl: TGocciaVariableDeclaration;
+  Initializers: array of TGocciaExpression;
+  Unobservable: Boolean;
+begin
+  Count := 0;
+  InitCount := 0;
+  SetLength(Result, 0);
+  SetLength(Initializers, 0);
+  for I := 0 to ABlock.Nodes.Count - 1 do
+  begin
+    if not (ABlock.Nodes[I] is TGocciaVariableDeclaration) then
+      Break;
+    Decl := TGocciaVariableDeclaration(ABlock.Nodes[I]);
+    if Decl.IsVar then
+      Break;
+    for J := 0 to High(Decl.Variables) do
+    begin
+      if Decl.Variables[J].IsPattern or Assigned(Decl.Variables[J].Pattern) or
+         (InitCount = LEADING_LEXICAL_HOLE_LIMIT) then
+        Exit;
+      SetLength(Initializers, InitCount + 1);
+      Initializers[InitCount] := Decl.Variables[J].Initializer;
+      Inc(InitCount);
+      Unobservable := True;
+      for K := 0 to InitCount - 1 do
+        if not InitializerAvoidsOwnBinding(Initializers[K],
+           Decl.Variables[J].Name) then
+        begin
+          Unobservable := False;
+          Break;
+        end;
+      if Unobservable then
+      begin
+        SetLength(Result, Count + 1);
+        Result[Count] := Decl.Variables[J].Name;
+        Inc(Count);
+      end;
+    end;
+  end;
 end;
 
 end.

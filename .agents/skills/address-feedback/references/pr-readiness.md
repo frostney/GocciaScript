@@ -23,7 +23,8 @@ Record the repository, PR number or URL, and final head object ID. A PR is
   up-to-date branches;
 - every intentionally active review automation has a terminal completed verdict
   explicitly tied to that head, with no newer incomplete or follow-up review;
-  CodeRabbit alone is exempt when its adapter reports `bot-skip` below;
+  CodeRabbit alone is exempt when its adapter reports `bot-skip` or
+  `not-active` below;
 - no actionable current-head finding remains;
 - GitHub reports zero unresolved review threads;
 - every inline automation thread has a maintainer-workflow reply in that thread;
@@ -121,7 +122,8 @@ If no exact absolute time or duration exists, set no `retry_at` and remain
 unambiguously, or do not clearly describe availability. A missing `retry_at`
 rules out a timed retrigger, not the helper's `wait` for the verdict. Never
 infer a provider, account quota, hourly window, blind delay, or retry count.
-CodeRabbit's retry times come only from its adapter; see [CodeRabbit](#coderabbit).
+CodeRabbit's retry times, including its back-off after a refusal whose wait
+cannot be read, come only from its adapter; see [CodeRabbit](#coderabbit).
 
 ## CodeRabbit
 
@@ -141,6 +143,30 @@ CodeRabbit command or work out a CodeRabbit wait yourself.
 reports its head's state. A pending head state from `run` means its deadline
 came first.
 
+CodeRabbit reports on a head through commit statuses or, since about
+2026-10-27, through a check run named `CodeRabbit`, and a head can carry
+both. The adapter reads each check run as the statuses it replaced: in
+progress while it runs, then its summary's `Result:` description, such as
+"Review rate limited", from its completion. A bare "Review skipped" from a
+draft is the draft skip.
+
+`not-active` means nothing shows the repository uses CodeRabbit: the PR has
+no CodeRabbit status, check run, comment or review once CodeRabbit's own review would
+have started; no `.coderabbit*` configuration file sits at the repository
+root; the 10 latest closed PRs carry no CodeRabbit status or check run on their last commit
+and no CodeRabbit review or comment among their first 10 reviews and their
+first and last 10 comments; and `.github/delivery/review-automations.json`
+names no CodeRabbit automation. The adapter then posts no trigger: a trigger
+is not evidence that CodeRabbit is in use, and it may never answer one. An
+organization's central CodeRabbit configuration does not count, because it
+applies only where CodeRabbit is installed. A repository where CodeRabbit was
+newly installed, with its setup only in central or web settings, has no such
+evidence until its first reviewed PRs close; if CodeRabbit's first status or check run on a
+PR comes more than 120 s after the push, open or ready event, the adapter
+reports `not-active`, so name CodeRabbit in its policy file. A policy file
+that cannot be read is an operational error only when nothing else shows
+CodeRabbit.
+
 `bot-skip` means CodeRabbit reported "Review skipped: bot user not eligible
 for review" and GitHub identifies the PR author as a bot. No CodeRabbit review
 is expected, so this state satisfies its review gate without a trigger or
@@ -153,10 +179,11 @@ automation and required checks still need to pass their gates.
 | `review-complete` | `run`, `status` | Classify every finding of the head's CodeRabbit review. |
 | `clean-complete` | `run`, `status` | CodeRabbit is complete for the head with no findings. |
 | `bot-skip` | `run`, `status` | No CodeRabbit review applies to this bot-authored PR. Continue the remaining gates. |
-| `satisfied` | `status` | Every head is complete or has a `bot-skip` exemption. |
+| `not-active` | `run`, `status` | CodeRabbit is not in use on this repository, so no CodeRabbit review applies and nothing was triggered. Continue the remaining gates. |
+| `satisfied` | `status` | Every head is complete or has a `bot-skip` or `not-active` exemption. |
 | `trigger-incremental`, `trigger-full` | `run`, `status` | Pending: `run`, which posts it. |
-| `awaiting-automatic`, `triggered`, `in-progress`, `waiting` | `run`, `status` | Pending: `run` waits; after its deadline, `run` again. |
-| `rate-limited-unknown-wait` | `run`, `status` | Pending: `run` again later; never trigger by hand. |
+| `awaiting-automatic`, `triggered`, `in-progress`, `waiting` | `run`, `status` | Pending: `run` waits; after its deadline, `run` again. `triggered` also covers a trigger on another open PR of the same head, for up to 10 minutes. |
+| `rate-limited-unknown-wait` | `run`, `status` | Pending: CodeRabbit refused the head without a wait the adapter can read. `run` waits until `retryAt`, 15, 30 or 60 minutes after the head's first, second or third refusal since its latest push, open or ready event, then posts one trigger. A refusal counts once for each such event or trigger on any open PR of the head. Never trigger by hand. |
 | `pending` | `run`, `status` | A head is pending, or GitHub was unreachable until the deadline: `run` again. |
 | `lock-held` | `run` | Pending: another `run` holds the trigger lock; `run` again later. |
 | `draft` | `run`, `status` | Mark the PR ready when the workflow permits, then `run`. |
@@ -165,7 +192,7 @@ automation and required checks still need to pass their gates.
 | `paused` | `run`, `status` | Blocked: CodeRabbit paused its reviews of the PR. A person resumes them or triggers a review. |
 | `blocked-unanswered` | `run`, `status` | Blocked: CodeRabbit did not answer the trigger. A person checks CodeRabbit on the PR, then triggers again or pushes. |
 | `blocked-stalled` | `run`, `status` | Blocked: CodeRabbit's review never finished. A person checks CodeRabbit on the PR, then triggers again or pushes. |
-| `blocked-unknown-wait` | `run`, `status` | Blocked: CodeRabbit refused the head without a stated wait. A person reads its notice on the PR and triggers when it allows. |
+| `blocked-unknown-wait` | `run`, `status` | Blocked: CodeRabbit refused the head a fourth time since its latest push, open or ready event, the last time without a wait the adapter can read. A person reads its notice on the PR and triggers when it allows. |
 | `blocked-no-capacity` | `run`, `status` | Blocked: a person checks CodeRabbit seats or plan. |
 | `blocked-lock-loss` | `run`, `status` | Blocked: CodeRabbit stopped the head's review after lock loss again after one retry. A person checks CodeRabbit on the PR, then triggers again or pushes. |
 | `blocked-unconfirmed`, `unrecognized-status` | `run`, `status` | Blocked: escalate to a person. |

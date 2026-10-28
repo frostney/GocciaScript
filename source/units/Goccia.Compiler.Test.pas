@@ -37,6 +37,15 @@ uses
   Goccia.Values.Primitives;
 
 const
+  { The captured-bindings tests read CAPTURE_READS bindings in all, as
+    CAPTURE_FEW_BINDINGS bindings read in turn and as CAPTURE_MANY_BINDINGS
+    read in turn. Finding the upvalue of each read by visiting the closure's
+    upvalues made the many cost several times the few (about 5.5 times
+    here); finding it by an index costs about the same for both, and the
+    bound allows CHAIN_COMPILE_RATIO times. }
+  CAPTURE_READS = 240000;
+  CAPTURE_FEW_BINDINGS = 1875;
+  CAPTURE_MANY_BINDINGS = 30000;
   { Top-level declarations per compile in the linear-time tests: enough that
     a step costing time quadratic in them (a scan of every earlier local per
     declaration, about 5 s here for script consts) is far past the bound,
@@ -47,6 +56,28 @@ const
     module-level `const`; the slack absorbs a busy machine. }
   LINEAR_COMPILE_RATIO = 4;
   LINEAR_SLACK_NANOSECONDS = 20 * 1000 * 1000;
+  { Names in the shorter list of the parameter-list and pattern tests; the
+    longer has twice as many. A scan of the names before each name took
+    about 2 s here to parse a parameter list this long (the duplicate
+    check), 0.1 s to compile it (the record of the parameter names) and 8 s
+    to compile a pattern (collecting its names), and four times as long for
+    the longer list. }
+  NAME_LIST_COUNT = 8000;
+  { Doubling a list may multiply the time by at most 2.5 (plus the slack):
+    linear work doubles it, quadratic work quadruples it. }
+  NAME_LIST_DOUBLING_PERCENT = 250;
+  { The operator-chain test compiles CHAIN_OPERATORS binary operators as
+    chains of CHAIN_SHORT_TERMS terms and as chains CHAIN_LENGTH_FACTOR
+    times as long. Work quadratic in a chain's length makes the long chains
+    cost about CHAIN_LENGTH_FACTOR times as much (over 3 s here); a linear
+    compile costs about the same for both, and the bound allows
+    CHAIN_COMPILE_RATIO times. }
+  CHAIN_SHORT_TERMS = 25;
+  CHAIN_LENGTH_FACTOR = 16;
+  CHAIN_OPERATORS = 16000;
+  CHAIN_COMPILE_RATIO = 3;
+  // The bindings each closure of the captured shape reads, in turn.
+  CHAIN_CAPTURED_BINDINGS = 25;
 
 type
   TTestCompiler = class(TTestSuite)
@@ -60,7 +91,10 @@ type
       const AEnableDeadBranchElimination: Boolean = True;
       const ATraditionalForLoops: Boolean = False;
       const ANonStrictMode: Boolean = False;
-      const AVarDeclarations: Boolean = False): TGocciaBytecodeModule;
+      const AVarDeclarations: Boolean = False;
+      const AFunctionKeyword: Boolean = False;
+      const ALabels: Boolean = False;
+      const AWhileLoops: Boolean = False): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
@@ -94,6 +128,27 @@ type
     function HasBigIntConstant(const ATemplate: TGocciaFunctionTemplate;
       const AExpected: string): Boolean;
     function NegativeZero: Double;
+    // The compiler's recorded type of every typed local of the first
+    // function in ASource, in slot order: I integer, F float, B boolean,
+    // S string, R reference. A local the compiler left untyped adds nothing.
+    function RecordedLocalTypes(const ASource: string;
+      const AStrictTypes: Boolean = False;
+      const ANonStrictMode: Boolean = False): string;
+    // The recorded types of `const r = AInitializer;` in a function whose
+    // parameters a, b and o are untyped, after the declarations in APrelude.
+    function InitializerTypes(const APrelude, AInitializer: string;
+      const AStrictTypes: Boolean): string;
+    // Checks InitializerTypes in the default and the strict-types profile.
+    procedure ExpectInitializerType(const APrelude, AInitializer,
+      AExpected: string);
+    // True when `f()` in g is typed as a Number: g adds two results of the
+    // call and the sum uses OP_ADD_FLOAT. ADeclaration declares f inside the
+    // function that declares g, so f is a local, not a global.
+    function CallResultIsTyped(const ADeclaration: string;
+      const AStrictTypes: Boolean = False;
+      const ANonStrictMode: Boolean = False;
+      const ACaller: string =
+        'const g = () => { const r = f(); return r + r; };'): Boolean;
 
     procedure TestCompileLiteral;
     procedure TestASTSpansUseUTF16CodeUnitOffsets;
@@ -106,11 +161,30 @@ type
     procedure TestAnonymousDerivedClassInBlockKeepsLaterLocalsApart;
     function CompileNanoseconds(const ALinePattern: string;
       const AGlobalBackedTopLevel: Boolean;
-      const ACount: Integer = LINEAR_DECLARATION_COUNT): Int64;
+      const ACount: Integer = LINEAR_DECLARATION_COUNT;
+      const APrefix: string = ''; const ASuffix: string = ''): Int64;
+    function SourceCompileNanoseconds(const ASourceText: string;
+      const AGlobalBackedTopLevel: Boolean;
+      const AStrictTypes: Boolean = False): Int64;
     procedure ExpectTopLevelCompileLinear(const ABaseline: Int64;
       const ALinePattern: string; const AGlobalBackedTopLevel: Boolean);
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
     procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
+    procedure TestTopLevelCallsCompileInLinearTime;
+    procedure TestManyCapturedBindingsCompileInLinearTime;
+    procedure TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime;
+    procedure ExpectNameListLinear(const APattern, AItem: string;
+      const ACount: Integer = NAME_LIST_COUNT);
+    procedure TestParameterListsParseAndCompileInLinearTime;
+    procedure TestDestructuringPatternsCompileInLinearTime;
+    procedure TestOperatorChainsCompileInLinearTime;
+    procedure TestOperatorChainsFoldTheirConstantStart;
+    procedure TestNestedChainsCompileInLinearTime;
+    procedure TestNestedChainsFoldTheirConstantOperands;
+    procedure TestSwitchCaseDeclarationsCompileInLinearTime;
+    procedure TestTypeScriptComparisonChainsParseInLinearTime;
+    procedure TestLongBranchesCompileOnce;
+    procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
     procedure TestFloatConstantsArePooledByBitPattern;
@@ -151,6 +225,7 @@ type
     procedure TestCompoundAssignmentWritesRegisterOnlyBindingDirectly;
     procedure TestInitializerReachingItsBindingKeepsCopy;
     procedure TestLexicalHolesSetOnlyWhereObservable;
+    procedure TestCompoundSmallIntegerUsesImmediate;
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestObjectRestBytecodeRoundTrip;
@@ -162,6 +237,8 @@ type
     procedure TestBinaryRoundTripKeepsBothZeros;
     procedure TestBinaryRejectsMalformedArtifacts;
     procedure TestUndeclaredPrivateNameRaisesSyntaxError;
+    procedure TestBytecodeLimitRaisesSyntaxErrorAtSource;
+    procedure TestLongBranchTakesLongFormInItsFunctionOnly;
     procedure TestCompileAfterRaisedCompileStartsAtNestingDepthZero;
     procedure TestConstantFoldsNestedArithmetic;
     procedure TestConstantFoldsBigInt;
@@ -181,6 +258,7 @@ type
     procedure TestInferredNumericLocalsUseTypedArithmetic;
     procedure TestAnnotatedParametersUseTypedArithmetic;
     procedure TestClosedNumericFibonacciUsesSuperinstructions;
+    procedure TestConciseArrowBodyMarksTailCalls;
     procedure TestClosedNumericScalarSelfCallArityLimit;
     procedure TestMixedOrEscapedCallsCancelNumericProof;
     procedure TestKnownNumericLocalUsesSubtractImmediate;
@@ -197,6 +275,18 @@ type
     procedure TestCapturedNumericLocalAvoidsTypedArithmetic;
     procedure TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber;
     procedure TestReturnAnnotationDoesNotTypeCallResult;
+    procedure TestUncheckedStrictBindingDoesNotTypeOperands;
+    procedure TestBinaryOperatorResultTypes;
+    procedure TestBitwiseOperatorResultTypes;
+    procedure TestUnaryOperatorResultTypes;
+    procedure TestIntegerTypeComesOnlyFromInt32Results;
+    procedure TestMathCallsAreNotTrusted;
+    procedure TestConstTypeComesFromTheNumberProof;
+    procedure TestLetKeepsItsTypeOnlyWhenEveryValueIsANumber;
+    procedure TestCapturedConstKeepsItsType;
+    procedure TestConstFunctionReturnTypeTypesCalls;
+    procedure TestCallResultStaysUntypedWhenReturnTypeIsNotProven;
+    procedure TestFallThroughMakesTheReturnTypeUntyped;
     procedure TestForOfSkipsHandlerWithoutAbruptClose;
     procedure TestForOfUsesHandlerForExpressionBody;
     procedure TestForOfUsesOneIteratorCloseHandler;
@@ -204,6 +294,9 @@ type
     procedure TestConstSelfIncrementUsesGenericAssignment;
     procedure TestGlobalBackedCountedForLimitIsNotSnapshotted;
     procedure TestIfAndConditionalLessThanUseJumpIfNotLt;
+    procedure TestConstantOperandComparisonsUseImmediateJumps;
+    procedure TestConstantOperandComparisonsKeepGenericForms;
+    procedure TestHugeConstantComparisonCompilesWithInvalidOpUnmasked;
     procedure TestLessThanValueKeepsGenericCompare;
     procedure TestConstantIfEliminatesBranch;
     procedure TestConstantIfPrunesAbruptTail;
@@ -238,6 +331,32 @@ begin
     TestScriptTopLevelDeclarationsCompileInLinearTime);
   Test('Module top-level declarations compile in linear time',
     TestModuleTopLevelDeclarationsCompileInLinearTime);
+  Test('Top-level calls among many bindings compile in linear time',
+    TestTopLevelCallsCompileInLinearTime);
+  Test('A closure that captures many bindings compiles in linear time',
+    TestManyCapturedBindingsCompileInLinearTime);
+  Test('Direct eval code among many captured bindings compiles in linear time',
+    TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime);
+  Test('Parameter lists parse and compile in linear time',
+    TestParameterListsParseAndCompileInLinearTime);
+  Test('Destructuring patterns compile in linear time',
+    TestDestructuringPatternsCompileInLinearTime);
+  Test('Chains of binary operators compile in time linear in their length',
+    TestOperatorChainsCompileInLinearTime);
+  Test('Chains of binary operators fold the constants they start with',
+    TestOperatorChainsFoldTheirConstantStart);
+  Test('Right-nested and unary chains compile in time linear in their length',
+    TestNestedChainsCompileInLinearTime);
+  Test('Right-nested and unary chains fold the constant operands inside them',
+    TestNestedChainsFoldTheirConstantOperands);
+  Test('A switch with a declaration in each case clause compiles in linear time',
+    TestSwitchCaseDeclarationsCompileInLinearTime);
+  Test('TypeScript comparison chains parse in time linear in the code after them',
+    TestTypeScriptComparisonChainsParseInLinearTime);
+  Test('A branch past a 16-bit jump offset compiles in the time of short ones',
+    TestLongBranchesCompileOnce);
+  Test('SlotHoldsLocal follows the declared and dropped locals',
+    TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
     TestEndingABlockRestoresTheBindingItShadowed);
   Test('Var and slot lookups find the oldest local of a name',
@@ -310,6 +429,8 @@ begin
     TestInitializerReachingItsBindingKeepsCopy);
   Test('Lexical TDZ holes are set once, and only where observable',
     TestLexicalHolesSetOnlyWhereObservable);
+  Test('compound += and -= of a small integer use immediates',
+    TestCompoundSmallIntegerUsesImmediate);
   Test('this property read uses local register',
     TestThisPropertyReadUsesLocalRegister);
   Test('this property read retains derived-constructor guard',
@@ -335,6 +456,10 @@ begin
   Test('Binary loader rejects malformed artifacts',
     TestBinaryRejectsMalformedArtifacts);
   Test('Undeclared private name raises SyntaxError', TestUndeclaredPrivateNameRaisesSyntaxError);
+  Test('A bytecode limit raises a SyntaxError at the source that reached it',
+    TestBytecodeLimitRaisesSyntaxErrorAtSource);
+  Test('A long branch takes the long jump form in its own function only',
+    TestLongBranchTakesLongFormInItsFunctionOnly);
   Test('A compile after compiles that raised starts at nesting depth 0',
     TestCompileAfterRaisedCompileStartsAtNestingDepthZero);
   Test('Constant folds nested arithmetic', TestConstantFoldsNestedArithmetic);
@@ -365,6 +490,8 @@ begin
   Test('Annotated parameters use typed arithmetic', TestAnnotatedParametersUseTypedArithmetic);
   Test('Closed numeric Fibonacci uses superinstructions',
     TestClosedNumericFibonacciUsesSuperinstructions);
+  Test('Concise arrow body marks tail calls',
+    TestConciseArrowBodyMarksTailCalls);
   Test('Closed numeric scalar self-call supports only small arities',
     TestClosedNumericScalarSelfCallArityLimit);
   Test('Mixed or escaped calls cancel numeric proof',
@@ -388,6 +515,25 @@ begin
     TestReassignedLocalKeepsTypeOnlyWhenEveryValueIsNumber);
   Test('Return annotation does not type call result',
     TestReturnAnnotationDoesNotTypeCallResult);
+  Test('Unchecked strict binding does not type operands',
+    TestUncheckedStrictBindingDoesNotTypeOperands);
+  Test('Binary operator result types', TestBinaryOperatorResultTypes);
+  Test('Bitwise operator result types', TestBitwiseOperatorResultTypes);
+  Test('Unary operator result types', TestUnaryOperatorResultTypes);
+  Test('Integer type comes only from int32 and uint32 results',
+    TestIntegerTypeComesOnlyFromInt32Results);
+  Test('Math calls are not trusted', TestMathCallsAreNotTrusted);
+  Test('Const type comes from the number proof',
+    TestConstTypeComesFromTheNumberProof);
+  Test('Let keeps its type only when every value is a Number',
+    TestLetKeepsItsTypeOnlyWhenEveryValueIsANumber);
+  Test('Captured const keeps its type', TestCapturedConstKeepsItsType);
+  Test('Const function return type types calls',
+    TestConstFunctionReturnTypeTypesCalls);
+  Test('Call result stays untyped when the return type is not proven',
+    TestCallResultStaysUntypedWhenReturnTypeIsNotProven);
+  Test('Fall-through makes the return type untyped',
+    TestFallThroughMakesTheReturnTypeUntyped);
   Test('for-of skips handler without abrupt close', TestForOfSkipsHandlerWithoutAbruptClose);
   Test('for-of uses handler for expression body', TestForOfUsesHandlerForExpressionBody);
   Test('for-of uses one iterator-close handler', TestForOfUsesOneIteratorCloseHandler);
@@ -401,6 +547,12 @@ begin
     TestIfAndConditionalLessThanUseJumpIfNotLt);
   Test('less-than value keeps generic compare',
     TestLessThanValueKeepsGenericCompare);
+  Test('comparisons with an Int16 constant use immediate jumps',
+    TestConstantOperandComparisonsUseImmediateJumps);
+  Test('comparisons outside the immediate forms keep generic compares',
+    TestConstantOperandComparisonsKeepGenericForms);
+  Test('a comparison with a constant past Int64 compiles with invalid ' +
+    'operations unmasked', TestHugeConstantComparisonCompilesWithInvalidOpUnmasked);
   Test('Constant if eliminates branch', TestConstantIfEliminatesBranch);
   Test('Constant if prunes abrupt tail', TestConstantIfPrunesAbruptTail);
   Test('Coverage preserves constant branch shape', TestCoveragePreservesConstantBranch);
@@ -488,7 +640,10 @@ function TTestCompiler.CompileSource(
   const AEnableDeadBranchElimination: Boolean;
   const ATraditionalForLoops: Boolean;
   const ANonStrictMode: Boolean;
-  const AVarDeclarations: Boolean): TGocciaBytecodeModule;
+  const AVarDeclarations: Boolean;
+  const AFunctionKeyword: Boolean;
+  const ALabels: Boolean;
+  const AWhileLoops: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -502,9 +657,13 @@ begin
   Lexer := TGocciaLexer.Create(ASource, '<test>');
   SourceLines := CreateTextLines(ASource);
   Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
-  if ATraditionalForLoops or AVarDeclarations or ANonStrictMode then
+  if ATraditionalForLoops or AVarDeclarations or ANonStrictMode or
+     AFunctionKeyword or ALabels or AWhileLoops then
   begin
     ParserOptions := Parser.Options;
+    ParserOptions.FunctionDeclarationsEnabled := AFunctionKeyword;
+    ParserOptions.LabelStatementsEnabled := ALabels;
+    ParserOptions.WhileLoopsEnabled := AWhileLoops;
     ParserOptions.TraditionalForLoopsEnabled := ATraditionalForLoops;
     ParserOptions.VarDeclarationsEnabled := AVarDeclarations;
     // The parser marks a function that contains a sloppy direct eval; the
@@ -861,33 +1020,46 @@ begin
   end;
 end;
 
-{ The fastest of LINEAR_TRIALS compiles of ACount top-level declarations,
-  each ALinePattern formatted with its index; the parse is not timed. }
+{ The fastest of LINEAR_TRIALS compiles of ACount lines, each ALinePattern
+  formatted with its index, between the lines APrefix and ASuffix; the parse
+  is not timed. }
 function TTestCompiler.CompileNanoseconds(const ALinePattern: string;
-  const AGlobalBackedTopLevel: Boolean; const ACount: Integer): Int64;
+  const AGlobalBackedTopLevel: Boolean; const ACount: Integer;
+  const APrefix, ASuffix: string): Int64;
 var
   Source: TStringBuffer;
+  I: Integer;
+begin
+  Source := TStringBuffer.Create;
+  if APrefix <> '' then
+    Source.Append(APrefix + LineEnding);
+  for I := 0 to ACount - 1 do
+    Source.Append(Format(ALinePattern, [I]) + LineEnding);
+  if ASuffix <> '' then
+    Source.Append(ASuffix + LineEnding);
+  Result := SourceCompileNanoseconds(Source.ToString, AGlobalBackedTopLevel);
+end;
+
+{ The fastest of LINEAR_TRIALS compiles of ASourceText; the parse is not
+  timed. }
+function TTestCompiler.SourceCompileNanoseconds(const ASourceText: string;
+  const AGlobalBackedTopLevel: Boolean; const AStrictTypes: Boolean): Int64;
+var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   ParserOptions: TGocciaParserOptions;
   ProgramNode: TGocciaProgram;
   Compiler: TGocciaCompiler;
   Module: TGocciaBytecodeModule;
-  SourceText: string;
   SourceLines: TStringList;
   Start, Elapsed: Int64;
-  I, Trial: Integer;
+  Trial: Integer;
 begin
-  Source := TStringBuffer.Create;
-  for I := 0 to ACount - 1 do
-    Source.Append(Format(ALinePattern, [I]) + LineEnding);
-  SourceText := Source.ToString;
-
   Result := High(Int64);
   for Trial := 1 to LINEAR_TRIALS do
   begin
-    Lexer := TGocciaLexer.Create(SourceText, '<test>');
-    SourceLines := CreateTextLines(SourceText);
+    Lexer := TGocciaLexer.Create(ASourceText, '<test>');
+    SourceLines := CreateTextLines(ASourceText);
     Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
     Compiler := TGocciaCompiler.Create('<test>');
     ProgramNode := nil;
@@ -899,6 +1071,7 @@ begin
       Parser.ApplyOptions(ParserOptions);
       ProgramNode := Parser.Parse;
       Compiler.GlobalBackedTopLevel := AGlobalBackedTopLevel;
+      Compiler.StrictTypes := AStrictTypes;
       Start := GetNanoseconds;
       Module := Compiler.Compile(ProgramNode);
       Elapsed := GetNanoseconds - Start;
@@ -954,6 +1127,850 @@ begin
   ExpectTopLevelCompileLinear(Baseline, 'var a%0:d = %0:d;', False);
   ExpectTopLevelCompileLinear(Baseline, 'function a%0:d() {}', False);
   ExpectTopLevelCompileLinear(Baseline, 'class A%0:d {}', False);
+end;
+
+{ A call compiled at a function's top level asks whether its destination
+  register holds a local. Answering by visiting every local made each call
+  cost time linear in the bindings before it, so a top-level call per
+  binding compiled in quadratic time (about 12 s here for 15,000). Each
+  shape is timed against the same declarations followed by a property read
+  of about the call's cost, which compiles no call. }
+procedure TTestCompiler.TestTopLevelCallsCompileInLinearTime;
+
+  procedure ExpectCallsCompileLinear(const ADeclarations, ARead,
+    ACall: string; const AGlobalBackedTopLevel: Boolean);
+  var
+    Baseline, Elapsed: Int64;
+  begin
+    Baseline := CompileNanoseconds(ADeclarations + ' ' + ARead,
+      AGlobalBackedTopLevel);
+    Elapsed := CompileNanoseconds(ADeclarations + ' ' + ACall,
+      AGlobalBackedTopLevel);
+    if Elapsed > LINEAR_COMPILE_RATIO * Baseline +
+       LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d lines "%s %s" took %d ms to compile against %d ms ' +
+        'with "%s" in place of the call', [LINEAR_DECLARATION_COUNT,
+        ADeclarations, ACall, Elapsed div 1000000, Baseline div 1000000,
+        ARead]));
+    Expect<Boolean>(Elapsed <=
+      LINEAR_COMPILE_RATIO * Baseline + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f.a%0:d;', 'f(a%0:d);',
+    False);
+  ExpectCallsCompileLinear('let a%0:d = %0:d;', 'f.a%0:d;', 'f(a%0:d);',
+    True);
+  // Functions that write a module-scope binding, each called at top level.
+  ExpectCallsCompileLinear(
+    'let a%0:d = 0; const w%0:d = () => { a%0:d = 1; };', 'w%0:d.a;',
+    'w%0:d();', False);
+end;
+
+// A function of p with ABindings `let` bindings x0, x1, ..., and a closure
+// h in it that reads them in turn, AReads reads in all.
+function CapturedReadsSource(const ABindings, AReads: Integer): string;
+var
+  Source: TStringBuffer;
+  Index: Integer;
+begin
+  Source := TStringBuffer.Create;
+  Source.Append('const f = (p) => {' + LineEnding);
+  for Index := 0 to ABindings - 1 do
+    Source.Append(Format('let x%d = p + %d;', [Index, Index]) + LineEnding);
+  Source.Append('const h = () => {' + LineEnding);
+  for Index := 0 to AReads - 1 do
+    Source.Append(Format('x%d;', [Index mod ABindings]) + LineEnding);
+  Source.Append('};' + LineEnding + 'return h; };' + LineEnding);
+  Result := Source.ToString;
+end;
+
+{ A closure resolves a captured binding at each read, and finding its
+  upvalue visited every upvalue before it: a closure reading thousands of
+  captured bindings compiled in time quadratic in them. }
+procedure TTestCompiler.TestManyCapturedBindingsCompileInLinearTime;
+var
+  Few, Many: Int64;
+begin
+  Few := SourceCompileNanoseconds(CapturedReadsSource(CAPTURE_FEW_BINDINGS,
+    CAPTURE_READS), False);
+  Many := SourceCompileNanoseconds(CapturedReadsSource(CAPTURE_MANY_BINDINGS,
+    CAPTURE_READS), False);
+  if Many > CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS then
+    Fail(Format('%d reads of %d captured bindings took %d ms to compile ' +
+      'against %d ms for %d', [CAPTURE_READS, CAPTURE_MANY_BINDINGS,
+      Many div 1000000, Few div 1000000, CAPTURE_FEW_BINDINGS]));
+  Expect<Boolean>(Many <=
+    CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+end;
+
+{ Direct eval code is compiled against its call site's record, which seeds
+  the calling closure's upvalues, and each name the eval code reads was
+  looked up among them by visiting them in turn. }
+procedure TTestCompiler.TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime;
+
+  // The eval code reads CAPTURE_READS div 4 bindings in turn, from a call
+  // site whose record lists ABindings bindings of enclosing functions, which
+  // the eval's caller has as upvalues. The record is built here: compiling
+  // a caller with that many bindings takes long for another reason.
+  function EvalCompileNanoseconds(const ABindings: Integer): Int64;
+  var
+    Reads: TStringBuffer;
+    EvalSource: string;
+    Caller, EvalModule: TGocciaBytecodeModule;
+    Site: TGocciaFunctionTemplate;
+    Env: TGocciaDirectEvalEnvironment;
+    Lexer: TGocciaLexer;
+    Parser: TGocciaParser;
+    ProgramNode: TGocciaProgram;
+    Compiler: TGocciaCompiler;
+    SourceLines: TStringList;
+    Index, Trial: Integer;
+    Start, Elapsed: Int64;
+  begin
+    Reads := TStringBuffer.Create;
+    for Index := 0 to CAPTURE_READS div 4 - 1 do
+      Reads.Append(Format('x%d;', [Index mod ABindings]));
+    EvalSource := Reads.ToString;
+    Result := High(Int64);
+    Caller := CompileSource('const f = () => () => eval("x");');
+    try
+      Site := FindTemplateWithDirectEval(Caller.TopLevel);
+      Expect<Boolean>(Assigned(Site)).ToBe(True);
+      if not Assigned(Site) then
+        Exit;
+      Env := Site.GetDirectEvalEnvironment(0);
+      SetLength(Env.Bindings, ABindings);
+      for Index := 0 to ABindings - 1 do
+      begin
+        Env.Bindings[Index] := Default(TGocciaDirectEvalBindingInfo);
+        Env.Bindings[Index].Name := Format('x%d', [Index]);
+        Env.Bindings[Index].Kind := debUpvalue;
+        Env.Bindings[Index].Index := Index;
+      end;
+      for Trial := 1 to LINEAR_TRIALS do
+      begin
+        Lexer := TGocciaLexer.Create(EvalSource, '<eval>');
+        SourceLines := CreateTextLines(EvalSource);
+        Parser := TGocciaParser.CreateFromLexer(Lexer, '<eval>', SourceLines);
+        ProgramNode := Parser.Parse;
+        Compiler := TGocciaCompiler.Create('<eval>');
+        EvalModule := nil;
+        try
+          Start := GetNanoseconds;
+          EvalModule := Compiler.CompileDirectEval(ProgramNode, Env, True,
+            nil);
+          Elapsed := GetNanoseconds - Start;
+          Expect<Integer>(EvalModule.TopLevel.UpvalueCount).ToBe(ABindings);
+        finally
+          EvalModule.Free;
+          Compiler.Free;
+          ProgramNode.Free;
+          Parser.Free;
+          SourceLines.Free;
+          Lexer.Free;
+        end;
+        if Elapsed < Result then
+          Result := Elapsed;
+      end;
+    finally
+      Caller.Free;
+    end;
+  end;
+
+var
+  Few, Many: Int64;
+begin
+  Few := EvalCompileNanoseconds(CAPTURE_FEW_BINDINGS);
+  Many := EvalCompileNanoseconds(CAPTURE_MANY_BINDINGS);
+  if Many > CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS then
+    Fail(Format('Eval code reading %d of %d captured bindings took %d ms to ' +
+      'compile against %d ms among %d', [CAPTURE_READS div 4,
+      CAPTURE_MANY_BINDINGS, Many div 1000000, Few div 1000000,
+      CAPTURE_FEW_BINDINGS]));
+  Expect<Boolean>(Many <=
+    CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+end;
+
+{ APattern with its %s replaced by a list of AItem formatted with each index,
+  parsed and compiled at ACount items and at twice as many. The two
+  lengths alternate over LINEAR_TRIALS trials, and the fastest parse and
+  compile of each are compared, so a busy machine slows both alike. }
+procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
+  const ACount: Integer);
+
+  function NameList(const ACount: Integer): string;
+  var
+    Buffer: TStringBuffer;
+    I: Integer;
+  begin
+    Buffer := TStringBuffer.Create;
+    for I := 0 to ACount - 1 do
+    begin
+      if I > 0 then
+        Buffer.Append(', ');
+      Buffer.Append(Format(AItem, [I]));
+    end;
+    Result := Buffer.ToString;
+  end;
+
+  procedure ParseAndCompile(const ASource: string;
+    out AParseNanoseconds, ACompileNanoseconds: Int64);
+  var
+    Lexer: TGocciaLexer;
+    Parser: TGocciaParser;
+    ParserOptions: TGocciaParserOptions;
+    ProgramNode: TGocciaProgram;
+    Compiler: TGocciaCompiler;
+    Module: TGocciaBytecodeModule;
+    SourceLines: TStringList;
+    Start: Int64;
+  begin
+    Lexer := TGocciaLexer.Create(ASource, '<test>');
+    SourceLines := CreateTextLines(ASource);
+    Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
+    Compiler := TGocciaCompiler.Create('<test>');
+    ProgramNode := nil;
+    Module := nil;
+    try
+      ParserOptions := Parser.Options;
+      ParserOptions.VarDeclarationsEnabled := True;
+      ParserOptions.FunctionDeclarationsEnabled := True;
+      ParserOptions.TraditionalForLoopsEnabled := True;
+      Parser.ApplyOptions(ParserOptions);
+      Start := GetNanoseconds;
+      ProgramNode := Parser.Parse;
+      AParseNanoseconds := GetNanoseconds - Start;
+      Start := GetNanoseconds;
+      Module := Compiler.Compile(ProgramNode);
+      ACompileNanoseconds := GetNanoseconds - Start;
+    finally
+      Module.Free;
+      Compiler.Free;
+      ProgramNode.Free;
+      Parser.Free;
+      SourceLines.Free;
+      Lexer.Free;
+    end;
+  end;
+
+  function DoublingBound(const AShorter: Int64): Int64;
+  begin
+    Result := AShorter * NAME_LIST_DOUBLING_PERCENT div 100 +
+      LINEAR_SLACK_NANOSECONDS;
+  end;
+
+var
+  Shorter, Longer: string;
+  ShorterParse, ShorterCompile, LongerParse, LongerCompile,
+    ParseTime, CompileTime: Int64;
+  Trial: Integer;
+begin
+  Shorter := Format(APattern, [NameList(ACount)]);
+  Longer := Format(APattern, [NameList(2 * ACount)]);
+  ShorterParse := High(Int64);
+  ShorterCompile := High(Int64);
+  LongerParse := High(Int64);
+  LongerCompile := High(Int64);
+  for Trial := 1 to LINEAR_TRIALS do
+  begin
+    ParseAndCompile(Shorter, ParseTime, CompileTime);
+    ShorterParse := Min(ShorterParse, ParseTime);
+    ShorterCompile := Min(ShorterCompile, CompileTime);
+    ParseAndCompile(Longer, ParseTime, CompileTime);
+    LongerParse := Min(LongerParse, ParseTime);
+    LongerCompile := Min(LongerCompile, CompileTime);
+    if (LongerParse <= DoublingBound(ShorterParse)) and
+       (LongerCompile <= DoublingBound(ShorterCompile)) then
+      Break;
+  end;
+  if (LongerParse > DoublingBound(ShorterParse)) or
+     (LongerCompile > DoublingBound(ShorterCompile)) then
+    Fail(Format('"%s" with %d items "%s" took %d ms to parse and %d ms ' +
+      'to compile, against %d ms and %d ms with %d', [APattern,
+      2 * ACount, AItem, LongerParse div 1000000,
+      LongerCompile div 1000000, ShorterParse div 1000000,
+      ShorterCompile div 1000000, ACount]));
+  Expect<Boolean>(LongerParse <= DoublingBound(ShorterParse)).ToBe(True);
+  Expect<Boolean>(LongerCompile <= DoublingBound(ShorterCompile)).ToBe(True);
+end;
+
+{ The parse checks a parameter list's names for duplicates (ES2026 §15.1.1,
+  §15.3.1) and the compiler records them for the body (§10.2.11 step 5), each
+  once per name. }
+procedure TTestCompiler.TestParameterListsParseAndCompileInLinearTime;
+begin
+  ExpectNameListLinear('const g = (%s) => a0;', 'a%d');
+  ExpectNameListLinear('const g = async (%s, ...rest) => rest;', 'a%d');
+  ExpectNameListLinear('const g = function (%s) { return a0; };', 'a%d');
+  ExpectNameListLinear('function g(%s) { return a0; }', 'a%d');
+  ExpectNameListLinear('const o = { m(%s) { return a0; } };', 'a%d');
+  ExpectNameListLinear('class C { m(%s) { return a0; } }', 'a%d');
+  // A pattern parameter of an async arrow is searched for `await`; twice
+  // NAME_LIST_COUNT names would pass the parameter initialization's
+  // instruction limit.
+  ExpectNameListLinear('const g = async ({ %s }) => a0;', 'a%d',
+    NAME_LIST_COUNT div 2);
+end;
+
+{ The compiler collects a pattern's bound names, each once, wherever it
+  declares them (ES2026 §8.2.1 BoundNames), and the parse checks them
+  against each other in a static block and a for statement's let or const
+  (§15.7.1, §14.7.4.1). }
+procedure TTestCompiler.TestDestructuringPatternsCompileInLinearTime;
+begin
+  // Body/block lexical-name validation must remain linear as the list grows.
+  ExpectNameListLinear('function g() { let %s; }', 'b%d');
+  ExpectNameListLinear('const g = () => { let %s; };', 'b%d');
+  ExpectNameListLinear('class C { m() { let %s; } }', 'b%d');
+  ExpectNameListLinear('{ let %s; }', 'b%d');
+  ExpectNameListLinear('switch (0) { case 0: let %s; }', 'b%d');
+  ExpectNameListLinear('const g = (o) => { const { %s } = o; return b0; };',
+    'b%d');
+  ExpectNameListLinear('const g = (o) => { let [%s] = o; return b0; };',
+    'b%d');
+  ExpectNameListLinear('const g = (o) => { var { %s } = o; return b0; };',
+    'b%d');
+  ExpectNameListLinear('const { %s } = {};', 'b%d');
+  ExpectNameListLinear(
+    'const g = (o) => { for (const { %s } of o) { return b0; } };', 'b%d');
+  ExpectNameListLinear(
+    'const g = () => { try { g(); } catch ({ %s }) { return b0; } };', 'b%d');
+  ExpectNameListLinear(
+    'const g = (o) => { const { %s } = o; return b0; };', 'k%0:d: [b%0:d = %0:d]');
+  ExpectNameListLinear('class C { static { const { %s } = {}; } }', 'b%d');
+  ExpectNameListLinear('for (let { %s } = {}; false;) {}', 'b%d');
+end;
+
+{ An operator compiled as the operand of another used to work out its type
+  and try its constant value again from its whole subtree, so a chain of k
+  binary operators compiled in time quadratic in k: a function with 250
+  closures each summing 120 captured bindings took 3 s, and twice the terms
+  four times as long. Each shape compiles the same number of operators as
+  short chains and as long ones; their compile times must stay close. }
+procedure TTestCompiler.TestOperatorChainsCompileInLinearTime;
+
+  // Chains of ATerms terms, CHAIN_OPERATORS operators in all: AFirst, then
+  // AOperator and ATerm (formatted with the term's index modulo
+  // CHAIN_CAPTURED_BINDINGS) for each further term. Each chain is the body
+  // of an arrow function of p, or, with ACaptured, of a closure over that
+  // many `let` bindings of the function around it.
+  function ChainsSource(const AFirst, AOperator, ATerm: string;
+    const ATerms: Integer; const ACaptured: Boolean): string;
+  var
+    Source: TStringBuffer;
+    Chain, Index, Term: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    if ACaptured then
+    begin
+      Source.Append('const outer = (p) => {' + LineEnding);
+      for Index := 0 to CHAIN_CAPTURED_BINDINGS - 1 do
+        Source.Append(Format('let x%d = p + %d;', [Index, Index]) +
+          LineEnding);
+    end;
+    for Chain := 0 to CHAIN_OPERATORS div (ATerms - 1) - 1 do
+    begin
+      if ACaptured then
+        Source.Append(Format('const h%d = () => ', [Chain]))
+      else
+        Source.Append(Format('const f%d = (p) => ', [Chain]));
+      Source.Append(AFirst);
+      for Term := 1 to ATerms - 1 do
+        Source.Append(' ' + AOperator + ' ' +
+          Format(ATerm, [Term mod CHAIN_CAPTURED_BINDINGS]));
+      Source.Append(';' + LineEnding);
+    end;
+    if ACaptured then
+      Source.Append('return p; };' + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  procedure ExpectChainsCompileLinear(const AFirst, AOperator,
+    ATerm: string; const ACaptured: Boolean;
+    const AStrictTypes: Boolean = False);
+  var
+    Short, Long: Int64;
+  begin
+    Short := SourceCompileNanoseconds(ChainsSource(AFirst, AOperator, ATerm,
+      CHAIN_SHORT_TERMS, ACaptured), False, AStrictTypes);
+    Long := SourceCompileNanoseconds(ChainsSource(AFirst, AOperator, ATerm,
+      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR, ACaptured), False,
+      AStrictTypes);
+    if Long > CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d operators "%s %s %s" in chains of %d terms took %d ms ' +
+        'to compile against %d ms in chains of %d', [CHAIN_OPERATORS,
+        AFirst, AOperator, ATerm, CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR,
+        Long div 1000000, Short div 1000000, CHAIN_SHORT_TERMS]));
+    Expect<Boolean>(Long <=
+      CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  // A parameter: the operand types and the constant tries.
+  ExpectChainsCompileLinear('p', '+', 'p', False);
+  // An Int16 immediate on the right of every `+`.
+  ExpectChainsCompileLinear('p', '+', '1', False);
+  // A comparison's type needs no walk; only the constant tries remain.
+  ExpectChainsCompileLinear('p', '<', 'p', False);
+  // Closures summing captured bindings, the shape the slowdown was seen in.
+  ExpectChainsCompileLinear('x0', '+', 'x%d', True);
+  // Strict types try to simplify every operator by its operand types, and
+  // `x + ""` to x once x is a String.
+  ExpectChainsCompileLinear('p', '+', 'p', False, True);
+  ExpectChainsCompileLinear('p', '+', '""', False, True);
+end;
+
+{ CompileExpressionNode skips the constant tries of the left operands a
+  failed try already found not constant. The constant part at the start of a
+  chain is still a left operand of every operator above it, and must still
+  be folded when its turn comes. }
+procedure TTestCompiler.TestOperatorChainsFoldTheirConstantStart;
+
+  procedure ExpectFolded(const ASource: string; const AFolded: Int16;
+    const AOperators: Integer);
+  var
+    Module: TGocciaBytecodeModule;
+    Chain: TGocciaFunctionTemplate;
+  begin
+    Module := CompileSource(ASource);
+    try
+      Chain := Module.TopLevel.GetFunction(0);
+      Expect<Boolean>(HasLoadInt(Chain, AFolded)).ToBe(True);
+      Expect<Integer>(CountArithmeticOps(Chain)).ToBe(AOperators);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  // `k * 2 + k` is 12; the operators with p and the last k remain.
+  ExpectFolded('const k = 4; const f = (p) => k * 2 + k + p + k;', 12, 2);
+  ExpectFolded('const f = (p) => 1 + 2 + p + 3 + 4;', 3, 3);
+  ExpectFolded('const f = (p) => 2 * 3 * 4 + p + p + p + p;', 24, 4);
+end;
+
+{ In TypeScript, a '<' after a callee may open call-site type arguments,
+  and the parser scans ahead to see whether it does. In `p < p < p` the
+  depth of '<' never comes back to zero, so each scan went on to the bracket
+  around the chain, or to the end of the file, and lexed those tokens again:
+  40 chains of 120 terms took 5 s to lex and parse. A failed scan now decides
+  the '<' tokens after it as well. Four times the source parses in at most 8
+  times the time, where linear growth gives 4 and quadratic 16. }
+procedure TTestCompiler.TestTypeScriptComparisonChainsParseInLinearTime;
+const
+  GROWTH_RATIO = 8;
+
+  // ALines statements, each `const yN = ` and ATerms terms joined by '<', in
+  // the body of an arrow function or at the top level, and then ATail.
+  function ChainsSource(const ALines, ATerms: Integer;
+    const AInFunction: Boolean; const ATail: string): string;
+  var
+    Source: TStringBuffer;
+    Line, Term: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    if AInFunction then
+      Source.Append('const f = (p: number) => {' + LineEnding)
+    else
+      Source.Append('const p = 1;' + LineEnding);
+    for Line := 0 to ALines - 1 do
+    begin
+      Source.Append(Format('const y%d = p', [Line]));
+      for Term := 1 to ATerms - 1 do
+        Source.Append(' < p');
+      Source.Append(';' + LineEnding);
+    end;
+    Source.Append(ATail + LineEnding);
+    if AInFunction then
+      Source.Append('};' + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  function ParseNanoseconds(const ASource: string): Int64;
+  var
+    Lexer: TGocciaLexer;
+    Parser: TGocciaParser;
+    ProgramNode: TGocciaProgram;
+    SourceLines: TStringList;
+    Start, Elapsed: Int64;
+    Trial: Integer;
+  begin
+    Result := High(Int64);
+    for Trial := 1 to LINEAR_TRIALS do
+    begin
+      Lexer := TGocciaLexer.Create(ASource, '<test>.ts');
+      SourceLines := CreateTextLines(ASource);
+      Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>.ts', SourceLines);
+      ProgramNode := nil;
+      try
+        Start := GetNanoseconds;
+        ProgramNode := Parser.Parse;
+        Elapsed := GetNanoseconds - Start;
+      finally
+        ProgramNode.Free;
+        Parser.Free;
+        SourceLines.Free;
+        Lexer.Free;
+      end;
+      if Elapsed < Result then
+        Result := Elapsed;
+    end;
+  end;
+
+  procedure ExpectChainsParseLinear(const ALines, ATerms: Integer;
+    const AInFunction: Boolean; const ATail: string);
+  var
+    Small, Large: Int64;
+  begin
+    Small := ParseNanoseconds(ChainsSource(ALines, ATerms, AInFunction,
+      ATail));
+    Large := ParseNanoseconds(ChainsSource(4 * ALines, ATerms, AInFunction,
+      ATail));
+    if Large > GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d chains of %d terms took %d ms to parse against %d ms ' +
+        'for %d', [4 * ALines, ATerms, Large div 1000000, Small div 1000000,
+        ALines]));
+    Expect<Boolean>(Large <=
+      GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  // The shape the slowdown was seen in: long chains in a function body.
+  ExpectChainsParseLinear(8, 120, True, 'return p;');
+  // A division after the chains, which the scans lex as the start of a
+  // regular expression that does not end.
+  ExpectChainsParseLinear(8, 120, True, 'return p / 2;');
+  // Short chains at the top level, where each scan ran to the end of the
+  // file.
+  ExpectChainsParseLinear(250, 3, False, '');
+end;
+
+{ A chain that nests to the right, such as `1 + (2 + (3 + p))`, or a chain
+  of unary operators, such as `- - - p`, is tried as a constant at every
+  operator, and each try evaluated the operands below it again down to p;
+  `1 + x` also asked for the type of its whole right operand at every
+  operator. Both took time quadratic in the chain's length (3.8 s on `main`
+  for 19,200 operators in chains of 480, against about 50 ms now). The
+  shapes compile CHAIN_OPERATORS operators as chains of CHAIN_SHORT_TERMS
+  terms and as chains CHAIN_LENGTH_FACTOR times as long, with the bound of
+  TestOperatorChainsCompileInLinearTime. }
+procedure TTestCompiler.TestNestedChainsCompileInLinearTime;
+
+  // Chains of ATerms terms, CHAIN_OPERATORS operators in all, each the body
+  // of an arrow function of p: AOpen (formatted with the term's index) for
+  // each operator, then p, then AClose for each operator.
+  function NestedChainsSource(const AOpen, AClose: string;
+    const ATerms: Integer): string;
+  var
+    Source: TStringBuffer;
+    Chain, Term: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    for Chain := 0 to CHAIN_OPERATORS div (ATerms - 1) - 1 do
+    begin
+      Source.Append(Format('const f%d = (p) => ', [Chain]));
+      for Term := 1 to ATerms - 1 do
+        Source.Append(Format(AOpen, [Term]));
+      Source.Append('p');
+      for Term := 1 to ATerms - 1 do
+        Source.Append(AClose);
+      Source.Append(';' + LineEnding);
+    end;
+    Result := Source.ToString;
+  end;
+
+  procedure ExpectNestedChainsCompileLinear(const AOpen, AClose: string;
+    const AStrictTypes: Boolean = False);
+  var
+    Short, Long: Int64;
+  begin
+    Short := SourceCompileNanoseconds(NestedChainsSource(AOpen, AClose,
+      CHAIN_SHORT_TERMS), False, AStrictTypes);
+    Long := SourceCompileNanoseconds(NestedChainsSource(AOpen, AClose,
+      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR), False, AStrictTypes);
+    if Long > CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d operators "%s" in chains of %d terms took %d ms to ' +
+        'compile against %d ms in chains of %d', [CHAIN_OPERATORS, AOpen,
+        CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR, Long div 1000000,
+        Short div 1000000, CHAIN_SHORT_TERMS]));
+    Expect<Boolean>(Long <=
+      CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  // Int16 constants: the constant tries and the type of `1 + x`'s x.
+  ExpectNestedChainsCompileLinear('%d + (', ')');
+  // Constants outside the immediate path, and strings.
+  ExpectNestedChainsCompileLinear('%d.5 * (', ')');
+  ExpectNestedChainsCompileLinear('"s" + (', ')');
+  ExpectNestedChainsCompileLinear('- ', '');
+  ExpectNestedChainsCompileLinear('!', '');
+  ExpectNestedChainsCompileLinear('typeof ', '');
+  // Strict types also try to simplify `x + ""` and `!!b` at every operator.
+  ExpectNestedChainsCompileLinear('%d + (', ')', True);
+  ExpectNestedChainsCompileLinear('!', '', True);
+end;
+
+{ CompileExpressionNode skips the constant tries of the operands a failed
+  try already found not constant, on either side of a binary operator and
+  below a unary one. An operand beside them that is constant must still be
+  folded when its turn comes. }
+procedure TTestCompiler.TestNestedChainsFoldTheirConstantOperands;
+
+  procedure ExpectFolded(const ASource: string; const AFolded: Int16;
+    const AOperators: Integer);
+  var
+    Module: TGocciaBytecodeModule;
+    Chain: TGocciaFunctionTemplate;
+  begin
+    Module := CompileSource(ASource);
+    try
+      Chain := Module.TopLevel.GetFunction(0);
+      Expect<Boolean>(HasLoadInt(Chain, AFolded)).ToBe(True);
+      Expect<Integer>(CountArithmeticOps(Chain)).ToBe(AOperators);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  ExpectFolded('const f = (p) => 1 + (p + (2 + 3));', 5, 2);
+  ExpectFolded('const k = 4; const f = (p) => k * (p - (k * 2));', 8, 2);
+  ExpectFolded('const f = (p) => -(p + -(2 + 3));', -5, 1);
+  ExpectFolded('const f = (p) => 1 + (2 + (p + (3 * 4)));', 12, 3);
+end;
+
+{ The case clauses of a switch share one scope, so the compiler forgets
+  before each clause which of their bindings the clauses before it
+  initialized or gave a constant. Doing that by visiting every local of the
+  function made a switch with a `let` or `const` in each clause compile in
+  time quadratic in its clauses (about 0.45 s here for 4,000, 31 ms for
+  1,000). Each shape compiles 4,000 clauses in at most 8 times the time of
+  1,000, about 2.8 times per doubling where linear growth gives 2 and
+  quadratic 4, and within a few times the same clauses with their bodies in
+  braces, whose bindings live in a block of each clause. Both sizes stay
+  below about 5,400 clauses, past which the switch's first jumps need the
+  long form (TestLongBranchesCompileOnce). }
+procedure TTestCompiler.TestSwitchCaseDeclarationsCompileInLinearTime;
+const
+  SMALL_CLAUSES = 1000;
+  LARGE_CLAUSES = 4000;
+  GROWTH_RATIO = 8;
+  FLAT_CLAUSE = 'case %0:d: const s%0:d = %0:d; break;';
+  BRACED_CLAUSE = 'case %0:d: { const s%0:d = %0:d; break; }';
+
+  procedure ExpectSwitchCompilesLinear(const APrefix, ASuffix: string;
+    const AGlobalBackedTopLevel: Boolean);
+  var
+    Small, Large, Braced: Int64;
+  begin
+    Small := CompileNanoseconds(FLAT_CLAUSE, AGlobalBackedTopLevel,
+      SMALL_CLAUSES, APrefix, ASuffix);
+    Large := CompileNanoseconds(FLAT_CLAUSE, AGlobalBackedTopLevel,
+      LARGE_CLAUSES, APrefix, ASuffix);
+    Braced := CompileNanoseconds(BRACED_CLAUSE, AGlobalBackedTopLevel,
+      LARGE_CLAUSES, APrefix, ASuffix);
+    if Large > GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d clauses "%s" in "%s" took %d ms to compile against ' +
+        '%d ms for %d', [LARGE_CLAUSES, FLAT_CLAUSE, APrefix,
+        Large div 1000000, Small div 1000000, SMALL_CLAUSES]));
+    Expect<Boolean>(Large <=
+      GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+    if Large > LINEAR_COMPILE_RATIO * Braced + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d clauses "%s" in "%s" took %d ms to compile against ' +
+        '%d ms with braces', [LARGE_CLAUSES, FLAT_CLAUSE, APrefix,
+        Large div 1000000, Braced div 1000000]));
+    Expect<Boolean>(Large <=
+      LINEAR_COMPILE_RATIO * Braced + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', False);
+  ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', True);
+  ExpectSwitchCompilesLinear(
+    'const d = 1; const g = () => { switch (d) {', '} };', False);
+end;
+
+{ A conditional jump over a branch longer than its 16-bit offset holds takes
+  a long form. The compiler used to give it one by compiling the whole
+  program a second time, so a program cost twice as much to compile once one
+  of its branches passed the limit. Each shape here puts the same clauses or
+  statements in branches past the limit and in twice as many branches short
+  enough for the 16-bit offset; all sizes stay where the compile time grows
+  linearly. The long branches compile within 1.6 times the time of the short
+  ones (1.0 to 1.2 here, and 1.9 to 2.0 with the second compile), at a
+  script's top level, at a global-backed top level and in an arrow function.
+  The bound is a ratio alone: an absolute slack would let the second compile
+  pass on a machine fast enough for the slack to cover it. }
+procedure TTestCompiler.TestLongBranchesCompileOnce;
+const
+  LONG_BRANCH_RATIO_PERCENT = 160;
+  // Three switches of 6,000 clauses each need the long form, which starts
+  // at about 5,400; six of 3,000 do not.
+  CLAUSES = 18000;
+  LONG_SWITCHES = 3;
+  CLAUSE = 'case %0:d: const s%0:d = %0:d; break;';
+  // Two instructions each: 18,000 of them need the long form, which starts
+  // past 32,767 instructions, and 9,000 do not.
+  STATEMENTS = 36000;
+  LONG_IFS = 2;
+  STATEMENT = 'r = r + 1;';
+
+  { The CLAUSES clauses or STATEMENTS statements in ABranches switches or
+    ifs, between APrefix and ASuffix. }
+  function BranchSource(const ASwitch: Boolean; const ABranches: Integer;
+    const APrefix, ASuffix: string): string;
+  var
+    Source: TStringBuffer;
+    Count, Branch, I: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append(APrefix + LineEnding);
+    if ASwitch then
+      Count := CLAUSES
+    else
+      Count := STATEMENTS;
+    for Branch := 0 to ABranches - 1 do
+    begin
+      if ASwitch then
+        Source.Append('switch (d) {' + LineEnding)
+      else
+        Source.Append('if (d) {' + LineEnding);
+      for I := Branch * (Count div ABranches) to
+          (Branch + 1) * (Count div ABranches) - 1 do
+        if ASwitch then
+          Source.Append(Format(CLAUSE, [I]) + LineEnding)
+        else
+          Source.Append(STATEMENT + LineEnding);
+      Source.Append('}' + LineEnding);
+    end;
+    Source.Append(ASuffix + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  { The long-form jumps in ATemplate and the functions below it: a
+    conditional jump or handler push, an OP_JUMP over the next instruction,
+    and the OP_JUMP that reaches the branch's target. }
+  function CountLongFormJumps(const ATemplate: TGocciaFunctionTemplate): Integer;
+  var
+    I: Integer;
+  begin
+    Result := 0;
+    for I := 1 to ATemplate.CodeCount - 2 do
+      if not (JumpOperandOf(DecodeOp(ATemplate.GetInstruction(I - 1))) in
+           [gjoNone, gjoAx]) and
+         (DecodeOp(ATemplate.GetInstruction(I)) = Ord(OP_JUMP)) and
+         (DecodeAx(ATemplate.GetInstruction(I)) = 1) and
+         (DecodeOp(ATemplate.GetInstruction(I + 1)) = Ord(OP_JUMP)) then
+        Inc(Result);
+    for I := 0 to ATemplate.FunctionCount - 1 do
+      Inc(Result, CountLongFormJumps(ATemplate.GetFunction(I)));
+  end;
+
+  { ACheckShapes: whether to check that only the long branches take the
+    long form (CompileSource compiles one source the same for both kinds of
+    top level). }
+  procedure ExpectLongBranchesCompileOnce(const ASwitch: Boolean;
+    const ALongBranches: Integer; const APrefix, ASuffix: string;
+    const AGlobalBackedTopLevel, ACheckShapes: Boolean);
+  var
+    LongSource, ShortSource: string;
+    Module: TGocciaBytecodeModule;
+    Long, Short: Int64;
+  begin
+    LongSource := BranchSource(ASwitch, ALongBranches, APrefix, ASuffix);
+    ShortSource := BranchSource(ASwitch, 2 * ALongBranches, APrefix,
+      ASuffix);
+    if ACheckShapes then
+    begin
+      Module := CompileSource(LongSource);
+      try
+        Expect<Boolean>(CountLongFormJumps(Module.TopLevel) > 0).ToBe(True);
+      finally
+        Module.Free;
+      end;
+      Module := CompileSource(ShortSource);
+      try
+        Expect<Integer>(CountLongFormJumps(Module.TopLevel)).ToBe(0);
+      finally
+        Module.Free;
+      end;
+    end;
+
+    Long := SourceCompileNanoseconds(LongSource, AGlobalBackedTopLevel);
+    Short := SourceCompileNanoseconds(ShortSource, AGlobalBackedTopLevel);
+    if Long * 100 > LONG_BRANCH_RATIO_PERCENT * Short then
+      Fail(Format('%d long branches in "%s" took %d ms to compile against ' +
+        '%d ms in %d short ones', [ALongBranches, APrefix,
+        Long div 1000000, Short div 1000000, 2 * ALongBranches]));
+    Expect<Boolean>(Long * 100 <= LONG_BRANCH_RATIO_PERCENT * Short).ToBe(
+      True);
+  end;
+
+begin
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES, 'const d = 1;', '',
+    False, True);
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES, 'const d = 1;', '',
+    True, False);
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES,
+    'const d = 1; const g = () => {', '};', False, True);
+  // A parameter, since an if on a constant compiles to no jump.
+  ExpectLongBranchesCompileOnce(False, LONG_IFS,
+    'const g = (d) => { let r = 0;', 'return r; };', False, True);
+end;
+
+procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
+var
+  Scope: TGocciaCompilerScope;
+  Closed: TArray<UInt16>;
+  ClosedCount: Integer;
+  FirstSlot, VarSlot, BlockSlot, TempSlot: UInt16;
+begin
+  Scope := TGocciaCompilerScope.Create(nil, 0);
+  try
+    FirstSlot := Scope.DeclareLocal('a', False);
+    Expect<Boolean>(Scope.SlotHoldsLocal(FirstSlot)).ToBe(True);
+    TempSlot := Scope.AllocateRegister;
+    // A register allocated for a value is not a local's.
+    Expect<Boolean>(Scope.SlotHoldsLocal(TempSlot)).ToBe(False);
+    Scope.FreeRegister;
+    Expect<Boolean>(Scope.SlotHoldsLocal(1000)).ToBe(False);
+
+    Scope.BeginScope;
+    BlockSlot := Scope.DeclareLocal('b', False);
+    VarSlot := Scope.DeclareVarLocal('v');
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(True);
+    Expect<Boolean>(Scope.SlotHoldsLocal(VarSlot)).ToBe(True);
+    // The var, declared at depth 0, keeps the block's local from being
+    // dropped, and both keep their registers.
+    Scope.EndScope(Closed, ClosedCount);
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(True);
+    Expect<Boolean>(Scope.SlotHoldsLocal(VarSlot)).ToBe(True);
+  finally
+    Scope.Free;
+  end;
+
+  Scope := TGocciaCompilerScope.Create(nil, 0);
+  try
+    Scope.DeclareLocal('a', False);
+    Scope.BeginScope;
+    BlockSlot := Scope.DeclareLocal('b', False);
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(True);
+    Scope.EndScope(Closed, ClosedCount);
+    // The block's local is dropped with its block, and the register it had
+    // is free for a value again.
+    Expect<Boolean>(Scope.SlotHoldsLocal(BlockSlot)).ToBe(False);
+    Expect<Integer>(Scope.AllocateRegister).ToBe(BlockSlot);
+    Scope.FreeRegister;
+
+    // A caller's local rebuilt for a direct eval names its register.
+    Scope.DeclareCallerLocal('c', 40, False, False);
+    Expect<Boolean>(Scope.SlotHoldsLocal(40)).ToBe(True);
+    Expect<Boolean>(Scope.SlotHoldsLocal(39)).ToBe(False);
+  finally
+    Scope.Free;
+  end;
 end;
 
 { Each a distinct number outside the immediate range, so each takes its own
@@ -2241,11 +3258,52 @@ begin
   Expect<Integer>(HolesIn(
     'const f = (p) => { const r = () => b; const b = p + 1; return r; };'))
     .ToBe(1);
-  // A block sets its binding's hole on entry, and the declaration does not
-  // set it again.
+  // A block's leading binding that nothing can reach before its declaration
+  // completes gets no hole either, so a loop body sets none per iteration.
   Expect<Integer>(HolesIn(
     'const f = (p) => { if (p) { let c = p + 1; return c; } return 0; };'))
+    .ToBe(0);
+  // A block sets the hole of a binding an earlier initializer's arrow names,
+  // or one declared after another statement, on entry, and the declaration
+  // does not set it again.
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { if (p) { const r = () => c; let c = p + 1; return r; } return 0; };'))
     .ToBe(1);
+  Expect<Integer>(HolesIn(
+    'const f = (p) => { if (p) { p.x = 1; let c = p + 1; return c; } return 0; };'))
+    .ToBe(1);
+end;
+
+procedure TTestCompiler.TestCompoundSmallIntegerUsesImmediate;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  // x holds only Numbers and no closure can rebind it: += 1 and -= 300 add
+  // immediates.
+  Module := CompileSource(
+    'const f = (p) => { let x = 0; if (p) { x = 5; } x += 1; x -= 300; return x; }; f(1);');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ADD_NUM_IMM);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_ADD_NUM_IMM)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_SUB_NUM_IMM)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_ADD) + CountOp(Func, OP_SUB) +
+        CountOp(Func, OP_ADD_FLOAT) + CountOp(Func, OP_SUB_FLOAT)).ToBe(0);
+    end;
+  finally
+    Module.Free;
+  end;
+  // A closure can store a String in x, so += keeps the generic operator.
+  Module := CompileSource(
+    'const f = (p) => { let x = 0; const g = () => { x = "s"; }; g(); x += 1; return x; }; f(1);');
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+  finally
+    Module.Free;
+  end;
 end;
 
 procedure TTestCompiler.TestInitializerReachingItsBindingKeepsCopy;
@@ -2716,6 +3774,10 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_GET_LOCAL_PROP_CONST))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_ADD_NUM_IMM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT_IMM))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_STRICT_EQ_IMM))).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_GT_IMM)).ToBe(False);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_GT_IMM)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CREATE_GLOBAL_IMPORT_BINDING))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CHECK_BINDING_INITIALIZED))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_THROW_UNDEFINED_VARIABLE))).ToBe(True);
@@ -2917,6 +3979,85 @@ begin
 
   Expect<Boolean>(Raised).ToBe(True);
   Expect<Boolean>(ContainsMessage).ToBe(True);
+end;
+
+procedure TTestCompiler.TestBytecodeLimitRaisesSyntaxErrorAtSource;
+
+  // The SyntaxError compiling ASource raises: its message, line and column.
+  procedure ExpectLimit(const ASource, AMessage: string;
+    const ALine, AColumn: Integer);
+  var
+    Raised: Boolean;
+    Message: string;
+    Line, Column: Integer;
+  begin
+    Raised := False;
+    Line := 0;
+    Column := 0;
+    try
+      CompileSource(ASource).Free;
+    except
+      on E: TGocciaSyntaxError do
+      begin
+        Raised := True;
+        Message := E.Message;
+        Line := E.Line;
+        Column := E.Column;
+      end;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Boolean>(Pos(AMessage, Message) > 0).ToBe(True);
+    Expect<Integer>(Line).ToBe(ALine);
+    Expect<Integer>(Column).ToBe(AColumn);
+  end;
+
+var
+  Args, Keys: string;
+  I: Integer;
+begin
+  Args := '';
+  for I := 1 to 70000 do
+    Args := Args + '0, ';
+  // The call's argument count is checked once its arguments are parsed, so
+  // the error names the call.
+  ExpectLimit('const f = (...a) => a.length;' + #10 + '  ' + #10 +
+    '  f(' + Args + '0);', 'Too many arguments in one call: more than 65535',
+    3, 3);
+
+  Keys := '';
+  for I := 0 to 69999 do
+    Keys := Keys + 'p' + IntToStr(I) + ': 0, ';
+  // A key's constant is added after its value is compiled, so the error
+  // names the object literal.
+  ExpectLimit('const o = {' + #10 + Keys + '};',
+    'Too many constants in one function: more than 65535', 1, 11);
+end;
+
+procedure TTestCompiler.TestLongBranchTakesLongFormInItsFunctionOnly;
+var
+  Body: string;
+  I: Integer;
+  Module: TGocciaBytecodeModule;
+  Small, Long: TGocciaFunctionTemplate;
+begin
+  Body := '';
+  for I := 1 to 40000 do
+    Body := Body + 'r = r + 1; ';
+  Module := CompileSource('const small = (k) => k ? 1 : 2;' + #10 +
+    'const long = (k) => { let r = 0; if (k) { ' + Body + '} return r; };');
+  try
+    Small := Module.TopLevel.GetFunction(0);
+    Long := Module.TopLevel.GetFunction(1);
+    // The short function's conditional jump keeps its one instruction, and
+    // the top level has no jump.
+    Expect<Integer>(CountOp(Small, OP_JUMP)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP)).ToBe(0);
+    // The if without an else has no OP_JUMP of its own: the two are its
+    // conditional jump's long form.
+    Expect<Integer>(CountOp(Long, OP_JUMP)).ToBe(2);
+  finally
+    Module.Free;
+  end;
 end;
 
 procedure TTestCompiler.TestConstantFoldsNestedArithmetic;
@@ -3476,6 +4617,77 @@ begin
   end;
 end;
 
+procedure TTestCompiler.TestConciseArrowBodyMarksTailCalls;
+
+  function TailCalls(const ATemplate: TGocciaFunctionTemplate): Integer;
+  var
+    I: Integer;
+    Instruction: UInt32;
+  begin
+    Result := 0;
+    for I := 0 to ATemplate.CodeCount - 1 do
+    begin
+      Instruction := ATemplate.GetInstruction(I);
+      if (TGocciaOpCode(DecodeOp(Instruction)) in [OP_CALL, OP_CALL_METHOD]) and
+         ((DecodeC(Instruction) and CALL_FLAG_TAIL) <> 0) then
+        Inc(Result);
+    end;
+    for I := 0 to ATemplate.FunctionCount - 1 do
+      Inc(Result, TailCalls(ATemplate.GetFunction(I)));
+  end;
+
+  procedure ExpectTailCalls(const ASource: string; const AExpected: Integer;
+    const ANonStrictMode: Boolean = False);
+  var
+    Module: TGocciaBytecodeModule;
+  begin
+    Module := CompileSource(ASource, False, False, False, True, True, True,
+      False, ANonStrictMode);
+    try
+      Expect<Integer>(TailCalls(Module.TopLevel)).ToBe(AExpected);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // ES2026 §15.10.2: the call, each branch of a conditional, the right
+  // operand of &&, || and ??, and the last operand of a comma expression.
+  ExpectTailCalls('const f = (n) => f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => n ? f(n - 1) : f(n - 2);', 2);
+  ExpectTailCalls('const f = (n) => n && f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => n || f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => n ?? f(n - 1);', 1);
+  ExpectTailCalls('const f = (n) => (n, f(n - 1));', 1);
+  ExpectTailCalls('const o = { f: (n) => o.f(n - 1) };', 1);
+  // Not in tail position: an operand, an argument, the condition.
+  ExpectTailCalls('const f = (n) => 1 + f(n - 1);', 0);
+  ExpectTailCalls('const f = (n) => [f(n - 1)];', 0);
+  ExpectTailCalls('const f = (n) => f(n - 1) ? 1 : 2;', 0);
+  ExpectTailCalls('const f = (n) => (f(n - 1), 1);', 0);
+  // IsInTailPosition (§15.10.1): never in sloppy code or an async body.
+  ExpectTailCalls('const f = async (n) => f(n - 1);', 0);
+  ExpectTailCalls('const f = (n) => f(n - 1);', 0, True);
+
+  // A closed numeric arrow with a tail self-call keeps ordinary frames: no
+  // frame may run above a closed numeric frame (ADR 0127).
+  Module := CompileSource(
+    'const run = () => {' +
+    '  const h = (n) => n <= 0 ? 0 : (n < 5 ? h(n - 1) : h(n - 1) + 1);' +
+    '  h(10);' +
+    '}; run();', False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CALL_SELF_NUM)).ToBe(0);
+    Expect<Integer>(TailCalls(Module.TopLevel)).ToBe(1);
+    // Its parameter is still a proven Number.
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(2);
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestClosedNumericFibonacciUsesSuperinstructions;
 var
   Module: TGocciaBytecodeModule;
@@ -3840,10 +5052,75 @@ begin
   try
     Expect<Integer>(CountOp(Module.TopLevel, OP_MUL_FLOAT)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_FLOAT)).ToBe(1);
-    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(2);
+    // `a += 2` adds an immediate, `a + b` adds two registers.
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
     Expect<Integer>(CountOp(Module.TopLevel, OP_ADD)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(0);
     Expect<Integer>(CountOp(Module.TopLevel, OP_MUL)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestUncheckedStrictBindingDoesNotTypeOperands;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // An annotated let declared without an initializer holds undefined, which
+  // no check has seen: its reads, a closure's reads, a const copied from it
+  // and a call returning it stay generic (#1912).
+  Module := CompileSource(
+    'let y: number; y + 1; 1 + y; y - 1; y + y;' +
+    'let z!: number; z + 1;' +
+    'const h = () => y + 1; const c = y; c + 1;' +
+    'const f = () => { let u: number; return u; }; f() + 1;',
+    True);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // The annotation is still enforced on every assignment.
+  Module := CompileSource('let y: number; y = 1; y = "x";', True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  // A rest parameter holds an array whatever its annotation names, so `+=`
+  // can concatenate and its result is checked.
+  Module := CompileSource(
+    'const r = (...xs: number) => xs - 1; const s = (...xs: number) => xs + 1;' +
+    'const t = (...xs: number) => { xs += 1; };',
+    True);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+
+  // A var holds undefined until its declaration runs, initializer or not.
+  Module := CompileSource('var v: number; v + 1; var w: number = 2; w - 1;',
+    True, False, False, True, True, True, False, False, True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(0);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // A checked initializer keeps the typed operator.
+  Module := CompileSource('let k: number = 1; k + 1;', True);
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_ADD_NUM_IMM)).ToBe(1);
   finally
     Module.Free;
   end;
@@ -3856,7 +5133,7 @@ begin
   // A return-type annotation is not checked, so neither a direct call nor a
   // call through a captured binding gets typed arithmetic from it.
   Module := CompileSource(
-    'const f = (): number => 1; f() + 1; f() + f();' +
+    'const f = (x): number => x; f() + 1; f() + f();' +
     'const g = () => f() - 1; g();',
     False, False, False, False, False, False);
   try
@@ -3871,7 +5148,7 @@ begin
   // Under strict types a binding initialized from the call is not enforced,
   // and an enforced binding checks a value computed from the call.
   Module := CompileSource(
-    'const f = (): number => 1; const r = f(); r + 1;' +
+    'const f = (x): number => x; const r = f(); r + 1;' +
     'let t: number = 0; t = t + f();',
     True, False, False, False, False, False);
   try
@@ -3882,6 +5159,523 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+function TTestCompiler.RecordedLocalTypes(const ASource: string;
+  const AStrictTypes: Boolean; const ANonStrictMode: Boolean): string;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  Result := '';
+  Module := CompileSource(ASource, AStrictTypes, False, False, False, False,
+    False, False, ANonStrictMode);
+  try
+    Func := Module.TopLevel.GetFunction(0);
+    for I := 0 to Func.LocalTypeCount - 1 do
+      case Func.GetLocalType(I) of
+        sltInteger: Result := Result + 'I';
+        sltFloat: Result := Result + 'F';
+        sltBoolean: Result := Result + 'B';
+        sltString: Result := Result + 'S';
+        sltReference: Result := Result + 'R';
+      end;
+  finally
+    Module.Free;
+  end;
+end;
+
+function TTestCompiler.InitializerTypes(const APrelude, AInitializer: string;
+  const AStrictTypes: Boolean): string;
+begin
+  Result := RecordedLocalTypes('const f = (a, b, o) => { ' + APrelude +
+    ' const r = ' + AInitializer + '; return r; };', AStrictTypes);
+end;
+
+procedure TTestCompiler.ExpectInitializerType(const APrelude, AInitializer,
+  AExpected: string);
+begin
+  Expect<string>(InitializerTypes(APrelude, AInitializer, False)).ToBe(AExpected);
+  Expect<string>(InitializerTypes(APrelude, AInitializer, True)).ToBe(AExpected);
+end;
+
+function TTestCompiler.CallResultIsTyped(const ADeclaration: string;
+  const AStrictTypes: Boolean; const ANonStrictMode: Boolean;
+  const ACaller: string): Boolean;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('const main = () => { ' + ADeclaration + ' ' +
+    ACaller + ' return g; };', AStrictTypes, False, False, False, False,
+    False, False, ANonStrictMode, False, True, True, True);
+  try
+    // g adds two results of f. Nothing else in the source adds.
+    Result := (CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT) = 1) and
+      (CountOpRecursive(Module.TopLevel, OP_ADD) = 0);
+    if not Result then
+      Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestBinaryOperatorResultTypes;
+const
+  Operators: array[0..4] of string = ('-', '*', '/', '%', '**');
+var
+  Op: string;
+begin
+  for Op in Operators do
+  begin
+    // One proven Number operand makes the result a Number: ToNumeric runs on
+    // both operands and a Number with a BigInt throws (ES2026 §13.15.3).
+    ExpectInitializerType('', 'a ' + Op + ' 2', 'F');
+    ExpectInitializerType('', '2 ' + Op + ' a', 'F');
+    ExpectInitializerType('', '"7" ' + Op + ' 2', 'F');
+    ExpectInitializerType('', '({ valueOf: () => 5 }) ' + Op + ' 2', 'F');
+    ExpectInitializerType('const big = 1n;', 'big ' + Op + ' 2', 'F');
+    ExpectInitializerType('', '(a ' + Op + ' 2) ' + Op + ' b', 'F');
+    // No operand is a proven Number: the operands may be BigInts, and then
+    // so is the result.
+    ExpectInitializerType('', 'a ' + Op + ' b', '');
+    ExpectInitializerType('const big = 1n;', 'big ' + Op + ' big', '');
+    ExpectInitializerType('', '"7" ' + Op + ' "2"', '');
+  end;
+
+  // + adds only when both operands are Numbers, and concatenates when either
+  // is a String; with an unknown operand it can do either or add BigInts.
+  ExpectInitializerType('', '1 + 2', 'F');
+  ExpectInitializerType('', 'a + 1', '');
+  ExpectInitializerType('', '1 + a', '');
+  ExpectInitializerType('', 'a + b', '');
+  ExpectInitializerType('', '(a * 2) + b', '');
+  ExpectInitializerType('const big = 1n;', 'big + 1', '');
+  ExpectInitializerType('', 'a + "s"', 'S');
+  ExpectInitializerType('', '"s" + a', 'S');
+  ExpectInitializerType('', '"4" + 1', 'S');
+  ExpectInitializerType('', '1 + "4"', 'S');
+  ExpectInitializerType('', '`t${a}` + 2', 'S');
+  ExpectInitializerType('const big = 1n;', 'big + "s"', 'S');
+  ExpectInitializerType('', '(a * 2) + (b * 3)', 'F');
+
+  // Comparisons are Booleans.
+  ExpectInitializerType('', 'a < b', 'B');
+  ExpectInitializerType('', 'a === b', 'B');
+end;
+
+procedure TTestCompiler.TestBitwiseOperatorResultTypes;
+const
+  Operators: array[0..4] of string = ('&', '|', '^', '<<', '>>');
+var
+  Op: string;
+begin
+  for Op in Operators do
+  begin
+    // The result is an int32 unless both operands are BigInts, in which
+    // case it is a BigInt (ES2026 §6.1.6.1.9 to §6.1.6.1.11); a Number with
+    // a BigInt throws.
+    ExpectInitializerType('', 'a ' + Op + ' 0', 'I');
+    ExpectInitializerType('', '0 ' + Op + ' a', 'I');
+    ExpectInitializerType('', '(a * 1) ' + Op + ' b', 'I');
+    ExpectInitializerType('const big = 1n;', 'big ' + Op + ' 1', 'I');
+    ExpectInitializerType('', 'a ' + Op + ' b', '');
+    ExpectInitializerType('const big = 1n;', 'big ' + Op + ' big', '');
+  end;
+
+  // >>> is a uint32 for every pair of operands: two BigInts throw.
+  ExpectInitializerType('', 'a >>> b', 'I');
+  ExpectInitializerType('', 'a >>> 0', 'I');
+  ExpectInitializerType('const big = 1n;', 'big >>> 0n', 'I');
+end;
+
+procedure TTestCompiler.TestUnaryOperatorResultTypes;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // Unary + is ToNumber, which throws for a BigInt.
+  ExpectInitializerType('', '+a', 'F');
+  ExpectInitializerType('const big = 1n;', '+big', 'F');
+  ExpectInitializerType('', '+({ valueOf: () => "4" })', 'F');
+  // Unary - and ~ keep a Number a Number and turn a BigInt into a BigInt.
+  ExpectInitializerType('', '-(a * 1)', 'F');
+  ExpectInitializerType('', '-(-(a * 1))', 'F');
+  ExpectInitializerType('', '-(a | 0)', 'F');
+  ExpectInitializerType('', '-a', '');
+  ExpectInitializerType('const big = 1n;', '-big', '');
+  ExpectInitializerType('', '~(a * 1)', 'I');
+  ExpectInitializerType('', '~a', '');
+  ExpectInitializerType('const big = 1n;', '~big', '');
+  // A typed instruction takes those results as operands.
+  Module := CompileSource(
+    'const f = (a, b) => { return (+a) + (+b); };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+  // ! is a Boolean, typeof a String, and void and delete stay untyped.
+  ExpectInitializerType('', '!a', 'B');
+  ExpectInitializerType('', '!0', 'B');
+  ExpectInitializerType('', 'typeof a', 'S');
+  ExpectInitializerType('', 'void a', '');
+  ExpectInitializerType('', 'delete o.x', '');
+end;
+
+procedure TTestCompiler.TestIntegerTypeComesOnlyFromInt32Results;
+const
+  Operators: array[0..5] of string = ('+', '-', '*', '/', '%', '**');
+var
+  Op, Source: string;
+  I: Integer;
+begin
+  // Arithmetic is not closed over the integers: 5 / 2 has a fraction, 5 % 0
+  // is NaN, 2 ** -1 has a fraction, and a sum, a difference or a product can
+  // pass 2^1024 and become Infinity. Every arithmetic result is a Number.
+  for Op in Operators do
+    ExpectInitializerType('const x = a | 0; const y = b | 0;',
+      'x ' + Op + ' y', 'IIF');
+  ExpectInitializerType('', '(2147483647 | 0) + (2147483647 | 0)', 'F');
+  ExpectInitializerType('', '(-2147483648 | 0) - (2147483647 | 0)', 'F');
+  ExpectInitializerType('', '(a >>> 0) + (b >>> 0)', 'F');
+
+  // A conditional of integers is an integer, and of an integer and a Number
+  // a Number.
+  ExpectInitializerType('', 'a ? (a | 0) : (b | 0)', 'I');
+  ExpectInitializerType('', 'a ? (a | 0) : 1', 'F');
+  ExpectInitializerType('', 'a ? 1 : 2', 'F');
+  ExpectInitializerType('', 'a ? 1 : "s"', '');
+
+  // A chain of 1,100 constants that each double the one before reaches
+  // Infinity at the 1,025th, and Infinity - Infinity is NaN. Only the first
+  // one, a bitwise result, is an integer.
+  Source := 'const f = (n) => { const v0 = n | 0;';
+  for I := 1 to 1099 do
+    Source := Source + ' const v' + IntToStr(I) + ' = v' + IntToStr(I - 1) +
+      ' + v' + IntToStr(I - 1) + ';';
+  Source := Source + ' const w = v1099 - v1099; return w; };';
+  Expect<string>(RecordedLocalTypes(Source)).ToBe('I' + StringOfChar('F', 1100));
+  Expect<string>(RecordedLocalTypes(Source, True)).ToBe(
+    'I' + StringOfChar('F', 1100));
+end;
+
+procedure TTestCompiler.TestMathCallsAreNotTrusted;
+begin
+  // Math is a writable global binding, so no call on it has a known type.
+  ExpectInitializerType('', 'Math.round(a)', '');
+  ExpectInitializerType('', 'Math.min(a, b) + 1', '');
+  ExpectInitializerType('', 'Math.round(a) + 0.5', '');
+  ExpectInitializerType('', 'globalThis.Math.round(2) + 0.5', '');
+  ExpectInitializerType('', 'Math.round(a) + Math.round(b)', '');
+  // A member of Math is a read, not a call: 3 * Math.PI is a Number only
+  // because * with a Number operand is.
+  ExpectInitializerType('', '3 * Math.PI', 'F');
+  // A shadowing binding or a parameter named Math changes nothing.
+  ExpectInitializerType('const Math = { round: () => "r" };',
+    'Math.round(2) + 0.5', 'R');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (Math) => { const r = Math.max(1, 2) + 0.5; return r; };'
+    )).ToBe('');
+end;
+
+procedure TTestCompiler.TestConstTypeComesFromTheNumberProof;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // The scan proves a const a Number where the expression rules cannot: the
+  // old value of a Number binding, and an assignment to it.
+  ExpectInitializerType('let n = 1;', 'n++', 'FF');
+  ExpectInitializerType('let n = 1;', '(n -= 2)', 'FF');
+  ExpectInitializerType('let n = 1;', '(n = 5)', 'FF');
+  // Logical operators yield one of their operands: a Number only when both
+  // are. Only the proof knows, and it runs for a body that has only consts.
+  ExpectInitializerType('const k = 1;', 'k && 2', 'FF');
+  ExpectInitializerType('const k = 1;', 'k || 2', 'FF');
+  ExpectInitializerType('const k = 1;', 'k ?? 2', 'FF');
+  ExpectInitializerType('const k = 1;', 'k && a', 'F');
+  ExpectInitializerType('const k = 1;', 'a && k', 'F');
+  // A chain of consts whose initializers each have a Number operand.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { const x = a - 1; const y = x * 3; return y; };'
+    )).ToBe('FF');
+  // The binding the initializer reads is not a Number, so neither is it.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let n = 1; n = "s"; const r = n++; return r; };'
+    )).ToBe('');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let n = 1; n = "s"; const r = n++; return r; };',
+    True)).ToBe('F');
+  // Other initializers, and a destructuring pattern, give no type.
+  ExpectInitializerType('', 'a', '');
+  ExpectInitializerType('', 'o.x', '');
+  ExpectInitializerType('const { y } = o;', 'a', '');
+  ExpectInitializerType('const [z] = o;', 'a', '');
+  ExpectInitializerType('const { y } = o; const { w } = y;', 'a - 1', 'F');
+
+  // An initializer the expression rules type is not checked either.
+  Module := CompileSource(
+    'const f = (a) => { const x = a - 1; return x; };',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+  // The initializer is covered by the proof, so strict types do not check it.
+  Module := CompileSource(
+    'const f = (a) => { let n = 1; const r = n++; return r; };',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestLetKeepsItsTypeOnlyWhenEveryValueIsANumber;
+
+  function Additions(const ASource: string; const AStrictTypes: Boolean;
+    out AFloatAdditions: Integer): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+  begin
+    Module := CompileSource(ASource, AStrictTypes, False, False, False, False,
+      False);
+    try
+      AFloatAdditions := CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT);
+      Result := CountOpRecursive(Module.TopLevel, OP_ADD);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  Module: TGocciaBytecodeModule;
+  Floats, Generics: Integer;
+  Strict: Boolean;
+begin
+  for Strict in [False, True] do
+  begin
+    // Every assignment gives a Number: the let is a Number.
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a * 2; x = x - 1; return x; };', Strict
+      )).ToBe('F');
+    // One assignment of another type, directly or from a closure (the R is
+    // the closure's own binding), and it is not. Under strict types it is not enforced either: the initializer is
+    // not a literal form, so x stays free to hold the string.
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a * 2; x = "t"; return x; };', Strict
+      )).ToBe('');
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a * 2; const set = () => { x = "z"; };' +
+      ' return x; };', Strict)).ToBe('R');
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a; return x; };', Strict)).ToBe('');
+    Expect<string>(RecordedLocalTypes(
+      'const f = (a) => { let x = a * 2; if (a) { x = a; } return x; };',
+      Strict)).ToBe('');
+
+    // A closure reads a captured let that holds only Numbers typed, and one
+    // that a closure assigns untyped.
+    Generics := Additions(
+      'const f = (k) => { let n = k * 2; n = n - 1; return () => n + n; };',
+      Strict, Floats);
+    Expect<Integer>(Floats).ToBe(1);
+    Expect<Integer>(Generics).ToBe(0);
+    Generics := Additions(
+      'const f = (k) => { let n = k * 2; const set = () => { n = "z"; };' +
+      ' return () => n + n; };', Strict, Floats);
+    Expect<Integer>(Floats).ToBe(0);
+    Expect<Integer>(Generics).ToBe(1);
+    Generics := Additions(
+      'const f = (k) => { let n = k * 2; const bump = () => { n = n + 1; };' +
+      ' return () => n + n; };', Strict, Floats);
+    Expect<Integer>(Floats).ToBe(0);
+  end;
+
+  // The proof says Number, not integer: an integer initializer that is
+  // assigned a quotient later gives a Number, and so does one never assigned.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let x = a | 0; x = x / 2; return x; };')).ToBe('F');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let x = a | 0; x = x / 2; return x; };', True)).ToBe('F');
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { let x = a >>> 0; return x; };')).ToBe('F');
+  // A const keeps the exact type of its initializer.
+  Expect<string>(RecordedLocalTypes(
+    'const f = (a) => { const x = a | 0; return x; };')).ToBe('I');
+
+  // A literal initializer is the one profile difference. By default the let
+  // is a Number only if every assignment is; with strict types it is a
+  // Number whatever is assigned, and the assignment is checked.
+  Expect<string>(RecordedLocalTypes(
+    'const f = () => { let x = 1; x = "s"; return x; };')).ToBe('');
+  Expect<string>(RecordedLocalTypes(
+    'const f = () => { let x = 1; x = "s"; return x; };', True)).ToBe('F');
+  Expect<string>(RecordedLocalTypes(
+    'const f = () => { let x = 1; x = x + 1; return x; };')).ToBe('F');
+  Module := CompileSource('const f = () => { let x = 1; x = "s"; return x; };',
+    True, False, False, False, False, False);
+  try
+    Expect<Boolean>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE) > 0).ToBe(True);
+  finally
+    Module.Free;
+  end;
+  Module := CompileSource(
+    'const f = (a) => { let x = a * 2; x = x - 1; return x; };',
+    True, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_CHECK_TYPE)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestCapturedConstKeepsItsType;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  // A closure reads a captured const typed.
+  Module := CompileSource(
+    'const f = (k) => { const c = k * 3; return () => c + c; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(1);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // A closure compiled before the const is initialized cannot rely on it:
+  // the call throws a ReferenceError.
+  Module := CompileSource(
+    'const f = (k) => { const g = () => c + c; const c = k * 3; return g; };',
+    False, False, False, False, False, False);
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD_FLOAT)).ToBe(0);
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_ADD)).ToBe(1);
+  finally
+    Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstFunctionReturnTypeTypesCalls;
+var
+  Strict: Boolean;
+begin
+  for Strict in [False, True] do
+  begin
+    // Every return is a Number.
+    Expect<Boolean>(CallResultIsTyped('const f = (x) => x * 2;', Strict)).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = (x) => { if (x) { return x * 2; } return 0; };', Strict
+      )).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = (x) => { if (x) { return 1; } else { return 2; } };', Strict
+      )).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = (x) => { for (const i of x) { return i * 2; } return 0; };',
+      Strict)).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = function (x) { return x * 2; };', Strict)).ToBe(True);
+    // A function that returns a typed call, and a call from a closure.
+    Expect<Boolean>(CallResultIsTyped(
+      'const h = (x) => x * 2; const f = (x) => h(x) - 1;', Strict)).ToBe(True);
+    Expect<Boolean>(CallResultIsTyped('const f = (x) => x * 2;', Strict, False,
+      'const g = () => { const k = () => { const r = f(); return r + r; };' +
+      ' return k; };')).ToBe(True);
+    // A recursive call is untyped, but multiplying it by a Number is not.
+    Expect<Boolean>(CallResultIsTyped(
+      'const f = (x) => x <= 1 ? 1 : f(x - 1) * 2;', Strict)).ToBe(True);
+    // The call is a Number whatever the arguments are.
+    Expect<Boolean>(CallResultIsTyped('const f = (x) => x * 2;', Strict, False,
+      'const g = () => { const r = f("3"); return r + r; };')).ToBe(True);
+  end;
+end;
+
+procedure TTestCompiler.TestCallResultStaysUntypedWhenReturnTypeIsNotProven;
+
+  procedure ExpectUntyped(const ADeclaration: string;
+    const ANonStrictMode: Boolean = False;
+    const ACaller: string =
+      'const g = () => { const r = f(); return r + r; };');
+  var
+    Strict: Boolean;
+  begin
+    for Strict in [False, True] do
+      Expect<Boolean>(CallResultIsTyped(ADeclaration, Strict, ANonStrictMode,
+        ACaller)).ToBe(False);
+  end;
+
+begin
+  // Two return types, an unknown one, and a return without a value.
+  ExpectUntyped('const f = (x) => x ? 1 : "s";');
+  ExpectUntyped('const f = (x) => { if (x) { return 1; } return "s"; };');
+  ExpectUntyped('const f = (x) => { return x; };');
+  ExpectUntyped('const f = (x) => { if (x) { return 1; } return; };');
+  ExpectUntyped('const f = (x) => { return; };');
+  ExpectUntyped('const f = (x) => { throw x; };');
+  ExpectUntyped('const f = (x) => 5n;');
+  ExpectUntyped('const f = (x) => ({});');
+  ExpectUntyped('const f = (x) => { try { return 1; } finally { return "s"; } };');
+  // A Number and a BigInt: the sum of the two results must stay generic.
+  ExpectUntyped('const f = (x) => x ? 1 : 5n;');
+  // A function that calls itself is untyped inside its own body.
+  ExpectUntyped('const f = (x) => x <= 1 ? 1 : x * f(x - 1);');
+  // An async arrow returns a promise, and so does an async function. A
+  // generator function returns a generator.
+  ExpectUntyped('const f = async () => 1;');
+  ExpectUntyped('const f = async function () { return 1; };');
+  ExpectUntyped('const f = function* () { return 1; };');
+  // A let binding can be reassigned, and a parameter or an inner const of
+  // the same name is another function.
+  ExpectUntyped('let f = () => 1;');
+  ExpectUntyped('let f = () => 1; f = () => "s";');
+  ExpectUntyped('const f = () => 1;', False,
+    'const g = (f) => { const r = f(); return r + r; };');
+  ExpectUntyped('const f = () => 1;', False,
+    'const g = () => { const f = () => "s"; const r = f(); return r + r; };');
+  // An optional call is not a plain call, and neither is a call of a member.
+  ExpectUntyped('const f = () => 1;', False,
+    'const g = () => { const r = f?.(); return r + r; };');
+  ExpectUntyped('const f = () => 1; const o = { f };', False,
+    'const g = () => { const r = o.f(); return r + r; };');
+  // A with object can supply the callee, and a sloppy direct eval can
+  // declare a var of the same name.
+  ExpectUntyped('const f = () => 1;', True,
+    'const g = (o) => { with (o) { const r = f(); return r + r; } };');
+  ExpectUntyped('const f = () => 1;', True,
+    'const g = () => { eval("var f = () => 1"); const r = f(); return r + r; };');
+end;
+
+procedure TTestCompiler.TestFallThroughMakesTheReturnTypeUntyped;
+
+  procedure ExpectUntypedReturn(const ADeclaration: string);
+  var
+    Strict: Boolean;
+  begin
+    for Strict in [False, True] do
+      Expect<Boolean>(CallResultIsTyped(ADeclaration, Strict)).ToBe(False);
+  end;
+
+begin
+  // A function that can reach the end of its body returns undefined there.
+  ExpectUntypedReturn('const f = (x) => { if (x) { return 1; } };');
+  ExpectUntypedReturn(
+    'const f = (x) => { if (x) { return 1; } else { if (x === 2) { return 2; } } };');
+  ExpectUntypedReturn(
+    'const f = (x) => { switch (x) { case 1: return 1; case 2: break; } };');
+  ExpectUntypedReturn(
+    'const f = (x) => { try { if (x) { throw x; } return 1; } catch (e) { } };');
+  ExpectUntypedReturn(
+    'const f = (x) => { for (const i of x) { return i * 2; } };');
+  ExpectUntypedReturn('const f = (x) => { x * 2; };');
+  // A try statement is never known to end abruptly, so one that returns in
+  // every path still counts as one that can fall through.
+  ExpectUntypedReturn(
+    'const f = (x) => { try { return x * 1; } finally { x = 0; } };');
 end;
 
 procedure TTestCompiler.TestForOfSkipsHandlerWithoutAbruptClose;
@@ -4034,6 +5828,105 @@ begin
     Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP_IF_NOT_LT)).ToBe(0);
   finally
     Module.Free;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantOperandComparisonsUseImmediateJumps;
+const
+  Cases: array[0..9] of string = (
+    'const f = (a) => { if (a < 50) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (a > 500) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (a <= -3) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (a >= 0) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => { if (5 < a) { return "y"; } return "n"; }; f(1);',
+    'const f = (a) => a === 1 ? "y" : "n"; f(1);',
+    'const f = (a) => { if (a !== 32767) { return "y"; } return "n"; }; f(1);',
+    'const K = 4; const f = (a) => { if (a > K) { return "y"; } return "n"; }; f(1);',
+    'const f = (a, b) => { if (a === 1 || b === 2) { return "y"; } return "n"; }; f(1, 2);',
+    'const f = (a, b) => { if (a < 3 && b >= 2) { return "y"; } return "n"; }; f(1, 2);');
+  Expected: array[0..9] of TGocciaOpCode = (
+    OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM,
+    OP_JUMP_IF_NOT_GTE_IMM, OP_JUMP_IF_NOT_GT_IMM,
+    OP_JUMP_IF_NOT_STRICT_EQ_IMM, OP_JUMP_IF_STRICT_EQ_IMM,
+    OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_STRICT_EQ_IMM, OP_JUMP_IF_NOT_LT_IMM);
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  for I := Low(Cases) to High(Cases) do
+  begin
+    Module := CompileSource(Cases[I]);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, Expected[I]);
+      Expect<Boolean>(Assigned(Func)).ToBe(True);
+      if Assigned(Func) then
+      begin
+        // The comparison is one instruction: no Boolean is tested and no
+        // instruction loads the constant.
+        Expect<Integer>(CountOp(Func, OP_JUMP_IF_FALSE) +
+          CountOp(Func, OP_JUMP_IF_TRUE)).ToBe(0);
+        Expect<Integer>(CountOp(Func, OP_LOAD_INT)).ToBe(0);
+      end;
+    finally
+      Module.Free;
+    end;
+  end;
+end;
+
+procedure TTestCompiler.TestConstantOperandComparisonsKeepGenericForms;
+const
+  // A constant outside Int16, a fraction, a relational test jumping on
+  // true inside `||`, and a comparison whose value is kept.
+  Cases: array[0..3] of string = (
+    'const f = (a) => { if (a < 40000) { return 1; } return 0; }; f(1);',
+    'const f = (a) => { if (a < 0.5) { return 1; } return 0; }; f(1);',
+    'const f = (a, b) => { if (a < 3 || b) { return 1; } return 0; }; f(1, 2);',
+    'const f = (a) => { const c = a < 3; return c; }; f(1);');
+var
+  Module: TGocciaBytecodeModule;
+  I: Integer;
+begin
+  for I := Low(Cases) to High(Cases) do
+  begin
+    Module := CompileSource(Cases[I]);
+    try
+      Expect<Integer>(CountOpRecursive(Module.TopLevel,
+        OP_JUMP_IF_NOT_LT_IMM)).ToBe(0);
+    finally
+      Module.Free;
+    end;
+  end;
+end;
+
+procedure TTestCompiler.TestHugeConstantComparisonCompilesWithInvalidOpUnmasked;
+const
+  // A literal and a const binding past the Int64 range: an embedder can call
+  // the compiler outside the engine's masked floating-point scope, where
+  // truncating such a value raises EInvalidOp.
+  Cases: array[0..1] of string = (
+    'const f = (a) => { if (a < 1e30) { return 1; } return 0; }; f(1);',
+    'const K = -1e300; const f = (a) => { if (a < K) { return 1; } return 0; }; f(1);');
+var
+  Module: TGocciaBytecodeModule;
+  SavedMask: TFPUExceptionMask;
+  I: Integer;
+begin
+  SavedMask := GetExceptionMask;
+  SetExceptionMask(SavedMask - [exInvalidOp]);
+  try
+    for I := Low(Cases) to High(Cases) do
+    begin
+      Module := CompileSource(Cases[I]);
+      try
+        Expect<Integer>(CountOpRecursive(Module.TopLevel,
+          OP_JUMP_IF_NOT_LT_IMM)).ToBe(0);
+      finally
+        Module.Free;
+      end;
+    end;
+  finally
+    SetExceptionMask(SavedMask);
   end;
 end;
 
@@ -4229,14 +6122,15 @@ var
 begin
   // `var x;` inside `catch (x)` redeclares the function's var binding, but
   // `x` in the catch block is the catch parameter (ES2026 B.3.4). The var's
-  // enforced Number type stays on the var: the read after the try statement
-  // is typed, the catch parameter read is not.
+  // enforced Number type stays on the var: the assignment after the try
+  // statement is checked, the catch parameter's is not. (Reads of a var are
+  // never typed by its enforced type: it holds undefined until its
+  // declaration runs.)
   Module := CompileSource(
-    'var x = 1; try { throw "s"; } catch (x) { var x; x - 1; } x - 2;',
+    'var x = 1; try { throw "s"; } catch (x) { var x; x = "a"; } x = "b";',
     True, False, False, False, False, False, False, False, True);
   try
-    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB_NUM_IMM)).ToBe(1);
-    Expect<Integer>(CountOp(Module.TopLevel, OP_SUB)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_CHECK_TYPE)).ToBe(1);
   finally
     Module.Free;
   end;

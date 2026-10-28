@@ -3861,7 +3861,8 @@ console.log("--max-memory (maxBytes readonly)...");
 
 console.log("--max-stack (default overflow)...");
 {
-  const { exitCode, json } = runLoaderJson("const f = () => f(); f();\n");
+  // A block body: a concise `() => f()` is a proper tail call and never overflows.
+  const { exitCode, json } = runLoaderJson("const f = () => { f(); }; f();\n");
   if (exitCode !== 1) throw new Error(`Default overflow should exit 1, got ${exitCode}`);
   if (json.error?.type !== "RangeError") throw new Error(`Expected RangeError, got ${json.error?.type}`);
 }
@@ -3940,7 +3941,7 @@ const nativeReentryShapes: Record<string, string> = {
   "sort comparator": "const c = () => { n++; [2, 1].sort(c); return 0; }; try { [2, 1].sort(c); } catch (e) { console.log(e.name, n); }",
   "Reflect.construct": "class A { constructor() { n++; Reflect.construct(A, []); } } try { new A(); } catch (e) { console.log(e.name, n); }",
   "yield*": "const o = { *g() { n++; yield* o.g(); } }; try { o.g().next(); } catch (e) { console.log(e.name, n); }",
-  "map callback": "const f = () => { n++; [0].map(() => f()); }; try { f(); } catch (e) { console.log(e.name, n); }",
+  "map callback": "const f = () => { n++; [0].map(() => { f(); }); }; try { f(); } catch (e) { console.log(e.name, n); }",
 };
 const runNativeReentry = (shape: string, args: string[]) => {
   const run = Bun.spawnSync([RUNNER, "--max-memory=256MiB", ...args], {

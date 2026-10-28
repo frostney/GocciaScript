@@ -124,6 +124,15 @@ function EmitJumpIfNotLessThan(const ACtx: TGocciaCompilationContext;
   const ALeftReg, ARightReg: UInt16): Integer;
 procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
   const AIndex: Integer);
+{ The offset of a jump with a signed 16-bit (sBx or C) or 24-bit (Ax)
+  operand. An offset that does not fit raises EGocciaBytecodeLimit, so a
+  jump is never written to the wrong place. }
+function SignedJumpOffset16(const AOffset: Integer): Int16;
+function SignedJumpOffset24(const AOffset: Integer): Int32;
+{ A conditional jump back to ATarget, in the long form when the offset does
+  not fit the instruction's signed 16-bit one. }
+procedure EmitBackwardConditionalJump(const ACtx: TGocciaCompilationContext;
+  const AOp: TGocciaOpCode; const AReg: UInt16; const ATarget: Integer);
 function CurrentCodePosition(const ACtx: TGocciaCompilationContext): Integer;
 
 function TokenTypeToRuntimeOp(
@@ -138,7 +147,28 @@ function ShortCircuitJumpOp(
 implementation
 
 uses
-  TextSemantics;
+  TextSemantics,
+
+  Goccia.Error.Messages;
+
+procedure RaiseJumpLimit(const ALimit: Integer);
+begin
+  raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeJumpLimit, [ALimit]);
+end;
+
+function SignedJumpOffset16(const AOffset: Integer): Int16;
+begin
+  if (AOffset < Low(Int16)) or (AOffset > High(Int16)) then
+    RaiseJumpLimit(High(Int16));
+  Result := Int16(AOffset);
+end;
+
+function SignedJumpOffset24(const AOffset: Integer): Int32;
+begin
+  if (AOffset < -AX_JUMP_OFFSET_LIMIT) or (AOffset > AX_JUMP_OFFSET_LIMIT) then
+    RaiseJumpLimit(AX_JUMP_OFFSET_LIMIT);
+  Result := AOffset;
+end;
 
 // ES2026 §15.7.14 ClassDefinitionEvaluation runs the class body with the
 // class's PrivateEnvironment, so a function or class created by code in the
@@ -236,12 +266,34 @@ begin
       UInt32(ACtx.Template.CodeCount), ALocation.Line, ALocation.Column);
 end;
 
+procedure EmitBackwardConditionalJump(const ACtx: TGocciaCompilationContext;
+  const AOp: TGocciaOpCode; const AReg: UInt16; const ATarget: Integer);
+var
+  Offset: Integer;
+begin
+  Offset := ATarget - CurrentCodePosition(ACtx) - 1;
+  // A register past 255 puts an OP_WIDE prefix before the jump, which is then
+  // one instruction further from ATarget.
+  if AReg > High(UInt8) then
+    Dec(Offset);
+  if Offset >= Low(Int16) then
+  begin
+    EmitInstruction(ACtx, EncodeAsBx(AOp, AReg, Int16(Offset)));
+    Exit;
+  end;
+  // The jump takes the OP_JUMP after the next instruction, which skips it.
+  EmitInstruction(ACtx, EncodeAsBx(AOp, AReg, 1));
+  EmitInstruction(ACtx, EncodeAx(OP_JUMP, 1));
+  EmitInstruction(ACtx, EncodeAx(OP_JUMP,
+    SignedJumpOffset24(ATarget - CurrentCodePosition(ACtx) - 1)));
+end;
+
 function EmitJumpInstruction(const ACtx: TGocciaCompilationContext;
   const AOp: TGocciaOpCode; const AReg: UInt16): Integer;
 begin
   if AOp = OP_JUMP then
-    Result := EmitInstruction(ACtx, EncodeAx(AOp, 0))
-  else if (AOp = OP_PUSH_HANDLER) or (AOp = OP_PUSH_FINALLY_HANDLER) then
+    Exit(EmitInstruction(ACtx, EncodeAx(AOp, 0)));
+  if (AOp = OP_PUSH_HANDLER) or (AOp = OP_PUSH_FINALLY_HANDLER) then
     Result := EmitInstruction(ACtx, EncodeABx(AOp, AReg, 0))
   else if (AOp = OP_JUMP_IF_NULLISH) or (AOp = OP_JUMP_IF_NOT_NULLISH) then
     Result := EmitInstruction(ACtx,
@@ -270,75 +322,24 @@ procedure PatchJumpTarget(const ACtx: TGocciaCompilationContext;
   const AIndex: Integer);
 var
   Offset: Integer;
-  Instruction: UInt32;
-  Op: UInt16;
-  A, B: UInt16;
+  Operand: TGocciaJumpOperand;
+  HasPrefix: Boolean;
 begin
   Offset := CurrentCodePosition(ACtx) - AIndex - 1;
-  Instruction := ACtx.Template.GetInstruction(AIndex);
-  Op := DecodeOp(Instruction);
-
-  if TGocciaOpCode(Op) = OP_JUMP then
-    ACtx.Template.PatchInstruction(AIndex, EncodeAx(OP_JUMP, Offset))
-  else if (TGocciaOpCode(Op) = OP_PUSH_HANDLER) or
-          (TGocciaOpCode(Op) = OP_PUSH_FINALLY_HANDLER) then
+  Operand := JumpOperandOf(DecodeOp(ACtx.Template.GetInstruction(AIndex)));
+  HasPrefix := (AIndex > 0) and
+    (DecodeOp(ACtx.Template.GetInstruction(AIndex - 1)) = Ord(OP_WIDE));
+  if Operand = gjoAx then
+    Offset := SignedJumpOffset24(Offset)
+  else if not JumpOffsetFits(Operand, HasPrefix, Offset) then
   begin
-    A := DecodeA(Instruction);
-    if (AIndex > 0) and
-       (DecodeOp(ACtx.Template.GetInstruction(AIndex - 1)) = Ord(OP_WIDE)) then
-      A := A or (UInt16(DecodeA(
-        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
-    if (Offset < 0) or (Offset > High(UInt16)) then
-      raise Exception.Create('Handler jump offset exceeds 16-bit range');
-    ACtx.Template.PatchInstruction(AIndex,
-      EncodeABx(TGocciaOpCode(Op), A, UInt16(Offset)));
-  end
-  else if (TGocciaOpCode(Op) = OP_JUMP_IF_NULLISH) or
-          (TGocciaOpCode(Op) = OP_JUMP_IF_NOT_NULLISH) then
-  begin
-    A := DecodeA(Instruction);
-    B := DecodeB(Instruction);
-    if (AIndex > 0) and
-       (DecodeOp(ACtx.Template.GetInstruction(AIndex - 1)) = Ord(OP_WIDE)) then
-    begin
-      A := A or (UInt16(DecodeA(
-        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
-      B := B or (UInt16(DecodeB(
-        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
-    end;
-    if (Offset < 0) or (Offset > High(UInt16)) then
-      raise Exception.Create('Nullish jump offset exceeds 16-bit range');
-    ACtx.Template.PatchInstruction(AIndex,
-      EncodeABC(TGocciaOpCode(Op), A, B, UInt16(Offset)));
-  end
-  else if (TGocciaOpCode(Op) = OP_JUMP_IF_NUM_NOT_LTE_IMM) or
-          (TGocciaOpCode(Op) = OP_JUMP_IF_NOT_LT) then
-  begin
-    A := DecodeA(Instruction);
-    B := DecodeB(Instruction);
-    if (AIndex > 0) and
-       (DecodeOp(ACtx.Template.GetInstruction(AIndex - 1)) = Ord(OP_WIDE)) then
-    begin
-      A := A or (UInt16(DecodeA(
-        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
-      B := B or (UInt16(DecodeB(
-        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
-    end;
-    if (Offset < Low(Int16)) or (Offset > High(Int16)) then
-      raise Exception.Create('Numeric immediate jump offset exceeds 16-bit range');
-    ACtx.Template.PatchInstruction(AIndex,
-      EncodeABC(TGocciaOpCode(Op), A, B, UInt16(Int16(Offset))));
-  end
-  else
-  begin
-    A := DecodeA(Instruction);
-    if (AIndex > 0) and
-       (DecodeOp(ACtx.Template.GetInstruction(AIndex - 1)) = Ord(OP_WIDE)) then
-      A := A or (UInt16(DecodeA(
-        ACtx.Template.GetInstruction(AIndex - 1))) shl 8);
-    ACtx.Template.PatchInstruction(AIndex,
-      EncodeAsBx(TGocciaOpCode(Op), A, Int16(Offset)));
+    // A conditional jump or handler push out of reach is written as 0 and
+    // recorded for the long form, which TGocciaFunctionTemplate.RelaxFarJumps
+    // gives it once the function is compiled.
+    ACtx.Template.AddFarJump(AIndex, CurrentCodePosition(ACtx));
+    Offset := 0;
   end;
+  ACtx.Template.PatchJumpOffset(AIndex, Offset);
 end;
 
 function CurrentCodePosition(const ACtx: TGocciaCompilationContext): Integer;

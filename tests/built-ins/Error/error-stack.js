@@ -51,9 +51,17 @@ test("stack contains 'at' lines for call chain", () => {
 });
 
 test("stack traces through nested function calls", () => {
+  // Each caller binds the result before returning it: a call in tail position
+  // (ES2026 §15.10.2) would replace the caller's frame.
   const inner = () => new Error("deep");
-  const middle = () => inner();
-  const outer = () => middle();
+  const middle = () => {
+    const error = inner();
+    return error;
+  };
+  const outer = () => {
+    const error = middle();
+    return error;
+  };
   const error = outer();
   const lines = error.stack.split("\n");
   expect(lines.length >= 4).toBe(true);

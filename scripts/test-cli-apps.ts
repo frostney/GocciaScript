@@ -41,7 +41,7 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
-import { verifyAllocationProfiles } from "./test-cli-profiling";
+import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
@@ -806,7 +806,7 @@ await section("Bare Loader: tail-call optimization stays strict-mode only...", a
   // is bounded by --max-stack and throws RangeError.
   const src =
     "const f = (n) => (n === 0 ? 'done' : f(n - 1)); try { print(f(100000)); } catch (e) { print(e.constructor.name); }\n";
-  const proc = Bun.spawnSync([BARE, "--max-stack=1000"], {
+  const proc = Bun.spawnSync([BARE, "--max-stack=1000", "--compat-non-strict-mode"], {
     stdin: new TextEncoder().encode(src),
     stdout: "pipe",
     stderr: "pipe",
@@ -8234,6 +8234,10 @@ await section("Bundler: constants folding to Infinity, NaN and -0 compile + roun
 await section("Bundler: source and precompiled module graphs agree...", verifyAotModules);
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
+await section("Compile profiling: per-function parse and compile records...", verifyCompileProfiles);
+await section("Compile profiling: every counter grows with its shape...", verifyCompileCounterGrowth);
+
+await section("Function profiling: recursive totals stay within <module>'s...", verifyRecursiveTotals);
 
 await section("BenchmarkRunner: results are reported under a polluted Array.prototype...", async () => {
   // The results array is new, so its elements are made with
@@ -10535,6 +10539,104 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
     const diff = JSON.parse(stdout.slice(newline + 1));
     if (!diff.changes.some((c: any) => c.kind === "create" && c.path === "/src/nested/added.txt"))
       throw new Error(`Sandbox mode diff should include the created file, got: ${JSON.stringify(diff.changes)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("goccia:ast expression-style example: fixes quotes, trailing commas and long calls, keeping them only under --copy-rw...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const example = join(dirname(fileURLToPath(import.meta.url)), "..", "examples", "_experimental", "expression-style.mjs");
+    const tree = join(tmp, "tree");
+    mkdirSync(tree, { recursive: true });
+    const original = [
+      'import { join } from "./paths.js";',
+      'const quoted = "it\'s";',
+      'const list = [',
+      '  "one",',
+      '  2',
+      '];',
+      'const sum = (',
+      '  first,',
+      '  second',
+      ') => first + second;',
+      'const spread = (',
+      '  head,',
+      '  ...tail',
+      ') => head;',
+      'report("a message long enough to push this line past eighty columns", first, second);',
+      'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
+      '',
+    ].join("\n");
+    const expected = [
+      "import { join } from './paths.js';",
+      'const quoted = "it\'s";',
+      'const list = [',
+      "  'one',",
+      '  2,',
+      '];',
+      'const sum = (',
+      '  first,',
+      '  second,',
+      ') => first + second;',
+      'const spread = (',
+      '  head,',
+      '  ...tail',
+      ') => head;',
+      'report(',
+      "  'a message long enough to push this line past eighty columns',",
+      '  first,',
+      '  second,',
+      ');',
+      'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
+      '',
+    ].join("\n");
+    writeFileSync(join(tree, "sample.js"), original);
+
+    const readOnly = Bun.spawnSync(
+      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const report = normalizeLineEndings(readOnly.stdout.toString());
+    if (readOnly.exitCode !== 0)
+      throw new Error(`expression-style under --copy should exit 0, got ${readOnly.exitCode}: ${readOnly.stderr.toString()}`);
+    for (const line of [
+      "/src/sample.js:1:22  a string literal should use single quotes",
+      "/src/sample.js:4:3  a string literal should use single quotes",
+      "/src/sample.js:5:3  a multi-line list should end with a trailing comma",
+      "/src/sample.js:9:3  a multi-line list should end with a trailing comma",
+      "/src/sample.js:15:1  a call on a line over 80 columns should put one argument per line",
+      "/src/sample.js:15:8  a string literal should use single quotes",
+      "6 finding(s) in 1 file(s), 1 rewritten",
+    ]) {
+      if (!report.includes(line))
+        throw new Error(`expression-style should report "${line}", got:\n${report}`);
+    }
+    if (report.includes("FAILURE"))
+      throw new Error(`expression-style under --copy should parse every file, got:\n${report}`);
+    if (readFileSync(join(tree, "sample.js"), "utf-8") !== original)
+      throw new Error("expression-style under --copy changed the host file");
+
+    const readWrite = Bun.spawnSync(
+      [RUNNER, example, "--experimental-ast", "--copy-rw", `${tree}=/src`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (readWrite.exitCode !== 0)
+      throw new Error(`expression-style under --copy-rw should exit 0, got ${readWrite.exitCode}: ${readWrite.stderr.toString()}`);
+    const fixed = normalizeLineEndings(readFileSync(join(tree, "sample.js"), "utf-8"));
+    if (fixed !== expected)
+      throw new Error(`expression-style under --copy-rw should write the fixed file, got:\n${fixed}`);
+
+    const again = Bun.spawnSync(
+      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const againReport = normalizeLineEndings(again.stdout.toString());
+    if (again.exitCode !== 0)
+      throw new Error(`expression-style rerun should exit 0, got ${again.exitCode}: ${again.stderr.toString()}`);
+    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 1 file(s), 0 rewritten"))
+      throw new Error(`expression-style should find nothing in a file it fixed, got:\n${againReport}`);
   } finally {
     clean(tmp);
   }
@@ -13629,7 +13731,7 @@ await section("Fuzz Harness: engine-modelled outcomes exit zero...", async () =>
       "script-throw": "null.x;",
       timeout: "while (true) {}",
       "module-denied": 'import { a } from "./nope.js";',
-      "deep-recursion": "const f = () => f(); f();",
+      "deep-recursion": "const f = () => { f(); }; f();",
       // Requests ~800 MB of element storage in one step, past the harness's
       // 256 MB budget. The refusal raises the uncatchable TGocciaMemoryLimitError;
       // the harness must classify it as a bounded outcome (exit 0), not let it

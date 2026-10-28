@@ -57,7 +57,7 @@ class Replay(REPLAY.RecordedGitHub):
     def summary(self, ref: str) -> dict[str, Any]:
         return next(
             item for item in self.case(ref)["comments"]
-            if item["versions"][0][1].startswith(ADAPTER.SUMMARY_MARKER)
+            if ADAPTER.is_summary({"user": item["user"], "body": item["versions"][0][1]})
         )
 
     def add_status(self, ref: str, description: str, when: str, state: str = "success") -> None:
@@ -102,6 +102,13 @@ class Replay(REPLAY.RecordedGitHub):
         case["reviews"] = [item for item in case["reviews"] if item["submitted_at"] <= after]
         for head in case["heads"].values():
             head["statuses"] = [item for item in head["statuses"] if item["created_at"] <= after]
+            runs = [run for run in head.get("checkRuns", []) if run["started_at"] <= after]
+            head["checkRuns"] = [
+                run if (run.get("completed_at") or "") <= after
+                else run | {"status": "in_progress", "conclusion": None, "completed_at": None,
+                            "output": {"title": "Review in progress", "summary": ""}}
+                for run in runs
+            ]
 
     def remove_comment(self, ref: str, identifier: int) -> None:
         self.case(ref)["comments"].remove(self.comment(ref, identifier))
@@ -1352,16 +1359,369 @@ class BoundTest(unittest.TestCase):
         blocked = state("GocciaScript#1172", "2026-08-17T14:33:10Z")
         self.assertEqual((blocked["state"], blocked["since"]), ("blocked-stalled", "2026-08-17T13:33:10Z"))
 
-    def test_a_refusal_without_a_paired_wait_blocks_after_fifteen_minutes(self) -> None:
+    def test_a_refusal_without_a_paired_wait_triggers_after_fifteen_minutes(self) -> None:
         # pascal-mcp-sdk#48: the notice for 7b39784a was edited in at 10:21:04, 64 s before the
         # refusal at 10:22:08, so no stated wait pairs with it.
         unknown = state("pascal-mcp-sdk#48", "2026-08-10T10:37:07Z")
         self.assertEqual(unknown["status"]["description"], "Review rate limited")
         self.assertIsNone(unknown["rateLimit"]["wait"])
-        self.assertEqual((unknown["state"], unknown["boundAt"]), ("rate-limited-unknown-wait", "2026-08-10T10:37:08Z"))
-        blocked = state("pascal-mcp-sdk#48", "2026-08-10T10:37:08Z")
-        self.assertEqual((blocked["state"], blocked["since"]), ("blocked-unknown-wait", "2026-08-10T10:22:08Z"))
-        self.assertEqual((blocked["retryAt"], blocked["nextMode"]), (None, None))
+        self.assertEqual(
+            (unknown["state"], unknown["since"], unknown["retryAt"], unknown["refusals"]),
+            ("rate-limited-unknown-wait", "2026-08-10T10:22:08Z", "2026-08-10T10:37:08Z", 1),
+        )
+        permitted = state("pascal-mcp-sdk#48", "2026-08-10T10:37:08Z")
+        self.assertEqual((permitted["state"], permitted["nextMode"]), ("trigger-incremental", "incremental"))
+
+
+def trigger_comment(identifier: int, seconds: int, body: str = "@coderabbitai review") -> dict[str, Any]:
+    return {"id": identifier, "user": {"login": "maintainer"}, "created_at": offset(seconds),
+            "versions": [[offset(seconds), body]]}
+
+
+class UnknownWaitBackoffTest(unittest.TestCase):
+    """A refusal without a readable wait backs off 15, 30 then 60 minutes per refusal of the cycle.
+
+    Synthetic pull requests: the summary carries no stated wait, so no refusal has one.
+    """
+
+    HEAD = "6a7b8c9d" * 5
+    BRANCH = "ledger-rounding"
+    LIMITED = "Review rate limited"
+
+    def pull(self, number: int, statuses: list[tuple[int, str, str]], comments: list[dict[str, Any]] = (),
+             events: list[dict[str, Any]] = ()) -> dict[str, Any]:
+        commit = invented_commit(*statuses, branch=self.BRANCH)
+        summary = summary_comment(9100 + number, (12, f"{ADAPTER.SUMMARY_MARKER}\n<!-- walkthrough_start -->"))
+        return invented_pull(number, 0, self.HEAD, self.BRANCH, commit=commit, events=list(events),
+                             comments=[summary, *comments])
+
+    def test_two_statuses_for_one_refusal_count_once(self) -> None:
+        # CodeRabbit posted two refusal statuses about 3 s apart for one event in lwpt#140, lwpt#149,
+        # lwpt#155 and pascal-mcp-sdk#39.
+        statuses = [(10, "pending", "Review in progress"), (60, "success", self.LIMITED),
+                    (61, "pending", "Review in progress"), (63, "success", self.LIMITED)]
+        gh = Invented({"A": self.pull(1, statuses)}, now=offset(100))
+        first = observe(gh, "A")
+        self.assertEqual((first["state"], first["refusals"], first["retryAt"]),
+                         ("rate-limited-unknown-wait", 1, offset(63 + 15 * 60)))
+        statuses += [(1000, "success", self.LIMITED), (1003, "success", self.LIMITED)]
+        gh = Invented({"A": self.pull(1, statuses, [trigger_comment(5001, 980)])}, now=offset(1100))
+        second = observe(gh, "A")
+        self.assertEqual((second["state"], second["refusals"], second["retryAt"]),
+                         ("rate-limited-unknown-wait", 2, offset(1003 + 30 * 60)))
+
+    def test_refusals_before_the_cycle_start_do_not_count(self) -> None:
+        # Three refusals, one per attempt, then the pull request is marked ready and refused again.
+        statuses = [(60, "success", self.LIMITED), (1005, "success", self.LIMITED),
+                    (3005, "success", self.LIMITED), (4010, "success", self.LIMITED)]
+        comments = [trigger_comment(5001, 1000), trigger_comment(5002, 3000)]
+        pull = self.pull(1, statuses, comments, [{"type": "ready", "at": offset(4000)}])
+        result = observe(Invented({"A": pull}, now=offset(4200)), "A")
+        self.assertEqual((result["state"], result["refusals"], result["retryAt"]),
+                         ("rate-limited-unknown-wait", 1, offset(4010 + 15 * 60)))
+
+    def test_a_refusal_from_before_the_cycle_start_holds_as_the_first(self) -> None:
+        # Refused at +60, then marked ready at +200 with no review since.
+        pull = self.pull(1, [(60, "success", self.LIMITED)], events=[{"type": "ready", "at": offset(200)}])
+        gh = Invented({"A": pull}, now=offset(330))
+        result = observe(gh, "A")
+        self.assertEqual((result["state"], result["refusals"], result["retryAt"]),
+                         ("rate-limited-unknown-wait", 1, offset(60 + 15 * 60)))
+        self.assertEqual(observed_at(gh, "A", offset(60 + 15 * 60))["state"], "trigger-incremental")
+        # The trigger's refusal is the cycle's first: the refusal before the cycle start is not counted.
+        gh.case("A")["comments"].append(trigger_comment(5003, 960))
+        gh.case("A")["heads"][self.HEAD]["statuses"].append(
+            {"id": 7998, "state": "success", "description": self.LIMITED, "context": "CodeRabbit",
+             "created_at": offset(965), "creator": {"login": "coderabbitai[bot]"}})
+        refused = observed_at(gh, "A", offset(1000))
+        self.assertEqual((refused["state"], refused["refusals"], refused["retryAt"]),
+                         ("rate-limited-unknown-wait", 1, offset(965 + 15 * 60)))
+
+    def test_a_trigger_on_another_pull_request_of_the_head_holds_this_one(self) -> None:
+        # Two open pull requests on one head, refused at +60; B triggered when its back-off ended.
+        statuses = [(60, "success", self.LIMITED)]
+        a = self.pull(1, statuses)
+        b = self.pull(2, statuses, [trigger_comment(5002, 960)])
+        gh = Invented({"A": a, "B": b}, now=offset(990))
+        held = observe(gh, "A")
+        self.assertEqual((held["state"], held["boundAt"], held["nextMode"]),
+                         ("triggered", offset(960 + 10 * 60), None))
+        self.assertEqual([item["id"] for item in held["sharedTriggers"]], [5002])
+        self.assertEqual(observed_at(gh, "A", offset(960 + 10 * 60))["state"], "trigger-incremental")
+        # A refusal answering B's trigger is the second refusal for both.
+        gh.case("A")["heads"][self.HEAD]["statuses"].append(
+            {"id": 7999, "state": "success", "description": self.LIMITED, "context": "CodeRabbit",
+             "created_at": offset(965), "creator": {"login": "coderabbitai[bot]"}})
+        answered = observed_at(gh, "A", offset(990))
+        self.assertEqual((answered["state"], answered["refusals"], answered["retryAt"]),
+                         ("rate-limited-unknown-wait", 2, offset(965 + 30 * 60)))
+
+
+class CheckRunTest(unittest.TestCase):
+    """CodeRabbit's check runs count as its commit statuses.
+
+    Since about 2026-10-27T01:00Z CodeRabbit reports on GocciaScript through a
+    check run named CodeRabbit, one per attempt, updated in place, instead of
+    commit statuses. GocciaScript#1911: on 2e8467f9 a "Review skipped" run at
+    01:02:14 while a draft, marked ready at 01:02:40, a "Review rate limited" run
+    at 01:02:53, the trigger at 01:11:59 refused by a run at 01:12:16, and the
+    summary edited at 01:12:15 to "Next included review available in 49 minutes."
+    Reading statuses alone, the adapter reported the trigger blocked-unanswered.
+    GocciaScript#1922: 8d202749's statuses until 00:07:42, then a run from
+    01:02:06 to "Finished" at 01:07:07.
+    """
+
+    def test_a_refused_trigger_waits_out_the_stated_wait_then_triggers_once(self) -> None:
+        result = state("GocciaScript#1911", "2026-10-27T01:21:59Z")
+        self.assertEqual(result["status"]["description"], "Review rate limited")
+        self.assertEqual(result["status"]["createdAt"], "2026-10-27T01:12:16Z")
+        self.assertEqual(result["rateLimit"]["wait"]["editedAt"], "2026-10-27T01:12:15Z")
+        self.assertEqual((result["state"], result["retryAt"]), ("waiting", "2026-10-27T02:02:15Z"))
+        self.assertEqual(state("GocciaScript#1911", "2026-10-27T02:02:14Z")["state"], "waiting")
+        self.assertEqual(state("GocciaScript#1911", "2026-10-27T02:02:15Z")["state"], "trigger-incremental")
+
+    def test_a_run_triggers_once_when_the_wait_ends(self) -> None:
+        ref = "GocciaScript#1911"
+        gh = Replay(ref, now="2026-10-27T01:30:00Z")
+        gh.truncate(ref, "2026-10-27T01:30:00Z")
+        head = gh.case(ref)["heads"][gh.head(ref)]
+
+        def answer(posted: float) -> None:
+            head["checkRuns"].append({"id": 1, "name": "CodeRabbit", "app": {"slug": "coderabbitai"}, "status": "completed",
+                                      "conclusion": "success", "started_at": iso(posted + 5), "completed_at": iso(posted + 3600),
+                                      "output": {"title": "Finished", "summary": "Result: Success - Review completed"}})
+
+        answering(gh, ref, answer)
+        final, _reason, _value = run(gh, ref, "2026-10-27T02:10:00Z")
+        self.assertEqual(posts(gh), [("@coderabbitai review", "2026-10-27T02:02:15Z")])
+        self.assertEqual(final, "in-progress")
+
+    def test_a_bare_skip_from_a_draft_is_the_draft_skip(self) -> None:
+        result = state("GocciaScript#1911", "2026-10-27T01:02:30Z")
+        self.assertEqual((result["state"], result["status"]["kind"]), ("draft", "draft-skip"))
+        later = state("GocciaScript#1911", "2026-10-27T01:05:00Z")
+        self.assertEqual([item["kind"] for item in later["statusHistory"]], ["draft-skip", "rate-limited"])
+
+    def test_a_running_check_run_is_in_progress_and_its_completion_completes_the_head(self) -> None:
+        running = state("GocciaScript#1922", "2026-10-27T01:04:00Z")
+        self.assertEqual((running["state"], running["status"]["description"]), ("in-progress", "Review in progress"))
+        self.assertEqual(state("GocciaScript#1922", "2026-10-27T01:08:00Z")["state"], "clean-complete")
+
+    def test_a_check_run_stands_for_the_statuses_it_replaced(self) -> None:
+        def check(**fields: Any) -> dict[str, Any]:
+            return {"id": 5, "name": "CodeRabbit", "app": {"slug": "coderabbitai"}, "status": "completed",
+                    "conclusion": "neutral", "started_at": "2026-10-27T01:00:00Z", "completed_at": "2026-10-27T01:00:00Z",
+                    "output": {"title": "Review rate limited", "summary": "Result: Rate limited - Review rate limited\nRun ID: x"}} | fields
+
+        def shown(run: dict[str, Any], draft: bool = False) -> list[tuple[str, str, str]]:
+            return [(item["state"], item["description"], ADAPTER.status_kind(item))
+                    for item in ADAPTER.check_run_statuses(run, None, draft)]
+
+        self.assertEqual(shown(check()), [("success", "Review rate limited", "rate-limited")])
+        self.assertEqual(shown(check(status="in_progress", conclusion=None, completed_at=None,
+                                     output={"title": "Reviewing", "summary": ""})),
+                         [("pending", "Reviewing", "in-progress")])
+        self.assertEqual(shown(check(conclusion="success", completed_at="2026-10-27T01:05:00Z",
+                                     output={"title": "Finished", "summary": "Result: Success - Review completed"})),
+                         [("pending", "Review in progress", "in-progress"), ("success", "Review completed", "completed")])
+        self.assertEqual(shown(check(conclusion="failure", output={"title": "Review stopped after lock loss", "summary": ""})),
+                         [("failure", "Review stopped after lock loss", "lock-loss")])
+        skipped = check(conclusion="skipped", output={"title": "Review skipped", "summary": "Result: Skipped - Review skipped"})
+        self.assertEqual(shown(skipped), [("success", "Review skipped", "skipped")])
+        self.assertEqual(shown(skipped, draft=True), [("success", "Review skipped: draft pull request", "draft-skip")])
+        self.assertFalse(ADAPTER.is_coderabbit_run(check(app={"slug": "github-actions"})))
+        self.assertFalse(ADAPTER.is_coderabbit_run(check(name="build")))
+
+    def test_a_bare_skip_on_a_bot_authored_pull_request_is_the_bot_skip_its_summary_states(self) -> None:
+        # Synthetic, after homebrew-tap#24 (2026-08): CodeRabbit wrote "Review skipped / Bot user
+        # detected." into its summary a second before its bot-skip status. Here the skip is a bare
+        # check run, as CodeRabbit reports since 2026-10-27.
+        notice = (f"{ADAPTER.SUMMARY_MARKER}\n<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n"
+                  "> [!IMPORTANT]\n> ## Review skipped\n>\n> Bot user detected.\n"
+                  "<!-- end of auto-generated comment: skip review by coderabbit.ai -->")
+        plain = f"{ADAPTER.SUMMARY_MARKER}\n<!-- walkthrough_start -->"
+        run_ = {"id": 4242, "name": "CodeRabbit", "app": {"slug": "coderabbitai"}, "status": "completed", "conclusion": "skipped",
+                "started_at": offset(15), "completed_at": offset(15),
+                "output": {"title": "Review skipped", "summary": "Result: Skipped - Review skipped"}}
+
+        def observed(user: dict[str, Any], summary: str, edited: int = 14) -> tuple[Invented, dict[str, Any]]:
+            commit = invented_commit(branch="deps") | {"checkRuns": [run_]}
+            versions = [(edited, summary)] if edited <= 14 else [(14, plain), (edited, summary)]
+            pull = invented_pull(7, 5, "8e9f0a1b" * 5, "deps", user=user, commit=commit,
+                                 comments=[summary_comment(9707, *versions)])
+            gh = Invented({"B": pull}, now=offset(20))
+            return gh, observe(gh, "B")
+
+        reduced = recorder_module().reduce_body(notice)
+        self.assertRegex(reduced, ADAPTER.BOT_SKIP_NOTICE)
+        bot = {"login": "renovate[bot]", "type": "Bot"}
+        gh, result = observed(bot, notice)
+        self.assertEqual((result["state"], result["status"]["shown"]), ("bot-skip", "Review skipped"))
+        self.assertEqual(ADAPTER.aggregate_status({"pullRequests": [result]})[0], "satisfied")
+        self.assertEqual((run(gh, "B", offset(300))[0], gh.posts), ("bot-skip", []))
+        self.assertEqual(observed(bot, notice, 15 - 60)[1]["state"], "bot-skip")
+        # A notice from more than 60 s before the skip, or set after it, explains another skip.
+        for user, summary, edited in ((bot, plain, 14), ({"login": "frostney", "type": "User"}, notice, 14),
+                                      (bot, notice, 15 - 61), (bot, notice, 16)):
+            with self.subTest(user=user["login"], notice=summary == notice, edited=edited):
+                self.assertEqual(observed(user, summary, edited)[1]["state"], "skipped")
+
+    def test_a_check_run_reports_its_own_id_and_source(self) -> None:
+        result = state("GocciaScript#1911", "2026-10-27T01:21:59Z")
+        self.assertEqual((result["status"]["source"], result["status"]["checkRunId"]), ("check-run", 121948923139))
+        self.assertEqual([item["checkRunId"] for item in result["statusHistory"]], [121945527953, 121945744063, 121948923139])
+        older = state("GocciaScript#1162", "2026-08-15T17:00:00Z")
+        self.assertEqual({item["source"] for item in older["statusHistory"]}, {"status"})
+
+    def test_the_replay_flags_an_answered_trigger_reported_unanswered(self) -> None:
+        pull = Replay("GocciaScript#1911", now="2026-10-27T01:21:59Z").case("GocciaScript#1911")
+        sha = head(pull, "2e8467f9")
+        history, now = REPLAY.History([pull]), at("2026-10-27T01:21:59Z")
+        decision = {"state": "blocked-unanswered", "boundAt": "2026-10-27T01:21:59Z"}
+        self.assertEqual(history.violations(pull, sha, now, decision), ["answered-trigger"])
+
+
+class NotActiveTest(unittest.TestCase):
+    """CodeRabbit is not triggered on a repository where nothing shows it is used.
+
+    Mirrors a private repository's pull request on 2026-10-26: no review policy, no CodeRabbit
+    configuration and no CodeRabbit comment or review on its latest merged pull requests. A run posted
+    `@coderabbitai review` two minutes after the pull request opened, got no answer and blocked
+    as blocked-unanswered.
+    """
+
+    HEAD = "7c8d9e0f" * 5
+    BRANCH = "ops-key-rotation"
+
+    def quiet(self, comments: list[dict[str, Any]] = ()) -> Invented:
+        commit = invented_commit(branch=self.BRANCH)
+        pull = invented_pull(281, 0, self.HEAD, self.BRANCH, commit=commit, comments=list(comments))
+        gh = Invented({"Q": pull}, now=offset(60))
+        gh.unconfigured.add(INVENTED_REPO)
+        return gh
+
+    def repository(self, gh: Invented, **fields: Any) -> None:
+        """The repository's presence answer with `fields` replacing an unconfigured repository's."""
+        read = gh.graphql
+
+        def graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+            value = read(query, variables)
+            if "review-automations.json" in query:
+                value["repository"] |= fields
+            return value
+
+        gh.graphql = graphql  # type: ignore[method-assign]
+
+    def test_nothing_shows_coderabbit_so_it_is_not_active_and_never_triggered(self) -> None:
+        gh = self.quiet()
+        self.assertEqual(observe(gh, "Q")["state"], "awaiting-automatic")
+        result = observed_at(gh, "Q", offset(120))
+        self.assertEqual((result["state"], result["nextMode"]), ("not-active", None))
+        self.assertEqual(result["presence"], {"active": False, "source": None})
+        self.assertEqual(ADAPTER.aggregate_status({"pullRequests": [result]})[0], "satisfied")
+        self.assertIn("not-active", ADAPTER.FINAL_STATES - ADAPTER.BLOCKED_STATES)
+        gh.now = PUSHED + 30
+        final, _reason, _value = run(gh, "Q", offset(3600))
+        self.assertEqual((final, gh.posts), ("not-active", []))
+        # The run wakes when CodeRabbit's own review would have started.
+        self.assertEqual(iso(gh.now), offset(120))
+
+    def test_a_trigger_nobody_answered_is_no_evidence(self) -> None:
+        gh = self.quiet([trigger_comment(5281, 121)])
+        result = observed_at(gh, "Q", offset(200))
+        self.assertEqual(result["state"], "not-active")
+
+    def test_any_repository_evidence_makes_coderabbit_a_gate(self) -> None:
+        def policy(**automation: Any) -> dict[str, Any]:
+            entry = {"id": "reviewer", "terminal_review_states": ["COMMENTED"]} | automation
+            return {"text": json.dumps({"automations": [entry]})}
+
+        def closed(*, comments: list[str] = (), late: list[str] = (), reviews: list[str] = (),
+                   statuses: list[tuple[str, str]] = ()) -> dict[str, Any]:
+            def nodes(logins: list[str]) -> dict[str, Any]:
+                return {"nodes": [{"author": {"login": login}} for login in logins]}
+
+            contexts = [{"context": context, "creator": {"login": login}} for context, login in statuses]
+            return {"nodes": [{"first": nodes(["vercel", *comments]), "last": nodes(late), "reviews": nodes(reviews),
+                               "commits": {"nodes": [{"commit": {"status": {"contexts": contexts}}}]}}]}
+
+        def suites(runs: int) -> dict[str, Any]:
+            nodes = [{"app": {"slug": "github-actions"}, "checkRuns": {"totalCount": 3}},
+                     {"app": {"slug": "coderabbitai"}, "checkRuns": {"totalCount": runs}}]
+            return {"nodes": [{"commits": {"nodes": [{"commit": {"status": None, "checkSuites": {"nodes": nodes}}}]}}]}
+
+        cases = (
+            ({"root": {"entries": [{"name": ".coderabbit.yml"}]}}, "config .coderabbit.yml"),
+            ({"pullRequests": closed(comments=["coderabbitai"])}, "closed-pull-requests"),
+            ({"pullRequests": closed(late=["coderabbitai"])}, "closed-pull-requests"),
+            ({"pullRequests": closed(reviews=["coderabbitai"])}, "closed-pull-requests"),
+            ({"pullRequests": closed(statuses=[("CodeRabbit", "coderabbitai")])}, "closed-pull-requests"),
+            ({"pullRequests": suites(1)}, "closed-pull-requests"),
+            # CodeRabbit's app installed on the repository leaves an empty check suite on every commit.
+            ({"pullRequests": suites(0)}, None),
+            ({"policy": policy(id="CodeRabbit")}, "policy"),
+            ({"policy": policy(actors=["coderabbitai[bot]"])}, "policy"),
+            # A broken policy waits for nothing when other evidence shows CodeRabbit.
+            ({"policy": {"text": "{not json"}, "root": {"entries": [{"name": ".coderabbit.yaml"}]}}, "config .coderabbit.yaml"),
+            ({"policy": policy(actors=["copilot-pull-request-reviewer"])}, None),
+            ({"pullRequests": closed(comments=["github-actions"], statuses=[("CodeRabbit", "someone")])}, None),
+        )
+        for fields, source in cases:
+            with self.subTest(fields=fields):
+                gh = self.quiet()
+                self.repository(gh, **fields)
+                result = observed_at(gh, "Q", offset(120))
+                expected = "trigger-incremental" if source else "not-active"
+                self.assertEqual((result["state"], result["presence"]["source"]), (expected, source))
+
+    def test_activity_on_the_pull_request_needs_no_repository_read(self) -> None:
+        def status(gh: Invented) -> None:
+            gh.case("Q")["heads"][self.HEAD]["statuses"].append(
+                {"id": 7281, "state": "success", "description": "Review skipped: draft pull request",
+                 "context": "CodeRabbit", "created_at": offset(20), "creator": {"login": "coderabbitai[bot]"}})
+
+        def review(gh: Invented) -> None:
+            gh.case("Q")["reviews"].append({"id": 8281, "user": {"login": "coderabbitai[bot]"}, "commit_id": "0" * 40,
+                                           "submitted_at": offset(20), "body": ""})
+
+        def comment(gh: Invented) -> None:
+            gh.case("Q")["comments"].append(summary_comment(9281, (20, SKIP_SUMMARY)))
+
+        def check_run(gh: Invented) -> None:
+            gh.case("Q")["heads"][self.HEAD]["checkRuns"] = [
+                {"id": 6281, "name": "CodeRabbit", "app": {"slug": "coderabbitai"}, "status": "completed",
+                 "conclusion": "skipped", "started_at": offset(20), "completed_at": offset(20),
+                 "output": {"title": "Review skipped", "summary": "Result: Skipped - Review skipped"}}]
+
+        for add in (status, check_run, review, comment):
+            with self.subTest(activity=add.__name__):
+                gh = self.quiet()
+                add(gh)
+                read = gh.graphql
+
+                def graphql(query: str, variables: dict[str, Any], read: Any = read) -> dict[str, Any]:
+                    self.assertNotIn("review-automations.json", query)
+                    return read(query, variables)
+
+                gh.graphql = graphql  # type: ignore[method-assign]
+                result = observed_at(gh, "Q", offset(120))
+                self.assertEqual(result["presence"], {"active": True, "source": "pull-request"})
+
+    def test_an_unreadable_policy_is_an_operational_error_when_nothing_else_shows_coderabbit(self) -> None:
+        for text, error in (
+            ("{not json", "cannot read review policy"),
+            ('{"automations": ["coderabbit"]}', "has an invalid automation"),
+            ('{"automations": [{"id": "x", "actors": 5, "terminal_review_states": ["COMMENTED"]}]}', "has an invalid actors"),
+            ('{"automations": [{"id": "x", "actors": "coderabbitai", "terminal_review_states": ["COMMENTED"]}]}', "has an invalid actors"),
+        ):
+            with self.subTest(text=text):
+                gh = self.quiet()
+                self.repository(gh, policy={"text": text})
+                with self.assertRaisesRegex(ADAPTER.WaitError, error):
+                    observed_at(gh, "Q", offset(120))
+                head = gh.head("Q")
+                code, output = main(gh, "status", "--repo", INVENTED_REPO, "--pr", "281", "--head", f"281={head}", "--json")
+                self.assertEqual((code, output["state"]), (2, "operational-error"))
 
 
 class StatedWaitTest(unittest.TestCase):
@@ -1432,6 +1792,102 @@ class StatedWaitTest(unittest.TestCase):
         self.assertEqual((other["state"], other["retryAt"]), ("waiting", "2026-08-09T12:59:31Z"))
         result = state("duetto#27", "2026-08-09T12:29:52Z")
         self.assertEqual((result["state"], result["retryAt"]), ("trigger-incremental", None))
+
+
+class SummaryMarkerTest(unittest.TestCase):
+    """CodeRabbit's summary is found by its marker among the HTML comments it opens with.
+
+    Since about 2026-10-20 every version of the summary opens with
+    "<!-- coderabbit-ai-generated:v1 -->" and a blank line before the marker.
+    GocciaScript#1910: CodeRabbit refused d5d3aaa2 at 08:02:00. The summary's
+    edit at 08:01:04 says "Next included review available in 54 minutes." and
+    its edit at 08:02:16 removed the notice.
+    """
+
+    REF = "GocciaScript#1910"
+    SUMMARY = 6404508436
+    NEW_OPENING = "<!-- coderabbit-ai-generated:v1 -->"
+
+    def test_every_version_of_the_new_summary_is_the_summary(self) -> None:
+        summary = Replay(self.REF, now="2026-10-26T12:00:00Z").comment(self.REF, self.SUMMARY)
+        self.assertEqual(len(summary["versions"]), 8)
+        for edited, body in summary["versions"]:
+            with self.subTest(edited=edited):
+                self.assertTrue(body.startswith(f"{self.NEW_OPENING}\n\n{ADAPTER.SUMMARY_MARKER}\n"))
+                self.assertTrue(ADAPTER.is_summary({"user": summary["user"], "body": body}))
+
+    def test_the_old_opening_is_still_the_summary(self) -> None:
+        old = Replay("GocciaScript#1162", now="2026-08-15T17:00:00Z").summary("GocciaScript#1162")
+        self.assertTrue(old["versions"][0][1].startswith(ADAPTER.SUMMARY_MARKER))
+
+    def test_only_a_bot_comment_opening_with_the_marker_is_the_summary(self) -> None:
+        bot = {"login": "coderabbitai[bot]"}
+        cases = {
+            f"{ADAPTER.SUMMARY_MARKER}\nbody": True,
+            f"  \n{self.NEW_OPENING}\n\n{ADAPTER.SUMMARY_MARKER}\nbody": True,
+            f"<!-- a -->\n<!-- b\nspanning lines -->\n{ADAPTER.SUMMARY_MARKER}": True,
+            f"<!-- This is an auto-generated reply by CodeRabbit -->\nQuoted:\n{ADAPTER.SUMMARY_MARKER}": False,
+            f"Prose first.\n{ADAPTER.SUMMARY_MARKER}": False,
+            f"{self.NEW_OPENING}\n<!-- This is an auto-generated reply by CodeRabbit -->": False,
+            "": False,
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual(ADAPTER.is_summary({"user": bot, "body": body}), expected)
+        self.assertFalse(ADAPTER.is_summary({"user": {"login": "maintainer"}, "body": f"{ADAPTER.SUMMARY_MARKER}"}))
+
+    def test_the_stated_wait_pairs_with_the_refusal(self) -> None:
+        result = state(self.REF, "2026-10-26T08:02:00Z")
+        self.assertEqual(result["status"]["description"], "Review rate limited")
+        wait = result["rateLimit"]["wait"]
+        self.assertEqual(
+            (wait["commentId"], wait["editedAt"], wait["statedSeconds"], wait["noCapacity"]),
+            (self.SUMMARY, "2026-10-26T08:01:04Z", 54 * 60, False),
+        )
+        self.assertEqual((result["state"], result["retryAt"]), ("waiting", "2026-10-26T08:56:04Z"))
+
+    def test_a_wait_stated_only_in_the_edit_history_is_read(self) -> None:
+        # From 08:02:16 the current body has no notice; only the 08:01:04 version in the edit
+        # history states the wait. The adapter reported blocked-unknown-wait here.
+        gh = Replay(self.REF, now="2026-10-26T08:17:00Z")
+        current = gh.comment_view(*gh.refs[self.REF], gh.comment(self.REF, self.SUMMARY))
+        self.assertEqual(current["updated_at"], "2026-10-26T08:02:16Z")
+        self.assertIsNone(ADAPTER.stated_seconds(current["body"]))
+        result = observe(gh, self.REF)
+        self.assertEqual(result["rateLimit"]["wait"]["editedAt"], "2026-10-26T08:01:04Z")
+        self.assertEqual((result["state"], result["retryAt"]), ("waiting", "2026-10-26T08:56:04Z"))
+        self.assertEqual(state(self.REF, "2026-10-26T08:56:03Z")["state"], "waiting")
+        self.assertEqual(state(self.REF, "2026-10-26T08:56:04Z")["state"], "trigger-incremental")
+
+    def test_a_run_triggers_once_when_the_stated_wait_ends(self) -> None:
+        gh = Replay(self.REF, now="2026-10-26T08:05:00Z")
+        gh.truncate(self.REF, "2026-10-26T08:05:00Z")
+        answering(gh, self.REF, lambda posted: gh.add_status(self.REF, "Review in progress", iso(posted + 5), state="pending"))
+        final, _reason, _value = run(gh, self.REF, "2026-10-26T09:10:00Z")
+        self.assertEqual(posts(gh), [("@coderabbitai review", "2026-10-26T08:56:04Z")])
+        self.assertEqual(final, "in-progress")
+
+    def test_the_replay_flags_an_unknown_wait_beside_a_stated_one(self) -> None:
+        pull = Replay(self.REF, now="2026-10-26T08:17:00Z").case(self.REF)
+        sha = head(pull, "d5d3aaa2")
+        history, now = REPLAY.History([pull]), at("2026-10-26T08:17:00Z")
+        for decision in ({"state": "blocked-unknown-wait", "boundAt": "2026-10-26T08:17:00Z"},
+                         {"state": "rate-limited-unknown-wait", "boundAt": "2026-10-26T08:30:00Z"}):
+            with self.subTest(state=decision["state"]):
+                self.assertEqual(history.violations(pull, sha, now, decision), ["unread-wait"])
+        waiting = {"state": "waiting", "retryAt": "2026-10-26T08:56:04Z"}
+        self.assertEqual(history.violations(pull, sha, now, waiting), [])
+
+    def test_an_earlier_review_is_read_from_the_new_summary(self) -> None:
+        # 6d268e55's review: the summary carried the reviewing block from 23:28:45 to 23:35:36.
+        gh = Replay(self.REF, now="2026-10-25T23:40:00Z")
+        view = gh.comment_view(*gh.refs[self.REF], gh.comment(self.REF, self.SUMMARY))
+        found = ADAPTER.earlier_review(gh, [view], at("2026-10-25T23:30:00Z"))
+        self.assertEqual(found, {"commentId": self.SUMMARY, "endedAt": "2026-10-25T23:35:36Z"})
+
+
+def head(pull: dict[str, Any], prefix: str) -> str:
+    return next(sha for sha in pull["heads"] if sha.startswith(prefix))
 
 
 class HeadScopeTest(unittest.TestCase):
@@ -1541,12 +1997,29 @@ class RunTest(unittest.TestCase):
         self.assertEqual((final, gh.posts), ("clean-complete", []))
         self.assertGreaterEqual(gh.now, at("2026-09-25T19:47:10Z"))
 
-    def test_an_unknown_wait_is_polled_then_blocks_and_never_triggers(self) -> None:
-        gh = Replay("GocciaScript#1162", now="2026-08-15T16:50:00Z")
-        gh.move_version("GocciaScript#1162", gh.summary("GocciaScript#1162")["id"], "2026-08-15T16:49:30Z", "2026-08-15T16:47:30Z")
-        final, _reason, _value = run(gh, "GocciaScript#1162", "2026-08-15T17:40:00Z")
-        self.assertEqual((final, gh.posts), ("blocked-unknown-wait", []))
-        self.assertEqual(iso(gh.now), "2026-08-15T17:04:32Z")
+    def test_an_unknown_wait_backs_off_then_triggers_once_per_refusal_then_blocks(self) -> None:
+        # GocciaScript#1162, refused at 16:49:32. Synthetic: the notice moved 62 s before the
+        # refusal, so no wait pairs with it, and CodeRabbit refuses every trigger 5 s after it
+        # without stating a wait.
+        ref = "GocciaScript#1162"
+        gh = Replay(ref, now="2026-08-15T16:50:00Z")
+        gh.truncate(ref, "2026-08-15T16:50:00Z")
+        gh.move_version(ref, gh.summary(ref)["id"], "2026-08-15T16:49:30Z", "2026-08-15T16:48:30Z")
+
+        def refuse(posted: float) -> None:
+            gh.add_status(ref, "Review rate limited", iso(posted + 5))
+
+        answering(gh, ref, refuse, refuse, refuse, refuse)
+        final, reason, value = run(gh, ref, "2026-08-15T20:00:00Z")
+        self.assertEqual(
+            [when for _body, when in posts(gh)],
+            ["2026-08-15T17:04:32Z", "2026-08-15T17:34:37Z", "2026-08-15T18:34:42Z"],
+        )
+        self.assertEqual(final, "blocked-unknown-wait")
+        self.assertIn("refusal 4 since", reason)
+        self.assertEqual(value["pullRequests"][0]["since"], "2026-08-15T18:34:47Z")
+        # The run observes the fourth refusal at its next poll, 60 s after its last trigger.
+        self.assertEqual(iso(gh.now), "2026-08-15T18:35:42Z")
 
     def test_a_trigger_posted_as_the_deadline_passes_is_reported(self) -> None:
         # GocciaScript#1162 at 17:47:29. Synthetic: the POST takes 2 s, past the deadline.

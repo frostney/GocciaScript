@@ -137,9 +137,18 @@ const CROSS_SURFACE_CONTRACT_ALLOWLIST = new Map<string, AllowlistEntry>([
   ],
 ]);
 
-// Parser failures are part of the Function constructor contract only in this
-// directory. Other malformed source belongs in the CLI parser/lexer suites.
+// Dynamic rejection assertions are limited to the API contract and the two
+// explicitly requested language early-error matrices. Other malformed source
+// belongs in the CLI parser/lexer suites.
 const DYNAMIC_REJECTION_ALLOWLIST = [
+  {
+    prefix: "tests/language/declaration-early-errors/lexical-declarations.js",
+    reason: "#1951 requires a language-level matrix of declaration-scope errors and legal neighbours",
+  },
+  {
+    prefix: "tests/language/declaration-early-errors/use-strict-parameters.js",
+    reason: "#1952 requires a language-level matrix of directive/parameter early errors and legal neighbours",
+  },
   {
     prefix: "tests/built-ins/Function/",
     reason: "the dynamic-code API itself is the operation under test",

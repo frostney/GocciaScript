@@ -390,6 +390,9 @@ resourcestring
   // Syntax errors — nesting limit
   SSuggestNestingLimitExceeded = 'Move deeply nested parts, or part of a long operator or call chain, into separate variables or functions';
 
+  // Syntax errors — bytecode limits
+  SSuggestBytecodeLimit = 'Split the function, or move part of a large literal, call or branch into separate functions or modules';
+
   // Runtime errors — structuredClone
   SSuggestStructuredClone = 'only plain objects, arrays, primitives, and built-in types can be cloned';
 

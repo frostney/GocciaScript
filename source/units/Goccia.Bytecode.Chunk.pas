@@ -6,6 +6,7 @@ interface
 
 uses
   Generics.Collections,
+  SysUtils,
 
   CriticalSections,
   HashMap,
@@ -32,6 +33,18 @@ const
   PARAMETER_EVAL_VAR_OBJECT_LOCAL = '`#eval-parameter-var-object`:';
 
 type
+  { A function needs more of something than an operand of the bytecode
+    format can encode (constants, functions, registers, locals, upvalues,
+    arguments, jump offsets). The compiler reports it as a SyntaxError at the
+    source it was compiling (TGocciaCompiler.Compile), or at Line and Column
+    when they are set: a limit found once a function was compiled
+    (TGocciaFunctionTemplate.RelaxFarJumps) is located at its instruction. }
+  EGocciaBytecodeLimit = class(Exception)
+  public
+    Line: Integer;
+    Column: Integer;
+  end;
+
   TGocciaBytecodeConstantKind = (
     bckNil,
     bckTrue,
@@ -293,6 +306,19 @@ type
     Recorded: Boolean;
   end;
 
+  // Whether a frame of a template reads its argument window (the arguments
+  // as passed, apart from the registers they are copied into): found by
+  // scanning the code on the first call, since only the instructions that
+  // read the window and the kinds of function that keep it do.
+  TGocciaArgumentWindowUse = (awuUnknown, awuRead, awuUnread);
+
+  // A conditional jump or handler push whose offset to Target did not fit
+  // it when it was patched (TGocciaFunctionTemplate.AddFarJump).
+  TGocciaFarJump = record
+    Index: Integer;
+    Target: Integer;
+  end;
+
   TGocciaFunctionTemplate = class
   private
     FName: string;
@@ -301,6 +327,15 @@ type
     FConstants: array of TGocciaBytecodeConstant;
     FConstantCount: Integer;
     FFunctions: TObjectList<TGocciaFunctionTemplate>;
+    // Set once another template owns this one (AddFunction).
+    FAttached: Boolean;
+    // Compile-time only, never serialized: the jumps AddFarJump recorded,
+    // and while RelaxFarJumps rewrites the code, the old indices of the
+    // jumps it widens, in ascending order (RelocatedPC).
+    FFarJumps: array of TGocciaFarJump;
+    FFarJumpCount: Integer;
+    FWidenedJumps: array of Integer;
+    FWidenedJumpCount: Integer;
     FUpvalueDescriptors: array of TGocciaUpvalueDescriptor;
     FDirectEvalEnvironments: array of TGocciaDirectEvalEnvironment;
     FDirectEvalEnvironmentCount: Integer;
@@ -389,6 +424,14 @@ type
     // Phase 4). A TGocciaDirectEvalCodeCache, typed as TObject to keep the VM
     // out of this unit; owned here. Not serialised to .gbc.
     FDirectEvalCodeCaches: array of TObject;
+    // Runtime-only: what ArgumentWindowUnread found. Reset whenever the code
+    // changes. Not serialised to .gbc.
+    FArgumentWindowUse: TGocciaArgumentWindowUse;
+    function ScanArgumentWindowUse: TGocciaArgumentWindowUse;
+    function RelocatedPC(const APC: UInt32): UInt32;
+    function HasWidePrefix(const AIndex: Integer): Boolean;
+    procedure RaiseLimitAt(const APC: Integer; const AMessage: string;
+      const ALimit: Integer);
     function PropertyReadSlot(const AConstIndex: Integer): Integer;
     function PropertyWriteSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
@@ -399,6 +442,15 @@ type
     function EmitInstruction(const AInstruction: UInt64;
       const AForceWide: Boolean = False): Integer;
     procedure PatchInstruction(const AIndex: Integer; const AInstruction: UInt64);
+    { Writes AOffset into the jump at AIndex (its OP_WIDE prefix included,
+      for a C offset); its other operands keep their values. }
+    procedure PatchJumpOffset(const AIndex, AOffset: Integer);
+    { True when no frame of this template reads its argument window: the code
+      has no instruction that reads it (OP_ARG_COUNT, OP_LOAD_ARGUMENT,
+      OP_PACK_ARGS, OP_CREATE_ARGUMENTS) and no direct eval, and the function
+      is neither async nor a generator, whose continuations keep the window.
+      Such a frame's arguments live only in its registers. }
+    function ArgumentWindowUnread: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     { Records the callee of the call/construct instruction that starts at APC.
       APC must be the value CodeCount had immediately before the instruction
       was emitted, which is what the VM sees as the instruction's start IP
@@ -516,6 +568,25 @@ type
     // function itself.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property ParameterPreambleSize: UInt16 read FParameterPreambleSize write FParameterPreambleSize;
+    { Whether another template owns this one: a function template the
+      compiler created and has not added to its parent yet is the compiler's
+      to free when the compile raises. }
+    property Attached: Boolean read FAttached;
+    { Compile time: the conditional jump or handler push at AIndex, whose
+      offset to ATarget does not fit its operand, is written with offset 0
+      until RelaxFarJumps gives it the long form. }
+    procedure AddFarJump(const AIndex, ATarget: Integer);
+    { Once the function is compiled: gives every jump AddFarJump recorded the
+      long form, the jump skipping one instruction to an OP_JUMP with a
+      24-bit offset, behind an OP_JUMP over it that the other path takes.
+      The two instructions it adds lengthen the jumps across them, so any
+      conditional jump they put out of its reach takes the long form too.
+      Every other jump keeps its form; its offset, the line map, the locals,
+      the call sites, the eval sites and the preambles move with the code.
+      Raises EGocciaBytecodeLimit for a jump past 24 bits or a preamble past
+      16. Code without a recorded jump is left as it is. }
+    procedure RelaxFarJumps;
+    property FarJumpCount: Integer read FFarJumpCount;
     property TypeCheckPreambleSize: UInt16 read FTypeCheckPreambleSize write FTypeCheckPreambleSize;
     property DirectEvalSyntheticArgumentsSlot: Integer read FDirectEvalSyntheticArgumentsSlot write FDirectEvalSyntheticArgumentsSlot;
     property DerivedThisInitializedSlot: Integer read FDerivedThisInitializedSlot write FDerivedThisInitializedSlot;
@@ -554,11 +625,10 @@ function IsBodyEvalVarObjectName(const AName: string): Boolean;
 implementation
 
 uses
-  SysUtils,
-
   NumberBits,
 
   Goccia.Bytecode,
+  Goccia.Error.Messages,
   Goccia.GarbageCollector;
 
 function IsEvalVarObjectName(const AName: string): Boolean;
@@ -707,6 +777,7 @@ begin
   FCode[FCodeCount] := UInt32(AInstruction and $FFFFFFFF);
   Result := FCodeCount;
   Inc(FCodeCount);
+  FArgumentWindowUse := awuUnknown;
 end;
 
 procedure TGocciaFunctionTemplate.AddCallSite(const APC: UInt32;
@@ -792,6 +863,32 @@ begin
       (((HighOperands shr 16) and $FF) shl 24);
   end;
   FCode[AIndex] := UInt32(AInstruction and $FFFFFFFF);
+  FArgumentWindowUse := awuUnknown;
+end;
+
+function TGocciaFunctionTemplate.ArgumentWindowUnread: Boolean;
+begin
+  if FArgumentWindowUse = awuUnknown then
+    FArgumentWindowUse := ScanArgumentWindowUse;
+  Result := FArgumentWindowUse = awuUnread;
+end;
+
+{ Every word is read as an instruction, an OP_WIDE prefix included, so a
+  word that is not one can only make the answer awuRead, never hide a read. }
+function TGocciaFunctionTemplate.ScanArgumentWindowUse: TGocciaArgumentWindowUse;
+var
+  I: Integer;
+begin
+  Result := awuRead;
+  if FIsAsync or FIsGenerator then
+    Exit;
+  for I := 0 to FCodeCount - 1 do
+    case DecodeOp(FCode[I]) of
+      Ord(OP_ARG_COUNT), Ord(OP_LOAD_ARGUMENT), Ord(OP_PACK_ARGS),
+      Ord(OP_CREATE_ARGUMENTS), Ord(OP_DIRECT_EVAL):
+        Exit;
+    end;
+  Result := awuUnread;
 end;
 
 function TGocciaFunctionTemplate.AddConstantNil: UInt16;
@@ -803,7 +900,8 @@ begin
       Exit(UInt16(I));
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckNil;
@@ -827,7 +925,8 @@ begin
       Exit(UInt16(I));
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := Target;
@@ -845,7 +944,8 @@ begin
       Exit(UInt16(I));
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckInteger;
@@ -869,7 +969,8 @@ begin
     Exit;
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckFloat;
@@ -886,7 +987,8 @@ begin
     Exit;
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckString;
@@ -903,7 +1005,8 @@ begin
     Exit;
 
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckPrivateName;
@@ -926,7 +1029,8 @@ function TGocciaFunctionTemplate.AddConstantBigInt(
   const AValue: string): UInt16;
 begin
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckBigInt;
@@ -946,7 +1050,8 @@ begin
     raise Exception.Create(
       'Template payload length mismatch: cooked vs raw');
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckTemplateObject;
@@ -975,7 +1080,8 @@ function TGocciaFunctionTemplate.AddConstantRegExpLiteral(
   const APattern, AFlags: string): UInt16;
 begin
   if FConstantCount >= High(UInt16) then
-    raise Exception.Create('Constant pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeConstantLimit,
+      [High(UInt16)]);
   if FConstantCount >= Length(FConstants) then
     SetLength(FConstants, FConstantCount * 2 + 8);
   FConstants[FConstantCount].Kind := bckRegExpLiteral;
@@ -1146,16 +1252,19 @@ function TGocciaFunctionTemplate.AddFunction(
   const AFunction: TGocciaFunctionTemplate): UInt16;
 begin
   if FFunctions.Count > High(UInt16) then
-    raise Exception.Create('Function pool overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeFunctionLimit,
+      [High(UInt16) + 1]);
   Result := UInt16(FFunctions.Count);
   FFunctions.Add(AFunction);
+  AFunction.FAttached := True;
 end;
 
 procedure TGocciaFunctionTemplate.AddUpvalueDescriptor(
   const AIsLocal: Boolean; const AIndex: UInt16; const AName: string);
 begin
   if FUpvalueCount >= High(UInt16) then
-    raise Exception.Create('Upvalue descriptor overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeUpvalueLimit,
+      [High(UInt16)]);
   if FUpvalueCount >= Length(FUpvalueDescriptors) then
     SetLength(FUpvalueDescriptors, FUpvalueCount * 2 + 4);
   FUpvalueDescriptors[FUpvalueCount].Name := AName;
@@ -1175,7 +1284,8 @@ var
   I: Integer;
 begin
   if FDirectEvalEnvironmentCount >= High(UInt16) then
-    raise Exception.Create('Direct eval environment overflow: exceeds 65535 entries');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeDirectEvalLimit,
+      [High(UInt16)]);
   if FDirectEvalEnvironmentCount >= Length(FDirectEvalEnvironments) then
     SetLength(FDirectEvalEnvironments, FDirectEvalEnvironmentCount * 2 + 4);
   FDirectEvalEnvironments[FDirectEvalEnvironmentCount].PC := APC;
@@ -1198,6 +1308,302 @@ begin
       ABindings[I];
   Result := FDirectEvalEnvironmentCount;
   Inc(FDirectEvalEnvironmentCount);
+end;
+
+type
+  TRelaxedJump = record
+    Index: Integer;
+    Target: Integer;
+    // The first jump at or after Target, by its position among the jumps.
+    TargetOrdinal: Integer;
+    Operand: TGocciaJumpOperand;
+    HasPrefix: Boolean;
+    Widened: Boolean;
+  end;
+
+const
+  // The instructions a jump's long form adds after it: the OP_JUMP over the
+  // next one, and the OP_JUMP to the jump's target.
+  LONG_FORM_ADDED_INSTRUCTIONS = 2;
+
+procedure TGocciaFunctionTemplate.PatchJumpOffset(const AIndex,
+  AOffset: Integer);
+var
+  Operand: TGocciaJumpOperand;
+  NoPrefix: UInt32;
+begin
+  if (AIndex < 0) or (AIndex >= FCodeCount) then
+    raise ERangeError.CreateFmt('PatchJumpOffset: index %d out of range 0..%d',
+      [AIndex, FCodeCount - 1]);
+  Operand := JumpOperandOf(DecodeOp(FCode[AIndex]));
+  if Operand = gjoNone then
+    raise ERangeError.CreateFmt('PatchJumpOffset: instruction %d is not a jump',
+      [AIndex]);
+  if not JumpOffsetFits(Operand, HasWidePrefix(AIndex), AOffset) then
+    raise ERangeError.CreateFmt(
+      'PatchJumpOffset: offset %d does not fit instruction %d',
+      [AOffset, AIndex]);
+  if HasWidePrefix(AIndex) then
+    WriteJumpOffset(FCode[AIndex], FCode[AIndex - 1], Operand, AOffset)
+  else
+  begin
+    NoPrefix := 0;
+    WriteJumpOffset(FCode[AIndex], NoPrefix, Operand, AOffset);
+  end;
+  FArgumentWindowUse := awuUnknown;
+end;
+
+function TGocciaFunctionTemplate.HasWidePrefix(const AIndex: Integer): Boolean;
+begin
+  Result := (AIndex > 0) and (DecodeOp(FCode[AIndex - 1]) = Ord(OP_WIDE));
+end;
+
+// Raises the limit AMessage names, located at the instruction at APC.
+procedure TGocciaFunctionTemplate.RaiseLimitAt(const APC: Integer;
+  const AMessage: string; const ALimit: Integer);
+var
+  Error: EGocciaBytecodeLimit;
+begin
+  Error := EGocciaBytecodeLimit.CreateFmt(AMessage, [ALimit]);
+  if Assigned(FDebugInfo) then
+  begin
+    Error.Line := FDebugInfo.GetLineForPC(UInt32(APC));
+    Error.Column := FDebugInfo.GetColumnForPC(UInt32(APC));
+  end;
+  raise Error;
+end;
+
+procedure TGocciaFunctionTemplate.AddFarJump(const AIndex, ATarget: Integer);
+begin
+  if FFarJumpCount >= Length(FFarJumps) then
+    SetLength(FFarJumps, FFarJumpCount * 2 + 4);
+  FFarJumps[FFarJumpCount].Index := AIndex;
+  FFarJumps[FFarJumpCount].Target := ATarget;
+  Inc(FFarJumpCount);
+end;
+
+// APC moved past every widened jump before it, two instructions each.
+function TGocciaFunctionTemplate.RelocatedPC(const APC: UInt32): UInt32;
+var
+  Low, High, Middle: Integer;
+begin
+  // The number of widened jumps whose index is below APC.
+  Low := 0;
+  High := FWidenedJumpCount;
+  while Low < High do
+  begin
+    Middle := Low + (High - Low) div 2;
+    if UInt32(FWidenedJumps[Middle]) < APC then
+      Low := Middle + 1
+    else
+      High := Middle;
+  end;
+  Result := APC + UInt32(LONG_FORM_ADDED_INSTRUCTIONS * Low);
+end;
+
+procedure TGocciaFunctionTemplate.RelaxFarJumps;
+var
+  Jumps: array of TRelaxedJump;
+  // While deciding which jumps to widen: how many are widened among the
+  // jumps from each one on, or before each one.
+  Widened: array of Integer;
+  JumpCount, I, J, PC, Shift, Offset, NewBase, Target, First, Last,
+    Middle: Integer;
+  Operand: TGocciaJumpOperand;
+  HasPrefix, Changed: Boolean;
+  // Each recorded jump's target plus one, by the jump's index; 0 elsewhere.
+  RecordedTargets: array of Integer;
+  NewCode: array of UInt32;
+  Relocated: UInt32;
+
+  // Writes AOffset into AJump, copied to ABase of the new code.
+  procedure WriteNewJumpOffset(const ABase: Integer;
+    const AJump: TRelaxedJump; const AOffset: Integer);
+  var
+    NoPrefix: UInt32;
+  begin
+    if AJump.HasPrefix then
+      WriteJumpOffset(NewCode[ABase], NewCode[ABase - 1], AJump.Operand,
+        AOffset)
+    else
+    begin
+      NoPrefix := 0;
+      WriteJumpOffset(NewCode[ABase], NoPrefix, AJump.Operand, AOffset);
+    end;
+  end;
+
+begin
+  if FFarJumpCount = 0 then
+    Exit;
+  Jumps := nil;
+  JumpCount := 0;
+  // A jump patched again was patched further on, since the code only grows,
+  // so its last record holds its target.
+  SetLength(RecordedTargets, FCodeCount);
+  for I := 0 to FFarJumpCount - 1 do
+    RecordedTargets[FFarJumps[I].Index] := FFarJumps[I].Target + 1;
+  // Every jump of the code in order, with its target: a recorded one's,
+  // since its offset is a placeholder, or the one its offset reaches.
+  PC := 0;
+  while PC < FCodeCount do
+  begin
+    HasPrefix := DecodeOp(FCode[PC]) = Ord(OP_WIDE);
+    if HasPrefix then
+      Inc(PC);
+    Operand := JumpOperandOf(DecodeOp(FCode[PC]));
+    if Operand <> gjoNone then
+    begin
+      if JumpCount >= Length(Jumps) then
+        SetLength(Jumps, JumpCount * 2 + 16);
+      Jumps[JumpCount].Index := PC;
+      Jumps[JumpCount].Operand := Operand;
+      Jumps[JumpCount].HasPrefix := HasPrefix;
+      Jumps[JumpCount].Widened := RecordedTargets[PC] > 0;
+      if Jumps[JumpCount].Widened then
+        Target := RecordedTargets[PC] - 1
+      else if HasPrefix then
+        Target := PC + 1 + DecodeJumpOffset(FCode[PC], FCode[PC - 1], Operand)
+      else
+        Target := PC + 1 + DecodeJumpOffset(FCode[PC], 0, Operand);
+      Jumps[JumpCount].Target := Target;
+      Inc(JumpCount);
+    end;
+    Inc(PC);
+  end;
+  RecordedTargets := nil;
+
+  for I := 0 to JumpCount - 1 do
+  begin
+    First := 0;
+    Last := JumpCount;
+    while First < Last do
+    begin
+      Middle := First + (Last - First) div 2;
+      if Jumps[Middle].Index < Jumps[I].Target then
+        First := Middle + 1
+      else
+        Last := Middle;
+    end;
+    Jumps[I].TargetOrdinal := First;
+  end;
+
+  // A widened jump lengthens every jump across it, which may then
+  // need widening too, so the widened set only grows. A forward jump spans
+  // only jumps after it, so a pass from the last jump back decides every
+  // forward jump from the jumps after it, which that pass has decided; a
+  // pass from the first decides the backward jumps. The passes repeat until
+  // neither widens a jump, each linear in the jumps.
+  SetLength(Widened, JumpCount + 1);
+  repeat
+    Changed := False;
+    Widened[JumpCount] := 0;
+    for I := JumpCount - 1 downto 0 do
+    begin
+      if not Jumps[I].Widened and (Jumps[I].Operand <> gjoAx) and
+         (Jumps[I].Target > Jumps[I].Index) then
+      begin
+        Offset := Jumps[I].Target - Jumps[I].Index - 1 +
+          LONG_FORM_ADDED_INSTRUCTIONS *
+          (Widened[I + 1] - Widened[Jumps[I].TargetOrdinal]);
+        if not JumpOffsetFits(Jumps[I].Operand, Jumps[I].HasPrefix,
+           Offset) then
+        begin
+          Jumps[I].Widened := True;
+          Changed := True;
+        end;
+      end;
+      Widened[I] := Widened[I + 1] + Ord(Jumps[I].Widened);
+    end;
+    Widened[0] := 0;
+    for I := 0 to JumpCount - 1 do
+    begin
+      if not Jumps[I].Widened and (Jumps[I].Operand <> gjoAx) and
+         (Jumps[I].Target <= Jumps[I].Index) then
+      begin
+        Offset := Jumps[I].Target - Jumps[I].Index - 1 -
+          LONG_FORM_ADDED_INSTRUCTIONS *
+          (Widened[I] - Widened[Jumps[I].TargetOrdinal]);
+        if not JumpOffsetFits(Jumps[I].Operand, Jumps[I].HasPrefix,
+           Offset) then
+        begin
+          Jumps[I].Widened := True;
+          Changed := True;
+        end;
+      end;
+      Widened[I + 1] := Widened[I] + Ord(Jumps[I].Widened);
+    end;
+  until not Changed;
+  Widened := nil;
+
+  // The widened jumps' indices, for RelocatedPC.
+  SetLength(FWidenedJumps, JumpCount);
+  FWidenedJumpCount := 0;
+  for I := 0 to JumpCount - 1 do
+    if Jumps[I].Widened then
+    begin
+      FWidenedJumps[FWidenedJumpCount] := Jumps[I].Index;
+      Inc(FWidenedJumpCount);
+    end;
+
+  SetLength(NewCode,
+    FCodeCount + LONG_FORM_ADDED_INSTRUCTIONS * FWidenedJumpCount);
+  J := 0;
+  Shift := 0;
+  for PC := 0 to FCodeCount - 1 do
+  begin
+    NewCode[PC + Shift] := FCode[PC];
+    if (J >= JumpCount) or (Jumps[J].Index <> PC) then
+      Continue;
+    NewBase := PC + Shift;
+    Offset := Integer(RelocatedPC(UInt32(Jumps[J].Target)));
+    if Jumps[J].Widened then
+    begin
+      WriteNewJumpOffset(NewBase, Jumps[J], 1);
+      NewCode[NewBase + 1] := UInt32(EncodeAx(OP_JUMP, 1));
+      Offset := Offset - (NewBase + 2) - 1;
+      if not JumpOffsetFits(gjoAx, False, Offset) then
+        RaiseLimitAt(Jumps[J].Index, SErrorBytecodeJumpLimit,
+          AX_JUMP_OFFSET_LIMIT);
+      NewCode[NewBase + 2] := UInt32(EncodeAx(OP_JUMP, Offset));
+      Inc(Shift, LONG_FORM_ADDED_INSTRUCTIONS);
+    end
+    else
+    begin
+      // Only an OP_JUMP can be out of reach here.
+      Offset := Offset - NewBase - 1;
+      if not JumpOffsetFits(Jumps[J].Operand, Jumps[J].HasPrefix, Offset) then
+        RaiseLimitAt(Jumps[J].Index, SErrorBytecodeJumpLimit,
+          AX_JUMP_OFFSET_LIMIT);
+      WriteNewJumpOffset(NewBase, Jumps[J], Offset);
+    end;
+    Inc(J);
+  end;
+
+  if FParameterPreambleSize > 0 then
+  begin
+    Relocated := RelocatedPC(FParameterPreambleSize);
+    if Relocated > High(UInt16) then
+      RaiseLimitAt(0, SErrorBytecodePreambleLimit, High(UInt16));
+    FParameterPreambleSize := UInt16(Relocated);
+  end;
+  // The type checks are the first instructions and contain no jump, so the
+  // type-check preamble does not move.
+  FCode := NewCode;
+  FCodeCount := Length(NewCode);
+  if Assigned(FDebugInfo) then
+    FDebugInfo.RelocatePCs(RelocatedPC);
+  for I := 0 to FCallSiteCount - 1 do
+    FCallSites[I].PC := RelocatedPC(FCallSites[I].PC);
+  for I := 0 to FDirectEvalEnvironmentCount - 1 do
+    FDirectEvalEnvironments[I].PC :=
+      RelocatedPC(FDirectEvalEnvironments[I].PC);
+  // The exception handler table is filled only by the binary loader, never
+  // for a template the compiler builds.
+  FArgumentWindowUse := awuUnknown;
+  FFarJumps := nil;
+  FFarJumpCount := 0;
+  FWidenedJumps := nil;
+  FWidenedJumpCount := 0;
 end;
 
 procedure TGocciaFunctionTemplate.AddExceptionHandler(
