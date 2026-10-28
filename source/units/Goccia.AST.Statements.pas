@@ -736,7 +736,7 @@ begin
     Exit;
 
   Expression := TGocciaExpressionStatement(AStatement).Expression;
-  if not (Expression is TGocciaLiteralExpression) then
+  if not (Expression is TGocciaLiteralExpression) or Expression.Parenthesized then
     Exit;
 
   LiteralExpression := TGocciaLiteralExpression(Expression);

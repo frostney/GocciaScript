@@ -172,7 +172,6 @@ procedure EmitBodyVarEnvironment(const ACtx: TGocciaCompilationContext;
   const AParams: TGocciaParameterArray; const ABody: TGocciaASTNode);
 procedure MarkParametersInitialized(const AScope: TGocciaCompilerScope;
   const AParams: TGocciaParameterArray; const AHasArgumentsObject: Boolean);
-function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
 function SyntheticParamLocalName(const AIndex: Integer): string;
 function DeclareArgumentsObjectLocal(const ACtx: TGocciaCompilationContext;
   const AScope: TGocciaCompilerScope; const AParams: TGocciaParameterArray;
@@ -3556,17 +3555,6 @@ begin
 
   Result := AScope.DeclareVarLocal(IDENTIFIER_ARGUMENTS);
   AScope.MarkArgumentsObjectSlot(UInt16(Result));
-end;
-
-function ParameterListIsSimple(const AParams: TGocciaParameterArray): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to High(AParams) do
-    if AParams[I].IsRest or AParams[I].IsPattern or
-       Assigned(AParams[I].DefaultValue) then
-      Exit(False);
-  Result := True;
 end;
 
 function SyntheticParamLocalName(const AIndex: Integer): string;
