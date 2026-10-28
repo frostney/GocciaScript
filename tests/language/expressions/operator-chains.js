@@ -85,6 +85,40 @@ describe("a right-nested chain", () => {
     expect(leading(opaque(4))).toBe(10);
     expect(leading(opaque("a"))).toBe("123a");
   });
+
+  test("with constants on the left folds the constants beside its first other term", () => {
+    const leading = (x) => 1 + (2 + (x + (3 * 4)));
+    expect(leading(opaque(4))).toBe(19);
+    expect(leading(opaque("a"))).toBe("12a12");
+  });
+
+  test("with other constants on the left", () => {
+    const K = 3;
+    const fractions = (x) => 1.5 * (2.5 - (0.5 + x));
+    const strings = (x) => "a" + ("b" + ("c" + x));
+    const bindings = (x) => K + (K * (2 + x));
+    expect(fractions(opaque(1))).toBe(1.5);
+    expect(strings(opaque(1))).toBe("abc1");
+    expect(bindings(opaque(1))).toBe(12);
+  });
+
+  test("with constants on the left reads a binding an earlier operand assigns", () => {
+    const run = (p) => {
+      let x = 1;
+      return 1 + ((x = p) + (x + 2));
+    };
+    expect(run(opaque(5))).toBe(13);
+    expect(run(opaque("s"))).toBe("1ss2");
+  });
+
+  test("reads a binding before and after an operand assigns it", () => {
+    const run = (p) => {
+      let x = 1;
+      return 1 + (x + ((x = p) + x));
+    };
+    expect(run(opaque(5))).toBe(12);
+    expect(run(opaque("s"))).toBe("11ss");
+  });
 });
 
 describe("an operator whose right operand changes a binding of its left one", () => {

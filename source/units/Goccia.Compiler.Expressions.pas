@@ -2920,8 +2920,12 @@ begin
           TrySignedInt16NumberLiteral(AExpr.Left, Immediate) then
   begin
     // `1 + x`: x is compiled only on this path, so its type is asked for
-    // first.
-    RightType := ExpressionType(ACtx.Scope, AExpr.Right);
+    // first. In `1 + (2 + (3 + p))` each operator asks again for the type
+    // of an operand the walk above it has typed, which took time quadratic
+    // in the chain's length; the walks record their answers, which hold
+    // while nothing but the chain's folded constants is emitted.
+    RightType := ExpressionTypeRecorded(ACtx.Scope,
+      ACtx.Scope.ExpressionTypeMemo(ACtx.Template), AExpr.Right);
     if HasExactNumberProofOfType(ACtx.Scope, AExpr.Right, RightType) then
     begin
       OwnsRegB := CompileOperand(ACtx, AExpr.Right, RegB, nil, nil, ADest);
@@ -3155,8 +3159,8 @@ begin
     Exit;
   end;
 
-  if TryFoldUnary(ACtx, AExpr, ADest) then
-    Exit;
+  // CompileExpressionNode has already tried to fold AExpr to a constant and
+  // to simplify it by its operand's type.
 
   RegB := ACtx.Scope.AllocateRegister;
 

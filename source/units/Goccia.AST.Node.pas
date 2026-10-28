@@ -167,6 +167,10 @@ type
       read GetTypeAssertion;
   end;
 
+  // A list of expressions that does not own them. Units that pass one to
+  // another use this alias, so that FPC builds one specialization of it.
+  TGocciaExpressionList = TList<TGocciaExpression>;
+
   TGocciaStatement = class(TGocciaASTNode)
   private
     FLabels: TStringList;

@@ -54,6 +54,11 @@ jobs:
           npx tsx scripts/check-vm-stack-stores.ts --self-test
           npx tsx scripts/check-vm-stack-stores.ts
 
+      - name: Check VM dispatch layout
+        run: |
+          npx tsx scripts/check-vm-dispatch-layout.ts --self-test
+          npx tsx scripts/check-vm-dispatch-layout.ts
+
       - name: Build all
         run: ./build.pas --prod
 
@@ -503,12 +508,23 @@ jobs:
       - name: Check AWFY driver helpers
         run: node scripts/test-awfy-driver.js
 
+      # Instructions retired tell work from code placement (#1917). The
+      # driver records them only where perf can count them, and the report
+      # says why when it cannot.
+      - name: Allow user-space perf counters
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends "linux-tools-$(uname -r)" \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends "linux-tools-$(uname -r)"; }
+          sudo sysctl -w kernel.perf_event_paranoid=1
+
       - name: Run AWFY report
         run: |
           node scripts/awfy-ci-report.js \
             --awfy-dir awfy-suite/benchmarks/JavaScript \
             --goccia-baseline build-main/GocciaRunner \
             --goccia-candidate build/GocciaRunner \
+            --counters \
             --output awfy-report.json
 
       - name: Upload AWFY report

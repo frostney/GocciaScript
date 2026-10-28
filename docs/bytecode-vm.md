@@ -135,7 +135,7 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - use unchecked template access in the dispatch loop where bounds are already guaranteed
 - fuse `Number - Int16` as `OP_SUB_NUM_IMM` and conditional `Number <= Int16` as `OP_JUMP_IF_NUM_NOT_LTE_IMM` only when the compiler proves the source is an ECMAScript Number; these instructions remove literal-load and branch dispatches rather than merely replacing a generic arithmetic dispatch. `x += k` and `x -= k` on such a binding use `OP_ADD_NUM_IMM` and `OP_SUB_NUM_IMM` too, when no closure can store another value in it (`CompileCompoundAssignment`)
 - fuse for/if/conditional `A < B` as `OP_JUMP_IF_NOT_LT` so the compare and `JUMP_IF_FALSE` share one dispatch; the opcode keeps generic `<` semantics (Number, BigInt, ToPrimitive/valueOf) and is not a Number-only shortcut
-- test a condition comparing a value with a signed Int16 Number constant (a literal or a `const` bound to one), `x < k`, `x > k`, `x <= k`, `x >= k`, `x === k` or `x !== k` either way round, with one of `OP_JUMP_IF_NOT_LT_IMM`, `OP_JUMP_IF_NOT_GT_IMM`, `OP_JUMP_IF_NOT_LTE_IMM`, `OP_JUMP_IF_NOT_GTE_IMM`, `OP_JUMP_IF_NOT_STRICT_EQ_IMM` and `OP_JUMP_IF_STRICT_EQ_IMM` (`TryEmitImmediateComparisonJump` in `Goccia.Compiler.Expressions.pas`): the constant is an operand, so no instruction loads it and none tests a Boolean. The six share one dispatch arm, placed last, and a helper, `ImmediateComparisonJumps`, at the end of `Goccia.VM.pas`: six inline arms moved the code after them and cost about 1.5% on AWFY `Json` through instruction-cache misses. They need no type proof. A Number scalar compares directly; any other value takes the generic comparison with the constant as a Number, and since only `x` can run guest code in ToPrimitive, `k < x` is emitted as `x > k`. Strict equality converts nothing. Relational tests fuse only when the jump is on false, because `!(x < k)` is not `x >= k` for NaN
+- test a condition comparing a value with a signed Int16 Number constant (a literal or a `const` bound to one), `x < k`, `x > k`, `x <= k`, `x >= k`, `x === k` or `x !== k` either way round, with one of `OP_JUMP_IF_NOT_LT_IMM`, `OP_JUMP_IF_NOT_GT_IMM`, `OP_JUMP_IF_NOT_LTE_IMM`, `OP_JUMP_IF_NOT_GTE_IMM`, `OP_JUMP_IF_NOT_STRICT_EQ_IMM` and `OP_JUMP_IF_STRICT_EQ_IMM` (`TryEmitImmediateComparisonJump` in `Goccia.Compiler.Expressions.pas`): the constant is an operand, so no instruction loads it and none tests a Boolean. The six share one dispatch arm and a helper, `ImmediateComparisonJumps`, at the end of `Goccia.VM.pas`. They need no type proof. A Number scalar compares directly; any other value takes the generic comparison with the constant as a Number, and since only `x` can run guest code in ToPrimitive, `k < x` is emitted as `x > k`. Strict equality converts nothing. Relational tests fuse only when the jump is on false, because `!(x < k)` is not `x >= k` for NaN
 - test the condition of an `if`, a `for` or `while` loop or a conditional expression as a chain of jumps (`EmitConditionJumps` in `Goccia.Compiler.Expressions.pas`): `a && b`, `a || b` and `!a` jump on each operand where it is computed instead of materializing the expression's value and testing it again, which is equivalent because ToBoolean has no side effects. `x === null`, `x !== undefined` and the other strict comparisons with a value that is `null` or `undefined` at compile time (a literal or a `const` binding) become one `OP_JUMP_IF_NULLISH` or `OP_JUMP_IF_NOT_NULLISH` on `x`, since registers hold both unboxed; loose `==` keeps `OP_EQ`, because it also holds for an object with `[[IsHTMLDDA]]`. A call used as a condition, or as an operand of `&&`, `||` or `!` there, is tested in the register the call wrote its result to, with no copy (`CompileCallCore` reports that register); an optional-chain call and a call of an identifier that a `with` object may supply still build their result in the condition register, as they did before. Under coverage `&&` and `||` are not split, so the statement keeps its own branch records
 - fuse `local.ident` as `OP_GET_LOCAL_PROP_CONST`: one instruction that reads the local slot (including the `OP_GET_LOCAL` TDZ hole check) and then the existing `OP_GET_PROP_CONST` shape-lite IC; computed keys, optional chaining, `with` lookups, import bindings, and global-backed identifiers keep the unfused path
 - retain a static named import's linked module namespace in its local/upvalue slot: `OP_IMPORT` scales with declarations, while repeated identifier reads use `OP_GET_IMPORT_BINDING` to dereference the cached live binding identity without repeating module-loader lookup. A global-backed script, whose environment no link step fills, also predeclares each imported name in the global scope and binds it there (`OP_CREATE_GLOBAL_IMPORT_BINDING` for a named import, a `const` define for a namespace, source-phase or deferred binding), so a later script against the same scope, such as the next REPL input, reads the live binding
@@ -154,6 +154,61 @@ Recent VM cleanup and optimization work has focused on reducing per-instruction 
 - use a non-captured `this` in its own register, with no temporary-register move, as the object of a property read (also inside a member chain such as `this.a.b` or `this.a.m()`), a property store `this.x = v` and a compound assignment `this.x op= v` (`TryResolveThisRegister` in `Goccia.Compiler.Expressions.pas`); the derived-constructor guard is emitted where `this` is evaluated. Captured `this`, top-level code and coverage runs keep the copy
 - keep fast register access limited to proven hot/simple paths; local-slot and complex property paths should only move to fast access when they stay correct and measurably improve throughput
 - the register window fill is GC-safety/correctness critical (the GC marks the whole live window, and a callee reads those slots before it writes them): every register of a new window is written before anything can collect. A frame without an argument window (above) clears only the registers its `this` and arguments do not overwrite; every other frame clears the whole window. A local-cell window must likewise hold no cell, but most frames capture no local and create none, so the VM keeps a mark above which every slot of the cell arena is nil (`FLocalCellStaleTop`, raised by whatever stores a cell) and clears only the part of a new window below it. Development builds assert that each new or grown window is clear; that is a local check, since CI builds with production flags and assertions off, and what fails there for a broken mark is the suite's closure and generator tests. The argument window is not cleared, because `SetupNewFrame` stores every slot of it before anything that can collect runs (see [ADR 0126](adr/0126-bytecode-call-path-arena-fills-and-thread-binding.md) for both invariants, the thread binding, and the sealed callee class below)
+
+### Dispatch layout
+
+The speed of `ExecuteClosureRegistersInternal` depends on where its code lands
+as well as on what it executes ([issue #1917](https://github.com/frostney/GocciaScript/issues/1917),
+[ADR 0165](adr/0165-the-dispatch-loop-keeps-its-hot-arms-first-and-aligned.md)).
+Which hot lines share an instruction-cache or op-cache set depends on their
+addresses, so moving code that never runs changes the speed of code that does.
+Most layouts land within about 1% of each other, but some are far off: one
+measured order of the arms made AWFY Towers, Queens, Permute and Richards 10-13%
+slower with the same instructions, through op-cache and instruction-cache
+misses in four of the 64 cache sets, and moving that code by 128 to 3072 bytes
+undid that. Two layout rules keep this under control:
+
+- **Hot arms first.** FPC lays out a case statement's arms in source order. The
+  arms the AWFY workloads execute most, at least 0.1% of their executed opcodes
+  on average, open the case in `source/units/Goccia.VM.DispatchCase.inc`,
+  highest share first, and every other arm follows them, so an edit to one of
+  those cannot move a hot arm. A new opcode's arm goes after the `Cold arms`
+  comment. `OP_ITER_NEXT` leads the hot arms out of that order: FPC places
+  the function's temporaries in the order it compiles the arms, and in
+  frequency order the dispatch function's stack frame grew by 336 bytes on
+  AArch64, so fewer native re-entries fit on the stack. With it first, the
+  frame is smaller than before on AArch64 and x86-64.
+- **Arms on 64-byte boundaries.** The dispatch function is compiled with
+  `{$CODEALIGN JUMP=64}`, so no arm shares a cache line or an op-cache window
+  with the end of the arm before it. FPC also aligns the labels where a case
+  statement ends and where an `if` without an `else` rejoins, which is most of
+  the 74 KB of padding; code that falls through to such a label executes it,
+  0.0-0.7% more instructions on AWFY.
+
+Together, on a Zen 5 core, the two lower the op-cache misses of the
+dispatch-bound AWFY workloads (List, Queens, Permute, Towers, Sieve, Richards)
+by a fifth to two fifths and raise those of Bounce, DeltaBlue and NBody by
+7-16%. Times stay within 3% of the previous layout per benchmark, and the
+geometric mean within half a percent either way across the comparisons made:
+the layout makes measurement steadier, not the VM faster. An edit to a cold arm no longer changes the hot arms'
+op-cache misses.
+
+`scripts/check-vm-dispatch-layout.ts` (CI and the pre-commit hook) fails when
+the hot arms are no longer first or in order, or the alignment is gone. Its
+`--rank` option ranks the arms from opcode profiles and prints the list it
+keeps, with the command that made it. A change to either rule changes the
+layout of every arm and needs the measurement below; then update the script's
+`HOT_ARMS` with it.
+
+To see how much a benchmark moves when code placement alone changes, build
+the layout probe, `./build.pas --prod --layout-probe runner`. It is the
+production build with a few hundred bytes of code that never runs ahead of the
+dispatch function, so the dispatch function and everything after it sit
+further along, written to `build/layout-probe/`. Compare it with the ordinary
+build as [Judging a change by work and placement](benchmarks.md#judging-a-change-by-work-and-placement)
+describes: both run the same instructions, so any time difference between them
+is placement. A change whose time delta stays within that difference, with no
+change in instructions, has not been shown to do anything.
 
 ### Growing String Accumulators
 
@@ -615,7 +670,7 @@ What the compiler knows about a binding of an enclosing function, the constant v
 
 Typed arithmetic opcodes (`OP_ADD_FLOAT`, `OP_ADD_NUM_IMM` and the rest) do not check their operands, so a binding's type hint has to hold at every read, including a read compiled before an assignment that reaches it through a loop's back edge or the join after a branch. A `const` takes the type of its initializer, or Number when the same scan proves the initializer a Number. A `let` without enforced type keeps a Number hint only when `Goccia.Compiler.NumericBindings`, which scans the whole function body before compiling it, proves that its initializer and every assignment to it produce a Number; an assignment never gives a binding a hint, and a `var` gets none because it can be read before its declaration runs.
 
-Every expression is tried as a constant before it is compiled. A binary operator evaluates its left operand first, so a failed try walks down the left operands to the first one that is not constant. The try counts those operands, and the compiler skips the tries of the ones it compiles next (`CompileExpressionNode`) as long as no instruction is emitted in between, so a chain of operators costs one walk rather than one per operator.
+Every expression is tried as a constant before it is compiled. A try evaluates the operands first, so a failed one walks down to the first operand that is not constant: down the left operands of `a + b + c`, past a constant left operand into the right one in `1 + (2 + p)`, and through the operand of a unary operator in `- - p`. The try keeps the operands on that path, and the compiler skips their tries when it compiles them (`CompileExpressionNode`) as long as nothing but folded constants is emitted in between: a folded constant changes no binding a constant depends on. A chain of binary operators nested either way, or a chain of unary operators, costs one walk rather than one per operator. The `1 + x` immediate path asks for the type of x before compiling it, and records the types that walk works out for the binary operators in x (`ExpressionTypeRecorded` with the scope's `ExpressionTypeMemo`), which hold under the same condition, so `1 + (2 + (3 + p))` is typed in one walk too.
 
 When coverage is enabled, `PreserveCoverageShape` keeps constant branch structure in the emitted bytecode so coverage can report the non-hit branch instead of erasing it from the report. An `if` statement or a loop keeps its conditional jump, and so does a ternary or a `&&`, `||` or `??` expression that a constant decides: the compiler does not fold it, nor reduce `flag && true` or `flag || false` to `flag` under `--strict-types`. Its operands are still folded and propagated.
 
@@ -689,4 +744,5 @@ During code review, the following findings were investigated and determined to b
 - Keep the VM and the built-ins on shared runtime objects, not conversion layers.
 - Evaluate a call that can run guest code into a local before storing its result into a register, local cell or argument slot. Guest code can move those stacks, and Pascal leaves open whether `FRegisters[A] := F(...)` takes the slot's address before calling `F`; FPC 3.2.4-rc2 and trunk can take it first, which writes the result into the freed block. `scripts/check-vm-stack-stores.ts` rejects such a store.
 - Allocate an exception handler's register before compiling the region it protects. A throw skips the `OP_CLOSE_UPVALUE` instructions of the scopes it leaves, so when it reaches a handler the VM detaches the closure cell of every local slot above that handler's register.
+- Put a new opcode's dispatch arm after the `Cold arms` comment in `source/units/Goccia.VM.DispatchCase.inc`, and keep the hot arms first, in the order `scripts/check-vm-dispatch-layout.ts` lists; see [Dispatch layout](#dispatch-layout).
 - Keep `goto` out of the VM. The dispatch loop is one `while` loop with a production and an instrumented fetch path, and `Continue` in its opcode case moves to the next instruction. FPC's wasm32 code generator turns a function that uses `goto` into a state machine over its whole body, under which Richards executed about three times the instructions there; natively the loop executes no more instructions in total than the `goto` version did (see [ADR 0154](adr/0154-the-vm-dispatch-loop-uses-no-goto.md)).

@@ -168,6 +168,8 @@ type
     procedure TestDestructuringPatternsCompileInLinearTime;
     procedure TestOperatorChainsCompileInLinearTime;
     procedure TestOperatorChainsFoldTheirConstantStart;
+    procedure TestNestedChainsCompileInLinearTime;
+    procedure TestNestedChainsFoldTheirConstantOperands;
     procedure TestSwitchCaseDeclarationsCompileInLinearTime;
     procedure TestLongBranchesCompileOnce;
     procedure TestSlotHoldsLocalFollowsTheLocals;
@@ -327,6 +329,10 @@ begin
     TestOperatorChainsCompileInLinearTime);
   Test('Chains of binary operators fold the constants they start with',
     TestOperatorChainsFoldTheirConstantStart);
+  Test('Right-nested and unary chains compile in time linear in their length',
+    TestNestedChainsCompileInLinearTime);
+  Test('Right-nested and unary chains fold the constant operands inside them',
+    TestNestedChainsFoldTheirConstantOperands);
   Test('A switch with a declaration in each case clause compiles in linear time',
     TestSwitchCaseDeclarationsCompileInLinearTime);
   Test('A branch past a 16-bit jump offset compiles in the time of short ones',
@@ -1393,6 +1399,101 @@ begin
   ExpectFolded('const k = 4; const f = (p) => k * 2 + k + p + k;', 12, 2);
   ExpectFolded('const f = (p) => 1 + 2 + p + 3 + 4;', 3, 3);
   ExpectFolded('const f = (p) => 2 * 3 * 4 + p + p + p + p;', 24, 4);
+end;
+
+{ A chain that nests to the right, such as `1 + (2 + (3 + p))`, or a chain
+  of unary operators, such as `- - - p`, is tried as a constant at every
+  operator, and each try evaluated the operands below it again down to p;
+  `1 + x` also asked for the type of its whole right operand at every
+  operator. Both took time quadratic in the chain's length (3.8 s on `main`
+  for 19,200 operators in chains of 480, against about 50 ms now). The
+  shapes compile CHAIN_OPERATORS operators as chains of CHAIN_SHORT_TERMS
+  terms and as chains CHAIN_LENGTH_FACTOR times as long, with the bound of
+  TestOperatorChainsCompileInLinearTime. }
+procedure TTestCompiler.TestNestedChainsCompileInLinearTime;
+
+  // Chains of ATerms terms, CHAIN_OPERATORS operators in all, each the body
+  // of an arrow function of p: AOpen (formatted with the term's index) for
+  // each operator, then p, then AClose for each operator.
+  function NestedChainsSource(const AOpen, AClose: string;
+    const ATerms: Integer): string;
+  var
+    Source: TStringBuffer;
+    Chain, Term: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    for Chain := 0 to CHAIN_OPERATORS div (ATerms - 1) - 1 do
+    begin
+      Source.Append(Format('const f%d = (p) => ', [Chain]));
+      for Term := 1 to ATerms - 1 do
+        Source.Append(Format(AOpen, [Term]));
+      Source.Append('p');
+      for Term := 1 to ATerms - 1 do
+        Source.Append(AClose);
+      Source.Append(';' + LineEnding);
+    end;
+    Result := Source.ToString;
+  end;
+
+  procedure ExpectNestedChainsCompileLinear(const AOpen, AClose: string;
+    const AStrictTypes: Boolean = False);
+  var
+    Short, Long: Int64;
+  begin
+    Short := SourceCompileNanoseconds(NestedChainsSource(AOpen, AClose,
+      CHAIN_SHORT_TERMS), False, AStrictTypes);
+    Long := SourceCompileNanoseconds(NestedChainsSource(AOpen, AClose,
+      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR), False, AStrictTypes);
+    if Long > CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d operators "%s" in chains of %d terms took %d ms to ' +
+        'compile against %d ms in chains of %d', [CHAIN_OPERATORS, AOpen,
+        CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR, Long div 1000000,
+        Short div 1000000, CHAIN_SHORT_TERMS]));
+    Expect<Boolean>(Long <=
+      CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  // Int16 constants: the constant tries and the type of `1 + x`'s x.
+  ExpectNestedChainsCompileLinear('%d + (', ')');
+  // Constants outside the immediate path, and strings.
+  ExpectNestedChainsCompileLinear('%d.5 * (', ')');
+  ExpectNestedChainsCompileLinear('"s" + (', ')');
+  ExpectNestedChainsCompileLinear('- ', '');
+  ExpectNestedChainsCompileLinear('!', '');
+  ExpectNestedChainsCompileLinear('typeof ', '');
+  // Strict types also try to simplify `x + ""` and `!!b` at every operator.
+  ExpectNestedChainsCompileLinear('%d + (', ')', True);
+  ExpectNestedChainsCompileLinear('!', '', True);
+end;
+
+{ CompileExpressionNode skips the constant tries of the operands a failed
+  try already found not constant, on either side of a binary operator and
+  below a unary one. An operand beside them that is constant must still be
+  folded when its turn comes. }
+procedure TTestCompiler.TestNestedChainsFoldTheirConstantOperands;
+
+  procedure ExpectFolded(const ASource: string; const AFolded: Int16;
+    const AOperators: Integer);
+  var
+    Module: TGocciaBytecodeModule;
+    Chain: TGocciaFunctionTemplate;
+  begin
+    Module := CompileSource(ASource);
+    try
+      Chain := Module.TopLevel.GetFunction(0);
+      Expect<Boolean>(HasLoadInt(Chain, AFolded)).ToBe(True);
+      Expect<Integer>(CountArithmeticOps(Chain)).ToBe(AOperators);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  ExpectFolded('const f = (p) => 1 + (p + (2 + 3));', 5, 2);
+  ExpectFolded('const k = 4; const f = (p) => k * (p - (k * 2));', 8, 2);
+  ExpectFolded('const f = (p) => -(p + -(2 + 3));', -5, 1);
+  ExpectFolded('const f = (p) => 1 + (2 + (p + (3 * 4)));', 12, 3);
 end;
 
 { The case clauses of a switch share one scope, so the compiler forgets

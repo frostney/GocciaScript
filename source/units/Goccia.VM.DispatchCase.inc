@@ -5,6 +5,1036 @@
   the same instruction, so end it with Exit or by raising. }
 
           case TGocciaOpCode(Op) of
+      // Hot arms. FPC lays the arms out in this order, so these come first
+      // and stay together, and an edit to any arm after them cannot move them
+      // (issue #1917). They are the arms the AWFY workloads execute most, by
+      // their mean share of executed opcodes, highest first, except
+      // OP_ITER_NEXT: FPC places the function's temporaries in the order it
+      // compiles the arms, and with that arm first the dispatch function's
+      // stack frame is no larger than with the old order, on AArch64 too,
+      // where frequency order cost 336 bytes per native re-entry. A change to
+      // the set or the order is a measured layout change: see 'Dispatch
+      // layout' in docs/bytecode-vm.md, and scripts/check-vm-dispatch-layout.ts,
+      // which holds the list.
+      OP_ITER_NEXT:
+      begin
+        if (FRegisters[C].Kind = grkObject) and
+           (FRegisters[C].ObjectValue is TGocciaIteratorValue) then
+        begin
+          IterResult := TGocciaIteratorValue(FRegisters[C].ObjectValue).DirectNext(DoneFlag);
+          if DoneFlag then
+            FRegisters[A] := RegisterUndefined
+          else
+            FRegisters[A] := VMValueToRegisterFast(IterResult);
+          if DoneFlag then
+            FRegisters[B] := RegisterBoolean(True)
+          else
+            FRegisters[B] := RegisterBoolean(False);
+        end
+        else if (FRegisters[C].Kind = grkObject) and
+                (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+        begin
+          IterResult := FRegisters[C].ObjectValue;
+          NextMethod := IterResult.GetProperty(PROP_NEXT);
+          if not Assigned(NextMethod) or
+             (NextMethod is TGocciaUndefinedLiteralValue) or
+             not NextMethod.IsCallable then
+          begin
+            FRegisters[A] := RegisterUndefined;
+            FRegisters[B] := RegisterBoolean(True);
+          end
+          else
+          begin
+            CallArgs := AcquireArguments;
+            try
+              IterResult := InvokeCallable(NextMethod, CallArgs, IterResult);
+            finally
+              ReleaseArguments(CallArgs);
+            end;
+
+            IterResult := AwaitValue(IterResult);
+            if IterResult.IsPrimitive then
+              ThrowTypeError(Format(SErrorIteratorResultNotObject, [IterResult.ToStringLiteral.Value]),
+                SSuggestIteratorResultObject);
+
+            DoneValue := IterResult.GetProperty(PROP_DONE);
+            if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+            begin
+              FRegisters[A] := RegisterUndefined;
+              FRegisters[B] := RegisterBoolean(True);
+            end
+            else
+            begin
+              // A `value` getter runs guest code (see FRegisters).
+              GuestCallValue := IterResult.GetProperty(PROP_VALUE);
+              FRegisters[A] := VMValueToRegisterFast(GuestCallValue);
+              FRegisters[B] := RegisterBoolean(False);
+            end;
+          end;
+        end
+        else
+        begin
+          FRegisters[A] := RegisterUndefined;
+          FRegisters[B] := RegisterBoolean(True);
+        end;
+      end;
+
+      OP_GET_PROP_CONST, OP_GET_LOCAL_PROP_CONST:
+      begin
+        // OP_GET_LOCAL_PROP_CONST loads the local into A, then reads the
+        // property of A as OP_GET_PROP_CONST reads the property of B.
+        if TGocciaOpCode(Op) = OP_GET_LOCAL_PROP_CONST then
+        begin
+          FRegisters[A] := GetLocalRegister(B);
+          if FRegisters[A].Kind = grkHole then
+            ThrowUninitializedLocal(Template, InstructionStartIP, B);
+          B := A;
+        end;
+        if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) and
+           VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) then
+        begin
+          // Hot shape: per-site inline cache keyed by the name-constant
+          // index, validated against (own-map identity, map entry version).
+          // Hits and fills serve only own plain data properties on
+          // ordinary-lookup receivers; everything else degrades to the
+          // generic GetPropertyValue path. Sites whose MissStreak saturated
+          // are megamorphic: they skip the cache and use the uncached
+          // own-data fast path. A nil slot (out-of-range constant index in
+          // corrupt bytecode) runs fully uncached.
+          // The gate above is the three exact classes the caches serve, not
+          // `is TGocciaObjectValue`: no tier below does anything for another
+          // receiver class but call GetPropertyValue, which the next branch
+          // does without walking the class chain first.
+          PropertyReadCache := Template.PropertyReadCacheSlot(C);
+          if Assigned(PropertyReadCache) and
+             (PropertyReadCache^.MissStreak <
+              PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
+             VMTryGetCachedOwnDataProperty(
+               TGocciaObjectValue(FRegisters[B].ObjectValue),
+               PropertyReadCache, GlobalBindingValue) then
+            SetRegisterFast(A, GlobalBindingValue)
+          else
+          begin
+            ProtoReadCache := Template.ProtoReadCacheSlot(C);
+            if Assigned(ProtoReadCache) and
+               (ProtoReadCache^.MissStreak <
+                PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
+               VMTryGetCachedProtoProperty(
+                 TGocciaObjectValue(FRegisters[B].ObjectValue),
+                 ProtoReadCache, GlobalBindingValue) then
+              SetRegisterFast(A, GlobalBindingValue)
+            else
+            begin
+              Constant := Template.GetConstantUnchecked(C);
+              GlobalName := Constant.StringValue;
+              if Constant.Kind <> bckPrivateName then
+              begin
+                // One own-map probe establishes own-data / own-non-data /
+                // absent; no fallback tier re-hashes the same name on this
+                // receiver.
+                case VMProbeOwnProperty(
+                  TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
+                  KeyIndex, PrivateDescriptor) of
+                  oppData:
+                  // A not-yet-materialized lazy descriptor (the only
+                  // TGocciaPropertyDescriptorData subclass) must not be read raw
+                  // or cached here: route its first touch through
+                  // GetPropertyValue, which materializes it and replaces the
+                  // entry in place with a plain descriptor so later reads cache
+                  // normally.
+                  if PrivateDescriptor.ClassType =
+                     TGocciaPropertyDescriptorData then
+                  begin
+                    if Assigned(PropertyReadCache) and
+                       (PropertyReadCache^.MissStreak <
+                        PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) then
+                      VMPrimeOwnPropertyCache(
+                        TGocciaObjectValue(FRegisters[B].ObjectValue),
+                        KeyIndex, PropertyReadCache);
+                    SetRegisterFast(A,
+                      TGocciaPropertyDescriptorData(PrivateDescriptor).Value);
+                  end
+                  else
+                    SetRegister(A, GetPropertyValue(
+                      FRegisters[B].ObjectValue, GlobalName));
+                  oppNonData:
+                  begin
+                    // Accessor/exotic own descriptor: never cacheable here;
+                    // converge the own tier toward dormant.
+                    if Assigned(PropertyReadCache) and
+                       (PropertyReadCache^.MissStreak <
+                        PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) then
+                      Inc(PropertyReadCache^.MissStreak);
+                    ServeOwnNonDataProperty(A, FRegisters[B].ObjectValue,
+                      PrivateDescriptor);
+                  end;
+                else
+                  // oppAbsent: own absence is established, so the proto
+                  // fill may skip its own re-probe (see the core's
+                  // contract); deeper or exotic resolutions stay generic.
+                  if Assigned(ProtoReadCache) and
+                     (ProtoReadCache^.MissStreak <
+                      PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
+                     VMFillProtoReadCache(
+                       TGocciaObjectValue(FRegisters[B].ObjectValue),
+                       GlobalName, ProtoReadCache, GlobalBindingValue) then
+                    SetRegisterFast(A, GlobalBindingValue)
+                  else
+                    SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
+                      GlobalName));
+                end;
+              end
+              else
+                SetRegister(A, GetPrivatePropertyValue(
+                  FRegisters[B].ObjectValue, GlobalName));
+            end;
+          end;
+        end
+        else
+          // Every other receiver, a primitive or an object the caches do not
+          // serve, out of line so this arm stays small.
+          ExecGetUncachedConstProperty(Template, A, B, C);
+      end;
+
+      OP_GET_LOCAL:
+      begin
+        FRegisters[A] := GetLocalRegister(DecodeBx(Instruction));
+        if FRegisters[A].Kind = grkHole then
+          ThrowUninitializedLocal(Template, InstructionStartIP,
+            DecodeBx(Instruction));
+      end;
+
+      OP_JUMP_IF_FALSE:
+        if not RegisterToBoolean(FRegisters[A]) then
+        begin
+          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
+          JumpOffset := DecodesBx(Instruction);
+          Inc(Frame.IP, JumpOffset);
+          if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+            PollExecutionTimeout(
+              PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+        end
+        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            Template.DebugInfo.SourceFile,
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
+
+      OP_JUMP:
+      begin
+        JumpOffset := DecodeAx(Instruction);
+        Inc(Frame.IP, JumpOffset);
+        if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+      end;
+
+      OP_MOVE:
+        SetRegisterRaw(A, FRegisters[B]);
+
+      OP_CALL_METHOD:
+      begin
+        if FThreadPolls^.TimeoutArmed then
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+        // See OP_CALL: an exact class comparison decides a bytecode callee.
+        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
+          Assigned(FRegisters[A].ObjectValue) and
+          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
+        if (not CalleeIsBytecodeFunction) and
+           ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
+           (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
+           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+             IntrinsicKind = nikStringFromCharCode) and
+           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+             CreationRealm = CurrentRealm) and
+           (FRegisters[A + 1].Kind = grkInt) and
+           (FRegisters[A + 2].Kind = grkInt) then
+        begin
+          SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+            UTF16CodeUnitPairToString(
+              Cardinal(FRegisters[A + 1].IntValue and $FFFF),
+              Cardinal(FRegisters[A + 2].IntValue and $FFFF))));
+          Continue;
+        end;
+        if (not CalleeIsBytecodeFunction) and ((C and 1) = 0) then
+        begin
+          if (FRegisters[A - 1].Kind = grkObject) and
+             (FRegisters[A].Kind = grkObject) and
+             (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) then
+          begin
+            { Identity, not name: an own `bind`, `call` or `apply` on a function
+              object is a different function — `Reflect.apply` assigned as one,
+              or the two statics node:async_hooks installs — and matching on the
+              name alone silently redirected the call into the intrinsic. }
+            CalleeIntrinsicKind :=
+              TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).IntrinsicKind;
+            if (CalleeIntrinsicKind = nikFunctionBind) and
+               (FRegisters[A - 1].ObjectValue is TGocciaFunctionBase) then
+            begin
+              // Binding reads the target's length and name, which can be
+              // getters that run guest code (see FRegisters).
+              case B of
+                0:
+                  begin
+                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithoutArgs(
+                      FRegisters[A - 1].ObjectValue,
+                      TGocciaUndefinedLiteralValue.UndefinedValue);
+                    FRegisters[A] := RegisterObject(GuestCallValue);
+                  end;
+                1:
+                  begin
+                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithoutArgs(
+                      FRegisters[A - 1].ObjectValue,
+                      RegisterToValue(FRegisters[A + 1]));
+                    FRegisters[A] := RegisterObject(GuestCallValue);
+                  end;
+                2:
+                  begin
+                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithSingleArg(
+                      FRegisters[A - 1].ObjectValue,
+                      RegisterToValue(FRegisters[A + 1]),
+                      RegisterToValue(FRegisters[A + 2]));
+                    FRegisters[A] := RegisterObject(GuestCallValue);
+                  end;
+              else
+                BytecodeFunction := nil;
+              end;
+              if B <= 2 then
+                Continue;
+            end;
+
+            if FRegisters[A - 1].ObjectValue is TGocciaBytecodeFunctionValue then
+            begin
+              BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A - 1].ObjectValue);
+              if Assigned(BytecodeFunction.FClosure) and
+                 Assigned(BytecodeFunction.FClosure.Template) and
+                 (not BytecodeFunction.FClosure.Template.IsAsync) and
+                 (not BytecodeFunction.FClosure.Template.IsGenerator) then
+              begin
+                if CalleeIntrinsicKind = nikFunctionCall then
+                begin
+                  if B = 0 then
+                    CallThisRegister := RegisterUndefined
+                  else
+                    CallThisRegister := FRegisters[A + 1];
+                  if not BytecodeFunction.FStrictThis then
+                    CallThisRegister := CoerceNonStrictThisRegister(
+                      CallThisRegister,
+                      BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                        FGlobalThisValue),
+                      BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                        FRealm));
+                  PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+                  // The first operand is the callee's `this`; the rest are its
+                  // arguments, read straight out of the caller's registers.
+                  if B <= 1 then
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, nil, 0, True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp)
+                  else
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, @FRegisters[A + 2], B - 1, True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                  Continue;
+                end
+                // The dense hole-free gate is what makes the direct element
+                // reads below legal: no read can reach an accessor, so the
+                // argument values cannot be produced by guest code that
+                // allocates (and collects) while the earlier ones sit in plain
+                // locals, and no read order is observable. A holey array or one
+                // whose length was grown past its element count falls through
+                // to the generic call, which runs Function.prototype.apply and
+                // therefore CreateListFromArrayLike — ascending Get order, a
+                // rooted arguments collection, and the spec argument count.
+                else if (CalleeIntrinsicKind = nikFunctionApply) and (B >= 2) and
+                        (FRegisters[A + 2].Kind = grkObject) and
+                        (FRegisters[A + 2].ObjectValue is TGocciaArrayValue) and
+                        IsDenseHoleFreeArgumentArray(
+                          TGocciaArrayValue(FRegisters[A + 2].ObjectValue)) then
+                begin
+                  ArgsArray := TGocciaArrayValue(FRegisters[A + 2].ObjectValue);
+                  CallThisRegister := FRegisters[A + 1];
+                  if not BytecodeFunction.FStrictThis then
+                    CallThisRegister := CoerceNonStrictThisRegister(
+                      CallThisRegister,
+                      BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                        FGlobalThisValue),
+                      BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                        FRealm));
+                  PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
+                  // Up to three arguments are staged in a stack array, which
+                  // spares the common short apply a heap staging array.
+                  if ArgsArray.Elements.Count <= Length(ApplyArgRegisters) then
+                  begin
+                    for I := 0 to ArgsArray.Elements.Count - 1 do
+                      ApplyArgRegisters[I] :=
+                        VMValueToRegisterFast(ArgsArray.Elements[I]);
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, @ApplyArgRegisters[0],
+                      ArgsArray.Elements.Count, True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                  end
+                  else
+                  begin
+                    SetLength(RegisterArgs, ArgsArray.Elements.Count);
+                    for I := 0 to High(RegisterArgs) do
+                      RegisterArgs[I] :=
+                        VMValueToRegisterFast(ArgsArray.Elements[I]);
+                    SetupNewFrame(BytecodeFunction.FClosure,
+                      CallThisRegister, PGocciaRegister(RegisterArgs),
+                      Length(RegisterArgs), True,
+                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                  end;
+                  Continue;
+                end;
+              end;
+            end;
+          end;
+        end;
+
+        if CalleeIsBytecodeFunction then
+        begin
+          BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
+          if Assigned(BytecodeFunction.FClosure) and
+             Assigned(BytecodeFunction.FClosure.Template) and
+             (not BytecodeFunction.FClosure.Template.IsAsync) and
+             (not BytecodeFunction.FClosure.Template.IsGenerator) then
+          begin
+            CallThisRegister := FRegisters[A - 1];
+            if not BytecodeFunction.FStrictThis then
+              CallThisRegister := CoerceNonStrictThisRegister(
+                CallThisRegister,
+                BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                  FGlobalThisValue),
+                BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                  FRealm));
+            if (C and 1) = 0 then
+            begin
+              // See OP_CALL: the arguments are read straight out of the
+              // caller's registers.
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
+              SetupNewFrame(BytecodeFunction.FClosure,
+                CallThisRegister, @FRegisters[A + 1], B, True,
+                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              Continue;
+            end
+            else if (FRegisters[B].Kind = grkObject) and
+                    (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+            begin
+              SetLength(RegisterArgs,
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
+	              for I := 0 to High(RegisterArgs) do
+	                RegisterArgs[I] := VMValueToRegisterFast(
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
+              SetupNewFrame(BytecodeFunction.FClosure,
+                CallThisRegister, PGocciaRegister(RegisterArgs),
+                Length(RegisterArgs), True,
+                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              Continue;
+            end;
+          end;
+        end;
+
+        if (C and 1) = 1 then
+          CallArgs := AcquireArguments
+        else
+          CallArgs := AcquireArguments(B);
+        try
+          if (C and 1) = 1 then
+          begin
+            if GetRegister(B) is TGocciaArrayValue then
+              for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
+                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
+          end
+          else
+            for I := 0 to B - 1 do
+              CallArgs.Add(GetRegister(A + 1 + I));
+          if not (Assigned(GetRegister(A)) and
+                  (GetRegister(A).IsCallable or
+                   (GetRegister(A) is TGocciaProxyValue))) then
+            ThrowNotCallableHere(GetRegister(A), GetRegister(A - 1));
+          if (GetRegister(A) is TGocciaNativeFunctionValue) or
+             (GetRegister(A) is TGocciaFunctionConstructorClassValue) or
+             (GetRegister(A) is TGocciaBoundFunctionValue) or
+             (GetRegister(A) is TGocciaProxyValue) then
+          begin
+            if FCallStack <> nil then
+              SavedConstructFrameOk :=
+                FCallStack.TryGetTopFrame(SavedConstructFrame)
+            else
+              SavedConstructFrameOk := False;
+            // See OP_CALL: also stamps the recorded call-site position for a
+            // native callee's created error; snapshotted above, restored below.
+            EnterNativeCallSite(PreviousCallSite);
+            try
+              SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
+                GetRegister(A - 1)));
+            finally
+              LeaveGocciaCallSite(PreviousCallSite);
+            end;
+            if SavedConstructFrameOk and (FCallStack <> nil) then
+              FCallStack.SetTopFrame(SavedConstructFrame);
+          end
+          else
+            SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
+              GetRegister(A - 1)));
+        finally
+          ReleaseArguments(CallArgs);
+        end;
+      end;
+
+      OP_LOAD_INT:
+        FRegisters[A] := RegisterInt(DecodesBx(Instruction));
+
+      OP_RETURN:
+      begin
+        ReturnValue := FRegisters[A];
+        if Assigned(EntryGenerator) then
+          EntryGenerator.FReturnRequiresAwait := B <> 0;
+        if FClosedNumericFrameStackCount >
+           InitialClosedNumericFrameCount then
+        begin
+          ResultReg := PopClosedNumericFrame(Frame, Template, PrevCovLine,
+            ProfileEntryTimestamp);
+          SetRegisterRaw(ResultReg, ReturnValue);
+          Continue;
+        end;
+        // Outermost frame: let the finally block handle teardown
+        if FFrameStackCount <= InitialFrameStackCount then
+        begin
+          FLastClosureThisValue := GetLocalRegister(0);
+          Exit(ReturnValue);
+        end;
+        // Intermediate trampoline frame: tear down and pop to parent
+        TeardownCurrentFrame(Template, ProfileEntryTimestamp,
+          FFrameStack[FFrameStackCount - 1].HandlerCount);
+        ResultReg := PopFrame(Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+        SetRegisterRaw(ResultReg, ReturnValue);
+        Continue;
+      end;
+      OP_SET_PROP_CONST:
+        if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
+        begin
+          RightValue := RegisterToValue(FRegisters[C]);
+          // Own writable-data write IC: (shape, entry index), same receiver
+          // gate as the read cache. Hits skip the name hash. Accessors,
+          // proxies, private fields, deletion, and non-writable descriptors
+          // fall through to SetPropertyValue / AssignProperty.
+          PropertyWriteCache := Template.PropertyWriteCacheSlot(B);
+          if not (Assigned(PropertyWriteCache) and
+             (PropertyWriteCache^.MissStreak <
+              PROPERTY_WRITE_CACHE_POLYMORPHIC_LIMIT) and
+             VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue) and
+             VMTrySetCachedOwnWritableDataProperty(
+               TGocciaObjectValue(FRegisters[A].ObjectValue),
+               PropertyWriteCache, RightValue)) then
+          begin
+            Constant := Template.GetConstantUnchecked(B);
+            GlobalName := Constant.StringValue;
+            if Constant.Kind = bckPrivateName then
+              SetPrivatePropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                RightValue)
+            else if VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue) then
+            begin
+              if Assigned(PropertyWriteCache) and
+                 (PropertyWriteCache^.MissStreak <
+                  PROPERTY_WRITE_CACHE_POLYMORPHIC_LIMIT) then
+              begin
+                case VMProbeOwnProperty(
+                  TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
+                  KeyIndex, PrivateDescriptor) of
+                  oppData:
+                  if (PrivateDescriptor.ClassType =
+                      TGocciaPropertyDescriptorData) and
+                     PrivateDescriptor.Writable then
+                  begin
+                    TGocciaPropertyDescriptorData(PrivateDescriptor).Value :=
+                      RightValue;
+                    VMPrimeOwnPropertyWriteCache(
+                      TGocciaObjectValue(FRegisters[A].ObjectValue),
+                      KeyIndex, PropertyWriteCache);
+                  end
+                  else
+                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                      RightValue);
+                  oppNonData:
+                  begin
+                    Inc(PropertyWriteCache^.MissStreak);
+                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                      RightValue);
+                  end;
+                else
+                  if FRegisters[A].ObjectValue is TGocciaVMLiteralObjectValue then
+                  begin
+                    if not TGocciaVMLiteralObjectValue(
+                      FRegisters[A].ObjectValue)
+                      .TrySetLiteralDataPropertyFast(GlobalName, RightValue) then
+                      SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                        RightValue);
+                  end
+                  else
+                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                      RightValue);
+                end;
+              end
+              else if not VMTrySetOwnWritableDataProperty(
+                TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
+                RightValue) then
+              begin
+                if FRegisters[A].ObjectValue is TGocciaVMLiteralObjectValue then
+                begin
+                  if not TGocciaVMLiteralObjectValue(FRegisters[A].ObjectValue)
+                    .TrySetLiteralDataPropertyFast(GlobalName, RightValue) then
+                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                      RightValue);
+                end
+                else
+                  SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
+                    RightValue);
+              end;
+            end
+            else
+              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue);
+          end;
+        end
+        else if Template.GetConstantUnchecked(B).Kind = bckPrivateName then
+          SetPrivatePropertyValue(GetRegister(A),
+            Template.GetConstantUnchecked(B).StringValue,
+            GetRegister(C))
+        else
+          SetPropertyValue(GetRegister(A),
+            Template.GetConstantUnchecked(B).StringValue,
+            GetRegister(C));
+
+      // A register compared with a signed Int16 immediate, one arm for the
+      // six opcodes, so the dispatch loop stays small; the comparison is in
+      // ImmediateComparisonJumps.
+      OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM,
+      OP_JUMP_IF_NOT_GTE_IMM, OP_JUMP_IF_NOT_STRICT_EQ_IMM,
+      OP_JUMP_IF_STRICT_EQ_IMM:
+        begin
+          NumericComparisonResult := ImmediateComparisonJumps(
+            TGocciaOpCode(Op), A, Int16(B));
+          if NumericComparisonResult then
+          begin
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+          end;
+          if FCoverageEnabled then
+            RecordFusedBranchHit(Template, InstructionStartIP,
+              NumericComparisonResult);
+        end;
+      OP_ADD:
+      begin
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then
+            TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue +
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then
+            TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) +
+            NumericScalarToDouble(FRegisters[C]));
+        end
+        else begin
+          if FProfilingOpcodes then
+            TGocciaProfiler.Instance.RecordScalarMiss;
+          if (((FRegisters[B].Kind = grkObject) and
+                  (FRegisters[B].ObjectValue is TGocciaStringLiteralValue)) or
+                 ((FRegisters[C].Kind = grkObject) and
+                  (FRegisters[C].ObjectValue is TGocciaStringLiteralValue))) and
+                (not ((FRegisters[B].Kind = grkObject) and
+                      Assigned(FRegisters[B].ObjectValue) and
+                      (not FRegisters[B].ObjectValue.IsPrimitive))) and
+                (not ((FRegisters[C].Kind = grkObject) and
+                      Assigned(FRegisters[C].ObjectValue) and
+                      (not FRegisters[C].ObjectValue.IsPrimitive))) then
+          begin
+            if (FRegisters[B].Kind = grkObject) and
+               (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
+              SetRegisterFast(A, TGocciaStringLiteralValue.Concatenate(
+                TGocciaStringLiteralValue(FRegisters[B].ObjectValue),
+                VMRegisterToStringFast(FRegisters[C]).Value))
+            else
+              SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                VMRegisterToStringFast(FRegisters[B]).Value +
+                VMRegisterToStringFast(FRegisters[C]).Value));
+          end
+        else
+        begin
+          LeftValue := GetRegisterFast(B);
+          RightValue := GetRegisterFast(C);
+          if (LeftValue is TGocciaStringLiteralValue) and
+             (RightValue is TGocciaStringLiteralValue) then
+            SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+              TGocciaStringLiteralValue(LeftValue).Value +
+              TGocciaStringLiteralValue(RightValue).Value))
+          else if LeftValue.IsPrimitive and RightValue.IsPrimitive then
+          begin
+            if (LeftValue is TGocciaStringLiteralValue) or
+               (RightValue is TGocciaStringLiteralValue) then
+              SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                LeftValue.ToStringLiteral.Value + RightValue.ToStringLiteral.Value))
+            else
+              SetRegisterFast(A, EvaluateAddition(LeftValue, RightValue));
+          end
+          else
+            // Rooted: at least one operand is an object, so EvaluateAddition
+            // re-enters guest code. See VMRootedBinaryValue.
+            SetRegister(A, VMRootedBinaryValue(@EvaluateAddition,
+              LeftValue, RightValue));
+        end;
+        end;
+      end;
+
+      OP_ADD_FLOAT:
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) +
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
+        end;
+
+      OP_ARRAY_SET:
+        ExecSetComputedProperty(A, FRegisters[B], FRegisters[C],
+          ELEMENT_SET_OPTIONS);
+
+      OP_ARRAY_GET:
+        ExecGetComputedProperty(A, FRegisters[B], FRegisters[C],
+          ELEMENT_GET_OPTIONS);
+
+      OP_MUL_FLOAT:
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) *
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble * RightDouble);
+        end;
+
+      OP_LOAD_UNDEFINED:
+        FRegisters[A] := RegisterUndefined;
+
+      OP_MUL:
+      begin
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) *
+            NumericScalarToDouble(FRegisters[C]));
+        end
+        else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
+          SetRegister(A, VMRootedBinaryValue(@EvaluateMultiplication,
+            GetRegisterFast(B), GetRegisterFast(C)));
+        end;
+      end;
+
+      OP_JUMP_IF_NOT_NULLISH:
+        if not RegisterMatchesNullishKind(FRegisters[A], B) then
+        begin
+          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
+          Inc(Frame.IP, C);
+        end
+        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            Template.DebugInfo.SourceFile,
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
+
+      OP_ADD_NUM_IMM:
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue + Int16(C))
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + Int16(C))
+        else if VMBoxedNumberRegister(FRegisters[B]) then
+          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
+            FRegisters[B].ObjectValue).Value + Int16(C))
+        else
+          raise Exception.Create(
+            'Invalid non-numeric source for OP_ADD_NUM_IMM');
+
+      OP_SUB:
+      begin
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue -
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) -
+            NumericScalarToDouble(FRegisters[C]));
+        end
+        else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
+          SetRegister(A, VMRootedBinaryValue(@EvaluateSubtraction,
+            GetRegisterFast(B), GetRegisterFast(C)));
+        end;
+      end;
+
+      OP_JUMP_IF_NULLISH:
+        if RegisterMatchesNullishKind(FRegisters[A], B) then
+        begin
+          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
+          Inc(Frame.IP, C);
+        end
+        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            Template.DebugInfo.SourceFile,
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
+
+      OP_LOAD_FALSE:
+        FRegisters[A] := RegisterBoolean(False);
+
+      OP_JUMP_IF_NOT_LT:
+        begin
+          if (FRegisters[A].Kind = grkInt) and (FRegisters[B].Kind = grkInt) then
+          begin
+            if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+            NumericComparisonResult := FRegisters[A].IntValue <
+              FRegisters[B].IntValue;
+          end
+          else if RegisterIsNumericScalar(FRegisters[A]) and
+                  RegisterIsNumericScalar(FRegisters[B]) then
+          begin
+            if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+            NumericComparisonResult := NumericScalarToDouble(FRegisters[A]) <
+              NumericScalarToDouble(FRegisters[B]);
+          end
+          else
+          begin
+            if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
+            LeftValue := GetRegisterFast(A);
+            RightValue := GetRegisterFast(B);
+            if (LeftValue is TGocciaStringLiteralValue) and
+               (RightValue is TGocciaStringLiteralValue) then
+              NumericComparisonResult :=
+                Goccia.Arithmetic.CompareStringValues(
+                  TGocciaStringLiteralValue(LeftValue).Value,
+                  TGocciaStringLiteralValue(RightValue).Value) < 0
+            else
+              NumericComparisonResult := VMRootedBinaryPredicate(
+                @Goccia.Arithmetic.LessThan, LeftValue, RightValue);
+          end;
+          if not NumericComparisonResult then
+          begin
+            if FCoverageEnabled and
+               (TGocciaCoverageTracker.Instance <> nil) and
+               Assigned(Template.DebugInfo) then
+              TGocciaCoverageTracker.Instance.RecordBranchHit(
+                Template.DebugInfo.SourceFile,
+                Template.DebugInfo.GetLineForPC(InstructionStartIP),
+                Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
+            JumpOffset := Int16(C);
+            Inc(Frame.IP, JumpOffset);
+            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+              PollExecutionTimeout(
+                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+          end
+          else if FCoverageEnabled and
+                  (TGocciaCoverageTracker.Instance <> nil) and
+                  Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
+        end;
+
+      OP_JUMP_IF_TRUE:
+        if RegisterToBoolean(FRegisters[A]) then
+        begin
+          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
+            TGocciaCoverageTracker.Instance.RecordBranchHit(
+              Template.DebugInfo.SourceFile,
+              Template.DebugInfo.GetLineForPC(InstructionStartIP),
+              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
+          JumpOffset := DecodesBx(Instruction);
+          Inc(Frame.IP, JumpOffset);
+          if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
+            PollExecutionTimeout(
+              PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+        end
+        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
+          TGocciaCoverageTracker.Instance.RecordBranchHit(
+            Template.DebugInfo.SourceFile,
+            Template.DebugInfo.GetLineForPC(InstructionStartIP),
+            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
+
+      // A proven Number can also arrive boxed: NaN, the infinities and -0
+      // are kept as number values rather than scalar registers.
+      OP_SUB_NUM_IMM:
+        if FRegisters[B].Kind = grkInt then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue - Int16(C))
+        else if FRegisters[B].Kind = grkFloat then
+          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - Int16(C))
+        else if VMBoxedNumberRegister(FRegisters[B]) then
+          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
+            FRegisters[B].ObjectValue).Value - Int16(C))
+        else
+          raise Exception.Create(
+            'Invalid non-numeric source for OP_SUB_NUM_IMM');
+
+      OP_LTE:
+      begin
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := RegisterBoolean(FRegisters[B].IntValue <=
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) <=
+            NumericScalarToDouble(FRegisters[C]));
+        end
+        else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
+          LeftValue := GetRegisterFast(B);
+          RightValue := GetRegisterFast(C);
+          if (LeftValue is TGocciaStringLiteralValue) and
+             (RightValue is TGocciaStringLiteralValue) then
+            FRegisters[A] := RegisterBoolean(
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) <= 0)
+          else
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
+        end;
+      end;
+
+      OP_EQ:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue = FRegisters[C].IntValue)
+        else if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[C].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
+           (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
+          FRegisters[A] := RegisterBoolean(UTF16StringsEqual(
+            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
+            TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
+        else
+          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
+            vseEqual:
+              FRegisters[A] := RegisterBoolean(True);
+            vseNotEqual:
+              FRegisters[A] := RegisterBoolean(False);
+          else
+            SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
+          end;
+
+      OP_SET_LOCAL:
+        SetLocalRaw(DecodeBx(Instruction), FRegisters[A]);
+
+      OP_LOAD_CHAR:
+        if DecodeBx(Instruction) <= 127 then
+          FRegisters[A] := RegisterObject(
+            CachedASCIIStringValue(
+              TASCIIStringCodeUnit(DecodeBx(Instruction))))
+        else
+          FRegisters[A] := RegisterObject(TGocciaStringLiteralValue.Create(
+            UTF16CodeUnitImmediateToString(DecodeBx(Instruction))));
+
+      OP_LOAD_HOLE:
+        FRegisters[A] := RegisterHole;
+
+      OP_ADD_INT:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := VMIntResult(FRegisters[B].IntValue +
+            FRegisters[C].IntValue)
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) +
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
+        end;
+
+      OP_SUB_FLOAT:
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) -
+            NumericScalarToDouble(FRegisters[C]))
+        else
+        begin
+          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
+            RightDouble);
+          FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
+        end;
+
       OP_LOAD_CONST:
         begin
           Constant := Template.GetConstantUnchecked(DecodeBx(Instruction));
@@ -45,21 +1075,588 @@
           end;
         end;
 
-      OP_LOAD_CHAR:
-        if DecodeBx(Instruction) <= 127 then
-          FRegisters[A] := RegisterObject(
-            CachedASCIIStringValue(
-              TASCIIStringCodeUnit(DecodeBx(Instruction))))
+      OP_GET_GLOBAL, OP_GET_GLOBAL_DECLARED:
+      begin
+        if not Assigned(FGlobalScope) then
+          FRegisters[A] := RegisterUndefined
         else
-          FRegisters[A] := RegisterObject(TGocciaStringLiteralValue.Create(
-            UTF16CodeUnitImmediateToString(DecodeBx(Instruction))));
+        begin
+          // Per-site inline cache keyed by the name-constant index.  It serves
+          // either an own lexical-map entry or an ordinary global object's own
+          // plain-data entry.  Both modes re-read the live value by a
+          // version-validated entry index; exotic objects, accessors, lazy
+          // descriptors, and dynamic scopes remain on the named lookup path.
+          GlobalReadCache := Template.GlobalReadCacheSlot(DecodeBx(Instruction));
+          if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (GlobalReadCache^.ObjectValue = nil) and
+             FGlobalScope.TryGetLexicalValueAt(GlobalReadCache^.EntryIndex,
+               GlobalReadCache^.Version, GlobalBindingValue) then
+            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+          // A module environment's import binding, read by a function the
+          // module created while it was linked: resolve it through the cached
+          // binding, skipping the scope's name lookups.
+          else if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (GlobalReadCache^.ObjectBindingKind =
+               GLOBAL_READ_OBJECT_BINDING_IMPORT) and
+             FGlobalScope.LexicalEntryVersionIs(GlobalReadCache^.Version) and
+             TGocciaModuleImportBinding(GlobalReadCache^.ObjectValue)
+               .TryGetValue(GlobalBindingValue) then
+            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+          else if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (FGlobalScope.ThisValue is TGocciaObjectValue) and
+             (GlobalReadCache^.ObjectValue =
+               Pointer(FGlobalScope.ThisValue)) and
+             VMGlobalObjectBindingCacheStillPrecedes(FGlobalScope,
+               GlobalReadCache) and
+             VMTryGetCachedGlobalOwnDataProperty(
+               TGocciaObjectValue(FGlobalScope.ThisValue),
+               GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
+               GlobalBindingValue) then
+            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+          else
+          begin
+            GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
+            if Assigned(GlobalReadCache) then
+            begin
+              GlobalReadCache^.Scope := nil;
+              GlobalReadCache^.ObjectValue := nil;
+              GlobalReadCache^.ObjectBindingKind :=
+                GLOBAL_READ_OBJECT_BINDING_NONE;
+              if FGlobalScope.TryGetBindingValueFillCache(GlobalName,
+                GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
+                GlobalBindingValue, GlobalImportBinding,
+                GlobalImportVersion) then
+              begin
+                GlobalBindingEntryIndex := GlobalReadCache^.EntryIndex;
+                GlobalBindingVersion := GlobalReadCache^.Version;
+                if Assigned(GlobalImportBinding) then
+                begin
+                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
+                  GlobalReadCache^.ObjectValue := Pointer(GlobalImportBinding);
+                  GlobalReadCache^.ObjectBindingKind :=
+                    GLOBAL_READ_OBJECT_BINDING_IMPORT;
+                  GlobalReadCache^.Version := GlobalImportVersion;
+                end
+                else if (FGlobalScope.ThisValue is TGocciaObjectValue) and
+                   ((not FGlobalScope.ContainsOwnLexicalBinding(GlobalName) and
+                     FGlobalScope.ContainsOwnVarBinding(GlobalName)) or
+                    (FGlobalScope.IsBuiltInBinding(GlobalName) and
+                     FGlobalScope.IsGlobalObjectBackedBinding(GlobalName))) and
+                   VMTryGetGlobalOwnDataPropertyFillCache(
+                     TGocciaObjectValue(FGlobalScope.ThisValue), GlobalName,
+                     GlobalReadCache^.EntryIndex,
+                     GlobalReadCache^.Version) then
+                begin
+                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
+                  GlobalReadCache^.ObjectValue :=
+                    Pointer(FGlobalScope.ThisValue);
+                  if FGlobalScope.ContainsOwnVarBinding(GlobalName) then
+                    GlobalReadCache^.ObjectBindingKind :=
+                      GLOBAL_READ_OBJECT_BINDING_VAR
+                  else
+                  begin
+                    GlobalReadCache^.ObjectBindingKind :=
+                      GLOBAL_READ_OBJECT_BINDING_BUILTIN;
+                    GlobalReadCache^.BindingEntryIndex :=
+                      GlobalBindingEntryIndex;
+                    GlobalReadCache^.BindingVersion :=
+                      GlobalBindingVersion;
+                  end;
+                end
+                else if GlobalReadCache^.EntryIndex >= 0 then
+                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
+                FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue);
+              end
+              else if TGocciaOpCode(Op) = OP_GET_GLOBAL_DECLARED then
+                ThrowReferenceError(Format(SErrorUndefinedVariable,
+                  [GlobalName]), SSuggestDeclareBeforeUse)
+              else
+                FRegisters[A] := RegisterUndefined;
+            end
+            else if FGlobalScope.TryGetBindingValue(GlobalName,
+              GlobalBindingValue) then
+              FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
+            else if TGocciaOpCode(Op) = OP_GET_GLOBAL_DECLARED then
+              // ES2026 §6.2.5.5 GetValue step 2: the declared binding is
+              // gone (a configurable global its var redeclared was deleted),
+              // so the reference is unresolvable.
+              ThrowReferenceError(Format(SErrorUndefinedVariable,
+                [GlobalName]), SSuggestDeclareBeforeUse)
+            else
+              FRegisters[A] := RegisterUndefined;
+          end;
+        end;
+      end;
+
+      OP_HAS_GLOBAL:
+      begin
+        if Assigned(FGlobalScope) then
+        begin
+          GlobalReadCache := Template.GlobalReadCacheSlot(
+            DecodeBx(Instruction));
+          if Assigned(GlobalReadCache) and
+             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
+             (((GlobalReadCache^.ObjectValue = nil) and
+               FGlobalScope.HasLexicalBindingAt(
+                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version)) or
+              ((FGlobalScope.ThisValue is TGocciaObjectValue) and
+               (GlobalReadCache^.ObjectValue =
+                 Pointer(FGlobalScope.ThisValue)) and
+               VMGlobalObjectBindingCacheStillPrecedes(FGlobalScope,
+                 GlobalReadCache) and
+               VMTryGetCachedGlobalOwnDataProperty(
+                 TGocciaObjectValue(FGlobalScope.ThisValue),
+                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
+                 GlobalBindingValue))) then
+          begin
+            FRegisters[A] := RegisterBoolean(True);
+            Continue;
+          end;
+        end;
+
+        GlobalName := Template.GetConstantUnchecked(
+          DecodeBx(Instruction)).StringValue;
+        // Contains can materialize a lazy global (a shim) or reach a Proxy
+        // trap on the global object's prototype chain, either of which runs
+        // guest code (see FRegisters).
+        GuestCallBoolean := Assigned(FGlobalScope) and
+          FGlobalScope.Contains(GlobalName);
+        FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+      end;
+
+      OP_GET_UPVALUE:
+      begin
+        if Assigned(FCurrentClosure) then
+        begin
+          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
+          if Assigned(Upvalue) then
+          begin
+            if Upvalue.Value.Kind = grkHole then
+              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
+            SetRegisterRaw(A, Upvalue.Value)
+          end
+          else
+            FRegisters[A] := RegisterUndefined;
+        end
+        else
+          FRegisters[A] := RegisterUndefined;
+      end;
+
+      OP_LOAD_NULL:
+        FRegisters[A] := RegisterNull;
+
+      OP_LOAD_TRUE:
+        FRegisters[A] := RegisterBoolean(True);
+
+      OP_CONSTRUCT:
+      begin
+        if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
+        begin
+          SetLength(RegisterArgs, C);
+          for I := 0 to C - 1 do
+            RegisterArgs[I] := FRegisters[B + 1 + I];
+          // The constructor runs guest code (see FRegisters).
+          GuestCallRegister := TGocciaVMClassValue(FRegisters[B].ObjectValue)
+            .InstantiateRegisters(RegisterArgs);
+          FRegisters[A] := GuestCallRegister;
+        end
+        else
+        begin
+          if not MayBeConstructor(GetRegister(B)) then
+            ThrowNotConstructorHere(GetRegister(B));
+          { A native constructor can capture a stack trace (`new Error(...)`),
+            and this frame carries no position of its own. Snapshot the top
+            frame, stamp it at the construct site so a trace captured during
+            construction locates the `new`, then restore it on success so the
+            stamp does not leak onto a later throw in the same function
+            (`new Map(); JSON.parse('{')`). On a throw, the handler that
+            catches it in this frame clears the stamp (HandleExceptionUnwind). }
+          if FCallStack <> nil then
+            SavedConstructFrameOk :=
+              FCallStack.TryGetTopFrame(SavedConstructFrame)
+          else
+            SavedConstructFrameOk := False;
+          StampCurrentCallSiteLocation;
+          CallArgs := AcquireArguments(C);
+          try
+            for I := 0 to C - 1 do
+              CallArgs.Add(GetRegister(B + 1 + I));
+            EnterCurrentInstructionCallSite(PreviousCallSite);
+            try
+              SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
+            finally
+              LeaveGocciaCallSite(PreviousCallSite);
+            end;
+          finally
+            ReleaseArguments(CallArgs);
+          end;
+          if SavedConstructFrameOk and (FCallStack <> nil) then
+            FCallStack.SetTopFrame(SavedConstructFrame);
+        end;
+      end;
+
+      OP_PUSH_FINALLY_HANDLER:
+      begin
+        if FHandlerStack.Count >= FHandlerStack.Capacity then
+          GrowHandlerStack(FHandlerStack.Count + 1);
+        FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth,
+          bhkFinally);
+      end;
+
+      OP_POP_HANDLER:
+        if not FHandlerStack.IsEmpty then
+          FHandlerStack.Pop;
+
+      OP_BAND:
+        if (FRegisters[B].Kind = grkInt) and
+           (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterInt(
+            LongInt(FRegisters[B].IntValue) and
+            LongInt(FRegisters[C].IntValue))
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+          FRegisters[A] := RegisterInt(
+            VMRegisterToInt32(FRegisters[B]) and
+            VMRegisterToInt32(FRegisters[C]))
+        else
+          SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseAnd,
+            GetRegister(B), GetRegister(C)));
+
+      OP_CALL:
+      begin
+        if FThreadPolls^.TimeoutArmed then
+          PollExecutionTimeout(
+            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
+        // A bytecode function is the usual callee and is neither a native nor
+        // a bound function. Its class is sealed, so one exact class comparison
+        // decides it: a bytecode callee skips the two `is` tests below, and
+        // any other callee skips the one for a bytecode function, each of
+        // which would walk a whole class chain to fail.
+        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
+          Assigned(FRegisters[A].ObjectValue) and
+          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
+        if (not CalleeIsBytecodeFunction) and
+           ((C and CALL_FLAG_SPREAD) = 0) and
+           (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
+           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+             CreationRealm = CurrentRealm) and
+           (B = 1) and
+           (FRegisters[A + 1].Kind = grkObject) and
+           (FRegisters[A + 1].ObjectValue is TGocciaStringLiteralValue) then
+        begin
+          case TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
+            IntrinsicKind of
+            nikDecodeURI:
+              begin
+                SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                  DecodeURI(TGocciaStringLiteralValue(
+                    FRegisters[A + 1].ObjectValue).Value)));
+                Continue;
+              end;
+            nikDecodeURIComponent:
+              begin
+                SetRegisterFast(A, TGocciaStringLiteralValue.Create(
+                  DecodeURIComponent(TGocciaStringLiteralValue(
+                    FRegisters[A + 1].ObjectValue).Value)));
+                Continue;
+              end;
+          end;
+        end;
+        if (not CalleeIsBytecodeFunction) and
+           (FRegisters[A].Kind = grkObject) and
+           (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
+        begin
+          BoundFunction := TGocciaBoundFunctionValue(FRegisters[A].ObjectValue);
+          if BoundFunction.OriginalFunction is TGocciaBytecodeFunctionValue then
+          begin
+            BytecodeFunction := TGocciaBytecodeFunctionValue(BoundFunction.OriginalFunction);
+            if Assigned(BytecodeFunction.FClosure) and
+               Assigned(BytecodeFunction.FClosure.Template) and
+               (not BytecodeFunction.FClosure.Template.IsAsync) and
+               (not BytecodeFunction.FClosure.Template.IsGenerator) then
+            begin
+              if (C and 1) = 0 then
+              begin
+                SetLength(RegisterArgs, BoundFunction.BoundArgCount + B);
+                for I := 0 to BoundFunction.BoundArgCount - 1 do
+                  RegisterArgs[I] := ValueToRegister(BoundFunction.GetBoundArg(I));
+                for I := 0 to B - 1 do
+                  RegisterArgs[BoundFunction.BoundArgCount + I] := FRegisters[A + 1 + I];
+                CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
+                if not BytecodeFunction.FStrictThis then
+                  CallThisRegister := CoerceNonStrictThisRegister(
+                    CallThisRegister,
+                    BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                      FGlobalThisValue),
+                    BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                      FRealm));
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
+                SetupNewFrame(BytecodeFunction.FClosure,
+                  CallThisRegister, PGocciaRegister(RegisterArgs),
+                  Length(RegisterArgs), True,
+                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                Continue;
+              end
+              else if (FRegisters[B].Kind = grkObject) and
+                      (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+              begin
+                SetLength(RegisterArgs,
+                  BoundFunction.BoundArgCount +
+                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
+                for I := 0 to BoundFunction.BoundArgCount - 1 do
+                  RegisterArgs[I] := VMValueToRegisterFast(BoundFunction.GetBoundArg(I));
+	                for I := 0 to TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1 do
+	                  RegisterArgs[BoundFunction.BoundArgCount + I] := VMValueToRegisterFast(
+	                    TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
+                CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
+                if not BytecodeFunction.FStrictThis then
+                  CallThisRegister := CoerceNonStrictThisRegister(
+                    CallThisRegister,
+                    BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
+                      FGlobalThisValue),
+                    BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
+                      FRealm));
+                if (C and CALL_FLAG_TAIL) <> 0 then
+                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                    InitialFrameStackCount, SavedHandlerCount)
+                else
+                  PushFrame(A, Frame.IP, Template, PrevCovLine,
+                    ProfileEntryTimestamp);
+                SetupNewFrame(BytecodeFunction.FClosure,
+                  CallThisRegister, PGocciaRegister(RegisterArgs),
+                  Length(RegisterArgs), True,
+                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+                Continue;
+              end;
+            end;
+          end;
+        end;
+
+        if CalleeIsBytecodeFunction then
+        begin
+          BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
+          if Assigned(BytecodeFunction.FClosure) and
+             Assigned(BytecodeFunction.FClosure.Template) and
+             (not BytecodeFunction.FClosure.Template.IsAsync) and
+             (not BytecodeFunction.FClosure.Template.IsGenerator) then
+          begin
+            if not BytecodeFunction.FStrictThis then
+            begin
+              CallGlobalThisValue := BytecodeClosureGlobalThis(
+                BytecodeFunction.FClosure, FGlobalThisValue);
+              if Assigned(CallGlobalThisValue) then
+                CallThisRegister := VMValueToRegisterFast(CallGlobalThisValue)
+              else
+                CallThisRegister := RegisterUndefined;
+            end
+            else
+              CallThisRegister := RegisterUndefined;
+            if (C and 1) = 0 then
+            begin
+              // The arguments are read straight out of the caller's registers:
+              // SetupNewFrame copies them into the callee's argument window
+              // before it acquires (and so may move or clear) any register,
+              // or, when the callee never reads one and no arena grows,
+              // straight into the callee's registers.
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
+              SetupNewFrame(BytecodeFunction.FClosure,
+                CallThisRegister, @FRegisters[A + 1], B, True,
+                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              Continue;
+            end
+            else if (FRegisters[B].Kind = grkObject) and
+                    (FRegisters[B].ObjectValue is TGocciaArrayValue) then
+            begin
+              SetLength(RegisterArgs,
+                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
+	              for I := 0 to High(RegisterArgs) do
+	                RegisterArgs[I] := ValueToRegister(
+	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
+              if (C and CALL_FLAG_TAIL) <> 0 then
+                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
+                  InitialFrameStackCount, SavedHandlerCount)
+              else
+                PushFrame(A, Frame.IP, Template, PrevCovLine,
+                  ProfileEntryTimestamp);
+              SetupNewFrame(BytecodeFunction.FClosure,
+                CallThisRegister, PGocciaRegister(RegisterArgs),
+                Length(RegisterArgs), True,
+                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              Continue;
+            end;
+          end;
+        end;
+
+        if (C and 1) = 1 then
+          CallArgs := AcquireArguments
+        else
+          CallArgs := AcquireArguments(B);
+        try
+          if (C and 1) = 1 then
+          begin
+	            if GetRegister(B) is TGocciaArrayValue then
+	              for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
+	                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
+          end
+          else
+            for I := 0 to B - 1 do
+              CallArgs.Add(GetRegister(A + 1 + I));
+          if not (Assigned(GetRegister(A)) and
+                  (GetRegister(A).IsCallable or
+                   (GetRegister(A) is TGocciaProxyValue))) then
+            ThrowNotCallableHere(GetRegister(A), nil);
+          if (GetRegister(A) is TGocciaNativeFunctionValue) or
+             (GetRegister(A) is TGocciaFunctionConstructorClassValue) or
+             (GetRegister(A) is TGocciaBoundFunctionValue) or
+             (GetRegister(A) is TGocciaProxyValue) then
+          begin
+            if FCallStack <> nil then
+              SavedConstructFrameOk :=
+                FCallStack.TryGetTopFrame(SavedConstructFrame)
+            else
+              SavedConstructFrameOk := False;
+            // Also stamps the executing frame with this call's position so an
+            // error a native callee creates captures the call site (deferred
+            // frames are 0:0). Uses the recorded call-site column (the
+            // instruction line map resolves only to the enclosing
+            // statement). Snapshotted above and
+            // restored below.
+            EnterNativeCallSite(PreviousCallSite);
+            try
+              SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
+                TGocciaUndefinedLiteralValue.UndefinedValue));
+            finally
+              LeaveGocciaCallSite(PreviousCallSite);
+            end;
+            if SavedConstructFrameOk and (FCallStack <> nil) then
+              FCallStack.SetTopFrame(SavedConstructFrame);
+          end
+          else
+            SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
+              TGocciaUndefinedLiteralValue.UndefinedValue));
+        finally
+          ReleaseArguments(CallArgs);
+        end;
+      end;
+
+      OP_GTE:
+      begin
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := RegisterBoolean(FRegisters[B].IntValue >=
+            FRegisters[C].IntValue);
+        end
+        else if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := RegisterBoolean(
+            NumericScalarToDouble(FRegisters[B]) >=
+            NumericScalarToDouble(FRegisters[C]));
+        end
+        else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
+          LeftValue := GetRegisterFast(B);
+          RightValue := GetRegisterFast(C);
+          if (LeftValue is TGocciaStringLiteralValue) and
+             (RightValue is TGocciaStringLiteralValue) then
+            FRegisters[A] := RegisterBoolean(
+              Goccia.Arithmetic.CompareStringValues(
+                TGocciaStringLiteralValue(LeftValue).Value,
+                TGocciaStringLiteralValue(RightValue).Value) >= 0)
+          else
+          begin
+            // ToPrimitive can run guest code (see FRegisters).
+            GuestCallBoolean := VMRootedBinaryPredicate(
+              @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue);
+            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
+          end;
+        end;
+      end;
+
+      OP_NEQ:
+        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
+          FRegisters[A] := RegisterBoolean(
+            FRegisters[B].IntValue <> FRegisters[C].IntValue)
+        else if (FRegisters[B].Kind = grkObject) and
+           (FRegisters[C].Kind = grkObject) and
+           (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
+           (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
+          FRegisters[A] := RegisterBoolean(not UTF16StringsEqual(
+            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
+            TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
+        else
+          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
+            vseEqual:
+              FRegisters[A] := RegisterBoolean(False);
+            vseNotEqual:
+              FRegisters[A] := RegisterBoolean(True);
+          else
+            SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
+          end;
+
+      OP_MOD:
+      begin
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMModuloRegister(
+            NumericScalarToDouble(FRegisters[B]),
+            NumericScalarToDouble(FRegisters[C]));
+        end
+        else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
+          SetRegister(A, VMRootedBinaryValue(@EvaluateModulo,
+            GetRegisterFast(B), GetRegisterFast(C)));
+        end;
+      end;
+
+      OP_NOT:
+        FRegisters[A] := RegisterBoolean(not RegisterToBoolean(FRegisters[B]));
+
+      OP_DIV:
+      begin
+        if RegisterIsNumericScalar(FRegisters[B]) and
+           RegisterIsNumericScalar(FRegisters[C]) then
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
+          FRegisters[A] := VMNumberRegister(
+            NumericScalarToDouble(FRegisters[B]) /
+            NumericScalarToDouble(FRegisters[C]));
+        end
+        else
+        begin
+          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
+          SetRegister(A, VMRootedBinaryValue(@EvaluateDivision,
+            GetRegisterFast(B), GetRegisterFast(C)));
+        end;
+      end;
+
+      // Cold arms: every other opcode, in no performance-relevant order. A
+      // new opcode's arm goes here.
 
       OP_LOAD_REGEXP:
         FRegisters[A] := ValueToRegister(
           BuildRegExpLiteralConstant(Template, DecodeBx(Instruction)));
-
-      OP_LOAD_UNDEFINED:
-        FRegisters[A] := RegisterUndefined;
 
       OP_GET_THIS_BINDING:
         // ES2026 §9.4.3 ResolveThisBinding falls through to GetThisBinding
@@ -74,18 +1671,6 @@
           FRegisters[A] := VMValueToRegisterFast(FGlobalScope.ThisValue)
         else
           FRegisters[A] := RegisterUndefined;
-
-      OP_LOAD_TRUE:
-        FRegisters[A] := RegisterBoolean(True);
-
-      OP_LOAD_FALSE:
-        FRegisters[A] := RegisterBoolean(False);
-
-      OP_LOAD_NULL:
-        FRegisters[A] := RegisterNull;
-
-      OP_LOAD_HOLE:
-        FRegisters[A] := RegisterHole;
 
       OP_CHECK_TYPE:
         VMStrictTypeCheckRegisterValue(GetRegister(A), TGocciaLocalType(B));
@@ -125,41 +1710,6 @@
           FRegisters[A] := RegisterUndefined;
           FRegisters[B] := RegisterBoolean(False);
         end;
-      end;
-
-      OP_LOAD_INT:
-        FRegisters[A] := RegisterInt(DecodesBx(Instruction));
-
-      OP_MOVE:
-        SetRegisterRaw(A, FRegisters[B]);
-
-      OP_GET_LOCAL:
-      begin
-        FRegisters[A] := GetLocalRegister(DecodeBx(Instruction));
-        if FRegisters[A].Kind = grkHole then
-          ThrowUninitializedLocal(Template, InstructionStartIP,
-            DecodeBx(Instruction));
-      end;
-
-      OP_SET_LOCAL:
-        SetLocalRaw(DecodeBx(Instruction), FRegisters[A]);
-
-      OP_GET_UPVALUE:
-      begin
-        if Assigned(FCurrentClosure) then
-        begin
-          Upvalue := FCurrentClosure.GetUpvalue(DecodeBx(Instruction));
-          if Assigned(Upvalue) then
-          begin
-            if Upvalue.Value.Kind = grkHole then
-              ThrowUninitializedUpvalue(Template, DecodeBx(Instruction));
-            SetRegisterRaw(A, Upvalue.Value)
-          end
-          else
-            FRegisters[A] := RegisterUndefined;
-        end
-        else
-          FRegisters[A] := RegisterUndefined;
       end;
 
       OP_SET_UPVALUE:
@@ -235,55 +1785,6 @@
         FRegisters[A] := RegisterObject(ArgsArray);
       end;
 
-      OP_JUMP:
-      begin
-        JumpOffset := DecodeAx(Instruction);
-        Inc(Frame.IP, JumpOffset);
-        if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-          PollExecutionTimeout(
-            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
-      end;
-
-      OP_JUMP_IF_TRUE:
-        if RegisterToBoolean(FRegisters[A]) then
-        begin
-          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
-            TGocciaCoverageTracker.Instance.RecordBranchHit(
-              Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(InstructionStartIP),
-              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
-          JumpOffset := DecodesBx(Instruction);
-          Inc(Frame.IP, JumpOffset);
-          if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-            PollExecutionTimeout(
-              PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
-        end
-        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
-          TGocciaCoverageTracker.Instance.RecordBranchHit(
-            Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(InstructionStartIP),
-            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
-
-      OP_JUMP_IF_FALSE:
-        if not RegisterToBoolean(FRegisters[A]) then
-        begin
-          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
-            TGocciaCoverageTracker.Instance.RecordBranchHit(
-              Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(InstructionStartIP),
-              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
-          JumpOffset := DecodesBx(Instruction);
-          Inc(Frame.IP, JumpOffset);
-          if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-            PollExecutionTimeout(
-              PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
-        end
-        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
-          TGocciaCoverageTracker.Instance.RecordBranchHit(
-            Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(InstructionStartIP),
-            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
-
       OP_JUMP_IF_NUM_NOT_LTE_IMM:
         begin
           if FRegisters[A].Kind = grkInt then
@@ -320,139 +1821,12 @@
               Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
         end;
 
-      OP_JUMP_IF_NOT_LT:
-        begin
-          if (FRegisters[A].Kind = grkInt) and (FRegisters[B].Kind = grkInt) then
-          begin
-            if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-            NumericComparisonResult := FRegisters[A].IntValue <
-              FRegisters[B].IntValue;
-          end
-          else if RegisterIsNumericScalar(FRegisters[A]) and
-                  RegisterIsNumericScalar(FRegisters[B]) then
-          begin
-            if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-            NumericComparisonResult := NumericScalarToDouble(FRegisters[A]) <
-              NumericScalarToDouble(FRegisters[B]);
-          end
-          else
-          begin
-            if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-            LeftValue := GetRegisterFast(A);
-            RightValue := GetRegisterFast(B);
-            if (LeftValue is TGocciaStringLiteralValue) and
-               (RightValue is TGocciaStringLiteralValue) then
-              NumericComparisonResult :=
-                Goccia.Arithmetic.CompareStringValues(
-                  TGocciaStringLiteralValue(LeftValue).Value,
-                  TGocciaStringLiteralValue(RightValue).Value) < 0
-            else
-              NumericComparisonResult := VMRootedBinaryPredicate(
-                @Goccia.Arithmetic.LessThan, LeftValue, RightValue);
-          end;
-          if not NumericComparisonResult then
-          begin
-            if FCoverageEnabled and
-               (TGocciaCoverageTracker.Instance <> nil) and
-               Assigned(Template.DebugInfo) then
-              TGocciaCoverageTracker.Instance.RecordBranchHit(
-                Template.DebugInfo.SourceFile,
-                Template.DebugInfo.GetLineForPC(InstructionStartIP),
-                Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
-            JumpOffset := Int16(C);
-            Inc(Frame.IP, JumpOffset);
-            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-              PollExecutionTimeout(
-                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
-          end
-          else if FCoverageEnabled and
-                  (TGocciaCoverageTracker.Instance <> nil) and
-                  Assigned(Template.DebugInfo) then
-            TGocciaCoverageTracker.Instance.RecordBranchHit(
-              Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(InstructionStartIP),
-              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
-        end;
-
-      OP_JUMP_IF_NULLISH:
-        if RegisterMatchesNullishKind(FRegisters[A], B) then
-        begin
-          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
-            TGocciaCoverageTracker.Instance.RecordBranchHit(
-              Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(InstructionStartIP),
-              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
-          Inc(Frame.IP, C);
-        end
-        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
-          TGocciaCoverageTracker.Instance.RecordBranchHit(
-            Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(InstructionStartIP),
-            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
-
-      OP_JUMP_IF_NOT_NULLISH:
-        if not RegisterMatchesNullishKind(FRegisters[A], B) then
-        begin
-          if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
-            TGocciaCoverageTracker.Instance.RecordBranchHit(
-              Template.DebugInfo.SourceFile,
-              Template.DebugInfo.GetLineForPC(InstructionStartIP),
-              Template.DebugInfo.GetColumnForPC(InstructionStartIP), 0);
-          Inc(Frame.IP, C);
-        end
-        else if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and Assigned(Template.DebugInfo) then
-          TGocciaCoverageTracker.Instance.RecordBranchHit(
-            Template.DebugInfo.SourceFile,
-            Template.DebugInfo.GetLineForPC(InstructionStartIP),
-            Template.DebugInfo.GetColumnForPC(InstructionStartIP), 1);
-
       OP_PUSH_HANDLER:
       begin
         if FHandlerStack.Count >= FHandlerStack.Capacity then
           GrowHandlerStack(FHandlerStack.Count + 1);
         FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth);
       end;
-
-      OP_PUSH_FINALLY_HANDLER:
-      begin
-        if FHandlerStack.Count >= FHandlerStack.Capacity then
-          GrowHandlerStack(FHandlerStack.Count + 1);
-        FHandlerStack.Push(Frame.IP + DecodeBx(Instruction), A, FFrameDepth,
-          bhkFinally);
-      end;
-
-      OP_POP_HANDLER:
-        if not FHandlerStack.IsEmpty then
-          FHandlerStack.Pop;
-
-      OP_ADD_INT:
-        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue +
-            FRegisters[C].IntValue)
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) +
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
-        end;
-
-      OP_ADD_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) +
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble + RightDouble);
-        end;
 
       OP_SUB_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -470,63 +1844,11 @@
           FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
         end;
 
-      OP_SUB_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) -
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble - RightDouble);
-        end;
-
-      // A proven Number can also arrive boxed: NaN, the infinities and -0
-      // are kept as number values rather than scalar registers.
-      OP_SUB_NUM_IMM:
-        if FRegisters[B].Kind = grkInt then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue - Int16(C))
-        else if FRegisters[B].Kind = grkFloat then
-          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue - Int16(C))
-        else if VMBoxedNumberRegister(FRegisters[B]) then
-          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
-            FRegisters[B].ObjectValue).Value - Int16(C))
-        else
-          raise Exception.Create(
-            'Invalid non-numeric source for OP_SUB_NUM_IMM');
-
-      OP_ADD_NUM_IMM:
-        if FRegisters[B].Kind = grkInt then
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue + Int16(C))
-        else if FRegisters[B].Kind = grkFloat then
-          FRegisters[A] := VMNumberRegister(FRegisters[B].FloatValue + Int16(C))
-        else if VMBoxedNumberRegister(FRegisters[B]) then
-          FRegisters[A] := VMNumberRegister(TGocciaNumberLiteralValue(
-            FRegisters[B].ObjectValue).Value + Int16(C))
-        else
-          raise Exception.Create(
-            'Invalid non-numeric source for OP_ADD_NUM_IMM');
-
       OP_MUL_INT:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
           FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
             FRegisters[C].IntValue)
         else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) *
-            NumericScalarToDouble(FRegisters[C]))
-        else
-        begin
-          RegistersToDoubles(FRegisters[B], FRegisters[C], LeftDouble,
-            RightDouble);
-          FRegisters[A] := VMNumberRegister(LeftDouble * RightDouble);
-        end;
-
-      OP_MUL_FLOAT:
-        if RegisterIsNumericScalar(FRegisters[B]) and
            RegisterIsNumericScalar(FRegisters[C]) then
           FRegisters[A] := VMNumberRegister(
             NumericScalarToDouble(FRegisters[B]) *
@@ -791,14 +2113,6 @@
           TGocciaArrayValue(FRegisters[A].ObjectValue).Elements.Add(
             RegisterToValue(FRegisters[B]));
 
-      OP_ARRAY_GET:
-        ExecGetComputedProperty(A, FRegisters[B], FRegisters[C],
-          ELEMENT_GET_OPTIONS);
-
-      OP_ARRAY_SET:
-        ExecSetComputedProperty(A, FRegisters[B], FRegisters[C],
-          ELEMENT_SET_OPTIONS);
-
       OP_GET_LENGTH:
       begin
         if (FRegisters[B].Kind = grkObject) and
@@ -1009,217 +2323,6 @@
           end;
         end;
       end;
-
-      OP_GET_PROP_CONST, OP_GET_LOCAL_PROP_CONST:
-      begin
-        // OP_GET_LOCAL_PROP_CONST loads the local into A, then reads the
-        // property of A as OP_GET_PROP_CONST reads the property of B.
-        if TGocciaOpCode(Op) = OP_GET_LOCAL_PROP_CONST then
-        begin
-          FRegisters[A] := GetLocalRegister(B);
-          if FRegisters[A].Kind = grkHole then
-            ThrowUninitializedLocal(Template, InstructionStartIP, B);
-          B := A;
-        end;
-        if (FRegisters[B].Kind = grkObject) and Assigned(FRegisters[B].ObjectValue) and
-           VMPropertyReadCacheableReceiver(FRegisters[B].ObjectValue) then
-        begin
-          // Hot shape: per-site inline cache keyed by the name-constant
-          // index, validated against (own-map identity, map entry version).
-          // Hits and fills serve only own plain data properties on
-          // ordinary-lookup receivers; everything else degrades to the
-          // generic GetPropertyValue path. Sites whose MissStreak saturated
-          // are megamorphic: they skip the cache and use the uncached
-          // own-data fast path. A nil slot (out-of-range constant index in
-          // corrupt bytecode) runs fully uncached.
-          // The gate above is the three exact classes the caches serve, not
-          // `is TGocciaObjectValue`: no tier below does anything for another
-          // receiver class but call GetPropertyValue, which the next branch
-          // does without walking the class chain first.
-          PropertyReadCache := Template.PropertyReadCacheSlot(C);
-          if Assigned(PropertyReadCache) and
-             (PropertyReadCache^.MissStreak <
-              PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
-             VMTryGetCachedOwnDataProperty(
-               TGocciaObjectValue(FRegisters[B].ObjectValue),
-               PropertyReadCache, GlobalBindingValue) then
-            SetRegisterFast(A, GlobalBindingValue)
-          else
-          begin
-            ProtoReadCache := Template.ProtoReadCacheSlot(C);
-            if Assigned(ProtoReadCache) and
-               (ProtoReadCache^.MissStreak <
-                PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
-               VMTryGetCachedProtoProperty(
-                 TGocciaObjectValue(FRegisters[B].ObjectValue),
-                 ProtoReadCache, GlobalBindingValue) then
-              SetRegisterFast(A, GlobalBindingValue)
-            else
-            begin
-              Constant := Template.GetConstantUnchecked(C);
-              GlobalName := Constant.StringValue;
-              if Constant.Kind <> bckPrivateName then
-              begin
-                // One own-map probe establishes own-data / own-non-data /
-                // absent; no fallback tier re-hashes the same name on this
-                // receiver.
-                case VMProbeOwnProperty(
-                  TGocciaObjectValue(FRegisters[B].ObjectValue), GlobalName,
-                  KeyIndex, PrivateDescriptor) of
-                  oppData:
-                  // A not-yet-materialized lazy descriptor (the only
-                  // TGocciaPropertyDescriptorData subclass) must not be read raw
-                  // or cached here: route its first touch through
-                  // GetPropertyValue, which materializes it and replaces the
-                  // entry in place with a plain descriptor so later reads cache
-                  // normally.
-                  if PrivateDescriptor.ClassType =
-                     TGocciaPropertyDescriptorData then
-                  begin
-                    if Assigned(PropertyReadCache) and
-                       (PropertyReadCache^.MissStreak <
-                        PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) then
-                      VMPrimeOwnPropertyCache(
-                        TGocciaObjectValue(FRegisters[B].ObjectValue),
-                        KeyIndex, PropertyReadCache);
-                    SetRegisterFast(A,
-                      TGocciaPropertyDescriptorData(PrivateDescriptor).Value);
-                  end
-                  else
-                    SetRegister(A, GetPropertyValue(
-                      FRegisters[B].ObjectValue, GlobalName));
-                  oppNonData:
-                  begin
-                    // Accessor/exotic own descriptor: never cacheable here;
-                    // converge the own tier toward dormant.
-                    if Assigned(PropertyReadCache) and
-                       (PropertyReadCache^.MissStreak <
-                        PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) then
-                      Inc(PropertyReadCache^.MissStreak);
-                    ServeOwnNonDataProperty(A, FRegisters[B].ObjectValue,
-                      PrivateDescriptor);
-                  end;
-                else
-                  // oppAbsent: own absence is established, so the proto
-                  // fill may skip its own re-probe (see the core's
-                  // contract); deeper or exotic resolutions stay generic.
-                  if Assigned(ProtoReadCache) and
-                     (ProtoReadCache^.MissStreak <
-                      PROPERTY_READ_CACHE_POLYMORPHIC_LIMIT) and
-                     VMFillProtoReadCache(
-                       TGocciaObjectValue(FRegisters[B].ObjectValue),
-                       GlobalName, ProtoReadCache, GlobalBindingValue) then
-                    SetRegisterFast(A, GlobalBindingValue)
-                  else
-                    SetRegister(A, GetPropertyValue(FRegisters[B].ObjectValue,
-                      GlobalName));
-                end;
-              end
-              else
-                SetRegister(A, GetPrivatePropertyValue(
-                  FRegisters[B].ObjectValue, GlobalName));
-            end;
-          end;
-        end
-        else
-          // Every other receiver, a primitive or an object the caches do not
-          // serve, out of line so this arm stays small.
-          ExecGetUncachedConstProperty(Template, A, B, C);
-      end;
-
-      OP_SET_PROP_CONST:
-        if (FRegisters[A].Kind = grkObject) and Assigned(FRegisters[A].ObjectValue) then
-        begin
-          RightValue := RegisterToValue(FRegisters[C]);
-          // Own writable-data write IC: (shape, entry index), same receiver
-          // gate as the read cache. Hits skip the name hash. Accessors,
-          // proxies, private fields, deletion, and non-writable descriptors
-          // fall through to SetPropertyValue / AssignProperty.
-          PropertyWriteCache := Template.PropertyWriteCacheSlot(B);
-          if not (Assigned(PropertyWriteCache) and
-             (PropertyWriteCache^.MissStreak <
-              PROPERTY_WRITE_CACHE_POLYMORPHIC_LIMIT) and
-             VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue) and
-             VMTrySetCachedOwnWritableDataProperty(
-               TGocciaObjectValue(FRegisters[A].ObjectValue),
-               PropertyWriteCache, RightValue)) then
-          begin
-            Constant := Template.GetConstantUnchecked(B);
-            GlobalName := Constant.StringValue;
-            if Constant.Kind = bckPrivateName then
-              SetPrivatePropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                RightValue)
-            else if VMPropertyReadCacheableReceiver(FRegisters[A].ObjectValue) then
-            begin
-              if Assigned(PropertyWriteCache) and
-                 (PropertyWriteCache^.MissStreak <
-                  PROPERTY_WRITE_CACHE_POLYMORPHIC_LIMIT) then
-              begin
-                case VMProbeOwnProperty(
-                  TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
-                  KeyIndex, PrivateDescriptor) of
-                  oppData:
-                  if (PrivateDescriptor.ClassType =
-                      TGocciaPropertyDescriptorData) and
-                     PrivateDescriptor.Writable then
-                  begin
-                    TGocciaPropertyDescriptorData(PrivateDescriptor).Value :=
-                      RightValue;
-                    VMPrimeOwnPropertyWriteCache(
-                      TGocciaObjectValue(FRegisters[A].ObjectValue),
-                      KeyIndex, PropertyWriteCache);
-                  end
-                  else
-                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                      RightValue);
-                  oppNonData:
-                  begin
-                    Inc(PropertyWriteCache^.MissStreak);
-                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                      RightValue);
-                  end;
-                else
-                  if FRegisters[A].ObjectValue is TGocciaVMLiteralObjectValue then
-                  begin
-                    if not TGocciaVMLiteralObjectValue(
-                      FRegisters[A].ObjectValue)
-                      .TrySetLiteralDataPropertyFast(GlobalName, RightValue) then
-                      SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                        RightValue);
-                  end
-                  else
-                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                      RightValue);
-                end;
-              end
-              else if not VMTrySetOwnWritableDataProperty(
-                TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
-                RightValue) then
-              begin
-                if FRegisters[A].ObjectValue is TGocciaVMLiteralObjectValue then
-                begin
-                  if not TGocciaVMLiteralObjectValue(FRegisters[A].ObjectValue)
-                    .TrySetLiteralDataPropertyFast(GlobalName, RightValue) then
-                    SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                      RightValue);
-                end
-                else
-                  SetPropertyValue(FRegisters[A].ObjectValue, GlobalName,
-                    RightValue);
-              end;
-            end
-            else
-              SetPropertyValue(FRegisters[A].ObjectValue, GlobalName, RightValue);
-          end;
-        end
-        else if Template.GetConstantUnchecked(B).Kind = bckPrivateName then
-          SetPrivatePropertyValue(GetRegister(A),
-            Template.GetConstantUnchecked(B).StringValue,
-            GetRegister(C))
-        else
-          SetPropertyValue(GetRegister(A),
-            Template.GetConstantUnchecked(B).StringValue,
-            GetRegister(C));
 
       OP_SET_PROP_CONST_LOOSE:
       begin
@@ -1594,99 +2697,6 @@
         end;
       end;
 
-      OP_ADD:
-      begin
-        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-        begin
-          if FProfilingOpcodes then
-            TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue +
-            FRegisters[C].IntValue);
-        end
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-        begin
-          if FProfilingOpcodes then
-            TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) +
-            NumericScalarToDouble(FRegisters[C]));
-        end
-        else begin
-          if FProfilingOpcodes then
-            TGocciaProfiler.Instance.RecordScalarMiss;
-          if (((FRegisters[B].Kind = grkObject) and
-                  (FRegisters[B].ObjectValue is TGocciaStringLiteralValue)) or
-                 ((FRegisters[C].Kind = grkObject) and
-                  (FRegisters[C].ObjectValue is TGocciaStringLiteralValue))) and
-                (not ((FRegisters[B].Kind = grkObject) and
-                      Assigned(FRegisters[B].ObjectValue) and
-                      (not FRegisters[B].ObjectValue.IsPrimitive))) and
-                (not ((FRegisters[C].Kind = grkObject) and
-                      Assigned(FRegisters[C].ObjectValue) and
-                      (not FRegisters[C].ObjectValue.IsPrimitive))) then
-          begin
-            if (FRegisters[B].Kind = grkObject) and
-               (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) then
-              SetRegisterFast(A, TGocciaStringLiteralValue.Concatenate(
-                TGocciaStringLiteralValue(FRegisters[B].ObjectValue),
-                VMRegisterToStringFast(FRegisters[C]).Value))
-            else
-              SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-                VMRegisterToStringFast(FRegisters[B]).Value +
-                VMRegisterToStringFast(FRegisters[C]).Value));
-          end
-        else
-        begin
-          LeftValue := GetRegisterFast(B);
-          RightValue := GetRegisterFast(C);
-          if (LeftValue is TGocciaStringLiteralValue) and
-             (RightValue is TGocciaStringLiteralValue) then
-            SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-              TGocciaStringLiteralValue(LeftValue).Value +
-              TGocciaStringLiteralValue(RightValue).Value))
-          else if LeftValue.IsPrimitive and RightValue.IsPrimitive then
-          begin
-            if (LeftValue is TGocciaStringLiteralValue) or
-               (RightValue is TGocciaStringLiteralValue) then
-              SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-                LeftValue.ToStringLiteral.Value + RightValue.ToStringLiteral.Value))
-            else
-              SetRegisterFast(A, EvaluateAddition(LeftValue, RightValue));
-          end
-          else
-            // Rooted: at least one operand is an object, so EvaluateAddition
-            // re-enters guest code. See VMRootedBinaryValue.
-            SetRegister(A, VMRootedBinaryValue(@EvaluateAddition,
-              LeftValue, RightValue));
-        end;
-        end;
-      end;
-
-      OP_SUB:
-      begin
-        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMIntResult(FRegisters[B].IntValue -
-            FRegisters[C].IntValue);
-        end
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) -
-            NumericScalarToDouble(FRegisters[C]));
-        end
-        else
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          SetRegister(A, VMRootedBinaryValue(@EvaluateSubtraction,
-            GetRegisterFast(B), GetRegisterFast(C)));
-        end;
-      end;
-
       OP_INC:
         if FRegisters[B].Kind = grkInt then
           SetRegisterRaw(A, VMIntResult(FRegisters[B].IntValue + 1))
@@ -1916,66 +2926,6 @@
           end;
         end;
 
-      OP_MUL:
-      begin
-        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMIntProductResult(FRegisters[B].IntValue,
-            FRegisters[C].IntValue);
-        end
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) *
-            NumericScalarToDouble(FRegisters[C]));
-        end
-        else
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          SetRegister(A, VMRootedBinaryValue(@EvaluateMultiplication,
-            GetRegisterFast(B), GetRegisterFast(C)));
-        end;
-      end;
-
-      OP_DIV:
-      begin
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMNumberRegister(
-            NumericScalarToDouble(FRegisters[B]) /
-            NumericScalarToDouble(FRegisters[C]));
-        end
-        else
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          SetRegister(A, VMRootedBinaryValue(@EvaluateDivision,
-            GetRegisterFast(B), GetRegisterFast(C)));
-        end;
-      end;
-
-      OP_MOD:
-      begin
-        if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := VMModuloRegister(
-            NumericScalarToDouble(FRegisters[B]),
-            NumericScalarToDouble(FRegisters[C]));
-        end
-        else
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          SetRegister(A, VMRootedBinaryValue(@EvaluateModulo,
-            GetRegisterFast(B), GetRegisterFast(C)));
-        end;
-      end;
-
       OP_POW:
       begin
         if RegisterIsNumericScalar(FRegisters[B]) and
@@ -2012,21 +2962,6 @@
           else
             SetRegister(A, VMNumberValue(-LeftValue.ToNumberLiteral.Value));
         end;
-
-      OP_BAND:
-        if (FRegisters[B].Kind = grkInt) and
-           (FRegisters[C].Kind = grkInt) then
-          FRegisters[A] := RegisterInt(
-            LongInt(FRegisters[B].IntValue) and
-            LongInt(FRegisters[C].IntValue))
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-          FRegisters[A] := RegisterInt(
-            VMRegisterToInt32(FRegisters[B]) and
-            VMRegisterToInt32(FRegisters[C]))
-        else
-          SetRegister(A, VMRootedBinaryValue(@EvaluateBitwiseAnd,
-            GetRegister(B), GetRegister(C)));
 
       OP_BOR:
         if (FRegisters[B].Kind = grkInt) and
@@ -2111,48 +3046,6 @@
             not NumberToInt32(FRegisters[B].FloatValue))
         else
           SetRegister(A, EvaluateBitwiseNot(GetRegister(B)));
-
-      OP_EQ:
-        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-          FRegisters[A] := RegisterBoolean(
-            FRegisters[B].IntValue = FRegisters[C].IntValue)
-        else if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[C].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
-           (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
-          FRegisters[A] := RegisterBoolean(UTF16StringsEqual(
-            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
-            TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
-        else
-          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
-            vseEqual:
-              FRegisters[A] := RegisterBoolean(True);
-            vseNotEqual:
-              FRegisters[A] := RegisterBoolean(False);
-          else
-            SetRegister(A, GetRegister(B).IsEqual(GetRegister(C)));
-          end;
-
-      OP_NEQ:
-        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-          FRegisters[A] := RegisterBoolean(
-            FRegisters[B].IntValue <> FRegisters[C].IntValue)
-        else if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[C].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaStringLiteralValue) and
-           (FRegisters[C].ObjectValue is TGocciaStringLiteralValue) then
-          FRegisters[A] := RegisterBoolean(not UTF16StringsEqual(
-            TGocciaStringLiteralValue(FRegisters[B].ObjectValue).Value,
-            TGocciaStringLiteralValue(FRegisters[C].ObjectValue).Value))
-        else
-          case VMStrictEqualRegisters(FRegisters[B], FRegisters[C]) of
-            vseEqual:
-              FRegisters[A] := RegisterBoolean(False);
-            vseNotEqual:
-              FRegisters[A] := RegisterBoolean(True);
-          else
-            SetRegister(A, GetRegister(B).IsNotEqual(GetRegister(C)));
-          end;
 
       OP_LOOSE_EQ:
         if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
@@ -2241,80 +3134,6 @@
             // ToPrimitive can run guest code (see FRegisters).
             GuestCallBoolean := VMRootedBinaryPredicate(
               @Goccia.Arithmetic.GreaterThan, LeftValue, RightValue);
-            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
-          end;
-        end;
-      end;
-
-      OP_LTE:
-      begin
-        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := RegisterBoolean(FRegisters[B].IntValue <=
-            FRegisters[C].IntValue);
-        end
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) <=
-            NumericScalarToDouble(FRegisters[C]));
-        end
-        else
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          LeftValue := GetRegisterFast(B);
-          RightValue := GetRegisterFast(C);
-          if (LeftValue is TGocciaStringLiteralValue) and
-             (RightValue is TGocciaStringLiteralValue) then
-            FRegisters[A] := RegisterBoolean(
-              Goccia.Arithmetic.CompareStringValues(
-                TGocciaStringLiteralValue(LeftValue).Value,
-                TGocciaStringLiteralValue(RightValue).Value) <= 0)
-          else
-          begin
-            // ToPrimitive can run guest code (see FRegisters).
-            GuestCallBoolean := VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue);
-            FRegisters[A] := RegisterBoolean(GuestCallBoolean);
-          end;
-        end;
-      end;
-
-      OP_GTE:
-      begin
-        if (FRegisters[B].Kind = grkInt) and (FRegisters[C].Kind = grkInt) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := RegisterBoolean(FRegisters[B].IntValue >=
-            FRegisters[C].IntValue);
-        end
-        else if RegisterIsNumericScalar(FRegisters[B]) and
-           RegisterIsNumericScalar(FRegisters[C]) then
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarHit;
-          FRegisters[A] := RegisterBoolean(
-            NumericScalarToDouble(FRegisters[B]) >=
-            NumericScalarToDouble(FRegisters[C]));
-        end
-        else
-        begin
-          if FProfilingOpcodes then TGocciaProfiler.Instance.RecordScalarMiss;
-          LeftValue := GetRegisterFast(B);
-          RightValue := GetRegisterFast(C);
-          if (LeftValue is TGocciaStringLiteralValue) and
-             (RightValue is TGocciaStringLiteralValue) then
-            FRegisters[A] := RegisterBoolean(
-              Goccia.Arithmetic.CompareStringValues(
-                TGocciaStringLiteralValue(LeftValue).Value,
-                TGocciaStringLiteralValue(RightValue).Value) >= 0)
-          else
-          begin
-            // ToPrimitive can run guest code (see FRegisters).
-            GuestCallBoolean := VMRootedBinaryPredicate(
-              @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue);
             FRegisters[A] := RegisterBoolean(GuestCallBoolean);
           end;
         end;
@@ -2539,546 +3358,6 @@
         end;
       end;
 
-      OP_CALL:
-      begin
-        if FThreadPolls^.TimeoutArmed then
-          PollExecutionTimeout(
-            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
-        // A bytecode function is the usual callee and is neither a native nor
-        // a bound function. Its class is sealed, so one exact class comparison
-        // decides it: a bytecode callee skips the two `is` tests below, and
-        // any other callee skips the one for a bytecode function, each of
-        // which would walk a whole class chain to fail.
-        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
-          Assigned(FRegisters[A].ObjectValue) and
-          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
-        if (not CalleeIsBytecodeFunction) and
-           ((C and CALL_FLAG_SPREAD) = 0) and
-           (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
-           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
-             CreationRealm = CurrentRealm) and
-           (B = 1) and
-           (FRegisters[A + 1].Kind = grkObject) and
-           (FRegisters[A + 1].ObjectValue is TGocciaStringLiteralValue) then
-        begin
-          case TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
-            IntrinsicKind of
-            nikDecodeURI:
-              begin
-                SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-                  DecodeURI(TGocciaStringLiteralValue(
-                    FRegisters[A + 1].ObjectValue).Value)));
-                Continue;
-              end;
-            nikDecodeURIComponent:
-              begin
-                SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-                  DecodeURIComponent(TGocciaStringLiteralValue(
-                    FRegisters[A + 1].ObjectValue).Value)));
-                Continue;
-              end;
-          end;
-        end;
-        if (not CalleeIsBytecodeFunction) and
-           (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaBoundFunctionValue) then
-        begin
-          BoundFunction := TGocciaBoundFunctionValue(FRegisters[A].ObjectValue);
-          if BoundFunction.OriginalFunction is TGocciaBytecodeFunctionValue then
-          begin
-            BytecodeFunction := TGocciaBytecodeFunctionValue(BoundFunction.OriginalFunction);
-            if Assigned(BytecodeFunction.FClosure) and
-               Assigned(BytecodeFunction.FClosure.Template) and
-               (not BytecodeFunction.FClosure.Template.IsAsync) and
-               (not BytecodeFunction.FClosure.Template.IsGenerator) then
-            begin
-              if (C and 1) = 0 then
-              begin
-                SetLength(RegisterArgs, BoundFunction.BoundArgCount + B);
-                for I := 0 to BoundFunction.BoundArgCount - 1 do
-                  RegisterArgs[I] := ValueToRegister(BoundFunction.GetBoundArg(I));
-                for I := 0 to B - 1 do
-                  RegisterArgs[BoundFunction.BoundArgCount + I] := FRegisters[A + 1 + I];
-                CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
-                if not BytecodeFunction.FStrictThis then
-                  CallThisRegister := CoerceNonStrictThisRegister(
-                    CallThisRegister,
-                    BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
-                      FGlobalThisValue),
-                    BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
-                      FRealm));
-                if (C and CALL_FLAG_TAIL) <> 0 then
-                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                    InitialFrameStackCount, SavedHandlerCount)
-                else
-                  PushFrame(A, Frame.IP, Template, PrevCovLine,
-                    ProfileEntryTimestamp);
-                SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, PGocciaRegister(RegisterArgs),
-                  Length(RegisterArgs), True,
-                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                Continue;
-              end
-              else if (FRegisters[B].Kind = grkObject) and
-                      (FRegisters[B].ObjectValue is TGocciaArrayValue) then
-              begin
-                SetLength(RegisterArgs,
-                  BoundFunction.BoundArgCount +
-                  TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
-                for I := 0 to BoundFunction.BoundArgCount - 1 do
-                  RegisterArgs[I] := VMValueToRegisterFast(BoundFunction.GetBoundArg(I));
-	                for I := 0 to TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count - 1 do
-	                  RegisterArgs[BoundFunction.BoundArgCount + I] := VMValueToRegisterFast(
-	                    TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
-                CallThisRegister := ValueToRegister(BoundFunction.BoundThis);
-                if not BytecodeFunction.FStrictThis then
-                  CallThisRegister := CoerceNonStrictThisRegister(
-                    CallThisRegister,
-                    BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
-                      FGlobalThisValue),
-                    BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
-                      FRealm));
-                if (C and CALL_FLAG_TAIL) <> 0 then
-                  PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                    InitialFrameStackCount, SavedHandlerCount)
-                else
-                  PushFrame(A, Frame.IP, Template, PrevCovLine,
-                    ProfileEntryTimestamp);
-                SetupNewFrame(BytecodeFunction.FClosure,
-                  CallThisRegister, PGocciaRegister(RegisterArgs),
-                  Length(RegisterArgs), True,
-                  Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                Continue;
-              end;
-            end;
-          end;
-        end;
-
-        if CalleeIsBytecodeFunction then
-        begin
-          BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
-          if Assigned(BytecodeFunction.FClosure) and
-             Assigned(BytecodeFunction.FClosure.Template) and
-             (not BytecodeFunction.FClosure.Template.IsAsync) and
-             (not BytecodeFunction.FClosure.Template.IsGenerator) then
-          begin
-            if not BytecodeFunction.FStrictThis then
-            begin
-              CallGlobalThisValue := BytecodeClosureGlobalThis(
-                BytecodeFunction.FClosure, FGlobalThisValue);
-              if Assigned(CallGlobalThisValue) then
-                CallThisRegister := VMValueToRegisterFast(CallGlobalThisValue)
-              else
-                CallThisRegister := RegisterUndefined;
-            end
-            else
-              CallThisRegister := RegisterUndefined;
-            if (C and 1) = 0 then
-            begin
-              // The arguments are read straight out of the caller's registers:
-              // SetupNewFrame copies them into the callee's argument window
-              // before it acquires (and so may move or clear) any register,
-              // or, when the callee never reads one and no arena grows,
-              // straight into the callee's registers.
-              if (C and CALL_FLAG_TAIL) <> 0 then
-                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                  InitialFrameStackCount, SavedHandlerCount)
-              else
-                PushFrame(A, Frame.IP, Template, PrevCovLine,
-                  ProfileEntryTimestamp);
-              SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, @FRegisters[A + 1], B, True,
-                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              Continue;
-            end
-            else if (FRegisters[B].Kind = grkObject) and
-                    (FRegisters[B].ObjectValue is TGocciaArrayValue) then
-            begin
-              SetLength(RegisterArgs,
-                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
-	              for I := 0 to High(RegisterArgs) do
-	                RegisterArgs[I] := ValueToRegister(
-	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
-              if (C and CALL_FLAG_TAIL) <> 0 then
-                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                  InitialFrameStackCount, SavedHandlerCount)
-              else
-                PushFrame(A, Frame.IP, Template, PrevCovLine,
-                  ProfileEntryTimestamp);
-              SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, PGocciaRegister(RegisterArgs),
-                Length(RegisterArgs), True,
-                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              Continue;
-            end;
-          end;
-        end;
-
-        if (C and 1) = 1 then
-          CallArgs := AcquireArguments
-        else
-          CallArgs := AcquireArguments(B);
-        try
-          if (C and 1) = 1 then
-          begin
-	            if GetRegister(B) is TGocciaArrayValue then
-	              for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-	                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
-          end
-          else
-            for I := 0 to B - 1 do
-              CallArgs.Add(GetRegister(A + 1 + I));
-          if not (Assigned(GetRegister(A)) and
-                  (GetRegister(A).IsCallable or
-                   (GetRegister(A) is TGocciaProxyValue))) then
-            ThrowNotCallableHere(GetRegister(A), nil);
-          if (GetRegister(A) is TGocciaNativeFunctionValue) or
-             (GetRegister(A) is TGocciaFunctionConstructorClassValue) or
-             (GetRegister(A) is TGocciaBoundFunctionValue) or
-             (GetRegister(A) is TGocciaProxyValue) then
-          begin
-            if FCallStack <> nil then
-              SavedConstructFrameOk :=
-                FCallStack.TryGetTopFrame(SavedConstructFrame)
-            else
-              SavedConstructFrameOk := False;
-            // Also stamps the executing frame with this call's position so an
-            // error a native callee creates captures the call site (deferred
-            // frames are 0:0). Uses the recorded call-site column (the
-            // instruction line map resolves only to the enclosing
-            // statement). Snapshotted above and
-            // restored below.
-            EnterNativeCallSite(PreviousCallSite);
-            try
-              SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
-                TGocciaUndefinedLiteralValue.UndefinedValue));
-            finally
-              LeaveGocciaCallSite(PreviousCallSite);
-            end;
-            if SavedConstructFrameOk and (FCallStack <> nil) then
-              FCallStack.SetTopFrame(SavedConstructFrame);
-          end
-          else
-            SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
-              TGocciaUndefinedLiteralValue.UndefinedValue));
-        finally
-          ReleaseArguments(CallArgs);
-        end;
-      end;
-
-      OP_CALL_METHOD:
-      begin
-        if FThreadPolls^.TimeoutArmed then
-          PollExecutionTimeout(
-            PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
-        // See OP_CALL: an exact class comparison decides a bytecode callee.
-        CalleeIsBytecodeFunction := (FRegisters[A].Kind = grkObject) and
-          Assigned(FRegisters[A].ObjectValue) and
-          (FRegisters[A].ObjectValue.ClassType = TGocciaBytecodeFunctionValue);
-        if (not CalleeIsBytecodeFunction) and
-           ((C and CALL_FLAG_SPREAD) = 0) and (B = 2) and
-           (FRegisters[A].Kind = grkObject) and
-           (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) and
-           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
-             IntrinsicKind = nikStringFromCharCode) and
-           (TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).
-             CreationRealm = CurrentRealm) and
-           (FRegisters[A + 1].Kind = grkInt) and
-           (FRegisters[A + 2].Kind = grkInt) then
-        begin
-          SetRegisterFast(A, TGocciaStringLiteralValue.Create(
-            UTF16CodeUnitPairToString(
-              Cardinal(FRegisters[A + 1].IntValue and $FFFF),
-              Cardinal(FRegisters[A + 2].IntValue and $FFFF))));
-          Continue;
-        end;
-        if (not CalleeIsBytecodeFunction) and ((C and 1) = 0) then
-        begin
-          if (FRegisters[A - 1].Kind = grkObject) and
-             (FRegisters[A].Kind = grkObject) and
-             (FRegisters[A].ObjectValue is TGocciaNativeFunctionValue) then
-          begin
-            { Identity, not name: an own `bind`, `call` or `apply` on a function
-              object is a different function — `Reflect.apply` assigned as one,
-              or the two statics node:async_hooks installs — and matching on the
-              name alone silently redirected the call into the intrinsic. }
-            CalleeIntrinsicKind :=
-              TGocciaNativeFunctionValue(FRegisters[A].ObjectValue).IntrinsicKind;
-            if (CalleeIntrinsicKind = nikFunctionBind) and
-               (FRegisters[A - 1].ObjectValue is TGocciaFunctionBase) then
-            begin
-              // Binding reads the target's length and name, which can be
-              // getters that run guest code (see FRegisters).
-              case B of
-                0:
-                  begin
-                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithoutArgs(
-                      FRegisters[A - 1].ObjectValue,
-                      TGocciaUndefinedLiteralValue.UndefinedValue);
-                    FRegisters[A] := RegisterObject(GuestCallValue);
-                  end;
-                1:
-                  begin
-                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithoutArgs(
-                      FRegisters[A - 1].ObjectValue,
-                      RegisterToValue(FRegisters[A + 1]));
-                    FRegisters[A] := RegisterObject(GuestCallValue);
-                  end;
-                2:
-                  begin
-                    GuestCallValue := TGocciaBoundFunctionValue.CreateWithSingleArg(
-                      FRegisters[A - 1].ObjectValue,
-                      RegisterToValue(FRegisters[A + 1]),
-                      RegisterToValue(FRegisters[A + 2]));
-                    FRegisters[A] := RegisterObject(GuestCallValue);
-                  end;
-              else
-                BytecodeFunction := nil;
-              end;
-              if B <= 2 then
-                Continue;
-            end;
-
-            if FRegisters[A - 1].ObjectValue is TGocciaBytecodeFunctionValue then
-            begin
-              BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A - 1].ObjectValue);
-              if Assigned(BytecodeFunction.FClosure) and
-                 Assigned(BytecodeFunction.FClosure.Template) and
-                 (not BytecodeFunction.FClosure.Template.IsAsync) and
-                 (not BytecodeFunction.FClosure.Template.IsGenerator) then
-              begin
-                if CalleeIntrinsicKind = nikFunctionCall then
-                begin
-                  if B = 0 then
-                    CallThisRegister := RegisterUndefined
-                  else
-                    CallThisRegister := FRegisters[A + 1];
-                  if not BytecodeFunction.FStrictThis then
-                    CallThisRegister := CoerceNonStrictThisRegister(
-                      CallThisRegister,
-                      BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
-                        FGlobalThisValue),
-                      BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
-                        FRealm));
-                  PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
-                  // The first operand is the callee's `this`; the rest are its
-                  // arguments, read straight out of the caller's registers.
-                  if B <= 1 then
-                    SetupNewFrame(BytecodeFunction.FClosure,
-                      CallThisRegister, nil, 0, True,
-                      Frame, Template, PrevCovLine, ProfileEntryTimestamp)
-                  else
-                    SetupNewFrame(BytecodeFunction.FClosure,
-                      CallThisRegister, @FRegisters[A + 2], B - 1, True,
-                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                  Continue;
-                end
-                // The dense hole-free gate is what makes the direct element
-                // reads below legal: no read can reach an accessor, so the
-                // argument values cannot be produced by guest code that
-                // allocates (and collects) while the earlier ones sit in plain
-                // locals, and no read order is observable. A holey array or one
-                // whose length was grown past its element count falls through
-                // to the generic call, which runs Function.prototype.apply and
-                // therefore CreateListFromArrayLike — ascending Get order, a
-                // rooted arguments collection, and the spec argument count.
-                else if (CalleeIntrinsicKind = nikFunctionApply) and (B >= 2) and
-                        (FRegisters[A + 2].Kind = grkObject) and
-                        (FRegisters[A + 2].ObjectValue is TGocciaArrayValue) and
-                        IsDenseHoleFreeArgumentArray(
-                          TGocciaArrayValue(FRegisters[A + 2].ObjectValue)) then
-                begin
-                  ArgsArray := TGocciaArrayValue(FRegisters[A + 2].ObjectValue);
-                  CallThisRegister := FRegisters[A + 1];
-                  if not BytecodeFunction.FStrictThis then
-                    CallThisRegister := CoerceNonStrictThisRegister(
-                      CallThisRegister,
-                      BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
-                        FGlobalThisValue),
-                      BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
-                        FRealm));
-                  PushFrame(A, Frame.IP, Template, PrevCovLine, ProfileEntryTimestamp);
-                  // Up to three arguments are staged in a stack array, which
-                  // spares the common short apply a heap staging array.
-                  if ArgsArray.Elements.Count <= Length(ApplyArgRegisters) then
-                  begin
-                    for I := 0 to ArgsArray.Elements.Count - 1 do
-                      ApplyArgRegisters[I] :=
-                        VMValueToRegisterFast(ArgsArray.Elements[I]);
-                    SetupNewFrame(BytecodeFunction.FClosure,
-                      CallThisRegister, @ApplyArgRegisters[0],
-                      ArgsArray.Elements.Count, True,
-                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                  end
-                  else
-                  begin
-                    SetLength(RegisterArgs, ArgsArray.Elements.Count);
-                    for I := 0 to High(RegisterArgs) do
-                      RegisterArgs[I] :=
-                        VMValueToRegisterFast(ArgsArray.Elements[I]);
-                    SetupNewFrame(BytecodeFunction.FClosure,
-                      CallThisRegister, PGocciaRegister(RegisterArgs),
-                      Length(RegisterArgs), True,
-                      Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-                  end;
-                  Continue;
-                end;
-              end;
-            end;
-          end;
-        end;
-
-        if CalleeIsBytecodeFunction then
-        begin
-          BytecodeFunction := TGocciaBytecodeFunctionValue(FRegisters[A].ObjectValue);
-          if Assigned(BytecodeFunction.FClosure) and
-             Assigned(BytecodeFunction.FClosure.Template) and
-             (not BytecodeFunction.FClosure.Template.IsAsync) and
-             (not BytecodeFunction.FClosure.Template.IsGenerator) then
-          begin
-            CallThisRegister := FRegisters[A - 1];
-            if not BytecodeFunction.FStrictThis then
-              CallThisRegister := CoerceNonStrictThisRegister(
-                CallThisRegister,
-                BytecodeClosureGlobalThis(BytecodeFunction.FClosure,
-                  FGlobalThisValue),
-                BytecodeClosureExecutionRealm(BytecodeFunction.FClosure,
-                  FRealm));
-            if (C and 1) = 0 then
-            begin
-              // See OP_CALL: the arguments are read straight out of the
-              // caller's registers.
-              if (C and CALL_FLAG_TAIL) <> 0 then
-                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                  InitialFrameStackCount, SavedHandlerCount)
-              else
-                PushFrame(A, Frame.IP, Template, PrevCovLine,
-                  ProfileEntryTimestamp);
-              SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, @FRegisters[A + 1], B, True,
-                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              Continue;
-            end
-            else if (FRegisters[B].Kind = grkObject) and
-                    (FRegisters[B].ObjectValue is TGocciaArrayValue) then
-            begin
-              SetLength(RegisterArgs,
-                TGocciaArrayValue(FRegisters[B].ObjectValue).Elements.Count);
-	              for I := 0 to High(RegisterArgs) do
-	                RegisterArgs[I] := VMValueToRegisterFast(
-	                  TGocciaArrayValue(FRegisters[B].ObjectValue).GetProperty(IntegerToString(I)));
-              if (C and CALL_FLAG_TAIL) <> 0 then
-                PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
-                  InitialFrameStackCount, SavedHandlerCount)
-              else
-                PushFrame(A, Frame.IP, Template, PrevCovLine,
-                  ProfileEntryTimestamp);
-              SetupNewFrame(BytecodeFunction.FClosure,
-                CallThisRegister, PGocciaRegister(RegisterArgs),
-                Length(RegisterArgs), True,
-                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-              Continue;
-            end;
-          end;
-        end;
-
-        if (C and 1) = 1 then
-          CallArgs := AcquireArguments
-        else
-          CallArgs := AcquireArguments(B);
-        try
-          if (C and 1) = 1 then
-          begin
-            if GetRegister(B) is TGocciaArrayValue then
-              for I := 0 to TGocciaArrayValue(GetRegister(B)).Elements.Count - 1 do
-                CallArgs.Add(TGocciaArrayValue(GetRegister(B)).GetProperty(IntegerToString(I)));
-          end
-          else
-            for I := 0 to B - 1 do
-              CallArgs.Add(GetRegister(A + 1 + I));
-          if not (Assigned(GetRegister(A)) and
-                  (GetRegister(A).IsCallable or
-                   (GetRegister(A) is TGocciaProxyValue))) then
-            ThrowNotCallableHere(GetRegister(A), GetRegister(A - 1));
-          if (GetRegister(A) is TGocciaNativeFunctionValue) or
-             (GetRegister(A) is TGocciaFunctionConstructorClassValue) or
-             (GetRegister(A) is TGocciaBoundFunctionValue) or
-             (GetRegister(A) is TGocciaProxyValue) then
-          begin
-            if FCallStack <> nil then
-              SavedConstructFrameOk :=
-                FCallStack.TryGetTopFrame(SavedConstructFrame)
-            else
-              SavedConstructFrameOk := False;
-            // See OP_CALL: also stamps the recorded call-site position for a
-            // native callee's created error; snapshotted above, restored below.
-            EnterNativeCallSite(PreviousCallSite);
-            try
-              SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
-                GetRegister(A - 1)));
-            finally
-              LeaveGocciaCallSite(PreviousCallSite);
-            end;
-            if SavedConstructFrameOk and (FCallStack <> nil) then
-              FCallStack.SetTopFrame(SavedConstructFrame);
-          end
-          else
-            SetRegister(A, InvokeFunctionValue(GetRegister(A), CallArgs,
-              GetRegister(A - 1)));
-        finally
-          ReleaseArguments(CallArgs);
-        end;
-      end;
-
-      OP_CONSTRUCT:
-      begin
-        if (FRegisters[B].Kind = grkObject) and
-           (FRegisters[B].ObjectValue is TGocciaVMClassValue) then
-        begin
-          SetLength(RegisterArgs, C);
-          for I := 0 to C - 1 do
-            RegisterArgs[I] := FRegisters[B + 1 + I];
-          // The constructor runs guest code (see FRegisters).
-          GuestCallRegister := TGocciaVMClassValue(FRegisters[B].ObjectValue)
-            .InstantiateRegisters(RegisterArgs);
-          FRegisters[A] := GuestCallRegister;
-        end
-        else
-        begin
-          if not MayBeConstructor(GetRegister(B)) then
-            ThrowNotConstructorHere(GetRegister(B));
-          { A native constructor can capture a stack trace (`new Error(...)`),
-            and this frame carries no position of its own. Snapshot the top
-            frame, stamp it at the construct site so a trace captured during
-            construction locates the `new`, then restore it on success so the
-            stamp does not leak onto a later throw in the same function
-            (`new Map(); JSON.parse('{')`). On a throw, the handler that
-            catches it in this frame clears the stamp (HandleExceptionUnwind). }
-          if FCallStack <> nil then
-            SavedConstructFrameOk :=
-              FCallStack.TryGetTopFrame(SavedConstructFrame)
-          else
-            SavedConstructFrameOk := False;
-          StampCurrentCallSiteLocation;
-          CallArgs := AcquireArguments(C);
-          try
-            for I := 0 to C - 1 do
-              CallArgs.Add(GetRegister(B + 1 + I));
-            EnterCurrentInstructionCallSite(PreviousCallSite);
-            try
-              SetRegister(A, ConstructValue(GetRegister(B), CallArgs));
-            finally
-              LeaveGocciaCallSite(PreviousCallSite);
-            end;
-          finally
-            ReleaseArguments(CallArgs);
-          end;
-          if SavedConstructFrameOk and (FCallStack <> nil) then
-            FCallStack.SetTopFrame(SavedConstructFrame);
-        end;
-      end;
-
       OP_CONSTRUCT_SPREAD:
       begin
         SpreadArray := TGocciaArrayValue(FRegisters[C].ObjectValue);
@@ -3126,69 +3405,6 @@
 
       OP_GET_ITER:
         SetRegister(A, GetIteratorValue(GetRegister(B), C <> 0));
-
-      OP_ITER_NEXT:
-      begin
-        if (FRegisters[C].Kind = grkObject) and
-           (FRegisters[C].ObjectValue is TGocciaIteratorValue) then
-        begin
-          IterResult := TGocciaIteratorValue(FRegisters[C].ObjectValue).DirectNext(DoneFlag);
-          if DoneFlag then
-            FRegisters[A] := RegisterUndefined
-          else
-            FRegisters[A] := VMValueToRegisterFast(IterResult);
-          if DoneFlag then
-            FRegisters[B] := RegisterBoolean(True)
-          else
-            FRegisters[B] := RegisterBoolean(False);
-        end
-        else if (FRegisters[C].Kind = grkObject) and
-                (FRegisters[C].ObjectValue is TGocciaObjectValue) then
-        begin
-          IterResult := FRegisters[C].ObjectValue;
-          NextMethod := IterResult.GetProperty(PROP_NEXT);
-          if not Assigned(NextMethod) or
-             (NextMethod is TGocciaUndefinedLiteralValue) or
-             not NextMethod.IsCallable then
-          begin
-            FRegisters[A] := RegisterUndefined;
-            FRegisters[B] := RegisterBoolean(True);
-          end
-          else
-          begin
-            CallArgs := AcquireArguments;
-            try
-              IterResult := InvokeCallable(NextMethod, CallArgs, IterResult);
-            finally
-              ReleaseArguments(CallArgs);
-            end;
-
-            IterResult := AwaitValue(IterResult);
-            if IterResult.IsPrimitive then
-              ThrowTypeError(Format(SErrorIteratorResultNotObject, [IterResult.ToStringLiteral.Value]),
-                SSuggestIteratorResultObject);
-
-            DoneValue := IterResult.GetProperty(PROP_DONE);
-            if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-            begin
-              FRegisters[A] := RegisterUndefined;
-              FRegisters[B] := RegisterBoolean(True);
-            end
-            else
-            begin
-              // A `value` getter runs guest code (see FRegisters).
-              GuestCallValue := IterResult.GetProperty(PROP_VALUE);
-              FRegisters[A] := VMValueToRegisterFast(GuestCallValue);
-              FRegisters[B] := RegisterBoolean(False);
-            end;
-          end;
-        end
-        else
-        begin
-          FRegisters[A] := RegisterUndefined;
-          FRegisters[B] := RegisterBoolean(True);
-        end;
-      end;
 
       OP_ASYNC_ITER_NEXT:
       begin
@@ -3407,122 +3623,6 @@
         SetRegister(A, FinishDecorators(RegisterToValue(FRegisters[A + 1]),
           RegisterToValue(FRegisters[A])));
 
-      OP_GET_GLOBAL, OP_GET_GLOBAL_DECLARED:
-      begin
-        if not Assigned(FGlobalScope) then
-          FRegisters[A] := RegisterUndefined
-        else
-        begin
-          // Per-site inline cache keyed by the name-constant index.  It serves
-          // either an own lexical-map entry or an ordinary global object's own
-          // plain-data entry.  Both modes re-read the live value by a
-          // version-validated entry index; exotic objects, accessors, lazy
-          // descriptors, and dynamic scopes remain on the named lookup path.
-          GlobalReadCache := Template.GlobalReadCacheSlot(DecodeBx(Instruction));
-          if Assigned(GlobalReadCache) and
-             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
-             (GlobalReadCache^.ObjectValue = nil) and
-             FGlobalScope.TryGetLexicalValueAt(GlobalReadCache^.EntryIndex,
-               GlobalReadCache^.Version, GlobalBindingValue) then
-            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
-          // A module environment's import binding, read by a function the
-          // module created while it was linked: resolve it through the cached
-          // binding, skipping the scope's name lookups.
-          else if Assigned(GlobalReadCache) and
-             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
-             (GlobalReadCache^.ObjectBindingKind =
-               GLOBAL_READ_OBJECT_BINDING_IMPORT) and
-             FGlobalScope.LexicalEntryVersionIs(GlobalReadCache^.Version) and
-             TGocciaModuleImportBinding(GlobalReadCache^.ObjectValue)
-               .TryGetValue(GlobalBindingValue) then
-            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
-          else if Assigned(GlobalReadCache) and
-             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
-             (FGlobalScope.ThisValue is TGocciaObjectValue) and
-             (GlobalReadCache^.ObjectValue =
-               Pointer(FGlobalScope.ThisValue)) and
-             VMGlobalObjectBindingCacheStillPrecedes(FGlobalScope,
-               GlobalReadCache) and
-             VMTryGetCachedGlobalOwnDataProperty(
-               TGocciaObjectValue(FGlobalScope.ThisValue),
-               GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
-               GlobalBindingValue) then
-            FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
-          else
-          begin
-            GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
-            if Assigned(GlobalReadCache) then
-            begin
-              GlobalReadCache^.Scope := nil;
-              GlobalReadCache^.ObjectValue := nil;
-              GlobalReadCache^.ObjectBindingKind :=
-                GLOBAL_READ_OBJECT_BINDING_NONE;
-              if FGlobalScope.TryGetBindingValueFillCache(GlobalName,
-                GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
-                GlobalBindingValue, GlobalImportBinding,
-                GlobalImportVersion) then
-              begin
-                GlobalBindingEntryIndex := GlobalReadCache^.EntryIndex;
-                GlobalBindingVersion := GlobalReadCache^.Version;
-                if Assigned(GlobalImportBinding) then
-                begin
-                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
-                  GlobalReadCache^.ObjectValue := Pointer(GlobalImportBinding);
-                  GlobalReadCache^.ObjectBindingKind :=
-                    GLOBAL_READ_OBJECT_BINDING_IMPORT;
-                  GlobalReadCache^.Version := GlobalImportVersion;
-                end
-                else if (FGlobalScope.ThisValue is TGocciaObjectValue) and
-                   ((not FGlobalScope.ContainsOwnLexicalBinding(GlobalName) and
-                     FGlobalScope.ContainsOwnVarBinding(GlobalName)) or
-                    (FGlobalScope.IsBuiltInBinding(GlobalName) and
-                     FGlobalScope.IsGlobalObjectBackedBinding(GlobalName))) and
-                   VMTryGetGlobalOwnDataPropertyFillCache(
-                     TGocciaObjectValue(FGlobalScope.ThisValue), GlobalName,
-                     GlobalReadCache^.EntryIndex,
-                     GlobalReadCache^.Version) then
-                begin
-                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
-                  GlobalReadCache^.ObjectValue :=
-                    Pointer(FGlobalScope.ThisValue);
-                  if FGlobalScope.ContainsOwnVarBinding(GlobalName) then
-                    GlobalReadCache^.ObjectBindingKind :=
-                      GLOBAL_READ_OBJECT_BINDING_VAR
-                  else
-                  begin
-                    GlobalReadCache^.ObjectBindingKind :=
-                      GLOBAL_READ_OBJECT_BINDING_BUILTIN;
-                    GlobalReadCache^.BindingEntryIndex :=
-                      GlobalBindingEntryIndex;
-                    GlobalReadCache^.BindingVersion :=
-                      GlobalBindingVersion;
-                  end;
-                end
-                else if GlobalReadCache^.EntryIndex >= 0 then
-                  GlobalReadCache^.Scope := Pointer(FGlobalScope);
-                FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue);
-              end
-              else if TGocciaOpCode(Op) = OP_GET_GLOBAL_DECLARED then
-                ThrowReferenceError(Format(SErrorUndefinedVariable,
-                  [GlobalName]), SSuggestDeclareBeforeUse)
-              else
-                FRegisters[A] := RegisterUndefined;
-            end
-            else if FGlobalScope.TryGetBindingValue(GlobalName,
-              GlobalBindingValue) then
-              FRegisters[A] := VMValueToRegisterFast(GlobalBindingValue)
-            else if TGocciaOpCode(Op) = OP_GET_GLOBAL_DECLARED then
-              // ES2026 §6.2.5.5 GetValue step 2: the declared binding is
-              // gone (a configurable global its var redeclared was deleted),
-              // so the reference is unresolvable.
-              ThrowReferenceError(Format(SErrorUndefinedVariable,
-                [GlobalName]), SSuggestDeclareBeforeUse)
-            else
-              FRegisters[A] := RegisterUndefined;
-          end;
-        end;
-      end;
-
       OP_SET_GLOBAL:
       begin
         GlobalName := Template.GetConstantUnchecked(DecodeBx(Instruction)).StringValue;
@@ -3576,42 +3676,6 @@
               GlobalName, GlobalBindingValue, FGlobalScope.ThisValue);
           end;
         end;
-      end;
-
-      OP_HAS_GLOBAL:
-      begin
-        if Assigned(FGlobalScope) then
-        begin
-          GlobalReadCache := Template.GlobalReadCacheSlot(
-            DecodeBx(Instruction));
-          if Assigned(GlobalReadCache) and
-             (GlobalReadCache^.Scope = Pointer(FGlobalScope)) and
-             (((GlobalReadCache^.ObjectValue = nil) and
-               FGlobalScope.HasLexicalBindingAt(
-                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version)) or
-              ((FGlobalScope.ThisValue is TGocciaObjectValue) and
-               (GlobalReadCache^.ObjectValue =
-                 Pointer(FGlobalScope.ThisValue)) and
-               VMGlobalObjectBindingCacheStillPrecedes(FGlobalScope,
-                 GlobalReadCache) and
-               VMTryGetCachedGlobalOwnDataProperty(
-                 TGocciaObjectValue(FGlobalScope.ThisValue),
-                 GlobalReadCache^.EntryIndex, GlobalReadCache^.Version,
-                 GlobalBindingValue))) then
-          begin
-            FRegisters[A] := RegisterBoolean(True);
-            Continue;
-          end;
-        end;
-
-        GlobalName := Template.GetConstantUnchecked(
-          DecodeBx(Instruction)).StringValue;
-        // Contains can materialize a lazy global (a shim) or reach a Proxy
-        // trap on the global object's prototype chain, either of which runs
-        // guest code (see FRegisters).
-        GuestCallBoolean := Assigned(FGlobalScope) and
-          FGlobalScope.Contains(GlobalName);
-        FRegisters[A] := RegisterBoolean(GuestCallBoolean);
       end;
 
       OP_DELETE_GLOBAL:
@@ -4110,9 +4174,6 @@
 
       OP_THROW: raise EGocciaBytecodeThrow.Create(GetRegister(A));
 
-      OP_NOT:
-        FRegisters[A] := RegisterBoolean(not RegisterToBoolean(FRegisters[B]));
-
       OP_TO_BOOL:
         FRegisters[A] := RegisterBoolean(RegisterToBoolean(FRegisters[B]));
 
@@ -4420,54 +4481,6 @@
           ThrowTypeError(SErrorCannotSetPropertyOnNonObject,
             SSuggestCheckNullBeforeAccess);
 
-      OP_RETURN:
-      begin
-        ReturnValue := FRegisters[A];
-        if Assigned(EntryGenerator) then
-          EntryGenerator.FReturnRequiresAwait := B <> 0;
-        if FClosedNumericFrameStackCount >
-           InitialClosedNumericFrameCount then
-        begin
-          ResultReg := PopClosedNumericFrame(Frame, Template, PrevCovLine,
-            ProfileEntryTimestamp);
-          SetRegisterRaw(ResultReg, ReturnValue);
-          Continue;
-        end;
-        // Outermost frame: let the finally block handle teardown
-        if FFrameStackCount <= InitialFrameStackCount then
-        begin
-          FLastClosureThisValue := GetLocalRegister(0);
-          Exit(ReturnValue);
-        end;
-        // Intermediate trampoline frame: tear down and pop to parent
-        TeardownCurrentFrame(Template, ProfileEntryTimestamp,
-          FFrameStack[FFrameStackCount - 1].HandlerCount);
-        ResultReg := PopFrame(Frame, Template, PrevCovLine, ProfileEntryTimestamp);
-        SetRegisterRaw(ResultReg, ReturnValue);
-        Continue;
-      end;
-      // A register compared with a signed Int16 immediate, one arm for the
-      // six opcodes, placed last so the dispatch loop stays small and the arms
-      // before it keep their addresses; the comparison is in
-      // ImmediateComparisonJumps.
-      OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM,
-      OP_JUMP_IF_NOT_GTE_IMM, OP_JUMP_IF_NOT_STRICT_EQ_IMM,
-      OP_JUMP_IF_STRICT_EQ_IMM:
-        begin
-          NumericComparisonResult := ImmediateComparisonJumps(
-            TGocciaOpCode(Op), A, Int16(B));
-          if NumericComparisonResult then
-          begin
-            JumpOffset := Int16(C);
-            Inc(Frame.IP, JumpOffset);
-            if (JumpOffset < 0) and FThreadPolls^.TimeoutArmed then
-              PollExecutionTimeout(
-                PGocciaTimeoutPollState(FThreadPolls^.TimeoutState));
-          end;
-          if FCoverageEnabled then
-            RecordFusedBranchHit(Template, InstructionStartIP,
-              NumericComparisonResult);
-        end;
         else
           // OP_CALL_SELF is a reserved runtime-only opcode outside
           // TGocciaOpCode (Goccia.Bytecode), so it is dispatched here. The
