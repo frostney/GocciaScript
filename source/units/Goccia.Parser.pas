@@ -375,7 +375,8 @@ type
     function CollectGenericParameters: string;
     function TryCollectNewExpressionTypeArguments: Boolean;
     function TryCollectCallExpressionTypeArguments: Boolean;
-    procedure RememberNotTypeArguments(const AFirst: Integer);
+    procedure RememberNotTypeArguments(const AFirst: Integer;
+      const AEndsInLexError: Boolean);
     function TryParseGenericArrowFunction(
       out AExpression: TGocciaExpression): Boolean;
     function ParseDefiniteAssignmentAssertion(
@@ -9908,7 +9909,6 @@ var
   SavedCurrent: Integer;
   SavedLexer: TGocciaLexerCheckpoint;
   TokenType: TGocciaTokenType;
-  Known: Boolean;
 begin
   Result := False;
   if not FAllowsTypeScriptOnlySyntax then
@@ -9921,8 +9921,7 @@ begin
   if Assigned(FNotTypeArgumentStarts) and (FCurrent < FTokens.Count) and
      (not Assigned(FLexer) or (FCurrent = FTokens.Count - 1)) and
      (FTokens[FCurrent].TokenType = gttLess) and
-     FNotTypeArgumentStarts.TryGetValue(
-       FTokens[FCurrent].Span.StartOffset, Known) then
+     FNotTypeArgumentStarts.ContainsKey(FTokens[FCurrent].Span.StartOffset) then
     Exit;
 
   SavedCurrent := FCurrent;
@@ -9985,11 +9984,10 @@ begin
       FCurrent := SavedCurrent;
       // The probe lexed every token after the '<' itself when none had been
       // lexed before it, so what it saw is what a later probe from a '<'
-      // among them would see.
-      if not LexError and
-         (not Assigned(FLexer) or
-          (SavedLexer.TokenCount = SavedCurrent + 1)) then
-        RememberNotTypeArguments(SavedCurrent);
+      // among them would see, a lexer error at the end included.
+      if not Assigned(FLexer) or
+         (SavedLexer.TokenCount = SavedCurrent + 1) then
+        RememberNotTypeArguments(SavedCurrent, LexError);
       if Assigned(FLexer) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
@@ -10004,8 +10002,14 @@ end;
 // in what follows the chain. This works out in one pass what each of those
 // probes would decide, from the depths and bracket depths the tokens reach,
 // and remembers the '<' tokens whose probe would fail. A probe that would
-// need a token past the list, or would succeed, is left to run.
-procedure TGocciaParser.RememberNotTypeArguments(const AFirst: Integer);
+// succeed is left to run, and so is one that would need a token past the
+// list, unless AEndsInLexError: the list then ends where the lexer raised,
+// and such a probe would lex the same place with the same goal and fail on
+// the same error. A division after a chain is one such error, since the
+// probes lex what follows a '<' as the start of an expression, where '/'
+// opens a regular expression.
+procedure TGocciaParser.RememberNotTypeArguments(const AFirst: Integer;
+  const AEndsInLexError: Boolean);
 const
   // A shorter scan costs about what remembering it would.
   MIN_REMEMBERED_TOKENS = 32;
@@ -10127,12 +10131,12 @@ begin
         // At one token, the denylist is checked before the token counts,
         // and a closing bracket ends the probe before its depth does.
         Event := Earliest(Earliest(Deny, Fail), Stop);
-        Decided := False;
-        if Event < 0 then
-          Decided := False
-        else if (Event = Deny) or (Event = Fail) then
+        if (Event >= 0) and ((Event = Deny) or (Event = Fail)) then
           Decided := True
-        else if Event + 1 < Count then
+        else if (Event < 0) or (Event + 1 >= Count) then
+          // The probe would need the token after the list.
+          Decided := AEndsInLexError
+        else
           // The probe ends at Stop; it succeeds only with depth and bracket
           // depth back at its own, a type argument seen, and '(' or a
           // template next.

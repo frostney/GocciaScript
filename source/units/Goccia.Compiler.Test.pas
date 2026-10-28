@@ -1245,9 +1245,9 @@ const
   GROWTH_RATIO = 8;
 
   // ALines statements, each `const yN = ` and ATerms terms joined by '<', in
-  // the body of an arrow function or at the top level.
+  // the body of an arrow function or at the top level, and then ATail.
   function ChainsSource(const ALines, ATerms: Integer;
-    const AInFunction: Boolean): string;
+    const AInFunction: Boolean; const ATail: string): string;
   var
     Source: TStringBuffer;
     Line, Term: Integer;
@@ -1264,8 +1264,9 @@ const
         Source.Append(' < p');
       Source.Append(';' + LineEnding);
     end;
+    Source.Append(ATail + LineEnding);
     if AInFunction then
-      Source.Append('return p; };' + LineEnding);
+      Source.Append('};' + LineEnding);
     Result := Source.ToString;
   end;
 
@@ -1301,12 +1302,14 @@ const
   end;
 
   procedure ExpectChainsParseLinear(const ALines, ATerms: Integer;
-    const AInFunction: Boolean);
+    const AInFunction: Boolean; const ATail: string);
   var
     Small, Large: Int64;
   begin
-    Small := ParseNanoseconds(ChainsSource(ALines, ATerms, AInFunction));
-    Large := ParseNanoseconds(ChainsSource(4 * ALines, ATerms, AInFunction));
+    Small := ParseNanoseconds(ChainsSource(ALines, ATerms, AInFunction,
+      ATail));
+    Large := ParseNanoseconds(ChainsSource(4 * ALines, ATerms, AInFunction,
+      ATail));
     if Large > GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS then
       Fail(Format('%d chains of %d terms took %d ms to parse against %d ms ' +
         'for %d', [4 * ALines, ATerms, Large div 1000000, Small div 1000000,
@@ -1317,10 +1320,13 @@ const
 
 begin
   // The shape the slowdown was seen in: long chains in a function body.
-  ExpectChainsParseLinear(8, 120, True);
+  ExpectChainsParseLinear(8, 120, True, 'return p;');
+  // A division after the chains, which the scans lex as the start of a
+  // regular expression that does not end.
+  ExpectChainsParseLinear(8, 120, True, 'return p / 2;');
   // Short chains at the top level, where each scan ran to the end of the
   // file.
-  ExpectChainsParseLinear(250, 3, False);
+  ExpectChainsParseLinear(250, 3, False, '');
 end;
 
 { The case clauses of a switch share one scope, so the compiler forgets
