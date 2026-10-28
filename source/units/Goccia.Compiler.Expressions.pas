@@ -912,7 +912,7 @@ procedure CompileIdentifierAccessNoWith(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIdentifierExpression; const ADest: UInt16;
   const ASafe: Boolean);
 var
-  LocalIdx, UpvalIdx: Integer;
+  LocalIdx, UpvalIdx, BeforeRead: Integer;
   Local: TGocciaCompilerLocal;
   Slot: UInt16;
   NameIdx: UInt16;
@@ -936,7 +936,12 @@ begin
       Exit;
     end;
     Slot := Local.Slot;
+    BeforeRead := ACtx.Template.CodeCount;
     EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, Slot));
+    // Reading a local changes no type fact. Preserve a literal-left
+    // operator's memo while compiling intervening variable operands.
+    ACtx.Scope.NoteTypeFactsUnchanged(ACtx.Template, BeforeRead,
+      ACtx.Template.CodeCount);
     Exit;
   end;
 
@@ -2812,7 +2817,7 @@ var
   OwnsRegB, OwnsRegC, LeftCompiled, LeftTypeKnown, RightTypeKnown: Boolean;
 
   // Compiles AOperand as CompileOperand does, and reports whether it was a
-  // binary expression that handed over the type of its value.
+  // expression that handed over the type of its value.
   function CompileTypedOperand(const AOperand: TGocciaExpression;
     out ARegister: UInt16; const AEvaluatedLater: TGocciaExpression;
     out AOwnsRegister: Boolean; out AType: TGocciaLocalType): Boolean;
@@ -2921,7 +2926,7 @@ begin
     // first. In `1 + (2 + (3 + p))` each operator asks again for the type
     // of an operand the walk above it has typed, which took time quadratic
     // in the chain's length; the walks record their answers, which hold
-    // while nothing but the chain's folded constants is emitted.
+    // while only folded constants and local reads are emitted.
     RightType := ExpressionTypeRecorded(ACtx.Scope,
       ACtx.Scope.ExpressionTypeMemo(ACtx.Template), AExpr.Right);
     if HasExactNumberProofOfType(ACtx.Scope, AExpr.Right, RightType) then

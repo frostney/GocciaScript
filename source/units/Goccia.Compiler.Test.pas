@@ -1342,18 +1342,24 @@ begin
 end;
 
 procedure TTestCompiler.TestAlternatingExpressionWork;
+const
+  PREFIXES: array[0..1] of string = ('p + -(', 'p + -(1 + -(');
 var
   Small, Large: TGocciaCompileCounters;
-  Strict: Boolean;
+  Strict, Coverage: Boolean;
+  I, Depth: Integer;
 begin
-  for Strict := False to True do
-  begin
-    Small := SourceWork('const f = (p) => ' + DupeString('p + -(', 100) +
-      'p' + StringOfChar(')', 100) + ';', Strict);
-    Large := SourceWork('const f = (p) => ' + DupeString('p + -(', 200) +
-      'p' + StringOfChar(')', 200) + ';', Strict);
-    ExpectWorkLinear(Small, Large, ccExpressionTypeVisits);
-  end;
+  for I := Low(PREFIXES) to High(PREFIXES) do
+    for Strict := False to True do
+      for Coverage := False to True do
+      begin
+        Depth := I + 1;
+        Small := SourceWork('const f = (p) => ' + DupeString(PREFIXES[I], 100) +
+          'p' + StringOfChar(')', 100 * Depth) + ';', Strict, '<test>', Coverage);
+        Large := SourceWork('const f = (p) => ' + DupeString(PREFIXES[I], 200) +
+          'p' + StringOfChar(')', 200 * Depth) + ';', Strict, '<test>', Coverage);
+        ExpectWorkLinear(Small, Large, ccExpressionTypeVisits);
+      end;
 end;
 
 procedure TTestCompiler.TestLogicalInitializerWork;

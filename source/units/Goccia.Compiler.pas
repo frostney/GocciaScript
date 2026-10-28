@@ -506,7 +506,7 @@ begin
       EmitCompileTimeValue(Ctx, Value, ADest);
       if Assigned(Known) then
         FNotConstantCodeCount := Ctx.Template.CodeCount;
-      Ctx.Scope.NoteConstantEmitted(Ctx.Template, CodeCount,
+      Ctx.Scope.NoteTypeFactsUnchanged(Ctx.Template, CodeCount,
         Ctx.Template.CodeCount);
       Exit;
     end;

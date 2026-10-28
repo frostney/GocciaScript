@@ -359,14 +359,15 @@ type
       simplified), leaves no record of AExpr. }
     { ExpressionType's answers for the binary expressions a walk has typed,
       for a caller that would otherwise walk them again. They hold while
-      ATemplate emits nothing but folded constants (NoteConstantEmitted),
-      which change nothing a type depends on; once anything else is emitted
+      ATemplate emits only folded constants or local reads
+      (NoteTypeFactsUnchanged), which change nothing a type depends on;
+      once anything else is emitted
       the record is emptied when next asked for. }
     function ExpressionTypeMemo(
       const ATemplate: TGocciaFunctionTemplate): TGocciaExpressionTypeMemo;
-    { ATemplate's code grew from ABefore to AAfter instructions by a folded
-      constant alone. }
-    procedure NoteConstantEmitted(const ATemplate: TGocciaFunctionTemplate;
+    { ATemplate's code grew from ABefore to AAfter instructions without
+      changing any fact used by expression type analysis. }
+    procedure NoteTypeFactsUnchanged(const ATemplate: TGocciaFunctionTemplate;
       const ABefore, AAfter: Integer);
     procedure ForgetExpressionResultType;
     procedure NoteExpressionResultType(const AExpr: TGocciaExpression;
@@ -1492,7 +1493,7 @@ begin
   Result := FTypeMemo;
 end;
 
-procedure TGocciaCompilerScope.NoteConstantEmitted(
+procedure TGocciaCompilerScope.NoteTypeFactsUnchanged(
   const ATemplate: TGocciaFunctionTemplate; const ABefore, AAfter: Integer);
 begin
   if Assigned(FTypeMemo) and (FTypeMemoTemplate = ATemplate) and
