@@ -11,7 +11,7 @@ each family folder carries its licence text in `OFL.txt`.
 The woff2 files are the exact bytes Google Fonts served for these requests
 (unicode subsets as separate files, as Google splits them):
 
-```
+```text
 https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap
 ```
 
