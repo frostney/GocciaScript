@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  HashMap,
   OrderedStringMap,
 
   Goccia.AST.Node,
@@ -148,7 +149,7 @@ type
     // Once there are COMPILER_UPVALUE_INDEX_THRESHOLD upvalues: the first
     // upvalue of each captured slot, by UpvalueSlotKey (AddUpvalue), and of
     // each name (ResolveUpvalue in a seeded scope). Seeding drops them.
-    FUpvalueSlotIndex: TDictionary<Integer, Integer>;
+    FUpvalueSlotIndex: THashMap<Integer, Integer>;
     FUpvalueNameIndex: TOrderedStringMap<Integer>;
     FDepth: Integer;
     FNextSlot: Integer;
@@ -941,11 +942,13 @@ begin
   if not Assigned(FUpvalueSlotIndex) and
      (FUpvalueCount >= COMPILER_UPVALUE_INDEX_THRESHOLD) then
   begin
-    FUpvalueSlotIndex := TDictionary<Integer, Integer>.Create(
+    FUpvalueSlotIndex := THashMap<Integer, Integer>.Create(
       FUpvalueCount * 2);
     for I := 0 to FUpvalueCount - 1 do
-      FUpvalueSlotIndex.TryAdd(
-        UpvalueSlotKey(FUpvalues[I].Index, FUpvalues[I].IsLocal), I);
+      if not FUpvalueSlotIndex.ContainsKey(
+           UpvalueSlotKey(FUpvalues[I].Index, FUpvalues[I].IsLocal)) then
+        FUpvalueSlotIndex.Add(
+          UpvalueSlotKey(FUpvalues[I].Index, FUpvalues[I].IsLocal), I);
   end;
   if Assigned(FUpvalueSlotIndex) then
   begin
