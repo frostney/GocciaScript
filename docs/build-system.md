@@ -751,7 +751,7 @@ Runs on the full platform matrix:
 | macOS Latest | x64, ARM64 |
 | Windows Latest | x64 (x86_64-win64), x86 (i386-win32) |
 
-**`build`** — Installs FPC 3.2.4 with its matrix target (see [How build.pas works](#how-buildpas-works)), cross-compiles the `source/app/*.dpr` programs with the production flags, stages those binaries plus Pascal test executables, and uploads that staged set as intermediate artifacts.
+**`build`** — Installs FPC 3.2.4 with its matrix target (see [How build.pas works](#how-buildpas-works)). `.github/scripts/compile-programs.py` builds every application, Pascal test and compliance runner with up to four compiler processes, limited to the runner's logical CPU count. Each gets its own temporary unit-output and working directory and keeps `-B` and all production flags; compiled units are never reused across programs or runs. It prints per-program times and compiler totals, saves diagnostics under `build/ci-logs/`, and prints them on failure. Any compiler failure fails the job after the other compilers finish. The staged binaries are uploaded as intermediate artifacts. A failed upload is retried once after ten seconds, replacing any artifact left by the first attempt; a second failure fails the job.
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 
