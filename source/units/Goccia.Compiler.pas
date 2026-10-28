@@ -98,6 +98,8 @@ type
     procedure ProfileNameTemplates(const ATemplate: TGocciaFunctionTemplate);
     // Counts a constant-folding attempt in the compile profile; always True,
     // so it can lead the condition that makes the attempt.
+    procedure NoteShortCircuitJump(const ATemplate: TGocciaFunctionTemplate;
+      const ABefore, AAfter: Integer);
     function NoteConstantAttempt: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     procedure EnterNesting(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
     procedure RaiseNestingLimitExceeded(const ANode: TGocciaASTNode);
@@ -316,6 +318,7 @@ begin
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.DerivedConstructorThisGuard := FDerivedConstructorThisGuard;
   Result.OptimizationOptions := FOptimizationOptions;
+  Result.NoteShortCircuitJump := NoteShortCircuitJump;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
   Result.CompileFunctionBody := DoCompileFunctionBody;
@@ -2181,6 +2184,16 @@ begin
   end;
   FProfileTemplatePositions.AddOrSetValue(ATemplate,
     (Int64(ALine) shl 32) or Int64(Cardinal(AColumn)));
+end;
+
+procedure TGocciaCompiler.NoteShortCircuitJump(
+  const ATemplate: TGocciaFunctionTemplate; const ABefore, AAfter: Integer);
+begin
+  // Only carry an already valid failure path across this jump. A call,
+  // assignment or other emission before it still invalidates the path.
+  if (ATemplate = FNotConstantTemplate) and
+     (ABefore = FNotConstantCodeCount) then
+    FNotConstantCodeCount := AAfter;
 end;
 
 function TGocciaCompiler.NoteConstantAttempt: Boolean;

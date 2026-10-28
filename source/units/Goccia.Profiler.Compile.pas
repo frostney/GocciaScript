@@ -67,7 +67,9 @@ type
     // each compared: 1 once the list is hashed (16 names or more), the names
     // scanned below that.
     ccBindingNameLookups,
-    ccBindingNameProbes);
+    ccBindingNameProbes,
+    ccDirectEvalRecordProbes,
+    ccTypeArgumentProbeTokens);
 
   TGocciaCompileCounters = array[TGocciaCompileCounter] of Int64;
 
@@ -204,7 +206,9 @@ const
     'localListScans',
     'parameterNameProbes',
     'bindingNameLookups',
-    'bindingNameProbes');
+    'bindingNameProbes',
+    'directEvalRecordProbes',
+    'typeArgumentProbeTokens');
 
   COMPILE_COUNTER_LABELS: array[TGocciaCompileCounter] of string = (
     'Nodes compiled',
@@ -219,7 +223,9 @@ const
     'Local-list scans',
     'Parameter-name probes',
     'Binding-name lookups',
-    'Binding-name probes');
+    'Binding-name probes',
+    'Direct-eval record probes',
+    'Type-argument probe tokens');
 
 procedure PrintCompileProfile(const AProfiler: TGocciaCompileProfiler);
 { The "compile" section of the profile JSON, without a trailing comma: empty
