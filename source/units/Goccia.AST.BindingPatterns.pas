@@ -778,6 +778,12 @@ begin
       CollectPatternBindingNames(
         TGocciaDestructuringDeclaration(ANode).Pattern, ANames);
   end
+  else if ANode is TGocciaExportDestructuringDeclaration then
+    CollectLexicallyDeclaredNames(
+      TGocciaExportDestructuringDeclaration(ANode).Declaration, ANames)
+  else if ANode is TGocciaExportClassDeclaration then
+    CollectLexicallyDeclaredNames(
+      TGocciaExportClassDeclaration(ANode).Declaration, ANames)
   else if ANode is TGocciaUsingDeclaration then
   begin
     for I := 0 to High(TGocciaUsingDeclaration(ANode).Variables) do

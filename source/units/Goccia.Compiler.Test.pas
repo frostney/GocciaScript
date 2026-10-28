@@ -1416,6 +1416,12 @@ end;
   (§15.7.1, §14.7.4.1). }
 procedure TTestCompiler.TestDestructuringPatternsCompileInLinearTime;
 begin
+  // Body/block lexical-name validation must remain linear as the list grows.
+  ExpectNameListLinear('function g() { let %s; }', 'b%d');
+  ExpectNameListLinear('const g = () => { let %s; };', 'b%d');
+  ExpectNameListLinear('class C { m() { let %s; } }', 'b%d');
+  ExpectNameListLinear('{ let %s; }', 'b%d');
+  ExpectNameListLinear('switch (0) { case 0: let %s; }', 'b%d');
   ExpectNameListLinear('const g = (o) => { const { %s } = o; return b0; };',
     'b%d');
   ExpectNameListLinear('const g = (o) => { let [%s] = o; return b0; };',
