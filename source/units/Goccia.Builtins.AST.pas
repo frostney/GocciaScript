@@ -93,6 +93,7 @@ type
     anfDelegate, anfPrefix, anfShorthand, anfMethod, anfRest, anfStatic);
   TASTNodeFlags = set of TASTNodeFlag;
 
+  PASTFlatNode = ^TASTFlatNode;
   TASTFlatNode = record
     Kind: string;
     { Which flags this kind reports, and which of those are true. }
@@ -183,7 +184,8 @@ type
       const AFlags: TGocciaASTPartFlags); override;
     procedure LeavePart; override;
     procedure Run(const AProgram: TGocciaProgram);
-    function NodeAt(const AIndex: Integer): TASTFlatNode;
+    { The node's record in place. Valid until the next node is added. }
+    function NodeAt(const AIndex: Integer): PASTFlatNode;
     property Count: Integer read FCount;
   end;
 
@@ -516,9 +518,9 @@ begin
   FNodes[Result].TypeOnly := False;
 end;
 
-function TASTFlattener.NodeAt(const AIndex: Integer): TASTFlatNode;
+function TASTFlattener.NodeAt(const AIndex: Integer): PASTFlatNode;
 begin
-  Result := FNodes[AIndex];
+  Result := @FNodes[AIndex];
 end;
 
 procedure TASTFlattener.PushFrame(const AIndex, AStart, AFinish: Integer;
@@ -1091,7 +1093,7 @@ function MaterializeNode(const AFlattener: TASTFlattener;
   const AIndex: Integer): TGocciaObjectValue;
 var
   Children: TGocciaArrayValue;
-  Node: TASTFlatNode;
+  Node: PASTFlatNode;
   ChildIndex, Position, PropertyCount: Integer;
   StartLine, StartColumn, EndLine, EndColumn: Integer;
   Flag: TASTNodeFlag;
@@ -1101,44 +1103,44 @@ begin
   { The line and column are read off the caller's text at the mapped
     offsets — deriving them rather than translating them separately is what
     keeps `loc` and the range the same answer. }
-  ACoordinates.PositionAtOffset(Node.StartOffset, StartLine, StartColumn);
-  ACoordinates.PositionAtOffset(Node.EndOffset, EndLine, EndColumn);
+  ACoordinates.PositionAtOffset(Node^.StartOffset, StartLine, StartColumn);
+  ACoordinates.PositionAtOffset(Node^.EndOffset, EndLine, EndColumn);
   Roots.Initialize;
   try
-    PropertyCount := NODE_BASE_PROPERTY_COUNT + Ord(Node.OperatorText <> '') +
-      Ord(Node.BodyKind <> '') + Ord(Node.HasTypeOnly);
+    PropertyCount := NODE_BASE_PROPERTY_COUNT + Ord(Node^.OperatorText <> '') +
+      Ord(Node^.BodyKind <> '') + Ord(Node^.HasTypeOnly);
     for Flag := Low(TASTNodeFlag) to High(TASTNodeFlag) do
-      if Flag in Node.FlagKinds then
+      if Flag in Node^.FlagKinds then
         Inc(PropertyCount);
     Result := TGocciaObjectValue.Create(nil, PropertyCount);
     Roots.Add(Result);
     Children := TGocciaArrayValue.Create;
     Result.DefineFreshDataProperty('children', Children, RESULT_PROPERTY_FLAGS);
     Result.DefineFreshDataProperty('kind',
-      TGocciaStringLiteralValue.Create(Node.Kind), RESULT_PROPERTY_FLAGS);
+      TGocciaStringLiteralValue.Create(Node^.Kind), RESULT_PROPERTY_FLAGS);
     Result.DefineFreshDataProperty('start',
-      ANumbers.ValueOf(Node.StartOffset), RESULT_PROPERTY_FLAGS);
+      ANumbers.ValueOf(Node^.StartOffset), RESULT_PROPERTY_FLAGS);
     Result.DefineFreshDataProperty('end',
-      ANumbers.ValueOf(Node.EndOffset), RESULT_PROPERTY_FLAGS);
+      ANumbers.ValueOf(Node^.EndOffset), RESULT_PROPERTY_FLAGS);
     Result.DefineFreshDataProperty('loc', CreateLocObject(ANumbers, StartLine,
       StartColumn, EndLine, EndColumn), RESULT_PROPERTY_FLAGS);
-    if Node.OperatorText <> '' then
+    if Node^.OperatorText <> '' then
       Result.DefineFreshDataProperty('operator',
-        TGocciaStringLiteralValue.Create(Node.OperatorText),
+        TGocciaStringLiteralValue.Create(Node^.OperatorText),
         RESULT_PROPERTY_FLAGS);
-    if Node.BodyKind <> '' then
+    if Node^.BodyKind <> '' then
       Result.DefineFreshDataProperty('bodyKind',
-        TGocciaStringLiteralValue.Create(Node.BodyKind), RESULT_PROPERTY_FLAGS);
+        TGocciaStringLiteralValue.Create(Node^.BodyKind), RESULT_PROPERTY_FLAGS);
     for Flag := Low(TASTNodeFlag) to High(TASTNodeFlag) do
-      if Flag in Node.FlagKinds then
-        if Flag in Node.Flags then
+      if Flag in Node^.FlagKinds then
+        if Flag in Node^.Flags then
           Result.DefineFreshDataProperty(FLAG_NAMES[Flag],
             TGocciaBooleanLiteralValue.TrueValue, RESULT_PROPERTY_FLAGS)
         else
           Result.DefineFreshDataProperty(FLAG_NAMES[Flag],
             TGocciaBooleanLiteralValue.FalseValue, RESULT_PROPERTY_FLAGS);
-    if Node.HasTypeOnly then
-      if Node.TypeOnly then
+    if Node^.HasTypeOnly then
+      if Node^.TypeOnly then
         Result.DefineFreshDataProperty('typeOnly',
           TGocciaBooleanLiteralValue.TrueValue, RESULT_PROPERTY_FLAGS)
       else
@@ -1146,13 +1148,13 @@ begin
           TGocciaBooleanLiteralValue.FalseValue, RESULT_PROPERTY_FLAGS);
 
     Position := 0;
-    ChildIndex := Node.FirstChild;
+    ChildIndex := Node^.FirstChild;
     while ChildIndex >= 0 do
     begin
       AppendElement(Children, Position,
         MaterializeNode(AFlattener, ACoordinates, ANumbers, ChildIndex));
       Inc(Position);
-      ChildIndex := AFlattener.NodeAt(ChildIndex).NextSibling;
+      ChildIndex := AFlattener.NodeAt(ChildIndex)^.NextSibling;
     end;
   finally
     Roots.Clear;
