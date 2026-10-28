@@ -11,7 +11,7 @@
 ## Executive Summary
 
 - **Self-hosted build** — `./build.pas` is a FreePascal script via `instantfpc`; no Make/CMake/npm required
-- **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked), plus the `--gc-stress` development variant
+- **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked), plus the `--gc-stress` development variant and the `--layout-probe` production variant
 - **CI/CD** — `ci.yml` for main/tags (full platform matrix), `pr.yml` for PRs (ubuntu-latest x64 only, with benchmark comparison)
 - **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
 - **Explicit clean recovery** — `./build.pas --clean <target>` clears stale FPC artifacts before diagnosing misleading compiler/resource failures
@@ -33,7 +33,7 @@ Delphi 12 contributors build the Win32 and Win64 native application matrix from 
 
 ### Build Modes
 
-The build script supports two modes via `--dev` (default) and `--prod` flags. `--gc-stress` is a development build that collects every 8 VM instructions; see [Tooling — GC-stress build](contributing/tooling.md#gc-stress-build).
+The build script supports two modes via `--dev` (default) and `--prod` flags. `--gc-stress` is a development build that collects every 8 VM instructions; see [Tooling — GC-stress build](contributing/tooling.md#gc-stress-build). `--layout-probe` needs `--prod` and adds `-dGOCCIA_VM_LAYOUT_PROBE`: the same build with the VM's dispatch code a few hundred bytes further along, written to `build/layout-probe/` with units under `build/compiled/layout-probe/`, for measuring how much code placement alone moves a benchmark; see [Bytecode VM — Dispatch layout](bytecode-vm.md#dispatch-layout).
 
 ```bash
 ./build.pas runner              # Dev build (default)
@@ -651,7 +651,7 @@ The build script is a FreePascal program that runs via the `instantfpc` shebang:
 It:
 
 1. Creates the `build/` directory if it doesn't exist.
-2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`), and `--gc-stress`, which adds the GC-stress flags to a development build and moves its unit caches and binaries.
+2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`), `--gc-stress`, which adds the GC-stress flags to a development build and moves its unit caches and binaries, and `--layout-probe`, which does the same for the layout probe on a production build.
 3. Parses remaining arguments to determine which components to build.
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
 5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
