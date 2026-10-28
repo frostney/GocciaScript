@@ -89,4 +89,51 @@ test("an arithmetic operator disqualifies the type-argument reading", () => {
   expect(a < b - 1).toBe(false);
 });
 
+test("a long comparison chain compares each pair in turn", () => {
+  const chain = (p, q) => p < q < p < q < p < q < p < q < p < q < p < q < p;
+
+  expect(chain(1, 2)).toBe(false);
+  expect(chain(3, 2)).toBe(true);
+});
+
+test("type arguments after a comparison chain in the same statement", () => {
+  const identity = (value) => value;
+  const a = 1;
+  const b = 2;
+
+  // The probes from the chain's operators fail; the one from the call succeeds.
+  expect(a < b < identity<number>(0) < a < b < a < b < a < b).toBe(true);
+});
+
+test("type arguments in the statements after a comparison chain", () => {
+  const identity = (value) => value;
+  const a = 1;
+  const b = 2;
+  const c = 3;
+
+  const first = a < b < c < a < b < c;
+  const second = identity<string>("v");
+  const third = identity<Map<string, number>>(c);
+  const fourth = a < b < c < a < b < c;
+
+  expect(first).toBe(true);
+  expect(second).toBe("v");
+  expect(third).toBe(3);
+  expect(fourth).toBe(true);
+});
+
+test("type arguments in a block after a comparison chain", () => {
+  const identity = (value) => value;
+  const a = 1;
+  const b = 2;
+  let seen = null;
+
+  const chain = a < b < a < b < a < b < a < b;
+  if (chain) {
+    seen = identity<string>(`t${a < b}`);
+  }
+
+  expect(seen).toBe("ttrue");
+});
+
 });

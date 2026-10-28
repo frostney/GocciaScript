@@ -115,6 +115,9 @@ type
     // comparison chain in JavaScript. Resolved once from the source file's
     // extension; see IsTypeScriptExtension.
     FAllowsTypeScriptOnlySyntax: Boolean;
+    // The source offsets of '<' tokens that TryCollectCallExpressionTypeArguments
+    // knows do not start call-site type arguments (RememberNotTypeArguments).
+    FNotTypeArgumentStarts: THashMap<Integer, Boolean>;
     FSourceLines: TStringList;
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
@@ -385,6 +388,8 @@ type
     function CollectGenericParameters: string;
     function TryCollectNewExpressionTypeArguments: Boolean;
     function TryCollectCallExpressionTypeArguments: Boolean;
+    procedure RememberNotTypeArguments(const AFirst: Integer;
+      const AEndsInLexError: Boolean);
     function TryParseGenericArrowFunction(
       out AExpression: TGocciaExpression): Boolean;
     function ParseDefiniteAssignmentAssertion(
@@ -813,6 +818,7 @@ end;
 
 destructor TGocciaParser.Destroy;
 begin
+  FNotTypeArgumentStarts.Free;
   FActiveIterationLabels.Free;
   FActiveLabels.Free;
   FPrivateClassContexts.Free;
@@ -10246,10 +10252,15 @@ end;
 // call in a `.ts` file. tsc, esbuild and bun all draw the line at the file
 // extension, and so does the Type Annotations proposal, which leaves generic
 // call syntax out for this exact reason.
+//
+// A probe that fails has seen what the probes from the '<' tokens it passed
+// would see, and decides those that would fail too
+// (RememberNotTypeArguments), so a chain such as `a < b < c < ...` is scanned
+// once rather than once per operator.
 function TGocciaParser.TryCollectCallExpressionTypeArguments: Boolean;
 var
   BracketDepth, Depth: Integer;
-  HasTypeArgument: Boolean;
+  HasTypeArgument, LexError: Boolean;
   SavedCurrent: Integer;
   SavedLexer: TGocciaLexerCheckpoint;
   TokenType: TGocciaTokenType;
@@ -10258,9 +10269,20 @@ begin
   if not FAllowsTypeScriptOnlySyntax then
     Exit;
 
+  // A probe that failed further left may have decided this one already
+  // (RememberNotTypeArguments). Its answer holds when this probe would lex
+  // every token after the '<' itself, as that one did: no token after it has
+  // been lexed yet.
+  if Assigned(FNotTypeArgumentStarts) and (FCurrent < FTokens.Count) and
+     (not Assigned(FLexer) or (FCurrent = FTokens.Count - 1)) and
+     (FTokens[FCurrent].TokenType = gttLess) and
+     FNotTypeArgumentStarts.ContainsKey(FTokens[FCurrent].Span.StartOffset) then
+    Exit;
+
   SavedCurrent := FCurrent;
   if Assigned(FLexer) then
     SavedLexer := FLexer.CreateCheckpoint;
+  LexError := False;
 
   try
     try
@@ -10306,15 +10328,187 @@ begin
         Result := True;
     except
       on E: TGocciaLexerError do
+      begin
         Result := False;
+        LexError := True;
+      end;
     end;
   finally
     if not Result then
     begin
       FCurrent := SavedCurrent;
+      // The probe lexed every token after the '<' itself when none had been
+      // lexed before it, so what it saw is what a later probe from a '<'
+      // among them would see, a lexer error at the end included.
+      if not Assigned(FLexer) or
+         (SavedLexer.TokenCount = SavedCurrent + 1) then
+        RememberNotTypeArguments(SavedCurrent, LexError);
       if Assigned(FLexer) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
+  end;
+end;
+
+// A failed probe has scanned the tokens from AFirst to the end of the token
+// list. Every later '<' among them would be probed in turn, and its probe
+// would scan and lex the same tokens again: in `a < b < c < ...` the depth
+// never returns to zero, so each probe ran on to the bracket that encloses
+// the chain, or to the end of the file, and the probes took time quadratic
+// in what follows the chain. This works out in one pass what each of those
+// probes would decide, from the depths and bracket depths the tokens reach,
+// and remembers the '<' tokens whose probe would fail. A probe that would
+// succeed is left to run, and so is one that would need a token past the
+// list, unless AEndsInLexError: the list then ends where the lexer raised,
+// and such a probe would lex the same place with the same goal and fail on
+// the same error. A division after a chain is one such error, since the
+// probes lex what follows a '<' as the start of an expression, where '/'
+// opens a regular expression.
+procedure TGocciaParser.RememberNotTypeArguments(const AFirst: Integer;
+  const AEndsInLexError: Boolean);
+const
+  // A shorter scan costs about what remembering it would.
+  MIN_REMEMBERED_TOKENS = 32;
+var
+  Count, I, Top, Stop, Fail, Deny, Event: Integer;
+  Depth, Bracket, Arguments: Integer;
+  Depths, Brackets, ArgumentCounts, NextLowerDepth, NextLowerBracket,
+    Stack: array of Integer;
+  TokenType: TGocciaTokenType;
+  DenyAt: THashMap<Int64, Integer>;
+  Decided: Boolean;
+
+  function TypeAt(const AIndex: Integer): TGocciaTokenType; {$IFDEF FPC}inline;{$ENDIF}
+  begin
+    Result := FTokens[AFirst + AIndex].TokenType;
+  end;
+
+  function StateKey(const ADepth, ABracket: Integer): Int64; {$IFDEF FPC}inline;{$ENDIF}
+  begin
+    Result := (Int64(ADepth) shl 32) or Int64(UInt32(ABracket));
+  end;
+
+  // For each index, the first later index whose value in AValues is lower,
+  // or -1.
+  procedure FillNextLower(const AValues: array of Integer;
+    var ANextLower: array of Integer);
+  var
+    Index: Integer;
+  begin
+    Top := 0;
+    for Index := Count - 1 downto 0 do
+    begin
+      while (Top > 0) and (AValues[Stack[Top - 1]] >= AValues[Index]) do
+        Dec(Top);
+      if Top > 0 then
+        ANextLower[Index] := Stack[Top - 1]
+      else
+        ANextLower[Index] := -1;
+      Stack[Top] := Index;
+      Inc(Top);
+    end;
+  end;
+
+  // The earlier of two token indices, A at a tie; -1 for none.
+  function Earliest(const A, B: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
+  begin
+    if (A >= 0) and ((B < 0) or (A <= B)) then
+      Result := A
+    else
+      Result := B;
+  end;
+
+begin
+  Count := FTokens.Count - AFirst;
+  if Count < MIN_REMEMBERED_TOKENS then
+    Exit;
+
+  // After each token, the depth and bracket depth a probe from AFirst has
+  // reached, and how many tokens so far count as a type argument. A probe
+  // from a later '<' at S reaches these less what the one from AFirst had
+  // before S.
+  SetLength(Depths, Count);
+  SetLength(Brackets, Count);
+  SetLength(ArgumentCounts, Count);
+  Depth := 0;
+  Bracket := 0;
+  Arguments := 0;
+  for I := 0 to Count - 1 do
+  begin
+    case TypeAt(I) of
+      gttLess: Inc(Depth);
+      gttGreater: Dec(Depth);
+      gttRightShift: Dec(Depth, 2);
+      gttUnsignedRightShift: Dec(Depth, 3);
+      gttComma:;
+      gttLeftParen, gttLeftBracket, gttLeftBrace:
+        begin
+          Inc(Bracket);
+          Inc(Arguments);
+        end;
+      gttRightParen, gttRightBracket, gttRightBrace:
+        Dec(Bracket);
+    else
+      Inc(Arguments);
+    end;
+    Depths[I] := Depth;
+    Brackets[I] := Bracket;
+    ArgumentCounts[I] := Arguments;
+  end;
+
+  SetLength(Stack, Count);
+  SetLength(NextLowerDepth, Count);
+  SetLength(NextLowerBracket, Count);
+  FillNextLower(Depths, NextLowerDepth);
+  FillNextLower(Brackets, NextLowerBracket);
+
+  if not Assigned(FNotTypeArgumentStarts) then
+    FNotTypeArgumentStarts := THashMap<Integer, Boolean>.Create;
+  // Later tokens first, so that the denylisted token found for a state is
+  // the first one after the '<' being decided.
+  DenyAt := THashMap<Int64, Integer>.Create;
+  try
+    for I := Count - 1 downto 0 do
+    begin
+      TokenType := TypeAt(I);
+      if TokenType = gttLess then
+      begin
+        // The probe from I ends at the first of: a denylisted token while
+        // its depth is 1 and its bracket depth 0, which is the state after
+        // I; a closing bracket below its own; its depth falling to 0 or
+        // below, or the end of the file next.
+        if not DenyAt.TryGetValue(StateKey(Depths[I], Brackets[I]), Deny) then
+          Deny := -1;
+        Fail := NextLowerBracket[I];
+        Stop := NextLowerDepth[I];
+        if (Count > 1) and (TypeAt(Count - 1) = gttEOF) and
+           (Count - 2 >= I) then
+          Stop := Earliest(Stop, Count - 2);
+        // At one token, the denylist is checked before the token counts,
+        // and a closing bracket ends the probe before its depth does.
+        Event := Earliest(Earliest(Deny, Fail), Stop);
+        if (Event >= 0) and ((Event = Deny) or (Event = Fail)) then
+          Decided := True
+        else if (Event < 0) or (Event + 1 >= Count) then
+          // The probe would need the token after the list.
+          Decided := AEndsInLexError
+        else
+          // The probe ends at Stop; it succeeds only with depth and bracket
+          // depth back at its own, a type argument seen, and '(' or a
+          // template next.
+          Decided := not ((ArgumentCounts[Event] > ArgumentCounts[I]) and
+            (Depths[Event] = Depths[I] - 1) and
+            (Brackets[Event] = Brackets[I]) and
+            (TypeAt(Event + 1) in [gttLeftParen, gttTemplate,
+              gttTemplateHead]));
+        if Decided then
+          FNotTypeArgumentStarts.AddOrSetValue(
+            FTokens[AFirst + I].Span.StartOffset, True);
+      end;
+      if (I > 0) and (TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS) then
+        DenyAt.AddOrSetValue(StateKey(Depths[I - 1], Brackets[I - 1]), I);
+    end;
+  finally
+    DenyAt.Free;
   end;
 end;
 
