@@ -662,6 +662,12 @@ type
       out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
+    procedure SetResolvedPrivateValue(const AObject: TGocciaValue;
+      const ARuntimeKey: string; const AValue: TGocciaValue);
+    procedure DefinePrivateFieldValue(const AObject: TGocciaObjectValue;
+      const AKey: string; const AValue: TGocciaValue);
+    procedure DefinePrivateFieldValueGeneric(const AObject: TGocciaObjectValue;
+      const AKey: string; const AValue: TGocciaValue);
     function HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
     function HasWithBindingValue(const AObject, AKey: TGocciaValue): TGocciaValue;
     function GetWithBindingValue(const AObject, AKey: TGocciaValue;
@@ -11741,7 +11747,7 @@ procedure TGocciaVM.StampBytecodePrivateBrandsGeneric(
 var
   Plan: TGocciaPrivateStampPlan;
   Names: TArray<string>;
-  BrandKey, RuntimeKey: string;
+  BrandKey: string;
   ExistingValue: TGocciaValue;
   PrototypeDescriptor: TGocciaPropertyDescriptor;
   ReceiverObject: TGocciaObjectValue;
@@ -11768,7 +11774,6 @@ begin
     for I := 0 to High(Names) do
     begin
       BrandKey := Plan.BrandKeys[I];
-      RuntimeKey := Plan.RuntimeKeys[I];
       // Two names can share a brand key only when the plan says so; then
       // the first of them that stamps the receiver claims it.
       if Plan.HasSharedBrandKeys then
@@ -11778,7 +11783,7 @@ begin
         if PrivateNameIndex(SeenBrandKeys, BrandKey) >= 0 then
           Continue;
       end;
-      if TryGetRawObjectPrivateDescriptor(ReceiverObject, RuntimeKey,
+      if TryGetRawObjectPrivateDescriptor(ReceiverObject, Plan.RuntimeKeys[I],
          PrototypeDescriptor) and
          not HasBytecodePrivateInitializersApplied(AInstance, AClassValue) then
       begin
@@ -11814,7 +11819,7 @@ begin
       // The runtime token contains the class's address. Keep its owner alive
       // for as long as the receiver carries the brand, even if a later field
       // initializer throws, so collection cannot recycle that identity.
-      SetRawPrivateValue(AInstance, BrandKey, AClassValue);
+      SetResolvedPrivateValue(AInstance, BrandKey, AClassValue);
 
       if (not (AInstance is TGocciaInstanceValue)) and
          Assigned(AClassValue.Prototype) and
@@ -11827,12 +11832,12 @@ begin
         // instead of treating it as a field (ES2026 §7.3.31 PrivateSet
         // step 3).
         if PrototypeDescriptor is TGocciaPropertyDescriptorData then
-          DefineRawObjectPrivateDescriptor(ReceiverObject, RuntimeKey,
+          DefineRawObjectPrivateDescriptor(ReceiverObject, Plan.RuntimeKeys[I],
             TGocciaPropertyDescriptorData.Create(
               TGocciaPropertyDescriptorData(PrototypeDescriptor).Value,
               PrototypeDescriptor.Flags - [pfWritable]))
         else if Assigned(PrototypeDescriptor) then
-          DefineRawObjectPrivateDescriptor(ReceiverObject, RuntimeKey,
+          DefineRawObjectPrivateDescriptor(ReceiverObject, Plan.RuntimeKeys[I],
             ClonePropertyDescriptor(PrototypeDescriptor));
       end;
     end;
@@ -14620,29 +14625,92 @@ end;
 procedure TGocciaVM.SetRawPrivateValue(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 begin
+  SetResolvedPrivateValue(AObject,
+    ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue);
+end;
+
+// Runtime keys already identify the declaring class. Stamping and field
+// definition can reuse them without another lexical-class lookup.
+procedure TGocciaVM.SetResolvedPrivateValue(const AObject: TGocciaValue;
+  const ARuntimeKey: string; const AValue: TGocciaValue);
+begin
   if AObject is TGocciaInstanceValue then
   begin
     TGocciaInstanceValue(AObject).SetRawPrivateProperty(
-      ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue);
+      ARuntimeKey, AValue);
     Exit;
   end;
 
   if AObject is TGocciaClassValue then
   begin
     TGocciaClassValue(AObject).AddPrivateStaticProperty(
-      ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue);
+      ARuntimeKey, AValue);
     Exit;
   end;
 
   if AObject is TGocciaObjectValue then
   begin
     DefineRawObjectPrivateProperty(TGocciaObjectValue(AObject),
-      ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue, [pfWritable, pfConfigurable]);
+      ARuntimeKey, AValue, [pfWritable, pfConfigurable]);
     Exit;
   end;
 
-  ThrowBytecodePrivateTypeError(AKey,
+  ThrowBytecodePrivateTypeError(ARuntimeKey,
     SErrorPrivateFieldInaccessible);
+end;
+
+procedure TGocciaVM.DefinePrivateFieldValue(const AObject: TGocciaObjectValue;
+  const AKey: string; const AValue: TGocciaValue);
+var
+  ClassValue: TGocciaVMClassValue;
+  Entry: PGocciaPrivateKeyCacheEntry;
+  Index: Integer;
+begin
+  // The current lexical class owns a cached key. Use it in place, without
+  // managed locals or a second cache search. Outer names and cache misses
+  // still resolve through the complete private environment.
+  if AObject.Extensible and Assigned(FCurrentClosure) and
+     (FCurrentClosure.PrivateClass is TGocciaVMClassValue) then
+  begin
+    ClassValue := TGocciaVMClassValue(FCurrentClosure.PrivateClass);
+    Index := ClassValue.CachedPrivateKeyIndex(AKey);
+    if Index >= 0 then
+    begin
+      Entry := ClassValue.PrivateKeyCacheEntry(Index);
+      if Entry^.RuntimeKey <> '' then
+      begin
+        SetResolvedPrivateValue(AObject, Entry^.RuntimeKey, AValue);
+        Exit;
+      end;
+    end;
+  end;
+  DefinePrivateFieldValueGeneric(AObject, AKey, AValue);
+end;
+
+procedure TGocciaVM.DefinePrivateFieldValueGeneric(
+  const AObject: TGocciaObjectValue; const AKey: string;
+  const AValue: TGocciaValue);
+var
+  RuntimeKey: string;
+  ExistingValue: TGocciaValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  HasSlot: Boolean;
+begin
+  RuntimeKey := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
+  // Existing slots matter only when adding a slot would be refused.
+  if not AObject.Extensible then
+  begin
+    if AObject is TGocciaInstanceValue then
+      HasSlot := TGocciaInstanceValue(AObject).TryGetRawPrivateProperty(
+        RuntimeKey, ExistingValue)
+    else
+      HasSlot := TryGetRawObjectPrivateDescriptor(AObject, RuntimeKey,
+        Descriptor);
+    if not HasSlot then
+      ThrowTypeError('Cannot add private elements to a non-extensible object',
+        SSuggestObjectNotExtensible);
+  end;
+  SetResolvedPrivateValue(AObject, RuntimeKey, AValue);
 end;
 
 function TGocciaVM.HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
