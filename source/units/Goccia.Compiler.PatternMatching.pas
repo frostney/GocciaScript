@@ -83,7 +83,7 @@ end;
 procedure AddPatternBindingName(const ANames: TUnicodeStringList;
   const AName: string);
 begin
-  if ANames.IndexOf(AName) < 0 then
+  if not ANames.HasString(AName) then
     ANames.Add(AName);
 end;
 

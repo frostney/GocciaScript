@@ -47,6 +47,16 @@ const
     module-level `const`; the slack absorbs a busy machine. }
   LINEAR_COMPILE_RATIO = 4;
   LINEAR_SLACK_NANOSECONDS = 20 * 1000 * 1000;
+  { Names in the shorter list of the parameter-list and pattern tests; the
+    longer has twice as many. A scan of the names before each name took
+    about 2 s here to parse a parameter list this long (the duplicate
+    check), 0.1 s to compile it (the record of the parameter names) and 8 s
+    to compile a pattern (collecting its names), and four times as long for
+    the longer list. }
+  NAME_LIST_COUNT = 8000;
+  { Doubling a list may multiply the time by at most 2.5 (plus the slack):
+    linear work doubles it, quadratic work quadruples it. }
+  NAME_LIST_DOUBLING_PERCENT = 250;
   { The operator-chain test compiles CHAIN_OPERATORS binary operators as
     chains of CHAIN_SHORT_TERMS terms and as chains CHAIN_LENGTH_FACTOR
     times as long. Work quadratic in a chain's length makes the long chains
@@ -152,9 +162,14 @@ type
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
     procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
     procedure TestTopLevelCallsCompileInLinearTime;
+    procedure ExpectNameListLinear(const APattern, AItem: string;
+      const ACount: Integer = NAME_LIST_COUNT);
+    procedure TestParameterListsParseAndCompileInLinearTime;
+    procedure TestDestructuringPatternsCompileInLinearTime;
     procedure TestOperatorChainsCompileInLinearTime;
     procedure TestOperatorChainsFoldTheirConstantStart;
     procedure TestSwitchCaseDeclarationsCompileInLinearTime;
+    procedure TestLongBranchesCompileOnce;
     procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
@@ -304,12 +319,18 @@ begin
     TestModuleTopLevelDeclarationsCompileInLinearTime);
   Test('Top-level calls among many bindings compile in linear time',
     TestTopLevelCallsCompileInLinearTime);
+  Test('Parameter lists parse and compile in linear time',
+    TestParameterListsParseAndCompileInLinearTime);
+  Test('Destructuring patterns compile in linear time',
+    TestDestructuringPatternsCompileInLinearTime);
   Test('Chains of binary operators compile in time linear in their length',
     TestOperatorChainsCompileInLinearTime);
   Test('Chains of binary operators fold the constants they start with',
     TestOperatorChainsFoldTheirConstantStart);
   Test('A switch with a declaration in each case clause compiles in linear time',
     TestSwitchCaseDeclarationsCompileInLinearTime);
+  Test('A branch past a 16-bit jump offset compiles in the time of short ones',
+    TestLongBranchesCompileOnce);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
@@ -1122,6 +1143,150 @@ begin
     'w%0:d();', False);
 end;
 
+{ APattern with its %s replaced by a list of AItem formatted with each index,
+  parsed and compiled at ACount items and at twice as many. The two
+  lengths alternate over LINEAR_TRIALS trials, and the fastest parse and
+  compile of each are compared, so a busy machine slows both alike. }
+procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
+  const ACount: Integer);
+
+  function NameList(const ACount: Integer): string;
+  var
+    Buffer: TStringBuffer;
+    I: Integer;
+  begin
+    Buffer := TStringBuffer.Create;
+    for I := 0 to ACount - 1 do
+    begin
+      if I > 0 then
+        Buffer.Append(', ');
+      Buffer.Append(Format(AItem, [I]));
+    end;
+    Result := Buffer.ToString;
+  end;
+
+  procedure ParseAndCompile(const ASource: string;
+    out AParseNanoseconds, ACompileNanoseconds: Int64);
+  var
+    Lexer: TGocciaLexer;
+    Parser: TGocciaParser;
+    ParserOptions: TGocciaParserOptions;
+    ProgramNode: TGocciaProgram;
+    Compiler: TGocciaCompiler;
+    Module: TGocciaBytecodeModule;
+    SourceLines: TStringList;
+    Start: Int64;
+  begin
+    Lexer := TGocciaLexer.Create(ASource, '<test>');
+    SourceLines := CreateTextLines(ASource);
+    Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
+    Compiler := TGocciaCompiler.Create('<test>');
+    ProgramNode := nil;
+    Module := nil;
+    try
+      ParserOptions := Parser.Options;
+      ParserOptions.VarDeclarationsEnabled := True;
+      ParserOptions.FunctionDeclarationsEnabled := True;
+      ParserOptions.TraditionalForLoopsEnabled := True;
+      Parser.ApplyOptions(ParserOptions);
+      Start := GetNanoseconds;
+      ProgramNode := Parser.Parse;
+      AParseNanoseconds := GetNanoseconds - Start;
+      Start := GetNanoseconds;
+      Module := Compiler.Compile(ProgramNode);
+      ACompileNanoseconds := GetNanoseconds - Start;
+    finally
+      Module.Free;
+      Compiler.Free;
+      ProgramNode.Free;
+      Parser.Free;
+      SourceLines.Free;
+      Lexer.Free;
+    end;
+  end;
+
+  function DoublingBound(const AShorter: Int64): Int64;
+  begin
+    Result := AShorter * NAME_LIST_DOUBLING_PERCENT div 100 +
+      LINEAR_SLACK_NANOSECONDS;
+  end;
+
+var
+  Shorter, Longer: string;
+  ShorterParse, ShorterCompile, LongerParse, LongerCompile,
+    ParseTime, CompileTime: Int64;
+  Trial: Integer;
+begin
+  Shorter := Format(APattern, [NameList(ACount)]);
+  Longer := Format(APattern, [NameList(2 * ACount)]);
+  ShorterParse := High(Int64);
+  ShorterCompile := High(Int64);
+  LongerParse := High(Int64);
+  LongerCompile := High(Int64);
+  for Trial := 1 to LINEAR_TRIALS do
+  begin
+    ParseAndCompile(Shorter, ParseTime, CompileTime);
+    ShorterParse := Min(ShorterParse, ParseTime);
+    ShorterCompile := Min(ShorterCompile, CompileTime);
+    ParseAndCompile(Longer, ParseTime, CompileTime);
+    LongerParse := Min(LongerParse, ParseTime);
+    LongerCompile := Min(LongerCompile, CompileTime);
+    if (LongerParse <= DoublingBound(ShorterParse)) and
+       (LongerCompile <= DoublingBound(ShorterCompile)) then
+      Break;
+  end;
+  if (LongerParse > DoublingBound(ShorterParse)) or
+     (LongerCompile > DoublingBound(ShorterCompile)) then
+    Fail(Format('"%s" with %d items "%s" took %d ms to parse and %d ms ' +
+      'to compile, against %d ms and %d ms with %d', [APattern,
+      2 * ACount, AItem, LongerParse div 1000000,
+      LongerCompile div 1000000, ShorterParse div 1000000,
+      ShorterCompile div 1000000, ACount]));
+  Expect<Boolean>(LongerParse <= DoublingBound(ShorterParse)).ToBe(True);
+  Expect<Boolean>(LongerCompile <= DoublingBound(ShorterCompile)).ToBe(True);
+end;
+
+{ The parse checks a parameter list's names for duplicates (ES2026 §15.1.1,
+  §15.3.1) and the compiler records them for the body (§10.2.11 step 5), each
+  once per name. }
+procedure TTestCompiler.TestParameterListsParseAndCompileInLinearTime;
+begin
+  ExpectNameListLinear('const g = (%s) => a0;', 'a%d');
+  ExpectNameListLinear('const g = async (%s, ...rest) => rest;', 'a%d');
+  ExpectNameListLinear('const g = function (%s) { return a0; };', 'a%d');
+  ExpectNameListLinear('function g(%s) { return a0; }', 'a%d');
+  ExpectNameListLinear('const o = { m(%s) { return a0; } };', 'a%d');
+  ExpectNameListLinear('class C { m(%s) { return a0; } }', 'a%d');
+  // A pattern parameter of an async arrow is searched for `await`; twice
+  // NAME_LIST_COUNT names would pass the parameter initialization's
+  // instruction limit.
+  ExpectNameListLinear('const g = async ({ %s }) => a0;', 'a%d',
+    NAME_LIST_COUNT div 2);
+end;
+
+{ The compiler collects a pattern's bound names, each once, wherever it
+  declares them (ES2026 §8.2.1 BoundNames), and the parse checks them
+  against each other in a static block and a for statement's let or const
+  (§15.7.1, §14.7.4.1). }
+procedure TTestCompiler.TestDestructuringPatternsCompileInLinearTime;
+begin
+  ExpectNameListLinear('const g = (o) => { const { %s } = o; return b0; };',
+    'b%d');
+  ExpectNameListLinear('const g = (o) => { let [%s] = o; return b0; };',
+    'b%d');
+  ExpectNameListLinear('const g = (o) => { var { %s } = o; return b0; };',
+    'b%d');
+  ExpectNameListLinear('const { %s } = {};', 'b%d');
+  ExpectNameListLinear(
+    'const g = (o) => { for (const { %s } of o) { return b0; } };', 'b%d');
+  ExpectNameListLinear(
+    'const g = () => { try { g(); } catch ({ %s }) { return b0; } };', 'b%d');
+  ExpectNameListLinear(
+    'const g = (o) => { const { %s } = o; return b0; };', 'k%0:d: [b%0:d = %0:d]');
+  ExpectNameListLinear('class C { static { const { %s } = {}; } }', 'b%d');
+  ExpectNameListLinear('for (let { %s } = {}; false;) {}', 'b%d');
+end;
+
 { An operator compiled as the operand of another used to work out its type
   and try its constant value again from its whole subtree, so a chain of k
   binary operators compiled in time quadratic in k: a function with 250
@@ -1239,8 +1404,8 @@ end;
   1,000, about 2.8 times per doubling where linear growth gives 2 and
   quadratic 4, and within a few times the same clauses with their bodies in
   braces, whose bindings live in a block of each clause. Both sizes stay
-  below about 5,400 clauses, past which the switch's first jump needs the
-  long form and the whole program is compiled a second time. }
+  below about 5,400 clauses, past which the switch's first jumps need the
+  long form (TestLongBranchesCompileOnce). }
 procedure TTestCompiler.TestSwitchCaseDeclarationsCompileInLinearTime;
 const
   SMALL_CLAUSES = 1000;
@@ -1279,6 +1444,134 @@ begin
   ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', True);
   ExpectSwitchCompilesLinear(
     'const d = 1; const g = () => { switch (d) {', '} };', False);
+end;
+
+{ A conditional jump over a branch longer than its 16-bit offset holds takes
+  a long form. The compiler used to give it one by compiling the whole
+  program a second time, so a program cost twice as much to compile once one
+  of its branches passed the limit. Each shape here puts the same clauses or
+  statements in branches past the limit and in twice as many branches short
+  enough for the 16-bit offset; all sizes stay where the compile time grows
+  linearly. The long branches compile within 1.6 times the time of the short
+  ones (1.0 to 1.2 here, and 1.9 to 2.0 with the second compile), at a
+  script's top level, at a global-backed top level and in an arrow function.
+  The bound is a ratio alone: an absolute slack would let the second compile
+  pass on a machine fast enough for the slack to cover it. }
+procedure TTestCompiler.TestLongBranchesCompileOnce;
+const
+  LONG_BRANCH_RATIO_PERCENT = 160;
+  // Three switches of 6,000 clauses each need the long form, which starts
+  // at about 5,400; six of 3,000 do not.
+  CLAUSES = 18000;
+  LONG_SWITCHES = 3;
+  CLAUSE = 'case %0:d: const s%0:d = %0:d; break;';
+  // Two instructions each: 18,000 of them need the long form, which starts
+  // past 32,767 instructions, and 9,000 do not.
+  STATEMENTS = 36000;
+  LONG_IFS = 2;
+  STATEMENT = 'r = r + 1;';
+
+  { The CLAUSES clauses or STATEMENTS statements in ABranches switches or
+    ifs, between APrefix and ASuffix. }
+  function BranchSource(const ASwitch: Boolean; const ABranches: Integer;
+    const APrefix, ASuffix: string): string;
+  var
+    Source: TStringBuffer;
+    Count, Branch, I: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append(APrefix + LineEnding);
+    if ASwitch then
+      Count := CLAUSES
+    else
+      Count := STATEMENTS;
+    for Branch := 0 to ABranches - 1 do
+    begin
+      if ASwitch then
+        Source.Append('switch (d) {' + LineEnding)
+      else
+        Source.Append('if (d) {' + LineEnding);
+      for I := Branch * (Count div ABranches) to
+          (Branch + 1) * (Count div ABranches) - 1 do
+        if ASwitch then
+          Source.Append(Format(CLAUSE, [I]) + LineEnding)
+        else
+          Source.Append(STATEMENT + LineEnding);
+      Source.Append('}' + LineEnding);
+    end;
+    Source.Append(ASuffix + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  { The long-form jumps in ATemplate and the functions below it: a
+    conditional jump or handler push, an OP_JUMP over the next instruction,
+    and the OP_JUMP that reaches the branch's target. }
+  function CountLongFormJumps(const ATemplate: TGocciaFunctionTemplate): Integer;
+  var
+    I: Integer;
+  begin
+    Result := 0;
+    for I := 1 to ATemplate.CodeCount - 2 do
+      if not (JumpOperandOf(DecodeOp(ATemplate.GetInstruction(I - 1))) in
+           [gjoNone, gjoAx]) and
+         (DecodeOp(ATemplate.GetInstruction(I)) = Ord(OP_JUMP)) and
+         (DecodeAx(ATemplate.GetInstruction(I)) = 1) and
+         (DecodeOp(ATemplate.GetInstruction(I + 1)) = Ord(OP_JUMP)) then
+        Inc(Result);
+    for I := 0 to ATemplate.FunctionCount - 1 do
+      Inc(Result, CountLongFormJumps(ATemplate.GetFunction(I)));
+  end;
+
+  { ACheckShapes: whether to check that only the long branches take the
+    long form (CompileSource compiles one source the same for both kinds of
+    top level). }
+  procedure ExpectLongBranchesCompileOnce(const ASwitch: Boolean;
+    const ALongBranches: Integer; const APrefix, ASuffix: string;
+    const AGlobalBackedTopLevel, ACheckShapes: Boolean);
+  var
+    LongSource, ShortSource: string;
+    Module: TGocciaBytecodeModule;
+    Long, Short: Int64;
+  begin
+    LongSource := BranchSource(ASwitch, ALongBranches, APrefix, ASuffix);
+    ShortSource := BranchSource(ASwitch, 2 * ALongBranches, APrefix,
+      ASuffix);
+    if ACheckShapes then
+    begin
+      Module := CompileSource(LongSource);
+      try
+        Expect<Boolean>(CountLongFormJumps(Module.TopLevel) > 0).ToBe(True);
+      finally
+        Module.Free;
+      end;
+      Module := CompileSource(ShortSource);
+      try
+        Expect<Integer>(CountLongFormJumps(Module.TopLevel)).ToBe(0);
+      finally
+        Module.Free;
+      end;
+    end;
+
+    Long := SourceCompileNanoseconds(LongSource, AGlobalBackedTopLevel);
+    Short := SourceCompileNanoseconds(ShortSource, AGlobalBackedTopLevel);
+    if Long * 100 > LONG_BRANCH_RATIO_PERCENT * Short then
+      Fail(Format('%d long branches in "%s" took %d ms to compile against ' +
+        '%d ms in %d short ones', [ALongBranches, APrefix,
+        Long div 1000000, Short div 1000000, 2 * ALongBranches]));
+    Expect<Boolean>(Long * 100 <= LONG_BRANCH_RATIO_PERCENT * Short).ToBe(
+      True);
+  end;
+
+begin
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES, 'const d = 1;', '',
+    False, True);
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES, 'const d = 1;', '',
+    True, False);
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES,
+    'const d = 1; const g = () => {', '};', False, True);
+  // A parameter, since an if on a constant compiles to no jump.
+  ExpectLongBranchesCompileOnce(False, LONG_IFS,
+    'const g = (d) => { let r = 0;', 'return r; };', False, True);
 end;
 
 procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
@@ -3409,11 +3702,13 @@ begin
   try
     Small := Module.TopLevel.GetFunction(0);
     Long := Module.TopLevel.GetFunction(1);
-    Expect<Boolean>(Module.TopLevel.FarBranches).ToBe(False);
-    Expect<Boolean>(Small.FarBranches).ToBe(False);
-    Expect<Boolean>(Long.FarBranches).ToBe(True);
-    // The short function's conditional jump keeps its one instruction.
+    // The short function's conditional jump keeps its one instruction, and
+    // the top level has no jump.
     Expect<Integer>(CountOp(Small, OP_JUMP)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP)).ToBe(0);
+    // The if without an else has no OP_JUMP of its own: the two are its
+    // conditional jump's long form.
+    Expect<Integer>(CountOp(Long, OP_JUMP)).ToBe(2);
   finally
     Module.Free;
   end;

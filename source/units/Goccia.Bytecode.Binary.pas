@@ -386,34 +386,13 @@ begin
           RejectInvalidBytecode(ATemplate, PC, Format(
             'function index %d is outside 0..%d',
             [DecodeBx(Instruction), ATemplate.FunctionCount - 1]));
-
-      OP_JUMP:
-        begin
-          JumpTarget := Int64(PC) + 1 + DecodeAx(Instruction);
-          RequireJumpTarget(JumpTarget);
-        end;
-      OP_JUMP_IF_TRUE, OP_JUMP_IF_FALSE:
-        begin
-          JumpTarget := Int64(PC) + 1 + DecodesBx(Instruction);
-          RequireJumpTarget(JumpTarget);
-        end;
-      OP_JUMP_IF_NUM_NOT_LTE_IMM, OP_JUMP_IF_NOT_LT, OP_JUMP_IF_NOT_LT_IMM,
-      OP_JUMP_IF_NOT_GT_IMM, OP_JUMP_IF_NOT_LTE_IMM, OP_JUMP_IF_NOT_GTE_IMM,
-      OP_JUMP_IF_NOT_STRICT_EQ_IMM, OP_JUMP_IF_STRICT_EQ_IMM:
-        begin
-          JumpTarget := Int64(PC) + 1 + Int16(C);
-          RequireJumpTarget(JumpTarget);
-        end;
-      OP_JUMP_IF_NULLISH, OP_JUMP_IF_NOT_NULLISH:
-        begin
-          JumpTarget := Int64(PC) + 1 + C;
-          RequireJumpTarget(JumpTarget);
-        end;
-      OP_PUSH_HANDLER, OP_PUSH_FINALLY_HANDLER:
-        begin
-          JumpTarget := Int64(PC) + 1 + DecodeBx(Instruction);
-          RequireJumpTarget(JumpTarget);
-        end;
+    end;
+    // A jump lands on an instruction of the template, or just past the last.
+    if JumpOperandOf(Op) <> gjoNone then
+    begin
+      JumpTarget := Int64(PC) + 1 + DecodeJumpOffset(Instruction, Prefix,
+        JumpOperandOf(Op));
+      RequireJumpTarget(JumpTarget);
     end;
     Inc(PC);
   end;
