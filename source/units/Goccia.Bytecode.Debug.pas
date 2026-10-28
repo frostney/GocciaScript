@@ -18,6 +18,10 @@ type
     EndPC: UInt32;
   end;
 
+  { Where the instruction at APC moves when the code is rewritten
+    (TGocciaFunctionTemplate.RelaxFarJumps). }
+  TGocciaPCRelocation = function(const APC: UInt32): UInt32 of object;
+
   TGocciaDebugInfo = class
   private
     FSourceFile: string;
@@ -46,6 +50,9 @@ type
     procedure AddLocal(const AName: string; const ASlot: UInt16;
       const AStartPC, AEndPC: UInt32);
     procedure SetLocalEndPC(const AIndex: Integer; const AEndPC: UInt32);
+    { Moves every PC the line map and the locals record by ARelocate, which
+      keeps their order. A local still open (EndPC High(UInt32)) stays so. }
+    procedure RelocatePCs(const ARelocate: TGocciaPCRelocation);
 
     function GetLineForPC(const APC: UInt32): UInt32;
     function GetColumnForPC(const APC: UInt32): UInt16;
@@ -146,6 +153,20 @@ procedure TGocciaDebugInfo.SetLocalEndPC(const AIndex: Integer;
   const AEndPC: UInt32);
 begin
   FLocals[AIndex].EndPC := AEndPC;
+end;
+
+procedure TGocciaDebugInfo.RelocatePCs(const ARelocate: TGocciaPCRelocation);
+var
+  I: Integer;
+begin
+  for I := 0 to FLineMapCount - 1 do
+    FLineMap[I].PC := ARelocate(FLineMap[I].PC);
+  for I := 0 to FLocalCount - 1 do
+  begin
+    FLocals[I].StartPC := ARelocate(FLocals[I].StartPC);
+    if FLocals[I].EndPC <> High(UInt32) then
+      FLocals[I].EndPC := ARelocate(FLocals[I].EndPC);
+  end;
 end;
 
 { The last entry at or before APC, or -1. A binary search over a map whose

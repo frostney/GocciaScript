@@ -26,6 +26,12 @@ describe("long conditional branches", () => {
     expect(realm.evaluate(`const g = (k) => k ?? (${operands(70000)}, 1); g(null) + ":" + g(0)`)).toBe("1:0");
   });
 
+  test("an if body over 40,000 statements at the top level of a script", () => {
+    for (const k of [1, 0]) {
+      expect(new ShadowRealm().evaluate(`let r = 0; const k = ${k}; if (k) { ${statements(40000)} } r`)).toBe(k ? 40000 : 0);
+    }
+  });
+
   test("a function with a long branch keeps its short branches correct", () => {
     expect(realm.evaluate(`const g = (k) => { let r = 0; if (k > 1) { r = 7; } else if (k) { ${statements(40000)} } return r + (k ? 1 : 2); }; [g(2), g(1), g(0)].join()`)).toBe("8,40001,2");
   });

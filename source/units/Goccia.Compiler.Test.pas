@@ -155,6 +155,7 @@ type
     procedure TestOperatorChainsCompileInLinearTime;
     procedure TestOperatorChainsFoldTheirConstantStart;
     procedure TestSwitchCaseDeclarationsCompileInLinearTime;
+    procedure TestLongBranchesCompileOnce;
     procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
@@ -310,6 +311,8 @@ begin
     TestOperatorChainsFoldTheirConstantStart);
   Test('A switch with a declaration in each case clause compiles in linear time',
     TestSwitchCaseDeclarationsCompileInLinearTime);
+  Test('A branch past a 16-bit jump offset compiles in the time of short ones',
+    TestLongBranchesCompileOnce);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
@@ -1239,8 +1242,8 @@ end;
   1,000, about 2.8 times per doubling where linear growth gives 2 and
   quadratic 4, and within a few times the same clauses with their bodies in
   braces, whose bindings live in a block of each clause. Both sizes stay
-  below about 5,400 clauses, past which the switch's first jump needs the
-  long form and the whole program is compiled a second time. }
+  below about 5,400 clauses, past which the switch's first jumps need the
+  long form (TestLongBranchesCompileOnce). }
 procedure TTestCompiler.TestSwitchCaseDeclarationsCompileInLinearTime;
 const
   SMALL_CLAUSES = 1000;
@@ -1279,6 +1282,142 @@ begin
   ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', True);
   ExpectSwitchCompilesLinear(
     'const d = 1; const g = () => { switch (d) {', '} };', False);
+end;
+
+{ A conditional jump over a branch longer than its 16-bit offset holds takes
+  a long form. The compiler used to give it one by compiling the whole
+  program a second time, so a program cost twice as much to compile once one
+  of its branches passed the limit. Each shape here puts the same clauses or
+  statements in branches past the limit and in twice as many branches short
+  enough for the 16-bit offset; all sizes stay where the compile time grows
+  linearly. The long branches compile within 1.5 times the time of the short
+  ones (about 1.05 here, and 2.0 with the second compile), at a script's top
+  level, at a global-backed top level and in an arrow function. }
+procedure TTestCompiler.TestLongBranchesCompileOnce;
+const
+  LONG_BRANCH_RATIO_PERCENT = 150;
+  // Three switches of 6,000 clauses each need the long form, which starts
+  // at about 5,400; six of 3,000 do not.
+  CLAUSES = 18000;
+  LONG_SWITCHES = 3;
+  CLAUSE = 'case %0:d: const s%0:d = %0:d; break;';
+  // Two instructions each: 18,000 of them need the long form, which starts
+  // past 32,767 instructions, and 9,000 do not.
+  STATEMENTS = 36000;
+  LONG_IFS = 2;
+  STATEMENT = 'r = r + 1;';
+
+  { ACount clauses or statements in ABranches switches or ifs. }
+  function BranchSource(const ASwitch: Boolean; const ABranches: Integer;
+    const APrefix, ASuffix: string): string;
+  var
+    Source: TStringBuffer;
+    Count, Branch, I: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append(APrefix + LineEnding);
+    if ASwitch then
+      Count := CLAUSES
+    else
+      Count := STATEMENTS;
+    for Branch := 0 to ABranches - 1 do
+    begin
+      if ASwitch then
+        Source.Append('switch (d) {' + LineEnding)
+      else
+        Source.Append('if (d) {' + LineEnding);
+      for I := Branch * (Count div ABranches) to
+          (Branch + 1) * (Count div ABranches) - 1 do
+        if ASwitch then
+          Source.Append(Format(CLAUSE, [I]) + LineEnding)
+        else
+          Source.Append(STATEMENT + LineEnding);
+      Source.Append('}' + LineEnding);
+    end;
+    Source.Append(ASuffix + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  { The long-form jumps in ATemplate and the functions below it: a
+    conditional jump or handler push, an OP_JUMP over the next instruction,
+    and the OP_JUMP that reaches the branch's target. }
+  function CountLongFormJumps(const ATemplate: TGocciaFunctionTemplate): Integer;
+  var
+    I: Integer;
+    Op: UInt8;
+  begin
+    Result := 0;
+    for I := 1 to ATemplate.CodeCount - 2 do
+    begin
+      Op := DecodeOp(ATemplate.GetInstruction(I - 1));
+      if (DecodeOp(ATemplate.GetInstruction(I)) = Ord(OP_JUMP)) and
+         (DecodeAx(ATemplate.GetInstruction(I)) = 1) and
+         (DecodeOp(ATemplate.GetInstruction(I + 1)) = Ord(OP_JUMP)) and
+         (Op in [Ord(OP_JUMP_IF_TRUE),
+           Ord(OP_JUMP_IF_FALSE), Ord(OP_JUMP_IF_NULLISH),
+           Ord(OP_JUMP_IF_NOT_NULLISH), Ord(OP_PUSH_HANDLER),
+           Ord(OP_PUSH_FINALLY_HANDLER), Ord(OP_JUMP_IF_NUM_NOT_LTE_IMM),
+           Ord(OP_JUMP_IF_NOT_LT), Ord(OP_JUMP_IF_NOT_LT_IMM),
+           Ord(OP_JUMP_IF_NOT_GT_IMM), Ord(OP_JUMP_IF_NOT_LTE_IMM),
+           Ord(OP_JUMP_IF_NOT_GTE_IMM), Ord(OP_JUMP_IF_NOT_STRICT_EQ_IMM),
+           Ord(OP_JUMP_IF_STRICT_EQ_IMM)]) then
+        Inc(Result);
+    end;
+    for I := 0 to ATemplate.FunctionCount - 1 do
+      Inc(Result, CountLongFormJumps(ATemplate.GetFunction(I)));
+  end;
+
+  { ACheckShapes: whether to check that only the long branches take the
+    long form (CompileSource compiles one source the same for both kinds of
+    top level). }
+  procedure ExpectLongBranchesCompileOnce(const ASwitch: Boolean;
+    const ALongBranches: Integer; const APrefix, ASuffix: string;
+    const AGlobalBackedTopLevel, ACheckShapes: Boolean);
+  var
+    LongSource, ShortSource: string;
+    Module: TGocciaBytecodeModule;
+    Long, Short: Int64;
+  begin
+    LongSource := BranchSource(ASwitch, ALongBranches, APrefix, ASuffix);
+    ShortSource := BranchSource(ASwitch, 2 * ALongBranches, APrefix,
+      ASuffix);
+    if ACheckShapes then
+    begin
+      Module := CompileSource(LongSource);
+      try
+        Expect<Boolean>(CountLongFormJumps(Module.TopLevel) > 0).ToBe(True);
+      finally
+        Module.Free;
+      end;
+      Module := CompileSource(ShortSource);
+      try
+        Expect<Integer>(CountLongFormJumps(Module.TopLevel)).ToBe(0);
+      finally
+        Module.Free;
+      end;
+    end;
+
+    Long := SourceCompileNanoseconds(LongSource, AGlobalBackedTopLevel);
+    Short := SourceCompileNanoseconds(ShortSource, AGlobalBackedTopLevel);
+    if Long * 100 > LONG_BRANCH_RATIO_PERCENT * Short +
+       100 * LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d long branches in "%s" took %d ms to compile against ' +
+        '%d ms in %d short ones', [ALongBranches, APrefix,
+        Long div 1000000, Short div 1000000, 2 * ALongBranches]));
+    Expect<Boolean>(Long * 100 <= LONG_BRANCH_RATIO_PERCENT * Short +
+      100 * LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES, 'const d = 1;', '',
+    False, True);
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES, 'const d = 1;', '',
+    True, False);
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES,
+    'const d = 1; const g = () => {', '};', False, True);
+  // A parameter, since an if on a constant compiles to no jump.
+  ExpectLongBranchesCompileOnce(False, LONG_IFS,
+    'const g = (d) => { let r = 0;', 'return r; };', False, True);
 end;
 
 procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
@@ -3409,11 +3548,13 @@ begin
   try
     Small := Module.TopLevel.GetFunction(0);
     Long := Module.TopLevel.GetFunction(1);
-    Expect<Boolean>(Module.TopLevel.FarBranches).ToBe(False);
-    Expect<Boolean>(Small.FarBranches).ToBe(False);
-    Expect<Boolean>(Long.FarBranches).ToBe(True);
-    // The short function's conditional jump keeps its one instruction.
+    // The short function's conditional jump keeps its one instruction, and
+    // the top level has no jump.
     Expect<Integer>(CountOp(Small, OP_JUMP)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP)).ToBe(0);
+    // The if without an else has no OP_JUMP of its own: the two are its
+    // conditional jump's long form.
+    Expect<Integer>(CountOp(Long, OP_JUMP)).ToBe(2);
   finally
     Module.Free;
   end;
