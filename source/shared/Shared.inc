@@ -2,13 +2,15 @@
   {$mode delphiunicode} {$H+}
 {$ENDIF}
 
-{ FPC 3.2.4 changed two RTL interfaces this code uses. Generics.Defaults
-  comparers take their arguments as const instead of constref (Delphi has
-  always used const), and the openssl unit renamed DLLSSLName and DLLUtilName
-  to BaseSSLName and BaseCryptoName. These symbols keep FPC 3.2.2 building. }
+{ FPC 3.2.4 changed three RTL interfaces this code uses. Generics.Defaults
+  comparers and the Notify method of the Generics.Collections lists take
+  their value as const instead of constref (Delphi has always used const),
+  and the openssl unit renamed DLLSSLName and DLLUtilName to BaseSSLName and
+  BaseCryptoName. These symbols keep FPC 3.2.2 building. }
 {$IFDEF FPC}
   {$IF FPC_FULLVERSION < 30204}
     {$DEFINE GOCCIA_FPC_CONSTREF_COMPARERS}
+    {$DEFINE GOCCIA_FPC_CONSTREF_COLLECTION_NOTIFY}
     {$DEFINE GOCCIA_FPC_OPENSSL_DLL_NAMES}
   {$ENDIF}
 {$ENDIF}

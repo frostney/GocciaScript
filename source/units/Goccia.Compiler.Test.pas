@@ -47,6 +47,16 @@ const
     module-level `const`; the slack absorbs a busy machine. }
   LINEAR_COMPILE_RATIO = 4;
   LINEAR_SLACK_NANOSECONDS = 20 * 1000 * 1000;
+  { Names in the shorter list of the parameter-list and pattern tests; the
+    longer has twice as many. A scan of the names before each name took
+    about 2 s here to parse a parameter list this long (the duplicate
+    check), 0.1 s to compile it (the record of the parameter names) and 8 s
+    to compile a pattern (collecting its names), and four times as long for
+    the longer list. }
+  NAME_LIST_COUNT = 8000;
+  { Doubling a list may multiply the time by at most 2.5 (plus the slack):
+    linear work doubles it, quadratic work quadruples it. }
+  NAME_LIST_DOUBLING_PERCENT = 250;
   { The operator-chain test compiles CHAIN_OPERATORS binary operators as
     chains of CHAIN_SHORT_TERMS terms and as chains CHAIN_LENGTH_FACTOR
     times as long. Work quadratic in a chain's length makes the long chains
@@ -152,6 +162,10 @@ type
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
     procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
     procedure TestTopLevelCallsCompileInLinearTime;
+    procedure ExpectNameListLinear(const APattern, AItem: string;
+      const ACount: Integer = NAME_LIST_COUNT);
+    procedure TestParameterListsParseAndCompileInLinearTime;
+    procedure TestDestructuringPatternsCompileInLinearTime;
     procedure TestOperatorChainsCompileInLinearTime;
     procedure TestOperatorChainsFoldTheirConstantStart;
     procedure TestSwitchCaseDeclarationsCompileInLinearTime;
@@ -304,6 +318,10 @@ begin
     TestModuleTopLevelDeclarationsCompileInLinearTime);
   Test('Top-level calls among many bindings compile in linear time',
     TestTopLevelCallsCompileInLinearTime);
+  Test('Parameter lists parse and compile in linear time',
+    TestParameterListsParseAndCompileInLinearTime);
+  Test('Destructuring patterns compile in linear time',
+    TestDestructuringPatternsCompileInLinearTime);
   Test('Chains of binary operators compile in time linear in their length',
     TestOperatorChainsCompileInLinearTime);
   Test('Chains of binary operators fold the constants they start with',
@@ -1120,6 +1138,150 @@ begin
   ExpectCallsCompileLinear(
     'let a%0:d = 0; const w%0:d = () => { a%0:d = 1; };', 'w%0:d.a;',
     'w%0:d();', False);
+end;
+
+{ APattern with its %s replaced by a list of AItem formatted with each index,
+  parsed and compiled at ACount items and at twice as many. The two
+  lengths alternate over LINEAR_TRIALS trials, and the fastest parse and
+  compile of each are compared, so a busy machine slows both alike. }
+procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
+  const ACount: Integer);
+
+  function NameList(const ACount: Integer): string;
+  var
+    Buffer: TStringBuffer;
+    I: Integer;
+  begin
+    Buffer := TStringBuffer.Create;
+    for I := 0 to ACount - 1 do
+    begin
+      if I > 0 then
+        Buffer.Append(', ');
+      Buffer.Append(Format(AItem, [I]));
+    end;
+    Result := Buffer.ToString;
+  end;
+
+  procedure ParseAndCompile(const ASource: string;
+    out AParseNanoseconds, ACompileNanoseconds: Int64);
+  var
+    Lexer: TGocciaLexer;
+    Parser: TGocciaParser;
+    ParserOptions: TGocciaParserOptions;
+    ProgramNode: TGocciaProgram;
+    Compiler: TGocciaCompiler;
+    Module: TGocciaBytecodeModule;
+    SourceLines: TStringList;
+    Start: Int64;
+  begin
+    Lexer := TGocciaLexer.Create(ASource, '<test>');
+    SourceLines := CreateTextLines(ASource);
+    Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
+    Compiler := TGocciaCompiler.Create('<test>');
+    ProgramNode := nil;
+    Module := nil;
+    try
+      ParserOptions := Parser.Options;
+      ParserOptions.VarDeclarationsEnabled := True;
+      ParserOptions.FunctionDeclarationsEnabled := True;
+      ParserOptions.TraditionalForLoopsEnabled := True;
+      Parser.ApplyOptions(ParserOptions);
+      Start := GetNanoseconds;
+      ProgramNode := Parser.Parse;
+      AParseNanoseconds := GetNanoseconds - Start;
+      Start := GetNanoseconds;
+      Module := Compiler.Compile(ProgramNode);
+      ACompileNanoseconds := GetNanoseconds - Start;
+    finally
+      Module.Free;
+      Compiler.Free;
+      ProgramNode.Free;
+      Parser.Free;
+      SourceLines.Free;
+      Lexer.Free;
+    end;
+  end;
+
+  function DoublingBound(const AShorter: Int64): Int64;
+  begin
+    Result := AShorter * NAME_LIST_DOUBLING_PERCENT div 100 +
+      LINEAR_SLACK_NANOSECONDS;
+  end;
+
+var
+  Shorter, Longer: string;
+  ShorterParse, ShorterCompile, LongerParse, LongerCompile,
+    ParseTime, CompileTime: Int64;
+  Trial: Integer;
+begin
+  Shorter := Format(APattern, [NameList(ACount)]);
+  Longer := Format(APattern, [NameList(2 * ACount)]);
+  ShorterParse := High(Int64);
+  ShorterCompile := High(Int64);
+  LongerParse := High(Int64);
+  LongerCompile := High(Int64);
+  for Trial := 1 to LINEAR_TRIALS do
+  begin
+    ParseAndCompile(Shorter, ParseTime, CompileTime);
+    ShorterParse := Min(ShorterParse, ParseTime);
+    ShorterCompile := Min(ShorterCompile, CompileTime);
+    ParseAndCompile(Longer, ParseTime, CompileTime);
+    LongerParse := Min(LongerParse, ParseTime);
+    LongerCompile := Min(LongerCompile, CompileTime);
+    if (LongerParse <= DoublingBound(ShorterParse)) and
+       (LongerCompile <= DoublingBound(ShorterCompile)) then
+      Break;
+  end;
+  if (LongerParse > DoublingBound(ShorterParse)) or
+     (LongerCompile > DoublingBound(ShorterCompile)) then
+    Fail(Format('"%s" with %d items "%s" took %d ms to parse and %d ms ' +
+      'to compile, against %d ms and %d ms with %d', [APattern,
+      2 * ACount, AItem, LongerParse div 1000000,
+      LongerCompile div 1000000, ShorterParse div 1000000,
+      ShorterCompile div 1000000, ACount]));
+  Expect<Boolean>(LongerParse <= DoublingBound(ShorterParse)).ToBe(True);
+  Expect<Boolean>(LongerCompile <= DoublingBound(ShorterCompile)).ToBe(True);
+end;
+
+{ The parse checks a parameter list's names for duplicates (ES2026 §15.1.1,
+  §15.3.1) and the compiler records them for the body (§10.2.11 step 5), each
+  once per name. }
+procedure TTestCompiler.TestParameterListsParseAndCompileInLinearTime;
+begin
+  ExpectNameListLinear('const g = (%s) => a0;', 'a%d');
+  ExpectNameListLinear('const g = async (%s, ...rest) => rest;', 'a%d');
+  ExpectNameListLinear('const g = function (%s) { return a0; };', 'a%d');
+  ExpectNameListLinear('function g(%s) { return a0; }', 'a%d');
+  ExpectNameListLinear('const o = { m(%s) { return a0; } };', 'a%d');
+  ExpectNameListLinear('class C { m(%s) { return a0; } }', 'a%d');
+  // A pattern parameter of an async arrow is searched for `await`; twice
+  // NAME_LIST_COUNT names would pass the parameter initialization's
+  // instruction limit.
+  ExpectNameListLinear('const g = async ({ %s }) => a0;', 'a%d',
+    NAME_LIST_COUNT div 2);
+end;
+
+{ The compiler collects a pattern's bound names, each once, wherever it
+  declares them (ES2026 §8.2.1 BoundNames), and the parse checks them
+  against each other in a static block and a for statement's let or const
+  (§15.7.1, §14.7.4.1). }
+procedure TTestCompiler.TestDestructuringPatternsCompileInLinearTime;
+begin
+  ExpectNameListLinear('const g = (o) => { const { %s } = o; return b0; };',
+    'b%d');
+  ExpectNameListLinear('const g = (o) => { let [%s] = o; return b0; };',
+    'b%d');
+  ExpectNameListLinear('const g = (o) => { var { %s } = o; return b0; };',
+    'b%d');
+  ExpectNameListLinear('const { %s } = {};', 'b%d');
+  ExpectNameListLinear(
+    'const g = (o) => { for (const { %s } of o) { return b0; } };', 'b%d');
+  ExpectNameListLinear(
+    'const g = () => { try { g(); } catch ({ %s }) { return b0; } };', 'b%d');
+  ExpectNameListLinear(
+    'const g = (o) => { const { %s } = o; return b0; };', 'k%0:d: [b%0:d = %0:d]');
+  ExpectNameListLinear('class C { static { const { %s } = {}; } }', 'b%d');
+  ExpectNameListLinear('for (let { %s } = {}; false;) {}', 'b%d');
 end;
 
 { An operator compiled as the operand of another used to work out its type
