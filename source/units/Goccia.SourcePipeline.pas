@@ -198,6 +198,7 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Error,
+  Goccia.Error.Messages,
   Goccia.FileExtensions,
   Goccia.Parser;
 
@@ -406,7 +407,7 @@ procedure RaiseModuleRedeclaration(const AName, AFileName: string;
   const AColumn: Integer = 0);
 begin
   raise TGocciaSyntaxError.Create(
-    Format('Identifier "%s" has already been declared', [AName]),
+    Format(SErrorIdentifierAlreadyDeclared, [AName]),
     ALine, AColumn, AFileName, ASourceLines);
 end;
 
