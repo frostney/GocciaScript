@@ -10613,6 +10613,8 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
     }
+    if (report.includes("FAILURE"))
+      throw new Error(`expression-style under --copy should parse every file, got:\n${report}`);
     if (readFileSync(join(tree, "sample.js"), "utf-8") !== original)
       throw new Error("expression-style under --copy changed the host file");
 
@@ -10630,8 +10632,11 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
       { stdout: "pipe", stderr: "pipe" },
     );
-    if (!normalizeLineEndings(again.stdout.toString()).includes("0 finding(s) in 1 file(s), 0 rewritten"))
-      throw new Error(`expression-style should find nothing in a file it fixed, got:\n${again.stdout.toString()}`);
+    const againReport = normalizeLineEndings(again.stdout.toString());
+    if (again.exitCode !== 0)
+      throw new Error(`expression-style rerun should exit 0, got ${again.exitCode}: ${again.stderr.toString()}`);
+    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 1 file(s), 0 rewritten"))
+      throw new Error(`expression-style should find nothing in a file it fixed, got:\n${againReport}`);
   } finally {
     clean(tmp);
   }

@@ -132,6 +132,15 @@ describe("ast.parse with expressions", () => {
     expect(kinds(block)).toEqual(["BlockStatement"]);
   });
 
+  test("a generic arrow function starts at its type parameter list", () => {
+    const result = parseExpressions("const f = <T>(v: T): T => v;\n", {
+      fileName: "a.ts",
+    });
+    const arrow = find(result.root, "ArrowFunctionExpression");
+
+    expect(text(result, arrow)).toBe("<T>(v: T): T => v");
+  });
+
   test("an unparenthesized arrow parameter is a parameter", () => {
     const result = parseExpressions("const f = x => x;\n");
     const arrow = find(result.root, "ArrowFunctionExpression");

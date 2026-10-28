@@ -424,7 +424,8 @@ type
     function Primary: TGocciaExpression;
     function ArrayLiteral: TGocciaExpression;
     function ObjectLiteral: TGocciaExpression;
-    function ArrowFunction(const AIsAsync: Boolean = False): TGocciaExpression;
+    function ArrowFunction(const AIsAsync: Boolean = False;
+      const AStart: TGocciaToken = nil): TGocciaExpression;
     function Assignment: TGocciaExpression;
     function AssignmentInheritingConsequentDepth: TGocciaExpression;
     function UnguardedAssignment: TGocciaExpression;
@@ -3654,7 +3655,7 @@ begin
     can be checked. }
   ValidateTypeSyntaxTokens(SavedCurrent, GenericParametersEnd);
 
-  AExpression := ArrowFunction;
+  AExpression := ArrowFunction(False, FTokens[SavedCurrent]);
   // ArrowFunction anchors its source text at the '(' it was entered on; widen
   // it to include the type parameter list.
   TGocciaArrowFunctionExpression(AExpression).SourceText :=
@@ -5167,7 +5168,8 @@ begin
   end;
 end;
 
-function TGocciaParser.ArrowFunction(const AIsAsync: Boolean): TGocciaExpression;
+function TGocciaParser.ArrowFunction(const AIsAsync: Boolean;
+  const AStart: TGocciaToken): TGocciaExpression;
 var
   SpanStart: TGocciaToken;
   Parameters: TGocciaParameterArray;
@@ -5184,10 +5186,13 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
-  { An async arrow begins at `async`, which the caller consumed before the
-    `(` that Previous is. The diagnostics below keep reporting the `(`. }
+  { An async arrow begins at `async` and a generic one at its type parameter
+    list, both consumed by the caller before the `(` that Previous is. The
+    diagnostics below keep reporting the `(`. }
   SpanStart := Previous;
-  if AIsAsync and (FCurrent >= 2) and
+  if Assigned(AStart) then
+    SpanStart := AStart
+  else if AIsAsync and (FCurrent >= 2) and
      (FTokens[FCurrent - 2].Lexeme = KEYWORD_ASYNC) then
     SpanStart := FTokens[FCurrent - 2];
 
