@@ -734,6 +734,27 @@ begin
   Result := Buffer.ToString;
 end;
 
+{ TStringList holds AnsiStrings, and the implicit conversion to one goes
+  through the platform's converter for every line. An ASCII line has the same
+  bytes in the system code page, so it is narrowed here; any other line takes
+  the implicit conversion. }
+function SourceLineToAnsi(const AText: string;
+  const AStart, ALength: Integer): AnsiString;
+var
+  Target: PAnsiChar;
+  I: Integer;
+begin
+  for I := AStart to AStart + ALength - 1 do
+    if Ord(AText[I]) > $7F then
+      Exit(AnsiString(Copy(AText, AStart, ALength)));
+  SetLength(Result, ALength);
+  if ALength = 0 then
+    Exit;
+  Target := PAnsiChar(Result);
+  for I := 0 to ALength - 1 do
+    Target[I] := AnsiChar(Ord(AText[AStart + I]));
+end;
+
 function CreateTextLines(const AText: string): TStringList;
 var
   LineStart: Integer;
@@ -747,21 +768,21 @@ begin
   begin
     if AText[TextIndex] = #13 then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(SourceLineToAnsi(AText, LineStart, TextIndex - LineStart));
       if (TextIndex < Length(AText)) and (AText[TextIndex + 1] = #10) then
         Inc(TextIndex);
       LineStart := TextIndex + 1;
     end
     else if AText[TextIndex] = #10 then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(SourceLineToAnsi(AText, LineStart, TextIndex - LineStart));
       LineStart := TextIndex + 1;
     end;
     Inc(TextIndex);
   end;
 
   if LineStart <= Length(AText) then
-    Result.Add(Copy(AText, LineStart, Length(AText) - LineStart + 1))
+    Result.Add(SourceLineToAnsi(AText, LineStart, Length(AText) - LineStart + 1))
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
     Result.Add('');
@@ -788,26 +809,26 @@ begin
   begin
     if AText[TextIndex] = #13 then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(SourceLineToAnsi(AText, LineStart, TextIndex - LineStart));
       if (TextIndex < Length(AText)) and (AText[TextIndex + 1] = #10) then
         Inc(TextIndex);
       LineStart := TextIndex + 1;
     end
     else if AText[TextIndex] = #10 then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(SourceLineToAnsi(AText, LineStart, TextIndex - LineStart));
       LineStart := TextIndex + 1;
     end
     else if IsLineOrParagraphSeparatorAt(AText, TextIndex) then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(SourceLineToAnsi(AText, LineStart, TextIndex - LineStart));
       LineStart := TextIndex + 1;
     end;
     Inc(TextIndex);
   end;
 
   if LineStart <= Length(AText) then
-    Result.Add(Copy(AText, LineStart, Length(AText) - LineStart + 1))
+    Result.Add(SourceLineToAnsi(AText, LineStart, Length(AText) - LineStart + 1))
   else if (Length(AText) > 0) and
     ((AText[Length(AText)] = #10) or (AText[Length(AText)] = #13) or
     IsLineOrParagraphSeparatorAt(AText, Length(AText))) then
