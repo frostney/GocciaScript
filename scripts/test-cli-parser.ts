@@ -243,6 +243,18 @@ console.log("Strict mode code rejects static as a pattern or for-head binding...
   }
 }
 
+console.log("Match patterns preserve binding early errors...");
+for (const pattern of [
+  "{ a: const x, b: const x }",
+  "{ a: const x } or { b: const y }",
+  "{ a: const x } or { b: let x }",
+  "not { a: const x }",
+  "{ a: const café, b: const café }",
+]) {
+  assertSyntaxError(`const f = (value) => value is ${pattern};\n`,
+    `match pattern ${pattern}`);
+}
+
 // -- Migrated language early-error coverage ------------------------------------
 
 console.log("Language early errors use the CLI parser...");

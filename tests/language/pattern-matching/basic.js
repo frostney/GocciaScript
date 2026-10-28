@@ -195,6 +195,16 @@ describe("pattern matching expressions", () => {
     expect(result).toBe(3);
   });
 
+  test("or alternatives preserve exact Unicode binding names in different orders", () => {
+    const value = { kind: 2, first: 3, second: 7 };
+    let result = 0;
+    if (value is { kind: 1, first: const café, second: const café }
+      or { second: const café, first: const café, kind: 2 }) {
+      result = café * 10 + café;
+    }
+    expect(result).toBe(37);
+  });
+
   test("or pattern alternatives restore failed tentative bindings", () => {
     const chosen = "outer";
     const value = { bad: "bad", kind: "second" };

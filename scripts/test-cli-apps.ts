@@ -2392,6 +2392,19 @@ function expectEvalHostProbe(label: string, lines: string[], expected: string[])
     throw new Error(`Test262 Runner ${label} probe got:\n${actual}\nexpected:\n${expected.join("\n")}`);
 }
 
+await section("Test262 Runner: eval membership uses exact identifier names...", async () => {
+  expectEvalHostProbe("exact eval names", [
+    "function direct() { let café = 3, café = 7, Name = 11, name = 13; return eval('[café, café, Name, name].join()'); }",
+    "print(direct());",
+    "print(eval('let café = 3; let café = 7; café + café'));",
+    "print((0, eval)('let Name = 11; let name = 13; Name + name'));",
+    "try { eval('let café; let café;'); } catch (error) { print(error.name); }",
+    "try { eval('let café; var café;'); } catch (error) { print(error.name); }",
+    "function conflict() { let café = 3; try { eval('var café'); } catch (error) { return error.name; } }",
+    "print(conflict());",
+  ], ["3,7,11,13", "10", "24", "SyntaxError", "SyntaxError", "SyntaxError"]);
+});
+
 await section("Test262 Runner: a second eval reads the vars an earlier eval of the same function declared...", async () => {
   expectEvalHostProbe("second eval", [
     "var s = 'outer';",
