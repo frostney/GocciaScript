@@ -58,6 +58,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Packages.Address,
+  Goccia.Profiler.Compile,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -394,6 +395,10 @@ type
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
+    function CompileDynamicFunctionCode(const AParamStr, ABodySource: string;
+      const AKind: TGocciaDynamicFunctionKind;
+      const ACompileProfile: TGocciaCompileProfiler;
+      const AProfileSource: string): TGocciaFunctionBase;
     procedure InjectModulesFromValue(const AValue: TGocciaValue;
       const ABaseAddress, AProvenance: string);
   public
@@ -2920,6 +2925,8 @@ var
 begin
   if TGocciaCoverageTracker.Instance <> nil then
     TGocciaCoverageTracker.Instance.ExcludeFile(AFileName);
+  if TGocciaCompileProfiler.Instance <> nil then
+    TGocciaCompileProfiler.Instance.ExcludeFile(AFileName);
   Compiler := TGocciaCompiler.Create(AFileName);
   try
     Compiler.GlobalBackedTopLevel := True;
@@ -3366,8 +3373,19 @@ var
   SavedGlobalScope: TGocciaScope;
   SavedGlobalBackedTopLevel: Boolean;
   FloatingPointState: TGocciaFloatingPointState;
+  CompileProfile: TGocciaCompileProfiler;
+  CompileProfileUnitDepth: Integer;
 begin
   AStage := gesCompile;
+  // The eval code's parse and compile are profiled as a unit of their own,
+  // not as functions of the caller's file; its run is not part of it.
+  CompileProfile := TGocciaCompileProfiler.Instance;
+  CompileProfileUnitDepth := -1;
+  if Assigned(CompileProfile) then
+  begin
+    CompileProfileUnitDepth := CompileProfile.UnitDepth;
+    CompileProfile.BeginUnit('<eval>', ASourceText);
+  end;
   VarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   DeclaredVarNames := TUnicodeStringList.Create;
@@ -3425,6 +3443,8 @@ begin
             Compiler.Free;
           end;
           FRetainedModules.Add(Module);
+          if Assigned(CompileProfile) then
+            CompileProfile.EndUnitTo(CompileProfileUnitDepth);
 
           // §19.2.1.3 EvalDeclarationInstantiation checks the global object
           // first; then the template binds the eval's functions and vars and
@@ -3458,6 +3478,8 @@ begin
       OptionsScope.Free;
     end;
   finally
+    if Assigned(CompileProfile) then
+      CompileProfile.EndUnitTo(CompileProfileUnitDepth);
     LeaveGocciaFloatingPointScope(FloatingPointState);
     SourceLines.Free;
     DeclaredVarNames.Free;
@@ -5519,13 +5541,52 @@ begin
   end;
 end;
 
+// The Function constructor's code is profiled as a compile unit of its own,
+// not as functions of the caller's file. Its run creates only the function.
 function TGocciaEngine.CompileDynamicFunction(
   const AParamsSources: array of string;
   const ABodySource: string;
   const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
 var
-  ParamStr: string;
-  I: Integer;
+  CompileProfile: TGocciaCompileProfiler;
+  UnitDepth, I: Integer;
+  ParamStr, ProfileSource: string;
+begin
+  ParamStr := '';
+  for I := 0 to High(AParamsSources) do
+  begin
+    if I > 0 then
+      ParamStr := ParamStr + ',';
+    ParamStr := ParamStr + AParamsSources[I];
+  end;
+  CompileProfile := TGocciaCompileProfiler.Instance;
+  if not Assigned(CompileProfile) then
+    Exit(CompileDynamicFunctionCode(ParamStr, ABodySource, AKind, nil, ''));
+  UnitDepth := CompileProfile.UnitDepth;
+  // The kind, the parameters as the wrapper joins them, and the body: the
+  // same function source is the same unit, whatever its arguments' split.
+  // The parameters are length-prefixed: no character they or the body may
+  // hold can move text from one field to the other.
+  ProfileSource := IntToStr(Ord(AKind)) + ':' + IntToStr(Length(ParamStr)) +
+    ':' + ParamStr + ABodySource;
+  CompileProfile.BeginUnit('<Function>', ProfileSource);
+  try
+    Result := CompileDynamicFunctionCode(ParamStr, ABodySource, AKind,
+      CompileProfile, ProfileSource);
+  finally
+    CompileProfile.EndUnitTo(UnitDepth);
+  end;
+end;
+
+{ ACompileProfile, when the compile profile is on, gets the parameter and
+  body validation parses as units of their own beside the wrapper's
+  (AProfileSource identifies them): their positions are not the wrapper's. }
+function TGocciaEngine.CompileDynamicFunctionCode(const AParamStr,
+  ABodySource: string; const AKind: TGocciaDynamicFunctionKind;
+  const ACompileProfile: TGocciaCompileProfiler;
+  const AProfileSource: string): TGocciaFunctionBase;
+var
+  UnitDepth: Integer;
   BodyParseResult: TGocciaFunctionBodyParseResult;
   FunctionExpression: TGocciaFunctionExpression;
   PipelineOptions: TGocciaSourcePipelineOptions;
@@ -5540,14 +5601,6 @@ begin
   // This prevents injection: a crafted body that tries to close the method
   // wrapper will fail validation because it will have unmatched braces when
   // parsed as a standalone function body.
-  ParamStr := '';
-  for I := 0 to High(AParamsSources) do
-  begin
-    if I > 0 then
-      ParamStr := ParamStr + ',';
-    ParamStr := ParamStr + AParamsSources[I];
-  end;
-
   // Validate params: must parse as a valid parameter list.
   // If params contain tokens that escape the signature, this will throw.
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
@@ -5559,22 +5612,36 @@ begin
     FExperimentalJSModuleSourceEnabled;
   PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
   PipelineOptions.SourceType := stScript;
-  if not TGocciaSourcePipeline.ParseFunctionParameters(ParamStr,
+  // A raise leaves these units open; CompileDynamicFunction closes them.
+  UnitDepth := -1;
+  if Assigned(ACompileProfile) then
+  begin
+    UnitDepth := ACompileProfile.UnitDepth;
+    ACompileProfile.BeginUnit('<Function:params>', AProfileSource);
+  end;
+  if not TGocciaSourcePipeline.ParseFunctionParameters(AParamStr,
     '<Function:params>', PipelineOptions, AKind) then
     ThrowSyntaxError('Invalid parameter list for Function constructor');
 
   // Validate body: must parse as a valid function body.
   // An arrow wrapper ensures the body is enclosed in matching braces.
+  if Assigned(ACompileProfile) then
+  begin
+    ACompileProfile.EndUnitTo(UnitDepth);
+    ACompileProfile.BeginUnit('<Function:body>', AProfileSource);
+  end;
   BodyParseResult := TGocciaSourcePipeline.ParseFunctionBodyWrapper(
     ABodySource, '<Function:body>', PipelineOptions, AKind);
   if not BodyParseResult.IsValid then
     ThrowSyntaxError('Invalid body for Function constructor');
+  if Assigned(ACompileProfile) then
+    ACompileProfile.EndUnitTo(UnitDepth);
 
   // Both pieces validated — safe to assemble the wrapper
   WrapperOptions := PipelineOptions;
   if BodyParseResult.HasUseStrictDirective then
     WrapperOptions.InheritedStrictMode := True;
-  ProgramNode := TGocciaSourcePipeline.ParseDynamicFunctionWrapper(ParamStr,
+  ProgramNode := TGocciaSourcePipeline.ParseDynamicFunctionWrapper(AParamStr,
     ABodySource, '<Function>', WrapperOptions, AKind);
   try
     FunctionExpression := nil;
