@@ -60,6 +60,7 @@ uses
   Goccia.NumberConversion,
   Goccia.NumberExponentiation,
   Goccia.NumberRemainder,
+  Goccia.Profiler.Compile,
   Goccia.Token,
   Goccia.Values.BigIntValue,
   Goccia.Values.Primitives;
@@ -688,6 +689,8 @@ function TryEvaluateConstantExpression(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaExpression; out AValue: TGocciaCompileTimeValue;
   const ANotConstant: TGocciaExpressionList): Boolean;
 begin
+  if Assigned(ACtx.Scope) and Assigned(ACtx.Scope.CompileProfile) then
+    ACtx.Scope.CompileProfile.Count(ccConstantEvaluationVisits);
   ResetCompileTimeValue(AValue, ctvkUnknown);
   if not (ACtx.OptimizationOptions.EnableConstantFolding or
           ACtx.OptimizationOptions.EnableConstPropagation or
@@ -852,6 +855,8 @@ function TryEmitConstantExpression(const ACtx: TGocciaCompilationContext;
 var
   Value: TGocciaCompileTimeValue;
 begin
+  if Assigned(ACtx.Scope) and Assigned(ACtx.Scope.CompileProfile) then
+    ACtx.Scope.CompileProfile.Count(ccConstantEmitAttempts);
   if TryEvaluateConstantExpression(ACtx, AExpr, Value) then
   begin
     EmitCompileTimeValue(ACtx, Value, ADest);
