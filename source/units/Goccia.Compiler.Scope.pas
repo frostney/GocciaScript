@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  HashMap,
   OrderedStringMap,
 
   Goccia.AST.Node,
@@ -147,6 +148,11 @@ type
     FSlotLocalCounts: array of Integer;
     FUpvalues: array of TGocciaCompilerUpvalue;
     FUpvalueCount: Integer;
+    // Once there are COMPILER_UPVALUE_INDEX_THRESHOLD upvalues: the first
+    // upvalue of each captured slot, by UpvalueSlotKey (AddUpvalue), and of
+    // each name (ResolveUpvalue in a seeded scope). Seeding drops them.
+    FUpvalueSlotIndex: THashMap<Integer, Integer>;
+    FUpvalueNameIndex: TOrderedStringMap<Integer>;
     FDepth: Integer;
     FNextSlot: Integer;
     FMaxSlot: UInt16;
@@ -513,6 +519,7 @@ uses
 
 const
   COMPILER_LOCAL_INDEX_THRESHOLD = 64;
+  COMPILER_UPVALUE_INDEX_THRESHOLD = 64;
   COMPILER_SUPER_LOCAL = '__super__';
 
 { TGocciaCompilerScope }
@@ -634,6 +641,8 @@ begin
   FParameterNames := nil;
   FLocalCount := 0;
   FUpvalueCount := 0;
+  FUpvalueSlotIndex := nil;
+  FUpvalueNameIndex := nil;
   FDepth := ADepth;
   FNextSlot := 0;
   FMaxSlot := 0;
@@ -676,6 +685,8 @@ end;
 destructor TGocciaCompilerScope.Destroy;
 begin
   FLocalIndex.Free;
+  FUpvalueSlotIndex.Free;
+  FUpvalueNameIndex.Free;
   FTypeMemo.Free;
   FParameterNames.Free;
   inherited;
@@ -870,6 +881,24 @@ begin
     FCompileProfile.Count(ccUpvalueResolutions);
   if FUpvaluesSeeded then
   begin
+    if not Assigned(FUpvalueNameIndex) and
+       (FUpvalueCount >= COMPILER_UPVALUE_INDEX_THRESHOLD) then
+    begin
+      FUpvalueNameIndex := TOrderedStringMap<Integer>.Create(
+        FUpvalueCount * 2);
+      for Idx := 0 to FUpvalueCount - 1 do
+        if not FUpvalueNameIndex.ContainsKey(FUpvalues[Idx].Name) then
+          FUpvalueNameIndex.Add(FUpvalues[Idx].Name, Idx);
+    end;
+    if Assigned(FUpvalueNameIndex) then
+    begin
+      // One probe of the index, found or not.
+      if Assigned(FCompileProfile) then
+        FCompileProfile.Count(ccUpvalueListProbes);
+      if not FUpvalueNameIndex.TryGetValue(AName, Result) then
+        Result := -1;
+      Exit;
+    end;
     for Idx := 0 to FUpvalueCount - 1 do
       if FUpvalues[Idx].Name = AName then
       begin
@@ -949,21 +978,58 @@ begin
   Result := -1;
 end;
 
+// The key of the slot an upvalue captures: a register of the enclosing
+// function (AIsLocal) or one of its upvalues.
+function UpvalueSlotKey(const AIndex: UInt16;
+  const AIsLocal: Boolean): Integer; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := Integer(AIndex) * 2 + Ord(AIsLocal);
+end;
+
+// The upvalue of a captured slot, or a new one. A function that captures
+// many bindings resolves each of them at every read; finding its upvalue by
+// visiting the list took time quadratic in the bindings it captures, so past
+// COMPILER_UPVALUE_INDEX_THRESHOLD upvalues an index finds it. Either way it
+// is the first upvalue of the slot, so the numbering does not change.
 function TGocciaCompilerScope.AddUpvalue(const AName: string; const AIndex: UInt16;
   const AIsLocal: Boolean; const AIsConst: Boolean;
   const AIsVar: Boolean): Integer;
 var
-  I: Integer;
+  I, Key: Integer;
 begin
-  for I := 0 to FUpvalueCount - 1 do
-    if (FUpvalues[I].Index = AIndex) and (FUpvalues[I].IsLocal = AIsLocal) then
-    begin
-      if Assigned(FCompileProfile) then
-        FCompileProfile.Count(ccUpvalueListProbes, I + 1);
+  Key := UpvalueSlotKey(AIndex, AIsLocal);
+  if not Assigned(FUpvalueSlotIndex) and
+     (FUpvalueCount >= COMPILER_UPVALUE_INDEX_THRESHOLD) then
+  begin
+    FUpvalueSlotIndex := THashMap<Integer, Integer>.Create(
+      FUpvalueCount * 2);
+    for I := 0 to FUpvalueCount - 1 do
+      if not FUpvalueSlotIndex.ContainsKey(
+           UpvalueSlotKey(FUpvalues[I].Index, FUpvalues[I].IsLocal)) then
+        FUpvalueSlotIndex.Add(
+          UpvalueSlotKey(FUpvalues[I].Index, FUpvalues[I].IsLocal), I);
+  end;
+  if Assigned(FUpvalueSlotIndex) then
+  begin
+    // One probe of the index, found or not.
+    if Assigned(FCompileProfile) then
+      FCompileProfile.Count(ccUpvalueListProbes);
+    if FUpvalueSlotIndex.TryGetValue(Key, I) then
       Exit(I);
-    end;
-  if Assigned(FCompileProfile) then
-    FCompileProfile.Count(ccUpvalueListProbes, FUpvalueCount);
+  end
+  else
+  begin
+    for I := 0 to FUpvalueCount - 1 do
+      if (FUpvalues[I].Index = AIndex) and
+         (FUpvalues[I].IsLocal = AIsLocal) then
+      begin
+        if Assigned(FCompileProfile) then
+          FCompileProfile.Count(ccUpvalueListProbes, I + 1);
+        Exit(I);
+      end;
+    if Assigned(FCompileProfile) then
+      FCompileProfile.Count(ccUpvalueListProbes, FUpvalueCount);
+  end;
 
   if FUpvalueCount >= High(UInt16) then
     raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeUpvalueLimit,
@@ -991,6 +1057,11 @@ begin
   SetLength(FUpvalues[FUpvalueCount].ExportNames, 0);
   Result := FUpvalueCount;
   Inc(FUpvalueCount);
+  if Assigned(FUpvalueSlotIndex) then
+    FUpvalueSlotIndex.Add(Key, Result);
+  if Assigned(FUpvalueNameIndex) and
+     not FUpvalueNameIndex.ContainsKey(AName) then
+    FUpvalueNameIndex.Add(AName, Result);
 end;
 
 function TGocciaCompilerScope.DeclareCallerLocal(const AName: string;
@@ -1015,6 +1086,10 @@ procedure TGocciaCompilerScope.SeedUpvalue(const AIndex: UInt16;
   AIsNonStrictImmutable: Boolean);
 begin
   FUpvaluesSeeded := True;
+  // The entry at AIndex changes, and with it the first upvalue of its slot
+  // or name: the indexes are built again when next needed.
+  FreeAndNil(FUpvalueSlotIndex);
+  FreeAndNil(FUpvalueNameIndex);
   while FUpvalueCount <= AIndex do
   begin
     if FUpvalueCount >= Length(FUpvalues) then

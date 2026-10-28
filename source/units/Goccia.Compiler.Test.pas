@@ -37,6 +37,15 @@ uses
   Goccia.Values.Primitives;
 
 const
+  { The captured-bindings tests read CAPTURE_READS bindings in all, as
+    CAPTURE_FEW_BINDINGS bindings read in turn and as CAPTURE_MANY_BINDINGS
+    read in turn. Finding the upvalue of each read by visiting the closure's
+    upvalues made the many cost several times the few (about 5.5 times
+    here); finding it by an index costs about the same for both, and the
+    bound allows CHAIN_COMPILE_RATIO times. }
+  CAPTURE_READS = 240000;
+  CAPTURE_FEW_BINDINGS = 1875;
+  CAPTURE_MANY_BINDINGS = 30000;
   { Top-level declarations per compile in the linear-time tests: enough that
     a step costing time quadratic in them (a scan of every earlier local per
     declaration, about 5 s here for script consts) is far past the bound,
@@ -162,6 +171,8 @@ type
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
     procedure TestModuleTopLevelDeclarationsCompileInLinearTime;
     procedure TestTopLevelCallsCompileInLinearTime;
+    procedure TestManyCapturedBindingsCompileInLinearTime;
+    procedure TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime;
     procedure ExpectNameListLinear(const APattern, AItem: string;
       const ACount: Integer = NAME_LIST_COUNT);
     procedure TestParameterListsParseAndCompileInLinearTime;
@@ -322,6 +333,10 @@ begin
     TestModuleTopLevelDeclarationsCompileInLinearTime);
   Test('Top-level calls among many bindings compile in linear time',
     TestTopLevelCallsCompileInLinearTime);
+  Test('A closure that captures many bindings compiles in linear time',
+    TestManyCapturedBindingsCompileInLinearTime);
+  Test('Direct eval code among many captured bindings compiles in linear time',
+    TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime);
   Test('Parameter lists parse and compile in linear time',
     TestParameterListsParseAndCompileInLinearTime);
   Test('Destructuring patterns compile in linear time',
@@ -1150,6 +1165,131 @@ begin
   ExpectCallsCompileLinear(
     'let a%0:d = 0; const w%0:d = () => { a%0:d = 1; };', 'w%0:d.a;',
     'w%0:d();', False);
+end;
+
+// A function of p with ABindings `let` bindings x0, x1, ..., and a closure
+// h in it that reads them in turn, AReads reads in all.
+function CapturedReadsSource(const ABindings, AReads: Integer): string;
+var
+  Source: TStringBuffer;
+  Index: Integer;
+begin
+  Source := TStringBuffer.Create;
+  Source.Append('const f = (p) => {' + LineEnding);
+  for Index := 0 to ABindings - 1 do
+    Source.Append(Format('let x%d = p + %d;', [Index, Index]) + LineEnding);
+  Source.Append('const h = () => {' + LineEnding);
+  for Index := 0 to AReads - 1 do
+    Source.Append(Format('x%d;', [Index mod ABindings]) + LineEnding);
+  Source.Append('};' + LineEnding + 'return h; };' + LineEnding);
+  Result := Source.ToString;
+end;
+
+{ A closure resolves a captured binding at each read, and finding its
+  upvalue visited every upvalue before it: a closure reading thousands of
+  captured bindings compiled in time quadratic in them. }
+procedure TTestCompiler.TestManyCapturedBindingsCompileInLinearTime;
+var
+  Few, Many: Int64;
+begin
+  Few := SourceCompileNanoseconds(CapturedReadsSource(CAPTURE_FEW_BINDINGS,
+    CAPTURE_READS), False);
+  Many := SourceCompileNanoseconds(CapturedReadsSource(CAPTURE_MANY_BINDINGS,
+    CAPTURE_READS), False);
+  if Many > CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS then
+    Fail(Format('%d reads of %d captured bindings took %d ms to compile ' +
+      'against %d ms for %d', [CAPTURE_READS, CAPTURE_MANY_BINDINGS,
+      Many div 1000000, Few div 1000000, CAPTURE_FEW_BINDINGS]));
+  Expect<Boolean>(Many <=
+    CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+end;
+
+{ Direct eval code is compiled against its call site's record, which seeds
+  the calling closure's upvalues, and each name the eval code reads was
+  looked up among them by visiting them in turn. }
+procedure TTestCompiler.TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime;
+
+  // The eval code reads CAPTURE_READS div 4 bindings in turn, from a call
+  // site whose record lists ABindings bindings of enclosing functions, which
+  // the eval's caller has as upvalues. The record is built here: compiling
+  // a caller with that many bindings takes long for another reason.
+  function EvalCompileNanoseconds(const ABindings: Integer): Int64;
+  var
+    Reads: TStringBuffer;
+    EvalSource: string;
+    Caller, EvalModule: TGocciaBytecodeModule;
+    Site: TGocciaFunctionTemplate;
+    Env: TGocciaDirectEvalEnvironment;
+    Lexer: TGocciaLexer;
+    Parser: TGocciaParser;
+    ProgramNode: TGocciaProgram;
+    Compiler: TGocciaCompiler;
+    SourceLines: TStringList;
+    Index, Trial: Integer;
+    Start, Elapsed: Int64;
+  begin
+    Reads := TStringBuffer.Create;
+    for Index := 0 to CAPTURE_READS div 4 - 1 do
+      Reads.Append(Format('x%d;', [Index mod ABindings]));
+    EvalSource := Reads.ToString;
+    Result := High(Int64);
+    Caller := CompileSource('const f = () => () => eval("x");');
+    try
+      Site := FindTemplateWithDirectEval(Caller.TopLevel);
+      Expect<Boolean>(Assigned(Site)).ToBe(True);
+      if not Assigned(Site) then
+        Exit;
+      Env := Site.GetDirectEvalEnvironment(0);
+      SetLength(Env.Bindings, ABindings);
+      for Index := 0 to ABindings - 1 do
+      begin
+        Env.Bindings[Index] := Default(TGocciaDirectEvalBindingInfo);
+        Env.Bindings[Index].Name := Format('x%d', [Index]);
+        Env.Bindings[Index].Kind := debUpvalue;
+        Env.Bindings[Index].Index := Index;
+      end;
+      for Trial := 1 to LINEAR_TRIALS do
+      begin
+        Lexer := TGocciaLexer.Create(EvalSource, '<eval>');
+        SourceLines := CreateTextLines(EvalSource);
+        Parser := TGocciaParser.CreateFromLexer(Lexer, '<eval>', SourceLines);
+        ProgramNode := Parser.Parse;
+        Compiler := TGocciaCompiler.Create('<eval>');
+        EvalModule := nil;
+        try
+          Start := GetNanoseconds;
+          EvalModule := Compiler.CompileDirectEval(ProgramNode, Env, True,
+            nil);
+          Elapsed := GetNanoseconds - Start;
+          Expect<Integer>(EvalModule.TopLevel.UpvalueCount).ToBe(ABindings);
+        finally
+          EvalModule.Free;
+          Compiler.Free;
+          ProgramNode.Free;
+          Parser.Free;
+          SourceLines.Free;
+          Lexer.Free;
+        end;
+        if Elapsed < Result then
+          Result := Elapsed;
+      end;
+    finally
+      Caller.Free;
+    end;
+  end;
+
+var
+  Few, Many: Int64;
+begin
+  Few := EvalCompileNanoseconds(CAPTURE_FEW_BINDINGS);
+  Many := EvalCompileNanoseconds(CAPTURE_MANY_BINDINGS);
+  if Many > CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS then
+    Fail(Format('Eval code reading %d of %d captured bindings took %d ms to ' +
+      'compile against %d ms among %d', [CAPTURE_READS div 4,
+      CAPTURE_MANY_BINDINGS, Many div 1000000, Few div 1000000,
+      CAPTURE_FEW_BINDINGS]));
+  Expect<Boolean>(Many <=
+    CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS).ToBe(True);
 end;
 
 { APattern with its %s replaced by a list of AItem formatted with each index,

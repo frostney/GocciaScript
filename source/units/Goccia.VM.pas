@@ -16353,6 +16353,44 @@ begin
 end;
 {$IFDEF PRODUCTION}{$IFDEF FPC}{$OPTIMIZATION AUTOINLINE}{$ENDIF}{$ENDIF}
 
+{$IFDEF GOCCIA_VM_LAYOUT_PROBE}
+var
+  GLayoutProbeSink: Cardinal;
+
+{ The layout probe (`./build.pas --prod --layout-probe`, issue #1917): code
+  that never runs, ahead of the VM's hot code, so that the probe build is the
+  ordinary build with that code moved by a few hundred bytes. Measured against
+  the ordinary build, it shows how much a benchmark moves when unrelated code
+  moves; see "Dispatch layout" in docs/bytecode-vm.md. }
+procedure LayoutProbePadding;
+begin
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 13) xor 1;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 7) xor 2;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 11) xor 3;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 5) xor 4;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 17) xor 5;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 3) xor 6;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 9) xor 7;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 15) xor 8;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 6) xor 9;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 10) xor 10;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 14) xor 11;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 4) xor 12;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 12) xor 13;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 8) xor 14;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 16) xor 15;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 2) xor 16;
+end;
+{$ENDIF}
+
+{ Every case arm of the dispatch loop starts on a 64-byte boundary (issue
+  #1917), so no arm shares a cache line, or an op-cache window, with the end
+  of the arm before it. FPC also aligns the labels where a case statement
+  ends and where an if statement without an else rejoins, in this function
+  and the routines nested in it, and to nothing outside them; code that falls
+  through to such a label executes the padding. See "Dispatch layout" in
+  docs/bytecode-vm.md for what it measured. }
+{$IFDEF FPC}{$PUSH}{$CODEALIGN JUMP=64}{$ENDIF}
 function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
   const AArguments: PGocciaRegister; const AArgCount: Integer;
@@ -17057,6 +17095,7 @@ begin
         PreviousMemoryPressureCountdown);
   end;
 end;
+{$IFDEF FPC}{$POP}{$ENDIF}
 
 { Every call native code makes into a bytecode function comes through here: a
   callback from Array.prototype.map, a getter, a comparator. The arguments are
@@ -18192,6 +18231,11 @@ begin
 end;
 
 initialization
+{$IFDEF GOCCIA_VM_LAYOUT_PROBE}
+  // Referenced so that smart linking keeps it; never true.
+  if ParamCount < 0 then
+    LayoutProbePadding;
+{$ENDIF}
   RegisterFunctionConstructRedirectHook(RedirectBytecodeClassConstruct);
   RegisterOrdinaryObjectClass(TGocciaVMLiteralObjectValue);
   RegisterSnapshotCodec(TGocciaVMLiteralObjectValue,
