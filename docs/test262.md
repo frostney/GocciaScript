@@ -103,8 +103,12 @@ The GitHub Actions artifact is named `test262-profile`. It contains:
 - `test262-profile-aggregate.json`: the review entry point, with run
   provenance, corpus settings, summary counts, runtime totals, path-group
   rollups, top opcode histograms, hot opcode pairs, scalar fast-path rates,
-  function self-time/allocation summaries, and links or identifiers for the
-  detailed profiles that explain each aggregate row.
+  function self-time, total-time and allocation summaries (each function's
+  figures added up over the tests, where a test's total time counts every
+  outermost activation once; see
+  [Function Profile](profiling.md#function-profile---profilefunctions)), and
+  links or identifiers for the detailed profiles that explain each aggregate
+  row.
 - `test262-profile-aggregate.md`: a human-readable review summary with the
   same provenance header and ranked tables.
 - `test262-profile-details/`: detailed profile JSON files used only after the

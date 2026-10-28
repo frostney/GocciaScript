@@ -17,7 +17,9 @@ type
     string, which every later addition and removal keeps current, so a test
     costs constant time where a scan costs time linear in the list: callers
     that keep a list unique by testing each string before adding it stay
-    linear in its length. IndexOf still scans, with the RTL's comparison. }
+    linear in its length. FindString answers the same and tells how many
+    strings it compared: 1 for a test through the count, the strings scanned
+    otherwise. IndexOf still scans, with the RTL's comparison. }
   TUnicodeStringList = class(TList<UnicodeString>)
   private const
     HASH_INDEX_MIN_COUNT = 16;
@@ -34,6 +36,8 @@ type
   public
     destructor Destroy; override;
     function HasString(const AValue: UnicodeString): Boolean;
+    function FindString(const AValue: UnicodeString;
+      out AProbes: Integer): Boolean;
   end;
 
 implementation
@@ -99,6 +103,14 @@ end;
 
 function TUnicodeStringList.HasString(const AValue: UnicodeString): Boolean;
 var
+  Probes: Integer;
+begin
+  Result := FindString(AValue, Probes);
+end;
+
+function TUnicodeStringList.FindString(const AValue: UnicodeString;
+  out AProbes: Integer): Boolean;
+var
   I: Integer;
 begin
   if (AValue <> '') and
@@ -106,11 +118,16 @@ begin
   begin
     if not Assigned(FCounts) then
       BuildCounts;
+    AProbes := 1;
     Exit(FCounts.ContainsKey(AValue));
   end;
   for I := 0 to Count - 1 do
     if Items[I] = AValue then
+    begin
+      AProbes := I + 1;
       Exit(True);
+    end;
+  AProbes := Count;
   Result := False;
 end;
 
