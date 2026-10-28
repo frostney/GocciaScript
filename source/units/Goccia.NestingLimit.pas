@@ -19,8 +19,9 @@ const
   // prefix operator (`!`, `typeof`, `await`, ...), each `new` and `**`
   // operand, and each `extends` clause, binding pattern and match pattern.
   // The RegExp compiler counts each group, lookaround and nested class.
-  // Operator, member and call chains (`a + b + c`, `a.b().c`) are parsed in
-  // a loop and do not count here; MAX_TREE_HEIGHT bounds them.
+  // Operator, member, call and type assertion chains (`a + b + c`,
+  // `a.b().c`, `x!`, `x as T`) are parsed in a loop and do not count here;
+  // MAX_TREE_HEIGHT bounds them.
   //
   // Real code stays far below the limit: the deepest nesting in the bundles
   // the benchmarks run (Web Tooling, JetStream, are-we-fast-yet) and in 542
