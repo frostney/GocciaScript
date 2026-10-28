@@ -19,6 +19,7 @@ uses
   Goccia.Modules,
   Goccia.NestingLimit,
   Goccia.Profiler.Compile,
+  Goccia.Scope.BindingMap,
   Goccia.SourceSpan,
   Goccia.Token,
   Goccia.Values.Primitives;
@@ -370,7 +371,7 @@ type
     function ParsePatternValueExpression: TGocciaExpression;
     function IsMatchExpressionAhead: Boolean;
     procedure CollectMatchPatternBindings(const APattern: TGocciaMatchPattern;
-      const ANames: TStringList);
+      const ANames: TOrderedStringMap<TGocciaDeclarationType>);
     procedure ValidateMatchPatternEarlyErrors(const APattern: TGocciaMatchPattern);
     // Type annotation helpers (Types as Comments)
     function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType;
@@ -534,7 +535,6 @@ uses
   Goccia.FileExtensions,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
-  Goccia.Scope.BindingMap,
   Goccia.Values.BigIntValue;
 
 // Terminators for the return-type annotation in the speculative arrow-function
@@ -4209,48 +4209,50 @@ begin
 end;
 
 procedure TGocciaParser.CollectMatchPatternBindings(
-  const APattern: TGocciaMatchPattern; const ANames: TStringList);
+  const APattern: TGocciaMatchPattern;
+  const ANames: TOrderedStringMap<TGocciaDeclarationType>);
 var
-  I, ExistingIndex, CurrentIndex: Integer;
+  I: Integer;
   BindingPattern: TGocciaBindingMatchPattern;
   AsPattern: TGocciaAsMatchPattern;
   OrPattern: TGocciaOrMatchPattern;
-  First, Current: TStringList;
-  Name, KindValue: string;
+  First, Current: TOrderedStringMap<TGocciaDeclarationType>;
+  Pair: TOrderedStringMap<TGocciaDeclarationType>.TKeyValuePair;
+  CurrentKind: TGocciaDeclarationType;
 
-  function IndexOfBindingName(const AList: TStringList; const AName: string): Integer;
+  function FindBinding(const AMap: TOrderedStringMap<TGocciaDeclarationType>;
+    const AName: string; out AKind: TGocciaDeclarationType): Boolean;
   var
-    J: Integer;
+    Probes: Integer;
   begin
-    for J := 0 to AList.Count - 1 do
-      if AList.Names[J] = AName then
-        Exit(J);
-    Result := -1;
+    if Assigned(FCompileProfile) then
+    begin
+      Result := AMap.TryGetValueWithProbes(AName, AKind, Probes);
+      FCompileProfile.CountLookup(ccBindingNameLookups, ccBindingNameProbes, Probes);
+    end
+    else
+      Result := AMap.TryGetValue(AName, AKind);
   end;
 
   procedure AddBinding(const AName: string; const AKind: TGocciaDeclarationType;
     const ALine, AColumn: Integer);
+  var
+    ExistingKind: TGocciaDeclarationType;
   begin
-    if IndexOfBindingName(ANames, AName) >= 0 then
+    if FindBinding(ANames, AName, ExistingKind) then
       raise TGocciaSyntaxError.Create('Duplicate binding in pattern',
         ALine, AColumn, FFileName, FSourceLines,
         'Use a distinct binding name in this pattern');
-    ANames.Add(AName + '=' + IntToStr(Ord(AKind)));
+    ANames.Add(AName, AKind);
   end;
 
-  procedure MergeBindings(const ASource: TStringList; const ALine, AColumn: Integer);
+  procedure MergeBindings(const ASource: TOrderedStringMap<TGocciaDeclarationType>;
+    const ALine, AColumn: Integer);
   var
-    J: Integer;
+    Entry: TOrderedStringMap<TGocciaDeclarationType>.TKeyValuePair;
   begin
-    for J := 0 to ASource.Count - 1 do
-    begin
-      Name := ASource.Names[J];
-      if IndexOfBindingName(ANames, Name) >= 0 then
-        raise TGocciaSyntaxError.Create('Duplicate binding in pattern',
-          ALine, AColumn, FFileName, FSourceLines,
-          'Use a distinct binding name in this pattern');
-      ANames.Add(Name + '=' + ASource.ValueFromIndex[J]);
-    end;
+    for Entry in ASource do
+      AddBinding(Entry.Key, Entry.Value, ALine, AColumn);
   end;
 
 begin
@@ -4296,31 +4298,24 @@ begin
   else if APattern is TGocciaOrMatchPattern then
   begin
     OrPattern := TGocciaOrMatchPattern(APattern);
-    First := TStringList.Create;
+    First := TOrderedStringMap<TGocciaDeclarationType>.Create;
     try
-      First.CaseSensitive := True;
-      First.NameValueSeparator := '=';
       if OrPattern.Patterns.Count > 0 then
         CollectMatchPatternBindings(OrPattern.Patterns[0], First);
 
       for I := 1 to OrPattern.Patterns.Count - 1 do
       begin
-        Current := TStringList.Create;
+        Current := TOrderedStringMap<TGocciaDeclarationType>.Create;
         try
-          Current.CaseSensitive := True;
-          Current.NameValueSeparator := '=';
           CollectMatchPatternBindings(OrPattern.Patterns[I], Current);
           if Current.Count <> First.Count then
             raise TGocciaSyntaxError.Create('"or" pattern alternatives must bind the same names',
               APattern.Line, APattern.Column, FFileName, FSourceLines,
               'Bind the same names with the same declaration kind in every alternative');
-          for ExistingIndex := 0 to First.Count - 1 do
+          for Pair in First do
           begin
-            Name := First.Names[ExistingIndex];
-            KindValue := First.ValueFromIndex[ExistingIndex];
-            CurrentIndex := IndexOfBindingName(Current, Name);
-            if (CurrentIndex < 0) or
-               (Current.ValueFromIndex[CurrentIndex] <> KindValue) then
+            if not FindBinding(Current, Pair.Key, CurrentKind) or
+               (CurrentKind <> Pair.Value) then
               raise TGocciaSyntaxError.Create('"or" pattern alternatives must bind the same names',
                 APattern.Line, APattern.Column, FFileName, FSourceLines,
                 'Bind the same names with the same declaration kind in every alternative');
@@ -4337,10 +4332,8 @@ begin
   end
   else if APattern is TGocciaNotMatchPattern then
   begin
-    First := TStringList.Create;
+    First := TOrderedStringMap<TGocciaDeclarationType>.Create;
     try
-      First.CaseSensitive := True;
-      First.NameValueSeparator := '=';
       CollectMatchPatternBindings(TGocciaNotMatchPattern(APattern).Pattern, First);
       if First.Count > 0 then
         raise TGocciaSyntaxError.Create('"not" patterns cannot contain bindings',
@@ -4355,12 +4348,10 @@ end;
 procedure TGocciaParser.ValidateMatchPatternEarlyErrors(
   const APattern: TGocciaMatchPattern);
 var
-  Names: TStringList;
+  Names: TOrderedStringMap<TGocciaDeclarationType>;
 begin
-  Names := TStringList.Create;
+  Names := TOrderedStringMap<TGocciaDeclarationType>.Create;
   try
-    Names.CaseSensitive := True;
-    Names.NameValueSeparator := '=';
     CollectMatchPatternBindings(APattern, Names);
   finally
     Names.Free;

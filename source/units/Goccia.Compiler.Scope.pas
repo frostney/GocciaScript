@@ -554,13 +554,19 @@ end;
 
 function TGocciaCompilerScope.NewestLocalNamed(const AName: string): Integer;
 var
-  I: Integer;
+  I, Probes: Integer;
+  Found: Boolean;
 begin
   if Assigned(FLocalIndex) then
   begin
     if Assigned(FCompileProfile) then
-      FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes, 1);
-    if not FLocalIndex.TryGetValue(AName, Result) then
+    begin
+      Found := FLocalIndex.TryGetValueWithProbes(AName, Result, Probes);
+      FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes, Probes);
+    end
+    else
+      Found := FLocalIndex.TryGetValue(AName, Result);
+    if not Found then
       Result := -1;
     Exit;
   end;

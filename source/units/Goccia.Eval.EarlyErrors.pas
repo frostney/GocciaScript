@@ -123,7 +123,7 @@ end;
 procedure AddUniqueEvalName(const ANames: TUnicodeStringList;
   const AName: string);
 begin
-  if (AName <> '') and (ANames.IndexOf(AName) < 0) then
+  if (AName <> '') and (not ANames.HasString(AName)) then
     ANames.Add(AName);
 end;
 
@@ -1141,7 +1141,7 @@ var
     RejectStrictEvalAssignmentName(AName, AFunction.Line, AFunction.Column);
     if AName = '' then
       Exit;
-    if BindingNames.IndexOf(AName) >= 0 then
+    if BindingNames.HasString(AName) then
       raise TGocciaSyntaxError.Create(
         'Duplicate parameter name not allowed in strict mode',
         AFunction.Line, AFunction.Column, '', nil);
@@ -1772,9 +1772,9 @@ begin
       Declaration := EvalFunctionDeclarationFromNode(ANodes[I]);
       if Assigned(Declaration) then
       begin
-        if Names.IndexOf(Declaration.Name) >= 0 then
+        if Names.HasString(Declaration.Name) then
         begin
-          if AStrict or (FunctionNames.IndexOf(Declaration.Name) < 0) then
+          if AStrict or (not FunctionNames.HasString(Declaration.Name)) then
             RaiseAlreadyDeclared(Declaration.Name, ANodes[I]);
         end
         else
@@ -1790,7 +1790,7 @@ begin
       CollectTopLevelEvalLexicalNames(Statement, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if Names.IndexOf(StatementNames[J]) >= 0 then
+        if Names.HasString(StatementNames[J]) then
           RaiseAlreadyDeclared(StatementNames[J], ANodes[I]);
         Names.Add(StatementNames[J]);
       end;
@@ -1912,11 +1912,11 @@ begin
   begin
     Declaration := EvalFunctionDeclarationFromNode(AProgram.Body[I]);
     if Assigned(Declaration) and
-       (AFunctionNames.IndexOf(Declaration.Name) < 0) then
+       (not AFunctionNames.HasString(Declaration.Name)) then
       AFunctionNames.Insert(0, Declaration.Name);
   end;
   for I := 0 to AVarNames.Count - 1 do
-    if AFunctionNames.IndexOf(AVarNames[I]) < 0 then
+    if not AFunctionNames.HasString(AVarNames[I]) then
       AddUniqueEvalName(ADeclaredVarNames, AVarNames[I]);
 end;
 
@@ -1947,13 +1947,13 @@ begin
       CollectTopLevelEvalLexicalNames(Statement, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if LexicalNames.IndexOf(StatementNames[J]) >= 0 then
+        if LexicalNames.HasString(StatementNames[J]) then
           RaiseAlreadyDeclared(StatementNames[J]);
         LexicalNames.Add(StatementNames[J]);
       end;
     end;
     for I := 0 to LexicalNames.Count - 1 do
-      if AVarNames.IndexOf(LexicalNames[I]) >= 0 then
+      if AVarNames.HasString(LexicalNames[I]) then
         RaiseAlreadyDeclared(LexicalNames[I]);
   finally
     Statement.Free;

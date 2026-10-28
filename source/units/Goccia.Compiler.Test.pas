@@ -31,6 +31,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.Lexer,
   Goccia.Parser,
+  Goccia.Profiler.Compile,
   Goccia.SourceSpan,
   Goccia.TestSetup,
   Goccia.Token,
@@ -174,9 +175,14 @@ type
     procedure TestManyCapturedBindingsCompileInLinearTime;
     procedure TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime;
     procedure ExpectNameListLinear(const APattern, AItem: string;
-      const ACount: Integer = NAME_LIST_COUNT);
+      const ACount: Integer = NAME_LIST_COUNT;
+      const ASlackNanoseconds: Int64 = LINEAR_SLACK_NANOSECONDS);
     procedure TestParameterListsParseAndCompileInLinearTime;
     procedure TestDestructuringPatternsCompileInLinearTime;
+    procedure TestMatchBindingsParseInLinearTime;
+    procedure TestDefaultParameterListsCompileInLinearTime;
+    procedure TestDirectEvalNameChecksScale;
+    procedure TestLargeSwitchLookupProbesScale;
     procedure TestOperatorChainsCompileInLinearTime;
     procedure TestOperatorChainsFoldTheirConstantStart;
     procedure TestNestedChainsCompileInLinearTime;
@@ -341,6 +347,14 @@ begin
     TestParameterListsParseAndCompileInLinearTime);
   Test('Destructuring patterns compile in linear time',
     TestDestructuringPatternsCompileInLinearTime);
+  Test('Match-pattern bindings parse in linear time',
+    TestMatchBindingsParseInLinearTime);
+  Test('Default parameter lists compile in linear time',
+    TestDefaultParameterListsCompileInLinearTime);
+  Test('Large switches keep local lookup probes proportional to clauses',
+    TestLargeSwitchLookupProbesScale);
+  Test('Direct eval string-name checks scale with the bindings',
+    TestDirectEvalNameChecksScale);
   Test('Chains of binary operators compile in time linear in their length',
     TestOperatorChainsCompileInLinearTime);
   Test('Chains of binary operators fold the constants they start with',
@@ -1297,7 +1311,7 @@ end;
   lengths alternate over LINEAR_TRIALS trials, and the fastest parse and
   compile of each are compared, so a busy machine slows both alike. }
 procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
-  const ACount: Integer);
+  const ACount: Integer; const ASlackNanoseconds: Int64);
 
   function NameList(const ACount: Integer): string;
   var
@@ -1357,7 +1371,7 @@ procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
   function DoublingBound(const AShorter: Int64): Int64;
   begin
     Result := AShorter * NAME_LIST_DOUBLING_PERCENT div 100 +
-      LINEAR_SLACK_NANOSECONDS;
+      ASlackNanoseconds;
   end;
 
 var
@@ -1417,6 +1431,89 @@ end;
   declares them (ES2026 §8.2.1 BoundNames), and the parse checks them
   against each other in a static block and a for statement's let or const
   (§15.7.1, §14.7.4.1). }
+{ Ratio-only bounds keep these checks effective on faster runners too.
+  The old match-name scan and parameter-prefix proof quadrupled work when
+  the input doubled. Keep defaults below the instruction limit. }
+procedure TTestCompiler.TestMatchBindingsParseInLinearTime;
+begin
+  ExpectNameListLinear('const g = (o) => o is { %s };',
+    'k%0:d: const b%0:d', 2000, 0);
+end;
+
+procedure TTestCompiler.TestDefaultParameterListsCompileInLinearTime;
+begin
+  ExpectNameListLinear('const g = (%s) => 1;', 'p%d = 1', 2000, 0);
+  ExpectNameListLinear('const g = (%s) => 1;', 'p%d = seed', 2000, 0);
+end;
+
+procedure TTestCompiler.TestLargeSwitchLookupProbesScale;
+
+  function Probes(const ACount: Integer): Int64;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+    Module: TGocciaBytecodeModule;
+    Profile: TGocciaCompileProfiler;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const g = (d) => { switch (d) {');
+    for I := 0 to ACount - 1 do
+      Source.Append(Format('case %0:d: const s%0:d = %0:d; break;', [I]));
+    Source.Append('} };');
+    TGocciaCompileProfiler.Initialize;
+    try
+      Profile := TGocciaCompileProfiler.Instance;
+      Module := CompileSource(Source.ToString);
+      Module.Free;
+      Result := 0;
+      for I := 0 to Profile.FunctionCount - 1 do
+        Inc(Result, Profile.GetFunction(I).Counters[ccLocalLookupProbes]);
+    finally
+      TGocciaCompileProfiler.Shutdown;
+    end;
+  end;
+
+var
+  ShortProbes, LongProbes: Int64;
+begin
+  ShortProbes := Probes(8000);
+  LongProbes := Probes(16000);
+  if LongProbes > ShortProbes * 5 div 2 then
+    Fail(Format('16000 switch clauses took %d local probes versus %d for 8000',
+      [LongProbes, ShortProbes]));
+  Expect<Boolean>(ShortProbes > 0).ToBe(True);
+  Expect<Boolean>(LongProbes <= ShortProbes * 5 div 2).ToBe(True);
+end;
+
+procedure TTestCompiler.TestDirectEvalNameChecksScale;
+
+  function EvalSource(const ACount: Integer): string;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const f = () => {');
+    for I := 0 to ACount - 1 do
+      Source.Append(Format('let v%d = 1;', [I]));
+    Source.Append('eval("0"); };');
+    Result := Source.ToString;
+  end;
+
+var
+  Shorter, Longer: string;
+  ShortTime, LongTime: Int64;
+begin
+  Shorter := EvalSource(256);
+  Longer := EvalSource(1024);
+  ShortTime := SourceCompileNanoseconds(Shorter, False);
+  LongTime := SourceCompileNanoseconds(Longer, False);
+  if LongTime > 6 * ShortTime then
+    Fail(Format('Direct eval with 1024 bindings took %d ns versus %d ns ' +
+      'with 256', [LongTime, ShortTime]));
+  Expect<Boolean>(LongTime <= 6 * ShortTime).ToBe(True);
+end;
+
 procedure TTestCompiler.TestDestructuringPatternsCompileInLinearTime;
 begin
   ExpectNameListLinear('const g = (o) => { const { %s } = o; return b0; };',
