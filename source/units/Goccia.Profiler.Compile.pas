@@ -59,11 +59,13 @@ type
     // relinking the names after a rename (RelinkLocalNames), and suspending
     // the bindings a finally block must not see (SuspendBindingsDeeperThan).
     ccLocalListScans,
-    // Parameter names examined when a function records its parameters.
+    // Lookups in a function's hashed set of parameter names, one per name
+    // it records and one per test of a name.
     ccParameterNameProbes,
     // Lookups in a list of unique binding names (collecting a pattern's or a
     // declaration's names, the duplicate-parameter check), and the names
-    // each examined.
+    // each compared: 1 once the list is hashed (16 names or more), the names
+    // scanned below that.
     ccBindingNameLookups,
     ccBindingNameProbes);
 
