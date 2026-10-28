@@ -176,11 +176,10 @@ type
     procedure TestManyCapturedBindingsCompileInLinearTime;
     procedure TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime;
     procedure ExpectNameListLinear(const APattern, AItem: string;
-      const ACount: Integer = NAME_LIST_COUNT;
-      const ASlackNanoseconds: Int64 = LINEAR_SLACK_NANOSECONDS);
+      const ACount: Integer = NAME_LIST_COUNT);
     procedure TestParameterListsParseAndCompileInLinearTime;
     procedure TestDestructuringPatternsCompileInLinearTime;
-    procedure TestMatchBindingsParseInLinearTime;
+    procedure TestMatchBindingNameChecksScale;
     procedure TestDefaultParameterListWorkScales;
     procedure TestOrdinaryParametersSkipInitializerSourceChecks;
     procedure TestDirectEvalNameChecksScale;
@@ -349,8 +348,8 @@ begin
     TestParameterListsParseAndCompileInLinearTime);
   Test('Destructuring patterns compile in linear time',
     TestDestructuringPatternsCompileInLinearTime);
-  Test('Match-pattern bindings parse in linear time',
-    TestMatchBindingsParseInLinearTime);
+  Test('Match-pattern binding-name checks scale with the bindings',
+    TestMatchBindingNameChecksScale);
   Test('Default parameter parsing and initializer work scale with the parameters',
     TestDefaultParameterListWorkScales);
   Test('Large switches keep local lookup probes proportional to clauses',
@@ -1315,7 +1314,7 @@ end;
   lengths alternate over LINEAR_TRIALS trials, and the fastest parse and
   compile of each are compared, so a busy machine slows both alike. }
 procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
-  const ACount: Integer; const ASlackNanoseconds: Int64);
+  const ACount: Integer);
 
   function NameList(const ACount: Integer): string;
   var
@@ -1375,7 +1374,7 @@ procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
   function DoublingBound(const AShorter: Int64): Int64;
   begin
     Result := AShorter * NAME_LIST_DOUBLING_PERCENT div 100 +
-      ASlackNanoseconds;
+      LINEAR_SLACK_NANOSECONDS;
   end;
 
 var
@@ -1431,16 +1430,42 @@ begin
     NAME_LIST_COUNT div 2);
 end;
 
-{ The compiler collects a pattern's bound names, each once, wherever it
-  declares them (ES2026 §8.2.1 BoundNames), and the parse checks them
-  against each other in a static block and a for statement's let or const
-  (§15.7.1, §14.7.4.1). }
-{ Ratio-only bounds keep these checks effective on faster runners too.
-  The old match-name scan quadrupled work when the input doubled. }
-procedure TTestCompiler.TestMatchBindingsParseInLinearTime;
+procedure TTestCompiler.TestMatchBindingNameChecksScale;
+
+  function Probes(const ACount: Integer): Int64;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+    Work: TGocciaCompileCounters;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const g = (o) => o is { ');
+    for I := 0 to ACount - 1 do
+    begin
+      if I > 0 then
+        Source.Append(', ');
+      Source.Append(Format('k%0:d: const b%0:d', [I]));
+    end;
+    Source.Append(' };');
+    Work := SourceCompileCounters(Source.ToString);
+    Result := Work[ccBindingNameProbes];
+  end;
+
+const
+  BINDING_COUNT = 4000;
+var
+  ShortProbes, LongProbes: Int64;
 begin
-  ExpectNameListLinear('const g = (o) => o is { %s };',
-    'k%0:d: const b%0:d', 2000, 0);
+  ShortProbes := Probes(BINDING_COUNT);
+  LongProbes := Probes(2 * BINDING_COUNT);
+  // Count duplicate-name validation work, independent of shared-runner timing.
+  // The old scan quadrupled comparisons when the number of bindings doubled.
+  Expect<Boolean>(ShortProbes >= BINDING_COUNT).ToBe(True);
+  Expect<Boolean>(LongProbes >= 2 * BINDING_COUNT).ToBe(True);
+  if LongProbes > ShortProbes * 5 div 2 then
+    Fail(Format('Match pattern with %d bindings took %d name probes versus %d ' +
+      'with %d', [2 * BINDING_COUNT, LongProbes, ShortProbes, BINDING_COUNT]));
+  Expect<Boolean>(LongProbes <= ShortProbes * 5 div 2).ToBe(True);
 end;
 
 { Read the same work counters exposed by --profile=compile. Summing all
@@ -1625,6 +1650,10 @@ begin
   Expect<Boolean>(LongProbes <= 5 * ShortProbes).ToBe(True);
 end;
 
+{ The compiler collects a pattern's bound names, each once, wherever it
+  declares them (ES2026 §8.2.1 BoundNames), and the parse checks them
+  against each other in a static block and a for statement's let or const
+  (§15.7.1, §14.7.4.1). }
 procedure TTestCompiler.TestDestructuringPatternsCompileInLinearTime;
 begin
   // Body/block lexical-name validation must remain linear as the list grows.
