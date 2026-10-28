@@ -83,22 +83,20 @@ begin
     Result := vbnStandard;
 end;
 
-// The names a lookup of the list examined: up to the match, or all of them.
+// One lookup of a unique-name list and the names it compared
+// (TUnicodeStringList.FindString: 1 once the list is hashed).
 procedure CountBindingNameLookup(const AProfile: TGocciaCompileProfiler;
-  const ANames: TUnicodeStringList; const AFound: Integer);
+  const AProbes: Integer);
 begin
-  if AFound >= 0 then
-    AProfile.CountLookup(ccBindingNameLookups, ccBindingNameProbes, AFound + 1)
-  else
-    AProfile.CountLookup(ccBindingNameLookups, ccBindingNameProbes,
-      ANames.Count);
+  AProfile.CountLookup(ccBindingNameLookups, ccBindingNameProbes, AProbes);
 end;
 
 procedure AddBindingName(const ANames: TUnicodeStringList;
   const AName: string;
   const AUnique: Boolean; const AProfile: TGocciaCompileProfiler = nil);
 var
-  Found: Integer;
+  Found: Boolean;
+  Probes: Integer;
 begin
   if AName = '' then
     Exit;
@@ -107,10 +105,10 @@ begin
     ANames.Add(AName);
     Exit;
   end;
-  Found := ANames.IndexOf(AName);
+  Found := ANames.FindString(AName, Probes);
   if Assigned(AProfile) then
-    CountBindingNameLookup(AProfile, ANames, Found);
-  if Found < 0 then
+    CountBindingNameLookup(AProfile, Probes);
+  if not Found then
     ANames.Add(AName);
 end;
 
@@ -188,7 +186,7 @@ begin
       Names := TUnicodeStringList.Create;
       try
         CollectPatternBindingNames(AParameters[I].Pattern, Names, True);
-        if Names.IndexOf(AName) >= 0 then
+        if Names.HasString(AName) then
           Exit(True);
       finally
         Names.Free;
@@ -210,14 +208,14 @@ var
 
   function AddBindingName(const AName: string): Boolean;
   var
-    Found: Integer;
+    Probes: Integer;
   begin
     if AName = '' then
       Exit(False);
-    Found := Names.IndexOf(AName);
+    Result := Names.FindString(AName, Probes);
     if Assigned(AProfile) then
-      CountBindingNameLookup(AProfile, Names, Found);
-    if Found >= 0 then
+      CountBindingNameLookup(AProfile, Probes);
+    if Result then
       Exit(True);
     Names.Add(AName);
     Result := False;
