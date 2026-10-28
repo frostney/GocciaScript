@@ -74,8 +74,8 @@ test("nullish coalescing vs logical OR", () => {
 });
 
 test("right-nested initializers preserve non-nullish false values", () => {
-  let x = 1;
-  const result = null ?? (undefined ?? ((x = false) ?? (x = 2)));
+  let x = true;
+  const result = null ?? (undefined ?? ((x = false) ?? (x = true)));
   expect(result).toBe(false);
   expect(x).toBe(false);
 });
