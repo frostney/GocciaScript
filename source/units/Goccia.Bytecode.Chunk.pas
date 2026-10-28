@@ -36,8 +36,14 @@ type
   { A function needs more of something than an operand of the bytecode
     format can encode (constants, functions, registers, locals, upvalues,
     arguments, jump offsets). The compiler reports it as a SyntaxError at the
-    source it was compiling (TGocciaCompiler.Compile). }
-  EGocciaBytecodeLimit = class(Exception);
+    source it was compiling (TGocciaCompiler.Compile), or at Line and Column
+    when they are set: a limit found once a function was compiled
+    (TGocciaFunctionTemplate.RelaxFarJumps) is located at its instruction. }
+  EGocciaBytecodeLimit = class(Exception)
+  public
+    Line: Integer;
+    Column: Integer;
+  end;
 
   TGocciaBytecodeConstantKind = (
     bckNil,
@@ -423,6 +429,9 @@ type
     FArgumentWindowUse: TGocciaArgumentWindowUse;
     function ScanArgumentWindowUse: TGocciaArgumentWindowUse;
     function RelocatedPC(const APC: UInt32): UInt32;
+    function HasWidePrefix(const AIndex: Integer): Boolean;
+    procedure RaiseLimitAt(const APC: Integer; const AMessage: string;
+      const ALimit: Integer);
     function PropertyReadSlot(const AConstIndex: Integer): Integer;
     function PropertyWriteSlot(const AConstIndex: Integer): Integer;
     function GetFunctionCount: Integer;
@@ -433,6 +442,9 @@ type
     function EmitInstruction(const AInstruction: UInt64;
       const AForceWide: Boolean = False): Integer;
     procedure PatchInstruction(const AIndex: Integer; const AInstruction: UInt64);
+    { Writes AOffset into the jump at AIndex (its OP_WIDE prefix included,
+      for a C offset); its other operands keep their values. }
+    procedure PatchJumpOffset(const AIndex, AOffset: Integer);
     { True when no frame of this template reads its argument window: the code
       has no instruction that reads it (OP_ARG_COUNT, OP_LOAD_ARGUMENT,
       OP_PACK_ARGS, OP_CREATE_ARGUMENTS) and no direct eval, and the function
@@ -1299,119 +1311,66 @@ begin
 end;
 
 type
-  // Where a jump instruction keeps its offset: OP_JUMP's signed 24-bit Ax,
-  // the signed 16-bit sBx, a 16-bit C whose high byte is in the OP_WIDE
-  // prefix (signed for the comparisons, unsigned for the nullish jumps), and
-  // a handler push's unsigned Bx.
-  TJumpOperand = (joNone, joAx, joSBx, joSignedC, joUnsignedC, joBx);
-
   TRelaxedJump = record
     Index: Integer;
     Target: Integer;
     // The first jump at or after Target, by its position among the jumps.
     TargetOrdinal: Integer;
-    Operand: TJumpOperand;
+    Operand: TGocciaJumpOperand;
     HasPrefix: Boolean;
     Widened: Boolean;
   end;
 
 const
-  // EncodeAx biases its signed 24-bit operand by 2^23 - 1.
-  AX_OFFSET_LIMIT = 8388607;
+  // The instructions a jump's long form adds after it: the OP_JUMP over the
+  // next one, and the OP_JUMP to the jump's target.
+  LONG_FORM_ADDED_INSTRUCTIONS = 2;
 
-function JumpOperandOf(const AOp: UInt8): TJumpOperand;
-begin
-  case AOp of
-    Ord(OP_JUMP):
-      Result := joAx;
-    Ord(OP_JUMP_IF_TRUE), Ord(OP_JUMP_IF_FALSE):
-      Result := joSBx;
-    Ord(OP_JUMP_IF_NUM_NOT_LTE_IMM), Ord(OP_JUMP_IF_NOT_LT),
-    Ord(OP_JUMP_IF_NOT_LT_IMM), Ord(OP_JUMP_IF_NOT_GT_IMM),
-    Ord(OP_JUMP_IF_NOT_LTE_IMM), Ord(OP_JUMP_IF_NOT_GTE_IMM),
-    Ord(OP_JUMP_IF_NOT_STRICT_EQ_IMM), Ord(OP_JUMP_IF_STRICT_EQ_IMM):
-      Result := joSignedC;
-    Ord(OP_JUMP_IF_NULLISH), Ord(OP_JUMP_IF_NOT_NULLISH):
-      Result := joUnsignedC;
-    Ord(OP_PUSH_HANDLER), Ord(OP_PUSH_FINALLY_HANDLER):
-      Result := joBx;
-  else
-    Result := joNone;
-  end;
-end;
-
-// The offset of the jump at AIndex, as the VM reads it.
-function DecodeJumpOffset(const ACode: array of UInt32; const AIndex: Integer;
-  const AOperand: TJumpOperand; const AHasPrefix: Boolean): Integer;
+procedure TGocciaFunctionTemplate.PatchJumpOffset(const AIndex,
+  AOffset: Integer);
 var
-  C: UInt16;
+  Operand: TGocciaJumpOperand;
+  NoPrefix: UInt32;
 begin
-  case AOperand of
-    joAx:
-      Result := DecodeAx(ACode[AIndex]);
-    joSBx:
-      Result := DecodesBx(ACode[AIndex]);
-    joBx:
-      Result := DecodeBx(ACode[AIndex]);
+  if (AIndex < 0) or (AIndex >= FCodeCount) then
+    raise ERangeError.CreateFmt('PatchJumpOffset: index %d out of range 0..%d',
+      [AIndex, FCodeCount - 1]);
+  Operand := JumpOperandOf(DecodeOp(FCode[AIndex]));
+  if Operand = gjoNone then
+    raise ERangeError.CreateFmt('PatchJumpOffset: instruction %d is not a jump',
+      [AIndex]);
+  if not JumpOffsetFits(Operand, HasWidePrefix(AIndex), AOffset) then
+    raise ERangeError.CreateFmt(
+      'PatchJumpOffset: offset %d does not fit instruction %d',
+      [AOffset, AIndex]);
+  if HasWidePrefix(AIndex) then
+    WriteJumpOffset(FCode[AIndex], FCode[AIndex - 1], Operand, AOffset)
   else
-    begin
-      C := DecodeC(ACode[AIndex]);
-      if AHasPrefix then
-        C := C or (UInt16(DecodeC(ACode[AIndex - 1])) shl 8);
-      if AOperand = joSignedC then
-        Result := Int16(C)
-      else
-        Result := C;
-    end;
+  begin
+    NoPrefix := 0;
+    WriteJumpOffset(FCode[AIndex], NoPrefix, Operand, AOffset);
   end;
+  FArgumentWindowUse := awuUnknown;
 end;
 
-function JumpOffsetFits(const AOperand: TJumpOperand;
-  const AHasPrefix: Boolean; const AOffset: Integer): Boolean;
+function TGocciaFunctionTemplate.HasWidePrefix(const AIndex: Integer): Boolean;
 begin
-  case AOperand of
-    joAx:
-      Result := (AOffset >= -AX_OFFSET_LIMIT) and (AOffset <= AX_OFFSET_LIMIT);
-    joSBx:
-      Result := (AOffset >= Low(Int16)) and (AOffset <= High(Int16));
-    joBx:
-      Result := (AOffset >= 0) and (AOffset <= High(UInt16));
-  else
-    // Without a prefix, C has no high byte.
-    if not AHasPrefix then
-      Result := (AOffset >= 0) and (AOffset <= High(UInt8))
-    else if AOperand = joSignedC then
-      Result := (AOffset >= Low(Int16)) and (AOffset <= High(Int16))
-    else
-      Result := (AOffset >= 0) and (AOffset <= High(UInt16));
-  end;
+  Result := (AIndex > 0) and (DecodeOp(FCode[AIndex - 1]) = Ord(OP_WIDE));
 end;
 
-// Writes AOffset, which fits, into the jump at AIndex of ACode.
-procedure WriteJumpOffset(var ACode: array of UInt32; const AIndex: Integer;
-  const AOperand: TJumpOperand; const AHasPrefix: Boolean;
-  const AOffset: Integer);
+// Raises the limit AMessage names, located at the instruction at APC.
+procedure TGocciaFunctionTemplate.RaiseLimitAt(const APC: Integer;
+  const AMessage: string; const ALimit: Integer);
 var
-  C: UInt32;
+  Error: EGocciaBytecodeLimit;
 begin
-  case AOperand of
-    joAx:
-      ACode[AIndex] := UInt32(EncodeAx(OP_JUMP, AOffset));
-    // A's high byte, if any, is in the prefix, which does not change.
-    joSBx:
-      ACode[AIndex] := UInt32(EncodeAsBx(TGocciaOpCode(DecodeOp(ACode[AIndex])),
-        DecodeA(ACode[AIndex]), Int16(AOffset)));
-    joBx:
-      ACode[AIndex] := (ACode[AIndex] and $FFFF) or (UInt32(AOffset) shl 16);
-  else
-    begin
-      C := UInt32(AOffset) and $FFFF;
-      ACode[AIndex] := (ACode[AIndex] and $00FFFFFF) or ((C and $FF) shl 24);
-      if AHasPrefix then
-        ACode[AIndex - 1] := (ACode[AIndex - 1] and $00FFFFFF) or
-          ((C shr 8) shl 24);
-    end;
+  Error := EGocciaBytecodeLimit.CreateFmt(AMessage, [ALimit]);
+  if Assigned(FDebugInfo) then
+  begin
+    Error.Line := FDebugInfo.GetLineForPC(UInt32(APC));
+    Error.Column := FDebugInfo.GetColumnForPC(UInt32(APC));
   end;
+  raise Error;
 end;
 
 procedure TGocciaFunctionTemplate.AddFarJump(const AIndex, ATarget: Integer);
@@ -1439,7 +1398,7 @@ begin
     else
       High := Middle;
   end;
-  Result := APC + UInt32(2 * Low);
+  Result := APC + UInt32(LONG_FORM_ADDED_INSTRUCTIONS * Low);
 end;
 
 procedure TGocciaFunctionTemplate.RelaxFarJumps;
@@ -1450,12 +1409,29 @@ var
   Widened: array of Integer;
   JumpCount, I, J, PC, Shift, Offset, NewBase, Target, First, Last,
     Middle: Integer;
-  Operand: TJumpOperand;
+  Operand: TGocciaJumpOperand;
   HasPrefix, Changed: Boolean;
   // Each recorded jump's target plus one, by the jump's index; 0 elsewhere.
   RecordedTargets: array of Integer;
   NewCode: array of UInt32;
   Relocated: UInt32;
+
+  // Writes AOffset into AJump, copied to ABase of the new code.
+  procedure WriteNewJumpOffset(const ABase: Integer;
+    const AJump: TRelaxedJump; const AOffset: Integer);
+  var
+    NoPrefix: UInt32;
+  begin
+    if AJump.HasPrefix then
+      WriteJumpOffset(NewCode[ABase], NewCode[ABase - 1], AJump.Operand,
+        AOffset)
+    else
+    begin
+      NoPrefix := 0;
+      WriteJumpOffset(NewCode[ABase], NoPrefix, AJump.Operand, AOffset);
+    end;
+  end;
+
 begin
   if FFarJumpCount = 0 then
     Exit;
@@ -1475,7 +1451,7 @@ begin
     if HasPrefix then
       Inc(PC);
     Operand := JumpOperandOf(DecodeOp(FCode[PC]));
-    if Operand <> joNone then
+    if Operand <> gjoNone then
     begin
       if JumpCount >= Length(Jumps) then
         SetLength(Jumps, JumpCount * 2 + 16);
@@ -1485,8 +1461,10 @@ begin
       Jumps[JumpCount].Widened := RecordedTargets[PC] > 0;
       if Jumps[JumpCount].Widened then
         Target := RecordedTargets[PC] - 1
+      else if HasPrefix then
+        Target := PC + 1 + DecodeJumpOffset(FCode[PC], FCode[PC - 1], Operand)
       else
-        Target := PC + 1 + DecodeJumpOffset(FCode, PC, Operand, HasPrefix);
+        Target := PC + 1 + DecodeJumpOffset(FCode[PC], 0, Operand);
       Jumps[JumpCount].Target := Target;
       Inc(JumpCount);
     end;
@@ -1509,7 +1487,7 @@ begin
     Jumps[I].TargetOrdinal := First;
   end;
 
-  // A widened jump lengthens by two every jump across it, which may then
+  // A widened jump lengthens every jump across it, which may then
   // need widening too, so the widened set only grows. A forward jump spans
   // only jumps after it, so a pass from the last jump back decides every
   // forward jump from the jumps after it, which that pass has decided; a
@@ -1521,11 +1499,12 @@ begin
     Widened[JumpCount] := 0;
     for I := JumpCount - 1 downto 0 do
     begin
-      if not Jumps[I].Widened and (Jumps[I].Operand <> joAx) and
+      if not Jumps[I].Widened and (Jumps[I].Operand <> gjoAx) and
          (Jumps[I].Target > Jumps[I].Index) then
       begin
         Offset := Jumps[I].Target - Jumps[I].Index - 1 +
-          2 * (Widened[I + 1] - Widened[Jumps[I].TargetOrdinal]);
+          LONG_FORM_ADDED_INSTRUCTIONS *
+          (Widened[I + 1] - Widened[Jumps[I].TargetOrdinal]);
         if not JumpOffsetFits(Jumps[I].Operand, Jumps[I].HasPrefix,
            Offset) then
         begin
@@ -1538,11 +1517,12 @@ begin
     Widened[0] := 0;
     for I := 0 to JumpCount - 1 do
     begin
-      if not Jumps[I].Widened and (Jumps[I].Operand <> joAx) and
+      if not Jumps[I].Widened and (Jumps[I].Operand <> gjoAx) and
          (Jumps[I].Target <= Jumps[I].Index) then
       begin
         Offset := Jumps[I].Target - Jumps[I].Index - 1 -
-          2 * (Widened[I] - Widened[Jumps[I].TargetOrdinal]);
+          LONG_FORM_ADDED_INSTRUCTIONS *
+          (Widened[I] - Widened[Jumps[I].TargetOrdinal]);
         if not JumpOffsetFits(Jumps[I].Operand, Jumps[I].HasPrefix,
            Offset) then
         begin
@@ -1565,7 +1545,8 @@ begin
       Inc(FWidenedJumpCount);
     end;
 
-  SetLength(NewCode, FCodeCount + 2 * FWidenedJumpCount);
+  SetLength(NewCode,
+    FCodeCount + LONG_FORM_ADDED_INSTRUCTIONS * FWidenedJumpCount);
   J := 0;
   Shift := 0;
   for PC := 0 to FCodeCount - 1 do
@@ -1577,24 +1558,23 @@ begin
     Offset := Integer(RelocatedPC(UInt32(Jumps[J].Target)));
     if Jumps[J].Widened then
     begin
-      WriteJumpOffset(NewCode, NewBase, Jumps[J].Operand, Jumps[J].HasPrefix,
-        1);
+      WriteNewJumpOffset(NewBase, Jumps[J], 1);
       NewCode[NewBase + 1] := UInt32(EncodeAx(OP_JUMP, 1));
       Offset := Offset - (NewBase + 2) - 1;
-      if not JumpOffsetFits(joAx, False, Offset) then
-        raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeJumpLimit,
-          [AX_OFFSET_LIMIT]);
+      if not JumpOffsetFits(gjoAx, False, Offset) then
+        RaiseLimitAt(Jumps[J].Index, SErrorBytecodeJumpLimit,
+          AX_JUMP_OFFSET_LIMIT);
       NewCode[NewBase + 2] := UInt32(EncodeAx(OP_JUMP, Offset));
-      Inc(Shift, 2);
+      Inc(Shift, LONG_FORM_ADDED_INSTRUCTIONS);
     end
     else
     begin
+      // Only an OP_JUMP can be out of reach here.
       Offset := Offset - NewBase - 1;
       if not JumpOffsetFits(Jumps[J].Operand, Jumps[J].HasPrefix, Offset) then
-        raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeJumpLimit,
-          [AX_OFFSET_LIMIT]);
-      WriteJumpOffset(NewCode, NewBase, Jumps[J].Operand, Jumps[J].HasPrefix,
-        Offset);
+        RaiseLimitAt(Jumps[J].Index, SErrorBytecodeJumpLimit,
+          AX_JUMP_OFFSET_LIMIT);
+      WriteNewJumpOffset(NewBase, Jumps[J], Offset);
     end;
     Inc(J);
   end;
@@ -1603,8 +1583,7 @@ begin
   begin
     Relocated := RelocatedPC(FParameterPreambleSize);
     if Relocated > High(UInt16) then
-      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodePreambleLimit,
-        [High(UInt16)]);
+      RaiseLimitAt(0, SErrorBytecodePreambleLimit, High(UInt16));
     FParameterPreambleSize := UInt16(Relocated);
   end;
   // The type checks are the first instructions and contain no jump, so the
@@ -1618,18 +1597,8 @@ begin
   for I := 0 to FDirectEvalEnvironmentCount - 1 do
     FDirectEvalEnvironments[I].PC :=
       RelocatedPC(FDirectEvalEnvironments[I].PC);
-  for I := 0 to FExceptionHandlerCount - 1 do
-  begin
-    FExceptionHandlers[I].TryStart :=
-      RelocatedPC(FExceptionHandlers[I].TryStart);
-    FExceptionHandlers[I].TryEnd := RelocatedPC(FExceptionHandlers[I].TryEnd);
-    if FExceptionHandlers[I].CatchTarget <> High(UInt32) then
-      FExceptionHandlers[I].CatchTarget :=
-        RelocatedPC(FExceptionHandlers[I].CatchTarget);
-    if FExceptionHandlers[I].FinallyTarget <> High(UInt32) then
-      FExceptionHandlers[I].FinallyTarget :=
-        RelocatedPC(FExceptionHandlers[I].FinallyTarget);
-  end;
+  // The exception handler table is filled only by the binary loader, never
+  // for a template the compiler builds.
   FArgumentWindowUse := awuUnknown;
   FFarJumps := nil;
   FFarJumpCount := 0;

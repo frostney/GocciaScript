@@ -421,6 +421,9 @@ procedure TGocciaCompiler.RaiseBytecodeLimit(
 var
   Node: TGocciaASTNode;
 begin
+  if AError.Line > 0 then
+    raise TGocciaSyntaxError.Create(AError.Message, AError.Line,
+      AError.Column, FSourcePath, nil, SSuggestBytecodeLimit);
   Node := FCurrentNode;
   if not Assigned(Node) then
     Node := AProgram;
@@ -2064,7 +2067,8 @@ begin
   FCurrentNode := nil;
   try
     Result := CompileProgram(AProgram);
-    // A jump past the long form's reach is reported at the program.
+    // A limit RelaxFarJumps finds is located at its instruction, or else at
+    // the program.
     FCurrentNode := nil;
     try
       RelaxFarJumpsBelow(Result.TopLevel);

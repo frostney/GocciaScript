@@ -5,7 +5,8 @@ features: [ShadowRealm]
 
 // Conditional jumps hold a 16-bit offset. One over a longer branch used to
 // wrap around: `if (k)` over 40,000 statements took the body for a falsy k.
-// Such a function now compiles with its conditional jumps in a long form.
+// Such a jump now takes a long form, and the function's other jumps keep
+// theirs.
 const realm = new ShadowRealm();
 const statements = (count) => "r = r + 1; ".repeat(count);
 const operands = (count) => Array.from({ length: count }, () => "k").join(", ");

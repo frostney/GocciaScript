@@ -1290,12 +1290,14 @@ end;
   of its branches passed the limit. Each shape here puts the same clauses or
   statements in branches past the limit and in twice as many branches short
   enough for the 16-bit offset; all sizes stay where the compile time grows
-  linearly. The long branches compile within 1.5 times the time of the short
-  ones (about 1.05 here, and 2.0 with the second compile), at a script's top
-  level, at a global-backed top level and in an arrow function. }
+  linearly. The long branches compile within 1.6 times the time of the short
+  ones (1.0 to 1.2 here, and 1.9 to 2.0 with the second compile), at a
+  script's top level, at a global-backed top level and in an arrow function.
+  The bound is a ratio alone: an absolute slack would let the second compile
+  pass on a machine fast enough for the slack to cover it. }
 procedure TTestCompiler.TestLongBranchesCompileOnce;
 const
-  LONG_BRANCH_RATIO_PERCENT = 150;
+  LONG_BRANCH_RATIO_PERCENT = 160;
   // Three switches of 6,000 clauses each need the long form, which starts
   // at about 5,400; six of 3,000 do not.
   CLAUSES = 18000;
@@ -1307,7 +1309,8 @@ const
   LONG_IFS = 2;
   STATEMENT = 'r = r + 1;';
 
-  { ACount clauses or statements in ABranches switches or ifs. }
+  { The CLAUSES clauses or STATEMENTS statements in ABranches switches or
+    ifs, between APrefix and ASuffix. }
   function BranchSource(const ASwitch: Boolean; const ABranches: Integer;
     const APrefix, ASuffix: string): string;
   var
@@ -1344,25 +1347,15 @@ const
   function CountLongFormJumps(const ATemplate: TGocciaFunctionTemplate): Integer;
   var
     I: Integer;
-    Op: UInt8;
   begin
     Result := 0;
     for I := 1 to ATemplate.CodeCount - 2 do
-    begin
-      Op := DecodeOp(ATemplate.GetInstruction(I - 1));
-      if (DecodeOp(ATemplate.GetInstruction(I)) = Ord(OP_JUMP)) and
+      if not (JumpOperandOf(DecodeOp(ATemplate.GetInstruction(I - 1))) in
+           [gjoNone, gjoAx]) and
+         (DecodeOp(ATemplate.GetInstruction(I)) = Ord(OP_JUMP)) and
          (DecodeAx(ATemplate.GetInstruction(I)) = 1) and
-         (DecodeOp(ATemplate.GetInstruction(I + 1)) = Ord(OP_JUMP)) and
-         (Op in [Ord(OP_JUMP_IF_TRUE),
-           Ord(OP_JUMP_IF_FALSE), Ord(OP_JUMP_IF_NULLISH),
-           Ord(OP_JUMP_IF_NOT_NULLISH), Ord(OP_PUSH_HANDLER),
-           Ord(OP_PUSH_FINALLY_HANDLER), Ord(OP_JUMP_IF_NUM_NOT_LTE_IMM),
-           Ord(OP_JUMP_IF_NOT_LT), Ord(OP_JUMP_IF_NOT_LT_IMM),
-           Ord(OP_JUMP_IF_NOT_GT_IMM), Ord(OP_JUMP_IF_NOT_LTE_IMM),
-           Ord(OP_JUMP_IF_NOT_GTE_IMM), Ord(OP_JUMP_IF_NOT_STRICT_EQ_IMM),
-           Ord(OP_JUMP_IF_STRICT_EQ_IMM)]) then
+         (DecodeOp(ATemplate.GetInstruction(I + 1)) = Ord(OP_JUMP)) then
         Inc(Result);
-    end;
     for I := 0 to ATemplate.FunctionCount - 1 do
       Inc(Result, CountLongFormJumps(ATemplate.GetFunction(I)));
   end;
@@ -1399,13 +1392,12 @@ const
 
     Long := SourceCompileNanoseconds(LongSource, AGlobalBackedTopLevel);
     Short := SourceCompileNanoseconds(ShortSource, AGlobalBackedTopLevel);
-    if Long * 100 > LONG_BRANCH_RATIO_PERCENT * Short +
-       100 * LINEAR_SLACK_NANOSECONDS then
+    if Long * 100 > LONG_BRANCH_RATIO_PERCENT * Short then
       Fail(Format('%d long branches in "%s" took %d ms to compile against ' +
         '%d ms in %d short ones', [ALongBranches, APrefix,
         Long div 1000000, Short div 1000000, 2 * ALongBranches]));
-    Expect<Boolean>(Long * 100 <= LONG_BRANCH_RATIO_PERCENT * Short +
-      100 * LINEAR_SLACK_NANOSECONDS).ToBe(True);
+    Expect<Boolean>(Long * 100 <= LONG_BRANCH_RATIO_PERCENT * Short).ToBe(
+      True);
   end;
 
 begin
