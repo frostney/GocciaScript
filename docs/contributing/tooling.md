@@ -90,9 +90,10 @@ All four layers enforce the same rules, providing defence in depth. The typical 
 
 ### FPC 3.2.2 and 3.2.4
 
-CI builds with FPC 3.2.4 (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)); the package managers in the [README](../../README.md#build-from-source) install 3.2.2, and the source must keep building on both. Two RTL interfaces differ, and `Shared.inc` defines a symbol for each on 3.2.2 only:
+CI builds with FPC 3.2.4 (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)); the package managers in the [README](../../README.md#build-from-source) install 3.2.2, and the source must keep building on both. Three RTL interfaces differ, and `Shared.inc` defines a symbol for each on 3.2.2 only:
 
 - `GOCCIA_FPC_CONSTREF_COMPARERS` — `Generics.Defaults` comparers take `constref` arguments on 3.2.2 and `const` on 3.2.4 (and Delphi). Declare a comparison function as `{$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: T`.
+- `GOCCIA_FPC_CONSTREF_COLLECTION_NOTIFY` — a `Generics.Collections` list's virtual `Notify` takes its value as `constref` on 3.2.2 and `const` on 3.2.4 (and Delphi); an override declares it the same way (`TUnicodeStringList`).
 - `GOCCIA_FPC_OPENSSL_DLL_NAMES` — the `openssl` unit's `DLLSSLName` and `DLLUtilName` are `BaseSSLName` and `BaseCryptoName` on 3.2.4.
 
 Workarounds for 3.2.2 compiler bugs stay while 3.2.2 is supported, including those 3.2.4 fixes, such as the inlined threadvar accessor ([#1699](https://github.com/frostney/GocciaScript/issues/1699)).

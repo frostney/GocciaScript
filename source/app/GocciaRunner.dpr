@@ -48,6 +48,7 @@ uses
   Goccia.Packages.Install,
   Goccia.Packages.Transport,
   Goccia.Profiler,
+  Goccia.Profiler.Compile,
   Goccia.Profiler.Report,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
@@ -706,7 +707,7 @@ begin
 
   if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
     raise TParseError.Create(
-      '--profile-output requires --profile=opcodes|functions|all.');
+      '--profile-output requires --profile=opcodes|functions|all|compile.');
 
   if ProfilerOptions.Format.Matches(pfFlamegraph) and
      not ProfilerOptions.OutputPath.Present then
@@ -2379,7 +2380,7 @@ end;
 
 procedure TRunnerApp.AfterExecute;
 var
-  ProfileOpcodes, ProfileFunctions: Boolean;
+  ProfileOpcodes, ProfileFunctions, ProfileCompile: Boolean;
   ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
 begin
   { Coverage and profiling are host-mode reports; a config that asks for
@@ -2410,6 +2411,7 @@ begin
 
   ProfileOpcodes := False;
   ProfileFunctions := False;
+  ProfileCompile := False;
   if ProfilerOptions.Mode.Present then
   begin
     ProfileMode := ProfilerOptions.Mode.Value;
@@ -2417,9 +2419,10 @@ begin
                       (ProfileMode = Goccia.CLI.Options.pmAll);
     ProfileFunctions := (ProfileMode = Goccia.CLI.Options.pmFunctions) or
                         (ProfileMode = Goccia.CLI.Options.pmAll);
+    ProfileCompile := ProfileMode = Goccia.CLI.Options.pmCompile;
   end;
 
-  if (ProfileOpcodes or ProfileFunctions) and
+  if (ProfileOpcodes or ProfileFunctions or ProfileCompile) and
      (TGocciaProfiler.Instance <> nil) then
   begin
     if not IsJsonOutput then
@@ -2433,6 +2436,8 @@ begin
       end;
       if ProfileFunctions then
         PrintFunctionProfile(TGocciaProfiler.Instance);
+      if ProfileCompile then
+        PrintCompileProfile(TGocciaCompileProfiler.Instance);
     end;
     if ProfilerOptions.OutputPath.Present then
     begin

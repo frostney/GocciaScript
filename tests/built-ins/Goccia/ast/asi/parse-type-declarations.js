@@ -30,6 +30,22 @@ describe("ast.parse type-level declarations under ASI", () => {
     ]);
   });
 
+  test("the semicolon-less value forms of import type end at their line break", () => {
+    for (const line of [
+      'import type from "./a.ts"',
+      'import type, { y } from "./a.ts"',
+      'import type, * as ns from "./a.ts"',
+    ]) {
+      const source = line + "\nconst value = 1\n";
+      const nodes = parse(source).root.children;
+
+      expect(nodes.map((node) => [node.kind, node.typeOnly, source.slice(node.start, node.end)])).toEqual([
+        ["ImportDeclaration", false, line],
+        ["VariableDeclaration", undefined, "const value = 1"],
+      ]);
+    }
+  });
+
   test("a multi-line union without semicolons stays one declaration", () => {
     const source = "export type GroupId =\n  | 'names'\n  | 'functions'\nconst value = 1\n";
     const [alias, declaration] = parse(source).root.children;
