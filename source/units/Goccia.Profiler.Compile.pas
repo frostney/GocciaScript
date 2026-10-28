@@ -46,7 +46,7 @@ type
     // HasExactNumberProof: the Number proof of an operand.
     ccNumberProofVisits,
     // Name lookups among one function scope's locals, and the locals each
-    // examined (1 for the hashed index, the entries scanned without it, plus
+    // examined (actual buckets for the hashed index, entries without it, plus
     // each shadowed local of the name it steps over).
     ccLocalLookups,
     ccLocalLookupProbes,
@@ -69,7 +69,11 @@ type
     ccBindingNameLookups,
     ccBindingNameProbes,
     ccDirectEvalRecordProbes,
-    ccTypeArgumentProbeTokens);
+    ccTypeArgumentProbeTokens,
+    // Parameters visited by the accumulating default-initializer proof.
+    ccParameterInitializerVisits,
+    // Closure source checks for a simple parameter default destination.
+    ccParameterInitializerSourceChecks);
 
   TGocciaCompileCounters = array[TGocciaCompileCounter] of Int64;
 
@@ -208,7 +212,9 @@ const
     'bindingNameLookups',
     'bindingNameProbes',
     'directEvalRecordProbes',
-    'typeArgumentProbeTokens');
+    'typeArgumentProbeTokens',
+    'parameterInitializerVisits',
+    'parameterInitializerSourceChecks');
 
   COMPILE_COUNTER_LABELS: array[TGocciaCompileCounter] of string = (
     'Nodes compiled',
@@ -225,7 +231,9 @@ const
     'Binding-name lookups',
     'Binding-name probes',
     'Direct-eval record probes',
-    'Type-argument probe tokens');
+    'Type-argument probe tokens',
+    'Parameter-initializer visits',
+    'Parameter-initializer source checks');
 
 procedure PrintCompileProfile(const AProfiler: TGocciaCompileProfiler);
 { The "compile" section of the profile JSON, without a trailing comma: empty

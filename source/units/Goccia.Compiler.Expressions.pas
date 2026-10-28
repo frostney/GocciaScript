@@ -1886,10 +1886,18 @@ begin
     (Copy(AName, 1, 19) <> '__accessor_computed');
 end;
 
-function DirectEvalBindingNameSeen(const ANames: TUnicodeStringList;
-  const AName: string): Boolean;
+function DirectEvalBindingNameSeen(const AProfile: TGocciaCompileProfiler;
+  const ANames: TUnicodeStringList; const AName: string): Boolean;
+var
+  Probes: Integer;
 begin
-  Result := ANames.IndexOf(AName) >= 0;
+  if Assigned(AProfile) then
+  begin
+    Result := ANames.FindString(AName, Probes);
+    AProfile.CountLookup(ccBindingNameLookups, ccBindingNameProbes, Probes);
+  end
+  else
+    Result := ANames.HasString(AName);
 end;
 
 // Adds the binding AName to a direct eval site record unless the record has
@@ -1898,7 +1906,8 @@ end;
 // bindings behind it: a sloppy eval's var of its name is a binding of the
 // variable environment, which the record then lists too (ES2026 §19.2.1.3,
 // steps 3.d and 17-18, with the web-compat exemption for a Catch clause).
-function AddDirectEvalBinding(var ABindings: TGocciaDirectEvalBindingArray;
+function AddDirectEvalBinding(const AProfile: TGocciaCompileProfiler;
+  var ABindings: TGocciaDirectEvalBindingArray;
   const ANames, ARecordNames: TUnicodeStringList; const AName: string;
   const AKind: TGocciaDirectEvalBindingKind; const AIndex: UInt16;
   const AIsConst: Boolean; const AIsVarEnvironmentBinding: Boolean = False;
@@ -1915,7 +1924,7 @@ begin
      (AName <> KEYWORD_THIS) and
      not IsDirectEvalVisibleCompilerName(AName) then
     Exit;
-  if DirectEvalBindingNameSeen(ANames, AName) then
+  if DirectEvalBindingNameSeen(AProfile, ANames, AName) then
     Exit;
 
   if not AIsCatchParameter then
@@ -2126,7 +2135,7 @@ begin
         AName := Scope.GetLocal(LocalIdx).Name;
         if DirectEvalRecordCoversName(AName) and
            not EvalVarObjectOutOfScope(Scope, AName) and
-           (Names.IndexOf(AName) < 0) then
+           not DirectEvalBindingNameSeen(AScope.CompileProfile, Names, AName) then
           Names.Add(AName);
       end;
       Scope := Scope.Parent;
@@ -2178,7 +2187,8 @@ begin
     end;
 
     for I := 0 to High(ABindings) do
-      if Names.IndexOf(ABindings[I].Name) < 0 then
+      if not DirectEvalBindingNameSeen(AScope.CompileProfile, Names,
+        ABindings[I].Name) then
       begin
         AName := ABindings[I].Name;
         AProblem := 'the record lists a name no scope at the call declares';
@@ -2392,12 +2402,12 @@ begin
       begin
         if EvalVarObjectOutOfScope(ACtx.Scope, Local.Name) then
           Continue;
-        if AddDirectEvalBinding(Bindings, Names, RecordNames, Local.Name, debWithLocal,
+        if AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debWithLocal,
            Local.Slot, False) then
           ACtx.Scope.MarkCaptured(LocalIdx);
       end
       else if Local.IsGlobalBacked then
-        AddDirectEvalBinding(Bindings, Names, RecordNames, Local.Name, debGlobal, 0,
+        AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debGlobal, 0,
           Local.IsConst, Local.IsVar)
       else
       begin
@@ -2416,7 +2426,7 @@ begin
         // 16), stands for that eval's variable environment.
         IsSyntheticArguments := (Local.Name = IDENTIFIER_ARGUMENTS) and
           (ACtx.Template.DirectEvalSyntheticArgumentsSlot = Local.Slot);
-        if AddDirectEvalBinding(Bindings, Names, RecordNames, Local.Name, debLocal,
+        if AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debLocal,
            Local.Slot, Local.IsConst,
            IsSyntheticArguments or
            ((Local.IsVar or IsVarEnvironmentParameter or
@@ -2438,7 +2448,7 @@ begin
         Local := ScopeCursor.GetLocal(LocalIdx);
         if Local.SuspendCount > 0 then
           Continue;
-        if DirectEvalBindingNameSeen(Names, Local.Name) then
+        if DirectEvalBindingNameSeen(ACtx.Scope.CompileProfile, Names, Local.Name) then
           Continue;
         if Local.Name = DERIVED_THIS_INITIALIZED_LOCAL then
         begin
@@ -2446,7 +2456,7 @@ begin
           if UpvalueIdx >= 0 then
           begin
             UV := ACtx.Scope.GetUpvalue(UpvalueIdx);
-            AddDirectEvalBinding(Bindings, Names, RecordNames, Local.Name, debUpvalue,
+            AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debUpvalue,
               UInt16(UpvalueIdx), UV.IsConst, UV.IsVar,
               UV.IsNonStrictImmutable);
           end;
@@ -2458,7 +2468,7 @@ begin
             Continue;
           UpvalueIdx := ACtx.Scope.ResolveUpvalue(Local.Name);
           if UpvalueIdx >= 0 then
-            AddDirectEvalBinding(Bindings, Names, RecordNames, Local.Name, debWithUpvalue,
+            AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debWithUpvalue,
               UInt16(UpvalueIdx), False);
           Continue;
         end;
@@ -2468,7 +2478,7 @@ begin
         if Local.IsGlobalBacked and ScopeCursor.GlobalBackedBindingsByName then
           Continue;
         if Local.IsGlobalBacked then
-          AddDirectEvalBinding(Bindings, Names, RecordNames, Local.Name, debGlobal, 0,
+          AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debGlobal, 0,
             Local.IsConst, Local.IsVar)
         else
         begin
@@ -2490,7 +2500,7 @@ begin
             UV := ACtx.Scope.GetUpvalue(UpvalueIdx);
             // Eval code in a function runs in that function's variable
             // environment, whose bindings it reaches as upvalues.
-            AddDirectEvalBinding(Bindings, Names, RecordNames, Local.Name, debUpvalue,
+            AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debUpvalue,
               UInt16(UpvalueIdx), UV.IsConst, UV.IsVar,
               UV.IsNonStrictImmutable, Local.IsCatchParameter,
               Local.IsOutsideVarEnvironment,
@@ -3657,7 +3667,7 @@ end;
 // probed, and the TDZ hole is gone before a read or write of the binding in
 // the same initializer checks for it. Such an initializer is compiled into a
 // temporary and moved into the register once it completes. An initializer
-// that cannot reach its own binding (ParameterInitializerAvoidsOwnBinding)
+// that cannot reach its own binding (ParameterInitializersAvoidOwnBindings)
 // keeps the register as its destination.
 //
 // That order and that TDZ are only observable through an expression in the
@@ -3675,6 +3685,7 @@ var
   JumpIdx: Integer;
   IsCaptured: Boolean;
   Names: TUnicodeStringList;
+  SafeInitializers: TArray<Boolean>;
 
   function ParameterLocalIndex(const AIndex: Integer): Integer;
   begin
@@ -3725,6 +3736,8 @@ begin
     Exit;
   end;
 
+  SafeInitializers := ParameterInitializersAvoidOwnBindings(AParams,
+    ACtx.Scope.CompileProfile);
   Names := TUnicodeStringList.Create;
   try
     for I := 0 to High(AParams) do
@@ -3766,7 +3779,7 @@ begin
         // The pattern's own register has no name, so its initializer cannot
         // reach it; the names the pattern binds are separate locals.
         ACtx.CompileExpression(AParams[I].DefaultValue, Slot)
-      else if ParameterInitializerAvoidsOwnBinding(AParams, I) then
+      else if SafeInitializers[I] then
         CompileExpressionWithInferredName(ACtx, AParams[I].DefaultValue, Slot,
           AParams[I].Name)
       else

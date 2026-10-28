@@ -146,13 +146,17 @@ One record per source function, keyed by its file and the line and column of its
 | Constant-evaluation visits | `constantEvaluationVisits` | Steps of the constant-evaluation walk over an operand subtree (`TryEvaluateConstantExpression`) |
 | Expression-type visits | `expressionTypeVisits` | Steps of type inference over an expression subtree (`ExpressionType`) |
 | Number-proof visits | `numberProofVisits` | `HasExactNumberProof` checks of an operand |
-| Local lookups, probes | `localLookups`, `localLookupProbes` | Name lookups among a function scope's locals, and the locals each examined (1 through the hashed index, the entries scanned without it, plus each shadowed local stepped over) |
+| Local lookups, probes | `localLookups`, `localLookupProbes` | Name lookups among a function scope's locals, and the locals each examined (actual buckets examined through the hashed index, entries scanned without it, plus each shadowed local stepped over) |
 | Upvalue resolutions, list probes | `upvalueResolutions`, `upvalueListProbes` | `ResolveUpvalue`, once per function scope it climbs, and the upvalue entries scanned for an existing capture |
 | Local-list scans | `localListScans` | Locals visited by walks over a scope's list of locals: the case-clause resets, relinking names after a rename, suspending bindings for a `finally` block |
 | Parameter-name probes | `parameterNameProbes` | Lookups in a function's hashed set of parameter names: one per name it records and one per test of a name |
-| Binding-name lookups, probes | `bindingNameLookups`, `bindingNameProbes` | Lookups in a list of unique binding names (a pattern's or a declaration's names in the compiler, declaration checks and the duplicate-parameter check in the parser), and the names each compared: 1 once the list is hashed (16 names or more), the names scanned below that |
+| Binding-name lookups, probes | `bindingNameLookups`, `bindingNameProbes` | Lookups in a list of unique binding names (a pattern's or a declaration's names in the compiler, declaration checks and the duplicate-parameter and match-pattern checks in the parser, and direct-eval compiler names), and the names each compared: 1 once the list is hashed (16 names or more), the names scanned below that; match-pattern maps count actual bucket probes |
+| Parameter-initializer visits | `parameterInitializerVisits` | Parameters visited by the accumulating proof that a default initializer cannot reach its own binding |
+| Parameter-initializer source checks | `parameterInitializerSourceChecks` | Earlier closure source texts checked for a simple parameter with a default; ordinary parameters and pattern destinations require no such check |
 | Direct-eval record probes | `directEvalRecordProbes` | Name lookups in the direct-eval binding record index |
 | Type-argument probe tokens | `typeArgumentProbeTokens` | Tokens visited by constructor lookahead and failed-probe indexing |
+
+Match-pattern nodes are not compiled expression/statement nodes. Compare parser binding work against pattern bindings or tokens; the compiled-node denominator can be very small for a large pattern.
 
 AST nodes are also counted by kind: for each function and each file in the JSON, and for the whole run in the text report.
 

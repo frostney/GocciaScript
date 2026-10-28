@@ -98,6 +98,7 @@ const COMPILE_COUNTERS = [
   "localLookupProbes", "upvalueResolutions", "upvalueListProbes",
   "localListScans", "parameterNameProbes", "bindingNameLookups",
   "bindingNameProbes", "directEvalRecordProbes", "typeArgumentProbeTokens",
+  "parameterInitializerVisits", "parameterInitializerSourceChecks",
 ];
 
 /** --profile=compile: one record per source function and file, parse and
@@ -110,7 +111,7 @@ export function verifyCompileProfiles(): void {
     for (const count of [50, 100]) {
       const dir = join(tmp, `n${count}`);
       mkdirSync(dir);
-      writeFileSync(join(dir, "dep.mjs"), "export const twice = (x) => x * 2;\n");
+      writeFileSync(join(dir, "dep.mjs"), "export const twice = (x = 0) => x * 2;\n");
       writeFileSync(join(dir, "main.mjs"), [
         'import { twice } from "./dep.mjs";',
         "const big = (p) => {",
@@ -149,6 +150,8 @@ export function verifyCompileProfiles(): void {
       const twice = compile.functions.find((fn: CompileFunction) => fn.name === "twice");
       if (!twice?.sourceFile.endsWith("dep.mjs") || !(twice.compileTimeNs > 0))
         throw new Error(`the imported module's function must be profiled: ${JSON.stringify(twice)}`);
+      if (twice.counters.parameterInitializerVisits !== 1)
+        throw new Error(`one default must visit one parameter: ${JSON.stringify(twice.counters)}`);
       nodes.push(big.counters.nodesCompiled);
     }
     if (nodes[1] < nodes[0] * 1.8)
@@ -227,6 +230,8 @@ export function verifyCompileCounterGrowth(): void {
       return [
         `const chain = (p) => ${range.map(() => "p").join(" + ")};`,
         `const params = (${range.map((i) => `a${i}`).join(", ")}) => a0;`,
+        `const defaults = (${range.map((i) => `d${i} = 1`).join(", ")}) => d0;`,
+        ...range.map((i) => `const closureDefault${i} = (f = () => 1, plain) => plain;`),
         `const pattern = () => { const { ${range.map((i) => `b${i}`).join(", ")} } = {}; return b0; };`,
         `const evalScope = () => { let ${range.map((i) => `e${i}`).join(",")}; eval(""); };`,
         `const constructors = (X) => ${range.map(() => "new X < ").join("")}0;`,

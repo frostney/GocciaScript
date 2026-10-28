@@ -177,7 +177,7 @@ type
     procedure TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime;
     procedure ExpectNameListLinear(const APattern, AItem: string;
       const ACount: Integer = NAME_LIST_COUNT);
-    function SourceWork(const ASource: string; const AStrictTypes: Boolean = False;
+    function SourceCompileCounters(const ASource: string; const AStrictTypes: Boolean = False;
       const AFileName: string = '<test>';
       const APreserveCoverageShape: Boolean = False): TGocciaCompileCounters;
     procedure ExpectWorkLinear(const AShort, ALong: TGocciaCompileCounters;
@@ -188,6 +188,11 @@ type
     procedure TestNewTypeArgumentWork;
     procedure TestParameterListsParseAndCompileInLinearTime;
     procedure TestDestructuringPatternsCompileInLinearTime;
+    procedure TestMatchBindingNameChecksScale;
+    procedure TestDefaultParameterListWorkScales;
+    procedure TestOrdinaryParametersSkipInitializerSourceChecks;
+    procedure TestDirectEvalNameChecksScale;
+    procedure TestLargeSwitchLookupProbesScale;
     procedure TestOperatorChainsCompileInLinearTime;
     procedure TestOperatorChainsFoldTheirConstantStart;
     procedure TestNestedChainsCompileInLinearTime;
@@ -356,6 +361,16 @@ begin
   Test('Constructor type argument probes use linear token work', TestNewTypeArgumentWork);
   Test('Destructuring patterns compile in linear time',
     TestDestructuringPatternsCompileInLinearTime);
+  Test('Match-pattern binding-name checks scale with the bindings',
+    TestMatchBindingNameChecksScale);
+  Test('Default parameter parsing and initializer work scale with the parameters',
+    TestDefaultParameterListWorkScales);
+  Test('Large switches keep local lookup probes proportional to clauses',
+    TestLargeSwitchLookupProbesScale);
+  Test('Ordinary parameters do not repeat closure-source destination proofs',
+    TestOrdinaryParametersSkipInitializerSourceChecks);
+  Test('Direct eval string-name checks scale with the bindings',
+    TestDirectEvalNameChecksScale);
   Test('Chains of binary operators compile in time linear in their length',
     TestOperatorChainsCompileInLinearTime);
   Test('Chains of binary operators fold the constants they start with',
@@ -1307,7 +1322,9 @@ begin
     CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS).ToBe(True);
 end;
 
-function TTestCompiler.SourceWork(const ASource: string;
+{ Read the same work counters exposed by --profile=compile. Summing all
+  function records includes parser work as well as nested compiler work. }
+function TTestCompiler.SourceCompileCounters(const ASource: string;
   const AStrictTypes: Boolean; const AFileName: string;
   const APreserveCoverageShape: Boolean): TGocciaCompileCounters;
 var
@@ -1354,9 +1371,9 @@ begin
       for Coverage := False to True do
       begin
         Depth := I + 1;
-        Small := SourceWork('const f = (p) => ' + DupeString(PREFIXES[I], 100) +
+        Small := SourceCompileCounters('const f = (p) => ' + DupeString(PREFIXES[I], 100) +
           'p' + StringOfChar(')', 100 * Depth) + ';', Strict, '<test>', Coverage);
-        Large := SourceWork('const f = (p) => ' + DupeString(PREFIXES[I], 200) +
+        Large := SourceCompileCounters('const f = (p) => ' + DupeString(PREFIXES[I], 200) +
           'p' + StringOfChar(')', 200 * Depth) + ';', Strict, '<test>', Coverage);
         ExpectWorkLinear(Small, Large, ccExpressionTypeVisits);
       end;
@@ -1374,10 +1391,10 @@ begin
     for Strict := False to True do
       for Coverage := False to True do
       begin
-        Small := SourceWork('const f = (p) => { const x = ' +
+        Small := SourceCompileCounters('const f = (p) => { const x = ' +
           DupeString(Prefix, 100) + 'p' + StringOfChar(')', 100) +
           '; return x; };', Strict, '<test>', Coverage);
-        Large := SourceWork('const f = (p) => { const x = ' +
+        Large := SourceCompileCounters('const f = (p) => { const x = ' +
           DupeString(Prefix, 200) + 'p' + StringOfChar(')', 200) +
           '; return x; };', Strict, '<test>', Coverage);
         ExpectWorkLinear(Small, Large, ccConstantEvaluationVisits);
@@ -1400,8 +1417,8 @@ procedure TTestCompiler.TestDirectEvalRecordWork;
 var
   Small, Large: TGocciaCompileCounters;
 begin
-  Small := SourceWork(Source(256));
-  Large := SourceWork(Source(512));
+  Small := SourceCompileCounters(Source(256));
+  Large := SourceCompileCounters(Source(512));
   ExpectWorkLinear(Small, Large, ccDirectEvalRecordProbes);
 end;
 
@@ -1414,9 +1431,9 @@ var
 begin
   for FileName in FILE_NAMES do
   begin
-    Small := SourceWork('const f = (X) => ' + DupeString('new X < ', 100) + '0;',
+    Small := SourceCompileCounters('const f = (X) => ' + DupeString('new X < ', 100) + '0;',
       False, FileName);
-    Large := SourceWork('const f = (X) => ' + DupeString('new X < ', 200) + '0;',
+    Large := SourceCompileCounters('const f = (X) => ' + DupeString('new X < ', 200) + '0;',
       False, FileName);
     ExpectWorkLinear(Small, Large, ccTypeArgumentProbeTokens);
   end;
@@ -1449,7 +1466,7 @@ procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
     Counters: TGocciaCompileCounters;
     Counter: TGocciaCompileCounter;
   begin
-    Counters := SourceWork(Format(APattern, [NameList(ACount)]));
+    Counters := SourceCompileCounters(Format(APattern, [NameList(ACount)]));
     Result := 0;
     for Counter := Low(Counter) to High(Counter) do
       Inc(Result, Counters[Counter]);
@@ -1484,6 +1501,185 @@ begin
   // instruction limit.
   ExpectNameListLinear('const g = async ({ %s }) => a0;', 'a%d',
     NAME_LIST_COUNT div 2);
+end;
+
+procedure TTestCompiler.TestMatchBindingNameChecksScale;
+
+  function Probes(const ACount: Integer): Int64;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+    Work: TGocciaCompileCounters;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const g = (o) => o is { ');
+    for I := 0 to ACount - 1 do
+    begin
+      if I > 0 then
+        Source.Append(', ');
+      Source.Append(Format('k%0:d: const b%0:d', [I]));
+    end;
+    Source.Append(' };');
+    Work := SourceCompileCounters(Source.ToString);
+    Result := Work[ccBindingNameProbes];
+  end;
+
+const
+  BINDING_COUNTS: array[0..2] of Integer = (4000, 8000, 16000);
+var
+  ShortProbes, LongProbes: Int64;
+  BindingCount: Integer;
+begin
+  for BindingCount in BINDING_COUNTS do
+  begin
+    ShortProbes := Probes(BindingCount);
+    LongProbes := Probes(2 * BindingCount);
+    // Small maps missed the residual hash clustering at 16k/32k names.
+    Expect<Boolean>(ShortProbes >= BindingCount).ToBe(True);
+    Expect<Boolean>(LongProbes >= 2 * BindingCount).ToBe(True);
+    if LongProbes > ShortProbes * 5 div 2 then
+      Fail(Format('Match pattern with %d bindings took %d name probes versus %d ' +
+        'with %d', [2 * BindingCount, LongProbes, ShortProbes, BindingCount]));
+    Expect<Boolean>(LongProbes <= ShortProbes * 5 div 2).ToBe(True);
+  end;
+end;
+
+procedure TTestCompiler.TestDefaultParameterListWorkScales;
+
+  function Counters(const ACount: Integer;
+    const AInitializer: string): TGocciaCompileCounters;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const g = (');
+    for I := 0 to ACount - 1 do
+    begin
+      if I > 0 then
+        Source.Append(', ');
+      Source.Append(Format('p%d = %s', [I, AInitializer]));
+    end;
+    Source.Append(') => 1;');
+    Result := SourceCompileCounters(Source.ToString);
+  end;
+
+  procedure CheckInitializer(const AInitializer: string);
+  const
+    PARAMETER_COUNT = 2000;
+  var
+    ShortWork, LongWork: TGocciaCompileCounters;
+    Counter: TGocciaCompileCounter;
+  begin
+    ShortWork := Counters(PARAMETER_COUNT, AInitializer);
+    LongWork := Counters(2 * PARAMETER_COUNT, AInitializer);
+    // Duplicate-name validation covers the parse; prefix visits cover the
+    // initializer proof. The old proof quadrupled work on doubling input.
+    for Counter in [ccBindingNameProbes, ccParameterInitializerVisits] do
+    begin
+      Expect<Boolean>(ShortWork[Counter] >= PARAMETER_COUNT).ToBe(True);
+      Expect<Boolean>(LongWork[Counter] >= 2 * PARAMETER_COUNT).ToBe(True);
+      if LongWork[Counter] > ShortWork[Counter] * 5 div 2 then
+        Fail(Format('Default "%s": %s grew from %d to %d for %d and %d parameters',
+          [AInitializer, COMPILE_COUNTER_JSON_NAMES[Counter], ShortWork[Counter],
+          LongWork[Counter], PARAMETER_COUNT, 2 * PARAMETER_COUNT]));
+      Expect<Boolean>(LongWork[Counter] <= ShortWork[Counter] * 5 div 2).ToBe(True);
+    end;
+  end;
+
+begin
+  CheckInitializer('1');
+  CheckInitializer('seed');
+end;
+
+procedure TTestCompiler.TestOrdinaryParametersSkipInitializerSourceChecks;
+
+  function SourceChecks(const ACount: Integer): Int64;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+    Work: TGocciaCompileCounters;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const f = (first = () => 1');
+    for I := 0 to ACount - 1 do
+      Source.Append(Format(', p%d', [I]));
+    Source.Append(') => 1;');
+    Work := SourceCompileCounters(Source.ToString);
+    Result := Work[ccParameterInitializerSourceChecks];
+  end;
+
+var
+  ShortChecks, LongChecks: Int64;
+begin
+  ShortChecks := SourceChecks(128);
+  LongChecks := SourceChecks(256);
+  // Only the first parameter has a default destination to prove safe.
+  // Adding ordinary parameters must not add closure-source searches.
+  Expect<Boolean>(ShortChecks > 0).ToBe(True);
+  Expect<Int64>(LongChecks).ToBe(ShortChecks);
+end;
+
+procedure TTestCompiler.TestLargeSwitchLookupProbesScale;
+
+  function Probes(const ACount: Integer): Int64;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+    Work: TGocciaCompileCounters;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const g = (d) => { switch (d) {');
+    for I := 0 to ACount - 1 do
+      Source.Append(Format('case %0:d: const s%0:d = %0:d; break;', [I]));
+    Source.Append('} };');
+    Work := SourceCompileCounters(Source.ToString);
+    Result := Work[ccLocalLookupProbes];
+  end;
+
+var
+  ShortProbes, LongProbes: Int64;
+begin
+  ShortProbes := Probes(8000);
+  LongProbes := Probes(16000);
+  if LongProbes > ShortProbes * 5 div 2 then
+    Fail(Format('16000 switch clauses took %d local probes versus %d for 8000',
+      [LongProbes, ShortProbes]));
+  Expect<Boolean>(ShortProbes > 0).ToBe(True);
+  Expect<Boolean>(LongProbes <= ShortProbes * 5 div 2).ToBe(True);
+end;
+
+procedure TTestCompiler.TestDirectEvalNameChecksScale;
+
+  function EvalSource(const ACount: Integer): string;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append('const f = () => {');
+    for I := 0 to ACount - 1 do
+      Source.Append(Format('let v%d = 1;', [I]));
+    Source.Append('eval("0"); };');
+    Result := Source.ToString;
+  end;
+
+var
+  ShortWork, LongWork: TGocciaCompileCounters;
+  ShortProbes, LongProbes: Int64;
+begin
+  ShortWork := SourceCompileCounters(EvalSource(256));
+  LongWork := SourceCompileCounters(EvalSource(1024));
+  ShortProbes := ShortWork[ccBindingNameProbes];
+  LongProbes := LongWork[ccBindingNameProbes];
+  // Count string-name membership only. Direct-eval record-array scans and
+  // growth remain separate work, so total compile time is not this contract.
+  Expect<Boolean>(ShortProbes >= 256).ToBe(True);
+  Expect<Boolean>(LongProbes >= 1024).ToBe(True);
+  if LongProbes > 5 * ShortProbes then
+    Fail(Format('Direct eval with 1024 bindings took %d name probes versus %d ' +
+      'with 256', [LongProbes, ShortProbes]));
+  Expect<Boolean>(LongProbes <= 5 * ShortProbes).ToBe(True);
 end;
 
 { The compiler collects a pattern's bound names, each once, wherever it
