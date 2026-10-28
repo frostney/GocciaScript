@@ -318,3 +318,27 @@ describe("private accessor decorators", () => {
     expect(new A().read()).toBe(1);
   });
 });
+
+test("decorated private methods retain their class evaluation on a shared receiver", () => {
+  const accesses = [];
+  const decorate = (method, context) => {
+    accesses.push(context.access);
+    return ({
+      replacement() { return method.call(this) + 10; },
+    }).replacement;
+  };
+  const make = (Base, value) => class extends Base {
+    @decorate #method() { return value; }
+    read() { return this.#method(); }
+  };
+  const Base = make(class {}, 1);
+  const Derived = make(Base, 2);
+  const receiver = new Derived();
+  expect(Base.prototype.read.call(receiver)).toBe(11);
+  expect(receiver.read()).toBe(12);
+  expect(accesses[0].get(receiver).call(receiver)).toBe(11);
+  expect(accesses[1].get(receiver).call(receiver)).toBe(12);
+  expect(accesses[0].has(receiver)).toBe(true);
+  expect(accesses[1].has(new Base())).toBe(false);
+  expect(() => accesses[1].get(new Base())).toThrow(TypeError);
+});

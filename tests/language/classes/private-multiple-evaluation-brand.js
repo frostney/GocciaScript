@@ -302,3 +302,86 @@ describe("code in a class body outside its methods uses the class's private name
     expect(() => First.fromBlock(second)).toThrow(TypeError);
   });
 });
+
+
+describe("re-evaluated classes sharing one receiver", () => {
+  const make = (Base, value) => class extends Base {
+    #value = value;
+    #method() { return value; }
+    get #accessor() { return this.#value; }
+    set #accessor(next) { this.#value = next; }
+    read() { return this.#value; }
+    write(next) { this.#value = next; }
+    method() { return this.#method(); }
+    get value() { return this.#accessor; }
+    set value(next) { this.#accessor = next; }
+    has(receiver) { return #value in receiver; }
+  };
+
+  test("base and derived evaluations keep their own fields and methods", () => {
+    const Base = make(class {}, 1);
+    const Derived = make(Base, 2);
+    const receiver = new Derived();
+    expect(Base.prototype.read.call(receiver)).toBe(1);
+    expect(receiver.read()).toBe(2);
+    expect(Base.prototype.method.call(receiver)).toBe(1);
+    expect(receiver.method()).toBe(2);
+    Base.prototype.write.call(receiver, 3);
+    expect(Base.prototype.read.call(receiver)).toBe(3);
+    expect(receiver.read()).toBe(2);
+    expect(Base.prototype.has(receiver)).toBe(true);
+    expect(Derived.prototype.has(receiver)).toBe(true);
+    expect(Derived.prototype.has(new Base())).toBe(false);
+    expect(() => Derived.prototype.read.call(new Base())).toThrow(TypeError);
+  });
+
+  test("base and derived evaluations keep their own accessors", () => {
+    const Base = make(class {}, 1);
+    const Derived = make(Base, 2);
+    const receiver = new Derived();
+    const access = Object.getOwnPropertyDescriptor(Base.prototype, "value");
+    expect(access.get.call(receiver)).toBe(1);
+    expect(receiver.value).toBe(2);
+    access.set.call(receiver, 4);
+    expect(access.get.call(receiver)).toBe(4);
+    expect(receiver.value).toBe(2);
+  });
+
+  test("return overrides keep private elements from both evaluations", () => {
+    class ReturnReceiver {
+      constructor(receiver) { return receiver; }
+    }
+    const First = make(ReturnReceiver, 1);
+    const Second = make(ReturnReceiver, 2);
+    const receiver = {};
+    new First(receiver);
+    new Second(receiver);
+    expect(First.prototype.read.call(receiver)).toBe(1);
+    expect(Second.prototype.read.call(receiver)).toBe(2);
+    expect(First.prototype.method.call(receiver)).toBe(1);
+    expect(Second.prototype.method.call(receiver)).toBe(2);
+    First.prototype.write.call(receiver, 5);
+    expect(First.prototype.read.call(receiver)).toBe(5);
+    expect(Second.prototype.read.call(receiver)).toBe(2);
+    expect(() => new First(receiver)).toThrow(TypeError);
+  });
+});
+
+
+test("discarded classes do not give new classes access to their receiver", () => {
+  const make = () => class extends class {
+    constructor(receiver) { return receiver; }
+  } {
+    #value = 1;
+    static has(receiver) { return #value in receiver; }
+  };
+  const receiver = {};
+  new (make())(receiver);
+  const aliased = Array.from({ length: 20000 }, () => 0).some(() => {
+    const Candidate = make();
+    // Allocation pressure allows the discarded class to be collected.
+    Array.from({ length: 50 }, () => ({ value: 1 }));
+    return Candidate.has(receiver);
+  });
+  expect(aliased).toBe(false);
+});
