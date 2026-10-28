@@ -7706,6 +7706,22 @@ var
       SSuggestCloseImportList);
   end;
 
+  { `type` is a legal ImportedDefaultBinding (ECMA-262 §16.2.2), so `import
+    type` is type-only only when a binding, "{" or "*" follows. One token of
+    lookahead after `type` tells them apart: "," or `from` before a module
+    string means `type` is the default binding. `import type from from "m"`
+    stays type-only, a default binding named `from`. }
+  function IsTypeDefaultBindingStart: Boolean;
+  begin
+    EnsureToken(FCurrent + 2, glgInputElementRegExp);
+    if FCurrent + 1 >= FTokens.Count then
+      Exit(False);
+    Result := (FTokens[FCurrent + 1].TokenType = gttComma) or
+      ((FTokens[FCurrent + 1].TokenType = gttFrom) and
+       (FCurrent + 2 < FTokens.Count) and
+       (FTokens[FCurrent + 2].TokenType = gttString));
+  end;
+
   function IsSourcePhaseImportStart: Boolean;
   begin
     EnsureToken(FCurrent + 2, glgInputElementRegExp);
@@ -7719,7 +7735,8 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) then
+  if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) and
+     not IsTypeDefaultBindingStart then
   begin
     Advance;
     SkipUntilSemicolon;
@@ -7808,7 +7825,7 @@ begin
           Advance;
           Consume(gttAs, 'Expected "as" after "*" in namespace import',
             SSuggestNamespaceImportAs);
-          NamespaceName := Consume(gttIdentifier,
+          NamespaceName := ConsumeIdentifierBinding(
             'Expected local name after "as"',
             SSuggestProvideLocalName).Lexeme;
           Consume(gttFrom, 'Expected "from" after namespace import',
@@ -7835,7 +7852,7 @@ begin
           ImportedName := ImportedNameToken.Lexeme;
 
           if Match(gttAs) then
-            LocalName := Consume(gttIdentifier, 'Expected local name after "as"',
+            LocalName := ConsumeIdentifierBinding('Expected local name after "as"',
               SSuggestProvideLocalName).Lexeme
           else if ImportedNameToken.TokenType = gttString then
             raise TGocciaSyntaxError.Create(
