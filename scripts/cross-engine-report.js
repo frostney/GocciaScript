@@ -151,7 +151,7 @@ function probeCounters({ perf = 'perf', platform = process.platform, spawn = spa
 // TERM at the limit (exit 124), KILL a second later. Its own few instructions
 // are counted with the sample's, the same in every sample.
 function counterCommand(command, args, counterSetup, outputFile, timeoutMs) {
-  const seconds = Math.max(1, Math.ceil(timeoutMs / 1000));
+  const seconds = Math.max(0.001, timeoutMs / 1000).toFixed(3).replace(/\.?0+$/, '');
   return {
     command: counterSetup.perf || 'perf',
     args: ['stat', '-x,', '-o', outputFile, '-e', counterSetup.events.map((entry) => entry.event).join(','), '--',

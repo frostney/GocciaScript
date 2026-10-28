@@ -383,6 +383,15 @@ console.log('awfy-driver: hardware counters...');
   const target = { name: 'Richards', summary };
   assertEqual(counterDeltaCell(target, 'instructions'), '-10.00%', 'instruction delta is the change in work');
   assertEqual(counterDeltaCell(target, 'itlbMisses'), '-', 'a counter without data renders as a dash');
+  const zeroTarget = { summary: { counterRatios: { 'goccia-candidate_over_goccia-baseline': { icacheMisses: 0 } } } };
+  assertEqual(counterDeltaCell(zeroTarget, 'icacheMisses'), '-100.00%', 'a count that falls to zero renders as -100%');
+  const scaledTarget = {
+    summary: {
+      engineStats: { 'goccia-baseline': { counters: { multiplexed: true } }, 'goccia-candidate': { counters: { multiplexed: false } } },
+      counterRatios: { 'goccia-candidate_over_goccia-baseline': { instructions: 0.9 } },
+    },
+  };
+  assertEqual(counterDeltaCell(scaledTarget, 'instructions'), '-10.00% (scaled)', 'a multiplexed count is marked as scaled');
 
   const counterComment = buildAwfyReportComment({
     metadata: {
@@ -450,8 +459,10 @@ console.log('awfy-driver: counted samples through a stand-in perf...');
   assertEqual(hybrid.counters.cycles, 300, 'hybrid CPUs: an uncounted core type adds nothing');
 
   const command = counterCommand('runner', ['a.js'], { perf: 'perf', events: [{ event: 'instructions:u' }] }, 'out.csv', 2500);
-  assertEqual(command.args.join(' '), 'stat -x, -o out.csv -e instructions:u -- timeout --kill-after=1 3 runner a.js',
-    'a counted sample runs under timeout, which enforces the limit');
+  assertEqual(command.args.join(' '), 'stat -x, -o out.csv -e instructions:u -- timeout --kill-after=1 2.5 runner a.js',
+    'a counted sample runs under timeout, which enforces the limit to the millisecond');
+  assertEqual(counterCommand('r', [], { events: [{ event: 'instructions:u' }] }, 'o', 100).args[9], '0.1',
+    'a limit under a second stays under a second');
   assertEqual(uncountedProcess({ status: 124 }).error.code, 'ETIMEDOUT', 'timeout\'s exit status is a timeout');
   assertEqual(uncountedProcess({ status: 137 }).signal, 'SIGKILL', 'a killed sample reports its signal');
   assertEqual(uncountedProcess({ status: 1 }).status, 1, 'an ordinary exit status is kept');

@@ -160,10 +160,17 @@ function reportHasCounterComparison(report) {
 
 // The PR's change in a counter's median against main: negative is fewer
 // instructions (less work) or fewer misses.
+// A count perf had to multiplex is scaled, not exact: such a cell is marked.
+function countersMultiplexed(target) {
+  const stats = target.summary?.engineStats || {};
+  return Boolean(stats['goccia-baseline']?.counters?.multiplexed || stats['goccia-candidate']?.counters?.multiplexed);
+}
+
 function counterDeltaCell(target, key) {
   const ratio = target.summary?.counterRatios?.[COMPARISON_PAIR]?.[key];
-  if (!finiteNumber(ratio) || ratio <= 0) return '-';
-  return formatDeltaPercent((ratio - 1) * 100);
+  if (!finiteNumber(ratio) || ratio < 0) return '-';
+  const cell = formatDeltaPercent((ratio - 1) * 100);
+  return countersMultiplexed(target) ? `${cell} (scaled)` : cell;
 }
 
 function counterNote(report, hasCounters) {
@@ -173,7 +180,10 @@ function counterNote(report, hasCounters) {
   if (!hasCounters) return 'Hardware counters were requested but no sample of both Goccia binaries recorded them. ';
   return 'The Instructions and L1i misses columns are the PR\'s change in the median perf_event count against main, '
     + 'so there negative is fewer (Δ PR vs main is the time saved, so there positive is faster). Instructions do not depend '
-    + 'on code placement: a time Δ with no instruction Δ and a moved L1i miss count is layout, not work. ';
+    + 'on code placement: a time Δ with no instruction Δ and a moved L1i miss count is layout, not work. '
+    + ((report?.targets || []).some(countersMultiplexed)
+      ? 'A (scaled) count is perf\'s estimate from a multiplexed counter, not an exact count. '
+      : '');
 }
 
 function buildGeomeanTable(geomean, labels = ENGINE_LABELS, engines = DEFAULT_COMMENT_ENGINES) {
