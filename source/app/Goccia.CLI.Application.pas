@@ -350,6 +350,7 @@ uses
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Profiler,
+  Goccia.Profiler.Compile,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Fetch,
   Goccia.ScriptLoader.Globals,
@@ -2479,6 +2480,11 @@ begin
       Goccia.CLI.Options.pmAll:
         TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes,
           Goccia.Profiler.pmFunctions];
+      Goccia.CLI.Options.pmCompile:
+        begin
+          TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmCompile];
+          TGocciaCompileProfiler.Initialize;
+        end;
     end;
   end;
 end;
@@ -2487,6 +2493,8 @@ procedure ShutdownProfilerIfEnabled(const AOptions: TGocciaProfilerOptions);
 begin
   if (TGocciaProfiler.Instance <> nil) then
     TGocciaProfiler.Shutdown;
+  if (TGocciaCompileProfiler.Instance <> nil) then
+    TGocciaCompileProfiler.Shutdown;
 end;
 
 function TGocciaCLIApplication.GetJobCount(const AFileCount: Integer): Integer;
