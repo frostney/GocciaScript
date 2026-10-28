@@ -149,8 +149,8 @@ One record per source function, keyed by its file and the line and column of its
 | Local lookups, probes | `localLookups`, `localLookupProbes` | Name lookups among a function scope's locals, and the locals each examined (1 through the hashed index, the entries scanned without it, plus each shadowed local stepped over) |
 | Upvalue resolutions, list probes | `upvalueResolutions`, `upvalueListProbes` | `ResolveUpvalue`, once per function scope it climbs, and the upvalue entries scanned for an existing capture |
 | Local-list scans | `localListScans` | Locals visited by walks over a scope's list of locals: the case-clause resets, relinking names after a rename, suspending bindings for a `finally` block |
-| Parameter-name probes | `parameterNameProbes` | Parameter names examined when a function records its parameters |
-| Binding-name lookups, probes | `bindingNameLookups`, `bindingNameProbes` | Lookups in a list of unique binding names (a pattern's or a declaration's names in the compiler, the duplicate-parameter check in the parser), and the names each examined |
+| Parameter-name probes | `parameterNameProbes` | Lookups in a function's hashed set of parameter names: one per name it records and one per test of a name |
+| Binding-name lookups, probes | `bindingNameLookups`, `bindingNameProbes` | Lookups in a list of unique binding names (a pattern's or a declaration's names in the compiler, the duplicate-parameter check in the parser), and the names each compared: 1 once the list is hashed (16 names or more), the names scanned below that |
 
 AST nodes are also counted by kind: for each function and each file in the JSON, and for the whole run in the text report.
 
