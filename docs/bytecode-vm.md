@@ -173,7 +173,11 @@ undid that. Two layout rules keep this under control:
   on average, open the case in `source/units/Goccia.VM.DispatchCase.inc`,
   highest share first, and every other arm follows them, so an edit to one of
   those cannot move a hot arm. A new opcode's arm goes after the `Cold arms`
-  comment.
+  comment. `OP_ITER_NEXT` leads the hot arms out of that order: FPC places
+  the function's temporaries in the order it compiles the arms, and in
+  frequency order the dispatch function's stack frame grew by 336 bytes on
+  AArch64, so fewer native re-entries fit on the stack. With it first, the
+  frame is smaller than before on AArch64 and x86-64.
 - **Arms on 64-byte boundaries.** The dispatch function is compiled with
   `{$CODEALIGN JUMP=64}`, so no arm shares a cache line or an op-cache window
   with the end of the arm before it. FPC also aligns the labels where a case
@@ -184,9 +188,9 @@ undid that. Two layout rules keep this under control:
 Together, on a Zen 5 core, the two lower the op-cache misses of the
 dispatch-bound AWFY workloads (List, Queens, Permute, Towers, Sieve, Richards)
 by a fifth to two fifths and raise those of Bounce, DeltaBlue and NBody by
-7-16%. Times stay within 1.8% of the previous layout per benchmark and are
-0.06-0.35% slower on geometric mean: the layout makes measurement steadier,
-not the VM faster. An edit to a cold arm no longer changes the hot arms'
+7-16%. Times stay within 3% of the previous layout per benchmark, and the
+geometric mean within half a percent either way across the comparisons made:
+the layout makes measurement steadier, not the VM faster. An edit to a cold arm no longer changes the hot arms'
 op-cache misses.
 
 `scripts/check-vm-dispatch-layout.ts` (CI and the pre-commit hook) fails when

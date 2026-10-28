@@ -8,10 +8,77 @@
       // Hot arms. FPC lays the arms out in this order, so these come first
       // and stay together, and an edit to any arm after them cannot move them
       // (issue #1917). They are the arms the AWFY workloads execute most, by
-      // their mean share of executed opcodes, highest first. A change to the
-      // set or the order is a measured layout change: see 'Dispatch layout' in
-      // docs/bytecode-vm.md, and scripts/check-vm-dispatch-layout.ts, which
-      // holds the list.
+      // their mean share of executed opcodes, highest first, except
+      // OP_ITER_NEXT: FPC places the function's temporaries in the order it
+      // compiles the arms, and with that arm first the dispatch function's
+      // stack frame is no larger than with the old order, on AArch64 too,
+      // where frequency order cost 336 bytes per native re-entry. A change to
+      // the set or the order is a measured layout change: see 'Dispatch
+      // layout' in docs/bytecode-vm.md, and scripts/check-vm-dispatch-layout.ts,
+      // which holds the list.
+      OP_ITER_NEXT:
+      begin
+        if (FRegisters[C].Kind = grkObject) and
+           (FRegisters[C].ObjectValue is TGocciaIteratorValue) then
+        begin
+          IterResult := TGocciaIteratorValue(FRegisters[C].ObjectValue).DirectNext(DoneFlag);
+          if DoneFlag then
+            FRegisters[A] := RegisterUndefined
+          else
+            FRegisters[A] := VMValueToRegisterFast(IterResult);
+          if DoneFlag then
+            FRegisters[B] := RegisterBoolean(True)
+          else
+            FRegisters[B] := RegisterBoolean(False);
+        end
+        else if (FRegisters[C].Kind = grkObject) and
+                (FRegisters[C].ObjectValue is TGocciaObjectValue) then
+        begin
+          IterResult := FRegisters[C].ObjectValue;
+          NextMethod := IterResult.GetProperty(PROP_NEXT);
+          if not Assigned(NextMethod) or
+             (NextMethod is TGocciaUndefinedLiteralValue) or
+             not NextMethod.IsCallable then
+          begin
+            FRegisters[A] := RegisterUndefined;
+            FRegisters[B] := RegisterBoolean(True);
+          end
+          else
+          begin
+            CallArgs := AcquireArguments;
+            try
+              IterResult := InvokeCallable(NextMethod, CallArgs, IterResult);
+            finally
+              ReleaseArguments(CallArgs);
+            end;
+
+            IterResult := AwaitValue(IterResult);
+            if IterResult.IsPrimitive then
+              ThrowTypeError(Format(SErrorIteratorResultNotObject, [IterResult.ToStringLiteral.Value]),
+                SSuggestIteratorResultObject);
+
+            DoneValue := IterResult.GetProperty(PROP_DONE);
+            if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
+            begin
+              FRegisters[A] := RegisterUndefined;
+              FRegisters[B] := RegisterBoolean(True);
+            end
+            else
+            begin
+              // A `value` getter runs guest code (see FRegisters).
+              GuestCallValue := IterResult.GetProperty(PROP_VALUE);
+              FRegisters[A] := VMValueToRegisterFast(GuestCallValue);
+              FRegisters[B] := RegisterBoolean(False);
+            end;
+          end;
+        end
+        else
+        begin
+          FRegisters[A] := RegisterUndefined;
+          FRegisters[B] := RegisterBoolean(True);
+        end;
+      end;
+
       OP_GET_PROP_CONST, OP_GET_LOCAL_PROP_CONST:
       begin
         // OP_GET_LOCAL_PROP_CONST loads the local into A, then reads the
@@ -1229,69 +1296,6 @@
           end;
           if SavedConstructFrameOk and (FCallStack <> nil) then
             FCallStack.SetTopFrame(SavedConstructFrame);
-        end;
-      end;
-
-      OP_ITER_NEXT:
-      begin
-        if (FRegisters[C].Kind = grkObject) and
-           (FRegisters[C].ObjectValue is TGocciaIteratorValue) then
-        begin
-          IterResult := TGocciaIteratorValue(FRegisters[C].ObjectValue).DirectNext(DoneFlag);
-          if DoneFlag then
-            FRegisters[A] := RegisterUndefined
-          else
-            FRegisters[A] := VMValueToRegisterFast(IterResult);
-          if DoneFlag then
-            FRegisters[B] := RegisterBoolean(True)
-          else
-            FRegisters[B] := RegisterBoolean(False);
-        end
-        else if (FRegisters[C].Kind = grkObject) and
-                (FRegisters[C].ObjectValue is TGocciaObjectValue) then
-        begin
-          IterResult := FRegisters[C].ObjectValue;
-          NextMethod := IterResult.GetProperty(PROP_NEXT);
-          if not Assigned(NextMethod) or
-             (NextMethod is TGocciaUndefinedLiteralValue) or
-             not NextMethod.IsCallable then
-          begin
-            FRegisters[A] := RegisterUndefined;
-            FRegisters[B] := RegisterBoolean(True);
-          end
-          else
-          begin
-            CallArgs := AcquireArguments;
-            try
-              IterResult := InvokeCallable(NextMethod, CallArgs, IterResult);
-            finally
-              ReleaseArguments(CallArgs);
-            end;
-
-            IterResult := AwaitValue(IterResult);
-            if IterResult.IsPrimitive then
-              ThrowTypeError(Format(SErrorIteratorResultNotObject, [IterResult.ToStringLiteral.Value]),
-                SSuggestIteratorResultObject);
-
-            DoneValue := IterResult.GetProperty(PROP_DONE);
-            if Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value then
-            begin
-              FRegisters[A] := RegisterUndefined;
-              FRegisters[B] := RegisterBoolean(True);
-            end
-            else
-            begin
-              // A `value` getter runs guest code (see FRegisters).
-              GuestCallValue := IterResult.GetProperty(PROP_VALUE);
-              FRegisters[A] := VMValueToRegisterFast(GuestCallValue);
-              FRegisters[B] := RegisterBoolean(False);
-            end;
-          end;
-        end
-        else
-        begin
-          FRegisters[A] := RegisterUndefined;
-          FRegisters[B] := RegisterBoolean(True);
         end;
       end;
 

@@ -44,7 +44,14 @@ benchmark without changing the instructions it executes:
 order. The 49 arms the AWFY workloads execute most, by their mean share of
 executed opcodes, open the dispatch case, highest first; every other arm
 follows them, and a new opcode's arm goes there. An edit to a cold arm then
-cannot move a hot one.
+cannot move a hot one. `OP_ITER_NEXT` leads the hot arms out of frequency
+order. FPC places a function's temporaries in the order it compiles its
+statements, and the order of the arms decides how well they pack: in
+frequency order the dispatch function's AArch64 frame grew from 3,120 to
+3,456 bytes, and on `aarch64-darwin` a recursion through `Reflect.construct`
+then reached 997 native re-entries before the stack ran low, under the 1,000
+the CLI tests require. With `OP_ITER_NEXT` first the frame is 3,040 bytes on
+AArch64 and 2,336 on x86-64, against 3,120 and 2,368 on `main`.
 
 **Every arm starts on a 64-byte boundary.** The dispatch function is compiled
 with `{$CODEALIGN JUMP=64}` between `{$PUSH}` and `{$POP}`, so no arm shares a
@@ -72,7 +79,8 @@ ADR 0087 rather than adding another path.
 
 ## Measurements
 
-Same machine and builds, four copies per binary, each copied afresh or with
+These tables measured the hot arms in plain frequency order, before
+`OP_ITER_NEXT` moved to the front. Same machine and builds, four copies per binary, each copied afresh or with
 its page cache dropped before every round, rounds in alternating order on one
 core whose SMT sibling stayed idle, the first round discarded. Medians of user
 cycles over twelve AWFY benchmarks. These runs used a measurement script
@@ -98,23 +106,27 @@ NBody. The layout moved by each of eleven distances from 64 to 3072 bytes kept
 every benchmark within 1.9% of its other layouts.
 
 The driver itself (`--counters --fresh-copies --alternate-order --cpu
---warmup 1`, twelve repetitions, eleven benchmarks, wall time), on this layout
-merged with `main` at `2fcffb67`:
+--warmup 1`, twelve repetitions, eleven benchmarks, wall time), on the final
+layout, with `OP_ITER_NEXT` first, merged with `main` at `2fcffb67`. Positive
+is slower:
 
 | Pair | Largest benchmark difference | Geomean |
 | --- | ---: | ---: |
 | `main` and its layout probe | 1.31% (DeltaBlue) | +0.12% |
-| this layout and its layout probe | 1.79% (List) | +0.16% |
-| this layout against `main` | 1.96% (Storage, faster), 1.39% (Bounce) | +0.10% |
+| this layout and its layout probe | 1.37% (Towers) | +0.27% |
+| frequency order and this layout | 1.71% (Towers, faster) | -0.40% |
+| this layout against `main` | 2.96% (Towers, faster), 1.75% (Storage, faster), 0.66% (Permute) | -0.41% |
 
 Each probe pair executes the same instructions to within 0.001%; this layout
 executes 0.0-0.7% more than `main`.
 
 ## Consequences
 
-- This is not a speed-up. Against `main` the layout is 0.06-0.35% slower on
-  geometric mean in four comparisons, Bounce 1.2-1.8% slower and Storage
-  1.2-2.0% faster each time, within the spread of the layouts measured.
+- This is not a speed-up. In frequency order the layout was 0.06-0.35% slower
+  than `main` on geometric mean in four comparisons, Bounce 1.2-1.8% slower
+  and Storage 1.2-2.0% faster each time; the final order measured 0.41%
+  faster, with Bounce 0.6% slower. All of that is within the spread of the
+  layouts measured.
 - An edit to a cold arm leaves the hot arms where they are, and a time delta
   it shows is noise. An edit to a hot arm still moves the hot arms after it,
   by whole lines.

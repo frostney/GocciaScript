@@ -51,8 +51,16 @@ const VM_UNIT = join(ROOT, "source", "units", "Goccia.VM.pas");
 
 // The hot arms, each as the labels it lists, highest mean share of executed
 // opcodes over the AWFY workloads first (opcode profiles of the pinned AWFY
-// corpus, issue #1917).
+// corpus, issue #1917), except OP_ITER_NEXT, which comes first: FPC places
+// the dispatch function's temporaries in the order it compiles the arms, and
+// in frequency order the function's stack frame grew by 336 bytes on AArch64,
+// so fewer native re-entries fit on the stack. With OP_ITER_NEXT first it is
+// smaller than with the old order on AArch64 and x86-64. --rank prints the
+// frequency order; move OP_ITER_NEXT, or whichever arm then keeps the frame
+// small, to the front, and compare the frame of `ExecuteClosureRegistersInternal`
+// (`sub sp, sp, #...` on AArch64, `lea -...(%rsp),%rsp` on x86-64) with main's.
 export const HOT_ARMS = [
+  "OP_ITER_NEXT",
   "OP_GET_PROP_CONST, OP_GET_LOCAL_PROP_CONST",
   "OP_GET_LOCAL",
   "OP_JUMP_IF_FALSE",
@@ -92,7 +100,6 @@ export const HOT_ARMS = [
   "OP_LOAD_NULL",
   "OP_LOAD_TRUE",
   "OP_CONSTRUCT",
-  "OP_ITER_NEXT",
   "OP_PUSH_FINALLY_HANDLER",
   "OP_POP_HANDLER",
   "OP_BAND",
