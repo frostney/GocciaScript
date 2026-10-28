@@ -137,7 +137,10 @@ type
     property OutputPath: TStringOption read FOutputPath;
   end;
 
-  TGocciaProfileMode = (pmOpcodes, pmFunctions, pmAll);
+  { pmAll is opcodes and functions; pmCompile (the parse and compile phase,
+    Goccia.Profiler.Compile) stays out of it, so the deterministic
+    benchmark profiles that CI captures with all keep their content. }
+  TGocciaProfileMode = (pmOpcodes, pmFunctions, pmAll, pmCompile);
   TGocciaProfileFormat = (pfFlamegraph);
 
   TGocciaProfilerOptions = class

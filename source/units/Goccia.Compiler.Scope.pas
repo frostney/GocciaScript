@@ -12,7 +12,8 @@ uses
   Goccia.AST.Node,
   Goccia.Bytecode.Chunk,
   Goccia.Compiler.ConstantValue,
-  Goccia.Modules;
+  Goccia.Modules,
+  Goccia.Profiler.Compile;
 
 type
   TGocciaCompilerVariableKind = (cvkLocal, cvkUpvalue, cvkGlobal);
@@ -178,6 +179,9 @@ type
     FParametersInVarEnvironment: Boolean;
     FParameterNames: array of string;
     FTemplate: TGocciaFunctionTemplate;
+    // The compile profile when --profile=compile is on, else nil; a scope
+    // takes its parent's (Goccia.Profiler.Compile).
+    FCompileProfile: TGocciaCompileProfiler;
     FUpvaluesSeeded: Boolean;
     // The join of the types this function returns (zeroed by InitInstance:
     // nothing seen yet), and the result for the last function compiled as a
@@ -253,6 +257,8 @@ type
       out AClosedCount: Integer);
 
     property Parent: TGocciaCompilerScope read FParent;
+    property CompileProfile: TGocciaCompileProfiler read FCompileProfile
+      write FCompileProfile;
     property LocalCount: Integer read FLocalCount;
     property UpvalueCount: Integer read FUpvalueCount;
     property Depth: Integer read FDepth;
@@ -526,6 +532,8 @@ var
 begin
   if Assigned(FLocalIndex) then
   begin
+    if Assigned(FCompileProfile) then
+      FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes, 1);
     if not FLocalIndex.TryGetValue(AName, Result) then
       Result := -1;
     Exit;
@@ -534,7 +542,15 @@ begin
   // locals to scan.
   for I := FLocalCount - 1 downto 0 do
     if FLocals[I].Name = AName then
+    begin
+      if Assigned(FCompileProfile) then
+        FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes,
+          FLocalCount - I);
       Exit(I);
+    end;
+  if Assigned(FCompileProfile) then
+    FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes,
+      FLocalCount);
   Result := -1;
 end;
 
@@ -564,6 +580,8 @@ var
   I, Previous: Integer;
   Newest: TOrderedStringMap<Integer>;
 begin
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccLocalListScans, FLocalCount);
   Newest := TOrderedStringMap<Integer>.Create(FLocalCount * 2);
   try
     for I := 0 to FLocalCount - 1 do
@@ -613,6 +631,10 @@ begin
   FParametersInVarEnvironment := False;
   FUpvaluesSeeded := False;
   FTemplate := nil;
+  if Assigned(AParent) then
+    FCompileProfile := AParent.FCompileProfile
+  else
+    FCompileProfile := nil;
   FLastBinaryExpression := nil;
   FSettledLocalCount := 0;
   FCaseClauseMarkCount := 0;
@@ -779,6 +801,8 @@ begin
        not (FGlobalBackedBindingsByName and FLocals[I].IsGlobalBacked) then
       Exit(I);
     I := FLocals[I].ShadowedLocal;
+    if Assigned(FCompileProfile) then
+      FCompileProfile.Count(ccLocalLookupProbes);
   end;
   Result := -1;
 end;
@@ -818,11 +842,19 @@ var
   UpvalueIdx: Integer;
   Idx: Integer;
 begin
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccUpvalueResolutions);
   if FUpvaluesSeeded then
   begin
     for Idx := 0 to FUpvalueCount - 1 do
       if FUpvalues[Idx].Name = AName then
+      begin
+        if Assigned(FCompileProfile) then
+          FCompileProfile.Count(ccUpvalueListProbes, Idx + 1);
         Exit(Idx);
+      end;
+    if Assigned(FCompileProfile) then
+      FCompileProfile.Count(ccUpvalueListProbes, FUpvalueCount);
     Exit(-1);
   end;
   if not Assigned(FParent) then
@@ -901,7 +933,13 @@ var
 begin
   for I := 0 to FUpvalueCount - 1 do
     if (FUpvalues[I].Index = AIndex) and (FUpvalues[I].IsLocal = AIsLocal) then
+    begin
+      if Assigned(FCompileProfile) then
+        FCompileProfile.Count(ccUpvalueListProbes, I + 1);
       Exit(I);
+    end;
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccUpvalueListProbes, FUpvalueCount);
 
   if FUpvalueCount >= High(UInt16) then
     raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeUpvalueLimit,
@@ -1095,7 +1133,13 @@ var
 begin
   for I := 0 to High(FParameterNames) do
     if FParameterNames[I] = AName then
+    begin
+      if Assigned(FCompileProfile) then
+        FCompileProfile.Count(ccParameterNameProbes, I + 1);
       Exit(True);
+    end;
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccParameterNameProbes, Length(FParameterNames));
   Result := False;
 end;
 
@@ -1124,6 +1168,8 @@ begin
   // Only the innermost open switch reaches a clause boundary: a switch
   // nested in a clause has ended before the next clause of its own begins.
   Kept := FCaseClauseMarks[FCaseClauseMarkCount - 1];
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccLocalListScans, FSettledLocalCount - Kept);
   for I := Kept to FSettledLocalCount - 1 do
   begin
     Index := FSettledLocals[I];
@@ -1602,6 +1648,8 @@ var
 begin
   Result.Depth := ADepth;
   Result.LocalCount := FLocalCount;
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccLocalListScans, FLocalCount);
   for I := 0 to FLocalCount - 1 do
     if FLocals[I].Depth > ADepth then
       Inc(FLocals[I].SuspendCount);
