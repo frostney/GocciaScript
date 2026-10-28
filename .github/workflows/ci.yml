@@ -124,6 +124,9 @@ jobs:
       - name: Check JavaScript test-suite structure
         run: bun run scripts/check-test-structure.ts
 
+      - name: Check parallel CI compilation
+        run: python3 .github/scripts/test-compile-programs.py
+
       - name: Check CI report publishing helpers
         run: node --test .github/scripts/test-report-publishing.js
 
@@ -267,49 +270,15 @@ jobs:
             "  BAKED_BUILD_DATE = '$GC_BUILD_DATE';" \
             > source/units/Goccia.Version.Generated.inc
 
-          # The fpc driver picks the target's compiler, and the toolchain's
-          # fpc.cfg supplies its units and binutils.
-          build_program() {
-            local src="$1"
-            shift
-            echo ""
-            echo "=== Building $(basename "${src%.*}") for ${{ matrix.target }} ==="
-            fpc -P"${CPU}" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-              -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app "$@" -Fu./souffle \
-              -Fi./source/units -Fi./source/shared -Fi./souffle \
-              -FU"build/compiled" -FE"build" \
-              $EXTRA_FLAGS \
-              "$src"
-          }
-
-          # Build program entrypoints
-          shopt -s nullglob
-          mkdir -p build/compiled
-          entrypoints=(./source/app/*.dpr)
-          if [ "${#entrypoints[@]}" -eq 0 ]; then
-            echo "::error::No .dpr entrypoints found in source/app/"
-            exit 1
+          # Use the runner's cores without sharing FPC unit/resource caches.
+          # All programs still receive -B and the same production flags.
+          if [ "$OS" = darwin ]; then
+            JOBS="$(sysctl -n hw.logicalcpu)"
+          else
+            JOBS="$(nproc)"
           fi
-
-          for src in "${entrypoints[@]}"; do
-            build_program "$src"
-          done
-
-          # Build test binaries from every tree build.pas searches, so the
-          # source/app tests also run on the targets PR CI does not cover.
-          for src in $(find source/units source/shared source/app -name '*.Test.pas'); do
-            build_program "$src"
-          done
-
-          # Compliance runners are explicit CI targets. They live outside the
-          # release-entrypoint glob so they cannot enter release archives.
-          for src in ./source/app/compliance/*.dpr; do
-            build_program "$src" -Fu./source/app/compliance
-          done
-
-          echo ""
-          echo "=== Build artifacts for ${{ matrix.target }} ==="
-          ls -la build/
+          if [ "$JOBS" -gt 4 ]; then JOBS=4; fi
+          python3 .github/scripts/compile-programs.py --jobs "$JOBS" "$CPU" "$OS" -- $EXTRA_FLAGS
 
       - name: Stage build artifacts
         # -Xs already strips the ELF and PE binaries. Only Mach-O needs the
@@ -332,11 +301,30 @@ jobs:
           fi
 
       - name: Upload build artifacts
+        id: upload-build
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gocciascript-${{ matrix.target }}
           retention-days: 1
           path: ci-artifacts/*
+          if-no-files-found: error
+
+      - name: Wait before retrying build upload
+        if: steps.upload-build.outcome == 'failure'
+        run: sleep 10
+
+      - name: Retry build artifact upload
+        if: steps.upload-build.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gocciascript-${{ matrix.target }}
+          retention-days: 1
+          path: ci-artifacts/*
+          if-no-files-found: error
+          # This job is the only producer of this target's artifact. Replace
+          # an incomplete upload if the first attempt failed after creation.
+          overwrite: true
 
   test:
     needs: build

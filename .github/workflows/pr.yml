@@ -168,6 +168,9 @@ jobs:
       - name: Check JavaScript test-suite structure
         run: bun run scripts/check-test-structure.ts
 
+      - name: Check parallel CI compilation
+        run: python3 .github/scripts/test-compile-programs.py
+
       - name: Check CI report publishing helpers
         run: node --test .github/scripts/test-report-publishing.js
 

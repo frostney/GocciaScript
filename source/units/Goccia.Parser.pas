@@ -342,7 +342,7 @@ type
 
     // Function body parsing: (params) { stmts } -> function expression
     function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
-    function ParseFunctionBodyBlock: TGocciaBlockStatement;
+    function ParseFunctionBodyBlock(const AParameters: TGocciaParameterArray = nil): TGocciaBlockStatement;
 
     // Destructuring pattern parsing
     function ParsePattern: TGocciaDestructuringPattern;
@@ -456,7 +456,7 @@ type
       const AStatement: TGocciaStatement; const ALine, AColumn: Integer);
     function DeclarationStatement: TGocciaStatement;
     function ExpressionStatement: TGocciaStatement;
-    function BlockStatement: TGocciaBlockStatement;
+    function BlockStatement(const AFunctionsAreVar: Boolean = False): TGocciaBlockStatement;
     function IfStatement: TGocciaStatement;
     function VarStatement: TGocciaStatement;
     function ForStatement: TGocciaStatement;
@@ -1082,19 +1082,21 @@ begin
   end;
 end;
 
-{ ES2026 §15.7.1 Static Semantics: Early Errors for ClassStaticBlockBody: a
-  duplicate entry in the LexicallyDeclaredNames of the statement list, or a
-  name that is both lexically declared and in its VarDeclaredNames (§8.2.6,
-  the TopLevelVarDeclaredNames: var declarations at any depth outside nested
-  functions, and the top-level function declarations), is a SyntaxError. The
-  statements are checked in order, so the error points at the statement
-  that declares the name a second time. }
-procedure ValidateClassStaticBlockDeclarations(
-  const ABody: TGocciaBlockStatement; const AFileName: string;
-  const ASourceLines: TStringList);
+{ ES2026 §14.2.1, §14.12.1, §15.2.1 and §15.7.1: declarations in
+  a statement list. Functions are lexical in blocks and case blocks, but var
+  scoped in function bodies and static blocks. Only ordinary block functions
+  may repeat in non-strict compatibility code (B.3.2). Membership is hashed;
+  the lists retain duplicates within a binding pattern until checked here. }
+procedure ValidateStatementListDeclarations(
+  const ANodes: array of TGocciaASTNode;
+  const AFunctionsAreVar, AAllowDuplicateFunctions: Boolean;
+  const AParameterNames: TUnicodeStringList;
+  const AFileName: string; const ASourceLines: TStringList);
 var
-  LexicalNames, VarNames, StatementNames: TUnicodeStringList;
+  LexicalNames, VarNames, FunctionNames, StatementNames: TUnicodeStringList;
   Node: TGocciaASTNode;
+  Declaration: TGocciaFunctionDeclaration;
+  IsLexicalFunction, AllowRepeatedFunction: Boolean;
   I, J: Integer;
 
   procedure RaiseAlreadyDeclared(const AName: string);
@@ -1105,25 +1107,51 @@ var
   end;
 
 begin
-  if not Assigned(ABody) or (ABody.Nodes.Count = 0) then
+  if Length(ANodes) = 0 then
     Exit;
   LexicalNames := TUnicodeStringList.Create;
   VarNames := TUnicodeStringList.Create;
+  FunctionNames := TUnicodeStringList.Create;
   StatementNames := TUnicodeStringList.Create;
   try
-    for I := 0 to ABody.Nodes.Count - 1 do
+    for I := 0 to High(ANodes) do
     begin
-      Node := ABody.Nodes[I];
+      Node := ANodes[I];
+      Declaration := nil;
+      if Node is TGocciaFunctionDeclaration then
+        Declaration := TGocciaFunctionDeclaration(Node)
+      else if Node is TGocciaExportFunctionDeclaration then
+        Declaration := TGocciaExportFunctionDeclaration(Node).Declaration;
+      IsLexicalFunction := not AFunctionsAreVar and Assigned(Declaration);
+      AllowRepeatedFunction := False;
       StatementNames.Clear;
-      CollectLexicallyDeclaredNames(Node, StatementNames);
+      if IsLexicalFunction then
+      begin
+        StatementNames.Add(Declaration.Name);
+        AllowRepeatedFunction := AAllowDuplicateFunctions and
+          not Declaration.FunctionExpression.IsAsync and
+          not Declaration.FunctionExpression.IsGenerator;
+      end
+      else
+        CollectLexicallyDeclaredNames(Node, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if LexicalNames.HasString(StatementNames[J]) or
-           VarNames.HasString(StatementNames[J]) then
+        if (LexicalNames.HasString(StatementNames[J]) and
+            not (AllowRepeatedFunction and
+                 FunctionNames.HasString(StatementNames[J]))) or
+           VarNames.HasString(StatementNames[J]) or
+           (Assigned(AParameterNames) and
+            AParameterNames.HasString(StatementNames[J])) then
           RaiseAlreadyDeclared(StatementNames[J]);
         LexicalNames.Add(StatementNames[J]);
+        if AllowRepeatedFunction then
+          FunctionNames.Add(StatementNames[J]);
       end;
+      if IsLexicalFunction then
+        Continue;
       StatementNames.Clear;
+      // Standard VarDeclaredNames excludes Annex B's conditional synthetic
+      // vars: a lexical shadow suppresses those vars instead of conflicting.
       CollectVarBindingNamesFromNode(Node, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
@@ -1134,8 +1162,97 @@ begin
     end;
   finally
     StatementNames.Free;
+    FunctionNames.Free;
     VarNames.Free;
     LexicalNames.Free;
+  end;
+end;
+
+// ES2026 §14.7.4.1, §14.7.5.1 and §14.15.1: loop/catch bindings
+// cannot repeat, or conflict with vars in their body. A simple catch parameter
+// permits the legacy var redeclaration (B.3.4), but never a lexical declaration.
+procedure ValidateScopedStatementBindings(const ANode: TGocciaStatement;
+  const AFileName: string; const ASourceLines: TStringList);
+var
+  Names, SeenNames, VarNames: TUnicodeStringList;
+  Body: TGocciaStatement;
+  Pattern: TGocciaDestructuringPattern;
+  BindingName: string;
+  RejectVarNames, IsCatch: Boolean;
+  DeclarationNodes: array of TGocciaASTNode;
+  I: Integer;
+begin
+  if not ((ANode is TGocciaForStatement) or
+          (ANode is TGocciaForOfStatement) or
+          (ANode is TGocciaForInStatement) or
+          (ANode is TGocciaTryStatement)) then
+    Exit;
+  Names := TUnicodeStringList.Create;
+  SeenNames := TUnicodeStringList.Create;
+  VarNames := TUnicodeStringList.Create;
+  try
+    Pattern := nil;
+    BindingName := '';
+    Body := nil;
+    IsCatch := False;
+    RejectVarNames := True;
+    if ANode is TGocciaForStatement then
+    begin
+      CollectLexicallyDeclaredNames(TGocciaForStatement(ANode).Init, Names);
+      Body := TGocciaForStatement(ANode).Body;
+    end
+    else if ANode is TGocciaForOfStatement then
+    begin
+      if TGocciaForOfStatement(ANode).IsVar then
+        Exit;
+      Pattern := TGocciaForOfStatement(ANode).BindingPattern;
+      BindingName := TGocciaForOfStatement(ANode).BindingName;
+      Body := TGocciaForOfStatement(ANode).Body;
+    end
+    else if ANode is TGocciaForInStatement then
+    begin
+      if TGocciaForInStatement(ANode).IsVar then
+        Exit;
+      Pattern := TGocciaForInStatement(ANode).BindingPattern;
+      BindingName := TGocciaForInStatement(ANode).BindingName;
+      Body := TGocciaForInStatement(ANode).Body;
+    end
+    else if ANode is TGocciaTryStatement then
+    begin
+      IsCatch := True;
+      Pattern := TGocciaTryStatement(ANode).CatchBindingPattern;
+      BindingName := TGocciaTryStatement(ANode).CatchParam;
+      Body := TGocciaTryStatement(ANode).CatchBlock;
+      RejectVarNames := Assigned(Pattern);
+    end;
+    if Assigned(Pattern) then
+      CollectPatternBindingNames(Pattern, Names)
+    else if BindingName <> '' then
+      Names.Add(BindingName);
+    if Names.Count = 0 then
+      Exit;
+    if RejectVarNames then
+      CollectVarBindingNamesFromNode(Body, VarNames);
+    for I := 0 to Names.Count - 1 do
+    begin
+      if SeenNames.HasString(Names[I]) or VarNames.HasString(Names[I]) then
+        raise TGocciaSyntaxError.Create(
+          Format(SErrorIdentifierAlreadyDeclared, [Names[I]]), ANode.Line,
+          ANode.Column, AFileName, ASourceLines, SSuggestAlreadyDeclared);
+      SeenNames.Add(Names[I]);
+    end;
+    if IsCatch and Assigned(Body) then
+    begin
+      SetLength(DeclarationNodes, TGocciaBlockStatement(Body).Nodes.Count);
+      for I := 0 to High(DeclarationNodes) do
+        DeclarationNodes[I] := TGocciaBlockStatement(Body).Nodes[I];
+      ValidateStatementListDeclarations(DeclarationNodes, False, True,
+        SeenNames, AFileName, ASourceLines);
+    end;
+  finally
+    VarNames.Free;
+    SeenNames.Free;
+    Names.Free;
   end;
 end;
 
@@ -1145,15 +1262,9 @@ var
 begin
   OuterDirectEvalUsage := EnterDirectEvalScope;
   try
-    Result := BlockStatement;
+    Result := BlockStatement(True);
   finally
     LeaveDirectEvalScope(OuterDirectEvalUsage);
-  end;
-  try
-    ValidateClassStaticBlockDeclarations(Result, FFileName, FSourceLines);
-  except
-    Result.Free;
-    raise;
   end;
 end;
 
@@ -1900,7 +2011,7 @@ begin
     Exit;
 
   Expression := TGocciaExpressionStatement(AStatement).Expression;
-  if not (Expression is TGocciaLiteralExpression) then
+  if not (Expression is TGocciaLiteralExpression) or Expression.Parenthesized then
     Exit;
 
   Literal := TGocciaLiteralExpression(Expression).Value;
@@ -3409,6 +3520,18 @@ begin
           Consume(gttArrow, 'Expected "=>" in async arrow function',
             SSuggestArrowFunctionSyntax);
 
+          SetLength(Parameters, 1);
+          Parameters[0].Name := Name;
+          Parameters[0].DefaultValue := nil;
+          Parameters[0].Pattern := nil;
+          Parameters[0].IsPattern := False;
+          Parameters[0].IsRest := False;
+          Parameters[0].IsOptional := False;
+          Parameters[0].TypeAnnotation := '';
+          Parameters[0].StartOffset := Token.Span.StartOffset;
+          Parameters[0].EndOffset := Token.Span.EndOffset;
+
+
           SavedInAsyncFunction := FInAsyncFunction;
           SavedInGeneratorFunction := FInGeneratorFunction;
           Inc(FFunctionDepth);
@@ -3419,7 +3542,7 @@ begin
           OuterDirectEvalUsage := EnterDirectEvalScope;
           try
             if Match(gttLeftBrace) then
-              ArrowBody := ParseFunctionBodyBlock
+              ArrowBody := ParseFunctionBodyBlock(Parameters)
             else
               ArrowBody := AssignmentInheritingConsequentDepth;
           finally
@@ -3431,16 +3554,6 @@ begin
               EndProfiledFunction;
           end;
 
-          SetLength(Parameters, 1);
-          Parameters[0].Name := Name;
-          Parameters[0].DefaultValue := nil;
-          Parameters[0].Pattern := nil;
-          Parameters[0].IsPattern := False;
-          Parameters[0].IsRest := False;
-          Parameters[0].IsOptional := False;
-          Parameters[0].TypeAnnotation := '';
-          Parameters[0].StartOffset := Token.Span.StartOffset;
-          Parameters[0].EndOffset := Token.Span.EndOffset;
 
           if HasUseStrictDirective(ArrowBody) then
             ValidateParameterEarlyErrors(Parameters, Line, Column, True,
@@ -5014,7 +5127,7 @@ begin
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
     try
-      Body := ParseFunctionBodyBlock;
+      Body := ParseFunctionBodyBlock(Params);
       SetterIsStrict := (not EffectiveNonStrictModeEnabled) or
         HasUseStrictDirective(Body);
       ValidateParameterEarlyErrors(Params, Line, Column, True, False, False,
@@ -5075,7 +5188,7 @@ begin
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
     try
-      Body := ParseFunctionBodyBlock;
+      Body := ParseFunctionBodyBlock(Parameters);
       FunctionIsStrict := FStrictModeActive or HasUseStrictDirective(Body);
       ValidateParameterEarlyErrors(Parameters, ALine, AColumn,
         FunctionIsStrict, AIsAsync, AIsGenerator, FunctionIsStrict);
@@ -5103,9 +5216,11 @@ end;
 // makes a body block cover the braces and nothing else: a method's body used
 // to start at its name, so slicing that range gave back the whole method
 // definition rather than its body.
-function TGocciaParser.ParseFunctionBodyBlock: TGocciaBlockStatement;
+function TGocciaParser.ParseFunctionBodyBlock(
+  const AParameters: TGocciaParameterArray): TGocciaBlockStatement;
 var
-  BraceLine, BraceColumn: Integer;
+  BraceLine, BraceColumn, I: Integer;
+  ParameterNames: TUnicodeStringList;
   Statements: TObjectList<TGocciaASTNode>;
   Stmt: TGocciaStatement;
   SavedStrictModeActive: Boolean;
@@ -5140,6 +5255,11 @@ begin
               DirectiveHasForbiddenEscape;
             if IsUseStrict then
             begin
+              // ES2026 §15.2.1 (also arrows, methods and async/generators).
+              if not ParameterListIsSimple(AParameters) then
+                raise TGocciaSyntaxError.Create(
+                  'Use strict directive is not allowed with non-simple parameters',
+                  Stmt.Line, Stmt.Column, FFileName, FSourceLines);
               if PrologueHasForbiddenEscape then
                 raise TGocciaSyntaxError.Create(
                   'Strict mode directive prologues must not contain decimal escapes',
@@ -5155,6 +5275,18 @@ begin
 
       Consume(gttRightBrace, 'Expected "}" after function body',
         SSuggestCloseBlock);
+      ParameterNames := TUnicodeStringList.Create;
+      try
+        for I := 0 to High(AParameters) do
+          if AParameters[I].IsPattern then
+            CollectPatternBindingNames(AParameters[I].Pattern, ParameterNames, True)
+          else
+            ParameterNames.Add(AParameters[I].Name);
+        ValidateStatementListDeclarations(Statements.ToArray, True, False,
+          ParameterNames, FFileName, FSourceLines);
+      finally
+        ParameterNames.Free;
+      end;
       Result := TGocciaBlockStatement.Create(Statements,
         SourceSpanAtPosition(BraceLine, BraceColumn));
     except
@@ -5234,7 +5366,7 @@ begin
       SavedDirectLabelStart);
     try
       if Match(gttLeftBrace) then
-        Body := ParseFunctionBodyBlock
+        Body := ParseFunctionBodyBlock(Parameters)
       else
         Body := AssignmentInheritingConsequentDepth;
       if HasUseStrictDirective(Body) then
@@ -5338,7 +5470,7 @@ begin
       OuterDirectEvalUsage := EnterDirectEvalScope;
       try
         if Match(gttLeftBrace) then
-          ArrowBody := ParseFunctionBodyBlock
+          ArrowBody := ParseFunctionBodyBlock(Parameters)
         else
           ArrowBody := AssignmentInheritingConsequentDepth;
       finally
@@ -5490,6 +5622,7 @@ function TGocciaParser.Statement: TGocciaStatement;
 begin
   EnterNesting;
   Result := UnguardedStatement;
+  ValidateScopedStatementBindings(Result, FFileName, FSourceLines);
   LeaveNesting;
 end;
 
@@ -6085,7 +6218,8 @@ begin
   end;
 end;
 
-function TGocciaParser.BlockStatement: TGocciaBlockStatement;
+function TGocciaParser.BlockStatement(
+  const AFunctionsAreVar: Boolean): TGocciaBlockStatement;
 var
   Nodes: TObjectList<TGocciaASTNode>;
   Line, Column: Integer;
@@ -6099,6 +6233,8 @@ begin
 
     Consume(gttRightBrace, 'Expected "}" after block',
       SSuggestCloseBlock);
+    ValidateStatementListDeclarations(Nodes.ToArray, AFunctionsAreVar,
+      EffectiveNonStrictModeEnabled, nil, FFileName, FSourceLines);
   except
     Nodes.Free;
     raise;
@@ -7477,9 +7613,7 @@ var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
   Name: string;
-  Line, Column, BraceLine, BraceColumn: Integer;
-  Statements: TObjectList<TGocciaASTNode>;
-  Stmt: TGocciaStatement;
+  Line, Column: Integer;
   MethodGenericParams, MethodReturnType: string;
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
@@ -7518,51 +7652,17 @@ begin
 
     Consume(gttLeftBrace, 'Expected "{" before method body',
       SSuggestOpenBraceMethodBody);
-    // The body is the braces, not the method: a class method inlines the
-    // block ParseFunctionBodyBlock builds for everything else, so it has to
-    // take the same position for it.
-    BraceLine := Previous.Line;
-    BraceColumn := Previous.Column;
-
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
       SavedDirectLabelStart);
     try
-      Statements := TObjectList<TGocciaASTNode>.Create(True);
-      try
-        while not Check(gttRightBrace) and not IsAtEnd do
-        begin
-          Stmt := Statement;
-          if Stmt is TGocciaExpressionStatement then
-          begin
-            if not Check(gttSemicolon) then
-              Statements.Add(Stmt)
-            else
-            begin
-              Advance;
-              Statements.Add(Stmt);
-            end;
-          end
-          else
-            Statements.Add(Stmt);
-        end;
-
-        Consume(gttRightBrace, 'Expected "}" after method body',
-          SSuggestCloseBlock);
-        Body := TGocciaBlockStatement.Create(Statements,
-          SourceSpanAtPosition(BraceLine, BraceColumn));
-        // The block owns the list now, and the arena frees the block.
-        Statements := nil;
-        Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, SourceSpanAtPosition(Line, Column));
-        Result.IsAsync := AIsAsync;
-        Result.IsGenerator := AIsGenerator;
-        Result.GenericParams := MethodGenericParams;
-        Result.ReturnType := MethodReturnType;
-        Result.SourceText := ExtractSourceRange(Line, Column);
-        Result.DirectEvalUsage := FDirectEvalUsage;
-      except
-        Statements.Free;
-        raise;
-      end;
+      Body := ParseFunctionBodyBlock(Parameters);
+      Result := TGocciaClassMethod.Create(Name, Parameters, Body, AIsStatic, SourceSpanAtPosition(Line, Column));
+      Result.IsAsync := AIsAsync;
+      Result.IsGenerator := AIsGenerator;
+      Result.GenericParams := MethodGenericParams;
+      Result.ReturnType := MethodReturnType;
+      Result.SourceText := ExtractSourceRange(Line, Column);
+      Result.DirectEvalUsage := FDirectEvalUsage;
     finally
       LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
         SavedDirectLabelStart);
@@ -9297,6 +9397,9 @@ end;
 function TGocciaParser.ParseProgram: TGocciaProgram;
 var
   Statements: TObjectList<TGocciaStatement>;
+  DeclarationNodes: array of TGocciaASTNode;
+  DeclarationCount, I: Integer;
+  IsModuleGoal: Boolean;
   Stmt: TGocciaStatement;
   SavedStrictModeActive: Boolean;
   SavedStrictModeSourceActive: Boolean;
@@ -9355,6 +9458,21 @@ begin
 
       if FDetectModuleGoal then
         SettleDetectedModuleGoal;
+      // ES2026 §16.1.1 / §16.2.1.1: ScriptBody / ModuleBody declarations.
+      // Only a Module binds its imports as lexical names; in a Script they
+      // meet the other declarations at run time (ADR 0140).
+      IsModuleGoal := FModuleSource or FModuleSyntaxDetected;
+      DeclarationCount := 0;
+      SetLength(DeclarationNodes, Statements.Count);
+      for I := 0 to Statements.Count - 1 do
+        if IsModuleGoal or not (Statements[I] is TGocciaImportDeclaration) then
+        begin
+          DeclarationNodes[DeclarationCount] := Statements[I];
+          Inc(DeclarationCount);
+        end;
+      SetLength(DeclarationNodes, DeclarationCount);
+      ValidateStatementListDeclarations(DeclarationNodes, not IsModuleGoal,
+        False, nil, FFileName, FSourceLines);
       Result := TGocciaProgram.Create(Statements);
       Result.HasTopLevelAwait := FHasTopLevelAwait;
       Result.DirectEvalUsage := FDirectEvalUsage;
@@ -11155,6 +11273,8 @@ end;
 function TGocciaParser.SwitchStatement: TGocciaStatement;
 var
   Discriminant: TGocciaExpression;
+  DeclarationNodes: TList<TGocciaASTNode>;
+  I, J: Integer;
   Cases: TObjectList<TGocciaCaseClause>;
   CaseClause: TGocciaCaseClause;
   TestExpression: TGocciaExpression;
@@ -11226,6 +11346,16 @@ begin
 
     Consume(gttRightBrace, 'Expected "}" after switch body',
       SSuggestCloseSwitchBody);
+    DeclarationNodes := TList<TGocciaASTNode>.Create;
+    try
+      for I := 0 to Cases.Count - 1 do
+        for J := 0 to Cases[I].Consequent.Count - 1 do
+          DeclarationNodes.Add(Cases[I].Consequent[J]);
+      ValidateStatementListDeclarations(DeclarationNodes.ToArray, False,
+        EffectiveNonStrictModeEnabled, nil, FFileName, FSourceLines);
+    finally
+      DeclarationNodes.Free;
+    end;
   except
     Cases.Free;
     raise;
