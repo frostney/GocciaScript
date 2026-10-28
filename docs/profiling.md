@@ -42,6 +42,34 @@ Production dispatch does not record opcodes. `--profile=opcodes` and `--profile=
 echo 'const x = 1 + 2; x;' | ./build/GocciaRunner --profile=all
 ```
 
+## Directories and deterministic captures
+
+`GocciaRunner directory --profile=all --profile-output=profile.json` writes
+one report covering every entry file, including their imported modules. With
+profiling enabled, the runner executes entries serially on the reporting
+thread, as BenchmarkRunner already does; `--jobs` still controls parallelism
+when profiling is off. Directory discovery is sorted. Counts accumulate across
+entries, but opcode pairs never join the last instruction of one entry to the
+first of another. Runtime function rows retain each template's file and line;
+compile records at the same source position accumulate. Flame graphs combine
+identical displayed stack paths, as they do for a single file. A script failure
+still exits nonzero and retains the profiles of the entries that ran.
+
+For repeatable **Runner** captures, add `--profile-deterministic`. It implies
+`--profile=all` unless a mode was specified, installs the deterministic guest
+clock and random source, and reports every function and compile timing field
+as zero while retaining counts, locations and all JSON keys. It works with
+`--profile=compile` too. Its flame graph is empty because zero-time stacks have
+no weight. Use normal profiling to measure time. External inputs and granted
+host services must also be held constant for repeatable results. Runner's
+flag does not change BenchmarkRunner's existing once-per-benchmark capture
+behavior described below.
+
+```bash
+./build/GocciaRunner scripts/ --profile-deterministic --profile-output=counts.json
+./build/GocciaRunner scripts/ --profile=compile --profile-deterministic --profile-output=compile-counts.json
+```
+
 ## Report Sections
 
 ### Opcode Histogram (`--profile=opcodes`)
@@ -97,6 +125,15 @@ Counts the times an object's layout could not be fully interned in the shape sys
 Per-function breakdown: self-time (exclusive — time in the function minus time in callees), total-time (inclusive — time in the function and its callees), call count, and allocation count (heap-allocated `TGocciaValue` instances created during that function's execution).
 
 Total time counts each outermost activation once. A call that starts while the same function already has a frame on the profiling stack (direct or mutual recursion, or a re-entry through a callback such as `arr.map(f)` inside `f`) adds nothing to the function's total, because the outer frame's time already contains it. The self times add up to the profiled time, and no function's total exceeds it; when all the work runs inside `<module>`, no total exceeds `<module>`'s. Work that runs after `<module>` returns, such as a promise job or a host callback, is outside `<module>`'s total. Calls counts every frame, including each resumption of a generator or async function after a `yield` or `await`. A proper tail call ends the caller's frame before the callee's starts: the caller's row keeps the time up to the call, the callee's work is not in the caller's total, and the flame graph shows the callee in the caller's place.
+
+Function timing excludes the measured time spent registering templates and
+maintaining the profiling stack, including flame-path interning. Returns update
+an interned path node in constant time instead of walking every ancestor.
+Expanded paths are constructed only for a flame-graph export. Instrumentation
+still has a cost: clock reads, enabled-mode dispatch and allocation counters
+can perturb execution, so compare elapsed time with an unprofiled run when
+measuring profiler overhead. These times are not an estimate of completely
+uninstrumented execution.
 
 Allocation counts belong to the active profiled function, including allocations
 made by native built-ins on its behalf. Collection follows each native entry
@@ -297,7 +334,7 @@ The profiler's allocation count per function tells you *which JS function* drive
 | `Goccia.Profiler.Compile.pas` | The compile profile: per-function records, counters, nodes by kind, and its console output and JSON section |
 | `Goccia.Bytecode.OpCodeNames.pas` | Opcode ordinal to human-readable name (cold path, report generation only) |
 
-The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag. The instance is per-thread, so parallel workers never share profiler state. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack for correct self-time calculation across recursive calls, and counts each function's frames on that stack so that only its outermost frame adds to its total time. Allocation tracking hooks into `TGocciaValue.AfterConstruction` via `GThreadPolls.ProfilingAllocations`, a flag in the per-thread poll word ([Thread Variables on Hot Paths](core-patterns.md#thread-variables-on-hot-paths)), attributing each allocation to the function on top of the profiler's timing stack.
+The profiler follows the same singleton pattern as `Goccia.Coverage.pas`: `Initialize`/`Instance`/`Shutdown`, boolean `Enabled` flag. The instance is per-thread, so parallel workers never share profiler state. Opcode counting and pair tracking use static arrays (no heap allocation in the hot path). Function profiling uses a timing stack and a clock adjusted for registration and frame bookkeeping, with parent-linked interned flame paths, and counts each function's frames on that stack so that only its outermost frame adds to its total time. Allocation tracking hooks into `TGocciaValue.AfterConstruction` via `GThreadPolls.ProfilingAllocations`, a flag in the per-thread poll word ([Thread Variables on Hot Paths](core-patterns.md#thread-variables-on-hot-paths)), attributing each allocation to the function on top of the profiler's timing stack.
 
 When profiling is disabled, the remaining cost is small but not zero: each allocation reads the per-thread poll word `GThreadPolls.Any`, which it reads anyway for the timeout and the instruction limit, and each native VM entry (`ExecuteClosureRegistersInternal`) saves that flag, sets it from the VM's function-profiling state, and restores it on exit. A callback-heavy A/B run (6M `map`/`reduce` callbacks) put that save/restore within run-to-run noise.
 

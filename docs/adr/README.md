@@ -175,3 +175,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0163 — goccia:ast reports the committed token stream, as typed ranges, on request](0163-goccia-ast-reports-the-committed-token-stream.md)
 - [0164 — A compile profile reports lex, parse and compile time and the compiler's work per source function](0164-compile-phase-profile.md)
 - [0165 — The dispatch loop keeps its hot arms first and aligned](0165-the-dispatch-loop-keeps-its-hot-arms-first-and-aligned.md)
+- [0166 — Profile stack paths incrementally and aggregate directory captures on one thread](0166-profiler-paths-and-directory-captures.md)

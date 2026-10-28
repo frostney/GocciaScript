@@ -387,6 +387,109 @@ export function verifyRecursiveTotals(): void {
   }
 }
 
+/** Directory profiles accumulate every entry on the reporting thread. */
+export function verifyDirectoryProfiles(): void {
+  const tmp = mkdtemp("goccia-directory-profile-");
+  try {
+    const dir = join(tmp, "inputs");
+    mkdirSync(dir);
+    for (const name of ["alpha", "beta"]) {
+      writeFileSync(join(dir, `${name}.js`),
+        `const ${name} = (x) => ({ value: x + 1 });\n${name}(Math.random() < 0.5 ? 1 : 2);\n`);
+    }
+    const run = (input: string, mode: string, output: string, extra: string[] = []) => {
+      const proc = Bun.spawnSync([resolve(RUNNER), input, `--profile=${mode}`,
+        `--profile-output=${output}`, ...extra],
+        { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+      if (proc.exitCode !== 0)
+        throw new Error(`directory profile exited ${proc.exitCode}: ${proc.stdout}\n${proc.stderr}`);
+      return JSON.parse(readFileSync(output, "utf8"));
+    };
+    const counts = (rows: { count: number }[], key: (row: any) => string) =>
+      Object.fromEntries(rows.map((row) => [key(row), row.count]).sort(([a], [b]) => String(a).localeCompare(String(b))));
+    for (const mode of ["opcodes", "functions", "compile", "all"]) {
+      const output = join(tmp, `${mode}.json`);
+      const profile = run(dir, mode, output, ["--jobs=4", "--profile-deterministic"]);
+      const first = readFileSync(output, "utf8");
+      run(dir, mode, output, ["--jobs=1", "--output=json", "--profile-deterministic"]);
+      if (readFileSync(output, "utf8") !== first)
+        throw new Error(`${mode}: directory captures must repeat across worker counts and output modes`);
+      const individual = ["alpha", "beta"].map((name) =>
+        run(join(dir, `${name}.js`), mode, join(tmp, `${mode}-${name}.json`), ["--profile-deterministic"]));
+      for (const [section, key] of [
+        ["opcodes", (row: any) => row.opcode],
+        ["opcodePairs", (row: any) => `${row.prev}/${row.cur}`],
+      ] as const) {
+        const summed = new Map<string, number>();
+        for (const one of individual) for (const row of one[section])
+          summed.set(key(row), (summed.get(key(row)) ?? 0) + row.count);
+        const expected = Object.fromEntries([...summed].sort(([a], [b]) => a.localeCompare(b)));
+        if (JSON.stringify(counts(profile[section], key)) !== JSON.stringify(expected))
+          throw new Error(`${mode}: ${section} must equal independent files, without cross-file transitions`);
+      }
+      const opcodes = mode === "opcodes" || mode === "all";
+      if ((profile.opcodes.length > 0) !== opcodes)
+        throw new Error(`${mode}: wrong opcode population`);
+      for (const field of ["hits", "misses", "total"])
+        if (profile.scalarFastPath[field] !== individual.reduce((sum, one) => sum + one.scalarFastPath[field], 0))
+          throw new Error(`${mode}: scalar ${field} must sum across files`);
+      const functions = mode === "functions" || mode === "all";
+      if ((profile.functions.length > 0) !== functions)
+        throw new Error(`${mode}: wrong function population`);
+      if (functions) for (const name of ["alpha", "beta"]) {
+        const fn = profile.functions.find((row: FunctionProfile) => row.name === name);
+        if (fn?.calls !== 1 || fn.allocations <= 0 || fn.selfTimeNs !== 0 || fn.totalTimeNs !== 0)
+          throw new Error(`${mode}: ${name} needs calls/allocations and zero deterministic times`);
+      }
+      if ((profile.compile.files.length > 0) !== (mode === "compile"))
+        throw new Error(`${mode}: wrong compile population`);
+      if (mode === "compile") {
+        if (profile.compile.files.length !== 2)
+          throw new Error("Directory compile profile must contain both inputs and no bootstrap files");
+        for (const counter of COMPILE_COUNTERS)
+          if (profile.compile.counters[counter] !== individual.reduce((sum, one) => sum + one.compile.counters[counter], 0))
+            throw new Error(`Directory compile counter ${counter} must sum across files`);
+        for (const fn of profile.compile.functions)
+          if (fn.lexTimeNs !== 0 || fn.parseTimeNs !== 0 || fn.compileTimeNs !== 0)
+            throw new Error("Deterministic compile profiles must zero wall-clock fields");
+      }
+      // Normal captures retain real timing and work through both CLI report paths.
+      const timed = run(dir, mode, output, ["--jobs=4", "--output=json"]);
+      if (functions && !timed.functions.every((fn: any) => fn.totalTimeNs > 0))
+        throw new Error(`${mode}: normal directory function captures need real times`);
+      if (mode === "compile" && !timed.compile.files.every((file: any) => file.compileTimeNs > 0))
+        throw new Error("Normal directory compile captures need real times");
+    }
+    const flame = join(tmp, "flame.txt");
+    const flameRun = Bun.spawnSync([resolve(RUNNER), dir, "--jobs=4", "--profile=functions",
+      "--profile-format=flamegraph", `--profile-output=${flame}`],
+      { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+    if (flameRun.exitCode !== 0 || !readFileSync(flame, "utf8").includes("<module>"))
+      throw new Error("Directory flame export must include executed stacks");
+    const deterministicFlame = Bun.spawnSync([resolve(RUNNER), dir,
+      "--profile-deterministic", "--profile-format=flamegraph", `--profile-output=${flame}`],
+      { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+    if (deterministicFlame.exitCode !== 0 || readFileSync(flame, "utf8").trim() !== "")
+      throw new Error("Zero-time deterministic captures must emit no flame weights");
+    const implied = join(tmp, "implied.json");
+    const defaultMode = Bun.spawnSync([resolve(RUNNER), dir,
+      "--profile-deterministic", `--profile-output=${implied}`],
+      { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+    if (defaultMode.exitCode !== 0) throw new Error("Deterministic capture must imply all");
+    const impliedProfile = JSON.parse(readFileSync(implied, "utf8"));
+    if (impliedProfile.opcodes.length === 0 || impliedProfile.functions.length === 0 || impliedProfile.compile.files.length !== 0)
+      throw new Error("Implicit all must populate opcodes and functions only");
+    writeFileSync(join(dir, "z-failure.js"), 'throw new Error("expected failure");\n');
+    const failedOutput = join(tmp, "failed.json");
+    const failed = Bun.spawnSync([resolve(RUNNER), dir, "--jobs=4", "--profile=all",
+      `--profile-output=${failedOutput}`], { stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+    if (failed.exitCode !== 1 || !JSON.parse(readFileSync(failedOutput, "utf8")).functions.some((fn: FunctionProfile) => fn.name === "alpha"))
+      throw new Error("A failed directory entry must retain earlier profiles and exit 1");
+  } finally {
+    clean(tmp);
+  }
+}
+
 if (import.meta.main) {
   verifyAllocationProfiles();
   console.log("Allocation profiling checks passed (loader, benchmark, nested calls, exceptions, async, generators).");
@@ -394,6 +497,8 @@ if (import.meta.main) {
   console.log("Compile profiling checks passed (per-function records, imported modules, shims excluded, all unchanged).");
   verifyCompileCounterGrowth();
   console.log("Compile counter checks passed (every counter grows with its shape, benchmark runner).");
+  verifyDirectoryProfiles();
+  console.log("Directory profiling checks passed (all modes, aggregation, determinism, failures, flame export).");
   verifyRecursiveTotals();
   console.log("Recursive total-time checks passed (direct, mutual, callback, generator, async).");
 }
