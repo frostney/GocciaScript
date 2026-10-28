@@ -33,6 +33,7 @@ uses
   Goccia.SourcePipeline,
   Goccia.Test262.Host,
   Goccia.TestSetup,
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Error,
@@ -57,6 +58,7 @@ type
     procedure TestBytecodeStrictDirectEvalCreatesVMValues;
     procedure TestDirectEvalGeneratedNameIsolation;
     procedure TestPrivateBrandRetainsIdentityThroughCollection;
+    procedure TestPrivateStampPlanFollowsNewDeclarations;
     function DirectEvalRetainedModules(const ASource: string;
       const ACalls: Integer): Integer;
     procedure TestBytecodeDirectEvalReusesCodePerSite;
@@ -75,6 +77,8 @@ type
 
 procedure TGlobalEvalTests.SetupTests;
 begin
+  Test('A cached private stamp plan follows new host declarations',
+    TestPrivateStampPlanFollowsNewDeclarations);
   Test('Private brands retain their identity through collection and failed initialization',
     TestPrivateBrandRetainsIdentityThroughCollection);
   Test('Direct eval preserves imported private names and variable objects',
@@ -262,6 +266,48 @@ begin
       BYTECODE_FUNCTION_CLASS).ToBe(True);
   finally
     Host.Free;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TGlobalEvalTests.TestPrivateStampPlanFollowsNewDeclarations;
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  ClassValue: TGocciaClassValue;
+  Receiver: TGocciaObjectValue;
+  PrivateCount: Integer;
+  Token: string;
+  Value: TGocciaValue;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  try
+    Engine := CreateEngine(Source);
+    Value := Engine.EvaluateGlobalEval(
+      'class ReturnReceiver { constructor(o) { return o; } }' +
+      'globalThis.Stamp = class extends ReturnReceiver {};' +
+      'globalThis.receiver = {}; new Stamp(receiver); Stamp',
+      '<private-stamp-plan>', Stage);
+    ClassValue := TGocciaClassValue(Value);
+    Token := ClassValue.PrivateBrandToken;
+    Receiver := TGocciaObjectValue(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('receiver'));
+    PrivateCount := 0;
+    if Assigned(Receiver.PrivateElements) then
+      PrivateCount := Receiver.PrivateElements.CountFast;
+    // The first construction cached an empty plan. A host declaration must
+    // invalidate it, so the next construction adds the new private brand.
+    ClassValue.DeclarePrivateName('#late');
+    Expect<string>(ClassValue.PrivateBrandToken).ToBe(Token);
+    Value := Engine.EvaluateGlobalEval('new Stamp({})',
+      '<private-stamp-plan>', Stage);
+    Receiver := TGocciaObjectValue(Value);
+    Expect<Boolean>(Assigned(Receiver.PrivateElements)).ToBe(True);
+    Expect<Integer>(Receiver.PrivateElements.CountFast).ToBe(PrivateCount + 1);
+  finally
     Engine.Free;
     Source.Free;
   end;

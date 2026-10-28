@@ -385,3 +385,57 @@ test("discarded classes do not give new classes access to their receiver", () =>
   });
   expect(aliased).toBe(false);
 });
+
+test("cached private fields stay isolated across alternating class evaluations", () => {
+  const create = (initial) => class {
+    #x = initial;
+    #y = initial + 1;
+
+    read(receiver) {
+      return receiver.#x + receiver.#y;
+    }
+
+    write(receiver, value) {
+      receiver.#x = value;
+      receiver.#y = value + 1;
+    }
+  };
+  const First = create(1);
+  const Second = create(10);
+  const first = new First();
+  const second = new Second();
+  const laterFirst = new First();
+  const laterSecond = new Second();
+
+  first.write(laterFirst, 20);
+  second.write(laterSecond, 30);
+  expect(first.read(first)).toBe(3);
+  expect(second.read(second)).toBe(21);
+  expect(first.read(laterFirst)).toBe(41);
+  expect(second.read(laterSecond)).toBe(61);
+  expect(() => first.read(second)).toThrow(TypeError);
+  expect(() => second.write(first, 99)).toThrow(TypeError);
+  expect(first.read(first)).toBe(3);
+});
+
+test("private stamp plans remain valid across static initialization", () => {
+  class Fields {
+    #x = 1;
+    static early = new this();
+    static #later = 2;
+    #y = 3;
+
+    read() {
+      return this.#x + this.#y + Fields.#later;
+    }
+
+    write(value) {
+      this.#x = value;
+    }
+  }
+
+  const later = new Fields();
+  Fields.early.write(10);
+  expect(Fields.early.read()).toBe(15);
+  expect(later.read()).toBe(6);
+});
