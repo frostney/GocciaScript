@@ -18,6 +18,7 @@ uses
 
 type
   TGocciaCompilerVariableKind = (cvkLocal, cvkUpvalue, cvkGlobal);
+  TGocciaExpressionTypeMemo = TDictionary<TGocciaExpression, TGocciaLocalType>;
   TGocciaCompilerExportNameArray = array of string;
 
   TGocciaCompilerLocal = record
@@ -202,6 +203,11 @@ type
     // of the value its instruction produces (see NoteBinaryResultType).
     FLastBinaryExpression: TGocciaExpression;
     FLastBinaryResultType: TGocciaLocalType;
+    // ExpressionType's answers for binary expressions (ExpressionTypeMemo),
+    // and the template and code count they hold for.
+    FTypeMemo: TGocciaExpressionTypeMemo;
+    FTypeMemoTemplate: TGocciaFunctionTemplate;
+    FTypeMemoCodeCount: Integer;
     // While the case clauses of a switch statement are compiled, the locals
     // marked initialized or given a constant value, in that order, and where
     // each open switch's next clause starts reading them (BeginCaseClauses).
@@ -351,6 +357,17 @@ type
       it back once, and only for that operand: a nested operator recorded
       later, or an operand compiled another way (folded to a constant, or
       simplified), leaves no record of AExpr. }
+    { ExpressionType's answers for the binary expressions a walk has typed,
+      for a caller that would otherwise walk them again. They hold while
+      ATemplate emits nothing but folded constants (NoteConstantEmitted),
+      which change nothing a type depends on; once anything else is emitted
+      the record is emptied when next asked for. }
+    function ExpressionTypeMemo(
+      const ATemplate: TGocciaFunctionTemplate): TGocciaExpressionTypeMemo;
+    { ATemplate's code grew from ABefore to AAfter instructions by a folded
+      constant alone. }
+    procedure NoteConstantEmitted(const ATemplate: TGocciaFunctionTemplate;
+      const ABefore, AAfter: Integer);
     procedure ForgetBinaryResultType;
     procedure NoteBinaryResultType(const AExpr: TGocciaExpression;
       const AType: TGocciaLocalType);
@@ -648,6 +665,8 @@ begin
   else
     FCompileProfile := nil;
   FLastBinaryExpression := nil;
+  FTypeMemo := nil;
+  FTypeMemoTemplate := nil;
   FSettledLocalCount := 0;
   FCaseClauseMarkCount := 0;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
@@ -668,6 +687,7 @@ begin
   FLocalIndex.Free;
   FUpvalueSlotIndex.Free;
   FUpvalueNameIndex.Free;
+  FTypeMemo.Free;
   FParameterNames.Free;
   inherited;
 end;
@@ -1457,6 +1477,27 @@ begin
     else
       FReturnConflict := True;
   end;
+end;
+
+function TGocciaCompilerScope.ExpressionTypeMemo(
+  const ATemplate: TGocciaFunctionTemplate): TGocciaExpressionTypeMemo;
+begin
+  if not Assigned(FTypeMemo) then
+    FTypeMemo := TGocciaExpressionTypeMemo.Create
+  else if (FTypeMemoTemplate <> ATemplate) or
+          (FTypeMemoCodeCount <> ATemplate.CodeCount) then
+    FTypeMemo.Clear;
+  FTypeMemoTemplate := ATemplate;
+  FTypeMemoCodeCount := ATemplate.CodeCount;
+  Result := FTypeMemo;
+end;
+
+procedure TGocciaCompilerScope.NoteConstantEmitted(
+  const ATemplate: TGocciaFunctionTemplate; const ABefore, AAfter: Integer);
+begin
+  if Assigned(FTypeMemo) and (FTypeMemoTemplate = ATemplate) and
+     (FTypeMemoCodeCount = ABefore) then
+    FTypeMemoCodeCount := AAfter;
 end;
 
 procedure TGocciaCompilerScope.ForgetBinaryResultType;

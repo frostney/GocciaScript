@@ -179,7 +179,10 @@ type
     procedure TestDestructuringPatternsCompileInLinearTime;
     procedure TestOperatorChainsCompileInLinearTime;
     procedure TestOperatorChainsFoldTheirConstantStart;
+    procedure TestNestedChainsCompileInLinearTime;
+    procedure TestNestedChainsFoldTheirConstantOperands;
     procedure TestSwitchCaseDeclarationsCompileInLinearTime;
+    procedure TestLongBranchesCompileOnce;
     procedure TestSlotHoldsLocalFollowsTheLocals;
     procedure TestEndingABlockRestoresTheBindingItShadowed;
     procedure TestVarAndSlotLookupsFindTheOldestLocal;
@@ -341,8 +344,14 @@ begin
     TestOperatorChainsCompileInLinearTime);
   Test('Chains of binary operators fold the constants they start with',
     TestOperatorChainsFoldTheirConstantStart);
+  Test('Right-nested and unary chains compile in time linear in their length',
+    TestNestedChainsCompileInLinearTime);
+  Test('Right-nested and unary chains fold the constant operands inside them',
+    TestNestedChainsFoldTheirConstantOperands);
   Test('A switch with a declaration in each case clause compiles in linear time',
     TestSwitchCaseDeclarationsCompileInLinearTime);
+  Test('A branch past a 16-bit jump offset compiles in the time of short ones',
+    TestLongBranchesCompileOnce);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
   Test('Ending a block restores the binding it shadowed',
@@ -1532,6 +1541,101 @@ begin
   ExpectFolded('const f = (p) => 2 * 3 * 4 + p + p + p + p;', 24, 4);
 end;
 
+{ A chain that nests to the right, such as `1 + (2 + (3 + p))`, or a chain
+  of unary operators, such as `- - - p`, is tried as a constant at every
+  operator, and each try evaluated the operands below it again down to p;
+  `1 + x` also asked for the type of its whole right operand at every
+  operator. Both took time quadratic in the chain's length (3.8 s on `main`
+  for 19,200 operators in chains of 480, against about 50 ms now). The
+  shapes compile CHAIN_OPERATORS operators as chains of CHAIN_SHORT_TERMS
+  terms and as chains CHAIN_LENGTH_FACTOR times as long, with the bound of
+  TestOperatorChainsCompileInLinearTime. }
+procedure TTestCompiler.TestNestedChainsCompileInLinearTime;
+
+  // Chains of ATerms terms, CHAIN_OPERATORS operators in all, each the body
+  // of an arrow function of p: AOpen (formatted with the term's index) for
+  // each operator, then p, then AClose for each operator.
+  function NestedChainsSource(const AOpen, AClose: string;
+    const ATerms: Integer): string;
+  var
+    Source: TStringBuffer;
+    Chain, Term: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    for Chain := 0 to CHAIN_OPERATORS div (ATerms - 1) - 1 do
+    begin
+      Source.Append(Format('const f%d = (p) => ', [Chain]));
+      for Term := 1 to ATerms - 1 do
+        Source.Append(Format(AOpen, [Term]));
+      Source.Append('p');
+      for Term := 1 to ATerms - 1 do
+        Source.Append(AClose);
+      Source.Append(';' + LineEnding);
+    end;
+    Result := Source.ToString;
+  end;
+
+  procedure ExpectNestedChainsCompileLinear(const AOpen, AClose: string;
+    const AStrictTypes: Boolean = False);
+  var
+    Short, Long: Int64;
+  begin
+    Short := SourceCompileNanoseconds(NestedChainsSource(AOpen, AClose,
+      CHAIN_SHORT_TERMS), False, AStrictTypes);
+    Long := SourceCompileNanoseconds(NestedChainsSource(AOpen, AClose,
+      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR), False, AStrictTypes);
+    if Long > CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS then
+      Fail(Format('%d operators "%s" in chains of %d terms took %d ms to ' +
+        'compile against %d ms in chains of %d', [CHAIN_OPERATORS, AOpen,
+        CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR, Long div 1000000,
+        Short div 1000000, CHAIN_SHORT_TERMS]));
+    Expect<Boolean>(Long <=
+      CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  end;
+
+begin
+  // Int16 constants: the constant tries and the type of `1 + x`'s x.
+  ExpectNestedChainsCompileLinear('%d + (', ')');
+  // Constants outside the immediate path, and strings.
+  ExpectNestedChainsCompileLinear('%d.5 * (', ')');
+  ExpectNestedChainsCompileLinear('"s" + (', ')');
+  ExpectNestedChainsCompileLinear('- ', '');
+  ExpectNestedChainsCompileLinear('!', '');
+  ExpectNestedChainsCompileLinear('typeof ', '');
+  // Strict types also try to simplify `x + ""` and `!!b` at every operator.
+  ExpectNestedChainsCompileLinear('%d + (', ')', True);
+  ExpectNestedChainsCompileLinear('!', '', True);
+end;
+
+{ CompileExpressionNode skips the constant tries of the operands a failed
+  try already found not constant, on either side of a binary operator and
+  below a unary one. An operand beside them that is constant must still be
+  folded when its turn comes. }
+procedure TTestCompiler.TestNestedChainsFoldTheirConstantOperands;
+
+  procedure ExpectFolded(const ASource: string; const AFolded: Int16;
+    const AOperators: Integer);
+  var
+    Module: TGocciaBytecodeModule;
+    Chain: TGocciaFunctionTemplate;
+  begin
+    Module := CompileSource(ASource);
+    try
+      Chain := Module.TopLevel.GetFunction(0);
+      Expect<Boolean>(HasLoadInt(Chain, AFolded)).ToBe(True);
+      Expect<Integer>(CountArithmeticOps(Chain)).ToBe(AOperators);
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  ExpectFolded('const f = (p) => 1 + (p + (2 + 3));', 5, 2);
+  ExpectFolded('const k = 4; const f = (p) => k * (p - (k * 2));', 8, 2);
+  ExpectFolded('const f = (p) => -(p + -(2 + 3));', -5, 1);
+  ExpectFolded('const f = (p) => 1 + (2 + (p + (3 * 4)));', 12, 3);
+end;
+
 { The case clauses of a switch share one scope, so the compiler forgets
   before each clause which of their bindings the clauses before it
   initialized or gave a constant. Doing that by visiting every local of the
@@ -1541,8 +1645,8 @@ end;
   1,000, about 2.8 times per doubling where linear growth gives 2 and
   quadratic 4, and within a few times the same clauses with their bodies in
   braces, whose bindings live in a block of each clause. Both sizes stay
-  below about 5,400 clauses, past which the switch's first jump needs the
-  long form and the whole program is compiled a second time. }
+  below about 5,400 clauses, past which the switch's first jumps need the
+  long form (TestLongBranchesCompileOnce). }
 procedure TTestCompiler.TestSwitchCaseDeclarationsCompileInLinearTime;
 const
   SMALL_CLAUSES = 1000;
@@ -1581,6 +1685,134 @@ begin
   ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', True);
   ExpectSwitchCompilesLinear(
     'const d = 1; const g = () => { switch (d) {', '} };', False);
+end;
+
+{ A conditional jump over a branch longer than its 16-bit offset holds takes
+  a long form. The compiler used to give it one by compiling the whole
+  program a second time, so a program cost twice as much to compile once one
+  of its branches passed the limit. Each shape here puts the same clauses or
+  statements in branches past the limit and in twice as many branches short
+  enough for the 16-bit offset; all sizes stay where the compile time grows
+  linearly. The long branches compile within 1.6 times the time of the short
+  ones (1.0 to 1.2 here, and 1.9 to 2.0 with the second compile), at a
+  script's top level, at a global-backed top level and in an arrow function.
+  The bound is a ratio alone: an absolute slack would let the second compile
+  pass on a machine fast enough for the slack to cover it. }
+procedure TTestCompiler.TestLongBranchesCompileOnce;
+const
+  LONG_BRANCH_RATIO_PERCENT = 160;
+  // Three switches of 6,000 clauses each need the long form, which starts
+  // at about 5,400; six of 3,000 do not.
+  CLAUSES = 18000;
+  LONG_SWITCHES = 3;
+  CLAUSE = 'case %0:d: const s%0:d = %0:d; break;';
+  // Two instructions each: 18,000 of them need the long form, which starts
+  // past 32,767 instructions, and 9,000 do not.
+  STATEMENTS = 36000;
+  LONG_IFS = 2;
+  STATEMENT = 'r = r + 1;';
+
+  { The CLAUSES clauses or STATEMENTS statements in ABranches switches or
+    ifs, between APrefix and ASuffix. }
+  function BranchSource(const ASwitch: Boolean; const ABranches: Integer;
+    const APrefix, ASuffix: string): string;
+  var
+    Source: TStringBuffer;
+    Count, Branch, I: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append(APrefix + LineEnding);
+    if ASwitch then
+      Count := CLAUSES
+    else
+      Count := STATEMENTS;
+    for Branch := 0 to ABranches - 1 do
+    begin
+      if ASwitch then
+        Source.Append('switch (d) {' + LineEnding)
+      else
+        Source.Append('if (d) {' + LineEnding);
+      for I := Branch * (Count div ABranches) to
+          (Branch + 1) * (Count div ABranches) - 1 do
+        if ASwitch then
+          Source.Append(Format(CLAUSE, [I]) + LineEnding)
+        else
+          Source.Append(STATEMENT + LineEnding);
+      Source.Append('}' + LineEnding);
+    end;
+    Source.Append(ASuffix + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  { The long-form jumps in ATemplate and the functions below it: a
+    conditional jump or handler push, an OP_JUMP over the next instruction,
+    and the OP_JUMP that reaches the branch's target. }
+  function CountLongFormJumps(const ATemplate: TGocciaFunctionTemplate): Integer;
+  var
+    I: Integer;
+  begin
+    Result := 0;
+    for I := 1 to ATemplate.CodeCount - 2 do
+      if not (JumpOperandOf(DecodeOp(ATemplate.GetInstruction(I - 1))) in
+           [gjoNone, gjoAx]) and
+         (DecodeOp(ATemplate.GetInstruction(I)) = Ord(OP_JUMP)) and
+         (DecodeAx(ATemplate.GetInstruction(I)) = 1) and
+         (DecodeOp(ATemplate.GetInstruction(I + 1)) = Ord(OP_JUMP)) then
+        Inc(Result);
+    for I := 0 to ATemplate.FunctionCount - 1 do
+      Inc(Result, CountLongFormJumps(ATemplate.GetFunction(I)));
+  end;
+
+  { ACheckShapes: whether to check that only the long branches take the
+    long form (CompileSource compiles one source the same for both kinds of
+    top level). }
+  procedure ExpectLongBranchesCompileOnce(const ASwitch: Boolean;
+    const ALongBranches: Integer; const APrefix, ASuffix: string;
+    const AGlobalBackedTopLevel, ACheckShapes: Boolean);
+  var
+    LongSource, ShortSource: string;
+    Module: TGocciaBytecodeModule;
+    Long, Short: Int64;
+  begin
+    LongSource := BranchSource(ASwitch, ALongBranches, APrefix, ASuffix);
+    ShortSource := BranchSource(ASwitch, 2 * ALongBranches, APrefix,
+      ASuffix);
+    if ACheckShapes then
+    begin
+      Module := CompileSource(LongSource);
+      try
+        Expect<Boolean>(CountLongFormJumps(Module.TopLevel) > 0).ToBe(True);
+      finally
+        Module.Free;
+      end;
+      Module := CompileSource(ShortSource);
+      try
+        Expect<Integer>(CountLongFormJumps(Module.TopLevel)).ToBe(0);
+      finally
+        Module.Free;
+      end;
+    end;
+
+    Long := SourceCompileNanoseconds(LongSource, AGlobalBackedTopLevel);
+    Short := SourceCompileNanoseconds(ShortSource, AGlobalBackedTopLevel);
+    if Long * 100 > LONG_BRANCH_RATIO_PERCENT * Short then
+      Fail(Format('%d long branches in "%s" took %d ms to compile against ' +
+        '%d ms in %d short ones', [ALongBranches, APrefix,
+        Long div 1000000, Short div 1000000, 2 * ALongBranches]));
+    Expect<Boolean>(Long * 100 <= LONG_BRANCH_RATIO_PERCENT * Short).ToBe(
+      True);
+  end;
+
+begin
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES, 'const d = 1;', '',
+    False, True);
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES, 'const d = 1;', '',
+    True, False);
+  ExpectLongBranchesCompileOnce(True, LONG_SWITCHES,
+    'const d = 1; const g = () => {', '};', False, True);
+  // A parameter, since an if on a constant compiles to no jump.
+  ExpectLongBranchesCompileOnce(False, LONG_IFS,
+    'const g = (d) => { let r = 0;', 'return r; };', False, True);
 end;
 
 procedure TTestCompiler.TestSlotHoldsLocalFollowsTheLocals;
@@ -3711,11 +3943,13 @@ begin
   try
     Small := Module.TopLevel.GetFunction(0);
     Long := Module.TopLevel.GetFunction(1);
-    Expect<Boolean>(Module.TopLevel.FarBranches).ToBe(False);
-    Expect<Boolean>(Small.FarBranches).ToBe(False);
-    Expect<Boolean>(Long.FarBranches).ToBe(True);
-    // The short function's conditional jump keeps its one instruction.
+    // The short function's conditional jump keeps its one instruction, and
+    // the top level has no jump.
     Expect<Integer>(CountOp(Small, OP_JUMP)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_JUMP)).ToBe(0);
+    // The if without an else has no OP_JUMP of its own: the two are its
+    // conditional jump's long form.
+    Expect<Integer>(CountOp(Long, OP_JUMP)).ToBe(2);
   finally
     Module.Free;
   end;
