@@ -1122,8 +1122,7 @@ begin
         Declaration := TGocciaFunctionDeclaration(Node)
       else if Node is TGocciaExportFunctionDeclaration then
         Declaration := TGocciaExportFunctionDeclaration(Node).Declaration;
-      IsLexicalFunction := not AFunctionsAreVar and Assigned(Declaration) and
-        (Declaration.LabelCount = 0);
+      IsLexicalFunction := not AFunctionsAreVar and Assigned(Declaration);
       AllowRepeatedFunction := False;
       StatementNames.Clear;
       if IsLexicalFunction then

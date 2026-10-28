@@ -119,3 +119,40 @@ describe("scope boundaries", () => {
     });
   }
 });
+
+
+describe("labelled function declaration scope", () => {
+  for (const wrap of [
+    (body) => `{ ${body} }`,
+    (body) => `switch (0) { case 0: ${body} }`,
+  ]) {
+    for (const source of [
+      "var a; label: function a() {}",
+      "label: function a() {} var a;",
+      "let a; label: function a() {}",
+      "label: function a() {} let a;",
+    ]) {
+      test(`rejects ${wrap(source)}`, () => {
+        expect(() => new Function(wrap(source))).toThrow(SyntaxError);
+      });
+    }
+    for (const source of [
+      "function a() {} label: function a() {}",
+      "label: function a() {} function a() {}",
+      "first: function a() {} second: function a() {}",
+    ]) {
+      test(`accepts ${wrap(source)}`, () => {
+        expect(() => new Function(wrap(source))).not.toThrow();
+      });
+    }
+  }
+  for (const body of [
+    "label: function a() {}",
+    "var a; label: function a() {}",
+    "label: function a() {} var a;",
+  ]) {
+    test(`rejects catch parameter overlap with ${body}`, () => {
+      expect(() => new Function(`try {} catch (a) { ${body} }`)).toThrow(SyntaxError);
+    });
+  }
+});

@@ -1,5 +1,6 @@
 {
   "compat-function": true,
+  "compat-label": true,
   "compat-non-strict-mode": true,
   "compat-var": true,
   "compat-traditional-for-loop": true,

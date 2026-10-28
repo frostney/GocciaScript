@@ -39,6 +39,17 @@ for (const [name, form] of forms) {
     test("allows a directive with simple parameters", () => {
       expect(() => new Function(form("a", '"use strict";'))).not.toThrow();
     });
+    for (const params of ["a: number", "a?: number"]) {
+      test(`allows erased annotations with ${params}`, () => {
+        expect(() => new Function(form(params, '"use strict";'))).not.toThrow();
+      });
+    }
+    for (const params of ["a: number = 1", "{a}: object", "[a]: number[]", "...a: number[]"]) {
+      if (name === "setter" && params.startsWith("...")) continue;
+      test(`rejects annotated non-simple parameters ${params}`, () => {
+        expect(() => new Function(form(params, '"use strict";'))).toThrow(SyntaxError);
+      });
+    }
     for (const body of [
       '("use strict");',
       '"use\\x20strict";',

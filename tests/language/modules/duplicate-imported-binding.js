@@ -16,7 +16,7 @@ describe("an imported binding redeclared in the module", () => {
       caught = error;
     }
     expect(caught).toBeInstanceOf(SyntaxError);
-    expect(caught.message).toBe('Identifier "dynamicValue" has already been declared');
+    expect(caught.message).toBe("Identifier 'dynamicValue' has already been declared");
   });
 
   test("one import declaration binding a name twice rejects with a SyntaxError", async () => {
@@ -27,6 +27,6 @@ describe("an imported binding redeclared in the module", () => {
       caught = error;
     }
     expect(caught).toBeInstanceOf(SyntaxError);
-    expect(caught.message).toBe('Identifier "value" has already been declared');
+    expect(caught.message).toBe("Identifier 'value' has already been declared");
   });
 });
