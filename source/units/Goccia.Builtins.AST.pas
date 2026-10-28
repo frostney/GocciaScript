@@ -1070,6 +1070,17 @@ const
     'async', 'generator', 'delegate', 'prefix', 'shorthand', 'method',
     'rest', 'static');
 
+{ Every array in the result is filled in index order as it is made, so an
+  element goes straight onto the end of its dense elements, where
+  ArrayCreateDataProperty would spell the index as a property key and parse
+  it back. }
+procedure AppendElement(const AArray: TGocciaArrayValue; const AIndex: Integer;
+  const AValue: TGocciaValue);
+begin
+  if not AArray.TryAppendDenseElementFast(AIndex, AValue) then
+    ArrayCreateDataProperty(AArray, AIndex, AValue);
+end;
+
 { Nodes are materialized parent-first. A node is held only by this call (its
   parent attaches it on return) while its kind string and its children are
   made, and each of those can collect, so it is rooted until it returns; every
@@ -1138,7 +1149,7 @@ begin
     ChildIndex := Node.FirstChild;
     while ChildIndex >= 0 do
     begin
-      ArrayCreateDataProperty(Children, Position,
+      AppendElement(Children, Position,
         MaterializeNode(AFlattener, ACoordinates, ANumbers, ChildIndex));
       Inc(Position);
       ChildIndex := AFlattener.NodeAt(ChildIndex).NextSibling;
@@ -1509,7 +1520,7 @@ begin
   begin
     TokenObject := TGocciaObjectValue.Create(
       TGocciaObjectValue.SharedObjectPrototype, TOKEN_PROPERTY_COUNT);
-    ArrayCreateDataProperty(ATarget, I, TokenObject);
+    AppendElement(ATarget, I, TokenObject);
     TokenType := ATokens[I].TokenType;
     if TypeValues[TokenType] = nil then
       TypeValues[TokenType] :=
@@ -1691,7 +1702,7 @@ begin
       if CommentSpans[I].Kind = gckHashbang then
         Continue;
       CommentObject := TGocciaObjectValue.Create(nil, COMMENT_PROPERTY_COUNT);
-      ArrayCreateDataProperty(Comments, CommentIndex, CommentObject);
+      AppendElement(Comments, CommentIndex, CommentObject);
       Inc(CommentIndex);
       StartOffset := MappedOffset(PipelineResult.OriginMap,
         CommentSpans[I].StartOffset, obStart);
