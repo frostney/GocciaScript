@@ -648,6 +648,33 @@ function DecodeBx(const AInstruction: UInt32): UInt16; {$IFDEF FPC}inline;{$ENDI
 function DecodesBx(const AInstruction: UInt32): Int16; {$IFDEF FPC}inline;{$ENDIF}
 function DecodeAx(const AInstruction: UInt32): Int32; {$IFDEF FPC}inline;{$ENDIF}
 
+type
+  { Where a jump keeps its offset, which the VM adds to the index of the
+    instruction after the jump (an OP_WIDE prefix does not count): OP_JUMP's
+    signed 24-bit Ax, the signed 16-bit sBx of OP_JUMP_IF_TRUE and
+    OP_JUMP_IF_FALSE, a 16-bit C whose high byte is in the OP_WIDE prefix
+    (signed for the comparison jumps, unsigned for the nullish ones), and a
+    handler push's unsigned Bx. }
+  TGocciaJumpOperand = (gjoNone, gjoAx, gjoSBx, gjoSignedC, gjoUnsignedC,
+    gjoBx);
+
+const
+  // How far OP_JUMP's signed 24-bit offset reaches either way.
+  AX_JUMP_OFFSET_LIMIT = 8388607;
+
+function JumpOperandOf(const AOp: UInt8): TGocciaJumpOperand;
+{ The offset of the jump ABase, whose OP_WIDE prefix is APrefix (0 for a jump
+  without one). }
+function DecodeJumpOffset(const ABase, APrefix: UInt32;
+  const AOperand: TGocciaJumpOperand): Integer;
+{ Whether AOffset fits the operand; without a prefix, C has no high byte. }
+function JumpOffsetFits(const AOperand: TGocciaJumpOperand;
+  const AHasPrefix: Boolean; const AOffset: Integer): Boolean;
+{ Writes AOffset, which fits, into the jump ABase, and C's high byte into its
+  prefix APrefix; every other operand keeps its value. }
+procedure WriteJumpOffset(var ABase, APrefix: UInt32;
+  const AOperand: TGocciaJumpOperand; const AOffset: Integer);
+
 implementation
 
 const
@@ -796,6 +823,97 @@ end;
 function DecodesBx(const AInstruction: UInt32): Int16;
 begin
   Result := Int16(Integer(DecodeBx(AInstruction)) - SBIAS_16);
+end;
+
+function JumpOperandOf(const AOp: UInt8): TGocciaJumpOperand;
+begin
+  case AOp of
+    Ord(OP_JUMP):
+      Result := gjoAx;
+    Ord(OP_JUMP_IF_TRUE), Ord(OP_JUMP_IF_FALSE):
+      Result := gjoSBx;
+    Ord(OP_JUMP_IF_NUM_NOT_LTE_IMM), Ord(OP_JUMP_IF_NOT_LT),
+    Ord(OP_JUMP_IF_NOT_LT_IMM), Ord(OP_JUMP_IF_NOT_GT_IMM),
+    Ord(OP_JUMP_IF_NOT_LTE_IMM), Ord(OP_JUMP_IF_NOT_GTE_IMM),
+    Ord(OP_JUMP_IF_NOT_STRICT_EQ_IMM), Ord(OP_JUMP_IF_STRICT_EQ_IMM):
+      Result := gjoSignedC;
+    Ord(OP_JUMP_IF_NULLISH), Ord(OP_JUMP_IF_NOT_NULLISH):
+      Result := gjoUnsignedC;
+    Ord(OP_PUSH_HANDLER), Ord(OP_PUSH_FINALLY_HANDLER):
+      Result := gjoBx;
+  else
+    Result := gjoNone;
+  end;
+end;
+
+function DecodeJumpOffset(const ABase, APrefix: UInt32;
+  const AOperand: TGocciaJumpOperand): Integer;
+var
+  C: UInt16;
+begin
+  case AOperand of
+    gjoAx:
+      Result := DecodeAx(ABase);
+    gjoSBx:
+      Result := DecodesBx(ABase);
+    gjoBx:
+      Result := DecodeBx(ABase);
+    gjoSignedC, gjoUnsignedC:
+      begin
+        C := DecodeC(ABase) or (UInt16(DecodeC(APrefix)) shl 8);
+        if AOperand = gjoSignedC then
+          Result := Int16(C)
+        else
+          Result := C;
+      end;
+  else
+    Result := 0;
+  end;
+end;
+
+function JumpOffsetFits(const AOperand: TGocciaJumpOperand;
+  const AHasPrefix: Boolean; const AOffset: Integer): Boolean;
+begin
+  case AOperand of
+    gjoAx:
+      Result := (AOffset >= -AX_JUMP_OFFSET_LIMIT) and
+        (AOffset <= AX_JUMP_OFFSET_LIMIT);
+    gjoSBx:
+      Result := (AOffset >= Low(Int16)) and (AOffset <= High(Int16));
+    gjoBx:
+      Result := (AOffset >= 0) and (AOffset <= High(UInt16));
+    gjoSignedC, gjoUnsignedC:
+      if not AHasPrefix then
+        Result := (AOffset >= 0) and (AOffset <= High(UInt8))
+      else if AOperand = gjoSignedC then
+        Result := (AOffset >= Low(Int16)) and (AOffset <= High(Int16))
+      else
+        Result := (AOffset >= 0) and (AOffset <= High(UInt16));
+  else
+    Result := False;
+  end;
+end;
+
+procedure WriteJumpOffset(var ABase, APrefix: UInt32;
+  const AOperand: TGocciaJumpOperand; const AOffset: Integer);
+var
+  C: UInt32;
+begin
+  case AOperand of
+    gjoAx:
+      ABase := (ABase and $FF) or
+        ((UInt32(AOffset + SBIAS_24) and $FFFFFF) shl 8);
+    gjoSBx:
+      ABase := (ABase and $FFFF) or (UInt32(AOffset + SBIAS_16) shl 16);
+    gjoBx:
+      ABase := (ABase and $FFFF) or (UInt32(AOffset) shl 16);
+    gjoSignedC, gjoUnsignedC:
+      begin
+        C := UInt32(AOffset) and $FFFF;
+        ABase := (ABase and $00FFFFFF) or ((C and $FF) shl 24);
+        APrefix := (APrefix and $00FFFFFF) or ((C shr 8) shl 24);
+      end;
+  end;
 end;
 
 function DecodeAx(const AInstruction: UInt32): Int32;
