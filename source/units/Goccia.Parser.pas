@@ -18,6 +18,7 @@ uses
   Goccia.Lexer,
   Goccia.Modules,
   Goccia.NestingLimit,
+  Goccia.Profiler.Compile,
   Goccia.SourceSpan,
   Goccia.Token,
   Goccia.Values.Primitives;
@@ -105,6 +106,9 @@ type
   private
     FTokens: TObjectList<TGocciaToken>;
     FLexer: TGocciaLexer;
+    // The thread's compile profile when --profile=compile is on, else nil
+    // (Goccia.Profiler.Compile).
+    FCompileProfile: TGocciaCompileProfiler;
     FCurrent: Integer;
     FFileName: string;
     // Call-site type arguments are TypeScript-only: `a < b > (c)` is a
@@ -480,6 +484,9 @@ type
     function ContinueStatement: TGocciaStatement;
     function LabeledStatement: TGocciaStatement;
     function ParseProgram: TGocciaProgram;
+    function ParseInArena: TGocciaProgram;
+    procedure BeginProfiledFunction(const ALine, AColumn: Integer);
+    procedure EndProfiledFunction;
   public
     constructor Create(const ATokens: TObjectList<TGocciaToken>;
       const AFileName: string; const ASourceLines: TStringList);
@@ -692,6 +699,7 @@ constructor TGocciaParser.Create(const ATokens: TObjectList<TGocciaToken>;
 begin
   FTokens := ATokens;
   FLexer := nil;
+  FCompileProfile := TGocciaCompileProfiler.Instance;
   FFileName := AFileName;
   FAllowsTypeScriptOnlySyntax := IsTypeScriptFileName(AFileName);
   FSourceLines := ASourceLines;
@@ -714,6 +722,7 @@ constructor TGocciaParser.CreateFromLexer(const ALexer: TGocciaLexer;
 begin
   FTokens := ALexer.Tokens;
   FLexer := ALexer;
+  FCompileProfile := TGocciaCompileProfiler.Instance;
   FFileName := AFileName;
   FAllowsTypeScriptOnlySyntax := IsTypeScriptFileName(AFileName);
   FSourceLines := ASourceLines;
@@ -932,7 +941,7 @@ begin
   // ES2026 §15.1.1, §15.3.1, §15.4.1, §15.8.1, §15.9.1:
   // parameter-list early errors depend on the syntactic form and the
   // active Await/Yield grammar parameters.
-  if ParameterListHasDuplicateBindingNames(AParameters) and
+  if ParameterListHasDuplicateBindingNames(AParameters, FCompileProfile) and
      (ARejectDuplicateBindingNames or not ParameterListIsSimple(AParameters)) then
     raise TGocciaSyntaxError.Create(
       'Duplicate parameter name not allowed',
@@ -3393,6 +3402,8 @@ begin
           SavedInAsyncFunction := FInAsyncFunction;
           SavedInGeneratorFunction := FInGeneratorFunction;
           Inc(FFunctionDepth);
+          if Assigned(FCompileProfile) then
+            BeginProfiledFunction(Line, Column);
           FInAsyncFunction := 1;
           FInGeneratorFunction := 0;
           OuterDirectEvalUsage := EnterDirectEvalScope;
@@ -3406,6 +3417,8 @@ begin
             FInGeneratorFunction := SavedInGeneratorFunction;
             FInAsyncFunction := SavedInAsyncFunction;
             Dec(FFunctionDepth);
+            if Assigned(FCompileProfile) then
+              EndProfiledFunction;
           end;
 
           SetLength(Parameters, 1);
@@ -4876,6 +4889,8 @@ begin
   SavedInAsyncFunction := FInAsyncFunction;
   SavedInGeneratorFunction := FInGeneratorFunction;
   Inc(FFunctionDepth);
+  if Assigned(FCompileProfile) then
+    BeginProfiledFunction(Line, Column);
   FInAsyncFunction := 0;
   FInGeneratorFunction := 0;
   EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
@@ -4892,6 +4907,8 @@ begin
     FInGeneratorFunction := SavedInGeneratorFunction;
     FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
+    if Assigned(FCompileProfile) then
+      EndProfiledFunction;
   end;
 end;
 
@@ -4989,6 +5006,8 @@ begin
     SavedInAsyncFunction := FInAsyncFunction;
     SavedInGeneratorFunction := FInGeneratorFunction;
     Inc(FFunctionDepth);
+    if Assigned(FCompileProfile) then
+      BeginProfiledFunction(Line, Column);
     FInAsyncFunction := 0;
     FInGeneratorFunction := 0;
     EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
@@ -5007,6 +5026,8 @@ begin
       FInGeneratorFunction := SavedInGeneratorFunction;
       FInAsyncFunction := SavedInAsyncFunction;
       Dec(FFunctionDepth);
+      if Assigned(FCompileProfile) then
+        EndProfiledFunction;
     end;
   finally
     LeaveDirectEvalScope(OuterDirectEvalUsage);
@@ -5029,6 +5050,8 @@ begin
   SavedInAsyncFunction := FInAsyncFunction;
   SavedInGeneratorFunction := FInGeneratorFunction;
   Inc(FFunctionDepth);
+  if Assigned(FCompileProfile) then
+    BeginProfiledFunction(ALine, AColumn);
   FInAsyncFunction := Ord(AIsAsync);
   FInGeneratorFunction := Ord(AIsGenerator);
   OuterDirectEvalUsage := EnterDirectEvalScope;
@@ -5069,6 +5092,8 @@ begin
     FInGeneratorFunction := SavedInGeneratorFunction;
     FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
+    if Assigned(FCompileProfile) then
+      EndProfiledFunction;
   end;
 end;
 
@@ -5169,6 +5194,8 @@ begin
   SavedInAsyncFunction := FInAsyncFunction;
   SavedInGeneratorFunction := FInGeneratorFunction;
   Inc(FFunctionDepth);
+  if Assigned(FCompileProfile) then
+    BeginProfiledFunction(Line, Column);
   if AIsAsync then
     FInAsyncFunction := 1;
   OuterDirectEvalUsage := EnterDirectEvalScope;
@@ -5218,6 +5245,8 @@ begin
     FInGeneratorFunction := SavedInGeneratorFunction;
     FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
+    if Assigned(FCompileProfile) then
+      EndProfiledFunction;
   end;
 
   ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, Body,
@@ -5295,6 +5324,8 @@ begin
       SavedInAsyncFunction := FInAsyncFunction;
       SavedInGeneratorFunction := FInGeneratorFunction;
       Inc(FFunctionDepth);
+      if Assigned(FCompileProfile) then
+        BeginProfiledFunction(Line, Column);
       FInAsyncFunction := 0;
       FInGeneratorFunction := 0;
       EnterFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
@@ -5312,6 +5343,8 @@ begin
         FInGeneratorFunction := SavedInGeneratorFunction;
         FInAsyncFunction := SavedInAsyncFunction;
         Dec(FFunctionDepth);
+        if Assigned(FCompileProfile) then
+          EndProfiledFunction;
       end;
       if HasUseStrictDirective(ArrowBody) then
         ValidateParameterEarlyErrors(Parameters, Line, Column, True,
@@ -7459,6 +7492,8 @@ begin
   SavedInAsyncFunction := FInAsyncFunction;
   SavedInGeneratorFunction := FInGeneratorFunction;
   Inc(FFunctionDepth);
+  if Assigned(FCompileProfile) then
+    BeginProfiledFunction(Line, Column);
   FInAsyncFunction := Ord(AIsAsync);
   FInGeneratorFunction := Ord(AIsGenerator);
   OuterDirectEvalUsage := EnterDirectEvalScope;
@@ -7532,6 +7567,8 @@ begin
     FInGeneratorFunction := SavedInGeneratorFunction;
     FInAsyncFunction := SavedInAsyncFunction;
     Dec(FFunctionDepth);
+    if Assigned(FCompileProfile) then
+      EndProfiledFunction;
   end;
 end;
 
@@ -7775,6 +7812,22 @@ var
       SSuggestCloseImportList);
   end;
 
+  { `type` is a legal ImportedDefaultBinding (ECMA-262 §16.2.2), so `import
+    type` is type-only only when a binding, "{" or "*" follows. One token of
+    lookahead after `type` tells them apart: "," or `from` before a module
+    string means `type` is the default binding. `import type from from "m"`
+    stays type-only, a default binding named `from`. }
+  function IsTypeDefaultBindingStart: Boolean;
+  begin
+    EnsureToken(FCurrent + 2, glgInputElementRegExp);
+    if FCurrent + 1 >= FTokens.Count then
+      Exit(False);
+    Result := (FTokens[FCurrent + 1].TokenType = gttComma) or
+      ((FTokens[FCurrent + 1].TokenType = gttFrom) and
+       (FCurrent + 2 < FTokens.Count) and
+       (FTokens[FCurrent + 2].TokenType = gttString));
+  end;
+
   function IsSourcePhaseImportStart: Boolean;
   begin
     EnsureToken(FCurrent + 2, glgInputElementRegExp);
@@ -7788,7 +7841,8 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) then
+  if CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) and
+     not IsTypeDefaultBindingStart then
   begin
     Advance;
     SkipUntilSemicolon;
@@ -7877,7 +7931,7 @@ begin
           Advance;
           Consume(gttAs, 'Expected "as" after "*" in namespace import',
             SSuggestNamespaceImportAs);
-          NamespaceName := Consume(gttIdentifier,
+          NamespaceName := ConsumeIdentifierBinding(
             'Expected local name after "as"',
             SSuggestProvideLocalName).Lexeme;
           Consume(gttFrom, 'Expected "from" after namespace import',
@@ -7904,7 +7958,7 @@ begin
           ImportedName := ImportedNameToken.Lexeme;
 
           if Match(gttAs) then
-            LocalName := Consume(gttIdentifier, 'Expected local name after "as"',
+            LocalName := ConsumeIdentifierBinding('Expected local name after "as"',
               SSuggestProvideLocalName).Lexeme
           else if ImportedNameToken.TokenType = gttString then
             raise TGocciaSyntaxError.Create(
@@ -9175,6 +9229,42 @@ begin
 end;
 
 function TGocciaParser.Parse: TGocciaProgram;
+begin
+  if not Assigned(FCompileProfile) then
+    Exit(ParseInArena);
+  // The top level of the file is line 0, column 0 of the compile profile.
+  BeginProfiledFunction(0, 0);
+  try
+    Result := ParseInArena;
+  finally
+    EndProfiledFunction;
+  end;
+end;
+
+procedure TGocciaParser.BeginProfiledFunction(const ALine, AColumn: Integer);
+var
+  LexNanoseconds: Int64;
+begin
+  if Assigned(FLexer) then
+    LexNanoseconds := FLexer.ScanTimeNanoseconds
+  else
+    LexNanoseconds := 0;
+  FCompileProfile.BeginParse(FFileName, ALine, AColumn, FTokens,
+    LexNanoseconds, FTokens.Count);
+end;
+
+procedure TGocciaParser.EndProfiledFunction;
+var
+  LexNanoseconds: Int64;
+begin
+  if Assigned(FLexer) then
+    LexNanoseconds := FLexer.ScanTimeNanoseconds
+  else
+    LexNanoseconds := 0;
+  FCompileProfile.EndParse(LexNanoseconds, FTokens.Count);
+end;
+
+function TGocciaParser.ParseInArena: TGocciaProgram;
 var
   Arena, PreviousArena: TGocciaASTArena;
 begin

@@ -67,9 +67,11 @@ Use `--output=<file>` to write results to a file instead of stdout.
 ## Profiling Benchmark Runs
 
 `GocciaBenchmarkRunner` accepts the same VM profiling options as `GocciaRunner`:
-`--profile=opcodes|functions|all`, `--profile-output=<path>`, and
+`--profile=opcodes|functions|all|compile`, `--profile-output=<path>`, and
 `--profile-format=flamegraph`. Profiling forces serial execution
-because profiler state is per thread.
+because profiler state is per thread. `compile` profiles the parse and compile
+of each file instead of its execution ([Compile Profile](profiling.md#compile-profile---profilecompile));
+`all` does not include it.
 
 Use profiler-backed benchmark runs when a benchmark ratio is ambiguous and you need
 to see the opcode mix, scalar fast-path hit rate, JS function self-time, or

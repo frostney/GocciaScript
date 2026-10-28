@@ -82,6 +82,13 @@ interface Animal { name: string; speak(): string; }
 import type { Foo } from './types.js';
 export type { Bar };
 
+// `type` is a legal default binding, so these are ordinary value imports that
+// bind `type`. After `import type`, a binding, `{` or `*` makes the import
+// type-only; `from` before a module string, or `,`, makes `type` the binding.
+import type from './x.js';
+import type, { y } from './x.js';
+import type, * as ns from './x.js';
+
 // Mixed type/value named bindings keep runtime imports/exports for value bindings
 import { parseSourceFile, type SourceFile } from "./parser.js";
 export { value, type ValueShape };
