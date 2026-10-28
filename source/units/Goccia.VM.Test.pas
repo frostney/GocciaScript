@@ -50,6 +50,7 @@ type
     FRealm: TGocciaRealm;
     FRealmExecutionContext: TGocciaExecutionContextScope;
     procedure TestExecuteIntegerAddition;
+    procedure TestNumericDestinationAliasesOperand;
     procedure TestExecuteIntegerMultiplicationSignOfZero;
     procedure TestExecuteLocalsRoundTrip;
     procedure TestExecuteLiteralLoads;
@@ -105,6 +106,8 @@ end;
 procedure TTestGocciaVM.SetupTests;
 begin
   Test('Execute integer addition', TestExecuteIntegerAddition);
+  Test('Numeric destination may alias either operand',
+    TestNumericDestinationAliasesOperand);
   Test('Integer multiplication gives -0 for a zero product with a negative ' +
     'operand', TestExecuteIntegerMultiplicationSignOfZero);
   Test('Execute locals round trip', TestExecuteLocalsRoundTrip);
@@ -136,6 +139,45 @@ begin
     TestPropertyCacheSlotsStayWithTheirConstant);
   Test('A VM entered on one thread reads the limits of the thread that runs it next',
     TestLimitsOfTheRunningThreadApplyAfterAnotherThreadEnteredFirst);
+end;
+
+procedure TTestGocciaVM.TestNumericDestinationAliasesOperand;
+const
+  Opcodes: array[0..11] of TGocciaOpCode = (
+    OP_ADD, OP_ADD_INT, OP_ADD_FLOAT, OP_SUB, OP_SUB_INT, OP_SUB_FLOAT,
+    OP_MUL, OP_MUL_INT, OP_MUL_FLOAT, OP_DIV, OP_DIV_INT, OP_DIV_FLOAT);
+  Expected: array[0..11] of Double = (
+    10, 10, 10, 5, 5, 5, 18.75, 18.75, 18.75, 3, 3, 3);
+var
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+  ResultValue: TGocciaValue;
+  Operation, Destination: Integer;
+begin
+  // Direct bytecode keeps both alias arrangements independent of compiler
+  // register allocation. Fractional operands exercise the scalar-pair path
+  // even for the INT opcodes; the integral results also change register kind.
+  for Operation := Low(Opcodes) to High(Opcodes) do
+    for Destination := 0 to 1 do
+    begin
+      Template := TGocciaFunctionTemplate.Create('numeric-alias');
+      VM := TGocciaVM.Create;
+      try
+        Template.MaxRegisters := 2;
+        Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0,
+          Template.AddConstantFloat(7.5)));
+        Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 1,
+          Template.AddConstantFloat(2.5)));
+        Template.EmitInstruction(EncodeABC(Opcodes[Operation],
+          Destination, 0, 1));
+        Template.EmitInstruction(EncodeABC(OP_RETURN, Destination, 0, 0));
+        ResultValue := VM.ExecuteFunction(Template);
+        Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(Expected[Operation]);
+      finally
+        VM.Free;
+        Template.Free;
+      end;
+    end;
 end;
 
 procedure TTestGocciaVM.TestExecuteIntegerAddition;
