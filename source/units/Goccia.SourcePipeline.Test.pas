@@ -181,9 +181,10 @@ begin
   end;
 end;
 
-{ Two imports conflict with later declarations: the error names the one
-  imported first, at its import declaration, as it did before the names were
-  kept in a hash map. }
+{ Two imports conflict with later declarations: the parser checks the
+  module's declarations in source order, so the error names the first
+  declaration that repeats a name and points at it. The order does not
+  depend on how the names are stored. }
 procedure TSourcePipelineTests.
   TestModuleEarlyErrorNamesTheFirstImportInSourceOrder;
 var
@@ -195,14 +196,14 @@ begin
     'import { a } from "./m.js";' + LineEnding +
     'const a = 1;' + LineEnding +
     'const b = 2;', [], Line, Column))
-    .ToBe('Identifier "b" has already been declared');
-  // At the import declaration that binds it.
-  Expect<Integer>(Line).ToBe(2);
+    .ToBe('Identifier ''a'' has already been declared');
+  // At the declaration that repeats the name.
+  Expect<Integer>(Line).ToBe(4);
   Expect<Integer>(Column).ToBe(1);
 end;
 
 { Two vars conflict with lexical declarations: the error names the var
-  declared first. }
+  declared first, at that var. }
 procedure TSourcePipelineTests.TestModuleEarlyErrorNamesTheFirstVarInSourceOrder;
 var
   Line, Column: Integer;
@@ -212,10 +213,9 @@ begin
     'const b = 2;' + LineEnding +
     'var b = 3;' + LineEnding +
     'var a = 4;', [cfVar], Line, Column))
-    .ToBe('Identifier "b" has already been declared');
-  // A var conflict has no position of its own.
-  Expect<Integer>(Line).ToBe(0);
-  Expect<Integer>(Column).ToBe(0);
+    .ToBe('Identifier ''b'' has already been declared');
+  Expect<Integer>(Line).ToBe(3);
+  Expect<Integer>(Column).ToBe(1);
 end;
 
 begin

@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  OrderedStringMap,
   UnicodeStringList,
 
   Goccia.AST.Expressions,
@@ -64,7 +65,7 @@ procedure CollectVarBindingNamesFromNodes(
 { Appends the names ANode binds lexically as a statement-list item that is
   not a function declaration (ES2026 §8.2.4 LexicallyDeclaredNames,
   §8.2.8 TopLevelLexicallyDeclaredNames): its let, const or using bindings,
-  its class or enum name, and the same for the export forms. A function
+  its class or enum name, imports, and named default declarations. A function
   declaration, whose name a block binds lexically but a function body or
   static block binds as a var, and any other node append nothing. A name is
   appended once per binding, so a repeated one appears twice. }
@@ -251,8 +252,7 @@ var
 begin
   for I := 0 to High(AParameters) do
     if AParameters[I].IsRest or AParameters[I].IsPattern or
-       Assigned(AParameters[I].DefaultValue) or AParameters[I].IsOptional or
-       (AParameters[I].TypeAnnotation <> '') then
+       Assigned(AParameters[I].DefaultValue) then
       Exit(False);
   Result := True;
 end;
@@ -760,6 +760,9 @@ procedure CollectLexicallyDeclaredNames(const ANode: TGocciaASTNode;
   const ANames: TUnicodeStringList);
 var
   VarDecl: TGocciaVariableDeclaration;
+  ImportDecl: TGocciaImportDeclaration;
+  ImportPair: TStringStringMap.TKeyValuePair;
+  DefaultDecl: TGocciaExportDefaultDeclaration;
   I: Integer;
 begin
   VarDecl := nil;
@@ -777,6 +780,28 @@ begin
     if not TGocciaDestructuringDeclaration(ANode).IsVar then
       CollectPatternBindingNames(
         TGocciaDestructuringDeclaration(ANode).Pattern, ANames);
+  end
+  else if ANode is TGocciaExportDestructuringDeclaration then
+    CollectLexicallyDeclaredNames(
+      TGocciaExportDestructuringDeclaration(ANode).Declaration, ANames)
+  else if ANode is TGocciaExportClassDeclaration then
+    CollectLexicallyDeclaredNames(
+      TGocciaExportClassDeclaration(ANode).Declaration, ANames)
+  else if ANode is TGocciaImportDeclaration then
+  begin
+    ImportDecl := TGocciaImportDeclaration(ANode);
+    AddBindingName(ANames, ImportDecl.NamespaceName, False);
+    for ImportPair in ImportDecl.Imports do
+      AddBindingName(ANames, ImportPair.Key, False);
+    // The import map retains one entry when two specifiers bind one name.
+    AddBindingName(ANames, ImportDecl.DuplicateBinding, False);
+  end
+  else if ANode is TGocciaExportDefaultDeclaration then
+  begin
+    DefaultDecl := TGocciaExportDefaultDeclaration(ANode);
+    if DefaultDecl.IsDirectDeclaration and
+       (DefaultDecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) then
+      AddBindingName(ANames, DefaultDecl.LocalName, False);
   end
   else if ANode is TGocciaUsingDeclaration then
   begin
