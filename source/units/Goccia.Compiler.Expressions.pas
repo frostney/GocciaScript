@@ -229,6 +229,7 @@ uses
   Goccia.Keywords.Reserved,
   Goccia.Modules,
   Goccia.PrivateNames,
+  Goccia.Profiler.Compile,
   Goccia.Token,
   Goccia.Types.Enforcement,
   Goccia.Values.BigIntValue,
@@ -289,6 +290,8 @@ function HasExactNumberProofOfType(const AScope: TGocciaCompilerScope;
 var
   LocalIndex: Integer;
 begin
+  if Assigned(AScope.CompileProfile) then
+    AScope.CompileProfile.Count(ccNumberProofVisits);
   if IsKnownNumeric(AType) then
     Exit(True);
   if AExpr is TGocciaIdentifierExpression then
