@@ -2347,6 +2347,7 @@ begin
       end;
       RecordTypeAssertion(Result, takAs, AssertionStart,
         Previous.Span.EndOffset);
+      CountChainLink;
     end
     else if not HasLineTerminatorBeforePeek and
       MatchContextualKeywordWithLexicalGoal(KEYWORD_SATISFIES,
@@ -2360,6 +2361,7 @@ begin
           Peek.Line, Peek.Column, FFileName, FSourceLines);
       RecordTypeAssertion(Result, takSatisfies, AssertionStart,
         Previous.Span.EndOffset);
+      CountChainLink;
     end
     else
       Break;
@@ -2722,6 +2724,7 @@ begin
           Token := Advance;
           RecordTypeAssertion(Result, takNonNull, Token.Span.StartOffset,
             Token.Span.EndOffset);
+          CountChainLink;
         end;
       gttIncrement, gttDecrement:
         begin

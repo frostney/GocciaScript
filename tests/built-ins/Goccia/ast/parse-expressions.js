@@ -651,6 +651,14 @@ describe("ast.parse with expressions", () => {
     expect(find(result.root, "NumericLiteral")).toBeDefined();
   });
 
+  test("a type assertion chain taller than the tree height limit is a SyntaxError", () => {
+    for (const link of ["!", " as T", " satisfies T"]) {
+      expect(() =>
+        parseExpressions(`a${link.repeat(30000)};\n`, { fileName: "a.ts" }),
+      ).toThrow(SyntaxError);
+    }
+  });
+
   test("a long operator chain is reported link by link", () => {
     const terms = Array.from({ length: 300 }, (_, index) => `a${index}`);
     const result = parseExpressions(`x = ${terms.join(" + ")};\n`);
