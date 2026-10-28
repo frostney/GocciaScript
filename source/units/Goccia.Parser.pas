@@ -9407,7 +9407,8 @@ function TGocciaParser.ParseProgram: TGocciaProgram;
 var
   Statements: TObjectList<TGocciaStatement>;
   DeclarationNodes: array of TGocciaASTNode;
-  I: Integer;
+  DeclarationCount, I: Integer;
+  IsModuleGoal: Boolean;
   Stmt: TGocciaStatement;
   SavedStrictModeActive: Boolean;
   SavedStrictModeSourceActive: Boolean;
@@ -9467,12 +9468,20 @@ begin
       if FDetectModuleGoal then
         SettleDetectedModuleGoal;
       // ES2026 §16.1.1 / §16.2.1.1: ScriptBody / ModuleBody declarations.
+      // Only a Module binds its imports as lexical names; in a Script they
+      // meet the other declarations at run time (ADR 0140).
+      IsModuleGoal := FModuleSource or FModuleSyntaxDetected;
+      DeclarationCount := 0;
       SetLength(DeclarationNodes, Statements.Count);
-      for I := 0 to High(DeclarationNodes) do
-        DeclarationNodes[I] := Statements[I];
-      ValidateStatementListDeclarations(DeclarationNodes,
-        not (FModuleSource or FModuleSyntaxDetected), False, nil,
-        FFileName, FSourceLines);
+      for I := 0 to Statements.Count - 1 do
+        if IsModuleGoal or not (Statements[I] is TGocciaImportDeclaration) then
+        begin
+          DeclarationNodes[DeclarationCount] := Statements[I];
+          Inc(DeclarationCount);
+        end;
+      SetLength(DeclarationNodes, DeclarationCount);
+      ValidateStatementListDeclarations(DeclarationNodes, not IsModuleGoal,
+        False, nil, FFileName, FSourceLines);
       Result := TGocciaProgram.Create(Statements);
       Result.HasTopLevelAwait := FHasTopLevelAwait;
       Result.DirectEvalUsage := FDirectEvalUsage;
