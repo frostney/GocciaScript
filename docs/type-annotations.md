@@ -116,7 +116,7 @@ class Box<T> implements Container {
 try { throw new Error("oops"); } catch (e: Error) { }
 ```
 
-A type-level statement erased this way still has a kind of its own in [`goccia:ast`](built-ins.md#ast--experimental-gocciabuiltinsastpas), so a tool reading the source can tell it from an empty statement.
+A type-level statement erased this way still has a kind of its own in [`goccia:ast`](built-ins-ast.md#the-statement-view), so a tool reading the source can tell it from an empty statement.
 
 ## Angle Brackets and JSX
 

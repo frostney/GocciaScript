@@ -1,3 +1,4 @@
 {
-  "experimental-ast": true
+  "experimental-ast": true,
+  "compat-function": true
 }
