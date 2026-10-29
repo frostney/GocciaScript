@@ -77,10 +77,9 @@ implementation
 
 uses
   Math,
-{$IF DEFINED(FPC) AND DEFINED(UNIX)}
-  cwstring,
-{$ENDIF}
+
   Generated.UnicodeCaseData,
+  ProcessEncoding,
   StringBuffer;
 
 type
@@ -854,83 +853,5 @@ begin
 
   Result := Buffer.ToString;
 end;
-
-{$IF DEFINED(FPC) AND DEFINED(UNIX)}
-{ cwstring converts between UTF-16 and the system code page through iconv,
-  which costs a converter lookup and a call per string. Most strings that
-  cross the boundary are ASCII — resource strings, identifiers, file names —
-  and ASCII is the same bytes in UTF-8 and in ASCII, so those are converted
-  here and everything else is handed to cwstring as before. }
-var
-  GIconvUnicode2AnsiMove: procedure(ASource: PUnicodeChar;
-    var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
-  GIconvAnsi2UnicodeMove: procedure(ASource: PAnsiChar;
-    ACodePage: TSystemCodePage; var ADest: UnicodeString; ALength: SizeInt);
-
-function IsASCIICompatibleCodePage(const ACodePage: TSystemCodePage): Boolean;
-begin
-  Result := (ACodePage = CP_UTF8) or (ACodePage = CP_ASCII);
-end;
-
-procedure ASCIIUnicode2AnsiMove(ASource: PUnicodeChar;
-  var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
-var
-  Target: PAnsiChar;
-  I: SizeInt;
-begin
-  if IsASCIICompatibleCodePage(ACodePage) then
-  begin
-    I := 0;
-    while (I < ALength) and (Ord(ASource[I]) <= $7F) do
-      Inc(I);
-    if I = ALength then
-    begin
-      SetLength(ADest, ALength);
-      Target := PAnsiChar(ADest);
-      for I := 0 to ALength - 1 do
-        Target[I] := AnsiChar(Ord(ASource[I]));
-      SetCodePage(ADest, ACodePage, False);
-      Exit;
-    end;
-  end;
-  GIconvUnicode2AnsiMove(ASource, ADest, ACodePage, ALength);
-end;
-
-procedure ASCIIAnsi2UnicodeMove(ASource: PAnsiChar; ACodePage: TSystemCodePage;
-  var ADest: UnicodeString; ALength: SizeInt);
-var
-  Target: PUnicodeChar;
-  I: SizeInt;
-begin
-  if IsASCIICompatibleCodePage(ACodePage) then
-  begin
-    I := 0;
-    while (I < ALength) and (Ord(ASource[I]) <= $7F) do
-      Inc(I);
-    if I = ALength then
-    begin
-      SetLength(ADest, ALength);
-      Target := PUnicodeChar(ADest);
-      for I := 0 to ALength - 1 do
-        Target[I] := UnicodeChar(Ord(ASource[I]));
-      Exit;
-    end;
-  end;
-  GIconvAnsi2UnicodeMove(ASource, ACodePage, ADest, ALength);
-end;
-
-procedure InstallASCIIConversions;
-begin
-  GIconvUnicode2AnsiMove := WideStringManager.Unicode2AnsiMoveProc;
-  GIconvAnsi2UnicodeMove := WideStringManager.Ansi2UnicodeMoveProc;
-  WideStringManager.Unicode2AnsiMoveProc := @ASCIIUnicode2AnsiMove;
-  WideStringManager.Ansi2UnicodeMoveProc := @ASCIIAnsi2UnicodeMove;
-end;
-{$ENDIF}
-
-initialization
-{$IF DEFINED(FPC) AND DEFINED(UNIX)}
-  InstallASCIIConversions;
-{$ENDIF}
 
 end.

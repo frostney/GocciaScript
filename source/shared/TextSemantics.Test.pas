@@ -402,34 +402,55 @@ begin
 end;
 
 procedure TTextSemanticsTests.TestUTF8ConversionsRoundTripASCIIAndNonASCII;
-const
-  ASCII_TEXT = 'plain ASCII text';
-  // The last character is the only non-ASCII one, so a scan that stopped
-  // early would take the ASCII path for it.
-  TRAILING_UNICODE_TEXT = 'plain text then na' + #$00EF;
-  ASTRAL_TEXT = 'face ' + #$D83D#$DE00;
+
+  // A conversion of a constant is folded at compile time; one of a value
+  // built at run time goes through the string manager.
+  function Built(const AText: string): string;
+  begin
+    Result := Copy(AText + 'x', 1, Length(AText));
+  end;
+
 var
   Bytes: UTF8String;
-  Latin1: RawByteString;
+  ASCIIBytes, Latin1: RawByteString;
+  Text: string;
 begin
-  Bytes := UTF8String(ASCII_TEXT);
+  Text := Built('plain ASCII text');
+  Bytes := UTF8String(Text);
   Expect<Integer>(StringCodePage(Bytes)).ToBe(CP_UTF8);
-  Expect<Integer>(Length(Bytes)).ToBe(Length(ASCII_TEXT));
-  Expect<string>(string(Bytes)).ToBe(ASCII_TEXT);
+  Expect<Integer>(Length(Bytes)).ToBe(Length(Text));
+  Expect<string>(string(Bytes)).ToBe(Text);
 
-  Bytes := UTF8String(TRAILING_UNICODE_TEXT);
+  // Only the last character is non-ASCII, so a scan that stopped early would
+  // narrow it.
+  Text := Built('plain text then na' + #$00EF);
+  Bytes := UTF8String(Text);
   Expect<Integer>(StringCodePage(Bytes)).ToBe(CP_UTF8);
-  Expect<Integer>(Length(Bytes)).ToBe(Length(TRAILING_UNICODE_TEXT) + 1);
+  Expect<Integer>(Length(Bytes)).ToBe(Length(Text) + 1);
   Expect<Integer>(Ord(Bytes[Length(Bytes) - 1])).ToBe($C3);
   Expect<Integer>(Ord(Bytes[Length(Bytes)])).ToBe($AF);
-  Expect<string>(string(Bytes)).ToBe(TRAILING_UNICODE_TEXT);
+  Expect<string>(string(Bytes)).ToBe(Text);
 
-  Bytes := UTF8String(ASTRAL_TEXT);
+  Text := Built('face ' + #$D83D#$DE00);
+  Bytes := UTF8String(Text);
   Expect<Integer>(Length(Bytes)).ToBe(Length('face ') + 4);
-  Expect<string>(string(Bytes)).ToBe(ASTRAL_TEXT);
+  Expect<string>(string(Bytes)).ToBe(Text);
 
-  Bytes := UTF8String('');
+  Text := Built('a' + #0 + 'b');
+  Bytes := UTF8String(Text);
+  Expect<Integer>(Length(Bytes)).ToBe(3);
+  Expect<Integer>(Ord(Bytes[2])).ToBe(0);
+  Expect<string>(string(Bytes)).ToBe(Text);
+
+  Bytes := UTF8String(Built(''));
   Expect<Integer>(Length(Bytes)).ToBe(0);
+
+  // Converting to the ASCII code page goes from UTF-8 through UTF-16.
+  Text := Built('ascii');
+  ASCIIBytes := UTF8String(Text);
+  SetCodePage(ASCIIBytes, CP_ASCII, True);
+  Expect<Integer>(StringCodePage(ASCIIBytes)).ToBe(CP_ASCII);
+  Expect<string>(string(ASCIIBytes)).ToBe(Text);
 
   // A code page other than UTF-8 or ASCII goes through the platform converter.
   SetLength(Latin1, 4);
