@@ -4292,6 +4292,22 @@ await section("Loader: --host-environment module controls time, zone, and random
       throw new Error(
         `Loader should reject conflicting host environment options, got: ${conflictOutput}`,
       );
+
+    const profileConflict = runLoaderJson("0;\n", [
+      `--host-environment=${providerPath}`,
+      "--profile-deterministic",
+    ]);
+    const profileConflictOutput =
+      JSON.stringify(profileConflict.json) + profileConflict.stderr;
+    if (
+      profileConflict.exitCode === 0 ||
+      !profileConflictOutput.includes(
+        "cannot be combined with --profile-deterministic",
+      )
+    )
+      throw new Error(
+        `Loader should name --profile-deterministic when it conflicts with a host environment, got: ${profileConflictOutput}`,
+      );
   } finally {
     clean(tmp);
   }

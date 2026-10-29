@@ -536,9 +536,11 @@ begin
   if (HostEnvironmentModulePath <> '') or
      (HostEnvironmentEntry.Value <> '') then
   begin
+    if FProfileDeterministic.Present then
+      raise TParseError.Create(
+        '--host-environment cannot be combined with --profile-deterministic.');
     if Assigned(EngineOptions) and
-       (ResolveFlagOption(EngineOptions.Deterministic, AFileConfig) or
-        FProfileDeterministic.Present) then
+       ResolveFlagOption(EngineOptions.Deterministic, AFileConfig) then
       raise TParseError.Create(
         '--host-environment cannot be combined with --deterministic.');
     if HostEnvironmentModulePath <> '' then
