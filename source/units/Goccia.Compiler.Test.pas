@@ -44,7 +44,7 @@ const
     read in turn. Finding the upvalue of each read by visiting the closure's
     upvalues made the many cost several times the few (about 5.5 times
     here); finding it by an index costs about the same for both, and the
-    bound allows CHAIN_COMPILE_RATIO times. }
+    bound allows 2.5 times the upvalue-list probes. }
   CAPTURE_READS = 240000;
   CAPTURE_FEW_BINDINGS = 1875;
   CAPTURE_MANY_BINDINGS = 30000;
@@ -71,8 +71,8 @@ const
     chains of CHAIN_SHORT_TERMS terms and as chains CHAIN_LENGTH_FACTOR
     times as long. Work quadratic in a chain's length makes the long chains
     cost about CHAIN_LENGTH_FACTOR times as much (over 3 s here); a linear
-    compile costs about the same for both, and the bound allows
-    CHAIN_COMPILE_RATIO times. }
+    compile costs about the same for both, and the bound allows 2.5 times
+    the work. }
   CHAIN_SHORT_TERMS = 25;
   CHAIN_LENGTH_FACTOR = 16;
   CHAIN_OPERATORS = 16000;
@@ -165,9 +165,6 @@ type
       const AGlobalBackedTopLevel: Boolean;
       const ACount: Integer = LINEAR_DECLARATION_COUNT;
       const APrefix: string = ''; const ASuffix: string = ''): Int64;
-    function SourceCompileNanoseconds(const ASourceText: string;
-      const AGlobalBackedTopLevel: Boolean;
-      const AStrictTypes: Boolean = False): Int64;
     procedure ExpectTopLevelCompileLinear(const ABaseline: Int64;
       const ALinePattern: string; const AGlobalBackedTopLevel: Boolean);
     procedure TestScriptTopLevelDeclarationsCompileInLinearTime;
@@ -1062,23 +1059,8 @@ function TTestCompiler.CompileNanoseconds(const ALinePattern: string;
   const APrefix, ASuffix: string): Int64;
 var
   Source: TStringBuffer;
+  SourceText: string;
   I: Integer;
-begin
-  Source := TStringBuffer.Create;
-  if APrefix <> '' then
-    Source.Append(APrefix + LineEnding);
-  for I := 0 to ACount - 1 do
-    Source.Append(Format(ALinePattern, [I]) + LineEnding);
-  if ASuffix <> '' then
-    Source.Append(ASuffix + LineEnding);
-  Result := SourceCompileNanoseconds(Source.ToString, AGlobalBackedTopLevel);
-end;
-
-{ The fastest of LINEAR_TRIALS compiles of ASourceText; the parse is not
-  timed. }
-function TTestCompiler.SourceCompileNanoseconds(const ASourceText: string;
-  const AGlobalBackedTopLevel: Boolean; const AStrictTypes: Boolean): Int64;
-var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
   ParserOptions: TGocciaParserOptions;
@@ -1089,11 +1071,19 @@ var
   Start, Elapsed: Int64;
   Trial: Integer;
 begin
+  Source := TStringBuffer.Create;
+  if APrefix <> '' then
+    Source.Append(APrefix + LineEnding);
+  for I := 0 to ACount - 1 do
+    Source.Append(Format(ALinePattern, [I]) + LineEnding);
+  if ASuffix <> '' then
+    Source.Append(ASuffix + LineEnding);
+  SourceText := Source.ToString;
   Result := High(Int64);
   for Trial := 1 to LINEAR_TRIALS do
   begin
-    Lexer := TGocciaLexer.Create(ASourceText, '<test>');
-    SourceLines := CreateTextLines(ASourceText);
+    Lexer := TGocciaLexer.Create(SourceText, '<test>');
+    SourceLines := CreateTextLines(SourceText);
     Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
     Compiler := TGocciaCompiler.Create('<test>');
     ProgramNode := nil;
@@ -1105,7 +1095,6 @@ begin
       Parser.ApplyOptions(ParserOptions);
       ProgramNode := Parser.Parse;
       Compiler.GlobalBackedTopLevel := AGlobalBackedTopLevel;
-      Compiler.StrictTypes := AStrictTypes;
       Start := GetNanoseconds;
       Module := Compiler.Compile(ProgramNode);
       Elapsed := GetNanoseconds - Start;
@@ -1224,18 +1213,13 @@ end;
   captured bindings compiled in time quadratic in them. }
 procedure TTestCompiler.TestManyCapturedBindingsCompileInLinearTime;
 var
-  Few, Many: Int64;
+  Few, Many: TGocciaCompileCounters;
 begin
-  Few := SourceCompileNanoseconds(CapturedReadsSource(CAPTURE_FEW_BINDINGS,
-    CAPTURE_READS), False);
-  Many := SourceCompileNanoseconds(CapturedReadsSource(CAPTURE_MANY_BINDINGS,
-    CAPTURE_READS), False);
-  if Many > CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS then
-    Fail(Format('%d reads of %d captured bindings took %d ms to compile ' +
-      'against %d ms for %d', [CAPTURE_READS, CAPTURE_MANY_BINDINGS,
-      Many div 1000000, Few div 1000000, CAPTURE_FEW_BINDINGS]));
-  Expect<Boolean>(Many <=
-    CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+  Few := SourceCompileCounters(CapturedReadsSource(CAPTURE_FEW_BINDINGS,
+    CAPTURE_READS));
+  Many := SourceCompileCounters(CapturedReadsSource(CAPTURE_MANY_BINDINGS,
+    CAPTURE_READS));
+  ExpectWorkLinear(Few, Many, ccUpvalueListProbes);
 end;
 
 { Direct eval code is compiled against its call site's record, which seeds
@@ -1357,7 +1341,7 @@ procedure TTestCompiler.ExpectWorkLinear(const AShort, ALong: TGocciaCompileCoun
   const ACounter: TGocciaCompileCounter);
 begin
   if ALong[ACounter] > AShort[ACounter] * 5 div 2 then
-    Fail(Format('%s grew from %d to %d when input doubled',
+    Fail(Format('%s grew from %d to %d, exceeding the 2.5x work bound',
       [COMPILE_COUNTER_JSON_NAMES[ACounter], AShort[ACounter], ALong[ACounter]]));
   Expect<Boolean>(AShort[ccNodesCompiled] > 0).ToBe(True);
   Expect<Boolean>(ALong[ACounter] <= AShort[ACounter] * 5 div 2).ToBe(True);
@@ -1721,7 +1705,8 @@ end;
   binary operators compiled in time quadratic in k: a function with 250
   closures each summing 120 captured bindings took 3 s, and twice the terms
   four times as long. Each shape compiles the same number of operators as
-  short chains and as long ones; their compile times must stay close. }
+  short chains and as long ones; type visits and constant-evaluation visits
+  must each stay close, so neither can hide the other's regression. }
 procedure TTestCompiler.TestOperatorChainsCompileInLinearTime;
 
   // Chains of ATerms terms, CHAIN_OPERATORS operators in all: AFirst, then
@@ -1764,20 +1749,14 @@ procedure TTestCompiler.TestOperatorChainsCompileInLinearTime;
     ATerm: string; const ACaptured: Boolean;
     const AStrictTypes: Boolean = False);
   var
-    Short, Long: Int64;
+    Short, Long: TGocciaCompileCounters;
   begin
-    Short := SourceCompileNanoseconds(ChainsSource(AFirst, AOperator, ATerm,
-      CHAIN_SHORT_TERMS, ACaptured), False, AStrictTypes);
-    Long := SourceCompileNanoseconds(ChainsSource(AFirst, AOperator, ATerm,
-      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR, ACaptured), False,
-      AStrictTypes);
-    if Long > CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS then
-      Fail(Format('%d operators "%s %s %s" in chains of %d terms took %d ms ' +
-        'to compile against %d ms in chains of %d', [CHAIN_OPERATORS,
-        AFirst, AOperator, ATerm, CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR,
-        Long div 1000000, Short div 1000000, CHAIN_SHORT_TERMS]));
-    Expect<Boolean>(Long <=
-      CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+    Short := SourceCompileCounters(ChainsSource(AFirst, AOperator, ATerm,
+      CHAIN_SHORT_TERMS, ACaptured), AStrictTypes);
+    Long := SourceCompileCounters(ChainsSource(AFirst, AOperator, ATerm,
+      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR, ACaptured), AStrictTypes);
+    ExpectWorkLinear(Short, Long, ccExpressionTypeVisits);
+    ExpectWorkLinear(Short, Long, ccConstantEvaluationVisits);
   end;
 
 begin
@@ -1928,7 +1907,7 @@ end;
   for 19,200 operators in chains of 480, against about 50 ms now). The
   shapes compile CHAIN_OPERATORS operators as chains of CHAIN_SHORT_TERMS
   terms and as chains CHAIN_LENGTH_FACTOR times as long, with the bound of
-  TestOperatorChainsCompileInLinearTime. }
+  TestOperatorChainsCompileInLinearTime for both type and constant visits. }
 procedure TTestCompiler.TestNestedChainsCompileInLinearTime;
 
   // Chains of ATerms terms, CHAIN_OPERATORS operators in all, each the body
@@ -1957,19 +1936,14 @@ procedure TTestCompiler.TestNestedChainsCompileInLinearTime;
   procedure ExpectNestedChainsCompileLinear(const AOpen, AClose: string;
     const AStrictTypes: Boolean = False);
   var
-    Short, Long: Int64;
+    Short, Long: TGocciaCompileCounters;
   begin
-    Short := SourceCompileNanoseconds(NestedChainsSource(AOpen, AClose,
-      CHAIN_SHORT_TERMS), False, AStrictTypes);
-    Long := SourceCompileNanoseconds(NestedChainsSource(AOpen, AClose,
-      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR), False, AStrictTypes);
-    if Long > CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS then
-      Fail(Format('%d operators "%s" in chains of %d terms took %d ms to ' +
-        'compile against %d ms in chains of %d', [CHAIN_OPERATORS, AOpen,
-        CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR, Long div 1000000,
-        Short div 1000000, CHAIN_SHORT_TERMS]));
-    Expect<Boolean>(Long <=
-      CHAIN_COMPILE_RATIO * Short + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+    Short := SourceCompileCounters(NestedChainsSource(AOpen, AClose,
+      CHAIN_SHORT_TERMS), AStrictTypes);
+    Long := SourceCompileCounters(NestedChainsSource(AOpen, AClose,
+      CHAIN_SHORT_TERMS * CHAIN_LENGTH_FACTOR), AStrictTypes);
+    ExpectWorkLinear(Short, Long, ccExpressionTypeVisits);
+    ExpectWorkLinear(Short, Long, ccConstantEvaluationVisits);
   end;
 
 begin
