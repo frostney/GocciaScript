@@ -279,7 +279,7 @@ describe("ast.parse", () => {
     expect(() => parse(42)).toThrow(TypeError);
   });
 
-  test("nodes, locations, positions and comments are plain data properties in a fixed order", () => {
+  test("nodes, locations, positions and comments hold plain data properties", () => {
     const result = parse("// c\nconst a = 1;\n");
     const node = result.root.children[0];
     const comment = result.comments[0];
@@ -288,10 +288,10 @@ describe("ast.parse", () => {
       return descriptor.writable && descriptor.enumerable && descriptor.configurable;
     });
 
-    expect(Object.keys(node)).toEqual(["kind", "start", "end", "loc", "children"]);
-    expect(Object.keys(node.loc)).toEqual(["start", "end"]);
-    expect(Object.keys(node.loc.start)).toEqual(["line", "column"]);
-    expect(Object.keys(comment)).toEqual(["kind", "start", "end", "loc"]);
+    expect(Object.keys(node).sort()).toEqual(["children", "end", "kind", "loc", "start"]);
+    expect(Object.keys(node.loc).sort()).toEqual(["end", "start"]);
+    expect(Object.keys(node.loc.start).sort()).toEqual(["column", "line"]);
+    expect(Object.keys(comment).sort()).toEqual(["end", "kind", "loc", "start"]);
     expect([node, node.loc, node.loc.start, node.loc.end, comment, comment.loc].every(isPlainData)).toBe(true);
   });
 

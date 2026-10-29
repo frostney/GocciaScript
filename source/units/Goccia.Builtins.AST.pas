@@ -1000,6 +1000,7 @@ const
     result's objects are made here and their keys are distinct, so each is
     defined directly, without the lookups an assignment makes first. }
   RESULT_PROPERTY_FLAGS = [pfEnumerable, pfConfigurable, pfWritable];
+  NUMBER_CACHE_LENGTH = 1 shl 18;
   POSITION_PROPERTY_COUNT = 2;
   LOC_PROPERTY_COUNT = 2;
   { children, kind, start, end, loc. }
@@ -1012,9 +1013,12 @@ type
     between 0 and one past the source's length, and a file repeats them
     many times over — a node starts where its first child and first token
     do — so each is made once and shared: a number is a primitive, and which
-    instance holds it is not observable. A value is attached to the result as
-    soon as it is made, so every one the cache holds is reachable from the
-    result while the cache lives. }
+    instance holds it is not observable. Making an object registers it but
+    never collects, and a cached value is attached to the object being built
+    before anything that can collect runs, so every value the cache holds is
+    reachable from the result while the cache lives. The table is capped, so
+    past NUMBER_CACHE_LENGTH a large source gets a fresh value per use rather
+    than a pointer per character that the memory budget does not count. }
   TASTNumberValues = class
   private
     FValues: array of TGocciaNumberLiteralValue;
@@ -1026,7 +1030,10 @@ type
 constructor TASTNumberValues.Create(const ASourceLength: Integer);
 begin
   inherited Create;
-  SetLength(FValues, ASourceLength + 2);
+  if ASourceLength + 2 < NUMBER_CACHE_LENGTH then
+    SetLength(FValues, ASourceLength + 2)
+  else
+    SetLength(FValues, NUMBER_CACHE_LENGTH);
 end;
 
 function TASTNumberValues.ValueOf(
@@ -1052,8 +1059,9 @@ begin
     RESULT_PROPERTY_FLAGS);
 end;
 
-{ The two positions are attached as they are made, so each is reachable from
-  the loc object while the next allocates. }
+{ Making an object registers it but never collects, so the loc object and
+  its positions need no rooting while they are made; the caller attaches the
+  loc object before anything that can collect runs. }
 function CreateLocObject(const ANumbers: TASTNumberValues;
   const AStartLine, AStartColumn, AEndLine,
   AEndColumn: Integer): TGocciaObjectValue;
@@ -1530,13 +1538,13 @@ begin
     // The object was made just above, so each key is a fresh data property
     // and needs none of the checks an assignment makes.
     TokenObject.DefineFreshDataProperty(PROP_TOKEN_TYPE, TypeValues[TokenType],
-      [pfEnumerable, pfConfigurable, pfWritable]);
+      RESULT_PROPERTY_FLAGS);
     TokenObject.DefineFreshDataProperty(PROP_TOKEN_START,
       ANumbers.ValueOf(ATokens[I].StartOffset),
-      [pfEnumerable, pfConfigurable, pfWritable]);
+      RESULT_PROPERTY_FLAGS);
     TokenObject.DefineFreshDataProperty(PROP_TOKEN_END,
       ANumbers.ValueOf(ATokens[I].EndOffset),
-      [pfEnumerable, pfConfigurable, pfWritable]);
+      RESULT_PROPERTY_FLAGS);
   end;
 end;
 
