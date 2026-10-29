@@ -279,6 +279,32 @@ describe("ast.parse", () => {
     expect(() => parse(42)).toThrow(TypeError);
   });
 
+  test("nodes, locations, positions and comments are plain data properties in a fixed order", () => {
+    const result = parse("// c\nconst a = 1;\n");
+    const node = result.root.children[0];
+    const comment = result.comments[0];
+    const isPlainData = (object) => Object.keys(object).every((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(object, key);
+      return descriptor.writable && descriptor.enumerable && descriptor.configurable;
+    });
+
+    expect(Object.keys(node)).toEqual(["kind", "start", "end", "loc", "children"]);
+    expect(Object.keys(node.loc)).toEqual(["start", "end"]);
+    expect(Object.keys(node.loc.start)).toEqual(["line", "column"]);
+    expect(Object.keys(comment)).toEqual(["kind", "start", "end", "loc"]);
+    expect([node, node.loc, node.loc.start, node.loc.end, comment, comment.loc].every(isPlainData)).toBe(true);
+  });
+
+  test("positions that share a line or column are still independent objects", () => {
+    const result = parse("a;\nb;\n");
+    const [first, second] = result.root.children;
+
+    expect(first.loc.start.column).toBe(second.loc.start.column);
+    first.loc.start.column = 99;
+    expect(second.loc.start.column).toBe(1);
+    expect(first.loc.start).not.toBe(second.loc.start);
+  });
+
   // The result arrays are new, so their elements are created with
   // CreateDataPropertyOrThrow (ES2026 §7.3.6), which never consults the
   // prototype chain: an index setter or a read-only index on Array.prototype
