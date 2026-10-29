@@ -11,6 +11,13 @@ uses
   Goccia.TestSetup;
 
 type
+  TClockedProfiler = class(TGocciaProfiler)
+  private
+    FSample: Integer;
+  protected
+    function ReadTimestamp: Int64; override;
+  end;
+
   TProfilerTests = class(TTestSuite)
   private
     function Profiler: TGocciaProfiler;
@@ -23,6 +30,9 @@ type
     procedure TestReentryBetweenOtherFunctionsCountsOnce;
     procedure TestResetWithFramesOnTheStack;
     procedure TestCollapsedStacksKeepSelfTime;
+    procedure TestBookkeepingIsExcluded;
+    procedure TestCollapsedAliasesAndRefresh;
+    procedure TestIndependentEntriesHaveNoOpcodePair;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -56,6 +66,12 @@ begin
     TestResetWithFramesOnTheStack);
   Test('Collapsed stacks keep their self-time weights',
     TestCollapsedStacksKeepSelfTime);
+  Test('Registration, pushes and pops are excluded from active frames',
+    TestBookkeepingIsExcluded);
+  Test('Collapsed aliases merge and a later return refreshes the export',
+    TestCollapsedAliasesAndRefresh);
+  Test('Independent entries do not invent an opcode pair',
+    TestIndependentEntriesHaveNoOpcodePair);
 end;
 
 function TProfilerTests.Profiler: TGocciaProfiler;
@@ -209,6 +225,83 @@ begin
   Expect<Int64>(StackWeight('f;f')).ToBe(30);
   Expect<Int64>(StackWeight('f')).ToBe(40);
   Expect<Int64>(TotalOf(F)).ToBe(100);
+end;
+
+function TClockedProfiler.ReadTimestamp: Int64;
+const
+  // Registration, module entry, child registration, child entry, child
+  // return, module return. Only the gaps between these pairs are user time.
+  SAMPLES: array[0..11] of Int64 =
+    (0, 10, 10, 30, 50, 90, 90, 120, 170, 200, 240, 300);
+begin
+  Result := SAMPLES[FSample];
+  Inc(FSample);
+end;
+
+procedure TProfilerTests.TestBookkeepingIsExcluded;
+var
+  Clocked: TClockedProfiler;
+  Module, Child: Integer;
+begin
+  Clocked := TClockedProfiler.Create;
+  try
+    Module := Clocked.RegisterTemplate('<module>', 'script.js', 1);
+    Clocked.PushFunction(Module);
+    Child := Clocked.RegisterTemplate('child', 'script.js', 2);
+    Clocked.PushFunction(Child);
+    Clocked.PopFunction(Child);
+    Clocked.PopFunction(Module);
+    Expect<Int64>(Clocked.GetFunctionProfile(Child).SelfTimeNanoseconds).ToBe(50);
+    Expect<Int64>(Clocked.GetFunctionProfile(Module).SelfTimeNanoseconds).ToBe(60);
+    Expect<Int64>(Clocked.GetFunctionProfile(Module).TotalTimeNanoseconds).ToBe(110);
+  finally
+    Clocked.Free;
+  end;
+end;
+
+procedure TProfilerTests.TestCollapsedAliasesAndRefresh;
+var
+  Parent, Child, Alias, Anonymous: Integer;
+begin
+  Parent := Profiler.RegisterTemplate('párent', 'a.js', 1);
+  Child := Profiler.RegisterTemplate('child', 'a.js', 2);
+  Alias := Profiler.RegisterTemplate('child', 'b.js', 2);
+  Anonymous := Profiler.RegisterTemplate('', 'a.js', 3);
+  Profiler.PushFunction(Parent, 0);
+  Profiler.PushFunction(Child, 10);
+  Profiler.PopFunction(Child, 30);
+  Expect<Int64>(StackWeight('párent;child')).ToBe(20);
+  Profiler.PushFunction(Alias, 40);
+  Profiler.PopFunction(Alias, 70);
+  Profiler.PushFunction(Anonymous, 70);
+  Profiler.PopFunction(Anonymous, 80);
+  Profiler.PopFunction(Parent, 100);
+  Expect<Integer>(Profiler.CollapsedStacks.Count).ToBe(3);
+  Expect<string>(Profiler.CollapsedStacks.EntryAt(0).Key).ToBe('párent;child');
+  Expect<string>(Profiler.CollapsedStacks.EntryAt(1).Key).ToBe('párent;<anonymous>');
+  Expect<string>(Profiler.CollapsedStacks.EntryAt(2).Key).ToBe('párent');
+  Expect<Int64>(StackWeight('párent;child')).ToBe(50);
+  Expect<Int64>(StackWeight('párent;<anonymous>')).ToBe(10);
+  Expect<Int64>(StackWeight('párent')).ToBe(40);
+  Profiler.ResetCounts;
+  Expect<Integer>(Profiler.CollapsedStacks.Count).ToBe(0);
+  Profiler.PushFunction(Child, 0);
+  Profiler.PopFunction(Child, 5);
+  Expect<Int64>(StackWeight('child')).ToBe(5);
+  Expect<Integer>(Profiler.CollapsedStacks.Count).ToBe(1);
+end;
+
+procedure TProfilerTests.TestIndependentEntriesHaveNoOpcodePair;
+begin
+  Profiler.RecordOpcode(1);
+  Profiler.RecordOpcode(2);
+  Profiler.BeginEntry;
+  Profiler.RecordOpcode(3);
+  Profiler.RecordOpcode(4);
+  Expect<Int64>(Profiler.GetOpcodePairCount(1, 2)).ToBe(1);
+  Expect<Int64>(Profiler.GetOpcodePairCount(2, 3)).ToBe(0);
+  Expect<Int64>(Profiler.GetOpcodePairCount(3, 4)).ToBe(1);
+  Expect<Int64>(Profiler.GetOpcodeCount(3)).ToBe(1);
 end;
 
 begin

@@ -7,6 +7,7 @@ uses
   Classes,
   SysUtils,
 
+  HostOutputFiles,
   TimingUtils,
 
   Goccia.Application,
@@ -20,6 +21,7 @@ uses
   Goccia.CLI.SourcePipelineResult,
   Goccia.CLI.Options,
   CLI.Options,
+  Goccia.Capabilities,
   Goccia.Compiler,
   Goccia.Engine,
   Goccia.FileExtensions,
@@ -36,26 +38,36 @@ uses
   FileUtils;
 
 type
+  TBundlerOutput = record
+    InputFile: string;
+    OutputPath: string;
+    MapOutputPath: string;
+    CreateParents: Boolean;
+  end;
+
   TBundlerApp = class(TGocciaCLIApplication)
   private
     FOutputPath: TStringOption;
     FSourceMap: TStringOption;
+    FPlan: array of TBundlerOutput;
 
     function CompileSource(const ASource: TStringList;
       const AFileName: string;
       out ASourceMap: TGocciaSourceMap): TGocciaBytecodeModule;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
-      const AFileName, AOutputPath: string);
-    procedure EmitBytecode(const ASource: TStringList; const AFileName,
-      AOutputPath: string);
-    function ResolveOutputPath(const AInputFile: string): string;
-    procedure EmitFromFile(const AFileName: string);
-    procedure EmitFromStdin;
+      const AOutput: TBundlerOutput);
+    procedure EmitBytecode(const ASource: TStringList;
+      const AOutput: TBundlerOutput);
+    function ResolveOutputPath(const AInputFile, AInputRoot: string): string;
+    procedure AddPlannedFiles(const AFiles: TStringList;
+      const AInputRoot: string; const AStdin: Boolean);
+    procedure ValidateOutputPlan;
+    procedure EmitPlannedFile(const AIndex: Integer);
     procedure EmitWorkerProc(const AFileName: string; const AIndex: Integer;
       out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
     procedure EmitParallel(const AFiles: TStringList;
       const AJobCount: Integer);
-    procedure EmitPath(const APath: string);
+
   protected
     function HonoredSettings: TGocciaHonoredSettings; override;
     function HonorsUnsafeRequests: Boolean; override;
@@ -113,20 +125,17 @@ end;
 { TBundlerApp - Core logic }
 
 procedure TBundlerApp.WriteSourceMapIfEnabled(
-  const ASourceMap: TGocciaSourceMap; const AFileName, AOutputPath: string);
+  const ASourceMap: TGocciaSourceMap; const AOutput: TBundlerOutput);
 var
-  MapOutputPath, SourceName: string;
+  SourceName: string;
 begin
-  if not FSourceMap.Present then
+  if AOutput.MapOutputPath = '' then
     Exit;
-  MapOutputPath := FSourceMap.ValueOr('');
-  if MapOutputPath = '' then
-    MapOutputPath := ChangeFileExt(AOutputPath, EXT_MAP);
-  SourceName := AFileName;
+  SourceName := AOutput.InputFile;
   if (SourceName = STDIN_FILE_NAME) and FOutputPath.Present then
-    SourceName := AOutputPath;
-  WriteSourceMapIfAvailable(ASourceMap, MapOutputPath, AOutputPath, SourceName,
-    not GIsWorkerThread);
+    SourceName := AOutput.OutputPath;
+  WriteSourceMapIfAvailable(ASourceMap, AOutput.MapOutputPath,
+    AOutput.OutputPath, SourceName, not GIsWorkerThread);
 end;
 
 function TBundlerApp.CompileSource(const ASource: TStringList;
@@ -218,7 +227,7 @@ begin
 end;
 
 procedure TBundlerApp.EmitBytecode(const ASource: TStringList;
-  const AFileName, AOutputPath: string);
+  const AOutput: TBundlerOutput);
 var
   Module: TGocciaBytecodeModule;
   SourceMap: TGocciaSourceMap;
@@ -226,7 +235,7 @@ var
   FloatingPointState: TGocciaFloatingPointState;
 begin
   if not GIsWorkerThread then
-    WriteLn('Compiling: ', AFileName);
+    WriteLn('Compiling: ', AOutput.InputFile);
   StartTime := GetNanoseconds;
 
   SourceMap := nil;
@@ -235,30 +244,43 @@ begin
     steps. The scope is per call because the mask is per thread. }
   EnterGocciaFloatingPointScope(FloatingPointState);
   try
-    Module := CompileSource(ASource, AFileName, SourceMap);
+    Module := CompileSource(ASource, AOutput.InputFile, SourceMap);
   finally
     LeaveGocciaFloatingPointScope(FloatingPointState);
   end;
   try
-    Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutputPath);
-    WriteSourceMapIfEnabled(SourceMap, AFileName, AOutputPath);
+    if AOutput.CreateParents then
+      EnsureHostOutputParent(AOutput.OutputPath);
+    Goccia.Bytecode.Binary.SaveModuleToFile(Module, AOutput.OutputPath);
+    WriteSourceMapIfEnabled(SourceMap, AOutput);
     EndTime := GetNanoseconds;
     if not GIsWorkerThread then
       WriteLn(SysUtils.Format('  Compiled to %s (%s)',
-        [AOutputPath, FormatDuration(EndTime - StartTime)]));
+        [AOutput.OutputPath, FormatDuration(EndTime - StartTime)]));
   finally
     SourceMap.Free;
     Module.Free;
   end;
 end;
 
-function TBundlerApp.ResolveOutputPath(const AInputFile: string): string;
+function TBundlerApp.ResolveOutputPath(const AInputFile,
+  AInputRoot: string): string;
+var
+  RelativePath: string;
 begin
   if FOutputPath.Present then
   begin
     if DirectoryExists(FOutputPath.Value) then
+    begin
+      if AInputRoot <> '' then
+        RelativePath := ExtractRelativePath(
+          IncludeTrailingPathDelimiter(ExpandFileName(AInputRoot)),
+          ExpandFileName(AInputFile))
+      else
+        RelativePath := ExtractFileName(AInputFile);
       Result := IncludeTrailingPathDelimiter(FOutputPath.Value) +
-        ChangeFileExt(ExtractFileName(AInputFile), EXT_GBC)
+        ChangeFileExt(RelativePath, EXT_GBC);
+    end
     else
       Result := FOutputPath.Value;
   end
@@ -266,19 +288,13 @@ begin
     Result := ChangeFileExt(AInputFile, EXT_GBC);
 end;
 
-procedure TBundlerApp.EmitFromFile(const AFileName: string);
+procedure TBundlerApp.EmitPlannedFile(const AIndex: Integer);
 var
   Source: TStringList;
-  OutputPath: string;
 begin
-  if LowerCase(ExtractFileExt(AFileName)) = EXT_GBC then
-    raise Exception.CreateFmt('Cannot compile bytecode file: %s', [AFileName]);
-
-  OutputPath := ResolveOutputPath(AFileName);
-
-  Source := SourceRegistry.Load(AFileName);
+  Source := SourceRegistry.Load(FPlan[AIndex].InputFile);
   try
-    EmitBytecode(Source, AFileName, OutputPath);
+    EmitBytecode(Source, FPlan[AIndex]);
   finally
     Source.Free;
   end;
@@ -308,56 +324,94 @@ begin
   end;
 end;
 
-procedure TBundlerApp.EmitFromStdin;
+procedure TBundlerApp.AddPlannedFiles(const AFiles: TStringList;
+  const AInputRoot: string; const AStdin: Boolean);
 var
-  Source, SectionSource, Names: TStringList;
-  OutputPath: string;
-  I: Integer;
+  I, Index: Integer;
 begin
-  if not FOutputPath.Present then
-    raise TParseError.Create(
-      '--output=<path> is required when compiling from stdin.');
-
-  Source := ReadSourceFromText(Input);
-
-  if MultifileEnabled then
+  for I := 0 to AFiles.Count - 1 do
   begin
-    if not DirectoryExists(FOutputPath.Value) then
-      raise TParseError.Create(
-        '--output must be a directory when --multifile is set with stdin.');
-
-    // Ownership of Source transfers to SplitStdinMultifile.
-    Names := SplitStdinMultifile(Source);
-    try
-      for I := 0 to Names.Count - 1 do
-      begin
-        // Sanitize the filename so '<stdin>[partN]' becomes a Windows-
-        // legal '_stdin_[partN].gbc' on disk.  The section name stays
-        // intact for EmitBytecode (used for diagnostics).
-        OutputPath := IncludeTrailingPathDelimiter(FOutputPath.Value) +
-          ChangeFileExt(SanitizeFileBaseName(ExtractFileName(Names[I])),
-            EXT_GBC);
-        SectionSource := SourceRegistry.Load(Names[I]);
-        try
-          EmitBytecode(SectionSource, Names[I], OutputPath);
-        finally
-          SectionSource.Free;
-        end;
-      end;
-    finally
-      Names.Free;
+    if LowerCase(ExtractFileExt(AFiles[I])) = EXT_GBC then
+      raise Exception.CreateFmt('Cannot compile bytecode file: %s', [AFiles[I]]);
+    Index := Length(FPlan);
+    SetLength(FPlan, Index + 1);
+    FPlan[Index].InputFile := AFiles[I];
+    if AStdin and MultifileEnabled then
+      FPlan[Index].OutputPath := IncludeTrailingPathDelimiter(FOutputPath.Value) +
+        ChangeFileExt(SanitizeFileBaseName(ExtractFileName(AFiles[I])), EXT_GBC)
+    else if AStdin then
+      FPlan[Index].OutputPath := FOutputPath.Value
+    else
+      FPlan[Index].OutputPath := ResolveOutputPath(AFiles[I], AInputRoot);
+    FPlan[Index].CreateParents := (AInputRoot <> '') and
+      FOutputPath.Present and DirectoryExists(FOutputPath.Value);
+    if FSourceMap.Present then
+    begin
+      FPlan[Index].MapOutputPath := FSourceMap.ValueOr('');
+      if FPlan[Index].MapOutputPath = '' then
+        FPlan[Index].MapOutputPath := ChangeFileExt(
+          FPlan[Index].OutputPath, EXT_MAP);
     end;
-    Exit;
+  end;
+end;
+
+procedure TBundlerApp.ValidateOutputPlan;
+var
+  Destinations, Sources: TStringList;
+  I, Index: Integer;
+  ParentPath, NextParent: string;
+
+  procedure ReserveDestination(const APath, ASource: string);
+  var
+    Canonical: string;
+    Index: Integer;
+  begin
+    if APath = '' then
+      Exit;
+    Canonical := CanonicalCapabilityPath(APath);
+    if Destinations.Find(Canonical, Index) then
+      raise TParseError.CreateFmt(
+        'Output collision: %s and %s both write to %s',
+        [Sources[PtrInt(Destinations.Objects[Index])], ASource, APath]);
+    Destinations.AddObject(Canonical, TObject(PtrInt(Sources.Add(ASource))));
   end;
 
-  if DirectoryExists(FOutputPath.Value) then
-    raise TParseError.Create(
-      '--output must be a file when compiling from stdin.');
-
+begin
+  Destinations := TStringList.Create;
+  Sources := TStringList.Create;
   try
-    EmitBytecode(Source, STDIN_FILE_NAME, FOutputPath.Value);
+    Destinations.Sorted := True;
+    {$IF DEFINED(DARWIN) OR DEFINED(MSWINDOWS)}
+    Destinations.CaseSensitive := False;
+    {$ELSE}
+    Destinations.CaseSensitive := True;
+    {$IFEND}
+    for I := 0 to High(FPlan) do
+    begin
+      ReserveDestination(FPlan[I].OutputPath, FPlan[I].InputFile + ' (bytecode)');
+      ReserveDestination(FPlan[I].MapOutputPath, FPlan[I].InputFile + ' (source map)');
+    end;
+    // A planned file cannot also be a directory needed by another output.
+    // Check after collecting all destinations so input order does not matter.
+    for I := 0 to Destinations.Count - 1 do
+    begin
+      ParentPath := ExtractFileDir(Destinations[I]);
+      while ParentPath <> '' do
+      begin
+        if Destinations.Find(ParentPath, Index) then
+          raise TParseError.CreateFmt(
+            'Output collision: %s and %s require %s as both a file and a directory',
+            [Sources[PtrInt(Destinations.Objects[Index])],
+             Sources[PtrInt(Destinations.Objects[I])], ParentPath]);
+        NextParent := ExtractFileDir(ParentPath);
+        if NextParent = ParentPath then
+          Break;
+        ParentPath := NextParent;
+      end;
+    end;
   finally
-    Source.Free;
+    Sources.Free;
+    Destinations.Free;
   end;
 end;
 
@@ -368,7 +422,7 @@ begin
   AConsoleOutput := '';
   AErrorMessage := '';
   try
-    EmitFromFile(AFileName);
+    EmitPlannedFile(AIndex);
   except
     on E: Exception do
       AErrorMessage := E.Message;
@@ -400,78 +454,13 @@ begin
   end;
 end;
 
-procedure TBundlerApp.EmitPath(const APath: string);
-var
-  Files, RawFiles, SinglePath: TStringList;
-  I: Integer;
-begin
-  if IsStdinPath(APath) then
-  begin
-    EmitFromStdin;
-    Exit;
-  end;
-
-  if DirectoryExists(APath) then
-  begin
-    RawFiles := FindAllFiles(APath, ScriptExtensions);
-    try
-      Files := ExpandMultifileFiles(RawFiles);
-    finally
-      RawFiles.Free;
-    end;
-    try
-      if GetJobCount(Files.Count) > 1 then
-      begin
-        WriteLn(SysUtils.Format('Compiling %d files with %d workers',
-          [Files.Count, GetJobCount(Files.Count)]));
-        EmitParallel(Files, GetJobCount(Files.Count));
-      end
-      else
-        for I := 0 to Files.Count - 1 do
-        begin
-          if I > 0 then
-            WriteLn;
-          EmitFromFile(Files[I]);
-        end;
-    finally
-      Files.Free;
-    end;
-  end
-  else if FileExists(APath) then
-  begin
-    if MultifileEnabled then
-    begin
-      SinglePath := TStringList.Create;
-      try
-        SinglePath.Add(APath);
-        Files := ExpandMultifileFiles(SinglePath);
-      finally
-        SinglePath.Free;
-      end;
-      try
-        for I := 0 to Files.Count - 1 do
-        begin
-          if I > 0 then
-            WriteLn;
-          EmitFromFile(Files[I]);
-        end;
-      finally
-        Files.Free;
-      end;
-    end
-    else
-      EmitFromFile(APath);
-  end
-  else
-    raise Exception.Create('Path not found: ' + APath);
-end;
-
 { TBundlerApp - ExecuteWithPaths }
 
 procedure TBundlerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   I: Integer;
-  Inputs, Found: TStringList;
+  Inputs, Found, Files, StdinNames: TStringList;
+  InputRoot: string;
 begin
   if FOutputPath.Present and (FOutputPath.Value <> '') and
      not DirectoryExists(FOutputPath.Value) and
@@ -487,12 +476,6 @@ begin
       + 'may expand to multiple sections); pass a directory or omit '
       + '--output.');
 
-  if (FSourceMap.ValueOr('') <> '') and
-     ((APaths.Count > 1) or
-      ((APaths.Count = 1) and DirectoryExists(APaths[0]))) then
-    raise TParseError.Create(
-      '--source-map=<file> supports a single input file or stdin.');
-
   // Use Present rather than the value to catch the bare --source-map
   // form too — see ScriptLoader for the rationale.
   if FSourceMap.Present and MultifileEnabled then
@@ -500,40 +483,80 @@ begin
       '--source-map cannot be combined with --multifile (an input '
       + 'may expand to multiple sections).');
 
-  { Every config governing the inputs is validated before anything is
-    emitted, so a bad config never leaves some outputs written. }
+  { Freeze the complete invocation before a worker may write: directory
+    discovery, multifile expansion, configs and every output destination. }
+  FPlan := nil;
   Inputs := TStringList.Create;
+  StdinNames := nil;
   try
     if APaths.Count = 0 then
-      Inputs.Add(STDIN_FILE_NAME);
-    for I := 0 to APaths.Count - 1 do
-      if IsStdinPath(APaths[I]) then
-        Inputs.Add(STDIN_FILE_NAME)
-      else if DirectoryExists(APaths[I]) then
+      Inputs.Add(STDIN_FILE_NAME)
+    else
+      Inputs.AddStrings(APaths);
+    for I := 0 to Inputs.Count - 1 do
+    begin
+      if (APaths.Count = 0) or IsStdinPath(Inputs[I]) then
       begin
-        Found := FindAllFiles(APaths[I], ScriptExtensions);
-        try
-          Inputs.AddStrings(Found);
-        finally
-          Found.Free;
-        end;
+        if not FOutputPath.Present then
+          raise TParseError.Create(
+            '--output=<path> is required when compiling from stdin.');
+        if MultifileEnabled and not DirectoryExists(FOutputPath.Value) then
+          raise TParseError.Create(
+            '--output must be a directory when --multifile is set with stdin.');
+        if not MultifileEnabled and DirectoryExists(FOutputPath.Value) then
+          raise TParseError.Create(
+            '--output must be a file when compiling from stdin.');
+        ValidateFileConfig(STDIN_FILE_NAME);
+        if StdinNames = nil then
+          StdinNames := SplitStdinMultifile(ReadSourceFromText(Input));
+        AddPlannedFiles(StdinNames, '', True);
+        Continue;
+      end;
+      InputRoot := '';
+      if DirectoryExists(Inputs[I]) then
+      begin
+        InputRoot := Inputs[I];
+        Found := FindAllFiles(InputRoot, ScriptExtensions);
       end
-      else if FileExists(APaths[I]) then
-        Inputs.Add(APaths[I]);
-    ValidateFileConfigs(Inputs);
+      else
+      begin
+        if not FileExists(Inputs[I]) then
+          raise Exception.Create('Path not found: ' + Inputs[I]);
+        Found := TStringList.Create;
+        Found.Add(Inputs[I]);
+      end;
+      try
+        Files := ExpandMultifileFiles(Found);
+        try
+          AddPlannedFiles(Files, InputRoot, False);
+        finally
+          Files.Free;
+        end;
+      finally
+        Found.Free;
+      end;
+    end;
+    ValidateOutputPlan;
+    Inputs.Clear;
+    for I := 0 to High(FPlan) do
+      Inputs.Add(FPlan[I].InputFile);
+    if GetJobCount(Inputs.Count) > 1 then
+    begin
+      WriteLn(SysUtils.Format('Compiling %d files with %d workers',
+        [Inputs.Count, GetJobCount(Inputs.Count)]));
+      EmitParallel(Inputs, GetJobCount(Inputs.Count));
+    end
+    else
+      for I := 0 to High(FPlan) do
+      begin
+        if I > 0 then
+          WriteLn;
+        EmitPlannedFile(I);
+      end;
   finally
+    StdinNames.Free;
     Inputs.Free;
   end;
-
-  if APaths.Count = 0 then
-    EmitFromStdin
-  else
-    for I := 0 to APaths.Count - 1 do
-    begin
-      if I > 0 then
-        WriteLn;
-      EmitPath(APaths[I]);
-    end;
 end;
 
 { Entry point }

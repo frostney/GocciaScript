@@ -139,6 +139,10 @@ type
 
   TGocciaCompilerScope = class
   private
+    // The compilation root owns generated-name counters; descendants share it.
+    FGeneratedNameScope: TGocciaCompilerScope;
+    FClassPrivateCounter: Integer;
+    FEvalVarObjectCounter: Integer;
     FParent: TGocciaCompilerScope;
     FLocals: array of TGocciaCompilerLocal;
     FLocalIndex: TOrderedStringMap<Integer>;
@@ -226,6 +230,10 @@ type
     constructor Create(const AParent: TGocciaCompilerScope;
       const ADepth: Integer);
     destructor Destroy; override;
+
+    function NextClassPrivatePrefix: string;
+    procedure ReserveClassPrivatePrefix(const APrefix: string);
+    procedure ReserveEvalVarObjectName(const AName: string);
 
     { Sizes the locals table for ACount locals when nothing is declared
       yet. Every slot of the table is initialized and finalized whether a
@@ -504,11 +512,6 @@ type
       read FParametersInVarEnvironment write FParametersInVarEnvironment;
   end;
 
-function NextClassPrivatePrefix: string;
-// Keeps the hidden variable object names DeclareEvalVarObjects makes from
-// now on different from AName, one an eval site record already names.
-procedure ReserveEvalVarObjectName(const AName: string);
-
 
 implementation
 
@@ -554,13 +557,19 @@ end;
 
 function TGocciaCompilerScope.NewestLocalNamed(const AName: string): Integer;
 var
-  I: Integer;
+  I, Probes: Integer;
+  Found: Boolean;
 begin
   if Assigned(FLocalIndex) then
   begin
     if Assigned(FCompileProfile) then
-      FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes, 1);
-    if not FLocalIndex.TryGetValue(AName, Result) then
+    begin
+      Found := FLocalIndex.TryGetValueWithProbes(AName, Result, Probes);
+      FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes, Probes);
+    end
+    else
+      Found := FLocalIndex.TryGetValue(AName, Result);
+    if not Found then
       Result := -1;
     Exit;
   end;
@@ -637,6 +646,10 @@ var
 begin
   inherited Create;
   FParent := AParent;
+  if Assigned(AParent) then
+    FGeneratedNameScope := AParent.FGeneratedNameScope
+  else
+    FGeneratedNameScope := Self;
   FLocalIndex := nil;
   FParameterNames := nil;
   FLocalCount := 0;
@@ -1319,16 +1332,14 @@ begin
   FDirectEvalSeen := True;
 end;
 
-threadvar
-  GEvalVarObjectCounter: Integer;
-
-procedure ReserveEvalVarObjectName(const AName: string);
+// Imported direct-eval bindings must remain distinct from new hidden locals.
+procedure TGocciaCompilerScope.ReserveEvalVarObjectName(const AName: string);
 var
   Suffix: Integer;
 begin
   if TryStrToInt(Copy(AName, LastDelimiter(':', AName) + 1, MaxInt),
-     Suffix) and (Suffix >= GEvalVarObjectCounter) then
-    GEvalVarObjectCounter := Suffix + 1;
+     Suffix) and (Suffix >= FGeneratedNameScope.FEvalVarObjectCounter) then
+    FGeneratedNameScope.FEvalVarObjectCounter := Suffix + 1;
 end;
 
 procedure TGocciaCompilerScope.DeclareEvalVarObjects(
@@ -1340,8 +1351,8 @@ begin
     Exit;
   if FEvalVarObjectSlot >= 0 then
     Exit;
-  Suffix := IntToStr(GEvalVarObjectCounter);
-  Inc(GEvalVarObjectCounter);
+  Suffix := IntToStr(FGeneratedNameScope.FEvalVarObjectCounter);
+  Inc(FGeneratedNameScope.FEvalVarObjectCounter);
   // The parameters' environment encloses the body's, so its object is
   // declared and probed first, and the body's is the nearer with binding.
   if not AParameterListIsSimple then
@@ -1874,13 +1885,20 @@ begin
   Result := FWithBindingDepths[AIndex];
 end;
 
-threadvar
-  GClassPrivateCounter: Integer;
-
-function NextClassPrivatePrefix: string;
+function TGocciaCompilerScope.NextClassPrivatePrefix: string;
 begin
-  Result := IntToStr(GClassPrivateCounter) + '$';
-  Inc(GClassPrivateCounter);
+  Result := IntToStr(FGeneratedNameScope.FClassPrivateCounter) + '$';
+  Inc(FGeneratedNameScope.FClassPrivateCounter);
+end;
+
+procedure TGocciaCompilerScope.ReserveClassPrivatePrefix(const APrefix: string);
+var
+  Ordinal: Integer;
+begin
+  if (APrefix <> '') and (APrefix[Length(APrefix)] = '$') and
+     TryStrToInt(Copy(APrefix, 1, Length(APrefix) - 1), Ordinal) and
+     (Ordinal >= FGeneratedNameScope.FClassPrivateCounter) then
+    FGeneratedNameScope.FClassPrivateCounter := Ordinal + 1;
 end;
 
 end.

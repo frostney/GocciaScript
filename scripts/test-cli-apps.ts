@@ -41,8 +41,10 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
-import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
+import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
+import { verifyBundlerLayout } from "./test-cli-bundler-layout";
+import { verifyBundlerReproducibility, verifyBundlerPrivateIsolation } from "./test-cli-bundler-reproducibility";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 // The runner reports canonical host paths. On Windows the temp directory's
@@ -2392,6 +2394,19 @@ function expectEvalHostProbe(label: string, lines: string[], expected: string[])
     throw new Error(`Test262 Runner ${label} probe got:\n${actual}\nexpected:\n${expected.join("\n")}`);
 }
 
+await section("Test262 Runner: eval membership uses exact identifier names...", async () => {
+  expectEvalHostProbe("exact eval names", [
+    "function direct() { let café = 3, café = 7, Name = 11, name = 13; return eval('[café, café, Name, name].join()'); }",
+    "print(direct());",
+    "print(eval('let café = 3; let café = 7; café + café'));",
+    "print((0, eval)('let Name = 11; let name = 13; Name + name'));",
+    "try { eval('let café; let café;'); } catch (error) { print(error.name); }",
+    "try { eval('let café; var café;'); } catch (error) { print(error.name); }",
+    "function conflict() { let café = 3; try { eval('var café'); } catch (error) { return error.name; } }",
+    "print(conflict());",
+  ], ["3,7,11,13", "10", "24", "SyntaxError", "SyntaxError", "SyntaxError"]);
+});
+
 await section("Test262 Runner: a second eval reads the vars an earlier eval of the same function declared...", async () => {
   expectEvalHostProbe("second eval", [
     "var s = 'outer';",
@@ -4278,6 +4293,22 @@ await section("Loader: --host-environment module controls time, zone, and random
     )
       throw new Error(
         `Loader should reject conflicting host environment options, got: ${conflictOutput}`,
+      );
+
+    const profileConflict = runLoaderJson("0;\n", [
+      `--host-environment=${providerPath}`,
+      "--profile-deterministic",
+    ]);
+    const profileConflictOutput =
+      JSON.stringify(profileConflict.json) + profileConflict.stderr;
+    if (
+      profileConflict.exitCode === 0 ||
+      !profileConflictOutput.includes(
+        "cannot be combined with --profile-deterministic",
+      )
+    )
+      throw new Error(
+        `Loader should name --profile-deterministic when it conflicts with a host environment, got: ${profileConflictOutput}`,
       );
   } finally {
     clean(tmp);
@@ -8232,11 +8263,15 @@ await section("Bundler: constants folding to Infinity, NaN and -0 compile + roun
 // ============================================================================
 
 await section("Bundler: source and precompiled module graphs agree...", verifyAotModules);
+await section("Bundler: nested outputs and collision preflight preserve files...", verifyBundlerLayout);
+await section("Bundler: repeated builds are byte-identical across worker counts...", verifyBundlerReproducibility);
+await section("Bundler: independently compiled classes keep private storage isolated...", verifyBundlerPrivateIsolation);
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
 await section("Compile profiling: per-function parse and compile records...", verifyCompileProfiles);
 await section("Compile profiling: every counter grows with its shape...", verifyCompileCounterGrowth);
 
+await section("Directory profiling: all files, modes and deterministic captures...", verifyDirectoryProfiles);
 await section("Function profiling: recursive totals stay within <module>'s...", verifyRecursiveTotals);
 
 await section("BenchmarkRunner: results are reported under a polluted Array.prototype...", async () => {

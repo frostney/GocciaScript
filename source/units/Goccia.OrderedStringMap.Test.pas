@@ -55,6 +55,7 @@ type
     procedure SetupTests; override;
 
     procedure TestReuseDeletedBucketClearsDeletedCount;
+    procedure TestCountedLookupsIncludeCollisionsAndTombstones;
     procedure TestDeleteHeavyInsertCompactsTombstones;
     procedure TestEntryIndexSurvivesAddsAndSeesUpdates;
     procedure TestEntryVersionInvalidatesOnRemoveCompactClear;
@@ -115,6 +116,8 @@ end;
 
 procedure TTestOrderedStringMap.SetupTests;
 begin
+  Test('Counted lookups include collisions, misses and tombstones',
+    TestCountedLookupsIncludeCollisionsAndTombstones);
   Test('Reuse deleted bucket clears deleted count',
     TestReuseDeletedBucketClearsDeletedCount);
   Test('Delete-heavy insert compacts tombstones',
@@ -147,19 +150,55 @@ var
 begin
   Map := TOrderedStringMap<Integer>.Create(16);
   try
-    Map.Add('a', 1);
+    Map.Add('Aa', 1);
     Map.Add('b', 2);
 
-    Expect<Boolean>(Map.Remove('a')).ToBe(True);
+    Expect<Boolean>(Map.Remove('Aa')).ToBe(True);
     Expect<Integer>(Map.DeletedCount).ToBe(1);
 
-    // "q" hashes to the same initial bucket as "a" in a 16-slot table.
-    Map.Add('q', 3);
+    // These strings have the same full additive hash, before mixing.
+    Map.Add('B@', 3);
 
     Expect<Integer>(Map.DeletedCount).ToBe(0);
     Expect<Integer>(Map.Count).ToBe(2);
     Expect<Boolean>(Map.ContainsKey('b')).ToBe(True);
-    Expect<Boolean>(Map.ContainsKey('q')).ToBe(True);
+    Expect<Boolean>(Map.ContainsKey('B@')).ToBe(True);
+  finally
+    Map.Free;
+  end;
+end;
+
+procedure TTestOrderedStringMap.TestCountedLookupsIncludeCollisionsAndTombstones;
+var
+  Map: TOrderedStringMap<Integer>;
+  Value, Probes: Integer;
+begin
+  Map := TOrderedStringMap<Integer>.Create(16);
+  try
+    // Aa and B@ have equal full additive hashes, so these four distinct
+    // strings collide even after mixing. This checks real bucket visits.
+    Map.Add('AaAa', 1);
+    Map.Add('AaB@', 2);
+    Map.Add('B@Aa', 3);
+    Expect<Boolean>(Map.TryGetValueWithProbes('AaAa', Value, Probes)).ToBe(True);
+    Expect<Integer>(Probes).ToBe(1);
+    Expect<Integer>(Value).ToBe(1);
+    Expect<Boolean>(Map.TryGetValueWithProbes('B@Aa', Value, Probes)).ToBe(True);
+    Expect<Integer>(Probes).ToBe(3);
+    Expect<Integer>(Value).ToBe(3);
+    Expect<Boolean>(Map.TryGetValueWithProbes('B@B@', Value, Probes)).ToBe(False);
+    Expect<Integer>(Probes).ToBe(4);
+    Expect<Integer>(Value).ToBe(0);
+    Map.Remove('AaAa');
+    Expect<Boolean>(Map.TryGetValueWithProbes('B@Aa', Value, Probes)).ToBe(True);
+    Expect<Integer>(Probes).ToBe(3);
+    Expect<Boolean>(Map.TryGetValueWithProbes('AaAa', Value, Probes)).ToBe(False);
+    Expect<Integer>(Probes).ToBe(4);
+    Map.Add('B@B@', 4);
+    Expect<Integer>(Map.DeletedCount).ToBe(0);
+    Expect<Boolean>(Map.TryGetValueWithProbes('B@B@', Value, Probes)).ToBe(True);
+    Expect<Integer>(Probes).ToBe(1);
+    Expect<Integer>(Value).ToBe(4);
   finally
     Map.Free;
   end;
