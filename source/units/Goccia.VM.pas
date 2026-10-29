@@ -15726,7 +15726,7 @@ procedure TGocciaVM.TeardownCurrentFrame(const ATemplate: TGocciaFunctionTemplat
 begin
   if FProfilingFunctions and Assigned(ATemplate) and
      (ATemplate.ProfileIndex >= 0) then
-    TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex, GetNanoseconds);
+    TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex);
   if Assigned(FCallStack) then
     FCallStack.Pop;
   if FCurrentExecutionContextPushed then
@@ -15832,9 +15832,7 @@ begin
         ATemplate.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
           ATemplate.Name, '', 0);
     end;
-    AProfileTimestamp := GetNanoseconds;
-    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex,
-      AProfileTimestamp);
+    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex);
   end;
 
   if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and
@@ -15850,8 +15848,7 @@ function TGocciaVM.PopClosedNumericFrame(var AFrame: TGocciaVMCallFrame;
 begin
   if FProfilingFunctions and Assigned(ATemplate) and
      (ATemplate.ProfileIndex >= 0) then
-    TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex,
-      GetNanoseconds);
+    TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex);
   if Assigned(FCallStack) then
     FCallStack.Pop;
   Dec(FFrameDepth);
@@ -16406,9 +16403,7 @@ begin
         ATemplate.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
           ATemplate.Name, '', 0);
     end;
-    AProfileTimestamp := GetNanoseconds;
-    TGocciaProfiler.Instance.PushFunction(
-      ATemplate.ProfileIndex, AProfileTimestamp);
+    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex);
   end;
 
   if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and
