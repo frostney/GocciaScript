@@ -1950,13 +1950,84 @@ begin
     (ARegister.ObjectValue is TGocciaNumberLiteralValue);
 end;
 
+// Reads two numeric scalar operands (grkInt or grkFloat) as Doubles and
+// returns True, or returns False when either is anything else, a boxed Number
+// included. Each register is read once through its address: testing it with
+// RegisterIsNumericScalar and then reading it with NumericScalarToDouble made
+// the compiler load the register twice, each time copying it to a temporary.
+// The caller must not run guest code between taking the addresses and this
+// call, since guest code can move the register file.
+function VMNumericScalarPair(const ALeft, ARight: PGocciaRegister;
+  out ALeftDouble, ARightDouble: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := False;
+  if ALeft^.Kind = grkFloat then
+    ALeftDouble := ALeft^.FloatValue
+  else if ALeft^.Kind = grkInt then
+    ALeftDouble := ALeft^.IntValue
+  else
+    Exit;
+  if ARight^.Kind = grkFloat then
+    ARightDouble := ARight^.FloatValue
+  else if ARight^.Kind = grkInt then
+    ARightDouble := ARight^.IntValue
+  else
+    Exit;
+  Result := True;
+end;
+
+// Stores the Number AValue in ADest^, classified as VMNumberRegister does; the
+// numeric opcodes write their result here. The range test is false
+// for NaN and the infinities, so a finite value is classified with compares
+// and one truncation instead of calls to IsNaN, IsInfinite and Frac. Writing
+// the register in place spares the copy a function result makes through a
+// temporary. The caller must not run guest code between taking ADest and this
+// call, since guest code can move the register file.
+procedure VMStoreNumberRegister(const ADest: PGocciaRegister;
+  const AValue: Double); {$IFDEF FPC}inline;{$ENDIF}
+var
+  IntValue: Int64;
+begin
+  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
+  begin
+    IntValue := Trunc(AValue);
+    if IntValue <> AValue then
+    begin
+      ADest^.Kind := grkFloat;
+      ADest^.FloatValue := AValue;
+    end
+    else if (IntValue = 0) and NumberBits.IsNegativeZero(AValue) then
+    begin
+      ADest^.ObjectValue := TGocciaNumberLiteralValue.NegativeZeroValue;
+      ADest^.Kind := grkObject;
+    end
+    else
+    begin
+      ADest^.Kind := grkInt;
+      ADest^.IntValue := IntValue;
+    end;
+  end
+  else if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
+  begin
+    // The value before the kind: a register the collector can see never
+    // claims an object it does not hold.
+    ADest^.ObjectValue := VMNumberValue(AValue);
+    ADest^.Kind := grkObject;
+  end
+  else
+  begin
+    ADest^.Kind := grkFloat;
+    ADest^.FloatValue := AValue;
+  end;
+end;
+
 function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
 var
   IntValue: Int64;
 begin
-  // The result of every arithmetic opcode lands here. The range test is false
-  // for NaN and the infinities, so a finite value is classified with compares
-  // and one truncation instead of calls to IsNaN, IsInfinite and Frac.
+  // The same classification as VMStoreNumberRegister, for callers that need
+  // the register as a value. Built over that procedure and the result's
+  // address, these callers' code grew.
   if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
   begin
     IntValue := Trunc(AValue);
