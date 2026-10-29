@@ -394,12 +394,13 @@ var
   Lines: TStringList;
 begin
   Lines := CreateECMAScriptSourceLines(ASCII_LINE + #10 + UNICODE_LINE + #10 +
-    ASCII_LINE);
+    #10 + ASCII_LINE);
   try
-    Expect<Integer>(Lines.Count).ToBe(3);
+    Expect<Integer>(Lines.Count).ToBe(4);
     Expect<string>(Lines[0]).ToBe(ASCII_LINE);
     Expect<string>(Lines[1]).ToBe(UNICODE_LINE);
-    Expect<string>(Lines[2]).ToBe(ASCII_LINE);
+    Expect<string>(Lines[2]).ToBe('');
+    Expect<string>(Lines[3]).ToBe(ASCII_LINE);
   finally
     Lines.Free;
   end;
