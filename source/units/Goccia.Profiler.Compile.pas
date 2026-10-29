@@ -106,6 +106,7 @@ type
   private
     FFunctions: array of TGocciaCompileFunctionProfile;
     FFunctionCount: Integer;
+    FDeterministic: Boolean;
     FFunctionIndex: TOrderedStringMap<Integer>;
     FExcludedFiles: TOrderedStringMap<Boolean>;
     FNodeKindIndex: THashMap<TClass, Integer>;
@@ -188,6 +189,7 @@ type
     function IsExcluded(const AFile: string): Boolean;
 
     function GetFunction(const AIndex: Integer): TGocciaCompileFunctionProfile;
+    property Deterministic: Boolean read FDeterministic write FDeterministic;
     property FunctionCount: Integer read FFunctionCount;
     property NodeKindCount: Integer read FNodeKindCount;
     function NodeKindName(const AIndex: Integer): string;
@@ -583,6 +585,12 @@ function TGocciaCompileProfiler.GetFunction(
   const AIndex: Integer): TGocciaCompileFunctionProfile;
 begin
   Result := FFunctions[AIndex];
+  if FDeterministic then
+  begin
+    Result.LexNanoseconds := 0;
+    Result.ParseNanoseconds := 0;
+    Result.CompileNanoseconds := 0;
+  end;
 end;
 
 function TGocciaCompileProfiler.NodeKindName(const AIndex: Integer): string;

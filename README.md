@@ -342,6 +342,8 @@ Use one fixed JavaScript-visible clock, UTC time zone, and portable random strea
 
 Timeouts and profiling still use the real monotonic clock. The equivalent config key is `"deterministic": true`; embedders can inject their own clock and RNG providers through the engine host environment.
 
+For repeatable profile counts across a file or directory, use `--profile-deterministic --profile-output=counts.json`; timing fields are zero. See [Profiling](docs/profiling.md#directories-and-deterministic-captures).
+
 For custom providers, pass a JavaScript module to `--host-environment` or implement the Pascal host interfaces. See [Host Environment](docs/host-environment.md) for both examples and the provider contract.
 
 ### Start the REPL

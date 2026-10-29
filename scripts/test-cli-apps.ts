@@ -41,7 +41,7 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
-import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
+import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
 import { verifyBundlerLayout } from "./test-cli-bundler-layout";
 import { verifyBundlerReproducibility, verifyBundlerPrivateIsolation } from "./test-cli-bundler-reproducibility";
@@ -4294,6 +4294,22 @@ await section("Loader: --host-environment module controls time, zone, and random
       throw new Error(
         `Loader should reject conflicting host environment options, got: ${conflictOutput}`,
       );
+
+    const profileConflict = runLoaderJson("0;\n", [
+      `--host-environment=${providerPath}`,
+      "--profile-deterministic",
+    ]);
+    const profileConflictOutput =
+      JSON.stringify(profileConflict.json) + profileConflict.stderr;
+    if (
+      profileConflict.exitCode === 0 ||
+      !profileConflictOutput.includes(
+        "cannot be combined with --profile-deterministic",
+      )
+    )
+      throw new Error(
+        `Loader should name --profile-deterministic when it conflicts with a host environment, got: ${profileConflictOutput}`,
+      );
   } finally {
     clean(tmp);
   }
@@ -8255,6 +8271,7 @@ await section("Allocation profiling: host callbacks and native re-entry...", ver
 await section("Compile profiling: per-function parse and compile records...", verifyCompileProfiles);
 await section("Compile profiling: every counter grows with its shape...", verifyCompileCounterGrowth);
 
+await section("Directory profiling: all files, modes and deterministic captures...", verifyDirectoryProfiles);
 await section("Function profiling: recursive totals stay within <module>'s...", verifyRecursiveTotals);
 
 await section("BenchmarkRunner: results are reported under a polluted Array.prototype...", async () => {
