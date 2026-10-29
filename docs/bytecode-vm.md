@@ -713,6 +713,19 @@ Prefer:
 - compiler lowering to existing instructions for syntactic sugar
 - flags or operands when an operation is a mode of an existing instruction rather than a new concept
 
+### Private field construction
+
+Compiled private labels resolve through the declaring class to runtime keys.
+The class cache and private stamp plan retain those keys; construction reuses
+cache hits in place and resolves misses through the lexical private environment.
+Constant and dynamic field-definition instructions share that path. A receiver
+that is not extensible still requires an existing-slot check before a write.
+
+Brand stamping stores the declaring class as the brand value, keeping its
+identity alive even if a later initializer throws. Reusing a cached key does
+not replace that ownership or share identities between class evaluations;
+see [ADR 0166](adr/0166-reproducible-bundler-output.md).
+
 ### Object Integrity Levels
 
 The VM has no property-flag primitives of its own; integrity levels belong to the shared object model. `TGocciaObjectValue` (`Goccia.Values.ObjectValue.pas`) declares virtual `Freeze`, `Seal`, `PreventExtensions`, `TryPreventExtensions`, `TestIntegrityFrozen`, and `TestIntegritySealed`:

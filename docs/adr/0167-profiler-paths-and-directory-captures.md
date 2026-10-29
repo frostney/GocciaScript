@@ -1,4 +1,4 @@
-# 0166 - Profile stack paths incrementally and aggregate directory captures on one thread
+# 0167 - Profile stack paths incrementally and aggregate directory captures on one thread
 
 **Date:** 2026-10-28
 **Area:** `profiler`, `cli`

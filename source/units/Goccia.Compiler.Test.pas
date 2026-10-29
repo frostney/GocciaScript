@@ -236,6 +236,7 @@ type
     procedure TestStaticImportLoadsScaleWithDeclarations;
     procedure TestBinaryRoundTrip;
     procedure TestObjectRestBytecodeRoundTrip;
+    procedure TestGeneratedNamesPerCompilation;
     procedure TestBinaryRoundTripClosedNumericSelfCall;
     procedure TestBinaryRoundTripUpvalueNames;
     procedure TestBinaryRoundTripFunctionDeclarationPosition;
@@ -321,6 +322,8 @@ type
 
 procedure TTestCompiler.SetupTests;
 begin
+  Test('Generated names are reproducible across compilations',
+    TestGeneratedNamesPerCompilation);
   Test('Compile literal', TestCompileLiteral);
   Test('AST spans use canonical UTF-16 code-unit offsets',
     TestASTSpansUseUTF16CodeUnitOffsets);
@@ -3628,6 +3631,61 @@ begin
   finally
     Original.Free;
     DeleteFile(TempFile);
+  end;
+end;
+
+procedure TTestCompiler.TestGeneratedNamesPerCompilation;
+const
+  SOURCES: array[0..2] of string = (
+    'const make = () => class { #x = 1; get() { return this.#x; } };',
+    'const key = "x"; class C { [key] = 1; static [key] = 2; }',
+    'const outer = () => { eval("var x = 1"); ' +
+      'return (a = eval("var y = 2")) => { eval("var z = 3"); return x; }; };');
+var
+  Original, Repeated, Unrelated: TGocciaBytecodeModule;
+  OriginalStream, RepeatedStream: TMemoryStream;
+  I: Integer;
+
+  procedure Serialize(const AModule: TGocciaBytecodeModule;
+    const AStream: TMemoryStream);
+  var
+    Writer: TGocciaBytecodeWriter;
+  begin
+    Writer := TGocciaBytecodeWriter.Create(AStream);
+    try
+      Writer.WriteModule(AModule);
+    finally
+      Writer.Free;
+    end;
+  end;
+begin
+  for I := 0 to High(SOURCES) do
+  begin
+    Original := CompileSource(SOURCES[I], False, False, False, True, True,
+      True, False, True);
+    try
+      Unrelated := CompileSource(SOURCES[(I + 1) mod Length(SOURCES)],
+        False, False, False, True, True, True, False, True);
+      Unrelated.Free;
+      Repeated := CompileSource(SOURCES[I], False, False, False, True, True,
+        True, False, True);
+      OriginalStream := TMemoryStream.Create;
+      RepeatedStream := TMemoryStream.Create;
+      try
+        Serialize(Original, OriginalStream);
+        Serialize(Repeated, RepeatedStream);
+        Expect<Int64>(RepeatedStream.Size).ToBe(OriginalStream.Size);
+        if RepeatedStream.Size = OriginalStream.Size then
+          Expect<Boolean>(CompareMem(OriginalStream.Memory,
+            RepeatedStream.Memory, OriginalStream.Size)).ToBe(True);
+      finally
+        RepeatedStream.Free;
+        OriginalStream.Free;
+        Repeated.Free;
+      end;
+    finally
+      Original.Free;
+    end;
   end;
 end;
 
