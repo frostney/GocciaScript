@@ -43,6 +43,8 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
 import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
+import { verifyBundlerLayout } from "./test-cli-bundler-layout";
+import { verifyBundlerReproducibility, verifyBundlerPrivateIsolation } from "./test-cli-bundler-reproducibility";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 // The runner reports canonical host paths. On Windows the temp directory's
@@ -8245,6 +8247,9 @@ await section("Bundler: constants folding to Infinity, NaN and -0 compile + roun
 // ============================================================================
 
 await section("Bundler: source and precompiled module graphs agree...", verifyAotModules);
+await section("Bundler: nested outputs and collision preflight preserve files...", verifyBundlerLayout);
+await section("Bundler: repeated builds are byte-identical across worker counts...", verifyBundlerReproducibility);
+await section("Bundler: independently compiled classes keep private storage isolated...", verifyBundlerPrivateIsolation);
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
 await section("Compile profiling: per-function parse and compile records...", verifyCompileProfiles);
