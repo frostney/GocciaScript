@@ -190,6 +190,9 @@ type
 
     property Capacity: Integer read FBucketCount;
     property DeletedCount: Integer read FDeletedCount;
+    // Entry slots in use, removed ones included: the bound for walking the
+    // entries by index with TryGetValueAtEntry, which copies no key.
+    property EntryCount: Integer read FEntryCount;
     property EntryVersion: Cardinal read FEntryVersion;
   end;
 

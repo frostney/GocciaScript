@@ -1586,16 +1586,20 @@ end;
 
 destructor TGocciaObjectValue.Destroy;
 var
-  Pair: TGocciaPropertyMap.TKeyValuePair;
+  Descriptor: TGocciaPropertyDescriptor;
   SymPair: TSymbolDescriptorMap.TKeyValuePair;
+  I: Integer;
 begin
   // A constructor that raises frees the object it was building, so the maps
   // may not exist yet. The development build's stack check can raise inside
   // any constructor, for example when a deep nest of Proxies with native
   // traps reaches the end of the native stack.
+  // Walked by entry index: the enumerator copies every key, and a sweep
+  // destroys more objects than anything else does.
   if Assigned(FProperties) then
-    for Pair in FProperties do
-      Pair.Value.Free;
+    for I := 0 to FProperties.EntryCount - 1 do
+      if FProperties.TryGetValueAtEntry(I, Descriptor) then
+        Descriptor.Free;
   FProperties.Free;
 
   if Assigned(FSymbolDescriptors) then
