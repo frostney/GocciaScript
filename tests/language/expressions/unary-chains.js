@@ -57,3 +57,17 @@ test("reads a binding an operand inside it assigns", () => {
   };
   expect(run(opaque(3))).toBe(-6);
 });
+
+test("alternating binary and unary operands preserve Number and BigInt results", () => {
+  const run = (p) => p + -(p + -(p + -p));
+  expect(run(opaque(3))).toBe(0);
+  expect(run(opaque(3n))).toBe(0n);
+});
+
+test("a unary operand keeps its value when a later operand changes its binding", () => {
+  const run = (start) => {
+    let x = start;
+    return -(x + 1) + (x = "s", 2) + x;
+  };
+  expect(run(opaque(1))).toBe("0s");
+});

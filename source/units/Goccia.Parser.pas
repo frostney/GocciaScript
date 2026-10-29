@@ -119,6 +119,8 @@ type
     // The source offsets of '<' tokens that TryCollectCallExpressionTypeArguments
     // knows do not start call-site type arguments (RememberNotTypeArguments).
     FNotTypeArgumentStarts: THashMap<Integer, Boolean>;
+    // Constructor probes have different accepted followers and bracket rules.
+    FNotNewTypeArgumentStarts: THashMap<Integer, Boolean>;
     FSourceLines: TStringList;
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
@@ -399,7 +401,7 @@ type
     function TryCollectNewExpressionTypeArguments: Boolean;
     function TryCollectCallExpressionTypeArguments: Boolean;
     procedure RememberNotTypeArguments(const AFirst: Integer;
-      const AEndsInLexError: Boolean);
+      const AEndsInLexError: Boolean; const AConstructor: Boolean = False);
     function TryParseGenericArrowFunction(
       out AExpression: TGocciaExpression): Boolean;
     function ParseDefiniteAssignmentAssertion(
@@ -828,6 +830,7 @@ end;
 destructor TGocciaParser.Destroy;
 begin
   FNotTypeArgumentStarts.Free;
+  FNotNewTypeArgumentStarts.Free;
   FActiveIterationLabels.Free;
   FActiveLabels.Free;
   FPrivateClassContexts.Free;
@@ -1102,6 +1105,7 @@ procedure ValidateStatementListDeclarations(
   const AParameterNames: TUnicodeStringList;
   const AFileName: string; const ASourceLines: TStringList);
 var
+  Profile: TGocciaCompileProfiler;
   LexicalNames, VarNames, FunctionNames, StatementNames: TUnicodeStringList;
   Node: TGocciaASTNode;
   Declaration: TGocciaFunctionDeclaration;
@@ -1118,6 +1122,7 @@ var
 begin
   if Length(ANodes) = 0 then
     Exit;
+  Profile := TGocciaCompileProfiler.Instance;
   LexicalNames := TUnicodeStringList.Create;
   VarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
@@ -1145,12 +1150,12 @@ begin
         CollectLexicallyDeclaredNames(Node, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if (LexicalNames.HasString(StatementNames[J]) and
+        if (BindingNameSeen(LexicalNames, StatementNames[J], Profile) and
             not (AllowRepeatedFunction and
-                 FunctionNames.HasString(StatementNames[J]))) or
-           VarNames.HasString(StatementNames[J]) or
+                 BindingNameSeen(FunctionNames, StatementNames[J], Profile))) or
+           BindingNameSeen(VarNames, StatementNames[J], Profile) or
            (Assigned(AParameterNames) and
-            AParameterNames.HasString(StatementNames[J])) then
+            BindingNameSeen(AParameterNames, StatementNames[J], Profile)) then
           RaiseAlreadyDeclared(StatementNames[J]);
         LexicalNames.Add(StatementNames[J]);
         if AllowRepeatedFunction then
@@ -1164,7 +1169,7 @@ begin
       CollectVarBindingNamesFromNode(Node, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if LexicalNames.HasString(StatementNames[J]) then
+        if BindingNameSeen(LexicalNames, StatementNames[J], Profile) then
           RaiseAlreadyDeclared(StatementNames[J]);
         VarNames.Add(StatementNames[J]);
       end;
@@ -1183,6 +1188,7 @@ end;
 procedure ValidateScopedStatementBindings(const ANode: TGocciaStatement;
   const AFileName: string; const ASourceLines: TStringList);
 var
+  Profile: TGocciaCompileProfiler;
   Names, SeenNames, VarNames: TUnicodeStringList;
   Body: TGocciaStatement;
   Pattern: TGocciaDestructuringPattern;
@@ -1196,6 +1202,7 @@ begin
           (ANode is TGocciaForInStatement) or
           (ANode is TGocciaTryStatement)) then
     Exit;
+  Profile := TGocciaCompileProfiler.Instance;
   Names := TUnicodeStringList.Create;
   SeenNames := TUnicodeStringList.Create;
   VarNames := TUnicodeStringList.Create;
@@ -1244,7 +1251,7 @@ begin
       CollectVarBindingNamesFromNode(Body, VarNames);
     for I := 0 to Names.Count - 1 do
     begin
-      if SeenNames.HasString(Names[I]) or VarNames.HasString(Names[I]) then
+      if BindingNameSeen(SeenNames, Names[I], Profile) or BindingNameSeen(VarNames, Names[I], Profile) then
         raise TGocciaSyntaxError.Create(
           Format(SErrorIdentifierAlreadyDeclared, [Names[I]]), ANode.Line,
           ANode.Column, AFileName, ASourceLines, SSuggestAlreadyDeclared);
@@ -7387,7 +7394,7 @@ begin
           CollectVariableInfoBindingNames(Variables[I], VariableBindingNames);
           for J := 0 to VariableBindingNames.Count - 1 do
           begin
-            if BindingNames.HasString(VariableBindingNames[J]) then
+            if BindingNameSeen(BindingNames, VariableBindingNames[J], FCompileProfile) then
               raise TGocciaSyntaxError.Create(
                 'Duplicate lexical binding in for-loop initializer',
                 DeclLine, DeclColumn, FFileName, FSourceLines);
@@ -10382,11 +10389,18 @@ end;
 function TGocciaParser.TryCollectNewExpressionTypeArguments: Boolean;
 var
   Depth: Integer;
-  HasTypeArgument: Boolean;
+  HasTypeArgument, LexError: Boolean;
   SavedCurrent: Integer;
   SavedLexer: TGocciaLexerCheckpoint;
 begin
   Result := False;
+  if Assigned(FNotNewTypeArgumentStarts) and (FCurrent < FTokens.Count) and
+     (not Assigned(FLexer) or (FCurrent = FTokens.Count - 1)) and
+     (FTokens[FCurrent].TokenType = gttLess) and
+     FNotNewTypeArgumentStarts.ContainsKey(FTokens[FCurrent].Span.StartOffset) then
+    Exit;
+
+  LexError := False;
   SavedCurrent := FCurrent;
   if Assigned(FLexer) then
     SavedLexer := FLexer.CreateCheckpoint;
@@ -10399,6 +10413,8 @@ begin
       Depth := 0;
       HasTypeArgument := False;
       repeat
+        if Assigned(FCompileProfile) then
+          FCompileProfile.Count(ccTypeArgumentProbeTokens);
         case PeekWithLexicalGoal(glgInputElementDiv).TokenType of
           gttLess: Inc(Depth);
           gttGreater: Dec(Depth);
@@ -10418,12 +10434,18 @@ begin
         Result := True;
     except
       on E: TGocciaLexerError do
+      begin
         Result := False;
+        LexError := True;
+      end;
     end;
   finally
     if not Result then
     begin
       FCurrent := SavedCurrent;
+      if not Assigned(FLexer) or
+         (SavedLexer.TokenCount = SavedCurrent + 1) then
+        RememberNotTypeArguments(SavedCurrent, LexError, True);
       if Assigned(FLexer) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
@@ -10572,7 +10594,7 @@ end;
 // probes lex what follows a '<' as the start of an expression, where '/'
 // opens a regular expression.
 procedure TGocciaParser.RememberNotTypeArguments(const AFirst: Integer;
-  const AEndsInLexError: Boolean);
+  const AEndsInLexError: Boolean; const AConstructor: Boolean);
 const
   // A shorter scan costs about what remembering it would.
   MIN_REMEMBERED_TOKENS = 32;
@@ -10584,6 +10606,7 @@ var
   TokenType: TGocciaTokenType;
   DenyAt: THashMap<Int64, Integer>;
   Decided: Boolean;
+  Starts: THashMap<Integer, Boolean>;
 
   function TypeAt(const AIndex: Integer): TGocciaTokenType; {$IFDEF FPC}inline;{$ENDIF}
   begin
@@ -10605,6 +10628,8 @@ var
     Top := 0;
     for Index := Count - 1 downto 0 do
     begin
+      if Assigned(FCompileProfile) then
+        FCompileProfile.Count(ccTypeArgumentProbeTokens);
       while (Top > 0) and (AValues[Stack[Top - 1]] >= AValues[Index]) do
         Dec(Top);
       if Top > 0 then
@@ -10642,6 +10667,8 @@ begin
   Arguments := 0;
   for I := 0 to Count - 1 do
   begin
+    if Assigned(FCompileProfile) then
+      FCompileProfile.Count(ccTypeArgumentProbeTokens);
     case TypeAt(I) of
       gttLess: Inc(Depth);
       gttGreater: Dec(Depth);
@@ -10654,7 +10681,11 @@ begin
           Inc(Arguments);
         end;
       gttRightParen, gttRightBracket, gttRightBrace:
-        Dec(Bracket);
+        begin
+          Dec(Bracket);
+          if AConstructor then
+            Inc(Arguments);
+        end;
     else
       Inc(Arguments);
     end;
@@ -10669,14 +10700,26 @@ begin
   FillNextLower(Depths, NextLowerDepth);
   FillNextLower(Brackets, NextLowerBracket);
 
-  if not Assigned(FNotTypeArgumentStarts) then
-    FNotTypeArgumentStarts := THashMap<Integer, Boolean>.Create;
+  if AConstructor then
+  begin
+    if not Assigned(FNotNewTypeArgumentStarts) then
+      FNotNewTypeArgumentStarts := THashMap<Integer, Boolean>.Create;
+    Starts := FNotNewTypeArgumentStarts;
+  end
+  else
+  begin
+    if not Assigned(FNotTypeArgumentStarts) then
+      FNotTypeArgumentStarts := THashMap<Integer, Boolean>.Create;
+    Starts := FNotTypeArgumentStarts;
+  end;
   // Later tokens first, so that the denylisted token found for a state is
   // the first one after the '<' being decided.
   DenyAt := THashMap<Int64, Integer>.Create;
   try
     for I := Count - 1 downto 0 do
     begin
+      if Assigned(FCompileProfile) then
+        FCompileProfile.Count(ccTypeArgumentProbeTokens);
       TokenType := TypeAt(I);
       if TokenType = gttLess then
       begin
@@ -10687,6 +10730,11 @@ begin
         if not DenyAt.TryGetValue(StateKey(Depths[I], Brackets[I]), Deny) then
           Deny := -1;
         Fail := NextLowerBracket[I];
+        if AConstructor then
+        begin
+          Deny := -1;
+          Fail := -1;
+        end;
         Stop := NextLowerDepth[I];
         if (Count > 1) and (TypeAt(Count - 1) = gttEOF) and
            (Count - 2 >= I) then
@@ -10699,6 +10747,11 @@ begin
         else if (Event < 0) or (Event + 1 >= Count) then
           // The probe would need the token after the list.
           Decided := AEndsInLexError
+        else if AConstructor then
+          Decided := not ((ArgumentCounts[Event] > ArgumentCounts[I]) and
+            (Depths[Event] = Depths[I] - 1) and
+            (TypeAt(Event + 1) in [gttLeftParen, gttSemicolon, gttComma,
+              gttRightParen, gttRightBracket, gttRightBrace, gttEOF]))
         else
           // The probe ends at Stop; it succeeds only with depth and bracket
           // depth back at its own, a type argument seen, and '(' or a
@@ -10709,7 +10762,7 @@ begin
             (TypeAt(Event + 1) in [gttLeftParen, gttTemplate,
               gttTemplateHead]));
         if Decided then
-          FNotTypeArgumentStarts.AddOrSetValue(
+          Starts.AddOrSetValue(
             FTokens[AFirst + I].Span.StartOffset, True);
       end;
       if (I > 0) and (TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS) then

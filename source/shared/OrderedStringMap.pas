@@ -219,9 +219,12 @@ end;
 class function TOrderedStringMap<TValue>.HashKey(const AKey: string): Cardinal;
 begin
   Result := UTF16StringHash(AKey);
-  // Spread adjacent hashes before masking into a power-of-two table.
-  // Decimal-suffixed names otherwise form long linear-probing clusters.
+  // Mix high bits into the bucket bits before and after multiplication.
+  // Multiplication alone leaves decimal-suffixed names clustered when the
+  // power-of-two bucket mask discards their differing high bits.
+  Result := Result xor (Result shr 16);
   Result := Result * Cardinal($9E3779B1);
+  Result := Result xor (Result shr 16);
 end;
 {$IFDEF FPC}
   {$POP}

@@ -30,6 +30,8 @@ function VarBindingNameCollectionMode(
 
 { AProfile, the compile profile when one is on, counts the lookups that keep
   the names unique (Goccia.Profiler.Compile). }
+function BindingNameSeen(const ANames: TUnicodeStringList; const AName: string;
+  const AProfile: TGocciaCompileProfiler): Boolean;
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
   const ANames: TUnicodeStringList; const AUnique: Boolean = False;
   const AProfile: TGocciaCompileProfiler = nil);
@@ -90,6 +92,16 @@ procedure CountBindingNameLookup(const AProfile: TGocciaCompileProfiler;
   const AProbes: Integer);
 begin
   AProfile.CountLookup(ccBindingNameLookups, ccBindingNameProbes, AProbes);
+end;
+
+function BindingNameSeen(const ANames: TUnicodeStringList; const AName: string;
+  const AProfile: TGocciaCompileProfiler): Boolean;
+var
+  Probes: Integer;
+begin
+  Result := ANames.FindString(AName, Probes);
+  if Assigned(AProfile) then
+    CountBindingNameLookup(AProfile, Probes);
 end;
 
 procedure AddBindingName(const ANames: TUnicodeStringList;

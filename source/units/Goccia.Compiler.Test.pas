@@ -6,6 +6,7 @@ uses
   Classes,
   Generics.Collections,
   Math,
+  StrUtils,
   SysUtils,
 
   NumberBits,
@@ -64,8 +65,7 @@ const
     to compile a pattern (collecting its names), and four times as long for
     the longer list. }
   NAME_LIST_COUNT = 8000;
-  { Doubling a list may multiply the time by at most 2.5 (plus the slack):
-    linear work doubles it, quadratic work quadruples it. }
+  { Linear name work approximately doubles; full scans quadruple it. }
   NAME_LIST_DOUBLING_PERCENT = 250;
   { The operator-chain test compiles CHAIN_OPERATORS binary operators as
     chains of CHAIN_SHORT_TERMS terms and as chains CHAIN_LENGTH_FACTOR
@@ -95,8 +95,8 @@ type
       const AVarDeclarations: Boolean = False;
       const AFunctionKeyword: Boolean = False;
       const ALabels: Boolean = False;
-      const AWhileLoops: Boolean = False): TGocciaBytecodeModule;
-    function SourceCompileCounters(const ASource: string): TGocciaCompileCounters;
+      const AWhileLoops: Boolean = False;
+      const AFileName: string = '<test>'): TGocciaBytecodeModule;
     function CountOp(const ATemplate: TGocciaFunctionTemplate;
       const AOp: TGocciaOpCode): Integer;
     function CountOpRecursive(const ATemplate: TGocciaFunctionTemplate;
@@ -177,6 +177,16 @@ type
     procedure TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime;
     procedure ExpectNameListLinear(const APattern, AItem: string;
       const ACount: Integer = NAME_LIST_COUNT);
+    function SourceCompileCounters(const ASource: string; const AStrictTypes: Boolean = False;
+      const AFileName: string = '<test>';
+      const APreserveCoverageShape: Boolean = False;
+      const AGlobalBackedTopLevel: Boolean = False): TGocciaCompileCounters;
+    procedure ExpectWorkLinear(const AShort, ALong: TGocciaCompileCounters;
+      const ACounter: TGocciaCompileCounter);
+    procedure TestAlternatingExpressionWork;
+    procedure TestLogicalInitializerWork;
+    procedure TestDirectEvalRecordWork;
+    procedure TestNewTypeArgumentWork;
     procedure TestParameterListsParseAndCompileInLinearTime;
     procedure TestDestructuringPatternsCompileInLinearTime;
     procedure TestMatchBindingNameChecksScale;
@@ -349,6 +359,10 @@ begin
     TestDirectEvalAmongManyCapturedBindingsCompilesInLinearTime);
   Test('Parameter lists parse and compile in linear time',
     TestParameterListsParseAndCompileInLinearTime);
+  Test('Alternating unary and binary expressions use linear type work', TestAlternatingExpressionWork);
+  Test('Right-nested logical initializers use linear folding work', TestLogicalInitializerWork);
+  Test('Direct eval records use linear name lookup work', TestDirectEvalRecordWork);
+  Test('Constructor type argument probes use linear token work', TestNewTypeArgumentWork);
   Test('Destructuring patterns compile in linear time',
     TestDestructuringPatternsCompileInLinearTime);
   Test('Match-pattern binding-name checks scale with the bindings',
@@ -373,7 +387,7 @@ begin
     TestSwitchCaseDeclarationsCompileInLinearTime);
   Test('TypeScript comparison chains parse in time linear in the code after them',
     TestTypeScriptComparisonChainsParseInLinearTime);
-  Test('A branch past a 16-bit jump offset compiles in the time of short ones',
+  Test('A branch past a 16-bit jump offset compiles each node once',
     TestLongBranchesCompileOnce);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
@@ -663,7 +677,7 @@ function TTestCompiler.CompileSource(
   const AVarDeclarations: Boolean;
   const AFunctionKeyword: Boolean;
   const ALabels: Boolean;
-  const AWhileLoops: Boolean): TGocciaBytecodeModule;
+  const AWhileLoops: Boolean; const AFileName: string): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -674,9 +688,9 @@ var
   ParserOptions: TGocciaParserOptions;
   Profile: TGocciaCompileProfile;
 begin
-  Lexer := TGocciaLexer.Create(ASource, '<test>');
+  Lexer := TGocciaLexer.Create(ASource, AFileName);
   SourceLines := CreateTextLines(ASource);
-  Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
+  Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName, SourceLines);
   if ATraditionalForLoops or AVarDeclarations or ANonStrictMode or
      AFunctionKeyword or ALabels or AWhileLoops then
   begin
@@ -693,7 +707,7 @@ begin
   end;
   ProgramNode := Parser.Parse;
 
-  Compiler := TGocciaCompiler.Create('<test>');
+  Compiler := TGocciaCompiler.Create(AFileName);
   try
     Compiler.StrictTypes := AStrictTypes;
     Compiler.GlobalBackedTopLevel := AGlobalBackedTopLevel;
@@ -1312,10 +1326,128 @@ begin
     CHAIN_COMPILE_RATIO * Few + LINEAR_SLACK_NANOSECONDS).ToBe(True);
 end;
 
-{ APattern with its %s replaced by a list of AItem formatted with each index,
-  parsed and compiled at ACount items and at twice as many. The two
-  lengths alternate over LINEAR_TRIALS trials, and the fastest parse and
-  compile of each are compared, so a busy machine slows both alike. }
+{ Read the same work counters exposed by --profile=compile. Summing all
+  function records includes parser work as well as nested compiler work. }
+function TTestCompiler.SourceCompileCounters(const ASource: string;
+  const AStrictTypes: Boolean; const AFileName: string;
+  const APreserveCoverageShape: Boolean;
+  const AGlobalBackedTopLevel: Boolean): TGocciaCompileCounters;
+var
+  Profile: TGocciaCompileProfiler;
+  Module: TGocciaBytecodeModule;
+  I: Integer;
+  Counter: TGocciaCompileCounter;
+begin
+  Result := Default(TGocciaCompileCounters);
+  TGocciaCompileProfiler.Initialize;
+  try
+    Profile := TGocciaCompileProfiler.Instance;
+    Module := CompileSource(ASource, AStrictTypes, APreserveCoverageShape,
+      AGlobalBackedTopLevel, True, True, True, True, False, True, True, False, False, AFileName);
+    Module.Free;
+    for I := 0 to Profile.FunctionCount - 1 do
+      for Counter := Low(Counter) to High(Counter) do
+        Inc(Result[Counter], Profile.GetFunction(I).Counters[Counter]);
+  finally
+    TGocciaCompileProfiler.Shutdown;
+  end;
+end;
+
+procedure TTestCompiler.ExpectWorkLinear(const AShort, ALong: TGocciaCompileCounters;
+  const ACounter: TGocciaCompileCounter);
+begin
+  if ALong[ACounter] > AShort[ACounter] * 5 div 2 then
+    Fail(Format('%s grew from %d to %d when input doubled',
+      [COMPILE_COUNTER_JSON_NAMES[ACounter], AShort[ACounter], ALong[ACounter]]));
+  Expect<Boolean>(AShort[ccNodesCompiled] > 0).ToBe(True);
+  Expect<Boolean>(ALong[ACounter] <= AShort[ACounter] * 5 div 2).ToBe(True);
+end;
+
+procedure TTestCompiler.TestAlternatingExpressionWork;
+const
+  PREFIXES: array[0..1] of string = ('p + -(', 'p + -(1 + -(');
+var
+  Small, Large: TGocciaCompileCounters;
+  Strict, Coverage: Boolean;
+  I, Depth: Integer;
+begin
+  for I := Low(PREFIXES) to High(PREFIXES) do
+    for Strict := False to True do
+      for Coverage := False to True do
+      begin
+        Depth := I + 1;
+        Small := SourceCompileCounters('const f = (p) => ' + DupeString(PREFIXES[I], 100) +
+          'p' + StringOfChar(')', 100 * Depth) + ';', Strict, '<test>', Coverage);
+        Large := SourceCompileCounters('const f = (p) => ' + DupeString(PREFIXES[I], 200) +
+          'p' + StringOfChar(')', 200 * Depth) + ';', Strict, '<test>', Coverage);
+        ExpectWorkLinear(Small, Large, ccExpressionTypeVisits);
+      end;
+end;
+
+procedure TTestCompiler.TestLogicalInitializerWork;
+const
+  PREFIXES: array[0..2] of string = ('true && (', 'false || (', 'null ?? (');
+var
+  Small, Large: TGocciaCompileCounters;
+  Strict, Coverage: Boolean;
+  Prefix: string;
+begin
+  for Prefix in PREFIXES do
+    for Strict := False to True do
+      for Coverage := False to True do
+      begin
+        Small := SourceCompileCounters('const f = (p) => { const x = ' +
+          DupeString(Prefix, 100) + 'p' + StringOfChar(')', 100) +
+          '; return x; };', Strict, '<test>', Coverage);
+        Large := SourceCompileCounters('const f = (p) => { const x = ' +
+          DupeString(Prefix, 200) + 'p' + StringOfChar(')', 200) +
+          '; return x; };', Strict, '<test>', Coverage);
+        ExpectWorkLinear(Small, Large, ccConstantEvaluationVisits);
+      end;
+end;
+
+procedure TTestCompiler.TestDirectEvalRecordWork;
+  function Source(const ACount: Integer): string;
+  var
+    Buffer: TStringBuffer;
+    I: Integer;
+  begin
+    Buffer := TStringBuffer.Create;
+    Buffer.Append('const f = () => {');
+    for I := 0 to ACount - 1 do
+      Buffer.Append(Format('let b%d;', [I]));
+    Buffer.Append('eval(""); };');
+    Result := Buffer.ToString;
+  end;
+var
+  Small, Large: TGocciaCompileCounters;
+begin
+  Small := SourceCompileCounters(Source(256));
+  Large := SourceCompileCounters(Source(512));
+  ExpectWorkLinear(Small, Large, ccDirectEvalRecordProbes);
+end;
+
+procedure TTestCompiler.TestNewTypeArgumentWork;
+const
+  FILE_NAMES: array[0..1] of string = ('probe.js', 'probe.ts');
+var
+  Small, Large: TGocciaCompileCounters;
+  FileName: string;
+begin
+  for FileName in FILE_NAMES do
+  begin
+    Small := SourceCompileCounters('const f = (X) => ' + DupeString('new X < ', 100) + '0;',
+      False, FileName);
+    Large := SourceCompileCounters('const f = (X) => ' + DupeString('new X < ', 200) + '0;',
+      False, FileName);
+    ExpectWorkLinear(Small, Large, ccTypeArgumentProbeTokens);
+  end;
+end;
+
+{ Compare the work of the same name list at two sizes. Wall time on shared
+  runners is not a work bound, even when each size takes its fastest trial.
+  The aggregate includes parser membership and compiler name/type work;
+  individual hash probe ratios fluctuate as table occupancy changes. }
 procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
   const ACount: Integer);
 
@@ -1334,85 +1466,28 @@ procedure TTestCompiler.ExpectNameListLinear(const APattern, AItem: string;
     Result := Buffer.ToString;
   end;
 
-  procedure ParseAndCompile(const ASource: string;
-    out AParseNanoseconds, ACompileNanoseconds: Int64);
+  function Work(const ACount: Integer): Int64;
   var
-    Lexer: TGocciaLexer;
-    Parser: TGocciaParser;
-    ParserOptions: TGocciaParserOptions;
-    ProgramNode: TGocciaProgram;
-    Compiler: TGocciaCompiler;
-    Module: TGocciaBytecodeModule;
-    SourceLines: TStringList;
-    Start: Int64;
+    Counters: TGocciaCompileCounters;
+    Counter: TGocciaCompileCounter;
   begin
-    Lexer := TGocciaLexer.Create(ASource, '<test>');
-    SourceLines := CreateTextLines(ASource);
-    Parser := TGocciaParser.CreateFromLexer(Lexer, '<test>', SourceLines);
-    Compiler := TGocciaCompiler.Create('<test>');
-    ProgramNode := nil;
-    Module := nil;
-    try
-      ParserOptions := Parser.Options;
-      ParserOptions.VarDeclarationsEnabled := True;
-      ParserOptions.FunctionDeclarationsEnabled := True;
-      ParserOptions.TraditionalForLoopsEnabled := True;
-      Parser.ApplyOptions(ParserOptions);
-      Start := GetNanoseconds;
-      ProgramNode := Parser.Parse;
-      AParseNanoseconds := GetNanoseconds - Start;
-      Start := GetNanoseconds;
-      Module := Compiler.Compile(ProgramNode);
-      ACompileNanoseconds := GetNanoseconds - Start;
-    finally
-      Module.Free;
-      Compiler.Free;
-      ProgramNode.Free;
-      Parser.Free;
-      SourceLines.Free;
-      Lexer.Free;
-    end;
-  end;
-
-  function DoublingBound(const AShorter: Int64): Int64;
-  begin
-    Result := AShorter * NAME_LIST_DOUBLING_PERCENT div 100 +
-      LINEAR_SLACK_NANOSECONDS;
+    Counters := SourceCompileCounters(Format(APattern, [NameList(ACount)]));
+    Result := 0;
+    for Counter := Low(Counter) to High(Counter) do
+      Inc(Result, Counters[Counter]);
+    Expect<Boolean>(Counters[ccNodesCompiled] > 0).ToBe(True);
+    Expect<Boolean>(Counters[ccBindingNameLookups] > 0).ToBe(True);
   end;
 
 var
-  Shorter, Longer: string;
-  ShorterParse, ShorterCompile, LongerParse, LongerCompile,
-    ParseTime, CompileTime: Int64;
-  Trial: Integer;
+  ShortWork, LongWork: Int64;
 begin
-  Shorter := Format(APattern, [NameList(ACount)]);
-  Longer := Format(APattern, [NameList(2 * ACount)]);
-  ShorterParse := High(Int64);
-  ShorterCompile := High(Int64);
-  LongerParse := High(Int64);
-  LongerCompile := High(Int64);
-  for Trial := 1 to LINEAR_TRIALS do
-  begin
-    ParseAndCompile(Shorter, ParseTime, CompileTime);
-    ShorterParse := Min(ShorterParse, ParseTime);
-    ShorterCompile := Min(ShorterCompile, CompileTime);
-    ParseAndCompile(Longer, ParseTime, CompileTime);
-    LongerParse := Min(LongerParse, ParseTime);
-    LongerCompile := Min(LongerCompile, CompileTime);
-    if (LongerParse <= DoublingBound(ShorterParse)) and
-       (LongerCompile <= DoublingBound(ShorterCompile)) then
-      Break;
-  end;
-  if (LongerParse > DoublingBound(ShorterParse)) or
-     (LongerCompile > DoublingBound(ShorterCompile)) then
-    Fail(Format('"%s" with %d items "%s" took %d ms to parse and %d ms ' +
-      'to compile, against %d ms and %d ms with %d', [APattern,
-      2 * ACount, AItem, LongerParse div 1000000,
-      LongerCompile div 1000000, ShorterParse div 1000000,
-      ShorterCompile div 1000000, ACount]));
-  Expect<Boolean>(LongerParse <= DoublingBound(ShorterParse)).ToBe(True);
-  Expect<Boolean>(LongerCompile <= DoublingBound(ShorterCompile)).ToBe(True);
+  ShortWork := Work(ACount);
+  LongWork := Work(ACount * 2);
+  if LongWork > ShortWork * NAME_LIST_DOUBLING_PERCENT div 100 then
+    Fail(Format('"%s" with %d items "%s" did %d operations versus %d with %d',
+      [APattern, ACount * 2, AItem, LongWork, ShortWork, ACount]));
+  Expect<Boolean>(LongWork <= ShortWork * NAME_LIST_DOUBLING_PERCENT div 100).ToBe(True);
 end;
 
 { The parse checks a parameter list's names for duplicates (ES2026 §15.1.1,
@@ -1455,43 +1530,22 @@ procedure TTestCompiler.TestMatchBindingNameChecksScale;
   end;
 
 const
-  BINDING_COUNT = 4000;
+  BINDING_COUNTS: array[0..2] of Integer = (4000, 8000, 16000);
 var
   ShortProbes, LongProbes: Int64;
+  BindingCount: Integer;
 begin
-  ShortProbes := Probes(BINDING_COUNT);
-  LongProbes := Probes(2 * BINDING_COUNT);
-  // Count duplicate-name validation work, independent of shared-runner timing.
-  // The old scan quadrupled comparisons when the number of bindings doubled.
-  Expect<Boolean>(ShortProbes >= BINDING_COUNT).ToBe(True);
-  Expect<Boolean>(LongProbes >= 2 * BINDING_COUNT).ToBe(True);
-  if LongProbes > ShortProbes * 5 div 2 then
-    Fail(Format('Match pattern with %d bindings took %d name probes versus %d ' +
-      'with %d', [2 * BINDING_COUNT, LongProbes, ShortProbes, BINDING_COUNT]));
-  Expect<Boolean>(LongProbes <= ShortProbes * 5 div 2).ToBe(True);
-end;
-
-{ Read the same work counters exposed by --profile=compile. Summing all
-  function records includes parser work as well as nested compiler work. }
-function TTestCompiler.SourceCompileCounters(
-  const ASource: string): TGocciaCompileCounters;
-var
-  Module: TGocciaBytecodeModule;
-  Profile: TGocciaCompileProfiler;
-  I: Integer;
-  Counter: TGocciaCompileCounter;
-begin
-  Result := Default(TGocciaCompileCounters);
-  TGocciaCompileProfiler.Initialize;
-  try
-    Profile := TGocciaCompileProfiler.Instance;
-    Module := CompileSource(ASource);
-    Module.Free;
-    for I := 0 to Profile.FunctionCount - 1 do
-      for Counter := Low(TGocciaCompileCounter) to High(TGocciaCompileCounter) do
-        Inc(Result[Counter], Profile.GetFunction(I).Counters[Counter]);
-  finally
-    TGocciaCompileProfiler.Shutdown;
+  for BindingCount in BINDING_COUNTS do
+  begin
+    ShortProbes := Probes(BindingCount);
+    LongProbes := Probes(2 * BindingCount);
+    // Small maps missed the residual hash clustering at 16k/32k names.
+    Expect<Boolean>(ShortProbes >= BindingCount).ToBe(True);
+    Expect<Boolean>(LongProbes >= 2 * BindingCount).ToBe(True);
+    if LongProbes > ShortProbes * 5 div 2 then
+      Fail(Format('Match pattern with %d bindings took %d name probes versus %d ' +
+        'with %d', [2 * BindingCount, LongProbes, ShortProbes, BindingCount]));
+    Expect<Boolean>(LongProbes <= ShortProbes * 5 div 2).ToBe(True);
   end;
 end;
 
@@ -1549,25 +1603,15 @@ procedure TTestCompiler.TestOrdinaryParametersSkipInitializerSourceChecks;
   var
     Source: TStringBuffer;
     I: Integer;
-    Module: TGocciaBytecodeModule;
-    Profile: TGocciaCompileProfiler;
+    Work: TGocciaCompileCounters;
   begin
     Source := TStringBuffer.Create;
     Source.Append('const f = (first = () => 1');
     for I := 0 to ACount - 1 do
       Source.Append(Format(', p%d', [I]));
     Source.Append(') => 1;');
-    TGocciaCompileProfiler.Initialize;
-    try
-      Profile := TGocciaCompileProfiler.Instance;
-      Module := CompileSource(Source.ToString);
-      Module.Free;
-      Result := 0;
-      for I := 0 to Profile.FunctionCount - 1 do
-        Inc(Result, Profile.GetFunction(I).Counters[ccParameterInitializerSourceChecks]);
-    finally
-      TGocciaCompileProfiler.Shutdown;
-    end;
+    Work := SourceCompileCounters(Source.ToString);
+    Result := Work[ccParameterInitializerSourceChecks];
   end;
 
 var
@@ -1587,25 +1631,15 @@ procedure TTestCompiler.TestLargeSwitchLookupProbesScale;
   var
     Source: TStringBuffer;
     I: Integer;
-    Module: TGocciaBytecodeModule;
-    Profile: TGocciaCompileProfiler;
+    Work: TGocciaCompileCounters;
   begin
     Source := TStringBuffer.Create;
     Source.Append('const g = (d) => { switch (d) {');
     for I := 0 to ACount - 1 do
       Source.Append(Format('case %0:d: const s%0:d = %0:d; break;', [I]));
     Source.Append('} };');
-    TGocciaCompileProfiler.Initialize;
-    try
-      Profile := TGocciaCompileProfiler.Instance;
-      Module := CompileSource(Source.ToString);
-      Module.Free;
-      Result := 0;
-      for I := 0 to Profile.FunctionCount - 1 do
-        Inc(Result, Profile.GetFunction(I).Counters[ccLocalLookupProbes]);
-    finally
-      TGocciaCompileProfiler.Shutdown;
-    end;
+    Work := SourceCompileCounters(Source.ToString);
+    Result := Work[ccLocalLookupProbes];
   end;
 
 var
@@ -2037,15 +2071,12 @@ end;
   program a second time, so a program cost twice as much to compile once one
   of its branches passed the limit. Each shape here puts the same clauses or
   statements in branches past the limit and in twice as many branches short
-  enough for the 16-bit offset; all sizes stay where the compile time grows
-  linearly. The long branches compile within 1.6 times the time of the short
-  ones (1.0 to 1.2 here, and 1.9 to 2.0 with the second compile), at a
-  script's top level, at a global-backed top level and in an arrow function.
-  The bound is a ratio alone: an absolute slack would let the second compile
-  pass on a machine fast enough for the slack to cover it. }
+  enough for the 16-bit offset. The short source has more branch nodes, so
+  the long source must compile no more nodes than the short one, including
+  nested functions. Recompiling the program or a function exceeds this bound
+  regardless of machine speed. }
 procedure TTestCompiler.TestLongBranchesCompileOnce;
 const
-  LONG_BRANCH_RATIO_PERCENT = 160;
   // Three switches of 6,000 clauses each need the long form, which starts
   // at about 5,400; six of 3,000 do not.
   CLAUSES = 18000;
@@ -2117,7 +2148,7 @@ const
   var
     LongSource, ShortSource: string;
     Module: TGocciaBytecodeModule;
-    Long, Short: Int64;
+    Long, Short: TGocciaCompileCounters;
   begin
     LongSource := BranchSource(ASwitch, ALongBranches, APrefix, ASuffix);
     ShortSource := BranchSource(ASwitch, 2 * ALongBranches, APrefix,
@@ -2138,14 +2169,18 @@ const
       end;
     end;
 
-    Long := SourceCompileNanoseconds(LongSource, AGlobalBackedTopLevel);
-    Short := SourceCompileNanoseconds(ShortSource, AGlobalBackedTopLevel);
-    if Long * 100 > LONG_BRANCH_RATIO_PERCENT * Short then
-      Fail(Format('%d long branches in "%s" took %d ms to compile against ' +
-        '%d ms in %d short ones', [ALongBranches, APrefix,
-        Long div 1000000, Short div 1000000, 2 * ALongBranches]));
-    Expect<Boolean>(Long * 100 <= LONG_BRANCH_RATIO_PERCENT * Short).ToBe(
-      True);
+    Long := SourceCompileCounters(LongSource, False, '<test>', False,
+      AGlobalBackedTopLevel);
+    Short := SourceCompileCounters(ShortSource, False, '<test>', False,
+      AGlobalBackedTopLevel);
+    Expect<Boolean>(Short[ccNodesCompiled] > 0).ToBe(True);
+    Expect<Boolean>(Long[ccNodesCompiled] > 0).ToBe(True);
+    if Long[ccNodesCompiled] > Short[ccNodesCompiled] then
+      Fail(Format('%d long branches in "%s" (global-backed: %s) compiled %d nodes ' +
+        'against %d in %d short ones', [ALongBranches, APrefix,
+        BoolToStr(AGlobalBackedTopLevel, True), Long[ccNodesCompiled],
+        Short[ccNodesCompiled], 2 * ALongBranches]));
+    Expect<Boolean>(Long[ccNodesCompiled] <= Short[ccNodesCompiled]).ToBe(True);
   end;
 
 begin

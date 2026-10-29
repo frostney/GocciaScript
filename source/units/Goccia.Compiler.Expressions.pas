@@ -209,6 +209,7 @@ uses
   Math,
   SysUtils,
 
+  OrderedStringMap,
   UnicodeStringList,
 
   Goccia.AST.BindingPatterns,
@@ -911,7 +912,7 @@ procedure CompileIdentifierAccessNoWith(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaIdentifierExpression; const ADest: UInt16;
   const ASafe: Boolean);
 var
-  LocalIdx, UpvalIdx: Integer;
+  LocalIdx, UpvalIdx, BeforeRead: Integer;
   Local: TGocciaCompilerLocal;
   Slot: UInt16;
   NameIdx: UInt16;
@@ -935,7 +936,12 @@ begin
       Exit;
     end;
     Slot := Local.Slot;
+    BeforeRead := ACtx.Template.CodeCount;
     EmitInstruction(ACtx, EncodeABx(OP_GET_LOCAL, ADest, Slot));
+    // Reading a local changes no type fact. Preserve a literal-left
+    // operator's memo while compiling intervening variable operands.
+    ACtx.Scope.NoteTypeFactsUnchanged(ACtx.Template, BeforeRead,
+      ACtx.Template.CodeCount);
     Exit;
   end;
 
@@ -1894,17 +1900,6 @@ begin
     Result := ANames.HasString(AName);
 end;
 
-function DirectEvalRecordHasName(const ABindings: TGocciaDirectEvalBindingArray;
-  const AName: string): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to High(ABindings) do
-    if ABindings[I].Name = AName then
-      Exit(True);
-  Result := False;
-end;
-
 // Adds the binding AName to a direct eval site record unless the record has
 // that name already or it is a compiler-internal name eval code cannot spell.
 // True when it was added. A catch clause's parameter does not hide the
@@ -1913,7 +1908,7 @@ end;
 // steps 3.d and 17-18, with the web-compat exemption for a Catch clause).
 function AddDirectEvalBinding(const AProfile: TGocciaCompileProfiler;
   var ABindings: TGocciaDirectEvalBindingArray;
-  const ANames: TUnicodeStringList; const AName: string;
+  const ANames, ARecordNames: TUnicodeStringList; const AName: string;
   const AKind: TGocciaDirectEvalBindingKind; const AIndex: UInt16;
   const AIsConst: Boolean; const AIsVarEnvironmentBinding: Boolean = False;
   const AIsEvalSyntheticArguments: Boolean = False;
@@ -1934,6 +1929,7 @@ begin
 
   if not AIsCatchParameter then
     ANames.Add(AName);
+  ARecordNames.Add(AName);
   BindingIndex := Length(ABindings);
   SetLength(ABindings, BindingIndex + 1);
   ABindings[BindingIndex].Name := AName;
@@ -2030,21 +2026,6 @@ begin
   end;
 end;
 
-function FindDirectEvalRecordBinding(
-  const ABindings: TGocciaDirectEvalBindingArray; const AName: string;
-  out ABinding: TGocciaDirectEvalBindingInfo): Boolean;
-var
-  I: Integer;
-begin
-  for I := 0 to High(ABindings) do
-    if ABindings[I].Name = AName then
-    begin
-      ABinding := ABindings[I];
-      Exit(True);
-    end;
-  Result := False;
-end;
-
 // The names a direct eval site record covers: those eval code can spell, plus
 // the hidden bindings the bridge reads for `this`, the derived-constructor
 // `this` flag and `with` objects.
@@ -2121,12 +2102,13 @@ function DirectEvalSiteRecordMatchesScope(const AScope: TGocciaCompilerScope;
   const AStrictCaller: Boolean; out AName, AProblem: string): Boolean;
 var
   Names: TUnicodeStringList;
+  RecordsByName: TOrderedStringMap<Integer>;
   Scope: TGocciaCompilerScope;
   Binding: TGocciaDirectEvalBindingInfo;
   ExpectedKind: TGocciaDirectEvalBindingKind;
   ExpectedIndex: Integer;
   HasEntry: Boolean;
-  LocalIdx, I: Integer;
+  LocalIdx, I, BindingIndex: Integer;
 begin
   AName := '';
   AProblem := '';
@@ -2138,7 +2120,13 @@ begin
   end;
 
   Names := TUnicodeStringList.Create;
+  RecordsByName := TOrderedStringMap<Integer>.Create;
   try
+    // A catch parameter can precede a second binding of its name. The
+    // verifier resolves the first record, just as the former scan did.
+    for I := 0 to High(ABindings) do
+      if not RecordsByName.ContainsKey(ABindings[I].Name) then
+        RecordsByName.Add(ABindings[I].Name, I);
     Scope := AScope;
     while Assigned(Scope) do
     begin
@@ -2156,7 +2144,11 @@ begin
     for I := 0 to Names.Count - 1 do
     begin
       AName := Names[I];
-      HasEntry := FindDirectEvalRecordBinding(ABindings, AName, Binding);
+      if Assigned(AScope.CompileProfile) then
+        AScope.CompileProfile.Count(ccDirectEvalRecordProbes);
+      HasEntry := RecordsByName.TryGetValue(AName, BindingIndex);
+      if HasEntry then
+        Binding := ABindings[BindingIndex];
       case ResolveDirectEvalSiteName(AScope, AName, ExpectedKind,
         ExpectedIndex) of
         drsNone:
@@ -2203,6 +2195,7 @@ begin
         Exit(False);
       end;
   finally
+    RecordsByName.Free;
     Names.Free;
   end;
   AName := '';
@@ -2376,7 +2369,7 @@ function CaptureDirectEvalEnvironment(const ACtx: TGocciaCompilationContext;
   const ACall: TGocciaCallExpression; const APC: UInt32): Integer;
 var
   Bindings: TGocciaDirectEvalBindingArray;
-  Names: TUnicodeStringList;
+  Names, RecordNames: TUnicodeStringList;
   ScopeCursor: TGocciaCompilerScope;
   Local: TGocciaCompilerLocal;
   UV: TGocciaCompilerUpvalue;
@@ -2388,6 +2381,7 @@ var
   VarObjectSlot: Integer;
 begin
   Names := TUnicodeStringList.Create;
+  RecordNames := TUnicodeStringList.Create;
   try
     for LocalIdx := ACtx.Scope.LocalCount - 1 downto 0 do
     begin
@@ -2408,12 +2402,12 @@ begin
       begin
         if EvalVarObjectOutOfScope(ACtx.Scope, Local.Name) then
           Continue;
-        if AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, Local.Name, debWithLocal,
+        if AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debWithLocal,
            Local.Slot, False) then
           ACtx.Scope.MarkCaptured(LocalIdx);
       end
       else if Local.IsGlobalBacked then
-        AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, Local.Name, debGlobal, 0,
+        AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debGlobal, 0,
           Local.IsConst, Local.IsVar)
       else
       begin
@@ -2432,7 +2426,7 @@ begin
         // 16), stands for that eval's variable environment.
         IsSyntheticArguments := (Local.Name = IDENTIFIER_ARGUMENTS) and
           (ACtx.Template.DirectEvalSyntheticArgumentsSlot = Local.Slot);
-        if AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, Local.Name, debLocal,
+        if AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debLocal,
            Local.Slot, Local.IsConst,
            IsSyntheticArguments or
            ((Local.IsVar or IsVarEnvironmentParameter or
@@ -2462,7 +2456,7 @@ begin
           if UpvalueIdx >= 0 then
           begin
             UV := ACtx.Scope.GetUpvalue(UpvalueIdx);
-            AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, Local.Name, debUpvalue,
+            AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debUpvalue,
               UInt16(UpvalueIdx), UV.IsConst, UV.IsVar,
               UV.IsNonStrictImmutable);
           end;
@@ -2474,7 +2468,7 @@ begin
             Continue;
           UpvalueIdx := ACtx.Scope.ResolveUpvalue(Local.Name);
           if UpvalueIdx >= 0 then
-            AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, Local.Name, debWithUpvalue,
+            AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debWithUpvalue,
               UInt16(UpvalueIdx), False);
           Continue;
         end;
@@ -2484,14 +2478,14 @@ begin
         if Local.IsGlobalBacked and ScopeCursor.GlobalBackedBindingsByName then
           Continue;
         if Local.IsGlobalBacked then
-          AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, Local.Name, debGlobal, 0,
+          AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debGlobal, 0,
             Local.IsConst, Local.IsVar)
         else
         begin
           // A binding a catch clause's parameter listed above hides
           // (AddDirectEvalBinding) is reached by its own upvalue, which the
           // name would not find: one of the calling scope's locals.
-          if DirectEvalRecordHasName(Bindings, Local.Name) then
+          if RecordNames.HasString(Local.Name) then
           begin
             if ScopeCursor <> ACtx.Scope.Parent then
               Continue;
@@ -2506,7 +2500,7 @@ begin
             UV := ACtx.Scope.GetUpvalue(UpvalueIdx);
             // Eval code in a function runs in that function's variable
             // environment, whose bindings it reaches as upvalues.
-            AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, Local.Name, debUpvalue,
+            AddDirectEvalBinding(ACtx.Scope.CompileProfile, Bindings, Names, RecordNames, Local.Name, debUpvalue,
               UInt16(UpvalueIdx), UV.IsConst, UV.IsVar,
               UV.IsNonStrictImmutable, Local.IsCatchParameter,
               Local.IsOutsideVarEnvironment,
@@ -2532,6 +2526,7 @@ begin
       CaptureDirectEvalPrivateNames(ACtx.Scope));
     ACtx.Scope.MarkDirectEvalSeen;
   finally
+    RecordNames.Free;
     Names.Free;
   end;
 end;
@@ -2825,22 +2820,22 @@ procedure CompileBinary(const ACtx: TGocciaCompilationContext;
 var
   RegB, RegC: UInt16;
   Op, IntOp, FloatOp: TGocciaOpCode;
-  JumpIdx: Integer;
+  JumpIdx, BeforeJump: Integer;
   LeftType, RightType: TGocciaLocalType;
   PrivateExpr: TGocciaPrivateMemberExpression;
   Immediate: Int16;
   OwnsRegB, OwnsRegC, LeftCompiled, LeftTypeKnown, RightTypeKnown: Boolean;
 
   // Compiles AOperand as CompileOperand does, and reports whether it was a
-  // binary expression that handed over the type of its value.
+  // expression that handed over the type of its value.
   function CompileTypedOperand(const AOperand: TGocciaExpression;
     out ARegister: UInt16; const AEvaluatedLater: TGocciaExpression;
     out AOwnsRegister: Boolean; out AType: TGocciaLocalType): Boolean;
   begin
-    ACtx.Scope.ForgetBinaryResultType;
+    ACtx.Scope.ForgetExpressionResultType;
     AOwnsRegister := CompileOperand(ACtx, AOperand, ARegister,
       AEvaluatedLater, nil, ADest);
-    Result := ACtx.Scope.TakeBinaryResultType(AOperand, AType);
+    Result := ACtx.Scope.TakeExpressionResultType(AOperand, AType);
   end;
 
 begin
@@ -2849,7 +2844,10 @@ begin
   if AExpr.Operator = gttAnd then
   begin
     ACtx.CompileExpression(AExpr.Left, ADest);
+    BeforeJump := ACtx.Template.CodeCount;
     JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest);
+    if Assigned(ACtx.NoteShortCircuitJump) then
+      ACtx.NoteShortCircuitJump(ACtx.Template, BeforeJump, ACtx.Template.CodeCount);
     ACtx.CompileExpression(AExpr.Right, ADest);
     PatchJumpTarget(ACtx, JumpIdx);
     Exit;
@@ -2858,7 +2856,10 @@ begin
   if AExpr.Operator = gttOr then
   begin
     ACtx.CompileExpression(AExpr.Left, ADest);
+    BeforeJump := ACtx.Template.CodeCount;
     JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, ADest);
+    if Assigned(ACtx.NoteShortCircuitJump) then
+      ACtx.NoteShortCircuitJump(ACtx.Template, BeforeJump, ACtx.Template.CodeCount);
     ACtx.CompileExpression(AExpr.Right, ADest);
     PatchJumpTarget(ACtx, JumpIdx);
     Exit;
@@ -2867,7 +2868,10 @@ begin
   if AExpr.Operator = gttNullishCoalescing then
   begin
     ACtx.CompileExpression(AExpr.Left, ADest);
+    BeforeJump := ACtx.Template.CodeCount;
     JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ADest);
+    if Assigned(ACtx.NoteShortCircuitJump) then
+      ACtx.NoteShortCircuitJump(ACtx.Template, BeforeJump, ACtx.Template.CodeCount);
     ACtx.CompileExpression(AExpr.Right, ADest);
     PatchJumpTarget(ACtx, JumpIdx);
     Exit;
@@ -2920,7 +2924,7 @@ begin
           UInt16(Immediate)));
       if OwnsRegB then
         ACtx.Scope.FreeRegister;
-      ACtx.Scope.NoteBinaryResultType(AExpr,
+      ACtx.Scope.NoteExpressionResultType(AExpr,
         BinaryExpressionType(AExpr.Operator, LeftType, sltFloat));
       Exit;
     end;
@@ -2932,7 +2936,7 @@ begin
     // first. In `1 + (2 + (3 + p))` each operator asks again for the type
     // of an operand the walk above it has typed, which took time quadratic
     // in the chain's length; the walks record their answers, which hold
-    // while nothing but the chain's folded constants is emitted.
+    // while only folded constants and local reads are emitted.
     RightType := ExpressionTypeRecorded(ACtx.Scope,
       ACtx.Scope.ExpressionTypeMemo(ACtx.Template), AExpr.Right);
     if HasExactNumberProofOfType(ACtx.Scope, AExpr.Right, RightType) then
@@ -2942,7 +2946,7 @@ begin
         UInt16(Immediate)));
       if OwnsRegB then
         ACtx.Scope.FreeRegister;
-      ACtx.Scope.NoteBinaryResultType(AExpr,
+      ACtx.Scope.NoteExpressionResultType(AExpr,
         BinaryExpressionType(gttPlus, sltFloat, RightType));
       Exit;
     end;
@@ -2954,7 +2958,7 @@ begin
   RightTypeKnown := CompileTypedOperand(AExpr.Right, RegC, nil, OwnsRegC,
     RightType);
 
-  // A binary operand's value is in its register already, and has the type it
+  // An operand's value is in its register already, and has the type it
   // handed over. Any other operand is asked for its type now that both are
   // compiled, the left one first.
   if not LeftTypeKnown then
@@ -2981,7 +2985,7 @@ begin
     ACtx.Scope.FreeRegister;
   if OwnsRegB then
     ACtx.Scope.FreeRegister;
-  ACtx.Scope.NoteBinaryResultType(AExpr,
+  ACtx.Scope.NoteExpressionResultType(AExpr,
     BinaryExpressionType(AExpr.Operator, LeftType, RightType));
 end;
 
@@ -3161,6 +3165,8 @@ procedure CompileUnary(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaUnaryExpression; const ADest: UInt16);
 var
   RegB: UInt16;
+  OperandType, ResultType: TGocciaLocalType;
+  HasOperandType: Boolean;
 begin
   if AExpr.Operator = gttDelete then
   begin
@@ -3172,11 +3178,14 @@ begin
   // to simplify it by its operand's type.
 
   RegB := ACtx.Scope.AllocateRegister;
+  ACtx.Scope.ForgetExpressionResultType;
 
   if (AExpr.Operator = gttTypeof) and (AExpr.Operand is TGocciaIdentifierExpression) then
     CompileIdentifierAccess(ACtx, TGocciaIdentifierExpression(AExpr.Operand), RegB, True)
   else
     ACtx.CompileExpression(AExpr.Operand, RegB);
+
+  HasOperandType := ACtx.Scope.TakeExpressionResultType(AExpr.Operand, OperandType);
 
   case AExpr.Operator of
     gttNot:        EmitInstruction(ACtx, EncodeABC(OP_NOT, ADest, RegB, 0));
@@ -3190,6 +3199,29 @@ begin
   end;
 
   ACtx.Scope.FreeRegister;
+
+  // A unary wrapper must hand on the type of the value just compiled, or
+  // every enclosing binary operator walks that subtree again. Unknown
+  // operands stay unknown: minus and bitwise NOT also accept BigInt.
+  ResultType := sltUntyped;
+  case AExpr.Operator of
+    gttPlus: ResultType := sltFloat;
+    gttNot: ResultType := sltBoolean;
+    gttTypeof: ResultType := sltString;
+    gttMinus, gttBitwiseNot:
+      begin
+        if not HasOperandType then
+          Exit;
+        if IsKnownNumeric(OperandType) then
+          if AExpr.Operator = gttMinus then
+            ResultType := sltFloat
+          else
+            ResultType := sltInteger;
+      end;
+  else
+    Exit;
+  end;
+  ACtx.Scope.NoteExpressionResultType(AExpr, ResultType);
 end;
 
 // ES2026 §13.16 Comma Operator (,)

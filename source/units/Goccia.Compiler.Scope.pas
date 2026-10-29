@@ -203,10 +203,10 @@ type
     FReturnSeen: Boolean;
     FReturnConflict: Boolean;
     FLastChildReturnType: TGocciaLocalType;
-    // The binary expression this function's code compiled last, and the type
-    // of the value its instruction produces (see NoteBinaryResultType).
-    FLastBinaryExpression: TGocciaExpression;
-    FLastBinaryResultType: TGocciaLocalType;
+    // The expression this function's code compiled last, and the type
+    // of the value its instruction produces (see NoteExpressionResultType).
+    FLastTypedExpression: TGocciaExpression;
+    FLastExpressionResultType: TGocciaLocalType;
     // ExpressionType's answers for binary expressions (ExpressionTypeMemo),
     // and the template and code count they hold for.
     FTypeMemo: TGocciaExpressionTypeMemo;
@@ -354,32 +354,33 @@ type
     function InferredReturnType: TGocciaLocalType;
     property LastChildReturnType: TGocciaLocalType read FLastChildReturnType
       write FLastChildReturnType;
-    { A binary operator hands the type of the value it computed to the
+    { A binary or unary operator hands the type of the value it computed to the
       operator whose operand it is, which would otherwise work the type out
       again from the operand's whole subtree: in a chain of k operators that
       is k walks, each as long as the chain so far. The operand's value is
       computed into a register before anything after it runs, so its type is
       the one it had when its instruction was chosen.
-      NoteBinaryResultType records it as the last act of compiling AExpr;
-      TakeBinaryResultType, called right after the operand is compiled, gives
+      NoteExpressionResultType records it as the last act of compiling AExpr;
+      TakeExpressionResultType, called right after the operand is compiled, gives
       it back once, and only for that operand: a nested operator recorded
       later, or an operand compiled another way (folded to a constant, or
       simplified), leaves no record of AExpr. }
     { ExpressionType's answers for the binary expressions a walk has typed,
       for a caller that would otherwise walk them again. They hold while
-      ATemplate emits nothing but folded constants (NoteConstantEmitted),
-      which change nothing a type depends on; once anything else is emitted
+      ATemplate emits only folded constants or local reads
+      (NoteTypeFactsUnchanged), which change nothing a type depends on;
+      once anything else is emitted
       the record is emptied when next asked for. }
     function ExpressionTypeMemo(
       const ATemplate: TGocciaFunctionTemplate): TGocciaExpressionTypeMemo;
-    { ATemplate's code grew from ABefore to AAfter instructions by a folded
-      constant alone. }
-    procedure NoteConstantEmitted(const ATemplate: TGocciaFunctionTemplate;
+    { ATemplate's code grew from ABefore to AAfter instructions without
+      changing any fact used by expression type analysis. }
+    procedure NoteTypeFactsUnchanged(const ATemplate: TGocciaFunctionTemplate;
       const ABefore, AAfter: Integer);
-    procedure ForgetBinaryResultType;
-    procedure NoteBinaryResultType(const AExpr: TGocciaExpression;
+    procedure ForgetExpressionResultType;
+    procedure NoteExpressionResultType(const AExpr: TGocciaExpression;
       const AType: TGocciaLocalType);
-    function TakeBinaryResultType(const AExpr: TGocciaExpression;
+    function TakeExpressionResultType(const AExpr: TGocciaExpression;
       out AType: TGocciaLocalType): Boolean;
     procedure SetLocalTypeAnnotation(const AIndex: Integer;
       const AAnnotation: string);
@@ -677,7 +678,7 @@ begin
     FCompileProfile := AParent.FCompileProfile
   else
     FCompileProfile := nil;
-  FLastBinaryExpression := nil;
+  FLastTypedExpression := nil;
   FTypeMemo := nil;
   FTypeMemoTemplate := nil;
   FSettledLocalCount := 0;
@@ -1503,7 +1504,7 @@ begin
   Result := FTypeMemo;
 end;
 
-procedure TGocciaCompilerScope.NoteConstantEmitted(
+procedure TGocciaCompilerScope.NoteTypeFactsUnchanged(
   const ATemplate: TGocciaFunctionTemplate; const ABefore, AAfter: Integer);
 begin
   if Assigned(FTypeMemo) and (FTypeMemoTemplate = ATemplate) and
@@ -1511,27 +1512,27 @@ begin
     FTypeMemoCodeCount := AAfter;
 end;
 
-procedure TGocciaCompilerScope.ForgetBinaryResultType;
+procedure TGocciaCompilerScope.ForgetExpressionResultType;
 begin
-  FLastBinaryExpression := nil;
+  FLastTypedExpression := nil;
 end;
 
-procedure TGocciaCompilerScope.NoteBinaryResultType(
+procedure TGocciaCompilerScope.NoteExpressionResultType(
   const AExpr: TGocciaExpression; const AType: TGocciaLocalType);
 begin
-  FLastBinaryExpression := AExpr;
-  FLastBinaryResultType := AType;
+  FLastTypedExpression := AExpr;
+  FLastExpressionResultType := AType;
 end;
 
-function TGocciaCompilerScope.TakeBinaryResultType(
+function TGocciaCompilerScope.TakeExpressionResultType(
   const AExpr: TGocciaExpression; out AType: TGocciaLocalType): Boolean;
 begin
-  Result := Assigned(AExpr) and (FLastBinaryExpression = AExpr);
+  Result := Assigned(AExpr) and (FLastTypedExpression = AExpr);
   if Result then
-    AType := FLastBinaryResultType
+    AType := FLastExpressionResultType
   else
     AType := sltUntyped;
-  FLastBinaryExpression := nil;
+  FLastTypedExpression := nil;
 end;
 
 function TGocciaCompilerScope.InferredReturnType: TGocciaLocalType;

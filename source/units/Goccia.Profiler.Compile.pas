@@ -68,6 +68,8 @@ type
     // scanned below that.
     ccBindingNameLookups,
     ccBindingNameProbes,
+    ccDirectEvalRecordProbes,
+    ccTypeArgumentProbeTokens,
     // Parameters visited by the accumulating default-initializer proof.
     ccParameterInitializerVisits,
     // Closure source checks for a simple parameter default destination.
@@ -211,6 +213,8 @@ const
     'parameterNameProbes',
     'bindingNameLookups',
     'bindingNameProbes',
+    'directEvalRecordProbes',
+    'typeArgumentProbeTokens',
     'parameterInitializerVisits',
     'parameterInitializerSourceChecks');
 
@@ -228,6 +232,8 @@ const
     'Parameter-name probes',
     'Binding-name lookups',
     'Binding-name probes',
+    'Direct-eval record probes',
+    'Type-argument probe tokens',
     'Parameter-initializer visits',
     'Parameter-initializer source checks');
 

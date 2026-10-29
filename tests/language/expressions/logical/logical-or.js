@@ -15,3 +15,14 @@ test("logical OR (||) with short-circuit evaluation", () => {
   expect(false || (a = 1)).toBeTruthy();
   expect(a).toBe(1);
 });
+
+test("right-nested initializers preserve calls and short circuit their suffix", () => {
+  let calls = 0;
+  const value = (p) => {
+    calls += 1;
+    return p;
+  };
+  const first = false || (false || (value(3) || value(4)));
+  expect(first).toBe(3);
+  expect(calls).toBe(1);
+});

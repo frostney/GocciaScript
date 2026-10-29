@@ -15,3 +15,13 @@ test("logical AND (&&) with short-circuit evaluation", () => {
   expect(true && (a = 1)).toBeTruthy();
   expect(a).toBe(1);
 });
+
+test("right-nested initializers read mutations between short circuits", () => {
+  const run = (p) => {
+    let x = 1;
+    const result = true && (true && ((x = p) && (true && x)));
+    return [result, x];
+  };
+  expect(run(7)).toEqual([7, 7]);
+  expect(run(0)).toEqual([0, 0]);
+});

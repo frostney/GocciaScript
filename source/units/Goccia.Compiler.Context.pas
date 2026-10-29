@@ -27,6 +27,8 @@ type
     const AScope: TGocciaCompilerScope) of object;
   TSetDerivedConstructorThisGuardProc = procedure(
     const AGuard: Boolean) of object;
+  TNoteShortCircuitJumpProc = procedure(const ATemplate: TGocciaFunctionTemplate;
+    const ABefore, AAfter: Integer) of object;
   TSetNonStrictModeProc = procedure(const AEnabled: Boolean) of object;
 
   TFormalParameterCountMap = THashMap<TGocciaFunctionTemplate, Integer>;
@@ -98,6 +100,8 @@ type
     NonStrictMode: Boolean;
     DerivedConstructorThisGuard: Boolean;
     OptimizationOptions: TGocciaCompilerOptimizationOptions;
+    // A forward logical jump changes no binding facts before its right operand.
+    NoteShortCircuitJump: TNoteShortCircuitJumpProc;
     CompileExpression: TCompileExpressionProc;
     CompileStatement: TCompileStatementProc;
     CompileFunctionBody: TCompileFunctionBodyProc;
