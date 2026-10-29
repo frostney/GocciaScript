@@ -1,0 +1,225 @@
+FPC-SAFESEH 1
+# Reviewed input identities for the supplied FPC 3.2.4-rc2+1 Win32 units.
+# Hashes cover whole objects, including registrations through pointer stores.
+# Only linked objects are required and hashed. A new unit must be audited.
+# handler = OS SEH entry; nonseh = reviewed ordinary function/callback.
+# A handler may be absent only with an explicit Removing object(section) map record.
+version 3.2.4-rc2+1
+target i386-win32
+
+object fcl-base/contnrs.o a794947c39debe99271b8a0a9b72f53b7518b9b23f34f30c19cdbe73e0a837cd
+object fcl-base/syncobjs.o b7bbc17e411178e1f8ebb2eb20c2aa88cc8359610048b03b563653c72a757ef1
+object fcl-process/pipes.o 01d6364858038d6cddd10a2508b85b1ac7623aa64ff802d1383041f752640d05
+object fcl-process/process.o ec5fb5375dd3aa4ec37910842cc8ba2ec023588adcded19213dc6d03531ea125
+object rtl-console/crt.o 4f2d0a90a32a18680c231818a5007d71ca3ab8eb7a861ea813f5821ef608a313
+object rtl-console/keyboard.o 24bcb2ee29c04ec2231453006ac5b6a261b216280954f145fc08724f95b8071c
+object rtl-console/mouse.o 91ba1ac8c865e688f383cb4d551f9b2b953efeeff7435c1309c2b3fb4da62a0d
+object rtl-console/video.o e16cf3d9943c0bfc1c7f281b16b737855401e5837ea2df40bfddcac5e2d9accc
+object rtl-console/winevent.o 03526e6a0a41a9905bf35bde9f07286ba818509e1a28ca127cf6cd9e056db61b
+object rtl-extra/matrix.o 354168f43d072200ad2120da4729f72e1c5154a68a849a5788c90b5234b5bc0b
+object rtl-extra/objects.o a9fafbc638bb0be135b8bd67aaf645e8e1011fb1231b034b970b56844b20134b
+object rtl-extra/printer.o ab6ffb6fb93b21ed054b6401ae1cdf63c4a1d282188f041950aa0f057dbbdff1
+object rtl-extra/real48utils.o 57cced5e99e81962bbc472305579edfdde3a369d72bdc8e4d07ac76d09b31561
+object rtl-extra/serial.o ab4ab2d8dc30e64a1e9b98a2efe344a1b8db62b6c00899100d877e42d5ee50f3
+object rtl-extra/sockets.o fdeea9e16d35a5ba824db5b04638c01572ad1ecf8bbaf784ba98ce7f7ea46915
+object rtl-extra/ucomplex.o fffaa03d33190be9648bd925f01d7577b25c9df6c8f0c59c599b22b7a8b15e98
+object rtl-extra/winsock.o 72251484be700835032890a4151065e8a521961b5d83d4ab9ab9af32a04c8690
+object rtl-extra/winsock2.o 6cf36953267bf079542bf35fbd89f9e1be9c824b58b1f7d4672a12ed5b0c3144
+object rtl-generics/generics.collections.o 31f6716859d0d5e447e5c9e1230223a900a69c4a125efaa643160f3aa8c158a8
+object rtl-generics/generics.defaults.o d3e29d3cd419bd6632f8fcc1bd6d4ab74dd7e3759ee4f6e2f7745b9db8fbdf25
+object rtl-generics/generics.hashes.o 2617e78430525b3b84ff44e1f9c586d2fb47142a78d059cdfd4d1b7d658e888f
+object rtl-generics/generics.helpers.o a17dc629d7c49048ff07cce6ac8c9fbd87563cf76112292e597f28fa51376568
+object rtl-generics/generics.memoryexpanders.o 73f93fb7033231ebd622dbcf00e7cefab5f9fd0eae217c47cbb7a1f09559cca1
+object rtl-generics/generics.strings.o a8e0581166c1bff75bf7eac41b4b8cd83707ca9181dddad11e66c15911cba1d1
+object rtl-objpas/convutils.o b5a6d4e34a0067f2e79080a91e27b9f71bcbcba06e69cf7df7d77db7475c9b2b
+object rtl-objpas/dateutils.o 41bd54fe384827b7ed32852415c96be813da22e994a1a2d976d7feda97ef4af4
+object rtl-objpas/fmtbcd.o c16ca2288481d0b0d12a3206c4ae4c6db525450f22ec0716aec271aa7b8bbffc
+object rtl-objpas/rtti.o 7b45d1c62daa2771dec0ed7b0341271957452c63522e23d83240f492e53436e4
+object rtl-objpas/stdconvs.o 0958846de9d8087fec02234e0dbb64725762827b8418132d7065de65fb0638f6
+object rtl-objpas/strutils.o e35dc74a07b39d8cd09d185b6e16d8fa79eceacaba080e1cabca5d119e3510db
+object rtl-objpas/system.timespan.o 3613fae8fe46dbe849b12c0f44a343aff1cb7d3a6854961b1869b87e90137ceb
+object rtl-objpas/system.uiconsts.o dbc0047216b615c9c34f4b811dfc7b11dafe8a7ca3ac9497e57979b444dadfda
+object rtl-objpas/system.uitypes.o 6ecc323eecfc9b82aba5a43d734674c09145d4cd63765dfed9fdabbc26bc4286
+object rtl-objpas/variants.o b4676436549277344d0333a9391ac41968132c9c6943d1cb48d5f69f83b0b70f
+object rtl-objpas/varutils.o 49b1f3a9e0ffce8b2900d99583e56c4d39bcc682029f316a44632e216fa74514
+object rtl-objpas/widestrutils.o 3dd6bc267e33f7557877484d03f06817b9426e93c153fb3bf93f256d1542762f
+object rtl-unicode/collation_de.o 8d76fddcb7897d0630b09ea0e4653cef9adcfd98cee051d3cee4c2117ebcf8df
+object rtl-unicode/collation_es.o 0e611d8a0fe6c05ca3916e2fa630b423fed5f88aa2be313fe37fcc1bce2e1bbd
+object rtl-unicode/collation_fr_ca.o c5aa2c1fdaabbd6873c0cc2ad720b6271eb2627480c66dabaf364ba638925c7b
+object rtl-unicode/collation_ja.o 606cb57ae56ce366c07596e70999d6461ba5249216aeb81fa5c1d00778110774
+object rtl-unicode/collation_ko.o 9215590efedb327a6b248d9ee43ef9214922029a6c0bbac0c8e9eefeecd906a2
+object rtl-unicode/collation_ru.o 5166a333f1ab6644a56fd23c966deaf6550abc81f76db5b1fc6f30a512ba9f4d
+object rtl-unicode/collation_sv.o d7233bf351db1a79dd6344423b9ee8c1f937a8a56bc347e059286e209360306a
+object rtl-unicode/collation_zh.o b3850ee07291918fd0adf1cb8c42f27a60ad17ff61b62152b16d6f0efdcbb719
+object rtl-unicode/cp895.o ce2180b1379c1919dd34e77abd5ff9d3b7fe69c3d18fb74ff9dd0e6b8bde49c9
+object rtl-unicode/cp932.o 0557d271113724c10dbc5bcc66a7ff9ad8bf3348beab6692c70139831137770a
+object rtl-unicode/cp936.o ee64b2bce2eae83c83f7891f2ddc1b27f203e452622f9a267ec90ddf35e865d3
+object rtl-unicode/cp949.o 5b2439ece64811f2f3f30af4a50e3a518314d1742736a1b860ca34a9cfaafae2
+object rtl-unicode/cp950.o cb32bf5e45b7a627e8f7cb4f8721e83da06c640998d0489ca80f4d873704907b
+object rtl-unicode/unicodeducet.o 8dafeb32a140cb7c09252e0d80ef6d572eb79f983f9fe262adda3ac115e7299b
+object rtl/character.o 27ad81148c825d8cef9fe6711a6cff8a94e5ad5b4870b9fdfaaa8ca39f6a0b08
+object rtl/charset.o 8c376629cf99640d9e18898061dded21158f2bceda4502b52e342497512911ad
+object rtl/classes.o d8f15fb1781a00c76985b5ede339f829bd9f7e48a014bbdf6c1bca9c06c9bbb9
+object rtl/cmem.o ece7d42c237ff76fba0a9534c756624504b4bf4f7f6a5045d55437e91bd2e41f
+object rtl/cp1250.o ba1a7a9015711004851262789d297a1de59899e142a7501dbb9c624f62cf51c1
+object rtl/cp1251.o 47b7777fb5643810cdb5fb4b4d53f3373128860d79af255558765974d1970d5b
+object rtl/cp1252.o 414c52174f03fe85250d010eeb4083f4aed3e4278a0e38c1c8bb7247bd146ea1
+object rtl/cp1253.o c77cf9f70721a6f3318db4b4a5728b54ad670a57c1f750686deac5246075aedb
+object rtl/cp1254.o 8aec6ffe9ad898908a6daf3d9729dc37bda6bc3f8a9908d0192ceab41a423960
+object rtl/cp1255.o a99c3863e4878efc34b0fe3bfde8f803f95e84e0ec881ad658d89ad3156eed8b
+object rtl/cp1256.o 1c3fc328f69a241628dd88ebc055f525c7ecc6f6d6cff1abe0b305a4933852ee
+object rtl/cp1257.o decdfb16033d4af2be77c4920662faf324ed4312b84a70404f77ebab0a0079d8
+object rtl/cp1258.o 0c883123b1a855adaf2bfc2c9c373a933f4ff3f65cd6831deaa8b4b9a1958a91
+object rtl/cp3021.o 86794ec81fc4f3b50208e01d3d34e4ba711df05add288cf91565dfe2d209b013
+object rtl/cp437.o 68c35f40d08d22b504bdeb1b9529508e5ae27ece1f95bb69b7f6d5c6e33458c9
+object rtl/cp646.o 3e12f789fa8030b67c492c14c8950e61cf95485113b1cfd7af064f3f132722c3
+object rtl/cp737.o 74413a9f82b916d07c4a7f52f9bf9a282e9fa3ca9ebea4739a845534ce1d399d
+object rtl/cp775.o e4e883a1ffe412ca8d2b51c054f0c22f6f762e11f0a2ee7e8fdd4d09d0457864
+object rtl/cp850.o 0b38ba21335460b54e9ca16d2e11a709b8e7aa793ff830ff8d1cb3feda1cebb4
+object rtl/cp852.o b2894ae79dcb8d4f71da0d790c5e522b02695b735c7ad12d39726087fcbfef62
+object rtl/cp855.o ab8f20efc85748be66457525e23611c55e8ed7d48b6651d30f29945f7544c726
+object rtl/cp856.o 2fa708ef0f050513af4142933c7f4bcc3fc7b75f411fd1816386cddfb1a193e0
+object rtl/cp857.o 4003153bd542c7919dce49971b21dd3b947c72359fdab7337267a47dbe83be10
+object rtl/cp860.o fa5f3042f4d57135e954fe5821cbc6466fff28372cda736536f0bbe46e5dd775
+object rtl/cp861.o c6f95cc0a9e695d909810b64f1d53df07eb4a7144d04b5aecfd030493beb799e
+object rtl/cp862.o 916aa35f7bf1678c9d52677c63974cc8cec5936ec0555d325188004516df87bf
+object rtl/cp863.o 97fad14673043150a09e47e667b1314f5116be5bc96bde7f6921d477779854d6
+object rtl/cp864.o a02d7f700ef758a8f737523be9f64426401c5151e3208b5127ea57d59205a14f
+object rtl/cp865.o 44cf77f2d7fadee97ca5a165c1e6653bef1eea698652a0e630fb5ed2ae12aaf5
+object rtl/cp866.o 1f8b0c3338f78ada5153393dab7be2d75abd15118a2ad67fe4f813fc025b2b64
+object rtl/cp869.o e86ea451a82699d96e6b657dce1ba7707204cde690fa18dbf4b7bbf346a7bb7c
+object rtl/cp874.o 52027be0472a510c2ed5cb7c4519163202381ba07e417821050616e65ee3c613
+object rtl/cp8859_1.o 0f06fb44adb89beb278e3e27fac641aa84797040329091d6aaf9e2ff15070b4f
+object rtl/cp8859_10.o 0b0ab5a7f3c7706cb1666c829cb44454c5027e2461f44ac3a6ca882a137aacdc
+object rtl/cp8859_11.o b9eacdebc8e46663eb92931975bdbcc7c88ddab21f619dd57d7175c9820128cf
+object rtl/cp8859_13.o 61acc2cc4ed8925a60524aa4866e3dd1bc1bdaaea6b40a16af0c740bc8fb303a
+object rtl/cp8859_14.o 3b4bf3cb72f4267f1f94b400b7f08f618dce77258c45c7468453b675d7ff4cac
+object rtl/cp8859_15.o ba4c6ad70fe1c2f9b439de683f40915cacd995c391779314bff66604254ec03e
+object rtl/cp8859_16.o f723da6dcbf585ddd36ff0598f0b7022973e74c406059c4f889b0adfef3363ed
+object rtl/cp8859_2.o d0f3c1bb79a6d0e49401b5b59949d281ce401b063bf62b74192c2a3a2962a0a9
+object rtl/cp8859_3.o e27cec7c20b14fed86f33dfb6b499a8690e41b7dc63d04f2e5f3518758a4aa1a
+object rtl/cp8859_4.o 0bbf61988b40640b3371277f2244f29a283ac85a0e6f9722d2bbef5a69b8a0a8
+object rtl/cp8859_5.o c72e46efd33b65b897a669e112e56f5ec3c7cef3689a165066a8d91100c219bc
+object rtl/cp8859_6.o 3a1d0d1ffc5e40ad8f514f830e238cc39dafab79f7a0de2db210df9d187ebd9c
+object rtl/cp8859_7.o f3904477ebd8e0630a69457e3645685cfc751044a3765dabdc0cfd4566dae24c
+object rtl/cp8859_8.o 67c0103aa4c2c6baf1f388a4b680797e0d3a29e93031383b738bfa4379429c2c
+object rtl/cp8859_9.o 758feb909c65621bf0ea80f6ae391698ec61eb82df6e49a727fb44b67a4fce72
+object rtl/cpkoi8_r.o 35b6b29334a121205226ff9637ae2e100f8cc85203deaeaaaa3c7d4d1f8caef6
+object rtl/cpkoi8_u.o c888a65d041d2c61251a347656f2b36fb29adef25f11948e02afc62faaa93d64
+object rtl/cpu.o 356e6e0c0ba4f3c747357d00a39f1426c829c2086ed90a52e1f59d807b8f50ca
+object rtl/ctypes.o 9fe4628bb2ed9a0d5d438855508e4776d355f919e44ae1d9869d174828385361
+object rtl/dos.o 1f916874fbea30a6ba80ed29a233dc23edf74a8d4a2fbc997f97f4ca90abedc7
+object rtl/dynlibs.o aada8293ff66d1716c79fbae56e9370748a247c0cec74ecdcbc0cd9379ae3fdd
+object rtl/exeinfo.o 74a52d4c4ca8cf90e71f0873d5783a35f6aa1a54af51ac206edc6f37d7aff484
+object rtl/extpas.o 20a9dfbffe3b2911874c9c50cbe210cb2f219c5a5a1ac4b26197e53932a89498
+object rtl/fgl.o 18e1257c732e7cd3f7849fb3bd87a71bb1c8af17e26290187b18850a165766b7
+object rtl/fpintres.o 5757bbb6ac7652973835a7f36da1b677ca87bb3eecd87f1f2091c09f71fe85e2
+object rtl/fpwidestring.o 24722214b82a22bd66f32bccfdf87d2586cc1dae51afc12e084b0ba4874d0ae0
+object rtl/getopts.o 8be9616e8598479661bf020c68cfb5d07400bf0590fbcd2ebe861a5d8ad76d65
+object rtl/heaptrc.o 2d7700605e3456e99eb10da21396ddce941a600ce9e0b442c812d0849cc42ed3
+object rtl/initc.o 733412aa64bb0534b6dbdb42bd7ff47d664dbaba077cd5a7f8f4fc2003b5a17c
+object rtl/iso7185.o aaadadd0a6e0a83dc084d417f4d91a81aa973f552a719b13dbd4e88ea55c790f
+object rtl/lineinfo.o bc85e25279f0e1f7be8acf93a3448e63cba894484fb1d8bdad5cf35140ff8c4f
+object rtl/lnfodwrf.o d6000439de033aeb537fa27a01e5660373c18069b58bd9d47e74487ee9d0f90f
+object rtl/macpas.o 78aa96a937212ce482610f84df946d90e6b197e01a65bf1da9474a6906f66097
+object rtl/math.o 509876feb636fff69868fb6694acc4bf907c6ae452c14c5e2c8e59bc7a9aa1f4
+object rtl/messages.o 744b031e2d8bee2f86dcaf80ba02753fbf8b08a0de6017ffdb581e3d89d2e8e2
+object rtl/mmx.o ef5a17050247240b3a65eae83f8601e0d9b6facc7320d1d884b25be3eaa711cf
+object rtl/objpas.o 166fca98bfc8509e010b58abadac1801ca031f7add14b0cadf8c2f22b8d90cee
+object rtl/rtlconsts.o 9b18e943d9d656f7361f7d7be89193870c4d6f72cc374cd74baf64ee279e2426
+object rtl/sfpu128.o 4f15dffd3ccb5f99369eb417d7cad061a098f9701bca674f1ef0d788cd9385f1
+object rtl/sfpux80.o 77fc180d1d2ce471d9fdb148be15c970930d0450f5494ef6aaabb5d63fb7fda8
+object rtl/sharemem.o 710cb1a7427676945cba58b1ffc50992441a20489cdc833ca0f8e6902fb097af
+object rtl/signals.o 314a38917f6bd1860c7c396290a446fbde8a0435d9ec549f9b4729318fa5ae7d
+object rtl/softfpu.o 2bfebfdf618bb92ac7161a6a952322ffe147e2f4dd38342e3c145d864c790674
+object rtl/strings.o 1f557cca37cb03c99ff372a64e290d2b03f6e3251366d265d15729e3eca96381
+object rtl/sysconst.o 697ad5ad8e80a292c6dc6bb8eabfd2c45b77d5217b66e9bd761a371bf3af4409
+object rtl/sysinitcyg.o 30e6edc9850fcfe908a39e9650419dee955930b7b09afaba08532bc43602a78a
+object rtl/sysinitgprof.o b3977cf160d95b2f2dd635178b8aaac1840a833f8948147d61f7469f8cfcaf5a
+required-object rtl/sysinitpas.o 3757c0f2a37eadd8b80dbbac59b389f1ace75a0b43306dc43d94552d520da13c
+required-object rtl/system.o 6cea36a6b9e3c64b7104cdddac075119b9d85a824a7f8fc0a7f561c096279dc9
+object rtl/sysutils.o 297c50f6213c9a403fef0258834f795d5841d4d7a715bfb471e8490a61130cdb
+object rtl/types.o 50fd6d86722fdd3359a6aeed87d258a54c85f62826527235fb4ee55aac8a7e8a
+object rtl/typinfo.o d72b600e70b2c67bb9885bc37bfb7d07af823457511df9f5833e1a63a8faa1dd
+object rtl/ufloat128.o d573a1f5f52397584c401ea3844fb0935fc3eb26f319382298fbd8b7259953e7
+object rtl/ufloatx80.o 6927f55741c4ff6434c5639e662a64b9fc75ecd415ad07aa56411ba3937e8ac9
+object rtl/unicodedata.o 14d839903013d5cd4ff409f3eb2e8c4937e636fdc42cbe6770927d81bd1a724c
+object rtl/uuchar.o 266554c155cb3fd1db5651ee271b98454c93328ec3cf10e046992734e1799666
+object rtl/windirs.o b0c4ffc86fd585c43def991fd853c958e8e120942950ff5463be22c5bda5571b
+object rtl/windows.o 53ce4526b20a010ce3e6464571ee660212f7d45cf6064a50852b9efe1193f391
+object rtl/winsysut.o 9af1a6a091d5a454491eb20340040b39236abc24fec8207d394d857e1ee5dcae
+
+# Handler sections use the complete linker spelling, including signature CRC.
+nonseh rtl-console/crt.o .text.n_crt_$$_crtctrlbreakhandler$boolean$$boolean
+nonseh rtl-console/keyboard.o .text.n_keyboard_$$_kbdctrlbreakhandler$boolean$$boolean
+nonseh rtl-console/keyboard.o .text.n_keyboard_$$_setkbdctrlbreakhandler
+nonseh rtl-console/mouse.o .text.n_mouse_$$_mouseeventhandler$input_record
+nonseh rtl-console/video.o .text.n_video_$$_defaulterrorhandler$longint$pointer$$terrorhandlerreturnvalue
+nonseh rtl-console/winevent.o .text.n_winevent_$$_getmouseeventhandler$$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_getkeyboardeventhandler$$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_getfocuseventhandler$$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_getmenueventhandler$$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_getresizeeventhandler$$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_getunknowneventhandler$$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_neweventhandlerinstalled$teventprocedure$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_setmouseeventhandler$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_setkeyboardeventhandler$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_setfocuseventhandler$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_setmenueventhandler$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_setresizeeventhandler$teventprocedure
+nonseh rtl-console/winevent.o .text.n_winevent_$$_setunknowneventhandler$teventprocedure
+nonseh rtl/classes.o .text.n_classes_$$_registerinitcomponenthandler$tcomponentclass$tinitcomponenthandler
+nonseh rtl/classes.o .text.n_classes_$$_defaultinithandler$tcomponent$tclass$$boolean
+handler rtl/signals.o .text.n_signals_$$_signals_exception_handler$pexception_record$pexception_frame$pcontext$pointer$$longint
+nonseh rtl/signals.o .text.n_signals_$$_api_signals_exception_handler$pexception_pointers$$longint
+nonseh rtl/signals.o .text.n_signals_$$_install_exception_handler
+nonseh rtl/signals.o .text.n_signals_$$_remove_exception_handler
+handler rtl/system.o .text.n_system_$$___fpc_except_safecall$crcf011d407
+nonseh rtl/system.o .text.n_system_$$_winctrlbreakhandler$longword$$longbool
+nonseh rtl/system.o .text.n_system_$$_syssetctrlbreakhandler$tctrlbreakhandler$$tctrlbreakhandler
+handler rtl/system.o .text.n_system_$$_nullhandler$crcf011d407
+handler rtl/system.o .text.n_system_$$___fpc_finally_handler$crcf011d407
+handler rtl/system.o .text.n_system_$$___fpc_default_handler$crcf011d407
+handler rtl/system.o .text.n_system_$$_nestedhandler$crcf011d407
+nonseh rtl/system.o .text.n_system_$$_commonhandler$texceptionrecord$tsehframe$tcontext$pointer
+handler rtl/system.o .text.n_system_$$___fpc_except_handler$crcf011d407
+handler rtl/system.o .text.n_system_$$___fpc_on_handler$crcf011d407
+nonseh rtl/system.o .text.n_fpc_safecallhandler
+nonseh rtl/sysutils.o .text.n_sysutils_$$_asserterrorhandler$shortstring$shortstring$longint$pointer
+
+# Exact source-bound exclusions for ordinary functions, not OS handlers.
+# Paths are relative to this manifest. Re-review and refresh after a source edit.
+source-nonseh ../../source/units/Goccia.Values.IteratorValue.pas b7832a1b5c60744db09d3106f9c8cf6321a1dd3008c14c91a0b652a56677e5d6 .text.n_goccia.values.iteratorvalue_$$_preservecurrentexceptionacrossnestedhandler
+source-nonseh ../../source/units/Goccia.Builtins.GlobalRegExp.pas c798e396902ee3a8b5d73849a5ce8baa1f09e38ce07ec5afffc752cb96e2d6b0 .text.n_goccia.builtins.globalregexp_$$_handleregexpscanerror$tgocciaobjectvalue$longint$exception
+source-nonseh ../../source/shared/PESafeSEH.pas 68994cb9ce2099453a858a2c4b931c8b4509eba2f811c5188cbea81d5e0b8c46 .text.n_pesafeseh_$$_sortedhandlers$tpeimage$tservaarray$$tservaarray
+source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm_$$_snapshothandlerkey$longint$word$tgocciabytecodehandlerkind$$int64
+
+# Reviewed ordinary methods and test fixtures. No mangling-shape exemption.
+source-nonseh ../../source/units/Goccia.Bytecode.Chunk.pas ccaf7eee25d5d486900deb8e1bed36470ccccc262d714879a688a7e51e82c74f .text.n_goccia.bytecode.chunk$_$tgocciafunctiontemplate_$__$$_addexceptionhandler$crc68eec1e9
+source-nonseh ../../source/units/Goccia.RuntimeExtensions.Sandbox.pas 22c94ed40c336be85b03a2ac24eaa546caecb6a15cf11d83ef3b01c54b233f85 .text.n_goccia.runtimeextensions.sandbox$_$tgocciasandboxruntimeextension_$__$$_handlerootclamp$crc066a5453
+source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 2b139dddb5ceaeb796213d991f9deb2aecfed4b71db77f8c2b93cf121fa3c0c8 .text.n_goccia.values.eventtargetvalue$_$tgocciaeventtargetvalue_$__$$_eventhandlervalue$crcd95711d6
+source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 2b139dddb5ceaeb796213d991f9deb2aecfed4b71db77f8c2b93cf121fa3c0c8 .text.n_goccia.values.eventtargetvalue$_$tgocciaeventtargetvalue_$__$$_findeventhandlerlistener$crca9efb927
+source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 2b139dddb5ceaeb796213d991f9deb2aecfed4b71db77f8c2b93cf121fa3c0c8 .text.n_goccia.values.eventtargetvalue$_$tgocciaeventtargetvalue_$__$$_seteventhandlervalue$crce545fb3e
+source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tgocciabytecodegeneratorobjectvalue_$__$$_prepareawaithandlers$crcc0181dbf
+source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tgocciavm_$__$$_growhandlerstack$longint
+source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tgocciavm_$__$$_tryunwindtohandler$crce3b93773
+source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tgocciavmasyncawaitcontinuationvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
+source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tgocciavmasyncfromsyncfulfillvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
+source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tgocciavmasyncfromsyncrejectvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
+source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tsnapshotframeinfo_$__$$_hashandler$longint$word$tgocciabytecodehandlerkind$$boolean
+source-nonseh ../../source/shared/FPCSafeSEH.Test.pas c9eba3c52df69f5eb2da8258a2c50865352ef7ae3e283d80e86e1b19e28a58dd .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testhandlerownership
+source-nonseh ../../source/shared/FPCSafeSEH.Test.pas c9eba3c52df69f5eb2da8258a2c50865352ef7ae3e283d80e86e1b19e28a58dd .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testmissinghandler
+source-nonseh ../../source/shared/FPCSafeSEH.Test.pas c9eba3c52df69f5eb2da8258a2c50865352ef7ae3e283d80e86e1b19e28a58dd .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testunknownhandler
+source-nonseh ../../source/units/Goccia.Bytecode.Binary.Test.pas 0e5f913fd15e2c52f6c6be7a5eba9c5604a8acfb15e0b287b4ad26be3c7e58ff .text.n_p$goccia.bytecode.binary.test$_$tbytecodebinarytests_$__$$_testroundtripsexceptionhandlers
+source-nonseh ../../source/units/Goccia.Compiler.Test.pas f896bcf85a6743940a6cb487c078e121c77abb68f9d105d6406adf17c2296b04 .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofskipshandlerwithoutabruptclose
+source-nonseh ../../source/units/Goccia.Compiler.Test.pas f896bcf85a6743940a6cb487c078e121c77abb68f9d105d6406adf17c2296b04 .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofuseshandlerforexpressionbody
+source-nonseh ../../source/units/Goccia.Compiler.Test.pas f896bcf85a6743940a6cb487c078e121c77abb68f9d105d6406adf17c2296b04 .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofusesoneiteratorclosehandler
+source-nonseh ../../source/units/Goccia.HeapSnapshot.Test.pas 4d4264c00f0a541bdf073c623e1a1fe4da90c2099834a1d2b1088fb1990cae62 .text.n_p$goccia.heapsnapshot.test$_$theapsnapshottests_$__$$_testgeneratorkeepsitshandlers
+source-nonseh ../../source/shared/PESafeSEH.Test.pas 700b53e7fe7586c5f2ed20980c9952320113c2508cdb4bf272e2a883adf59cf3 .text.n_p$pesafeseh.test$_$tpesafesehtests_$__$$_testhandlerrefusals
+source-nonseh ../../source/shared/PESafeSEH.Test.pas 700b53e7fe7586c5f2ed20980c9952320113c2508cdb4bf272e2a883adf59cf3 .text.n_p$pesafeseh.test_$$_handlers$$tservaarray
+source-nonseh ../../source/shared/SandboxVirtualFileSystem.Test.pas 8e3006b803baf8a8327bf88b0db84c7181ea63f5124dfe36b65d6beb7544d888 .text.n_p$sandboxvirtualfilesystemtest$_$ttestsandboxvirtualfilesystem_$__$$_handlerootclamp$crc066a5453
+nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandler$formal
+nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandlerstr$formal
+
+# Guest bytecode metadata accessor, retained by unoptimized builds.
+source-nonseh ../../source/units/Goccia.Bytecode.Chunk.pas ccaf7eee25d5d486900deb8e1bed36470ccccc262d714879a688a7e51e82c74f .text.n_goccia.bytecode.chunk$_$tgocciafunctiontemplate_$__$$_getexceptionhandler$crc4b9bae09

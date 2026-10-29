@@ -300,6 +300,30 @@ jobs:
             exit 1
           fi
 
+      - name: Build Win32 exception probes with development metadata
+        if: matrix.target == 'i386-win32'
+        run: |
+          mkdir -p build/ci-debug-compiled
+          fpc -Pi386 -Twin32 -O- -gw -godwarfsets -gl -Ct -Cr -Sa -B -Xm \
+            -Fusource/shared -Fisource/shared -Fusource/generated \
+            -FUbuild/ci-debug-compiled -FEci-artifacts -oWin32Exceptions.Debug.exe \
+            source/shared/Win32Exceptions.Test.pas
+          build/tools/safeseh --apply ci-artifacts/Win32Exceptions.Debug.exe \
+            ci-artifacts/Win32Exceptions.Debug.map build/ci-debug-compiled
+          mv ci-artifacts/Win32Exceptions.Debug.map{,.safeseh-inputs} build/
+
+      - name: Verify SafeSEH in every staged Win32 executable
+        if: matrix.target == 'i386-win32'
+        run: |
+          found=0
+          for executable in ci-artifacts/*.exe; do
+            test -f "$executable"
+            found=$((found + 1))
+            name="$(basename "$executable" .exe)"
+            build/tools/safeseh --check "$executable" "build/$name.map"
+          done
+          test "$found" -gt 0
+
       - name: Upload build artifacts
         id: upload-build
         continue-on-error: true
@@ -387,8 +411,41 @@ jobs:
         if: runner.os == 'Windows' && matrix.target != 'i386-win32'
         run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
 
+      - name: Compare every Win32 exception registration path
+        if: matrix.target == 'i386-win32'
+        shell: pwsh
+        run: ./.github/scripts/test-win32-exceptions.ps1
+
+      - name: Compare Win32 development exception paths
+        if: matrix.target == 'i386-win32'
+        shell: pwsh
+        run: ./.github/scripts/test-win32-exceptions.ps1 -Executable build/Win32Exceptions.Debug.exe
+
+      - name: Measure Win32 exception handling with the same code
+        if: matrix.target == 'i386-win32'
+        shell: pwsh
+        run: ./.github/scripts/measure-win32-safeseh.ps1
+
+      - name: Upload Win32 exception measurements
+        if: always() && matrix.target == 'i386-win32'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: win32-safeseh-measurements
+          if-no-files-found: error
+          retention-days: 7
+          path: safeseh-*.json
+
       - name: Run all JavaScript tests
         run: ./build/GocciaTestRunner -P tests --silent --no-progress --output=test-results.json
+
+      - name: Upload JavaScript test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: javascript-test-results-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 7
+          path: test-results.json
 
       - name: Round-trip objects observed by the JavaScript suite
         if: matrix.target == 'x86_64-linux'
