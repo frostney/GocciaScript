@@ -179,7 +179,8 @@ type
       const ACount: Integer = NAME_LIST_COUNT);
     function SourceCompileCounters(const ASource: string; const AStrictTypes: Boolean = False;
       const AFileName: string = '<test>';
-      const APreserveCoverageShape: Boolean = False): TGocciaCompileCounters;
+      const APreserveCoverageShape: Boolean = False;
+      const AGlobalBackedTopLevel: Boolean = False): TGocciaCompileCounters;
     procedure ExpectWorkLinear(const AShort, ALong: TGocciaCompileCounters;
       const ACounter: TGocciaCompileCounter);
     procedure TestAlternatingExpressionWork;
@@ -383,7 +384,7 @@ begin
     TestSwitchCaseDeclarationsCompileInLinearTime);
   Test('TypeScript comparison chains parse in time linear in the code after them',
     TestTypeScriptComparisonChainsParseInLinearTime);
-  Test('A branch past a 16-bit jump offset compiles in the time of short ones',
+  Test('A branch past a 16-bit jump offset compiles each node once',
     TestLongBranchesCompileOnce);
   Test('SlotHoldsLocal follows the declared and dropped locals',
     TestSlotHoldsLocalFollowsTheLocals);
@@ -1326,7 +1327,8 @@ end;
   function records includes parser work as well as nested compiler work. }
 function TTestCompiler.SourceCompileCounters(const ASource: string;
   const AStrictTypes: Boolean; const AFileName: string;
-  const APreserveCoverageShape: Boolean): TGocciaCompileCounters;
+  const APreserveCoverageShape: Boolean;
+  const AGlobalBackedTopLevel: Boolean): TGocciaCompileCounters;
 var
   Profile: TGocciaCompileProfiler;
   Module: TGocciaBytecodeModule;
@@ -1337,8 +1339,8 @@ begin
   TGocciaCompileProfiler.Initialize;
   try
     Profile := TGocciaCompileProfiler.Instance;
-    Module := CompileSource(ASource, AStrictTypes, APreserveCoverageShape, False, True, True,
-      True, True, False, True, True, False, False, AFileName);
+    Module := CompileSource(ASource, AStrictTypes, APreserveCoverageShape,
+      AGlobalBackedTopLevel, True, True, True, True, False, True, True, False, False, AFileName);
     Module.Free;
     for I := 0 to Profile.FunctionCount - 1 do
       for Counter := Low(Counter) to High(Counter) do
@@ -2066,15 +2068,12 @@ end;
   program a second time, so a program cost twice as much to compile once one
   of its branches passed the limit. Each shape here puts the same clauses or
   statements in branches past the limit and in twice as many branches short
-  enough for the 16-bit offset; all sizes stay where the compile time grows
-  linearly. The long branches compile within 1.6 times the time of the short
-  ones (1.0 to 1.2 here, and 1.9 to 2.0 with the second compile), at a
-  script's top level, at a global-backed top level and in an arrow function.
-  The bound is a ratio alone: an absolute slack would let the second compile
-  pass on a machine fast enough for the slack to cover it. }
+  enough for the 16-bit offset. The short source has more branch nodes, so
+  the long source must compile no more nodes than the short one, including
+  nested functions. Recompiling the program or a function exceeds this bound
+  regardless of machine speed. }
 procedure TTestCompiler.TestLongBranchesCompileOnce;
 const
-  LONG_BRANCH_RATIO_PERCENT = 160;
   // Three switches of 6,000 clauses each need the long form, which starts
   // at about 5,400; six of 3,000 do not.
   CLAUSES = 18000;
@@ -2146,7 +2145,7 @@ const
   var
     LongSource, ShortSource: string;
     Module: TGocciaBytecodeModule;
-    Long, Short: Int64;
+    Long, Short: TGocciaCompileCounters;
   begin
     LongSource := BranchSource(ASwitch, ALongBranches, APrefix, ASuffix);
     ShortSource := BranchSource(ASwitch, 2 * ALongBranches, APrefix,
@@ -2167,14 +2166,18 @@ const
       end;
     end;
 
-    Long := SourceCompileNanoseconds(LongSource, AGlobalBackedTopLevel);
-    Short := SourceCompileNanoseconds(ShortSource, AGlobalBackedTopLevel);
-    if Long * 100 > LONG_BRANCH_RATIO_PERCENT * Short then
-      Fail(Format('%d long branches in "%s" took %d ms to compile against ' +
-        '%d ms in %d short ones', [ALongBranches, APrefix,
-        Long div 1000000, Short div 1000000, 2 * ALongBranches]));
-    Expect<Boolean>(Long * 100 <= LONG_BRANCH_RATIO_PERCENT * Short).ToBe(
-      True);
+    Long := SourceCompileCounters(LongSource, False, '<test>', False,
+      AGlobalBackedTopLevel);
+    Short := SourceCompileCounters(ShortSource, False, '<test>', False,
+      AGlobalBackedTopLevel);
+    Expect<Boolean>(Short[ccNodesCompiled] > 0).ToBe(True);
+    Expect<Boolean>(Long[ccNodesCompiled] > 0).ToBe(True);
+    if Long[ccNodesCompiled] > Short[ccNodesCompiled] then
+      Fail(Format('%d long branches in "%s" (global-backed: %s) compiled %d nodes ' +
+        'against %d in %d short ones', [ALongBranches, APrefix,
+        BoolToStr(AGlobalBackedTopLevel, True), Long[ccNodesCompiled],
+        Short[ccNodesCompiled], 2 * ALongBranches]));
+    Expect<Boolean>(Long[ccNodesCompiled] <= Short[ccNodesCompiled]).ToBe(True);
   end;
 
 begin
