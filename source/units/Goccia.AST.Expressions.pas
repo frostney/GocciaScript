@@ -354,6 +354,8 @@ type
       of its value. Equal offsets mean the parser did not record one. }
     StartOffset: Integer;
     EndOffset: Integer;
+    { Where the static key is, for a member that is not computed. }
+    Key: TGocciaASTPartRange;
   end;
 
   TGocciaObjectExpression = class(TGocciaExpression)
@@ -2128,6 +2130,10 @@ begin
         end;
     end;
     AVisitor.EnterPart(apkProperty, Order.StartOffset, Order.EndOffset, Flags);
+    { A shorthand property's key is its value: the one Identifier is the
+      value's. }
+    if not (apfShorthand in Flags) then
+      VisitPartRange(AVisitor, Order.Key);
     AVisitor.VisitChild(Key);
     AVisitor.VisitChild(Value);
     AVisitor.LeavePart;
