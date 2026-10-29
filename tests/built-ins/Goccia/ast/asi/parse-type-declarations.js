@@ -56,4 +56,26 @@ describe("ast.parse type-level declarations under ASI", () => {
     );
     expect(declaration.kind).toBe("VariableDeclaration");
   });
+
+  test("the semicolon-less type-only module forms report their specifiers and module path", () => {
+    const lines = [
+      'import type { A, B } from "./a.ts"',
+      "export type { A }",
+      'export type { A as B } from "./a.ts"',
+      'export type * from "./star.ts"',
+    ];
+    const source = lines.join("\n") + "\nconst value = 1\n";
+    const nodes = parse(source, { expressions: true }).root.children;
+    const shape = (node) =>
+      node.children.map((child) => `${child.kind}(${source.slice(child.start, child.end)})`);
+
+    expect(nodes.slice(0, 4).map(shape)).toEqual([
+      ["ImportSpecifier(A)", "ImportSpecifier(B)", 'StringLiteral("./a.ts")'],
+      ["ExportSpecifier(A)"],
+      ["ExportSpecifier(A as B)", 'StringLiteral("./a.ts")'],
+      ['StringLiteral("./star.ts")'],
+    ]);
+    expect(nodes.slice(0, 4).map((node) => source.slice(node.start, node.end))).toEqual(lines);
+    expect(nodes[4].kind).toBe("VariableDeclaration");
+  });
 });

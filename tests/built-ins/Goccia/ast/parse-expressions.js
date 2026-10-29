@@ -29,6 +29,12 @@ const kinds = (node) => node.children.map((child) => child.kind);
 
 const text = (result, node) => result.source.slice(node.start, node.end);
 
+const typeOnlyOf = (node) => node.typeOnly;
+
+/** `kind(text)` of every child, in order. */
+const shapeOf = (result, node) =>
+  node.children.map((child) => `${child.kind}(${text(result, child)})`);
+
 /** The only expression of the first statement. */
 const firstExpression = (result) => result.root.children[0].children[0];
 
@@ -217,7 +223,7 @@ describe("ast.parse with expressions", () => {
     expect(kinds(computed)).toEqual(["Identifier", "NumericLiteral"]);
     expect(method.method).toBe(true);
     expect(text(result, method)).toBe("d() { return 1; }");
-    expect(kinds(method)).toEqual(["BlockStatement"]);
+    expect(kinds(method)).toEqual(["Identifier", "BlockStatement"]);
     expect(text(result, getter)).toBe("get e() { return 2; }");
     expect(getter.method).toBe(true);
   });
@@ -437,9 +443,12 @@ describe("ast.parse with expressions", () => {
       "import a from \"./a.js\";\nexport { b } from './b.js';\n",
     );
 
-    expect(kinds(result.root.children[0])).toEqual(["StringLiteral"]);
-    expect(text(result, result.root.children[0].children[0])).toBe('"./a.js"');
-    expect(text(result, result.root.children[1].children[0])).toBe("'./b.js'");
+    const [imported, reExported] = result.root.children;
+
+    expect(kinds(imported)).toEqual(["ImportDefaultSpecifier", "StringLiteral"]);
+    expect(kinds(reExported)).toEqual(["ExportSpecifier", "StringLiteral"]);
+    expect(text(result, imported.children[1])).toBe('"./a.js"');
+    expect(text(result, reExported.children[1])).toBe("'./b.js'");
   });
 
   test("class members are reported with static and computed", () => {
@@ -486,7 +495,7 @@ describe("ast.parse with expressions", () => {
       true,
     ]);
     expect(members[5].computed).toBe(true);
-    expect(kinds(members[2])).toEqual(["Parameter", "BlockStatement"]);
+    expect(kinds(members[2])).toEqual(["Identifier", "Parameter", "BlockStatement"]);
     expect(find(members[2], "Super")).toBeDefined();
     expect(find(members[3], "YieldExpression")).toBeDefined();
   });
@@ -498,7 +507,12 @@ describe("ast.parse with expressions", () => {
     const method = find(result.root, "MethodDefinition");
 
     expect(text(result, method)).toBe("@dec m() {}");
-    expect(kinds(method)).toEqual(["Identifier", "BlockStatement"]);
+    // The decorator comes first, as it does in the source, then the key.
+    expect(shapeOf(result, method)).toEqual([
+      "Identifier(dec)",
+      "Identifier(m)",
+      "BlockStatement({})",
+    ]);
   });
 
   test("a decorated field is reported once", () => {
@@ -511,9 +525,9 @@ describe("ast.parse with expressions", () => {
       "@keep x = 1;",
       "@keep #y = 2;",
     ]);
-    expect(fields.map((field) => kinds(field))).toEqual([
-      ["Identifier", "NumericLiteral"],
-      ["Identifier", "NumericLiteral"],
+    expect(fields.map((field) => shapeOf(result, field))).toEqual([
+      ["Identifier(keep)", "Identifier(x)", "NumericLiteral(1)"],
+      ["Identifier(keep)", "Identifier(#y)", "NumericLiteral(2)"],
     ]);
   });
 
@@ -522,7 +536,7 @@ describe("ast.parse with expressions", () => {
     const accessor = find(result.root, "AccessorProperty");
 
     expect(text(result, accessor)).toBe("accessor z = 1;");
-    expect(kinds(accessor)).toEqual(["NumericLiteral"]);
+    expect(kinds(accessor)).toEqual(["Identifier", "NumericLiteral"]);
     expect(findAll(result.root, "BlockStatement")).toEqual([]);
   });
 
@@ -682,17 +696,17 @@ describe("ast.parse with expressions beside type-level declarations and tokens",
   ];
   const source = lines.join("\n") + "\n";
 
-  test("the statements keep the kinds and typeOnly the statement view gives them, with no children of their own", () => {
+  test("the statements keep the kinds and typeOnly the statement view gives them; only the type-only module forms gain children", () => {
     const statements = parseExpressions(source, { fileName: "types.ts" }).root
       .children;
 
     expect(
       statements.map((node) => [node.kind, node.typeOnly, node.children.length]),
     ).toEqual([
-      ["ImportDeclaration", true, 0],
-      ["ImportDeclaration", false, 1],
-      ["ExportDeclaration", true, 0],
-      ["ReExportDeclaration", true, 0],
+      ["ImportDeclaration", true, 2],
+      ["ImportDeclaration", false, 3],
+      ["ExportDeclaration", true, 1],
+      ["ReExportDeclaration", true, 1],
       ["ExportTypeAliasDeclaration", true, 0],
       ["ExportInterfaceDeclaration", true, 0],
       ["TypeAliasDeclaration", true, 0],
@@ -723,5 +737,630 @@ describe("ast.parse with expressions beside type-level declarations and tokens",
     expect(withExpressions.tokens).toEqual(statementsOnly.tokens);
     expect(parseExpressions(source, { fileName: "types.ts" }).tokens)
       .toBeUndefined();
+  });
+});
+
+describe("ast.parse with expressions: import and export specifiers", () => {
+  test("an import reports its default binding, named imports and module path in source order", () => {
+    const result = parseExpressions('import d, { b as bb, c } from "./b";\n');
+    const declaration = result.root.children[0];
+
+    expect(shapeOf(result, declaration)).toEqual([
+      "ImportDefaultSpecifier(d)",
+      "ImportSpecifier(b as bb)",
+      "ImportSpecifier(c)",
+      'StringLiteral("./b")',
+    ]);
+  });
+
+  test("a namespace import covers `* as ns`, alone or after a default binding", () => {
+    const result = parseExpressions(
+      'import * as ns from "./n";\nimport d, * as all from "./m";\n',
+    );
+    const [alone, withDefault] = result.root.children;
+
+    expect(shapeOf(result, alone)).toEqual([
+      "ImportNamespaceSpecifier(* as ns)",
+      'StringLiteral("./n")',
+    ]);
+    expect(shapeOf(result, withDefault)).toEqual([
+      "ImportDefaultSpecifier(d)",
+      "ImportNamespaceSpecifier(* as all)",
+      'StringLiteral("./m")',
+    ]);
+  });
+
+  test("an import with no bindings has only its module path", () => {
+    const result = parseExpressions('import "./side-effect";\n');
+
+    expect(shapeOf(result, result.root.children[0])).toEqual([
+      'StringLiteral("./side-effect")',
+    ]);
+  });
+
+  test("a re-export and an export list report one ExportSpecifier per entry, `f as g` whole", () => {
+    const result = parseExpressions(
+      'export { e, f as g } from "./e";\nexport { h };\nexport { i as j, k };\n',
+    );
+    const [reExport, local, aliased] = result.root.children;
+
+    expect(shapeOf(result, reExport)).toEqual([
+      "ExportSpecifier(e)",
+      "ExportSpecifier(f as g)",
+      'StringLiteral("./e")',
+    ]);
+    expect(shapeOf(result, local)).toEqual(["ExportSpecifier(h)"]);
+    expect(shapeOf(result, aliased)).toEqual([
+      "ExportSpecifier(i as j)",
+      "ExportSpecifier(k)",
+    ]);
+  });
+
+  test("a source-phase or deferred import reports its binding as a specifier", () => {
+    const result = parseExpressions(
+      'import source wasm from "./a.wasm";\nimport defer * as lazy from "./b.js";\n',
+    );
+    const [source, deferred] = result.root.children;
+
+    expect(shapeOf(result, source)).toEqual([
+      "ImportDefaultSpecifier(wasm)",
+      'StringLiteral("./a.wasm")',
+    ]);
+    expect(shapeOf(result, deferred)).toEqual([
+      "ImportNamespaceSpecifier(* as lazy)",
+      'StringLiteral("./b.js")',
+    ]);
+  });
+
+  test("a star re-export has no specifier", () => {
+    const result = parseExpressions(
+      'export * from "./a";\nexport * as ns from "./b";\n',
+    );
+
+    expect(result.root.children.map((node) => shapeOf(result, node))).toEqual([
+      ['StringLiteral("./a")'],
+      ['StringLiteral("./b")'],
+    ]);
+  });
+
+  test("a specifier's range covers its type modifier, and only that specifier is typeOnly", () => {
+    const result = parseExpressions(
+      'import { type C, D } from "./c.ts";\nexport { type E as F, G };\nexport { type H } from "./h.ts";\n',
+      { fileName: "m.ts" },
+    );
+    const [imported, exported, reExported] = result.root.children;
+
+    expect(shapeOf(result, imported)).toEqual([
+      "ImportSpecifier(type C)",
+      "ImportSpecifier(D)",
+      'StringLiteral("./c.ts")',
+    ]);
+    expect(imported.children.slice(0, 2).map(typeOnlyOf)).toEqual([true, false]);
+    expect(shapeOf(result, exported)).toEqual([
+      "ExportSpecifier(type E as F)",
+      "ExportSpecifier(G)",
+    ]);
+    expect(exported.children.map(typeOnlyOf)).toEqual([true, false]);
+    expect(reExported.children[0].typeOnly).toBe(true);
+    // The statements themselves run, so they are not typeOnly.
+    expect([imported, exported, reExported].map(typeOnlyOf)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  test("every other specifier carries typeOnly false, and the module path has no typeOnly", () => {
+    const result = parseExpressions(
+      'import d, * as ns from "./a";\nimport { b } from "./b";\nexport { c } from "./c";\nexport { e };\n',
+    );
+
+    for (const kind of [
+      "ImportDefaultSpecifier",
+      "ImportNamespaceSpecifier",
+      "ImportSpecifier",
+      "ExportSpecifier",
+    ]) {
+      const specifiers = findAll(result.root, kind);
+
+      expect(specifiers.length).toBeGreaterThan(0);
+      for (const specifier of specifiers) {
+        expect(specifier.typeOnly).toBe(false);
+      }
+    }
+    for (const path of findAll(result.root, "StringLiteral")) {
+      expect("typeOnly" in path).toBe(false);
+    }
+  });
+
+  test("names stay out of the tree: a specifier has no children and no name property", () => {
+    const result = parseExpressions('import { b as bb } from "./b";\n');
+    const specifier = find(result.root, "ImportSpecifier");
+
+    expect(specifier.children).toEqual([]);
+    expect(Object.keys(specifier).sort()).toEqual([
+      "children",
+      "end",
+      "kind",
+      "loc",
+      "start",
+      "typeOnly",
+    ]);
+  });
+
+  test("string-literal names are part of the specifier's range", () => {
+    const result = parseExpressions(
+      'import { "a-b" as c } from "./a";\nexport { c as "d-e" };\nexport { "f-g" as "h-i" } from "./f";\n',
+    );
+
+    expect(findAll(result.root, "ImportSpecifier").map((n) => text(result, n)))
+      .toEqual(['"a-b" as c']);
+    expect(findAll(result.root, "ExportSpecifier").map((n) => text(result, n)))
+      .toEqual(['c as "d-e"', '"f-g" as "h-i"']);
+  });
+
+  test("the text after the last specifier is the comma and the closing brace a formatter reads", () => {
+    const source =
+      'import {\n  a,\n  b as c,\n} from "./a";\nexport {\n  d,\n  e\n};\n';
+    const result = parseExpressions(source);
+    const [imported, exported] = result.root.children;
+    const lastImport = imported.children[1];
+    const lastExport = exported.children[1];
+
+    expect(source.slice(lastImport.end, source.indexOf("}", lastImport.end) + 1))
+      .toBe(",\n}");
+    expect(source.slice(lastExport.end, source.indexOf("}", lastExport.end) + 1))
+      .toBe("\n}");
+  });
+
+  test("a specifier nests inside its declaration and the siblings do not overlap", () => {
+    const source = 'import d, { a as b, type c } from "./a.ts";\nexport { x as y } from "./x.ts";\n';
+    const result = parseExpressions(source, { fileName: "n.ts" });
+
+    for (const declaration of result.root.children) {
+      declaration.children.forEach((child, index) => {
+        expect(child.start).toBeGreaterThanOrEqual(declaration.start);
+        expect(child.end).toBeLessThanOrEqual(declaration.end);
+        if (index > 0) {
+          expect(child.start).toBeGreaterThanOrEqual(
+            declaration.children[index - 1].end,
+          );
+        }
+      });
+    }
+  });
+
+  test("without the option the statements keep their kinds, ranges and no children", () => {
+    const source =
+      'import d, { b as bb, type c } from "./b.ts";\nimport * as ns from "./n.ts";\nexport { e, f as g } from "./e.ts";\nexport { h };\n';
+    const plain = parse(source, { fileName: "m.ts" });
+    const result = parseExpressions(source, { fileName: "m.ts" });
+
+    expect(plain.root.children.map((node) => node.children)).toEqual([[], [], [], []]);
+    expect(plain.root.children.map((node) => [node.kind, node.start, node.end, node.typeOnly]))
+      .toEqual(
+        result.root.children.map((node) => [node.kind, node.start, node.end, node.typeOnly]),
+      );
+  });
+});
+
+describe("ast.parse with expressions: type-only module statements", () => {
+  test("import type reports its specifiers and module path, all typeOnly", () => {
+    const result = parseExpressions(
+      'import type { A, B as C } from "./a.ts";\nimport type * as NS from "./ns.ts";\nimport type D from "./d.ts";\n',
+      { fileName: "t.ts" },
+    );
+    const [named, namespace, defaulted] = result.root.children;
+
+    expect(shapeOf(result, named)).toEqual([
+      "ImportSpecifier(A)",
+      "ImportSpecifier(B as C)",
+      'StringLiteral("./a.ts")',
+    ]);
+    expect(named.children.slice(0, 2).map(typeOnlyOf)).toEqual([true, true]);
+    expect(shapeOf(result, namespace)).toEqual([
+      "ImportNamespaceSpecifier(* as NS)",
+      'StringLiteral("./ns.ts")',
+    ]);
+    expect(namespace.children[0].typeOnly).toBe(true);
+    expect(shapeOf(result, defaulted)).toEqual([
+      "ImportDefaultSpecifier(D)",
+      'StringLiteral("./d.ts")',
+    ]);
+    expect(defaulted.children[0].typeOnly).toBe(true);
+  });
+
+  test("export type reports its specifiers and the module path of a re-export", () => {
+    const result = parseExpressions(
+      'export type { T } from "./t.ts";\nexport type { U, V as W };\nexport type * from "./star.ts";\nexport type * as Star from "./star.ts";\nexport type {};\n',
+      { fileName: "t.ts" },
+    );
+    const [reExport, local, star, namespaced, empty] = result.root.children;
+
+    expect(shapeOf(result, reExport)).toEqual([
+      "ExportSpecifier(T)",
+      'StringLiteral("./t.ts")',
+    ]);
+    expect(reExport.children[0].typeOnly).toBe(true);
+    expect(shapeOf(result, local)).toEqual([
+      "ExportSpecifier(U)",
+      "ExportSpecifier(V as W)",
+    ]);
+    expect(local.children.map(typeOnlyOf)).toEqual([true, true]);
+    expect(shapeOf(result, star)).toEqual(['StringLiteral("./star.ts")']);
+    expect(shapeOf(result, namespaced)).toEqual(['StringLiteral("./star.ts")']);
+    expect(empty.children).toEqual([]);
+  });
+
+  test("the node keeps its kind, typeOnly and whole-text range", () => {
+    const lines = [
+      'import type { A } from "./a.ts";',
+      'export type { A } from "./a.ts";',
+      "export type { A };",
+      'export type * from "./a.ts";',
+    ];
+    const source = lines.join("\n") + "\n";
+    const nodes = parseExpressions(source, { fileName: "t.ts" }).root.children;
+
+    expect(
+      nodes.map((node) => [node.kind, node.typeOnly, source.slice(node.start, node.end)]),
+    ).toEqual([
+      ["ImportDeclaration", true, lines[0]],
+      ["ReExportDeclaration", true, lines[1]],
+      ["ExportDeclaration", true, lines[2]],
+      ["ReExportDeclaration", true, lines[3]],
+    ]);
+  });
+
+  test("a multi-line list, a trailing comma, import attributes and comments between tokens", () => {
+    const source = [
+      "import type {",
+      "  A,",
+      "  B as C,",
+      '} from "./a.json" with { type: "json" };',
+      'export /* why */ type { /* x */ D } /* here */ from /* y */ "./d.ts";',
+      "",
+    ].join("\n");
+    const result = parseExpressions(source, { fileName: "t.ts" });
+    const [imported, exported] = result.root.children;
+
+    expect(shapeOf(result, imported)).toEqual([
+      "ImportSpecifier(A)",
+      "ImportSpecifier(B as C)",
+      'StringLiteral("./a.json")',
+    ]);
+    expect(shapeOf(result, exported)).toEqual([
+      "ExportSpecifier(D)",
+      'StringLiteral("./d.ts")',
+    ]);
+  });
+
+  test("a type-only statement's children nest inside it and do not overlap", () => {
+    const source = 'import type { A, B } from "./a.ts";\nexport type { C } from "./c.ts";\n';
+    const result = parseExpressions(source, { fileName: "t.ts" });
+
+    for (const node of result.root.children) {
+      node.children.forEach((child, index) => {
+        expect(child.start).toBeGreaterThanOrEqual(node.start);
+        expect(child.end).toBeLessThanOrEqual(node.end);
+        if (index > 0) {
+          expect(child.start).toBeGreaterThanOrEqual(node.children[index - 1].end);
+        }
+      });
+    }
+  });
+
+  test("type aliases and interfaces still have no children", () => {
+    const result = parseExpressions(
+      'export type T = string | number;\nexport interface I { x: number }\ntype U = { a: 1 };\ninterface J { y: string }\n',
+      { fileName: "t.ts" },
+    );
+
+    expect(result.root.children.map((node) => [node.kind, node.children.length])).toEqual([
+      ["ExportTypeAliasDeclaration", 0],
+      ["ExportInterfaceDeclaration", 0],
+      ["TypeAliasDeclaration", 0],
+      ["InterfaceDeclaration", 0],
+    ]);
+  });
+
+  test("a default binding named from is still the default specifier", () => {
+    const result = parseExpressions('import type from from "./a.ts";\n', {
+      fileName: "t.ts",
+    });
+
+    expect(shapeOf(result, result.root.children[0])).toEqual([
+      "ImportDefaultSpecifier(from)",
+      'StringLiteral("./a.ts")',
+    ]);
+  });
+
+  test("a type-only import that is not an import clause reports nothing", () => {
+    const result = parseExpressions('import type A = require("./a");\n', {
+      fileName: "t.ts",
+    });
+
+    expect(result.root.children.map((node) => node.kind)).toEqual([
+      "ImportDeclaration",
+    ]);
+    expect(result.root.children[0].children).toEqual([]);
+  });
+
+  test("the statement view is unchanged: the same statements, ranges and typeOnly, no children", () => {
+    const source =
+      'import type { A } from "./a.ts";\nexport type { A };\nexport type { A } from "./a.ts";\nexport type * from "./a.ts";\nconst v = 1;\n';
+    const plain = parse(source, { fileName: "t.ts" });
+    const result = parseExpressions(source, { fileName: "t.ts" });
+
+    expect(plain.root.children.slice(0, 4).map((node) => node.children)).toEqual([
+      [],
+      [],
+      [],
+      [],
+    ]);
+    expect(plain.root.children.map((node) => [node.kind, node.start, node.end, node.typeOnly]))
+      .toEqual(
+        result.root.children.map((node) => [node.kind, node.start, node.end, node.typeOnly]),
+      );
+  });
+});
+
+describe("ast.parse with expressions: static keys", () => {
+  const keyOf = (result, node) => text(result, node.children[0]);
+
+  test("each static key is the first child of its member, by what it is", () => {
+    const source =
+      'const o = { "k-1": 1, 2: 3, [k]: 4, k2: "v", m() {} };\nclass C { "s"() {} [x] = 1; 5 = 2; }\n';
+    const result = parseExpressions(source);
+    const object = find(result.root, "ObjectExpression");
+    const [quoted, numeric, computed, named, method] = object.children;
+    const [stringMethod, computedField, numericField] = find(
+      result.root,
+      "ClassDeclaration",
+    ).children;
+
+    expect(shapeOf(result, quoted)).toEqual(['StringLiteral("k-1")', "NumericLiteral(1)"]);
+    expect(shapeOf(result, numeric)).toEqual(["NumericLiteral(2)", "NumericLiteral(3)"]);
+    expect(shapeOf(result, computed)).toEqual(["Identifier(k)", "NumericLiteral(4)"]);
+    expect(shapeOf(result, named)).toEqual(["Identifier(k2)", 'StringLiteral("v")']);
+    expect(shapeOf(result, method)).toEqual(["Identifier(m)", "BlockStatement({})"]);
+    expect(shapeOf(result, stringMethod)).toEqual(['StringLiteral("s")', "BlockStatement({})"]);
+    expect(shapeOf(result, computedField)).toEqual(["Identifier(x)", "NumericLiteral(1)"]);
+    expect(shapeOf(result, numericField)).toEqual(["NumericLiteral(5)", "NumericLiteral(2)"]);
+  });
+
+  test("a computed key is reported once, as the expression it is", () => {
+    const result = parseExpressions(
+      "const o = { [a + b]: 1, [`t`]() {} };\nclass C { [x]() {} static [y] = 1; get [z]() { return 1; } }\n",
+    );
+    const [sum, template] = find(result.root, "ObjectExpression").children;
+    const [method, field, getter] = find(result.root, "ClassDeclaration").children;
+
+    expect(shapeOf(result, sum)).toEqual(["BinaryExpression(a + b)", "NumericLiteral(1)"]);
+    expect(shapeOf(result, template)).toEqual(["TemplateLiteral(`t`)", "BlockStatement({})"]);
+    expect(shapeOf(result, method)).toEqual(["Identifier(x)", "BlockStatement({})"]);
+    expect(shapeOf(result, field)).toEqual(["Identifier(y)", "NumericLiteral(1)"]);
+    expect(shapeOf(result, getter)).toEqual([
+      "Identifier(z)",
+      "BlockStatement({ return 1; })",
+    ]);
+    for (const member of [sum, template, method, field, getter]) {
+      expect(member.computed).toBe(true);
+    }
+  });
+
+  test("a shorthand property reports one Identifier, not two", () => {
+    const result = parseExpressions("const o = { a, b };\n");
+    const [a, b] = find(result.root, "ObjectExpression").children;
+
+    expect(shapeOf(result, a)).toEqual(["Identifier(a)"]);
+    expect(shapeOf(result, b)).toEqual(["Identifier(b)"]);
+    expect(a.shorthand).toBe(true);
+  });
+
+  test("get, set, async, * and static are not part of an object key's range", () => {
+    const result = parseExpressions(
+      'const o = { get a() { return 1; }, set a(v) {}, async b() {}, *c() {}, async *d() {}, get "e"() { return 1; }, async 1() {} };\n',
+    );
+    const members = find(result.root, "ObjectExpression").children;
+
+    expect(members.map((member) => keyOf(result, member))).toEqual([
+      "a",
+      "a",
+      "b",
+      "c",
+      "d",
+      '"e"',
+      "1",
+    ]);
+    expect(members.map((member) => member.children[0].kind)).toEqual([
+      "Identifier",
+      "Identifier",
+      "Identifier",
+      "Identifier",
+      "Identifier",
+      "StringLiteral",
+      "NumericLiteral",
+    ]);
+    expect(members.map((member) => text(result, member))[0]).toBe(
+      "get a() { return 1; }",
+    );
+  });
+
+  test("get, set, async, *, static and accessor are not part of a class member's key range", () => {
+    const result = parseExpressions(
+      [
+        "class C {",
+        "  get a() { return 1; }",
+        "  set a(v) {}",
+        "  async b() {}",
+        "  *c() {}",
+        "  async *d() {}",
+        "  static e = 1;",
+        "  static async *f() {}",
+        "  static get g() { return 1; }",
+        "  accessor h = 1;",
+        "  static accessor i = 1;",
+        '  static "j" = 1;',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const members = find(result.root, "ClassDeclaration").children;
+
+    expect(members.map((member) => keyOf(result, member))).toEqual([
+      "a",
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+      "g",
+      "h",
+      "i",
+      '"j"',
+    ]);
+    expect(members.map((member) => member.kind)).toEqual([
+      "MethodDefinition",
+      "MethodDefinition",
+      "MethodDefinition",
+      "MethodDefinition",
+      "MethodDefinition",
+      "PropertyDefinition",
+      "MethodDefinition",
+      "MethodDefinition",
+      "AccessorProperty",
+      "AccessorProperty",
+      "PropertyDefinition",
+    ]);
+    expect(members[6].static).toBe(true);
+  });
+
+  test("a private name is an Identifier that includes its #", () => {
+    const result = parseExpressions(
+      "class C {\n  #p = 1;\n  static #s = 2;\n  #m() {}\n  get #g() { return 1; }\n  set #g(v) {}\n  static async #a() {}\n  accessor #h = 3;\n}\n",
+    );
+    const members = find(result.root, "ClassDeclaration").children;
+
+    expect(members.map((member) => keyOf(result, member))).toEqual([
+      "#p",
+      "#s",
+      "#m",
+      "#g",
+      "#g",
+      "#a",
+      "#h",
+    ]);
+    expect(members.map((member) => member.children[0].kind)).toEqual(
+      Array(7).fill("Identifier"),
+    );
+  });
+
+  test("a key that spells a modifier, a keyword or a bigint is still the key", () => {
+    const result = parseExpressions(
+      "const o = { get: 1, set: 2, async: 3, static: 4, if: 5, 1n: 6, async() {}, get() {} };\nclass C { get = 1; set() {} static = 2; async = 3; static static() {} 7n = 1; }\n",
+    );
+    const object = find(result.root, "ObjectExpression").children;
+    const members = find(result.root, "ClassDeclaration").children;
+
+    expect(object.map((member) => [member.children[0].kind, keyOf(result, member)])).toEqual([
+      ["Identifier", "get"],
+      ["Identifier", "set"],
+      ["Identifier", "async"],
+      ["Identifier", "static"],
+      ["Identifier", "if"],
+      ["BigIntLiteral", "1n"],
+      ["Identifier", "async"],
+      ["Identifier", "get"],
+    ]);
+    expect(members.map((member) => [member.children[0].kind, keyOf(result, member)])).toEqual([
+      ["Identifier", "get"],
+      ["Identifier", "set"],
+      ["Identifier", "static"],
+      ["Identifier", "async"],
+      ["Identifier", "static"],
+      ["BigIntLiteral", "7n"],
+    ]);
+    expect(members[4].static).toBe(true);
+  });
+
+  test("a TypeScript member's key stops before its optional marker and type annotation", () => {
+    const result = parseExpressions(
+      "class C {\n  a?: string;\n  readonly b: number = 1;\n  private c: string = 'x';\n  d<T>(v: T): T { return v; }\n}\n",
+      { fileName: "k.ts" },
+    );
+    const members = find(result.root, "ClassDeclaration").children;
+
+    expect(members.map((member) => keyOf(result, member))).toEqual(["a", "b", "c", "d"]);
+  });
+
+  test("a member's values stay out of the tree beside its key", () => {
+    const result = parseExpressions("const o = { a: 1 };\n");
+    const property = find(result.root, "Property");
+
+    expect(kinds(property)).toEqual(["Identifier", "NumericLiteral"]);
+    expect(Object.keys(property).sort()).toEqual([
+      "children",
+      "computed",
+      "end",
+      "kind",
+      "loc",
+      "method",
+      "shorthand",
+      "start",
+    ]);
+  });
+
+  test("keys nest inside their member, before its value, and siblings do not overlap", () => {
+    const source =
+      'const o = { "a-b": f(1), c() { return 2; }, get d() { return 3; } };\nclass C { "e" = g(); #f() {} }\n';
+    const result = parseExpressions(source);
+    const members = [
+      ...find(result.root, "ObjectExpression").children,
+      ...find(result.root, "ClassDeclaration").children,
+    ];
+
+    for (const member of members) {
+      const key = member.children[0];
+
+      expect(key.start).toBeGreaterThanOrEqual(member.start);
+      expect(key.end).toBeLessThanOrEqual(member.end);
+      member.children.forEach((child, index) => {
+        if (index > 0) {
+          expect(child.start).toBeGreaterThanOrEqual(member.children[index - 1].end);
+        }
+      });
+    }
+  });
+
+  test("object-pattern keys are not reported", () => {
+    const result = parseExpressions(
+      'const { "a": b, c: d } = o;\n({ "e": f } = o);\nconst g = ({ "h": i }) => i;\n',
+    );
+
+    expect(findAll(result.root, "StringLiteral")).toEqual([]);
+  });
+
+  test("without the option no key is reported", () => {
+    const result = parse('const o = { "k": 1 };\nclass C { "s"() {} #p = 1; }\n');
+    const walk = (node) => [node.kind, ...node.children.flatMap(walk)];
+
+    expect(result.root.children.flatMap(walk)).toEqual([
+      "VariableDeclaration",
+      "ClassDeclaration",
+      "BlockStatement",
+    ]);
+  });
+
+  test("with jsx on, a key the transformer wrote is not reported and one the file wrote is", () => {
+    const source =
+      'const style = { "text-align": "left" };\nconst view = <a data-x="1" style={{ "z-index": 1 }} />;\n';
+    const result = parseExpressions(source, { jsx: true, fileName: "view.tsx" });
+    const keys = findAll(result.root, "Property").map((property) =>
+      text(result, property.children[0]),
+    );
+
+    expect(keys).toEqual(['"text-align"', '"z-index"']);
   });
 });

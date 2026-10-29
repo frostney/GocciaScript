@@ -86,7 +86,27 @@ const CLASS_MEMBER_KINDS = [
   "StaticBlock",
 ];
 
+// Kinds that are a piece of an import or export declaration: each is
+// re-parsed inside the smallest declaration that holds one.
+const SPECIFIER_WRAPPERS = {
+  ImportDefaultSpecifier: { prefix: "import ", suffix: ' from "m";\n' },
+  ImportNamespaceSpecifier: { prefix: "import ", suffix: ' from "m";\n' },
+  ImportSpecifier: { prefix: "import {", suffix: '} from "m";\n' },
+  ExportSpecifier: { prefix: "export {", suffix: "};\n" },
+};
+
+// A static key is a name or a literal, and so is an expression, except where
+// the name is a reserved word or a private name. It is re-parsed as an
+// expression first, and as the key of a class member if that does not place
+// it: a class member accepts every spelling a key can have.
+const KEY_KINDS = ["Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral"];
+const KEY_WRAPPER = { prefix: "class __Probe {\n", suffix: "() {}\n}\n" };
+
 const expressionWrapperFor = (kind, slice) => {
+  if (SPECIFIER_WRAPPERS[kind]) {
+    return SPECIFIER_WRAPPERS[kind];
+  }
+
   if (kind === "Property") {
     return { prefix: `${EXPRESSION_PREFIX}{`, suffix: `}${EXPRESSION_SUFFIX}` };
   }
@@ -174,26 +194,42 @@ const wrapperFor = (kind, slice) => {
  */
 const roundTrip = (file, text, node, expressions) => {
   const slice = text.slice(node.start, node.end);
-  const wrapper = wrapperFor(node.kind, slice);
-  const wrapped = wrapper.prefix + slice + wrapper.suffix;
-  const start = wrapper.prefix.length;
-  const end = start + slice.length;
-  let reparsed = null;
+  const wrappers = [wrapperFor(node.kind, slice)];
 
-  try {
-    reparsed = parse(wrapped, { jsx: isJsxPath(file), fileName: file, expressions });
-  } catch (error) {
-    return `re-parsing the range's text failed: ${error.message}`;
+  if (expressions && KEY_KINDS.includes(node.kind)) {
+    wrappers.push(KEY_WRAPPER);
   }
 
-  const match = nodesOf(reparsed.root).find(
-    (candidate) =>
-      candidate.kind === node.kind &&
-      candidate.start === start &&
-      candidate.end === end,
-  );
+  let failure = null;
 
-  return match ? null : "the range's text does not re-parse to the same node";
+  for (const wrapper of wrappers) {
+    const wrapped = wrapper.prefix + slice + wrapper.suffix;
+    const start = wrapper.prefix.length;
+    const end = start + slice.length;
+    let reparsed = null;
+
+    try {
+      reparsed = parse(wrapped, { jsx: isJsxPath(file), fileName: file, expressions });
+    } catch (error) {
+      failure = `re-parsing the range's text failed: ${error.message}`;
+      continue;
+    }
+
+    const match = nodesOf(reparsed.root).find(
+      (candidate) =>
+        candidate.kind === node.kind &&
+        candidate.start === start &&
+        candidate.end === end,
+    );
+
+    if (match) {
+      return null;
+    }
+
+    failure = "the range's text does not re-parse to the same node";
+  }
+
+  return failure;
 };
 
 const checkNode = (file, text, node, parent) => {
