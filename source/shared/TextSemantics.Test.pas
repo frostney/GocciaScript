@@ -26,6 +26,7 @@ type
     procedure TestECMAScriptSourceLinesSplitUnicodeLineTerminators;
     procedure TestTextLineHelpersPreserveUnicode;
     procedure TestSourceTextFallsBackAfterMutation;
+    procedure TestUTF8ConversionsRoundTripASCIIAndNonASCII;
   public
     procedure SetupTests; override;
   end;
@@ -58,6 +59,8 @@ begin
     TestTextLineHelpersPreserveUnicode);
   Test('Preserved source text falls back after line-list mutation',
     TestSourceTextFallsBackAfterMutation);
+  Test('UTF-8 conversions round-trip ASCII and non-ASCII text',
+    TestUTF8ConversionsRoundTripASCIIAndNonASCII);
 end;
 
 procedure TTextSemanticsTests.TestTrimECMAScriptWhitespace;
@@ -396,6 +399,46 @@ begin
   finally
     Lines.Free;
   end;
+end;
+
+procedure TTextSemanticsTests.TestUTF8ConversionsRoundTripASCIIAndNonASCII;
+const
+  ASCII_TEXT = 'plain ASCII text';
+  // The last character is the only non-ASCII one, so a scan that stopped
+  // early would take the ASCII path for it.
+  TRAILING_UNICODE_TEXT = 'plain text then na' + #$00EF;
+  ASTRAL_TEXT = 'face ' + #$D83D#$DE00;
+var
+  Bytes: UTF8String;
+  Latin1: RawByteString;
+begin
+  Bytes := UTF8String(ASCII_TEXT);
+  Expect<Integer>(StringCodePage(Bytes)).ToBe(CP_UTF8);
+  Expect<Integer>(Length(Bytes)).ToBe(Length(ASCII_TEXT));
+  Expect<string>(string(Bytes)).ToBe(ASCII_TEXT);
+
+  Bytes := UTF8String(TRAILING_UNICODE_TEXT);
+  Expect<Integer>(StringCodePage(Bytes)).ToBe(CP_UTF8);
+  Expect<Integer>(Length(Bytes)).ToBe(Length(TRAILING_UNICODE_TEXT) + 1);
+  Expect<Integer>(Ord(Bytes[Length(Bytes) - 1])).ToBe($C3);
+  Expect<Integer>(Ord(Bytes[Length(Bytes)])).ToBe($AF);
+  Expect<string>(string(Bytes)).ToBe(TRAILING_UNICODE_TEXT);
+
+  Bytes := UTF8String(ASTRAL_TEXT);
+  Expect<Integer>(Length(Bytes)).ToBe(Length('face ') + 4);
+  Expect<string>(string(Bytes)).ToBe(ASTRAL_TEXT);
+
+  Bytes := UTF8String('');
+  Expect<Integer>(Length(Bytes)).ToBe(0);
+
+  // A code page other than UTF-8 or ASCII goes through the platform converter.
+  SetLength(Latin1, 4);
+  Latin1[1] := 'c';
+  Latin1[2] := 'a';
+  Latin1[3] := 'f';
+  Latin1[4] := AnsiChar($E9);
+  SetCodePage(Latin1, 28591, False);
+  Expect<string>(string(Latin1)).ToBe('caf' + #$00E9);
 end;
 
 begin
