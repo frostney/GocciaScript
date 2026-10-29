@@ -23,7 +23,10 @@ unit Goccia.Builtins.AST;
   [ADR 0163](../../docs/adr/0163-goccia-ast-reports-the-committed-token-stream.md).
   A type-level declaration is reported by the kind it was written as, and
   `typeOnly` marks the module statements that carry no code; see
-  [ADR 0161](../../docs/adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md). }
+  [ADR 0161](../../docs/adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
+  The module forms are the exception to ADR 0161's "no children": they report
+  their specifiers and module path, see
+  [ADR 0168](../../docs/adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md). }
 
 interface
 
@@ -940,8 +943,28 @@ begin
       end;
     apkStaticBlock:
       Index := NewNode('StaticBlock');
+    apkImportDefaultSpecifier, apkImportNamespaceSpecifier,
+    apkImportSpecifier, apkExportSpecifier:
+      begin
+        case AKind of
+          apkImportDefaultSpecifier: Index := NewNode('ImportDefaultSpecifier');
+          apkImportNamespaceSpecifier:
+            Index := NewNode('ImportNamespaceSpecifier');
+          apkImportSpecifier: Index := NewNode('ImportSpecifier');
+        else
+          Index := NewNode('ExportSpecifier');
+        end;
+        { Every specifier says whether it is type-only: `type C` in a value
+          import, or any specifier of a type-only statement. }
+        FNodes[Index].HasTypeOnly := True;
+        FNodes[Index].TypeOnly := apfTypeOnly in AFlags;
+      end;
+    apkKeyIdentifier: Index := NewNode('Identifier');
+    apkKeyNumeric: Index := NewNode('NumericLiteral');
+    apkKeyBigInt: Index := NewNode('BigIntLiteral');
   else
-    // The module path of an import or a re-export is a string literal.
+    // The module path of an import or a re-export, and a quoted key, are
+    // string literals.
     Index := NewNode('StringLiteral');
   end;
   { A part the parser measured has that range, as a statement does; one it

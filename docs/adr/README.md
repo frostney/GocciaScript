@@ -177,3 +177,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0165 — The dispatch loop keeps its hot arms first and aligned](0165-the-dispatch-loop-keeps-its-hot-arms-first-and-aligned.md)
 - [0166 — Bundler names and output destinations are deterministic](0166-reproducible-bundler-output.md)
 - [0167 — Profile stack paths incrementally and aggregate directory captures on one thread](0167-profiler-paths-and-directory-captures.md)
+- [0168 — goccia:ast reports the specifiers and module path of type-only module statements, and nothing else about them](0168-goccia-ast-reports-the-children-of-type-only-module-statements.md)
