@@ -1,4 +1,4 @@
-# 0166 - goccia:ast reports the specifiers and module path of type-only module statements, and nothing else about them
+# 0168 - goccia:ast reports the specifiers and module path of type-only module statements, and nothing else about them
 
 **Date:** 2026-10-28
 **Area:** `runtime`, `parser`

@@ -26,7 +26,7 @@ unit Goccia.Builtins.AST;
   [ADR 0161](../../docs/adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
   The module forms are the exception to ADR 0161's "no children": they report
   their specifiers and module path, see
-  [ADR 0166](../../docs/adr/0166-goccia-ast-reports-the-children-of-type-only-module-statements.md). }
+  [ADR 0168](../../docs/adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md). }
 
 interface
 
