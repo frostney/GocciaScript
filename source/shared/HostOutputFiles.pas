@@ -39,7 +39,7 @@ type
 { Registers APath (as the option holds it) as an output a config confined to
   ACanonicalRoot, the config's directory. ACanonicalPath is APath with its
   existing directories resolved, as the containment check saw it; it must lie
-  within ACanonicalRoot. Writes to APath, and to a file directly inside APath
+  within ACanonicalRoot. Writes to APath, and to every descendant of APath
   when it names a directory, then go through the pinned route. Register before
   any worker thread writes; registration is not synchronized. }
 procedure RegisterConfinedHostOutput(const APath, ACanonicalPath,
@@ -55,6 +55,11 @@ function IsConfinedHostOutput(const APath: string): Boolean;
   path is created as TFileStream(fmCreate) would. The caller frees the
   stream. }
 function CreateHostOutputStream(const APath: string): TStream;
+{ Opt in to creating missing parent directories for this output. Confined
+  paths use the same pinned, no-follow route as the subsequent write; other
+  writers keep their existing missing-parent behavior. Call only after the
+  complete output plan has been validated. Does not create the output file. }
+procedure EnsureHostOutputParent(const APath: string);
 { AStrings.SaveToFile(APath), through CreateHostOutputStream. }
 procedure SaveStringsToHostFile(const AStrings: TStrings; const APath: string);
 { AText as UTF-8 (lone surrogates replaced), through CreateHostOutputStream. }
@@ -115,6 +120,8 @@ end;
 { POSIX openat(2); variadic in C, so declared varargs for the mode. }
 function HostOpenAt(ADirectory: cint; APath: PAnsiChar; AFlags: cint): cint;
   cdecl; varargs; external 'c' name 'openat';
+function HostMkdirAt(ADirectory: cint; APath: PAnsiChar; AMode: cuint): cint;
+  cdecl; external 'c' name 'mkdirat';
 {$IFDEF LINUX}
 function HostErrnoLocation: pcint; cdecl; external 'c' name '__errno_location';
 {$ELSE}
@@ -203,7 +210,7 @@ end;
 function FindConfinedOutput(const APath: string; out AEntry: TConfinedOutput;
   out ARoute, ACanonicalPath: string): Boolean;
 var
-  Expanded, Name: string;
+  Expanded, Name, Prefix: string;
   I: Integer;
 begin
   Result := False;
@@ -219,14 +226,19 @@ begin
       ACanonicalPath := AEntry.CanonicalPath;
       Exit(True);
     end;
-    { A file directly inside a registered directory (a directory output). }
-    if SameHostPath(ExtractFileDir(Expanded), AEntry.Path) then
+    { Keep every descendant on the pinned route, including missing parents.
+      Do not consult DirectoryExists here: a replaced or temporarily missing
+      directory must never turn a registered output into an unconfined one. }
+    Prefix := IncludeTrailingPathDelimiter(AEntry.Path);
+    if (Length(Expanded) > Length(Prefix)) and
+       SameHostPath(Copy(Expanded, 1, Length(Prefix)), Prefix) then
     begin
-      Name := ExtractFileName(Expanded);
+      Name := Copy(Expanded, Length(Prefix) + 1, MaxInt);
       if AEntry.Route = '' then
         ARoute := Name
       else
         ARoute := AEntry.Route + '/' + Name;
+      ARoute := StringReplace(ARoute, PathDelim, '/', [rfReplaceAll]);
       ACanonicalPath := IncludeTrailingPathDelimiter(AEntry.CanonicalPath) +
         Name;
       Exit(True);
@@ -250,9 +262,10 @@ end;
 
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 function OpenConfinedOutput(const APath: string; const AEntry: TConfinedOutput;
-  const ARoute: string): TStream;
+  const ARoute: string; const AParentsOnly: Boolean = False): TStream;
 const
   NEW_FILE_MODE = &666;
+  NEW_DIRECTORY_MODE = &777;
 var
   Parts: TStringArray;
   PathBytes: TBytes;
@@ -288,9 +301,18 @@ begin
         Refuse(APath, 'the path cannot be encoded for the host');
       Next := HostOpenAt(Directory, PAnsiChar(@PathBytes[0]),
         O_RDONLY or HOST_O_NOFOLLOW or O_NONBLOCK);
+      if (Next < 0) and AParentsOnly and (HostErrnoLocation^ = ESysENOENT) then
+      begin
+        { A competing worker may have created this parent. Reopen it with
+          no-follow either way; never trust the path after mkdirat. }
+        if (HostMkdirAt(Directory, PAnsiChar(@PathBytes[0]),
+             NEW_DIRECTORY_MODE) <> 0) and (HostErrnoLocation^ <> ESysEEXIST) then
+          Refuse(APath, Walked + ' cannot be created (' + HostErrorText + ')');
+        Next := HostOpenAt(Directory, PAnsiChar(@PathBytes[0]),
+          O_RDONLY or HOST_O_NOFOLLOW or O_NONBLOCK);
+      end;
       if Next < 0 then
       begin
-        { Nothing creates a missing directory for an output, as before. }
         if HostErrnoLocation^ = ESysENOENT then
           raise EHostOutputRefused.CreateFmt('Cannot write %s: the ' +
             'directory %s does not exist', [APath, Walked]);
@@ -302,6 +324,8 @@ begin
       if (fpFStat(Directory, Info) <> 0) or not fpS_ISDIR(Info.st_mode) then
         Refuse(APath, Walked + ' is not a directory');
     end;
+    if AParentsOnly then
+      Exit(nil);
     if not TryEncodeUTF8NullTerminated(Parts[High(Parts)], PathBytes,
          ErrorOffset) then
       Refuse(APath, 'the path cannot be encoded for the host');
@@ -324,6 +348,27 @@ begin
   Result := THostOutputStream.Create(THandle(Next));
 end;
 {$ELSE}
+procedure EnsureRecheckedDirectory(const APath, ACanonicalPath: string);
+var
+  Parent: string;
+begin
+  if HostPathIsSymlink(APath) then
+    Refuse(APath, 'its directory is a symbolic link');
+  if not DirectoryExists(APath) then
+  begin
+    Parent := ExtractFileDir(APath);
+    if SameHostPath(Parent, APath) then
+      Refuse(APath, 'its root directory does not exist');
+    EnsureRecheckedDirectory(Parent, ExtractFileDir(ACanonicalPath));
+    if not CreateDir(APath) and not DirectoryExists(APath) then
+      Refuse(APath, 'its directory cannot be created');
+  end;
+  if HostPathIsSymlink(APath) or
+     not SameHostPath(StripTrailingDelimiter(CanonicalHostPath(APath)),
+       StripTrailingDelimiter(ACanonicalPath)) then
+    Refuse(APath, 'its directory no longer resolves to ' + ACanonicalPath);
+end;
+
 function OpenConfinedOutput(const APath: string; const AEntry: TConfinedOutput;
   const ARoute, ACanonicalPath: string): TStream;
 var
@@ -357,6 +402,29 @@ begin
   {$ELSE}
   Result := OpenConfinedOutput(APath, Entry, Route, Canonical);
   {$IFEND}
+end;
+
+procedure EnsureHostOutputParent(const APath: string);
+var
+  Entry: TConfinedOutput;
+  Route, Canonical, Parent: string;
+begin
+  if FindConfinedOutput(APath, Entry, Route, Canonical) then
+  begin
+    {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
+    OpenConfinedOutput(APath, Entry, Route, True);
+    {$ELSE}
+    EnsureRecheckedDirectory(ExtractFileDir(ExpandFileName(APath)),
+      ExtractFileDir(Canonical));
+    {$IFEND}
+  end
+  else
+  begin
+    Parent := ExtractFileDir(ExpandFileName(APath));
+    if not ForceHostDirectories(Parent) then
+      raise EHostOutputRefused.CreateFmt('Cannot create output directory %s',
+        [Parent]);
+  end;
 end;
 
 procedure SaveStringsToHostFile(const AStrings: TStrings; const APath: string);

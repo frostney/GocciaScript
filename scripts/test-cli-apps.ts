@@ -43,6 +43,8 @@ import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
 import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
+import { verifyBundlerLayout } from "./test-cli-bundler-layout";
+import { verifyBundlerReproducibility, verifyBundlerPrivateIsolation } from "./test-cli-bundler-reproducibility";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 // The runner reports canonical host paths. On Windows the temp directory's
@@ -2391,6 +2393,19 @@ function expectEvalHostProbe(label: string, lines: string[], expected: string[])
   if (actual !== expected.join("\n"))
     throw new Error(`Test262 Runner ${label} probe got:\n${actual}\nexpected:\n${expected.join("\n")}`);
 }
+
+await section("Test262 Runner: eval membership uses exact identifier names...", async () => {
+  expectEvalHostProbe("exact eval names", [
+    "function direct() { let café = 3, café = 7, Name = 11, name = 13; return eval('[café, café, Name, name].join()'); }",
+    "print(direct());",
+    "print(eval('let café = 3; let café = 7; café + café'));",
+    "print((0, eval)('let Name = 11; let name = 13; Name + name'));",
+    "try { eval('let café; let café;'); } catch (error) { print(error.name); }",
+    "try { eval('let café; var café;'); } catch (error) { print(error.name); }",
+    "function conflict() { let café = 3; try { eval('var café'); } catch (error) { return error.name; } }",
+    "print(conflict());",
+  ], ["3,7,11,13", "10", "24", "SyntaxError", "SyntaxError", "SyntaxError"]);
+});
 
 await section("Test262 Runner: a second eval reads the vars an earlier eval of the same function declared...", async () => {
   expectEvalHostProbe("second eval", [
@@ -8232,6 +8247,9 @@ await section("Bundler: constants folding to Infinity, NaN and -0 compile + roun
 // ============================================================================
 
 await section("Bundler: source and precompiled module graphs agree...", verifyAotModules);
+await section("Bundler: nested outputs and collision preflight preserve files...", verifyBundlerLayout);
+await section("Bundler: repeated builds are byte-identical across worker counts...", verifyBundlerReproducibility);
+await section("Bundler: independently compiled classes keep private storage isolated...", verifyBundlerPrivateIsolation);
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
 await section("Compile profiling: per-function parse and compile records...", verifyCompileProfiles);

@@ -1935,7 +1935,7 @@ begin
         SetLength(Dropped, Length(Dropped) + 1);
         Dropped[High(Dropped)] := Declaration;
       end
-      else if KeptNames.IndexOf(Name) < 0 then
+      else if not KeptNames.HasString(Name) then
         KeptNames.Add(Name);
     end;
     for I := 0 to High(Dropped) do
@@ -1944,8 +1944,8 @@ begin
       Exit;
     CollectVarBindingNamesFromStatements(AStatements, StandardVarNames);
     for I := FDirectEvalDeclaredVarNames.Count - 1 downto 0 do
-      if (StandardVarNames.IndexOf(FDirectEvalDeclaredVarNames[I]) < 0) and
-         (KeptNames.IndexOf(FDirectEvalDeclaredVarNames[I]) < 0) then
+      if (not StandardVarNames.HasString(FDirectEvalDeclaredVarNames[I])) and
+         (not KeptNames.HasString(FDirectEvalDeclaredVarNames[I])) then
         FDirectEvalDeclaredVarNames.Delete(I);
   finally
     StandardVarNames.Free;
@@ -1983,7 +1983,7 @@ begin
       // A hidden variable object of the record keeps its name, so a
       // function the eval code declares names its own differently.
       if IsEvalVarObjectName(Binding.Name) then
-        ReserveEvalVarObjectName(Binding.Name);
+        OuterScope.ReserveEvalVarObjectName(Binding.Name);
       case Binding.Kind of
         debUpvalue:
         begin
@@ -2043,8 +2043,11 @@ begin
     // Visible private names, the outermost class body's first, so that an
     // inner class body's name shadows it (ResolvePrivatePrefixForName).
     for I := 0 to High(ASite.PrivateNames) do
+    begin
+      CallerScope.ReserveClassPrivatePrefix(ASite.PrivateNames[I].Prefix);
       CallerScope.DeclarePrivateNamePrefix(ASite.PrivateNames[I].Name,
         ASite.PrivateNames[I].Prefix);
+    end;
     // `this` is checked against super() as in an arrow of a derived
     // constructor. The constructor declares its flag after its `this`, and
     // the record lists the nearest bindings first, so the flag comes before

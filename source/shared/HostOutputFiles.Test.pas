@@ -28,6 +28,9 @@ type
     procedure TestConfinedPathWrites;
     procedure TestConfinedPathReplacesContent;
     procedure TestFileInsideConfinedDirectory;
+    procedure TestNestedParentsRequireOptIn;
+    procedure TestNestedSwappedDirectoryIsRefused;
+    procedure TestNestedParentCreationRefusesLinks;
     procedure TestMissingDirectoryIsNamed;
     procedure TestSwappedDirectoryIsRefused;
     procedure TestSymlinkLeafIsRefused;
@@ -49,10 +52,16 @@ begin
     TestConfinedPathReplacesContent);
   Test('A file directly inside a confined directory output is written',
     TestFileInsideConfinedDirectory);
+  Test('Nested output parents are created only when requested',
+    TestNestedParentsRequireOptIn);
   Test('An output under a missing directory says the directory is missing',
     TestMissingDirectoryIsNamed);
   { Symbolic and hard links need an API this build only has on UNIX. }
   {$IFDEF UNIX}
+  Test('A nested directory swapped for a link is refused',
+    TestNestedSwappedDirectoryIsRefused);
+  Test('Creating nested parents never follows a swapped directory link',
+    TestNestedParentCreationRefusesLinks);
   Test('A directory swapped for a link after the check is refused',
     TestSwappedDirectoryIsRefused);
   Test('A link at the output''s own name is refused',
@@ -62,6 +71,10 @@ begin
   Test('A hard-linked output is refused before it is truncated',
     TestHardLinkedLeafIsRefused);
   {$ELSE}
+  Skip('A nested directory swapped for a link is refused',
+    TestNestedSwappedDirectoryIsRefused, 'links are not available on this platform');
+  Skip('Creating nested parents never follows a swapped directory link',
+    TestNestedParentCreationRefusesLinks, 'links are not available on this platform');
   Skip('A directory swapped for a link after the check is refused',
     TestSwappedDirectoryIsRefused, 'links are not available on this platform');
   Skip('A link at the output''s own name is refused',
@@ -198,6 +211,83 @@ begin
   WriteText(IncludeTrailingPathDelimiter(Directory) + 'main.gbc', 'bytes');
   Expect<string>(ReadText(Directory + PathDelim + 'main.gbc')).ToBe('bytes');
 end;
+
+procedure THostOutputFilesTests.TestNestedParentsRequireOptIn;
+var
+  Directory, Path, Other: string;
+begin
+  Directory := FProject + PathDelim + 'out';
+  RegisterConfinedHostOutput(Directory, CanonicalHostPath(Directory),
+    CanonicalHostPath(FProject));
+  Path := Directory + PathDelim + 'nested' + PathDelim + 'deep' +
+    PathDelim + 'main.gbc';
+  Expect<Boolean>(IsConfinedHostOutput(Path)).ToBe(True);
+  Expect<Boolean>(Refused(Path)).ToBe(True);
+  Expect<Boolean>(DirectoryExists(ExtractFileDir(Path))).ToBe(False);
+  EnsureHostOutputParent(Path);
+  Expect<Boolean>(FileExists(Path)).ToBe(False);
+  WriteText(Path, 'bytes');
+  Expect<string>(ReadText(Path)).ToBe('bytes');
+  { Opt-in is per operation; creating one tree never changes other writers. }
+  Other := Directory + PathDelim + 'other' + PathDelim + 'report.json';
+  Expect<Boolean>(Refused(Other)).ToBe(True);
+  Expect<Boolean>(DirectoryExists(ExtractFileDir(Other))).ToBe(False);
+  { A sibling sharing the prefix is not below the registered output. }
+  Expect<Boolean>(IsConfinedHostOutput(Directory + '-other' + PathDelim +
+    'main.gbc')).ToBe(False);
+end;
+
+procedure THostOutputFilesTests.TestNestedSwappedDirectoryIsRefused;
+{$IFDEF UNIX}
+var
+  Directory, Nested, Path: string;
+begin
+  Directory := FProject + PathDelim + 'out';
+  Nested := Directory + PathDelim + 'nested';
+  ForceDirectories(Nested);
+  RegisterConfinedHostOutput(Directory, CanonicalHostPath(Directory),
+    CanonicalHostPath(FProject));
+  Path := Nested + PathDelim + 'main.gbc';
+  Expect<Boolean>(RenameFile(Nested, Nested + '.moved')).ToBe(True);
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(FOutside)),
+    PAnsiChar(AnsiString(Nested)))).ToBe(0);
+  Expect<Boolean>(Refused(Path)).ToBe(True);
+  Expect<Boolean>(FileExists(FOutside + PathDelim + 'main.gbc')).ToBe(False);
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
+procedure THostOutputFilesTests.TestNestedParentCreationRefusesLinks;
+{$IFDEF UNIX}
+var
+  Directory, Nested, Path: string;
+  WasRefused: Boolean;
+begin
+  Directory := FProject + PathDelim + 'out';
+  Nested := Directory + PathDelim + 'nested';
+  ForceDirectories(Nested);
+  RegisterConfinedHostOutput(Directory, CanonicalHostPath(Directory),
+    CanonicalHostPath(FProject));
+  Expect<Boolean>(RenameFile(Nested, Nested + '.moved')).ToBe(True);
+  Expect<Integer>(fpSymlink(PAnsiChar(AnsiString(FOutside)),
+    PAnsiChar(AnsiString(Nested)))).ToBe(0);
+  Path := Nested + PathDelim + 'deep' + PathDelim + 'main.gbc';
+  WasRefused := False;
+  try
+    EnsureHostOutputParent(Path);
+  except
+    on E: EHostOutputRefused do
+      WasRefused := True;
+  end;
+  Expect<Boolean>(WasRefused).ToBe(True);
+  Expect<Boolean>(DirectoryExists(FOutside + PathDelim + 'deep')).ToBe(False);
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
 
 procedure THostOutputFilesTests.TestMissingDirectoryIsNamed;
 var
