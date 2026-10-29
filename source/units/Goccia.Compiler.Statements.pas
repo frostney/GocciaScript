@@ -6503,7 +6503,6 @@ var
   SetterPair: TGocciaSetterExpressionMap.TKeyValuePair;
   KeyReg: UInt16;
   ComputedKeyName: string;
-  ClassKeyPrefix: string;
   NeedsKeyLocal: Boolean;
   KeyIsLocal: Boolean;
   AccessorFlags: UInt16;
@@ -6567,7 +6566,6 @@ begin
   end;
 
   SortClassCallableSourceEntries(Entries);
-  ClassKeyPrefix := IntToHex(NativeUInt(AClassDef), SizeOf(NativeUInt) * 2);
   for I := 0 to High(Entries) do
   begin
     Entry := Entries[I];
@@ -6631,7 +6629,7 @@ begin
         SetLength(AComputedFieldKeyLocals,
           Length(AComputedFieldKeyLocals) + 1);
         ComputedKeyName := Format('#computed-element-key:%s:%d',
-          [ClassKeyPrefix, Entry.ElementIndex]);
+          [APrivatePrefix, Entry.ElementIndex]);
         AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].ElementIndex :=
           Entry.ElementIndex;
         AComputedFieldKeyLocals[High(AComputedFieldKeyLocals)].Name :=
@@ -7531,7 +7529,7 @@ begin
     (ClassDef.SuperClass <> '');
   IsTopLevelGlobalBacked := TopLevelBindingIsGlobalBacked(ACtx, False);
 
-  PrivPrefix := NextClassPrivatePrefix;
+  PrivPrefix := ACtx.Scope.NextClassPrivatePrefix;
   PrivateNameMark := ACtx.Scope.PrivateNameMark;
   OldPrivatePrefix := ACtx.Scope.PrivatePrefix;
   ACtx.Scope.PrivatePrefix := PrivPrefix;
@@ -7782,7 +7780,7 @@ begin
     (ClassDef.SuperClass <> '');
   HasNameBinding := ClassDef.Name <> '';
 
-  PrivPrefix := NextClassPrivatePrefix;
+  PrivPrefix := ACtx.Scope.NextClassPrivatePrefix;
   PrivateNameMark := ACtx.Scope.PrivateNameMark;
   OldPrivatePrefix := ACtx.Scope.PrivatePrefix;
   ACtx.Scope.PrivatePrefix := PrivPrefix;

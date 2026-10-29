@@ -114,6 +114,29 @@ running. A library with no static import/export declaration can be compiled
 with `--source-type=module`. A `.gbc` entry adopts the recorded goal by
 default; an explicit conflicting `--source-type` is rejected.
 
+## Output layout and collision checks
+
+The `--output` root directory must already exist. Directory inputs preserve their
+relative tree below that root: `src/nested/index.js` becomes
+`dist/nested/index.gbc` for `src/ --output=dist/`. The bundler creates missing
+subdirectories there, including for multifile sections, and puts generated
+source maps beside their bytecode files. Each positional directory supplies its
+own relative root; explicit file inputs use their basenames. Without `--output`,
+companions still go beside their sources.
+
+Before compiling or writing, the bundler expands every positional input and
+multifile section and checks all bytecode and requested map destinations. Two
+outputs resolving to the same destination fail the invocation with both source
+names and the destination; existing artifacts remain untouched. This includes
+same-stem inputs such as `index.js` and `index.ts`, overlapping input roots,
+and an explicit map path shared by multiple inputs or by the bytecode output.
+An output file also cannot occupy a directory needed by another output.
+Rename the conflicting input or compile it separately to a distinct output.
+
+Configured output directories retain the [config output confinement](build-system.md#configuration-file-gocciajson)
+checks for every descendant. Creating nested parents does not permit following
+a symbolic link outside the configured tree.
+
 ## Verification and measurement
 
 `bun scripts/test-cli-aot.ts` compares source and artifact execution for

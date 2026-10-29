@@ -28,10 +28,12 @@ uses
   Goccia.Capabilities,
   Goccia.Engine,
   Goccia.Error,
+  Goccia.GarbageCollector,
   Goccia.Runtime,
   Goccia.SourcePipeline,
   Goccia.Test262.Host,
   Goccia.TestSetup,
+  Goccia.Values.ClassValue,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Error,
@@ -54,6 +56,9 @@ type
     procedure TestBytecodeEvalCreatesVMClasses;
     procedure TestBytecodeTest262HostEvalCreatesVMFunctions;
     procedure TestBytecodeStrictDirectEvalCreatesVMValues;
+    procedure TestDirectEvalGeneratedNameIsolation;
+    procedure TestPrivateBrandRetainsIdentityThroughCollection;
+    procedure TestPrivateStampPlanFollowsNewDeclarations;
     function DirectEvalRetainedModules(const ASource: string;
       const ACalls: Integer): Integer;
     procedure TestBytecodeDirectEvalReusesCodePerSite;
@@ -72,6 +77,12 @@ type
 
 procedure TGlobalEvalTests.SetupTests;
 begin
+  Test('A cached private stamp plan follows new host declarations',
+    TestPrivateStampPlanFollowsNewDeclarations);
+  Test('Private brands retain their identity through collection and failed initialization',
+    TestPrivateBrandRetainsIdentityThroughCollection);
+  Test('Direct eval preserves imported private names and variable objects',
+    TestDirectEvalGeneratedNameIsolation);
   Test('Bytecode global eval creates VM functions',
     TestBytecodeEvalCreatesVMFunctions);
   Test('Bytecode global eval creates VM classes',
@@ -253,6 +264,145 @@ begin
       BYTECODE_FUNCTION_CLASS).ToBe(True);
     Expect<Boolean>(GlobalObject.GetProperty('sloppyInFunction').ClassName =
       BYTECODE_FUNCTION_CLASS).ToBe(True);
+  finally
+    Host.Free;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TGlobalEvalTests.TestPrivateStampPlanFollowsNewDeclarations;
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  ClassValue: TGocciaClassValue;
+  Receiver: TGocciaObjectValue;
+  PrivateCount: Integer;
+  Token: string;
+  Value: TGocciaValue;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  try
+    Engine := CreateEngine(Source);
+    Value := Engine.EvaluateGlobalEval(
+      'class ReturnReceiver { constructor(o) { return o; } }' +
+      'globalThis.Stamp = class extends ReturnReceiver {};' +
+      'globalThis.receiver = {}; new Stamp(receiver); Stamp',
+      '<private-stamp-plan>', Stage);
+    ClassValue := TGocciaClassValue(Value);
+    Token := ClassValue.PrivateBrandToken;
+    Receiver := TGocciaObjectValue(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('receiver'));
+    PrivateCount := 0;
+    if Assigned(Receiver.PrivateElements) then
+      PrivateCount := Receiver.PrivateElements.CountFast;
+    // The first construction cached an empty plan. A host declaration must
+    // invalidate it, so the next construction adds the new private brand.
+    ClassValue.DeclarePrivateName('#late');
+    Expect<string>(ClassValue.PrivateBrandToken).ToBe(Token);
+    Value := Engine.EvaluateGlobalEval('new Stamp({})',
+      '<private-stamp-plan>', Stage);
+    Receiver := TGocciaObjectValue(Value);
+    Expect<Boolean>(Assigned(Receiver.PrivateElements)).ToBe(True);
+    Expect<Integer>(Receiver.PrivateElements.CountFast).ToBe(PrivateCount + 1);
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TGlobalEvalTests.TestPrivateBrandRetainsIdentityThroughCollection;
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+  Value: TGocciaValue;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  try
+    Engine := CreateEngine(Source);
+    Engine.EvaluateGlobalEval(
+      'globalThis.receiver = {}; globalThis.failedReceiver = {};' +
+      '(() => {' +
+      ' class ReturnReceiver { constructor(o) { return o; } }' +
+      ' class Complete extends ReturnReceiver { #x = 1; }' +
+      ' class Partial extends ReturnReceiver {' +
+      '   #x = 1; #later = (() => { throw 1; })();' +
+      ' }' +
+      ' new Complete(receiver);' +
+      ' try { new Partial(failedReceiver); } catch (error) {}' +
+      ' globalThis.completeBrand = new WeakRef(Complete);' +
+      ' globalThis.partialBrand = new WeakRef(Partial);' +
+      '})();', '<private-brand-collection>', Stage);
+    TGarbageCollector.Instance.ClearKeptObjects;
+    TGarbageCollector.Instance.Collect;
+    Value := Engine.EvaluateGlobalEval(
+      'completeBrand.deref() !== undefined && partialBrand.deref() !== undefined',
+      '<private-brand-collection>', Stage);
+    Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+
+    // The receiver owns the identity. Dropping it releases the class too.
+    Engine.EvaluateGlobalEval(
+      'receiver = null; failedReceiver = null;',
+      '<private-brand-collection>', Stage);
+    TGarbageCollector.Instance.ClearKeptObjects;
+    TGarbageCollector.Instance.Collect;
+    Value := Engine.EvaluateGlobalEval(
+      'completeBrand.deref() === undefined && partialBrand.deref() === undefined',
+      '<private-brand-collection>', Stage);
+    Expect<Boolean>(Value.ToBooleanLiteral.Value).ToBe(True);
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TGlobalEvalTests.TestDirectEvalGeneratedNameIsolation;
+var
+  Engine: TGocciaEngine;
+  EngineOptions: TGocciaTest262EngineOptions;
+  Host: TGocciaTest262Host;
+  Source: TStringList;
+  GlobalObject: TGocciaObjectValue;
+begin
+  Source := TStringList.Create;
+  Source.Text :=
+    'class Outer {' +
+    ' #outer = 11; ' +
+    ' make() { return eval("(class Inner { #inner = 22; ' +
+    ' read(outer) { return outer.#outer + this.#inner; } })"); }' +
+    '}' + LineEnding +
+    'const outer = new Outer(); const Inner = outer.make();' +
+    'globalThis.privateResult = new Inner().read(outer);' + LineEnding +
+    'function run() {' +
+    ' eval("var outerVar = 7");' +
+    ' const nested = eval("(function(a = eval(\"var parameterVar = 3\")) {' +
+    ' eval(\"var bodyVar = 5\");' +
+    ' return outerVar + parameterVar + bodyVar; })");' +
+    ' return nested(); }' +
+    'globalThis.varResult = run();';
+  EngineOptions := Default(TGocciaTest262EngineOptions);
+  EngineOptions.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
+  EngineOptions.SourceType := stScript;
+  EngineOptions.Capabilities := TGocciaCapabilities.None;
+  Engine := nil;
+  Host := nil;
+  try
+    Engine := TGocciaEngine.Create('<direct-eval-isolation>', Source,
+      EngineOptions.Capabilities);
+    ConfigureTest262Engine(Engine, EngineOptions);
+    Host := TGocciaTest262Host.Create(EngineOptions);
+    Host.ConfigureHostEnvironment(Engine.HostEnvironment);
+    Host.Install(Engine);
+    Engine.Execute;
+    GlobalObject := TGocciaObjectValue(Engine.Realm.GlobalObject);
+    Expect<Double>(GlobalObject.GetProperty('privateResult').ToNumberLiteral.Value)
+      .ToBe(33);
+    Expect<Double>(GlobalObject.GetProperty('varResult').ToNumberLiteral.Value)
+      .ToBe(15);
   finally
     Host.Free;
     Engine.Free;

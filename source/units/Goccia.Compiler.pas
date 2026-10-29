@@ -1986,7 +1986,7 @@ begin
       // A hidden variable object of the record keeps its name, so a
       // function the eval code declares names its own differently.
       if IsEvalVarObjectName(Binding.Name) then
-        ReserveEvalVarObjectName(Binding.Name);
+        OuterScope.ReserveEvalVarObjectName(Binding.Name);
       case Binding.Kind of
         debUpvalue:
         begin
@@ -2046,8 +2046,11 @@ begin
     // Visible private names, the outermost class body's first, so that an
     // inner class body's name shadows it (ResolvePrivatePrefixForName).
     for I := 0 to High(ASite.PrivateNames) do
+    begin
+      CallerScope.ReserveClassPrivatePrefix(ASite.PrivateNames[I].Prefix);
       CallerScope.DeclarePrivateNamePrefix(ASite.PrivateNames[I].Name,
         ASite.PrivateNames[I].Prefix);
+    end;
     // `this` is checked against super() as in an arrow of a derived
     // constructor. The constructor declares its flag after its `this`, and
     // the record lists the nearest bindings first, so the flag comes before

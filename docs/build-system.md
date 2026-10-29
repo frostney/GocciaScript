@@ -259,7 +259,7 @@ printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner 
 # each section as an independent file across the worker pool
 ./build/GocciaRunner scenarios.js --multifile
 ./build/GocciaTestRunner suites.js --multifile --jobs=4
-mkdir -p dist   # the bundler does not create --output directories
+mkdir -p dist   # the output root must already exist
 ./build/GocciaBundler scenarios.js --multifile --output=dist/
 printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaRunner --multifile
 
@@ -478,9 +478,9 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc
 ./build/GocciaBundler src/ --jobs=4
 ```
 
-`--output` directories must already exist; the bundler does not create them. A missing directory for
-several files or `--multifile` is currently reported as "`--output` must be a directory"
-([#1279](https://github.com/frostney/GocciaScript/issues/1279)).
+The `--output` root must already exist; directory inputs preserve their relative
+paths below it. See [output layout and collision checks](bytecode-loading.md#output-layout-and-collision-checks)
+for nested directories, multifile sections, source maps and invocation preflight.
 
 See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary format.
 

@@ -454,12 +454,13 @@ var
 begin
   Output := TStringList.Create;
   try
-    for Pair in AProfiler.CollapsedStacks do
-    begin
-      Microseconds := Pair.Value div 1000;
-      if Microseconds > 0 then
-        Output.Add(Pair.Key + ' ' + IntToStr(Microseconds));
-    end;
+    if not AProfiler.Deterministic then
+      for Pair in AProfiler.CollapsedStacks do
+      begin
+        Microseconds := Pair.Value div 1000;
+        if Microseconds > 0 then
+          Output.Add(Pair.Key + ' ' + IntToStr(Microseconds));
+      end;
     SaveStringsToHostFile(Output, AOutputPath);
   finally
     Output.Free;

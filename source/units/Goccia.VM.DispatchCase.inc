@@ -2350,26 +2350,8 @@
         begin
           if Constant.Kind = bckPrivateName then
           begin
-            if (FRegisters[A].ObjectValue is TGocciaInstanceValue) then
-            begin
-              if (not TGocciaInstanceValue(FRegisters[A].ObjectValue)
-                    .TryGetRawPrivateProperty(GlobalName, TargetValue)) and
-                 (not TGocciaInstanceValue(FRegisters[A].ObjectValue)
-                    .Extensible) then
-                ThrowTypeError(
-                  'Cannot add private elements to a non-extensible object',
-                  SSuggestObjectNotExtensible);
-            end
-            else if (FRegisters[A].ObjectValue is TGocciaObjectValue) and
-                    (not TryGetRawObjectPrivateDescriptor(
-                      TGocciaObjectValue(FRegisters[A].ObjectValue),
-                      GlobalName, PrivateDescriptor)) and
-                    (not TGocciaObjectValue(FRegisters[A].ObjectValue)
-                      .Extensible) then
-              ThrowTypeError(
-                'Cannot add private elements to a non-extensible object',
-                SSuggestObjectNotExtensible);
-            SetRawPrivateValue(FRegisters[A].ObjectValue, GlobalName,
+            DefinePrivateFieldValue(
+              TGocciaObjectValue(FRegisters[A].ObjectValue), GlobalName,
               RightValue);
             Continue;
           end;
@@ -2400,23 +2382,8 @@
             // (EmitDefineStaticPropertyByName).
             if IsPrivateNameKeyRegister(FRegisters[B]) then
             begin
-              if TargetValue is TGocciaInstanceValue then
-              begin
-                if (not TGocciaInstanceValue(TargetValue)
-                      .TryGetRawPrivateProperty(GlobalName, LeftValue)) and
-                   (not TGocciaInstanceValue(TargetValue).Extensible) then
-                  ThrowTypeError(
-                    'Cannot add private elements to a non-extensible object',
-                    SSuggestObjectNotExtensible);
-              end
-              else if (not TryGetRawObjectPrivateDescriptor(
-                       TGocciaObjectValue(TargetValue), GlobalName,
-                       PrivateDescriptor)) and
-                      (not TGocciaObjectValue(TargetValue).Extensible) then
-                ThrowTypeError(
-                  'Cannot add private elements to a non-extensible object',
-                  SSuggestObjectNotExtensible);
-              SetRawPrivateValue(TargetValue, GlobalName, RightValue);
+              DefinePrivateFieldValue(TGocciaObjectValue(TargetValue),
+                GlobalName, RightValue);
               Continue;
             end;
 
