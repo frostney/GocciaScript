@@ -488,7 +488,8 @@ begin
       begin
         Require(not InMap, 'Discarded section after memory map');
         Delete(Line, 1, Length(REMOVE_SECTION));
-        Position := Pos('(', Line);
+        // Reviewed handler sections contain no parentheses; object paths may.
+        Position := LastDelimiter('(', Line);
         if (Position > 0) and (Line[Length(Line)] = ')') then
         begin
           Name := Copy(Line, 1, Position - 1);
@@ -746,7 +747,7 @@ begin
     if Length(Encoded) > 0 then
       Move(Encoded[1], ReceiptBytes[0], Length(Encoded));
     if not ReplaceHostFile(AMapFile + '.safeseh-inputs',
-      AMapFile + '.safeseh-inputs.tmp', ReceiptBytes, &666, True, False, Error) then
+      AMapFile + '.safeseh-inputs.tmp', ReceiptBytes, &644, True, False, Error) then
       Require(False, Error);
     // The shared helper compares a read-back from its exclusively held file
     // handle with Output before replacing the image; no second in-memory

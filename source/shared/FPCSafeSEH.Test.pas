@@ -45,6 +45,7 @@ type
     procedure TestBaseMismatch;
     procedure TestOptionalUnit;
     procedure TestDeadStripping;
+    procedure TestDeadStrippingParenthesizedPath;
     procedure TestDuplicateEvidence;
     procedure TestMalformedManifest;
     procedure TestMalformedMap;
@@ -179,6 +180,7 @@ begin
   Test('matches map and executable image bases', TestBaseMismatch);
   Test('optional units require their handlers only when linked', TestOptionalUnit);
   Test('accepts only explicit unreferenced-section removal', TestDeadStripping);
+  Test('resolves discarded handlers in object paths containing parentheses', TestDeadStrippingParenthesizedPath);
   Test('rejects duplicate or conflicting map evidence', TestDuplicateEvidence);
   Test('rejects unsupported and malformed manifests', TestMalformedManifest);
   Test('rejects malformed or truncated handler addresses', TestMalformedMap);
@@ -293,6 +295,35 @@ begin
     ' 0x10001100 0x40 signals.o', 'both live and discarded');
   Reject(Manifest, StringReplace(LinkedMap, 'Removing signals.o', 'Keeping signals.o', []),
     'Missing manifest handler');
+end;
+
+procedure TFPCSafeSEHTests.TestDeadStrippingParenthesizedPath;
+var
+  Directory, ObjectFile, LinkedMap: string;
+  Handlers: TSERvaArray;
+begin
+  Directory := FDirectory + PathDelim + 'Program Files (x86)';
+  ObjectFile := Directory + PathDelim + 'signals.o';
+  ForceDirectories(Directory);
+  WriteText(ObjectFile, 'reviewed object bytes');
+  try
+    LinkedMap := StringReplace(Map, FIXTURE_HEADER,
+      'READOBJECT ' + ObjectFile + LineEnding +
+      'Removing ' + ObjectFile + '(' + OPTIONAL_SECTION + ')' + LineEnding + FIXTURE_HEADER, []);
+    Handlers := Resolve(Manifest, LinkedMap);
+    Expect<Integer>(Length(Handlers)).ToBe(1);
+    Expect<Cardinal>(Handlers[0]).ToBe(FIXTURE_RVA);
+    // Also cover the Windows spelling when this test runs on another host.
+    LinkedMap := StringReplace(LinkedMap, 'Removing ' + ObjectFile,
+      'Removing C:\Program Files (x86)\FPC (pinned)\signals.o', []);
+    Handlers := Resolve(Manifest, LinkedMap);
+    Expect<Integer>(Length(Handlers)).ToBe(1);
+    Reject(Manifest, LinkedMap + ' ' + OPTIONAL_SECTION + LineEnding +
+      ' 0x10001100 0x40 signals.o', 'both live and discarded');
+  finally
+    DeleteFile(ObjectFile);
+    RemoveDir(Directory);
+  end;
 end;
 
 procedure TFPCSafeSEHTests.TestDuplicateEvidence;
