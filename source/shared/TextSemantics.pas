@@ -850,11 +850,41 @@ begin
   Result := CreateTextLines(AText);
 end;
 
+{$IFDEF FPC}
+{ FPC's StringReplace converts the text to and from the system code page.
+  The round trip leaves ASCII text alone, and any text without surrogates
+  when that code page is UTF-8; otherwise it can turn a character into '?'.
+  Text with no CR that the round trip would leave alone is returned as it was
+  given, so skipping the rewrite never changes the result. }
+function NeedsNewlineRewrite(const AText: string): Boolean;
+var
+  Index: Integer;
+  CodeUnit: Cardinal;
+  IsUTF8: Boolean;
+begin
+  IsUTF8 := DefaultSystemCodePage = CP_UTF8;
+  for Index := 1 to Length(AText) do
+  begin
+    CodeUnit := Ord(AText[Index]);
+    if CodeUnit = 13 then
+      Exit(True);
+    if (CodeUnit >= $80) and
+       (not IsUTF8 or ((CodeUnit >= $D800) and (CodeUnit <= $DFFF))) then
+      Exit(True);
+  end;
+  Result := False;
+end;
+{$ELSE}
+// Delphi's StringReplace works on UTF-16 directly, so only a CR needs it.
+function NeedsNewlineRewrite(const AText: string): Boolean;
+begin
+  Result := Pos(#13, AText) > 0;
+end;
+{$ENDIF}
+
 function NormalizeNewlinesToLF(const AText: string): string;
 begin
-  // StringReplace converts the text to and from the system code page, so
-  // text with no CR, which is most text, is returned as it was given.
-  if Pos(#13, AText) = 0 then
+  if not NeedsNewlineRewrite(AText) then
     Exit(AText);
   Result := StringReplace(AText, #13#10, #10, [rfReplaceAll]);
   Result := StringReplace(Result, #13, #10, [rfReplaceAll]);

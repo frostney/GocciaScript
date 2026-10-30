@@ -414,7 +414,12 @@ begin
     'a' + #10 + UNICODE_WORD + #10);
   Expect<string>(NormalizeNewlinesToLF('a' + #13#10 + UNICODE_WORD + #13 + 'b')).ToBe(
     'a' + #10 + UNICODE_WORD + #10 + 'b');
+  Expect<string>(NormalizeNewlinesToLF('a' + #13 + 'b')).ToBe('a' + #10 + 'b');
   Expect<string>(NormalizeNewlinesToLF('')).ToBe('');
+  // Text without a CR is treated as the same text with one would be, even
+  // when it holds a lone surrogate.
+  Expect<string>(NormalizeNewlinesToLF('a' + #$D800 + 'b')).ToBe(
+    Copy(NormalizeNewlinesToLF('a' + #$D800 + 'b' + #13), 1, 3));
 end;
 
 procedure TTextSemanticsTests.TestSourceTextFallsBackAfterMutation;
