@@ -295,14 +295,15 @@ describe("ast.parse", () => {
     expect([node, node.loc, node.loc.start, node.loc.end, comment, comment.loc].every(isPlainData)).toBe(true);
   });
 
-  test("positions that share a line or column are still independent objects", () => {
+  test("positions at the same line and column are still independent objects", () => {
     const result = parse("a;\nb;\n");
-    const [first, second] = result.root.children;
+    const rootStart = result.root.loc.start;
+    const childStart = result.root.children[0].loc.start;
 
-    expect(first.loc.start.column).toBe(second.loc.start.column);
-    first.loc.start.column = 99;
-    expect(second.loc.start.column).toBe(1);
-    expect(first.loc.start).not.toBe(second.loc.start);
+    expect([rootStart.line, rootStart.column]).toEqual([childStart.line, childStart.column]);
+    expect(rootStart).not.toBe(childStart);
+    rootStart.column = 99;
+    expect(childStart.column).toBe(1);
   });
 
   // The result arrays are new, so their elements are created with
