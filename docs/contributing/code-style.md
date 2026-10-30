@@ -272,7 +272,7 @@ The codebase provides purpose-built hash maps that replace `TDictionary` on hot 
 
 **API compatibility:** All custom maps share the same core API as `TDictionary`: `Add`, `AddOrSetValue`, `TryGetValue`, `ContainsKey`, `Remove`, `Clear`. The `Keys`, `Values`, and `ToArray` accessors return dynamic arrays, so index those with a `for` loop rather than `for...in`.
 
-**Sequential iteration:** `TOrderedStringMap` and `TOrderedMap` also expose a key/value-pair enumerator — prefer `for Pair in Map do`, which yields entries in declaration order at O(1) amortized per step (this is how the class, scope, and module code iterate these maps). Do **not** iterate by driving the random-access `EntryAt(Index)` from a `for Index := 0 to Count - 1` loop: `EntryAt` scans active entries from the start (O(Index)), so the loop is O(N²). The enumerator copies each key; a hot loop that needs only the values, such as a destructor, walks `for Index := 0 to Map.EntryCount - 1` with `TryGetValueAtEntry`, which skips removed entries and copies no key.
+**Sequential iteration:** `TOrderedStringMap` and `TOrderedMap` also expose a key/value-pair enumerator — prefer `for Pair in Map do`, which yields entries in declaration order at O(1) amortized per step (this is how the class, scope, and module code iterate these maps). Do **not** iterate by driving the random-access `EntryAt(Index)` from a `for Index := 0 to Count - 1` loop: `EntryAt` scans active entries from the start (O(Index)), so the loop is O(N²). The enumerator copies each key; on a `TOrderedStringMap`, a hot loop that needs only the values, such as a destructor, walks `for Index := 0 to Map.EntryCount - 1` with `TryGetValueAtEntry`, which skips removed entries and copies no key.
 
 ### Function and Method Names
 
