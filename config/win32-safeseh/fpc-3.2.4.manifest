@@ -207,9 +207,9 @@ source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f1
 source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tgocciavmasyncfromsyncfulfillvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tgocciavmasyncfromsyncrejectvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 source-nonseh ../../source/units/Goccia.VM.pas 372f082b0dd24a17dabcf40bf2f4104f16f12b2d7caa7b7613532e4865297623 .text.n_goccia.vm$_$tsnapshotframeinfo_$__$$_hashandler$longint$word$tgocciabytecodehandlerkind$$boolean
-source-nonseh ../../source/shared/FPCSafeSEH.Test.pas c9eba3c52df69f5eb2da8258a2c50865352ef7ae3e283d80e86e1b19e28a58dd .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testhandlerownership
-source-nonseh ../../source/shared/FPCSafeSEH.Test.pas c9eba3c52df69f5eb2da8258a2c50865352ef7ae3e283d80e86e1b19e28a58dd .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testmissinghandler
-source-nonseh ../../source/shared/FPCSafeSEH.Test.pas c9eba3c52df69f5eb2da8258a2c50865352ef7ae3e283d80e86e1b19e28a58dd .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testunknownhandler
+source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 57725eff690fbe61fd45da3c7b29fac1540e61aa1ef81059a7e48437cf2639c9 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testhandlerownership
+source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 57725eff690fbe61fd45da3c7b29fac1540e61aa1ef81059a7e48437cf2639c9 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testmissinghandler
+source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 57725eff690fbe61fd45da3c7b29fac1540e61aa1ef81059a7e48437cf2639c9 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testunknownhandler
 source-nonseh ../../source/units/Goccia.Bytecode.Binary.Test.pas 0e5f913fd15e2c52f6c6be7a5eba9c5604a8acfb15e0b287b4ad26be3c7e58ff .text.n_p$goccia.bytecode.binary.test$_$tbytecodebinarytests_$__$$_testroundtripsexceptionhandlers
 source-nonseh ../../source/units/Goccia.Compiler.Test.pas f896bcf85a6743940a6cb487c078e121c77abb68f9d105d6406adf17c2296b04 .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofskipshandlerwithoutabruptclose
 source-nonseh ../../source/units/Goccia.Compiler.Test.pas f896bcf85a6743940a6cb487c078e121c77abb68f9d105d6406adf17c2296b04 .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofuseshandlerforexpressionbody
