@@ -18,6 +18,17 @@ time.sleep(0.2)
 record = {"source": str(source), "args": sys.argv[1:], "cwd": os.getcwd(),
           "start": start, "end": time.monotonic()}
 pathlib.Path(os.environ["RECORDS"], source.stem + ".json").write_text(json.dumps(record))
+if source.stem == "safeseh":
+    output = pathlib.Path(next(a.split("=", 1)[1] for a in sys.argv if a.startswith("--set-cache="))) / "safeseh"
+    output.write_text("#!/usr/bin/env python3\nimport json, os, pathlib, sys\n"
+                      "p = pathlib.Path(sys.argv[2])\n"
+                      "pathlib.Path(os.environ['RECORDS'], p.stem + '.postlink').write_text(json.dumps(sys.argv[1:]))\n"
+                      "sys.exit(9 if p.stem == os.environ.get('FAIL_POSTLINK') else 0)\n")
+    output.chmod(0o755)
+else:
+    output = pathlib.Path(next(a[3:] for a in sys.argv if a.startswith("-FE")))
+    (output / (source.stem + ".exe")).write_text("fixture image")
+    (output / (source.stem + ".map")).write_text("fixture map")
 print("123 lines compiled, 0.2 sec")
 if source.stem == os.environ.get("FAIL_PROGRAM"):
     print("deliberate compiler failure")
@@ -43,14 +54,17 @@ class CompileProgramsTest(unittest.TestCase):
         compiler.parent.mkdir()
         compiler.write_text(COMPILER)
         compiler.chmod(0o755)
+        instant = compiler.with_name("instantfpc")
+        instant.write_text(COMPILER)
+        instant.chmod(0o755)
         self.records = self.root / "records"
         self.records.mkdir()
         self.env = dict(os.environ, PATH=f"{compiler.parent}{os.pathsep}{os.environ['PATH']}",
                         RECORDS=str(self.records))
 
-    def run_build(self, jobs=2):
+    def run_build(self, jobs=2, cpu="x86_64", os_name="linux"):
         return subprocess.run(
-            [sys.executable, str(SCRIPT), "--jobs", str(jobs), "x86_64", "linux", "--", "-Xd"],
+            [sys.executable, str(SCRIPT), "--jobs", str(jobs), cpu, os_name, "--", "-Xd"],
             cwd=self.root, env=self.env, capture_output=True, text=True,
         )
 
@@ -65,12 +79,14 @@ class CompileProgramsTest(unittest.TestCase):
             for flag in ["-Px86_64", "-Tlinux", "-O4", "-dPRODUCTION", "-Xs", "-CX", "-XX", "-B", "-Xd"]:
                 self.assertIn(flag, record["args"])
             self.assertIn("-FU" + record["cwd"], record["args"])
+            self.assertNotIn("-Xm", record["args"])
         events = sorted([(r["start"], 1) for r in records] + [(r["end"], -1) for r in records])
         active = peak = 0
         for _, delta in events:
             active += delta
             peak = max(peak, active)
         self.assertEqual(peak, 2)
+        self.assertEqual(list(self.records.glob("*.postlink")), [])
         self.assertIn("6 programs", result.stdout)
         self.assertIn("0 failed", result.stdout)
         self.assertEqual(list((self.root / "build/ci-compiled").iterdir()), [])
@@ -84,6 +100,23 @@ class CompileProgramsTest(unittest.TestCase):
         self.assertEqual(len(list(self.records.glob("*.json"))), len(self.sources))
         self.assertIn("deliberate compiler failure",
                       (self.root / "build/ci-logs/First.log").read_text())
+
+    def test_win32_finalizes_every_output_and_deletes_rejected_images(self):
+        result = self.run_build(cpu="i386", os_name="win32")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = {Path(p).stem for p in self.sources}
+        self.assertEqual({p.stem for p in self.records.glob("*.postlink")}, expected)
+        for name in expected:
+            record = json.loads((self.records / f"{name}.json").read_text())
+            self.assertIn("-Xm", record["args"])
+            postlink = json.loads((self.records / f"{name}.postlink").read_text())
+            self.assertEqual(postlink, ["--apply", str(self.root / f"build/{name}.exe"),
+                                       str(self.root / f"build/{name}.map"), record["cwd"]])
+        self.env["FAIL_POSTLINK"] = "First"
+        result = self.run_build(cpu="i386", os_name="win32")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse((self.root / "build/First.exe").exists())
+        self.assertTrue((self.root / "build/Second.exe").exists())
 
     def test_refuses_missing_program_groups_and_colliding_output_names(self):
         for jobs in [0, -1]:

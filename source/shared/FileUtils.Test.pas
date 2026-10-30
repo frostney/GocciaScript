@@ -38,6 +38,8 @@ type
     procedure TestCanonicalHostPathIsStableForARealFile;
     procedure TestCanonicalHostPathFollowsASymlink;
     procedure TestReplaceHostFileCreatesWithPermissions;
+    procedure TestVerifiedReplacement;
+    procedure TestVerifiedReplacementRefusesDanglingLink;
     procedure TestReadSharedHostFileBytes;
     procedure TestHostPathIsRegularFile;
     procedure TestReadHostHandleBytesReadsFromTheStart;
@@ -96,6 +98,12 @@ begin
   Skip('ReplaceHostFile creates the temporary with the given permissions',
     TestReplaceHostFileCreatesWithPermissions,
     'POSIX modes are not available on this platform');
+  {$ENDIF}
+  Test('ReplaceHostFile verifies bytes and preserves exact permissions',
+    TestVerifiedReplacement);
+  {$IFDEF UNIX}
+  Test('ReplaceHostFile refuses a dangling temporary symlink',
+    TestVerifiedReplacementRefusesDanglingLink);
   {$ENDIF}
   Test('ReadSharedHostFileBytes reads the whole file',
     TestReadSharedHostFileBytes);
@@ -503,6 +511,67 @@ begin
     physically. }
   Expect<string>(CanonicalHostPath(LinkPath)).ToBe(TargetCanonical);
 end;
+
+procedure TFileUtilsTests.TestVerifiedReplacement;
+var
+  Target, Error: string;
+  {$IFDEF UNIX}
+  PreviousMask: Cardinal;
+  Mode: Cardinal;
+  {$ENDIF}
+begin
+  Target := FTempDir + PathDelim + 'verified.bin';
+  {$IFDEF UNIX}
+  PreviousMask := fpUmask(&077);
+  try
+  {$ENDIF}
+    Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp',
+      TEncoding.UTF8.GetBytes('verified replacement'), &751, True, True,
+      Error)).ToBe(True);
+    Expect<string>(TEncoding.UTF8.GetString(ReadFileBytes(Target)))
+      .ToBe('verified replacement');
+    {$IFDEF UNIX}
+    Expect<Boolean>(TryHostFileMode(Target, Mode)).ToBe(True);
+    Expect<Cardinal>(Mode).ToBe(&751);
+    {$ENDIF}
+    Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp', nil,
+      &751, True, True, Error)).ToBe(True);
+    Expect<Integer>(Length(ReadFileBytes(Target))).ToBe(0);
+  {$IFDEF UNIX}
+  finally
+    fpUmask(PreviousMask);
+  end;
+  {$ENDIF}
+end;
+
+procedure TFileUtilsTests.TestVerifiedReplacementRefusesDanglingLink;
+{$IFDEF UNIX}
+var
+  Target, Redirect, Error: string;
+begin
+  Target := FTempDir + PathDelim + 'original.bin';
+  Redirect := FTempDir + PathDelim + 'absent.bin';
+  Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp',
+    TEncoding.UTF8.GetBytes('original'), Error)).ToBe(True);
+  Expect<Integer>(fpSymlink(PAnsiChar(UTF8Encode(Redirect)),
+    PAnsiChar(UTF8Encode(Target + '.tmp')))).ToBe(0);
+  try
+    Expect<Boolean>(ReplaceHostFile(Target, Target + '.tmp',
+      TEncoding.UTF8.GetBytes('replacement'), &751, True, True,
+      Error)).ToBe(False);
+    Expect<Boolean>(Pos('symlink', Error) > 0).ToBe(True);
+    Expect<string>(TEncoding.UTF8.GetString(ReadFileBytes(Target))).ToBe('original');
+    Expect<Boolean>(HostPathIsRegularFile(Target)).ToBe(True);
+    Expect<Boolean>(FileExists(Redirect)).ToBe(False);
+    Expect<Boolean>(HostPathIsSymlink(Target + '.tmp')).ToBe(True);
+  finally
+    DeleteFile(Target + '.tmp');
+  end;
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
 
 procedure TFileUtilsTests.TestReadSharedHostFileBytes;
 var

@@ -16,7 +16,7 @@
 - **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
 - **Explicit clean recovery** — `./build.pas --clean <target>` clears stale FPC artifacts before diagnosing misleading compiler/resource failures
 
-GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
+GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself. Win32 builds also apply [audited SafeSEH metadata](contributing/win32-safeseh.md).
 
 This file is the authoritative command reference for local builds and CLI usage. Root-level files such as `README.md`, `CONTRIBUTING.md`, and
 `AGENTS.md` link here instead of duplicating the complete command list.
@@ -645,7 +645,7 @@ Overflow and range checks are enabled in development mode for safety. In product
 The build script is a FreePascal program that runs via the `instantfpc` shebang:
 
 ```pascal
-#!/usr/bin/env instantfpc
+#!/usr/bin/env -S instantfpc -B -Fu./source/shared
 ```
 
 It:
@@ -654,11 +654,11 @@ It:
 2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`), `--gc-stress`, which adds the GC-stress flags to a development build and moves its unit caches and binaries, and `--layout-probe`, which does the same for the layout probe on a production build.
 3. Parses remaining arguments to determine which components to build.
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
-5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
-6. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
+5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and quiet output; Win32 retains the linked filename for its post-link step.
+6. Applies `FPC_TARGET_CPU` and `FPC_TARGET_OS`, when set, as the compiler's `-P<cpu>` and `-T<os>` target overrides.
 7. For the `tests` target, auto-discovers all `*.Test.pas` files under `source/units/`, `source/shared/` and `source/app/` (including `source/app/compliance/`), compiling each program with its own `build/compiled/tests/<test-program>/` unit-output directory.
 
-Every workflow that compiles installs FPC 3.2.4 with the [`frostney/fpc-toolchain`](https://github.com/frostney/fpc-toolchain) action, pinned by commit, which caches the toolchain between runs. CI is pinned to the build `3.2.4-rc2-b1`, which each of `ci.yml`, `pr.yml`, `fuzz.yml`, `gc-stress.yml` and `timezone-data-bump.yml` names once, in its `FPC_VERSION` variable; moving to 3.2.4 final is a one-line bump of that variable in each. In `ci.yml` the `build` job asks the action for its matrix target: the Linux runner cross-compiles the Linux and Windows targets and the macOS runner the Darwin ones, with `fpc -P<cpu> -T<os>` picking the compiler and the toolchain's `fpc.cfg` supplying the units and binutils. FPC 3.2.4 builds no x86 cross compilers on arm64 hosts, so on Apple Silicon `x86_64-darwin` runs the toolchain's x86_64 macOS compiler under Rosetta 2. The Linux targets link against the pinned Ubuntu 22.04 (x86_64) and 18.04 (aarch64) glibc libraries that the job downloads and checks by SHA-256, not the runner's own, so a release needs glibc 2.34 on x86_64 and 2.17 on aarch64. The source builds on FPC 3.2.2 as well; `Shared.inc` defines the symbols that cover the two RTL interfaces 3.2.4 changed.
+Every workflow that compiles installs FPC 3.2.4 with the [`frostney/fpc-toolchain`](https://github.com/frostney/fpc-toolchain) action, pinned by commit, which caches the toolchain between runs. CI is pinned to the build `3.2.4-rc2-b1`, which each of `ci.yml`, `pr.yml`, `fuzz.yml`, `gc-stress.yml` and `timezone-data-bump.yml` names once, in its `FPC_VERSION` variable; a version bump also requires the [Win32 manifest re-audit](contributing/win32-safeseh.md#re-auditing-a-toolchain-update). In `ci.yml` the `build` job asks the action for its matrix target: the Linux runner cross-compiles the Linux and Windows targets and the macOS runner the Darwin ones, with `fpc -P<cpu> -T<os>` picking the compiler and the toolchain's `fpc.cfg` supplying the units and binutils. FPC 3.2.4 builds no x86 cross compilers on arm64 hosts, so on Apple Silicon `x86_64-darwin` runs the toolchain's x86_64 macOS compiler under Rosetta 2. The Linux targets link against the pinned Ubuntu 22.04 (x86_64) and 18.04 (aarch64) glibc libraries that the job downloads and checks by SHA-256, not the runner's own, so a release needs glibc 2.34 on x86_64 and 2.17 on aarch64. The source builds on FPC 3.2.2 as well; `Shared.inc` defines the symbols that cover the two RTL interfaces 3.2.4 changed.
 
 ## Project Structure for Compilation
 

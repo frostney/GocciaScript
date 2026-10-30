@@ -172,6 +172,13 @@ function ReplaceHostFile(const APath, ATemporaryPath: string;
 function ReplaceHostFile(const APath, ATemporaryPath: string;
   const ABytes: TBytes; const APermissions: Cardinal;
   out AError: string): Boolean; overload;
+{ As ReplaceHostFile, optionally read back the exclusively held temporary and
+  compare every byte before replacement. AExactPermissions restores the exact
+  requested POSIX mode after writing, independent of the creation umask. }
+function ReplaceHostFile(const APath, ATemporaryPath: string;
+  const ABytes: TBytes; const APermissions: Cardinal;
+  const AVerifyBytes, AExactPermissions: Boolean;
+  out AError: string): Boolean; overload;
 
 type
   { Which directory a path named when it was recorded: POSIX device and inode
@@ -492,6 +499,8 @@ end;
   value — macOS and the BSDs cap lower). }
 function HostRealPath(APath: PAnsiChar; AResolved: PAnsiChar): PAnsiChar;
   cdecl; external 'c' name 'realpath';
+function HostFchmod(AHandle: cint; AMode: TMode): cint;
+  cdecl; external 'c' name 'fchmod';
 {$ENDIF}
 
 {$IFDEF MSWINDOWS}
@@ -720,14 +729,30 @@ begin
   Result := FindAllFiles(ADirectory, Extensions);
 end;
 
+function VerifyReplacementBytes(const AHandle: THandle;
+  const AExpected: TBytes; out AError: string): Boolean;
+var
+  Actual: TBytes;
+begin
+  Result := ReadHostHandleBytes(AHandle, Actual, AError);
+  if not Result then
+    Exit;
+  Result := Length(Actual) = Length(AExpected);
+  if Result and (Length(Actual) > 0) then
+    Result := CompareMem(@Actual[0], @AExpected[0], Length(Actual));
+  if not Result then
+    AError := 'temporary file read-back differs from the replacement bytes';
+end;
+
 function ReplaceHostFile(const APath, ATemporaryPath: string;
   const ABytes: TBytes; const APermissions: Cardinal;
+  const AVerifyBytes, AExactPermissions: Boolean;
   out AError: string): Boolean; overload;
 {$IF DEFINED(UNIX) AND NOT DEFINED(LAKON)}
 var
   TemporaryBytes, PathBytes: TBytes;
   ErrorOffset: Integer;
-  Handle: cint;
+  Handle, OpenFlags: cint;
   Offset: SizeInt;
   Written: TSsize;
   Created: Boolean;
@@ -750,8 +775,10 @@ begin
   if FileExists(ATemporaryPath) then
     DeleteFile(ATemporaryPath);
 
-  Handle := fpOpen(PAnsiChar(@TemporaryBytes[0]),
-    O_WRONLY or O_CREAT or O_EXCL, APermissions);
+  OpenFlags := O_WRONLY or O_CREAT or O_EXCL;
+  if AVerifyBytes then
+    OpenFlags := O_RDWR or O_CREAT or O_EXCL;
+  Handle := fpOpen(PAnsiChar(@TemporaryBytes[0]), OpenFlags, APermissions);
   if Handle < 0 then
   begin
     AError := SysErrorMessage(fpgeterrno);
@@ -774,8 +801,13 @@ begin
     end;
     // On disk before the rename makes it the file, or a crash can leave the
     // replaced name holding an empty file.
+    if (AError = '') and AExactPermissions and
+       (HostFchmod(Handle, APermissions) <> 0) then
+      AError := SysErrorMessage(fpgeterrno);
     if (AError = '') and not FileFlush(Handle) then
       AError := SysErrorMessage(fpgeterrno);
+    if (AError = '') and AVerifyBytes then
+      VerifyReplacementBytes(Handle, ABytes, AError);
   finally
     if fpClose(Handle) <> 0 then
       if AError = '' then
@@ -796,7 +828,7 @@ end;
 var
   Handle: THandle;
   Offset: SizeInt;
-  Written, LastError: DWORD;
+  Written, LastError, Access: DWORD;
   Attempt: Integer;
   PosixRename: Boolean;
 begin
@@ -812,7 +844,10 @@ begin
 
   { CREATE_NEW fails on any existing name, a reparse point included, so the
     write cannot be redirected between the check above and this open. }
-  Handle := CreateFileW(PWideChar(ATemporaryPath), GENERIC_WRITE, 0, nil,
+  Access := GENERIC_WRITE;
+  if AVerifyBytes then
+    Access := Access or GENERIC_READ;
+  Handle := CreateFileW(PWideChar(ATemporaryPath), Access, 0, nil,
     CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
   if Handle = INVALID_HANDLE_VALUE then
   begin
@@ -833,6 +868,8 @@ begin
     end;
     if (AError = '') and not FileFlush(Handle) then
       AError := SysErrorMessage(GetLastError);
+    if (AError = '') and AVerifyBytes then
+      VerifyReplacementBytes(Handle, ABytes, AError);
   finally
     CloseHandle(Handle);
   end;
@@ -895,6 +932,8 @@ begin
     try
       if Length(ABytes) > 0 then
         Stream.WriteBuffer(ABytes[0], Length(ABytes));
+      if AVerifyBytes and not VerifyReplacementBytes(Stream.Handle, ABytes, AError) then
+        raise EReadError.Create(AError);
     finally
       Stream.Free;
     end;
@@ -909,6 +948,14 @@ begin
     DeleteFile(ATemporaryPath);
 end;
 {$ENDIF}
+
+function ReplaceHostFile(const APath, ATemporaryPath: string;
+  const ABytes: TBytes; const APermissions: Cardinal;
+  out AError: string): Boolean; overload;
+begin
+  Result := ReplaceHostFile(APath, ATemporaryPath, ABytes, APermissions,
+    False, False, AError);
+end;
 
 function ReplaceHostFile(const APath, ATemporaryPath: string;
   const ABytes: TBytes; out AError: string): Boolean;

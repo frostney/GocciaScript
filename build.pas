@@ -1,4 +1,4 @@
-#!/usr/bin/env -S instantfpc -Fu./source/shared
+#!/usr/bin/env -S instantfpc -B -Fu./source/shared
 
 {$mode delphi}
 {$H+}
@@ -8,7 +8,8 @@ uses
   Process,
   SysUtils,
 
-  FileUtils in 'source/shared/FileUtils.pas';
+  FileUtils in 'source/shared/FileUtils.pas',
+  FPCSafeSEH in 'source/shared/FPCSafeSEH.pas';
 
 type
   TBuildMode = (bmDev, bmProd);
@@ -290,6 +291,10 @@ begin
     if Arch <> '' then
       Args.Add('-P' + Arch);
 
+    Arch := GetEnvironmentVariable('FPC_TARGET_OS');
+    if Arch <> '' then
+      Args.Add('-T' + Arch);
+
     Args.Add('@config.cfg');
     if AUnitOutputDirectory <> '' then
       Args.Add('-FU' + AUnitOutputDirectory);
@@ -340,6 +345,63 @@ begin
   finally
     Args.Free;
   end;
+end;
+
+{ Query the effective compiler target, including config.cfg and cross-target
+  environment overrides. The build host need not be the executable's target. }
+function CompileProgram(const AArguments: TStringArray;
+  out AOutput: string): Boolean;
+var
+  Arguments: TStringArray;
+  Target, Executable, ObjectDirectory: string;
+  Lines: TStringList;
+  J: Integer;
+begin
+  Arguments := Copy(AArguments);
+  SetLength(Arguments, Length(Arguments) + 1);
+  Arguments[High(Arguments) - 1] := '-iTP';
+  Arguments[High(Arguments)] := '-iTO';
+  if not RunCommand('fpc', Arguments, Target) then
+    raise Exception.Create('Cannot determine compiler target: ' + Target);
+  if Trim(Target) <> 'i386 win32' then
+    Exit(RunCommand('fpc', AArguments, AOutput));
+
+  ObjectDirectory := '';
+  for J := 0 to High(AArguments) do
+    if Copy(AArguments[J], 1, 3) = '-FU' then
+      ObjectDirectory := Copy(AArguments[J], 4, MaxInt);
+  if ObjectDirectory = '' then
+    raise Exception.Create('Win32 build requires its compiler-owned unit directory');
+  SetLength(Arguments, Length(Arguments) + 1);
+  // The ordinary build suppresses informational output. Retain the linker's
+  // output path here so config.cfg output overrides are finalized correctly.
+  Arguments[High(Arguments) - 2] := '-vi';
+  Arguments[High(Arguments) - 1] := '-Xm';
+  Arguments[High(Arguments)] := AArguments[High(AArguments)];
+  Result := RunCommand('fpc', Arguments, AOutput);
+  if not Result then
+    Exit;
+  Executable := '';
+  Lines := TStringList.Create;
+  try
+    Lines.Text := AOutput;
+    for J := 0 to Lines.Count - 1 do
+      if Copy(Lines[J], 1, 8) = 'Linking ' then
+        Executable := Trim(Copy(Lines[J], 9, MaxInt));
+    if Executable = '' then
+      raise Exception.Create('Win32 build did not report its linked executable');
+    FinalizeFPCExecutable(Executable, ChangeFileExt(Executable, '.map'), ObjectDirectory);
+    AOutput := AOutput + LineEnding + 'SafeSEH verified: ' + Executable;
+  except
+    on E: Exception do
+    begin
+      if Executable <> '' then
+        DeleteFile(Executable);
+      AOutput := AOutput + LineEnding + 'SafeSEH failed: ' + E.Message;
+      Result := False;
+    end;
+  end;
+  Lines.Free;
 end;
 
 function TestUnitOutputDirectory(const ATestFile: string): string;
@@ -400,7 +462,7 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaREPL...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaREPL.dpr',
+  if not CompileProgram(FPCArgs('source/app/GocciaREPL.dpr',
       EnsureUnitOutputDirectory(TargetUnitOutputDirectory('repl'))),
       Output) then
     PrintBuildFailureAndExit(Output, 'GocciaREPL build failed', 'repl');
@@ -414,7 +476,7 @@ var
 begin
   WriteLn('');
   WriteLn('Building GocciaRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaRunner.dpr',
+  if not CompileProgram(FPCArgs('source/app/GocciaRunner.dpr',
       EnsureUnitOutputDirectory(TargetUnitOutputDirectory('runner'))),
       Output) then
     PrintBuildFailureAndExit(Output, 'GocciaRunner build failed', 'runner');
@@ -429,7 +491,7 @@ var
 begin
   WriteLn('');
   WriteLn('Building GocciaScriptLoaderBare...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaScriptLoaderBare.dpr',
+  if not CompileProgram(FPCArgs('source/app/GocciaScriptLoaderBare.dpr',
       EnsureUnitOutputDirectory(TargetUnitOutputDirectory('loaderbare'))),
       Output) then
     PrintBuildFailureAndExit(Output, 'GocciaScriptLoaderBare build failed',
@@ -445,7 +507,7 @@ var
 begin
   WriteLn('');
   WriteLn('Building GocciaFuzzHarness...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaFuzzHarness.dpr',
+  if not CompileProgram(FPCArgs('source/app/GocciaFuzzHarness.dpr',
       EnsureUnitOutputDirectory(TargetUnitOutputDirectory('fuzzharness'))),
       Output) then
     PrintBuildFailureAndExit(Output, 'GocciaFuzzHarness build failed',
@@ -481,7 +543,7 @@ begin
     begin
       UnitOutputDirectory := TestUnitOutputDirectory(TestFiles[K]);
 
-      if not RunCommand('fpc', FPCArgs(TestFiles[K],
+      if not CompileProgram(FPCArgs(TestFiles[K],
           EnsureUnitOutputDirectory(UnitOutputDirectory)), Output) then
         PrintBuildFailureAndExit(Output, 'Test build failed: ' + TestFiles[K],
           'tests');
@@ -500,7 +562,7 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaTestRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaTestRunner.dpr',
+  if not CompileProgram(FPCArgs('source/app/GocciaTestRunner.dpr',
       EnsureUnitOutputDirectory(TargetUnitOutputDirectory('testrunner'))),
       Output) then
     PrintBuildFailureAndExit(Output, 'GocciaTestRunner build failed',
@@ -514,7 +576,7 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaTest262Runner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaTest262Runner.dpr',
+  if not CompileProgram(FPCArgs('source/app/GocciaTest262Runner.dpr',
       EnsureUnitOutputDirectory(TargetUnitOutputDirectory('test262runner'))),
       Output) then
     PrintBuildFailureAndExit(Output, 'GocciaTest262Runner build failed',
@@ -528,7 +590,7 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaTOMLComplianceRunner...');
-  if not RunCommand('fpc', FPCArgs(
+  if not CompileProgram(FPCArgs(
       'source/app/compliance/GocciaTOMLComplianceRunner.dpr',
       EnsureUnitOutputDirectory(
         TargetUnitOutputDirectory('tomlcompliancerunner'))), Output) then
@@ -543,7 +605,7 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaWasmTestRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaWasmTestRunner.dpr',
+  if not CompileProgram(FPCArgs('source/app/GocciaWasmTestRunner.dpr',
       EnsureUnitOutputDirectory(TargetUnitOutputDirectory('wasmtestrunner'))),
       Output) then
     PrintBuildFailureAndExit(Output, 'GocciaWasmTestRunner build failed',
@@ -571,7 +633,7 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaBenchmarkRunner...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaBenchmarkRunner.dpr',
+  if not CompileProgram(FPCArgs('source/app/GocciaBenchmarkRunner.dpr',
       EnsureUnitOutputDirectory(TargetUnitOutputDirectory('benchmarkrunner'))),
       Output) then
     PrintBuildFailureAndExit(Output, 'GocciaBenchmarkRunner build failed',
@@ -585,7 +647,7 @@ var
   Output: string;
 begin
   WriteLn('Building GocciaBundler...');
-  if not RunCommand('fpc', FPCArgs('source/app/GocciaBundler.dpr',
+  if not CompileProgram(FPCArgs('source/app/GocciaBundler.dpr',
       EnsureUnitOutputDirectory(TargetUnitOutputDirectory('bundler'))),
       Output) then
     PrintBuildFailureAndExit(Output, 'GocciaBundler build failed', 'bundler');

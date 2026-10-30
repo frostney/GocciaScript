@@ -54,6 +54,21 @@ def main():
         f"-FE{build}", *flags,
     ]
 
+    safeseh = None
+    if (args.cpu, args.os) == ("i386", "win32"):
+        # Build once for the host. Every cross-linked executable uses the same
+        # Pascal post-link implementation as build.pas, before its units expire.
+        tool_dir = build / "tools"
+        tool_units = tool_dir / "compiled"
+        tool_units.mkdir(parents=True, exist_ok=True)
+        subprocess.run([
+            "instantfpc", f"--set-cache={tool_dir}", "--skip-run", "-B",
+            f"-Fu{root / 'source/shared'}", f"-FU{tool_units}",
+            str(root / "safeseh.pas"),
+        ], check=True)
+        safeseh = tool_dir / ("safeseh.exe" if sys.platform == "win32" else "safeseh")
+        common.append("-Xm")
+
     def compile_program(source):
         # FPC's PPUs, resource lists and linker scratch files must not be shared
         # between programs, even when the compiler options are identical.
@@ -68,6 +83,14 @@ def main():
             command.append(str(source))
             with log.open("w") as output:
                 result = subprocess.run(command, cwd=units, stdout=output, stderr=subprocess.STDOUT)
+                if result.returncode == 0 and safeseh:
+                    executable = build / f"{source.stem}.exe"
+                    result = subprocess.run([
+                        str(safeseh), "--apply", str(executable),
+                        str(build / f"{source.stem}.map"), units,
+                    ], cwd=root, stdout=output, stderr=subprocess.STDOUT)
+                    if result.returncode:
+                        executable.unlink(missing_ok=True)
         elapsed = time.monotonic() - started
         # Keep compiler output off the runner's live log pipe: a full build can
         # emit hundreds of thousands of repeated diagnostics. On failure retain
