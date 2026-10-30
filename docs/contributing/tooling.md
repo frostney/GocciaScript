@@ -272,8 +272,8 @@ unit that converts strings through the RTL before `FileUtils` or the console
 built-in is initialized lists it in its uses. Because the setting is
 process-wide, it also applies to an application that embeds the engine. On
 Linux and macOS the unit installs `cwstring`, which converts through iconv, and
-in front of it a direct conversion for ASCII text to and from UTF-8, which
-produces the same bytes without an iconv call.
+in front of it a direct conversion for ASCII text to and from UTF-8 or
+US-ASCII, which produces the same bytes without an iconv call.
 
 ## Fuzzing and Memory Safety
 

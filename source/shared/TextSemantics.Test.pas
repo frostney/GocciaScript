@@ -421,8 +421,8 @@ begin
   Expect<Integer>(Length(Bytes)).ToBe(Length(Text));
   Expect<string>(string(Bytes)).ToBe(Text);
 
-  // Only the last character is non-ASCII, so a scan that stopped early would
-  // narrow it.
+  // Only the last character is non-ASCII, so a scan that skipped the last
+  // character would narrow it.
   Text := Built('plain text then na' + #$00EF);
   Bytes := UTF8String(Text);
   Expect<Integer>(StringCodePage(Bytes)).ToBe(CP_UTF8);
@@ -451,6 +451,15 @@ begin
   SetCodePage(ASCIIBytes, CP_ASCII, True);
   Expect<Integer>(StringCodePage(ASCIIBytes)).ToBe(CP_ASCII);
   Expect<string>(string(ASCIIBytes)).ToBe(Text);
+
+{$IFDEF UNIX}
+  // ASCII text in a code page that is not ASCII-compatible still goes through
+  // iconv: 'A' is $C1 in EBCDIC.
+  ASCIIBytes := UTF8String(Built('A'));
+  SetCodePage(ASCIIBytes, 37, True);
+  Expect<Integer>(Length(ASCIIBytes)).ToBe(1);
+  Expect<Integer>(Ord(ASCIIBytes[1])).ToBe($C1);
+{$ENDIF}
 
   // A code page other than UTF-8 or ASCII goes through the platform converter.
   SetLength(Latin1, 4);
