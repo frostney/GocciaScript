@@ -186,6 +186,7 @@ begin
     Check(Destroyed = 1, 'nested exception not freed exactly once');
 end;
 
+{$IFDEF WIN32_SEH_PROBES}
 procedure RaiseSafeCall; safecall;
 begin
   raise EProbe.Create('safecall');
@@ -201,7 +202,6 @@ begin
   Check(Invoke() = UNEXPECTED_HRESULT, 'safecall HRESULT');
 end;
 
-{$IFDEF WIN32_SEH_PROBES}
 // Actual processor faults, independent of constant folding and Pascal checks.
 procedure AccessViolation; assembler;
 asm
@@ -449,12 +449,12 @@ begin
   else if AMode = 'reraise' then TestReraise
   else if AMode = 'cleanup-raises' then TestReplacement(True)
   else if AMode = 'except-raises' then TestReplacement(False)
-  else if AMode = 'safecall' then TestSafeCall
-  else if (AMode = 'access-violation') or (AMode = 'integer-divide') or
+  else if (AMode = 'safecall') or (AMode = 'access-violation') or (AMode = 'integer-divide') or
     (AMode = 'floating-point') then
   begin
     {$IFDEF WIN32_SEH_PROBES}
-    TestHardware(AMode);
+    if AMode = 'safecall' then TestSafeCall
+    else TestHardware(AMode);
     {$ELSE}
     WriteLn('SKIP ', AMode, ' (requires i386 Windows)');
     Exit;

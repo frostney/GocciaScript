@@ -768,7 +768,8 @@ jobs:
 
       - name: Install Web Tooling dependencies
         working-directory: web-tooling-suite
-        run: npm install --ignore-scripts --no-audit --no-fund
+        # The pinned corpus declares raw-loader as a direct Git dependency.
+        run: npm install --allow-git=root --ignore-scripts --no-audit --no-fund
 
       - name: Run Web Tooling report
         env:
