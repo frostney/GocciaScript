@@ -852,25 +852,39 @@ end;
 
 {$IFDEF FPC}
 { FPC's StringReplace converts the text to and from the system code page.
-  The round trip leaves ASCII text alone, and any text without surrogates
-  when that code page is UTF-8; otherwise it can turn a character into '?'.
+  The round trip leaves ASCII text alone, and any text without a lone
+  surrogate when that code page is UTF-8; otherwise it can turn a character
+  into '?'.
   Text with no CR that the round trip would leave alone is returned as it was
   given, so skipping the rewrite never changes the result. }
 function NeedsNewlineRewrite(const AText: string): Boolean;
 var
   Index: Integer;
-  CodeUnit: Cardinal;
+  CodeUnit, NextCodeUnit: Cardinal;
   IsUTF8: Boolean;
 begin
   IsUTF8 := DefaultSystemCodePage = CP_UTF8;
-  for Index := 1 to Length(AText) do
+  Index := 1;
+  while Index <= Length(AText) do
   begin
     CodeUnit := Ord(AText[Index]);
     if CodeUnit = 13 then
       Exit(True);
-    if (CodeUnit >= $80) and
-       (not IsUTF8 or ((CodeUnit >= $D800) and (CodeUnit <= $DFFF))) then
-      Exit(True);
+    if CodeUnit >= $80 then
+    begin
+      if not IsUTF8 then
+        Exit(True);
+      if (CodeUnit >= $D800) and (CodeUnit <= $DFFF) then
+      begin
+        if (CodeUnit > $DBFF) or (Index = Length(AText)) then
+          Exit(True);
+        NextCodeUnit := Ord(AText[Index + 1]);
+        if (NextCodeUnit < $DC00) or (NextCodeUnit > $DFFF) then
+          Exit(True);
+        Inc(Index);
+      end;
+    end;
+    Inc(Index);
   end;
   Result := False;
 end;
