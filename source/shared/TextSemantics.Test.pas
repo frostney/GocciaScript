@@ -6,6 +6,7 @@ uses
   Classes,
   SysUtils,
 
+  ProcessEncoding,
   TestingPascalLibrary,
   TextEncoding,
   TextSemantics;
