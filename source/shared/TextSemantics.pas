@@ -733,6 +733,36 @@ begin
   Result := Buffer.ToString;
 end;
 
+{$IFDEF FPC}
+{ FPC's TStringList holds AnsiStrings, and the implicit conversion to one goes
+  through the platform's converter for every line. An ASCII line has the same
+  bytes in the system code page, so it is narrowed here; any other line takes
+  the implicit conversion. }
+function StringListLine(const AText: string;
+  const AStart, ALength: Integer): AnsiString;
+var
+  Target: PAnsiChar;
+  I: Integer;
+begin
+  for I := AStart to AStart + ALength - 1 do
+    if Ord(AText[I]) > $7F then
+      Exit(AnsiString(Copy(AText, AStart, ALength)));
+  SetLength(Result, ALength);
+  if ALength = 0 then
+    Exit;
+  Target := PAnsiChar(Result);
+  for I := 0 to ALength - 1 do
+    Target[I] := AnsiChar(Ord(AText[AStart + I]));
+end;
+{$ELSE}
+// Delphi's TStringList holds UnicodeStrings, so a line needs no conversion.
+function StringListLine(const AText: string;
+  const AStart, ALength: Integer): string;
+begin
+  Result := Copy(AText, AStart, ALength);
+end;
+{$ENDIF}
+
 function CreateTextLines(const AText: string): TStringList;
 var
   LineStart: Integer;
@@ -746,21 +776,21 @@ begin
   begin
     if AText[TextIndex] = #13 then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(StringListLine(AText, LineStart, TextIndex - LineStart));
       if (TextIndex < Length(AText)) and (AText[TextIndex + 1] = #10) then
         Inc(TextIndex);
       LineStart := TextIndex + 1;
     end
     else if AText[TextIndex] = #10 then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(StringListLine(AText, LineStart, TextIndex - LineStart));
       LineStart := TextIndex + 1;
     end;
     Inc(TextIndex);
   end;
 
   if LineStart <= Length(AText) then
-    Result.Add(Copy(AText, LineStart, Length(AText) - LineStart + 1))
+    Result.Add(StringListLine(AText, LineStart, Length(AText) - LineStart + 1))
   else if (Length(AText) > 0) and ((AText[Length(AText)] = #10) or
     (AText[Length(AText)] = #13)) then
     Result.Add('');
@@ -787,26 +817,26 @@ begin
   begin
     if AText[TextIndex] = #13 then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(StringListLine(AText, LineStart, TextIndex - LineStart));
       if (TextIndex < Length(AText)) and (AText[TextIndex + 1] = #10) then
         Inc(TextIndex);
       LineStart := TextIndex + 1;
     end
     else if AText[TextIndex] = #10 then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(StringListLine(AText, LineStart, TextIndex - LineStart));
       LineStart := TextIndex + 1;
     end
     else if IsLineOrParagraphSeparatorAt(AText, TextIndex) then
     begin
-      Result.Add(Copy(AText, LineStart, TextIndex - LineStart));
+      Result.Add(StringListLine(AText, LineStart, TextIndex - LineStart));
       LineStart := TextIndex + 1;
     end;
     Inc(TextIndex);
   end;
 
   if LineStart <= Length(AText) then
-    Result.Add(Copy(AText, LineStart, Length(AText) - LineStart + 1))
+    Result.Add(StringListLine(AText, LineStart, Length(AText) - LineStart + 1))
   else if (Length(AText) > 0) and
     ((AText[Length(AText)] = #10) or (AText[Length(AText)] = #13) or
     IsLineOrParagraphSeparatorAt(AText, Length(AText))) then
@@ -819,8 +849,56 @@ begin
   Result := CreateTextLines(AText);
 end;
 
+{$IFDEF FPC}
+{ FPC's StringReplace converts the text to and from the system code page.
+  The round trip leaves ASCII text alone, and any text without a lone
+  surrogate when that code page is UTF-8; otherwise it can turn a character
+  into '?'.
+  Text with no CR that the round trip would leave alone is returned as it was
+  given, so skipping the rewrite never changes the result. }
+function NeedsNewlineRewrite(const AText: string): Boolean;
+var
+  Index: Integer;
+  CodeUnit, NextCodeUnit: Cardinal;
+  IsUTF8: Boolean;
+begin
+  IsUTF8 := DefaultSystemCodePage = CP_UTF8;
+  Index := 1;
+  while Index <= Length(AText) do
+  begin
+    CodeUnit := Ord(AText[Index]);
+    if CodeUnit = 13 then
+      Exit(True);
+    if CodeUnit >= $80 then
+    begin
+      if not IsUTF8 then
+        Exit(True);
+      if (CodeUnit >= $D800) and (CodeUnit <= $DFFF) then
+      begin
+        if (CodeUnit > $DBFF) or (Index = Length(AText)) then
+          Exit(True);
+        NextCodeUnit := Ord(AText[Index + 1]);
+        if (NextCodeUnit < $DC00) or (NextCodeUnit > $DFFF) then
+          Exit(True);
+        Inc(Index);
+      end;
+    end;
+    Inc(Index);
+  end;
+  Result := False;
+end;
+{$ELSE}
+// Delphi's StringReplace works on UTF-16 directly, so only a CR needs it.
+function NeedsNewlineRewrite(const AText: string): Boolean;
+begin
+  Result := Pos(#13, AText) > 0;
+end;
+{$ENDIF}
+
 function NormalizeNewlinesToLF(const AText: string): string;
 begin
+  if not NeedsNewlineRewrite(AText) then
+    Exit(AText);
   Result := StringReplace(AText, #13#10, #10, [rfReplaceAll]);
   Result := StringReplace(Result, #13, #10, [rfReplaceAll]);
 end;
