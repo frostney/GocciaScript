@@ -353,6 +353,7 @@ var
   PollDescriptor: TPollFD;
   SocketError: Integer;
   SocketErrorLength: TSockLen;
+  NoDelay: Integer;
 begin
   { DoRequest passes the literal ResolveHostToAddress pinned, so the
     numeric path is the one taken and nothing is resolved twice. A name
@@ -368,6 +369,12 @@ begin
   if Result < 0 then
     raise EHTTPError.Create('Failed to create socket');
   DisableSocketSigPipe(Result);
+  { A request is written whole, right after the TLS handshake's last
+    flight: Nagle would hold it until that flight is acknowledged, a
+    delayed ACK on TLS 1.3. }
+  NoDelay := 1;
+  fpSetSockOpt(Result, IPPROTO_TCP, TCP_NODELAY, @NoDelay,
+    SizeOf(NoDelay));
 
   FillChar(SockAddr, SizeOf(SockAddr), 0);
   SockAddr.sin_family := AF_INET;
@@ -909,7 +916,16 @@ type
     StatusText: string;
     Headers: THTTPHeaders;
     Body: TBytes;
+    { The message ended where its framing said and nothing followed it, on
+      an HTTP/1.1 connection the server did not close: the connection may
+      carry the next request. }
+    Reusable: Boolean;
   end;
+
+  { On a reused connection: no byte of a response arrived before it ended,
+    or what arrived is no status line. The server closed it, or the
+    previous response left bytes behind. }
+  EHTTPNoResponse = class(EHTTPError);
 
 function FindHeaderValue(const AHeaders: THTTPHeaders;
   const AName: string): string;
@@ -1023,7 +1039,8 @@ function ReadResponse(const ASock: TSocket;
   var ATransport: TTransportSecurityConnection;
   const AIsHead: Boolean; const ADeadlineNs: Int64;
   const AMaxBodyBytes: Integer;
-  const ASkipRedirectBody: Boolean): TRawHTTPResponse;
+  const ASkipRedirectBody: Boolean;
+  const AReused: Boolean = False): TRawHTTPResponse;
 var
   Buf: array[0..RECV_BUF_SIZE - 1] of Byte;
   RawHeader: TBytes;
@@ -1039,6 +1056,7 @@ var
   ChunkBuf: TBytes;
   ChunkBufLimit: Integer;
   Remaining: Integer;
+  Persistent: Boolean;
 
   function RemainingTimeoutMilliseconds: Integer;
   var
@@ -1093,12 +1111,29 @@ begin
   Result.StatusText := '';
   SetLength(Result.Headers, 0);
   SetLength(Result.Body, 0);
+  Result.Reusable := False;
 
   // Read until we find the end of headers (CRLFCRLF)
   SetLength(RawHeader, 0);
   HeaderEnd := -1;
   repeat
-    N := Receive(Buf, RECV_BUF_SIZE);
+    try
+      N := Receive(Buf, RECV_BUF_SIZE);
+    except
+      on E: Exception do
+      begin
+        { On a reused connection, a failed read before the first byte (a
+          reset, or the TLS backend's read error) is no response at all; a
+          timeout stays a timeout. }
+        if AReused and (Length(RawHeader) = 0) and
+           not ((ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs)) then
+          raise EHTTPNoResponse.Create(E.Message);
+        raise;
+      end;
+    end;
+    if (N <= 0) and (Length(RawHeader) = 0) then
+      raise EHTTPNoResponse.Create(
+        'Invalid HTTP response: no header terminator');
     if N <= 0 then Break;
     AppendBytes(RawHeader, @Buf[0], N, MAX_RESPONSE_HEADER_BYTES);
     HeaderEnd := FindHeaderTerminator(RawHeader);
@@ -1125,6 +1160,18 @@ begin
   else
     Line := HeaderBlock;
 
+  { HTTP/1.1 connections persist unless a Connection field says close
+    (RFC 9112 section 9.3); an HTTP/1.0 one is never reused here. }
+  Persistent := Copy(Line, 1, 9) = 'HTTP/1.1 ';
+  { On a reused connection, bytes the previous response left behind are no
+    status line: the connection is given up before any of them is read as
+    a body. }
+  if AReused and not ((Length(Line) >= 12) and
+    (Copy(Line, 1, 7) = 'HTTP/1.') and CharInSet(Line[8], ['0'..'9']) and
+    (Line[9] = ' ') and CharInSet(Line[10], ['0'..'9']) and
+    CharInSet(Line[11], ['0'..'9']) and CharInSet(Line[12], ['0'..'9']) and
+    ((Length(Line) = 12) or (Line[13] = ' '))) then
+    raise EHTTPNoResponse.Create('Invalid HTTP response: malformed status line');
   J := Pos(' ', Line);
   if J > 0 then
   begin
@@ -1178,10 +1225,20 @@ begin
     end;
   end;
 
+  if Persistent then
+    for I := 0 to High(Result.Headers) do
+      if (Result.Headers[I].Name = 'connection') and
+         (Pos('close', LowerCase(Result.Headers[I].Value)) > 0) then
+        Persistent := False;
+
   // Don't read body for HEAD requests or 1xx/204/304 responses
   if AIsHead or (Result.StatusCode div 100 = 1) or
      (Result.StatusCode = 204) or (Result.StatusCode = 304) then
+  begin
+    Result.Reusable := Persistent and (Result.StatusCode div 100 <> 1) and
+      (Length(BodyBytes) = 0);
     Exit;
+  end;
   { A redirect the caller will refuse whatever its body holds (redirect
     mode "error") is refused from its status line and headers, without
     waiting for a body. }
@@ -1271,6 +1328,19 @@ begin
       Move(ChunkBuf[0], Result.Body[BodyLen], ChunkSize);
       RemoveLeadingBytes(ChunkBuf, ChunkSize + 2);
     until False;
+    { RFC 9112 section 6.3: chunked must be the final coding, and a
+      Content-Length beside it is a framing error a later message could hide
+      behind: neither connection is reused. }
+    Result.Reusable := Persistent and (Length(ChunkBuf) = 0) and
+      (Copy(TransferEncoding, Length(TransferEncoding) - 6, 7) = 'chunked') and
+      not HasHeader(Result.Headers, 'content-length');
+    { A second Transfer-Encoding field could name a coding after chunked. }
+    J := 0;
+    for I := 0 to High(Result.Headers) do
+      if Result.Headers[I].Name = 'transfer-encoding' then
+        Inc(J);
+    if J > 1 then
+      Result.Reusable := False;
   end
   else
   begin
@@ -1304,6 +1374,9 @@ begin
       SetLength(Result.Body, ContentLen);
       BodyLen := 0;
 
+      { Bytes past the declared length would belong to no request. }
+      Result.Reusable := Persistent and (Length(BodyBytes) <= ContentLen);
+
       // Copy bytes already read with headers
       if Length(BodyBytes) > 0 then
       begin
@@ -1327,7 +1400,11 @@ begin
         if N <= 0 then
           raise EHTTPError.Create(TRUNCATED_BODY_ERROR);
         Remaining := ContentLen - BodyLen;
-        if N > Remaining then N := Remaining;
+        if N > Remaining then
+        begin
+          N := Remaining;
+          Result.Reusable := False;
+        end;
         Move(Buf[0], Result.Body[BodyLen], N);
         Inc(BodyLen, N);
       end;
@@ -1497,6 +1574,9 @@ var
   Method: string;
   HeaderName, HeaderNameLower, HeaderValue: string;
   DeadlineNs: Int64;
+  { A connection is open (Sock, Transport); Reused: it carried the previous
+    hop, a redirect within the same origin. }
+  Connected, Reused, Stale: Boolean;
 
   function RemainingTimeoutMilliseconds: Integer;
   var
@@ -1529,8 +1609,7 @@ var
       Result := Result + ':' + IntToStr(AParsed.Port);
   end;
 
-  function ResolveAndValidateDestination(
-    const AParsed: THTTPParsedURL): string;
+  procedure ValidateName(const AParsed: THTTPParsedURL);
   var
     Reason: string;
   begin
@@ -1542,18 +1621,43 @@ var
        not APolicy.HostCheck(AParsed.Host, AParsed.Port, '', Reason) then
       raise EHTTPDestinationDenied.CreateDenied(DestinationScope(AParsed),
         Reason);
+  end;
 
-    Result := ResolveHostToAddress(AParsed.Host);
-
+  procedure ValidateAddress(const AParsed: THTTPParsedURL;
+    const AAddress: string);
+  var
+    Reason: string;
+  begin
     if Assigned(APolicy.HostCheck) and
-       not APolicy.HostCheck(AParsed.Host, AParsed.Port, Result, Reason) then
+       not APolicy.HostCheck(AParsed.Host, AParsed.Port, AAddress, Reason) then
       raise EHTTPDestinationDenied.CreateDenied(DestinationScope(AParsed),
         Reason);
 
-    if APolicy.DenyPrivateRanges and IsPrivateNetworkAddress(Result) then
+    if APolicy.DenyPrivateRanges and IsPrivateNetworkAddress(AAddress) then
       raise EHTTPError.CreateFmt(
         'fetch destination not allowed: %s resolves to private address %s',
-        [AParsed.Host, Result]);
+        [AParsed.Host, AAddress]);
+  end;
+
+  function ResolveAndValidateDestination(
+    const AParsed: THTTPParsedURL): string;
+  begin
+    ValidateName(AParsed);
+    Result := ResolveHostToAddress(AParsed.Host);
+    ValidateAddress(AParsed, Result);
+  end;
+
+  procedure CloseConnection;
+  begin
+    if Connected then
+    begin
+      Connected := False;
+      try
+        CloseTransportSecurity(Transport);
+      finally
+        SocketClose(Sock);
+      end;
+    end;
   end;
 
 begin
@@ -1574,141 +1678,196 @@ begin
   Method := UpperCase(AMethod);
   IsHead := (Method = 'HEAD');
 
-  while True do
-  begin
-    Parsed := ParseHTTPURL(CurrentURL);
-    { Runs on every pass of this loop, so a redirect hop is resolved,
-      validated, and pinned exactly like the initial request. }
-    ResolvedAddress := ResolveAndValidateDestination(Parsed);
-    ValidateHTTPRequestText(Parsed.Path, 'request target', False);
-    FillChar(Transport, SizeOf(Transport), 0);
-    { Connect to the address that was just validated, not to the name. Both
-      platform connect paths take a numeric fast path for a literal, so this
-      performs no second lookup and there is no window in which DNS can
-      answer differently. }
-    Sock := ConnectSocket(ResolvedAddress, Parsed.Port,
-      RemainingTimeoutMilliseconds);
-    try
-      ConfigureSocketTimeout(Sock, RemainingTimeoutMilliseconds);
-      { TLS still verifies against the hostname. Pinning changes which
-        address we dial, never which identity we require the peer to prove —
-        handing the literal here would break certificate validation and
-        silently downgrade the connection's guarantees. }
-      if Parsed.Scheme = 'https' then
-        try
-          StartTransportSecurity(Transport, Sock, Parsed.Host, DeadlineNs);
-        except
-          { A handshake the deadline ended is the request timing out. }
-          if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then
-            raise EHTTPError.Create('HTTP request timed out');
-          raise;
-        end;
+  Connected := False;
+  Reused := False;
+  try
+    while True do
+    begin
+      Parsed := ParseHTTPURL(CurrentURL);
+      if Reused then
+      begin
+        { A redirect within the origin rides the connection that answered
+          it: the name is checked again, and the address it was pinned to
+          is checked again, without a second lookup. }
+        ValidateName(Parsed);
+        ValidateAddress(Parsed, ResolvedAddress);
+      end
+      else
+        { Runs on every pass of this loop that opens a connection, so a
+          redirect hop is resolved, validated, and pinned exactly like the
+          initial request. }
+        ResolvedAddress := ResolveAndValidateDestination(Parsed);
+      ValidateHTTPRequestText(Parsed.Path, 'request target', False);
+      if not Reused then
+      begin
+        FillChar(Transport, SizeOf(Transport), 0);
+        { Connect to the address that was just validated, not to the name.
+          Both platform connect paths take a numeric fast path for a
+          literal, so this performs no second lookup and there is no window
+          in which DNS can answer differently. }
+        Sock := ConnectSocket(ResolvedAddress, Parsed.Port,
+          RemainingTimeoutMilliseconds);
+        Connected := True;
+        ConfigureSocketTimeout(Sock, RemainingTimeoutMilliseconds);
+        { TLS still verifies against the hostname. Pinning changes which
+          address we dial, never which identity we require the peer to
+          prove — handing the literal here would break certificate
+          validation and silently downgrade the connection's guarantees. }
+        if Parsed.Scheme = 'https' then
+          try
+            StartTransportSecurity(Transport, Sock, Parsed.Host, DeadlineNs);
+          except
+            { A handshake the deadline ended is the request timing out. }
+            if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then
+              raise EHTTPError.Create('HTTP request timed out');
+            raise;
+          end;
+      end
+      else
+        ConfigureSocketTimeout(Sock, RemainingTimeoutMilliseconds);
 
-      try
-        // Build Host header value
-        if ((Parsed.Scheme = 'http') and (Parsed.Port = 80)) or
-           ((Parsed.Scheme = 'https') and (Parsed.Port = 443)) then
-          HostHeader := Parsed.Host
-        else
-          HostHeader := Parsed.Host + ':' + IntToStr(Parsed.Port);
+      // Build Host header value
+      if ((Parsed.Scheme = 'http') and (Parsed.Port = 80)) or
+         ((Parsed.Scheme = 'https') and (Parsed.Port = 443)) then
+        HostHeader := Parsed.Host
+      else
+        HostHeader := Parsed.Host + ':' + IntToStr(Parsed.Port);
 
-        RequestText := Method + ' ' + Parsed.Path + ' HTTP/1.1' + CRLF;
-        RequestText := RequestText + 'Host: ' + HostHeader + CRLF;
+      RequestText := Method + ' ' + Parsed.Path + ' HTTP/1.1' + CRLF;
+      RequestText := RequestText + 'Host: ' + HostHeader + CRLF;
+      { HTTP/1.1 connections persist by default (RFC 9112 section 9.3), so
+        a redirect within the origin can reuse this one. When no redirect
+        can follow, the server is asked to close it, so the closed socket
+        waits out TIME-WAIT on its side, not here. }
+      if (APolicy.RedirectMode <> hrmFollow) or
+         (Redirects >= AMaxRedirects) then
         RequestText := RequestText + 'Connection: close' + CRLF;
 
-        // Check if user provided User-Agent
-        HasUserAgent := False;
-        for I := 0 to High(AHeaders) do
-          if LowerCase(AHeaders[I].Name) = 'user-agent' then
-            HasUserAgent := True;
+      // Check if user provided User-Agent
+      HasUserAgent := False;
+      for I := 0 to High(AHeaders) do
+        if LowerCase(AHeaders[I].Name) = 'user-agent' then
+          HasUserAgent := True;
 
-        if not HasUserAgent then
-          RequestText := RequestText + 'User-Agent: GocciaScript/1.0' + CRLF;
+      if not HasUserAgent then
+        RequestText := RequestText + 'User-Agent: GocciaScript/1.0' + CRLF;
 
-        // Add custom headers (skip Host since we already set it)
-        ValidateHTTPRequestHeaders(AHeaders);
-        for I := 0 to High(AHeaders) do
-        begin
-          HeaderName := AHeaders[I].Name;
-          HeaderValue := AHeaders[I].Value;
-          HeaderNameLower := LowerCase(HeaderName);
-          if HeaderNameLower = 'host' then Continue;
-          if not SendCredentials and
-             ((HeaderNameLower = 'authorization') or
-              (HeaderNameLower = 'cookie') or
-              (HeaderNameLower = 'proxy-authorization')) then Continue;
-          RequestText := RequestText + HeaderName + ': ' +
-            HeaderValue + CRLF;
-        end;
+      // Add custom headers (skip Host since we already set it)
+      ValidateHTTPRequestHeaders(AHeaders);
+      for I := 0 to High(AHeaders) do
+      begin
+        HeaderName := AHeaders[I].Name;
+        HeaderValue := AHeaders[I].Value;
+        HeaderNameLower := LowerCase(HeaderName);
+        if HeaderNameLower = 'host' then Continue;
+        if not SendCredentials and
+           ((HeaderNameLower = 'authorization') or
+            (HeaderNameLower = 'cookie') or
+            (HeaderNameLower = 'proxy-authorization')) then Continue;
+        RequestText := RequestText + HeaderName + ': ' +
+          HeaderValue + CRLF;
+      end;
 
-        RequestText := RequestText + CRLF;
-        Request := EncodeUTF8WithReplacement(RequestText);
+      RequestText := RequestText + CRLF;
+      Request := EncodeUTF8WithReplacement(RequestText);
 
+      Stale := False;
+      try
         try
           SendAll(Sock, Transport, Request);
         except
-          { A send the deadline ended is the request timing out: the TLS
-            backends end a send by it, as they end a read. }
-          if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then
-            raise EHTTPError.Create('HTTP request timed out');
-          raise;
+          { A send on a reused connection that fails (plain or TLS): the
+            server closed it. }
+          on E: Exception do
+          begin
+            Stale := Reused;
+            raise;
+          end;
         end;
         Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs,
-          MaxBodyBytes, APolicy.RedirectMode = hrmError);
-      finally
-        CloseTransportSecurity(Transport);
+          MaxBodyBytes, APolicy.RedirectMode = hrmError, Reused);
+      except
+        on E: Exception do
+        begin
+          CloseConnection;
+          { A send or a read the deadline ended is the request timing out:
+            the TLS backends end a send by it, as they end a read. }
+          if (DeadlineNs <> 0) and (GetNanoseconds >= DeadlineNs) then
+            raise EHTTPError.Create('HTTP request timed out');
+          { A reused connection the server closed between two hops, before
+            any response arrived: the hop (a GET or HEAD) is made again, once,
+            on a connection of its own. A response that did arrive is never
+            requested twice. }
+          if Reused and (Stale or (E is EHTTPNoResponse)) then
+          begin
+            Reused := False;
+            Continue;
+          end;
+          raise;
+        end;
       end;
-    finally
-      SocketClose(Sock);
-    end;
+      Reused := False;
 
-    { WHATWG Fetch, HTTP fetch: a redirect status is handled by the
-      request's redirect mode. "error" is a network error, "manual" answers
-      with the redirect response itself, and "follow" runs HTTP-redirect
-      fetch, which answers with the response when it has no Location. }
-    if IsRedirectStatus(Raw.StatusCode) and
-       (APolicy.RedirectMode <> hrmManual) then
-    begin
-      if APolicy.RedirectMode = hrmError then
-        raise EHTTPError.Create(REDIRECT_MODE_ERROR_MESSAGE);
-      { HTTP-redirect fetch: no Location header answers with the response;
-        a present one, even empty, is parsed against the response's URL. }
-      if HasHeader(Raw.Headers, 'location') then
+      { WHATWG Fetch, HTTP fetch: a redirect status is handled by the
+        request's redirect mode. "error" is a network error, "manual"
+        answers with the redirect response itself, and "follow" runs
+        HTTP-redirect fetch, which answers with the response when it has
+        no Location. }
+      if IsRedirectStatus(Raw.StatusCode) and
+         (APolicy.RedirectMode <> hrmManual) then
       begin
-        Location := FindHeaderValue(Raw.Headers, 'location');
-        // WHATWG Fetch: Location parsed against the response's URL.
-        CurrentURL := ResolveHTTPRedirectURL(CurrentURL, Location);
-        NextParsed := ParseHTTPURL(CurrentURL);
-        { HTTP-redirect fetch: a request that has already been redirected
-          AMaxRedirects (20) times fails with a network error. }
-        if Redirects >= AMaxRedirects then
-          raise EHTTPError.CreateFmt(REDIRECT_LIMIT_ERROR_MESSAGE,
-            [AMaxRedirects]);
-        Inc(Redirects);
-        Result.Redirected := True;
+        if APolicy.RedirectMode = hrmError then
+          raise EHTTPError.Create(REDIRECT_MODE_ERROR_MESSAGE);
+        { HTTP-redirect fetch: no Location header answers with the
+          response; a present one, even empty, is parsed against the
+          response's URL. }
+        if HasHeader(Raw.Headers, 'location') then
+        begin
+          Location := FindHeaderValue(Raw.Headers, 'location');
+          // WHATWG Fetch: Location parsed against the response's URL.
+          CurrentURL := ResolveHTTPRedirectURL(CurrentURL, Location);
+          NextParsed := ParseHTTPURL(CurrentURL);
+          { HTTP-redirect fetch: a request that has already been
+            redirected AMaxRedirects (20) times fails with a network
+            error. }
+          if Redirects >= AMaxRedirects then
+            raise EHTTPError.CreateFmt(REDIRECT_LIMIT_ERROR_MESSAGE,
+              [AMaxRedirects]);
+          Inc(Redirects);
+          Result.Redirected := True;
 
-        { Fetch removes Authorization once a redirect changes origin. Keep
-          caller credentials off every later hop, even if it returns here. }
-        if not SameHTTPOrigin(Parsed, NextParsed) then
-          SendCredentials := False;
+          { Fetch removes Authorization once a redirect changes origin.
+            Keep caller credentials off every later hop, even if it
+            returns here. }
+          if not SameHTTPOrigin(Parsed, NextParsed) then
+            SendCredentials := False;
 
-        { HTTP-redirect fetch: a 303 turns a request into GET unless it is
-          already GET or HEAD, so a HEAD request stays HEAD. }
-        if (Raw.StatusCode = HTTP_STATUS_SEE_OTHER) and (Method <> 'GET') and
-           not IsHead then
-          Method := 'GET';
+          { HTTP-redirect fetch: a 303 turns a request into GET unless it
+            is already GET or HEAD, so a HEAD request stays HEAD. }
+          if (Raw.StatusCode = HTTP_STATUS_SEE_OTHER) and
+             (Method <> 'GET') and not IsHead then
+            Method := 'GET';
 
-        Continue;
+          { The next hop reuses this connection only within the origin
+            (scheme, host and port), on a message that ended cleanly. }
+          if Raw.Reusable and SameHTTPOrigin(Parsed, NextParsed) then
+            Reused := True
+          else
+            CloseConnection;
+          Continue;
+        end;
       end;
-    end;
 
-    // No redirect — build final response
-    Result.StatusCode := Raw.StatusCode;
-    Result.StatusText := Raw.StatusText;
-    Result.Headers := Raw.Headers;
-    Result.Body := Raw.Body;
-    Result.FinalURL := CurrentURL;
-    Break;
+      // No redirect — build final response
+      Result.StatusCode := Raw.StatusCode;
+      Result.StatusText := Raw.StatusText;
+      Result.Headers := Raw.Headers;
+      Result.Body := Raw.Body;
+      Result.FinalURL := CurrentURL;
+      Break;
+    end;
+  finally
+    CloseConnection;
   end;
 end;
 

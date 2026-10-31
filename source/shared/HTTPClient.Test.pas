@@ -36,6 +36,7 @@ type
     procedure ExpectResetFailsTheRequestOnly(const ABlockSigPipe: Boolean);
     procedure TestTLSPeerThatResetsDoesNotRaiseSigPipe;
     procedure TestResetWithSigPipeBlockedLeavesNoneToDeliver;
+    procedure TestResetReusedTLSConnectionIsReplaced;
     {$IFEND}
     procedure TestRejectsAmbiguousAuthority;
     procedure TestAcceptsValidIPv6Literals;
@@ -57,6 +58,14 @@ type
     procedure TestRedirectStatusesAreFollowed;
     procedure TestSeeOtherKeepsHead;
     procedure TestEmptyLocationIsFollowed;
+    procedure TestSameOriginRedirectsShareAConnection;
+    procedure TestSilentlyClosedConnectionIsReplaced;
+    procedure TestAmbiguousFramingIsNotReused;
+    procedure TestLeftoverBytesAreNotAResponse;
+    procedure TestCrossOriginRedirectOpensAConnection;
+    procedure TestLateLeftoverBytesAreNotAResponse;
+    procedure TestArrivedResponseIsNotRequestedTwice;
+    procedure TestConnectionCloseWhenNoReuseCanFollow;
     {$ENDIF}
     procedure TestComparesOrigins;
     procedure TestClassifiesPrivateAddressRanges;
@@ -664,6 +673,8 @@ begin
     TestTLSPeerThatResetsDoesNotRaiseSigPipe);
   Test('A reset leaves no SIGPIPE pending for a thread that blocks it',
     TestResetWithSigPipeBlockedLeavesNoneToDeliver);
+  Test('A reused TLS connection the server resets is replaced once',
+    TestResetReusedTLSConnectionIsReplaced);
   {$IFEND}
   Test('Rejects ambiguous authority', TestRejectsAmbiguousAuthority);
   Test('Accepts valid IPv6 literals', TestAcceptsValidIPv6Literals);
@@ -697,6 +708,22 @@ begin
   Test('A 303 keeps a HEAD request HEAD', TestSeeOtherKeepsHead);
   Test('An empty Location resolves to the response URL and is followed',
     TestEmptyLocationIsFollowed);
+  Test('Redirects within the origin share one connection',
+    TestSameOriginRedirectsShareAConnection);
+  Test('A reused connection the server closed is replaced once',
+    TestSilentlyClosedConnectionIsReplaced);
+  Test('A response with ambiguous framing ends its connection',
+    TestAmbiguousFramingIsNotReused);
+  Test('Bytes left after a response are not read as the next one',
+    TestLeftoverBytesAreNotAResponse);
+  Test('A redirect to another origin opens its own connection',
+    TestCrossOriginRedirectOpensAConnection);
+  Test('Bytes arriving late after a response are not read as the next one',
+    TestLateLeftoverBytesAreNotAResponse);
+  Test('A response that arrived on a reused connection is not requested again',
+    TestArrivedResponseIsNotRequestedTwice);
+  Test('Connection: close is sent when no redirect can reuse the connection',
+    TestConnectionCloseWhenNoReuseCanFollow);
   {$ENDIF}
   Test('Compares origins by scheme, host and port', TestComparesOrigins);
   Test('Classifies private address ranges',
@@ -1059,6 +1086,172 @@ end;
 procedure THTTPClientTests.TestResetWithSigPipeBlockedLeavesNoneToDeliver;
 begin
   ExpectResetFailsTheRequestOnly(True);
+end;
+
+type
+  { A TLS server that answers the first request on a connection with a
+    redirect, reads the next request on it and resets the connection (RST, no
+    close_notify) instead of answering; on its next connection it answers
+    200. Counts its connections. }
+  TResettingTLSServer = class(TThread)
+  private
+    FListener: cint;
+    FCertificateFile: string;
+    FKeyFile: string;
+  protected
+    procedure Execute; override;
+  public
+    Port: Word;
+    Connections: Integer;
+    Failure: string;
+    constructor Create(const ACertificateFile, AKeyFile: string);
+    destructor Destroy; override;
+  end;
+
+constructor TResettingTLSServer.Create(const ACertificateFile,
+  AKeyFile: string);
+begin
+  FCertificateFile := ACertificateFile;
+  FKeyFile := AKeyFile;
+  FListener := CreateLoopbackListener(Port);
+  inherited Create(False);
+end;
+
+destructor TResettingTLSServer.Destroy;
+begin
+  CloseSocket(FListener);
+  inherited Destroy;
+end;
+
+procedure TResettingTLSServer.Execute;
+const
+  LOAD_WAIT_NANOSECONDS = Int64(10) * 1000 * 1000 * 1000;
+  REDIRECT: RawByteString = 'HTTP/1.1 302 Found'#13#10 +
+    'Location: /next'#13#10'Content-Length: 0'#13#10#13#10;
+  DONE: RawByteString = 'HTTP/1.1 200 OK'#13#10 +
+    'Content-Length: 2'#13#10#13#10'ok';
+var
+  Connection: cint;
+  Context: PSSL_CTX;
+  Deadline: Int64;
+  Linger: TLinger;
+  Request: array[0..4095] of Byte;
+  Session: PSSL;
+  I: Integer;
+begin
+  Context := nil;
+  try
+    for I := 1 to 2 do
+    begin
+      Connection := AcceptWithin(FListener);
+      if Connection < 0 then
+        Exit;
+      Inc(Connections);
+      Session := nil;
+      try
+        Deadline := GetNanoseconds + LOAD_WAIT_NANOSECONDS;
+        while not IsSSLloaded and (GetNanoseconds < Deadline) do
+          Sleep(5);
+        if not Assigned(Context) then
+        begin
+          Context := SslCtxNew(SslMethodTLSV1_2);
+          if not Assigned(Context) or
+             (SslCtxUseCertificateFile(Context, FCertificateFile,
+               SSL_FILETYPE_PEM) <> 1) or
+             (SslCtxUsePrivateKeyFile(Context, FKeyFile,
+               SSL_FILETYPE_PEM) <> 1) then
+          begin
+            Failure := 'the server could not load its certificate and key';
+            Exit;
+          end;
+        end;
+        Session := SslNew(Context);
+        SslSetFd(Session, Connection);
+        if SslAccept(Session) <> 1 then
+        begin
+          Failure := 'the TLS handshake failed';
+          Exit;
+        end;
+        if SslRead(Session, @Request[0], SizeOf(Request)) <= 0 then
+        begin
+          Failure := 'the client sent no request';
+          Exit;
+        end;
+        if I = 1 then
+        begin
+          SslWrite(Session, @REDIRECT[1], Length(REDIRECT));
+          if SslRead(Session, @Request[0], SizeOf(Request)) <= 0 then
+          begin
+            Failure := 'the client did not reuse the connection';
+            Exit;
+          end;
+          Linger.l_onoff := 1;
+          Linger.l_linger := 0;
+          fpSetSockOpt(Connection, SOL_SOCKET, SO_LINGER, @Linger,
+            SizeOf(Linger));
+        end
+        else
+          SslWrite(Session, @DONE[1], Length(DONE));
+      finally
+        if Assigned(Session) then
+          SslFree(Session);
+        CloseSocket(Connection);
+      end;
+    end;
+  finally
+    if Assigned(Context) then
+      SslCtxFree(Context);
+  end;
+end;
+
+procedure THTTPClientTests.TestResetReusedTLSConnectionIsReplaced;
+var
+  CertificateFile, KeyFile: string;
+  Headers: THTTPHeaders;
+  Response: THTTPResponse;
+  Server: TResettingTLSServer;
+  Outcome: string;
+
+  procedure WriteText(const AFileName: string; const AText: RawByteString);
+  var
+    Stream: TFileStream;
+  begin
+    Stream := TFileStream.Create(AFileName, fmCreate);
+    try
+      Stream.WriteBuffer(AText[1], Length(AText));
+    finally
+      Stream.Free;
+    end;
+  end;
+begin
+  CertificateFile := GetTempFileName('', 'goccia-tls-cert');
+  KeyFile := GetTempFileName('', 'goccia-tls-key');
+  WriteText(CertificateFile, TEST_CERTIFICATE);
+  WriteText(KeyFile, TEST_PRIVATE_KEY);
+  Setenv('SSL_CERT_FILE', PAnsiChar(AnsiString(CertificateFile)), 1);
+  SetLength(Headers, 0);
+  try
+    Server := TResettingTLSServer.Create(CertificateFile, KeyFile);
+    try
+      try
+        Response := HTTPGet(Format('https://localhost:%d/', [Server.Port]),
+          Headers, nil, 10000);
+        Outcome := IntToStr(Response.StatusCode);
+      except
+        on E: Exception do
+          Outcome := 'error: ' + E.Message;
+      end;
+      Server.WaitFor;
+      Expect<string>(Server.Failure).ToBe('');
+      Expect<string>(Outcome).ToBe('200');
+      Expect<Integer>(Server.Connections).ToBe(2);
+    finally
+      Server.Free;
+    end;
+  finally
+    DeleteFile(CertificateFile);
+    DeleteFile(KeyFile);
+  end;
 end;
 {$IFEND}
 
@@ -1619,6 +1812,305 @@ begin
     Server.WaitFor;
     Expect<Integer>(Response.StatusCode).ToBe(200);
     Expect<Boolean>(Pos('HEAD /next ', Server.RequestHead(2)) = 1).ToBe(True);
+  finally
+    Server.Free;
+  end;
+end;
+{$ENDIF}
+
+{$IFDEF UNIX}
+type
+  { Serves its canned answers in order, several on one connection: it reads
+    the next request on the same connection until the client closes it, then
+    accepts another. An answer that starts with the close marker is sent and its
+    connection closed without saying so; the part of an answer after the late
+    marker is sent 20 ms after the rest. Counts the connections it accepted. }
+  TKeepAliveServer = class(TThread)
+  private
+    FListener: cint;
+    FResponses: array of RawByteString;
+  protected
+    procedure Execute; override;
+  public
+    Port: Word;
+    Connections: Integer;
+    Served: Integer;
+    constructor Create(const AResponses: array of RawByteString);
+    destructor Destroy; override;
+  end;
+
+constructor TKeepAliveServer.Create(const AResponses: array of RawByteString);
+var
+  I: Integer;
+begin
+  SetLength(FResponses, Length(AResponses));
+  for I := 0 to High(AResponses) do
+    FResponses[I] := AResponses[I];
+  FListener := CreateLoopbackListener(Port);
+  inherited Create(False);
+end;
+
+destructor TKeepAliveServer.Destroy;
+begin
+  CloseSocket(FListener);
+  inherited Destroy;
+end;
+
+procedure TKeepAliveServer.Execute;
+var
+  Connection: cint;
+  Head, Reply, Late: RawByteString;
+  CloseAfter: Boolean;
+begin
+  while Served <= High(FResponses) do
+  begin
+    Connection := AcceptWithin(FListener);
+    if Connection < 0 then
+      Exit;
+    Inc(Connections);
+    try
+      while Served <= High(FResponses) do
+      begin
+        Head := ReceiveRequestHead(Connection);
+        if Head = '' then
+          Break;
+        Reply := FResponses[Served];
+        Inc(Served);
+        CloseAfter := Copy(Reply, 1, 7) = '{close}';
+        if CloseAfter then
+          Delete(Reply, 1, 7);
+        if Pos('{port}', Reply) > 0 then
+          Reply := RawByteString(StringReplace(string(Reply),
+            '{port}', IntToStr(Port), [rfReplaceAll]));
+        { The part after a late marker follows 20 ms later, in a segment
+          of its own. }
+        Late := '';
+        if Pos('{late}', Reply) > 0 then
+        begin
+          Late := Copy(Reply, Pos('{late}', Reply) + 6, MaxInt);
+          Reply := Copy(Reply, 1, Pos('{late}', Reply) - 1);
+        end;
+        fpSend(Connection, @Reply[1], Length(Reply),
+          {$IFDEF LINUX}MSG_NOSIGNAL{$ELSE}0{$ENDIF});
+        if Late <> '' then
+        begin
+          Sleep(20);
+          fpSend(Connection, @Late[1], Length(Late),
+            {$IFDEF LINUX}MSG_NOSIGNAL{$ELSE}0{$ENDIF});
+        end;
+        if CloseAfter then
+          Break;
+      end;
+    finally
+      CloseSocket(Connection);
+    end;
+  end;
+end;
+
+{ GETs http://127.0.0.1:<port>/ from AServer and answers 'status|body', or
+  'error: <message>'. }
+function FetchKeepAlive(const AServer: TKeepAliveServer;
+  const AHead: Boolean = False): string;
+var
+  Body: RawByteString;
+  Headers: THTTPHeaders;
+  Response: THTTPResponse;
+  URL: string;
+begin
+  SetLength(Headers, 0);
+  URL := Format('http://127.0.0.1:%d/', [AServer.Port]);
+  try
+    if AHead then
+      Response := HTTPHead(URL, Headers, nil, 5000)
+    else
+      Response := HTTPGet(URL, Headers, nil, 5000);
+    SetLength(Body, Length(Response.Body));
+    if Length(Response.Body) > 0 then
+      Move(Response.Body[0], Body[1], Length(Response.Body));
+    Result := IntToStr(Response.StatusCode) + '|' + string(Body);
+  except
+    on E: EHTTPError do
+      Result := 'error: ' + E.Message;
+  end;
+end;
+
+const
+  KEEP_ALIVE_HOP = 'HTTP/1.1 302 Found'#13#10 +
+    'Location: /next'#13#10'Content-Length: 0'#13#10#13#10;
+  KEEP_ALIVE_DONE = 'HTTP/1.1 200 OK'#13#10 +
+    'Content-Length: 2'#13#10#13#10'ok';
+
+procedure THTTPClientTests.TestSameOriginRedirectsShareAConnection;
+var
+  Server: TKeepAliveServer;
+begin
+  Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP, KEEP_ALIVE_HOP,
+    'HTTP/1.1 307 Temporary Redirect'#13#10'Location: /last'#13#10 +
+    'Transfer-Encoding: chunked'#13#10#13#10'5'#13#10'moved'#13#10'0'#13#10#13#10,
+    KEEP_ALIVE_DONE]);
+  try
+    Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
+    Server.WaitFor;
+    Expect<Integer>(Server.Served).ToBe(4);
+    Expect<Integer>(Server.Connections).ToBe(1);
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestSilentlyClosedConnectionIsReplaced;
+var
+  Server: TKeepAliveServer;
+begin
+  Server := TKeepAliveServer.Create(['{close}' + KEEP_ALIVE_HOP,
+    '{close}' + KEEP_ALIVE_HOP, KEEP_ALIVE_DONE]);
+  try
+    Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
+    Server.WaitFor;
+    Expect<Integer>(Server.Served).ToBe(3);
+    Expect<Integer>(Server.Connections).ToBe(3);
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestAmbiguousFramingIsNotReused;
+var
+  Server: TKeepAliveServer;
+begin
+  { Transfer-Encoding beside Content-Length (RFC 9112 section 6.3),
+    Connection: close, and a second Transfer-Encoding field: each answer ends
+    its connection. }
+  Server := TKeepAliveServer.Create([
+    'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Transfer-Encoding: chunked'#13#10'Content-Length: 5'#13#10#13#10 +
+    '0'#13#10#13#10,
+    'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Content-Length: 0'#13#10'Connection: close'#13#10#13#10,
+    'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Transfer-Encoding: chunked'#13#10'Transfer-Encoding: identity'#13#10#13#10 +
+    '0'#13#10#13#10,
+    KEEP_ALIVE_DONE]);
+  try
+    Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
+    Server.WaitFor;
+    Expect<Integer>(Server.Connections).ToBe(4);
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestLeftoverBytesAreNotAResponse;
+var
+  Server: TKeepAliveServer;
+begin
+  { A body past Content-Length, and a body sent to a HEAD request: the bytes
+    would be taken for the next response on a reused connection. }
+  Server := TKeepAliveServer.Create([
+    'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Content-Length: 2'#13#10#13#10'okHTTP/1.1 200 OK'#13#10 +
+    'Content-Length: 4'#13#10#13#10'EVIL',
+    KEEP_ALIVE_DONE]);
+  try
+    Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
+    Server.WaitFor;
+    Expect<Integer>(Server.Connections).ToBe(2);
+  finally
+    Server.Free;
+  end;
+  Server := TKeepAliveServer.Create([
+    'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Content-Length: 4'#13#10#13#10'junk',
+    'HTTP/1.1 200 OK'#13#10'Content-Length: 2'#13#10#13#10]);
+  try
+    Expect<string>(FetchKeepAlive(Server, True)).ToBe('200|');
+    Server.WaitFor;
+    Expect<Integer>(Server.Connections).ToBe(2);
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestCrossOriginRedirectOpensAConnection;
+var
+  Server: TKeepAliveServer;
+begin
+  Server := TKeepAliveServer.Create(['HTTP/1.1 302 Found'#13#10 +
+    'Location: http://localhost:{port}/other'#13#10 +
+    'Content-Length: 0'#13#10#13#10, KEEP_ALIVE_DONE]);
+  try
+    Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
+    Server.WaitFor;
+    Expect<Integer>(Server.Connections).ToBe(2);
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestLateLeftoverBytesAreNotAResponse;
+var
+  Server: TKeepAliveServer;
+  Started: Int64;
+begin
+  { Stray bytes with a blank line in them, after a complete redirect: read
+    as the next hop's response they would be one without a length, read
+    until the server closes. }
+  Server := TKeepAliveServer.Create([
+    'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Content-Length: 2'#13#10#13#10'ok{late}junk'#13#10#13#10,
+    KEEP_ALIVE_DONE, KEEP_ALIVE_DONE]);
+  try
+    Started := GetNanoseconds;
+    Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
+    Expect<Boolean>(GetNanoseconds - Started < Int64(3000) * 1000000)
+      .ToBe(True);
+    Server.WaitFor;
+    Expect<Integer>(Server.Connections).ToBe(2);
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestArrivedResponseIsNotRequestedTwice;
+var
+  Server: TKeepAliveServer;
+begin
+  { The second hop's answer is cut short on the reused connection: an error,
+    not a third request. }
+  Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP,
+    '{close}HTTP/1.1 200 OK'#13#10'Content-Length: 10'#13#10#13#10'abc',
+    KEEP_ALIVE_DONE]);
+  try
+    Expect<Boolean>(Pos('error: ', FetchKeepAlive(Server)) = 1).ToBe(True);
+    Expect<Integer>(Server.Served).ToBe(2);
+    { A retry would have taken this answer; the next fetch drains it. }
+    Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
+    Server.WaitFor;
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure THTTPClientTests.TestConnectionCloseWhenNoReuseCanFollow;
+var
+  Response: THTTPResponse;
+  Server: TCannedResponseServer;
+begin
+  Server := TCannedResponseServer.Create([REDIRECT_TO_NEXT]);
+  try
+    FetchStart(Server, RedirectPolicy(hrmManual), Response);
+    Server.WaitFor;
+    Expect<Boolean>(Pos('Connection: close', string(Server.RequestHead(1))) > 0)
+      .ToBe(True);
+  finally
+    Server.Free;
+  end;
+  Server := TCannedResponseServer.Create(RedirectChain(1, True));
+  try
+    FetchStart(Server, DefaultHTTPPolicy, Response);
+    Server.WaitFor;
+    Expect<Boolean>(Pos('Connection: close', string(Server.RequestHead(1))) > 0)
+      .ToBe(False);
   finally
     Server.Free;
   end;
