@@ -96,6 +96,7 @@ type
     anfDelegate, anfPrefix, anfShorthand, anfMethod, anfRest, anfStatic);
   TASTNodeFlags = set of TASTNodeFlag;
 
+  PASTFlatNode = ^TASTFlatNode;
   TASTFlatNode = record
     Kind: string;
     { Which flags this kind reports, and which of those are true. }
@@ -186,7 +187,8 @@ type
       const AFlags: TGocciaASTPartFlags); override;
     procedure LeavePart; override;
     procedure Run(const AProgram: TGocciaProgram);
-    function NodeAt(const AIndex: Integer): TASTFlatNode;
+    { The node's record in place. Valid until the next node is added. }
+    function NodeAt(const AIndex: Integer): PASTFlatNode;
     property Count: Integer read FCount;
   end;
 
@@ -519,9 +521,9 @@ begin
   FNodes[Result].TypeOnly := False;
 end;
 
-function TASTFlattener.NodeAt(const AIndex: Integer): TASTFlatNode;
+function TASTFlattener.NodeAt(const AIndex: Integer): PASTFlatNode;
 begin
-  Result := FNodes[AIndex];
+  Result := @FNodes[AIndex];
 end;
 
 procedure TASTFlattener.PushFrame(const AIndex, AStart, AFinish: Integer;
@@ -1016,23 +1018,84 @@ begin
   AOriginMap.Map(AOffset, ABias, Result);
 end;
 
-function CreatePositionObject(const ALine, AColumn: Integer): TGocciaObjectValue;
+const
+  { What an assignment to a fresh key of an ordinary object creates. The
+    result's objects are made here and their keys are distinct, so each is
+    defined directly, without the lookups an assignment makes first. }
+  RESULT_PROPERTY_FLAGS = [pfEnumerable, pfConfigurable, pfWritable];
+  NUMBER_CACHE_LENGTH = 1 shl 18;
+  POSITION_PROPERTY_COUNT = 2;
+  LOC_PROPERTY_COUNT = 2;
+  { children, kind, start, end, loc. }
+  NODE_BASE_PROPERTY_COUNT = 5;
+  { kind, start, end, loc. }
+  COMMENT_PROPERTY_COUNT = 4;
+
+type
+  { The numbers one result holds. Every offset, line and column in it lies
+    between 0 and one past the source's length, and a file repeats them
+    many times over — a node starts where its first child and first token
+    do — so each is made once and shared: a number is a primitive, and which
+    instance holds it is not observable. Making an object registers it but
+    never collects, and a cached value is attached to the object being built
+    before anything that can collect runs, so every value the cache holds is
+    reachable from the result while the cache lives. The table is capped, so
+    past NUMBER_CACHE_LENGTH a large source gets a fresh value per use rather
+    than a pointer per character that the memory budget does not count. }
+  TASTNumberValues = class
+  private
+    FValues: array of TGocciaNumberLiteralValue;
+  public
+    constructor Create(const ASourceLength: Integer);
+    function ValueOf(const AValue: Integer): TGocciaNumberLiteralValue;
+  end;
+
+constructor TASTNumberValues.Create(const ASourceLength: Integer);
 begin
-  Result := TGocciaObjectValue.Create;
-  Result.AssignProperty('line', TGocciaNumberLiteralValue.Create(ALine));
-  Result.AssignProperty('column', TGocciaNumberLiteralValue.Create(AColumn));
+  inherited Create;
+  if ASourceLength + 2 < NUMBER_CACHE_LENGTH then
+    SetLength(FValues, ASourceLength + 2)
+  else
+    SetLength(FValues, NUMBER_CACHE_LENGTH);
 end;
 
-function CreateLocObject(const AStartLine, AStartColumn, AEndLine,
-  AEndColumn: Integer): TGocciaObjectValue;
-var
-  Position: TGocciaObjectValue;
+function TASTNumberValues.ValueOf(
+  const AValue: Integer): TGocciaNumberLiteralValue;
 begin
-  Result := TGocciaObjectValue.Create;
-  Position := CreatePositionObject(AStartLine, AStartColumn);
-  Result.AssignProperty('start', Position);
-  Position := CreatePositionObject(AEndLine, AEndColumn);
-  Result.AssignProperty('end', Position);
+  if (AValue < 0) or (AValue > High(FValues)) then
+    Exit(TGocciaNumberLiteralValue.Create(AValue));
+  Result := FValues[AValue];
+  if Result = nil then
+  begin
+    Result := TGocciaNumberLiteralValue.Create(AValue);
+    FValues[AValue] := Result;
+  end;
+end;
+
+function CreatePositionObject(const ANumbers: TASTNumberValues;
+  const ALine, AColumn: Integer): TGocciaObjectValue;
+begin
+  Result := TGocciaObjectValue.Create(nil, POSITION_PROPERTY_COUNT);
+  Result.DefineFreshDataProperty('line', ANumbers.ValueOf(ALine),
+    RESULT_PROPERTY_FLAGS);
+  Result.DefineFreshDataProperty('column', ANumbers.ValueOf(AColumn),
+    RESULT_PROPERTY_FLAGS);
+end;
+
+{ Making an object registers it but never collects, so the loc object and
+  its positions need no rooting while they are made; the caller attaches the
+  loc object before anything that can collect runs. }
+function CreateLocObject(const ANumbers: TASTNumberValues;
+  const AStartLine, AStartColumn, AEndLine,
+  AEndColumn: Integer): TGocciaObjectValue;
+begin
+  Result := TGocciaObjectValue.Create(nil, LOC_PROPERTY_COUNT);
+  Result.DefineFreshDataProperty('start',
+    CreatePositionObject(ANumbers, AStartLine, AStartColumn),
+    RESULT_PROPERTY_FLAGS);
+  Result.DefineFreshDataProperty('end',
+    CreatePositionObject(ANumbers, AEndLine, AEndColumn),
+    RESULT_PROPERTY_FLAGS);
 end;
 
 const
@@ -1040,17 +1103,29 @@ const
     'async', 'generator', 'delegate', 'prefix', 'shorthand', 'method',
     'rest', 'static');
 
+{ Every array in the result is filled in index order as it is made, so an
+  element goes straight onto the end of its dense elements, where
+  ArrayCreateDataProperty would spell the index as a property key and parse
+  it back. }
+procedure AppendElement(const AArray: TGocciaArrayValue; const AIndex: Integer;
+  const AValue: TGocciaValue);
+begin
+  if not AArray.TryAppendDenseElementFast(AIndex, AValue) then
+    ArrayCreateDataProperty(AArray, AIndex, AValue);
+end;
+
 { Nodes are materialized parent-first. A node is held only by this call (its
   parent attaches it on return) while its kind string and its children are
   made, and each of those can collect, so it is rooted until it returns; every
   object it has attached by then is reachable from it. }
 function MaterializeNode(const AFlattener: TASTFlattener;
   const ACoordinates: IGocciaSourceCoordinates;
+  const ANumbers: TASTNumberValues;
   const AIndex: Integer): TGocciaObjectValue;
 var
   Children: TGocciaArrayValue;
-  Node: TASTFlatNode;
-  ChildIndex, Position: Integer;
+  Node: PASTFlatNode;
+  ChildIndex, Position, PropertyCount: Integer;
   StartLine, StartColumn, EndLine, EndColumn: Integer;
   Flag: TASTNodeFlag;
   Roots: TGocciaActiveRootFrame;
@@ -1059,47 +1134,58 @@ begin
   { The line and column are read off the caller's text at the mapped
     offsets — deriving them rather than translating them separately is what
     keeps `loc` and the range the same answer. }
-  ACoordinates.PositionAtOffset(Node.StartOffset, StartLine, StartColumn);
-  ACoordinates.PositionAtOffset(Node.EndOffset, EndLine, EndColumn);
+  ACoordinates.PositionAtOffset(Node^.StartOffset, StartLine, StartColumn);
+  ACoordinates.PositionAtOffset(Node^.EndOffset, EndLine, EndColumn);
   Roots.Initialize;
   try
-    Result := TGocciaObjectValue.Create;
+    PropertyCount := NODE_BASE_PROPERTY_COUNT + Ord(Node^.OperatorText <> '') +
+      Ord(Node^.BodyKind <> '') + Ord(Node^.HasTypeOnly);
+    for Flag := Low(TASTNodeFlag) to High(TASTNodeFlag) do
+      if Flag in Node^.FlagKinds then
+        Inc(PropertyCount);
+    Result := TGocciaObjectValue.Create(nil, PropertyCount);
     Roots.Add(Result);
     Children := TGocciaArrayValue.Create;
-    Result.AssignProperty('children', Children);
-    Result.AssignProperty('kind', TGocciaStringLiteralValue.Create(Node.Kind));
-    Result.AssignProperty('start',
-      TGocciaNumberLiteralValue.Create(Node.StartOffset));
-    Result.AssignProperty('end',
-      TGocciaNumberLiteralValue.Create(Node.EndOffset));
-    Result.AssignProperty('loc', CreateLocObject(StartLine, StartColumn,
-      EndLine, EndColumn));
-    if Node.OperatorText <> '' then
-      Result.AssignProperty('operator',
-        TGocciaStringLiteralValue.Create(Node.OperatorText));
-    if Node.BodyKind <> '' then
-      Result.AssignProperty('bodyKind',
-        TGocciaStringLiteralValue.Create(Node.BodyKind));
+    Result.DefineFreshDataProperty('children', Children, RESULT_PROPERTY_FLAGS);
+    Result.DefineFreshDataProperty('kind',
+      TGocciaStringLiteralValue.Create(Node^.Kind), RESULT_PROPERTY_FLAGS);
+    Result.DefineFreshDataProperty('start',
+      ANumbers.ValueOf(Node^.StartOffset), RESULT_PROPERTY_FLAGS);
+    Result.DefineFreshDataProperty('end',
+      ANumbers.ValueOf(Node^.EndOffset), RESULT_PROPERTY_FLAGS);
+    Result.DefineFreshDataProperty('loc', CreateLocObject(ANumbers, StartLine,
+      StartColumn, EndLine, EndColumn), RESULT_PROPERTY_FLAGS);
+    if Node^.OperatorText <> '' then
+      Result.DefineFreshDataProperty('operator',
+        TGocciaStringLiteralValue.Create(Node^.OperatorText),
+        RESULT_PROPERTY_FLAGS);
+    if Node^.BodyKind <> '' then
+      Result.DefineFreshDataProperty('bodyKind',
+        TGocciaStringLiteralValue.Create(Node^.BodyKind), RESULT_PROPERTY_FLAGS);
     for Flag := Low(TASTNodeFlag) to High(TASTNodeFlag) do
-      if Flag in Node.FlagKinds then
-        if Flag in Node.Flags then
-          Result.AssignProperty(FLAG_NAMES[Flag], TGocciaBooleanLiteralValue.TrueValue)
+      if Flag in Node^.FlagKinds then
+        if Flag in Node^.Flags then
+          Result.DefineFreshDataProperty(FLAG_NAMES[Flag],
+            TGocciaBooleanLiteralValue.TrueValue, RESULT_PROPERTY_FLAGS)
         else
-          Result.AssignProperty(FLAG_NAMES[Flag], TGocciaBooleanLiteralValue.FalseValue);
-    if Node.HasTypeOnly then
-      if Node.TypeOnly then
-        Result.AssignProperty('typeOnly', TGocciaBooleanLiteralValue.TrueValue)
+          Result.DefineFreshDataProperty(FLAG_NAMES[Flag],
+            TGocciaBooleanLiteralValue.FalseValue, RESULT_PROPERTY_FLAGS);
+    if Node^.HasTypeOnly then
+      if Node^.TypeOnly then
+        Result.DefineFreshDataProperty('typeOnly',
+          TGocciaBooleanLiteralValue.TrueValue, RESULT_PROPERTY_FLAGS)
       else
-        Result.AssignProperty('typeOnly', TGocciaBooleanLiteralValue.FalseValue);
+        Result.DefineFreshDataProperty('typeOnly',
+          TGocciaBooleanLiteralValue.FalseValue, RESULT_PROPERTY_FLAGS);
 
     Position := 0;
-    ChildIndex := Node.FirstChild;
+    ChildIndex := Node^.FirstChild;
     while ChildIndex >= 0 do
     begin
-      ArrayCreateDataProperty(Children, Position,
-        MaterializeNode(AFlattener, ACoordinates, ChildIndex));
+      AppendElement(Children, Position,
+        MaterializeNode(AFlattener, ACoordinates, ANumbers, ChildIndex));
       Inc(Position);
-      ChildIndex := AFlattener.NodeAt(ChildIndex).NextSibling;
+      ChildIndex := AFlattener.NodeAt(ChildIndex)^.NextSibling;
     end;
   finally
     Roots.Clear;
@@ -1453,7 +1539,7 @@ end;
   are immutable and shared: a file has tens of thousands of tokens and
   sixteen types. }
 procedure MaterializeTokens(const ATarget: TGocciaArrayValue;
-  const ATokens: TASTFlatTokenArray);
+  const ATokens: TASTFlatTokenArray; const ANumbers: TASTNumberValues);
 var
   TypeValues: array[TASTTokenType] of TGocciaStringLiteralValue;
   TokenType: TASTTokenType;
@@ -1467,7 +1553,7 @@ begin
   begin
     TokenObject := TGocciaObjectValue.Create(
       TGocciaObjectValue.SharedObjectPrototype, TOKEN_PROPERTY_COUNT);
-    ArrayCreateDataProperty(ATarget, I, TokenObject);
+    AppendElement(ATarget, I, TokenObject);
     TokenType := ATokens[I].TokenType;
     if TypeValues[TokenType] = nil then
       TypeValues[TokenType] :=
@@ -1475,13 +1561,13 @@ begin
     // The object was made just above, so each key is a fresh data property
     // and needs none of the checks an assignment makes.
     TokenObject.DefineFreshDataProperty(PROP_TOKEN_TYPE, TypeValues[TokenType],
-      [pfEnumerable, pfConfigurable, pfWritable]);
+      RESULT_PROPERTY_FLAGS);
     TokenObject.DefineFreshDataProperty(PROP_TOKEN_START,
-      TGocciaNumberLiteralValue.Create(ATokens[I].StartOffset),
-      [pfEnumerable, pfConfigurable, pfWritable]);
+      ANumbers.ValueOf(ATokens[I].StartOffset),
+      RESULT_PROPERTY_FLAGS);
     TokenObject.DefineFreshDataProperty(PROP_TOKEN_END,
-      TGocciaNumberLiteralValue.Create(ATokens[I].EndOffset),
-      [pfEnumerable, pfConfigurable, pfWritable]);
+      ANumbers.ValueOf(ATokens[I].EndOffset),
+      RESULT_PROPERTY_FLAGS);
   end;
 end;
 
@@ -1557,6 +1643,7 @@ var
   TokenCollector: TASTTokenCollector;
   FlatTokens: TASTFlatTokenArray;
   Tokens: TGocciaArrayValue;
+  Numbers: TASTNumberValues;
 begin
   { Normalized up front so the text handed back is the text the offsets index:
     the pipeline normalizes line terminators before it lexes, and a CRLF file
@@ -1611,8 +1698,10 @@ begin
     SourceLines.Free;
   end;
 
+  Numbers := nil;
   InitializeTempRoot(ResultRoot);
   try
+    Numbers := TASTNumberValues.Create(Length(SourceText));
     ResultObject := TGocciaObjectValue.Create;
     AddTempRootIfNeeded(ResultRoot, ResultObject);
 
@@ -1632,7 +1721,7 @@ begin
     try
       Flattener.Run(PipelineResult.ProgramNode);
       ResultObject.AssignProperty('root',
-        MaterializeNode(Flattener, Coordinates, 0));
+        MaterializeNode(Flattener, Coordinates, Numbers, 0));
     finally
       Flattener.Free;
     end;
@@ -1645,8 +1734,8 @@ begin
       // kinds it has always had.
       if CommentSpans[I].Kind = gckHashbang then
         Continue;
-      CommentObject := TGocciaObjectValue.Create;
-      ArrayCreateDataProperty(Comments, CommentIndex, CommentObject);
+      CommentObject := TGocciaObjectValue.Create(nil, COMMENT_PROPERTY_COUNT);
+      AppendElement(Comments, CommentIndex, CommentObject);
       Inc(CommentIndex);
       StartOffset := MappedOffset(PipelineResult.OriginMap,
         CommentSpans[I].StartOffset, obStart);
@@ -1654,14 +1743,16 @@ begin
         CommentSpans[I].EndOffset, obEnd);
       Coordinates.PositionAtOffset(StartOffset, StartLine, StartColumn);
       Coordinates.PositionAtOffset(EndOffset, EndLine, EndColumn);
-      CommentObject.AssignProperty('kind',
-        TGocciaStringLiteralValue.Create(CommentKindName(CommentSpans[I].Kind)));
-      CommentObject.AssignProperty('start',
-        TGocciaNumberLiteralValue.Create(StartOffset));
-      CommentObject.AssignProperty('end',
-        TGocciaNumberLiteralValue.Create(EndOffset));
-      CommentObject.AssignProperty('loc',
-        CreateLocObject(StartLine, StartColumn, EndLine, EndColumn));
+      CommentObject.DefineFreshDataProperty('kind',
+        TGocciaStringLiteralValue.Create(CommentKindName(CommentSpans[I].Kind)),
+        RESULT_PROPERTY_FLAGS);
+      CommentObject.DefineFreshDataProperty('start',
+        Numbers.ValueOf(StartOffset), RESULT_PROPERTY_FLAGS);
+      CommentObject.DefineFreshDataProperty('end',
+        Numbers.ValueOf(EndOffset), RESULT_PROPERTY_FLAGS);
+      CommentObject.DefineFreshDataProperty('loc',
+        CreateLocObject(Numbers, StartLine, StartColumn, EndLine, EndColumn),
+        RESULT_PROPERTY_FLAGS);
     end;
 
     if WantTokens then
@@ -1674,12 +1765,13 @@ begin
       end;
       Tokens := TGocciaArrayValue.Create;
       ResultObject.AssignProperty(PROP_TOKENS, Tokens);
-      MaterializeTokens(Tokens, FlatTokens);
+      MaterializeTokens(Tokens, FlatTokens, Numbers);
     end;
 
     Result := ResultObject;
   finally
     RemoveTempRootIfNeeded(ResultRoot);
+    Numbers.Free;
     PipelineResult.Free;
   end;
 end;
