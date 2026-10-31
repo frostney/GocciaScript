@@ -2588,6 +2588,10 @@ type
     FReturnValue: TGocciaValue;
     FReturnRequiresAwait: Boolean;
     FReturnResumeValueAwaited: Boolean;
+    // The async generator whose request this body is running, while the body
+    // is suspended on an await. The await's reaction settles the request and
+    // continues that generator's queue in the same job (ES2026 §27.6.3.2).
+    FQueueOwner: TGocciaValue;
     FHasContinuation: Boolean;
     FContinuationIP: Integer;
     // The suspended frame's registers and local cells occupy the first
@@ -2703,14 +2707,12 @@ type
     FQueueHead: Integer;
     FQueueCount: Integer;
     FQueueRunning: Boolean;
-    function ContinueQueue(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
     function DequeueRequest(
       out ARequest: TGocciaBytecodeAsyncGeneratorRequest): Boolean;
     procedure EnqueueRequest(
       const ARequest: TGocciaBytecodeAsyncGeneratorRequest);
     procedure FinishRequest;
-    procedure ContinueWhenPromiseSettles(const APromise: TGocciaPromiseValue);
+    procedure ContinueWhenBodySettles;
     procedure AwaitYieldValue(const ARequestPromise: TGocciaPromiseValue;
       const AValue: TGocciaValue);
     procedure AwaitReturnValue(const ARequestPromise: TGocciaPromiseValue;
@@ -4472,6 +4474,7 @@ var
   ReturnMethod: TGocciaValue;
   ReturnMethodCalled: Boolean;
   ReturnAwaitsValue: Boolean;
+  ReturnResumeRoot: TGocciaTempRoot;
   ReturnResumeValue: TGocciaValue;
   YieldedValue: TGocciaValue;
   HadDelegateContinuation: Boolean;
@@ -4572,109 +4575,118 @@ begin
       FReturnValue := nil;
       ReturnMethodCalled := False;
       ReturnAwaitsValue := False;
+      InitializeTempRoot(ReturnResumeRoot);
       OriginalReturnResumeValue := RegisterToValue(FResumeValue);
       ReturnResumeValue := OriginalReturnResumeValue;
       if Assigned(FClosure) and Assigned(FClosure.Template) and
          FClosure.Template.IsAsync then
         ReturnResumeValue := AwaitValue(ReturnResumeValue);
-      if Assigned(FDelegateIterator) then
-        NextResult := FDelegateIterator.ReturnValue(ReturnResumeValue)
-      else if Assigned(FDelegateIteratorValue) then
-      begin
-        if IsAsyncGeneratorClosure and
-           (FDelegateIteratorValue is TGocciaVMAsyncIteratorRecordValue) then
+      // The awaited value lives only in this local until FReturnValue takes
+      // it, and the delegate's return getter and method run script code that
+      // can collect it.
+      AddTempRootIfNeeded(ReturnResumeRoot, ReturnResumeValue);
+      try
+        if Assigned(FDelegateIterator) then
+          NextResult := FDelegateIterator.ReturnValue(ReturnResumeValue)
+        else if Assigned(FDelegateIteratorValue) then
         begin
-          if TGocciaVMAsyncIteratorRecordValue(FDelegateIteratorValue)
-             .GetUnderlyingReturnMethod(NextResult) then
+          if IsAsyncGeneratorClosure and
+             (FDelegateIteratorValue is TGocciaVMAsyncIteratorRecordValue) then
           begin
-            if not NextResult.IsCallable then
-              ClearDelegateAndThrowTypeError('Iterator return is not callable');
-            CallArgs := TGocciaArgumentsCollection.Create([ReturnResumeValue]);
-            try
-              NextResult := CallDelegateMethod(NextResult,
-                TGocciaVMAsyncIteratorRecordValue(FDelegateIteratorValue)
-                  .FIteratorValue, CallArgs);
-              ReturnMethodCalled := True;
-            finally
-              CallArgs.Free;
-            end;
+            if TGocciaVMAsyncIteratorRecordValue(FDelegateIteratorValue)
+               .GetUnderlyingReturnMethod(NextResult) then
+            begin
+              if not NextResult.IsCallable then
+                ClearDelegateAndThrowTypeError('Iterator return is not callable');
+              CallArgs := TGocciaArgumentsCollection.Create([ReturnResumeValue]);
+              try
+                NextResult := CallDelegateMethod(NextResult,
+                  TGocciaVMAsyncIteratorRecordValue(FDelegateIteratorValue)
+                    .FIteratorValue, CallArgs);
+                ReturnMethodCalled := True;
+              finally
+                CallArgs.Free;
+              end;
+            end
+            else
+              NextResult := nil;
           end
           else
-            NextResult := nil;
-        end
-        else
-          NextResult := FDelegateIteratorValue.GetProperty(PROP_RETURN);
-        if not ReturnMethodCalled then
-        begin
-          if Assigned(NextResult) and
-             not (NextResult is TGocciaUndefinedLiteralValue) and
-             not (NextResult is TGocciaNullLiteralValue) then
+            NextResult := FDelegateIteratorValue.GetProperty(PROP_RETURN);
+          if not ReturnMethodCalled then
           begin
-            if not NextResult.IsCallable then
-              ClearDelegateAndThrowTypeError('Iterator return is not callable');
-            CallArgs := TGocciaArgumentsCollection.Create([ReturnResumeValue]);
-            try
-              NextResult := CallDelegateMethod(NextResult,
-                FDelegateIteratorValue, CallArgs);
-            finally
-              CallArgs.Free;
-            end;
+            if Assigned(NextResult) and
+               not (NextResult is TGocciaUndefinedLiteralValue) and
+               not (NextResult is TGocciaNullLiteralValue) then
+            begin
+              if not NextResult.IsCallable then
+                ClearDelegateAndThrowTypeError('Iterator return is not callable');
+              CallArgs := TGocciaArgumentsCollection.Create([ReturnResumeValue]);
+              try
+                NextResult := CallDelegateMethod(NextResult,
+                  FDelegateIteratorValue, CallArgs);
+              finally
+                CallArgs.Free;
+              end;
+            end
+            else
+              NextResult := nil;
           end
-          else
-            NextResult := nil;
-        end
-      end;
-      if Assigned(NextResult) then
-      begin
-        if not (NextResult is TGocciaObjectValue) then
-          ClearDelegateAndThrowTypeError('Iterator return result is not an object');
-        DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
-        Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
-        if not Done then
-        begin
-          if IsAsyncGeneratorClosure then
-          begin
-            YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
-            if not Assigned(YieldedValue) then
-              YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-          end
-          else
-            YieldedValue := NextResult;
-          CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
-            AResumeRegister, AContinuationIP);
-          SignalYield(
-            VMValueToRegisterFast(YieldedValue),
-            Ord(not IsAsyncGeneratorClosure));
-          Exit;
         end;
-        YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
-        if not Assigned(YieldedValue) then
-          YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
-        if IsAsyncGeneratorClosure and
-           (FDelegateIteratorValue is TGocciaVMAsyncIteratorRecordValue) and
-           TGocciaVMAsyncIteratorRecordValue(FDelegateIteratorValue)
-             .LastReturnMethodMissing then
-          ReturnAwaitsValue := True
-        else
-          FReturnValue := YieldedValue;
+        if Assigned(NextResult) then
+        begin
+          if not (NextResult is TGocciaObjectValue) then
+            ClearDelegateAndThrowTypeError('Iterator return result is not an object');
+          DoneValue := TGocciaObjectValue(NextResult).GetProperty(PROP_DONE);
+          Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
+          if not Done then
+          begin
+            if IsAsyncGeneratorClosure then
+            begin
+              YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+              if not Assigned(YieldedValue) then
+                YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+            end
+            else
+              YieldedValue := NextResult;
+            CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
+              AResumeRegister, AContinuationIP);
+            SignalYield(
+              VMValueToRegisterFast(YieldedValue),
+              Ord(not IsAsyncGeneratorClosure));
+            Exit;
+          end;
+          YieldedValue := TGocciaObjectValue(NextResult).GetProperty(PROP_VALUE);
+          if not Assigned(YieldedValue) then
+            YieldedValue := TGocciaUndefinedLiteralValue.UndefinedValue;
+          if IsAsyncGeneratorClosure and
+             (FDelegateIteratorValue is TGocciaVMAsyncIteratorRecordValue) and
+             TGocciaVMAsyncIteratorRecordValue(FDelegateIteratorValue)
+               .LastReturnMethodMissing then
+            ReturnAwaitsValue := True
+          else
+            FReturnValue := YieldedValue;
+        end;
+        ClearDelegateState;
+        if not Assigned(FReturnValue) and not ReturnAwaitsValue then
+        begin
+          if Assigned(FClosure) and Assigned(FClosure.Template) and
+             FClosure.Template.IsAsync then
+            ReturnAwaitsValue := True
+          else
+            FReturnValue := ReturnResumeValue;
+        end;
+        // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression, step
+        // 7.c.ii: with no delegate return method, an async generator awaits the
+        // value before the return completion unwinds through any finally.
+        if ReturnAwaitsValue then
+          FReturnValue := AwaitValue(ReturnResumeValue);
+        if not Assigned(FReturnSentinel) then
+          FReturnSentinel := TGocciaObjectValue.Create;
+        raise EGocciaBytecodeThrow.Create(FReturnSentinel);
+      finally
+        RemoveTempRootIfNeeded(ReturnResumeRoot);
       end;
-      ClearDelegateState;
-      if not Assigned(FReturnValue) and not ReturnAwaitsValue then
-      begin
-        if Assigned(FClosure) and Assigned(FClosure.Template) and
-           FClosure.Template.IsAsync then
-          ReturnAwaitsValue := True
-        else
-          FReturnValue := ReturnResumeValue;
-      end;
-      // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression, step
-      // 7.c.ii: with no delegate return method, an async generator awaits the
-      // value before the return completion unwinds through any finally.
-      if ReturnAwaitsValue then
-        FReturnValue := AwaitValue(ReturnResumeValue);
-      if not Assigned(FReturnSentinel) then
-        FReturnSentinel := TGocciaObjectValue.Create;
-      raise EGocciaBytecodeThrow.Create(FReturnSentinel);
     end;
 
     if FResumeKind = bgrkThrow then
@@ -5062,6 +5074,8 @@ function TGocciaVMAsyncAwaitContinuationValue.HandleReaction(
 var
   Done: Boolean;
   PreviousAsyncPromise: TGocciaPromiseValue;
+  QueueOwner: TGocciaBytecodeAsyncGeneratorObjectValue;
+  QueueOwnerRoot: TGocciaTempRoot;
   ResumeValue: TGocciaValue;
   ResultValue: TGocciaValue;
   Suspended: Boolean;
@@ -5105,6 +5119,21 @@ begin
     end;
   finally
     FVM.FCurrentAsyncPromise := PreviousAsyncPromise;
+  end;
+  // The request is settled: an async generator body finishes it and runs the
+  // queued requests now, in this job (ContinueWhenBodySettles).
+  if Assigned(FContinuation.FQueueOwner) then
+  begin
+    QueueOwner := TGocciaBytecodeAsyncGeneratorObjectValue(
+      FContinuation.FQueueOwner);
+    FContinuation.FQueueOwner := nil;
+    InitializeTempRoot(QueueOwnerRoot);
+    AddTempRootIfNeeded(QueueOwnerRoot, QueueOwner);
+    try
+      QueueOwner.FinishRequest;
+    finally
+      RemoveTempRootIfNeeded(QueueOwnerRoot);
+    end;
   end;
 end;
 
@@ -5310,6 +5339,8 @@ begin
   end;
   MarkRegisterReferences(FThisValue);
   MarkRegisterReferences(FResumeValue);
+  if Assigned(FQueueOwner) then
+    FQueueOwner.MarkReferences;
   if FYieldPending then
     MarkRegisterReferences(FPendingYieldValue);
   if Assigned(FAwaitOnFulfilled) then
@@ -5373,15 +5404,6 @@ begin
   Result := Request.Promise;
 end;
 
-function TGocciaBytecodeAsyncGeneratorObjectValue.ContinueQueue(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-begin
-  FQueueRunning := False;
-  ProcessQueue;
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
 function TGocciaBytecodeAsyncGeneratorObjectValue.DequeueRequest(
   out ARequest: TGocciaBytecodeAsyncGeneratorRequest): Boolean;
 begin
@@ -5428,15 +5450,14 @@ begin
   ProcessQueue;
 end;
 
-procedure TGocciaBytecodeAsyncGeneratorObjectValue.ContinueWhenPromiseSettles(
-  const APromise: TGocciaPromiseValue);
-var
-  ContinueFunction: TGocciaNativeFunctionValue;
+// The body suspended on an await: the request stays the running one until
+// that await's reaction (TGocciaVMAsyncAwaitContinuationValue.HandleReaction)
+// settles it, which then finishes the request and continues the queue in the
+// same job, as AsyncGeneratorCompleteStep and AsyncGeneratorDrainQueue do
+// (ES2026 §27.6.3.2).
+procedure TGocciaBytecodeAsyncGeneratorObjectValue.ContinueWhenBodySettles;
 begin
-  ContinueFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    ContinueQueue, 'async-generator-continue', 1);
-  ContinueFunction.CapturedRoot := Self;
-  APromise.InvokeThen(ContinueFunction, ContinueFunction);
+  FInner.FQueueOwner := Self;
 end;
 
 procedure TGocciaBytecodeAsyncGeneratorObjectValue.AwaitYieldValue(
@@ -5532,7 +5553,7 @@ begin
         AwaitYieldValue(ARequestPromise, ResultValue);
     except
       on E: EGocciaBytecodeAsyncSuspend do
-        ContinueWhenPromiseSettles(ARequestPromise);
+        ContinueWhenBodySettles;
       on E: EGocciaBytecodeThrow do
       begin
         ARequestPromise.Reject(E.ThrownValue);
@@ -5635,7 +5656,7 @@ begin
             if Suspended then
             begin
               // As for EGocciaBytecodeAsyncSuspend below.
-              ContinueWhenPromiseSettles(ARequest.Promise);
+              ContinueWhenBodySettles;
               Exit;
             end;
             try
@@ -5671,7 +5692,7 @@ begin
 	          except
 	            on E: EGocciaBytecodeAsyncSuspend do
 	            begin
-              ContinueWhenPromiseSettles(ARequest.Promise);
+              ContinueWhenBodySettles;
 	            end;
 	          end;
         finally
@@ -18030,6 +18051,8 @@ begin
     AWriter.Refuse('a generator with a yield still pending');
   if G.FState = bgsExecuting then
     AWriter.Refuse('a generator that is running');
+  if Assigned(G.FQueueOwner) then
+    AWriter.Refuse('no snapshot codec for an async generator request queue');
   WriteSnapshotClosure(AWriter, G.FClosure);
   AWriter.WriteRegister(G.FThisValue);
   WriteSnapshotRegisters(AWriter, G.FArguments, Length(G.FArguments));

@@ -313,6 +313,25 @@ test("a return outside try settles requests queued behind it in the same job", a
   expect(log).toEqual(["first", "second"]);
 });
 
+test("a return that leaves try settles requests queued behind it in the same job", async () => {
+  const log = [];
+  const helpers = {
+    async *gen() {
+      try {
+        return 1;
+      } finally {
+        log.push("finally");
+      }
+    },
+  };
+  const iter = helpers.gen();
+  iter.next().then((result) => log.push("first " + result.value));
+  iter.next().then((result) => log.push("second " + result.done));
+  await 0;
+  await 0;
+  expect(log).toEqual(["finally", "first 1", "second true"]);
+});
+
 test("a return in finally during return() awaits its value", async () => {
   const log = [];
   const thenable = {
