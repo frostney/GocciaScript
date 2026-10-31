@@ -1703,14 +1703,6 @@ begin
     CheckExecutionTimeoutNow;
     CheckInstructionLimit;
 
-    { Host work an extension owns is real work too: a promise it settles from
-      its WaitForIdle settles in the engine's idle wait, so it must settle
-      here, where an async test's promise, `.resolves` and async hooks wait.
-      Fetch and real timers are not part of it: they are waited for below,
-      in the order that comment explains. }
-    if Assigned(GPromiseWaitHostWork) and GPromiseWaitHostWork() then
-      Continue;
-
     Manager := TGocciaFetchManager.Instance;
     HasPendingFetch := Assigned(Manager) and Manager.HasPending;
 
@@ -1731,6 +1723,18 @@ begin
       Sleep(FETCH_POLL_INTERVAL_MS);
       Continue;
     end;
+
+    { Host work an extension owns is real work too: a promise it settles from
+      its WaitForIdle settles in the engine's idle wait, so it must settle
+      here, where an async test's promise, `.resolves` and async hooks wait.
+      It comes after fetch. An extension's WaitForIdle may block until its
+      work ends, and the script may end that work only after a fetch it
+      awaits settles, which needs the polls above; run first, it would hold
+      the fetch until the extension gave up. It comes before Atomics waiters
+      and virtual time, which would otherwise starve it. Fetch and real timers
+      themselves opt out (RunPendingWorkForPromiseWait). }
+    if Assigned(GPromiseWaitHostWork) and GPromiseWaitHostWork() then
+      Continue;
 
     { A pending async Atomics waiter is not, unlike a fetch, necessarily
       resolved by outside work: a real-mode timer calling Atomics.notify can be

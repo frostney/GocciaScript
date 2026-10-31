@@ -20,14 +20,24 @@ timers, and nothing an extension owns.
 
 ## Decision
 
-**`WaitForFetchPromise` runs the running engine's extension work before it
-polls fetch or runs a timer.** `TGocciaEngineExtension` and
+**`WaitForFetchPromise` runs the running engine's extension work once no
+fetch is in flight, before it waits on an `Atomics.waitAsync` waiter or runs a
+timer.** `TGocciaEngineExtension` and
 `TGocciaRuntimeExtension` gain a virtual `RunPendingWorkForPromiseWait`. Its
 default runs `WaitForIdle` when `HasPendingWork` is True and returns whether
 it was. `TGocciaRuntimeCore` forwards it to each of its extensions. The engine
 installs a hook (`GPromiseWaitHostWork` in `Goccia.FetchManager`) that calls
 it on every extension of the innermost running engine on the thread. When any
 had work, the wait drains microtasks again before it checks anything else.
+
+- **After fetch.** An extension's `WaitForIdle` may block until its work
+  ends, and a script may end that work only after a fetch it awaits settles.
+  Run while the fetch was in flight, it would hold the fetch until the
+  extension gave up. Fetch completions are only polled on this thread, so the
+  extension's work waits for them instead.
+- **Before `Atomics.waitAsync` waiters and virtual time.** A waiter with no
+  timeout keeps that part of the wait polling indefinitely, and real work
+  outranks virtual time, as for fetch.
 
 - **Fetch and timers opt out.** The wait already polls fetch completions and
   runs real timers one at a time, in an order chosen so that a fetch raced
@@ -45,6 +55,9 @@ had work, the wait drains microtasks again before it checks anything else.
   middle of a test.
 - **A separate hook the test library calls.** A synchronous `await` reaches
   the same wait and has the same gap.
+- **Run the extension work before polling fetch.** A test that starts host
+  work, awaits a fetch and only then ends the host work would block in the
+  extension until it gave up.
 
 ## Consequences
 
@@ -55,6 +68,8 @@ had work, the wait drains microtasks again before it checks anything else.
   timers, overrides `RunPendingWorkForPromiseWait` to return False.
 - With a pause-checkpoint handler installed, a host call awaited inside a
   test still is not served by the promise wait.
+- While any fetch is in flight, an extension's work waits for it, even when
+  the awaited promise is the extension's own.
 
 ## Related
 
