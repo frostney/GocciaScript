@@ -221,6 +221,7 @@ type
       out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
     procedure RunScriptsParallel(const AFiles: TStringList;
       const AJobCount: Integer);
+    procedure RunScriptsSequentially(const AFiles: TStringList);
     procedure RunScripts(const APath: string);
     function ProfileJobCount(const AFileCount: Integer): Integer;
     procedure BeginProfileEntry;
@@ -1616,10 +1617,27 @@ begin
   end;
 end;
 
+procedure TRunnerApp.RunScriptsSequentially(const AFiles: TStringList);
+var
+  I: Integer;
+begin
+  for I := 0 to AFiles.Count - 1 do
+  begin
+    if I > 0 then
+      WriteLn;
+    RunScriptFromFile(AFiles[I]);
+    { Reclaim this file's garbage before the next one, as the JSON, stdin and
+      parallel paths do. Without this every freed engine's garbage stayed
+      live until an automatic collection happened to run, so memory grew
+      with every file or --multifile section. }
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.Collect;
+  end;
+end;
+
 procedure TRunnerApp.RunScripts(const APath: string);
 var
   Files, RawFiles, SinglePath: TStringList;
-  I: Integer;
 begin
   if IsStdinPath(APath) then
   begin
@@ -1643,12 +1661,7 @@ begin
         RunScriptsParallel(Files, ProfileJobCount(Files.Count));
       end
       else
-        for I := 0 to Files.Count - 1 do
-        begin
-          if I > 0 then
-            WriteLn;
-          RunScriptFromFile(Files[I]);
-        end;
+        RunScriptsSequentially(Files);
     finally
       Files.Free;
     end;
@@ -1672,12 +1685,7 @@ begin
           RunScriptsParallel(Files, ProfileJobCount(Files.Count));
         end
         else
-          for I := 0 to Files.Count - 1 do
-          begin
-            if I > 0 then
-              WriteLn;
-            RunScriptFromFile(Files[I]);
-          end;
+          RunScriptsSequentially(Files);
       finally
         Files.Free;
       end;
