@@ -14,7 +14,7 @@
 - **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked), plus the `--gc-stress` development variant and the `--layout-probe` production variant
 - **CI/CD** — `ci.yml` for main/tags (full platform matrix), `pr.yml` for PRs (ubuntu-latest x64 only, with benchmark comparison)
 - **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
-- **Automatic clean retry** — when FPC fails with a stale-state symptom, `build.pas` wipes that target's unit directory and retries it once; `./build.pas --clean <target>` is the explicit form when the retry also fails
+- **Automatic clean retry** — when FPC fails with a stale-state symptom, `build.pas` wipes that target's unit directory and retries it once; a failure that survives the retry is diagnosed from its output
 
 GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself. Win32 builds also apply [audited SafeSEH metadata](contributing/win32-safeseh.md).
 
