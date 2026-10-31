@@ -63,7 +63,13 @@ with tempfile.TemporaryDirectory(prefix="goccia-build-check-") as directory:
     assert "ran Alpha" in output and "ran Beta" not in output
     assert len(traces()) == 1
     clear_trace()
-    output = run("tests", "--test=alpha", "--test=beta", "--jobs=2", "--run-tests")
+    # Hold each compile open so overlap does not depend on two trivial
+    # compiles happening to coincide on a loaded host.
+    env["GOCCIA_BUILD_CHECK_DELAY"] = "1"
+    try:
+        output = run("tests", "--test=alpha", "--test=beta", "--jobs=2", "--run-tests")
+    finally:
+        del env["GOCCIA_BUILD_CHECK_DELAY"]
     assert "ran Alpha" in output and "ran Beta" in output and "ran Other" not in output
     records = traces()
     assert len(records) == 2
