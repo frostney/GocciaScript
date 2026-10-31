@@ -6872,6 +6872,123 @@ await section("TestRunner: a parallel worker reclaims each file's garbage before
   }
 });
 
+await section("Runner: --multifile --jobs=1 reclaims each section's garbage before the next section...", async () => {
+  // Sequential multifile runs execute one section after another with automatic
+  // collection off. Before the runner collected after each section, every freed
+  // engine's garbage stayed live until the end, so memory grew about 4 MiB per
+  // JSON section. The peak live GC heap is the observable: with the collection,
+  // it must stay flat regardless of the section count.
+  const tmp = makeTmp();
+  try {
+    const sectionSource = [
+      "const data = [];",
+      "for (const i of Array.from({ length: 5000 }, (_, k) => k)) {",
+      '  data.push({ id: i, value: "x".repeat(100) });',
+      "}",
+      "",
+    ].join("\n");
+
+    // stdin multifile JSON runs take their own loop, so both inputs are covered.
+    const peakLiveBytes = (sectionCount: number, fromStdin: boolean): number => {
+      const sections = Array(sectionCount).fill(sectionSource).join("---\n");
+      const label = `${fromStdin ? "stdin" : "file"} --multifile garbage run (${sectionCount} sections)`;
+      let proc;
+      if (fromStdin) {
+        proc = Bun.spawnSync(
+          [resolve(RUNNER), "-", "--multifile", "--output=json"],
+          { stdin: Buffer.from(sections), stdout: "pipe", stderr: "pipe" },
+        );
+      } else {
+        const file = join(tmp, `gc-${sectionCount}.js`);
+        writeFileSync(file, sections);
+        proc = Bun.spawnSync(
+          [resolve(RUNNER), file, "--multifile", "--jobs=1", "--output=json"],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+      }
+      if (proc.exitCode !== 0)
+        throw new Error(`Runner ${label} exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const json = JSON.parse(proc.stdout.toString());
+      if (!json.ok || json.files?.length !== sectionCount)
+        throw new Error(`Runner ${label} should produce ${sectionCount} ok sections: ${json.ok}, ${json.files?.length} files`);
+      return json.memory.gc.peakLiveBytes;
+    };
+
+    // Two sections give a baseline; sixteen sections would grow about 8x without
+    // the per-section collection. With it, the sixteen-section peak stays within
+    // twice the two-section peak.
+    for (const fromStdin of [false, true]) {
+      const twoSections = peakLiveBytes(2, fromStdin);
+      const sixteenSections = peakLiveBytes(16, fromStdin);
+      if (sixteenSections > twoSections * 2)
+        throw new Error(
+          `Runner ${fromStdin ? "stdin" : "file"} --multifile peak live GC heap grew with the section count: ` +
+            `${sixteenSections} bytes for 16 sections vs ${twoSections} bytes for 2 sections`,
+        );
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Runner: text-output --jobs=1 runs reclaim each file's garbage before the next file...", async () => {
+  // The text-output sequential paths (a --multifile file, a directory or
+  // several file arguments with --jobs=1) have no JSON memory report, so each section prints the live GC
+  // heap it starts with. With the collection after each file, every section
+  // starts from the same heap; without it, each one starts on top of the
+  // garbage of all the sections before it.
+  const tmp = makeTmp();
+  try {
+    const sectionSource = [
+      "console.log(`live:${Goccia.gc.bytesAllocated}`);",
+      "const data = [];",
+      "for (const i of Array.from({ length: 5000 }, (_, k) => k)) {",
+      '  data.push({ id: i, value: "x".repeat(100) });',
+      "}",
+      "",
+    ].join("\n");
+    const sectionCount = 16;
+
+    const sectionStartBytes = (label: string, args: string[]): number[] => {
+      const proc = Bun.spawnSync([resolve(RUNNER), ...args], { stdout: "pipe", stderr: "pipe" });
+      if (proc.exitCode !== 0)
+        throw new Error(`Runner ${label} garbage run exited ${proc.exitCode}: ${proc.stderr.toString()}`);
+      const starts = [...proc.stdout.toString().matchAll(/live:(\d+)/g)].map((m) => Number(m[1]));
+      if (starts.length !== sectionCount)
+        throw new Error(`Runner ${label} garbage run should print ${sectionCount} section starts, got ${starts.length}`);
+      return starts;
+    };
+
+    const requireFlat = (label: string, starts: number[]) => {
+      // One section allocates about 2.4 MB, many times the starting heap, so
+      // any section starting on a previous section's garbage exceeds this.
+      const limit = starts[0] * 2;
+      const worst = Math.max(...starts);
+      if (worst > limit)
+        throw new Error(
+          `Runner ${label} live GC heap grew across files: a section started at ${worst} bytes, ` +
+            `the first at ${starts[0]} bytes (${starts.join(", ")})`,
+        );
+    };
+
+    const multifile = join(tmp, "gc-sections.js");
+    writeFileSync(multifile, Array(sectionCount).fill(sectionSource).join("---\n"));
+    requireFlat("--multifile --jobs=1", sectionStartBytes("--multifile --jobs=1", [multifile, "--multifile", "--jobs=1"]));
+
+    const dir = join(tmp, "gc-dir");
+    mkdirSync(dir);
+    for (let i = 0; i < sectionCount; i++)
+      writeFileSync(join(dir, `f${String(i).padStart(2, "0")}.js`), sectionSource);
+    requireFlat("directory --jobs=1", sectionStartBytes("directory --jobs=1", [dir, "--jobs=1"]));
+
+    // Plain file arguments run one by one without --multifile.
+    const fileArgs = readdirSync(dir).sort().map((name) => join(dir, name));
+    requireFlat("file arguments", sectionStartBytes("file arguments", [...fileArgs, "--jobs=1"]));
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("TestRunner: --output=json emits structured JSON envelope to stdout...", async () => {
   const tmp = makeTmp();
   try {

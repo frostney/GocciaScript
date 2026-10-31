@@ -221,6 +221,7 @@ type
       out AConsoleOutput: string; out AErrorMessage: string; AData: Pointer);
     procedure RunScriptsParallel(const AFiles: TStringList;
       const AJobCount: Integer);
+    procedure RunScriptsSequentially(const AFiles: TStringList);
     procedure RunScripts(const APath: string);
     function ProfileJobCount(const AFileCount: Integer): Integer;
     procedure BeginProfileEntry;
@@ -1449,6 +1450,12 @@ begin
       Results[I] := RunScriptFromFileForJSON(AFiles[I], False);
       if not Results[I].Ok then
         ExitCode := 1;
+      { Reclaim this file's garbage before the next one, as parallel workers
+        do after each file. Without this every freed engine's garbage stayed
+        live until the end: multifile runs never forced a collection, so
+        memory grew about 4 MiB per JSON section. }
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.Collect;
     end;
     MemoryStats := FinishCLIJSONMemoryMeasurement(MemoryMeasurement);
   end;
@@ -1490,6 +1497,11 @@ begin
       finally
         SectionSource.Free;
       end;
+      { Reclaim this section's garbage before the next one, as the JSON and
+        parallel paths do after each file. Without this every freed engine's
+        garbage stayed live until the end. }
+      if Assigned(TGarbageCollector.Instance) then
+        TGarbageCollector.Instance.Collect;
     end;
   finally
     Names.Free;
@@ -1544,6 +1556,15 @@ begin
       ExitCode := 1;
     end;
   end;
+
+  { Reclaim this file's garbage before the worker takes the next one, as the
+    sequential path does after each file and as the test runner does. Workers
+    run with automatic collection off, so without this every object a worker
+    allocated stayed live until the worker exited. Collect is serialized by
+    the collector lock, which is what makes it safe on a worker thread (the
+    same path Goccia.gc() takes). }
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.Collect;
 end;
 
 procedure TRunnerApp.RunScriptsParallel(const AFiles: TStringList;
@@ -1596,10 +1617,27 @@ begin
   end;
 end;
 
+procedure TRunnerApp.RunScriptsSequentially(const AFiles: TStringList);
+var
+  I: Integer;
+begin
+  for I := 0 to AFiles.Count - 1 do
+  begin
+    if I > 0 then
+      WriteLn;
+    RunScriptFromFile(AFiles[I]);
+    { Reclaim this file's garbage before the next one, as the JSON, stdin and
+      parallel paths do. Without this every freed engine's garbage stayed
+      live until an automatic collection happened to run, so memory grew
+      with every file or --multifile section. }
+    if Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.Collect;
+  end;
+end;
+
 procedure TRunnerApp.RunScripts(const APath: string);
 var
   Files, RawFiles, SinglePath: TStringList;
-  I: Integer;
 begin
   if IsStdinPath(APath) then
   begin
@@ -1623,12 +1661,7 @@ begin
         RunScriptsParallel(Files, ProfileJobCount(Files.Count));
       end
       else
-        for I := 0 to Files.Count - 1 do
-        begin
-          if I > 0 then
-            WriteLn;
-          RunScriptFromFile(Files[I]);
-        end;
+        RunScriptsSequentially(Files);
     finally
       Files.Free;
     end;
@@ -1652,12 +1685,7 @@ begin
           RunScriptsParallel(Files, ProfileJobCount(Files.Count));
         end
         else
-          for I := 0 to Files.Count - 1 do
-          begin
-            if I > 0 then
-              WriteLn;
-            RunScriptFromFile(Files[I]);
-          end;
+          RunScriptsSequentially(Files);
       finally
         Files.Free;
       end;
@@ -2081,6 +2109,10 @@ begin
             finally
               SectionSource.Free;
             end;
+            { Reclaim this section's garbage before the next one, as the
+              file and text stdin paths do. }
+            if Assigned(TGarbageCollector.Instance) then
+              TGarbageCollector.Instance.Collect;
           end;
           WriteLn(BuildAggregateScriptLoaderJSON(JSONResults,
             FinishCLIJSONMemoryMeasurement(MemoryMeasurement),
@@ -2178,7 +2210,14 @@ begin
     for I := 0 to APaths.Count - 1 do
     begin
       if I > 0 then
+      begin
         WriteLn;
+        { Reclaim the previous path's garbage before this one runs: a plain
+          file argument runs without RunScriptsSequentially, so nothing else
+          collects between two file arguments. }
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.Collect;
+      end;
       RunScripts(APaths[I]);
     end;
   end;
