@@ -1,4 +1,4 @@
-{ The process-wide string encoding on Windows.
+{ The process-wide string encoding.
 
   GocciaScript strings are UTF-16, and FPC 3.2's RTL is not Unicode: every
   AnsiString it takes or returns (TFileStream and FindFirst file names,
@@ -15,7 +15,10 @@
   as the other platforms. A console keeps the console's output code page, which
   the RTL selects, so it displays what it displayed before; a character outside
   that code page still prints as '?'. A unit that converts strings through the
-  RTL lists this unit in its uses, so that it is initialized first. }
+  RTL lists this unit in its uses, so that it is initialized first.
+
+  On Linux and macOS this unit installs cwstring, which makes those
+  conversions through iconv, with a direct path for ASCII text in front of it. }
 
 unit ProcessEncoding;
 
@@ -25,7 +28,7 @@ interface
 
 implementation
 
-{$IFDEF MSWINDOWS}
+{$IF DEFINED(MSWINDOWS)}
 uses
   Windows;
 
@@ -46,6 +49,83 @@ initialization
     SetTextCodePage(ErrOutput, CP_UTF8);
     SetTextCodePage(StdErr, CP_UTF8);
   end;
+{$ELSEIF DEFINED(FPC) AND DEFINED(UNIX)}
+uses
+  cwstring;
+
+{ cwstring converts between UTF-16 and the system code page through iconv,
+  which costs a converter lookup and a call per string. Most strings that
+  cross the boundary are ASCII — resource strings, identifiers, file names —
+  and ASCII is the same bytes in UTF-8 and in ASCII, so those are converted
+  here and everything else is handed to cwstring as before. }
+var
+  GIconvUnicode2AnsiMove: procedure(ASource: PUnicodeChar;
+    var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
+  GIconvAnsi2UnicodeMove: procedure(ASource: PAnsiChar;
+    ACodePage: TSystemCodePage; var ADest: UnicodeString; ALength: SizeInt);
+
+function IsASCIICompatibleCodePage(const ACodePage: TSystemCodePage): Boolean;
+begin
+  Result := (ACodePage = CP_UTF8) or (ACodePage = CP_ASCII);
+end;
+
+procedure ASCIIUnicode2AnsiMove(ASource: PUnicodeChar;
+  var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
+var
+  Target: PAnsiChar;
+  I: SizeInt;
+begin
+  if IsASCIICompatibleCodePage(ACodePage) then
+  begin
+    I := 0;
+    while (I < ALength) and (Ord(ASource[I]) <= $7F) do
+      Inc(I);
+    if I = ALength then
+    begin
+      SetLength(ADest, ALength);
+      Target := PAnsiChar(ADest);
+      for I := 0 to ALength - 1 do
+        Target[I] := AnsiChar(Ord(ASource[I]));
+      SetCodePage(ADest, ACodePage, False);
+      Exit;
+    end;
+  end;
+  GIconvUnicode2AnsiMove(ASource, ADest, ACodePage, ALength);
+end;
+
+procedure ASCIIAnsi2UnicodeMove(ASource: PAnsiChar; ACodePage: TSystemCodePage;
+  var ADest: UnicodeString; ALength: SizeInt);
+var
+  Target: PUnicodeChar;
+  I: SizeInt;
+begin
+  if IsASCIICompatibleCodePage(ACodePage) then
+  begin
+    I := 0;
+    while (I < ALength) and (Ord(ASource[I]) <= $7F) do
+      Inc(I);
+    if I = ALength then
+    begin
+      SetLength(ADest, ALength);
+      Target := PUnicodeChar(ADest);
+      for I := 0 to ALength - 1 do
+        Target[I] := UnicodeChar(Ord(ASource[I]));
+      Exit;
+    end;
+  end;
+  GIconvAnsi2UnicodeMove(ASource, ACodePage, ADest, ALength);
+end;
+
+procedure InstallASCIIConversions;
+begin
+  GIconvUnicode2AnsiMove := WideStringManager.Unicode2AnsiMoveProc;
+  GIconvAnsi2UnicodeMove := WideStringManager.Ansi2UnicodeMoveProc;
+  WideStringManager.Unicode2AnsiMoveProc := ASCIIUnicode2AnsiMove;
+  WideStringManager.Ansi2UnicodeMoveProc := ASCIIAnsi2UnicodeMove;
+end;
+
+initialization
+  InstallASCIIConversions;
 {$ENDIF}
 
 end.
