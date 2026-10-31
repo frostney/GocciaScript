@@ -29,6 +29,17 @@
   reaches both the collector and the flags through one lookup. Instance keeps
   its own thread variable; see TGarbageCollector.Instance for why.
 
+  TimeoutState and InstructionLimitState are the thread's poll states, a
+  PGocciaTimeoutPollState and a PGocciaInstructionLimitState, set by the same
+  procedures that set TimeoutArmed and InstructionLimitActive. A caller that
+  finds a flag set passes the pointer beside it to PollExecutionTimeout or
+  CheckInstructionLimitState, and so polls without another lookup:
+
+    if Polls^.TimeoutArmed then
+      PollExecutionTimeout(PGocciaTimeoutPollState(Polls^.TimeoutState));
+
+  They are untyped because this unit uses no other.
+
   The thread variable is declared in the interface on purpose: other units
   reference it directly, where an accessor function would add a call to the
   lookup (FPC does not inline TGarbageCollector.Instance or CurrentRealm into
@@ -45,6 +56,8 @@ interface
 type
   TGocciaThreadPolls = packed record
     Collector: Pointer;
+    TimeoutState: Pointer;
+    InstructionLimitState: Pointer;
     case Boolean of
       False: (
         TimeoutArmed: Boolean;

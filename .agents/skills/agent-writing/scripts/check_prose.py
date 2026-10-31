@@ -37,6 +37,7 @@ BANNED_PATTERNS = (
     ),
 )
 INLINE_CODE = re.compile(r"`[^`]*`")
+FENCE = re.compile(r"(`{3,}|~{3,})(.*)")
 SKILL_DIR = Path(__file__).resolve().parents[1]
 
 
@@ -77,13 +78,22 @@ def markdown_paths(root: Path) -> list[Path]:
 
 def check_lines(path: Path, lines: Iterable[str]) -> list[str]:
     findings: list[str] = []
-    in_fence = False
+    fence = ""  # The open code block's run of backticks or tildes.
     for line_number, line in enumerate(lines, start=1):
         stripped = line.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
+        fence_match = FENCE.match(stripped)
+        marker, rest = fence_match.groups() if fence_match else ("", "")
+        if fence:
+            # CommonMark closes a block only on the character that opened it,
+            # in a run at least as long, with nothing after it.
+            if marker[:1] == fence[0] and len(marker) >= len(fence) and not rest.strip():
+                fence = ""
             continue
-        if in_fence or stripped.startswith(">"):
+        # A backtick fence cannot carry a backtick in its info string.
+        if marker and not (marker[0] == "`" and "`" in rest):
+            fence = marker
+            continue
+        if stripped.startswith(">"):
             continue
 
         prose = INLINE_CODE.sub("", line)

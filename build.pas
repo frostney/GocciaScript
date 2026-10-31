@@ -1,4 +1,4 @@
-#!/usr/bin/env -S instantfpc -Fu./source/shared
+#!/usr/bin/env -S instantfpc -B -Fu./source/shared
 
 {$mode delphi}
 {$H+}
@@ -8,7 +8,8 @@ uses
   Process,
   SysUtils,
 
-  FileUtils in 'source/shared/FileUtils.pas';
+  FileUtils in 'source/shared/FileUtils.pas',
+  FPCSafeSEH in 'source/shared/FPCSafeSEH.pas';
 
 type
   TBuildMode = (bmDev, bmProd);
@@ -21,6 +22,13 @@ var
     compiled into its own unit caches and written to build/gc-stress/ so it
     never mixes with, or replaces, the ordinary binaries. }
   GCStressBuild: Boolean = False;
+  { --layout-probe: a production build with -dGOCCIA_VM_LAYOUT_PROBE, which
+    adds a few hundred bytes of code that never runs ahead of the VM's
+    dispatch function, so that function and all code after it sit further
+    along, compiled into its own unit caches and written to build/layout-probe/.
+    Benchmarked against the ordinary production build, it shows how much code
+    placement alone moves a benchmark (issue #1917). }
+  LayoutProbeBuild: Boolean = False;
   CleanRequested: Boolean = False;
   GVersion, GCommit, GBuildDate: string;
 
@@ -253,14 +261,21 @@ begin
   Result := 'build' + DirectorySeparator + 'gc-stress';
 end;
 
-{ Root of the unit caches. The GC-stress build keeps its own, because FPC does
-  not recompile a unit when only the defines change: a shared cache would hand
-  stress-compiled units to an ordinary build, or the reverse. }
+function LayoutProbeExecutableDirectory: string;
+begin
+  Result := 'build' + DirectorySeparator + 'layout-probe';
+end;
+
+{ Root of the unit caches. The GC-stress and layout-probe builds keep their
+  own, because FPC does not recompile a unit when only the defines change: a
+  shared cache would hand their units to an ordinary build, or the reverse. }
 function CompiledRootDirectory: string;
 begin
   Result := 'build' + DirectorySeparator + 'compiled';
   if GCStressBuild then
-    Result := Result + DirectorySeparator + 'gc-stress';
+    Result := Result + DirectorySeparator + 'gc-stress'
+  else if LayoutProbeBuild then
+    Result := Result + DirectorySeparator + 'layout-probe';
 end;
 
 function FPCArgs(const ASource: string;
@@ -275,6 +290,10 @@ begin
     Arch := GetEnvironmentVariable('FPC_TARGET_CPU');
     if Arch <> '' then
       Args.Add('-P' + Arch);
+
+    Arch := GetEnvironmentVariable('FPC_TARGET_OS');
+    if Arch <> '' then
+      Args.Add('-T' + Arch);
 
     Args.Add('@config.cfg');
     if AUnitOutputDirectory <> '' then
@@ -295,6 +314,11 @@ begin
       Args.Add('-CX');
       Args.Add('-XX');
       Args.Add('-B');
+      if LayoutProbeBuild then
+      begin
+        Args.Add('-dGOCCIA_VM_LAYOUT_PROBE');
+        Args.Add('-FE' + LayoutProbeExecutableDirectory);
+      end;
     end else
     begin
       Args.Add('-O-');
@@ -321,6 +345,63 @@ begin
   finally
     Args.Free;
   end;
+end;
+
+{ Query the effective compiler target, including config.cfg and cross-target
+  environment overrides. The build host need not be the executable's target. }
+function CompileProgram(const AArguments: TStringArray;
+  out AOutput: string): Boolean;
+var
+  Arguments: TStringArray;
+  Target, Executable, ObjectDirectory: string;
+  Lines: TStringList;
+  J: Integer;
+begin
+  Arguments := Copy(AArguments);
+  SetLength(Arguments, Length(Arguments) + 1);
+  Arguments[High(Arguments) - 1] := '-iTP';
+  Arguments[High(Arguments)] := '-iTO';
+  if not RunCommand('fpc', Arguments, Target) then
+    raise Exception.Create('Cannot determine compiler target: ' + Target);
+  if Trim(Target) <> 'i386 win32' then
+    Exit(RunCommand('fpc', AArguments, AOutput));
+
+  ObjectDirectory := '';
+  for J := 0 to High(AArguments) do
+    if Copy(AArguments[J], 1, 3) = '-FU' then
+      ObjectDirectory := Copy(AArguments[J], 4, MaxInt);
+  if ObjectDirectory = '' then
+    raise Exception.Create('Win32 build requires its compiler-owned unit directory');
+  SetLength(Arguments, Length(Arguments) + 1);
+  // The ordinary build suppresses informational output. Retain the linker's
+  // output path here so config.cfg output overrides are finalized correctly.
+  Arguments[High(Arguments) - 2] := '-vi';
+  Arguments[High(Arguments) - 1] := '-Xm';
+  Arguments[High(Arguments)] := AArguments[High(AArguments)];
+  Result := RunCommand('fpc', Arguments, AOutput);
+  if not Result then
+    Exit;
+  Executable := '';
+  Lines := TStringList.Create;
+  try
+    Lines.Text := AOutput;
+    for J := 0 to Lines.Count - 1 do
+      if Copy(Lines[J], 1, 8) = 'Linking ' then
+        Executable := Trim(Copy(Lines[J], 9, MaxInt));
+    if Executable = '' then
+      raise Exception.Create('Win32 build did not report its linked executable');
+    FinalizeFPCExecutable(Executable, ChangeFileExt(Executable, '.map'), ObjectDirectory);
+    AOutput := AOutput + LineEnding + 'SafeSEH verified: ' + Executable;
+  except
+    on E: Exception do
+    begin
+      if Executable <> '' then
+        DeleteFile(Executable);
+      AOutput := AOutput + LineEnding + 'SafeSEH failed: ' + E.Message;
+      Result := False;
+    end;
+  end;
+  Lines.Free;
 end;
 
 function TestUnitOutputDirectory(const ATestFile: string): string;
@@ -397,7 +478,7 @@ end;
 function CompileWithStaleRetry(const ASource, AUnitOutputDirectory,
   ALabel: string; out AOutput: string): Boolean;
 begin
-  Result := RunCommand('fpc', FPCArgs(ASource,
+  Result := CompileProgram(FPCArgs(ASource,
     EnsureUnitOutputDirectory(AUnitOutputDirectory)), AOutput);
   if Result or not HasStaleArtifactSignature(AOutput) then
     Exit;
@@ -405,7 +486,7 @@ begin
   WriteLn('FPC reported a stale-state error for ', ALabel,
     '; retrying once from a clean unit directory');
   RemoveCompiledArtifacts(AUnitOutputDirectory);
-  Result := RunCommand('fpc', FPCArgs(ASource,
+  Result := CompileProgram(FPCArgs(ASource,
     EnsureUnitOutputDirectory(AUnitOutputDirectory)), AOutput);
 end;
 
@@ -684,6 +765,8 @@ begin
       BuildMode := bmProd
     else if ParamStr(I) = '--gc-stress' then
       GCStressBuild := True
+    else if ParamStr(I) = '--layout-probe' then
+      LayoutProbeBuild := True
     else if ParamStr(I) = '--clean' then
       CleanRequested := True
     else
@@ -697,7 +780,21 @@ begin
     Halt(1);
   end;
 
-  if BuildMode = bmProd then
+  if LayoutProbeBuild and (BuildMode <> bmProd) then
+  begin
+    WriteLn('--layout-probe measures production code placement; it needs ' +
+      '--prod');
+    Halt(1);
+  end;
+
+  if LayoutProbeBuild then
+  begin
+    WriteLn('Build mode: production, layout probe (binaries in ',
+      LayoutProbeExecutableDirectory, ')');
+    if not DirectoryExists(LayoutProbeExecutableDirectory) then
+      CreateDir(LayoutProbeExecutableDirectory);
+  end
+  else if BuildMode = bmProd then
     WriteLn('Build mode: production')
   else if GCStressBuild then
   begin

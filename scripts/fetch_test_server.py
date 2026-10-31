@@ -8,6 +8,8 @@ Endpoints:
   GET  /redirect-headers — 302 → /echo-headers
   GET  /redirect-host — 302 → localhost on the same port, /echo-headers
   GET  /redirect-external — 302 → http://10.255.255.1:1/json (private, off-allowlist)
+  GET  /redirect-chain/<n> — 307 → /redirect-chain/<n-1>; /redirect-chain/0 → /json
+  GET  /bytes/<n>     — 200 with a body of <n> "a" bytes (application/octet-stream)
   GET  /status/<code> — responds with <code> and empty body
   GET  /              — 200 "ok"
   HEAD *              — 200 with Content-Length but no body
@@ -70,6 +72,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Location", "http://10.255.255.1:1/json")
             self.send_header("Content-Length", "0")
             self.end_headers()
+        elif self.path.startswith("/redirect-chain/"):
+            # A chain of <n> redirects ending at /json, so a test can count
+            # the redirects fetch follows before it gives up.
+            try:
+                remaining = int(self.path.rsplit("/", 1)[-1])
+            except ValueError:
+                remaining = -1
+            if remaining < 0:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(307)
+            if remaining == 0:
+                self.send_header("Location", "/json")
+            else:
+                self.send_header("Location", f"/redirect-chain/{remaining - 1}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif self.path.startswith("/bytes/"):
+            # A body of <n> bytes, so a test can hold bodies against the
+            # engine's memory limit.
+            try:
+                size = int(self.path.rsplit("/", 1)[-1])
+            except ValueError:
+                size = -1
+            if size < 0 or size > 64 * 1024 * 1024:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            self.wfile.write(b"a" * size)
         elif self.path.startswith("/status/"):
             raw_code = self.path.rsplit("/", 1)[-1]
             try:

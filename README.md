@@ -28,8 +28,8 @@ deterministic, with a fixed clock and seeded randomness.
   and the full test suite runs under FreePascal's heap checker and under
   Valgrind memcheck. Every week a
   [GC-stress run](https://github.com/frostney/GocciaScript/actions/workflows/gc-stress.yml)
-  collects garbage every 8 instructions across the GC-sensitive parts of the
-  test suite and of test262.
+  collects garbage every 8 instructions across the whole test suite and the
+  GC-sensitive part of test262.
 - **In production.** GocciaScript is the engine behind
   [Shotcup](https://shotcup.dev)'s hosted sandboxes, where every run gets a
   fresh engine with hard limits.
@@ -159,7 +159,10 @@ virtual filesystem:
 - synchronous forms such as `readFileSync`, `writeFileSync`, `mkdirSync`,
   `readdirSync`, `statSync`, `rmSync`, `renameSync`, and `copyFileSync`;
 - Node-shaped callback forms for the same operation families;
-- `fs.promises` forms, `Stats` objects, and Node-shaped filesystem errors.
+- `fs.promises` forms, `Stats` objects, and Node-shaped filesystem errors;
+- `fs.globSync`, `fs.glob` and `fs.promises.glob` for names, with content
+  and fuzzy-name search in `goccia:search`
+  ([Sandbox Search Built-ins](docs/built-ins-sandbox-search.md)).
 
 The documented method set never reaches the ambient host filesystem. See
 [Sandbox Modules](docs/built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas)
@@ -195,7 +198,7 @@ profile (applied by `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and
 
 Non-standard data-format APIs and SemVer are import-only Goccia runtime modules, not auto-installed globals: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. They expose named exports only; use `import * as CSV from "goccia:csv"` when you want the namespace-object shape. There is no default export.
 
-`goccia:ast` is an experimental runtime module behind `--experimental-ast`. It exposes one `parse` function that returns a source file's statement structure — kinds, offsets, line/column, nesting — plus its comments, so a lint rule or a codemod can be a GocciaScript program. Every offset and position is into the text that was passed, including for a `.tsx` file the engine rewrote before parsing. See [Built-ins](docs/built-ins.md#ast--experimental-gocciabuiltinsastpas), [ADR 0117](docs/adr/0117-javascript-visible-ast-module.md), and [ADR 0118](docs/adr/0118-original-file-source-ranges.md).
+`goccia:ast` is an experimental runtime module behind `--experimental-ast`. It exposes one `parse` function that returns a source file's statement structure — kinds, offsets, line/column, nesting — plus its comments and, on request, every token (`tokens: true`) and its expressions, object properties, parameters and class members (`expressions: true`), so a lint rule, a formatter, a codemod or a check that needs to know what is code can be a GocciaScript program. Every offset and position is into the text that was passed, including for a `.tsx` file the engine rewrote before parsing. See [AST Built-ins](docs/built-ins-ast.md), [ADR 0117](docs/adr/0117-javascript-visible-ast-module.md), [ADR 0118](docs/adr/0118-original-file-source-ranges.md), [ADR 0162](docs/adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md), and [ADR 0163](docs/adr/0163-goccia-ast-reports-the-committed-token-stream.md).
 
 `node:async_hooks` is an import-only module too, at Node's own address. It exports `AsyncLocalStorage` and `AsyncResource`, named and on the default export; the `async_hooks` observer API (`createHook`, `executionAsyncId`, and the rest) is out of scope. The engine propagates the async context, so a store bound with `run` survives `await` and every promise-reaction continuation. See the [Async Context reference](docs/built-ins-async-context.md) and [ADR 0112](docs/adr/0112-native-async-local-storage.md).
 
@@ -244,7 +247,7 @@ Linux (x64 and arm64) and Windows (x64 and x86):
 curl -fsSL https://www.gocciascript.dev/install | sh
 
 # a pinned version
-curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.14.0 sh
+curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.15.0 sh
 
 # macOS with Homebrew
 brew install frostney/tap/gocciascript
@@ -265,11 +268,23 @@ embedded data otherwise.
 
 ### Build from source
 
-Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`):
+Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`),
+version 3.2.2 or 3.2.4. The package managers install 3.2.2:
 
 - macOS: `brew install fpc`
 - Ubuntu/Debian: `sudo apt-get install fpc`
 - Windows: `choco install freepascal`
+
+CI is pinned to the FPC 3.2.4 build `3.2.4-rc2-b1` from
+[fpc-toolchain](https://github.com/frostney/fpc-toolchain). To build with the
+same compiler on Linux or macOS, install it next to any other FPC and put it
+first on `PATH` (Windows: see its README):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/frostney/fpc-toolchain/main/scripts/install.sh
+sh install.sh 3.2.4-rc2-b1
+eval "$(~/.local/share/fpc-toolchains/bin/fpc-toolchain env 3.2.4)"
+```
 
 ```bash
 # Dev build of everything
@@ -326,6 +341,8 @@ Use one fixed JavaScript-visible clock, UTC time zone, and portable random strea
 ```
 
 Timeouts and profiling still use the real monotonic clock. The equivalent config key is `"deterministic": true`; embedders can inject their own clock and RNG providers through the engine host environment.
+
+For repeatable profile counts across a file or directory, use `--profile-deterministic --profile-output=counts.json`; timing fields are zero. See [Profiling](docs/profiling.md#directories-and-deterministic-captures).
 
 For custom providers, pass a JavaScript module to `--host-environment` or implement the Pascal host interfaces. See [Host Environment](docs/host-environment.md) for both examples and the provider contract.
 
@@ -448,7 +465,10 @@ contract through the IDE; see [Delphi Validation](docs/contributing/delphi.md)
 and [Build System](docs/build-system.md#prerequisites).
 
 Native hosts can embed GocciaScript to run portable JavaScript with
-application-specific globals, modules, capabilities, and limits. See
+application-specific globals, modules, capabilities, and limits. A host can
+answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
+mark sandbox paths read-only, and snapshot a paused run's heap to restore it in
+a fresh engine ([Heap Snapshots](docs/heap-snapshots.md)). See
 [Embedding the Engine](docs/embedding.md).
 
 ## Architecture
@@ -461,7 +481,7 @@ flowchart LR
     AST --> Compiler["Bytecode Compiler"] --> VM["Goccia VM"] --> Result["Result"]
 ```
 
-The VM, the built-ins and the runtime share one set of value types, one scope chain, and one mark-and-sweep GC. The VM is Goccia-owned rather than a generic VM layer: it keeps tagged `TGocciaRegister` values (unboxed scalars) and falls back to `TGocciaValue` for heap objects. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; main has removed it, and the next release ships without it.
+The VM, the built-ins and the runtime share one set of value types, one scope chain, and one mark-and-sweep GC. The VM is Goccia-owned rather than a generic VM layer: it keeps tagged `TGocciaRegister` values (unboxed scalars) and falls back to `TGocciaValue` for heap objects. Releases up to 0.14 also offered a tree-walk interpreter as a second execution mode; GocciaScript 0.15.0 removed it ([ADR 0138](docs/adr/0138-bytecode-is-the-only-way-gocciascript-executes.md)).
 
 See [Architecture](docs/architecture.md) for the pipeline and layers, [Bytecode VM](docs/bytecode-vm.md) for bytecode execution, [Core patterns](docs/core-patterns.md) for implementation patterns, and [GocciaScript Context](CONTEXT.md) for canonical terminology.
 
@@ -486,8 +506,10 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 | [Type Annotations](docs/type-annotations.md) | TypeScript-compatible type syntax, `--strict-types`, and the `<` disambiguation rules |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
 | [FFI Built-ins](docs/built-ins-ffi.md) | Native libraries, aggregate types, callbacks, lifetimes, and safety limits |
+| [AST Built-ins](docs/built-ins-ast.md) | The experimental `goccia:ast` module: statement and expression views, ranges, and comments |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |
 | [Binary Data Built-ins](docs/built-ins-binary-data.md) | ArrayBuffer, SharedArrayBuffer, TypedArray API |
+| [Sandbox Search Built-ins](docs/built-ins-sandbox-search.md) | `fs.globSync`, and `grep` and `fuzzyFind` from `goccia:search`, with their shared test vectors |
 | [Async Context](docs/built-ins-async-context.md) | `node:async_hooks`: `AsyncLocalStorage`, `AsyncResource`, and what propagates |
 | [Errors](docs/errors.md) | Error types, parser/runtime display, `Error.cause`, `try`/`catch`/`finally` |
 | [JSON Output](docs/json-output.md) | The `--output=json` and `--output=compact-json` envelopes, including errors and timeouts |

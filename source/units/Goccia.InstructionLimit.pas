@@ -23,6 +23,13 @@ type
     ScopeLimits: array of Int64;
     ScopeDepth: Integer;
     Active: Boolean;
+    { The lowest InstructionCount at which the base budget or a scope's
+      budget is spent, High(Int64) when none is set, so that a poll is one
+      comparison. Start, Clear, Push and Pop recompute it. Code that lowers
+      MaxInstructions or a scope's limit any other way must lower it too, and
+      after the limit: a poll that reaches it checks every budget exactly and
+      raises for a spent one, or recomputes it when none is spent. }
+    NextLimitCount: Int64;
   end;
   PGocciaInstructionLimitState = ^TGocciaInstructionLimitState;
 
@@ -33,9 +40,19 @@ procedure PopInstructionLimitScope;
 function CaptureInstructionLimitState: PGocciaInstructionLimitState; {$IFDEF FPC}inline;{$ENDIF}
 function InstructionLimitIsActive: Boolean; {$IFDEF FPC}inline;{$ENDIF}
 procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
-procedure CheckInstructionLimit; {$IFDEF FPC}inline;{$ENDIF}
+procedure CheckInstructionLimit;
+{ CheckInstructionLimit through a captured handle: no thread-variable lookup.
+  Goccia.ThreadPolls keeps the handle beside the InstructionLimitActive
+  flag. }
+procedure CheckInstructionLimitState(
+  const AState: PGocciaInstructionLimitState); {$IFDEF FPC}inline;{$ENDIF}
 procedure PollInstructionLimit(
   const AState: PGocciaInstructionLimitState); {$IFDEF FPC}inline;{$ENDIF}
+{ The slow path of the two above, taken once the count reaches
+  NextLimitCount: checks every budget exactly and raises
+  TGocciaInstructionLimitError for the first one spent. It is in the interface
+  so that they can be inlined into other units; call them instead. }
+procedure InstructionLimitReached(const AState: PGocciaInstructionLimitState);
 
 implementation
 
@@ -45,11 +62,35 @@ uses
 threadvar
   GInstructionLimitState: TGocciaInstructionLimitState;
 
+procedure RecomputeNextLimitCount(const AState: PGocciaInstructionLimitState);
+var
+  Next, Candidate: Int64;
+  I: Integer;
+begin
+  Next := High(Int64);
+  if AState^.MaxInstructions > 0 then
+    Next := AState^.MaxInstructions;
+  for I := 0 to AState^.ScopeDepth - 1 do
+    if AState^.ScopeLimits[I] > 0 then
+    begin
+      if AState^.ScopeStarts[I] > High(Int64) - AState^.ScopeLimits[I] then
+        Candidate := High(Int64)
+      else
+        Candidate := AState^.ScopeStarts[I] + AState^.ScopeLimits[I];
+      if Candidate < Next then
+        Next := Candidate;
+    end;
+  AState^.NextLimitCount := Next;
+end;
+
 // Every assignment to GInstructionLimitState.Active goes through here, so the
-// mirror that Goccia.ThreadPolls readers see cannot drift from it.
+// mirror that Goccia.ThreadPolls readers see cannot drift from it. Every
+// change to a budget ends here too, so it recomputes NextLimitCount.
 procedure SetInstructionLimitActive(const AActive: Boolean);
 begin
+  RecomputeNextLimitCount(@GInstructionLimitState);
   GInstructionLimitState.Active := AActive;
+  GThreadPolls.InstructionLimitState := @GInstructionLimitState;
   GThreadPolls.InstructionLimitActive := AActive;
 end;
 
@@ -109,16 +150,21 @@ begin
     'Execution exceeded instruction limit of %d', [AMaxInstructions]);
 end;
 
-procedure CheckScopedInstructionLimits;
+procedure InstructionLimitReached(const AState: PGocciaInstructionLimitState);
 var
   I: Integer;
 begin
-  for I := 0 to GInstructionLimitState.ScopeDepth - 1 do
-    if (GInstructionLimitState.ScopeLimits[I] > 0) and
-       (GInstructionLimitState.InstructionCount -
-        GInstructionLimitState.ScopeStarts[I] >=
-        GInstructionLimitState.ScopeLimits[I]) then
-      RaiseInstructionLimit(GInstructionLimitState.ScopeLimits[I]);
+  for I := 0 to AState^.ScopeDepth - 1 do
+    if (AState^.ScopeLimits[I] > 0) and
+       (AState^.InstructionCount - AState^.ScopeStarts[I] >=
+        AState^.ScopeLimits[I]) then
+      RaiseInstructionLimit(AState^.ScopeLimits[I]);
+  if (AState^.MaxInstructions > 0) and
+     (AState^.InstructionCount >= AState^.MaxInstructions) then
+    RaiseInstructionLimit(AState^.MaxInstructions);
+  // Nothing is spent: NextLimitCount was lowered from outside, or this is a
+  // thread whose state was never started, where it is still 0.
+  RecomputeNextLimitCount(AState);
 end;
 
 function CaptureInstructionLimitState: PGocciaInstructionLimitState;
@@ -137,27 +183,25 @@ begin
     Inc(GInstructionLimitState.InstructionCount);
 end;
 
-procedure CheckInstructionLimit; {$IFDEF FPC}inline;{$ENDIF}
+procedure CheckInstructionLimitState(
+  const AState: PGocciaInstructionLimitState); {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if GInstructionLimitState.ScopeDepth > 0 then
-    CheckScopedInstructionLimits;
-  if (GInstructionLimitState.MaxInstructions > 0) and
-     (GInstructionLimitState.InstructionCount >=
-      GInstructionLimitState.MaxInstructions) then
-    RaiseInstructionLimit(GInstructionLimitState.MaxInstructions);
+  if AState^.InstructionCount >= AState^.NextLimitCount then
+    InstructionLimitReached(AState);
+end;
+
+procedure CheckInstructionLimit;
+begin
+  CheckInstructionLimitState(@GInstructionLimitState);
 end;
 
 procedure PollInstructionLimit(
   const AState: PGocciaInstructionLimitState); {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if AState.Active then
+  if AState^.Active then
   begin
-    if AState.ScopeDepth > 0 then
-      CheckScopedInstructionLimits;
-    if (AState.MaxInstructions > 0) and
-       (AState.InstructionCount >= AState.MaxInstructions) then
-      RaiseInstructionLimit(AState.MaxInstructions);
-    Inc(AState.InstructionCount);
+    CheckInstructionLimitState(AState);
+    Inc(AState^.InstructionCount);
   end;
 end;
 

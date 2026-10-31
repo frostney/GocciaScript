@@ -125,6 +125,7 @@ const ALLOWED_CALLS = new Set(
     "Elements",
     "GetElement",
     "GetLength",
+    "StoredLength",
     "ThisValue",
     "IntValue",
     "FloatValue",

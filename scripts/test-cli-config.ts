@@ -263,10 +263,15 @@ console.log("Priority: TOML > JSON5 > JSON...");
     writeFileSync(join(tmp, "goccia.json"), '{"compat-asi": false}\n');
     writeFileSync(join(tmp, "goccia.json5"), "{'compat-asi': false}\n");
     writeFileSync(join(tmp, "goccia.toml"), 'compat-asi = true\n');
-    writeFileSync(join(tmp, "test.js"), "const x = 1\nx\n");
+    // Parses only with ASI. The printed result is built at run time, so no
+    // source line a parse diagnostic quotes can match it.
+    writeFileSync(join(tmp, "test.js"), 'const x = "toml" + "-wins"\nx\n');
 
-    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.nothrow().text();
-    if (!containsLine(out, "1")) throw new Error(`TOML should win over JSON5 and JSON, got: ${out}`);
+    const res = await $`${RUNNER} --print ${join(tmp, "test.js")} 2>&1`.nothrow();
+    const out = res.text();
+    if (res.exitCode !== 0 || !containsLine(out, "toml-wins")) {
+      throw new Error(`TOML should win over JSON5 and JSON, got exit ${res.exitCode}: ${out}`);
+    }
   } finally {
     clean(tmp);
   }
@@ -1250,14 +1255,18 @@ console.log("--config=<dir> respects priority TOML > JSON5 > JSON...");
   const tmp = makeTmp();
   const cfgDir = makeTmp();
   try {
-    writeFileSync(join(tmp, "test.js"), "const x = 61\nx\n");
+    // Parses only with ASI; the printed result is built at run time, as above.
+    writeFileSync(join(tmp, "test.js"), 'const x = "config-dir-" + "toml-wins"\nx\n');
     // All three present; TOML must win (matches auto-discovery priority).
     writeFileSync(join(cfgDir, "goccia.json"), '{"compat-asi": false}\n');
     writeFileSync(join(cfgDir, "goccia.json5"), "{'compat-asi': false}\n");
     writeFileSync(join(cfgDir, "goccia.toml"), 'compat-asi = true\n');
 
-    const out = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.nothrow().text();
-    if (!containsLine(out, "61")) throw new Error(`--config=<dir> should pick TOML over JSON5/JSON, got: ${out}`);
+    const res = await $`${RUNNER} --print ${join(tmp, "test.js")} --config=${cfgDir} 2>&1`.nothrow();
+    const out = res.text();
+    if (res.exitCode !== 0 || !containsLine(out, "config-dir-toml-wins")) {
+      throw new Error(`--config=<dir> should pick TOML over JSON5/JSON, got exit ${res.exitCode}: ${out}`);
+    }
   } finally {
     clean(tmp);
     clean(cfgDir);

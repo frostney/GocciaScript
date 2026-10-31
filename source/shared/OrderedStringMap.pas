@@ -2,7 +2,7 @@
   TOrderedStringMap<TValue> - String-keyed insertion-order-preserving map.
 
   Standalone implementation (does not inherit from TOrderedMap) with
-  static inline DJB2 hashing and ECMAScript UTF-16 string equality. This avoids
+  static inline mixed DJB2 hashing and ECMAScript UTF-16 string equality. This avoids
   the virtual dispatch overhead of TOrderedMap<TKey, TValue>.HashKey on
   every lookup — critical for property maps, module exports, and other
   hot paths where string-keyed maps dominate.
@@ -94,7 +94,7 @@ type
 
     function DeletedSlotsNeedCompaction: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function FindBucket(const AKey: string; AHash: Cardinal;
-      out ABucketIdx: Integer): Boolean;
+      out ABucketIdx: Integer; const AProbes: PInteger = nil): Boolean;
     procedure Grow(const APendingValue: TValue);
     procedure Rehash(ANewBucketCount: Integer);
     procedure Compact(const APendingValue: TValue);
@@ -149,6 +149,9 @@ type
 
     procedure Add(const AKey: string; const AValue: TValue); override;
     function TryGetValue(const AKey: string; out AValue: TValue): Boolean; override;
+    // Includes every bucket examined, also on a miss and across tombstones.
+    function TryGetValueWithProbes(const AKey: string; out AValue: TValue;
+      out AProbes: Integer): Boolean;
     function ContainsKey(const AKey: string): Boolean; override;
     function Remove(const AKey: string): Boolean; override;
     procedure Clear; override;
@@ -216,6 +219,12 @@ end;
 class function TOrderedStringMap<TValue>.HashKey(const AKey: string): Cardinal;
 begin
   Result := UTF16StringHash(AKey);
+  // Mix high bits into the bucket bits before and after multiplication.
+  // Multiplication alone leaves decimal-suffixed names clustered when the
+  // power-of-two bucket mask discards their differing high bits.
+  Result := Result xor (Result shr 16);
+  Result := Result * Cardinal($9E3779B1);
+  Result := Result xor (Result shr 16);
 end;
 {$IFDEF FPC}
   {$POP}
@@ -236,7 +245,7 @@ end;
 { Probe }
 
 function TOrderedStringMap<TValue>.FindBucket(const AKey: string; AHash: Cardinal;
-  out ABucketIdx: Integer): Boolean;
+  out ABucketIdx: Integer; const AProbes: PInteger): Boolean;
 var
   Idx, EntryIdx, FirstDeleted: Integer;
 begin
@@ -254,6 +263,9 @@ begin
         ABucketIdx := FirstDeleted
       else
         ABucketIdx := Idx;
+      if Assigned(AProbes) then
+        AProbes^ := ((Idx - Integer(AHash and Cardinal(FBucketCount - 1))) and
+          (FBucketCount - 1)) + 1;
       Exit;
     end;
 
@@ -268,6 +280,9 @@ begin
     begin
       ABucketIdx := Idx;
       Result := True;
+      if Assigned(AProbes) then
+        AProbes^ := ((Idx - Integer(AHash and Cardinal(FBucketCount - 1))) and
+          (FBucketCount - 1)) + 1;
       Exit;
     end;
 
@@ -483,6 +498,24 @@ begin
   end;
   Hash := HashKey(AKey);
   Result := FindBucket(AKey, Hash, BucketIdx);
+  if Result then
+    AValue := FEntries[FBuckets[BucketIdx]].Value
+  else
+    AValue := Default(TValue);
+end;
+
+function TOrderedStringMap<TValue>.TryGetValueWithProbes(const AKey: string;
+  out AValue: TValue; out AProbes: Integer): Boolean;
+var
+  BucketIdx: Integer;
+begin
+  AProbes := 0;
+  if FBucketCount = 0 then
+  begin
+    AValue := Default(TValue);
+    Exit(False);
+  end;
+  Result := FindBucket(AKey, HashKey(AKey), BucketIdx, @AProbes);
   if Result then
     AValue := FEntries[FBuckets[BucketIdx]].Value
   else

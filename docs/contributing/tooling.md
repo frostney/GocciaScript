@@ -6,7 +6,7 @@
 
 - **Auto-formatter** — `./format.pas` auto-fixes uses clauses, PascalCase naming, parameter prefixes, and stray spaces; runs via Lefthook pre-commit hook
 - **Editor config** — `.editorconfig` + VSCode/Cursor extensions for zero-config formatting on save
-- **Platform pitfalls** — stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
+- **Platform pitfalls** — code that must build on FPC 3.2.2 and 3.2.4, stale FPC artifacts after branch changes, FPC 3.2.2 `Int64`→`Double` conversion bugs (all platforms + AArch64-specific) and FPC 3.2.4 integer arguments resolving to `Single` overloads, endian-dependent byte indexing, `Int64` loop counters and lengths on 32-bit targets
 - **Fuzzing and probes** — `GocciaFuzzHarness` fuzzes single inputs and the scheduled run checks memory safety; `scripts/depth-probe.ts` is a manual, memory-capped probe of the runner's depth limits
 
 ## Auto-Formatting
@@ -87,6 +87,16 @@ The `runOnSave` command runs silently (`"runIn": "backend"`), so it will not ope
 All four layers enforce the same rules, providing defence in depth. The typical developer experience is: EditorConfig handles whitespace while you type, format-on-save fixes everything else when you save, and the pre-commit hook and CI catch anything that slips through.
 
 ## Platform-Specific Pitfalls
+
+### FPC 3.2.2 and 3.2.4
+
+CI builds with FPC 3.2.4 (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)); the package managers in the [README](../../README.md#build-from-source) install 3.2.2, and the source must keep building on both. Three RTL interfaces differ, and `Shared.inc` defines a symbol for each on 3.2.2 only:
+
+- `GOCCIA_FPC_CONSTREF_COMPARERS` — `Generics.Defaults` comparers take `constref` arguments on 3.2.2 and `const` on 3.2.4 (and Delphi). Declare a comparison function as `{$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} A, B: T`.
+- `GOCCIA_FPC_CONSTREF_COLLECTION_NOTIFY` — a `Generics.Collections` list's virtual `Notify` takes its value as `constref` on 3.2.2 and `const` on 3.2.4 (and Delphi); an override declares it the same way (`TUnicodeStringList`).
+- `GOCCIA_FPC_OPENSSL_DLL_NAMES` — the `openssl` unit's `DLLSSLName` and `DLLUtilName` are `BaseSSLName` and `BaseCryptoName` on 3.2.4.
+
+Workarounds for 3.2.2 compiler bugs stay while 3.2.2 is supported, including those 3.2.4 fixes, such as the inlined threadvar accessor ([#1699](https://github.com/frostney/GocciaScript/issues/1699)).
 
 ### Stale FPC Build Artifacts
 
@@ -254,6 +264,21 @@ did 226,196 allocations for a 36,028-character source). Use `CharInSet(Ch,
 loop over source text. Likewise, append a scanned character to a string or
 builder directly, or copy a range of the source, instead of building a
 one-character string per character.
+
+### AnsiString RTL Calls on Windows
+
+GocciaScript strings are UTF-16, but FPC 3.2's RTL is not Unicode: `TFileStream`
+and `FindFirst` take and return AnsiString file names, `TStringList` holds
+AnsiStrings, and `WriteLn` converts text to the output's code page. Each of
+these converts through the system code page. That is the locale's code page on
+Linux and macOS, usually UTF-8, and the ANSI code page (1252 on most systems)
+on Windows, where a character outside it comes back as `?`. On Windows the
+`ProcessEncoding` unit makes UTF-8 the code page of those conversions and of
+the names the RTL returns, and of `Output`, `ErrOutput` and `StdErr` when they
+are redirected to a file or a pipe; a console keeps its own output code page. A
+unit that converts strings through the RTL before `FileUtils` or the console
+built-in is initialized lists it in its uses. Because the setting is
+process-wide, it also applies to an application that embeds the engine.
 
 ## Fuzzing and Memory Safety
 
@@ -472,13 +497,27 @@ before.
 Pass `--timeout=0`: under stress, `tests/language/functions/function-parameters.js`
 alone takes about 50 seconds.
 
+Each collection marks the whole live heap, so a test that builds N objects
+costs time proportional to N times the heap under stress. `Goccia.build.gcStress`
+is `true` in a stress build ([ADR 0155](../adr/0155-goccia-build-reports-a-gc-stress-build.md)).
+A test with a large N reads it to shrink N, or to skip a case whose point is a
+size past an engine bound, so its other cases still run under stress:
+
+```javascript
+// 100,000 nested Proxies: seconds normally, hours under stress.
+const deepNestRuns = typeof Goccia !== "undefined" && !Goccia.build.gcStress;
+test.runIf(deepNestRuns)("a read through 100,000 nested Proxies throws RangeError", () => {
+  // ...
+});
+```
+
 The scheduled [GC-stress workflow](../../.github/workflows/gc-stress.yml) runs
 every Sunday at 04:41 UTC and on demand. `scripts/gc-stress.ts` runs the
 GC-sensitive test262 directories (Promise, Iterator, the async-function and
-await directories, eval code, arguments objects and generators) and `tests/`
-paths under the stress build and under an ordinary development build of the
-same commit. It reports only tests that pass in the ordinary build and fail
-under stress. Each `tests/` file runs in its own process, because an
+await directories, eval code, arguments objects and generators) and the whole
+`tests/` tree under the stress build and under an ordinary development build
+of the same commit. It reports only tests that pass in the ordinary build and
+fail under stress. Each `tests/` file runs in its own process, because an
 engine-integrity fault stops a whole test-runner run. To reproduce the whole
 comparison locally, build both variants and point the script at a test262
 checkout:

@@ -2388,22 +2388,50 @@ begin
   // moved the counters in the window — a concurrent release only frees room,
   // but a re-entrant same-thread charge from a sweep destructor would not —
   // can push the committed total past the ceiling.
+  //
+  // In a production build neither locked section has a try..finally.
+  // TryChargeExternalBytesLocked is integer arithmetic and flag stores on
+  // this collector's own fields, and Shared.inc turns the stack, range and
+  // overflow checks off there, so nothing under the lock can raise; every
+  // string and buffer reservation passes here, and a frame would cost an
+  // exception-frame push and pop, with their thread-variable lookups, and a
+  // setjmp on each of them. Keep it so: whatever is added inside the lock
+  // must not raise in a production build either.
+  //
+  // Every other build checks: each routine TryChargeExternalBytesLocked
+  // calls checks the stack in its prologue, which can raise near the end of
+  // the stack (building the RangeError for a deep recursion allocates
+  // strings there), and the counters are overflow-checked. There the frame
+  // stays, so that a raise cannot leave the lock held and block the next
+  // thread that takes it (a cross-thread ReleaseExternalBytes).
   CriticalSectionEnter(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   try
+  {$ENDIF}
     Result := TryChargeExternalBytesLocked(ABytes);
+  {$IFNDEF PRODUCTION}
   finally
+  {$ENDIF}
     CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   end;
+  {$ENDIF}
   if Result then
     Exit;
   if not TryCollectForLimitedBytes(ABytes, AProtect) then
     Exit(False);
   CriticalSectionEnter(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   try
+  {$ENDIF}
     Result := TryChargeExternalBytesLocked(ABytes);
+  {$IFNDEF PRODUCTION}
   finally
+  {$ENDIF}
     CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   end;
+  {$ENDIF}
 end;
 
 function TGarbageCollector.TryChargeExternalBytes(
@@ -2418,8 +2446,13 @@ begin
   // suspended frame at every await, so an async chain near the ceiling would
   // collect at every await. The periodic pressure check sees these bytes
   // like any others.
+  //
+  // A try..finally around the lock only where checks are on (see
+  // TryReserveExternalBytes): there the additions are overflow-checked.
   CriticalSectionEnter(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   try
+  {$ENDIF}
     Result := FitsWithinLimitLocked(ABytes);
     if Result then
     begin
@@ -2429,9 +2462,13 @@ begin
       if FBytesAllocated > FPeakBytesAllocated then
         FPeakBytesAllocated := FBytesAllocated;
     end;
+  {$IFNDEF PRODUCTION}
   finally
+  {$ENDIF}
     CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   end;
+  {$ENDIF}
 end;
 
 procedure TGarbageCollector.ReleaseExternalBytes(const ABytes: Int64);
@@ -2443,9 +2480,15 @@ begin
   // object charged on thread A can be destroyed on thread B, which then
   // releases here against collector A). The accounting lock serializes it with
   // the owner's counter updates so the two never tear
-  // FBytesAllocated/FExternalBytes — see FAccountingLock.
+  // FBytesAllocated/FExternalBytes — see FAccountingLock. Like the
+  // reservation it undoes, it takes the lock with a try..finally only where
+  // checks are on (see TryReserveExternalBytes): in a production build what
+  // runs under it is integer arithmetic on this collector's fields and cannot
+  // raise, and must stay that way.
   CriticalSectionEnter(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   try
+  {$ENDIF}
     if ABytes >= FExternalBytes then
     begin
       Dec(FBytesAllocated, FExternalBytes);
@@ -2456,15 +2499,20 @@ begin
       Dec(FExternalBytes, ABytes);
       Dec(FBytesAllocated, ABytes);
     end;
-    // Released bytes take the heap below the level the last forced collection
-    // observed, so that observation no longer bounds what a collection could
-    // reclaim and must not go on suppressing one.
-    if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
+    // Released bytes take the heap below the level the last forced
+    // collection observed, so that observation no longer bounds what a
+    // collection could reclaim and must not go on suppressing one.
+    if (FForcedCollectFloor >= 0) and
+       (FBytesAllocated < FForcedCollectFloor) then
       FForcedCollectFloor := -1;
     NoteBytesReleasedLocked;
+  {$IFNDEF PRODUCTION}
   finally
+  {$ENDIF}
     CriticalSectionLeave(FAccountingLock);
+  {$IFNDEF PRODUCTION}
   end;
+  {$ENDIF}
 end;
 
 procedure TGarbageCollector.NoteBytesReleasedLocked;

@@ -58,6 +58,7 @@ uses
   Goccia.ObjectModel,
   Goccia.ObjectModel.Engine,
   Goccia.Packages.Address,
+  Goccia.Profiler.Compile,
   Goccia.Realm,
   Goccia.Scope,
   Goccia.Scope.BindingMap,
@@ -362,6 +363,9 @@ type
       (last expression value, or undefined). }
     procedure InstantiateModuleFunctions(const AProgram: TGocciaProgram;
       var AContext: TGocciaEvaluationContext);
+    function CompileModuleProgram(const AProgram: TGocciaProgram;
+      const AFilePath: string; const ANonStrictMode,
+      AArgumentsObjectEnabled: Boolean): TGocciaBytecodeModule;
     function EvaluateModuleBody(const AProgram: TGocciaProgram;
       const AContext: TGocciaEvaluationContext;
       out AProgramConsumed: Boolean): TGocciaValue;
@@ -391,6 +395,10 @@ type
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
+    function CompileDynamicFunctionCode(const AParamStr, ABodySource: string;
+      const AKind: TGocciaDynamicFunctionKind;
+      const ACompileProfile: TGocciaCompileProfiler;
+      const AProfileSource: string): TGocciaFunctionBase;
     procedure InjectModulesFromValue(const AValue: TGocciaValue;
       const ABaseAddress, AProvenance: string);
   public
@@ -459,6 +467,16 @@ type
     // The compiled modules this engine keeps, in the order it compiled them:
     // the functions a heap snapshot names run their code (ADR 0148).
     function RetainedModule(const AIndex: Integer): TGocciaBytecodeModule;
+    { Compiles the source module at ASourcePath as linking it would, without
+      linking or running it, and keeps it: a heap snapshot restore needs the
+      code of the modules it restores (ADR 0148). The engine's own source
+      when ASourcePath is its source path, else the loader reads the module
+      under its read policy, and ASource (AHasSource) is what loading it
+      would record. AAsCompiledEntry: the engine's own source, compiled as
+      CompileModule compiles it. }
+    function CompileModuleForSnapshot(const ASourcePath: string;
+      const AIsHostOwned, AAsCompiledEntry: Boolean; out AHasSource: Boolean;
+      out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
     function RunModule(
       const AModule: TGocciaBytecodeModule): TGocciaValue;
     function RunModuleInScope(const AModule: TGocciaBytecodeModule;
@@ -2310,6 +2328,8 @@ begin
     TGocciaStringLiteralValue.Create(GetBuildArch), [pfEnumerable]));
   BuildObj.DefineProperty('date', TGocciaPropertyDescriptorData.Create(
     TGocciaStringLiteralValue.Create(GetBuildDate), [pfEnumerable]));
+  BuildObj.DefineProperty('gcStress', TGocciaPropertyDescriptorData.Create(
+    TGocciaBooleanLiteralValue.FromBoolean(IsGCStressBuild), [pfEnumerable]));
 
   ShimsArray := TGocciaArrayValue.Create;
   AddTempRootIfNeeded(ShimsRoot, ShimsArray);
@@ -2708,8 +2728,6 @@ procedure TGocciaEngine.InstantiateModuleFunctions(
   const AProgram: TGocciaProgram; var AContext: TGocciaEvaluationContext);
 var
   BytecodeModule: TGocciaBytecodeModule;
-  Compiler: TGocciaCompiler;
-  Options: TGocciaCompilerOptimizationOptions;
 begin
   if AContext.CompiledModule is TGocciaBytecodeModule then
   begin
@@ -2718,7 +2736,23 @@ begin
       AContext.Scope, AContext.Realm);
     Exit;
   end;
-  Compiler := TGocciaCompiler.Create(AContext.CurrentFilePath);
+  BytecodeModule := CompileModuleProgram(AProgram, AContext.CurrentFilePath,
+    AContext.NonStrictMode, AContext.Scope.EffectiveArgumentsObjectEnabled);
+  AContext.CompiledModule := BytecodeModule;
+  InstantiateCompiledModuleFunctions(BytecodeModule, AContext.Scope,
+    AContext.Realm);
+end;
+
+{ A module-form program compiled for linking, and kept for the engine's
+  life. }
+function TGocciaEngine.CompileModuleProgram(const AProgram: TGocciaProgram;
+  const AFilePath: string; const ANonStrictMode,
+  AArgumentsObjectEnabled: Boolean): TGocciaBytecodeModule;
+var
+  Compiler: TGocciaCompiler;
+  Options: TGocciaCompilerOptimizationOptions;
+begin
+  Compiler := TGocciaCompiler.Create(AFilePath);
   try
     // The module's top-level bindings live in its Module Environment
     // Record, so the module body and its functions read them there by name:
@@ -2728,24 +2762,74 @@ begin
     Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
     Compiler.PreinitializedTopLevelFunctions := True;
     Compiler.StrictTypes := FStrictTypes;
-    Compiler.NonStrictMode := AContext.NonStrictMode;
-    Compiler.ArgumentsObjectEnabled :=
-      AContext.Scope.EffectiveArgumentsObjectEnabled;
+    Compiler.NonStrictMode := ANonStrictMode;
+    Compiler.ArgumentsObjectEnabled := AArgumentsObjectEnabled;
     Options := Compiler.OptimizationOptions;
     Options.PreserveCoverageShape :=
       (TGocciaCoverageTracker.Instance <> nil) and
       TGocciaCoverageTracker.Instance.Enabled;
     Compiler.OptimizationOptions := Options;
-    BytecodeModule := Compiler.Compile(AProgram);
-    BytecodeModule.CompileProfile := BuildBytecodeCompileProfile(
+    Result := Compiler.Compile(AProgram);
+    Result.CompileProfile := BuildBytecodeCompileProfile(
       SourcePipelineOptions(stModule), FStrictTypes);
   finally
     Compiler.Free;
   end;
-  FRetainedModules.Add(BytecodeModule);
-  AContext.CompiledModule := BytecodeModule;
-  InstantiateCompiledModuleFunctions(BytecodeModule, AContext.Scope,
-    AContext.Realm);
+  FRetainedModules.Add(Result);
+end;
+
+{ ADR 0148: a restore compiles each source module a snapshot names as linking
+  it compiled it, a module's code being strict and its arguments object the
+  loader's setting, or the engine's for its own source. The snapshot names
+  the bytecode by its hash, so a module compiled differently is refused. }
+function TGocciaEngine.CompileModuleForSnapshot(const ASourcePath: string;
+  const AIsHostOwned, AAsCompiledEntry: Boolean; out AHasSource: Boolean;
+  out ASource: TGocciaModuleSnapshotSource): TGocciaBytecodeModule;
+var
+  ParseResult: TGocciaSourcePipelineResult;
+  ProgramNode: TGocciaProgram;
+  SavedSourceType: TGocciaSourceType;
+begin
+  AHasSource := False;
+  ASource := Default(TGocciaModuleSnapshotSource);
+  if AAsCompiledEntry then
+  begin
+    if ASourcePath <> FSourcePath then
+      raise Exception.Create('an entry module this engine was not made with');
+    ParseResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
+      SourcePipelineOptions(stModule));
+    // The record names a Module, regardless of the host's next parse goal.
+    SavedSourceType := FSourceType;
+    FSourceType := stModule;
+    try
+      Result := CompileModule(ParseResult.ProgramNode);
+    finally
+      FSourceType := SavedSourceType;
+      ParseResult.Free;
+    end;
+    Exit;
+  end;
+  if ASourcePath = FSourcePath then
+  begin
+    ParseResult := TGocciaSourcePipeline.Parse(FSourceLines, FSourcePath,
+      SourcePipelineOptions(stModule));
+    try
+      Result := CompileModuleProgram(ParseResult.ProgramNode, FSourcePath,
+        False, cfArgumentsObject in FCompatibility);
+    finally
+      ParseResult.Free;
+    end;
+    Exit;
+  end;
+  ProgramNode := FModuleLoader.ParseModuleForSnapshot(ASourcePath,
+    AIsHostOwned, ASource);
+  try
+    Result := CompileModuleProgram(ProgramNode, ASourcePath, False,
+      FModuleLoader.ArgumentsObjectEnabled);
+  finally
+    ProgramNode.Free;
+  end;
+  AHasSource := True;
 end;
 
 { Create each top-level function declaration of AModule, compiled for
@@ -2841,6 +2925,8 @@ var
 begin
   if TGocciaCoverageTracker.Instance <> nil then
     TGocciaCoverageTracker.Instance.ExcludeFile(AFileName);
+  if TGocciaCompileProfiler.Instance <> nil then
+    TGocciaCompileProfiler.Instance.ExcludeFile(AFileName);
   Compiler := TGocciaCompiler.Create(AFileName);
   try
     Compiler.GlobalBackedTopLevel := True;
@@ -3287,8 +3373,19 @@ var
   SavedGlobalScope: TGocciaScope;
   SavedGlobalBackedTopLevel: Boolean;
   FloatingPointState: TGocciaFloatingPointState;
+  CompileProfile: TGocciaCompileProfiler;
+  CompileProfileUnitDepth: Integer;
 begin
   AStage := gesCompile;
+  // The eval code's parse and compile are profiled as a unit of their own,
+  // not as functions of the caller's file; its run is not part of it.
+  CompileProfile := TGocciaCompileProfiler.Instance;
+  CompileProfileUnitDepth := -1;
+  if Assigned(CompileProfile) then
+  begin
+    CompileProfileUnitDepth := CompileProfile.UnitDepth;
+    CompileProfile.BeginUnit('<eval>', ASourceText);
+  end;
   VarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   DeclaredVarNames := TUnicodeStringList.Create;
@@ -3346,6 +3443,8 @@ begin
             Compiler.Free;
           end;
           FRetainedModules.Add(Module);
+          if Assigned(CompileProfile) then
+            CompileProfile.EndUnitTo(CompileProfileUnitDepth);
 
           // §19.2.1.3 EvalDeclarationInstantiation checks the global object
           // first; then the template binds the eval's functions and vars and
@@ -3379,6 +3478,8 @@ begin
       OptionsScope.Free;
     end;
   finally
+    if Assigned(CompileProfile) then
+      CompileProfile.EndUnitTo(CompileProfileUnitDepth);
     LeaveGocciaFloatingPointScope(FloatingPointState);
     SourceLines.Free;
     DeclaredVarNames.Free;
@@ -4045,6 +4146,8 @@ begin
       if FModuleLoader.ContentProvider.TryGetLastModified(EntryModule.Path,
          EntryLastModified) then
         EntryModule.LastModified := EntryLastModified;
+      EntryModule.SnapshotKind := mskEntryCompiled;
+      EntryModule.CompiledModule := AModule;
       FModuleLoader.RegisterModule(EntryModule.Path, EntryModule);
       SavedRuntimeModule := FVM.CurrentRuntimeModule;
       FVM.CurrentRuntimeModule := EntryModule;
@@ -4505,6 +4608,8 @@ begin
               ModuleScope);
             InstantiateModuleFunctions(PipelineResult.ProgramNode,
               ModuleContext);
+            EntryModule.SnapshotKind := mskSource;
+            EntryModule.CompiledModule := ModuleContext.CompiledModule;
             if FModuleLoader.VarEnabled then
               HoistVarDeclarations(PipelineResult.ProgramNode.Body,
                 ModuleScope, ModuleContext);
@@ -5436,13 +5541,52 @@ begin
   end;
 end;
 
+// The Function constructor's code is profiled as a compile unit of its own,
+// not as functions of the caller's file. Its run creates only the function.
 function TGocciaEngine.CompileDynamicFunction(
   const AParamsSources: array of string;
   const ABodySource: string;
   const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
 var
-  ParamStr: string;
-  I: Integer;
+  CompileProfile: TGocciaCompileProfiler;
+  UnitDepth, I: Integer;
+  ParamStr, ProfileSource: string;
+begin
+  ParamStr := '';
+  for I := 0 to High(AParamsSources) do
+  begin
+    if I > 0 then
+      ParamStr := ParamStr + ',';
+    ParamStr := ParamStr + AParamsSources[I];
+  end;
+  CompileProfile := TGocciaCompileProfiler.Instance;
+  if not Assigned(CompileProfile) then
+    Exit(CompileDynamicFunctionCode(ParamStr, ABodySource, AKind, nil, ''));
+  UnitDepth := CompileProfile.UnitDepth;
+  // The kind, the parameters as the wrapper joins them, and the body: the
+  // same function source is the same unit, whatever its arguments' split.
+  // The parameters are length-prefixed: no character they or the body may
+  // hold can move text from one field to the other.
+  ProfileSource := IntToStr(Ord(AKind)) + ':' + IntToStr(Length(ParamStr)) +
+    ':' + ParamStr + ABodySource;
+  CompileProfile.BeginUnit('<Function>', ProfileSource);
+  try
+    Result := CompileDynamicFunctionCode(ParamStr, ABodySource, AKind,
+      CompileProfile, ProfileSource);
+  finally
+    CompileProfile.EndUnitTo(UnitDepth);
+  end;
+end;
+
+{ ACompileProfile, when the compile profile is on, gets the parameter and
+  body validation parses as units of their own beside the wrapper's
+  (AProfileSource identifies them): their positions are not the wrapper's. }
+function TGocciaEngine.CompileDynamicFunctionCode(const AParamStr,
+  ABodySource: string; const AKind: TGocciaDynamicFunctionKind;
+  const ACompileProfile: TGocciaCompileProfiler;
+  const AProfileSource: string): TGocciaFunctionBase;
+var
+  UnitDepth: Integer;
   BodyParseResult: TGocciaFunctionBodyParseResult;
   FunctionExpression: TGocciaFunctionExpression;
   PipelineOptions: TGocciaSourcePipelineOptions;
@@ -5457,14 +5601,6 @@ begin
   // This prevents injection: a crafted body that tries to close the method
   // wrapper will fail validation because it will have unmatched braces when
   // parsed as a standalone function body.
-  ParamStr := '';
-  for I := 0 to High(AParamsSources) do
-  begin
-    if I > 0 then
-      ParamStr := ParamStr + ',';
-    ParamStr := ParamStr + AParamsSources[I];
-  end;
-
   // Validate params: must parse as a valid parameter list.
   // If params contain tokens that escape the signature, this will throw.
   PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
@@ -5476,22 +5612,36 @@ begin
     FExperimentalJSModuleSourceEnabled;
   PipelineOptions.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
   PipelineOptions.SourceType := stScript;
-  if not TGocciaSourcePipeline.ParseFunctionParameters(ParamStr,
+  // A raise leaves these units open; CompileDynamicFunction closes them.
+  UnitDepth := -1;
+  if Assigned(ACompileProfile) then
+  begin
+    UnitDepth := ACompileProfile.UnitDepth;
+    ACompileProfile.BeginUnit('<Function:params>', AProfileSource);
+  end;
+  if not TGocciaSourcePipeline.ParseFunctionParameters(AParamStr,
     '<Function:params>', PipelineOptions, AKind) then
     ThrowSyntaxError('Invalid parameter list for Function constructor');
 
   // Validate body: must parse as a valid function body.
   // An arrow wrapper ensures the body is enclosed in matching braces.
+  if Assigned(ACompileProfile) then
+  begin
+    ACompileProfile.EndUnitTo(UnitDepth);
+    ACompileProfile.BeginUnit('<Function:body>', AProfileSource);
+  end;
   BodyParseResult := TGocciaSourcePipeline.ParseFunctionBodyWrapper(
     ABodySource, '<Function:body>', PipelineOptions, AKind);
   if not BodyParseResult.IsValid then
     ThrowSyntaxError('Invalid body for Function constructor');
+  if Assigned(ACompileProfile) then
+    ACompileProfile.EndUnitTo(UnitDepth);
 
   // Both pieces validated — safe to assemble the wrapper
   WrapperOptions := PipelineOptions;
   if BodyParseResult.HasUseStrictDirective then
     WrapperOptions.InheritedStrictMode := True;
-  ProgramNode := TGocciaSourcePipeline.ParseDynamicFunctionWrapper(ParamStr,
+  ProgramNode := TGocciaSourcePipeline.ParseDynamicFunctionWrapper(AParamStr,
     ABodySource, '<Function>', WrapperOptions, AKind);
   try
     FunctionExpression := nil;

@@ -11,12 +11,12 @@
 ## Executive Summary
 
 - **Self-hosted build** — `./build.pas` is a FreePascal script via `instantfpc`; no Make/CMake/npm required
-- **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked), plus the `--gc-stress` development variant
+- **Two modes** — `--dev` (default: debug info, checks) and `--prod` (O4, stripped, smart-linked), plus the `--gc-stress` development variant and the `--layout-probe` production variant
 - **CI/CD** — `ci.yml` for main/tags (full platform matrix), `pr.yml` for PRs (ubuntu-latest x64 only, with benchmark comparison)
 - **Auto-formatter** — `./format.pas` with Lefthook pre-commit hook enforces code style automatically
 - **Automatic clean retry** — when FPC fails with a stale-state symptom, `build.pas` wipes that target's unit directory and retries it once; `./build.pas --clean <target>` is the explicit form when the retry also fails
 
-GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself.
+GocciaScript uses a self-hosted build script written in FreePascal, executed via `instantfpc`. No external build tools (Make, CMake, npm) are required beyond the FreePascal compiler itself. Win32 builds also apply [audited SafeSEH metadata](contributing/win32-safeseh.md).
 
 This file is the authoritative command reference for local builds and CLI usage. Root-level files such as `README.md`, `CONTRIBUTING.md`, and
 `AGENTS.md` link here instead of duplicating the complete command list.
@@ -33,7 +33,7 @@ Delphi 12 contributors build the Win32 and Win64 native application matrix from 
 
 ### Build Modes
 
-The build script supports two modes via `--dev` (default) and `--prod` flags. `--gc-stress` is a development build that collects every 8 VM instructions; see [Tooling — GC-stress build](contributing/tooling.md#gc-stress-build).
+The build script supports two modes via `--dev` (default) and `--prod` flags. `--gc-stress` is a development build that collects every 8 VM instructions; see [Tooling — GC-stress build](contributing/tooling.md#gc-stress-build). `--layout-probe` needs `--prod` and adds `-dGOCCIA_VM_LAYOUT_PROBE`: the same build with the VM's dispatch code a few hundred bytes further along, written to `build/layout-probe/` with units under `build/compiled/layout-probe/`, for measuring how much code placement alone moves a benchmark; see [Bytecode VM — Dispatch layout](bytecode-vm.md#dispatch-layout).
 
 ```bash
 ./build.pas runner              # Dev build (default)
@@ -259,7 +259,7 @@ printf "const f = () => Promise.resolve().then(f); f();" | ./build/GocciaRunner 
 # each section as an independent file across the worker pool
 ./build/GocciaRunner scenarios.js --multifile
 ./build/GocciaTestRunner suites.js --multifile --jobs=4
-mkdir -p dist   # the bundler does not create --output directories
+mkdir -p dist   # the output root must already exist
 ./build/GocciaBundler scenarios.js --multifile --output=dist/
 printf '1;\n---\n2;\n---\n3;\n' | ./build/GocciaRunner --multifile
 
@@ -478,9 +478,9 @@ printf "const x = 2 + 2; x;" | ./build/GocciaBundler --output=out.gbc
 ./build/GocciaBundler src/ --jobs=4
 ```
 
-`--output` directories must already exist; the bundler does not create them. A missing directory for
-several files or `--multifile` is currently reported as "`--output` must be a directory"
-([#1279](https://github.com/frostney/GocciaScript/issues/1279)).
+The `--output` root must already exist; directory inputs preserve their relative
+paths below it. See [output layout and collision checks](bytecode-loading.md#output-layout-and-collision-checks)
+for nested directories, multifile sections, source maps and invocation preflight.
 
 See [bytecode-vm.md](bytecode-vm.md) for the bytecode VM architecture and binary format.
 
@@ -500,7 +500,7 @@ reach, how inputs are copied in and written back, and the config section.
 # Empty filesystem; the entry is copied to /main.js.
 ./build/GocciaRunner main.js --sandbox
 
-# Copy inputs read-only to /task.txt and /fixtures, then print a JSON diff.
+# Copy inputs to /task.txt and /fixtures (never written back), then print a JSON diff.
 ./build/GocciaRunner main.js --copy task.txt --copy fixtures --diff
 
 # An entry inside a copied directory runs there: /src/main.js.
@@ -520,7 +520,7 @@ reach, how inputs are copied in and written back, and the config section.
 | Option | Effect |
 |---|---|
 | `--sandbox` | Run in sandbox mode with an empty virtual filesystem; the entry file is copied to `/<name>` |
-| `--copy <host>[=<sandbox>]` | Copy a host file or directory into the sandbox read-only (default `/<basename>`); enables sandbox mode. Repeatable |
+| `--copy <host>[=<sandbox>]` | Copy a host file or directory into the sandbox (default `/<basename>`); the script may change the copy, but it is never written back; enables sandbox mode. Repeatable |
 | `--copy-rw <host>[=<sandbox>]` | Copy like `--copy`, then write changed files back to the host after a successful run |
 | `--entry <sandbox-path>` | Run a path inside the sandbox instead of a host file |
 | `--diff[=json\|unified]` | Print sandbox filesystem changes after the run (default: `json`) |
@@ -645,20 +645,20 @@ Overflow and range checks are enabled in development mode for safety. In product
 The build script is a FreePascal program that runs via the `instantfpc` shebang:
 
 ```pascal
-#!/usr/bin/env instantfpc
+#!/usr/bin/env -S instantfpc -B -Fu./source/shared
 ```
 
 It:
 
 1. Creates the `build/` directory if it doesn't exist.
-2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`), and `--gc-stress`, which adds the GC-stress flags to a development build and moves its unit caches and binaries.
+2. Parses `--dev`/`--prod` flags to determine the build mode (defaults to `--dev`), `--gc-stress`, which adds the GC-stress flags to a development build and moves its unit caches and binaries, and `--layout-probe`, which does the same for the layout probe on a production build.
 3. Parses remaining arguments to determine which components to build.
 4. Counts and prints source statistics: total lines of code (LOC), significant lines of code (SLOC, excluding blanks and comments), and file count.
-5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and suppressed verbose output flags (`-vw-n-h-i-l-d-u-t-p-c-x-`).
-6. If the `FPC_TARGET_CPU` environment variable is set, prepends `-P<arch>` to the compiler arguments (used by CI to target x86_64 on Windows where the FPC package defaults to i386).
+5. Calls `fpc` with `@config.cfg`, a target-specific `-FUbuild/compiled/...` override, mode-specific flags, and quiet output; Win32 retains the linked filename for its post-link step.
+6. Applies `FPC_TARGET_CPU` and `FPC_TARGET_OS`, when set, as the compiler's `-P<cpu>` and `-T<os>` target overrides.
 7. For the `tests` target, auto-discovers all `*.Test.pas` files under `source/units/`, `source/shared/` and `source/app/` (including `source/app/compliance/`), compiling each program with its own `build/compiled/tests/<test-program>/` unit-output directory.
 
-The GitHub Actions cross-compilation workflow (`.github/workflows/toolchain.yml`) uses two reduced cached FPC toolchains rather than a full target-side FCL install: a macOS-hosted one for the Darwin targets and a Linux-hosted one for the Linux and Windows targets. Both start from the same patched FPC 3.2.2 source and build their target units with `.github/scripts/build-fpc-cross-units.sh`. Each prebuilds the RTL, `rtl-objpas`, `rtl-generics`, and `fcl-process`, and also caches the official `fcl-base` sources so cross builds can resolve units such as `Base64` on demand from the shipped FPC packages.
+Every workflow that compiles installs FPC 3.2.4 with the [`frostney/fpc-toolchain`](https://github.com/frostney/fpc-toolchain) action, pinned by commit, which caches the toolchain between runs. CI is pinned to the build `3.2.4-rc2-b1`, which each of `ci.yml`, `pr.yml`, `fuzz.yml`, `gc-stress.yml` and `timezone-data-bump.yml` names once, in its `FPC_VERSION` variable; a version bump also requires the [Win32 manifest re-audit](contributing/win32-safeseh.md#re-auditing-a-toolchain-update). In `ci.yml` the `build` job asks the action for its matrix target: the Linux runner cross-compiles the Linux and Windows targets and the macOS runner the Darwin ones, with `fpc -P<cpu> -T<os>` picking the compiler and the toolchain's `fpc.cfg` supplying the units and binutils. FPC 3.2.4 builds no x86 cross compilers on arm64 hosts, so on Apple Silicon `x86_64-darwin` runs the toolchain's x86_64 macOS compiler under Rosetta 2. The Linux targets link against the pinned Ubuntu 22.04 (x86_64) and 18.04 (aarch64) glibc libraries that the job downloads and checks by SHA-256, not the runner's own, so a release needs glibc 2.34 on x86_64 and 2.17 on aarch64. The source builds on FPC 3.2.2 as well; `Shared.inc` defines the symbols that cover the two RTL interfaces 3.2.4 changed.
 
 ## Project Structure for Compilation
 
@@ -739,7 +739,7 @@ GitHub Actions CI is split into two workflow files, plus `nightly.yml`, which ch
 
 ### `ci.yml` — Push to main + tags
 
-Job graph: `supersede -> toolchain -> build -> test / toml-compliance / json5-compliance / test262 -> test262-merge / awfy / jetstream-workload -> jetstream / web-tooling-workload -> web-tooling / benchmark / cli -> artifacts (main) / release (tags)`. `jetstream-plan` and `web-tooling-plan` feed their workload matrices, and `test-structure` runs on its own.
+Job graph: `supersede -> build -> test / toml-compliance / json5-compliance / test262 -> test262-merge / awfy / jetstream-workload -> jetstream / web-tooling-workload -> web-tooling / benchmark / cli -> artifacts (main) / release (tags)`. `jetstream-plan` and `web-tooling-plan` feed their workload matrices, and `test-structure` runs on its own.
 
 All matrix strategies use `fail-fast: false`, so one platform failing does not cancel other platforms. The lanes that fan out from `build` (`test`, `toml-compliance`, `json5-compliance`, `test262`, `awfy`, `jetstream-workload`, `web-tooling-workload`, `benchmark`, `cli`) do not depend on each other; only the merge jobs wait for their own lane (`test262-merge` for `test262`, `jetstream` for `jetstream-workload`, `web-tooling` for `web-tooling-workload`). The first job, `supersede`, cancels superseded `main` runs as a whole so their builds stop holding macOS runners. GitHub does not process runs in push order, so it compares commits rather than relying on a concurrency group. On a push to `main`, it lists the workflow's other queued or in-progress `main` push runs and compares each run's commit with its own. It cancels runs whose commit is an ancestor of its own, and cancels its own run when its commit is an ancestor of another run's. Runs for the same commit and diverged commits are left alone, and a failed API call only logs a warning. `toolchain` waits for `supersede`, so cancellation happens before any macOS work. Tag runs and every `workflow_dispatch` run, including one on `main`, are never cancelled. The shard-merging report jobs (`test262-merge`, `jetstream`, `web-tooling`) and the AWFY and JetStream publish steps use `!cancelled()` rather than `always()`, so they still run after a failed shard or workload but a cancelled run publishes nothing. Each Blob publisher uploads the report before the daily pointer that makes it visible, so an interrupted publish leaves either the previous pointer or one to a complete report.
 
@@ -749,9 +749,9 @@ Runs on the full platform matrix:
 |----|-------------|
 | Ubuntu Latest | x64, ARM64 |
 | macOS Latest | x64, ARM64 |
-| Windows Latest | x86 (i386-win32) |
+| Windows Latest | x64 (x86_64-win64), x86 (i386-win32) |
 
-**`build`** — Installs FPC, compiles the `source/app/*.dpr` programs with `--prod`, stages those binaries plus Pascal test executables, and uploads that staged set as intermediate artifacts.
+**`build`** — Installs FPC 3.2.4 with its matrix target (see [How build.pas works](#how-buildpas-works)). `.github/scripts/compile-programs.py` builds every application, Pascal test and compliance runner with up to four compiler processes, limited to the runner's logical CPU count. Each gets its own temporary unit-output and working directory and keeps `-B` and all production flags; compiled units are never reused across programs or runs. It prints per-program times and compiler totals, saves diagnostics under `build/ci-logs/`, and prints them on failure. Any compiler failure fails the job after the other compilers finish. The staged binaries are uploaded as intermediate artifacts. A failed upload is retried once after ten seconds, replacing any artifact left by the first attempt; a second failure fails the job.
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests on all platforms.
 
@@ -770,13 +770,13 @@ Runs on the full platform matrix:
 
 **`cli`** (needs build) — Downloads pre-built binaries and runs CLI behavior smoke tests on all platforms via Bun: the shared test assertions, options across all apps, lexer numeric-separator rejection, parser error display, config-file loading, app-specific features including the runner's sandbox mode, capability flags, limits and permission defaults (`scripts/test-cli-permissions.ts`), embedded resources, Intl taint robustness, FFI callback-slot exhaustion in a process of its own (`scripts/test-cli-ffi-callback-slots.ts`, after building the FFI fixture library), and the differential suites. Windows runs additionally assert that `GocciaRunner` does not link OpenSSL DLLs (HTTPS must use the platform TLS stack statically).
 
-**`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints. The rolling `nightly` prerelease is not a `ci.yml` job: `.github/workflows/nightly.yml` runs on a schedule, every three hours, and looks for the newest `CI` run that concluded `success` for a `push` to `main`, so a cancelled, failed, tag, or dispatched run is never published. It publishes when that run's commit is ahead of the commit the `nightly` tag points at (or has diverged from it, after a rewritten `main`), and does nothing when no newer commit has passed or the run's one-day artifacts have expired; a manual run on `main` publishes the newest passing build at once. It checks out the run's `head_sha` and downloads that run's `gocciascript-<target>` artifacts. If any of the six target artifacts or packaged archives is missing, the job fails without touching the existing release; otherwise it restores the executable bit on the binaries (artifacts do not keep file modes), packages the six targets with `tests/`, `benchmarks/`, and `examples/`, and deletes and recreates the `nightly` prerelease at that commit under the non-cancelling `nightly-release` concurrency group. A commit newer than that run's, still in CI or failed, does not hold the nightly back: the newest build that passed is what gets published. Keeping the job out of `ci.yml` means a cancelled `main` run can never stop between deleting and recreating the release. A scheduled workflow uses the default branch's copy of `nightly.yml`, so changes to it take effect only after merge.
+**`artifacts`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, main only) — Uploads production binaries after all checks pass, deriving the executable names from the `source/app/*.dpr` entrypoints. The rolling `nightly` prerelease is not a `ci.yml` job: `.github/workflows/nightly.yml` runs on a schedule, every three hours, and looks for the newest `CI` run that concluded `success` for a `push` to `main`, so a cancelled, failed, tag, or dispatched run is never published. It publishes when that run's commit is ahead of the commit the `nightly` tag points at (or has diverged from it, after a rewritten `main`), and does nothing when no newer commit has passed or the run's one-day artifacts have expired; a manual run on `main` publishes the newest passing build at once. It checks out the run's `head_sha` and downloads that run's `gocciascript-<target>` artifacts. If any of the six target artifacts or packaged archives is missing, the job fails without touching the existing release; otherwise it packages the six targets with `.github/scripts/package-release-archive.sh`, the same script the tagged `release` job uses, and deletes and recreates the `nightly` prerelease at that commit under the non-cancelling `nightly-release` concurrency group. A commit newer than that run's, still in CI or failed, does not hold the nightly back: the newest build that passed is what gets published. Keeping the job out of `ci.yml` means a cancelled `main` run can never stop between deleting and recreating the release. A scheduled workflow uses the default branch's copy of `nightly.yml`, so changes to it take effect only after merge.
 
-**`release`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, tags only) — Downloads all platform build artifacts, stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints, bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux/macOS, `.zip` for Windows), generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
+**`release`** (needs test + toml-compliance + json5-compliance + awfy + jetstream + web-tooling + benchmark + cli, tags only) — Downloads all platform build artifacts and packages each target with `.github/scripts/package-release-archive.sh`, which owns the target list and the asset names shared with the nightly: it stages only the shipped binaries derived from the `source/app/*.dpr` entrypoints and restores their executable bit (artifacts do not keep file modes), bundles them with `tests/`, `benchmarks/`, and `examples/` into per-platform archives (`.tar.gz` for Linux, `.zip` for macOS and Windows), and runs `.github/scripts/check-release-archive.sh`, which fails the job if an archive lacks a shipped binary or records a non-Windows binary without the executable bit. The `pr.yml` job `release-packaging` runs the same script on the `build-pr` binaries without publishing anything: once as the Linux x64 `.tar.gz` and once, as the `x86_64-darwin` target, as a macOS `.zip`. It skips the usual `chmod` after the download, as this job does, so the check fails if packaging stops restoring the bit, and it then runs `GocciaRunner` from both extracted archives. The `release` job then generates categorized release notes via [git-cliff](https://git-cliff.org/) (`cliff.toml`), and creates a GitHub release using `softprops/action-gh-release`.
 
 ### `pr.yml` — Pull requests
 
-Job graph: `build (+ build-main) -> test / benchmark -> benchmark-comment / awfy-report -> awfy-comment / jetstream-workload -> jetstream-report -> jetstream-comment / web-tooling-workload -> web-tooling-report -> web-tooling-comment / test262 -> test262-merge -> test262-comment / boot-timing / cli`. `test`, `benchmark`, and `boot-timing` feed `timing-comment`; `docs` and `test-structure` run on their own.
+Job graph: `build (+ build-main) -> test / benchmark -> benchmark-comment / awfy-report -> awfy-comment / jetstream-workload -> jetstream-report -> jetstream-comment / web-tooling-workload -> web-tooling-report -> web-tooling-comment / test262 -> test262-merge -> test262-comment / boot-timing / cli`. `test`, `benchmark`, and `boot-timing` feed `timing-comment`; `docs` and `test-structure` run on their own. A new push to the pull request cancels its previous run (`cancel-in-progress`). The merge jobs (`test262-merge`, `jetstream-report`, `web-tooling-report`) and the comment jobs (`awfy-comment`, `jetstream-comment`, `web-tooling-comment`, `timing-comment`, `test262-comment`) use `!cancelled()` rather than `always()`. They still run after a failed shard or workload, and a missing shard fails its merge job with the missing shards or workloads named. A cancelled run skips them, so the replaced commit shows cancelled instead of failing on artifacts the cancellation never produced, and its missing reports do not overwrite the PR comments. `.github/scripts/test-report-publishing.js` fails if a job-level `if:` in any workflow uses `always()`.
 
 Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices on that platform.
 
@@ -784,9 +784,9 @@ Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices
 
 **`test`** (needs build) — Runs all JavaScript tests and Pascal unit tests.
 
-**`benchmark`** (needs build + build-main) — Compares the PR against a `main` build measured **on the same runner**. A separate `build-main` job builds the benchmark runner from the PR's base commit (`github.event.pull_request.base.sha`); the `benchmark` job then warms up the runner (discarded) and benchmarks the `main` build and the PR build back-to-back, so deltas reflect the diff rather than cross-runner variance (issue #815, [ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). It posts a collapsible comparison comment grouped by file: each file section shows the same-runner `main` and PR `opsPerSec` point estimates side by side, each carrying its min/max ops/sec range in brackets. Classification (in [`scripts/benchmark-compare.js`](../scripts/benchmark-compare.js), unit-tested by `scripts/test-benchmark-compare.ts`) uses range overlap: fully above the `main` range is an improvement, fully below is a regression, and overlapping ranges are treated as unchanged noise. The comment also reports the measured median per-run variance as a noise floor. Percentage deltas are secondary context, files with significant changes are auto-expanded, and the comparison is advisory (comment-only, never merge-blocking). The deterministic profile diff (opcode/allocation counts) is regenerated from the same `main` build. If no `main` build is available, shows results without comparison.
+**`benchmark`** (needs build + build-main) — Compares the PR against a `main` build measured **on the same runner**. A separate `build-main` job builds the benchmark runner from the PR's base commit (`github.event.pull_request.base.sha`) with the same FPC build as `build`, so a compiler change never shows up as a PR's delta; the `benchmark` job then warms up the runner (discarded) and benchmarks the `main` build and the PR build back-to-back, so deltas reflect the diff rather than cross-runner variance (issue #815, [ADR 0076](adr/0076-same-runner-benchmark-comparison.md)). It posts a collapsible comparison comment grouped by file: each file section shows the same-runner `main` and PR `opsPerSec` point estimates side by side, each carrying its min/max ops/sec range in brackets. Classification (in [`scripts/benchmark-compare.js`](../scripts/benchmark-compare.js), unit-tested by `scripts/test-benchmark-compare.ts`) uses range overlap: fully above the `main` range is an improvement, fully below is a regression, and overlapping ranges are treated as unchanged noise. The comment also reports the measured median per-run variance as a noise floor. Percentage deltas are secondary context, files with significant changes are auto-expanded, and the comparison is advisory (comment-only, never merge-blocking). The deterministic profile diff (opcode/allocation counts) is regenerated from the same `main` build. If no `main` build is available, shows results without comparison.
 
-**`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA and runs a matrix of native `GocciaTest262Runner` shards. GitHub's strategy index and total define each shard, and `scripts/run_test262_suite.ts --merge-shards` validates and merges every downloaded shard report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: always()`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list. PR CI does not generate or upload the full-corpus test262 profile artifact.
+**`test262`** (needs build, **non-blocking**) — Checks out `tc39/test262` at the pinned SHA and runs a matrix of native `GocciaTest262Runner` shards. GitHub's strategy index and total define each shard, and `scripts/run_test262_suite.ts --merge-shards` validates and merges every downloaded shard report. Failing tests do not fail the job. The downstream `test262-comment` job (`if: ${{ !cancelled() }}`) restores the most recent `test262-baseline-` cache entry from main, then `bun scripts/run_test262_suite.ts --comment test262-results.json <baseline>` builds the markdown body and the workflow posts/updates a comment using marker `<!-- test262-results -->`. The comment shows a per-category breakdown (built-ins, harness, intl402, language, staging) with Δ-vs-main columns when a baseline is cached, an "Areas closest to 100%" sub-table, and a collapsible per-test delta list. PR CI does not generate or upload the full-corpus test262 profile artifact.
 
 **`awfy-report`** (needs build + build-main) — Runs the same `ciReport` AWFY set as full CI on the PR x64 build, using Goccia bytecode, QuickJS, and the latest Node Current release with five interleaved samples per engine. It uploads the normalized `awfy-report` JSON artifact. The downstream `awfy-comment` job posts or updates an `AWFY Results` comment with median timings and geomean ratios; min/max/CV and raw samples remain in the artifact.
 
@@ -796,7 +796,7 @@ Runs on **ubuntu-latest x64 only**; workload suites may fan out through matrices
 
 **`cli`** (needs build) — Builds the FFI fixture library and runs CLI behavior smoke tests via Bun (`scripts/test-cli-assertions.ts`, `scripts/test-cli.ts`, `scripts/test-cli-lexer.ts`, `scripts/test-cli-parser.ts`, `scripts/test-cli-config.ts`, `scripts/test-cli-apps.ts`, `scripts/test-cli-permissions.ts`, `scripts/test-cli-embedded-resources.ts`, `scripts/test-cli-intl-taint.ts`, `scripts/test-cli-ffi-callback-slots.ts`, `scripts/test-cli-differential.ts`). `test-cli-permissions.ts` covers the capability flags, limits, and permission defaults. `test-cli-apps.ts` includes `GocciaScriptLoaderBare` coverage for stdin, `-`, input files, CLI-local `print`, module source type, and absence of the loader runtime profile, plus `GocciaRunner` sandbox-mode coverage for `--copy` / `--copy-rw` inputs, the `sandbox` config section, virtual `fs`, `$`, shared and child-sandbox `runScript` / shell `goccia`, diff output, the engine resource and fetch-policy options, and the `runScript` failure kinds for every guest-reachable failure and every host-set ceiling.
 
-FPC is only installed once per platform in the `build` job. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
+FPC is installed only in the `build` jobs and `pr.yml`'s `build-main`. In `ci.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, cli, TOML, JSON5, and test262 conformance jobs reuse the pre-built binaries and artifacts from that job; in `pr.yml`, the test, AWFY, JetStream, Web Tooling, benchmark, test262, and cli jobs do the same.
 
 Report publication uses `.github/scripts/publish-website-report.sh` for the optional Blob token check and one website dependency installation per CI job. The workflow retains report arguments, timestamps, artifact conditions, and profile archive creation. Checked-out PR report jobs share `.github/scripts/upsert-pr-comment.js`; report builders retain their markdown and comment markers.
 

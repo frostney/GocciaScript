@@ -31,7 +31,8 @@ uses
   TimingUtils,
 
   Goccia.Bytecode.OpCodeNames,
-  Goccia.JSON.Utils;
+  Goccia.JSON.Utils,
+  Goccia.Profiler.Compile;
 
 const
   MAX_OPCODE_PAIRS_DISPLAYED = 20;
@@ -426,7 +427,10 @@ begin
         Profile.Allocations]));
     end;
   end;
-  Buf.Append(#10'  ]');
+  Buf.Append(#10'  ],');
+
+  // Compile section (--profile=compile)
+  AppendCompileProfileJSON(Buf, TGocciaCompileProfiler.Instance);
 
   Buf.Append(#10'}' + #10);
 
@@ -450,12 +454,13 @@ var
 begin
   Output := TStringList.Create;
   try
-    for Pair in AProfiler.CollapsedStacks do
-    begin
-      Microseconds := Pair.Value div 1000;
-      if Microseconds > 0 then
-        Output.Add(Pair.Key + ' ' + IntToStr(Microseconds));
-    end;
+    if not AProfiler.Deterministic then
+      for Pair in AProfiler.CollapsedStacks do
+      begin
+        Microseconds := Pair.Value div 1000;
+        if Microseconds > 0 then
+          Output.Add(Pair.Key + ' ' + IntToStr(Microseconds));
+      end;
     SaveStringsToHostFile(Output, AOutputPath);
   finally
     Output.Free;

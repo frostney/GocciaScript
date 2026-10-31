@@ -8,7 +8,8 @@ uses
   NumberBits,
   TestingPascalLibrary,
 
-  Goccia.NumberExponentiation;
+  Goccia.NumberExponentiation,
+  Goccia.TestSetup;
 
 type
   TNumberExponentiationTests = class(TTestSuite)
@@ -19,13 +20,16 @@ type
     procedure TestSignedZeroBases;
     procedure TestInfiniteExponents;
     procedure TestNegativeFractionalBase;
+    procedure TestCorrectlyRoundedResults;
+    procedure TestNegativeBaseLargeIntegralExponent;
+    procedure TestSubnormalAndOverflowingResults;
   public
     procedure SetupTests; override;
   end;
 
 procedure TNumberExponentiationTests.SetupTests;
 begin
-  Test('ordinary finite values use native binary64 power', TestOrdinaryValues);
+  Test('ordinary finite values', TestOrdinaryValues);
   Test('zero exponent takes precedence over a NaN base', TestNaNPrecedence);
   Test('infinite bases preserve odd exponent signs', TestInfiniteBases);
   Test('signed-zero bases preserve odd exponent signs', TestSignedZeroBases);
@@ -33,6 +37,11 @@ begin
     TestInfiniteExponents);
   Test('negative bases reject fractional exponents',
     TestNegativeFractionalBase);
+  Test('finite results are correctly rounded', TestCorrectlyRoundedResults);
+  Test('negative bases keep the sign for integral exponents of 2^31 or more',
+    TestNegativeBaseLargeIntegralExponent);
+  Test('results round once into the subnormal range and overflow to infinity',
+    TestSubnormalAndOverflowingResults);
 end;
 
 procedure TNumberExponentiationTests.TestOrdinaryValues;
@@ -79,10 +88,53 @@ begin
   Expect<Boolean>(IsNan(NumberExponentiation(-2.0, 0.5))).ToBe(True);
 end;
 
+// Expected bit patterns are Node 24's results, each the correctly rounded
+// value.
+procedure TNumberExponentiationTests.TestCorrectlyRoundedResults;
+begin
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($4415AF1D78B58C40), 0.5))).ToBe($4202A05F20000000);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(10.0, -5.0))).ToBe(
+    $3EE4F8B588E368F1);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($3FF199999999999A), 30.0))).ToBe($4031730C06EF9D91);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(10.0, 308.0))).ToBe(
+    $7FE1CCF385EBC8A0);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(
+    BitsToDouble($16687E92154EF7AC), 1.5))).ToBe($01A56E1FC2F8F359);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(2.0,
+    BitsToDouble($3FB999999999999A)))).ToBe($3FF125FBEE250664);
+  Expect<Double>(NumberExponentiation(9.0, 0.5)).ToBe(3.0);
+  Expect<Double>(NumberExponentiation(3.0, 33.0)).ToBe(5559060566555523.0);
+end;
+
+procedure TNumberExponentiationTests.TestNegativeBaseLargeIntegralExponent;
+begin
+  Expect<Double>(NumberExponentiation(-2.0, 2147483648.0)).ToBe(Infinity);
+  Expect<Double>(NumberExponentiation(-3.0, 2147483649.0)).ToBe(NegInfinity);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(-0.5, 2147483649.0))).ToBe(
+    UInt64(1) shl 63);
+  Expect<Double>(NumberExponentiation(-1.0, 1e300)).ToBe(1.0);
+end;
+
+procedure TNumberExponentiationTests.TestSubnormalAndOverflowingResults;
+begin
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(2.0, -1074.0))).ToBe(1);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(0.5, 1075.0))).ToBe(0);
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(-2.0, -1075.0))).ToBe(
+    UInt64(1) shl 63);
+  // Rounded once into the subnormal range; rounding the normal result again
+  // there would give $000FFFFFFFFFFFE0.
+  Expect<UInt64>(DoubleToBits(NumberExponentiation(288.0,
+    BitsToDouble(UInt64($C05F45F2DA703D6F))))).ToBe($000FFFFFFFFFFFDF);
+  Expect<Double>(NumberExponentiation(10.0, 309.0)).ToBe(Infinity);
+  Expect<Double>(NumberExponentiation(-10.0, 309.0)).ToBe(NegInfinity);
+end;
+
 begin
   TestRunnerProgram.AddSuite(
     TNumberExponentiationTests.Create('Goccia.NumberExponentiation'));
-  TestRunnerProgram.Run;
+  RunGocciaTests;
 
   ExitCode := TestResultToExitCode;
 end.

@@ -9,7 +9,8 @@ unit Goccia.CLI.SandboxMode;
   Sandbox mode turns on with --sandbox, --copy, --copy-rw, or a trusted
   `sandbox` section in the root config. Command-line inputs are added to the
   config's; one with the same sandbox path as a config input replaces it, so
-  `--copy out` turns a config's `copy-rw: ["out"]` into a read-only dry run. }
+  `--copy out` turns a config's `copy-rw: ["out"]` into a dry run that writes
+  nothing back. }
 
 {$I Goccia.inc}
 

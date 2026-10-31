@@ -3,6 +3,7 @@
 const fs = require('fs');
 
 const MARKER = '<!-- awfy-results -->';
+const COMPARISON_PAIR = 'goccia-candidate_over_goccia-baseline';
 const LEGACY_MARKER = '<!-- awfy-smoke -->';
 const DEFAULT_COMMENT_ENGINES = ['goccia', 'qjs', 'node'];
 const COMPARISON_COMMENT_ENGINES = ['goccia-baseline', 'goccia-candidate', 'qjs', 'node'];
@@ -37,8 +38,12 @@ function reportHasGocciaComparison(report) {
   });
 }
 
+// The comment's engine columns: those the report ran, when its metadata says,
+// so a local A/B of two Goccia binaries has no empty reference columns.
 function commentEngines(report) {
-  return reportHasGocciaComparison(report) ? COMPARISON_COMMENT_ENGINES : DEFAULT_COMMENT_ENGINES;
+  const engines = reportHasGocciaComparison(report) ? COMPARISON_COMMENT_ENGINES : DEFAULT_COMMENT_ENGINES;
+  const ran = new Set((report?.metadata?.engines || []).map((engine) => engine.name));
+  return ran.size > 0 ? engines.filter((engine) => ran.has(engine)) : engines;
 }
 
 function targetStatus(target, engines = DEFAULT_COMMENT_ENGINES) {
@@ -137,7 +142,7 @@ function gocciaComparisonClassification(target) {
 }
 
 function deltaCell(target) {
-  const ratio = target.summary?.ratios?.['goccia-candidate_over_goccia-baseline'];
+  const ratio = target.summary?.ratios?.[COMPARISON_PAIR];
   if (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0) return '-';
   const delta = (1 - ratio) * 100;
   const formatted = formatDeltaPercent(delta);
@@ -146,6 +151,39 @@ function deltaCell(target) {
   if (classification === 'regressed') return `🔴 ${formatted}`;
   if (classification === 'unchanged') return `~ overlap (${formatted})`;
   return formatted;
+}
+
+// Whether the report has perf_event counters for both Goccia binaries.
+function reportHasCounterComparison(report) {
+  return (report?.targets || []).some((target) => target.summary?.counterRatios?.[COMPARISON_PAIR]);
+}
+
+// The PR's change in a counter's median against main: negative is fewer
+// instructions (less work) or fewer misses.
+// A count perf had to multiplex is scaled, not exact: such a cell is marked.
+function countersMultiplexed(target) {
+  const stats = target.summary?.engineStats || {};
+  return Boolean(stats['goccia-baseline']?.counters?.multiplexed || stats['goccia-candidate']?.counters?.multiplexed);
+}
+
+function counterDeltaCell(target, key) {
+  const ratio = target.summary?.counterRatios?.[COMPARISON_PAIR]?.[key];
+  if (!finiteNumber(ratio) || ratio < 0) return '-';
+  const cell = formatDeltaPercent((ratio - 1) * 100);
+  return countersMultiplexed(target) ? `${cell} (scaled)` : cell;
+}
+
+function counterNote(report, hasCounters) {
+  const counters = report?.metadata?.counters;
+  if (!counters) return '';
+  if (!counters.available) return `Hardware counters were requested but not recorded: ${String(counters.reason).replace(/\.$/, '')}. `;
+  if (!hasCounters) return 'Hardware counters were requested but no sample of both Goccia binaries recorded them. ';
+  return 'The Instructions and L1i misses columns are the PR\'s change in the median perf_event count against main, '
+    + 'so there negative is fewer (Δ PR vs main is the time saved, so there positive is faster). Instructions do not depend '
+    + 'on code placement: a time Δ with no instruction Δ and a moved L1i miss count is layout, not work. '
+    + ((report?.targets || []).some(countersMultiplexed)
+      ? 'A (scaled) count is perf\'s estimate from a multiplexed counter, not an exact count. '
+      : '');
 }
 
 function buildGeomeanTable(geomean, labels = ENGINE_LABELS, engines = DEFAULT_COMMENT_ENGINES) {
@@ -179,17 +217,21 @@ function buildAwfyReportComment(report) {
   const labels = engineLabels(report);
   const engines = commentEngines(report);
   const hasComparison = reportHasGocciaComparison(report);
+  const hasCounters = hasComparison && reportHasCounterComparison(report);
 
   body += `| Target | Status | ${engines.map((engine) => labels[engine]).join(' | ')}`;
   if (hasComparison) body += ' | Δ PR vs main';
+  if (hasCounters) body += ' | Instructions | L1i misses';
   body += ' |\n';
   body += `|--------|--------|${engines.map(() => '--------').join('|')}`;
   if (hasComparison) body += '|-------------';
+  if (hasCounters) body += '|-------------|-----------';
   body += '|\n';
   for (const target of report.targets || []) {
     const cells = engineCells(target, engines);
     body += `| ${target.name} | ${targetStatus(target, engines)} | ${cells.join(' | ')}`;
     if (hasComparison) body += ` | ${deltaCell(target)}`;
+    if (hasCounters) body += ` | ${counterDeltaCell(target, 'instructions')} | ${counterDeltaCell(target, 'icacheMisses')}`;
     body += ' |\n';
   }
 
@@ -204,6 +246,7 @@ function buildAwfyReportComment(report) {
   if (sampleCount !== null) body += `Medians from ${plural(sampleCount, 'interleaved sample')} per engine; `;
   body += 'raw JSON includes min/max/CV and is attached as the `awfy-report` artifact. ';
   if (hasComparison) body += 'Δ compares PR Goccia median against the same-runner main Goccia median; overlapping min/max ranges are treated as unchanged noise. ';
+  if (hasComparison) body += counterNote(report, hasCounters);
   body += 'Rows below 0.5ms are timer-floor sensitive.</sub>\n';
   return body;
 }
@@ -247,6 +290,7 @@ module.exports = {
   buildAwfySmokeComment: buildAwfyReportComment,
   cleanEngineVersion,
   commentEngines,
+  counterDeltaCell,
   deltaCell,
   engineLabels,
   LEGACY_MARKER,

@@ -1,5 +1,5 @@
 /*---
-description: Operator, member and call chains taller than the supported tree height are a catchable SyntaxError
+description: Operator, member, call and type assertion chains taller than the supported tree height are a catchable SyntaxError
 features: [ShadowRealm, Goccia]
 ---*/
 
@@ -34,6 +34,9 @@ const chains = {
   "optional calls": [(d) => `const f = () => f; typeof f${"?.()".repeat(d)}`, () => "function"],
   "tagged templates": [(d) => `const tag = () => tag; typeof tag${"`x`".repeat(d)}`, () => "function"],
   "tagged member access": [(d) => `const o = () => o; o.o = o; typeof o${".o".repeat(d)}\`x\``, () => "function"],
+  "non-null assertions": [(d) => `const n = 1; n${"!".repeat(d)}`, () => 1],
+  "as assertions": [(d) => `1${" as number".repeat(d)}`, () => 1],
+  "satisfies assertions": [(d) => `1${" satisfies number".repeat(d)}`, () => 1],
 };
 
 describe("chain length limit", () => {
@@ -97,10 +100,14 @@ describe("chain length limit", () => {
   });
 
   test("lists do not count: sequences, arguments, elements and statements", () => {
-    expect(realm.evaluate(`let c = 0; (c${", c".repeat(DEEP)})`)).toBe(0);
-    expect(realm.evaluate(`[${"1, ".repeat(DEEP)}1].length`)).toBe(DEEP + 1);
-    expect(realm.evaluate(`const f = (...a) => a.length; f(${"1, ".repeat(DEEP)}1)`)).toBe(DEEP + 1);
-    expect(realm.evaluate(`let n = 0;${" n += 1;".repeat(DEEP)} n`)).toBe(DEEP);
+    // Running these lists takes an instruction per item. A GC-stress build
+    // collects every 8 instructions, so a stress run uses 5,000 items, still
+    // past the height limit.
+    const items = (typeof Goccia !== "undefined" && Goccia.build.gcStress) ? 5000 : DEEP;
+    expect(realm.evaluate(`let c = 0; (c${", c".repeat(items)})`)).toBe(0);
+    expect(realm.evaluate(`[${"1, ".repeat(items)}1].length`)).toBe(items + 1);
+    expect(realm.evaluate(`const f = (...a) => a.length; f(${"1, ".repeat(items)}1)`)).toBe(items + 1);
+    expect(realm.evaluate(`let n = 0;${" n += 1;".repeat(items)} n`)).toBe(items);
   });
 
   test("the engine keeps working after the error", () => {

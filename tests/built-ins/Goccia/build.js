@@ -1,5 +1,5 @@
 /*---
-description: Goccia.build exposes compile-time platform information (os and arch)
+description: Goccia.build exposes compile-time platform information (os, arch and whether the build is a GC-stress build)
 features: [Goccia]
 ---*/
 
@@ -77,5 +77,13 @@ describe.runIf(hasGoccia)("Goccia.build", () => {
   test("build.arch is enumerable", () => {
     const keys = Object.keys(Goccia.build);
     expect(keys.includes("arch")).toBe(true);
+  });
+
+  test("build.gcStress is an enumerable, read-only boolean", () => {
+    const original = Goccia.build.gcStress;
+    expect(typeof original).toBe("boolean");
+    expect(Object.keys(Goccia.build).includes("gcStress")).toBe(true);
+    expect(() => { Goccia.build.gcStress = !original; }).toThrow(TypeError);
+    expect(Goccia.build.gcStress).toBe(original);
   });
 });

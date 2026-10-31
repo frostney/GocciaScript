@@ -43,11 +43,13 @@ function comparableEngineMetadata(report) {
 }
 
 function mergeReports(reports, manifest) {
-  if (reports.length === 0) throw new Error('No JetStream shard reports provided');
+  const expected = reportBenchmarks(manifest);
+  if (reports.length === 0) {
+    throw new Error(`No JetStream shard reports found; missing workloads: ${expected.join(', ')}`);
+  }
   const first = reports[0];
   const targets = [];
   const names = new Set();
-  const expected = reportBenchmarks(manifest);
   const firstEngines = JSON.stringify(comparableEngineMetadata(first));
 
   for (const report of reports) {
@@ -99,7 +101,6 @@ function mergeReports(reports, manifest) {
 
 function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  if (options.reports.length === 0) throw new Error('Provide at least one shard report path');
   const manifest = JSON.parse(fs.readFileSync(options.manifestPath, 'utf8'));
   const reports = options.reports.map((fileName) => JSON.parse(fs.readFileSync(fileName, 'utf8')));
   const merged = mergeReports(reports, manifest);

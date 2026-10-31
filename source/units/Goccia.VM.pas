@@ -423,6 +423,17 @@ type
     // stack. A `const` record parameter may be passed by reference on some
     // targets (e.g. win64), which would leave the parameter dangling into
     // the freed old block; a value copy taken at the call is immune.
+    // Whether an OP_JUMP_IF_*_IMM instruction takes its jump. It can run
+    // guest code (a relational ToPrimitive).
+    function ImmediateComparisonJumps(const AOp: TGocciaOpCode;
+      const ALeftIndex: Integer; const AImmediate: Int16): Boolean;
+    // OP_GET_PROP_CONST and OP_GET_LOCAL_PROP_CONST for a receiver the
+    // property read caches do not serve: R[ADest] := R[AObject][K[AName]].
+    procedure ExecGetUncachedConstProperty(
+      const ATemplate: TGocciaFunctionTemplate; const ADest, AObject: Integer;
+      const ANameIndex: UInt16);
+    procedure RecordFusedBranchHit(const ATemplate: TGocciaFunctionTemplate;
+      const APC: Integer; const ATaken: Boolean);
     procedure ExecGetComputedProperty(const ADest: Integer;
       AObjReg, AKeyReg: TGocciaRegister;
       const AOptions: TGocciaComputedAccessOptions);
@@ -508,14 +519,16 @@ type
     function DynamicImportAttributeType(const AOptions: TGocciaValue): string;
     procedure ExportBindingValue(const AName: string; const AValue: TGocciaValue;
       const ASourcePath: string = '');
+    { AIsPrivate: AName is the storage key of a private name (a
+      bckPrivateName constant) rather than a property key. }
     procedure DefineGetterProperty(const ATarget: TGocciaValue; const AName: string;
-      const AGetter: TGocciaValue);
+      const AGetter: TGocciaValue; const AIsPrivate: Boolean = False);
     procedure DefineSetterProperty(const ATarget: TGocciaValue; const AName: string;
-      const ASetter: TGocciaValue);
+      const ASetter: TGocciaValue; const AIsPrivate: Boolean = False);
     procedure DefineStaticGetterProperty(const ATarget: TGocciaValue; const AName: string;
-      const AGetter: TGocciaValue);
+      const AGetter: TGocciaValue; const AIsPrivate: Boolean = False);
     procedure DefineStaticSetterProperty(const ATarget: TGocciaValue; const AName: string;
-      const ASetter: TGocciaValue);
+      const ASetter: TGocciaValue; const AIsPrivate: Boolean = False);
     procedure DefineDataPropertyByKeyInternal(const ATarget: TGocciaValue;
       const AKey: TGocciaRegister; const AValue: TGocciaValue;
       const ASetHomeObject: Boolean);
@@ -535,6 +548,9 @@ type
     function FinalizeEnumValue(const AValue: TGocciaValue; const AName: string): TGocciaValue;
     procedure StampBytecodePrivateBrands(const AClassValue: TGocciaClassValue;
       const AInstance: TGocciaValue;
+      const APreserveExistingPrivateSlots: Boolean);
+    procedure StampBytecodePrivateBrandsGeneric(
+      const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
       const APreserveExistingPrivateSlots: Boolean);
     procedure SetupAutoAccessorValue(const AName: string; const AFlags: Integer;
       const AClassValue: TGocciaValue = nil);
@@ -598,6 +614,9 @@ type
       const AObject: TGocciaValue): string;
     function ResolveBytecodePrivateRuntimeKey(const AKey: string;
       const AObject: TGocciaValue): string;
+    function TryGetInstancePrivateField(const AInstance: TGocciaInstanceValue;
+      const AKey: string; out ALexicalClass: TGocciaClassValue;
+      out ARuntimeKey: string; out AValue: TGocciaValue): Boolean;
     function ResolveBytecodePrivateBrandToken(const AKey: string;
       const AObject: TGocciaValue): string;
     function CurrentBytecodePrivateAccessClass(
@@ -609,6 +628,16 @@ type
     procedure SetPropertyValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
     procedure SetPropertyValueGeneric(const AObject: TGocciaValue;
+      const AKey: string; const AValue: TGocciaValue);
+    { The private-name counterparts of the two above. AKey is a private
+      storage key that came from a bckPrivateName constant, never from a
+      property key, whatever its text. }
+    function PrivateReferenceDescriptor(const AObject: TGocciaObjectValue;
+      const AKey: string;
+      var ALexicalClass: TGocciaClassValue): TGocciaPropertyDescriptor;
+    function GetPrivatePropertyValue(const AObject: TGocciaValue;
+      const AKey: string): TGocciaValue;
+    procedure SetPrivatePropertyValue(const AObject: TGocciaValue;
       const AKey: string; const AValue: TGocciaValue);
     { DefinePropertyOrThrow of a data property for a field, a computed
       literal key or a class element: the descriptor is the target's once the
@@ -633,6 +662,12 @@ type
       out AValue: TGocciaValue): Boolean;
     procedure SetRawPrivateValue(const AObject: TGocciaValue; const AKey: string;
       const AValue: TGocciaValue);
+    procedure SetResolvedPrivateValue(const AObject: TGocciaValue;
+      const ARuntimeKey: string; const AValue: TGocciaValue);
+    procedure DefinePrivateFieldValue(const AObject: TGocciaObjectValue;
+      const AKey: string; const AValue: TGocciaValue);
+    procedure DefinePrivateFieldValueGeneric(const AObject: TGocciaObjectValue;
+      const AKey: string; const AValue: TGocciaValue);
     function HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
     function HasWithBindingValue(const AObject, AKey: TGocciaValue): TGocciaValue;
     function GetWithBindingValue(const AObject, AKey: TGocciaValue;
@@ -692,6 +727,8 @@ type
     procedure ResolveFrameLocations(const AFrames: TGocciaCallFrameArray;
       const ACount: Integer; var ALocations: TGocciaFrameLocationArray);
     procedure InternExecutionSourcePath(const ASourcePath: string);
+    procedure NoteFrameEntry(const ATemplate: TGocciaFunctionTemplate;
+      var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
     procedure SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
       const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
       const AArgCount: Integer; const APushExecutionContext: Boolean;
@@ -828,6 +865,7 @@ uses
   Goccia.Arithmetic,
   Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
+  Goccia.Bytecode.Debug,
   Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
@@ -856,6 +894,7 @@ uses
   Goccia.PatternMatching,
   Goccia.PrivateNames,
   Goccia.Profiler,
+  Goccia.Profiler.Compile,
   Goccia.RegExp.Runtime,
   Goccia.Scope.Redeclaration,
   Goccia.SourcePipeline,
@@ -888,11 +927,13 @@ uses
   Goccia.Values.ToPrimitive,
   Goccia.Values.TypedArrayValue;
 
+{ Private storage keys. The VM builds these strings for its own private
+  element tables only: an instruction names a private element through a
+  bckPrivateName constant, never through a property key, so a property key
+  with the same text is an ordinary property. }
 const
-  BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
+  BYTECODE_PRIVATE_SLOT_PREFIX = PRIVATE_STORAGE_SLOT_PREFIX;
   BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
-  // First character of both prefixes above.
-  BYTECODE_PRIVATE_KEY_LEAD = '#';
   BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
   // Compiled private keys a class remembers having resolved; see
   // TGocciaVMClassValue.FPrivateKeyCache.
@@ -955,6 +996,33 @@ type
     function IsConstructable: Boolean; override;
     procedure TraceReferences; override;
   end;
+
+  { What OP_LOAD_CONST puts in a register for a bckPrivateName constant: the
+    private name's storage key as an operand of the instruction that follows
+    (OP_HAS_PROPERTY for `#x in o`, OP_GET_INDEX and OP_SET_INDEX past the
+    8-bit constant operand). Only this class makes those instructions treat
+    their key as a private name; a string with the same text is a property
+    key. The compiler never lets it reach script code. }
+  TGocciaPrivateNameKeyValue = class(TGocciaStringLiteralValue);
+
+// Whether AReg holds the TGocciaPrivateNameKeyValue of a private name.
+function IsPrivateNameKeyRegister(const AReg: TGocciaRegister): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := (AReg.Kind = grkObject) and Assigned(AReg.ObjectValue) and
+    (AReg.ObjectValue.ClassType = TGocciaPrivateNameKeyValue);
+end;
+
+{ The polls a call or an iteration makes when Goccia.ThreadPolls says
+  something is armed: each runs only when its own flag is set, through the
+  state pointer beside the flag, so neither looks up a thread variable. }
+procedure RunArmedPolls(const APolls: PGocciaThreadPolls);
+begin
+  if APolls^.TimeoutArmed then
+    PollExecutionTimeout(PGocciaTimeoutPollState(APolls^.TimeoutState));
+  if APolls^.InstructionLimitActive then
+    CheckInstructionLimitState(
+      PGocciaInstructionLimitState(APolls^.InstructionLimitState));
+end;
 
 function BytecodeFunctionIntrinsicKind(const ATemplate: TGocciaFunctionTemplate):
   TGocciaFunctionObjectIntrinsicKind; {$IFDEF FPC}inline;{$ENDIF}
@@ -1882,19 +1950,95 @@ begin
     (ARegister.ObjectValue is TGocciaNumberLiteralValue);
 end;
 
-function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+// Reads two numeric scalar operands (grkInt or grkFloat) as Doubles and
+// returns True, or returns False when either is anything else, a boxed Number
+// included. Each register is read once through its address: testing it with
+// RegisterIsNumericScalar and then reading it with NumericScalarToDouble made
+// the compiler load the register twice, each time copying it to a temporary.
+// The caller must not run guest code between taking the addresses and this
+// call, since guest code can move the register file.
+function VMNumericScalarPair(const ALeft, ARight: PGocciaRegister;
+  out ALeftDouble, ARightDouble: Double): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
+  Result := False;
+  if ALeft^.Kind = grkFloat then
+    ALeftDouble := ALeft^.FloatValue
+  else if ALeft^.Kind = grkInt then
+    ALeftDouble := ALeft^.IntValue
+  else
+    Exit;
+  if ARight^.Kind = grkFloat then
+    ARightDouble := ARight^.FloatValue
+  else if ARight^.Kind = grkInt then
+    ARightDouble := ARight^.IntValue
+  else
+    Exit;
+  Result := True;
+end;
+
+// Stores the Number AValue in ADest^, classified as VMNumberRegister does; the
+// numeric opcodes write their result here. The range test is false
+// for NaN and the infinities, so a finite value is classified with compares
+// and one truncation instead of calls to IsNaN, IsInfinite and Frac. Writing
+// the register in place spares the copy a function result makes through a
+// temporary. The caller must not run guest code between taking ADest and this
+// call, since guest code can move the register file.
+procedure VMStoreNumberRegister(const ADest: PGocciaRegister;
+  const AValue: Double); {$IFDEF FPC}inline;{$ENDIF}
+var
+  IntValue: Int64;
+begin
+  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
+  begin
+    IntValue := Trunc(AValue);
+    if IntValue <> AValue then
+    begin
+      ADest^.Kind := grkFloat;
+      ADest^.FloatValue := AValue;
+    end
+    else if (IntValue = 0) and NumberBits.IsNegativeZero(AValue) then
+    begin
+      ADest^.ObjectValue := TGocciaNumberLiteralValue.NegativeZeroValue;
+      ADest^.Kind := grkObject;
+    end
+    else
+    begin
+      ADest^.Kind := grkInt;
+      ADest^.IntValue := IntValue;
+    end;
+  end
+  else if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
+  begin
+    // The value before the kind: a register the collector can see never
+    // claims an object it does not hold.
+    ADest^.ObjectValue := VMNumberValue(AValue);
+    ADest^.Kind := grkObject;
+  end
+  else
+  begin
+    ADest^.Kind := grkFloat;
+    ADest^.FloatValue := AValue;
+  end;
+end;
+
+function VMNumberRegister(const AValue: Double): TGocciaRegister; {$IFDEF FPC}inline;{$ENDIF}
+var
+  IntValue: Int64;
+begin
+  // The same classification as VMStoreNumberRegister, for callers that need
+  // the register as a value. Built over that procedure and the result's
+  // address, these callers' code grew.
+  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) then
+  begin
+    IntValue := Trunc(AValue);
+    if IntValue <> AValue then
+      Exit(RegisterFloat(AValue));
+    if (IntValue = 0) and NumberBits.IsNegativeZero(AValue) then
+      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
+    Exit(RegisterInt(IntValue));
+  end;
   if Math.IsNaN(AValue) or Math.IsInfinite(AValue) then
     Exit(RegisterObject(VMNumberValue(AValue)));
-  if AValue = 0.0 then
-  begin
-    if NumberBits.IsNegativeZero(AValue) then
-      Exit(RegisterObject(TGocciaNumberLiteralValue.NegativeZeroValue));
-    Exit(RegisterInt(0));
-  end;
-  if (AValue >= Low(LongInt)) and (AValue <= High(LongInt)) and
-     (Frac(AValue) = 0.0) then
-    Exit(RegisterInt(Trunc(AValue)));
   Result := RegisterFloat(AValue);
 end;
 
@@ -2617,11 +2761,12 @@ type
   end;
 
   // What StampBytecodePrivateBrands stamps for a class: each private name
-  // and its brand key, built for one PrivateNamesVersion of the class.
+  // and its brand and runtime keys, built for one PrivateNamesVersion.
   TGocciaPrivateStampPlan = record
     Version: Cardinal;
     Names: TArray<string>;
     BrandKeys: TArray<string>;
+    RuntimeKeys: TArray<string>;
     HasSharedBrandKeys: Boolean;
   end;
 
@@ -2661,6 +2806,8 @@ type
     // Compiled keys of private static elements, which the class declares
     // under a per-evaluation runtime key instead of the compiled one.
     FRuntimeKeyedPrivateKeys: array of string;
+    // True when FPrivateStampPlan still lists the class's private names.
+    function PrivateStampPlanIsCurrent: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     function CachedPrivateKeyIndex(const AKey: string): Integer;
     function PrivateKeyCacheEntry(
       const AIndex: Integer): PGocciaPrivateKeyCacheEntry; {$IFDEF FPC}inline;{$ENDIF}
@@ -2685,6 +2832,10 @@ type
     procedure TraceReferences; override;
     procedure AddRuntimeKeyedPrivateKey(const ACompiledKey: string);
     function PrivateStampPlan: TGocciaPrivateStampPlan;
+    // True when the current plan is known to list no private name, read in
+    // place without copying the plan; False when it lists some or has to be
+    // rebuilt.
+    function HasEmptyPrivateStampPlan: Boolean;
     // The brand key for ACompiledKey, which this class declares.
     function PrivateBrandKeyFor(const ACompiledKey: string): string;
     // BytecodePrivateRuntimeKey of ACompiledKey, which this class declares,
@@ -4671,6 +4822,7 @@ var
   HadContinuation: Boolean;
   ReturnRegister: TGocciaRegister;
   Suspension: TGocciaBytecodeSuspension;
+  Polls: PGocciaThreadPolls;
 begin
   FLastResumeResultIsIteratorResult := False;
   if FState = bgsCompleted then
@@ -4718,11 +4870,9 @@ begin
     try
       // ExecuteClosureRegisters' polls, then the entry told to report a
       // suspension through Suspension instead of raising.
-      if GThreadPolls.Any <> 0 then
-      begin
-        CheckExecutionTimeout;
-        CheckInstructionLimit;
-      end;
+      Polls := @GThreadPolls;
+      if Polls^.Any <> 0 then
+        RunArmedPolls(Polls);
       Suspension.Kind := bskNone;
       ReturnRegister := FVM.ExecuteClosureRegistersInternal(FClosure,
         FThisValue, PGocciaRegister(FArguments), Length(FArguments), True,
@@ -7145,6 +7295,7 @@ var
   NativeInstanceConstructedByNativeSuper: Boolean;
   Chain: TGocciaImplicitConstructorChain;
   PreviousPendingNewTarget: TGocciaValue;
+  Polls: PGocciaThreadPolls;
   procedure EnsureBoxedArgs;
   begin
     if not Assigned(BoxedArgs) then
@@ -7319,11 +7470,9 @@ var
     end;
   end;
 begin
-  if GThreadPolls.Any <> 0 then
-  begin
-    CheckExecutionTimeout;
-    CheckInstructionLimit;
-  end;
+  Polls := @GThreadPolls;
+  if Polls^.Any <> 0 then
+    RunArmedPolls(Polls);
   BoxedArgs := nil;
   try
     NativeInstance := nil;
@@ -8196,8 +8345,8 @@ end;
   A growth is decided inside call setup, which can neither collect nor throw.
   It cannot collect because the callee, the receiver and the arguments of a
   call made from native code are still held only in Pascal locals there
-  (SetupNewFrame copies them into the argument window before anything can
-  collect). It cannot throw because the caller's frame is already saved and
+  (SetupNewFrame copies them into the argument window, or for a callee that
+  never reads one into its registers, before anything can collect). It cannot throw because the caller's frame is already saved and
   the callee's is not yet set up, and unwinding from between the two would
   tear down a frame that does not exist. So a growth that does not fit takes
   only the entries its frame needs, uncharged, and the next instruction
@@ -8960,8 +9109,7 @@ begin
     if (KeyIndex < 0) or (KeyIndex >= ATemplate.ConstantCount) then
       Continue;
     KeyConstant := ATemplate.GetConstantUnchecked(KeyIndex)^;
-    if (KeyConstant.Kind = bckString) and
-       IsBytecodePrivateKey(KeyConstant.StringValue) then
+    if KeyConstant.Kind = bckPrivateName then
       DeclareBytecodePrivateNameForClass(AClassValue, KeyConstant.StringValue);
   end;
 end;
@@ -9203,10 +9351,13 @@ var
   Element: TGocciaValue;
 begin
   // Element reads that resolve without a property key. This procedure must
-  // keep no managed locals: that is what makes these paths cheap.
+  // keep no managed locals: that is what makes these paths cheap. The classes
+  // are compared exactly rather than with `is`, which walks the class chain
+  // of every receiver that is not a typed array; a subclass instance simply
+  // takes the generic core.
   if AObjReg.Kind = grkObject then
   begin
-    if AObjReg.ObjectValue is TGocciaTypedArrayValue then
+    if AObjReg.ObjectValue.ClassType = TGocciaTypedArrayValue then
     begin
       // Typed-array unboxed element read: the element goes straight into the
       // destination register as a scalar. Non-index keys, BigInt kinds, and
@@ -9220,7 +9371,7 @@ begin
       end;
     end
     else if (AKeyReg.Kind = grkInt) and
-            (AObjReg.ObjectValue is TGocciaArrayValue) then
+            (AObjReg.ObjectValue.ClassType = TGocciaArrayValue) then
     begin
       // Dense array element at an integer index. A hole, an out-of-range
       // index, or an accessor-shadowed slot takes the generic core.
@@ -9254,6 +9405,11 @@ begin
   if (caoThrowOnNullUndefined in AOptions) and
      (AObjReg.Kind in [grkNull, grkUndefined]) then
     ThrowNullishBasePropertyAccess(AObjReg.Kind, AKeyReg, False)
+  else if (caoHandlePrivateKeys in AOptions) and
+          IsPrivateNameKeyRegister(AKeyReg) then
+    // A private name past the 8-bit constant operand (EmitLoadPropertyByName).
+    SetRegister(ADest, GetPrivatePropertyValue(RegisterToValue(AObjReg),
+      TGocciaPrivateNameKeyValue(AKeyReg.ObjectValue).Value))
   else if (AObjReg.Kind = grkObject) and
           (AObjReg.ObjectValue is TGocciaTypedArrayValue) and
           TryGetArrayIndexRegister(AKeyReg, FastIndex) and
@@ -9303,12 +9459,8 @@ begin
     else
     begin
       KeyName := PropertyKeyName(Key);
-      if (caoHandlePrivateKeys in AOptions) and
-         IsBytecodePrivateKey(KeyName) then
-        SetRegister(ADest, GetPropertyValue(AObjReg.ObjectValue, KeyName))
-      else
-        SetRegister(ADest, TGocciaClassValue(AObjReg.ObjectValue)
-          .GetProperty(KeyName));
+      SetRegister(ADest, TGocciaClassValue(AObjReg.ObjectValue)
+        .GetProperty(KeyName));
     end;
   end
   else if (AObjReg.Kind = grkObject) and
@@ -9321,12 +9473,7 @@ begin
     else
     begin
       KeyName := PropertyKeyName(Key);
-      // Private-key routing historically applies only to keys that did
-      // not pass through ToPropertyKey on this arm.
-      if (caoHandlePrivateKeys in AOptions) and (not Key.FromObjectKey) and
-         IsBytecodePrivateKey(KeyName) then
-        SetRegister(ADest, GetPropertyValue(AObjReg.ObjectValue, KeyName))
-      else if (caoLiteralFastPath in AOptions) and
+      if (caoLiteralFastPath in AOptions) and
               (AObjReg.ObjectValue is TGocciaVMLiteralObjectValue) and
               TGocciaVMLiteralObjectValue(AObjReg.ObjectValue)
                 .TryGetOwnDataPropertyFastRegister(KeyName,
@@ -9356,11 +9503,12 @@ var
 begin
   // Element writes that resolve without a property key. This procedure must
   // keep no managed locals: that is what makes these paths cheap. Everything
-  // else, including the nullish target check, runs in the generic core.
+  // else, including the nullish target check, runs in the generic core, as
+  // does an instance of a subclass of either class compared exactly below.
   if FRegisters[ATargetIndex].Kind = grkObject then
   begin
     Target := FRegisters[ATargetIndex].ObjectValue;
-    if Target is TGocciaTypedArrayValue then
+    if Target.ClassType = TGocciaTypedArrayValue then
     begin
       // Typed-array unboxed element write: a numeric-scalar value going to a
       // valid integer index stores directly.
@@ -9371,15 +9519,22 @@ begin
         Exit;
     end
     else if (AKeyReg.Kind = grkInt) and
-            (Target is TGocciaArrayValue) and
-            (AKeyReg.IntValue >= 0) and
-            (AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count) then
+            (Target.ClassType = TGocciaArrayValue) and
+            (AKeyReg.IntValue >= 0) then
     begin
-      // Overwriting a dense array element. The array declines when the slot is
-      // a hole or the store needs the complete [[Set]]; the value boxed here
-      // is then simply dropped and the generic core boxes its own.
-      if TGocciaArrayValue(Target).TrySetDenseElementFast(AKeyReg.IntValue,
-           RegisterToValue(AValueReg)) then
+      // Storing a dense array element, filling a hole, or appending one past
+      // the elements, the last two only when no prototype can intercept the
+      // store. When the array declines, the value boxed here is simply
+      // dropped and the generic core boxes its own.
+      if AKeyReg.IntValue < TGocciaArrayValue(Target).Elements.Count then
+      begin
+        if TGocciaArrayValue(Target).TryStoreElementFast(AKeyReg.IntValue,
+             RegisterToValue(AValueReg)) then
+          Exit;
+      end
+      else if (AKeyReg.IntValue = TGocciaArrayValue(Target).Elements.Count) and
+              TGocciaArrayValue(Target).TryAppendDenseElementFast(
+                AKeyReg.IntValue, RegisterToValue(AValueReg)) then
         Exit;
     end;
   end;
@@ -9399,6 +9554,16 @@ var
   FastIndex: Integer;
   Roots: TGocciaActiveRootFrame;
 begin
+  // A private name past the 8-bit constant operand (EmitStorePropertyByName).
+  if (caoHandlePrivateKeys in AOptions) and
+     IsPrivateNameKeyRegister(AKeyReg) then
+  begin
+    SetPrivatePropertyValue(GetRegister(ATargetIndex),
+      TGocciaPrivateNameKeyValue(AKeyReg.ObjectValue).Value,
+      RegisterToValue(AValueReg));
+    Exit;
+  end;
+
   // ES2026 §6.2.5.6 PutValue step 3.a precedes step 3.c, so a nullish target must
   // throw before ClassifyPropertyKey below — that call can run a user
   // toString/valueOf, and the side effect must not be observable here.
@@ -9455,12 +9620,8 @@ begin
     else
     begin
       KeyName := PropertyKeyName(Key);
-      if (caoHandlePrivateKeys in AOptions) and
-         IsBytecodePrivateKey(KeyName) then
-        SetPropertyValue(FRegisters[ATargetIndex].ObjectValue, KeyName, Value)
-      else
-        TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
-          .SetProperty(KeyName, Value);
+      TGocciaObjectValue(FRegisters[ATargetIndex].ObjectValue)
+        .SetProperty(KeyName, Value);
     end;
   end
   else
@@ -9829,6 +9990,7 @@ end;
 function TGocciaVM.IterableToArray(const AIterable: TGocciaValue;
   const ATryAsync: Boolean; const ALimit: Integer): TGocciaArrayValue;
 var
+  Polls: PGocciaThreadPolls;
   IteratorValue: TGocciaValue;
   DoneFlag: Boolean;
   NextMethod: TGocciaValue;
@@ -9890,12 +10052,10 @@ begin
         Exit;
       end;
       try
+        Polls := @GThreadPolls;
         repeat
-          if GThreadPolls.Any <> 0 then
-          begin
-            CheckExecutionTimeout;
-            CheckInstructionLimit;
-          end;
+          if Polls^.Any <> 0 then
+            RunArmedPolls(Polls);
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             Result.Elements.Add(NextResult);
@@ -9942,12 +10102,10 @@ begin
         ThrowTypeError(SErrorIteratorNextMustBeCallable,
           SSuggestIteratorProtocol);
       try
+        Polls := @GThreadPolls;
         repeat
-          if GThreadPolls.Any <> 0 then
-          begin
-            CheckExecutionTimeout;
-            CheckInstructionLimit;
-          end;
+          if Polls^.Any <> 0 then
+            RunArmedPolls(Polls);
           CallArgs := AcquireArguments;
           try
             NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
@@ -10009,6 +10167,7 @@ end;
 procedure TGocciaVM.SpreadIterableIntoArray(const ATarget: TGocciaArrayValue;
   const ASource: TGocciaValue);
 var
+  Polls: PGocciaThreadPolls;
   SourceArray, Spread: TGocciaArrayValue;
   Target, SourceElements: TGocciaElementList;
   Needed, I: Integer;
@@ -10018,22 +10177,26 @@ begin
   begin
     // With the intrinsic iterator in place, every IteratorStepValue of
     // ArrayAccumulation yields ? Get(array, ToString(index)) while index is
-    // below the array's live length (§23.1.5.2.1), so read those values
-    // directly.  The count is re-read each step because a getter reached
-    // through a hole may grow or shrink the source, as it would mid-iteration.
+    // below the array's length (§23.1.5.2.1), so read those values directly.
+    // The length can be past the stored elements (a length set far ahead, or
+    // an element stored far past the others), so the dense count is only a
+    // capacity hint.  The length is re-read each step because a getter
+    // reached through a hole may grow or shrink the source, as it would
+    // mid-iteration; as for the iterator, a length past High(Integer) ends
+    // there.  The length is never below the dense count, so the dense count
+    // decides while it holds and the length is read only past it.
     SourceArray := TGocciaArrayValue(ASource);
     SourceElements := SourceArray.Elements;
     Needed := Target.Count + SourceElements.Count;
     if Needed > Target.Capacity then
       Target.Capacity := Max(Needed, Target.Capacity * 2);
     I := 0;
-    while I < SourceElements.Count do
+    Polls := @GThreadPolls;
+    while (I < SourceElements.Count) or
+          (I < Min(SourceArray.StoredLength, High(Integer))) do
     begin
-      if GThreadPolls.Any <> 0 then
-      begin
-        CheckExecutionTimeout;
-        CheckInstructionLimit;
-      end;
+      if Polls^.Any <> 0 then
+        RunArmedPolls(Polls);
       Target.Add(ArrayIteratorValueAt(SourceArray, I));
       Inc(I);
     end;
@@ -10053,6 +10216,7 @@ end;
 function TGocciaVM.TryIterableToArray(const AIterable: TGocciaValue;
   out AArray: TGocciaArrayValue): Boolean;
 var
+  Polls: PGocciaThreadPolls;
   IteratorValue, IteratorMethod, IteratorObject, NextMethod, NextResult,
     DoneValue, Value: TGocciaValue;
   IteratorSource: TGocciaObjectValue;
@@ -10121,12 +10285,10 @@ begin
     if IteratorValue is TGocciaIteratorValue then
     begin
       try
+        Polls := @GThreadPolls;
         repeat
-          if GThreadPolls.Any <> 0 then
-          begin
-            CheckExecutionTimeout;
-            CheckInstructionLimit;
-          end;
+          if Polls^.Any <> 0 then
+            RunArmedPolls(Polls);
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             AArray.Elements.Add(NextResult);
@@ -10145,12 +10307,10 @@ begin
     // is TGocciaObjectValue` arm), so the loop just reuses it instead
     // of re-running GetProperty(PROP_NEXT) per iteration.
     try
+      Polls := @GThreadPolls;
       repeat
-        if GThreadPolls.Any <> 0 then
-        begin
-          CheckExecutionTimeout;
-          CheckInstructionLimit;
-        end;
+        if Polls^.Any <> 0 then
+          RunArmedPolls(Polls);
         CallArgs := AcquireArguments;
         try
           NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
@@ -10720,7 +10880,8 @@ begin
 end;
 
 procedure TGocciaVM.DefineGetterProperty(const ATarget: TGocciaValue;
-  const AName: string; const AGetter: TGocciaValue);
+  const AName: string; const AGetter: TGocciaValue;
+  const AIsPrivate: Boolean);
 var
   TargetObject: TGocciaObjectValue;
   ExistingDescriptor: TGocciaPropertyDescriptor;
@@ -10744,6 +10905,20 @@ begin
     SetBytecodeHomeObject(AGetter, ATarget)
   else
     SetBytecodeHomeObject(AGetter, TargetObject);
+  // A private instance accessor is a private element of the prototype, which
+  // StampBytecodePrivateBrands and a private reference find there.
+  if AIsPrivate then
+  begin
+    ExistingSetter := nil;
+    if TargetObject.TryGetPrivateElement(AName, ExistingDescriptor) and
+       (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) then
+      ExistingSetter := TGocciaPropertyDescriptorAccessor(
+        ExistingDescriptor).Setter;
+    TargetObject.SetPrivateElement(AName,
+      TGocciaPropertyDescriptorAccessor.Create(AGetter, ExistingSetter,
+        DescriptorFlags));
+    Exit;
+  end;
   ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(AName);
   ExistingSetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
@@ -10755,7 +10930,8 @@ begin
 end;
 
 procedure TGocciaVM.DefineSetterProperty(const ATarget: TGocciaValue;
-  const AName: string; const ASetter: TGocciaValue);
+  const AName: string; const ASetter: TGocciaValue;
+  const AIsPrivate: Boolean);
 var
   TargetObject: TGocciaObjectValue;
   ExistingDescriptor: TGocciaPropertyDescriptor;
@@ -10779,6 +10955,18 @@ begin
     SetBytecodeHomeObject(ASetter, ATarget)
   else
     SetBytecodeHomeObject(ASetter, TargetObject);
+  if AIsPrivate then
+  begin
+    ExistingGetter := nil;
+    if TargetObject.TryGetPrivateElement(AName, ExistingDescriptor) and
+       (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) then
+      ExistingGetter := TGocciaPropertyDescriptorAccessor(
+        ExistingDescriptor).Getter;
+    TargetObject.SetPrivateElement(AName,
+      TGocciaPropertyDescriptorAccessor.Create(ExistingGetter, ASetter,
+        DescriptorFlags));
+    Exit;
+  end;
   ExistingDescriptor := TargetObject.GetOwnPropertyDescriptor(AName);
   ExistingGetter := nil;
   if (ExistingDescriptor is TGocciaPropertyDescriptorAccessor) and
@@ -10790,14 +10978,15 @@ begin
 end;
 
 procedure TGocciaVM.DefineStaticGetterProperty(const ATarget: TGocciaValue;
-  const AName: string; const AGetter: TGocciaValue);
+  const AName: string; const AGetter: TGocciaValue;
+  const AIsPrivate: Boolean);
 var
   PrivateBrandToken: string;
 begin
   if ATarget is TGocciaClassValue then
   begin
     SetBytecodeHomeObject(AGetter, ATarget, True);
-      if IsBytecodePrivateKey(AName) then
+      if AIsPrivate then
       begin
         PrivateBrandToken := BytecodePrivateTokenForKey(AName,
           TGocciaClassValue(ATarget).PrivateBrandToken);
@@ -10810,14 +10999,15 @@ begin
 end;
 
 procedure TGocciaVM.DefineStaticSetterProperty(const ATarget: TGocciaValue;
-  const AName: string; const ASetter: TGocciaValue);
+  const AName: string; const ASetter: TGocciaValue;
+  const AIsPrivate: Boolean);
 var
   PrivateBrandToken: string;
 begin
   if ATarget is TGocciaClassValue then
   begin
     SetBytecodeHomeObject(ASetter, ATarget, True);
-      if IsBytecodePrivateKey(AName) then
+      if AIsPrivate then
       begin
         PrivateBrandToken := BytecodePrivateTokenForKey(AName,
           TGocciaClassValue(ATarget).PrivateBrandToken);
@@ -11313,11 +11503,48 @@ function TGocciaVM.ResolveBytecodePrivateRuntimeKey(const AKey: string;
 var
   LexicalClass: TGocciaClassValue;
 begin
+  // Brand keys already contain their runtime identity.
+  if IsBytecodePrivateBrandKey(AKey) then
+    Exit(AKey);
   LexicalClass := LexicalBytecodePrivateClass(AKey);
   if LexicalClass is TGocciaVMClassValue then
     Exit(TGocciaVMClassValue(LexicalClass).PrivateRuntimeKeyFor(AKey));
   Result := BytecodePrivateRuntimeKey(AKey,
     ResolveBytecodePrivateBrandToken(AKey, AObject));
+end;
+
+// Reuse cached field keys without resolving the private environment again
+// for a write. On a miss, return its class for the descriptor lookup; the
+// generic field path fills a missing runtime key after that lookup.
+function TGocciaVM.TryGetInstancePrivateField(
+  const AInstance: TGocciaInstanceValue; const AKey: string;
+  out ALexicalClass: TGocciaClassValue; out ARuntimeKey: string;
+  out AValue: TGocciaValue): Boolean;
+var
+  Entry: PGocciaPrivateKeyCacheEntry;
+  Index: Integer;
+  BrandValue: TGocciaValue;
+begin
+  Result := False;
+  AValue := nil;
+  ALexicalClass := LexicalBytecodePrivateClass(AKey);
+  if not (ALexicalClass is TGocciaVMClassValue) then
+    Exit;
+  Index := TGocciaVMClassValue(ALexicalClass).CachedPrivateKeyIndex(AKey);
+  if Index < 0 then
+    Exit;
+  Entry := TGocciaVMClassValue(ALexicalClass).PrivateKeyCacheEntry(Index);
+  // Methods and accessors need no runtime field key. Leave them to the
+  // descriptor path instead of populating a key for a field that is absent.
+  if Entry^.RuntimeKey = '' then
+    Exit;
+  ARuntimeKey := Entry^.RuntimeKey;
+  if not AInstance.TryGetRawPrivateProperty(ARuntimeKey, AValue) then
+    Exit;
+  if Entry^.BrandKey = '' then
+    Entry^.BrandKey := BytecodePrivateBrandKey(AKey,
+      ALexicalClass.PrivateBrandToken);
+  Result := AInstance.TryGetRawPrivateProperty(Entry^.BrandKey, BrandValue);
 end;
 
 function TGocciaVM.ResolveBytecodePrivateBrandToken(const AKey: string;
@@ -11446,54 +11673,36 @@ begin
      not (AInstance is TGocciaObjectValue) then
     Exit;
   Descriptor := nil;
-  TGocciaObjectValue(AInstance).Properties.TryGetValue(
+  TGocciaObjectValue(AInstance).TryGetPrivateElement(
     BytecodePrivateInitializedKey(AClassValue.PrivateBrandToken), Descriptor);
   Result := Descriptor is TGocciaPropertyDescriptorData;
 end;
 
+{ An object's private elements live apart from its properties
+  (TGocciaObjectValue.PrivateElements), so a property key never reaches one
+  and a private storage key never reaches a property, whatever their text. }
 function TryGetRawObjectPrivateDescriptor(const AObject: TGocciaObjectValue;
   const AKey: string; out ADescriptor: TGocciaPropertyDescriptor): Boolean;
 begin
   ADescriptor := nil;
-  Result := Assigned(AObject) and AObject.Properties.TryGetValue(AKey,
+  Result := Assigned(AObject) and AObject.TryGetPrivateElement(AKey,
     ADescriptor);
-end;
-
-// The descriptor AObject holds under the private storage key AKey: its raw
-// entry, or what an exotic object reports for the key. An ordinary object or
-// class instance reports only its raw entries, so a miss there is final and
-// the second lookup is skipped.
-function PrivateKeyOwnDescriptor(const AObject: TGocciaObjectValue;
-  const AKey: string): TGocciaPropertyDescriptor;
-begin
-  if (not TryGetRawObjectPrivateDescriptor(AObject, AKey, Result)) and
-     (AObject.ClassType <> TGocciaObjectValue) and
-     (AObject.ClassType <> TGocciaInstanceValue) then
-    Result := AObject.GetOwnPropertyDescriptor(AKey);
 end;
 
 procedure DefineRawObjectPrivateProperty(const AObject: TGocciaObjectValue;
   const AKey: string; const AValue: TGocciaValue;
   const AFlags: TPropertyFlags);
-var
-  Descriptor: TGocciaPropertyDescriptor;
 begin
-  if AObject.Properties.TryGetValue(AKey, Descriptor) then
-    Descriptor.Free;
-  AObject.Properties.Add(AKey,
+  AObject.SetPrivateElement(AKey,
     TGocciaPropertyDescriptorData.Create(AValue, AFlags));
 end;
 
 procedure DefineRawObjectPrivateDescriptor(const AObject: TGocciaObjectValue;
   const AKey: string; const ADescriptor: TGocciaPropertyDescriptor);
-var
-  ExistingDescriptor: TGocciaPropertyDescriptor;
 begin
   if not Assigned(ADescriptor) then
     Exit;
-  if AObject.Properties.TryGetValue(AKey, ExistingDescriptor) then
-    ExistingDescriptor.Free;
-  AObject.Properties.Add(AKey, ADescriptor);
+  AObject.SetPrivateElement(AKey, ADescriptor);
 end;
 
 procedure StampBytecodePrivateInitializersApplied(const AInstance: TGocciaValue;
@@ -11515,7 +11724,7 @@ function BuildPrivateStampPlan(
 var
   Names: TArray<string>;
   Count: Integer;
-  PrototypeNames: TArray<string>;
+  PrototypeNames: TGocciaPropertyMap.TKeyArray;
   PrivateBrandToken: string;
   I, J: Integer;
 begin
@@ -11524,13 +11733,12 @@ begin
   Names := nil;
   Count := 0;
   AClassValue.CollectOwnPrivateNames(Names, Count);
-  // An ordinary object lists no private storage key among its own property
-  // names (TGocciaObjectValue.GetOwnPropertyKeys skips them), so only a
-  // prototype of another kind is asked.
+  // The private methods and accessors of the class sit among its prototype's
+  // private elements.
   if Assigned(AClassValue.Prototype) and
-     (AClassValue.Prototype.ClassType <> TGocciaObjectValue) then
+     Assigned(AClassValue.Prototype.PrivateElements) then
   begin
-    PrototypeNames := AClassValue.Prototype.GetOwnPropertyNames;
+    PrototypeNames := AClassValue.Prototype.PrivateElements.Keys;
     for I := 0 to High(PrototypeNames) do
       if IsBytecodePrivateKey(PrototypeNames[I]) then
       begin
@@ -11549,6 +11757,7 @@ begin
   SetLength(Names, Count);
   Result.Names := Names;
   SetLength(Result.BrandKeys, Count);
+  SetLength(Result.RuntimeKeys, Count);
   for I := 0 to Count - 1 do
   begin
     PrivateBrandToken := BytecodePrivateTokenForKey(Names[I],
@@ -11556,19 +11765,26 @@ begin
     Result.BrandKeys[I] := BytecodePrivateBrandKey(
       NormalizeBytecodePrivateKey(Names[I], PrivateBrandToken),
       PrivateBrandToken);
+    Result.RuntimeKeys[I] := BytecodePrivateRuntimeKey(Names[I],
+      AClassValue.PrivateBrandToken);
     for J := 0 to I - 1 do
       if Result.BrandKeys[J] = Result.BrandKeys[I] then
         Result.HasSharedBrandKeys := True;
   end;
 end;
 
+function TGocciaVMClassValue.PrivateStampPlanIsCurrent: Boolean;
+begin
+  // The plan follows the private-name set: every private element the VM puts
+  // on the prototype declares its name first, which bumps the version.
+  // PrivateBrandToken is assigned only at class creation and never changes.
+  Result := FPrivateStampPlanBuilt and
+    (FPrivateStampPlan.Version = PrivateNamesVersion);
+end;
+
 function TGocciaVMClassValue.PrivateStampPlan: TGocciaPrivateStampPlan;
 begin
-  // The plan follows the private-name set, and a prototype that is not an
-  // ordinary object can change the names it lists at any time.
-  if (not FPrivateStampPlanBuilt) or
-     (FPrivateStampPlan.Version <> PrivateNamesVersion) or
-     (Assigned(Prototype) and (Prototype.ClassType <> TGocciaObjectValue)) then
+  if not PrivateStampPlanIsCurrent then
   begin
     FPrivateStampPlan := BuildPrivateStampPlan(Self);
     FPrivateStampPlanBuilt := True;
@@ -11576,7 +11792,27 @@ begin
   Result := FPrivateStampPlan;
 end;
 
+function TGocciaVMClassValue.HasEmptyPrivateStampPlan: Boolean;
+begin
+  Result := PrivateStampPlanIsCurrent and
+    (Length(FPrivateStampPlan.Names) = 0);
+end;
+
+// Every construction stamps its class's private brands; most classes have
+// none. Kept free of managed locals so that they pay no copy of the plan and
+// no exception frame.
 procedure TGocciaVM.StampBytecodePrivateBrands(
+  const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
+  const APreserveExistingPrivateSlots: Boolean);
+begin
+  if (AClassValue is TGocciaVMClassValue) and
+     TGocciaVMClassValue(AClassValue).HasEmptyPrivateStampPlan then
+    Exit;
+  StampBytecodePrivateBrandsGeneric(AClassValue, AInstance,
+    APreserveExistingPrivateSlots);
+end;
+
+procedure TGocciaVM.StampBytecodePrivateBrandsGeneric(
   const AClassValue: TGocciaClassValue; const AInstance: TGocciaValue;
   const APreserveExistingPrivateSlots: Boolean);
 var
@@ -11618,7 +11854,7 @@ begin
         if PrivateNameIndex(SeenBrandKeys, BrandKey) >= 0 then
           Continue;
       end;
-      if TryGetRawObjectPrivateDescriptor(ReceiverObject, Names[I],
+      if TryGetRawObjectPrivateDescriptor(ReceiverObject, Plan.RuntimeKeys[I],
          PrototypeDescriptor) and
          not HasBytecodePrivateInitializersApplied(AInstance, AClassValue) then
       begin
@@ -11651,30 +11887,29 @@ begin
       end;
       if Assigned(SeenBrandKeys) then
         SeenBrandKeys.Add(BrandKey);
-      SetRawPrivateValue(AInstance, BrandKey,
-        TGocciaBooleanLiteralValue.TrueValue);
+      // The runtime token contains the class's address. Keep its owner alive
+      // for as long as the receiver carries the brand, even if a later field
+      // initializer throws, so collection cannot recycle that identity.
+      SetResolvedPrivateValue(AInstance, BrandKey, AClassValue);
 
       if (not (AInstance is TGocciaInstanceValue)) and
          Assigned(AClassValue.Prototype) and
          IsBytecodePrivateKey(Names[I]) then
       begin
-        PrototypeDescriptor := AClassValue.Prototype.GetOwnPropertyDescriptor(
-          Names[I]);
+        TryGetRawObjectPrivateDescriptor(AClassValue.Prototype, Names[I],
+          PrototypeDescriptor);
         // A private data element on the prototype is a method. Its copy is
-        // not writable, so SetPropertyValue rejects assigning to it instead
-        // of treating it as a field (ES2026 §7.3.31 PrivateSet step 3).
-        try
-          if PrototypeDescriptor is TGocciaPropertyDescriptorData then
-            DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
-              TGocciaPropertyDescriptorData.Create(
-                TGocciaPropertyDescriptorData(PrototypeDescriptor).Value,
-                PrototypeDescriptor.Flags - [pfWritable]))
-          else if Assigned(PrototypeDescriptor) then
-            DefineRawObjectPrivateDescriptor(ReceiverObject, Names[I],
-              ClonePropertyDescriptor(PrototypeDescriptor));
-        finally
-          ReleaseDescriptor(PrototypeDescriptor);
-        end;
+        // not writable, so SetPrivatePropertyValue rejects assigning to it
+        // instead of treating it as a field (ES2026 §7.3.31 PrivateSet
+        // step 3).
+        if PrototypeDescriptor is TGocciaPropertyDescriptorData then
+          DefineRawObjectPrivateDescriptor(ReceiverObject, Plan.RuntimeKeys[I],
+            TGocciaPropertyDescriptorData.Create(
+              TGocciaPropertyDescriptorData(PrototypeDescriptor).Value,
+              PrototypeDescriptor.Flags - [pfWritable]))
+        else if Assigned(PrototypeDescriptor) then
+          DefineRawObjectPrivateDescriptor(ReceiverObject, Plan.RuntimeKeys[I],
+            ClonePropertyDescriptor(PrototypeDescriptor));
       end;
     end;
   finally
@@ -12674,9 +12909,10 @@ var
     Pair: TGocciaPropertyMap.TKeyValuePair;
   begin
     Result := '';
-    if not Assigned(TGocciaClassValue(ClassVal).Prototype) then
+    if (not Assigned(TGocciaClassValue(ClassVal).Prototype)) or
+       not Assigned(TGocciaClassValue(ClassVal).Prototype.PrivateElements) then
       Exit;
-    for Pair in TGocciaClassValue(ClassVal).Prototype.Properties do
+    for Pair in TGocciaClassValue(ClassVal).Prototype.PrivateElements do
       if IsBytecodePrivateKey(Pair.Key) and
          BytecodePrivateSourceNameEquals(Pair.Key, AName) then
         Exit(Pair.Key);
@@ -12725,7 +12961,7 @@ var
     Key := PrivatePrototypeKey(AName);
     Descriptor := PrivatePrototypeDescriptor(Key);
     if Descriptor is TGocciaPropertyDescriptorData then
-      TGocciaClassValue(ClassVal).Prototype.DefineProperty(Key,
+      TGocciaClassValue(ClassVal).Prototype.SetPrivateElement(Key,
         TGocciaPropertyDescriptorData.Create(AValue, Descriptor.Flags));
   end;
 
@@ -12792,7 +13028,7 @@ var
       Setter := AValue
     else
       Getter := AValue;
-    TGocciaClassValue(ClassVal).Prototype.DefineProperty(Key,
+    TGocciaClassValue(ClassVal).Prototype.SetPrivateElement(Key,
       TGocciaPropertyDescriptorAccessor.Create(Getter, Setter,
         Descriptor.Flags));
   end;
@@ -13748,13 +13984,12 @@ begin
 end;
 
 
-// A named read whose key is not private and whose receiver is not nullish:
-// the receiver's own lookup, then the primitive's prototype. The generic core
-// owns the private-name strings and the error messages, and with them an
-// implicit exception frame, so this procedure has neither
-// (docs/core-patterns.md, "Managed Locals on Hot Paths"). Both private key
-// prefixes start with '#'; every other key takes the ordinary path below,
-// which is the tail of the core.
+// A named read of an ordinary property whose receiver is not nullish: the
+// receiver's own lookup, then the primitive's prototype. A private name never
+// comes here (GetPrivatePropertyValue), so no key text is special. The
+// generic core owns the error messages, and with them an implicit exception
+// frame, so this procedure has neither (docs/core-patterns.md, "Managed
+// Locals on Hot Paths").
 function TGocciaVM.GetPropertyValue(const AObject: TGocciaValue;
   const AKey: string): TGocciaValue;
 var
@@ -13762,8 +13997,7 @@ var
 begin
   if (not Assigned(AObject)) or
      (AObject.ClassType = TGocciaNullLiteralValue) or
-     (AObject.ClassType = TGocciaUndefinedLiteralValue) or
-     ((AKey <> '') and (AKey[1] = BYTECODE_PRIVATE_KEY_LEAD)) then
+     (AObject.ClassType = TGocciaUndefinedLiteralValue) then
     Exit(GetPropertyValueGeneric(AObject, AKey));
 
   Result := AObject.GetProperty(AKey);
@@ -13789,8 +14023,69 @@ function TGocciaVM.GetPropertyValueGeneric(const AObject: TGocciaValue;
   const AKey: string): TGocciaValue;
 var
   Boxed: TGocciaObjectValue;
+begin
+  if (AObject is TGocciaNullLiteralValue) or
+     (AObject is TGocciaUndefinedLiteralValue) then
+    StampThrowLocation;
+  if AObject is TGocciaNullLiteralValue then
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfNull, [AKey]),
+      SSuggestCheckNullBeforeAccess);
+  if AObject is TGocciaUndefinedLiteralValue then
+    ThrowTypeError(Format(SErrorCannotReadPropertiesOfUndefined, [AKey]),
+      SSuggestCheckNullBeforeAccess);
+
+  Result := AObject.GetProperty(AKey);
+  if Assigned(Result) then
+    Exit;
+
+  Boxed := AObject.Box;
+  if Assigned(Boxed) then
+    Result := Boxed.GetPropertyWithContext(AKey, AObject)
+  else
+    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+// ES2026 §15.7.14 ClassDefinitionEvaluation: each evaluation has fresh
+// private names. A prototype can keep lexical labels, but lookup must use
+// the declaring class, not a different evaluation on the receiver's chain.
+function TGocciaVM.PrivateReferenceDescriptor(
+  const AObject: TGocciaObjectValue; const AKey: string;
+  var ALexicalClass: TGocciaClassValue): TGocciaPropertyDescriptor;
+var
   Current: TGocciaObjectValue;
+begin
+  // Class instances keep fields in their raw map; only other receivers
+  // carry runtime-keyed descriptors. Methods use the declaring prototype.
+  if not (AObject is TGocciaInstanceValue) and
+     TryGetRawObjectPrivateDescriptor(AObject,
+       ResolveBytecodePrivateRuntimeKey(AKey, AObject), Result) then
+    Exit;
+  if not Assigned(ALexicalClass) then
+    ALexicalClass := LexicalBytecodePrivateClass(AKey);
+  if Assigned(ALexicalClass) then
+  begin
+    Result := nil;
+    if Assigned(ALexicalClass.Prototype) then
+      TryGetRawObjectPrivateDescriptor(ALexicalClass.Prototype, AKey, Result);
+    Exit;
+  end;
+  Current := AObject;
+  while Assigned(Current) do
+  begin
+    if TryGetRawObjectPrivateDescriptor(Current, AKey, Result) then
+      Exit;
+    Current := Current.Prototype;
+  end;
+  Result := nil;
+end;
+
+// ES2026 §7.3.30 PrivateGet(O, P): AKey is the storage key of a private name
+// the compiler resolved (a bckPrivateName constant), never a property key.
+function TGocciaVM.GetPrivatePropertyValue(const AObject: TGocciaValue;
+  const AKey: string): TGocciaValue;
+var
   Descriptor: TGocciaPropertyDescriptor;
+  LexicalClass: TGocciaClassValue;
   PrivateName: string;
   BrandKey: string;
   BrandValue: TGocciaValue;
@@ -13809,106 +14104,90 @@ begin
       [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
 
-  if IsBytecodePrivateKey(AKey) then
+  LexicalClass := nil;
+  if (AObject is TGocciaInstanceValue) and
+     TryGetInstancePrivateField(TGocciaInstanceValue(AObject), AKey, LexicalClass,
+       PrivateName, Result) then
+    Exit;
+
+  if AObject is TGocciaClassValue then
   begin
-    if AObject is TGocciaClassValue then
+    PrivateName := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
+    if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
     begin
-      PrivateName := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
-      if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
+      EmptyArgs := TGocciaArgumentsCollection.Create;
+      try
+        Exit(DispatchCall(
+          TGocciaClassValue(AObject).GetOwnPrivatePropertyGetter(
+            PrivateName), EmptyArgs, AObject));
+      finally
+        EmptyArgs.Free;
+      end;
+    end;
+    if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
+      ThrowBytecodePrivateTypeError(AKey,
+        SErrorPrivateGetterMissing);
+    if TGocciaClassValue(AObject).PrivateStaticMethods.TryGetValue(
+      PrivateName, Result) then
+      Exit;
+    if TryGetRawPrivateValue(AObject, AKey, Result) then
+      Exit;
+    ThrowBytecodePrivateTypeError(AKey,
+      SErrorPrivateFieldInaccessible);
+  end;
+
+  if AObject is TGocciaObjectValue then
+  begin
+    Descriptor := PrivateReferenceDescriptor(TGocciaObjectValue(AObject), AKey,
+      LexicalClass);
+    if Assigned(Descriptor) then
+    begin
+      if LexicalClass is TGocciaVMClassValue then
+        BrandKey := TGocciaVMClassValue(LexicalClass).PrivateBrandKeyFor(AKey)
+      else
+        BrandKey := ResolveBytecodePrivateBrandKey(AKey, AObject);
+    end;
+    if Descriptor is TGocciaPropertyDescriptorAccessor then
+    begin
+      Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
+      if not TryGetRawPrivateValue(
+        AObject, BrandKey,
+        BrandValue) then
+        ThrowBytecodePrivateTypeError(AKey,
+          SErrorPrivateFieldInaccessible);
+      if Assigned(Getter) then
       begin
         EmptyArgs := TGocciaArgumentsCollection.Create;
         try
-          Exit(DispatchCall(
-            TGocciaClassValue(AObject).GetOwnPrivatePropertyGetter(
-              PrivateName), EmptyArgs, AObject));
+          Exit(InvokeFunctionValue(Getter, EmptyArgs, AObject));
         finally
           EmptyArgs.Free;
         end;
       end;
-      if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
-        ThrowBytecodePrivateTypeError(AKey,
-          SErrorPrivateGetterMissing);
-      if TGocciaClassValue(AObject).PrivateStaticMethods.TryGetValue(
-        PrivateName, Result) then
-        Exit;
-      if TryGetRawPrivateValue(AObject, AKey, Result) then
-        Exit;
       ThrowBytecodePrivateTypeError(AKey,
-        SErrorPrivateFieldInaccessible);
+        SErrorPrivateGetterMissing);
     end;
-
-    if AObject is TGocciaObjectValue then
+    if Descriptor is TGocciaPropertyDescriptorData then
     begin
-      Current := TGocciaObjectValue(AObject);
-      while Assigned(Current) do
-      begin
-        Descriptor := PrivateKeyOwnDescriptor(Current, AKey);
-        try
-          if Descriptor is TGocciaPropertyDescriptorAccessor then
-          begin
-            // Released before the getter runs, which could replace the
-            // descriptor; the finally below then has nothing to release.
-            Getter := TGocciaPropertyDescriptorAccessor(Descriptor).Getter;
-            ReleaseDescriptor(Descriptor);
-            Descriptor := nil;
-            if not TryGetRawPrivateValue(
-              AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
-              BrandValue) then
-              ThrowBytecodePrivateTypeError(AKey,
-                SErrorPrivateFieldInaccessible);
-            if Assigned(Getter) then
-            begin
-              EmptyArgs := TGocciaArgumentsCollection.Create;
-              try
-                Exit(InvokeFunctionValue(Getter, EmptyArgs, AObject));
-              finally
-                EmptyArgs.Free;
-              end;
-            end;
-            ThrowBytecodePrivateTypeError(AKey,
-              SErrorPrivateGetterMissing);
-          end;
-          if Descriptor is TGocciaPropertyDescriptorData then
-          begin
-            if not TryGetRawPrivateValue(
-              AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
-              BrandValue) then
-              ThrowBytecodePrivateTypeError(AKey,
-                SErrorPrivateFieldInaccessible);
-            Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
-          end;
-        finally
-          ReleaseDescriptor(Descriptor);
-        end;
-        Current := Current.Prototype;
-      end;
+      if not TryGetRawPrivateValue(
+        AObject, BrandKey,
+        BrandValue) then
+        ThrowBytecodePrivateTypeError(AKey,
+          SErrorPrivateFieldInaccessible);
+      Exit(TGocciaPropertyDescriptorData(Descriptor).Value);
     end;
+  end;
 
-    BrandKey := '';
-    if TryGetRawPrivateFieldValue(AObject, AKey, BrandKey, Result) then
-      Exit;
-    ThrowBytecodePrivateTypeError(AKey,
-      SErrorPrivateFieldInaccessible);
-  end
-  else if TryGetRawPrivateValue(AObject, AKey, Result) then
+  BrandKey := '';
+  if TryGetRawPrivateFieldValue(AObject, AKey, BrandKey, Result) then
     Exit;
-
-  Result := AObject.GetProperty(AKey);
-  if Assigned(Result) then
-    Exit;
-
-  Boxed := AObject.Box;
-  if Assigned(Boxed) then
-    Result := Boxed.GetPropertyWithContext(AKey, AObject)
-  else
-    Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  ThrowBytecodePrivateTypeError(AKey,
+    SErrorPrivateFieldInaccessible);
 end;
 
 // Computed GET for receivers that are not arrays, classes, or objects:
 // string/number/boolean/bigint/symbol primitives resolve through their
-// boxed object per OrdinaryGet. Deliberately
-// bypasses GetPropertyValue so user string keys that collide with the
-// '#slot:' private-key mangling stay ordinary property names.
+// boxed object per OrdinaryGet.
 procedure TGocciaVM.ExecGetComputedPropertyFallback(const ADest: Integer;
   const AReceiverReg, AKeyReg: TGocciaRegister);
 var
@@ -14079,13 +14358,14 @@ begin
   end;
 end;
 
-// An ordinary object under a public key goes straight to its [[Set]]. This
-// procedure keeps no managed locals, so that store pays no exception frame;
-// private names, primitives and nullish targets take the generic core.
+// An ordinary object goes straight to its [[Set]]. This procedure keeps no
+// managed locals, so that store pays no exception frame; primitives and
+// nullish targets take the generic core. A private name never comes here
+// (SetPrivatePropertyValue), so no key text is special.
 procedure TGocciaVM.SetPropertyValue(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 begin
-  if (AObject is TGocciaObjectValue) and not IsBytecodePrivateKey(AKey) then
+  if AObject is TGocciaObjectValue then
     AObject.SetProperty(AKey, AValue)
   else
     SetPropertyValueGeneric(AObject, AKey, AValue);
@@ -14094,135 +14374,14 @@ end;
 procedure TGocciaVM.SetPropertyValueGeneric(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 var
-  Current: TGocciaObjectValue;
-  Descriptor: TGocciaPropertyDescriptor;
-  StoppedAtData: Boolean;
-  Setter: TGocciaValue;
-  SetterArgs: TGocciaArgumentsCollection;
-  PrivateName: string;
   BoxedValue: TGocciaObjectValue;
-  BrandKey: string;
-  ExistingValue: TGocciaValue;
 begin
-  StoppedAtData := False;
   if AObject is TGocciaNullLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
-      [DisplayClassElementName(AKey)]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
       SSuggestCheckNullBeforeAccess);
   if AObject is TGocciaUndefinedLiteralValue then
-    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
-      [DisplayClassElementName(AKey)]),
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
       SSuggestCheckNullBeforeAccess);
-  if IsBytecodePrivateKey(AKey) then
-  begin
-    if AObject is TGocciaClassValue then
-    begin
-      PrivateName := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
-      if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
-      begin
-        SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
-        try
-          DispatchCall(
-            TGocciaClassValue(AObject).GetOwnPrivatePropertySetter(
-              PrivateName), SetterArgs, AObject);
-        finally
-          SetterArgs.Free;
-        end;
-        Exit;
-      end;
-      if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
-        ThrowBytecodePrivateTypeError(AKey,
-          SErrorPrivateSetterMissing);
-      if TGocciaClassValue(AObject).HasOwnPrivateStaticMethod(PrivateName) then
-        ThrowBytecodePrivateTypeError(AKey,
-          SErrorPrivateMethodNotWritable);
-      if TGocciaClassValue(AObject).HasOwnPrivateStaticProperty(PrivateName) then
-      begin
-        TGocciaClassValue(AObject).AddPrivateStaticProperty(
-          PrivateName, AValue);
-        Exit;
-      end;
-      ThrowBytecodePrivateTypeError(AKey,
-        SErrorPrivateFieldInaccessible);
-    end;
-
-    if AObject is TGocciaObjectValue then
-    begin
-      Current := TGocciaObjectValue(AObject);
-      while Assigned(Current) do
-      begin
-        Descriptor := PrivateKeyOwnDescriptor(Current, AKey);
-        try
-          if (Descriptor is TGocciaPropertyDescriptorAccessor) and
-             Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
-          begin
-            // Released before the setter runs, which could replace the
-            // descriptor; the finally below then has nothing to release.
-            Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
-            ReleaseDescriptor(Descriptor);
-            Descriptor := nil;
-            if not TryGetRawPrivateValue(
-              AObject, ResolveBytecodePrivateBrandKey(AKey, AObject),
-              ExistingValue) then
-              ThrowBytecodePrivateTypeError(AKey,
-                SErrorPrivateFieldInaccessible);
-            SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
-            try
-              InvokeFunctionValue(Setter, SetterArgs, AObject);
-            finally
-              SetterArgs.Free;
-            end;
-            Exit;
-          end;
-          if Descriptor is TGocciaPropertyDescriptorData then
-          begin
-            // Only the private methods StampBytecodePrivateBrands copies onto
-            // a receiver that is not a class instance are not writable.
-            if not Descriptor.Writable then
-            begin
-              if TryGetRawPrivateValue(AObject,
-                 ResolveBytecodePrivateBrandKey(AKey, AObject),
-                 ExistingValue) then
-                ThrowBytecodePrivateTypeError(AKey,
-                  SErrorPrivateMethodNotWritable);
-              ThrowBytecodePrivateTypeError(AKey,
-                SErrorPrivateFieldInaccessible);
-            end;
-            StoppedAtData := True;
-            Break;
-          end;
-          if Descriptor is TGocciaPropertyDescriptorAccessor then
-            ThrowBytecodePrivateTypeError(AKey,
-              SErrorPrivateSetterMissing);
-        finally
-          ReleaseDescriptor(Descriptor);
-        end;
-        Current := Current.Prototype;
-      end;
-    end;
-    BrandKey := '';
-    if TryGetRawPrivateFieldValue(AObject, AKey, BrandKey, ExistingValue) then
-    begin
-      if (AObject = FPrivateInitializerReceiver) and
-         FPrivateInitializerPreserveExisting then
-        Exit;
-    end
-    else
-    begin
-      // The walk stopped at a private data element the receiver does not hold
-      // as a field: a private method, which cannot be assigned once the
-      // receiver carries the class brand (ES2026 §7.3.31 PrivateSet step 3).
-      if StoppedAtData and
-         TryGetRawPrivateValue(AObject,
-           ResolveBytecodePrivateBrandKey(AKey, AObject), ExistingValue) then
-        ThrowBytecodePrivateTypeError(AKey, SErrorPrivateMethodNotWritable);
-      ThrowBytecodePrivateTypeError(AKey,
-        SErrorPrivateFieldInaccessible);
-    end;
-    SetRawPrivateValue(AObject, AKey, AValue);
-    Exit;
-  end;
-
   if AObject is TGocciaObjectValue then
   begin
     AObject.SetProperty(AKey, AValue);
@@ -14251,11 +14410,21 @@ begin
     SSuggestCheckNullBeforeAccess);
 end;
 
-procedure TGocciaVM.SetPropertyValueLoose(const AObject: TGocciaValue;
+// ES2026 §7.3.31 PrivateSet(O, P, value): AKey is the storage key of a
+// private name the compiler resolved (a bckPrivateName constant).
+procedure TGocciaVM.SetPrivatePropertyValue(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 var
-  BoxedValue: TGocciaObjectValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  LexicalClass: TGocciaClassValue;
+  StoppedAtData: Boolean;
+  Setter: TGocciaValue;
+  SetterArgs: TGocciaArgumentsCollection;
+  PrivateName: string;
+  BrandKey: string;
+  ExistingValue: TGocciaValue;
 begin
+  StoppedAtData := False;
   if AObject is TGocciaNullLiteralValue then
     ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull,
       [DisplayClassElementName(AKey)]),
@@ -14264,12 +14433,130 @@ begin
     ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined,
       [DisplayClassElementName(AKey)]),
       SSuggestCheckNullBeforeAccess);
-
-  if IsBytecodePrivateKey(AKey) then
+  LexicalClass := nil;
+  if (AObject is TGocciaInstanceValue) and
+     TryGetInstancePrivateField(TGocciaInstanceValue(AObject), AKey, LexicalClass,
+       PrivateName, ExistingValue) then
   begin
-    SetPropertyValue(AObject, AKey, AValue);
+    if (AObject = FPrivateInitializerReceiver) and
+       FPrivateInitializerPreserveExisting then
+      Exit;
+    TGocciaInstanceValue(AObject).SetRawPrivateProperty(PrivateName, AValue);
     Exit;
   end;
+
+  if AObject is TGocciaClassValue then
+  begin
+    PrivateName := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
+    if TGocciaClassValue(AObject).HasOwnPrivateSetter(PrivateName) then
+    begin
+      SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
+      try
+        DispatchCall(
+          TGocciaClassValue(AObject).GetOwnPrivatePropertySetter(
+            PrivateName), SetterArgs, AObject);
+      finally
+        SetterArgs.Free;
+      end;
+      Exit;
+    end;
+    if TGocciaClassValue(AObject).HasOwnPrivateGetter(PrivateName) then
+      ThrowBytecodePrivateTypeError(AKey,
+        SErrorPrivateSetterMissing);
+    if TGocciaClassValue(AObject).HasOwnPrivateStaticMethod(PrivateName) then
+      ThrowBytecodePrivateTypeError(AKey,
+        SErrorPrivateMethodNotWritable);
+    if TGocciaClassValue(AObject).HasOwnPrivateStaticProperty(PrivateName) then
+    begin
+      TGocciaClassValue(AObject).AddPrivateStaticProperty(
+        PrivateName, AValue);
+      Exit;
+    end;
+    ThrowBytecodePrivateTypeError(AKey,
+      SErrorPrivateFieldInaccessible);
+  end;
+
+  if AObject is TGocciaObjectValue then
+  begin
+    Descriptor := PrivateReferenceDescriptor(TGocciaObjectValue(AObject), AKey,
+      LexicalClass);
+    if Assigned(Descriptor) then
+    begin
+      if LexicalClass is TGocciaVMClassValue then
+        BrandKey := TGocciaVMClassValue(LexicalClass).PrivateBrandKeyFor(AKey)
+      else
+        BrandKey := ResolveBytecodePrivateBrandKey(AKey, AObject);
+    end;
+    if (Descriptor is TGocciaPropertyDescriptorAccessor) and
+       Assigned(TGocciaPropertyDescriptorAccessor(Descriptor).Setter) then
+    begin
+      Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
+      if not TryGetRawPrivateValue(
+        AObject, BrandKey,
+        ExistingValue) then
+        ThrowBytecodePrivateTypeError(AKey,
+          SErrorPrivateFieldInaccessible);
+      SetterArgs := TGocciaArgumentsCollection.Create([AValue]);
+      try
+        InvokeFunctionValue(Setter, SetterArgs, AObject);
+      finally
+        SetterArgs.Free;
+      end;
+      Exit;
+    end;
+    if Descriptor is TGocciaPropertyDescriptorData then
+    begin
+      // Only the private methods StampBytecodePrivateBrands copies onto
+      // a receiver that is not a class instance are not writable.
+      if not Descriptor.Writable then
+      begin
+        if TryGetRawPrivateValue(AObject, BrandKey,
+           ExistingValue) then
+          ThrowBytecodePrivateTypeError(AKey,
+            SErrorPrivateMethodNotWritable);
+        ThrowBytecodePrivateTypeError(AKey,
+          SErrorPrivateFieldInaccessible);
+      end;
+      StoppedAtData := True;
+    end;
+    if Descriptor is TGocciaPropertyDescriptorAccessor then
+      ThrowBytecodePrivateTypeError(AKey,
+        SErrorPrivateSetterMissing);
+  end;
+
+  BrandKey := '';
+  if TryGetRawPrivateFieldValue(AObject, AKey, BrandKey, ExistingValue) then
+  begin
+    if (AObject = FPrivateInitializerReceiver) and
+       FPrivateInitializerPreserveExisting then
+      Exit;
+  end
+  else
+  begin
+    // The walk stopped at a private data element the receiver does not hold
+    // as a field: a private method, which cannot be assigned once the
+    // receiver carries the class brand (ES2026 §7.3.31 PrivateSet step 3).
+    if StoppedAtData and
+       TryGetRawPrivateValue(AObject,
+         ResolveBytecodePrivateBrandKey(AKey, AObject), ExistingValue) then
+      ThrowBytecodePrivateTypeError(AKey, SErrorPrivateMethodNotWritable);
+    ThrowBytecodePrivateTypeError(AKey,
+      SErrorPrivateFieldInaccessible);
+  end;
+  SetRawPrivateValue(AObject, AKey, AValue);
+end;
+
+procedure TGocciaVM.SetPropertyValueLoose(const AObject: TGocciaValue;
+  const AKey: string; const AValue: TGocciaValue);
+var
+  BoxedValue: TGocciaObjectValue;
+begin
+  if AObject is TGocciaNullLiteralValue then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfNull, [AKey]),
+      SSuggestCheckNullBeforeAccess);
+  if AObject is TGocciaUndefinedLiteralValue then
+    ThrowTypeError(Format(SErrorCannotSetPropertiesOfUndefined, [AKey]),
+      SSuggestCheckNullBeforeAccess);
 
   if AObject is TGocciaObjectValue then
   begin
@@ -14340,6 +14627,8 @@ function TGocciaVM.TryGetRawPrivateValue(const AObject: TGocciaValue;
 var
   BrandKey: string;
 begin
+  if (AObject is TGocciaInstanceValue) and IsBytecodePrivateBrandKey(AKey) then
+    Exit(TGocciaInstanceValue(AObject).TryGetRawPrivateProperty(AKey, AValue));
   BrandKey := '';
   Result := TryGetRawPrivateFieldValue(AObject, AKey, BrandKey, AValue);
 end;
@@ -14362,10 +14651,11 @@ begin
   if AObject is TGocciaInstanceValue then
   begin
     InstanceValue := TGocciaInstanceValue(AObject);
-    if InstanceValue.TryGetRawPrivateProperty(AKey, AValue) then
+    if IsBytecodePrivateBrandKey(AKey) then
+      Exit(InstanceValue.TryGetRawPrivateProperty(AKey, AValue));
+    if InstanceValue.TryGetRawPrivateProperty(
+      ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue) then
     begin
-      if IsBytecodePrivateBrandKey(AKey) then
-        Exit(True);
       if ABrandKey = '' then
         ABrandKey := ResolveBytecodePrivateBrandKey(AKey, AObject);
       Result := InstanceValue.TryGetRawPrivateProperty(ABrandKey, BrandValue);
@@ -14393,8 +14683,8 @@ begin
         Exit;
     end;
 
-    TryGetRawObjectPrivateDescriptor(TGocciaObjectValue(AObject), AKey,
-      Descriptor);
+    TryGetRawObjectPrivateDescriptor(TGocciaObjectValue(AObject),
+      ResolveBytecodePrivateRuntimeKey(AKey, AObject), Descriptor);
     if Descriptor is TGocciaPropertyDescriptorData then
     begin
       AValue := TGocciaPropertyDescriptorData(Descriptor).Value;
@@ -14406,28 +14696,92 @@ end;
 procedure TGocciaVM.SetRawPrivateValue(const AObject: TGocciaValue;
   const AKey: string; const AValue: TGocciaValue);
 begin
+  SetResolvedPrivateValue(AObject,
+    ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue);
+end;
+
+// Runtime keys already identify the declaring class. Stamping and field
+// definition can reuse them without another lexical-class lookup.
+procedure TGocciaVM.SetResolvedPrivateValue(const AObject: TGocciaValue;
+  const ARuntimeKey: string; const AValue: TGocciaValue);
+begin
   if AObject is TGocciaInstanceValue then
   begin
-    TGocciaInstanceValue(AObject).SetRawPrivateProperty(AKey, AValue);
+    TGocciaInstanceValue(AObject).SetRawPrivateProperty(
+      ARuntimeKey, AValue);
     Exit;
   end;
 
   if AObject is TGocciaClassValue then
   begin
     TGocciaClassValue(AObject).AddPrivateStaticProperty(
-      ResolveBytecodePrivateRuntimeKey(AKey, AObject), AValue);
+      ARuntimeKey, AValue);
     Exit;
   end;
 
   if AObject is TGocciaObjectValue then
   begin
-    DefineRawObjectPrivateProperty(TGocciaObjectValue(AObject), AKey,
-      AValue, [pfWritable, pfConfigurable]);
+    DefineRawObjectPrivateProperty(TGocciaObjectValue(AObject),
+      ARuntimeKey, AValue, [pfWritable, pfConfigurable]);
     Exit;
   end;
 
-  ThrowBytecodePrivateTypeError(AKey,
+  ThrowBytecodePrivateTypeError(ARuntimeKey,
     SErrorPrivateFieldInaccessible);
+end;
+
+procedure TGocciaVM.DefinePrivateFieldValue(const AObject: TGocciaObjectValue;
+  const AKey: string; const AValue: TGocciaValue);
+var
+  ClassValue: TGocciaVMClassValue;
+  Entry: PGocciaPrivateKeyCacheEntry;
+  Index: Integer;
+begin
+  // The current lexical class owns a cached key. Use it in place, without
+  // managed locals or a second cache search. Outer names and cache misses
+  // still resolve through the complete private environment.
+  if AObject.Extensible and Assigned(FCurrentClosure) and
+     (FCurrentClosure.PrivateClass is TGocciaVMClassValue) then
+  begin
+    ClassValue := TGocciaVMClassValue(FCurrentClosure.PrivateClass);
+    Index := ClassValue.CachedPrivateKeyIndex(AKey);
+    if Index >= 0 then
+    begin
+      Entry := ClassValue.PrivateKeyCacheEntry(Index);
+      if Entry^.RuntimeKey <> '' then
+      begin
+        SetResolvedPrivateValue(AObject, Entry^.RuntimeKey, AValue);
+        Exit;
+      end;
+    end;
+  end;
+  DefinePrivateFieldValueGeneric(AObject, AKey, AValue);
+end;
+
+procedure TGocciaVM.DefinePrivateFieldValueGeneric(
+  const AObject: TGocciaObjectValue; const AKey: string;
+  const AValue: TGocciaValue);
+var
+  RuntimeKey: string;
+  ExistingValue: TGocciaValue;
+  Descriptor: TGocciaPropertyDescriptor;
+  HasSlot: Boolean;
+begin
+  RuntimeKey := ResolveBytecodePrivateRuntimeKey(AKey, AObject);
+  // Existing slots matter only when adding a slot would be refused.
+  if not AObject.Extensible then
+  begin
+    if AObject is TGocciaInstanceValue then
+      HasSlot := TGocciaInstanceValue(AObject).TryGetRawPrivateProperty(
+        RuntimeKey, ExistingValue)
+    else
+      HasSlot := TryGetRawObjectPrivateDescriptor(AObject, RuntimeKey,
+        Descriptor);
+    if not HasSlot then
+      ThrowTypeError('Cannot add private elements to a non-extensible object',
+        SSuggestObjectNotExtensible);
+  end;
+  SetResolvedPrivateValue(AObject, RuntimeKey, AValue);
 end;
 
 function TGocciaVM.HasPropertyValue(const AObject, AKey: TGocciaValue): TGocciaValue;
@@ -14444,8 +14798,11 @@ begin
     // A Symbol has no string conversion, so it is named by its description.
     if AKey is TGocciaSymbolValue then
       KeyStr := TGocciaSymbolValue(AKey).ToDisplayString.Value
+    else if AKey is TGocciaPrivateNameKeyValue then
+      KeyStr := DisplayClassElementName(
+        TGocciaPrivateNameKeyValue(AKey).Value)
     else
-      KeyStr := DisplayClassElementName(AKey.ToStringLiteral.Value);
+      KeyStr := AKey.ToStringLiteral.Value;
     if AObject is TGocciaSymbolValue then
       ThrowTypeError(Format(SErrorCannotUseInOperator, [KeyStr,
         TGocciaSymbolValue(AObject).ToDisplayString.Value]),
@@ -14457,29 +14814,24 @@ begin
 
   if AObject is TGocciaObjectValue then
   begin
-    if AKey is TGocciaStringLiteralValue then
+    // ES2026 §13.10.1 RelationalExpression : PrivateIdentifier in
+    // ShiftExpression, step 8: PrivateElementFind(rval, privateName).
+    if AKey is TGocciaPrivateNameKeyValue then
     begin
-      KeyStr := TGocciaStringLiteralValue(AKey).Value;
-      if IsBytecodePrivateKey(KeyStr) or IsBytecodePrivateBrandKey(KeyStr) then
-      begin
-        BrandKey := '';
-        if TryGetRawPrivateFieldValue(AObject, KeyStr, BrandKey, Prop) then
-          Exit(TGocciaBooleanLiteralValue.TrueValue);
-        if IsBytecodePrivateKey(KeyStr) then
-        begin
-          if (AObject is TGocciaClassValue) and
-             HasBytecodeStaticPrivateMethodOrAccessor(AObject,
-               ResolveBytecodePrivateRuntimeKey(KeyStr, AObject)) then
-            Exit(TGocciaBooleanLiteralValue.TrueValue);
-          if BrandKey = '' then
-            BrandKey := ResolveBytecodePrivateBrandKey(KeyStr, AObject);
-          if TryGetRawPrivateValue(AObject, BrandKey, Prop) then
-            Exit(TGocciaBooleanLiteralValue.TrueValue);
-        end;
-        Exit(TGocciaBooleanLiteralValue.FalseValue);
-      end;
+      KeyStr := TGocciaPrivateNameKeyValue(AKey).Value;
+      BrandKey := '';
+      if TryGetRawPrivateFieldValue(AObject, KeyStr, BrandKey, Prop) then
+        Exit(TGocciaBooleanLiteralValue.TrueValue);
+      if (AObject is TGocciaClassValue) and
+         HasBytecodeStaticPrivateMethodOrAccessor(AObject,
+           ResolveBytecodePrivateRuntimeKey(KeyStr, AObject)) then
+        Exit(TGocciaBooleanLiteralValue.TrueValue);
+      if BrandKey = '' then
+        BrandKey := ResolveBytecodePrivateBrandKey(KeyStr, AObject);
+      if TryGetRawPrivateValue(AObject, BrandKey, Prop) then
+        Exit(TGocciaBooleanLiteralValue.TrueValue);
+      Exit(TGocciaBooleanLiteralValue.FalseValue);
     end;
-
     if AKey is TGocciaObjectValue then
       ResolvedKey := ToPropertyKey(AKey)
     else
@@ -15083,6 +15435,8 @@ var
   CompatibilityNonStrictMode, StrictEval: Boolean;
   EvalTemplate: TGocciaFunctionTemplate;
   I: Integer;
+  CompileProfile: TGocciaCompileProfiler;
+  CompileProfileUnitDepth: Integer;
 begin
   EvalSource := CreateECMAScriptSourceLines(ASourceText);
   PrivateNames := TStringList.Create;
@@ -15090,6 +15444,15 @@ begin
   StandardVarNames := TUnicodeStringList.Create;
   FunctionNames := TUnicodeStringList.Create;
   DeclaredVarNames := TUnicodeStringList.Create;
+  // The eval code is profiled as a compile unit of its own, not as
+  // functions of the caller's file (Goccia.Profiler.Compile).
+  CompileProfile := TGocciaCompileProfiler.Instance;
+  CompileProfileUnitDepth := -1;
+  if Assigned(CompileProfile) then
+  begin
+    CompileProfileUnitDepth := CompileProfile.UnitDepth;
+    CompileProfile.BeginUnit('<eval>', ASourceText);
+  end;
   try
     PrivateNames.CaseSensitive := True;
     for I := 0 to High(ASite.PrivateNames) do
@@ -15154,6 +15517,8 @@ begin
       PipelineResult.Free;
     end;
   finally
+    if Assigned(CompileProfile) then
+      CompileProfile.EndUnitTo(CompileProfileUnitDepth);
     DeclaredVarNames.Free;
     FunctionNames.Free;
     StandardVarNames.Free;
@@ -15305,12 +15670,12 @@ end;
 function TGocciaVM.ExecuteClosureRegisters(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: TGocciaRegisterArray;
   const APushExecutionContext: Boolean): TGocciaRegister;
+var
+  Polls: PGocciaThreadPolls;
 begin
-  if GThreadPolls.Any <> 0 then
-  begin
-    CheckExecutionTimeout;
-    CheckInstructionLimit;
-  end;
+  Polls := @GThreadPolls;
+  if Polls^.Any <> 0 then
+    RunArmedPolls(Polls);
   Result := ExecuteClosureRegistersInternal(AClosure, AThisValue,
     PGocciaRegister(AArguments), Length(AArguments), APushExecutionContext);
 end;
@@ -15432,7 +15797,7 @@ procedure TGocciaVM.TeardownCurrentFrame(const ATemplate: TGocciaFunctionTemplat
 begin
   if FProfilingFunctions and Assigned(ATemplate) and
      (ATemplate.ProfileIndex >= 0) then
-    TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex, GetNanoseconds);
+    TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex);
   if Assigned(FCallStack) then
     FCallStack.Pop;
   if FCurrentExecutionContextPushed then
@@ -15538,9 +15903,7 @@ begin
         ATemplate.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
           ATemplate.Name, '', 0);
     end;
-    AProfileTimestamp := GetNanoseconds;
-    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex,
-      AProfileTimestamp);
+    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex);
   end;
 
   if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and
@@ -15556,8 +15919,7 @@ function TGocciaVM.PopClosedNumericFrame(var AFrame: TGocciaVMCallFrame;
 begin
   if FProfilingFunctions and Assigned(ATemplate) and
      (ATemplate.ProfileIndex >= 0) then
-    TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex,
-      GetNanoseconds);
+    TGocciaProfiler.Instance.PopFunction(ATemplate.ProfileIndex);
   if Assigned(FCallStack) then
     FCallStack.Pop;
   Dec(FFrameDepth);
@@ -15926,71 +16288,164 @@ procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
   out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
 var
-  I, RegisterWindow: Integer;
+  I, RegisterWindow, CellWindow, NewRegisterBase, NewArgumentBase: Integer;
+  Template: TGocciaFunctionTemplate;
+  DebugInfo: TGocciaDebugInfo;
   ExecutionRealm: TGocciaRealm;
   FunctionValue: TGocciaValue;
   HasOwnSourceFile: Boolean;
+  Registers: PGocciaRegister;
 begin
   // The collector does not mark the registers of closed numeric frames, which
   // relies on no other frame running above them.
   Assert(FClosedNumericFrameStackCount = 0,
     'A frame was set up above a closed numeric frame');
+  // The template is read through a local: the out parameter is a pointer,
+  // and every read of it would load the pointer again.
+  Template := AClosure.Template;
+  ATemplate := Template;
   AProfileTimestamp := 0;
-  ATemplate := AClosure.Template;
+  APrevCovLine := 0;
   if FShimLoad^.Depth > 0 then
-    NoteShimLoadFrame(ATemplate);
+    NoteShimLoadFrame(Template);
   // The frame's source path is the template's own source file, or the running
   // module's path when it has none. This procedure runs on every call and must
   // not hold that string: a managed local costs an implicit exception frame.
-  HasOwnSourceFile := Assigned(ATemplate.DebugInfo) and
-    (ATemplate.DebugInfo.SourceFile <> '');
+  DebugInfo := Template.DebugInfo;
+  HasOwnSourceFile := Assigned(DebugInfo) and (DebugInfo.SourceFile <> '');
 
-  // Acquire the argument window on the arena (sets FArgumentBase/FArgCount and
-  // FArguments) and store every slot of it straight away: the window is not
-  // cleared, and nothing between here and the last store can collect.
-  AcquireArgumentWindow(AArgCount);
-  for I := 0 to AArgCount - 1 do
-    FArguments[I] := AArguments[I];
   // The register window holds `this` and one register per argument even when
   // the callee declares fewer registers than it is passed arguments.
-  RegisterWindow := ATemplate.MaxRegisters;
+  RegisterWindow := Template.MaxRegisters;
   if RegisterWindow < 1 then
     RegisterWindow := 1;
-  AcquireLocalCells(RegisterWindow);
+  CellWindow := RegisterWindow;
   if RegisterWindow <= AArgCount then
     RegisterWindow := AArgCount + 1;
-  AcquireRegisters(RegisterWindow);
+  NewRegisterBase := FRegisterBase + FRegisterCount;
+  NewArgumentBase := FArgumentBase + FArgCount;
+  if Template.ArgumentWindowUnread and
+     (NewRegisterBase + RegisterWindow <= Length(FRegisterStack)) and
+     (NewArgumentBase < Length(FArgumentStack)) then
+  begin
+    // Nothing reads this frame's argument window, so it gets an empty one
+    // and the arguments go straight into their registers. Neither the
+    // register nor the argument arena grows here, so AArguments still points
+    // at them (the local-cell arena may grow below, after the copy, and
+    // nothing points into it); it can point into this very
+    // register arena, at the caller's registers or, on a tail call, at the
+    // frame being replaced, whose window starts where this one does. There
+    // every argument sits above the register it is copied to, so `this`,
+    // which a tail call's arguments never overlap, is stored first and the
+    // arguments in ascending order. The rest of the window is cleared, as
+    // AcquireRegisters clears it, before anything can collect. FillChar
+    // clears it: a loop of two Int64 stores per register ran fewer
+    // instructions but made native callbacks (Array.prototype.map) about 3%
+    // slower.
+    FArgumentBase := NewArgumentBase;
+    FArgCount := 0;
+    FArguments := @FArgumentStack[NewArgumentBase];
+    Registers := @FRegisterStack[NewRegisterBase];
+    Registers[0] := AThisValue;
+    for I := 0 to AArgCount - 1 do
+      Registers[I + 1] := AArguments[I];
+    if RegisterWindow > AArgCount + 1 then
+      FillChar(Registers[AArgCount + 1],
+        (RegisterWindow - AArgCount - 1) * SizeOf(TGocciaRegister), 0);
+    FRegisterBase := NewRegisterBase;
+    FRegisterCount := RegisterWindow;
+    FRegisters := Registers;
+    AcquireLocalCells(CellWindow);
+  end
+  else
+  begin
+    // Acquire the argument window on the arena (sets FArgumentBase/FArgCount
+    // and FArguments) and store every slot of it straight away: the window is
+    // not cleared, and nothing between here and the last store can collect.
+    AcquireArgumentWindow(AArgCount);
+    for I := 0 to AArgCount - 1 do
+      FArguments[I] := AArguments[I];
+    AcquireLocalCells(CellWindow);
+    AcquireRegisters(RegisterWindow);
+    // Both windows were acquired above and are still as acquired: the
+    // registers exist and no local slot has a cell yet, so these are plain
+    // stores.
+    FRegisters[0] := AThisValue;
+    for I := 0 to AArgCount - 1 do
+      FRegisters[I + 1] := FArguments[I];
+  end;
   FCurrentClosure := AClosure;
-  if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
+  if Assigned(AClosure.GlobalScope) then
     FGlobalScope := AClosure.GlobalScope;
   FCurrentExecutionContextPushed := False;
   Inc(FFrameDepth);
   // Push a deferred frame: store the template pointer and (only when the
   // template has no own source file) the module-path fallback, so an ordinary
   // call performs no per-call stack-trace string work. The resolver registered
-  // in the constructor reproduces ATemplate.Name and the frame's source path
-  // at capture time, keeping Error.stack output byte-identical.
+  // in the constructor reproduces the template's name and the frame's source
+  // path at capture time, keeping Error.stack output byte-identical.
   if Assigned(FCallStack) then
   begin
     if FCallStack.Count >= FCallStack.Capacity then
       GrowCallStack;
     if HasOwnSourceFile then
-      FCallStack.PushTemplate(Pointer(ATemplate), '')
+      FCallStack.PushTemplate(Pointer(Template), '')
     else
-      FCallStack.PushTemplate(Pointer(ATemplate), FCurrentModuleSourcePath);
+      FCallStack.PushTemplate(Pointer(Template), FCurrentModuleSourcePath);
   end;
 
   // The dispatch loop's frame record carries only the instruction pointer and
   // the template; its other fields exist for the entries PushFrame saves and
   // are never read from this record, so they are not cleared here.
   AFrame.IP := 0;
-  AFrame.Template := ATemplate;
+  AFrame.Template := Template;
 
-  if not ATemplate.IsArrow then
+  if Template.IsArrow then
+    FCurrentNewTarget := AClosure.NewTarget
+  else
     FCurrentNewTarget := nil;
-  if ATemplate.IsArrow and Assigned(AClosure) then
-    FCurrentNewTarget := AClosure.NewTarget;
 
+  // BytecodeClosureExecutionRealm, with the class of a bytecode function
+  // compared first: it is what almost every closure belongs to, and an exact
+  // class comparison is one load where `is` is a call.
+  ExecutionRealm := FRealm;
+  FunctionValue := AClosure.FunctionValue;
+  if Assigned(FunctionValue) and
+     ((FunctionValue.ClassType = TGocciaBytecodeFunctionValue) or
+      (FunctionValue is TGocciaFunctionBase)) and
+     Assigned(TGocciaFunctionBase(FunctionValue).CreationRealm) then
+    ExecutionRealm := TGocciaFunctionBase(FunctionValue).CreationRealm;
+
+  if APushExecutionContext and Assigned(ExecutionRealm) then
+  begin
+    // Consecutive calls almost always run code from one source file, so the
+    // interned reference of the last path is reused while the path is the
+    // same string.
+    if HasOwnSourceFile then
+    begin
+      if Pointer(DebugInfo.SourceFile) <> Pointer(FExecutionSourcePath) then
+        InternExecutionSourcePath(DebugInfo.SourceFile);
+    end
+    else if Pointer(FCurrentModuleSourcePath) <>
+            Pointer(FExecutionSourcePath) then
+      InternExecutionSourcePath(FCurrentModuleSourcePath);
+    if TGocciaExecutionContextStack.FunctionContextsFull(
+         FExecutionContextThread) then
+      GrowExecutionContextStack;
+    TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
+      ExecutionRealm, FGlobalScope, FunctionValue, FExecutionSourcePathRef);
+    FCurrentExecutionContextPushed := True;
+  end;
+
+  if FCoverageEnabled or FProfilingFunctions then
+    NoteFrameEntry(Template, APrevCovLine, AProfileTimestamp);
+end;
+
+{ The coverage and profiler records of a frame SetupNewFrame has set up, out
+  of line: neither runs unless asked for. }
+procedure TGocciaVM.NoteFrameEntry(const ATemplate: TGocciaFunctionTemplate;
+  var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
+begin
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
      (ATemplate.DebugInfo.LineMapCount > 0) and not ATemplate.IsGenerator then
@@ -16019,54 +16474,12 @@ begin
         ATemplate.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
           ATemplate.Name, '', 0);
     end;
-    AProfileTimestamp := GetNanoseconds;
-    TGocciaProfiler.Instance.PushFunction(
-      ATemplate.ProfileIndex, AProfileTimestamp);
-  end;
-
-  // Both windows were acquired above and are still as acquired: the registers
-  // exist and no local slot has a cell yet, so these are plain stores.
-  FRegisters[0] := AThisValue;
-  for I := 0 to AArgCount - 1 do
-    FRegisters[I + 1] := FArguments[I];
-  // BytecodeClosureExecutionRealm, with the class of a bytecode function
-  // compared first: it is what almost every closure belongs to, and an exact
-  // class comparison is one load where `is` is a call.
-  ExecutionRealm := FRealm;
-  FunctionValue := AClosure.FunctionValue;
-  if Assigned(FunctionValue) and
-     ((FunctionValue.ClassType = TGocciaBytecodeFunctionValue) or
-      (FunctionValue is TGocciaFunctionBase)) and
-     Assigned(TGocciaFunctionBase(FunctionValue).CreationRealm) then
-    ExecutionRealm := TGocciaFunctionBase(FunctionValue).CreationRealm;
-
-  if APushExecutionContext and Assigned(ExecutionRealm) then
-  begin
-    // Consecutive calls almost always run code from one source file, so the
-    // interned reference of the last path is reused while the path is the
-    // same string.
-    if HasOwnSourceFile then
-    begin
-      if Pointer(ATemplate.DebugInfo.SourceFile) <>
-         Pointer(FExecutionSourcePath) then
-        InternExecutionSourcePath(ATemplate.DebugInfo.SourceFile);
-    end
-    else if Pointer(FCurrentModuleSourcePath) <>
-            Pointer(FExecutionSourcePath) then
-      InternExecutionSourcePath(FCurrentModuleSourcePath);
-    if TGocciaExecutionContextStack.FunctionContextsFull(
-         FExecutionContextThread) then
-      GrowExecutionContextStack;
-    TGocciaExecutionContextStack.PushFunctionContext(FExecutionContextThread,
-      ExecutionRealm, FGlobalScope, FunctionValue, FExecutionSourcePathRef);
-    FCurrentExecutionContextPushed := True;
+    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex);
   end;
 
   if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and
      (ATemplate.DebugInfo.LineMapCount > 0) then
-    APrevCovLine := ATemplate.DebugInfo.GetLineMapEntry(0).Line
-  else
-    APrevCovLine := 0;
+    APrevCovLine := ATemplate.DebugInfo.GetLineMapEntry(0).Line;
 end;
 
 procedure TGocciaVM.HandleExceptionUnwind(const AErrorValue: TGocciaValue;
@@ -16182,19 +16595,50 @@ begin
 end;
 {$IFDEF PRODUCTION}{$IFDEF FPC}{$OPTIMIZATION AUTOINLINE}{$ENDIF}{$ENDIF}
 
+{$IFDEF GOCCIA_VM_LAYOUT_PROBE}
+var
+  GLayoutProbeSink: Cardinal;
+
+{ The layout probe (`./build.pas --prod --layout-probe`, issue #1917): code
+  that never runs, ahead of the VM's hot code, so that the probe build is the
+  ordinary build with that code moved by a few hundred bytes. Measured against
+  the ordinary build, it shows how much a benchmark moves when unrelated code
+  moves; see "Dispatch layout" in docs/bytecode-vm.md. }
+procedure LayoutProbePadding;
+begin
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 13) xor 1;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 7) xor 2;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 11) xor 3;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 5) xor 4;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 17) xor 5;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 3) xor 6;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 9) xor 7;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 15) xor 8;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 6) xor 9;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 10) xor 10;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 14) xor 11;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 4) xor 12;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 12) xor 13;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 8) xor 14;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 16) xor 15;
+  GLayoutProbeSink := GLayoutProbeSink xor (GLayoutProbeSink shl 2) xor 16;
+end;
+{$ENDIF}
+
+{ Every case arm of the dispatch loop starts on a 64-byte boundary (issue
+  #1917), so no arm shares a cache line, or an op-cache window, with the end
+  of the arm before it. FPC also aligns the labels where a case statement
+  ends and where an if statement without an else rejoins, in this function
+  and the routines nested in it, and to nothing outside them; code that falls
+  through to such a label executes the padding. See "Dispatch layout" in
+  docs/bytecode-vm.md for what it measured. }
+{$IFDEF FPC}{$PUSH}{$CODEALIGN JUMP=64}{$ENDIF}
 function TGocciaVM.ExecuteClosureRegistersInternal(
   const AClosure: TGocciaBytecodeClosure; const AThisValue: TGocciaRegister;
   const AArguments: PGocciaRegister; const AArgCount: Integer;
   const APushExecutionContext: Boolean; const AStopAtIP: Integer;
   const AStopGenerator: TObject;
   const ASuspension: PGocciaBytecodeSuspension): TGocciaRegister;
-label
-  LGetPropConstShared,
-  LProdLoopHead,
-  LInstrumentedLoopHead,
-  LDispatchCase,
-  LDispatchNext,
-  LInnerLoopsDone;
 var
   Frame: TGocciaVMCallFrame;
   SavedRegisterBase: Integer;
@@ -16681,118 +17125,111 @@ begin
       try
         UseProdDispatch := not FCoverageEnabled and not FProfilingOpcodes and
           (AStopAtIP < 0) and not FThreadPolls^.InstructionLimitActive;
-        if UseProdDispatch then
-          goto LProdLoopHead
-        else
-          goto LInstrumentedLoopHead;
-
-LProdLoopHead:
-        if Frame.IP >= Template.CodeCount then
-          goto LInnerLoopsDone;
-        InstructionStartIP := Frame.IP;
-        Instruction := Template.GetInstructionUnchecked(Frame.IP);
-        Inc(Frame.IP);
-
-        // Every instruction passes through here; only an OP_WIDE prefix pays
-        // for the high operand bytes.
-        Op := DecodeOp(Instruction);
-        if Op <> Ord(OP_WIDE) then
+        // One loop, two instruction-fetch paths, no goto: FPC lowers a
+        // function that uses goto on wasm32 into a state machine over its
+        // whole body, and natively this loop executes no more instructions
+        // in total (ADR 0154).
+        // Continue in the opcode case fetches the next instruction without
+        // the memory-pressure check at the end of the body.
+        while Frame.IP < Template.CodeCount do
         begin
-          A := DecodeA(Instruction);
-          B := DecodeB(Instruction);
-          C := DecodeC(Instruction);
-        end
-        else
-        begin
-          WideA := UInt16(DecodeA(Instruction)) shl 8;
-          WideB := UInt16(DecodeB(Instruction)) shl 8;
-          WideC := UInt16(DecodeC(Instruction)) shl 8;
-          if Frame.IP >= Template.CodeCount then
-            raise Exception.Create('Truncated OP_WIDE bytecode prefix');
-          Instruction := Template.GetInstructionUnchecked(Frame.IP);
-          Inc(Frame.IP);
-          Op := DecodeOp(Instruction);
-          A := WideA or DecodeA(Instruction);
-          B := WideB or DecodeB(Instruction);
-          C := WideC or DecodeC(Instruction);
-        end;
-        goto LDispatchCase;
-
-LInstrumentedLoopHead:
-        if Frame.IP >= Template.CodeCount then
-          goto LInnerLoopsDone;
-        if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
-           Assigned(AStopGenerator) then
-        begin
-          TGocciaBytecodeGeneratorObjectValue(AStopGenerator).
-            CaptureInitialContinuation(Frame, SavedHandlerCount, PrevCovLine,
-              Frame.IP);
-          Result := RegisterUndefined;
-          Exit;
-        end;
-
-        PollInstructionLimit(InstructionLimitState);
-        InstructionStartIP := Frame.IP;
-        Instruction := Template.GetInstructionUnchecked(Frame.IP);
-        Inc(Frame.IP);
-
-        WideA := 0;
-        WideB := 0;
-        WideC := 0;
-        if DecodeOp(Instruction) = Ord(OP_WIDE) then
-        begin
-          WideA := UInt16(DecodeA(Instruction)) shl 8;
-          WideB := UInt16(DecodeB(Instruction)) shl 8;
-          WideC := UInt16(DecodeC(Instruction)) shl 8;
-          if Frame.IP >= Template.CodeCount then
-            raise Exception.Create('Truncated OP_WIDE bytecode prefix');
-          Instruction := Template.GetInstructionUnchecked(Frame.IP);
-          Inc(Frame.IP);
-        end;
-
-        if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
-           Assigned(Template.DebugInfo) then
-        begin
-          CovLine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
-          if (CovLine <> 0) and (CovLine <> PrevCovLine) then
+          if UseProdDispatch then
           begin
-            TGocciaCoverageTracker.Instance.RecordLineHit(
-              Template.DebugInfo.SourceFile, CovLine);
-            PrevCovLine := CovLine;
+            InstructionStartIP := Frame.IP;
+            Instruction := Template.GetInstructionUnchecked(Frame.IP);
+            Inc(Frame.IP);
+
+            // Every instruction passes through here; only an OP_WIDE prefix
+            // pays for the high operand bytes.
+            Op := DecodeOp(Instruction);
+            if Op <> Ord(OP_WIDE) then
+            begin
+              A := DecodeA(Instruction);
+              B := DecodeB(Instruction);
+              C := DecodeC(Instruction);
+            end
+            else
+            begin
+              WideA := UInt16(DecodeA(Instruction)) shl 8;
+              WideB := UInt16(DecodeB(Instruction)) shl 8;
+              WideC := UInt16(DecodeC(Instruction)) shl 8;
+              if Frame.IP >= Template.CodeCount then
+                raise Exception.Create('Truncated OP_WIDE bytecode prefix');
+              Instruction := Template.GetInstructionUnchecked(Frame.IP);
+              Inc(Frame.IP);
+              Op := DecodeOp(Instruction);
+              A := WideA or DecodeA(Instruction);
+              B := WideB or DecodeB(Instruction);
+              C := WideC or DecodeC(Instruction);
+            end;
+          end
+          else
+          begin
+            if (AStopAtIP >= 0) and (Frame.IP >= AStopAtIP) and
+               Assigned(AStopGenerator) then
+            begin
+              TGocciaBytecodeGeneratorObjectValue(AStopGenerator).
+                CaptureInitialContinuation(Frame, SavedHandlerCount,
+                  PrevCovLine, Frame.IP);
+              Result := RegisterUndefined;
+              Exit;
+            end;
+
+            PollInstructionLimit(InstructionLimitState);
+            InstructionStartIP := Frame.IP;
+            Instruction := Template.GetInstructionUnchecked(Frame.IP);
+            Inc(Frame.IP);
+
+            WideA := 0;
+            WideB := 0;
+            WideC := 0;
+            if DecodeOp(Instruction) = Ord(OP_WIDE) then
+            begin
+              WideA := UInt16(DecodeA(Instruction)) shl 8;
+              WideB := UInt16(DecodeB(Instruction)) shl 8;
+              WideC := UInt16(DecodeC(Instruction)) shl 8;
+              if Frame.IP >= Template.CodeCount then
+                raise Exception.Create('Truncated OP_WIDE bytecode prefix');
+              Instruction := Template.GetInstructionUnchecked(Frame.IP);
+              Inc(Frame.IP);
+            end;
+
+            if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
+               Assigned(Template.DebugInfo) then
+            begin
+              CovLine := Template.DebugInfo.GetLineForPC(InstructionStartIP);
+              if (CovLine <> 0) and (CovLine <> PrevCovLine) then
+              begin
+                TGocciaCoverageTracker.Instance.RecordLineHit(
+                  Template.DebugInfo.SourceFile, CovLine);
+                PrevCovLine := CovLine;
+              end;
+            end;
+
+            Op := DecodeOp(Instruction);
+            if FProfilingOpcodes then
+              TGocciaProfiler.Instance.RecordOpcode(Op);
+            A := WideA or DecodeA(Instruction);
+            B := WideB or DecodeB(Instruction);
+            C := WideC or DecodeC(Instruction);
           end;
-        end;
 
-        Op := DecodeOp(Instruction);
-        if FProfilingOpcodes then
-          TGocciaProfiler.Instance.RecordOpcode(Op);
-        A := WideA or DecodeA(Instruction);
-        B := WideB or DecodeB(Instruction);
-        C := WideC or DecodeC(Instruction);
-
-LDispatchCase:
 {$I Goccia.VM.DispatchCase.inc}
-        if FMemoryPressureCheckCountdown = 0 then
-        begin
-          if Assigned(GC) then
-            GC.CollectForMemoryPressure(nil,
-              MEMORY_PRESSURE_CHECK_FORCES_COLLECTION);
-          FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
-          if FStackChargePending then
-            SettleStackGrowth
-          else if FStackChargedBytes + FStackUnchargedBytes > 0 then
-            ShrinkIdleStacks;
-        end
-        else
-          Dec(FMemoryPressureCheckCountdown);
-        goto LDispatchNext;
 
-LDispatchNext:
-        if UseProdDispatch then
-          goto LProdLoopHead
-        else
-          goto LInstrumentedLoopHead;
-
-LInnerLoopsDone:
+          if FMemoryPressureCheckCountdown = 0 then
+          begin
+            if Assigned(GC) then
+              GC.CollectForMemoryPressure(nil,
+                MEMORY_PRESSURE_CHECK_FORCES_COLLECTION);
+            FMemoryPressureCheckCountdown := MEMORY_PRESSURE_CHECK_INTERVAL;
+            if FStackChargePending then
+              SettleStackGrowth
+            else if FStackChargedBytes + FStackUnchargedBytes > 0 then
+              ShrinkIdleStacks;
+          end
+          else
+            Dec(FMemoryPressureCheckCountdown);
+        end;
       except
         on E: EGocciaBytecodeThrow do
           if not TryUnwindToHandler(E.ThrownValue,
@@ -16900,19 +17337,21 @@ LInnerLoopsDone:
         PreviousMemoryPressureCountdown);
   end;
 end;
+{$IFDEF FPC}{$POP}{$ENDIF}
 
 { Every call native code makes into a bytecode function comes through here: a
   callback from Array.prototype.map, a getter, a comparator. The arguments are
   converted on the stack, which keeps this procedure free of a managed local
   (and so of an implicit exception frame, an allocation and a release per
-  call); SetupNewFrame copies them into the callee's argument window before
-  anything can collect. A call with more arguments than the buffer holds
+  call); SetupNewFrame copies them into the callee's argument window, or into
+  its registers when it never reads one, before anything can collect. A call with more arguments than the buffer holds
   stages them on the heap. }
 function TGocciaVM.ExecuteClosure(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaValue; const AArguments: TGocciaArgumentsCollection;
   const APushExecutionContext: Boolean;
   const ASuspension: PGocciaBytecodeSuspension): TGocciaValue;
 var
+  Polls: PGocciaThreadPolls;
   StackArguments: array[0..MAX_STACK_STAGED_ARGUMENT_COUNT - 1] of
     TGocciaRegister;
   I, ArgumentCount: Integer;
@@ -16923,11 +17362,9 @@ begin
       APushExecutionContext));
   for I := 0 to ArgumentCount - 1 do
     StackArguments[I] := VMValueToRegisterFast(AArguments.GetElement(I));
-  if GThreadPolls.Any <> 0 then
-  begin
-    CheckExecutionTimeout;
-    CheckInstructionLimit;
-  end;
+  Polls := @GThreadPolls;
+  if Polls^.Any <> 0 then
+    RunArmedPolls(Polls);
   Result := RegisterToValue(ExecuteClosureRegistersInternal(AClosure,
     VMValueToRegisterFast(AThisValue), @StackArguments[0], ArgumentCount,
     APushExecutionContext, -1, nil, ASuspension));
@@ -17902,7 +18339,145 @@ begin
   Literal.FFastLiteralMode := Fast and Literal.Extensible;
 end;
 
+// ES2026 §13.10.1 Relational Operators: Evaluation and §7.2.14
+// IsStrictlyEqual, with a Number immediate as one operand. A relational
+// opcode jumps when its comparison is false, OP_JUMP_IF_NOT_STRICT_EQ_IMM
+// when the values differ and OP_JUMP_IF_STRICT_EQ_IMM when they are equal.
+// A Number, scalar or boxed (NaN, an infinity, -0), compares directly; any
+// other value takes IsLessThan through the helpers OP_LT and the other
+// relational opcodes use, so ToPrimitive, BigInt and String operands keep
+// their semantics, and is never strictly equal to a Number.
+function TGocciaVM.ImmediateComparisonJumps(const AOp: TGocciaOpCode;
+  const ALeftIndex: Integer; const AImmediate: Int16): Boolean;
+var
+  LeftValue, RightValue: TGocciaValue;
+  LeftNumber: Double;
+  IsNumber, Holds: Boolean;
+begin
+  IsNumber := True;
+  case FRegisters[ALeftIndex].Kind of
+    grkInt:
+      LeftNumber := FRegisters[ALeftIndex].IntValue;
+    grkFloat:
+      LeftNumber := FRegisters[ALeftIndex].FloatValue;
+  else
+    IsNumber := VMBoxedNumberRegister(FRegisters[ALeftIndex]);
+    if IsNumber then
+      LeftNumber := TGocciaNumberLiteralValue(
+        FRegisters[ALeftIndex].ObjectValue).Value
+    else
+      LeftNumber := 0;
+  end;
+
+  if IsNumber then
+  begin
+    // Each comparison is stored before it is negated: FPC rewrites
+    // `not (x < k)` as `x >= k`, which is wrong when x is NaN.
+    case AOp of
+      OP_JUMP_IF_NOT_LT_IMM: Holds := LeftNumber < AImmediate;
+      OP_JUMP_IF_NOT_GT_IMM: Holds := LeftNumber > AImmediate;
+      OP_JUMP_IF_NOT_LTE_IMM: Holds := LeftNumber <= AImmediate;
+      OP_JUMP_IF_NOT_GTE_IMM: Holds := LeftNumber >= AImmediate;
+    else
+      Holds := LeftNumber = AImmediate;
+    end;
+    Result := Holds = (AOp = OP_JUMP_IF_STRICT_EQ_IMM);
+    Exit;
+  end;
+
+  case AOp of
+    OP_JUMP_IF_NOT_STRICT_EQ_IMM:
+      Exit(True);
+    OP_JUMP_IF_STRICT_EQ_IMM:
+      Exit(False);
+  end;
+
+  LeftValue := GetRegisterFast(ALeftIndex);
+  RightValue := TGocciaNumberLiteralValue.Create(AImmediate);
+  case AOp of
+    OP_JUMP_IF_NOT_LT_IMM:
+      Holds := VMRootedBinaryPredicate(@Goccia.Arithmetic.LessThan,
+        LeftValue, RightValue);
+    OP_JUMP_IF_NOT_GT_IMM:
+      Holds := VMRootedBinaryPredicate(@Goccia.Arithmetic.GreaterThan,
+        LeftValue, RightValue);
+    OP_JUMP_IF_NOT_LTE_IMM:
+      Holds := VMRootedBinaryPredicate(
+        @Goccia.Arithmetic.LessThanOrEqual, LeftValue, RightValue);
+  else
+    Holds := VMRootedBinaryPredicate(
+      @Goccia.Arithmetic.GreaterThanOrEqual, LeftValue, RightValue);
+  end;
+  Result := not Holds;
+end;
+
+// Coverage for a fused compare-and-jump: branch 0 is the jump, branch 1 the
+// fall-through, as for OP_JUMP_IF_FALSE.
+procedure TGocciaVM.RecordFusedBranchHit(
+  const ATemplate: TGocciaFunctionTemplate; const APC: Integer;
+  const ATaken: Boolean);
+begin
+  if (TGocciaCoverageTracker.Instance = nil) or
+     not Assigned(ATemplate.DebugInfo) then
+    Exit;
+  if ATaken then
+    TGocciaCoverageTracker.Instance.RecordBranchHit(
+      ATemplate.DebugInfo.SourceFile, ATemplate.DebugInfo.GetLineForPC(APC),
+      ATemplate.DebugInfo.GetColumnForPC(APC), 0)
+  else
+    TGocciaCoverageTracker.Instance.RecordBranchHit(
+      ATemplate.DebugInfo.SourceFile, ATemplate.DebugInfo.GetLineForPC(APC),
+      ATemplate.DebugInfo.GetColumnForPC(APC), 1);
+end;
+
+// A constant-name property read on a receiver the property read caches do
+// not serve. An Array's `length` is an own data property that cannot be
+// deleted or made an accessor (ES2026 §10.4.2), and a String's is fixed
+// (§10.4.3), so each is read from the value itself, without a name lookup or
+// a boxed Number.
+procedure TGocciaVM.ExecGetUncachedConstProperty(
+  const ATemplate: TGocciaFunctionTemplate; const ADest, AObject: Integer;
+  const ANameIndex: UInt16);
+var
+  Constant: PGocciaBytecodeConstant;
+  StoredLength: Int64;
+  Value: TGocciaValue;
+begin
+  Constant := ATemplate.GetConstantUnchecked(ANameIndex);
+  if Constant^.Kind = bckPrivateName then
+    Value := GetPrivatePropertyValue(GetRegister(AObject), Constant^.StringValue)
+  else if (FRegisters[AObject].Kind = grkObject) and
+          Assigned(FRegisters[AObject].ObjectValue) and
+          (FRegisters[AObject].ObjectValue.ClassType = TGocciaArrayValue) and
+          (Constant^.StringValue = PROP_LENGTH) then
+  begin
+    StoredLength :=
+      TGocciaArrayValue(FRegisters[AObject].ObjectValue).StoredLength;
+    FRegisters[ADest] := VMNumberRegister(StoredLength);
+    Exit;
+  end
+  else if (FRegisters[AObject].Kind = grkObject) and
+          Assigned(FRegisters[AObject].ObjectValue) and
+          (FRegisters[AObject].ObjectValue.ClassType =
+           TGocciaStringLiteralValue) and
+          (Constant^.StringValue = PROP_LENGTH) then
+  begin
+    StoredLength := UTF16CodeUnitLength(TGocciaStringLiteralValue(
+      FRegisters[AObject].ObjectValue).Value);
+    FRegisters[ADest] := VMNumberRegister(StoredLength);
+    Exit;
+  end
+  else
+    Value := GetPropertyValue(GetRegister(AObject), Constant^.StringValue);
+  SetRegister(ADest, Value);
+end;
+
 initialization
+{$IFDEF GOCCIA_VM_LAYOUT_PROBE}
+  // Referenced so that smart linking keeps it; never true.
+  if ParamCount < 0 then
+    LayoutProbePadding;
+{$ENDIF}
   RegisterFunctionConstructRedirectHook(RedirectBytecodeClassConstruct);
   RegisterOrdinaryObjectClass(TGocciaVMLiteralObjectValue);
   RegisterSnapshotCodec(TGocciaVMLiteralObjectValue,

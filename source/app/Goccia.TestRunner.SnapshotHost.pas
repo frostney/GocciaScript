@@ -770,7 +770,7 @@ begin
 end;
 
 function CompareInlineEdits(
-  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} ALeft,
+  {$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} ALeft,
   ARight: TGocciaInlineSnapshotEdit): Integer;
 begin
   Result := CompareText(ALeft.SourcePath, ARight.SourcePath);

@@ -30,6 +30,11 @@ postprocessors = [
   { pattern = '(?m)^(- feat\(sandbox\): apply a sandbox run.s changes with --write-back \(#1248\))$', replace = "$1 — shipped as `--copy-rw`: name each input the run may write back with `--copy-rw` (or `\"copy-rw\"` in the `sandbox` section)" },
   { pattern = '(?m)^(- feat\(modules\): opt-in bare-specifier resolution against node_modules \(#1190\))$', replace = "$1 — the opt-in is `--allow-import=node_modules` (the interim `--allow-node-modules` flag was removed before release)" },
   { pattern = '(?m)^(- fix\(cli\): keep --no-host-filesystem in force when a JavaScript manifest is loaded \(#1257\))$', replace = "$1 — `--no-host-filesystem` is removed in this release: host reads are denied by default, and `--deny-read` also refuses the project's own imports" },
+  # 0.15.0: #1481 kept `--mode=interpreted`; #1644 removed `--mode` and the
+  # interpreter before the release shipped.
+  { pattern = '(?m)^(- feat!: run scripts, tests, benchmarks and the REPL in bytecode mode by default \(#1481\))$', replace = "$1 — superseded in this release by #1644: bytecode is the only execution mode, and `--mode` or a `\"mode\"` config key exits with status 2" },
+  # 0.15.0: #1829 was squash-merged without its PR number in the subject.
+  { pattern = '(?m)^(- feat\(snapshot\): restore built-in differences atomically)$', replace = "$1 (#1829)" },
 ]
 
 [git]
@@ -62,6 +67,13 @@ commit_parsers = [
   { message = "^(Website: )?chore\\(release\\)", skip = true },
 
   { message = "^Website: ", group = "🌐 Website" },
+
+  # Sentence-style 0.15.0 subjects that no verb rule below files correctly.
+  # Each pattern matches exactly one PR's subject.
+  { message = "^Date and the other legacy shims run as bytecode", group = "⚡ Performance" },
+  { message = "^console\\.log shows functions, classes and errors", group = "🐛 Fixed" },
+  { message = "^Name private members as written in bytecode-mode errors", group = "🐛 Fixed" },
+  { message = "^Make the console-rendering and config-globals CLI checks pass", group = "🏗️ Internal" },
 
   { message = "^Wasm support", group = "🚀 Added" },
   { message = "^Add ", group = "🚀 Added" },

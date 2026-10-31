@@ -52,3 +52,15 @@ describe("new expression type arguments", () => {
     expect(new Comparable < /x/.test("x")).toBe(false);
   });
 });
+
+test("failed constructor probes preserve a later successful generic constructor", () => {
+  class Comparable {
+    valueOf() {
+      return 1;
+    }
+  }
+  const result = new Comparable < new Comparable < new Comparable < new Comparable < new Comparable < new Comparable < new Comparable < new Comparable < new Comparable < new Comparable < new Comparable < 2;
+  const values = new Set<Array<number>>;
+  values.add([result]);
+  expect([...values][0][0]).toBe(true);
+});

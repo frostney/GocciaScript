@@ -42,8 +42,9 @@ Remediation is independent of the operation:
   findings.
 - Fix modes authorize local edits and validation, not commits, pushes, PR
   comments, review-thread changes, deployments, publication, or shared-state
-  mutation. Stop remediation for a material product, architecture, security,
-  compatibility, or scope decision.
+  mutation. Stop remediation for a
+  [material](../software-engineering-excellence/SKILL.md#blockers-and-decisions)
+  product, architecture, security, compatibility, or scope decision.
 - A request to save JSON authorizes only the named findings artifact; it does
   not authorize remediation.
 - Exact file lists and prior-findings JSON are additive inputs. They do not
@@ -60,8 +61,7 @@ Remediation is independent of the operation:
   local. When the review delegates lanes, read
   [references/subagent-lanes.md](references/subagent-lanes.md) before
   publishing the lane map. While lanes run, the coordinator continues its own
-  lane-independent work, such as resolving the boundary and running the project
-  gate.
+  lane-independent work, such as running the project gate.
 
 Safe probes include declared checks, local builds and servers, disposable
 repros, isolated test data, browser interaction, temporary artifacts, and
@@ -156,8 +156,9 @@ Apply these requirements across the mapped finding scope.
   migration, packaging, or deployment path.
 - Record setup, action or command, input, expected result, and observed result.
   Credit returned results or matching stored evidence; a request, acknowledgment,
-  or expected outcome is not an observed result. Mark missing results
-  `unverified` and source-only conclusions `static only`.
+  or expected outcome is not an observed result. Re-run a check that returned
+  no result; mark a result that cannot be obtained `unverified` and source-only
+  conclusions `static only`.
 - Verify that changed tests fail for the relevant wrong behavior and assert
   outcomes rather than implementation details. Do not credit brittle,
   over-mocked, incidental, or snapshot-heavy coverage.
@@ -229,7 +230,13 @@ the map's term and describe your own role there as the `coordinator`. A short
 report may compress wording but keeps every applicable field below.
 
 For a fresh review, lead with the verdict: `APPROVE`,
-`APPROVE WITH IMPROVEMENTS`, or `REQUEST CHANGES`.
+`APPROVE WITH IMPROVEMENTS`, or `REQUEST CHANGES`. The report ends this
+skill's step. Started directly, continue under the
+[delivery settings](../deliver/SKILL.md#delivery-settings); with
+`entry-points: deliver`, the reviewed change and its validated findings go on
+to `/deliver`, which fixes the findings, verifies and publishes the change up to
+the configured endpoint (`ready-to-merge` when there is no `ORCHESTRATION.md`).
+With `stop`, end with this report.
 
 Include:
 
@@ -260,7 +267,10 @@ names the mechanism the repository documents, not a generic one. Check the
 project's git workflow first: where it forbids rebasing an ordinary branch,
 write "merge the base branch in", and reserve stack commands for branches in a
 confirmed stack. The same applies to review comments and pull request text
-posted from the report.
+posted from the report. When a caller has the review result recorded on a
+pull request, record it where
+[PR descriptions](../agent-writing/references/pr-descriptions.md#review-and-status-results)
+directs.
 
 `BLOCKING` prevents safe shipment. `IMPORTANT` has material correctness,
 security, operability, test-value, maintainability, simplification, or

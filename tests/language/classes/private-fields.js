@@ -491,7 +491,7 @@ test("private fields on replacement receivers use distinct class brands", () => 
   expect(() => First.readFrom(second)).toThrow(TypeError);
 });
 
-test("forged bytecode private brand properties do not grant access", () => {
+test("properties named like private storage keys do not grant access", () => {
   class TestClass {
     #method() {
       return 1;
@@ -502,17 +502,8 @@ test("forged bytecode private brand properties do not grant access", () => {
     }
   }
 
-  const privateKey = Object.getOwnPropertyNames(TestClass.prototype)
-    .find((key) => key.indexOf("#slot:") === 0);
-  if (privateKey === undefined) {
-    expect(privateKey).toBe(undefined);
-    return;
-  }
-
-  const forged = {};
-  forged[privateKey] = TestClass.prototype[privateKey];
-  forged["#brand:" + privateKey] = true;
-
+  expect(Object.getOwnPropertyNames(TestClass.prototype)).toEqual(["constructor", "readFrom"]);
+  const forged = { "#slot:0$method": () => 1, "#brand:0$method": true };
   expect(() => new TestClass().readFrom(forged)).toThrow(TypeError);
 });
 

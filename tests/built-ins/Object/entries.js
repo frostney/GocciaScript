@@ -57,3 +57,14 @@ test("Object.entries throws for null", () => {
 test("Object.entries throws for undefined", () => {
   expect(() => Object.entries(undefined)).toThrow(TypeError);
 });
+
+// #1326: these names once matched the engine's private storage keys.
+test("Object.entries includes names that look like private storage keys", () => {
+  const dynamic = {};
+  dynamic["#slot:x"] = 1;
+  dynamic["#initialized:y"] = 2;
+  expect(Object.entries(dynamic)).toEqual([
+    ["#slot:x", 1],
+    ["#initialized:y", 2],
+  ]);
+});

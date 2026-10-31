@@ -14,11 +14,14 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Engine,
+  Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Codec,
   Goccia.Values.Primitives;
 
 const
   TEST_PATH = '<heap-snapshot-test>';
+  // What a harness reports for a restore whose first root is not a value.
+  ROOT_NOT_A_VALUE = 'restored a root that is not a value';
 
 type
   { capture(value): hands a module's value to the test, rooted. }
@@ -63,6 +66,14 @@ function RoundTripModuleBytes(const ASource: string; const ABytes: TBytes;
 // The position of object AIndex's entry (its codec, then its payload's
 // length and the payload) in a snapshot.
 function ObjectEntryAt(const ABytes: TBytes; const AIndex: Integer): Integer;
+// The position just past a snapshot's build identity. What follows is the
+// same for every build of one tree, so a sweep that edits only from here
+// edits the same bytes whatever version and commit the build bakes in.
+function BuildIdentityEnd(const ABytes: TBytes): Integer;
+// ARestore's first root when it is a value, else nil. A root is whatever
+// object was written, and a hostile snapshot can make it any object it
+// holds, a closure's cell among them.
+function RootValue(const ARestore: TGocciaHeapSnapshotRestore): TGocciaValue;
 
 implementation
 
@@ -72,7 +83,6 @@ uses
   TestingPascalLibrary,
 
   Goccia.GarbageCollector,
-  Goccia.HeapSnapshot,
   Goccia.Scope.BindingMap,
   Goccia.SourcePipeline,
   Goccia.Test262.Host,
@@ -151,6 +161,7 @@ end;
 function RestoreAndCheck(const ABytes: TBytes;
   const ACheck: string; const ALimits: TGocciaHeapSnapshotLimits): string;
 var
+  Root: TGocciaValue;
   Engine: TGocciaEngine;
   Restore: TGocciaHeapSnapshotRestore;
   Lines: TStringList;
@@ -164,8 +175,11 @@ begin
   try
     Engine := TGocciaEngine.Create(TEST_PATH, Lines);
     Restore := TGocciaHeapSnapshotRestore.Create(Engine, Stream, ALimits);
+    Root := RootValue(Restore);
+    if not Assigned(Root) then
+      Exit(ROOT_NOT_A_VALUE);
     TGocciaObjectValue(Engine.Realm.GlobalObject).AssignProperty('restored',
-      TGocciaValue(Restore.Roots[0]));
+      Root);
     Result := Engine.EvaluateGlobalEval(ACheck, TEST_PATH,
       Stage).ToStringLiteral.Value;
   finally
@@ -317,6 +331,7 @@ function RoundTripModuleBytes(const ASource: string;
   const ABytes: TBytes; const ACheck: string;
   const AWithEval: Boolean): string;
 var
+  Root: TGocciaValue;
   Engine: TGocciaEngine;
   EvalHost: TGocciaTest262Host;
   Restore: TGocciaHeapSnapshotRestore;
@@ -346,8 +361,11 @@ begin
       on E: EGocciaHeapSnapshotInvalid do
         Exit('refused: ' + E.Message);
     end;
+    Root := RootValue(Restore);
+    if not Assigned(Root) then
+      Exit(ROOT_NOT_A_VALUE);
     TGocciaObjectValue(Engine.Realm.GlobalObject).AssignProperty('restored',
-      TGocciaValue(Restore.Roots[0]));
+      Root);
     Result := Engine.EvaluateGlobalEval(ACheck, TEST_PATH,
       Stage).ToStringLiteral.Value;
   finally
@@ -376,8 +394,7 @@ var
   end;
 
 begin
-  Result := 4 + 2;
-  Result := Result + 4 + 2 * Integer(U32At(Result));  // build identity
+  Result := BuildIdentityEnd(ABytes);
   Count := U32At(Result);                               // strings
   Inc(Result, 4);
   for I := 1 to Integer(Count) do
@@ -385,11 +402,34 @@ begin
   Result := Result + 4 + 6 * Integer(U32At(Result));  // codecs
   Result := Result + 4 + 4 * Integer(U32At(Result));  // built-in names
   Result := Result + 4 + 8 * Integer(U32At(Result));  // built-ins the run built
+  // Module records: their headers are the record codec's, not walked here.
+  Expect<Integer>(Integer(U32At(Result))).ToBe(0);
+  Inc(Result, 4);
   Result := Result + 4 + 4 * Integer(U32At(Result));  // modules
   Expect<Boolean>(AIndex < Integer(U32At(Result))).ToBe(True);
   Inc(Result, 4);
   for I := 1 to AIndex do
     Result := Result + 2 + 4 + Integer(U32At(Result + 2));
+end;
+
+function BuildIdentityEnd(const ABytes: TBytes): Integer;
+var
+  Units: Cardinal;
+begin
+  // The magic and the format version, then the identity's UTF-16 units
+  // after their count.
+  Expect<Boolean>(Length(ABytes) >= 4 + 2 + 4).ToBe(True);
+  Result := 4 + 2;
+  Move(ABytes[Result], Units, 4);
+  Result := Result + 4 + 2 * Integer(LEtoN(Units));
+  Expect<Boolean>(Result < Length(ABytes)).ToBe(True);
+end;
+
+function RootValue(const ARestore: TGocciaHeapSnapshotRestore): TGocciaValue;
+begin
+  Result := nil;
+  if (Length(ARestore.Roots) > 0) and (ARestore.Roots[0] is TGocciaValue) then
+    Result := TGocciaValue(ARestore.Roots[0]);
 end;
 
 end.

@@ -397,6 +397,7 @@ uses
   Goccia.Timeout,
   Goccia.Timers,
   Goccia.Utils,
+  Goccia.Utils.Arrays,
   Goccia.Values.AsymmetricMatcher,
   Goccia.Values.ClassHelper,
   Goccia.Values.ClassValue,
@@ -456,7 +457,8 @@ begin
         if PropertiesArray.Elements[I] = TGocciaHoleValue.HoleValue then
           Continue;
         ActualProperty := ActualArray.GetElement(I);
-        MergedArray.SetElement(I, MergeSnapshotPropertyShape(ActualProperty,
+        ArrayCreateDataProperty(MergedArray, I,
+          MergeSnapshotPropertyShape(ActualProperty,
           PropertiesArray.GetElement(I)));
       end;
       Result := MergedArray;

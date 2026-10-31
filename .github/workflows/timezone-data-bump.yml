@@ -11,6 +11,10 @@ on:
     - cron: '30 8 1 * *'
   workflow_dispatch:
 
+env:
+  # The frostney/fpc-toolchain build, as in ci.yml.
+  FPC_VERSION: "3.2.4-rc2-b1"
+
 jobs:
   bump:
     runs-on: ubuntu-latest
@@ -22,12 +26,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # The generator writes the resource with fpcres.
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
+
       - name: Install generator dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install fpc tzdata -qq > /dev/null
+          sudo apt-get install tzdata -qq > /dev/null
 
       - id: latest
         name: Resolve latest IANA release

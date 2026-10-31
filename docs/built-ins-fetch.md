@@ -18,9 +18,30 @@ The `options` object supports:
 
 - `method`: `"GET"` or `"HEAD"` (case-insensitive);
 - `headers`: a plain object or `Headers` instance;
+- `redirect`: `"follow"` (the default), `"error"`, or `"manual"`; any other value throws `TypeError`;
 - `signal`: an `AbortSignal`, `null`, or `undefined`.
 
-Redirects (301/302/303/307/308) are followed automatically up to 20 hops. A redirect's `Location` is parsed by the URL Standard's parser with the redirecting response's URL as the base (relative, `./`, `../`, absolute-path, query-only and scheme-relative forms), and the URL sent, for the first request and every hop, has its dot segments removed (`https://h/a/./b/../c` is requested as `https://h/a/c`); a `Location` that does not parse is a network error. HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
+### Redirects
+
+A redirect status is 301, 302, 303, 307 or 308; any other status, a 300 or 306 with a `Location` included, is the response. What a redirect does depends on the `redirect` option ([WHATWG Fetch, HTTP fetch](https://fetch.spec.whatwg.org/#http-fetch); [ADR 0156](adr/0156-fetch-honours-the-redirect-mode.md)):
+
+- `"follow"` follows up to 20 redirects. A twenty-first rejects with `TypeError: redirect limit exceeded: more than 20 redirects`. A redirect response without a `Location` is the response. The method stays as it was on every hop, a `HEAD` after a 303 included.
+- `"error"` rejects any redirect, one without a `Location` included, with `TypeError: redirect refused: the request's redirect mode is "error"`, as soon as its status line and headers arrive, without reading its body.
+- `"manual"` resolves with the redirect response itself: its status, `statusText`, headers (`Location` included) and body, `redirected` false, and `url` the request's URL. A browser answers with an opaque-redirect response (status 0, no headers) here; GocciaScript has no origin model to protect, so it answers as Node.js and Bun do.
+
+`Authorization`, `Cookie` and `Proxy-Authorization` headers the script sets are sent only while the redirects stay on the request's origin (scheme, host and port). The first redirect to another origin drops them for that hop and every later one, even one that returns to the original origin. An HTTPS-to-HTTP redirect changes the scheme, so the credentials never travel without TLS. Other headers are sent on every hop.
+
+A redirect's `Location` is parsed by the URL Standard's parser with the redirecting response's URL as the base (relative, `./`, `../`, absolute-path, query-only and scheme-relative forms), and the URL sent, for the first request and every hop, has its dot segments removed (`https://h/a/./b/../c` is requested as `https://h/a/c`); a `Location` that does not parse is a network error.
+
+A redirect to the same origin is sent over the connection that carried the redirect when that response ended cleanly ([ADR 0170](adr/0170-fetch-reuses-the-connection-within-an-origin.md)): it is HTTP/1.1 without `Connection: close`, and its body is framed by `Content-Length` with nothing after it, by `chunked` read to its end with nothing after it, or it has none (a `HEAD` response, a 204 or a 304). `chunked` counts only as the final coding of a single `Transfer-Encoding` field with no `Content-Length` beside it. The hop's checks run against the address that connection was opened to, without a second lookup. A hop on a reused connection is sent once more, on a new connection, when its request cannot be written, when the connection ends or fails before the first byte of the response, or when what arrives first is not an HTTP/1.x status line (bytes the previous response left behind); a response that did arrive is never requested again. Any other hop opens a connection of its own, and no connection outlives the `fetch` call.
+
+Under `"manual"` and `"error"`, and on the request that reaches the redirect limit, the request asks the server to close the connection. Every other request leaves it open for a redirect, so a server that answers with neither `Content-Length` nor `chunked` and keeps the connection open holds the fetch until its timeout.
+
+### Transport security
+
+HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
+
+With OpenSSL the process keeps one client context, so the trust store is read once rather than for every connection. The context carries configuration only: no TLS session is cached in it. A change to `SSL_CERT_FILE` or `SSL_CERT_DIR` makes the next connection read the trust store again; a CA file replaced at the same path is read after a restart.
 
 ### Network capability
 
@@ -62,6 +83,22 @@ accepted sizes:
 ```
 
 A response over the ceiling rejects with `TypeError`.
+
+### Response bodies and the memory limit
+
+A response body is fully buffered, and its bytes count against the engine's
+memory limit (`--max-memory`) like any other allocation the script makes. The
+bytes are reserved when the fetch settles, so a body that does not fit the
+room left rejects the fetch with the catchable
+`RangeError: Allocation failed: GC heap size exceeds the configured memory limit`,
+whatever `--max-fetch-bytes` allows. Responses a script keeps hold of keep
+their bodies reserved, so bodies that each fit can together pass the limit.
+`text()`, `json()` and `arrayBuffer()` give the body's bytes back once they
+have read it (`arrayBuffer()` hands them to the buffer it returns, without a
+copy), and a response that is collected unread gives them back too. A
+`new Response(body)` reserves its encoded body the same way and throws the
+`RangeError` when it does not fit. See [Garbage Collector — what `BytesAllocated`
+tracks](garbage-collector.md#what-bytesallocated-tracks).
 
 The capability set and the ceiling belong to one engine: embedders fix the set
 at engine construction and set `FetchMaxResponseBytes` on the engine. Each
@@ -108,7 +145,7 @@ Each host thread caps requests in flight at 16, and runtimes on the same thread 
 
 A response body that ends early is a network error, as the Fetch Standard requires for an incomplete message: when the connection closes before the `Content-Length` bytes, or before a `chunked` body's last chunk, the fetch rejects with `TypeError: HTTP response body ended before its declared length`, and a `chunked` body that does not follow the chunked coding (a chunk-size line that is not hexadecimal, or chunk data not followed by CRLF) rejects with `TypeError: Invalid HTTP response: malformed chunked body`; the trailer section after the last chunk is read through its closing empty line and its fields are dropped. A `Content-Length` that is not decimal digits rejects with `TypeError: Invalid HTTP response: malformed Content-Length`. A body with neither header ends when the connection closes, and a connection that fails rather than closes rejects.
 
-A peer that resets the connection never ends the process with `SIGPIPE`: a reset that lands on the request or the response rejects the one fetch with a `TypeError`, and one that lands only on the `close_notify` alert that closing a TLS connection writes, after the response is complete, leaves the fetch's result alone. Sockets send with `MSG_NOSIGNAL` on Linux and carry `SO_NOSIGPIPE` on macOS and FreeBSD; OpenSSL's socket BIO writes without either, so on Linux each OpenSSL call that can write runs with `SIGPIPE` blocked on the calling thread and takes back a `SIGPIPE` it raised. The process-wide disposition of `SIGPIPE`, which an embedder may have set, is never changed.
+A peer that resets the connection never ends the process with `SIGPIPE`: a reset that lands on the request or the response rejects the one fetch with a `TypeError` (unless it lands on a redirect hop's reused connection before any of the response arrives, which sends the hop again; see [Redirects](#redirects)), and one that lands only on the `close_notify` alert that closing a TLS connection writes, after the response is complete, leaves the fetch's result alone. Sockets send with `MSG_NOSIGNAL` on Linux and carry `SO_NOSIGPIPE` on macOS and FreeBSD; OpenSSL's socket BIO writes without either, so on Linux each OpenSSL call that can write runs with `SIGPIPE` blocked on the calling thread and takes back a `SIGPIPE` it raised. The process-wide disposition of `SIGPIPE`, which an embedder may have set, is never changed.
 
 The focused subset has no `Request` object, streaming request or response body, or CORS processing.
 

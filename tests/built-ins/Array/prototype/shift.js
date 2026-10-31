@@ -31,4 +31,37 @@ describe("Array.prototype.shift", () => {
     expect(obj.length).toBe(2);
     expect(obj.hasOwnProperty('2')).toBe(false);
   });
+
+  test("shift on an array with a named property writes own elements without calling an inherited setter", () => {
+    let calls = "";
+    Object.defineProperty(Array.prototype, "0", {
+      set(value) { calls += value; },
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.shift();
+      expect(calls).toBe("");
+      expect(Array.from(arr)).toEqual([2, 3]);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
+
+  test("shift on an array with a named property writes own elements past an inherited read-only index", () => {
+    Object.defineProperty(Array.prototype, "0", {
+      value: "ro",
+      writable: false,
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.shift();
+      expect(Array.from(arr)).toEqual([2, 3]);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
 });

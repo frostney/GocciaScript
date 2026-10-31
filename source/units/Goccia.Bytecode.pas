@@ -258,7 +258,17 @@ const
   //               OP_APPLY_CLASS_DECORATOR and OP_FINISH_DECORATORS read it
   //               from R[A+1], which v94 code loads with undefined or a
   //               computed element key.
-  GOCCIA_FORMAT_VERSION = 96;
+  //   v96 -> v97: a private name is a bckPrivateName constant instead of a
+  //               bckString whose text starts with '#slot:', and the VM
+  //               keeps private elements out of an object's properties. v96
+  //               code would read its private names as ordinary property
+  //               keys.
+  //   v97 -> v98: added OP_JUMP_IF_NOT_LT_IMM, OP_JUMP_IF_NOT_GT_IMM,
+  //               OP_JUMP_IF_NOT_LTE_IMM, OP_JUMP_IF_NOT_GTE_IMM,
+  //               OP_JUMP_IF_NOT_STRICT_EQ_IMM and OP_JUMP_IF_STRICT_EQ_IMM
+  //               (opcodes 239 to 244), which compare a register with a
+  //               signed Int16 immediate and jump in one dispatch.
+  GOCCIA_FORMAT_VERSION = 98;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -285,6 +295,12 @@ const
   // carries the key register, still holding the UNCOERCED key: this validate is
   // emitted before OP_TO_PROPERTY_KEY precisely so step 3.a precedes step 3.c.
   VALIDATE_OP_REQUIRE_OBJECT_FOR_MEMBER = 2;
+  // C operand of OP_TO_PROPERTY_KEY. With TO_PROPERTY_KEY_KEEP_INT the key is
+  // consumed only by element get/set opcodes, which accept an Int key and give it
+  // the same meaning as its ToString form, so an Int key is left as it is. A VM
+  // that ignores the flag still converts the key, so it stays correct either way.
+  TO_PROPERTY_KEY_STRICT = 0;
+  TO_PROPERTY_KEY_KEEP_INT = 1;
   // A operand of OP_CHECK_BINDING_INITIALIZED.
   CHECK_BINDING_UPVALUE = 0;
   CHECK_BINDING_GLOBAL = 1;
@@ -304,14 +320,13 @@ const
   //   255    = unbounded — emitted *only* for rest-pattern destructuring
   //            (`[a, b, ...rest] = iter`) where the iterator must drain
   //            completely.
-  // Oversized fixed patterns (Count >= 255 without a rest element) are
-  // rejected at compile time by EmitDestructuring in
-  // Goccia.Compiler.Expressions.pas rather than collapsed to this
-  // sentinel — that would silently switch "consume exactly N" to "drain
-  // entirely" and hang on infinite iterators.  Likewise, rest patterns
-  // whose start index would not fit in OP_UNPACK's UInt8 operand are
-  // rejected there too.  This sentinel therefore only ever appears when
-  // the caller actually wants the full-drain semantics.
+  // Oversized fixed patterns (Count >= 255 without a rest element) step the
+  // iterator instead (EmitDestructuring in Goccia.Compiler.Expressions.pas)
+  // rather than collapse to this sentinel — that would silently switch
+  // "consume exactly N" to "drain entirely" and hang on infinite iterators.
+  // Likewise, rest patterns whose start index would not fit in OP_UNPACK's
+  // UInt8 operand step the iterator too.  This sentinel therefore only ever
+  // appears when the caller actually wants the full-drain semantics.
   ITERABLE_LIMIT_UNBOUNDED = 255;
 
   MIN_SBX: Int16 = -32768;
@@ -583,7 +598,23 @@ type
     // configurable (ES2026 §9.1.1.4.16 CreateGlobalVarBinding), so deleting
     // the property removes the binding, and GetValue of the now unresolvable
     // reference throws (§6.2.5.5 GetValue step 2).
-    OP_GET_GLOBAL_DECLARED = 238
+    OP_GET_GLOBAL_DECLARED = 238,
+    // A = left register, B = signed Int16 immediate, C = signed Int16 jump
+    // offset taken when the comparison is false. Generic relational
+    // semantics (ES2026 §13.10.1): a Number in A is compared directly; any
+    // other value takes the generic comparison with the immediate as a
+    // Number. The immediate is a primitive, so only A's ToPrimitive can run
+    // guest code, and `imm < x` may be emitted as `x > imm`.
+    OP_JUMP_IF_NOT_LT_IMM = 239,
+    OP_JUMP_IF_NOT_GT_IMM = 240,
+    OP_JUMP_IF_NOT_LTE_IMM = 241,
+    OP_JUMP_IF_NOT_GTE_IMM = 242,
+    // A = register, B = signed Int16 immediate, C = signed Int16 jump
+    // offset. Jumps when A is not (NOT_STRICT_EQ) or is (STRICT_EQ) strictly
+    // equal to the immediate Number (ES2026 §7.2.14 IsStrictlyEqual): only a
+    // Number can be, so no value is converted and no guest code runs.
+    OP_JUMP_IF_NOT_STRICT_EQ_IMM = 243,
+    OP_JUMP_IF_STRICT_EQ_IMM = 244
   );
 
 const
@@ -616,6 +647,33 @@ function DecodeC(const AInstruction: UInt32): UInt8; {$IFDEF FPC}inline;{$ENDIF}
 function DecodeBx(const AInstruction: UInt32): UInt16; {$IFDEF FPC}inline;{$ENDIF}
 function DecodesBx(const AInstruction: UInt32): Int16; {$IFDEF FPC}inline;{$ENDIF}
 function DecodeAx(const AInstruction: UInt32): Int32; {$IFDEF FPC}inline;{$ENDIF}
+
+type
+  { Where a jump keeps its offset, which the VM adds to the index of the
+    instruction after the jump (an OP_WIDE prefix does not count): OP_JUMP's
+    signed 24-bit Ax, the signed 16-bit sBx of OP_JUMP_IF_TRUE and
+    OP_JUMP_IF_FALSE, a 16-bit C whose high byte is in the OP_WIDE prefix
+    (signed for the comparison jumps, unsigned for the nullish ones), and a
+    handler push's unsigned Bx. }
+  TGocciaJumpOperand = (gjoNone, gjoAx, gjoSBx, gjoSignedC, gjoUnsignedC,
+    gjoBx);
+
+const
+  // How far OP_JUMP's signed 24-bit offset reaches either way.
+  AX_JUMP_OFFSET_LIMIT = 8388607;
+
+function JumpOperandOf(const AOp: UInt8): TGocciaJumpOperand;
+{ The offset of the jump ABase, whose OP_WIDE prefix is APrefix (0 for a jump
+  without one). }
+function DecodeJumpOffset(const ABase, APrefix: UInt32;
+  const AOperand: TGocciaJumpOperand): Integer;
+{ Whether AOffset fits the operand; without a prefix, C has no high byte. }
+function JumpOffsetFits(const AOperand: TGocciaJumpOperand;
+  const AHasPrefix: Boolean; const AOffset: Integer): Boolean;
+{ Writes AOffset, which fits, into the jump ABase, and C's high byte into its
+  prefix APrefix; every other operand keeps its value. }
+procedure WriteJumpOffset(var ABase, APrefix: UInt32;
+  const AOperand: TGocciaJumpOperand; const AOffset: Integer);
 
 implementation
 
@@ -765,6 +823,97 @@ end;
 function DecodesBx(const AInstruction: UInt32): Int16;
 begin
   Result := Int16(Integer(DecodeBx(AInstruction)) - SBIAS_16);
+end;
+
+function JumpOperandOf(const AOp: UInt8): TGocciaJumpOperand;
+begin
+  case AOp of
+    Ord(OP_JUMP):
+      Result := gjoAx;
+    Ord(OP_JUMP_IF_TRUE), Ord(OP_JUMP_IF_FALSE):
+      Result := gjoSBx;
+    Ord(OP_JUMP_IF_NUM_NOT_LTE_IMM), Ord(OP_JUMP_IF_NOT_LT),
+    Ord(OP_JUMP_IF_NOT_LT_IMM), Ord(OP_JUMP_IF_NOT_GT_IMM),
+    Ord(OP_JUMP_IF_NOT_LTE_IMM), Ord(OP_JUMP_IF_NOT_GTE_IMM),
+    Ord(OP_JUMP_IF_NOT_STRICT_EQ_IMM), Ord(OP_JUMP_IF_STRICT_EQ_IMM):
+      Result := gjoSignedC;
+    Ord(OP_JUMP_IF_NULLISH), Ord(OP_JUMP_IF_NOT_NULLISH):
+      Result := gjoUnsignedC;
+    Ord(OP_PUSH_HANDLER), Ord(OP_PUSH_FINALLY_HANDLER):
+      Result := gjoBx;
+  else
+    Result := gjoNone;
+  end;
+end;
+
+function DecodeJumpOffset(const ABase, APrefix: UInt32;
+  const AOperand: TGocciaJumpOperand): Integer;
+var
+  C: UInt16;
+begin
+  case AOperand of
+    gjoAx:
+      Result := DecodeAx(ABase);
+    gjoSBx:
+      Result := DecodesBx(ABase);
+    gjoBx:
+      Result := DecodeBx(ABase);
+    gjoSignedC, gjoUnsignedC:
+      begin
+        C := DecodeC(ABase) or (UInt16(DecodeC(APrefix)) shl 8);
+        if AOperand = gjoSignedC then
+          Result := Int16(C)
+        else
+          Result := C;
+      end;
+  else
+    Result := 0;
+  end;
+end;
+
+function JumpOffsetFits(const AOperand: TGocciaJumpOperand;
+  const AHasPrefix: Boolean; const AOffset: Integer): Boolean;
+begin
+  case AOperand of
+    gjoAx:
+      Result := (AOffset >= -AX_JUMP_OFFSET_LIMIT) and
+        (AOffset <= AX_JUMP_OFFSET_LIMIT);
+    gjoSBx:
+      Result := (AOffset >= Low(Int16)) and (AOffset <= High(Int16));
+    gjoBx:
+      Result := (AOffset >= 0) and (AOffset <= High(UInt16));
+    gjoSignedC, gjoUnsignedC:
+      if not AHasPrefix then
+        Result := (AOffset >= 0) and (AOffset <= High(UInt8))
+      else if AOperand = gjoSignedC then
+        Result := (AOffset >= Low(Int16)) and (AOffset <= High(Int16))
+      else
+        Result := (AOffset >= 0) and (AOffset <= High(UInt16));
+  else
+    Result := False;
+  end;
+end;
+
+procedure WriteJumpOffset(var ABase, APrefix: UInt32;
+  const AOperand: TGocciaJumpOperand; const AOffset: Integer);
+var
+  C: UInt32;
+begin
+  case AOperand of
+    gjoAx:
+      ABase := (ABase and $FF) or
+        ((UInt32(AOffset + SBIAS_24) and $FFFFFF) shl 8);
+    gjoSBx:
+      ABase := (ABase and $FFFF) or (UInt32(AOffset + SBIAS_16) shl 16);
+    gjoBx:
+      ABase := (ABase and $FFFF) or (UInt32(AOffset) shl 16);
+    gjoSignedC, gjoUnsignedC:
+      begin
+        C := UInt32(AOffset) and $FFFF;
+        ABase := (ABase and $00FFFFFF) or ((C and $FF) shl 24);
+        APrefix := (APrefix and $00FFFFFF) or ((C shr 8) shl 24);
+      end;
+  end;
 end;
 
 function DecodeAx(const AInstruction: UInt32): Int32;
