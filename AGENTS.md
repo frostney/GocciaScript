@@ -26,6 +26,13 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
   the retry was already rebuilt from an empty unit directory, so diagnose the
   reported source line. See [Tooling — Stale FPC Build Artifacts](docs/contributing/tooling.md#stale-fpc-build-artifacts).
 
+## Build and test scope
+
+Always name the target(s) needed, for example `./build.pas testrunner`, and run
+only the relevant tests during development. Follow [Build System's focused
+workflow](docs/build-system.md#build-specific-components), including its
+full-suite gate and intentional full-build exceptions.
+
 ## TC39 spec lookup
 
 For ECMAScript or ECMA-402 behavior, use the project TC39 MCP server before falling back to web sources or large spec HTML files. The canonical project MCP config lives under `.agents/mcp/`, with client-facing links/adapters for supported tools. The shared JSON shape is:
