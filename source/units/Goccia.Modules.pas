@@ -12,16 +12,34 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.GarbageCollector,
+  Goccia.HeapSnapshot.Codec,
+  Goccia.Modules.Phases,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue;
 
+const
+  // Preserve the existing names for callers of Goccia.Modules.
+  icpEvaluation = Goccia.Modules.Phases.icpEvaluation;
+  icpSource = Goccia.Modules.Phases.icpSource;
+  icpDefer = Goccia.Modules.Phases.icpDefer;
+
 type
-  TGocciaImportCallPhase = (icpEvaluation, icpSource, icpDefer);
+  TGocciaImportCallPhase = Goccia.Modules.Phases.TGocciaImportCallPhase;
+  { What a heap snapshot can make of a module record (ADR 0148): a source
+    module the engine compiled, whose state is its environment and exports
+    (mskEntryCompiled: the entry an embedder compiled with CompileModule and
+    ran with RunModuleForSourceType, which keeps its top level in
+    registers); a data module (JSON, text, bytes), whose exports are values;
+    or a record a host or a runtime module loader built, which it refuses. }
+  TGocciaModuleSnapshotKind = (mskNone, mskSource, mskEntryCompiled,
+    mskData);
   EGocciaDeferredModuleNotReady = class(Exception);
   TGocciaModule = class;
   TGocciaModuleList = TList<TGocciaModule>;
+  // One named type, so every unit shares its specialization.
+  TGocciaModuleKeyList = TList<string>;
   TGocciaModuleResolutionStamp = record
     Module: TGocciaModule;
     Version: Cardinal;
@@ -78,6 +96,8 @@ type
       const ATargetExportName: string): Boolean;
     procedure MarkReferences;
     function TryGetValue(out AValue: TGocciaValue): Boolean;
+    property RequestedModule: TGocciaModule read FRequestedModule;
+    property RequestedExportName: string read FRequestedExportName;
   end;
 
   { Roots the values a module holds directly for as long as the module lives:
@@ -102,6 +122,8 @@ type
   private
     FAmbiguousExports: TOrderedStringMap<Boolean>;
     FAsyncCycleRoot: TGocciaModule;
+    FCompiledModule: TObject;
+    FSnapshotKind: TGocciaModuleSnapshotKind;
     FEnvironment: TGCManagedObject;
     FEvaluationPromise: TGocciaValue;
     FEvaluationResult: TGocciaValue;
@@ -131,6 +153,11 @@ type
     FAsyncCycleRoot: TGocciaModule;
     FStarExportNames: TOrderedStringMap<Boolean>;
     FExportResolutionVersion: Cardinal;
+    FSnapshotKind: TGocciaModuleSnapshotKind;
+    FCompiledModule: TObject;
+    // A record a heap snapshot restore is filling: until its forwardings are
+    // checked, a resolution (the collector's included) stops at it.
+    FSnapshotPending: Boolean;
     procedure InvalidateExportResolutions;
     procedure EnsureRoots;
     function GetExportsTable: TGocciaValueMap;
@@ -193,6 +220,15 @@ type
     procedure SetEnvironment(const AEnvironment: TGCManagedObject);
     function TryGetExportValue(const AExportName: string;
       out AValue: TGocciaValue): Boolean;
+    { A heap snapshot's payload of the record (ADR 0148): its environment,
+      exports, namespace object, evaluation state and the records it refers
+      to. ReadSnapshot fills an empty record. }
+    procedure WriteSnapshot(const AWriter: TGocciaHeapSnapshotWriter);
+    procedure ReadSnapshot(const AReader: TGocciaHeapSnapshotReader);
+    // Once every record is filled: refuses a forwarded export whose chain of
+    // modules is longer than a resolution should follow.
+    procedure CheckSnapshotForwardings(
+      const AReader: TGocciaHeapSnapshotReader);
     property Path: string read FPath;
     property ExportsTable: TGocciaValueMap read GetExportsTable;
     property CaptureEvaluationResult: Boolean read FCaptureEvaluationResult write FCaptureEvaluationResult;
@@ -204,6 +240,13 @@ type
     { Diagnostic ownership stamped at host enrollment and inherited by every
       module this module imports, including later dynamic/deferred imports. }
     property IsHostOwned: Boolean read FIsHostOwned write FIsHostOwned;
+    property SnapshotKind: TGocciaModuleSnapshotKind read FSnapshotKind
+      write FSnapshotKind;
+    { The bytecode the engine compiled a source module to (a
+      TGocciaBytecodeModule the engine keeps): a heap snapshot names the
+      module by it. }
+    property CompiledModule: TObject read FCompiledModule
+      write FCompiledModule;
   end;
 
   TGocciaModuleNamespaceObject = class(TGocciaObjectValue)
@@ -327,6 +370,12 @@ function DecodeImportSpecifierAttribute(const AEncodedModulePath: string;
   grant (ADR 0122). A guest that spells the marker itself only makes its own
   request stricter. }
 function MarkComputedImportSpecifier(const AModulePath: string): string;
+{ A module record a heap snapshot refers to, or nil: one the snapshot holds,
+  else the snapshot is refused (ADR 0148). }
+procedure WriteSnapshotModuleReference(const AWriter: TGocciaHeapSnapshotWriter;
+  const AModule: TGocciaModule);
+function ReadSnapshotModuleReference(
+  const AReader: TGocciaHeapSnapshotReader): TGocciaModule;
 { Strips the computed marker; True when it was present. }
 function StripComputedImportSpecifier(var AModulePath: string): Boolean;
 
@@ -345,7 +394,6 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.HeapSnapshot.Codec,
   Goccia.Keywords.Reserved,
   Goccia.Realm,
   Goccia.Scope,
@@ -856,6 +904,8 @@ begin
   FReplacedState := TGocciaModuleReplacedState.Create;
   FReplacedState.FAmbiguousExports := FAmbiguousExports;
   FReplacedState.FAsyncCycleRoot := FAsyncCycleRoot;
+  FReplacedState.FCompiledModule := FCompiledModule;
+  FReplacedState.FSnapshotKind := FSnapshotKind;
   // Stays registered as a root until the reload ends, so RollbackReload can
   // put it back whatever the collector ran in between.
   FReplacedState.FEnvironment := FEnvironment;
@@ -922,6 +972,8 @@ begin
   FStarExportNames := Replaced.FStarExportNames;
   Replaced.FStarExportNames := nil;
   FAsyncCycleRoot := Replaced.FAsyncCycleRoot;
+  FCompiledModule := Replaced.FCompiledModule;
+  FSnapshotKind := Replaced.FSnapshotKind;
   FEvaluationPromise := Replaced.FEvaluationPromise;
   FEvaluationResult := Replaced.FEvaluationResult;
   FLastModified := Replaced.FLastModified;
@@ -1054,7 +1106,7 @@ begin
   ABindingModule := nil;
   ABindingName := '';
   AValue := nil;
-  if FAmbiguousExports.ContainsKey(AExportName) then
+  if FSnapshotPending or FAmbiguousExports.ContainsKey(AExportName) then
     Exit(False);
 
   ResolutionKey := ModuleExportResolutionKey(Self, AExportName);
@@ -1973,6 +2025,331 @@ begin
   AAttributeType := Copy(AEncodedModulePath, SeparatorIndex + 1, MaxInt);
 end;
 
+{ Heap snapshots (ADR 0148): a module record's payload, and the codec of
+  its namespace object. A record is not a managed object; the record codec
+  (Goccia.Modules.Snapshot) lists every record of the run and writes each
+  one's header, and the record writes and reads its own payload here. }
+
+const
+  // An export binding's kind in a record's payload.
+  SNAPSHOT_EXPORT_LOCAL = 0;
+  SNAPSHOT_EXPORT_FORWARD = 1;
+  SNAPSHOT_EXPORT_VALUE = 2;
+  // What a restored export binding or name holds, charged before it is made.
+  SNAPSHOT_EXPORT_ENTRY_BYTES = 128;
+
+type
+  TModuleNamespaceSnapshotCodec = class(TGocciaSnapshotCodec)
+  public
+    function Tag: string; override;
+    function SchemaVersion: Word; override;
+    procedure Write(const AWriter: TGocciaHeapSnapshotWriter;
+      const AObject: TGCManagedObject); override;
+    function Allocate(const AReader: TGocciaHeapSnapshotReader):
+      TGCManagedObject; override;
+    procedure Fill(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+    procedure Finish(const AReader: TGocciaHeapSnapshotReader;
+      const AObject: TGCManagedObject); override;
+  end;
+
+procedure WriteSnapshotModuleReference(const AWriter: TGocciaHeapSnapshotWriter;
+  const AModule: TGocciaModule);
+begin
+  if Assigned(AModule) and not AWriter.HoldsModuleRecord(AModule) then
+    AWriter.Refuse('a binding of the module ' + AModule.Path + ', which ' +
+      'the snapshot cannot hold: a host module, or one that failed or was ' +
+      'replaced');
+  AWriter.WriteModuleRecord(AModule);
+end;
+
+function ReadSnapshotModuleReference(
+  const AReader: TGocciaHeapSnapshotReader): TGocciaModule;
+var
+  Rec: TObject;
+begin
+  Rec := AReader.ReadModuleRecord;
+  if Assigned(Rec) and not (Rec is TGocciaModule) then
+    AReader.Refuse('a module record of another kind');
+  Result := TGocciaModule(Rec);
+end;
+
+procedure WriteSnapshotNames(const AWriter: TGocciaHeapSnapshotWriter;
+  const ANames: TOrderedStringMap<Boolean>);
+var
+  Pair: TOrderedStringMap<Boolean>.TKeyValuePair;
+begin
+  AWriter.WriteU32(ANames.Count);
+  for Pair in ANames do
+  begin
+    AWriter.Poll;
+    AWriter.WriteStr(Pair.Key);
+  end;
+end;
+
+procedure ReadSnapshotNames(const AReader: TGocciaHeapSnapshotReader;
+  const ANames: TOrderedStringMap<Boolean>);
+var
+  Count, I: Integer;
+  Name: string;
+begin
+  Count := AReader.ReadItemCount(4);
+  AReader.ReserveItems(Count, SNAPSHOT_EXPORT_ENTRY_BYTES);
+  for I := 0 to Count - 1 do
+  begin
+    AReader.Poll;
+    Name := AReader.ReadStr;
+    if ANames.ContainsKey(Name) then
+      AReader.Refuse('an export name listed twice');
+    ANames.Add(Name, True);
+  end;
+end;
+
+procedure TGocciaModule.WriteSnapshot(
+  const AWriter: TGocciaHeapSnapshotWriter);
+var
+  BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
+  ExportPair: TGocciaValueMap.TKeyValuePair;
+  Binding: TGocciaModuleExportBinding;
+begin
+  if Assigned(FReplacedState) then
+    AWriter.Refuse('the module ' + FPath + ' is being reloaded');
+  AWriter.WriteDouble(FLastModified);
+  AWriter.WriteRef(FEnvironment);
+  AWriter.WriteU32(FExportBindings.Count);
+  for BindingPair in FExportBindings do
+  begin
+    AWriter.Poll;
+    Binding := BindingPair.Value;
+    AWriter.WriteStr(BindingPair.Key);
+    if Assigned(Binding.FSourceModule) then
+    begin
+      AWriter.WriteU8(SNAPSHOT_EXPORT_FORWARD);
+      WriteSnapshotModuleReference(AWriter, Binding.FSourceModule);
+      AWriter.WriteStr(Binding.FSourceExportName);
+    end
+    else if Assigned(Binding.FEnvironment) then
+    begin
+      AWriter.WriteU8(SNAPSHOT_EXPORT_LOCAL);
+      AWriter.WriteRef(Binding.FEnvironment);
+      AWriter.WriteStr(Binding.FLocalName);
+    end
+    else
+    begin
+      AWriter.WriteU8(SNAPSHOT_EXPORT_VALUE);
+      AWriter.WriteValue(Binding.FValue);
+    end;
+  end;
+  AWriter.WriteU32(FExportsTable.Count);
+  for ExportPair in FExportsTable do
+  begin
+    AWriter.Poll;
+    AWriter.WriteStr(ExportPair.Key);
+    AWriter.WriteValue(ExportPair.Value);
+  end;
+  WriteSnapshotNames(AWriter, FAmbiguousExports);
+  WriteSnapshotNames(AWriter, FStarExportNames);
+  AWriter.WriteValue(FNamespaceObject);
+  AWriter.WriteValue(FEvaluationPromise);
+  WriteSnapshotModuleReference(AWriter, FAsyncCycleRoot);
+end;
+
+procedure TGocciaModule.ReadSnapshot(const AReader: TGocciaHeapSnapshotReader);
+var
+  Count, I: Integer;
+  Name, LocalName: string;
+  Kind: Byte;
+  Environment: TGCManagedObject;
+  SourceModule: TGocciaModule;
+  Value, Namespace: TGocciaValue;
+begin
+  if (FExportBindings.Count > 0) or (FExportsTable.Count > 0) or
+     Assigned(FEnvironment) or Assigned(FNamespaceObject) then
+    AReader.Refuse('a module record filled twice');
+  // A collection while the restore fills the records resolves the import
+  // bindings it marks: none may follow a forwarding chain nothing checked.
+  FSnapshotPending := True;
+  EnsureRoots;
+  FLastModified := AReader.ReadDouble;
+  Environment := AReader.ReadRef;
+  if Assigned(Environment) then
+  begin
+    if Environment.ClassType <> TGocciaScope then
+      AReader.Refuse('a module environment that is not a module scope');
+    // Each record roots its own environment, and a root is held once: two
+    // records sharing one would leave it unrooted when the first goes.
+    if Assigned(AReader.Scratch(Environment)) then
+      AReader.Refuse('two modules that share an environment');
+    AReader.SetScratch(Environment, TObject.Create);
+  end;
+  SetEnvironment(Environment);
+  Count := AReader.ReadItemCount(6);
+  AReader.ReserveItems(Count, SNAPSHOT_EXPORT_ENTRY_BYTES);
+  for I := 0 to Count - 1 do
+  begin
+    AReader.Poll;
+    Name := AReader.ReadStr;
+    if FExportBindings.ContainsKey(Name) then
+      AReader.Refuse('an export bound twice');
+    Kind := AReader.ReadU8;
+    case Kind of
+      SNAPSHOT_EXPORT_LOCAL:
+        begin
+          // A local export is a binding of the module's own environment,
+          // which the module roots, and never one of its import bindings,
+          // which read through another export: a forged one could hold a
+          // scope nothing roots, or read itself without end.
+          Environment := AReader.ReadRef;
+          if not Assigned(Environment) or (Environment <> FEnvironment) then
+            AReader.Refuse('a local export outside its module''s ' +
+              'environment');
+          LocalName := AReader.ReadStr;
+          if not (TGocciaScope(Environment).ContainsOwnLexicalBinding(
+               LocalName) or TGocciaScope(Environment).ContainsOwnVarBinding(
+               LocalName)) or
+             TGocciaScope(Environment).IsOwnImportBinding(LocalName) then
+            AReader.Refuse('a local export of no local binding');
+          FExportBindings.Add(Name,
+            TGocciaModuleExportBinding.CreateBinding(Environment, LocalName));
+        end;
+      SNAPSHOT_EXPORT_FORWARD:
+        begin
+          SourceModule := ReadSnapshotModuleReference(AReader);
+          if not Assigned(SourceModule) then
+            AReader.Refuse('an export forwarded from no module');
+          LocalName := AReader.ReadStr;
+          FExportBindings.Add(Name,
+            TGocciaModuleExportBinding.CreateForwarding(SourceModule,
+              LocalName));
+        end;
+      SNAPSHOT_EXPORT_VALUE:
+        FExportBindings.Add(Name,
+          TGocciaModuleExportBinding.CreateValue(AReader.ReadValue));
+    else
+      AReader.Refuse('an unknown export binding kind');
+    end;
+  end;
+  Count := AReader.ReadItemCount(5);
+  AReader.ReserveItems(Count, SNAPSHOT_EXPORT_ENTRY_BYTES);
+  for I := 0 to Count - 1 do
+  begin
+    AReader.Poll;
+    Name := AReader.ReadStr;
+    if FExportsTable.ContainsKey(Name) then
+      AReader.Refuse('an export listed twice');
+    // An entry holds a value: a missing one would resolve an import of it
+    // to the module's environment instead, where an import binding of the
+    // same name could read itself without end.
+    Value := AReader.ReadPresentValue;
+    FExportsTable.Add(Name, Value);
+  end;
+  ReadSnapshotNames(AReader, FAmbiguousExports);
+  ReadSnapshotNames(AReader, FStarExportNames);
+  Namespace := AReader.ReadValue;
+  if Assigned(Namespace) then
+  begin
+    if not (Namespace is TGocciaModuleNamespaceObject) or
+       (TGocciaModuleNamespaceObject(Namespace).FModule <> Self) then
+      AReader.Refuse('a namespace object of another module');
+    FNamespaceObject := TGocciaModuleNamespaceObject(Namespace);
+    if TGarbageCollector.Instance <> nil then
+      TGarbageCollector.Instance.AddRootObject(FNamespaceObject);
+  end;
+  FEvaluationPromise := AReader.ReadValue;
+  FAsyncCycleRoot := ReadSnapshotModuleReference(AReader);
+  InvalidateExportResolutions;
+end;
+
+// Resolving an export follows its forwardings one call per module; a
+// snapshot's chains are kept far shorter than any native stack.
+procedure TGocciaModule.CheckSnapshotForwardings(
+  const AReader: TGocciaHeapSnapshotReader);
+const
+  MAX_FORWARDING_HOPS = 1024;
+var
+  BindingPair: TGocciaModuleExportBindingMap.TKeyValuePair;
+  Binding: TGocciaModuleExportBinding;
+  Hops: Integer;
+begin
+  for BindingPair in FExportBindings do
+  begin
+    AReader.Poll;
+    Binding := BindingPair.Value;
+    Hops := 0;
+    while Assigned(Binding.FSourceModule) do
+    begin
+      Inc(Hops);
+      if Hops > MAX_FORWARDING_HOPS then
+        AReader.Refuse('an export forwarded through more modules than a ' +
+          'resolution follows');
+      if Hops and 63 = 0 then
+        AReader.Poll;
+      if not Binding.FSourceModule.FExportBindings.TryGetValue(
+         Binding.FSourceExportName, Binding) then
+        Break;
+    end;
+  end;
+  // Every chain from this record's exports is checked; one through another
+  // record still stops at it until that record is checked too.
+  FSnapshotPending := False;
+end;
+
+{ TModuleNamespaceSnapshotCodec }
+
+function TModuleNamespaceSnapshotCodec.Tag: string;
+begin
+  Result := 'module.namespace';
+end;
+
+function TModuleNamespaceSnapshotCodec.SchemaVersion: Word;
+begin
+  Result := 1;
+end;
+
+// A namespace object is its module's: its exports are the module's, and it
+// has no state of its own a run can change.
+procedure TModuleNamespaceSnapshotCodec.Write(
+  const AWriter: TGocciaHeapSnapshotWriter; const AObject: TGCManagedObject);
+var
+  Namespace: TGocciaModuleNamespaceObject;
+begin
+  Namespace := TGocciaModuleNamespaceObject(AObject);
+  if not Assigned(Namespace.FModule) then
+    AWriter.Refuse('a namespace object whose module went away');
+  WriteSnapshotModuleReference(AWriter, Namespace.FModule);
+end;
+
+function TModuleNamespaceSnapshotCodec.Allocate(
+  const AReader: TGocciaHeapSnapshotReader): TGCManagedObject;
+var
+  Module: TGocciaModule;
+begin
+  Module := ReadSnapshotModuleReference(AReader);
+  if not Assigned(Module) then
+    AReader.Refuse('a namespace object of no module');
+  Result := TGocciaModuleNamespaceObject.Create(Module);
+end;
+
+procedure TModuleNamespaceSnapshotCodec.Fill(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+begin
+  if ReadSnapshotModuleReference(AReader) <>
+     TGocciaModuleNamespaceObject(AObject).FModule then
+    AReader.Refuse('a namespace object whose module changed');
+end;
+
+// The records are filled by now: the module must hold this namespace object,
+// or it would make another.
+procedure TModuleNamespaceSnapshotCodec.Finish(
+  const AReader: TGocciaHeapSnapshotReader; const AObject: TGCManagedObject);
+var
+  Namespace: TGocciaModuleNamespaceObject;
+begin
+  Namespace := TGocciaModuleNamespaceObject(AObject);
+  if Namespace.FModule.FNamespaceObject <> Namespace then
+    AReader.Refuse('a namespace object its module does not hold');
+end;
+
 { A heap snapshot restore (ADR 0148) names the module source prototypes by
   their realm slots, filled with the first module source; both are built
   here as that would. }
@@ -1990,5 +2367,7 @@ initialization
     @MaterializeModuleSourcePrototypes);
   RegisterSnapshotSlotMaterializer('ModuleSource.prototype',
     @MaterializeModuleSourcePrototypes);
+  RegisterSnapshotCodec(TGocciaModuleNamespaceObject,
+    TModuleNamespaceSnapshotCodec.Create);
 
 end.

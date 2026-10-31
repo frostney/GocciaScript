@@ -1,4 +1,18 @@
 describe("TypedArray.prototype.with", () => {
+  test("without arguments converts undefined for integer and float elements", () => {
+    expect(new Int32Array([1, 2]).with()).toEqual(new Int32Array([0, 2]));
+    const floats = new Float64Array([1, 2]).with();
+    expect(Number.isNaN(floats[0])).toBe(true);
+    expect(floats[1]).toBe(2);
+    expect(() => new Int32Array().with()).toThrow(RangeError);
+  });
+
+  test("omitted BigInt values throw TypeError before checking the index", () => {
+    expect(() => new BigInt64Array([1n]).with()).toThrow(TypeError);
+    expect(() => new BigUint64Array([1n]).with(0)).toThrow(TypeError);
+    expect(() => new BigInt64Array().with()).toThrow(TypeError);
+  });
+
   test("without value uses undefined → NaN → 0 for integer types", () => {
     const ta = new Int32Array([1, 2, 3]);
     const result = ta.with(0);

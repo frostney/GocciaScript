@@ -12,12 +12,23 @@ const {
   classifyProcessOutcome,
   checksumAgreement,
   median,
+  parseArgs,
   parseResult,
+  refreshBinaryCopies,
+  releaseBinaryCopies,
   summarizeSamples,
 } = require('./awfy-driver.js');
-const { MARKER, buildAwfyReportComment, formatMicros } = require('./awfy-comment.js');
+const { MARKER, buildAwfyReportComment, counterDeltaCell, formatMicros } = require('./awfy-comment.js');
+const {
+  buildMetricTargetSummary,
+  counterCommand,
+  parsePerfStat,
+  probeCounters,
+  uncountedProcess,
+} = require('./cross-engine-report.js');
 const {
   expectedEnginesForRun,
+  parseArgs: parseCiReportArgs,
   reportConfig,
   targetSpecs,
   validateReport,
@@ -304,6 +315,218 @@ console.log('awfy-driver: PR comment markdown...');
   assert(comparisonComment.includes('| QuickJS 2026-06-04 | - | - | 1.000 | - |'), 'comparison geomean rows use versioned QuickJS label');
   assert(comparisonComment.includes('| NodeJS v26.4.0 | - | - | - | 1.000 |'), 'comparison geomean rows use versioned Node label');
   assert(comparisonComment.includes('Δ compares PR Goccia median against the same-runner main Goccia median; overlapping min/max ranges are treated as unchanged noise'), 'comparison comment explains delta basis and overlap classifier');
+}
+
+console.log('awfy-driver: hardware counters...');
+{
+  const perfText = [
+    '# started on Tue Oct 27 2026',
+    '',
+    '1891235675,,instructions:u,455491637,100.00,,',
+    '456097787,,cycles:u,455491637,100.00,,',
+    '618686,,branch-misses:u,455491637,100.00,,',
+    '<not supported>,,L1-icache-load-misses:u,0,100.00,,',
+    '903,,iTLB-load-misses:u,455491637,83.00,,',
+  ].join('\n');
+  const parsed = parsePerfStat(perfText);
+  assertEqual(parsed.counters.instructions, 1891235675, 'perf parser reads instructions');
+  assertEqual(parsed.counters.cycles, 456097787, 'perf parser reads cycles');
+  assertEqual(parsed.counters.icacheMisses, null, 'perf parser marks an unsupported event as null');
+  assertEqual(parsed.multiplexed, true, 'perf parser flags a multiplexed (scaled) event');
+
+  const offLinux = probeCounters({ platform: 'darwin' });
+  assertEqual(offLinux.available, false, 'counters are unavailable outside Linux');
+  assert(offLinux.reason.includes('darwin'), 'unavailable counters say why');
+
+  const missingPerf = probeCounters({
+    platform: 'linux',
+    spawn: () => ({ error: Object.assign(new Error('spawn perf ENOENT'), { code: 'ENOENT' }) }),
+  });
+  assertEqual(missingPerf.available, false, 'counters are unavailable without perf');
+  assert(missingPerf.reason.includes('ENOENT'), 'missing perf names the spawn error');
+
+  const forbidden = probeCounters({
+    platform: 'linux',
+    spawn: () => ({ status: 255, stderr: 'Error:\nAccess to performance monitoring and observability operations is limited.\n' }),
+  });
+  assertEqual(forbidden.available, false, 'counters are unavailable when perf_event is not permitted');
+  assert(forbidden.reason.includes('Access to performance monitoring'), 'the reason includes the line after perf\'s bare "Error:"');
+
+  const partial = probeCounters({
+    platform: 'linux',
+    spawn: () => ({ status: 0, stderr: perfText }),
+  });
+  assertEqual(partial.available, true, 'counters are available when instructions count');
+  assertEqual(partial.events.map((entry) => entry.key).join(','), 'instructions,cycles,branchMisses,itlbMisses',
+    'only the events perf counted are requested');
+
+  const sample = (engine, instructions, cycles, icacheMisses) => ({
+    engine,
+    outcome: 'ok',
+    durationMicros: cycles / 1000,
+    checksum: 'verified',
+    counters: { instructions, cycles, icacheMisses, multiplexed: false },
+  });
+  const summary = buildMetricTargetSummary([
+    sample('goccia-baseline', 1000, 4000, 100),
+    sample('goccia-candidate', 900, 4100, 150),
+    sample('goccia-baseline', 1000, 4200, 120),
+    sample('goccia-candidate', 900, 4300, 130),
+    { engine: 'qjs', outcome: 'ok', durationMicros: 1, checksum: 'verified' },
+  ], { field: 'durationMicros', outputPrefix: 'Micros', ratioDirection: 'lower-is-better' });
+  assertEqual(summary.engineStats['goccia-baseline'].counters.instructions.median, 1000, 'counter summary keeps the median');
+  assertEqual(summary.engineStats['goccia-candidate'].counters.cycles.min, 4100, 'counter summary keeps the minimum');
+  assertEqual(summary.engineStats.qjs.counters, undefined, 'engines without counters get no counter summary');
+  assertEqual(summary.counterRatios['goccia-candidate_over_goccia-baseline'].instructions, 0.9, 'counter ratios compare medians');
+  assertEqual(summary.counterRatios['goccia-candidate_over_goccia-baseline'].icacheMisses, 140 / 110, 'counter ratios cover cache misses');
+
+  const target = { name: 'Richards', summary };
+  assertEqual(counterDeltaCell(target, 'instructions'), '-10.00%', 'instruction delta is the change in work');
+  assertEqual(counterDeltaCell(target, 'itlbMisses'), '-', 'a counter without data renders as a dash');
+  const zeroTarget = { summary: { counterRatios: { 'goccia-candidate_over_goccia-baseline': { icacheMisses: 0 } } } };
+  assertEqual(counterDeltaCell(zeroTarget, 'icacheMisses'), '-100.00%', 'a count that falls to zero renders as -100%');
+  const scaledTarget = {
+    summary: {
+      engineStats: { 'goccia-baseline': { counters: { multiplexed: true } }, 'goccia-candidate': { counters: { multiplexed: false } } },
+      counterRatios: { 'goccia-candidate_over_goccia-baseline': { instructions: 0.9 } },
+    },
+  };
+  assertEqual(counterDeltaCell(scaledTarget, 'instructions'), '-10.00% (scaled)', 'a multiplexed count is marked as scaled');
+
+  const counterComment = buildAwfyReportComment({
+    metadata: {
+      options: { repetitions: 2 },
+      counters: { available: true, reason: null, events: ['instructions:u'] },
+      engines: [{ name: 'goccia-baseline', version: '' }, { name: 'goccia-candidate', version: '' }],
+    },
+    targets: [{ name: 'Richards', kind: 'awfy', summary: { ...summary, ratios: { 'goccia-candidate_over_goccia-baseline': 1.02 } } }],
+    geomeanRatios: {},
+  });
+  assert(counterComment.includes('| Target | Status | Goccia main | Goccia PR | Δ PR vs main | Instructions | L1i misses |'),
+    'comment adds counter columns when both Goccia binaries were counted, and shows only the engines that ran');
+  assert(counterComment.includes('| -10.00% | +27.27% |'), 'comment renders instruction and L1i miss deltas');
+  assert(counterComment.includes('Instructions do not depend on code placement'), 'comment explains how to read the counters');
+  assert(counterComment.includes('negative is fewer'), 'comment states the sign of the counter columns');
+
+  const unavailableCounters = buildAwfyReportComment({
+    metadata: {
+      options: { repetitions: 2 },
+      counters: { available: false, reason: 'hardware counters need Linux perf_event (platform darwin)', events: [] },
+      engines: [{ name: 'goccia-baseline', version: '' }, { name: 'goccia-candidate', version: '' }],
+    },
+    targets: [{ name: 'Richards', kind: 'awfy', summary: { engineStats: {}, ratios: {} } }],
+    geomeanRatios: {},
+  });
+  assert(!unavailableCounters.includes('| Instructions |'), 'comment omits counter columns without counters');
+  assert(unavailableCounters.includes('not recorded: hardware counters need Linux perf_event'), 'comment says why counters are missing');
+
+  const options = parseArgs(['--counters', '--cpu', '3', '--fresh-copies', '--alternate-order', '--warmup=1']);
+  assertEqual(options.counters, true, '--counters enables counters');
+  assertEqual(options.cpu, 3, '--cpu takes a CPU number');
+  assertEqual(options.freshCopies, true, '--fresh-copies is parsed');
+  assertEqual(options.alternateOrder, true, '--alternate-order is parsed');
+  assertEqual(options.warmup, 1, '--warmup takes a count');
+
+  const copyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goccia-awfy-copies-'));
+  try {
+    const binary = path.join(copyDir, 'runner');
+    fs.writeFileSync(binary, 'binary bytes');
+    const engines = [{ name: 'goccia-baseline', kind: 'goccia', command: binary }, { name: 'qjs', kind: 'qjs', command: 'qjs' }];
+    refreshBinaryCopies(engines, copyDir, 0);
+    const first = engines[0].sampleCommand;
+    assert(first && first !== binary && fs.readFileSync(first, 'utf8') === 'binary bytes', 'a fresh copy holds the same bytes');
+    refreshBinaryCopies(engines, copyDir, 1);
+    assert(engines[0].sampleCommand !== first && fs.existsSync(first), 'the next repetition runs a new copy, beside the previous one');
+    assertEqual(engines[1].sampleCommand, undefined, 'reference engines are not copied');
+    const second = engines[0].sampleCommand;
+    releaseBinaryCopies(engines);
+    assert(!fs.existsSync(first) && !fs.existsSync(second), 'a finished target releases its copies');
+    assertEqual(engines[0].sampleCommand, null, 'after release the engine runs its own binary');
+  } finally {
+    fs.rmSync(copyDir, { recursive: true, force: true });
+  }
+}
+
+console.log('awfy-driver: counted samples through a stand-in perf...');
+{
+  const hybrid = parsePerfStat([
+    '100,,cpu_core/instructions:u/,10,100.00,,',
+    '20,,cpu_atom/instructions:u/,10,100.00,,',
+    '<not counted>,,cpu_atom/cycles:u/,0,0.00,,',
+    '300,,cpu_core/cycles:u/,10,100.00,,',
+  ].join('\n'));
+  assertEqual(hybrid.counters.instructions, 120, 'hybrid CPUs: per-core-type counts add up');
+  assertEqual(hybrid.counters.cycles, 300, 'hybrid CPUs: an uncounted core type adds nothing');
+
+  const command = counterCommand('runner', ['a.js'], { perf: 'perf', events: [{ event: 'instructions:u' }] }, 'out.csv', 2500);
+  assertEqual(command.args.join(' '), 'stat -x, -o out.csv -e instructions:u -- timeout --kill-after=1 2.5 runner a.js',
+    'a counted sample runs under timeout, which enforces the limit to the millisecond');
+  assertEqual(counterCommand('r', [], { events: [{ event: 'instructions:u' }] }, 'o', 100).args[9], '0.1',
+    'a limit under a second stays under a second');
+  assertEqual(uncountedProcess({ status: 124 }).error.code, 'ETIMEDOUT', 'timeout\'s exit status is a timeout');
+  assertEqual(uncountedProcess({ status: 137 }).signal, 'SIGKILL', 'a killed sample reports its signal');
+  assertEqual(uncountedProcess({ status: 1 }).status, 1, 'an ordinary exit status is kept');
+
+  const ciOptions = parseCiReportArgs(['--awfy-dir', 'x', '--counters']);
+  assertEqual(ciOptions.counters, true, 'awfy-ci-report takes --counters');
+
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'goccia-awfy-perf-'));
+  try {
+    // A stand-in perf: it writes fixed counts to its -o file, then runs the
+    // command after `--`, so the whole path from probe to report is exercised.
+    const perf = path.join(sandbox, 'perf');
+    fs.writeFileSync(perf, [
+      '#!/bin/sh',
+      'out=""',
+      'while [ "$1" != "--" ]; do [ "$1" = "-o" ] && out="$2"; shift; done',
+      'shift',
+      'counts="1000,,instructions:u,1,100.00,,\n2000,,cycles:u,1,100.00,,\n5,,branch-misses:u,1,100.00,,\n7,,L1-icache-load-misses:u,1,100.00,,\n1,,iTLB-load-misses:u,1,100.00,,"',
+      'if [ -n "$out" ]; then printf "$counts\\n" > "$out"; else printf "$counts\\n" >&2; fi',
+      'exec "$@"',
+      '',
+    ].join('\n'));
+    fs.chmodSync(perf, 0o755);
+    const runner = path.join(sandbox, 'runner');
+    fs.writeFileSync(runner, [
+      '#!/bin/sh',
+      `echo '${RESULT_MARKER}{"durationMicros":5,"checksum":"1","verificationPassed":true}'`,
+      '',
+    ].join('\n'));
+    fs.chmodSync(runner, 0o755);
+    const output = path.join(sandbox, 'report.json');
+    const proc = spawnSync(process.execPath, [
+      path.join(__dirname, 'awfy-driver.js'),
+      '--probe', 'loop-dispatch-floor:1',
+      '--engines', 'goccia',
+      '--goccia-baseline', runner,
+      '--goccia-candidate', runner,
+      '--repetitions', '2',
+      '--warmup', '1',
+      '--counters',
+      '--fresh-copies',
+      '--alternate-order',
+      '--output', output,
+    ], { encoding: 'utf8', env: { ...process.env, PATH: `${sandbox}${path.delimiter}${process.env.PATH}` } });
+    if (process.platform === 'linux') {
+      assertEqual(proc.status, 0, `driver run with the stand-in perf succeeds: ${proc.stderr}`);
+      const report = JSON.parse(fs.readFileSync(output, 'utf8'));
+      const target = report.targets[0];
+      assertEqual(report.metadata.counters.available, true, 'the stand-in perf counts');
+      assertEqual(target.samples.length, 4, 'warm-up samples are not recorded');
+      // Rounds alternate counting the warm-up, so the first recorded one is
+      // the second round and runs the candidate first.
+      assertEqual(target.samples[0].engine, 'goccia-candidate', 'alternate order: the second round starts with the candidate');
+      assertEqual(target.samples[2].engine, 'goccia-baseline', 'alternate order: the third round starts with the baseline');
+      assert(target.samples.every((sample) => sample.counters?.instructions === 1000), 'every sample carries its counts');
+      assert(target.samples.every((sample) => !sample.command.includes(runner)), 'samples run fresh copies of the binary');
+      assertEqual(target.summary.counterRatios['goccia-candidate_over_goccia-baseline'].instructions, 1,
+        'counter ratios compare the two binaries');
+    } else {
+      assert(proc.status === 0 || proc.status === 1, 'driver run outside Linux ends');
+    }
+  } finally {
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
 }
 
 console.log('awfy-ci-report: manifest helpers...');

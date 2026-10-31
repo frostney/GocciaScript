@@ -141,4 +141,8 @@ Return:
 - blocker or next required transition.
 
 Never report a partial prefix as ready when any required fix exists only in a
-higher layer. A `ready` result never means merged.
+higher layer. A `ready` result never means merged. Started directly, continue
+under the [delivery settings](../../deliver/SKILL.md#delivery-settings); with
+`entry-points: deliver`, the stack goes on to `/deliver`, which takes it to the
+configured endpoint (`ready-to-merge` when there is no `ORCHESTRATION.md`).
+With `stop`, end with this result.

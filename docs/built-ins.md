@@ -10,7 +10,7 @@
 - **Runtime opt-ins** — Testing, benchmarking, FFI, data-format APIs, and SemVer extend the runtime surface through concrete runtime extension classes
 - **Goccia runtime modules** — Non-standard data-format APIs and SemVer are named-export-only modules (`goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, `goccia:semver`); use namespace imports for `CSV.parse(...)`-style call sites
 - **Node-addressed modules** — `node:async_hooks` provides `AsyncLocalStorage` and `AsyncResource` at Node's own address, with engine-level async-context propagation; see [Async Context](built-ins-async-context.md)
-- **Sandbox modules** — `GocciaRunner`'s sandbox mode installs import-only `"fs"` and `"goccia"` modules for sandbox filesystem and shell/nested-execution access; they are not globals
+- **Sandbox modules** — `GocciaRunner`'s sandbox mode installs import-only `"fs"`, `"goccia"` and `"goccia:search"` modules for sandbox filesystem, shell/nested-execution access and file search; they are not globals
 - **ECMAScript shims** — Legacy standard names such as global `parseInt`, `parseFloat`, `isNaN`, `isFinite`, `Date`, `__proto__`, and legacy getter/setter helpers are installed through Goccia.shims
 - **Adding new built-ins** — See [Adding Built-in Types](adding-built-in-types.md) for the step-by-step recipe
 - **Always-present globals** — `globalThis` and `Goccia` namespace are registered after all built-ins
@@ -25,7 +25,7 @@ Runtime globals (Console, Performance, TextEncoder/TextDecoder, URL, fetch, Head
 
 Timers are runner-only. `GocciaTestRunner` installs `TGocciaTimersRuntimeExtension`, which registers the `setTimeout`, `clearTimeout`, `setInterval` and `clearInterval` globals plus the `goccia:timers` control module over a deterministic virtual timer queue — no timer ever waits on wall time. The loader runtime profile does not install it: the timers carry no ambient authority, but a scheduling surface is one a sandboxed script does not otherwise get. See [Fake timers](testing-api.md#fake-timers) and [ADR 0113](adr/0113-deterministic-virtual-timer-queue.md).
 
-In sandbox mode, `GocciaRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"` and `"goccia"`; it does not create global `fs`, `$`, or `runScript` bindings.
+In sandbox mode, `GocciaRunner` applies the loader runtime profile and then installs `TGocciaSandboxRuntimeExtension`. That extension registers sandbox capabilities as import-only runtime modules named `"fs"`, `"goccia"` and `"goccia:search"`; it does not create global `fs`, `$`, or `runScript` bindings.
 
 FFI is not part of the loader runtime profile. It needs the engine's `ffi` capability; CLI tools grant it and install `TGocciaFFIRuntimeExtension` for `--allow-ffi[=<library>,...]` or `"allow-ffi"` in a config file's `permissions` block once the config is trusted, or accepted for one run with `-P` ([Config trust](permissions.md#config-trust)). See [Permissions](permissions.md).
 
@@ -72,6 +72,8 @@ Separately, the `TGocciaCLIApplication`-based CLI hosts use `LogCallback` for `-
 Implements the [ECMAScript Math object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math). See [MDN Math reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Math) for the full API.
 
 **Full standard compliance** — all standard constants and methods are available.
+
+**`Math.pow` and `**`** — both compute ES2026 §6.1.6.1.3 `Number::exponentiate` with one implementation, `Goccia.NumberExponentiation`, a port of the `pow` of Arm's optimized-routines (the algorithm of glibc and musl). A finite result is within 0.54 ULP of the exact value. A result that is exactly representable, such as `10 ** 22` or `2 ** -1074`, comes out exact, and every platform returns the same bits. As in V8, `x ** 2` is `x * x` and `x ** 0.5` is `Math.sqrt(x)`.
 
 **Extras:**
 
@@ -160,7 +162,7 @@ Implements the [ECMAScript Number](https://developer.mozilla.org/en-US/docs/Web/
 
 ### BigInt (`Goccia.Builtins.GlobalBigInt.pas`)
 
-Implements [ECMAScript BigInt](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) (ES2020). See [MDN BigInt reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) for the full API.
+Implements [ECMAScript BigInt](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt). See [MDN BigInt reference](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt) for the full API.
 
 **Related:** `BigInt64Array` and `BigUint64Array` are implemented — see [Binary Data Built-ins](built-ins-binary-data.md).
 
@@ -301,6 +303,7 @@ Current default shims:
 | `os` | `string` | Operating system: `"darwin"`, `"linux"`, `"windows"`, `"freebsd"`, `"netbsd"`, `"openbsd"`, `"android"`, `"aix"`, `"solaris"`, or `"unknown"` |
 | `arch` | `string` | Processor architecture: `"x86_64"`, `"aarch64"`, `"x86"`, `"arm"`, `"powerpc64"`, `"powerpc"`, or `"unknown"` |
 | `date` | `string` | Build date in `YYYY-MM-DD` format (e.g., `"2026-04-20"`) |
+| `gcStress` | `boolean` | `true` only in a GC-stress build (`./build.pas --gc-stress`), which collects every 8 instructions. Tests use it to shrink or skip cases whose cost grows with the live heap times the instruction count ([GC-stress build](contributing/tooling.md#gc-stress-build)) |
 
 **`goccia:semver` module**
 
@@ -405,7 +408,7 @@ ErrorName: message
 
 ### Iterator (`Goccia.Values.IteratorValue.pas`, `Iterator.Concrete.pas`, `Iterator.Lazy.pas`, `Iterator.Concat.pas`, `Iterator.Generic.pas`)
 
-Implements the [ECMAScript Iterator Helpers](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator), Iterator Sequencing (`Iterator.concat`), the Stage 4 Joint Iteration proposal (`Iterator.zip`), and the Stage 3 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) proposal.
+Implements the [ECMAScript Iterator Helpers](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Iterator), Iterator Sequencing (`Iterator.concat`), the Stage 4 Joint Iteration proposal (`Iterator.zip`), and the Stage 4 [Iterator Includes](https://github.com/tc39/proposal-iterator-includes) proposal.
 
 All built-in iterators (Array, String, Map, Set) share a common `Iterator.prototype` with helper methods per the ECMAScript Iterator Helpers proposal:
 
@@ -559,7 +562,7 @@ Maps are iterable: `[...myMap]` spreads the map into an array of `[key, value]` 
 
 ### WeakMap (`Goccia.Values.WeakMapValue.pas`)
 
-Implements the [ECMAScript WeakMap](https://tc39.es/ecma262/#sec-weakmap-objects) including ES2026 `WeakMap.prototype.getOrInsert` and `WeakMap.prototype.getOrInsertComputed`.
+Implements the [ECMAScript WeakMap](https://tc39.es/ecma262/#sec-weakmap-objects) including `WeakMap.prototype.getOrInsert` and `WeakMap.prototype.getOrInsertComputed`.
 
 A weak key-value collection where keys are objects or non-registered symbols. WeakMap entries do not keep keys alive. Values are traced only while their key is reachable from outside the WeakMap.
 
@@ -718,9 +721,10 @@ filesystem. This covers the listed `fs` surface, not the entire Node.js host or 
 | `fs.rmSync(path, options?)` | Delete a file or directory; `{ recursive: true }` removes non-empty directories |
 | `fs.renameSync(from, to)` | Move or rename a sandbox path |
 | `fs.copyFileSync(from, to)` | Copy a file |
-| `fs.readFile`, `fs.writeFile`, `fs.appendFile`, `fs.mkdir`, `fs.readdir`, `fs.stat`, `fs.rm`, `fs.rename`, `fs.copyFile` | Node-shaped callback forms, available on the default namespace and as named exports |
+| `fs.globSync(pattern, options?)` | Paths matching a glob, sorted; see [Sandbox Search Built-ins](built-ins-sandbox-search.md) |
+| `fs.readFile`, `fs.writeFile`, `fs.appendFile`, `fs.mkdir`, `fs.readdir`, `fs.stat`, `fs.rm`, `fs.rename`, `fs.copyFile`, `fs.glob` | Node-shaped callback forms, available on the default namespace and as named exports |
 | `fs.exists(path, callback)` | Deprecated Node-shaped boolean-only callback form; it never passes an error argument |
-| `fs.promises` | Promise-returning versions of the same operations except `exists` |
+| `fs.promises` | Promise-returning versions of the same operations except `exists`; `fs.promises.glob` returns an async iterator, as Node's does |
 
 `readFileSync` returns a `Uint8Array` by default so binary copied files can round-trip without text coercion.
 
@@ -764,6 +768,8 @@ methods throw them, callback methods pass them as their only argument, and
 promise methods reject with the same shape. See
 [Sandbox filesystem errors](errors.md#sandbox-filesystem-errors) for the full
 mapping and message format.
+
+Sandbox mode also registers `goccia:search`, whose `grep` and `fuzzyFind` search file contents and rank paths by a fuzzy query. [Sandbox Search Built-ins](built-ins-sandbox-search.md) specifies them with `fs.globSync`.
 
 The `"goccia"` module exposes sandbox orchestration helpers.
 
@@ -837,62 +843,9 @@ Shell `goccia` takes `goccia [--sandbox] [--copy <from[=to]>]... [--diff[=json|u
 
 ### AST — experimental (`Goccia.Builtins.AST.pas`)
 
-Only available when the host passes `--experimental-ast`. `goccia:ast` makes
-the parse result reachable from JavaScript, so a tool that asks questions
-about source — a lint rule, a codemod, a metric — can be a GocciaScript
-program instead of a Pascal one. It is a read: there is no write-back.
-
-```javascript
-import { parse } from "goccia:ast";
-
-const { source, root, comments } = parse(text, { jsx: true, fileName: "App.tsx" });
-```
-
-| Option | Meaning |
-|--------|---------|
-| `jsx` | Run the JSX preprocessor before parsing (default `false`) |
-| `module` | Parse as module source rather than script source (default `true`) |
-| `fileName` | File name the parser sees; its extension decides JSX handling, so a `.ts` name skips the JSX preprocessor (default `<source>`). A syntax error reports only `(line:column)`, not the file name ([#1277](https://github.com/frostney/GocciaScript/issues/1277)) |
-
-The *language* is the host's, not a second one configured here: the
-compatibility flags in force for the run are the ones `parse` accepts, exactly
-as `eval` and the `Function` constructor inherit them. A file that needs
-`--compat-asi` to parse needs the host to have been given `--compat-asi`.
-
-`parse` returns `{ source, root, comments }`:
-
-| Property | Description |
-|----------|-------------|
-| `source` | The text that was passed, returned unchanged. Every offset and position in the result indexes it |
-| `root` | The `Program` node |
-| `comments` | Every comment, in source order |
-
-Every node is `{ kind, start, end, loc, children }`, and every comment is
-`{ kind, start, end, loc }` with `kind` either `"Line"` or `"Block"`.
-`start` and `end` are zero-based offsets into `source`, `end` exclusive;
-`loc.start` and `loc.end` are `{ line, column }` with one-based lines.
-
-The tree holds statements only — no expressions, names, or literal values.
-`children` are the statements nested immediately beneath a node, reached
-through expressions where it has to be, so the block of an arrow function
-assigned to a `const` is a child of that declaration. Three kinds own a
-statement *list*, whose children are siblings of one another: `Program`,
-`BlockStatement`, and `SwitchCase`.
-
-A syntax error in the parsed text is a `SyntaxError` naming its position; it
-does not abort the caller's own run unless the caller lets it.
-
-With `jsx` on, the text is rewritten before it is parsed, but nothing in the
-result is measured in that rewrite: offsets and positions alike are mapped back
-to the file as written, so `source.slice(node.start, node.end)` is the node's
-own text. Comments the transformer removes — one between JSX attributes, or a
-child container holding nothing else — are not in `comments`, because the
-parser never sees them.
-
-See [ADR 0117](adr/0117-javascript-visible-ast-module.md) for what the module
-exposes, what it withholds, and why, and
-[ADR 0118](adr/0118-original-file-source-ranges.md) for the one coordinate
-system.
+See [AST Built-ins](built-ins-ast.md) for `goccia:ast`: the statement view,
+the expression view, options, node kinds and flags, and how ranges map back
+to a `.tsx` file.
 
 ### FFI (`Goccia.Builtins.GlobalFFI.pas`)
 

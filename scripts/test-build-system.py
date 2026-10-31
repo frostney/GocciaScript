@@ -31,8 +31,11 @@ with tempfile.TemporaryDirectory(prefix="goccia-build-check-") as directory:
         (root / f"source/shared/{name}.Test.pas").write_text(
             f"program {name}; begin WriteLn('ran {name}'); end.\n")
     wrapper = root / "bin/fpc"
+    # build.pas asks fpc for its target (-iTP -iTO) before every compile; only
+    # compiles are traced and delayed.
     wrapper.write_text("#!/usr/bin/env python3\n" +
         "import json, os, pathlib, subprocess, sys, time\n" +
+        f"if '-iTP' in sys.argv: os.execv({FPC!r}, [{FPC!r}] + sys.argv[1:])\n" +
         f"trace = pathlib.Path({str(root / 'trace')!r}) / str(os.getpid())\n" +
         "start = time.monotonic()\n" +
         "time.sleep(float(os.environ.get('GOCCIA_BUILD_CHECK_DELAY', '0')))\n" +
@@ -94,7 +97,7 @@ with tempfile.TemporaryDirectory(prefix="goccia-build-check-") as directory:
 
     # Unselected targets, tests, legacy caches and stress caches survive clean.
     sentinels = ["targets/runner", "targets/repl", "tests/source/shared/Beta.Test",
-                 "gc-stress/targets/repl", ""]
+                 "gc-stress/targets/repl", "layout-probe/targets/repl", ""]
     for folder in sentinels:
         cache = root / "build/compiled" / folder
         cache.mkdir(parents=True, exist_ok=True)
@@ -111,6 +114,7 @@ with tempfile.TemporaryDirectory(prefix="goccia-build-check-") as directory:
     run("--gc-stress", "--clean", "repl")
     assert not (root / "build/compiled/gc-stress/targets/repl/keep.ppu").exists()
     assert (root / "build/compiled/targets/runner/keep.ppu").exists()
+    assert (root / "build/compiled/layout-probe/targets/repl/keep.ppu").exists()
 
     clear_trace()
     for args in [("--clean", "tests", "--test=absent"),

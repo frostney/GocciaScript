@@ -742,7 +742,7 @@ begin
 end;
 
 function CompareTest262Cases(
-  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} ALeft,
+  {$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} ALeft,
   ARight: TTest262Case): Integer;
 begin
   Result := CompareText(ALeft.Id, ARight.Id);

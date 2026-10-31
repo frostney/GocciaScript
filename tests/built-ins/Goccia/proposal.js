@@ -14,7 +14,7 @@ describe.runIf(hasGoccia)("Goccia.proposal", () => {
   test("proposal has stage keys", () => {
     const keys = Object.keys(Goccia.proposal);
     expect(keys.length > 0).toBe(true);
-    expect(keys.includes("stage-3")).toBe(true);
+    expect(keys.includes("stage-4")).toBe(true);
   });
 
   test("stage keys use the stage- prefix", () => {
@@ -38,14 +38,19 @@ describe.runIf(hasGoccia)("Goccia.proposal", () => {
     });
   });
 
-  test("stage 3 includes Iterator Includes", () => {
-    const proposal = Goccia.proposal["stage-3"].find(
+  test("stage 4 includes Iterator Includes", () => {
+    const proposal = Goccia.proposal["stage-4"].find(
       (entry) => entry.name === "Iterator Includes",
     );
 
     expect(proposal.link).toBe(
       "https://github.com/tc39/proposal-iterator-includes",
     );
+  });
+
+  test("a stage with no listed proposal has no key", () => {
+    expect(Object.keys(Goccia.proposal).includes("stage-3")).toBe(false);
+    expect(Goccia.proposal["stage-3"]).toBeUndefined();
   });
 
   test("proposal is read-only", () => {

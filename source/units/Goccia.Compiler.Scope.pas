@@ -7,15 +7,18 @@ interface
 uses
   Generics.Collections,
 
+  HashMap,
   OrderedStringMap,
 
   Goccia.AST.Node,
   Goccia.Bytecode.Chunk,
   Goccia.Compiler.ConstantValue,
-  Goccia.Modules;
+  Goccia.Modules,
+  Goccia.Profiler.Compile;
 
 type
   TGocciaCompilerVariableKind = (cvkLocal, cvkUpvalue, cvkGlobal);
+  TGocciaExpressionTypeMemo = TDictionary<TGocciaExpression, TGocciaLocalType>;
   TGocciaCompilerExportNameArray = array of string;
 
   TGocciaCompilerLocal = record
@@ -30,6 +33,13 @@ type
     // TDZ hole. Whether the read may also take the register as an operand is
     // decided where the operand is compiled; see TryResolveSettledLocalName.
     IsInitialized: Boolean;
+    // True when the binding's declaration need not set its TDZ hole: the
+    // block that declares it set the hole on entry, and until the declaration
+    // runs nothing can store to it, or, for a leading binding of a function
+    // body, nothing can observe the binding before its declaration completes
+    // (LeadingLexicalsWithUnobservableHole). Coverage ignores it, so that the
+    // declaration keeps an instruction on its own line.
+    HoleAtBlockEntry: Boolean;
     // Above zero while the code being compiled is outside this local's scope
     // although the local is still declared: ResolveLocal skips it then. See
     // TGocciaCompilerScope.SuspendBindingsDeeperThan.
@@ -61,7 +71,16 @@ type
     HoldsOnlyNumbers: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
+    // A strictly typed binding that can hold a value no type check has seen:
+    // the undefined of an annotated let or var declared without an
+    // initializer, or the array of an annotated rest parameter. Its TypeHint
+    // is still enforced on every store, but it does not describe what a read
+    // yields, so ExpressionType does not report it.
+    HoldsUncheckedValue: Boolean;
     ParamTypeSignature: string;
+    // The type every call of the function this const binding holds returns,
+    // or sltUntyped (CalleeReturnType in Goccia.Compiler.Statements).
+    ReturnTypeHint: TGocciaLocalType;
     TypeAnnotation: string;
     ElementTypeAnnotation: string;
     HasConstantValue: Boolean;
@@ -94,7 +113,12 @@ type
     IsGlobalBacked: Boolean;
     TypeHint: TGocciaLocalType;
     IsStrictlyTyped: Boolean;
+    HoldsUncheckedValue: Boolean;
     ParamTypeSignature: string;
+    // Copied from the captured binding: the return type of a const function
+    // and whether a let holds only Numbers.
+    ReturnTypeHint: TGocciaLocalType;
+    HoldsOnlyNumbers: Boolean;
     IsImportBinding: Boolean;
     ImportPhase: TGocciaImportCallPhase;
     ImportModulePath: string;
@@ -115,12 +139,24 @@ type
 
   TGocciaCompilerScope = class
   private
+    // The compilation root owns generated-name counters; descendants share it.
+    FGeneratedNameScope: TGocciaCompilerScope;
+    FClassPrivateCounter: Integer;
+    FEvalVarObjectCounter: Integer;
     FParent: TGocciaCompilerScope;
     FLocals: array of TGocciaCompilerLocal;
     FLocalIndex: TOrderedStringMap<Integer>;
     FLocalCount: Integer;
+    // How many of the locals hold each register, indexed by slot, so that
+    // SlotHoldsLocal answers without visiting the locals.
+    FSlotLocalCounts: array of Integer;
     FUpvalues: array of TGocciaCompilerUpvalue;
     FUpvalueCount: Integer;
+    // Once there are COMPILER_UPVALUE_INDEX_THRESHOLD upvalues: the first
+    // upvalue of each captured slot, by UpvalueSlotKey (AddUpvalue), and of
+    // each name (ResolveUpvalue in a seeded scope). Seeding drops them.
+    FUpvalueSlotIndex: THashMap<Integer, Integer>;
+    FUpvalueNameIndex: TOrderedStringMap<Integer>;
     FDepth: Integer;
     FNextSlot: Integer;
     FMaxSlot: UInt16;
@@ -152,10 +188,40 @@ type
     FIsSloppyEvalCode: Boolean;
     FEvalCodeVarEnvironment: TGocciaDirectEvalVarEnvironment;
     FParametersInVarEnvironment: Boolean;
-    FParameterNames: array of string;
+    // A hash map, so recording thousands of parameters is linear in them;
+    // nil until the first name.
+    FParameterNames: TOrderedStringMap<Boolean>;
     FTemplate: TGocciaFunctionTemplate;
+    // The compile profile when --profile=compile is on, else nil; a scope
+    // takes its parent's (Goccia.Profiler.Compile).
+    FCompileProfile: TGocciaCompileProfiler;
     FUpvaluesSeeded: Boolean;
+    // The join of the types this function returns (zeroed by InitInstance:
+    // nothing seen yet), and the result for the last function compiled as a
+    // child of this scope.
+    FReturnType: TGocciaLocalType;
+    FReturnSeen: Boolean;
+    FReturnConflict: Boolean;
+    FLastChildReturnType: TGocciaLocalType;
+    // The expression this function's code compiled last, and the type
+    // of the value its instruction produces (see NoteExpressionResultType).
+    FLastTypedExpression: TGocciaExpression;
+    FLastExpressionResultType: TGocciaLocalType;
+    // ExpressionType's answers for binary expressions (ExpressionTypeMemo),
+    // and the template and code count they hold for.
+    FTypeMemo: TGocciaExpressionTypeMemo;
+    FTypeMemoTemplate: TGocciaFunctionTemplate;
+    FTypeMemoCodeCount: Integer;
+    // While the case clauses of a switch statement are compiled, the locals
+    // marked initialized or given a constant value, in that order, and where
+    // each open switch's next clause starts reading them (BeginCaseClauses).
+    FSettledLocals: array of Integer;
+    FSettledLocalCount: Integer;
+    FCaseClauseMarks: array of Integer;
+    FCaseClauseMarkCount: Integer;
     procedure EnsureLocalIndex;
+    procedure NoteSettledLocal(const AIndex: Integer);
+    procedure CountLocalSlot(const ASlot: UInt16);
     function NewestLocalNamed(const AName: string): Integer;
     procedure RecordDebugLocal(const AIndex: Integer);
     procedure ForgetTopLocalName;
@@ -164,6 +230,10 @@ type
     constructor Create(const AParent: TGocciaCompilerScope;
       const ADepth: Integer);
     destructor Destroy; override;
+
+    function NextClassPrivatePrefix: string;
+    procedure ReserveClassPrivatePrefix(const APrefix: string);
+    procedure ReserveEvalVarObjectName(const AName: string);
 
     { Sizes the locals table for ACount locals when nothing is declared
       yet. Every slot of the table is initialized and finalized whether a
@@ -209,6 +279,8 @@ type
       out AClosedCount: Integer);
 
     property Parent: TGocciaCompilerScope read FParent;
+    property CompileProfile: TGocciaCompileProfiler read FCompileProfile
+      write FCompileProfile;
     property LocalCount: Integer read FLocalCount;
     property UpvalueCount: Integer read FUpvalueCount;
     property Depth: Integer read FDepth;
@@ -216,6 +288,10 @@ type
     property NextSlot: Integer read FNextSlot;
 
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
+    // True when one of the locals, suspended or not, holds register ASlot.
+    // Constant time: a call is compiled with this check, and a function's top
+    // level can hold thousands of locals.
+    function SlotHoldsLocal(const ASlot: UInt16): Boolean;
     // The local in place, without copying the record and its managed fields.
     // The pointer is valid only until the next DeclareLocal or DeclareVarLocal,
     // which can reallocate the local array.
@@ -233,7 +309,22 @@ type
     // function body reads them before it is compiled.
     procedure AddParameterName(const AName: string);
     function HasParameterName(const AName: string): Boolean;
-    procedure ClearInitializedAtDepth(const ADepth: Integer);
+    { The case clauses of a switch statement share one block scope, and a
+      clause can be entered without running the declarations of the clauses
+      before it. So a read in a clause must neither use the register of an
+      earlier clause's binding directly nor be replaced by a constant tracked
+      for it. BeginCaseClauses is called after the switch's BeginScope and
+      before its lexical prelude; from then on the scope notes every local
+      marked initialized or given a constant value. Before each clause,
+      ForgetCaseClauseFacts(Depth) clears both for the switch's own locals
+      (those at ADepth) noted since the previous clause, and keeps the notes
+      on other live locals for an enclosing switch. Every local at ADepth
+      that is initialized or holds a constant was noted, so this visits only
+      what the previous clause settled, not every local of the function.
+      EndCaseClauses closes the innermost switch. }
+    procedure BeginCaseClauses;
+    procedure ForgetCaseClauseFacts(const ADepth: Integer);
+    procedure EndCaseClauses;
     procedure EnterLoop(const AMayCreateClosure: Boolean);
     procedure LeaveLoop;
     procedure MarkDirectEvalSeen;
@@ -244,6 +335,8 @@ type
       const ATypeHint: TGocciaLocalType);
     procedure SetLocalStrictlyTyped(const AIndex: Integer;
       const AStrictlyTyped: Boolean);
+    procedure SetLocalHoldsUncheckedValue(const AIndex: Integer;
+      const AHoldsUncheckedValue: Boolean);
     procedure SetLocalArrayTyped(const AIndex: Integer;
       const AArrayTyped: Boolean);
     procedure SetLocalCallProvenNumeric(const AIndex: Integer;
@@ -252,6 +345,43 @@ type
       const AHoldsOnlyNumbers: Boolean);
     procedure SetLocalParamTypeSignature(const AIndex: Integer;
       const ASignature: string);
+    procedure SetLocalReturnTypeHint(const AIndex: Integer;
+      const AType: TGocciaLocalType);
+    // Records that one return of this function yields a value of AType
+    // (sltUntyped: unknown, or undefined).
+    procedure NoteReturnType(const AType: TGocciaLocalType);
+    // The type every return of this function yields, or sltUntyped.
+    function InferredReturnType: TGocciaLocalType;
+    property LastChildReturnType: TGocciaLocalType read FLastChildReturnType
+      write FLastChildReturnType;
+    { A binary or unary operator hands the type of the value it computed to the
+      operator whose operand it is, which would otherwise work the type out
+      again from the operand's whole subtree: in a chain of k operators that
+      is k walks, each as long as the chain so far. The operand's value is
+      computed into a register before anything after it runs, so its type is
+      the one it had when its instruction was chosen.
+      NoteExpressionResultType records it as the last act of compiling AExpr;
+      TakeExpressionResultType, called right after the operand is compiled, gives
+      it back once, and only for that operand: a nested operator recorded
+      later, or an operand compiled another way (folded to a constant, or
+      simplified), leaves no record of AExpr. }
+    { ExpressionType's answers for the binary expressions a walk has typed,
+      for a caller that would otherwise walk them again. They hold while
+      ATemplate emits only folded constants or local reads
+      (NoteTypeFactsUnchanged), which change nothing a type depends on;
+      once anything else is emitted
+      the record is emptied when next asked for. }
+    function ExpressionTypeMemo(
+      const ATemplate: TGocciaFunctionTemplate): TGocciaExpressionTypeMemo;
+    { ATemplate's code grew from ABefore to AAfter instructions without
+      changing any fact used by expression type analysis. }
+    procedure NoteTypeFactsUnchanged(const ATemplate: TGocciaFunctionTemplate;
+      const ABefore, AAfter: Integer);
+    procedure ForgetExpressionResultType;
+    procedure NoteExpressionResultType(const AExpr: TGocciaExpression;
+      const AType: TGocciaLocalType);
+    function TakeExpressionResultType(const AExpr: TGocciaExpression;
+      out AType: TGocciaLocalType): Boolean;
     procedure SetLocalTypeAnnotation(const AIndex: Integer;
       const AAnnotation: string);
     procedure SetLocalElementTypeAnnotation(const AIndex: Integer;
@@ -259,7 +389,6 @@ type
     procedure SetLocalConstantValue(const AIndex: Integer;
       const AValue: TGocciaCompileTimeValue);
     procedure ClearLocalConstantValue(const AIndex: Integer);
-    procedure ClearConstantValuesAtDepth(const ADepth: Integer);
     procedure MarkImportBinding(const AIndex: Integer;
       const APhase: TGocciaImportCallPhase; const AModulePath,
       AExportName: string);
@@ -384,19 +513,17 @@ type
       read FParametersInVarEnvironment write FParametersInVarEnvironment;
   end;
 
-function NextClassPrivatePrefix: string;
-// Keeps the hidden variable object names DeclareEvalVarObjects makes from
-// now on different from AName, one an eval site record already names.
-procedure ReserveEvalVarObjectName(const AName: string);
-
 
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+
+  Goccia.Error.Messages;
 
 const
   COMPILER_LOCAL_INDEX_THRESHOLD = 64;
+  COMPILER_UPVALUE_INDEX_THRESHOLD = 64;
   COMPILER_SUPER_LOCAL = '__super__';
 
 { TGocciaCompilerScope }
@@ -415,13 +542,35 @@ begin
     FLocalIndex.Add(FLocals[I].Name, I);
 end;
 
+procedure TGocciaCompilerScope.CountLocalSlot(const ASlot: UInt16);
+var
+  NewLength: Integer;
+begin
+  if ASlot >= Length(FSlotLocalCounts) then
+  begin
+    NewLength := Length(FSlotLocalCounts) * 2 + 16;
+    if NewLength <= ASlot then
+      NewLength := ASlot + 1;
+    SetLength(FSlotLocalCounts, NewLength);
+  end;
+  Inc(FSlotLocalCounts[ASlot]);
+end;
+
 function TGocciaCompilerScope.NewestLocalNamed(const AName: string): Integer;
 var
-  I: Integer;
+  I, Probes: Integer;
+  Found: Boolean;
 begin
   if Assigned(FLocalIndex) then
   begin
-    if not FLocalIndex.TryGetValue(AName, Result) then
+    if Assigned(FCompileProfile) then
+    begin
+      Found := FLocalIndex.TryGetValueWithProbes(AName, Result, Probes);
+      FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes, Probes);
+    end
+    else
+      Found := FLocalIndex.TryGetValue(AName, Result);
+    if not Found then
       Result := -1;
     Exit;
   end;
@@ -429,7 +578,15 @@ begin
   // locals to scan.
   for I := FLocalCount - 1 downto 0 do
     if FLocals[I].Name = AName then
+    begin
+      if Assigned(FCompileProfile) then
+        FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes,
+          FLocalCount - I);
       Exit(I);
+    end;
+  if Assigned(FCompileProfile) then
+    FCompileProfile.CountLookup(ccLocalLookups, ccLocalLookupProbes,
+      FLocalCount);
   Result := -1;
 end;
 
@@ -459,6 +616,8 @@ var
   I, Previous: Integer;
   Newest: TOrderedStringMap<Integer>;
 begin
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccLocalListScans, FLocalCount);
   Newest := TOrderedStringMap<Integer>.Create(FLocalCount * 2);
   try
     for I := 0 to FLocalCount - 1 do
@@ -488,9 +647,16 @@ var
 begin
   inherited Create;
   FParent := AParent;
+  if Assigned(AParent) then
+    FGeneratedNameScope := AParent.FGeneratedNameScope
+  else
+    FGeneratedNameScope := Self;
   FLocalIndex := nil;
+  FParameterNames := nil;
   FLocalCount := 0;
   FUpvalueCount := 0;
+  FUpvalueSlotIndex := nil;
+  FUpvalueNameIndex := nil;
   FDepth := ADepth;
   FNextSlot := 0;
   FMaxSlot := 0;
@@ -508,6 +674,15 @@ begin
   FParametersInVarEnvironment := False;
   FUpvaluesSeeded := False;
   FTemplate := nil;
+  if Assigned(AParent) then
+    FCompileProfile := AParent.FCompileProfile
+  else
+    FCompileProfile := nil;
+  FLastTypedExpression := nil;
+  FTypeMemo := nil;
+  FTypeMemoTemplate := nil;
+  FSettledLocalCount := 0;
+  FCaseClauseMarkCount := 0;
   if Assigned(AParent) and (AParent.FWithBindingCount > 0) then
   begin
     FWithBindingCount := AParent.FWithBindingCount;
@@ -524,6 +699,10 @@ end;
 destructor TGocciaCompilerScope.Destroy;
 begin
   FLocalIndex.Free;
+  FUpvalueSlotIndex.Free;
+  FUpvalueNameIndex.Free;
+  FTypeMemo.Free;
+  FParameterNames.Free;
   inherited;
 end;
 
@@ -537,7 +716,8 @@ function TGocciaCompilerScope.DeclareLocal(const AName: string;
   const AIsConst: Boolean): UInt16;
 begin
   if FNextSlot >= High(UInt16) then
-    raise Exception.Create('Compiler error: local variable slot overflow (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeLocalLimit,
+      [High(UInt16)]);
   if FLocalCount >= Length(FLocals) then
     SetLength(FLocals, FLocalCount * 2 + 8);
   FLocals[FLocalCount].Name := AName;
@@ -545,6 +725,7 @@ begin
   FLocals[FLocalCount].Depth := FDepth;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsInitialized := False;
+  FLocals[FLocalCount].HoleAtBlockEntry := False;
   FLocals[FLocalCount].SuspendCount := 0;
   FLocals[FLocalCount].IsConst := AIsConst;
   FLocals[FLocalCount].IsNonStrictImmutable := False;
@@ -559,7 +740,9 @@ begin
   FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
+  FLocals[FLocalCount].HoldsUncheckedValue := False;
   FLocals[FLocalCount].ParamTypeSignature := '';
+  FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
@@ -572,6 +755,7 @@ begin
   SetLength(FLocals[FLocalCount].ExportNames, 0);
   FLocals[FLocalCount].ShadowedLocal := NewestLocalNamed(AName);
   RecordDebugLocal(FLocalCount);
+  CountLocalSlot(FLocals[FLocalCount].Slot);
   Result := UInt16(FNextSlot);
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
@@ -603,7 +787,8 @@ begin
 
   // Declare at depth 0 so EndScope never pops it
   if FNextSlot >= High(UInt16) then
-    raise Exception.Create('Compiler error: local variable slot overflow (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeLocalLimit,
+      [High(UInt16)]);
   if FLocalCount >= Length(FLocals) then
     SetLength(FLocals, FLocalCount * 2 + 8);
   FLocals[FLocalCount].Name := AName;
@@ -611,6 +796,7 @@ begin
   FLocals[FLocalCount].Depth := 0;
   FLocals[FLocalCount].IsCaptured := False;
   FLocals[FLocalCount].IsInitialized := False;
+  FLocals[FLocalCount].HoleAtBlockEntry := False;
   FLocals[FLocalCount].SuspendCount := 0;
   FLocals[FLocalCount].IsConst := False;
   FLocals[FLocalCount].IsNonStrictImmutable := False;
@@ -625,7 +811,9 @@ begin
   FLocals[FLocalCount].HoldsOnlyNumbers := False;
   FLocals[FLocalCount].TypeHint := sltUntyped;
   FLocals[FLocalCount].IsStrictlyTyped := False;
+  FLocals[FLocalCount].HoldsUncheckedValue := False;
   FLocals[FLocalCount].ParamTypeSignature := '';
+  FLocals[FLocalCount].ReturnTypeHint := sltUntyped;
   FLocals[FLocalCount].TypeAnnotation := '';
   FLocals[FLocalCount].ElementTypeAnnotation := '';
   FLocals[FLocalCount].HasConstantValue := False;
@@ -638,6 +826,7 @@ begin
   SetLength(FLocals[FLocalCount].ExportNames, 0);
   FLocals[FLocalCount].ShadowedLocal := NewestLocalNamed(AName);
   RecordDebugLocal(FLocalCount);
+  CountLocalSlot(FLocals[FLocalCount].Slot);
   Result := UInt16(FNextSlot);
   EnsureLocalIndex;
   if Assigned(FLocalIndex) then
@@ -661,6 +850,8 @@ begin
        not (FGlobalBackedBindingsByName and FLocals[I].IsGlobalBacked) then
       Exit(I);
     I := FLocals[I].ShadowedLocal;
+    if Assigned(FCompileProfile) then
+      FCompileProfile.Count(ccLocalLookupProbes);
   end;
   Result := -1;
 end;
@@ -700,11 +891,37 @@ var
   UpvalueIdx: Integer;
   Idx: Integer;
 begin
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccUpvalueResolutions);
   if FUpvaluesSeeded then
   begin
+    if not Assigned(FUpvalueNameIndex) and
+       (FUpvalueCount >= COMPILER_UPVALUE_INDEX_THRESHOLD) then
+    begin
+      FUpvalueNameIndex := TOrderedStringMap<Integer>.Create(
+        FUpvalueCount * 2);
+      for Idx := 0 to FUpvalueCount - 1 do
+        if not FUpvalueNameIndex.ContainsKey(FUpvalues[Idx].Name) then
+          FUpvalueNameIndex.Add(FUpvalues[Idx].Name, Idx);
+    end;
+    if Assigned(FUpvalueNameIndex) then
+    begin
+      // One probe of the index, found or not.
+      if Assigned(FCompileProfile) then
+        FCompileProfile.Count(ccUpvalueListProbes);
+      if not FUpvalueNameIndex.TryGetValue(AName, Result) then
+        Result := -1;
+      Exit;
+    end;
     for Idx := 0 to FUpvalueCount - 1 do
       if FUpvalues[Idx].Name = AName then
+      begin
+        if Assigned(FCompileProfile) then
+          FCompileProfile.Count(ccUpvalueListProbes, Idx + 1);
         Exit(Idx);
+      end;
+    if Assigned(FCompileProfile) then
+      FCompileProfile.Count(ccUpvalueListProbes, FUpvalueCount);
     Exit(-1);
   end;
   if not Assigned(FParent) then
@@ -721,7 +938,12 @@ begin
     FUpvalues[Idx].IsGlobalBacked := FParent.FLocals[LocalIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FLocals[LocalIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FLocals[LocalIdx].IsStrictlyTyped;
+    FUpvalues[Idx].HoldsUncheckedValue :=
+      FParent.FLocals[LocalIdx].HoldsUncheckedValue;
     FUpvalues[Idx].ParamTypeSignature := FParent.FLocals[LocalIdx].ParamTypeSignature;
+    FUpvalues[Idx].ReturnTypeHint := FParent.FLocals[LocalIdx].ReturnTypeHint;
+    FUpvalues[Idx].HoldsOnlyNumbers := FParent.FLocals[LocalIdx].HoldsOnlyNumbers and
+      not FParent.FLocals[LocalIdx].IsGlobalBacked;
     FUpvalues[Idx].IsImportBinding := FParent.FLocals[LocalIdx].IsImportBinding;
     FUpvalues[Idx].ImportPhase := FParent.FLocals[LocalIdx].ImportPhase;
     FUpvalues[Idx].ImportModulePath := FParent.FLocals[LocalIdx].ImportModulePath;
@@ -743,7 +965,8 @@ begin
   if UpvalueIdx >= 0 then
   begin
     if UpvalueIdx > High(UInt16) then
-      raise Exception.Create('Compiler error: upvalue index overflow (>65535)');
+      raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeUpvalueLimit,
+        [High(UInt16)]);
     Idx := AddUpvalue(AName, UInt16(UpvalueIdx), False,
       FParent.FUpvalues[UpvalueIdx].IsConst,
       FParent.FUpvalues[UpvalueIdx].IsVar);
@@ -752,7 +975,11 @@ begin
     FUpvalues[Idx].IsGlobalBacked := FParent.FUpvalues[UpvalueIdx].IsGlobalBacked;
     FUpvalues[Idx].TypeHint := FParent.FUpvalues[UpvalueIdx].TypeHint;
     FUpvalues[Idx].IsStrictlyTyped := FParent.FUpvalues[UpvalueIdx].IsStrictlyTyped;
+    FUpvalues[Idx].HoldsUncheckedValue :=
+      FParent.FUpvalues[UpvalueIdx].HoldsUncheckedValue;
     FUpvalues[Idx].ParamTypeSignature := FParent.FUpvalues[UpvalueIdx].ParamTypeSignature;
+    FUpvalues[Idx].ReturnTypeHint := FParent.FUpvalues[UpvalueIdx].ReturnTypeHint;
+    FUpvalues[Idx].HoldsOnlyNumbers := FParent.FUpvalues[UpvalueIdx].HoldsOnlyNumbers;
     FUpvalues[Idx].IsImportBinding := FParent.FUpvalues[UpvalueIdx].IsImportBinding;
     FUpvalues[Idx].ImportPhase := FParent.FUpvalues[UpvalueIdx].ImportPhase;
     FUpvalues[Idx].ImportModulePath := FParent.FUpvalues[UpvalueIdx].ImportModulePath;
@@ -765,18 +992,62 @@ begin
   Result := -1;
 end;
 
+// The key of the slot an upvalue captures: a register of the enclosing
+// function (AIsLocal) or one of its upvalues.
+function UpvalueSlotKey(const AIndex: UInt16;
+  const AIsLocal: Boolean): Integer; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := Integer(AIndex) * 2 + Ord(AIsLocal);
+end;
+
+// The upvalue of a captured slot, or a new one. A function that captures
+// many bindings resolves each of them at every read; finding its upvalue by
+// visiting the list took time quadratic in the bindings it captures, so past
+// COMPILER_UPVALUE_INDEX_THRESHOLD upvalues an index finds it. Either way it
+// is the first upvalue of the slot, so the numbering does not change.
 function TGocciaCompilerScope.AddUpvalue(const AName: string; const AIndex: UInt16;
   const AIsLocal: Boolean; const AIsConst: Boolean;
   const AIsVar: Boolean): Integer;
 var
-  I: Integer;
+  I, Key: Integer;
 begin
-  for I := 0 to FUpvalueCount - 1 do
-    if (FUpvalues[I].Index = AIndex) and (FUpvalues[I].IsLocal = AIsLocal) then
+  Key := UpvalueSlotKey(AIndex, AIsLocal);
+  if not Assigned(FUpvalueSlotIndex) and
+     (FUpvalueCount >= COMPILER_UPVALUE_INDEX_THRESHOLD) then
+  begin
+    FUpvalueSlotIndex := THashMap<Integer, Integer>.Create(
+      FUpvalueCount * 2);
+    for I := 0 to FUpvalueCount - 1 do
+      if not FUpvalueSlotIndex.ContainsKey(
+           UpvalueSlotKey(FUpvalues[I].Index, FUpvalues[I].IsLocal)) then
+        FUpvalueSlotIndex.Add(
+          UpvalueSlotKey(FUpvalues[I].Index, FUpvalues[I].IsLocal), I);
+  end;
+  if Assigned(FUpvalueSlotIndex) then
+  begin
+    // One probe of the index, found or not.
+    if Assigned(FCompileProfile) then
+      FCompileProfile.Count(ccUpvalueListProbes);
+    if FUpvalueSlotIndex.TryGetValue(Key, I) then
       Exit(I);
+  end
+  else
+  begin
+    for I := 0 to FUpvalueCount - 1 do
+      if (FUpvalues[I].Index = AIndex) and
+         (FUpvalues[I].IsLocal = AIsLocal) then
+      begin
+        if Assigned(FCompileProfile) then
+          FCompileProfile.Count(ccUpvalueListProbes, I + 1);
+        Exit(I);
+      end;
+    if Assigned(FCompileProfile) then
+      FCompileProfile.Count(ccUpvalueListProbes, FUpvalueCount);
+  end;
 
   if FUpvalueCount >= High(UInt16) then
-    raise Exception.Create('Compiler error: upvalue count overflow (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeUpvalueLimit,
+      [High(UInt16)]);
   if FUpvalueCount >= Length(FUpvalues) then
     SetLength(FUpvalues, FUpvalueCount * 2 + 4);
   FUpvalues[FUpvalueCount].Name := AName;
@@ -788,7 +1059,10 @@ begin
   FUpvalues[FUpvalueCount].IsGlobalBacked := False;
   FUpvalues[FUpvalueCount].TypeHint := sltUntyped;
   FUpvalues[FUpvalueCount].IsStrictlyTyped := False;
+  FUpvalues[FUpvalueCount].HoldsUncheckedValue := False;
   FUpvalues[FUpvalueCount].ParamTypeSignature := '';
+  FUpvalues[FUpvalueCount].ReturnTypeHint := sltUntyped;
+  FUpvalues[FUpvalueCount].HoldsOnlyNumbers := False;
   FUpvalues[FUpvalueCount].IsImportBinding := False;
   FUpvalues[FUpvalueCount].ImportPhase := icpEvaluation;
   FUpvalues[FUpvalueCount].ImportModulePath := '';
@@ -797,6 +1071,11 @@ begin
   SetLength(FUpvalues[FUpvalueCount].ExportNames, 0);
   Result := FUpvalueCount;
   Inc(FUpvalueCount);
+  if Assigned(FUpvalueSlotIndex) then
+    FUpvalueSlotIndex.Add(Key, Result);
+  if Assigned(FUpvalueNameIndex) and
+     not FUpvalueNameIndex.ContainsKey(AName) then
+    FUpvalueNameIndex.Add(AName, Result);
 end;
 
 function TGocciaCompilerScope.DeclareCallerLocal(const AName: string;
@@ -821,6 +1100,10 @@ procedure TGocciaCompilerScope.SeedUpvalue(const AIndex: UInt16;
   AIsNonStrictImmutable: Boolean);
 begin
   FUpvaluesSeeded := True;
+  // The entry at AIndex changes, and with it the first upvalue of its slot
+  // or name: the indexes are built again when next needed.
+  FreeAndNil(FUpvalueSlotIndex);
+  FreeAndNil(FUpvalueNameIndex);
   while FUpvalueCount <= AIndex do
   begin
     if FUpvalueCount >= Length(FUpvalues) then
@@ -862,7 +1145,8 @@ end;
 function TGocciaCompilerScope.AllocateRegister: UInt16;
 begin
   if FNextSlot >= High(UInt16) then
-    raise Exception.Create('Compiler error: register slot overflow (>65535)');
+    raise EGocciaBytecodeLimit.CreateFmt(SErrorBytecodeRegisterLimit,
+      [High(UInt16)]);
   Result := UInt16(FNextSlot);
   Inc(FNextSlot);
   if FNextSlot > FMaxSlot then
@@ -888,6 +1172,7 @@ begin
   while (FLocalCount > 0) and (FLocals[FLocalCount - 1].Depth = FDepth) do
   begin
     Dec(FLocalCount);
+    Dec(FSlotLocalCounts[FLocals[FLocalCount].Slot]);
     if FLocals[FLocalCount].DebugLocalIndex >= 0 then
       FTemplate.DebugInfo.SetLocalEndPC(FLocals[FLocalCount].DebugLocalIndex,
         UInt32(FTemplate.CodeCount));
@@ -909,6 +1194,12 @@ function TGocciaCompilerScope.GetLocal(
   const AIndex: Integer): TGocciaCompilerLocal;
 begin
   Result := FLocals[AIndex];
+end;
+
+function TGocciaCompilerScope.SlotHoldsLocal(const ASlot: UInt16): Boolean;
+begin
+  Result := (ASlot < Length(FSlotLocalCounts)) and
+    (FSlotLocalCounts[ASlot] > 0);
 end;
 
 function TGocciaCompilerScope.LocalAt(
@@ -938,36 +1229,82 @@ end;
 procedure TGocciaCompilerScope.MarkLocalInitialized(const AIndex: Integer);
 begin
   FLocals[AIndex].IsInitialized := True;
+  NoteSettledLocal(AIndex);
 end;
 
 procedure TGocciaCompilerScope.AddParameterName(const AName: string);
 begin
-  if (AName = '') or HasParameterName(AName) then
+  if AName = '' then
     Exit;
-  SetLength(FParameterNames, Length(FParameterNames) + 1);
-  FParameterNames[High(FParameterNames)] := AName;
+  if not Assigned(FParameterNames) then
+    FParameterNames := TOrderedStringMap<Boolean>.Create;
+  FParameterNames.Add(AName, True);
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccParameterNameProbes, 1);
 end;
 
 function TGocciaCompilerScope.HasParameterName(const AName: string): Boolean;
-var
-  I: Integer;
 begin
-  for I := 0 to High(FParameterNames) do
-    if FParameterNames[I] = AName then
-      Exit(True);
-  Result := False;
+  if not Assigned(FParameterNames) then
+    Exit(False);
+  Result := FParameterNames.ContainsKey(AName);
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccParameterNameProbes, 1);
 end;
 
-procedure TGocciaCompilerScope.ClearInitializedAtDepth(const ADepth: Integer);
-var
-  I: Integer;
+procedure TGocciaCompilerScope.NoteSettledLocal(const AIndex: Integer);
 begin
-  // The locals of ADepth are not always the tail of FLocals: a `var` that was
-  // not hoisted (one in a class static block) is declared at depth 0 after
-  // them. Scan every local instead of stopping at the first shallower one.
-  for I := 0 to FLocalCount - 1 do
-    if FLocals[I].Depth = ADepth then
-      FLocals[I].IsInitialized := False;
+  if FCaseClauseMarkCount = 0 then
+    Exit;
+  if FSettledLocalCount >= Length(FSettledLocals) then
+    SetLength(FSettledLocals, FSettledLocalCount * 2 + 16);
+  FSettledLocals[FSettledLocalCount] := AIndex;
+  Inc(FSettledLocalCount);
+end;
+
+procedure TGocciaCompilerScope.BeginCaseClauses;
+begin
+  if FCaseClauseMarkCount >= Length(FCaseClauseMarks) then
+    SetLength(FCaseClauseMarks, FCaseClauseMarkCount * 2 + 4);
+  FCaseClauseMarks[FCaseClauseMarkCount] := FSettledLocalCount;
+  Inc(FCaseClauseMarkCount);
+end;
+
+procedure TGocciaCompilerScope.ForgetCaseClauseFacts(const ADepth: Integer);
+var
+  I, Kept, Index: Integer;
+begin
+  // Only the innermost open switch reaches a clause boundary: a switch
+  // nested in a clause has ended before the next clause of its own begins.
+  Kept := FCaseClauseMarks[FCaseClauseMarkCount - 1];
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccLocalListScans, FSettledLocalCount - Kept);
+  for I := Kept to FSettledLocalCount - 1 do
+  begin
+    Index := FSettledLocals[I];
+    // A local of a block that has ended is dropped: its index may hold a
+    // newer local by now, which is noted again when it is settled.
+    if Index >= FLocalCount then
+      Continue;
+    if FLocals[Index].Depth = ADepth then
+    begin
+      FLocals[Index].IsInitialized := False;
+      if FLocals[Index].HasConstantValue then
+        ClearLocalConstantValue(Index);
+      Continue;
+    end;
+    FSettledLocals[Kept] := Index;
+    Inc(Kept);
+  end;
+  FSettledLocalCount := Kept;
+  FCaseClauseMarks[FCaseClauseMarkCount - 1] := Kept;
+end;
+
+procedure TGocciaCompilerScope.EndCaseClauses;
+begin
+  Dec(FCaseClauseMarkCount);
+  if FCaseClauseMarkCount = 0 then
+    FSettledLocalCount := 0;
 end;
 
 // AMayCreateClosure describes the subtree of the loop being entered. A loop
@@ -996,16 +1333,14 @@ begin
   FDirectEvalSeen := True;
 end;
 
-threadvar
-  GEvalVarObjectCounter: Integer;
-
-procedure ReserveEvalVarObjectName(const AName: string);
+// Imported direct-eval bindings must remain distinct from new hidden locals.
+procedure TGocciaCompilerScope.ReserveEvalVarObjectName(const AName: string);
 var
   Suffix: Integer;
 begin
   if TryStrToInt(Copy(AName, LastDelimiter(':', AName) + 1, MaxInt),
-     Suffix) and (Suffix >= GEvalVarObjectCounter) then
-    GEvalVarObjectCounter := Suffix + 1;
+     Suffix) and (Suffix >= FGeneratedNameScope.FEvalVarObjectCounter) then
+    FGeneratedNameScope.FEvalVarObjectCounter := Suffix + 1;
 end;
 
 procedure TGocciaCompilerScope.DeclareEvalVarObjects(
@@ -1017,8 +1352,8 @@ begin
     Exit;
   if FEvalVarObjectSlot >= 0 then
     Exit;
-  Suffix := IntToStr(GEvalVarObjectCounter);
-  Inc(GEvalVarObjectCounter);
+  Suffix := IntToStr(FGeneratedNameScope.FEvalVarObjectCounter);
+  Inc(FGeneratedNameScope.FEvalVarObjectCounter);
   // The parameters' environment encloses the body's, so its object is
   // declared and probed first, and the body's is the nearer with binding.
   if not AParameterListIsSimple then
@@ -1126,10 +1461,98 @@ begin
   FLocals[AIndex].ParamTypeSignature := ASignature;
 end;
 
+procedure TGocciaCompilerScope.SetLocalReturnTypeHint(const AIndex: Integer;
+  const AType: TGocciaLocalType);
+begin
+  FLocals[AIndex].ReturnTypeHint := AType;
+end;
+
+procedure TGocciaCompilerScope.NoteReturnType(const AType: TGocciaLocalType);
+begin
+  if FReturnConflict then
+    Exit;
+  if (AType = sltUntyped) or (AType = sltReference) then
+  begin
+    FReturnConflict := True;
+    Exit;
+  end;
+  if not FReturnSeen then
+  begin
+    FReturnSeen := True;
+    FReturnType := AType;
+  end
+  else if FReturnType <> AType then
+  begin
+    if (FReturnType in [sltInteger, sltFloat]) and
+       (AType in [sltInteger, sltFloat]) then
+      FReturnType := sltFloat
+    else
+      FReturnConflict := True;
+  end;
+end;
+
+function TGocciaCompilerScope.ExpressionTypeMemo(
+  const ATemplate: TGocciaFunctionTemplate): TGocciaExpressionTypeMemo;
+begin
+  if not Assigned(FTypeMemo) then
+    FTypeMemo := TGocciaExpressionTypeMemo.Create
+  else if (FTypeMemoTemplate <> ATemplate) or
+          (FTypeMemoCodeCount <> ATemplate.CodeCount) then
+    FTypeMemo.Clear;
+  FTypeMemoTemplate := ATemplate;
+  FTypeMemoCodeCount := ATemplate.CodeCount;
+  Result := FTypeMemo;
+end;
+
+procedure TGocciaCompilerScope.NoteTypeFactsUnchanged(
+  const ATemplate: TGocciaFunctionTemplate; const ABefore, AAfter: Integer);
+begin
+  if Assigned(FTypeMemo) and (FTypeMemoTemplate = ATemplate) and
+     (FTypeMemoCodeCount = ABefore) then
+    FTypeMemoCodeCount := AAfter;
+end;
+
+procedure TGocciaCompilerScope.ForgetExpressionResultType;
+begin
+  FLastTypedExpression := nil;
+end;
+
+procedure TGocciaCompilerScope.NoteExpressionResultType(
+  const AExpr: TGocciaExpression; const AType: TGocciaLocalType);
+begin
+  FLastTypedExpression := AExpr;
+  FLastExpressionResultType := AType;
+end;
+
+function TGocciaCompilerScope.TakeExpressionResultType(
+  const AExpr: TGocciaExpression; out AType: TGocciaLocalType): Boolean;
+begin
+  Result := Assigned(AExpr) and (FLastTypedExpression = AExpr);
+  if Result then
+    AType := FLastExpressionResultType
+  else
+    AType := sltUntyped;
+  FLastTypedExpression := nil;
+end;
+
+function TGocciaCompilerScope.InferredReturnType: TGocciaLocalType;
+begin
+  if FReturnSeen and not FReturnConflict then
+    Result := FReturnType
+  else
+    Result := sltUntyped;
+end;
+
 procedure TGocciaCompilerScope.SetLocalStrictlyTyped(const AIndex: Integer;
   const AStrictlyTyped: Boolean);
 begin
   FLocals[AIndex].IsStrictlyTyped := AStrictlyTyped;
+end;
+
+procedure TGocciaCompilerScope.SetLocalHoldsUncheckedValue(
+  const AIndex: Integer; const AHoldsUncheckedValue: Boolean);
+begin
+  FLocals[AIndex].HoldsUncheckedValue := AHoldsUncheckedValue;
 end;
 
 procedure TGocciaCompilerScope.SetLocalArrayTyped(const AIndex: Integer;
@@ -1167,23 +1590,13 @@ procedure TGocciaCompilerScope.SetLocalConstantValue(const AIndex: Integer;
 begin
   FLocals[AIndex].HasConstantValue := True;
   FLocals[AIndex].ConstantValue := AValue;
+  NoteSettledLocal(AIndex);
 end;
 
 procedure TGocciaCompilerScope.ClearLocalConstantValue(const AIndex: Integer);
 begin
   FLocals[AIndex].HasConstantValue := False;
   ResetCompileTimeValue(FLocals[AIndex].ConstantValue, ctvkUnknown);
-end;
-
-procedure TGocciaCompilerScope.ClearConstantValuesAtDepth(
-  const ADepth: Integer);
-var
-  I: Integer;
-begin
-  // See ClearInitializedAtDepth: the locals of ADepth need not be the tail.
-  for I := 0 to FLocalCount - 1 do
-    if FLocals[I].Depth = ADepth then
-      ClearLocalConstantValue(I);
 end;
 
 procedure TGocciaCompilerScope.MarkImportBinding(const AIndex: Integer;
@@ -1363,6 +1776,8 @@ var
 begin
   Result.Depth := ADepth;
   Result.LocalCount := FLocalCount;
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccLocalListScans, FLocalCount);
   for I := 0 to FLocalCount - 1 do
     if FLocals[I].Depth > ADepth then
       Inc(FLocals[I].SuspendCount);
@@ -1471,13 +1886,20 @@ begin
   Result := FWithBindingDepths[AIndex];
 end;
 
-threadvar
-  GClassPrivateCounter: Integer;
-
-function NextClassPrivatePrefix: string;
+function TGocciaCompilerScope.NextClassPrivatePrefix: string;
 begin
-  Result := IntToStr(GClassPrivateCounter) + '$';
-  Inc(GClassPrivateCounter);
+  Result := IntToStr(FGeneratedNameScope.FClassPrivateCounter) + '$';
+  Inc(FGeneratedNameScope.FClassPrivateCounter);
+end;
+
+procedure TGocciaCompilerScope.ReserveClassPrivatePrefix(const APrefix: string);
+var
+  Ordinal: Integer;
+begin
+  if (APrefix <> '') and (APrefix[Length(APrefix)] = '$') and
+     TryStrToInt(Copy(APrefix, 1, Length(APrefix) - 1), Ordinal) and
+     (Ordinal >= FGeneratedNameScope.FClassPrivateCounter) then
+    FGeneratedNameScope.FClassPrivateCounter := Ordinal + 1;
 end;
 
 end.

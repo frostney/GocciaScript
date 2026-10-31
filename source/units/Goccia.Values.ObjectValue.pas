@@ -40,9 +40,26 @@ type
     property HasIndexKey: Boolean read FHasIndexKey;
   end;
 
+  { What a few objects hold besides their properties: a RegExp's compiled data,
+    and the private elements (ES2026 §7.3.1 MakeBasicObject's
+    [[PrivateElements]]; each a §6.2.10 PrivateElement) the VM keeps by private
+    storage key. An object points to one only once it needs it, so every
+    other object stays the size it was. Private elements are kept out of the
+    property map so that no property key, whatever its text, names one. }
+  TGocciaObjectInternalSlots = class
+  public
+    RegExpData: TObject;
+    // Nil until the object holds a private element.
+    PrivateElements: TGocciaPropertyMap;
+    destructor Destroy; override;
+  end;
+
   TGocciaObjectValue = class(TGocciaValue)
   private
+    function GetRegExpData: TObject; {$IFDEF FPC}inline;{$ENDIF}
     procedure SetRegExpData(const AValue: TObject);
+    function GetPrivateElements: TGocciaPropertyMap; {$IFDEF FPC}inline;{$ENDIF}
+    function EnsureInternalSlots: TGocciaObjectInternalSlots;
     procedure MaterializeAllLazyStringProperties;
     procedure EnsureSymbolStorage; {$IFDEF FPC}inline;{$ENDIF}
     function StoreLazyPropertyDescriptor(const AName: string;
@@ -64,7 +81,7 @@ type
     FHasErrorData: Boolean;
     FErrorStack: string;
     FHasRegExpData: Boolean;
-    FRegExpData: TObject;
+    FInternalSlots: TGocciaObjectInternalSlots;
     procedure NoteIndexedOwnProperty(const AName: string);
     { Replace ADescriptor, AName's entry in FProperties, by what it
       materializes into when it is a lazy placeholder, and return the entry. }
@@ -86,6 +103,15 @@ type
     // it, and throws TypeError if it refuses.
     procedure AssignThroughExoticParent(const AParent: TGocciaObjectValue;
       const AName: string; const AValue: TGocciaValue);
+    // ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor step 1 for a strict
+    // assignment to AName, which this object does not own: walks the
+    // prototype chain. True when the chain took the assignment, through an
+    // inherited setter or a parent that answers [[Set]] itself; throws
+    // TypeError for an inherited read-only property or an inherited accessor
+    // without a setter; False when the assignment is to create an own
+    // property.
+    function SetThroughPrototypeChain(const AName: string;
+      const AValue: TGocciaValue): Boolean;
   public
     class procedure InitializeSharedPrototype;
     class function GetSharedObjectPrototype: TGocciaObjectValue; static;
@@ -230,7 +256,17 @@ type
     procedure CommitOwnPropertiesForRestore(
       const AProperties: TGocciaRestoredOwnProperties);
 
+    // The private element stored under the private storage key AKey.
+    function TryGetPrivateElement(const AKey: string;
+      out ADescriptor: TGocciaPropertyDescriptor): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+    // Stores ADescriptor under AKey, freeing the descriptor it replaces. The
+    // object owns ADescriptor from here.
+    procedure SetPrivateElement(const AKey: string;
+      const ADescriptor: TGocciaPropertyDescriptor);
+
     property Properties: TGocciaPropertyMap read FProperties;
+    // Nil while the object holds no private element.
+    property PrivateElements: TGocciaPropertyMap read GetPrivateElements;
     property Prototype: TGocciaObjectValue read FPrototype write FPrototype;
     property Frozen: Boolean read FFrozen;
     property Sealed: Boolean read FSealed;
@@ -240,7 +276,7 @@ type
     property HasErrorData: Boolean read FHasErrorData write FHasErrorData;
     property ErrorStack: string read FErrorStack write FErrorStack;
     property HasRegExpData: Boolean read FHasRegExpData write FHasRegExpData;
-    property RegExpData: TObject read FRegExpData write SetRegExpData;
+    property RegExpData: TObject read GetRegExpData write SetRegExpData;
   published
     function ObjectPrototypeToString(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function ObjectPrototypeHasOwnProperty(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -414,11 +450,6 @@ uses
 var
   GObjectPrototypeSlot: TGocciaRealmSlotId;
   GObjectMethodHostSlot: TGocciaRealmSlotId;
-
-const
-  BYTECODE_PRIVATE_SLOT_PREFIX = '#slot:';
-  BYTECODE_PRIVATE_BRAND_PREFIX = '#brand:';
-  BYTECODE_PRIVATE_INITIALIZED_PREFIX = '#initialized:';
 
 { Prototype walks.
 
@@ -668,17 +699,6 @@ begin
   end;
   AValue := DelegateGetProperty(AParent, AName, AReceiver);
   Result := True;
-end;
-
-function IsInternalPrivateStorageKey(const AName: string): Boolean;
-begin
-  Result :=
-    (Copy(AName, 1, Length(BYTECODE_PRIVATE_SLOT_PREFIX)) =
-      BYTECODE_PRIVATE_SLOT_PREFIX) or
-    (Copy(AName, 1, Length(BYTECODE_PRIVATE_BRAND_PREFIX)) =
-      BYTECODE_PRIVATE_BRAND_PREFIX) or
-    (Copy(AName, 1, Length(BYTECODE_PRIVATE_INITIALIZED_PREFIX)) =
-      BYTECODE_PRIVATE_INITIALIZED_PREFIX);
 end;
 
 function IsHiddenRegExpDataProperty(const AObject: TGocciaObjectValue;
@@ -1039,14 +1059,52 @@ begin
   ADescriptor.MarkValues;
 end;
 
+{ TGocciaObjectInternalSlots }
+
+destructor TGocciaObjectInternalSlots.Destroy;
+var
+  Pair: TGocciaPropertyMap.TKeyValuePair;
+begin
+  RegExpData.Free;
+  if Assigned(PrivateElements) then
+    for Pair in PrivateElements do
+      Pair.Value.Free;
+  PrivateElements.Free;
+  inherited;
+end;
+
 { TGocciaObjectValue }
+
+function TGocciaObjectValue.EnsureInternalSlots: TGocciaObjectInternalSlots;
+begin
+  if not Assigned(FInternalSlots) then
+    FInternalSlots := TGocciaObjectInternalSlots.Create;
+  Result := FInternalSlots;
+end;
+
+function TGocciaObjectValue.GetRegExpData: TObject;
+begin
+  if Assigned(FInternalSlots) then
+    Result := FInternalSlots.RegExpData
+  else
+    Result := nil;
+end;
 
 procedure TGocciaObjectValue.SetRegExpData(const AValue: TObject);
 begin
-  if FRegExpData = AValue then
+  if GetRegExpData = AValue then
     Exit;
-  FRegExpData.Free;
-  FRegExpData := AValue;
+  EnsureInternalSlots;
+  FInternalSlots.RegExpData.Free;
+  FInternalSlots.RegExpData := AValue;
+end;
+
+function TGocciaObjectValue.GetPrivateElements: TGocciaPropertyMap;
+begin
+  if Assigned(FInternalSlots) then
+    Result := FInternalSlots.PrivateElements
+  else
+    Result := nil;
 end;
 
 threadvar
@@ -1548,8 +1606,34 @@ begin
   end;
 
   FSymbolInsertionOrder.Free;
-  FRegExpData.Free;
+  FInternalSlots.Free;
   inherited;
+end;
+
+function TGocciaObjectValue.TryGetPrivateElement(const AKey: string;
+  out ADescriptor: TGocciaPropertyDescriptor): Boolean;
+begin
+  ADescriptor := nil;
+  Result := Assigned(FInternalSlots) and
+    Assigned(FInternalSlots.PrivateElements) and
+    FInternalSlots.PrivateElements.TryGetValue(AKey, ADescriptor);
+end;
+
+procedure TGocciaObjectValue.SetPrivateElement(const AKey: string;
+  const ADescriptor: TGocciaPropertyDescriptor);
+var
+  Existing: TGocciaPropertyDescriptor;
+begin
+  EnsureInternalSlots;
+  if not Assigned(FInternalSlots.PrivateElements) then
+    FInternalSlots.PrivateElements := TGocciaPropertyMap.Create;
+  if FInternalSlots.PrivateElements.TryGetValue(AKey, Existing) then
+  begin
+    if Existing = ADescriptor then
+      Exit;
+    Existing.Free;
+  end;
+  FInternalSlots.PrivateElements.AddOrSetValue(AKey, ADescriptor);
 end;
 
 procedure TGocciaObjectValue.ClearOwnPropertiesForRestore;
@@ -1720,6 +1804,11 @@ begin
   for Pair in FProperties do
     Pair.Value.MarkValues;
 
+  if Assigned(FInternalSlots) and
+     Assigned(FInternalSlots.PrivateElements) then
+    for Pair in FInternalSlots.PrivateElements do
+      Pair.Value.MarkValues;
+
   if Assigned(FSymbolDescriptors) then
     for SymPair in FSymbolDescriptors do
     begin
@@ -1781,11 +1870,8 @@ end;
 procedure TGocciaObjectValue.AssignProperty(const AName: string; const AValue: TGocciaValue; const ACanCreate: Boolean = True);
 var
   Descriptor: TGocciaPropertyDescriptor;
-  Setter: TGocciaValue;
-  Writable: Boolean;
   Accessor: TGocciaPropertyDescriptorAccessor;
   Args: TGocciaArgumentsCollection;
-  Proto: TGocciaObjectValue;
 begin
   if FProperties.TryGetValue(AName, Descriptor) then
   begin
@@ -1818,23 +1904,44 @@ begin
     end;
   end;
 
-  // ES2026 §10.1.9.2 step 1: walk the prototype chain for an inherited
-  // accessor or read-only property.
+  if SetThroughPrototypeChain(AName, AValue) then
+    Exit;
+
+  if not ACanCreate then
+    ThrowTypeError(Format(SErrorCannotAssignNonExistent, [AName]), SSuggestCannotDeleteNonConfigurable);
+
+  if not FExtensible then
+    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
+
+  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
+    [pfEnumerable, pfConfigurable, pfWritable]));
+end;
+
+// ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor step 1: walk the prototype
+// chain for an inherited accessor or read-only property.
+function TGocciaObjectValue.SetThroughPrototypeChain(const AName: string;
+  const AValue: TGocciaValue): Boolean;
+var
+  Descriptor: TGocciaPropertyDescriptor;
+  Setter: TGocciaValue;
+  Writable: Boolean;
+  Args: TGocciaArgumentsCollection;
+  Proto: TGocciaObjectValue;
+begin
   Proto := FPrototype;
   while Assigned(Proto) do
   begin
     if not UsesOrdinarySet(Proto) then
     begin
       AssignThroughExoticParent(Proto, AName, AValue);
-      Exit;
+      Exit(True);
     end;
     Descriptor := Proto.GetOwnPropertyDescriptorHolding(AName, AValue, Self);
     if Assigned(Descriptor) then
     begin
       if Descriptor is TGocciaPropertyDescriptorAccessor then
       begin
-        Accessor := TGocciaPropertyDescriptorAccessor(Descriptor);
-        Setter := Accessor.Setter;
+        Setter := TGocciaPropertyDescriptorAccessor(Descriptor).Setter;
         ReleaseDescriptor(Descriptor);
         if Assigned(Setter) and Setter.IsCallable then
         begin
@@ -1845,7 +1952,7 @@ begin
           finally
             Args.Free;
           end;
-          Exit;
+          Exit(True);
         end;
         ThrowTypeError(Format(SErrorSetPropertyOnlyGetter, [AName, ToStringTag]), SSuggestPropertyHasOnlyGetter);
       end
@@ -1855,21 +1962,13 @@ begin
         ReleaseDescriptor(Descriptor);
         if not Writable then
           ThrowTypeError(Format(SErrorCannotAssignReadOnly, [AName]), SSuggestCannotDeleteNonConfigurable);
-        Break;
+        Exit(False);
       end;
       ReleaseDescriptor(Descriptor);
     end;
     Proto := Proto.FPrototype;
   end;
-
-  if not ACanCreate then
-    ThrowTypeError(Format(SErrorCannotAssignNonExistent, [AName]), SSuggestCannotDeleteNonConfigurable);
-
-  if not FExtensible then
-    ThrowTypeError(Format(SErrorCannotAddPropertyNotExtensible, [AName]), SSuggestObjectNotExtensible);
-
-  DefineProperty(AName, TGocciaPropertyDescriptorData.Create(AValue,
-    [pfEnumerable, pfConfigurable, pfWritable]));
+  Result := False;
 end;
 
 // ES2026 §10.1.9.2 OrdinarySetWithOwnDescriptor(O, P, V, Receiver, ownDesc)
@@ -2324,8 +2423,7 @@ begin
   Count := 0;
   for Key in FProperties.Keys do
   begin
-    if IsInternalPrivateStorageKey(Key) or
-       IsHiddenRegExpDataProperty(Self, Key) then
+    if IsHiddenRegExpDataProperty(Self, Key) then
       Continue;
     Keys[Count] := Key;
     Inc(Count);
@@ -2514,8 +2612,7 @@ begin
   Count := 0;
 
   for Pair in FProperties do
-    if Pair.Value.Enumerable and
-       not IsInternalPrivateStorageKey(Pair.Key) then
+    if Pair.Value.Enumerable then
     begin
       Names[Count] := Pair.Key;
       Inc(Count);
@@ -2585,8 +2682,7 @@ begin
   Count := 0;
   for Key in FProperties.Keys do
   begin
-    if IsInternalPrivateStorageKey(Key) or
-       IsHiddenRegExpDataProperty(Self, Key) then
+    if IsHiddenRegExpDataProperty(Self, Key) then
       Continue;
     Names[Count] := Key;
     Inc(Count);

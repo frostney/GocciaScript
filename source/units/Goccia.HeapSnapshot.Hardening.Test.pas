@@ -208,7 +208,8 @@ type
     FCapture: TCapture;
     FExerciser: THeapSnapshotExerciser;
     FFed: Integer;
-    procedure Exercise(const ARoot: TGCManagedObject);
+    // ARoot is nil when the root is not a value: nothing to exercise.
+    procedure Exercise(const ARoot: TGocciaValue);
   public
     Restored: Integer;
     Refused: Integer;
@@ -216,7 +217,8 @@ type
     // (CollectBeforeEveryReservation). Not while what restored is used:
     // that is the engine's code, not the reader's.
     Stressed: Boolean;
-    // What ACheck returned for the last input that restored.
+    // What ACheck returned for the last input that restored, or
+    // ROOT_NOT_A_VALUE when its root was not a value.
     LastCheck: string;
     // Exercise what restored before ACheck runs, rather than instead, bound
     // by the instruction limit alone: what ACheck counts then does not
@@ -330,7 +332,7 @@ end;
 
 function ParseLayout(const ABytes: TBytes): TSnapshotLayout;
 var
-  At, I, Count: Integer;
+  At, I, J, Count, RecordCount, Kind: Integer;
 
   procedure Field(const AAt, ASize: Integer);
   begin
@@ -457,6 +459,38 @@ begin
   Result.CodecCount := Section(1, 4, 2);           // codecs: tag, schema
   Result.BuiltinCount := Section(1, 4, 0);         // built-in names
   Section(2, 4, 0);                                // built-ins the run built
+  // Module records' headers (Goccia.Modules.Snapshot): the record codec's
+  // schema, then each record's path, host ownership, kind, a source
+  // module's source path and bytecode hash, and its cache keys.
+  Field(At, 4);
+  RecordCount := Integer(U32At(ABytes, At));
+  Inc(At, 4);
+  if RecordCount > 0 then
+  begin
+    Field(At, 2);
+    Inc(At, 2);
+  end;
+  for I := 1 to RecordCount do
+  begin
+    Field(At, 4);
+    Inc(At, 4 + 1);
+    Kind := ABytes[At];
+    Inc(At);
+    if Kind <> 2 then
+    begin
+      Field(At, 4);
+      Field(At + 4, 4);
+      Inc(At, 8);
+    end;
+    Field(At, 4);
+    Count := Integer(U32At(ABytes, At));
+    Inc(At, 4);
+    for J := 1 to Count do
+    begin
+      Field(At, 4);
+      Inc(At, 4);
+    end;
+  end;
   Section(1, 4, 0);                                // modules
   Result.ObjectCountAt := At;
   Field(At, 4);
@@ -480,6 +514,12 @@ begin
   Inc(At, 4);
   for I := 1 to Count do
     Difference;
+  // Each module record's payload, after its length.
+  for I := 1 to RecordCount do
+  begin
+    Field(At, 4);
+    At := At + 4 + Integer(U32At(ABytes, At));
+  end;
   Result.RootsAt := At;
   Field(At, 4);                                    // roots
   Expect<Boolean>(At + 4 <= Length(ABytes)).ToBe(True);
@@ -550,7 +590,7 @@ var
   Stream: TBytesStream;
   GC: TGarbageCollector;
   Previous: Int64;
-  Root: TGCManagedObject;
+  Root: TGocciaValue;
   Global: TGocciaObjectValue;
   Stage: TGocciaGlobalEvalStage;
 begin
@@ -583,16 +623,21 @@ begin
     Inc(Restored);
     // A root can be any object a codec writes, a cell among them; what is
     // used is a value.
-    Root := Restore.Roots[0];
+    Root := RootValue(Restore);
     if (ACheck = '') or ExerciseBeforeCheck then
       Exercise(Root);
     if ACheck <> '' then
     begin
-      Global := TGocciaObjectValue(FEngine.Realm.GlobalObject);
-      Global.AssignProperty('restored', TGocciaValue(Root));
-      LastCheck := FEngine.EvaluateGlobalEval(ACheck, TEST_PATH,
-        Stage).ToStringLiteral.Value;
-      Global.DeleteProperty('restored');
+      if not Assigned(Root) then
+        LastCheck := ROOT_NOT_A_VALUE
+      else
+      begin
+        Global := TGocciaObjectValue(FEngine.Realm.GlobalObject);
+        Global.AssignProperty('restored', Root);
+        LastCheck := FEngine.EvaluateGlobalEval(ACheck, TEST_PATH,
+          Stage).ToStringLiteral.Value;
+        Global.DeleteProperty('restored');
+      end;
     end;
   finally
     Restore.Free;
@@ -604,9 +649,9 @@ begin
   end;
 end;
 
-procedure TMutantFeeder.Exercise(const ARoot: TGCManagedObject);
+procedure TMutantFeeder.Exercise(const ARoot: TGocciaValue);
 begin
-  if not (ARoot is TGocciaValue) then
+  if not Assigned(ARoot) then
     Exit;
   if not ExerciseBeforeCheck then
     StartExecutionTimeout(EXERCISE_TIMEOUT_MS);
@@ -615,7 +660,7 @@ begin
     try
       // Each feed uses generators another way (resume, return first,
       // throw first), in turn.
-      FExerciser.Exercise(TGocciaValue(ARoot), FFed);
+      FExerciser.Exercise(ARoot, FFed);
     except
       // The run's own limits are outcomes a run can have, and so is a
       // rejection the run left unhandled (a built-in such as
@@ -1393,7 +1438,7 @@ procedure FeedRandomMutants(const AFeeder: TMutantFeeder; const ASeed: TBytes;
 var
   State: Cardinal;
   Mutant: TBytes;
-  I: Integer;
+  I, Start: Integer;
 
   function NextRandom: Cardinal;
   begin
@@ -1403,14 +1448,22 @@ var
     Result := State;
   end;
 
+  // A position past the build identity, so a build's version and commit
+  // do not move the edits.
+  function At: Integer;
+  begin
+    Result := Start + Integer(NextRandom mod Cardinal(Length(Mutant) - Start));
+  end;
+
 begin
   State := $0DDBA11;
+  Start := BuildIdentityEnd(ASeed);
   for I := 1 to ACount do
   begin
     Mutant := Copy(ASeed);
-    Mutant[NextRandom mod Cardinal(Length(Mutant))] := Byte(NextRandom);
+    Mutant[At] := Byte(NextRandom);
     if NextRandom mod 2 = 0 then
-      Mutant[NextRandom mod Cardinal(Length(Mutant))] :=
+      Mutant[At] :=
         INTERESTING_BYTES[NextRandom mod Cardinal(Length(INTERESTING_BYTES))];
     AFeeder.Feed(Mutant);
   end;
@@ -1989,6 +2042,9 @@ begin
 end;
 
 procedure THeapSnapshotHardeningTests.TestLazyNativeNamespacesRestore;
+const
+  NAMES: array[0..5] of string = ('CSV', 'JSON5', 'JSONL', 'TOML',
+    'TSV', 'YAML');
 
   procedure InstallNamespaces(const AEngine: TGocciaEngine);
   var
@@ -2006,34 +2062,46 @@ procedure THeapSnapshotHardeningTests.TestLazyNativeNamespacesRestore;
 var
   Lines: TStringList;
   Engine, Destination: TGocciaEngine;
-  Capture: TCapture;
+  Context: TGocciaExecutionContextScope;
+  Root: TGocciaObjectValue;
+  Value: TGCManagedObject;
+  Name: string;
   Check: TGocciaHeapSnapshotRoundTrip;
   Table: TGocciaHeapSnapshotBuiltinTable;
   Resolver: TGocciaBuiltinPathResolver;
 begin
   Lines := TStringList.Create;
-  Lines.Text := 'import { parse as csv } from "goccia:csv"; ' +
-    'import { parse as json5 } from "goccia:json5"; ' +
-    'import { parse as jsonl } from "goccia:jsonl"; ' +
-    'import { parse as toml } from "goccia:toml"; ' +
-    'import { parse as tsv } from "goccia:tsv"; ' +
-    'import { parse as yaml } from "goccia:yaml"; ' +
-    'capture([csv, json5, jsonl, toml, tsv, yaml]);';
   Engine := TGocciaEngine.Create(TEST_PATH, Lines);
-  Capture := TCapture.Create;
   InstallNamespaces(Engine);
-  Engine.GlobalScope.DefineLexicalBinding('capture',
-    TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
   Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
   try
-    Engine.Execute;
-    Check.Observe(Capture.Value);
+    Context := Engine.ActivateRealmExecutionContext;
+    try
+      Root := TGocciaObjectValue.Create;
+      Check.Observe(Root);
+      Table := TGocciaHeapSnapshotBuiltinTable.Create;
+      Resolver := TGocciaBuiltinPathResolver.Create(Table, Engine);
+      try
+        // Exercise late native materialization without importing a runtime
+        // module record, which ADR 0150 refuses until host codecs land.
+        for Name in NAMES do
+        begin
+          Value := Resolver.Resolve('%builtin' + HEAP_SNAPSHOT_PATH_SEPARATOR +
+            Name + HEAP_SNAPSHOT_PATH_SEPARATOR + '.parse');
+          Expect<Boolean>(Value is TGocciaNativeFunctionValue).ToBe(True);
+          Root.AssignProperty(Name, TGocciaValue(Value));
+        end;
+      finally
+        Resolver.Free;
+        Table.Free;
+      end;
+    finally
+      Context.Free;
+    end;
     Destination := TGocciaEngine.Create(TEST_PATH, Lines);
     try
       InstallNamespaces(Destination);
-      Destination.GlobalScope.DefineLexicalBinding('capture',
-        TGocciaNativeFunctionValue.Create(Capture.Capture, 'capture', 1), dtConst);
-      // The destination never compiles or runs these imports. Native values
+      // The destination never imports the runtime modules. Native values
       // have no bytecode templates and the registered factories do no I/O.
       Check.Verify(Destination);
       Expect<string>(Check.FailureDetails.Text).ToBe('');
@@ -2054,10 +2122,7 @@ begin
     end;
   finally
     Check.Free;
-    if Assigned(Capture.Value) then
-      TGarbageCollector.Instance.RemoveTempRoot(Capture.Value);
     Engine.Free;
-    Capture.Free;
     Lines.Free;
   end;
 end;

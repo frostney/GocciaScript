@@ -138,6 +138,7 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Realm,
   Goccia.Timeout,
+  Goccia.Utils.Arrays,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
@@ -260,6 +261,7 @@ function CloneResultValueRecursive(const AValue: TGocciaValue;
 var
   ArrayValue, ClonedArray: TGocciaArrayValue;
   ObjectValue, ClonedObject: TGocciaObjectValue;
+  ClonedRoot: TGocciaTempRoot;
   Key: string;
   I: Integer;
 begin
@@ -286,9 +288,17 @@ begin
     try
       ArrayValue := TGocciaArrayValue(AValue);
       ClonedArray := TGocciaArrayValue.Create(nil, ArrayValue.GetLength);
-      for I := 0 to ArrayValue.GetLength - 1 do
-        ClonedArray.SetElement(I,
-          CloneResultValueRecursive(ArrayValue.GetElement(I), ASeen));
+      // Only this frame holds the copy while its elements are cloned, and
+      // creating an element can collect at the growth gate.
+      InitializeTempRoot(ClonedRoot);
+      AddTempRootIfNeeded(ClonedRoot, ClonedArray);
+      try
+        for I := 0 to ArrayValue.GetLength - 1 do
+          ArrayCreateDataProperty(ClonedArray, I,
+            CloneResultValueRecursive(ArrayValue.GetElement(I), ASeen));
+      finally
+        RemoveTempRootIfNeeded(ClonedRoot);
+      end;
       Exit(ClonedArray);
     finally
       ASeen.Remove(AValue);
@@ -302,9 +312,15 @@ begin
       ObjectValue := TGocciaObjectValue(AValue);
       ClonedObject := TGocciaObjectValue.Create(
         TGocciaObjectValue.SharedObjectPrototype, 8);
-      for Key in ObjectValue.GetOwnPropertyKeys do
-        ClonedObject.SetProperty(Key,
-          CloneResultValueRecursive(ObjectValue.GetProperty(Key), ASeen));
+      InitializeTempRoot(ClonedRoot);
+      AddTempRootIfNeeded(ClonedRoot, ClonedObject);
+      try
+        for Key in ObjectValue.GetOwnPropertyKeys do
+          ClonedObject.SetProperty(Key,
+            CloneResultValueRecursive(ObjectValue.GetProperty(Key), ASeen));
+      finally
+        RemoveTempRootIfNeeded(ClonedRoot);
+      end;
       Exit(ClonedObject);
     finally
       ASeen.Remove(AValue);

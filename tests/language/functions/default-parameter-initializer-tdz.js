@@ -66,6 +66,13 @@ describe("default parameter initializer and the parameter's temporal dead zone",
     expect(() => (({ g = () => c } = {}, c = [g()]) => c)()).toThrow(ReferenceError);
   });
 
+  test("earlier closures retain the exact later binding across unrelated defaults", () => {
+    expect(() => ((read = () => café, a = 1, b = a + 1, café = [read()]) => café)()).toThrow(ReferenceError);
+    expect(((read = () => café, a = 1, b = a + 1, café = b, café = 7) => [read(), café])()).toEqual([2, 7]);
+    expect(() => ((read = () => target, a = 1, target = { value: read() }) => target)()).toThrow(ReferenceError);
+    expect(((read = () => targetExtra, target = 3, targetExtra = 7) => [target, read()])()).toEqual([3, 7]);
+  });
+
   test("assigning or reading a later parameter throws", () => {
     expect(() => ((a = (b = 7), b) => [a, b])()).toThrow(ReferenceError);
     expect(() => ((a = b, b) => [a, b])()).toThrow(ReferenceError);

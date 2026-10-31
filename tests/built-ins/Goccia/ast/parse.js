@@ -278,4 +278,34 @@ describe("ast.parse", () => {
   test("the source argument must be a string", () => {
     expect(() => parse(42)).toThrow(TypeError);
   });
+
+  // The result arrays are new, so their elements are created with
+  // CreateDataPropertyOrThrow (ES2026 §7.3.6), which never consults the
+  // prototype chain: an index setter or a read-only index on Array.prototype
+  // does not intercept them.
+  test("children and comments ignore an index setter or a read-only index on Array.prototype", () => {
+    let calls = 0;
+    Object.defineProperty(Array.prototype, "0", {
+      set() { calls += 1; },
+      configurable: true,
+    });
+    Object.defineProperty(Array.prototype, "1", {
+      value: "inherited",
+      writable: false,
+      configurable: true,
+    });
+    let result;
+    try {
+      result = parse("a;\nb;\n// c\n");
+    } finally {
+      delete Array.prototype[0];
+      delete Array.prototype[1];
+    }
+    expect(calls).toBe(0);
+    expect(kinds(result.root)).toEqual(["ExpressionStatement", "ExpressionStatement"]);
+    expect(Object.hasOwn(result.root.children, 0)).toBe(true);
+    expect(Object.hasOwn(result.root.children, 1)).toBe(true);
+    expect(result.comments.length).toBe(1);
+    expect(Object.hasOwn(result.comments, 0)).toBe(true);
+  });
 });

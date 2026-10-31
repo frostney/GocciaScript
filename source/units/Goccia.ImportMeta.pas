@@ -30,6 +30,9 @@ function GetOrCreateImportMeta(const AFilePath: string;
   const AResolver: TResolveModuleURLCallback = nil): TGocciaObjectValue;
 function FilePathToUrl(const AFilePath: string): string;
 procedure ClearImportMetaCache;
+{ Whether ARealm (a TGocciaRealm) has made an import.meta object: state
+  outside the heap no heap snapshot codec covers yet (ADR 0148). }
+function HasImportMetaObjects(const ARealm: TObject): Boolean;
 
 implementation
 
@@ -285,6 +288,17 @@ end;
 procedure ClearImportMetaCache;
 begin
   FreeAndNil(FallbackImportMetaCache);
+end;
+
+function HasImportMetaObjects(const ARealm: TObject): Boolean;
+var
+  Cache: TObject;
+begin
+  Cache := nil;
+  if ARealm is TGocciaRealm then
+    Cache := TGocciaRealm(ARealm).GetOwnedSlot(GImportMetaCacheSlot);
+  Result := (Cache is TGocciaImportMetaCache) and
+    (TGocciaImportMetaCache(Cache).FObjects.Count > 0);
 end;
 
 initialization

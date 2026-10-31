@@ -904,3 +904,17 @@ describe("JSON.stringify typed arrays", () => {
     expect(() => JSON.stringify(new BigInt64Array(1))).toThrow(TypeError);
   });
 });
+
+// #1326: these names once matched the engine's private storage keys.
+test("JSON.stringify serializes names that look like private storage keys", () => {
+  const obj = { "#slot:a": 1, "#brand:b": 2, "#plain": 3, ordinary: 4 };
+  expect(JSON.stringify(obj)).toBe('{"#slot:a":1,"#brand:b":2,"#plain":3,"ordinary":4}');
+});
+
+test("JSON.stringify leaves out private fields", () => {
+  class Secret {
+    #hidden = 1;
+    shown = 2;
+  }
+  expect(JSON.stringify(new Secret())).toBe('{"shown":2}');
+});

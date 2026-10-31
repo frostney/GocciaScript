@@ -60,4 +60,50 @@ describe("Array.prototype.unshift", () => {
     expect(result).toBe(4294967290);
     expect(huge.length).toBe(4294967290);
   });
+
+  test("unshift writes own elements without calling an inherited setter", () => {
+    let calls = "";
+    Object.defineProperty(Array.prototype, "1", {
+      set(value) { calls += value; },
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      expect(arr.unshift(0)).toBe(4);
+      expect(calls).toBe("");
+      expect(arr).toEqual([0, 1, 2, 3]);
+    } finally {
+      delete Array.prototype[1];
+    }
+  });
+
+  test("unshift writes own elements past an inherited read-only index", () => {
+    Object.defineProperty(Array.prototype, "2", {
+      value: "ro",
+      writable: false,
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.unshift(0);
+      expect(arr).toEqual([0, 1, 2, 3]);
+    } finally {
+      delete Array.prototype[2];
+    }
+  });
+});
+
+// ES2026 §23.1.3.37 Array.prototype.unshift ends with Set(O, "length",
+// len + argCount, true), ArraySetLength (§10.4.2.4) on an Array.
+describe("unshift on an array longer than 2 ** 31 - 1", () => {
+  test("moves the elements up and sets the length", () => {
+    const arr = [];
+    arr.length = 2 ** 31 + 1;
+    arr[2 ** 31] = "last";
+    expect(arr.unshift("u")).toBe(2 ** 31 + 2);
+    expect(arr.length).toBe(2 ** 31 + 2);
+    expect(arr[0]).toBe("u");
+    expect(arr[2 ** 31 + 1]).toBe("last");
+    expect(Object.hasOwn(arr, 2 ** 31)).toBe(false);
+  });
 });

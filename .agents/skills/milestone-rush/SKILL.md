@@ -90,7 +90,9 @@ work-item deliveries and the release at the verified milestone boundary.
 1. Keep the coordinator thin: it owns confirmed decisions and provenance,
    graph state, worker admission and replacement, delivery-state promotion,
    integration, merge, and milestone closure. Detailed investigation,
-   implementation, remediation, and validation belong to bounded workers.
+   implementation, remediation, and validation belong to workers, each on the
+   [capability tier](references/orchestration.md#capability-tiers) its packet
+   records.
 2. Give each worker one context-isolated task packet and its dependencies.
    Use `/deliver` with the issue or confirmed roadmap item, required endpoint,
    configured integration destination and applicable evidence. Pass the selected
@@ -108,20 +110,22 @@ work-item deliveries and the release at the verified milestone boundary.
    competing workers authority over the same stack or merge a partial prefix
    beneath a required fix layer.
 5. Keep remediation validation focused on the changed behavior. Run the
-   repository's complete local gate once only after implementation and bounded
-   review fixes converge on the intended head, unless a new material source
+   repository's complete local gate once only after implementation and review
+   fixes converge on the intended head, unless a new material source
    change invalidates it. Do not repeatedly use a complete suite as the
    diagnostic loop.
 6. Treat heavyweight full CI as terminal promotion evidence, never as a remote
-   debugger. Dispatch it only after the current base, required PR checks, and
-   every active review tool have converged on the candidate head. Cancel
-   superseded runs when the CI service supports safe cancellation; record
-   otherwise unavoidable waste. A later head, base, topology, or review change
-   invalidates the proof.
-7. Integrate continuously rather than waiting for a batch. After every squash
-   merge, re-pull milestone scope and default-branch state; merge its updated
-   remote base into every affected remaining branch and rerun its applicable
-   gates. Review and CI evidence is valid only for the current PR head.
+   debugger. Dispatch it only after required PR checks and every active review
+   tool have converged on the candidate head. Cancel superseded runs when the
+   CI service supports safe cancellation; record otherwise unavoidable waste.
+   A later head, PR base, topology, or review change invalidates the proof;
+   the base branch moving on does not.
+7. Integrate continuously rather than waiting for a batch: merge each PR or
+   stack as soon as it is ready under `git-workflow`'s merge rules. After
+   every squash merge, re-pull milestone scope and default-branch
+   state; merge the updated remote base only into remaining branches that
+   `git-workflow` says need it, and rerun their applicable gates. Review and
+   CI evidence is valid only for the current PR head.
 8. Read [references/scope-changes.md](references/scope-changes.md) when
    execution discovers new work, issues are added to the milestone externally,
    or a milestone merge causes an integrated regression.
@@ -158,7 +162,8 @@ Unsupported passive waiting required by repository policy blocks spawning.
   and verify that every in-scope item is delivered and closed with evidence; no
   milestone PR, required check, review thread, or active review-tool pass
   remains pending; and the synced default branch passes the applicable full
-  project gate. A failure resumes execution.
+  project gate. A watcher or CI result for that exact revision is that
+  evidence; do not run the gate again. A failure resumes execution.
 - Run the event-ledger `validate` and `summarize` commands for the current
   `runId` before closure. Any invalid closure evidence the event-ledger
   reference lists blocks closure until corrected or explicitly marked

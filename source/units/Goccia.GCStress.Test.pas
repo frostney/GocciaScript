@@ -33,7 +33,9 @@ uses
   Goccia.GarbageCollector,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.AST,
+  Goccia.RuntimeExtensions.Sandbox,
   Goccia.RuntimeProfiles.Loader,
+  Goccia.Sandbox.Context,
   Goccia.TestSetup,
   Goccia.Threading,
   Goccia.Threading.Init;
@@ -41,6 +43,8 @@ uses
 type
   TGCStressTests = class(TTestSuite)
   private
+    { When set, stressed engines also get the sandbox modules over it. }
+    FSandboxContext: TGocciaSandboxContext;
     procedure BeginStress;
     procedure EndStress(const AWhat: string);
     function CreateStressedEngine(const AFileName: string;
@@ -94,6 +98,7 @@ type
     procedure TestRelativeTimeFormatValue;
     procedure TestTypedArrayFromWrapper;
     procedure TestIntlPrimitiveOptions;
+    procedure TestSandboxSearch;
   end;
 
 const
@@ -162,6 +167,8 @@ begin
   AddCase('custom matcher hints and extractor results', TestCustomMatchers);
   AddCase('Response body promises', TestResponseBodies);
   AddCase('the goccia:semver namespace', TestSemverNamespace);
+  AddCase('sandbox search results: fs.globSync, grep and fuzzyFind',
+    TestSandboxSearch);
   AddCase('Array.prototype methods: receiver wrappers and results',
     TestArrayMethods);
   AddCase('Array.fromAsync with a this-constructor', TestArrayFromAsync);
@@ -246,6 +253,8 @@ begin
     Runtime := AttachRuntime(Result);
     ApplyLoaderRuntimeProfile(Runtime);
     Runtime.Install(TGocciaASTRuntimeExtension.Create);
+    if Assigned(FSandboxContext) then
+      Runtime.Install(TGocciaSandboxRuntimeExtension.Create(FSandboxContext));
   except
     Result.Free;
     raise;
@@ -540,6 +549,46 @@ begin
     'const out = [semver.parse("1.2.3-beta.1"), semver.satisfies("1.2.3", "^1.0.0"),' + LineEnding +
     '  new semver.Range(">=1.0.0 <2.0.0").test("1.5.0")];' + LineEnding +
     'export default out;');
+end;
+
+// The search results are built from native records into fresh arrays and
+// objects, each attached to the rooted result before its strings are made.
+procedure TGCStressTests.TestSandboxSearch;
+var
+  Output: string;
+begin
+  FSandboxContext := TGocciaSandboxContext.Create;
+  try
+    FSandboxContext.Fs.MakeDirectory('/src/user', True);
+    FSandboxContext.Fs.WriteAllText('/src/user/controller.ts',
+      'export const a = 1;' + LineEnding + '// TODO one' + LineEnding +
+      'export const b = 2;' + LineEnding);
+    FSandboxContext.Fs.WriteAllText('/src/user/model.ts',
+      'export const rows = [];' + LineEnding + '// TODO two' + LineEnding);
+    FSandboxContext.Fs.WriteAllText('/README.md', 'TODO three' + LineEnding);
+    RunStressed('search.mjs',
+      'import fs from "fs";' + LineEnding +
+      'import { grep, fuzzyFind } from "goccia:search";' + LineEnding +
+      'let out = [];' + LineEnding +
+      'try {' + LineEnding +
+      '  out = [fs.globSync(["**/*.ts", "*.md"]),' + LineEnding +
+      '    grep("TODO", { context: 2 }), grep("export (const)", { regex: true }),' + LineEnding +
+      '    fuzzyFind("usrctrl"), fuzzyFind("ts", { limit: 1 })];' + LineEnding +
+      '  for await (const path of fs.promises.glob("src/**")) out.push(path);' + LineEnding +
+      '  out.push(await new Promise((resolve) => fs.glob("**", (error, paths) => resolve(paths))));' + LineEnding +
+      '} catch (error) { out = ["error", String(error && error.stack || error)]; }' + LineEnding +
+      'fs.writeFileSync("/out.json", JSON.stringify(out));');
+    Output := FSandboxContext.Fs.ReadAllText('/out.json');
+    Expect<string>(Copy(Output, 1, 59))
+      .ToBe('[["README.md","src/user/controller.ts","src/user/model.ts"]');
+    Expect<Boolean>(Pos('"positions":[5,6,8,10,13,14,16]', Output) > 0)
+      .ToBe(True);
+    Expect<Boolean>(Pos('"before":["export const a = 1;"]', Output) > 0)
+      .ToBe(True);
+    Expect<Boolean>(Pos('"src/user/model.ts"]]', Output) > 0).ToBe(True);
+  finally
+    FreeAndNil(FSandboxContext);
+  end;
 end;
 
 // The receiver wrapper of a primitive this and the result were held only by

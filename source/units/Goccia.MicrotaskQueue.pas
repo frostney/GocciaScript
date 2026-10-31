@@ -961,7 +961,7 @@ begin
 end;
 
 function CompareRejectionOrder(
-  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} ALeft, ARight: Int64): Integer;
+  {$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} ALeft, ARight: Int64): Integer;
 begin
   if ALeft < ARight then
     Result := -1

@@ -50,6 +50,7 @@ type
     FRealm: TGocciaRealm;
     FRealmExecutionContext: TGocciaExecutionContextScope;
     procedure TestExecuteIntegerAddition;
+    procedure TestNumericDestinationAliasesOperand;
     procedure TestExecuteIntegerMultiplicationSignOfZero;
     procedure TestExecuteLocalsRoundTrip;
     procedure TestExecuteLiteralLoads;
@@ -59,6 +60,7 @@ type
     procedure TestExecuteAddNumberImmediate;
     procedure TestExecuteNumberImmediateBranch;
     procedure TestExecuteJumpIfNotLessThan;
+    procedure TestExecuteCompareImmediateJumps;
     procedure TestExecuteArrayOps;
     procedure TestExecuteArrayPop;
     procedure TestExecuteObjectOps;
@@ -104,6 +106,8 @@ end;
 procedure TTestGocciaVM.SetupTests;
 begin
   Test('Execute integer addition', TestExecuteIntegerAddition);
+  Test('Numeric destination may alias either operand',
+    TestNumericDestinationAliasesOperand);
   Test('Integer multiplication gives -0 for a zero product with a negative ' +
     'operand', TestExecuteIntegerMultiplicationSignOfZero);
   Test('Execute locals round trip', TestExecuteLocalsRoundTrip);
@@ -114,6 +118,7 @@ begin
   Test('Execute Number add immediate', TestExecuteAddNumberImmediate);
   Test('Execute Number immediate branch', TestExecuteNumberImmediateBranch);
   Test('Execute jump if not less than', TestExecuteJumpIfNotLessThan);
+  Test('Execute compare-with-immediate jumps', TestExecuteCompareImmediateJumps);
   Test('Execute array ops', TestExecuteArrayOps);
   Test('Execute array pop', TestExecuteArrayPop);
   Test('Execute object ops', TestExecuteObjectOps);
@@ -134,6 +139,45 @@ begin
     TestPropertyCacheSlotsStayWithTheirConstant);
   Test('A VM entered on one thread reads the limits of the thread that runs it next',
     TestLimitsOfTheRunningThreadApplyAfterAnotherThreadEnteredFirst);
+end;
+
+procedure TTestGocciaVM.TestNumericDestinationAliasesOperand;
+const
+  Opcodes: array[0..11] of TGocciaOpCode = (
+    OP_ADD, OP_ADD_INT, OP_ADD_FLOAT, OP_SUB, OP_SUB_INT, OP_SUB_FLOAT,
+    OP_MUL, OP_MUL_INT, OP_MUL_FLOAT, OP_DIV, OP_DIV_INT, OP_DIV_FLOAT);
+  Expected: array[0..11] of Double = (
+    10, 10, 10, 5, 5, 5, 18.75, 18.75, 18.75, 3, 3, 3);
+var
+  Template: TGocciaFunctionTemplate;
+  VM: TGocciaVM;
+  ResultValue: TGocciaValue;
+  Operation, Destination: Integer;
+begin
+  // Direct bytecode keeps both alias arrangements independent of compiler
+  // register allocation. Fractional operands exercise the scalar-pair path
+  // even for the INT opcodes; the integral results also change register kind.
+  for Operation := Low(Opcodes) to High(Opcodes) do
+    for Destination := 0 to 1 do
+    begin
+      Template := TGocciaFunctionTemplate.Create('numeric-alias');
+      VM := TGocciaVM.Create;
+      try
+        Template.MaxRegisters := 2;
+        Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0,
+          Template.AddConstantFloat(7.5)));
+        Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 1,
+          Template.AddConstantFloat(2.5)));
+        Template.EmitInstruction(EncodeABC(Opcodes[Operation],
+          Destination, 0, 1));
+        Template.EmitInstruction(EncodeABC(OP_RETURN, Destination, 0, 0));
+        ResultValue := VM.ExecuteFunction(Template);
+        Expect<Double>(ResultValue.ToNumberLiteral.Value).ToBe(Expected[Operation]);
+      finally
+        VM.Free;
+        Template.Free;
+      end;
+    end;
 end;
 
 procedure TTestGocciaVM.TestExecuteIntegerAddition;
@@ -412,6 +456,81 @@ begin
   finally
     VM.Free;
     Template.Free;
+  end;
+end;
+
+procedure TTestGocciaVM.TestExecuteCompareImmediateJumps;
+type
+  TLoadKind = (lkInt, lkConstant, lkUndefined);
+var
+  VM: TGocciaVM;
+
+  // Runs `if (R0 <op> AImmediate) return 99; return 7;` with R0 loaded from
+  // an integer, a constant or undefined, and reports whether the comparison
+  // held. Each run builds its own template, because patching a wide
+  // instruction keeps its prefix's high operand bytes.
+  function Holds(const AKind: TLoadKind; const AInt: Int16;
+    const AConstant: Double; const AString: string; const AOp: TGocciaOpCode;
+    const AImmediate: Int16): Boolean;
+  var
+    Template: TGocciaFunctionTemplate;
+    Index: UInt16;
+  begin
+    Template := TGocciaFunctionTemplate.Create('compare-immediate-jumps');
+    try
+      Template.MaxRegisters := 2;
+      case AKind of
+        lkInt:
+          Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 0, AInt));
+        lkConstant:
+          begin
+            if AString <> '' then
+              Index := Template.AddConstantString(AString)
+            else
+              Index := Template.AddConstantFloat(AConstant);
+            Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, Index));
+          end;
+      else
+        Template.EmitInstruction(EncodeABC(OP_LOAD_UNDEFINED, 0, 0, 0));
+      end;
+      Template.EmitInstruction(EncodeABC(AOp, 0, UInt16(AImmediate),
+        UInt16(Int16(2))), True);
+      Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, 99));
+      Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+      Template.EmitInstruction(EncodeAsBx(OP_LOAD_INT, 1, 7));
+      Template.EmitInstruction(EncodeABC(OP_RETURN, 1, 0, 0));
+      Result := VM.ExecuteFunction(Template).ToNumberLiteral.Value = 99;
+    finally
+      Template.Free;
+    end;
+  end;
+
+begin
+  VM := TGocciaVM.Create;
+  try
+    Expect<Boolean>(Holds(lkInt, 2, 0, '', OP_JUMP_IF_NOT_LT_IMM, 3)).ToBe(True);
+    Expect<Boolean>(Holds(lkInt, 3, 0, '', OP_JUMP_IF_NOT_LT_IMM, 3)).ToBe(False);
+    Expect<Boolean>(Holds(lkInt, 3, 0, '', OP_JUMP_IF_NOT_LTE_IMM, 3)).ToBe(True);
+    Expect<Boolean>(Holds(lkInt, -301, 0, '', OP_JUMP_IF_NOT_GT_IMM, -300)).ToBe(False);
+    Expect<Boolean>(Holds(lkInt, -300, 0, '', OP_JUMP_IF_NOT_GTE_IMM, -300)).ToBe(True);
+    Expect<Boolean>(Holds(lkConstant, 0, 4.5, '', OP_JUMP_IF_NOT_GT_IMM, 4)).ToBe(True);
+    // NaN, held as a boxed number, satisfies no relation.
+    Expect<Boolean>(Holds(lkConstant, 0, NaN, '', OP_JUMP_IF_NOT_LT_IMM, 3)).ToBe(False);
+    Expect<Boolean>(Holds(lkConstant, 0, NaN, '', OP_JUMP_IF_NOT_GTE_IMM, 3)).ToBe(False);
+    // A String takes the generic comparison: "300" is converted to 300.
+    Expect<Boolean>(Holds(lkConstant, 0, 0, '300', OP_JUMP_IF_NOT_GT_IMM, 299)).ToBe(True);
+    Expect<Boolean>(Holds(lkConstant, 0, 0, '300', OP_JUMP_IF_NOT_LT_IMM, 299)).ToBe(False);
+    Expect<Boolean>(Holds(lkUndefined, 0, 0, '', OP_JUMP_IF_NOT_GTE_IMM, 0)).ToBe(False);
+
+    // NOT_STRICT_EQ jumps on a mismatch, so "holds" means equal; STRICT_EQ
+    // jumps on a match, so "holds" means not equal.
+    Expect<Boolean>(Holds(lkInt, 300, 0, '', OP_JUMP_IF_NOT_STRICT_EQ_IMM, 300)).ToBe(True);
+    Expect<Boolean>(Holds(lkConstant, 0, 0, '300', OP_JUMP_IF_NOT_STRICT_EQ_IMM, 300)).ToBe(False);
+    Expect<Boolean>(Holds(lkConstant, 0, NaN, '', OP_JUMP_IF_STRICT_EQ_IMM, 0)).ToBe(True);
+    Expect<Boolean>(Holds(lkInt, 1, 0, '', OP_JUMP_IF_STRICT_EQ_IMM, 1)).ToBe(False);
+    Expect<Boolean>(Holds(lkUndefined, 0, 0, '', OP_JUMP_IF_STRICT_EQ_IMM, 0)).ToBe(True);
+  finally
+    VM.Free;
   end;
 end;
 

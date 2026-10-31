@@ -8,7 +8,7 @@ uses
   OrderedStringMap,
 
   Goccia.AST.Node,
-  Goccia.Modules;
+  Goccia.Modules.Phases;
 
 type
   TGocciaLinkBindingKind = (lbLet, lbConst, lbVar);

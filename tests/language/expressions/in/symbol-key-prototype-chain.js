@@ -58,8 +58,11 @@ describe("in with a symbol key", () => {
   // test workers cannot spare.
   const is64Bit = typeof Goccia !== "undefined" &&
     ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
+  // A GC-stress build collects every 8 instructions, so building 100,000
+  // Proxies costs time quadratic in the nest: hours, not seconds.
+  const deepNestRuns = is64Bit && !(typeof Goccia !== "undefined" && Goccia.build.gcStress);
 
-  test.runIf(is64Bit)("Proxies nested 100,000 deep as targets throw RangeError", () => {
+  test.runIf(deepNestRuns)("Proxies nested 100,000 deep as targets throw RangeError", () => {
     const handler = {};
     let proxy = { [key]: 1 };
     for (const i of Array.from({ length: 100000 })) {

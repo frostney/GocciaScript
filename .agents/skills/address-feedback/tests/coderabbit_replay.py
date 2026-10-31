@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Replay recorded CodeRabbit history through the adapter and check what happened next.
 
-    python3 coderabbit_replay.py [--corpus FILE] [--json]
+    python3 coderabbit_replay.py [--corpus FILE] [--json] [--no-repository-evidence]
 
 `RecordedGitHub` serves the GitHub reads the adapter makes as a recorded pull
 request showed them at a chosen time. The harness replays the adapter's
@@ -26,11 +26,22 @@ the recorded history:
   starts within 120 s;
 - `unbounded`: every decision is final, a trigger, or a wait with a bound or
   retry time;
-- `expired-bound`: a wait's bound or retry time is still ahead; and
+- `expired-bound`: a wait's bound or retry time is still ahead;
+- `unread-wait`: no unknown wait while a CodeRabbit comment version set
+  within 60 s before the head's latest refusal states one;
+- `not-active`: CodeRabbit is never reported not active on a pull request
+  where it posted a status, comment or review at any recorded time;
+- `answered-trigger`: a trigger is never reported unanswered when CodeRabbit
+  posted a status or check run on the head after it, by `now`;
 - `error`: the adapter never fails on recorded data.
 
 Exits 1 when it finds a violation that `fixtures/coderabbit_replay_pinned.json`
-does not pin.
+does not pin. Every recorded repository uses CodeRabbit, and by default the
+replay answers each with a CodeRabbit configuration file;
+`--no-repository-evidence` answers each with none, so only a pull request's
+own activity shows CodeRabbit is used. That mode ignores the pins and is
+diagnostic: on the recorded corpus it reports the late first activity of
+GocciaScript#1225 and #1237 and exits 1.
 """
 
 from __future__ import annotations
@@ -44,7 +55,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 sys.dont_write_bytecode = True
 
@@ -60,7 +71,14 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CORPUS = FIXTURES / "coderabbit_recorded.json"
 PINNED = FIXTURES / "coderabbit_replay_pinned.json"
 TRIGGER_STATES = {"trigger-incremental", "trigger-full"}
+UNKNOWN_WAIT_STATES = {"rate-limited-unknown-wait", "blocked-unknown-wait"}
 REVIEW_COMMANDS = {"@coderabbitai review", "@coderabbitai full review"}
+
+
+def head_statuses(head: dict[str, Any]) -> list[dict[str, Any]]:
+    """A recorded head's CodeRabbit statuses and its check runs as statuses, in their final state."""
+    runs = [status for run in head.get("checkRuns", []) for status in ADAPTER.check_run_statuses(run, None, False)]
+    return head["statuses"] + runs
 
 
 def at(value: str) -> float:
@@ -89,6 +107,9 @@ class RecordedGitHub:
         self.posts: list[tuple[str, dict[str, str], float]] = []
         self.on_post: Any = None
         self.unreadable_histories: set[int] = set()
+        # Every recorded repository uses CodeRabbit; a configuration file stands in for how it is set up.
+        # A repository listed here has no review policy, no configuration and no closed pull requests.
+        self.unconfigured: set[str] = set()
         self.next_id = 9_000_000_000
         self.timelines = {key: head_timeline(pull) for key, pull in self.pulls.items()}
 
@@ -125,6 +146,25 @@ class RecordedGitHub:
             if at(status["created_at"]) <= self.now
         }
         return sorted(found.values(), key=lambda item: (item["created_at"], item["id"]), reverse=True)
+
+    def check_runs(self, repo: str, sha: str) -> list[dict[str, Any]]:
+        """CodeRabbit's check runs on the commit as they stood at `now`.
+
+        A run is recorded in its final state; before its completion it is shown
+        in progress, and before its start not at all.
+        """
+        found = {}
+        for pull in self.pulls.values():
+            if pull["repo"] != repo or sha not in pull["heads"]:
+                continue
+            for run in pull["heads"][sha].get("checkRuns", []):
+                if at(run["started_at"]) > self.now:
+                    continue
+                if run.get("completed_at") and at(run["completed_at"]) > self.now:
+                    run = run | {"status": "in_progress", "conclusion": None, "completed_at": None,
+                                 "output": {"title": "Review in progress", "summary": ""}}
+                found[run["id"]] = run
+        return list(found.values())
 
     def suites(self, repo: str, sha: str) -> list[dict[str, Any]]:
         found = {
@@ -168,6 +208,7 @@ class RecordedGitHub:
                 "head": {"sha": self.head_at(repo, number), "ref": pull["ref"]},
                 "state": "open" if self.is_open(pull) else "closed",
                 "draft": self.is_draft(pull),
+                "user": pull.get("user"),
                 "created_at": pull["createdAt"],
             }
         match = re.fullmatch(r"repos/([^/]+/[^/]+)/commits/([0-9a-f]{40})", endpoint)
@@ -189,6 +230,19 @@ class RecordedGitHub:
         match = re.fullmatch(r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/statuses", path)
         if match:
             return [self.statuses(*match.groups())]
+        match = re.fullmatch(r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/check-runs", path)
+        if match:
+            # GitHub's defaults: every check name, and only the latest run of each.
+            query = parse_qs(urlparse(endpoint).query)
+            runs = self.check_runs(*match.groups())
+            if "check_name" in query:
+                runs = [run for run in runs if run["name"] == query["check_name"][0]]
+            if query.get("filter", ["latest"])[0] != "all":
+                latest: dict[str, dict[str, Any]] = {}
+                for run in sorted(runs, key=lambda item: (item["started_at"], item["id"])):
+                    latest[run["name"]] = run
+                runs = list(latest.values())
+            return [{"check_runs": runs}]
         match = re.fullmatch(r"repos/([^/]+/[^/]+)/commits/([0-9a-f]+)/check-suites", path)
         if match:
             return [{"check_suites": self.suites(*match.groups())}]
@@ -233,6 +287,10 @@ class RecordedGitHub:
             begin = max(0, end - limit)
             info = {"hasPreviousPage": begin > 0, "startCursor": str(begin)}
             return {"repository": {"pullRequest": {"timelineItems": {"pageInfo": info, "nodes": pushes[begin:end]}}}}
+        if "review-automations.json" in query:
+            repo = f"{variables['owner']}/{variables['name']}"
+            entries = [] if repo in self.unconfigured else [{"name": ".coderabbit.yaml"}]
+            return {"repository": {"policy": None, "root": {"entries": entries}, "pullRequests": {"nodes": []}}}
         if "userContentEdits" in query:
             identifier = int(variables["id"].removeprefix("IC_"))
             if identifier in self.unreadable_histories:
@@ -279,7 +337,7 @@ def head_timeline(pull: dict[str, Any]) -> list[tuple[float, str]]:
     arrivals = []
     for sha, head in pull["heads"].items():
         suites = [at(suite["created_at"]) for suite in head["checkSuites"] if suite["head_branch"] == pull["ref"]]
-        statuses = [at(status["created_at"]) for status in head["statuses"]]
+        statuses = sorted(at(status["created_at"]) for status in head_statuses(head))
         if suites or (statuses and sha != pull["head"]):
             arrivals.append((min(suites or statuses), sha))
     arrivals.sort()
@@ -339,6 +397,15 @@ def stated_wait(pulls: list[dict[str, Any]], status: dict[str, Any], now: float)
     return (status_at, best) if best else None
 
 
+def coderabbit_seen(pull: dict[str, Any]) -> bool:
+    """Whether CodeRabbit posted a status, comment or review on the pull request at any recorded time."""
+    return (
+        any(head_statuses(head) for head in pull["heads"].values())
+        or any(item["user"]["login"].lower() in ADAPTER.BOT_LOGINS for item in pull["comments"])
+        or any(review["user"]["login"].lower() in ADAPTER.BOT_LOGINS for review in pull["reviews"])
+    )
+
+
 class History:
     """What the recorded pull requests show actually happened."""
 
@@ -353,7 +420,7 @@ class History:
             status["id"]: status
             for pull in self.by_repo[repo]
             if sha in pull["heads"]
-            for status in pull["heads"][sha]["statuses"]
+            for status in head_statuses(pull["heads"][sha])
         }
         return sorted(found.values(), key=lambda item: (item["created_at"], item["id"]))
 
@@ -387,13 +454,13 @@ class History:
         ])
         moments = [pushed] + [time for time in self.triggers(pull, whole_line=True) if time >= pushed]
         # In CodeRabbit's order, by time and then status id.
-        statuses = [(at(status["created_at"]), ADAPTER.status_kind(status)) for status in self.statuses(pull["repo"], sha)]
+        statuses = [(at(status["created_at"]), ADAPTER.status_kind(status, pull.get("user"))) for status in self.statuses(pull["repo"], sha)]
         statuses = [(when, kind) for when, kind in statuses if when <= now]
         shared = any(
             other is not pull and sha in other["heads"] and at(other["createdAt"]) <= now and open_at(other, now)
             for other in self.by_repo[pull["repo"]]
         )
-        ending = {"completed", "paused", "draft-skip"} | (set() if shared else {"skipped"})
+        ending = {"completed", "paused", "draft-skip", "bot-skip"} | (set() if shared else {"skipped"})
         pending = [index for index, (_when, kind) in enumerate(statuses) if kind == "in-progress"][-1:]
         moments += [statuses[index][0] for index in pending if not any(kind in ending for _when, kind in statuses[index + 1:])]
         return max(moment for moment in moments if moment <= now)
@@ -434,11 +501,20 @@ class History:
                 found.append("unbounded")
             elif at(bound) <= now:
                 found.append("expired-bound")
-        if state not in TRIGGER_STATES:
-            return found
         statuses = self.statuses(pull["repo"], sha)
         before = [status for status in statuses if at(status["created_at"]) <= now]
         after = [status for status in statuses if at(status["created_at"]) > now]
+        refusals = [status for status in before if ADAPTER.status_kind(status) == "rate-limited"]
+        sharing = [other for other in self.by_repo[pull["repo"]] if sha in other["heads"]]
+        if state in UNKNOWN_WAIT_STATES and refusals and stated_wait(sharing, refusals[-1], now):
+            found.append("unread-wait")
+        if state == "not-active" and any(coderabbit_seen(other) for other in sharing):
+            found.append("not-active")
+        asked = [trigger for trigger in self.triggers(pull, whole_line=True) if trigger <= now]
+        if state == "blocked-unanswered" and asked and any(asked[-1] < at(status["created_at"]) for status in before):
+            found.append("answered-trigger")
+        if state not in TRIGGER_STATES:
+            return found
         triggers = self.triggers(pull)
         # A recorded trigger at that point that CodeRabbit started reviewing.
         accepted = any(
@@ -447,8 +523,6 @@ class History:
             == "in-progress"
             for trigger in triggers
         )
-        refusals = [status for status in before if ADAPTER.status_kind(status) == "rate-limited"]
-        sharing = [other for other in self.by_repo[pull["repo"]] if sha in other["heads"]]
         own = stated_wait(sharing, refusals[-1], now) if refusals else None
         if own and now < own[1] and not accepted:
             found.append("refused-trigger")
@@ -471,7 +545,7 @@ class History:
 def event_times(pull: dict[str, Any], start: float, end: float) -> list[float]:
     times = {start}
     for head in pull["heads"].values():
-        times |= {at(status["created_at"]) for status in head["statuses"]}
+        times |= {at(status["created_at"]) for status in head_statuses(head)}
     for item in pull["comments"]:
         times |= {at(version[0]) for version in item["versions"]}
     times |= {at(review["submitted_at"]) for review in pull["reviews"]}
@@ -479,10 +553,19 @@ def event_times(pull: dict[str, Any], start: float, end: float) -> list[float]:
     return sorted(time for time in times if start <= time < end)
 
 
-def replay(pulls: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Every violation, and how many decisions reached each state."""
+def replay(
+    pulls: list[dict[str, Any]], repository_evidence: bool = True
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Every violation, and how many decisions reached each state.
+
+    Without `repository_evidence` no repository shows CodeRabbit is used beyond
+    its pull requests' own activity.
+    """
     history = History(pulls)
     by_repo = {repo: RecordedGitHub(group, 0.0) for repo, group in history.by_repo.items()}
+    if not repository_evidence:
+        for repo, gh in by_repo.items():
+            gh.unconfigured.add(repo)
     violations: list[dict[str, Any]] = []
     checked: dict[str, int] = defaultdict(int)
     for pull in pulls:
@@ -539,10 +622,11 @@ def main() -> int:
     arguments = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     arguments.add_argument("--corpus", type=Path, default=CORPUS)
     arguments.add_argument("--json", action="store_true")
+    arguments.add_argument("--no-repository-evidence", action="store_true")
     args = arguments.parse_args()
     pulls = load(args.corpus)
-    violations, checked = replay(pulls)
-    known = pinned() if args.corpus == CORPUS else {}
+    violations, checked = replay(pulls, not args.no_repository_evidence)
+    known = pinned() if args.corpus == CORPUS and not args.no_repository_evidence else {}
     unpinned = [item for item in violations if item["key"] not in known]
     heads = sum(len(head_timeline(pull)) for pull in pulls)
     summary = {

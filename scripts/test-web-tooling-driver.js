@@ -289,6 +289,15 @@ console.log('web-tooling-ci-report: validation...');
   assertEqual(merged.targets.map((target) => target.name).join(','), 'acorn,coffeescript', 'merge restores manifest order');
   assertEqual(merged.summary.completedCount, 2, 'merge rebuilds the overall summary');
   assertEqual(merged.metadata.shards.count, 2, 'merge records shard count');
+  let noReportsError = null;
+  try {
+    mergeReports([], manifest);
+  } catch (error) {
+    noReportsError = error;
+  }
+  assertEqual(noReportsError?.message,
+    'No Web Tooling shard reports found; missing workloads: acorn, coffeescript',
+    'merge names every missing workload when no shard report arrived');
 }
 
 console.log('web-tooling-comment: markdown...');

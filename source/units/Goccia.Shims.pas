@@ -176,7 +176,6 @@ uses
 
 const
   DATE_SHIM_NAME = 'Date';
-  HAS_OWN_PROPERTY_SHIM_NAME = 'hasOwnProperty';
   DATE_VALUE_STORE_NAME = '__GocciaDateSlots';
   DEFAULT_SHIMS: array[0..13] of TGocciaShimDefinition = (
     ( // WHATWG HTML spec §8.3 — legacy btoa(data) via Uint8Array.toBase64
@@ -1561,11 +1560,16 @@ begin
 end;
 
 
-{ The hasOwnProperty shim is installed only on an Object.prototype without
-  a hasOwnProperty of its own, so no global path builds it; native code can
-  still load it (LoadShimValue). A restore loads it directly with the
-  current realm's loader. }
-procedure MaterializeHasOwnPropertyShim;
+{ A heap snapshot restore (ADR 0148) fills a shim's realm slot, and the
+  Date shim's other slots, by loading the shim with the current realm's
+  loader, as native code can (the hasOwnProperty shim, which no global path
+  builds, or the Date shim a runtime extension takes). It builds no lazy
+  member: a run can fill the slot through any of the shim's members
+  (Array.prototype.toLocaleString or Number.prototype.toLocaleString) or
+  through none, and a member the restore built that the run had not would be
+  named as one the run built. The members the run built are named apart and
+  resolve by their own paths. }
+procedure MaterializeShimSlot(const ASlotName: string);
 var
   Holder: TGocciaShimLoaderHolder;
   I: Integer;
@@ -1574,25 +1578,14 @@ begin
   if not Assigned(Holder) then
     Exit;
   for I := Low(DEFAULT_SHIMS) to High(DEFAULT_SHIMS) do
-    if DEFAULT_SHIMS[I].Name = HAS_OWN_PROPERTY_SHIM_NAME then
+    if (ASlotName = '%Shim:' + DEFAULT_SHIMS[I].Name + '%') or
+       (((ASlotName = '%DateValueStore%') or
+         (ASlotName = '%DateConstructor%')) and
+        (DEFAULT_SHIMS[I].Name = DATE_SHIM_NAME)) then
+    begin
       LoadShimValue(Holder.Loader, I);
-end;
-
-{ Where a script first reads shim AIndex: its global, or its first
-  prototype member. A heap snapshot restore (ADR 0148) fills the shim's
-  realm slot, and the Date shim's, by building that lazy member. }
-function ShimGlobalPath(const AIndex: Integer): string;
-const
-  TARGET_PATHS: array[TGocciaShimTarget] of string = ('Object.prototype.',
-    'Number.prototype.', 'Array.prototype.');
-var
-  Members: TGocciaShimPrototypeMembers;
-begin
-  Members := ShimPrototypeMembers(AIndex);
-  if Length(Members) = 0 then
-    Result := DEFAULT_SHIMS[AIndex].Name
-  else
-    Result := TARGET_PATHS[Members[0].Target] + Members[0].Name;
+      Exit;
+    end;
 end;
 
 initialization
@@ -1600,18 +1593,16 @@ initialization
   begin
     GShimExportSlots[GShimInitIndex] := RegisterRealmSlot(
       '%Shim:' + DEFAULT_SHIMS[GShimInitIndex].Name + '%');
-    if DEFAULT_SHIMS[GShimInitIndex].Name = HAS_OWN_PROPERTY_SHIM_NAME then
-      RegisterSnapshotSlotMaterializer('%Shim:' + HAS_OWN_PROPERTY_SHIM_NAME +
-        '%', @MaterializeHasOwnPropertyShim)
-    else
-      RegisterSnapshotSlotGlobalPath(
-        '%Shim:' + DEFAULT_SHIMS[GShimInitIndex].Name + '%',
-        ShimGlobalPath(GShimInitIndex));
+    RegisterSnapshotSlotNamedMaterializer(
+      '%Shim:' + DEFAULT_SHIMS[GShimInitIndex].Name + '%',
+      @MaterializeShimSlot);
   end;
   GShimLoaderSlot := RegisterRealmOwnedSlot('%ShimLoader%');
   // The Date shim fills the [[DateValue]] slots' WeakMap and %Date% too.
-  RegisterSnapshotSlotGlobalPath('%DateValueStore%', DATE_SHIM_NAME);
-  RegisterSnapshotSlotGlobalPath('%DateConstructor%', DATE_SHIM_NAME);
+  RegisterSnapshotSlotNamedMaterializer('%DateValueStore%',
+    @MaterializeShimSlot);
+  RegisterSnapshotSlotNamedMaterializer('%DateConstructor%',
+    @MaterializeShimSlot);
   RegisterThreadvarCleanup(@ReleaseShimProgramCache);
 
 end.

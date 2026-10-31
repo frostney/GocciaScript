@@ -18,7 +18,7 @@ The annotation surface is part of GocciaScript's language profile; see
 
 GocciaScript implements the [TC39 Type Annotations](https://tc39.es/proposal-type-annotations/) proposal. Supported annotations follow its types-as-comments model and have no runtime effect by default. Raw type strings are preserved on AST nodes for potential future optimization.
 
-**GocciaScript runtime extension** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce supported annotations at runtime. Annotated variables, function parameters, and literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. This optional runtime contract is not a replacement for a static structural checker such as `tsc`.
+**GocciaScript runtime extension** — pass `--strict-types` (or set `"strict-types": true` in `goccia.json`) to enforce supported annotations at runtime. Annotated variables, function parameters, and literal-inferred types are checked on initial value and on every assignment; incompatible values throw `TypeError`. Union (`string | number`), `any`, and `unknown` annotations remain unenforced. A declaration without an initializer is not checked: an annotated `let` or `var` holds `undefined` until it is assigned, and operators on it give their usual result (`let n: number;` then `n + 1` is `NaN`). A `var` also holds `undefined` before its declaration runs, initializer or not, so a `var` read where its declaration was skipped gives the same result. A rest parameter's array is not checked against its annotation on entry, so `(...xs: number) => xs + 1` concatenates, while an assignment to it, `xs += 1` included, is checked. This optional runtime contract is not a replacement for a static structural checker such as `tsc`.
 
 An unannotated `let` takes an inferred type from the syntactic form of its initializer alone, and only from these forms:
 
@@ -28,7 +28,7 @@ An unannotated `let` takes an inferred type from the syntactic form of its initi
 | Template literal, with or without substitutions | `string` |
 | Object literal, array literal, `new` expression, arrow function, or function expression | `object` (any non-primitive value) |
 
-Every other initializer leaves the binding untyped, whatever the engine could work out about its value: an identifier, a call, an operator expression (including a negated number such as `-1`), a BigInt literal, `null`, or `undefined`.
+Every other initializer leaves the binding untyped, whatever the engine could work out about its value: an identifier, a call, an operator expression (including a negated number such as `-1`), a BigInt literal, `null`, or `undefined`. The bytecode compiler may still infer a Number for such a binding to choose typed instructions, but only when it proves that every value the binding can hold is a Number. An assignment of any other value defeats the proof, so `total = "text"` above stays allowed, and the inference is never enforced ([Compiler Type Inference](bytecode-vm.md#compiler-type-inference)).
 
 ```javascript
 const base = 16;
@@ -82,6 +82,13 @@ interface Animal { name: string; speak(): string; }
 import type { Foo } from './types.js';
 export type { Bar };
 
+// `type` is a legal default binding, so these are ordinary value imports that
+// bind `type`. After `import type`, a binding, `{` or `*` makes the import
+// type-only; `from` before a module string, or `,`, makes `type` the binding.
+import type from './x.js';
+import type, { y } from './x.js';
+import type, * as ns from './x.js';
+
 // Mixed type/value named bindings keep runtime imports/exports for value bindings
 import { parseSourceFile, type SourceFile } from "./parser.js";
 export { value, type ValueShape };
@@ -108,6 +115,8 @@ class Box<T> implements Container {
 // Catch parameter type annotation
 try { throw new Error("oops"); } catch (e: Error) { }
 ```
+
+A type-level statement erased this way still has a kind of its own in [`goccia:ast`](built-ins-ast.md#the-statement-view), so a tool reading the source can tell it from an empty statement.
 
 ## Angle Brackets and JSX
 

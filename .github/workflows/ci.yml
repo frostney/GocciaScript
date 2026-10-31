@@ -12,7 +12,10 @@ permissions:
   contents: read
 
 env:
-  FPC_VERSION: "3.2.2"
+  # The frostney/fpc-toolchain release every job installs, pinned to one build.
+  # pr.yml, fuzz.yml, gc-stress.yml and timezone-data-bump.yml name the same
+  # one; moving to another build (3.2.4 final) changes this line in each.
+  FPC_VERSION: "3.2.4-rc2-b1"
 
 jobs:
   # A newer push to main cancels the CI run of any older main commit as a whole,
@@ -24,8 +27,7 @@ jobs:
   # commit (re-runs) and diverged commits are left alone. Tag runs and every
   # workflow_dispatch run are never cancelled, and a failed API call only logs
   # a warning. The job always runs and gates its step instead, because a skipped
-  # job can also skip jobs further down the chain, such as build, even when
-  # toolchain itself is allowed to run.
+  # job also skips the jobs further down the chain, such as build.
   # The nightly release is published by nightly.yml after a main run succeeds,
   # outside this cancellable scope, and the report jobs below use !cancelled()
   # so a cancelled run publishes nothing.
@@ -100,7 +102,7 @@ jobs:
           if [ -n "$newer_run" ]; then
             echo "Run ${newer_run} tests a newer main commit; cancelling this run."
             if gh api -X POST "repos/${repo}/actions/runs/${own_run}/cancel" > /dev/null; then
-              # Hold this job until the cancellation reaches it, so toolchain
+              # Hold this job until the cancellation reaches it, so build
               # never starts macOS work for a superseded commit.
               for _ in $(seq 1 30); do sleep 10; done
               echo "::warning::This run is still active five minutes after cancelling itself; continuing."
@@ -109,10 +111,6 @@ jobs:
             fi
           fi
           exit 0
-
-  toolchain:
-    needs: supersede
-    uses: ./.github/workflows/toolchain.yml
 
   test-structure:
     runs-on: ubuntu-latest
@@ -126,13 +124,18 @@ jobs:
       - name: Check JavaScript test-suite structure
         run: bun run scripts/check-test-structure.ts
 
+      - name: Check parallel CI compilation
+        run: python3 .github/scripts/test-compile-programs.py
+
       - name: Check CI report publishing helpers
         run: node --test .github/scripts/test-report-publishing.js
 
   build:
-    needs: toolchain
+    needs: supersede
     # Only the Darwin targets need a macOS runner, the scarcest kind this
     # workflow uses; the Linux and Windows targets cross-compile on Linux.
+    # frostney/fpc-toolchain ships every target here for its runner's host;
+    # x86_64-darwin runs the x86_64 macOS compiler under Rosetta 2.
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -141,7 +144,6 @@ jobs:
           - target: aarch64-darwin
             cpu: aarch64
             os: darwin
-            native: true
             runner: macos-latest
           - target: x86_64-darwin
             cpu: x86_64
@@ -169,56 +171,74 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Restore toolchain cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
         with:
-          path: |
-            fpc-cross
-            cross-binutils
-            cross-libs
-          key: ${{ runner.os == 'Linux' && needs.toolchain.outputs.linux-cache-key || needs.toolchain.outputs.cache-key }}
-          fail-on-cache-miss: true
+          version: ${{ env.FPC_VERSION }}
+          # The action leaves out the runner's own target.
+          targets: ${{ matrix.target }}
+
+      # The Linux targets link libc (cthreads, dynlibs) against a pinned older
+      # glibc rather than the runner's, which keeps the glibc a release needs
+      # as low as before: Ubuntu 22.04's for x86_64 (glibc 2.34) and 18.04's
+      # for aarch64 (glibc 2.17). The assets are replaced in place upstream, so
+      # the checksum pins them: a new one fails the download instead of
+      # changing what the release links against. -Xd below keeps the linker
+      # to these libraries.
+      - name: Select Linux link libraries
+        id: link-libs-asset
+        if: matrix.os == 'linux'
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-linux)
+              echo "name=Linux_AMD64_Ubuntu_2204.zip" >> "$GITHUB_OUTPUT"
+              echo "sha256=4684a45a073238fdbf02c730ca26f8d2f2f9cc09b021fd1fdf3677948e7882e0" >> "$GITHUB_OUTPUT"
+              ;;
+            aarch64-linux)
+              echo "name=Linux_AArch64_Ubuntu_1804.zip" >> "$GITHUB_OUTPUT"
+              echo "sha256=3f7d776411e3f9023655c5eff900c08922fc4f8c0882624dcffdf14ecc89d158" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Restore Linux link libraries
+        id: link-libs
+        if: matrix.os == 'linux'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: link-libs
+          key: link-libs-${{ matrix.target }}-${{ steps.link-libs-asset.outputs.sha256 }}
+
+      - name: Download Linux link libraries
+        if: matrix.os == 'linux' && steps.link-libs.outputs.cache-hit != 'true'
+        env:
+          LIBS: ${{ steps.link-libs-asset.outputs.name }}
+          LIBS_SHA256: ${{ steps.link-libs-asset.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 \
+            "https://github.com/LongDirtyAnimAlf/fpcupdeluxe/releases/download/crosslibs_all/${LIBS}" \
+            -o "$RUNNER_TEMP/link-libs.zip"
+          echo "${LIBS_SHA256}  $RUNNER_TEMP/link-libs.zip" | sha256sum -c -
+          mkdir -p link-libs
+          unzip -qo "$RUNNER_TEMP/link-libs.zip" -d link-libs
 
       - name: Cross-compile GocciaScript
         run: |
           set -euo pipefail
-          PREFIX="$PWD/fpc-cross"
-          export PATH="$PREFIX/bin:$PWD/cross-binutils/bin:$PATH"
-
           echo "Target: ${{ matrix.target }}"
-          if [ ! -x "$PREFIX/bin/fpcres" ]; then
-            echo "::error::fpcres not found in restored FPC toolchain"
-            exit 1
-          fi
-
           CPU="${{ matrix.cpu }}"
           OS="${{ matrix.os }}"
-          TARGET="${CPU}-${OS}"
-          NATIVE="${{ matrix.native }}"
+          fpc -iW
 
-          # Determine the cross-compiler binary
-          if [ "$NATIVE" = "true" ]; then
-            CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppca64"
-          else
-            case "$CPU" in
-              x86_64)  CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppcrossx64" ;;
-              i386)    CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppcross386" ;;
-              aarch64) CROSS_FPC="$PREFIX/lib/fpc/${FPC_VERSION}/ppcrossa64" ;;
-            esac
-          fi
-
-          # Determine extra flags for cross targets
+          # Determine extra flags for the target
           EXTRA_FLAGS=""
           case "$OS" in
             linux)
-              LIBDIR=$(find "$PWD/cross-libs/${CPU}-linux" -name "libc.so" -exec dirname {} \; | head -1)
-              if [ -z "$LIBDIR" ]; then echo "::error::libc.so not found in cross-libs/${CPU}-linux"; exit 1; fi
-              # -Xd keeps the linker to the pinned cross-libs; without it,
+              LIBDIR=$(find "$PWD/link-libs" -name "libc.so" -exec dirname {} \; | head -1)
+              if [ -z "$LIBDIR" ]; then echo "::error::libc.so not found in link-libs"; exit 1; fi
+              # -Xd keeps the linker to the pinned libraries; without it,
               # FPC searches the build host's own library directories first.
-              EXTRA_FLAGS="-Xd -XP${CPU}-linux- -Fl${LIBDIR}"
-              ;;
-            win32|win64)
-              EXTRA_FLAGS=""
+              EXTRA_FLAGS="-Xd -Fl${LIBDIR}"
               ;;
             darwin)
               SDK_ROOT="$(xcrun --show-sdk-path)"
@@ -250,87 +270,15 @@ jobs:
             "  BAKED_BUILD_DATE = '$GC_BUILD_DATE';" \
             > source/units/Goccia.Version.Generated.inc
 
-          RTL_DIR="$PREFIX/lib/fpc/${FPC_VERSION}/units/${TARGET}/rtl"
-          OBJPAS_DIR="$PREFIX/lib/fpc/${FPC_VERSION}/units/${TARGET}/rtl-objpas"
-          GEN_DIR="$PREFIX/lib/fpc/${FPC_VERSION}/units/${TARGET}/rtl-generics"
-          FCL_DIR="$PREFIX/lib/fpc/${FPC_VERSION}/units/${TARGET}/fcl-process"
-          FCL_BASE_SRC="$PREFIX/share/fpcsrc/packages/fcl-base/src"
-          FCL_NET_SRC="$PREFIX/share/fpcsrc/packages/fcl-net/src"
-          OPENSSL_SRC="$PREFIX/share/fpcsrc/packages/openssl/src"
-
-          # Verify RTL units exist
-          echo "RTL units: $(ls "$RTL_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
-          echo "rtl-objpas units: $(ls "$OBJPAS_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
-          echo "rtl-generics units: $(ls "$GEN_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
-          echo "fcl-process units: $(ls "$FCL_DIR"/*.ppu 2>/dev/null | wc -l) .ppu files"
-          echo "fcl-base source path: $FCL_BASE_SRC"
-          echo "fcl-net source path: $FCL_NET_SRC"
-          echo "openssl source path: $OPENSSL_SRC"
-          test -d "$FCL_BASE_SRC"
-          test -d "$FCL_NET_SRC"
-          test -d "$OPENSSL_SRC"
-
-          # Build program entrypoints
-          shopt -s nullglob
-          mkdir -p build/compiled
-          entrypoints=(./source/app/*.dpr)
-          if [ "${#entrypoints[@]}" -eq 0 ]; then
-            echo "::error::No .dpr entrypoints found in source/app/"
-            exit 1
+          # Use the runner's cores without sharing FPC unit/resource caches.
+          # All programs still receive -B and the same production flags.
+          if [ "$OS" = darwin ]; then
+            JOBS="$(sysctl -n hw.logicalcpu)"
+          else
+            JOBS="$(nproc)"
           fi
-
-          for src in "${entrypoints[@]}"; do
-            name="$(basename "${src%.dpr}")"
-            echo ""
-            echo "=== Building ${name} for ${TARGET} ==="
-            "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-              -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./souffle \
-              -Fi./source/units -Fi./source/shared -Fi./souffle \
-              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
-              -FU"build/compiled" -FE"build" \
-              $EXTRA_FLAGS \
-              -dFPC_SOFT_FPUX80 \
-              "$src"
-            echo "${name} built successfully for ${TARGET}"
-          done
-
-          # Build test binaries from every tree build.pas searches, so the
-          # source/app tests also run on the targets PR CI does not cover.
-          for src in $(find source/units source/shared source/app -name '*.Test.pas'); do
-            name="$(basename "${src%.pas}")"
-            echo ""
-            echo "=== Building ${name} for ${TARGET} ==="
-            "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-              -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./souffle \
-              -Fi./source/units -Fi./source/shared -Fi./souffle \
-              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
-              -FU"build/compiled" -FE"build" \
-              $EXTRA_FLAGS \
-              -dFPC_SOFT_FPUX80 \
-              "$src"
-            echo "${name} built successfully for ${TARGET}"
-          done
-
-          # Compliance runners are explicit CI targets. They live outside the
-          # release-entrypoint glob so they cannot enter release archives.
-          for src in ./source/app/compliance/*.dpr; do
-            name="$(basename "${src%.dpr}")"
-            echo ""
-            echo "=== Building ${name} for ${TARGET} ==="
-            "$CROSS_FPC" -T"${OS}" -O4 -dPRODUCTION -Xs -CX -XX -B \
-              -Fu./source/units -Fu./source/generated -Fu./source/shared -Fu./source/app -Fu./source/app/compliance -Fu./souffle \
-              -Fi./source/units -Fi./source/shared -Fi./souffle \
-              -Fu"$RTL_DIR" -Fu"$OBJPAS_DIR" -Fu"$GEN_DIR" -Fu"$FCL_DIR" -Fu"$FCL_BASE_SRC" -Fu"$FCL_NET_SRC" -Fu"$OPENSSL_SRC" \
-              -FU"build/compiled" -FE"build" \
-              $EXTRA_FLAGS \
-              -dFPC_SOFT_FPUX80 \
-              "$src"
-            echo "${name} built successfully for ${TARGET}"
-          done
-
-          echo ""
-          echo "=== Build artifacts for ${TARGET} ==="
-          ls -la build/
+          if [ "$JOBS" -gt 4 ]; then JOBS=4; fi
+          python3 .github/scripts/compile-programs.py --jobs "$JOBS" "$CPU" "$OS" -- $EXTRA_FLAGS
 
       - name: Stage build artifacts
         # -Xs already strips the ELF and PE binaries. Only Mach-O needs the
@@ -352,12 +300,55 @@ jobs:
             exit 1
           fi
 
+      - name: Build Win32 exception probes with development metadata
+        if: matrix.target == 'i386-win32'
+        run: |
+          mkdir -p build/ci-debug-compiled
+          fpc -Pi386 -Twin32 -O- -gw -godwarfsets -gl -Ct -Cr -Sa -B -Xm \
+            -Fusource/shared -Fisource/shared -Fusource/generated \
+            -FUbuild/ci-debug-compiled -FEci-artifacts -oWin32Exceptions.Debug.exe \
+            source/shared/Win32Exceptions.Test.pas
+          build/tools/safeseh --apply ci-artifacts/Win32Exceptions.Debug.exe \
+            ci-artifacts/Win32Exceptions.Debug.map build/ci-debug-compiled
+          mv ci-artifacts/Win32Exceptions.Debug.map{,.safeseh-inputs} build/
+
+      - name: Verify SafeSEH in every staged Win32 executable
+        if: matrix.target == 'i386-win32'
+        run: |
+          found=0
+          for executable in ci-artifacts/*.exe; do
+            test -f "$executable"
+            found=$((found + 1))
+            name="$(basename "$executable" .exe)"
+            build/tools/safeseh --check "$executable" "build/$name.map"
+          done
+          test "$found" -gt 0
+
       - name: Upload build artifacts
+        id: upload-build
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gocciascript-${{ matrix.target }}
           retention-days: 1
           path: ci-artifacts/*
+          if-no-files-found: error
+
+      - name: Wait before retrying build upload
+        if: steps.upload-build.outcome == 'failure'
+        run: sleep 10
+
+      - name: Retry build artifact upload
+        if: steps.upload-build.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gocciascript-${{ matrix.target }}
+          retention-days: 1
+          path: ci-artifacts/*
+          if-no-files-found: error
+          # This job is the only producer of this target's artifact. Replace
+          # an incomplete upload if the first attempt failed after creation.
+          overwrite: true
 
   test:
     needs: build
@@ -420,8 +411,41 @@ jobs:
         if: runner.os == 'Windows' && matrix.target != 'i386-win32'
         run: gcc -shared -o fixtures/ffi/libfixture.dll fixtures/ffi/fixture.c
 
+      - name: Compare every Win32 exception registration path
+        if: matrix.target == 'i386-win32'
+        shell: pwsh
+        run: ./.github/scripts/test-win32-exceptions.ps1
+
+      - name: Compare Win32 development exception paths
+        if: matrix.target == 'i386-win32'
+        shell: pwsh
+        run: ./.github/scripts/test-win32-exceptions.ps1 -Executable build/Win32Exceptions.Debug.exe
+
+      - name: Measure Win32 exception handling with the same code
+        if: matrix.target == 'i386-win32'
+        shell: pwsh
+        run: ./.github/scripts/measure-win32-safeseh.ps1
+
+      - name: Upload Win32 exception measurements
+        if: always() && matrix.target == 'i386-win32'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: win32-safeseh-measurements
+          if-no-files-found: error
+          retention-days: 7
+          path: safeseh-*.json
+
       - name: Run all JavaScript tests
         run: ./build/GocciaTestRunner -P tests --silent --no-progress --output=test-results.json
+
+      - name: Upload JavaScript test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: javascript-test-results-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 7
+          path: test-results.json
 
       - name: Round-trip objects observed by the JavaScript suite
         if: matrix.target == 'x86_64-linux'
@@ -1168,7 +1192,8 @@ jobs:
 
       - name: Install Web Tooling dependencies
         working-directory: web-tooling-suite
-        run: npm install --ignore-scripts --no-audit --no-fund
+        # The pinned corpus declares raw-loader as a direct Git dependency.
+        run: npm install --allow-git=root --ignore-scripts --no-audit --no-fund
 
       - name: Run Web Tooling report
         env:
@@ -1481,6 +1506,9 @@ jobs:
       - name: Check app-specific CLI features
         run: bun run scripts/test-cli-apps.ts
 
+      - name: Check sandbox filesystem search against the shared vectors
+        run: bun run scripts/test-cli-sandbox-search.ts
+
       # test-cli-permissions.ts fetches a loopback name only the hosts file
       # lists, which the runner image does not have, to show fetch resolves
       # through the system resolver.
@@ -1607,19 +1635,13 @@ jobs:
 
       - name: Package releases
         run: |
-          VERSION="${GITHUB_REF_NAME}"
-
-          # Map target names to user-friendly archive names
-          declare -A DISPLAY_NAMES=(
-            ["aarch64-darwin"]="macos-arm64"
-            ["x86_64-darwin"]="macos-x64"
-            ["x86_64-linux"]="linux-x64"
-            ["aarch64-linux"]="linux-arm64"
-            ["x86_64-win64"]="windows-x64"
-            ["i386-win32"]="windows-x86"
-          )
-
-          targets=("aarch64-darwin" "x86_64-darwin" "x86_64-linux" "aarch64-linux" "x86_64-win64" "i386-win32")
+          # package-release-archive.sh owns the target list and the asset
+          # names (.tar.gz for Linux, .zip for macOS and Windows), shared with
+          # nightly.yml. It restores the executable bit on the binaries
+          # (artifacts do not keep file modes) and fails if an archive lacks
+          # a binary or records one as not executable.
+          targets_list="$(bash ./.github/scripts/package-release-archive.sh --targets)"
+          mapfile -t targets <<< "$targets_list"
 
           for target in "${targets[@]}"; do
             artifact_dir="artifacts/gocciascript-${target}"
@@ -1628,22 +1650,7 @@ jobs:
               continue
             fi
 
-            display="${DISPLAY_NAMES[$target]}"
-            archive_name="gocciascript-${VERSION}-${display}"
-            pkg_dir="${archive_name}"
-            bash ./.github/scripts/stage-build-artifacts.sh "$artifact_dir" "$pkg_dir"
-
-            cp -r tests/ "$pkg_dir/tests/"
-            cp -r benchmarks/ "$pkg_dir/benchmarks/"
-            cp -r examples/ "$pkg_dir/examples/"
-
-            if [[ "$target" == *win* ]]; then
-              zip -r "${archive_name}.zip" "$pkg_dir/"
-            else
-              tar -czf "${archive_name}.tar.gz" "$pkg_dir/"
-            fi
-
-            rm -rf "$pkg_dir"
+            bash ./.github/scripts/package-release-archive.sh "$target" "$artifact_dir" "${GITHUB_REF_NAME}"
           done
 
       - name: Generate release notes

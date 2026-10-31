@@ -41,8 +41,10 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
-import { verifyAllocationProfiles } from "./test-cli-profiling";
+import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
+import { verifyBundlerLayout } from "./test-cli-bundler-layout";
+import { verifyBundlerReproducibility, verifyBundlerPrivateIsolation } from "./test-cli-bundler-reproducibility";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 // The runner reports canonical host paths. On Windows the temp directory's
@@ -806,7 +808,7 @@ await section("Bare Loader: tail-call optimization stays strict-mode only...", a
   // is bounded by --max-stack and throws RangeError.
   const src =
     "const f = (n) => (n === 0 ? 'done' : f(n - 1)); try { print(f(100000)); } catch (e) { print(e.constructor.name); }\n";
-  const proc = Bun.spawnSync([BARE, "--max-stack=1000"], {
+  const proc = Bun.spawnSync([BARE, "--max-stack=1000", "--compat-non-strict-mode"], {
     stdin: new TextEncoder().encode(src),
     stdout: "pipe",
     stderr: "pipe",
@@ -1609,6 +1611,78 @@ await section("test262 runner: deterministic shards merge into one complete repo
         `test262 merge should reject duplicate shards: ${duplicateProc.stderr.toString()}`,
       );
     }
+
+    const missingProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "missing.json"),
+        shardReports[0],
+        shardReports[1],
+        shardReports[3],
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (missingProc.exitCode !== 1 ||
+        !missingProc.stderr.toString().includes("Expected 4 shard reports, got 3; missing shards: 2")) {
+      throw new Error(
+        `test262 merge should name the missing shard: ${missingProc.stderr.toString()}`,
+      );
+    }
+
+    const noneProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "none.json"),
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (noneProc.exitCode !== 1 ||
+        !noneProc.stderr.toString().includes("found no shard reports: every shard is missing")) {
+      throw new Error(
+        `test262 merge should fail when every shard is missing: ${noneProc.stderr.toString()}`,
+      );
+    }
+
+    // A stored report from another execution mode must not merge with
+    // bytecode shards; one that records "bytecode" still merges.
+    const shardWithMode = (path: string, mode: string): string => {
+      const report = JSON.parse(readFileSync(path, "utf8"));
+      report.run.mode = mode;
+      const modePath = join(tmp, `${mode}-${report.shard.index}.json`);
+      writeFileSync(modePath, JSON.stringify(report));
+      return modePath;
+    };
+    const mergeWithFirst = (firstShard: string) =>
+      Bun.spawnSync(
+        [
+          "bun",
+          "scripts/run_test262_suite.ts",
+          "--merge-shards",
+          "--output", join(tmp, "mode-merged.json"),
+          firstShard,
+          ...shardReports.slice(1),
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+      );
+    const interpretedProc = mergeWithFirst(shardWithMode(shardReports[0], "interpreted"));
+    if (interpretedProc.exitCode !== 1 ||
+        !interpretedProc.stderr.toString().includes('run mode "interpreted" is not "bytecode"')) {
+      throw new Error(
+        `test262 merge should reject an interpreted shard report, got ${interpretedProc.exitCode}: ` +
+          interpretedProc.stderr.toString(),
+      );
+    }
+    const bytecodeProc = mergeWithFirst(shardWithMode(shardReports[0], "bytecode"));
+    if (bytecodeProc.exitCode !== 0) {
+      throw new Error(
+        `test262 merge should accept a shard report recording bytecode, got ${bytecodeProc.exitCode}: ` +
+          bytecodeProc.stderr.toString(),
+      );
+    }
   } finally {
     clean(tmp);
   }
@@ -2319,6 +2393,19 @@ function expectEvalHostProbe(label: string, lines: string[], expected: string[])
   if (actual !== expected.join("\n"))
     throw new Error(`Test262 Runner ${label} probe got:\n${actual}\nexpected:\n${expected.join("\n")}`);
 }
+
+await section("Test262 Runner: eval membership uses exact identifier names...", async () => {
+  expectEvalHostProbe("exact eval names", [
+    "function direct() { let café = 3, café = 7, Name = 11, name = 13; return eval('[café, café, Name, name].join()'); }",
+    "print(direct());",
+    "print(eval('let café = 3; let café = 7; café + café'));",
+    "print((0, eval)('let Name = 11; let name = 13; Name + name'));",
+    "try { eval('let café; let café;'); } catch (error) { print(error.name); }",
+    "try { eval('let café; var café;'); } catch (error) { print(error.name); }",
+    "function conflict() { let café = 3; try { eval('var café'); } catch (error) { return error.name; } }",
+    "print(conflict());",
+  ], ["3,7,11,13", "10", "24", "SyntaxError", "SyntaxError", "SyntaxError"]);
+});
 
 await section("Test262 Runner: a second eval reads the vars an earlier eval of the same function declared...", async () => {
   expectEvalHostProbe("second eval", [
@@ -4207,6 +4294,22 @@ await section("Loader: --host-environment module controls time, zone, and random
       throw new Error(
         `Loader should reject conflicting host environment options, got: ${conflictOutput}`,
       );
+
+    const profileConflict = runLoaderJson("0;\n", [
+      `--host-environment=${providerPath}`,
+      "--profile-deterministic",
+    ]);
+    const profileConflictOutput =
+      JSON.stringify(profileConflict.json) + profileConflict.stderr;
+    if (
+      profileConflict.exitCode === 0 ||
+      !profileConflictOutput.includes(
+        "cannot be combined with --profile-deterministic",
+      )
+    )
+      throw new Error(
+        `Loader should name --profile-deterministic when it conflicts with a host environment, got: ${profileConflictOutput}`,
+      );
   } finally {
     clean(tmp);
   }
@@ -5048,6 +5151,50 @@ await section("Loader: --globals from JS module...", async () => {
   }
 });
 
+await section("TestRunner: CLI and config globals modules load before tests...", async () => {
+  const tmp = makeTmp();
+  try {
+    writeFileSync(join(tmp, "dependency.js"), "export const value = 42;\n");
+    writeFileSync(join(tmp, "globals.js"), [
+      'import { value } from "./dependency.js";',
+      'if (typeof test !== "undefined") throw new Error("testing globals attached too early");',
+      "globalThis.globalsModuleSideEffect = value;",
+      "export const injected = { value };",
+      'export const priority = "module";',
+      "",
+    ].join("\n"));
+    writeFileSync(join(tmp, "base.json"), '{"priority":"structured","fromStructured":true}\n');
+    for (const route of ["config", "cli"]) {
+      writeFileSync(join(tmp, "goccia.json"), JSON.stringify(
+        route === "config" ? { globals: ["./base.json", "./globals.js"] } : {},
+      ));
+      writeFileSync(join(tmp, "suite.test.js"), [
+        "const atImport = injected.value;",
+        'test("globals are ready before the suite loads", () => {',
+        "  expect(atImport).toBe(42);",
+        "  expect(fromStructured).toBe(true);",
+        '  expect(priority).toBe("inline");',
+        `  expect(typeof globalsModuleSideEffect).toBe("${route === "cli" ? "number" : "undefined"}");`,
+        "});",
+        "",
+      ].join("\n"));
+      const result = Bun.spawnSync([
+        resolve(TESTRUNNER), "-P", "suite.test.js", "--no-progress", "--output=json",
+        ...(route === "cli" ? ["--globals=./base.json", "--globals=./globals.js"] : []),
+        "--global=priority=inline",
+      ], { cwd: tmp, stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+      const output = result.stdout.toString();
+      if (result.exitCode !== 0)
+        throw new Error(`${route} globals module failed: ${output}\n${result.stderr}`);
+      const report = JSON.parse(output);
+      if (report.ok !== true || report.passed !== 1 || report.failed !== 0)
+        throw new Error(`${route} globals module did not run its test: ${output}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: jobs a --globals JS module leaves pending run with the script...", async () => {
   const tmp = makeTmp();
   try {
@@ -5262,6 +5409,54 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
     }
 
+    console.log("Loader: line coverage of declarations whose initializer starts on a later line...");
+    // A lexical binding's TDZ hole is set when its block is entered, so the
+    // declaration itself needs none; under coverage it still sets it, because
+    // that instruction is the only one on a declaration line whose initializer
+    // starts below it, in a block, a switch clause, a loop body or a
+    // destructuring declaration.
+    const laterLineDeclarationSourcePath = join(tmp, "declaration-coverage.js");
+    writeFileSync(
+      laterLineDeclarationSourcePath,
+      [
+        "const id = (x) => x;",
+        "const run = (a) => {",
+        "  {",
+        "    let inner =",
+        "      id(a);",
+        "    a = inner;",
+        "  }",
+        "  switch (a) {",
+        "    case 1:",
+        "      const picked =",
+        "        id(a);",
+        "      a = picked;",
+        "  }",
+        "  for (const n of [1, 2]) {",
+        "    const step =",
+        "      id(n);",
+        "    a += step;",
+        "  }",
+        "  const { p } =",
+        "    { p: 1 };",
+        "  return a + p;",
+        "};",
+        "console.log(run(1));",
+        "",
+      ].join("\n"),
+    );
+    const laterLineDeclarationLcovPath = join(tmp, "declaration-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${laterLineDeclarationLcovPath} ${laterLineDeclarationSourcePath}`.quiet();
+    const laterLineDeclarationLcov = readFileSync(laterLineDeclarationLcovPath, "utf-8");
+    for (const line of [4, 10, 15, 19]) {
+      if (!laterLineDeclarationLcov.includes(`DA:${line},`) || laterLineDeclarationLcov.includes(`DA:${line},0\n`)) {
+        throw new Error(`LCOV should count declaration line ${line} as executed, got:\n${laterLineDeclarationLcov}`);
+      }
+    }
+    if (/^DA:\d+,0$/m.test(laterLineDeclarationLcov)) {
+      throw new Error(`LCOV should report no unexecuted line, got:\n${laterLineDeclarationLcov}`);
+    }
+
     console.log("Loader: line coverage of let and parameter operands spread over several lines...");
     // The same holds for a let binding and a parameter, which the compiler
     // reads in place where nothing can rebind them before they are used, and
@@ -5320,6 +5515,8 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       {
         name: "constant-branch",
         lines: [4, 5, 6, 7, 8, 9, 10, 11],
+        // Line 9's `if` keeps its own two arms next to the `&&`'s two.
+        recordsOnLine: { 9: 4 } as Record<number, number>,
         decided: { args: [] as string[], decl: "const" },
         undecided: { args: [] as string[], decl: "let" },
         source: (decl: string) => [
@@ -5343,6 +5540,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       {
         name: "strict-type-branch",
         lines: [3, 4],
+        recordsOnLine: {} as Record<number, number>,
         decided: { args: ["--strict-types"], decl: "const" },
         undecided: { args: [] as string[], decl: "const" },
         source: (decl: string) => [
@@ -5357,7 +5555,7 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         ],
       },
     ];
-    for (const { name, lines, decided, undecided, source } of constantBranchCases) {
+    for (const { name, lines, recordsOnLine, decided, undecided, source } of constantBranchCases) {
       const reports: Record<string, string> = {};
       for (const [kind, { args, decl }] of Object.entries({ decided, undecided })) {
         const sourcePath = join(tmp, `${name}-${kind}.js`);
@@ -5370,6 +5568,12 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
         if (!new RegExp(`^BRDA:${line},\\d+,\\d+,1$`, "m").test(reports.decided) ||
             !new RegExp(`^BRDA:${line},\\d+,\\d+,-$`, "m").test(reports.decided)) {
           throw new Error(`${name}: LCOV should keep a taken and an untaken branch on line ${line}, got:\n${reports.decided}`);
+        }
+      }
+      for (const [line, count] of Object.entries(recordsOnLine)) {
+        const found = branchRecords(reports.undecided).filter((r) => r.startsWith(`${line}:`)).length;
+        if (found !== count) {
+          throw new Error(`${name}: LCOV should keep ${count} branch records on line ${line}, found ${found}:\n${reports.undecided}`);
         }
       }
       if (branchRecords(reports.decided).join("\n") !== branchRecords(reports.undecided).join("\n")) {
@@ -8059,8 +8263,47 @@ await section("Bundler: constants folding to Infinity, NaN and -0 compile + roun
 // ============================================================================
 
 await section("Bundler: source and precompiled module graphs agree...", verifyAotModules);
+await section("Bundler: nested outputs and collision preflight preserve files...", verifyBundlerLayout);
+await section("Bundler: repeated builds are byte-identical across worker counts...", verifyBundlerReproducibility);
+await section("Bundler: independently compiled classes keep private storage isolated...", verifyBundlerPrivateIsolation);
 
 await section("Allocation profiling: host callbacks and native re-entry...", verifyAllocationProfiles);
+await section("Compile profiling: per-function parse and compile records...", verifyCompileProfiles);
+await section("Compile profiling: every counter grows with its shape...", verifyCompileCounterGrowth);
+
+await section("Directory profiling: all files, modes and deterministic captures...", verifyDirectoryProfiles);
+await section("Function profiling: recursive totals stay within <module>'s...", verifyRecursiveTotals);
+
+await section("BenchmarkRunner: results are reported under a polluted Array.prototype...", async () => {
+  // The results array is new, so its elements are made with
+  // CreateDataPropertyOrThrow (ES2026 §7.3.6), which never consults an index
+  // setter the benchmark file put on Array.prototype.
+  const tmp = makeTmp();
+  try {
+    const benchFile = join(tmp, "polluted.js");
+    const outFile = join(tmp, "polluted.json");
+    writeFileSync(benchFile, microbenchModule([
+      'Object.defineProperty(Array.prototype, "0", { set() {}, configurable: true });',
+      'group("g", () => { bench("one", () => 1 + 1); bench("two", () => 2 + 2); });',
+    ]));
+    const proc = Bun.spawnSync(
+      [resolve(BENCHRUNNER), benchFile, "--source-type=module", "--no-progress", "--format=json", `--output=${outFile}`],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, GOCCIA_BENCH_CALIBRATION_MS: "50", GOCCIA_BENCH_ROUNDS: "3" } as Record<string, string>,
+        timeout: 120_000,
+      },
+    );
+    if (proc.exitCode !== 0) throw new Error(`exit ${proc.exitCode}: ${proc.stderr.toString()}`);
+    const file = JSON.parse(readFileSync(outFile, "utf-8")).files[0];
+    const names = (file.benchmarks ?? []).map((b: any) => b?.name);
+    if (file.ok !== true || JSON.stringify(names) !== JSON.stringify(["one", "two"]))
+      throw new Error(`both benchmarks should be reported, got ok=${file.ok} ${JSON.stringify(names)}`);
+  } finally {
+    clean(tmp);
+  }
+});
 
 {
   const tmp = makeTmp();
@@ -9271,6 +9514,46 @@ await section("Runner sandbox mode: an unhandled promise rejection fails the run
   }
 });
 
+await section("Runner sandbox mode: a runScript result array is copied whole under a polluted Array.prototype...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    // The copy in the caller's realm is a new array, so its elements are made
+    // with CreateDataPropertyOrThrow (ES2026 §7.3.6), which never consults the
+    // caller's Array.prototype.
+    const tree = writeSandboxTree(tmp, [
+      {
+        path: "/main.js",
+        text: [
+          'import { runScript } from "goccia";',
+          "let calls = 0;",
+          'const plain = runScript("/child.js").result;',
+          'Object.defineProperty(Array.prototype, "0", { set() { calls++; }, configurable: true });',
+          'Object.defineProperty(Array.prototype, "1", { value: "inherited", writable: false, configurable: true });',
+          'const polluted = runScript("/child.js").result;',
+          "delete Array.prototype[0]; delete Array.prototype[1];",
+          "console.log(JSON.stringify({ calls, plain, polluted, own: [0, 1, 2].map((i) => Object.hasOwn(polluted, i)) }));",
+        ].join("\n"),
+      },
+      { path: "/child.js", text: '["a", "b", ["c"]];' },
+    ]);
+    const proc = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js", "--source-type=module"],
+      { stdout: "pipe", stderr: "pipe", timeout: 20_000 },
+    );
+    const output = normalizeLineEndings(proc.stdout.toString()).trim();
+    const expected = JSON.stringify({
+      calls: 0,
+      plain: ["a", "b", ["c"]],
+      polluted: ["a", "b", ["c"]],
+      own: [true, true, true],
+    });
+    if (proc.exitCode !== 0 || output !== expected)
+      throw new Error(`A runScript result array should be copied whole, got exit ${proc.exitCode}: ${output}${proc.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: a caller's cleanup and waitAsync jobs that come due during a nested run stay with the caller...", async () => {
   const tmp = makeNativeTmp();
   try {
@@ -10224,7 +10507,7 @@ await section("Runner sandbox mode: a sandbox write does not reach the host with
     if (!readFileSync(entry, "utf-8").includes("fs.writeFileSync"))
       throw new Error("SECURITY: Sandbox mode wrote to the host entry file");
     // Write-back runs only when an input was copied with --copy-rw, so a
-    // read-only run has nothing to report.
+    // run without one has nothing to report.
     if (proc.stderr.toString().includes("write-back:"))
       throw new Error(`Sandbox mode without --copy-rw should print no write-back report, got: ${proc.stderr.toString()}`);
   } finally {
@@ -10276,7 +10559,7 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
       `write-back: ${join(tree, "kept.txt")}`,
       `write-back: ${join(tree, "nested", "added.txt")}`,
       "write-back: /loose.txt was not copied from the host, skipped",
-      "write-back: /ro/ro.txt was copied read-only, skipped (use --copy-rw to write it back)",
+      "write-back: /ro/ro.txt was copied without write-back, skipped (use --copy-rw to write it back)",
       "write-back: 2 file(s) written, 2 skipped",
     ]) {
       if (!containsLine(stderr, expected))
@@ -10291,6 +10574,104 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
     const diff = JSON.parse(stdout.slice(newline + 1));
     if (!diff.changes.some((c: any) => c.kind === "create" && c.path === "/src/nested/added.txt"))
       throw new Error(`Sandbox mode diff should include the created file, got: ${JSON.stringify(diff.changes)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("goccia:ast expression-style example: fixes quotes, trailing commas and long calls, keeping them only under --copy-rw...", async () => {
+  const tmp = makeNativeTmp();
+  try {
+    const example = join(dirname(fileURLToPath(import.meta.url)), "..", "examples", "_experimental", "expression-style.mjs");
+    const tree = join(tmp, "tree");
+    mkdirSync(tree, { recursive: true });
+    const original = [
+      'import { join } from "./paths.js";',
+      'const quoted = "it\'s";',
+      'const list = [',
+      '  "one",',
+      '  2',
+      '];',
+      'const sum = (',
+      '  first,',
+      '  second',
+      ') => first + second;',
+      'const spread = (',
+      '  head,',
+      '  ...tail',
+      ') => head;',
+      'report("a message long enough to push this line past eighty columns", first, second);',
+      'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
+      '',
+    ].join("\n");
+    const expected = [
+      "import { join } from './paths.js';",
+      'const quoted = "it\'s";',
+      'const list = [',
+      "  'one',",
+      '  2,',
+      '];',
+      'const sum = (',
+      '  first,',
+      '  second,',
+      ') => first + second;',
+      'const spread = (',
+      '  head,',
+      '  ...tail',
+      ') => head;',
+      'report(',
+      "  'a message long enough to push this line past eighty columns',",
+      '  first,',
+      '  second,',
+      ');',
+      'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
+      '',
+    ].join("\n");
+    writeFileSync(join(tree, "sample.js"), original);
+
+    const readOnly = Bun.spawnSync(
+      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const report = normalizeLineEndings(readOnly.stdout.toString());
+    if (readOnly.exitCode !== 0)
+      throw new Error(`expression-style under --copy should exit 0, got ${readOnly.exitCode}: ${readOnly.stderr.toString()}`);
+    for (const line of [
+      "/src/sample.js:1:22  a string literal should use single quotes",
+      "/src/sample.js:4:3  a string literal should use single quotes",
+      "/src/sample.js:5:3  a multi-line list should end with a trailing comma",
+      "/src/sample.js:9:3  a multi-line list should end with a trailing comma",
+      "/src/sample.js:15:1  a call on a line over 80 columns should put one argument per line",
+      "/src/sample.js:15:8  a string literal should use single quotes",
+      "6 finding(s) in 1 file(s), 1 rewritten",
+    ]) {
+      if (!report.includes(line))
+        throw new Error(`expression-style should report "${line}", got:\n${report}`);
+    }
+    if (report.includes("FAILURE"))
+      throw new Error(`expression-style under --copy should parse every file, got:\n${report}`);
+    if (readFileSync(join(tree, "sample.js"), "utf-8") !== original)
+      throw new Error("expression-style under --copy changed the host file");
+
+    const readWrite = Bun.spawnSync(
+      [RUNNER, example, "--experimental-ast", "--copy-rw", `${tree}=/src`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    if (readWrite.exitCode !== 0)
+      throw new Error(`expression-style under --copy-rw should exit 0, got ${readWrite.exitCode}: ${readWrite.stderr.toString()}`);
+    const fixed = normalizeLineEndings(readFileSync(join(tree, "sample.js"), "utf-8"));
+    if (fixed !== expected)
+      throw new Error(`expression-style under --copy-rw should write the fixed file, got:\n${fixed}`);
+
+    const again = Bun.spawnSync(
+      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const againReport = normalizeLineEndings(again.stdout.toString());
+    if (again.exitCode !== 0)
+      throw new Error(`expression-style rerun should exit 0, got ${again.exitCode}: ${again.stderr.toString()}`);
+    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 1 file(s), 0 rewritten"))
+      throw new Error(`expression-style should find nothing in a file it fixed, got:\n${againReport}`);
   } finally {
     clean(tmp);
   }
@@ -11806,7 +12187,7 @@ await section("Runner sandbox mode: a trusted sandbox section switches it on..."
       throw new Error("An untrusted sandbox section must not write back");
 
     // A command-line --copy of the same target replaces the config's
-    // copy-rw: a read-only dry run.
+    // copy-rw: a dry run that writes nothing back.
     const dryRun = runSandboxCli(["main.js", "--source-type=module", "-P", "--copy", "out"], { cwd: project });
     if (dryRun.exitCode !== 0 || dryRun.stdout.trim() !== "input" || result() !== "before")
       throw new Error(`--copy out should downgrade the config's copy-rw, got (exit ${dryRun.exitCode}, result ${result()}):\n${dryRun.stdout}${dryRun.stderr}`);
@@ -11959,7 +12340,7 @@ await section("Runner sandbox mode: sandbox section keys are validated...", asyn
       if (refused.exitCode !== 1 || !refused.stderr.includes(`Error: ${needle}`) || refused.stdout !== "")
         throw new Error(`A config ${label} outside its directory should exit 1 with ${JSON.stringify(needle)} on stderr, got (exit ${refused.exitCode}):\n${refused.stdout}${refused.stderr}`);
     }
-    // A read-only copy may come from anywhere.
+    // A --copy input, never written back, may come from anywhere.
     writeFileSync(join(tmp, "elsewhere", "shared.txt"), "shared");
     writeFileSync(join(tmp, "project", "main.js"), [
       'import fs from "fs";',
@@ -13385,7 +13766,7 @@ await section("Fuzz Harness: engine-modelled outcomes exit zero...", async () =>
       "script-throw": "null.x;",
       timeout: "while (true) {}",
       "module-denied": 'import { a } from "./nope.js";',
-      "deep-recursion": "const f = () => f(); f();",
+      "deep-recursion": "const f = () => { f(); }; f();",
       // Requests ~800 MB of element storage in one step, past the harness's
       // 256 MB budget. The refusal raises the uncatchable TGocciaMemoryLimitError;
       // the harness must classify it as a bounded outcome (exit 0), not let it

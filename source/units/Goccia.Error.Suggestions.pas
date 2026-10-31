@@ -390,6 +390,9 @@ resourcestring
   // Syntax errors — nesting limit
   SSuggestNestingLimitExceeded = 'Move deeply nested parts, or part of a long operator or call chain, into separate variables or functions';
 
+  // Syntax errors — bytecode limits
+  SSuggestBytecodeLimit = 'Split the function, or move part of a large literal, call or branch into separate functions or modules';
+
   // Runtime errors — structuredClone
   SSuggestStructuredClone = 'only plain objects, arrays, primitives, and built-in types can be cloned';
 
@@ -411,6 +414,7 @@ resourcestring
 
   // Fetch API
   SSuggestFetchUsage = 'use fetch(url) or fetch(url, { method: "GET" })';
+  SSuggestFetchRedirect = 'redirect is "follow" (the default), "error" or "manual"';
   SSuggestFetchAllowedHosts = 'grant it with --allow-net=<host>, or "allow-net" in the "permissions" block of goccia.json';
   SSuggestFetchDeniedScope = 'refused by the net deny %s (--deny-net=%s, or "deny-net" in the "permissions" block of goccia.json); a deny always wins over an allow';
   SSuggestFetchDeniedAll = 'a net deny refuses every host (--deny-net, or "deny-net": true in the "permissions" block of goccia.json); a deny always wins over an allow';

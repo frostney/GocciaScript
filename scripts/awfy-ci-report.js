@@ -23,6 +23,7 @@ function usage() {
     '  --goccia-candidate <path>',
     '                       Optional candidate Goccia binary, interleaved as goccia-candidate',
     '  --timeout-ms <n>     Per-sample timeout (default: 300000)',
+    '  --counters           Record perf_event counters per Goccia sample where available',
   ].join('\n');
 }
 
@@ -35,6 +36,7 @@ function parseArgs(argv) {
     gocciaBaseline: '',
     gocciaCandidate: '',
     timeoutMs: DEFAULT_TIMEOUT_MS,
+    counters: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -62,6 +64,8 @@ function parseArgs(argv) {
       options.gocciaCandidate = nextValue();
     } else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) {
       options.timeoutMs = parsePositiveInteger(nextValue(), '--timeout-ms');
+    } else if (arg === '--counters') {
+      options.counters = true;
     } else {
       throw new Error(`Unknown option: ${arg}`);
     }
@@ -157,6 +161,7 @@ function runReport(options, manifest) {
   }
   if (options.gocciaBaseline) args.push('--goccia-baseline', options.gocciaBaseline);
   if (options.gocciaCandidate) args.push('--goccia-candidate', options.gocciaCandidate);
+  if (options.counters) args.push('--counters');
   args.push(
     '--repetitions', String(repetitions),
     '--timeout-ms', String(options.timeoutMs),

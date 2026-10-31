@@ -124,7 +124,10 @@ embed an IPv4 host — IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, and
 This is checked twice: against an address literal in the URL, and against the
 address a host name resolved to — so `api.example.com` whose DNS answers with
 `169.254.169.254` is refused unless `private` (or `169.254.169.254`) is
-allowed. Both checks run again on every redirect hop.
+allowed. Both checks run again on every redirect hop; a hop that reuses the
+connection of a redirect within the origin checks the address that connection
+was opened to rather than resolving the name again
+([Fetch: Redirects](built-ins-fetch.md#redirects)).
 
 `private` is a grant of its own: `--allow-net=private` reaches
 `http://127.0.0.1:8080` and `http://localhost:8080`, but no public address. A
@@ -729,8 +732,9 @@ Nested `runScript` children inherit the running engine's set, as described in
 ### Copy inputs
 
 `--copy <host>[=<sandbox>]` copies a host file or directory into the sandbox
-before the run, read-only. `--copy-rw` copies the same way and marks the input
-for [write-back](#write-back). Both repeat. The copies are snapshots, not live
+before the run; the script may change the copy, but it is never written back.
+`--copy-rw` copies the same way and marks the input for
+[write-back](#write-back). Both repeat. The copies are snapshots, not live
 mounts: they form the baseline a diff is measured against, and the host path is
 never reachable from the guest.
 
@@ -751,7 +755,7 @@ never reachable from the guest.
   `Copy path is a symlink (not supported): <path>` (exit 1, see
   [ADR 0071](adr/0071-reject-symlinks-in-sandbox-seed-imports.md)).
 
-The positional entry file is copied read-only to `/<basename>` — unless it lies
+The positional entry file is copied, without write-back, to `/<basename>` — unless it lies
 inside a copied input, in which case it runs at that input's sandbox path and is
 not copied again: `GocciaRunner src/main.js --copy src` runs `/src/main.js`. An
 entry that would land on another input's path is an error that suggests
@@ -777,8 +781,8 @@ the host paths they were copied from, including new files created inside a
 [ADR 0119](adr/0119-host-applied-sandbox-write-back.md) hold:
 
 - a failed run writes nothing;
-- when any input was copied with `--copy-rw`, changes under a read-only
-  `--copy` input, or outside every input, are reported as skipped; a run with
+- when any input was copied with `--copy-rw`, changes under a `--copy`
+  input, or outside every input, are reported as skipped; a run with
   no `--copy-rw` input writes nothing and prints no `write-back:` report;
 - a deletion is never applied;
 - a symbolic link met at write-back, at the file or on its way, is refused
@@ -873,7 +877,7 @@ command line may name any path.
 **Combining with the command line.** Command-line `--copy` and `--copy-rw`
 inputs add to the section's. When a command-line input has the same sandbox
 target as a config input, the command-line one replaces it, so `--copy out`
-over a config's `"copy-rw": ["out"]` is a read-only dry run. There is no flag
+over a config's `"copy-rw": ["out"]` is a dry run that writes nothing back. There is no flag
 that turns a config's sandbox off; run with `--config=<other>` to leave it, or
 with `--ignore-config-permissions`, which ignores the section along with the
 config's other requests.
@@ -942,6 +946,12 @@ Error: /repo/goccia.json: "allowed-hosts" was removed in GocciaScript 0.14.0; us
 Boolean flags no longer take a value: `--compat-asi=false` is an error (exit
 2) rather than a silent enable. In a config file a flag must be exactly `true`
 or `false`; any other value is an invalid value (exit 1).
+
+GocciaScript 0.15.0 removed `--mode` and the `"mode"` config key, again
+without an alias, because bytecode became the only execution mode. Drop the
+option or key: `--mode` with or without a value, and a `"mode"` key, fail with
+status 2, and the message names 0.15.0 instead of 0.14.0. [Build System — Execution
+Mode](build-system.md#execution-mode) shows both messages.
 
 ## Related documents
 

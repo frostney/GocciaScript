@@ -7,11 +7,13 @@ interface
 uses
   Generics.Collections,
 
+  OrderedStringMap,
   UnicodeStringList,
 
   Goccia.AST.Expressions,
   Goccia.AST.Node,
-  Goccia.AST.Statements;
+  Goccia.AST.Statements,
+  Goccia.Profiler.Compile;
 
 type
   TGocciaVarBindingNameCollectionMode = (
@@ -26,18 +28,26 @@ function VarBindingNameCollectionMode(
   const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
   TGocciaVarBindingNameCollectionMode;
 
+{ AProfile, the compile profile when one is on, counts the lookups that keep
+  the names unique (Goccia.Profiler.Compile). }
+function BindingNameSeen(const ANames: TUnicodeStringList; const AName: string;
+  const AProfile: TGocciaCompileProfiler): Boolean;
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
-  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean = False;
+  const AProfile: TGocciaCompileProfiler = nil);
 procedure CollectVariableInfoBindingNames(const AInfo: TGocciaVariableInfo;
-  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean = False;
+  const AProfile: TGocciaCompileProfiler = nil);
 procedure CollectVariableDeclarationBindingNames(
   const ADeclaration: TGocciaVariableDeclaration;
   const ANames: TUnicodeStringList;
-  const AUnique: Boolean = False);
+  const AUnique: Boolean = False;
+  const AProfile: TGocciaCompileProfiler = nil);
 function ParameterListBindsName(const AParameters: TGocciaParameterArray;
   const AName: string): Boolean;
 function ParameterListHasDuplicateBindingNames(
-  const AParameters: TGocciaParameterArray): Boolean;
+  const AParameters: TGocciaParameterArray;
+  const AProfile: TGocciaCompileProfiler = nil): Boolean;
 function ParameterListIsSimple(
   const AParameters: TGocciaParameterArray): Boolean;
 function ParameterListContainsExpressionClass(
@@ -54,6 +64,15 @@ procedure CollectVarBindingNamesFromNodes(
   const ANodes: TObjectList<TGocciaASTNode>;
   const ANames: TUnicodeStringList;
   const AMode: TGocciaVarBindingNameCollectionMode = vbnStandard);
+{ Appends the names ANode binds lexically as a statement-list item that is
+  not a function declaration (ES2026 §8.2.4 LexicallyDeclaredNames,
+  §8.2.8 TopLevelLexicallyDeclaredNames): its let, const or using bindings,
+  its class or enum name, imports, and named default declarations. A function
+  declaration, whose name a block binds lexically but a function body or
+  static block binds as a var, and any other node append nothing. A name is
+  appended once per binding, so a repeated one appears twice. }
+procedure CollectLexicallyDeclaredNames(const ANode: TGocciaASTNode;
+  const ANames: TUnicodeStringList);
 
 implementation
 
@@ -67,18 +86,48 @@ begin
     Result := vbnStandard;
 end;
 
+// One lookup of a unique-name list and the names it compared
+// (TUnicodeStringList.FindString: 1 once the list is hashed).
+procedure CountBindingNameLookup(const AProfile: TGocciaCompileProfiler;
+  const AProbes: Integer);
+begin
+  AProfile.CountLookup(ccBindingNameLookups, ccBindingNameProbes, AProbes);
+end;
+
+function BindingNameSeen(const ANames: TUnicodeStringList; const AName: string;
+  const AProfile: TGocciaCompileProfiler): Boolean;
+var
+  Probes: Integer;
+begin
+  Result := ANames.FindString(AName, Probes);
+  if Assigned(AProfile) then
+    CountBindingNameLookup(AProfile, Probes);
+end;
+
 procedure AddBindingName(const ANames: TUnicodeStringList;
   const AName: string;
-  const AUnique: Boolean);
+  const AUnique: Boolean; const AProfile: TGocciaCompileProfiler = nil);
+var
+  Found: Boolean;
+  Probes: Integer;
 begin
   if AName = '' then
     Exit;
-  if (not AUnique) or (ANames.IndexOf(AName) < 0) then
+  if not AUnique then
+  begin
+    ANames.Add(AName);
+    Exit;
+  end;
+  Found := ANames.FindString(AName, Probes);
+  if Assigned(AProfile) then
+    CountBindingNameLookup(AProfile, Probes);
+  if not Found then
     ANames.Add(AName);
 end;
 
 procedure CollectPatternBindingNames(const APattern: TGocciaDestructuringPattern;
-  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean;
+  const AProfile: TGocciaCompileProfiler);
 var
   ObjPat: TGocciaObjectDestructuringPattern;
   ArrPat: TGocciaArrayDestructuringPattern;
@@ -89,46 +138,52 @@ begin
 
   if APattern is TGocciaIdentifierDestructuringPattern then
     AddBindingName(ANames,
-      TGocciaIdentifierDestructuringPattern(APattern).Name, AUnique)
+      TGocciaIdentifierDestructuringPattern(APattern).Name, AUnique, AProfile)
   else if APattern is TGocciaObjectDestructuringPattern then
   begin
     ObjPat := TGocciaObjectDestructuringPattern(APattern);
     for I := 0 to ObjPat.Properties.Count - 1 do
-      CollectPatternBindingNames(ObjPat.Properties[I].Pattern, ANames, AUnique);
+      CollectPatternBindingNames(ObjPat.Properties[I].Pattern, ANames, AUnique,
+        AProfile);
   end
   else if APattern is TGocciaArrayDestructuringPattern then
   begin
     ArrPat := TGocciaArrayDestructuringPattern(APattern);
     for I := 0 to ArrPat.Elements.Count - 1 do
-      CollectPatternBindingNames(ArrPat.Elements[I], ANames, AUnique);
+      CollectPatternBindingNames(ArrPat.Elements[I], ANames, AUnique,
+        AProfile);
   end
   else if APattern is TGocciaAssignmentDestructuringPattern then
     CollectPatternBindingNames(
-      TGocciaAssignmentDestructuringPattern(APattern).Left, ANames, AUnique)
+      TGocciaAssignmentDestructuringPattern(APattern).Left, ANames, AUnique,
+      AProfile)
   else if APattern is TGocciaRestDestructuringPattern then
     CollectPatternBindingNames(
-      TGocciaRestDestructuringPattern(APattern).Argument, ANames, AUnique);
+      TGocciaRestDestructuringPattern(APattern).Argument, ANames, AUnique,
+      AProfile);
 end;
 
 procedure CollectVariableInfoBindingNames(const AInfo: TGocciaVariableInfo;
-  const ANames: TUnicodeStringList; const AUnique: Boolean = False);
+  const ANames: TUnicodeStringList; const AUnique: Boolean;
+  const AProfile: TGocciaCompileProfiler);
 begin
   if AInfo.IsPattern or Assigned(AInfo.Pattern) then
-    CollectPatternBindingNames(AInfo.Pattern, ANames, AUnique)
+    CollectPatternBindingNames(AInfo.Pattern, ANames, AUnique, AProfile)
   else
-    AddBindingName(ANames, AInfo.Name, AUnique);
+    AddBindingName(ANames, AInfo.Name, AUnique, AProfile);
 end;
 
 procedure CollectVariableDeclarationBindingNames(
   const ADeclaration: TGocciaVariableDeclaration;
   const ANames: TUnicodeStringList;
-  const AUnique: Boolean = False);
+  const AUnique: Boolean;
+  const AProfile: TGocciaCompileProfiler);
 var
   I: Integer;
 begin
   for I := 0 to High(ADeclaration.Variables) do
     CollectVariableInfoBindingNames(ADeclaration.Variables[I], ANames,
-      AUnique);
+      AUnique, AProfile);
 end;
 
 function ParameterListBindsName(const AParameters: TGocciaParameterArray;
@@ -144,7 +199,7 @@ begin
       Names := TUnicodeStringList.Create;
       try
         CollectPatternBindingNames(AParameters[I].Pattern, Names, True);
-        if Names.IndexOf(AName) >= 0 then
+        if Names.HasString(AName) then
           Exit(True);
       finally
         Names.Free;
@@ -158,16 +213,22 @@ begin
 end;
 
 function ParameterListHasDuplicateBindingNames(
-  const AParameters: TGocciaParameterArray): Boolean;
+  const AParameters: TGocciaParameterArray;
+  const AProfile: TGocciaCompileProfiler): Boolean;
 var
   I, J: Integer;
   Names, PatternNames: TUnicodeStringList;
 
   function AddBindingName(const AName: string): Boolean;
+  var
+    Probes: Integer;
   begin
     if AName = '' then
       Exit(False);
-    if Names.IndexOf(AName) >= 0 then
+    Result := Names.FindString(AName, Probes);
+    if Assigned(AProfile) then
+      CountBindingNameLookup(AProfile, Probes);
+    if Result then
       Exit(True);
     Names.Add(AName);
     Result := False;
@@ -203,8 +264,7 @@ var
 begin
   for I := 0 to High(AParameters) do
     if AParameters[I].IsRest or AParameters[I].IsPattern or
-       Assigned(AParameters[I].DefaultValue) or AParameters[I].IsOptional or
-       (AParameters[I].TypeAnnotation <> '') then
+       Assigned(AParameters[I].DefaultValue) then
       Exit(False);
   Result := True;
 end;
@@ -706,6 +766,69 @@ begin
     Exit;
   for I := 0 to ANodes.Count - 1 do
     CollectVarBindingNamesFromNodeInternal(ANodes[I], ANames, AMode, True);
+end;
+
+procedure CollectLexicallyDeclaredNames(const ANode: TGocciaASTNode;
+  const ANames: TUnicodeStringList);
+var
+  VarDecl: TGocciaVariableDeclaration;
+  ImportDecl: TGocciaImportDeclaration;
+  ImportPair: TStringStringMap.TKeyValuePair;
+  DefaultDecl: TGocciaExportDefaultDeclaration;
+  I: Integer;
+begin
+  VarDecl := nil;
+  if ANode is TGocciaVariableDeclaration then
+    VarDecl := TGocciaVariableDeclaration(ANode)
+  else if ANode is TGocciaExportVariableDeclaration then
+    VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
+  if Assigned(VarDecl) then
+  begin
+    if not VarDecl.IsVar then
+      CollectVariableDeclarationBindingNames(VarDecl, ANames);
+  end
+  else if ANode is TGocciaDestructuringDeclaration then
+  begin
+    if not TGocciaDestructuringDeclaration(ANode).IsVar then
+      CollectPatternBindingNames(
+        TGocciaDestructuringDeclaration(ANode).Pattern, ANames);
+  end
+  else if ANode is TGocciaExportDestructuringDeclaration then
+    CollectLexicallyDeclaredNames(
+      TGocciaExportDestructuringDeclaration(ANode).Declaration, ANames)
+  else if ANode is TGocciaExportClassDeclaration then
+    CollectLexicallyDeclaredNames(
+      TGocciaExportClassDeclaration(ANode).Declaration, ANames)
+  else if ANode is TGocciaImportDeclaration then
+  begin
+    ImportDecl := TGocciaImportDeclaration(ANode);
+    AddBindingName(ANames, ImportDecl.NamespaceName, False);
+    for ImportPair in ImportDecl.Imports do
+      AddBindingName(ANames, ImportPair.Key, False);
+    // The import map retains one entry when two specifiers bind one name.
+    AddBindingName(ANames, ImportDecl.DuplicateBinding, False);
+  end
+  else if ANode is TGocciaExportDefaultDeclaration then
+  begin
+    DefaultDecl := TGocciaExportDefaultDeclaration(ANode);
+    if DefaultDecl.IsDirectDeclaration and
+       (DefaultDecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) then
+      AddBindingName(ANames, DefaultDecl.LocalName, False);
+  end
+  else if ANode is TGocciaUsingDeclaration then
+  begin
+    for I := 0 to High(TGocciaUsingDeclaration(ANode).Variables) do
+      CollectVariableInfoBindingNames(
+        TGocciaUsingDeclaration(ANode).Variables[I], ANames);
+  end
+  else if ANode is TGocciaClassDeclaration then
+    AddBindingName(ANames,
+      TGocciaClassDeclaration(ANode).ClassDefinition.Name, False)
+  else if ANode is TGocciaEnumDeclaration then
+    AddBindingName(ANames, TGocciaEnumDeclaration(ANode).Name, False)
+  else if ANode is TGocciaExportEnumDeclaration then
+    AddBindingName(ANames,
+      TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
 end;
 
 end.

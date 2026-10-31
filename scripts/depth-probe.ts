@@ -220,7 +220,7 @@ const CATALOG: Probe[] = [
     depths: [1, 5],
     summary: "Overflow the JS stack DEPTH times (a count), catching each RangeError, then check the engine still works",
     body: (d) =>
-      `const overflow = () => overflow();\n` +
+      `const overflow = () => { overflow(); };\n` +
       `report(() => Array.from({ length: ${d} }).map(() => { try { overflow(); return "none"; } catch (e) { return e.constructor.name; } }).join(","));\n` +
       `check(sanity, SANITY);\n`,
   },

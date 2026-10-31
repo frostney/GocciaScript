@@ -26,6 +26,10 @@ type
     FUrl: string;
     FHeaders: TGocciaHeadersValue;
     FBody: TBytes;
+    { The bytes of FBody reserved against the memory limit on this thread's
+      collector (TGarbageCollector.TryReserveExternalBytes); released when
+      the body is consumed or the response is freed. }
+    FChargedBytes: Int64;
     FBodyUsed: Boolean;
     FRedirected: Boolean;
 
@@ -56,12 +60,19 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
 
     procedure InitializePrototype;
+    { Drops the body once it is consumed (it can be read only once) and
+      gives its reservation back. }
+    procedure ReleaseBody;
   public
     constructor Create(const AClass: TGocciaClassValue = nil);
+    destructor Destroy; override;
 
+    { AChargedBytes: how many of ABody's bytes the caller reserved on this
+      thread's collector (TryReserveExternalBytes) for the response, which
+      owns the reservation from here and releases it with the body. }
     procedure InitFromHTTP(const AStatus: Integer; const AStatusText, AUrl: string;
       const AHeaders: TGocciaHeadersValue; const ABody: TBytes;
-      const ARedirected: Boolean);
+      const ARedirected: Boolean; const AChargedBytes: Int64);
 
     function ToStringTag: string; override;
     procedure TraceReferences; override;
@@ -90,6 +101,7 @@ uses
   Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
@@ -119,6 +131,7 @@ begin
   FUrl := '';
   FHeaders := TGocciaHeadersValue.Create;
   SetLength(FBody, 0);
+  FChargedBytes := 0;
   FBodyUsed := False;
   FRedirected := False;
   InitializePrototype;
@@ -127,17 +140,39 @@ begin
     FPrototype := Shared.Prototype;
 end;
 
+destructor TGocciaResponseValue.Destroy;
+begin
+  ReleaseBody;
+  inherited;
+end;
+
 procedure TGocciaResponseValue.InitFromHTTP(const AStatus: Integer;
   const AStatusText, AUrl: string; const AHeaders: TGocciaHeadersValue;
-  const ABody: TBytes; const ARedirected: Boolean);
+  const ABody: TBytes; const ARedirected: Boolean;
+  const AChargedBytes: Int64);
 begin
+  ReleaseBody;
   FStatus := AStatus;
   FStatusText := AStatusText;
   FUrl := AUrl;
   FHeaders := AHeaders;
   FBody := ABody;
+  FChargedBytes := AChargedBytes;
   FRedirected := ARedirected;
   FBodyUsed := False;
+end;
+
+procedure TGocciaResponseValue.ReleaseBody;
+var
+  GC: TGarbageCollector;
+begin
+  FBody := nil;
+  if FChargedBytes <= 0 then
+    Exit;
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
+    GC.ReleaseExternalBytes(FChargedBytes);
+  FChargedBytes := 0;
 end;
 
 procedure TGocciaResponseValue.InitializePrototype;
@@ -329,8 +364,17 @@ begin
     R.FBodyUsed := True;
 
     BodyText := DecodeUTF8WithReplacement(R.FBody);
-    P.Resolve(TGocciaStringLiteralValue.Create(BodyText));
+    // The decoded text is all that is still needed of the body.
+    R.ReleaseBody;
     Result := P;
+    try
+      P.Resolve(TGocciaStringLiteralValue.Create(BodyText));
+    except
+      // Text over the memory limit rejects the read, as a body that does
+      // not fit rejects the fetch.
+      on E: TGocciaThrowValue do
+        P.Reject(E.Value);
+    end;
   finally
     Roots.Clear;
   end;
@@ -365,6 +409,8 @@ begin
     R.FBodyUsed := True;
 
     BodyText := DecodeUTF8WithReplacement(R.FBody);
+    // The decoded text is all that is still needed of the body.
+    R.ReleaseBody;
 
     Parser := TGocciaJSONParser.Create;
     try
@@ -403,6 +449,7 @@ function TGocciaResponseValue.ResponseArrayBuffer(
 var
   R: TGocciaResponseValue;
   AB: TGocciaArrayBufferValue;
+  Body: TBytes;
   P: TGocciaPromiseValue;
   Roots: TGocciaActiveRootFrame;
 begin
@@ -423,12 +470,24 @@ begin
     end;
     R.FBodyUsed := True;
 
-    AB := TGocciaArrayBufferValue.Create(Length(R.FBody));
-    if Length(R.FBody) > 0 then
-      Move(R.FBody[0], AB.Data[0], Length(R.FBody));
-
-    P.Resolve(AB);
+    { The buffer adopts the body's bytes rather than copying them: the
+      response gives its reservation back and the buffer reserves the same
+      bytes as its own, so the body is never charged twice. }
+    Body := R.FBody;
+    R.ReleaseBody;
     Result := P;
+    try
+      AB := TGocciaArrayBufferValue.CreateFromBytes(Body);
+      Roots.Add(AB);
+    except
+      // A buffer over the memory limit rejects the read.
+      on E: TGocciaThrowValue do
+      begin
+        P.Reject(E.Value);
+        Exit;
+      end;
+    end;
+    P.Resolve(AB);
   finally
     Roots.Clear;
   end;
@@ -446,6 +505,9 @@ var
   InitObj, HeadersObj: TGocciaObjectValue;
   PropNames: TArray<string>;
   I, StatusVal: Integer;
+  Body: TBytes;
+  Charged: Int64;
+  GC: TGarbageCollector;
 begin
   if AArguments.Length = 0 then Exit;
 
@@ -454,7 +516,21 @@ begin
   if not ((BodyArg is TGocciaUndefinedLiteralValue) or
           (BodyArg is TGocciaNullLiteralValue)) then
   begin
-    FBody := EncodeUTF8WithReplacement(BodyArg.ToStringLiteral.Value);
+    Body := EncodeUTF8WithReplacement(BodyArg.ToStringLiteral.Value);
+    { The encoded body is held natively for the response's life, so it is
+      reserved against the memory limit as a fetched body is. }
+    Charged := 0;
+    GC := TGarbageCollector.Instance;
+    if Assigned(GC) and (Length(Body) > 0) then
+    begin
+      if not GC.TryReserveExternalBytes(Length(Body), Self) then
+        ThrowRangeError(SErrorMemoryLimitExceeded,
+          SSuggestMemoryLimitExceeded);
+      Charged := Length(Body);
+    end;
+    ReleaseBody;
+    FBody := Body;
+    FChargedBytes := Charged;
   end;
 
   // Argument 1: init dictionary { status, statusText, headers }

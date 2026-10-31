@@ -141,6 +141,7 @@ uses
   Goccia.FloatingPoint,
   Goccia.MicrotaskQueue,
   Goccia.UncatchableFault,
+  Goccia.Utils.Arrays,
   Goccia.Values.ArrayValue,
   Goccia.Values.Await,
   Goccia.Values.Error,
@@ -1086,7 +1087,8 @@ begin
         try
           AssignBenchmarkResultProperties(SingleResult, BenchResult);
 
-          ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+          ArrayCreateDataProperty(ResultsArray, ResultsArray.GetLength,
+            SingleResult);
         finally
           if Assigned(GC) then
             GC.RemoveTempRoot(SingleResult);
@@ -1119,7 +1121,8 @@ begin
             SingleResult.AssignProperty('error',
               TGocciaStringLiteralValue.Create(BenchmarkExceptionMessage(E)));
 
-            ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+            ArrayCreateDataProperty(ResultsArray, ResultsArray.GetLength,
+              SingleResult);
           finally
             if Assigned(GC) then
               GC.RemoveTempRoot(SingleResult);
@@ -1194,7 +1197,8 @@ begin
         try
           AssignBenchmarkResultProperties(SingleResult, BenchResult);
 
-          ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+          ArrayCreateDataProperty(ResultsArray, ResultsArray.GetLength,
+            SingleResult);
         finally
           if Assigned(GC) then
             GC.RemoveTempRoot(SingleResult);
@@ -1226,7 +1230,8 @@ begin
               BenchCase.SummaryScope, BenchCase.BoxplotScope);
             SingleResult.AssignProperty('error',
               TGocciaStringLiteralValue.Create(BenchmarkExceptionMessage(E)));
-            ResultsArray.SetElement(ResultsArray.GetLength, SingleResult);
+            ArrayCreateDataProperty(ResultsArray, ResultsArray.GetLength,
+              SingleResult);
           finally
             if Assigned(GC) then
               GC.RemoveTempRoot(SingleResult);

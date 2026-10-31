@@ -70,9 +70,19 @@ if args[:2] == ["api", "graphql"]:
         output({"data":{"repository":{"pullRequest":with_connection_counts(scenario["review"])}}})
     if "releaseAssets" in query:
         output({"data":{"repository":scenario["tag"]}})
-    output({"data":{"repository":{"pullRequest":scenario["pull"]}}})
+    pulls = scenario.get("pullsByRequest") or [scenario["pull"]]
+    selected = pulls[min(counter, len(pulls) - 1)]
+    if "state" not in query.split("commits(")[0].split():
+        selected.pop("state", None)
+    output({"data":{"repository":{"pullRequest":selected}}})
 
 endpoint = next((arg for arg in args if arg.startswith("repos/")), "")
+if "per_page=" in endpoint and "expectedRestPageSize" in scenario:
+    from urllib.parse import parse_qs, urlsplit
+    size = int(parse_qs(urlsplit(endpoint).query)["per_page"][0])
+    if size != scenario["expectedRestPageSize"]:
+        print("unexpected REST page size: " + str(size), file=sys.stderr)
+        sys.exit(3)
 if "user" in args:
     output({"login":"maintainer"})
 if endpoint.endswith("/pulls/comments/10"):
@@ -93,7 +103,7 @@ if "/actions/runs?" in endpoint:
     census_path = pathlib.Path(os.environ["FAKE_GH_COUNTER"] + ".census")
     index = int(census_path.read_text()) if census_path.exists() else 0
     census_path.write_text(str(index + 1))
-    states = scenario["census"]
+    states = scenario.get("census") or [{"runPages": [scenario.get("restWorkflowRuns", {"total_count": 0, "workflow_runs": []})]}]
     output(states[min(index, len(states) - 1)]["runPages"])
 if "/actions/runs/" in endpoint and "/jobs" in endpoint:
     census_path = pathlib.Path(os.environ["FAKE_GH_COUNTER"] + ".census")
@@ -115,7 +125,14 @@ def check(
     started_at: str = "2026-08-12T08:00:00Z",
     app: str = "automated-review-app",
     completed_at: str | None = None,
+    event: str | None = None,
+    suite_id: int | None = None,
+    workflow: int = 1,
 ) -> dict:
+    """A check run; with an event, a job of a workflow triggered by that event."""
+    suite = {"app": {"slug": app}, "databaseId": suite_id}
+    if event:
+        suite["workflowRun"] = {"event": event, "workflow": {"databaseId": workflow}}
     return {
         "__typename": "CheckRun",
         "id": f"check-{name}-{app}-{started_at}",
@@ -125,13 +142,14 @@ def check(
         "detailsUrl": "https://example.invalid/check",
         "startedAt": started_at,
         "completedAt": completed_at or (started_at if status == "COMPLETED" else None),
-        "checkSuite": {"app": {"slug": app}},
+        "checkSuite": suite,
     }
 
 
-def pull(head: str, checks: list[dict], merged: bool = False) -> dict:
+def pull(head: str, checks: list[dict], merged: bool = False, state: str | None = None) -> dict:
     return {
         "headRefOid": head,
+        "state": state or ("MERGED" if merged else "OPEN"),
         "merged": merged,
         "mergedAt": "2026-08-12T08:00:00Z" if merged else None,
         "mergeCommit": {"oid": "merge-sha"} if merged else None,
@@ -303,7 +321,7 @@ class WaitCommandsTest(unittest.TestCase):
         )
         self.assertEqual(output["state"], "waiting")
 
-    def test_latest_duplicate_check_context_controls_the_gate(self) -> None:
+    def test_a_running_context_keeps_its_check_name_waiting(self) -> None:
         self.write_scenario(
             pull=pull(
                 "head-1",
@@ -395,6 +413,244 @@ class WaitCommandsTest(unittest.TestCase):
             "--head", "head-1", "--check", "CI", "--deadline", self.deadline(), "--interval", "0.01", "--state", str(state),
         )
         self.assertEqual(output["state"], "changed")
+
+    def named_check_wait(self, *checks: str, state: Path | None = None, seconds: float = 0.3) -> dict:
+        deadline = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+        return self.run_json(
+            DELIVERY, "wait", "checks-terminal", "--repo", "owner/repo", "--pr", "7",
+            "--head", "head-1", *(part for name in checks for part in ("--check", name)),
+            "--deadline", deadline, "--interval", "0.05",
+            *(("--state", str(state)) if state else ()),
+        )[1]
+
+    def test_named_check_wait_ignores_checks_it_was_not_asked_about(self) -> None:
+        pending = check("CI", "IN_PROGRESS", None)
+        others = [check(f"other {conclusion}", "COMPLETED", conclusion) for conclusion in ("SKIPPED", "NEUTRAL", "FAILURE")]
+        with self.subTest("one wait"):
+            self.write_scenario(pullsByRequest=[pull("head-1", [pending]), pull("head-1", [pending, *others])])
+            output = self.named_check_wait("CI", seconds=2)
+            self.assertEqual(output["state"], "timed-out")
+            self.assertEqual(len(output["observation"]["checks"]), 4)
+        with self.subTest("resumed checkpoint"):
+            state = self.directory / "wait.json"
+            self.write_scenario(pull=pull("head-1", [pending]))
+            self.assertEqual(self.named_check_wait("CI", state=state)["state"], "timed-out")
+            self.write_scenario(pull=pull("head-1", [pending, *others]))
+            self.assertEqual(self.named_check_wait("CI", state=state)["state"], "timed-out")
+
+    def test_named_checks_are_judged_alone_and_pass_when_skipped_or_neutral(self) -> None:
+        self.write_scenario(pull=pull("head-1", [
+            check("CI", "COMPLETED", "SKIPPED"),
+            check("Lint", "COMPLETED", "NEUTRAL"),
+            check("optional", "COMPLETED", "FAILURE"),
+        ]))
+        output = self.named_check_wait("CI", "Lint", seconds=3)
+        self.assertEqual(output["state"], "satisfied")
+        self.assertEqual(output["metrics"]["observations"], 1)
+
+    def test_named_check_failure_wakes_the_wait_while_another_named_check_runs(self) -> None:
+        deploy = check("Deploy", "IN_PROGRESS", None)
+        self.write_scenario(pullsByRequest=[
+            pull("head-1", [check("CI", "IN_PROGRESS", None), deploy]),
+            pull("head-1", [check("CI", "COMPLETED", "FAILURE"), deploy]),
+        ])
+        output = self.named_check_wait("CI", "Deploy", seconds=3)
+        self.assertEqual(output["state"], "changed")
+        self.assertIn("non-success terminal result: CI", output["reason"])
+        self.assertEqual(output["metrics"]["observations"], 2)
+
+    def test_named_check_that_ends_skipped_or_neutral_does_not_wake_the_wait(self) -> None:
+        deploy = check("Deploy", "IN_PROGRESS", None)
+        state = self.directory / "wait.json"
+        self.write_scenario(pull=pull("head-1", [check("CI", "IN_PROGRESS", None), check("Lint", "IN_PROGRESS", None), deploy]))
+        self.assertEqual(self.named_check_wait("CI", "Lint", "Deploy", state=state)["state"], "timed-out")
+        self.write_scenario(pull=pull("head-1", [check("CI", "COMPLETED", "SKIPPED"), check("Lint", "COMPLETED", "NEUTRAL"), deploy]))
+        self.assertEqual(self.named_check_wait("CI", "Lint", "Deploy", state=state)["state"], "timed-out")
+
+    def test_named_check_that_already_failed_ends_the_wait_while_others_run(self) -> None:
+        self.write_scenario(pull=pull("head-1", [
+            check("CI", "COMPLETED", "FAILURE"), check("Deploy", "IN_PROGRESS", None),
+        ]))
+        _, inspected = self.run_json(
+            DELIVERY, "inspect", "checks-terminal", "--repo", "owner/repo",
+            "--pr", "7", "--head", "head-1", "--check", "CI", "--check", "Deploy",
+        )
+        self.assertEqual(inspected["state"], "changed")
+        self.assertIn("CI", inspected["reason"])
+        output = self.named_check_wait("CI", "Deploy", seconds=3)
+        self.assertEqual(output["state"], "changed")
+        self.assertEqual(output["metrics"]["observations"], 1)
+
+    def test_every_source_of_a_check_name_must_pass(self) -> None:
+        # One workflow on both push and pull_request runs each job twice per head.
+        for name, runs, expected in (
+            ("push failed, pull_request passed", [("push", 1, "automated-review-app", "FAILURE"), ("pull_request", 1, "automated-review-app", "SUCCESS")], "changed"),
+            ("push failed, pull_request running", [("push", 1, "automated-review-app", "FAILURE"), ("pull_request", 1, "automated-review-app", None)], "changed"),
+            ("both passed", [("push", 1, "automated-review-app", "SUCCESS"), ("pull_request", 1, "automated-review-app", "SUCCESS")], "satisfied"),
+            ("two workflows with one job name", [("pull_request", 1, "automated-review-app", "FAILURE"), ("pull_request", 2, "automated-review-app", "SUCCESS")], "changed"),
+            ("two apps with one check name", [(None, 1, "vercel", "FAILURE"), (None, 1, "netlify", "SUCCESS")], "changed"),
+        ):
+            with self.subTest(name):
+                shutil.rmtree(self.directory / ".agent", ignore_errors=True)
+                self.write_scenario(pull=pull("head-1", [
+                    check("test", "COMPLETED" if conclusion else "IN_PROGRESS", conclusion, f"2026-08-12T08:00:0{index}Z",
+                          app=app, event=event, suite_id=10 + index, workflow=workflow)
+                    for index, (event, workflow, app, conclusion) in enumerate(runs)
+                ]))
+                self.assertEqual(self.named_check_wait("test", seconds=3)["state"], expected)
+
+    def test_a_newer_check_suite_from_the_same_source_replaces_the_older(self) -> None:
+        # A run cancelled by a newer one, or a re-check after an edit, stays on the head.
+        # A newer suite's job can start before an older suite's job does.
+        for name, older, newer, newer_started, expected in (
+            ("failure then success", "FAILURE", "SUCCESS", "2026-09-08T07:43:45Z", "satisfied"),
+            ("cancelled then success", "CANCELLED", "SUCCESS", "2026-09-08T07:43:45Z", "satisfied"),
+            ("success then failure", "SUCCESS", "FAILURE", "2026-09-08T07:43:45Z", "changed"),
+            ("newer suite started first and failed", "SUCCESS", "FAILURE", "2026-09-08T07:43:05Z", "changed"),
+        ):
+            with self.subTest(name):
+                shutil.rmtree(self.directory / ".agent", ignore_errors=True)
+                self.write_scenario(pull=pull("head-1", [
+                    check("conventional-title", "COMPLETED", newer, newer_started, event="pull_request", suite_id=12),
+                    check("conventional-title", "COMPLETED", older, "2026-09-08T07:43:25Z", event="pull_request", suite_id=11),
+                ]))
+                self.assertEqual(self.named_check_wait("conventional-title", seconds=3)["state"], expected)
+
+    def test_jobs_with_one_name_in_one_suite_all_count(self) -> None:
+        self.write_scenario(pull=pull("head-1", [
+            check("test", "COMPLETED", "SUCCESS", "2026-08-12T08:00:05Z", event="pull_request", suite_id=11),
+            check("test", "COMPLETED", "FAILURE", "2026-08-12T08:00:00Z", event="pull_request", suite_id=11),
+        ]))
+        self.assertEqual(self.named_check_wait("test", seconds=3)["state"], "changed")
+
+    def test_rest_fallback_finds_the_source_of_each_check_run(self) -> None:
+        older = {"name": "test", "status": "completed", "conclusion": "failure", "started_at": "2026-08-12T08:00:05Z", "id": 1, "app": {"slug": "github-actions"}, "check_suite": {"id": 11}}
+        newer = {"name": "test", "status": "completed", "conclusion": "success", "started_at": "2026-08-12T08:00:00Z", "id": 2, "app": {"slug": "github-actions"}, "check_suite": {"id": 12}}
+        for events, expected in ((("pull_request", "pull_request"), "satisfied"), (("push", "pull_request"), "changed")):
+            with self.subTest(events=events):
+                self.counter.unlink(missing_ok=True)
+                self.counter.with_name("counter.census").unlink(missing_ok=True)
+                shutil.rmtree(self.directory / ".agent", ignore_errors=True)
+                self.write_scenario(
+                    graphqlRateLimited=True,
+                    restChecks={"check_runs": [newer, older]},
+                    restWorkflowRuns={"total_count": 2, "workflow_runs": [
+                        {"id": 100 + index, "check_suite_id": suite, "workflow_id": 1, "event": event}
+                        for index, (suite, event) in enumerate(zip((11, 12), events))
+                    ]},
+                )
+                output = self.named_check_wait("test", seconds=3)
+                self.assertEqual(output["state"], expected)
+                self.assertEqual(output["metrics"]["rateLimitFallbacks"], 1)
+
+    def test_rest_fallback_waits_until_every_actions_run_is_listed(self) -> None:
+        run = {"name": "test", "status": "completed", "conclusion": "success", "started_at": "2026-08-12T08:00:00Z", "id": 1, "app": {"slug": "github-actions"}, "check_suite": {"id": 11}}
+        self.write_scenario(graphqlRateLimited=True, restChecks={"check_runs": [run]})
+        output = self.named_check_wait("test")
+        self.assertEqual(output["state"], "timed-out")
+        self.assertGreater(output["metrics"]["retries"], 0)
+
+    def test_named_check_that_failed_to_start_or_went_stale_ends_the_wait(self) -> None:
+        # Both are conclusions in GitHub's GraphQL CheckConclusionState.
+        for conclusion in ("STARTUP_FAILURE", "STALE"):
+            with self.subTest(conclusion=conclusion):
+                self.write_scenario(pull=pull("head-1", [check("CI", "COMPLETED", conclusion)]))
+                _, output = self.run_json(
+                    DELIVERY, "inspect", "checks-terminal", "--repo", "owner/repo",
+                    "--pr", "7", "--head", "head-1", "--check", "CI",
+                )
+                self.assertEqual(output["state"], "changed")
+
+    def test_rest_fallback_judges_a_commit_status_by_its_latest_state(self) -> None:
+        # GitHub lists statuses newest first; one context can change twice in a second.
+        for history, expected in (
+            ([("failure", "08:00"), ("success", "08:05")], "satisfied"),
+            ([("success", "08:00"), ("failure", "08:05")], "changed"),
+            ([("pending", "08:00"), ("success", "08:00")], "satisfied"),
+        ):
+            with self.subTest(expected=expected):
+                self.counter.unlink(missing_ok=True)
+                shutil.rmtree(self.directory / ".agent", ignore_errors=True)
+                self.write_scenario(
+                    graphqlRateLimited=True,
+                    restStatuses=[
+                        {"context": "Vercel", "state": state, "created_at": f"2026-08-12T{time}:00Z"}
+                        for state, time in reversed(history)
+                    ],
+                )
+                output = self.named_check_wait("Vercel", seconds=3)
+                self.assertEqual(output["state"], expected)
+                self.assertEqual(len(output["observation"]["checks"]), 1)
+
+    def test_checkpoint_from_the_earlier_helper_resumes_without_a_change(self) -> None:
+        # The earlier key listed every terminal check that did not succeed.
+        pending = check("CI", "IN_PROGRESS", None)
+        skipped = check("optional", "COMPLETED", "SKIPPED")
+        self.write_scenario(pull=pull("head-1", [pending, skipped]))
+        state = self.directory / "wait.json"
+        self.assertEqual(self.named_check_wait("CI", state=state)["state"], "timed-out")
+        checkpoint = json.loads(state.read_text())
+        earlier = {"head": "head-1", "nonSuccess": ["optional"], "terminal": False}
+        checkpoint["digest"] = hashlib.sha256(
+            json.dumps(earlier, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        state.write_text(json.dumps(checkpoint))
+        self.assertEqual(self.named_check_wait("CI", state=state)["state"], "timed-out")
+        self.write_scenario(pull=pull("head-1", [check("CI", "COMPLETED", "FAILURE"), skipped]))
+        state.write_text(json.dumps(checkpoint))
+        self.assertEqual(self.named_check_wait("CI", state=state)["state"], "changed")
+        # A wait for other checks on the same state file leaves it untouched.
+        self.write_scenario(pull=pull("head-1", [pending, skipped]))
+        state.write_text(json.dumps(checkpoint))
+        self.assertEqual(self.named_check_wait("optional", state=state)["state"], "invalidated")
+        self.assertEqual(json.loads(state.read_text())["digest"], checkpoint["digest"])
+        self.assertEqual(self.named_check_wait("CI", state=state)["state"], "timed-out")
+
+    def merge_wait(self, command: str = "wait", seconds: float = 3) -> dict:
+        deadline = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+        timing = ("--deadline", deadline, "--interval", "0.05") if command == "wait" else ()
+        return self.run_json(
+            DELIVERY, command, "pr-merged", "--repo", "owner/repo", "--pr", "7", "--head", "head-1", *timing,
+        )[1]
+
+    def test_pr_merged_reports_a_merge(self) -> None:
+        self.write_scenario(pull=pull("head-1", [], merged=True))
+        output = self.merge_wait()
+        self.assertEqual(output["state"], "satisfied")
+        self.assertEqual(output["observation"]["mergeCommit"], "merge-sha")
+
+    def test_pr_merged_keeps_waiting_on_an_open_pull_request(self) -> None:
+        self.write_scenario(pull=pull("head-1", []))
+        output = self.merge_wait(seconds=0.3)
+        self.assertEqual(output["state"], "timed-out")
+        self.assertEqual(output["reason"], "deadline reached")
+
+    def test_pr_merged_ends_when_the_pull_request_closes_without_merging(self) -> None:
+        self.write_scenario(pull=pull("head-1", [], state="CLOSED"))
+        for command in ("wait", "inspect"):
+            with self.subTest(command=command):
+                output = self.merge_wait(command)
+                self.assertEqual(output["state"], "changed")
+                self.assertIn("closed without merging", output["reason"])
+                self.assertEqual(output["metrics"]["observations"], 1)
+        self.write_scenario(pull=pull("head-2", [], state="CLOSED"))
+        self.assertEqual(self.merge_wait()["state"], "invalidated")
+
+    def test_pr_merged_rest_fallback_tells_closed_from_merged(self) -> None:
+        # REST gives an unmerged pull request its test merge commit.
+        for rest, state, merge_commit, expected in (
+            ({"state": "closed", "merged": False, "merged_at": None, "merge_commit_sha": "test-merge-sha"}, "CLOSED", None, "changed"),
+            ({"state": "closed", "merged": True, "merged_at": "2026-08-12T08:00:00Z", "merge_commit_sha": "merge-sha"}, "MERGED", "merge-sha", "satisfied"),
+        ):
+            with self.subTest(expected=expected):
+                self.counter.unlink(missing_ok=True)
+                shutil.rmtree(self.directory / ".agent", ignore_errors=True)
+                self.write_scenario(graphqlRateLimited=True, restPull={"head": {"sha": "head-1"}, **rest})
+                output = self.merge_wait()
+                self.assertEqual(output["state"], expected)
+                self.assertEqual(output["observation"]["state"], state)
+                self.assertEqual(output["observation"]["mergeCommit"], merge_commit)
+                self.assertEqual(output["metrics"]["rateLimitFallbacks"], 1)
 
     def write_digestless_checkpoint(self, *arguments: str) -> None:
         """Leave the checkpoint a run writes when GitHub never answered."""
@@ -866,6 +1122,100 @@ class WaitCommandsTest(unittest.TestCase):
         self.assertEqual(output["state"], "waiting")
         self.assertIn("stable", output["reason"])
 
+    def test_rest_page_size_preserves_complete_workflow_census(self) -> None:
+        runs = [
+            workflow_run(101, matrix_jobs(3)),
+            workflow_run(202, matrix_jobs(2, run_id=202), name="Follow-up"),
+        ]
+        state = census(*runs)
+        state["runPages"] = [
+            {"total_count": 2, "workflow_runs": [item["run"]]} for item in runs
+        ]
+        state["jobPages"] = {
+            str(item["run"]["id"]): [
+                {"total_count": len(item["jobs"]), "jobs": [job]} for job in item["jobs"]
+            ]
+            for item in runs
+        }
+        for size, arguments in (
+            (100, []),
+            (1, ["--rest-page-size", "1"]),
+            (100, ["--rest-page-size", "100"]),
+        ):
+            with self.subTest(size=size, arguments=arguments):
+                self.reset_census()
+                self.write_scenario(census=[state], expectedRestPageSize=size)
+                result, output = self.census_wait(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output["state"], "satisfied")
+                self.assertEqual(output["metrics"]["observations"], 2)
+                self.assertEqual([run["id"] for run in output["observation"]["runs"]], [101, 202])
+                self.assertEqual(sum(len(run["jobs"]) for run in output["observation"]["runs"]), 5)
+
+    def test_small_rest_pages_keep_later_failures_and_missing_pages_visible(self) -> None:
+        jobs = matrix_jobs(2)
+        jobs[-1]["conclusion"] = "failure"
+        state = census(workflow_run(101, jobs))
+        state["jobPages"]["101"] = [
+            {"total_count": 2, "jobs": [job]} for job in jobs
+        ]
+        self.write_scenario(census=[state], expectedRestPageSize=1)
+        _, output = self.census_wait("--rest-page-size", "1")
+        self.assertEqual(output["state"], "changed")
+        self.assertIn("test (1)", output["reason"])
+        self.reset_census()
+        state["jobPages"]["101"].pop()
+        self.write_scenario(census=[state], expectedRestPageSize=1)
+        _, output = self.census_wait("--rest-page-size", "1", deadline=self.short_deadline())
+        self.assertEqual(output["state"], "timed-out")
+        self.assertGreater(output["metrics"]["retries"], 0)
+
+    def test_rest_page_size_applies_to_rate_limit_fallback(self) -> None:
+        self.write_scenario(
+            graphqlRateLimited=True,
+            expectedRestPageSize=5,
+            restChecks={"check_runs": [{"name": "CI", "status": "completed", "conclusion": "success"}]},
+        )
+        result, output = self.run_json(
+            DELIVERY, "inspect", "checks-terminal", "--repo", "owner/repo", "--pr", "7",
+            "--head", "head-1", "--check", "CI", "--rest-page-size", "5",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output["state"], "satisfied")
+        self.assertEqual(output["metrics"]["rateLimitFallbacks"], 1)
+
+        # With --all-workflows the fallback runs inside the workflow census,
+        # which must hand it the same page size.
+        self.reset_census()
+        self.counter.unlink(missing_ok=True)
+        self.write_scenario(
+            graphqlRateLimited=True,
+            expectedRestPageSize=5,
+            restChecks={"check_runs": [{"name": "CI", "status": "completed", "conclusion": "success"}]},
+            census=[census(workflow_run(101, matrix_jobs(1)))],
+        )
+        result, output = self.run_json(
+            DELIVERY, "inspect", "checks-terminal", "--repo", "owner/repo", "--pr", "7",
+            "--head", "head-1", "--all-workflows", "--check", "CI", "--rest-page-size", "5",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output["metrics"]["rateLimitFallbacks"], 1)
+        self.assertEqual([run["id"] for run in output["observation"]["runs"]], [101])
+
+    def test_rest_page_size_rejects_invalid_values_before_transport(self) -> None:
+        for command in ("inspect", "wait"):
+            for value in ("0", "101", "-1", "five"):
+                with self.subTest(command=command, value=value):
+                    result = subprocess.run(
+                        [sys.executable, str(DELIVERY), command, "checks-terminal",
+                         "--rest-page-size", value],
+                        text=True, capture_output=True, cwd=self.directory,
+                        env=self.environment, timeout=6,
+                    )
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("--rest-page-size", result.stderr)
+                    self.assertFalse(self.counter.exists())
+
     def test_all_workflows_reports_a_later_failure(self) -> None:
         for conclusion in ("failure", "cancelled", "timed_out", "action_required"):
             with self.subTest(conclusion=conclusion):
@@ -971,6 +1321,21 @@ class WaitCommandsTest(unittest.TestCase):
         _, output = self.census_wait("--check", "Vercel")
         self.assertEqual(output["state"], "satisfied")
         self.assertEqual(output["observation"]["checks"][0]["name"], "Vercel")
+
+    def test_all_workflows_reports_a_failed_named_check_at_once_and_once(self) -> None:
+        self.write_scenario(
+            pull=pull("head-1", [
+                check("Preview", "IN_PROGRESS", None),
+                check("Review", "COMPLETED", "FAILURE", "2026-08-12T08:00:00Z"),
+                check("Review", "COMPLETED", "FAILURE", "2026-08-12T08:00:02Z"),
+            ]),
+            census=[census(workflow_run(101, matrix_jobs(2)))],
+        )
+        _, output = self.census_wait("--check", "Preview", "--check", "Review")
+        self.assertEqual(output["state"], "changed")
+        self.assertEqual(output["metrics"]["observations"], 1)
+        self.assertEqual(output["reason"].count("check Review: failure"), 1)
+        self.assertNotIn("Preview", output["reason"])
 
 
 if __name__ == "__main__":

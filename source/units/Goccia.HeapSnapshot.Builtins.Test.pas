@@ -23,6 +23,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot,
   Goccia.HeapSnapshot.Codec,
+  Goccia.HeapSnapshot.RoundTrip,
   Goccia.HeapSnapshot.TestSupport,
   Goccia.InstructionLimit,
   Goccia.Timeout,
@@ -65,6 +66,7 @@ type
     procedure TestSlotsNothingFillsAreKnown;
     procedure TestShimLoadedNativelyRestores;
     procedure TestDateRefusesUntilItsCodec;
+    procedure TestPrivateElementsOnBuiltinRefuse;
     procedure TestBuiltinInternalsAreNotMissed;
     procedure TestShimTakesInRunFunction;
     procedure TestShimLoadCallsAnotherEngine;
@@ -82,6 +84,12 @@ type
     procedure TestDifferenceTruncationsAndMutants;
     procedure TestRestoredRunSnapshotsAgain;
     procedure TestShimLoadOnAMovedVM;
+    function CreateRoundTripDestination(
+      const ASourceEngine: TGocciaEngine): TGocciaEngine;
+    function RoundTripFailures(const AScript: string;
+      const ANativeShim: string = ''): string;
+    procedure TestLateBuiltinsRoundTripAsTheRunBuiltThem;
+    procedure TestSegmentLookupLeavesNoFreedHost;
   public
     procedure SetupTests; override;
   end;
@@ -141,6 +149,8 @@ begin
     TestSlotsNothingFillsAreKnown);
   Test('A shim loaded natively, not through its global, restores',
     TestShimLoadedNativelyRestores);
+  Test('A built-in a derived constructor stamped with private elements ' +
+    'refuses the snapshot', TestPrivateElementsOnBuiltinRefuse);
   Test('A Date refuses the snapshot until a codec covers its time value',
     TestDateRefusesUntilItsCodec);
   Test('Built-ins written in JavaScript are not missed objects; the run''s are',
@@ -176,6 +186,10 @@ begin
     TestRestoredRunSnapshotsAgain);
   Test('A shim load on a VM another thread entered first counts its frames',
     TestShimLoadOnAMovedVM);
+  Test('Built-ins the run built late restore as it built them, and snapshot ' +
+    'the same again', TestLateBuiltinsRoundTripAsTheRunBuiltThem);
+  Test('A segment lookup before any segment iterator leaves no freed object ' +
+    'on a shared prototype', TestSegmentLookupLeavesNoFreedHost);
 end;
 
 // Builds everything an engine builds lazily: every own property of every
@@ -501,6 +515,27 @@ begin
   Expect<string>(RestoreAndCheck(Bytes, '[restored.t, ' +
     'restored.proto === Date.prototype, new Date(9).getTime()].join()'))
     .ToBe('7,true,9');
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestPrivateElementsOnBuiltinRefuse;
+const
+  // A base constructor that returns Math lets the derived class stamp its
+  // private field and brand on that built-in. The class itself is not kept.
+  STAMP_MATH = '(() => { class Base { constructor() { return Math; } } ' +
+    'class Stamp extends Base { #x = 1; } new Stamp(); ' +
+    'return { m: Math }; })()';
+var
+  Refusal: string;
+begin
+  // A built-in is written by name and by a difference of its properties;
+  // neither carries private elements, so the snapshot refuses instead of
+  // dropping them.
+  Snapshot(STAMP_MATH, Refusal);
+  Expect<Boolean>(Pos('Math holds private elements', Refusal) > 0)
+    .ToBe(True);
+  // The same reference without the stamp writes.
+  Snapshot('({ m: Math })', Refusal);
+  Expect<string>(Refusal).ToBe('');
 end;
 
 // The refusal of a snapshot of a fresh object in a run whose top-level
@@ -1506,6 +1541,93 @@ begin
     Template.Free;
     VM.Free;
   end;
+end;
+
+
+function THeapSnapshotBuiltinsTests.CreateRoundTripDestination(
+  const ASourceEngine: TGocciaEngine): TGocciaEngine;
+begin
+  Result := TGocciaEngine.Create(ASourceEngine.SourcePath,
+    ASourceEngine.SourceLines);
+end;
+
+// Round-trips what AScript returns as the test runner's heap-snapshot mode
+// does (GocciaTestRunner --heap-snapshots): the session is made before the
+// run, each restore goes into a fresh engine with a session of its own, and
+// the restored value's snapshot must be the run's, byte for byte. ANativeShim
+// names a shim native code loads first, as a runtime extension can. Returns
+// the failures and refusals, '' when it passed.
+function THeapSnapshotBuiltinsTests.RoundTripFailures(const AScript: string;
+  const ANativeShim: string): string;
+var
+  Lines: TStringList;
+  Engine: TGocciaEngine;
+  Check: TGocciaHeapSnapshotRoundTrip;
+  Stage: TGocciaGlobalEvalStage;
+  I: Integer;
+begin
+  Lines := TStringList.Create;
+  Engine := TGocciaEngine.Create(TEST_PATH, Lines);
+  Check := TGocciaHeapSnapshotRoundTrip.Create(Engine);
+  try
+    if ANativeShim <> '' then
+      for I := 0 to DefaultShimCount - 1 do
+        if DefaultShim(I).Name = ANativeShim then
+          LoadShimValue(Engine.ShimLoader, I);
+    Check.Observe(Engine.EvaluateGlobalEval(AScript, TEST_PATH, Stage));
+    Check.Verify(CreateRoundTripDestination);
+    Result := Trim(Check.FailureDetails.Text);
+    if Check.Refused > 0 then
+      Result := Result + ' refused ' + IntToStr(Check.Refused);
+    if (Result = '') and (Check.Passed <> 1) then
+      Result := 'passed ' + IntToStr(Check.Passed);
+  finally
+    Check.Free;
+    Engine.Free;
+    Lines.Free;
+  end;
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestLateBuiltinsRoundTripAsTheRunBuiltThem;
+begin
+  // Array.prototype.toLocaleString and Number.prototype.toLocaleString share
+  // one shim (#1901). A restore filled its slot by building the Number member
+  // the run had not built, which the re-snapshot named.
+  Expect<string>(RoundTripFailures(
+    'void Array.prototype.toLocaleString; [1, 2]')).ToBe('');
+  Expect<string>(RoundTripFailures(
+    'Object.getOwnPropertyNames(Array.prototype); ({ a: 1 })')).ToBe('');
+  Expect<string>(RoundTripFailures('[].toLocaleString(); [1, 2]')).ToBe('');
+  Expect<string>(RoundTripFailures(
+    'void Number.prototype.toLocaleString; [1, 2]')).ToBe('');
+  Expect<string>(RoundTripFailures('[1].toLocaleString(); [1, 2]')).ToBe('');
+  Expect<string>(RoundTripFailures('void ({}).__proto__; [1, 2]')).ToBe('');
+  Expect<string>(RoundTripFailures('void btoa; [1, 2]')).ToBe('');
+  // Native code loads a shim without reading the global or member that
+  // installs it.
+  Expect<string>(RoundTripFailures('[1, 2]', 'Date')).ToBe('');
+  Expect<string>(RoundTripFailures('[1, 2]', 'hasOwnProperty')).ToBe('');
+  Expect<string>(RoundTripFailures('void Date; [1, 2]', 'Date')).ToBe('');
+  // BigInt.prototype.toLocaleString and String.prototype.localeCompare make
+  // Intl's NumberFormat and Collator prototypes without reading Intl.
+  Expect<string>(RoundTripFailures('(1n).toLocaleString(); [1, 2]')).ToBe('');
+  Expect<string>(RoundTripFailures('"a".localeCompare("b"); [1, 2]')).ToBe('');
+  Expect<string>(RoundTripFailures(
+    '"a".localeCompare("b"); void Intl.Collator; [1, 2]')).ToBe('');
+  Expect<string>(RoundTripFailures(
+    'void Intl.NumberFormat; (1n).toLocaleString(); [1, 2]')).ToBe('');
+end;
+
+procedure THeapSnapshotBuiltinsTests.TestSegmentLookupLeavesNoFreedHost;
+begin
+  // Segments.prototype.containing built the segment iterator prototype
+  // through a throwaway iterator, which became that prototype's method host
+  // and was then freed; the snapshot's table read the freed host.
+  Expect<string>(RoundTripFailures(
+    'new Intl.Segmenter().segment("ab").containing(0)')).ToBe('');
+  Expect<string>(RoundTripFailures(
+    'const data = new Intl.Segmenter().segment("ab").containing(0); ' +
+    '[...new Intl.Segmenter().segment("xy")]; data')).ToBe('');
 end;
 
 begin

@@ -186,11 +186,11 @@ const tokenise = (content: string, file: string): WordEntry[] => {
 
 // ── Suffix array + LCP ────────────────────────────────────────────────
 
-// Cap suffix comparison depth. For MIN_WORDS=35, we only need to compare
-// enough words to distinguish suffixes for clone detection. Comparing beyond
-// this depth doesn't change which clones we find, but dramatically reduces
-// sort time from O(n² log n) to O(n · CAP · log n).
-const SUFFIX_CMP_CAP = 64;
+// Cap suffix comparison depth. A clone needs MIN_WORDS matching words, so
+// comparing at least that deep finds every clone; comparing further doesn't
+// change which clones we find, but dramatically reduces sort time from
+// O(n² log n) to O(n · CAP · log n).
+const SUFFIX_CMP_CAP = Math.max(64, MIN_WORDS);
 const CMP_RANGE = range(SUFFIX_CMP_CAP);
 
 const buildSuffixArray = (words: string[]): Int32Array => {
@@ -214,18 +214,19 @@ const buildLCPArray = (words: string[], sa: Int32Array): Int32Array => {
   const rank = new Int32Array(n);
   for (const i of range(n)) rank[sa[i]] = i;
   const lcp = new Int32Array(n);
-  let h = 0;
   for (const i of range(n)) {
     if (rank[i] > 0) {
       const j = sa[rank[i] - 1];
-      // Extend match using Kasai's algorithm (amortized O(n) total).
-      // Use CMP_RANGE to bound per-call iteration without allocation.
+      // Each pair is compared from its first word. Kasai's carried-over
+      // length is only valid on a fully sorted suffix array, and this one is
+      // sorted to SUFFIX_CMP_CAP words, so carrying it reports clones of text
+      // that does not repeat. CMP_RANGE bounds each pair to that depth.
+      let h = 0;
       for (const _ of CMP_RANGE) {
         if (!(i + h < n && j + h < n && words[i + h] === words[j + h])) break;
         h++;
       }
       lcp[rank[i]] = h;
-      if (h > 0) h--;
     }
   }
   return lcp;

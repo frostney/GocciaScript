@@ -4,8 +4,11 @@ unit Goccia.Compiler.OperandSafety;
 
 // Syntactic proofs behind reading a let binding or a parameter straight from
 // its register (see TryResolveSettledLocalName in Goccia.Compiler.Expressions),
-// and behind evaluating a parameter's initializer straight into the
-// parameter's register (see EmitParameterInitialization).
+// behind evaluating a parameter's or a lexical declaration's initializer
+// straight into the binding's register (see EmitParameterInitialization and
+// LexicalInitializerMayTargetSlot in Goccia.Compiler.Statements), and behind
+// leaving out the TDZ hole of a function body's leading lexical bindings (see
+// LeadingLexicalsWithUnobservableHole in Goccia.Compiler).
 //
 // The proofs are allowlists. A node is accepted only when its class is listed
 // here and every child that can hold code has been accepted too; a class that
@@ -23,7 +26,9 @@ interface
 
 uses
   Goccia.AST.Expressions,
-  Goccia.AST.Node;
+  Goccia.AST.Node,
+  Goccia.AST.Statements,
+  Goccia.Profiler.Compile;
 
 // True when running ANode cannot create a closure and cannot call direct eval.
 // ANode is a loop statement. Function, method, accessor and class forms are
@@ -39,8 +44,9 @@ function StatementCreatesNoClosure(const ANode: TGocciaASTNode): Boolean;
 // accepted.
 function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 
-// True when nothing evaluated up to the end of the initializer of the simple
-// parameter AParams[AIndex] can read or write that parameter's binding: no
+// One result per parameter, computed by a single accumulating syntax walk.
+// True when nothing evaluated up to the end of the initializer of a simple
+// parameter can read or write that parameter's binding: no
 // expression in the parameters up to and including it names the parameter,
 // as an identifier, an assignment target or a destructuring target, none calls
 // direct eval, and every arrow or function expression there has source text
@@ -49,19 +55,52 @@ function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 // initializer use the parameter's register as its destination, where it
 // writes intermediate values before it completes; otherwise one of them
 // replaces the TDZ hole a read or a write of the binding has to find.
-// Parameters before AIndex count because a closure created in their
+// Earlier parameters count because a closure created in their
 // initializers reaches the binding when the initializer calls it.
-function ParameterInitializerAvoidsOwnBinding(
-  const AParams: TGocciaParameterArray; const AIndex: Integer): Boolean;
+function ParameterInitializersAvoidOwnBindings(
+  const AParams: TGocciaParameterArray;
+  const AProfile: TGocciaCompileProfiler = nil): TArray<Boolean>;
+
+// The same proof for the initializer of a lexical declaration of AName: no
+// node of AInitializer can reach the binding, by the rules above. Code that
+// ran before the declaration can still reach it through a closure, so a
+// caller also rules that out: by requiring the binding to be uncaptured, or
+// by proving the same for every earlier initializer in a scope with no
+// hoisted function declaration.
+function InitializerAvoidsOwnBinding(const AInitializer: TGocciaExpression;
+  const AName: string): Boolean;
+
+// Whether ANames holds AName.
+function NameListContains(const ANames: TArray<string>;
+  const AName: string): Boolean;
+
+// The let and const bindings declared by the statements that open a function
+// body or a block, up to the first statement of another kind, whose TDZ hole
+// nothing can observe: no initializer evaluated before a binding's own
+// declaration has completed can reach it, by InitializerAvoidsOwnBinding. The
+// caller rules out a body or block with hoisted function declarations, which
+// exist from its entry and could reach the binding from a call in an
+// initializer, and coverage. Such a binding needs no hole on entry, because
+// its declaration initializes it before anything can read it. A block is
+// entered afresh on each iteration of a loop around it, and a closure an
+// earlier iteration created reaches that iteration's binding, never the new
+// one. Only the first LEADING_LEXICAL_HOLE_LIMIT bindings are considered.
+function LeadingLexicalsWithUnobservableHole(
+  const ABlock: TGocciaBlockStatement): TArray<string>;
 
 implementation
 
 uses
   Generics.Collections,
 
-  Goccia.AST.Statements;
+  UnicodeStringList;
 
 const
+  // LeadingLexicalsWithUnobservableHole checks every earlier initializer for
+  // each binding, so it looks at this many leading bindings at most; the
+  // rest keep their TDZ hole. That keeps a body that opens with thousands of
+  // declarations, as generated code can, from compiling in quadratic time.
+  LEADING_LEXICAL_HOLE_LIMIT = 16;
   // An operand is checked once per enclosing operator, so a deeply nested
   // right-leaning expression would otherwise be walked a quadratic number of
   // times. A subtree larger than this keeps the copy.
@@ -73,11 +112,15 @@ type
     RejectLocalWrites: Boolean;
     // Nodes left to visit; negative means unlimited.
     Budget: Integer;
-    // Empty for the loop and operand proofs. For the parameter initializer
-    // proof, the binding name no node may reach; an arrow or function
+    // Empty for the loop and operand proofs. For the initializer proofs, the
+    // binding name no node may reach; an arrow or function
     // expression is then accepted when its source text cannot name the
     // binding.
     AvoidName: string;
+    // The parameter-list proof accumulates references once across the prefix.
+    // Other proofs leave these nil and keep their single-name predicate.
+    SeenNames: TUnicodeStringList;
+    FunctionSources: TList<string>;
   end;
 
 function IsAsciiIdentifierPart(const AChar: Char): Boolean;
@@ -113,12 +156,23 @@ end;
 
 function ScanReachesName(const AScan: TScan; const AName: string): Boolean;
 begin
+  if Assigned(AScan.SeenNames) then
+  begin
+    if not AScan.SeenNames.HasString(AName) then
+      AScan.SeenNames.Add(AName);
+    Exit(False);
+  end;
   Result := (AScan.AvoidName <> '') and (AName = AScan.AvoidName);
 end;
 
 function ScanAcceptsFunctionSource(const AScan: TScan;
   const ASourceText: string): Boolean;
 begin
+  if Assigned(AScan.FunctionSources) then
+  begin
+    AScan.FunctionSources.Add(ASourceText);
+    Exit(True);
+  end;
   Result := (AScan.AvoidName <> '') and
     not SourceTextMayReachName(ASourceText, AScan.AvoidName);
 end;
@@ -497,6 +551,7 @@ function StatementCreatesNoClosure(const ANode: TGocciaASTNode): Boolean;
 var
   Scan: TScan;
 begin
+  Scan := Default(TScan);
   Scan.RejectLocalWrites := False;
   Scan.Budget := -1;
   Scan.AvoidName := '';
@@ -507,31 +562,132 @@ function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 var
   Scan: TScan;
 begin
+  Scan := Default(TScan);
   Scan.RejectLocalWrites := True;
   Scan.Budget := OPERAND_NODE_BUDGET;
   Scan.AvoidName := '';
   Result := ScanNode(Scan, AExpr);
 end;
 
-function ParameterInitializerAvoidsOwnBinding(
-  const AParams: TGocciaParameterArray; const AIndex: Integer): Boolean;
+function ParameterInitializersAvoidOwnBindings(
+  const AParams: TGocciaParameterArray;
+  const AProfile: TGocciaCompileProfiler = nil): TArray<Boolean>;
 var
   Scan: TScan;
-  I: Integer;
+  I, J: Integer;
+  PrefixAccepted: Boolean;
 begin
+  SetLength(Result, Length(AParams));
+  Scan := Default(TScan);
+  Scan.Budget := -1;
+  Scan.SeenNames := TUnicodeStringList.Create;
+  Scan.FunctionSources := TList<string>.Create;
+  try
+    PrefixAccepted := True;
+    for I := 0 to High(AParams) do
+    begin
+      if Assigned(AProfile) then
+        AProfile.Count(ccParameterInitializerVisits);
+      // A rejected node is independent of the target name and invalidates
+      // every later prefix. Name references instead accumulate in SeenNames.
+      PrefixAccepted := PrefixAccepted and
+        (not AParams[I].IsPattern or ScanPattern(Scan, AParams[I].Pattern)) and
+        ScanNode(Scan, AParams[I].DefaultValue);
+      // Only a simple default can use its parameter register as a destination.
+      // Other parameters still contribute references to later defaults.
+      if AParams[I].IsPattern or not Assigned(AParams[I].DefaultValue) then
+        Continue;
+      Result[I] := PrefixAccepted and (AParams[I].Name <> '') and
+        not Scan.SeenNames.HasString(AParams[I].Name);
+      if not Result[I] then
+        Continue;
+      // Keep the existing conservative source-text rule for closures. Earlier
+      // initializers may create a closure which a later initializer calls.
+      for J := 0 to Scan.FunctionSources.Count - 1 do
+      begin
+        if Assigned(AProfile) then
+          AProfile.Count(ccParameterInitializerSourceChecks);
+        if SourceTextMayReachName(Scan.FunctionSources[J], AParams[I].Name) then
+        begin
+          Result[I] := False;
+          Break;
+        end;
+      end;
+    end;
+  finally
+    Scan.FunctionSources.Free;
+    Scan.SeenNames.Free;
+  end;
+end;
+
+function InitializerAvoidsOwnBinding(const AInitializer: TGocciaExpression;
+  const AName: string): Boolean;
+var
+  Scan: TScan;
+begin
+  Scan := Default(TScan);
   Scan.RejectLocalWrites := False;
   Scan.Budget := -1;
-  Scan.AvoidName := AParams[AIndex].Name;
-  if Scan.AvoidName = '' then
+  Scan.AvoidName := AName;
+  if AName = '' then
     Exit(False);
-  for I := 0 to AIndex do
+  Result := ScanNode(Scan, AInitializer);
+end;
+
+function NameListContains(const ANames: TArray<string>;
+  const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(ANames) do
+    if ANames[I] = AName then
+      Exit(True);
+  Result := False;
+end;
+
+function LeadingLexicalsWithUnobservableHole(
+  const ABlock: TGocciaBlockStatement): TArray<string>;
+var
+  I, J, K, Count, InitCount: Integer;
+  Decl: TGocciaVariableDeclaration;
+  Initializers: array of TGocciaExpression;
+  Unobservable: Boolean;
+begin
+  Count := 0;
+  InitCount := 0;
+  SetLength(Result, 0);
+  SetLength(Initializers, 0);
+  for I := 0 to ABlock.Nodes.Count - 1 do
   begin
-    if AParams[I].IsPattern and not ScanPattern(Scan, AParams[I].Pattern) then
-      Exit(False);
-    if not ScanNode(Scan, AParams[I].DefaultValue) then
-      Exit(False);
+    if not (ABlock.Nodes[I] is TGocciaVariableDeclaration) then
+      Break;
+    Decl := TGocciaVariableDeclaration(ABlock.Nodes[I]);
+    if Decl.IsVar then
+      Break;
+    for J := 0 to High(Decl.Variables) do
+    begin
+      if Decl.Variables[J].IsPattern or Assigned(Decl.Variables[J].Pattern) or
+         (InitCount = LEADING_LEXICAL_HOLE_LIMIT) then
+        Exit;
+      SetLength(Initializers, InitCount + 1);
+      Initializers[InitCount] := Decl.Variables[J].Initializer;
+      Inc(InitCount);
+      Unobservable := True;
+      for K := 0 to InitCount - 1 do
+        if not InitializerAvoidsOwnBinding(Initializers[K],
+           Decl.Variables[J].Name) then
+        begin
+          Unobservable := False;
+          Break;
+        end;
+      if Unobservable then
+      begin
+        SetLength(Result, Count + 1);
+        Result[Count] := Decl.Variables[J].Name;
+        Inc(Count);
+      end;
+    end;
   end;
-  Result := True;
 end;
 
 end.
