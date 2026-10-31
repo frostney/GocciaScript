@@ -4,19 +4,34 @@
 {$H+}
 
 uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
   Classes,
   Process,
   SysUtils,
 
   FileUtils in 'source/shared/FileUtils.pas',
-  FPCSafeSEH in 'source/shared/FPCSafeSEH.pas';
+  FPCSafeSEH in 'source/shared/FPCSafeSEH.pas',
+  ProcessorDetection in 'source/shared/ProcessorDetection.pas';
 
 type
   TBuildMode = (bmDev, bmProd);
+  TBuildTarget = (btTests, btRunner, btLoaderBare, btFuzzHarness,
+    btTestRunner, btTest262Runner, btTOMLComplianceRunner, btWasmTestRunner,
+    btBenchmarkRunner, btBundler, btREPL);
+
+const
+  BUILD_TARGET_NAMES: array[TBuildTarget] of string = (
+    'tests', 'runner', 'loaderbare', 'fuzzharness', 'testrunner',
+    'test262runner', 'tomlcompliancerunner', 'wasmtestrunner',
+    'benchmarkrunner', 'bundler', 'repl');
 
 var
   I: Integer;
   BuildTriggers: TStringList;
+  TestFilters: TStringList;
+  SelectedTests: TStringList;
+  TestJobs: Integer;
+  RunTestsRequested: Boolean = False;
   BuildMode: TBuildMode = bmDev;
   { --gc-stress: a development build with -dGOCCIA_GC_STRESS and heaptrc (-gh),
     compiled into its own unit caches and written to build/gc-stress/ so it
@@ -37,7 +52,7 @@ var
   Describe: string;
   DashPos: SizeInt;
 begin
-  if not RunCommand('git', ['describe', '--tags', '--always', '--match', '[0-9]*'], Describe) then
+  if not RunCommand('git', ['describe', '--tags', '--always', '--match', '[0-9]*'], Describe, [poRunIdle]) then
     Describe := '';
   Describe := Trim(Describe);
 
@@ -55,7 +70,7 @@ end;
 
 function ComputeCommit: string;
 begin
-  if not RunCommand('git', ['rev-parse', '--short', 'HEAD'], Result) then
+  if not RunCommand('git', ['rev-parse', '--short', 'HEAD'], Result, [poRunIdle]) then
     Result := '';
   Result := Trim(Result);
   if Result = '' then
@@ -361,10 +376,10 @@ begin
   SetLength(Arguments, Length(Arguments) + 1);
   Arguments[High(Arguments) - 1] := '-iTP';
   Arguments[High(Arguments)] := '-iTO';
-  if not RunCommand('fpc', Arguments, Target) then
+  if not RunCommand('fpc', Arguments, Target, [poRunIdle]) then
     raise Exception.Create('Cannot determine compiler target: ' + Target);
   if Trim(Target) <> 'i386 win32' then
-    Exit(RunCommand('fpc', AArguments, AOutput));
+    Exit(RunCommand('fpc', AArguments, AOutput, [poRunIdle]));
 
   ObjectDirectory := '';
   for J := 0 to High(AArguments) do
@@ -378,7 +393,7 @@ begin
   Arguments[High(Arguments) - 2] := '-vi';
   Arguments[High(Arguments) - 1] := '-Xm';
   Arguments[High(Arguments)] := AArguments[High(AArguments)];
-  Result := RunCommand('fpc', Arguments, AOutput);
+  Result := RunCommand('fpc', Arguments, AOutput, [poRunIdle]);
   if not Result then
     Exit;
   Executable := '';
@@ -444,9 +459,8 @@ begin
 end;
 
 { Deletes the compiled state FPC leaves under ADirectory (units, objects,
-  resources) and returns how many files it removed. Shared by --clean, which
-  passes the whole compiled root, and the stale-state retry, which passes one
-  target's own unit directory. }
+  resources) and returns how many files it removed. Both scoped --clean and
+  the stale-state retry pass one target or test program's unit directory. }
 function RemoveCompiledArtifacts(const ADirectory: string): Integer;
 var
   Files: TStringList;
@@ -559,43 +573,157 @@ begin
   WriteLn('');
 end;
 
-procedure BuildTests;
+{ Worker threads only compile. The coordinator joins every started worker and
+  reports its output before propagating failure, so no compiler is abandoned. }
+type
+  TTestBuildThread = class(TThread)
+  private
+    FTestFile: string;
+  protected
+    procedure Execute; override;
+  public
+    Output: string;
+    Succeeded: Boolean;
+    constructor Create(const ATestFile: string);
+  end;
+
+constructor TTestBuildThread.Create(const ATestFile: string);
+begin
+  inherited Create(True);
+  FTestFile := ATestFile;
+end;
+
+procedure TTestBuildThread.Execute;
+begin
+  try
+    Succeeded := CompileWithStaleRetry(FTestFile,
+      TestUnitOutputDirectory(FTestFile), FTestFile, Output);
+  except
+    on E: Exception do
+    begin
+      Output := E.Message;
+      Succeeded := False;
+    end;
+  end;
+end;
+
+function MatchesTestFilters(const ATestFile: string): Boolean;
 var
-  AllUnitFiles: TStringList;
-  TestFiles: TStringList;
-  Output: string;
-  UnitOutputDirectory: string;
   K: Integer;
 begin
-  WriteLn('Building Tests...');
+  Result := TestFilters.Count = 0;
+  for K := 0 to TestFilters.Count - 1 do
+    if Pos(TestFilters[K], LowerCase(StringReplace(ATestFile,
+        '\', '/', [rfReplaceAll]))) > 0 then
+      Exit(True);
+end;
+
+procedure DiscoverSelectedTests;
+var
+  AllUnitFiles: TStringList;
+  K: Integer;
+begin
   AllUnitFiles := TStringList.Create;
-  TestFiles := TStringList.Create;
   try
     AddFoundFiles(AllUnitFiles, 'source/units', '.pas');
     AddFoundFiles(AllUnitFiles, 'source/shared', '.pas');
     AddFoundFiles(AllUnitFiles, 'source/app', '.pas');
-
     for K := 0 to AllUnitFiles.Count - 1 do
-    begin
-      if Pos('.Test.pas', AllUnitFiles[K]) > 0 then
-        TestFiles.Add(AllUnitFiles[K]);
-    end;
-
-    for K := 0 to TestFiles.Count - 1 do
-    begin
-      UnitOutputDirectory := TestUnitOutputDirectory(TestFiles[K]);
-
-      if not CompileWithStaleRetry(TestFiles[K], UnitOutputDirectory,
-          TestFiles[K], Output) then
-        PrintBuildFailureAndExit(Output, 'Test build failed: ' + TestFiles[K]);
-      WriteLn(Output);
-    end;
+      if (Pos('.Test.pas', AllUnitFiles[K]) > 0) and
+          MatchesTestFilters(AllUnitFiles[K]) then
+        SelectedTests.Add(AllUnitFiles[K]);
+    SelectedTests.Sort;
   finally
-    TestFiles.Free;
     AllUnitFiles.Free;
   end;
+  if SelectedTests.Count = 0 then
+  begin
+    WriteLn('No Pascal test programs match --test');
+    Halt(1);
+  end;
+end;
 
+procedure BuildTests;
+var
+  Workers: array of TTestBuildThread;
+  NextTest, K, ActiveJobs: Integer;
+  Failed: Boolean;
+  Output, Executable: string;
+begin
+  ActiveJobs := TestJobs;
+  if ActiveJobs > SelectedTests.Count then
+    ActiveJobs := SelectedTests.Count;
+  WriteLn('Building ', SelectedTests.Count, ' test program(s), jobs=', ActiveJobs, '...');
+  SetLength(Workers, ActiveJobs);
+  NextTest := 0;
+  Failed := False;
+  try
+    repeat
+      for K := 0 to High(Workers) do
+      begin
+        if Assigned(Workers[K]) and Workers[K].Finished then
+        begin
+          Workers[K].WaitFor;
+          WriteLn(Workers[K].Output);
+          if not Workers[K].Succeeded then
+          begin
+            WriteLn('Test build failed: ', Workers[K].FTestFile);
+            Failed := True;
+          end;
+          FreeAndNil(Workers[K]);
+        end;
+        if not Assigned(Workers[K]) and not Failed and
+            (NextTest < SelectedTests.Count) then
+        begin
+          { Create directories in the coordinator: compilers never race to
+            create a common parent, and each receives a different -FU. }
+          EnsureUnitOutputDirectory(TestUnitOutputDirectory(SelectedTests[NextTest]));
+          Workers[K] := TTestBuildThread.Create(SelectedTests[NextTest]);
+          Workers[K].Start;
+          Inc(NextTest);
+        end;
+      end;
+      ActiveJobs := 0;
+      for K := 0 to High(Workers) do
+        if Assigned(Workers[K]) then
+          Inc(ActiveJobs);
+      if ActiveJobs > 0 then
+        Sleep(10);
+    until ActiveJobs = 0;
+  finally
+    for K := 0 to High(Workers) do
+      if Assigned(Workers[K]) then
+      begin
+        Workers[K].WaitFor;
+        Workers[K].Free;
+      end;
+  end;
+  if Failed then
+    Halt(1);
   WriteLn('Tests built successfully');
+
+  if RunTestsRequested then
+    for K := 0 to SelectedTests.Count - 1 do
+    begin
+      Executable := 'build';
+      if GCStressBuild then
+        Executable := GCStressExecutableDirectory
+      else if LayoutProbeBuild then
+        Executable := LayoutProbeExecutableDirectory;
+      Executable := Executable + DirectorySeparator +
+        ChangeFileExt(ExtractFileName(SelectedTests[K]), '');
+      {$IFDEF MSWINDOWS}
+      Executable := Executable + '.exe';
+      {$ENDIF}
+      WriteLn('Running ', Executable, '...');
+      if not RunCommand(Executable, [], Output, [poRunIdle]) then
+      begin
+        WriteLn(Output);
+        WriteLn('Test program failed: ', SelectedTests[K]);
+        Halt(1);
+      end;
+      WriteLn(Output);
+    end;
 end;
 
 procedure BuildTestRunner;
@@ -655,7 +783,7 @@ var
   Output: string;
 begin
   WriteLn('Building FFI fixture library...');
-  if not RunCommand('./fixtures/ffi/build.sh', [], Output) then
+  if not RunCommand('./fixtures/ffi/build.sh', [], Output, [poRunIdle]) then
   begin
     WriteLn(Output);
     WriteLn('FFI fixture build failed');
@@ -690,62 +818,62 @@ begin
 end;
 
 procedure Clean;
+var
+  K, J, Removed: Integer;
 begin
-  WriteLn('Cleaning build artifacts...');
-  if not DirectoryExists('build/compiled') then
-  begin
-    WriteLn('Nothing to clean');
-    Exit;
-  end;
+  Removed := 0;
+  for K := 0 to BuildTriggers.Count - 1 do
+    if BuildTriggers[K] = 'tests' then
+      for J := 0 to SelectedTests.Count - 1 do
+        Inc(Removed, RemoveCompiledArtifacts(TestUnitOutputDirectory(SelectedTests[J])))
+    else
+      Inc(Removed, RemoveCompiledArtifacts(TargetUnitOutputDirectory(BuildTriggers[K])));
+  WriteLn('Cleaned selected unit caches: removed ', Removed, ' file(s)');
+end;
 
-  WriteLn('Removed ', RemoveCompiledArtifacts('build/compiled'), ' file(s)');
+function ResolveBuildTarget(const ATrigger: string): TBuildTarget;
+var
+  Target: TBuildTarget;
+begin
+  for Target := Low(TBuildTarget) to High(TBuildTarget) do
+    if ATrigger = BUILD_TARGET_NAMES[Target] then
+      Exit(Target);
+  { The targets renamed or merged in 0.14.0 name their replacement
+    instead of failing as unknown. }
+  if ATrigger = 'loader' then
+    WriteLn('Build target "loader" was renamed to "runner" in 0.14.0; ' +
+      'use ./build.pas runner')
+  else if ATrigger = 'sandboxrunner' then
+    WriteLn('Build target "sandboxrunner" was merged into "runner" in ' +
+      '0.14.0; build ./build.pas runner and use its sandbox mode ' +
+      '(--sandbox, --copy, --copy-rw)')
+  else
+  begin
+    WriteLn('Unknown build target: ', ATrigger);
+    if ATrigger = 'clean' then
+      WriteLn('Use --clean as an option, for example: ./build.pas --clean runner');
+  end;
+  Halt(1);
 end;
 
 procedure Build(const ATrigger: string);
 begin
-  if ATrigger = 'repl' then
-    BuildREPL
-  else if ATrigger = 'runner' then
-    BuildRunner
-  else if ATrigger = 'loaderbare' then
-    BuildScriptLoaderBare
-  else if ATrigger = 'fuzzharness' then
-    BuildFuzzHarness
-  else if ATrigger = 'tests' then
-    BuildTests
-  else if ATrigger = 'testrunner' then
-  begin
-    BuildTestRunner;
-    BuildFFIFixture;
-  end
-  else if ATrigger = 'test262runner' then
-    BuildTest262Runner
-  else if ATrigger = 'tomlcompliancerunner' then
-    BuildTOMLComplianceRunner
-  else if ATrigger = 'wasmtestrunner' then
-    BuildWasmTestRunner
-  else if ATrigger = 'benchmarkrunner' then
-    BuildBenchmarkRunner
-  else if ATrigger = 'bundler' then
-    BuildGocciaBundler
-  else
-  begin
-    { The targets renamed or merged in 0.14.0 name their replacement
-      instead of failing as unknown. }
-    if ATrigger = 'loader' then
-      WriteLn('Build target "loader" was renamed to "runner" in 0.14.0; ' +
-        'use ./build.pas runner')
-    else if ATrigger = 'sandboxrunner' then
-      WriteLn('Build target "sandboxrunner" was merged into "runner" in ' +
-        '0.14.0; build ./build.pas runner and use its sandbox mode ' +
-        '(--sandbox, --copy, --copy-rw)')
-    else
-    begin
-      WriteLn('Unknown build target: ', ATrigger);
-      if ATrigger = 'clean' then
-        WriteLn('Use --clean as an option, for example: ./build.pas --clean runner');
-    end;
-    Halt(1);
+  case ResolveBuildTarget(ATrigger) of
+    btTests: BuildTests;
+    btRunner: BuildRunner;
+    btLoaderBare: BuildScriptLoaderBare;
+    btFuzzHarness: BuildFuzzHarness;
+    btTestRunner:
+      begin
+        BuildTestRunner;
+        BuildFFIFixture;
+      end;
+    btTest262Runner: BuildTest262Runner;
+    btTOMLComplianceRunner: BuildTOMLComplianceRunner;
+    btWasmTestRunner: BuildWasmTestRunner;
+    btBenchmarkRunner: BuildBenchmarkRunner;
+    btBundler: BuildGocciaBundler;
+    btREPL: BuildREPL;
   end;
 end;
 
@@ -756,6 +884,13 @@ begin
     CreateDir('build/compiled');
 
   BuildTriggers := TStringList.Create;
+  TestFilters := TStringList.Create;
+  SelectedTests := TStringList.Create;
+  TestJobs := GetProcessorCount;
+  if TestJobs < 1 then
+    TestJobs := 1;
+  if TestJobs > 4 then
+    TestJobs := 4;
 
   for I := 1 to ParamCount do
   begin
@@ -769,8 +904,34 @@ begin
       LayoutProbeBuild := True
     else if ParamStr(I) = '--clean' then
       CleanRequested := True
+    else if Copy(ParamStr(I), 1, 7) = '--test=' then
+    begin
+      if Length(ParamStr(I)) = 7 then
+      begin
+        WriteLn('--test requires a non-empty substring');
+        Halt(1);
+      end;
+      TestFilters.Add(LowerCase(StringReplace(Copy(ParamStr(I), 8,
+        Length(ParamStr(I))), '\', '/', [rfReplaceAll])));
+    end
+    else if ParamStr(I) = '--run-tests' then
+      RunTestsRequested := True
+    else if Copy(ParamStr(I), 1, 7) = '--jobs=' then
+    begin
+      if not TryStrToInt(Copy(ParamStr(I), 8, Length(ParamStr(I))), TestJobs) or
+          (TestJobs < 1) then
+      begin
+        WriteLn('--jobs requires a positive integer');
+        Halt(1);
+      end;
+      if TestJobs > Integer(GetProcessorCount) then
+        TestJobs := GetProcessorCount;
+      if TestJobs < 1 then
+        TestJobs := 1;
+    end
     else
-      BuildTriggers.Add(LowerCase(ParamStr(I)));
+      if BuildTriggers.IndexOf(LowerCase(ParamStr(I))) < 0 then
+        BuildTriggers.Add(LowerCase(ParamStr(I)));
   end;
 
   if GCStressBuild and (BuildMode = bmProd) then
@@ -814,31 +975,32 @@ begin
   PrintVersion(GVersion, GCommit, GBuildDate);
   PrintSourceStats;
 
+  { Keep every component in the full-build gate, including the fuzz harness
+    so engine signature changes cannot leave the nightly harness broken. }
+  if BuildTriggers.Count = 0 then
+    for I := Ord(Low(TBuildTarget)) to Ord(High(TBuildTarget)) do
+      BuildTriggers.Add(BUILD_TARGET_NAMES[TBuildTarget(I)]);
+
+  { Resolve and validate the complete selection before removing any cache. }
+  for I := 0 to BuildTriggers.Count - 1 do
+    ResolveBuildTarget(BuildTriggers[I]);
+  if ((TestFilters.Count > 0) or RunTestsRequested) and
+      (BuildTriggers.IndexOf('tests') < 0) then
+  begin
+    WriteLn('--test and --run-tests require the tests target');
+    Halt(1);
+  end;
+  if BuildTriggers.IndexOf('tests') >= 0 then
+    DiscoverSelectedTests;
   if CleanRequested then
     Clean;
-
-  if BuildTriggers.Count = 0 then
-  begin
-    BuildTriggers.Add('tests');
-    BuildTriggers.Add('runner');
-    BuildTriggers.Add('loaderbare');
-    { Built by default so the harness cannot silently rot: it links most of
-      the engine, so a signature change elsewhere breaks the ordinary build
-      rather than the nightly fuzz job days later. }
-    BuildTriggers.Add('fuzzharness');
-    BuildTriggers.Add('testrunner');
-    BuildTriggers.Add('test262runner');
-    BuildTriggers.Add('tomlcompliancerunner');
-    BuildTriggers.Add('wasmtestrunner');
-    BuildTriggers.Add('benchmarkrunner');
-    BuildTriggers.Add('bundler');
-    BuildTriggers.Add('repl');
-  end;
 
   for I := 0 to BuildTriggers.Count - 1 do
   begin
     Build(BuildTriggers[I]);
   end;
 
+  SelectedTests.Free;
+  TestFilters.Free;
   BuildTriggers.Free;
 end.

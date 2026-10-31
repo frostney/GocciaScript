@@ -88,6 +88,11 @@ All four layers enforce the same rules, providing defence in depth. The typical 
 
 ## Platform-Specific Pitfalls
 
+### Focused Builds and Tests
+
+Use the [Build System's focused workflow](../build-system.md#build-specific-components)
+for explicit targets, test selection, parallelism and scoped cleaning.
+
 ### FPC 3.2.2 and 3.2.4
 
 CI builds with FPC 3.2.4 (see [Build System — How `build.pas` Works](../build-system.md#how-buildpas-works)); the package managers in the [README](../../README.md#build-from-source) install 3.2.2, and the source must keep building on both. Three RTL interfaces differ, and `Shared.inc` defines a symbol for each on 3.2.2 only:
@@ -115,13 +120,13 @@ error (a real `Error:` in source without those symptoms) is never retried.
 
 If the retry also fails, `build.pas` reports the retry's output and exits
 non-zero. The retry already rebuilt that target from an empty unit directory,
-so diagnose the reported Pascal source line. Use `--clean` to rebuild from
-empty unit directories on purpose:
+so diagnose the reported Pascal source line. Use `--clean` to rebuild selected
+targets from empty unit directories on purpose:
 
 ```bash
 ./build.pas --clean loaderbare
 ./build.pas --clean testrunner
-./build.pas --clean
+./build.pas --clean tests --test=TimingUtils
 ```
 
 ### Website Checks Are Inert Without Its Dependencies
