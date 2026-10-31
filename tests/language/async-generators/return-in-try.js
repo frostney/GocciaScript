@@ -270,6 +270,72 @@ test("a for await loop's iterator is closed after the returned value is awaited"
   expect(log).toEqual(["then", "iterator return"]);
 });
 
+test("a yield* return without a delegate return method keeps the value awaited before finally", async () => {
+  const value = {};
+  const delegate = {
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+    next() {
+      return { value: 1, done: false };
+    },
+  };
+  const helpers = {
+    async *gen() {
+      try {
+        yield* delegate;
+      } finally {
+        yield "pause";
+        value.then = (resolve) => resolve("too late");
+      }
+    },
+  };
+  const iter = helpers.gen();
+  await iter.next();
+  expect(await iter.return(value)).toEqual({ value: "pause", done: false });
+  const result = await iter.next();
+  expect(result.value).toBe(value);
+  expect(result.done).toBe(true);
+});
+
+test("a return outside try settles requests queued behind it in the same job", async () => {
+  const helpers = {
+    async *gen() {
+      return 1;
+    },
+  };
+  const iter = helpers.gen();
+  const log = [];
+  iter.next().then(() => log.push("first"));
+  iter.next().then(() => log.push("second"));
+  await 0;
+  await 0;
+  expect(log).toEqual(["first", "second"]);
+});
+
+test("a return in finally during return() awaits its value", async () => {
+  const log = [];
+  const thenable = {
+    then(resolve) {
+      log.push("then");
+      resolve("from finally");
+    },
+  };
+  const helpers = {
+    async *gen() {
+      try {
+        yield 1;
+      } finally {
+        return thenable;
+      }
+    },
+  };
+  const iter = helpers.gen();
+  await iter.next();
+  expect(await iter.return("ignored")).toEqual({ value: "from finally", done: true });
+  expect(log).toEqual(["then"]);
+});
+
 test("a return without an operand runs finally without awaiting", async () => {
   const log = [];
   const helpers = {

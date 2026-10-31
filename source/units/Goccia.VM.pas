@@ -4471,6 +4471,7 @@ var
   OriginalReturnResumeValue: TGocciaValue;
   ReturnMethod: TGocciaValue;
   ReturnMethodCalled: Boolean;
+  ReturnAwaitsValue: Boolean;
   ReturnResumeValue: TGocciaValue;
   YieldedValue: TGocciaValue;
   HadDelegateContinuation: Boolean;
@@ -4570,6 +4571,7 @@ begin
       NextResult := nil;
       FReturnValue := nil;
       ReturnMethodCalled := False;
+      ReturnAwaitsValue := False;
       OriginalReturnResumeValue := RegisterToValue(FResumeValue);
       ReturnResumeValue := OriginalReturnResumeValue;
       if Assigned(FClosure) and Assigned(FClosure.Template) and
@@ -4652,25 +4654,24 @@ begin
            (FDelegateIteratorValue is TGocciaVMAsyncIteratorRecordValue) and
            TGocciaVMAsyncIteratorRecordValue(FDelegateIteratorValue)
              .LastReturnMethodMissing then
-        begin
-          FReturnValue := OriginalReturnResumeValue;
-          FReturnRequiresAwait := True;
-        end
+          ReturnAwaitsValue := True
         else
           FReturnValue := YieldedValue;
       end;
       ClearDelegateState;
-      if not Assigned(FReturnValue) then
+      if not Assigned(FReturnValue) and not ReturnAwaitsValue then
       begin
         if Assigned(FClosure) and Assigned(FClosure.Template) and
            FClosure.Template.IsAsync then
-        begin
-          FReturnValue := OriginalReturnResumeValue;
-          FReturnRequiresAwait := True;
-        end
+          ReturnAwaitsValue := True
         else
           FReturnValue := ReturnResumeValue;
       end;
+      // ES2026 §15.5.5 YieldExpression : yield * AssignmentExpression, step
+      // 7.c.ii: with no delegate return method, an async generator awaits the
+      // value before the return completion unwinds through any finally.
+      if ReturnAwaitsValue then
+        FReturnValue := AwaitValue(ReturnResumeValue);
       if not Assigned(FReturnSentinel) then
         FReturnSentinel := TGocciaObjectValue.Create;
       raise EGocciaBytecodeThrow.Create(FReturnSentinel);
@@ -4857,9 +4858,7 @@ begin
 
   FResumeKind := AKind;
   FResumeValue := VMValueToRegisterFast(AValue);
-  // FReturnRequiresAwait is kept: a yield* return that still owes its value
-  // an await sets it before unwinding, and a finally block that awaits or
-  // yields on the way out resumes the body before that return completes.
+  FReturnRequiresAwait := False;
   if AKind <> bgrkReturn then
     FReturnResumeValueAwaited := False;
   PreviousState := FState;
@@ -5082,15 +5081,16 @@ begin
       // The body awaited again: its next await's reaction resumes it.
       if Suspended then
         Exit;
-      if FAsyncGeneratorResult and (FResumeKind = bgrkReturn) then
-        FPromise.Resolve(CreateIteratorResult(ResultValue, Done))
       // ES2026 §27.6.3.2 AsyncGeneratorStart: the body's completion value is
-      // final. A return statement awaited it already (§14.10.1), and an
-      // implicit return has undefined; only a return the body still owes an
-      // await (FReturnRequiresAwait) waits for it here.
-      else if FAsyncGeneratorResult and Done and
-              not FContinuation.FReturnRequiresAwait then
-        FPromise.Resolve(CreateIteratorResult(ResultValue, True))
+      // final. Only a return that still owes its value an await (an
+      // OP_RETURN with B = 1, ES2026 §14.10.1 step 3) waits for it here; a
+      // return that awaited it in the body, and an implicit return, do not.
+      if FAsyncGeneratorResult and Done and
+         FContinuation.FReturnRequiresAwait then
+        FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), True))
+      else if FAsyncGeneratorResult and
+              ((FResumeKind = bgrkReturn) or Done) then
+        FPromise.Resolve(CreateIteratorResult(ResultValue, Done))
       else if FAsyncGeneratorResult then
         FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), Done))
       else if Done then
@@ -17116,8 +17116,6 @@ begin
               if not ReturnAwaitAbrupt then
               begin
                 GActiveBytecodeGenerator.FReturnResumeValueAwaited := False;
-                // The value was awaited above; the return owes it nothing.
-                GActiveBytecodeGenerator.FReturnRequiresAwait := False;
                 if not Assigned(GActiveBytecodeGenerator.FReturnSentinel) then
                   GActiveBytecodeGenerator.FReturnSentinel := TGocciaObjectValue.Create;
                 HandleExceptionUnwind(GActiveBytecodeGenerator.FReturnSentinel,

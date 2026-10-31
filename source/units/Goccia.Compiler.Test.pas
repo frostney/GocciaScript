@@ -852,7 +852,31 @@ begin
   end;
 end;
 
+// A sync generator, an async function and a bare return compile no await;
+// an async generator's return that leaves no try keeps OP_RETURN's own await
+// (B = 1), since nothing runs between that await and the return.
 procedure TTestCompiler.TestOtherFunctionKindsReturnWithoutAwait;
+
+  // OP_RETURNs with a nonzero B operand in ATemplate and the functions
+  // nested in it.
+  function CountAwaitingReturns(
+    const ATemplate: TGocciaFunctionTemplate): Integer;
+  var
+    I: Integer;
+    Instruction: UInt32;
+  begin
+    Result := 0;
+    for I := 0 to ATemplate.CodeCount - 1 do
+    begin
+      Instruction := ATemplate.GetInstruction(I);
+      if (TGocciaOpCode(DecodeOp(Instruction)) = OP_RETURN) and
+         (DecodeB(Instruction) <> 0) then
+        Inc(Result);
+    end;
+    for I := 0 to ATemplate.FunctionCount - 1 do
+      Inc(Result, CountAwaitingReturns(ATemplate.GetFunction(I)));
+  end;
+
 var
   Module: TGocciaBytecodeModule;
 begin
@@ -866,10 +890,12 @@ begin
     '  },' +
     '  async *empty() {' +
     '    try { return; } finally { holder.done = true; }' +
-    '  }' +
+    '  },' +
+    '  async *outside() { return holder; }' +
     '};');
   try
     Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_AWAIT)).ToBe(0);
+    Expect<Integer>(CountAwaitingReturns(Module.TopLevel)).ToBe(1);
   finally
     Module.Free;
   end;
