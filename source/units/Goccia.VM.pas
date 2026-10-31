@@ -4857,7 +4857,9 @@ begin
 
   FResumeKind := AKind;
   FResumeValue := VMValueToRegisterFast(AValue);
-  FReturnRequiresAwait := False;
+  // FReturnRequiresAwait is kept: a yield* return that still owes its value
+  // an await sets it before unwinding, and a finally block that awaits or
+  // yields on the way out resumes the body before that return completes.
   if AKind <> bgrkReturn then
     FReturnResumeValueAwaited := False;
   PreviousState := FState;
@@ -5082,6 +5084,13 @@ begin
         Exit;
       if FAsyncGeneratorResult and (FResumeKind = bgrkReturn) then
         FPromise.Resolve(CreateIteratorResult(ResultValue, Done))
+      // ES2026 §27.6.3.2 AsyncGeneratorStart: the body's completion value is
+      // final. A return statement awaited it already (§14.10.1), and an
+      // implicit return has undefined; only a return the body still owes an
+      // await (FReturnRequiresAwait) waits for it here.
+      else if FAsyncGeneratorResult and Done and
+              not FContinuation.FReturnRequiresAwait then
+        FPromise.Resolve(CreateIteratorResult(ResultValue, True))
       else if FAsyncGeneratorResult then
         FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), Done))
       else if Done then
@@ -17107,6 +17116,8 @@ begin
               if not ReturnAwaitAbrupt then
               begin
                 GActiveBytecodeGenerator.FReturnResumeValueAwaited := False;
+                // The value was awaited above; the return owes it nothing.
+                GActiveBytecodeGenerator.FReturnRequiresAwait := False;
                 if not Assigned(GActiveBytecodeGenerator.FReturnSentinel) then
                   GActiveBytecodeGenerator.FReturnSentinel := TGocciaObjectValue.Create;
                 HandleExceptionUnwind(GActiveBytecodeGenerator.FReturnSentinel,
