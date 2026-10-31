@@ -173,7 +173,8 @@ type
     function HasRoomForAdd: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     // Entry-index access for version-validated inline caches: look up an
     // entry index once, then re-read its value directly while EntryVersion
-    // is unchanged.
+    // is unchanged. A walk from 0 to EntryCount - 1 that does not mutate
+    // the map needs no version check.
     function TryGetEntryIndex(const AKey: string; out AIndex: Integer): Boolean;
     function TryGetValueAtEntry(const AIndex: Integer;
       out AValue: TValue): Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -190,6 +191,9 @@ type
 
     property Capacity: Integer read FBucketCount;
     property DeletedCount: Integer read FDeletedCount;
+    // Entry slots in use, removed ones included: the bound for walking the
+    // entries by index with TryGetValueAtEntry, which copies no key.
+    property EntryCount: Integer read FEntryCount;
     property EntryVersion: Cardinal read FEntryVersion;
   end;
 
@@ -691,9 +695,9 @@ end;
 function TOrderedStringMap<TValue>.TryGetValueAtEntry(const AIndex: Integer;
   out AValue: TValue): Boolean;
 begin
-  // Callers must pair this with an EntryVersion check; while the version is
-  // unchanged an index obtained from TryGetEntryIndex stays active and keeps
-  // its key (Remove/Compact/Clear re-stamp the version).
+  // A cached index must be paired with an EntryVersion check; while the
+  // version is unchanged an index obtained from TryGetEntryIndex stays active
+  // and keeps its key (Remove/Compact/Clear re-stamp the version).
   Result := (AIndex >= 0) and (AIndex < FEntryCount) and FEntries[AIndex].Active;
   if Result then
     AValue := FEntries[AIndex].Value
