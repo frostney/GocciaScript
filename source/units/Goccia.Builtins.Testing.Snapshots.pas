@@ -275,7 +275,7 @@ begin
 end;
 
 function NaturalCompareText(
-  {$IFDEF FPC}constref{$ELSE}const{$ENDIF} ALeft, ARight: string): Integer;
+  {$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} ALeft, ARight: string): Integer;
 var
   LeftIndex, RightIndex: Integer;
   LeftStart, RightStart, LeftSignificant, RightSignificant: Integer;

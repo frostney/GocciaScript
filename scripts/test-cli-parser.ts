@@ -137,6 +137,94 @@ console.log("Function parameter-list early errors...");
   for (const { desc, source, args } of cases) {
     assertSyntaxError(source, desc, [...args]);
   }
+
+  // A duplicate far from the name it repeats, in a list of thousands.
+  const names = Array.from({ length: 5000 }, (_, i) => `a${i}`).join(", ");
+  const longCases = [
+    { desc: "long arrow list repeating its first name last", source: `const f = (${names}, a0) => 0;\n`, args: [] },
+    { desc: "long object method list repeating a name", source: `const o = { m(${names}, a4999) {} };\n`, args: [] },
+    { desc: "long class method list repeating a name", source: `class C { m(a0, ${names}) {} }\n`, args: [] },
+    { desc: "long function list repeating a name", source: `function f(${names}, a2500) {}\n`, args: ["--compat-function"] },
+    { desc: "long list whose pattern repeats a name", source: `const f = (${names}, { x: [a4999] }) => 0;\n`, args: [] },
+    { desc: "long object pattern parameter repeating a name", source: `const f = ({ ${names} }, a0) => 0;\n`, args: [] },
+    {
+      desc: "long non-simple non-strict function list repeating a name",
+      source: `function f(${names}, a0 = 1) {}\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "long non-strict function list repeating a name under use strict",
+      source: `function f(${names}, a0) { "use strict"; }\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+    { desc: "long async arrow list repeating a name", source: `const f = async (${names}, a1) => 0;\n`, args: [] },
+    {
+      desc: "long non-strict function list repeating a name in a rest parameter",
+      source: `function f(${names}, ...a0) {}\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "long non-strict function list repeating a name in a pattern",
+      source: `function f(${names}, [a4999]) {}\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+    {
+      desc: "long non-strict function pattern repeating a name inside it",
+      source: `function f({ x: a0, y: [${names}] }) {}\n`,
+      args: ["--compat-function", "--compat-non-strict-mode"],
+    },
+  ] as const;
+
+  for (const { desc, source, args } of longCases) {
+    assertSyntaxError(source, desc, [...args], { messageIncludes: "Duplicate parameter name" });
+  }
+
+  // Lists without a repeated name are accepted in every form.
+  for (const [source, args] of [
+    [`const f = (${names}) => 0;\n`, []],
+    [`class C { m(${names}, ...rest) {} }\n`, []],
+    [`function f({ ${names} }, [b0], b1 = 1) {}\n`, ["--compat-function"]],
+    [`function f(${names}, a0) { return a0; }\n`, ["--compat-function", "--compat-non-strict-mode"]],
+  ] as const) {
+    const { exitCode, json } = runLoaderJson(source, [...args]);
+    if (exitCode !== 0 || json.ok !== true)
+      throw new Error(`A long parameter list should be accepted, got exit ${exitCode}: ${JSON.stringify(json.error)}`);
+  }
+}
+
+console.log("Names a long pattern binds are checked against later declarations...");
+{
+  const names = Array.from({ length: 5000 }, (_, i) => `b${i}`).join(", ");
+  const cases = [
+    {
+      desc: "top-level const naming a pattern's last binding again",
+      source: `const { ${names} } = {};\nconst b4999 = 1;\n`,
+      args: [],
+      message: "has already been declared",
+    },
+    {
+      desc: "top-level let naming a pattern's first binding again",
+      source: `let [${names}] = [];\nlet b0;\n`,
+      args: [],
+      message: "has already been declared",
+    },
+    {
+      desc: "static block let naming a pattern's binding again",
+      source: `class C { static { const { ${names} } = {}; let b4999; } }\n`,
+      args: [],
+      message: "has already been declared",
+    },
+    {
+      desc: "for statement let naming a pattern's binding again",
+      source: `for (let { ${names} } = {}, b0 = 1; false; ) {}\n`,
+      args: ["--compat-traditional-for-loop"],
+      message: "Duplicate lexical binding",
+    },
+  ] as const;
+
+  for (const { desc, source, args, message } of cases) {
+    assertSyntaxError(source, desc, [...args], { messageIncludes: message });
+  }
 }
 
 console.log("Strict mode code rejects static as a pattern or for-head binding...");
@@ -153,6 +241,18 @@ console.log("Strict mode code rejects static as a pattern or for-head binding...
       messageIncludes: "must not bind reserved word 'static'",
     });
   }
+}
+
+console.log("Match patterns preserve binding early errors...");
+for (const pattern of [
+  "{ a: const x, b: const x }",
+  "{ a: const x } or { b: const y }",
+  "{ a: const x } or { b: let x }",
+  "not { a: const x }",
+  "{ a: const café, b: const café }",
+]) {
+  assertSyntaxError(`const f = (value) => value is ${pattern};\n`,
+    `match pattern ${pattern}`);
 }
 
 // -- Migrated language early-error coverage ------------------------------------
@@ -491,6 +591,47 @@ console.log("Annex B labelled-function early errors...");
 
   for (const { source, desc, args } of cases)
     assertSyntaxError(source, desc, [...args]);
+}
+
+// -- Class static block declaration early errors (#1329) -----------------------
+
+console.log("Class static block declaration early errors...");
+{
+  // ES2026 §15.7.1: a static block's LexicallyDeclaredNames must be unique and
+  // must not occur in its VarDeclaredNames, which take var declarations at any
+  // depth and the block's top-level function declarations.
+  const args = ["--compat-var", "--compat-function"];
+  const rejected = [
+    ["class C { static { let a; let a; } }\n", "duplicate let in a static block"],
+    ["class C { static { const a = 1; class a {} } }\n", "const and class with one name in a static block"],
+    ["class C { static { let a; var a; } }\n", "let and var with one name in a static block"],
+    ["class C { static { var a; let a; } }\n", "var before let with one name in a static block"],
+    ["class C { static { let a; { var a; } } }\n", "let and a nested-block var in a static block"],
+    ["class C { static { let a; for (var a of []) {} } }\n", "let and a for-of var head in a static block"],
+    ["class C { static { let a; try { var a; } catch {} } }\n", "let and a var in a try block in a static block"],
+    ["class C { static { let f; function f() {} } }\n", "let and a function declaration in a static block"],
+  ] as const;
+  for (const [source, desc] of rejected)
+    assertSyntaxError(source, desc, args, { messageIncludes: "has already been declared" });
+  // The error points at the second declaration of the name.
+  assertSyntaxError(
+    "class C {\n  static {\n    let a;\n    var a;\n  }\n}\n",
+    "var after let reported at the var",
+    args,
+    { messageIncludes: "has already been declared", line: 4 },
+  );
+
+  const accepted = [
+    ["class C { static { var a; var a; function f() {} function f() {} var f; } }\n", "repeated var and function names"],
+    ["class C { static { var a; { let a; } } }\n", "a var and a nested-block let"],
+    ["class C { static { let a; } static { var a; } }\n", "let and var in separate static blocks"],
+    ["class C { static { let a; (() => { var a; }); } }\n", "let and a var inside a nested function"],
+  ] as const;
+  for (const [source, desc] of accepted) {
+    const res = runLoaderJson(source, args);
+    if (res.exitCode !== 0)
+      throw new Error(`${desc}: should parse, got exit ${res.exitCode} ${JSON.stringify(res.json.error)}`);
+  }
 }
 
 // -- Strict-mode legacy octal literal rejection ---------------------------------

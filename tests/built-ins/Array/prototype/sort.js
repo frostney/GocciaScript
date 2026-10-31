@@ -155,4 +155,37 @@ describe("Array.prototype.sort", () => {
       delete Array.prototype[3];
     }
   });
+
+  test("sort on an array with a named property writes own elements without calling an inherited setter", () => {
+    let calls = "";
+    Object.defineProperty(Array.prototype, "0", {
+      set(value) { calls += value; },
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.sort((a, b) => b - a);
+      expect(calls).toBe("");
+      expect(Array.from(arr)).toEqual([3, 2, 1]);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
+
+  test("sort on an array with a named property writes own elements past an inherited read-only index", () => {
+    Object.defineProperty(Array.prototype, "0", {
+      value: "ro",
+      writable: false,
+      configurable: true,
+    });
+    try {
+      const arr = [1, 2, 3];
+      arr.named = true;
+      arr.sort((a, b) => b - a);
+      expect(Array.from(arr)).toEqual([3, 2, 1]);
+    } finally {
+      delete Array.prototype[0];
+    }
+  });
 });

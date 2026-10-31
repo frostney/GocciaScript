@@ -13,12 +13,21 @@ on:
 # accumulate: a new push cancels the previous run for the same pull request.
 # This also keeps the surviving verdict attached to the current head instead of
 # leaving a green result that belongs to an already-replaced commit.
+# Jobs that must run after a failed dependency use !cancelled(), not always():
+# always() also runs them in the cancelled run, where they fail on artifacts the
+# cancellation never produced or post comments for the replaced commit.
 concurrency:
   group: pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+
+env:
+  # The frostney/fpc-toolchain build that build and build-main both install, so
+  # the benchmark comparison measures the diff, not a compiler change. ci.yml
+  # names the same one.
+  FPC_VERSION: "3.2.4-rc2-b1"
 
 jobs:
   build:
@@ -33,7 +42,9 @@ jobs:
           persist-credentials: false
 
       - name: Install FPC
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
 
       - name: Check formatting
         run: ./format.pas --check
@@ -42,6 +53,11 @@ jobs:
         run: |
           npx tsx scripts/check-vm-stack-stores.ts --self-test
           npx tsx scripts/check-vm-stack-stores.ts
+
+      - name: Check VM dispatch layout
+        run: |
+          npx tsx scripts/check-vm-dispatch-layout.ts --self-test
+          npx tsx scripts/check-vm-dispatch-layout.ts
 
       - name: Build all
         run: ./build.pas --prod
@@ -73,7 +89,26 @@ jobs:
           persist-credentials: false
 
       - name: Install FPC
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
+
+      # A base from before the move to FPC 3.2.4 does not compile on it: its
+      # Generics.Defaults comparers are declared constref, and it sets the
+      # openssl unit's DLLSSLName and DLLUtilName, which 3.2.4 renamed. Port
+      # such a base the way Shared.inc does, so both builds use one compiler.
+      # Remove this step after 0.16.0.
+      - name: Port a pre-3.2.4 base to FPC 3.2.4
+        run: |
+          if grep -q GOCCIA_FPC_CONSTREF_COMPARERS source/shared/Shared.inc; then
+            echo "The base already builds on FPC 3.2.4."
+            exit 0
+          fi
+          grep -rlF '{$IFDEF FPC}constref{$ELSE}const{$ENDIF}' source \
+            | xargs -r sed -i 's/{\$IFDEF FPC}constref{\$ELSE}const{\$ENDIF}/const/'
+          sed -i -e 's/\bDLLSSLName :=/BaseSSLName :=/' -e 's/\bDLLUtilName :=/BaseCryptoName :=/' \
+            source/shared/TransportSecurity.pas
+          git diff --stat
 
       - name: Build benchmark runner and GocciaRunner (main base)
         # The PR base may predate the GocciaScriptLoader -> GocciaRunner rename.
@@ -132,6 +167,9 @@ jobs:
 
       - name: Check JavaScript test-suite structure
         run: bun run scripts/check-test-structure.ts
+
+      - name: Check parallel CI compilation
+        run: python3 .github/scripts/test-compile-programs.py
 
       - name: Check CI report publishing helpers
         run: node --test .github/scripts/test-report-publishing.js
@@ -473,12 +511,23 @@ jobs:
       - name: Check AWFY driver helpers
         run: node scripts/test-awfy-driver.js
 
+      # Instructions retired tell work from code placement (#1917). The
+      # driver records them only where perf can count them, and the report
+      # says why when it cannot.
+      - name: Allow user-space perf counters
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends "linux-tools-$(uname -r)" \
+            || { sudo apt-get update && sudo apt-get install -y --no-install-recommends "linux-tools-$(uname -r)"; }
+          sudo sysctl -w kernel.perf_event_paranoid=1
+
       - name: Run AWFY report
         run: |
           node scripts/awfy-ci-report.js \
             --awfy-dir awfy-suite/benchmarks/JavaScript \
             --goccia-baseline build-main/GocciaRunner \
             --goccia-candidate build/GocciaRunner \
+            --counters \
             --output awfy-report.json
 
       - name: Upload AWFY report
@@ -604,7 +653,9 @@ jobs:
 
   jetstream-report:
     needs: jetstream-workload
-    if: always()
+    # Runs when a shard failed, so a missing shard still fails this job, but
+    # not when a newer push cancelled the run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -626,7 +677,10 @@ jobs:
       - name: Merge JetStream report
         id: jetstream-merge
         continue-on-error: true
+        # nullglob: with no workload reports, the script gets no paths and names
+        # every missing workload instead of failing on the literal pattern.
         run: |
+          shopt -s nullglob
           node scripts/jetstream-merge-reports.js \
             --output jetstream-report.json \
             jetstream-reports/*.json
@@ -714,7 +768,8 @@ jobs:
 
       - name: Install Web Tooling dependencies
         working-directory: web-tooling-suite
-        run: npm install --ignore-scripts --no-audit --no-fund
+        # The pinned corpus declares raw-loader as a direct Git dependency.
+        run: npm install --allow-git=root --ignore-scripts --no-audit --no-fund
 
       - name: Run Web Tooling report
         env:
@@ -736,7 +791,9 @@ jobs:
 
   web-tooling-report:
     needs: web-tooling-workload
-    if: always()
+    # Runs when a shard failed, so a missing shard still fails this job, but
+    # not when a newer push cancelled the run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -756,7 +813,10 @@ jobs:
           merge-multiple: true
 
       - name: Merge Web Tooling report
+        # nullglob: with no workload reports, the script gets no paths and names
+        # every missing workload instead of failing on the literal pattern.
         run: |
+          shopt -s nullglob
           node scripts/web-tooling-merge-reports.js \
             --output web-tooling-report.json \
             web-tooling-reports/*.json
@@ -835,6 +895,9 @@ jobs:
 
       - name: Check app-specific CLI features
         run: bun run scripts/test-cli-apps.ts
+
+      - name: Check sandbox filesystem search against the shared vectors
+        run: bun run scripts/test-cli-sandbox-search.ts
 
       # test-cli-permissions.ts fetches a loopback name only the hosts file
       # lists, which the runner image does not have, to show fetch resolves
@@ -921,6 +984,48 @@ jobs:
           retention-days: 1
           path: boot-timing.json
 
+  # Runs the release packaging on the PR build without publishing anything. The
+  # tagged release and the nightly only package on tags and schedules, so this
+  # is where a change that breaks the archives, such as binaries that lose
+  # their executable bit (#1898), shows up before a release.
+  release-packaging:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      # No chmod after the download on purpose: the release job gets the
+      # binaries without their executable bit too, and packaging must restore it.
+      - name: Download build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: build-pr
+          path: artifacts/build-pr/
+
+      # The PR build has Linux x64 binaries only. Packaging them a second time
+      # as the x86_64-darwin target exercises the macOS .zip path; the archive
+      # check reads modes and paths, not the binary format.
+      - name: Package and check the Linux and macOS archive formats
+        run: |
+          bash ./.github/scripts/package-release-archive.sh x86_64-linux artifacts/build-pr pr
+          bash ./.github/scripts/package-release-archive.sh x86_64-darwin artifacts/build-pr pr
+
+      - name: Run the runner from each extracted archive
+        run: |
+          mkdir extracted
+          tar -xzf gocciascript-pr-linux-x64.tar.gz -C extracted
+          unzip -q gocciascript-pr-macos-x64.zip -d extracted
+          for dir in extracted/gocciascript-pr-linux-x64 extracted/gocciascript-pr-macos-x64; do
+            output="$(printf 'console.log("packaged", 1 + 1);\n' | "$dir/GocciaRunner" -)"
+            echo "$output"
+            grep -q '^packaged 2$' <<< "$output"
+          done
+
   test262:
     needs: build
     runs-on: ubuntu-latest
@@ -1001,7 +1106,9 @@ jobs:
 
   test262-merge:
     needs: test262
-    if: always()
+    # Runs when a shard failed, so a missing shard still fails this job, but
+    # not when a newer push cancelled the run.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -1021,7 +1128,10 @@ jobs:
           merge-multiple: true
 
       - name: Merge test262 shards
+        # nullglob: with no shard reports, the merge gets no paths and reports
+        # every shard missing instead of failing on the literal pattern.
         run: |
+          shopt -s nullglob
           bun scripts/run_test262_suite.ts \
             --merge-shards \
             --output=test262-results.json \
@@ -1119,7 +1229,9 @@ jobs:
 
   awfy-comment:
     needs: awfy-report
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1155,7 +1267,9 @@ jobs:
 
   jetstream-comment:
     needs: jetstream-report
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1191,7 +1305,9 @@ jobs:
 
   web-tooling-comment:
     needs: web-tooling-report
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1227,7 +1343,9 @@ jobs:
 
   timing-comment:
     needs: [test, benchmark, boot-timing]
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -1403,7 +1521,9 @@ jobs:
 
   test262-comment:
     needs: test262-merge
-    if: always()
+    # Posts when a dependency failed, but not when a newer push cancelled the
+    # run: the replaced commit's comment would overwrite the last complete one.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -1,11 +1,11 @@
 name: GC stress
 
-# Runs the GC-sensitive part of test262 and tests/ under the GC-stress build
-# (`./build.pas --gc-stress`): the VM runs a full collection every 8 dispatched
-# instructions, and heaptrc keeps freed blocks out of reuse. A value that only
-# a Pascal local holds while guest code runs is then freed at once, so a
-# missing GC root faults here instead of in a production run that collects at
-# the wrong moment (#1625, #1628, #1629).
+# Runs the GC-sensitive part of test262 and the whole tests/ tree under the
+# GC-stress build (`./build.pas --gc-stress`): the VM runs a full collection
+# every 8 dispatched instructions, and heaptrc keeps freed blocks out of reuse.
+# A value that only a Pascal local holds while guest code runs is then freed
+# at once, so a missing GC root faults here instead of in a production run
+# that collects at the wrong moment (#1625, #1628, #1629).
 #
 # The same tests also run under an ordinary development build of the same
 # commit, and only tests that pass there but fail under stress fail the job.
@@ -29,6 +29,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # The frostney/fpc-toolchain build, as in ci.yml.
+  FPC_VERSION: "3.2.4-rc2-b1"
+
 jobs:
   gc-stress:
     runs-on: ubuntu-latest
@@ -50,7 +54,9 @@ jobs:
           no-cache: true
 
       - name: Install FPC
-        run: sudo apt-get update && sudo apt-get install fpc -qq > /dev/null
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_VERSION }}
 
       - name: Read test262 pin
         id: test262-pin

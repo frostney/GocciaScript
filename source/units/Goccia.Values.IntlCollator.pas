@@ -26,7 +26,13 @@ type
 
     procedure InitializePrototype;
   public
-    constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil);
+    // AWithPrototype False: an instance native code makes for one abstract
+    // operation and drops (String.prototype.localeCompare), which no script
+    // reaches. It leaves the realm's shared prototype unbuilt, so only
+    // Intl.Collator builds that (a heap snapshot restore builds it the same
+    // way, ADR 0148).
+    constructor Create(const ALocale: string; const AOptions: TGocciaObjectValue = nil;
+      const AWithPrototype: Boolean = True);
 
     function ToStringTag: string; override;
     procedure TraceReferences; override;
@@ -282,7 +288,8 @@ end;
 
 { TGocciaIntlCollatorValue }
 
-constructor TGocciaIntlCollatorValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue);
+constructor TGocciaIntlCollatorValue.Create(const ALocale: string; const AOptions: TGocciaObjectValue;
+  const AWithPrototype: Boolean);
 var
   OptionsRoots: TGocciaActiveRootFrame;
   Canonical, RawLocale: string;
@@ -424,9 +431,12 @@ begin
     else if FCollation <> 'default' then
       FICULocale := AddUnicodeLocaleExtensionKeyword(FICULocale, 'co', FCollation);
 
-    InitializePrototype;
-    if (GetIntlCollatorShared <> nil) then
-      FPrototype := GetIntlCollatorShared.Prototype;
+    if AWithPrototype then
+    begin
+      InitializePrototype;
+      if (GetIntlCollatorShared <> nil) then
+        FPrototype := GetIntlCollatorShared.Prototype;
+    end;
   finally
     OptionsRoots.Clear;
   end;

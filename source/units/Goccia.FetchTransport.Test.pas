@@ -118,6 +118,11 @@ type
     procedure TestInvalidStatusRejects;
     procedure TestInvalidHeaderRejects;
     procedure TestOversizedBodyRejects;
+    procedure TestBodyOverMemoryLimitRejects;
+    procedure TestHeldBodiesCountTogether;
+    procedure TestConsumedBodyIsChargedOnce;
+    procedure TestCollectedResponseGivesItsBytesBack;
+    procedure TestBodyNearTheLimitSettlesThePromise;
     procedure TestAbortCancelsRequest;
     procedure TestTimeoutSignalCancelsRequest;
     procedure TestRunDeadlineEndsWait;
@@ -139,6 +144,8 @@ type
     procedure TestRedirectURLMatchesDirect;
     procedure TestRedirectLocationResolvesAgainstResponseURL;
     procedure TestRequestURLIsParsed;
+    procedure TestRedirectModeReachesTransport;
+    procedure TestRedirectModesMatchDirect;
     procedure TestRequestURLIsParsedOnTheWire;
     procedure TestNonASCIIRequestURLIsEncodedOnTheWire;
     procedure TestRecordThenReplay;
@@ -343,6 +350,16 @@ begin
     TestInvalidHeaderRejects);
   Test('a body over the response ceiling rejects with TypeError',
     TestOversizedBodyRejects);
+  Test('a body over the memory limit rejects with the memory-limit ' +
+    'RangeError', TestBodyOverMemoryLimitRejects);
+  Test('bodies held at once count together against the memory limit',
+    TestHeldBodiesCountTogether);
+  Test('a consumed body is charged once, by what it became',
+    TestConsumedBodyIsChargedOnce);
+  Test('a collected response gives its body''s bytes back',
+    TestCollectedResponseGivesItsBytesBack);
+  Test('a body that only just fits still settles the fetch either way',
+    TestBodyNearTheLimitSettlesThePromise);
   Test('an abort cancels the request and a later answer is ignored',
     TestAbortCancelsRequest);
   Test('AbortSignal.timeout ends the wait for an answer',
@@ -391,6 +408,8 @@ begin
     'or direct', TestNonASCIIRequestURLIsEncodedOnTheWire);
   Test('a run recorded through the network replays without it',
     TestRecordThenReplay);
+  Test('redirect modes "manual" and "error" read the same, forwarded or ' +
+    'direct', TestRedirectModesMatchDirect);
   {$ELSE}
   Skip('a forwarded response reads as the built-in client''s does',
     TestForwardedMatchesDirect, LOOPBACK_ORIGIN_SKIP_REASON);
@@ -406,7 +425,11 @@ begin
     LOOPBACK_ORIGIN_SKIP_REASON);
   Skip('a run recorded through the network replays without it',
     TestRecordThenReplay, LOOPBACK_ORIGIN_SKIP_REASON);
+  Skip('redirect modes "manual" and "error" read the same, forwarded or ' +
+    'direct', TestRedirectModesMatchDirect, LOOPBACK_ORIGIN_SKIP_REASON);
   {$ENDIF}
+  Test('a transport receives the request''s redirect mode',
+    TestRedirectModeReachesTransport);
 end;
 
 procedure TFetchTransportTests.TestWithoutTransportUsesNetwork;
@@ -627,6 +650,192 @@ begin
     ApiCapabilities, CEILING))
     .ToBe('TypeError: HTTP response body exceeds 4 byte limit');
   Expect<Integer>(Fake.Request(0).MaxResponseBytes).ToBe(CEILING);
+end;
+
+const
+  MEBIBYTE = 1024 * 1024;
+  MEMORY_HEADROOM = 4 * MEBIBYTE;
+  MEMORY_LIMIT_OUTCOME = 'RangeError: Allocation failed: GC heap size ' +
+    'exceeds the configured memory limit';
+
+function BodyResponse(const ABytes: Integer): THTTPResponse;
+begin
+  Result := Default(THTTPResponse);
+  Result.StatusCode := 200;
+  Result.StatusText := 'OK';
+  SetLength(Result.Body, ABytes);
+  if ABytes > 0 then
+    FillChar(Result.Body[0], ABytes, Ord('a'));
+end;
+
+{ Runs AScript like RunWithTransport, with the collector's ceiling
+  MEMORY_HEADROOM above what it holds once the engine exists, and a response
+  ceiling well above every body. }
+function RunUnderMemoryLimit(const AScript: string;
+  const ATransport: IGocciaFetchTransport): string;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  GC: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+begin
+  GC := TGarbageCollector.Instance;
+  Source := TStringList.Create;
+  try
+    Source.Text := 'globalThis.outcome = "pending";' + sLineBreak + AScript;
+    Engine := CreateFetchEngine(Source, ApiCapabilities);
+    try
+      Engine.FetchTransport := ATransport;
+      Engine.FetchMaxResponseBytes := 16 * MEBIBYTE;
+      GC.Collect;
+      PreviousMaxBytes := GC.MaxBytes;
+      GC.MaxBytes := GC.BytesAllocated + MEMORY_HEADROOM;
+      try
+        Engine.Execute;
+      finally
+        GC.MaxBytes := PreviousMaxBytes;
+      end;
+      Result := GlobalText(Engine, 'outcome');
+    finally
+      Engine.Free;
+    end;
+  finally
+    Source.Free;
+  end;
+  GC.Collect;
+end;
+
+{ A fetched body is reserved against the engine's memory limit when the
+  fetch settles, as a native built-in reserves the bytes it holds; one that
+  does not fit rejects with the catchable RangeError an allocation over the
+  limit throws, whatever the response ceiling allows. }
+procedure TFetchTransportTests.TestBodyOverMemoryLimitRejects;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Fake.Response := BodyResponse(6 * MEBIBYTE);
+  Expect<string>(RunUnderMemoryLimit(FetchScript(API_URL), Transport))
+    .ToBe(MEMORY_LIMIT_OUTCOME);
+  Fake.Response := BodyResponse(MEBIBYTE);
+  Expect<string>(RunUnderMemoryLimit('fetch("' + API_URL + '").then(' +
+    '(r) => r.arrayBuffer()).then((b) => { globalThis.outcome = ' +
+    'String(b.byteLength); });', Transport))
+    .ToBe(IntToStr(MEBIBYTE));
+end;
+
+{ Responses a script keeps hold of keep their bodies reserved, so bodies
+  that each fit can together pass the limit: the one that does not fit
+  rejects. }
+procedure TFetchTransportTests.TestHeldBodiesCountTogether;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Fake.Response := BodyResponse(3 * MEBIBYTE div 2);
+  Expect<string>(RunUnderMemoryLimit(
+    'const held = [];' + sLineBreak +
+    'const step = () => fetch("' + API_URL + '").then(' +
+    '(r) => { held.push(r); return "ok"; }, (e) => e.name);' + sLineBreak +
+    'step().then((a) => step().then((b) => step().then((c) => {' +
+    ' globalThis.outcome = [a, b, c, held.length].join(","); })));',
+    Transport)).ToBe('ok,ok,RangeError,2');
+end;
+
+{ text(), json() and arrayBuffer() hand the body's reservation to what they
+  make from it. arrayBuffer() adopts the bytes, so a body over half the room
+  left still fits; text() gives the body back before it makes the string,
+  which holds two bytes per character, so a body of 1.5 MiB (3 MiB of text)
+  fits in 4 MiB of room, where body and text together would not. }
+procedure TFetchTransportTests.TestConsumedBodyIsChargedOnce;
+type
+  TReadCase = record
+    Read: string;
+    Bytes: Integer;
+  end;
+const
+  READS: array[0..1] of TReadCase = (
+    (Read: 'text'; Bytes: 3 * MEBIBYTE div 2),
+    (Read: 'arrayBuffer'; Bytes: 5 * MEBIBYTE div 2)
+  );
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+  I: Integer;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  for I := 0 to High(READS) do
+  begin
+    Fake.Response := BodyResponse(READS[I].Bytes);
+    Expect<string>(RunUnderMemoryLimit('fetch("' + API_URL + '").then(' +
+      '(r) => r.' + READS[I].Read + '().then((v) => {' +
+      ' globalThis.outcome = [r.bodyUsed, v.length ?? v.byteLength]' +
+      '.join(","); }, (e) => { globalThis.outcome = "read " + e.name; }));',
+      Transport)).ToBe('true,' + IntToStr(READS[I].Bytes));
+  end;
+end;
+
+{ A response nothing reaches any more is freed by the collection a
+  reservation runs before it refuses, and gives its body's bytes back. }
+procedure TFetchTransportTests.TestCollectedResponseGivesItsBytesBack;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Fake.Response := BodyResponse(3 * MEBIBYTE);
+  Expect<string>(RunUnderMemoryLimit(
+    'const status = () => fetch("' + API_URL + '").then(' +
+    '(r) => String(r.status), (e) => e.name);' + sLineBreak +
+    'status().then((a) => status().then((b) => status().then((c) => {' +
+    ' globalThis.outcome = [a, b, c].join(","); })));', Transport))
+    .ToBe('200,200,200');
+end;
+
+{ Bodies whose size leaves less room than the headers and the response
+  value need: making those values reaches the limit after the body was
+  reserved. The fetch must still settle, resolved or rejected with the
+  memory-limit RangeError, never left pending with the error thrown out of
+  the run. }
+procedure TFetchTransportTests.TestBodyNearTheLimitSettlesThePromise;
+const
+  SWEEP_BYTES = 8 * 1024;
+  STEP_BYTES = 64;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+  Bytes: Integer;
+  Outcome: string;
+  Settled: Boolean;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Settled := True;
+  Bytes := MEMORY_HEADROOM - SWEEP_BYTES;
+  while Settled and (Bytes <= MEMORY_HEADROOM) do
+  begin
+    Fake.Response := BodyResponse(Bytes);
+    try
+      Outcome := RunUnderMemoryLimit('fetch("' + API_URL + '").then(' +
+        '(r) => { globalThis.outcome = "resolved"; },' +
+        ' (e) => { globalThis.outcome = e.name + ": " + e.message; });',
+        Transport);
+    except
+      on E: Exception do
+        Outcome := 'raised ' + E.ClassName;
+    end;
+    Settled := (Outcome = 'resolved') or (Outcome = MEMORY_LIMIT_OUTCOME);
+    Inc(Bytes, STEP_BYTES);
+  end;
+  Expect<string>(IntToStr(Bytes - STEP_BYTES) + ' ' + Outcome)
+    .ToBe(IntToStr(MEMORY_HEADROOM) + ' ' + Outcome);
+  Expect<Boolean>(Settled).ToBe(True);
 end;
 
 procedure TFetchTransportTests.TestAbortCancelsRequest;
@@ -1941,6 +2150,101 @@ begin
   Expect<Integer>(Fake.RequestCount).ToBe(1);
   Expect<string>(Fake.Request(0).URL).ToBe('http://' + API_HOST + '/a/d?x=1');
 end;
+
+{ fetch()'s redirect option reaches the transport as the request's redirect
+  mode; without it the mode is "follow". }
+procedure TFetchTransportTests.TestRedirectModeReachesTransport;
+var
+  Fake: TFakeTransport;
+  Transport: IGocciaFetchTransport;
+begin
+  Fake := TFakeTransport.Create(tmAnswer);
+  Transport := Fake;
+  Fake.Response := TextResponse(204, '');
+  RunWithTransport('fetch("' + API_URL + '");' +
+    'fetch("' + API_URL + '", { redirect: "follow" });' +
+    'fetch("' + API_URL + '", { redirect: "error" });' +
+    'fetch("' + API_URL + '", { redirect: "manual" });',
+    Transport, ApiCapabilities);
+  Expect<Integer>(Fake.RequestCount).ToBe(4);
+  Expect<Boolean>(Fake.Request(0).Redirect = hrmFollow).ToBe(True);
+  Expect<Boolean>(Fake.Request(1).Redirect = hrmFollow).ToBe(True);
+  Expect<Boolean>(Fake.Request(2).Redirect = hrmError).ToBe(True);
+  Expect<Boolean>(Fake.Request(3).Redirect = hrmManual).ToBe(True);
+end;
+
+{ WHATWG Fetch, HTTP fetch: under "manual" the redirect response is the
+  answer, and under "error" a redirect is a network error. The built-in
+  client and a transport forwarding through FetchOverNetwork read the same,
+  and neither requests the Location. }
+procedure TFetchTransportTests.TestRedirectModesMatchDirect;
+{$IFDEF UNIX}
+type
+  TModeCase = record
+    Mode: string;
+    Outcome: string;
+  end;
+const
+  CASES: array[0..1] of TModeCase = (
+    (Mode: 'manual'; Outcome: '302|Found|false|{base}/dir/page|false|/next'),
+    (Mode: 'error'; Outcome: 'TypeError: redirect refused: the request''s ' +
+      'redirect mode is "error"')
+  );
+var
+  Direct, Forwarded: TLoopbackOrigin;
+  Tape: TTape;
+  Script: string;
+  Capabilities: TGocciaCapabilities;
+  Transport: IGocciaFetchTransport;
+  I: Integer;
+
+  function ModeScript(const AOrigin: TLoopbackOrigin): string;
+  begin
+    Result := 'fetch("http://' + LOOPBACK_HOST + ':' +
+      IntToStr(AOrigin.Port) + '/dir/page", { redirect: "' + CASES[I].Mode +
+      '" }).then((r) => { globalThis.outcome = [r.status, r.statusText,' +
+      ' r.ok, r.url, r.redirected, r.headers.get("location")].join("|"); },' +
+      ' (e) => { globalThis.outcome = e.name + ": " + e.message; });';
+  end;
+
+  function Expected(const AOrigin: TLoopbackOrigin): string;
+  begin
+    Result := StringReplace(CASES[I].Outcome, '{base}', 'http://' +
+      LOOPBACK_HOST + ':' + IntToStr(AOrigin.Port), []);
+  end;
+begin
+  Capabilities := TGocciaCapabilities.None.Allow(gcNet, LOOPBACK_HOST)
+    .Allow(gcNet, NET_PRIVATE_SCOPE);
+  for I := 0 to High(CASES) do
+  begin
+    Tape := TTape.Create;
+    Direct := TLoopbackOrigin.Create(1, False, '/next');
+    Forwarded := TLoopbackOrigin.Create(1, False, '/next');
+    try
+      Script := ModeScript(Direct);
+      Expect<string>(RunWithTransport(Script, nil, Capabilities))
+        .ToBe(Expected(Direct));
+      Transport := TRecordingTransport.Create(Tape);
+      Script := ModeScript(Forwarded);
+      Expect<string>(RunWithTransport(Script, Transport, Capabilities))
+        .ToBe(Expected(Forwarded));
+      Transport := nil;
+      Direct.WaitFor;
+      Forwarded.WaitFor;
+      Expect<string>(Direct.RequestLine(1)).ToBe('GET /dir/page HTTP/1.1');
+      Expect<string>(Forwarded.RequestLine(1)).ToBe('GET /dir/page HTTP/1.1');
+    finally
+      Direct.Free;
+      Forwarded.Free;
+      Tape.Free;
+    end;
+  end;
+end;
+{$ELSE}
+begin
+  // Registered as skipped on this platform.
+end;
+{$ENDIF}
 
 procedure TFetchTransportTests.TestRequestURLIsParsedOnTheWire;
 {$IFDEF UNIX}

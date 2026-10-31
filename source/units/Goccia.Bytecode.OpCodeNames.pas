@@ -230,6 +230,12 @@ begin
     OP_THROW_UNDEFINED_VARIABLE:       Result := 'OP_THROW_UNDEFINED_VARIABLE';
     OP_DIRECT_EVAL:                    Result := 'OP_DIRECT_EVAL';
     OP_GET_GLOBAL_DECLARED:            Result := 'OP_GET_GLOBAL_DECLARED';
+    OP_JUMP_IF_NOT_LT_IMM:             Result := 'OP_JUMP_IF_NOT_LT_IMM';
+    OP_JUMP_IF_NOT_GT_IMM:             Result := 'OP_JUMP_IF_NOT_GT_IMM';
+    OP_JUMP_IF_NOT_LTE_IMM:            Result := 'OP_JUMP_IF_NOT_LTE_IMM';
+    OP_JUMP_IF_NOT_GTE_IMM:            Result := 'OP_JUMP_IF_NOT_GTE_IMM';
+    OP_JUMP_IF_NOT_STRICT_EQ_IMM:      Result := 'OP_JUMP_IF_NOT_STRICT_EQ_IMM';
+    OP_JUMP_IF_STRICT_EQ_IMM:          Result := 'OP_JUMP_IF_STRICT_EQ_IMM';
   else
     if AOp = OP_CALL_SELF then
       Result := 'OP_CALL_SELF'

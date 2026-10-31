@@ -7,6 +7,7 @@ interface
 uses
   SysUtils,
 
+  SandboxGlob,
   SandboxVirtualFileSystem,
 
   Goccia.Arguments.Collection,
@@ -28,6 +29,9 @@ type
     FPreviousGocciaModule: TGocciaModule;
     FPreviousRootClampCallback: TSandboxRootClampCallback;
     FRootClampInstalled: Boolean;
+    FSearchModule: TGocciaModule;
+    FSearchModuleRegistered: Boolean;
+    FPreviousSearchModule: TGocciaModule;
 
     procedure HandleRootClamp(const APath, ABase,
       ACanonicalPath: string);
@@ -132,6 +136,20 @@ type
     function FsPromisesCopyFile(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
 
+    procedure SearchProgress;
+    function GlobPaths(const APatterns, AExcludes: TSandboxGlobPatternArray;
+      const ACwd: string): TStringArray;
+    function FsGlobSync(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsGlob(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function FsPromisesGlob(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function SearchGrep(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function SearchFuzzyFind(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+
     function CreateFsNamespace: TGocciaObjectValue;
     function CreateGocciaNamespace: TGocciaObjectValue;
   public
@@ -143,6 +161,9 @@ type
 implementation
 
 uses
+  Math,
+
+  SandboxFuzzy,
   SandboxShell,
   TextEncoding,
 
@@ -155,11 +176,14 @@ uses
   Goccia.JSON,
   Goccia.Keywords.Reserved,
   Goccia.MicrotaskQueue,
+  Goccia.NativeLimits,
   Goccia.Realm,
   Goccia.Sandbox.FileSystemErrors,
+  Goccia.Sandbox.Search,
   Goccia.Shims,
   Goccia.UncatchableFault,
   Goccia.Utils,
+  Goccia.Utils.Arrays,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.DataViewValue,
@@ -171,6 +195,7 @@ uses
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.PromiseValue,
   Goccia.Values.SharedArrayBufferValue,
+  Goccia.Values.SymbolValue,
   Goccia.Values.TypedArrayValue,
   Goccia.VM.Exception;
 
@@ -185,7 +210,8 @@ type
     sfoExists,
     sfoRm,
     sfoRename,
-    sfoCopyFile
+    sfoCopyFile,
+    sfoGlob
   );
 
   TGocciaSandboxFsCompletion = (
@@ -207,6 +233,8 @@ type
     FCompletion: TGocciaSandboxFsCompletion;
     FCallback: TGocciaValue;
     FPromise: TGocciaPromiseValue;
+    FGlobPatterns: TSandboxGlobPatternArray;
+    FGlobExcludes: TSandboxGlobPatternArray;
     procedure CompleteFailure(const AError: TGocciaValue);
     procedure CompleteSuccess(const AValue: TGocciaValue);
   public
@@ -259,6 +287,31 @@ type
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
 
+  { What fs.promises.glob returns: an async iterator over the paths, which
+    are found when the first next() runs. }
+  TGocciaSandboxGlobIteratorValue = class(TGocciaObjectValue)
+  private
+    FExtension: TGocciaSandboxRuntimeExtension;
+    FPatterns: TSandboxGlobPatternArray;
+    FExcludes: TSandboxGlobPatternArray;
+    FCwd: string;
+    FPaths: TStringArray;
+    FStarted: Boolean;
+    FIndex: Integer;
+    function IteratorResult(const AValue: TGocciaValue;
+      const ADone: Boolean): TGocciaValue;
+  public
+    constructor Create(const AExtension: TGocciaSandboxRuntimeExtension;
+      const APatterns, AExcludes: TSandboxGlobPatternArray;
+      const ACwd: string);
+    function Next(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function ReturnMethod(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+    function AsyncIterator(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  end;
+
 function AddNativeFunction(const AObject: TGocciaObjectValue;
   const AName: string; const ACallback: TGocciaNativeFunctionCallback;
   const AArity: Integer): TGocciaNativeFunctionValue;
@@ -307,6 +360,26 @@ begin
   else
     Result := RejectedPromise(
       CreateErrorObject(ERROR_NAME, AException.Message));
+end;
+
+{ The paths as a script array, rooted while the strings are allocated. }
+function PathsToArray(const APaths: TStringArray): TGocciaValue;
+var
+  Arr: TGocciaArrayValue;
+  ArrRoot: TGocciaTempRoot;
+  Index: Integer;
+begin
+  Arr := TGocciaArrayValue.Create(nil, Length(APaths));
+  InitializeTempRoot(ArrRoot);
+  try
+    AddTempRootIfNeeded(ArrRoot, Arr);
+    for Index := 0 to High(APaths) do
+      ArrayCreateDataProperty(Arr, Index,
+        TGocciaStringLiteralValue.Create(APaths[Index]));
+  finally
+    RemoveTempRootIfNeeded(ArrRoot);
+  end;
+  Result := Arr;
 end;
 
 { TGocciaSandboxFsJob }
@@ -433,6 +506,9 @@ begin
         Value := FExtension.RenameValue(FPath, FDestination);
       sfoCopyFile:
         Value := FExtension.CopyFileValue(FPath, FDestination);
+      sfoGlob:
+        Value := PathsToArray(FExtension.GlobPaths(FGlobPatterns,
+          FGlobExcludes, FPath));
     else
       raise Exception.Create('Unsupported filesystem operation');
     end;
@@ -1115,6 +1191,216 @@ end;
 
 { TGocciaSandboxStatValue }
 
+{ Search options }
+
+const
+  SEARCH_MODULE_NAME = 'goccia:search';
+  GLOB_OPTION_NAMES: array[0..1] of string = ('cwd', 'exclude');
+  GREP_OPTION_NAMES: array[0..7] of string = ('cwd', 'glob', 'exclude',
+    'regex', 'ignoreCase', 'maxResults', 'maxBytes', 'context');
+  FUZZY_OPTION_NAMES: array[0..3] of string = ('cwd', 'glob', 'exclude',
+    'limit');
+  DEFAULT_FUZZY_LIMIT = 100;
+  { The largest integer a Number holds exactly. }
+  MAX_SAFE_INTEGER = 9007199254740991;
+
+type
+  TGocciaSandboxSearchSelection = record
+    Cwd: string;
+    HasGlob: Boolean;
+    Globs: TStringArray;
+    Excludes: TStringArray;
+  end;
+
+function SearchOptionsObject(const AValue: TGocciaValue;
+  const ANames: array of string; const ANameCount: Integer;
+  const AMethod: string): TGocciaObjectValue;
+var
+  Key: string;
+  Index: Integer;
+  Known: Boolean;
+begin
+  if IsMissingValue(AValue) then
+    Exit(nil);
+  if not (AValue is TGocciaObjectValue) or (AValue is TGocciaArrayValue) or
+     AValue.IsCallable then
+    ThrowTypeError(AMethod + ' options must be an object');
+  Result := TGocciaObjectValue(AValue);
+  for Key in Result.GetOwnPropertyKeys do
+  begin
+    Known := False;
+    for Index := 0 to ANameCount - 1 do
+      if ANames[Index] = Key then
+        Known := True;
+    if not Known then
+      ThrowTypeError(AMethod + ' does not accept option "' + Key + '"');
+  end;
+end;
+
+{ A pattern argument or option: a string, or an array of strings. }
+function SearchPatternList(const AValue: TGocciaValue;
+  const AMethod, AName: string): TStringArray;
+var
+  Arr: TGocciaArrayValue;
+  Element: TGocciaValue;
+  Index: Integer;
+begin
+  Result := nil;
+  if AValue is TGocciaStringLiteralValue then
+  begin
+    SetLength(Result, 1);
+    Result[0] := TGocciaStringLiteralValue(AValue).Value;
+    Exit;
+  end;
+  if not (AValue is TGocciaArrayValue) then
+    ThrowTypeError(AMethod + ' ' + AName +
+      ' must be a string or an array of strings');
+  Arr := TGocciaArrayValue(AValue);
+  SetLength(Result, Arr.GetLength);
+  for Index := 0 to Arr.GetLength - 1 do
+  begin
+    Element := Arr.GetElement(Index);
+    if not (Element is TGocciaStringLiteralValue) then
+      ThrowTypeError(AMethod + ' ' + AName +
+        ' must be a string or an array of strings');
+    Result[Index] := TGocciaStringLiteralValue(Element).Value;
+  end;
+end;
+
+function SearchExcludeList(const AObject: TGocciaObjectValue;
+  const AMethod: string): TStringArray;
+var
+  Value: TGocciaValue;
+begin
+  Result := nil;
+  if not Assigned(AObject) then
+    Exit;
+  Value := AObject.GetProperty('exclude');
+  if IsMissingValue(Value) then
+    Exit;
+  if not (Value is TGocciaArrayValue) then
+    ThrowTypeError(AMethod + ' option "exclude" must be an array of strings');
+  Result := SearchPatternList(Value, AMethod, 'option "exclude"');
+end;
+
+function SearchCwd(const AObject: TGocciaObjectValue;
+  const ADefault, AMethod: string): string;
+var
+  Value: TGocciaValue;
+begin
+  Result := ADefault;
+  if not Assigned(AObject) then
+    Exit;
+  Value := AObject.GetProperty('cwd');
+  if IsMissingValue(Value) then
+    Exit;
+  if not (Value is TGocciaStringLiteralValue) then
+    ThrowTypeError(AMethod + ' option "cwd" must be a string');
+  Result := TGocciaStringLiteralValue(Value).Value;
+end;
+
+function SearchBooleanOption(const AObject: TGocciaObjectValue;
+  const AName, AMethod: string): Boolean;
+var
+  Value: TGocciaValue;
+begin
+  Result := False;
+  if not Assigned(AObject) then
+    Exit;
+  Value := AObject.GetProperty(AName);
+  if IsMissingValue(Value) then
+    Exit;
+  if not (Value is TGocciaBooleanLiteralValue) then
+    ThrowTypeError(AMethod + ' option "' + AName + '" must be a boolean');
+  Result := TGocciaBooleanLiteralValue(Value).Value;
+end;
+
+function SearchIntegerOption(const AObject: TGocciaObjectValue;
+  const AName, AMethod: string; const ADefault, AMinimum: Int64): Int64;
+var
+  Value: TGocciaValue;
+  Number: Double;
+begin
+  Result := ADefault;
+  if not Assigned(AObject) then
+    Exit;
+  Value := AObject.GetProperty(AName);
+  if IsMissingValue(Value) then
+    Exit;
+  if not (Value is TGocciaNumberLiteralValue) then
+    ThrowTypeError(AMethod + ' option "' + AName + '" must be an integer');
+  Number := TGocciaNumberLiteralValue(Value).Value;
+  if IsNan(Number) or IsInfinite(Number) or (Frac(Number) <> 0) or
+     (Number < AMinimum) or (Number > MAX_SAFE_INTEGER) then
+    ThrowTypeError(AMethod + ' option "' + AName +
+      '" must be an integer of at least ' + IntToStr(AMinimum));
+  Result := Trunc(Number);
+end;
+
+function SearchSelection(const AObject: TGocciaObjectValue;
+  const ADefaultCwd, AMethod: string): TGocciaSandboxSearchSelection;
+var
+  Value: TGocciaValue;
+begin
+  Result := Default(TGocciaSandboxSearchSelection);
+  Result.Cwd := SearchCwd(AObject, ADefaultCwd, AMethod);
+  Result.Excludes := SearchExcludeList(AObject, AMethod);
+  if Assigned(AObject) then
+  begin
+    Value := AObject.GetProperty('glob');
+    if not IsMissingValue(Value) then
+    begin
+      Result.HasGlob := True;
+      Result.Globs := SearchPatternList(Value, AMethod, 'option "glob"');
+    end;
+  end;
+end;
+
+function RequireSearchText(const AArgs: TGocciaArgumentsCollection;
+  const AMethod, AName: string): string;
+var
+  Value: TGocciaValue;
+begin
+  Value := AArgs.GetElement(0);
+  if not (Value is TGocciaStringLiteralValue) then
+    ThrowTypeError(AMethod + ' requires a ' + AName + ' string');
+  Result := TGocciaStringLiteralValue(Value).Value;
+  if Result = '' then
+    ThrowTypeError(AMethod + ' requires a non-empty ' + AName);
+end;
+
+{ The glob arguments every form shares, validated before any work. }
+{ Compiles patterns once, before any search work; a refused pattern is the
+  script's TypeError. }
+function CompileSearchGlobs(const APatterns: TStringArray;
+  const AProgress: TSandboxGlobProgress;
+  const AMethod: string): TSandboxGlobPatternArray;
+begin
+  Result := nil;
+  try
+    Result := CompileSandboxGlobs(APatterns, AProgress);
+  except
+    on E: ESandboxGlobError do
+      ThrowTypeError(AMethod + ': ' + E.Message);
+  end;
+end;
+
+procedure ParseGlobArguments(const APattern, AOptions: TGocciaValue;
+  const ADefaultCwd, AMethod: string; const AProgress: TSandboxGlobProgress;
+  out APatterns, AExcludes: TSandboxGlobPatternArray; out ACwd: string);
+var
+  Options: TGocciaObjectValue;
+  Patterns, Excludes: TStringArray;
+begin
+  Patterns := SearchPatternList(APattern, AMethod, 'pattern');
+  Options := SearchOptionsObject(AOptions, GLOB_OPTION_NAMES,
+    Length(GLOB_OPTION_NAMES), AMethod);
+  ACwd := SearchCwd(Options, ADefaultCwd, AMethod);
+  Excludes := SearchExcludeList(Options, AMethod);
+  APatterns := CompileSearchGlobs(Patterns, AProgress, AMethod);
+  AExcludes := CompileSearchGlobs(Excludes, AProgress, AMethod);
+end;
+
 constructor TGocciaSandboxStatValue.Create(const APrototype: TGocciaObjectValue;
   const AStat: TSandboxFsStat);
 begin
@@ -1291,6 +1577,87 @@ begin
 end;
 
 { TGocciaSandboxRuntimeExtension }
+
+{ TGocciaSandboxGlobIteratorValue }
+
+constructor TGocciaSandboxGlobIteratorValue.Create(
+  const AExtension: TGocciaSandboxRuntimeExtension;
+  const APatterns, AExcludes: TSandboxGlobPatternArray; const ACwd: string);
+begin
+  inherited Create(TGocciaObjectValue.SharedObjectPrototype, 4);
+  FExtension := AExtension;
+  FPatterns := APatterns;
+  FExcludes := AExcludes;
+  FCwd := ACwd;
+  AddNativeFunction(Self, 'next', Next, 0);
+  AddNativeFunction(Self, 'return', ReturnMethod, 0);
+  DefineSymbolProperty(TGocciaSymbolValue.WellKnownAsyncIterator,
+    TGocciaPropertyDescriptorData.Create(
+      TGocciaNativeFunctionValue.CreateWithoutPrototype(AsyncIterator,
+        '[Symbol.asyncIterator]', 0), [pfWritable, pfConfigurable]));
+end;
+
+function TGocciaSandboxGlobIteratorValue.IteratorResult(
+  const AValue: TGocciaValue; const ADone: Boolean): TGocciaValue;
+var
+  Obj: TGocciaObjectValue;
+  ObjRoot: TGocciaTempRoot;
+begin
+  InitializeTempRoot(ObjRoot);
+  try
+    AddTempRootIfNeeded(ObjRoot, AValue);
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
+      2);
+    AddTempRootIfNeeded(ObjRoot, Obj);
+    Obj.SetProperty('value', AValue);
+    Obj.SetProperty('done', TGocciaBooleanLiteralValue.Create(ADone));
+    Result := FulfilledPromise(Obj);
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
+end;
+
+function TGocciaSandboxGlobIteratorValue.Next(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  try
+    if not FStarted then
+    begin
+      FStarted := True;
+      FPaths := FExtension.GlobPaths(FPatterns, FExcludes, FCwd);
+      FIndex := 0;
+    end;
+    if FIndex > High(FPaths) then
+      Exit(IteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True));
+    Inc(FIndex);
+    Result := IteratorResult(TGocciaStringLiteralValue.Create(
+      FPaths[FIndex - 1]), False);
+  except
+    on E: Exception do
+      Result := RejectedPromiseFromException(E);
+  end;
+end;
+
+function TGocciaSandboxGlobIteratorValue.ReturnMethod(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  FStarted := True;
+  FPaths := nil;
+  FIndex := 0;
+  if IsMissingValue(AArgs.GetElement(0)) then
+    Result := IteratorResult(TGocciaUndefinedLiteralValue.UndefinedValue, True)
+  else
+    Result := IteratorResult(AArgs.GetElement(0), True);
+end;
+
+function TGocciaSandboxGlobIteratorValue.AsyncIterator(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := Self;
+end;
 
 function RequireSandboxStatsReceiver(
   const AThisValue: TGocciaValue): TGocciaSandboxStatValue;
@@ -1477,6 +1844,7 @@ begin
   FFsModule.AddExportValue('rm', FsNamespace.GetProperty('rm'));
   FFsModule.AddExportValue('rename', FsNamespace.GetProperty('rename'));
   FFsModule.AddExportValue('copyFile', FsNamespace.GetProperty('copyFile'));
+  FFsModule.AddExportValue('glob', FsNamespace.GetProperty('glob'));
   FFsModule.AddExportValue('readFileSync',
     FsNamespace.GetProperty('readFileSync'));
   FFsModule.AddExportValue('writeFileSync',
@@ -1494,6 +1862,7 @@ begin
     FsNamespace.GetProperty('renameSync'));
   FFsModule.AddExportValue('copyFileSync',
     FsNamespace.GetProperty('copyFileSync'));
+  FFsModule.AddExportValue('globSync', FsNamespace.GetProperty('globSync'));
   FFsModule.AddExportValue('promises', FsNamespace.GetProperty('promises'));
   if not Runtime.Engine.ModuleLoader.GlobalModules.TryGetValue(
     'fs', FPreviousFsModule) then
@@ -1512,6 +1881,19 @@ begin
   Runtime.Engine.ModuleLoader.GlobalModules.Add('goccia', FGocciaModule);
   FGocciaModuleRegistered := True;
 
+  FSearchModule := TGocciaModule.Create(SEARCH_MODULE_NAME);
+  FSearchModule.AddExportValue('grep',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(SearchGrep, 'grep', 2));
+  FSearchModule.AddExportValue('fuzzyFind',
+    TGocciaNativeFunctionValue.CreateWithoutPrototype(SearchFuzzyFind,
+      'fuzzyFind', 2));
+  if not Runtime.Engine.ModuleLoader.GlobalModules.TryGetValue(
+    SEARCH_MODULE_NAME, FPreviousSearchModule) then
+    FPreviousSearchModule := nil;
+  Runtime.Engine.ModuleLoader.GlobalModules.Add(SEARCH_MODULE_NAME,
+    FSearchModule);
+  FSearchModuleRegistered := True;
+
   FPreviousRootClampCallback := FContext.Fs.RootClampCallback;
   FContext.Fs.RootClampCallback := HandleRootClamp;
   FRootClampInstalled := True;
@@ -1527,6 +1909,16 @@ begin
   end;
   if Assigned(Runtime) and Assigned(Runtime.Engine) then
   begin
+    if FSearchModuleRegistered then
+    begin
+      if Assigned(FPreviousSearchModule) then
+        Runtime.Engine.ModuleLoader.GlobalModules.Add(SEARCH_MODULE_NAME,
+          FPreviousSearchModule)
+      else
+        Runtime.Engine.ModuleLoader.GlobalModules.Remove(SEARCH_MODULE_NAME);
+      FPreviousSearchModule := nil;
+      FSearchModuleRegistered := False;
+    end;
     if FGocciaModuleRegistered then
     begin
       if Assigned(FPreviousGocciaModule) then
@@ -1547,6 +1939,8 @@ begin
       FFsModuleRegistered := False;
     end;
   end;
+  FSearchModule.Free;
+  FSearchModule := nil;
   FGocciaModule.Free;
   FGocciaModule := nil;
   FFsModule.Free;
@@ -1554,12 +1948,275 @@ begin
   inherited;
 end;
 
+procedure TGocciaSandboxRuntimeExtension.SearchProgress;
+begin
+  CheckNativeWork;
+end;
+
+function TGocciaSandboxRuntimeExtension.GlobPaths(const APatterns,
+  AExcludes: TSandboxGlobPatternArray; const ACwd: string): TStringArray;
+begin
+  Result := nil;
+  try
+    Result := GlobSandbox(FContext.Fs, APatterns, AExcludes,
+      FContext.Fs.Normalize(ACwd, FContext.Shell.WorkingDirectory),
+      SearchProgress);
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'glob', ACwd));
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.FsGlobSync(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Patterns, Excludes: TSandboxGlobPatternArray;
+  Cwd: string;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fs.globSync');
+  ParseGlobArguments(AArgs.GetElement(0), AArgs.GetElement(1),
+    FContext.Shell.WorkingDirectory, 'fs.globSync', SearchProgress, Patterns,
+    Excludes, Cwd);
+  Result := PathsToArray(GlobPaths(Patterns, Excludes, Cwd));
+end;
+
+function TGocciaSandboxRuntimeExtension.FsGlob(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Patterns, Excludes: TSandboxGlobPatternArray;
+  Cwd: string;
+  Callback, Options: TGocciaValue;
+  Queue: TGocciaMicrotaskQueue;
+  Job: TGocciaSandboxFsJob;
+begin
+  ValidateArgumentCount(AArgs, 3, 'fs.glob');
+  if AArgs.Length >= 3 then
+  begin
+    Options := AArgs.GetElement(1);
+    Callback := RequireFsCallback(AArgs, 2, 'fs.glob');
+  end
+  else
+  begin
+    Options := nil;
+    Callback := RequireFsCallback(AArgs, 1, 'fs.glob');
+  end;
+  ParseGlobArguments(AArgs.GetElement(0), Options,
+    FContext.Shell.WorkingDirectory, 'fs.glob', SearchProgress, Patterns,
+    Excludes, Cwd);
+  Queue := TGocciaMicrotaskQueue.Instance;
+  if not Assigned(Queue) then
+    raise Exception.Create('Filesystem callbacks require a microtask queue');
+  Job := TGocciaSandboxFsJob.Create(Self, sfoGlob, Cwd, '', nil, False,
+    False, sfcValue, Callback, nil);
+  Job.FGlobPatterns := Patterns;
+  Job.FGlobExcludes := Excludes;
+  Queue.EnqueueJob(Job);
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+end;
+
+function TGocciaSandboxRuntimeExtension.FsPromisesGlob(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Patterns, Excludes: TSandboxGlobPatternArray;
+  Cwd: string;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fs.promises.glob');
+  ParseGlobArguments(AArgs.GetElement(0), AArgs.GetElement(1),
+    FContext.Shell.WorkingDirectory, 'fs.promises.glob', SearchProgress,
+    Patterns, Excludes, Cwd);
+  Result := TGocciaSandboxGlobIteratorValue.Create(Self, Patterns, Excludes,
+    Cwd);
+end;
+
+function SearchFilesOrThrow(const AContext: TGocciaSandboxContext;
+  const ASelection: TGocciaSandboxSearchSelection;
+  const AProgress: TSandboxGlobProgress;
+  const AMethod: string): TSandboxSearchFileArray;
+var
+  Globs, Excludes: TSandboxGlobPatternArray;
+begin
+  Result := nil;
+  Globs := CompileSearchGlobs(ASelection.Globs, AProgress, AMethod);
+  Excludes := CompileSearchGlobs(ASelection.Excludes, AProgress, AMethod);
+  try
+    Result := SandboxSearchFiles(AContext.Fs,
+      AContext.Fs.Normalize(ASelection.Cwd, AContext.Shell.WorkingDirectory),
+      ASelection.HasGlob, Globs, Excludes, AProgress);
+  except
+    on E: ESandboxFsError do
+      raise TGocciaThrowValue.Create(
+        CreateSandboxFileSystemError(E, 'search', ASelection.Cwd));
+  end;
+end;
+
+{ AObject, which the caller keeps rooted, gets the strings as an array
+  property; the array is attached before its strings are allocated. }
+procedure SetStringsProperty(const AObject: TGocciaObjectValue;
+  const AName: string; const AStrings: TStringArray);
+var
+  Arr: TGocciaArrayValue;
+  Index: Integer;
+begin
+  Arr := TGocciaArrayValue.Create(nil, Length(AStrings));
+  AObject.SetProperty(AName, Arr);
+  for Index := 0 to High(AStrings) do
+    ArrayCreateDataProperty(Arr, Index,
+      TGocciaStringLiteralValue.Create(AStrings[Index]));
+end;
+
+function TGocciaSandboxRuntimeExtension.SearchGrep(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Options: TGocciaObjectValue;
+  Selection: TGocciaSandboxSearchSelection;
+  GrepOptions: TGocciaSandboxGrepOptions;
+  Files: TSandboxSearchFileArray;
+  Found: TGocciaSandboxGrepResult;
+  Obj, MatchObj: TGocciaObjectValue;
+  Matches: TGocciaArrayValue;
+  ObjRoot: TGocciaTempRoot;
+  Index: Integer;
+begin
+  ValidateArgumentCount(AArgs, 2, 'grep');
+  GrepOptions := Default(TGocciaSandboxGrepOptions);
+  GrepOptions.Pattern := RequireSearchText(AArgs, 'grep', 'pattern');
+  Options := SearchOptionsObject(AArgs.GetElement(1), GREP_OPTION_NAMES,
+    Length(GREP_OPTION_NAMES), 'grep');
+  Selection := SearchSelection(Options, FContext.Shell.WorkingDirectory,
+    'grep');
+  GrepOptions.Regex := SearchBooleanOption(Options, 'regex', 'grep');
+  GrepOptions.IgnoreCase := SearchBooleanOption(Options, 'ignoreCase', 'grep');
+  { Counts past what a search can hold mean "no limit": clamp them so the
+    native arithmetic stays in range. }
+  GrepOptions.MaxResults := Integer(Min(SearchIntegerOption(Options,
+    'maxResults', 'grep', DEFAULT_SANDBOX_GREP_MAX_RESULTS, 1), MaxInt));
+  GrepOptions.MaxBytes := SearchIntegerOption(Options, 'maxBytes', 'grep',
+    SANDBOX_GREP_NO_BYTE_LIMIT, 0);
+  GrepOptions.Context := Integer(Min(SearchIntegerOption(Options, 'context',
+    'grep', 0, 0), MAX_SANDBOX_GREP_CONTEXT));
+  Files := SearchFilesOrThrow(FContext, Selection, SearchProgress, 'grep');
+  Found := SandboxGrep(FContext.Fs, Files, GrepOptions);
+  InitializeTempRoot(ObjRoot);
+  try
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
+      2);
+    AddTempRootIfNeeded(ObjRoot, Obj);
+    Matches := TGocciaArrayValue.Create(nil, Length(Found.Matches));
+    Obj.SetProperty('matches', Matches);
+    Obj.SetProperty('truncated',
+      TGocciaBooleanLiteralValue.Create(Found.Truncated));
+    for Index := 0 to High(Found.Matches) do
+    begin
+      MatchObj := TGocciaObjectValue.Create(
+        TGocciaObjectValue.SharedObjectPrototype, 6);
+      ArrayCreateDataProperty(Matches, Index, MatchObj);
+      MatchObj.SetProperty('path',
+        TGocciaStringLiteralValue.Create(Found.Matches[Index].Path));
+      MatchObj.SetProperty('line',
+        TGocciaNumberLiteralValue.Create(Found.Matches[Index].Line));
+      MatchObj.SetProperty('column',
+        TGocciaNumberLiteralValue.Create(Found.Matches[Index].Column));
+      MatchObj.SetProperty('text',
+        TGocciaStringLiteralValue.Create(Found.Matches[Index].Text));
+      if GrepOptions.Context > 0 then
+      begin
+        SetStringsProperty(MatchObj, 'before', Found.Matches[Index].Before);
+        SetStringsProperty(MatchObj, 'after', Found.Matches[Index].After);
+      end;
+    end;
+    Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+    Found.Matches := nil;
+    ReleaseNativeBytes(Found.ReservedBytes);
+  end;
+end;
+
+function TGocciaSandboxRuntimeExtension.SearchFuzzyFind(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Query: string;
+  Options: TGocciaObjectValue;
+  Selection: TGocciaSandboxSearchSelection;
+  Limit: Int64;
+  Files: TSandboxSearchFileArray;
+  Found: TSandboxFuzzyMatchArray;
+  Match: TSandboxFuzzyMatch;
+  Count, Index, PositionIndex: Integer;
+  Obj, MatchObj: TGocciaObjectValue;
+  Matches, Positions: TGocciaArrayValue;
+  ObjRoot: TGocciaTempRoot;
+begin
+  ValidateArgumentCount(AArgs, 2, 'fuzzyFind');
+  Query := RequireSearchText(AArgs, 'fuzzyFind', 'query');
+  Options := SearchOptionsObject(AArgs.GetElement(1), FUZZY_OPTION_NAMES,
+    Length(FUZZY_OPTION_NAMES), 'fuzzyFind');
+  Selection := SearchSelection(Options, FContext.Shell.WorkingDirectory,
+    'fuzzyFind');
+  Limit := Min(SearchIntegerOption(Options, 'limit', 'fuzzyFind',
+    DEFAULT_FUZZY_LIMIT, 1), MaxInt);
+  Files := SearchFilesOrThrow(FContext, Selection, SearchProgress,
+    'fuzzyFind');
+  Query := FoldSandboxFuzzyQuery(Query);
+  Found := nil;
+  SetLength(Found, Length(Files));
+  Count := 0;
+  for Index := 0 to High(Files) do
+  begin
+    CheckNativeWork;
+    if TrySandboxFuzzyMatch(Files[Index].Path, Query, Match) then
+    begin
+      Found[Count] := Match;
+      Inc(Count);
+    end;
+  end;
+  SetLength(Found, Count);
+  SortSandboxFuzzyMatches(Found);
+  if Count > Limit then
+    Count := Integer(Limit);
+  InitializeTempRoot(ObjRoot);
+  try
+    Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
+      2);
+    AddTempRootIfNeeded(ObjRoot, Obj);
+    Matches := TGocciaArrayValue.Create(nil, Count);
+    Obj.SetProperty('matches', Matches);
+    Obj.SetProperty('truncated',
+      TGocciaBooleanLiteralValue.Create(Length(Found) > Limit));
+    for Index := 0 to Count - 1 do
+    begin
+      MatchObj := TGocciaObjectValue.Create(
+        TGocciaObjectValue.SharedObjectPrototype, 3);
+      ArrayCreateDataProperty(Matches, Index, MatchObj);
+      MatchObj.SetProperty('path',
+        TGocciaStringLiteralValue.Create(Found[Index].Path));
+      MatchObj.SetProperty('score',
+        TGocciaNumberLiteralValue.Create(Found[Index].Score));
+      Positions := TGocciaArrayValue.Create(nil,
+        Length(Found[Index].Positions));
+      MatchObj.SetProperty('positions', Positions);
+      for PositionIndex := 0 to High(Found[Index].Positions) do
+        ArrayCreateDataProperty(Positions, PositionIndex, TGocciaNumberLiteralValue.Create(
+          Found[Index].Positions[PositionIndex]));
+    end;
+    Result := Obj;
+  finally
+    RemoveTempRootIfNeeded(ObjRoot);
+  end;
+end;
+
 function TGocciaSandboxRuntimeExtension.CreateFsNamespace: TGocciaObjectValue;
 var
   Promises: TGocciaObjectValue;
 begin
   Result := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
-    28);
+    32);
   AddNativeFunction(Result, 'readFileSync', FsReadFileSync, 2);
   AddNativeFunction(Result, 'writeFileSync', FsWriteFileSync, 2);
   AddNativeFunction(Result, 'appendFileSync', FsAppendFileSync, 2);
@@ -1570,6 +2227,7 @@ begin
   AddNativeFunction(Result, 'rmSync', FsRmSync, 2);
   AddNativeFunction(Result, 'renameSync', FsRenameSync, 2);
   AddNativeFunction(Result, 'copyFileSync', FsCopyFileSync, 2);
+  AddNativeFunction(Result, 'globSync', FsGlobSync, 2);
 
   AddNativeFunction(Result, 'readFile', FsReadFile, 3);
   AddNativeFunction(Result, 'writeFile', FsWriteFile, 4);
@@ -1581,9 +2239,10 @@ begin
   AddNativeFunction(Result, 'rm', FsRm, 3);
   AddNativeFunction(Result, 'rename', FsRename, 3);
   AddNativeFunction(Result, 'copyFile', FsCopyFile, 4);
+  AddNativeFunction(Result, 'glob', FsGlob, 3);
 
   Promises := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,
-    12);
+    13);
   AddNativeFunction(Promises, 'readFile', FsPromisesReadFile, 2);
   AddNativeFunction(Promises, 'writeFile', FsPromisesWriteFile, 3);
   AddNativeFunction(Promises, 'appendFile', FsPromisesAppendFile, 3);
@@ -1593,6 +2252,7 @@ begin
   AddNativeFunction(Promises, 'rm', FsPromisesRm, 2);
   AddNativeFunction(Promises, 'rename', FsPromisesRename, 2);
   AddNativeFunction(Promises, 'copyFile', FsPromisesCopyFile, 3);
+  AddNativeFunction(Promises, 'glob', FsPromisesGlob, 2);
   Result.SetProperty('promises', Promises);
 end;
 
@@ -1859,13 +2519,23 @@ function TGocciaSandboxRuntimeExtension.ReaddirValue(
 var
   Entries: TSandboxFsStatArray;
   Arr: TGocciaArrayValue;
+  ArrRoot: TGocciaTempRoot;
   I: Integer;
 begin
   try
     Entries := FContext.Fs.List(APath);
     Arr := TGocciaArrayValue.Create(nil, Length(Entries));
-    for I := 0 to High(Entries) do
-      Arr.SetElement(I, TGocciaStringLiteralValue.Create(Entries[I].Name));
+    // Only this frame holds the array while its entries are created, and
+    // creating an element can collect at the growth gate.
+    InitializeTempRoot(ArrRoot);
+    try
+      AddTempRootIfNeeded(ArrRoot, Arr);
+      for I := 0 to High(Entries) do
+        ArrayCreateDataProperty(Arr, I,
+          TGocciaStringLiteralValue.Create(Entries[I].Name));
+    finally
+      RemoveTempRootIfNeeded(ArrRoot);
+    end;
     Result := Arr;
   except
     on E: ESandboxFsError do

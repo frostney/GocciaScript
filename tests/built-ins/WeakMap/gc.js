@@ -4,6 +4,9 @@ features: [WeakMap, Goccia, Symbol]
 ---*/
 
 const hasGoccia = typeof Goccia !== "undefined";
+// A GC-stress build collects every 8 instructions, and each collection walks
+// the whole chain, so a stress run uses a shorter one.
+const chainLength = hasGoccia && Goccia.build.gcStress ? 2000 : 60000;
 
 describe.runIf(hasGoccia)("WeakMap GC behavior", () => {
   test("keeps value reachable while key is strongly reachable", () => {
@@ -32,7 +35,7 @@ describe.runIf(hasGoccia)("WeakMap GC behavior", () => {
   test("walks a deep key-as-value chain after GC without quadratic blowup", () => {
     const map = new WeakMap();
     const head = {};
-    const length = 60000;
+    const length = chainLength;
     let key = head;
     Array.from({ length }).forEach(() => {
       const next = {};
@@ -60,7 +63,7 @@ describe.runIf(hasGoccia)("WeakMap GC behavior", () => {
     (() => {
       const map = new WeakMap();
       let key = {};
-      Array.from({ length: 60000 }).forEach(() => {
+      Array.from({ length: chainLength }).forEach(() => {
         const next = {};
         map.set(key, next);
         key = next;

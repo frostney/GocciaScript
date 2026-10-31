@@ -210,3 +210,39 @@ test("spread of an Array subclass instance yields its elements", () => {
   const numbers = Numbers.from([1, 2, 3]);
   expect([...numbers]).toEqual([1, 2, 3]);
 });
+
+test("spread copies every index up to a length set far past the elements", () => {
+  const farLength = 2000000;
+  const source = [1, 2];
+  source.length = farLength;
+  const copy = [...source];
+  expect(copy.length).toBe(farLength);
+  expect(copy[1]).toBe(2);
+  expect(Object.hasOwn(copy, farLength - 1)).toBe(true);
+  expect(copy[farLength - 1]).toBe(undefined);
+});
+
+test("spread reads an element stored far past the others", () => {
+  const farLength = 2000000;
+  const source = [1];
+  source[farLength - 1] = "last";
+  const copy = [0, ...source];
+  expect(copy.length).toBe(farLength + 1);
+  expect(copy[farLength]).toBe("last");
+});
+
+test("spread reads an inherited value past the stored elements", () => {
+  const farLength = 2000000;
+  const source = [1];
+  source.length = farLength;
+  Array.prototype[farLength - 1] = "inherited";
+  let copy;
+  try {
+    copy = [...source];
+  } finally {
+    delete Array.prototype[farLength - 1];
+  }
+  expect(copy.length).toBe(farLength);
+  expect(Object.hasOwn(copy, farLength - 1)).toBe(true);
+  expect(copy[farLength - 1]).toBe("inherited");
+});

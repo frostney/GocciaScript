@@ -91,6 +91,10 @@ uses
 
 const
   INVALID_FETCH_AUDIT_SUBJECT = '<invalid URL>';
+  // WHATWG Fetch, the RequestRedirect enum's values.
+  FETCH_REDIRECT_FOLLOW = 'follow';
+  FETCH_REDIRECT_ERROR = 'error';
+  FETCH_REDIRECT_MANUAL = 'manual';
   FETCH_BACKEND_UNAVAILABLE_ERROR = 'no fetch backend is available';
 
 { TGocciaGlobalFetch }
@@ -217,8 +221,10 @@ function TGocciaGlobalFetch.FetchCallback(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  URLArg, OptionsArg, MethodVal, HeadersVal, SignalVal: TGocciaValue;
-  URLStr, Method: string;
+  URLArg, OptionsArg, MethodVal, HeadersVal, RedirectVal,
+    SignalVal: TGocciaValue;
+  URLStr, Method, RedirectText: string;
+  RedirectMode: THTTPRedirectMode;
   RequestHeaders: THTTPHeaders;
   Promise: TGocciaPromiseValue;
   Signal: TGocciaAbortSignalValue;
@@ -246,6 +252,7 @@ begin
 
   // Extract options
   Method := 'GET';
+  RedirectMode := hrmFollow;
   Signal := nil;
   SetLength(RequestHeaders, 0);
 
@@ -293,6 +300,24 @@ begin
                 TGocciaObjectValue(HeadersVal).GetProperty(PropNames[I]).ToStringLiteral.Value;
             end;
           end;
+        end;
+
+        { Read the redirect mode: WebIDL converts it to a string and refuses
+          a value outside the RequestRedirect enum with a TypeError. }
+        RedirectVal := Obj.GetProperty(PROP_REDIRECT);
+        if Assigned(RedirectVal) and
+           not (RedirectVal is TGocciaUndefinedLiteralValue) then
+        begin
+          RedirectText := RedirectVal.ToStringLiteral.Value;
+          if RedirectText = FETCH_REDIRECT_FOLLOW then
+            RedirectMode := hrmFollow
+          else if RedirectText = FETCH_REDIRECT_ERROR then
+            RedirectMode := hrmError
+          else if RedirectText = FETCH_REDIRECT_MANUAL then
+            RedirectMode := hrmManual
+          else
+            ThrowTypeError(Format(SErrorFetchInvalidRedirect, [RedirectText]),
+              SSuggestFetchRedirect);
         end;
 
         // Read cancellation signal
@@ -349,7 +374,7 @@ begin
         if not Assigned(Manager) then
           raise Exception.Create(FETCH_BACKEND_UNAVAILABLE_ERROR);
         Manager.StartFetch(URLStr, Method, RequestHeaders, Policy, FRealm,
-          Promise, Signal);
+          Promise, Signal, RedirectMode);
       except
         on E: TGocciaTimeoutError do
           raise;

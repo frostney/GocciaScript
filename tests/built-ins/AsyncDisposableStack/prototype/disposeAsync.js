@@ -81,20 +81,23 @@ describe.runIf(typeof Goccia !== "undefined")("disposeAsync across a collection"
     stack.defer(() => { log.push("earlier"); });
     stack.defer(() => ({
       get then() {
+        log.push("then read");
         Goccia.gc();
         return undefined;
       },
     }));
 
     await stack.disposeAsync();
-    expect(log).toEqual(["earlier"]);
+    expect(log).toEqual(["then read", "earlier"]);
   });
 
   test("rejects with a disposer's error after a later disposer collects", async () => {
+    const log = [];
     const stack = new AsyncDisposableStack();
-    stack.defer(() => { Goccia.gc(); });
-    stack.defer(() => { throw new RangeError("kept"); });
+    stack.defer(() => { log.push("collected"); Goccia.gc(); });
+    stack.defer(() => { log.push("threw"); throw new RangeError("kept"); });
 
     await expect(stack.disposeAsync()).rejects.toThrow("kept");
+    expect(log).toEqual(["threw", "collected"]);
   });
 });

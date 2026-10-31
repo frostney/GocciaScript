@@ -26,6 +26,23 @@ type
     property DurationMs: Integer read FDurationMs;
   end;
 
+  { What a timeout poll reads, kept in one record so that one thread-variable
+    lookup reaches all of it: every reference to a thread variable is a lookup
+    (a pthread_getspecific call on POSIX targets). Only the scope procedures
+    below change it, on the thread that owns it. A handle to it is valid only
+    on that thread. }
+  TGocciaTimeoutPollState = record
+  private
+    DeadlineNs: Int64;       // 0 means no scope on the stack has a deadline
+    CheckCounter: Integer;
+    // A poll reads the clock when CheckCounter and CheckMask is 0: every time
+    // while the soonest deadline is short, once in 1024 polls otherwise.
+    CheckMask: Integer;
+    DurationMs: Integer;
+    Scope: TGocciaTimeoutScope;
+  end;
+  PGocciaTimeoutPollState = ^TGocciaTimeoutPollState;
+
 { File-scope (back-compat) entry points. StartExecutionTimeout resets
   the stack and pushes a single tsFile entry; ClearExecutionTimeout
   drops every active scope. Existing callers in script-loader / REPL
@@ -59,6 +76,16 @@ procedure PopTimeoutScope;
   raise propagates (see ExtendElementsWithHoles in Goccia.Values.HoleValue
   for the rollback pattern). }
 procedure CheckExecutionTimeout;
+{ CheckExecutionTimeout through the calling thread's poll state, for a caller
+  that already holds it (Goccia.ThreadPolls keeps it beside the TimeoutArmed
+  flag): the same throttle and the same error, without a thread-variable
+  lookup. }
+procedure PollExecutionTimeout(
+  const AState: PGocciaTimeoutPollState); {$IFDEF FPC}inline;{$ENDIF}
+{ The slow path of a poll: reads the clock and raises when the soonest
+  deadline has passed. It is in the interface so that PollExecutionTimeout can
+  be inlined into other units; call PollExecutionTimeout instead. }
+procedure CheckExecutionTimeoutDeadline(const AState: PGocciaTimeoutPollState);
 { CheckExecutionTimeout without the self-throttle: the clock is read on every
   call. For a loop that sleeps or blocks between iterations, where one clock
   read in 1024 would overshoot the deadline by the length of 1023 waits, and
@@ -91,10 +118,7 @@ type
 threadvar
   GTimeoutStack: array of TTimeoutStackEntry;
   GTimeoutDepth: Integer;
-  GMinDeadlineNs: Int64;     // 0 means no scope on the stack has a deadline
-  GMinDeadlineScope: TGocciaTimeoutScope;
-  GMinDeadlineMs: Integer;
-  GCheckCounter: Integer;
+  GTimeoutPoll: TGocciaTimeoutPollState;
 
 constructor TGocciaTimeoutError.Create(const AScope: TGocciaTimeoutScope;
   const ADurationMs: Integer);
@@ -110,25 +134,31 @@ end;
 
 procedure RecomputeMinDeadline;
 var
+  Poll: PGocciaTimeoutPollState;
   I: Integer;
 begin
-  GMinDeadlineNs := 0;
-  GMinDeadlineMs := 0;
+  Poll := @GTimeoutPoll;
+  Poll^.DeadlineNs := 0;
+  Poll^.DurationMs := 0;
   for I := 0 to GTimeoutDepth - 1 do
   begin
     if GTimeoutStack[I].DeadlineNs = 0 then Continue;
-    if (GMinDeadlineNs = 0) or
-       (GTimeoutStack[I].DeadlineNs < GMinDeadlineNs) then
+    if (Poll^.DeadlineNs = 0) or
+       (GTimeoutStack[I].DeadlineNs < Poll^.DeadlineNs) then
     begin
-      GMinDeadlineNs := GTimeoutStack[I].DeadlineNs;
-      GMinDeadlineScope := GTimeoutStack[I].Scope;
-      GMinDeadlineMs := GTimeoutStack[I].DurationMs;
+      Poll^.DeadlineNs := GTimeoutStack[I].DeadlineNs;
+      Poll^.Scope := GTimeoutStack[I].Scope;
+      Poll^.DurationMs := GTimeoutStack[I].DurationMs;
     end;
   end;
-  // GMinDeadlineNs changes here and in the two procedures that reset it, and
-  // nowhere else; each mirrors it for the callers that poll through
-  // Goccia.ThreadPolls.
-  GThreadPolls.TimeoutArmed := GMinDeadlineNs <> 0;
+  if Poll^.DurationMs > TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS then
+    Poll^.CheckMask := TIMEOUT_CHECK_INTERVAL - 1
+  else
+    Poll^.CheckMask := 0;
+  // The deadline changes here and nowhere else; this mirrors it for the
+  // callers that poll through Goccia.ThreadPolls.
+  GThreadPolls.TimeoutState := Poll;
+  GThreadPolls.TimeoutArmed := Poll^.DeadlineNs <> 0;
 end;
 
 procedure PushTimeoutScope(const AScope: TGocciaTimeoutScope;
@@ -164,11 +194,7 @@ end;
 
 procedure StartExecutionTimeout(const ATimeoutMilliseconds: Integer);
 begin
-  GTimeoutDepth := 0;
-  GMinDeadlineNs := 0;
-  GThreadPolls.TimeoutArmed := False;
-  GMinDeadlineMs := 0;
-  GCheckCounter := 0;
+  ClearExecutionTimeout;
   if ATimeoutMilliseconds > 0 then
     PushTimeoutScope(tsFile, ATimeoutMilliseconds);
 end;
@@ -176,42 +202,52 @@ end;
 procedure ClearExecutionTimeout;
 begin
   GTimeoutDepth := 0;
-  GMinDeadlineNs := 0;
-  GThreadPolls.TimeoutArmed := False;
-  GMinDeadlineMs := 0;
-  GCheckCounter := 0;
+  RecomputeMinDeadline;
+  GTimeoutPoll.CheckCounter := 0;
+end;
+
+procedure CheckExecutionTimeoutDeadline(const AState: PGocciaTimeoutPollState);
+begin
+  if GetNanoseconds >= AState^.DeadlineNs then
+    raise TGocciaTimeoutError.Create(AState^.Scope, AState^.DurationMs);
+end;
+
+procedure PollExecutionTimeout(
+  const AState: PGocciaTimeoutPollState); {$IFDEF FPC}inline;{$ENDIF}
+begin
+  if AState^.DeadlineNs <> 0 then
+  begin
+    Inc(AState^.CheckCounter);
+    if (AState^.CheckCounter and AState^.CheckMask) = 0 then
+      CheckExecutionTimeoutDeadline(AState);
+  end;
 end;
 
 procedure CheckExecutionTimeout;
 begin
-  if GMinDeadlineNs = 0 then Exit;
-
-  Inc(GCheckCounter);
-  if (GMinDeadlineMs > TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS) and
-     ((GCheckCounter and (TIMEOUT_CHECK_INTERVAL - 1)) <> 0) then
-    Exit;
-
-  if GetNanoseconds >= GMinDeadlineNs then
-    raise TGocciaTimeoutError.Create(GMinDeadlineScope, GMinDeadlineMs);
+  PollExecutionTimeout(@GTimeoutPoll);
 end;
 
 procedure CheckExecutionTimeoutNow;
+var
+  Poll: PGocciaTimeoutPollState;
 begin
-  if GMinDeadlineNs = 0 then Exit;
-
-  if GetNanoseconds >= GMinDeadlineNs then
-    raise TGocciaTimeoutError.Create(GMinDeadlineScope, GMinDeadlineMs);
+  Poll := @GTimeoutPoll;
+  if Poll^.DeadlineNs <> 0 then
+    CheckExecutionTimeoutDeadline(Poll);
 end;
 
 function RemainingExecutionTimeoutMilliseconds: Integer;
 var
+  Poll: PGocciaTimeoutPollState;
   RemainingNs: Int64;
 begin
-  if GMinDeadlineNs = 0 then
+  Poll := @GTimeoutPoll;
+  if Poll^.DeadlineNs = 0 then
     Exit(0);
-  RemainingNs := GMinDeadlineNs - GetNanoseconds;
+  RemainingNs := Poll^.DeadlineNs - GetNanoseconds;
   if RemainingNs <= 0 then
-    raise TGocciaTimeoutError.Create(GMinDeadlineScope, GMinDeadlineMs);
+    raise TGocciaTimeoutError.Create(Poll^.Scope, Poll^.DurationMs);
   if RemainingNs >= Int64(High(Integer)) * 1000000 then
     Exit(High(Integer));
   Result := Integer((RemainingNs + 999999) div 1000000);

@@ -48,6 +48,7 @@ uses
   Goccia.Packages.Install,
   Goccia.Packages.Transport,
   Goccia.Profiler,
+  Goccia.Profiler.Compile,
   Goccia.Profiler.Report,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
@@ -136,6 +137,7 @@ type
     FPrint: TFlagOption;
     FPreferBytecode: TFlagOption;
     FSourceMap: TStringOption;
+    FProfileDeterministic: TFlagOption;
     FHostEnvironmentModule: TStringOption;
     FGlobalFiles: TRepeatableOption;
     FInlineGlobals: TRepeatableOption;
@@ -220,6 +222,8 @@ type
     procedure RunScriptsParallel(const AFiles: TStringList;
       const AJobCount: Integer);
     procedure RunScripts(const APath: string);
+    function ProfileJobCount(const AFileCount: Integer): Integer;
+    procedure BeginProfileEntry;
   protected
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     function HonorsSandboxSection: Boolean; override;
@@ -449,6 +453,8 @@ begin
   AddEngineOptions;
   AddCoverageOptions;
   AddProfilerOptions;
+  FProfileDeterministic := AddFlag('profile-deterministic',
+    'Capture repeatable profile counts with zero timing fields');
   AddSandboxOptions;
 
   FOutputPath := AddString('output',
@@ -511,6 +517,8 @@ begin
   AEngine.ModuleLoader.PreferBytecode :=
     ResolveFlagOption(FPreferBytecode, AFileConfig);
   Runtime := AttachRuntime(AEngine);
+  if FProfileDeterministic.Present then
+    AEngine.HostEnvironment.UseDeterministicProfile;
 
   { The command line names a host module; a config names a guest one. }
   HostEnvironmentModulePath := '';
@@ -528,6 +536,9 @@ begin
   if (HostEnvironmentModulePath <> '') or
      (HostEnvironmentEntry.Value <> '') then
   begin
+    if FProfileDeterministic.Present then
+      raise TParseError.Create(
+        '--host-environment cannot be combined with --profile-deterministic.');
     if Assigned(EngineOptions) and
        ResolveFlagOption(EngineOptions.Deterministic, AFileConfig) then
       raise TParseError.Create(
@@ -633,6 +644,7 @@ begin
   Check(ProfilerOptions.Mode);
   Check(ProfilerOptions.OutputPath);
   Check(ProfilerOptions.Format);
+  Check(FProfileDeterministic);
   Check(FSourceMap);
   Check(FHostEnvironmentModule);
   Check(FGlobalFiles);
@@ -698,6 +710,9 @@ begin
   if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
     ProfilerOptions.Mode.Apply('functions');
 
+  if FProfileDeterministic.Present and not ProfilerOptions.Mode.Present then
+    ProfilerOptions.Mode.Apply('all');
+
   // --coverage-format / --coverage-output imply --coverage, so every later
   // reader can test Enabled alone instead of repeating the three-way check.
   // Mirrors TTestRunnerApp.Validate.
@@ -706,7 +721,7 @@ begin
 
   if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
     raise TParseError.Create(
-      '--profile-output requires --profile=opcodes|functions|all.');
+      '--profile-output requires --profile=opcodes|functions|all|compile.');
 
   if ProfilerOptions.Format.Matches(pfFlamegraph) and
      not ProfilerOptions.OutputPath.Present then
@@ -1125,6 +1140,21 @@ begin
     WriteLn(AReport.ResultText);
 end;
 
+function TRunnerApp.ProfileJobCount(const AFileCount: Integer): Integer;
+begin
+  // As in BenchmarkRunner, one reporting thread accumulates all files.
+  if ProfilerOptions.Mode.Present then
+    Result := 1
+  else
+    Result := GetJobCount(AFileCount);
+end;
+
+procedure TRunnerApp.BeginProfileEntry;
+begin
+  if Assigned(TGocciaProfiler.Instance) then
+    TGocciaProfiler.Instance.BeginEntry;
+end;
+
 procedure TRunnerApp.RunSource(const ASource: TStringList;
   const AFileName: string);
 var
@@ -1134,6 +1164,7 @@ var
   MemoryMeasurement: TCLIJSONMemoryMeasurement;
   StartTime: Int64;
 begin
+  BeginProfileEntry;
   FLastDiagnosticPrincipal := 0;
   FillChar(Report, SizeOf(Report), 0);
   Report.MemoryStats := DefaultCLIJSONMemoryStats;
@@ -1209,6 +1240,7 @@ var
   StartTime: Int64;
   ErrorInfo: TCLIJSONErrorInfo;
 begin
+  BeginProfileEntry;
   FillChar(Report, SizeOf(Report), 0);
   Report.MemoryStats := DefaultCLIJSONMemoryStats;
 
@@ -1363,7 +1395,7 @@ var
 begin
   WorkerMemoryStats := DefaultCLIJSONMemoryStats;
   SetLength(Results, AFiles.Count);
-  JobCount := GetJobCount(AFiles.Count);
+  JobCount := ProfileJobCount(AFiles.Count);
 
   if JobCount > 1 then
   begin
@@ -1604,11 +1636,11 @@ begin
       RawFiles.Free;
     end;
     try
-      if GetJobCount(Files.Count) > 1 then
+      if ProfileJobCount(Files.Count) > 1 then
       begin
         WriteLn(SysUtils.Format('Running %d files with %d workers',
-          [Files.Count, GetJobCount(Files.Count)]));
-        RunScriptsParallel(Files, GetJobCount(Files.Count));
+          [Files.Count, ProfileJobCount(Files.Count)]));
+        RunScriptsParallel(Files, ProfileJobCount(Files.Count));
       end
       else
         for I := 0 to Files.Count - 1 do
@@ -1633,11 +1665,11 @@ begin
         SinglePath.Free;
       end;
       try
-        if GetJobCount(Files.Count) > 1 then
+        if ProfileJobCount(Files.Count) > 1 then
         begin
           WriteLn(SysUtils.Format('Running %d files with %d workers',
-            [Files.Count, GetJobCount(Files.Count)]));
-          RunScriptsParallel(Files, GetJobCount(Files.Count));
+            [Files.Count, ProfileJobCount(Files.Count)]));
+          RunScriptsParallel(Files, ProfileJobCount(Files.Count));
         end
         else
           for I := 0 to Files.Count - 1 do
@@ -1723,7 +1755,8 @@ begin
 end;
 
 { The sandbox path to run. A host entry inside a copied input runs from
-  there; any other host entry is copied read-only to /<basename>. }
+  there; any other host entry is copied, without write-back, to
+  /<basename>. }
 function TRunnerApp.ResolveSandboxEntry(const AHost: TGocciaSandboxHost;
   const ARequest: TGocciaSandboxModeRequest): string;
 var
@@ -1977,6 +2010,13 @@ var
   SandboxRequest: TGocciaSandboxModeRequest;
 begin
   FLastPaths := APaths;
+  if FProfileDeterministic.Present and not FSandboxActive then
+  begin
+    if Assigned(TGocciaProfiler.Instance) then
+      TGocciaProfiler.Instance.Deterministic := True;
+    if Assigned(TGocciaCompileProfiler.Instance) then
+      TGocciaCompileProfiler.Instance.Deterministic := True;
+  end;
 
   if InstallModeActive then
   begin
@@ -2398,7 +2438,7 @@ end;
 
 procedure TRunnerApp.AfterExecute;
 var
-  ProfileOpcodes, ProfileFunctions: Boolean;
+  ProfileOpcodes, ProfileFunctions, ProfileCompile: Boolean;
   ProfileMode: Goccia.CLI.Options.TGocciaProfileMode;
 begin
   { Coverage and profiling are host-mode reports; a config that asks for
@@ -2429,6 +2469,7 @@ begin
 
   ProfileOpcodes := False;
   ProfileFunctions := False;
+  ProfileCompile := False;
   if ProfilerOptions.Mode.Present then
   begin
     ProfileMode := ProfilerOptions.Mode.Value;
@@ -2436,9 +2477,10 @@ begin
                       (ProfileMode = Goccia.CLI.Options.pmAll);
     ProfileFunctions := (ProfileMode = Goccia.CLI.Options.pmFunctions) or
                         (ProfileMode = Goccia.CLI.Options.pmAll);
+    ProfileCompile := ProfileMode = Goccia.CLI.Options.pmCompile;
   end;
 
-  if (ProfileOpcodes or ProfileFunctions) and
+  if (ProfileOpcodes or ProfileFunctions or ProfileCompile) and
      (TGocciaProfiler.Instance <> nil) then
   begin
     if not IsJsonOutput then
@@ -2452,6 +2494,8 @@ begin
       end;
       if ProfileFunctions then
         PrintFunctionProfile(TGocciaProfiler.Instance);
+      if ProfileCompile then
+        PrintCompileProfile(TGocciaCompileProfiler.Instance);
     end;
     if ProfilerOptions.OutputPath.Present then
     begin

@@ -116,3 +116,100 @@ describe("exponentiation with NaN", () => {
     expect(Number.isNaN(2 ** NaN)).toBe(true);
   });
 });
+
+// Each expected value is what Node 24 returns, and is the correctly rounded
+// result. `power` keeps its operands out of constant folding, and `boxed`
+// takes the generic operator through valueOf.
+const power = (x, y) => x ** y;
+const boxed = (x, y) => ({ valueOf: () => x }) ** ({ valueOf: () => y });
+
+describe("exponentiation of finite operands", () => {
+  const cases = [
+    [1e20, 0.5, 10000000000],
+    [9, 0.5, 3],
+    [5, 0.5, 2.23606797749979],
+    [1e300, 0.5, 1e150],
+    [10, -5, 0.00001],
+    [10, 308, 1e308],
+    [10, -308, 1e-308],
+    [1.1, 30, 17.44940226888645],
+    [27, 1 / 3, 3],
+    [5, -3, 0.008],
+    [0.1, 3, 0.0010000000000000002],
+    [1.5, -7, 0.05852766346593507],
+    [123.456, 7.89, 31771028258180936],
+    [0.9, 1000, 1.7478712517226947e-46],
+    [1.0000001, 1e7, 2.7182816941320818],
+    [2, 0.1, 1.0717734625362931],
+    [1e-200, 1.5, 1e-300],
+    [4, -0.5, 0.5],
+    [1.0000000000000002, 2 ** 52, 2.718281828459045],
+    [0.9999999999999999, -(2 ** 52), 1.6487212707001282],
+  ];
+
+  test.each(cases)("%s ** %s is %s", (x, y, expected) => {
+    expect(power(x, y)).toBe(expected);
+    expect(boxed(x, y)).toBe(expected);
+  });
+
+  test("constant operands fold to the same results", () => {
+    expect(1e20 ** 0.5).toBe(10000000000);
+    expect(10 ** -5).toBe(0.00001);
+    expect(1.1 ** 30).toBe(17.44940226888645);
+    expect(27 ** (1 / 3)).toBe(3);
+  });
+
+  test("exactly representable results are exact", () => {
+    expect(power(10, 22)).toBe(1e22);
+    expect(power(10, 15)).toBe(1000000000000000);
+    expect(power(3, 33)).toBe(5559060566555523);
+    expect(power(-3, 33)).toBe(-5559060566555523);
+    expect(power(2, 1023)).toBe(8.98846567431158e307);
+    expect(power(2, -1074)).toBe(5e-324);
+    expect(power(0.5, 1074)).toBe(5e-324);
+    expect(power(2, -1022)).toBe(2.2250738585072014e-308);
+    expect(power(2.5, 2)).toBe(6.25);
+    expect(power(16, 0.25)).toBe(2);
+  });
+
+  test("** 0.5 is the square root", () => {
+    for (const x of [2, 3, 5, 7, 10, 0.1, 1e-300, 5e-324, 1e308, Number.MAX_VALUE, 123456789.123]) {
+      expect(power(x, 0.5)).toBe(Math.sqrt(x));
+    }
+  });
+
+  test("** 2 is the product of the base with itself", () => {
+    for (const x of [1.1, -3.7, 1e154, 1e-162, 0.1, 123456789.123]) {
+      expect(power(x, 2)).toBe(x * x);
+    }
+  });
+
+  test("results past the range overflow and underflow", () => {
+    expect(power(10, 309)).toBe(Infinity);
+    expect(power(-10, 309)).toBe(-Infinity);
+    expect(power(2, -1075)).toBe(0);
+    expect(Object.is(power(-2, -1075), -0)).toBe(true);
+    expect(Object.is(power(-10, -400), 0)).toBe(true);
+  });
+
+  test("a subnormal result is rounded once", () => {
+    expect(power(288, -125.09294758759437)).toBe(2.225073858507185e-308);
+  });
+});
+
+describe("exponentiation with a negative base", () => {
+  test("an integral exponent of 2^31 or more keeps the parity's sign", () => {
+    expect(power(-2, 1e20)).toBe(Infinity);
+    expect(power(-0.5, 1e20)).toBe(0);
+    expect(power(-2, 2 ** 31)).toBe(Infinity);
+    expect(power(-3, 2 ** 31 + 1)).toBe(-Infinity);
+    expect(Object.is(power(-0.5, 2 ** 31 + 1), -0)).toBe(true);
+    expect(power(-1, 1e300)).toBe(1);
+    expect(power(-1, 2 ** 52 + 1)).toBe(-1);
+  });
+
+  test("an odd integral exponent gives a negative result", () => {
+    expect(power(-1.1, 31)).toBe(-19.194342495775096);
+    expect(power(-2, -3)).toBe(-0.125);
+  });
+});

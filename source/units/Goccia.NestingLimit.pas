@@ -19,8 +19,9 @@ const
   // prefix operator (`!`, `typeof`, `await`, ...), each `new` and `**`
   // operand, and each `extends` clause, binding pattern and match pattern.
   // The RegExp compiler counts each group, lookaround and nested class.
-  // Operator, member and call chains (`a + b + c`, `a.b().c`) are parsed in
-  // a loop and do not count here; MAX_TREE_HEIGHT bounds them.
+  // Operator, member, call and type assertion chains (`a + b + c`,
+  // `a.b().c`, `x!`, `x as T`) are parsed in a loop and do not count here;
+  // MAX_TREE_HEIGHT bounds them.
   //
   // Real code stays far below the limit: the deepest nesting in the bundles
   // the benchmarks run (Web Tooling, JetStream, are-we-fast-yet) and in 542
@@ -33,7 +34,8 @@ const
   MAX_NESTING_DEPTH = 1024;
 
   // How tall the syntax tree of a statement or expression may be, counting
-  // each level of nesting and each link of an operator, member or call chain.
+  // each level of nesting and each link of an operator, member, call or type
+  // assertion chain.
   // The parser builds a chain in a loop, but every pass after it (the
   // bytecode compiler and its analyses, freeing the tree) recurses once per link, so a chain long enough would overflow the
   // stack there. The parser bounds the height bottom up (see

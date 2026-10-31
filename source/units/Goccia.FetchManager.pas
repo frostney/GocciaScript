@@ -66,11 +66,13 @@ type
       response ceiling, audit emitter). It is passed per request rather than
       stored here because engines on one thread may hold different policies;
       the caller reads it from host configuration, never from script space.
-      ARealm is the dispatching engine's realm. }
+      ARealm is the dispatching engine's realm. ARedirectMode is the
+      script's `redirect` option. }
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
       const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
-      const ASignal: TGocciaAbortSignalValue = nil); virtual; abstract;
+      const ASignal: TGocciaAbortSignalValue = nil;
+      const ARedirectMode: THTTPRedirectMode = hrmFollow); virtual; abstract;
     function PumpCompletions: Integer; virtual; abstract;
     { True while any engine on the thread has a request in flight. }
     function HasPending: Boolean; virtual; abstract;
@@ -97,7 +99,8 @@ procedure DiscardFetchCompletions(const ARealm: TGocciaRealm); overload;
 
 { Performs ARequest over the network exactly as fetch() does with no
   transport installed — the net capability checked on every redirect hop and
-  against every resolved address, the response ceiling, the timeout — and
+  against every resolved address, the request's redirect mode, the response
+  ceiling, the timeout — and
   answers AResponder with the result. Blocking: a transport that forwards to
   the network (to record what it answers, say) calls it from a thread of its
   own. The hop decisions it makes are not audited. Its answer passes the
@@ -123,8 +126,10 @@ uses
 
   HTTPClient,
 
+  Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.URL.Parser,
+  Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
   Goccia.Values.HeadersValue,
   Goccia.Values.ResponseValue,
@@ -289,6 +294,7 @@ type
     FURL: string;
     FMethod: string;
     FHeaders: THTTPHeaders;
+    FRedirectMode: THTTPRedirectMode;
 
     FTimeoutMilliseconds: Integer;
     { The worker's own copy of the dispatching engine's policy. }
@@ -299,6 +305,7 @@ type
     constructor Create(const AState: TGocciaFetchState;
       const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
       const AURL, AMethod: string; const AHeaders: THTTPHeaders;
+      const ARedirectMode: THTTPRedirectMode;
       const ATimeoutMilliseconds: Integer;
       const APolicy: TGocciaFetchPolicy);
     destructor Destroy; override;
@@ -361,7 +368,8 @@ type
     procedure StartFetch(const AURL, AMethod: string;
       const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
       const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
-      const ASignal: TGocciaAbortSignalValue = nil); override;
+      const ASignal: TGocciaAbortSignalValue = nil;
+      const ARedirectMode: THTTPRedirectMode = hrmFollow); override;
     function PumpCompletions: Integer; override;
     function HasPending: Boolean; override;
     function HasPendingFor(const ARealm: TGocciaRealm): Boolean; override;
@@ -528,6 +536,7 @@ end;
 constructor TGocciaFetchWorker.Create(const AState: TGocciaFetchState;
   const ALimiter: TGocciaFetchLimiter; const ARequestID: Integer;
   const AURL, AMethod: string; const AHeaders: THTTPHeaders;
+  const ARedirectMode: THTTPRedirectMode;
   const ATimeoutMilliseconds: Integer; const APolicy: TGocciaFetchPolicy);
 begin
   inherited Create(True, FETCH_WORKER_STACK_SIZE);
@@ -536,6 +545,7 @@ begin
   FURL := AURL;
   FMethod := AMethod;
   FHeaders := AHeaders;
+  FRedirectMode := ARedirectMode;
   FTimeoutMilliseconds := ATimeoutMilliseconds;
   FPolicy := APolicy;
   FState := AState;
@@ -609,7 +619,8 @@ end;
 { The built-in network request behind fetch(): fills ACompletion with the
   response or the error, and with the hop decisions it made. }
 procedure PerformNetworkRequest(const AURL, AMethod: string;
-  const AHeaders: THTTPHeaders; const ATimeoutMilliseconds: Integer;
+  const AHeaders: THTTPHeaders; const ARedirectMode: THTTPRedirectMode;
+  const ATimeoutMilliseconds: Integer;
   const ACapabilities: TGocciaCapabilities; const AMaxResponseBytes: Integer;
   const ACompletion: TGocciaFetchCompletion);
 var
@@ -621,6 +632,7 @@ begin
     RequestPolicy := DefaultHTTPPolicy;
     RequestPolicy.MaxResponseBytes := AMaxResponseBytes;
     RequestPolicy.HostCheck := Checker.CheckDestination;
+    RequestPolicy.RedirectMode := ARedirectMode;
     try
       if AMethod = FETCH_METHOD_HEAD then
         ACompletion.Response := HTTPHead(AURL, AHeaders, nil,
@@ -653,8 +665,9 @@ var
 begin
   Completion := TGocciaFetchCompletion.Create(FRequestID);
   try
-    PerformNetworkRequest(FURL, FMethod, FHeaders, FTimeoutMilliseconds,
-      FPolicy.Capabilities, FPolicy.MaxResponseBytes, Completion);
+    PerformNetworkRequest(FURL, FMethod, FHeaders, FRedirectMode,
+      FTimeoutMilliseconds, FPolicy.Capabilities, FPolicy.MaxResponseBytes,
+      Completion);
     if FState.PostCompletion(Completion) then
       Completion := nil;
   finally
@@ -990,7 +1003,8 @@ end;
 procedure TGocciaFetchManagerImpl.StartFetch(const AURL, AMethod: string;
   const AHeaders: THTTPHeaders; const APolicy: TGocciaFetchPolicy;
   const ARealm: TGocciaRealm; const APromise: TGocciaPromiseValue;
-  const ASignal: TGocciaAbortSignalValue);
+  const ASignal: TGocciaAbortSignalValue;
+  const ARedirectMode: THTTPRedirectMode);
 var
   Pending: TGocciaPendingFetch;
   Worker: TGocciaFetchWorker;
@@ -1094,6 +1108,7 @@ begin
       Request.URL := RequestURL;
       Request.Headers := Copy(AHeaders);
       Request.Body := nil;
+      Request.Redirect := ARedirectMode;
       Request.TimeoutMilliseconds := RequestTimeoutMilliseconds;
       Request.MaxResponseBytes := MaxResponseBytes;
       Request.Capabilities := APolicy.Capabilities;
@@ -1104,7 +1119,7 @@ begin
     else
     begin
       Worker := TGocciaFetchWorker.Create(FState, FLimiter,
-        Pending.RequestID, RequestURL, AMethod, AHeaders,
+        Pending.RequestID, RequestURL, AMethod, AHeaders, ARedirectMode,
         RequestTimeoutMilliseconds, APolicy);
       LimitAcquired := False;
     end;
@@ -1345,13 +1360,108 @@ begin
   Result := -1;
 end;
 
+{ Reserves a response body's ABytes against the memory limit on this
+  thread's collector (TryReserveExternalBytes), the way a native built-in
+  that holds bytes for a value does. ACharged is what was reserved: ABytes,
+  or 0 with no collector or no body. False when the body does not fit,
+  after the collection the reservation runs as its last resort. }
+function ReserveResponseBody(const ABytes: Integer;
+  out ACharged: Int64): Boolean;
+var
+  GC: TGarbageCollector;
+begin
+  ACharged := 0;
+  GC := TGarbageCollector.Instance;
+  if (ABytes <= 0) or not Assigned(GC) then
+    Exit(True);
+  Result := GC.TryReserveExternalBytes(ABytes);
+  if Result then
+    ACharged := ABytes;
+end;
+
+{ Resolves APromise with the response ACompletion carries. Its body's bytes
+  are reserved first, before any value is made, so the collection a
+  reservation may run sees no value that only this frame holds (the promise
+  is a temp root); a body that does not fit rejects with the memory-limit
+  RangeError, as an allocation over the limit throws it. Making the headers
+  and the response can still reach the limit when the body only just fits:
+  that script-visible error rejects the promise too, rather than leaving it
+  pending and the error to whatever pumped the completion. The response owns
+  the reservation once it has the body. }
+procedure SettleResponse(const APromise: TGocciaPromiseValue;
+  const ACompletion: TGocciaFetchCompletion);
+var
+  RespHeaders: TGocciaHeadersValue;
+  RespValue: TGocciaResponseValue;
+  ResponseURL: string;
+  BodyCharge: Int64;
+  Roots: TGocciaActiveRootFrame;
+  I: Integer;
+
+  procedure ReleaseCharge;
+  begin
+    if (BodyCharge > 0) and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.ReleaseExternalBytes(BodyCharge);
+    BodyCharge := 0;
+  end;
+
+begin
+  ResponseURL := ResponseURLForScript(ACompletion.Response.FinalURL);
+  if not ReserveResponseBody(Length(ACompletion.Response.Body),
+     BodyCharge) then
+  begin
+    try
+      APromise.Reject(CreateErrorObject('RangeError',
+        SErrorMemoryLimitExceeded));
+    except
+      // Too little room left even for the error: reject with the error
+      // that refusal raised, which is the same memory-limit RangeError.
+      on E: TGocciaThrowValue do
+        APromise.Reject(E.Value);
+    end;
+    Exit;
+  end;
+  Roots.Initialize;
+  try
+    try
+      RespHeaders := TGocciaHeadersValue.Create;
+      Roots.Add(RespHeaders);
+      RespHeaders.Immutable := True;
+      for I := 0 to High(ACompletion.Response.Headers) do
+        RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
+          ACompletion.Response.Headers[I].Value);
+      RespValue := TGocciaResponseValue.Create;
+      Roots.Add(RespValue);
+    except
+      on E: TGocciaThrowValue do
+      begin
+        ReleaseCharge;
+        APromise.Reject(E.Value);
+        Exit;
+      end;
+      else
+      begin
+        ReleaseCharge;
+        raise;
+      end;
+    end;
+    RespValue.InitFromHTTP(ACompletion.Response.StatusCode,
+      ACompletion.Response.StatusText, ResponseURL, RespHeaders,
+      ACompletion.Response.Body, ACompletion.Response.Redirected,
+      BodyCharge);
+    // The response owns the body now; the completion keeps no alias.
+    ACompletion.Response.Body := nil;
+    APromise.Resolve(RespValue);
+  finally
+    Roots.Clear;
+  end;
+end;
+
 procedure TGocciaFetchManagerImpl.SettleCompletion(
   const ACompletion: TGocciaFetchCompletion);
 var
   Pending: TGocciaPendingFetch;
   PendingIndex, I: Integer;
-  RespHeaders: TGocciaHeadersValue;
-  RespValue: TGocciaResponseValue;
   PreviousRealm: TGocciaRealm;
 begin
   PendingIndex := FindPendingIndex(ACompletion.RequestID);
@@ -1384,24 +1494,7 @@ begin
       ReplayHopDecisions(Pending, ACompletion);
 
       if ACompletion.Success then
-      begin
-        RespHeaders := TGocciaHeadersValue.Create;
-        RespHeaders.Immutable := True;
-        for I := 0 to High(ACompletion.Response.Headers) do
-          RespHeaders.AddHeader(ACompletion.Response.Headers[I].Name,
-            ACompletion.Response.Headers[I].Value);
-
-        RespValue := TGocciaResponseValue.Create;
-        RespValue.InitFromHTTP(
-          ACompletion.Response.StatusCode,
-          ACompletion.Response.StatusText,
-          ResponseURLForScript(ACompletion.Response.FinalURL),
-          RespHeaders,
-          ACompletion.Response.Body,
-          ACompletion.Response.Redirected);
-
-        Pending.Promise.Resolve(RespValue);
-      end
+        SettleResponse(Pending.Promise, ACompletion)
       else if ACompletion.DeniedScope <> '' then
         Pending.Promise.Reject(CreatePermissionDeniedError(
           CapabilityName(gcNet), ACompletion.DeniedScope))
@@ -1713,7 +1806,7 @@ begin
   Completion := TGocciaFetchCompletion.Create(0);
   try
     PerformNetworkRequest(ARequest.URL, ARequest.Method, ARequest.Headers,
-      ARequest.TimeoutMilliseconds, ARequest.Capabilities,
+      ARequest.Redirect, ARequest.TimeoutMilliseconds, ARequest.Capabilities,
       ARequest.MaxResponseBytes, Completion);
     if Completion.Success then
       AResponder.Respond(Completion.Response)

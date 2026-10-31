@@ -42,6 +42,13 @@ describe.runIf(hasGoccia)("Goccia.spec", () => {
     expect(es2026.includes("WeakMap.prototype.getOrInsert / getOrInsertComputed")).toBe(true);
   });
 
+  test("lists Explicit Resource Management under the 2027 draft, not 2026", () => {
+    const es2026 = Goccia.spec["2026"].map((feature) => feature.name);
+    const es2027 = Goccia.spec["2027"].map((feature) => feature.name);
+    expect(es2026.includes("Explicit Resource Management")).toBe(false);
+    expect(es2027.includes("Explicit Resource Management")).toBe(true);
+  });
+
   test("spec is read-only", () => {
     const original = Goccia.spec;
     expect(() => { Goccia.spec = "overwritten"; }).toThrow(TypeError);

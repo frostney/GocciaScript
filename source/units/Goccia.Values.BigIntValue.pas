@@ -360,7 +360,10 @@ begin
   else
     OptionsArg := nil;
 
-  NumberFormat := TGocciaIntlNumberFormatValue.CreateFromArguments(LocalesArg, OptionsArg);
+  // No script reaches this instance: it leaves Intl.NumberFormat's prototype
+  // unbuilt.
+  NumberFormat := TGocciaIntlNumberFormatValue.CreateFromArguments(LocalesArg,
+    OptionsArg, False);
   FormatArgs := TGocciaArgumentsCollection.Create([BigIntValue]);
   try
     Result := NumberFormat.IntlNumberFormatFormat(FormatArgs, NumberFormat);

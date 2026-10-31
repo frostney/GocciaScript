@@ -105,9 +105,9 @@ GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor in
 - **Settings.** Set `GlobalBackedTopLevel` on the engine where 0.14 code set it on the executor. `StrictTypes` and `Compatibility` were already engine properties.
 - **Global scope.** Read `Engine.GlobalScope` where 0.14 code read the global scope through `Engine.Interpreter`. `Engine.Interpreter` and `Engine.Executor` are removed.
 - **Compiled modules.** `CompileModule`, `RetainModule`, `RunModule`, `RunModuleInScope` and `RunModuleForSourceType` take or return `TGocciaBytecodeModule`.
-- **Behavior.** A host that created an interpreter executor now runs bytecode. Where the two executors behaved differently, the bytecode behavior applies.
+- **Behavior.** A host that created an interpreter executor now runs bytecode. Where the two executors behaved differently, the bytecode behavior applies. `SourceType` now defaults to `stDetect`, so an entry with a top-level `import` or `export` runs as module source; set `stScript` to keep Script semantics ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). A promise a run leaves rejected with no handler now raises from the run; set `UnhandledRejections := urIgnore` to keep it on the queue ([ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md)).
 
-CLI users have one change: `--mode` and the `"mode"` config key now exit with status 2 ([Build System — Execution Mode](build-system.md#execution-mode)).
+CLI users see three changes: `--mode` and the `"mode"` config key now exit with status 2 ([Build System — Execution Mode](build-system.md#execution-mode)); an entry with a top-level `import` or `export` runs as a module unless `--source-type=script` is given; and an unhandled promise rejection fails the run with exit 1 ([Errors](errors.md#unhandled-promise-rejections)).
 
 ### Automatic Semicolon Insertion
 
@@ -395,7 +395,7 @@ console.log(version);  // "1.0.0"
 
 ## Console Output Capture
 
-By default, `console.log` and friends write directly to stdout. The `OutputCallback` property lets you intercept all console output programmatically:
+By default, `console.log` and friends write directly to stdout, as UTF-8 when redirected under a UTF-8 locale and on Windows (where linking the engine makes UTF-8 the host process's RTL code page; see [Tooling — AnsiString RTL Calls on Windows](contributing/tooling.md#ansistring-rtl-calls-on-windows)). The `OutputCallback` property lets you intercept all console output programmatically:
 
 ```pascal
 uses
@@ -495,7 +495,7 @@ Runtime extensions are ordinary Pascal classes installed on `TGocciaRuntimeCore`
 | `TGocciaTestingLibraryRuntimeExtension` | `describe`, `test`, `expect` | Testing framework; TestRunner installs this through `ApplyTestRunnerRuntimeProfile` |
 | `TGocciaBenchmarkRuntimeExtension` | `suite`, `bench` | Benchmark framework; BenchmarkRunner installs this through `ApplyBenchmarkRunnerRuntimeProfile` |
 | `TGocciaFFIRuntimeExtension` | `FFI.open`, `FFILibrary`, `FFIPointer` | Native shared-library FFI; needs the `ffi` capability, which CLI tools grant for `--allow-ffi` or `"allow-ffi"` in a config file's `permissions` block |
-| `TGocciaSandboxRuntimeExtension` | the import-only `"fs"` and `"goccia"` [sandbox modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas) over a `TGocciaSandboxContext`'s virtual filesystem | GocciaRunner's sandbox mode installs it; see [Sandbox filesystem](#sandbox-filesystem) |
+| `TGocciaSandboxRuntimeExtension` | the import-only `"fs"`, `"goccia"` and `goccia:search` [sandbox modules](built-ins.md#sandbox-modules-gocciaruntimeextensionssandboxpas) ([search](built-ins-sandbox-search.md), with shared test vectors for out-of-sandbox search) over a `TGocciaSandboxContext`'s virtual filesystem | GocciaRunner's sandbox mode installs it; see [Sandbox filesystem](#sandbox-filesystem) |
 
 When embedding, grant `ffi` in the engine's capability set and call `InstallFFIIfGranted(Runtime)`; the extension refuses to attach without the grant, and `FFI.open` checks each library path against the `ffi` scopes.
 
@@ -871,7 +871,7 @@ finally
 end;
 ```
 
-Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) leaves the instruction budget inactive, so bytecode production dispatch omits the per-instruction poll. A positive limit selects the instrumented loop, which increments and checks the counter on every dispatched instruction.
+Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) leaves the instruction budget inactive, so bytecode production dispatch omits the per-instruction poll. A positive limit selects the dispatch loop's instrumented fetch path, which increments and checks the counter on every dispatched instruction.
 
 ### Call Stack Depth Limit
 
@@ -921,16 +921,16 @@ For long-lived engines (REPL-style), each `Execute` call drains its own microtas
 
 ## Fetch Transport
 
-By default an engine's `fetch()` requests go to the network. Set `Engine.FetchTransport` to an `IGocciaFetchTransport` (unit `Goccia.FetchTransport`) to answer them yourself, for example to record a run's responses and replay them later without the network ([ADR 0146](adr/0146-embedder-fetch-transport.md), [ADR 0149](adr/0149-fetch-urls-go-through-the-url-parser.md)). The transport belongs to the engine: it is read when each request starts, so it can be replaced between runs, and no other engine on the thread, nested or not, and no engine on another thread uses it. A child engine the host creates (a sandbox `runScript` child) needs its own.
+By default an engine's `fetch()` requests go to the network. Set `Engine.FetchTransport` to an `IGocciaFetchTransport` (unit `Goccia.FetchTransport`) to answer them yourself, for example to record a run's responses and replay them later without the network ([ADR 0146](adr/0146-embedder-fetch-transport.md), [ADR 0149](adr/0149-fetch-urls-go-through-the-url-parser.md), [ADR 0156](adr/0156-fetch-honours-the-redirect-mode.md)). The transport belongs to the engine: it is read when each request starts, so it can be replaced between runs, and no other engine on the thread, nested or not, and no engine on another thread uses it. A child engine the host creates (a sandbox `runScript` child) needs its own.
 
-`fetch()` still makes every decision it makes before network work: the URL, the `net` capability's name check and its audit event, `GET`/`HEAD` only, an already-aborted signal, and the cap of 16 requests in flight per thread. A request the built-in client would refuse to send (an unsupported scheme, a control character in the request target or a header) rejects with that client's `TypeError` and never reaches the transport. The transport's `Fetch` then receives a `TGocciaFetchTransportRequest` (method, request URL (the URL as `fetch()` received it, parsed by the URL Standard and serialized without its fragment, dot segments removed), header list, an empty body, the milliseconds left before the run's deadline or the signal's timeout, the response ceiling, the capability set) and an `IGocciaFetchResponder`:
+`fetch()` still makes every decision it makes before network work: the URL, the `net` capability's name check and its audit event, `GET`/`HEAD` only, an already-aborted signal, and the cap of 16 requests in flight per thread. A request the built-in client would refuse to send (an unsupported scheme, a control character in the request target or a header) rejects with that client's `TypeError` and never reaches the transport. The transport's `Fetch` then receives a `TGocciaFetchTransportRequest` (method, request URL (the URL as `fetch()` received it, parsed by the URL Standard and serialized without its fragment, dot segments removed), header list, an empty body, the request's redirect mode (`Redirect`: `hrmFollow`, `hrmError` or `hrmManual` from `fetch()`'s `redirect` option), the milliseconds left before the run's deadline or the signal's timeout, the response ceiling, the capability set) and an `IGocciaFetchResponder`:
 
 - `Respond(Response)` answers with a `THTTPResponse` (`HTTPTypes`); `FinalURL` must be an absolute http(s) URL, and `Response.url` is that URL serialized by the engine's URL parser (the one behind `URL`) without its fragment, scheme and host in lowercase and dot segments resolved, as the built-in client's final URL is, and the URL must parse there too; empty means the request URL as `fetch()` received it, serialized the same way. `Fail(Message)` rejects the fetch with `TypeError: Message`; `Fail(Message, Scope)` rejects it with `PermissionDenied` for that net scope.
 - Answer inside `Fetch` or later, from any thread; the first answer wins and each call returns whether it was taken. The promise settles at the engine's next completion pump, never inside the `fetch()` call, and the run waits for an unanswered request as for a network one. The run deadline or the request's signal ends that wait. The wait runs no script and consumes no instruction budget, so an instruction limit stops it only when the budget was already exhausted.
 - An abort, or the engine discarding its requests when a run fails or ends, cancels the request, even after an answer was taken but before it settled: `IsCancelled` turns true and a later answer is refused. An exception from `Fetch` cancels the request too: an ordinary exception rejects the fetch with `TypeError: fetch failed: <message>`, while the run's timeout, instruction-limit, memory-limit and engine-integrity errors propagate and end the run.
 - A response is held to the rules a network response meets: status 200 to 599, status text that is a reason phrase (tab, space, visible ASCII, U+0080 to U+00FF), header names that are tokens, header values without NUL, CR, LF or any character past U+00FF (header values and status text are bytes), a body within the ceiling; a `HEAD`, 204, 205 or 304 response has no body, whatever its size. Anything else rejects with `TypeError`.
 
-`Fetch` runs on the engine's thread and must not run script or call into the engine. To forward a request to the network, as a recording transport does, call `FetchOverNetwork(Request, Responder)` (`Goccia.FetchManager`) from a thread of your own: it applies the redirect-hop and resolved-address checks, ceiling and timeout of a run without a transport, and does not audit those hop decisions. Its answer passes through the rules above, which a conforming server's response meets unchanged, so a forwarded response reads as a direct one.
+`Fetch` runs on the engine's thread and must not run script or call into the engine. To forward a request to the network, as a recording transport does, call `FetchOverNetwork(Request, Responder)` (`Goccia.FetchManager`) from a thread of your own: it applies the redirect-hop and resolved-address checks, the redirect mode, ceiling and timeout of a run without a transport, and does not audit those hop decisions. A transport that follows redirects itself must honour `Redirect` the same way; the engine takes its answer as given. Its answer passes through the rules above, which a conforming server's response meets unchanged, so a forwarded response reads as a direct one.
 
 A replay transport answers from its recording, keyed by a fingerprint of the request, in recorded order (`TTape` and `Fingerprint` are the host's own):
 

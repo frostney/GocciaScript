@@ -150,11 +150,14 @@ describe("default constructors forwarding through a 20-class chain", () => {
 
 describe("a 30,000-class chain of default constructors", () => {
   // Built only on a 64-bit host, where the classes fit the memory budget a
-  // test worker should spend.
-  const is64Bit = typeof Goccia !== "undefined" &&
-    ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch);
+  // test worker should spend, and not in a GC-stress build, which collects
+  // every 8 instructions, so building 30,000 classes there takes hours. The
+  // 20-class chain above still runs under stress.
+  const deepChainRuns = typeof Goccia !== "undefined" &&
+    ["x86_64", "aarch64", "powerpc64"].includes(Goccia.build.arch) &&
+    !(typeof Goccia !== "undefined" && Goccia.build.gcStress);
 
-  test.runIf(is64Bit)("constructs its most derived class", () => {
+  test.runIf(deepChainRuns)("constructs its most derived class", () => {
     const Leaf = chain(30000, class {}, (B) => class extends B {});
     const leaf = new Leaf();
     expect(typeof leaf).toBe("object");
@@ -162,7 +165,7 @@ describe("a 30,000-class chain of default constructors", () => {
     expect(typeof new Leaf()).toBe("object");
   });
 
-  test.runIf(is64Bit)("initializes every class's field from the base outwards", () => {
+  test.runIf(deepChainRuns)("initializes every class's field from the base outwards", () => {
     let order = 0;
     const Leaf = chain(30000, class { first = order++; }, (B) => class extends B { last = order++; });
     const leaf = new Leaf();
@@ -170,7 +173,7 @@ describe("a 30,000-class chain of default constructors", () => {
     expect(leaf.last).toBe(30000);
   });
 
-  test.runIf(is64Bit)("passes its arguments to an explicit base constructor", () => {
+  test.runIf(deepChainRuns)("passes its arguments to an explicit base constructor", () => {
     class Base { constructor(value) { this.value = value; } }
     const Leaf = chain(30000, Base, (B) => class extends B {});
     expect(new Leaf(42).value).toBe(42);

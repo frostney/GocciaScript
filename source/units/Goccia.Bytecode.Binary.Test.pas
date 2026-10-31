@@ -43,6 +43,8 @@ type
     procedure TestRejectsMalformedDirectEvalSite;
     procedure TestRefusesGlobalEvalCode;
     procedure TestRoundTripsBigIntConstantSlots;
+    procedure TestRoundTripsPrivateNameConstants;
+    procedure TestConstantPoolStopsAtWhatTheFormatCounts;
     procedure TestRejectsMalformedBigIntPayloads;
     procedure TestRejectsDuplicateInternedConstants;
     procedure TestRoundTripsBigIntConstants;
@@ -78,6 +80,10 @@ begin
     TestRefusesGlobalEvalCode);
   Test('BigInt payloads and following constant slots survive serialization',
     TestRoundTripsBigIntConstantSlots);
+  Test('A private name and a string with the same text stay two constants',
+    TestRoundTripsPrivateNameConstants);
+  Test('A constant pool holds at most the 65535 constants the format counts',
+    TestConstantPoolStopsAtWhatTheFormatCounts);
   Test('Rejects malformed BigInt payloads before execution',
     TestRejectsMalformedBigIntPayloads);
   Test('BigInt bytes survive a save/load/save cycle', TestRoundTripsBigIntConstants);
@@ -833,6 +839,96 @@ begin
       .ToBe('-' + BIG_DECIMAL);
     Expect<string>(LoadedTemplate.GetConstant(4).StringValue)
       .ToBe('after BigInt');
+  finally
+    Loaded.Free;
+  end;
+end;
+
+procedure TBytecodeBinaryTests.TestRoundTripsPrivateNameConstants;
+const
+  STORAGE_KEY = '#slot:0$value';
+var
+  Template, LoadedTemplate: TGocciaFunctionTemplate;
+  Loaded: TGocciaBytecodeModule;
+  Reason: string;
+begin
+  Template := TGocciaFunctionTemplate.Create('private-name');
+  Template.MaxRegisters := 1;
+  Expect<Integer>(Template.AddConstantString(STORAGE_KEY)).ToBe(0);
+  Expect<Integer>(Template.AddConstantPrivateName(STORAGE_KEY)).ToBe(1);
+  Expect<Integer>(Template.AddConstantPrivateName(STORAGE_KEY)).ToBe(1);
+  Expect<Integer>(Template.AddConstantString(STORAGE_KEY)).ToBe(0);
+  Template.EmitInstruction(EncodeABx(OP_LOAD_CONST, 0, 1));
+  Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+  Loaded := LoadTemplateThroughBinary(Template, Reason);
+  try
+    Expect<string>(Reason).ToBe('');
+    Expect<Boolean>(Assigned(Loaded)).ToBe(True);
+    if not Assigned(Loaded) then
+      Exit;
+    LoadedTemplate := Loaded.TopLevel;
+    Expect<Integer>(LoadedTemplate.ConstantCount).ToBe(2);
+    Expect<Integer>(Ord(LoadedTemplate.GetConstant(0).Kind))
+      .ToBe(Ord(bckString));
+    Expect<Integer>(Ord(LoadedTemplate.GetConstant(1).Kind))
+      .ToBe(Ord(bckPrivateName));
+    Expect<string>(LoadedTemplate.GetConstant(1).StringValue)
+      .ToBe(STORAGE_KEY);
+  finally
+    Loaded.Free;
+  end;
+end;
+
+procedure TBytecodeBinaryTests.TestConstantPoolStopsAtWhatTheFormatCounts;
+
+  // Whether adding one more constant of kind AKind fails with the constant
+  // pool's bytecode limit.
+  function Overflows(const ATemplate: TGocciaFunctionTemplate;
+    const AKind: Integer): Boolean;
+  begin
+    Result := False;
+    try
+      case AKind of
+        0: ATemplate.AddConstantString('one more');
+        1: ATemplate.AddConstantPrivateName('#slot:0$more');
+        2: ATemplate.AddConstantInteger(123456789);
+        3: ATemplate.AddConstantBigInt('42');
+      end;
+    except
+      on E: EGocciaBytecodeLimit do
+        Result := Pos('Too many constants', E.Message) > 0;
+    end;
+  end;
+
+var
+  Template, LoadedTemplate: TGocciaFunctionTemplate;
+  Loaded: TGocciaBytecodeModule;
+  Reason: string;
+  I: Integer;
+begin
+  // The writer counts constants in a UInt16, so 65535 is the most a template
+  // can hold; one more would be written as a count of zero.
+  Template := TGocciaFunctionTemplate.Create('full-pool');
+  Template.MaxRegisters := 1;
+  for I := 0 to High(UInt16) - 1 do
+    Template.AddConstantString(IntToStr(I));
+  Expect<Integer>(Template.ConstantCount).ToBe(High(UInt16));
+  Expect<Boolean>(Overflows(Template, 0)).ToBe(True);
+  Expect<Boolean>(Overflows(Template, 1)).ToBe(True);
+  Expect<Boolean>(Overflows(Template, 2)).ToBe(True);
+  Expect<Boolean>(Overflows(Template, 3)).ToBe(True);
+  Expect<Integer>(Template.ConstantCount).ToBe(High(UInt16));
+  Template.EmitInstruction(EncodeABC(OP_RETURN, 0, 0, 0));
+  Loaded := LoadTemplateThroughBinary(Template, Reason);
+  try
+    Expect<string>(Reason).ToBe('');
+    Expect<Boolean>(Assigned(Loaded)).ToBe(True);
+    if not Assigned(Loaded) then
+      Exit;
+    LoadedTemplate := Loaded.TopLevel;
+    Expect<Integer>(LoadedTemplate.ConstantCount).ToBe(High(UInt16));
+    Expect<string>(LoadedTemplate.GetConstant(High(UInt16) - 1).StringValue)
+      .ToBe(IntToStr(High(UInt16) - 1));
   finally
     Loaded.Free;
   end;

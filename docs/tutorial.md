@@ -15,7 +15,7 @@ GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first rec
 
 ## Prerequisites
 
-You need the [FreePascal](https://www.freepascal.org/) compiler (`fpc`):
+You need the [FreePascal](https://www.freepascal.org/) compiler (`fpc`), version 3.2.2 or 3.2.4. The package managers below install 3.2.2; [Build from source](../README.md#build-from-source) shows how to install the 3.2.4 build CI uses:
 
 ```bash
 # macOS

@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, writeFileSync, readFileSync, rmSync } = require('node:fs');
+const { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -61,5 +61,57 @@ process.exit(Number(process.argv[2] === 'install' ? process.env.INSTALL_EXIT : p
     assert.ok(calls.every(c => c.cwd === resolve(__dirname, '../../website')));
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Job-level `if:` conditions, by workflow file and job id. Workflows indent
+// jobs by two spaces and job keys by four; a block scalar continues on deeper
+// lines.
+function jobConditions(workflowPath) {
+  const lines = readFileSync(workflowPath, 'utf8').split('\n');
+  const conditions = new Map();
+  let inJobs = false;
+  let job = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\S/.test(line)) {
+      inJobs = line.startsWith('jobs:');
+      job = null;
+      continue;
+    }
+    if (!inJobs) continue;
+    const jobMatch = /^ {2}([\w-]+):\s*$/.exec(line);
+    if (jobMatch) {
+      job = jobMatch[1];
+      continue;
+    }
+    const ifMatch = /^ {4}if:(.*)$/.exec(line);
+    if (job && ifMatch) {
+      let condition = ifMatch[1];
+      while (index + 1 < lines.length && /^ {5,}\S/.test(lines[index + 1])) {
+        index += 1;
+        condition += `\n${lines[index]}`;
+      }
+      conditions.set(job, condition.trim());
+    }
+  }
+  return conditions;
+}
+
+test('workflow jobs that run after a failed dependency skip a cancelled run', () => {
+  const workflows = resolve(__dirname, '../workflows');
+  for (const file of readdirSync(workflows).filter(name => /\.ya?ml$/.test(name))) {
+    for (const [job, condition] of jobConditions(join(workflows, file))) {
+      assert.doesNotMatch(condition, /\balways\(\)/,
+        `${file} job ${job} uses always(), which also runs it in a cancelled run; use !cancelled()`);
+    }
+  }
+  const pr = jobConditions(join(workflows, 'pr.yml'));
+  for (const job of [
+    'jetstream-report', 'web-tooling-report', 'test262-merge',
+    'awfy-comment', 'jetstream-comment', 'web-tooling-comment', 'timing-comment', 'test262-comment',
+  ]) {
+    assert.match(pr.get(job) ?? '', /!cancelled\(\)/,
+      `pr.yml job ${job} must still run after a failed dependency in a run that was not cancelled`);
   }
 });

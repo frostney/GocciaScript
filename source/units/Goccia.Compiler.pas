@@ -7,6 +7,7 @@ interface
 uses
   Generics.Collections,
 
+  HashMap,
   UnicodeStringList,
 
   Goccia.AST.Expressions,
@@ -18,7 +19,8 @@ uses
   Goccia.Compiler.ConstantValue,
   Goccia.Compiler.Context,
   Goccia.Compiler.Scope,
-  Goccia.Modules.LinkPlan;
+  Goccia.Modules.LinkPlan,
+  Goccia.Profiler.Compile;
 
 type
   TGocciaCompiler = class
@@ -64,8 +66,47 @@ type
     // Expressions and statements open in the walk over the tree; see
     // EnterNesting.
     FNestingDepth: Integer;
+    // The innermost expression or statement being compiled, where a
+    // bytecode limit is reported (RaiseBytecodeLimit).
+    FCurrentNode: TGocciaASTNode;
+    // The operands an attempt to fold an expression to a constant has just
+    // found not to be constants, deepest first, and how many of them are
+    // still to be compiled (FNotConstantPending, from the end). They stay
+    // known while the template emits nothing but folded constants, which
+    // change nothing a constant depends on (CompileExpressionNode).
+    // FNotConstantScratch holds the operands of a try that is under way.
+    FNotConstantPath: TGocciaExpressionList;
+    FNotConstantScratch: TGocciaExpressionList;
+    FNotConstantPending: Integer;
+    FNotConstantTemplate: TGocciaFunctionTemplate;
+    FNotConstantCodeCount: Integer;
+    // Every template the compile has switched to, with repeats: a compile
+    // that raises frees those no other template owns yet
+    // (FreeUnattachedTemplates).
+    FEnteredTemplates: TList<TGocciaFunctionTemplate>;
+    // The thread's compile profile while a compile with --profile=compile
+    // runs, else nil (Goccia.Profiler.Compile).
+    FCompileProfile: TGocciaCompileProfiler;
+    // Where the compile profile places a template whose debug information
+    // has no position (class field initializers): the node being compiled
+    // when it was first entered.
+    FProfileTemplatePositions: THashMap<TGocciaFunctionTemplate, Int64>;
+    function CompileUnprofiled(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    procedure ProfileTemplatePosition(const ATemplate: TGocciaFunctionTemplate;
+      out ALine, AColumn: Integer);
+    procedure ProfileEnterTemplate(const ATemplate: TGocciaFunctionTemplate);
+    procedure ProfileNameTemplates(const ATemplate: TGocciaFunctionTemplate);
+    // Counts a constant-folding attempt in the compile profile; always True,
+    // so it can lead the condition that makes the attempt.
+    procedure NoteShortCircuitJump(const ATemplate: TGocciaFunctionTemplate;
+      const ABefore, AAfter: Integer);
+    function NoteConstantAttempt: Boolean; {$IFDEF FPC}inline;{$ENDIF}
     procedure EnterNesting(const ANode: TGocciaASTNode); {$IFDEF FPC}inline;{$ENDIF}
     procedure RaiseNestingLimitExceeded(const ANode: TGocciaASTNode);
+    procedure RaiseBytecodeLimit(const AError: EGocciaBytecodeLimit;
+      const AProgram: TGocciaProgram);
+    function CompileProgram(const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+    procedure FreeUnattachedTemplates(const ATopLevel: TGocciaFunctionTemplate);
     procedure DoCompileExpression(const AExpr: TGocciaExpression;
       const ADest: UInt16);
     procedure CompileExpressionNode(const AExpr: TGocciaExpression;
@@ -220,6 +261,9 @@ begin
   // so compiling a script with no functions skips both dictionaries.
   FNumberBindingProofs := TNumberBindingProofMap.Create;
   FBlockFunctionVarBindings := TBlockFunctionVarBindingSet.Create;
+  FEnteredTemplates := TList<TGocciaFunctionTemplate>.Create;
+  FNotConstantPath := TGocciaExpressionList.Create;
+  FNotConstantScratch := TGocciaExpressionList.Create;
   FDerivedConstructorThisGuard := False;
   FModule := nil;
   FCurrentTemplate := nil;
@@ -231,6 +275,9 @@ end;
 
 destructor TGocciaCompiler.Destroy;
 begin
+  FEnteredTemplates.Free;
+  FNotConstantPath.Free;
+  FNotConstantScratch.Free;
   FBlockFunctionVarBindings.Free;
   FNumberBindingProofs.Free;
   FNumericParameterProofs.Free;
@@ -271,6 +318,7 @@ begin
   Result.NonStrictMode := FNonStrictMode and not FCurrentTemplate.StrictCode;
   Result.DerivedConstructorThisGuard := FDerivedConstructorThisGuard;
   Result.OptimizationOptions := FOptimizationOptions;
+  Result.NoteShortCircuitJump := NoteShortCircuitJump;
   Result.CompileExpression := DoCompileExpression;
   Result.CompileStatement := DoCompileStatement;
   Result.CompileFunctionBody := DoCompileFunctionBody;
@@ -322,11 +370,15 @@ procedure TGocciaCompiler.DoSwapState(
   const ATemplate: TGocciaFunctionTemplate;
   const AScope: TGocciaCompilerScope);
 begin
+  if Assigned(FCompileProfile) then
+    ProfileEnterTemplate(ATemplate);
   if Assigned(FCurrentTemplate) then
     RecordDerivedConstructorThisGuard(FCurrentTemplate,
       FDerivedConstructorThisGuard);
   FCurrentTemplate := ATemplate;
   FCurrentScope := AScope;
+  if Assigned(ATemplate) and not ATemplate.Attached then
+    FEnteredTemplates.Add(ATemplate);
   if Assigned(FCurrentTemplate) and Assigned(FCurrentScope) then
     FCurrentScope.AttachTemplate(FCurrentTemplate);
   if not Assigned(FCurrentTemplate) or
@@ -362,29 +414,123 @@ end;
 
 procedure TGocciaCompiler.DoCompileExpression(
   const AExpr: TGocciaExpression; const ADest: UInt16);
+var
+  OuterNode: TGocciaASTNode;
 begin
   EnterNesting(AExpr);
+  OuterNode := FCurrentNode;
+  FCurrentNode := AExpr;
   CompileExpressionNode(AExpr, ADest);
+  FCurrentNode := OuterNode;
   Dec(FNestingDepth);
 end;
 
 function TGocciaCompiler.DoCompileStatement(
   const AStmt: TGocciaStatement): Boolean;
+var
+  OuterNode: TGocciaASTNode;
 begin
   EnterNesting(AStmt);
+  OuterNode := FCurrentNode;
+  FCurrentNode := AStmt;
   Result := CompileStatementNode(AStmt);
+  FCurrentNode := OuterNode;
   Dec(FNestingDepth);
 end;
 
+// A bytecode limit is an implementation limit of the program's source, so it
+// is reported as the parser reports the nesting limit: a SyntaxError at the
+// expression or statement that reached it, which new Function, eval,
+// ShadowRealm.prototype.evaluate and dynamic import throw as a catchable
+// error. The node is the innermost one open when the limit was hit, since a
+// raise skips the restores above.
+procedure TGocciaCompiler.RaiseBytecodeLimit(
+  const AError: EGocciaBytecodeLimit; const AProgram: TGocciaProgram);
+var
+  Node: TGocciaASTNode;
+begin
+  if AError.Line > 0 then
+    raise TGocciaSyntaxError.Create(AError.Message, AError.Line,
+      AError.Column, FSourcePath, nil, SSuggestBytecodeLimit);
+  Node := FCurrentNode;
+  if not Assigned(Node) then
+    Node := AProgram;
+  raise TGocciaSyntaxError.Create(AError.Message, Node.Line, Node.Column,
+    FSourcePath, nil, SSuggestBytecodeLimit);
+end;
+
+// Every expression is first tried as a constant. A try evaluates the
+// operands first, so a failed one walks down to the first operand that is
+// not a constant, and the operands on that path are the expressions the
+// compile reaches next: in a chain such as `a + b + c + ...`,
+// `1 + (2 + (3 + p))` or `- - - p`, trying each of them again walked the
+// chain once per operator, in time quadratic in its length. The failed try
+// keeps the operands it found not constant, and the compiles that reach
+// them skip their tries, as long as nothing was emitted in between but
+// folded constants, which a constant cannot depend on.
 procedure TGocciaCompiler.CompileExpressionNode(
   const AExpr: TGocciaExpression; const ADest: UInt16);
 var
   Ctx: TGocciaCompilationContext;
+  Value: TGocciaCompileTimeValue;
+  Known, Swap: TGocciaExpressionList;
+  NextNotConstant: TGocciaExpression;
+  CodeCount: Integer;
+  Simplified: Boolean;
 begin
+  if Assigned(FCompileProfile) then
+    FCompileProfile.CountNode(AExpr.ClassType);
   Ctx := BuildContext;
   EmitLineMapping(Ctx, AExpr.Line, AExpr.Column);
 
-  if TryEmitConstantExpression(Ctx, AExpr, ADest) then
+  Known := nil;
+  if (FNotConstantPending > 0) and (Ctx.Template = FNotConstantTemplate) and
+     (Ctx.Template.CodeCount = FNotConstantCodeCount) then
+    Known := FNotConstantPath;
+
+  // The operand the compile reaches next, or the one below it: a strict-types
+  // simplification compiles `!!b` as b.
+  if Assigned(Known) and (Known[FNotConstantPending - 1] = AExpr) then
+    Dec(FNotConstantPending)
+  else if Assigned(Known) and (FNotConstantPending > 1) and
+          (Known[FNotConstantPending - 2] = AExpr) then
+    Dec(FNotConstantPending, 2)
+  else
+  begin
+    FNotConstantScratch.Clear;
+    if NoteConstantAttempt and
+       TryEvaluateConstantExpression(Ctx, AExpr, Value,
+         FNotConstantScratch) then
+    begin
+      CodeCount := Ctx.Template.CodeCount;
+      EmitCompileTimeValue(Ctx, Value, ADest);
+      if Assigned(Known) then
+        FNotConstantCodeCount := Ctx.Template.CodeCount;
+      Ctx.Scope.NoteTypeFactsUnchanged(Ctx.Template, CodeCount,
+        Ctx.Template.CodeCount);
+      Exit;
+    end;
+    Swap := FNotConstantPath;
+    FNotConstantPath := FNotConstantScratch;
+    FNotConstantScratch := Swap;
+    FNotConstantPending := FNotConstantPath.Count;
+    FNotConstantTemplate := Ctx.Template;
+    FNotConstantCodeCount := Ctx.Template.CodeCount;
+  end;
+
+  // The operand of AExpr that its try found not constant, if any, is the
+  // next one on the path.
+  NextNotConstant := nil;
+  if FNotConstantPending > 0 then
+    NextNotConstant := FNotConstantPath[FNotConstantPending - 1];
+  if (AExpr is TGocciaBinaryExpression) and Assigned(NextNotConstant) then
+    Simplified := TryEmitStrictTypeSimplification(Ctx, AExpr, ADest,
+      NextNotConstant = TGocciaBinaryExpression(AExpr).Left,
+      NextNotConstant = TGocciaBinaryExpression(AExpr).Right)
+  else
+    Simplified := TryEmitStrictTypeSimplification(Ctx, AExpr, ADest, False,
+      False);
+  if Simplified then
     Exit;
 
   if AExpr is TGocciaLiteralExpression then
@@ -497,6 +643,8 @@ var
   LoopScope: TGocciaCompilerScope;
 begin
   Result := False;
+  if Assigned(FCompileProfile) then
+    FCompileProfile.CountNode(AStmt.ClassType);
   Ctx := BuildContext;
   if (AStmt.LabelCount > 0) and (FLabelReentryStatement <> AStmt) then
   begin
@@ -700,7 +848,8 @@ var
 begin
   Names := TUnicodeStringList.Create;
   try
-    CollectVariableDeclarationBindingNames(AVarDecl, Names, True);
+    CollectVariableDeclarationBindingNames(AVarDecl, Names, True,
+      AScope.CompileProfile);
     for I := 0 to Names.Count - 1 do
       if AScope.ResolveLocal(Names[I]) < 0 then
         AScope.DeclareLocal(Names[I], AVarDecl.IsConst);
@@ -853,7 +1002,8 @@ begin
       Names := TUnicodeStringList.Create;
       try
         CollectVariableDeclarationBindingNames(ExportVarDecl.Declaration,
-          Names, True);
+          Names, True,
+          AScope.CompileProfile);
         for Name in Names do
           MarkLocalExport(AScope, Name, Name);
       finally
@@ -866,7 +1016,8 @@ begin
       Names := TUnicodeStringList.Create;
       try
         CollectPatternBindingNames(ExportDestructuringDecl.Declaration.Pattern,
-          Names, True);
+          Names, True,
+          AScope.CompileProfile);
         for Name in Names do
           MarkLocalExport(AScope, Name, Name);
       finally
@@ -1009,6 +1160,7 @@ var
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
   HoistedVarStart: Integer;
+  UnobservableHoles: TArray<string>;
 begin
   SavedFinally := Goccia.Compiler.Statements.SavePendingFinally;
   try
@@ -1044,17 +1196,27 @@ begin
       // Function-body lexical declarations are instantiated before any body
       // statement executes, regardless of whether the body also contains a
       // hoisted function declaration. This establishes the TDZ for earlier
-      // references and assignments.
+      // references and assignments; a leading binding whose TDZ nothing can
+      // observe (LeadingLexicalsWithUnobservableHole) gets no hole.
       PredeclaredLexicalStart := FCurrentScope.LocalCount;
       for I := 0 to Block.Nodes.Count - 1 do
         PredeclareLexicalLocals(Block.Nodes[I], FCurrentScope);
+      if HasFunctionDecl or FOptimizationOptions.PreserveCoverageShape then
+        SetLength(UnobservableHoles, 0)
+      else
+        UnobservableHoles := LeadingLexicalsWithUnobservableHole(Block);
       for PredeclaredLexicalIndex := PredeclaredLexicalStart to
         FCurrentScope.LocalCount - 1 do
       begin
         PredeclaredLocal := FCurrentScope.LocalAt(PredeclaredLexicalIndex);
         if not PredeclaredLocal^.IsVar then
-          EmitInstruction(BuildContext, EncodeABC(OP_LOAD_HOLE,
-            PredeclaredLocal^.Slot, 0, 0));
+        begin
+          if not NameListContains(UnobservableHoles,
+             PredeclaredLocal^.Name) then
+            EmitInstruction(BuildContext, EncodeABC(OP_LOAD_HOLE,
+              PredeclaredLocal^.Slot, 0, 0));
+          PredeclaredLocal^.HoleAtBlockEntry := True;
+        end;
       end;
 
       if HasFunctionDecl then
@@ -1100,9 +1262,14 @@ begin
             Reg := FCurrentScope.AllocateRegister;
             DoCompileExpression(TGocciaExpression(Node), Reg);
             FCurrentScope.FreeRegister;
+            StatementAbrupt := False;
           end;
         end;
       end;
+      // Control can reach the end of the body unless its last statement is
+      // abrupt, and then the function returns undefined.
+      if not StatementAbrupt then
+        FCurrentScope.NoteReturnType(sltUntyped);
       Reg := FCurrentScope.AllocateRegister;
       EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, Reg, 0, 0));
       EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
@@ -1111,12 +1278,25 @@ begin
     else if ABody is TGocciaExpression then
     begin
       Reg := FCurrentScope.AllocateRegister;
-      DoCompileExpression(TGocciaExpression(ABody), Reg);
+      // ES2026 §15.10.1 IsInTailPosition: a ConciseBody is a tail-position
+      // body like a FunctionBody, and HasCallInTailPosition (§15.10.2)
+      // reaches its ExpressionBody through the same expression rules a
+      // `return` uses (CompileReturnValueTailAware).
+      if Goccia.Compiler.Statements.ReturnIsTailPositionEligible(
+           BuildContext) then
+        Goccia.Compiler.Expressions.CompileReturnValueTailAware(BuildContext,
+          TGocciaExpression(ABody), Reg)
+      else
+        DoCompileExpression(TGocciaExpression(ABody), Reg);
+      // A concise body returns its expression.
+      FCurrentScope.NoteReturnType(ExpressionType(FCurrentScope,
+        TGocciaExpression(ABody)));
       EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
       FCurrentScope.FreeRegister;
     end
     else
     begin
+      FCurrentScope.NoteReturnType(sltUntyped);
       Reg := FCurrentScope.AllocateRegister;
       EmitInstruction(BuildContext, EncodeABC(OP_LOAD_UNDEFINED, Reg, 0, 0));
       EmitInstruction(BuildContext, EncodeABC(OP_RETURN, Reg, 0, 0));
@@ -1158,7 +1338,8 @@ begin
         begin
           Names := TUnicodeStringList.Create;
           try
-            CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+            CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True,
+              AScope.CompileProfile);
             for J := 0 to Names.Count - 1 do
               AScope.DeclareVarLocal(Names[J]);
           finally
@@ -1181,7 +1362,8 @@ begin
         begin
           Names := TUnicodeStringList.Create;
           try
-            CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True);
+            CollectVariableInfoBindingNames(VarDecl.Variables[I], Names, True,
+              AScope.CompileProfile);
             for J := 0 to Names.Count - 1 do
               AScope.DeclareVarLocal(Names[J]);
           finally
@@ -1756,7 +1938,7 @@ begin
         SetLength(Dropped, Length(Dropped) + 1);
         Dropped[High(Dropped)] := Declaration;
       end
-      else if KeptNames.IndexOf(Name) < 0 then
+      else if not KeptNames.HasString(Name) then
         KeptNames.Add(Name);
     end;
     for I := 0 to High(Dropped) do
@@ -1765,8 +1947,8 @@ begin
       Exit;
     CollectVarBindingNamesFromStatements(AStatements, StandardVarNames);
     for I := FDirectEvalDeclaredVarNames.Count - 1 downto 0 do
-      if (StandardVarNames.IndexOf(FDirectEvalDeclaredVarNames[I]) < 0) and
-         (KeptNames.IndexOf(FDirectEvalDeclaredVarNames[I]) < 0) then
+      if (not StandardVarNames.HasString(FDirectEvalDeclaredVarNames[I])) and
+         (not KeptNames.HasString(FDirectEvalDeclaredVarNames[I])) then
         FDirectEvalDeclaredVarNames.Delete(I);
   finally
     StandardVarNames.Free;
@@ -1804,7 +1986,7 @@ begin
       // A hidden variable object of the record keeps its name, so a
       // function the eval code declares names its own differently.
       if IsEvalVarObjectName(Binding.Name) then
-        ReserveEvalVarObjectName(Binding.Name);
+        OuterScope.ReserveEvalVarObjectName(Binding.Name);
       case Binding.Kind of
         debUpvalue:
         begin
@@ -1864,8 +2046,11 @@ begin
     // Visible private names, the outermost class body's first, so that an
     // inner class body's name shadows it (ResolvePrivatePrefixForName).
     for I := 0 to High(ASite.PrivateNames) do
+    begin
+      CallerScope.ReserveClassPrivatePrefix(ASite.PrivateNames[I].Prefix);
       CallerScope.DeclarePrivateNamePrefix(ASite.PrivateNames[I].Name,
         ASite.PrivateNames[I].Prefix);
+    end;
     // `this` is checked against super() as in an arrow of a derived
     // constructor. The constructor declares its flag after its `this`, and
     // the record lists the nearest bindings first, so the flag comes before
@@ -1930,7 +2115,159 @@ begin
     ClearFunctionSourceText(ATemplate.GetFunction(I));
 end;
 
+// A conditional jump whose branch is longer than its offset holds was
+// written as a placeholder; each function with one takes the long form for
+// it now that its code is complete, and every other function keeps its
+// bytecode.
+procedure RelaxFarJumpsBelow(const ATemplate: TGocciaFunctionTemplate);
+var
+  I: Integer;
+begin
+  ATemplate.RelaxFarJumps;
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    RelaxFarJumpsBelow(ATemplate.GetFunction(I));
+end;
+
+// Engine code (a bootstrap shim) is never profiled.
 function TGocciaCompiler.Compile(
+  const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+begin
+  if FHideSourceText then
+    FCompileProfile := nil
+  else
+    FCompileProfile := TGocciaCompileProfiler.Instance;
+  if not Assigned(FCompileProfile) then
+    Exit(CompileUnprofiled(AProgram));
+  FProfileTemplatePositions := THashMap<TGocciaFunctionTemplate, Int64>.Create;
+  try
+    FCompileProfile.BeginCompile;
+    try
+      Result := CompileUnprofiled(AProgram);
+    except
+      FCompileProfile.EndCompile('', -1);
+      raise;
+    end;
+    FCompileProfile.EndCompile(Result.TopLevel.Name,
+      Result.TopLevel.CodeCount);
+    // Names a function takes from its binding are given after its body
+    // compiled, so they are read from the finished templates.
+    ProfileNameTemplates(Result.TopLevel);
+  finally
+    FreeAndNil(FProfileTemplatePositions);
+    FCompileProfile := nil;
+  end;
+end;
+
+procedure TGocciaCompiler.ProfileTemplatePosition(
+  const ATemplate: TGocciaFunctionTemplate; out ALine, AColumn: Integer);
+var
+  Position: Int64;
+begin
+  ALine := 0;
+  AColumn := 0;
+  if ATemplate = FTopLevelTemplate then
+    Exit;
+  if Assigned(ATemplate.DebugInfo) and
+     (ATemplate.DebugInfo.DeclarationLine > 0) then
+  begin
+    ALine := ATemplate.DebugInfo.DeclarationLine;
+    AColumn := ATemplate.DebugInfo.DeclarationColumn;
+    Exit;
+  end;
+  if FProfileTemplatePositions.TryGetValue(ATemplate, Position) then
+  begin
+    ALine := Integer(Position shr 32);
+    AColumn := Integer(Position and $FFFFFFFF);
+    Exit;
+  end;
+  if Assigned(FCurrentNode) then
+  begin
+    ALine := FCurrentNode.Line;
+    AColumn := FCurrentNode.Column;
+  end;
+  FProfileTemplatePositions.AddOrSetValue(ATemplate,
+    (Int64(ALine) shl 32) or Int64(Cardinal(AColumn)));
+end;
+
+procedure TGocciaCompiler.NoteShortCircuitJump(
+  const ATemplate: TGocciaFunctionTemplate; const ABefore, AAfter: Integer);
+begin
+  // Only carry an already valid failure path across this jump. A call,
+  // assignment or other emission before it still invalidates the path.
+  if (ATemplate = FNotConstantTemplate) and
+     (ABefore = FNotConstantCodeCount) then
+    FNotConstantCodeCount := AAfter;
+end;
+
+function TGocciaCompiler.NoteConstantAttempt: Boolean;
+begin
+  if Assigned(FCompileProfile) then
+    FCompileProfile.Count(ccConstantEmitAttempts);
+  Result := True;
+end;
+
+procedure TGocciaCompiler.ProfileNameTemplates(
+  const ATemplate: TGocciaFunctionTemplate);
+var
+  I, Line, Column: Integer;
+begin
+  ProfileTemplatePosition(ATemplate, Line, Column);
+  FCompileProfile.NameFunction(FSourcePath, Line, Column, ATemplate.Name,
+    ATemplate.CodeCount);
+  for I := 0 to ATemplate.FunctionCount - 1 do
+    ProfileNameTemplates(ATemplate.GetFunction(I));
+end;
+
+// The compile profile's switch to ATemplate, from the template being left.
+procedure TGocciaCompiler.ProfileEnterTemplate(
+  const ATemplate: TGocciaFunctionTemplate);
+var
+  LeavingName: string;
+  LeavingInstructions, Line, Column: Integer;
+begin
+  if Assigned(FCurrentTemplate) then
+  begin
+    LeavingName := FCurrentTemplate.Name;
+    LeavingInstructions := FCurrentTemplate.CodeCount;
+  end
+  else
+  begin
+    LeavingName := '';
+    LeavingInstructions := -1;
+  end;
+  if not Assigned(ATemplate) then
+  begin
+    FCompileProfile.EndCompile(LeavingName, LeavingInstructions);
+    FCompileProfile.BeginCompile;
+    Exit;
+  end;
+  ProfileTemplatePosition(ATemplate, Line, Column);
+  FCompileProfile.EnterTemplate(LeavingName, LeavingInstructions,
+    ATemplate.Name, FSourcePath, Line, Column);
+end;
+
+function TGocciaCompiler.CompileUnprofiled(
+  const AProgram: TGocciaProgram): TGocciaBytecodeModule;
+begin
+  FCurrentNode := nil;
+  try
+    Result := CompileProgram(AProgram);
+    // A limit RelaxFarJumps finds is located at its instruction, or else at
+    // the program.
+    FCurrentNode := nil;
+    try
+      RelaxFarJumpsBelow(Result.TopLevel);
+    except
+      FreeAndNil(Result);
+      raise;
+    end;
+  except
+    on E: EGocciaBytecodeLimit do
+      RaiseBytecodeLimit(E, AProgram);
+  end;
+end;
+
+function TGocciaCompiler.CompileProgram(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
   I: Integer;
@@ -1940,14 +2277,22 @@ var
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
   SavedFinally: TObject;
+  CallerScope: TGocciaCompilerScope;
 begin
   // A compile that raised left the levels it had entered open; this one
   // starts at the top of the tree.
   FNestingDepth := 0;
+  // A template of an earlier compile may share an address with one of this
+  // compile.
+  FNotConstantPending := 0;
   if Assigned(FNumericParameterProofs) then
     FNumericParameterProofs.Clear;
   FNumberBindingProofs.Clear;
   FBlockFunctionVarBindings.Clear;
+  // Keyed by template: a compile that raised freed its templates, and a new
+  // one may reuse an address.
+  if Assigned(FTemplateDerivedConstructorThisGuards) then
+    FTemplateDerivedConstructorThisGuards.Clear;
   if not FEvalCode then
     FCompatibilityNonStrictMode := FNonStrictMode;
   FModule := TGocciaBytecodeModule.Create(GOCCIA_RUNTIME_TAG, FSourcePath);
@@ -1971,6 +2316,20 @@ begin
   FCurrentTemplate.GlobalEvalCode := FGlobalEvalVarEnvironment;
   // Direct eval code is a function nested at its call site.
   FCurrentScope := TGocciaCompilerScope.Create(FDirectEvalCallerScope, 0);
+  if Assigned(FCompileProfile) then
+  begin
+    FCurrentScope.CompileProfile := FCompileProfile;
+    // A direct eval's caller scopes are rebuilt for this compile, before it
+    // took the profile: lookups that climb into them count too.
+    CallerScope := FDirectEvalCallerScope;
+    while Assigned(CallerScope) do
+    begin
+      CallerScope.CompileProfile := FCompileProfile;
+      CallerScope := CallerScope.Parent;
+    end;
+    FCompileProfile.EnterTemplate('', -1, FCurrentTemplate.Name,
+      FSourcePath, 0, 0);
+  end;
   FCurrentScope.IsArrow := Assigned(FDirectEvalCallerScope);
   if Assigned(FDirectEvalCallerScope) then
   begin
@@ -2039,8 +2398,11 @@ begin
     begin
       PredeclaredLocal := FCurrentScope.LocalAt(PredeclaredLexicalIndex);
       if not PredeclaredLocal^.IsVar then
+      begin
         EmitInstruction(Ctx, EncodeABC(OP_LOAD_HOLE,
           PredeclaredLocal^.Slot, 0, 0));
+        PredeclaredLocal^.HoleAtBlockEntry := True;
+      end;
     end;
     if not FPreinitializedTopLevelFunctions and not FGlobalBackedTopLevel and
        not FEvalCode then
@@ -2152,12 +2514,48 @@ begin
     Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
     FCompletionRegister := -1;
     FreeAndNil(FCurrentScope);
-    FTopLevelTemplate := nil;
     if Assigned(FModule) then
     begin
-      FreeAndNil(FCurrentTemplate);
+      FreeUnattachedTemplates(FTopLevelTemplate);
+      FCurrentTemplate := nil;
       FreeAndNil(FModule);
     end;
+    FTopLevelTemplate := nil;
+    FEnteredTemplates.Clear;
+  end;
+end;
+
+// A compile that raised: the top level and every function template whose
+// compile had started but that was not added to its parent yet belong to no
+// one else. A template that was added is freed with the template that owns
+// it.
+procedure TGocciaCompiler.FreeUnattachedTemplates(
+  const ATopLevel: TGocciaFunctionTemplate);
+var
+  Unattached: TList<TGocciaFunctionTemplate>;
+  Template: TGocciaFunctionTemplate;
+  I: Integer;
+begin
+  Unattached := TList<TGocciaFunctionTemplate>.Create;
+  try
+    if Assigned(FCurrentTemplate) then
+      FEnteredTemplates.Add(FCurrentTemplate);
+    if Assigned(ATopLevel) then
+      FEnteredTemplates.Add(ATopLevel);
+    // Read every flag before freeing any template.
+    for I := 0 to FEnteredTemplates.Count - 1 do
+    begin
+      Template := FEnteredTemplates[I];
+      // Once the module holds the top level it frees it.
+      if not Template.Attached and (Template <> FModule.TopLevel) and
+         (Unattached.IndexOf(Template) < 0) then
+        Unattached.Add(Template);
+    end;
+    for I := 0 to Unattached.Count - 1 do
+      Unattached[I].Free;
+  finally
+    Unattached.Free;
+    FEnteredTemplates.Clear;
   end;
 end;
 

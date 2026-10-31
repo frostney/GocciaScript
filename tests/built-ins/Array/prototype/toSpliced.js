@@ -122,3 +122,14 @@ describe.runIf(typeof Goccia !== "undefined")("toSpliced across a collection", (
     expect(result[3]).toBe("z");
   });
 });
+
+test("toSpliced distinguishes omitted start and skipCount from undefined", () => {
+  const source = [1, 2, 3];
+  const copy = source.toSpliced();
+  expect(copy).toEqual(source);
+  expect(copy).not.toBe(source);
+  expect(source.toSpliced(undefined)).toEqual([]);
+  expect(source.toSpliced(1)).toEqual([1]);
+  expect(source.toSpliced(1, undefined)).toEqual(source);
+  expect(source).toEqual([1, 2, 3]);
+});

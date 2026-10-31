@@ -296,7 +296,11 @@ empty shell (it may read non-reference data), `Fill` it from its payload,
 reading every byte (references resolve to shells), and optionally `Finish`
 once every object is filled. `WriteObjectCore` and `ReadObjectCore` write
 and read an ordinary object's prototype, extensibility, integrity and own
-properties. A reader codec checks what it reads and calls `Refuse` rather
+properties. An object that holds private elements (a class prototype's
+private methods, or what a derived constructor stamped on an object its
+base constructor returned) refuses the snapshot: they are not properties.
+The same holds for a built-in, which is written by name and by a difference
+of its properties. A reader codec checks what it reads and calls `Refuse` rather
 than guessing, and calls `Poll` once per item in any loop whose length comes
 from the input. `source/units/Goccia.Values.ArrayValue.pas` holds the array
 codec as an example.
@@ -311,14 +315,25 @@ fills it:
 
 - `RegisterSnapshotSlotMaterializer`, a procedure that builds it in the
   current realm (the iterator prototypes, the function-object intrinsics,
-  Intl's legacy fallback symbol, the segment and module source prototypes,
-  and the `hasOwnProperty` shim, which native code can load although no
-  script installs it);
+  Intl's legacy fallback symbol, the segment and module source prototypes);
+- `RegisterSnapshotSlotNamedMaterializer`, the same told the slot's name,
+  so one procedure fills a family of slots: each shim's slot, and the `Date`
+  shim's own slots, are filled by loading the shim as native code can;
 - or `RegisterSnapshotSlotGlobalPath`, the lazy built-in whose first read
   fills it, by its path from the global object (`Temporal.PlainDate` for
-  Temporal's and Intl's shared prototypes, `DisposableStack`, and for each
-  shim its global or prototype member, `Date` for the `Date` shim's own
-  slots).
+  Temporal's and Intl's shared prototypes, `DisposableStack`).
+
+A restore fills a slot by building only what fills it. A lazy member the
+restore built and the run did not would be named, by a session watching the
+restore, as one the run built, and a snapshot of the restored run would not
+be the run's. So a global path is only for a slot that nothing but that read
+fills. A shim is loaded through any of its members (`Array.prototype` and
+`Number.prototype` share the `toLocaleString` shim) or natively, so its slot
+is filled by loading it; the members the run built are named apart and
+resolve by their own paths. Native code that makes an instance only for one
+operation and drops it (the collator `String.prototype.localeCompare` uses,
+the number format of `BigInt.prototype.toLocaleString`) leaves the shared
+prototype unbuilt, so only its global builds that.
 
 Every slot a run can fill resolves by its name on its own in a fresh engine.
 `Goccia.HeapSnapshot.Builtins.Test` builds everything an engine builds lazily
@@ -377,7 +392,12 @@ data, a Date's time value) has no difference yet, and refuses the snapshot.
 `source/units/Goccia.HeapSnapshot.Test.pas` round-trips graphs through two
 engines and checks them by script, and feeds the reader every truncation
 and 10,000 mutants of a real snapshot, and of one holding closures and a
-suspended generator, which it then resumes.
+suspended generator, which it then resumes. It also points that snapshot's
+root at each object it holds in turn, a closure's cell among them, so a root
+that is not a value is checked before use, as an embedder must check it.
+The random mutants of every test edit only the bytes after the build
+identity: the version and commit a build bakes in do not move the edits, so
+a release tag's build runs the same mutants as the pull request before it.
 `source/units/Goccia.HeapSnapshot.Modules.Test.pas` does the same for a run
 that imports modules from files, restoring each mutant in a fresh engine.
 `Goccia.HeapSnapshot.Builtins.Test` round-trips each kind of difference,

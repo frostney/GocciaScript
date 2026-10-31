@@ -10,7 +10,9 @@ describe("TypedArray.prototype.sort", () => {
   });
 
   test("sorts a large array correctly (guards against the O(n^2) sort regression)", () => {
-    const N = 60000;
+    // A GC-stress build collects every 8 instructions, so filling the array
+    // there costs its length times the live heap; a stress run sorts fewer.
+    const N = typeof Goccia !== "undefined" && Goccia.build.gcStress ? 2000 : 60000;
     // Strictly descending input is the worst case for the previous insertion
     // sort; the bottom-up merge sort handles it in O(n log n).
     const ta = new Uint16Array(Array.from({ length: N }, (_, i) => N - i));

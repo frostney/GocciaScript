@@ -123,7 +123,7 @@ end;
 procedure AddUniqueEvalName(const ANames: TUnicodeStringList;
   const AName: string);
 begin
-  if (AName <> '') and (ANames.IndexOf(AName) < 0) then
+  if (AName <> '') and (not ANames.HasString(AName)) then
     ANames.Add(AName);
 end;
 
@@ -138,72 +138,25 @@ begin
     Result := nil;
 end;
 
+// ValidateEvalScriptBody has already rejected a top-level using declaration,
+// so CollectLexicallyDeclaredNames finds none here.
 procedure CollectTopLevelEvalLexicalNames(const ANodes: TObjectList<TGocciaStatement>;
   const ANames: TUnicodeStringList);
 var
-  VarDecl: TGocciaVariableDeclaration;
-  DestructDecl: TGocciaDestructuringDeclaration;
   Names: TUnicodeStringList;
-  I, J, K: Integer;
+  I, J: Integer;
 begin
-  for I := 0 to ANodes.Count - 1 do
-  begin
-    if ANodes[I] is TGocciaVariableDeclaration then
+  Names := TUnicodeStringList.Create;
+  try
+    for I := 0 to ANodes.Count - 1 do
     begin
-      VarDecl := TGocciaVariableDeclaration(ANodes[I]);
-      if VarDecl.IsVar then
-        Continue;
-      for J := 0 to High(VarDecl.Variables) do
-      begin
-        Names := TUnicodeStringList.Create;
-        try
-          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
-          for K := 0 to Names.Count - 1 do
-            AddUniqueEvalName(ANames, Names[K]);
-        finally
-          Names.Free;
-        end;
-      end;
-    end
-    else if ANodes[I] is TGocciaExportVariableDeclaration then
-    begin
-      VarDecl := TGocciaExportVariableDeclaration(ANodes[I]).Declaration;
-      if VarDecl.IsVar then
-        Continue;
-      for J := 0 to High(VarDecl.Variables) do
-      begin
-        Names := TUnicodeStringList.Create;
-        try
-          CollectVariableInfoBindingNames(VarDecl.Variables[J], Names, True);
-          for K := 0 to Names.Count - 1 do
-            AddUniqueEvalName(ANames, Names[K]);
-        finally
-          Names.Free;
-        end;
-      end;
-    end
-    else if ANodes[I] is TGocciaDestructuringDeclaration then
-    begin
-      DestructDecl := TGocciaDestructuringDeclaration(ANodes[I]);
-      if DestructDecl.IsVar then
-        Continue;
-      Names := TUnicodeStringList.Create;
-      try
-        CollectPatternBindingNames(DestructDecl.Pattern, Names, True);
-        for J := 0 to Names.Count - 1 do
-          AddUniqueEvalName(ANames, Names[J]);
-      finally
-        Names.Free;
-      end;
-    end
-    else if ANodes[I] is TGocciaClassDeclaration then
-      AddUniqueEvalName(ANames,
-        TGocciaClassDeclaration(ANodes[I]).ClassDefinition.Name)
-    else if ANodes[I] is TGocciaEnumDeclaration then
-      AddUniqueEvalName(ANames, TGocciaEnumDeclaration(ANodes[I]).Name)
-    else if ANodes[I] is TGocciaExportEnumDeclaration then
-      AddUniqueEvalName(ANames,
-        TGocciaExportEnumDeclaration(ANodes[I]).Declaration.Name);
+      Names.Clear;
+      CollectLexicallyDeclaredNames(ANodes[I], Names);
+      for J := 0 to Names.Count - 1 do
+        AddUniqueEvalName(ANames, Names[J]);
+    end;
+  finally
+    Names.Free;
   end;
 end;
 
@@ -1188,7 +1141,7 @@ var
     RejectStrictEvalAssignmentName(AName, AFunction.Line, AFunction.Column);
     if AName = '' then
       Exit;
-    if BindingNames.IndexOf(AName) >= 0 then
+    if BindingNames.HasString(AName) then
       raise TGocciaSyntaxError.Create(
         'Duplicate parameter name not allowed in strict mode',
         AFunction.Line, AFunction.Column, '', nil);
@@ -1819,9 +1772,9 @@ begin
       Declaration := EvalFunctionDeclarationFromNode(ANodes[I]);
       if Assigned(Declaration) then
       begin
-        if Names.IndexOf(Declaration.Name) >= 0 then
+        if Names.HasString(Declaration.Name) then
         begin
-          if AStrict or (FunctionNames.IndexOf(Declaration.Name) < 0) then
+          if AStrict or (not FunctionNames.HasString(Declaration.Name)) then
             RaiseAlreadyDeclared(Declaration.Name, ANodes[I]);
         end
         else
@@ -1837,7 +1790,7 @@ begin
       CollectTopLevelEvalLexicalNames(Statement, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if Names.IndexOf(StatementNames[J]) >= 0 then
+        if Names.HasString(StatementNames[J]) then
           RaiseAlreadyDeclared(StatementNames[J], ANodes[I]);
         Names.Add(StatementNames[J]);
       end;
@@ -1959,11 +1912,11 @@ begin
   begin
     Declaration := EvalFunctionDeclarationFromNode(AProgram.Body[I]);
     if Assigned(Declaration) and
-       (AFunctionNames.IndexOf(Declaration.Name) < 0) then
+       (not AFunctionNames.HasString(Declaration.Name)) then
       AFunctionNames.Insert(0, Declaration.Name);
   end;
   for I := 0 to AVarNames.Count - 1 do
-    if AFunctionNames.IndexOf(AVarNames[I]) < 0 then
+    if not AFunctionNames.HasString(AVarNames[I]) then
       AddUniqueEvalName(ADeclaredVarNames, AVarNames[I]);
 end;
 
@@ -1994,13 +1947,13 @@ begin
       CollectTopLevelEvalLexicalNames(Statement, StatementNames);
       for J := 0 to StatementNames.Count - 1 do
       begin
-        if LexicalNames.IndexOf(StatementNames[J]) >= 0 then
+        if LexicalNames.HasString(StatementNames[J]) then
           RaiseAlreadyDeclared(StatementNames[J]);
         LexicalNames.Add(StatementNames[J]);
       end;
     end;
     for I := 0 to LexicalNames.Count - 1 do
-      if AVarNames.IndexOf(LexicalNames[I]) >= 0 then
+      if AVarNames.HasString(LexicalNames[I]) then
         RaiseAlreadyDeclared(LexicalNames[I]);
   finally
     Statement.Free;
