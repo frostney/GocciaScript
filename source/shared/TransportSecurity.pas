@@ -88,6 +88,13 @@ function SocketSendAllBefore(const ASock: TSocket; const ABuffer: Pointer;
   negative or longer than AInput. }
 procedure ConsumeEncryptedInput(var AInput: TBytes; const AIncomplete: Boolean;
   const AExtraLength: Integer);
+
+{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
+{ How many client contexts the OpenSSL backend has built in this process:
+  one, shared by every connection, plus one for each change of SSL_CERT_FILE
+  or SSL_CERT_DIR it has seen. }
+function OpenSSLClientContextsBuilt: Integer;
+{$IFEND}
 {$ENDIF}
 
 implementation
@@ -664,6 +671,7 @@ var
   { The SSL_CERT_FILE and SSL_CERT_DIR values the shared context loaded its
     trust store under: a change makes the next connection build a new one. }
   GSharedOpenSSLTrust: string = '';
+  GOpenSSLClientContextsBuilt: Integer = 0;
 
 procedure PreferOpenSSLVersionThree;
 var
@@ -1048,8 +1056,19 @@ begin
         SslCtxFree(GSharedOpenSSLContext);
       GSharedOpenSSLContext := Context;
       GSharedOpenSSLTrust := Trust;
+      Inc(GOpenSSLClientContextsBuilt);
     end;
     Result := SslNew(GSharedOpenSSLContext);
+  finally
+    CriticalSectionLeave(GOpenSSLLoadLock);
+  end;
+end;
+
+function OpenSSLClientContextsBuilt: Integer;
+begin
+  CriticalSectionEnter(GOpenSSLLoadLock);
+  try
+    Result := GOpenSSLClientContextsBuilt;
   finally
     CriticalSectionLeave(GOpenSSLLoadLock);
   end;

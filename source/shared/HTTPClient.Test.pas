@@ -13,7 +13,8 @@ uses
   HTTPTypes,
   NetworkAddress,
   TestingPascalLibrary,
-  TimingUtils;
+  TimingUtils,
+  TransportSecurity;
 
 type
   THTTPClientTests = class(TTestSuite)
@@ -70,6 +71,8 @@ type
     procedure TestLateLeftoverBytesAreNotAResponse;
     procedure TestArrivedResponseIsNotRequestedTwice;
     procedure TestConnectionCloseWhenNoReuseCanFollow;
+    procedure TestSendOnResetConnectionIsRetried;
+    procedure TestReusedHopChecksThePinnedAddress;
     {$ENDIF}
     procedure TestComparesOrigins;
     procedure TestClassifiesPrivateAddressRanges;
@@ -230,6 +233,144 @@ begin
     SetLength(Result, Length(Result) + Count);
     Move(Buffer[0], Result[Length(Result) - Count + 1], Count);
   until Pos(#13#10#13#10, Result) > 0;
+end;
+
+{ Closes AConnection with a reset (RST) rather than a FIN. }
+procedure ResetOnClose(const AConnection: cint);
+var
+  Linger: TLinger;
+begin
+  Linger.l_onoff := 1;
+  Linger.l_linger := 0;
+  fpSetSockOpt(AConnection, SOL_SOCKET, SO_LINGER, @Linger, SizeOf(Linger));
+end;
+
+{ AConnection has bytes, or the peer's close, waiting to be read. }
+function HasPendingInput(const AConnection: cint): Boolean;
+var
+  Readable: TPollFd;
+begin
+  Readable.fd := AConnection;
+  Readable.events := POLLIN;
+  Readable.revents := 0;
+  Result := fpPoll(@Readable, 1, 0) <> 0;
+end;
+
+const
+  { A redirect within the origin, and the answer that ends a chain. Typed, so
+    a TLS server writes their bytes. }
+  KEEP_ALIVE_HOP: RawByteString = 'HTTP/1.1 302 Found'#13#10 +
+    'Location: /next'#13#10'Content-Length: 0'#13#10#13#10;
+  KEEP_ALIVE_DONE: RawByteString = 'HTTP/1.1 200 OK'#13#10 +
+    'Content-Length: 2'#13#10#13#10'ok';
+
+type
+  { A test server thread that can reset a kept connection when the client
+    asks it to, between the client reading a redirect and writing its next
+    request: the client's write is then the one that fails. }
+  TResettableServer = class(TThread)
+  private
+    FResetRequested: Boolean;
+    FResetNow: PRTLEvent;
+    FResetDone: PRTLEvent;
+  protected
+    { In the server thread: waits for RequestReset and checks that the client
+      kept AConnection (it has sent nothing since and not closed it), then
+      resets it. False, with Failure set, when either did not happen. The
+      caller frees any TLS session on AConnection first, which sends
+      nothing, and must not use AConnection again. }
+    function ResetWhenAsked(const AConnection: cint): Boolean;
+    { Lets a client waiting in RequestReset go; called on every exit. }
+    procedure ReleaseResetWaiter;
+  public
+    Failure: string;
+    constructor Create;
+    destructor Destroy; override;
+    { In the client thread: asks for the reset and returns once it is done. }
+    procedure RequestReset;
+  end;
+
+  { A host check that counts the checks a request makes (the name, then the
+    address, of every hop it connects or reuses a connection for). On the
+    third, the redirect hop's first, it calls OnRedirectHop; it refuses the
+    address check numbered DenyAddressCheck. }
+  THopGate = class
+  public
+    Checks: Integer;
+    AddressChecks: Integer;
+    DenyAddressCheck: Integer;
+    CheckedAddresses: string;
+    OnRedirectHop: TThreadMethod;
+    function Check(const AHost: string; const APort: Integer;
+      const AResolvedAddress: string; out AReason: string): Boolean;
+  end;
+
+constructor TResettableServer.Create;
+begin
+  FResetNow := RTLEventCreate;
+  FResetDone := RTLEventCreate;
+  inherited Create(False);
+end;
+
+destructor TResettableServer.Destroy;
+begin
+  inherited Destroy;
+  RTLEventDestroy(FResetNow);
+  RTLEventDestroy(FResetDone);
+end;
+
+procedure TResettableServer.RequestReset;
+begin
+  FResetRequested := True;
+  RTLEventSetEvent(FResetNow);
+  RTLEventWaitFor(FResetDone, 10000);
+  { Loopback delivers the reset as the server closes; the pause only keeps a
+    slow machine from writing first. }
+  Sleep(50);
+end;
+
+function TResettableServer.ResetWhenAsked(const AConnection: cint): Boolean;
+begin
+  Result := False;
+  RTLEventWaitFor(FResetNow, 10000);
+  if not FResetRequested then
+    Failure := 'the client did not check the redirect hop'
+  { A client that did not keep the connection has closed it, and one that
+    sent its next request has written to it. }
+  else if HasPendingInput(AConnection) then
+    Failure := 'the client did not keep the connection'
+  else
+  begin
+    ResetOnClose(AConnection);
+    CloseSocket(AConnection);
+    Result := True;
+  end;
+  ReleaseResetWaiter;
+end;
+
+procedure TResettableServer.ReleaseResetWaiter;
+begin
+  RTLEventSetEvent(FResetDone);
+end;
+
+function THopGate.Check(const AHost: string; const APort: Integer;
+  const AResolvedAddress: string; out AReason: string): Boolean;
+begin
+  AReason := '';
+  Result := True;
+  Inc(Checks);
+  if (Checks = 3) and Assigned(OnRedirectHop) then
+    OnRedirectHop;
+  if AResolvedAddress <> '' then
+  begin
+    Inc(AddressChecks);
+    CheckedAddresses := CheckedAddresses + AResolvedAddress + ';';
+    if AddressChecks = DenyAddressCheck then
+    begin
+      AReason := 'denied by the test';
+      Result := False;
+    end;
+  end;
 end;
 
 type
@@ -539,6 +680,65 @@ const
 function Setenv(AName, AValue: PAnsiChar; AOverwrite: cint): cint; cdecl;
   external 'c' name 'setenv';
 
+procedure WriteTestFile(const AFileName: string; const AText: RawByteString);
+var
+  Stream: TFileStream;
+begin
+  Stream := TFileStream.Create(AFileName, fmCreate);
+  try
+    if AText <> '' then
+      Stream.WriteBuffer(AText[1], Length(AText));
+  finally
+    Stream.Free;
+  end;
+end;
+
+{ Writes the test certificate and key to temporary files and has the client
+  trust the certificate through SSL_CERT_FILE. The caller deletes both. }
+procedure TrustTestCertificate(out ACertificateFile, AKeyFile: string);
+begin
+  ACertificateFile := GetTempFileName('', 'goccia-tls-cert');
+  AKeyFile := GetTempFileName('', 'goccia-tls-key');
+  WriteTestFile(ACertificateFile, TEST_CERTIFICATE);
+  WriteTestFile(AKeyFile, TEST_PRIVATE_KEY);
+  Setenv('SSL_CERT_FILE', PAnsiChar(AnsiString(ACertificateFile)), 1);
+end;
+
+{ A TLS 1.2 server context with the test certificate and key, for a server
+  thread, or nil with AFailure set. The client loads OpenSSL before it sends
+  its hello, so the hello waits in the socket until the library this server
+  shares is ready. }
+function CreateTestServerContext(const ACertificateFile, AKeyFile: string;
+  var AFailure: string): PSSL_CTX;
+const
+  LOAD_WAIT_NANOSECONDS = Int64(10) * 1000 * 1000 * 1000;
+var
+  Deadline: Int64;
+begin
+  Result := nil;
+  Deadline := GetNanoseconds + LOAD_WAIT_NANOSECONDS;
+  while not IsSSLloaded and (GetNanoseconds < Deadline) do
+    Sleep(5);
+  if not IsSSLloaded then
+  begin
+    AFailure := 'the client never loaded OpenSSL';
+    Exit;
+  end;
+  { SslCtxUsePrivateKeyFile binds SSL_CTX_use_RSAPrivateKey_file, hence the
+    RSA key. }
+  Result := SslCtxNew(SslMethodTLSV1_2);
+  if not Assigned(Result) or
+     (SslCtxUseCertificateFile(Result, ACertificateFile,
+       SSL_FILETYPE_PEM) <> 1) or
+     (SslCtxUsePrivateKeyFile(Result, AKeyFile, SSL_FILETYPE_PEM) <> 1) then
+  begin
+    if Assigned(Result) then
+      SslCtxFree(Result);
+    Result := nil;
+    AFailure := 'the server could not load its certificate and key';
+  end;
+end;
+
 type
   { Accepts one connection, completes a TLS handshake on it and then sends
     nothing until Release: a peer that goes silent after the handshake. }
@@ -585,13 +785,9 @@ begin
 end;
 
 procedure TSilentTLSServer.Execute;
-const
-  LOAD_WAIT_NANOSECONDS = Int64(10) * 1000 * 1000 * 1000;
 var
   Connection: cint;
   Context: PSSL_CTX;
-  Deadline: Int64;
-  Linger: TLinger;
   Request: array[0..4095] of Byte;
   Session: PSSL;
 begin
@@ -601,27 +797,9 @@ begin
   Context := nil;
   Session := nil;
   try
-    { The client loads OpenSSL before it sends its hello, so the hello waits
-      in the socket until the library this server shares is ready. }
-    Deadline := GetNanoseconds + LOAD_WAIT_NANOSECONDS;
-    while not IsSSLloaded and (GetNanoseconds < Deadline) do
-      Sleep(5);
-    if not IsSSLloaded then
-    begin
-      Failure := 'the client never loaded OpenSSL';
+    Context := CreateTestServerContext(FCertificateFile, FKeyFile, Failure);
+    if not Assigned(Context) then
       Exit;
-    end;
-    { SslCtxUsePrivateKeyFile binds SSL_CTX_use_RSAPrivateKey_file, hence
-      the RSA key. }
-    Context := SslCtxNew(SslMethodTLSV1_2);
-    if not Assigned(Context) or
-       (SslCtxUseCertificateFile(Context, FCertificateFile,
-         SSL_FILETYPE_PEM) <> 1) or
-       (SslCtxUsePrivateKeyFile(Context, FKeyFile, SSL_FILETYPE_PEM) <> 1) then
-    begin
-      Failure := 'the server could not load its certificate and key';
-      Exit;
-    end;
     Session := SslNew(Context);
     SslSetFd(Session, Connection);
     HandshakeCompleted := SslAccept(Session) = 1;
@@ -631,10 +809,7 @@ begin
     begin
       if SslRead(Session, @Request[0], SizeOf(Request)) <= 0 then
         Failure := 'the client sent no request';
-      Linger.l_onoff := 1;
-      Linger.l_linger := 0;
-      fpSetSockOpt(Connection, SOL_SOCKET, SO_LINGER, @Linger,
-        SizeOf(Linger));
+      ResetOnClose(Connection);
       Exit;
     end;
     RTLEventWaitFor(FRelease, 60000);
@@ -732,6 +907,10 @@ begin
     TestArrivedResponseIsNotRequestedTwice);
   Test('Connection: close is sent when no redirect can reuse the connection',
     TestConnectionCloseWhenNoReuseCanFollow);
+  Test('A send that fails on a reset reused connection is retried once',
+    TestSendOnResetConnectionIsRetried);
+  Test('A reused connection''s hop checks the address it was opened to',
+    TestReusedHopChecksThePinnedAddress);
   {$ENDIF}
   Test('Compares origins by scheme, host and port', TestComparesOrigins);
   Test('Classifies private address ranges',
@@ -973,24 +1152,8 @@ var
   Client: TClientRequest;
   Finished: Boolean;
   Server: TSilentTLSServer;
-
-  procedure WriteText(const AFileName: string; const AText: RawByteString);
-  var
-    Stream: TFileStream;
-  begin
-    Stream := TFileStream.Create(AFileName, fmCreate);
-    try
-      Stream.WriteBuffer(AText[1], Length(AText));
-    finally
-      Stream.Free;
-    end;
-  end;
 begin
-  CertificateFile := GetTempFileName('', 'goccia-tls-cert');
-  KeyFile := GetTempFileName('', 'goccia-tls-key');
-  WriteText(CertificateFile, TEST_CERTIFICATE);
-  WriteText(KeyFile, TEST_PRIVATE_KEY);
-  Setenv('SSL_CERT_FILE', PAnsiChar(AnsiString(CertificateFile)), 1);
+  TrustTestCertificate(CertificateFile, KeyFile);
   try
     Server := TSilentTLSServer.Create(CertificateFile, KeyFile);
     try
@@ -1035,24 +1198,8 @@ var
   Finished: Boolean;
   Server: TSilentTLSServer;
   SigPipesBefore: LongInt;
-
-  procedure WriteText(const AFileName: string; const AText: RawByteString);
-  var
-    Stream: TFileStream;
-  begin
-    Stream := TFileStream.Create(AFileName, fmCreate);
-    try
-      Stream.WriteBuffer(AText[1], Length(AText));
-    finally
-      Stream.Free;
-    end;
-  end;
 begin
-  CertificateFile := GetTempFileName('', 'goccia-tls-cert');
-  KeyFile := GetTempFileName('', 'goccia-tls-key');
-  WriteText(CertificateFile, TEST_CERTIFICATE);
-  WriteText(KeyFile, TEST_PRIVATE_KEY);
-  Setenv('SSL_CERT_FILE', PAnsiChar(AnsiString(CertificateFile)), 1);
+  TrustTestCertificate(CertificateFile, KeyFile);
   try
     Server := TSilentTLSServer.Create(CertificateFile, KeyFile);
     Server.ResetAfterRequest := True;
@@ -1098,42 +1245,25 @@ end;
 
 type
   { A TLS server that answers the first request on a connection with a
-    redirect, reads the next request on it and resets the connection (RST, no
-    close_notify) instead of answering; on its next connection it answers
-    200. Counts its connections. With ResetBeforeNextRequest it resets the
-    first connection once the client asks it to (RequestReset), before the
-    client writes its next request, so that write is the one that fails. }
-  TResettingTLSServer = class(TThread)
+    redirect. Then, by default, it reads the next request on that connection
+    and resets the connection (RST, no close_notify) instead of answering;
+    with AResetBeforeNextRequest it resets the connection when the client
+    asks (RequestReset), before the client writes its next request. On its
+    next connection it answers 200. Counts its connections. }
+  TResettingTLSServer = class(TResettableServer)
   private
     FListener: cint;
     FCertificateFile: string;
     FKeyFile: string;
-    FResetRequested: Boolean;
-    FResetNow: PRTLEvent;
-    FResetDone: PRTLEvent;
+    FResetBeforeNextRequest: Boolean;
   protected
     procedure Execute; override;
   public
     Port: Word;
     Connections: Integer;
-    Failure: string;
-    ResetBeforeNextRequest: Boolean;
     constructor Create(const ACertificateFile, AKeyFile: string;
-      const AResetBeforeNextRequest: Boolean = False);
+      const AResetBeforeNextRequest: Boolean);
     destructor Destroy; override;
-    { Asks for the reset and returns once the connection is reset. }
-    procedure RequestReset;
-  end;
-
-  { A host check that, on the redirect hop's first check, has the server
-    reset the connection the hop is about to reuse. The check runs between
-    reading the redirect and writing the next request. }
-  TResetBeforeSendGate = class
-  public
-    Server: TResettingTLSServer;
-    Checks: Integer;
-    function Check(const AHost: string; const APort: Integer;
-      const AResolvedAddress: string; out AReason: string): Boolean;
   end;
 
 constructor TResettingTLSServer.Create(const ACertificateFile,
@@ -1141,59 +1271,21 @@ constructor TResettingTLSServer.Create(const ACertificateFile,
 begin
   FCertificateFile := ACertificateFile;
   FKeyFile := AKeyFile;
-  ResetBeforeNextRequest := AResetBeforeNextRequest;
-  FResetNow := RTLEventCreate;
-  FResetDone := RTLEventCreate;
+  FResetBeforeNextRequest := AResetBeforeNextRequest;
   FListener := CreateLoopbackListener(Port);
-  inherited Create(False);
+  inherited Create;
 end;
 
 destructor TResettingTLSServer.Destroy;
 begin
   CloseSocket(FListener);
-  RTLEventDestroy(FResetNow);
-  RTLEventDestroy(FResetDone);
   inherited Destroy;
 end;
 
-procedure TResettingTLSServer.RequestReset;
-begin
-  FResetRequested := True;
-  RTLEventSetEvent(FResetNow);
-  RTLEventWaitFor(FResetDone, 10000);
-end;
-
-function TResetBeforeSendGate.Check(const AHost: string;
-  const APort: Integer; const AResolvedAddress: string;
-  out AReason: string): Boolean;
-begin
-  AReason := '';
-  Inc(Checks);
-  { The first request checks the name and then the address; the third
-    check is the redirect hop's, on the connection it reuses. }
-  if Checks = 3 then
-  begin
-    Server.RequestReset;
-    { Loopback delivers the reset as the server closes; the pause only
-      keeps a slow machine from writing first. }
-    Sleep(50);
-  end;
-  Result := True;
-end;
-
 procedure TResettingTLSServer.Execute;
-const
-  LOAD_WAIT_NANOSECONDS = Int64(10) * 1000 * 1000 * 1000;
-  REDIRECT: RawByteString = 'HTTP/1.1 302 Found'#13#10 +
-    'Location: /next'#13#10'Content-Length: 0'#13#10#13#10;
-  DONE: RawByteString = 'HTTP/1.1 200 OK'#13#10 +
-    'Content-Length: 2'#13#10#13#10'ok';
 var
   Connection: cint;
   Context: PSSL_CTX;
-  Deadline: Int64;
-  Linger: TLinger;
-  Readable: TPollFd;
   Request: array[0..4095] of Byte;
   Session: PSSL;
   I: Integer;
@@ -1208,21 +1300,12 @@ begin
       Inc(Connections);
       Session := nil;
       try
-        Deadline := GetNanoseconds + LOAD_WAIT_NANOSECONDS;
-        while not IsSSLloaded and (GetNanoseconds < Deadline) do
-          Sleep(5);
         if not Assigned(Context) then
         begin
-          Context := SslCtxNew(SslMethodTLSV1_2);
-          if not Assigned(Context) or
-             (SslCtxUseCertificateFile(Context, FCertificateFile,
-               SSL_FILETYPE_PEM) <> 1) or
-             (SslCtxUsePrivateKeyFile(Context, FKeyFile,
-               SSL_FILETYPE_PEM) <> 1) then
-          begin
-            Failure := 'the server could not load its certificate and key';
+          Context := CreateTestServerContext(FCertificateFile, FKeyFile,
+            Failure);
+          if not Assigned(Context) then
             Exit;
-          end;
         end;
         Session := SslNew(Context);
         SslSetFd(Session, Connection);
@@ -1236,53 +1319,27 @@ begin
           Failure := 'the client sent no request';
           Exit;
         end;
-        if (I = 1) and ResetBeforeNextRequest then
+        if I = 2 then
+          SslWrite(Session, @KEEP_ALIVE_DONE[1], Length(KEEP_ALIVE_DONE))
+        else
         begin
-          SslWrite(Session, @REDIRECT[1], Length(REDIRECT));
-          RTLEventWaitFor(FResetNow, 10000);
-          if not FResetRequested then
+          SslWrite(Session, @KEEP_ALIVE_HOP[1], Length(KEEP_ALIVE_HOP));
+          if FResetBeforeNextRequest then
           begin
-            Failure := 'the client did not check the redirect hop';
-            Exit;
-          end;
-          { A client that did not keep the connection has closed it (its
-            close_notify and FIN are waiting); one that keeps it has sent
-            nothing since its first request. }
-          Readable.fd := Connection;
-          Readable.events := POLLIN;
-          Readable.revents := 0;
-          if fpPoll(@Readable, 1, 0) <> 0 then
-          begin
-            Failure := 'the client did not keep the connection';
-            Exit;
-          end;
-          { Freeing the session sends nothing, and a zero linger turns the
-            close into a reset. }
-          SslFree(Session);
-          Session := nil;
-          Linger.l_onoff := 1;
-          Linger.l_linger := 0;
-          fpSetSockOpt(Connection, SOL_SOCKET, SO_LINGER, @Linger,
-            SizeOf(Linger));
-          CloseSocket(Connection);
-          Connection := -1;
-          RTLEventSetEvent(FResetDone);
-        end
-        else if I = 1 then
-        begin
-          SslWrite(Session, @REDIRECT[1], Length(REDIRECT));
-          if SslRead(Session, @Request[0], SizeOf(Request)) <= 0 then
+            SslFree(Session);
+            Session := nil;
+            if not ResetWhenAsked(Connection) then
+              Exit;
+            Connection := -1;
+          end
+          else if SslRead(Session, @Request[0], SizeOf(Request)) <= 0 then
           begin
             Failure := 'the client did not reuse the connection';
             Exit;
-          end;
-          Linger.l_onoff := 1;
-          Linger.l_linger := 0;
-          fpSetSockOpt(Connection, SOL_SOCKET, SO_LINGER, @Linger,
-            SizeOf(Linger));
-        end
-        else
-          SslWrite(Session, @DONE[1], Length(DONE));
+          end
+          else
+            ResetOnClose(Connection);
+        end;
       finally
         if Assigned(Session) then
           SslFree(Session);
@@ -1293,8 +1350,7 @@ begin
   finally
     if Assigned(Context) then
       SslCtxFree(Context);
-    { A client waiting in RequestReset is let go on any exit. }
-    RTLEventSetEvent(FResetDone);
+    ReleaseResetWaiter;
   end;
 end;
 
@@ -1306,42 +1362,24 @@ procedure THTTPClientTests.ExpectResetReusedTLSConnectionIsReplaced(
   const AResetBeforeNextRequest: Boolean);
 var
   CertificateFile, KeyFile: string;
-  Gate: TResetBeforeSendGate;
+  Gate: THopGate;
   Headers: THTTPHeaders;
   Policy: THTTPRequestPolicy;
   Response: THTTPResponse;
   Server: TResettingTLSServer;
   Outcome: string;
-
-  procedure WriteText(const AFileName: string; const AText: RawByteString);
-  var
-    Stream: TFileStream;
-  begin
-    Stream := TFileStream.Create(AFileName, fmCreate);
-    try
-      Stream.WriteBuffer(AText[1], Length(AText));
-    finally
-      Stream.Free;
-    end;
-  end;
 begin
-  CertificateFile := GetTempFileName('', 'goccia-tls-cert');
-  KeyFile := GetTempFileName('', 'goccia-tls-key');
-  WriteText(CertificateFile, TEST_CERTIFICATE);
-  WriteText(KeyFile, TEST_PRIVATE_KEY);
-  Setenv('SSL_CERT_FILE', PAnsiChar(AnsiString(CertificateFile)), 1);
+  TrustTestCertificate(CertificateFile, KeyFile);
   SetLength(Headers, 0);
-  Gate := TResetBeforeSendGate.Create;
+  Gate := THopGate.Create;
   try
     Server := TResettingTLSServer.Create(CertificateFile, KeyFile,
       AResetBeforeNextRequest);
     try
       Policy := DefaultHTTPPolicy;
       if AResetBeforeNextRequest then
-      begin
-        Gate.Server := Server;
-        Policy.HostCheck := Gate.Check;
-      end;
+        Gate.OnRedirectHop := Server.RequestReset;
+      Policy.HostCheck := Gate.Check;
       try
         Response := HTTPGet(Format('https://localhost:%d/', [Server.Port]),
           Headers, nil, 10000, Policy);
@@ -1411,14 +1449,9 @@ begin
 end;
 
 procedure TAnsweringTLSServer.Execute;
-const
-  LOAD_WAIT_NANOSECONDS = Int64(10) * 1000 * 1000 * 1000;
-  DONE: RawByteString = 'HTTP/1.1 200 OK'#13#10 +
-    'Content-Length: 2'#13#10'Connection: close'#13#10#13#10'ok';
 var
   Connection: cint;
   Context: PSSL_CTX;
-  Deadline: Int64;
   Request: array[0..4095] of Byte;
   Session: PSSL;
   I: Integer;
@@ -1432,28 +1465,19 @@ begin
         Exit;
       Session := nil;
       try
-        Deadline := GetNanoseconds + LOAD_WAIT_NANOSECONDS;
-        while not IsSSLloaded and (GetNanoseconds < Deadline) do
-          Sleep(5);
         if not Assigned(Context) then
         begin
-          Context := SslCtxNew(SslMethodTLSV1_2);
-          if not Assigned(Context) or
-             (SslCtxUseCertificateFile(Context, FCertificateFile,
-               SSL_FILETYPE_PEM) <> 1) or
-             (SslCtxUsePrivateKeyFile(Context, FKeyFile,
-               SSL_FILETYPE_PEM) <> 1) then
-          begin
-            Failure := 'the server could not load its certificate and key';
+          Context := CreateTestServerContext(FCertificateFile, FKeyFile,
+            Failure);
+          if not Assigned(Context) then
             Exit;
-          end;
         end;
         Session := SslNew(Context);
         SslSetFd(Session, Connection);
         if SslAccept(Session) <> 1 then
           Inc(FailedHandshakes)
         else if SslRead(Session, @Request[0], SizeOf(Request)) > 0 then
-          SslWrite(Session, @DONE[1], Length(DONE));
+          SslWrite(Session, @KEEP_ALIVE_DONE[1], Length(KEEP_ALIVE_DONE));
       finally
         if Assigned(Session) then
           SslFree(Session);
@@ -1466,28 +1490,16 @@ begin
   end;
 end;
 
-{ The client's OpenSSL context is shared by every connection of the process,
-  and is built again when SSL_CERT_FILE changes: a certificate trusted by the
-  first file is refused once the variable names a file without it. }
+{ The client's OpenSSL context is built once and shared by the connections
+  that follow, and built again when SSL_CERT_FILE changes: a certificate the
+  first file trusts is refused once the variable names a file without it. }
 procedure THTTPClientTests.TestChangedTrustStoreIsUsed;
 var
   CertificateFile, KeyFile, EmptyFile: string;
   Headers: THTTPHeaders;
   Server: TAnsweringTLSServer;
-  Trusted, Untrusted: string;
-
-  procedure WriteText(const AFileName: string; const AText: RawByteString);
-  var
-    Stream: TFileStream;
-  begin
-    Stream := TFileStream.Create(AFileName, fmCreate);
-    try
-      if AText <> '' then
-        Stream.WriteBuffer(AText[1], Length(AText));
-    finally
-      Stream.Free;
-    end;
-  end;
+  First, Second, Untrusted: string;
+  ContextsAfterFirst, ContextsAfterSecond, ContextsAfterChange: Integer;
 
   function Fetch: string;
   begin
@@ -1501,24 +1513,27 @@ var
   end;
 
 begin
-  CertificateFile := GetTempFileName('', 'goccia-tls-cert');
-  KeyFile := GetTempFileName('', 'goccia-tls-key');
+  TrustTestCertificate(CertificateFile, KeyFile);
   EmptyFile := GetTempFileName('', 'goccia-tls-none');
-  WriteText(CertificateFile, TEST_CERTIFICATE);
-  WriteText(KeyFile, TEST_PRIVATE_KEY);
-  WriteText(EmptyFile, '');
+  WriteTestFile(EmptyFile, '');
   SetLength(Headers, 0);
   try
-    Server := TAnsweringTLSServer.Create(CertificateFile, KeyFile, 2);
+    Server := TAnsweringTLSServer.Create(CertificateFile, KeyFile, 3);
     try
-      Setenv('SSL_CERT_FILE', PAnsiChar(AnsiString(CertificateFile)), 1);
-      Trusted := Fetch;
+      First := Fetch;
+      ContextsAfterFirst := OpenSSLClientContextsBuilt;
+      Second := Fetch;
+      ContextsAfterSecond := OpenSSLClientContextsBuilt;
       Setenv('SSL_CERT_FILE', PAnsiChar(AnsiString(EmptyFile)), 1);
       Untrusted := Fetch;
+      ContextsAfterChange := OpenSSLClientContextsBuilt;
       Server.WaitFor;
       Expect<string>(Server.Failure).ToBe('');
-      Expect<string>(Trusted).ToBe('200');
+      Expect<string>(First).ToBe('200');
+      Expect<string>(Second).ToBe('200');
+      Expect<Integer>(ContextsAfterSecond).ToBe(ContextsAfterFirst);
       Expect<Boolean>(Pos('error: ', Untrusted) = 1).ToBe(True);
+      Expect<Integer>(ContextsAfterChange).ToBe(ContextsAfterFirst + 1);
       Expect<Integer>(Server.FailedHandshakes).ToBe(1);
     finally
       Server.Free;
@@ -1529,6 +1544,7 @@ begin
     DeleteFile(EmptyFile);
   end;
 end;
+
 {$IFEND}
 
 procedure THTTPClientTests.TestRejectsAmbiguousAuthority;
@@ -2098,10 +2114,14 @@ end;
 type
   { Serves its canned answers in order, several on one connection: it reads
     the next request on the same connection until the client closes it, then
-    accepts another. An answer that starts with the close marker is sent and its
-    connection closed without saying so; the part of an answer after the late
-    marker is sent 20 ms after the rest. Counts the connections it accepted. }
-  TKeepAliveServer = class(TThread)
+    accepts another. A marker at the start of an answer ends its connection
+    once the answer is sent: the close marker closes it without saying so,
+    and the reset marker resets it when the client asks (RequestReset). The
+    part of an answer after the late marker is sent 20 ms after the rest.
+    Counts the connections it accepted and the answers it sent.
+    TCannedResponseServer instead takes one request per connection and
+    records each request. }
+  TKeepAliveServer = class(TResettableServer)
   private
     FListener: cint;
     FResponses: array of RawByteString;
@@ -2123,7 +2143,7 @@ begin
   for I := 0 to High(AResponses) do
     FResponses[I] := AResponses[I];
   FListener := CreateLoopbackListener(Port);
-  inherited Create(False);
+  inherited Create;
 end;
 
 destructor TKeepAliveServer.Destroy;
@@ -2133,60 +2153,81 @@ begin
 end;
 
 procedure TKeepAliveServer.Execute;
+
+  function TakeMarker(var AReply: RawByteString;
+    const AMarker: RawByteString): Boolean;
+  begin
+    Result := Copy(AReply, 1, Length(AMarker)) = AMarker;
+    if Result then
+      Delete(AReply, 1, Length(AMarker));
+  end;
+
 var
   Connection: cint;
   Head, Reply, Late: RawByteString;
-  CloseAfter: Boolean;
+  CloseAfter, ResetAfter: Boolean;
 begin
-  while Served <= High(FResponses) do
-  begin
-    Connection := AcceptWithin(FListener);
-    if Connection < 0 then
-      Exit;
-    Inc(Connections);
-    try
-      while Served <= High(FResponses) do
-      begin
-        Head := ReceiveRequestHead(Connection);
-        if Head = '' then
-          Break;
-        Reply := FResponses[Served];
-        Inc(Served);
-        CloseAfter := Copy(Reply, 1, 7) = '{close}';
-        if CloseAfter then
-          Delete(Reply, 1, 7);
-        if Pos('{port}', Reply) > 0 then
-          Reply := RawByteString(StringReplace(string(Reply),
-            '{port}', IntToStr(Port), [rfReplaceAll]));
-        { The part after a late marker follows 20 ms later, in a segment
-          of its own. }
-        Late := '';
-        if Pos('{late}', Reply) > 0 then
+  try
+    while Served <= High(FResponses) do
+    begin
+      Connection := AcceptWithin(FListener);
+      if Connection < 0 then
+        Exit;
+      Inc(Connections);
+      try
+        while Served <= High(FResponses) do
         begin
-          Late := Copy(Reply, Pos('{late}', Reply) + 6, MaxInt);
-          Reply := Copy(Reply, 1, Pos('{late}', Reply) - 1);
-        end;
-        fpSend(Connection, @Reply[1], Length(Reply),
-          {$IFDEF LINUX}MSG_NOSIGNAL{$ELSE}0{$ENDIF});
-        if Late <> '' then
-        begin
-          Sleep(20);
-          fpSend(Connection, @Late[1], Length(Late),
+          Head := ReceiveRequestHead(Connection);
+          if Head = '' then
+            Break;
+          Reply := FResponses[Served];
+          Inc(Served);
+          CloseAfter := TakeMarker(Reply, '{close}');
+          ResetAfter := TakeMarker(Reply, '{reset}');
+          if Pos('{port}', Reply) > 0 then
+            Reply := RawByteString(StringReplace(string(Reply),
+              '{port}', IntToStr(Port), [rfReplaceAll]));
+          { The part after a late marker follows 20 ms later, in a segment
+            of its own. }
+          Late := '';
+          if Pos('{late}', Reply) > 0 then
+          begin
+            Late := Copy(Reply, Pos('{late}', Reply) + 6, MaxInt);
+            Reply := Copy(Reply, 1, Pos('{late}', Reply) - 1);
+          end;
+          fpSend(Connection, @Reply[1], Length(Reply),
             {$IFDEF LINUX}MSG_NOSIGNAL{$ELSE}0{$ENDIF});
+          if Late <> '' then
+          begin
+            Sleep(20);
+            fpSend(Connection, @Late[1], Length(Late),
+              {$IFDEF LINUX}MSG_NOSIGNAL{$ELSE}0{$ENDIF});
+          end;
+          if ResetAfter then
+          begin
+            if not ResetWhenAsked(Connection) then
+              Exit;
+            Connection := -1;
+            Break;
+          end;
+          if CloseAfter then
+            Break;
         end;
-        if CloseAfter then
-          Break;
+      finally
+        if Connection >= 0 then
+          CloseSocket(Connection);
       end;
-    finally
-      CloseSocket(Connection);
     end;
+  finally
+    ReleaseResetWaiter;
   end;
 end;
 
-{ GETs http://127.0.0.1:<port>/ from AServer and answers 'status|body', or
-  'error: <message>'. }
+{ GETs (or with AHead, HEADs) http://127.0.0.1:<port>/ from AServer under
+  APolicy and answers 'status|body', or 'error: <message>'. }
 function FetchKeepAlive(const AServer: TKeepAliveServer;
-  const AHead: Boolean = False): string;
+  const APolicy: THTTPRequestPolicy; const AHead: Boolean = False): string;
+  overload;
 var
   Body: RawByteString;
   Headers: THTTPHeaders;
@@ -2197,9 +2238,9 @@ begin
   URL := Format('http://127.0.0.1:%d/', [AServer.Port]);
   try
     if AHead then
-      Response := HTTPHead(URL, Headers, nil, 5000)
+      Response := HTTPHead(URL, Headers, nil, 5000, APolicy)
     else
-      Response := HTTPGet(URL, Headers, nil, 5000);
+      Response := HTTPGet(URL, Headers, nil, 5000, APolicy);
     SetLength(Body, Length(Response.Body));
     if Length(Response.Body) > 0 then
       Move(Response.Body[0], Body[1], Length(Response.Body));
@@ -2210,11 +2251,28 @@ begin
   end;
 end;
 
-const
-  KEEP_ALIVE_HOP = 'HTTP/1.1 302 Found'#13#10 +
-    'Location: /next'#13#10'Content-Length: 0'#13#10#13#10;
-  KEEP_ALIVE_DONE = 'HTTP/1.1 200 OK'#13#10 +
-    'Content-Length: 2'#13#10#13#10'ok';
+function FetchKeepAlive(const AServer: TKeepAliveServer;
+  const AHead: Boolean = False): string; overload;
+begin
+  Result := FetchKeepAlive(AServer, DefaultHTTPPolicy, AHead);
+end;
+
+{ Fetches from a TKeepAliveServer serving AResponses, and expects AOutcome
+  over AConnections connections. }
+procedure ExpectAnswerOver(const AResponses: array of RawByteString;
+  const AHead: Boolean; const AOutcome: string; const AConnections: Integer);
+var
+  Server: TKeepAliveServer;
+begin
+  Server := TKeepAliveServer.Create(AResponses);
+  try
+    Expect<string>(FetchKeepAlive(Server, AHead)).ToBe(AOutcome);
+    Server.WaitFor;
+    Expect<Integer>(Server.Connections).ToBe(AConnections);
+  finally
+    Server.Free;
+  end;
+end;
 
 procedure THTTPClientTests.TestSameOriginRedirectsShareAConnection;
 var
@@ -2232,6 +2290,10 @@ begin
   finally
     Server.Free;
   end;
+  { A response to HEAD has no body, whatever its Content-Length says. }
+  ExpectAnswerOver(['HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Content-Length: 7'#13#10#13#10,
+    'HTTP/1.1 200 OK'#13#10'Content-Length: 2'#13#10#13#10], True, '200|', 1);
 end;
 
 procedure THTTPClientTests.TestSilentlyClosedConnectionIsReplaced;
@@ -2256,8 +2318,8 @@ var
 begin
   { Transfer-Encoding beside Content-Length (RFC 9112 section 6.3), whether
     it names chunked or another coding, Connection: close, a second
-    Transfer-Encoding field, and a final coding that only contains the word
-    chunked: each answer ends its connection. }
+    Transfer-Encoding field, a final coding that only contains the word
+    chunked, and HTTP/1.0: each answer ends its connection. }
   Server := TKeepAliveServer.Create([
     'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
     'Transfer-Encoding: chunked'#13#10'Content-Length: 5'#13#10#13#10 +
@@ -2271,45 +2333,40 @@ begin
     '0'#13#10#13#10,
     'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
     'Transfer-Encoding: xchunked'#13#10#13#10'0'#13#10#13#10,
+    'HTTP/1.0 302 Found'#13#10'Location: /next'#13#10 +
+    'Content-Length: 0'#13#10#13#10,
     KEEP_ALIVE_DONE]);
   try
     Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
     Server.WaitFor;
-    Expect<Integer>(Server.Connections).ToBe(6);
+    Expect<Integer>(Server.Connections).ToBe(7);
   finally
     Server.Free;
   end;
 end;
 
 procedure THTTPClientTests.TestLeftoverBytesAreNotAResponse;
-var
-  Server: TKeepAliveServer;
+const
+  STRAY = 'HTTP/1.1 200 OK'#13#10'Content-Length: 4'#13#10#13#10'EVIL';
 begin
-  { A body past Content-Length, and a body sent to a HEAD request: the bytes
-    would be taken for the next response on a reused connection. }
-  Server := TKeepAliveServer.Create([
-    'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
-    'Content-Length: 2'#13#10#13#10'okHTTP/1.1 200 OK'#13#10 +
-    'Content-Length: 4'#13#10#13#10'EVIL',
-    KEEP_ALIVE_DONE]);
-  try
-    Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
-    Server.WaitFor;
-    Expect<Integer>(Server.Connections).ToBe(2);
-  finally
-    Server.Free;
-  end;
-  Server := TKeepAliveServer.Create([
-    'HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+  { Bytes past the end of a message would be taken for the next response on
+    a reused connection: past Content-Length in the read with the head (an
+    empty body included), past it in a later read of the body, past the last
+    chunk, and a body sent to a HEAD request. Each ends its connection. }
+  ExpectAnswerOver(['HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Content-Length: 2'#13#10#13#10'ok' + STRAY, KEEP_ALIVE_DONE], False,
+    '200|ok', 2);
+  ExpectAnswerOver([KEEP_ALIVE_HOP + STRAY, KEEP_ALIVE_DONE], False,
+    '200|ok', 2);
+  ExpectAnswerOver(['HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Content-Length: 4'#13#10#13#10'ok{late}ok' + STRAY, KEEP_ALIVE_DONE],
+    False, '200|ok', 2);
+  ExpectAnswerOver(['HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
+    'Transfer-Encoding: chunked'#13#10#13#10'0'#13#10#13#10 + STRAY,
+    KEEP_ALIVE_DONE], False, '200|ok', 2);
+  ExpectAnswerOver(['HTTP/1.1 302 Found'#13#10'Location: /next'#13#10 +
     'Content-Length: 4'#13#10#13#10'junk',
-    'HTTP/1.1 200 OK'#13#10'Content-Length: 2'#13#10#13#10]);
-  try
-    Expect<string>(FetchKeepAlive(Server, True)).ToBe('200|');
-    Server.WaitFor;
-    Expect<Integer>(Server.Connections).ToBe(2);
-  finally
-    Server.Free;
-  end;
+    'HTTP/1.1 200 OK'#13#10'Content-Length: 2'#13#10#13#10], True, '200|', 2);
 end;
 
 procedure THTTPClientTests.TestCrossOriginRedirectOpensAConnection;
@@ -2412,6 +2469,66 @@ begin
     Expect<Boolean>(AsksToClose(21)).ToBe(True);
   finally
     Server.Free;
+  end;
+end;
+
+{ The server resets the kept connection after its redirect, before the client
+  writes the next request on it: the failed write sends the hop again, once,
+  on a connection of its own. }
+procedure THTTPClientTests.TestSendOnResetConnectionIsRetried;
+var
+  Gate: THopGate;
+  Policy: THTTPRequestPolicy;
+  Server: TKeepAliveServer;
+begin
+  Gate := THopGate.Create;
+  try
+    Server := TKeepAliveServer.Create(['{reset}' + KEEP_ALIVE_HOP,
+      KEEP_ALIVE_DONE]);
+    try
+      Gate.OnRedirectHop := Server.RequestReset;
+      Policy := DefaultHTTPPolicy;
+      Policy.HostCheck := Gate.Check;
+      Expect<string>(FetchKeepAlive(Server, Policy)).ToBe('200|ok');
+      Server.WaitFor;
+      Expect<string>(Server.Failure).ToBe('');
+      Expect<Integer>(Server.Connections).ToBe(2);
+    finally
+      Server.Free;
+    end;
+  finally
+    Gate.Free;
+  end;
+end;
+
+{ A hop that reuses the connection checks the address the connection was
+  opened to, before it sends anything: refusing that address refuses the hop,
+  and the server never hears it. }
+procedure THTTPClientTests.TestReusedHopChecksThePinnedAddress;
+var
+  Gate: THopGate;
+  Policy: THTTPRequestPolicy;
+  Server: TKeepAliveServer;
+begin
+  Gate := THopGate.Create;
+  try
+    Gate.DenyAddressCheck := 2;
+    Server := TKeepAliveServer.Create([KEEP_ALIVE_HOP, KEEP_ALIVE_DONE]);
+    try
+      Policy := DefaultHTTPPolicy;
+      Policy.HostCheck := Gate.Check;
+      Expect<Boolean>(Pos('error: ', FetchKeepAlive(Server, Policy)) = 1)
+        .ToBe(True);
+      Expect<string>(Gate.CheckedAddresses).ToBe('127.0.0.1;127.0.0.1;');
+      Expect<Integer>(Server.Served).ToBe(1);
+      { The refused hop's answer is still waiting: this fetch takes it. }
+      Expect<string>(FetchKeepAlive(Server)).ToBe('200|ok');
+      Server.WaitFor;
+    finally
+      Server.Free;
+    end;
+  finally
+    Gate.Free;
   end;
 end;
 {$ENDIF}

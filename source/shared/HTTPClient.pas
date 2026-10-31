@@ -922,9 +922,10 @@ type
     Reusable: Boolean;
   end;
 
-  { On a reused connection: no byte of a response arrived before it ended,
-    or what arrived is no status line. The server closed it, or the
-    previous response left bytes behind. }
+  { No response came back for the request: the send failed, the connection
+    ended or failed before the first byte, or (on a reused connection) what
+    arrived is no status line, bytes the previous response left behind.
+    DoRequest makes the hop again only when its connection was reused. }
   EHTTPNoResponse = class(EHTTPError);
 
 function FindHeaderValue(const AHeaders: THTTPHeaders;
@@ -946,6 +947,7 @@ end;
 const
   TRUNCATED_BODY_ERROR = 'HTTP response body ended before its declared length';
   MALFORMED_CHUNK_ERROR = 'Invalid HTTP response: malformed chunked body';
+  NO_HEADER_TERMINATOR_ERROR = 'Invalid HTTP response: no header terminator';
 
 const
   { What a size larger than any Integer body limit parses to. }
@@ -1072,7 +1074,8 @@ var
   ChunkBuf: TBytes;
   ChunkBufLimit: Integer;
   Remaining: Integer;
-  Persistent: Boolean;
+  Persistent, FramingInDoubt: Boolean;
+  TransferEncodingFields: Integer;
 
   function RemainingTimeoutMilliseconds: Integer;
   var
@@ -1084,6 +1087,23 @@ var
     if RemainingNs <= 0 then
       raise EHTTPError.Create('HTTP request timed out');
     Result := Integer((RemainingNs + 999999) div 1000000);
+  end;
+
+  function DeadlinePassed: Boolean;
+  begin
+    Result := (ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs);
+  end;
+
+  { An HTTP/1.x status line: version, a space, a three-digit code, and an
+    optional reason phrase after a space. }
+  function IsStatusLine(const ALine: string): Boolean;
+  begin
+    Result := (Length(ALine) >= 12) and (Copy(ALine, 1, 7) = 'HTTP/1.') and
+      CharInSet(ALine[8], ['0'..'9']) and (ALine[9] = ' ') and
+      CharInSet(ALine[10], ['0'..'9']) and
+      CharInSet(ALine[11], ['0'..'9']) and
+      CharInSet(ALine[12], ['0'..'9']) and
+      ((Length(ALine) = 12) or (ALine[13] = ' '));
   end;
 
   function Receive(var ABuffer: array of Byte;
@@ -1105,7 +1125,7 @@ var
         { A TLS backend that cannot tell a timeout from a broken
           connection raises its read error when the socket timeout ends
           the read. Past the deadline that is the request timing out. }
-        if (ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs) then
+        if DeadlinePassed then
           raise EHTTPError.Create('HTTP request timed out');
         raise;
       end;
@@ -1113,9 +1133,7 @@ var
       if Result < 0 then
         Failure := LastSocketReadFailure;
     until Failure <> srfInterrupted;
-    if (Result <= 0) and
-       ((Failure = srfTimedOut) or
-        ((ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs))) then
+    if (Result <= 0) and ((Failure = srfTimedOut) or DeadlinePassed) then
       raise EHTTPError.Create('HTTP request timed out');
     { A failed read (a reset connection) is not the peer closing it, which
       is what ends a body without a declared length. }
@@ -1141,22 +1159,20 @@ begin
         { On a reused connection, a failed read before the first byte (a
           reset, or the TLS backend's read error) is no response at all; a
           timeout stays a timeout. }
-        if AReused and (Length(RawHeader) = 0) and
-           not ((ADeadlineNs <> 0) and (GetNanoseconds >= ADeadlineNs)) then
+        if AReused and (Length(RawHeader) = 0) and not DeadlinePassed then
           raise EHTTPNoResponse.Create(E.Message);
         raise;
       end;
     end;
     if (N <= 0) and (Length(RawHeader) = 0) then
-      raise EHTTPNoResponse.Create(
-        'Invalid HTTP response: no header terminator');
+      raise EHTTPNoResponse.Create(NO_HEADER_TERMINATOR_ERROR);
     if N <= 0 then Break;
     AppendBytes(RawHeader, @Buf[0], N, MAX_RESPONSE_HEADER_BYTES);
     HeaderEnd := FindHeaderTerminator(RawHeader);
   until HeaderEnd >= 0;
 
   if HeaderEnd < 0 then
-    raise EHTTPError.Create('Invalid HTTP response: no header terminator');
+    raise EHTTPError.Create(NO_HEADER_TERMINATOR_ERROR);
 
   // Split headers from any body bytes already received
   HeaderBlock := IsomorphicDecode(RawHeader, 0, HeaderEnd);
@@ -1176,18 +1192,14 @@ begin
   else
     Line := HeaderBlock;
 
-  { HTTP/1.1 connections persist unless a Connection field says close
-    (RFC 9112 section 9.3); an HTTP/1.0 one is never reused here. }
-  Persistent := Copy(Line, 1, 9) = 'HTTP/1.1 ';
   { On a reused connection, bytes the previous response left behind are no
     status line: the connection is given up before any of them is read as
     a body. }
-  if AReused and not ((Length(Line) >= 12) and
-    (Copy(Line, 1, 7) = 'HTTP/1.') and CharInSet(Line[8], ['0'..'9']) and
-    (Line[9] = ' ') and CharInSet(Line[10], ['0'..'9']) and
-    CharInSet(Line[11], ['0'..'9']) and CharInSet(Line[12], ['0'..'9']) and
-    ((Length(Line) = 12) or (Line[13] = ' '))) then
+  if AReused and not IsStatusLine(Line) then
     raise EHTTPNoResponse.Create('Invalid HTTP response: malformed status line');
+  { HTTP/1.1 connections persist unless a Connection field says close
+    (RFC 9112 section 9.3); an HTTP/1.0 one is never reused here. }
+  Persistent := IsStatusLine(Line) and (Copy(Line, 1, 8) = 'HTTP/1.1');
   J := Pos(' ', Line);
   if J > 0 then
   begin
@@ -1246,6 +1258,18 @@ begin
       if (Result.Headers[I].Name = 'connection') and
          (Pos('close', LowerCase(Result.Headers[I].Value)) > 0) then
         Persistent := False;
+
+  { RFC 9112 section 6.3: a Transfer-Encoding beside Content-Length, or a
+    second Transfer-Encoding field that could name a coding after chunked,
+    leaves the message's length in doubt, and a later message could hide
+    behind it. Such a message never leaves its connection for another. }
+  TransferEncodingFields := 0;
+  for I := 0 to High(Result.Headers) do
+    if Result.Headers[I].Name = 'transfer-encoding' then
+      Inc(TransferEncodingFields);
+  FramingInDoubt := (TransferEncodingFields > 1) or
+    ((TransferEncodingFields > 0) and
+     HasHeader(Result.Headers, 'content-length'));
 
   // Don't read body for HEAD requests or 1xx/204/304 responses
   if AIsHead or (Result.StatusCode div 100 = 1) or
@@ -1344,19 +1368,12 @@ begin
       Move(ChunkBuf[0], Result.Body[BodyLen], ChunkSize);
       RemoveLeadingBytes(ChunkBuf, ChunkSize + 2);
     until False;
-    { RFC 9112 section 6.3: chunked must be the final coding, and a
-      Content-Length beside it is a framing error a later message could hide
-      behind: neither connection is reused. }
-    Result.Reusable := Persistent and (Length(ChunkBuf) = 0) and
-      (FinalTransferCoding(TransferEncoding) = 'chunked') and
-      not HasHeader(Result.Headers, 'content-length');
-    { A second Transfer-Encoding field could name a coding after chunked. }
-    J := 0;
-    for I := 0 to High(Result.Headers) do
-      if Result.Headers[I].Name = 'transfer-encoding' then
-        Inc(J);
-    if J > 1 then
-      Result.Reusable := False;
+    { Chunked frames the message only as the final coding (RFC 9112
+      section 6.3), and bytes past the last chunk would belong to no
+      request. }
+    Result.Reusable := Persistent and not FramingInDoubt and
+      (Length(ChunkBuf) = 0) and
+      (FinalTransferCoding(TransferEncoding) = 'chunked');
   end
   else
   begin
@@ -1390,14 +1407,13 @@ begin
       SetLength(Result.Body, ContentLen);
       BodyLen := 0;
 
-      { Bytes past the declared length would belong to no request, and a
-        Transfer-Encoding field beside Content-Length leaves the length in
-        doubt (RFC 9112 section 6.3). }
-      Result.Reusable := Persistent and (Length(BodyBytes) <= ContentLen) and
-        not HasHeader(Result.Headers, 'transfer-encoding');
+      { Bytes past the declared length would belong to no request. }
+      Result.Reusable := Persistent and not FramingInDoubt and
+        (Length(BodyBytes) <= ContentLen);
 
-      // Copy bytes already read with headers
-      if Length(BodyBytes) > 0 then
+      // Copy bytes already read with headers; with no body to fill, bytes
+      // past it are only counted (Result.Reusable above)
+      if (Length(BodyBytes) > 0) and (ContentLen > 0) then
       begin
         if Length(BodyBytes) >= ContentLen then
         begin
@@ -1595,7 +1611,7 @@ var
   DeadlineNs: Int64;
   { A connection is open (Sock, Transport); Reused: it carried the previous
     hop, a redirect within the same origin. }
-  Connected, Reused, Stale: Boolean;
+  Connected, Reused: Boolean;
 
   function RemainingTimeoutMilliseconds: Integer;
   var
@@ -1790,15 +1806,17 @@ begin
       RequestText := RequestText + CRLF;
       Request := EncodeUTF8WithReplacement(RequestText);
 
-      Stale := False;
       try
         try
           SendAll(Sock, Transport, Request);
         except
           { A send on a reused connection that fails (plain or TLS): the
-            server closed it. }
-          Stale := Reused;
-          raise;
+            server closed it, and no response can come. }
+          on E: Exception do
+            if Reused then
+              raise EHTTPNoResponse.Create(E.Message)
+            else
+              raise;
         end;
         Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs,
           MaxBodyBytes, APolicy.RedirectMode = hrmError, Reused);
@@ -1814,7 +1832,7 @@ begin
             any response arrived: the hop (a GET or HEAD) is made again, once,
             on a connection of its own. A response that did arrive is never
             requested twice. }
-          if Reused and (Stale or (E is EHTTPNoResponse)) then
+          if Reused and (E is EHTTPNoResponse) then
           begin
             Reused := False;
             Continue;
