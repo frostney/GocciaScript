@@ -114,9 +114,9 @@ once more. The retry happens at most once per compile, and an ordinary compile
 error (a real `Error:` in source without those symptoms) is never retried.
 
 If the retry also fails, `build.pas` reports the retry's output and exits
-non-zero. Only then diagnose the reported Pascal source line. A manual
-`--clean` is needed only for a failure the retry did not fix, or to clean
-every target at once:
+non-zero. The retry already rebuilt that target from an empty unit directory,
+so diagnose the reported Pascal source line. Use `--clean` to rebuild from
+empty unit directories on purpose:
 
 ```bash
 ./build.pas --clean loaderbare

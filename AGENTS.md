@@ -22,9 +22,9 @@ Assistants should treat CONTRIBUTING as authoritative for contribution requireme
 - **Stale FPC failures retry clean automatically**: `build.pas` retries a
   target once from a clean unit directory when FPC reports a stale-state error,
   so do not run `./build.pas --clean <target>` pre-emptively after a merge,
-  branch switch, PR sync, or generated resource change. Run `--clean` yourself,
-  and diagnose the reported source line, only when the build still fails after
-  that retry. See [Tooling — Stale FPC Build Artifacts](docs/contributing/tooling.md#stale-fpc-build-artifacts).
+  branch switch, PR sync, or generated resource change. A failure that survives
+  the retry was already rebuilt from an empty unit directory, so diagnose the
+  reported source line. See [Tooling — Stale FPC Build Artifacts](docs/contributing/tooling.md#stale-fpc-build-artifacts).
 
 ## TC39 spec lookup
 

@@ -94,7 +94,7 @@ the replacement: 0.14 renamed `GocciaScriptLoader` to `GocciaRunner` and merged
 
 Cleaning is explicit. `./build.pas` and `./build.pas --prod` build all components without cleaning; use `./build.pas --clean` for a clean full build or `./build.pas --clean <target...>` to clean before selected targets.
 
-FPC 3.2.2 can report stale compiled state as misleading messages such as `Internal error`, `Compilation raised exception internally` or `Error while compiling resources`. When a target's compile fails with one of those, `build.pas` prints `FPC reported a stale-state error for <target>; retrying once from a clean unit directory`, wipes only that target's unit directory and compiles it once more. An ordinary compile error is not retried. If the retry also fails, `build.pas` reports its output and exits non-zero; then run `--clean` explicitly and diagnose the reported source line only if the same target still fails.
+FPC 3.2.2 can report stale compiled state as misleading messages such as `Internal error`, `Compilation raised exception internally` or `Error while compiling resources`. When a target's compile fails with one of those, `build.pas` prints `FPC reported a stale-state error for <target>; retrying once from a clean unit directory`, wipes only that target's unit directory and compiles it once more. An ordinary compile error is not retried. If the retry also fails, `build.pas` reports its output and exits non-zero; the target was already rebuilt from an empty unit directory, so diagnose the reported source line.
 
 ### Compile and Run
 

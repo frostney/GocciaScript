@@ -15,7 +15,7 @@ Use this gate before handoff, review, or PR creation. A change is not done until
 - **JavaScript suite gate** — Always run `./build.pas testrunner` and `./build/GocciaTestRunner -P tests`. [Testing requirements](CONTRIBUTING.md#3-testing-requirements) explains `-P` and the `--trust` alternative.
 - **Format gate** — Run `./format.pas --check` before push or PR.
 - **Platform gate** — A platform-sensitive change has a green `ci.yml` run dispatched for its current head (see [Workflow — Full CI](docs/contributing/workflow.md#full-ci)); PR CI covers Linux x64 only.
-- `build.pas` retries a target once from a clean unit directory when FPC reports stale compiled state; a build failure that survives that retry is diagnosed as a source failure, with `./build.pas --clean <target>` run only if it still fails (see [Tooling — Stale FPC Build Artifacts](docs/contributing/tooling.md#stale-fpc-build-artifacts)).
+- `build.pas` retries a target once from a clean unit directory when FPC reports stale compiled state; a build failure that survives that retry is diagnosed as a source failure (see [Tooling — Stale FPC Build Artifacts](docs/contributing/tooling.md#stale-fpc-build-artifacts)).
 
 ## Documentation and Decisions
 
