@@ -6,6 +6,7 @@ uses
   Classes,
   SysUtils,
 
+  ProcessEncoding,
   TestingPascalLibrary,
   TextEncoding,
   TextSemantics;
@@ -25,6 +26,8 @@ type
     procedure TestReplacementPatternExpansion;
     procedure TestECMAScriptSourceLinesSplitUnicodeLineTerminators;
     procedure TestTextLineHelpersPreserveUnicode;
+    procedure TestSourceLinesKeepNonASCIILinesBesideASCIIOnes;
+    procedure TestNewlineNormalization;
     procedure TestSourceTextFallsBackAfterMutation;
   public
     procedure SetupTests; override;
@@ -56,6 +59,10 @@ begin
     TestECMAScriptSourceLinesSplitUnicodeLineTerminators);
   Test('Text line helpers preserve Unicode text',
     TestTextLineHelpersPreserveUnicode);
+  Test('Source lines keep non-ASCII lines intact beside ASCII ones',
+    TestSourceLinesKeepNonASCIILinesBesideASCIIOnes);
+  Test('Newline normalization rewrites CR and CRLF and nothing else',
+    TestNewlineNormalization);
   Test('Preserved source text falls back after line-list mutation',
     TestSourceTextFallsBackAfterMutation);
 end;
@@ -378,6 +385,52 @@ begin
   finally
     Lines.Free;
   end;
+end;
+
+procedure TTextSemanticsTests.TestSourceLinesKeepNonASCIILinesBesideASCIIOnes;
+const
+  ASCII_LINE = 'const a = "plain";';
+  UNICODE_LINE = 'const b = "na' + #$00EF + 've ' + #$D83D#$DE00 + '";';
+var
+  Lines: TStringList;
+begin
+  Lines := CreateECMAScriptSourceLines(ASCII_LINE + #10 + UNICODE_LINE + #10 +
+    #10 + ASCII_LINE);
+  try
+    Expect<Integer>(Lines.Count).ToBe(4);
+    Expect<string>(Lines[0]).ToBe(ASCII_LINE);
+    Expect<string>(Lines[1]).ToBe(UNICODE_LINE);
+    Expect<string>(Lines[2]).ToBe('');
+    Expect<string>(Lines[3]).ToBe(ASCII_LINE);
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TTextSemanticsTests.TestNewlineNormalization;
+const
+  UNICODE_WORD = 'na' + #$00EF + 've';
+
+  procedure ExpectNormalizedAsWithCR(const AText: string);
+  begin
+    Expect<string>(NormalizeNewlinesToLF(AText)).ToBe(
+      Copy(NormalizeNewlinesToLF(AText + #13), 1, Length(AText)));
+  end;
+
+begin
+  Expect<string>(NormalizeNewlinesToLF('a' + #10 + UNICODE_WORD + #10)).ToBe(
+    'a' + #10 + UNICODE_WORD + #10);
+  Expect<string>(NormalizeNewlinesToLF('a' + #13#10 + UNICODE_WORD + #13 + 'b')).ToBe(
+    'a' + #10 + UNICODE_WORD + #10 + 'b');
+  Expect<string>(NormalizeNewlinesToLF('a' + #13 + 'b')).ToBe('a' + #10 + 'b');
+  Expect<string>(NormalizeNewlinesToLF('')).ToBe('');
+  // Text without a CR is treated as the same text with one would be, whether
+  // it holds a surrogate pair or a lone, reversed or trailing surrogate.
+  ExpectNormalizedAsWithCR('a' + #$D83D#$DE00 + 'b');
+  ExpectNormalizedAsWithCR('a' + #$D800 + 'b');
+  ExpectNormalizedAsWithCR('a' + #$DE00 + 'b');
+  ExpectNormalizedAsWithCR('a' + #$DE00#$D83D + 'b');
+  ExpectNormalizedAsWithCR('a' + #$D83D);
 end;
 
 procedure TTextSemanticsTests.TestSourceTextFallsBackAfterMutation;
