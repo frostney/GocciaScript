@@ -208,6 +208,8 @@ type
     procedure TestThisPropertyReadRetainsDerivedGuard;
     procedure TestLocalPropertyReadUsesFusedOpcode;
     procedure TestOptionalLocalPropertyReadSkipsFusedOpcode;
+    procedure TestAsyncGeneratorReturnAwaitsBeforeTryCleanup;
+    procedure TestOtherFunctionKindsReturnWithoutAwait;
     procedure TestInitializedConstOperandsSkipGetLocal;
     procedure TestConstOperandsBeforeDeclarationKeepGetLocal;
     procedure TestSwitchClauseForgetsInitializedConsts;
@@ -470,6 +472,10 @@ begin
     TestLocalPropertyReadUsesFusedOpcode);
   Test('optional local property read skips fused opcode',
     TestOptionalLocalPropertyReadSkipsFusedOpcode);
+  Test('async generator return awaits before the try cleanup',
+    TestAsyncGeneratorReturnAwaitsBeforeTryCleanup);
+  Test('other function kinds return without an await',
+    TestOtherFunctionKindsReturnWithoutAwait);
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
@@ -793,6 +799,105 @@ begin
     Result := FindFunctionWithOp(Candidate, AOp);
     if Assigned(Result) then
       Exit(Result);
+  end;
+end;
+
+// ES2026 §14.10.1 step 3: the value is awaited while the try is still
+// active, so the await precedes the handler pop and the inlined finally, and
+// the return does not await it again.
+procedure TTestCompiler.TestAsyncGeneratorReturnAwaitsBeforeTryCleanup;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I, AwaitIndex, PopIndex, ReturnCount: Integer;
+  Instruction: UInt32;
+begin
+  Module := CompileSource(
+    'const holder = {' +
+    '  async *values() {' +
+    '    try { return holder; } finally { holder.done = true; }' +
+    '  }' +
+    '};');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_AWAIT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      AwaitIndex := -1;
+      PopIndex := -1;
+      ReturnCount := 0;
+      for I := 0 to Func.CodeCount - 1 do
+      begin
+        Instruction := Func.GetInstruction(I);
+        case TGocciaOpCode(DecodeOp(Instruction)) of
+          OP_AWAIT:
+            if AwaitIndex < 0 then
+              AwaitIndex := I;
+          OP_POP_HANDLER:
+            if PopIndex < 0 then
+              PopIndex := I;
+          OP_RETURN:
+            begin
+              Inc(ReturnCount);
+              Expect<Integer>(DecodeB(Instruction)).ToBe(0);
+            end;
+        end;
+      end;
+      Expect<Integer>(CountOp(Func, OP_AWAIT)).ToBe(1);
+      Expect<Boolean>(PopIndex > AwaitIndex).ToBe(True);
+      Expect<Boolean>(ReturnCount > 0).ToBe(True);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+// A sync generator, an async function and a bare return compile no await;
+// an async generator's return that leaves no try keeps OP_RETURN's own await
+// (B = 1), since nothing runs between that await and the return.
+procedure TTestCompiler.TestOtherFunctionKindsReturnWithoutAwait;
+
+  // OP_RETURNs with a nonzero B operand in ATemplate and the functions
+  // nested in it.
+  function CountAwaitingReturns(
+    const ATemplate: TGocciaFunctionTemplate): Integer;
+  var
+    I: Integer;
+    Instruction: UInt32;
+  begin
+    Result := 0;
+    for I := 0 to ATemplate.CodeCount - 1 do
+    begin
+      Instruction := ATemplate.GetInstruction(I);
+      if (TGocciaOpCode(DecodeOp(Instruction)) = OP_RETURN) and
+         (DecodeB(Instruction) <> 0) then
+        Inc(Result);
+    end;
+    for I := 0 to ATemplate.FunctionCount - 1 do
+      Inc(Result, CountAwaitingReturns(ATemplate.GetFunction(I)));
+  end;
+
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource(
+    'const holder = {' +
+    '  *values() {' +
+    '    try { return holder; } finally { holder.done = true; }' +
+    '  },' +
+    '  async read() {' +
+    '    try { return holder; } finally { holder.done = true; }' +
+    '  },' +
+    '  async *empty() {' +
+    '    try { return; } finally { holder.done = true; }' +
+    '  },' +
+    '  async *outside() { return holder; }' +
+    '};');
+  try
+    Expect<Integer>(CountOpRecursive(Module.TopLevel, OP_AWAIT)).ToBe(0);
+    Expect<Integer>(CountAwaitingReturns(Module.TopLevel)).ToBe(1);
+  finally
+    Module.Free;
   end;
 end;
 

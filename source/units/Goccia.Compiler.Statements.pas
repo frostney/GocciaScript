@@ -2871,9 +2871,21 @@ begin
     else
       ACtx.CompileExpression(AStmt.Value, Reg);
     ACtx.Scope.NoteReturnType(ExpressionType(ACtx.Scope, AStmt.Value));
-    EmitPendingCleanup(ACtx);
+    // ES2026 §14.10.1 step 3: in an async generator the value is awaited
+    // before the return completion leaves any enclosing try, so a catch sees
+    // its rejection and the finally blocks, disposals and iterator closes run
+    // after it settles; the OP_RETURN then returns the awaited value as is.
+    // With no cleanup pending nothing runs between that await and the
+    // return, so the OP_RETURN awaits the value instead (B = 1), which
+    // settles the request and any queued behind it in the same job.
     ReturnNeedsAwait := Assigned(ACtx.Template) and ACtx.Template.IsAsync and
       ACtx.Template.IsGenerator;
+    if ReturnNeedsAwait and (CurrentPendingFinallyBase > 0) then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_AWAIT, Reg, Reg, 0));
+      ReturnNeedsAwait := False;
+    end;
+    EmitPendingCleanup(ACtx);
     EmitInstruction(ACtx, EncodeABC(OP_RETURN, Reg,
       Ord(ReturnNeedsAwait), 0));
     ACtx.Scope.FreeRegister;
