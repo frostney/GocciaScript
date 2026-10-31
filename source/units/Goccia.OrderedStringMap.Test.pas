@@ -58,6 +58,7 @@ type
     procedure TestCountedLookupsIncludeCollisionsAndTombstones;
     procedure TestDeleteHeavyInsertCompactsTombstones;
     procedure TestEntryIndexSurvivesAddsAndSeesUpdates;
+    procedure TestEntryWalkVisitsEachLiveValueOnce;
     procedure TestEntryVersionInvalidatesOnRemoveCompactClear;
     procedure TestEntryVersionsDifferAcrossInstances;
     procedure TestValueAddressAtEntryTracksTheLiveEntry;
@@ -124,6 +125,8 @@ begin
     TestDeleteHeavyInsertCompactsTombstones);
   Test('Entry index survives adds and sees value updates',
     TestEntryIndexSurvivesAddsAndSeesUpdates);
+  Test('Walking entries to EntryCount visits each live value once',
+    TestEntryWalkVisitsEachLiveValueOnce);
   Test('Entry version invalidates on remove, compact, and clear',
     TestEntryVersionInvalidatesOnRemoveCompactClear);
   Test('Entry versions differ across instances',
@@ -257,6 +260,42 @@ begin
     Map.Add('cached', 2);
     Expect<Boolean>(Map.TryGetValueAtEntry(Index, Value)).ToBe(True);
     Expect<Integer>(Value).ToBe(2);
+  finally
+    Map.Free;
+  end;
+end;
+
+procedure TTestOrderedStringMap.TestEntryWalkVisitsEachLiveValueOnce;
+var
+  Map: TOrderedStringMap<Integer>;
+  Seen: array[0..9] of Integer;
+  I, Value, Visited: Integer;
+begin
+  Map := TOrderedStringMap<Integer>.Create(4);
+  try
+    for I := 0 to 9 do
+      Map.Add('key' + IntToStr(I), I);
+    Map.Remove('key3');
+    Map.Remove('key7');
+    Map.Add('key3', 3);
+    // The removed entries stay in place as inactive slots for the walk to skip.
+    Expect<Boolean>(Map.EntryCount > Map.Count).ToBe(True);
+
+    FillChar(Seen, SizeOf(Seen), 0);
+    Visited := 0;
+    for I := 0 to Map.EntryCount - 1 do
+      if Map.TryGetValueAtEntry(I, Value) then
+      begin
+        Inc(Seen[Value]);
+        Inc(Visited);
+      end;
+
+    Expect<Integer>(Visited).ToBe(Map.Count);
+    for I := 0 to 9 do
+      if I = 7 then
+        Expect<Integer>(Seen[I]).ToBe(0)
+      else
+        Expect<Integer>(Seen[I]).ToBe(1);
   finally
     Map.Free;
   end;
