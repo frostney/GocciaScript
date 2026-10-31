@@ -87,6 +87,17 @@ type
     procedure DiscardPending(const ARealm: TGocciaRealm); virtual; abstract;
   end;
 
+type
+  { Runs the running engine's pending host work, other than fetch and real
+    timers, that can settle a promise, and returns True if there was any. }
+  TGocciaPromiseWaitHostWork = function: Boolean;
+
+var
+  { Set by Goccia.Engine. WaitForFetchPromise calls it so that a promise an
+    embedder's extension settles from its WaitForIdle settles there too, as
+    it does in the engine's idle wait. }
+  GPromiseWaitHostWork: TGocciaPromiseWaitHostWork = nil;
+
 procedure DrainMicrotasksAndFetchCompletions;
 function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
 { The realm-less forms act on the current realm's engine. }
@@ -1691,6 +1702,14 @@ begin
 
     CheckExecutionTimeoutNow;
     CheckInstructionLimit;
+
+    { Host work an extension owns is real work too: a promise it settles from
+      its WaitForIdle settles in the engine's idle wait, so it must settle
+      here, where an async test's promise, `.resolves` and async hooks wait.
+      Fetch and real timers are not part of it: they are waited for below,
+      in the order that comment explains. }
+    if Assigned(GPromiseWaitHostWork) and GPromiseWaitHostWork() then
+      Continue;
 
     Manager := TGocciaFetchManager.Instance;
     HasPendingFetch := Assigned(Manager) and Manager.HasPending;

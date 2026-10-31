@@ -25,6 +25,7 @@ type
     procedure Detach; override;
     procedure WaitForIdle; override;
     function HasPendingWork: Boolean; override;
+    function RunPendingWorkForPromiseWait: Boolean; override;
     procedure DiscardPending; override;
 
     property BuiltinFetch: TGocciaGlobalFetch read FBuiltinFetch;
@@ -143,6 +144,14 @@ function TGocciaFetchRuntimeExtension.HasPendingWork: Boolean;
 begin
   Result := Assigned(FBuiltinFetch) and
     HasPendingFetches(FBuiltinFetch.Realm);
+end;
+
+{ The promise wait polls fetch completions itself, so that a fetch it races
+  against a timer decides the race (Goccia.FetchManager.WaitForFetchPromise).
+  Waiting for every request here would let the first one hold up the rest. }
+function TGocciaFetchRuntimeExtension.RunPendingWorkForPromiseWait: Boolean;
+begin
+  Result := False;
 end;
 
 procedure TGocciaFetchRuntimeExtension.DiscardPending;

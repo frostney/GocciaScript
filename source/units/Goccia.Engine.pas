@@ -126,6 +126,12 @@ type
       for. Guest code that runs after WaitForIdle returns, in a later
       extension's pass or in a microtask, can start more. }
     function HasPendingWork: Boolean; virtual;
+    { Runs this extension's pending work while the engine drives one promise
+      to settlement outside its idle wait — an async test's returned promise,
+      `.resolves`, an async hook — and returns True if it had any. The
+      default runs WaitForIdle when HasPendingWork. An extension whose work
+      that wait already drives in its own order returns False. }
+    function RunPendingWorkForPromiseWait: Boolean; virtual;
     { Why a heap snapshot of the run would lose state this extension holds
       outside the heap, or '' when it would not (ADR 0148). Separate from
       HasPendingWork, which says whether the idle wait has work: a timer the
@@ -392,6 +398,7 @@ type
     function SourcePipelineOptions(
       const ASourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
     function ExtensionsHavePendingWork: Boolean;
+    function RunExtensionWorkForPromiseWait: Boolean;
     function CompileDynamicFunction(const AParamsSources: array of string;
       const ABodySource: string;
       const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase;
@@ -718,6 +725,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.Eval.EarlyErrors,
   Goccia.Execution.CallSite,
+  Goccia.FetchManager,
   Goccia.FileExtensions,
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
@@ -755,9 +763,9 @@ uses
 
 threadvar
   { The engine whose run — Execute, ExecuteProgram, RunModule — is innermost
-    on this thread, or nil between runs. Compared, never dereferenced: a run
-    that starts while a different engine holds it is nested inside that
-    engine's execution. }
+    on this thread, or nil between runs. A run that starts while a different
+    engine holds it is nested inside that engine's execution. Dereferenced
+    only by RunRunningEngineWorkForPromiseWait, inside that engine's run. }
   GRunningEngine: TGocciaEngine;
 
 { TGocciaEngineExtension }
@@ -769,6 +777,13 @@ end;
 function TGocciaEngineExtension.HasPendingWork: Boolean;
 begin
   Result := False;
+end;
+
+function TGocciaEngineExtension.RunPendingWorkForPromiseWait: Boolean;
+begin
+  Result := HasPendingWork;
+  if Result then
+    WaitForIdle;
 end;
 
 function TGocciaEngineExtension.HeapSnapshotRefusal: string;
@@ -2460,6 +2475,30 @@ begin
     if FExtensions[I].HasPendingWork then
       Exit(True);
   Result := False;
+end;
+
+{ The promise wait runs outside the idle wait, so it offers no pause
+  checkpoint: with a checkpoint handler installed, the host-call owner's work
+  is left for the idle wait, which offers one before it. }
+function TGocciaEngine.RunExtensionWorkForPromiseWait: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to FExtensions.Count - 1 do
+  begin
+    if (FExtensions[I] = FHostCallOwner) and Assigned(FOnPauseCheckpoint) then
+      Continue;
+    if FExtensions[I].RunPendingWorkForPromiseWait then
+      Result := True;
+  end;
+end;
+
+{ GPromiseWaitHostWork: the innermost running engine's extension work. }
+function RunRunningEngineWorkForPromiseWait: Boolean;
+begin
+  Result := Assigned(GRunningEngine) and
+    GRunningEngine.RunExtensionWorkForPromiseWait;
 end;
 
 { Runs the engine to idle: no host work in flight, no job queued. A job can
@@ -5680,5 +5719,8 @@ begin
     ProgramNode.Free;
   end;
 end;
+
+initialization
+  GPromiseWaitHostWork := @RunRunningEngineWorkForPromiseWait;
 
 end.

@@ -36,6 +36,7 @@ type
     procedure Detach; override;
     procedure WaitForIdle; override;
     function HasPendingWork: Boolean; override;
+    function RunPendingWorkForPromiseWait: Boolean; override;
     function HeapSnapshotRefusal: string; override;
     procedure DiscardPending; override;
   end;
@@ -111,6 +112,14 @@ end;
 function TGocciaTimersRuntimeExtension.HasPendingWork: Boolean;
 begin
   Result := (not FDrainBounded) and HasRealTimeoutsForHost;
+end;
+
+{ The promise wait runs real timers itself, one at a time and only when no
+  fetch is in flight (Goccia.FetchManager.WaitForFetchPromise). Draining them
+  here would run virtual time ahead of outstanding work. }
+function TGocciaTimersRuntimeExtension.RunPendingWorkForPromiseWait: Boolean;
+begin
+  Result := False;
 end;
 
 { The timer queue keeps ids, deadlines, the fake clock and parked errors

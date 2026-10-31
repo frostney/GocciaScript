@@ -1,0 +1,228 @@
+program Goccia.Engine.PromiseWait.Test;
+
+{$I Goccia.inc}
+
+uses
+  {$IFDEF UNIX}cthreads,{$ENDIF}
+  Classes,
+  SysUtils,
+
+  TestingPascalLibrary,
+
+  Goccia.Arguments.Collection,
+  Goccia.Capabilities,
+  Goccia.Engine,
+  Goccia.GarbageCollector,
+  Goccia.Runtime,
+  Goccia.RuntimeExtensions.TestingLibrary,
+  Goccia.Scope.BindingMap,
+  Goccia.TestSetup,
+  Goccia.Values.Error,
+  Goccia.Values.NativeFunction,
+  Goccia.Values.ObjectValue,
+  Goccia.Values.Primitives,
+  Goccia.Values.PromiseValue;
+
+type
+  { Stands in for an embedder's host-backed async API: hostValue(x) returns a
+    pending promise, HasPendingWork reports it, and WaitForIdle settles it
+    with x, as an answer from the host would. }
+  THostValueExtension = class(TGocciaRuntimeExtension)
+  private
+    FPending: TList;
+    FValues: TList;
+    FWaitCount: Integer;
+    function HostValue(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
+  public
+    procedure Attach(const ARuntime: TGocciaRuntimeCore); override;
+    procedure Detach; override;
+    procedure WaitForIdle; override;
+    function HasPendingWork: Boolean; override;
+    property WaitCount: Integer read FWaitCount;
+  end;
+
+  TPromiseWaitTests = class(TTestSuite)
+  private
+    function RunModule(const ASource: string;
+      out AWaitCount: Integer): string;
+    procedure TestHostPromiseInsideTest;
+    procedure TestHostPromiseInResolves;
+    procedure TestHostPromiseInHook;
+    procedure TestRejectedHostPromiseFailsTheTest;
+  public
+    procedure SetupTests; override;
+  end;
+
+procedure THostValueExtension.Attach(const ARuntime: TGocciaRuntimeCore);
+begin
+  inherited Attach(ARuntime);
+  FPending := TList.Create;
+  FValues := TList.Create;
+  Runtime.Engine.GlobalScope.DefineLexicalBinding('hostValue',
+    TGocciaNativeFunctionValue.Create(HostValue, 'hostValue', 1), dtConst);
+end;
+
+procedure THostValueExtension.Detach;
+begin
+  FPending.Free;
+  FValues.Free;
+  inherited Detach;
+end;
+
+function THostValueExtension.HostValue(const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+var
+  Promise: TGocciaPromiseValue;
+begin
+  Promise := TGocciaPromiseValue.Create;
+  TGarbageCollector.Instance.AddTempRoot(Promise);
+  TGarbageCollector.Instance.AddTempRoot(AArgs.GetElement(0));
+  FPending.Add(Promise);
+  FValues.Add(AArgs.GetElement(0));
+  Result := Promise;
+end;
+
+procedure THostValueExtension.WaitForIdle;
+var
+  Promise: TGocciaPromiseValue;
+  Value: TGocciaValue;
+begin
+  Inc(FWaitCount);
+  while FPending.Count > 0 do
+  begin
+    Promise := TGocciaPromiseValue(FPending[0]);
+    Value := TGocciaValue(FValues[0]);
+    FPending.Delete(0);
+    FValues.Delete(0);
+    { A string value stands for an error the host reports. }
+    if Value is TGocciaStringLiteralValue then
+      Promise.Reject(Value)
+    else
+      Promise.Resolve(Value);
+    TGarbageCollector.Instance.RemoveTempRoot(Promise);
+    TGarbageCollector.Instance.RemoveTempRoot(Value);
+  end;
+end;
+
+function THostValueExtension.HasPendingWork: Boolean;
+begin
+  Result := FPending.Count > 0;
+end;
+
+procedure TPromiseWaitTests.SetupTests;
+begin
+  Test('a host promise awaited inside test() settles',
+    TestHostPromiseInsideTest);
+  Test('a host promise passed to expect().resolves settles',
+    TestHostPromiseInResolves);
+  Test('a host promise awaited in an async beforeEach settles',
+    TestHostPromiseInHook);
+  Test('a host promise the host rejects fails the test with its reason',
+    TestRejectedHostPromiseFailsTheTest);
+end;
+
+{ Runs ASource as a module with goccia:test installed module-only and the
+  host extension, and returns what the module reports through
+  `globalThis.outcome`, or the uncaught error. }
+function TPromiseWaitTests.RunModule(const ASource: string;
+  out AWaitCount: Integer): string;
+var
+  Source: TStringList;
+  Runtime: TGocciaRuntime;
+  Host: THostValueExtension;
+begin
+  Result := '';
+  AWaitCount := 0;
+  Source := TStringList.Create;
+  Source.Text := ASource;
+  Runtime := TGocciaRuntime.Create('main.js', Source,
+    TGocciaCapabilities.None);
+  try
+    Runtime.Engine.SourceType := stModule;
+    Runtime.Install(TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly);
+    Host := THostValueExtension.Create;
+    Runtime.Install(Host);
+    try
+      Runtime.Execute;
+      Result := Runtime.Engine.GlobalScope.GetValue('outcome')
+        .ToStringLiteral.Value;
+    except
+      on E: TGocciaThrowValue do
+      begin
+        if E.Value is TGocciaObjectValue then
+          Result := 'uncaught: ' + TGocciaObjectValue(E.Value)
+            .GetProperty('message').ToStringLiteral.Value
+        else
+          Result := 'uncaught: ' + E.Value.ToStringLiteral.Value;
+      end;
+    end;
+    AWaitCount := Host.WaitCount;
+  finally
+    Runtime.Free;
+    Source.Free;
+  end;
+end;
+
+const
+  REPORT =
+    'const r = await runTests({ showTestResults: false });' + LineEnding +
+    'globalThis.outcome = r.passed + " passed, " + r.failed + " failed" +' +
+    ' (r.failed ? ": " + r.failedTests.join("; ") : "");';
+
+procedure TPromiseWaitTests.TestHostPromiseInsideTest;
+var
+  WaitCount: Integer;
+begin
+  Expect<string>(RunModule(
+    'import { test, expect, runTests } from "goccia:test";' + LineEnding +
+    'test("host value", async () => {' + LineEnding +
+    '  expect(await hostValue(2)).toBe(2);' + LineEnding +
+    '  expect(await hostValue(3)).toBe(3);' + LineEnding +
+    '});' + LineEnding + REPORT, WaitCount)).ToBe('1 passed, 0 failed');
+  Expect<Boolean>(WaitCount >= 2).ToBe(True);
+end;
+
+procedure TPromiseWaitTests.TestHostPromiseInResolves;
+var
+  WaitCount: Integer;
+begin
+  Expect<string>(RunModule(
+    'import { test, expect, runTests } from "goccia:test";' + LineEnding +
+    'test("resolves", async () => {' + LineEnding +
+    '  await expect(hostValue(4)).resolves.toBe(4);' + LineEnding +
+    '});' + LineEnding + REPORT, WaitCount)).ToBe('1 passed, 0 failed');
+end;
+
+procedure TPromiseWaitTests.TestHostPromiseInHook;
+var
+  WaitCount: Integer;
+begin
+  Expect<string>(RunModule(
+    'import { test, expect, beforeEach, runTests } from "goccia:test";' +
+    LineEnding +
+    'let seen = 0;' + LineEnding +
+    'beforeEach(async () => { seen = await hostValue(5); });' + LineEnding +
+    'test("hook value", () => { expect(seen).toBe(5); });' + LineEnding +
+    REPORT, WaitCount)).ToBe('1 passed, 0 failed');
+end;
+
+procedure TPromiseWaitTests.TestRejectedHostPromiseFailsTheTest;
+var
+  WaitCount: Integer;
+  Outcome: string;
+begin
+  Outcome := RunModule(
+    'import { test, expect, runTests } from "goccia:test";' + LineEnding +
+    'test("host error", async () => { await hostValue("refused"); });' +
+    LineEnding + REPORT, WaitCount);
+  Expect<Boolean>(Pos('0 passed, 1 failed', Outcome) = 1).ToBe(True);
+  Expect<Boolean>(Pos('refused', Outcome) > 0).ToBe(True);
+  Expect<Boolean>(Pos('still pending', Outcome) = 0).ToBe(True);
+end;
+
+begin
+  TestRunnerProgram.AddSuite(TPromiseWaitTests.Create('Engine promise wait'));
+  RunGocciaTests;
+  ExitCode := TestResultToExitCode;
+end.

@@ -148,7 +148,10 @@ wait would call the owner's `WaitForIdle`, before it blocks, the engine calls
 the handler if the run is at a pause checkpoint: no frame running, no job
 queued, no `Atomics.waitAsync` waiter, no other extension with pending work,
 and pending host calls on the owner. `IsAtPauseCheckpoint` answers the same
-question.
+question. The wait that drives one promise to settlement inside a run (an async
+test, a synchronous `await`) does not call the owner while a handler is set,
+so its host calls are served only where a checkpoint is offered
+([ADR 0171](adr/0171-the-promise-wait-runs-extension-host-work.md)).
 
 ```pascal
 procedure THost.OnCheckpoint(const AEngine: TGocciaEngine;
