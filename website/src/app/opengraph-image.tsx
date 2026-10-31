@@ -8,26 +8,25 @@ export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 const CANONICAL_HOST = new URL(CANONICAL_SITE_URL).hostname;
 
-const FONT_URLS = {
-  ibmPlexSans600:
-    "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXGKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1swZSAXcomDVmadSDNF5zAA.ttf",
-  instrumentSerifRegular:
-    "https://fonts.gstatic.com/s/instrumentserif/v5/jizBRFtNs2ka5fXjeivQ4LroWlx-2zI.ttf",
-  instrumentSerifItalic:
-    "https://fonts.gstatic.com/s/instrumentserif/v5/jizHRFtNs2ka5fXjeivQ4LroWlx-6zATiw.ttf",
+const FONT_FILES = {
+  ibmPlexSans600: "ibm-plex-sans-600.ttf",
+  instrumentSerifRegular: "instrument-serif-regular.ttf",
+  instrumentSerifItalic: "instrument-serif-italic.ttf",
 };
 
-async function fetchFont(url: string): Promise<ArrayBuffer> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`font fetch failed: ${url} (${res.status})`);
-  return await res.arrayBuffer();
+// Read the bundled TTFs at build time so the OG image never depends on a
+// network fetch to a font host. Satori cannot read woff2, hence TTF.
+async function readFont(file: string): Promise<Buffer> {
+  return await fs.readFile(
+    path.join(process.cwd(), "src", "fonts", "og", file),
+  );
 }
 
 export default async function OpenGraphImage() {
   const [instrument, instrumentItalic, plex, logoBuf] = await Promise.all([
-    fetchFont(FONT_URLS.instrumentSerifRegular),
-    fetchFont(FONT_URLS.instrumentSerifItalic),
-    fetchFont(FONT_URLS.ibmPlexSans600),
+    readFont(FONT_FILES.instrumentSerifRegular),
+    readFont(FONT_FILES.instrumentSerifItalic),
+    readFont(FONT_FILES.ibmPlexSans600),
     fs.readFile(path.join(process.cwd(), "public", "logo.png")),
   ]);
   const logoDataUri = `data:image/png;base64,${logoBuf.toString("base64")}`;
