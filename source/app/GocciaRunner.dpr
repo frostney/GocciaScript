@@ -2109,6 +2109,10 @@ begin
             finally
               SectionSource.Free;
             end;
+            { Reclaim this section's garbage before the next one, as the
+              file and text stdin paths do. }
+            if Assigned(TGarbageCollector.Instance) then
+              TGarbageCollector.Instance.Collect;
           end;
           WriteLn(BuildAggregateScriptLoaderJSON(JSONResults,
             FinishCLIJSONMemoryMeasurement(MemoryMeasurement),
@@ -2206,7 +2210,14 @@ begin
     for I := 0 to APaths.Count - 1 do
     begin
       if I > 0 then
+      begin
         WriteLn;
+        { Reclaim the previous path's garbage before this one runs: a plain
+          file argument runs without RunScriptsSequentially, so nothing else
+          collects between two file arguments. }
+        if Assigned(TGarbageCollector.Instance) then
+          TGarbageCollector.Instance.Collect;
+      end;
       RunScripts(APaths[I]);
     end;
   end;
