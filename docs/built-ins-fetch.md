@@ -33,9 +33,13 @@ A redirect status is 301, 302, 303, 307 or 308; any other status, a 300 or 306 w
 
 A redirect's `Location` is parsed by the URL Standard's parser with the redirecting response's URL as the base (relative, `./`, `../`, absolute-path, query-only and scheme-relative forms), and the URL sent, for the first request and every hop, has its dot segments removed (`https://h/a/./b/../c` is requested as `https://h/a/c`); a `Location` that does not parse is a network error.
 
+A redirect to the same origin is sent over the connection that carried the redirect, when that response ended cleanly: HTTP/1.1, no `Connection: close`, and a body framed by `Content-Length` with nothing after it, by chunked coding read to its end, or absent. The hop's checks run against the address that connection was opened to, without a second lookup. A hop that fails on a reused connection before any of its response arrives is sent once more, on a new connection; a response that did arrive is never requested again. Any other hop opens a connection of its own, and no connection outlives the `fetch` call. Under `"manual"` and `"error"`, and once the redirect limit is reached, the request asks the server to close the connection.
+
 ### Transport security
 
 HTTPS uses SecureTransport on macOS, SChannel on Windows, and OpenSSL on Linux. On Linux the first HTTPS request loads OpenSSL once for the whole process, so concurrent first requests share that load. If OpenSSL is missing, every HTTPS request rejects with a `TypeError` saying that HTTPS requires OpenSSL.
+
+With OpenSSL the process keeps one client context, so the trust store is read once rather than for every connection. The context carries configuration only: no TLS session is cached in it. A change to `SSL_CERT_FILE` or `SSL_CERT_DIR` makes the next connection read the trust store again; a CA file replaced at the same path is read after a restart.
 
 ### Network capability
 

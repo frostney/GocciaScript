@@ -1026,6 +1026,22 @@ begin
   Result := False;
 end;
 
+{ The last coding a Transfer-Encoding value lists, lowercased, such as
+  'chunked' for 'gzip, chunked'. }
+function FinalTransferCoding(const AValue: string): string;
+var
+  I: Integer;
+begin
+  Result := AValue;
+  for I := Length(AValue) downto 1 do
+    if AValue[I] = ',' then
+    begin
+      Result := Copy(AValue, I + 1, MaxInt);
+      Break;
+    end;
+  Result := LowerCase(Trim(Result));
+end;
+
 { WHATWG Fetch: a redirect status is 301, 302, 303, 307 or 308. }
 function IsRedirectStatus(const AStatus: Integer): Boolean;
 begin
@@ -1332,7 +1348,7 @@ begin
       Content-Length beside it is a framing error a later message could hide
       behind: neither connection is reused. }
     Result.Reusable := Persistent and (Length(ChunkBuf) = 0) and
-      (Copy(TransferEncoding, Length(TransferEncoding) - 6, 7) = 'chunked') and
+      (FinalTransferCoding(TransferEncoding) = 'chunked') and
       not HasHeader(Result.Headers, 'content-length');
     { A second Transfer-Encoding field could name a coding after chunked. }
     J := 0;
@@ -1374,8 +1390,11 @@ begin
       SetLength(Result.Body, ContentLen);
       BodyLen := 0;
 
-      { Bytes past the declared length would belong to no request. }
-      Result.Reusable := Persistent and (Length(BodyBytes) <= ContentLen);
+      { Bytes past the declared length would belong to no request, and a
+        Transfer-Encoding field beside Content-Length leaves the length in
+        doubt (RFC 9112 section 6.3). }
+      Result.Reusable := Persistent and (Length(BodyBytes) <= ContentLen) and
+        not HasHeader(Result.Headers, 'transfer-encoding');
 
       // Copy bytes already read with headers
       if Length(BodyBytes) > 0 then
@@ -1778,11 +1797,8 @@ begin
         except
           { A send on a reused connection that fails (plain or TLS): the
             server closed it. }
-          on E: Exception do
-          begin
-            Stale := Reused;
-            raise;
-          end;
+          Stale := Reused;
+          raise;
         end;
         Raw := ReadResponse(Sock, Transport, IsHead, DeadlineNs,
           MaxBodyBytes, APolicy.RedirectMode = hrmError, Reused);

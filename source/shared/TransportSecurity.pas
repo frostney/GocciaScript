@@ -645,6 +645,7 @@ type
 const
   OPENSSL_VERSION_THREE = '.3';
   SSL_CTRL_SET_MIN_PROTO_VERSION = 123;
+  SSL_SESS_CACHE_OFF = 0;
   TLS1_2_VERSION = $0303;
 
 var
@@ -1005,12 +1006,26 @@ function LibcGetEnv(AName: PAnsiChar): PAnsiChar; cdecl;
   once per process (per value of the variables): a CA file replaced at the
   same path is seen after a restart. }
 function NewSharedOpenSSLSession: PSSL;
+
+  { A variable's value, marked so that an unset variable and an empty one
+    differ: OpenSSL takes only an unset one for its default path. }
+  function TrustVariable(const AName: PAnsiChar): string;
+  var
+    Value: PAnsiChar;
+  begin
+    Value := LibcGetEnv(AName);
+    if Assigned(Value) then
+      Result := '=' + string(AnsiString(Value))
+    else
+      Result := '-';
+  end;
+
 var
   Context: PSSL_CTX;
   Trust: string;
 begin
-  Trust := string(AnsiString(LibcGetEnv('SSL_CERT_FILE'))) + #0 +
-    string(AnsiString(LibcGetEnv('SSL_CERT_DIR')));
+  Trust := TrustVariable('SSL_CERT_FILE') + #0 +
+    TrustVariable('SSL_CERT_DIR');
   CriticalSectionEnter(GOpenSSLLoadLock);
   try
     if not Assigned(GSharedOpenSSLContext) or
@@ -1018,6 +1033,10 @@ begin
     begin
       Context := CreateOpenSSLContext;
       try
+        { No session is cached in the context, so one connection can never
+          resume another's: the context carries configuration only. }
+        SslCTXCtrl(Context, SSL_CTRL_SET_SESS_CACHE_MODE, SSL_SESS_CACHE_OFF,
+          nil);
         ConfigureOpenSSLContextVerification(Context);
       except
         SslCtxFree(Context);
