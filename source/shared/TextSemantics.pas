@@ -77,10 +77,9 @@ implementation
 
 uses
   Math,
-{$IF DEFINED(FPC) AND DEFINED(UNIX)}
-  cwstring,
-{$ENDIF}
+
   Generated.UnicodeCaseData,
+  ProcessEncoding,
   StringBuffer;
 
 type
