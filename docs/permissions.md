@@ -124,7 +124,10 @@ embed an IPv4 host — IPv4-compatible `::a.b.c.d`, NAT64 `64:ff9b::/96`, and
 This is checked twice: against an address literal in the URL, and against the
 address a host name resolved to — so `api.example.com` whose DNS answers with
 `169.254.169.254` is refused unless `private` (or `169.254.169.254`) is
-allowed. Both checks run again on every redirect hop.
+allowed. Both checks run again on every redirect hop; a hop that reuses the
+connection of a redirect within the origin checks the address that connection
+was opened to rather than resolving the name again
+([Fetch: Redirects](built-ins-fetch.md#redirects)).
 
 `private` is a grant of its own: `--allow-net=private` reaches
 `http://127.0.0.1:8080` and `http://localhost:8080`, but no public address. A

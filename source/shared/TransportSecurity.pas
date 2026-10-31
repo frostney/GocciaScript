@@ -88,6 +88,13 @@ function SocketSendAllBefore(const ASock: TSocket; const ABuffer: Pointer;
   negative or longer than AInput. }
 procedure ConsumeEncryptedInput(var AInput: TBytes; const AIncomplete: Boolean;
   const AExtraLength: Integer);
+
+{$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
+{ How many client contexts the OpenSSL backend has built in this process:
+  one, shared by every connection, plus one for each change of SSL_CERT_FILE
+  or SSL_CERT_DIR it has seen. }
+function OpenSSLClientContextsBuilt: Integer;
+{$IFEND}
 {$ENDIF}
 
 implementation
@@ -634,7 +641,7 @@ end;
 type
   TOpenSSLData = class
   public
-    Context: PSSL_CTX;
+    { The session holds its own reference to the shared context. }
     SSL: PSSL;
   end;
 
@@ -645,6 +652,7 @@ type
 const
   OPENSSL_VERSION_THREE = '.3';
   SSL_CTRL_SET_MIN_PROTO_VERSION = 123;
+  SSL_SESS_CACHE_OFF = 0;
   TLS1_2_VERSION = $0303;
 
 var
@@ -655,6 +663,15 @@ var
   GOpenSSLLoadLock: TGocciaCriticalSection;
   GOpenSSLLoadAttempted: Boolean = False;
   GOpenSSLLoaded: Boolean = False;
+  { One client context for the process, created on first use under
+    GOpenSSLLoadLock: the trust store is loaded into it once, not into a
+    context per connection. It holds configuration only (client session
+    caching stays off), so connections share nothing through it. }
+  GSharedOpenSSLContext: PSSL_CTX = nil;
+  { The SSL_CERT_FILE and SSL_CERT_DIR values the shared context loaded its
+    trust store under: a change makes the next connection build a new one. }
+  GSharedOpenSSLTrust: string = '';
+  GOpenSSLClientContextsBuilt: Integer = 0;
 
 procedure PreferOpenSSLVersionThree;
 var
@@ -742,12 +759,9 @@ begin
   end;
 end;
 
-procedure ConfigureOpenSSLVerification(const AContext: PSSL_CTX;
-  const ASSL: PSSL; const AHost: string);
+procedure ConfigureOpenSSLContextVerification(const AContext: PSSL_CTX);
 var
   SetDefaultVerifyPaths: TSSLSetDefaultVerifyPaths;
-  SetHostName: TSSLSetHostName;
-  HostName: TBytes;
 begin
   SetDefaultVerifyPaths := TSSLSetDefaultVerifyPaths(GetProcedureAddress(
     SSLLibHandle, 'SSL_CTX_set_default_verify_paths'));
@@ -755,7 +769,13 @@ begin
     raise ETransportSecurityError.Create('Failed to load OpenSSL default certificate paths');
 
   SslCtxSetVerify(AContext, SSL_VERIFY_PEER, TSSLCTXVerifyCallback(nil));
+end;
 
+procedure ConfigureOpenSSLVerification(const ASSL: PSSL; const AHost: string);
+var
+  SetHostName: TSSLSetHostName;
+  HostName: TBytes;
+begin
   HostName := EncodeTLSHostName(AHost);
   SetHostName := TSSLSetHostName(GetProcedureAddress(SSLLibHandle,
     'SSL_set1_host'));
@@ -982,6 +1002,78 @@ begin
   end;
 end;
 
+{ OpenSSL reads the variables through libc's getenv, which sees setenv;
+  the RTL's GetEnvironmentVariable reads the environment the process
+  started with. }
+function LibcGetEnv(AName: PAnsiChar): PAnsiChar; cdecl;
+  external 'c' name 'getenv';
+
+{ A session on the shared context, made under the lock: a rebuild on
+  another thread cannot free the context between choosing it and SSL_new,
+  which takes the session's own reference to it. The trust store is read
+  once per process (per value of the variables): a CA file replaced at the
+  same path is seen after a restart. }
+function NewSharedOpenSSLSession: PSSL;
+
+  { A variable's value, marked so that an unset variable and an empty one
+    differ: OpenSSL takes only an unset one for its default path. }
+  function TrustVariable(const AName: PAnsiChar): string;
+  var
+    Value: PAnsiChar;
+  begin
+    Value := LibcGetEnv(AName);
+    if Assigned(Value) then
+      Result := '=' + string(AnsiString(Value))
+    else
+      Result := '-';
+  end;
+
+var
+  Context: PSSL_CTX;
+  Trust: string;
+begin
+  Trust := TrustVariable('SSL_CERT_FILE') + #0 +
+    TrustVariable('SSL_CERT_DIR');
+  CriticalSectionEnter(GOpenSSLLoadLock);
+  try
+    if not Assigned(GSharedOpenSSLContext) or
+       (Trust <> GSharedOpenSSLTrust) then
+    begin
+      Context := CreateOpenSSLContext;
+      try
+        { No session is cached in the context, so one connection can never
+          resume another's: the context carries configuration only. }
+        SslCTXCtrl(Context, SSL_CTRL_SET_SESS_CACHE_MODE, SSL_SESS_CACHE_OFF,
+          nil);
+        ConfigureOpenSSLContextVerification(Context);
+      except
+        SslCtxFree(Context);
+        raise;
+      end;
+      { SSL_new takes its own reference, so connections still open on the
+        old context keep it until they are freed. }
+      if Assigned(GSharedOpenSSLContext) then
+        SslCtxFree(GSharedOpenSSLContext);
+      GSharedOpenSSLContext := Context;
+      GSharedOpenSSLTrust := Trust;
+      Inc(GOpenSSLClientContextsBuilt);
+    end;
+    Result := SslNew(GSharedOpenSSLContext);
+  finally
+    CriticalSectionLeave(GOpenSSLLoadLock);
+  end;
+end;
+
+function OpenSSLClientContextsBuilt: Integer;
+begin
+  CriticalSectionEnter(GOpenSSLLoadLock);
+  try
+    Result := GOpenSSLClientContextsBuilt;
+  finally
+    CriticalSectionLeave(GOpenSSLLoadLock);
+  end;
+end;
+
 procedure StartOpenSSL(var AConnection: TTransportSecurityConnection;
   const AHost: string);
 var
@@ -994,16 +1086,13 @@ begin
     raise ETransportSecurityError.Create(OPENSSL_LOAD_ERROR);
 
   Data := TOpenSSLData.Create;
-  Data.Context := nil;
   Data.SSL := nil;
   try
-    Data.Context := CreateOpenSSLContext;
-
-    Data.SSL := SslNew(Data.Context);
+    Data.SSL := NewSharedOpenSSLSession;
     if not Assigned(Data.SSL) then
       raise ETransportSecurityError.Create('Failed to create OpenSSL session');
 
-    ConfigureOpenSSLVerification(Data.Context, Data.SSL, AHost);
+    ConfigureOpenSSLVerification(Data.SSL, AHost);
 
     HostName := EncodeTLSHostName(AHost);
     SslCtrl(Data.SSL, SSL_CTRL_SET_TLSEXT_HOSTNAME,
@@ -1043,8 +1132,6 @@ begin
   except
     if Assigned(Data.SSL) then
       SslFree(Data.SSL);
-    if Assigned(Data.Context) then
-      SslCtxFree(Data.Context);
     Data.Free;
     raise;
   end;
@@ -1062,8 +1149,6 @@ begin
       GuardedSslShutdown(Data.SSL);
       SslFree(Data.SSL);
     end;
-    if Assigned(Data.Context) then
-      SslCtxFree(Data.Context);
     Data.Free;
   end;
 end;
