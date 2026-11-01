@@ -46,6 +46,8 @@ type
     procedure WaitForIdle; virtual;
     { See TGocciaEngineExtension.HasPendingWork. }
     function HasPendingWork: Boolean; virtual;
+    { See TGocciaEngineExtension.RunPendingWorkForPromiseWait. }
+    function RunPendingWorkForPromiseWait: Boolean; virtual;
     { See TGocciaEngineExtension.HeapSnapshotRefusal. }
     function HeapSnapshotRefusal: string; virtual;
     { See TGocciaEngineExtension.MaterializeHeapSnapshotBuiltin. }
@@ -96,6 +98,7 @@ type
 
     procedure WaitForIdle; override;
     function HasPendingWork: Boolean; override;
+    function RunPendingWorkForPromiseWait: Boolean; override;
     function HeapSnapshotRefusal: string; override;
     procedure MaterializeHeapSnapshotBuiltin(const AName: string); override;
     procedure DiscardPending; override;
@@ -264,6 +267,13 @@ end;
 function TGocciaRuntimeExtension.HasPendingWork: Boolean;
 begin
   Result := False;
+end;
+
+function TGocciaRuntimeExtension.RunPendingWorkForPromiseWait: Boolean;
+begin
+  Result := HasPendingWork;
+  if Result then
+    WaitForIdle;
 end;
 
 function TGocciaRuntimeExtension.HeapSnapshotRefusal: string;
@@ -557,6 +567,16 @@ begin
     if FExtensions[I].HasPendingWork then
       Exit(True);
   Result := False;
+end;
+
+function TGocciaRuntimeCore.RunPendingWorkForPromiseWait: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to FExtensions.Count - 1 do
+    if FExtensions[I].RunPendingWorkForPromiseWait then
+      Result := True;
 end;
 
 function TGocciaRuntimeCore.HeapSnapshotRefusal: string;

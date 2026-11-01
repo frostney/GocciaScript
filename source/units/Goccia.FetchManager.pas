@@ -87,6 +87,17 @@ type
     procedure DiscardPending(const ARealm: TGocciaRealm); virtual; abstract;
   end;
 
+type
+  { Runs the running engine's pending host work, other than fetch and real
+    timers, that can settle a promise, and returns True if there was any. }
+  TGocciaPromiseWaitHostWork = function: Boolean;
+
+var
+  { Set by Goccia.Engine. WaitForFetchPromise calls it so that a promise an
+    embedder's extension settles from its WaitForIdle settles there too, as
+    it does in the engine's idle wait. }
+  GPromiseWaitHostWork: TGocciaPromiseWaitHostWork = nil;
+
 procedure DrainMicrotasksAndFetchCompletions;
 function WaitForFetchPromise(const APromise: TGocciaPromiseValue): Boolean;
 { The realm-less forms act on the current realm's engine. }
@@ -1712,6 +1723,18 @@ begin
       Sleep(FETCH_POLL_INTERVAL_MS);
       Continue;
     end;
+
+    { Host work an extension owns is real work too: a promise it settles from
+      its WaitForIdle settles in the engine's idle wait, so it must settle
+      here, where an async test's promise, `.resolves` and async hooks wait.
+      It comes after fetch. An extension's WaitForIdle may block until its
+      work ends, and the script may end that work only after a fetch it
+      awaits settles, which needs the polls above; run first, it would hold
+      the fetch until the extension gave up. It comes before Atomics waiters
+      and virtual time, which would otherwise starve it. Fetch and real timers
+      themselves opt out (RunPendingWorkForPromiseWait). }
+    if Assigned(GPromiseWaitHostWork) and GPromiseWaitHostWork() then
+      Continue;
 
     { A pending async Atomics waiter is not, unlike a fetch, necessarily
       resolved by outside work: a real-mode timer calling Atomics.notify can be
