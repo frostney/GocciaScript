@@ -80,6 +80,8 @@ type
       handler, or been consumed by the host in a way that reports its
       rejection (an await, a module evaluation that rethrows it). }
     FIsHandled: Boolean;
+    { A module's evaluation promise (TGocciaVM.ExecuteModule). }
+    FIsModuleEvaluation: Boolean;
 
     procedure TriggerReactions;
     procedure InitializePrototype;
@@ -113,6 +115,13 @@ type
     property State: TGocciaPromiseState read FState;
     property PromiseResult: TGocciaValue read FResult;
     property IsHandled: Boolean read FIsHandled;
+    { ES2026 §27.7.5.2 AsyncBlockStart step 2.f fulfils a module's evaluation
+      promise with undefined whatever its body's last statement leaves. Set,
+      Resolve fulfils the promise with the value as it is, without reading a
+      then method or adopting a promise, so the host can still read the
+      body's completion value from it while no script sees it. }
+    property IsModuleEvaluation: Boolean read FIsModuleEvaluation
+      write FIsModuleEvaluation;
   published
     function PromiseThen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseCatch(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -859,7 +868,7 @@ begin
     Exit;
   end;
 
-  if AValue is TGocciaObjectValue then
+  if (AValue is TGocciaObjectValue) and not FIsModuleEvaluation then
   begin
     try
       // ES2026 §27.2.1.3.2 step 9: Let then be Get(resolution, "then").

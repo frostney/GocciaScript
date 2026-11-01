@@ -4057,18 +4057,26 @@ begin
 end;
 
 { A top level compiled as an async function body returns its evaluation
-  promise, which must be fulfilled once the run is idle. }
-procedure RaiseUnlessAsyncTopLevelFulfilled(const AEngine: TGocciaEngine;
-  const AModule: TGocciaBytecodeModule; const AResult: TGocciaValue);
+  promise, which must be fulfilled once the run is idle. It holds the
+  completion value of the body's last statement (IsModuleEvaluation), which
+  is the run's result, as the value a synchronous top level returns is. }
+function AsyncTopLevelCompletion(const AEngine: TGocciaEngine;
+  const AModule: TGocciaBytecodeModule;
+  const AResult: TGocciaValue): TGocciaValue;
 begin
+  Result := AResult;
   if Assigned(AModule) and Assigned(AModule.TopLevel) and
      AModule.TopLevel.IsAsync and (AResult is TGocciaPromiseValue) then
+  begin
     RaiseUnlessEntryPromiseFulfilled(AEngine, TGocciaPromiseValue(AResult));
+    Result := TGocciaPromiseValue(AResult).PromiseResult;
+  end;
 end;
 
 function TGocciaEngine.RunModule(
   const AModule: TGocciaBytecodeModule): TGocciaValue;
 var
+  Completion: TGocciaValue;
   OptionsScope: TGocciaSourcePipelineOptionsScope;
   RunSourceType: TGocciaSourceType;
   GC: TGarbageCollector;
@@ -4095,12 +4103,13 @@ begin
       GC.AddTempRoot(Result);
     try
       WaitForRuntimeIdle;
-      RaiseUnlessAsyncTopLevelFulfilled(Self, AModule, Result);
+      Completion := AsyncTopLevelCompletion(Self, AModule, Result);
       RaiseUnhandledRejection;
     finally
       if Assigned(Result) and Assigned(GC) then
         GC.RemoveTempRoot(Result);
     end;
+    Result := Completion;
     Completed := True;
   finally
     if not Completed then
@@ -4115,6 +4124,7 @@ function TGocciaEngine.RunModuleInScope(
   const AModule: TGocciaBytecodeModule;
   const AScope: TGocciaScope): TGocciaValue;
 var
+  Completion: TGocciaValue;
   OptionsScope: TGocciaSourcePipelineOptionsScope;
   RunSourceType: TGocciaSourceType;
   GC: TGarbageCollector;
@@ -4148,12 +4158,13 @@ begin
       GC.AddTempRoot(Result);
     try
       WaitForRuntimeIdle;
-      RaiseUnlessAsyncTopLevelFulfilled(Self, AModule, Result);
+      Completion := AsyncTopLevelCompletion(Self, AModule, Result);
       RaiseUnhandledRejection;
     finally
       if Assigned(Result) and Assigned(GC) then
         GC.RemoveTempRoot(Result);
     end;
+    Result := Completion;
     Completed := True;
   finally
     if not Completed then
