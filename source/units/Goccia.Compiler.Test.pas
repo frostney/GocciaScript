@@ -210,6 +210,7 @@ type
     procedure TestOptionalLocalPropertyReadSkipsFusedOpcode;
     procedure TestAsyncGeneratorReturnAwaitsBeforeTryCleanup;
     procedure TestOtherFunctionKindsReturnWithoutAwait;
+    procedure TestForAwaitCloseAwaitsReturnResult;
     procedure TestInitializedConstOperandsSkipGetLocal;
     procedure TestConstOperandsBeforeDeclarationKeepGetLocal;
     procedure TestSwitchClauseForgetsInitializedConsts;
@@ -476,6 +477,8 @@ begin
     TestAsyncGeneratorReturnAwaitsBeforeTryCleanup);
   Test('other function kinds return without an await',
     TestOtherFunctionKindsReturnWithoutAwait);
+  Test('for await close awaits the return result',
+    TestForAwaitCloseAwaitsReturnResult);
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
@@ -855,6 +858,78 @@ end;
 // A sync generator, an async function and a bare return compile no await;
 // an async generator's return that leaves no try keeps OP_RETURN's own await
 // (B = 1), since nothing runs between that await and the return.
+// ES2026 §7.4.14 AsyncIteratorClose: a for-await close calls return(), skips
+// the Await when there is no return method (step 4.b), awaits the result as a
+// suspension (step 4.d) and checks it only for a completion that is not a
+// throw (steps 5 and 7). The break exit and the throw handler each close once.
+procedure TTestCompiler.TestForAwaitCloseAwaitsReturnResult;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  Ops: array of Integer;
+  I, OpCount, CallCount, CheckCount, AwaitCount: Integer;
+  Instruction: UInt32;
+begin
+  Module := CompileSource(
+    'const holder = {' +
+    '  async read(source) {' +
+    '    for await (const x of source) { break; }' +
+    '  }' +
+    '};');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_ITER_CLOSE);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      // Opcodes in order, without OP_WIDE prefixes; the close modes are
+      // recorded as 1000 + C.
+      SetLength(Ops, Func.CodeCount);
+      OpCount := 0;
+      for I := 0 to Func.CodeCount - 1 do
+      begin
+        Instruction := Func.GetInstruction(I);
+        if TGocciaOpCode(DecodeOp(Instruction)) = OP_WIDE then
+          Continue;
+        if TGocciaOpCode(DecodeOp(Instruction)) = OP_ITER_CLOSE then
+          Ops[OpCount] := 1000 + DecodeC(Instruction)
+        else
+          Ops[OpCount] := DecodeOp(Instruction);
+        Inc(OpCount);
+      end;
+      CallCount := 0;
+      CheckCount := 0;
+      AwaitCount := 0;
+      for I := 0 to OpCount - 1 do
+        if Ops[I] = Ord(OP_AWAIT) then
+          Inc(AwaitCount)
+        else if Ops[I] = 1000 + ITER_CLOSE_ASYNC_RETURN then
+        begin
+          Inc(CallCount);
+          Expect<Boolean>(I + 2 < OpCount).ToBe(True);
+          if I + 2 < OpCount then
+          begin
+            Expect<Integer>(Ops[I + 1]).ToBe(Ord(OP_JUMP_IF_NULLISH));
+            Expect<Integer>(Ops[I + 2]).ToBe(Ord(OP_AWAIT));
+          end;
+        end
+        else if Ops[I] = 1000 + ITER_CLOSE_ASYNC_RESULT then
+        begin
+          Inc(CheckCount);
+          Expect<Integer>(Ops[I - 1]).ToBe(Ord(OP_AWAIT));
+        end
+        else if Ops[I] >= 1000 then
+          // A for-await close uses only the async close modes.
+          Expect<Integer>(Ops[I]).ToBe(1000 + ITER_CLOSE_ASYNC_RETURN);
+      Expect<Integer>(CallCount).ToBe(2);
+      Expect<Integer>(CheckCount).ToBe(1);
+      // next()'s await and one per close.
+      Expect<Integer>(AwaitCount).ToBe(3);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
 procedure TTestCompiler.TestOtherFunctionKindsReturnWithoutAwait;
 
   // OP_RETURNs with a nonzero B operand in ATemplate and the functions

@@ -3979,6 +3979,17 @@ begin
     if not Assigned(FIteratorValue) then
       Exit(AsyncFromSyncIteratorContinuation(Value, True, False));
 
+    ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
+    // ES2026 §27.1.5.2.2 step 8: without a return method the promise is
+    // resolved with the iterator result at once, its value as it is.
+    if not Assigned(ReturnMethod) or
+       (ReturnMethod is TGocciaUndefinedLiteralValue) or
+       (ReturnMethod is TGocciaNullLiteralValue) then
+    begin
+      ClearIteratorState;
+      Exit(PromiseResolve(CreateIteratorResult(Value, True)));
+    end;
+
     if FIteratorValue is TGocciaIteratorValue then
     begin
       if Assigned(AArgs) and (AArgs.Length > 0) then
@@ -3996,14 +4007,6 @@ begin
       Exit(AsyncFromSyncIteratorContinuation(Value, Done, False));
     end;
 
-    ReturnMethod := FIteratorValue.GetProperty(PROP_RETURN);
-    if not Assigned(ReturnMethod) or
-       (ReturnMethod is TGocciaUndefinedLiteralValue) or
-       (ReturnMethod is TGocciaNullLiteralValue) then
-    begin
-      ClearIteratorState;
-      Exit(AsyncFromSyncIteratorContinuation(Value, True, False));
-    end;
     if not ReturnMethod.IsCallable then
       ThrowTypeError('Iterator return is not callable');
 
@@ -5077,6 +5080,7 @@ var
   QueueOwner: TGocciaBytecodeAsyncGeneratorObjectValue;
   QueueOwnerRoot: TGocciaTempRoot;
   ResumeValue: TGocciaValue;
+  ResultRoot: TGocciaTempRoot;
   ResultValue: TGocciaValue;
   Suspended: Boolean;
 begin
@@ -5084,6 +5088,7 @@ begin
   if not Assigned(FContinuation) or not Assigned(FPromise) then
     Exit;
 
+  InitializeTempRoot(ResultRoot);
   ResumeValue := AArgument;
   Suspended := False;
   PreviousAsyncPromise := FVM.FCurrentAsyncPromise;
@@ -5101,10 +5106,39 @@ begin
       // return that awaited it in the body, and an implicit return, do not.
       if FAsyncGeneratorResult and Done and
          FContinuation.FReturnRequiresAwait then
-        FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), True))
+      begin
+        if Assigned(FContinuation.FQueueOwner) then
+        begin
+          // The Await is a reaction like any other: its job settles the
+          // request, finishes it and continues the queue
+          // (ResolveAwaitedReturn, RejectAwaitedReturn). Until then the
+          // request stays the running one.
+          AddTempRootIfNeeded(ResultRoot, ResultValue);
+          TGocciaBytecodeAsyncGeneratorObjectValue(FContinuation.FQueueOwner)
+            .AwaitReturnValue(FPromise, ResultValue);
+          FContinuation.FQueueOwner := nil;
+        end
+        else
+          FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue),
+            True));
+      end
       else if FAsyncGeneratorResult and
-              ((FResumeKind = bgrkReturn) or Done) then
+              (Done or ((FResumeKind = bgrkReturn) and
+                        FContinuation.FDelegateActive)) then
         FPromise.Resolve(CreateIteratorResult(ResultValue, Done))
+      else if FAsyncGeneratorResult and
+              Assigned(FContinuation.FQueueOwner) and
+              not FContinuation.FDelegateActive then
+      begin
+        // ES2026 §27.5.3.7 Yield awaits the value before AsyncGeneratorYield,
+        // and that Await's job settles the request, as for the return above
+        // (ResolveAwaitedYield, RejectAwaitedYield). That includes a yield in
+        // a finally that return() runs.
+        AddTempRootIfNeeded(ResultRoot, ResultValue);
+        TGocciaBytecodeAsyncGeneratorObjectValue(FContinuation.FQueueOwner)
+          .AwaitYieldValue(FPromise, ResultValue);
+        FContinuation.FQueueOwner := nil;
+      end
       else if FAsyncGeneratorResult then
         FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), Done))
       else if Done then
@@ -5119,6 +5153,7 @@ begin
     end;
   finally
     FVM.FCurrentAsyncPromise := PreviousAsyncPromise;
+    RemoveTempRootIfNeeded(ResultRoot);
   end;
   // The request is settled: an async generator body finishes it and runs the
   // queued requests now, in this job (ContinueWhenBodySettles).
@@ -9956,35 +9991,46 @@ begin
       SSuggestIteratorResultObject);
 end;
 
-procedure CloseRawAsyncIterator(const AIteratorObject: TGocciaValue);
+// ES2026 §7.4.14 AsyncIteratorClose, steps 3-4.c, for a for-await close:
+// returns the result of calling the iterator's return method, or nil when it
+// has none (step 4.b). The caller awaits the result with OP_AWAIT, so the
+// close suspends the async function as the spec's Await does.
+// GetIteratorValue keeps an async iterator in a record whose own return
+// method always exists, so the record answers with its iterator's method.
+function CallAsyncIteratorReturn(const AIteratorObject: TGocciaValue): TGocciaValue;
 var
-  ReturnMethod, ReturnResult: TGocciaValue;
+  ReturnMethod, ReturnTarget: TGocciaValue;
   CallArgs: TGocciaArgumentsCollection;
 begin
-  if not Assigned(AIteratorObject) then
-    Exit;
+  Result := nil;
   if not (AIteratorObject is TGocciaObjectValue) then
     Exit;
-  ReturnMethod := AIteratorObject.GetProperty(PROP_RETURN);
-  if not Assigned(ReturnMethod) or
-     (ReturnMethod is TGocciaUndefinedLiteralValue) or
-     (ReturnMethod is TGocciaNullLiteralValue) then
-    Exit;
+  ReturnTarget := AIteratorObject;
+  if AIteratorObject is TGocciaVMAsyncIteratorRecordValue then
+  begin
+    if not TGocciaVMAsyncIteratorRecordValue(AIteratorObject)
+       .GetUnderlyingReturnMethod(ReturnMethod) then
+      Exit;
+    ReturnTarget := TGocciaVMAsyncIteratorRecordValue(AIteratorObject)
+      .FIteratorValue;
+  end
+  else
+  begin
+    ReturnMethod := AIteratorObject.GetProperty(PROP_RETURN);
+    if not Assigned(ReturnMethod) or
+       (ReturnMethod is TGocciaUndefinedLiteralValue) or
+       (ReturnMethod is TGocciaNullLiteralValue) then
+      Exit;
+  end;
   if not ReturnMethod.IsCallable then
     ThrowTypeError(SErrorIteratorReturnMustBeCallable,
       SSuggestIteratorProtocol);
   CallArgs := TGocciaArgumentsCollection.Create;
   try
-    ReturnResult := InvokeCallable(ReturnMethod, CallArgs, AIteratorObject);
+    Result := InvokeCallable(ReturnMethod, CallArgs, ReturnTarget);
   finally
     CallArgs.Free;
   end;
-  ReturnResult := AwaitValue(ReturnResult);
-  if (ReturnResult is TGocciaUndefinedLiteralValue)
-      or (ReturnResult is TGocciaNullLiteralValue)
-      or ReturnResult.IsPrimitive then
-    ThrowTypeError(SErrorIteratorReturnObject,
-      SSuggestIteratorResultObject);
 end;
 
 // Abrupt-completion variant of CloseRawIterator: per ES2026 §7.4.11
@@ -9992,16 +10038,12 @@ end;
 // not let iter.return()'s own errors replace the original exception.
 // Mirrors CloseIteratorPreservingError in Goccia.Values.IteratorSupport
 // for the TGocciaIteratorValue case.
-procedure CloseRawIteratorPreservingError(const AIteratorObject: TGocciaValue;
-  const AAsync: Boolean = False);
+procedure CloseRawIteratorPreservingError(const AIteratorObject: TGocciaValue);
 begin
   if not Assigned(AIteratorObject) then
     Exit;
   try
-    if AAsync then
-      CloseRawAsyncIterator(AIteratorObject)
-    else
-      CloseRawIterator(AIteratorObject);
+    CloseRawIterator(AIteratorObject);
   except
     on E: Exception do
       { ES2026 §7.4.11 IteratorClose step 5: when the body completed abruptly,

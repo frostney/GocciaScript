@@ -214,6 +214,8 @@ type
     IsIteratorClose: Boolean;
     IsAsyncIterator: Boolean;
     IteratorReg: UInt16;
+    // An async iterator's close awaits return()'s result in this register.
+    IteratorCloseResultReg: UInt16;
     IsScopedHandlerCleanup: Boolean;
     ScopedCleanupDepth: Integer;
     // Active catch/finally handlers that abrupt exits must remove.
@@ -2359,6 +2361,28 @@ begin
   end;
 end;
 
+// ES2026 §7.4.14 AsyncIteratorClose: call the iterator's return method, Await
+// its result (step 4.d) as a suspension of the async function, then check
+// that the result is an Object (step 7). An iterator without a return method
+// closes without an Await (step 4.b). AResultReg receives the result. Only a
+// normal, break, continue or return completion checks the result: a throw
+// completion skips the check (step 5), and its caller discards any error.
+procedure EmitAsyncIteratorClose(const ACtx: TGocciaCompilationContext;
+  const AIteratorReg, AResultReg: UInt16; const ACheckResult: Boolean);
+var
+  NoReturnJump: Integer;
+begin
+  EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AIteratorReg, AResultReg,
+    ITER_CLOSE_ASYNC_RETURN));
+  NoReturnJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, AResultReg,
+    GOCCIA_NULLISH_MATCH_HOLE);
+  EmitInstruction(ACtx, EncodeABC(OP_AWAIT, AResultReg, AResultReg, 0));
+  if ACheckResult then
+    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AIteratorReg, AResultReg,
+      ITER_CLOSE_ASYNC_RESULT));
+  PatchJumpTarget(ACtx, NoReturnJump);
+end;
+
 procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
   const AEntry: TPendingFinallyEntry; const ACloseIterator: Boolean);
 var
@@ -2413,8 +2437,14 @@ begin
     PatchJumpTarget(ACtx, NullishJump);
   end
   else if AEntry.IsIteratorClose and ACloseIterator then
-    EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AEntry.IteratorReg,
-      Ord(AEntry.IsAsyncIterator), 0));
+  begin
+    if AEntry.IsAsyncIterator then
+      EmitAsyncIteratorClose(ACtx, AEntry.IteratorReg,
+        AEntry.IteratorCloseResultReg, True)
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AEntry.IteratorReg, 0,
+        ITER_CLOSE_NORMAL));
+  end;
 end;
 
 function CompileBlockStatement(const ACtx: TGocciaCompilationContext;
@@ -3659,8 +3689,9 @@ end;
 procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForAwaitOfStatement);
 var
-  IterReg, ValueReg, DoneReg, CloseErrorReg: UInt16;
-  LoopStart, ExitJump, MismatchJump, HandlerJump, I: Integer;
+  IterReg, ValueReg, DoneReg, CloseErrorReg, CloseResultReg: UInt16;
+  LoopStart, ExitJump, MismatchJump, HandlerJump, CloseHandlerJump,
+    I: Integer;
   Slot: UInt16;
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
@@ -3672,12 +3703,16 @@ begin
   ValueReg := ACtx.Scope.AllocateRegister;
   DoneReg := ACtx.Scope.AllocateRegister;
   CloseErrorReg := 0;
+  CloseResultReg := 0;
 
   NeedsIteratorClose := Assigned(AStmt.AssignmentTarget) or
     Assigned(AStmt.BindingPattern) or Assigned(AStmt.MatchPattern) or
     StatementNeedsIteratorClose(AStmt.Body);
   if NeedsIteratorClose then
+  begin
     CloseErrorReg := ACtx.Scope.AllocateRegister;
+    CloseResultReg := ACtx.Scope.AllocateRegister;
+  end;
 
   CompileExpressionWithLoopHeadTDZ(ACtx, AStmt.Iterable, IterReg,
     AStmt.BindingName, AStmt.BindingPattern,
@@ -3710,6 +3745,7 @@ begin
       PendingEntry.IsIteratorClose := True;
       PendingEntry.IsAsyncIterator := True;
       PendingEntry.IteratorReg := IterReg;
+      PendingEntry.IteratorCloseResultReg := CloseResultReg;
       GPendingFinally.Add(PendingEntry);
       GContinueFinallyBase := GPendingFinally.Count;
     end;
@@ -3765,8 +3801,14 @@ begin
 
     if NeedsIteratorClose then
     begin
+      // ES2026 §7.4.14 AsyncIteratorClose step 5: the body's throw completion
+      // wins over any error from return(), its Await or its result.
       PatchJumpTarget(ACtx, HandlerJump);
-      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 1, 1));
+      CloseHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER,
+        CloseResultReg);
+      EmitAsyncIteratorClose(ACtx, IterReg, CloseResultReg, False);
+      EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+      PatchJumpTarget(ACtx, CloseHandlerJump);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
     end;
 
@@ -3781,7 +3823,10 @@ begin
   ACtx.Scope.FreeRegister;
   ACtx.Scope.FreeRegister;
   if NeedsIteratorClose then
+  begin
     ACtx.Scope.FreeRegister;
+    ACtx.Scope.FreeRegister;
+  end;
 end;
 
 function ForBodyAssignsIdentifier(const ANode: TGocciaASTNode;

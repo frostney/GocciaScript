@@ -3362,7 +3362,25 @@
         SetFunctionNameFromKey(GetRegister(A), GetRegister(B), C);
 
       OP_ITER_CLOSE:
-        if FRegisters[A].Kind = grkObject then
+        if C = ITER_CLOSE_ASYNC_RETURN then
+        begin
+          IteratorElementValue := CallAsyncIteratorReturn(GetRegister(A));
+          if Assigned(IteratorElementValue) then
+            SetRegister(B, IteratorElementValue)
+          else
+            FRegisters[B] := RegisterHole;
+        end
+        else if C = ITER_CLOSE_ASYNC_RESULT then
+        begin
+          // ES2026 §7.4.14 AsyncIteratorClose step 7.
+          IteratorElementValue := GetRegister(B);
+          if (IteratorElementValue is TGocciaUndefinedLiteralValue) or
+             (IteratorElementValue is TGocciaNullLiteralValue) or
+             IteratorElementValue.IsPrimitive then
+            ThrowTypeError(SErrorIteratorReturnObject,
+              SSuggestIteratorResultObject);
+        end
+        else if FRegisters[A].Kind = grkObject then
         begin
           if C = ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN then
           begin
@@ -3376,9 +3394,7 @@
               CloseRawIteratorPreservingError(FRegisters[A].ObjectValue);
           end
           else if C = ITER_CLOSE_PRESERVE_ERROR then
-            CloseRawIteratorPreservingError(FRegisters[A].ObjectValue, B <> 0)
-          else if B <> 0 then
-            CloseRawAsyncIterator(FRegisters[A].ObjectValue)
+            CloseRawIteratorPreservingError(FRegisters[A].ObjectValue)
           else
             CloseRawIterator(FRegisters[A].ObjectValue);
         end;

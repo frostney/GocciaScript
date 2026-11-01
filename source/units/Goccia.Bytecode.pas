@@ -268,7 +268,12 @@ const
   //               OP_JUMP_IF_NOT_STRICT_EQ_IMM and OP_JUMP_IF_STRICT_EQ_IMM
   //               (opcodes 239 to 244), which compare a register with a
   //               signed Int16 immediate and jump in one dispatch.
-  GOCCIA_FORMAT_VERSION = 98;
+  //   v98 -> v99: OP_ITER_CLOSE operand C gained ITER_CLOSE_ASYNC_RETURN and
+  //               ITER_CLOSE_ASYNC_RESULT, which split a for-await close into
+  //               the return() call and the result check around an
+  //               OP_AWAIT. Operand B no longer selects an async close in the
+  //               other modes.
+  GOCCIA_FORMAT_VERSION = 99;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -307,6 +312,11 @@ const
   ITER_CLOSE_NORMAL = 0;
   ITER_CLOSE_PRESERVE_ERROR = 1;
   ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN = 2;
+  // ES2026 §7.4.14 AsyncIteratorClose, steps 3-4.c: R[B] := the result of
+  // calling the iterator's return method, or a hole when it has none.
+  ITER_CLOSE_ASYNC_RETURN = 3;
+  // AsyncIteratorClose step 7: R[B], the awaited result, must be an Object.
+  ITER_CLOSE_ASYNC_RESULT = 4;
   CALL_FLAG_SPREAD = 1;
   CALL_FLAG_TRUSTED = 2;
   // ES2026 §15.10 Tail Position Calls: the call sits in tail position of its
