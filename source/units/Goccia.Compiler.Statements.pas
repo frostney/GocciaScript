@@ -4738,6 +4738,7 @@ var
   DestructDecl: TGocciaDestructuringDeclaration;
   LocalIdx: Integer;
   HasUsingInit: Boolean;
+  UsingDisposeSlots, OldUsingDisposeSlots: TList<TPreallocatedUsingDisposeSlot>;
   SavedResourceBase, ResourceCount: Integer;
   CatchReg, ErrorReg: UInt16;
   HandlerJump, EndJump, NullishJump: Integer;
@@ -4750,6 +4751,7 @@ begin
 
   HasLexicalInit := False;
   HasUsingInit := AStmt.Init is TGocciaUsingDeclaration;
+  UsingDisposeSlots := nil;
   UseSharedLexicalFor := False;
   PerIterIsConst := False;
   PerIterNames := nil;
@@ -4814,6 +4816,13 @@ begin
       PendingEntry.FinallyBlock := nil;
       PendingEntry.UsingErrorReg := ErrorReg;
       GPendingFinally.Add(PendingEntry);
+
+      // As a block does: the head's bindings and every dispose register exist
+      // before the first initializer runs, so a disposal after an initializer
+      // threw skips the bindings that follow it.
+      PredeclareBlockLexicalLocals(AStmt.Init, ACtx);
+      UsingDisposeSlots := TList<TPreallocatedUsingDisposeSlot>.Create;
+      PreallocateUsingDisposeSlots(ACtx, UsingDecl, UsingDisposeSlots);
     end;
 
     try
@@ -4823,6 +4832,18 @@ begin
          (AStmt.Init is TGocciaExpressionStatement) then
         CompileDiscardedExpression(ACtx,
           TGocciaExpressionStatement(AStmt.Init).Expression)
+      else if HasUsingInit then
+      begin
+        OldUsingDisposeSlots := GPreallocatedUsingDisposeSlots;
+        GPreallocatedUsingDisposeSlots := UsingDisposeSlots;
+        try
+          ACtx.CompileStatement(AStmt.Init);
+        finally
+          if GPreallocatedUsingDisposeSlots = UsingDisposeSlots then
+            GPreallocatedUsingDisposeSlots := OldUsingDisposeSlots;
+          FreeAndNil(UsingDisposeSlots);
+        end;
+      end
       else if Assigned(AStmt.Init) then
         ACtx.CompileStatement(AStmt.Init);
 
@@ -5047,6 +5068,7 @@ begin
   finally
     if Assigned(PerIterNames) then
       PerIterNames.Free;
+    UsingDisposeSlots.Free;
   end;
 end;
 
