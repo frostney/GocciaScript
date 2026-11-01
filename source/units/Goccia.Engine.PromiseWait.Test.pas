@@ -49,6 +49,8 @@ type
     FUntilCancelled: TList;
     FCancelled: Boolean;
     FWaitCount: Integer;
+    FSettlesReadyWorkFirst: Boolean;
+    procedure SettleValues;
     function HostValue(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
     function HostUntilCancelled(const AArgs: TGocciaArgumentsCollection;
@@ -60,7 +62,14 @@ type
     procedure Detach; override;
     procedure WaitForIdle; override;
     function HasPendingWork: Boolean; override;
+    { With SettlesReadyWorkFirst, the promise wait settles the hostValue
+      promises on their own when there are any, without blocking on
+      hostUntilCancelled: the bounded step an extension whose WaitForIdle
+      blocks on one piece of work takes so another can be awaited first. }
+    function RunPendingWorkForPromiseWait: Boolean; override;
     property WaitCount: Integer read FWaitCount;
+    property SettlesReadyWorkFirst: Boolean read FSettlesReadyWorkFirst
+      write FSettlesReadyWorkFirst;
   end;
 
   TDelayedAnswer = class(TThread)
@@ -86,12 +95,14 @@ type
   TPromiseWaitTests = class(TTestSuite)
   private
     function RunModule(const ASource: string;
-      out AWaitCount: Integer; const AWithFetch: Boolean = False): string;
+      out AWaitCount: Integer; const AWithFetch: Boolean = False;
+      const ABoundedStep: Boolean = False): string;
     procedure TestHostPromiseInsideTest;
     procedure TestHostPromiseInResolves;
     procedure TestHostPromiseInHook;
     procedure TestRejectedHostPromiseFailsTheTest;
     procedure TestAwaitedFetchIsNotHeldByHostWork;
+    procedure TestBoundedStepLetsReadyWorkBeAwaitedFirst;
   public
     procedure SetupTests; override;
   end;
@@ -155,14 +166,11 @@ begin
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
-procedure THostValueExtension.WaitForIdle;
+procedure THostValueExtension.SettleValues;
 var
   Promise: TGocciaPromiseValue;
   Value: TGocciaValue;
-  Started: Int64;
-  Outcome: string;
 begin
-  Inc(FWaitCount);
   while FPending.Count > 0 do
   begin
     Promise := TGocciaPromiseValue(FPending[0]);
@@ -176,6 +184,16 @@ begin
     TGarbageCollector.Instance.RemoveTempRoot(Promise);
     TGarbageCollector.Instance.RemoveTempRoot(Value);
   end;
+end;
+
+procedure THostValueExtension.WaitForIdle;
+var
+  Promise: TGocciaPromiseValue;
+  Started: Int64;
+  Outcome: string;
+begin
+  Inc(FWaitCount);
+  SettleValues;
   if FUntilCancelled.Count > 0 then
   begin
     { Nothing on this thread can cancel while this blocks: only the script
@@ -200,6 +218,17 @@ end;
 function THostValueExtension.HasPendingWork: Boolean;
 begin
   Result := (FPending.Count > 0) or (FUntilCancelled.Count > 0);
+end;
+
+function THostValueExtension.RunPendingWorkForPromiseWait: Boolean;
+begin
+  if FSettlesReadyWorkFirst and (FPending.Count > 0) then
+  begin
+    Inc(FWaitCount);
+    SettleValues;
+    Exit(True);
+  end;
+  Result := inherited RunPendingWorkForPromiseWait;
 end;
 
 { TDelayedAnswer }
@@ -264,6 +293,8 @@ begin
     TestRejectedHostPromiseFailsTheTest);
   Test('host work does not hold up a fetch the test awaits first',
     TestAwaitedFetchIsNotHeldByHostWork);
+  Test('an extension that settles ready work first lets it be awaited ' +
+    'before blocking work', TestBoundedStepLetsReadyWorkBeAwaitedFirst);
 end;
 
 { Runs ASource as a module with goccia:test installed module-only and the
@@ -271,7 +302,8 @@ end;
   AWithFetch), and returns what the module reports through
   `globalThis.outcome`, or the uncaught error. }
 function TPromiseWaitTests.RunModule(const ASource: string;
-  out AWaitCount: Integer; const AWithFetch: Boolean): string;
+  out AWaitCount: Integer; const AWithFetch: Boolean;
+  const ABoundedStep: Boolean): string;
 var
   Source: TStringList;
   Runtime: TGocciaRuntime;
@@ -298,6 +330,7 @@ begin
       Runtime.Engine.FetchTransport := Transport;
     end;
     Host := THostValueExtension.Create;
+    Host.SettlesReadyWorkFirst := ABoundedStep;
     Runtime.Install(Host);
     try
       Runtime.Execute;
@@ -397,6 +430,29 @@ begin
     '  expect(await response.text()).toBe("answer");' + LineEnding +
     '  expect(await work).toBe("cancelled");' + LineEnding +
     '});' + LineEnding + REPORT, WaitCount, True))
+    .ToBe('1 passed, 0 failed');
+  Expect<Boolean>(GetMilliseconds - Started < HOST_GIVE_UP_MS).ToBe(True);
+end;
+
+{ The test awaits a ready host value while other host work, which only the
+  script can end, is pending. WaitForIdle settles both together and so
+  blocks on the second; an extension that overrides
+  RunPendingWorkForPromiseWait to settle the ready work alone lets the script
+  go on and end the other. }
+procedure TPromiseWaitTests.TestBoundedStepLetsReadyWorkBeAwaitedFirst;
+var
+  WaitCount: Integer;
+  Started: Int64;
+begin
+  Started := GetMilliseconds;
+  Expect<string>(RunModule(
+    'import { test, expect, runTests } from "goccia:test";' + LineEnding +
+    'test("value, then cancel", async () => {' + LineEnding +
+    '  const work = hostUntilCancelled();' + LineEnding +
+    '  expect(await hostValue(2)).toBe(2);' + LineEnding +
+    '  cancelHost();' + LineEnding +
+    '  expect(await work).toBe("cancelled");' + LineEnding +
+    '});' + LineEnding + REPORT, WaitCount, False, True))
     .ToBe('1 passed, 0 failed');
   Expect<Boolean>(GetMilliseconds - Started < HOST_GIVE_UP_MS).ToBe(True);
 end;

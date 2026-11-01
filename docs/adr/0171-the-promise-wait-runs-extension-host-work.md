@@ -55,6 +55,10 @@ had work, the wait drains microtasks again before it checks anything else.
   middle of a test.
 - **A separate hook the test library calls.** A synchronous `await` reaches
   the same wait and has the same gap.
+- **A non-blocking step as the default.** `WaitForIdle` is allowed to block
+  on its work (ADR 0142), and an extension that never overrides anything
+  would then never be waited for here, which is the failure this decision
+  fixes.
 - **Run the extension work before polling fetch.** A test that starts host
   work, awaits a fetch and only then ends the host work would block in the
   extension until it gave up.
@@ -70,6 +74,13 @@ had work, the wait drains microtasks again before it checks anything else.
   test still is not served by the promise wait.
 - While any fetch is in flight, an extension's work waits for it, even when
   the awaited promise is the extension's own.
+- The default runs the whole `WaitForIdle`, which settles everything the
+  extension has. An extension whose `WaitForIdle` blocks on one piece of work
+  that only the script can end (until it gives up) would block a test that
+  awaits another piece first, exactly as the idle wait does at the top level
+  of a module. Such an extension overrides `RunPendingWorkForPromiseWait` to
+  settle the work that is ready and return, waiting only when none is; the
+  wait calls it again after the script has run.
 
 ## Related
 
