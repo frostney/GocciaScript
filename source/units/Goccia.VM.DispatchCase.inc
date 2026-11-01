@@ -3938,10 +3938,7 @@
                  not (RightValue is TGocciaNullLiteralValue) then
               begin
                 if not RightValue.IsCallable then
-                  RightValue := GetDisposeMethod(LeftValue, dhAsyncDispose)
-                else
-                  RightValue := TGocciaVMAsyncDisposeMethodValue.Create(
-                    RightValue);
+                  RightValue := GetDisposeMethod(LeftValue, dhAsyncDispose);
               end
               else
               begin
@@ -3979,14 +3976,13 @@
         end;
       end;
 
-      // TC39 Explicit Resource Management: OP_USING_DISPOSE
-      // A=errorAccum, B=disposeMethod, C=resource
-      // Calls disposeMethod.call(resource). On error, wraps with SuppressedError
-      // if errorAccum already holds an error.
-      // TC39 Explicit Resource Management: OP_USING_DISPOSE
-      // A=errorAccum, B=disposeMethod (overwritten with call result), C=resource
-      // Calls disposeMethod.call(resource). Stores result in B for OP_AWAIT.
-      // On error, wraps with SuppressedError in A.
+      // ES2027 §7.5.4 DisposeResources step 4.e: A=errorAccum,
+      // B=disposeMethod (overwritten with the call's result), C=resource.
+      // Calls disposeMethod.call(resource) and stores the result in B for an
+      // await-using resource's OP_AWAIT (step 4.e.ii). A throw from the call
+      // leaves a hole in B, so that resource is not awaited, and goes to A,
+      // wrapped in a SuppressedError when A already holds an error (step
+      // 4.e.iii).
       OP_USING_DISPOSE:
       begin
         // Stamp the disposal site onto the top frame so an auto-SuppressedError
@@ -4007,15 +4003,15 @@
            LeftValue.IsCallable then
         begin
           try
-            // Clear B before the call so that if it throws, the follow-up
-            // OP_AWAIT sees null instead of the stale dispose function.
-            FRegisters[B] := RegisterNull;
+            // B holds a hole until the call returns, so a throw leaves one.
+            FRegisters[B] := RegisterHole;
             // GetDisposeMethod admits any callable, a callable Proxy too.
             RightValue := DispatchCallNoArgs(LeftValue,
               RegisterToValue(FRegisters[C]));
-            // Store result in B so a follow-up OP_AWAIT can await it
             if Assigned(RightValue) then
-              SetRegister(B, RightValue);
+              SetRegister(B, RightValue)
+            else
+              FRegisters[B] := RegisterUndefined;
           except
             on E: EGocciaBytecodeThrow do
             begin
@@ -4065,6 +4061,31 @@
             end;
           end;
         end;
+        finally
+          if SavedConstructFrameOk and (FCallStack <> nil) then
+            FCallStack.SetTopFrame(SavedConstructFrame);
+        end;
+      end;
+
+      // ES2027 §7.5.4 DisposeResources step 4.e.iii for an error the Await
+      // of an await using resource's result threw: A=errorAccum, B=the error.
+      OP_USING_DISPOSE_ERROR:
+      begin
+        // As OP_USING_DISPOSE: a SuppressedError records the disposal site.
+        if FCallStack <> nil then
+          SavedConstructFrameOk :=
+            FCallStack.TryGetTopFrame(SavedConstructFrame)
+        else
+          SavedConstructFrameOk := False;
+        StampCurrentInstructionLocation;
+        try
+          LeftValue := RegisterToValue(FRegisters[B]);
+          RightValue := RegisterToValue(FRegisters[A]);
+          if Assigned(RightValue) and
+             (RightValue <> TGocciaHoleValue.HoleValue) then
+            SetRegister(A, CreateSuppressedErrorObject(LeftValue, RightValue))
+          else
+            SetRegister(A, LeftValue);
         finally
           if SavedConstructFrameOk and (FCallStack <> nil) then
             FCallStack.SetTopFrame(SavedConstructFrame);
