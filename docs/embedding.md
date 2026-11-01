@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 1060 -->
+<!-- doc-length-limit: 1070 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -795,6 +795,10 @@ end;
 | `TGocciaArrayValue` | `object` (array) | `.Elements: TGocciaValueList` |
 | `TGocciaFunctionBase` | `function` | `.Call(Args, ThisValue)` |
 | `TGocciaInstanceValue` | `object` (class instance) | `.ClassValue`, `.GetProperty(Name)` |
+
+### What a Function Closed Over
+
+`BytecodeClosureOf(Value)` (`Goccia.VM`) returns the `TGocciaBytecodeClosure` behind a script function, or `nil` for anything else (a native or bound function, a class, an object, a primitive), so an embedder that moves a function to another engine or thread can read what it captured. `Template.SourceText` is its source as `toString()` returns it; for each `I` below `UpvalueCount`, `Template.GetUpvalueDescriptor(I).Name` names a captured binding and `RegisterToValue(GetUpvalue(I).Value)` is its current value, shared with every closure that captured it. A name the function resolves as a global is not an upvalue: it resolves through `GlobalScope`. The closure is for reading only (the engine keeps using it, so do not call `SetUpvalue` or write its properties); use it on the engine's thread while the function value is reachable, and root a value `RegisterToValue` returns, which can be newly allocated for a number, before anything that can collect.
 
 ## Error Handling
 

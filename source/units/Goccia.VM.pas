@@ -848,6 +848,21 @@ type
     function IsIdle: Boolean;
   end;
 
+{ The closure behind a bytecode function value, or nil for any other value
+  (a native function, a bound function, a class, a primitive). It gives an
+  embedder what a script function closed over: Template (its SourceText and,
+  through GetUpvalueDescriptor, each captured binding's name), UpvalueCount,
+  GetUpvalue (the captured cell; RegisterToValue(Cell.Value) is the binding's
+  current value) and GlobalScope.
+
+  For reading only. The engine owns the closure and keeps using it: an
+  embedder that calls SetUpvalue or writes a property changes the running
+  function. It lives as long as the function value, so keep that value
+  reachable while the closure is used, and use it on the engine's thread.
+  RegisterToValue can allocate a value for a number, so root a value it
+  returns before anything that can collect. }
+function BytecodeClosureOf(const AValue: TGocciaValue): TGocciaBytecodeClosure;
+
 implementation
 
 uses
@@ -18502,6 +18517,14 @@ begin
   else
     Value := GetPropertyValue(GetRegister(AObject), Constant^.StringValue);
   SetRegister(ADest, Value);
+end;
+
+function BytecodeClosureOf(const AValue: TGocciaValue): TGocciaBytecodeClosure;
+begin
+  if AValue is TGocciaBytecodeFunctionValue then
+    Result := TGocciaBytecodeFunctionValue(AValue).FClosure
+  else
+    Result := nil;
 end;
 
 initialization
