@@ -40,6 +40,33 @@ console.log("Stdin smoke...");
   if (!containsLine(out, "4")) throw new Error(`Expected 4 on its own line, got: ${out}`);
 }
 
+console.log("Module top-level await keeps the last value and fails only on its own awaits...");
+{
+  // A module entry with top-level await is an async body (ES2026
+  // §16.2.1.7.3.2 ExecuteModule step 10). Its last statement's value is still
+  // the run's result, and is never adopted as if the module had awaited it.
+  for (const [source, expected] of [
+    ["await 0; 42;", 42],
+    ["await 0; ({ answer: 42 });", { answer: 42 }],
+    ["await 0; const p = Promise.reject('handled'); p.catch(() => {}); p;", {}],
+    ["await 0; new Promise(() => {});", {}],
+    ["await 0; ({ then() { console.log('then called'); } });", {}],
+  ] as const) {
+    const { exitCode, json, stderr } = runLoaderJson(source, ["--source-type=module"]);
+    if (exitCode !== 0 || JSON.stringify(json.files?.[0]?.result) !== JSON.stringify(expected) ||
+        JSON.stringify(json.output).includes("then called"))
+      throw new Error(
+        `Module ${JSON.stringify(source)} should exit 0 with result ${JSON.stringify(expected)}, ` +
+          `got exit ${exitCode}, result ${JSON.stringify(json.files?.[0]?.result)}, output ${JSON.stringify(json.output)}${stderr}`,
+      );
+  }
+  const printed = await $`printf %s 'await 0; 42;' | ${RUNNER} --source-type=module --print -`.text();
+  if (!containsLine(printed, "42")) throw new Error(`Expected 42 on its own line, got: ${printed}`);
+  const rejected = runLoaderJson("await 0; await Promise.reject(new TypeError('rejected'));", ["--source-type=module"]);
+  if (rejected.exitCode === 0 || rejected.json.error?.type !== "TypeError")
+    throw new Error(`A rejected top-level await should fail with its TypeError, got exit ${rejected.exitCode}, ${JSON.stringify(rejected.json.error)}`);
+}
+
 console.log("REPL stdin decodes UTF-8...");
 {
   const repl = Bun.spawnSync([REPL], {

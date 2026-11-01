@@ -80,6 +80,10 @@ type
       handler, or been consumed by the host in a way that reports its
       rejection (an await, a module evaluation that rethrows it). }
     FIsHandled: Boolean;
+    { A module's evaluation promise (TGocciaVM.ExecuteModule), and the
+      completion value its body left, kept for the host. }
+    FIsModuleEvaluation: Boolean;
+    FModuleCompletion: TGocciaValue;
 
     procedure TriggerReactions;
     procedure InitializePrototype;
@@ -113,6 +117,14 @@ type
     property State: TGocciaPromiseState read FState;
     property PromiseResult: TGocciaValue read FResult;
     property IsHandled: Boolean read FIsHandled;
+    { ES2026 §27.7.5.2 AsyncBlockStart step 2.f fulfils a module's evaluation
+      promise with undefined whatever its body's last statement leaves. Set,
+      Resolve fulfils the promise with undefined and keeps the value it was
+      given in ModuleCompletion, for the host only: no then method is read
+      and no promise adopted. }
+    property IsModuleEvaluation: Boolean read FIsModuleEvaluation
+      write FIsModuleEvaluation;
+    property ModuleCompletion: TGocciaValue read FModuleCompletion;
   published
     function PromiseThen(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
     function PromiseCatch(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
@@ -827,6 +839,8 @@ begin
 
   if Assigned(FResult) then
     FResult.MarkReferences;
+  if Assigned(FModuleCompletion) then
+    FModuleCompletion.MarkReferences;
 
   if Assigned(FReactions) then
     for I := 0 to FReactions.Count - 1 do
@@ -851,6 +865,17 @@ var
   ThenMethod: TGocciaValue;
 begin
   if FState <> gpsPending then Exit;
+
+  // A module's evaluation promise is not resolved with its body's completion
+  // value, even when that value is the promise itself (IsModuleEvaluation).
+  if FIsModuleEvaluation then
+  begin
+    FModuleCompletion := AValue;
+    FState := gpsFulfilled;
+    FResult := TGocciaUndefinedLiteralValue.UndefinedValue;
+    TriggerReactions;
+    Exit;
+  end;
 
   if AValue = Self then
   begin
