@@ -211,6 +211,7 @@ type
     procedure TestAsyncGeneratorReturnAwaitsBeforeTryCleanup;
     procedure TestOtherFunctionKindsReturnWithoutAwait;
     procedure TestForAwaitCloseAwaitsReturnResult;
+    procedure TestAwaitUsingAwaitsDisposeResultOnce;
     procedure TestInitializedConstOperandsSkipGetLocal;
     procedure TestConstOperandsBeforeDeclarationKeepGetLocal;
     procedure TestSwitchClauseForgetsInitializedConsts;
@@ -479,6 +480,8 @@ begin
     TestOtherFunctionKindsReturnWithoutAwait);
   Test('for await close awaits the return result',
     TestForAwaitCloseAwaitsReturnResult);
+  Test('await using awaits a dispose result once',
+    TestAwaitUsingAwaitsDisposeResultOnce);
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
@@ -940,6 +943,64 @@ begin
       Expect<Integer>(ReturnTestCount).ToBe(1);
       // next()'s await and one per close.
       Expect<Integer>(AwaitCount).ToBe(4);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+// ES2027 §7.5.4 DisposeResources: an await using resource awaits its dispose
+// result once, inside a handler whose catch adds the Await's error to the
+// accumulated one (step 4.e.ii-iii). A hole, left by a dispose call that threw,
+// skips the Await. The normal exit and the block's handler each dispose once.
+procedure TTestCompiler.TestAwaitUsingAwaitsDisposeResultOnce;
+const
+  Expected: array[0..7] of TGocciaOpCode = (OP_JUMP_IF_NULLISH, OP_LOAD_TRUE,
+    OP_LOAD_FALSE, OP_PUSH_HANDLER, OP_AWAIT, OP_POP_HANDLER, OP_JUMP,
+    OP_USING_DISPOSE_ERROR);
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  Ops: array of TGocciaOpCode;
+  I, J, OpCount, DisposeCount, ErrorCount: Integer;
+  Op: TGocciaOpCode;
+begin
+  Module := CompileSource(
+    'const holder = {' +
+    '  async run(resource) {' +
+    '    await using r = resource;' +
+    '  }' +
+    '};');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_USING_DISPOSE);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      SetLength(Ops, Func.CodeCount);
+      OpCount := 0;
+      for I := 0 to Func.CodeCount - 1 do
+      begin
+        Op := TGocciaOpCode(DecodeOp(Func.GetInstruction(I)));
+        if Op = OP_WIDE then
+          Continue;
+        Ops[OpCount] := Op;
+        Inc(OpCount);
+      end;
+      DisposeCount := 0;
+      ErrorCount := 0;
+      for I := 0 to OpCount - 1 do
+        if Ops[I] = OP_USING_DISPOSE then
+        begin
+          Inc(DisposeCount);
+          Expect<Boolean>(I + Length(Expected) < OpCount).ToBe(True);
+          if I + Length(Expected) < OpCount then
+            for J := 0 to High(Expected) do
+              Expect<Integer>(Ord(Ops[I + 1 + J])).ToBe(Ord(Expected[J]));
+        end
+        else if Ops[I] = OP_USING_DISPOSE_ERROR then
+          Inc(ErrorCount);
+      Expect<Integer>(DisposeCount).ToBe(2);
+      Expect<Integer>(ErrorCount).ToBe(2);
     end;
   finally
     Module.Free;
@@ -4276,6 +4337,10 @@ begin
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_NOT_LT_IMM))).ToBe(True);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_JUMP_IF_STRICT_EQ_IMM))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_USING_DISPOSE_ERROR))).ToBe(True);
+  Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_USING_DISPOSE_ERROR) + 1)).ToBe(False);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_USING_DISPOSE_ERROR)).ToBe(True);
+  Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_USING_DISPOSE_ERROR)).ToBe(False);
   Expect<Boolean>(GocciaOpCodeUsesRegisterB(OP_JUMP_IF_NOT_GT_IMM)).ToBe(False);
   Expect<Boolean>(GocciaOpCodeUsesRegisterC(OP_JUMP_IF_NOT_GT_IMM)).ToBe(False);
   Expect<Boolean>(IsValidGocciaOpCode(Ord(OP_CREATE_GLOBAL_IMPORT_BINDING))).ToBe(True);

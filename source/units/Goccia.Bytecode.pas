@@ -274,7 +274,15 @@ const
   //               OP_AWAIT, and ITER_CLOSE_IS_GENERATOR_RETURN, which tells a
   //               generator's return completion from a throw. Operand B no
   //               longer selects an async close in the other modes.
-  GOCCIA_FORMAT_VERSION = 99;
+  //   v99 -> v100: an await using disposal follows ES2027 §7.5.4
+  //               DisposeResources. OP_USING_DISPOSE leaves a hole in R[B]
+  //               when the dispose call throws, so that resource is not
+  //               awaited, and the new OP_USING_DISPOSE_ERROR (opcode 245)
+  //               adds an error the resource's OP_AWAIT threw to the
+  //               accumulated one. A resource with Symbol.asyncDispose keeps
+  //               the method itself, whose result the OP_AWAIT awaits once;
+  //               v99 code awaited a wrapper that had already drained it.
+  GOCCIA_FORMAT_VERSION = 100;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -629,7 +637,12 @@ type
     // equal to the immediate Number (ES2026 §7.2.14 IsStrictlyEqual): only a
     // Number can be, so no value is converted and no guest code runs.
     OP_JUMP_IF_NOT_STRICT_EQ_IMM = 243,
-    OP_JUMP_IF_STRICT_EQ_IMM = 244
+    OP_JUMP_IF_STRICT_EQ_IMM = 244,
+    // ES2027 §7.5.4 DisposeResources step 4.e.iii for an await using
+    // resource whose Await threw: R[A] := R[B], or a new SuppressedError
+    // whose error is R[B] and whose suppressed value is R[A] when R[A] already
+    // holds an error rather than a hole.
+    OP_USING_DISPOSE_ERROR = 245
   );
 
 const
@@ -728,7 +741,8 @@ begin
     OP_DIV, OP_MOD, OP_POW, OP_BAND, OP_BOR, OP_BXOR,
     OP_SHL, OP_SHR, OP_USHR, OP_DEFINE_CLASS_METHOD_DYNAMIC,
     OP_CLASS_ADD_METHOD_DYNAMIC, OP_SET_PRIVATE_CLASS, OP_AWAIT,
-    OP_DYNAMIC_IMPORT, OP_USING_INIT, OP_USING_DISPOSE, OP_YIELD,
+    OP_DYNAMIC_IMPORT, OP_USING_INIT, OP_USING_DISPOSE, OP_USING_DISPOSE_ERROR,
+    OP_YIELD,
     OP_MATCH_VALUE, OP_MATCH_HAS_PROPERTY, OP_MATCH_EXTRACTOR, OP_INC,
     OP_DEC, OP_TO_NUMERIC, OP_TO_OBJECT, OP_HAS_WITH_BINDING,
     OP_TO_PROPERTY_KEY, OP_ENUM_KEYS, OP_ENUM_ENTRY, OP_ITER_UNPACK,

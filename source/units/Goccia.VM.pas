@@ -2512,21 +2512,10 @@ type
     procedure TraceReferences; override;
   end;
 
+  { ES2027 §7.5.3 GetDisposeMethod step 6: the closure an await using
+    declaration disposes a resource with when it has a Symbol.dispose method
+    and no Symbol.asyncDispose method. }
   TGocciaVMSyncDisposeFallbackValue = class(TGocciaFunctionBase)
-  private
-    FDisposeMethod: TGocciaValue;
-  protected
-    function GetFunctionLength: Integer; override;
-    function GetFunctionName: string; override;
-  public
-    constructor Create(const ADisposeMethod: TGocciaValue);
-    function Call(const AArguments: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue; override;
-    function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
-    procedure TraceReferences; override;
-  end;
-
-  TGocciaVMAsyncDisposeMethodValue = class(TGocciaFunctionBase)
   private
     FDisposeMethod: TGocciaValue;
   protected
@@ -3105,88 +3094,71 @@ function TGocciaVMSyncDisposeFallbackValue.Call(
   const AArguments: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 begin
-  if Assigned(FDisposeMethod) and FDisposeMethod.IsCallable then
-    InvokeCallable(FDisposeMethod, AArguments, AThisValue);
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := CallNoArgs(AThisValue);
 end;
 
+// The closure's steps 6.a-6.f: call the Symbol.dispose method with no
+// arguments and return a promise, fulfilled with undefined, or rejected with
+// what the call threw (IfAbruptRejectPromise). The disposal awaits that
+// promise, so a value the method returns is never awaited and its throw is
+// awaited as a rejection.
 function TGocciaVMSyncDisposeFallbackValue.CallNoArgs(
   const AThisValue: TGocciaValue): TGocciaValue;
 var
   CallArgs: TGocciaArgumentsCollection;
+  IsRooted: Boolean;
+  Promise: TGocciaPromiseValue;
 begin
-  if Assigned(FDisposeMethod) and FDisposeMethod.IsCallable then
-  begin
+  Promise := TGocciaPromiseValue.Create;
+  IsRooted := TGarbageCollector.Instance <> nil;
+  if IsRooted then
+    TGarbageCollector.Instance.AddTempRoot(Promise);
+  try
     CallArgs := TGocciaArgumentsCollection.Create;
     try
-      InvokeCallable(FDisposeMethod, CallArgs, AThisValue);
+      try
+        if Assigned(FDisposeMethod) and FDisposeMethod.IsCallable then
+          InvokeCallable(FDisposeMethod, CallArgs, AThisValue);
+        Promise.Resolve(TGocciaUndefinedLiteralValue.UndefinedValue);
+      except
+        on E: EGocciaBytecodeThrow do
+          Promise.Reject(E.ThrownValue);
+        on E: TGocciaThrowValue do
+          Promise.Reject(E.Value);
+        on E: TGocciaTimeoutError do
+          raise;
+        on E: TGocciaInstructionLimitError do
+          raise;
+        on E: TGocciaMemoryLimitError do
+          raise;
+        on E: EGocciaCapabilityAuditDeliveryError do
+          raise;
+        on E: Exception do
+        begin
+          if IsEngineIntegrityFault(E) then
+            raise;
+          if E is TGocciaTypeError then
+            Promise.Reject(CreateErrorObject(TYPE_ERROR_NAME, E.Message))
+          else if E is TGocciaReferenceError then
+            Promise.Reject(CreateErrorObject(REFERENCE_ERROR_NAME,
+              E.Message))
+          else if E is TGocciaSyntaxError then
+            Promise.Reject(CreateErrorObject(SYNTAX_ERROR_NAME, E.Message))
+          else
+            Promise.Reject(CreateErrorObject(ERROR_NAME, E.Message));
+        end;
+      end;
     finally
       CallArgs.Free;
     end;
+  finally
+    if IsRooted then
+      TGarbageCollector.Instance.RemoveTempRoot(Promise);
   end;
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  Result := Promise;
 end;
 
 procedure TGocciaVMSyncDisposeFallbackValue.TraceReferences;
-begin
-  inherited;
-  if Assigned(FDisposeMethod) then
-    FDisposeMethod.MarkReferences;
-end;
-
-constructor TGocciaVMAsyncDisposeMethodValue.Create(
-  const ADisposeMethod: TGocciaValue);
-begin
-  inherited Create;
-  FDisposeMethod := ADisposeMethod;
-end;
-
-function TGocciaVMAsyncDisposeMethodValue.GetFunctionLength: Integer;
-begin
-  Result := 0;
-end;
-
-function TGocciaVMAsyncDisposeMethodValue.GetFunctionName: string;
-begin
-  Result := '[Symbol.asyncDispose]';
-end;
-
-function TGocciaVMAsyncDisposeMethodValue.Call(
-  const AArguments: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  DisposeResult: TGocciaValue;
-begin
-  if Assigned(FDisposeMethod) and FDisposeMethod.IsCallable then
-  begin
-    DisposeResult := InvokeCallable(FDisposeMethod, AArguments, AThisValue);
-    if Assigned(DisposeResult) then
-      AwaitValue(DisposeResult);
-  end;
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-function TGocciaVMAsyncDisposeMethodValue.CallNoArgs(
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  CallArgs: TGocciaArgumentsCollection;
-  DisposeResult: TGocciaValue;
-begin
-  if Assigned(FDisposeMethod) and FDisposeMethod.IsCallable then
-  begin
-    CallArgs := TGocciaArgumentsCollection.Create;
-    try
-      DisposeResult := InvokeCallable(FDisposeMethod, CallArgs, AThisValue);
-    finally
-      CallArgs.Free;
-    end;
-    if Assigned(DisposeResult) then
-      AwaitValue(DisposeResult);
-  end;
-  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
-end;
-
-procedure TGocciaVMAsyncDisposeMethodValue.TraceReferences;
 begin
   inherited;
   if Assigned(FDisposeMethod) then

@@ -169,7 +169,7 @@ class Counter {
 `using` and `await using` declarations (ECMA-262 draft, ES2027, §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported, in a block or directly in a function body.
 
 - `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
-- `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is awaited.
+- `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is called and its result awaited, or `[Symbol.dispose]()` is called when there is no `[Symbol.asyncDispose]`, with the job timing of DisposeResources (§7.5.4): a call that throws is not awaited, and null or undefined resources await once in all.
 - `DisposableStack` and `AsyncDisposableStack` are available as built-in constructors.
 - `Symbol.dispose` and `Symbol.asyncDispose` are well-known symbols.
 - `SuppressedError` is thrown when both the block body and a disposer throw.

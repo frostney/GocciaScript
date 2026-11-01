@@ -1813,21 +1813,99 @@ end;
 // Each OP_USING_DISPOSE: A=errorAccum, B=disposeMethod, C=resource
 // OP_USING_DISPOSE writes the call result back into B, so for await using
 // we emit OP_AWAIT on DisposeSlot to await the actual dispose Promise.
+// ES2027 §7.5.4 DisposeResources, for the resources AResources lists in
+// declaration order, accumulating a disposal error in AErrorReg. An await using
+// resource awaits the result of its dispose call (step 4.e.ii), but not after
+// the call threw (step 4.e.iii), and an error from that Await joins AErrorReg
+// as a throw from the call does. A null or undefined await using resource is
+// not awaited itself: the disposal awaits undefined once for those, before the
+// next using resource is disposed (step 4.d) or at the end (step 5), unless a
+// dispose result was awaited first.
 procedure EmitDisposalSequence(const ACtx: TGocciaCompilationContext;
   const AResources: array of TUsingResourceEntry;
   const AResourceCount: Integer; const AErrorReg: UInt16);
 var
   I: Integer;
+  HasAwait: Boolean;
+  NeedsAwaitReg, HasAwaitedReg, AwaitReg: UInt16;
+  NoMethodJump, ThrewJump, HandlerJump, AwaitedJump, CaughtJump,
+    SkipJump: Integer;
+
+  // Steps 4.d and 5: Await(undefined) when a null resource left needsAwait
+  // set and nothing was awaited yet, then clear needsAwait.
+  procedure EmitPendingAwait;
+  var
+    NoPendingJump: Integer;
+  begin
+    NoPendingJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE,
+      NeedsAwaitReg);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, AwaitReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_AWAIT, AwaitReg, AwaitReg, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, NeedsAwaitReg, 0, 0));
+    PatchJumpTarget(ACtx, NoPendingJump);
+  end;
+
 begin
+  HasAwait := False;
+  for I := 0 to AResourceCount - 1 do
+    HasAwait := HasAwait or AResources[I].IsAwait;
+  if not HasAwait then
+  begin
+    for I := AResourceCount - 1 downto 0 do
+      EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE,
+        AErrorReg, AResources[I].DisposeSlot, AResources[I].ValueSlot));
+    Exit;
+  end;
+
+  // NeedsAwaitReg holds needsAwait and not hasAwaited, which is all steps
+  // 4.d and 5 read.
+  NeedsAwaitReg := ACtx.Scope.AllocateRegister;
+  HasAwaitedReg := ACtx.Scope.AllocateRegister;
+  AwaitReg := ACtx.Scope.AllocateRegister;
+  EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, NeedsAwaitReg, 0, 0));
+  EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, HasAwaitedReg, 0, 0));
   for I := AResourceCount - 1 downto 0 do
   begin
+    if not AResources[I].IsAwait then
+    begin
+      EmitPendingAwait;
+      EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE,
+        AErrorReg, AResources[I].DisposeSlot, AResources[I].ValueSlot));
+      Continue;
+    end;
+
+    // OP_USING_INIT leaves null for a null or undefined resource (step 4.f).
+    NoMethodJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+      AResources[I].DisposeSlot, GOCCIA_NULLISH_MATCH_NULL);
     EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE,
       AErrorReg, AResources[I].DisposeSlot, AResources[I].ValueSlot));
-    // Await the actual dispose result for async resources
-    if AResources[I].IsAwait then
-      EmitInstruction(ACtx, EncodeABC(OP_AWAIT,
-        AResources[I].DisposeSlot, AResources[I].DisposeSlot, 0));
+    // A hole: the call threw, and OP_USING_DISPOSE took its error.
+    ThrewJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+      AResources[I].DisposeSlot, GOCCIA_NULLISH_MATCH_HOLE);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, HasAwaitedReg, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_FALSE, NeedsAwaitReg, 0, 0));
+    HandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER, AwaitReg);
+    EmitInstruction(ACtx, EncodeABC(OP_AWAIT,
+      AResources[I].DisposeSlot, AResources[I].DisposeSlot, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+    AwaitedJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    PatchJumpTarget(ACtx, HandlerJump);
+    EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE_ERROR,
+      AErrorReg, AwaitReg, 0));
+    CaughtJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+    // Step 4.f: needsAwait, which matters only while nothing was awaited.
+    PatchJumpTarget(ACtx, NoMethodJump);
+    SkipJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, HasAwaitedReg);
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, NeedsAwaitReg, 0, 0));
+    PatchJumpTarget(ACtx, SkipJump);
+    PatchJumpTarget(ACtx, ThrewJump);
+    PatchJumpTarget(ACtx, AwaitedJump);
+    PatchJumpTarget(ACtx, CaughtJump);
   end;
+  EmitPendingAwait;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
+  ACtx.Scope.FreeRegister;
 end;
 
 function GetBlockFunctionDeclaration(const ANode: TGocciaASTNode): TGocciaFunctionDeclaration;
