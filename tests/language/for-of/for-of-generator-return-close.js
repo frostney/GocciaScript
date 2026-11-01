@@ -19,7 +19,7 @@ const makeSource = (descriptor, log) =>
         log.push("get return");
         return descriptor();
       },
-    }
+    },
   );
 
 const closeThroughLoop = (source) => {
@@ -50,7 +50,7 @@ describe("generator return() through for...of", () => {
   test("a primitive result from return is a TypeError", () => {
     const log = [];
     const { outcome, finallyLog, after } = closeThroughLoop(
-      makeSource(() => () => 0, log)
+      makeSource(() => () => 0, log),
     );
     expect(outcome).toBe("TypeError");
     expect(log).toEqual(["get return"]);
@@ -59,9 +59,7 @@ describe("generator return() through for...of", () => {
   });
 
   test("an undefined result from return is a TypeError", () => {
-    const { outcome } = closeThroughLoop(
-      makeSource(() => () => undefined, [])
-    );
+    const { outcome } = closeThroughLoop(makeSource(() => () => undefined, []));
     expect(outcome).toBe("TypeError");
   });
 
@@ -71,8 +69,8 @@ describe("generator return() through for...of", () => {
         () => () => {
           throw "thrown";
         },
-        []
-      )
+        [],
+      ),
     );
     expect(outcome).toBe("thrown");
     expect(finallyLog).toEqual(["finally"]);
@@ -83,7 +81,7 @@ describe("generator return() through for...of", () => {
     const { outcome } = closeThroughLoop(
       makeSource(() => {
         throw "getter";
-      }, [])
+      }, []),
     );
     expect(outcome).toBe("getter");
   });
@@ -101,8 +99,8 @@ describe("generator return() through for...of", () => {
           log.push("return called");
           return {};
         },
-        log
-      )
+        log,
+      ),
     );
     expect(outcome).toEqual({ value: 9, done: true });
     expect(log).toEqual(["get return", "return called"]);
@@ -199,7 +197,7 @@ describe("generator return() through for...of", () => {
           () => () => {
             throw "close";
           },
-          []
+          [],
         )) {
           yield x;
         }
