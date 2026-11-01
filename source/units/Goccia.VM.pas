@@ -2721,6 +2721,10 @@ type
       const AValue: TGocciaValue);
     procedure RejectAwaitedYield(const ARequestPromise: TGocciaPromiseValue;
       const AReason: TGocciaValue);
+    function ResumeWithThrowAtYield(const ARequestPromise: TGocciaPromiseValue;
+      const AReason: TGocciaValue; out AYieldedValue: TGocciaValue): Boolean;
+    procedure AwaitYieldOrThrowAtYield(
+      const ARequestPromise: TGocciaPromiseValue; const AValue: TGocciaValue);
     procedure ResolveAwaitedReturn(const ARequestPromise: TGocciaPromiseValue;
       const AValue: TGocciaValue);
     procedure RejectAwaitedReturn(const ARequestPromise: TGocciaPromiseValue;
@@ -5078,6 +5082,7 @@ var
   Done: Boolean;
   PreviousAsyncPromise: TGocciaPromiseValue;
   QueueOwner: TGocciaBytecodeAsyncGeneratorObjectValue;
+  QueueHandedOff: Boolean;
   QueueOwnerRoot: TGocciaTempRoot;
   ResumeValue: TGocciaValue;
   ResultRoot: TGocciaTempRoot;
@@ -5089,6 +5094,7 @@ begin
     Exit;
 
   InitializeTempRoot(ResultRoot);
+  QueueHandedOff := False;
   ResumeValue := AArgument;
   Suspended := False;
   PreviousAsyncPromise := FVM.FCurrentAsyncPromise;
@@ -5117,6 +5123,7 @@ begin
           TGocciaBytecodeAsyncGeneratorObjectValue(FContinuation.FQueueOwner)
             .AwaitReturnValue(FPromise, ResultValue);
           FContinuation.FQueueOwner := nil;
+          QueueHandedOff := True;
         end
         else
           FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue),
@@ -5134,10 +5141,20 @@ begin
         // and that Await's job settles the request, as for the return above
         // (ResolveAwaitedYield, RejectAwaitedYield). That includes a yield in
         // a finally that return() runs.
-        AddTempRootIfNeeded(ResultRoot, ResultValue);
-        TGocciaBytecodeAsyncGeneratorObjectValue(FContinuation.FQueueOwner)
-          .AwaitYieldValue(FPromise, ResultValue);
+        // The request leaves this continuation first: a throw at the yield
+        // may suspend the body on an await again, which hands it back.
+        QueueOwner := TGocciaBytecodeAsyncGeneratorObjectValue(
+          FContinuation.FQueueOwner);
         FContinuation.FQueueOwner := nil;
+        QueueHandedOff := True;
+        AddTempRootIfNeeded(ResultRoot, ResultValue);
+        InitializeTempRoot(QueueOwnerRoot);
+        AddTempRootIfNeeded(QueueOwnerRoot, QueueOwner);
+        try
+          QueueOwner.AwaitYieldOrThrowAtYield(FPromise, ResultValue);
+        finally
+          RemoveTempRootIfNeeded(QueueOwnerRoot);
+        end;
       end
       else if FAsyncGeneratorResult then
         FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), Done))
@@ -5156,8 +5173,9 @@ begin
     RemoveTempRootIfNeeded(ResultRoot);
   end;
   // The request is settled: an async generator body finishes it and runs the
-  // queued requests now, in this job (ContinueWhenBodySettles).
-  if Assigned(FContinuation.FQueueOwner) then
+  // queued requests now, in this job (ContinueWhenBodySettles). A request
+  // handed to an Await's reaction above is finished there.
+  if not QueueHandedOff and Assigned(FContinuation.FQueueOwner) then
   begin
     QueueOwner := TGocciaBytecodeAsyncGeneratorObjectValue(
       FContinuation.FQueueOwner);
@@ -5558,11 +5576,27 @@ end;
 procedure TGocciaBytecodeAsyncGeneratorObjectValue.RejectAwaitedYield(
   const ARequestPromise: TGocciaPromiseValue; const AReason: TGocciaValue);
 var
+  YieldedValue: TGocciaValue;
+begin
+  if ResumeWithThrowAtYield(ARequestPromise, AReason, YieldedValue) then
+    AwaitYieldOrThrowAtYield(ARequestPromise, YieldedValue);
+end;
+
+// The Await of a yield threw (ES2026 §27.5.3.7 Yield): the body resumes with
+// the throw at that yield. Returns True, with the value, when the body yields
+// again and that value still has to be awaited; the request is otherwise
+// settled, finished or left running on an await the body suspended on.
+function TGocciaBytecodeAsyncGeneratorObjectValue.ResumeWithThrowAtYield(
+  const ARequestPromise: TGocciaPromiseValue; const AReason: TGocciaValue;
+  out AYieldedValue: TGocciaValue): Boolean;
+var
   Done: Boolean;
   PreviousAsyncPromise: TGocciaPromiseValue;
   ResultValue: TGocciaValue;
   UnwrappedValue: TGocciaValue;
 begin
+  Result := False;
+  AYieldedValue := nil;
   PreviousAsyncPromise := FInner.FVM.FCurrentAsyncPromise;
   FInner.FVM.FCurrentAsyncPromise := ARequestPromise;
   try
@@ -5585,7 +5619,10 @@ begin
         FinishRequest;
       end
       else
-        AwaitYieldValue(ARequestPromise, ResultValue);
+      begin
+        AYieldedValue := ResultValue;
+        Result := True;
+      end;
     except
       on E: EGocciaBytecodeAsyncSuspend do
         ContinueWhenBodySettles;
@@ -5603,6 +5640,55 @@ begin
   finally
     FInner.FVM.FCurrentAsyncPromise := PreviousAsyncPromise;
   end;
+end;
+
+// ES2026 §27.5.3.7 Yield: await a yielded value, then settle the request from
+// the Await's reaction (ResolveAwaitedYield, RejectAwaitedYield). When the
+// Await throws at once (PromiseResolve reads a throwing constructor), the
+// throw happens at the yield, inside the body. A body that yields again is
+// handled here, in a loop rather than by recursion.
+procedure TGocciaBytecodeAsyncGeneratorObjectValue.AwaitYieldOrThrowAtYield(
+  const ARequestPromise: TGocciaPromiseValue; const AValue: TGocciaValue);
+var
+  Reason, Value: TGocciaValue;
+  Threw: Boolean;
+  ValueRoot, ReasonRoot: TGocciaTempRoot;
+begin
+  Value := AValue;
+  repeat
+    Threw := False;
+    Reason := nil;
+    InitializeTempRoot(ValueRoot);
+    AddTempRootIfNeeded(ValueRoot, Value);
+    try
+      try
+        AwaitYieldValue(ARequestPromise, Value);
+      except
+        on E: EGocciaBytecodeThrow do
+        begin
+          Threw := True;
+          Reason := E.ThrownValue;
+        end;
+        on E: TGocciaThrowValue do
+        begin
+          Threw := True;
+          Reason := E.Value;
+        end;
+      end;
+    finally
+      RemoveTempRootIfNeeded(ValueRoot);
+    end;
+    if not Threw then
+      Exit;
+    InitializeTempRoot(ReasonRoot);
+    AddTempRootIfNeeded(ReasonRoot, Reason);
+    try
+      if not ResumeWithThrowAtYield(ARequestPromise, Reason, Value) then
+        Exit;
+    finally
+      RemoveTempRootIfNeeded(ReasonRoot);
+    end;
+  until False;
 end;
 
 procedure TGocciaBytecodeAsyncGeneratorObjectValue.ResolveAwaitedReturn(
@@ -5708,7 +5794,7 @@ begin
                 UnwrappedValue := Value
               else
               begin
-                AwaitYieldValue(ARequest.Promise, Value);
+                AwaitYieldOrThrowAtYield(ARequest.Promise, Value);
                 Exit;
               end;
             except

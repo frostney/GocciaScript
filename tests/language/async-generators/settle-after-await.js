@@ -207,6 +207,97 @@ describe("async generator settling after an await", () => {
     ]);
   });
 
+  // PromiseResolve reads the constructor of a promise, so the Await of a
+  // yield throws at once and the throw happens at the yield.
+  const makeBrokenPromise = () => {
+    const promise = Promise.resolve(42);
+    Object.defineProperty(promise, "constructor", {
+      get() {
+        throw "broken";
+      },
+    });
+    return promise;
+  };
+
+  test("a yield whose Await throws at once throws at the yield", async () => {
+    const log = [];
+    const helpers = {
+      async *values(awaitFirst) {
+        if (awaitFirst) await null;
+        try {
+          yield makeBrokenPromise();
+        } catch (e) {
+          log.push("caught:" + e);
+          yield "recovered";
+        } finally {
+          log.push("finally");
+        }
+      },
+    };
+    for (const awaitFirst of [true, false]) {
+      const iterator = helpers.values(awaitFirst);
+      expect(await iterator.next()).toEqual({
+        value: "recovered",
+        done: false,
+      });
+      expect(await iterator.next()).toEqual({ value: undefined, done: true });
+    }
+    expect(log).toEqual(["caught:broken", "finally", "caught:broken", "finally"]);
+  });
+
+  test("a throw at the yield that awaits again keeps queued requests in order", async () => {
+    const log = [];
+    const helpers = {
+      async *values() {
+        await null;
+        try {
+          yield makeBrokenPromise();
+        } catch (e) {
+          log.push("caught");
+          await null;
+          log.push("resumed");
+          yield "second";
+        }
+      },
+    };
+    const iterator = helpers.values();
+    const requests = [
+      iterator.next().then((r) => log.push("n1:" + r.value)),
+      iterator.next().then((r) => log.push("n2:" + r.done)),
+      iterator.return(9).then((r) => log.push("r:" + r.value)),
+    ];
+    await Promise.all([...requests, ticker(log, 4)]);
+    expect(log).toEqual([
+      "caught",
+      "t1",
+      "resumed",
+      "t2",
+      "t3",
+      "n1:second",
+      "n2:true",
+      "t4",
+      "r:9",
+    ]);
+  });
+
+  test("a yield that throws at once many times in a row does not nest", async () => {
+    let caught = 0;
+    const helpers = {
+      async *values() {
+        for (const i of Array.from({ length: 5000 })) {
+          try {
+            yield makeBrokenPromise();
+          } catch (e) {
+            caught++;
+          }
+        }
+        yield "end";
+      },
+    };
+    expect(await helpers.values().next()).toEqual({ value: "end", done: false });
+    expect(caught).toBe(5000);
+  });
+
   test("a plain returned value and a return that leaves a try settle in order with other jobs", async () => {
     const log = [];
     const helpers = {
