@@ -8,6 +8,11 @@ import {
   thenableValue,
   thenCalls,
 } from "./helpers/tla-last-statement-thenable.js";
+import { afterDependencyValue } from "./helpers/tla-after-async-dependency-handled-rejection.js";
+import {
+  afterDependencyThenableValue,
+  afterDependencyThenCalls,
+} from "./helpers/tla-after-async-dependency-thenable.js";
 
 describe("the last statement of a module with top-level await", () => {
   test("a handled rejected promise does not fail the module's evaluation", () => {
@@ -19,5 +24,22 @@ describe("the last statement of a module with top-level await", () => {
     await null;
     await null;
     expect(thenCalls).toBe(0);
+  });
+
+  test("after an asynchronous dependency, a handled rejected promise does not fail the module", () => {
+    expect(afterDependencyValue).toBe("loaded");
+  });
+
+  test("after an asynchronous dependency, a thenable is not called", async () => {
+    expect(afterDependencyThenableValue).toBe("loaded");
+    await null;
+    await null;
+    expect(afterDependencyThenCalls).toBe(0);
+  });
+
+  test("a dynamic import of such a module resolves to its namespace", async () => {
+    const namespace =
+      await import("./helpers/tla-after-async-dependency-handled-rejection.js");
+    expect(namespace.afterDependencyValue).toBe("loaded");
   });
 });

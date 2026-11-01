@@ -4057,9 +4057,10 @@ begin
 end;
 
 { A top level compiled as an async function body returns its evaluation
-  promise, which must be fulfilled once the run is idle. It holds the
-  completion value of the body's last statement (IsModuleEvaluation), which
-  is the run's result, as the value a synchronous top level returns is. }
+  promise, which must be fulfilled once the run is idle. It keeps the
+  completion value of the body's last statement for the host
+  (ModuleCompletion), which is the run's result, as the value a synchronous
+  top level returns is. }
 function AsyncTopLevelCompletion(const AEngine: TGocciaEngine;
   const AModule: TGocciaBytecodeModule;
   const AResult: TGocciaValue): TGocciaValue;
@@ -4069,7 +4070,9 @@ begin
      AModule.TopLevel.IsAsync and (AResult is TGocciaPromiseValue) then
   begin
     RaiseUnlessEntryPromiseFulfilled(AEngine, TGocciaPromiseValue(AResult));
-    Result := TGocciaPromiseValue(AResult).PromiseResult;
+    Result := TGocciaPromiseValue(AResult).ModuleCompletion;
+    if not Assigned(Result) then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
   end;
 end;
 
