@@ -17570,6 +17570,7 @@ begin
       if Assigned(AModule.TopLevel) and AModule.TopLevel.IsAsync then
       begin
         Promise := TGocciaPromiseValue.Create;
+        Promise.IsModuleEvaluation := True;
         InitializeTempRoot(PromiseRoot);
         AddTempRootIfNeeded(PromiseRoot, Promise);
         try

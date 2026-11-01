@@ -347,9 +347,12 @@ type
     function MaterializeAsyncDisposableStackGlobal: TGocciaValue;
     procedure DiscardRuntimePending;
     { Compile AProgram with this engine's language profile. ANonStrictMode
-      is false for module source, which is always strict. }
+      is false for module source, which is always strict. AAsyncTopLevel
+      compiles the top level as an async function body, as module source
+      with top-level await is. }
     function CompileProgram(const AProgram: TGocciaProgram;
-      const ANonStrictMode: Boolean): TGocciaBytecodeModule;
+      const ANonStrictMode: Boolean;
+      const AAsyncTopLevel: Boolean = False): TGocciaBytecodeModule;
     { Run AModule on the VM against the VM's current global scope, after
       linking its static requests; AThisValue is its top-level `this`, or nil
       for the scope's. }
@@ -2726,7 +2729,7 @@ end;
   the global environment when GlobalBackedTopLevel is set, which first checks
   them against the global environment's existing bindings. }
 function TGocciaEngine.CompileProgram(const AProgram: TGocciaProgram;
-  const ANonStrictMode: Boolean): TGocciaBytecodeModule;
+  const ANonStrictMode, AAsyncTopLevel: Boolean): TGocciaBytecodeModule;
 var
   Compiler: TGocciaCompiler;
   Options: TGocciaCompilerOptimizationOptions;
@@ -2737,6 +2740,7 @@ begin
   Compiler := TGocciaCompiler.Create(FSourcePath);
   try
     Compiler.GlobalBackedTopLevel := FGlobalBackedTopLevel;
+    Compiler.AsyncTopLevel := AAsyncTopLevel;
     Compiler.StrictTypes := FStrictTypes;
     Compiler.NonStrictMode := ANonStrictMode;
     Compiler.ArgumentsObjectEnabled := cfArgumentsObject in FCompatibility;
@@ -3384,9 +3388,15 @@ begin
     if FSourceType = stModule then
       FGlobalBackedTopLevel := False;
     try
-      // Module source is always strict.
+      // Module source is always strict. Its top level with top-level await
+      // is an async function body, as an imported module's is
+      // (CompileModuleProgram): each await suspends it (ES2026
+      // §16.2.1.6.1.3.2 ExecuteAsyncModule, §16.2.1.7.3.2 ExecuteModule
+      // step 10) rather than running queued jobs until the awaited promise
+      // settles.
       Result := CompileProgram(AProgram,
-        (FSourceType <> stModule) and (cfNonStrictMode in FCompatibility));
+        (FSourceType <> stModule) and (cfNonStrictMode in FCompatibility),
+        (FSourceType = stModule) and AProgram.HasTopLevelAwait);
     finally
       FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
     end;
@@ -4023,9 +4033,53 @@ begin
   end;
 end;
 
+{ The entry's evaluation promise once the run is idle. Rejected, the entry
+  threw. Still pending, its top-level await waits on a promise that nothing
+  left in the run can settle: that fails the run as it does where the entry's
+  awaits run synchronously (Goccia.Values.Await.AwaitValue), never reporting
+  a run that stopped partway as a success. A rejection no handler took is
+  usually why — a reaction that threw instead of settling what the entry
+  awaits — so it is reported first, and under the throw policy it is the
+  run's error. }
+procedure RaiseUnlessEntryPromiseFulfilled(const AEngine: TGocciaEngine;
+  const APromise: TGocciaPromiseValue);
+begin
+  case APromise.State of
+    gpsRejected:
+      raise TGocciaThrowValue.Create(APromise.PromiseResult);
+    gpsPending:
+      begin
+        AEngine.RaiseUnhandledRejection;
+        ThrowTypeError(SErrorAwaitPromiseUnsettled,
+          SSuggestAwaitMicrotaskDrain);
+      end;
+  end;
+end;
+
+{ A top level compiled as an async function body returns its evaluation
+  promise, which must be fulfilled once the run is idle. It keeps the
+  completion value of the body's last statement for the host
+  (ModuleCompletion), which is the run's result, as the value a synchronous
+  top level returns is. }
+function AsyncTopLevelCompletion(const AEngine: TGocciaEngine;
+  const AModule: TGocciaBytecodeModule;
+  const AResult: TGocciaValue): TGocciaValue;
+begin
+  Result := AResult;
+  if Assigned(AModule) and Assigned(AModule.TopLevel) and
+     AModule.TopLevel.IsAsync and (AResult is TGocciaPromiseValue) then
+  begin
+    RaiseUnlessEntryPromiseFulfilled(AEngine, TGocciaPromiseValue(AResult));
+    Result := TGocciaPromiseValue(AResult).ModuleCompletion;
+    if not Assigned(Result) then
+      Result := TGocciaUndefinedLiteralValue.UndefinedValue;
+  end;
+end;
+
 function TGocciaEngine.RunModule(
   const AModule: TGocciaBytecodeModule): TGocciaValue;
 var
+  Completion: TGocciaValue;
   OptionsScope: TGocciaSourcePipelineOptionsScope;
   RunSourceType: TGocciaSourceType;
   GC: TGarbageCollector;
@@ -4052,11 +4106,13 @@ begin
       GC.AddTempRoot(Result);
     try
       WaitForRuntimeIdle;
+      Completion := AsyncTopLevelCompletion(Self, AModule, Result);
       RaiseUnhandledRejection;
     finally
       if Assigned(Result) and Assigned(GC) then
         GC.RemoveTempRoot(Result);
     end;
+    Result := Completion;
     Completed := True;
   finally
     if not Completed then
@@ -4071,6 +4127,7 @@ function TGocciaEngine.RunModuleInScope(
   const AModule: TGocciaBytecodeModule;
   const AScope: TGocciaScope): TGocciaValue;
 var
+  Completion: TGocciaValue;
   OptionsScope: TGocciaSourcePipelineOptionsScope;
   RunSourceType: TGocciaSourceType;
   GC: TGarbageCollector;
@@ -4104,11 +4161,13 @@ begin
       GC.AddTempRoot(Result);
     try
       WaitForRuntimeIdle;
+      Completion := AsyncTopLevelCompletion(Self, AModule, Result);
       RaiseUnhandledRejection;
     finally
       if Assigned(Result) and Assigned(GC) then
         GC.RemoveTempRoot(Result);
     end;
+    Result := Completion;
     Completed := True;
   finally
     if not Completed then
@@ -4314,29 +4373,6 @@ end;
 procedure TGocciaEngine.UnregisterHostModuleProvider(const AName: string);
 begin
   UnregisterGlobalModuleProvider(AName);
-end;
-
-{ The entry's evaluation promise once the run is idle. Rejected, the entry
-  threw. Still pending, its top-level await waits on a promise that nothing
-  left in the run can settle: that fails the run as it does where the entry's
-  awaits run synchronously (Goccia.Values.Await.AwaitValue), never reporting
-  a run that stopped partway as a success. A rejection no handler took is
-  usually why — a reaction that threw instead of settling what the entry
-  awaits — so it is reported first, and under the throw policy it is the
-  run's error. }
-procedure RaiseUnlessEntryPromiseFulfilled(const AEngine: TGocciaEngine;
-  const APromise: TGocciaPromiseValue);
-begin
-  case APromise.State of
-    gpsRejected:
-      raise TGocciaThrowValue.Create(APromise.PromiseResult);
-    gpsPending:
-      begin
-        AEngine.RaiseUnhandledRejection;
-        ThrowTypeError(SErrorAwaitPromiseUnsettled,
-          SSuggestAwaitMicrotaskDrain);
-      end;
-  end;
 end;
 
 function TGocciaEngine.ValidateBytecodeModule(

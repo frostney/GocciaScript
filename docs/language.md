@@ -106,7 +106,7 @@ class C {
 }
 ```
 
-**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason.
+**`await` expressions:** Valid inside `async` functions and at the top level (ES2022+ top-level `await`). Suspends execution until the Promise settles; returns the fulfilled value or throws the rejection reason. A top-level `await` in module source, an entry file or an imported module, suspends the module and resumes in the job an `await` in an async function would (ES2026 §16.2.1.7.3.2 ExecuteModule). Script source has no top-level `await` in ECMAScript; there it waits by running queued jobs until the promise settles, and continues in the job that settled it.
 
 **Return semantics:** Async functions always return a Promise. If the body returns a value, the Promise resolves to that value. If the body throws, the Promise rejects.
 

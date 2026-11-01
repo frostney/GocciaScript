@@ -3694,8 +3694,14 @@ begin
 
     if NeedsIteratorClose then
     begin
+      // The handler sees a throw from the body, and also the return
+      // completion of a generator whose return() resumed it at a yield in the
+      // body. ES2026 §7.4.11 IteratorClose gives precedence over errors from
+      // return only to a throw completion (step 5): for the return completion
+      // they propagate and the result must be an Object (steps 6-7).
       PatchJumpTarget(ACtx, HandlerJump);
-      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, 0, 1));
+      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, IterReg, CloseErrorReg,
+        ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN));
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
     end;
 
