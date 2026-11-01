@@ -41,7 +41,13 @@ const
     'globalThis.klass = class C { m() { return 1; } };' + LineEnding +
     'globalThis.method = new globalThis.klass().m;' + LineEnding +
     'globalThis.plain = {};' + LineEnding +
-    'globalThis.num = 3;';
+    'globalThis.num = 3;' + LineEnding +
+    'globalThis.shim = atob;';
+
+  MODULE_SCRIPT =
+    'let k = 41;' + LineEnding +
+    'export function read() { return k; }' + LineEnding +
+    'globalThis.read = read;';
 
 type
   TBytecodeClosureOfTests = class(TTestSuite)
@@ -56,6 +62,8 @@ type
     procedure TestAsyncArrowClosure;
     procedure TestMethodClosure;
     procedure TestNilForOtherValues;
+    procedure TestShimHasNoSourceText;
+    procedure TestModuleFunctionResolvesThroughGlobalScope;
   protected
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -71,6 +79,10 @@ begin
   Test('an async arrow function has a closure', TestAsyncArrowClosure);
   Test('a class method has a closure', TestMethodClosure);
   Test('any other value has none', TestNilForOtherValues);
+  Test('a built-in implemented in bytecode has no source text',
+    TestShimHasNoSourceText);
+  Test('a module function declaration reads its bindings through GlobalScope',
+    TestModuleFunctionResolvesThroughGlobalScope);
 end;
 
 procedure TBytecodeClosureOfTests.BeforeAll;
@@ -160,6 +172,46 @@ begin
   Expect<Boolean>(Assigned(BytecodeClosureOf(Global('plain')))).ToBe(False);
   Expect<Boolean>(Assigned(BytecodeClosureOf(Global('num')))).ToBe(False);
   Expect<Boolean>(Assigned(BytecodeClosureOf(nil))).ToBe(False);
+end;
+
+procedure TBytecodeClosureOfTests.TestShimHasNoSourceText;
+var
+  Closure: TGocciaBytecodeClosure;
+begin
+  Closure := BytecodeClosureOf(Global('shim'));
+  Expect<Boolean>(Assigned(Closure)).ToBe(True);
+  Expect<string>(Closure.Template.SourceText).ToBe('');
+end;
+
+{ A function declared at a module's top level reads k by name from its module
+  environment: its cell for k stays an undefined placeholder, and k resolves
+  through GlobalScope. }
+procedure TBytecodeClosureOfTests.TestModuleFunctionResolvesThroughGlobalScope;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Closure: TGocciaBytecodeClosure;
+  Cell: string;
+begin
+  Source := TStringList.Create;
+  Engine := nil;
+  try
+    Source.Text := MODULE_SCRIPT;
+    Engine := TGocciaEngine.Create('<closure-of-module>', Source);
+    Engine.SourceType := stModule;
+    Engine.Compatibility := [cfFunction];
+    Engine.Execute;
+    Closure := BytecodeClosureOf(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('read'));
+    Expect<Boolean>(Assigned(Closure)).ToBe(True);
+    Cell := CapturedValue(Closure, 'k');
+    Expect<string>(Cell).ToBe('undefined');
+    Expect<string>(Closure.GlobalScope.GetValue('k').ToStringLiteral.Value)
+      .ToBe('41');
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
 end;
 
 begin
