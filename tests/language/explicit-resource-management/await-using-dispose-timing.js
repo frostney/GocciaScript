@@ -327,6 +327,58 @@ describe("await using disposal timing", () => {
     ]);
   });
 
+  test("a declaration the block has not reached is not disposed or awaited", async () => {
+    const { log } = await observe(async (log) => {
+      for (const i of [1, 2]) {
+        try {
+          await using a = asyncResource("a" + i, log, () => undefined);
+          if (i === 2) {
+            throw new Error("thrown " + i);
+          }
+          await using b = asyncResource("b" + i, log, () => undefined);
+        } catch (e) {
+          log.push("caught " + e.message);
+        }
+      }
+    });
+    expect(log).toEqual([
+      "dispose b1",
+      "t1",
+      "dispose a1",
+      "t2",
+      "dispose a2",
+      "t3",
+      "caught thrown 2",
+      "t4",
+      "settled",
+      "t5",
+      "t6",
+    ]);
+  });
+
+  test("an initializer that throws adds no resource", async () => {
+    const thrower = () => {
+      throw new Error("initializer");
+    };
+    const alone = await observe(async (log) => {
+      await using b = thrower();
+    });
+    const afterResource = await observe(async (log) => {
+      await using a = asyncResource("a", log, () => undefined);
+      await using b = thrower();
+    });
+    expect([alone, afterResource]).toEqual([
+      {
+        outcome: "initializer",
+        log: ["t1", "settled", "t2", "t3", "t4", "t5", "t6"],
+      },
+      {
+        outcome: "initializer",
+        log: ["dispose a", "t1", "t2", "settled", "t3", "t4", "t5", "t6"],
+      },
+    ]);
+  });
+
   test("using and await using resources dispose in reverse order", async () => {
     const { log } = await observe(async (log) => {
       using a = {

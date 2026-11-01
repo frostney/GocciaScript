@@ -1722,6 +1722,41 @@ begin
   end;
 end;
 
+// Allocates the hidden dispose register of each binding of AUsingDecl when its
+// scope is entered, sets it to a hole and registers it for disposal, recording
+// it in ASlots for CompileUsingDeclaration. Every disposal of the scope then
+// finds a hole for a declaration that has not run, whether control leaves
+// before it or its initializer throws, or a value an earlier evaluation of the
+// scope left: §7.5.2 AddDisposableResource never ran for it, so the disposal
+// skips it (EmitDisposalSequence).
+procedure PreallocateUsingDisposeSlots(const ACtx: TGocciaCompilationContext;
+  const AUsingDecl: TGocciaUsingDeclaration;
+  const ASlots: TList<TPreallocatedUsingDisposeSlot>);
+var
+  VarIdx, LocalIdx: Integer;
+  Entry: TUsingResourceEntry;
+  Preallocated: TPreallocatedUsingDisposeSlot;
+begin
+  for VarIdx := 0 to High(AUsingDecl.Variables) do
+  begin
+    LocalIdx := ACtx.Scope.ResolveLocal(AUsingDecl.Variables[VarIdx].Name);
+    if LocalIdx < 0 then
+      Continue;
+
+    Entry.ValueSlot := ACtx.Scope.GetLocal(LocalIdx).Slot;
+    Entry.DisposeSlot := ACtx.Scope.AllocateRegister;
+    Entry.IsAwait := AUsingDecl.IsAwait;
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, Entry.DisposeSlot, 0, 0));
+    RegisterUsingResourceForDisposal(Entry);
+
+    Preallocated.Declaration := AUsingDecl;
+    Preallocated.VariableIndex := VarIdx;
+    Preallocated.DisposeSlot := Entry.DisposeSlot;
+    Preallocated.ResourceRegistered := True;
+    ASlots.Add(Preallocated);
+  end;
+end;
+
 // TC39 Explicit Resource Management: compile using / await using declaration.
 // Emits OP_USING_INIT for each variable to validate and extract the dispose method.
 // Also updates the topmost GPendingFinally entry so that CompileReturnStatement
@@ -1753,15 +1788,16 @@ begin
       LocalIdx := ACtx.Scope.ResolveLocal(Info.Name);
     end;
 
-    // Allocate and clear the hidden dispose-method register before the
-    // initializer runs. If a later initializer throws, the unwind path skips
-    // this resource unless OP_USING_INIT actually stored a callable disposer.
+    // Allocate the hidden dispose-method register and set it to a hole
+    // before the initializer runs. If the initializer throws, the unwind path
+    // skips this resource: only OP_USING_INIT stores its disposer, or null for
+    // a null or undefined value.
     if not TryUsePreallocatedUsingDisposeSlot(AStmt, I, DisposeSlot,
       ResourceRegistered) then
     begin
       DisposeSlot := ACtx.Scope.AllocateRegister;
       ResourceRegistered := False;
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, DisposeSlot, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, DisposeSlot, 0, 0));
     end;
 
     // Compile the initializer into the value slot, applying NamedEvaluation
@@ -1828,8 +1864,8 @@ var
   I: Integer;
   HasAwait: Boolean;
   NeedsAwaitReg, HasAwaitedReg, AwaitReg: UInt16;
-  NoMethodJump, ThrewJump, HandlerJump, AwaitedJump, CaughtJump,
-    SkipJump: Integer;
+  NotDeclaredJump, NoMethodJump, ThrewJump, HandlerJump, AwaitedJump,
+    CaughtJump, SkipJump: Integer;
 
   // Steps 4.d and 5: Await(undefined) when a null resource left needsAwait
   // set and nothing was awaited yet, then clear needsAwait.
@@ -1869,10 +1905,11 @@ begin
     if not AResources[I].IsAwait then
     begin
       // A null or undefined using resource is not on the stack at all
-      // (§7.5.2 AddDisposableResource step 2.a), so it neither awaits for an
-      // earlier null await using resource nor is disposed.
+      // (§7.5.2 AddDisposableResource step 2.a), nor is one whose
+      // declaration has not run (a hole), so neither awaits for an earlier
+      // null await using resource nor is disposed.
       NoMethodJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
-        AResources[I].DisposeSlot, GOCCIA_NULLISH_MATCH_NULL);
+        AResources[I].DisposeSlot, GOCCIA_NULLISH_MATCH_ANY);
       EmitPendingAwait;
       EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE,
         AErrorReg, AResources[I].DisposeSlot, AResources[I].ValueSlot));
@@ -1880,6 +1917,9 @@ begin
       Continue;
     end;
 
+    // A hole: the declaration has not run, so there is no resource.
+    NotDeclaredJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+      AResources[I].DisposeSlot, GOCCIA_NULLISH_MATCH_HOLE);
     // OP_USING_INIT leaves null for a null or undefined resource (step 4.f).
     NoMethodJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
       AResources[I].DisposeSlot, GOCCIA_NULLISH_MATCH_NULL);
@@ -1904,6 +1944,7 @@ begin
     SkipJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, HasAwaitedReg);
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, NeedsAwaitReg, 0, 0));
     PatchJumpTarget(ACtx, SkipJump);
+    PatchJumpTarget(ACtx, NotDeclaredJump);
     PatchJumpTarget(ACtx, ThrewJump);
     PatchJumpTarget(ACtx, AwaitedJump);
     PatchJumpTarget(ACtx, CaughtJump);
@@ -2547,6 +2588,8 @@ var
   SavedResources: array of TUsingResourceEntry;
   PendingEntry: TPendingFinallyEntry;
   HasFunctionDecl, StatementAbrupt: Boolean;
+  PreallocatedUsingDisposeSlots,
+    OldPreallocatedUsingDisposeSlots: TList<TPreallocatedUsingDisposeSlot>;
 begin
   Result := False;
   HasFunctionDecl := False;
@@ -2648,34 +2691,51 @@ begin
   FillChar(PendingEntry, SizeOf(PendingEntry), 0);
   PendingEntry.FinallyBlock := nil;
   PendingEntry.UsingErrorReg := ErrorReg;
-  // Resources not yet known (filled by CompileUsingDeclaration during body)
   GPendingFinally.Add(PendingEntry);
 
-  // Compile all statements in the block (including using declarations)
-  for I := 0 to AStmt.Nodes.Count - 1 do
-  begin
-    Node := AStmt.Nodes[I];
-    if GetBlockFunctionDeclaration(Node) <> nil then
+  // Every using declaration of the block gets its dispose register now, set
+  // to a hole, so a disposal skips one the block has not reached.
+  PreallocatedUsingDisposeSlots :=
+    TList<TPreallocatedUsingDisposeSlot>.Create;
+  OldPreallocatedUsingDisposeSlots := GPreallocatedUsingDisposeSlots;
+  GPreallocatedUsingDisposeSlots := PreallocatedUsingDisposeSlots;
+  try
+    for I := 0 to AStmt.Nodes.Count - 1 do
+      if AStmt.Nodes[I] is TGocciaUsingDeclaration then
+        PreallocateUsingDisposeSlots(ACtx,
+          TGocciaUsingDeclaration(AStmt.Nodes[I]),
+          PreallocatedUsingDisposeSlots);
+
+    // Compile all statements in the block (including using declarations)
+    for I := 0 to AStmt.Nodes.Count - 1 do
     begin
-      CompileCompatBlockFunctionActivation(ACtx,
-        GetBlockFunctionDeclaration(Node));
-      Continue;
+      Node := AStmt.Nodes[I];
+      if GetBlockFunctionDeclaration(Node) <> nil then
+      begin
+        CompileCompatBlockFunctionActivation(ACtx,
+          GetBlockFunctionDeclaration(Node));
+        Continue;
+      end;
+      if Node is TGocciaStatement then
+      begin
+        StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
+        Result := Result or StatementAbrupt;
+        if ACtx.OptimizationOptions.EnableDeadBranchElimination and
+           not ACtx.OptimizationOptions.PreserveCoverageShape and
+           StatementAbrupt then
+          Break;
+      end
+      else if Node is TGocciaExpression then
+      begin
+        Reg := ACtx.Scope.AllocateRegister;
+        ACtx.CompileExpression(TGocciaExpression(Node), Reg);
+        ACtx.Scope.FreeRegister;
+      end;
     end;
-    if Node is TGocciaStatement then
-    begin
-      StatementAbrupt := ACtx.CompileStatement(TGocciaStatement(Node));
-      Result := Result or StatementAbrupt;
-      if ACtx.OptimizationOptions.EnableDeadBranchElimination and
-         not ACtx.OptimizationOptions.PreserveCoverageShape and
-         StatementAbrupt then
-        Break;
-    end
-    else if Node is TGocciaExpression then
-    begin
-      Reg := ACtx.Scope.AllocateRegister;
-      ACtx.CompileExpression(TGocciaExpression(Node), Reg);
-      ACtx.Scope.FreeRegister;
-    end;
+  finally
+    if GPreallocatedUsingDisposeSlots = PreallocatedUsingDisposeSlots then
+      GPreallocatedUsingDisposeSlots := OldPreallocatedUsingDisposeSlots;
+    PreallocatedUsingDisposeSlots.Free;
   end;
 
   // Pop the pending-finally entry we pushed
@@ -3532,7 +3592,7 @@ begin
     if AStmt.IsUsing then
     begin
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, UsingErrorReg, 0, 0));
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, DisposeReg, 0, 0));
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_HOLE, DisposeReg, 0, 0));
       UsingHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_FINALLY_HANDLER,
         UsingCatchReg);
     end;
@@ -5511,10 +5571,7 @@ var
 
   procedure RegisterSwitchUsingResources;
   var
-    CaseIdx, ConsequentIdx, VarIdx, LocalIdx: Integer;
-    UsingDecl: TGocciaUsingDeclaration;
-    Entry: TUsingResourceEntry;
-    Preallocated: TPreallocatedUsingDisposeSlot;
+    CaseIdx, ConsequentIdx: Integer;
   begin
     if not HasUsing then
       Exit;
@@ -5527,30 +5584,10 @@ var
     begin
       CaseClause := AStmt.Cases[CaseIdx];
       for ConsequentIdx := 0 to CaseClause.Consequent.Count - 1 do
-      begin
-        if not (CaseClause.Consequent[ConsequentIdx] is TGocciaUsingDeclaration) then
-          Continue;
-
-        UsingDecl := TGocciaUsingDeclaration(CaseClause.Consequent[ConsequentIdx]);
-        for VarIdx := 0 to High(UsingDecl.Variables) do
-        begin
-          LocalIdx := ACtx.Scope.ResolveLocal(UsingDecl.Variables[VarIdx].Name);
-          if LocalIdx < 0 then
-            Continue;
-
-          Entry.ValueSlot := ACtx.Scope.GetLocal(LocalIdx).Slot;
-          Entry.DisposeSlot := ACtx.Scope.AllocateRegister;
-          Entry.IsAwait := UsingDecl.IsAwait;
-          EmitInstruction(ACtx, EncodeABC(OP_LOAD_NULL, Entry.DisposeSlot, 0, 0));
-          RegisterUsingResourceForDisposal(Entry);
-
-          Preallocated.Declaration := UsingDecl;
-          Preallocated.VariableIndex := VarIdx;
-          Preallocated.DisposeSlot := Entry.DisposeSlot;
-          Preallocated.ResourceRegistered := True;
-          PreallocatedUsingDisposeSlots.Add(Preallocated);
-        end;
-      end;
+        if CaseClause.Consequent[ConsequentIdx] is TGocciaUsingDeclaration then
+          PreallocateUsingDisposeSlots(ACtx,
+            TGocciaUsingDeclaration(CaseClause.Consequent[ConsequentIdx]),
+            PreallocatedUsingDisposeSlots);
     end;
   end;
 begin
