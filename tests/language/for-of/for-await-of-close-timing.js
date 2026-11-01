@@ -478,4 +478,116 @@ describe("for-await-of close timing", () => {
       "t9",
     ]);
   });
+  test("a generator's return() through the loop it is suspended in propagates close errors", async () => {
+    const make = (descriptor) =>
+      Object.defineProperty(
+        {
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          next() {
+            return { value: 1, done: false };
+          },
+        },
+        "return",
+        descriptor
+      );
+    const sources = [
+      make({
+        value() {
+          return 0;
+        },
+      }),
+      make({
+        value() {
+          throw "thrown";
+        },
+      }),
+      make({
+        value() {
+          return Promise.reject("rejected");
+        },
+      }),
+      make({
+        get() {
+          throw "getter";
+        },
+      }),
+      make({ value: 5 }),
+    ];
+    const outcomes = [];
+    for (const source of sources) {
+      const finallyLog = [];
+      const helpers = {
+        async *values() {
+          try {
+            for await (const x of source) {
+              yield x;
+            }
+          } finally {
+            finallyLog.push("finally");
+          }
+        },
+      };
+      const iterator = helpers.values();
+      await iterator.next();
+      try {
+        await iterator.return(9);
+        outcomes.push("fulfilled");
+      } catch (e) {
+        outcomes.push(e instanceof TypeError ? "TypeError" : e);
+      }
+      expect(finallyLog).toEqual(["finally"]);
+      expect(await iterator.next()).toEqual({ value: undefined, done: true });
+    }
+    expect(outcomes).toEqual([
+      "TypeError",
+      "thrown",
+      "rejected",
+      "getter",
+      "TypeError",
+    ]);
+  });
+
+  test("a generator's return() through the loop awaits the close before settling", async () => {
+    const log = [];
+    const source = {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      next() {
+        return { value: 1, done: false };
+      },
+      return() {
+        log.push("return");
+        return {};
+      },
+    };
+    const helpers = {
+      async *values() {
+        try {
+          for await (const x of source) {
+            yield x;
+          }
+        } finally {
+          log.push("finally");
+        }
+      },
+    };
+    const iterator = helpers.values();
+    await iterator.next();
+    const request = iterator
+      .return(9)
+      .then((r) => log.push("return:" + r.value + ":" + r.done));
+    await Promise.all([request, ticker(log, 4)]);
+    expect(log).toEqual([
+      "return",
+      "t1",
+      "finally",
+      "t2",
+      "return:9:true",
+      "t3",
+      "t4",
+    ]);
+  });
 });

@@ -271,8 +271,9 @@ const
   //   v98 -> v99: OP_ITER_CLOSE operand C gained ITER_CLOSE_ASYNC_RETURN and
   //               ITER_CLOSE_ASYNC_RESULT, which split a for-await close into
   //               the return() call and the result check around an
-  //               OP_AWAIT. Operand B no longer selects an async close in the
-  //               other modes.
+  //               OP_AWAIT, and ITER_CLOSE_IS_GENERATOR_RETURN, which tells a
+  //               generator's return completion from a throw. Operand B no
+  //               longer selects an async close in the other modes.
   GOCCIA_FORMAT_VERSION = 99;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
@@ -317,6 +318,10 @@ const
   ITER_CLOSE_ASYNC_RETURN = 3;
   // AsyncIteratorClose step 7: R[B], the awaited result, must be an Object.
   ITER_CLOSE_ASYNC_RESULT = 4;
+  // R[A] := whether R[B], the completion a close handler caught, is the
+  // running generator's return completion rather than a throw. Here A names
+  // the destination, not the iterator.
+  ITER_CLOSE_IS_GENERATOR_RETURN = 5;
   CALL_FLAG_SPREAD = 1;
   CALL_FLAG_TRUSTED = 2;
   // ES2026 §15.10 Tail Position Calls: the call sits in tail position of its

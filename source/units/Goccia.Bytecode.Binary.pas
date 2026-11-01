@@ -324,7 +324,8 @@ begin
 
       OP_ITER_CLOSE:
         if (C = ITER_CLOSE_PRESERVE_UNLESS_GENERATOR_RETURN) or
-           (C = ITER_CLOSE_ASYNC_RETURN) or (C = ITER_CLOSE_ASYNC_RESULT) then
+           (C = ITER_CLOSE_ASYNC_RETURN) or (C = ITER_CLOSE_ASYNC_RESULT) or
+           (C = ITER_CLOSE_IS_GENERATOR_RETURN) then
           RequireRegister(B);
 
       // Only the computed-member mode puts a register in C (the uncoerced key

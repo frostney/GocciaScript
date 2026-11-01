@@ -861,13 +861,14 @@ end;
 // ES2026 §7.4.14 AsyncIteratorClose: a for-await close calls return(), skips
 // the Await when there is no return method (step 4.b), awaits the result as a
 // suspension (step 4.d) and checks it only for a completion that is not a
-// throw (steps 5 and 7). The break exit and the throw handler each close once.
+// throw (steps 5 and 7). The break exit closes once; the handler closes once
+// for a generator's return completion and once for a throw.
 procedure TTestCompiler.TestForAwaitCloseAwaitsReturnResult;
 var
   Module: TGocciaBytecodeModule;
   Func: TGocciaFunctionTemplate;
   Ops: array of Integer;
-  I, OpCount, CallCount, CheckCount, AwaitCount: Integer;
+  I, OpCount, CallCount, CheckCount, ReturnTestCount, AwaitCount: Integer;
   Instruction: UInt32;
 begin
   Module := CompileSource(
@@ -898,6 +899,7 @@ begin
       end;
       CallCount := 0;
       CheckCount := 0;
+      ReturnTestCount := 0;
       AwaitCount := 0;
       for I := 0 to OpCount - 1 do
         if Ops[I] = Ord(OP_AWAIT) then
@@ -917,13 +919,27 @@ begin
           Inc(CheckCount);
           Expect<Integer>(Ops[I - 1]).ToBe(Ord(OP_AWAIT));
         end
+        else if Ops[I] = 1000 + ITER_CLOSE_IS_GENERATOR_RETURN then
+        begin
+          Inc(ReturnTestCount);
+          Expect<Boolean>(I + 2 < OpCount).ToBe(True);
+          if I + 2 < OpCount then
+          begin
+            Expect<Integer>(Ops[I + 1]).ToBe(Ord(OP_JUMP_IF_FALSE));
+            Expect<Integer>(Ops[I + 2])
+              .ToBe(1000 + ITER_CLOSE_ASYNC_RETURN);
+          end;
+        end
         else if Ops[I] >= 1000 then
           // A for-await close uses only the async close modes.
           Expect<Integer>(Ops[I]).ToBe(1000 + ITER_CLOSE_ASYNC_RETURN);
-      Expect<Integer>(CallCount).ToBe(2);
-      Expect<Integer>(CheckCount).ToBe(1);
+      // The break exit, then the handler's close for a generator's return
+      // completion and its close for a throw.
+      Expect<Integer>(CallCount).ToBe(3);
+      Expect<Integer>(CheckCount).ToBe(2);
+      Expect<Integer>(ReturnTestCount).ToBe(1);
       // next()'s await and one per close.
-      Expect<Integer>(AwaitCount).ToBe(3);
+      Expect<Integer>(AwaitCount).ToBe(4);
     end;
   finally
     Module.Free;

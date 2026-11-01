@@ -3370,6 +3370,13 @@
           else
             FRegisters[B] := RegisterHole;
         end
+        else if C = ITER_CLOSE_IS_GENERATOR_RETURN then
+          FRegisters[A] := RegisterBoolean(
+            (FRegisters[B].Kind = grkObject) and
+            Assigned(GActiveBytecodeGenerator) and
+            Assigned(GActiveBytecodeGenerator.FReturnSentinel) and
+            (FRegisters[B].ObjectValue =
+             GActiveBytecodeGenerator.FReturnSentinel))
         else if C = ITER_CLOSE_ASYNC_RESULT then
         begin
           // ES2026 §7.4.14 AsyncIteratorClose step 7.

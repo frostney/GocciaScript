@@ -3691,7 +3691,7 @@ procedure CompileForAwaitOfStatement(const ACtx: TGocciaCompilationContext;
 var
   IterReg, ValueReg, DoneReg, CloseErrorReg, CloseResultReg: UInt16;
   LoopStart, ExitJump, MismatchJump, HandlerJump, CloseHandlerJump,
-    I: Integer;
+    ThrowCloseJump, I: Integer;
   Slot: UInt16;
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
@@ -3801,9 +3801,21 @@ begin
 
     if NeedsIteratorClose then
     begin
-      // ES2026 §7.4.14 AsyncIteratorClose step 5: the body's throw completion
-      // wins over any error from return(), its Await or its result.
+      // The handler sees a throw from the body, and also the return
+      // completion of a generator whose return() resumed it at a yield in the
+      // body. ES2026 §7.4.14 AsyncIteratorClose closes for that one as for
+      // any completion that is not a throw: errors propagate and the result
+      // is checked.
       PatchJumpTarget(ACtx, HandlerJump);
+      EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, CloseResultReg,
+        CloseErrorReg, ITER_CLOSE_IS_GENERATOR_RETURN));
+      ThrowCloseJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE,
+        CloseResultReg);
+      EmitAsyncIteratorClose(ACtx, IterReg, CloseResultReg, True);
+      EmitInstruction(ACtx, EncodeABC(OP_THROW, CloseErrorReg, 0, 0));
+      // Step 5: the body's throw completion wins over any error from
+      // return(), its Await or its result.
+      PatchJumpTarget(ACtx, ThrowCloseJump);
       CloseHandlerJump := EmitJumpInstruction(ACtx, OP_PUSH_HANDLER,
         CloseResultReg);
       EmitAsyncIteratorClose(ACtx, IterReg, CloseResultReg, False);

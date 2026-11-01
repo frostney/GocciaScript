@@ -211,9 +211,9 @@ source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 57725eff690fbe61fd45da3c7b
 source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 57725eff690fbe61fd45da3c7b29fac1540e61aa1ef81059a7e48437cf2639c9 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testmissinghandler
 source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 57725eff690fbe61fd45da3c7b29fac1540e61aa1ef81059a7e48437cf2639c9 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testunknownhandler
 source-nonseh ../../source/units/Goccia.Bytecode.Binary.Test.pas 0e5f913fd15e2c52f6c6be7a5eba9c5604a8acfb15e0b287b4ad26be3c7e58ff .text.n_p$goccia.bytecode.binary.test$_$tbytecodebinarytests_$__$$_testroundtripsexceptionhandlers
-source-nonseh ../../source/units/Goccia.Compiler.Test.pas be84b138d6df05251ebb164f5ed35b440dc723c0412f7fcff100eafcfd31fe1c .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofskipshandlerwithoutabruptclose
-source-nonseh ../../source/units/Goccia.Compiler.Test.pas be84b138d6df05251ebb164f5ed35b440dc723c0412f7fcff100eafcfd31fe1c .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofuseshandlerforexpressionbody
-source-nonseh ../../source/units/Goccia.Compiler.Test.pas be84b138d6df05251ebb164f5ed35b440dc723c0412f7fcff100eafcfd31fe1c .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofusesoneiteratorclosehandler
+source-nonseh ../../source/units/Goccia.Compiler.Test.pas a444e7c461675d7b94869f7b03803a66b0809ef5d2094e3263e0e2f6ee08140d .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofskipshandlerwithoutabruptclose
+source-nonseh ../../source/units/Goccia.Compiler.Test.pas a444e7c461675d7b94869f7b03803a66b0809ef5d2094e3263e0e2f6ee08140d .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofuseshandlerforexpressionbody
+source-nonseh ../../source/units/Goccia.Compiler.Test.pas a444e7c461675d7b94869f7b03803a66b0809ef5d2094e3263e0e2f6ee08140d .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofusesoneiteratorclosehandler
 source-nonseh ../../source/units/Goccia.HeapSnapshot.Test.pas 4d4264c00f0a541bdf073c623e1a1fe4da90c2099834a1d2b1088fb1990cae62 .text.n_p$goccia.heapsnapshot.test$_$theapsnapshottests_$__$$_testgeneratorkeepsitshandlers
 source-nonseh ../../source/shared/PESafeSEH.Test.pas 700b53e7fe7586c5f2ed20980c9952320113c2508cdb4bf272e2a883adf59cf3 .text.n_p$pesafeseh.test$_$tpesafesehtests_$__$$_testhandlerrefusals
 source-nonseh ../../source/shared/PESafeSEH.Test.pas 700b53e7fe7586c5f2ed20980c9952320113c2508cdb4bf272e2a883adf59cf3 .text.n_p$pesafeseh.test_$$_handlers$$tservaarray
