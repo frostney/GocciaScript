@@ -848,6 +848,30 @@ type
     function IsIdle: Boolean;
   end;
 
+{ The closure behind a bytecode function value, or nil for any other value
+  (a native function, a bound function, a class, a primitive). It gives an
+  embedder what a script function closed over: Template (its SourceText and,
+  through GetUpvalueDescriptor, each captured binding's name), UpvalueCount,
+  GetUpvalue (the captured cell; RegisterToValue(Cell.Value) is the binding's
+  value) and GlobalScope.
+
+  - SourceText is empty for a built-in implemented in bytecode (a shim such
+    as atob), whose toString() reports native code.
+  - A function declared at a module's top level reads every binding it
+    reaches outside itself by name from its module environment, which is its
+    GlobalScope: its cells are placeholders that stay undefined. Resolve
+    those names through GlobalScope instead.
+  - For reading only. The engine owns the closure and keeps using it: an
+    embedder that calls SetUpvalue or writes a property changes the running
+    function.
+  - The template belongs to the engine that compiled the function, not to the
+    function value: use the closure while that engine is alive and the
+    function value is reachable, and on the engine's thread. The one-shot
+    TGocciaEngine.RunScript frees its engine before it returns.
+  - RegisterToValue can allocate a value for a number, so root a value it
+    returns before anything that can collect. }
+function BytecodeClosureOf(const AValue: TGocciaValue): TGocciaBytecodeClosure;
+
 implementation
 
 uses
@@ -18630,6 +18654,14 @@ begin
   else
     Value := GetPropertyValue(GetRegister(AObject), Constant^.StringValue);
   SetRegister(ADest, Value);
+end;
+
+function BytecodeClosureOf(const AValue: TGocciaValue): TGocciaBytecodeClosure;
+begin
+  if AValue is TGocciaBytecodeFunctionValue then
+    Result := TGocciaBytecodeFunctionValue(AValue).FClosure
+  else
+    Result := nil;
 end;
 
 initialization
