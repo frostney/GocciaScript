@@ -1868,9 +1868,15 @@ begin
   begin
     if not AResources[I].IsAwait then
     begin
+      // A null or undefined using resource is not on the stack at all
+      // (§7.5.2 AddDisposableResource step 2.a), so it neither awaits for an
+      // earlier null await using resource nor is disposed.
+      NoMethodJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
+        AResources[I].DisposeSlot, GOCCIA_NULLISH_MATCH_NULL);
       EmitPendingAwait;
       EmitInstruction(ACtx, EncodeABC(OP_USING_DISPOSE,
         AErrorReg, AResources[I].DisposeSlot, AResources[I].ValueSlot));
+      PatchJumpTarget(ACtx, NoMethodJump);
       Continue;
     end;
 

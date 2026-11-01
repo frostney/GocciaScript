@@ -290,6 +290,43 @@ describe("await using disposal timing", () => {
     ]);
   });
 
+  test("a null using resource adds no await between null await using resources", async () => {
+    const outcomes = [];
+    outcomes.push(
+      (
+        await observe(async (log) => {
+          {
+            await using a = null;
+            using b = null;
+            await using c = null;
+          }
+          log.push("after");
+        })
+      ).log
+    );
+    outcomes.push(
+      (
+        await observe(async (log) => {
+          {
+            await using a = null;
+            using b = undefined;
+            using c = {
+              [Symbol.dispose]() {
+                log.push("dispose c");
+              },
+            };
+            await using d = null;
+          }
+          log.push("after");
+        })
+      ).log
+    );
+    expect(outcomes).toEqual([
+      ["t1", "after", "t2", "settled", "t3", "t4", "t5", "t6"],
+      ["t1", "dispose c", "t2", "after", "t3", "settled", "t4", "t5", "t6"],
+    ]);
+  });
+
   test("using and await using resources dispose in reverse order", async () => {
     const { log } = await observe(async (log) => {
       using a = {
