@@ -866,19 +866,21 @@ var
 begin
   if FState <> gpsPending then Exit;
 
-  if AValue = Self then
-  begin
-    Reject(Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
-      SErrorPromiseChainingCycle));
-    Exit;
-  end;
-
+  // A module's evaluation promise is not resolved with its body's completion
+  // value, even when that value is the promise itself (IsModuleEvaluation).
   if FIsModuleEvaluation then
   begin
     FModuleCompletion := AValue;
     FState := gpsFulfilled;
     FResult := TGocciaUndefinedLiteralValue.UndefinedValue;
     TriggerReactions;
+    Exit;
+  end;
+
+  if AValue = Self then
+  begin
+    Reject(Goccia.Values.ErrorHelper.CreateErrorObject(TYPE_ERROR_NAME,
+      SErrorPromiseChainingCycle));
     Exit;
   end;
 

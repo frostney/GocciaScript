@@ -42,4 +42,22 @@ describe("the last statement of a module with top-level await", () => {
       await import("./helpers/tla-after-async-dependency-handled-rejection.js");
     expect(namespace.afterDependencyValue).toBe("loaded");
   });
+
+  test("a last value that is a promise then saw does not fail the module", async () => {
+    const originalThen = Promise.prototype.then;
+    Promise.prototype.then = {
+      then(onFulfilled, onRejected) {
+        globalThis.capturedByThen = this;
+        return originalThen.call(this, onFulfilled, onRejected);
+      },
+    }.then;
+    let namespace;
+    try {
+      namespace =
+        await import("./helpers/tla-last-statement-captured-promise.js");
+    } finally {
+      Promise.prototype.then = originalThen;
+    }
+    expect(namespace.capturedValue).toBe("loaded");
+  });
 });
