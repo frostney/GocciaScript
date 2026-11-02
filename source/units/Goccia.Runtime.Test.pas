@@ -813,9 +813,11 @@ end;
 
 { Installs the testing library, optionally muted before anything runs, and
   runs a module that imports `goccia:test`, registers a failing test and runs
-  it. Returns whether the extension had built its assertions before the run,
-  and (as the result) whether it holds them muted afterwards. The failing test
-  would print a marker to stdout if the mute did not reach it. }
+  it. Reports through ABuiltBeforeRun whether the extension had built its
+  assertions before the run, and through AMutedAfterRun whether it holds them
+  muted afterwards; the result is whether they exist after the run. A muted
+  run's failing test would print a marker to stdout if the mute did not reach
+  it. }
 function TRuntimeTests.RunTestingLibraryModule(const AInjectGlobals: Boolean;
   const AMuteBeforeRun: Boolean; out ABuiltBeforeRun: Boolean;
   out AMutedAfterRun: Boolean): Boolean;

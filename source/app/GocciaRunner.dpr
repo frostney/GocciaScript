@@ -462,7 +462,7 @@ begin
 
   FOutputPath := AddString('output',
     '"json" for structured JSON output, "compact-json" omits build, memory, stdout, stderr');
-  FSilent := AddFlag('silent', 'Suppress console output from the script');
+  FSilent := AddFlag('silent', 'Suppress console and goccia:test reporter output from the script');
   FPrint := AddFlag('print',
     'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
   FPreferBytecode := AddFlag('prefer-bytecode',
