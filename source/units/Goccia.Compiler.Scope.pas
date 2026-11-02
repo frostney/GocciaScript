@@ -161,6 +161,7 @@ type
     FNextSlot: Integer;
     FMaxSlot: UInt16;
     FRegionPeakSlot: Integer;
+    FAwaitCount: Integer;
     FPrivatePrefix: string;
     // Register of the class whose body this function's code is evaluating,
     // or -1 outside a class body.
@@ -300,6 +301,13 @@ type
     // start) and folds that peak into the enclosing region.
     function BeginRegisterRegion: Integer;
     function EndRegisterRegion(const ASavedPeak: Integer): Integer;
+
+    // How many OP_AWAIT instructions this scope's code has emitted. A
+    // statement that emitted one has suspended the frame, which is where a
+    // register it left holding an awaited container or promise stays
+    // reachable for as long as the frame lives.
+    procedure NoteAwaitEmitted;
+    property AwaitCount: Integer read FAwaitCount;
 
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
     // True when one of the locals, suspended or not, holds register ASlot.
@@ -675,6 +683,7 @@ begin
   FNextSlot := 0;
   FMaxSlot := 0;
   FRegionPeakSlot := 0;
+  FAwaitCount := 0;
   FPrivateNameCount := 0;
   FPrivateClassReg := -1;
   FDirectEvalSyntheticArgumentsSlot := -1;
@@ -1170,6 +1179,11 @@ begin
     FMaxSlot := UInt16(FNextSlot);
   if FNextSlot > FRegionPeakSlot then
     FRegionPeakSlot := FNextSlot;
+end;
+
+procedure TGocciaCompilerScope.NoteAwaitEmitted;
+begin
+  Inc(FAwaitCount);
 end;
 
 function TGocciaCompilerScope.BeginRegisterRegion: Integer;
