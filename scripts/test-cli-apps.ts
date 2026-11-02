@@ -10696,7 +10696,7 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
   }
 });
 
-await section("goccia:ast expression-style example: fixes quotes, trailing commas and long calls, keeping them only under --copy-rw...", async () => {
+await section("goccia:ast expression-style example: fixes quotes, trailing commas (specifier lists included) and long calls, keeping them only under --copy-rw...", async () => {
   const tmp = makeNativeTmp();
   try {
     const example = join(dirname(fileURLToPath(import.meta.url)), "..", "examples", "_experimental", "expression-style.mjs");
@@ -10719,6 +10719,13 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       ') => head;',
       'report("a message long enough to push this line past eighty columns", first, second);',
       'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
+      'import {',
+      '  alpha,',
+      '  beta',
+      '} from "./letters.js";',
+      'export {',
+      '  alpha',
+      '};',
       '',
     ].join("\n");
     const expected = [
@@ -10742,6 +10749,13 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       '  second,',
       ');',
       'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
+      'import {',
+      '  alpha,',
+      '  beta,',
+      "} from './letters.js';",
+      'export {',
+      '  alpha,',
+      '};',
       '',
     ].join("\n");
     writeFileSync(join(tree, "sample.js"), original);
@@ -10760,7 +10774,10 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/sample.js:9:3  a multi-line list should end with a trailing comma",
       "/src/sample.js:15:1  a call on a line over 80 columns should put one argument per line",
       "/src/sample.js:15:8  a string literal should use single quotes",
-      "6 finding(s) in 1 file(s), 1 rewritten",
+      "/src/sample.js:19:3  a multi-line list should end with a trailing comma",
+      "/src/sample.js:20:8  a string literal should use single quotes",
+      "/src/sample.js:22:3  a multi-line list should end with a trailing comma",
+      "9 finding(s) in 1 file(s), 1 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
