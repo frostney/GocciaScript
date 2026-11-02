@@ -7,7 +7,11 @@ features: [for-of, Array]
 // (ES2026 §23.1.5.2.1 %ArrayIteratorPrototype%.next), so elements past the
 // last stored one are visited as undefined.
 
-const farLength = 2000000;
+// 2,000,000 is past the dense-extension gap, so the tail stays sparse instead
+// of dense holes. A GC-stress build collects every 8 instructions, so each
+// step costs a pass over the live heap and the three loops take about an hour
+// there; a stress run uses a length whose tail is dense holes.
+const farLength = (typeof Goccia !== "undefined" && Goccia.build.gcStress) ? 2000 : 2000000;
 
 test("for...of visits every index up to a length set far past the elements", () => {
   const array = [1, 2];

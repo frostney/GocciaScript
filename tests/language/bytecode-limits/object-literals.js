@@ -27,20 +27,27 @@ const expectLimit = (source, message) => {
   expect(error.message.includes(message)).toBe(true);
 };
 
+// A GC-stress build collects every 8 instructions, and building a source here
+// costs its size times the live heap: these sizes take over half an hour
+// there. A stress run evaluates a smaller literal and skips the cases whose
+// point is a size past the constant limit; they run in every other build.
+const gcStress = typeof Goccia !== "undefined" && Goccia.build.gcStress;
+const distinctNames = gcStress ? 2000 : 20000;
+
 describe("object literals and the constant limit", () => {
-  test("20,000 distinct property names evaluate", () => {
-    expect(realm.evaluate(`const o = { ${list(20000, (i) => `p${i}: 0`)} }; Object.keys(o).length`)).toBe(20000);
+  test(`${distinctNames} distinct property names evaluate`, () => {
+    expect(realm.evaluate(`const o = { ${list(distinctNames, (i) => `p${i}: 0`)} }; Object.keys(o).length`)).toBe(distinctNames);
   });
 
-  test("66,000 properties that repeat a few names evaluate", () => {
+  test.runIf(!gcStress)("66,000 properties that repeat a few names evaluate", () => {
     expect(realm.evaluate(`const o = { ${list(66000, (i) => `p${i % 100}: ${i % 1000}`)} }; Object.keys(o).length + ":" + o.p99`)).toBe("100:999");
   });
 
-  test("33,000 properties with distinct names and string values are a SyntaxError", () => {
+  test.runIf(!gcStress)("33,000 properties with distinct names and string values are a SyntaxError", () => {
     expectLimit(`({ ${list(33000, (i) => `p${i}: "v${i}"`)} })`, CONSTANT_LIMIT);
   });
 
-  test("the SyntaxError for a literal inside a function can be caught around new Function", () => {
+  test.runIf(!gcStress)("the SyntaxError for a literal inside a function can be caught around new Function", () => {
     let caught;
     try {
       new Function(`return () => ({ ${list(33000, (i) => `p${i}: "v${i}"`)} });`);
