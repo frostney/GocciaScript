@@ -157,11 +157,6 @@ type
     FImportMetaAllowed: Boolean;
     FDetectModuleGoal: Boolean;
     FRecordTypeRanges: Boolean;
-    { Where the last CollectTypeAnnotation or CollectGenericParameters
-      started, for TypeRangesSince. }
-    FTypeStart: Integer;
-    { Call-site type arguments, read before the call they belong to exists. }
-    FPendingTypeArguments: TGocciaTypeRangeArray;
     FModuleSyntaxDetected: Boolean;
     FDeferredImportMetaLine: Integer;
     FDeferredImportMetaColumn: Integer;
@@ -400,7 +395,13 @@ type
       const AContextualTerminator: string = '';
       const ASecondaryContextualTerminator: string = '';
       const AAllowInitialObjectType: Boolean = False;
-      const ARequireType: Boolean = False): string;
+      const ARequireType: Boolean = False): string; overload;
+    { The same, for an annotation after a `:`, with what the parse records of
+      it (TypeRangesBetween). }
+    function CollectTypeAnnotation(const ATerminators: array of TGocciaTokenType;
+      const AContextualTerminator, ASecondaryContextualTerminator: string;
+      const AAllowInitialObjectType, ARequireType: Boolean;
+      out ATypeRanges: TGocciaTypeRangeArray): string; overload;
     function CollectTypeAnnotationTokens(
       const ATerminators: array of TGocciaTokenType;
       const AContextualTerminator: string;
@@ -408,20 +409,20 @@ type
       const AAllowInitialObjectType: Boolean): string;
     procedure ValidateTypeSyntaxTokens(const AStartIndex, AEndIndex: Integer);
     function CollectExpressionTypeAnnotation: string;
-    function CollectGenericParameters: string;
+    function CollectGenericParameters: string; overload;
+    function CollectGenericParameters(
+      out ATypeRanges: TGocciaTypeRangeArray): string; overload;
     { What the parse records of type syntax it erases (ADR 0172): the tokens
       from AStartIndex up to AEndIndex read as ASyntax, or nil when the parse
-      does not record type ranges. Called once the parse has committed to
-      the tokens, never from inside a probe. }
+      does not record type ranges. Called once the parse, or the probe that
+      collected them, has decided the tokens are type syntax. The reader
+      never raises, so it cannot fail a probe either. }
     function TypeRangesBetween(const ASyntax: TGocciaTypeSyntax;
       const AStartIndex, AEndIndex: Integer): TGocciaTypeRangeArray;
-    { The same, for what the last CollectTypeAnnotation or
-      CollectGenericParameters consumed. }
-    function CollectedTypeRanges(
-      const ASyntax: TGocciaTypeSyntax): TGocciaTypeRangeArray;
-    function TakePendingTypeArguments: TGocciaTypeRangeArray;
-    function TryCollectNewExpressionTypeArguments: Boolean;
-    function TryCollectCallExpressionTypeArguments: Boolean;
+    function TryCollectNewExpressionTypeArguments(
+      out ATypeArguments: TGocciaTypeRangeArray): Boolean;
+    function TryCollectCallExpressionTypeArguments(
+      out ATypeArguments: TGocciaTypeRangeArray): Boolean;
     procedure RememberNotTypeArguments(const AFirst: Integer;
       const AEndsInLexError: Boolean; const AConstructor: Boolean = False);
     function TryParseGenericArrowFunction(
@@ -2659,13 +2660,14 @@ begin
         glgInputElementDiv) then
     begin
       AssertionStart := Previous.Span.StartOffset;
+      TypeStart := FCurrent;
       TypeAnnotation := CollectExpressionTypeAnnotation;
       if TypeAnnotation = '' then
         raise TGocciaSyntaxError.Create(
           'Expected type annotation after "satisfies"',
           Peek.Line, Peek.Column, FFileName, FSourceLines);
       RecordTypeAssertion(Result, takSatisfies, AssertionStart,
-        Previous.Span.EndOffset, CollectedTypeRanges(tsType));
+        Previous.Span.EndOffset, TypeRangesBetween(tsType, TypeStart, FCurrent));
       CountChainLink;
     end
     else
@@ -2962,7 +2964,9 @@ function TGocciaParser.Call: TGocciaExpression;
 var
   Arguments: TObjectList<TGocciaExpression>;
   Arg: TGocciaExpression;
-  TypeArguments: TGocciaTypeRangeArray;
+  { Call-site type arguments, read in the iteration before the one that
+    builds their call. }
+  PendingTypeArguments, TypeArguments: TGocciaTypeRangeArray;
   Token: TGocciaToken;
   Line, Column: Integer;
   CurrentType: TGocciaTokenType;
@@ -2976,7 +2980,8 @@ begin
       gttLeftParen:
         begin
           { Taken before the arguments, which may hold calls of their own. }
-          TypeArguments := TakePendingTypeArguments;
+          TypeArguments := PendingTypeArguments;
+          PendingTypeArguments := nil;
           { The token before the `(`, read before Advance consumes the `(`:
             Pascal does not fix the order a call's arguments are evaluated. }
           Token := Previous;
@@ -3068,7 +3073,8 @@ begin
             raise TGocciaSyntaxError.Create(
               'Optional chains cannot be used as unparenthesized template tags',
               Peek.Line, Peek.Column, FFileName, FSourceLines);
-          TypeArguments := TakePendingTypeArguments;
+          TypeArguments := PendingTypeArguments;
+          PendingTypeArguments := nil;
           Token := Advance;
           Result := ParseTaggedTemplate(Result, Token);
           Result.AddTypeRanges(TypeArguments);
@@ -3079,7 +3085,8 @@ begin
           // Call-site type arguments — `fn<T>(x)`, erased like every other type
           // annotation. Anything the probe declines is left for the relational
           // operator, so the loop must end rather than consume the '<'.
-          if not TryCollectCallExpressionTypeArguments then
+          if not TryCollectCallExpressionTypeArguments(
+            PendingTypeArguments) then
             Break;
         end;
     else
@@ -3622,8 +3629,7 @@ begin
           Expr := ParseMemberAccessSegment(Expr, False);
           CountChainLink;
         end;
-        TryCollectNewExpressionTypeArguments;
-        TypeRanges := TakePendingTypeArguments;
+        TryCollectNewExpressionTypeArguments(TypeRanges);
         if Check(gttOptionalChaining) then
           raise TGocciaSyntaxError.Create(
             'Optional chaining is not allowed in an unparenthesized new expression',
@@ -3787,8 +3793,7 @@ begin
                 ValidateIdentifierBinding(Token);
                 Name := Token.Lexeme;
               end;
-              CollectGenericParameters;
-              TypeRanges := CollectedTypeRanges(tsTypeParameters);
+              CollectGenericParameters(TypeRanges);
               Result := ParseFunctionBodyExpression(AsyncStartLine, AsyncStartColumn, True, IsGenerator);
               Result.AddTypeRanges(TypeRanges);
               ValidateStrictFunctionBindingName(Name,
@@ -3859,8 +3864,7 @@ begin
           if IsIdentifierBindingToken(Peek.TokenType) then
             Name := ConsumeIdentifierBinding(
               'Expected generator function name').Lexeme;
-          CollectGenericParameters;
-          TypeRanges := CollectedTypeRanges(tsTypeParameters);
+          CollectGenericParameters(TypeRanges);
           Result := ParseFunctionBodyExpression(Token.Line, Token.Column, False, True);
           Result.AddTypeRanges(TypeRanges);
           ValidateStrictFunctionBindingName(Name,
@@ -3879,8 +3883,7 @@ begin
           if IsIdentifierBindingToken(Peek.TokenType) then
             Name := ConsumeIdentifierBinding(
               'Expected function name').Lexeme;
-          CollectGenericParameters;
-          TypeRanges := CollectedTypeRanges(tsTypeParameters);
+          CollectGenericParameters(TypeRanges);
           Result := ParseFunctionBodyExpression(Token.Line, Token.Column);
           Result.AddTypeRanges(TypeRanges);
           ValidateStrictFunctionBindingName(Name,
@@ -5133,8 +5136,8 @@ begin
         if Check(gttColon) then
         begin
           Advance;
-          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttRightParen, gttComma], '', '', False, True);
-          Result[ParamCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttRightParen, gttComma], '', '', False, True,
+            Result[ParamCount].TypeRanges);
         end;
         Result[ParamCount].EndOffset := Previous.Span.EndOffset;
         Inc(ParamCount);
@@ -5150,8 +5153,8 @@ begin
         if Check(gttColon) then
         begin
           Advance;
-          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma], '', '', False, True);
-          Result[ParamCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma], '', '', False, True,
+            Result[ParamCount].TypeRanges);
         end;
 
         if Match(gttAssign) then
@@ -5176,8 +5179,8 @@ begin
         if Check(gttColon) then
         begin
           Advance;
-          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma], '', '', False, True);
-          Result[ParamCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+          Result[ParamCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttRightParen, gttComma], '', '', False, True,
+            Result[ParamCount].TypeRanges);
         end;
 
         if Match(gttAssign) then
@@ -5216,8 +5219,8 @@ begin
   if Check(gttColon) then
   begin
     Advance;
-    CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
-    ReturnType := CollectedTypeRanges(tsAnnotation);
+    CollectTypeAnnotation([gttLeftBrace], '', '', True, True,
+      ReturnType);
   end;
   Consume(gttLeftBrace, 'Expected "{" before getter body',
     SSuggestOpenBraceGetterBody);
@@ -5337,8 +5340,8 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
-      ReturnType := CollectedTypeRanges(tsAnnotation);
+      CollectTypeAnnotation([gttLeftBrace], '', '', True, True,
+        ReturnType);
     end;
     Consume(gttLeftBrace, 'Expected "{" before setter body',
       SSuggestOpenBraceSetterBody);
@@ -5407,8 +5410,8 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
-      ReturnType := CollectedTypeRanges(tsAnnotation);
+      CollectTypeAnnotation([gttLeftBrace], '', '', True, True,
+        ReturnType);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before function body',
@@ -5581,8 +5584,8 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      FnReturnType := CollectTypeAnnotation([gttArrow], '', '', False, True);
-      ReturnType := CollectedTypeRanges(tsAnnotation);
+      FnReturnType := CollectTypeAnnotation([gttArrow], '', '', False, True,
+        ReturnType);
     end;
 
     // ES2026 §15.3 ArrowParameters [no LineTerminator here] =>, and §15.9
@@ -6303,8 +6306,8 @@ begin
       begin
         Advance;
         Variables[VariableCount].TypeAnnotation :=
-          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
-        Variables[VariableCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True,
+          Variables[VariableCount].TypeRanges);
       end;
       Consume(gttAssign, 'Destructuring declarations must have an initializer',
         SSuggestDestructuringRequiresInitializer);
@@ -6322,8 +6325,8 @@ begin
       if Check(gttColon) then
       begin
         Advance;
-        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
-        Variables[VariableCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True,
+          Variables[VariableCount].TypeRanges);
         if HasDefiniteAssignment and
            (Variables[VariableCount].TypeAnnotation = '') then
           RejectDefiniteAssignmentWithoutAnnotation;
@@ -6402,8 +6405,8 @@ begin
     begin
       Advance;
       Variables[VariableCount].TypeAnnotation :=
-        CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
-      Variables[VariableCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+        CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True,
+        Variables[VariableCount].TypeRanges);
     end;
 
     // using declarations must have an initializer
@@ -6862,8 +6865,8 @@ begin
       begin
         Advance;
         Variables[VariableCount].TypeAnnotation :=
-          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
-        Variables[VariableCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+          CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True,
+          Variables[VariableCount].TypeRanges);
       end;
       Consume(gttAssign, 'Destructuring declarations must have an initializer',
         SSuggestDestructuringRequiresInitializer);
@@ -6880,8 +6883,8 @@ begin
       if Check(gttColon) then
       begin
         Advance;
-        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
-        Variables[VariableCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+        Variables[VariableCount].TypeAnnotation := CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True,
+          Variables[VariableCount].TypeRanges);
         if HasDefiniteAssignment and
            (Variables[VariableCount].TypeAnnotation = '') then
           RejectDefiniteAssignmentWithoutAnnotation;
@@ -7413,8 +7416,8 @@ begin
         begin
           Advance;
           Variables[VarCount].TypeAnnotation :=
-            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
-          Variables[VarCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True,
+            Variables[VarCount].TypeRanges);
         end;
         Consume(gttAssign, 'Destructuring declarations must have an initializer',
           SSuggestDestructuringRequiresInitializer);
@@ -7435,8 +7438,8 @@ begin
         begin
           Advance;
           Variables[VarCount].TypeAnnotation :=
-            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True);
-          Variables[VarCount].TypeRanges := CollectedTypeRanges(tsAnnotation);
+            CollectTypeAnnotation([gttAssign, gttSemicolon, gttComma], '', '', False, True,
+            Variables[VarCount].TypeRanges);
         end;
         if Match(gttAssign) then
         begin
@@ -7721,8 +7724,7 @@ begin
   NameToken := ConsumeIdentifierBinding('Expected function name',
     'Provide a name for the function declaration');
 
-  CollectGenericParameters;
-  TypeParameters := CollectedTypeRanges(tsTypeParameters);
+  CollectGenericParameters(TypeParameters);
 
   FunctionExpr := TGocciaFunctionExpression(ParseFunctionBodyExpression(Line, Column, AIsAsync, AIsGenerator));
   FunctionExpr.AddTypeRanges(TypeParameters);
@@ -7826,8 +7828,8 @@ begin
           { The collector reports the missing annotation itself now — and does
             it by whether anything was consumed, so a type that renders as ''
             (a template literal type) is no longer mistaken for an absent one. }
-          CatchType := CollectTypeAnnotation([gttRightParen], '', '', False, True);
-          CatchTypeRanges := CollectedTypeRanges(tsAnnotation);
+          CatchType := CollectTypeAnnotation([gttRightParen], '', '', False, True,
+            CatchTypeRanges);
         end;
         if (CatchType = '') and MatchContextualKeyword(KEYWORD_IS) then
           CatchPattern := ParseMatchPattern;
@@ -7869,7 +7871,7 @@ var
   Name: string;
   Line, Column: Integer;
   MethodGenericParams, MethodReturnType: string;
-  MethodTypeRanges: TGocciaTypeRangeArray;
+  MethodTypeRanges, ReturnTypeRanges: TGocciaTypeRangeArray;
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
@@ -7878,8 +7880,7 @@ begin
   Line := Previous.Line;
   Column := Previous.Column;
 
-  MethodGenericParams := CollectGenericParameters;
-  MethodTypeRanges := CollectedTypeRanges(tsTypeParameters);
+  MethodGenericParams := CollectGenericParameters(MethodTypeRanges);
 
   Consume(gttLeftParen, 'Expected "(" after method name',
     SSuggestOpenParenMethodParameterList);
@@ -7903,8 +7904,9 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      MethodReturnType := CollectTypeAnnotation([gttLeftBrace], '', '', True, True);
-      AppendTypeRanges(MethodTypeRanges, CollectedTypeRanges(tsAnnotation));
+      MethodReturnType := CollectTypeAnnotation([gttLeftBrace], '', '', True,
+        True, ReturnTypeRanges);
+      AppendTypeRanges(MethodTypeRanges, ReturnTypeRanges);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before method body',
@@ -8925,6 +8927,7 @@ var
   ComputedInstanceSetters: TGocciaComputedSetterEntryArray;
   ClassGenericParams, ClassImplementsClause, FieldType: string;
   ClassTypeRanges, FieldTypeRanges: TGocciaTypeRangeArray;
+  TypeStart: Integer;
   InstancePropertyTypes: TStringStringMap;
   MemberDecorators: TGocciaDecoratorList;
   Elements: TGocciaClassElementArray;
@@ -8942,8 +8945,7 @@ var
 begin
   SetLength(Elements, 0);
   SetLength(FieldOrder, 0);
-  ClassGenericParams := CollectGenericParameters;
-  ClassTypeRanges := CollectedTypeRanges(tsTypeParameters);
+  ClassGenericParams := CollectGenericParameters(ClassTypeRanges);
   SuperClassExpression := nil;
   SavedStrictModeActive := FStrictModeActive;
   SavedStrictModeSourceActive := FStrictModeSourceActive;
@@ -8964,8 +8966,10 @@ begin
         SuperClass := TGocciaIdentifierExpression(SuperClassExpression).Name
       else
         SuperClass := '';
+      TypeStart := FCurrent;
       CollectGenericParameters;
-      AppendTypeRanges(ClassTypeRanges, CollectedTypeRanges(tsTypeArguments));
+      AppendTypeRanges(ClassTypeRanges, TypeRangesBetween(tsTypeArguments,
+        TypeStart, FCurrent));
     end
     else
       SuperClass := '';
@@ -8974,8 +8978,10 @@ begin
     if CheckUnescapedIdentifierKeyword(KEYWORD_IMPLEMENTS) then
     begin
       Advance;
+      TypeStart := FCurrent;
       ClassImplementsClause := CollectTypeAnnotation([gttLeftBrace]);
-      AppendTypeRanges(ClassTypeRanges, CollectedTypeRanges(tsImplements));
+      AppendTypeRanges(ClassTypeRanges, TypeRangesBetween(tsImplements,
+        TypeStart, FCurrent));
     end;
   finally
     FStrictModeActive := SavedStrictModeActive;
@@ -9229,8 +9235,8 @@ begin
       if Check(gttColon) and not IsGetter and not IsSetter then
       begin
         Advance;
-        FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon], '', '', False, True);
-        FieldTypeRanges := CollectedTypeRanges(tsAnnotation);
+        FieldType := CollectTypeAnnotation([gttAssign, gttSemicolon], '', '', False, True,
+          FieldTypeRanges);
       end;
 
       if IsAccessor then
@@ -10292,7 +10298,6 @@ var
   StartIndex: Integer;
 begin
   StartIndex := FCurrent;
-  FTypeStart := StartIndex;
   Result := CollectTypeAnnotationTokens(ATerminators, AContextualTerminator,
     ASecondaryContextualTerminator, AAllowInitialObjectType);
 
@@ -10433,16 +10438,28 @@ begin
     Result := nil;
 end;
 
-function TGocciaParser.CollectedTypeRanges(
-  const ASyntax: TGocciaTypeSyntax): TGocciaTypeRangeArray;
+function TGocciaParser.CollectTypeAnnotation(
+  const ATerminators: array of TGocciaTokenType;
+  const AContextualTerminator, ASecondaryContextualTerminator: string;
+  const AAllowInitialObjectType, ARequireType: Boolean;
+  out ATypeRanges: TGocciaTypeRangeArray): string;
+var
+  StartIndex: Integer;
 begin
-  Result := TypeRangesBetween(ASyntax, FTypeStart, FCurrent);
+  StartIndex := FCurrent;
+  Result := CollectTypeAnnotation(ATerminators, AContextualTerminator,
+    ASecondaryContextualTerminator, AAllowInitialObjectType, ARequireType);
+  ATypeRanges := TypeRangesBetween(tsAnnotation, StartIndex, FCurrent);
 end;
 
-function TGocciaParser.TakePendingTypeArguments: TGocciaTypeRangeArray;
+function TGocciaParser.CollectGenericParameters(
+  out ATypeRanges: TGocciaTypeRangeArray): string;
+var
+  StartIndex: Integer;
 begin
-  Result := FPendingTypeArguments;
-  FPendingTypeArguments := nil;
+  StartIndex := FCurrent;
+  Result := CollectGenericParameters;
+  ATypeRanges := TypeRangesBetween(tsTypeParameters, StartIndex, FCurrent);
 end;
 
 function TGocciaParser.CollectExpressionTypeAnnotation: string;
@@ -10466,7 +10483,6 @@ var
   Depth: Integer;
 begin
   Result := '';
-  FTypeStart := FCurrent;
   if not Check(gttLess) then
     Exit;
 
@@ -10510,7 +10526,8 @@ begin
   Result := Trim(Result);
 end;
 
-function TGocciaParser.TryCollectNewExpressionTypeArguments: Boolean;
+function TGocciaParser.TryCollectNewExpressionTypeArguments(
+  out ATypeArguments: TGocciaTypeRangeArray): Boolean;
 var
   Depth: Integer;
   HasTypeArgument, LexError: Boolean;
@@ -10518,6 +10535,7 @@ var
   SavedLexer: TGocciaLexerCheckpoint;
 begin
   Result := False;
+  ATypeArguments := nil;
   if Assigned(FNotNewTypeArgumentStarts) and (FCurrent < FTokens.Count) and
      (not Assigned(FLexer) or (FCurrent = FTokens.Count - 1)) and
      (FTokens[FCurrent].TokenType = gttLess) and
@@ -10557,8 +10575,8 @@ begin
           gttRightBracket, gttRightBrace, gttEOF]) then
       begin
         Result := True;
-        FPendingTypeArguments := TypeRangesBetween(tsTypeArguments,
-          SavedCurrent, FCurrent);
+        ATypeArguments := TypeRangesBetween(tsTypeArguments, SavedCurrent,
+          FCurrent);
       end;
     except
       on E: TGocciaLexerError do
@@ -10615,7 +10633,8 @@ end;
 // would see, and decides those that would fail too
 // (RememberNotTypeArguments), so a chain such as `a < b < c < ...` is scanned
 // once rather than once per operator.
-function TGocciaParser.TryCollectCallExpressionTypeArguments: Boolean;
+function TGocciaParser.TryCollectCallExpressionTypeArguments(
+  out ATypeArguments: TGocciaTypeRangeArray): Boolean;
 var
   BracketDepth, Depth: Integer;
   HasTypeArgument, LexError: Boolean;
@@ -10624,6 +10643,7 @@ var
   TokenType: TGocciaTokenType;
 begin
   Result := False;
+  ATypeArguments := nil;
   if not FAllowsTypeScriptOnlySyntax then
     Exit;
 
@@ -10685,8 +10705,8 @@ begin
           gttLeftParen, gttTemplate, gttTemplateHead]) then
       begin
         Result := True;
-        FPendingTypeArguments := TypeRangesBetween(tsTypeArguments,
-          SavedCurrent, FCurrent);
+        ATypeArguments := TypeRangesBetween(tsTypeArguments, SavedCurrent,
+          FCurrent);
       end;
     except
       on E: TGocciaLexerError do

@@ -50,7 +50,7 @@ member's static key an `Identifier`, `StringLiteral` or `NumericLiteral`.
 `TSParenthesizedType`, which typescript-estree dropped, is kept, as
 `ParenthesizedExpression` is.
 
-Three things differ from typescript-estree:
+Four things differ from typescript-estree:
 
 - **A member's range stops before its `,` or `;`.** typescript-estree includes
   it. An object literal's `Property` and a module specifier stop before their
@@ -61,6 +61,9 @@ Three things differ from typescript-estree:
   everywhere in the result, a rule slices names from `source`.
 - **A negative number's literal is the number.** In `-1` the `NumericLiteral`
   covers `1`, and the `TSLiteralType` covers the `-`.
+- **A computed key is reported only when it is one literal.** `['k']: T`
+  holds a `StringLiteral`; `[Symbol.iterator]: T` holds no key node, because
+  the reader reads types, not expressions.
 
 ### Type nodes are children of what they annotate
 
@@ -88,23 +91,29 @@ committed to a run of type tokens, `Goccia.Parser.TypeRanges` reads the run
 again and returns the tree as an array of ranges in source order, each
 followed by the ranges inside it. It reads only tokens already consumed,
 lexes nothing, never reads past the run and never raises: a shape it does not
-recognise is passed over. It is never called from inside a probe, so it
-cannot turn a speculative reading into a `SyntaxError` (CONTRIBUTING rule 5).
+recognise is passed over. It runs only on tokens that the parse, or a type
+argument probe that has just accepted them, has decided are type syntax, and
+because it never raises it cannot turn a speculative reading into a
+`SyntaxError` (CONTRIBUTING rule 5).
 Ranges nest by construction, so a misread type gets the wrong kinds, never
 overlapping or escaping ranges. Past 256 levels of nesting the rest of a type
-is not structured.
+is passed over without being structured, so what holds it still ends where
+its text does.
 
 The array is held where the syntax belongs: on the parameter, variable and
 class member records, on the expression it annotates, on the class
 definition, on the try statement, and on the empty statement an erased
 declaration leaves. Each node's `ForEachChild` reports it as parts, between
-`EnterPart` and `LeavePart`, so the flattener still walks the tree only
-through `ForEachChild`.
+`EnterPart` and `LeavePart`, in source order, so the flattener still walks
+the tree through `ForEachChild`. The one exception is an assertion's type:
+the assertion itself is not a node, so its record keeps the type and the
+flattener reports it with the assertion, as it already reports the
+assertion.
 
 Without the switch the parser does what it did, and builds the same nodes.
-The compiler never reads the arrays. Each expression, parameter, variable,
-class member, class definition, try statement and empty statement carries one
-more pointer, which is nil unless the switch is on.
+The compiler never reads the arrays. Each expression, type assertion,
+parameter, variable, class member, class definition, try statement and empty
+statement carries one more pointer, which is nil unless the switch is on.
 
 ### Rejected
 

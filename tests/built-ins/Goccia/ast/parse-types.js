@@ -323,43 +323,218 @@ describe("ast.parse with expressions: type syntax", () => {
     ]);
   });
 
-  test("other type forms are reported by their typescript-estree kinds", () => {
-    const source = [
-      "type A = { readonly [K in keyof Crate as `get${K}`]?: Crate[K] };",
-      "type B<T> = T extends Array<infer U> ? U : never;",
-      "type C = typeof shelf;",
-      "type D = import(\"./crate\").Crate<string>;",
-      "type E = (string | number)[];",
-      "type F = -1 | 2n | true | `plain`;",
-      "type G = unique symbol;",
-      "function H(value: unknown): asserts value is string {}",
-    ].join("\n");
-    const result = parseTypes(`${source}\n`);
-    const kinds = new Set(all(result.root).map((node) => node.kind));
-
-    [
-      "TSMappedType",
-      "TSTypeOperator",
-      "TSTemplateLiteralType",
-      "TSConditionalType",
-      "TSInferType",
-      "TSTypeParameter",
-      "TSTypeQuery",
-      "TSImportType",
-      "TSParenthesizedType",
-      "TSArrayType",
-      "TSLiteralType",
-      "NumericLiteral",
-      "BigIntLiteral",
-      "BooleanLiteral",
-      "TemplateLiteral",
-      "TSSymbolKeyword",
-      "TSTypePredicate",
-      "TSNeverKeyword",
-    ].forEach((kind) => expect(kinds.has(kind)).toBe(true));
-    expect(text(result, find(result.root, "TSImportType").children[0])).toBe(
-      "\"./crate\"",
+  test("a mapped type reports its constraint, name type and value type", () => {
+    const result = parseTypes(
+      "type Getters = { readonly [K in keyof Crate as `get${K}`]?: Crate[K] };\n",
     );
+
+    expect(treeOf(result, result.root.children[0].children[0])).toEqual([
+      "TSMappedType({ readonly [K in keyof Crate as `get${K}`]?: Crate[K] })",
+      "TSTypeOperator(keyof Crate)",
+      "TSTypeReference(Crate)",
+      "TSTemplateLiteralType(`get${K}`)",
+      "TSTypeReference(K)",
+      "TSIndexedAccessType(Crate[K])",
+      "TSTypeReference(Crate)",
+      "TSTypeReference(K)",
+    ]);
+  });
+
+  test("a conditional type reports its four types, and infer its parameter", () => {
+    const result = parseTypes("type Item<T> = T extends Array<infer U> ? U : never;\n");
+
+    expect(treeOf(result, find(result.root, "TSConditionalType"))).toEqual([
+      "TSConditionalType(T extends Array<infer U> ? U : never)",
+      "TSTypeReference(T)",
+      "TSTypeReference(Array<infer U>)",
+      "TSTypeParameterInstantiation(<infer U>)",
+      "TSInferType(infer U)",
+      "TSTypeParameter(U)",
+      "TSTypeReference(U)",
+      "TSNeverKeyword(never)",
+    ]);
+  });
+
+  test("type queries, import types and type operators", () => {
+    const result = parseTypes(
+      "type A = typeof shelf.crate;\ntype B = import(\"./crate\").Crate<string>;\ntype C = unique symbol;\ntype D = readonly (string | number)[];\n",
+    );
+    const types = result.root.children.map((alias) => treeOf(result, alias.children[0]));
+
+    expect(types).toEqual([
+      ["TSTypeQuery(typeof shelf.crate)"],
+      [
+        "TSImportType(import(\"./crate\").Crate<string>)",
+        "TSLiteralType(\"./crate\")",
+        "StringLiteral(\"./crate\")",
+        "TSTypeParameterInstantiation(<string>)",
+        "TSStringKeyword(string)",
+      ],
+      ["TSTypeOperator(unique symbol)", "TSSymbolKeyword(symbol)"],
+      [
+        "TSTypeOperator(readonly (string | number)[])",
+        "TSArrayType((string | number)[])",
+        "TSParenthesizedType((string | number))",
+        "TSUnionType(string | number)",
+        "TSStringKeyword(string)",
+        "TSNumberKeyword(number)",
+      ],
+    ]);
+  });
+
+  test("literal types hold their literal; a negative number's literal is the number", () => {
+    const result = parseTypes("type Flag = -1 | 2n | true | `plain` | null;\n");
+    const union = find(result.root, "TSUnionType");
+
+    expect(union.children.map((member) => treeOf(result, member))).toEqual([
+      ["TSLiteralType(-1)", "NumericLiteral(1)"],
+      ["TSLiteralType(2n)", "BigIntLiteral(2n)"],
+      ["TSLiteralType(true)", "BooleanLiteral(true)"],
+      ["TSLiteralType(`plain`)", "TemplateLiteral(`plain`)"],
+      ["TSNullKeyword(null)"],
+    ]);
+  });
+
+  test("a type predicate is the return type's type", () => {
+    const result = parseTypes(
+      "function isCrate(value: unknown): value is Crate { return true; }\nfunction check(value: unknown): asserts value is string {}\n",
+    );
+
+    expect(
+      findAll(result.root, "TSTypePredicate").map((node) => treeOf(result, node)),
+    ).toEqual([
+      ["TSTypePredicate(value is Crate)", "TSTypeReference(Crate)"],
+      ["TSTypePredicate(asserts value is string)", "TSStringKeyword(string)"],
+    ]);
+  });
+
+  test("a tagged template's and a bare `new`'s type arguments are their children", () => {
+    const result = parseTypes("const query = sql<Row>`select 1`;\nconst box = new Box<Crate>;\n");
+
+    expect(shapeOf(result, find(result.root, "TaggedTemplateExpression"))).toEqual([
+      "Identifier(sql)",
+      "TSTypeParameterInstantiation(<Row>)",
+    ]);
+    expect(shapeOf(result, find(result.root, "NewExpression"))).toEqual([
+      "Identifier(Box)",
+      "TSTypeParameterInstantiation(<Crate>)",
+    ]);
+  });
+
+  test("`>>>` closes three type argument lists, each ending at its own `>`", () => {
+    const result = parseTypes("let deep: A<B<C<D>>>;\n");
+
+    expect(
+      findAll(result.root, "TSTypeParameterInstantiation").map((list) => text(result, list)),
+    ).toEqual(["<B<C<D>>>", "<C<D>>", "<D>"]);
+  });
+
+  test("array and indexed access chains apply left to right", () => {
+    const result = parseTypes("let grid: Cell[][];\nlet pick: Crate['a'][0];\n");
+
+    expect(findAll(result.root, "TSArrayType").map((node) => text(result, node))).toEqual([
+      "Cell[][]",
+      "Cell[]",
+    ]);
+    expect(
+      findAll(result.root, "TSIndexedAccessType").map((node) => text(result, node)),
+    ).toEqual(["Crate['a'][0]", "Crate['a']"]);
+  });
+
+  test("a computed key reports its literal, and only a literal", () => {
+    const result = parseTypes("type Crate = { ['lid-color']: string; [Symbol.iterator](): void };\n");
+    const literal = find(result.root, "TSTypeLiteral");
+
+    expect(literal.children.map((member) => shapeOf(result, member))).toEqual([
+      ["StringLiteral('lid-color')", "TSTypeAnnotation(: string)"],
+      ["TSTypeAnnotation(: void)"],
+    ]);
+    expect(literal.children.map((member) => member.computed)).toEqual([true, true]);
+  });
+
+  test("an infer constraint in a conditional's extends clause keeps the branches", () => {
+    const result = parseTypes("type Pick<T> = T extends infer U extends string ? 'a' : 'b';\n");
+
+    expect(shapeOf(result, find(result.root, "TSConditionalType"))).toEqual([
+      "TSTypeReference(T)",
+      "TSInferType(infer U extends string)",
+      "TSLiteralType('a')",
+      "TSLiteralType('b')",
+    ]);
+  });
+
+  test("intersections, function types, this and the predefined types", () => {
+    const result = parseTypes(
+      "type A = Crate & { lid: this } & ((size: bigint) => void);\ntype B = [any, unknown, object, undefined, never, null, intrinsic];\n",
+    );
+    const [intersection, tuple] = result.root.children.map((alias) => alias.children[0]);
+
+    expect(shapeOf(result, intersection)).toEqual([
+      "TSTypeReference(Crate)",
+      "TSTypeLiteral({ lid: this })",
+      "TSParenthesizedType(((size: bigint) => void))",
+    ]);
+    expect(find(intersection, "TSThisType")).toBeDefined();
+    expect(treeOf(result, find(intersection, "TSFunctionType")).slice(1)).toEqual([
+      "Parameter(size: bigint)",
+      "TSTypeAnnotation(: bigint)",
+      "TSBigIntKeyword(bigint)",
+      "TSTypeAnnotation(=> void)",
+      "TSVoidKeyword(void)",
+    ]);
+    expect(tuple.children.map((element) => element.kind)).toEqual([
+      "TSAnyKeyword",
+      "TSUnknownKeyword",
+      "TSObjectKeyword",
+      "TSUndefinedKeyword",
+      "TSNeverKeyword",
+      "TSNullKeyword",
+      "TSIntrinsicKeyword",
+    ]);
+  });
+
+  test("annotations sit under what they annotate, wherever the parser accepts them", () => {
+    const cases = [
+      ["const f = function (a: A): R { return a; };", "FunctionExpression", ["Parameter", "TSTypeAnnotation", "BlockStatement"]],
+      ["const f = async function* (a: A): R {};", "FunctionExpression", ["Parameter", "TSTypeAnnotation", "BlockStatement"]],
+      ["const o = { get size(): number { return 1; }, set size(v: number) {} };", "ObjectExpression", null],
+      ["class K { static #count: number = 0; accessor label: string = ''; }", "ClassDeclaration", null],
+      ["const f = (r: Res) => { using handle: Handle = open(r); };", "UsingDeclaration", ["TSTypeAnnotation", "CallExpression"]],
+      ["let pending!: number;", "VariableDeclaration", ["TSTypeAnnotation"]],
+      ["const v = shelf?.pick<Crate>(1);", "CallExpression", ["MemberExpression", "TSTypeParameterInstantiation", "NumericLiteral"]],
+    ];
+
+    cases.forEach(([source, kind, shape]) => {
+      const result = parseTypes(`${source}\n`);
+      const node = find(result.root, kind);
+
+      if (shape) {
+        expect(node.children.map((child) => child.kind)).toEqual(shape);
+      }
+    });
+
+    const object = find(parseTypes(`${cases[2][0]}\n`).root, "ObjectExpression");
+    expect(findAll(object, "TSTypeAnnotation").length).toBe(2);
+    const members = find(parseTypes(`${cases[3][0]}\n`).root, "ClassDeclaration").children;
+    expect(members.map((member) => member.children.map((child) => child.kind))).toEqual([
+      ["Identifier", "TSTypeAnnotation", "NumericLiteral"],
+      ["Identifier", "TSTypeAnnotation", "StringLiteral"],
+    ]);
+  });
+
+  test("shapes the parser reads speculatively still parse with types recorded", () => {
+    [
+      "x = c ? (a, b) : d << 2;",
+      "x = a < b > c;",
+      "x = c ? (y) : z;",
+      "x = a < b && c > (d);",
+      "x = c ? (l) => ({ k: 1 }) : (l) => 2;",
+    ].forEach((source) => {
+      const result = parseTypes(`${source}\n`);
+
+      expect(result.root.children[0].kind).toBe("ExpressionStatement");
+      expect(all(result.root).filter((node) => node.kind.startsWith("TS"))).toEqual([]);
+    });
   });
 
   test("a catch parameter's annotation is a child of the try statement", () => {
@@ -404,11 +579,17 @@ describe("ast.parse with expressions: type syntax", () => {
   });
 
   test("a deeply nested type does not exhaust the stack", () => {
-    const depth = 2000;
-    const source = `let deep: ${"Array<".repeat(depth)}number${">".repeat(depth)};\n`;
-    const result = parseTypes(source);
+    const depth = 20000;
+    [
+      `${"Array<".repeat(depth)}number${">".repeat(depth)}`,
+      `${"keyof ".repeat(depth)}Crate`,
+      `Cell${"[]".repeat(depth)}`,
+      `${"(".repeat(depth)}Cell${")".repeat(depth)}`,
+    ].forEach((type) => {
+      const result = parseTypes(`let deep: ${type};\n`);
 
-    expect(find(result.root, "TSTypeAnnotation")).toBeDefined();
+      expect(text(result, find(result.root, "TSTypeAnnotation"))).toBe(`: ${type}`);
+    });
   });
 
   test("without the option no type syntax is reported and the statements are unchanged", () => {

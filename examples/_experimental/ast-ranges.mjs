@@ -107,14 +107,26 @@ const KEY_WRAPPER = { prefix: "class __Probe {\n", suffix: "() {}\n}\n" };
 const ASSERTION_KINDS = ["TSAsExpression", "TSSatisfiesExpression", "TSNonNullExpression"];
 const isTypeKind = (kind) => kind.startsWith("TS") && !ASSERTION_KINDS.includes(kind);
 const TYPE_ALIAS = { prefix: "type __Probe = ", suffix: ";\n" };
-const TYPE_MEMBER_KINDS = [
-  "TSPropertySignature",
-  "TSMethodSignature",
-  "TSCallSignatureDeclaration",
-  "TSConstructSignatureDeclaration",
-  "TSIndexSignature",
-];
-const TUPLE_ELEMENT_KINDS = ["TSNamedTupleMember", "TSOptionalType", "TSRestType"];
+const TYPE_MEMBER_WRAPPER = { prefix: "type __Probe = {\n", suffix: "\n};\n" };
+const TUPLE_ELEMENT_WRAPPER = { prefix: "type __Probe = [", suffix: "];\n" };
+const TYPE_WRAPPERS = {
+  // A predicate is only a return type.
+  TSTypePredicate: { prefix: "function __probe(__x): ", suffix: " {}\n" },
+  TSTypeParameterDeclaration: { prefix: "type __Probe", suffix: " = 0;\n" },
+  TSTypeParameter: { prefix: "type __Probe<", suffix: "> = 0;\n" },
+  TSTypeParameterInstantiation: { prefix: "type __Probe = __T", suffix: ";\n" },
+  TSPropertySignature: TYPE_MEMBER_WRAPPER,
+  TSMethodSignature: TYPE_MEMBER_WRAPPER,
+  TSCallSignatureDeclaration: TYPE_MEMBER_WRAPPER,
+  TSConstructSignatureDeclaration: TYPE_MEMBER_WRAPPER,
+  TSIndexSignature: TYPE_MEMBER_WRAPPER,
+  TSNamedTupleMember: TUPLE_ELEMENT_WRAPPER,
+  TSOptionalType: TUPLE_ELEMENT_WRAPPER,
+  TSRestType: TUPLE_ELEMENT_WRAPPER,
+  TSInterfaceBody: { prefix: "interface __Probe ", suffix: "\n" },
+  TSInterfaceHeritage: { prefix: "interface __Probe extends ", suffix: " {}\n" },
+  TSClassImplements: { prefix: "class __Probe implements ", suffix: " {}\n" },
+};
 
 const typeWrapperFor = (kind, slice) => {
   if (kind === "TSTypeAnnotation") {
@@ -123,44 +135,7 @@ const typeWrapperFor = (kind, slice) => {
       : { prefix: "let __probe", suffix: ";\n" };
   }
 
-  // A predicate is only a return type.
-  if (kind === "TSTypePredicate") {
-    return { prefix: "function __probe(__x): ", suffix: " {}\n" };
-  }
-
-  if (kind === "TSTypeParameterDeclaration") {
-    return { prefix: "type __Probe", suffix: " = 0;\n" };
-  }
-
-  if (kind === "TSTypeParameter") {
-    return { prefix: "type __Probe<", suffix: "> = 0;\n" };
-  }
-
-  if (kind === "TSTypeParameterInstantiation") {
-    return { prefix: "type __Probe = __T", suffix: ";\n" };
-  }
-
-  if (TYPE_MEMBER_KINDS.includes(kind)) {
-    return { prefix: "type __Probe = {\n", suffix: "\n};\n" };
-  }
-
-  if (TUPLE_ELEMENT_KINDS.includes(kind)) {
-    return { prefix: "type __Probe = [", suffix: "];\n" };
-  }
-
-  if (kind === "TSInterfaceBody") {
-    return { prefix: "interface __Probe ", suffix: "\n" };
-  }
-
-  if (kind === "TSInterfaceHeritage") {
-    return { prefix: "interface __Probe extends ", suffix: " {}\n" };
-  }
-
-  if (kind === "TSClassImplements") {
-    return { prefix: "class __Probe implements ", suffix: " {}\n" };
-  }
-
-  return TYPE_ALIAS;
+  return TYPE_WRAPPERS[kind] ?? TYPE_ALIAS;
 };
 
 // A function type's parameter, such as `this: Window`, need not be one a

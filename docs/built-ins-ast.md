@@ -174,8 +174,9 @@ variable's annotation of its `VariableDeclaration`, a call's type arguments of
 the `CallExpression`, between its callee and arguments. A `type` alias holds its
 type parameters and its type, and an `interface` its type parameters,
 heritage and body. A member's static key is an `Identifier`, `StringLiteral`
-or `NumericLiteral`, as in an object literal, but a type's name is not a node:
-slice it from `source`.
+or `NumericLiteral`, as in an object literal, and so is a computed key that
+is one literal (`['k']`); any other computed key has no node. A type's name
+is not a node either: slice it from `source`.
 
 A member's range stops before the `,` or `;` that follows it, so the text
 between the last member and the closing brace is the separator a formatter

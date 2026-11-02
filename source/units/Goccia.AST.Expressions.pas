@@ -2147,16 +2147,18 @@ end;
 procedure TGocciaArrowFunctionExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
-  VisitTypeRanges(AVisitor, TypeRanges);
+  VisitTypeRanges(AVisitor, TypeRanges, trfTypeParameters);
   ForEachParameterChild(AVisitor, FParameters);
+  VisitTypeRanges(AVisitor, TypeRanges, trfAfterTypeParameters);
   AVisitor.VisitChild(FBody);
 end;
 
 procedure TGocciaFunctionExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
-  VisitTypeRanges(AVisitor, TypeRanges);
+  VisitTypeRanges(AVisitor, TypeRanges, trfTypeParameters);
   ForEachParameterChild(AVisitor, FParameters);
+  VisitTypeRanges(AVisitor, TypeRanges, trfAfterTypeParameters);
   AVisitor.VisitChild(FBody);
 end;
 

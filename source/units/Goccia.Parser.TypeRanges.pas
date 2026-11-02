@@ -44,6 +44,7 @@ function ReadTypeRanges(const ATokens: TObjectList<TGocciaToken>;
 implementation
 
 uses
+  Goccia.Constants.TypeNames,
   Goccia.Keywords.Contextual;
 
 const
@@ -61,15 +62,13 @@ const
     `this` are reserved words, read before these. }
   TYPE_KEYWORD_COUNT = 11;
   TYPE_KEYWORD_NAMES: array[0..TYPE_KEYWORD_COUNT - 1] of string = (
-    'any', 'unknown', 'number', 'bigint', 'boolean', 'string', 'symbol',
-    'object', 'never', 'undefined', 'intrinsic');
+    KEYWORD_ANY, KEYWORD_UNKNOWN, NUMBER_TYPE_NAME, BIGINT_TYPE_NAME,
+    BOOLEAN_TYPE_NAME, STRING_TYPE_NAME, SYMBOL_TYPE_NAME, OBJECT_TYPE_NAME,
+    KEYWORD_NEVER, UNDEFINED_TYPE_NAME, KEYWORD_INTRINSIC);
   TYPE_KEYWORD_KINDS: array[0..TYPE_KEYWORD_COUNT - 1] of TGocciaASTPartKind = (
     apkAnyKeyword, apkUnknownKeyword, apkNumberKeyword, apkBigIntKeyword,
     apkBooleanKeyword, apkStringKeyword, apkSymbolKeyword, apkObjectKeyword,
     apkNeverKeyword, apkUndefinedKeyword, apkIntrinsicKeyword);
-
-  KEYWORD_UNIQUE = 'unique';
-  KEYWORD_OUT = 'out';
 
 type
   { Where reading is, so a loop can tell whether an iteration moved. }
@@ -93,6 +92,9 @@ type
     FRanges: TGocciaTypeRangeArray;
     FCount: Integer;
     FDepth: Integer;
+    { Reading the `extends` clause of a conditional type, directly: there an
+      `infer U extends C` keeps its constraint even when a `?` follows. }
+    FInExtendsClause: Boolean;
 
     function TokenAt(const AOffset: Integer): TGocciaToken;
     function TypeAt(const AOffset: Integer): TGocciaTokenType;
@@ -102,7 +104,10 @@ type
     function CurrentStart: Integer;
     function AtEnd: Boolean;
     procedure Advance;
+    function GroupEnd(const AIndex: Integer): Integer;
     procedure SkipBalanced;
+    procedure SkipOpaqueType;
+    procedure ParseQualifiedNameTail;
     function Here: TTypeReaderMark;
     function MovedFrom(const AMark: TTypeReaderMark): Boolean;
     procedure Restore(const AMark: TTypeReaderMark);
@@ -145,7 +150,7 @@ type
     procedure ParseReturnType;
     procedure ParseTypeParameters;
     procedure ParseTypeArguments;
-    procedure ParseHeritage(const AKind: TGocciaASTPartKind);
+    procedure ParseNamedType(const AKind: TGocciaASTPartKind);
     procedure ParseHeritageList(const AKind: TGocciaASTPartKind);
     procedure SkipToWord(const AText: string);
   public
@@ -275,19 +280,74 @@ begin
   end;
 end;
 
-{ Passes over a bracketed group, the current token opening it. }
-procedure TTypeReader.SkipBalanced;
+{ The index just past the bracketed group that ATokens[AIndex] opens, or
+  FEnd when the run ends first. }
+function TTypeReader.GroupEnd(const AIndex: Integer): Integer;
 var
   Depth: Integer;
 begin
   Depth := 0;
+  Result := AIndex;
   repeat
-    case TypeAt(0) of
+    case FTokens[Result].TokenType of
       gttLeftParen, gttLeftBracket, gttLeftBrace: Inc(Depth);
       gttRightParen, gttRightBracket, gttRightBrace: Dec(Depth);
     end;
+    Inc(Result);
+  until (Result >= FEnd) or (Depth <= 0);
+end;
+
+{ Passes over a bracketed group, the current token opening it. }
+procedure TTypeReader.SkipBalanced;
+var
+  Last: Integer;
+begin
+  if AtEnd then
+    Exit;
+  Last := GroupEnd(FPosition);
+  while FPosition < Last do
     Advance;
-  until AtEnd or (Depth <= 0);
+end;
+
+{ Passes over a type too deeply nested to read, up to the token that ends
+  it in the list or brackets around it, so what holds it still ends where
+  its text does. }
+procedure TTypeReader.SkipOpaqueType;
+var
+  Depth: Integer;
+begin
+  Depth := 0;
+  while not AtEnd do
+  begin
+    case TypeAt(0) of
+      gttLeftParen, gttLeftBracket, gttLeftBrace, gttLess, gttTemplateHead:
+        Inc(Depth);
+      gttRightParen, gttRightBracket, gttRightBrace, gttGreater,
+      gttTemplateTail:
+        begin
+          if Depth = 0 then
+            Exit;
+          Dec(Depth);
+        end;
+      gttComma, gttSemicolon, gttTemplateMiddle:
+        if Depth = 0 then
+          Exit;
+    end;
+    Advance;
+  end;
+end;
+
+{ The rest of a name after its first word, `.b.c`, and the type arguments
+  after it. A `<` on the next line is not a type argument list. }
+procedure TTypeReader.ParseQualifiedNameTail;
+begin
+  while (TypeAt(0) = gttDot) and IsWord(1) do
+  begin
+    Advance;
+    Advance;
+  end;
+  if (TypeAt(0) = gttLess) and not BreakBefore(0) then
+    ParseTypeArguments;
 end;
 
 function TTypeReader.Here: TTypeReaderMark;
@@ -384,23 +444,14 @@ end;
   opens, and a parenthesized type otherwise. }
 function TTypeReader.StartsFunctionType: Boolean;
 var
-  Depth, Index: Integer;
+  Index: Integer;
 begin
   if TypeAt(0) = gttLess then
     Exit(True);
   if TypeAt(0) <> gttLeftParen then
     Exit(False);
-  Depth := 0;
-  Index := FPosition;
-  repeat
-    case FTokens[Index].TokenType of
-      gttLeftParen, gttLeftBracket, gttLeftBrace: Inc(Depth);
-      gttRightParen, gttRightBracket, gttRightBrace: Dec(Depth);
-    end;
-    Inc(Index);
-  until (Index >= FEnd) or (Depth <= 0);
-  Result := (Depth = 0) and (Index < FEnd) and
-    (FTokens[Index].TokenType = gttArrow);
+  Index := GroupEnd(FPosition);
+  Result := (Index < FEnd) and (FTokens[Index].TokenType = gttArrow);
 end;
 
 function TTypeReader.StartsMappedType: Boolean;
@@ -427,11 +478,21 @@ end;
 function TTypeReader.ParseType(const AAllowConditional: Boolean): Boolean;
 var
   First, Node: Integer;
+  Mark: TTypeReaderMark;
+  SavedInExtendsClause: Boolean;
 begin
   Result := False;
-  if AtEnd or (FDepth >= MAX_TYPE_DEPTH) then
+  if AtEnd then
     Exit;
+  if FDepth >= MAX_TYPE_DEPTH then
+  begin
+    Mark := Here;
+    SkipOpaqueType;
+    Exit(MovedFrom(Mark));
+  end;
   Inc(FDepth);
+  SavedInExtendsClause := FInExtendsClause;
+  FInExtendsClause := not AAllowConditional;
   try
     if StartsFunctionType then
     begin
@@ -468,6 +529,7 @@ begin
     end;
     Close(Node);
   finally
+    FInExtendsClause := SavedInExtendsClause;
     Dec(FDepth);
   end;
 end;
@@ -517,9 +579,20 @@ begin
   if (WordIs(0, KEYWORD_KEYOF) or WordIs(0, KEYWORD_UNIQUE) or
       WordIs(0, KEYWORD_READONLY)) and StartsType(1) then
   begin
+    { `keyof keyof T` nests without passing through ParseType. }
+    if FDepth >= MAX_TYPE_DEPTH then
+    begin
+      SkipOpaqueType;
+      Exit(True);
+    end;
     Node := Open(apkTypeOperator, CurrentStart);
     Advance;
-    ParseTypeOperator();
+    Inc(FDepth);
+    try
+      ParseTypeOperator();
+    finally
+      Dec(FDepth);
+    end;
     Close(Node);
     Exit(True);
   end;
@@ -528,8 +601,9 @@ begin
   Result := ParsePostfix;
 end;
 
-{ `infer U`, and `infer U extends C` where no `?` follows the constraint:
-  with one, `extends` begins a conditional type instead. }
+{ `infer U`, and `infer U extends C`. Outside a conditional's `extends`
+  clause, a `?` after the constraint makes `extends` begin a conditional
+  type instead, as TypeScript reads it. }
 function TTypeReader.ParseInfer: Boolean;
 var
   Node, Parameter: Integer;
@@ -544,7 +618,7 @@ begin
     Mark := Here;
     Advance;
     ParseType(False);
-    if TypeAt(0) = gttQuestion then
+    if (TypeAt(0) = gttQuestion) and not FInExtendsClause then
       Restore(Mark);
   end;
   Close(Parameter);
@@ -552,10 +626,12 @@ begin
   Result := True;
 end;
 
-{ `T[]` and `T[K]`, applied to the type before them, left to right. }
+{ `T[]` and `T[K]`, applied to the type before them, left to right. Each
+  one nests the type before it a level deeper, so they count towards the
+  depth limit. }
 function TTypeReader.ParsePostfix: Boolean;
 var
-  First, Node: Integer;
+  First, Node, Levels: Integer;
 begin
   First := FCount;
   if not ParsePrimary then
@@ -563,8 +639,11 @@ begin
   Result := True;
   if FCount = First then
     Exit;
-  while (TypeAt(0) = gttLeftBracket) and not BreakBefore(0) do
+  Levels := 0;
+  while (TypeAt(0) = gttLeftBracket) and not BreakBefore(0) and
+        (FDepth + Levels < MAX_TYPE_DEPTH) do
   begin
+    Inc(Levels);
     if TypeAt(1) = gttRightBracket then
     begin
       Node := Wrap(apkArrayType, First);
@@ -581,6 +660,8 @@ begin
     end;
     Close(Node);
   end;
+  while (TypeAt(0) = gttLeftBracket) and not BreakBefore(0) do
+    SkipBalanced;
 end;
 
 function TTypeReader.ParsePrimary: Boolean;
@@ -645,7 +726,7 @@ end;
   type arguments. The name itself is not a node: a rule slices it. }
 procedure TTypeReader.ParseTypeReference;
 var
-  I, Node: Integer;
+  I: Integer;
   Token: TGocciaToken;
 begin
   Token := TokenAt(0);
@@ -658,16 +739,7 @@ begin
         Exit;
       end;
 
-  Node := Open(apkTypeReference, CurrentStart);
-  Advance;
-  while (TypeAt(0) = gttDot) and IsWord(1) do
-  begin
-    Advance;
-    Advance;
-  end;
-  if (TypeAt(0) = gttLess) and not BreakBefore(0) then
-    ParseTypeArguments;
-  Close(Node);
+  ParseNamedType(apkTypeReference);
 end;
 
 procedure TTypeReader.ParseTemplateLiteralType;
@@ -705,14 +777,8 @@ begin
   else if IsWord(0) then
   begin
     Advance;
-    while (TypeAt(0) = gttDot) and IsWord(1) do
-    begin
-      Advance;
-      Advance;
-    end;
+    ParseQualifiedNameTail;
   end;
-  if (TypeAt(0) = gttLess) and not BreakBefore(0) then
-    ParseTypeArguments;
   Close(Node);
 end;
 
@@ -720,7 +786,7 @@ end;
   typescript-estree has it. }
 procedure TTypeReader.ParseImportType;
 var
-  Node, Literal: Integer;
+  Node: Integer;
 begin
   Node := Open(apkImportType, CurrentStart);
   Advance;
@@ -728,11 +794,7 @@ begin
   begin
     Advance;
     if TypeAt(0) = gttString then
-    begin
-      Literal := Open(apkLiteralType, CurrentStart);
-      Leaf(apkKeyString);
-      Close(Literal);
-    end;
+      ParseLiteralType(apkKeyString);
     while not AtEnd and (TypeAt(0) <> gttRightParen) do
       if TypeAt(0) in [gttLeftParen, gttLeftBracket, gttLeftBrace] then
         SkipBalanced
@@ -741,13 +803,7 @@ begin
     if TypeAt(0) = gttRightParen then
       Advance;
   end;
-  while (TypeAt(0) = gttDot) and IsWord(1) do
-  begin
-    Advance;
-    Advance;
-  end;
-  if (TypeAt(0) = gttLess) and not BreakBefore(0) then
-    ParseTypeArguments;
+  ParseQualifiedNameTail;
   Close(Node);
 end;
 
@@ -854,7 +910,7 @@ procedure TTypeReader.ParseMember;
   end;
 
 var
-  Node, Depth, KeyEnd, After, StartOffset: Integer;
+  Node, KeyEnd, After, StartOffset: Integer;
   Flags: TGocciaASTPartFlags;
   IsComputed, IsMethod: Boolean;
 begin
@@ -903,17 +959,7 @@ begin
     an optional `?`, says whether the member is a method. }
   IsComputed := TypeAt(0) = gttLeftBracket;
   if IsComputed then
-  begin
-    Depth := 0;
-    KeyEnd := FPosition;
-    repeat
-      case FTokens[KeyEnd].TokenType of
-        gttLeftParen, gttLeftBracket, gttLeftBrace: Inc(Depth);
-        gttRightParen, gttRightBracket, gttRightBrace: Dec(Depth);
-      end;
-      Inc(KeyEnd);
-    until (KeyEnd >= FEnd) or (Depth <= 0);
-  end
+    KeyEnd := GroupEnd(FPosition)
   else if IsWord(0) or (TypeAt(0) in [gttString, gttNumber, gttBigInt]) then
     KeyEnd := FPosition + 1
   else
@@ -930,11 +976,20 @@ begin
     Node := Open(apkMethodSignature, StartOffset, Flags)
   else
     Node := Open(apkPropertySignature, StartOffset, Flags);
-  if IsComputed then
-    while FPosition < KeyEnd do
-      Advance
-  else
+  { A computed key that is one literal, `['k']`, reports the literal; any
+    other is an expression, which the reader does not read. }
+  if not IsComputed then
+    Leaf(KeyKindOf(TokenAt(0)))
+  else if (KeyEnd - FPosition = 3) and
+          (TypeAt(1) in [gttString, gttNumber, gttBigInt]) then
+  begin
+    Advance;
     Leaf(KeyKindOf(TokenAt(0)));
+    Advance;
+  end
+  else
+    while FPosition < KeyEnd do
+      Advance;
   if TypeAt(0) = gttQuestion then
     Advance;
   if IsMethod then
@@ -1084,7 +1139,7 @@ procedure TTypeReader.ParseReturnType;
 var
   Node: Integer;
 begin
-  if (IsWord(0) or (TypeAt(0) = gttThis)) and WordIs(1, KEYWORD_IS) and
+  if IsWord(0) and WordIs(1, KEYWORD_IS) and
      not BreakBefore(1) then
   begin
     Node := Open(apkTypePredicate, CurrentStart);
@@ -1169,9 +1224,9 @@ begin
   Close(Node);
 end;
 
-{ `Base<T>` in an `extends` or `implements` list: a name, qualified or not,
-  with its type arguments. }
-procedure TTypeReader.ParseHeritage(const AKind: TGocciaASTPartKind);
+{ A name, qualified or not, with its type arguments: a type reference, or
+  `Base<T>` in an `extends` or `implements` list. }
+procedure TTypeReader.ParseNamedType(const AKind: TGocciaASTPartKind);
 var
   Node: Integer;
 begin
@@ -1179,13 +1234,7 @@ begin
     Exit;
   Node := Open(AKind, CurrentStart);
   Advance;
-  while (TypeAt(0) = gttDot) and IsWord(1) do
-  begin
-    Advance;
-    Advance;
-  end;
-  if (TypeAt(0) = gttLess) and not BreakBefore(0) then
-    ParseTypeArguments;
+  ParseQualifiedNameTail;
   Close(Node);
 end;
 
@@ -1196,7 +1245,7 @@ begin
   while not AtEnd and (TypeAt(0) <> gttLeftBrace) do
   begin
     Mark := Here;
-    ParseHeritage(AKind);
+    ParseNamedType(AKind);
     if TypeAt(0) = gttComma then
       Advance
     else if not MovedFrom(Mark) then

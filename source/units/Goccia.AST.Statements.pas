@@ -1371,8 +1371,9 @@ begin
   if not Assigned(ADefinition) then
     Exit;
   VisitDecorators(AVisitor, ADefinition.Decorators);
-  VisitTypeRanges(AVisitor, ADefinition.TypeRanges);
+  VisitTypeRanges(AVisitor, ADefinition.TypeRanges, trfTypeParameters);
   AVisitor.VisitChild(ADefinition.SuperClassExpression);
+  VisitTypeRanges(AVisitor, ADefinition.TypeRanges, trfAfterTypeParameters);
 
   ElementIndex := 0;
   FieldIndex := 0;
@@ -1553,8 +1554,9 @@ end;
 procedure TGocciaClassMethod.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
-  VisitTypeRanges(AVisitor, TypeRanges);
+  VisitTypeRanges(AVisitor, TypeRanges, trfTypeParameters);
   ForEachParameterChild(AVisitor, FParameters);
+  VisitTypeRanges(AVisitor, TypeRanges, trfAfterTypeParameters);
   AVisitor.VisitChild(FBody);
 end;
 

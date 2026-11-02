@@ -165,7 +165,9 @@ type
 
   { One piece of erased type syntax. A type's ranges are kept in source
     order, each one followed by the ranges inside it: SubtreeEnd is the index
-    just past the last of those, so the array is a tree without pointers. }
+    just past the last of those, so the array is a tree without pointers.
+    A TGocciaASTPartRange is a leaf whose equal offsets mean "not recorded";
+    a type range always holds what the parser read, and may hold more. }
   TGocciaTypeRange = record
     Kind: TGocciaASTPartKind;
     StartOffset: Integer;
@@ -174,6 +176,11 @@ type
     SubtreeEnd: Integer;
   end;
   TGocciaTypeRangeArray = array of TGocciaTypeRange;
+
+  { Which of a node's types VisitTypeRanges reports. A function's or a
+    class's type parameters come before its parameters or heritage in the
+    source, and the rest of its types after them. }
+  TGocciaTypeRangeFilter = (trfAll, trfTypeParameters, trfAfterTypeParameters);
 
   { Receives a node's children from TGocciaASTNode.ForEachChild. }
   TGocciaASTChildVisitor = class
@@ -304,10 +311,11 @@ procedure VisitPartRange(const AVisitor: TGocciaASTChildVisitor;
 procedure VisitPartRanges(const AVisitor: TGocciaASTChildVisitor;
   const ARanges: TGocciaASTPartRangeArray);
 
-{ Reports each recorded type, with the ranges inside it nested between its
-  EnterPart and LeavePart. }
+{ Reports each recorded type AFilter selects, with the ranges inside it
+  nested between its EnterPart and LeavePart. }
 procedure VisitTypeRanges(const AVisitor: TGocciaASTChildVisitor;
-  const ARanges: TGocciaTypeRangeArray);
+  const ARanges: TGocciaTypeRangeArray;
+  const AFilter: TGocciaTypeRangeFilter = trfAll);
 
 { Adds ASource to the end of ATarget. }
 procedure AppendTypeRanges(var ATarget: TGocciaTypeRangeArray;
@@ -371,7 +379,8 @@ begin
 end;
 
 procedure VisitTypeRanges(const AVisitor: TGocciaASTChildVisitor;
-  const ARanges: TGocciaTypeRangeArray);
+  const ARanges: TGocciaTypeRangeArray;
+  const AFilter: TGocciaTypeRangeFilter);
 
   procedure VisitFrom(var AIndex: Integer);
   var
@@ -388,10 +397,18 @@ procedure VisitTypeRanges(const AVisitor: TGocciaASTChildVisitor;
 
 var
   I: Integer;
+  IsTypeParameters: Boolean;
 begin
   I := 0;
   while I < Length(ARanges) do
-    VisitFrom(I);
+  begin
+    IsTypeParameters := ARanges[I].Kind = apkTypeParameterDeclaration;
+    if (AFilter = trfAll) or
+       (IsTypeParameters = (AFilter = trfTypeParameters)) then
+      VisitFrom(I)
+    else
+      I := ARanges[I].SubtreeEnd;
+  end;
 end;
 
 procedure AppendTypeRanges(var ATarget: TGocciaTypeRangeArray;
@@ -401,6 +418,11 @@ var
 begin
   if Length(ASource) = 0 then
     Exit;
+  if Length(ATarget) = 0 then
+  begin
+    ATarget := ASource;
+    Exit;
+  end;
   Base := Length(ATarget);
   SetLength(ATarget, Base + Length(ASource));
   for I := 0 to High(ASource) do
