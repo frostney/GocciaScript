@@ -140,3 +140,20 @@ describe("for await (using x of source)", () => {
     expect(log).toEqual(["body 1", "sync dispose 1", "return"]);
   });
 });
+
+describe("async generator return() in a for await with a using head", () => {
+  test("disposes the iteration's value before the iterator closes", async () => {
+    const log = [];
+    const holder = {
+      async *run() {
+        for await (await using x of asyncSource(log)) {
+          yield x.n;
+        }
+      },
+    };
+    const it = holder.run();
+    expect(await it.next()).toEqual({ value: 1, done: false });
+    expect(await it.return(9)).toEqual({ value: 9, done: true });
+    expect(log).toEqual(["async dispose 1", "return"]);
+  });
+});

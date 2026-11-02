@@ -858,6 +858,19 @@ begin
   end;
 end;
 
+// Pre-declares the const bindings of a top-level using declaration, which
+// PredeclareLexicalLocals leaves to a function body's block
+// (CompileBlockStatement).
+procedure PredeclareUsingLocals(const AUsingDecl: TGocciaUsingDeclaration;
+  const AScope: TGocciaCompilerScope);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AUsingDecl.Variables) do
+    if AScope.ResolveLocal(AUsingDecl.Variables[I].Name) < 0 then
+      AScope.DeclareLocal(AUsingDecl.Variables[I].Name, True);
+end;
+
 // Pre-declare lexical locals from any statement node that introduces bindings,
 // so that hoisted function declarations can resolve upvalue captures.
 procedure PredeclareLexicalLocals(const ANode: TGocciaASTNode;
@@ -2387,6 +2400,13 @@ begin
     PredeclaredLexicalStart := FCurrentScope.LocalCount;
     for I := 0 to AProgram.Body.Count - 1 do
       PredeclareLexicalLocals(AProgram.Body[I], FCurrentScope);
+    // A top-level using declaration binds as a const does: in the global or
+    // module environment when the top level is global-backed, which the link
+    // plan declares as well, and visible to the hoisted functions.
+    for I := 0 to AProgram.Body.Count - 1 do
+      if AProgram.Body[I] is TGocciaUsingDeclaration then
+        PredeclareUsingLocals(TGocciaUsingDeclaration(AProgram.Body[I]),
+          FCurrentScope);
     MarkModuleExportLocals(AProgram.Body, FCurrentScope);
     if FGlobalBackedTopLevel and not FGlobalEvalVarEnvironment then
       MarkTopLevelGlobalBackedLocals(FCurrentScope);
@@ -2458,19 +2478,12 @@ begin
 
     // ES2027 §16.2.1.7.3.2 ExecuteModule step 3.f: once a module's body
     // completes, normally or with a throw, DisposeResources disposes the
-    // resources its top-level using and await using declarations added. The
-    // bindings are declared here, after the hoisted functions, as locals of
-    // the top level, in their temporal dead zone until their declarations
-    // run, so that each gets its dispose register on entry
-    // (PreallocateUsingDisposeSlots).
+    // resources its top-level using and await using declarations added. Each
+    // gets its dispose register on entry (PreallocateUsingDisposeSlots).
     HasUsing := False;
     for I := 0 to AProgram.Body.Count - 1 do
       if AProgram.Body[I] is TGocciaUsingDeclaration then
-      begin
         HasUsing := True;
-        Goccia.Compiler.Statements.PredeclareBlockUsingLocals(Ctx,
-          TGocciaUsingDeclaration(AProgram.Body[I]));
-      end;
     if HasUsing then
     begin
       Goccia.Compiler.Statements.BeginUsingDisposalRegion(Ctx, UsingRegion);

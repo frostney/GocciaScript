@@ -158,9 +158,6 @@ procedure PreallocateUsingDisposeSlots(const ACtx: TGocciaCompilationContext;
   const AUsingDecl: TGocciaUsingDeclaration;
   const ASlots: TList<TPreallocatedUsingDisposeSlot>);
 procedure EndUsingDisposeSlots(var ASlots: TUsingDisposeSlots);
-procedure PredeclareBlockUsingLocals(const ACtx: TGocciaCompilationContext;
-  const AUsingDecl: TGocciaUsingDeclaration;
-  const AEmitInitializers: Boolean = True);
 
 // True when a value returned from the code being compiled is in tail position
 // (ES2026 §15.10.1 IsInTailPosition): strict code outside a generator or async
@@ -1698,8 +1695,9 @@ threadvar
   // GUsingResources is a lazily-created container reused across compilations and
   // never freed otherwise (its entries are balanced/emptied during a compile);
   // it is released at thread teardown (see ClearCompilerWorkingState, #892).
-  // GPreallocatedUsingDisposeSlots is save/restored and freed per switch
-  // statement, so it is nil at rest.
+  // GPreallocatedUsingDisposeSlots is installed and restored around each scope
+  // whose using declarations get their dispose registers on entry
+  // (BeginUsingDisposeSlots), so it is nil at rest.
   GUsingResources: TList<TUsingResourceEntry>;
   GPreallocatedUsingDisposeSlots: TList<TPreallocatedUsingDisposeSlot>;
 
@@ -1866,6 +1864,13 @@ begin
        (ACtx.Scope.GetLocal(LocalIdx).Slot = ValueSlot) and
        ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
       EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ValueSlot, UInt16(ValueSlot)));
+    // A top-level binding of a script or module lives in the global or module
+    // environment, which the binding's initialization defines as a const's
+    // does, once the resource was added (ES2027 §14.3.1.2, LexicalBinding :
+    // BindingIdentifier Initializer: AddDisposableResource, then
+    // InitializeReferencedBinding).
+    if TopLevelBindingIsGlobalBacked(ACtx, False) then
+      EmitGlobalDefine(ACtx, ValueSlot, Info.Name, True);
 
     // Track for disposal at block exit
     Entry.ValueSlot := ValueSlot;
@@ -1998,6 +2003,14 @@ procedure EmitUsingHandlerDisposal(const ACtx: TGocciaCompilationContext;
 var
   ReturnJump, ThrowJump, CompletionJump: Integer;
 begin
+  // Only a generator's own frame sees its return completion.
+  if not ACtx.Template.IsGenerator then
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_MOVE, AErrorReg, ACaughtReg, 0));
+    EmitDisposalSequence(ACtx, AResources, AResourceCount, AErrorReg);
+    EmitInstruction(ACtx, EncodeABC(OP_THROW, AErrorReg, 0, 0));
+    Exit;
+  end;
   EmitInstruction(ACtx, EncodeABC(OP_ITER_CLOSE, AErrorReg, ACaughtReg,
     ITER_CLOSE_IS_GENERATOR_RETURN));
   ReturnJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, AErrorReg);
@@ -2014,6 +2027,41 @@ begin
   EmitInstruction(ACtx, EncodeABC(OP_THROW, AErrorReg, 0, 0));
   PatchJumpTarget(ACtx, CompletionJump);
   EmitInstruction(ACtx, EncodeABC(OP_THROW, ACaughtReg, 0, 0));
+end;
+
+// Disposes AResources in reverse order and throws the error they left in
+// AErrorReg, if any: the normal exit of a scope, or a return, break or
+// continue out of it.
+procedure EmitDisposalThenThrowError(const ACtx: TGocciaCompilationContext;
+  const AResources: array of TUsingResourceEntry;
+  const AResourceCount: Integer; const AErrorReg: UInt16);
+var
+  NullishJump: Integer;
+begin
+  EmitDisposalSequence(ACtx, AResources, AResourceCount, AErrorReg);
+  NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, AErrorReg,
+    GOCCIA_NULLISH_MATCH_HOLE);
+  EmitInstruction(ACtx, EncodeABC(OP_THROW, AErrorReg, 0, 0));
+  PatchJumpTarget(ACtx, NullishJump);
+end;
+
+// The end of a scope whose finally handler AHandlerJump pushed: the normal
+// exit removes the handler and disposes, and the handler disposes for the
+// completion it caught.
+procedure EmitUsingScopeExit(const ACtx: TGocciaCompilationContext;
+  const AResources: array of TUsingResourceEntry;
+  const AResourceCount: Integer; const AErrorReg, ACaughtReg: UInt16;
+  const AHandlerJump: Integer);
+var
+  EndJump: Integer;
+begin
+  EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
+  EmitDisposalThenThrowError(ACtx, AResources, AResourceCount, AErrorReg);
+  EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+  PatchJumpTarget(ACtx, AHandlerJump);
+  EmitUsingHandlerDisposal(ACtx, AResources, AResourceCount, AErrorReg,
+    ACaughtReg);
+  PatchJumpTarget(ACtx, EndJump);
 end;
 
 // Opens the disposal region of a scope with using declarations: the using
@@ -2053,10 +2101,9 @@ procedure EndUsingDisposalRegion(const ACtx: TGocciaCompilationContext;
   const ARegion: TUsingDisposalRegion);
 var
   Resources: array of TUsingResourceEntry;
-  ResourceCount, I, NullishJump, EndJump: Integer;
+  ResourceCount, I: Integer;
 begin
   GPendingFinally.Delete(GPendingFinally.Count - 1);
-  EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
 
   ResourceCount := GUsingResources.Count - ARegion.ResourceBase;
   SetLength(Resources, ResourceCount);
@@ -2065,18 +2112,8 @@ begin
   for I := GUsingResources.Count - 1 downto ARegion.ResourceBase do
     GUsingResources.Delete(I);
 
-  EmitDisposalSequence(ACtx, Resources, ResourceCount, ARegion.ErrorReg);
-  NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
-    ARegion.ErrorReg, GOCCIA_NULLISH_MATCH_HOLE);
-  EmitInstruction(ACtx, EncodeABC(OP_THROW, ARegion.ErrorReg, 0, 0));
-  PatchJumpTarget(ACtx, NullishJump);
-  EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-
-  PatchJumpTarget(ACtx, ARegion.HandlerJump);
-  EmitUsingHandlerDisposal(ACtx, Resources, ResourceCount, ARegion.ErrorReg,
-    ARegion.CatchReg);
-
-  PatchJumpTarget(ACtx, EndJump);
+  EmitUsingScopeExit(ACtx, Resources, ResourceCount, ARegion.ErrorReg,
+    ARegion.CatchReg, ARegion.HandlerJump);
 
   // The dispose registers, then the error and catch registers, in reverse
   // order of allocation.
@@ -2659,7 +2696,6 @@ end;
 procedure EmitPendingEntryCleanup(const ACtx: TGocciaCompilationContext;
   const AEntry: TPendingFinallyEntry; const ACloseIterator: Boolean);
 var
-  NullishJump: Integer;
   I: Integer;
   Local: TGocciaCompilerLocal;
   HandlerPopCount: Integer;
@@ -2701,14 +2737,8 @@ begin
     end;
   end
   else if Length(AEntry.UsingResources) > 0 then
-  begin
-    EmitDisposalSequence(ACtx, AEntry.UsingResources,
-      Length(AEntry.UsingResources), AEntry.UsingErrorReg);
-    NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
-      AEntry.UsingErrorReg, GOCCIA_NULLISH_MATCH_HOLE);
-    EmitInstruction(ACtx, EncodeABC(OP_THROW, AEntry.UsingErrorReg, 0, 0));
-    PatchJumpTarget(ACtx, NullishJump);
-  end
+    EmitDisposalThenThrowError(ACtx, AEntry.UsingResources,
+      Length(AEntry.UsingResources), AEntry.UsingErrorReg)
   else if AEntry.IsIteratorClose and ACloseIterator then
   begin
     if AEntry.IsAsyncIterator then
@@ -3644,8 +3674,6 @@ end;
 // completion it caught (EmitUsingHandlerDisposal).
 procedure EndForOfUsingIteration(const ACtx: TGocciaCompilationContext;
   var AHead: TForOfUsingHead);
-var
-  NullishJump, EndJump: Integer;
 begin
   if AHead.PendingActive then
   begin
@@ -3653,19 +3681,8 @@ begin
     AHead.PendingActive := False;
   end;
 
-  EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
-  EmitDisposalSequence(ACtx, [AHead.Resource], 1, AHead.ErrorReg);
-  NullishJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH,
-    AHead.ErrorReg, GOCCIA_NULLISH_MATCH_HOLE);
-  EmitInstruction(ACtx, EncodeABC(OP_THROW, AHead.ErrorReg, 0, 0));
-  PatchJumpTarget(ACtx, NullishJump);
-  EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-
-  PatchJumpTarget(ACtx, AHead.HandlerJump);
-  EmitUsingHandlerDisposal(ACtx, [AHead.Resource], 1, AHead.ErrorReg,
-    AHead.CatchReg);
-
-  PatchJumpTarget(ACtx, EndJump);
+  EmitUsingScopeExit(ACtx, [AHead.Resource], 1, AHead.ErrorReg,
+    AHead.CatchReg, AHead.HandlerJump);
 end;
 
 procedure FreeForOfUsingHead(const ACtx: TGocciaCompilationContext);
@@ -4863,7 +4880,7 @@ var
   DestructDecl: TGocciaDestructuringDeclaration;
   LocalIdx: Integer;
   HasUsingInit: Boolean;
-  UsingDisposeSlots, OldUsingDisposeSlots: TList<TPreallocatedUsingDisposeSlot>;
+  UsingDisposeSlots: TUsingDisposeSlots;
   UsingRegion: TUsingDisposalRegion;
   UsingDecl: TGocciaUsingDeclaration;
 begin
@@ -4872,7 +4889,7 @@ begin
 
   HasLexicalInit := False;
   HasUsingInit := AStmt.Init is TGocciaUsingDeclaration;
-  UsingDisposeSlots := nil;
+  UsingDisposeSlots.Slots := nil;
   UseSharedLexicalFor := False;
   PerIterIsConst := False;
   PerIterNames := nil;
@@ -4925,8 +4942,8 @@ begin
       // before the first initializer runs, so a disposal after an initializer
       // threw skips the bindings that follow it.
       PredeclareBlockLexicalLocals(AStmt.Init, ACtx);
-      UsingDisposeSlots := TList<TPreallocatedUsingDisposeSlot>.Create;
-      PreallocateUsingDisposeSlots(ACtx, UsingDecl, UsingDisposeSlots);
+      BeginUsingDisposeSlots(UsingDisposeSlots);
+      PreallocateUsingDisposeSlots(ACtx, UsingDecl, UsingDisposeSlots.Slots);
     end;
 
     try
@@ -4938,14 +4955,10 @@ begin
           TGocciaExpressionStatement(AStmt.Init).Expression)
       else if HasUsingInit then
       begin
-        OldUsingDisposeSlots := GPreallocatedUsingDisposeSlots;
-        GPreallocatedUsingDisposeSlots := UsingDisposeSlots;
         try
           ACtx.CompileStatement(AStmt.Init);
         finally
-          if GPreallocatedUsingDisposeSlots = UsingDisposeSlots then
-            GPreallocatedUsingDisposeSlots := OldUsingDisposeSlots;
-          FreeAndNil(UsingDisposeSlots);
+          EndUsingDisposeSlots(UsingDisposeSlots);
         end;
       end
       else if Assigned(AStmt.Init) then
@@ -5140,7 +5153,8 @@ begin
   finally
     if Assigned(PerIterNames) then
       PerIterNames.Free;
-    UsingDisposeSlots.Free;
+    if Assigned(UsingDisposeSlots.Slots) then
+      EndUsingDisposeSlots(UsingDisposeSlots);
   end;
 end;
 
@@ -5634,8 +5648,7 @@ var
   HasFunctionDecl, NeedsPrelude, StatementAbrupt, HasUsing: Boolean;
   CaseClausesOpen: Boolean;
   UsingRegion: TUsingDisposalRegion;
-  PreallocatedUsingDisposeSlots, OldPreallocatedUsingDisposeSlots:
-    TList<TPreallocatedUsingDisposeSlot>;
+  UsingDisposeSlots: TUsingDisposeSlots;
 
   procedure BeginSwitchUsingDisposalRegion;
   begin
@@ -5652,9 +5665,7 @@ var
     if not HasUsing then
       Exit;
 
-    PreallocatedUsingDisposeSlots := TList<TPreallocatedUsingDisposeSlot>.Create;
-    OldPreallocatedUsingDisposeSlots := GPreallocatedUsingDisposeSlots;
-    GPreallocatedUsingDisposeSlots := PreallocatedUsingDisposeSlots;
+    BeginUsingDisposeSlots(UsingDisposeSlots);
 
     for CaseIdx := 0 to AStmt.Cases.Count - 1 do
     begin
@@ -5663,12 +5674,11 @@ var
         if CaseClause.Consequent[ConsequentIdx] is TGocciaUsingDeclaration then
           PreallocateUsingDisposeSlots(ACtx,
             TGocciaUsingDeclaration(CaseClause.Consequent[ConsequentIdx]),
-            PreallocatedUsingDisposeSlots);
+            UsingDisposeSlots.Slots);
     end;
   end;
 begin
-  PreallocatedUsingDisposeSlots := nil;
-  OldPreallocatedUsingDisposeSlots := nil;
+  UsingDisposeSlots.Slots := nil;
   DiscReg := ACtx.Scope.AllocateRegister;
 
   ACtx.CompileExpression(AStmt.Discriminant, DiscReg);
@@ -5837,12 +5847,8 @@ begin
   finally
     if CaseClausesOpen then
       ACtx.Scope.EndCaseClauses;
-    if Assigned(PreallocatedUsingDisposeSlots) then
-    begin
-      if GPreallocatedUsingDisposeSlots = PreallocatedUsingDisposeSlots then
-        GPreallocatedUsingDisposeSlots := OldPreallocatedUsingDisposeSlots;
-      PreallocatedUsingDisposeSlots.Free;
-    end;
+    if Assigned(UsingDisposeSlots.Slots) then
+      EndUsingDisposeSlots(UsingDisposeSlots);
     BreakJumps.Free;
     GBreakJumps := OldBreakJumps;
     GBreakFinallyBase := OldBreakFinallyBase;
