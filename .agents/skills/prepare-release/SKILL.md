@@ -35,7 +35,7 @@ Read-only first, one approval checkpoint, then apply, then hand off:
 
 ### 1. Preflight
 - Apply `git-workflow`'s clean-worktree and fresh-base preflight; stop if it fails.
-- After a merge, branch switch, or generated-resource change, build clean to rule out stale FPC artifacts before trusting any failure: `./build.pas --clean <target>` (see `docs/contributing/tooling.md` § Stale FPC Build Artifacts).
+- `build.pas` retries a target once from a clean unit directory when FPC reports stale compiled state, so a build failure that survives that retry is a source failure; do not clean pre-emptively after a merge, branch switch, or generated-resource change (see `docs/contributing/tooling.md` § Stale FPC Build Artifacts).
 
 ### 2. Verify green — the DEFINITION_OF_DONE gate (reused, not restated)
 ```bash
