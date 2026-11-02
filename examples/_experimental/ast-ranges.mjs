@@ -16,7 +16,7 @@
 //
 // Each file is checked twice: once as the statement tree `parse` returns by
 // default, and once with `expressions: true`, where every expression,
-// object property and parameter is a node as well.
+// object property, parameter and piece of type syntax is a node as well.
 //
 // Run:
 //   ./build.pas runner
@@ -102,7 +102,76 @@ const SPECIFIER_WRAPPERS = {
 const KEY_KINDS = ["Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral"];
 const KEY_WRAPPER = { prefix: "class __Probe {\n", suffix: "() {}\n}\n" };
 
+// The TypeScript assertions are expressions; every other `TS` kind is type
+// syntax, re-parsed in the smallest declaration that holds it.
+const ASSERTION_KINDS = ["TSAsExpression", "TSSatisfiesExpression", "TSNonNullExpression"];
+const isTypeKind = (kind) => kind.startsWith("TS") && !ASSERTION_KINDS.includes(kind);
+const TYPE_ALIAS = { prefix: "type __Probe = ", suffix: ";\n" };
+const TYPE_MEMBER_KINDS = [
+  "TSPropertySignature",
+  "TSMethodSignature",
+  "TSCallSignatureDeclaration",
+  "TSConstructSignatureDeclaration",
+  "TSIndexSignature",
+];
+const TUPLE_ELEMENT_KINDS = ["TSNamedTupleMember", "TSOptionalType", "TSRestType"];
+
+const typeWrapperFor = (kind, slice) => {
+  if (kind === "TSTypeAnnotation") {
+    return slice.startsWith("=>")
+      ? { prefix: "type __Probe = () ", suffix: ";\n" }
+      : { prefix: "let __probe", suffix: ";\n" };
+  }
+
+  // A predicate is only a return type.
+  if (kind === "TSTypePredicate") {
+    return { prefix: "function __probe(__x): ", suffix: " {}\n" };
+  }
+
+  if (kind === "TSTypeParameterDeclaration") {
+    return { prefix: "type __Probe", suffix: " = 0;\n" };
+  }
+
+  if (kind === "TSTypeParameter") {
+    return { prefix: "type __Probe<", suffix: "> = 0;\n" };
+  }
+
+  if (kind === "TSTypeParameterInstantiation") {
+    return { prefix: "type __Probe = __T", suffix: ";\n" };
+  }
+
+  if (TYPE_MEMBER_KINDS.includes(kind)) {
+    return { prefix: "type __Probe = {\n", suffix: "\n};\n" };
+  }
+
+  if (TUPLE_ELEMENT_KINDS.includes(kind)) {
+    return { prefix: "type __Probe = [", suffix: "];\n" };
+  }
+
+  if (kind === "TSInterfaceBody") {
+    return { prefix: "interface __Probe ", suffix: "\n" };
+  }
+
+  if (kind === "TSInterfaceHeritage") {
+    return { prefix: "interface __Probe extends ", suffix: " {}\n" };
+  }
+
+  if (kind === "TSClassImplements") {
+    return { prefix: "class __Probe implements ", suffix: " {}\n" };
+  }
+
+  return TYPE_ALIAS;
+};
+
+// A function type's parameter, such as `this: Window`, need not be one a
+// method accepts.
+const FUNCTION_TYPE_PARAMETER_WRAPPER = { prefix: "type __Probe = (", suffix: ") => 0;\n" };
+
 const expressionWrapperFor = (kind, slice) => {
+  if (isTypeKind(kind)) {
+    return typeWrapperFor(kind, slice);
+  }
+
   if (SPECIFIER_WRAPPERS[kind]) {
     return SPECIFIER_WRAPPERS[kind];
   }
@@ -162,11 +231,12 @@ const nodesOf = (root) => {
 
 // A statement kind, as opposed to one the expression view adds.
 const isStatementKind = (kind) =>
-  kind === "Program" ||
-  kind === "SwitchCase" ||
-  kind === "Statement" ||
-  kind.endsWith("Statement") ||
-  kind.endsWith("Declaration");
+  !kind.startsWith("TS") &&
+  (kind === "Program" ||
+    kind === "SwitchCase" ||
+    kind === "Statement" ||
+    kind.endsWith("Statement") ||
+    kind.endsWith("Declaration"));
 
 const wrapperFor = (kind, slice) => {
   if (!isStatementKind(kind)) {
@@ -198,6 +268,10 @@ const roundTrip = (file, text, node, expressions) => {
 
   if (expressions && KEY_KINDS.includes(node.kind)) {
     wrappers.push(KEY_WRAPPER);
+  }
+
+  if (expressions && node.kind === "Parameter") {
+    wrappers.push(FUNCTION_TYPE_PARAMETER_WRAPPER);
   }
 
   let failure = null;

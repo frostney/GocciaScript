@@ -36,6 +36,7 @@ type
     IsRest: Boolean;                              // True if this is a rest parameter (...args)
     IsOptional: Boolean;                          // True if optional parameter (x?)
     TypeAnnotation: string;                       // Stored for future optimization; ignored at runtime
+    TypeRanges: TGocciaTypeRangeArray;            // Where the annotation is, when the parse records it
     { The parameter's extent in the parsed text, from its first token (the
       `...` of a rest parameter) to the end of its type annotation or default
       value. Equal offsets mean the parser did not record one. }
@@ -1921,6 +1922,7 @@ begin
     AVisitor.EnterPart(apkParameter, AParameters[I].StartOffset,
       AParameters[I].EndOffset, Flags);
     AVisitor.VisitChild(AParameters[I].Pattern);
+    VisitTypeRanges(AVisitor, AParameters[I].TypeRanges);
     AVisitor.VisitChild(AParameters[I].DefaultValue);
     AVisitor.LeavePart;
   end;
@@ -1946,6 +1948,7 @@ procedure TGocciaTaggedTemplateExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
   AVisitor.VisitChild(FTag);
+  VisitTypeRanges(AVisitor, TypeRanges);
   VisitExpressionList(AVisitor, FExpressions);
 end;
 
@@ -2058,6 +2061,7 @@ procedure TGocciaCallExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
   AVisitor.VisitChild(FCallee);
+  VisitTypeRanges(AVisitor, TypeRanges);
   VisitExpressionList(AVisitor, FArguments);
 end;
 
@@ -2143,6 +2147,7 @@ end;
 procedure TGocciaArrowFunctionExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
+  VisitTypeRanges(AVisitor, TypeRanges);
   ForEachParameterChild(AVisitor, FParameters);
   AVisitor.VisitChild(FBody);
 end;
@@ -2150,6 +2155,7 @@ end;
 procedure TGocciaFunctionExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
+  VisitTypeRanges(AVisitor, TypeRanges);
   ForEachParameterChild(AVisitor, FParameters);
   AVisitor.VisitChild(FBody);
 end;
@@ -2184,6 +2190,7 @@ procedure TGocciaNewExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
   AVisitor.VisitChild(FCallee);
+  VisitTypeRanges(AVisitor, TypeRanges);
   VisitExpressionList(AVisitor, FArguments);
 end;
 
@@ -2203,6 +2210,7 @@ end;
 procedure TGocciaGetterExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
+  VisitTypeRanges(AVisitor, TypeRanges);
   AVisitor.VisitChild(FBody);
 end;
 
@@ -2210,6 +2218,7 @@ procedure TGocciaSetterExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
   ForEachParameterChild(AVisitor, FParameters);
+  VisitTypeRanges(AVisitor, TypeRanges);
   AVisitor.VisitChild(FBody);
 end;
 
