@@ -61,6 +61,7 @@ type
     procedure TestRejectionForOuterScopeWaitsThere;
     procedure TestRunningJobKeepsItsArgumentRooted;
     procedure TestReleasedJobArgumentIsCollectable;
+    procedure TestReleaseDropsTheRootOnce;
     procedure TestReleaseIgnoresAnotherValue;
   end;
 
@@ -154,6 +155,8 @@ begin
     TestRunningJobKeepsItsArgumentRooted);
   Test('a running job''s argument is collectable once the handler releases it',
     TestReleasedJobArgumentIsCollectable);
+  Test('releasing the running job''s argument drops its root once',
+    TestReleaseDropsTheRootOnce);
   Test('releasing a value that is not the running job''s argument does nothing',
     TestReleaseIgnoresAnotherValue);
 end;
@@ -497,9 +500,34 @@ begin
   try
     Argument := TCountedArgument.Create(nil);
     Expect<Integer>(RunCollectingJob(Argument, Argument, Queue)).ToBe(1);
-    { Released once, and not removed a second time when the job ends: the
-      argument is gone and nothing else is swept again. }
-    TGarbageCollector.Instance.Collect;
+  finally
+    Queue.Free;
+  end;
+end;
+
+procedure TMicrotaskQueueTests.TestReleaseDropsTheRootOnce;
+var
+  Argument: TGocciaValue;
+  GC: TGarbageCollector;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  GC := TGarbageCollector.Instance;
+  Queue := TGocciaMicrotaskQueue.Create;
+  try
+    Argument := TCountedArgument.Create(nil);
+    { A second queued root of the same object, so the job's own root is the
+      only one a stray removal could take. }
+    GC.AddQueuedRoot(Argument);
+    try
+      Expect<Integer>(RunCollectingJob(Argument, Argument, Queue)).ToBe(0);
+      { Released during the job and not removed again when it ended: the
+        other root still holds the argument. }
+      GC.Collect;
+      Expect<Integer>(GDestroyedArgumentCount).ToBe(0);
+    finally
+      GC.RemoveQueuedRoot(Argument);
+    end;
+    GC.Collect;
     Expect<Integer>(GDestroyedArgumentCount).ToBe(1);
   finally
     Queue.Free;
@@ -508,19 +536,27 @@ end;
 
 procedure TMicrotaskQueueTests.TestReleaseIgnoresAnotherValue;
 var
+  GC: TGarbageCollector;
   Other: TGocciaValue;
   Queue: TGocciaMicrotaskQueue;
 begin
+  GC := TGarbageCollector.Instance;
   Queue := TGocciaMicrotaskQueue.Create;
   try
     Other := TCountedArgument.Create(nil);
-    TGarbageCollector.Instance.AddTempRoot(Other);
+    GC.AddQueuedRoot(Other);
     try
+      { The running job's argument is swept when the job ends; the other value
+        keeps the one queued root it had. }
       Expect<Integer>(RunCollectingJob(TCountedArgument.Create(nil), Other,
         Queue)).ToBe(0);
+      GC.Collect;
+      Expect<Integer>(GDestroyedArgumentCount).ToBe(1);
     finally
-      TGarbageCollector.Instance.RemoveTempRoot(Other);
+      GC.RemoveQueuedRoot(Other);
     end;
+    GC.Collect;
+    Expect<Integer>(GDestroyedArgumentCount).ToBe(2);
   finally
     Queue.Free;
   end;

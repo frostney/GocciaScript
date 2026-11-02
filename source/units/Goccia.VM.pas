@@ -2596,6 +2596,12 @@ type
     FState: TGocciaBytecodeGeneratorState;
     FResumeKind: TGocciaBytecodeGeneratorResumeKind;
     FResumeValue: TGocciaRegister;
+    // True while TGocciaVMAsyncAwaitContinuationValue.HandleReaction resumes
+    // this continuation with the running job's argument: only then may the
+    // resume point let go of that argument's queued root, because any other
+    // resume (a guest's own next() call, say) leaves the job's native code
+    // holding it.
+    FResumedByAwaitJob: Boolean;
     FResumeRegister: UInt16;
     FReturnSentinel: TGocciaValue;
     FReturnValue: TGocciaValue;
@@ -5097,8 +5103,13 @@ begin
   FVM.FCurrentAsyncPromise := FPromise;
   try
     try
-      ResultValue := FContinuation.ResumeRaw(FResumeKind, ResumeValue, Done,
-        @Suspended);
+      FContinuation.FResumedByAwaitJob := True;
+      try
+        ResultValue := FContinuation.ResumeRaw(FResumeKind, ResumeValue, Done,
+          @Suspended);
+      finally
+        FContinuation.FResumedByAwaitJob := False;
+      end;
       // The body awaited again: its next await's reaction resumes it.
       if Suspended then
         Exit;
@@ -17207,11 +17218,17 @@ begin
                 // FResumeValue for as long as it lives, and the job that
                 // resumed it roots its argument until the job ends, so both
                 // would keep an awaited value reachable after the program has
-                // dropped it, until the next suspension.
-                if GActiveBytecodeGenerator.FResumeValue.Kind = grkObject then
-                  TGocciaMicrotaskQueue.Instance.ReleaseRunningJobArgument(
-                    GActiveBytecodeGenerator.FResumeValue.ObjectValue);
-                GActiveBytecodeGenerator.FResumeValue := RegisterUndefined;
+                // dropped it, until the next suspension. Only the await job's
+                // own resume lets go (FResumedByAwaitJob).
+                if GActiveBytecodeGenerator.FResumedByAwaitJob then
+                begin
+                  GActiveBytecodeGenerator.FResumedByAwaitJob := False;
+                  if (GActiveBytecodeGenerator.FResumeValue.Kind = grkObject) and
+                     Assigned(TGocciaMicrotaskQueue.Instance) then
+                    TGocciaMicrotaskQueue.Instance.ReleaseRunningJobArgument(
+                      GActiveBytecodeGenerator.FResumeValue.ObjectValue);
+                  GActiveBytecodeGenerator.FResumeValue := RegisterUndefined;
+                end;
               end;
             end;
           bgrkThrow:
