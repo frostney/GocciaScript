@@ -1,6 +1,6 @@
 /*---
 description: Re-evaluated classes create distinct private brands
-features: [classes, private-fields, private-methods, private-static-fields]
+features: [classes, private-fields, private-methods, private-static-fields, Goccia.gc]
 ---*/
 
 test("private instance methods are branded per class evaluation", () => {
@@ -375,13 +375,15 @@ test("discarded classes do not give new classes access to their receiver", () =>
     #value = 1;
     static has(receiver) { return #value in receiver; }
   };
+  // Collecting first leaves the discarded class as the only garbage, so the
+  // next collection frees its storage and the next class can be made there.
+  // An engine that brands by class address then aliases within two steps.
+  Goccia.gc();
   const receiver = {};
   new (make())(receiver);
-  const aliased = Array.from({ length: 20000 }, () => 0).some(() => {
-    const Candidate = make();
-    // Allocation pressure allows the discarded class to be collected.
-    Array.from({ length: 50 }, () => ({ value: 1 }));
-    return Candidate.has(receiver);
+  const aliased = Array.from({ length: 100 }, () => 0).some(() => {
+    Goccia.gc();
+    return make().has(receiver);
   });
   expect(aliased).toBe(false);
 });

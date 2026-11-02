@@ -7,7 +7,7 @@
 - **Experimental opt-in** — `goccia:ast` exists only when the host passes `--experimental-ast`; its shape may change between releases
 - **One function** — `parse(text, options)` returns the text, a tree of nodes, and every comment, so a lint rule, a formatter or a codemod can be a GocciaScript program
 - **Tokens on request** — with `tokens: true` the result also carries every token and comment as a typed range, so a tool can tell code from strings, templates and regexes without its own lexer
-- **Two views** — by default the tree holds statements; with `expressions: true` it also holds expressions, object properties, parameters, class members, module specifiers and static keys, with the flags a layout rule dispatches on
+- **Two views** — by default the tree holds statements; with `expressions: true` it also holds expressions, object properties, parameters, class members, module specifiers, static keys and type syntax, with the flags a layout rule dispatches on
 - **One coordinate system** — every offset and position indexes the text that was passed, including a `.tsx` file the engine rewrote before parsing
 - **Ranges, not values** — names and literal values stay out of the tree; a rule slices them from `source`
 
@@ -30,7 +30,7 @@ const { source, root, comments } = parse(text, { jsx: true, fileName: "App.tsx" 
 | `module` | Parse as module source rather than script source (default `true`) |
 | `fileName` | File name the parser sees; its extension decides JSX handling, so a `.ts` name skips the JSX preprocessor (default `<source>`). A syntax error reports only `(line:column)`, not the file name ([#1277](https://github.com/frostney/GocciaScript/issues/1277)) |
 | `tokens` | Also return `tokens`, every token and comment of the file (default `false`). Without it no token work is done; see [Tokens](#tokens) |
-| `expressions` | Report expressions, object properties, parameters, class members, module specifiers and static keys as well as statements (default `false`); see [The expression view](#the-expression-view) |
+| `expressions` | Report expressions, object properties, parameters, class members, module specifiers, static keys and type syntax as well as statements (default `false`); see [The expression view](#the-expression-view) |
 
 The *language* is the host's, not a second one configured here: the
 compatibility flags in force for the run are the ones `parse` accepts, exactly
@@ -66,7 +66,7 @@ arrow function assigned to a `const` is a child of that declaration. Three
 kinds own a statement *list*, whose children are siblings of one another:
 `Program`, `BlockStatement`, and `SwitchCase`.
 
-Type-level declarations do nothing at run time ([Type Annotations](type-annotations.md)), but each keeps a kind of its own and its whole text, wherever it appears: `type T = ...` is a `TypeAliasDeclaration`, `interface I {}` an `InterfaceDeclaration`, and their exported forms `ExportTypeAliasDeclaration` and `ExportInterfaceDeclaration`. `import type ... from`, `export type { A }`, and `export type { A } from` or `export type * from` are the `ImportDeclaration`, `ExportDeclaration` and `ReExportDeclaration` they look like, with `typeOnly: true`. `import type from "m"`, `import type, { y } from "m"` and `import type, * as ns from "m"` are value imports that bind `type`, so they report `typeOnly: false`. Those three kinds carry `typeOnly: false` when the statement runs, including `import { type C, D } from "..."`, where `type` marks one specifier rather than the statement. The four type declaration kinds always carry `typeOnly: true`, and `EmptyStatement` is only ever a lone `;`. Only those seven statement kinds and the four specifier kinds (below) carry `typeOnly`. A type declaration has no children and no names. A type-only `import`, `export { }` or re-export has none in the statement view either, and reports its specifiers and module path in the expression view like a value one ([ADR 0168](adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md)). See [ADR 0161](adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
+Type-level declarations do nothing at run time ([Type Annotations](type-annotations.md)), but each keeps a kind of its own and its whole text, wherever it appears: `type T = ...` is a `TypeAliasDeclaration`, `interface I {}` an `InterfaceDeclaration`, and their exported forms `ExportTypeAliasDeclaration` and `ExportInterfaceDeclaration`. `import type ... from`, `export type { A }`, and `export type { A } from` or `export type * from` are the `ImportDeclaration`, `ExportDeclaration` and `ReExportDeclaration` they look like, with `typeOnly: true`. `import type from "m"`, `import type, { y } from "m"` and `import type, * as ns from "m"` are value imports that bind `type`, so they report `typeOnly: false`. Those three kinds carry `typeOnly: false` when the statement runs, including `import { type C, D } from "..."`, where `type` marks one specifier rather than the statement. The four type declaration kinds always carry `typeOnly: true`, and `EmptyStatement` is only ever a lone `;`. Only those seven statement kinds and the four specifier kinds (below) carry `typeOnly`. In the statement view a type declaration has no children and no names, and neither has a type-only `import`, `export { }` or re-export. In the expression view a type-only module statement reports its specifiers and module path like a value one ([ADR 0168](adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md)), and a type declaration its [type syntax](#type-syntax). See [ADR 0161](adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
 
 ## The expression view
 
@@ -96,7 +96,7 @@ Kinds follow ESTree, with Babel's literal kinds: `Identifier`,
 re-export's module path is a `StringLiteral` child of its declaration, after
 its specifiers (below). An
 assertion wraps the expression it asserts and covers its type, so in
-`f(a as T)` the argument ends after `T`; the type itself is not a node.
+`f(a as T)` the argument ends after `T`; the type is its second child.
 
 A node carries the flags its kind is laid out by, and no others:
 
@@ -110,6 +110,7 @@ A node carries the flags its kind is laid out by, and no others:
 | `FunctionExpression` | `async`, `generator` |
 | `YieldExpression` | `delegate` (`yield*`) |
 | `Property` | `computed`, `shorthand` (`{ a }`), `method` (`a() {}`, `get a() {}`) |
+| `TSPropertySignature`, `TSMethodSignature` | `computed` (`[key]: T`) |
 | `Parameter` | `rest` (`...args`) |
 | `MethodDefinition`, `PropertyDefinition`, `AccessorProperty` | `static`, `computed` |
 | `ImportDefaultSpecifier`, `ImportNamespaceSpecifier`, `ImportSpecifier`, `ExportSpecifier` | `typeOnly`: `true` for a specifier written with `type` (`import { type C }`) and for every specifier of a type-only statement, `false` otherwise |
@@ -135,12 +136,58 @@ key, and `NumericLiteral` or `BigIntLiteral` for a number. `get`, `set`,
 property reports one `Identifier`, its value. A computed key is the expression
 it is.
 
-Not yet in the view: type annotations (erased before the tree is built),
-variable declarators, the properties of an object pattern and their keys,
-labels, the patterns of `match`, and JSX attributes and text. What they contain is
-reported directly beneath the node around them
-([#1928](https://github.com/frostney/GocciaScript/issues/1928),
-[#1929](https://github.com/frostney/GocciaScript/issues/1929)).
+Not yet in the view: variable declarators, the properties of an object
+pattern and their keys, labels, the patterns of `match`, and JSX attributes
+and text. What they contain is reported directly beneath the node around them
+([#1928](https://github.com/frostney/GocciaScript/issues/1928)).
+
+## Type syntax
+
+Types do nothing at run time and the parser erases them, but with
+`expressions: true` it first records where each piece was, and the view
+reports it as nodes ([ADR 0172](adr/0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md)).
+Kinds are typescript-estree's:
+
+| Kind | The range covers |
+|------|------------------|
+| `TSTypeAnnotation` | `: T` after a parameter, variable, field or catch parameter, or a function's return type; `=> R` in a function type |
+| `TSTypeParameterDeclaration`, `TSTypeParameter` | `<T extends U = V>` where generics are declared, and each parameter in it |
+| `TSTypeParameterInstantiation` | `<A, B>` where generics are applied: a type reference, a call, a `new`, a superclass |
+| `TSTypeReference` | A named type, qualified or not, with its type arguments; `const` in `as const` |
+| `TSUnionType`, `TSIntersectionType` | Members joined by `\|` or `&`, a leading operator included |
+| `TSTypeLiteral`, `TSInterfaceBody` | `{ ... }`, holding `TSPropertySignature`, `TSMethodSignature`, `TSCallSignatureDeclaration`, `TSConstructSignatureDeclaration` and `TSIndexSignature` members |
+| `TSTupleType` | `[...]`, holding its element types, `TSNamedTupleMember` (`a?: T`), `TSOptionalType` (`T?`) and `TSRestType` (`...T`) |
+| `TSArrayType`, `TSIndexedAccessType` | `T[]`, and `T["k"]` with its object type and key |
+| `TSFunctionType`, `TSConstructorType` | `(a: T) => R` and `new (a: T) => R`, with type parameters, `Parameter` nodes and the `TSTypeAnnotation` of `=> R` |
+| `TSLiteralType` | `'a'`, `1`, `-1`, `2n`, `true` or `` `a` ``, holding the `StringLiteral`, `NumericLiteral`, `BigIntLiteral`, `BooleanLiteral` or `TemplateLiteral` |
+| `TSTemplateLiteralType` | `` `id-${number}` ``, holding the types in its substitutions |
+| `TSMappedType` | `{ [K in C as N]: V }`, holding `C`, `N` and `V` |
+| `TSConditionalType`, `TSInferType` | `A extends B ? C : D`; `infer U`, holding its `TSTypeParameter` |
+| `TSTypeOperator`, `TSTypeQuery`, `TSImportType` | `keyof T`, `readonly T[]`, `unique symbol`; `typeof x`; `import("m").T`, with its path as a `TSLiteralType` |
+| `TSTypePredicate`, `TSParenthesizedType`, `TSThisType` | `x is T`, `asserts x`; `(T)`; `this` |
+| `TSInterfaceHeritage`, `TSClassImplements` | An entry of an interface's `extends` list or a class's `implements` list |
+| `TSStringKeyword`, `TSNumberKeyword`, and the other predefined types | `string`, `number`, `boolean`, `bigint`, `symbol`, `object`, `any`, `unknown`, `never`, `undefined`, `void`, `null` and `intrinsic` |
+
+Each is a child of what it annotates: a parameter's annotation of its
+`Parameter`, a function's type parameters and return type of the function, a
+variable's annotation of its `VariableDeclaration`, a call's type arguments of
+the `CallExpression`, between its callee and arguments. A `type` alias holds its
+type parameters and its type, and an `interface` its type parameters,
+heritage and body. A member's static key is an `Identifier`, `StringLiteral`
+or `NumericLiteral`, as in an object literal, and so is a computed key that
+is one literal (`['k']`); any other computed key has no node. A type's name
+is not a node either: slice it from `source`.
+
+A member's range stops before the `,` or `;` that follows it, so the text
+between the last member and the closing brace is the separator a formatter
+looks for:
+
+```javascript
+const { source, root } = parse("type Point = {\n  x: number;\n  y: number;\n};\n",
+  { fileName: "point.ts", expressions: true });
+const literal = root.children[0].children[0];   // TSTypeLiteral
+source.slice(literal.children.at(-1).end, literal.end);   // ";\n}"
+```
 
 ## Tokens
 
@@ -214,10 +261,12 @@ exposes, what it withholds, and why,
 system, [ADR 0161](adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md)
 for type-level declarations,
 [ADR 0162](adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md)
-for the expression view, and
+for the expression view,
 [ADR 0163](adr/0163-goccia-ast-reports-the-committed-token-stream.md) for the
-token stream, and
+token stream,
 [ADR 0168](adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md)
-for the children of type-only module statements. `examples/_experimental/` has a blank-line lint
+for the children of type-only module statements, and
+[ADR 0172](adr/0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md)
+for type syntax. `examples/_experimental/` has a blank-line lint
 rule, a range checker, and a formatter-style program
 (`expression-style.mjs`) written against it.

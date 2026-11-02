@@ -131,6 +131,15 @@ Act on its result:
 - Any other exit: the guard failed. Stop, do not publish, and report its
   output.
 
+At the same points, check what you publish against the repository's binding
+guides. A current
+[binding-guide ledger](../code-review/SKILL.md#binding-guides) must cover the
+content: review any change made since the ledger was recorded before
+publishing it. Check the commit message, title or body you are about to write
+against every ledger row marked `for publication`, such as the repository's
+commit, pull request description and writing rules, fix every instance of a
+broken rule, and record each row's result.
+
 ## Default-branch health
 
 A pull request's own checks protect the default branch; the default branch's
