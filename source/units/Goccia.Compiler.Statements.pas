@@ -34,6 +34,8 @@ procedure CompileThrowStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaThrowStatement);
 procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
+procedure EmitClearDeadRegisters(const ACtx: TGocciaCompilationContext;
+  const ARegionPeak: Integer);
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 procedure CompileForInStatement(const ACtx: TGocciaCompilationContext;
@@ -3085,14 +3087,16 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
-// A catch clause starts from an exception that unwound the try block, so the
-// registers the block used above the live ones hold whatever its last
-// statement left in them: the receiver of a call, an argument, an
-// intermediate value. Nothing reads them again before the clause writes them,
-// but the VM marks the frame's whole register window, so a long-lived frame
-// (a suspended async function, a script's top level) would keep such an
-// object reachable after the program has dropped its last reference to it.
-// Clearing them costs instructions only on the path that caught an exception.
+// Control that leaves a region of statements (a loop that has finished, a try
+// block that an exception unwound) leaves the registers the region used above
+// the live ones holding whatever its last statements put in them: the
+// receiver of a call, an argument, an intermediate value. Nothing reads them
+// again before the code that follows writes them, but the VM marks the
+// frame's whole register window, so a long-lived frame (a suspended async
+// function, a script's top level) would keep such an object reachable after
+// the program has dropped its last reference to it. One OP_LOAD_UNDEFINED per
+// register, from the first free one to the region's peak (BeginRegisterRegion,
+// EndRegisterRegion), clears them; it runs once per exit, not per iteration.
 procedure EmitClearDeadRegisters(const ACtx: TGocciaCompilationContext;
   const ARegionPeak: Integer);
 var
