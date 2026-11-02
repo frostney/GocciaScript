@@ -104,6 +104,7 @@ type
     function CurrentStart: Integer;
     function AtEnd: Boolean;
     procedure Advance;
+    function ClosesSubstitution(const AIndex: Integer): Boolean;
     function GroupEnd(const AIndex: Integer): Integer;
     procedure SkipBalanced;
     procedure SkipOpaqueType;
@@ -280,6 +281,15 @@ begin
   end;
 end;
 
+{ The closing brace of a template substitution is a token of its own,
+  before the template's next part, and closes no bracket. }
+function TTypeReader.ClosesSubstitution(const AIndex: Integer): Boolean;
+begin
+  Result := (FTokens[AIndex].TokenType = gttRightBrace) and
+    (AIndex + 1 < FEnd) and
+    (FTokens[AIndex + 1].TokenType in [gttTemplateMiddle, gttTemplateTail]);
+end;
+
 { The index just past the bracketed group that ATokens[AIndex] opens, or
   FEnd when the run ends first. }
 function TTypeReader.GroupEnd(const AIndex: Integer): Integer;
@@ -291,7 +301,10 @@ begin
   repeat
     case FTokens[Result].TokenType of
       gttLeftParen, gttLeftBracket, gttLeftBrace: Inc(Depth);
-      gttRightParen, gttRightBracket, gttRightBrace: Dec(Depth);
+      gttRightParen, gttRightBracket: Dec(Depth);
+      gttRightBrace:
+        if not ClosesSubstitution(Result) then
+          Dec(Depth);
     end;
     Inc(Result);
   until (Result >= FEnd) or (Depth <= 0);
@@ -324,6 +337,7 @@ begin
         Inc(Depth);
       gttRightParen, gttRightBracket, gttRightBrace, gttGreater,
       gttTemplateTail:
+        if not ((FGreaterUsed = 0) and ClosesSubstitution(FPosition)) then
         begin
           if Depth = 0 then
             Exit;

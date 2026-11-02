@@ -537,6 +537,23 @@ describe("ast.parse with expressions: type syntax", () => {
     });
   });
 
+  test("a template literal type inside brackets does not end them early", () => {
+    const result = parseTypes(
+      "type Handler = (id: `user-${string}`, [key]: [`k-${number}`]) => void;\ntype Keyed = { [`k-${1}`]: string };\n",
+    );
+    const handler = result.root.children[0].children[0];
+
+    expect(handler.kind).toBe("TSFunctionType");
+    expect(shapeOf(result, handler)).toEqual([
+      "Parameter(id: `user-${string}`)",
+      "Parameter([key]: [`k-${number}`])",
+      "TSTypeAnnotation(=> void)",
+    ]);
+    expect(text(result, find(result.root.children[1], "TSPropertySignature"))).toBe(
+      "[`k-${1}`]: string",
+    );
+  });
+
   test("a catch parameter's annotation is a child of the try statement", () => {
     const result = parseTypes("try { open(); } catch (error: unknown) { log(error); }\n");
 
