@@ -3181,6 +3181,8 @@ begin
 
   if HasCatch then
   begin
+    // The clear is the catch clause's, not the try block's last statement's.
+    EmitLineMapping(ACtx, AStmt.CatchBlock.Line, AStmt.CatchBlock.Column);
     EmitClearDeadRegisters(ACtx, TryRegionPeak);
     if HasFinally then
     begin

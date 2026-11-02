@@ -56,6 +56,7 @@ describe("catch clause after a try block that filled a container", () => {
       const baseline = collect();
       let held = [];
       let count = 0;
+      let caught = 0;
       try {
         for (const _ of Array.from({ length: ITEMS * 2 })) {
           const buffer = new ArrayBuffer(ITEM_SIZE);
@@ -64,13 +65,15 @@ describe("catch clause after a try block that filled a container", () => {
           if (count === ITEMS) throw 1;
         }
       } catch (e) {
-        expect(e).toBe(1);
+        caught = e;
       }
       held = null;
       Goccia.gc();
-      return Goccia.gc.bytesAllocated - baseline;
+      return [caught, Goccia.gc.bytesAllocated - baseline];
     };
-    expect(run()).toBeLessThan(FILLED / 2);
+    const [caught, grown] = run();
+    expect(caught).toBe(1);
+    expect(grown).toBeLessThan(FILLED / 2);
   });
 });
 
