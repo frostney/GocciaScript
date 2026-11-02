@@ -2695,7 +2695,7 @@ type
     procedure HandleYield(const AValue: TGocciaRegister;
       const AResumeRegister: UInt16; const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
-      const AContinuationIP: Integer);
+      const AContinuationIP: Integer; const ATempOperand: Boolean);
     procedure HandleYieldDelegate(const AIterable: TGocciaRegister;
       const AResumeRegister: UInt16; const AFrame: TGocciaVMCallFrame;
       const AHandlerBaseCount: Integer; const APrevCovLine: UInt32;
@@ -4453,12 +4453,22 @@ end;
 procedure TGocciaBytecodeGeneratorObjectValue.HandleYield(
   const AValue: TGocciaRegister; const AResumeRegister: UInt16;
   const AFrame: TGocciaVMCallFrame; const AHandlerBaseCount: Integer;
-  const APrevCovLine: UInt32; const AContinuationIP: Integer);
+  const APrevCovLine: UInt32; const AContinuationIP: Integer;
+  const ATempOperand: Boolean);
 begin
   ClearDelegateState;
   CaptureContinuation(AFrame, AHandlerBaseCount, APrevCovLine,
     AResumeRegister, AContinuationIP);
   SignalYield(AValue, 0);
+  // The operand register is the resume register (OP_YIELD's A and B are the
+  // same), a temporary holding only the yielded value: a next() writes the
+  // sent value over it before any instruction runs, and a throw() or
+  // return() abandons the yield expression, so the resumed body never reads
+  // the copy. Left there it would keep the yielded value reachable for as
+  // long as the generator stays suspended, after its consumer has dropped
+  // it. The value travels on in FPendingYieldValue and the suspension.
+  if ATempOperand and (AResumeRegister < FContinuationRegisterCount) then
+    FContinuationRegisters[AResumeRegister] := RegisterUndefined;
 end;
 
 procedure TGocciaBytecodeGeneratorObjectValue.SignalYield(
@@ -5164,7 +5174,12 @@ begin
         end;
       end
       else if FAsyncGeneratorResult then
-        FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), Done))
+      begin
+        // AwaitValue runs jobs. A yielded value is no longer kept by the
+        // suspended frame (HandleYield), so it is rooted here meanwhile.
+        AddTempRootIfNeeded(ResultRoot, ResultValue);
+        FPromise.Resolve(CreateIteratorResult(AwaitValue(ResultValue), Done));
+      end
       else if Done then
         FPromise.Resolve(ResultValue);
     except
