@@ -171,6 +171,26 @@ begin
   Result := ALine;
 end;
 
+{ A comment can belong to the unit beside it, and sorting would move one
+  away from the other, so a uses clause holding a comment is left as written. }
+function ContainsComment(const AText: string): Boolean;
+var
+  Lines: TStringList;
+  I: Integer;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.Text := AText;
+    for I := 0 to Lines.Count - 1 do
+      if (StripLineComment(Lines[I]) <> Lines[I]) or
+         (Pos('(*', Lines[I]) > 0) then
+        Exit(True);
+  finally
+    Lines.Free;
+  end;
+  Result := False;
+end;
+
 function UpdateBlockState(const ALine: string; AInBlock: Boolean): Boolean;
 var
   K: Integer;
@@ -235,7 +255,7 @@ begin
         BeforeSC := StripLineComment(AInput[J]);
       end;
 
-      if ContainsDirective(FullBlock) then
+      if ContainsDirective(FullBlock) or ContainsComment(FullBlock) then
       begin
         while I <= J do
         begin
