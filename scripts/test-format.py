@@ -19,6 +19,7 @@ interface
 
 uses
   SysUtils,
+  Zeta in 'lib//z{x}.pas',
   Goccia.Values,
   Classes,
   TextSemantics;
@@ -38,12 +39,38 @@ uses
 
   TextSemantics,
 
-  Goccia.Values;
+  Goccia.Values,
+
+  Zeta in 'lib//z{x}.pas';
 
 implementation
 
 end.
 """
+
+# A comment opened on the uses line closes after the clause's first line; the
+# clause is kept, and the later clause is still sorted.
+OPEN_COMMENT = """unit Sample;
+
+interface
+
+uses { the units
+  this file needs }
+  SysUtils,
+  Classes;
+
+implementation
+
+uses
+  SysUtils,
+  Classes;
+
+end.
+"""
+
+OPEN_COMMENT_SORTED = OPEN_COMMENT.replace(
+    "implementation\n\nuses\n  SysUtils,\n  Classes;",
+    "implementation\n\nuses\n  Classes,\n  SysUtils;")
 
 COMMENTED = {
     "line comment": """  Classes,
@@ -109,5 +136,7 @@ with tempfile.TemporaryDirectory(prefix="goccia-format-check-") as directory:
     for name, units in COMMENTED.items():
         text = COMMENTED_UNIT.replace("{units}", units)
         assert format_text(text) == text, (name, format_text(text))
+
+    assert format_text(OPEN_COMMENT) == OPEN_COMMENT_SORTED, format_text(OPEN_COMMENT)
 
 print("format.pas behaves as expected")

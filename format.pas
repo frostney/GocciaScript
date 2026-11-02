@@ -257,11 +257,16 @@ begin
 
       if ContainsDirective(FullBlock) or ContainsComment(FullBlock) then
       begin
-        while I <= J do
+        { A comment can open inside the clause and close after it, so the
+          lines kept as written still track whether a comment is open. }
+        AOutput.Add(AInput[I]);
+        while I < J do
         begin
-          AOutput.Add(AInput[I]);
           Inc(I);
+          InBlock := UpdateBlockState(AInput[I], InBlock);
+          AOutput.Add(AInput[I]);
         end;
+        Inc(I);
         Continue;
       end;
 
