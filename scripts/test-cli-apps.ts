@@ -15418,6 +15418,77 @@ await section("Runner sandbox mode: every host-set ceiling reports itself as one
   }
 });
 
+await section("Loader: --output=json and --silent mute the goccia:test reporter...", async () => {
+  const tmp = makeTmp();
+  try {
+    // The loader installs goccia:test module-only, so the reporter's
+    // assertions object does not exist until this import resolves. The host's
+    // mute must still reach it. Failing, todo and skipped tests write the
+    // per-test markers; the results block is left on (no showTestResults).
+    const source = [
+      'import { test, expect, runTests } from "goccia:test";',
+      'console.log("from console");',
+      'test("fails", () => { expect(1).toBe(2); });',
+      'test.todo("later");',
+      'test.skip("skipped", () => {});',
+      "const result = await runTests();",
+      "result.failed;",
+      "",
+    ].join("\n");
+    const first = join(tmp, "first.js");
+    const second = join(tmp, "second.js");
+    writeFileSync(first, source);
+    writeFileSync(second, source);
+    const reporterMarkers = ["❌", "📝", "⏸️", "Test Results"];
+    const run = (args: string[]) => {
+      const proc = Bun.spawnSync([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" });
+      return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    };
+
+    // Control: the unmuted reporter does write to stdout, so the cases below
+    // prove the mute rather than an absent reporter.
+    const unmuted = run([first]);
+    for (const marker of reporterMarkers) {
+      if (!unmuted.stdout.includes(marker))
+        throw new Error(`Unmuted goccia:test reporter should print ${marker}, got:\n${unmuted.stdout}`);
+    }
+
+    for (const format of ["json", "compact-json"]) {
+      for (const files of [[first], [first, second]]) {
+        const label = `--output=${format} with ${files.length} file(s)`;
+        const muted = run([...files, `--output=${format}`, "--jobs=2"]);
+        let json: any;
+        try {
+          json = JSON.parse(muted.stdout);
+        } catch {
+          throw new Error(`${label} stdout should be the JSON envelope alone, got:\n${muted.stdout}`);
+        }
+        if (!json.output.includes("from console"))
+          throw new Error(`${label} should still capture console output, got ${json.output}`);
+        if (json.files[0].result !== 1)
+          throw new Error(`${label} should still report the run's result (1 failed), got ${json.files[0].result}`);
+      }
+    }
+
+    const silent = run([first, "--silent"]);
+    for (const marker of reporterMarkers) {
+      if (silent.stdout.includes(marker))
+        throw new Error(`--silent should mute the goccia:test reporter (${marker}), got:\n${silent.stdout}`);
+    }
+    if (silent.stdout.includes("from console"))
+      throw new Error(`--silent should still mute the console, got:\n${silent.stdout}`);
+
+    // Sandbox mode configures its engines separately.
+    const sandboxSilent = run(["--sandbox", first, "--silent"]);
+    for (const marker of reporterMarkers) {
+      if (sandboxSilent.stdout.includes(marker))
+        throw new Error(`--sandbox --silent should mute the goccia:test reporter (${marker}), got:\n${sandboxSilent.stdout}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 if (sectionFailures.length > 0) {
   console.error(`\n${sectionFailures.length} section(s) failed:`);
   for (const failure of sectionFailures) {
