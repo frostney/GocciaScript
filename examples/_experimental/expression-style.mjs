@@ -4,9 +4,10 @@
 //   1. A string literal is written in single quotes, when that needs no
 //      change to its escaping: `"a"` becomes `'a'`, but `"it's"` and
 //      `"say \"hi\""` stay as they are.
-//   2. A multi-line array, object, argument list or parameter list ends with
-//      a trailing comma, except after a rest parameter or a setter's
-//      parameter, where one is a syntax error.
+//   2. A multi-line array, object, argument list, parameter list or braced
+//      import or export specifier list ends with a trailing comma, except
+//      after a rest parameter or a setter's parameter, where one is a syntax
+//      error.
 //   3. A call that sits on one line longer than WIDTH puts its arguments one
 //      per line, indented one step past the line it starts on, with a
 //      trailing comma. A call inside a template literal's `${}` is left
@@ -54,6 +55,8 @@ const RULES = {
   trailingComma: "a multi-line list should end with a trailing comma",
   wrapArguments: `a call on a line over ${WIDTH} columns should put one argument per line`,
 };
+
+const SPECIFIER_KINDS = ["ImportSpecifier", "ExportSpecifier"];
 
 const FUNCTION_KINDS = [
   "ArrowFunctionExpression",
@@ -159,6 +162,25 @@ const listOf = (source, commentEnds, node) => {
   if (CALL_KINDS.includes(node.kind) && source[node.end - 1] === ")") {
     // The callee is the first child; the arguments are the rest.
     return { items: node.children.slice(1), close: node.end - 1 };
+  }
+
+  // The braced specifiers of an import or export, `import type` and
+  // `export type` included. A default or namespace binding is not in the
+  // braces, so it is not one of the list's items.
+  const specifiers = node.children.filter((child) =>
+    SPECIFIER_KINDS.includes(child.kind),
+  );
+
+  if (specifiers.length > 0) {
+    // Past the last specifier come its `,` if any, then the `}`.
+    const last = specifiers[specifiers.length - 1];
+    const after = nextSignificant(source, commentEnds, last.end);
+    const close =
+      after.char === ","
+        ? nextSignificant(source, commentEnds, after.offset + 1)
+        : after;
+
+    return close.char === "}" ? { items: specifiers, close: close.offset } : null;
   }
 
   if (FUNCTION_KINDS.includes(node.kind)) {
@@ -353,6 +375,16 @@ const fixFile = (file, source) => {
   return { findings, fixed: settle(source, findings, 1) };
 };
 
+/**
+ * The line ending a file is written with: its first one, or LF when it has
+ * none. A file that mixes them is written back with that first one.
+ */
+const lineEndingOf = (text) => {
+  const match = /\r\n?|\n/.exec(text);
+
+  return match === null ? "\n" : match[0];
+};
+
 const sourceFiles = (dir) => {
   const found = [];
 
@@ -376,7 +408,11 @@ let rewritten = 0;
 
 files.forEach((file) => {
   try {
-    const source = fs.readFileSync(file, "utf8");
+    // `parse` measures every offset in its LF-normalized `source`, so the
+    // rules read that text, and a fixed file gets its line ending back.
+    const written = fs.readFileSync(file, "utf8");
+    const lineEnding = lineEndingOf(written);
+    const source = written.replace(/\r\n?/g, "\n");
     const { findings, fixed } = fixFile(file, source);
 
     findings
@@ -389,7 +425,7 @@ files.forEach((file) => {
       });
 
     if (fixed !== source) {
-      fs.writeFileSync(file, fixed);
+      fs.writeFileSync(file, fixed.replace(/\n/g, lineEnding));
       rewritten = rewritten + 1;
     }
   } catch (error) {

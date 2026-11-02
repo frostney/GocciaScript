@@ -10696,7 +10696,7 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
   }
 });
 
-await section("goccia:ast expression-style example: fixes quotes, trailing commas and long calls, keeping them only under --copy-rw...", async () => {
+await section("goccia:ast expression-style example: fixes quotes, trailing commas (specifier lists included) and long calls, keeping them only under --copy-rw...", async () => {
   const tmp = makeNativeTmp();
   try {
     const example = join(dirname(fileURLToPath(import.meta.url)), "..", "examples", "_experimental", "expression-style.mjs");
@@ -10719,6 +10719,13 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       ') => head;',
       'report("a message long enough to push this line past eighty columns", first, second);',
       'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
+      'import {',
+      '  alpha,',
+      '  beta',
+      '} from "./letters.js";',
+      'export {',
+      '  alpha',
+      '};',
       '',
     ].join("\n");
     const expected = [
@@ -10742,9 +10749,21 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       '  second,',
       ');',
       'keep(firstArgumentValue, /* a comment stays put */ secondArgumentValue, thirdArgument);',
+      'import {',
+      '  alpha,',
+      '  beta,',
+      "} from './letters.js';",
+      'export {',
+      '  alpha,',
+      '};',
       '',
     ].join("\n");
     writeFileSync(join(tree, "sample.js"), original);
+    // Offsets index parse()'s LF-normalized text, so a CRLF file is fixed in
+    // the same places and keeps its line endings.
+    const crlfOriginal = ['import {', '  gamma', '} from "./letters.js";', ''].join("\r\n");
+    const crlfExpected = ['import {', '  gamma,', "} from './letters.js';", ''].join("\r\n");
+    writeFileSync(join(tree, "windows.js"), crlfOriginal);
 
     const readOnly = Bun.spawnSync(
       [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
@@ -10760,7 +10779,12 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/sample.js:9:3  a multi-line list should end with a trailing comma",
       "/src/sample.js:15:1  a call on a line over 80 columns should put one argument per line",
       "/src/sample.js:15:8  a string literal should use single quotes",
-      "6 finding(s) in 1 file(s), 1 rewritten",
+      "/src/sample.js:19:3  a multi-line list should end with a trailing comma",
+      "/src/sample.js:20:8  a string literal should use single quotes",
+      "/src/sample.js:22:3  a multi-line list should end with a trailing comma",
+      "/src/windows.js:2:3  a multi-line list should end with a trailing comma",
+      "/src/windows.js:3:8  a string literal should use single quotes",
+      "11 finding(s) in 2 file(s), 2 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
@@ -10769,6 +10793,8 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       throw new Error(`expression-style under --copy should parse every file, got:\n${report}`);
     if (readFileSync(join(tree, "sample.js"), "utf-8") !== original)
       throw new Error("expression-style under --copy changed the host file");
+    if (readFileSync(join(tree, "windows.js"), "utf-8") !== crlfOriginal)
+      throw new Error("expression-style under --copy changed the host CRLF file");
 
     const readWrite = Bun.spawnSync(
       [RUNNER, example, "--experimental-ast", "--copy-rw", `${tree}=/src`],
@@ -10779,6 +10805,9 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const fixed = normalizeLineEndings(readFileSync(join(tree, "sample.js"), "utf-8"));
     if (fixed !== expected)
       throw new Error(`expression-style under --copy-rw should write the fixed file, got:\n${fixed}`);
+    const crlfFixed = readFileSync(join(tree, "windows.js"), "utf-8");
+    if (crlfFixed !== crlfExpected)
+      throw new Error(`expression-style under --copy-rw should fix the CRLF file and keep CRLF, got:\n${JSON.stringify(crlfFixed)}`);
 
     const again = Bun.spawnSync(
       [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
@@ -10787,7 +10816,7 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const againReport = normalizeLineEndings(again.stdout.toString());
     if (again.exitCode !== 0)
       throw new Error(`expression-style rerun should exit 0, got ${again.exitCode}: ${again.stderr.toString()}`);
-    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 1 file(s), 0 rewritten"))
+    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 2 file(s), 0 rewritten"))
       throw new Error(`expression-style should find nothing in a file it fixed, got:\n${againReport}`);
   } finally {
     clean(tmp);
