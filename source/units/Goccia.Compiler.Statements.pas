@@ -3313,7 +3313,6 @@ begin
       CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchBodyErrorReg, 0, 0));
       PatchJumpTarget(ACtx, CatchBodySuccessJump);
-      ACtx.Scope.FreeRegister;
     end;
 
     if PatternMismatchJump >= 0 then
@@ -3329,7 +3328,6 @@ begin
         CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
       PatchJumpTarget(ACtx, CatchSuccessJump);
-      ACtx.Scope.FreeRegister;
     end;
 
     if HasCatchInitHandler then
@@ -3342,7 +3340,6 @@ begin
       CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchInitErrorReg, 0, 0));
       PatchJumpTarget(ACtx, CatchInitSuccessJump);
-      ACtx.Scope.FreeRegister;
     end;
   end
   else
@@ -3362,6 +3359,20 @@ begin
   end;
 
   PatchJumpTarget(ACtx, EndJump);
+  // The registers the handlers use stay allocated until here, in the order
+  // they were taken: freeing each as its handler's code ended left the
+  // counter below a register a later handler still throws from, so code the
+  // finally block compiles (a loop's dead-register clear, a temporary) could
+  // overwrite the exception it was about to rethrow.
+  if HasCatch then
+  begin
+    if HasCatchInitHandler then
+      ACtx.Scope.FreeRegister;
+    if Assigned(AStmt.CatchPattern) then
+      ACtx.Scope.FreeRegister;
+    if HasFinally then
+      ACtx.Scope.FreeRegister;
+  end;
   ACtx.Scope.FreeRegister;
 end;
 
