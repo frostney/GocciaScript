@@ -17200,8 +17200,19 @@ begin
               if GActiveBytecodeGenerator.FIgnoreNextResume then
                 GActiveBytecodeGenerator.FIgnoreNextResume := False
               else
+              begin
                 SetRegisterRaw(GActiveBytecodeGenerator.FResumeRegister,
                   GActiveBytecodeGenerator.FResumeValue);
+                // The register holds the value now. The generator marks
+                // FResumeValue for as long as it lives, and the job that
+                // resumed it roots its argument until the job ends, so both
+                // would keep an awaited value reachable after the program has
+                // dropped it, until the next suspension.
+                if GActiveBytecodeGenerator.FResumeValue.Kind = grkObject then
+                  TGocciaMicrotaskQueue.Instance.ReleaseRunningJobArgument(
+                    GActiveBytecodeGenerator.FResumeValue.ObjectValue);
+                GActiveBytecodeGenerator.FResumeValue := RegisterUndefined;
+              end;
             end;
           bgrkThrow:
             HandleExceptionUnwind(
