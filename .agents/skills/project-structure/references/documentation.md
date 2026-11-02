@@ -29,13 +29,12 @@ Use the following files when the topics apply:
 | `code-style.md` | Naming, layout, design and dependency rules |
 | `deployment.md` | Build profiles, CI/CD, release, rollback |
 | `testing.md` or `testing-pattern.md` | Non-obvious test policy |
-| `decision-log.md` | Append-only decisions |
 | `spikes/` | Immutable point-in-time investigations |
 
 Use a short summary when a long document benefits from one; small documents
 can start directly with their subject. Each topic has one
-authoritative home; other documents link to it. Do not rewrite old decision-log
-entries or spikes to match later reality.
+authoritative home; other documents link to it. Do not rewrite spikes to match
+later reality. Whether to keep a decision log is the project's own choice.
 
 ## Governance content
 
