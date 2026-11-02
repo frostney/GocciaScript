@@ -48,7 +48,8 @@ const
   JOIN_MS = 20000;
   API_HOST = 'api.example';
   RACE_TRIALS = 60;
-  POLL_CAP = 20000000;
+  { How long a polling thread runs without a request before it gives up. }
+  POLL_LIMIT_MS = 8000;
 
   { Each runs until something stops it. }
   SCRIPT_BYTECODE_LOOP =
@@ -387,8 +388,10 @@ begin
   Started := GetMilliseconds;
   try
     try
-      while Polls < POLL_CAP do
-      begin
+      { Until the abort ends it; the clock bounds a request that never
+        comes, and is read every 4,096 polls so that the loop outlasts any
+        request delay however fast a poll is. }
+      repeat
         case FMode of
           pmChurnScopes:
             begin
@@ -403,7 +406,8 @@ begin
             CheckExecutionTimeout;
         end;
         Inc(Polls);
-      end;
+      until ((Polls and $FFF) = 0) and
+        (GetMilliseconds - Started > POLL_LIMIT_MS);
       Raised := 'never';
     except
       on E: Exception do
