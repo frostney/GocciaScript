@@ -4610,6 +4610,21 @@ begin
     OpCode := OP_DEFINE_GLOBAL_LET_LONG;
   EmitInstruction(ACtx, EncodeABx(OpCode, ACtx.Scope.GetLocal(LocalIdx).Slot,
     ACtx.Template.AddConstantString(ACtx.Scope.GetLocal(LocalIdx).Name)));
+  // As for a plain declaration (ClearGlobalBackedSlot): the binding is read
+  // and written by name from here on, so the register, and the cell of a
+  // closure compiled before it, let go of the value instead of keeping it
+  // reachable after a reassignment. An exported binding's export statement
+  // publishes the register next, so it keeps the value.
+  if not ACtx.GlobalLexicalPatternIsConst and
+     (ACtx.Scope.GetLocal(LocalIdx).ExportNameCount = 0) then
+  begin
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED,
+      ACtx.Scope.GetLocal(LocalIdx).Slot, 0, 0));
+    if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+      EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL,
+        ACtx.Scope.GetLocal(LocalIdx).Slot,
+        ACtx.Scope.GetLocal(LocalIdx).Slot));
+  end;
 end;
 
 procedure EmitDestructuring(const ACtx: TGocciaCompilationContext;
