@@ -62,6 +62,9 @@ jobs:
       - name: Check build-system behavior
         run: python3 scripts/test-build-system.py
 
+      - name: Check formatter behavior
+        run: python3 scripts/test-format.py
+
       - name: Build all
         run: ./build.pas --prod
 

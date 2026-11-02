@@ -34,7 +34,7 @@ Install Lefthook as described in [Workflow — Local setup](workflow.md#local-se
 
 All of the following are **auto-fixed** (not just warned about):
 
-- **Uses clauses**: one unit per line, grouped (System > Third-party > Project > Relative), alphabetically sorted within each group, blank line between groups. Units with an `in` path are always in the Relative group; `Goccia.*` units are Project; known FPC standard library units are System; everything else is Third-party.
+- **Uses clauses**: one unit per line, grouped (System > Third-party > Project > Relative), alphabetically sorted within each group, blank line between groups. Units with an `in` path are always in the Relative group; `Goccia.*` units are Project; known FPC standard library units are System; everything else is Third-party. A uses clause that holds a compiler directive or a comment is left as written, since sorting could separate a comment or `{$IFDEF}` from the unit it belongs to.
 - **Function naming**: capitalizes the first letter of function, procedure, constructor, and destructor names to enforce PascalCase. Renames all references within the same file. External C bindings are excluded.
 - **Parameter naming**: adds the `A` prefix to multi-letter parameters (e.g., `Value` -> `AValue`) and renames all references within the function scope (declaration, local variables, and body). Single-letter parameters and Pascal keyword conflicts are skipped.
 - **Stray spaces**: removes spurious spaces before `;`, `)`, and `,` (e.g., `string ;` -> `string;`). String literals and comments are left untouched.

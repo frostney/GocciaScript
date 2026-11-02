@@ -125,65 +125,36 @@ begin
   end;
 end;
 
-function ContainsDirective(const AText: string): Boolean;
-begin
-  Result := Pos('{$', UpperCase(AText)) > 0;
-end;
+type
+  TCommentState = (csNone, csBrace, csParen);
 
-function StripLineComment(const ALine: string): string;
-var
-  I: Integer;
-  InStr: Boolean;
-begin
-  I := 1;
-  InStr := False;
-  while I <= Length(ALine) do
-  begin
-    if InStr then
-    begin
-      if (ALine[I] = '''') then
-      begin
-        if (I < Length(ALine)) and (ALine[I + 1] = '''') then
-        begin
-          Inc(I, 2);
-          Continue;
-        end;
-        InStr := False;
-      end;
-    end
-    else
-    begin
-      if ALine[I] = '''' then
-        InStr := True
-      else if (ALine[I] = '/') and (I < Length(ALine)) and (ALine[I + 1] = '/') then
-      begin
-        Result := Copy(ALine, 1, I - 1);
-        Exit;
-      end
-      else if ALine[I] = '{' then
-      begin
-        Result := Copy(ALine, 1, I - 1);
-        Exit;
-      end;
-    end;
-    Inc(I);
-  end;
-  Result := ALine;
-end;
-
-function UpdateBlockState(const ALine: string; AInBlock: Boolean): Boolean;
+{ Returns the code of ALine outside comments and string literals. A brace or
+  parenthesised comment left open carries over to the next line through
+  AState, and AHasComment is set when a comment or directive opens on the
+  line. }
+function CodeOutsideComments(const ALine: string; var AState: TCommentState;
+  var AHasComment: Boolean): string;
 var
   K: Integer;
   InStr: Boolean;
 begin
+  Result := '';
   K := 1;
   InStr := False;
   while K <= Length(ALine) do
   begin
-    if AInBlock then
+    if AState = csBrace then
     begin
       if ALine[K] = '}' then
-        AInBlock := False;
+        AState := csNone;
+    end
+    else if AState = csParen then
+    begin
+      if (ALine[K] = '*') and (K < Length(ALine)) and (ALine[K + 1] = ')') then
+      begin
+        AState := csNone;
+        Inc(K);
+      end;
     end
     else if InStr then
     begin
@@ -193,55 +164,61 @@ begin
     else if ALine[K] = '''' then
       InStr := True
     else if ALine[K] = '{' then
-      AInBlock := True
+    begin
+      AState := csBrace;
+      AHasComment := True;
+    end
+    else if (ALine[K] = '(') and (K < Length(ALine)) and (ALine[K + 1] = '*') then
+    begin
+      AState := csParen;
+      AHasComment := True;
+      Inc(K);
+    end
     else if (ALine[K] = '/') and (K < Length(ALine)) and (ALine[K + 1] = '/') then
+    begin
+      AHasComment := True;
       Break;
+    end
+    else
+      Result := Result + ALine[K];
     Inc(K);
   end;
-  Result := AInBlock;
 end;
 
 procedure FormatUsesInLines(const AInput: TStringList; const AOutput: TStringList);
 var
-  I, J: Integer;
-  UsesContent, AfterUses, FullBlock, BeforeSC: string;
+  I, J, K: Integer;
+  UsesContent, AfterUses: string;
   Units, Formatted: TStringList;
-  InBlock: Boolean;
+  State, ClauseState: TCommentState;
+  HasComment, LineHasComment: Boolean;
 begin
   I := 0;
-  InBlock := False;
+  State := csNone;
   while I < AInput.Count do
   begin
-    if InBlock then
+    if (State = csNone) and IsUsesKeyword(AInput[I]) then
     begin
-      InBlock := UpdateBlockState(AInput[I], InBlock);
-      AOutput.Add(AInput[I]);
-      Inc(I);
-      Continue;
-    end;
-
-    InBlock := UpdateBlockState(AInput[I], InBlock);
-
-    if IsUsesKeyword(AInput[I]) then
-    begin
-      FullBlock := AInput[I];
+      { The clause ends at the first semicolon that is code, not one inside a
+        comment or a string. }
       J := I;
-      BeforeSC := StripLineComment(FullBlock);
-
-      while (Pos(';', BeforeSC) = 0) and (J + 1 < AInput.Count) do
-      begin
+      ClauseState := csNone;
+      HasComment := False;
+      while (Pos(';', CodeOutsideComments(AInput[J], ClauseState,
+        HasComment)) = 0) and (J + 1 < AInput.Count) do
         Inc(J);
-        FullBlock := FullBlock + #10 + AInput[J];
-        BeforeSC := StripLineComment(AInput[J]);
-      end;
 
-      if ContainsDirective(FullBlock) then
+      { A comment or directive can belong to the unit beside it, and sorting
+        would move one away from the other, so such a clause is left as
+        written. A comment opened in it can close after it. }
+      if HasComment then
       begin
         while I <= J do
         begin
           AOutput.Add(AInput[I]);
           Inc(I);
         end;
+        State := ClauseState;
         Continue;
       end;
 
@@ -250,13 +227,8 @@ begin
         UsesContent := ''
       else
         UsesContent := Trim(Copy(AfterUses, 5, Length(AfterUses)));
-
-      J := I;
-      while (Pos(';', StripLineComment(UsesContent)) = 0) and (J + 1 < AInput.Count) do
-      begin
-        Inc(J);
-        UsesContent := UsesContent + ' ' + Trim(AInput[J]);
-      end;
+      for K := I + 1 to J do
+        UsesContent := UsesContent + ' ' + Trim(AInput[K]);
 
       Units := TStringList.Create;
       try
@@ -291,6 +263,8 @@ begin
     end
     else
     begin
+      LineHasComment := False;
+      CodeOutsideComments(AInput[I], State, LineHasComment);
       AOutput.Add(AInput[I]);
       Inc(I);
     end;
