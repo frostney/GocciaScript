@@ -44,6 +44,18 @@ function StatementCreatesNoClosure(const ANode: TGocciaASTNode): Boolean;
 // accepted.
 function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 
+// True when the function whose parameters are AParams and whose body is ABody
+// can never write a parameter: every parameter is a plain identifier with no
+// default, and the body holds no assignment to an identifier, no increment or
+// decrement of one, no destructuring assignment, no direct eval, no suspension
+// point, and no function, class or other form the allowlist does not name.
+// A call that passes a value as an argument leaves it in the caller's
+// registers, and only a callee that can write the parameter can drop its own
+// reference to the value (ADR 0174). ABody is the body statement, or the
+// expression of an arrow function.
+function ParametersSurviveBody(const AParams: TGocciaParameterArray;
+  const ABody: TGocciaASTNode): Boolean;
+
 // One result per parameter, computed by a single accumulating syntax walk.
 // True when nothing evaluated up to the end of the initializer of a simple
 // parameter can read or write that parameter's binding: no
@@ -567,6 +579,23 @@ begin
   Scan.Budget := OPERAND_NODE_BUDGET;
   Scan.AvoidName := '';
   Result := ScanNode(Scan, AExpr);
+end;
+
+function ParametersSurviveBody(const AParams: TGocciaParameterArray;
+  const ABody: TGocciaASTNode): Boolean;
+var
+  Scan: TScan;
+  I: Integer;
+begin
+  for I := 0 to High(AParams) do
+    if AParams[I].IsRest or AParams[I].IsPattern or
+       Assigned(AParams[I].DefaultValue) then
+      Exit(False);
+  Scan := Default(TScan);
+  Scan.RejectLocalWrites := True;
+  Scan.Budget := -1;
+  Scan.AvoidName := '';
+  Result := ScanNode(Scan, ABody);
 end;
 
 function ParameterInitializersAvoidOwnBindings(

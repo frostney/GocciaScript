@@ -5084,6 +5084,8 @@ begin
 
   ChildScope.DeclareLocal('__receiver', False);
   ChildTemplate.ParameterCount := Length(AExpr.Parameters);
+  ChildTemplate.ParametersMayBeDropped :=
+    not ParametersSurviveBody(AExpr.Parameters, AExpr.Body);
 
   FormalCount := -1;
   for I := 0 to High(AExpr.Parameters) do
@@ -7583,6 +7585,8 @@ begin
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AExpr.Parameters);
+  ChildTemplate.ParametersMayBeDropped :=
+    not ParametersSurviveBody(AExpr.Parameters, AExpr.Body);
 
   FormalCount := -1;
   for I := 0 to High(AExpr.Parameters) do

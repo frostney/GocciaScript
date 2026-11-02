@@ -683,6 +683,11 @@ begin
         if ATask.Handler is TGocciaPromiseReactionHandler then
           HandlerResult := TGocciaPromiseReactionHandler(ATask.Handler).
             Run(ATask.Value)
+        else if ATask.Handler is TGocciaFunctionBase then
+          // A bytecode handler lets go of the job's root on its argument once
+          // its own frame holds it (CallOneArgOwned).
+          HandlerResult := TGocciaFunctionBase(ATask.Handler).CallOneArgOwned(
+            ATask.Value, TGocciaUndefinedLiteralValue.UndefinedValue)
         else
         begin
           CallArgs := TGocciaArgumentsCollection.Create([ATask.Value]);

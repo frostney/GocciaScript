@@ -288,6 +288,9 @@ type
     FPendingNewTarget: TGocciaValue;
     FCurrentNewTarget: TGocciaValue;
     FCurrentAsyncPromise: TGocciaPromiseValue;
+    // The argument of a call made through CallOneArgOwned, until the callee's
+    // first frame holds it.
+    FOwnedArgument: TGocciaValue;
     FGlobalBackedTopLevel: Boolean;
     FCoverageEnabled: Boolean;
     FProfilingOpcodes: Boolean;
@@ -734,6 +737,11 @@ type
       const AArgCount: Integer; const APushExecutionContext: Boolean;
       var AFrame: TGocciaVMCallFrame; out ATemplate: TGocciaFunctionTemplate;
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
+    // Clears ACount registers of the caller's window at absolute index
+    // AAbsoluteIndex (in FRegisterStack) that hold objects: the receiver and
+    // arguments of a call whose callee has copied them (ADR 0174).
+    procedure ReleaseCallerRegisters(const AAbsoluteIndex, ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
+    procedure HandOffOwnedArgument;
     procedure NoteShimLoadFrame(const ATemplate: TGocciaFunctionTemplate);
     procedure HandleExceptionUnwind(const AErrorValue: TGocciaValue;
       const AInitialFrameStackCount, AInitialClosedNumericFrameCount,
@@ -2505,6 +2513,7 @@ type
       const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; override;
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
+    function CallOneArgOwned(const AArg0, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; override;
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; override;
     function IsConstructable: Boolean; override;
@@ -6393,6 +6402,21 @@ begin
 
   Result := RegisterToValue(FVM.ExecuteClosureRegisters1(FClosure,
     VMValueToRegisterFast(EffectiveThis), VMValueToRegisterFast(AArg0)));
+end;
+
+function TGocciaBytecodeFunctionValue.CallOneArgOwned(const AArg0,
+  AThisValue: TGocciaValue): TGocciaValue;
+begin
+  // The first frame this call sets up is the callee's own: it takes AArg0 into
+  // its registers and then lets the running job's root on it go
+  // (TGocciaVM.HandOffOwnedArgument). A callee that sets up no frame, a
+  // generator, leaves the root to the job, and the field is cleared either way.
+  FVM.FOwnedArgument := AArg0;
+  try
+    Result := CallOneArg(AArg0, AThisValue);
+  finally
+    FVM.FOwnedArgument := nil;
+  end;
 end;
 
 function TGocciaBytecodeFunctionValue.CallTwoArgs(const AArg0, AArg1,
@@ -16436,6 +16460,31 @@ begin
     Inc(FShimLoad^.OtherFrames);
 end;
 
+procedure TGocciaVM.HandOffOwnedArgument;
+var
+  Argument: TGocciaValue;
+begin
+  Argument := FOwnedArgument;
+  FOwnedArgument := nil;
+  if Assigned(TGocciaMicrotaskQueue.Instance) then
+    TGocciaMicrotaskQueue.Instance.ReleaseRunningJobArgument(Argument);
+end;
+
+procedure TGocciaVM.ReleaseCallerRegisters(const AAbsoluteIndex,
+  ACount: Integer);
+var
+  Registers, Limit: PGocciaRegister;
+begin
+  Registers := @FRegisterStack[AAbsoluteIndex];
+  Limit := Registers + ACount;
+  while Registers < Limit do
+  begin
+    if Registers^.Kind = grkObject then
+      Registers^.Kind := grkUndefined;
+    Inc(Registers);
+  end;
+end;
+
 procedure TGocciaVM.SetupNewFrame(const AClosure: TGocciaBytecodeClosure;
   const AThisValue: TGocciaRegister; const AArguments: PGocciaRegister;
   const AArgCount: Integer; const APushExecutionContext: Boolean;
@@ -16870,6 +16919,7 @@ var
   ApplyArgRegisters: array[0..2] of TGocciaRegister;
   BytecodeFunction: TGocciaBytecodeFunctionValue;
   CalleeIsBytecodeFunction: Boolean;
+  CallerArgIndex: Integer;
   BoundFunction: TGocciaBoundFunctionValue;
   JumpOffset: Integer;
   PrevCovLine, CovLine: UInt32;
@@ -17168,6 +17218,8 @@ begin
       SetupNewFrame(AClosure, AThisValue, AArguments, AArgCount,
         APushExecutionContext,
         Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+      if Assigned(FOwnedArgument) then
+        HandOffOwnedArgument;
     if Assigned(AClosure) and Assigned(AClosure.GlobalScope) then
       FGlobalScope := AClosure.GlobalScope;
     if Assigned(FPendingNewTarget) then

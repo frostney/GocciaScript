@@ -418,6 +418,7 @@
             begin
               // See OP_CALL: the arguments are read straight out of the
               // caller's registers.
+              CallerArgIndex := FRegisterBase + A + 1;
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -427,6 +428,10 @@
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, @FRegisters[A + 1], B, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              // The arguments are the callee's now.
+              if ((C and CALL_FLAG_TAIL) = 0) and
+                 BytecodeFunction.FClosure.Template.ParametersMayBeDropped then
+                ReleaseCallerRegisters(CallerArgIndex, B);
               Continue;
             end
             else if (FRegisters[B].Kind = grkObject) and
@@ -1445,6 +1450,7 @@
               // before it acquires (and so may move or clear) any register,
               // or, when the callee never reads one and no arena grows,
               // straight into the callee's registers.
+              CallerArgIndex := FRegisterBase + A + 1;
               if (C and CALL_FLAG_TAIL) <> 0 then
                 PrepareTailCallFrameReuse(Template, ProfileEntryTimestamp,
                   InitialFrameStackCount, SavedHandlerCount)
@@ -1454,6 +1460,10 @@
               SetupNewFrame(BytecodeFunction.FClosure,
                 CallThisRegister, @FRegisters[A + 1], B, True,
                 Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              // The arguments are the callee's now.
+              if ((C and CALL_FLAG_TAIL) = 0) and
+                 BytecodeFunction.FClosure.Template.ParametersMayBeDropped then
+                ReleaseCallerRegisters(CallerArgIndex, B);
               Continue;
             end
             else if (FRegisters[B].Kind = grkObject) and
