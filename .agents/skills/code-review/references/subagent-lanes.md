@@ -13,21 +13,26 @@ validation, verdict, and report.
    lanes instead. Group only tightly coupled findings. Exact-file and
    prior-findings inputs retain their normal intersection rules.
 3. Give each worker its lane ID, assigned review axis or finding IDs, exact
-   scope, claim or source finding, comparison boundary or baseline, relevant
-   project instructions, and known evidence. A worker may inspect and run the
-   safe probes allowed by this skill, but it must not edit, create persistent or
-   external side effects, delegate further, assign final finding IDs or
-   severities, or issue a verdict.
+   scope, claim or source finding, comparison boundary or baseline, the path of
+   every listed [binding guide](../SKILL.md#binding-guides), and known
+   evidence. Each worker opens every guide and, as that section describes,
+   checks every rule that bears on its axis or findings across its complete
+   scope, searching the whole diff after a first instance. A worker may inspect
+   and run the safe probes allowed by this skill, but it must not edit, create
+   persistent or external side effects, delegate further, assign final finding
+   IDs or severities, or issue a verdict.
 4. Require each worker to return its lane ID, assigned review axis or findings,
    bounded scope, inspected supporting context, exact probes and observed
-   results, every evidence-supported candidate with evidence, impact, gain, if not
+   results, a binding-guide ledger row for each rule it checked, every
+   evidence-supported candidate with evidence, impact, gain, if not
    done, smallest remedy, and any uncertainty or limitation, verified claims, limitations, and
    `complete` or `incomplete` status. Workers do not apply a severity or
    reporting threshold; the coordinator owns candidate filtering.
 5. Validate every candidate against the current checkout, apply the
    de-duplication checks in `SKILL.md`, reconcile conflicts across lanes, then
-   assign final IDs, severities, categories, and verdict. Do not repeat a
-   completed lane wholesale.
+   assign final IDs, severities, categories, and verdict. Merge the lanes'
+   ledger rows and check directly every guide section no lane recorded. Do not
+   repeat a completed lane wholesale.
 6. If sub-agents are unsupported, unavailable after any applicable bounded
    retry, or leave a lane incomplete, complete that lane directly. Report the
    affected lane and reason as a single-agent fallback. Temporary capacity
