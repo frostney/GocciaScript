@@ -178,8 +178,10 @@ combined diff:
 ```
 
 For VM, compiler, register, or GC changes also run the relevant native Pascal
-tests as described in `docs/testing.md`. Use a clean build
-(`./build.pas --clean <target>`) after a merge or unexplained FPC error.
+tests as described in `docs/testing.md`. `build.pas` retries a target once
+from a clean unit directory when FPC reports stale compiled state, so a build
+failure that survives that retry is a source failure (see
+`docs/contributing/tooling.md` § Stale FPC Build Artifacts).
 
 Interpreter and bytecode suite results must match on the public JavaScript
 tests: same pass/fail set, no new crashes. Do not weaken sandbox defaults or
