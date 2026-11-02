@@ -3935,7 +3935,13 @@ begin
       DeclarePatternBindings(ACtx, AStmt.MatchPattern);
       CompilePatternTest(ACtx, ValueReg, AStmt.MatchPattern, DoneReg);
       MismatchJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, DoneReg);
-    end;
+    end
+    else
+      // The binding took its own copy of the value, and the body would
+      // otherwise run with the value still in this register: a body that
+      // drops its binding could not release it before the next iteration.
+      // An async iteration costs far more than this one instruction.
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ValueReg, 0, 0));
 
     ACtx.CompileStatement(AStmt.Body);
 
