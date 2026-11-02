@@ -17232,11 +17232,24 @@ begin
               end;
             end;
           bgrkThrow:
-            HandleExceptionUnwind(
-              RegisterToValue(GActiveBytecodeGenerator.FResumeValue),
-              InitialFrameStackCount, InitialClosedNumericFrameCount,
-              SavedHandlerCount,
-              Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+            begin
+              HandleExceptionUnwind(
+                RegisterToValue(GActiveBytecodeGenerator.FResumeValue),
+                InitialFrameStackCount, InitialClosedNumericFrameCount,
+                SavedHandlerCount,
+                Frame, Template, PrevCovLine, ProfileEntryTimestamp);
+              // The handler's register holds the thrown value now (see the
+              // bgrkNext case above for why both holders are let go).
+              if GActiveBytecodeGenerator.FResumedByAwaitJob then
+              begin
+                GActiveBytecodeGenerator.FResumedByAwaitJob := False;
+                if (GActiveBytecodeGenerator.FResumeValue.Kind = grkObject) and
+                   Assigned(TGocciaMicrotaskQueue.Instance) then
+                  TGocciaMicrotaskQueue.Instance.ReleaseRunningJobArgument(
+                    GActiveBytecodeGenerator.FResumeValue.ObjectValue);
+                GActiveBytecodeGenerator.FResumeValue := RegisterUndefined;
+              end;
+            end;
           bgrkReturn:
             begin
               GActiveBytecodeGenerator.FReturnValue :=

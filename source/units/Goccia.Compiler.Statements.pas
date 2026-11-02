@@ -3198,6 +3198,14 @@ begin
       end;
     end;
 
+    // The exception reached the clause in CatchReg, and a binding took its
+    // own copy. Nothing reads CatchReg again unless the clause's pattern
+    // test fails and rethrows it, so left alone it would keep the exception
+    // object reachable for as long as the frame runs, after the clause has
+    // dropped its binding. The handlers write it afresh whenever they run.
+    if not Assigned(AStmt.CatchPattern) then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, CatchReg, 0, 0));
+
     if Assigned(AStmt.CatchPattern) then
     begin
       DeclarePatternBindings(ACtx, AStmt.CatchPattern);
