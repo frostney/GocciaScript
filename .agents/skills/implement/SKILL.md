@@ -75,13 +75,17 @@ This loop covers development: `/deliver` owns end-to-end delivery and
    [long-command and lane rules](../delivery-wait/SKILL.md#long-commands-and-delegated-lanes);
    ending a turn with a tracked pending command does not finish implementation.
 3. Apply `/code-review fix-all` and `/test-against-spec fix`. Review the actual
-   change against the agreed requirements; test observable behavior against
-   explicit specification sources. Use their direct documented equivalents if
-   unavailable. Reuse matching evidence without repeating already-covered work.
+   change against the agreed requirements and, rule by rule, against the
+   repository's binding guides, recording the review's
+   [binding-guide ledger](../code-review/SKILL.md#binding-guides); test
+   observable behavior against explicit specification sources. Use their
+   direct documented equivalents if unavailable. Reuse matching evidence
+   without repeating already-covered work.
 4. Repair every verified requirement gap, including visual or behavioral fidelity,
-   regardless of a finding's severity. Optional improvements outside the agreed
-   outcome do not become requirements. Any edit invalidates affected evidence:
-   repeat the necessary review, inspection and behavior checks until they agree
+   regardless of a finding's severity, and every instance of a broken guide
+   rule. Optional improvements outside the agreed outcome do not become
+   requirements. Any edit invalidates affected evidence, including the ledger
+   rows for what it touches: repeat the necessary review, inspection and behavior checks until they agree
    on the unchanged result. Own the final applicable Definition of Done and
    project gate; run only its missing or invalidated checks.
 
@@ -92,10 +96,11 @@ owns that operation and resumes testing afterward.
 
 ## Finish
 
-Finish when every verified requirement gap is resolved and applicable gates
+Finish when every verified requirement gap is resolved, the binding-guide
+ledger covers the final diff with no broken rule left, and applicable gates
 pass; unrelated improvements do not extend the task. Return the implemented
-result, observed requirement evidence and any route that replaced a failed
-source to the caller, or continue under the
+result, observed requirement evidence, the ledger and any route that replaced
+a failed source to the caller, or continue under the
 [delivery settings](../deliver/SKILL.md#delivery-settings) when started
 directly. Report unresolved required behavior as incomplete; never waive it because its finding is low
 severity.
