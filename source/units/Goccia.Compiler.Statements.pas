@@ -5932,6 +5932,7 @@ var
   CreatedControls: array of TLabelControlState;
   State: TLabelControlState;
   StartIndex, I: Integer;
+  OuterRegionPeak, RegionPeak: Integer;
 begin
   if not Assigned(GLabelControls) then
     GLabelControls := TList<TLabelControlState>.Create;
@@ -5953,9 +5954,18 @@ begin
   end;
 
   try
+    OuterRegionPeak := ACtx.Scope.BeginRegisterRegion;
     ACtx.CompileStatement(AStmt);
     for I := StartIndex to GLabelControls.Count - 1 do
       PatchJumpList(ACtx, GLabelControls[I].BreakJumps);
+    RegionPeak := ACtx.Scope.EndRegisterRegion(OuterRegionPeak);
+    // A `break label` of this loop lands here, past the clear the loop makes
+    // for its own exit, so a labeled loop clears once more after its breaks.
+    if StatementIsIteration(AStmt) and (RegionPeak > ACtx.Scope.NextSlot) then
+    begin
+      EmitLineMapping(ACtx, AStmt.Line, AStmt.Column);
+      EmitClearDeadRegisters(ACtx, RegionPeak);
+    end;
     Result := False;
   finally
     for I := GLabelControls.Count - 1 downto StartIndex do
