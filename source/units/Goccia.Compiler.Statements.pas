@@ -3085,6 +3085,23 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+// A catch clause starts from an exception that unwound the try block, so the
+// registers the block used above the live ones hold whatever its last
+// statement left in them: the receiver of a call, an argument, an
+// intermediate value. Nothing reads them again before the clause writes them,
+// but the VM marks the frame's whole register window, so a long-lived frame
+// (a suspended async function, a script's top level) would keep such an
+// object reachable after the program has dropped its last reference to it.
+// Clearing them costs instructions only on the path that caught an exception.
+procedure EmitClearDeadRegisters(const ACtx: TGocciaCompilationContext;
+  const ARegionPeak: Integer);
+var
+  Slot: Integer;
+begin
+  for Slot := ACtx.Scope.NextSlot to ARegionPeak - 1 do
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
+end;
+
 procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 var
@@ -3101,12 +3118,14 @@ var
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   Entry: TPendingFinallyEntry;
+  OuterRegionPeak, TryRegionPeak: Integer;
 begin
   HasCatch := Assigned(AStmt.CatchBlock);
   HasFinally := Assigned(AStmt.FinallyBlock);
   HasCatchInitHandler := Assigned(AStmt.CatchBindingPattern) and HasFinally;
 
   CatchReg := ACtx.Scope.AllocateRegister;
+  OuterRegionPeak := ACtx.Scope.BeginRegisterRegion;
   CatchBodyErrorReg := 0;
   CatchInitErrorReg := 0;
   CatchInitHandlerJump := -1;
@@ -3144,6 +3163,7 @@ begin
   end;
 
   CompileBlockStatement(ACtx, AStmt.Block);
+  TryRegionPeak := ACtx.Scope.EndRegisterRegion(OuterRegionPeak);
 
   EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
   if HasCatch and HasFinally then
@@ -3161,6 +3181,7 @@ begin
 
   if HasCatch then
   begin
+    EmitClearDeadRegisters(ACtx, TryRegionPeak);
     if HasFinally then
     begin
       GPendingFinally.Add(Entry);
