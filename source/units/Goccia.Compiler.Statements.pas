@@ -1025,6 +1025,24 @@ begin
   EmitInstruction(ACtx, EncodeABx(OpCode, ASlot, NameIdx));
 end;
 
+// Drops the value a global-backed top-level binding's register carried into
+// its global define: the binding is read and written by name afterwards, so
+// the register and any closure cell over it are dead storage that would keep
+// the value reachable for the life of the top-level frame. An exported
+// binding keeps it: its export statement publishes the register next.
+procedure ClearGlobalBackedSlot(const ACtx: TGocciaCompilationContext;
+  const AName: string; const ASlot: UInt16);
+var
+  LocalIdx: Integer;
+begin
+  LocalIdx := ACtx.Scope.FindLocalBySlot(AName, ASlot);
+  if (LocalIdx < 0) or (ACtx.Scope.GetLocal(LocalIdx).ExportNameCount > 0) then
+    Exit;
+  EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ASlot, 0, 0));
+  if ACtx.Scope.GetLocal(LocalIdx).IsCaptured then
+    EmitInstruction(ACtx, EncodeABx(OP_SET_LOCAL, ASlot, ASlot));
+end;
+
 function DeclarationHoldsOnlyNumbers(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration; const AIndex: Integer): Boolean;
 var
@@ -1551,8 +1569,19 @@ begin
     if IsTopLevelGlobalBacked then
     begin
       if not UseWithVarInitializer then
+      begin
         EmitGlobalDefine(ACtx, Slot, Info.Name, AStmt.IsConst, AStmt.IsVar,
           HasInitializer);
+        // Every later read and write of a global-backed binding goes to the
+        // global binding by name, so the register only carried the value into
+        // the define. Left holding it, the top-level frame would keep the
+        // initializer reachable after the script assigns the binding again.
+        // A closure compiled before the declaration shares the register's
+        // cell, which OP_SET_LOCAL clears too.
+        if HasInitializer and not AStmt.IsConst and
+           not (ACtx.DirectEvalVarsByName and AStmt.IsVar) then
+          ClearGlobalBackedSlot(ACtx, Info.Name, Slot);
+      end;
       LocalIdx := ACtx.Scope.FindLocalBySlot(Info.Name, Slot);
       if LocalIdx >= 0 then
         ACtx.Scope.MarkGlobalBacked(LocalIdx);
