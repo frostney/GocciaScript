@@ -323,6 +323,21 @@ describe("ast.parse with expressions: type syntax", () => {
     ]);
   });
 
+  test("an interface whose type parameter defaults to an object type ends at its own body", () => {
+    const result = parseTypes(
+      "interface Box<T = {}> extends Base<{ id: string }> {\n  contents: T;\n}\nconst after = 1;\n",
+    );
+    const [box, after] = result.root.children;
+
+    expect(box.kind).toBe("InterfaceDeclaration");
+    expect(shapeOf(result, box)).toEqual([
+      "TSTypeParameterDeclaration(<T = {}>)",
+      "TSInterfaceHeritage(Base<{ id: string }>)",
+      "TSInterfaceBody({\n  contents: T;\n})",
+    ]);
+    expect(after.kind).toBe("VariableDeclaration");
+  });
+
   test("a mapped type reports its constraint, name type and value type", () => {
     const result = parseTypes(
       "type Getters = { readonly [K in keyof Crate as `get${K}`]?: Crate[K] };\n",
