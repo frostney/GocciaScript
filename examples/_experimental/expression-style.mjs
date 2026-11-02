@@ -375,6 +375,16 @@ const fixFile = (file, source) => {
   return { findings, fixed: settle(source, findings, 1) };
 };
 
+/**
+ * The line ending a file is written with: its first one, or LF when it has
+ * none. A file that mixes them is written back with that first one.
+ */
+const lineEndingOf = (text) => {
+  const match = /\r\n?|\n/.exec(text);
+
+  return match === null ? "\n" : match[0];
+};
+
 const sourceFiles = (dir) => {
   const found = [];
 
@@ -398,7 +408,11 @@ let rewritten = 0;
 
 files.forEach((file) => {
   try {
-    const source = fs.readFileSync(file, "utf8");
+    // `parse` measures every offset in its LF-normalized `source`, so the
+    // rules read that text, and a fixed file gets its line ending back.
+    const written = fs.readFileSync(file, "utf8");
+    const lineEnding = lineEndingOf(written);
+    const source = written.replace(/\r\n?/g, "\n");
     const { findings, fixed } = fixFile(file, source);
 
     findings
@@ -411,7 +425,7 @@ files.forEach((file) => {
       });
 
     if (fixed !== source) {
-      fs.writeFileSync(file, fixed);
+      fs.writeFileSync(file, fixed.replace(/\n/g, lineEnding));
       rewritten = rewritten + 1;
     }
   } catch (error) {
