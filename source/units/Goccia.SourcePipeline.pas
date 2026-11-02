@@ -54,6 +54,9 @@ type
       preprocessor on, it also asks the transformer for the JSX tokens the
       lexer never sees. Off by default. }
     CollectTokens: Boolean;
+    { Opt-in record of where erased type syntax was, which `goccia:ast`
+      reports in its expression view. Off by default. }
+    RecordTypeRanges: Boolean;
   end;
 
   { One token of TGocciaSourcePipelineResult.Tokens. Offsets index the text
@@ -272,6 +275,7 @@ begin
   AParserOptions.ForInLoopsEnabled := AOptions.ForInLoopsEnabled or
     (cfForIn in AOptions.Compatibility);
   AParserOptions.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
+  AParserOptions.RecordTypeRanges := AOptions.RecordTypeRanges;
 end;
 
 procedure ConfigureParser(const AParser: TGocciaParser;
@@ -603,6 +607,7 @@ begin
   Result.InheritedStrictMode := False;
   Result.CollectComments := False;
   Result.CollectTokens := False;
+  Result.RecordTypeRanges := False;
 end;
 
 class function TGocciaSourcePipeline.CurrentOptionsOrDefault: TGocciaSourcePipelineOptions;
