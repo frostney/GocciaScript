@@ -89,15 +89,26 @@ type
     { Scopes hidden by the current one, innermost last. }
     FOuterScopes: array of TGocciaMicrotaskOuterScope;
     FOuterScopeCount: Integer;
+    { The job ExecuteTask is running: its argument, and whether the queue still
+      holds the argument's queued root. See ReleaseRunningJobArgument. }
+    FRunningArgument: TGocciaValue;
+    FRunningArgumentRooted: Boolean;
     function FindOuterScope(const AScope: TGocciaMicrotaskScopeId): Integer;
     procedure AddQueuedRoots(const AMicrotask: TGocciaMicrotask);
-    procedure RemoveQueuedRoots(const AMicrotask: TGocciaMicrotask);
+    procedure RemoveQueuedRoots(const AMicrotask: TGocciaMicrotask;
+      const ARemoveArgument: Boolean = True);
     procedure ExecuteTask(const ATask: TGocciaMicrotask);
     procedure CompactQueueIfEmpty;
     procedure CompactFinalizationQueueIfEmpty;
   public
     class function Instance: TGocciaMicrotaskQueue;
     class procedure Initialize;
+    { The running job holds its argument as a queued root until it ends, so a
+      continuation that resumes with the argument and drops it would still see
+      it reachable until its next suspension. A handler that has stored the
+      argument somewhere the collector marks calls this to let go of the
+      queue's hold. Does nothing unless AArgument is the running job's. }
+    procedure ReleaseRunningJobArgument(const AArgument: TGocciaValue);
     class procedure Shutdown;
 
     constructor Create;
@@ -579,7 +590,7 @@ begin
 end;
 
 procedure TGocciaMicrotaskQueue.RemoveQueuedRoots(
-  const AMicrotask: TGocciaMicrotask);
+  const AMicrotask: TGocciaMicrotask; const ARemoveArgument: Boolean);
 var
   GC: TGarbageCollector;
   Job: TGocciaMicrotaskJob;
@@ -589,7 +600,7 @@ begin
   begin
     if Assigned(AMicrotask.Handler) then
       GC.RemoveQueuedRoot(AMicrotask.Handler);
-    if Assigned(AMicrotask.Value) then
+    if ARemoveArgument and Assigned(AMicrotask.Value) then
       GC.RemoveQueuedRoot(AMicrotask.Value);
     if Assigned(AMicrotask.ResultPromise) then
       GC.RemoveQueuedRoot(AMicrotask.ResultPromise);
@@ -604,9 +615,21 @@ begin
   end;
 end;
 
+procedure TGocciaMicrotaskQueue.ReleaseRunningJobArgument(
+  const AArgument: TGocciaValue);
+begin
+  if not FRunningArgumentRooted or (FRunningArgument <> AArgument) then
+    Exit;
+  FRunningArgumentRooted := False;
+  if Assigned(TGarbageCollector.Instance) then
+    TGarbageCollector.Instance.RemoveQueuedRoot(AArgument);
+end;
+
 procedure TGocciaMicrotaskQueue.ExecuteTask(
   const ATask: TGocciaMicrotask);
 var
+  SavedArgument: TGocciaValue;
+  SavedArgumentRooted: Boolean;
   Promise: TGocciaPromiseValue;
   Capability: TGocciaPromiseReactionCapability;
   HandlerResult: TGocciaValue;
@@ -651,6 +674,11 @@ begin
     reachable here anyway, through the queued root of the task that is still
     in flight, but that is a property of the drain loop rather than of this
     function — one reordering of RemoveQueuedRoots away from being false. }
+  SavedArgument := FRunningArgument;
+  SavedArgumentRooted := FRunningArgumentRooted;
+  FRunningArgument := ATask.Value;
+  FRunningArgumentRooted := Assigned(ATask.Value);
+  try
   ContextToken := EnterAsyncContext(ATask.Context);
   try
 
@@ -758,6 +786,14 @@ begin
   finally
     LeaveAsyncContext(ContextToken);
   end;
+  finally
+    { The argument's queued root ends with the job, unless the handler has
+      already let go of it (ReleaseRunningJobArgument). }
+    if FRunningArgumentRooted and Assigned(TGarbageCollector.Instance) then
+      TGarbageCollector.Instance.RemoveQueuedRoot(ATask.Value);
+    FRunningArgument := SavedArgument;
+    FRunningArgumentRooted := SavedArgumentRooted;
+  end;
 end;
 
 procedure TGocciaMicrotaskQueue.CompactQueueIfEmpty;
@@ -792,7 +828,7 @@ begin
     try
       ExecuteTask(Task);
     finally
-      RemoveQueuedRoots(Task);
+      RemoveQueuedRoots(Task, False);
       PumpAtomicsWaitAsyncCompletions;
       if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.ClearKeptObjects;
@@ -810,7 +846,7 @@ begin
     try
       ExecuteTask(Task);
     finally
-      RemoveQueuedRoots(Task);
+      RemoveQueuedRoots(Task, False);
       PumpAtomicsWaitAsyncCompletions;
       if (TGarbageCollector.Instance <> nil) then
         TGarbageCollector.Instance.ClearKeptObjects;
@@ -851,7 +887,7 @@ begin
       try
         ExecuteTask(Task);
       finally
-        RemoveQueuedRoots(Task);
+        RemoveQueuedRoots(Task, False);
         PumpAtomicsWaitAsyncCompletions;
         if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.ClearKeptObjects;
@@ -868,7 +904,7 @@ begin
       try
         ExecuteTask(Task);
       finally
-        RemoveQueuedRoots(Task);
+        RemoveQueuedRoots(Task, False);
         PumpAtomicsWaitAsyncCompletions;
         if (TGarbageCollector.Instance <> nil) then
           TGarbageCollector.Instance.ClearKeptObjects;

@@ -641,6 +641,8 @@ var
   PreviousLabelReentryStatement: TGocciaStatement;
   PreviousLoopReentryStatement: TGocciaStatement;
   LoopScope: TGocciaCompilerScope;
+  RegionOuterPeak, RegionPeak: Integer;
+  AwaitMark, StatementOuterPeak, StatementPeak: Integer;
 begin
   Result := False;
   if Assigned(FCompileProfile) then
@@ -675,8 +677,24 @@ begin
       (LoopScope.LoopMayCreateClosure or
        not StatementCreatesNoClosure(AStmt)));
     FLoopReentryStatement := AStmt;
+    RegionOuterPeak := LoopScope.BeginRegisterRegion;
     try
-      Exit(DoCompileStatement(AStmt));
+      Result := DoCompileStatement(AStmt);
+      // What the loop's last iteration left in the registers above the live
+      // ones is dead once control is past it, and would stay reachable for as
+      // long as this frame runs (EmitClearDeadRegisters).
+      if not Result then
+      begin
+        RegionPeak := LoopScope.EndRegisterRegion(RegionOuterPeak);
+        // The clear belongs to the loop statement, not to the last statement
+        // of its body, whose line a loop that ran no iteration never reached.
+        if RegionPeak > LoopScope.NextSlot then
+          EmitLineMapping(Ctx, AStmt.Line, AStmt.Column);
+        Goccia.Compiler.Statements.EmitClearDeadRegisters(Ctx, RegionPeak);
+      end
+      else
+        LoopScope.EndRegisterRegion(RegionOuterPeak);
+      Exit;
     finally
       FLoopReentryStatement := PreviousLoopReentryStatement;
       LoopScope.LeaveLoop;
@@ -703,6 +721,9 @@ begin
       EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED,
         UInt16(Ctx.CompletionRegister), 0, 0));
   end;
+
+  AwaitMark := Ctx.Scope.AwaitCount;
+  StatementOuterPeak := Ctx.Scope.BeginRegisterRegion;
 
   if AStmt is TGocciaExpressionStatement then
     Goccia.Compiler.Statements.CompileExpressionStatement(Ctx, TGocciaExpressionStatement(AStmt))
@@ -794,6 +815,22 @@ begin
   else if AStmt is TGocciaUsingDeclaration then
     Goccia.Compiler.Statements.CompileUsingDeclaration(Ctx,
       TGocciaUsingDeclaration(AStmt));
+
+  StatementPeak := Ctx.Scope.EndRegisterRegion(StatementOuterPeak);
+  // A statement that suspended the frame on an await leaves the awaited
+  // promise, or the container it resolved with, in the registers it used
+  // above the live ones. The frame outlives the statement, so clear them. A
+  // compound statement's own statements clear theirs; a simple one clears
+  // here, once per execution of an already costly await.
+  if (not Result) and (Ctx.Scope.AwaitCount <> AwaitMark) and
+     ((AStmt is TGocciaExpressionStatement) or
+      (AStmt is TGocciaVariableDeclaration) or
+      (AStmt is TGocciaDestructuringDeclaration)) and
+     (StatementPeak > Ctx.Scope.NextSlot) then
+  begin
+    EmitLineMapping(Ctx, AStmt.Line, AStmt.Column);
+    Goccia.Compiler.Statements.EmitClearDeadRegisters(Ctx, StatementPeak);
+  end;
 
   if not Result then
     Result := Goccia.Compiler.Statements.StatementAlwaysAbrupt(Ctx, AStmt);

@@ -729,9 +729,13 @@ begin
   else
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
   if AExpr.IsDelegate then
-    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest, 1))
+    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest,
+      YIELD_FLAG_DELEGATE))
+  else if ACtx.Scope.SlotHoldsLocal(ADest) then
+    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest, 0))
   else
-    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest,
+      YIELD_FLAG_TEMP_OPERAND));
 end;
 
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;

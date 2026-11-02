@@ -7,6 +7,7 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.GarbageCollector,
   Goccia.MicrotaskQueue,
   Goccia.TestSetup,
   Goccia.Values.ObjectValue,
@@ -23,6 +24,21 @@ type
   public
     procedure CaptureRoots(
       const AContainer: TGocciaObjectValue); override;
+  end;
+
+  { An argument that reports its own sweep. Created with a nil prototype:
+    nothing here reads a property. }
+  TCountedArgument = class(TGocciaObjectValue)
+  public
+    destructor Destroy; override;
+  end;
+
+  { Collects while it runs, optionally after letting go of the argument the
+    job roots, and records how many arguments the collection swept. }
+  TCollectingHandler = class(TGocciaPromiseReactionHandler)
+  public
+    function HandleReaction(const AArgument: TGocciaValue): TGocciaValue;
+      override;
   end;
 
   TMicrotaskQueueTests = class(TTestSuite)
@@ -43,11 +59,19 @@ type
     procedure TestHandledRejectionIsNoLongerTracked;
     procedure TestClearQueueForgetsTrackedRejections;
     procedure TestRejectionForOuterScopeWaitsThere;
+    procedure TestRunningJobKeepsItsArgumentRooted;
+    procedure TestReleasedJobArgumentIsCollectable;
+    procedure TestReleaseDropsTheRootOnce;
+    procedure TestReleaseIgnoresAnotherValue;
   end;
 
 var
   GDestroyedJobCount: Integer;
   GExecutedJobCount: Integer;
+  GDestroyedArgumentCount: Integer;
+  GArgumentsSweptDuringJob: Integer;
+  GHandlerQueue: TGocciaMicrotaskQueue;
+  GHandlerRelease: TGocciaValue;
 
 function EmptyMicrotask: TGocciaMicrotask;
 begin
@@ -69,6 +93,26 @@ end;
 procedure TTrackingMicrotaskJob.Execute;
 begin
   Inc(GExecutedJobCount);
+end;
+
+{ TCountedArgument }
+
+destructor TCountedArgument.Destroy;
+begin
+  Inc(GDestroyedArgumentCount);
+  inherited;
+end;
+
+{ TCollectingHandler }
+
+function TCollectingHandler.HandleReaction(
+  const AArgument: TGocciaValue): TGocciaValue;
+begin
+  if Assigned(GHandlerRelease) then
+    GHandlerQueue.ReleaseRunningJobArgument(GHandlerRelease);
+  TGarbageCollector.Instance.Collect;
+  GArgumentsSweptDuringJob := GDestroyedArgumentCount;
+  Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
 { TFailingCaptureMicrotaskJob }
@@ -107,12 +151,24 @@ begin
   Test('a rejection for an outer scope waits there while an inner scope ' +
     'is current',
     TestRejectionForOuterScopeWaitsThere);
+  Test('a running job keeps its argument rooted until it ends',
+    TestRunningJobKeepsItsArgumentRooted);
+  Test('a running job''s argument is collectable once the handler releases it',
+    TestReleasedJobArgumentIsCollectable);
+  Test('releasing the running job''s argument drops its root once',
+    TestReleaseDropsTheRootOnce);
+  Test('releasing a value that is not the running job''s argument does nothing',
+    TestReleaseIgnoresAnotherValue);
 end;
 
 procedure TMicrotaskQueueTests.BeforeEach;
 begin
   GDestroyedJobCount := 0;
   GExecutedJobCount := 0;
+  GDestroyedArgumentCount := 0;
+  GArgumentsSweptDuringJob := 0;
+  GHandlerQueue := nil;
+  GHandlerRelease := nil;
 end;
 
 procedure TMicrotaskQueueTests.TestFreesJobWhenRootCaptureFails;
@@ -401,9 +457,119 @@ begin
   end;
 end;
 
+{ Runs one job whose handler collects. AReleaseArgument names the value the
+  handler lets go of first, nil for none. Answers the arguments swept while the
+  job ran, then drains the job and leaves nothing queued. }
+function RunCollectingJob(const AArgument, AReleaseArgument: TGocciaValue;
+  const AQueue: TGocciaMicrotaskQueue): Integer;
+var
+  Task: TGocciaMicrotask;
 begin
-  TestRunnerProgram.AddSuite(
-    TMicrotaskQueueTests.Create('MicrotaskQueue'));
-  RunGocciaTests;
+  GHandlerQueue := AQueue;
+  GHandlerRelease := AReleaseArgument;
+  Task := EmptyMicrotask;
+  Task.Handler := TCollectingHandler.Create;
+  Task.Value := AArgument;
+  AQueue.Enqueue(Task);
+  AQueue.DrainQueue;
+  Result := GArgumentsSweptDuringJob;
+end;
+
+procedure TMicrotaskQueueTests.TestRunningJobKeepsItsArgumentRooted;
+var
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Queue := TGocciaMicrotaskQueue.Create;
+  try
+    Expect<Integer>(RunCollectingJob(TCountedArgument.Create(nil), nil,
+      Queue)).ToBe(0);
+    { The root ends with the job: the next collection sweeps the argument. }
+    TGarbageCollector.Instance.Collect;
+    Expect<Integer>(GDestroyedArgumentCount).ToBe(1);
+  finally
+    Queue.Free;
+  end;
+end;
+
+procedure TMicrotaskQueueTests.TestReleasedJobArgumentIsCollectable;
+var
+  Argument: TGocciaValue;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  Queue := TGocciaMicrotaskQueue.Create;
+  try
+    Argument := TCountedArgument.Create(nil);
+    Expect<Integer>(RunCollectingJob(Argument, Argument, Queue)).ToBe(1);
+  finally
+    Queue.Free;
+  end;
+end;
+
+procedure TMicrotaskQueueTests.TestReleaseDropsTheRootOnce;
+var
+  Argument: TGocciaValue;
+  GC: TGarbageCollector;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  GC := TGarbageCollector.Instance;
+  Queue := TGocciaMicrotaskQueue.Create;
+  try
+    Argument := TCountedArgument.Create(nil);
+    { A second queued root of the same object, so the job's own root is the
+      only one a stray removal could take. }
+    GC.AddQueuedRoot(Argument);
+    try
+      Expect<Integer>(RunCollectingJob(Argument, Argument, Queue)).ToBe(0);
+      { Released during the job and not removed again when it ended: the
+        other root still holds the argument. }
+      GC.Collect;
+      Expect<Integer>(GDestroyedArgumentCount).ToBe(0);
+    finally
+      GC.RemoveQueuedRoot(Argument);
+    end;
+    GC.Collect;
+    Expect<Integer>(GDestroyedArgumentCount).ToBe(1);
+  finally
+    Queue.Free;
+  end;
+end;
+
+procedure TMicrotaskQueueTests.TestReleaseIgnoresAnotherValue;
+var
+  GC: TGarbageCollector;
+  Other: TGocciaValue;
+  Queue: TGocciaMicrotaskQueue;
+begin
+  GC := TGarbageCollector.Instance;
+  Queue := TGocciaMicrotaskQueue.Create;
+  try
+    Other := TCountedArgument.Create(nil);
+    GC.AddQueuedRoot(Other);
+    try
+      { The running job's argument is swept when the job ends; the other value
+        keeps the one queued root it had. }
+      Expect<Integer>(RunCollectingJob(TCountedArgument.Create(nil), Other,
+        Queue)).ToBe(0);
+      GC.Collect;
+      Expect<Integer>(GDestroyedArgumentCount).ToBe(1);
+    finally
+      GC.RemoveQueuedRoot(Other);
+    end;
+    GC.Collect;
+    Expect<Integer>(GDestroyedArgumentCount).ToBe(2);
+  finally
+    Queue.Free;
+  end;
+end;
+
+begin
+  TGarbageCollector.Initialize;
+  try
+    TestRunnerProgram.AddSuite(
+      TMicrotaskQueueTests.Create('MicrotaskQueue'));
+    RunGocciaTests;
+  finally
+    TGarbageCollector.Shutdown;
+  end;
   ExitCode := TestResultToExitCode;
 end.

@@ -160,6 +160,8 @@ type
     FDepth: Integer;
     FNextSlot: Integer;
     FMaxSlot: UInt16;
+    FRegionPeakSlot: Integer;
+    FAwaitCount: Integer;
     FPrivatePrefix: string;
     // Register of the class whose body this function's code is evaluating,
     // or -1 outside a class body.
@@ -222,6 +224,9 @@ type
     procedure EnsureLocalIndex;
     procedure NoteSettledLocal(const AIndex: Integer);
     procedure CountLocalSlot(const ASlot: UInt16);
+    // Records that registers below FNextSlot are in use: the template's
+    // register count and the open register region's peak.
+    procedure NoteSlotsInUse; {$IFDEF FPC}inline;{$ENDIF}
     function NewestLocalNamed(const AName: string): Integer;
     procedure RecordDebugLocal(const AIndex: Integer);
     procedure ForgetTopLocalName;
@@ -286,6 +291,23 @@ type
     property Depth: Integer read FDepth;
     property MaxSlot: UInt16 read FMaxSlot;
     property NextSlot: Integer read FNextSlot;
+
+    // A register region measures how far the registers in use grow while a
+    // statement compiles, so code that leaves the statement can clear the
+    // registers it used above the live ones. BeginRegisterRegion starts a
+    // region at the next free register and returns the enclosing region's
+    // peak; EndRegisterRegion closes it, returns this region's peak (one past
+    // the highest register it used, at least the first free register at its
+    // start) and folds that peak into the enclosing region.
+    function BeginRegisterRegion: Integer;
+    function EndRegisterRegion(const ASavedPeak: Integer): Integer;
+
+    // How many OP_AWAIT instructions this scope's code has emitted. A
+    // statement that emitted one has suspended the frame, which is where a
+    // register it left holding an awaited container or promise stays
+    // reachable for as long as the frame lives.
+    procedure NoteAwaitEmitted;
+    property AwaitCount: Integer read FAwaitCount;
 
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
     // True when one of the locals, suspended or not, holds register ASlot.
@@ -660,6 +682,8 @@ begin
   FDepth := ADepth;
   FNextSlot := 0;
   FMaxSlot := 0;
+  FRegionPeakSlot := 0;
+  FAwaitCount := 0;
   FPrivateNameCount := 0;
   FPrivateClassReg := -1;
   FDirectEvalSyntheticArgumentsSlot := -1;
@@ -762,8 +786,7 @@ begin
     FLocalIndex.Add(AName, FLocalCount);
   Inc(FLocalCount);
   Inc(FNextSlot);
-  if FNextSlot > FMaxSlot then
-    FMaxSlot := UInt16(FNextSlot);
+  NoteSlotsInUse;
 end;
 
 function TGocciaCompilerScope.DeclareVarLocal(const AName: string): UInt16;
@@ -833,8 +856,7 @@ begin
     FLocalIndex.Add(AName, FLocalCount);
   Inc(FLocalCount);
   Inc(FNextSlot);
-  if FNextSlot > FMaxSlot then
-    FMaxSlot := UInt16(FNextSlot);
+  NoteSlotsInUse;
 end;
 
 function TGocciaCompilerScope.ResolveLocal(const AName: string): Integer;
@@ -1089,8 +1111,7 @@ begin
   FNextSlot := ASlot;
   DeclareLocal(AName, AIsConst);
   FNextSlot := NextSlot;
-  if FNextSlot > FMaxSlot then
-    FMaxSlot := UInt16(FNextSlot);
+  NoteSlotsInUse;
   Result := FLocalCount - 1;
   FLocals[Result].IsVar := AIsVar;
 end;
@@ -1149,8 +1170,34 @@ begin
       [High(UInt16)]);
   Result := UInt16(FNextSlot);
   Inc(FNextSlot);
+  NoteSlotsInUse;
+end;
+
+procedure TGocciaCompilerScope.NoteSlotsInUse;
+begin
   if FNextSlot > FMaxSlot then
     FMaxSlot := UInt16(FNextSlot);
+  if FNextSlot > FRegionPeakSlot then
+    FRegionPeakSlot := FNextSlot;
+end;
+
+procedure TGocciaCompilerScope.NoteAwaitEmitted;
+begin
+  Inc(FAwaitCount);
+end;
+
+function TGocciaCompilerScope.BeginRegisterRegion: Integer;
+begin
+  Result := FRegionPeakSlot;
+  FRegionPeakSlot := FNextSlot;
+end;
+
+function TGocciaCompilerScope.EndRegisterRegion(
+  const ASavedPeak: Integer): Integer;
+begin
+  Result := FRegionPeakSlot;
+  if ASavedPeak > FRegionPeakSlot then
+    FRegionPeakSlot := ASavedPeak;
 end;
 
 procedure TGocciaCompilerScope.FreeRegister;
