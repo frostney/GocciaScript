@@ -1,6 +1,6 @@
 /*---
 description: Re-evaluated classes create distinct private brands
-features: [classes, private-fields, private-methods, private-static-fields]
+features: [classes, private-fields, private-methods, private-static-fields, Goccia.gc]
 ---*/
 
 test("private instance methods are branded per class evaluation", () => {
