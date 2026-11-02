@@ -47,8 +47,11 @@ whichever thread holds it. `ClearAbort` disarms the thread and detaches the
 handle; a request through a detached handle only records itself. A run
 captures a fresh handle, so a late request for the previous run reaches
 nothing, and the host needs no lock of its own around the capture and the
-clear. A thread that ends without `ClearAbort` is disarmed by the thread
-cleanup registry. A request is sticky until `ClearAbort`: every poll raises,
+clear. A thread that ends is disarmed by the thread cleanup registry, which
+`ShutdownThreadRuntime` runs as a worker exits; a thread that ends without
+either leaves the handle attached to a record that is freed, and a request on
+it then writes into that memory, so the engine thread must `ClearAbort` (in a
+`finally`) before it ends. A request is sticky until `ClearAbort`: every poll raises,
 so a nested `runScript` child's result, which carries the error back to its
 parent as a resource-limit failure, cannot hide it, and the parent's next poll
 ends the run ([#1509](https://github.com/frostney/GocciaScript/issues/1509):
@@ -114,7 +117,7 @@ A request ends:
 | Where the run is | How it notices | Latency |
 |---|---|---|
 | Bytecode dispatch, including a loop with no call | the instruction poll | the next instruction |
-| A native loop that follows the chokepoint rule (`Array.prototype.reverse`, `join`, `sort`, typed array sorts, `RegExp` matching, and the rest that call `CheckExecutionTimeout`) | the timeout poll | 1,024 polls |
+| A native loop that follows the chokepoint rule (`Array.prototype.reverse`, `join`, `sort`, typed array sorts, `RegExp` matching, and the rest that call `CheckExecutionTimeout`; a loop that calls `CheckNativeWork` also checks the count) | the timeout poll | 1,024 polls |
 | A value allocation, a bytecode call | `RunAllocationPolls`, `RunArmedPolls` | the next one |
 | `Atomics.wait` | its wait loop, in 50 ms slices | at most 50 ms |
 | `Atomics.waitAsync` and a promise wait | `Sleep(1)` loops | about 1 ms |
@@ -160,6 +163,10 @@ a collection before every reservation.
   instrumented dispatch path while it lasts.
 - `GocciaRunner` and the other CLI hosts are single-threaded and do not
   request aborts; only their error reporting names the new error.
+- A boundary that converts the error anyway, such as the module-resolution
+  wrappers, hands script a catchable error only until the next poll, which
+  raises again because the request is sticky. The testing library's per-test
+  and per-file arms now re-raise it, as they do the memory limit.
 - A native loop that does not poll, such as a host call with no check, is as
   unstoppable by an abort as by a deadline; the fix is the chokepoint rule's,
   not a second mechanism.

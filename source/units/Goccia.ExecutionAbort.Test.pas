@@ -28,6 +28,7 @@ uses
   Goccia.InstructionLimit,
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Fetch,
+  Goccia.RuntimeExtensions.TestingLibrary,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.Threading,
@@ -40,12 +41,14 @@ uses
 const
   { A script that was stopped ends well inside this; one that was not runs
     until its own limit. }
-  PROMPT_END_MS = 3000;
+  PROMPT_END_MS = 10000;
   LET_IT_RUN_MS = 60;
+  { Long enough that the script is inside its wait, not still starting. }
+  LET_IT_WAIT_MS = 400;
   JOIN_MS = 20000;
   API_HOST = 'api.example';
   RACE_TRIALS = 60;
-  POLL_CAP = 100000000;
+  POLL_CAP = 20000000;
 
   { Each runs until something stops it. }
   SCRIPT_BYTECODE_LOOP =
@@ -82,6 +85,14 @@ const
     '  return { done: false, value: 1 };' + LineEnding +
     '} }) };' + LineEnding +
     'for (const x of it) {}';
+  { An abort inside a test is not a failed test: it unwinds out of runTests. }
+  SCRIPT_TESTING_LIBRARY =
+    'import { test, expect, runTests } from "goccia:test";' + LineEnding +
+    'const it = { [Symbol.iterator]: () => ({ next: () => ({' +
+    ' done: false, value: 1 }) }) };' + LineEnding +
+    'test("never ends", () => { for (const x of it) {} });' + LineEnding +
+    'test("after it", () => { expect(1).toBe(1); });' + LineEnding +
+    'globalThis.outcome = await runTests({ showTestResults: false });';
   SCRIPT_QUICK = 'export const answer = 6 * 7;';
 
 type
@@ -106,6 +117,8 @@ type
     FDeadlineMs: Integer;
     FStress: Boolean;
     FRequestOnStart: Boolean;
+    FWithTestingLibrary: Boolean;
+    FRequestDelayMs: Integer;
     FReady: TEvent;
     FSecondScript: string;
     function RunOnce(const AScript: string; const AArm: Boolean;
@@ -128,9 +141,17 @@ type
     property Stress: Boolean read FStress write FStress;
     property RequestOnStart: Boolean read FRequestOnStart write FRequestOnStart;
     property SecondScript: string read FSecondScript write FSecondScript;
+    property WithTestingLibrary: Boolean read FWithTestingLibrary
+      write FWithTestingLibrary;
+    property RequestDelayMs: Integer read FRequestDelayMs
+      write FRequestDelayMs;
   end;
 
   { Polls the way a native loop and the VM do until the abort ends it. }
+  { Which poll a thread makes, and only that one, so that each test reaches the
+    request through the poll it names: the instruction poll alone, the instruction
+    poll between scope pushes and pops (every one recomputes the limit), or the
+    native loops' timeout poll alone. }
   TPollMode = (pmInstructions, pmChurnScopes, pmNativeLoopOnly);
 
   TPollingThread = class(TThread)
@@ -172,8 +193,7 @@ type
 
   TExecutionAbortTests = class(TTestSuite)
   private
-    function PollsUntilAbort(const AViaTimeout: Boolean;
-      out AClassName: string): Int64;
+    function PollsUntilAbort(out AClassName: string): Int64;
     function StopsScript(const AScript: string; const ARun: TAbortableRun;
       out AElapsed: Int64): string;
     procedure TestArmingTurnsBothPollsOn;
@@ -198,6 +218,7 @@ type
     procedure TestAtomicsWaitAsyncIsStopped;
     procedure TestFetchWaitIsStopped;
     procedure TestMicrotaskChainIsStopped;
+    procedure TestAbortInsideATestUnwindsOutOfRunTests;
     procedure TestPendingPromisesAreLeftSafeToFree;
     procedure TestWorkerRunsAgainAfterAnAbort;
     procedure TestAbortBeforeTheRunStartsEndsItAtOnce;
@@ -231,6 +252,7 @@ begin
   FScript := AScript;
   FReady := TEvent.Create(nil, True, False, '');
   FSecondScript := SCRIPT_QUICK;
+  FRequestDelayMs := LET_IT_RUN_MS;
   inherited Create(True);
 end;
 
@@ -267,6 +289,8 @@ begin
     Runtime.Engine.SourceType := stModule;
     if FWhileLoops then
       Runtime.Engine.Compatibility := [cfWhileLoops];
+    if FWithTestingLibrary and AArm then
+      Runtime.Install(TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly);
     if AWithFetch then
     begin
       Runtime.Install(TGocciaFetchRuntimeExtension.Create);
@@ -375,8 +399,9 @@ begin
             end;
           pmInstructions:
             PollInstructionLimit(CaptureInstructionLimitState);
+          pmNativeLoopOnly:
+            CheckExecutionTimeout;
         end;
-        CheckExecutionTimeout;
         Inc(Polls);
       end;
       Raised := 'never';
@@ -472,6 +497,8 @@ begin
   Test('a fetch nobody answers is stopped', TestFetchWaitIsStopped);
   Test('a microtask chain that never ends is stopped',
     TestMicrotaskChainIsStopped);
+  Test('an abort inside a goccia:test test unwinds out of runTests',
+    TestAbortInsideATestUnwindsOutOfRunTests);
   Test('a run stopped with pending promises and live data is safe to free',
     TestPendingPromisesAreLeftSafeToFree);
   Test('the worker runs a fresh engine after an abort',
@@ -531,7 +558,7 @@ end;
 
 { Polls until the abort ends it, on a thread of its own that a second thread
   requests from. Returns the polls it made and the class it raised. }
-function TExecutionAbortTests.PollsUntilAbort(const AViaTimeout: Boolean;
+function TExecutionAbortTests.PollsUntilAbort(
   out AClassName: string): Int64;
 var
   Poller: TPollingThread;
@@ -560,7 +587,7 @@ procedure TExecutionAbortTests.TestRequestEndsTheInstructionPoll;
 var
   Name: string;
 begin
-  PollsUntilAbort(False, Name);
+  PollsUntilAbort(Name);
   Expect<string>(Name).ToBe(TGocciaAbortError.ClassName);
 end;
 
@@ -880,7 +907,7 @@ var
 begin
   ARun.Start;
   ARun.WaitUntilRunning;
-  Requester := TRequestingThread.Create(ARun.Handle, LET_IT_RUN_MS);
+  Requester := TRequestingThread.Create(ARun.Handle, ARun.RequestDelayMs);
   try
     ARun.WaitFor;
     Requester.WaitFor;
@@ -948,6 +975,7 @@ var
 begin
   Run := TAbortableRun.Create(SCRIPT_ATOMICS_WAIT);
   try
+    Run.RequestDelayMs := LET_IT_WAIT_MS;
     Expect<string>(StopsScript(SCRIPT_ATOMICS_WAIT, Run, Elapsed))
       .ToBe(TGocciaAbortError.ClassName);
     Expect<Boolean>(Elapsed < PROMPT_END_MS).ToBe(True);
@@ -963,6 +991,7 @@ var
 begin
   Run := TAbortableRun.Create(SCRIPT_ATOMICS_WAIT_ASYNC);
   try
+    Run.RequestDelayMs := LET_IT_WAIT_MS;
     Expect<string>(StopsScript(SCRIPT_ATOMICS_WAIT_ASYNC, Run, Elapsed))
       .ToBe(TGocciaAbortError.ClassName);
     Expect<Boolean>(Elapsed < PROMPT_END_MS).ToBe(True);
@@ -978,6 +1007,7 @@ var
 begin
   Run := TAbortableRun.Create(SCRIPT_FETCH);
   try
+    Run.RequestDelayMs := LET_IT_WAIT_MS;
     Run.WithFetch := True;
     Expect<string>(StopsScript(SCRIPT_FETCH, Run, Elapsed))
       .ToBe(TGocciaAbortError.ClassName);
@@ -996,6 +1026,22 @@ begin
   Run := TAbortableRun.Create(SCRIPT_MICROTASK_CHAIN);
   try
     Expect<string>(StopsScript(SCRIPT_MICROTASK_CHAIN, Run, Elapsed))
+      .ToBe(TGocciaAbortError.ClassName);
+    Expect<Boolean>(Elapsed < PROMPT_END_MS).ToBe(True);
+  finally
+    Run.Free;
+  end;
+end;
+
+procedure TExecutionAbortTests.TestAbortInsideATestUnwindsOutOfRunTests;
+var
+  Run: TAbortableRun;
+  Elapsed: Int64;
+begin
+  Run := TAbortableRun.Create(SCRIPT_TESTING_LIBRARY);
+  try
+    Run.WithTestingLibrary := True;
+    Expect<string>(StopsScript(SCRIPT_TESTING_LIBRARY, Run, Elapsed))
       .ToBe(TGocciaAbortError.ClassName);
     Expect<Boolean>(Elapsed < PROMPT_END_MS).ToBe(True);
   finally

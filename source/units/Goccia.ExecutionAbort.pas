@@ -30,8 +30,8 @@ unit Goccia.ExecutionAbort;
 
     The handle belongs to one run. CaptureAbortHandle arms the calling
     thread, ClearAbort disarms it and detaches the handle, and a request made
-    through a detached handle, or after the thread ended, does nothing: a late
-    request cannot reach the next run, which captures a handle of its own.
+    through a detached handle does nothing: a late request cannot reach the
+    next run, which captures a handle of its own.
     Between the two, a request is sticky: every poll raises until ClearAbort,
     so a nested run's result cannot hide it from its parent.
 
@@ -43,9 +43,11 @@ unit Goccia.ExecutionAbort;
     pays nothing.
 
     The calling thread owns the arm: capture, ClearAbort and the run are one
-    thread's calls, and only Request is for the others. A thread that ends
-    without ClearAbort is disarmed by the thread cleanup registry. Capturing
-    again on an armed thread detaches the previous handle first. }
+    thread's calls, and only Request is for the others. ClearAbort must run
+    before the thread ends: ShutdownThreadRuntime runs it through the thread
+    cleanup registry for a worker built on InitThreadRuntime, but a request on
+    a handle still attached to a finished thread writes into freed memory.
+    Capturing again on an armed thread detaches the previous handle first. }
 
 interface
 

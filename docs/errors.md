@@ -16,7 +16,7 @@
 
 ## Error Types
 
-GocciaScript supports the standard ECMAScript error constructors plus the CLI-only resource-ceiling types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, and `MemoryLimitError` are CLI-only and not exposed as JavaScript constructors.
+GocciaScript supports the standard ECMAScript error constructors plus the CLI-only resource-ceiling types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, `RunAbortedError`, and `MemoryLimitError` are CLI-only and not exposed as JavaScript constructors.
 
 | Type | Thrown when | MDN |
 |------|-----------|-----|
@@ -30,9 +30,10 @@ GocciaScript supports the standard ECMAScript error constructors plus the CLI-on
 | [`SuppressedError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) | Disposal error during explicit resource management (`using`/`await using`); wraps both the new and suppressed error | [SuppressedError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) |
 | `TimeoutError` | Execution exceeded the `--timeout` limit (CLI only; not a JS-visible constructor) | -- |
 | `InstructionLimitError` | Execution exceeded the `--max-instructions` budget (CLI only; not a JS-visible constructor) | -- |
+| `RunAbortedError` | A host stopped the run from another thread through an abort handle (`Goccia.ExecutionAbort`, [Embedding](embedding.md#aborting-a-run-from-another-thread); a Pascal host API, so the CLI tools never raise it; not a JS-visible constructor) | -- |
 | `MemoryLimitError` | A *gated* growth point -- array element storage or object property storage -- was refused by the `--max-memory` budget after a forced collection failed to make room. Charged allocations under the same budget throw a catchable `RangeError` instead (CLI only; not a JS-visible constructor) | -- |
 
-The last three are resource ceilings rather than in-language errors. Script
+The last four are resource ceilings rather than in-language errors. Script
 `try`/`catch` cannot observe them: they unwind past
 every handler to the host, because a ceiling the guest can catch is a ceiling
 the guest can ignore in a loop. Allocation sites that charge the budget
