@@ -72,6 +72,47 @@ OPEN_COMMENT_SORTED = OPEN_COMMENT.replace(
     "implementation\n\nuses\n  SysUtils,\n  Classes;",
     "implementation\n\nuses\n  Classes,\n  SysUtils;")
 
+# A comment before the closing semicolon does not hide it, so the later clause
+# is still sorted.
+COMMENT_BEFORE_SEMICOLON = """unit Sample;
+
+interface
+
+uses
+  Classes,
+  SysUtils { a note };
+
+implementation
+
+uses
+  SysUtils,
+  Classes;
+
+end.
+"""
+
+COMMENT_BEFORE_SEMICOLON_SORTED = COMMENT_BEFORE_SEMICOLON.replace(
+    "implementation\n\nuses\n  SysUtils,\n  Classes;",
+    "implementation\n\nuses\n  Classes,\n  SysUtils;")
+
+# A (* *) comment opened after the clause is still a comment, so a uses line
+# inside it is not formatted.
+TRAILING_PAREN_COMMENT = """unit Sample;
+
+interface
+
+uses
+  Classes,
+  SysUtils; (* an older version read
+uses
+  Zeta, Alpha;
+*)
+
+implementation
+
+end.
+"""
+
 COMMENTED = {
     "line comment": """  Classes,
   // A comment between units, with a comma, and a semicolon;
@@ -81,6 +122,9 @@ COMMENTED = {
   SysUtils,""",
     "parenthesised comment": """  Classes,
   (* A comment between units, with a comma, and a semicolon; *)
+  SysUtils,""",
+    "directive": """  {$IFDEF UNIX}cthreads,{$ENDIF}
+  Classes,
   SysUtils,""",
     "multi-line block comment": """  Classes,
   { A comment that spans lines, with a comma,
@@ -138,5 +182,9 @@ with tempfile.TemporaryDirectory(prefix="goccia-format-check-") as directory:
         assert format_text(text) == text, (name, format_text(text))
 
     assert format_text(OPEN_COMMENT) == OPEN_COMMENT_SORTED, format_text(OPEN_COMMENT)
+    assert format_text(COMMENT_BEFORE_SEMICOLON) == COMMENT_BEFORE_SEMICOLON_SORTED, (
+        format_text(COMMENT_BEFORE_SEMICOLON))
+    assert format_text(TRAILING_PAREN_COMMENT) == TRAILING_PAREN_COMMENT, (
+        format_text(TRAILING_PAREN_COMMENT))
 
 print("format.pas behaves as expected")
