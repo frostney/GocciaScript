@@ -293,6 +293,21 @@ type
     // reservation path and the uncharged growth gate, for the reason
     // ShouldForceLimitCollection states.
     FForcedCollectFloor: Int64;
+    // How the floor lets go of a request it refused (ADR 0173). The floor is
+    // a record of a heap level, and objects that merely become unreachable
+    // move no counter, so a guest that drops what it held and retries the
+    // refused size would be refused from the record for as long as nothing
+    // collected. FForcedCollectRefusals counts the requests the record has
+    // answered since the last forced collection, and once it reaches
+    // FForcedCollectRetryAfter the next request forces a collection after all.
+    // A retry that collection makes room for starts over at 1, so the first
+    // retry after a drop is always collected for; each retry collection that
+    // makes no room doubles the interval (up to FORCED_COLLECT_MAX_RETRY_AFTER),
+    // so a loop that retries without dropping anything walks the heap a
+    // logarithmic number of times, not once per attempt. Both are written
+    // under FAccountingLock, like the floor.
+    FForcedCollectRefusals: Int64;
+    FForcedCollectRetryAfter: Int64;
 
     {$IFDEF GC_TIMING}
     FTotalMarkTimeNs: Int64;
@@ -354,6 +369,13 @@ type
     // Reads the live total and the forced-collect floor, so the caller must
     // hold FAccountingLock across the decision it feeds.
     function ShouldForceLimitCollection(const ABytes: Int64): Boolean;
+    // True when a request that does not fit would force a collection but for
+    // the floor, which has answered it before. Same locking as above.
+    function ForcedFloorRefuses(const ABytes: Int64): Boolean;
+    // Forgets the forced-collect floor and the retry state, so the next
+    // request that does not fit forces its collection. Caller holds
+    // FAccountingLock.
+    procedure ClearForcedCollectFloorLocked;
     // The one --max-memory fit predicate (overflow guard + ceiling test).
     // Caller must hold FAccountingLock ("Locked" suffix).
     function FitsWithinLimitLocked(const ABytes: Int64): Boolean; {$IFDEF FPC}inline;{$ENDIF}
@@ -582,6 +604,12 @@ type
   end;
 
 const
+  // The longest a run of record-answered refusals can go without forcing a
+  // collection (FForcedCollectRetryAfter): a heap walk every 65,536 refused
+  // attempts costs a refused retry loop nothing it would notice, and a guest
+  // that retried that long without dropping anything and then drops can still
+  // call Goccia.gc().
+  FORCED_COLLECT_MAX_RETRY_AFTER = 65536;
   DEFAULT_GC_THRESHOLD = 10000;
   // The mark a quarantined object carries (TGarbageCollector.QuarantineSwept).
   // AdvanceMark never makes it the current mark.
@@ -1191,6 +1219,8 @@ begin
   FHeapTriggeredCollections := 0;
   FBytesAfterLastCollect := 0;
   FForcedCollectFloor := -1;
+  FForcedCollectRefusals := 0;
+  FForcedCollectRetryAfter := 1;
   {$IFDEF GC_TIMING}
   FTotalMarkTimeNs := 0;
   FTotalSweepTimeNs := 0;
@@ -1327,7 +1357,7 @@ begin
       // floor means that observation no longer bounds what a collection could
       // reclaim and must not go on suppressing one.
       if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
-        FForcedCollectFloor := -1;
+        ClearForcedCollectFloorLocked;
       NoteBytesReleasedLocked;
     finally
       CriticalSectionLeave(FAccountingLock);
@@ -1770,7 +1800,7 @@ begin
       // back-off; FBytesAllocated is read there, so it is read under the lock.
       CriticalSectionEnter(FAccountingLock);
       try
-        FForcedCollectFloor := -1;
+        ClearForcedCollectFloorLocked;
         FBytesAfterLastCollect := FBytesAllocated;
       finally
         CriticalSectionLeave(FAccountingLock);
@@ -2133,7 +2163,7 @@ begin
       // conditional invalidation lands on -1.
       CriticalSectionEnter(FAccountingLock);
       try
-        FForcedCollectFloor := -1;
+        ClearForcedCollectFloorLocked;
       finally
         CriticalSectionLeave(FAccountingLock);
       end;
@@ -2191,6 +2221,10 @@ begin
   // then apply the same fit test, so a level that defeated one defeats the
   // other at the same request size. A second, gate-private floor would only
   // buy each path the right to re-learn what the other just proved.
+  //
+  // This predicate only reads the floor. A request the floor rules out is
+  // still collected for every FForcedCollectRetryAfter-th time, because the
+  // floor cannot see a program drop what it held (TryCollectForLimitedBytes).
   Result := not FCollecting and not FMemoryLimitFiring and
     (FMaxBytes > 0) and (ABytes <= FMaxBytes) and
     (FBytesAllocated <= High(Int64) - ABytes) and
@@ -2199,10 +2233,28 @@ begin
      (FForcedCollectFloor <= FMaxBytes - ABytes));
 end;
 
+function TGarbageCollector.ForcedFloorRefuses(const ABytes: Int64): Boolean;
+begin
+  Result := not FCollecting and not FMemoryLimitFiring and
+    (FMaxBytes > 0) and (ABytes <= FMaxBytes) and
+    (FBytesAllocated <= High(Int64) - ABytes) and
+    (FBytesAllocated + ABytes > FMaxBytes) and
+    (FForcedCollectFloor >= 0) and
+    (FForcedCollectFloor > FMaxBytes - ABytes);
+end;
+
+procedure TGarbageCollector.ClearForcedCollectFloorLocked;
+begin
+  FForcedCollectFloor := -1;
+  FForcedCollectRefusals := 0;
+  FForcedCollectRetryAfter := 1;
+end;
+
 function TGarbageCollector.TryCollectForLimitedBytes(const ABytes: Int64;
   const AProtect: TGCManagedObject): Boolean;
 var
-  ShouldForce: Boolean;
+  ShouldForce, Retrying: Boolean;
+  RetryAfter: Int64;
 begin
   // Only the owner thread reaches this method (via TryReserveExternalBytes or
   // directly from RequireNativeBytes in Goccia.MemoryLimit), so the only
@@ -2230,6 +2282,22 @@ begin
     if FitsWithinLimitLocked(ABytes) then
       Exit(True);
     ShouldForce := ShouldForceLimitCollection(ABytes);
+    Retrying := False;
+    // The floor answers a repeat of a refused request without a walk, but it
+    // cannot see the program drop what it held: unreachable objects move no
+    // counter. So every FForcedCollectRetryAfter-th request it answers
+    // collects after all (ADR 0173); the first retry after a drop always
+    // does, and a retry loop that drops nothing backs off geometrically.
+    if (not ShouldForce) and ForcedFloorRefuses(ABytes) then
+    begin
+      Inc(FForcedCollectRefusals);
+      if FForcedCollectRefusals >= FForcedCollectRetryAfter then
+      begin
+        ShouldForce := True;
+        Retrying := True;
+      end;
+    end;
+    RetryAfter := FForcedCollectRetryAfter;
   finally
     CriticalSectionLeave(FAccountingLock);
   end;
@@ -2239,15 +2307,29 @@ begin
   CriticalSectionEnter(FAccountingLock);
   try
     Result := FitsWithinLimitLocked(ABytes);
-    // Record the level this collection could not get below, so a retry of a
-    // request it already refused skips the walk that just proved fruitless.
-    // Collect clears this again — as do CollectYoung and the conditional
+    // The collection cleared the floor and the retry state (Collect). Put
+    // back what this attempt learned. A request that fits starts over. One
+    // that does not records the level this collection could not get below,
+    // so a retry of a request it already refused skips the walk that just
+    // proved fruitless until FForcedCollectRetryAfter says to look again; a
+    // retry collection that made no room doubles that interval. Collect
+    // clears all of it again — as do CollectYoung and the conditional
     // invalidations on any counter drop (ReleaseExternalBytes,
     // UnregisterObject) — so any ordinary collection re-arms forcing.
     // The per-request-size term is pinned by the damper test's third arm in
     // Goccia.GarbageCollector.Test.pas (a size-independent floor fails it).
     if not Result then
+    begin
       FForcedCollectFloor := FBytesAllocated;
+      FForcedCollectRefusals := 0;
+      if Retrying then
+      begin
+        if RetryAfter < FORCED_COLLECT_MAX_RETRY_AFTER then
+          FForcedCollectRetryAfter := RetryAfter * 2
+        else
+          FForcedCollectRetryAfter := FORCED_COLLECT_MAX_RETRY_AFTER;
+      end;
+    end;
   finally
     CriticalSectionLeave(FAccountingLock);
   end;
@@ -2504,7 +2586,7 @@ begin
     // collection could reclaim and must not go on suppressing one.
     if (FForcedCollectFloor >= 0) and
        (FBytesAllocated < FForcedCollectFloor) then
-      FForcedCollectFloor := -1;
+      ClearForcedCollectFloorLocked;
     NoteBytesReleasedLocked;
   {$IFNDEF PRODUCTION}
   finally

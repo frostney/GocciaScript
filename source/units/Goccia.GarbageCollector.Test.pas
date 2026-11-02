@@ -94,6 +94,7 @@ type
     procedure TestReservationCollectsBeyondPressureReserve;
     procedure TestReservationRefusesWhatCollectionCannotFit;
     procedure TestRepeatedRefusalCollectsOnlyOnce;
+    procedure TestRetryAfterDropCollectsAgain;
     procedure TestTryCollectGrantsAlreadyFittingRequestWithoutWalking;
     procedure TestDataDescriptorPushRootsProtectsValue;
     procedure TestAccessorDescriptorPushRootsProtectsBothHalves;
@@ -221,8 +222,10 @@ begin
     TestReservationCollectsBeyondPressureReserve);
   Test('External reservation still refuses what a collection cannot fit',
     TestReservationRefusesWhatCollectionCannotFit);
-  Test('Repeated refusal of the same size collects only once',
+  Test('Repeated refusal of the same size backs its collections off',
     TestRepeatedRefusalCollectsOnlyOnce);
+    Test('A retry after the program drops what it held collects again and fits',
+      TestRetryAfterDropCollectsAgain);
   Test('An already-fitting request is granted without walking the heap',
     TestTryCollectGrantsAlreadyFittingRequestWithoutWalking);
   Test('Data descriptor PushRoots keeps its value alive across a collection',
@@ -1482,15 +1485,18 @@ begin
       GC.TryReserveExternalBytes(UNFITTABLE_BYTES)).ToBe(False);
     Expect<Integer>(GC.TotalCollections).ToBe(CollectionsBefore + 1);
 
-    { Every retry of a size that collection already proved unfittable must be
-      answered from the recorded floor. Without the damper this is one full
-      mark-and-sweep per iteration, which is the amplification a guest gets by
-      catching the RangeError and trying again. }
+    { A retry loop that drops nothing must not walk the heap per attempt:
+      that is the amplification a guest gets by catching the RangeError and
+      trying again. The floor answers most retries, and every retry the floor
+      lets through that makes no room doubles the interval to the next one:
+      the first retry collects (the program may have dropped something), then
+      the 3rd, 7th and 15th, so 16 retries cost 4 collections, not 16. }
     CollectionsAfterFirst := GC.TotalCollections;
     for I := 1 to RETRY_COUNT do
       Expect<Boolean>(
         GC.TryReserveExternalBytes(UNFITTABLE_BYTES)).ToBe(False);
-    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsAfterFirst);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsAfterFirst + 4);
+    CollectionsAfterFirst := GC.TotalCollections;
 
     { The floor is a statement about a size, not a blanket stop. Fresh garbage
       plus a request the floor does not rule out collects again and succeeds,
@@ -1506,6 +1512,67 @@ begin
       GC.ReleaseExternalBytes(Reservation);
     if BallastReserved then
       GC.ReleaseExternalBytes(BALLAST_BYTES);
+    GC.MaxBytes := PreviousMaxBytes;
+  end;
+end;
+
+{ The floor records a heap level, and objects that become unreachable move no
+  counter, so a program that drops what it held after a refusal and retries the
+  same size must still get its collection: the first retry the floor answers
+  collects. Without that, the retry is refused until something else collects. }
+procedure TTestGarbageCollector.TestRetryAfterDropCollectsAgain;
+const
+  BUDGET_HEADROOM_BYTES = 8 * 1024 * 1024;
+  HELD_OBJECT_COUNT = 20000;
+  { Fits the budget beside nothing but the baseline, and not beside the held
+    objects: HELD_OBJECT_COUNT instances come to well over the difference. }
+  REQUEST_BYTES = BUDGET_HEADROOM_BYTES - 64 * 1024;
+var
+  BaselineBytes: Int64;
+  CollectionsAfterRefusal: Integer;
+  GC: TGarbageCollector;
+  Held: array of TChildManaged;
+  I: Integer;
+  PreviousMaxBytes: Int64;
+  Reserved: Boolean;
+begin
+  GC := TGarbageCollector.Instance;
+  GC.Collect;
+  BaselineBytes := GC.BytesAllocated;
+  PreviousMaxBytes := GC.MaxBytes;
+  Reserved := False;
+  SetLength(Held, HELD_OBJECT_COUNT);
+  for I := 0 to High(Held) do
+    Held[I] := nil;
+  try
+    GC.MaxBytes := BaselineBytes + BUDGET_HEADROOM_BYTES;
+    for I := 0 to High(Held) do
+    begin
+      Held[I] := TChildManaged.Create;
+      GC.RegisterObject(Held[I]);
+      GC.AddRootObject(Held[I]);
+    end;
+    Expect<Boolean>(
+      GC.BytesAllocated + REQUEST_BYTES > GC.MaxBytes).ToBe(True);
+
+    { Everything is held, so the forced collection reclaims nothing and the
+      request is refused. }
+    Expect<Boolean>(GC.TryReserveExternalBytes(REQUEST_BYTES)).ToBe(False);
+    CollectionsAfterRefusal := GC.TotalCollections;
+
+    { The program lets go of everything. No counter moved, so the floor still
+      rules the request out; the retry collects regardless and fits. }
+    for I := 0 to High(Held) do
+      GC.RemoveRootObject(Held[I]);
+    Reserved := GC.TryReserveExternalBytes(REQUEST_BYTES);
+    Expect<Boolean>(Reserved).ToBe(True);
+    Expect<Integer>(GC.TotalCollections).ToBe(CollectionsAfterRefusal + 1);
+  finally
+    if Reserved then
+      GC.ReleaseExternalBytes(REQUEST_BYTES);
+    for I := 0 to High(Held) do
+      if Assigned(Held[I]) then
+        GC.RemoveRootObject(Held[I]);
     GC.MaxBytes := PreviousMaxBytes;
   end;
 end;
