@@ -95,23 +95,62 @@ COMMENT_BEFORE_SEMICOLON_SORTED = COMMENT_BEFORE_SEMICOLON.replace(
     "implementation\n\nuses\n  SysUtils,\n  Classes;",
     "implementation\n\nuses\n  Classes,\n  SysUtils;")
 
-# A (* *) comment opened after the clause is still a comment, so a uses line
-# inside it is not formatted.
+# A (* *) comment opened after the clause is still a comment until its *),
+# whatever it holds, so a uses line inside it is not formatted and the later
+# clause is still sorted.
 TRAILING_PAREN_COMMENT = """unit Sample;
 
 interface
 
 uses
   Classes,
-  SysUtils; (* an older version read
+  SysUtils; (* an older version, with a } brace, read
+something first, then
 uses
   Zeta, Alpha;
 *)
 
 implementation
 
+uses
+  SysUtils,
+  Classes;
+
 end.
 """
+
+TRAILING_PAREN_COMMENT_SORTED = TRAILING_PAREN_COMMENT.replace(
+    "implementation\n\nuses\n  SysUtils,\n  Classes;",
+    "implementation\n\nuses\n  Classes,\n  SysUtils;")
+
+# A comment between clauses is tracked across lines, so commented-out code
+# holding a uses line is left alone and the later clause is still sorted.
+COMMENTED_OUT_CODE = """unit Sample;
+
+interface
+
+uses
+  Classes,
+  SysUtils;
+
+{ Disabled until the port lands:
+
+uses
+  Zeta, Alpha;
+}
+
+implementation
+
+uses
+  SysUtils,
+  Classes;
+
+end.
+"""
+
+COMMENTED_OUT_CODE_SORTED = COMMENTED_OUT_CODE.replace(
+    "implementation\n\nuses\n  SysUtils,\n  Classes;",
+    "implementation\n\nuses\n  Classes,\n  SysUtils;")
 
 COMMENTED = {
     "line comment": """  Classes,
@@ -184,7 +223,9 @@ with tempfile.TemporaryDirectory(prefix="goccia-format-check-") as directory:
     assert format_text(OPEN_COMMENT) == OPEN_COMMENT_SORTED, format_text(OPEN_COMMENT)
     assert format_text(COMMENT_BEFORE_SEMICOLON) == COMMENT_BEFORE_SEMICOLON_SORTED, (
         format_text(COMMENT_BEFORE_SEMICOLON))
-    assert format_text(TRAILING_PAREN_COMMENT) == TRAILING_PAREN_COMMENT, (
+    assert format_text(TRAILING_PAREN_COMMENT) == TRAILING_PAREN_COMMENT_SORTED, (
         format_text(TRAILING_PAREN_COMMENT))
+    assert format_text(COMMENTED_OUT_CODE) == COMMENTED_OUT_CODE_SORTED, (
+        format_text(COMMENTED_OUT_CODE))
 
 print("format.pas behaves as expected")

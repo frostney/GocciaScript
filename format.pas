@@ -130,8 +130,8 @@ type
 
 { Returns the code of ALine outside comments and string literals. A brace or
   parenthesised comment left open carries over to the next line through
-  AState, and AHasComment is set when the line holds any comment, directives
-  included. }
+  AState, and AHasComment is set when a comment or directive opens on the
+  line. }
 function CodeOutsideComments(const ALine: string; var AState: TCommentState;
   var AHasComment: Boolean): string;
 var
