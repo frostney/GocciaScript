@@ -2273,11 +2273,13 @@ var
   I: Integer;
   RetReg: UInt16;
   Ctx: TGocciaCompilationContext;
-  HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
+  HasFunctionDecl, BodyAbrupt, StatementAbrupt, HasUsing: Boolean;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
   SavedFinally: TObject;
   CallerScope: TGocciaCompilerScope;
+  UsingRegion: Goccia.Compiler.Statements.TUsingDisposalRegion;
+  UsingDisposeSlots: Goccia.Compiler.Statements.TUsingDisposeSlots;
 begin
   // A compile that raised left the levels it had entered open; this one
   // starts at the top of the tree.
@@ -2454,34 +2456,68 @@ begin
         DoCompileStatement(AProgram.Body[I]);
       end;
 
+    // ES2027 §16.2.1.7.3.2 ExecuteModule step 3.f: once a module's body
+    // completes, normally or with a throw, DisposeResources disposes the
+    // resources its top-level using and await using declarations added. The
+    // bindings are declared here, after the hoisted functions, as locals of
+    // the top level, in their temporal dead zone until their declarations
+    // run, so that each gets its dispose register on entry
+    // (PreallocateUsingDisposeSlots).
+    HasUsing := False;
     for I := 0 to AProgram.Body.Count - 1 do
-    begin
-      // Skip function declarations — already compiled during hoisting.
-      if IsHoistedFunctionDeclaration(AProgram.Body[I]) or
-         ((not FPreinitializedTopLevelFunctions) and
-          IsAnonymousDefaultFunctionDeclaration(AProgram.Body[I])) or
-         (AProgram.Body[I] is TGocciaImportDeclaration) or
-         (AProgram.Body[I] is TGocciaReExportDeclaration) then
-        Continue;
-
-      if AProgram.Body[I] is TGocciaExpressionStatement then
+      if AProgram.Body[I] is TGocciaUsingDeclaration then
       begin
-        EmitLineMapping(Ctx, AProgram.Body[I].Line, AProgram.Body[I].Column);
-        DoCompileExpression(
-          TGocciaExpressionStatement(AProgram.Body[I]).Expression, RetReg);
-        StatementAbrupt := False;
-      end
-      else
-        StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
-
-      if FOptimizationOptions.EnableDeadBranchElimination and
-         not FOptimizationOptions.PreserveCoverageShape and
-         StatementAbrupt then
-      begin
-        BodyAbrupt := True;
-        Break;
+        HasUsing := True;
+        Goccia.Compiler.Statements.PredeclareBlockUsingLocals(Ctx,
+          TGocciaUsingDeclaration(AProgram.Body[I]));
       end;
+    if HasUsing then
+    begin
+      Goccia.Compiler.Statements.BeginUsingDisposalRegion(Ctx, UsingRegion);
+      Goccia.Compiler.Statements.BeginUsingDisposeSlots(UsingDisposeSlots);
     end;
+    try
+      if HasUsing then
+        for I := 0 to AProgram.Body.Count - 1 do
+          if AProgram.Body[I] is TGocciaUsingDeclaration then
+            Goccia.Compiler.Statements.PreallocateUsingDisposeSlots(Ctx,
+              TGocciaUsingDeclaration(AProgram.Body[I]),
+              UsingDisposeSlots.Slots);
+
+      for I := 0 to AProgram.Body.Count - 1 do
+      begin
+        // Skip function declarations — already compiled during hoisting.
+        if IsHoistedFunctionDeclaration(AProgram.Body[I]) or
+           ((not FPreinitializedTopLevelFunctions) and
+            IsAnonymousDefaultFunctionDeclaration(AProgram.Body[I])) or
+           (AProgram.Body[I] is TGocciaImportDeclaration) or
+           (AProgram.Body[I] is TGocciaReExportDeclaration) then
+          Continue;
+
+        if AProgram.Body[I] is TGocciaExpressionStatement then
+        begin
+          EmitLineMapping(Ctx, AProgram.Body[I].Line, AProgram.Body[I].Column);
+          DoCompileExpression(
+            TGocciaExpressionStatement(AProgram.Body[I]).Expression, RetReg);
+          StatementAbrupt := False;
+        end
+        else
+          StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
+
+        if FOptimizationOptions.EnableDeadBranchElimination and
+           not FOptimizationOptions.PreserveCoverageShape and
+           StatementAbrupt then
+        begin
+          BodyAbrupt := True;
+          Break;
+        end;
+      end;
+    finally
+      if HasUsing then
+        Goccia.Compiler.Statements.EndUsingDisposeSlots(UsingDisposeSlots);
+    end;
+    if HasUsing then
+      Goccia.Compiler.Statements.EndUsingDisposalRegion(Ctx, UsingRegion);
 
     EmitInstruction(Ctx, EncodeABC(OP_RETURN, RetReg, 0, 0));
     FCurrentScope.FreeRegister;

@@ -166,7 +166,7 @@ class Counter {
 
 ### Explicit Resource Management
 
-`using` and `await using` declarations (ECMA-262 draft, ES2027, §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported, in a block or directly in a function body.
+`using` and `await using` declarations (ECMA-262 draft, ES2027, §14.3.1 [Explicit Resource Management](https://tc39.es/ecma262/#sec-let-and-const-declarations)) are supported in a block, directly in a function body, at a module's top level, and in the head of a `for`, `for...of` or `for await...of` statement. Resources are disposed in reverse order however control leaves their scope: normally, by `break`, `continue` or `return`, with a throw, or through a generator's `return()` at a `yield` inside it. A module disposes its top-level resources once its body completes, before its evaluation settles.
 
 - `using` — Synchronous disposal. When the enclosing block exits, `[Symbol.dispose]()` is called on the bound value.
 - `await using` — Asynchronous disposal. When the enclosing block exits, `[Symbol.asyncDispose]()` is called and its result awaited, or `[Symbol.dispose]()` is called when there is no `[Symbol.asyncDispose]`, with the job timing of DisposeResources (§7.5.4): a call that throws is not awaited, and null or undefined resources await once in all.
