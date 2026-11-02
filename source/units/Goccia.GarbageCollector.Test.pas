@@ -93,7 +93,7 @@ type
     procedure TestReservationCollectsAndRetries;
     procedure TestReservationCollectsBeyondPressureReserve;
     procedure TestReservationRefusesWhatCollectionCannotFit;
-    procedure TestRepeatedRefusalCollectsOnlyOnce;
+    procedure TestRepeatedRefusalBacksCollectionsOff;
     procedure TestRetryAfterDropCollectsAgain;
     procedure TestTryCollectGrantsAlreadyFittingRequestWithoutWalking;
     procedure TestDataDescriptorPushRootsProtectsValue;
@@ -223,9 +223,9 @@ begin
   Test('External reservation still refuses what a collection cannot fit',
     TestReservationRefusesWhatCollectionCannotFit);
   Test('Repeated refusal of the same size backs its collections off',
-    TestRepeatedRefusalCollectsOnlyOnce);
-    Test('A retry after the program drops what it held collects again and fits',
-      TestRetryAfterDropCollectsAgain);
+    TestRepeatedRefusalBacksCollectionsOff);
+  Test('A retry after the program drops what it held collects again and fits',
+    TestRetryAfterDropCollectsAgain);
   Test('An already-fitting request is granted without walking the heap',
     TestTryCollectGrantsAlreadyFittingRequestWithoutWalking);
   Test('Data descriptor PushRoots keeps its value alive across a collection',
@@ -1444,7 +1444,7 @@ begin
   end;
 end;
 
-procedure TTestGarbageCollector.TestRepeatedRefusalCollectsOnlyOnce;
+procedure TTestGarbageCollector.TestRepeatedRefusalBacksCollectionsOff;
 const
   BUDGET_HEADROOM_BYTES = 8 * 1024 * 1024;
   BALLAST_BYTES = 4 * 1024 * 1024;
@@ -1563,7 +1563,10 @@ begin
     { The program lets go of everything. No counter moved, so the floor still
       rules the request out; the retry collects regardless and fits. }
     for I := 0 to High(Held) do
+    begin
       GC.RemoveRootObject(Held[I]);
+      Held[I] := nil;
+    end;
     Reserved := GC.TryReserveExternalBytes(REQUEST_BYTES);
     Expect<Boolean>(Reserved).ToBe(True);
     Expect<Integer>(GC.TotalCollections).ToBe(CollectionsAfterRefusal + 1);

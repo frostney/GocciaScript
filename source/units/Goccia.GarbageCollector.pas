@@ -299,7 +299,7 @@ type
     // refused size would be refused from the record for as long as nothing
     // collected. FForcedCollectRefusals counts the requests the record has
     // answered since the last forced collection, and once it reaches
-    // FForcedCollectRetryAfter the next request forces a collection after all.
+    // FForcedCollectRetryAfter that request forces a collection after all.
     // A retry that collection makes room for starts over at 1, so the first
     // retry after a drop is always collected for; each retry collection that
     // makes no room doubles the interval (up to FORCED_COLLECT_MAX_RETRY_AFTER),
