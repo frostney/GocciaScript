@@ -39,8 +39,10 @@ type
     FSnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     FSnapshotFormatter: IGocciaSnapshotFormatter;
     FInjectGlobals: Boolean;
+    FSuppressOutput: Boolean;
     FTestModule: TGocciaRuntimeNamespaceModuleRegistration;
     procedure SetOnExpect(const AObserver: TGocciaExpectObserver);
+    procedure SetSuppressOutput(const AValue: Boolean);
     procedure EnsureTestAssertions;
     function MaterializeTestModule: TGocciaValue;
   public
@@ -55,9 +57,17 @@ type
     procedure Detach; override;
     // Stored even when the module-only assertions have not materialized yet.
     property OnExpect: TGocciaExpectObserver read FOnExpect write SetOnExpect;
-    { Hosts that own stdout — the JSON envelope modes of GocciaTestRunner —
-      need to silence the reporter's per-test markers. Exposed the same way
-      the console extension exposes its builtin. }
+    { Mutes the reporter's per-test markers and results block. A host that
+      owns stdout (the JSON envelope modes of GocciaRunner and
+      GocciaTestRunner) sets it before the script runs. Stored like OnExpect,
+      so it also holds for the module-only half, whose assertions object does
+      not exist until the first `goccia:test` import resolves. The
+      `runTests()` result object still carries the counts and messages. }
+    property SuppressOutput: Boolean read FSuppressOutput
+      write SetSuppressOutput;
+    { The assertions object, or nil until it is built (immediately for the
+      globals half, on the first `goccia:test` import for the module-only
+      half). Prefer SuppressOutput for muting. }
     property BuiltinTestAssertions: TGocciaTestAssertions
       read FBuiltinTestAssertions;
   end;
@@ -111,7 +121,16 @@ begin
       Runtime.Engine.GlobalScope, Runtime.Engine.ThrowError,
       FSnapshotHost, FSnapshotUpdateMode, FSnapshotFormatter, FInjectGlobals);
     FBuiltinTestAssertions.OnExpect := FOnExpect;
+    FBuiltinTestAssertions.SuppressOutput := FSuppressOutput;
   end;
+end;
+
+procedure TGocciaTestingLibraryRuntimeExtension.SetSuppressOutput(
+  const AValue: Boolean);
+begin
+  FSuppressOutput := AValue;
+  if Assigned(FBuiltinTestAssertions) then
+    FBuiltinTestAssertions.SuppressOutput := AValue;
 end;
 
 procedure TGocciaTestingLibraryRuntimeExtension.SetOnExpect(
