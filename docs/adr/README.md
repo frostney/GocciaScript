@@ -182,3 +182,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0170 — fetch reuses the connection within an origin and shares one OpenSSL context](0170-fetch-reuses-the-connection-within-an-origin.md)
 - [0171 — The wait that drives one promise to settlement runs extensions' host work](0171-the-promise-wait-runs-extension-host-work.md)
 - [0172 — goccia:ast reports erased type syntax as nodes, which the parser records only when the expression view asks](0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md)
+- [0173 — A request the floor refused is collected for again, with a backoff](0173-a-refused-request-is-collected-for-again-after-a-backoff.md)
+- [0174 — A host stops a run from another thread through an abort handle that both limit polls observe](0174-a-host-stops-a-run-from-another-thread-through-an-abort-handle.md)

@@ -34,6 +34,8 @@ procedure CompileThrowStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaThrowStatement);
 procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
+procedure EmitClearDeadRegisters(const ACtx: TGocciaCompilationContext;
+  const ARegionPeak: Integer);
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 procedure CompileForInStatement(const ACtx: TGocciaCompilationContext;
@@ -3114,6 +3116,25 @@ begin
   ACtx.Scope.FreeRegister;
 end;
 
+// Control that leaves a region of statements (a loop that has finished, a try
+// block that an exception unwound) leaves the registers the region used above
+// the live ones holding whatever its last statements put in them: the
+// receiver of a call, an argument, an intermediate value. Nothing reads them
+// again before the code that follows writes them, but the VM marks the
+// frame's whole register window, so a long-lived frame (a suspended async
+// function, a script's top level) would keep such an object reachable after
+// the program has dropped its last reference to it. One OP_LOAD_UNDEFINED per
+// register, from the first free one to the region's peak (BeginRegisterRegion,
+// EndRegisterRegion), clears them; it runs once per exit, not per iteration.
+procedure EmitClearDeadRegisters(const ACtx: TGocciaCompilationContext;
+  const ARegionPeak: Integer);
+var
+  Slot: Integer;
+begin
+  for Slot := ACtx.Scope.NextSlot to ARegionPeak - 1 do
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
+end;
+
 procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 var
@@ -3130,12 +3151,14 @@ var
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
   Entry: TPendingFinallyEntry;
+  OuterRegionPeak, TryRegionPeak: Integer;
 begin
   HasCatch := Assigned(AStmt.CatchBlock);
   HasFinally := Assigned(AStmt.FinallyBlock);
   HasCatchInitHandler := Assigned(AStmt.CatchBindingPattern) and HasFinally;
 
   CatchReg := ACtx.Scope.AllocateRegister;
+  OuterRegionPeak := ACtx.Scope.BeginRegisterRegion;
   CatchBodyErrorReg := 0;
   CatchInitErrorReg := 0;
   CatchInitHandlerJump := -1;
@@ -3173,6 +3196,7 @@ begin
   end;
 
   CompileBlockStatement(ACtx, AStmt.Block);
+  TryRegionPeak := ACtx.Scope.EndRegisterRegion(OuterRegionPeak);
 
   EmitInstruction(ACtx, EncodeABC(OP_POP_HANDLER, 0, 0, 0));
   if HasCatch and HasFinally then
@@ -3190,6 +3214,9 @@ begin
 
   if HasCatch then
   begin
+    // The clear is the catch clause's, not the try block's last statement's.
+    EmitLineMapping(ACtx, AStmt.CatchBlock.Line, AStmt.CatchBlock.Column);
+    EmitClearDeadRegisters(ACtx, TryRegionPeak);
     if HasFinally then
     begin
       GPendingFinally.Add(Entry);
@@ -3278,7 +3305,6 @@ begin
       CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchBodyErrorReg, 0, 0));
       PatchJumpTarget(ACtx, CatchBodySuccessJump);
-      ACtx.Scope.FreeRegister;
     end;
 
     if PatternMismatchJump >= 0 then
@@ -3294,7 +3320,6 @@ begin
         CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchReg, 0, 0));
       PatchJumpTarget(ACtx, CatchSuccessJump);
-      ACtx.Scope.FreeRegister;
     end;
 
     if HasCatchInitHandler then
@@ -3307,7 +3332,6 @@ begin
       CompileFinallyBlock(ACtx, AStmt.FinallyBlock);
       EmitInstruction(ACtx, EncodeABC(OP_THROW, CatchInitErrorReg, 0, 0));
       PatchJumpTarget(ACtx, CatchInitSuccessJump);
-      ACtx.Scope.FreeRegister;
     end;
   end
   else
@@ -3327,6 +3351,20 @@ begin
   end;
 
   PatchJumpTarget(ACtx, EndJump);
+  // The registers the handlers use stay allocated until here, in the order
+  // they were taken: freeing each as its handler's code ended left the
+  // counter below a register a later handler still throws from, so code the
+  // finally block compiles (a loop's dead-register clear, a temporary) could
+  // overwrite the exception it was about to rethrow.
+  if HasCatch then
+  begin
+    if HasCatchInitHandler then
+      ACtx.Scope.FreeRegister;
+    if Assigned(AStmt.CatchPattern) then
+      ACtx.Scope.FreeRegister;
+    if HasFinally then
+      ACtx.Scope.FreeRegister;
+  end;
   ACtx.Scope.FreeRegister;
 end;
 
@@ -5905,6 +5943,7 @@ var
   CreatedControls: array of TLabelControlState;
   State: TLabelControlState;
   StartIndex, I: Integer;
+  OuterRegionPeak, RegionPeak: Integer;
 begin
   if not Assigned(GLabelControls) then
     GLabelControls := TList<TLabelControlState>.Create;
@@ -5926,9 +5965,18 @@ begin
   end;
 
   try
+    OuterRegionPeak := ACtx.Scope.BeginRegisterRegion;
     ACtx.CompileStatement(AStmt);
     for I := StartIndex to GLabelControls.Count - 1 do
       PatchJumpList(ACtx, GLabelControls[I].BreakJumps);
+    RegionPeak := ACtx.Scope.EndRegisterRegion(OuterRegionPeak);
+    // A `break label` of this loop lands here, past the clear the loop makes
+    // for its own exit, so a labeled loop clears once more after its breaks.
+    if StatementIsIteration(AStmt) and (RegionPeak > ACtx.Scope.NextSlot) then
+    begin
+      EmitLineMapping(ACtx, AStmt.Line, AStmt.Column);
+      EmitClearDeadRegisters(ACtx, RegionPeak);
+    end;
     Result := False;
   finally
     for I := GLabelControls.Count - 1 downto StartIndex do

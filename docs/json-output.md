@@ -155,7 +155,7 @@ For parallel runs, the top-level `memory.gc` block combines one measurement per 
 | `stderr` | `string` | Unformatted stderr-oriented console output; present even when empty |
 | `output` | `string[]` | Formatted console output split into lines: one element per line, empty lines included |
 | `error` | `object \| null` | First failed file's error details, or `null` when the run succeeds |
-| `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, etc.) |
+| `error.type` | `string` | Error type name (`"TypeError"`, `"SyntaxError"`, `"TimeoutError"`, `"MemoryLimitError"`, `"RunAbortedError"`, etc.) |
 | `error.message` | `string` | Error message text |
 | `error.line` | `number \| null` | Source line number (1-based), or `null` if unavailable. For a parse error, where parsing failed. For a thrown error, where the engine recorded the error was created, the location the human-readable `-->` line shows. A thrown value that is not an engine-created error has no location |
 | `error.column` | `number \| null` | Source column number (1-based), or `null` if unavailable, as for `error.line` |
