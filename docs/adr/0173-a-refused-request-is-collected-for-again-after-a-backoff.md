@@ -62,8 +62,12 @@ every other reservation as it was.
 - Only the first retry after the initial refusal is guaranteed to collect. If that
   collection makes no room, the interval becomes 2, and a retry that follows a
   drop but not a counter change can be refused without a collection; `Goccia.gc()`
-  remains the fallback. A retry collection that frees some of what the program
-  held counts as progress and keeps the interval at 1.
+  remains the fallback. A retry collection that sweeps some of what the
+  program held but still cannot fit the request doubles the interval like any
+  other retry that makes no room: the sweep settles its bytes in bulk and does
+  not count as a counter drop. Only a release below the floor while the
+  collection runs (a reservation given back, an object unregistered outside the
+  sweep) keeps the interval at 1.
 - A refused retry loop pays more than the O(1) it paid before. On a heap of
   20,000 small objects and about 250 MB of buffers under `--max-memory=256MiB`, one
   forced collection takes about 14 ms, and 200,000 refused attempts took 4.0 s
