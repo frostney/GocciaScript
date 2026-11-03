@@ -10861,6 +10861,17 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "const urls = { sourceUrls: ['https://reviews.example/brands/other?brand=Orchardbeam&page=2'] };",
       "const rows = database.query('reviewRuns').withIndex('by_workspace', (q) => q.eq('workspaceId', id)).collect();",
       "const ok = ready && (audit.status === 'complete' || audit.categories.length > 0 || audit.pending);",
+      "const hidden = pages.filter((page) => page.schema.present && !(page.schema.hasAggregateRating || page.schema.hasReview));",
+      "const links = database",
+      "  .query('runs')",
+      "  .withIndex('by_definition', (q) =>",
+      "    q.eq('definitionId', fields.definitionId).eq('definitionRevision', fields.definitionRevision),",
+      "  );",
+      "const boundaries = conditional.flatMap(([boundary, applies]) => (applies ? [boundary] : []));",
+      "function normalizeIdForTable<",
+      "  TableName extends 'decisionMemories' | 'metricSnapshots' | 'pages' | 'threads' | 'signals',",
+      ">(id: string) {}",
+      "export async function getAuthenticatedClient(): Promise<AuthenticatedHttpClient | null> {}",
       "",
     ].join("\n");
     const layoutExpected = [
@@ -10890,9 +10901,33 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "const ok =",
       "  ready &&",
       "  (audit.status === 'complete' || audit.categories.length > 0 || audit.pending);",
+      "const hidden = pages.filter(",
+      "  (page) =>",
+      "    page.schema.present &&",
+      "    !(page.schema.hasAggregateRating || page.schema.hasReview),",
+      ");",
+      "const links = database",
+      "  .query('runs')",
+      "  .withIndex('by_definition', (q) =>",
+      "    q",
+      "      .eq('definitionId', fields.definitionId)",
+      "      .eq('definitionRevision', fields.definitionRevision),",
+      "  );",
+      "const boundaries = conditional.flatMap(([boundary, applies]) =>",
+      "  applies ? [boundary] : [],",
+      ");",
+      "function normalizeIdForTable<",
+      "  TableName extends",
+      "    | 'decisionMemories'",
+      "    | 'metricSnapshots'",
+      "    | 'pages'",
+      "    | 'threads'",
+      "    | 'signals',",
+      ">(id: string) {}",
+      "export async function getAuthenticatedClient(): Promise<AuthenticatedHttpClient | null> {}",
       "",
     ].join("\n");
-    writeFileSync(join(tree, "layout.js"), layoutOriginal);
+    writeFileSync(join(tree, "layout.ts"), layoutOriginal);
 
     const readOnly = Bun.spawnSync(
       [RUNNER, example, "--experimental-ast", "--compat-function", "--copy", `${tree}=/src`],
@@ -10924,15 +10959,19 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/types.ts:48:10  a multi-line list should end with a trailing comma",
       "/src/types.ts:60:3  a multi-line list should end with a trailing comma",
       "/src/types.ts:64:3  a multi-line list should end with a trailing comma",
-      "/src/layout.js:1:1  a line over 80 columns should be broken the way Biome breaks it",
-      "/src/layout.js:2:1  a line over 80 columns should be broken the way Biome breaks it",
-      "/src/layout.js:3:1  a line over 80 columns should be broken the way Biome breaks it",
-      "/src/layout.js:4:1  a line over 80 columns should be broken the way Biome breaks it",
-      "/src/layout.js:5:1  a line over 80 columns should be broken the way Biome breaks it",
-      "/src/layout.js:6:1  a line over 80 columns should be broken the way Biome breaks it",
-      "/src/layout.js:7:1  a line over 80 columns should be broken the way Biome breaks it",
-      "/src/layout.js:8:1  a line over 80 columns should be broken the way Biome breaks it",
-      "30 finding(s) in 4 file(s), 4 rewritten",
+      "/src/layout.ts:1:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:2:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:3:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:4:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:5:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:6:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:7:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:8:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:9:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:13:5  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:15:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:17:3  a line over 80 columns should be broken the way Biome breaks it",
+      "34 finding(s) in 4 file(s), 4 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
@@ -10954,7 +10993,7 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     if (fixed !== expected)
       throw new Error(`expression-style under --copy-rw should write the fixed file, got:\n${fixed}`);
     const typesFixed = normalizeLineEndings(readFileSync(join(tree, "types.ts"), "utf-8"));
-    const layoutFixed = normalizeLineEndings(readFileSync(join(tree, "layout.js"), "utf-8"));
+    const layoutFixed = normalizeLineEndings(readFileSync(join(tree, "layout.ts"), "utf-8"));
     if (layoutFixed !== layoutExpected)
       throw new Error(`expression-style under --copy-rw should lay out long lines as Biome does, got:\n${layoutFixed}`);
     if (typesFixed !== typesExpected)

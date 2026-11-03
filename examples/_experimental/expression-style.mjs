@@ -17,10 +17,11 @@
 //      lay it out: the outermost expression or statement on it is broken at
 //      its outermost group that does not fit — the arguments of a call, the
 //      body of an arrow, a logical chain, a member chain, an array, object,
-//      type argument list or type literal — and inner groups only where they
-//      still do not fit. A node holding a comment, one inside a template
-//      literal's `${}`, and the head of a call or member access that goes on
-//      past its line are left alone.
+//      type argument list, type literal or union — and inner groups only
+//      where they still do not fit. A node holding a comment, one inside a template
+//      literal's `${}`, the head of a call or member access that goes on past
+//      its line, a declaration's type annotation and a function's return type
+//      are left alone, as Biome leaves them.
 //
 // Each rule dispatches on the tree: a node's `kind`, its flags (`rest` on a
 // parameter), and its range. What the tree does not hold — the text of a
@@ -711,7 +712,15 @@ const makeLayout = (source) => {
     return false;
   };
 
-  const bodyOf = (arrow) => arrow.children[arrow.children.length - 1];
+  // An arrow's body; a conditional one is read through the parentheses Biome
+  // prints around it on one line, which the layout adds back itself.
+  const bodyOf = (arrow) => {
+    const body = arrow.children[arrow.children.length - 1];
+
+    return body.kind === "ParenthesizedExpression" && body.children[0]?.kind === "ConditionalExpression"
+      ? body.children[0]
+      : body;
+  };
 
   const couldExpandArg = (node, arrowChain = false) =>
     (node.kind === "ObjectExpression" && node.children.length > 0) ||
@@ -1058,7 +1067,8 @@ const makeLayout = (source) => {
 
   const printArrow = (node, options) => {
     const body = bodyOf(node);
-    const head = source.slice(node.start, body.start).trimEnd();
+    const written = node.children[node.children.length - 1];
+    const head = source.slice(node.start, written.start).trimEnd();
 
     if (
       ["BlockStatement", "ObjectExpression", "ArrayExpression", "ArrowFunctionExpression", "JSXElement"].includes(body.kind)
@@ -1256,6 +1266,7 @@ const makeLayout = (source) => {
       case "ConditionalExpression":
         return printConditional(node);
       case "ObjectExpression":
+      case "ObjectPattern":
         return printObject(node);
       case "ArrayExpression":
         return printArray(node);
@@ -1274,7 +1285,12 @@ const makeLayout = (source) => {
           return raw(node);
         }
 
-        return [print(object), group(indent([softline, between(object.end, node.end)]))];
+        // `a.b` alone stays together; a longer access may break before `.b`.
+        const shouldInline =
+          object.kind === "Identifier" && parents.get(node)?.kind !== "MemberExpression";
+        const lookup = between(object.end, node.end);
+
+        return [print(object), shouldInline ? lookup : group(indent([softline, lookup]))];
       }
       case "TSNonNullExpression":
         return [print(node.children[0]), "!"];
@@ -1288,6 +1304,30 @@ const makeLayout = (source) => {
 
         return typeArguments
           ? [source.slice(node.start, typeArguments.start), print(typeArguments), source.slice(typeArguments.end, node.end)]
+          : raw(node);
+      }
+      case "UnaryExpression": {
+        const [argument] = node.children;
+
+        return argument ? [source.slice(node.start, argument.start), print(argument)] : raw(node);
+      }
+      case "TSUnionType": {
+        const parent = parents.get(node);
+        // A union is indented under what holds it, except inside type
+        // arguments, where the argument list already indents it.
+        const shouldIndent = !["TSTypeParameterInstantiation", "TSTypeReference", "TSTupleType"].includes(parent?.kind);
+        const code = [
+          ifBreak([shouldIndent ? line : "", "| "]),
+          ...join([line, "| "], node.children.map((child) => print(child))),
+        ];
+
+        return group(shouldIndent ? indent(code) : code);
+      }
+      case "TSTypeParameter": {
+        const constraint = node.children.find((child) => child.start > node.start);
+
+        return constraint
+          ? [source.slice(node.start, constraint.start), print(constraint), source.slice(constraint.end, node.end)]
           : raw(node);
       }
       case "TSTypeParameterInstantiation":
@@ -1315,6 +1355,12 @@ const makeLayout = (source) => {
         }
 
         const after = node.children[node.children.length - 1];
+
+        // A destructured parameter typed by a type literal breaks its pattern
+        // and keeps the type on one line, as Biome does.
+        if (binding?.kind === "ObjectPattern" && annotation.children[0]?.kind === "TSTypeLiteral") {
+          return [head, source.slice(binding.end, node.end)];
+        }
 
         return [
           head,
@@ -1387,7 +1433,7 @@ const makeLayout = (source) => {
     return print(node);
   };
 
-  return { parents, printRoot };
+  return { parents, printRoot, printArguments, callArgs };
 };
 
 const layoutEdits = (source, comments, lineStarts, nodes, root) => {
@@ -1434,6 +1480,8 @@ const layoutEdits = (source, comments, lineStarts, nodes, root) => {
     "TSTypeReference",
     "TSTypeAnnotation",
     "TSAsExpression",
+    "TSTypeParameter",
+    "UnaryExpression",
   ];
 
   // The outermost node that starts and ends on each long line.
@@ -1462,12 +1510,39 @@ const layoutEdits = (source, comments, lineStarts, nodes, root) => {
 
     return (
       parent !== undefined &&
-      [...CALL_LIKE, "MemberExpression", "TaggedTemplateExpression", "AssignmentExpression"].includes(parent.kind) &&
-      parent.children[0] === node
+      (([...CALL_LIKE, "MemberExpression", "TaggedTemplateExpression", "AssignmentExpression"].includes(parent.kind) &&
+        parent.children[0] === node) ||
+        // A declaration's left side is never broken, nor a function's return
+        // type on the line of its head.
+        (node.kind === "TSTypeAnnotation" &&
+          ["VariableDeclaration", "FunctionDeclaration", "ExportFunctionDeclaration", "FunctionExpression", "ArrowFunctionExpression", "MethodDefinition"].includes(parent.kind)))
     );
   };
 
-  return outermost
+  // A call that spans lines, as a link of a broken member chain does, whose
+  // argument list sits on one long line: that list is laid out alone.
+  const argumentLists = nodes
+    .filter((node) => node.kind === "CallExpression" && node.loc.start.line !== node.loc.end.line)
+    .filter((node) => longLines.has(node.loc.end.line) && !inTemplate(node))
+    .map((node) => ({ node, open: layout.callArgs(node).open }))
+    .filter(({ node, open }) => lineStarts.findLastIndex((start) => start <= open) + 1 === node.loc.end.line)
+    .filter(({ node, open }) => !comments.some((comment) => comment.start >= open && comment.end <= node.end))
+    .flatMap(({ node, open }) => {
+      const lineNumber = node.loc.end.line;
+      const text = lineText(source, lineStarts, lineNumber);
+      const suffix = source.slice(node.end, lineStarts[lineNumber] - 1);
+      const column = open - lineStarts[lineNumber - 1];
+      const withSuffix = printDoc([layout.printArguments(node), suffix], indentOf(text).length, column);
+      const printed = withSuffix.slice(0, withSuffix.length - suffix.length);
+
+      return printed.includes("\n") && printed !== source.slice(open, node.end)
+        ? [{ node, rule: RULES.layout, start: open, end: node.end, text: printed }]
+        : [];
+    });
+
+  return [
+    ...argumentLists,
+    ...outermost
     .filter(
       (node) =>
         PRINTABLE_ROOTS.includes(node.kind) && !inTemplate(node) && !isHeadOfLongerExpression(node),
@@ -1494,7 +1569,8 @@ const layoutEdits = (source, comments, lineStarts, nodes, root) => {
       }
 
       return [{ node, rule: RULES.layout, start: node.start, end: node.end, text: printed }];
-    });
+    }),
+  ];
 };
 
 const indentOf = (line) => line.slice(0, line.length - line.trimStart().length);
