@@ -223,6 +223,3 @@ nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandlerstr$formal
 
 # Guest bytecode metadata accessor, retained by unoptimized builds.
 source-nonseh ../../source/units/Goccia.Bytecode.Chunk.pas ccaf7eee25d5d486900deb8e1bed36470ccccc262d714879a688a7e51e82c74f .text.n_goccia.bytecode.chunk$_$tgocciafunctiontemplate_$__$$_getexceptionhandler$crc4b9bae09
-
-# Emits resource-disposal bytecode; does not register a native exception frame.
-source-nonseh ../../source/units/Goccia.Compiler.Statements.pas a639ad3fc8042f5da345a5f6154448578f793c8e5475a22a2a62d5abc28323ee .text.n_goccia.compiler.statements_$$_emitusinghandlerdisposal$crce7935bd3
