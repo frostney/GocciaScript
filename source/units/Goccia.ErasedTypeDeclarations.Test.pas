@@ -36,6 +36,8 @@ type
     procedure TestExportTypeList;
     procedure TestExportTypeListFrom;
     procedure TestExportTypeStar;
+    procedure TestOverload;
+    procedure TestExportOverload;
     procedure TestSemicolon;
   public
     procedure SetupTests; override;
@@ -56,6 +58,10 @@ begin
   Test('export type with a list and from is erased as a re-export',
     TestExportTypeListFrom);
   Test('export type * is erased as a re-export', TestExportTypeStar);
+  Test('a function overload signature is erased as an overload',
+    TestOverload);
+  Test('an exported function overload signature is erased as an exported overload',
+    TestExportOverload);
   Test('a semicolon is an empty statement with no erased type',
     TestSemicolon);
 end;
@@ -67,6 +73,8 @@ var
 begin
   Options := TGocciaSourcePipeline.DefaultOptions;
   Options.SourceType := stModule;
+  // Overload signatures are `function` declarations.
+  Options.Compatibility := Options.Compatibility + [cfFunction];
   Lines := CreateTextLines(ASource);
   try
     Result := TGocciaSourcePipeline.Parse(Lines, 'erased.ts', Options);
@@ -141,6 +149,17 @@ end;
 procedure TErasedTypeDeclarationTests.TestExportTypeStar;
 begin
   ExpectErased('export type * as S from "./s.ts";', etkReExport);
+end;
+
+procedure TErasedTypeDeclarationTests.TestOverload;
+begin
+  ExpectErased('function pick(text: string): string;', etkOverload);
+end;
+
+procedure TErasedTypeDeclarationTests.TestExportOverload;
+begin
+  ExpectErased('export function pick(count: number): number;',
+    etkExportOverload);
 end;
 
 procedure TErasedTypeDeclarationTests.TestSemicolon;

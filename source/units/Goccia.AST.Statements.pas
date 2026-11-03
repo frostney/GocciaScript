@@ -640,7 +640,9 @@ type
     etkExportInterface,  // export interface I {}
     etkImport,           // import type ... from "...";
     etkExport,           // export type { A };
-    etkReExport          // export type { A } from "...";  export type * from "...";
+    etkReExport,         // export type { A } from "...";  export type * from "...";
+    etkOverload,         // function f(a: string): string;
+    etkExportOverload    // export function f(a: string): string;
   );
 
   TGocciaEmptyStatement = class(TGocciaStatement)

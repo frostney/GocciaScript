@@ -225,6 +225,8 @@ begin
     etkImport: Result := 'ImportDeclaration';
     etkExport: Result := 'ExportDeclaration';
     etkReExport: Result := 'ReExportDeclaration';
+    etkOverload: Result := 'OverloadDeclaration';
+    etkExportOverload: Result := 'ExportOverloadDeclaration';
   else
     Result := 'EmptyStatement';
   end;
