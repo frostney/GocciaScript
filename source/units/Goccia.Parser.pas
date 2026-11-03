@@ -11103,26 +11103,31 @@ end;
 // which is two statements.
 function TGocciaParser.IsAmbientDeclarationStart: Boolean;
 var
-  SavedCurrent: Integer;
+  Next: TGocciaToken;
+
+  function IsKeyword(const AKeyword: string): Boolean;
+  begin
+    Result := (Next.TokenType = gttIdentifier) and (Next.Lexeme = AKeyword) and
+      not Next.ContainsEscape;
+  end;
+
 begin
   if not CheckUnescapedIdentifierKeyword(KEYWORD_DECLARE) then
     Exit(False);
-  SavedCurrent := FCurrent;
-  try
-    Advance;
-    if IsAtEnd or HasLineTerminatorBeforePeek then
-      Exit(False);
-    Result := Check(gttConst) or Check(gttLet) or Check(gttVar) or
-      Check(gttFunction) or Check(gttClass) or Check(gttEnum) or
-      CheckUnescapedIdentifierKeyword(KEYWORD_MODULE) or
-      CheckUnescapedIdentifierKeyword(KEYWORD_GLOBAL) or
-      CheckUnescapedIdentifierKeyword(KEYWORD_NAMESPACE) or
-      CheckUnescapedIdentifierKeyword(KEYWORD_ABSTRACT) or
-      CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) or
-      CheckUnescapedIdentifierKeyword(KEYWORD_INTERFACE);
-  finally
-    FCurrent := SavedCurrent;
-  end;
+  // After an identifier a `/` divides, so the token after `declare` is read
+  // under the division goal: `declare / 2` and `declare /= 2` stay
+  // expressions, and the token is the one the expression parser would read.
+  EnsureToken(FCurrent + 1, glgInputElementDiv);
+  if FCurrent + 1 >= FTokens.Count then
+    Exit(False);
+  Next := FTokens[FCurrent + 1];
+  if (Next.TokenType = gttEOF) or HasLineTerminatorBetween(Peek, Next) then
+    Exit(False);
+  Result := (Next.TokenType in [gttConst, gttLet, gttVar, gttFunction,
+    gttClass, gttEnum]) or IsKeyword(KEYWORD_MODULE) or
+    IsKeyword(KEYWORD_GLOBAL) or IsKeyword(KEYWORD_NAMESPACE) or
+    IsKeyword(KEYWORD_ABSTRACT) or IsKeyword(KEYWORD_TYPE) or
+    IsKeyword(KEYWORD_INTERFACE);
 end;
 
 // Skips an ambient declaration from its `declare`. It has no run-time

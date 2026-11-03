@@ -53,3 +53,10 @@ test("declare stays an identifier when no declaration follows it", () => {
   const table = { declare: 1 };
   expect(table.declare).toBe(1);
 });
+
+test("declare followed by a division or a division assignment is an expression", () => {
+  let declare = 8;
+  expect(declare / 2).toBe(4);
+  declare /= 2;
+  expect(declare / 2 / 2).toBe(1);
+});
