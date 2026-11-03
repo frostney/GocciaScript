@@ -4,9 +4,9 @@
 
 ## Executive Summary
 
-- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`), and `MemoryLimitError` (`--max-memory`)
+- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`), `MemoryLimitError` (`--max-memory`), and `RunAbortedError` (a host's abort from another thread)
 - **`--max-memory` refuses in two ways** -- both force a collection and re-test first, and they differ in what the guest can do about the answer. A *charged* allocation (string payload, `ArrayBuffer` backing store) throws a **catchable** `RangeError`; a *gated* growth point (array element storage, object property storage) ends the run with the **uncatchable** `MemoryLimitError`. Either way, two shapes no collection could help are refused straight away without walking the heap -- a request larger than the whole budget, and a repeat of one a forced collection has already refused. The same byte count can therefore be survivable on one path and fatal on the other -- see [Garbage Collector § Gated growth points](garbage-collector.md#gated-growth-points)
-- **Engine-integrity faults** -- A fourth uncatchable class, and not an error type at all: a use-after-free, an invalid dereference, or a broken heap unwinds past every `catch` to the host, because a script cannot meaningfully continue on top of one. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md)
+- **Engine-integrity faults** -- A fifth uncatchable class, and not an error type at all: a use-after-free, an invalid dereference, or a broken heap unwinds past every `catch` to the host, because a script cannot meaningfully continue on top of one. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md)
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
 - **Runtime errors** -- Carry `name`, `message`, `stack`, and optional `cause`; catchable with `try`/`catch`/`finally`. A promise left rejected with no handler is reported as an uncaught error and fails the run
 - **Sandbox filesystem errors** -- Use real `Error` objects with Node-shaped `code`, `errno`, `path`, `syscall`, and optional `dest` metadata
@@ -16,7 +16,7 @@
 
 ## Error Types
 
-GocciaScript supports the standard ECMAScript error constructors plus the CLI-only resource-ceiling types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, and `MemoryLimitError` are CLI-only and not exposed as JavaScript constructors.
+GocciaScript supports the standard ECMAScript error constructors plus the resource-ceiling types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, and `MemoryLimitError` are CLI-only; `RunAbortedError` is raised by a Pascal host's abort handle. None of them is exposed as a JavaScript constructor.
 
 | Type | Thrown when | MDN |
 |------|-----------|-----|
@@ -30,9 +30,10 @@ GocciaScript supports the standard ECMAScript error constructors plus the CLI-on
 | [`SuppressedError`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) | Disposal error during explicit resource management (`using`/`await using`); wraps both the new and suppressed error | [SuppressedError](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SuppressedError) |
 | `TimeoutError` | Execution exceeded the `--timeout` limit (CLI only; not a JS-visible constructor) | -- |
 | `InstructionLimitError` | Execution exceeded the `--max-instructions` budget (CLI only; not a JS-visible constructor) | -- |
+| `RunAbortedError` | A host stopped the run from another thread through an abort handle (`Goccia.ExecutionAbort`, [Embedding](embedding.md#aborting-a-run-from-another-thread); a Pascal host API, so the CLI tools never raise it; not a JS-visible constructor) | -- |
 | `MemoryLimitError` | A *gated* growth point -- array element storage or object property storage -- was refused by the `--max-memory` budget after a forced collection failed to make room. Charged allocations under the same budget throw a catchable `RangeError` instead (CLI only; not a JS-visible constructor) | -- |
 
-The last three are resource ceilings rather than in-language errors. Script
+The last four are resource ceilings rather than in-language errors. Script
 `try`/`catch` cannot observe them: they unwind past
 every handler to the host, because a ceiling the guest can catch is a ceiling
 the guest can ignore in a loop. Allocation sites that charge the budget
