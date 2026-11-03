@@ -159,6 +159,10 @@ type
     FImportMetaAllowed: Boolean;
     FDetectModuleGoal: Boolean;
     FRecordTypeRanges: Boolean;
+    // The last overload signature ParseFunctionBodyExpression read, for the
+    // statement that erases it.
+    FSignatureParameters: TGocciaParameterArray;
+    FSignatureTypeRanges: TGocciaTypeRangeArray;
     FModuleSyntaxDetected: Boolean;
     FDeferredImportMetaLine: Integer;
     FDeferredImportMetaColumn: Integer;
@@ -346,7 +350,11 @@ type
       const ACalleeEnd, AOpenParen: TGocciaToken): TGocciaToken;
 
     // Parameter list parsing (shared by arrow functions, class methods, object methods)
-    function ParseParameterList: TGocciaParameterArray;
+    function ParseParameterList: TGocciaParameterArray; overload;
+    function ParseParameterList(
+      out AThisParameter: TGocciaTypeRangeArray): TGocciaParameterArray; overload;
+    procedure RecordAmbientModuleName(const AStatement: TGocciaEmptyStatement;
+      const AFirstToken: Integer);
 
     // Getter/setter expression parsing (shared by object literals and class bodies)
     function ParseGetterExpression: TGocciaGetterExpression;
@@ -5152,7 +5160,16 @@ end;
 
 function TGocciaParser.ParseParameterList: TGocciaParameterArray;
 var
+  ThisParameter: TGocciaTypeRangeArray;
+begin
+  Result := ParseParameterList(ThisParameter);
+end;
+
+function TGocciaParser.ParseParameterList(
+  out AThisParameter: TGocciaTypeRangeArray): TGocciaParameterArray;
+var
   ThisTypeRanges: TGocciaTypeRangeArray;
+  ThisStart: Integer;
   ParamCount: Integer;
   ParamName: string;
   DefaultValue: TGocciaExpression;
@@ -5166,13 +5183,26 @@ begin
 
     // A TypeScript `this` parameter, first in the list, only types `this`
     // inside the function; it is not a parameter at run time, so it is read
-    // as type syntax and dropped.
+    // as type syntax. It is kept only as a type, a Parameter part holding
+    // its annotation, for the expression view.
+    AThisParameter := nil;
     if Check(gttThis) and CheckNext(gttColon) then
     begin
+      ThisStart := Peek.Span.StartOffset;
       Advance;
       Advance;
       CollectTypeAnnotation([gttRightParen, gttComma], '', '', False, True,
         ThisTypeRanges);
+      if Length(ThisTypeRanges) > 0 then
+      begin
+        SetLength(AThisParameter, 1);
+        AThisParameter[0].Kind := apkParameter;
+        AThisParameter[0].StartOffset := ThisStart;
+        AThisParameter[0].EndOffset := Previous.Span.EndOffset;
+        AThisParameter[0].Flags := [];
+        AThisParameter[0].SubtreeEnd := 1 + Length(ThisTypeRanges);
+        AppendTypeRanges(AThisParameter, ThisTypeRanges);
+      end;
       Match(gttComma);
     end;
 
@@ -5451,11 +5481,12 @@ end;
 { With AAllowSignature, a header that ends without a body — at a ';' or, under
   ASI, a line break — is a TypeScript overload signature, and the result is
   nil. Its parameters and return type are type syntax for the implementation
-  that follows, so nothing of it is kept. }
+  that follows: they are left in FSignatureParameters and
+  FSignatureTypeRanges for the expression view, and nothing runs them. }
 function TGocciaParser.ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean; const AAllowSignature: Boolean): TGocciaExpression;
 var
   Parameters: TGocciaParameterArray;
-  ReturnType: TGocciaTypeRangeArray;
+  ThisParameter, ReturnType: TGocciaTypeRangeArray;
   Body: TGocciaASTNode;
   FunctionIsStrict: Boolean;
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
@@ -5475,7 +5506,7 @@ begin
   FInGeneratorFunction := Ord(AIsGenerator);
   OuterDirectEvalUsage := EnterDirectEvalScope;
   try
-    Parameters := ParseParameterList;
+    Parameters := ParseParameterList(ThisParameter);
     Consume(gttRightParen, 'Expected ")" after parameters',
       SSuggestCloseParenParameterList);
     ValidateParameterEarlyErrors(Parameters, ALine, AColumn, False,
@@ -5498,6 +5529,9 @@ begin
         not Check(gttLeftBrace))) then
     begin
       Match(gttSemicolon);
+      FSignatureParameters := Parameters;
+      FSignatureTypeRanges := ThisParameter;
+      AppendTypeRanges(FSignatureTypeRanges, ReturnType);
       Exit(nil);
     end;
 
@@ -5512,6 +5546,7 @@ begin
       ValidateParameterEarlyErrors(Parameters, ALine, AColumn,
         FunctionIsStrict, AIsAsync, AIsGenerator, FunctionIsStrict);
       Result := TGocciaFunctionExpression.Create(Parameters, Body, SourceSpanAtPosition(ALine, AColumn));
+      Result.AddTypeRanges(ThisParameter);
       Result.AddTypeRanges(ReturnType);
       TGocciaFunctionExpression(Result).IsAsync := AIsAsync;
       TGocciaFunctionExpression(Result).IsGenerator := AIsGenerator;
@@ -5952,6 +5987,7 @@ end;
 
 function TGocciaParser.UnguardedStatement: TGocciaStatement;
 var
+  ErasedFirstToken: Integer;
   Line, Column: Integer;
   TypeStart: Integer;
   DecoratorStart: TGocciaToken;
@@ -6067,9 +6103,11 @@ begin
   begin
     Line := Peek.Line;
     Column := Peek.Column;
+    ErasedFirstToken := FCurrent;
     SkipAmbientDeclaration;
     Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
       etkAmbient);
+    RecordAmbientModuleName(TGocciaEmptyStatement(Result), ErasedFirstToken);
   end
   else if IsLexicalDeclarationStart then
   begin
@@ -7845,6 +7883,9 @@ begin
   begin
     Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
       etkOverload);
+    AppendTypeRanges(TypeParameters, FSignatureTypeRanges);
+    TGocciaEmptyStatement(Result).SetSignature(FSignatureParameters,
+      TypeParameters);
     Exit;
   end;
   FunctionExpr.AddTypeRanges(TypeParameters);
@@ -7993,7 +8034,7 @@ var
   Name: string;
   Line, Column: Integer;
   MethodGenericParams, MethodReturnType: string;
-  MethodTypeRanges, ReturnTypeRanges: TGocciaTypeRangeArray;
+  MethodTypeRanges, ReturnTypeRanges, ThisParameter: TGocciaTypeRangeArray;
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
@@ -8016,7 +8057,8 @@ begin
   FInGeneratorFunction := Ord(AIsGenerator);
   OuterDirectEvalUsage := EnterDirectEvalScope;
   try
-    Parameters := ParseParameterList;
+    Parameters := ParseParameterList(ThisParameter);
+    AppendTypeRanges(MethodTypeRanges, ThisParameter);
     Consume(gttRightParen, 'Expected ")" after parameters',
       SSuggestCloseParenParameterList);
     ValidateParameterEarlyErrors(Parameters, Line, Column, True,
@@ -8596,6 +8638,7 @@ end;
 
 function TGocciaParser.ExportDeclaration: TGocciaStatement;
 var
+  ErasedFirstToken: Integer;
   ExportsTable: TStringStringMap;
   LocalName, ExportedName, ModulePath, NamespaceName, AttributeType: string;
   Line, Column: Integer;
@@ -8743,9 +8786,11 @@ begin
 
   if IsAmbientDeclarationStart then
   begin
+    ErasedFirstToken := FCurrent;
     SkipAmbientDeclaration;
     Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
       etkExportAmbient);
+    RecordAmbientModuleName(TGocciaEmptyStatement(Result), ErasedFirstToken);
     Exit;
   end;
 
@@ -11234,6 +11279,29 @@ end;
 // follows it on the same line. Anywhere else it is an identifier: `declare(x)`,
 // `declare = 1`, and `declare` with `const x = 1` on the next line under ASI,
 // which is two statements.
+{ The name of `declare module "m"`, from its consumed tokens, as the module
+  path an import reports. A module named by an identifier, and every other
+  ambient declaration, records nothing. }
+procedure TGocciaParser.RecordAmbientModuleName(
+  const AStatement: TGocciaEmptyStatement; const AFirstToken: Integer);
+var
+  Parts: TGocciaASTPartRangeArray;
+  Keyword: TGocciaToken;
+begin
+  if AFirstToken + 2 >= FCurrent then
+    Exit;
+  Keyword := FTokens[AFirstToken + 1];
+  if (Keyword.TokenType <> gttIdentifier) or (Keyword.Lexeme <> KEYWORD_MODULE) or
+     Keyword.ContainsEscape or
+     (FTokens[AFirstToken + 2].TokenType <> gttString) then
+    Exit;
+  Parts := nil;
+  AppendPartRange(Parts, apkModuleSpecifier,
+    FTokens[AFirstToken + 2].Span.StartOffset,
+    FTokens[AFirstToken + 2].Span.EndOffset, []);
+  AStatement.SetModuleParts(Parts);
+end;
+
 function TGocciaParser.IsAmbientDeclarationStart: Boolean;
 var
   Next: TGocciaToken;
@@ -11345,8 +11413,13 @@ function TGocciaParser.ExportedOverloadOr(const AStatement: TGocciaStatement;
 begin
   if (AStatement is TGocciaEmptyStatement) and
      (TGocciaEmptyStatement(AStatement).ErasedTypeKind = etkOverload) then
+  begin
     Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(ALine, AColumn),
-      etkExportOverload)
+      etkExportOverload);
+    TGocciaEmptyStatement(Result).SetSignature(
+      TGocciaEmptyStatement(AStatement).SignatureParameters,
+      TGocciaEmptyStatement(AStatement).SignatureTypeRanges);
+  end
   else
     Result := AStatement;
 end;

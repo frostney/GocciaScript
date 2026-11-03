@@ -193,7 +193,9 @@ type
 
   { Which of a node's types VisitTypeRanges reports. A function's or a
     class's type parameters come before its parameters or heritage in the
-    source, and the rest of its types after them. }
+    source, and the rest of its types after them. A function's TypeScript
+    `this` parameter is recorded as a type, a Parameter part, and comes
+    with its type parameters, after them. }
   TGocciaTypeRangeFilter = (trfAll, trfTypeParameters, trfAfterTypeParameters);
 
   { Receives a node's children from TGocciaASTNode.ForEachChild. }
@@ -430,19 +432,47 @@ procedure VisitTypeRanges(const AVisitor: TGocciaASTChildVisitor;
     AVisitor.LeavePart;
   end;
 
-var
-  I: Integer;
-  IsTypeParameters: Boolean;
-begin
-  I := 0;
-  while I < Length(ARanges) do
+type
+  TSelection = (selAll, selTypeParameters, selThisParameter, selRest);
+
+  // Reports each top-level range ASelection takes, with what it holds.
+  procedure VisitSelected(const ASelection: TSelection);
+  var
+    I: Integer;
+    Taken: Boolean;
   begin
-    IsTypeParameters := ARanges[I].Kind = apkTypeParameterDeclaration;
-    if (AFilter = trfAll) or
-       (IsTypeParameters = (AFilter = trfTypeParameters)) then
-      VisitFrom(I)
-    else
-      I := ARanges[I].SubtreeEnd;
+    I := 0;
+    while I < Length(ARanges) do
+    begin
+      case ASelection of
+        selTypeParameters:
+          Taken := ARanges[I].Kind = apkTypeParameterDeclaration;
+        selThisParameter:
+          Taken := ARanges[I].Kind = apkParameter;
+        selRest:
+          Taken := not (ARanges[I].Kind in [apkTypeParameterDeclaration,
+            apkParameter]);
+      else
+        Taken := True;
+      end;
+      if Taken then
+        VisitFrom(I)
+      else
+        I := ARanges[I].SubtreeEnd;
+    end;
+  end;
+
+begin
+  case AFilter of
+    trfAll:
+      VisitSelected(selAll);
+    trfTypeParameters:
+      begin
+        VisitSelected(selTypeParameters);
+        VisitSelected(selThisParameter);
+      end;
+    trfAfterTypeParameters:
+      VisitSelected(selRest);
   end;
 end;
 
