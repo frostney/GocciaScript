@@ -696,7 +696,7 @@ describe("ast.parse with expressions beside type-level declarations and tokens",
   ];
   const source = lines.join("\n") + "\n";
 
-  test("the statements keep the kinds and typeOnly the statement view gives them; only the type-only module forms gain children", () => {
+  test("the statements keep the kinds and typeOnly the statement view gives them, and gain their children", () => {
     const statements = parseExpressions(source, { fileName: "types.ts" }).root
       .children;
 
@@ -707,10 +707,10 @@ describe("ast.parse with expressions beside type-level declarations and tokens",
       ["ImportDeclaration", false, 3],
       ["ExportDeclaration", true, 1],
       ["ReExportDeclaration", true, 1],
-      ["ExportTypeAliasDeclaration", true, 0],
-      ["ExportInterfaceDeclaration", true, 0],
-      ["TypeAliasDeclaration", true, 0],
-      ["InterfaceDeclaration", true, 0],
+      ["ExportTypeAliasDeclaration", true, 1],
+      ["ExportInterfaceDeclaration", true, 1],
+      ["TypeAliasDeclaration", true, 1],
+      ["InterfaceDeclaration", true, 1],
       ["VariableDeclaration", undefined, 1],
     ]);
     statements.slice(0, 8).forEach((node, index) => {
@@ -1050,17 +1050,19 @@ describe("ast.parse with expressions: type-only module statements", () => {
     }
   });
 
-  test("type aliases and interfaces still have no children", () => {
+  test("type aliases and interfaces report their type or body, not specifiers", () => {
     const result = parseExpressions(
       'export type T = string | number;\nexport interface I { x: number }\ntype U = { a: 1 };\ninterface J { y: string }\n',
       { fileName: "t.ts" },
     );
 
-    expect(result.root.children.map((node) => [node.kind, node.children.length])).toEqual([
-      ["ExportTypeAliasDeclaration", 0],
-      ["ExportInterfaceDeclaration", 0],
-      ["TypeAliasDeclaration", 0],
-      ["InterfaceDeclaration", 0],
+    expect(
+      result.root.children.map((node) => [node.kind, ...node.children.map((child) => child.kind)]),
+    ).toEqual([
+      ["ExportTypeAliasDeclaration", "TSUnionType"],
+      ["ExportInterfaceDeclaration", "TSInterfaceBody"],
+      ["TypeAliasDeclaration", "TSTypeLiteral"],
+      ["InterfaceDeclaration", "TSInterfaceBody"],
     ]);
   });
 

@@ -26,7 +26,11 @@ unit Goccia.Builtins.AST;
   [ADR 0161](../../docs/adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
   The module forms are the exception to ADR 0161's "no children": they report
   their specifiers and module path, see
-  [ADR 0168](../../docs/adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md). }
+  [ADR 0168](../../docs/adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md).
+  With `expressions: true` the parser also records erased type syntax, and
+  every type is reported as nodes beneath what it annotates, type
+  declarations included; see
+  [ADR 0172](../../docs/adr/0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md). }
 
 interface
 
@@ -86,6 +90,23 @@ const
     'TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression');
   KIND_PROPERTY = 'Property';
   KIND_PARAMETER = 'Parameter';
+  { Erased type syntax, by the names typescript-estree gives it (ADR 0172). }
+  TYPE_PART_KINDS: array[apkTypeAnnotation..apkClassImplements] of string = (
+    'TSTypeAnnotation', 'TSTypeParameterDeclaration', 'TSTypeParameter',
+    'TSTypeParameterInstantiation', 'TSTypeReference', 'TSUnionType',
+    'TSIntersectionType', 'TSArrayType', 'TSIndexedAccessType', 'TSTupleType',
+    'TSNamedTupleMember', 'TSOptionalType', 'TSRestType', 'TSTypeLiteral',
+    'TSPropertySignature', 'TSMethodSignature', 'TSCallSignatureDeclaration',
+    'TSConstructSignatureDeclaration', 'TSIndexSignature', 'TSMappedType',
+    'TSFunctionType', 'TSConstructorType', 'TSParenthesizedType',
+    'TSLiteralType', 'TSTemplateLiteralType', 'TSTypeOperator', 'TSTypeQuery',
+    'TSImportType', 'TSConditionalType', 'TSInferType', 'TSTypePredicate',
+    'TSThisType', 'TSAnyKeyword', 'TSUnknownKeyword', 'TSNumberKeyword',
+    'TSBigIntKeyword', 'TSBooleanKeyword', 'TSStringKeyword',
+    'TSSymbolKeyword', 'TSObjectKeyword', 'TSNeverKeyword',
+    'TSUndefinedKeyword', 'TSVoidKeyword', 'TSNullKeyword',
+    'TSIntrinsicKeyword', 'TSInterfaceBody', 'TSInterfaceHeritage',
+    'TSClassImplements');
 
   NO_OFFSET = -1;
 
@@ -802,12 +823,23 @@ var
   Saved: TGocciaASTNode;
   Expression: TGocciaExpression;
   Assertion: TGocciaTypeAssertion;
+  { For each wrapper, outermost first, the assertion it reports, or -1 for
+    parentheses. }
+  WrapperAssertions: array of Integer;
+
+  procedure PushWrapper(const AAssertion: Integer);
+  begin
+    if Wrappers = Length(WrapperAssertions) then
+      SetLength(WrapperAssertions, Wrappers * 2 + 2);
+    WrapperAssertions[Wrappers] := AAssertion;
+    Inc(Wrappers);
+  end;
 
   procedure PushParentheses;
   begin
     PushFrame(NewNode(KIND_PARENTHESIZED), Expression.ParenStartOffset,
       Expression.ParenEndOffset, True, False);
-    Inc(Wrappers);
+    PushWrapper(-1);
     Parenthesized := False;
   end;
 
@@ -837,7 +869,7 @@ begin
         PushParentheses;
       PushFrame(NewNode(TYPE_ASSERTION_KINDS[Assertion.Kind]),
         Assertion.StartOffset, Assertion.EndOffset, False, False);
-      Inc(Wrappers);
+      PushWrapper(I);
     end;
     if Parenthesized then
       PushParentheses;
@@ -874,8 +906,14 @@ begin
   end;
 
   PopFrame;
-  for I := 1 to Wrappers do
+  { An assertion's type follows what it asserts, inside the assertion. }
+  for I := Wrappers - 1 downto 0 do
+  begin
+    if WrapperAssertions[I] >= 0 then
+      VisitTypeRanges(Self,
+        Expression.TypeAssertions[WrapperAssertions[I]].TypeRanges);
     PopFrame;
+  end;
 end;
 
 procedure TASTFlattener.VisitChild(const ANode: TGocciaASTNode);
@@ -962,6 +1000,15 @@ begin
     apkKeyIdentifier: Index := NewNode('Identifier');
     apkKeyNumeric: Index := NewNode('NumericLiteral');
     apkKeyBigInt: Index := NewNode('BigIntLiteral');
+    apkBooleanLiteral: Index := NewNode('BooleanLiteral');
+    apkTemplateLiteral: Index := NewNode('TemplateLiteral');
+    apkPropertySignature, apkMethodSignature:
+      begin
+        Index := NewNode(TYPE_PART_KINDS[AKind]);
+        Report(Index, anfComputed, apfComputed);
+      end;
+    apkTypeAnnotation..apkTypeLiteral, apkCallSignature..apkClassImplements:
+      Index := NewNode(TYPE_PART_KINDS[AKind]);
   else
     // The module path of an import or a re-export, and a quoted key, are
     // string literals.
@@ -1639,7 +1686,7 @@ var
   StartLine, StartColumn, EndLine, EndColumn: Integer;
   ResultRoot: TGocciaTempRoot;
   I, CommentIndex: Integer;
-  WantTokens: Boolean;
+  WantTokens, WantExpressions: Boolean;
   TokenCollector: TASTTokenCollector;
   FlatTokens: TASTFlatTokenArray;
   Tokens: TGocciaArrayValue;
@@ -1677,6 +1724,11 @@ begin
     the pipeline copies none and the JSX transformer records none. }
   WantTokens := ReadBooleanOption(AArgs.GetElement(1), OPTION_TOKENS, False);
   Options.CollectTokens := WantTokens;
+  { Erased type syntax is reported only in the expression view, so only it
+    asks the parser to record where it was. }
+  WantExpressions := ReadBooleanOption(AArgs.GetElement(1), 'expressions',
+    False);
+  Options.RecordTypeRanges := WantExpressions;
 
   { CreateTextLines keeps the exact text alongside the split lines, so the
     string the pipeline parses is character for character the one returned as
@@ -1717,7 +1769,7 @@ begin
     Coordinates := TGocciaSourceCoordinates.Create(SourceText);
 
     Flattener := TASTFlattener.Create(PipelineResult.OriginMap,
-      ReadBooleanOption(AArgs.GetElement(1), 'expressions', False));
+      WantExpressions);
     try
       Flattener.Run(PipelineResult.ProgramNode);
       ResultObject.AssignProperty('root',

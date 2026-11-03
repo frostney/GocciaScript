@@ -40,6 +40,12 @@ type
     CheckMask: Integer;
     DurationMs: Integer;
     Scope: TGocciaTimeoutScope;
+    { The request word of the abort handle that armed this thread, nil when
+      none did (Goccia.ExecutionAbort). Read by the slow path of a poll. While
+      it is set and no scope has a deadline, DeadlineNs holds a placeholder
+      that never arrives, so the poll runs and TimeoutArmed stays the one
+      mirror. }
+    AbortRequested: PLongInt;
   end;
   PGocciaTimeoutPollState = ^TGocciaTimeoutPollState;
 
@@ -93,15 +99,26 @@ procedure CheckExecutionTimeoutDeadline(const AState: PGocciaTimeoutPollState);
 procedure CheckExecutionTimeoutNow;
 function RemainingExecutionTimeoutMilliseconds: Integer;
 
+{ The abort plumbing, for Goccia.ExecutionAbort alone; hosts use that unit.
+  ArmTimeoutAbort makes the calling thread's timeout polls, the native loops',
+  raise TGocciaAbortError once the word AAbortRequested points to is set. The
+  word stays valid until DisarmTimeoutAbort, on the same thread. }
+procedure ArmTimeoutAbort(const AAbortRequested: PLongInt);
+procedure DisarmTimeoutAbort;
+
 implementation
 
 uses
   TimingUtils,
 
+  Goccia.InstructionLimit,
   Goccia.ThreadCleanupRegistry,
   Goccia.ThreadPolls;
 
 const
+  // The deadline an abort-only thread carries so that TimeoutArmed is True: a
+  // time that never arrives, which no deadline computed from the clock reaches.
+  ABORT_ONLY_DEADLINE_NS = High(Int64);
   TIMEOUT_CHECK_INTERVAL = 1024;
   TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS = 16;
   // Initial capacity reserved on first push; the stack grows on demand
@@ -151,7 +168,14 @@ begin
       Poll^.DurationMs := GTimeoutStack[I].DurationMs;
     end;
   end;
-  if Poll^.DurationMs > TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS then
+  if (Poll^.DeadlineNs = 0) and (Poll^.AbortRequested <> nil) then
+  begin
+    // Abort only: nothing to read the clock for, so poll the request word at
+    // the same rate as a long deadline.
+    Poll^.DeadlineNs := ABORT_ONLY_DEADLINE_NS;
+    Poll^.CheckMask := TIMEOUT_CHECK_INTERVAL - 1;
+  end
+  else if Poll^.DurationMs > TIMEOUT_ALWAYS_CHECK_THRESHOLD_MS then
     Poll^.CheckMask := TIMEOUT_CHECK_INTERVAL - 1
   else
     Poll^.CheckMask := 0;
@@ -208,6 +232,12 @@ end;
 
 procedure CheckExecutionTimeoutDeadline(const AState: PGocciaTimeoutPollState);
 begin
+  // Ahead of the deadline, so that a requested abort is never reported as the
+  // timeout it may also have passed.
+  if (AState^.AbortRequested <> nil) and (AState^.AbortRequested^ <> 0) then
+    RaiseAbort;
+  if AState^.DeadlineNs = ABORT_ONLY_DEADLINE_NS then
+    Exit;
   if GetNanoseconds >= AState^.DeadlineNs then
     raise TGocciaTimeoutError.Create(AState^.Scope, AState^.DurationMs);
 end;
@@ -243,7 +273,10 @@ var
   RemainingNs: Int64;
 begin
   Poll := @GTimeoutPoll;
-  if Poll^.DeadlineNs = 0 then
+  if (Poll^.AbortRequested <> nil) and (Poll^.AbortRequested^ <> 0) then
+    RaiseAbort;
+  // No deadline, or only the placeholder an armed abort carries.
+  if (Poll^.DeadlineNs = 0) or (Poll^.DeadlineNs = ABORT_ONLY_DEADLINE_NS) then
     Exit(0);
   RemainingNs := Poll^.DeadlineNs - GetNanoseconds;
   if RemainingNs <= 0 then
@@ -251,6 +284,20 @@ begin
   if RemainingNs >= Int64(High(Integer)) * 1000000 then
     Exit(High(Integer));
   Result := Integer((RemainingNs + 999999) div 1000000);
+end;
+
+procedure ArmTimeoutAbort(const AAbortRequested: PLongInt);
+begin
+  GTimeoutPoll.AbortRequested := AAbortRequested;
+  RecomputeMinDeadline;
+end;
+
+procedure DisarmTimeoutAbort;
+begin
+  if GTimeoutPoll.AbortRequested = nil then
+    Exit;
+  GTimeoutPoll.AbortRequested := nil;
+  RecomputeMinDeadline;
 end;
 
 { The calling thread's scope stack, released when its runtime shuts down. }

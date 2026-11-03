@@ -56,3 +56,37 @@ test("interface with optional properties", () => {
   const cfg = { host: "localhost" };
   expect(cfg.host).toBe("localhost");
 });
+
+test("an object type in a type parameter's default or constraint is not the body", () => {
+  interface Box<T = {}> {
+    contents: T;
+  }
+  interface Crate<T extends { id: string } = { id: string }> extends Box<T> {
+    label: string;
+  }
+
+  const crate = { contents: { id: "c-1" }, label: "fragile" };
+  expect(crate.label).toBe("fragile");
+});
+
+test("an object type in an extends clause's type arguments is not the body", () => {
+  interface Base<T> {
+    item: T;
+  }
+  interface Shelf extends Base<{ id: string }>, Base<{ size: number }> {
+    count: number;
+  }
+
+  const shelf = { item: { id: "s-1" }, count: 2 };
+  expect(shelf.count).toBe(2);
+});
+
+test("a template literal type in an interface does not end it early", () => {
+  interface Tagged<K extends `tag-${string}` = `tag-${string}`> {
+    key: K;
+    describe(id: `item-${number}`): `${string}!`;
+  }
+
+  const tagged = { key: "tag-a", describe: (id) => `${id}!` };
+  expect(tagged.describe("item-1")).toBe("item-1!");
+});

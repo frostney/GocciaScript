@@ -641,6 +641,7 @@ var
   PreviousLabelReentryStatement: TGocciaStatement;
   PreviousLoopReentryStatement: TGocciaStatement;
   LoopScope: TGocciaCompilerScope;
+  RegionOuterPeak, RegionPeak: Integer;
 begin
   Result := False;
   if Assigned(FCompileProfile) then
@@ -675,8 +676,24 @@ begin
       (LoopScope.LoopMayCreateClosure or
        not StatementCreatesNoClosure(AStmt)));
     FLoopReentryStatement := AStmt;
+    RegionOuterPeak := LoopScope.BeginRegisterRegion;
     try
-      Exit(DoCompileStatement(AStmt));
+      Result := DoCompileStatement(AStmt);
+      // What the loop's last iteration left in the registers above the live
+      // ones is dead once control is past it, and would stay reachable for as
+      // long as this frame runs (EmitClearDeadRegisters).
+      if not Result then
+      begin
+        RegionPeak := LoopScope.EndRegisterRegion(RegionOuterPeak);
+        // The clear belongs to the loop statement, not to the last statement
+        // of its body, whose line a loop that ran no iteration never reached.
+        if RegionPeak > LoopScope.NextSlot then
+          EmitLineMapping(Ctx, AStmt.Line, AStmt.Column);
+        Goccia.Compiler.Statements.EmitClearDeadRegisters(Ctx, RegionPeak);
+      end
+      else
+        LoopScope.EndRegisterRegion(RegionOuterPeak);
+      Exit;
     finally
       FLoopReentryStatement := PreviousLoopReentryStatement;
       LoopScope.LeaveLoop;

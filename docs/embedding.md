@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 1070 -->
+<!-- doc-length-limit: 1100 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -839,7 +839,7 @@ end;
 
 ## Execution Limits
 
-Two mechanisms prevent runaway scripts: wall-clock timeouts and instruction limits. Both use thread-local storage and are safe with parallel workers — each thread gets its own independent counter. Whether either is armed on a thread is mirrored in `GThreadPolls` (`Goccia.ThreadPolls`), which is all that a value allocation and a bytecode call read when neither is.
+Two mechanisms prevent runaway scripts: wall-clock timeouts and instruction limits; a third lets another thread stop a run ([below](#aborting-a-run-from-another-thread)). All use thread-local storage and are safe with parallel workers — each thread gets its own independent counter. Whether either is armed on a thread is mirrored in `GThreadPolls` (`Goccia.ThreadPolls`), which is all that a value allocation and a bytecode call read when neither is.
 
 ### Timeout
 
@@ -876,6 +876,39 @@ end;
 ```
 
 Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) leaves the instruction budget inactive, so bytecode production dispatch omits the per-instruction poll. A positive limit selects the dispatch loop's instrumented fetch path, which increments and checks the counter on every dispatched instruction.
+
+### Aborting a Run from Another Thread
+
+A host that runs scripts on worker threads stops one from another thread with an abort handle (`Goccia.ExecutionAbort`, [ADR 0174](adr/0174-a-host-stops-a-run-from-another-thread-through-an-abort-handle.md)). Capture it on the engine's thread before the run; any thread can then request the abort, and the run ends with `TGocciaAbortError` (`Goccia.InstructionLimit`).
+
+```pascal
+uses
+  Goccia.ExecutionAbort,
+  Goccia.InstructionLimit;
+
+// On the worker, with the engine built and before Execute:
+Handle := CaptureAbortHandle;       // keep it where the other thread can reach it
+try
+  try
+    Engine.Execute;
+  except
+    on TGocciaAbortError do
+      ; // stopped by the host: the engine is safe to free
+  end;
+finally
+  ClearAbort;                       // on the worker, before it ends
+end;
+
+// On any thread, while the run lasts:
+RequestAbort(Handle);               // or Handle.Request
+```
+
+- `TGocciaAbortError` descends from `TGocciaInstructionLimitError`, so script cannot catch it and a host that already handles the instruction limit sees it. Test for the subclass first to tell a stop from a spent budget. `GocciaRunner --output=json` reports it as `RunAbortedError`; `runScript` results and the sandbox protocol report it as a `resource-limit` failure.
+- The handle belongs to one run. `ClearAbort` disarms the thread and detaches the handle, so a request made after it does nothing and cannot reach the next run, which captures a handle of its own. Until `ClearAbort` a request is sticky: every poll raises. A deadline or budget the host set stays as it is.
+- A worker built on `InitThreadRuntime` is disarmed by `ShutdownThreadRuntime` as it exits, but any thread must `ClearAbort` before it ends: a request on a handle still attached to a finished thread writes into freed memory.
+- Capture before `Execute`. An armed thread runs the instrumented dispatch path an instruction limit selects, which costs about what an instruction limit costs; a thread that is not armed pays nothing.
+- A request ends bytecode at the next instruction, a native loop at its next timeout poll (the chokepoint rule above), and an engine wait (`Atomics.wait` within 50 ms, `Atomics.waitAsync`, a promise wait and a `fetch` nobody answers within about 1 ms). It does not interrupt a native call blocked outside the engine, such as foreign code or an extension's own blocking call, until that returns.
+- After the error the engine is as safe to free or to replace on the same worker as after a timeout.
 
 ### Call Stack Depth Limit
 
