@@ -30,7 +30,7 @@ describe("a loop in a finally block", () => {
     expect(run()).toEqual(["TypeError", 0]);
   });
 
-  test("keeps a rethrown exception when the catch clause has a pattern test", () => {
+  test("keeps an exception a catch clause rethrows past its finally block", () => {
     const run = () => {
       try {
         try {
@@ -49,5 +49,26 @@ describe("a loop in a finally block", () => {
       return ["no throw", ""];
     };
     expect(run()).toEqual(["RangeError", "original"]);
+  });
+
+  test("keeps the exception a non-matching catch pattern rethrows", () => {
+    const run = () => {
+      try {
+        try {
+          throw { code: 1 };
+        } catch (error is { code: 2 }) {
+          return "matched";
+        } finally {
+          let spins = 0;
+          while (spins < 2) {
+            spins++;
+          }
+        }
+      } catch (outer) {
+        return outer.code;
+      }
+      return "no throw";
+    };
+    expect(run()).toBe(1);
   });
 });
