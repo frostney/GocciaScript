@@ -641,6 +641,8 @@ type
     etkImport,           // import type ... from "...";
     etkExport,           // export type { A };
     etkReExport,         // export type { A } from "...";  export type * from "...";
+    etkAmbient,          // declare const x: T;  declare module "m" {}  declare global {}
+    etkExportAmbient,    // export declare function f(): void;
     etkOverload,         // function f(a: string): string;
     etkExportOverload    // export function f(a: string): string;
   );

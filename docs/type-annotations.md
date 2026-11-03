@@ -110,6 +110,14 @@ export interface Serializable {
   toJSON(): string;
 }
 
+// Ambient declarations (skipped entirely): `declare` before a variable,
+// function, class, enum, module, `global` or namespace on the same line.
+// They bind nothing at run time; `declare` alone is still an identifier.
+declare const process: { env: Record<string, string | undefined> };
+declare module "virtual:assets" { const url: string; export default url; }
+declare global { interface Window { app: unknown } }
+export declare function helper(name: string): void;
+
 // Runtime-erased as, satisfies, and generic constructor syntax
 const asserted = 42 as number;
 const colors = ["red", "green"] as const satisfies Array<string>;

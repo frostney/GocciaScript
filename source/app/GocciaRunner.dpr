@@ -55,6 +55,7 @@ uses
   Goccia.RuntimeExtensions.AST,
   Goccia.RuntimeExtensions.FFI,
   Goccia.RuntimeExtensions.Sandbox,
+  Goccia.RuntimeExtensions.TestingLibrary,
   Goccia.RuntimeProfiles.Loader,
   Goccia.Sandbox.Context,
   Goccia.Scope,
@@ -193,6 +194,7 @@ type
     function IsCompactJsonOutput: Boolean;
     procedure WriteSourceMapIfEnabled(const ASourceMap: TGocciaSourceMap;
       const AFileName: string);
+    procedure ConfigureTestReporter(const AEngine: TGocciaEngine);
     procedure ConfigureConsole(const AConsole: TGocciaConsole;
       const ACapture: TScriptLoaderConsoleCapture);
     procedure ApplyDataGlobalsToEngine(const AEngine: TGocciaEngine);
@@ -460,7 +462,7 @@ begin
 
   FOutputPath := AddString('output',
     '"json" for structured JSON output, "compact-json" omits build, memory, stdout, stderr');
-  FSilent := AddFlag('silent', 'Suppress console output from the script');
+  FSilent := AddFlag('silent', 'Suppress console and goccia:test reporter output from the script');
   FPrint := AddFlag('print',
     'Print the script''s last value to stdout (mirrors node -p / bun --print / deno eval -p)');
   FPreferBytecode := AddFlag('prefer-bytecode',
@@ -746,6 +748,27 @@ begin
     not IsJsonOutput);
 end;
 
+{ The `goccia:test` reporter writes its markers and results block straight to
+  stdout, not through the console builtin, so muting the console does not
+  reach it. Mute it wherever the console is muted or captured: --silent, and
+  the JSON envelope modes, whose stdout must carry the envelope alone. The
+  extension stores the setting for the module-only install, where the
+  assertions object does not exist until the script imports `goccia:test`.
+  The runTests() result still carries the counts and messages. }
+procedure TRunnerApp.ConfigureTestReporter(const AEngine: TGocciaEngine);
+var
+  Runtime: TGocciaRuntimeCore;
+  TestingExtension: TGocciaTestingLibraryRuntimeExtension;
+begin
+  Runtime := GetRuntime(AEngine);
+  if not Assigned(Runtime) then
+    Exit;
+  TestingExtension := TGocciaTestingLibraryRuntimeExtension(
+    Runtime.FindRuntimeExtension(TGocciaTestingLibraryRuntimeExtension));
+  if Assigned(TestingExtension) then
+    TestingExtension.SuppressOutput := FSilent.Present or IsJsonOutput;
+end;
+
 procedure TRunnerApp.ConfigureConsole(const AConsole: TGocciaConsole;
   const ACapture: TScriptLoaderConsoleCapture);
 begin
@@ -994,6 +1017,7 @@ begin
   try
     FLastDiagnosticPrincipal := Engine.ModuleLoader.DiagnosticScope.Principal;
     ConfigureConsole(RuntimeConsole(Engine), ACapture);
+    ConfigureTestReporter(Engine);
     ApplyDataGlobalsToEngine(Engine);
 
     PipelineOptions := TGocciaSourcePipeline.DefaultOptions;
@@ -1071,6 +1095,7 @@ begin
       RetainedModule := Module;
       Module := nil;
       ConfigureConsole(RuntimeConsole(Engine), ACapture);
+      ConfigureTestReporter(Engine);
       ApplyDataGlobalsToEngine(Engine);
       StartExecutionTimeout(EngineOptions.Timeout.Milliseconds(0));
       StartInstructionLimit(EngineOptions.MaxInstructions.ValueOr(0));
@@ -1760,6 +1785,7 @@ begin
     if LogFileOpen then
       Console.LogCallback := HandleConsoleLog;
   end;
+  ConfigureTestReporter(AEngine);
 end;
 
 { The sandbox path to run. A host entry inside a copied input runs from

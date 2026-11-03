@@ -443,7 +443,10 @@ type
       const AAsyncLine, AAsyncColumn: Integer): TAsyncFunctionCheck;
     function IsTypeOnlySpecifierModifier: Boolean;
     procedure SkipInterfaceDeclaration;
+    procedure SkipBracedBody;
     function IsTypeDeclaration: Boolean;
+    function IsAmbientDeclarationStart: Boolean;
+    procedure SkipAmbientDeclaration;
     function ExportedOverloadOr(const AStatement: TGocciaStatement;
       const ALine, AColumn: Integer): TGocciaStatement;
 
@@ -6027,6 +6030,14 @@ begin
     TGocciaEmptyStatement(Result).SetTypeRanges(
       TypeRangesBetween(tsInterface, TypeStart, FCurrent));
   end
+  else if IsAmbientDeclarationStart then
+  begin
+    Line := Peek.Line;
+    Column := Peek.Column;
+    SkipAmbientDeclaration;
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkAmbient);
+  end
   else if IsLexicalDeclarationStart then
   begin
     Advance;
@@ -6129,6 +6140,10 @@ begin
         '''await using'' is only valid in async functions or at the top level',
         Peek.Line, Peek.Column, FFileName, FSourceLines,
         'Wrap in an async function or use ''using'' for synchronous disposal');
+    // A top-level await using declaration awaits its disposal when the body
+    // completes, so the module evaluates asynchronously.
+    if FFunctionDepth = 0 then
+      FHasTopLevelAwait := True;
     Result := UsingStatement;
   end
   else if IsInvalidConciseMethodStatementStart then
@@ -7015,8 +7030,10 @@ begin
     AfterLeftParen := FCurrent;
 
     // `for (await using x of iterable)` is a synchronous for-of loop whose
-    // per-iteration binding uses the async-dispose hint. This is distinct from
-    // `for await (...)`, where `await` appears before the opening paren.
+    // per-iteration binding uses the async-dispose hint, and
+    // `for await (await using x of iterable)` an asynchronous one (ES2027
+    // §14.7.5): the `await` before the opening paren picks the iteration,
+    // the one after it the disposal.
     if IsAwaitUsingDeclarationStart then
     begin
       if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
@@ -7055,8 +7072,14 @@ begin
         BodyStmt := IterationBodyStatement;
         RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         RejectFunctionStatementBody(BodyStmt, Line, Column);
-        Result := TGocciaForOfStatement.Create(True, BindingName, nil,
-          IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil, nil, True, True);
+        if IsAwait then
+          Result := TGocciaForAwaitOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, True)
+        else
+          Result := TGocciaForOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, True);
         Exit;
       end;
 
@@ -7098,8 +7121,14 @@ begin
         BodyStmt := IterationBodyStatement;
         RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         RejectFunctionStatementBody(BodyStmt, Line, Column);
-        Result := TGocciaForOfStatement.Create(True, BindingName, nil,
-          IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil, nil, True, False);
+        if IsAwait then
+          Result := TGocciaForAwaitOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, False)
+        else
+          Result := TGocciaForOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, False);
         Exit;
       end;
 
@@ -8667,6 +8696,14 @@ begin
       etkExportInterface);
     TGocciaEmptyStatement(Result).SetTypeRanges(TypeRangesBetween(tsInterface,
       ErasedListStart, FCurrent));
+    Exit;
+  end;
+
+  if IsAmbientDeclarationStart then
+  begin
+    SkipAmbientDeclaration;
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkExportAmbient);
     Exit;
   end;
 
@@ -11124,22 +11161,140 @@ begin
     Advance;
   end;
 
-  if Check(gttLeftBrace) then
+  SkipBracedBody;
+end;
+
+// Skips a '{ ... }' body from its '{', with every brace inside it; nothing
+// when the current token is not a '{'. Template literals are skipped whole,
+// as above.
+procedure TGocciaParser.SkipBracedBody;
+var
+  Depth: Integer;
+begin
+  if not Check(gttLeftBrace) then
+    Exit;
+  Advance;
+  Depth := 1;
+  while not IsAtEnd and (Depth > 0) do
+  begin
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+    begin
+      SkipTemplateLiteral;
+      Continue;
+    end;
+    if Check(gttLeftBrace) then Inc(Depth);
+    if Check(gttRightBrace) then Dec(Depth);
+    Advance;
+  end;
+end;
+
+// `declare` begins an ambient declaration only when a declaration keyword
+// follows it on the same line. Anywhere else it is an identifier: `declare(x)`,
+// `declare = 1`, and `declare` with `const x = 1` on the next line under ASI,
+// which is two statements.
+function TGocciaParser.IsAmbientDeclarationStart: Boolean;
+var
+  Next: TGocciaToken;
+
+  function IsKeyword(const AKeyword: string): Boolean;
+  begin
+    Result := (Next.TokenType = gttIdentifier) and (Next.Lexeme = AKeyword) and
+      not Next.ContainsEscape;
+  end;
+
+begin
+  if not CheckUnescapedIdentifierKeyword(KEYWORD_DECLARE) then
+    Exit(False);
+  // After an identifier a `/` divides, so the token after `declare` is read
+  // under the division goal: `declare / 2` and `declare /= 2` stay
+  // expressions, and the token is the one the expression parser would read.
+  EnsureToken(FCurrent + 1, glgInputElementDiv);
+  if FCurrent + 1 >= FTokens.Count then
+    Exit(False);
+  Next := FTokens[FCurrent + 1];
+  if (Next.TokenType = gttEOF) or HasLineTerminatorBetween(Peek, Next) then
+    Exit(False);
+  Result := (Next.TokenType in [gttConst, gttLet, gttVar, gttFunction,
+    gttClass, gttEnum]) or IsKeyword(KEYWORD_MODULE) or
+    IsKeyword(KEYWORD_GLOBAL) or IsKeyword(KEYWORD_NAMESPACE) or
+    IsKeyword(KEYWORD_ABSTRACT) or IsKeyword(KEYWORD_TYPE) or
+    IsKeyword(KEYWORD_INTERFACE);
+end;
+
+// Skips an ambient declaration from its `declare`. It has no run-time
+// effect, so it is erased whole like `type` and `interface`. A declaration
+// with a body (`class`, `enum`, `const enum`, `module`, `global`,
+// `namespace`) ends at the body's closing '}'; `declare module "m";` has no
+// body and ends at its ';' or, under ASI, its line break. Every other form
+// ends where a `type` alias would.
+procedure TGocciaParser.SkipAmbientDeclaration;
+var
+  AngleDepth, Depth: Integer;
+  HasBody: Boolean;
+begin
+  Advance;
+  if CheckUnescapedIdentifierKeyword(KEYWORD_INTERFACE) then
   begin
     Advance;
-    Depth := 1;
-    while not IsAtEnd and (Depth > 0) do
-    begin
-      if Check(gttTemplateHead) or Check(gttTemplate) then
-      begin
-        SkipTemplateLiteral;
-        Continue;
-      end;
-      if Check(gttLeftBrace) then Inc(Depth);
-      if Check(gttRightBrace) then Dec(Depth);
-      Advance;
-    end;
+    Advance;
+    SkipInterfaceDeclaration;
+    Exit;
   end;
+  HasBody := Check(gttClass) or Check(gttEnum) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_MODULE) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_GLOBAL) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_NAMESPACE) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_ABSTRACT);
+  if Check(gttConst) then
+  begin
+    Advance;
+    HasBody := Check(gttEnum);
+  end;
+  if not HasBody then
+  begin
+    SkipUntilSemicolon;
+    Exit;
+  end;
+
+  // The head: everything up to the body's '{' outside brackets and type
+  // argument lists, as for an interface.
+  AngleDepth := 0;
+  Depth := 0;
+  while not IsAtEnd do
+  begin
+    if (AngleDepth = 0) and (Depth = 0) then
+    begin
+      if Check(gttLeftBrace) then
+        Break;
+      if Check(gttSemicolon) then
+      begin
+        Advance;
+        Exit;
+      end;
+      if FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek and
+         (Previous.TokenType = gttString) then
+        Exit;
+    end;
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+    begin
+      SkipTemplateLiteral;
+      Continue;
+    end;
+    case Peek.TokenType of
+      gttLess: Inc(AngleDepth);
+      gttGreater: Dec(AngleDepth);
+      gttRightShift: Dec(AngleDepth, 2);
+      gttUnsignedRightShift: Dec(AngleDepth, 3);
+      gttLeftParen, gttLeftBracket, gttLeftBrace: Inc(Depth);
+      gttRightParen, gttRightBracket, gttRightBrace: Dec(Depth);
+    end;
+    if AngleDepth < 0 then
+      AngleDepth := 0;
+    if Depth < 0 then
+      Depth := 0;
+    Advance;
+  end;
+  SkipBracedBody;
 end;
 
 { An exported overload signature is erased as one, from its `export`. }

@@ -112,6 +112,32 @@ describe("ast.parse type-level declarations", () => {
     ]);
   });
 
+  test("an ambient declaration is reported by kind and covers its whole text", () => {
+    const source = [
+      "declare const env: {",
+      "  mode: string;",
+      "};",
+      'declare module "virtual:a" {',
+      "  export const a: number;",
+      "}",
+      'declare module "side-effect";',
+      "declare global {",
+      "  interface Window { app: unknown }",
+      "}",
+      "export declare function helper(name: string): void;",
+      "",
+    ].join("\n");
+    const lines = source.split("\n");
+
+    expect(topLevel(source)).toEqual([
+      { kind: "AmbientDeclaration", typeOnly: true, text: lines.slice(0, 3).join("\n") },
+      { kind: "AmbientDeclaration", typeOnly: true, text: lines.slice(3, 6).join("\n") },
+      { kind: "AmbientDeclaration", typeOnly: true, text: lines[6] },
+      { kind: "AmbientDeclaration", typeOnly: true, text: lines.slice(7, 10).join("\n") },
+      { kind: "ExportAmbientDeclaration", typeOnly: true, text: lines[10] },
+    ]);
+  });
+
   test("an overload signature is reported by kind, and the implementation as a function", () => {
     const lines = [
       "function pick(text: string): string;",
