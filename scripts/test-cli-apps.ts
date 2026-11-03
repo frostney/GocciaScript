@@ -10766,8 +10766,9 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     writeFileSync(join(tree, "windows.js"), crlfOriginal);
     // Parameter lists of exported functions, function and constructor types
     // and method, call and construct signatures, tuple types and type
-    // parameter lists take the comma; a type argument list and a setter
-    // signature's parameter do not.
+    // parameter lists and destructuring patterns take the comma; a type
+    // argument list, a setter signature's parameter, a rest element and an
+    // array pattern's trailing hole do not.
     const typesOriginal = [
       'export function exported(',
       '  first: string,',
@@ -10814,6 +10815,26 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       '    value: string',
       '  );',
       '};',
+      'const {',
+      '  alpha,',
+      '  gamma: delta',
+      '} = source;',
+      'const [',
+      '  one,',
+      '  ...others',
+      '] = list;',
+      'const [',
+      '  head,',
+      '  ,',
+      '] = list;',
+      'const [',
+      '  first,',
+      '  second',
+      '] = pair;',
+      'function render({',
+      '  title,',
+      '  body',
+      '}: Props) {}',
       '',
     ].join("\n");
     const typesExpected = typesOriginal
@@ -10824,7 +10845,10 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       .replace("  seed: number\n", "  seed: number,\n")
       .replace("    factor: number\n", "    factor: number,\n")
       .replace("    input: string\n", "    input: string,\n")
-      .replace("    shape: number\n", "    shape: number,\n");
+      .replace("    shape: number\n", "    shape: number,\n")
+      .replace("  gamma: delta\n", "  gamma: delta,\n")
+      .replace("  second\n]", "  second,\n]")
+      .replace("  body\n}", "  body,\n}");
     writeFileSync(join(tree, "types.ts"), typesOriginal);
 
     const readOnly = Bun.spawnSync(
@@ -10854,7 +10878,10 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/types.ts:26:5  a multi-line list should end with a trailing comma",
       "/src/types.ts:29:5  a multi-line list should end with a trailing comma",
       "/src/types.ts:32:5  a multi-line list should end with a trailing comma",
-      "19 finding(s) in 3 file(s), 3 rewritten",
+      "/src/types.ts:48:10  a multi-line list should end with a trailing comma",
+      "/src/types.ts:60:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:64:3  a multi-line list should end with a trailing comma",
+      "22 finding(s) in 3 file(s), 3 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
@@ -15534,6 +15561,83 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
       } catch {
         throw new Error(`${label}: stdout should be the JSON envelope alone, got:\n${stdout.slice(0, 400)}`);
       }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: --output=json and --silent mute the goccia:test reporter...", async () => {
+  const tmp = makeTmp();
+  try {
+    // The loader installs goccia:test module-only, so the reporter's
+    // assertions object does not exist until this import resolves. The host's
+    // mute must still reach it. Failing, todo and skipped tests write the
+    // per-test markers; the results block is left on (no showTestResults).
+    const source = [
+      'import { test, expect, runTests } from "goccia:test";',
+      'console.log("from console");',
+      'test("fails", () => { expect(1).toBe(2); });',
+      'test.todo("later");',
+      'test.skip("skipped", () => {});',
+      "const result = await runTests();",
+      "result.failed;",
+      "",
+    ].join("\n");
+    const first = join(tmp, "first.js");
+    const second = join(tmp, "second.js");
+    writeFileSync(first, source);
+    writeFileSync(second, source);
+    const reporterMarkers = ["❌", "📝", "⏸️", "Test Results"];
+    const run = (args: string[]) => {
+      const proc = Bun.spawnSync([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" });
+      return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    };
+
+    // Control: the unmuted reporter does write to stdout, so the cases below
+    // prove the mute rather than an absent reporter.
+    const unmuted = run([first]);
+    for (const marker of reporterMarkers) {
+      if (!unmuted.stdout.includes(marker))
+        throw new Error(`Unmuted goccia:test reporter should print ${marker}, got:\n${unmuted.stdout}`);
+    }
+
+    for (const format of ["json", "compact-json"]) {
+      for (const files of [[first], [first, second]]) {
+        const label = `--output=${format} with ${files.length} file(s)`;
+        const muted = run([...files, `--output=${format}`, "--jobs=2"]);
+        let json: any;
+        try {
+          json = JSON.parse(muted.stdout);
+        } catch {
+          throw new Error(`${label} stdout should be the JSON envelope alone, got:\n${muted.stdout}`);
+        }
+        if (!json.output.includes("from console"))
+          throw new Error(`${label} should still capture console output, got ${json.output}`);
+        if (json.files.length !== files.length || json.files.some((file: { result: number }) => file.result !== 1))
+          throw new Error(`${label} should still report one failed test for each file, got ${JSON.stringify(json.files.map((file: { result: number }) => file.result))}`);
+      }
+    }
+
+    const silent = run([first, "--silent"]);
+    // A failing guest test does not fail the runner, so a run that stops
+    // before runTests() would otherwise pass the checks below untested.
+    if (silent.exitCode !== 0)
+      throw new Error(`--silent should exit 0, got ${silent.exitCode}:\n${silent.stderr}`);
+    for (const marker of reporterMarkers) {
+      if (silent.stdout.includes(marker))
+        throw new Error(`--silent should mute the goccia:test reporter (${marker}), got:\n${silent.stdout}`);
+    }
+    if (silent.stdout.includes("from console"))
+      throw new Error(`--silent should still mute the console, got:\n${silent.stdout}`);
+
+    // Sandbox mode configures its engines separately.
+    const sandboxSilent = run(["--sandbox", first, "--silent"]);
+    if (sandboxSilent.exitCode !== 0)
+      throw new Error(`--sandbox --silent should exit 0, got ${sandboxSilent.exitCode}:\n${sandboxSilent.stderr}`);
+    for (const marker of reporterMarkers) {
+      if (sandboxSilent.stdout.includes(marker))
+        throw new Error(`--sandbox --silent should mute the goccia:test reporter (${marker}), got:\n${sandboxSilent.stdout}`);
     }
   } finally {
     clean(tmp);

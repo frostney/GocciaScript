@@ -23,6 +23,7 @@ uses
   Goccia.Runtime,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.JSON5,
+  Goccia.RuntimeExtensions.TestingLibrary,
   Goccia.SourcePipeline,
   Goccia.TestSetup,
   Goccia.Values.Error,
@@ -76,6 +77,13 @@ type
     procedure CheckEntryModuleImportAfterExecute(
       const ATag: string);
     procedure TestEntryModuleImportAfterExecuteBytecode;
+    function RunTestingLibraryModule(const AInjectGlobals: Boolean;
+      const AMuteBeforeRun: Boolean; out ABuiltBeforeRun: Boolean;
+      out AMutedAfterRun: Boolean; out AOutcome: string): Boolean;
+    procedure TestTestingLibraryMuteHoldsForModuleOnlyInstall;
+    procedure TestTestingLibraryUnmutedByDefault;
+    procedure TestTestingLibraryMuteAppliesToBuiltAssertions;
+    procedure TestTestingLibraryMuteAppliesToGlobalsInstall;
   public
     procedure SetupTests; override;
   end;
@@ -147,6 +155,15 @@ begin
     TestFailedEntryRethrowsItsErrorBytecodeRun);
   Test('importing the entry module after Execute reuses it (bytecode)',
     TestEntryModuleImportAfterExecuteBytecode);
+  Test('goccia:test mute set before a module-only import holds once the ' +
+    'assertions materialize',
+    TestTestingLibraryMuteHoldsForModuleOnlyInstall);
+  Test('goccia:test reporter is not muted by default',
+    TestTestingLibraryUnmutedByDefault);
+  Test('goccia:test mute applies to assertions that already exist',
+    TestTestingLibraryMuteAppliesToBuiltAssertions);
+  Test('goccia:test mute applies to the globals install',
+    TestTestingLibraryMuteAppliesToGlobalsInstall);
 end;
 
 function TRuntimeTests.CreateEmptySource: TStringList;
@@ -792,6 +809,134 @@ end;
 procedure TRuntimeTests.TestEntryModuleImportAfterExecuteBytecode;
 begin
   CheckEntryModuleImportAfterExecute('bytecode');
+end;
+
+{ Installs the testing library, optionally muted before anything runs, and
+  runs a module that imports `goccia:test`, registers a failing test and runs
+  it. Reports through ABuiltBeforeRun whether the extension had built its
+  assertions before the run, and through AMutedAfterRun whether it holds them
+  muted afterwards; the result is whether they exist after the run. AOutcome is
+  what runTests() returned, as "<failed>: <failure messages>", so a mute that
+  dropped the counts or the messages is caught. A muted run's failing test
+  would print a marker to stdout if the mute did not reach it. }
+function TRuntimeTests.RunTestingLibraryModule(const AInjectGlobals: Boolean;
+  const AMuteBeforeRun: Boolean; out ABuiltBeforeRun: Boolean;
+  out AMutedAfterRun: Boolean; out AOutcome: string): Boolean;
+var
+  Extension: TGocciaTestingLibraryRuntimeExtension;
+  Runtime: TGocciaRuntime;
+  Source: TStringList;
+  Expected, TodoLine: string;
+begin
+  { Only a muted run may register the failing and todo tests; an unmuted one
+    would print their markers into this suite's output. }
+  if AMuteBeforeRun then
+  begin
+    Expected := '2';
+    TodoLine := 'test.todo("later");' + LineEnding;
+  end
+  else
+  begin
+    Expected := '1';
+    TodoLine := '';
+  end;
+  Source := TStringList.Create;
+  Source.Text :=
+    'import { test, expect, runTests } from "goccia:test";' + LineEnding +
+    'test("fails", () => { expect(1).toBe(' + Expected + '); });' +
+    LineEnding + TodoLine +
+    'const result = await runTests({ showTestResults: false });' +
+    LineEnding +
+    'globalThis.outcome = result.failed + ": " + result.failedTests.join("; ");';
+  Runtime := TGocciaRuntime.Create('main.js', Source, TGocciaCapabilities.None);
+  try
+    Runtime.Engine.SourceType := stModule;
+    if AInjectGlobals then
+      Extension := TGocciaTestingLibraryRuntimeExtension.Create
+    else
+      Extension := TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly;
+    Runtime.Install(Extension);
+    if AMuteBeforeRun then
+      Extension.SuppressOutput := True;
+    ABuiltBeforeRun := Assigned(Extension.BuiltinTestAssertions);
+    Runtime.Execute;
+    Result := Assigned(Extension.BuiltinTestAssertions);
+    AMutedAfterRun := Result and Extension.BuiltinTestAssertions.SuppressOutput;
+    AOutcome := Runtime.Engine.GlobalScope.GetValue('outcome')
+      .ToStringLiteral.Value;
+  finally
+    Runtime.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TRuntimeTests.TestTestingLibraryMuteHoldsForModuleOnlyInstall;
+var
+  Built, BuiltBefore, Muted: Boolean;
+  Outcome: string;
+begin
+  Built := RunTestingLibraryModule(False, True, BuiltBefore, Muted, Outcome);
+  Expect<Boolean>(BuiltBefore).ToBe(False);
+  Expect<Boolean>(Built).ToBe(True);
+  Expect<Boolean>(Muted).ToBe(True);
+  // Muting loses no information: the counts and the message are still there.
+  Expect<Boolean>(Pos('1: ', Outcome) = 1).ToBe(True);
+  Expect<Boolean>(Pos('Expected 1 to be 2', Outcome) > 0).ToBe(True);
+end;
+
+procedure TRuntimeTests.TestTestingLibraryUnmutedByDefault;
+var
+  Built, BuiltBefore, Muted: Boolean;
+  Outcome: string;
+begin
+  Built := RunTestingLibraryModule(False, False, BuiltBefore, Muted, Outcome);
+  Expect<Boolean>(Built).ToBe(True);
+  Expect<Boolean>(Muted).ToBe(False);
+  Expect<string>(Outcome).ToBe('0: ');
+end;
+
+procedure TRuntimeTests.TestTestingLibraryMuteAppliesToBuiltAssertions;
+var
+  Extension: TGocciaTestingLibraryRuntimeExtension;
+  Runtime: TGocciaRuntime;
+  Source: TStringList;
+begin
+  Source := TStringList.Create;
+  Source.Text := 'import { test } from "goccia:test";' + LineEnding +
+    'test("passes", () => {});';
+  Runtime := TGocciaRuntime.Create('main.js', Source, TGocciaCapabilities.None);
+  try
+    Runtime.Engine.SourceType := stModule;
+    Extension := TGocciaTestingLibraryRuntimeExtension.CreateModuleOnly;
+    Runtime.Install(Extension);
+    Runtime.Execute;
+    Expect<Boolean>(Extension.BuiltinTestAssertions.SuppressOutput)
+      .ToBe(False);
+    Extension.SuppressOutput := True;
+    Expect<Boolean>(Extension.BuiltinTestAssertions.SuppressOutput)
+      .ToBe(True);
+    Extension.SuppressOutput := False;
+    Expect<Boolean>(Extension.BuiltinTestAssertions.SuppressOutput)
+      .ToBe(False);
+  finally
+    Runtime.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TRuntimeTests.TestTestingLibraryMuteAppliesToGlobalsInstall;
+var
+  Built, BuiltBefore, Muted: Boolean;
+  Outcome: string;
+begin
+  { The globals half builds its assertions at install, so the mute reaches
+    them directly rather than through the stored value. }
+  Built := RunTestingLibraryModule(True, True, BuiltBefore, Muted, Outcome);
+  Expect<Boolean>(BuiltBefore).ToBe(True);
+  Expect<Boolean>(Built).ToBe(True);
+  Expect<Boolean>(Muted).ToBe(True);
+  Expect<Boolean>(Pos('1: ', Outcome) = 1).ToBe(True);
+  Expect<Boolean>(Pos('Expected 1 to be 2', Outcome) > 0).ToBe(True);
 end;
 
 begin
