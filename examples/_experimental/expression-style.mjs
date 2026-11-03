@@ -6,9 +6,10 @@
 //      `"say \"hi\""` stay as they are.
 //   2. A multi-line array, object, argument list, parameter list (of a
 //      function, an exported function, a function type or a method or call
-//      signature), braced import or export specifier list, tuple type or type
-//      parameter list ends with a trailing comma, except after a rest
-//      parameter or a setter's parameter, where one is a syntax error. A type
+//      signature), destructuring pattern, braced import or export specifier
+//      list, tuple type or type parameter list ends with a trailing comma,
+//      except after a rest parameter or element or a setter's parameter, where
+//      one is a syntax error, and after an array pattern's trailing hole. A type
 //      argument list (`Map<K, V>`) is left alone, as Biome and Prettier leave
 //      it.
 //   3. A call that sits on one line longer than WIDTH puts its arguments one
@@ -197,6 +198,28 @@ const listOf = (source, commentEnds, node) => {
     return close.char === "}" ? { items: specifiers, close: close.offset } : null;
   }
 
+  // A destructuring pattern's children are its elements, or for an object
+  // pattern each property's value, which ends where the property does. Past
+  // the last come its `,` if any, then the `}` or `]`; a second `,` there is a
+  // hole, which a trailing comma would turn into one more element.
+  if (node.kind === "ObjectPattern" || node.kind === "ArrayPattern") {
+    if (node.children.length === 0) {
+      return null;
+    }
+
+    const last = node.children[node.children.length - 1];
+    const after = nextSignificant(source, commentEnds, last.end);
+    const close =
+      after.char === ","
+        ? nextSignificant(source, commentEnds, after.offset + 1)
+        : after;
+    const closer = node.kind === "ObjectPattern" ? "}" : "]";
+
+    return close.char === closer && close.offset === node.end - 1
+      ? { items: node.children, close: close.offset }
+      : null;
+  }
+
   // A tuple type closes with `]`, a type parameter list with `>`; every child
   // is an element or a parameter.
   if (node.kind === "TSTupleType" && source[node.end - 1] === "]") {
@@ -249,7 +272,7 @@ const commaEdits = (source, commentEnds, nodes) =>
 
     const last = list.items[list.items.length - 1];
 
-    if (last.kind === "Parameter" && last.rest) {
+    if ((last.kind === "Parameter" && last.rest) || last.kind === "RestElement") {
       return [];
     }
 
