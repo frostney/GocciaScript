@@ -503,12 +503,16 @@ type
     FNamespaceName: string;
     FPhase: TGocciaImportCallPhase;
     FSpecifierRanges: TGocciaASTPartRangeArray;
+    FAttributeRanges: TGocciaImportAttributeRangeArray;
   public
     { Where the module path's string literal is, in the parsed text. }
     procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
     { Where each binding is, in source order: the default binding, the
       namespace, and each named import. }
     procedure SetSpecifierRanges(const ARanges: TGocciaASTPartRangeArray);
+    { Where each import attribute is, in source order. }
+    procedure SetAttributeRanges(
+      const AAttributes: TGocciaImportAttributeRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AImports: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
@@ -608,11 +612,15 @@ type
     FModulePath: string;
     FNamespaceName: string;
     FSpecifierRanges: TGocciaASTPartRangeArray;
+    FAttributeRanges: TGocciaImportAttributeRangeArray;
   public
     { Where the module path's string literal is, in the parsed text. }
     procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
     { Where each specifier is, in source order. }
     procedure SetSpecifierRanges(const ARanges: TGocciaASTPartRangeArray);
+    { Where each import attribute is, in source order. }
+    procedure SetAttributeRanges(
+      const AAttributes: TGocciaImportAttributeRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AExportsTable: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
@@ -1655,6 +1663,12 @@ begin
   FSpecifierRanges := ARanges;
 end;
 
+procedure TGocciaImportDeclaration.SetAttributeRanges(
+  const AAttributes: TGocciaImportAttributeRangeArray);
+begin
+  FAttributeRanges := AAttributes;
+end;
+
 procedure TGocciaImportDeclaration.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
@@ -1665,6 +1679,7 @@ begin
       FModuleSpecifierEnd, []);
     AVisitor.LeavePart;
   end;
+  VisitImportAttributes(AVisitor, FAttributeRanges);
 end;
 
 procedure TGocciaReExportDeclaration.SetModuleSpecifierRange(
@@ -1680,6 +1695,12 @@ begin
   FSpecifierRanges := ARanges;
 end;
 
+procedure TGocciaReExportDeclaration.SetAttributeRanges(
+  const AAttributes: TGocciaImportAttributeRangeArray);
+begin
+  FAttributeRanges := AAttributes;
+end;
+
 procedure TGocciaReExportDeclaration.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
@@ -1690,6 +1711,7 @@ begin
       FModuleSpecifierEnd, []);
     AVisitor.LeavePart;
   end;
+  VisitImportAttributes(AVisitor, FAttributeRanges);
 end;
 
 procedure TGocciaExportDeclaration.SetSpecifierRanges(
