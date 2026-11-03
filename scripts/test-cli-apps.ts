@@ -10764,9 +10764,40 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const crlfOriginal = ['import {', '  gamma', '} from "./letters.js";', ''].join("\r\n");
     const crlfExpected = ['import {', '  gamma,', "} from './letters.js';", ''].join("\r\n");
     writeFileSync(join(tree, "windows.js"), crlfOriginal);
+    // Parameter lists of exported functions and function types, tuple types
+    // and type parameter lists take the comma; a type argument list does not.
+    const typesOriginal = [
+      'export function exported(',
+      '  first: string,',
+      '  second: number',
+      '): void {}',
+      'type Callback = (',
+      '  value: string,',
+      '  done: boolean',
+      ') => void;',
+      'type Pair = [',
+      '  string,',
+      '  number',
+      '];',
+      'function generic<',
+      '  First,',
+      '  Second',
+      '>(first: First, second: Second): void {}',
+      'const table: Map<',
+      '  string,',
+      '  number',
+      '> = new Map();',
+      '',
+    ].join("\n");
+    const typesExpected = typesOriginal
+      .replace("  second: number\n", "  second: number,\n")
+      .replace("  done: boolean\n", "  done: boolean,\n")
+      .replace("  number\n];", "  number,\n];")
+      .replace("  Second\n>", "  Second,\n>");
+    writeFileSync(join(tree, "types.ts"), typesOriginal);
 
     const readOnly = Bun.spawnSync(
-      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      [RUNNER, example, "--experimental-ast", "--compat-function", "--copy", `${tree}=/src`],
       { stdout: "pipe", stderr: "pipe" },
     );
     const report = normalizeLineEndings(readOnly.stdout.toString());
@@ -10784,7 +10815,11 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/sample.js:22:3  a multi-line list should end with a trailing comma",
       "/src/windows.js:2:3  a multi-line list should end with a trailing comma",
       "/src/windows.js:3:8  a string literal should use single quotes",
-      "11 finding(s) in 2 file(s), 2 rewritten",
+      "/src/types.ts:3:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:7:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:11:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:15:3  a multi-line list should end with a trailing comma",
+      "15 finding(s) in 3 file(s), 3 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
@@ -10797,7 +10832,7 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       throw new Error("expression-style under --copy changed the host CRLF file");
 
     const readWrite = Bun.spawnSync(
-      [RUNNER, example, "--experimental-ast", "--copy-rw", `${tree}=/src`],
+      [RUNNER, example, "--experimental-ast", "--compat-function", "--copy-rw", `${tree}=/src`],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (readWrite.exitCode !== 0)
@@ -10805,18 +10840,21 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const fixed = normalizeLineEndings(readFileSync(join(tree, "sample.js"), "utf-8"));
     if (fixed !== expected)
       throw new Error(`expression-style under --copy-rw should write the fixed file, got:\n${fixed}`);
+    const typesFixed = normalizeLineEndings(readFileSync(join(tree, "types.ts"), "utf-8"));
+    if (typesFixed !== typesExpected)
+      throw new Error(`expression-style under --copy-rw should fix the TypeScript lists, got:\n${typesFixed}`);
     const crlfFixed = readFileSync(join(tree, "windows.js"), "utf-8");
     if (crlfFixed !== crlfExpected)
       throw new Error(`expression-style under --copy-rw should fix the CRLF file and keep CRLF, got:\n${JSON.stringify(crlfFixed)}`);
 
     const again = Bun.spawnSync(
-      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      [RUNNER, example, "--experimental-ast", "--compat-function", "--copy", `${tree}=/src`],
       { stdout: "pipe", stderr: "pipe" },
     );
     const againReport = normalizeLineEndings(again.stdout.toString());
     if (again.exitCode !== 0)
       throw new Error(`expression-style rerun should exit 0, got ${again.exitCode}: ${again.stderr.toString()}`);
-    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 2 file(s), 0 rewritten"))
+    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 3 file(s), 0 rewritten"))
       throw new Error(`expression-style should find nothing in a file it fixed, got:\n${againReport}`);
   } finally {
     clean(tmp);
