@@ -15538,8 +15538,8 @@ await section("Loader: --output=json and --silent mute the goccia:test reporter.
         }
         if (!json.output.includes("from console"))
           throw new Error(`${label} should still capture console output, got ${json.output}`);
-        if (json.files[0].result !== 1)
-          throw new Error(`${label} should still report the run's result (1 failed), got ${json.files[0].result}`);
+        if (json.files.length !== files.length || json.files.some((file: { result: number }) => file.result !== 1))
+          throw new Error(`${label} should still report one failed test for each file, got ${JSON.stringify(json.files.map((file: { result: number }) => file.result))}`);
       }
     }
 

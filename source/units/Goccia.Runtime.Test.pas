@@ -79,7 +79,7 @@ type
     procedure TestEntryModuleImportAfterExecuteBytecode;
     function RunTestingLibraryModule(const AInjectGlobals: Boolean;
       const AMuteBeforeRun: Boolean; out ABuiltBeforeRun: Boolean;
-      out AMutedAfterRun: Boolean): Boolean;
+      out AMutedAfterRun: Boolean; out AOutcome: string): Boolean;
     procedure TestTestingLibraryMuteHoldsForModuleOnlyInstall;
     procedure TestTestingLibraryUnmutedByDefault;
     procedure TestTestingLibraryMuteAppliesToBuiltAssertions;
@@ -815,12 +815,13 @@ end;
   runs a module that imports `goccia:test`, registers a failing test and runs
   it. Reports through ABuiltBeforeRun whether the extension had built its
   assertions before the run, and through AMutedAfterRun whether it holds them
-  muted afterwards; the result is whether they exist after the run. A muted
-  run's failing test would print a marker to stdout if the mute did not reach
-  it. }
+  muted afterwards; the result is whether they exist after the run. AOutcome is
+  what runTests() returned, as "<failed>: <failure messages>", so a mute that
+  dropped the counts or the messages is caught. A muted run's failing test
+  would print a marker to stdout if the mute did not reach it. }
 function TRuntimeTests.RunTestingLibraryModule(const AInjectGlobals: Boolean;
   const AMuteBeforeRun: Boolean; out ABuiltBeforeRun: Boolean;
-  out AMutedAfterRun: Boolean): Boolean;
+  out AMutedAfterRun: Boolean; out AOutcome: string): Boolean;
 var
   Extension: TGocciaTestingLibraryRuntimeExtension;
   Runtime: TGocciaRuntime;
@@ -844,7 +845,9 @@ begin
     'import { test, expect, runTests } from "goccia:test";' + LineEnding +
     'test("fails", () => { expect(1).toBe(' + Expected + '); });' +
     LineEnding + TodoLine +
-    'globalThis.outcome = await runTests({ showTestResults: false });';
+    'const result = await runTests({ showTestResults: false });' +
+    LineEnding +
+    'globalThis.outcome = result.failed + ": " + result.failedTests.join("; ");';
   Runtime := TGocciaRuntime.Create('main.js', Source, TGocciaCapabilities.None);
   try
     Runtime.Engine.SourceType := stModule;
@@ -859,6 +862,8 @@ begin
     Runtime.Execute;
     Result := Assigned(Extension.BuiltinTestAssertions);
     AMutedAfterRun := Result and Extension.BuiltinTestAssertions.SuppressOutput;
+    AOutcome := Runtime.Engine.GlobalScope.GetValue('outcome')
+      .ToStringLiteral.Value;
   finally
     Runtime.Free;
     Source.Free;
@@ -868,20 +873,26 @@ end;
 procedure TRuntimeTests.TestTestingLibraryMuteHoldsForModuleOnlyInstall;
 var
   Built, BuiltBefore, Muted: Boolean;
+  Outcome: string;
 begin
-  Built := RunTestingLibraryModule(False, True, BuiltBefore, Muted);
+  Built := RunTestingLibraryModule(False, True, BuiltBefore, Muted, Outcome);
   Expect<Boolean>(BuiltBefore).ToBe(False);
   Expect<Boolean>(Built).ToBe(True);
   Expect<Boolean>(Muted).ToBe(True);
+  // Muting loses no information: the counts and the message are still there.
+  Expect<Boolean>(Pos('1: ', Outcome) = 1).ToBe(True);
+  Expect<Boolean>(Pos('Expected 1 to be 2', Outcome) > 0).ToBe(True);
 end;
 
 procedure TRuntimeTests.TestTestingLibraryUnmutedByDefault;
 var
   Built, BuiltBefore, Muted: Boolean;
+  Outcome: string;
 begin
-  Built := RunTestingLibraryModule(False, False, BuiltBefore, Muted);
+  Built := RunTestingLibraryModule(False, False, BuiltBefore, Muted, Outcome);
   Expect<Boolean>(Built).ToBe(True);
   Expect<Boolean>(Muted).ToBe(False);
+  Expect<string>(Outcome).ToBe('0: ');
 end;
 
 procedure TRuntimeTests.TestTestingLibraryMuteAppliesToBuiltAssertions;
@@ -916,13 +927,16 @@ end;
 procedure TRuntimeTests.TestTestingLibraryMuteAppliesToGlobalsInstall;
 var
   Built, BuiltBefore, Muted: Boolean;
+  Outcome: string;
 begin
   { The globals half builds its assertions at install, so the mute reaches
     them directly rather than through the stored value. }
-  Built := RunTestingLibraryModule(True, True, BuiltBefore, Muted);
+  Built := RunTestingLibraryModule(True, True, BuiltBefore, Muted, Outcome);
   Expect<Boolean>(BuiltBefore).ToBe(True);
   Expect<Boolean>(Built).ToBe(True);
   Expect<Boolean>(Muted).ToBe(True);
+  Expect<Boolean>(Pos('1: ', Outcome) = 1).ToBe(True);
+  Expect<Boolean>(Pos('Expected 1 to be 2', Outcome) > 0).ToBe(True);
 end;
 
 begin
