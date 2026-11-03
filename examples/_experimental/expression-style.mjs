@@ -627,36 +627,22 @@ const shouldFlatten = (parentOperator, operator) => {
   return !(BITSHIFT.includes(parentOperator) && BITSHIFT.includes(operator));
 };
 
-const makeLayout = (source) => {
+const makeLayout = (source, commentEnds) => {
   const parents = new Map();
   const raw = (node) => source.slice(node.start, node.end);
   const between = (from, to) => source.slice(from, to).trim();
   const isLiteralish = (node) =>
     ["StringLiteral", "NumericLiteral", "BooleanLiteral", "NullLiteral", "BigIntLiteral"].includes(node.kind);
   const callArgs = (node) => {
-    // The arguments follow the `(`; the callee, and any type arguments, come before it.
+    // Only `?.` and type arguments can come between the callee and the `(`,
+    // so it is found forward: scanning back would stop at a `(` in a string.
     const callee = node.children[0];
-    let open = node.end - 1;
-    let depth = 0;
-    const offsets = Array.from({ length: node.end - callee.end }, (_, step) => node.end - 1 - step);
-
-    offsets.some((index) => {
-      const char = source[index];
-
-      if (char === ")") {
-        depth = depth + 1;
-      } else if (char === "(") {
-        depth = depth - 1;
-
-        if (depth === 0) {
-          open = index;
-
-          return true;
-        }
-      }
-
-      return false;
-    });
+    const typeArguments = node.children.find(
+      (child) => child.kind === "TSTypeParameterInstantiation" && child.start >= callee.end,
+    );
+    const afterCallee = nextSignificant(source, commentEnds, (typeArguments ?? callee).end);
+    const next = afterCallee.char === "?" ? nextSignificant(source, commentEnds, afterCallee.offset + 2) : afterCallee;
+    const open = next.char === "(" && next.offset < node.end ? next.offset : node.end - 1;
 
     return {
       callee,
@@ -1102,10 +1088,27 @@ const makeLayout = (source) => {
       return raw(node);
     }
 
+    // A pattern's children are its bindings alone: a key, `...` or `:` before
+    // each one is text between the previous entry and this one.
+    const entry = (child, index) => {
+      if (node.kind !== "ObjectPattern") {
+        return print(child);
+      }
+
+      const from = index === 0 ? node.start + 1 : node.children[index - 1].end;
+      const prefix = source
+        .slice(from, child.start)
+        .replace(/^[\s,]*/, "")
+        .replace(/\s*:\s*$/, ": ");
+
+      return [prefix, print(child)];
+    };
+
     return group([
       "{",
-      indent([line, ...join([",", line], node.children.map((child) => print(child)))]),
-      ifBreak(","),
+      indent([line, ...join([",", line], node.children.map(entry))]),
+      // Nothing may follow a rest element, not even a comma.
+      ifBreak(node.children[node.children.length - 1].kind === "RestElement" ? "" : ","),
       line,
       "}",
     ]);
@@ -1417,10 +1420,19 @@ const makeLayout = (source) => {
       // A name binding is not a node: one declarator `const x: T = init` has
       // its annotation, if any, and its initializer as children.
       const init = node.children[node.children.length - 1];
-      const left = init ? source.slice(node.start, init.start).replace(/\s*=\s*$/, "") : "";
+      const beforeInit = init ? source.slice(node.start, init.start) : "";
+      const left = beforeInit.replace(/\s*=\s*$/, "");
+
+      // `let state: T;` has an annotation and no initializer: only its type
+      // can break.
+      if (init?.kind === "TSTypeAnnotation" && node.children.length === 1 && /^(let|var)\s+[\w$]+$/.test(beforeInit)) {
+        return [beforeInit, print(init), tail(init)];
+      }
 
       if (
         !init ||
+        init.kind === "TSTypeAnnotation" ||
+        left === beforeInit ||
         !node.children.slice(0, -1).every((child) => child.kind === "TSTypeAnnotation") ||
         !/^(const|let|var)\s+[\w$]+(\s*:[^=]*)?$/.test(left)
       ) {
@@ -1449,7 +1461,10 @@ const layoutEdits = (source, comments, lineStarts, nodes, root) => {
     return [];
   }
 
-  const layout = makeLayout(source);
+  const layout = makeLayout(
+    source,
+    new Map(comments.map((comment) => [comment.start, comment.end])),
+  );
   const walk = (node) => {
     node.children.forEach((child) => {
       layout.parents.set(child, node);
