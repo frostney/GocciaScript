@@ -303,6 +303,7 @@ type
     procedure SetForInLoopsEnabled(const AValue: Boolean);
     procedure SetExperimentalJSModuleSourceEnabled(const AValue: Boolean);
     procedure SetWarningUnsupportedFeatures(const AValue: Boolean);
+    procedure SetSuppressWarnings(const AValue: Boolean);
 
     procedure PinSingletons;
     procedure RegisterBuiltIns;
@@ -667,7 +668,10 @@ type
     { The bytecode VM this engine runs on; a heap snapshot releases its idle
       scratch (ADR 0148). }
     property VM: TGocciaVM read FVM;
-    property SuppressWarnings: Boolean read FSuppressWarnings write FSuppressWarnings;
+    { Mutes the entry's parse warnings and, through the module loader, those of
+      every module it imports. }
+    property SuppressWarnings: Boolean
+      read FSuppressWarnings write SetSuppressWarnings;
     property UnhandledRejections: TGocciaUnhandledRejectionMode
       read FUnhandledRejections write FUnhandledRejections;
     { ADR 0148: the extension that owns the run's host calls; one of this
@@ -5082,6 +5086,13 @@ begin
   FWarningUnsupportedFeatures := AValue;
   if Assigned(FModuleLoader) then
     FModuleLoader.WarningUnsupportedFeatures := AValue;
+end;
+
+procedure TGocciaEngine.SetSuppressWarnings(const AValue: Boolean);
+begin
+  FSuppressWarnings := AValue;
+  if Assigned(FModuleLoader) then
+    FModuleLoader.SuppressWarnings := AValue;
 end;
 
 procedure TGocciaEngine.ThrowError(const AMessage: string; const ALine, AColumn: Integer);
