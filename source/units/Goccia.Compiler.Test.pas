@@ -212,7 +212,7 @@ type
     procedure TestOtherFunctionKindsReturnWithoutAwait;
     procedure TestForAwaitCloseAwaitsReturnResult;
     procedure TestAwaitUsingAwaitsDisposeResultOnce;
-    procedure TestUsingHandlerTellsGeneratorReturnFromThrow;
+    procedure TestUsingDisposalDistinguishesReturnFromThrow;
     procedure TestForAwaitUsingHeadIteratesAsynchronously;
     procedure TestTopLevelUsingIsDisposed;
     procedure TestInitializedConstOperandsSkipGetLocal;
@@ -486,7 +486,7 @@ begin
   Test('await using awaits a dispose result once',
     TestAwaitUsingAwaitsDisposeResultOnce);
   Test('a using handler tells a generator return from a throw',
-    TestUsingHandlerTellsGeneratorReturnFromThrow);
+    TestUsingDisposalDistinguishesReturnFromThrow);
   Test('for await with a using head iterates asynchronously',
     TestForAwaitUsingHeadIteratesAsynchronously);
   Test('a top-level using declaration is disposed',
@@ -1021,7 +1021,7 @@ end;
 // A using block protects its body with a finally handler, which that
 // completion reaches, and the handler tests for it before it disposes: once,
 // for the normal exit and the handler each.
-procedure TTestCompiler.TestUsingHandlerTellsGeneratorReturnFromThrow;
+procedure TTestCompiler.TestUsingDisposalDistinguishesReturnFromThrow;
 var
   Module: TGocciaBytecodeModule;
   Func: TGocciaFunctionTemplate;
