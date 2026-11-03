@@ -4,10 +4,13 @@
 //   1. A string literal is written in single quotes, when that needs no
 //      change to its escaping: `"a"` becomes `'a'`, but `"it's"` and
 //      `"say \"hi\""` stay as they are.
-//   2. A multi-line array, object, argument list, parameter list or braced
-//      import or export specifier list ends with a trailing comma, except
-//      after a rest parameter or a setter's parameter, where one is a syntax
-//      error.
+//   2. A multi-line array, object, argument list, parameter list (of a
+//      function, an exported function, a function type or a method or call
+//      signature), braced import or export specifier list, tuple type or type
+//      parameter list ends with a trailing comma, except after a rest
+//      parameter or a setter's parameter, where one is a syntax error. A type
+//      argument list (`Map<K, V>`) is left alone, as Biome and Prettier leave
+//      it.
 //   3. A call that sits on one line longer than WIDTH puts its arguments one
 //      per line, indented one step past the line it starts on, with a
 //      trailing comma. A call inside a template literal's `${}` is left
@@ -62,6 +65,12 @@ const FUNCTION_KINDS = [
   "ArrowFunctionExpression",
   "FunctionExpression",
   "FunctionDeclaration",
+  "ExportFunctionDeclaration",
+  "TSFunctionType",
+  "TSConstructorType",
+  "TSMethodSignature",
+  "TSCallSignatureDeclaration",
+  "TSConstructSignatureDeclaration",
   "MethodDefinition",
   "Property",
 ];
@@ -137,16 +146,21 @@ const quoteEdits = (source, nodes) =>
 // -- Rule 2: trailing commas -----------------------------------------------------
 
 // `set` as a whole word, followed by the start of a key rather than by the
-// `(` of a method named `set`: a name after a space, or a `[`, `#` or quote.
-const SETTER_HEAD = /(?:^|[^\w$.@#'"`])set(?:\s+[\w$#'"[]|[#'"[])/;
+// `(` of a method named `set`: a name after whitespace or comments, or a `[`,
+// `#` or quote.
+const SETTER_HEAD =
+  /(?:^|[^\w$.@#'"`])set(?:(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)+[\w$#'"[]|[#'"[])/;
+
+const MEMBER_KINDS = ["Property", "MethodDefinition", "TSMethodSignature"];
 
 /**
- * Whether an object property or class member is a setter. The view carries
- * no accessor flag, so this reads the text from the member's start (its
- * decorators and modifiers included) up to its first parameter.
+ * Whether an object property, class member, or interface or type literal
+ * member is a setter. The view carries no accessor flag, so this reads the
+ * text from the member's start (its decorators and modifiers included) up to
+ * its first parameter.
  */
 const isSetter = (source, node, firstParameter) =>
-  (node.kind === "Property" || node.kind === "MethodDefinition") &&
+  MEMBER_KINDS.includes(node.kind) &&
   SETTER_HEAD.test(source.slice(node.start, firstParameter.start));
 
 /**
@@ -181,6 +195,19 @@ const listOf = (source, commentEnds, node) => {
         : after;
 
     return close.char === "}" ? { items: specifiers, close: close.offset } : null;
+  }
+
+  // A tuple type closes with `]`, a type parameter list with `>`; every child
+  // is an element or a parameter.
+  if (node.kind === "TSTupleType" && source[node.end - 1] === "]") {
+    return { items: node.children, close: node.end - 1 };
+  }
+
+  if (
+    node.kind === "TSTypeParameterDeclaration" &&
+    source[node.end - 1] === ">"
+  ) {
+    return { items: node.children, close: node.end - 1 };
   }
 
   if (FUNCTION_KINDS.includes(node.kind)) {
