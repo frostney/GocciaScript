@@ -212,6 +212,9 @@ type
     procedure TestOtherFunctionKindsReturnWithoutAwait;
     procedure TestForAwaitCloseAwaitsReturnResult;
     procedure TestAwaitUsingAwaitsDisposeResultOnce;
+    procedure TestUsingHandlerTellsGeneratorReturnFromThrow;
+    procedure TestForAwaitUsingHeadIteratesAsynchronously;
+    procedure TestTopLevelUsingIsDisposed;
     procedure TestInitializedConstOperandsSkipGetLocal;
     procedure TestConstOperandsBeforeDeclarationKeepGetLocal;
     procedure TestSwitchClauseForgetsInitializedConsts;
@@ -482,6 +485,12 @@ begin
     TestForAwaitCloseAwaitsReturnResult);
   Test('await using awaits a dispose result once',
     TestAwaitUsingAwaitsDisposeResultOnce);
+  Test('a using handler tells a generator return from a throw',
+    TestUsingHandlerTellsGeneratorReturnFromThrow);
+  Test('for await with a using head iterates asynchronously',
+    TestForAwaitUsingHeadIteratesAsynchronously);
+  Test('a top-level using declaration is disposed',
+    TestTopLevelUsingIsDisposed);
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
@@ -1002,6 +1011,99 @@ begin
       Expect<Integer>(DisposeCount).ToBe(2);
       Expect<Integer>(ErrorCount).ToBe(2);
     end;
+  finally
+    Module.Free;
+  end;
+end;
+
+// ES2027 §27.8.3.4 GeneratorResumeAbrupt resumes a generator's return() with
+// a return completion, which leaving a block disposes (§7.5.4 DisposeResources).
+// A using block protects its body with a finally handler, which that
+// completion reaches, and the handler tests for it before it disposes: once,
+// for the normal exit and the handler each.
+procedure TTestCompiler.TestUsingHandlerTellsGeneratorReturnFromThrow;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I, ReturnTestCount: Integer;
+  Instruction: UInt32;
+begin
+  Module := CompileSource(
+    'const holder = {' +
+    '  *run(resource) {' +
+    '    { using r = resource; yield 1; }' +
+    '  }' +
+    '};');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_USING_DISPOSE);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_PUSH_HANDLER)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_PUSH_FINALLY_HANDLER)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_USING_DISPOSE)).ToBe(2);
+      ReturnTestCount := 0;
+      for I := 0 to Func.CodeCount - 1 do
+      begin
+        Instruction := Func.GetInstruction(I);
+        if (TGocciaOpCode(DecodeOp(Instruction)) = OP_ITER_CLOSE) and
+           (DecodeC(Instruction) = ITER_CLOSE_IS_GENERATOR_RETURN) then
+        begin
+          Inc(ReturnTestCount);
+          Expect<Integer>(DecodeOp(Func.GetInstruction(I + 1)))
+            .ToBe(Ord(OP_JUMP_IF_TRUE));
+        end;
+      end;
+      Expect<Integer>(ReturnTestCount).ToBe(1);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+// ES2027 §14.7.5: `for await (await using x of source)` and
+// `for await (using x of source)` are for-await-of loops (iteration kind
+// async-iterate) whose values are resources of their iteration.
+procedure TTestCompiler.TestForAwaitUsingHeadIteratesAsynchronously;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const holder = {' +
+    '  async run(source) {' +
+    '    for await (await using x of source) {}' +
+    '    for await (using y of source) {}' +
+    '  }' +
+    '};');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_USING_INIT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_ASYNC_ITER_NEXT)).ToBe(2);
+      Expect<Integer>(CountOp(Func, OP_ITER_NEXT)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_USING_INIT)).ToBe(2);
+      // Each iteration's normal exit and its handler dispose once.
+      Expect<Integer>(CountOp(Func, OP_USING_DISPOSE)).ToBe(4);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+// ES2027 §16.2.1.7.3.2 ExecuteModule: a module disposes the resources of its
+// top-level using declarations once its body completes, from the normal exit
+// and from the handler that a throw reaches.
+procedure TTestCompiler.TestTopLevelUsingIsDisposed;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('using r = globalThis.resource;');
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_USING_INIT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_FINALLY_HANDLER)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_USING_DISPOSE)).ToBe(2);
   finally
     Module.Free;
   end;

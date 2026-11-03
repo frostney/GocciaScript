@@ -6078,6 +6078,10 @@ begin
         '''await using'' is only valid in async functions or at the top level',
         Peek.Line, Peek.Column, FFileName, FSourceLines,
         'Wrap in an async function or use ''using'' for synchronous disposal');
+    // A top-level await using declaration awaits its disposal when the body
+    // completes, so the module evaluates asynchronously.
+    if FFunctionDepth = 0 then
+      FHasTopLevelAwait := True;
     Result := UsingStatement;
   end
   else if IsInvalidConciseMethodStatementStart then
@@ -6964,8 +6968,10 @@ begin
     AfterLeftParen := FCurrent;
 
     // `for (await using x of iterable)` is a synchronous for-of loop whose
-    // per-iteration binding uses the async-dispose hint. This is distinct from
-    // `for await (...)`, where `await` appears before the opening paren.
+    // per-iteration binding uses the async-dispose hint, and
+    // `for await (await using x of iterable)` an asynchronous one (ES2027
+    // §14.7.5): the `await` before the opening paren picks the iteration,
+    // the one after it the disposal.
     if IsAwaitUsingDeclarationStart then
     begin
       if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
@@ -7004,8 +7010,14 @@ begin
         BodyStmt := IterationBodyStatement;
         RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         RejectFunctionStatementBody(BodyStmt, Line, Column);
-        Result := TGocciaForOfStatement.Create(True, BindingName, nil,
-          IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil, nil, True, True);
+        if IsAwait then
+          Result := TGocciaForAwaitOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, True)
+        else
+          Result := TGocciaForOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, True);
         Exit;
       end;
 
@@ -7047,8 +7059,14 @@ begin
         BodyStmt := IterationBodyStatement;
         RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         RejectFunctionStatementBody(BodyStmt, Line, Column);
-        Result := TGocciaForOfStatement.Create(True, BindingName, nil,
-          IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil, nil, True, False);
+        if IsAwait then
+          Result := TGocciaForAwaitOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, False)
+        else
+          Result := TGocciaForOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, False);
         Exit;
       end;
 
