@@ -27,6 +27,19 @@ class Store {
   }
 }
 
+class Ledger {
+  #entry(name: string): string;
+  #entry(name: string): string {
+    return `entry ${name}`;
+  }
+
+  read(name: string) {
+    return this.#entry(name);
+  }
+}
+
+class Shelf { count(): number { return 2; } label(): string }
+
 test("a function overload's parameter names do not replace the implementation's", () => {
   expect(describeValue("a")).toBe("string:a");
   expect(describeValue(2)).toBe("number:2");
@@ -41,3 +54,13 @@ test("class method overloads keep the implementation", () => {
   expect(new Store().get(3)).toBe("got 3");
   expect(Store.make() instanceof Store).toBe(true);
 });
+
+test("a private method's overload does not claim its name", () => {
+  expect(new Ledger().read("rent")).toBe("entry rent");
+});
+
+test("a method signature can end at the class's closing brace", () => {
+  expect(new Shelf().count()).toBe(2);
+  expect(new Shelf().label).toBe(undefined);
+});
+

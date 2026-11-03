@@ -7993,8 +7993,9 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      MethodReturnType := CollectTypeAnnotation([gttLeftBrace, gttSemicolon],
-        '', '', True, True, ReturnTypeRanges);
+      // A signature's return type can end at the class's closing '}'.
+      MethodReturnType := CollectTypeAnnotation([gttLeftBrace, gttSemicolon,
+        gttRightBrace], '', '', True, True, ReturnTypeRanges);
       AppendTypeRanges(MethodTypeRanges, ReturnTypeRanges);
     end;
 
@@ -9625,13 +9626,13 @@ begin
       end
       else if Check(gttLeftParen) or Check(gttLess) then
       begin
-        if IsPrivate and not IsComputed and (MemberName <> '') then
-          DeclarePrivateName(MemberName, pndMethod, IsStatic);
-
         Method := ClassMethod(IsStatic, IsAsync, IsGenerator);
-        // An overload signature: the implementation is the member to keep.
+        // An overload signature: the implementation is the member to keep,
+        // and the only one to claim a private name.
         if not Assigned(Method) then
           Continue;
+        if IsPrivate and not IsComputed and (MemberName <> '') then
+          DeclarePrivateName(MemberName, pndMethod, IsStatic);
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
         Method.IsGenerator := IsGenerator;
