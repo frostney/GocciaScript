@@ -5454,6 +5454,12 @@ begin
       Local := ACtx.Scope.GetLocal(LocalIdx);
       if Local.IsImportBinding then
         Continue;
+      // ES2027 §16.2.3.7: an export list evaluates to an empty completion and
+      // reads no binding. The loader binds a linked module's local exports to
+      // its module environment, so reading one here would only throw in the
+      // binding's temporal dead zone when the list precedes the declaration.
+      if Local.IsGlobalBacked and ACtx.PreinitializedTopLevelFunctions then
+        Continue;
       if Local.IsGlobalBacked then
       begin
         Reg := ACtx.Scope.AllocateRegister;
