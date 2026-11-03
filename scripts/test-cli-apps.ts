@@ -15542,7 +15542,7 @@ await section("Loader: --output=json and --silent mute the goccia:test reporter.
     const reporterMarkers = ["❌", "📝", "⏸️", "Test Results"];
     const run = (args: string[]) => {
       const proc = Bun.spawnSync([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" });
-      return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+      return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
     };
 
     // Control: the unmuted reporter does write to stdout, so the cases below
@@ -15571,6 +15571,10 @@ await section("Loader: --output=json and --silent mute the goccia:test reporter.
     }
 
     const silent = run([first, "--silent"]);
+    // A failing guest test does not fail the runner, so a run that stops
+    // before runTests() would otherwise pass the checks below untested.
+    if (silent.exitCode !== 0)
+      throw new Error(`--silent should exit 0, got ${silent.exitCode}:\n${silent.stderr}`);
     for (const marker of reporterMarkers) {
       if (silent.stdout.includes(marker))
         throw new Error(`--silent should mute the goccia:test reporter (${marker}), got:\n${silent.stdout}`);
@@ -15580,6 +15584,8 @@ await section("Loader: --output=json and --silent mute the goccia:test reporter.
 
     // Sandbox mode configures its engines separately.
     const sandboxSilent = run(["--sandbox", first, "--silent"]);
+    if (sandboxSilent.exitCode !== 0)
+      throw new Error(`--sandbox --silent should exit 0, got ${sandboxSilent.exitCode}:\n${sandboxSilent.stderr}`);
     for (const marker of reporterMarkers) {
       if (sandboxSilent.stdout.includes(marker))
         throw new Error(`--sandbox --silent should mute the goccia:test reporter (${marker}), got:\n${sandboxSilent.stdout}`);
