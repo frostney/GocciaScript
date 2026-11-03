@@ -201,7 +201,7 @@ type
       const ATarget: TGatedStoreObjectValue;
       const ALimit: Integer): Integer;
     procedure TestGateCollectsBeforeRefusing;
-    procedure TestRepeatedRefusalCollectsOnlyOnce;
+    procedure TestRepeatedRefusalBacksCollectionsOff;
     procedure TestGatedGrowthRootsNativeOnlyValues;
     procedure TestRealGatedGrowthRootsNativeOnlyValues;
     procedure TestGatedGrowthRootsAnUnrootedMapOwner;
@@ -442,8 +442,8 @@ begin
     TestGatePermitsInBudgetRequest);
   Test('The gate collects and re-tests before refusing',
     TestGateCollectsBeforeRefusing);
-  Test('A repeated refusal of the same size collects only once',
-    TestRepeatedRefusalCollectsOnlyOnce);
+  Test('A repeated refusal of the same size backs its collections off',
+    TestRepeatedRefusalBacksCollectionsOff);
   Test('A gated growth keeps the values a store is carrying alive across a ' +
     'collection taken there', TestGatedGrowthRootsNativeOnlyValues);
   Test('The real gate''s own collection keeps those values alive too',
@@ -885,8 +885,8 @@ begin
       the byte counter and never walk the heap, so whether a storage doubling
       was refused depended on how much collectable garbage happened to be
       resident. It now forces one collection and re-tests before refusing —
-      once, not per attempt; TestRepeatedRefusalCollectsOnlyOnce pins that
-      half. The rooting the canary tests below pin is what makes this safe,
+      not once per attempt but with a backoff; TestRepeatedRefusalBacksCollectionsOff
+      pins that half. The rooting the canary tests below pin is what makes this safe,
       and it does not move. }
     Expect<Integer>(GC.TotalCollections - CollectionsBefore).ToBe(1);
   finally
@@ -894,11 +894,13 @@ begin
   end;
 end;
 
-procedure TMemoryLimitTests.TestRepeatedRefusalCollectsOnlyOnce;
+procedure TMemoryLimitTests.TestRepeatedRefusalBacksCollectionsOff;
 const
   { Enough attempts that a per-attempt mark-and-sweep would be unmistakable in
-    the count; the assertion is exact, so one extra walk fails it. }
+    the count; the assertion is exact, so one extra walk fails it. The walks
+    land on attempts 1, 2, 4 and 8 (see FForcedCollectRetryAfter). }
   RETRY_ATTEMPTS = 8;
+  EXPECTED_WALKS = 4;
 var
   CollectionsBefore: Integer;
   GC: TGarbageCollector;
@@ -918,8 +920,10 @@ begin
       RangeError and retries — or a native builder that asks again after a
       refusal — must not be able to bill the engine a full mark-and-sweep per
       attempt. The first forced collection records the level it could not get
-      below, and every later attempt at the same size is answered from that
-      record without walking the heap. }
+      below, and a later attempt at the same size is answered from that record
+      without walking the heap, except that every retry the record lets
+      through, which makes no room, doubles the number of attempts before the
+      next one: the retries cost a logarithmic number of walks. }
     CollectionsBefore := GC.TotalCollections;
     Refusals := 0;
     for I := 1 to RETRY_ATTEMPTS do
@@ -932,7 +936,7 @@ begin
     { Every attempt still refuses: the damper skips the walk, never the
       refusal. }
     Expect<Integer>(Refusals).ToBe(RETRY_ATTEMPTS);
-    Expect<Integer>(GC.TotalCollections - CollectionsBefore).ToBe(1);
+    Expect<Integer>(GC.TotalCollections - CollectionsBefore).ToBe(EXPECTED_WALKS);
 
     { And the damper suppresses a proven-hopeless repeat, not the mechanism: an
       ordinary collection clears the record, so the next attempt forces its own
