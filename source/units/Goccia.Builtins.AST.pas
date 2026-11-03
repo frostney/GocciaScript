@@ -999,6 +999,7 @@ begin
         FNodes[Index].HasTypeOnly := True;
         FNodes[Index].TypeOnly := apfTypeOnly in AFlags;
       end;
+    apkImportAttribute: Index := NewNode('ImportAttribute');
     apkKeyIdentifier: Index := NewNode('Identifier');
     apkKeyNumeric: Index := NewNode('NumericLiteral');
     apkKeyBigInt: Index := NewNode('BigIntLiteral');
@@ -1012,8 +1013,8 @@ begin
     apkTypeAnnotation..apkTypeLiteral, apkCallSignature..apkClassImplements:
       Index := NewNode(TYPE_PART_KINDS[AKind]);
   else
-    // The module path of an import or a re-export, and a quoted key, are
-    // string literals.
+    // The module path of an import or a re-export, a quoted key, and an
+    // import attribute's value are string literals.
     Index := NewNode('StringLiteral');
   end;
   { A part the parser measured has that range, as a statement does; one it
