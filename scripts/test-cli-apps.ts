@@ -10696,7 +10696,7 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
   }
 });
 
-await section("goccia:ast expression-style example: fixes quotes, trailing commas (specifier lists included) and long calls, keeping them only under --copy-rw...", async () => {
+await section("goccia:ast expression-style example: fixes quotes, trailing commas (specifier lists included) and long lines, keeping them only under --copy-rw...", async () => {
   const tmp = makeNativeTmp();
   try {
     const example = join(dirname(fileURLToPath(import.meta.url)), "..", "examples", "_experimental", "expression-style.mjs");
@@ -10850,6 +10850,49 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       .replace("  second\n]", "  second,\n]")
       .replace("  body\n}", "  body,\n}");
     writeFileSync(join(tree, "types.ts"), typesOriginal);
+    // A line over 80 columns is broken the way Biome breaks it; the expected
+    // text is Biome's own output for this sample.
+    const layoutOriginal = [
+      "const snoozed = latest.items.find((entry) => entry.item.lineageKey !== 'source-health:scheduled');",
+      "const kept = items.filter((candidate) => candidate.reviewKey === 'growth' && candidate.version === '1.1.0');",
+      "query.withIndex('by_workspace_and_connection_and_channel', (q) => q.eq('workspaceId', workspaceId).eq('connectionId', connectionId));",
+      "expect(decideCompetitorGate({ competitorCount: 2, domainAnchored: false }).action).toBe('skip');",
+      "const copy = { body: 'This sentence is long enough that it runs well past the eighty column limit.' };",
+      "const urls = { sourceUrls: ['https://reviews.example/brands/other?brand=Orchardbeam&page=2'] };",
+      "const rows = database.query('reviewRuns').withIndex('by_workspace', (q) => q.eq('workspaceId', id)).collect();",
+      "const ok = ready && (audit.status === 'complete' || audit.categories.length > 0 || audit.pending);",
+      "",
+    ].join("\n");
+    const layoutExpected = [
+      "const snoozed = latest.items.find(",
+      "  (entry) => entry.item.lineageKey !== 'source-health:scheduled',",
+      ");",
+      "const kept = items.filter(",
+      "  (candidate) =>",
+      "    candidate.reviewKey === 'growth' && candidate.version === '1.1.0',",
+      ");",
+      "query.withIndex('by_workspace_and_connection_and_channel', (q) =>",
+      "  q.eq('workspaceId', workspaceId).eq('connectionId', connectionId),",
+      ");",
+      "expect(",
+      "  decideCompetitorGate({ competitorCount: 2, domainAnchored: false }).action,",
+      ").toBe('skip');",
+      "const copy = {",
+      "  body: 'This sentence is long enough that it runs well past the eighty column limit.',",
+      "};",
+      "const urls = {",
+      "  sourceUrls: ['https://reviews.example/brands/other?brand=Orchardbeam&page=2'],",
+      "};",
+      "const rows = database",
+      "  .query('reviewRuns')",
+      "  .withIndex('by_workspace', (q) => q.eq('workspaceId', id))",
+      "  .collect();",
+      "const ok =",
+      "  ready &&",
+      "  (audit.status === 'complete' || audit.categories.length > 0 || audit.pending);",
+      "",
+    ].join("\n");
+    writeFileSync(join(tree, "layout.js"), layoutOriginal);
 
     const readOnly = Bun.spawnSync(
       [RUNNER, example, "--experimental-ast", "--compat-function", "--copy", `${tree}=/src`],
@@ -10863,7 +10906,7 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/sample.js:4:3  a string literal should use single quotes",
       "/src/sample.js:5:3  a multi-line list should end with a trailing comma",
       "/src/sample.js:9:3  a multi-line list should end with a trailing comma",
-      "/src/sample.js:15:1  a call on a line over 80 columns should put one argument per line",
+      "/src/sample.js:15:1  a line over 80 columns should be broken the way Biome breaks it",
       "/src/sample.js:15:8  a string literal should use single quotes",
       "/src/sample.js:19:3  a multi-line list should end with a trailing comma",
       "/src/sample.js:20:8  a string literal should use single quotes",
@@ -10881,7 +10924,15 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/types.ts:48:10  a multi-line list should end with a trailing comma",
       "/src/types.ts:60:3  a multi-line list should end with a trailing comma",
       "/src/types.ts:64:3  a multi-line list should end with a trailing comma",
-      "22 finding(s) in 3 file(s), 3 rewritten",
+      "/src/layout.js:1:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.js:2:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.js:3:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.js:4:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.js:5:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.js:6:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.js:7:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.js:8:1  a line over 80 columns should be broken the way Biome breaks it",
+      "30 finding(s) in 4 file(s), 4 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
@@ -10903,6 +10954,9 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     if (fixed !== expected)
       throw new Error(`expression-style under --copy-rw should write the fixed file, got:\n${fixed}`);
     const typesFixed = normalizeLineEndings(readFileSync(join(tree, "types.ts"), "utf-8"));
+    const layoutFixed = normalizeLineEndings(readFileSync(join(tree, "layout.js"), "utf-8"));
+    if (layoutFixed !== layoutExpected)
+      throw new Error(`expression-style under --copy-rw should lay out long lines as Biome does, got:\n${layoutFixed}`);
     if (typesFixed !== typesExpected)
       throw new Error(`expression-style under --copy-rw should fix the TypeScript lists, got:\n${typesFixed}`);
     const crlfFixed = readFileSync(join(tree, "windows.js"), "utf-8");
@@ -10916,7 +10970,7 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const againReport = normalizeLineEndings(again.stdout.toString());
     if (again.exitCode !== 0)
       throw new Error(`expression-style rerun should exit 0, got ${again.exitCode}: ${again.stderr.toString()}`);
-    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 3 file(s), 0 rewritten"))
+    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 4 file(s), 0 rewritten"))
       throw new Error(`expression-style should find nothing in a file it fixed, got:\n${againReport}`);
   } finally {
     clean(tmp);

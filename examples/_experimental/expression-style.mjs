@@ -1,9 +1,10 @@
 // Three expression-level style rules, enforced from `goccia:ast`'s expression
 // view (`parse(text, { expressions: true })`):
 //
-//   1. A string literal is written in single quotes, when that needs no
-//      change to its escaping: `"a"` becomes `'a'`, but `"it's"` and
-//      `"say \"hi\""` stay as they are.
+//   1. A string literal is written in single quotes unless its text holds
+//      more single quotes than double ones, escaping only the quote that
+//      delimits it: `"a"` becomes `'a'` and `"say \"hi\""` becomes
+//      `'say "hi"'`, but `"it's"` stays as it is.
 //   2. A multi-line array, object, argument list, parameter list (of a
 //      function, an exported function, a function type or a method or call
 //      signature), destructuring pattern, braced import or export specifier
@@ -12,11 +13,14 @@
 //      one is a syntax error, and after an array pattern's trailing hole. A type
 //      argument list (`Map<K, V>`) is left alone, as Biome and Prettier leave
 //      it.
-//   3. A call that sits on one line longer than WIDTH puts its arguments one
-//      per line, indented one step past the line it starts on, with a
-//      trailing comma. A call inside a template literal's `${}` is left
-//      alone: the long line is the template's, and it is shortened by
-//      changing the template, not by spreading a call across its text.
+//   3. A line longer than WIDTH is laid out again the way Biome and Prettier
+//      lay it out: the outermost expression or statement on it is broken at
+//      its outermost group that does not fit — the arguments of a call, the
+//      body of an arrow, a logical chain, a member chain, an array, object,
+//      type argument list or type literal — and inner groups only where they
+//      still do not fit. A node holding a comment, one inside a template
+//      literal's `${}`, and the head of a call or member access that goes on
+//      past its line are left alone.
 //
 // Each rule dispatches on the tree: a node's `kind`, its flags (`rest` on a
 // parameter), and its range. What the tree does not hold — the text of a
@@ -57,7 +61,7 @@ const MAX_PASSES = 100;
 const RULES = {
   singleQuotes: "a string literal should use single quotes",
   trailingComma: "a multi-line list should end with a trailing comma",
-  wrapArguments: `a call on a line over ${WIDTH} columns should put one argument per line`,
+  layout: `a line over ${WIDTH} columns should be broken the way Biome breaks it`,
 };
 
 const SPECIFIER_KINDS = ["ImportSpecifier", "ExportSpecifier"];
@@ -1489,7 +1493,7 @@ const layoutEdits = (source, comments, lineStarts, nodes, root) => {
         return [];
       }
 
-      return [{ node, rule: RULES.wrapArguments, start: node.start, end: node.end, text: printed }];
+      return [{ node, rule: RULES.layout, start: node.start, end: node.end, text: printed }];
     });
 };
 
