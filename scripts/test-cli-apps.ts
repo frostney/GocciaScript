@@ -10766,8 +10766,9 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     writeFileSync(join(tree, "windows.js"), crlfOriginal);
     // Parameter lists of exported functions, function and constructor types
     // and method, call and construct signatures, tuple types and type
-    // parameter lists take the comma; a type argument list and a setter
-    // signature's parameter do not.
+    // parameter lists and destructuring patterns take the comma; a type
+    // argument list, a setter signature's parameter, a rest element and an
+    // array pattern's trailing hole do not.
     const typesOriginal = [
       'export function exported(',
       '  first: string,',
@@ -10814,6 +10815,26 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       '    value: string',
       '  );',
       '};',
+      'const {',
+      '  alpha,',
+      '  gamma: delta',
+      '} = source;',
+      'const [',
+      '  one,',
+      '  ...others',
+      '] = list;',
+      'const [',
+      '  head,',
+      '  ,',
+      '] = list;',
+      'const [',
+      '  first,',
+      '  second',
+      '] = pair;',
+      'function render({',
+      '  title,',
+      '  body',
+      '}: Props) {}',
       '',
     ].join("\n");
     const typesExpected = typesOriginal
@@ -10824,7 +10845,10 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       .replace("  seed: number\n", "  seed: number,\n")
       .replace("    factor: number\n", "    factor: number,\n")
       .replace("    input: string\n", "    input: string,\n")
-      .replace("    shape: number\n", "    shape: number,\n");
+      .replace("    shape: number\n", "    shape: number,\n")
+      .replace("  gamma: delta\n", "  gamma: delta,\n")
+      .replace("  second\n]", "  second,\n]")
+      .replace("  body\n}", "  body,\n}");
     writeFileSync(join(tree, "types.ts"), typesOriginal);
 
     const readOnly = Bun.spawnSync(
@@ -10854,7 +10878,10 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/types.ts:26:5  a multi-line list should end with a trailing comma",
       "/src/types.ts:29:5  a multi-line list should end with a trailing comma",
       "/src/types.ts:32:5  a multi-line list should end with a trailing comma",
-      "19 finding(s) in 3 file(s), 3 rewritten",
+      "/src/types.ts:48:10  a multi-line list should end with a trailing comma",
+      "/src/types.ts:60:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:64:3  a multi-line list should end with a trailing comma",
+      "22 finding(s) in 3 file(s), 3 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
