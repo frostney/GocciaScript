@@ -97,7 +97,9 @@ re-export's module path is a `StringLiteral` child of its declaration, after
 its specifiers (below), and each attribute of its `with` clause an
 `ImportAttribute` after the path, covering `type: "json"` with the key
 (`Identifier` or `StringLiteral`) and the value's `StringLiteral` as its
-children. An
+children. A type-only import or re-export reports no `ImportAttribute`: it is
+erased without its `with` clause being read, and TypeScript rejects
+attributes there. An
 assertion wraps the expression it asserts and covers its type, so in
 `f(a as T)` the argument ends after `T`; the type is its second child.
 
