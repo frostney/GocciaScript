@@ -90,11 +90,14 @@ Kinds follow ESTree, with Babel's literal kinds: `Identifier`,
 `ParenthesizedExpression`, `ArrayPattern`, `ObjectPattern`, `RestElement`,
 `AssignmentPattern`, `Parameter`, `MethodDefinition`, `PropertyDefinition`,
 `AccessorProperty`, `StaticBlock`, `ImportDefaultSpecifier`,
-`ImportNamespaceSpecifier`, `ImportSpecifier`, `ExportSpecifier`, `JSXElement`, `IsExpression`,
+`ImportNamespaceSpecifier`, `ImportSpecifier`, `ExportSpecifier`, `ImportAttribute`, `JSXElement`, `IsExpression`,
 `MatchExpression`, and TypeScript's `TSAsExpression` (`x as T`, `x as const`),
 `TSSatisfiesExpression` and `TSNonNullExpression` (`x!`). An import's or
 re-export's module path is a `StringLiteral` child of its declaration, after
-its specifiers (below). An
+its specifiers (below), and each attribute of its `with` clause an
+`ImportAttribute` after the path, covering `type: "json"` with the key
+(`Identifier` or `StringLiteral`) and the value's `StringLiteral` as its
+children. An
 assertion wraps the expression it asserts and covers its type, so in
 `f(a as T)` the argument ends after `T`; the type is its second child.
 

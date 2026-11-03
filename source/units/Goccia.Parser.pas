@@ -140,6 +140,8 @@ type
     { Where the last module specifier consumed was, for the declaration that
       is built after it (RecordModuleSpecifier). }
     FModuleSpecifierStart: Integer;
+    // The `with` clause attributes of the import or re-export being parsed.
+    FImportAttributes: TGocciaImportAttributeRangeArray;
     FModuleSpecifierEnd: Integer;
     { Where each specifier of the import or export being parsed was, for the
       declaration that is built after them (RecordSpecifierRanges). }
@@ -267,6 +269,7 @@ type
     procedure ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
     function ConsumeModuleSpecifier(const AMessage: string): string;
     procedure RecordModuleSpecifier(const ADeclaration: TGocciaStatement);
+    procedure RecordImportAttribute(const AKeyToken, AValueToken: TGocciaToken);
     procedure AddSpecifierRange(const AKind: TGocciaASTPartKind;
       const AStartOffset, AEndOffset: Integer; const ATypeOnly: Boolean);
     procedure RecordSpecifierRanges(const ADeclaration: TGocciaStatement);
@@ -1731,12 +1734,42 @@ procedure TGocciaParser.RecordModuleSpecifier(
   const ADeclaration: TGocciaStatement);
 begin
   if ADeclaration is TGocciaImportDeclaration then
+  begin
     TGocciaImportDeclaration(ADeclaration).SetModuleSpecifierRange(
-      FModuleSpecifierStart, FModuleSpecifierEnd)
+      FModuleSpecifierStart, FModuleSpecifierEnd);
+    TGocciaImportDeclaration(ADeclaration).SetAttributeRanges(
+      FImportAttributes);
+  end
   else if ADeclaration is TGocciaReExportDeclaration then
+  begin
     TGocciaReExportDeclaration(ADeclaration).SetModuleSpecifierRange(
       FModuleSpecifierStart, FModuleSpecifierEnd);
+    TGocciaReExportDeclaration(ADeclaration).SetAttributeRanges(
+      FImportAttributes);
+  end;
+  FImportAttributes := nil;
   RecordSpecifierRanges(ADeclaration);
+end;
+
+{ An attribute runs from its key to its value. }
+procedure TGocciaParser.RecordImportAttribute(const AKeyToken,
+  AValueToken: TGocciaToken);
+var
+  Attribute: TGocciaImportAttributeRange;
+begin
+  Attribute.StartOffset := AKeyToken.Span.StartOffset;
+  Attribute.EndOffset := AValueToken.Span.EndOffset;
+  Attribute.Key.Flags := [];
+  Attribute.Key.StartOffset := AKeyToken.Span.StartOffset;
+  Attribute.Key.EndOffset := AKeyToken.Span.EndOffset;
+  if AKeyToken.TokenType = gttString then
+    Attribute.Key.Kind := apkKeyString
+  else
+    Attribute.Key.Kind := apkKeyIdentifier;
+  Attribute.ValueStartOffset := AValueToken.Span.StartOffset;
+  Attribute.ValueEndOffset := AValueToken.Span.EndOffset;
+  SetLength(FImportAttributes, Length(FImportAttributes) + 1);
+  FImportAttributes[High(FImportAttributes)] := Attribute;
 end;
 
 { A specifier's range runs from its first token, `type` included, to its
@@ -8143,6 +8176,7 @@ var
     AttributeKey: string;
     AttributeKeyColumn: Integer;
     AttributeKeyLine: Integer;
+    AttributeKeyToken: TGocciaToken;
     AttributeValueToken: TGocciaToken;
   begin
     Result := '';
@@ -8157,6 +8191,7 @@ var
       AttributeKey := ConsumeLiteralPropertyName(
         'Expected import attribute key',
         'Use an identifier or string key in the import attribute bag');
+      AttributeKeyToken := Previous;
       AttributeKeyLine := Previous.Line;
       AttributeKeyColumn := Previous.Column;
       Consume(gttColon, 'Expected ":" after import attribute key',
@@ -8164,6 +8199,7 @@ var
       AttributeValueToken := Consume(gttString,
         'Expected string import attribute value',
         'Import attribute values must be string literals');
+      RecordImportAttribute(AttributeKeyToken, AttributeValueToken);
       if AttributeKey <> KEYWORD_TYPE then
         raise TGocciaSyntaxError.Create(
           Format('Unsupported import attribute "%s"', [AttributeKey]),
@@ -8205,6 +8241,7 @@ var
 begin
   DuplicateBinding := '';
   FSpecifierRanges := nil;
+  FImportAttributes := nil;
   Line := Previous.Line;
   Column := Previous.Column;
 
@@ -8533,6 +8570,7 @@ var
     AttributeKey: string;
     AttributeKeyColumn: Integer;
     AttributeKeyLine: Integer;
+    AttributeKeyToken: TGocciaToken;
     AttributeValueToken: TGocciaToken;
   begin
     Result := '';
@@ -8545,6 +8583,7 @@ var
     begin
       AttributeKey := ConsumeLiteralPropertyName('Expected import attribute key',
         'Use an identifier or string key in the import attribute bag');
+      AttributeKeyToken := Previous;
       AttributeKeyLine := Previous.Line;
       AttributeKeyColumn := Previous.Column;
       Consume(gttColon, 'Expected ":" after import attribute key',
@@ -8552,6 +8591,7 @@ var
       AttributeValueToken := Consume(gttString,
         'Expected string import attribute value',
         'Import attribute values must be string literals');
+      RecordImportAttribute(AttributeKeyToken, AttributeValueToken);
       if AttributeKey <> KEYWORD_TYPE then
         raise TGocciaSyntaxError.Create(
           Format('Unsupported import attribute "%s"', [AttributeKey]),
@@ -8566,6 +8606,7 @@ var
   end;
 begin
   FSpecifierRanges := nil;
+  FImportAttributes := nil;
   Line := Previous.Line;
   Column := Previous.Column;
 

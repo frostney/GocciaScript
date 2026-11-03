@@ -88,6 +88,10 @@ type
     apkImportNamespaceSpecifier, // `* as ns`
     apkImportSpecifier,          // `b as bb` in `import { b as bb }`
     apkExportSpecifier,          // `f as g` in `export { f as g }`
+    // An import attribute, `type: "json"` in a `with` clause: its key (an
+    // identifier or string key kind below) and its value.
+    apkImportAttribute,
+    apkImportAttributeValue,     // the value's string literal
     { A static key of an object property or class member, by what it is. The
       parser keeps the key as a string, so its range is the only record. }
     apkKeyIdentifier,   // `k`, `#p`, or a reserved word used as a name
@@ -162,6 +166,16 @@ type
     Flags: TGocciaASTPartFlags;
   end;
   TGocciaASTPartRangeArray = array of TGocciaASTPartRange;
+
+  // One `key: "value"` of an import's or re-export's `with` clause.
+  TGocciaImportAttributeRange = record
+    StartOffset: Integer;
+    EndOffset: Integer;
+    Key: TGocciaASTPartRange;
+    ValueStartOffset: Integer;
+    ValueEndOffset: Integer;
+  end;
+  TGocciaImportAttributeRangeArray = array of TGocciaImportAttributeRange;
 
   { One piece of erased type syntax. A type's ranges are kept in source
     order, each one followed by the ranges inside it: SubtreeEnd is the index
@@ -321,6 +335,10 @@ procedure VisitTypeRanges(const AVisitor: TGocciaASTChildVisitor;
 procedure AppendTypeRanges(var ATarget: TGocciaTypeRangeArray;
   const ASource: TGocciaTypeRangeArray);
 
+{ Reports each attribute with its key and value inside it. }
+procedure VisitImportAttributes(const AVisitor: TGocciaASTChildVisitor;
+  const AAttributes: TGocciaImportAttributeRangeArray);
+
 { Adds one leaf part to the end of ARanges. }
 procedure AppendPartRange(var ARanges: TGocciaASTPartRangeArray;
   const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
@@ -376,6 +394,23 @@ var
 begin
   for I := 0 to High(ARanges) do
     VisitPartRange(AVisitor, ARanges[I]);
+end;
+
+procedure VisitImportAttributes(const AVisitor: TGocciaASTChildVisitor;
+  const AAttributes: TGocciaImportAttributeRangeArray);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AAttributes) do
+  begin
+    AVisitor.EnterPart(apkImportAttribute, AAttributes[I].StartOffset,
+      AAttributes[I].EndOffset, []);
+    VisitPartRange(AVisitor, AAttributes[I].Key);
+    AVisitor.EnterPart(apkImportAttributeValue,
+      AAttributes[I].ValueStartOffset, AAttributes[I].ValueEndOffset, []);
+    AVisitor.LeavePart;
+    AVisitor.LeavePart;
+  end;
 end;
 
 procedure VisitTypeRanges(const AVisitor: TGocciaASTChildVisitor;
