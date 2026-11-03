@@ -36,6 +36,11 @@ type
     procedure TestExportTypeList;
     procedure TestExportTypeListFrom;
     procedure TestExportTypeStar;
+    procedure TestAmbientVariable;
+    procedure TestAmbientModule;
+    procedure TestAmbientModuleWithoutBody;
+    procedure TestAmbientGlobal;
+    procedure TestExportAmbient;
     procedure TestSemicolon;
   public
     procedure SetupTests; override;
@@ -56,6 +61,16 @@ begin
   Test('export type with a list and from is erased as a re-export',
     TestExportTypeListFrom);
   Test('export type * is erased as a re-export', TestExportTypeStar);
+  Test('declare const is erased as an ambient declaration',
+    TestAmbientVariable);
+  Test('declare module with a body is erased as an ambient declaration',
+    TestAmbientModule);
+  Test('declare module without a body is erased as an ambient declaration',
+    TestAmbientModuleWithoutBody);
+  Test('declare global is erased as an ambient declaration',
+    TestAmbientGlobal);
+  Test('export declare is erased as an exported ambient declaration',
+    TestExportAmbient);
   Test('a semicolon is an empty statement with no erased type',
     TestSemicolon);
 end;
@@ -141,6 +156,34 @@ end;
 procedure TErasedTypeDeclarationTests.TestExportTypeStar;
 begin
   ExpectErased('export type * as S from "./s.ts";', etkReExport);
+end;
+
+procedure TErasedTypeDeclarationTests.TestAmbientVariable;
+begin
+  ExpectErased('declare const env: { mode: string };', etkAmbient);
+end;
+
+procedure TErasedTypeDeclarationTests.TestAmbientModule;
+begin
+  ExpectErased('declare module "virtual:a" { export const a: number; }',
+    etkAmbient);
+end;
+
+procedure TErasedTypeDeclarationTests.TestAmbientModuleWithoutBody;
+begin
+  ExpectErased('declare module "side-effect";', etkAmbient);
+end;
+
+procedure TErasedTypeDeclarationTests.TestAmbientGlobal;
+begin
+  ExpectErased('declare global { interface Window { app: unknown } }',
+    etkAmbient);
+end;
+
+procedure TErasedTypeDeclarationTests.TestExportAmbient;
+begin
+  ExpectErased('export declare function helper(name: string): void;',
+    etkExportAmbient);
 end;
 
 procedure TErasedTypeDeclarationTests.TestSemicolon;

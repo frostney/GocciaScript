@@ -112,6 +112,32 @@ describe("ast.parse type-level declarations", () => {
     ]);
   });
 
+  test("an ambient declaration is reported by kind and covers its whole text", () => {
+    const source = [
+      "declare const env: {",
+      "  mode: string;",
+      "};",
+      'declare module "virtual:a" {',
+      "  export const a: number;",
+      "}",
+      'declare module "side-effect";',
+      "declare global {",
+      "  interface Window { app: unknown }",
+      "}",
+      "export declare function helper(name: string): void;",
+      "",
+    ].join("\n");
+    const lines = source.split("\n");
+
+    expect(topLevel(source)).toEqual([
+      { kind: "AmbientDeclaration", typeOnly: true, text: lines.slice(0, 3).join("\n") },
+      { kind: "AmbientDeclaration", typeOnly: true, text: lines.slice(3, 6).join("\n") },
+      { kind: "AmbientDeclaration", typeOnly: true, text: lines[6] },
+      { kind: "AmbientDeclaration", typeOnly: true, text: lines.slice(7, 10).join("\n") },
+      { kind: "ExportAmbientDeclaration", typeOnly: true, text: lines[10] },
+    ]);
+  });
+
   test("a lone semicolon is the only empty statement, and it carries no typeOnly", () => {
     const source = "type A = 1;\n;\nconst b = 2;\n";
     const [alias, empty, declaration] = parse(source).root.children;

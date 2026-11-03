@@ -442,7 +442,10 @@ type
       const AAsyncLine, AAsyncColumn: Integer): TAsyncFunctionCheck;
     function IsTypeOnlySpecifierModifier: Boolean;
     procedure SkipInterfaceDeclaration;
+    procedure SkipBracedBody;
     function IsTypeDeclaration: Boolean;
+    function IsAmbientDeclarationStart: Boolean;
+    procedure SkipAmbientDeclaration;
 
     function BitwiseOr: TGocciaExpression;
     function BitwiseXor: TGocciaExpression;
@@ -5976,6 +5979,14 @@ begin
     TGocciaEmptyStatement(Result).SetTypeRanges(
       TypeRangesBetween(tsInterface, TypeStart, FCurrent));
   end
+  else if IsAmbientDeclarationStart then
+  begin
+    Line := Peek.Line;
+    Column := Peek.Column;
+    SkipAmbientDeclaration;
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkAmbient);
+  end
   else if IsLexicalDeclarationStart then
   begin
     Advance;
@@ -8600,6 +8611,14 @@ begin
     Exit;
   end;
 
+  if IsAmbientDeclarationStart then
+  begin
+    SkipAmbientDeclaration;
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkExportAmbient);
+    Exit;
+  end;
+
   if Check(gttDefault) then
   begin
     Advance;
@@ -11051,22 +11070,135 @@ begin
     Advance;
   end;
 
-  if Check(gttLeftBrace) then
+  SkipBracedBody;
+end;
+
+// Skips a '{ ... }' body from its '{', with every brace inside it; nothing
+// when the current token is not a '{'. Template literals are skipped whole,
+// as above.
+procedure TGocciaParser.SkipBracedBody;
+var
+  Depth: Integer;
+begin
+  if not Check(gttLeftBrace) then
+    Exit;
+  Advance;
+  Depth := 1;
+  while not IsAtEnd and (Depth > 0) do
+  begin
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+    begin
+      SkipTemplateLiteral;
+      Continue;
+    end;
+    if Check(gttLeftBrace) then Inc(Depth);
+    if Check(gttRightBrace) then Dec(Depth);
+    Advance;
+  end;
+end;
+
+// `declare` begins an ambient declaration only when a declaration keyword
+// follows it on the same line. Anywhere else it is an identifier: `declare(x)`,
+// `declare = 1`, and `declare` with `const x = 1` on the next line under ASI,
+// which is two statements.
+function TGocciaParser.IsAmbientDeclarationStart: Boolean;
+var
+  SavedCurrent: Integer;
+begin
+  if not CheckUnescapedIdentifierKeyword(KEYWORD_DECLARE) then
+    Exit(False);
+  SavedCurrent := FCurrent;
+  try
+    Advance;
+    if IsAtEnd or HasLineTerminatorBeforePeek then
+      Exit(False);
+    Result := Check(gttConst) or Check(gttLet) or Check(gttVar) or
+      Check(gttFunction) or Check(gttClass) or Check(gttEnum) or
+      CheckUnescapedIdentifierKeyword(KEYWORD_MODULE) or
+      CheckUnescapedIdentifierKeyword(KEYWORD_GLOBAL) or
+      CheckUnescapedIdentifierKeyword(KEYWORD_NAMESPACE) or
+      CheckUnescapedIdentifierKeyword(KEYWORD_ABSTRACT) or
+      CheckUnescapedIdentifierKeyword(KEYWORD_TYPE) or
+      CheckUnescapedIdentifierKeyword(KEYWORD_INTERFACE);
+  finally
+    FCurrent := SavedCurrent;
+  end;
+end;
+
+// Skips an ambient declaration from its `declare`. It has no run-time
+// effect, so it is erased whole like `type` and `interface`. A declaration
+// with a body (`class`, `enum`, `const enum`, `module`, `global`,
+// `namespace`) ends at the body's closing '}'; `declare module "m";` has no
+// body and ends at its ';' or, under ASI, its line break. Every other form
+// ends where a `type` alias would.
+procedure TGocciaParser.SkipAmbientDeclaration;
+var
+  AngleDepth, Depth: Integer;
+  HasBody: Boolean;
+begin
+  Advance;
+  if CheckUnescapedIdentifierKeyword(KEYWORD_INTERFACE) then
   begin
     Advance;
-    Depth := 1;
-    while not IsAtEnd and (Depth > 0) do
-    begin
-      if Check(gttTemplateHead) or Check(gttTemplate) then
-      begin
-        SkipTemplateLiteral;
-        Continue;
-      end;
-      if Check(gttLeftBrace) then Inc(Depth);
-      if Check(gttRightBrace) then Dec(Depth);
-      Advance;
-    end;
+    Advance;
+    SkipInterfaceDeclaration;
+    Exit;
   end;
+  HasBody := Check(gttClass) or Check(gttEnum) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_MODULE) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_GLOBAL) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_NAMESPACE) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_ABSTRACT);
+  if Check(gttConst) then
+  begin
+    Advance;
+    HasBody := Check(gttEnum);
+  end;
+  if not HasBody then
+  begin
+    SkipUntilSemicolon;
+    Exit;
+  end;
+
+  // The head: everything up to the body's '{' outside brackets and type
+  // argument lists, as for an interface.
+  AngleDepth := 0;
+  Depth := 0;
+  while not IsAtEnd do
+  begin
+    if (AngleDepth = 0) and (Depth = 0) then
+    begin
+      if Check(gttLeftBrace) then
+        Break;
+      if Check(gttSemicolon) then
+      begin
+        Advance;
+        Exit;
+      end;
+      if FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek and
+         (Previous.TokenType = gttString) then
+        Exit;
+    end;
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+    begin
+      SkipTemplateLiteral;
+      Continue;
+    end;
+    case Peek.TokenType of
+      gttLess: Inc(AngleDepth);
+      gttGreater: Dec(AngleDepth);
+      gttRightShift: Dec(AngleDepth, 2);
+      gttUnsignedRightShift: Dec(AngleDepth, 3);
+      gttLeftParen, gttLeftBracket, gttLeftBrace: Inc(Depth);
+      gttRightParen, gttRightBracket, gttRightBrace: Dec(Depth);
+    end;
+    if AngleDepth < 0 then
+      AngleDepth := 0;
+    if Depth < 0 then
+      Depth := 0;
+    Advance;
+  end;
+  SkipBracedBody;
 end;
 
 function TGocciaParser.IsTypeDeclaration: Boolean;
