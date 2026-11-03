@@ -225,6 +225,8 @@ begin
     etkImport: Result := 'ImportDeclaration';
     etkExport: Result := 'ExportDeclaration';
     etkReExport: Result := 'ReExportDeclaration';
+    etkAmbient: Result := 'AmbientDeclaration';
+    etkExportAmbient: Result := 'ExportAmbientDeclaration';
   else
     Result := 'EmptyStatement';
   end;
