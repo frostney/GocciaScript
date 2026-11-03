@@ -61,6 +61,22 @@ describe("an argument the callee has dropped", () => {
   });
 });
 
+describe("an argument a callee drops through a for-of head", () => {
+  test("is reclaimed when the head assigns the parameter", () => {
+    const baseline = collect();
+    const f = (buffer) => {
+      for (buffer of [0]) {
+        // The head wrote the parameter.
+      }
+      Goccia.gc();
+      return [buffer, Goccia.gc.bytesAllocated - baseline];
+    };
+    const [value, grown] = f(new ArrayBuffer(SIZE));
+    expect(value).toBe(0);
+    expect(grown).toBeLessThan(SIZE / 2);
+  });
+});
+
 describe("a callee that still holds its arguments", () => {
   test("keeps the value while the parameter is live", () => {
     const f = (buffer, label) => {

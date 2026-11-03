@@ -61,4 +61,23 @@ describe("Promise.prototype.then handler's dropped parameter", () => {
     });
     expect(result).toBe(3);
   });
+
+  test("hands an async handler its value, which it keeps across an await", async () => {
+    const handler = async (buffer) => {
+      await null;
+      Goccia.gc();
+      return buffer.byteLength;
+    };
+    const result = await Promise.resolve(new ArrayBuffer(2048)).then(handler);
+    expect(result).toBe(2048);
+  });
+
+  test("hands a bound function's target its value", async () => {
+    const target = (prefix, value) => {
+      Goccia.gc();
+      return `${prefix}${value.length}`;
+    };
+    const result = await Promise.resolve([1, 2, 3]).then(target.bind(null, "n"));
+    expect(result).toBe("n3");
+  });
 });

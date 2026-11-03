@@ -67,9 +67,11 @@ convention.
   bytecode handler with the settled value. The handler's first frame, once it
   holds the argument, tells the queue to drop the job's root
   (`TGocciaVM.HandOffOwnedArgument`, `ReleaseRunningJobArgument` from #2027), and
-  no arguments collection holds the value. A callee that sets up no frame (a
-  generator) leaves the root to the job; every other function keeps the previous
-  path.
+  no arguments collection holds the value. A callee that sets up no
+  frame leaves the root to the job. A generator with a parameter preamble runs
+  the preamble in its first frame and hands off too, which is safe because the
+  generator object keeps the argument itself. A handler that is not a bytecode
+  function keeps the previous path.
 
 ## Consequences
 
@@ -94,7 +96,13 @@ reassigns its parameters pays the release; the rest pay the flag test.
 - A callee that reassigns a parameter, and `.then(cb)` handlers that drop their
   parameter, no longer keep the value alive through the caller. A callee that
   keeps its parameter keeps the value, as it must.
-- Native callees, spread calls, bound-function calls and tail calls are
-  unchanged. A caller's argument registers stay populated after them until reused.
+- Native callees, spread calls, bound-function calls, tail calls, async callees,
+  `new C(x)` and the `f.call` / `f.apply` fast paths are unchanged. A caller's
+  argument registers stay populated after them until reused.
+- A callee that only forwards its parameter in a tail call (`(b) => g(b)`) never
+  writes it, so its flag is false and the caller's copy stays while `g` runs. The
+  alternative, a true flag for every body that returns a call, makes the common
+  wrapper pay about 17 instructions per object argument; that is the cost the
+  gate exists to avoid.
 - The registers cleared are temporaries nothing reads again: the compiler frees
   them right after the call instruction.

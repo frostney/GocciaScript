@@ -6435,8 +6435,10 @@ function TGocciaBytecodeFunctionValue.CallOneArgOwned(const AArg0,
 begin
   // The first frame this call sets up is the callee's own: it takes AArg0 into
   // its registers and then lets the running job's root on it go
-  // (TGocciaVM.HandOffOwnedArgument). A callee that sets up no frame, a
-  // generator, leaves the root to the job, and the field is cleared either way.
+  // (TGocciaVM.HandOffOwnedArgument). A callee that sets up no frame at all
+  // leaves the root to the job, and the field is cleared either way. A
+  // generator with a parameter preamble runs it in that first frame, which is
+  // fine: the generator object keeps the argument itself.
   FVM.FOwnedArgument := AArg0;
   try
     Result := CallOneArg(AArg0, AThisValue);

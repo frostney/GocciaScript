@@ -466,7 +466,10 @@ begin
   if Kind = TGocciaExpressionStatement then
     Result := ScanNode(AScan, TGocciaExpressionStatement(AStmt).Expression)
   else if Kind = TGocciaVariableDeclaration then
-    Result := ScanVariables(AScan, TGocciaVariableDeclaration(AStmt).Variables)
+    // A `var` can redeclare a parameter, which then writes its register.
+    Result := not (AScan.RejectLocalWrites and
+        TGocciaVariableDeclaration(AStmt).IsVar) and
+      ScanVariables(AScan, TGocciaVariableDeclaration(AStmt).Variables)
   else if Kind = TGocciaBlockStatement then
   begin
     Block := TGocciaBlockStatement(AStmt);
@@ -497,7 +500,11 @@ begin
   else if Kind = TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(AStmt);
-    Result := not Assigned(ForOf.MatchPattern) and not ForOf.IsUsing and
+    // The head writes its target on every iteration: an assignment target
+    // (`for (b of xs)`) or a `var` that redeclares a name.
+    Result := not (AScan.RejectLocalWrites and
+        (Assigned(ForOf.AssignmentTarget) or ForOf.IsVar)) and
+      not Assigned(ForOf.MatchPattern) and not ForOf.IsUsing and
       not ForOf.IsAwaitUsing and ScanPattern(AScan, ForOf.BindingPattern) and
       ScanPattern(AScan, ForOf.AssignmentTarget) and
       ScanNode(AScan, ForOf.Iterable) and ScanNode(AScan, ForOf.Body);
@@ -505,7 +512,9 @@ begin
   else if Kind = TGocciaForInStatement then
   begin
     ForIn := TGocciaForInStatement(AStmt);
-    Result := ScanPattern(AScan, ForIn.BindingPattern) and
+    Result := not (AScan.RejectLocalWrites and
+        (Assigned(ForIn.AssignmentTarget) or ForIn.IsVar)) and
+      ScanPattern(AScan, ForIn.BindingPattern) and
       ScanPattern(AScan, ForIn.AssignmentTarget) and
       ScanNode(AScan, ForIn.ObjectExpression) and ScanNode(AScan, ForIn.Body);
   end
