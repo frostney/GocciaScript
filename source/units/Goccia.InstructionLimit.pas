@@ -10,6 +10,14 @@ uses
 type
   TGocciaInstructionLimitError = class(Exception);
 
+  { Raised on the thread a host has armed with Goccia.ExecutionAbort once
+    another thread has requested the abort. A subclass, so that every
+    boundary that lets the instruction limit keep unwinding (the uncatchable
+    arms, Goccia.UncatchableFault, the sandbox's resource-limit
+    classification) treats it the same way; a reporter that wants to say
+    "aborted" tests for it first (ADR 0174). }
+  TGocciaAbortError = class(TGocciaInstructionLimitError);
+
   { Non-owning handle to the calling thread's live instruction budget.
     Capture once at the bytecode-loop boundary, then pass it to
     PollInstructionLimit. Start/Clear mutate the same record, so a captured
@@ -30,6 +38,13 @@ type
       after the limit: a poll that reaches it checks every budget exactly and
       raises for a spent one, or recomputes it when none is spent. }
     NextLimitCount: Int64;
+    { The request word of the abort handle that armed this thread, nil when
+      none did (Goccia.ExecutionAbort). A request lowers NextLimitCount to 0
+      from another thread; every recompute reads this word again after it
+      stores, so that a recompute that raced with the request cannot undo it.
+      While it is set, Active stays True, so the VM takes its instrumented
+      dispatch path and the poll runs. }
+    AbortRequested: PLongInt;
   end;
   PGocciaInstructionLimitState = ^TGocciaInstructionLimitState;
 
@@ -54,13 +69,36 @@ procedure PollInstructionLimit(
   so that they can be inlined into other units; call them instead. }
 procedure InstructionLimitReached(const AState: PGocciaInstructionLimitState);
 
+{ The abort plumbing, for Goccia.ExecutionAbort alone; hosts use that unit.
+
+  ArmInstructionAbort makes the calling thread's instruction poll observe the
+  word AAbortRequested points to, and returns where a request has to write 0
+  to stop a run that is inside the poll's single comparison. The word and the
+  address stay valid until DisarmInstructionAbort, on the same thread, which
+  also runs when the thread ends. Start/Clear and the scope procedures keep
+  the poll active while the arm lasts. }
+function ArmInstructionAbort(const AAbortRequested: PLongInt): PInt64;
+procedure DisarmInstructionAbort;
+{ Raises TGocciaAbortError. }
+procedure RaiseAbort;
+
 implementation
 
 uses
+  CriticalSections,
+
   Goccia.ThreadPolls;
 
 threadvar
   GInstructionLimitState: TGocciaInstructionLimitState;
+
+const
+  ABORT_MESSAGE = 'Execution aborted by the host';
+
+procedure RaiseAbort;
+begin
+  raise TGocciaAbortError.Create(ABORT_MESSAGE);
+end;
 
 procedure RecomputeNextLimitCount(const AState: PGocciaInstructionLimitState);
 var
@@ -81,17 +119,48 @@ begin
         Next := Candidate;
     end;
   AState^.NextLimitCount := Next;
+  { A request that arrived while Next was being computed wrote 0 before this
+    store, or will write it after the fence below; either way the word is
+    visible here, or the 0 lands after this store. This is the engine thread's
+    half of the handshake with Goccia.ExecutionAbort's Request. }
+  if AState^.AbortRequested <> nil then
+  begin
+    FullMemoryBarrier;
+    if AState^.AbortRequested^ <> 0 then
+      AState^.NextLimitCount := 0;
+  end;
 end;
 
 // Every assignment to GInstructionLimitState.Active goes through here, so the
 // mirror that Goccia.ThreadPolls readers see cannot drift from it. Every
 // change to a budget ends here too, so it recomputes NextLimitCount.
 procedure SetInstructionLimitActive(const AActive: Boolean);
+var
+  Armed: Boolean;
 begin
+  // An armed abort keeps the poll running whether or not a budget is set.
+  Armed := AActive or (GInstructionLimitState.AbortRequested <> nil);
   RecomputeNextLimitCount(@GInstructionLimitState);
-  GInstructionLimitState.Active := AActive;
+  GInstructionLimitState.Active := Armed;
   GThreadPolls.InstructionLimitState := @GInstructionLimitState;
-  GThreadPolls.InstructionLimitActive := AActive;
+  GThreadPolls.InstructionLimitActive := Armed;
+end;
+
+function ArmInstructionAbort(const AAbortRequested: PLongInt): PInt64;
+begin
+  GInstructionLimitState.AbortRequested := AAbortRequested;
+  SetInstructionLimitActive((GInstructionLimitState.MaxInstructions > 0) or
+    (GInstructionLimitState.ScopeDepth > 0));
+  Result := @GInstructionLimitState.NextLimitCount;
+end;
+
+procedure DisarmInstructionAbort;
+begin
+  if GInstructionLimitState.AbortRequested = nil then
+    Exit;
+  GInstructionLimitState.AbortRequested := nil;
+  SetInstructionLimitActive((GInstructionLimitState.MaxInstructions > 0) or
+    (GInstructionLimitState.ScopeDepth > 0));
 end;
 
 procedure StartInstructionLimit(const AMaxInstructions: Int64);
@@ -154,6 +223,9 @@ procedure InstructionLimitReached(const AState: PGocciaInstructionLimitState);
 var
   I: Integer;
 begin
+  // Ahead of the budgets: a request is a stop whatever else is spent.
+  if (AState^.AbortRequested <> nil) and (AState^.AbortRequested^ <> 0) then
+    RaiseAbort;
   for I := 0 to AState^.ScopeDepth - 1 do
     if (AState^.ScopeLimits[I] > 0) and
        (AState^.InstructionCount - AState^.ScopeStarts[I] >=

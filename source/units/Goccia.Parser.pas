@@ -11009,12 +11009,47 @@ begin
   end;
 end;
 
+// Skips an interface from the token after its name: its type parameters, its
+// `extends` list and its body. The body is the first '{' outside every bracket
+// and type argument list, so an object type in a type parameter's default or
+// constraint, `interface Box<T = {}>`, or in a type argument,
+// `interface Box extends Base<{ id: string }>`, is not taken for it. Template
+// literal types are skipped whole: the '}' that closes a substitution would
+// otherwise count as a brace (see SkipTemplateLiteral).
 procedure TGocciaParser.SkipInterfaceDeclaration;
 var
-  Depth: Integer;
+  AngleDepth, Depth: Integer;
 begin
-  while not IsAtEnd and not Check(gttLeftBrace) do
+  AngleDepth := 0;
+  Depth := 0;
+  while not IsAtEnd do
+  begin
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+    begin
+      SkipTemplateLiteral;
+      Continue;
+    end;
+    case Peek.TokenType of
+      gttLess: Inc(AngleDepth);
+      gttGreater: Dec(AngleDepth);
+      gttRightShift: Dec(AngleDepth, 2);
+      gttUnsignedRightShift: Dec(AngleDepth, 3);
+      gttLeftParen, gttLeftBracket: Inc(Depth);
+      gttRightParen, gttRightBracket, gttRightBrace: Dec(Depth);
+      gttLeftBrace:
+        begin
+          if (AngleDepth = 0) and (Depth = 0) then
+            Break;
+          Inc(Depth);
+        end;
+    end;
+    // Clamped so a stray closer cannot hide the body for the rest of the file.
+    if AngleDepth < 0 then
+      AngleDepth := 0;
+    if Depth < 0 then
+      Depth := 0;
     Advance;
+  end;
 
   if Check(gttLeftBrace) then
   begin
@@ -11022,6 +11057,11 @@ begin
     Depth := 1;
     while not IsAtEnd and (Depth > 0) do
     begin
+      if Check(gttTemplateHead) or Check(gttTemplate) then
+      begin
+        SkipTemplateLiteral;
+        Continue;
+      end;
       if Check(gttLeftBrace) then Inc(Depth);
       if Check(gttRightBrace) then Dec(Depth);
       Advance;
