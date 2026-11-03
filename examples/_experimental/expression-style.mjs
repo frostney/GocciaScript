@@ -146,8 +146,10 @@ const quoteEdits = (source, nodes) =>
 // -- Rule 2: trailing commas -----------------------------------------------------
 
 // `set` as a whole word, followed by the start of a key rather than by the
-// `(` of a method named `set`: a name after a space, or a `[`, `#` or quote.
-const SETTER_HEAD = /(?:^|[^\w$.@#'"`])set(?:\s+[\w$#'"[]|[#'"[])/;
+// `(` of a method named `set`: a name after whitespace or comments, or a `[`,
+// `#` or quote.
+const SETTER_HEAD =
+  /(?:^|[^\w$.@#'"`])set(?:(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)+[\w$#'"[]|[#'"[])/;
 
 const MEMBER_KINDS = ["Property", "MethodDefinition", "TSMethodSignature"];
 
