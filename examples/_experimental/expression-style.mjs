@@ -149,13 +149,16 @@ const quoteEdits = (source, nodes) =>
 // `(` of a method named `set`: a name after a space, or a `[`, `#` or quote.
 const SETTER_HEAD = /(?:^|[^\w$.@#'"`])set(?:\s+[\w$#'"[]|[#'"[])/;
 
+const MEMBER_KINDS = ["Property", "MethodDefinition", "TSMethodSignature"];
+
 /**
- * Whether an object property or class member is a setter. The view carries
- * no accessor flag, so this reads the text from the member's start (its
- * decorators and modifiers included) up to its first parameter.
+ * Whether an object property, class member, or interface or type literal
+ * member is a setter. The view carries no accessor flag, so this reads the
+ * text from the member's start (its decorators and modifiers included) up to
+ * its first parameter.
  */
 const isSetter = (source, node, firstParameter) =>
-  (node.kind === "Property" || node.kind === "MethodDefinition") &&
+  MEMBER_KINDS.includes(node.kind) &&
   SETTER_HEAD.test(source.slice(node.start, firstParameter.start));
 
 /**

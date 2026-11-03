@@ -10764,8 +10764,10 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const crlfOriginal = ['import {', '  gamma', '} from "./letters.js";', ''].join("\r\n");
     const crlfExpected = ['import {', '  gamma,', "} from './letters.js';", ''].join("\r\n");
     writeFileSync(join(tree, "windows.js"), crlfOriginal);
-    // Parameter lists of exported functions and function types, tuple types
-    // and type parameter lists take the comma; a type argument list does not.
+    // Parameter lists of exported functions, function and constructor types
+    // and method, call and construct signatures, tuple types and type
+    // parameter lists take the comma; a type argument list and a setter
+    // signature's parameter do not.
     const typesOriginal = [
       'export function exported(',
       '  first: string,',
@@ -10787,13 +10789,39 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       '  string,',
       '  number',
       '> = new Map();',
+      'type Factory = new (',
+      '  seed: number',
+      ') => object;',
+      'interface Shape {',
+      '  scale(',
+      '    factor: number',
+      '  ): void;',
+      '  (',
+      '    input: string',
+      '  ): boolean;',
+      '  new (',
+      '    shape: number',
+      '  ): Shape;',
+      '  set size(',
+      '    value: number',
+      '  );',
+      '}',
+      'type Box = {',
+      '  set label(',
+      '    value: string',
+      '  );',
+      '};',
       '',
     ].join("\n");
     const typesExpected = typesOriginal
       .replace("  second: number\n", "  second: number,\n")
       .replace("  done: boolean\n", "  done: boolean,\n")
       .replace("  number\n];", "  number,\n];")
-      .replace("  Second\n>", "  Second,\n>");
+      .replace("  Second\n>", "  Second,\n>")
+      .replace("  seed: number\n", "  seed: number,\n")
+      .replace("    factor: number\n", "    factor: number,\n")
+      .replace("    input: string\n", "    input: string,\n")
+      .replace("    shape: number\n", "    shape: number,\n");
     writeFileSync(join(tree, "types.ts"), typesOriginal);
 
     const readOnly = Bun.spawnSync(
@@ -10819,7 +10847,11 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/types.ts:7:3  a multi-line list should end with a trailing comma",
       "/src/types.ts:11:3  a multi-line list should end with a trailing comma",
       "/src/types.ts:15:3  a multi-line list should end with a trailing comma",
-      "15 finding(s) in 3 file(s), 3 rewritten",
+      "/src/types.ts:22:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:26:5  a multi-line list should end with a trailing comma",
+      "/src/types.ts:29:5  a multi-line list should end with a trailing comma",
+      "/src/types.ts:32:5  a multi-line list should end with a trailing comma",
+      "19 finding(s) in 3 file(s), 3 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
