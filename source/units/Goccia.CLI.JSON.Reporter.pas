@@ -571,6 +571,9 @@ function ExceptionClassToErrorType(const E: Exception): string;
 begin
   if E is TGocciaTimeoutError then
     Result := 'TimeoutError'
+  { Ahead of its parent: a host's abort is a stop, not a spent budget. }
+  else if E is TGocciaAbortError then
+    Result := 'RunAbortedError'
   else if E is TGocciaInstructionLimitError then
     Result := 'InstructionLimitError'
   { Named alongside the other two limits: now that a refused allocation

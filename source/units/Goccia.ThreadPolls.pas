@@ -15,8 +15,14 @@
   in the same procedure that changes the state it mirrors:
 
     TimeoutArmed            Goccia.Timeout: a scope with a deadline is active
-                            (the soonest deadline is not 0).
+                            (the soonest deadline is not 0), or an abort
+                            handle is armed and the deadline is a placeholder.
     InstructionLimitActive  Goccia.InstructionLimit: the state's Active flag.
+
+  An armed abort handle (Goccia.ExecutionAbort) sets both of them, with no
+  state of its own here: it keeps the instruction poll active and gives the
+  timeout poll a deadline that never arrives, so a request stops a run through
+  the polls that already exist.
 
   The third has no other owner:
 

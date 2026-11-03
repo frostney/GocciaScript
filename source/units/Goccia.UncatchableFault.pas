@@ -15,7 +15,9 @@ uses
 
     The resource ceilings — TGocciaTimeoutError, TGocciaInstructionLimitError,
     TGocciaMemoryLimitError — are opaque because a ceiling the guest can catch
-    is a ceiling it can ignore in a loop. The full argument, and the inventory
+    is a ceiling it can ignore in a loop. TGocciaAbortError, a host's request
+    to stop the run (Goccia.ExecutionAbort), descends from the instruction
+    limit's class and is opaque through it. The full argument, and the inventory
     of boundaries that honour it, live in Goccia.MemoryLimit.pas.
 
     EGocciaCapabilityAuditDeliveryError is opaque because an embedder whose

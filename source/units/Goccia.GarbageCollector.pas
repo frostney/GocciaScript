@@ -308,6 +308,9 @@ type
     // under FAccountingLock, like the floor.
     FForcedCollectRefusals: Int64;
     FForcedCollectRetryAfter: Int64;
+    // Set when a counter drop below the floor cleared the retry state, which
+    // the forced collection in TryCollectForLimitedBytes must not undo.
+    FForcedFloorDropped: Boolean;
 
     {$IFDEF GC_TIMING}
     FTotalMarkTimeNs: Int64;
@@ -1221,6 +1224,7 @@ begin
   FForcedCollectFloor := -1;
   FForcedCollectRefusals := 0;
   FForcedCollectRetryAfter := 1;
+  FForcedFloorDropped := False;
   {$IFDEF GC_TIMING}
   FTotalMarkTimeNs := 0;
   FTotalSweepTimeNs := 0;
@@ -1357,7 +1361,10 @@ begin
       // floor means that observation no longer bounds what a collection could
       // reclaim and must not go on suppressing one.
       if (FForcedCollectFloor >= 0) and (FBytesAllocated < FForcedCollectFloor) then
+      begin
         ClearForcedCollectFloorLocked;
+        FForcedFloorDropped := True;
+      end;
       NoteBytesReleasedLocked;
     finally
       CriticalSectionLeave(FAccountingLock);
@@ -2298,6 +2305,7 @@ begin
       end;
     end;
     RetryAfter := FForcedCollectRetryAfter;
+    FForcedFloorDropped := False;
   finally
     CriticalSectionLeave(FAccountingLock);
   end;
@@ -2322,7 +2330,10 @@ begin
     begin
       FForcedCollectFloor := FBytesAllocated;
       FForcedCollectRefusals := 0;
-      if Retrying then
+      // A counter drop below the floor while the collection ran (a release
+      // from another thread, the sweep freeing objects) already reset the
+      // interval to 1: the program made progress, so keep it there.
+      if Retrying and not FForcedFloorDropped then
       begin
         if RetryAfter < FORCED_COLLECT_MAX_RETRY_AFTER then
           FForcedCollectRetryAfter := RetryAfter * 2
@@ -2586,7 +2597,10 @@ begin
     // collection could reclaim and must not go on suppressing one.
     if (FForcedCollectFloor >= 0) and
        (FBytesAllocated < FForcedCollectFloor) then
+    begin
       ClearForcedCollectFloorLocked;
+      FForcedFloorDropped := True;
+    end;
     NoteBytesReleasedLocked;
   {$IFNDEF PRODUCTION}
   finally
