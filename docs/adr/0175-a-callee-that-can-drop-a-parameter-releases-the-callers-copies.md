@@ -1,4 +1,4 @@
-# 0174 - A callee that can drop a parameter releases the caller's copies of its arguments
+# 0175 - A callee that can drop a parameter releases the caller's copies of its arguments
 
 **Date:** 2026-11-03
 **Area:** `vm`, `gc`

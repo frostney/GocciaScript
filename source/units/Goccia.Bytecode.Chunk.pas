@@ -429,7 +429,7 @@ type
     FArgumentWindowUse: TGocciaArgumentWindowUse;
     // Runtime-only: False once the compiler has shown that the body never
     // writes a parameter, so a call has nothing to gain from clearing the
-    // caller's copies of the arguments (ADR 0174). True, also for a template
+    // caller's copies of the arguments (ADR 0175). True, also for a template
     // loaded from .gbc, which records nothing about it, means it may.
     FParametersMayBeDropped: Boolean;
     function ScanArgumentWindowUse: TGocciaArgumentWindowUse;

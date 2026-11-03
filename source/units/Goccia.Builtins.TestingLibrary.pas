@@ -391,6 +391,7 @@ uses
   Goccia.FetchManager,
   Goccia.FloatingPoint,
   Goccia.GarbageCollector,
+  Goccia.InstructionLimit,
   Goccia.MemoryLimit,
   Goccia.MicrotaskQueue,
   Goccia.RegExp.Runtime,
@@ -2426,6 +2427,8 @@ begin
           "catch the limit and keep going" the budget exists to prevent. }
         on E: TGocciaMemoryLimitError do
           raise;
+        on E: TGocciaInstructionLimitError do
+          raise;
         on E: Exception do
         begin
           if IsEngineIntegrityFault(E) then
@@ -3931,6 +3934,13 @@ begin
             DiscardPendingHostWork;
             raise;
           end;
+          { The same for a spent instruction budget, and for a host's abort request
+            (Goccia.ExecutionAbort), which descends from it. }
+          on E: TGocciaInstructionLimitError do
+          begin
+            DiscardPendingHostWork;
+            raise;
+          end;
           on E: Exception do
           begin
             if IsEngineIntegrityFault(E) then
@@ -4407,6 +4417,14 @@ begin
                 TerminalUnwinding := True;
                 raise;
               end;
+              { The same for a spent instruction budget, and for a host's abort request
+                (Goccia.ExecutionAbort), which descends from it. }
+              on E: TGocciaInstructionLimitError do
+              begin
+                DiscardPendingHostWork;
+                TerminalUnwinding := True;
+                raise;
+              end;
               on E: Exception do
               begin
                 if IsEngineIntegrityFault(E) then
@@ -4707,6 +4725,13 @@ begin
             still run in the same process, so stale microtasks or fetch
             completions from the aborted file must not leak into them. }
           on E: TGocciaMemoryLimitError do
+          begin
+            DiscardPendingHostWork;
+            raise;
+          end;
+          { The same for a spent instruction budget, and for a host's abort request
+            (Goccia.ExecutionAbort), which descends from it. }
+          on E: TGocciaInstructionLimitError do
           begin
             DiscardPendingHostWork;
             raise;
@@ -5342,6 +5367,8 @@ begin
       on E: TGocciaTimeoutError do
         raise;
       on E: TGocciaMemoryLimitError do
+        raise;
+      on E: TGocciaInstructionLimitError do
         raise;
       on E: TGocciaThrowValue do
       begin

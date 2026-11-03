@@ -43,6 +43,10 @@ function AtomicCompareExchangeInt32(var AValue: Integer;
   const ANewValue, AComparand: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}
 procedure ReadMemoryBarrier; {$IFDEF FPC}inline;{$ENDIF}
 procedure WriteMemoryBarrier; {$IFDEF FPC}inline;{$ENDIF}
+{ A full fence: no load or store on either side moves across it. For the
+  store-then-load handshake between two threads that each write one word and
+  then read the other's (Goccia.ExecutionAbort). }
+procedure FullMemoryBarrier; {$IFDEF FPC}inline;{$ENDIF}
 
 implementation
 
@@ -160,6 +164,15 @@ procedure WriteMemoryBarrier;
 begin
   {$IFDEF FPC}
   System.WriteBarrier;
+  {$ELSE}
+  System.MemoryBarrier;
+  {$ENDIF}
+end;
+
+procedure FullMemoryBarrier;
+begin
+  {$IFDEF FPC}
+  System.ReadWriteBarrier;
   {$ELSE}
   System.MemoryBarrier;
   {$ENDIF}

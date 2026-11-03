@@ -51,7 +51,7 @@ function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 // point, and no function, class or other form the allowlist does not name.
 // A call that passes a value as an argument leaves it in the caller's
 // registers, and only a callee that can write the parameter can drop its own
-// reference to the value (ADR 0174). ABody is the body statement, or the
+// reference to the value (ADR 0175). ABody is the body statement, or the
 // expression of an arrow function.
 function ParametersSurviveBody(const AParams: TGocciaParameterArray;
   const ABody: TGocciaASTNode): Boolean;

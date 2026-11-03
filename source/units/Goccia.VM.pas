@@ -739,7 +739,7 @@ type
       out APrevCovLine: UInt32; out AProfileTimestamp: Int64);
     // Clears ACount registers of the caller's window at absolute index
     // AAbsoluteIndex (in FRegisterStack) that hold objects: the receiver and
-    // arguments of a call whose callee has copied them (ADR 0174).
+    // arguments of a call whose callee has copied them (ADR 0175).
     procedure ReleaseCallerRegisters(const AAbsoluteIndex, ACount: Integer); {$IFDEF FPC}inline;{$ENDIF}
     procedure HandOffOwnedArgument;
     procedure NoteShimLoadFrame(const ATemplate: TGocciaFunctionTemplate);
