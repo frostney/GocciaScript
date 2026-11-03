@@ -1496,6 +1496,26 @@ console.log("--timeout (native sparse-array fill)...");
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
 
+console.log("--timeout and --max-instructions (Array.prototype.fill over a length above 2**31 - 1)...");
+{
+  // A length above 2**31 - 1 takes fill's sparse path, which assigns every
+  // index as a property. That loop is bound only by the JS-controlled length,
+  // so the deadline and the instruction budget have to reach it
+  // (the chokepoint rule in Goccia.Timeout).
+  const cases: [string, string][] = [
+    ["an Array", "const a = new Array(2 ** 31 + 10);\na.fill(1);\n"],
+    ["an array-like", "Array.prototype.fill.call({ length: 2 ** 40 }, 1);\n"],
+  ];
+  for (const [label, source] of cases) {
+    const timed = runLoaderJson(source, ["--timeout=100", "--max-memory=0"], { timeout: 10_000 });
+    if (timed.exitCode !== 1) throw new Error(`fill over ${label}: --timeout exit code should be 1, got ${timed.exitCode}`);
+    if (timed.json.error?.type !== "TimeoutError") throw new Error(`fill over ${label}: expected TimeoutError, got ${timed.json.error?.type}`);
+    const counted = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000 });
+    if (counted.exitCode !== 1) throw new Error(`fill over ${label}: --max-instructions exit code should be 1, got ${counted.exitCode}`);
+    if (counted.json.error?.type !== "InstructionLimitError") throw new Error(`fill over ${label}: expected InstructionLimitError, got ${counted.json.error?.type}`);
+  }
+}
+
 console.log("--timeout (native regex scan)...");
 {
   const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50"], { timeout: 10_000 });

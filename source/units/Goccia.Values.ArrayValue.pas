@@ -5003,6 +5003,12 @@ begin
       I64 := Start64;
       while I64 < End64 do
       begin
+        { The length is a JS-controlled value up to 2^53 - 1, so the deadline,
+          the instruction budget and a host's abort must reach this loop (the
+          chokepoint rule in Goccia.Timeout). A mask of 255 keeps the poll off
+          the per-element path. }
+        if (I64 and 255) = 0 then
+          CheckNativeWork;
         View.Obj.AssignProperty(IntegerToString(I64), FillValue);
         Inc(I64);
       end;
@@ -5032,7 +5038,11 @@ begin
 
     // Step 8: Repeat, while k < final — Set(O, ToString(k), value)
     for I := StartIdx to EndIdx - 1 do
+    begin
+      if (I and 255) = 0 then
+        CheckNativeWork;
       View.Put(I, FillValue);
+    end;
 
     // Step 9: Return O
     Result := View.Obj;

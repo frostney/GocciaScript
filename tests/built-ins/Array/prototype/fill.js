@@ -198,4 +198,22 @@ describe("Array.prototype.fill", () => {
       delete Array.prototype[0];
     }
   });
+
+  test("fill over a length above 2 ** 31 - 1 writes only the requested range", () => {
+    const length = 2 ** 31 + 10;
+    const arr = new Array(length);
+    expect(arr.fill(7, length - 5)).toBe(arr);
+    expect(arr.length).toBe(length);
+    expect(arr[length - 6]).toBeUndefined();
+    expect(arr[length - 5]).toBe(7);
+    expect(arr[length - 1]).toBe(7);
+  });
+
+  test("fill over an array-like with a length above 2 ** 31 - 1 honours start and end", () => {
+    const obj = { length: 2 ** 40 };
+    Array.prototype.fill.call(obj, "x", 2 ** 40 - 2, 2 ** 40 - 1);
+    expect(obj[2 ** 40 - 3]).toBeUndefined();
+    expect(obj[2 ** 40 - 2]).toBe("x");
+    expect(obj[2 ** 40 - 1]).toBeUndefined();
+  });
 });
