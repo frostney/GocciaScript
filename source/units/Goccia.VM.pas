@@ -10350,7 +10350,12 @@ begin
           (I < Min(SourceArray.StoredLength, High(Integer))) do
     begin
       if Polls^.Any <> 0 then
+      begin
+        // The spread of a huge array is native work no instruction counts, so
+        // it spends the budget itself (the chokepoint rule in Goccia.Timeout).
+        IncrementInstructionCounter;
         RunArmedPolls(Polls);
+      end;
       Target.Add(ArrayIteratorValueAt(SourceArray, I));
       Inc(I);
     end;

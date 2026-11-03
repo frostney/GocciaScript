@@ -144,6 +144,7 @@ uses
   Goccia.Constants.PropertyNames,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
+  Goccia.NativeLimits,
   Goccia.Realm,
   Goccia.Values.ArrayValue,
   Goccia.Values.ErrorHelper,
@@ -351,6 +352,12 @@ begin
     Exit;
   end;
 
+  { A native consumer (Array.from, spread, an iterator helper) walks a length
+    script controls, so the instruction budget and a host's abort have to
+    reach it: the chokepoint rule in Goccia.Timeout. }
+  if (FIndex and 255) = 0 then
+    CheckNativeWork;
+
   case FKind of
     akValues:
     begin
@@ -395,6 +402,8 @@ begin
   end;
 
   ADone := False;
+  if (FIndex and 255) = 0 then
+    CheckNativeWork;
   case FKind of
     akValues:
     begin

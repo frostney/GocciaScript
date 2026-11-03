@@ -231,7 +231,11 @@ type
     RawLen: Double;
     Arr: TGocciaArrayValue; // non-nil only when Obj is a native array
     SpeciesArr: TGocciaArrayValue; // non-nil when receiver is an Array or Array Proxy
+    // Element reads since Init, so that the instruction budget is polled once
+    // in a while rather than at every read.
+    PollCount: Integer;
     procedure Init(const AThisValue: TGocciaValue);
+    procedure PollBudget;
     function Get(const AIndex: Integer): TGocciaValue;
     procedure Put(const AIndex: Integer; const AValue: TGocciaValue);
     procedure PutGeneric(const AIndex: Integer; const AValue: TGocciaValue);
@@ -299,6 +303,7 @@ var
   ArrayProbe: TGocciaValue;
   ObjRoots: TGocciaActiveRootFrame;
 begin
+  PollCount := 0;
   Obj := ToObject(AThisValue);
   SpeciesArr := nil;
   if Obj is TGocciaArrayValue then
@@ -380,8 +385,20 @@ begin
       'use a smaller length');
 end;
 
+{ The per-element reads below poll the deadline themselves; the instruction
+  budget is polled through CheckNativeWork once every 256 reads, so a run under
+  --max-instructions or a host abort can end a loop over an array-like too
+  (the chokepoint rule in Goccia.Timeout). }
+procedure TArrayLikeView.PollBudget;
+begin
+  Inc(PollCount);
+  if (PollCount and 255) = 0 then
+    CheckNativeWork;
+end;
+
 function TArrayLikeView.Get(const AIndex: Integer): TGocciaValue;
 begin
+  PollBudget;
   // Per-iteration cooperative timeout poll for the same reason as
   // HasIndex: toReversed/toSorted/flat/slice and friends call Get
   // without HasIndex, so the timeout has to be reachable from here too.
@@ -433,6 +450,7 @@ end;
 
 function TArrayLikeView.HasIndex(const AIndex: Integer): Boolean;
 begin
+  PollBudget;
   // Poll the cooperative execution timeout from the per-iteration chokepoint
   // used by every native array iterator (indexOf, lastIndexOf, forEach, map,
   // filter, reduce, find, etc.). Pathological array-likes with length close
@@ -462,6 +480,7 @@ end;
 
 function TArrayLikeView.Get64(const AIndex: Int64): TGocciaValue;
 begin
+  PollBudget;
   CheckExecutionTimeout;
   if Assigned(Arr) and (AIndex >= 0) and (AIndex < Arr.Elements.Count) and
      (Arr.Elements[AIndex] <> TGocciaHoleValue.HoleValue) then
@@ -476,6 +495,7 @@ end;
 
 function TArrayLikeView.HasIndex64(const AIndex: Int64): Boolean;
 begin
+  PollBudget;
   CheckExecutionTimeout;
   if Assigned(Arr) and (AIndex >= 0) and (AIndex < Arr.Elements.Count) and
      (Arr.Elements[AIndex] <> TGocciaHoleValue.HoleValue) then

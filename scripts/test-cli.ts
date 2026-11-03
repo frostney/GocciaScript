@@ -1516,6 +1516,30 @@ console.log("--timeout and --max-instructions (Array.prototype.fill over a lengt
   }
 }
 
+console.log("--max-instructions (native loops over a huge array)...");
+{
+  // These loops used to poll only the deadline (through the per-element reads
+  // or the allocations they make), so an instruction budget could not end
+  // them: the chokepoint rule in Goccia.Timeout covers every limit.
+  const huge = "const a = new Array(2 ** 31 + 10);\n";
+  const cases: [string, string][] = [
+    ["the dense Array constructor", "const a = new Array(2 ** 28);\n"],
+    ["join", `${huge}a.join();\n`],
+    ["reverse", `${huge}a.reverse();\n`],
+    ["sort", `${huge}a.sort();\n`],
+    ["map", `${huge}a.map(() => 1);\n`],
+    ["shift", `${huge}a.shift();\n`],
+    ["copyWithin", `${huge}a.copyWithin(0, 1);\n`],
+    ["Array.from", `${huge}Array.from(a);\n`],
+    ["spread", `${huge}const b = [...a];\n`],
+  ];
+  for (const [label, source] of cases) {
+    const { exitCode, json } = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000 });
+    if (exitCode !== 1) throw new Error(`${label}: --max-instructions exit code should be 1, got ${exitCode}`);
+    if (json.error?.type !== "InstructionLimitError") throw new Error(`${label}: expected InstructionLimitError, got ${json.error?.type}`);
+  }
+}
+
 console.log("--timeout (native regex scan)...");
 {
   const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50"], { timeout: 10_000 });

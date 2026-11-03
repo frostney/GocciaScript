@@ -103,7 +103,7 @@ uses
 
   Goccia.Constants.TypeNames,
   Goccia.MemoryLimit,
-  Goccia.Timeout;
+  Goccia.NativeLimits;
 
 procedure RaiseElementIndexOutOfRange;
 begin
@@ -216,7 +216,7 @@ begin
     begin
       AElements.Add(TGocciaHoleValue.HoleValue);
       if (AElements.Count and 1023) = 0 then
-        CheckExecutionTimeout;
+        CheckNativeWork;
     end;
   except
     AElements.Count := StartCount;
