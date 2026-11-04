@@ -427,6 +427,11 @@ type
     // Runtime-only: what ArgumentWindowUnread found. Reset whenever the code
     // changes. Not serialised to .gbc.
     FArgumentWindowUse: TGocciaArgumentWindowUse;
+    // Runtime-only: False once the compiler has shown that the body never
+    // writes a parameter, so a call has nothing to gain from clearing the
+    // caller's copies of the arguments (ADR 0175). True, also for a template
+    // loaded from .gbc, which records nothing about it, means it may.
+    FParametersMayBeDropped: Boolean;
     function ScanArgumentWindowUse: TGocciaArgumentWindowUse;
     function RelocatedPC(const APC: UInt32): UInt32;
     function HasWidePrefix(const AIndex: Integer): Boolean;
@@ -543,6 +548,8 @@ type
     property ExceptionHandlerCount: Integer read FExceptionHandlerCount;
     property MaxRegisters: UInt16 read FMaxRegisters write FMaxRegisters;
     property ParameterCount: UInt16 read FParameterCount write FParameterCount;
+    property ParametersMayBeDropped: Boolean read FParametersMayBeDropped
+      write FParametersMayBeDropped;
     property FormalParameterCount: UInt16 read FFormalParameterCount write FFormalParameterCount;
     property UpvalueCount: UInt16 read FUpvalueCount;
     property DirectEvalEnvironmentCount: Integer read FDirectEvalEnvironmentCount;
@@ -680,6 +687,7 @@ begin
   FExceptionHandlerCount := 0;
   FMaxRegisters := 0;
   FParameterCount := 0;
+  FParametersMayBeDropped := True;
   FFormalParameterCount := 0;
   FUpvalueCount := 0;
   FDebugInfo := nil;

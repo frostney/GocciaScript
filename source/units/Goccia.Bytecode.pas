@@ -282,7 +282,10 @@ const
   //               accumulated one. A resource with Symbol.asyncDispose keeps
   //               the method itself, whose result the OP_AWAIT awaits once;
   //               v99 code awaited a wrapper that had already drained it.
-  GOCCIA_FORMAT_VERSION = 100;
+  //   v100 -> v101: OP_YIELD operand C gained YIELD_FLAG_TEMP_OPERAND, which
+  //               lets the suspended generator drop its copy of the yielded
+  //               value when R[A] is a compiler temporary.
+  GOCCIA_FORMAT_VERSION = 101;
   GOCCIA_BINARY_MAGIC: array[0..3] of Byte = (Ord('G'), Ord('B'), Ord('C'), 0);
   GOCCIA_NULLISH_MATCH_UNDEFINED = 0;
   GOCCIA_NULLISH_MATCH_NULL = 1;
@@ -330,6 +333,15 @@ const
   // running generator's return completion rather than a throw. Here A names
   // the destination, not the iterator.
   ITER_CLOSE_IS_GENERATOR_RETURN = 5;
+  // C operand of OP_YIELD. YIELD_FLAG_DELEGATE makes it `yield*`. With
+  // YIELD_FLAG_TEMP_OPERAND, R[A] is a temporary that holds only the value
+  // this yield hands out: a next() resumption writes the sent value over it
+  // and an abrupt one abandons the expression, so nothing reads it again and
+  // the suspended frame need not keep the value. A VM that ignores the flag
+  // keeps the value until the next suspension, which is correct but holds
+  // memory the program has dropped.
+  YIELD_FLAG_DELEGATE = 1;
+  YIELD_FLAG_TEMP_OPERAND = 2;
   CALL_FLAG_SPREAD = 1;
   CALL_FLAG_TRUSTED = 2;
   // ES2026 §15.10 Tail Position Calls: the call sits in tail position of its

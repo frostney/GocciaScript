@@ -184,3 +184,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0172 — goccia:ast reports erased type syntax as nodes, which the parser records only when the expression view asks](0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md)
 - [0173 — A request the floor refused is collected for again, with a backoff](0173-a-refused-request-is-collected-for-again-after-a-backoff.md)
 - [0174 — A host stops a run from another thread through an abort handle that both limit polls observe](0174-a-host-stops-a-run-from-another-thread-through-an-abort-handle.md)
+- [0175 — A callee that can drop a parameter releases the caller's copies of its arguments](0175-a-callee-that-can-drop-a-parameter-releases-the-callers-copies.md)

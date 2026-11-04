@@ -3350,6 +3350,14 @@ begin
       end;
     end;
 
+    // The exception reached the clause in CatchReg, and a binding took its
+    // own copy. Nothing reads CatchReg again unless the clause's pattern
+    // test fails and rethrows it, so left alone it would keep the exception
+    // object reachable for as long as the frame runs, after the clause has
+    // dropped its binding. The handlers write it afresh whenever they run.
+    if not Assigned(AStmt.CatchPattern) then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, CatchReg, 0, 0));
+
     if Assigned(AStmt.CatchPattern) then
     begin
       DeclarePatternBindings(ACtx, AStmt.CatchPattern);
@@ -4125,7 +4133,13 @@ begin
       DeclarePatternBindings(ACtx, AStmt.MatchPattern);
       CompilePatternTest(ACtx, ValueReg, AStmt.MatchPattern, DoneReg);
       MismatchJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, DoneReg);
-    end;
+    end
+    else
+      // The binding took its own copy of the value, and the body would
+      // otherwise run with the value still in this register: a body that
+      // drops its binding could not release it before the next iteration.
+      // An async iteration costs far more than this one instruction.
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ValueReg, 0, 0));
 
     ACtx.CompileStatement(AStmt.Body);
 
@@ -6148,6 +6162,8 @@ begin
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
+  ChildTemplate.ParametersMayBeDropped :=
+    not ParametersSurviveBody(AMethod.Parameters, AMethod.Body);
 
   FormalCount := -1;
   for I := 0 to High(AMethod.Parameters) do
@@ -6630,6 +6646,8 @@ begin
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
+  ChildTemplate.ParametersMayBeDropped :=
+    not ParametersSurviveBody(AMethod.Parameters, AMethod.Body);
 
   FormalCount := -1;
   for I := 0 to High(AMethod.Parameters) do

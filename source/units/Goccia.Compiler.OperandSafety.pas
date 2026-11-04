@@ -44,6 +44,18 @@ function StatementCreatesNoClosure(const ANode: TGocciaASTNode): Boolean;
 // accepted.
 function ExpressionKeepsLocalRegisters(const AExpr: TGocciaASTNode): Boolean;
 
+// True when the function whose parameters are AParams and whose body is ABody
+// can never write a parameter: every parameter is a plain identifier with no
+// default, and the body holds no assignment to an identifier, no increment or
+// decrement of one, no destructuring assignment, no direct eval, no suspension
+// point, and no function, class or other form the allowlist does not name.
+// A call that passes a value as an argument leaves it in the caller's
+// registers, and only a callee that can write the parameter can drop its own
+// reference to the value (ADR 0175). ABody is the body statement, or the
+// expression of an arrow function.
+function ParametersSurviveBody(const AParams: TGocciaParameterArray;
+  const ABody: TGocciaASTNode): Boolean;
+
 // One result per parameter, computed by a single accumulating syntax walk.
 // True when nothing evaluated up to the end of the initializer of a simple
 // parameter can read or write that parameter's binding: no
@@ -454,7 +466,10 @@ begin
   if Kind = TGocciaExpressionStatement then
     Result := ScanNode(AScan, TGocciaExpressionStatement(AStmt).Expression)
   else if Kind = TGocciaVariableDeclaration then
-    Result := ScanVariables(AScan, TGocciaVariableDeclaration(AStmt).Variables)
+    // A `var` can redeclare a parameter, which then writes its register.
+    Result := not (AScan.RejectLocalWrites and
+        TGocciaVariableDeclaration(AStmt).IsVar) and
+      ScanVariables(AScan, TGocciaVariableDeclaration(AStmt).Variables)
   else if Kind = TGocciaBlockStatement then
   begin
     Block := TGocciaBlockStatement(AStmt);
@@ -485,7 +500,11 @@ begin
   else if Kind = TGocciaForOfStatement then
   begin
     ForOf := TGocciaForOfStatement(AStmt);
-    Result := not Assigned(ForOf.MatchPattern) and not ForOf.IsUsing and
+    // The head writes its target on every iteration: an assignment target
+    // (`for (b of xs)`) or a `var` that redeclares a name.
+    Result := not (AScan.RejectLocalWrites and
+        (Assigned(ForOf.AssignmentTarget) or ForOf.IsVar)) and
+      not Assigned(ForOf.MatchPattern) and not ForOf.IsUsing and
       not ForOf.IsAwaitUsing and ScanPattern(AScan, ForOf.BindingPattern) and
       ScanPattern(AScan, ForOf.AssignmentTarget) and
       ScanNode(AScan, ForOf.Iterable) and ScanNode(AScan, ForOf.Body);
@@ -493,7 +512,9 @@ begin
   else if Kind = TGocciaForInStatement then
   begin
     ForIn := TGocciaForInStatement(AStmt);
-    Result := ScanPattern(AScan, ForIn.BindingPattern) and
+    Result := not (AScan.RejectLocalWrites and
+        (Assigned(ForIn.AssignmentTarget) or ForIn.IsVar)) and
+      ScanPattern(AScan, ForIn.BindingPattern) and
       ScanPattern(AScan, ForIn.AssignmentTarget) and
       ScanNode(AScan, ForIn.ObjectExpression) and ScanNode(AScan, ForIn.Body);
   end
@@ -567,6 +588,23 @@ begin
   Scan.Budget := OPERAND_NODE_BUDGET;
   Scan.AvoidName := '';
   Result := ScanNode(Scan, AExpr);
+end;
+
+function ParametersSurviveBody(const AParams: TGocciaParameterArray;
+  const ABody: TGocciaASTNode): Boolean;
+var
+  Scan: TScan;
+  I: Integer;
+begin
+  for I := 0 to High(AParams) do
+    if AParams[I].IsRest or AParams[I].IsPattern or
+       Assigned(AParams[I].DefaultValue) then
+      Exit(False);
+  Scan := Default(TScan);
+  Scan.RejectLocalWrites := True;
+  Scan.Budget := -1;
+  Scan.AvoidName := '';
+  Result := ScanNode(Scan, ABody);
 end;
 
 function ParameterInitializersAvoidOwnBindings(
