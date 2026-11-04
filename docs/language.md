@@ -351,6 +351,8 @@ const source = {
 };
 ```
 
+In an async generator, `yield*` suspends while awaiting each delegate result. It resumes from a promise reaction without running queued jobs inside the caller's `next()`, `throw()` or `return()` call; a delegate may settle its result after that call returns.
+
 Class generator methods use the same syntax:
 
 ```javascript
@@ -361,7 +363,7 @@ class Source {
 }
 ```
 
-The `function*` and `async function*` forms are compatibility syntax and require `--compat-function`, the same flag used for the `function` keyword. Async generator methods (`async *values() { ... }`) are supported by default and return async iterators whose `next()`, `return()`, and `throw()` methods return Promises. Async generators use GocciaScript's existing synchronous async/await drain model.
+The `function*` and `async function*` forms are compatibility syntax and require `--compat-function`, the same flag used for the `function` keyword. Async generator methods (`async *values() { ... }`) are supported by default and return async iterators whose `next()`, `return()`, and `throw()` methods return Promises.
 
 #### `for...of`
 
