@@ -10960,6 +10960,83 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "",
     ].join("\n");
     writeFileSync(join(tree, "layout.ts"), layoutOriginal);
+    // Overload signatures, a `this` parameter, `declare module` names and
+    // import and re-export `with` clauses, one with a line break between its
+    // key and value, as Biome formats them.
+    const signaturesOriginal = [
+      "import lanterns from \"./lanterns.json\" with {",
+      "  type:",
+      "    \"json\"",
+      "};",
+      "import tideChartForTheNorthernHarbour from \"../../fixtures/tides/northern-harbour.json\" with {",
+      "  type: \"json\"",
+      "};",
+      "declare module \"*.svg\" {",
+      "  const url: string;",
+      "  export default url;",
+      "}",
+      "declare module \"*.css\";",
+      "export { lanternIndex } from \"./lanterns.json\" with {",
+      "  type: \"json\"",
+      "};",
+      "export { default as tideTable } from \"../../fixtures/tides/northern-harbour-table.json\" with {",
+      "  type: \"json\"",
+      "};",
+      "function shelve(",
+      "  label: string,",
+      "  kind: \"jar\",",
+      "  count: number",
+      "): Record<\"jar\", number>;",
+      "export function shelve(",
+      "  label: string,",
+      "  kind: \"crate\",",
+      "  count: number",
+      "): Record<\"crate\", number>;",
+      "export function shelve(label: string, kind: string, count: number) {",
+      "  return { [kind]: count };",
+      "}",
+      "BellTowerElement.prototype.ringAllTheBells = function ringAllTheBells(",
+      "  this: BellTowerElement",
+      ") {",
+      "  return this.chime;",
+      "};",
+      "",
+    ].join("\n");
+    const signaturesExpected = [
+      "import lanterns from './lanterns.json' with { type: 'json' };",
+      "import tideChartForTheNorthernHarbour from '../../fixtures/tides/northern-harbour.json' with {",
+      "  type: 'json',",
+      "};",
+      "declare module '*.svg' {",
+      "  const url: string;",
+      "  export default url;",
+      "}",
+      "declare module '*.css';",
+      "export { lanternIndex } from './lanterns.json' with { type: 'json' };",
+      "export { default as tideTable } from '../../fixtures/tides/northern-harbour-table.json' with {",
+      "  type: 'json',",
+      "};",
+      "function shelve(",
+      "  label: string,",
+      "  kind: 'jar',",
+      "  count: number,",
+      "): Record<'jar', number>;",
+      "export function shelve(",
+      "  label: string,",
+      "  kind: 'crate',",
+      "  count: number,",
+      "): Record<'crate', number>;",
+      "export function shelve(label: string, kind: string, count: number) {",
+      "  return { [kind]: count };",
+      "}",
+      "BellTowerElement.prototype.ringAllTheBells = function ringAllTheBells(",
+      "  this: BellTowerElement,",
+      ") {",
+      "  return this.chime;",
+      "};",
+      "",
+    ].join("\n");
+    writeFileSync(join(tree, "signatures.ts"), signaturesOriginal);
 
     const readOnly = Bun.spawnSync(
       [RUNNER, example, "--experimental-ast", "--compat-function", "--copy", `${tree}=/src`],
@@ -11007,7 +11084,28 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/layout.ts:20:14  a string literal should use single quotes",
       "/src/layout.ts:21:1  a line over 80 columns should be broken the way Biome breaks it",
       "/src/layout.ts:23:3  a line over 80 columns should be broken the way Biome breaks it",
-      "38 finding(s) in 4 file(s), 4 rewritten",
+      "/src/signatures.ts:1:22  a string literal should use single quotes",
+      "/src/signatures.ts:2:3  a `with` clause that fits in 80 columns should be on one line",
+      "/src/signatures.ts:3:5  a string literal should use single quotes",
+      "/src/signatures.ts:5:44  a string literal should use single quotes",
+      "/src/signatures.ts:6:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:6:9  a string literal should use single quotes",
+      "/src/signatures.ts:8:16  a string literal should use single quotes",
+      "/src/signatures.ts:12:16  a string literal should use single quotes",
+      "/src/signatures.ts:13:30  a string literal should use single quotes",
+      "/src/signatures.ts:14:3  a `with` clause that fits in 80 columns should be on one line",
+      "/src/signatures.ts:14:9  a string literal should use single quotes",
+      "/src/signatures.ts:16:38  a string literal should use single quotes",
+      "/src/signatures.ts:17:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:17:9  a string literal should use single quotes",
+      "/src/signatures.ts:21:9  a string literal should use single quotes",
+      "/src/signatures.ts:22:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:23:11  a string literal should use single quotes",
+      "/src/signatures.ts:26:9  a string literal should use single quotes",
+      "/src/signatures.ts:27:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:28:11  a string literal should use single quotes",
+      "/src/signatures.ts:33:3  a multi-line list should end with a trailing comma",
+      "59 finding(s) in 5 file(s), 5 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
@@ -11032,6 +11130,9 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const layoutFixed = normalizeLineEndings(readFileSync(join(tree, "layout.ts"), "utf-8"));
     if (layoutFixed !== layoutExpected)
       throw new Error(`expression-style under --copy-rw should lay out long lines as Biome does, got:\n${layoutFixed}`);
+    const signaturesFixed = normalizeLineEndings(readFileSync(join(tree, "signatures.ts"), "utf-8"));
+    if (signaturesFixed !== signaturesExpected)
+      throw new Error(`expression-style under --copy-rw should format signatures and with clauses as Biome does, got:\n${signaturesFixed}`);
     if (typesFixed !== typesExpected)
       throw new Error(`expression-style under --copy-rw should fix the TypeScript lists, got:\n${typesFixed}`);
     const crlfFixed = readFileSync(join(tree, "windows.js"), "utf-8");
@@ -11045,7 +11146,7 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const againReport = normalizeLineEndings(again.stdout.toString());
     if (again.exitCode !== 0)
       throw new Error(`expression-style rerun should exit 0, got ${again.exitCode}: ${again.stderr.toString()}`);
-    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 4 file(s), 0 rewritten"))
+    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 5 file(s), 0 rewritten"))
       throw new Error(`expression-style should find nothing in a file it fixed, got:\n${againReport}`);
   } finally {
     clean(tmp);

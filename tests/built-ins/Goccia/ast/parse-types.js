@@ -624,6 +624,91 @@ describe("ast.parse with expressions: type syntax", () => {
     });
   });
 
+  test("an overload signature reports its type parameters, parameters and return type", () => {
+    const result = parseTypes(
+      [
+        'function pick<T>(this: Window, text: "a", ...rest: T[]): string;',
+        'export function pick(count: { n: "b" }): "c";',
+        "function pick(value: unknown) { return value; }",
+        "",
+      ].join("\n"),
+    );
+    const [overload, exported] = result.root.children;
+
+    expect(overload.kind).toBe("OverloadDeclaration");
+    expect(shapeOf(result, overload)).toEqual([
+      "TSTypeParameterDeclaration(<T>)",
+      "Parameter(this: Window)",
+      'Parameter(text: "a")',
+      "Parameter(...rest: T[])",
+      "TSTypeAnnotation(: string)",
+    ]);
+    expect(exported.kind).toBe("ExportOverloadDeclaration");
+    expect(shapeOf(result, exported)).toEqual([
+      'Parameter(count: { n: "b" })',
+      'TSTypeAnnotation(: "c")',
+    ]);
+    expect(findAll(exported, "StringLiteral").map((node) => text(result, node))).toEqual(['"b"', '"c"']);
+  });
+
+  test("a this parameter is a Parameter holding its annotation, after the type parameters", () => {
+    const result = parseTypes(
+      [
+        "function total<T>(this: Window, extra: T) {}",
+        "class Tally { add(this: Tally, step: number) {} }",
+        "const counter = { bump(this: Window) {} };",
+        "",
+      ].join("\n"),
+    );
+    const [declaration, klass, variable] = result.root.children;
+    const shapes = [declaration, find(klass, "MethodDefinition"), find(variable, "Property")]
+      .map((node) => shapeOf(result, node).filter((shape) => !shape.startsWith("BlockStatement")));
+
+    expect(shapes).toEqual([
+      [
+        "TSTypeParameterDeclaration(<T>)",
+        "Parameter(this: Window)",
+        "Parameter(extra: T)",
+      ],
+      ["Identifier(add)", "Parameter(this: Tally)", "Parameter(step: number)"],
+      ["Identifier(bump)", "Parameter(this: Window)"],
+    ]);
+    expect(treeOf(result, find(declaration, "Parameter"))).toEqual([
+      "Parameter(this: Window)",
+      "TSTypeAnnotation(: Window)",
+      "TSTypeReference(Window)",
+    ]);
+  });
+
+  test("declare module reports its name, and other ambient declarations nothing", () => {
+    const result = parseTypes(
+      [
+        'declare module "*.svg" {',
+        "  const url: string;",
+        "}",
+        'declare module "*.css";',
+        'export declare module "virtual:a" {}',
+        "declare global { interface Window { app: unknown } }",
+        'declare const mode: "light";',
+        "",
+      ].join("\n"),
+    );
+
+    expect(result.root.children.map((node) => shapeOf(result, node))).toEqual([
+      ['StringLiteral("*.svg")'],
+      ['StringLiteral("*.css")'],
+      ['StringLiteral("virtual:a")'],
+      [],
+      [],
+    ]);
+  });
+
+  test("without the option an overload signature and an ambient declaration have no children", () => {
+    const source = 'function pick(text: "a"): string;\ndeclare module "*.css";\n';
+
+    expect(parse(source, { fileName: "types.ts" }).root.children.map((node) => node.children.length)).toEqual([0, 0]);
+  });
+
   test("without the option no type syntax is reported and the statements are unchanged", () => {
     const source = "type Shade = 'light' | 'dark';\nconst pick = (s: Shade): Shade => s;\n";
     const plain = parse(source, { fileName: "types.ts" });

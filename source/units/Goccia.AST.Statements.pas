@@ -660,6 +660,8 @@ type
     FErasedTypeKind: TGocciaErasedTypeKind;
     FModuleParts: TGocciaASTPartRangeArray;
     FTypeRanges: TGocciaTypeRangeArray;
+    FSignatureParameters: TGocciaParameterArray;
+    FSignatureTypeRanges: TGocciaTypeRangeArray;
   public
     constructor Create(const ASpan: TGocciaSourceSpan;
       const AErasedTypeKind: TGocciaErasedTypeKind = etkNone);
@@ -672,8 +674,18 @@ type
       before skipping it, when the parse records type ranges (ADR 0172): its
       type parameters, heritage and type, or its body. }
     procedure SetTypeRanges(const ARanges: TGocciaTypeRangeArray);
+    { What the parser read of an overload signature: its parameters and its
+      type parameters, `this` parameter and return type, as a function
+      declaration reports them without its body. Neither the evaluator nor
+      the compiler reads them. }
+    procedure SetSignature(const AParameters: TGocciaParameterArray;
+      const ATypeRanges: TGocciaTypeRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     property ErasedTypeKind: TGocciaErasedTypeKind read FErasedTypeKind;
+    property SignatureParameters: TGocciaParameterArray
+      read FSignatureParameters;
+    property SignatureTypeRanges: TGocciaTypeRangeArray
+      read FSignatureTypeRanges;
   end;
 
   TGocciaCaseClause = class(TGocciaASTNode)
@@ -1738,11 +1750,22 @@ begin
   FTypeRanges := ARanges;
 end;
 
+procedure TGocciaEmptyStatement.SetSignature(
+  const AParameters: TGocciaParameterArray;
+  const ATypeRanges: TGocciaTypeRangeArray);
+begin
+  FSignatureParameters := AParameters;
+  FSignatureTypeRanges := ATypeRanges;
+end;
+
 procedure TGocciaEmptyStatement.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
   VisitPartRanges(AVisitor, FModuleParts);
   VisitTypeRanges(AVisitor, FTypeRanges);
+  VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfTypeParameters);
+  ForEachParameterChild(AVisitor, FSignatureParameters);
+  VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfAfterTypeParameters);
 end;
 
 end.
