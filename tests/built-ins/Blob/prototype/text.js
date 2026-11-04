@@ -20,8 +20,8 @@ describe("Blob.prototype.text", () => {
   });
 
   test("drops a leading BOM and replaces invalid sequences", async () => {
-    expect(await new Blob(["﻿abc"]).text()).toBe("abc");
-    expect(await new Blob(["﻿﻿a"]).text()).toBe("﻿a");
+    expect(await new Blob(["\uFEFFabc"]).text()).toBe("abc");
+    expect(await new Blob(["\uFEFF\uFEFFa"]).text()).toBe("\uFEFFa");
     expect(await new Blob([new Uint8Array([0x61, 0xff, 0x62])]).text()).toBe("a�b");
   });
 

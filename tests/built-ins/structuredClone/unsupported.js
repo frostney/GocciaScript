@@ -55,6 +55,10 @@ describe("values with no serialization", () => {
     expectDataCloneError(new Headers());
   });
 
+  test("a Blob, which the HTML Standard can serialize but this engine does not yet", () => {
+    expectDataCloneError(new Blob(["x"]));
+  });
+
   test("inside another value", () => {
     expectDataCloneError({ nested: Promise.resolve() });
     expectDataCloneError([new Proxy({}, {})]);

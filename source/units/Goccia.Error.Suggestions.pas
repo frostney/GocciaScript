@@ -434,6 +434,7 @@ resourcestring
   SSuggestResponseThisType = 'Response prototype methods must be called on a Response object';
   SSuggestBlobThisType = 'Blob prototype members must be used on a Blob object';
   SSuggestBlobParts = 'Pass an array of strings, ArrayBuffers, typed arrays, DataViews or Blobs: new Blob(["text", bytes])';
+  SSuggestBlobTooLarge = 'Split the data across several Blobs: one Blob holds at most 2147483647 bytes';
   SSuggestBlobOptions = 'Pass { type: "text/plain", endings: "transparent" | "native" }';
 
 implementation

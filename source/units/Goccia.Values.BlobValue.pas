@@ -320,7 +320,7 @@ var
 begin
   if ALength > MAX_BLOB_SIZE then
     ThrowRangeError(Format(SErrorBlobTooLarge, [MAX_BLOB_SIZE]),
-      SSuggestMemoryLimitExceeded);
+      SSuggestBlobTooLarge);
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and (ALength > 0) then
   begin
@@ -553,7 +553,7 @@ begin
       Inc(Total, PartLength);
       if Total > MAX_BLOB_SIZE then
         ThrowRangeError(Format(SErrorBlobTooLarge, [MAX_BLOB_SIZE]),
-          SSuggestMemoryLimitExceeded);
+          SSuggestBlobTooLarge);
     end;
 
     ReserveBytes(Total);
