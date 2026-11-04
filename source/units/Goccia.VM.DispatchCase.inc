@@ -3460,14 +3460,14 @@
         AwaitContinuation := GActiveBytecodeGenerator;
         if Assigned(AwaitContinuation) then
         begin
-          if (C and 1) <> 0 then
+          if (C and YIELD_FLAG_DELEGATE) <> 0 then
             AwaitContinuation.HandleYieldDelegate(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
               InstructionStartIP)
           else
             AwaitContinuation.HandleYield(
               FRegisters[A], B, Frame, SavedHandlerCount, PrevCovLine,
-              Frame.IP);
+              Frame.IP, ((C and YIELD_FLAG_TEMP_OPERAND) <> 0) and (A = B));
           if AwaitContinuation.FYieldPending then
           begin
             // The body yielded. A resumption that asked for it learns of the
