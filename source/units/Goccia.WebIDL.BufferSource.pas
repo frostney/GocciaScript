@@ -28,6 +28,13 @@ function IsFixedLengthArrayBuffer(const ABuffer: TGocciaValue): Boolean;
 procedure ConvertToAllowSharedBufferSource(const AValue: TGocciaValue;
   const AContext, ASuggestion: string);
 
+{ Converts AValue to the IDL BufferSource union (ArrayBuffer or
+  ArrayBufferView), without [AllowShared]: throws a TypeError, naming
+  AContext, when AValue is none of these, is or views a SharedArrayBuffer,
+  or is backed by a buffer that is not fixed-length. }
+procedure ConvertToBufferSource(const AValue: TGocciaValue;
+  const AContext, ASuggestion: string);
+
 { Converts AValue to the IDL type [AllowShared] Uint8Array. Throws a
   TypeError, naming AContext, when AValue is not a Uint8Array or its buffer
   is not fixed-length. }
@@ -103,6 +110,32 @@ begin
   else
     // No other union member matches: the union's last step throws.
     ThrowTypeError(Format(SErrorBufferSourceType, [AContext]), ASuggestion);
+end;
+
+// Web IDL §3.2.25 Union types, for BufferSource; each member's conversion is
+// §3.2.26's, whose step 2 throws for a shared buffer without [AllowShared].
+procedure ConvertToBufferSource(const AValue: TGocciaValue;
+  const AContext, ASuggestion: string);
+var
+  Buffer: TGocciaValue;
+begin
+  if (AValue is TGocciaArrayBufferValue) or
+     (AValue is TGocciaSharedArrayBufferValue) then
+    Buffer := AValue
+  else if (AValue is TGocciaTypedArrayValue) or
+          (AValue is TGocciaDataViewValue) then
+    Buffer := ViewedArrayBuffer(AValue)
+  else
+  begin
+    ThrowTypeError(Format(SErrorBufferSourceNonSharedType, [AContext]),
+      ASuggestion);
+    Exit;
+  end;
+  if Buffer is TGocciaSharedArrayBufferValue then
+    ThrowTypeError(Format(SErrorBufferSourceShared, [AContext]),
+      SSuggestBufferSourceShared);
+  if not IsFixedLengthArrayBuffer(Buffer) then
+    ThrowNotFixedLength(AContext);
 end;
 
 // Web IDL §3.2.26 converting a JavaScript value to an IDL Uint8Array, with

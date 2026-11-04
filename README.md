@@ -192,7 +192,7 @@ profile (applied by `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and
 `GocciaBenchmarkRunner`) adds
 `console`, `performance`, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only),
 `AbortController`, `AbortSignal`, `EventTarget`, `Event`, `URL`,
-`URLSearchParams`, `TextEncoder`, and `TextDecoder`. Error constructors include `Error`, `EvalError`, `TypeError`,
+`URLSearchParams`, `TextEncoder`, `TextDecoder`, and `Blob` ([File API](https://w3c.github.io/FileAPI/#blob-section)). Error constructors include `Error`, `EvalError`, `TypeError`,
 `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`,
 `SuppressedError`, and `DOMException`.
 

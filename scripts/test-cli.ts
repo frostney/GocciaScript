@@ -1614,6 +1614,36 @@ console.log("--max-memory (OOM triggers RangeError)...");
   if (out.includes("memory budget")) throw new Error(`OOM should be refused by a charged allocation, not the growth gate: ${out}`);
 }
 
+console.log("--max-memory (Blob bytes are charged and given back)...");
+{
+  // A Blob holds its bytes natively, reserved against the limit for its life
+  // (Goccia.Values.BlobValue). Over the limit, new Blob is the catchable
+  // RangeError, measured before anything is allocated, so a part repeated
+  // many times cannot build a native buffer past the limit first; slice and
+  // the reads are charged as well. Blobs that become garbage give their
+  // reservation back, so many of them in turn fit under one limit.
+  const source = [
+    "const chunk = new Uint8Array(1 << 20);",
+    "const one = new Blob([chunk]);",
+    "const out = [];",
+    "const tryIt = (fn) => { try { fn(); out.push('ok'); } catch (e) { out.push(e.constructor.name); } };",
+    "tryIt(() => new Blob(Array(200).fill(chunk)));",
+    "tryIt(() => new Blob(Array(1000).fill(one)));",
+    "tryIt(() => new Blob(Array(500).fill('x'.repeat(1 << 20))));",
+    "let total = 0;",
+    "for (const _ of Array(300).keys()) { total += new Blob([chunk]).slice(1).size; }",
+    "out.push(total);",
+    "console.log(out.join(','));",
+    "",
+  ].join("\n");
+  const res = await $`echo ${source} | ${RUNNER} --max-memory=67108864 2>&1`.quiet().nothrow();
+  const out = res.text();
+  if (res.exitCode !== 0) throw new Error(`Blob memory probe should exit 0, got ${res.exitCode}: ${out}`);
+  if (!out.includes(`RangeError,RangeError,RangeError,${300 * ((1 << 20) - 1)}`)) {
+    throw new Error(`Blob memory probe: over the limit should be RangeError and garbage Blobs should fit in turn: ${out}`);
+  }
+}
+
 console.log("--max-memory (peak resident memory stays near the ceiling)...");
 if (process.platform === "linux") {
   // BytesAllocated charges each value its InstanceSize, well under half of

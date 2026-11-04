@@ -407,6 +407,7 @@ resourcestring
   SSuggestTextEncoderEncodeIntoImmutable = 'an immutable ArrayBuffer cannot be written; encode into a Uint8Array over a mutable buffer';
 
   // Runtime errors — Web IDL buffer sources
+  SSuggestBufferSourceShared = 'Copy the bytes into an ArrayBuffer first: new Uint8Array(shared).slice()';
   SSuggestBufferSourceNotFixedLength = 'Copy the bytes into a fixed-length buffer first: buffer.slice() for a buffer, new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice() for a view';
 
   // Runtime errors — read-only property
@@ -431,6 +432,9 @@ resourcestring
   SSuggestFFIBareNameDenyScope = 'an ffi deny scope is in force, so a library name searched for by the platform loader cannot be judged against it; open the library by a path outside the deny instead';
   SSuggestHeadersThisType = 'Headers prototype methods must be called on a Headers object';
   SSuggestResponseThisType = 'Response prototype methods must be called on a Response object';
+  SSuggestBlobThisType = 'Blob prototype members must be used on a Blob object';
+  SSuggestBlobParts = 'Pass an array of strings, ArrayBuffers, typed arrays, DataViews or Blobs: new Blob(["text", bytes])';
+  SSuggestBlobOptions = 'Pass { type: "text/plain", endings: "transparent" | "native" }';
 
 implementation
 
