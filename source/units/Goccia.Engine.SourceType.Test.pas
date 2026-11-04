@@ -40,6 +40,7 @@ type
     procedure TestWithInADetectedModuleIsAStrictModeError;
     procedure TestWithInADetectedSloppyModuleIsAStrictModeError;
     procedure TestExplicitScriptKeepsModuleDeclarations;
+    procedure TestUsingSourceGoal;
     procedure TestDefaultEntrySourceType;
     procedure TestDetectedModuleEntryRunsAsModule;
     procedure TestDetectedScriptEntryRunsAsScript;
@@ -51,6 +52,7 @@ type
 
 procedure TEngineSourceTypeTests.SetupTests;
 begin
+  Test('Using declarations respect the settled script or module goal', TestUsingSourceGoal);
   Test('A top-level import declaration makes a detected source a Module',
     TestImportDeclarationIsModule);
   Test('A top-level export declaration makes a detected source a Module',
@@ -141,6 +143,21 @@ begin
   finally
     Source.Free;
   end;
+end;
+
+procedure TEngineSourceTypeTests.TestUsingSourceGoal;
+begin
+  Expect<Boolean>(ParseError('using r = null;', stScript) <> '').ToBe(True);
+  Expect<Boolean>(ParseError('await using r = null;', stScript) <> '').ToBe(True);
+  Expect<Boolean>(ParseError('using r = null;', stDetect) <> '').ToBe(True);
+  Expect<Boolean>(ParseError('await using r = null;', stDetect) <> '').ToBe(True);
+  Expect<Boolean>(ParsedSourceType('using r = null;', stModule) = stModule).ToBe(True);
+  Expect<Boolean>(ParsedSourceType('await using r = null;', stModule) = stModule).ToBe(True);
+  Expect<Boolean>(ParsedSourceType('using r = null; export {};', stDetect) = stModule).ToBe(True);
+  Expect<Boolean>(ParsedSourceType('await using r = null; export {};', stDetect) = stModule).ToBe(True);
+  Expect<Boolean>(ParsedSourceType('{ using r = null; }', stScript) = stScript).ToBe(True);
+  Expect<Boolean>(ParsedSourceType('const f = () => { using r = null; };', stScript) = stScript).ToBe(True);
+  Expect<Boolean>(ParsedSourceType('for (using r of [null]) {}', stScript) = stScript).ToBe(True);
 end;
 
 procedure TEngineSourceTypeTests.TestImportDeclarationIsModule;

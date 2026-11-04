@@ -708,6 +708,16 @@ begin
             AParseAsModule := (Result.FSourceType = stModule) and
               ParserOptions.NonStrictModeEnabled;
           end;
+          // ES2027 §16.1.1 / §8.6.6: ScriptBody must not ContainsUsing.
+          // Wait for source-goal detection: a later export makes this a module.
+          if Result.FSourceType = stScript then
+            for I := 0 to Result.FProgramNode.Body.Count - 1 do
+              if Result.FProgramNode.Body[I] is TGocciaUsingDeclaration then
+                raise TGocciaSyntaxError.Create(
+                  'Using declarations are not allowed at the top level of a script',
+                  Result.FProgramNode.Body[I].Line,
+                  Result.FProgramNode.Body[I].Column, AFileName,
+                  Lexer.SourceLines);
           if (Result.FSourceType = stModule) and not AParseAsModule then
             ValidateModuleEarlyErrors(Result.FProgramNode, AFileName,
               Lexer.SourceLines);
