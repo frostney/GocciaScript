@@ -320,7 +320,11 @@ const attributeClauseOf = (source, comments, commentEnds, node) => {
   const open = source.lastIndexOf("{", attributes[0].start);
   const lineStart = source.lastIndexOf("\n", open) + 1;
   const lineEnd = source.indexOf("\n", close.offset);
-  const joined = `{ ${attributes.map((attribute) => source.slice(attribute.start, attribute.end)).join(", ")} }`;
+  // Each attribute is its key and value children, so a line break between
+  // them does not survive the join.
+  const joined = `{ ${attributes
+    .map(({ children: [key, value] }) => `${source.slice(key.start, key.end)}: ${source.slice(value.start, value.end)}`)
+    .join(", ")} }`;
   const width =
     open - lineStart + joined.length + (lineEnd === -1 ? source.length : lineEnd) - close.offset - 1;
 
