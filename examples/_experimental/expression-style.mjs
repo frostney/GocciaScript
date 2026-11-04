@@ -6,13 +6,16 @@
 //      delimits it: `"a"` becomes `'a'` and `"say \"hi\""` becomes
 //      `'say "hi"'`, but `"it's"` stays as it is.
 //   2. A multi-line array, object, argument list, parameter list (of a
-//      function, an exported function, a function type or a method or call
-//      signature), destructuring pattern, braced import or export specifier
-//      list, tuple type or type parameter list ends with a trailing comma,
-//      except after a rest parameter or element or a setter's parameter, where
-//      one is a syntax error, and after an array pattern's trailing hole. A type
-//      argument list (`Map<K, V>`) is left alone, as Biome and Prettier leave
-//      it.
+//      function, an exported function, an overload signature, a function type
+//      or a method or call signature), destructuring pattern, braced import or
+//      export specifier list, tuple type or type parameter list ends with a
+//      trailing comma, except after a rest parameter or element or a setter's
+//      parameter, where one is a syntax error, and after an array pattern's
+//      trailing hole. A type argument list (`Map<K, V>`) is left alone, as
+//      Biome and Prettier leave it. An import's or re-export's multi-line
+//      `with { type: "json" }` clause is joined onto one line when its line
+//      then fits in WIDTH columns, as Biome joins it, and otherwise ends with
+//      a trailing comma.
 //   3. A line longer than WIDTH is laid out again the way Biome and Prettier
 //      lay it out: the outermost expression or statement on it is broken at
 //      its outermost group that does not fit — the arguments of a call, the
@@ -63,6 +66,7 @@ const RULES = {
   singleQuotes: "a string literal should use single quotes",
   trailingComma: "a multi-line list should end with a trailing comma",
   layout: `a line over ${WIDTH} columns should be broken the way Biome breaks it`,
+  joinAttributes: `a \`with\` clause that fits in ${WIDTH} columns should be on one line`,
 };
 
 const SPECIFIER_KINDS = ["ImportSpecifier", "ExportSpecifier"];
@@ -72,6 +76,8 @@ const FUNCTION_KINDS = [
   "FunctionExpression",
   "FunctionDeclaration",
   "ExportFunctionDeclaration",
+  "OverloadDeclaration",
+  "ExportOverloadDeclaration",
   "TSFunctionType",
   "TSConstructorType",
   "TSMethodSignature",
@@ -290,41 +296,99 @@ const listOf = (source, commentEnds, node) => {
   return null;
 };
 
-const commaEdits = (source, commentEnds, nodes) =>
+/**
+ * An import's or re-export's `with` clause: its attributes, where its `{` and
+ * `}` are, and the clause on one line, as Biome prints it when that fits.
+ * Null when it has none or a comment sits in the declaration.
+ */
+const attributeClauseOf = (source, comments, commentEnds, node) => {
+  const attributes = node.children.filter((child) => child.kind === "ImportAttribute");
+
+  if (attributes.length === 0 || comments.some((comment) => comment.start >= node.start && comment.end <= node.end)) {
+    return null;
+  }
+
+  // Past the last attribute come its `,` if any, then the `}`.
+  const last = attributes[attributes.length - 1];
+  const after = nextSignificant(source, commentEnds, last.end);
+  const close = after.char === "," ? nextSignificant(source, commentEnds, after.offset + 1) : after;
+
+  if (close.char !== "}") {
+    return null;
+  }
+
+  const open = source.lastIndexOf("{", attributes[0].start);
+  const lineStart = source.lastIndexOf("\n", open) + 1;
+  const lineEnd = source.indexOf("\n", close.offset);
+  const joined = `{ ${attributes.map((attribute) => source.slice(attribute.start, attribute.end)).join(", ")} }`;
+  const width =
+    open - lineStart + joined.length + (lineEnd === -1 ? source.length : lineEnd) - close.offset - 1;
+
+  return { items: attributes, open, close: close.offset, joined, fits: width <= WIDTH };
+};
+
+/** A multi-line `with` clause that fits on one line is joined, as Biome does. */
+const attributeEdits = (source, comments, commentEnds, nodes) =>
   nodes.flatMap((node) => {
-    const list = listOf(source, commentEnds, node);
+    const clause = attributeClauseOf(source, comments, commentEnds, node);
 
-    if (!list || list.items.length === 0) {
-      return [];
-    }
-
-    const last = list.items[list.items.length - 1];
-
-    if ((last.kind === "Parameter" && last.rest) || last.kind === "RestElement") {
-      return [];
-    }
-
-    const after = nextSignificant(source, commentEnds, last.end);
-
-    if (after.char === ",") {
-      return [];
-    }
-
-    // Multi-line means the closing delimiter is not on the last item's line.
-    if (!source.slice(last.end, list.close).includes("\n")) {
+    if (!clause || !clause.fits || !source.slice(clause.open, clause.close).includes("\n")) {
       return [];
     }
 
     return [
       {
-        node: last,
-        rule: RULES.trailingComma,
-        start: last.end,
-        end: last.end,
-        text: ",",
+        node: clause.items[0],
+        rule: RULES.joinAttributes,
+        start: clause.open,
+        end: clause.close + 1,
+        text: clause.joined,
       },
     ];
   });
+
+/** A `with` clause too long for one line breaks and ends with a comma. */
+const attributeListOf = (source, comments, commentEnds, node) => {
+  const clause = attributeClauseOf(source, comments, commentEnds, node);
+
+  return clause && !clause.fits ? clause : null;
+};
+
+const commaEdits = (source, comments, commentEnds, nodes) =>
+  nodes
+    .flatMap((node) => [listOf(source, commentEnds, node), attributeListOf(source, comments, commentEnds, node)])
+    .flatMap((list) => {
+      if (!list || list.items.length === 0) {
+        return [];
+      }
+
+      const last = list.items[list.items.length - 1];
+
+      if ((last.kind === "Parameter" && last.rest) || last.kind === "RestElement") {
+        return [];
+      }
+
+      const after = nextSignificant(source, commentEnds, last.end);
+
+      if (after.char === ",") {
+        return [];
+      }
+
+      // Multi-line means the closing delimiter is not on the last item's line.
+      if (!source.slice(last.end, list.close).includes("\n")) {
+        return [];
+      }
+
+      return [
+        {
+          node: last,
+          rule: RULES.trailingComma,
+          start: last.end,
+          end: last.end,
+          text: ",",
+        },
+      ];
+    });
 
 // -- Rule 3: lay out long lines ----------------------------------------------
 //
@@ -1630,7 +1694,8 @@ const editsIn = (file, source) => {
   return [
     ...layoutEdits(source, comments, lineStarts, nodes, root),
     ...quoteEdits(source, nodes),
-    ...commaEdits(source, commentEnds, nodes),
+    ...commaEdits(source, comments, commentEnds, nodes),
+    ...attributeEdits(source, comments, commentEnds, nodes),
   ];
 };
 
