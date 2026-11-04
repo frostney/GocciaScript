@@ -31,7 +31,9 @@ procedure ConvertToAllowSharedBufferSource(const AValue: TGocciaValue;
 { Converts AValue to the IDL BufferSource union (ArrayBuffer or
   ArrayBufferView), without [AllowShared]: throws a TypeError, naming
   AContext, when AValue is none of these, is or views a SharedArrayBuffer,
-  or is backed by a buffer that is not fixed-length. }
+  or is backed by a buffer that is not fixed-length. (In a union with a
+  string member, as BlobPart is, a SharedArrayBuffer itself matches no
+  member and converts as the string instead; only its views reach here.) }
 procedure ConvertToBufferSource(const AValue: TGocciaValue;
   const AContext, ASuggestion: string);
 

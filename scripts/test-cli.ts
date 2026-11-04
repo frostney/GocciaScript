@@ -1634,8 +1634,6 @@ console.log("--max-memory (Blob bytes are charged and given back)...");
     "const s = 'x'.repeat(1 << 20);",
     "tryIt(() => new Blob(Array(500).fill(s)));",
     "tryIt(() => new Blob(Array(25).fill(s)));",
-    "const empty = new Blob();",
-    "tryIt(() => new Blob({ [Symbol.iterator]: () => ({ next: () => ({ done: false, value: empty }) }) }));",
     "let total = 0;",
     "for (const _ of Array(300).keys()) { total += new Blob([chunk]).slice(1).size; }",
     "out.push(total);",
@@ -1645,8 +1643,19 @@ console.log("--max-memory (Blob bytes are charged and given back)...");
   const res = await $`echo ${source} | ${RUNNER} --max-memory=67108864 --timeout=60000 2>&1`.quiet().nothrow();
   const out = res.text();
   if (res.exitCode !== 0) throw new Error(`Blob memory probe should exit 0, got ${res.exitCode}: ${out}`);
-  if (!out.includes(`RangeError,RangeError,RangeError,ok,RangeError,${300 * ((1 << 20) - 1)}`)) {
+  if (!out.includes(`RangeError,RangeError,RangeError,ok,${300 * ((1 << 20) - 1)}`)) {
     throw new Error(`Blob memory probe: over the limit should be RangeError and garbage Blobs should fit in turn: ${out}`);
+  }
+  // The endless iterator runs under a smaller limit, which it reaches sooner.
+  const endless = [
+    "const empty = new Blob();",
+    "try { new Blob({ [Symbol.iterator]: () => ({ next: () => ({ done: false, value: empty }) }) }); console.log('ok'); }",
+    "catch (e) { console.log(e.constructor.name); }",
+    "",
+  ].join("\n");
+  const endlessRes = await $`echo ${endless} | ${RUNNER} --max-memory=16777216 --timeout=60000 2>&1`.quiet().nothrow();
+  if (endlessRes.exitCode !== 0 || !endlessRes.text().includes("RangeError")) {
+    throw new Error(`Blob memory probe: an endless iterator of parts should be refused by the limit: ${endlessRes.text()}`);
   }
 }
 

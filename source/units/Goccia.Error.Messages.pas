@@ -704,7 +704,7 @@ resourcestring
   SErrorBufferSourceType = '%s must be an ArrayBuffer, SharedArrayBuffer or ArrayBufferView';
   SErrorBufferSourceUint8ArrayType = '%s must be a Uint8Array';
   SErrorBufferSourceNonSharedType = '%s must be an ArrayBuffer or ArrayBufferView';
-  SErrorBufferSourceShared = '%s must not be a SharedArrayBuffer or a view of one';
+  SErrorBufferSourceShared = '%s must not be a view of a SharedArrayBuffer';
   SErrorBufferSourceNotFixedLength = '%s must not be backed by a resizable ArrayBuffer or a growable SharedArrayBuffer';
 
   // Promise prototype errors
