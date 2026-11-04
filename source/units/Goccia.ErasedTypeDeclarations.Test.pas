@@ -41,6 +41,8 @@ type
     procedure TestAmbientModuleWithoutBody;
     procedure TestAmbientGlobal;
     procedure TestExportAmbient;
+    procedure TestOverload;
+    procedure TestExportOverload;
     procedure TestSemicolon;
   public
     procedure SetupTests; override;
@@ -71,6 +73,10 @@ begin
     TestAmbientGlobal);
   Test('export declare is erased as an exported ambient declaration',
     TestExportAmbient);
+  Test('a function overload signature is erased as an overload',
+    TestOverload);
+  Test('an exported function overload signature is erased as an exported overload',
+    TestExportOverload);
   Test('a semicolon is an empty statement with no erased type',
     TestSemicolon);
 end;
@@ -82,6 +88,8 @@ var
 begin
   Options := TGocciaSourcePipeline.DefaultOptions;
   Options.SourceType := stModule;
+  // Overload signatures are `function` declarations.
+  Options.Compatibility := Options.Compatibility + [cfFunction];
   Lines := CreateTextLines(ASource);
   try
     Result := TGocciaSourcePipeline.Parse(Lines, 'erased.ts', Options);
@@ -184,6 +192,17 @@ procedure TErasedTypeDeclarationTests.TestExportAmbient;
 begin
   ExpectErased('export declare function helper(name: string): void;',
     etkExportAmbient);
+end;
+
+procedure TErasedTypeDeclarationTests.TestOverload;
+begin
+  ExpectErased('function pick(text: string): string;', etkOverload);
+end;
+
+procedure TErasedTypeDeclarationTests.TestExportOverload;
+begin
+  ExpectErased('export function pick(count: number): number;',
+    etkExportOverload);
 end;
 
 procedure TErasedTypeDeclarationTests.TestSemicolon;

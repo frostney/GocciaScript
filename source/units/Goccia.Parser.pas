@@ -361,7 +361,7 @@ type
       const ALine, AColumn: Integer): TGocciaSetterExpression;
 
     // Function body parsing: (params) { stmts } -> function expression
-    function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
+    function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False; const AAllowSignature: Boolean = False): TGocciaExpression;
     function ParseFunctionBodyBlock(const AParameters: TGocciaParameterArray = nil): TGocciaBlockStatement;
 
     // Destructuring pattern parsing
@@ -429,7 +429,8 @@ type
     procedure RememberNotTypeArguments(const AFirst: Integer;
       const AEndsInLexError: Boolean; const AConstructor: Boolean = False);
     function TryParseGenericArrowFunction(
-      out AExpression: TGocciaExpression): Boolean;
+      out AExpression: TGocciaExpression;
+      const AAsyncToken: TGocciaToken = nil): Boolean;
     function ParseDefiniteAssignmentAssertion(
       const AIsConst: Boolean): Boolean;
     procedure RejectDefiniteAssignmentWithoutAnnotation;
@@ -449,6 +450,8 @@ type
     function IsTypeDeclaration: Boolean;
     function IsAmbientDeclarationStart: Boolean;
     procedure SkipAmbientDeclaration;
+    function ExportedOverloadOr(const AStatement: TGocciaStatement;
+      const ALine, AColumn: Integer): TGocciaStatement;
 
     function BitwiseOr: TGocciaExpression;
     function BitwiseXor: TGocciaExpression;
@@ -3739,6 +3742,15 @@ begin
             Result := TGocciaIdentifierExpression.Create(Name, Token.Span);
           end;
         end
+        // async generic arrow function: async <T>(params) => body. Only an
+        // arrow can follow the type parameter list, so `async < b` stays a
+        // comparison.
+        else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
+                not HasLineTerminatorBetween(Token,
+                  PeekWithLexicalGoal(glgInputElementDiv)) and
+                CheckWithLexicalGoal(gttLess, glgInputElementDiv) and
+                TryParseGenericArrowFunction(Result, Token) then
+          // TryParseGenericArrowFunction has set Result.
         // async single-param arrow: async x => body
         else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
                 not HasLineTerminatorBetween(Token,
@@ -3965,9 +3977,11 @@ end;
 // `<T,>(v: T): T => v` and friends. The type parameter list is collected
 // speculatively: it must be followed by '(' opening a real arrow parameter
 // list, otherwise the parser cursor and lexer are rewound so the caller can
-// report its own error.
+// report its own error. With AAsyncToken, the `async` already consumed before
+// the '<', the arrow is async and its text starts at that token.
 function TGocciaParser.TryParseGenericArrowFunction(
-  out AExpression: TGocciaExpression): Boolean;
+  out AExpression: TGocciaExpression;
+  const AAsyncToken: TGocciaToken): Boolean;
 var
   GenericParametersEnd: Integer;
   SavedCurrent: Integer;
@@ -4019,11 +4033,19 @@ begin
     can be checked. }
   ValidateTypeSyntaxTokens(SavedCurrent, GenericParametersEnd);
 
-  AExpression := ArrowFunction(False, FTokens[SavedCurrent]);
+  if Assigned(AAsyncToken) then
+  begin
+    Line := AAsyncToken.Line;
+    Column := AAsyncToken.Column;
+    AExpression := ArrowFunction(True, AAsyncToken);
+    TGocciaArrowFunctionExpression(AExpression).IsAsync := True;
+  end
+  else
+    AExpression := ArrowFunction(False, FTokens[SavedCurrent]);
   AExpression.AddTypeRanges(TypeRangesBetween(tsTypeParameters, SavedCurrent,
     GenericParametersEnd));
   // ArrowFunction anchors its source text at the '(' it was entered on; widen
-  // it to include the type parameter list.
+  // it to include the type parameter list and any `async`.
   TGocciaArrowFunctionExpression(AExpression).SourceText :=
     ExtractSourceRange(Line, Column);
   Result := True;
@@ -5130,6 +5152,7 @@ end;
 
 function TGocciaParser.ParseParameterList: TGocciaParameterArray;
 var
+  ThisTypeRanges: TGocciaTypeRangeArray;
   ParamCount: Integer;
   ParamName: string;
   DefaultValue: TGocciaExpression;
@@ -5140,6 +5163,18 @@ begin
   FAllowInExpression := True;
   try
     ParamCount := 0;
+
+    // A TypeScript `this` parameter, first in the list, only types `this`
+    // inside the function; it is not a parameter at run time, so it is read
+    // as type syntax and dropped.
+    if Check(gttThis) and CheckNext(gttColon) then
+    begin
+      Advance;
+      Advance;
+      CollectTypeAnnotation([gttRightParen, gttComma], '', '', False, True,
+        ThisTypeRanges);
+      Match(gttComma);
+    end;
 
     if not Check(gttRightParen) then
     begin
@@ -5413,7 +5448,11 @@ begin
   end;
 end;
 
-function TGocciaParser.ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaExpression;
+{ With AAllowSignature, a header that ends without a body — at a ';' or, under
+  ASI, a line break — is a TypeScript overload signature, and the result is
+  nil. Its parameters and return type are type syntax for the implementation
+  that follows, so nothing of it is kept. }
+function TGocciaParser.ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean; const AAllowSignature: Boolean): TGocciaExpression;
 var
   Parameters: TGocciaParameterArray;
   ReturnType: TGocciaTypeRangeArray;
@@ -5446,8 +5485,20 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      CollectTypeAnnotation([gttLeftBrace], '', '', True, True,
-        ReturnType);
+      if AAllowSignature then
+        CollectTypeAnnotation([gttLeftBrace, gttSemicolon], '', '', True,
+          True, ReturnType)
+      else
+        CollectTypeAnnotation([gttLeftBrace], '', '', True, True,
+          ReturnType);
+    end;
+
+    if AAllowSignature and (Check(gttSemicolon) or IsAtEnd or
+       (FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek and
+        not Check(gttLeftBrace))) then
+    begin
+      Match(gttSemicolon);
+      Exit(nil);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before function body',
@@ -7788,7 +7839,14 @@ begin
 
   CollectGenericParameters(TypeParameters);
 
-  FunctionExpr := TGocciaFunctionExpression(ParseFunctionBodyExpression(Line, Column, AIsAsync, AIsGenerator));
+  FunctionExpr := TGocciaFunctionExpression(ParseFunctionBodyExpression(Line,
+    Column, AIsAsync, AIsGenerator, True));
+  if not Assigned(FunctionExpr) then
+  begin
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkOverload);
+    Exit;
+  end;
   FunctionExpr.AddTypeRanges(TypeParameters);
   ValidateStrictFunctionBindingName(NameToken.Lexeme, FunctionExpr, Line,
     Column);
@@ -7926,6 +7984,8 @@ begin
   Result := TryStmt;
 end;
 
+{ Nil for an overload signature: a header that ends without a body, at a
+  semicolon, the end of the class body, or under ASI a line break. }
 function TGocciaParser.ClassMethod(const AIsStatic: Boolean; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaClassMethod;
 var
   Parameters: TGocciaParameterArray;
@@ -7966,9 +8026,20 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      MethodReturnType := CollectTypeAnnotation([gttLeftBrace], '', '', True,
-        True, ReturnTypeRanges);
+      // A signature's return type can end at the class's closing '}'.
+      MethodReturnType := CollectTypeAnnotation([gttLeftBrace, gttSemicolon,
+        gttRightBrace], '', '', True, True, ReturnTypeRanges);
       AppendTypeRanges(MethodTypeRanges, ReturnTypeRanges);
+    end;
+
+    // A method header with no body is a TypeScript overload signature: type
+    // syntax for the implementation that follows, so nothing of it is kept.
+    if Check(gttSemicolon) or Check(gttRightBrace) or IsAtEnd or
+       (FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek and
+        not Check(gttLeftBrace)) then
+    begin
+      Match(gttSemicolon);
+      Exit(nil);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before method body',
@@ -8804,7 +8875,7 @@ begin
           Result := TGocciaExportFunctionDeclaration.Create(FunctionDecl, SourceSpanAtPosition(Line, Column));
         end
         else
-          Result := InnerDecl;
+          Result := ExportedOverloadOr(InnerDecl, Line, Column);
         Exit;
       end;
     end;
@@ -8830,7 +8901,7 @@ begin
       Result := TGocciaExportFunctionDeclaration.Create(FunctionDecl, SourceSpanAtPosition(Line, Column));
     end
     else
-      Result := InnerDecl;
+      Result := ExportedOverloadOr(InnerDecl, Line, Column);
     Exit;
   end;
 
@@ -9596,10 +9667,13 @@ begin
       end
       else if Check(gttLeftParen) or Check(gttLess) then
       begin
+        Method := ClassMethod(IsStatic, IsAsync, IsGenerator);
+        // An overload signature: the implementation is the member to keep,
+        // and the only one to claim a private name.
+        if not Assigned(Method) then
+          Continue;
         if IsPrivate and not IsComputed and (MemberName <> '') then
           DeclarePrivateName(MemberName, pndMethod, IsStatic);
-
-        Method := ClassMethod(IsStatic, IsAsync, IsGenerator);
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
         Method.IsGenerator := IsGenerator;
@@ -11263,6 +11337,18 @@ begin
     Advance;
   end;
   SkipBracedBody;
+end;
+
+{ An exported overload signature is erased as one, from its `export`. }
+function TGocciaParser.ExportedOverloadOr(const AStatement: TGocciaStatement;
+  const ALine, AColumn: Integer): TGocciaStatement;
+begin
+  if (AStatement is TGocciaEmptyStatement) and
+     (TGocciaEmptyStatement(AStatement).ErasedTypeKind = etkOverload) then
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(ALine, AColumn),
+      etkExportOverload)
+  else
+    Result := AStatement;
 end;
 
 function TGocciaParser.IsTypeDeclaration: Boolean;

@@ -8,7 +8,7 @@
 - **Optional enforcement** — `--strict-types` checks supported annotations at runtime; it is a runtime contract, not a static structural checker such as `tsc`
 - **Extension decides `<`** — A leading `<` is read as JSX or as a type parameter list by file extension, modeled on TypeScript with GocciaScript-specific extension rules (JSX is also recognized in `.js` and `.mjs`, and never in `.ts` or `.mts`)
 - **Restricted `!` productions** — Definite assignment and non-null assertions must sit on the same line as their operand, so ASI code keeps its usual meaning
-- **Bounded surface** — Namespaces, parameter properties, angle-bracket assertions, class-field definite assignment, and generic async arrows are deliberately unsupported
+- **Bounded surface** — Namespaces, parameter properties, angle-bracket assertions, and class-field definite assignment are deliberately unsupported
 
 The annotation surface is part of GocciaScript's language profile; see
 [Language](language.md) for the ECMAScript baseline it sits on and
@@ -70,9 +70,21 @@ const nonNull = { v: "x" };
 nonNull.v!.length;
 const firstY = [{ y: 1 }][0]!.y;
 
-// Generic arrow function expressions
+// Generic arrow function expressions, async ones included
 const identity = <T,>(v: T): T => v;
 const withDefault = <T = string,>(v: T): T => v;
+const load = async <T,>(read: () => Promise<T>): Promise<T> => read();
+
+// A `this` parameter types `this`; it is not a parameter at run time, so
+// `total.length` is 1
+function total(this: { base: number }, extra: number) { return this.base + extra; }
+
+// Overload signatures (erased): a function or method header with no body,
+// ended by `;` or, under ASI, a line break. The implementation keeps its own
+// parameters.
+function pick(text: string): string;
+function pick(count: number): number;
+function pick(value: string | number) { return value; }
 
 // Type and interface declarations (skipped entirely)
 type Point = { x: number, y: number };
@@ -130,7 +142,7 @@ A type-level statement erased this way still has a kind of its own in [`goccia:a
 
 A leading `<` is ambiguous: it can open a JSX element or a type parameter list. GocciaScript resolves this by file extension — modeled on TypeScript's `.ts`/`.mts` versus `.tsx` rule, with GocciaScript-specific extensions: JSX is also recognized (with a warning) in `.js` and `.mjs` sources.
 
-- **`.ts`, `.mts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations parse here, as does every *supported* generic arrow form — including the bare `<T>` the JSX extensions cannot take. Generic **async** arrows are unsupported in every extension; see [Not Supported](#not-supported).
+- **`.ts`, `.mts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations parse here, as does every generic arrow form — including the bare `<T>` the JSX extensions cannot take. A generic arrow can be `async`: `async <T>(v: T) => v` here, and `async <T,>(v: T) => v` in the JSX extensions below.
 
   ```typescript
   const identity: <T>(x: T) => T = (x) => x;
@@ -173,4 +185,3 @@ Both `!` forms are restricted productions: the `!` must appear on the same line 
 - Parameter properties in constructors (`constructor(public x: number)`).
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
 - Definite assignment assertions on class fields (`class C { x!: number }`) — only variable declarations accept `!`.
-- Generic **async** arrow expressions (`async <T,>(v: T) => v`) — the generic form is wired into primary-expression position only, so the `async` prefix is not recognised ahead of it.

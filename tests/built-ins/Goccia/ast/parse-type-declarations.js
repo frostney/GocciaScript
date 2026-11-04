@@ -138,6 +138,22 @@ describe("ast.parse type-level declarations", () => {
     ]);
   });
 
+  test("an overload signature is reported by kind, and the implementation as a function", () => {
+    const lines = [
+      "function pick(text: string): string;",
+      "export function pick(count: number): number;",
+      "export function pick(value: string | number) { return value; }",
+    ];
+    const kinds = topLevel(lines.join("\n") + "\n");
+
+    expect(kinds.slice(0, 2)).toEqual([
+      { kind: "OverloadDeclaration", typeOnly: true, text: lines[0] },
+      { kind: "ExportOverloadDeclaration", typeOnly: true, text: lines[1] },
+    ]);
+    expect(kinds[2].kind).toBe("ExportFunctionDeclaration");
+    expect(kinds[2].text).toBe(lines[2]);
+  });
+
   test("a lone semicolon is the only empty statement, and it carries no typeOnly", () => {
     const source = "type A = 1;\n;\nconst b = 2;\n";
     const [alias, empty, declaration] = parse(source).root.children;
