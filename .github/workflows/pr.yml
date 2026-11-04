@@ -628,12 +628,12 @@ jobs:
           sparse-checkout: |
             /LICENSE
             /README.md
-            /simple/hash-map.js
-            /SeaMonster/ai-astar.js
-            /SeaMonster/gaussian-blur.js
-            /class-fields/raytrace-public-class-fields.js
-            /generators/sync-file-system.js
-            /generators/lazy-collections.js
+            /workloads/hash-map/hash-map.js
+            /workloads/SeaMonster/ai-astar.js
+            /workloads/SeaMonster/gaussian-blur.js
+            /workloads/raytrace-public-class-fields/raytrace-public-class-fields.js
+            /workloads/sync-fs/sync-file-system.js
+            /workloads/lazy-collections/lazy-collections.js
 
       - name: Run JetStream workload report
         env:
