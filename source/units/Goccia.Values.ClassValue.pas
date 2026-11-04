@@ -737,7 +737,10 @@ begin
      ShouldDelayTypedArrayPrototypeLookup(ANativeClass, AArguments) or
      (ANativeClass is TGocciaArrayBufferClassValue) or
      (ANativeClass is TGocciaSharedArrayBufferClassValue) or
-     (ANativeClass is TGocciaDataViewClassValue));
+     (ANativeClass is TGocciaDataViewClassValue) or
+     // Web IDL: a Blob's arguments convert before its object is created
+     // from NewTarget's prototype.
+     (ANativeClass is TGocciaBlobClassValue));
 end;
 
 function ShouldDelayNativeSuperPrototypeLookup(

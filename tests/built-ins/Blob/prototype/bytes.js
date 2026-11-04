@@ -4,6 +4,15 @@ features: [Blob]
 ---*/
 
 describe("Blob.prototype.bytes", () => {
+  test("is an enumerable, writable, configurable method", () => {
+    const desc = Object.getOwnPropertyDescriptor(Blob.prototype, "bytes");
+    expect(typeof desc.value).toBe("function");
+    expect(desc.enumerable).toBe(true);
+    expect(desc.writable).toBe(true);
+    expect(desc.configurable).toBe(true);
+    expect(desc.value.length).toBe(0);
+  });
+
   test("resolves to a Uint8Array over a buffer of its own", async () => {
     const u = await new Blob(["AB"]).bytes();
     expect(u instanceof Uint8Array).toBe(true);

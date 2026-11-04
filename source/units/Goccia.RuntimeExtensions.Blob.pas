@@ -50,6 +50,7 @@ begin
   TypeDef.AddSpeciesGetter := False;
   RegisterTypeDefinition(Runtime.Engine.GlobalScope, TypeDef,
     Runtime.SpeciesGetter, RuntimeConstructor);
+  Runtime.RegisterRuntimeGlobalName(CONSTRUCTOR_BLOB);
 end;
 
 end.

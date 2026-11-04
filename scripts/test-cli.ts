@@ -1618,10 +1618,12 @@ console.log("--max-memory (Blob bytes are charged and given back)...");
 {
   // A Blob holds its bytes natively, reserved against the limit for its life
   // (Goccia.Values.BlobValue). Over the limit, new Blob is the catchable
-  // RangeError, measured before anything is allocated, so a part repeated
-  // many times cannot build a native buffer past the limit first; slice and
-  // the reads are charged as well. Blobs that become garbage give their
-  // reservation back, so many of them in turn fit under one limit.
+  // RangeError, measured before the bytes are allocated, so a part repeated
+  // many times cannot build a native buffer past the limit first, and a
+  // repeated string is charged by the bytes it adds, not once more per
+  // element. The list of parts is charged as it grows, so an iterator that
+  // never ends is refused by the limit too. Blobs that become garbage give
+  // their reservation back, so many of them in turn fit under one limit.
   const source = [
     "const chunk = new Uint8Array(1 << 20);",
     "const one = new Blob([chunk]);",
@@ -1629,17 +1631,21 @@ console.log("--max-memory (Blob bytes are charged and given back)...");
     "const tryIt = (fn) => { try { fn(); out.push('ok'); } catch (e) { out.push(e.constructor.name); } };",
     "tryIt(() => new Blob(Array(200).fill(chunk)));",
     "tryIt(() => new Blob(Array(1000).fill(one)));",
-    "tryIt(() => new Blob(Array(500).fill('x'.repeat(1 << 20))));",
+    "const s = 'x'.repeat(1 << 20);",
+    "tryIt(() => new Blob(Array(500).fill(s)));",
+    "tryIt(() => new Blob(Array(25).fill(s)));",
+    "const empty = new Blob();",
+    "tryIt(() => new Blob({ [Symbol.iterator]: () => ({ next: () => ({ done: false, value: empty }) }) }));",
     "let total = 0;",
     "for (const _ of Array(300).keys()) { total += new Blob([chunk]).slice(1).size; }",
     "out.push(total);",
     "console.log(out.join(','));",
     "",
   ].join("\n");
-  const res = await $`echo ${source} | ${RUNNER} --max-memory=67108864 2>&1`.quiet().nothrow();
+  const res = await $`echo ${source} | ${RUNNER} --max-memory=67108864 --timeout=60000 2>&1`.quiet().nothrow();
   const out = res.text();
   if (res.exitCode !== 0) throw new Error(`Blob memory probe should exit 0, got ${res.exitCode}: ${out}`);
-  if (!out.includes(`RangeError,RangeError,RangeError,${300 * ((1 << 20) - 1)}`)) {
+  if (!out.includes(`RangeError,RangeError,RangeError,ok,RangeError,${300 * ((1 << 20) - 1)}`)) {
     throw new Error(`Blob memory probe: over the limit should be RangeError and garbage Blobs should fit in turn: ${out}`);
   }
 }

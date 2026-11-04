@@ -4,6 +4,15 @@ features: [Blob]
 ---*/
 
 describe("Blob.prototype.slice", () => {
+  test("is an enumerable, writable, configurable method", () => {
+    const desc = Object.getOwnPropertyDescriptor(Blob.prototype, "slice");
+    expect(typeof desc.value).toBe("function");
+    expect(desc.enumerable).toBe(true);
+    expect(desc.writable).toBe(true);
+    expect(desc.configurable).toBe(true);
+    expect(desc.value.length).toBe(0);
+  });
+
   const b = new Blob(["0123456789"], { type: "text/plain" });
 
   test("with no arguments copies every byte with an empty type", async () => {

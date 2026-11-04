@@ -4,6 +4,15 @@ features: [Blob]
 ---*/
 
 describe("Blob.prototype.arrayBuffer", () => {
+  test("is an enumerable, writable, configurable method", () => {
+    const desc = Object.getOwnPropertyDescriptor(Blob.prototype, "arrayBuffer");
+    expect(typeof desc.value).toBe("function");
+    expect(desc.enumerable).toBe(true);
+    expect(desc.writable).toBe(true);
+    expect(desc.configurable).toBe(true);
+    expect(desc.value.length).toBe(0);
+  });
+
   test("resolves to a new ArrayBuffer copy each time", async () => {
     const b = new Blob([new Uint8Array([1, 2, 3])]);
     const a1 = await b.arrayBuffer();

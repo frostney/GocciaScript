@@ -113,16 +113,17 @@ const
   // Realm and owned slots a fresh engine leaves empty and nothing a script
   // does fills: the host installs eval; import.meta's cache holds no shared
   // prototype; the rest belong to runtime extensions (Fetch, URL, encoding,
-  // events), which this engine does not install. (Object.prototype has its
+  // events, Blob), which this engine does not install. (Object.prototype has its
   // own hasOwnProperty, so no script installs that shim, but its slot has a
   // materializer: native code can load it.)
-  UNFILLED_SLOTS: array[0..11] of string = (
+  UNFILLED_SLOTS: array[0..12] of string = (
     'eval',
     'ImportMeta.cache',
     'Headers.shared',
     'URL.shared',
     'URLSearchParams.shared',
     'Response.shared',
+    'Blob.shared',
     'TextDecoder.shared',
     'TextEncoder.shared',
     'Event.shared',

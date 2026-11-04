@@ -16,6 +16,10 @@ describe("Blob constructor", () => {
     expect(Blob.name).toBe("Blob");
   });
 
+  test("is listed among the runtime globals", () => {
+    expect(Goccia.runtimeGlobals.includes("Blob")).toBe(true);
+  });
+
   test("cannot be called without new", () => {
     expect(() => Blob()).toThrow(TypeError);
   });
@@ -83,10 +87,14 @@ describe("Blob constructor", () => {
     expect(new Blob(undefined, { type: "a/b" }).size).toBe(0);
   });
 
-  test("refuses a SharedArrayBuffer and views of one", () => {
+  test("a SharedArrayBuffer is a string part, and a view of one is refused", async () => {
+    // Web IDL: BlobPart has no SharedArrayBuffer or object member, so the
+    // buffer itself converts as a USVString; a view converts as BufferSource,
+    // which refuses a shared buffer without [AllowShared].
     const shared = new SharedArrayBuffer(4);
-    expect(() => new Blob([shared])).toThrow(TypeError);
+    expect(await new Blob([shared]).text()).toBe("[object SharedArrayBuffer]");
     expect(() => new Blob([new Uint8Array(shared)])).toThrow(TypeError);
+    expect(() => new Blob([new DataView(shared)])).toThrow(TypeError);
   });
 
   test("refuses a resizable ArrayBuffer and views of one", () => {
@@ -161,6 +169,20 @@ describe("Blob options", () => {
       get endings() { order.push("endings"); return undefined; },
     });
     expect(order).toEqual(["part", "endings"]);
+  });
+});
+
+describe("Blob construction order", () => {
+  test("the arguments convert before NewTarget's prototype is read", () => {
+    const order = [];
+    const newTarget = new Proxy(class {}, {
+      get(target, key) {
+        if (key === "prototype") order.push("proto");
+        return Reflect.get(target, key);
+      },
+    });
+    Reflect.construct(Blob, [[{ toString() { order.push("part"); return ""; } }]], newTarget);
+    expect(order).toEqual(["part", "proto"]);
   });
 });
 

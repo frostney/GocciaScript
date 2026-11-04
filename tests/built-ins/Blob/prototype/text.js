@@ -4,6 +4,15 @@ features: [Blob]
 ---*/
 
 describe("Blob.prototype.text", () => {
+  test("is an enumerable, writable, configurable method", () => {
+    const desc = Object.getOwnPropertyDescriptor(Blob.prototype, "text");
+    expect(typeof desc.value).toBe("function");
+    expect(desc.enumerable).toBe(true);
+    expect(desc.writable).toBe(true);
+    expect(desc.configurable).toBe(true);
+    expect(desc.value.length).toBe(0);
+  });
+
   test("returns a promise of the UTF-8 decoded bytes", async () => {
     const p = new Blob(["hé"]).text();
     expect(p instanceof Promise).toBe(true);

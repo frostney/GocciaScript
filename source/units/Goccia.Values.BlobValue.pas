@@ -97,9 +97,11 @@ uses
   Goccia.GarbageCollector,
   Goccia.Realm,
   Goccia.Values.ArrayBufferValue,
+  Goccia.Values.ArrayValue,
   Goccia.Values.DataViewValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.HoleValue,
   Goccia.Values.IteratorSupport,
   Goccia.Values.IteratorValue,
   Goccia.Values.NativeFunction,
@@ -154,73 +156,6 @@ end;
 // buffer of its own.
 // ---------------------------------------------------------------------------
 
-{ The code point at AIndex (1-based) of AText and how many code units it
-  takes; a lone surrogate reads as U+FFFD. }
-function CodePointAt(const AText: string; const AIndex: Integer;
-  out AUnits: Integer): Cardinal;
-var
-  High_, Low_: Cardinal;
-begin
-  High_ := Ord(AText[AIndex]);
-  AUnits := 1;
-  if (High_ >= $D800) and (High_ <= $DBFF) and (AIndex < Length(AText)) then
-  begin
-    Low_ := Ord(AText[AIndex + 1]);
-    if (Low_ >= $DC00) and (Low_ <= $DFFF) then
-    begin
-      AUnits := 2;
-      Exit($10000 + ((High_ - $D800) shl 10) + (Low_ - $DC00));
-    end;
-  end;
-  if (High_ >= $D800) and (High_ <= $DFFF) then
-    Result := $FFFD
-  else
-    Result := High_;
-end;
-
-function UTF8Length(const ACodePoint: Cardinal): Integer; {$IFDEF FPC}inline;{$ENDIF}
-begin
-  if ACodePoint < $80 then
-    Result := 1
-  else if ACodePoint < $800 then
-    Result := 2
-  else if ACodePoint < $10000 then
-    Result := 3
-  else
-    Result := 4;
-end;
-
-procedure PutUTF8(const ACodePoint: Cardinal; var ADest: TBytes;
-  var AOffset: Int64);
-begin
-  if ACodePoint < $80 then
-  begin
-    ADest[AOffset] := Byte(ACodePoint);
-    Inc(AOffset);
-  end
-  else if ACodePoint < $800 then
-  begin
-    ADest[AOffset] := Byte($C0 or (ACodePoint shr 6));
-    ADest[AOffset + 1] := Byte($80 or (ACodePoint and $3F));
-    Inc(AOffset, 2);
-  end
-  else if ACodePoint < $10000 then
-  begin
-    ADest[AOffset] := Byte($E0 or (ACodePoint shr 12));
-    ADest[AOffset + 1] := Byte($80 or ((ACodePoint shr 6) and $3F));
-    ADest[AOffset + 2] := Byte($80 or (ACodePoint and $3F));
-    Inc(AOffset, 3);
-  end
-  else
-  begin
-    ADest[AOffset] := Byte($F0 or (ACodePoint shr 18));
-    ADest[AOffset + 1] := Byte($80 or ((ACodePoint shr 12) and $3F));
-    ADest[AOffset + 2] := Byte($80 or ((ACodePoint shr 6) and $3F));
-    ADest[AOffset + 3] := Byte($80 or (ACodePoint and $3F));
-    Inc(AOffset, 4);
-  end;
-end;
-
 { File API §3.1.1 "convert line endings to native": the native line ending
   is CR LF where the platform's convention is CR LF, else LF; a CR LF pair,
   a lone CR and a lone LF each become one native line ending. }
@@ -231,7 +166,7 @@ const
   NATIVE_LINE_ENDING_BYTES = 1;
 {$ENDIF}
 
-procedure PutNativeLineEnding(var ADest: TBytes; var AOffset: Int64);
+procedure PutNativeLineEnding(const ADest: TBytes; var AOffset: SizeInt);
 begin
 {$IFDEF MSWINDOWS}
   ADest[AOffset] := 13;
@@ -241,64 +176,45 @@ begin
   Inc(AOffset);
 end;
 
-{ Walks AText as process blob parts encodes it. With ADest nil it only
-  counts; otherwise it writes at AOffset, which ADest has room for. Returns
-  the number of bytes. }
-function EncodeBlobString(const AText: string; const ANative: Boolean;
-  const AWrite: Boolean; var ADest: TBytes; var AOffset: Int64): Int64;
+{ Walks AText as process blob parts encodes it: the runs between line
+  endings as UTF-8, and with ANative each line ending as the native one.
+  With AWrite False it only counts; otherwise it writes at AOffset, which
+  ADest has room for. Returns the number of bytes. }
+function EncodeBlobString(const AText: string; const ANative, AWrite: Boolean;
+  const ADest: TBytes; var AOffset: SizeInt): Int64;
 var
-  I, Units: Integer;
-  CodePoint: Cardinal;
+  RunStart, I: Integer;
 begin
-  Result := 0;
-  I := 1;
-  while I <= Length(AText) do
+  if not ANative then
   begin
-    if ANative and ((AText[I] = #13) or (AText[I] = #10)) then
+    Result := UTF8LengthWithReplacement(AText, 1, Length(AText) + 1);
+    if AWrite then
+      WriteUTF8WithReplacement(AText, 1, Length(AText) + 1, ADest, AOffset);
+    Exit;
+  end;
+  Result := 0;
+  RunStart := 1;
+  I := 1;
+  while I <= Length(AText) + 1 do
+  begin
+    if (I > Length(AText)) or (AText[I] = #13) or (AText[I] = #10) then
     begin
+      // The run before the line ending (or the end), then the line ending.
+      Inc(Result, UTF8LengthWithReplacement(AText, RunStart, I));
+      if AWrite then
+        WriteUTF8WithReplacement(AText, RunStart, I, ADest, AOffset);
+      if I > Length(AText) then
+        Break;
       // A CR followed by an LF is one line ending.
       if (AText[I] = #13) and (I < Length(AText)) and (AText[I + 1] = #10) then
-        Inc(I, 2)
-      else
         Inc(I);
       Inc(Result, NATIVE_LINE_ENDING_BYTES);
       if AWrite then
         PutNativeLineEnding(ADest, AOffset);
-      Continue;
+      RunStart := I + 1;
     end;
-    CodePoint := CodePointAt(AText, I, Units);
-    Inc(I, Units);
-    Inc(Result, UTF8Length(CodePoint));
-    if AWrite then
-      PutUTF8(CodePoint, ADest, AOffset);
+    Inc(I);
   end;
-end;
-
-{ The number of bytes "get a copy of the bytes held by the buffer source"
-  returns for ASource, without copying them. }
-function HeldByteLength(const ASource: TGocciaValue): Int64;
-var
-  Buffer: TGocciaValue;
-begin
-  if ASource is TGocciaTypedArrayValue then
-  begin
-    Buffer := TGocciaTypedArrayValue(ASource).BufferValue;
-    Result := Int64(TGocciaTypedArrayValue(ASource).Length) *
-      TGocciaTypedArrayValue.BytesPerElement(TGocciaTypedArrayValue(ASource).Kind);
-  end
-  else if ASource is TGocciaDataViewValue then
-  begin
-    Buffer := TGocciaDataViewValue(ASource).BufferValue;
-    Result := TGocciaDataViewValue(ASource).ByteLengthSlot;
-  end
-  else
-  begin
-    Buffer := ASource;
-    Result := Length(TGocciaArrayBufferValue(ASource).Data);
-  end;
-  if (Buffer is TGocciaArrayBufferValue) and
-     TGocciaArrayBufferValue(Buffer).Detached then
-    Result := 0;
 end;
 
 // ---------------------------------------------------------------------------
@@ -306,17 +222,18 @@ end;
 // ---------------------------------------------------------------------------
 
 { Web IDL §3.2.25 union conversion for BlobPart (BufferSource or Blob or
-  USVString): a Blob is itself, an object with [[ArrayBufferData]],
-  [[DataView]] or [[TypedArrayName]] converts as a BufferSource (no
-  [AllowShared], no [AllowResizable]: a TypeError otherwise), anything else
-  as a USVString. Returns the part to keep: the Blob, the buffer source or
+  USVString): a Blob is itself, an ArrayBuffer or an object with [[DataView]]
+  or [[TypedArrayName]] converts as a BufferSource (no [AllowShared], no
+  [AllowResizable]: a TypeError otherwise), anything else as a USVString. Returns the part to keep: the Blob, the buffer source or
   a string value. }
 function ConvertBlobPart(const AValue: TGocciaValue): TGocciaValue;
 begin
+  // A SharedArrayBuffer itself matches no member of the union (only
+  // SharedArrayBuffer or object would take it), so it falls through to the
+  // string; a view of one is a typed array or DataView and is refused.
   if AValue is TGocciaBlobValue then
     Result := AValue
   else if (AValue is TGocciaArrayBufferValue) or
-          (AValue is TGocciaSharedArrayBufferValue) or
           (AValue is TGocciaTypedArrayValue) or
           (AValue is TGocciaDataViewValue) then
   begin
@@ -324,8 +241,8 @@ begin
     Result := AValue;
   end
   else
-    Result := TGocciaStringLiteralValue.Create(
-      AValue.ToStringLiteral.Value);
+    // A string is kept as it is: a part repeated many times is charged once.
+    Result := AValue.ToStringLiteral;
 end;
 
 { Web IDL §3.2.4.9 ConvertToInt for [Clamp] long long, as a Double. }
@@ -430,6 +347,10 @@ var
   Roots: TGocciaActiveRootFrame;
   Copied: TBytes;
 begin
+  { The first Blob made in a realm hosts the shared prototype's methods and
+    stays pinned with it, so it is an empty one, never the embedder's. }
+  if GetBlobShared = nil then
+    TGocciaBlobValue.Create;
   Result := TGocciaBlobValue.Create;
   Roots.Initialize;
   try
@@ -449,7 +370,11 @@ begin
 end;
 
 procedure TGocciaBlobValue.InitializePrototype;
+const
+  BLOB_OPERATIONS: array[0..3] of string = (PROP_SLICE, PROP_TEXT,
+    PROP_ARRAY_BUFFER_METHOD, PROP_BYTES);
 var
+  Name: string;
   Members: TGocciaMemberCollection;
   Shared: TGocciaSharedPrototype;
   PrototypeMembers: TArray<TGocciaMemberDefinition>;
@@ -484,6 +409,12 @@ begin
     Members.Free;
   end;
   RegisterMemberDefinitions(Shared.Prototype, PrototypeMembers);
+  // Web IDL §3.7.7: an interface's operations are enumerable, as its
+  // attributes are; native methods are registered non-enumerable.
+  for Name in BLOB_OPERATIONS do
+    Shared.Prototype.DefineProperty(Name, TGocciaPropertyDescriptorData.Create(
+      Shared.Prototype.GetProperty(Name),
+      [pfConfigurable, pfEnumerable, pfWritable]));
 end;
 
 class procedure TGocciaBlobValue.ExposePrototype(const AConstructor: TGocciaValue);
@@ -505,25 +436,37 @@ procedure TGocciaBlobValue.InitializeNativeFromArguments(
   const AArguments: TGocciaArgumentsCollection);
 var
   Roots: TGocciaActiveRootFrame;
+  ItemRoot: TGocciaTempRoot;
   PartsArg, OptionsArg, Item, Part, Field: TGocciaValue;
   Iterator: TGocciaIteratorValue;
-  Parts: array of TGocciaValue;
-  Count, I: Integer;
+  Holder: TGocciaArrayValue;
+  Parts: TGocciaElementList;
+  I: Integer;
   Done, Native: Boolean;
   BlobType, Endings: string;
-  Total, Offset, PartLength: Int64;
-  Bytes, Held: TBytes;
+  Total, PartLength, ListCharge, Grow: Int64;
+  Offset: SizeInt;
+  Bytes: TBytes;
   Reserved: Boolean;
+  GC: TGarbageCollector;
 begin
   // Step 1: no parameters is an empty Blob with an empty type.
   if AArguments.Length = 0 then
     Exit;
 
+  GC := TGarbageCollector.Instance;
+  ListCharge := 0;
+  InitializeTempRoot(ItemRoot);
   Roots.Initialize;
   try
     Roots.Add(Self);
-    Count := 0;
-    SetLength(Parts, 0);
+    { The converted parts are held by one rooted array, whose element list
+      grows as the iterator yields; its slots are reserved against the
+      memory limit as they are added, so an endless iterator is refused by
+      the limit rather than growing native memory past it. }
+    Holder := TGocciaArrayValue.Create;
+    Roots.Add(Holder);
+    Parts := Holder.Elements;
 
     // Web IDL converts the arguments in order: blobParts, an optional
     // sequence<BlobPart>, first. undefined is "not given"; anything else
@@ -542,13 +485,21 @@ begin
       Item := Iterator.DirectNext(Done);
       while not Done do
       begin
-        Roots.Add(Item);
-        Part := ConvertBlobPart(Item);
-        Roots.Add(Part);
-        if Count = Length(Parts) then
-          SetLength(Parts, Max(8, Count * 2));
-        Parts[Count] := Part;
-        Inc(Count);
+        AddTempRootIfNeeded(ItemRoot, Item);
+        if Parts.Count = Parts.Capacity then
+        begin
+          Grow := Max(16, Parts.Capacity);
+          if Assigned(GC) then
+          begin
+            if not GC.TryReserveExternalBytes(Grow * SizeOf(Pointer), Self) then
+              ThrowRangeError(SErrorMemoryLimitExceeded,
+                SSuggestMemoryLimitExceeded);
+            Inc(ListCharge, Grow * SizeOf(Pointer));
+          end;
+          Parts.Capacity := Parts.Capacity + Grow;
+        end;
+        Parts.Add(ConvertBlobPart(Item));
+        RemoveTempRootIfNeeded(ItemRoot);
         Item := Iterator.DirectNext(Done);
       end;
     end;
@@ -585,10 +536,11 @@ begin
     // Step 2, process blob parts. No script code runs from here on, so the
     // buffers' bytes are read as they are now (a later element's toString
     // may have changed or detached an earlier one, which the copy sees).
-    // The whole size is reserved before anything is allocated.
+    // The whole size is reserved before the bytes are allocated, and every
+    // part is written straight into them.
     Total := 0;
     Offset := 0;
-    for I := 0 to Count - 1 do
+    for I := 0 to Parts.Count - 1 do
     begin
       Part := Parts[I];
       if Part is TGocciaBlobValue then
@@ -597,7 +549,7 @@ begin
         PartLength := EncodeBlobString(TGocciaStringLiteralValue(Part).Value,
           Native, False, Bytes, Offset)
       else
-        PartLength := HeldByteLength(Part);
+        PartLength := ByteLengthHeldByBufferSource(Part);
       Inc(Total, PartLength);
       if Total > MAX_BLOB_SIZE then
         ThrowRangeError(Format(SErrorBlobTooLarge, [MAX_BLOB_SIZE]),
@@ -605,11 +557,11 @@ begin
     end;
 
     ReserveBytes(Total);
-    Reserved := Assigned(TGarbageCollector.Instance) and (Total > 0);
+    Reserved := Assigned(GC) and (Total > 0);
     try
       SetLength(Bytes, Total);
       Offset := 0;
-      for I := 0 to Count - 1 do
+      for I := 0 to Parts.Count - 1 do
       begin
         Part := Parts[I];
         if Part is TGocciaBlobValue then
@@ -623,24 +575,21 @@ begin
           EncodeBlobString(TGocciaStringLiteralValue(Part).Value, Native,
             True, Bytes, Offset)
         else
-        begin
-          Held := GetCopyOfBytesHeldByBufferSource(Part);
-          if Length(Held) > 0 then
-            Move(Held[0], Bytes[Offset], Length(Held));
-          Inc(Offset, Length(Held));
-          Held := nil;
-        end;
+          Inc(Offset, CopyBytesHeldByBufferSource(Part, Bytes, Offset));
       end;
     except
       if Reserved then
-        TGarbageCollector.Instance.ReleaseExternalBytes(Total);
+        GC.ReleaseExternalBytes(Total);
       raise;
     end;
 
     // Step 3: the type, normalised.
     AdoptBytes(Bytes, NormalizeBlobType(BlobType));
   finally
+    RemoveTempRootIfNeeded(ItemRoot);
     Roots.Clear;
+    if Assigned(GC) and (ListCharge > 0) then
+      GC.ReleaseExternalBytes(ListCharge);
   end;
 end;
 
@@ -778,7 +727,7 @@ var
   B: TGocciaBlobValue;
   P: TGocciaPromiseValue;
   Roots: TGocciaActiveRootFrame;
-  Bytes: TBytes;
+  Start: Integer;
   Text: string;
 begin
   if not (AThisValue is TGocciaBlobValue) then
@@ -791,12 +740,11 @@ begin
     Roots.Add(P);
     Result := P;
     try
-      Bytes := B.FBytes;
-      if (Length(Bytes) >= 3) and (Bytes[0] = $EF) and (Bytes[1] = $BB) and
-         (Bytes[2] = $BF) then
-        Bytes := Copy(B.FBytes, 3, Length(B.FBytes) - 3);
-      Text := DecodeUTF8WithReplacement(Bytes);
-      Bytes := nil;
+      Start := 0;
+      if (Length(B.FBytes) >= 3) and (B.FBytes[0] = $EF) and
+         (B.FBytes[1] = $BB) and (B.FBytes[2] = $BF) then
+        Start := 3;
+      Text := DecodeUTF8WithReplacement(B.FBytes, Start);
       P.Resolve(TGocciaStringLiteralValue.Create(Text));
     except
       // Text over the memory limit rejects the read, as Response.text does.
