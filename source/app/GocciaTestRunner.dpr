@@ -518,9 +518,8 @@ begin
     Exit;
   TestingExtension := TGocciaTestingLibraryRuntimeExtension(
     Runtime.FindRuntimeExtension(TGocciaTestingLibraryRuntimeExtension));
-  if Assigned(TestingExtension) and
-    Assigned(TestingExtension.BuiltinTestAssertions) then
-    TestingExtension.BuiltinTestAssertions.SuppressOutput := True;
+  if Assigned(TestingExtension) then
+    TestingExtension.SuppressOutput := True;
 end;
 
 function TTestRunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;

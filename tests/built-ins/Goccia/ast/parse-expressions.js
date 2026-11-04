@@ -696,7 +696,7 @@ describe("ast.parse with expressions beside type-level declarations and tokens",
   ];
   const source = lines.join("\n") + "\n";
 
-  test("the statements keep the kinds and typeOnly the statement view gives them; only the type-only module forms gain children", () => {
+  test("the statements keep the kinds and typeOnly the statement view gives them, and gain their children", () => {
     const statements = parseExpressions(source, { fileName: "types.ts" }).root
       .children;
 
@@ -707,10 +707,10 @@ describe("ast.parse with expressions beside type-level declarations and tokens",
       ["ImportDeclaration", false, 3],
       ["ExportDeclaration", true, 1],
       ["ReExportDeclaration", true, 1],
-      ["ExportTypeAliasDeclaration", true, 0],
-      ["ExportInterfaceDeclaration", true, 0],
-      ["TypeAliasDeclaration", true, 0],
-      ["InterfaceDeclaration", true, 0],
+      ["ExportTypeAliasDeclaration", true, 1],
+      ["ExportInterfaceDeclaration", true, 1],
+      ["TypeAliasDeclaration", true, 1],
+      ["InterfaceDeclaration", true, 1],
       ["VariableDeclaration", undefined, 1],
     ]);
     statements.slice(0, 8).forEach((node, index) => {
@@ -793,6 +793,36 @@ describe("ast.parse with expressions: import and export specifiers", () => {
     expect(shapeOf(result, aliased)).toEqual([
       "ExportSpecifier(i as j)",
       "ExportSpecifier(k)",
+    ]);
+  });
+
+  test("an import attribute reports its key and value after the module path", () => {
+    const result = parseExpressions(
+      'import d from "./d.json" with {\n  type: "json"\n};\n' +
+        "import c from './c.json' with { 'type': 'json' };\n" +
+        'export { e } from "./e.json" with { type: "json" };\n',
+    );
+    const [imported, quotedKey, reExported] = result.root.children;
+    const attributeOf = (declaration) =>
+      declaration.children.find((child) => child.kind === "ImportAttribute");
+
+    expect(shapeOf(result, imported)).toEqual([
+      "ImportDefaultSpecifier(d)",
+      'StringLiteral("./d.json")',
+      'ImportAttribute(type: "json")',
+    ]);
+    expect(shapeOf(result, attributeOf(imported))).toEqual([
+      "Identifier(type)",
+      'StringLiteral("json")',
+    ]);
+    expect(shapeOf(result, attributeOf(quotedKey))).toEqual([
+      "StringLiteral('type')",
+      "StringLiteral('json')",
+    ]);
+    expect(shapeOf(result, reExported)).toEqual([
+      "ExportSpecifier(e)",
+      'StringLiteral("./e.json")',
+      'ImportAttribute(type: "json")',
     ]);
   });
 
@@ -1050,17 +1080,19 @@ describe("ast.parse with expressions: type-only module statements", () => {
     }
   });
 
-  test("type aliases and interfaces still have no children", () => {
+  test("type aliases and interfaces report their type or body, not specifiers", () => {
     const result = parseExpressions(
       'export type T = string | number;\nexport interface I { x: number }\ntype U = { a: 1 };\ninterface J { y: string }\n',
       { fileName: "t.ts" },
     );
 
-    expect(result.root.children.map((node) => [node.kind, node.children.length])).toEqual([
-      ["ExportTypeAliasDeclaration", 0],
-      ["ExportInterfaceDeclaration", 0],
-      ["TypeAliasDeclaration", 0],
-      ["InterfaceDeclaration", 0],
+    expect(
+      result.root.children.map((node) => [node.kind, ...node.children.map((child) => child.kind)]),
+    ).toEqual([
+      ["ExportTypeAliasDeclaration", "TSUnionType"],
+      ["ExportInterfaceDeclaration", "TSInterfaceBody"],
+      ["TypeAliasDeclaration", "TSTypeLiteral"],
+      ["InterfaceDeclaration", "TSInterfaceBody"],
     ]);
   });
 

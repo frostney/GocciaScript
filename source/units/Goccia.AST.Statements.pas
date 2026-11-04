@@ -28,6 +28,8 @@ type
     HasInitializer: Boolean;
     IsPattern: Boolean;
     TypeAnnotation: string;
+    { Where the annotation is, when the parse records it. }
+    TypeRanges: TGocciaTypeRangeArray;
   end;
   TGocciaExpressionStatement = class(TGocciaStatement)
   private
@@ -247,6 +249,7 @@ type
     FCatchBlock: TGocciaBlockStatement;
     FFinallyBlock: TGocciaBlockStatement;
     FCatchParamType: string;
+    FCatchParamTypeRanges: TGocciaTypeRangeArray;
     FCatchPattern: TGocciaMatchPattern;
     FCatchBindingPattern: TGocciaDestructuringPattern;
   public
@@ -260,6 +263,8 @@ type
     property CatchBlock: TGocciaBlockStatement read FCatchBlock;
     property FinallyBlock: TGocciaBlockStatement read FFinallyBlock;
     property CatchParamType: string read FCatchParamType write FCatchParamType;
+    property CatchParamTypeRanges: TGocciaTypeRangeArray
+      read FCatchParamTypeRanges write FCatchParamTypeRanges;
     property CatchPattern: TGocciaMatchPattern read FCatchPattern;
     property CatchBindingPattern: TGocciaDestructuringPattern read FCatchBindingPattern;
   end;
@@ -349,6 +354,8 @@ type
     { Where the static key is, for a member that is not computed; its kind
       says what the key is. The parser keeps the name as a string. }
     Key: TGocciaASTPartRange;
+    { A field's type annotation, when the parse records it. }
+    TypeRanges: TGocciaTypeRangeArray;
   end;
 
   TGocciaFieldOrderEntry = record
@@ -366,6 +373,7 @@ type
     StartOffset: Integer;
     EndOffset: Integer;
     Key: TGocciaASTPartRange;
+    TypeRanges: TGocciaTypeRangeArray;
   end;
 
   TGocciaClassElementArray = array of TGocciaClassElement;
@@ -394,6 +402,9 @@ type
     FPrivateMethods: TGocciaClassMethodMap;
     FGenericParams: string;
     FImplementsClause: string;
+    { The type parameters, the superclass's type arguments and the
+      `implements` list, when the parse records them. }
+    FTypeRanges: TGocciaTypeRangeArray;
     FInstancePropertyTypes: TStringStringMap;
     FDecorators: TGocciaDecoratorList;
     FElements: TGocciaClassElementArray;
@@ -429,6 +440,7 @@ type
     property PrivateMethods: TGocciaClassMethodMap read FPrivateMethods;
     property GenericParams: string read FGenericParams write FGenericParams;
     property ImplementsClause: string read FImplementsClause write FImplementsClause;
+    property TypeRanges: TGocciaTypeRangeArray read FTypeRanges write FTypeRanges;
     property InstancePropertyTypes: TStringStringMap read FInstancePropertyTypes;
     property Decorators: TGocciaDecoratorList read FDecorators write FDecorators;
   end;
@@ -491,12 +503,16 @@ type
     FNamespaceName: string;
     FPhase: TGocciaImportCallPhase;
     FSpecifierRanges: TGocciaASTPartRangeArray;
+    FAttributeRanges: TGocciaImportAttributeRangeArray;
   public
     { Where the module path's string literal is, in the parsed text. }
     procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
     { Where each binding is, in source order: the default binding, the
       namespace, and each named import. }
     procedure SetSpecifierRanges(const ARanges: TGocciaASTPartRangeArray);
+    { Where each import attribute is, in source order. }
+    procedure SetAttributeRanges(
+      const AAttributes: TGocciaImportAttributeRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AImports: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
@@ -596,11 +612,15 @@ type
     FModulePath: string;
     FNamespaceName: string;
     FSpecifierRanges: TGocciaASTPartRangeArray;
+    FAttributeRanges: TGocciaImportAttributeRangeArray;
   public
     { Where the module path's string literal is, in the parsed text. }
     procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
     { Where each specifier is, in source order. }
     procedure SetSpecifierRanges(const ARanges: TGocciaASTPartRangeArray);
+    { Where each import attribute is, in source order. }
+    procedure SetAttributeRanges(
+      const AAttributes: TGocciaImportAttributeRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AExportsTable: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
@@ -628,13 +648,20 @@ type
     etkExportInterface,  // export interface I {}
     etkImport,           // import type ... from "...";
     etkExport,           // export type { A };
-    etkReExport          // export type { A } from "...";  export type * from "...";
+    etkReExport,         // export type { A } from "...";  export type * from "...";
+    etkAmbient,          // declare const x: T;  declare module "m" {}  declare global {}
+    etkExportAmbient,    // export declare function f(): void;
+    etkOverload,         // function f(a: string): string;
+    etkExportOverload    // export function f(a: string): string;
   );
 
   TGocciaEmptyStatement = class(TGocciaStatement)
   private
     FErasedTypeKind: TGocciaErasedTypeKind;
     FModuleParts: TGocciaASTPartRangeArray;
+    FTypeRanges: TGocciaTypeRangeArray;
+    FSignatureParameters: TGocciaParameterArray;
+    FSignatureTypeRanges: TGocciaTypeRangeArray;
   public
     constructor Create(const ASpan: TGocciaSourceSpan;
       const AErasedTypeKind: TGocciaErasedTypeKind = etkNone);
@@ -643,8 +670,22 @@ type
       order. Offsets only: no name is kept, and neither the evaluator nor the
       compiler reads them. }
     procedure SetModuleParts(const AParts: TGocciaASTPartRangeArray);
+    { What the parser read of an erased `type` or `interface` declaration
+      before skipping it, when the parse records type ranges (ADR 0172): its
+      type parameters, heritage and type, or its body. }
+    procedure SetTypeRanges(const ARanges: TGocciaTypeRangeArray);
+    { What the parser read of an overload signature: its parameters and its
+      type parameters, `this` parameter and return type, as a function
+      declaration reports them without its body. Neither the evaluator nor
+      the compiler reads them. }
+    procedure SetSignature(const AParameters: TGocciaParameterArray;
+      const ATypeRanges: TGocciaTypeRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     property ErasedTypeKind: TGocciaErasedTypeKind read FErasedTypeKind;
+    property SignatureParameters: TGocciaParameterArray
+      read FSignatureParameters;
+    property SignatureTypeRanges: TGocciaTypeRangeArray
+      read FSignatureTypeRanges;
   end;
 
   TGocciaCaseClause = class(TGocciaASTNode)
@@ -1281,6 +1322,7 @@ begin
   for I := 0 to High(AVariables) do
   begin
     AVisitor.VisitChild(AVariables[I].Pattern);
+    VisitTypeRanges(AVisitor, AVariables[I].TypeRanges);
     AVisitor.VisitChild(AVariables[I].Initializer);
   end;
 end;
@@ -1353,7 +1395,9 @@ begin
   if not Assigned(ADefinition) then
     Exit;
   VisitDecorators(AVisitor, ADefinition.Decorators);
+  VisitTypeRanges(AVisitor, ADefinition.TypeRanges, trfTypeParameters);
   AVisitor.VisitChild(ADefinition.SuperClassExpression);
+  VisitTypeRanges(AVisitor, ADefinition.TypeRanges, trfAfterTypeParameters);
 
   ElementIndex := 0;
   FieldIndex := 0;
@@ -1371,6 +1415,7 @@ begin
         AVisitor.EnterPart(apkClassField, StartOffset, EndOffset, Flags);
         VisitPartRange(AVisitor, Key);
         AVisitor.VisitChild(ComputedKeyExpression);
+        VisitTypeRanges(AVisitor, TypeRanges);
         AVisitor.VisitChild(FieldInitializer);
         AVisitor.LeavePart;
       end;
@@ -1399,6 +1444,8 @@ begin
           AVisitor.VisitChild(GetterNode);
           AVisitor.VisitChild(SetterNode);
         end;
+        if Kind in [cekField, cekAccessor] then
+          VisitTypeRanges(AVisitor, TypeRanges);
         AVisitor.VisitChild(FieldInitializer);
         AVisitor.VisitChild(StaticBlockBody);
         AVisitor.LeavePart;
@@ -1522,6 +1569,7 @@ procedure TGocciaTryStatement.ForEachChild(
 begin
   AVisitor.VisitChild(FBlock);
   AVisitor.VisitChild(FCatchBindingPattern);
+  VisitTypeRanges(AVisitor, FCatchParamTypeRanges);
   AVisitor.VisitChild(FCatchPattern);
   AVisitor.VisitChild(FCatchBlock);
   AVisitor.VisitChild(FFinallyBlock);
@@ -1530,7 +1578,9 @@ end;
 procedure TGocciaClassMethod.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
+  VisitTypeRanges(AVisitor, TypeRanges, trfTypeParameters);
   ForEachParameterChild(AVisitor, FParameters);
+  VisitTypeRanges(AVisitor, TypeRanges, trfAfterTypeParameters);
   AVisitor.VisitChild(FBody);
 end;
 
@@ -1625,6 +1675,12 @@ begin
   FSpecifierRanges := ARanges;
 end;
 
+procedure TGocciaImportDeclaration.SetAttributeRanges(
+  const AAttributes: TGocciaImportAttributeRangeArray);
+begin
+  FAttributeRanges := AAttributes;
+end;
+
 procedure TGocciaImportDeclaration.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
@@ -1635,6 +1691,7 @@ begin
       FModuleSpecifierEnd, []);
     AVisitor.LeavePart;
   end;
+  VisitImportAttributes(AVisitor, FAttributeRanges);
 end;
 
 procedure TGocciaReExportDeclaration.SetModuleSpecifierRange(
@@ -1650,6 +1707,12 @@ begin
   FSpecifierRanges := ARanges;
 end;
 
+procedure TGocciaReExportDeclaration.SetAttributeRanges(
+  const AAttributes: TGocciaImportAttributeRangeArray);
+begin
+  FAttributeRanges := AAttributes;
+end;
+
 procedure TGocciaReExportDeclaration.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
@@ -1660,6 +1723,7 @@ begin
       FModuleSpecifierEnd, []);
     AVisitor.LeavePart;
   end;
+  VisitImportAttributes(AVisitor, FAttributeRanges);
 end;
 
 procedure TGocciaExportDeclaration.SetSpecifierRanges(
@@ -1680,10 +1744,28 @@ begin
   FModuleParts := AParts;
 end;
 
+procedure TGocciaEmptyStatement.SetTypeRanges(
+  const ARanges: TGocciaTypeRangeArray);
+begin
+  FTypeRanges := ARanges;
+end;
+
+procedure TGocciaEmptyStatement.SetSignature(
+  const AParameters: TGocciaParameterArray;
+  const ATypeRanges: TGocciaTypeRangeArray);
+begin
+  FSignatureParameters := AParameters;
+  FSignatureTypeRanges := ATypeRanges;
+end;
+
 procedure TGocciaEmptyStatement.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
   VisitPartRanges(AVisitor, FModuleParts);
+  VisitTypeRanges(AVisitor, FTypeRanges);
+  VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfTypeParameters);
+  ForEachParameterChild(AVisitor, FSignatureParameters);
+  VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfAfterTypeParameters);
 end;
 
 end.

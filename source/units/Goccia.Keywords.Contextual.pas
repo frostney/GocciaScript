@@ -51,6 +51,17 @@ const
   KEYWORD_KEYOF        = 'keyof';
   KEYWORD_INFER        = 'infer';
   KEYWORD_ASSERTS      = 'asserts';
+  KEYWORD_UNIQUE       = 'unique';
+  KEYWORD_OUT          = 'out';
+  KEYWORD_DECLARE      = 'declare';
+  KEYWORD_MODULE       = 'module';
+  KEYWORD_GLOBAL       = 'global';
+  KEYWORD_NAMESPACE    = 'namespace';
+  // Predefined types with no runtime type name (Goccia.Constants.TypeNames)
+  KEYWORD_ANY          = 'any';
+  KEYWORD_UNKNOWN      = 'unknown';
+  KEYWORD_NEVER        = 'never';
+  KEYWORD_INTRINSIC    = 'intrinsic';
 
   // Contextual keywords that the lexer tokenizes directly. Other contextual
   // keywords stay as identifiers so the parser can interpret them by context.

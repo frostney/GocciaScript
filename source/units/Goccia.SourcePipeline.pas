@@ -54,6 +54,9 @@ type
       preprocessor on, it also asks the transformer for the JSX tokens the
       lexer never sees. Off by default. }
     CollectTokens: Boolean;
+    { Opt-in record of where erased type syntax was, which `goccia:ast`
+      reports in its expression view. Off by default. }
+    RecordTypeRanges: Boolean;
   end;
 
   { One token of TGocciaSourcePipelineResult.Tokens. Offsets index the text
@@ -272,6 +275,7 @@ begin
   AParserOptions.ForInLoopsEnabled := AOptions.ForInLoopsEnabled or
     (cfForIn in AOptions.Compatibility);
   AParserOptions.WarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
+  AParserOptions.RecordTypeRanges := AOptions.RecordTypeRanges;
 end;
 
 procedure ConfigureParser(const AParser: TGocciaParser;
@@ -603,6 +607,7 @@ begin
   Result.InheritedStrictMode := False;
   Result.CollectComments := False;
   Result.CollectTokens := False;
+  Result.RecordTypeRanges := False;
 end;
 
 class function TGocciaSourcePipeline.CurrentOptionsOrDefault: TGocciaSourcePipelineOptions;
@@ -703,6 +708,16 @@ begin
             AParseAsModule := (Result.FSourceType = stModule) and
               ParserOptions.NonStrictModeEnabled;
           end;
+          // ES2027 §16.1.1 / §8.6.6: ScriptBody must not ContainsUsing.
+          // Wait for source-goal detection: a later export makes this a module.
+          if Result.FSourceType = stScript then
+            for I := 0 to Result.FProgramNode.Body.Count - 1 do
+              if Result.FProgramNode.Body[I] is TGocciaUsingDeclaration then
+                raise TGocciaSyntaxError.Create(
+                  'Using declarations are not allowed at the top level of a script',
+                  Result.FProgramNode.Body[I].Line,
+                  Result.FProgramNode.Body[I].Column, AFileName,
+                  Lexer.SourceLines);
           if (Result.FSourceType = stModule) and not AParseAsModule then
             ValidateModuleEarlyErrors(Result.FProgramNode, AFileName,
               Lexer.SourceLines);

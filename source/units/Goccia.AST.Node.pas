@@ -88,12 +88,62 @@ type
     apkImportNamespaceSpecifier, // `* as ns`
     apkImportSpecifier,          // `b as bb` in `import { b as bb }`
     apkExportSpecifier,          // `f as g` in `export { f as g }`
+    // An import attribute, `type: "json"` in a `with` clause: its key (an
+    // identifier or string key kind below) and its value.
+    apkImportAttribute,
+    apkImportAttributeValue,     // the value's string literal
     { A static key of an object property or class member, by what it is. The
       parser keeps the key as a string, so its range is the only record. }
     apkKeyIdentifier,   // `k`, `#p`, or a reserved word used as a name
     apkKeyString,       // `"k-1"`
     apkKeyNumeric,      // `2`
-    apkKeyBigInt        // `2n`
+    apkKeyBigInt,       // `2n`
+    { The literal of a literal type (`true`, `` `id` ``); a string, number or
+      bigint one is the key kind above that names its spelling. }
+    apkBooleanLiteral,
+    apkTemplateLiteral,
+    { Type syntax the parser erased, recorded only when the parse asks for it
+      (TGocciaParserOptions.RecordTypeRanges). Named in the view as
+      typescript-estree names it, with a `TS` prefix. }
+    apkTypeAnnotation,             // `: T`, and the `=> R` of a function type
+    apkTypeParameterDeclaration,   // `<T, U>` where generics are declared
+    apkTypeParameter,              // `const T extends U = V`
+    apkTypeParameterInstantiation, // `<string>` where generics are applied
+    apkTypeReference,              // `Map<K, V>`, `ns.T`, `const` in `as const`
+    apkUnionType,
+    apkIntersectionType,
+    apkArrayType,                  // `T[]`
+    apkIndexedAccessType,          // `T["k"]`
+    apkTupleType,
+    apkNamedTupleMember,           // `name?: T` in a tuple
+    apkOptionalType,               // `T?` in a tuple
+    apkRestType,                   // `...T` in a tuple
+    apkTypeLiteral,                // `{ a: T }`
+    apkPropertySignature,
+    apkMethodSignature,
+    apkCallSignature,              // `(a: T): R` in a type literal
+    apkConstructSignature,         // `new (a: T): R` in a type literal
+    apkIndexSignature,             // `[key: string]: T`
+    apkMappedType,                 // `{ [K in keyof T]: U }`
+    apkFunctionType,               // `(a: T) => R`
+    apkConstructorType,            // `new (a: T) => R`
+    apkParenthesizedType,
+    apkLiteralType,                // `'a'`, `1`, `-1`, `true`
+    apkTemplateLiteralType,        // `` `id-${number}` ``
+    apkTypeOperator,               // `keyof T`, `readonly T[]`, `unique symbol`
+    apkTypeQuery,                  // `typeof x`
+    apkImportType,                 // `import("m").T`
+    apkConditionalType,
+    apkInferType,
+    apkTypePredicate,              // `x is T`, `asserts x`
+    apkThisType,
+    apkAnyKeyword, apkUnknownKeyword, apkNumberKeyword, apkBigIntKeyword,
+    apkBooleanKeyword, apkStringKeyword, apkSymbolKeyword, apkObjectKeyword,
+    apkNeverKeyword, apkUndefinedKeyword, apkVoidKeyword, apkNullKeyword,
+    apkIntrinsicKeyword,
+    apkInterfaceBody,
+    apkInterfaceHeritage,          // `Base<T>` in `interface I extends Base<T>`
+    apkClassImplements             // `Shape<T>` in `class C implements Shape<T>`
   );
 
   TGocciaASTPartFlag = (
@@ -116,6 +166,37 @@ type
     Flags: TGocciaASTPartFlags;
   end;
   TGocciaASTPartRangeArray = array of TGocciaASTPartRange;
+
+  // One `key: "value"` of an import's or re-export's `with` clause.
+  TGocciaImportAttributeRange = record
+    StartOffset: Integer;
+    EndOffset: Integer;
+    Key: TGocciaASTPartRange;
+    ValueStartOffset: Integer;
+    ValueEndOffset: Integer;
+  end;
+  TGocciaImportAttributeRangeArray = array of TGocciaImportAttributeRange;
+
+  { One piece of erased type syntax. A type's ranges are kept in source
+    order, each one followed by the ranges inside it: SubtreeEnd is the index
+    just past the last of those, so the array is a tree without pointers.
+    A TGocciaASTPartRange is a leaf whose equal offsets mean "not recorded";
+    a type range always holds what the parser read, and may hold more. }
+  TGocciaTypeRange = record
+    Kind: TGocciaASTPartKind;
+    StartOffset: Integer;
+    EndOffset: Integer;
+    Flags: TGocciaASTPartFlags;
+    SubtreeEnd: Integer;
+  end;
+  TGocciaTypeRangeArray = array of TGocciaTypeRange;
+
+  { Which of a node's types VisitTypeRanges reports. A function's or a
+    class's type parameters come before its parameters or heritage in the
+    source, and the rest of its types after them. A function's TypeScript
+    `this` parameter is recorded as a type, a Parameter part, and comes
+    with its type parameters, after them. }
+  TGocciaTypeRangeFilter = (trfAll, trfTypeParameters, trfAfterTypeParameters);
 
   { Receives a node's children from TGocciaASTNode.ForEachChild. }
   TGocciaASTChildVisitor = class
@@ -157,6 +238,8 @@ type
     Kind: TGocciaTypeAssertionKind;
     StartOffset: Integer;
     EndOffset: Integer;
+    { The asserted type, when the parse recorded it. }
+    TypeRanges: TGocciaTypeRangeArray;
   end;
 
   TGocciaExpression = class(TGocciaASTNode)
@@ -165,6 +248,7 @@ type
     FParenStartOffset: Integer;
     FParenEndOffset: Integer;
     FTypeAssertions: array of TGocciaTypeAssertion;
+    FTypeRanges: TGocciaTypeRangeArray;
     function GetTypeAssertionCount: Integer;
     function GetTypeAssertion(const AIndex: Integer): TGocciaTypeAssertion;
   public
@@ -173,7 +257,12 @@ type
       only place its extent survives. Recorded in source order, so each one
       ends after the one before it. }
     procedure AddTypeAssertion(const AKind: TGocciaTypeAssertionKind;
-      const AStartOffset, AEndOffset: Integer);
+      const AStartOffset, AEndOffset: Integer;
+      const ATypeRanges: TGocciaTypeRangeArray = nil);
+    { Records type syntax that belongs to this expression and was erased
+      from it: a function's type parameters and return type, a call's type
+      arguments. Only a node whose ForEachChild reports TypeRanges keeps any. }
+    procedure AddTypeRanges(const ARanges: TGocciaTypeRangeArray);
     { Records the outermost pair of parentheses around this expression, as
       offsets into the parsed text. The parser drops the parentheses from the
       tree, so this is the only place their extent survives. }
@@ -188,6 +277,7 @@ type
     property TypeAssertionCount: Integer read GetTypeAssertionCount;
     property TypeAssertions[const AIndex: Integer]: TGocciaTypeAssertion
       read GetTypeAssertion;
+    property TypeRanges: TGocciaTypeRangeArray read FTypeRanges;
   end;
 
   // A list of expressions that does not own them. Units that pass one to
@@ -236,6 +326,20 @@ procedure VisitPartRange(const AVisitor: TGocciaASTChildVisitor;
 { Reports each recorded leaf part, in the order given. }
 procedure VisitPartRanges(const AVisitor: TGocciaASTChildVisitor;
   const ARanges: TGocciaASTPartRangeArray);
+
+{ Reports each recorded type AFilter selects, with the ranges inside it
+  nested between its EnterPart and LeavePart. }
+procedure VisitTypeRanges(const AVisitor: TGocciaASTChildVisitor;
+  const ARanges: TGocciaTypeRangeArray;
+  const AFilter: TGocciaTypeRangeFilter = trfAll);
+
+{ Adds ASource to the end of ATarget. }
+procedure AppendTypeRanges(var ATarget: TGocciaTypeRangeArray;
+  const ASource: TGocciaTypeRangeArray);
+
+{ Reports each attribute with its key and value inside it. }
+procedure VisitImportAttributes(const AVisitor: TGocciaASTChildVisitor;
+  const AAttributes: TGocciaImportAttributeRangeArray);
 
 { Adds one leaf part to the end of ARanges. }
 procedure AppendPartRange(var ARanges: TGocciaASTPartRangeArray;
@@ -292,6 +396,105 @@ var
 begin
   for I := 0 to High(ARanges) do
     VisitPartRange(AVisitor, ARanges[I]);
+end;
+
+procedure VisitImportAttributes(const AVisitor: TGocciaASTChildVisitor;
+  const AAttributes: TGocciaImportAttributeRangeArray);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AAttributes) do
+  begin
+    AVisitor.EnterPart(apkImportAttribute, AAttributes[I].StartOffset,
+      AAttributes[I].EndOffset, []);
+    VisitPartRange(AVisitor, AAttributes[I].Key);
+    AVisitor.EnterPart(apkImportAttributeValue,
+      AAttributes[I].ValueStartOffset, AAttributes[I].ValueEndOffset, []);
+    AVisitor.LeavePart;
+    AVisitor.LeavePart;
+  end;
+end;
+
+procedure VisitTypeRanges(const AVisitor: TGocciaASTChildVisitor;
+  const ARanges: TGocciaTypeRangeArray;
+  const AFilter: TGocciaTypeRangeFilter);
+
+  procedure VisitFrom(var AIndex: Integer);
+  var
+    Last: Integer;
+  begin
+    Last := ARanges[AIndex].SubtreeEnd;
+    AVisitor.EnterPart(ARanges[AIndex].Kind, ARanges[AIndex].StartOffset,
+      ARanges[AIndex].EndOffset, ARanges[AIndex].Flags);
+    Inc(AIndex);
+    while AIndex < Last do
+      VisitFrom(AIndex);
+    AVisitor.LeavePart;
+  end;
+
+type
+  TSelection = (selAll, selTypeParameters, selThisParameter, selRest);
+
+  // Reports each top-level range ASelection takes, with what it holds.
+  procedure VisitSelected(const ASelection: TSelection);
+  var
+    I: Integer;
+    Taken: Boolean;
+  begin
+    I := 0;
+    while I < Length(ARanges) do
+    begin
+      case ASelection of
+        selTypeParameters:
+          Taken := ARanges[I].Kind = apkTypeParameterDeclaration;
+        selThisParameter:
+          Taken := ARanges[I].Kind = apkParameter;
+        selRest:
+          Taken := not (ARanges[I].Kind in [apkTypeParameterDeclaration,
+            apkParameter]);
+      else
+        Taken := True;
+      end;
+      if Taken then
+        VisitFrom(I)
+      else
+        I := ARanges[I].SubtreeEnd;
+    end;
+  end;
+
+begin
+  case AFilter of
+    trfAll:
+      VisitSelected(selAll);
+    trfTypeParameters:
+      begin
+        VisitSelected(selTypeParameters);
+        VisitSelected(selThisParameter);
+      end;
+    trfAfterTypeParameters:
+      VisitSelected(selRest);
+  end;
+end;
+
+procedure AppendTypeRanges(var ATarget: TGocciaTypeRangeArray;
+  const ASource: TGocciaTypeRangeArray);
+var
+  Base, I: Integer;
+begin
+  if Length(ASource) = 0 then
+    Exit;
+  if Length(ATarget) = 0 then
+  begin
+    ATarget := ASource;
+    Exit;
+  end;
+  Base := Length(ATarget);
+  SetLength(ATarget, Base + Length(ASource));
+  for I := 0 to High(ASource) do
+  begin
+    ATarget[Base + I] := ASource[I];
+    Inc(ATarget[Base + I].SubtreeEnd, Base);
+  end;
 end;
 
 procedure AppendPartRange(var ARanges: TGocciaASTPartRangeArray;
@@ -436,7 +639,7 @@ end;
 
 procedure TGocciaExpression.AddTypeAssertion(
   const AKind: TGocciaTypeAssertionKind; const AStartOffset,
-  AEndOffset: Integer);
+  AEndOffset: Integer; const ATypeRanges: TGocciaTypeRangeArray);
 var
   Index: Integer;
 begin
@@ -445,6 +648,13 @@ begin
   FTypeAssertions[Index].Kind := AKind;
   FTypeAssertions[Index].StartOffset := AStartOffset;
   FTypeAssertions[Index].EndOffset := AEndOffset;
+  FTypeAssertions[Index].TypeRanges := ATypeRanges;
+end;
+
+procedure TGocciaExpression.AddTypeRanges(
+  const ARanges: TGocciaTypeRangeArray);
+begin
+  AppendTypeRanges(FTypeRanges, ARanges);
 end;
 
 function TGocciaExpression.GetTypeAssertionCount: Integer;
