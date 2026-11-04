@@ -10961,8 +10961,8 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     ].join("\n");
     writeFileSync(join(tree, "layout.ts"), layoutOriginal);
     // Overload signatures, a `this` parameter, `declare module` names and
-    // `with` clauses, one with a line break between its key and value, as
-    // Biome formats them.
+    // import and re-export `with` clauses, one with a line break between its
+    // key and value, as Biome formats them.
     const signaturesOriginal = [
       "import lanterns from \"./lanterns.json\" with {",
       "  type:",
@@ -10976,6 +10976,12 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "  export default url;",
       "}",
       "declare module \"*.css\";",
+      "export { lanternIndex } from \"./lanterns.json\" with {",
+      "  type: \"json\"",
+      "};",
+      "export { default as tideTable } from \"../../fixtures/tides/northern-harbour-table.json\" with {",
+      "  type: \"json\"",
+      "};",
       "function shelve(",
       "  label: string,",
       "  kind: \"jar\",",
@@ -11006,6 +11012,10 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "  export default url;",
       "}",
       "declare module '*.css';",
+      "export { lanternIndex } from './lanterns.json' with { type: 'json' };",
+      "export { default as tideTable } from '../../fixtures/tides/northern-harbour-table.json' with {",
+      "  type: 'json',",
+      "};",
       "function shelve(",
       "  label: string,",
       "  kind: 'jar',",
@@ -11082,14 +11092,20 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/signatures.ts:6:9  a string literal should use single quotes",
       "/src/signatures.ts:8:16  a string literal should use single quotes",
       "/src/signatures.ts:12:16  a string literal should use single quotes",
-      "/src/signatures.ts:15:9  a string literal should use single quotes",
-      "/src/signatures.ts:16:3  a multi-line list should end with a trailing comma",
-      "/src/signatures.ts:17:11  a string literal should use single quotes",
-      "/src/signatures.ts:20:9  a string literal should use single quotes",
-      "/src/signatures.ts:21:3  a multi-line list should end with a trailing comma",
-      "/src/signatures.ts:22:11  a string literal should use single quotes",
+      "/src/signatures.ts:13:30  a string literal should use single quotes",
+      "/src/signatures.ts:14:3  a `with` clause that fits in 80 columns should be on one line",
+      "/src/signatures.ts:14:9  a string literal should use single quotes",
+      "/src/signatures.ts:16:38  a string literal should use single quotes",
+      "/src/signatures.ts:17:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:17:9  a string literal should use single quotes",
+      "/src/signatures.ts:21:9  a string literal should use single quotes",
+      "/src/signatures.ts:22:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:23:11  a string literal should use single quotes",
+      "/src/signatures.ts:26:9  a string literal should use single quotes",
       "/src/signatures.ts:27:3  a multi-line list should end with a trailing comma",
-      "53 finding(s) in 5 file(s), 5 rewritten",
+      "/src/signatures.ts:28:11  a string literal should use single quotes",
+      "/src/signatures.ts:33:3  a multi-line list should end with a trailing comma",
+      "59 finding(s) in 5 file(s), 5 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
