@@ -7,38 +7,38 @@
     "release": "3.0",
     "benchmarks": {
       "hash-map": {
-        "files": ["simple/hash-map.js"],
+        "files": ["workloads/hash-map/hash-map.js"],
         "iterations": 3,
         "worstCaseCount": 1,
         "focusAreas": ["collections", "object-model"]
       },
       "ai-astar": {
-        "files": ["SeaMonster/ai-astar.js"],
+        "files": ["workloads/SeaMonster/ai-astar.js"],
         "iterations": 3,
         "worstCaseCount": 1,
         "focusAreas": ["collections", "control-flow"]
       },
       "gaussian-blur": {
-        "files": ["SeaMonster/gaussian-blur.js"],
+        "files": ["workloads/SeaMonster/gaussian-blur.js"],
         "iterations": 3,
         "worstCaseCount": 1,
         "focusAreas": ["arrays", "numeric-compute"]
       },
       "raytrace-public-class-fields": {
-        "files": ["class-fields/raytrace-public-class-fields.js"],
+        "files": ["workloads/raytrace-public-class-fields/raytrace-public-class-fields.js"],
         "iterations": 3,
         "worstCaseCount": 1,
         "focusAreas": ["class-fields", "numeric-compute"]
       },
       "sync-fs": {
-        "files": ["generators/sync-file-system.js"],
+        "files": ["workloads/sync-fs/sync-file-system.js"],
         "iterations": 3,
         "worstCaseCount": 1,
         "deterministicRandom": true,
         "focusAreas": ["generators", "collections"]
       },
       "lazy-collections": {
-        "files": ["generators/lazy-collections.js"],
+        "files": ["workloads/lazy-collections/lazy-collections.js"],
         "iterations": 3,
         "worstCaseCount": 1,
         "focusAreas": ["generators", "iterators"]
