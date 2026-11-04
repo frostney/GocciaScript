@@ -2028,7 +2028,7 @@ end;
 // §7.5.4 DisposeResources wraps a dispose error in a SuppressedError only for
 // a throw completion (step 4.e.iii.1); for the return completion the first
 // dispose error replaces it, and with none the return goes on.
-procedure EmitUsingHandlerDisposal(const ACtx: TGocciaCompilationContext;
+procedure EmitUsingAbruptDisposal(const ACtx: TGocciaCompilationContext;
   const AResources: array of TUsingResourceEntry;
   const AResourceCount: Integer; const AErrorReg, ACaughtReg: UInt16);
 var
@@ -2090,7 +2090,7 @@ begin
   EmitDisposalThenThrowError(ACtx, AResources, AResourceCount, AErrorReg);
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
   PatchJumpTarget(ACtx, AHandlerJump);
-  EmitUsingHandlerDisposal(ACtx, AResources, AResourceCount, AErrorReg,
+  EmitUsingAbruptDisposal(ACtx, AResources, AResourceCount, AErrorReg,
     ACaughtReg);
   PatchJumpTarget(ACtx, EndJump);
 end;
@@ -2127,7 +2127,7 @@ end;
 
 // Closes the region BeginUsingDisposalRegion opened: the normal exit disposes
 // its resources in reverse order and throws a disposal error, and the handler
-// disposes them for the completion it caught (EmitUsingHandlerDisposal).
+// disposes them for the completion it caught (EmitUsingAbruptDisposal).
 procedure EndUsingDisposalRegion(const ACtx: TGocciaCompilationContext;
   const ARegion: TUsingDisposalRegion);
 var
@@ -3738,7 +3738,7 @@ end;
 
 // At the end of the iteration's body, where continue lands: dispose the
 // resource and throw a disposal error; the handler disposes it for the
-// completion it caught (EmitUsingHandlerDisposal).
+// completion it caught (EmitUsingAbruptDisposal).
 procedure EndForOfUsingIteration(const ACtx: TGocciaCompilationContext;
   var AHead: TForOfUsingHead);
 begin
