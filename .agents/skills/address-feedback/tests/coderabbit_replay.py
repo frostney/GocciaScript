@@ -32,7 +32,11 @@ the recorded history:
 - `not-active`: CodeRabbit is never reported not active on a pull request
   where it posted a status, comment or review at any recorded time;
 - `answered-trigger`: a trigger is never reported unanswered when CodeRabbit
-  posted a status or check run on the head after it, by `now`;
+  posted a status or check run on the head after it, or replied that it
+  already reviewed the last commit, by `now`;
+- `declined-trigger`: no trigger after CodeRabbit declined the pull request's
+  latest trigger as already reviewed, until it posts a status or check run
+  on the head;
 - `error`: the adapter never fails on recorded data.
 
 Exits 1 when it finds a violation that `fixtures/coderabbit_replay_pinned.json`
@@ -439,10 +443,29 @@ class History:
             if item["user"]["login"] == "maintainer" and asks(item["versions"][0][1])
         ]
 
+    def declined(self, pull: dict[str, Any], now: float) -> dict[float, float]:
+        """Each whole-line trigger CodeRabbit declined by `now` as already reviewed, with its reply's time.
+
+        A reply answers the newest trigger before it that no earlier reply answered.
+        """
+        replies = sorted(
+            at(item["created_at"])
+            for item in pull["comments"]
+            if at(item["created_at"]) <= now
+            and ADAPTER.already_reviewed({"user": item["user"], "body": item["versions"][0][1]})
+        )
+        found: dict[float, float] = {}
+        for replied in replies:
+            unanswered = [trigger for trigger in self.triggers(pull, whole_line=True) if trigger < replied and trigger not in found]
+            if unanswered:
+                found[unanswered[-1]] = replied
+        return found
+
     def review_cutoff(self, pull: dict[str, Any], sha: str, now: float) -> float:
         """The head's latest push to the pull request's branch, its latest trigger, or a newer review by `now`.
 
-        Opening the pull request or marking it ready leaves an existing review of the commit standing.
+        Opening the pull request or marking it ready leaves an existing review of the commit standing, and
+        so does a trigger CodeRabbit declined as already reviewed.
         A newer review starts with a pending status on the head and ends when CodeRabbit completes,
         pauses or skips it; a skip on a head another open pull request shares may answer that one.
         """
@@ -452,7 +475,8 @@ class History:
             at(event["at"]) for event in pull["events"]
             if event["type"] == "force-pushed" and sha in (event["from"], event["head"]) and at(event["at"]) <= now
         ])
-        moments = [pushed] + [time for time in self.triggers(pull, whole_line=True) if time >= pushed]
+        declined = self.declined(pull, now)
+        moments = [pushed] + [time for time in self.triggers(pull, whole_line=True) if time >= pushed and time not in declined]
         # In CodeRabbit's order, by time and then status id.
         statuses = [(at(status["created_at"]), ADAPTER.status_kind(status, pull.get("user"))) for status in self.statuses(pull["repo"], sha)]
         statuses = [(when, kind) for when, kind in statuses if when <= now]
@@ -511,10 +535,15 @@ class History:
         if state == "not-active" and any(coderabbit_seen(other) for other in sharing):
             found.append("not-active")
         asked = [trigger for trigger in self.triggers(pull, whole_line=True) if trigger <= now]
-        if state == "blocked-unanswered" and asked and any(asked[-1] < at(status["created_at"]) for status in before):
+        declined = self.declined(pull, now)
+        if state == "blocked-unanswered" and asked and (
+            asked[-1] in declined or any(asked[-1] < at(status["created_at"]) for status in before)
+        ):
             found.append("answered-trigger")
         if state not in TRIGGER_STATES:
             return found
+        if asked and asked[-1] in declined and not any(declined[asked[-1]] < at(status["created_at"]) for status in before):
+            found.append("declined-trigger")
         triggers = self.triggers(pull)
         # A recorded trigger at that point that CodeRabbit started reviewing.
         accepted = any(

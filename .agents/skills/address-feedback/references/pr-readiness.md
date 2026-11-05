@@ -191,6 +191,7 @@ automation and required checks still need to pass their gates.
 | `skipped` | `run`, `status` | Blocked: report the reason; a person must act. |
 | `paused` | `run`, `status` | Blocked: CodeRabbit paused its reviews of the PR. A person resumes them or triggers a review. |
 | `blocked-unanswered` | `run`, `status` | Blocked: CodeRabbit did not answer the trigger. A person checks CodeRabbit on the PR, then triggers again or pushes. |
+| `blocked-already-reviewed` | `run`, `status` | Blocked: CodeRabbit declined the trigger because it already reviewed the last commit, but no findings review or clean coverage marker of the head counts since its latest push or an undeclined trigger. A person reads CodeRabbit's review of the head on the PR. A full review spends the allowance on a commit CodeRabbit reviewed, so request one only when that spend is authorized. |
 | `blocked-stalled` | `run`, `status` | Blocked: CodeRabbit's review never finished. A person checks CodeRabbit on the PR, then triggers again or pushes. |
 | `blocked-unknown-wait` | `run`, `status` | Blocked: CodeRabbit refused the head a fourth time since its latest push, open or ready event, the last time without a wait the adapter can read. A person reads its notice on the PR and triggers when it allows. |
 | `blocked-no-capacity` | `run`, `status` | Blocked: a person checks CodeRabbit seats or plan. |

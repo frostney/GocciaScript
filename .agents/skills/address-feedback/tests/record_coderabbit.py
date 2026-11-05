@@ -178,6 +178,7 @@ def keeps(line: str) -> bool:
         or ADAPTER.NO_ACTIONABLE in line
         or ADAPTER.ACTIONABLE.search(line)
         or ADAPTER.REVIEW_FINDINGS.search(line)
+        or ADAPTER.ALREADY_REVIEWED.search(line)
     )
 
 
