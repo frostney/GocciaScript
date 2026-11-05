@@ -69,7 +69,10 @@ The **measurement contract** is the Performance Barometer's: the AWFY lane
 frozen JetStream subset (`scripts/jetstream-ci-report.js` with
 `perf/jetstream/manifest.json`, ADR 0091). GocciaScript and QuickJS samples are
 interleaved by repetition on one machine per workload (CI runs each JetStream
-workload on its own runner). Every workload completes and passes its result
+workload on its own runner). Each repetition runs GocciaScript before QuickJS
+today; whether the engine order alternates or is randomised is part of the
+measurement protocol that #2066 settles, and target-1 evidence uses the order
+that protocol records. Every workload completes and passes its result
 check where it has one: AWFY's `verifyResult`, and JetStream's upstream
 `validate()`, which four of the six subset workloads lack and so run
 execution-only.
