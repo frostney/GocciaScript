@@ -103,6 +103,7 @@ Behind existing compatibility flags:
 
 ### Baseline
 
+<!-- conformance-claim-ok: dated baseline measured at 7c6c8225 against test262 91c70759; a historical record, not live copy -->
 Measured at GocciaScript `7c6c8225` (origin/main) against the pinned test262
 suite `91c70759363c46557b694792bf34a2551a7af5ba`
 (`scripts/test262-suite-sha.txt`), with
@@ -110,6 +111,7 @@ suite `91c70759363c46557b694792bf34a2551a7af5ba`
 20 s per-test timeout, 2 GiB per-test heap): 1086 tests run, 787 pass, 291
 fail, 8 wrapper-infra, 0 timeouts.
 
+<!-- conformance-claim-ok: per-area counts of the same dated baseline -->
 | Area | Pass | Fail | Wrapper-infra |
 |------|-----:|-----:|--------------:|
 | `built-ins/Array` | 1 | 0 | 0 |
