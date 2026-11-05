@@ -107,7 +107,7 @@ The engine-owned host callback that receives capability audit events synchronous
 _Avoid_: Runtime extension, script-visible logger, best-effort telemetry, effect log.
 
 **Resource limit**:
-The umbrella for engine-enforced execution ceilings: instruction limit, execution timeout, and the memory budget's native-growth gate. A resource limit is enforced by the engine against the running program as a whole, is configured by the host rather than the program, and is not catchable from source. Exceeding one ends execution rather than producing a value source can handle. Only the native-growth gate makes the memory budget a resource limit in this sense; the budget's _charged_ allocation failures are the deliberate exception — they surface as an ordinary catchable `RangeError`, so they are not part of this umbrella (see Memory budget below). (Capability budget is a separate concept, realised per capability rather than as a program-wide ceiling — see below — so it is not part of this umbrella.)
+The umbrella for engine-enforced execution ceilings: instruction limit, execution timeout, and the memory budget's native-growth gate. A resource limit is enforced by the engine against the running program as a whole, is configured by the host rather than the program, and is not catchable from source. Exceeding one ends execution rather than producing a value source can handle. Only the native-growth gate makes the memory budget a resource limit in this sense; the budget's _charged_ allocation failures are the deliberate exception — they surface as an ordinary catchable `RangeError`, so they are not part of this umbrella (see Memory budget below). (Capability budget is a separate concept, realised per capability rather than as a program-wide ceiling — see below — so it is not part of this umbrella.) A host's abort (see Abort handle) ends a run through the same uncatchable channel but is not a resource limit: it is a stop the host asks for, not a ceiling the program crossed.
 _Avoid_: Sandbox permission, capability, quota, script error.
 
 **Memory budget**:
@@ -201,7 +201,7 @@ _Avoid_: Polyfill, compatibility flag.
 ### Execution
 
 **Deterministic execution**:
-An engine profile in which JavaScript-observable time is frozen at the Unix epoch (and so are sandbox file timestamps in `GocciaRunner`'s sandbox mode, or when an embedder passes the profile's clock to its sandbox), the time zone is UTC, and randomness comes from a fixed portable seed. Infrastructure clocks remain live, and child realms receive distinct reproducible random streams.
+An engine profile in which JavaScript-observable time is frozen at the Unix epoch (and so are sandbox file timestamps in `GocciaRunner`'s sandbox mode, or when an embedder passes the profile's clock to its sandbox), the time zone is UTC, and randomness comes from a fixed portable seed. Infrastructure clocks remain live, and child realms receive distinct reproducible random streams. `GocciaRunner`'s `--profile-deterministic` runs the program under this profile and also zeroes the profile's timing fields; `GocciaBenchmarkRunner`'s flag of the same name does neither.
 _Avoid_: Deterministic profiling, frozen timeout clock, seeded sandbox filesystem.
 
 **Heap snapshot**:
@@ -211,6 +211,18 @@ _Avoid_: Core dump, checkpoint file, memory-profiler heap snapshot.
 **Pause checkpoint**:
 The point at which a run waits on nothing but host calls, with no frame running and no job queued, so the host may pause it and take a heap snapshot.
 _Avoid_: Breakpoint, suspension point, idle callback.
+
+**Abort handle**:
+A host-held token, captured on an engine's thread before a run, through which any other thread asks that run to end. The run ends uncatchably, like a resource limit, but the stop comes from the host rather than from a ceiling the program crossed. See [Embedding](docs/embedding.md#aborting-a-run-from-another-thread).
+_Avoid_: Cancellation token, `AbortController` or `AbortSignal` (the script-visible web APIs), timeout.
+
+**Idle wait**:
+The wait at the end of a run that repeats until no runtime extension reports pending work. A module entry still pending when it ends fails the run.
+_Avoid_: Event loop, microtask drain, promise wait.
+
+**Promise wait**:
+The wait that drives one promise to settlement in the middle of a run — an async `goccia:test` test, `.resolves` or `.rejects`, an async hook, or a synchronous `await` — servicing fetch, timers and runtime extensions' host work until the promise settles.
+_Avoid_: Idle wait, microtask drain.
 
 **Source pipeline**:
 The shared source-processing pipeline that turns source text into an AST before execution. It owns parser policy and exposes purpose-specific parse entry points for full source, module source, dynamic Function parsing, and expression fragments.
@@ -331,11 +343,11 @@ A mutable builder for encoded or binary data whose elements and length are bytes
 _Avoid_: Text buffer, byte string.
 
 **Delphi parity**:
-The supported-compiler state in which every shipped executable compiles and runs across the declared Delphi target matrix and the complete applicable local test inventory passes with the expected semantics.
+The supported-compiler state in which every executable in the Delphi project group compiles and runs across the declared Delphi target matrix and the complete applicable local test inventory passes with the expected semantics.
 _Avoid_: Delphi compatibility, representative Delphi smoke test, core-engine-only support.
 
 **Delphi project group**:
-A repository-owned set of IDE project definitions that builds the shipped executable inventory under Delphi.
+A repository-owned set of IDE project definitions that builds the Delphi application matrix: the REPL, Runner, Bare Script Loader, Test Runner, Benchmark Runner, and Bundler. The internal harnesses that also ship (the test262 runner, the fuzz harness, and the Wasm test runner) build with FreePascal only.
 _Avoid_: Opening individual DPR files as the supported build, compliance harness group.
 
 **Compliance runner**:
@@ -353,6 +365,22 @@ _Avoid_: Byte range, character range, independently tracked line and column.
 **Source character**:
 A Unicode code point consumed by the ECMAScript lexical grammar from source text. A valid UTF-16 surrogate pair contributes one source character while an unpaired surrogate contributes one source character of width one code unit; source spans continue to count the underlying code units.
 _Avoid_: Pascal `Char`, byte, grapheme, source span.
+
+**Statement view**:
+The default `goccia:ast` tree: statements and the statements nested beneath them, with kinds and ranges but no expressions, names, or literal values.
+_Avoid_: AST, ESTree output.
+
+**Expression view**:
+The `goccia:ast` tree with `expressions: true`: the statement view plus every expression, property, parameter, class member and module specifier beneath each statement, and the erased type syntax the parser records, such as annotations, generics and overload signatures. An ambient declaration other than `declare module` still has no children. See [AST Built-ins](docs/built-ins-ast.md#the-expression-view).
+_Avoid_: Full AST, parser AST.
+
+**Token stream**:
+The tokens and comments a parse committed to, in source order, under the lexical goal the parser chose at each point, as `goccia:ast` returns them with `tokens: true`.
+_Avoid_: Lexer output, independent tokenization.
+
+**Type-level declaration**:
+A `type` alias, `interface`, ambient `declare` declaration, or overload signature, or an exported form of one. It is erased at run time but keeps a kind of its own in `goccia:ast`.
+_Avoid_: Type annotation, empty statement.
 
 **RegExp index**:
 A zero-based UTF-16 code-unit offset used by RegExp capture slots, match indices, `lastIndex`, replacement operations, and `d`-flag index pairs. Unicode-aware matching may consume a valid surrogate pair as one code point, but externally observable RegExp indices always remain code-unit offsets.
@@ -481,6 +509,10 @@ _Avoid_: Speedup, ranking score.
 **North-star trend**:
 The retained direction of compatible reference-ratio measurements over time. A trend line breaks when the corpus, subset, driver, or reference-engine version changes rather than implying continuity across different measurement contracts.
 _Avoid_: Release gate, competitive ranking.
+
+**Compile profile**:
+The profiler mode (`--profile=compile`) that reports, per source function, lex, parse and compile time and the compiler's work, recorded before execution. It is not part of `--profile=all`. See [Profiling](docs/profiling.md#compile-profile---profilecompile).
+_Avoid_: Opcode profile, function profile.
 
 **Profile report**:
 A retained performance-review artifact published by main-branch test262 and benchmark runs. It pairs an aggregate entry point — provenance, rollups, ranked hotspots — with detailed per-area profiles that explain a ranked row. A profile report is review material, not conformance evidence and not a gate. See [Profiling](docs/profiling.md) and [test262](docs/test262.md).

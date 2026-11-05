@@ -418,8 +418,9 @@ export function Install({
               <code>$PATH</code> at <code>./build</code>.
             </p>
             <p>
-              Delphi 12 Community Edition is also supported for the complete
-              shipped Win32 and Win64 application matrix. Open the repository
+              Delphi 12 Community Edition is also supported for the Win32 and
+              Win64 application matrix: the REPL, Runner, Bare Script Loader,
+              Test Runner, Benchmark Runner and Bundler. Open the repository
               project group and follow the{" "}
               <Link href="/docs/build-system">build and validation guide</Link>.
             </p>

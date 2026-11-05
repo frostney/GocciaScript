@@ -186,7 +186,7 @@ export function renderHomeMarkdown(
     "",
     list([
       `**Conformance.** test262, the official ECMAScript conformance suite, runs on every pull request and on main, and a regression against main fails the pull request. ${conformanceFigure}[by area on the compatibility dashboard](/compatibility).`,
-      "**Tested on every change.** 15,000+ JavaScript tests in 1,800+ files run on every pull request on Linux x64 and on six targets on main, plus differential suites checked against Bun and Vitest.",
+      "**Tested on every change.** 17,000+ JavaScript tests run on every pull request on Linux x64 and on six targets on main, plus differential suites checked against Bun and Vitest.",
       `**Fuzzing and memory checks.** Every night, AFL++ fuzzes the engine and heap snapshot reader, and the full test suite runs under FreePascal's heap checker (heaptrc) and Valgrind memcheck; see the [nightly workflow](${GITHUB_REPO_URL}/actions/workflows/fuzz.yml). The [weekly GC-stress run](${GITHUB_REPO_URL}/actions/workflows/gc-stress.yml) collects garbage every 8 instructions across the whole test suite and the GC-sensitive part of test262.`,
       "**In production.** GocciaScript is the engine behind [Shotcup's hosted sandboxes](https://shotcup.dev), where every run gets a fresh engine with hard limits.",
       "**Prebuilt for six targets.** Every release and nightly provides binaries for macOS and Linux (x64 and arm64) and Windows (x64 and x86). [Install with the one-line installer or Homebrew on macOS](/installation).",
@@ -304,7 +304,7 @@ async function installationMarkdown(): Promise<string> {
     "",
     "FreePascal is required.",
     "",
-    "Delphi 12 Community Edition is also supported for the complete shipped Win32 and Win64 application matrix. Open `source/app/GocciaScript.Delphi.groupproj` and follow the [build and validation guide](/docs/build-system).",
+    "Delphi 12 Community Edition is also supported for the Win32 and Win64 application matrix: the REPL, Runner, Bare Script Loader, Test Runner, Benchmark Runner and Bundler. Open `source/app/GocciaScript.Delphi.groupproj` and follow the [build and validation guide](/docs/build-system).",
     "",
     fence(
       [

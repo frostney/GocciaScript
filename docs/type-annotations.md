@@ -76,15 +76,18 @@ const withDefault = <T = string,>(v: T): T => v;
 const load = async <T,>(read: () => Promise<T>): Promise<T> => read();
 
 // A `this` parameter types `this`; it is not a parameter at run time, so
-// `total.length` is 1
-function total(this: { base: number }, extra: number) { return this.base + extra; }
-
-// Overload signatures (erased): a function or method header with no body,
-// ended by `;` or, under ASI, a line break. The implementation keeps its own
-// parameters.
-function pick(text: string): string;
-function pick(count: number): number;
-function pick(value: string | number) { return value; }
+// `Counter.prototype.total.length` is 1. Overload signatures (erased) are a
+// function or method header with no body, ended by `;` or, under ASI, a line
+// break; the implementation keeps its own parameters, so
+// `Counter.prototype.pick.length` is 1. Both also
+// work on `function` declarations under `--compat-function`.
+class Counter {
+  base = 2;
+  total(this: Counter, extra: number) { return this.base + extra; }
+  pick(text: string): string;
+  pick(count: number): number;
+  pick(value: string | number) { return value; }
+}
 
 // Type and interface declarations (skipped entirely)
 type Point = { x: number, y: number };

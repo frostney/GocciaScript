@@ -75,6 +75,15 @@ commit_parsers = [
   { message = "^Name private members as written in bytecode-mode errors", group = "🐛 Fixed" },
   { message = "^Make the console-rendering and config-globals CLI checks pass", group = "🏗️ Internal" },
 
+  # 0.16.0: contributor tooling and the experimental expression-style example,
+  # not engine or runtime changes. #2045 stays under Added: it also changes
+  # goccia:ast. Each pattern matches exactly one PR's subject.
+  { message = "^perf\\(build\\): scope test builds and avoid busy waits \\(#1851\\)", group = "🏗️ Internal" },
+  { message = "^feat\\(examples\\): expression-style .* \\(#2013\\)", group = "🏗️ Internal" },
+  { message = "^feat\\(examples\\): expression-style .* \\(#2034\\)", group = "🏗️ Internal" },
+  { message = "^feat\\(examples\\): expression-style .* \\(#2039\\)", group = "🏗️ Internal" },
+  { message = "^feat\\(examples\\): expression-style .* \\(#2043\\)", group = "🏗️ Internal" },
+
   { message = "^Wasm support", group = "🚀 Added" },
   { message = "^Add ", group = "🚀 Added" },
   { message = "^Implement ", group = "🚀 Added" },

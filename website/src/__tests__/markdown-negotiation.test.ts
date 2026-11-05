@@ -269,7 +269,9 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain(
       "by area on the compatibility dashboard](/compatibility)",
     );
-    expect(markdown).toContain("15,000+ JavaScript tests in 1,800+ files");
+    expect(markdown).toContain(
+      "17,000+ JavaScript tests run on every pull request",
+    );
     expect(markdown).toContain("checked against Bun and Vitest");
     expect(markdown).toContain("/actions/workflows/fuzz.yml");
     expect(markdown).toContain("/actions/workflows/gc-stress.yml");
