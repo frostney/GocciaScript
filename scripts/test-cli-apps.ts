@@ -1535,6 +1535,31 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
         'if (globalThis.fromEvalScript !== 3) throw new Error("evalScript var is not a global property");',
         "export {};",
       ]), "PASS", ""],
+      // ...against the realm's global environment, not the module's: the
+      // Script's `this`, its free identifiers and its top-level lexical
+      // declarations are the global ones (GlobalDeclarationInstantiation),
+      // whether the module reaches the host function through the harness's
+      // $262 wrapper (a closure of the realm) or directly.
+      ...[["$262.evalScript", "evalscript-wrapper"], ["Goccia.test262.evalScript", "evalscript-host"]].flatMap(
+        ([call, name]): [string, string[], string, string][] => [
+          [`module-${name}-this.js`, test(["module"], [], [
+            `if (${call}("this") !== globalThis) throw new Error("evalScript this is not the global object");`,
+            "export {};",
+          ]), "PASS", ""],
+          [`module-${name}-scope.js`, test(["module"], [], [
+            'let moduleLexical = "module";',
+            `if (${call}("typeof moduleLexical") !== "undefined") throw new Error("evalScript sees the module scope");`,
+            // Not a redeclaration: the module's binding is not a global one.
+            `${call}("let moduleLexical = \\'script\\'; class ScriptClass {}");`,
+            'if (moduleLexical !== "module") throw new Error("evalScript replaced the module binding");',
+            // The Script's lexical bindings persist in the global environment.
+            `if (${call}("moduleLexical + typeof ScriptClass") !== "scriptfunction") throw new Error("evalScript lexical bindings are not global");`,
+            "var threw = false;",
+            `try { ${call}("let moduleLexical = 1;"); } catch (e) { threw = e instanceof SyntaxError; }`,
+            'if (!threw) throw new Error("evalScript redeclaration was not a SyntaxError");',
+            "export {};",
+          ]), "PASS", ""],
+        ]),
       // A test file imported as a module is just its own source: the
       // harness ran once, in the realm, before the test.
       ["self-import.js", test(["async"], ["countingHelper.js"], [

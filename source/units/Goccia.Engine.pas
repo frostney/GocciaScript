@@ -450,7 +450,8 @@ type
       against the bindings earlier Scripts left there (ES2026 §16.1.7
       GlobalDeclarationInstantiation). ASourcePath names it in diagnostics.
       A host that evaluates several Scripts in one realm, such as the
-      test262 harness, runs each through it. }
+      test262 harness, runs each through it, also from a host function a
+      module body calls. }
     function ExecuteScriptProgram(const AProgram: TGocciaProgram;
       const ASourcePath: string): TGocciaValue;
     procedure WaitForRuntimeIdle;
@@ -4864,13 +4865,22 @@ function TGocciaEngine.ExecuteScriptProgram(const AProgram: TGocciaProgram;
   const ASourcePath: string): TGocciaValue;
 var
   SavedGlobalBackedTopLevel, SavedVMGlobalBackedTopLevel: Boolean;
+  SavedVMGlobalScope: TGocciaScope;
 begin
   SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
   SavedVMGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
+  SavedVMGlobalScope := FVM.GlobalScope;
   FGlobalBackedTopLevel := True;
+  { The Script can be started from inside a module body (a host function a
+    module calls), which has the VM's global scope set to the module's own
+    (EvaluateModuleBody). A Script runs against the realm's global
+    environment, the one CompileProgram checked its declarations against, as
+    EvaluateGlobalEval does. }
+  FVM.GlobalScope := FGlobalScope;
   try
     Result := RunProgram(AProgram, ASourcePath);
   finally
+    FVM.GlobalScope := SavedVMGlobalScope;
     FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
     FVM.GlobalBackedTopLevel := SavedVMGlobalBackedTopLevel;
   end;
