@@ -37,7 +37,8 @@ cat scripts/test262-suite-sha.txt
 git -C /path/to/test262-suite rev-parse HEAD
 ```
 
-If you have no checkout at the pinned SHA, fetch it:
+If you have no checkout at the pinned SHA, clone into a new, empty path and use
+that path for the remaining commands:
 
 ```bash
 git clone --filter=blob:none --no-checkout https://github.com/tc39/test262 /path/to/test262-suite
