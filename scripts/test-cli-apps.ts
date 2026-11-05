@@ -1415,7 +1415,13 @@ await section("test262 runner: negative tests need the expected error in the exp
       ["resolution-rejected.js", [...negative("resolution", "SyntaxError", ["module"]), "$DONOTEVALUATE();", "import { missing } from './resolution_FIXTURE.js';"], "PASS", ""],
       ["runtime-module.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new TypeError("x");'], "PASS", ""],
       ["runtime-module-wrong-type.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new RangeError("x");'], "FAIL", "got RangeError"],
-      ["runtime-wrapped.js", [...negative("runtime", "ReferenceError"), "unresolvable;"], "PASS", ""],
+      ["runtime-unresolvable.js", [...negative("runtime", "ReferenceError"), "unresolvable;"], "PASS", ""],
+      ["runtime-none.js", [...negative("runtime", "ReferenceError"), "var x = 1;"], "FAIL", "none thrown"],
+      // #2067: a runtime negative is graded on the test Script's own
+      // completion, with no try wrapper to turn its top-level lexical
+      // declarations into block-scoped ones, wherever the test lives.
+      ["runtime-global-lexical.js", [...negative("runtime", "SyntaxError"), "let undefined;"], "PASS", ""],
+      ["runtime-raw.js", [...negative("runtime", "TypeError", ["raw"]), 'throw new TypeError("x");'], "PASS", ""],
     ];
     writeFileSync(join(tests, "resolution_FIXTURE.js"), "export var present;\n");
     for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
@@ -1432,8 +1438,8 @@ await section("test262 runner: negative tests need the expected error in the exp
       { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
     );
     const report = JSON.parse(readFileSync(out, "utf8"));
-    if (report.run?.gradingContract !== 2)
-      throw new Error(`test262 report should publish gradingContract 2, got ${JSON.stringify(report.run)}`);
+    if (report.run?.gradingContract !== 3)
+      throw new Error(`test262 report should publish gradingContract 3, got ${JSON.stringify(report.run)}`);
     const byId = new Map<string, { status: string; message?: string }>(
       report.results.map((r: { id: string; status: string; message?: string }) => [r.id, r]),
     );
@@ -1442,6 +1448,89 @@ await section("test262 runner: negative tests need the expected error in the exp
       if (!result || result.status !== status || !(result.message ?? "").includes(fragment))
         throw new Error(`${file}: expected ${status} "${fragment}", got ${JSON.stringify(result)}`);
     }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 runner: harness includes run as separate non-strict Scripts before the test...", async () => {
+  // #2067 (test262 INTERPRETING.md, "Strict Mode" and "includes"): each
+  // harness file is a global Script of its own, evaluated before the test,
+  // and a strict run puts "use strict" in front of the test's own source
+  // only. A harness helper that relies on non-strict code keeps working
+  // under onlyStrict and from a module test.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "language");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "function Test262Error(message) { this.message = message; }\n");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(harness, "sloppyHelper.js"), [
+      "var helperValue = 1;",
+      "function sloppyAssign() {",
+      "  sloppyGlobal = 7;",
+      "  return this === globalThis;",
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(join(harness, "brokenHelper.js"), "null.x;\n");
+    const test = (flags: string[], includes: string[], body: string[]) => [
+      "// Copyright",
+      "/*---",
+      "description: harness evaluation",
+      ...(includes.length > 0 ? [`includes: [${includes.join(", ")}]`] : []),
+      ...(flags.length > 0 ? [`flags: [${flags.join(", ")}]`] : []),
+      "---*/",
+      ...body,
+    ];
+    const harnessIsSloppy = [
+      'if (!sloppyAssign()) throw new Error("harness this was not the global object");',
+      'if (globalThis.sloppyGlobal !== 7) throw new Error("harness assignment did not create a global");',
+      'if (globalThis.helperValue !== 1) throw new Error("harness var is not a global property");',
+    ];
+    const cases: [string, string[], string, string][] = [
+      // [file, source lines, expected status, expected message fragment]
+      ["strict-harness-sloppy.js", test(["onlyStrict"], ["sloppyHelper.js"], [
+        ...harnessIsSloppy,
+        "var threw = false;",
+        "try { undeclaredInBody = 1; } catch (e) { threw = e instanceof ReferenceError; }",
+        'if (!threw) throw new Error("the test body is not strict");',
+      ]), "PASS", ""],
+      ["module-harness-sloppy.js", test(["module"], ["sloppyHelper.js"], [...harnessIsSloppy, "export {};"]), "PASS", ""],
+      ["sloppy-body.js", test([], [], ["undeclaredInBody = 1;"]), "PASS", ""],
+      // A harness Script that fails means the test never ran.
+      ["broken-include.js", test([], ["brokenHelper.js"], ["var x = 1;"]), "WRAPPER_INFRA", "harness include brokenHelper.js failed"],
+      // Positions are the test file's own lines, the frontmatter included.
+      ["positions.js", test([], [], ["", "missingBinding;"]), "FAIL", "missingBinding"],
+    ];
+    for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
+
+    const out = join(tmp, "harness.json");
+    Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "language",
+        "--jobs=1",
+        "--output", out,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    const byId = new Map<string, { status: string; message?: string; diagnostic?: string }>(
+      report.results.map((r: { id: string; status: string; message?: string; diagnostic?: string }) => [r.id, r]),
+    );
+    for (const [file, , status, fragment] of cases) {
+      const result = byId.get(`language/${file}`);
+      if (!result || result.status !== status || !(result.message ?? "").includes(fragment))
+        throw new Error(`${file}: expected ${status} "${fragment}", got ${JSON.stringify(result)}`);
+    }
+    const positions = byId.get("language/positions.js");
+    if (!(positions?.diagnostic ?? "").includes("positions.js:6:1"))
+      throw new Error(`positions.js should report the file's line 6, got ${JSON.stringify(positions)}`);
   } finally {
     clean(tmp);
   }

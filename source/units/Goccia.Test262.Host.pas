@@ -5,10 +5,13 @@ unit Goccia.Test262.Host;
 interface
 
 uses
+  Classes,
+
   Goccia.Capabilities,
   Goccia.Engine,
   Goccia.HostEnvironment,
-  Goccia.SourcePipeline;
+  Goccia.SourcePipeline,
+  Goccia.Values.Primitives;
 
 type
   TGocciaTest262EngineOptions = record
@@ -42,11 +45,19 @@ procedure ConfigureTest262Engine(const AEngine: TGocciaEngine;
   const AOptions: TGocciaTest262EngineOptions;
   const AParentEnvironment: TGocciaHostEnvironment = nil);
 function Test262SourceCanSuspendAgent(const APath: string): Boolean;
+{ Parses ASourceLines as a Script under AEngine's language profile and
+  evaluates it in AEngine's realm, as its own global Script: its directive
+  prologue alone decides its strictness, and its global declarations share
+  the realm's global environment with every other Script evaluated there.
+  ASourcePath names the Script in diagnostics. Raises what parsing, global
+  declaration instantiation or evaluation raises. $262.evalScript and the
+  runner's harness includes both evaluate through it. }
+function EvaluateTest262Script(const AEngine: TGocciaEngine;
+  const ASourceLines: TStringList; const ASourcePath: string): TGocciaValue;
 
 implementation
 
 uses
-  Classes,
   Generics.Collections,
   StrUtils,
   SysUtils,
@@ -65,7 +76,6 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
-  Goccia.Scope.Redeclaration,
   Goccia.StackLimit,
   Goccia.TextFiles,
   Goccia.Threading,
@@ -76,7 +86,6 @@ uses
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
   Goccia.VM.Exception;
 
 type
@@ -300,17 +309,50 @@ begin
     Stage);
 end;
 
+function EvaluateTest262Script(const AEngine: TGocciaEngine;
+  const ASourceLines: TStringList; const ASourcePath: string): TGocciaValue;
+var
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
+  ScriptOptions: TGocciaSourcePipelineOptions;
+  PipelineResult: TGocciaSourcePipelineResult;
+  RealmScope: TGocciaExecutionContextScope;
+begin
+  ScriptOptions := TGocciaSourcePipeline.DefaultOptions;
+  ScriptOptions.Preprocessors := AEngine.Preprocessors;
+  ScriptOptions.Compatibility := AEngine.Compatibility;
+  ScriptOptions.LabelStatementsEnabled := AEngine.LabelStatementsEnabled;
+  ScriptOptions.ForInLoopsEnabled := AEngine.ForInLoopsEnabled;
+  ScriptOptions.ExperimentalJSModuleSourceEnabled :=
+    AEngine.ExperimentalJSModuleSourceEnabled;
+  ScriptOptions.WarningUnsupportedFeatures :=
+    AEngine.WarningUnsupportedFeatures;
+  ScriptOptions.SourceType := stScript;
+  ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(ScriptOptions);
+  try
+    RealmScope := AEngine.ActivateRealmExecutionContext;
+    try
+      PipelineResult := TGocciaSourcePipeline.Parse(ASourceLines,
+        ASourcePath, ScriptOptions);
+      try
+        Result := AEngine.ExecuteScriptProgram(PipelineResult.ProgramNode,
+          ASourcePath);
+      finally
+        PipelineResult.Free;
+      end;
+    finally
+      RealmScope.Free;
+    end;
+  finally
+    ActiveOptionsScope.Free;
+  end;
+end;
+
 function TTest262EvalHost.EvalScript(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  ScriptOptions: TGocciaSourcePipelineOptions;
   ScriptSource: TStringList;
-  PipelineResult: TGocciaSourcePipelineResult;
-  RealmScope: TGocciaExecutionContextScope;
   SourceValue: TGocciaValue;
-  SourceText: string;
 begin
   if AArgs.Length = 0 then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -318,38 +360,11 @@ begin
   if not (SourceValue is TGocciaStringLiteralValue) then
     Exit(SourceValue);
 
-  SourceText := TGocciaStringLiteralValue(SourceValue).Value;
-  ScriptSource := CreateECMAScriptSourceLines(SourceText);
+  ScriptSource := CreateECMAScriptSourceLines(
+    TGocciaStringLiteralValue(SourceValue).Value);
   try
-    ScriptOptions := TGocciaSourcePipeline.DefaultOptions;
-    ScriptOptions.Preprocessors := FEngine.Preprocessors;
-    ScriptOptions.Compatibility := FEngine.Compatibility;
-    ScriptOptions.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
-    ScriptOptions.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
-    ScriptOptions.ExperimentalJSModuleSourceEnabled :=
-      FEngine.ExperimentalJSModuleSourceEnabled;
-    ScriptOptions.WarningUnsupportedFeatures :=
-      FEngine.WarningUnsupportedFeatures;
-    ScriptOptions.SourceType := stScript;
-    ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(ScriptOptions);
-    try
-      RealmScope := FEngine.ActivateRealmExecutionContext;
-      try
-        PipelineResult := TGocciaSourcePipeline.Parse(ScriptSource,
-          '<test262-eval-script>', ScriptOptions);
-        try
-          CheckTopLevelRedeclarations(PipelineResult.ProgramNode,
-            FEngine.GlobalScope, '<test262-eval-script>');
-          Result := FEngine.ExecuteProgram(PipelineResult.ProgramNode);
-        finally
-          PipelineResult.Free;
-        end;
-      finally
-        RealmScope.Free;
-      end;
-    finally
-      ActiveOptionsScope.Free;
-    end;
+    Result := EvaluateTest262Script(FEngine, ScriptSource,
+      '<test262-eval-script>');
   finally
     ScriptSource.Free;
   end;

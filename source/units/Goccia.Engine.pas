@@ -349,10 +349,14 @@ type
     { Compile AProgram with this engine's language profile. ANonStrictMode
       is false for module source, which is always strict. AAsyncTopLevel
       compiles the top level as an async function body, as module source
-      with top-level await is. }
+      with top-level await is. ASourcePath names the compiled code in
+      diagnostics; empty means the entry's path. }
     function CompileProgram(const AProgram: TGocciaProgram;
       const ANonStrictMode: Boolean;
-      const AAsyncTopLevel: Boolean = False): TGocciaBytecodeModule;
+      const AAsyncTopLevel: Boolean = False;
+      const ASourcePath: string = ''): TGocciaBytecodeModule;
+    function RunProgram(const AProgram: TGocciaProgram;
+      const ASourcePath: string): TGocciaValue;
     { Run AModule on the VM against the VM's current global scope, after
       linking its static requests; AThisValue is its top-level `this`, or nil
       for the scope's. }
@@ -440,6 +444,15 @@ type
 
     function Execute: TGocciaScriptResult;
     function ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
+    { Runs AProgram, parsed as a Script, as a global Script of its own in
+      this engine's realm, whatever the entry's goal: its top-level
+      declarations are bound in the global environment, after a check
+      against the bindings earlier Scripts left there (ES2026 §16.1.7
+      GlobalDeclarationInstantiation). ASourcePath names it in diagnostics.
+      A host that evaluates several Scripts in one realm, such as the
+      test262 harness, runs each through it. }
+    function ExecuteScriptProgram(const AProgram: TGocciaProgram;
+      const ASourcePath: string): TGocciaValue;
     procedure WaitForRuntimeIdle;
     { ADR 0148: true while the run is at a pause checkpoint. No bytecode
       frame runs (the caller is the idle wait), the microtask queue is empty,
@@ -2729,15 +2742,20 @@ end;
   the global environment when GlobalBackedTopLevel is set, which first checks
   them against the global environment's existing bindings. }
 function TGocciaEngine.CompileProgram(const AProgram: TGocciaProgram;
-  const ANonStrictMode, AAsyncTopLevel: Boolean): TGocciaBytecodeModule;
+  const ANonStrictMode, AAsyncTopLevel: Boolean;
+  const ASourcePath: string): TGocciaBytecodeModule;
 var
   Compiler: TGocciaCompiler;
   Options: TGocciaCompilerOptimizationOptions;
+  SourcePath: string;
 begin
+  SourcePath := ASourcePath;
+  if SourcePath = '' then
+    SourcePath := FSourcePath;
   if FGlobalBackedTopLevel and Assigned(FGlobalScope) then
-    CheckTopLevelRedeclarations(AProgram, FGlobalScope, FSourcePath);
+    CheckTopLevelRedeclarations(AProgram, FGlobalScope, SourcePath);
 
-  Compiler := TGocciaCompiler.Create(FSourcePath);
+  Compiler := TGocciaCompiler.Create(SourcePath);
   try
     Compiler.GlobalBackedTopLevel := FGlobalBackedTopLevel;
     Compiler.AsyncTopLevel := AAsyncTopLevel;
@@ -4838,6 +4856,28 @@ begin
 end;
 
 function TGocciaEngine.ExecuteProgram(const AProgram: TGocciaProgram): TGocciaValue;
+begin
+  Result := RunProgram(AProgram, FSourcePath);
+end;
+
+function TGocciaEngine.ExecuteScriptProgram(const AProgram: TGocciaProgram;
+  const ASourcePath: string): TGocciaValue;
+var
+  SavedGlobalBackedTopLevel, SavedVMGlobalBackedTopLevel: Boolean;
+begin
+  SavedGlobalBackedTopLevel := FGlobalBackedTopLevel;
+  SavedVMGlobalBackedTopLevel := FVM.GlobalBackedTopLevel;
+  FGlobalBackedTopLevel := True;
+  try
+    Result := RunProgram(AProgram, ASourcePath);
+  finally
+    FGlobalBackedTopLevel := SavedGlobalBackedTopLevel;
+    FVM.GlobalBackedTopLevel := SavedVMGlobalBackedTopLevel;
+  end;
+end;
+
+function TGocciaEngine.RunProgram(const AProgram: TGocciaProgram;
+  const ASourcePath: string): TGocciaValue;
 var
   GC: TGarbageCollector;
   FloatingPointState: TGocciaFloatingPointState;
@@ -4855,7 +4895,8 @@ begin
   Completed := False;
   try
     Start := GetNanoseconds;
-    Module := CompileProgram(AProgram, cfNonStrictMode in FCompatibility);
+    Module := CompileProgram(AProgram, cfNonStrictMode in FCompatibility,
+      False, ASourcePath);
     FCompileTimeNanoseconds := GetNanoseconds - Start;
     FRetainedModules.Add(Module);
     Start := GetNanoseconds;
