@@ -1420,6 +1420,7 @@ begin
   FVM.LoadDeferredModule := FModuleLoader.LoadDeferredModuleNamespaceValue;
   FVM.ResolveModuleURL := FModuleLoader.ResolveModuleURL;
   FVM.CompileDirectEval := CompileDirectEvalCode;
+  FVM.CapabilityAuditEmitter := EmitCapabilityAudit;
   FModuleLoader.EvaluateModuleBody := EvaluateModuleBody;
   FModuleLoader.InstantiateModuleFunctions := InstantiateModuleFunctions;
   FModuleLoader.ReadModuleBytecode := DecodeModuleBytecode;

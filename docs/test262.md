@@ -389,8 +389,9 @@ engine/realm, returns a host record with the child realm's `globalThis`, its
 own `evalScript`, and `createRealm`, and keeps the child engine alive for the
 duration of the test run so cross-realm intrinsics remain valid.
 
-`eval` is also host-gated. The Test262 runner installs the official host eval;
-default Bare execution does not expose it. Bytecode direct calls preserve
+`eval` is also host-gated. The Test262 runner installs it through the
+engine's `EnableEval` option, the one embedders use; default Bare execution
+does not expose it. Bytecode direct calls preserve
 the caller realm and caller lexical bindings, while shadowed or indirect eval
 calls use ordinary function-call semantics.
 

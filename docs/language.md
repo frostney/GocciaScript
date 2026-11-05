@@ -8,7 +8,7 @@
 - **Implementation vs profile** — GocciaScript implements core ECMAScript; modern recommended defaults are product policy rather than the language ceiling
 - **Conformance evidence** — Generated test262 reports measure the release-track objective; canonical prose links to current results instead of freezing a percentage
 - **Compatibility paths** — Every standard core form disabled by the recommended profile has a targeted `--compat-*` path
-- **Host exposure** — Normal hosts do not install `eval`; the private `GocciaTest262Runner` conformance host exposes `eval`, `evalScript`, and `createRealm`
+- **Host exposure** — `eval` is installed only by an embedder that opts in through the engine's `EnableEval` option; the shipped CLIs do not, apart from the `GocciaTest262Runner` conformance host, which also exposes `evalScript` and `createRealm`
 - **TC39 proposals and extensions** — The TC39 Type Annotations proposal uses types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement
 - **Annex B policy** — Browser-only Annex B behavior is not a general pre-1.0 target
 
@@ -731,9 +731,9 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `eval()`
 
-**Implemented; not installed by normal hosts.** `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and default `GocciaScriptLoaderBare` do not expose runtime `eval`.
+**Implemented; off by default.** `GocciaRunner` (host and sandbox mode), `GocciaREPL`, `GocciaTestRunner`, and `GocciaScriptLoaderBare` do not expose `eval`, and no CLI flag or config key turns it on.
 
-`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The only implementation is a private conformance host hook: `GocciaTest262Runner` installs the official test262 host `eval`, plus `evalScript(sourceText)` and `createRealm()` properties on the private test262 host object, so the stock test262 harness can exercise ECMAScript direct-eval and realm semantics. Those hooks are not exposed outside conformance runs and should not be used as an application API.
+`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. An embedder that wants it calls `EnableEval(Engine)` (`Goccia.Builtins.GlobalEval`), which installs `globalThis.eval` as the realm's `%eval%`: a call written `eval(...)` is a direct eval with the caller's scope and strictness (ES2026 §13.3.6.1), any other call is an indirect eval in the global scope (§19.2.1), and each call reports an `eval.call` [audit event](capability-audit.md). See [Embedding — Changing the Defaults](embedding.md#changing-the-defaults). `GocciaTest262Runner` uses the same option, and adds `evalScript(sourceText)` and `createRealm()` on its private test262 host object so the stock test262 harness can exercise realm semantics.
 
 ### `arguments` Object
 

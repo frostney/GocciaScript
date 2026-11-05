@@ -17,6 +17,7 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
   Goccia.CallStack,
+  Goccia.CapabilityAudit,
   Goccia.EvaluationContext,
   Goccia.ExecutionContext,
   Goccia.GarbageCollector,
@@ -243,6 +244,7 @@ type
     FLoadDeferredModule: TLoadDeferredModuleCallback;
     FResolveModuleURL: TResolveModuleURLCallback;
     FCompileDirectEval: TGocciaCompileDirectEvalCallback;
+    FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
@@ -682,6 +684,8 @@ type
     function ExecuteDirectEvalSite(const ACalleeReg: UInt16;
       const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
       var AIP, AInstructionStartIP: Integer): TGocciaBytecodeClosure;
+    procedure AuditDirectEval(const ATemplate: TGocciaFunctionTemplate;
+      const ACallIP: Integer);
     procedure InstantiateDirectEvalDeclarations(
       const ATemplate: TGocciaFunctionTemplate; const ASiteIndex: Integer;
       const ASite: TGocciaDirectEvalEnvironment; const AStandardVarNames,
@@ -825,6 +829,9 @@ type
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
     property CompileDirectEval: TGocciaCompileDirectEvalCallback
       read FCompileDirectEval write FCompileDirectEval;
+    { Reports each direct eval of the realm's %eval% (eval.call). }
+    property CapabilityAuditEmitter: TGocciaCapabilityAuditEmitter
+      read FCapabilityAuditEmitter write FCapabilityAuditEmitter;
     property LoadModuleSource: TLoadModuleSourceCallback
       read FLoadModuleSource write FLoadModuleSource;
     property LoadDeferredModule: TLoadDeferredModuleCallback
@@ -890,7 +897,6 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Bytecode.Debug,
-  Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -15491,6 +15497,8 @@ begin
      TGocciaNativeFunctionValue(FRegisters[ACalleeReg].ObjectValue).DirectEvalHost and
      IsRealmEvalFunction(FRealm, FRegisters[ACalleeReg].ObjectValue)) then
     Exit;
+  if Assigned(FCapabilityAuditEmitter) then
+    AuditDirectEval(ATemplate, AIP);
   CallIP := AIP;
   CallInstruction := ATemplate.GetInstructionUnchecked(CallIP);
   Inc(CallIP);
@@ -15795,6 +15803,38 @@ begin
     VarNames.Free;
     PrivateNames.Free;
     EvalSource.Free;
+  end;
+end;
+
+// Reports a direct eval of %eval% (eval.call), located at the eval call
+// expression, as a native callee's audit event is located at its call.
+// ACallIP is the call instruction that OP_DIRECT_EVAL stands in front of.
+procedure TGocciaVM.AuditDirectEval(const ATemplate: TGocciaFunctionTemplate;
+  const ACallIP: Integer);
+var
+  Line, Column: Integer;
+  SourceFile: string;
+  PreviousCallSite: TGocciaCallSite;
+begin
+  SourceFile := '';
+  if not ATemplate.TryGetCallSitePosition(UInt32(ACallIP), Line, Column) then
+  begin
+    Line := 0;
+    Column := 0;
+    if Assigned(ATemplate.DebugInfo) then
+    begin
+      Line := ATemplate.DebugInfo.GetLineForPC(UInt32(ACallIP));
+      Column := ATemplate.DebugInfo.GetColumnForPC(UInt32(ACallIP));
+    end;
+  end;
+  if Assigned(ATemplate.DebugInfo) then
+    SourceFile := ATemplate.DebugInfo.SourceFile;
+  EnterGocciaCallSite(SourceFile, Line, Column, PreviousCallSite);
+  try
+    FCapabilityAuditEmitter(gckEval, gcdAllow, 'eval',
+      'direct eval is enabled');
+  finally
+    LeaveGocciaCallSite(PreviousCallSite);
   end;
 end;
 

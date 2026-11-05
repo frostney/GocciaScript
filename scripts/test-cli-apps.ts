@@ -9087,6 +9087,39 @@ await section("REPL: repeated tagged template execution...", async () => {
 // GocciaRunner sandbox mode
 // ============================================================================
 
+await section("Runner: eval is absent in host and sandbox mode, even with the other dynamic-code switches...", async () => {
+  // eval is an engine option only (EnableEval, #2065): no flag or config key
+  // installs it, so neither mode exposes it, nor does a ShadowRealm child.
+  const probe = [
+    'console.log("eval:" + typeof eval + ":" + ("eval" in globalThis));',
+    'if (typeof ShadowRealm === "function")',
+    '  console.log("child:" + new ShadowRealm().evaluate("typeof eval"));',
+    "",
+  ].join("\n");
+  const host = Bun.spawnSync(
+    [RUNNER, "--unsafe-function-constructor", "--unsafe-shadowrealm"],
+    { stdin: new TextEncoder().encode(probe), stdout: "pipe", stderr: "pipe" },
+  );
+  const hostOut = host.stdout.toString();
+  if (host.exitCode !== 0 || !containsLine(hostOut, "eval:undefined:false") ||
+      !containsLine(hostOut, "child:undefined"))
+    throw new Error(`Runner host mode exposed eval (exit ${host.exitCode}): ${hostOut}${host.stderr.toString()}`);
+
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [{ path: "/main.js", text: probe }]);
+    const sandbox = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const sandboxOut = sandbox.stdout.toString();
+    if (sandbox.exitCode !== 0 || !containsLine(sandboxOut, "eval:undefined:false"))
+      throw new Error(`Runner sandbox mode exposed eval (exit ${sandbox.exitCode}): ${sandboxOut}${sandbox.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Runner sandbox mode: a thrown stack cannot read a host file into the diagnostic...", async () => {
   // A code frame's source must come from what the engine parsed, not from a
   // path lifted out of a script-controlled `stack` string. In the sandbox this
