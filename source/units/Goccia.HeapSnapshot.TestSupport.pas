@@ -82,9 +82,9 @@ uses
 
   TestingPascalLibrary,
 
+  Goccia.Builtins.GlobalEval,
   Goccia.GarbageCollector,
   Goccia.Scope.BindingMap,
-  Goccia.Builtins.GlobalEval,
   Goccia.SourcePipeline,
   Goccia.Values.NativeFunction,
   Goccia.Values.ObjectValue;
