@@ -19,6 +19,7 @@ implementation
 
 uses
   Goccia.RuntimeExtensions.AsyncHooks,
+  Goccia.RuntimeExtensions.Blob,
   Goccia.RuntimeExtensions.Console,
   Goccia.RuntimeExtensions.CSV,
   Goccia.RuntimeExtensions.Fetch,
@@ -49,6 +50,7 @@ begin
   ARuntime.Install(TGocciaTextAssetsRuntimeExtension.Create);
   ARuntime.Install(TGocciaPerformanceRuntimeExtension.Create);
   ARuntime.Install(TGocciaTextEncodingRuntimeExtension.Create);
+  ARuntime.Install(TGocciaBlobRuntimeExtension.Create);
   ARuntime.Install(TGocciaURLRuntimeExtension.Create);
   ARuntime.Install(TGocciaFetchRuntimeExtension.Create);
   { Pure context bookkeeping — no I/O, no clock, no way to observe anything

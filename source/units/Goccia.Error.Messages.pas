@@ -703,6 +703,8 @@ resourcestring
   // Web IDL buffer source conversion errors (Goccia.WebIDL.BufferSource)
   SErrorBufferSourceType = '%s must be an ArrayBuffer, SharedArrayBuffer or ArrayBufferView';
   SErrorBufferSourceUint8ArrayType = '%s must be a Uint8Array';
+  SErrorBufferSourceNonSharedType = '%s must be an ArrayBuffer or ArrayBufferView';
+  SErrorBufferSourceShared = '%s must not be a view of a SharedArrayBuffer';
   SErrorBufferSourceNotFixedLength = '%s must not be backed by a resizable ArrayBuffer or a growable SharedArrayBuffer';
 
   // Promise prototype errors
@@ -933,6 +935,14 @@ resourcestring
   SErrorHeadersForEachNotCallable = 'Headers.prototype.forEach: callback is not a function';
   SErrorResponseNotResponse = 'Response method called on non-Response object';
   SErrorResponseBodyAlreadyUsed = 'body has already been consumed';
+
+  // Blob errors (File API)
+  SErrorBlobIllegalInvocation = '%s: illegal invocation';
+  SErrorBlobPartsNotSequence = 'Blob constructor: blobParts must be an iterable object (a sequence of BlobPart)';
+  SErrorBlobPartContext = 'Blob constructor: a blob part';
+  SErrorBlobOptionsNotObject = 'Blob constructor: options must be an object';
+  SErrorBlobEndings = 'Blob constructor: endings must be "transparent" or "native", not "%s"';
+  SErrorBlobTooLarge = 'Blob would hold more than %d bytes';
 
   // Intl errors
   SErrorIntlInvalidLanguageTag = 'Invalid language tag: %s';
