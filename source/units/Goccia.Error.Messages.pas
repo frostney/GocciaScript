@@ -741,6 +741,7 @@ resourcestring
   SErrorIteratorFlatMapMustReturnIterable = 'Iterator.prototype.flatMap callback must return an iterable';
 
   // Generic iterator errors
+  SErrorIteratorMethodNotCallable = 'Iterator %s is not callable';
   SErrorIteratorReturnMustBeCallable = 'Iterator return property must be callable';
   SErrorIteratorNextMustBeCallable = 'Iterator next property must be callable';
 

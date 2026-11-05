@@ -131,13 +131,16 @@ fail, 8 wrapper-infra, 0 timeouts.
 | `language/literals` | 3 | 5 | 0 |
 | `language/statements` | 16 | 6 | 0 |
 
-Two groups of results come from the runner, and #2069 fixes both. The 20
-failures with `SyntaxError: Identifier 'IsHTMLDDA' has already been declared`
-are a runner defect: its own harness declares the name. The 8 wrapper-infra
-results are the HTML-like comment tests (B.1.1). Those are an engine gap,
-because the parser does not accept HTML-like comments yet, but the runner
-misreports them as wrapper-infra; #2069 grades them as failures. This table is a measurement snapshot; README and
-website figures stay live-sourced from the published run (#1116).
+Two groups of results at `7c6c8225` came from the runner. The 20 failures
+with `SyntaxError: Identifier 'IsHTMLDDA' has already been declared` are a
+runner defect: its own harness declares the name; #2069 fixes it. The 8
+wrapper-infra results are the HTML-like comment tests (B.1.1). Those are an
+engine gap, because the parser does not accept HTML-like comments yet, but the
+runner misreported them as wrapper-infra. Since
+[ADR 0175](0175-test262-harness-includes-are-separate-non-strict-scripts.md)
+(#2067) the runner grades them as failures. This table is a measurement
+snapshot; README and website figures stay live-sourced from the published run
+(#1116).
 
 ## Consequences
 

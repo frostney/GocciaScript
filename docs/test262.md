@@ -23,21 +23,20 @@ replacement is recorded in
 ## Executive summary
 
 - Test262 runs via the dedicated native `GocciaTest262Runner`, never via
-  `GocciaTestRunner` or `GocciaScriptLoaderBare`. Wrapper bodies execute inside
-  a neutral engine without `expect`, `describe`, `test`, lifecycle hooks,
+  `GocciaTestRunner` or `GocciaScriptLoaderBare`. Tests execute inside a
+  neutral engine without `expect`, `describe`, `test`, lifecycle hooks,
   mocks, or `runTests`.
 - Stock tc39/test262 harness files are loaded from the pinned test262
-  checkout's `harness/` directory. The runner bundles two files from
-  `scripts/test262_harness/`: `$262.js`, the host-provided hook object, and
-  `goccia-global-shim.js`, which is appended after the includes and
-  re-publishes the harness bindings on `globalThis`.
+  checkout's `harness/` directory. The runner bundles one file,
+  `scripts/test262_harness/$262.js`, the host-provided hook object.
 - `Goccia.Test262.Host` installs the host hooks only in engines owned by the
   Test262 runner.
 - Test feature metadata may add explicit engine options when test262 splits
   proposal layers more narrowly than the base engine flag set.
-- The native runner catches engine outcomes directly. Stock async markers and
-  the negative-runtime wrapper markers remain the JavaScript-to-host verdict
-  protocol.
+- Each harness file runs as a non-strict global Script of its own before
+  the test, and a strict run adds `"use strict";` to the test's own source
+  only. The runner catches engine outcomes directly; the stock async markers
+  are the only JavaScript-to-host verdict protocol.
 - Wrapper-infrastructure failures are classified separately from
   conformance failures and gated to zero in CI.
 - CI assigns every normalized test ID to a deterministic shard, runs the
@@ -144,9 +143,9 @@ GocciaTest262Runner
   → for each test in its owning worker process:
       → create one runtime, heap, engine, and realm
       → read frontmatter, classify by phase (parse / runtime / positive)
-      → build source = (stock harness includes) + body, with a tiny
-        marker-emitting wrapper for most negative-runtime tests
-      → install the Test262-only host and execute in process
+      → install the Test262-only host, evaluate each harness file as its
+        own Script, then evaluate the test file (prefixed with "use strict";
+        in a strict run) as a Script or Module, in process
       → classify into PASS / FAIL / WRAPPER_INFRA / TIMEOUT
       → return the Pascal result and exit the worker process
   → aggregate per top-level category
@@ -169,8 +168,8 @@ not require synchronised numeric edits elsewhere.
 
 Both `--shard-index` and `--shard-count` are required, and the index is
 zero-based. Run the runner from the repository root: the bundled `$262.js`
-and `goccia-global-shim.js` are resolved relative to the working directory,
-and every test reports `WRAPPER_INFRA` otherwise.
+is resolved relative to the working directory, and every test reports
+`WRAPPER_INFRA` otherwise.
 
 ```bash
 ./build/GocciaTest262Runner \
@@ -204,98 +203,68 @@ artifact names.
 |-------------------|----------------------------------------------------------------------|--------------------------------------------------------------------------|
 | Sync positive     | engine returns normally                                              | an engine throw escapes                                                  |
 | Async positive    | captured output contains `Test262:AsyncTestComplete`                 | `Test262:AsyncTestFailure:<name>: <msg>`, no marker, or a throw before `$DONE` |
-| Negative runtime  | captured output contains `Test262:NegativeTestError:<expected-type>` | `Test262:NegativeTestNoError` or another error type                       |
-| Top-level negative runtime | escaped throw has the expected error type                   | no throw or another error type                                           |
+| Negative runtime  | the test's escaped throw has the expected error type                 | no throw or another error type                                           |
 | Negative parse / resolution | parsing, early errors, or linking raise `negative.type` before evaluation | clean run, `$DONOTEVALUATE` reached, a JS-level throw, or another error type |
 
 Async markers are emitted by stock test262 `doneprintHandle.js` via
 `$DONE`; the runner captures `print` output in the worker and scans it for
-those strings. The
-negative-runtime markers
-(`Test262:NegativeTestError:...` / `Test262:NegativeTestNoError`) are
-the only Goccia-specific marker addition; see "Wrapper templates"
-below. Runtime-negative Script tests that depend on global declaration
-instantiation run as top-level source instead, because wrapping them in
-`try { ... }` would introduce a block scope and change the declaration
-semantics under test.
+those strings. Every other verdict comes from how the test's own Script or
+Module ended; see "Harness evaluation" below.
 
-## Wrapper templates
+## Harness evaluation
 
-All four template kinds are produced by `TTest262App.BuildSource` in
-`GocciaTest262Runner`. Bodies for positive sync, positive async,
-empty, script-scope, and negative parse/resolution tests are all
-`harness + body` — identical shape, no special wrapping. Tests flagged
-`onlyStrict` receive a `"use strict"` directive prefix before the harness so
-the runtime uses strict directive semantics while the runner can still enable
-compatibility-gated parser support for Script tests. Tests flagged `raw` run
-their file exactly as written: no harness, no prefix, frontmatter kept. Each
-test runs once; `noStrict` and unflagged Script tests run without the prefix.
+`TTest262App.ExecuteOne` in `GocciaTest262Runner` evaluates each test as a
+sequence of separate Scripts in one realm, as test262's `INTERPRETING.md`
+describes ("Test262-Defined Bindings", the `async` flag, `includes`):
 
-### Positive (sync, async, empty, script-scope)
+1. `$262.js`, then `assert.js` and `sta.js`;
+2. `doneprintHandle.js` for an `async` test;
+3. the test's `includes`, in the order given;
+4. the test file itself: a Script, or a Module for a `module` test.
 
-```text
-{harness_source}
-{body}
-```
+Each harness file is its own global Script, evaluated through
+`EvaluateTest262Script` (`Goccia.Test262.Host`), the same path as
+`$262.evalScript`. Its own directive prologue alone decides its
+strictness, so harness files are non-strict, in a strict run and before a
+module test too. Their top-level declarations are global bindings that the
+test, and any later Script, sees and is checked against, as
+GlobalDeclarationInstantiation requires; a `var` or function declaration is
+also a property of `globalThis`. A test file a test imports, such as one that
+`import()`s itself, is loaded as its own source alone: the harness has
+already run in the realm.
 
-### Negative runtime
+The test file is evaluated whole, frontmatter comment included, so
+diagnostics report its own lines. A strict run (`onlyStrict`) inserts
+`"use strict";` and a newline as the initial characters of the test file,
+and of nothing else; its diagnostics are therefore one line past the file's.
+A `raw` test runs alone: no harness Script, no prefix, the file exactly as
+written. Every test runs once; `noStrict` and unflagged Script tests run
+without the prefix.
 
-```js
-{harness_source}
-try {
-{body}
-  print("Test262:NegativeTestNoError");
-} catch (__gocciaT262_e) {
-  var __gocciaT262_n = "unknown";
-  if (__gocciaT262_e && typeof __gocciaT262_e === "object") {
-    if (__gocciaT262_e.constructor && __gocciaT262_e.constructor.name) {
-      __gocciaT262_n = __gocciaT262_e.constructor.name;
-    }
-  }
-  print("Test262:NegativeTestError:" + __gocciaT262_n);
-}
-```
+No test source is wrapped. A negative-runtime test is graded on the
+completion of its own Script or Module: the error that escapes it must have
+`negative.type` as its `constructor.name`, read from data properties only,
+so no accessor getter runs. Because nothing wraps the test, its top-level
+declarations keep their global (or module) scope. If the thrown value's
+class cannot be identified, the test fails rather than being papered over
+by the harness.
 
-Top-level global-code runtime negatives that expect `SyntaxError`, and every
-`module`-flagged runtime negative (top-level `import`/`export` cannot sit inside
-`try`), use the positive template shape instead:
-
-```text
-{harness_source}
-{body}
-```
-
-The runner then checks the escaped error's `constructor.name` (read from data
-properties only, so no accessor getter runs) against `negative.type`.
-
-The error-class identification uses `e.constructor.name`, matching the
-spec-visible constructor/prototype path. If this cannot identify the
-thrown error class, the test is treated as an engine failure rather than
-papered over by the harness.
-
-The bindings `__gocciaT262_e` and `__gocciaT262_n` are the only
-Goccia-specific identifiers in the generated source. The catch parameter
-`__gocciaT262_e` is scoped to the catch block; `__gocciaT262_n` is a `var`
-and hoists to the script's global scope. The `__gocciaT262_` prefix is what
-avoids collisions with test-body bindings.
+A harness Script that fails to parse or throws means the test never ran:
+that is a wrapper-infrastructure result naming the include, not a
+conformance result. A harness Script that exceeds the timeout is a timeout.
 
 ### Negative parse
 
-```text
-{harness_source}
-{body}
-```
-
 Used for `negative.phase` `parse` and `resolution` (and `early`, should it
-reappear). The source is the positive template: like every other non-raw test,
-the body gets the stock harness, as the test262 interpretation rules require,
-so `sta.js` defines `$DONOTEVALUATE()`. Each non-raw parse or resolution test
-calls it as its first statement. `raw` tests get no harness and no
-`"use strict";` prefix, and keep their original source, frontmatter included;
-the evaluated ones throw the same string literal themselves. The test passes
-only when all of these hold:
+reappear). Like every other non-raw test, it gets the stock harness first,
+as the test262 interpretation rules require, so `sta.js` defines
+`$DONOTEVALUATE()`. Each non-raw parse or resolution test calls it as its
+first statement. `raw` tests get no harness and no `"use strict";` prefix,
+and keep their original source, frontmatter included; the evaluated ones
+throw the same string literal themselves. The test passes only when all of
+these hold:
 
-1. execution raised;
+1. execution of the test's own Script or Module raised;
 2. the body was not evaluated: the escaped value is not the string
    `$DONOTEVALUATE()` throws (`Test262: This statement should not be
    evaluated.`);
@@ -323,7 +292,7 @@ is the same grading the test262 interpretation rules and other runners apply.
 | Pascal-side exception during engine execution         | structured engine diagnostic              | conformance fail |
 | Runner/harness protocol exception                     | outside engine execution                   | wrapper infra     |
 | Native worker stalls beyond the watchdog              | supervisor kills only that worker         | timeout            |
-| Negative-runtime catch path itself fails              | no marker emitted                         | wrapper infra      |
+| A harness Script fails to parse or throws             | `harness include <name> failed`           | wrapper infra      |
 
 `ClassifyResult` receives the structured engine outcome, captured output, and
 formatted diagnostic. On POSIX, a native signal terminates only the current
@@ -369,13 +338,10 @@ Bodies do NOT see:
 ## Bundled harness adaptations
 
 The runner loads stock tc39/test262 harness files from the pinned
-checkout's `harness/` directory. `TTest262App.BuildHarness` prepends
-`$262.js`, `sta.js`, and `assert.js`, adds the test's `includes` (plus
-`doneprintHandle.js` for async tests), and appends `goccia-global-shim.js`.
-Only `$262.js` and the shim are bundled: `$262` is not a stock harness helper
-but the host-provided object test262 expects engines to supply, and the shim
-only re-publishes `$262`, `Test262Error`, `assert`, `$DONE`, and `asyncTest`
-on `globalThis`.
+checkout's `harness/` directory; "Harness evaluation" above gives their
+order and how they run. Only `$262.js` is bundled: `$262` is not a stock
+harness helper but the host-provided object test262 expects engines to
+supply.
 
 Bundling rule: do not add compatibility copies of stock harness files.
 If a stock helper fails, fix the language/runtime behavior or classify the
@@ -410,11 +376,14 @@ strict-mode behaviors statically:
 - Implicit globals throw `ReferenceError` (sloppy would create a global)
 - `delete <identifier>` and non-configurable property deletion throw by default
 
-The runner enables non-strict compatibility per test, not globally: Script
-tests receive it, while module tests stay strict. `onlyStrict`
-Script tests also receive the flag, but the injected directive keeps
-`with`, non-strict assignment failures, legacy `delete` return values, and
-regular-function nullish `this` coercion on the strict path. Remaining
+The runner enables non-strict compatibility for every test. Module code
+stays strict whatever the flag says, so for a module test the flag reaches
+only Script code: its harness Scripts, `$262.evalScript`, indirect `eval`
+and the `Function` constructor. `onlyStrict` tests also receive the flag,
+but the directive inserted in front of the test file keeps `with`,
+non-strict assignment failures, legacy `delete` return values, and
+regular-function nullish `this` coercion on the strict path for the test's
+own code, while the harness Scripts stay non-strict. Remaining
 `noStrict` tests rely on sloppy-only behaviors that
 GocciaScript still does not provide and fail naturally as ordinary
 conformance failures, not as wrapper-infra failures.
@@ -453,8 +422,7 @@ Default categories: `built-ins, harness, intl402, language, staging`
 - `annexB` (legacy browser behavior) is part of the conformance target
   and a release gate from 0.18.0. It is not in the default run yet:
   [#2069](https://github.com/frostney/GocciaScript/issues/2069) adds it
-  once the runner's `IsHTMLDDA` harness clash and the HTML-like comment
-  tests reported as wrapper-infra are fixed. Until then, run it with
+  once the runner's `IsHTMLDDA` harness clash is fixed. Until then, run it with
   `--categories=annexB`. New Annex B surfaces will go behind a
   compatibility flag, added by the 0.18.0 Annex B work, that the runner's
   engine profile turns on. See
@@ -496,10 +464,13 @@ change. When the cached `main` baseline was graded under a different contract,
 the PR comment still lists every PASS → FAIL transition but does not fail the
 regression gate; the next `main` run republishes the baseline under the new
 contract. Contract 2 (#1571) made negative parse and resolution tests require a
-pre-evaluation error of `negative.type`.
+pre-evaluation error of `negative.type`. Contract 3 (#2067) evaluates each
+harness file as a separate non-strict Script, applies `"use strict";` to the
+test file only, and grades every negative-runtime test on its own escaped
+throw, with no `try` wrapper.
 
 `scripts/test-cli-apps.ts` covers the negative grading paths with a small
-synthetic suite. After any wrapper-template change, also verify against the
+synthetic suite. After any grading or harness-evaluation change, also verify against the
 full conformance run:
 
 1. Run locally, from the repository root:
