@@ -71,11 +71,11 @@ execution-only.
 The target is judged on the contract current at the time. When the contract
 changes, for example to the warm AWFY protocol of #2066 or a new corpus pin, a
 result from an older segment does not count as meeting the target under the new
-one. ADR 0091's segmentation decides what counts as a change, narrowed here to
-the fields that matter for target 1: the corpus, the subset, the driver, the
-QuickJS version and the GocciaScript build contract. A Node.js version change
-alone does not start a new segment, because Node.js is not a target-1
-comparator.
+one. The barometer keeps breaking its trend lines as ADR 0091 says. Only the
+judgement of target 1 uses a narrower set of fields: the corpus, the subset, the
+driver, the QuickJS version, and the default production build with the driver's
+flags (see Terms). A Node.js version change alone does not move target 1 to a
+new segment, because Node.js is not a target-1 comparator.
 
 **QuickJS is the comparator for target 1**, at the version
 `.github/scripts/install-quickjs.sh` pins, built on the measuring machine.
