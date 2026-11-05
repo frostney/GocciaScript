@@ -2251,6 +2251,148 @@ class TriggerLockTest(unittest.TestCase):
         ADAPTER.release_lock(released)
 
 
+ALREADY_REVIEWED_REPLY = (
+    "<!-- coderabbit-ai-generated:v1 -->\n\n<!-- This is an auto-generated reply by CodeRabbit -->\n"
+    "<details>\n<summary>⚠️ Action not completed</summary>\n<dl>\n<dd>\n\n"
+    "Already reviewed the last commit. Use `@coderabbitai full review` to rerun a review of the entire changeset.\n\n"
+    "> Note: CodeRabbit is an incremental review system and does not re-review already reviewed commits. "
+    "This command is applicable only when automatic reviews are paused.\n\n</dd>\n</dl>\n</details>"
+)
+
+
+class AlreadyReviewedTest(unittest.TestCase):
+    """CodeRabbit declines a trigger on a commit it reviewed with a reply and starts no review.
+
+    Synthetic pull requests after three heads observed on 2026-10-30: CodeRabbit's check run
+    finished with no actionable comments, an incremental trigger followed, and CodeRabbit
+    replied "Already reviewed the last commit" 13 s to 4 min later with no status or check
+    run. The adapter reported blocked-unanswered 10 minutes after the trigger.
+    """
+
+    HEAD = "5e6f7a8b" * 5
+    BRANCH = "invoice-rounding"
+
+    def pull(self, clean: bool = True, reviewed: bool = True) -> dict[str, dict[str, Any]]:
+        commit = invented_commit(branch=self.BRANCH)
+        summary = [(35, REVIEWING_SUMMARY), (195, coverage_summary(self.HEAD, clean=clean))]
+        if reviewed:
+            commit["checkRuns"] = [{
+                "id": 4301, "name": "CodeRabbit", "app": {"slug": "coderabbitai"}, "status": "completed",
+                "conclusion": "success", "started_at": offset(30), "completed_at": offset(200),
+                "output": {"title": "Finished", "summary": "Result: Success - Review completed"},
+            }]
+        else:
+            summary = [(35, f"{ADAPTER.SUMMARY_MARKER}\n<!-- walkthrough_start -->")]
+        return {"A": invented_pull(1, 5, self.HEAD, self.BRANCH, commit=commit,
+                                   comments=[summary_comment(9301, *summary)])}
+
+    def declined(self, now: int, **options: bool) -> tuple[Invented, int]:
+        gh = Invented(self.pull(**options), offset(now))
+        gh.add_comment("A", "@coderabbitai review", offset(400))
+        return gh, gh.add_comment("A", ALREADY_REVIEWED_REPLY, offset(413), login="coderabbitai[bot]")
+
+    def test_a_declined_trigger_leaves_the_clean_review_complete(self) -> None:
+        for now in (420, 1001, 4000):
+            with self.subTest(now=now):
+                gh, reply = self.declined(now)
+                result = observe(gh, "A")
+                self.assertEqual(result["cleanReview"]["coveredCommitId"], self.HEAD)
+                self.assertEqual(result["triggers"][0]["alreadyReviewed"], {"commentId": reply, "createdAt": offset(413)})
+                self.assertEqual(result["state"], "clean-complete")
+
+    def test_until_the_reply_the_trigger_awaits_an_answer(self) -> None:
+        gh, _reply = self.declined(410)
+        gh.remove_comment("A", _reply)
+        self.assertEqual(observe(gh, "A")["state"], "triggered")
+
+    def test_a_run_on_a_declined_trigger_posts_nothing(self) -> None:
+        gh, _reply = self.declined(420)
+        final, _reason, _value = run(gh, "A", offset(2000))
+        self.assertEqual((final, posts(gh)), ("clean-complete", []))
+
+    def test_without_a_review_of_the_head_the_reply_blocks_instead_of_a_full_review(self) -> None:
+        gh = Invented(self.pull(clean=False), offset(1001))
+        gh.add_comment("A", "@coderabbitai review", offset(400))
+        self.assertEqual(observe(gh, "A")["state"], "blocked-unanswered")
+        gh.add_comment("A", ALREADY_REVIEWED_REPLY, offset(413), login="coderabbitai[bot]")
+        result = observe(gh, "A")
+        self.assertEqual((result["state"], result["nextMode"], result["since"]), ("blocked-already-reviewed", None, offset(413)))
+        final, _reason, _value = run(gh, "A", offset(3000))
+        self.assertEqual((final, posts(gh)), ("blocked-already-reviewed", []))
+
+    def test_a_run_whose_trigger_is_declined_stops_without_a_full_review(self) -> None:
+        gh = Invented(self.pull(reviewed=False), offset(200))
+
+        def reply(posted: float) -> None:
+            gh.add_comment("A", ALREADY_REVIEWED_REPLY, iso(posted + 13), login="coderabbitai[bot]")
+
+        answering(gh, "A", reply)
+        final, _reason, _value = run(gh, "A", offset(4000))
+        self.assertEqual(posts(gh), [("@coderabbitai review", offset(200))])
+        self.assertEqual(final, "blocked-already-reviewed")
+
+    def test_a_status_after_the_reply_decides(self) -> None:
+        gh, _reply = self.declined(500, clean=False)
+        gh.add_status("A", "Review in progress", offset(450), state="pending")
+        self.assertEqual(observe(gh, "A")["state"], "in-progress")
+
+    def test_a_trigger_after_the_reply_awaits_its_own_answer(self) -> None:
+        gh, _reply = self.declined(700)
+        gh.add_comment("A", "@coderabbitai review", offset(600))
+        result = observe(gh, "A")
+        self.assertEqual([trigger.get("alreadyReviewed") is not None for trigger in result["triggers"]], [True, False])
+        self.assertEqual(result["state"], "triggered")
+
+    def test_a_reply_answers_the_newest_trigger_before_it(self) -> None:
+        trigger = {"mode": "incremental", "createdAt": offset(0), "at": PUSHED}
+        triggers = [trigger | {"id": 1}, trigger | {"id": 2, "at": PUSHED + 60}, trigger | {"id": 3, "at": PUSHED + 300}]
+        replies = [{"id": 11, "user": {"login": "coderabbitai[bot]"}, "created_at": offset(100), "body": ALREADY_REVIEWED_REPLY},
+                   {"id": 12, "user": {"login": "maintainer"}, "created_at": offset(400), "body": ALREADY_REVIEWED_REPLY},
+                   {"id": 13, "user": {"login": "coderabbitai[bot]"}, "created_at": offset(500),
+                    "body": "Already reviewed the last commit."}]
+        found = ADAPTER.declined(replies, triggers)
+        self.assertEqual([(item["alreadyReviewed"] or {}).get("commentId") for item in found], [None, 11, None])
+
+    def test_a_marker_after_the_completed_status_is_awaited_before_blocking(self) -> None:
+        pulls = self.pull()
+        pulls["A"]["comments"][0]["versions"][1][0] = offset(400)
+        gh = Invented(pulls, offset(230))
+        gh.add_comment("A", "@coderabbitai review", offset(210))
+        gh.add_comment("A", ALREADY_REVIEWED_REPLY, offset(223), login="coderabbitai[bot]")
+        waiting = observe(gh, "A")
+        self.assertEqual((waiting["state"], waiting["boundAt"]), ("awaiting-automatic", offset(320)))
+        self.assertEqual(observed_at(gh, "A", offset(330))["state"], "blocked-already-reviewed")
+        self.assertEqual(observed_at(gh, "A", offset(500))["state"], "clean-complete")
+
+    def test_a_trigger_declined_on_another_pull_request_of_the_head_speaks_for_the_commit(self) -> None:
+        pulls = self.pull(clean=False)
+        pulls["B"] = invented_pull(2, 300, self.HEAD, self.BRANCH, commit=pulls["A"]["heads"][self.HEAD])
+        gh = Invented(pulls, offset(420))
+        gh.add_comment("B", "@coderabbitai review", offset(400))
+        gh.add_comment("B", ALREADY_REVIEWED_REPLY, offset(413), login="coderabbitai[bot]")
+        for now in (420, 1100):
+            with self.subTest(now=now):
+                result = observed_at(gh, "A", offset(now))
+                self.assertEqual(result["sharedWith"], [2])
+                self.assertEqual((result["state"], result["nextMode"]), ("blocked-already-reviewed", None))
+        final, _reason, _value = run(gh, "A", offset(3000))
+        self.assertEqual((final, posts(gh)), ("blocked-already-reviewed", []))
+
+    def test_the_recorder_keeps_the_reply_and_the_replay_counts_it(self) -> None:
+        reduced = recorder_module().reduce_body(ALREADY_REVIEWED_REPLY)
+        self.assertTrue(ADAPTER.already_reviewed({"user": {"login": "coderabbitai[bot]"}, "body": reduced}))
+        pulls, history = self.pull(), None
+        pulls["A"]["comments"] += [trigger_comment(9302, 400),
+                                   {"id": 9303, "user": {"login": "coderabbitai[bot]"}, "created_at": offset(413),
+                                    "versions": [[offset(413), reduced]]}]
+        history = REPLAY.History(list(pulls.values()))
+        self.assertEqual(history.violations(pulls["A"], self.HEAD, PUSHED + 1001, {"state": "clean-complete"}), [])
+        self.assertEqual(history.violations(pulls["A"], self.HEAD, PUSHED + 1001, {"state": "blocked-unanswered"}),
+                         ["answered-trigger"])
+        self.assertIn("declined-trigger", history.violations(
+            pulls["A"], self.HEAD, PUSHED + 1001, {"state": "trigger-full", "nextMode": "full"}))
+
+
 class ContractTest(unittest.TestCase):
     def test_only_the_two_included_review_commands_exist(self) -> None:
         self.assertEqual(set(ADAPTER.TRIGGERS.values()), {"@coderabbitai review", "@coderabbitai full review"})
