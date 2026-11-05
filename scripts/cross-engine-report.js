@@ -25,8 +25,41 @@ function expandGocciaEngines(requested, options) {
   return engines;
 }
 
+// The engines a run measures when --engines is not given. QuickJS is the
+// comparator for the first performance target (ADR 0176); `node-jitless` is
+// Node.js with V8's JIT tiers off, an interpreter-class context comparator; and
+// `node` is the JIT-enabled outside reference (ADR 0178). `jsc` is opt-in.
+const DEFAULT_ENGINES = ['goccia', 'qjs', 'node', 'node-jitless'];
+
+// Engine kinds and how each is started. `node-jitless` and `jsc` keep the
+// interpreter tier only: V8's Ignition with `--jitless`, and JavaScriptCore's
+// LLInt with `--useJIT=false` (the same option as JSC_useJIT=false). The flag
+// is an argument rather than an environment variable so that every sample's
+// recorded command shows it.
+const NODE_JITLESS_ARGS = ['--jitless'];
+const JSC_JITLESS_ARGS = ['--useJIT=false'];
+
+// Engine orders within a repetition (ADR 0178). `alternate` runs the given
+// order on even repetitions and its reverse on odd ones, so every pair of
+// engines swaps places from one repetition to the next; `fixed` runs the given
+// order every time.
+const ENGINE_ORDERS = ['alternate', 'fixed'];
+const DEFAULT_ENGINE_ORDER = 'alternate';
+
+function parseEngineOrder(value) {
+  if (!ENGINE_ORDERS.includes(value)) {
+    throw new Error(`--engine-order must be one of ${ENGINE_ORDERS.join(', ')}, got ${value}`);
+  }
+  return value;
+}
+
+function engineOrderForRepetition(engines, repetition, mode = DEFAULT_ENGINE_ORDER) {
+  if (mode === 'alternate' && repetition % 2 === 1) return [...engines].reverse();
+  return engines;
+}
+
 function resolveEngines(options) {
-  const requested = options.engines || ['goccia', 'qjs', 'node'];
+  const requested = options.engines || DEFAULT_ENGINES;
   const engines = [];
   const addGoccia = (name, command) => {
     const sourceCommit = name === 'goccia-baseline'
@@ -56,11 +89,61 @@ function resolveEngines(options) {
       engines.push({ name: 'qjs', kind: 'qjs', command: options.qjs, baseArgs: [] });
     } else if (name === 'node') {
       engines.push({ name: 'node', kind: 'node', command: options.node, baseArgs: [] });
+    } else if (name === 'node-jitless') {
+      engines.push({ name: 'node-jitless', kind: 'node-jitless', command: options.node, baseArgs: [...NODE_JITLESS_ARGS] });
+    } else if (name === 'jsc') {
+      engines.push({ name: 'jsc', kind: 'jsc', command: options.jsc || 'jsc', baseArgs: [...JSC_JITLESS_ARGS] });
     } else {
       throw new Error(`Unknown engine: ${name}`);
     }
   }
   return engines;
+}
+
+function commandText(command, args) {
+  const proc = spawnSync(command, args, { encoding: 'utf8' });
+  if (proc.error || proc.status !== 0) return '';
+  return (proc.stdout || proc.stderr || '').trim();
+}
+
+// The JavaScriptCore shell has no version option. The version is the one of
+// the package or framework that provides the shell: the Debian package on
+// Linux, the system framework's bundle version on macOS, otherwise unknown.
+function jscVersion(command, platform = process.platform) {
+  let resolved = command;
+  if (!command.includes(path.sep)) {
+    const located = commandText('sh', ['-c', 'command -v "$1"', 'sh', command]);
+    if (!located) return '';
+    resolved = located;
+  }
+  try {
+    resolved = fs.realpathSync(resolved);
+  } catch {
+    return '';
+  }
+  if (platform === 'darwin') {
+    const marker = resolved.indexOf('JavaScriptCore.framework');
+    if (marker < 0) return '';
+    const plist = path.join(resolved.slice(0, marker), 'JavaScriptCore.framework', 'Resources', 'Info.plist');
+    const version = commandText('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleVersion', plist]);
+    return version ? `JavaScriptCore ${version}` : '';
+  }
+  const owner = commandText('dpkg-query', ['-S', resolved]).split(/\r?\n/)[0] || '';
+  const packageName = owner.includes(':') ? owner.slice(0, owner.lastIndexOf(':')).trim() : '';
+  if (!packageName) return '';
+  const version = commandText('dpkg-query', ['-W', '-f=${Version}', packageName]);
+  return version ? `${packageName} ${version}` : '';
+}
+
+// The version string a report records for an engine.
+function engineVersion(engine) {
+  if (engine.kind === 'node' || engine.kind === 'node-jitless') return commandText(engine.command, ['--version']);
+  if (engine.kind === 'qjs') {
+    const proc = spawnSync(engine.command, ['-h'], { encoding: 'utf8' });
+    return `${proc.stdout || ''}${proc.stderr || ''}`.split(/\r?\n/)[0].trim();
+  }
+  if (engine.kind === 'jsc') return jscVersion(engine.command);
+  return commandText(engine.command, ['--version']);
 }
 
 function engineAllowedForTarget(engine, target) {
@@ -215,7 +298,10 @@ function classifyProcessOutcome(proc, parsed, stdout, stderr) {
   return 'ok';
 }
 
-function runEngineSample({ engine, target, fileName, repetition, options, marker, normalizeResult }) {
+// One process sample. `position` is the sample's place in its repetition's
+// engine order (0 is first), recorded with the engine's name so that a report
+// shows the order every sample ran in.
+function runEngineSample({ engine, target, fileName, repetition, position = null, options, marker, normalizeResult }) {
   const args = [];
   if (engine.kind === 'goccia') {
     args.push(fileName, ...engine.baseArgs, ...(target.gocciaFlags || []), ...profileArgs(options, target, engine, repetition));
@@ -251,6 +337,7 @@ function runEngineSample({ engine, target, fileName, repetition, options, marker
   return {
     engine: engine.name,
     repetition,
+    position,
     startedAt,
     outcome,
     ...(normalizeResult(parsed, target)),
@@ -414,7 +501,16 @@ function buildGeomeanRatios(targetReports) {
 module.exports = {
   COUNTER_EVENTS,
   COUNTER_KEYS,
+  DEFAULT_ENGINE_ORDER,
+  DEFAULT_ENGINES,
   DEFAULT_GOCCIA_FLAGS,
+  ENGINE_ORDERS,
+  JSC_JITLESS_ARGS,
+  NODE_JITLESS_ARGS,
+  engineOrderForRepetition,
+  engineVersion,
+  jscVersion,
+  parseEngineOrder,
   buildGeomeanRatios,
   buildMetricTargetSummary,
   checksumAgreement,

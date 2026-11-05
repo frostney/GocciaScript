@@ -21,11 +21,15 @@ type AwfyReport = {
     engines?: Array<{ name?: unknown; version?: unknown }>;
     options?: {
       repetitions?: unknown;
+      engineOrder?: unknown;
     };
   };
   targets?: Array<{
     name?: unknown;
     kind?: unknown;
+    innerIterations?: unknown;
+    warmupIterations?: unknown;
+    measuredIterations?: unknown;
     summary?: {
       engineStats?: Record<
         string,
@@ -54,6 +58,36 @@ function finiteRatio(value: unknown): number | null {
     : null;
 }
 
+// The measurement protocol (engine order and per-target iteration counts)
+// can change without a driver-version bump, so the trend line also breaks on
+// this key. Driver 1 reports carry no per-target warm protocol, so they have
+// none.
+function protocolKeyFromReport(report: AwfyReport): string | null {
+  const targets = Array.isArray(report.targets) ? report.targets : [];
+  const protocolTargets = targets.filter(
+    (target): target is typeof target & { name: string } =>
+      typeof target.name === "string",
+  );
+  if (
+    !protocolTargets.some(
+      (target) => typeof target.warmupIterations === "number",
+    )
+  ) {
+    return null;
+  }
+  const engineOrder =
+    typeof report.metadata?.options?.engineOrder === "string"
+      ? report.metadata.options.engineOrder
+      : "fixed";
+  const parts = protocolTargets
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map(
+      (target) =>
+        `${target.name}:${target.innerIterations}/${target.warmupIterations}/${target.measuredIterations}`,
+    );
+  return `${engineOrder}|${parts.join(",")}`;
+}
+
 export function summaryFromReport(report: AwfyReport) {
   const targets = Array.isArray(report.targets) ? report.targets : [];
   const workloadTargets = targets.filter((target) => target.kind !== "probe");
@@ -72,6 +106,15 @@ export function summaryFromReport(report: AwfyReport) {
     (name) => !reportedTargetNames.includes(name),
   ).length;
   const requiredEngines = ["goccia", "qjs", "node"];
+  // Reports from before the node-jitless comparator do not list it, and must
+  // not be marked failed for lacking it.
+  if (
+    (report.metadata?.engines ?? []).some(
+      (engine) => engine.name === "node-jitless",
+    )
+  ) {
+    requiredEngines.push("node-jitless");
+  }
   const failedWorkloadCount =
     missingWorkloadCount +
     workloadTargets.filter((target) => {
@@ -114,6 +157,9 @@ export function summaryFromReport(report: AwfyReport) {
     referenceRatios: {
       quickjs: finiteRatio(report.geomeanRatios?.goccia_over_qjs),
       node: finiteRatio(report.geomeanRatios?.goccia_over_node),
+      nodeJitless: finiteRatio(
+        report.geomeanRatios?.["goccia_over_node-jitless"],
+      ),
     },
     engineVersions,
     corpusCommit:
@@ -125,6 +171,7 @@ export function summaryFromReport(report: AwfyReport) {
         ? report.metadata.driver.version
         : null,
     targetNames,
+    protocolKey: protocolKeyFromReport(report),
   };
 }
 

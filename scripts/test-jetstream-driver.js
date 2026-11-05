@@ -6,8 +6,10 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { buildMetricTargetSummary, resolveEngines } = require('./cross-engine-report.js');
 const {
+  DRIVER_VERSION,
   buildJetStreamBundle,
   buildReport,
+  executionOrderFromSamples,
   parseArgs: parseDriverArgs,
   writeReport,
 } = require('./jetstream-driver.js');
@@ -68,6 +70,63 @@ console.log('jetstream-driver: CLI parsing...');
   assert(options.gocciaFlags.includes('--compat-var'), 'enables legacy var compatibility for upstream workloads');
   const ciOptions = parseCiArgs(['--jetstream-dir', 'suite', '--benchmark', 'tiny']);
   equal(ciOptions.benchmarks[0], 'tiny', 'CI report parses one workload shard');
+  equal(ciOptions.engines, 'goccia,qjs,node,node-jitless', 'CI report runs node-jitless by default');
+  equal(options.engineOrder, 'alternate', 'engines alternate their order by default');
+  equal(parseDriverArgs(['--engine-order', 'fixed']).engineOrder, 'fixed', 'parses the fixed engine order');
+  equal(parseDriverArgs(['--jsc=/opt/jsc']).jsc, '/opt/jsc', 'parses the JavaScriptCore shell path');
+  throws(() => parseDriverArgs(['--engine-order', 'random']), /--engine-order must be one of/, 'rejects an unknown engine order');
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'perf', 'jetstream', 'manifest.json'), 'utf8'));
+  equal(manifest.driver.version, DRIVER_VERSION, 'the manifest names the driver version the driver reports');
+}
+
+console.log('jetstream-driver: engine order and positions...');
+{
+  const order = executionOrderFromSamples([
+    { engine: 'goccia', repetition: 0, position: 0 },
+    { engine: 'qjs', repetition: 0, position: 1 },
+    { engine: 'goccia', repetition: 1, position: 1 },
+    { engine: 'qjs', repetition: 1, position: 0 },
+  ]);
+  equal(JSON.stringify(order), JSON.stringify([['goccia', 'qjs'], ['qjs', 'goccia']]), 'reads each repetition\'s order back from the samples');
+
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'jetstream-order-test-'));
+  try {
+    fs.mkdirSync(path.join(temporaryDirectory, 'workloads'));
+    fs.writeFileSync(path.join(temporaryDirectory, 'workloads', 'tiny.js'), [
+      'class Benchmark {',
+      '  runIteration() { let total = 0; for (let index = 0; index < 1000; index += 1) total += index; this.total = total; }',
+      '}',
+      '',
+    ].join('\n'));
+    const manifestFile = path.join(temporaryDirectory, 'manifest.json');
+    fs.writeFileSync(manifestFile, JSON.stringify({
+      jetStream: { commit: 'abc', benchmarks: { tiny: { files: ['workloads/tiny.js'], iterations: 2, worstCaseCount: 1 } } },
+    }));
+    const output = path.join(temporaryDirectory, 'report.json');
+    const run = spawnSync(process.execPath, [
+      path.join(__dirname, 'jetstream-driver.js'),
+      '--manifest', manifestFile,
+      '--jetstream-dir', temporaryDirectory,
+      '--benchmark', 'tiny',
+      '--engines', 'node,node-jitless',
+      '--repetitions', '2',
+      '--output', output,
+    ], { encoding: 'utf8' });
+    equal(run.status, 0, `runs node and node-jitless: ${run.stderr}`);
+    const report = JSON.parse(fs.readFileSync(output, 'utf8'));
+    const [target] = report.targets;
+    equal(report.metadata.driver.version, DRIVER_VERSION, 'the report names the driver version');
+    equal(report.metadata.options.engineOrder, 'alternate', 'the report names its engine order');
+    equal(JSON.stringify(target.executionOrder), JSON.stringify([['node', 'node-jitless'], ['node-jitless', 'node']]),
+      'the second repetition runs the reverse order');
+    equal(target.samples.map((sample) => `${sample.engine}@${sample.position}`).join(','),
+      'node@0,node-jitless@1,node-jitless@0,node@1', 'each sample records its engine and place');
+    assert(target.samples.find((sample) => sample.engine === 'node-jitless').command.includes('--jitless'),
+      'the jitless sample\'s command shows the flag');
+    assert(typeof report.geomeanRatios['node_over_node-jitless'] === 'number', 'the report has a ratio for each pair');
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 console.log('jetstream-driver: incremental report checkpoint...');
@@ -152,9 +211,9 @@ console.log('jetstream-driver: normalized reference ratios...');
 
 console.log('jetstream-ci-report: structural and outcome validation...');
 {
-  const manifest = { ciReport: { repetitions: 1, benchmarks: ['tiny'] } };
+  const manifest = { ciReport: { repetitions: 1, benchmarks: ['tiny'] }, driver: { version: 2 } };
   const report = {
-    metadata: { options: { repetitions: 1 } },
+    metadata: { driver: { version: 2 }, options: { repetitions: 1, engineOrder: 'alternate' } },
     targets: [{
       name: 'tiny',
       summary: {
@@ -167,6 +226,14 @@ console.log('jetstream-ci-report: structural and outcome validation...');
   equal(reportBenchmarks(manifest, ['tiny']).join(','), 'tiny', 'selects one configured workload shard');
   report.targets[0].summary.engineStats.goccia.timeout = 1;
   equal(validationFailures(report, manifest, ['goccia']).length, 1, 'surfaces measured timeout');
+  report.targets[0].summary.engineStats.goccia.timeout = 0;
+  report.metadata.options.engineOrder = 'fixed';
+  assert(validationFailures(report, manifest, ['goccia']).some((failure) => /alternate engine order/.test(failure)),
+    'requires the alternate engine order');
+  report.metadata.options.engineOrder = 'alternate';
+  report.metadata.driver.version = 1;
+  assert(validationFailures(report, manifest, ['goccia']).some((failure) => /driver version 2/.test(failure)),
+    'requires the manifest driver version');
 }
 
 console.log('jetstream-merge-reports: deterministic shard merge...');
@@ -180,7 +247,7 @@ console.log('jetstream-merge-reports: deterministic shard merge...');
       { name: 'goccia', kind: 'goccia', version: '0.8.1', sourceCommit: 'source123' },
       { name: 'qjs', kind: 'qjs', version: '2026-06-04' },
     ],
-    options: { repetitions: 1 },
+    options: { repetitions: 1, engineOrder: 'alternate' },
   };
   const target = (name, gocciaScore, qjsScore) => ({
     kind: 'jetstream',
@@ -236,6 +303,14 @@ console.log('jetstream-merge-reports: deterministic shard merge...');
     /reference-engine versions do not match/,
     'rejects mismatched Goccia binary source revisions',
   );
+  throws(
+    () => mergeReports([
+      { schemaVersion: 1, metadata, targets: [target('tiny', 10, 20)] },
+      { schemaVersion: 1, metadata: { ...metadata, options: { ...metadata.options, engineOrder: 'fixed' } }, targets: [target('small', 5, 20)] },
+    ], manifest),
+    /engine orders do not match/,
+    'rejects shards run in different engine orders',
+  );
 
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'jetstream-merge-test-'));
   try {
@@ -283,8 +358,30 @@ console.log('jetstream-comment: barometer framing...');
     geomeanRatios: { goccia_over_qjs: 2, goccia_over_node: 4 },
   });
   assert(comment.includes('Performance Barometer'), 'uses canonical dashboard vocabulary');
-  assert(comment.includes('not a product ranking'), 'avoids competitor framing');
+  assert(comment.includes('QuickJS is the bar for the interpreter-speed target'), 'names QuickJS as the target bar');
   assert(comment.includes('2.00×'), 'renders normalized ratio');
+  assert(!comment.includes('vs Node.js --jitless'), 'a report without node-jitless has no node-jitless column');
+
+  const withJitless = buildJetStreamComment({
+    metadata: { engines: [{ name: 'goccia' }, { name: 'qjs' }, { name: 'node' }, { name: 'node-jitless' }] },
+    targets: [{
+      name: 'tiny',
+      summary: {
+        checksumAgreement: { ok: true },
+        engineStats: {
+          goccia: { ok: 1, medianScore: 10 },
+          qjs: { ok: 1, medianScore: 20 },
+          node: { ok: 1, medianScore: 40 },
+          'node-jitless': { ok: 1, medianScore: 30 },
+        },
+        ratios: { goccia_over_qjs: 2, goccia_over_node: 4, 'goccia_over_node-jitless': 3 },
+      },
+    }],
+    geomeanRatios: { goccia_over_qjs: 2, goccia_over_node: 4, 'goccia_over_node-jitless': 3 },
+  });
+  assert(withJitless.includes('| vs QuickJS | vs Node.js --jitless | vs Node.js |'), 'shows a ratio column per comparator, QuickJS first');
+  assert(withJitless.includes('| 2.00× | 3.00× | 4.00× |'), 'renders each comparator ratio separately');
+  assert(withJitless.includes('Node.js --jitless 3.00×'), 'shows the node-jitless geomean');
 }
 
 console.log(`jetstream-driver: ${passed} assertions passed.`);

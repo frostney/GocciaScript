@@ -153,11 +153,12 @@ const workloadSummary = {
   workloadCount: 1,
   failedWorkloadCount: 1,
   repetitions: 1,
-  referenceRatios: { quickjs: null, node: null },
+  referenceRatios: { quickjs: null, node: null, nodeJitless: null },
   engineVersions: {},
   corpusCommit: "corpus",
   driverVersion: 1,
   targetNames: ["failed"],
+  protocolKey: null,
 };
 const conformanceSummary = {
   totalDiscovered: 1,

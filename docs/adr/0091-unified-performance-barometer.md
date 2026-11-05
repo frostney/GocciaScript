@@ -44,3 +44,5 @@ Consequences:
 - Measurement-version changes and failures are visible parts of the historical
   record instead of being smoothed over.
 - Web Tooling stays a separate Goccia-only viability lane.
+
+**Superseded in part by [ADR 0178](0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md):** the barometer adds a `node-jitless` ratio beside the QuickJS and Node.js ones, and engines alternate their order in both lanes.

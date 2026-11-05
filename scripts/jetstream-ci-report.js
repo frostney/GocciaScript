@@ -2,11 +2,11 @@
 
 const fs = require('fs');
 const { spawnSync } = require('child_process');
-const { expandGocciaEngines } = require('./cross-engine-report.js');
+const { DEFAULT_ENGINES: DRIVER_DEFAULT_ENGINES, expandGocciaEngines } = require('./cross-engine-report.js');
 
 const DEFAULT_MANIFEST = 'perf/jetstream/manifest.json';
 const DEFAULT_OUTPUT = 'jetstream-report.json';
-const DEFAULT_ENGINES = 'goccia,qjs,node';
+const DEFAULT_ENGINES = DRIVER_DEFAULT_ENGINES.join(',');
 const DEFAULT_TIMEOUT_MS = 300000;
 
 function usage() {
@@ -17,7 +17,10 @@ function usage() {
     '  --jetstream-dir <path>       Pinned WebKit/JetStream checkout',
     '  --output <path>              Report path',
     '  --benchmark <name>           Run one manifest workload; repeatable',
-    '  --engines <csv>              Engine order (default: goccia,qjs,node)',
+    `  --engines <csv>              Engines and their order (default: ${DEFAULT_ENGINES})`,
+    '  --qjs <path>                 QuickJS shell path (default: qjs)',
+    '  --node <path>                Node.js path for node and node-jitless (default: current node)',
+    '  --jsc <path>                 JavaScriptCore shell path for the jsc engine (default: jsc)',
     '  --goccia-baseline <path>     Optional baseline Goccia binary',
     '  --goccia-candidate <path>    Optional candidate Goccia binary',
     '  --goccia-commit <sha>         Source revision for the Goccia binary',
@@ -45,6 +48,9 @@ function parseArgs(argv) {
     gocciaBaselineCommit: '',
     gocciaCandidateCommit: '',
     benchmarks: [],
+    qjs: '',
+    node: '',
+    jsc: '',
     timeoutMs: DEFAULT_TIMEOUT_MS,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -66,6 +72,9 @@ function parseArgs(argv) {
     else if (arg === '--goccia-commit' || arg.startsWith('--goccia-commit=')) options.gocciaCommit = nextValue();
     else if (arg === '--goccia-baseline-commit' || arg.startsWith('--goccia-baseline-commit=')) options.gocciaBaselineCommit = nextValue();
     else if (arg === '--goccia-candidate-commit' || arg.startsWith('--goccia-candidate-commit=')) options.gocciaCandidateCommit = nextValue();
+    else if (arg === '--qjs' || arg.startsWith('--qjs=')) options.qjs = nextValue();
+    else if (arg === '--node' || arg.startsWith('--node=')) options.node = nextValue();
+    else if (arg === '--jsc' || arg.startsWith('--jsc=')) options.jsc = nextValue();
     else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) options.timeoutMs = positiveInteger(nextValue(), '--timeout-ms');
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -97,6 +106,13 @@ function validationFailures(report, manifest, engines, expectedBenchmarks = null
   const targets = new Map((report.targets || []).map((target) => [target.name, target]));
   if (report.metadata?.options?.repetitions !== expectedRepetitions) {
     failures.push(`expected ${expectedRepetitions} repetitions, report recorded ${report.metadata?.options?.repetitions}`);
+  }
+  const expectedDriverVersion = manifest.driver?.version;
+  if (expectedDriverVersion !== undefined && report.metadata?.driver?.version !== expectedDriverVersion) {
+    failures.push(`expected driver version ${expectedDriverVersion}, report recorded ${report.metadata?.driver?.version}`);
+  }
+  if (report.metadata?.options?.engineOrder !== 'alternate') {
+    failures.push(`expected the alternate engine order, report recorded ${report.metadata?.options?.engineOrder}`);
   }
   for (const name of benchmarks) {
     const target = targets.get(name);
@@ -131,11 +147,15 @@ function runReport(options, manifest) {
   if (options.gocciaCommit) args.push('--goccia-commit', options.gocciaCommit);
   if (options.gocciaBaselineCommit) args.push('--goccia-baseline-commit', options.gocciaBaselineCommit);
   if (options.gocciaCandidateCommit) args.push('--goccia-candidate-commit', options.gocciaCandidateCommit);
+  if (options.qjs) args.push('--qjs', options.qjs);
+  if (options.node) args.push('--node', options.node);
+  if (options.jsc) args.push('--jsc', options.jsc);
   args.push(
     '--manifest', options.manifestPath,
     '--repetitions', String(manifest.ciReport?.repetitions || 5),
     '--timeout-ms', String(options.timeoutMs),
     '--engines', options.engines,
+    '--engine-order', 'alternate',
     '--output', options.output,
   );
   const result = spawnSync(process.execPath, args, { stdio: 'inherit' });

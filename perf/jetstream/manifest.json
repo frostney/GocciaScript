@@ -47,7 +47,7 @@
   },
   "driver": {
     "script": "scripts/jetstream-driver.js",
-    "version": 1
+    "version": 2
   },
   "ciReport": {
     "repetitions": 5,

@@ -433,6 +433,7 @@ function performanceSuiteMarkdown(
     heading,
     "",
     `- QuickJS reference ratio: **${performanceRatio(point.quickjsRatio)}**`,
+    `- Node.js --jitless reference ratio (interpreter-class context): **${performanceRatio(point.nodeJitlessRatio)}**`,
     `- Node.js reference ratio: **${performanceRatio(point.nodeRatio)}**`,
     `- Workloads: ${compatibilityNumber(point.workloadCount)} (${compatibilityNumber(point.failedWorkloadCount)} failed)`,
     `- Commit: \`${point.shortSha}\``,

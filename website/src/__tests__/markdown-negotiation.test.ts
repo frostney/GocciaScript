@@ -44,6 +44,7 @@ const awfyPoint = {
   stale: false,
   quickjsRatio: 1.5,
   nodeRatio: 12.25,
+  nodeJitlessRatio: 3.5,
   failedWorkloadCount: 0,
   workloadCount: 14,
   repetitions: 3,
@@ -76,8 +77,10 @@ const performanceData: PerformanceDashboardData = {
         goccia: null,
         quickjs: 10,
         node: 1,
+        nodeJitless: null,
         quickjsRatio: null,
         nodeRatio: null,
+        nodeJitlessRatio: null,
       },
     ],
   },
@@ -323,6 +326,9 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain("# Performance Barometer");
     expect(markdown).toContain("## Are We Fast Yet");
     expect(markdown).toContain("- QuickJS reference ratio: **1.50x**");
+    expect(markdown).toContain(
+      "- Node.js --jitless reference ratio (interpreter-class context): **3.50x**",
+    );
     expect(markdown).toContain("- Node.js reference ratio: **12.25x**");
     expect(markdown).toContain("- Workloads: 14 (0 failed)");
     expect(markdown).toContain(

@@ -5,13 +5,19 @@ const fs = require('fs');
 const MARKER = '<!-- awfy-results -->';
 const COMPARISON_PAIR = 'goccia-candidate_over_goccia-baseline';
 const LEGACY_MARKER = '<!-- awfy-smoke -->';
+// The engines a report without engine metadata is read as having run.
 const DEFAULT_COMMENT_ENGINES = ['goccia', 'qjs', 'node'];
-const COMPARISON_COMMENT_ENGINES = ['goccia-baseline', 'goccia-candidate', 'qjs', 'node'];
+// Column order: Goccia, QuickJS (the first performance target's comparator),
+// the interpreter-class context engines, then JIT-enabled Node.js (ADR 0178).
+const ALL_COMMENT_ENGINES = ['goccia', 'qjs', 'node-jitless', 'jsc', 'node'];
+const COMPARISON_COMMENT_ENGINES = ['goccia-baseline', 'goccia-candidate', 'qjs', 'node-jitless', 'jsc', 'node'];
 const ENGINE_LABELS = {
   goccia: 'Goccia',
   'goccia-baseline': 'Goccia main',
   'goccia-candidate': 'Goccia PR',
   qjs: 'QuickJS',
+  'node-jitless': 'NodeJS --jitless',
+  jsc: 'JSC (no JIT)',
   node: 'NodeJS',
 };
 
@@ -41,9 +47,15 @@ function reportHasGocciaComparison(report) {
 // The comment's engine columns: those the report ran, when its metadata says,
 // so a local A/B of two Goccia binaries has no empty reference columns.
 function commentEngines(report) {
-  const engines = reportHasGocciaComparison(report) ? COMPARISON_COMMENT_ENGINES : DEFAULT_COMMENT_ENGINES;
+  const comparison = reportHasGocciaComparison(report);
   const ran = new Set((report?.metadata?.engines || []).map((engine) => engine.name));
-  return ran.size > 0 ? engines.filter((engine) => ran.has(engine)) : engines;
+  if (ran.size > 0) return (comparison ? COMPARISON_COMMENT_ENGINES : ALL_COMMENT_ENGINES).filter((engine) => ran.has(engine));
+  return comparison ? ['goccia-baseline', 'goccia-candidate', 'qjs', 'node'] : DEFAULT_COMMENT_ENGINES;
+}
+
+// Whether the report times warm (driver version 2 and later, ADR 0178).
+function reportIsWarm(report) {
+  return report?.metadata?.protocol?.timing === 'warm';
 }
 
 function targetStatus(target, engines = DEFAULT_COMMENT_ENGINES) {
@@ -242,12 +254,20 @@ function buildAwfyReportComment(report) {
   const countParts = [plural(awfyCount, 'pinned AWFY benchmark')];
   if (probeCount > 0) countParts.push(plural(probeCount, 'diagnostic probe'));
   const sampleCount = reportSampleCount(report);
+  const warm = reportIsWarm(report);
   body += `\n<sub>${countParts.join(' plus ')}. `;
   if (sampleCount !== null) body += `Medians from ${plural(sampleCount, 'interleaved sample')} per engine; `;
+  if (warm) {
+    body += 'each sample is one process, timed as the mean of its measured iterations after its warm-up iterations '
+      + '(counts per benchmark in `perf/awfy/manifest.json`), and engines alternate their order from one repetition to the next; ';
+  }
   body += 'raw JSON includes min/max/CV and is attached as the `awfy-report` artifact. ';
   if (hasComparison) body += 'Δ compares PR Goccia median against the same-runner main Goccia median; overlapping min/max ranges are treated as unchanged noise. ';
   if (hasComparison) body += counterNote(report, hasCounters);
-  body += 'Rows below 0.5ms are timer-floor sensitive.</sub>\n';
+  body += 'QuickJS is the bar for the interpreter-speed target; NodeJS --jitless and JSC with its JIT off are interpreter-class context that the target does not count, and NodeJS, with its JIT, is shown for scale. ';
+  body += warm
+    ? 'Times are per iteration; the 0.5ms timer floor applies to each sample\'s measured window, which holds many iterations.</sub>\n'
+    : 'Rows below 0.5ms are timer-floor sensitive.</sub>\n';
   return body;
 }
 
@@ -296,6 +316,7 @@ module.exports = {
   LEGACY_MARKER,
   MARKER,
   formatMicros,
+  reportIsWarm,
   targetStatus,
   unavailableComment,
 };

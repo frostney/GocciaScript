@@ -8,12 +8,22 @@ const ENGINE_LABELS = {
   'goccia-baseline': 'Goccia main',
   'goccia-candidate': 'Goccia PR',
   qjs: 'QuickJS',
+  'node-jitless': 'Node.js --jitless',
+  jsc: 'JSC (no JIT)',
   node: 'Node.js',
 };
+// The comparators Goccia gets a ratio against, each in a column of its own:
+// QuickJS for the first performance target, the interpreter-class context
+// engines, then JIT-enabled Node.js as the outside reference (ADR 0178).
+const COMPARATOR_ENGINES = ['qjs', 'node-jitless', 'jsc', 'node'];
 
 function reportEngines(report) {
   const names = (report.metadata?.engines || []).map((engine) => engine.name);
   return names.length > 0 ? names : ['goccia', 'qjs', 'node'];
+}
+
+function comparatorEngines(engines) {
+  return COMPARATOR_ENGINES.filter((engine) => engines.includes(engine));
 }
 
 function formatScore(value) {
@@ -46,18 +56,21 @@ function ratioFor(target, gocciaEngine, referenceEngine) {
 function buildJetStreamComment(report) {
   const engines = reportEngines(report);
   const gocciaEngine = engines.includes('goccia-candidate') ? 'goccia-candidate' : 'goccia';
+  const comparators = comparatorEngines(engines);
+  const label = (engine) => ENGINE_LABELS[engine] || engine;
   let body = `${MARKER}\n## JetStream 3 Performance Barometer\n\n`;
-  body += `| Workload | Status | ${engines.map((engine) => ENGINE_LABELS[engine] || engine).join(' | ')} | vs QuickJS | vs Node.js |\n`;
-  body += `|---|---|${engines.map(() => '---').join('|')}|---|---|\n`;
+  body += `| Workload | Status | ${engines.map(label).join(' | ')} | ${comparators.map((engine) => `vs ${label(engine)}`).join(' | ')} |\n`;
+  body += `|---|---|${engines.map(() => '---').join('|')}|${comparators.map(() => '---').join('|')}|\n`;
   for (const target of report.targets || []) {
     const scores = engines.map((engine) => formatScore(target.summary?.engineStats?.[engine]?.medianScore));
-    body += `| ${target.name} | ${targetStatus(target, engines)} | ${scores.join(' | ')} | `;
-    body += `${formatRatio(ratioFor(target, gocciaEngine, 'qjs'))} | ${formatRatio(ratioFor(target, gocciaEngine, 'node'))} |\n`;
+    const ratios = comparators.map((engine) => formatRatio(ratioFor(target, gocciaEngine, engine)));
+    body += `| ${target.name} | ${targetStatus(target, engines)} | ${scores.join(' | ')} | ${ratios.join(' | ')} |\n`;
   }
   const geomean = report.geomeanRatios || {};
-  body += `\n**Geomean reference ratio:** QuickJS ${formatRatio(geomean[`${gocciaEngine}_over_qjs`])}; `;
-  body += `Node.js ${formatRatio(geomean[`${gocciaEngine}_over_node`])}.\n`;
-  body += '\n<sub>1.00× means aligned; values above 1.00× mean Goccia was proportionally slower after normalizing JetStream’s higher-is-better score. This is a directional barometer across runtimes with different goals, not a product ranking. Raw samples and failure details remain in the `jetstream-report` artifact.</sub>\n';
+  body += `\n**Geomean reference ratio:** ${comparators
+    .map((engine) => `${label(engine)} ${formatRatio(geomean[`${gocciaEngine}_over_${engine}`])}`)
+    .join('; ')}.\n`;
+  body += '\n<sub>1.00× means aligned; values above 1.00× mean Goccia was proportionally slower after normalizing JetStream’s higher-is-better score. QuickJS is the bar for the interpreter-speed target; Node.js --jitless and JSC with its JIT off are interpreter-class context that the target does not count, and Node.js, with its JIT, is shown for scale. Engines alternate their order from one repetition to the next. Raw samples, each with its place in that order, and failure details remain in the `jetstream-report` artifact.</sub>\n';
   return body;
 }
 
@@ -81,4 +94,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { MARKER, buildJetStreamComment, formatRatio, formatScore, targetStatus };
+module.exports = { COMPARATOR_ENGINES, MARKER, buildJetStreamComment, comparatorEngines, formatRatio, formatScore, targetStatus };

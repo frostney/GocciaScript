@@ -6,7 +6,9 @@ const { expandGocciaEngines } = require('./awfy-driver.js');
 
 const DEFAULT_MANIFEST = 'perf/awfy/manifest.json';
 const DEFAULT_OUTPUT = 'awfy-report.json';
-const DEFAULT_ENGINES = 'goccia,qjs,node';
+const { DEFAULT_ENGINES: DRIVER_DEFAULT_ENGINES } = require('./cross-engine-report.js');
+
+const DEFAULT_ENGINES = DRIVER_DEFAULT_ENGINES.join(',');
 const DEFAULT_TIMEOUT_MS = 300000;
 
 function usage() {
@@ -17,7 +19,10 @@ function usage() {
     '  --manifest <path>    AWFY manifest path (default: perf/awfy/manifest.json)',
     '  --awfy-dir <path>    Path to are-we-fast-yet/benchmarks/JavaScript',
     '  --output <path>      Report path (default: awfy-report.json)',
-    '  --engines <csv>      Engine order (default: goccia,qjs,node)',
+    `  --engines <csv>      Engines and their order (default: ${DEFAULT_ENGINES})`,
+    '  --qjs <path>         QuickJS shell path (default: qjs)',
+    '  --node <path>        Node.js path for node and node-jitless (default: current node)',
+    '  --jsc <path>         JavaScriptCore shell path for the jsc engine (default: jsc)',
     '  --goccia-baseline <path>',
     '                       Optional baseline Goccia binary, interleaved as goccia-baseline',
     '  --goccia-candidate <path>',
@@ -35,6 +40,9 @@ function parseArgs(argv) {
     engines: DEFAULT_ENGINES,
     gocciaBaseline: '',
     gocciaCandidate: '',
+    qjs: '',
+    node: '',
+    jsc: '',
     timeoutMs: DEFAULT_TIMEOUT_MS,
     counters: false,
   };
@@ -62,6 +70,12 @@ function parseArgs(argv) {
       options.gocciaBaseline = nextValue();
     } else if (arg === '--goccia-candidate' || arg.startsWith('--goccia-candidate=')) {
       options.gocciaCandidate = nextValue();
+    } else if (arg === '--qjs' || arg.startsWith('--qjs=')) {
+      options.qjs = nextValue();
+    } else if (arg === '--node' || arg.startsWith('--node=')) {
+      options.node = nextValue();
+    } else if (arg === '--jsc' || arg.startsWith('--jsc=')) {
+      options.jsc = nextValue();
     } else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) {
       options.timeoutMs = parsePositiveInteger(nextValue(), '--timeout-ms');
     } else if (arg === '--counters') {
@@ -121,6 +135,13 @@ function validateReport(report, manifest, expectedEngines) {
   if (report.metadata?.options?.repetitions !== expectedRepetitions) {
     failures.push(`expected ${expectedRepetitions} repetitions, report recorded ${report.metadata?.options?.repetitions}`);
   }
+  const expectedDriverVersion = manifest.driver?.version;
+  if (expectedDriverVersion !== undefined && report.metadata?.driver?.version !== expectedDriverVersion) {
+    failures.push(`expected driver version ${expectedDriverVersion}, report recorded ${report.metadata?.driver?.version}`);
+  }
+  if (report.metadata?.options?.engineOrder !== 'alternate') {
+    failures.push(`expected the alternate engine order, report recorded ${report.metadata?.options?.engineOrder}`);
+  }
 
   for (const target of report.targets || []) {
     if (target.summary?.checksumAgreement?.ok === false) {
@@ -162,10 +183,14 @@ function runReport(options, manifest) {
   if (options.gocciaBaseline) args.push('--goccia-baseline', options.gocciaBaseline);
   if (options.gocciaCandidate) args.push('--goccia-candidate', options.gocciaCandidate);
   if (options.counters) args.push('--counters');
+  if (options.qjs) args.push('--qjs', options.qjs);
+  if (options.node) args.push('--node', options.node);
+  if (options.jsc) args.push('--jsc', options.jsc);
   args.push(
     '--repetitions', String(repetitions),
     '--timeout-ms', String(options.timeoutMs),
     '--engines', options.engines,
+    '--engine-order', 'alternate',
     '--output', options.output,
   );
 

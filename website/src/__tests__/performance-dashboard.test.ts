@@ -101,6 +101,183 @@ describe("Performance Barometer data", () => {
     expect(point.complete).toBe(false);
     expect(point.quickjsRatio).toBeNull();
     expect(point.nodeRatio).toBeNull();
+    expect(point.nodeJitlessRatio).toBeNull();
+  });
+
+  test("normalizes a driver 2 report with node-jitless", async () => {
+    const { performanceDashboardTestApi } = await import(
+      "@/lib/performance-dashboard"
+    );
+    const report = performanceDashboardTestApi.normalizeReport(
+      {
+        metadata: {
+          driver: { version: 2 },
+          corpus: { awfy: { commit: "awfy-sha" } },
+          engines: [
+            { name: "goccia", version: "0.8" },
+            { name: "qjs", version: "2026-06-04" },
+            { name: "node-jitless", version: "v24.1" },
+            { name: "node", version: "v24.1" },
+          ],
+        },
+        targets: [
+          {
+            name: "Tiny",
+            summary: {
+              engineStats: {
+                goccia: { ok: 5, medianMicros: 200 },
+                qjs: { ok: 5, medianMicros: 100 },
+                "node-jitless": { ok: 5, medianMicros: 80 },
+                node: { ok: 5, medianMicros: 50 },
+              },
+              ratios: {
+                goccia_over_qjs: 2,
+                "goccia_over_node-jitless": 2.5,
+                goccia_over_node: 4,
+              },
+            },
+          },
+          {
+            name: "Broken",
+            summary: {
+              engineStats: {
+                goccia: { ok: 5, medianMicros: 200 },
+                qjs: { ok: 5, medianMicros: 100 },
+                node: { ok: 5, medianMicros: 50 },
+              },
+            },
+          },
+        ],
+        geomeanRatios: {
+          goccia_over_qjs: 2,
+          "goccia_over_node-jitless": 2.5,
+          goccia_over_node: 4,
+        },
+      },
+      "awfy",
+    );
+    const [tiny, broken] = performanceDashboardTestApi.targetsFromReport(
+      report,
+      "awfy",
+    );
+    expect(tiny).toMatchObject({
+      status: "complete",
+      nodeJitless: 80,
+      nodeJitlessRatio: 2.5,
+    });
+    // The report lists node-jitless, so a target without its stats degrades.
+    expect(broken).toMatchObject({
+      status: "degraded",
+      failure: "node-jitless: missing",
+      nodeJitless: null,
+      nodeJitlessRatio: null,
+    });
+  });
+
+  test("keeps driver 1 reports without node-jitless complete", async () => {
+    const { performanceDashboardTestApi } = await import(
+      "@/lib/performance-dashboard"
+    );
+    const report = performanceDashboardTestApi.normalizeReport(
+      {
+        metadata: {
+          driver: { version: 1 },
+          corpus: { awfy: { commit: "awfy-sha" } },
+          engines: [
+            { name: "goccia", version: "0.8" },
+            { name: "qjs", version: "2026-06-04" },
+            { name: "node", version: "v24" },
+          ],
+        },
+        targets: [
+          {
+            name: "Tiny",
+            summary: {
+              engineStats: {
+                goccia: { ok: 5, medianMicros: 200 },
+                qjs: { ok: 5, medianMicros: 100 },
+                node: { ok: 5, medianMicros: 50 },
+              },
+              ratios: { goccia_over_qjs: 2, goccia_over_node: 4 },
+            },
+          },
+        ],
+        geomeanRatios: { goccia_over_qjs: 2, goccia_over_node: 4 },
+      },
+      "awfy",
+    );
+    expect(
+      performanceDashboardTestApi.targetsFromReport(report, "awfy")[0],
+    ).toMatchObject({
+      status: "complete",
+      failure: null,
+      nodeJitless: null,
+      nodeJitlessRatio: null,
+    });
+    const point = performanceDashboardTestApi.timelinePoint(
+      "awfy",
+      {
+        runId: 1,
+        runNumber: 1,
+        artifactId: 1,
+        runUrl: "https://example.test/run/1",
+        headSha: "abcdef123456",
+        shortSha: "abcdef12",
+        createdAt: "2026-07-12T00:00:00.000Z",
+      },
+      {
+        workloadCount: 1,
+        failedWorkloadCount: 0,
+        referenceRatios: { quickjs: 2, node: 4 },
+        driverVersion: 1,
+        targetNames: ["Tiny"],
+      },
+    );
+    expect(point).toMatchObject({
+      complete: true,
+      quickjsRatio: 2,
+      nodeRatio: 4,
+      nodeJitlessRatio: null,
+    });
+  });
+
+  test("breaks the compatibility key when the protocol changes", async () => {
+    const { performanceDashboardTestApi } = await import(
+      "@/lib/performance-dashboard"
+    );
+    const run = {
+      runId: 1,
+      runNumber: 1,
+      artifactId: 1,
+      runUrl: "https://example.test/run/1",
+      headSha: "abcdef123456",
+      shortSha: "abcdef12",
+      createdAt: "2026-07-12T00:00:00.000Z",
+    };
+    const summary = {
+      workloadCount: 1,
+      failedWorkloadCount: 0,
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: 3 },
+      driverVersion: 2,
+      targetNames: ["Tiny"],
+      protocolKey: "alternate|Tiny:10/3/5",
+    };
+    const key = (value: typeof summary | { protocolKey?: undefined }) =>
+      performanceDashboardTestApi.timelinePoint(
+        "awfy",
+        run,
+        value as typeof summary,
+      ).compatibilityKey;
+    const base = key(summary);
+    expect(key({ ...summary, protocolKey: "alternate|Tiny:10/4/5" })).not.toBe(
+      base,
+    );
+    expect(key({ ...summary, protocolKey: undefined })).not.toBe(base);
+    expect(key(summary)).toBe(base);
+    expect(
+      performanceDashboardTestApi.timelinePoint("awfy", run, summary)
+        .nodeJitlessRatio,
+    ).toBe(3);
   });
 
   test("builds retained history from daily summaries and reads only the latest report", async () => {
@@ -213,7 +390,7 @@ describe("Performance Barometer data", () => {
       workloadCount: 3,
       failedWorkloadCount: 2,
       repetitions: 5,
-      referenceRatios: { quickjs: 2, node: 4 },
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: null },
       engineVersions: {
         goccia: "0.8",
         qjs: "2026-06-04",
@@ -222,6 +399,121 @@ describe("Performance Barometer data", () => {
       corpusCommit: "release-sha",
       driverVersion: 1,
       targetNames: ["complete", "failed", "missing"],
+      protocolKey: null,
+    });
+  });
+
+  test("summarizes a driver 2 JetStream report with node-jitless", () => {
+    const report = {
+      metadata: {
+        driver: { version: 2 },
+        corpus: { jetStream: { commit: "release-sha" } },
+        engines: [
+          { name: "goccia", version: "0.8" },
+          { name: "qjs", version: "2026-06-04" },
+          { name: "node-jitless", version: "v24.1" },
+          { name: "node", version: "v24.1" },
+        ],
+        options: { repetitions: 5, engineOrder: "alternate" },
+      },
+      targets: [
+        {
+          name: "zeta",
+          iterations: 3,
+          summary: {
+            engineStats: {
+              goccia: { ok: 5 },
+              qjs: { ok: 5 },
+              "node-jitless": { ok: 5 },
+              node: { ok: 5 },
+            },
+          },
+        },
+        {
+          name: "alpha",
+          iterations: 20,
+          summary: {
+            engineStats: {
+              goccia: { ok: 5 },
+              qjs: { ok: 5 },
+              "node-jitless": { ok: 5 },
+              node: { ok: 5 },
+            },
+          },
+        },
+      ],
+      geomeanRatios: {
+        goccia_over_qjs: 2,
+        goccia_over_node: 4,
+        "goccia_over_node-jitless": 3,
+      },
+    };
+    expect(summaryFromReport(report)).toMatchObject({
+      failedWorkloadCount: 0,
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: 3 },
+      driverVersion: 2,
+      protocolKey: "alternate|alpha:20,zeta:3",
+    });
+    // A listed node-jitless engine is required once the report names it.
+    const failing = structuredClone(report);
+    const failingStats = (index: number) =>
+      failing.targets[index]?.summary.engineStats as Record<string, unknown>;
+    failingStats(0)["node-jitless"] = { timeout: 1 };
+    expect(summaryFromReport(failing).failedWorkloadCount).toBe(1);
+    delete failingStats(1)["node-jitless"];
+    expect(summaryFromReport(failing).failedWorkloadCount).toBe(2);
+  });
+
+  test("summarizes a driver 2 AWFY report with node-jitless and protocol", () => {
+    const stats = {
+      goccia: { ok: 5 },
+      qjs: { ok: 5 },
+      "node-jitless": { ok: 5 },
+      node: { ok: 5 },
+    };
+    const summary = summaryFromAwfyReport({
+      metadata: {
+        driver: { version: 2 },
+        corpus: { awfy: { commit: "awfy-sha" } },
+        engines: [
+          { name: "goccia", version: "0.8" },
+          { name: "qjs", version: "2026-06-04" },
+          { name: "node-jitless", version: "v24.1" },
+          { name: "node", version: "v24.1" },
+        ],
+        options: { repetitions: 5, engineOrder: "alternate" },
+      },
+      targets: [
+        {
+          name: "Richards",
+          kind: "awfy",
+          innerIterations: 10,
+          warmupIterations: 3,
+          measuredIterations: 5,
+          summary: { engineStats: stats },
+        },
+        {
+          name: "Bounce",
+          kind: "awfy",
+          innerIterations: 100,
+          warmupIterations: 2,
+          measuredIterations: 4,
+          summary: {
+            engineStats: { ...stats, "node-jitless": { crash: 1 } },
+          },
+        },
+      ],
+      geomeanRatios: {
+        goccia_over_qjs: 2,
+        goccia_over_node: 4,
+        "goccia_over_node-jitless": 3,
+      },
+    });
+    expect(summary).toMatchObject({
+      failedWorkloadCount: 1,
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: 3 },
+      driverVersion: 2,
+      protocolKey: "alternate|Bounce:100/2/4,Richards:10/3/5",
     });
   });
 
@@ -273,7 +565,8 @@ describe("Performance Barometer data", () => {
       workloadCount: 2,
       failedWorkloadCount: 1,
       targetNames: ["Bounce", "Richards"],
-      referenceRatios: { quickjs: 2, node: 4 },
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: null },
+      protocolKey: null,
     });
   });
 });
@@ -300,11 +593,12 @@ describe("JetStream Blob store", () => {
         workloadCount: 6,
         failedWorkloadCount: 0,
         repetitions: 5,
-        referenceRatios: { quickjs: 2, node: 4 },
+        referenceRatios: { quickjs: 2, node: 4, nodeJitless: null },
         engineVersions: { qjs: "2026-06-04", node: "v24" },
         corpusCommit: "release-sha",
         driverVersion: 1,
         targetNames: ["tiny"],
+        protocolKey: null,
       },
       reportJson,
     };
