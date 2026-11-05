@@ -79,14 +79,18 @@ begin
     // constructor has no "prototype" property (§10.3).
     FFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(Invoke,
       EVAL_NAME, 1);
-    // The realm slot keeps the function alive, so the direct-eval identity
-    // check still holds after a script replaces or deletes the global.
-    InstallRealmEvalFunction(FEngine.Realm, FFunction);
     // §19: { [[Writable]]: true, [[Enumerable]]: false,
-    // [[Configurable]]: true }.
+    // [[Configurable]]: true }. This is the step that can throw (a
+    // non-extensible global, or a non-configurable `eval` the script defined),
+    // so it runs before the realm slot is set and before EnableEval registers
+    // the host: a failed install leaves the engine as it was, and a later
+    // EnableEval can retry.
     (FEngine.Realm.GlobalObject as TGocciaObjectValue).DefineProperty(
       EVAL_NAME, TGocciaPropertyDescriptorData.Create(FFunction,
         [pfWritable, pfConfigurable]));
+    // The realm slot keeps the function alive, so the direct-eval identity
+    // check still holds after a script replaces or deletes the global.
+    InstallRealmEvalFunction(FEngine.Realm, FFunction);
   finally
     RealmScope.Free;
   end;
@@ -125,8 +129,13 @@ begin
   if IsEvalEnabled(AEngine) then
     Exit;
   Host := TGocciaEvalHost.Create(AEngine);
+  try
+    Host.Install;
+  except
+    Host.Free;
+    raise;
+  end;
   AEngine.AddExtension(Host);
-  Host.Install;
 end;
 
 end.

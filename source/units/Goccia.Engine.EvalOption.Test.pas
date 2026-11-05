@@ -55,6 +55,8 @@ type
     procedure TestDirectEvalInStrictDefaultEngine;
     procedure TestDirectEvalFollowsRealmEvalNotGlobalName;
     procedure TestShadowRealmChildGetsEval;
+    procedure TestOptionOutlivesTheGlobalBinding;
+    procedure TestFailedEnableEvalLeavesTheOptionOff;
     procedure TestEvalCallsAreAudited;
   public
     procedure BeforeAll; override;
@@ -107,6 +109,10 @@ begin
     TestDirectEvalFollowsRealmEvalNotGlobalName);
   Test('A ShadowRealm child of an eval-enabled realm gets its own eval',
     TestShadowRealmChildGetsEval);
+  Test('The option outlives a script deleting or replacing the global',
+    TestOptionOutlivesTheGlobalBinding);
+  Test('A failed EnableEval leaves the option off and the realm untouched',
+    TestFailedEnableEvalLeavesTheOptionOff);
   Test('Direct and indirect eval calls report eval.call audit events',
     TestEvalCallsAreAudited);
 end;
@@ -379,6 +385,76 @@ begin
     'indirect eval is enabled', Lines)).ToBe(1);
   Expect<Integer>(CountEvents('eval.call|allow|eval',
     'direct eval is enabled', Lines)).ToBe(1);
+end;
+
+procedure TEvalOptionTests.TestOptionOutlivesTheGlobalBinding;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+begin
+  { Feature detection reads the global, which a script can delete or replace;
+    IsEvalEnabled reads the host's choice and does not change. }
+  Source := TStringList.Create;
+  Source.Text := 'globalThis.result = "";' +
+    'delete globalThis.eval;' +
+    'const deleted = typeof eval;' +
+    'globalThis.eval = 42;' +
+    'globalThis.result = deleted + "," + typeof eval;';
+  Engine := TGocciaEngine.Create('eval-option.js', Source);
+  try
+    Engine.Compatibility := NON_STRICT_COMPATIBILITY;
+    EnableEval(Engine);
+    Engine.Execute;
+    Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('result').ToStringLiteral.Value).ToBe('undefined,number');
+    Expect<Boolean>(IsEvalEnabled(Engine)).ToBe(True);
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TEvalOptionTests.TestFailedEnableEvalLeavesTheOptionOff;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Failures: Integer;
+  I: Integer;
+begin
+  { The script makes the global object non-extensible, so installing the
+    global throws. The option must stay off: no registered host, no realm
+    %eval%, no eval for a ShadowRealm child, and a later call retries instead
+    of returning early. }
+  Source := TStringList.Create;
+  Source.Text := 'globalThis.result = "";' +
+    'Object.preventExtensions(globalThis);';
+  Engine := TGocciaEngine.Create('eval-option.js', Source);
+  try
+    Engine.Compatibility := NON_STRICT_COMPATIBILITY;
+    EnableShadowRealm(Engine);
+    Engine.Execute;
+    Failures := 0;
+    for I := 1 to 2 do
+      try
+        EnableEval(Engine);
+      except
+        on E: Exception do
+          Inc(Failures);
+      end;
+    Expect<Integer>(Failures).ToBe(2);
+    Expect<Boolean>(IsEvalEnabled(Engine)).ToBe(False);
+    Source.Text := 'globalThis.result = [typeof eval,' +
+      ' new ShadowRealm().evaluate("typeof eval"),' +
+      ' (() => { try { return eval("1"); }' +
+      ' catch (e) { return e.constructor.name; } })()].join(",");';
+    Engine.Execute;
+    Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('result').ToStringLiteral.Value).ToBe(
+      'undefined,undefined,ReferenceError');
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
 end;
 
 procedure TEvalOptionTests.TestEvalCallsAreAudited;

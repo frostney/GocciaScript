@@ -26,8 +26,12 @@ no presets.
 ### An installer in the `EnableShadowRealm` style
 
 `EnableEval(Engine)` in `Goccia.Builtins.GlobalEval` installs `globalThis.eval`
-as the realm's `%eval%`. `IsEvalEnabled(Engine)` reports whether it has run. It
-is off by default, idempotent, and an engine cannot turn it off again.
+as the realm's `%eval%`. `IsEvalEnabled(Engine)` reports whether it has completed. It
+is off by default, idempotent, and an engine cannot turn it off again. The
+option and the global are separate: a script can delete or replace
+`globalThis.eval`, which changes what feature detection sees but not
+`IsEvalEnabled`. An install that throws, such as one on a non-extensible global
+object, registers nothing, so the option stays off and a later call can retry.
 
 It is an installer, like `EnableShadowRealm`, and not an `Enabled` toggle like
 `FunctionConstructor.Enabled`. The `Function` constructor is an intrinsic that
