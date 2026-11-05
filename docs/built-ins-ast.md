@@ -52,7 +52,7 @@ Every node is `{ kind, start, end, loc, children }`, plus `typeOnly` on the
 kinds a type-level declaration or a module specifier can have (below), and every comment is
 `{ kind, start, end, loc }` with `kind` either `"Line"` or `"Block"`.
 `start` and `end` are zero-based offsets into `source`, `end` exclusive;
-`loc.start` and `loc.end` are `{ line, column }` with one-based lines.
+`loc.start` and `loc.end` are `{ line, column }` with one-based lines and columns.
 
 A syntax error in the parsed text is a `SyntaxError` naming its position; it
 does not abort the caller's own run unless the caller lets it.
