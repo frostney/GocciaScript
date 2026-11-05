@@ -279,10 +279,16 @@ these converts through the system code page. That is the locale's code page on
 Linux and macOS, usually UTF-8, and the ANSI code page (1252 on most systems)
 on Windows, where a character outside it comes back as `?`. On Windows the
 `ProcessEncoding` unit makes UTF-8 the code page of those conversions and of
-the names the RTL returns, and of `Output`, `ErrOutput` and `StdErr` when they
-are redirected to a file or a pipe; a console keeps its own output code page. A
-unit that converts strings through the RTL before `FileUtils` or the console
-built-in is initialized lists it in its uses. Because the setting is
+the names the RTL returns, and of `Output`, `StdOut`, `ErrOutput` and `StdErr`,
+so output redirected to a file or a pipe is UTF-8 bytes. When one of those
+handles is a console, the `ConsoleOutput` unit replaces the text file's write
+function: each flush converts the UTF-8 in the buffer to UTF-16 and writes it
+with `WriteConsoleW`, so every `Write` and `WriteLn` to the console shows
+characters outside the console's code page, and the code page itself is never
+changed. The RTL opens the standard text files again for each new thread, so
+this covers the main thread, which writes the output the thread pool's workers
+capture. A unit that converts strings through the RTL before `FileUtils` or
+the console built-in is initialized lists it in its uses. Because the setting is
 process-wide, it also applies to an application that embeds the engine. On
 Linux and macOS the unit installs `cwstring`, which converts through iconv, and
 in front of it a direct conversion for ASCII text to and from UTF-8 or
