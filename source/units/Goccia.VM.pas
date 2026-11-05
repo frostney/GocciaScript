@@ -941,6 +941,7 @@ uses
   Goccia.Values.EnumValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
+  Goccia.Values.Formatting,
   Goccia.Values.FunctionBase,
   Goccia.Values.GeneratorValue,
   Goccia.Values.HoleValue,
@@ -3568,7 +3569,7 @@ begin
     Exit(CreateIteratorResult(Value, True));
   end;
   if not ReturnMethod.IsCallable then
-    ThrowTypeError('Iterator return is not callable');
+    ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_RETURN]));
 
   CallArgs := TGocciaArgumentsCollection.Create([Value]);
   try
@@ -3620,7 +3621,7 @@ begin
      not (ThrowMethod is TGocciaNullLiteralValue) then
   begin
     if not ThrowMethod.IsCallable then
-      ThrowTypeError('Iterator throw is not callable');
+      ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_THROW]));
     CallArgs := TGocciaArgumentsCollection.Create([Value]);
     try
       Exit(InvokeCallable(ThrowMethod, CallArgs, FIteratorValue));
@@ -3635,7 +3636,7 @@ begin
      not (ReturnMethod is TGocciaNullLiteralValue) then
   begin
     if not ReturnMethod.IsCallable then
-      ThrowTypeError('Iterator return is not callable');
+      ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_RETURN]));
     CallArgs := TGocciaArgumentsCollection.Create;
     try
       ReturnResult := AwaitValue(InvokeCallable(ReturnMethod, CallArgs,
@@ -3647,7 +3648,7 @@ begin
       ThrowTypeError('Iterator return result is not an object');
   end;
 
-  ThrowTypeError('Iterator throw is not callable');
+  ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_THROW]));
   Result := TGocciaUndefinedLiteralValue.UndefinedValue;
 end;
 
@@ -4015,7 +4016,7 @@ begin
     end;
 
     if not ReturnMethod.IsCallable then
-      ThrowTypeError('Iterator return is not callable');
+      ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_RETURN]));
 
     if Assigned(AArgs) and (AArgs.Length > 0) then
       CallArgs := TGocciaArgumentsCollection.Create([Value])
@@ -4104,7 +4105,7 @@ begin
        not (ThrowMethod is TGocciaNullLiteralValue) then
     begin
       if not ThrowMethod.IsCallable then
-        ThrowTypeError('Iterator throw is not callable');
+        ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_THROW]));
       CallArgs := TGocciaArgumentsCollection.Create([Value]);
       try
         IteratorResult := InvokeCallable(ThrowMethod, CallArgs, FIteratorValue);
@@ -4129,7 +4130,7 @@ begin
        not (ReturnMethod is TGocciaNullLiteralValue) then
     begin
       if not ReturnMethod.IsCallable then
-        ThrowTypeError('Iterator return is not callable');
+        ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_RETURN]));
       CallArgs := TGocciaArgumentsCollection.Create;
       try
         IteratorResult := InvokeCallable(ReturnMethod, CallArgs, FIteratorValue);
@@ -4140,7 +4141,7 @@ begin
         ThrowTypeError('Iterator return result is not an object');
     end;
     ClearIteratorState;
-    ThrowTypeError('Iterator throw is not callable');
+    ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_THROW]));
   except
     on E: EGocciaBytecodeThrow do
       Result := PromiseReject(E.ThrownValue);
@@ -4561,13 +4562,14 @@ begin
             begin
               if not (Value is TGocciaObjectValue) then
                 ThrowTypeError('Iterator return result is not an object');
-              ThrowTypeError('Iterator throw is not callable');
+              ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_THROW]));
             end;
           adpNextResult, adpThrowResult, adpReturnResult:
             begin
               NextResult := Value;
               if not (NextResult is TGocciaObjectValue) then
-                ThrowTypeError('Iterator result is not an object');
+                ThrowTypeError(Format(SErrorIteratorResultNotObject,
+                  [FormatForDisplay(NextResult)]));
               DoneValue := NextResult.GetProperty(PROP_DONE);
               Done := Assigned(DoneValue) and DoneValue.ToBooleanLiteral.Value;
               Value := NextResult.GetProperty(PROP_VALUE);
@@ -4630,9 +4632,9 @@ begin
             begin
               Method := Receiver.GetProperty(PROP_RETURN);
               if MethodIsMissing(Method) then
-                ThrowTypeError('Iterator throw is not callable');
+                ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_THROW]));
               if not Method.IsCallable then
-                ThrowTypeError('Iterator return is not callable');
+                ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_RETURN]));
               Roots.Add(Method);
               CallArgs := TGocciaArgumentsCollection.Create;
               try
@@ -4651,7 +4653,12 @@ begin
         end;
       end;
       if not Assigned(Method) or not Method.IsCallable then
-        ThrowTypeError('Iterator method is not callable');
+        case Operation of
+          bgrkReturn: ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_RETURN]));
+          bgrkThrow: ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_THROW]));
+        else
+          ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_NEXT]));
+        end;
       Roots.Add(Method);
       CallArgs := TGocciaArgumentsCollection.Create([Value]);
       try
@@ -4727,7 +4734,7 @@ var
       if not ReturnMethod.IsCallable then
       begin
         ClearDelegateState;
-        ThrowTypeError('Iterator return is not callable');
+        ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_RETURN]));
       end;
       CallArgs := TGocciaArgumentsCollection.Create;
       try
@@ -4743,7 +4750,7 @@ var
       end;
     end;
     ClearDelegateState;
-    ThrowTypeError('Iterator throw is not callable');
+    ThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_THROW]));
   end;
 begin
   if Assigned(FClosure) and Assigned(FClosure.Template) and
@@ -4792,7 +4799,7 @@ begin
              not (NextResult is TGocciaNullLiteralValue) then
           begin
             if not NextResult.IsCallable then
-              ClearDelegateAndThrowTypeError('Iterator return is not callable');
+              ClearDelegateAndThrowTypeError(Format(SErrorIteratorMethodNotCallable, [PROP_RETURN]));
             CallArgs := TGocciaArgumentsCollection.Create([ReturnResumeValue]);
             try
               NextResult := CallDelegateMethod(NextResult,
