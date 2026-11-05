@@ -20,8 +20,8 @@ deterministic, with a fixed clock and seeded randomness.
   a passing test into a failure fails CI. The
   [compatibility dashboard](https://www.gocciascript.dev/compatibility) shows
   the current result by area, rendered from the published reports.
-- **Tested beyond the spec.** 15,000+ JavaScript tests in 1,800+ files run on
-  every pull request, and on six targets on main, with differential suites
+- **Tested beyond the spec.** 17,000+ JavaScript tests run on every pull
+  request, and on six targets on main, with differential suites
   checked against Bun and Vitest.
 - **Fuzzed and memory-checked.** Every night the engine and its heap snapshot
   reader are [fuzzed](https://github.com/frostney/GocciaScript/actions/workflows/fuzz.yml),
@@ -186,10 +186,10 @@ Core built-ins include `Math`, `JSON`, `Object`, `Function`, `Array`, `Boolean`,
 `ArrayBuffer`, `SharedArrayBuffer`, `DataView`, `Atomics`, and TypedArrays
 (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`,
 `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`,
-`BigInt64Array`, `BigUint64Array`), alongside the global functions
-`queueMicrotask`, `structuredClone`, `atob`, and `btoa`. The loader runtime
-profile (applied by `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and
-`GocciaBenchmarkRunner`) adds
+`BigInt64Array`, `BigUint64Array`), alongside the global functions `atob` and
+`btoa`. The loader runtime profile (applied by `GocciaRunner`, `GocciaREPL`,
+`GocciaTestRunner`, and `GocciaBenchmarkRunner`) adds the global functions
+`queueMicrotask` and `structuredClone`, and
 `console`, `performance`, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only),
 `AbortController`, `AbortSignal`, `EventTarget`, `Event`, `URL`,
 `URLSearchParams`, `TextEncoder`, and `TextDecoder`. Error constructors include `Error`, `EvalError`, `TypeError`,
@@ -198,7 +198,7 @@ profile (applied by `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and
 
 Non-standard data-format APIs and SemVer are import-only Goccia runtime modules, not auto-installed globals: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. They expose named exports only; use `import * as CSV from "goccia:csv"` when you want the namespace-object shape. There is no default export.
 
-`goccia:ast` is an experimental runtime module behind `--experimental-ast`. It exposes one `parse` function that returns a source file's statement structure — kinds, offsets, line/column, nesting — plus its comments and, on request, every token (`tokens: true`) and its expressions, object properties, parameters and class members (`expressions: true`), so a lint rule, a formatter, a codemod or a check that needs to know what is code can be a GocciaScript program. Every offset and position is into the text that was passed, including for a `.tsx` file the engine rewrote before parsing. See [AST Built-ins](docs/built-ins-ast.md), [ADR 0117](docs/adr/0117-javascript-visible-ast-module.md), [ADR 0118](docs/adr/0118-original-file-source-ranges.md), [ADR 0162](docs/adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md), and [ADR 0163](docs/adr/0163-goccia-ast-reports-the-committed-token-stream.md).
+`goccia:ast` is an experimental runtime module behind `--experimental-ast`. It exposes one `parse` function that returns a source file's statement structure — kinds, offsets, line/column, nesting — plus its comments and, on request, every token (`tokens: true`) and its expressions, object properties, parameters, class members, module specifiers and import attributes, and the erased type syntax — annotations, generics, overload signatures, `this` parameters and `declare module` names (`expressions: true`), so a lint rule, a formatter, a codemod or a check that needs to know what is code can be a GocciaScript program. Every offset and position is into the text that was passed, including for a `.tsx` file the engine rewrote before parsing. See [AST Built-ins](docs/built-ins-ast.md), [ADR 0117](docs/adr/0117-javascript-visible-ast-module.md), [ADR 0118](docs/adr/0118-original-file-source-ranges.md), [ADR 0161](docs/adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md), [ADR 0162](docs/adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md), [ADR 0163](docs/adr/0163-goccia-ast-reports-the-committed-token-stream.md), [ADR 0168](docs/adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md), and [ADR 0172](docs/adr/0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md).
 
 `node:async_hooks` is an import-only module too, at Node's own address. It exports `AsyncLocalStorage` and `AsyncResource`, named and on the default export; the `async_hooks` observer API (`createHook`, `executionAsyncId`, and the rest) is out of scope. The engine propagates the async context, so a store bound with `run` survives `await` and every promise-reaction continuation. See the [Async Context reference](docs/built-ins-async-context.md) and [ADR 0112](docs/adr/0112-native-async-local-storage.md).
 
@@ -247,7 +247,7 @@ Linux (x64 and arm64) and Windows (x64 and x86):
 curl -fsSL https://www.gocciascript.dev/install | sh
 
 # a pinned version
-curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.15.0 sh
+curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.16.0 sh
 
 # macOS with Homebrew
 brew install frostney/tap/gocciascript
@@ -342,7 +342,7 @@ Use one fixed JavaScript-visible clock, UTC time zone, and portable random strea
 
 Timeouts and profiling still use the real monotonic clock. The equivalent config key is `"deterministic": true`; embedders can inject their own clock and RNG providers through the engine host environment.
 
-For repeatable profile counts across a file or directory, use `--profile-deterministic --profile-output=counts.json`; timing fields are zero. See [Profiling](docs/profiling.md#directories-and-deterministic-captures).
+For repeatable profile counts across a file or directory, use `--profile-deterministic --profile-output=counts.json`; timing fields are zero. See [Profiling](docs/profiling.md#directories-and-deterministic-captures). `--profile=compile` reports lex, parse and compile time and the compiler's work per source function, before execution ([Profiling — Compile Profile](docs/profiling.md#compile-profile---profilecompile)).
 
 For custom providers, pass a JavaScript module to `--host-environment` or implement the Pascal host interfaces. See [Host Environment](docs/host-environment.md) for both examples and the provider contract.
 
@@ -354,7 +354,7 @@ For custom providers, pass a JavaScript module to `--host-environment` or implem
 
 ### Run Tests
 
-GocciaScript has 15,000+ JavaScript end-to-end tests across 1,800+ test files, covering language features, built-in objects, and edge cases.
+GocciaScript has 17,000+ JavaScript end-to-end tests, covering language features, built-in objects, and edge cases.
 
 Some test directories request permissions in their configs, so accept them for
 the run with `-P` (or trust the suite once per checkout with
@@ -382,7 +382,7 @@ See [Testing](docs/testing.md) for test organization and [Build System](docs/bui
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js
 ```
 
-The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`, `compact-json` (the same envelope as `json` without `build`, `memory`, `stdout`, or `stderr`). Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters). Retained AWFY and JetStream reference measurements are published through the [Performance Barometer](https://gocciascript.dev/performance).
+The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/compile/execute). Output formats: `console` (default), `text`, `csv`, `json`, `compact-json` (the same envelope as `json` without `build`, `memory`, `stdout`, or `stderr`). Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters). Retained AWFY and JetStream reference measurements are published through the [Performance Barometer](https://gocciascript.dev/performance).
 
 ## Recommended-profile quick tour
 
@@ -467,7 +467,8 @@ and [Build System](docs/build-system.md#prerequisites).
 Native hosts can embed GocciaScript to run portable JavaScript with
 application-specific globals, modules, capabilities, and limits. A host can
 answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
-mark sandbox paths read-only, and snapshot a paused run's heap to restore it in
+mark sandbox paths read-only, stop a run from another thread through an
+[abort handle](docs/embedding.md#aborting-a-run-from-another-thread), and snapshot a paused run's heap to restore it in
 a fresh engine ([Heap Snapshots](docs/heap-snapshots.md)). See
 [Embedding the Engine](docs/embedding.md).
 
@@ -506,7 +507,7 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 | [Type Annotations](docs/type-annotations.md) | TypeScript-compatible type syntax, `--strict-types`, and the `<` disambiguation rules |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
 | [FFI Built-ins](docs/built-ins-ffi.md) | Native libraries, aggregate types, callbacks, lifetimes, and safety limits |
-| [AST Built-ins](docs/built-ins-ast.md) | The experimental `goccia:ast` module: statement and expression views, ranges, and comments |
+| [AST Built-ins](docs/built-ins-ast.md) | The experimental `goccia:ast` module: statement and expression views, type syntax, ranges, tokens, and comments |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |
 | [Binary Data Built-ins](docs/built-ins-binary-data.md) | ArrayBuffer, SharedArrayBuffer, TypedArray API |
 | [Sandbox Search Built-ins](docs/built-ins-sandbox-search.md) | `fs.globSync`, and `grep` and `fuzzyFind` from `goccia:search`, with their shared test vectors |
