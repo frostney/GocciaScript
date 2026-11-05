@@ -455,8 +455,9 @@ Default categories: `built-ins, harness, intl402, language, staging`
   [#2069](https://github.com/frostney/GocciaScript/issues/2069) adds it
   once the runner's `IsHTMLDDA` harness clash and the HTML-like comment
   tests reported as wrapper-infra are fixed. Until then, run it with
-  `--categories=annexB`. New Annex B surfaces sit behind a compatibility
-  flag that the runner's engine profile turns on. See
+  `--categories=annexB`. New Annex B surfaces will go behind a
+  compatibility flag, added by the 0.18.0 Annex B work, that the runner's
+  engine profile turns on. See
   [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 - `intl402` covers Intl APIs (ECMA-402); tests exercise
   `Intl.getCanonicalLocales`, constructors, and formatting operations.

@@ -87,7 +87,7 @@ describe("GocciaScript positioning", () => {
       /non-strict Script semantics/i,
       /private test262 host.+conformance/i,
       /Annex B.+test262 conformance target/i,
-      /new ones sit behind a compatibility flag/i,
+      /new ones will go behind an opt-in compatibility flag/i,
     ]);
     expect(ECMASCRIPT_SCOPE_ANSWER).not.toMatch(/not a pre-1\.0 target/i);
   });

@@ -40,12 +40,14 @@ Annex B is part of GocciaScript's conformance target.
   does `cfVar` and `cfNonStrictMode`. The default profile keeps its modern
   shape, and a host that needs the legacy surface turns on one flag. The 0.18.0
   Annex B work introduces the flag; this ADR does not add it.
-- The flag follows the existing naming rule. Each compatibility flag is one
+- The flag follows the existing naming rule. Each `--compat-*` flag is one
   `TGocciaCompatibility` member (`Goccia.SourcePipeline.pas`) and one
   `SOURCE_COMPATIBILITY_FLAGS` entry (`Goccia.CLI.Options.pas`), whose option
   name is `compat-` followed by a kebab-case name for the behaviour it enables
   (`cfLabel` is `--compat-label`, `cfForIn` is `--compat-for-in-loop`). The
-  config key is the same name. No existing flag is named after a spec annex,
+  config key is the same name. The one member outside that rule,
+  `cfExperimentalJSModuleSource`, is an experimental proposal flag
+  (`--experimental-js-module-source`), not a compatibility path. No existing flag is named after a spec annex,
   so the spelling is left to the issue that adds the flag. Like every other
   compatibility flag, it is listed by name wherever it is needed: ADR 0046
   removed the `--compat-all` meta-flag, and nothing brings it back.
@@ -62,16 +64,20 @@ Always on, in every profile:
   B.2.2.16), which are the `trimStart` and `trimEnd` function objects, in the
   same file.
 - `Date.prototype.toGMTString` (B.2.3.3), in the Date shim in
-  `Goccia.Shims.pas`, which returns `toUTCString()`.
+  `Goccia.Shims.pas`. It is a separate method that returns `toUTCString()`,
+  where B.2.3.3 makes it the `toUTCString` function object itself; that gap is
+  0.18.0 work.
 - `RegExp.prototype.compile` (B.2.4.1), in `Goccia.Builtins.GlobalRegExp.pas`.
-- The RegExp identity escapes of B.1.2 in a pattern without the `u` or `v`
-  flag (`Goccia.RegExp.Compiler.pas`): `\a` matches `a`, `\p` matches `p`,
-  `\k` matches `k` in a pattern without named groups, and an incomplete `\x`
-  escape matches `x` and the characters after it. Other B.1.2 rules are not
-  implemented yet: legacy octal escapes, `\8` and `\9` as identity escapes
-  (both are back references today), an incomplete `\u` escape (a
-  `SyntaxError`), and `\c` without a control letter (which matches `c` rather
-  than `\c`).
+- Part of the B.1.2 RegExp pattern grammar, in a pattern without the `u` or
+  `v` flag (`Goccia.RegExp.Compiler.pas`): identity escapes (`\a` matches `a`,
+  `\p` matches `p`, and `\k` matches `k` in a pattern without named groups),
+  an incomplete `\x` escape matched as literal characters, a lone `{`, `}` or
+  `]` as a pattern character, and a quantified lookahead such as `(?=a)*`.
+  The rest of B.1.2 is not implemented yet or is incomplete. Examples: legacy
+  octal escapes, `\8` and `\9` as identity escapes (both are back references
+  today), an incomplete `\u` escape (a `SyntaxError`), `\c` without a control
+  letter (which matches `c` rather than `\c`), and a class range with a class
+  escape such as `[\d-a]` (accepted, but it does not match `-`).
 - The [[IsHTMLDDA]] slot of B.3.6. IsLooselyEqual in `Goccia.Arithmetic.pas`
   checks it, and the only object that has it is the test262 host's
   `TGocciaTest262IsHTMLDDAValue` (`Goccia.Test262.Host.pas`), which also
@@ -90,8 +96,8 @@ Behind existing compatibility flags:
   `if` or `else` clause (B.3.3), in script source under `--compat-function`
   plus `--compat-non-strict-mode` (`Goccia.Compiler.BlockFunctions`).
 - Labelled function declarations (B.3.1), in non-strict code under
-  `--compat-label` plus `--compat-function`, as [ADR 0061](0061-annex-b-labelled-functions.md)
-  records.
+  `--compat-label` plus `--compat-function` plus `--compat-non-strict-mode`
+  (see [ADR 0061](0061-annex-b-labelled-functions.md)).
 - A `var` redeclaring a simple catch parameter (B.3.4), wherever
   `--compat-var` allows `var`.
 
@@ -123,10 +129,12 @@ fail, 8 wrapper-infra, 0 timeouts.
 | `language/literals` | 3 | 5 | 0 |
 | `language/statements` | 16 | 6 | 0 |
 
-Two of these results are runner defects, not engine gaps, and #2069 fixes
-them: 20 failures are `SyntaxError: Identifier 'IsHTMLDDA' has already been
-declared` from the runner's own harness, and the 8 wrapper-infra results are
-the HTML-like comment tests. This table is a measurement snapshot; README and
+Two groups of results come from the runner, and #2069 fixes both. The 20
+failures with `SyntaxError: Identifier 'IsHTMLDDA' has already been declared`
+are a runner defect: its own harness declares the name. The 8 wrapper-infra
+results are the HTML-like comment tests (B.1.1). Those are an engine gap,
+because the parser does not accept HTML-like comments yet, but the runner
+misreports them as wrapper-infra; #2069 grades them as failures. This table is a measurement snapshot; README and
 website figures stay live-sourced from the published run (#1116).
 
 ## Consequences

@@ -915,7 +915,7 @@ export function Landing({
   compatibility?: {
     passed: number;
     totalRun: number;
-    annexBExcluded: boolean;
+    annexBIncluded: boolean;
   } | null;
   release?: ReleaseInfo | null;
   /** BCP-47 locale tag from `Accept-Language` so the release-date in
@@ -1032,9 +1032,9 @@ export function Landing({
                   {compatibility ? (
                     <>
                       The latest published run
-                      {compatibility.annexBExcluded
-                        ? ", Annex B excluded,"
-                        : ""}{" "}
+                      {compatibility.annexBIncluded
+                        ? ""
+                        : ", Annex B excluded,"}{" "}
                       has{" "}
                       <strong>
                         {compatibility.passed.toLocaleString(locale)} of{" "}

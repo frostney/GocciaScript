@@ -29,7 +29,7 @@ export default async function HomePage() {
     ? {
         passed: summary.passed,
         totalRun: summary.totalRun,
-        annexBExcluded: !test262RunIncludesAnnexB(summary),
+        annexBIncluded: test262RunIncludesAnnexB(summary),
       }
     : null;
   const structuredData = buildHomeStructuredData(getSiteUrl());

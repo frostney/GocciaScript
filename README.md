@@ -129,8 +129,9 @@ explicit compatibility paths:
 | `ShadowRealm` | Not installed | `--unsafe-shadowrealm` |
 
 Annex B's legacy browser features are part of the test262 conformance target.
-The ones that already ship stay as they are, and new ones go behind a
-compatibility flag that the test262 runner turns on; see
+The ones that already ship stay as they are, and new ones will go behind a
+compatibility flag, added by the 0.18.0 Annex B work, that the test262 runner
+turns on; see
 [ADR 0177](docs/adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 See [Language](docs/language.md) and [Language Tables](docs/language-tables.md)
 for the detailed semantics and feature matrix.
