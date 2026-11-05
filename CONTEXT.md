@@ -491,7 +491,7 @@ The `/compatibility` page on the project website, rendered from the generated te
 _Avoid_: Conformance table, hand-typed pass rate, Performance Barometer.
 
 **Wrapper infrastructure failure**:
-A test262 result class for a case whose run failed outside the conformance contract — a signal-killed engine process, a Pascal-side error, or a negative-runtime path that emitted no marker at all. It is distinct from a conformance failure and from a timeout, and is gated to zero in continuous integration. See [test262](docs/test262.md).
+A test262 result class for a case whose run failed outside the conformance contract — a signal-killed engine process, a runner or harness protocol error outside engine execution, or a harness Script that failed before the test ran. It is distinct from a conformance failure and from a timeout, and is gated to zero in continuous integration. See [test262](docs/test262.md).
 _Avoid_: Conformance fail, flaky test, harness error.
 
 **Performance Barometer**:

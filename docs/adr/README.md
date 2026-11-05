@@ -184,4 +184,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0172 — goccia:ast reports erased type syntax as nodes, which the parser records only when the expression view asks](0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md)
 - [0173 — A request the floor refused is collected for again, with a backoff](0173-a-refused-request-is-collected-for-again-after-a-backoff.md)
 - [0174 — A host stops a run from another thread through an abort handle that both limit polls observe](0174-a-host-stops-a-run-from-another-thread-through-an-abort-handle.md)
+- [0175 — test262 harness includes are separate non-strict Scripts, and only the test file is made strict](0175-test262-harness-includes-are-separate-non-strict-scripts.md)
 - [0176 — Performance is a goal: the interpreter beats QuickJS first, then .gcbundle, an opt-in JIT and a compiled executable](0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)
