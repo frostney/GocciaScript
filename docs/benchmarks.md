@@ -551,7 +551,7 @@ profile evidence for the mechanism.
 The JetStream lane supplements AWFY with a frozen set of modern, pure-JavaScript
 workloads from [`WebKit/JetStream`](https://github.com/WebKit/JetStream). It is
 one of the two lanes that measure the interpreter against QuickJS for the first
-performance target ([ADR 0175](adr/0175-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)), not an attempt to
+performance target ([ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)), not an attempt to
 reproduce the official browser suite.
 
 ```bash

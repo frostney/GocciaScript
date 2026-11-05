@@ -495,7 +495,7 @@ A test262 result class for a case whose run failed outside the conformance contr
 _Avoid_: Conformance fail, flaky test, harness error.
 
 **Performance Barometer**:
-The public view of GocciaScript performance against selected reference engines using retained, versioned benchmark reports. For the first performance target, an interpreter faster than QuickJS, QuickJS is the bar it measures progress against, not only a reference for scale. See [ADR 0175](docs/adr/0175-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md).
+The public view of GocciaScript performance against selected reference engines using retained, versioned benchmark reports. For the first performance target, an interpreter faster than QuickJS, QuickJS is the bar it measures progress against, not only a reference for scale. See [ADR 0176](docs/adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md).
 _Avoid_: Leaderboard, competitor comparison.
 
 **Reference engine**:

@@ -13,7 +13,7 @@ The explicit trade-off is cost: building and benchmarking `main` inside every PR
 
 Alternatives considered and rejected: **normalizing the cached cross-runner baseline** to an in-run calibration reference — cheaper, but a single calibration benchmark cannot cancel per-workload-class variance (memory-bound vs CPU-bound runners scale differently), so false verdicts shrink rather than disappear; a **consistent self-hosted runner** — removes cross-runner variance structurally but adds infrastructure burden and runs untrusted PR code on owned hardware in a public repo; and **demoting timing entirely** in favour of the already-trustworthy deterministic profile diff — honest and cheap, but the deterministic diff only catches regressions that change instruction or allocation counts, not a pure wall-clock-per-op slowdown, which is part of what the gate exists to surface. Per-file interleaving of the two binaries (the issue's "ideally interleaved") is a possible future refinement if residual same-runner drift proves material; the reported noise floor makes such drift visible. See [docs/build-system.md](../build-system.md) `benchmark` job reference and [VISION.md](../../VISION.md).
 
-**Superseded in part by [ADR 0175](0175-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md):** performance is now a
+**Superseded in part by [ADR 0176](0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md):** performance is now a
 project goal, so the `VISION.md` throughput stance is no longer a reason for
 the comparison to stay advisory. The same-runner method and the advisory,
 comment-only status stay.

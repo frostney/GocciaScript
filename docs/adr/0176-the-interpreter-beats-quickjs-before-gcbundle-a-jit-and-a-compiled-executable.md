@@ -1,4 +1,4 @@
-# 0175 - Performance is a goal: the interpreter beats QuickJS first, then .gcbundle, an opt-in JIT and a compiled executable
+# 0176 - Performance is a goal: the interpreter beats QuickJS first, then .gcbundle, an opt-in JIT and a compiled executable
 
 **Date:** 2026-11-05
 **Area:** `performance`, `bytecode VM`, `benchmarking`, `website`

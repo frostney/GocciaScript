@@ -18,7 +18,7 @@ it.
 Adapted from Wasmlight's `optimize-runtime` playbook. GocciaScript has one
 execution engine: the bytecode VM, which the performance targets call the
 interpreter. The tree-walk interpreter was removed in 0.15.0 (ADR 0138), and
-there is no JIT or AOT tier yet. ADR 0175 sets the performance targets in
+there is no JIT or AOT tier yet. ADR 0176 sets the performance targets in
 order: the interpreter beats QuickJS, then `.gcbundle` bytecode artifacts, an
 opt-in baseline JIT, and a compiled executable.
 
@@ -29,7 +29,7 @@ opt-in baseline JIT, and a compiled executable.
    `docs/core-patterns.md`, `docs/testing.md`, `docs/benchmarks.md`,
    `docs/profiling.md`, `docs/bytecode-vm.md`, and the ADRs governing the
    affected seam (especially 0005, 0065, 0076, 0081, 0087, 0088, 0091, 0138,
-   0175).
+   0176).
 2. Apply `git-workflow`. Never benchmark an unexplained dirty or
    mixed-revision tree.
 3. State the target workload, expected invariant, guard workloads, platforms,
@@ -41,7 +41,7 @@ opt-in baseline JIT, and a compiled executable.
    and the differential lane's external oracles, and require AWFY/probe
    workloads to check their own computed result.
 
-Default wave target unless the user overrides it: ADR 0175's target 1, an
+Default wave target unless the user overrides it: ADR 0176's target 1, an
 interpreter **faster than QuickJS**. On AWFY that is a `Goccia time / QuickJS
 time` geomean below `1.00×`; on the JetStream subset it is a `QuickJS score /
 Goccia score` geomean below `1.00×`. The target counts only when both hold on
