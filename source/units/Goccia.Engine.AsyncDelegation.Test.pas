@@ -16,12 +16,15 @@ type
   TAsyncDelegationTests = class(TTestSuite)
   private
     procedure TestDelegateSettlesOnLaterHostEntry;
+    procedure TestDelegateResultMessage;
   public
     procedure SetupTests; override;
   end;
 
 procedure TAsyncDelegationTests.SetupTests;
 begin
+  Test('An async delegate rejection identifies its non-object result',
+    TestDelegateResultMessage);
   Test('An async delegate remains pending until a later host entry settles it',
     TestDelegateSettlesOnLaterHostEntry);
 end;
@@ -54,6 +57,34 @@ begin
     Engine.WaitForRuntimeIdle;
     Expect<string>(Engine.EvaluateGlobalEval('globalThis.status;',
       '<async-delegation-result>', Stage).ToStringLiteral.Value).ToBe('fulfilled');
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+procedure TAsyncDelegationTests.TestDelegateResultMessage;
+var
+  Engine: TGocciaEngine;
+  Source: TStringList;
+  Stage: TGocciaGlobalEvalStage;
+begin
+  Source := TStringList.Create;
+  Engine := TGocciaEngine.Create('<async-delegation-message>', Source);
+  try
+    Engine.EvaluateGlobalEval(
+      'globalThis.message = "pending";' +
+      'const source = {' +
+      '  [Symbol.asyncIterator]() { return this; },' +
+      '  next() { return Promise.resolve(3); }' +
+      '};' +
+      '({ async *g() { yield* source; } }).g().next().catch((error) => {' +
+      '  globalThis.message = error.name + ": " + error.message;' +
+      '});', '<async-delegation-message>', Stage);
+    Engine.WaitForRuntimeIdle;
+    Expect<string>(Engine.EvaluateGlobalEval('globalThis.message;',
+      '<async-delegation-message-result>', Stage).ToStringLiteral.Value)
+      .ToBe('TypeError: Iterator result 3 is not an object');
   finally
     Engine.Free;
     Source.Free;
