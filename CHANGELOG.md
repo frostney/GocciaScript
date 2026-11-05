@@ -81,7 +81,7 @@ All notable changes to GocciaScript are documented in this file.
 - fix(bundler): emit reproducible bytecode without output or private-name collisions (#1973)
 - fix(parser): enforce declaration and strict directive early errors (#1966)
 - fix(parser): import type from "m", import type, { y } and import type, * as ns bind type as the default import instead of being erased (#1935)
-- fix(profiler): a recursive function's total time counts each outermost call once, so it no longer exceeds <module>'s (#1943)
+- fix(profiler): a recursive function's total time counts each outermost call once, so it no longer exceeds `<module>`'s (#1943)
 - fix(ast): goccia:ast reports type, interface, import type and export type declarations by kind, not as EmptyStatement (#1925)
 - fix(compiler): a function past the bytecode's 16-bit limits is a catchable SyntaxError, and a long branch compiles to a long jump instead of jumping to the wrong place (#1926)
 - fix(engine): ** and Math.pow are correctly rounded in nearly every case, and a negative base keeps its sign for integral exponents of 2^31 or more (#1924)

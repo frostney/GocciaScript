@@ -35,6 +35,9 @@ postprocessors = [
   { pattern = '(?m)^(- feat!: run scripts, tests, benchmarks and the REPL in bytecode mode by default \(#1481\))$', replace = "$1 — superseded in this release by #1644: bytecode is the only execution mode, and `--mode` or a `\"mode\"` config key exits with status 2" },
   # 0.15.0: #1829 was squash-merged without its PR number in the subject.
   { pattern = '(?m)^(- feat\(snapshot\): restore built-in differences atomically)$', replace = "$1 (#1829)" },
+  # 0.16.0: #1943's subject names the profiler's `<module>` row. Unquoted,
+  # GitHub drops it as an unknown HTML tag and the entry reads "exceeds 's".
+  { pattern = '(?m)^(- fix\(profiler\): a recursive function.s total time counts each outermost call once, so it no longer exceeds )<module>(.s \(#1943\))$', replace = "$1`<module>`$2" },
 ]
 
 [git]
