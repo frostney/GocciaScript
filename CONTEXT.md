@@ -371,7 +371,7 @@ The default `goccia:ast` tree: statements and the statements nested beneath them
 _Avoid_: AST, ESTree output.
 
 **Expression view**:
-The `goccia:ast` tree with `expressions: true`: the statement view plus every expression, property, parameter, class member, module specifier, and the erased type syntax beneath each statement. See [AST Built-ins](docs/built-ins-ast.md#the-expression-view).
+The `goccia:ast` tree with `expressions: true`: the statement view plus every expression, property, parameter, class member and module specifier beneath each statement, and the erased type syntax the parser records, such as annotations, generics and overload signatures. An ambient declaration other than `declare module` still has no children. See [AST Built-ins](docs/built-ins-ast.md#the-expression-view).
 _Avoid_: Full AST, parser AST.
 
 **Token stream**:
