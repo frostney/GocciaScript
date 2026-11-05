@@ -60,6 +60,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 | `URLSearchParams` | [WHATWG URL §6](https://url.spec.whatwg.org/#urlsearchparams) | Supported |
 | `TextEncoder` | [WHATWG Encoding §7.4](https://encoding.spec.whatwg.org/#interface-textencoder) | Supported |
 | `TextDecoder` | [WHATWG Encoding §7.2](https://encoding.spec.whatwg.org/#interface-textdecoder) | Supported |
+| `Blob` | [File API §3](https://w3c.github.io/FileAPI/#blob-section) | Supported (no `stream`/`textStream`: no `ReadableStream`) |
 | `performance.now`, `timeOrigin` | [High Resolution Time](https://w3c.github.io/hr-time/#dom-performance-now) | Supported |
 | `EventTarget`, `Event` | [WHATWG DOM §2](https://dom.spec.whatwg.org/#events) | Supported subset (single-target dispatch; no propagation) |
 | `AbortController`, `AbortSignal` | [WHATWG DOM §3](https://dom.spec.whatwg.org/#aborting-ongoing-activities) | Supported subset (fetch-scoped; `abort` event and `onabort`; no `any`) |
