@@ -2,6 +2,111 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.16.0] - 2026-11-05
+
+### ⚡ Performance
+
+- perf(text): splitting source into lines skips the newline rewrite and per-line conversion for ASCII text (#1987)
+- perf(text): ASCII text converts between UTF-16 and UTF-8 without iconv on Linux and macOS (#1986)
+- perf(ast): parse() builds its result without assignment lookups, per-position numbers or node copies (#1984)
+- perf(gc): destroying an object frees its property descriptors without copying each key (#1985)
+- perf(fetch): reuse the connection across same-origin redirects, share one OpenSSL context, set TCP_NODELAY (#1992)
+- perf(compiler): bound expression, binding and parser work (#1979)
+- perf(vm): numeric opcodes read each operand once and write their result in place (#1909)
+- perf(compiler): remove repeated binding scans and hash clustering (#1967)
+- perf(parser): a TypeScript comparison chain parses in time linear in the code after it (#1948)
+- perf(compiler): a closure that captures thousands of bindings compiles in linear time (#1947)
+- perf(compiler): right-nested and unary chains compile in time linear in their length (#1946)
+- perf(compiler): a branch past a 16-bit jump offset takes its long form without compiling the program again (#1949)
+- perf(engine): parameter lists and destructuring patterns parse and compile in linear time (#1938)
+- perf(compiler): a chain of binary operators compiles in time linear in its length (#1940)
+- perf(compiler): a switch with let or const declarations in its case clauses compiles in linear time (#1939)
+- perf(vm): a call to a function that never reads its arguments as passed copies them only into its registers (#1911)
+- perf(compiler): a call at a function's top level checks its register in constant time, so a call per binding no longer compiles in quadratic time (#1922)
+- perf(bytecode): branch on small integer constants in one instruction and read length without boxing (#1913)
+
+### 🌐 Website
+
+- fix(website): self-host fonts so builds no longer fail when Google Fonts is unreachable (#1965)
+
+### 🏗️ Internal
+
+- docs: bring docs, website and glossary in line with 0.16.0 before the release (#2098)
+- test(heaptrc): the #1910 far-length cases run at a short sparse length (#2049)
+- chore(jetstream): bump pin to 5fb9b491 and follow upstream's move to workloads/ (#2024)
+- feat(examples): expression-style lays out a long line the way Biome does, and picks quotes as Biome does (#2043)
+- feat(examples): expression-style puts a trailing comma on multi-line destructuring patterns (#2039)
+- feat(examples): expression-style puts a trailing comma on multi-line exported function, function type, tuple type and type parameter lists (#2034)
+- test(classes): the discarded-class brand test runs in under a second under heaptrc instead of timing out the memory-safety job (#2020)
+- test(gc-stress): the sparse for-of and object-literal limit tests finish under GC stress instead of timing out (#2019)
+- chore(skills): sync provisioned skills (#2022)
+- chore(toml-test): bump pin to 96fd0884 (#2018)
+- chore(test262): bump pin to 91c70759 (#2017)
+- docs(skills): the repo-native skills rely on build.pas's stale-state retry instead of a clean build after merges (#2014)
+- chore(timezone): bump data to 2026f (#2011)
+- feat(examples): expression-style puts a trailing comma on a multi-line import or export specifier list (#2013)
+- perf(build): scope test builds and avoid busy waits (#1851)
+- test(compiler): replace remaining chain and capture timing assertions with work counters (#1982)
+- ci: compile programs concurrently and retry failed build uploads (#1960)
+- refactor(vm): the dispatch loop keeps its hot arms first and aligned, and AWFY A/Bs tell work from placement (#1945)
+- test(bytecode-limits): each limit test file runs in under two seconds, so a slow macOS runner stays within the 30 s file timeout (#1936)
+- chore(skills): sync provisioned skills, so address-feedback reads CodeRabbit's check runs as well as its commit statuses (#1931)
+- chore(skills): sync provisioned skills, so address-feedback reads CodeRabbit's waits from its new summary opening (#1914)
+- ci: build with FPC 3.2.4 from frostney/fpc-toolchain instead of FPC 3.2.2 (#1904)
+
+### 🐛 Fixed
+
+- fix(generator): suspend async yield delegation while awaiting results (#2047)
+- fix(parser): reject top-level using declarations in scripts (#2046)
+- fix(build): let Win32 builds accept the disposal emitter and compiler test (#2044)
+- fix(parser): erase overload signatures, drop `this` parameters and parse generic async arrows (#2041)
+- fix(parser): erase ambient declarations (declare) like type and interface declarations (#2040)
+- fix(resource-management): generator return(), for await using heads and module top levels dispose their resources (#2016)
+- fix(runner): --output=json and --silent mute the goccia:test reporter in a module-only install (#2030)
+- fix(gc): a request the memory limit refused is collected for again after the program drops what it held (#2026)
+- fix(compiler): a catch clause and a finished loop clear the registers they left above the live ones (#2025)
+- fix(types): an interface whose type parameter defaults to an object type parses (#2028)
+- fix(compiler): a script's top-level let and var release their initializer once the binding is reassigned (#2023)
+- fix(format): a uses clause holding a comment is left as written instead of swallowing the rest of the file (#2012)
+- fix(resource-management): await using disposal follows the Await steps of DisposeResources (#2008)
+- fix(modules): a module entry's top-level await suspends the module (#2009)
+- fix(iteration): a generator's return() through for...of propagates close errors (#2003)
+- fix(async-iteration): close for await and settle async generator results from their Await's job (#2001)
+- fix(engine): a promise an extension settles can be awaited inside a goccia:test test (#1996)
+- fix(async-generators): await a returned value before leaving try (#1994)
+- fix(runner): collect after each file, file argument and multifile section (#1706)
+- fix(build): retry a target once from a clean unit directory on stale FPC state (#1847)
+- fix(windows): speed up 32-bit exceptions with SafeSEH tables (#1983)
+- fix(profiler): exclude recursive bookkeeping and capture directory runs (#1968)
+- fix(bundler): emit reproducible bytecode without output or private-name collisions (#1973)
+- fix(parser): enforce declaration and strict directive early errors (#1966)
+- fix(parser): import type from "m", import type, { y } and import type, * as ns bind type as the default import instead of being erased (#1935)
+- fix(profiler): a recursive function's total time counts each outermost call once, so it no longer exceeds `<module>`'s (#1943)
+- fix(ast): goccia:ast reports type, interface, import type and export type declarations by kind, not as EmptyStatement (#1925)
+- fix(compiler): a function past the bytecode's 16-bit limits is a catchable SyntaxError, and a long branch compiles to a long jump instead of jumping to the wrong place (#1926)
+- fix(engine): ** and Math.pow are correctly rounded in nearly every case, and a negative base keeps its sign for integral exponents of 2^31 or more (#1924)
+- fix(compiler): an annotated binding read before any checked store gives NaN under --strict-types instead of aborting (#1915)
+- fix(compiler): calls in tail position of a concise arrow body reuse the caller's frame (#1916)
+- fix(engine): for...of and spread over an array follow its length past the stored elements (#1910)
+- fix(intl): Segments.prototype.containing computes its segments without a throwaway segment iterator (#1907)
+- fix(heap-snapshot): a restore fills a shim's or Intl's prototype slot without building what the run did not (#1905)
+- fix(array): arrays the engine builds for scripts create their elements instead of assigning them (#1902)
+- fix(array): push, unshift, pop and splice set a length past 2^31 - 1, and splice moves the right elements there (#1900)
+- fix(release): release archives keep the executable bit on the Linux and macOS binaries (#1899)
+
+### 🚀 Added
+
+- feat(ast): the expression view reports what overload signatures, `this` parameters and `declare module` hold, and expression-style formats them and `with` clauses as Biome does (#2045)
+- feat(ast): the expression view reports import attributes with their key and value (#2042)
+- feat(runtime): a host stops a run from another thread through an abort handle (#2032)
+- feat(ast): the expression view reports type annotations, type literals and generics as nodes with ranges (#2021)
+- feat(vm): BytecodeClosureOf returns the closure behind a bytecode function value (#2000)
+- feat(ast): goccia:ast reports import and export specifiers, the children of type-only module statements, and static keys (#1981)
+- feat(ast): goccia:ast reports expressions, properties, parameters and class members on request, through one child enumeration on the node (#1930)
+- feat(profiler): --profile=compile reports lex, parse and compile time and the compiler's work per source function (#1944)
+- feat(ast): parse() can return every token and comment, so a tool finds strings, templates and regexes without its own lexer (#1927)
+- feat(compiler): infer operator, const and const-function result types (#1908)
+
 ## [0.15.1] - 2026-10-23
 
 ### 🐛 Fixed
