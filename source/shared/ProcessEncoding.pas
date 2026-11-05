@@ -10,12 +10,19 @@
 
   On Windows this unit makes UTF-8 the code page of those conversions and of
   the names the RTL returns from the file system, and the code page of
-  standard output and standard error when they are redirected to a file or a
-  pipe, so Windows reads, lists and writes the same strings and the same bytes
-  as the other platforms. A console keeps the console's output code page, which
-  the RTL selects, so it displays what it displayed before; a character outside
-  that code page still prints as '?'. A unit that converts strings through the
-  RTL lists this unit in its uses, so that it is initialized first.
+  standard output and standard error, so Windows reads, lists and writes the
+  same strings and the same bytes as the other platforms when output is
+  redirected to a file or a pipe; a GUI application's standard files keep the
+  RTL's settings. When a standard handle is a console, ConsoleOutput writes
+  its text to the console as UTF-16 with WriteConsoleW, so the console shows
+  every character its font has, without a change to the console's code
+  page. A unit that converts strings through the RTL lists this
+  unit in its uses, so that it is initialized first.
+
+  Standard output and standard error are thread variables in FPC, which the
+  RTL opens again for each new thread with its defaults, so this applies to the
+  main thread. The thread pool's workers capture their output for the main
+  thread to write.
 
   On Linux and macOS this unit installs cwstring, which makes those
   conversions through iconv, with a direct path for ASCII text in front of it. }
@@ -30,24 +37,83 @@ implementation
 
 {$IF DEFINED(MSWINDOWS)}
 uses
-  Windows;
+  Windows,
 
-function IsConsole(const AStdHandle: DWORD): Boolean;
+  ConsoleOutput;
+
+const
+  { At most as many UTF-16 code units as UTF-8 bytes: a one-byte to
+    three-byte character is one code unit, a four-byte one two. }
+  CONSOLE_CHUNK_BYTES = 1024;
+
+function IsConsoleHandle(const AHandle: THandle): Boolean;
 var
   Mode: DWORD;
 begin
-  Result := GetConsoleMode(GetStdHandle(AStdHandle), Mode);
+  Result := GetConsoleMode(AHandle, Mode);
+end;
+
+function WriteConsoleCharacters(const AHandle: THandle;
+  const ACharacters: PWideChar; const ACount: SizeInt): Boolean;
+var
+  Next: PWideChar;
+  Left: SizeInt;
+  Written: DWORD;
+begin
+  Next := ACharacters;
+  Left := ACount;
+  while Left > 0 do
+  begin
+    Written := 0;
+    if not WriteConsoleW(AHandle, Next, Left, Written, nil) or
+      (Written = 0) then
+      Exit(False);
+    Inc(Next, Written);
+    Dec(Left, Written);
+  end;
+  Result := True;
+end;
+
+{ Converts UTF-8 to UTF-16 in a buffer on the stack, so that writing to the
+  console allocates no memory, like the RTL's own write function: the runtime
+  error message at exit can follow a failed allocation. A malformed byte
+  becomes U+FFFD. }
+function WriteConsoleUTF8(const AHandle: THandle; const AText: PAnsiChar;
+  const ALength: SizeInt): Boolean;
+var
+  Characters: array[0..CONSOLE_CHUNK_BYTES - 1] of WideChar;
+  Next: PAnsiChar;
+  Left, Chunk, Count: SizeInt;
+begin
+  Next := AText;
+  Left := ALength;
+  while Left > 0 do
+  begin
+    Chunk := Left;
+    if Chunk > CONSOLE_CHUNK_BYTES then
+      Chunk := CompleteUTF8Length(Next, CONSOLE_CHUNK_BYTES);
+    Count := MultiByteToWideChar(CP_UTF8, 0, Next, Chunk, @Characters[0],
+      CONSOLE_CHUNK_BYTES);
+    if (Count = 0) or
+      not WriteConsoleCharacters(AHandle, @Characters[0], Count) then
+      Exit(False);
+    Inc(Next, Chunk);
+    Dec(Left, Chunk);
+  end;
+  Result := True;
 end;
 
 initialization
   SetMultiByteConversionCodePage(CP_UTF8);
   SetMultiByteRTLFileSystemCodePage(CP_UTF8);
-  if not IsConsole(STD_OUTPUT_HANDLE) then
-    SetTextCodePage(Output, CP_UTF8);
-  if not IsConsole(STD_ERROR_HANDLE) then
+  // A GUI application's StdOut and StdErr show a message box, and its other
+  // standard files are not open, so they keep the RTL's settings.
+  if IsConsole then
   begin
-    SetTextCodePage(ErrOutput, CP_UTF8);
-    SetTextCodePage(StdErr, CP_UTF8);
+    UseUnicodeOutput(Output, IsConsoleHandle, WriteConsoleUTF8);
+    UseUnicodeOutput(StdOut, IsConsoleHandle, WriteConsoleUTF8);
+    UseUnicodeOutput(ErrOutput, IsConsoleHandle, WriteConsoleUTF8);
+    UseUnicodeOutput(StdErr, IsConsoleHandle, WriteConsoleUTF8);
   end;
 {$ELSEIF DEFINED(FPC) AND DEFINED(UNIX)}
 uses

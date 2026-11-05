@@ -185,4 +185,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0173 — A request the floor refused is collected for again, with a backoff](0173-a-refused-request-is-collected-for-again-after-a-backoff.md)
 - [0174 — A host stops a run from another thread through an abort handle that both limit polls observe](0174-a-host-stops-a-run-from-another-thread-through-an-abort-handle.md)
 - [0175 — test262 harness includes are separate non-strict Scripts, and only the test file is made strict](0175-test262-harness-includes-are-separate-non-strict-scripts.md)
+- [0176 — Performance is a goal: the interpreter beats QuickJS first, then .gcbundle, an opt-in JIT and a compiled executable](0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)
 - [0177 — Annex B is part of the test262 conformance target, and new Annex B surfaces sit behind a compatibility flag](0177-annex-b-is-part-of-the-test262-conformance-target.md)

@@ -476,14 +476,14 @@ export function renderPerformanceMarkdown(
   return [
     frontmatter(
       "Performance Barometer - GocciaScript",
-      "Directional GocciaScript performance trends against QuickJS and Node.js, generated from the same data as the Performance Barometer page.",
+      "GocciaScript's interpreter against QuickJS, the bar for its first performance target, generated from the same data as the Performance Barometer page.",
     ),
     "",
     "# Performance Barometer",
     "",
     "This is the concise Markdown representation of the GocciaScript Performance Barometer page. It is generated from the same retained main-branch AWFY and JetStream 3 reports as the HTML dashboard.",
     "",
-    "A ratio compares GocciaScript with a reference engine on the same pinned workloads: 1.00x means aligned, and above 1.00x means GocciaScript was proportionally slower. Different runtimes have different goals; this is a directional view, not a product ranking.",
+    "A ratio compares GocciaScript with a reference engine on the same pinned workloads: 1.00x means aligned, and above 1.00x means GocciaScript was proportionally slower. The first performance target is an interpreter faster than QuickJS: both QuickJS ratios below 1.00x on every shipped platform. These reports measure Linux x64; Node.js, with its JIT, is shown for scale.",
     "",
     ...body,
     "",
