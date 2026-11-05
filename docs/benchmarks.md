@@ -549,9 +549,10 @@ profile evidence for the mechanism.
 ## JetStream 3 Reference Lane
 
 The JetStream lane supplements AWFY with a frozen set of modern, pure-JavaScript
-workloads from [`WebKit/JetStream`](https://github.com/WebKit/JetStream). It is a
-directional reference-engine barometer, not an attempt to reproduce the official
-browser suite or rank runtimes with different goals.
+workloads from [`WebKit/JetStream`](https://github.com/WebKit/JetStream). It is
+one of the two lanes that measure the interpreter against QuickJS for the first
+performance target ([ADR 0175](adr/0175-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)), not an attempt to
+reproduce the official browser suite.
 
 ```bash
 # List the frozen workload set
