@@ -1477,6 +1477,7 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
       "",
     ].join("\n"));
     writeFileSync(join(harness, "brokenHelper.js"), "null.x;\n");
+    writeFileSync(join(harness, "throwingHelper.js"), "function throwFromHelper() {\n  return null.x;\n}\n");
     const test = (flags: string[], includes: string[], body: string[]) => [
       "// Copyright",
       "/*---",
@@ -1505,6 +1506,7 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
       ["broken-include.js", test([], ["brokenHelper.js"], ["var x = 1;"]), "WRAPPER_INFRA", "harness include brokenHelper.js failed"],
       // Positions are the test file's own lines, the frontmatter included.
       ["positions.js", test([], [], ["", "missingBinding;"]), "FAIL", "missingBinding"],
+      ["helper-positions.js", test([], ["throwingHelper.js"], ["throwFromHelper();"]), "FAIL", "TypeError"],
     ];
     for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
 
@@ -1531,6 +1533,10 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
     const positions = byId.get("language/positions.js");
     if (!(positions?.diagnostic ?? "").includes("positions.js:6:1"))
       throw new Error(`positions.js should report the file's line 6, got ${JSON.stringify(positions)}`);
+    // An error a harness function raises names the harness file it came from.
+    const helperPositions = byId.get("language/helper-positions.js");
+    if (!(helperPositions?.diagnostic ?? "").includes("throwingHelper.js:2:"))
+      throw new Error(`helper-positions.js should report throwingHelper.js:2, got ${JSON.stringify(helperPositions)}`);
   } finally {
     clean(tmp);
   }
