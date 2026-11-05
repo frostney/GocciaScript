@@ -112,6 +112,39 @@ jobs:
           fi
           exit 0
 
+  # The same documentation checks pr.yml runs, so a direct push or an admin
+  # merge to main is checked too. Keep the two lists of steps identical.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # v23
+
+      - name: Check doc symbol references
+        run: npx tsx scripts/check-doc-symbols.ts
+
+      - name: Self-test doc-check file discovery
+        run: npx tsx scripts/doc-checks/markdown-files.self-test.ts
+
+      - name: Check doc duplication
+        run: npx tsx scripts/check-doc-duplication.ts
+
+      - name: Check doc file length
+        run: npx tsx scripts/check-doc-length.ts
+
+      - name: Check doc links
+        run: npx tsx scripts/check-doc-links.ts
+
+      - name: Self-test the conformance-claim heuristic
+        run: npx tsx scripts/check-conformance-claims.ts --self-test
+
+      - name: Check hand-typed conformance claims
+        run: npx tsx scripts/check-conformance-claims.ts
+
   test-structure:
     runs-on: ubuntu-latest
     steps:

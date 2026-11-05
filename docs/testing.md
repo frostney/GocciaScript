@@ -741,7 +741,7 @@ supersede → build → test             → artifacts (main), release (tags)
                    → benchmark        →
                    → cli              →
                    → test262 → test262-merge
-test-structure
+docs, test-structure (no build)
 ```
 
 **`build`** — Installs FPC 3.2.4 through `frostney/fpc-toolchain`, which ships every target for its runner's host: only the Darwin targets need a macOS runner, and the Linux and Windows targets cross-compile on Linux. It builds all binaries for its target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
