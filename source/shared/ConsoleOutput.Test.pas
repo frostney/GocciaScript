@@ -10,20 +10,32 @@ uses
   ProcessEncoding,
   TestingPascalLibrary;
 
+const
+  // A code page in which most of the test text has no characters, as a
+  // Windows console's standard output starts in.
+  CONSOLE_CODE_PAGE = 850;
+  LINE: UnicodeString = #$00FC' '#$D83D#$DE00' '#$65E5#$672C#$8A9E;
+
 type
   TConsoleOutputTests = class(TTestSuite)
   private
     FPath: string;
-    procedure OpenOutput(var AOutput: Text);
-    function FileBytes: RawByteString;
+    FTarget: Text;
+    procedure OpenTarget;
+    procedure CloseTarget;
+    function TargetFileBytes: RawByteString;
     procedure TestCompleteUTF8LengthKeepsWholeCharacters;
     procedure TestCompleteUTF8LengthHoldsBackASplitCharacter;
     procedure TestCompleteUTF8LengthIgnoresMalformedTails;
     procedure TestRedirectedOutputWritesUTF8Bytes;
-    procedure TestConsoleOutputWritesUTF16;
+    procedure TestConsoleOutputGoesToTheWriter;
     procedure TestConsoleOutputJoinsCharactersSplitAcrossFlushes;
     procedure TestConsoleOutputFlushesEachLine;
+    procedure TestConsoleOutputWritesAnIncompleteTailOnClose;
     procedure TestConsoleWriterFailureSetsIOResult;
+  protected
+    procedure BeforeEach; override;
+    procedure AfterAll; override;
   public
     procedure SetupTests; override;
   end;
@@ -33,7 +45,8 @@ var
   ProbedHandle: THandle;
   WriterCalls: Integer;
   WriterHandle: THandle;
-  Written: UnicodeString;
+  Written: RawByteString;
+  WrittenCharacters: UnicodeString;
   WriterSucceeds: Boolean;
 
 function ProbeConsole(const AHandle: THandle): Boolean;
@@ -50,15 +63,18 @@ begin
   Result := False;
 end;
 
-function RecordUTF16(const AHandle: THandle; const AText: PUnicodeChar;
+function RecordWrite(const AHandle: THandle; const AText: PAnsiChar;
   const ALength: SizeInt): Boolean;
 var
-  Chunk: UnicodeString;
+  Chunk: RawByteString;
 begin
   Inc(WriterCalls);
   WriterHandle := AHandle;
   SetString(Chunk, AText, ALength);
   Written := Written + Chunk;
+  // Each call is decoded on its own, as the console writer converts it, so a
+  // character split between two calls comes out as U+FFFD.
+  WrittenCharacters := WrittenCharacters + UTF8Decode(Chunk);
   Result := WriterSucceeds;
 end;
 
@@ -92,38 +108,66 @@ begin
     TestCompleteUTF8LengthIgnoresMalformedTails);
   Test('A redirected handle gets UTF-8 bytes and keeps its write function',
     TestRedirectedOutputWritesUTF8Bytes);
-  Test('A console handle gets UTF-16 through the writer',
-    TestConsoleOutputWritesUTF16);
-  Test('A character split across two flushes reaches the console whole',
+  Test('A console handle gets UTF-8 through the writer',
+    TestConsoleOutputGoesToTheWriter);
+  Test('A character split across two flushes reaches the writer whole',
     TestConsoleOutputJoinsCharactersSplitAcrossFlushes);
   Test('Each WriteLn to a console is written before it returns',
     TestConsoleOutputFlushesEachLine);
+  Test('Closing a console file writes an incomplete character it holds',
+    TestConsoleOutputWritesAnIncompleteTailOnClose);
   Test('A failed console write sets IOResult',
     TestConsoleWriterFailureSetsIOResult);
 end;
 
-procedure ResetRecording;
+procedure TConsoleOutputTests.BeforeEach;
 begin
+  // A failed assertion skips the rest of its test, so the file it left open
+  // is closed here.
+  CloseTarget;
   Probed := False;
   ProbedHandle := THandle(-1);
   WriterCalls := 0;
   WriterHandle := THandle(-1);
   Written := '';
+  WrittenCharacters := '';
   WriterSucceeds := True;
 end;
 
-procedure TConsoleOutputTests.OpenOutput(var AOutput: Text);
+procedure TConsoleOutputTests.AfterAll;
 begin
-  ResetRecording;
-  FPath := GetTempFileName(GetTempDir, 'goccia-console-output');
-  AssignFile(AOutput, FPath);
-  Rewrite(AOutput);
+  CloseTarget;
 end;
 
-function TConsoleOutputTests.FileBytes: RawByteString;
+procedure TConsoleOutputTests.OpenTarget;
+begin
+  FPath := GetTempFileName(GetTempDir, 'goccia-console-output');
+  AssignFile(FTarget, FPath);
+  Rewrite(FTarget);
+  SetTextCodePage(FTarget, CONSOLE_CODE_PAGE);
+end;
+
+procedure TConsoleOutputTests.CloseTarget;
+begin
+  if FPath = '' then
+    Exit;
+  if TextRec(FTarget).Mode <> fmClosed then
+  begin
+    {$I-}
+    CloseFile(FTarget);
+    {$I+}
+    IOResult;
+  end;
+  DeleteFile(FPath);
+  FPath := '';
+end;
+
+function TConsoleOutputTests.TargetFileBytes: RawByteString;
 var
   Stream: TFileStream;
 begin
+  if TextRec(FTarget).Mode <> fmClosed then
+    CloseFile(FTarget);
   Stream := TFileStream.Create(FPath, fmOpenRead or fmShareDenyNone);
   try
     SetLength(Result, Stream.Size);
@@ -132,7 +176,6 @@ begin
   finally
     Stream.Free;
   end;
-  DeleteFile(FPath);
 end;
 
 procedure TConsoleOutputTests.TestCompleteUTF8LengthKeepsWholeCharacters;
@@ -168,89 +211,86 @@ end;
 
 procedure TConsoleOutputTests.TestRedirectedOutputWritesUTF8Bytes;
 var
-  Target: Text;
   InOut: CodePointer;
 begin
-  OpenOutput(Target);
-  InOut := TextRec(Target).InOutFunc;
-  UseUnicodeOutput(Target, ProbeRedirected, RecordUTF16);
+  OpenTarget;
+  InOut := TextRec(FTarget).InOutFunc;
+  UseUnicodeOutput(FTarget, ProbeRedirected, RecordWrite);
   Expect<Boolean>(Probed).ToBe(True);
-  Expect<Boolean>(ProbedHandle = TextRec(Target).Handle).ToBe(True);
-  Expect<Boolean>(TextRec(Target).InOutFunc = InOut).ToBe(True);
-  Expect<Integer>(GetTextCodePage(Target)).ToBe(CP_UTF8);
-  WriteLn(Target, UnicodeString(#$00FC' '#$D83D#$DE00' '#$65E5#$672C#$8A9E));
-  CloseFile(Target);
+  Expect<Boolean>(ProbedHandle = TextRec(FTarget).Handle).ToBe(True);
+  Expect<Boolean>(TextRec(FTarget).InOutFunc = InOut).ToBe(True);
+  WriteLn(FTarget, LINE);
   Expect<Integer>(WriterCalls).ToBe(0);
-  Expect<Boolean>(FileBytes =
-    UTF8Bytes(#$00FC' '#$D83D#$DE00' '#$65E5#$672C#$8A9E + LineEnding)).ToBe(True);
+  Expect<Boolean>(TargetFileBytes = UTF8Bytes(LINE + LineEnding)).ToBe(True);
 end;
 
-procedure TConsoleOutputTests.TestConsoleOutputWritesUTF16;
-const
-  LINE: UnicodeString = #$00FC' '#$D83D#$DE00' '#$65E5#$672C#$8A9E;
-var
-  Target: Text;
+procedure TConsoleOutputTests.TestConsoleOutputGoesToTheWriter;
 begin
-  OpenOutput(Target);
-  UseUnicodeOutput(Target, ProbeConsole, RecordUTF16);
+  OpenTarget;
+  UseUnicodeOutput(FTarget, ProbeConsole, RecordWrite);
   Expect<Boolean>(Probed).ToBe(True);
-  WriteLn(Target, LINE);
-  Write(Target, 'plain ', 42);
-  CloseFile(Target);
+  WriteLn(FTarget, LINE);
+  Write(FTarget, 'plain ', 42);
+  CloseFile(FTarget);
   Expect<Boolean>(WriterHandle = ProbedHandle).ToBe(True);
-  Expect<Boolean>(Written = LINE + LineEnding + 'plain 42').ToBe(True);
-  Expect<Integer>(Length(FileBytes)).ToBe(0);
+  Expect<string>(WrittenCharacters).ToBe(LINE + LineEnding + 'plain 42');
+  Expect<Integer>(Length(TargetFileBytes)).ToBe(0);
 end;
 
 procedure TConsoleOutputTests.TestConsoleOutputJoinsCharactersSplitAcrossFlushes;
 var
-  Target: Text;
-  Line: UnicodeString;
+  Expected: string;
   I: Integer;
 begin
   // Each emoji is four bytes in UTF-8, so a buffer of whole emoji after one
   // byte of ASCII ends in the middle of one, whatever the buffer size.
-  Line := 'a';
+  Expected := 'a';
   for I := 1 to 1000 do
-    Line := Line + #$D83D#$DE00;
-  OpenOutput(Target);
-  UseUnicodeOutput(Target, ProbeConsole, RecordUTF16);
-  WriteLn(Target, Line);
-  CloseFile(Target);
+    Expected := Expected + #$D83D#$DE00;
+  OpenTarget;
+  UseUnicodeOutput(FTarget, ProbeConsole, RecordWrite);
+  WriteLn(FTarget, Expected);
+  CloseFile(FTarget);
   Expect<Boolean>(WriterCalls > 1).ToBe(True);
-  Expect<Boolean>(Written = Line + LineEnding).ToBe(True);
-  Expect<Boolean>(Pos(UnicodeString(#$FFFD), Written) = 0).ToBe(True);
+  Expect<string>(WrittenCharacters).ToBe(Expected + LineEnding);
 end;
 
 procedure TConsoleOutputTests.TestConsoleOutputFlushesEachLine;
-var
-  Target: Text;
 begin
-  OpenOutput(Target);
-  UseUnicodeOutput(Target, ProbeConsole, RecordUTF16);
-  WriteLn(Target, 'first');
-  Expect<Boolean>(Written = 'first' + LineEnding).ToBe(True);
-  WriteLn(Target, UnicodeString(#$00FC));
-  Expect<Boolean>(Written = 'first' + LineEnding + #$00FC + LineEnding).ToBe(True);
-  CloseFile(Target);
-  FileBytes;
+  OpenTarget;
+  UseUnicodeOutput(FTarget, ProbeConsole, RecordWrite);
+  WriteLn(FTarget, 'first');
+  Expect<string>(WrittenCharacters).ToBe('first' + LineEnding);
+  WriteLn(FTarget, LINE);
+  Expect<string>(WrittenCharacters).ToBe('first' + LineEnding + LINE + LineEnding);
+end;
+
+procedure TConsoleOutputTests.TestConsoleOutputWritesAnIncompleteTailOnClose;
+var
+  Lead: ShortString;
+begin
+  // The lead byte of U+00FC with nothing after it, written as a raw byte.
+  Lead := 'x';
+  Lead[1] := AnsiChar($C3);
+  OpenTarget;
+  UseUnicodeOutput(FTarget, ProbeConsole, RecordWrite);
+  Write(FTarget, Lead);
+  CloseFile(FTarget);
+  Expect<Boolean>(Written = RawBytes([$C3])).ToBe(True);
 end;
 
 procedure TConsoleOutputTests.TestConsoleWriterFailureSetsIOResult;
 var
-  Target: Text;
   Code: Word;
 begin
-  OpenOutput(Target);
-  UseUnicodeOutput(Target, ProbeConsole, RecordUTF16);
+  OpenTarget;
+  UseUnicodeOutput(FTarget, ProbeConsole, RecordWrite);
   WriterSucceeds := False;
   {$I-}
-  WriteLn(Target, 'lost');
+  WriteLn(FTarget, 'lost');
   Code := IOResult;
   {$I+}
-  CloseFile(Target);
-  FileBytes;
-  Expect<Integer>(Code).ToBe(101);
+  Expect<Integer>(Code).ToBe(WRITE_FAILED_IO_RESULT);
 end;
 
 begin

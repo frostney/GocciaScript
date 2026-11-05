@@ -8,16 +8,16 @@
 
   UseUnicodeOutput makes a standard text file write UTF-8, and when its handle
   is a console, it also replaces the file's write function: the RTL fills the
-  buffer with UTF-8, and each flush converts the complete characters in the
-  buffer to UTF-16 and hands them to the writer, which writes them to the
-  console. A character split across two flushes, when a long string fills the
-  buffer, stays at the start of the buffer until the rest of it arrives. Every
-  Write and WriteLn to the file goes through it, so nothing that writes to
-  standard output changes. The console's code page is not changed.
+  buffer with UTF-8, and each flush hands the buffer's complete characters to
+  the console writer, which writes them to the console as UTF-16. When a long
+  string fills the buffer in the middle of a character, the start of that
+  character stays in the buffer until the rest of it arrives. Every Write and
+  WriteLn to the file goes through it, so nothing that writes to standard
+  output changes. The console's code page is not changed.
 
   The probe and the writer are parameters so that the logic runs on every
-  platform under test; ProcessEncoding passes GetConsoleMode and WriteConsoleW
-  on Windows. }
+  platform under test; ProcessEncoding passes GetConsoleMode and a writer
+  around WriteConsoleW on Windows. }
 
 unit ConsoleOutput;
 
@@ -25,17 +25,22 @@ unit ConsoleOutput;
 
 interface
 
+const
+  { The IOResult of a failed write, as the RTL reports it for a file. }
+  WRITE_FAILED_IO_RESULT = 101;
+
 type
   { True when AHandle is a console. }
   TConsoleProbe = function(const AHandle: THandle): Boolean;
-  { Writes ALength UTF-16 code units to the console AHandle; False on failure. }
-  TConsoleUTF16Writer = function(const AHandle: THandle;
-    const AText: PUnicodeChar; const ALength: SizeInt): Boolean;
+  { Writes ALength bytes of UTF-8 to the console AHandle; False on failure.
+    The bytes end on a character boundary unless they end the output. }
+  TConsoleWriter = function(const AHandle: THandle; const AText: PAnsiChar;
+    const ALength: SizeInt): Boolean;
 
-{ Makes AOutput, an open standard text file, write UTF-8: to a console as
-  UTF-16 through AWriter, to anything else as UTF-8 bytes. }
+{ Makes AOutput, an open standard text file, write UTF-8: to a console
+  through AWriter, to anything else as UTF-8 bytes. }
 procedure UseUnicodeOutput(var AOutput: Text; const AIsConsole: TConsoleProbe;
-  const AWriter: TConsoleUTF16Writer);
+  const AWriter: TConsoleWriter);
 
 { The number of leading bytes of ABytes that end on a character boundary:
   ALength, less a UTF-8 sequence at the end that more bytes would complete. }
@@ -45,7 +50,7 @@ function CompleteUTF8Length(const ABytes: PAnsiChar;
 implementation
 
 type
-  PConsoleUTF16Writer = ^TConsoleUTF16Writer;
+  PConsoleWriter = ^TConsoleWriter;
 
 const
   UTF8_MAX_SEQUENCE_LENGTH = 4;
@@ -76,25 +81,27 @@ begin
     Result := Start;
 end;
 
-{ The write and flush function of a console text file. }
+{ The write and flush function of a console text file. The RTL calls it with
+  a full buffer in the middle of a write, the only time a character can be
+  split; any other call, from WriteLn, Flush, Close or the flush at exit,
+  writes everything, so no byte is left behind when the output ends. }
 procedure WriteConsoleBuffer(var ATextRec: TextRec);
 var
   Complete, Rest: SizeInt;
-  Characters: UnicodeString;
-  Writer: TConsoleUTF16Writer;
+  Writer: TConsoleWriter;
 begin
   if ATextRec.BufPos = 0 then
     Exit;
-  Complete := CompleteUTF8Length(PAnsiChar(ATextRec.BufPtr), ATextRec.BufPos);
+  if ATextRec.BufPos < ATextRec.BufSize then
+    Complete := ATextRec.BufPos
+  else
+    Complete := CompleteUTF8Length(PAnsiChar(ATextRec.BufPtr),
+      ATextRec.BufPos);
   if Complete > 0 then
   begin
-    Characters := '';
-    WideStringManager.Ansi2UnicodeMoveProc(PAnsiChar(ATextRec.BufPtr),
-      CP_UTF8, Characters, Complete);
-    Writer := PConsoleUTF16Writer(@ATextRec.UserData)^;
-    if not Writer(ATextRec.Handle, PUnicodeChar(Characters),
-      Length(Characters)) then
-      InOutRes := 101;
+    Writer := PConsoleWriter(@ATextRec.UserData)^;
+    if not Writer(ATextRec.Handle, PAnsiChar(ATextRec.BufPtr), Complete) then
+      InOutRes := WRITE_FAILED_IO_RESULT;
   end;
   Rest := ATextRec.BufPos - Complete;
   if Rest > 0 then
@@ -103,14 +110,14 @@ begin
 end;
 
 procedure UseUnicodeOutput(var AOutput: Text; const AIsConsole: TConsoleProbe;
-  const AWriter: TConsoleUTF16Writer);
+  const AWriter: TConsoleWriter);
 begin
   if TextRec(AOutput).Mode <> fmOutput then
     Exit;
   SetTextCodePage(AOutput, CP_UTF8);
   if not AIsConsole(TextRec(AOutput).Handle) then
     Exit;
-  PConsoleUTF16Writer(@TextRec(AOutput).UserData)^ := AWriter;
+  PConsoleWriter(@TextRec(AOutput).UserData)^ := AWriter;
   TextRec(AOutput).InOutFunc := @WriteConsoleBuffer;
   TextRec(AOutput).FlushFunc := @WriteConsoleBuffer;
 end;
