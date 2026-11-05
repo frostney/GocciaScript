@@ -29,29 +29,59 @@ Record the spec, edition, clause id, section number, and snapshot SHA when the M
 When an issue references test262 files, patterns, or categories:
 
 1. Read `docs/test262.md` before running the reproduction.
-2. Use `scripts/run_test262_suite.ts` with `GocciaScriptLoaderBare`; do not run stock test262 files directly through `GocciaRunner`, `GocciaTestRunner`, or hand-built wrappers.
-3. Use the pinned test262 SHA from `.github/workflows/pr.yml` or `.github/workflows/ci.yml` unless the issue explicitly targets another SHA.
-4. Build the bare loader:
+2. Reproduce with the native `GocciaTest262Runner`, the runner CI uses. Do not run stock test262 files through `GocciaRunner`, `GocciaTestRunner`, `GocciaScriptLoaderBare`, or hand-built wrappers, and do not use `scripts/run_test262_suite.ts` to run tests: it no longer discovers or executes them.
+3. Use the test262 SHA in `scripts/test262-suite-sha.txt` unless the issue explicitly targets another SHA. CI reads the same file, so do not take the pin from the workflows. Check that your checkout is at that commit:
 
 ```bash
-./build.pas loaderbare
+cat scripts/test262-suite-sha.txt
+git -C /path/to/test262-suite rev-parse HEAD
+```
+
+If you have no checkout at the pinned SHA, fetch it:
+
+```bash
+git clone --filter=blob:none --no-checkout https://github.com/tc39/test262 /path/to/test262-suite
+git -C /path/to/test262-suite checkout "$(cat scripts/test262-suite-sha.txt)"
+```
+
+4. Build the native runner:
+
+```bash
+./build.pas test262runner
 ```
 
 `build.pas` retries a target once from a clean unit directory when FPC
 reports stale compiled state, so a build failure that survives that retry is
-a source failure. Use `./build.pas --clean loaderbare` only to rebuild from
+a source failure. Use `./build.pas --clean test262runner` only to rebuild from
 empty unit directories on purpose (see `docs/contributing/tooling.md`
 § Stale FPC Build Artifacts).
 
-5. Run exact issue paths through the project runner, for example:
+5. Run the exact issue paths from the repository root. The runner resolves its
+   bundled harness files relative to the working directory, and every test
+   reports `WRAPPER_INFRA` from anywhere else. `--filter` is a glob over test
+   IDs (paths relative to `test/`), `--categories` narrows the top-level
+   categories, and `--verbose` prints every result:
 
 ```bash
-bun scripts/run_test262_suite.ts \
-  --suite-dir /path/to/test262-suite \
-  --categories intl402 \
-  --filter 'intl402/NumberFormat/prototype/format/example.js' \
-  --jobs 1 \
-  --verbose
+./build/GocciaTest262Runner \
+  --suite-dir=/path/to/test262-suite \
+  --categories=intl402 \
+  --filter='intl402/NumberFormat/prototype/format/example.js' \
+  --jobs=1 \
+  --verbose \
+  --output=.agent/test262-results.json
 ```
 
-The runner supplies the compatibility flags, harness substitutions, non-strict script handling, timeout/memory limits, pinned harness behavior, and PASS/FAIL/WRAPPER_INFRA classification used by CI. Direct loader experiments are only supplemental after the project runner result is known.
+The runner supplies the compatibility flags, host hooks, harness handling,
+strict and non-strict runs, timeout and memory limits, and the
+PASS/FAIL/WRAPPER_INFRA/TIMEOUT classification that CI reports. Pass
+`--timeout=<duration>` and `--max-memory=<size>` only to match a specific CI
+step or to cap a broad probe. For a wide `--categories` or `--filter` run,
+cap the process too, as `AGENTS.md` describes. Direct loader experiments are
+only supplemental after the runner result is known.
+
+`scripts/run_test262_suite.ts` keeps only the CI artifact work: `--merge-shards`
+combines the shard reports from `GocciaTest262Runner --shard-index/--shard-count`
+into the canonical report, and `--comment` renders the PR comment. See the
+CI sharding section of `docs/test262.md` before reproducing a shard-level
+result.
