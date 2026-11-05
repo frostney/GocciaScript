@@ -12,10 +12,11 @@
   the names the RTL returns from the file system, and the code page of
   standard output and standard error, so Windows reads, lists and writes the
   same strings and the same bytes as the other platforms when output is
-  redirected to a file or a pipe. When a standard handle is a console,
-  ConsoleOutput writes its text to the console as UTF-16 with WriteConsoleW,
-  so the console shows every character its font has, without a change to the
-  console's code page. A unit that converts strings through the RTL lists this
+  redirected to a file or a pipe; a GUI application's standard files keep the
+  RTL's settings. When a standard handle is a console, ConsoleOutput writes
+  its text to the console as UTF-16 with WriteConsoleW, so the console shows
+  every character its font has, without a change to the console's code
+  page. A unit that converts strings through the RTL lists this
   unit in its uses, so that it is initialized first.
 
   Standard output and standard error are thread variables in FPC, which the

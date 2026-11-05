@@ -279,8 +279,9 @@ these converts through the system code page. That is the locale's code page on
 Linux and macOS, usually UTF-8, and the ANSI code page (1252 on most systems)
 on Windows, where a character outside it comes back as `?`. On Windows the
 `ProcessEncoding` unit makes UTF-8 the code page of those conversions and of
-the names the RTL returns, and of `Output`, `StdOut`, `ErrOutput` and `StdErr`,
-so output redirected to a file or a pipe is UTF-8 bytes. When one of those
+the names the RTL returns, and, in a console application, of `Output`,
+`StdOut`, `ErrOutput` and `StdErr`, so output redirected to a file or a pipe
+is UTF-8 bytes; a GUI application's standard files keep the RTL's settings. When one of those
 handles is a console, the `ConsoleOutput` unit replaces the text file's write
 function: each flush converts the UTF-8 in the buffer to UTF-16 and writes it
 with `WriteConsoleW`, so every `Write` and `WriteLn` to the console shows

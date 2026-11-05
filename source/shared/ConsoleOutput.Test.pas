@@ -267,16 +267,23 @@ end;
 
 procedure TConsoleOutputTests.TestConsoleOutputWritesAnIncompleteTailOnClose;
 var
-  Lead: ShortString;
+  Bytes: RawByteString;
+  Size: SizeInt;
 begin
-  // The lead byte of U+00FC with nothing after it, written as a raw byte.
-  Lead := 'x';
-  Lead[1] := AnsiChar($C3);
+  // The buffer fills with the lead byte of U+00FC as its last byte, so the
+  // flush at the end of Write holds it back for a continuation that never
+  // comes. The bytes are in the file's code page, so they are written as
+  // they are.
   OpenTarget;
   UseUnicodeOutput(FTarget, ProbeConsole, RecordWrite);
-  Write(FTarget, Lead);
+  Size := TextRec(FTarget).BufSize;
+  Bytes := StringOfChar(AnsiChar('a'), Size - 1) + AnsiChar($C3);
+  SetCodePage(Bytes, CP_UTF8, False);
+  Write(FTarget, Bytes);
+  Expect<Integer>(Length(Written)).ToBe(Size - 1);
   CloseFile(FTarget);
-  Expect<Boolean>(Written = RawBytes([$C3])).ToBe(True);
+  Expect<Integer>(Length(Written)).ToBe(Size);
+  Expect<Integer>(Ord(Written[Size])).ToBe($C3);
 end;
 
 procedure TConsoleOutputTests.TestConsoleWriterFailureSetsIOResult;
