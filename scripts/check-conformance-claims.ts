@@ -19,6 +19,8 @@
  *     request, so a rate hand-typed there would be published repo-wide);
  *   - YAML and shell under `.github/`, `website/` and `scripts/` (inline
  *     `github-script` markdown, install scripts, issue forms).
+ * Files come from `git ls-files` (tracked plus untracked-not-ignored), so a
+ * gitignored tree is never entered; without git the checkout is walked.
  * It looks for a percentage, a fraction, an absolute pass count or an
  * unquantified strength claim ("near-complete conformance") sitting next to
  * test262 vocabulary. Exits non-zero if any hand-typed claim is found.

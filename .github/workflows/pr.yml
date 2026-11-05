@@ -131,6 +131,7 @@ jobs:
             build/GocciaBenchmarkRunner
             build/GocciaRunner
 
+  # ci.yml runs the same steps on pushes to main. Keep the two lists identical.
   docs:
     runs-on: ubuntu-latest
     steps:
