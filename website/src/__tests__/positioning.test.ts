@@ -11,6 +11,7 @@ import {
   PRODUCTION_READY_ANSWER,
   PRODUCTION_READY_QUESTION,
   TYPE_ANNOTATIONS_ANSWER,
+  TYPESCRIPT_JSX_ANSWER,
   VITEST_COMPATIBILITY_ANSWER,
 } from "@/lib/positioning";
 
@@ -169,9 +170,19 @@ describe("GocciaScript positioning", () => {
       ).toBe(false);
   });
 
+  test("answers TypeScript and JSX with the source forms that run", () => {
+    expectConcepts(TYPESCRIPT_JSX_ANSWER, [
+      /\.js, \.jsx, \.ts, \.tsx, \.mjs and \.mts/,
+      /types-as-comments/i,
+      /createElement/,
+      /does not type-check/i,
+    ]);
+  });
+
   test("states the complete Delphi support contract", () => {
     expectConcepts(COMPILER_SUPPORT_ANSWER, [
       /Win32 and Win64 application matrix/i,
+      /REPL, Runner, Bare Script Loader, Test Runner, Benchmark Runner and Bundler/,
       /all applicable Pascal and JavaScript tests/i,
       /shared runtime semantics across both compilers/i,
     ]);

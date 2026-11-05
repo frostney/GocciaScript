@@ -57,6 +57,8 @@ import {
   PRODUCTION_READY_QUESTION,
   TYPE_ANNOTATIONS_ANSWER,
   TYPE_ANNOTATIONS_QUESTION,
+  TYPESCRIPT_JSX_ANSWER,
+  TYPESCRIPT_JSX_QUESTION,
   VITEST_COMPATIBILITY_ANSWER,
   VITEST_COMPATIBILITY_QUESTION,
 } from "@/lib/positioning";
@@ -479,15 +481,36 @@ console.log("total:", total);`;
     { op: "OP_RETURN", arg: "", note: "" },
   ];
 
+  // The shape of `GocciaRunner example.js --output=compact-json` (see
+  // docs/json-output.md); the timings are from one such run.
   const RESULT = `{
-  "result": null,
-  "stdout": "total: 7.5\\n",
-  "fileName": "example.js",
-  "lexTimeNanoseconds": 14800,
-  "parseTimeNanoseconds": 41600,
-  "compileTimeNanoseconds": 23200,
-  "executeTimeNanoseconds": 5300,
-  "totalTimeNanoseconds": 84900
+  "ok": true,
+  "output": ["total: 7.5"],
+  "error": null,
+  "timing": {
+    "lex_ns": 45155,
+    "parse_ns": 50930,
+    "compile_ns": 81236,
+    "exec_ns": 56509,
+    "total_ns": 1467240
+  },
+  "workers": { "used": 1, "available": 1, "parallel": false },
+  "files": [
+    {
+      "fileName": "example.js",
+      "ok": true,
+      "output": ["total: 7.5"],
+      "error": null,
+      "timing": {
+        "lex_ns": 45155,
+        "parse_ns": 50930,
+        "compile_ns": 81236,
+        "exec_ns": 56509,
+        "total_ns": 1467240
+      },
+      "result": null
+    }
+  ]
 }`;
 
   const CONSOLE_OUTPUT = `total: 7.5`;
@@ -713,7 +736,7 @@ console.log("total:", total);`;
                         })),
                         {
                           kind: "meta" as const,
-                          text: "— exit 0 · 0.08ms",
+                          text: "— exit 0 · 1.47ms",
                         },
                       ]}
                     />
@@ -863,8 +886,8 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
     ),
   },
   {
-    question: "Can GocciaScript run TypeScript or JSX source?",
-    answer: TYPE_ANNOTATIONS_ANSWER,
+    question: TYPESCRIPT_JSX_QUESTION,
+    answer: TYPESCRIPT_JSX_ANSWER,
   },
   {
     question: "How do I try GocciaScript?",
@@ -1033,9 +1056,9 @@ export function Landing({
               <VStack gap={2}>
                 <Heading level={4}>Tested on every change</Heading>
                 <Text as="p" type="supporting" display="block">
-                  15,000+ JavaScript tests in 1,800+ files run on every pull
-                  request on Linux x64 and on six targets on main. Differential
-                  suites are checked against Bun and Vitest.
+                  17,000+ JavaScript tests run on every pull request on Linux
+                  x64 and on six targets on main. Differential suites are
+                  checked against Bun and Vitest.
                 </Text>
               </VStack>
             </Card>
@@ -1305,9 +1328,10 @@ export function Landing({
               <VStack gap={2}>
                 <Heading level={4}>Delphi 12</Heading>
                 <Text as="p" type="supporting" display="block">
-                  Repository projects cover every shipped application on Win32
-                  and Win64; the support contract includes all applicable Pascal
-                  and JavaScript tests.
+                  Repository projects cover the REPL, Runner, Bare Script
+                  Loader, Test Runner, Benchmark Runner and Bundler on Win32 and
+                  Win64; the support contract includes all applicable Pascal and
+                  JavaScript tests.
                 </Text>
               </VStack>
             </Card>
