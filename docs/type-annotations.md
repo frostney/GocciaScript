@@ -76,9 +76,10 @@ const withDefault = <T = string,>(v: T): T => v;
 const load = async <T,>(read: () => Promise<T>): Promise<T> => read();
 
 // A `this` parameter types `this`; it is not a parameter at run time, so
-// `total.length` is 1. Overload signatures (erased) are a function or method
-// header with no body, ended by `;` or, under ASI, a line break; the
-// implementation keeps its own parameters, so `pick.length` is 1. Both also
+// `Counter.prototype.total.length` is 1. Overload signatures (erased) are a
+// function or method header with no body, ended by `;` or, under ASI, a line
+// break; the implementation keeps its own parameters, so
+// `Counter.prototype.pick.length` is 1. Both also
 // work on `function` declarations under `--compat-function`.
 class Counter {
   base = 2;

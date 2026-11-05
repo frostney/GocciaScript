@@ -732,19 +732,19 @@ Each test starts with a `BeforeEach` override that calls `FAssertions.ResetCurre
 GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a post-build job fan-out plus release packaging. Its first job, `supersede`, cancels any in-flight `main` run whose commit is an ancestor of the pushed commit, or its own run when a newer `main` commit is already being tested; tag and dispatched runs are never cancelled. See [Build System](build-system.md#ciyml--push-to-main--tags) for the rules.
 
 ```text
-supersede → toolchain → build → test             → artifacts (main), release (tags)
-                              → toml-compliance  →
-                              → json5-compliance →
-                              → awfy             →
-                              → jetstream        →
-                              → web-tooling      →
-                              → benchmark        →
-                              → cli              →
-                              → test262 → test262-merge
+supersede → build → test             → artifacts (main), release (tags)
+                   → toml-compliance  →
+                   → json5-compliance →
+                   → awfy             →
+                   → jetstream        →
+                   → web-tooling      →
+                   → benchmark        →
+                   → cli              →
+                   → test262 → test262-merge
 test-structure
 ```
 
-**`toolchain`** / **`build`** — `toolchain` restores (or builds) the cached FPC cross-compilation toolchains: one on macOS for the Darwin targets, and one on Linux for the Linux and Windows targets, which keeps those four builds off the scarcer macOS runners. `build` cross-compiles all binaries for every target on its toolchain's host and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
+**`build`** — Installs FPC 3.2.4 through `frostney/fpc-toolchain`, which ships every target for its runner's host: only the Darwin targets need a macOS runner, and the Linux and Windows targets cross-compile on Linux. It builds all binaries for its target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
 
 **`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison.
 

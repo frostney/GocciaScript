@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`), and `MemoryLimitError` (`--max-memory`), and the uncatchable host stop `RunAbortedError` (a host's abort from another thread)
+- **Error types** -- `Error`, `TypeError`, `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`, `SuppressedError`, plus the uncatchable resource ceilings `TimeoutError` (`--timeout`), `InstructionLimitError` (`--max-instructions`) and `MemoryLimitError` (`--max-memory`), and the uncatchable host stop `RunAbortedError` (a host's abort from another thread)
 - **`--max-memory` refuses in two ways** -- both force a collection and re-test first, and they differ in what the guest can do about the answer. A *charged* allocation (string payload, `ArrayBuffer` backing store) throws a **catchable** `RangeError`; a *gated* growth point (array element storage, object property storage) ends the run with the **uncatchable** `MemoryLimitError`. Either way, a request larger than the whole budget is refused straight away, and a repeat of one a forced collection has already refused is usually refused without walking the heap: the first retry after a refusal forces a collection again, and each retry collection that makes no room doubles the interval before the next ([ADR 0173](adr/0173-a-refused-request-is-collected-for-again-after-a-backoff.md)). The same byte count can therefore be survivable on one path and fatal on the other -- see [Garbage Collector § Gated growth points](garbage-collector.md#gated-growth-points)
 - **Engine-integrity faults** -- A fifth uncatchable class, and not an error type at all: a use-after-free, an invalid dereference, or a broken heap unwinds past every `catch` to the host, because a script cannot meaningfully continue on top of one. See [ADR 0109](adr/0109-engine-integrity-faults-are-uncatchable.md)
 - **Parser errors** -- Displayed with source context, a caret pointing to the exact column, and optional suggestion text (e.g., "Use 'let' or 'const' instead")
@@ -16,7 +16,7 @@
 
 ## Error Types
 
-GocciaScript supports the standard ECMAScript error constructors plus the resource-ceiling types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, and `MemoryLimitError` are CLI-only; `RunAbortedError` is raised by a Pascal host's abort handle. None of them is exposed as a JavaScript constructor.
+GocciaScript supports the standard ECMAScript error constructors plus the resource-ceiling and host-stop types below. All JavaScript-visible error types inherit from `Error` and work with `instanceof`. `TimeoutError`, `InstructionLimitError`, and `MemoryLimitError` are CLI-only; `RunAbortedError` is raised by a Pascal host's abort handle. None of them is exposed as a JavaScript constructor.
 
 | Type | Thrown when | MDN |
 |------|-----------|-----|

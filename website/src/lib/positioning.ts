@@ -28,7 +28,7 @@ export const TYPESCRIPT_JSX_QUESTION =
   "Can GocciaScript run TypeScript or JSX source?";
 
 export const TYPESCRIPT_JSX_ANSWER =
-  "Yes. GocciaScript runs .js, .jsx, .ts, .tsx, .mjs and .mts files directly, with no separate transform step. Type annotations, interfaces and type aliases follow the TC39 Type Annotations proposal's types-as-comments model and are erased, and enum declarations follow the TC39 enum proposal. JSX in .js, .jsx, .tsx and .mjs files is rewritten into createElement calls before lexing, so your code supplies createElement and Fragment; in .ts and .mts a leading < is always type syntax. GocciaScript does not type-check: use tsc for that.";
+  "Yes. GocciaScript runs .js, .jsx, .ts, .tsx, .mjs and .mts files directly, with no separate transform step. Type annotations, interfaces and type aliases follow the TC39 Type Annotations proposal's types-as-comments model and are erased, and enum declarations follow the TC39 enum proposal. JSX in .js, .jsx, .tsx and .mjs files (with a warning in .js and .mjs) is rewritten into createElement calls before lexing, so your code supplies createElement and Fragment; in .ts and .mts a leading < is always type syntax. GocciaScript does not type-check: use tsc for that.";
 
 export const NODE_COMPATIBILITY_QUESTION = "Is GocciaScript Node-compatible?";
 

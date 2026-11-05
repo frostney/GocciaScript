@@ -533,7 +533,7 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 | [Test Framework API](docs/testing-api.md) | Assertions, mocks, lifecycle hooks, async patterns |
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |
 | [Build System](docs/build-system.md) | Build commands, compiler configuration, CI/CD |
-| [Profiling](docs/profiling.md) | Bytecode VM profiling: opcodes, functions, output formats |
+| [Profiling](docs/profiling.md) | Bytecode VM profiling: opcodes, functions, the compile profile, output formats |
 | [Architecture Decision Records](docs/adr/) | Durable architectural decisions and trade-offs |
 | [Contributing](CONTRIBUTING.md) | Single contribution standard: workflow, mandatory rules, testing, FreePascal style |
 | [AGENTS.md](AGENTS.md) | Agent operating manual for coding assistants; [CONTRIBUTING.md](CONTRIBUTING.md) is the contributing guide for everyone |
