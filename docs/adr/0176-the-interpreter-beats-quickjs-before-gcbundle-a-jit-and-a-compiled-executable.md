@@ -34,6 +34,12 @@ on `main` at `ffd9e5b4` (ubuntu-latest x64, QuickJS 2026-06-04):
 - **JetStream:** the geomean of QuickJS score / Goccia score over the six-workload
   JetStream 3 subset is **11.0×** (JetStream corpus `c603c04d`).
 
+The run's `awfy-report` and `jetstream-report` artifacts (ids 13323746690 and
+13325080006) expire on 2026-12-04. Main CI also publishes both reports to the
+`awfy/` and `jetstream/` Vercel Blob namespaces
+([`docs/benchmarks.md`](../benchmarks.md)), which is where the retained history
+behind `/performance` lives.
+
 ## Decision
 
 Performance is a project goal, with four targets in this order of priority.

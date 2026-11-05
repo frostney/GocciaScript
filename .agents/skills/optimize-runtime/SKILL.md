@@ -40,7 +40,10 @@ opt-in baseline JIT, and a compiled executable.
 5. Make every workload verify its result independently. There is no second
    execution mode to compare against: rely on the JavaScript suite, test262
    and the differential suites' external oracles, and require AWFY/probe
-   workloads to check their own computed result.
+   workloads to check their own computed result. JetStream workloads without
+   an upstream `validate()` hook run execution-only under ADR 0176, so their
+   timing does not establish result correctness; check their results with the
+   oracles above.
 
 Default wave target unless the user overrides it: ADR 0176's target 1, an
 interpreter **faster than QuickJS**. On AWFY that is a `Goccia time / QuickJS
