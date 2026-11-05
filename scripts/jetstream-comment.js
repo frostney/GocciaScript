@@ -57,7 +57,7 @@ function buildJetStreamComment(report) {
   const geomean = report.geomeanRatios || {};
   body += `\n**Geomean reference ratio:** QuickJS ${formatRatio(geomean[`${gocciaEngine}_over_qjs`])}; `;
   body += `Node.js ${formatRatio(geomean[`${gocciaEngine}_over_node`])}.\n`;
-  body += '\n<sub>1.00× means aligned; values above 1.00× mean Goccia was proportionally slower after normalizing JetStream’s higher-is-better score. This is a directional barometer across runtimes with different goals, not a product ranking. Raw samples and failure details remain in the `jetstream-report` artifact.</sub>\n';
+  body += '\n<sub>1.00× means aligned; values above 1.00× mean Goccia was proportionally slower after normalizing JetStream’s higher-is-better score. QuickJS is the bar for the interpreter-speed target; Node.js, with its JIT, is shown for scale. Raw samples and failure details remain in the `jetstream-report` artifact.</sub>\n';
   return body;
 }
 

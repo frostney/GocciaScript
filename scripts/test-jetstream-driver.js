@@ -283,7 +283,7 @@ console.log('jetstream-comment: barometer framing...');
     geomeanRatios: { goccia_over_qjs: 2, goccia_over_node: 4 },
   });
   assert(comment.includes('Performance Barometer'), 'uses canonical dashboard vocabulary');
-  assert(comment.includes('not a product ranking'), 'avoids competitor framing');
+  assert(comment.includes('QuickJS is the bar for the interpreter-speed target'), 'names QuickJS as the target bar');
   assert(comment.includes('2.00×'), 'renders normalized ratio');
 }
 
