@@ -9089,11 +9089,15 @@ await section("REPL: repeated tagged template execution...", async () => {
 
 await section("Runner: eval is absent in host and sandbox mode, even with the other dynamic-code switches...", async () => {
   // eval is an engine option only (EnableEval, #2065): no flag or config key
-  // installs it, so neither mode exposes it, nor does a ShadowRealm child.
+  // installs it, so neither mode exposes it, nor does a ShadowRealm child,
+  // even after the script defines a global named eval itself.
   const probe = [
     'console.log("eval:" + typeof eval + ":" + ("eval" in globalThis));',
-    'if (typeof ShadowRealm === "function")',
+    'if (typeof ShadowRealm === "function") {',
     '  console.log("child:" + new ShadowRealm().evaluate("typeof eval"));',
+    '  globalThis.eval = () => "fake";',
+    '  console.log("child-after-own-eval:" + new ShadowRealm().evaluate("typeof eval"));',
+    "}",
     "",
   ].join("\n");
   const host = Bun.spawnSync(
@@ -9102,7 +9106,8 @@ await section("Runner: eval is absent in host and sandbox mode, even with the ot
   );
   const hostOut = host.stdout.toString();
   if (host.exitCode !== 0 || !containsLine(hostOut, "eval:undefined:false") ||
-      !containsLine(hostOut, "child:undefined"))
+      !containsLine(hostOut, "child:undefined") ||
+      !containsLine(hostOut, "child-after-own-eval:undefined"))
     throw new Error(`Runner host mode exposed eval (exit ${host.exitCode}): ${hostOut}${host.stderr.toString()}`);
 
   const tmp = makeNativeTmp();

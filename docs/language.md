@@ -733,7 +733,7 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 **Implemented; off by default.** `GocciaRunner` (host and sandbox mode), `GocciaREPL`, `GocciaTestRunner`, and `GocciaScriptLoaderBare` do not expose `eval`, and no CLI flag or config key turns it on.
 
-`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. An embedder that wants it calls `EnableEval(Engine)` (`Goccia.Builtins.GlobalEval`), which installs `globalThis.eval` as the realm's `%eval%`: a call written `eval(...)` is a direct eval with the caller's scope and strictness (ES2026 §13.3.6.1), any other call is an indirect eval in the global scope (§19.2.1), and each call reports an `eval.call` [audit event](capability-audit.md). See [Embedding — Changing the Defaults](embedding.md#changing-the-defaults). `GocciaTest262Runner` uses the same option, and adds `evalScript(sourceText)` and `createRealm()` on its private test262 host object so the stock test262 harness can exercise realm semantics.
+`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. An embedder that wants it calls `EnableEval(Engine)`, which installs `globalThis.eval` with direct and indirect eval semantics; see [Embedding — Changing the Defaults](embedding.md#changing-the-defaults). `GocciaTest262Runner` uses the same option, and adds `evalScript(sourceText)` and `createRealm()` on its private test262 host object so the stock test262 harness can exercise realm semantics.
 
 ### `arguments` Object
 

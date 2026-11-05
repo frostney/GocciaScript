@@ -14,7 +14,7 @@ unit Goccia.Builtins.GlobalEval;
   EnableEval records the function as the realm's %eval%, which is what makes
   a call written `eval(...)` a direct eval (ES2026 §13.3.6.1 step 6.a); the VM
   evaluates a direct eval at its call site and never calls this function. A
-  call through any other reference is an indirect eval (§19.2.1.1), which
+  call through any other reference is an indirect eval (§19.2.1), which
   runs here through TGocciaEngine.EvaluateGlobalEval. Every call of %eval%,
   direct or indirect, reports an `eval.call` capability audit event. }
 
@@ -26,6 +26,9 @@ uses
 { Installs globalThis.eval on AEngine as its realm's %eval% (idempotent).
   Off by default: an engine that never calls this has no eval. }
 procedure EnableEval(const AEngine: TGocciaEngine);
+{ True once EnableEval has run on AEngine, whatever its script has since done
+  to the global `eval`. }
+function IsEvalEnabled(const AEngine: TGocciaEngine): Boolean;
 
 implementation
 
@@ -89,8 +92,8 @@ begin
   end;
 end;
 
-// ES2026 §19.2.1.1 eval ( x ), called indirectly: PerformEval(x, false,
-// false) in this host's realm. A direct eval never reaches this function; the
+// ES2026 §19.2.1 eval(x), called indirectly: PerformEval(x, false, false)
+// (§19.2.1.1) in this host's realm. A direct eval never reaches this function; the
 // VM evaluates it at the call site.
 function TGocciaEvalHost.Invoke(const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
@@ -110,11 +113,16 @@ begin
     TGocciaStringLiteralValue(SourceValue).Value, EVAL_SOURCE_PATH, Stage);
 end;
 
+function IsEvalEnabled(const AEngine: TGocciaEngine): Boolean;
+begin
+  Result := Assigned(AEngine.FindExtension(TGocciaEvalHost));
+end;
+
 procedure EnableEval(const AEngine: TGocciaEngine);
 var
   Host: TGocciaEvalHost;
 begin
-  if Assigned(AEngine.FindExtension(TGocciaEvalHost)) then
+  if IsEvalEnabled(AEngine) then
     Exit;
   Host := TGocciaEvalHost.Create(AEngine);
   AEngine.AddExtension(Host);

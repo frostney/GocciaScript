@@ -208,13 +208,12 @@ begin
   // capability set, so bare specifiers resolve in the child exactly as they
   // do in its creator, and never more widely.
   // SetDefaultGlobalBindings installs `eval` on the realm global. GocciaScript
-  // keeps eval out of normal realms, so mirror the creating realm: when it
-  // exposes `eval`, give the child its own %eval% through the engine option
-  // (EnableEval). It evaluates in the child realm, so isolation holds, and it
-  // reports to the audit sink the child inherited.
-  if (AParentEngine.Realm.GlobalObject is TGocciaObjectValue) and
-     TGocciaObjectValue(AParentEngine.Realm.GlobalObject).HasOwnProperty(
-       'eval') then
+  // keeps eval out of a realm unless its host opted in, so a child realm
+  // inherits that choice from its creator's engine option, not from whatever
+  // the creator's script left in its global `eval`. The child's own %eval%
+  // evaluates in the child realm, so isolation holds, and it reports to the
+  // audit sink the child inherited.
+  if IsEvalEnabled(AParentEngine) then
     EnableEval(FEngine);
   FEngine.SuspendRealmExecutionContext;
 end;

@@ -15806,38 +15806,6 @@ begin
   end;
 end;
 
-// Reports a direct eval of %eval% (eval.call), located at the eval call
-// expression, as a native callee's audit event is located at its call.
-// ACallIP is the call instruction that OP_DIRECT_EVAL stands in front of.
-procedure TGocciaVM.AuditDirectEval(const ATemplate: TGocciaFunctionTemplate;
-  const ACallIP: Integer);
-var
-  Line, Column: Integer;
-  SourceFile: string;
-  PreviousCallSite: TGocciaCallSite;
-begin
-  SourceFile := '';
-  if not ATemplate.TryGetCallSitePosition(UInt32(ACallIP), Line, Column) then
-  begin
-    Line := 0;
-    Column := 0;
-    if Assigned(ATemplate.DebugInfo) then
-    begin
-      Line := ATemplate.DebugInfo.GetLineForPC(UInt32(ACallIP));
-      Column := ATemplate.DebugInfo.GetColumnForPC(UInt32(ACallIP));
-    end;
-  end;
-  if Assigned(ATemplate.DebugInfo) then
-    SourceFile := ATemplate.DebugInfo.SourceFile;
-  EnterGocciaCallSite(SourceFile, Line, Column, PreviousCallSite);
-  try
-    FCapabilityAuditEmitter(gckEval, gcdAllow, 'eval',
-      'direct eval is enabled');
-  finally
-    LeaveGocciaCallSite(PreviousCallSite);
-  end;
-end;
-
 // ES2026 §19.2.1.1 PerformEval for a direct eval, up to the evaluation of the
 // body (ADR 0134 Phase 3). The call's frame is the current one. Gets the eval
 // code compiled at the call (CompileDirectEvalCode), instantiates a
@@ -16403,6 +16371,31 @@ begin
     ALocation.Line := Integer(ATemplate.DebugInfo.GetLineForPC(UInt32(APC)));
     ALocation.Column :=
       Integer(ATemplate.DebugInfo.GetColumnForPC(UInt32(APC)));
+  end;
+end;
+
+// Reports a direct eval of %eval% (eval.call), located at the eval call
+// expression, as a native callee's audit event is located at its call.
+// ACallIP is the call instruction that OP_DIRECT_EVAL stands in front of.
+procedure TGocciaVM.AuditDirectEval(const ATemplate: TGocciaFunctionTemplate;
+  const ACallIP: Integer);
+var
+  Location: TGocciaFrameLocation;
+  SourceFile: string;
+  PreviousCallSite: TGocciaCallSite;
+begin
+  Location := Default(TGocciaFrameLocation);
+  LocateFrameAt(ATemplate, ACallIP, Location);
+  SourceFile := '';
+  if Assigned(ATemplate.DebugInfo) then
+    SourceFile := ATemplate.DebugInfo.SourceFile;
+  EnterGocciaCallSite(SourceFile, Location.Line, Location.Column,
+    PreviousCallSite);
+  try
+    FCapabilityAuditEmitter(gckEval, gcdAllow, 'eval',
+      'direct eval is enabled');
+  finally
+    LeaveGocciaCallSite(PreviousCallSite);
   end;
 end;
 

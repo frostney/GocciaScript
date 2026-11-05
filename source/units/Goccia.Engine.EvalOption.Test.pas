@@ -44,10 +44,10 @@ type
     function CountEvents(const AEvent, AReason: string;
       out ALines: string): Integer;
     procedure TestAbsentByDefault;
-    procedure TestAbsentInDefaultRuntime;
     procedure TestAbsentWithOtherDynamicCodeOptions;
     procedure TestGlobalPropertyShape;
     procedure TestEnableEvalIsIdempotent;
+    procedure TestEnableEvalTwiceKeepsTheFunction;
     procedure TestDirectEvalSeesCallerScope;
     procedure TestIndirectEvalUsesGlobalScope;
     procedure TestDirectEvalInheritsStrictness;
@@ -87,13 +87,13 @@ end;
 procedure TEvalOptionTests.SetupTests;
 begin
   Test('eval is absent from an engine by default', TestAbsentByDefault);
-  Test('eval is absent from the default runtime',
-    TestAbsentInDefaultRuntime);
   Test('Function constructor and ShadowRealm options do not install eval',
     TestAbsentWithOtherDynamicCodeOptions);
   Test('EnableEval installs a writable, configurable, non-constructor eval',
     TestGlobalPropertyShape);
   Test('EnableEval is idempotent', TestEnableEvalIsIdempotent);
+  Test('A second EnableEval keeps the installed function',
+    TestEnableEvalTwiceKeepsTheFunction);
   Test('Direct eval sees the caller''s scope', TestDirectEvalSeesCallerScope);
   Test('Indirect eval evaluates in the global scope',
     TestIndirectEvalUsesGlobalScope);
@@ -198,20 +198,18 @@ begin
   Expect<string>(Run(ABSENCE_PROBE, [], [])).ToBe('undefined,false,true');
 end;
 
-procedure TEvalOptionTests.TestAbsentInDefaultRuntime;
-begin
-  Expect<string>(Run(ABSENCE_PROBE, [esRuntime], [])).ToBe(
-    'undefined,false,true');
-end;
-
 procedure TEvalOptionTests.TestAbsentWithOtherDynamicCodeOptions;
 begin
   { Neither the realm nor a ShadowRealm child gets eval from the other two
-    dynamic-code options. }
+    dynamic-code options, and a script cannot give a child one by defining a
+    global named eval: the child follows its creator's engine option. }
   Expect<string>(Run(ABSENCE_PROBE +
+    'globalThis.result += "," + new ShadowRealm().evaluate("typeof eval");' +
+    'globalThis.eval = () => "fake";' +
     'globalThis.result += "," + new ShadowRealm().evaluate("typeof eval");',
     [esRuntime, esFunctionConstructor, esShadowRealm],
-    NON_STRICT_COMPATIBILITY)).ToBe('undefined,false,true,undefined');
+    NON_STRICT_COMPATIBILITY)).ToBe(
+    'undefined,false,true,undefined,undefined');
 end;
 
 procedure TEvalOptionTests.TestGlobalPropertyShape;
@@ -231,13 +229,46 @@ end;
 
 procedure TEvalOptionTests.TestEnableEvalIsIdempotent;
 begin
-  { Run enables it twice; a second install would replace the function and
-    break the identity a direct eval checks. }
+  { Run enables it twice before the script runs. }
   Expect<string>(Run(
     'const first = eval;' +
     'globalThis.result = [first === globalThis.eval,' +
     ' (function () { const x = "local"; return eval("x"); })()].join(",");',
     [esEval], NON_STRICT_COMPATIBILITY)).ToBe('true,local');
+end;
+
+procedure TEvalOptionTests.TestEnableEvalTwiceKeepsTheFunction;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  First: TGocciaValue;
+begin
+  { A reinstall would replace both the global and the realm's %eval%, so a
+    reference a script saved before it would stop being a direct eval. }
+  Source := TStringList.Create;
+  Engine := TGocciaEngine.Create('eval-option.js', Source);
+  try
+    Engine.Compatibility := NON_STRICT_COMPATIBILITY;
+    EnableEval(Engine);
+    First := TGocciaObjectValue(Engine.Realm.GlobalObject).GetProperty('eval');
+    Expect<Boolean>(IsEvalEnabled(Engine)).ToBe(True);
+    Source.Text := 'globalThis.saved = eval;';
+    Engine.Execute;
+    EnableEval(Engine);
+    Expect<Boolean>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('eval') = First).ToBe(True);
+    Source.Text := 'globalThis.result = [saved === eval,' +
+      ' (function () { const x = "local"; return saved("typeof x"); })(),' +
+      ' (function () { const x = "local"; const eval = saved;' +
+      ' return eval("x"); })()].join(",");';
+    Engine.Execute;
+    Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('result').ToStringLiteral.Value).ToBe(
+      'true,undefined,local');
+  finally
+    Engine.Free;
+    Source.Free;
+  end;
 end;
 
 procedure TEvalOptionTests.TestDirectEvalSeesCallerScope;
@@ -267,7 +298,7 @@ end;
 
 procedure TEvalOptionTests.TestDirectEvalInheritsStrictness;
 begin
-  { §19.2.1.1 step 13: a direct eval in strict code is strict, so its var
+  { §19.2.1.1 step 12: a direct eval in strict code is strict, so its var
     declarations stay in its own environment and `this` in a plain call is
     undefined; in non-strict code they reach the caller. }
   Expect<string>(Run(
@@ -319,8 +350,13 @@ begin
     'globalThis.eval = (s) => "replaced:" + s;' +
     'const afterReplace = f();' +
     'globalThis.eval = original;' +
-    'globalThis.result = [afterReplace, f()].join(",");',
-    [esEval], NON_STRICT_COMPATIBILITY)).ToBe('replaced:x,local');
+    'const afterRestore = f();' +
+    'delete globalThis.eval;' +
+    'function g(e) { const x = "local"; var eval = e; return eval("x"); }' +
+    'globalThis.result = [afterReplace, afterRestore, g(original),' +
+    ' typeof globalThis.eval].join(",");',
+    [esEval], NON_STRICT_COMPATIBILITY)).ToBe(
+    'replaced:x,local,local,undefined');
 end;
 
 procedure TEvalOptionTests.TestShadowRealmChildGetsEval;
@@ -333,9 +369,11 @@ begin
     'globalThis.result = [realm.evaluate("typeof eval"),' +
     ' realm.evaluate("globalThis.marker = \"child\"; (0, eval)(\"marker\")"),' +
     ' realm.evaluate("(() => { const x = \"local\"; return eval(\"x\"); })()"),' +
-    ' marker].join(",");',
+    ' marker,' +
+    ' (delete globalThis.eval, new ShadowRealm().evaluate("typeof eval"))]' +
+    '.join(",");',
     [esEval, esShadowRealm], NON_STRICT_COMPATIBILITY)).ToBe(
-    'function,child,local,parent');
+    'function,child,local,parent,function');
   { The child's eval reports to the sink it inherited. }
   Expect<Integer>(CountEvents('eval.call|allow|eval',
     'indirect eval is enabled', Lines)).ToBe(1);
