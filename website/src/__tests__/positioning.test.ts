@@ -86,7 +86,10 @@ describe("GocciaScript positioning", () => {
       /while\/do\.\.\.while/i,
       /non-strict Script semantics/i,
       /private test262 host.+conformance/i,
+      /Annex B.+test262 conformance target/i,
+      /new ones sit behind a compatibility flag/i,
     ]);
+    expect(ECMASCRIPT_SCOPE_ANSWER).not.toMatch(/not a pre-1\.0 target/i);
   });
 
   test("keeps type annotations standards-first", () => {

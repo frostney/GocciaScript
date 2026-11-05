@@ -6,7 +6,7 @@
 
 - **Profile table** — Implemented semantics, recommended defaults, exposure paths, and standards sources are separate fields
 - **Generated evidence** — Core ECMAScript coverage is tracked by generated test262 reports rather than a hand-maintained feature inventory
-- **Annex B policy** — Browser-only legacy Annex B semantics are not a pre-1.0 target; selected existing shims remain documented individually
+- **Annex B policy** — Annex B is part of the test262 conformance target; new Annex B surfaces go behind a compatibility flag, and the ones that already ship stay as they are
 - **Parser policy** — Disabled parser syntax is a `SyntaxError` by default; `--warning-unsupported-features` restores warning/no-op recovery without enabling compatibility semantics
 - **Beyond core ECMAScript** — Separate tables cover Web Platform APIs and active TC39 proposals
 - **Canonical source** — Detailed semantics, examples, and rationale live in [language.md](language.md)
@@ -41,9 +41,10 @@ hand-maintained list of implemented features. See the
 current results and [language.md](language.md) for detailed semantics and
 profile policy.
 
-Browser-only legacy Annex B semantics are not a pre-1.0 target. Existing
-selected shims remain documented individually; see
-[ADR 0085](adr/0085-defer-annex-b-before-1-0.md).
+Annex B's legacy browser features are part of the test262 conformance target.
+New Annex B surfaces go behind a compatibility flag that the test262 runner
+turns on, and the ones that already ship stay as they are; see
+[ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 
 ## Web Platform APIs
 

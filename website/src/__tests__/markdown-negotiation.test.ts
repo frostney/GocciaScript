@@ -267,6 +267,9 @@ describe("createSiteMarkdown", () => {
       `${passed} of ${totalRun} tests passing (${compatibilityPercent(passed, totalRun)})`,
     );
     expect(markdown).toContain(
+      "The latest published run, Annex B excluded, has",
+    );
+    expect(markdown).toContain(
       "by area on the compatibility dashboard](/compatibility)",
     );
     expect(markdown).toContain(
@@ -284,6 +287,33 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain(
       "Pre-1.0: the host API and flags may change between releases; pin a version.",
     );
+  });
+
+  test("home Markdown names the Annex B exclusion only while the run leaves annexB out", () => {
+    const summary = compatibilityData.latest.summary;
+    const markdown = renderHomeMarkdown(null, {
+      ...compatibilityData,
+      latest: {
+        ...compatibilityData.latest,
+        summary: {
+          ...summary,
+          byCategory: [
+            ...summary.byCategory,
+            {
+              category: "annexB",
+              run: 10,
+              passed: 10,
+              failed: 0,
+              wrapperInfra: 0,
+              timeouts: 0,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(markdown).toContain("The latest published run has ");
+    expect(markdown).not.toContain("Annex B excluded");
   });
 
   test("home Markdown links to conformance evidence without inventing a result", () => {
