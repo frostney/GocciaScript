@@ -24,7 +24,8 @@ opt-in baseline JIT, and a compiled executable.
 
 ## Establish the experiment
 
-1. Read `.agent/HANDOFF.md` when it exists, `VISION.md`, `CONTEXT.md`, the
+1. Read `.agent/HANDOFF.md` when it exists, `VISION.md` (its throughput stance is
+   superseded by ADR 0176 until #2070 rewrites it), `CONTEXT.md`, the
    hot-path policy in `docs/contributing/code-style.md` and
    `docs/core-patterns.md`, `docs/testing.md`, `docs/benchmarks.md`,
    `docs/profiling.md`, `docs/bytecode-vm.md`, and the ADRs governing the
@@ -38,7 +39,7 @@ opt-in baseline JIT, and a compiled executable.
    an additional checked-build correctness gate, never as performance evidence.
 5. Make every workload verify its result independently. There is no second
    execution mode to compare against: rely on the JavaScript suite, test262
-   and the differential lane's external oracles, and require AWFY/probe
+   and the differential suites' external oracles, and require AWFY/probe
    workloads to check their own computed result.
 
 Default wave target unless the user overrides it: ADR 0176's target 1, an
@@ -83,7 +84,9 @@ targets.
    compilation from both sides where the driver already does so, verify
    observable results, and run on the same host. Pin QuickJS to the version in
    `.github/scripts/install-quickjs.sh`. Label emulated or virtualized Linux
-   results explicitly rather than presenting them as native hardware.
+   results explicitly rather than presenting them as native hardware. Whether
+   emulated results can count towards target 1 is open in #2102; until it is
+   settled, do not report them as target-1 evidence.
 
 Use interleaved `--goccia-baseline` / `--goccia-candidate` for Goccia-vs-Goccia
 A/B. Do not compare sequential batches on a noisy laptop as accept evidence.

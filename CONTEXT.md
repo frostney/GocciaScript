@@ -508,7 +508,7 @@ _Avoid_: Speedup, ranking score.
 
 **North-star trend**:
 The retained direction of compatible reference-ratio measurements over time. A trend line breaks when the corpus, subset, driver, or reference-engine version changes rather than implying continuity across different measurement contracts.
-_Avoid_: Release gate, competitive ranking.
+_Avoid_: Per-PR gate, competitive ranking. Target 1 of [ADR 0176](docs/adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md) is judged on this trend per platform at milestone acceptance, not on each PR.
 
 **Compile profile**:
 The profiler mode (`--profile=compile`) that reports, per source function, lex, parse and compile time and the compiler's work, recorded before execution. It is not part of `--profile=all`. See [Profiling](docs/profiling.md#compile-profile---profilecompile).

@@ -428,9 +428,10 @@ export function PerformanceDashboard({
           <h1>Performance Barometer</h1>
           <p>
             The first performance target is an interpreter faster than QuickJS:
-            both geomean ratios below 1.00× on every shipped platform. This page
-            tracks it on Linux x64 with pinned AWFY and JetStream 3 workloads;
-            Node.js, with its JIT, is shown for scale.
+            both QuickJS geomean ratios (AWFY and JetStream) below 1.00× on
+            every shipped platform. This page tracks it on Linux x64 with pinned
+            AWFY and JetStream 3 workloads; Node.js, with its JIT, is shown for
+            scale.
           </p>
         </div>
         <div className="compat-hero-actions">
