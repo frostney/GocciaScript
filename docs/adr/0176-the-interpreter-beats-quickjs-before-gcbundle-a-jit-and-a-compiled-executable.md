@@ -74,8 +74,9 @@ today; whether the engine order alternates or is randomised is part of the
 measurement protocol that #2066 settles, and target-1 evidence uses the order
 that protocol records. Every workload completes and passes its result
 check where it has one: AWFY's `verifyResult`, and JetStream's upstream
-`validate()`, which four of the six subset workloads lack and so run
-execution-only.
+`validate()` hook. The driver reports the four subset workloads without that
+hook as `execution-only`; the label does not exclude checks a workload performs
+while it runs.
 
 The target is judged on the contract current at the time. When the contract
 changes, for example to the warm AWFY protocol of #2066 or a new corpus pin, a
