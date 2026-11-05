@@ -903,7 +903,7 @@ end;
 
 function TTest262App.HarnessFilePath(const AName: string): string;
 begin
-  if (AName = '$262.js') or (AName = 'goccia-global-shim.js') then
+  if AName = '$262.js' then
     Result := ExpandFileName('scripts' + PathDelim + 'test262_harness' +
       PathDelim + AName)
   else
@@ -912,10 +912,11 @@ begin
 end;
 
 { The harness files a test evaluates before its own source, each as a
-  separate Script, in the order INTERPRETING.md gives: the Test262-defined
-  bindings ($262, sta.js, assert.js), doneprintHandle.js for an async test,
-  then the test's includes in source order. goccia-global-shim.js comes
-  last. A raw test evaluates none. }
+  separate global Script, in the order INTERPRETING.md gives: the
+  Test262-defined bindings ($262, assert.js, sta.js), doneprintHandle.js for
+  an async test, then the test's includes in source order. Their top-level
+  declarations are global bindings, so the test sees them from Script and
+  Module code alike. A raw test evaluates none. }
 function TTest262App.HarnessIncludes(
   const AMetadata: TTest262Metadata): TStringList;
 var
@@ -925,14 +926,13 @@ begin
   if AMetadata.HasFlag('raw') then
     Exit;
   Result.Add('$262.js');
-  Result.Add('sta.js');
   Result.Add('assert.js');
+  Result.Add('sta.js');
   if AMetadata.HasFlag('async') then
     Result.Add('doneprintHandle.js');
   for I := 0 to AMetadata.Includes.Count - 1 do
     if Result.IndexOf(AMetadata.Includes[I]) < 0 then
       Result.Add(AMetadata.Includes[I]);
-  Result.Add('goccia-global-shim.js');
 end;
 
 { Negative-runtime tests are graded against negative.type, which names the
@@ -1170,7 +1170,7 @@ var
   StrictMode: Boolean;
   TimedOut: Boolean;
 
-  { Records how the Script at APath ended when it raised E. }
+  { Records how the Script or Module at APath ended when it raised E. }
   procedure RecordFailure(const E: Exception; const APath: string;
     const ALines: TStringList);
   begin

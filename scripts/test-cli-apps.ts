@@ -1421,7 +1421,9 @@ await section("test262 runner: negative tests need the expected error in the exp
       // completion, with no try wrapper to turn its top-level lexical
       // declarations into block-scoped ones, wherever the test lives.
       ["runtime-global-lexical.js", [...negative("runtime", "SyntaxError"), "let undefined;"], "PASS", ""],
-      ["runtime-raw.js", [...negative("runtime", "TypeError", ["raw"]), 'throw new TypeError("x");'], "PASS", ""],
+      // raw source runs exactly as written: its own directive prologue
+      // still opens the Script, which a wrapper in front of it would end.
+      ["runtime-raw.js", ['"use strict";', ...negative("runtime", "ReferenceError", ["raw"]), "undeclaredInRaw = 1;"], "PASS", ""],
     ];
     writeFileSync(join(tests, "resolution_FIXTURE.js"), "export var present;\n");
     for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
@@ -1468,6 +1470,13 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
     mkdirSync(tests, { recursive: true });
     writeFileSync(join(harness, "sta.js"), "function Test262Error(message) { this.message = message; }\n");
     writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(harness, "doneprintHandle.js"), [
+      "function $DONE(error) {",
+      "  if (error) print('Test262:AsyncTestFailure:' + error.name + ': ' + error.message);",
+      "  else print('Test262:AsyncTestComplete');",
+      "}",
+      "",
+    ].join("\n"));
     writeFileSync(join(harness, "sloppyHelper.js"), [
       "var helperValue = 1;",
       "function sloppyAssign() {",
@@ -1478,12 +1487,17 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
     ].join("\n"));
     writeFileSync(join(harness, "brokenHelper.js"), "null.x;\n");
     writeFileSync(join(harness, "throwingHelper.js"), "function throwFromHelper() {\n  return null.x;\n}\n");
-    const test = (flags: string[], includes: string[], body: string[]) => [
+    writeFileSync(join(harness, "syntaxErrorHelper.js"), "var = ;\n");
+    writeFileSync(join(harness, "lexicalA.js"), "let sharedLexical = 1;\n");
+    writeFileSync(join(harness, "lexicalB.js"), "let sharedLexical = 2;\n");
+    writeFileSync(join(harness, "countingHelper.js"), "globalThis.harnessRuns = (globalThis.harnessRuns || 0) + 1;\n");
+    const test = (flags: string[], includes: string[], body: string[], frontmatter: string[] = []) => [
       "// Copyright",
       "/*---",
       "description: harness evaluation",
       ...(includes.length > 0 ? [`includes: [${includes.join(", ")}]`] : []),
       ...(flags.length > 0 ? [`flags: [${flags.join(", ")}]`] : []),
+      ...frontmatter,
       "---*/",
       ...body,
     ];
@@ -1507,6 +1521,30 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
       // Positions are the test file's own lines, the frontmatter included.
       ["positions.js", test([], [], ["", "missingBinding;"]), "FAIL", "missingBinding"],
       ["helper-positions.js", test([], ["throwingHelper.js"], ["throwFromHelper();"]), "FAIL", "TypeError"],
+      // A broken include is never the parse error a negative test expects.
+      ["parse-broken-include.js", test([], ["syntaxErrorHelper.js"], ["var = ;"],
+        ["negative:", "  phase: parse", "  type: SyntaxError"]), "WRAPPER_INFRA", "harness include syntaxErrorHelper.js failed"],
+      // Each Script's global declarations are checked against the ones
+      // earlier Scripts left (GlobalDeclarationInstantiation).
+      ["harness-clash.js", test([], ["lexicalA.js", "lexicalB.js"], ["var x = 1;"]), "WRAPPER_INFRA", "harness include lexicalB.js failed"],
+      ["body-redeclares-harness.js", test([], ["lexicalA.js"], ["let sharedLexical;"],
+        ["negative:", "  phase: runtime", "  type: SyntaxError"]), "PASS", ""],
+      // A module test's $262.evalScript runs a global Script too.
+      ["module-evalscript.js", test(["module"], [], [
+        '$262.evalScript("var fromEvalScript = 3;");',
+        'if (globalThis.fromEvalScript !== 3) throw new Error("evalScript var is not a global property");',
+        "export {};",
+      ]), "PASS", ""],
+      // A test file imported as a module is just its own source: the
+      // harness ran once, in the realm, before the test.
+      ["self-import.js", test(["async"], ["countingHelper.js"], [
+        "if (!globalThis.selfImportStarted) {",
+        "  globalThis.selfImportStarted = true;",
+        "  import('./self-import.js').then(() => {",
+        "    if (globalThis.harnessRuns !== 1) throw new Error('harness ran ' + globalThis.harnessRuns + ' times');",
+        "  }).then($DONE, $DONE);",
+        "}",
+      ]), "PASS", ""],
     ];
     for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
 

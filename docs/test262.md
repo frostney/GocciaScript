@@ -23,14 +23,12 @@ replacement is recorded in
 ## Executive summary
 
 - Test262 runs via the dedicated native `GocciaTest262Runner`, never via
-  `GocciaTestRunner` or `GocciaScriptLoaderBare`. Wrapper bodies execute inside
-  a neutral engine without `expect`, `describe`, `test`, lifecycle hooks,
+  `GocciaTestRunner` or `GocciaScriptLoaderBare`. Tests execute inside a
+  neutral engine without `expect`, `describe`, `test`, lifecycle hooks,
   mocks, or `runTests`.
 - Stock tc39/test262 harness files are loaded from the pinned test262
-  checkout's `harness/` directory. The runner bundles two files from
-  `scripts/test262_harness/`: `$262.js`, the host-provided hook object, and
-  `goccia-global-shim.js`, which is appended after the includes and
-  re-publishes the harness bindings on `globalThis`.
+  checkout's `harness/` directory. The runner bundles one file,
+  `scripts/test262_harness/$262.js`, the host-provided hook object.
 - `Goccia.Test262.Host` installs the host hooks only in engines owned by the
   Test262 runner.
 - Test feature metadata may add explicit engine options when test262 splits
@@ -170,8 +168,8 @@ not require synchronised numeric edits elsewhere.
 
 Both `--shard-index` and `--shard-count` are required, and the index is
 zero-based. Run the runner from the repository root: the bundled `$262.js`
-and `goccia-global-shim.js` are resolved relative to the working directory,
-and every test reports `WRAPPER_INFRA` otherwise.
+is resolved relative to the working directory, and every test reports
+`WRAPPER_INFRA` otherwise.
 
 ```bash
 ./build/GocciaTest262Runner \
@@ -219,11 +217,10 @@ Module ended; see "Harness evaluation" below.
 sequence of separate Scripts in one realm, as test262's `INTERPRETING.md`
 describes ("Test262-Defined Bindings", the `async` flag, `includes`):
 
-1. `$262.js`, `sta.js` and `assert.js`;
+1. `$262.js`, then `assert.js` and `sta.js`;
 2. `doneprintHandle.js` for an `async` test;
 3. the test's `includes`, in the order given;
-4. `goccia-global-shim.js`;
-5. the test file itself: a Script, or a Module for a `module` test.
+4. the test file itself: a Script, or a Module for a `module` test.
 
 Each harness file is its own global Script, evaluated through
 `EvaluateTest262Script` (`Goccia.Test262.Host`), the same path as
@@ -231,7 +228,10 @@ Each harness file is its own global Script, evaluated through
 strictness, so harness files are non-strict, in a strict run and before a
 module test too. Their top-level declarations are global bindings that the
 test, and any later Script, sees and is checked against, as
-GlobalDeclarationInstantiation requires.
+GlobalDeclarationInstantiation requires; a `var` or function declaration is
+also a property of `globalThis`. A test file a test imports, such as one that
+`import()`s itself, is loaded as its own source alone: the harness has
+already run in the realm.
 
 The test file is evaluated whole, frontmatter comment included, so
 diagnostics report its own lines. A strict run (`onlyStrict`) inserts
@@ -338,14 +338,10 @@ Bodies do NOT see:
 ## Bundled harness adaptations
 
 The runner loads stock tc39/test262 harness files from the pinned
-checkout's `harness/` directory. `TTest262App.HarnessIncludes` lists
-`$262.js`, `sta.js`, and `assert.js`, then `doneprintHandle.js` for async
-tests and the test's `includes`, and appends `goccia-global-shim.js`; see
-"Harness evaluation" above for how they run.
-Only `$262.js` and the shim are bundled: `$262` is not a stock harness helper
-but the host-provided object test262 expects engines to supply, and the shim
-only re-publishes `$262`, `Test262Error`, `assert`, `$DONE`, and `asyncTest`
-on `globalThis`.
+checkout's `harness/` directory; "Harness evaluation" above gives their
+order and how they run. Only `$262.js` is bundled: `$262` is not a stock
+harness helper but the host-provided object test262 expects engines to
+supply.
 
 Bundling rule: do not add compatibility copies of stock harness files.
 If a stock helper fails, fix the language/runtime behavior or classify the
