@@ -35,15 +35,10 @@ consumer validates this file and what it does when the file is absent.
   step. After a usage-limit reset, resume each lane from that checkpoint and
   report the lost window.
 
-## Context limits
+## Coordinator sessions
 
-- Record a warning when a lane's context passes 100k tokens. Past 150k
-  tokens, checkpoint and split or replace the lane before its next
-  inference. This is an absolute limit, independent of the model's context
-  window: a large window lets a lane grow, and every later inference pays
-  for re-reading the whole context.
-- A milestone-sized run starts from a fresh coordinator session seeded by
-  the handoff, not from a long-running conversation.
+A milestone-sized run starts from a fresh coordinator session seeded by the
+handoff, not from a long-running conversation.
 
 ## Context packets
 
@@ -54,9 +49,7 @@ contract.
 ## Usage ledger
 
 Record usage through the Milestone Rush
-[event ledger](.agents/skills/milestone-rush/references/event-ledger.md). When usage cannot be
-attributed to a lane, the per-lane context threshold above uses the lane's own
-most recent inference size, which every host reports.
+[event ledger](.agents/skills/milestone-rush/references/event-ledger.md).
 
 ## Waiting
 
