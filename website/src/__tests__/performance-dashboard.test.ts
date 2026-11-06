@@ -102,9 +102,10 @@ describe("Performance Barometer data", () => {
     expect(point.quickjsRatio).toBeNull();
     expect(point.nodeRatio).toBeNull();
     expect(point.nodeJitlessRatio).toBeNull();
+    expect(point.jscRatio).toBeNull();
   });
 
-  test("normalizes a driver 2 report with node-jitless", async () => {
+  test("normalizes a driver 2 report with node-jitless and jsc", async () => {
     const { performanceDashboardTestApi } = await import(
       "@/lib/performance-dashboard"
     );
@@ -117,6 +118,7 @@ describe("Performance Barometer data", () => {
             { name: "goccia", version: "0.8" },
             { name: "qjs", version: "2026-06-04" },
             { name: "node-jitless", version: "v24.1" },
+            { name: "jsc", version: "2.52.6" },
             { name: "node", version: "v24.1" },
           ],
         },
@@ -128,11 +130,13 @@ describe("Performance Barometer data", () => {
                 goccia: { ok: 5, medianMicros: 200 },
                 qjs: { ok: 5, medianMicros: 100 },
                 "node-jitless": { ok: 5, medianMicros: 80 },
+                jsc: { ok: 5, medianMicros: 120 },
                 node: { ok: 5, medianMicros: 50 },
               },
               ratios: {
                 goccia_over_qjs: 2,
                 "goccia_over_node-jitless": 2.5,
+                goccia_over_jsc: 1.6,
                 goccia_over_node: 4,
               },
             },
@@ -143,6 +147,7 @@ describe("Performance Barometer data", () => {
               engineStats: {
                 goccia: { ok: 5, medianMicros: 200 },
                 qjs: { ok: 5, medianMicros: 100 },
+                "node-jitless": { ok: 5, medianMicros: 80 },
                 node: { ok: 5, medianMicros: 50 },
               },
             },
@@ -164,17 +169,19 @@ describe("Performance Barometer data", () => {
       status: "complete",
       nodeJitless: 80,
       nodeJitlessRatio: 2.5,
+      jsc: 120,
+      jscRatio: 1.6,
     });
-    // The report lists node-jitless, so a target without its stats degrades.
+    // The report lists jsc, so a target without its stats degrades.
     expect(broken).toMatchObject({
       status: "degraded",
-      failure: "node-jitless: missing",
-      nodeJitless: null,
-      nodeJitlessRatio: null,
+      failure: "jsc: missing",
+      jsc: null,
+      jscRatio: null,
     });
   });
 
-  test("keeps driver 1 reports without node-jitless complete", async () => {
+  test("keeps driver 1 reports without node-jitless or jsc complete", async () => {
     const { performanceDashboardTestApi } = await import(
       "@/lib/performance-dashboard"
     );
@@ -213,6 +220,8 @@ describe("Performance Barometer data", () => {
       failure: null,
       nodeJitless: null,
       nodeJitlessRatio: null,
+      jsc: null,
+      jscRatio: null,
     });
     const point = performanceDashboardTestApi.timelinePoint(
       "awfy",
@@ -238,7 +247,43 @@ describe("Performance Barometer data", () => {
       quickjsRatio: 2,
       nodeRatio: 4,
       nodeJitlessRatio: null,
+      jscRatio: null,
     });
+  });
+
+  test("breaks the compatibility key when the JSC version changes", async () => {
+    const { performanceDashboardTestApi } = await import(
+      "@/lib/performance-dashboard"
+    );
+    const run = {
+      runId: 1,
+      runNumber: 1,
+      artifactId: 1,
+      runUrl: "https://example.test/run/1",
+      headSha: "abcdef123456",
+      shortSha: "abcdef12",
+      createdAt: "2026-07-12T00:00:00.000Z",
+    };
+    const summary = {
+      workloadCount: 1,
+      failedWorkloadCount: 0,
+      referenceRatios: { quickjs: 2, node: 4, jsc: 1.6 },
+      engineVersions: { qjs: "2026-06-04", node: "v24", jsc: "2.52.6" },
+      driverVersion: 2,
+      targetNames: ["Tiny"],
+    };
+    const point = (value: typeof summary) =>
+      performanceDashboardTestApi.timelinePoint("awfy", run, value);
+    expect(point(summary).jscRatio).toBe(1.6);
+    expect(
+      point({
+        ...summary,
+        engineVersions: { ...summary.engineVersions, jsc: "2.52.7" },
+      }).compatibilityKey,
+    ).not.toBe(point(summary).compatibilityKey);
+    expect(point(summary).compatibilityKey).toBe(
+      point(summary).compatibilityKey,
+    );
   });
 
   test("breaks the compatibility key when the protocol changes", async () => {
@@ -257,7 +302,7 @@ describe("Performance Barometer data", () => {
     const summary = {
       workloadCount: 1,
       failedWorkloadCount: 0,
-      referenceRatios: { quickjs: 2, node: 4, nodeJitless: 3 },
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: 3, jsc: 1.6 },
       driverVersion: 2,
       targetNames: ["Tiny"],
       protocolKey: "alternate|Tiny:10/3/5",
@@ -278,6 +323,9 @@ describe("Performance Barometer data", () => {
       performanceDashboardTestApi.timelinePoint("awfy", run, summary)
         .nodeJitlessRatio,
     ).toBe(3);
+    expect(
+      performanceDashboardTestApi.timelinePoint("awfy", run, summary).jscRatio,
+    ).toBe(1.6);
   });
 
   test("builds retained history from daily summaries and reads only the latest report", async () => {
@@ -390,7 +438,7 @@ describe("Performance Barometer data", () => {
       workloadCount: 3,
       failedWorkloadCount: 2,
       repetitions: 5,
-      referenceRatios: { quickjs: 2, node: 4, nodeJitless: null },
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: null, jsc: null },
       engineVersions: {
         goccia: "0.8",
         qjs: "2026-06-04",
@@ -403,7 +451,7 @@ describe("Performance Barometer data", () => {
     });
   });
 
-  test("summarizes a driver 2 JetStream report with node-jitless", () => {
+  test("summarizes a driver 2 JetStream report with node-jitless and jsc", () => {
     const report = {
       metadata: {
         driver: { version: 2 },
@@ -412,6 +460,7 @@ describe("Performance Barometer data", () => {
           { name: "goccia", version: "0.8" },
           { name: "qjs", version: "2026-06-04" },
           { name: "node-jitless", version: "v24.1" },
+          { name: "jsc", version: "2.52.6" },
           { name: "node", version: "v24.1" },
         ],
         options: { repetitions: 5, engineOrder: "alternate" },
@@ -425,6 +474,7 @@ describe("Performance Barometer data", () => {
               goccia: { ok: 5 },
               qjs: { ok: 5 },
               "node-jitless": { ok: 5 },
+              jsc: { ok: 5 },
               node: { ok: 5 },
             },
           },
@@ -437,6 +487,7 @@ describe("Performance Barometer data", () => {
               goccia: { ok: 5 },
               qjs: { ok: 5 },
               "node-jitless": { ok: 5 },
+              jsc: { ok: 5 },
               node: { ok: 5 },
             },
           },
@@ -446,11 +497,13 @@ describe("Performance Barometer data", () => {
         goccia_over_qjs: 2,
         goccia_over_node: 4,
         "goccia_over_node-jitless": 3,
+        goccia_over_jsc: 1.6,
       },
     };
     expect(summaryFromReport(report)).toMatchObject({
       failedWorkloadCount: 0,
-      referenceRatios: { quickjs: 2, node: 4, nodeJitless: 3 },
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: 3, jsc: 1.6 },
+      engineVersions: { jsc: "2.52.6" },
       driverVersion: 2,
       protocolKey: "alternate|alpha:20,zeta:3",
     });
@@ -462,13 +515,32 @@ describe("Performance Barometer data", () => {
     expect(summaryFromReport(failing).failedWorkloadCount).toBe(1);
     delete failingStats(1)["node-jitless"];
     expect(summaryFromReport(failing).failedWorkloadCount).toBe(2);
+    // A listed jsc engine is required once the report names it.
+    const jscFailing = structuredClone(report);
+    const jscStats = (index: number) =>
+      jscFailing.targets[index]?.summary.engineStats as Record<string, unknown>;
+    expect(summaryFromReport(jscFailing).failedWorkloadCount).toBe(0);
+    jscStats(0).jsc = { crash: 1 };
+    expect(summaryFromReport(jscFailing).failedWorkloadCount).toBe(1);
+    delete jscStats(1).jsc;
+    expect(summaryFromReport(jscFailing).failedWorkloadCount).toBe(2);
+    // A report that predates jsc is not failed for lacking it.
+    const legacy = structuredClone(report);
+    legacy.metadata.engines = legacy.metadata.engines.filter(
+      (engine) => engine.name !== "jsc",
+    );
+    for (const target of legacy.targets) {
+      delete (target.summary.engineStats as Record<string, unknown>).jsc;
+    }
+    expect(summaryFromReport(legacy).failedWorkloadCount).toBe(0);
   });
 
-  test("summarizes a driver 2 AWFY report with node-jitless and protocol", () => {
+  test("summarizes a driver 2 AWFY report with node-jitless, jsc and protocol", () => {
     const stats = {
       goccia: { ok: 5 },
       qjs: { ok: 5 },
       "node-jitless": { ok: 5 },
+      jsc: { ok: 5 },
       node: { ok: 5 },
     };
     const summary = summaryFromAwfyReport({
@@ -479,6 +551,7 @@ describe("Performance Barometer data", () => {
           { name: "goccia", version: "0.8" },
           { name: "qjs", version: "2026-06-04" },
           { name: "node-jitless", version: "v24.1" },
+          { name: "jsc", version: "2.52.6" },
           { name: "node", version: "v24.1" },
         ],
         options: { repetitions: 5, engineOrder: "alternate" },
@@ -499,7 +572,7 @@ describe("Performance Barometer data", () => {
           warmupIterations: 2,
           measuredIterations: 4,
           summary: {
-            engineStats: { ...stats, "node-jitless": { crash: 1 } },
+            engineStats: { ...stats, jsc: { crash: 1 } },
           },
         },
       ],
@@ -507,11 +580,13 @@ describe("Performance Barometer data", () => {
         goccia_over_qjs: 2,
         goccia_over_node: 4,
         "goccia_over_node-jitless": 3,
+        goccia_over_jsc: 1.6,
       },
     });
     expect(summary).toMatchObject({
       failedWorkloadCount: 1,
-      referenceRatios: { quickjs: 2, node: 4, nodeJitless: 3 },
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: 3, jsc: 1.6 },
+      engineVersions: { jsc: "2.52.6" },
       driverVersion: 2,
       protocolKey: "alternate|Bounce:100/2/4,Richards:10/3/5",
     });
@@ -565,7 +640,7 @@ describe("Performance Barometer data", () => {
       workloadCount: 2,
       failedWorkloadCount: 1,
       targetNames: ["Bounce", "Richards"],
-      referenceRatios: { quickjs: 2, node: 4, nodeJitless: null },
+      referenceRatios: { quickjs: 2, node: 4, nodeJitless: null, jsc: null },
       protocolKey: null,
     });
   });
@@ -593,7 +668,7 @@ describe("JetStream Blob store", () => {
         workloadCount: 6,
         failedWorkloadCount: 0,
         repetitions: 5,
-        referenceRatios: { quickjs: 2, node: 4, nodeJitless: null },
+        referenceRatios: { quickjs: 2, node: 4, nodeJitless: null, jsc: null },
         engineVersions: { qjs: "2026-06-04", node: "v24" },
         corpusCommit: "release-sha",
         driverVersion: 1,

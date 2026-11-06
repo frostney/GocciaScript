@@ -8,7 +8,13 @@ const DEFAULT_MANIFEST = 'perf/awfy/manifest.json';
 const DEFAULT_OUTPUT = 'awfy-report.json';
 const { DEFAULT_ENGINES: DRIVER_DEFAULT_ENGINES } = require('./cross-engine-report.js');
 
-const DEFAULT_ENGINES = DRIVER_DEFAULT_ENGINES.join(',');
+// CI measures the engines the manifest's ciReport names, which add JSC with
+// its JIT off to the driver's defaults (ADR 0178); the driver defaults apply
+// when the manifest names none.
+function ciEngines(manifest) {
+  const configured = reportConfig(manifest).engines;
+  return (Array.isArray(configured) && configured.length > 0 ? configured : DRIVER_DEFAULT_ENGINES).join(',');
+}
 const DEFAULT_TIMEOUT_MS = 300000;
 
 function usage() {
@@ -19,7 +25,7 @@ function usage() {
     '  --manifest <path>    AWFY manifest path (default: perf/awfy/manifest.json)',
     '  --awfy-dir <path>    Path to are-we-fast-yet/benchmarks/JavaScript',
     '  --output <path>      Report path (default: awfy-report.json)',
-    `  --engines <csv>      Engines and their order (default: ${DEFAULT_ENGINES})`,
+    '  --engines <csv>      Engines and their order (default: the manifest\'s ciReport.engines)',
     '  --qjs <path>         QuickJS shell path (default: qjs)',
     '  --node <path>        Node.js path for node and node-jitless (default: current node)',
     '  --jsc <path>         JavaScriptCore shell path for the jsc engine (default: jsc)',
@@ -37,7 +43,7 @@ function parseArgs(argv) {
     manifestPath: DEFAULT_MANIFEST,
     awfyDir: '',
     output: DEFAULT_OUTPUT,
-    engines: DEFAULT_ENGINES,
+    engines: '',
     gocciaBaseline: '',
     gocciaCandidate: '',
     qjs: '',
@@ -127,6 +133,17 @@ function expectedEnginesForTarget(manifest, target, expectedEngines) {
   ));
 }
 
+// The JavaScriptCore shell comes from a distribution package whose version
+// moves with the runner image, so a report that measured JSC must say which
+// version it was (ADR 0178).
+function jscVersionFailures(report, expectedEngines) {
+  if (!expectedEngines.includes('jsc')) return [];
+  const entry = (report.metadata?.engines || []).find((engine) => engine.name === 'jsc');
+  return entry && typeof entry.version === 'string' && entry.version.trim() !== ''
+    ? []
+    : ['jsc: the report records no JavaScriptCore version'];
+}
+
 function validateReport(report, manifest, expectedEngines) {
   const config = reportConfig(manifest);
   const expectedRepetitions = config.repetitions || 5;
@@ -142,6 +159,7 @@ function validateReport(report, manifest, expectedEngines) {
   if (report.metadata?.options?.engineOrder !== 'alternate') {
     failures.push(`expected the alternate engine order, report recorded ${report.metadata?.options?.engineOrder}`);
   }
+  failures.push(...jscVersionFailures(report, expectedEngines));
 
   for (const target of report.targets || []) {
     if (target.summary?.checksumAgreement?.ok === false) {
@@ -169,6 +187,7 @@ function validateReport(report, manifest, expectedEngines) {
 
 function runReport(options, manifest) {
   if (!options.awfyDir) throw new Error('--awfy-dir is required');
+  if (!options.engines) options.engines = ciEngines(manifest);
 
   const config = reportConfig(manifest);
   const repetitions = config.repetitions || 5;
@@ -226,6 +245,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  ciEngines,
+  jscVersionFailures,
   expectedEnginesForTarget,
   expectedEnginesForRun,
   parseArgs,

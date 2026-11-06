@@ -45,6 +45,7 @@ const awfyPoint = {
   quickjsRatio: 1.5,
   nodeRatio: 12.25,
   nodeJitlessRatio: 3.5,
+  jscRatio: 2.75,
   failedWorkloadCount: 0,
   workloadCount: 14,
   repetitions: 3,
@@ -78,9 +79,11 @@ const performanceData: PerformanceDashboardData = {
         quickjs: 10,
         node: 1,
         nodeJitless: null,
+        jsc: null,
         quickjsRatio: null,
         nodeRatio: null,
         nodeJitlessRatio: null,
+        jscRatio: null,
       },
     ],
   },
@@ -359,7 +362,13 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain(
       "- Node.js --jitless reference ratio (interpreter-class context): **3.50x**",
     );
+    expect(markdown).toContain(
+      "- JSC (no JIT) reference ratio (interpreter-class context): **2.75x**",
+    );
     expect(markdown).toContain("- Node.js reference ratio: **12.25x**");
+    expect(markdown).toContain(
+      "Node.js with --jitless and JavaScriptCore (JSC) with its JIT off are interpreter-class context comparators that the target does not count",
+    );
     expect(markdown).toContain("- Workloads: 14 (0 failed)");
     expect(markdown).toContain(
       "- CI run: [#912](https://github.com/frostney/GocciaScript/actions/runs/200)",

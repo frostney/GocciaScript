@@ -54,9 +54,11 @@ export type PerformanceTarget = {
   quickjs: number | null;
   node: number | null;
   nodeJitless: number | null;
+  jsc: number | null;
   quickjsRatio: number | null;
   nodeRatio: number | null;
   nodeJitlessRatio: number | null;
+  jscRatio: number | null;
 };
 
 export type PerformanceTimelinePoint = {
@@ -73,6 +75,7 @@ export type PerformanceTimelinePoint = {
   quickjsRatio: number | null;
   nodeRatio: number | null;
   nodeJitlessRatio: number | null;
+  jscRatio: number | null;
   failedWorkloadCount: number;
   workloadCount: number;
   repetitions: number | null;
@@ -118,6 +121,7 @@ type RunSummary = {
     quickjs?: unknown;
     node?: unknown;
     nodeJitless?: unknown;
+    jsc?: unknown;
   };
   engineVersions?: Record<string, unknown>;
   corpusCommit?: unknown;
@@ -252,13 +256,15 @@ function targetFailure(
 ): string | null {
   const failures: string[] = [];
   const engines = ["goccia", "qjs", "node"];
-  // Reports from before the node-jitless comparator carry no stats for it and
-  // are not degraded for lacking it.
-  if (
-    target.engineStats["node-jitless"] ||
-    reportEngineNames.includes("node-jitless")
-  ) {
-    engines.push("node-jitless");
+  // Reports from before the node-jitless and jsc comparators carry no stats
+  // for them and are not degraded for lacking them.
+  for (const comparator of ["node-jitless", "jsc"]) {
+    if (
+      target.engineStats[comparator] ||
+      reportEngineNames.includes(comparator)
+    ) {
+      engines.push(comparator);
+    }
   }
   for (const engine of engines) {
     const stats = target.engineStats[engine];
@@ -297,11 +303,13 @@ function targetsFromReport(
       quickjs: finitePositive(target.engineStats.qjs?.[field]),
       node: finitePositive(target.engineStats.node?.[field]),
       nodeJitless: finitePositive(target.engineStats["node-jitless"]?.[field]),
+      jsc: finitePositive(target.engineStats.jsc?.[field]),
       quickjsRatio: finitePositive(target.ratios.goccia_over_qjs),
       nodeRatio: finitePositive(target.ratios.goccia_over_node),
       nodeJitlessRatio: finitePositive(
         target.ratios["goccia_over_node-jitless"],
       ),
+      jscRatio: finitePositive(target.ratios.goccia_over_jsc),
     };
   });
 }
@@ -320,6 +328,7 @@ function timelinePoint(
   const nodeJitlessRatio = finitePositive(
     summary?.referenceRatios?.nodeJitless,
   );
+  const jscRatio = finitePositive(summary?.referenceRatios?.jsc);
   const engineVersions = Object.fromEntries(
     Object.entries(summary?.engineVersions ?? {}).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -346,6 +355,7 @@ function timelinePoint(
       typeof summary?.driverVersion === "number" ? summary.driverVersion : null,
     quickjs: engineVersions.qjs ?? "unknown",
     node: engineVersions.node ?? "unknown",
+    jsc: engineVersions.jsc ?? "unknown",
     protocol:
       typeof summary?.protocolKey === "string" ? summary.protocolKey : null,
     targets: targetNames.sort(),
@@ -358,6 +368,7 @@ function timelinePoint(
     quickjsRatio: complete ? quickjsRatio : null,
     nodeRatio: complete ? nodeRatio : null,
     nodeJitlessRatio: complete ? nodeJitlessRatio : null,
+    jscRatio: complete ? jscRatio : null,
     failedWorkloadCount,
     workloadCount,
     repetitions:

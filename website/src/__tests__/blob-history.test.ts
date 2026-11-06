@@ -153,7 +153,7 @@ const workloadSummary = {
   workloadCount: 1,
   failedWorkloadCount: 1,
   repetitions: 1,
-  referenceRatios: { quickjs: null, node: null, nodeJitless: null },
+  referenceRatios: { quickjs: null, node: null, nodeJitless: null, jsc: null },
   engineVersions: {},
   corpusCommit: "corpus",
   driverVersion: 1,

@@ -20,6 +20,7 @@ export type JetStreamReferenceRatios = {
   quickjs: number | null;
   node: number | null;
   nodeJitless: number | null;
+  jsc: number | null;
 };
 
 export type JetStreamBlobRunSummary = {

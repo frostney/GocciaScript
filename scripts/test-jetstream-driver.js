@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { buildMetricTargetSummary, resolveEngines } = require('./cross-engine-report.js');
+const { DEFAULT_ENGINES, buildMetricTargetSummary, engineOrderForRepetition, resolveEngines } = require('./cross-engine-report.js');
 const {
   DRIVER_VERSION,
   buildJetStreamBundle,
@@ -15,6 +15,7 @@ const {
 } = require('./jetstream-driver.js');
 const { buildJetStreamComment } = require('./jetstream-comment.js');
 const {
+  ciEngines,
   parseArgs: parseCiArgs,
   reportBenchmarks,
   validationFailures,
@@ -70,13 +71,27 @@ console.log('jetstream-driver: CLI parsing...');
   assert(options.gocciaFlags.includes('--compat-var'), 'enables legacy var compatibility for upstream workloads');
   const ciOptions = parseCiArgs(['--jetstream-dir', 'suite', '--benchmark', 'tiny']);
   equal(ciOptions.benchmarks[0], 'tiny', 'CI report parses one workload shard');
-  equal(ciOptions.engines, 'goccia,qjs,node,node-jitless', 'CI report runs node-jitless by default');
+  equal(ciOptions.engines, '', 'CI report takes its engines from the manifest unless told otherwise');
   equal(options.engineOrder, 'alternate', 'engines alternate their order by default');
   equal(parseDriverArgs(['--engine-order', 'fixed']).engineOrder, 'fixed', 'parses the fixed engine order');
   equal(parseDriverArgs(['--jsc=/opt/jsc']).jsc, '/opt/jsc', 'parses the JavaScriptCore shell path');
   throws(() => parseDriverArgs(['--engine-order', 'random']), /--engine-order must be one of/, 'rejects an unknown engine order');
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'perf', 'jetstream', 'manifest.json'), 'utf8'));
   equal(manifest.driver.version, DRIVER_VERSION, 'the manifest names the driver version the driver reports');
+  equal(ciEngines(manifest), 'goccia,qjs,node,node-jitless,jsc', 'CI adds JSC with its JIT off to the default engines');
+  equal(ciEngines({ ciReport: {} }), DEFAULT_ENGINES.join(','), 'a manifest without ciReport.engines runs the driver defaults');
+  equal(manifest.ciReport.repetitions, 6, 'CI runs six repetitions');
+  const ciEngineNames = ciEngines(manifest).split(',');
+  const orders = Array.from({ length: manifest.ciReport.repetitions }, (_, repetition) => (
+    engineOrderForRepetition(ciEngineNames, repetition, 'alternate')
+  ));
+  for (const first of ciEngineNames) {
+    for (const second of ciEngineNames) {
+      if (first === second) continue;
+      const ahead = orders.filter((order) => order.indexOf(first) < order.indexOf(second)).length;
+      equal(ahead * 2, orders.length, `${first} runs before ${second} in half the repetitions`);
+    }
+  }
 }
 
 console.log('jetstream-driver: engine order and positions...');
@@ -234,6 +249,13 @@ console.log('jetstream-ci-report: structural and outcome validation...');
   report.metadata.driver.version = 1;
   assert(validationFailures(report, manifest, ['goccia']).some((failure) => /driver version 2/.test(failure)),
     'requires the manifest driver version');
+  report.metadata.driver.version = 2;
+  report.targets[0].summary.engineStats.jsc = { ok: 1, rawCount: 1, medianScore: 20 };
+  report.metadata.engines = [{ name: 'goccia', version: 'g' }, { name: 'jsc', version: '' }];
+  assert(validationFailures(report, manifest, ['goccia', 'jsc']).some((failure) => /no JavaScriptCore version/.test(failure)),
+    'requires a recorded JavaScriptCore version when JSC was measured');
+  report.metadata.engines[1].version = 'libjavascriptcoregtk-bin 2.52.6-0ubuntu0.24.04.1';
+  equal(validationFailures(report, manifest, ['goccia', 'jsc']).length, 0, 'accepts JSC samples with a recorded version');
 }
 
 console.log('jetstream-merge-reports: deterministic shard merge...');

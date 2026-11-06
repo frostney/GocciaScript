@@ -50,7 +50,8 @@
     "version": 2
   },
   "ciReport": {
-    "repetitions": 5,
+    "repetitions": 6,
+    "engines": ["goccia", "qjs", "node", "node-jitless", "jsc"],
     "benchmarks": [
       "hash-map",
       "ai-astar",

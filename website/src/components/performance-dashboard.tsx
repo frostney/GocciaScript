@@ -39,6 +39,12 @@ const SERIES = [
     dash: "6 4",
   },
   {
+    key: "jscRatio",
+    label: "JSC (no JIT) (interpreter-class context)",
+    color: "var(--perf-jsc)",
+    dash: "2 4",
+  },
+  {
     key: "nodeRatio",
     label: "Node.js with JIT (for scale)",
     color: "var(--perf-node)",
@@ -99,7 +105,7 @@ function pointLabel(point: PerformanceTimelinePoint): string {
   if (!point.complete) {
     return `${dateLabel(point.createdAt)}: incomplete; ${point.failedWorkloadCount} failed workload${point.failedWorkloadCount === 1 ? "" : "s"}`;
   }
-  return `${dateLabel(point.createdAt)}: QuickJS ${ratio(point.quickjsRatio)}, Node.js --jitless ${ratio(point.nodeJitlessRatio)}, Node.js ${ratio(point.nodeRatio)}`;
+  return `${dateLabel(point.createdAt)}: QuickJS ${ratio(point.quickjsRatio)}, Node.js --jitless ${ratio(point.nodeJitlessRatio)}, JSC (no JIT) ${ratio(point.jscRatio)}, Node.js ${ratio(point.nodeRatio)}`;
 }
 
 function timelineSegments(
@@ -163,9 +169,12 @@ function PerformanceChart({
   const padX = 58;
   const padY = 40;
   const values = points.flatMap((point) =>
-    [point.quickjsRatio, point.nodeJitlessRatio, point.nodeRatio].filter(
-      (value): value is number => value !== null,
-    ),
+    [
+      point.quickjsRatio,
+      point.nodeJitlessRatio,
+      point.jscRatio,
+      point.nodeRatio,
+    ].filter((value): value is number => value !== null),
   );
   const maximum = Math.max(1, ...values);
   const minimum = Math.min(1, ...values);
@@ -200,12 +209,13 @@ function PerformanceChart({
           id={`${suite}-chart-title`}
         >{`${suiteLabel(suite)} reference ratio over time`}</title>
         <desc id={`${suite}-chart-description`}>
-          QuickJS, Node.js --jitless and Node.js reference ratios on a
-          logarithmic scale. QuickJS is the bar for the interpreter-speed
-          target; Node.js --jitless is interpreter-class context the target does
-          not count; Node.js with its JIT is shown for scale. One means aligned;
-          values above one mean Goccia was proportionally slower. Lines break
-          when a run is incomplete or measurement versions change.
+          QuickJS, Node.js --jitless, JSC (no JIT) and Node.js reference ratios
+          on a logarithmic scale. QuickJS is the bar for the interpreter-speed
+          target; Node.js --jitless and JSC with its JIT off are
+          interpreter-class context the target does not count; Node.js with its
+          JIT is shown for scale. One means aligned; values above one mean
+          Goccia was proportionally slower. Lines break when a run is incomplete
+          or measurement versions change.
         </desc>
         {ticks.map((tick) => (
           <g key={tick}>
@@ -337,6 +347,8 @@ function LatestMetric({
       <small>QuickJS (interpreter target)</small>
       <strong>{point ? ratio(point.nodeJitlessRatio) : "—"}</strong>
       <small>Node.js --jitless (interpreter-class context)</small>
+      <strong>{point ? ratio(point.jscRatio) : "—"}</strong>
+      <small>JSC (no JIT) (interpreter-class context)</small>
       <strong>{point ? ratio(point.nodeRatio) : "—"}</strong>
       <small>Node.js with JIT (for scale)</small>
       <p>
@@ -365,6 +377,7 @@ function TimelineTable({
               <th scope="col">Date</th>
               <th scope="col">QuickJS</th>
               <th scope="col">Node.js --jitless</th>
+              <th scope="col">JSC (no JIT)</th>
               <th scope="col">Node.js</th>
               <th scope="col">Status</th>
               <th scope="col">Commit</th>
@@ -376,6 +389,7 @@ function TimelineTable({
                 <th scope="row">{dateLabel(point.createdAt)}</th>
                 <td>{ratio(point.quickjsRatio)}</td>
                 <td>{ratio(point.nodeJitlessRatio)}</td>
+                <td>{ratio(point.jscRatio)}</td>
                 <td>{ratio(point.nodeRatio)}</td>
                 <td>{point.complete ? "Complete" : "Incomplete"}</td>
                 <td>
@@ -409,9 +423,11 @@ function WorkloadTable({
               <th scope="col">Goccia</th>
               <th scope="col">QuickJS</th>
               <th scope="col">Node.js --jitless</th>
+              <th scope="col">JSC (no JIT)</th>
               <th scope="col">Node.js</th>
               <th scope="col">QJS ratio</th>
               <th scope="col">Node --jitless ratio</th>
+              <th scope="col">JSC ratio</th>
               <th scope="col">Node ratio</th>
               <th scope="col">Status</th>
             </tr>
@@ -423,9 +439,11 @@ function WorkloadTable({
                 <td>{measurement(target, target.goccia)}</td>
                 <td>{measurement(target, target.quickjs)}</td>
                 <td>{measurement(target, target.nodeJitless)}</td>
+                <td>{measurement(target, target.jsc)}</td>
                 <td>{measurement(target, target.node)}</td>
                 <td>{ratio(target.quickjsRatio)}</td>
                 <td>{ratio(target.nodeJitlessRatio)}</td>
+                <td>{ratio(target.jscRatio)}</td>
                 <td>{ratio(target.nodeRatio)}</td>
                 <td>{target.failure ?? "Complete"}</td>
               </tr>
@@ -474,8 +492,10 @@ export function PerformanceDashboard({
             The first performance target is an interpreter faster than QuickJS:
             both QuickJS geomean ratios (AWFY and JetStream) below 1.00× on
             every shipped platform. This page tracks it on Linux x64 with pinned
-            AWFY and JetStream 3 workloads; Node.js, with its JIT, is shown for
-            scale.
+            AWFY and JetStream 3 workloads. Node.js with --jitless and
+            JavaScriptCore with its JIT off are interpreter-class context
+            comparators that the target does not count; Node.js, with its JIT,
+            is shown for scale.
           </p>
         </div>
         <div className="compat-hero-actions">
@@ -562,10 +582,10 @@ export function PerformanceDashboard({
 
       <p className="compat-note">
         QuickJS is the bar for the interpreter-speed target. Node.js --jitless
-        is interpreter-class context the target does not count, and Node.js with
-        its JIT is shown for scale. Incomplete runs remain visible as gaps. The
-        last complete measurement is labeled stale rather than carried forward
-        as current.
+        and JSC with its JIT off are interpreter-class context the target does
+        not count, and Node.js with its JIT is shown for scale. Incomplete runs
+        remain visible as gaps. The last complete measurement is labeled stale
+        rather than carried forward as current.
       </p>
     </div>
   );

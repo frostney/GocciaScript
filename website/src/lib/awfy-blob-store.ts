@@ -29,6 +29,7 @@ export type AwfyBlobRunSummary = {
     quickjs: number | null;
     node: number | null;
     nodeJitless: number | null;
+    jsc: number | null;
   };
   engineVersions: Record<string, string>;
   corpusCommit: string;

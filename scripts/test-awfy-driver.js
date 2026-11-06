@@ -36,7 +36,9 @@ const {
   uncountedProcess,
 } = require('./cross-engine-report.js');
 const {
+  ciEngines,
   expectedEnginesForRun,
+  jscVersionFailures,
   parseArgs: parseCiReportArgs,
   reportConfig,
   targetSpecs,
@@ -839,7 +841,53 @@ console.log('awfy-ci-report: validation...');
     'ci report validation requires the manifest driver version');
   assertThrows(() => validateReport(clean({ repetitions: 5, engineOrder: 'alternate' }), manifest, ['goccia', 'qjs']),
     'ci report validation requires every expected engine');
-  assertEqual(parseCiReportArgs([]).engines, 'goccia,qjs,node,node-jitless', 'the CI report runs node-jitless by default');
+  assertEqual(parseCiReportArgs([]).engines, '', 'the CI report takes its engines from the manifest unless told otherwise');
+
+  const withJsc = (version) => ({
+    metadata: {
+      driver: { version: 2 },
+      options: { repetitions: 5, engineOrder: 'alternate' },
+      engines: [{ name: 'goccia', version: 'g' }, { name: 'jsc', version }],
+    },
+    targets: [{
+      kind: 'awfy',
+      name: 'NBody',
+      summary: {
+        checksumAgreement: { ok: true, checksums: ['verified'] },
+        engineStats: {
+          goccia: { ok: 5, rawCount: 5, medianMicros: 1000 },
+          jsc: { ok: 5, rawCount: 5, medianMicros: 300 },
+        },
+      },
+    }],
+  });
+  validateReport(withJsc('libjavascriptcoregtk-bin 2.52.6-0ubuntu0.24.04.1'), manifest, ['goccia', 'jsc']);
+  assert(true, 'ci report validation accepts jsc samples with a recorded version');
+  assertThrows(() => validateReport(withJsc(''), manifest, ['goccia', 'jsc']),
+    'ci report validation requires a recorded JavaScriptCore version');
+  assertEqual(jscVersionFailures(withJsc(''), ['goccia']).length, 0, 'the JSC version is required only when JSC was measured');
+}
+
+console.log('awfy-ci-report: the CI comparator set and repetitions...');
+{
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'perf', 'awfy', 'manifest.json'), 'utf8'));
+  assertEqual(ciEngines(manifest), 'goccia,qjs,node,node-jitless,jsc', 'CI adds JSC with its JIT off to the default engines');
+  assertEqual(ciEngines({ ciReport: {} }), DEFAULT_ENGINES.join(','), 'a manifest without ciReport.engines runs the driver defaults');
+  const repetitions = manifest.ciReport.repetitions;
+  assertEqual(repetitions, 6, 'CI runs six repetitions');
+  // With the alternate order, each engine runs before each other engine in
+  // exactly half the repetitions only when the repetition count is even.
+  const engines = ciEngines(manifest).split(',');
+  const orders = Array.from({ length: repetitions }, (_, repetition) => (
+    engineOrderForRepetition(engines, repetition, 'alternate')
+  ));
+  for (const first of engines) {
+    for (const second of engines) {
+      if (first === second) continue;
+      const ahead = orders.filter((order) => order.indexOf(first) < order.indexOf(second)).length;
+      assertEqual(ahead * 2, repetitions, `${first} runs before ${second} in half the repetitions`);
+    }
+  }
 }
 
 console.log(`awfy-driver: ${passed} assertions passed.`);

@@ -36,7 +36,7 @@ adds no timer cost, and the 0.5 ms floor applies to the window, not to one
 iteration. The first warm-up iteration is kept as `firstIterationMicros`, the
 cold figure, and each engine's stats carry its median as
 `medianFirstIterationMicros`; no ratio uses it. The headline over processes
-stays the median of the five samples.
+is the median of the samples, six in CI.
 
 The counts live per benchmark under `warmProtocol` in `perf/awfy/manifest.json`.
 They keep each benchmark's problem size (`innerIterations` 1, `CD` 2), five
@@ -54,8 +54,9 @@ runs the `--engines` order, and every next repetition runs the reverse of the
 one before, so every pair of engines swaps places from one repetition to the
 next. The order is deterministic, so a report can be rerun in the same order,
 and over an even number of repetitions each engine of a pair runs first
-equally often; with CI's five, the `--engines` order runs three times and its
-reverse twice. Random order was rejected: it balances only in expectation and
+equally often. CI runs six repetitions in both lanes, so the `--engines` order
+and its reverse run three times each; with an odd number of engines the middle
+one keeps its place, but still swaps order with every other engine. Random order was rejected: it balances only in expectation and
 needs a recorded seed to be reproducible. Every sample records `engine`,
 `repetition` and `position` (its place in that repetition's order), each
 target records `executionOrder`, and the report's metadata names the order
@@ -67,9 +68,17 @@ mode and the base order. Target-1 evidence cites the order from those fields.
   JIT tier, from the same Node.js binary as `node`. It runs by default in both
   drivers and in CI, and the barometer publishes its ratio.
 - `jsc` is the JavaScriptCore shell with `--useJIT=false` (the same option as
-  `JSC_useJIT=false`), which leaves the LLInt interpreter. It is opt-in
-  (`--engines ...,jsc --jsc <path>`) and is not run in CI: no CI runner has a
-  `jsc` shell today, and a new install step is a separate decision.
+  `JSC_useJIT=false`), which leaves the LLInt interpreter. CI runs it in both
+  lanes: every AWFY and JetStream job on `ubuntu-latest` installs the shell
+  from the Ubuntu archive's `libjavascriptcoregtk-bin` package
+  (`.github/scripts/install-jsc.sh`). The archive drops a package version once
+  an update supersedes it, so the version is recorded rather than pinned: the
+  driver writes the package and version into the report's engine metadata, the
+  CI reports fail when a report that measured JSC records none, and the
+  barometer breaks the trend line when it changes. The drivers' defaults leave
+  `jsc` out, because a local machine may have no shell; each manifest's
+  `ciReport.engines` adds it for CI, and a local run opts in with
+  `--engines ...,jsc --jsc <path>`.
 - The JIT flags are arguments, not environment variables, so every sample's
   recorded command shows them.
 
@@ -92,6 +101,9 @@ barometer as an outside reference.
   with four engines, against 139 s for the cold protocol with three, most of
   it `Havlak`'s two Goccia iterations per process. The PR lane runs two Goccia
   binaries, so its share of `Havlak` doubles.
+- CI runs six repetitions instead of five and a fifth engine, which costs
+  each AWFY and JetStream job about a fifth more time again, and the JSC
+  install adds a step to each of them.
 - Per-platform measurement and JavaScriptCore on macOS runners stay with
   #2102.
 - What stays: ADR 0076's same-runner rule, ADR 0087's target, then repetition,

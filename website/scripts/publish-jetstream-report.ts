@@ -81,14 +81,16 @@ export function summaryFromReport(report: JetStreamReport) {
     (name) => !reportedTargetNames.includes(name),
   ).length;
   const requiredEngines = ["goccia", "qjs", "node"];
-  // Reports from before the node-jitless comparator do not list it, and must
-  // not be marked failed for lacking it.
-  if (
-    (report.metadata?.engines ?? []).some(
-      (engine) => engine.name === "node-jitless",
-    )
-  ) {
-    requiredEngines.push("node-jitless");
+  // Reports from before the node-jitless and jsc comparators do not list
+  // them, and must not be marked failed for lacking them.
+  for (const comparator of ["node-jitless", "jsc"]) {
+    if (
+      (report.metadata?.engines ?? []).some(
+        (engine) => engine.name === comparator,
+      )
+    ) {
+      requiredEngines.push(comparator);
+    }
   }
   const failedWorkloadCount =
     missingWorkloadCount +
@@ -132,6 +134,7 @@ export function summaryFromReport(report: JetStreamReport) {
       nodeJitless: finiteRatio(
         report.geomeanRatios?.["goccia_over_node-jitless"],
       ),
+      jsc: finiteRatio(report.geomeanRatios?.goccia_over_jsc),
     },
     engineVersions,
     corpusCommit:
