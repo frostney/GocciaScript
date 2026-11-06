@@ -14,6 +14,7 @@ import {
   rankGroupCoverage,
   readNewestValidTest262Report,
   type Test262DashboardData,
+  test262RunIncludesAnnexB,
 } from "@/lib/test262-dashboard";
 
 function buildZip(name: string, text: string): Uint8Array {
@@ -86,6 +87,32 @@ describe("latest test262 summary selection", () => {
 
   test("returns null when ready data has no latest report", () => {
     expect(latestTest262Summary({ ...data, latest: null })).toBeNull();
+  });
+
+  test("reports whether the run covered the annexB category", () => {
+    const category = {
+      run: 1,
+      passed: 1,
+      failed: 0,
+      wrapperInfra: 0,
+      timeouts: 0,
+    };
+    expect(test262RunIncludesAnnexB(latest.summary)).toBe(false);
+    expect(
+      test262RunIncludesAnnexB({
+        ...latest.summary,
+        byCategory: [{ category: "language", ...category }],
+      }),
+    ).toBe(false);
+    expect(
+      test262RunIncludesAnnexB({
+        ...latest.summary,
+        byCategory: [
+          { category: "language", ...category },
+          { category: "annexB", ...category },
+        ],
+      }),
+    ).toBe(true);
   });
 
   test.each([

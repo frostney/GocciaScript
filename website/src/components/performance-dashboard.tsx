@@ -468,12 +468,14 @@ export function PerformanceDashboard({
     <div className="compat-page perf-page container">
       <section className="compat-hero perf-hero">
         <div>
-          <p className="section-kicker">reference engine barometer</p>
+          <p className="section-kicker">performance target</p>
           <h1>Performance Barometer</h1>
           <p>
-            A directional north-star view of GocciaScript against QuickJS and
-            Node.js using pinned AWFY and JetStream 3 workloads. Different
-            runtimes have different goals; this is not a product ranking.
+            The first performance target is an interpreter faster than QuickJS:
+            both QuickJS geomean ratios (AWFY and JetStream) below 1.00× on
+            every shipped platform. This page tracks it on Linux x64 with pinned
+            AWFY and JetStream 3 workloads; Node.js, with its JIT, is shown for
+            scale.
           </p>
         </div>
         <div className="compat-hero-actions">

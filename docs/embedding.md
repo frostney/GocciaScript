@@ -395,7 +395,7 @@ console.log(version);  // "1.0.0"
 
 ## Console Output Capture
 
-By default, `console.log` and friends write directly to stdout, as UTF-8 when redirected under a UTF-8 locale and on Windows (where linking the engine makes UTF-8 the host process's RTL code page; see [Tooling — AnsiString RTL Calls on Windows](contributing/tooling.md#ansistring-rtl-calls-on-windows)). The `OutputCallback` property lets you intercept all console output programmatically:
+By default, `console.log` and friends write directly to stdout, as UTF-8 when redirected under a UTF-8 locale and on Windows, and as UTF-16 through `WriteConsoleW` to a Windows console (linking the engine makes UTF-8 the host process's RTL code page and, in a console application, sets up the main thread's standard output and standard error this way; see [Tooling — AnsiString RTL Calls on Windows](contributing/tooling.md#ansistring-rtl-calls-on-windows)). The `OutputCallback` property lets you intercept all console output programmatically:
 
 ```pascal
 uses

@@ -8,6 +8,7 @@ import { getSiteUrl } from "@/lib/site-url";
 import {
   latestTest262Summary,
   loadTest262DashboardData,
+  test262RunIncludesAnnexB,
 } from "@/lib/test262-dashboard";
 
 export const metadata: Metadata = {
@@ -23,9 +24,13 @@ export default async function HomePage() {
   ]);
   const locale = parseAcceptLanguage(hdrs.get("accept-language"));
   const summary = latestTest262Summary(compatibilityData);
-  // Only the two counts cross into the client component.
+  // Only the two counts and the Annex B scope cross into the client component.
   const compatibility = summary
-    ? { passed: summary.passed, totalRun: summary.totalRun }
+    ? {
+        passed: summary.passed,
+        totalRun: summary.totalRun,
+        annexBIncluded: test262RunIncludesAnnexB(summary),
+      }
     : null;
   const structuredData = buildHomeStructuredData(getSiteUrl());
   const serializedStructuredData = JSON.stringify(structuredData).replace(

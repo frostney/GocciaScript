@@ -10,7 +10,7 @@
 - **Compatibility paths** — Every standard core form disabled by the recommended profile has a targeted `--compat-*` path
 - **Host exposure** — Normal hosts do not install `eval`; the private `GocciaTest262Runner` conformance host exposes `eval`, `evalScript`, and `createRealm`
 - **TC39 proposals and extensions** — The TC39 Type Annotations proposal uses types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement
-- **Annex B policy** — Browser-only Annex B behavior is not a general pre-1.0 target
+- **Annex B policy** — Annex B is part of the test262 conformance target; new Annex B surfaces go behind a compatibility flag that the test262 runner turns on
 
 GocciaScript implements ECMAScript with curated recommended defaults. Calling it merely a JavaScript-like subset is misleading: the engine's implemented language capability, its recommended profile, and its host APIs are separate dimensions. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For current generated evidence, use the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility); for quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
 
@@ -22,7 +22,7 @@ GocciaScript implements ECMAScript with curated recommended defaults. Calling it
 
 Compatibility flags are parser and runtime policy switches for ECMAScript conformance work, test262 execution, and hosts that deliberately need legacy JavaScript behavior. They are not the recommended starting point for generated code or ordinary userland scripts. AI coding agents should usually emit the default forms first, then enable a flag only when the surrounding project, test, or host explicitly needs the legacy semantics.
 
-Annex B is not a general compatibility target before 1.0. ECMA-262 describes Annex B as legacy web-browser behavior outside the core language, and GocciaScript's current sandbox-first, non-browser host direction does not justify adding broad Annex B semantics. Existing Annex-B-shaped surfaces may remain when they already serve core conformance or are clean shim-level legacy aliases, but new parser/runtime/object-model Annex B work should wait for a future Web API or browser-compatibility profile. See [ADR 0085](adr/0085-defer-annex-b-before-1-0.md).
+Annex B is part of the test262 conformance target, and new Annex B surfaces go behind an off-by-default compatibility flag; see [Annex B Web-Browser Legacy Features](#annex-b-web-browser-legacy-features).
 
 | Flag | Enables | Recommended userland default |
 |------|---------|--------------------------|
@@ -896,9 +896,9 @@ These are deliberate differences from standard ECMAScript behavior, not missing 
 
 ### Annex B Web-Browser Legacy Features
 
-**Deferred before 1.0.** GocciaScript does not pursue broad Annex B support for the current release track. Annex B covers legacy web-browser compatibility behavior and is not part of the core ECMAScript language; implementing it broadly would add parser, binding, RegExp, object-model, and host semantics that do not match the current sandbox-first and non-browser runtime goals.
+**Off by default for new surfaces.** Annex B covers legacy web-browser compatibility behavior and is not part of the core ECMAScript language, but test262 tests it and GocciaScript's conformance target includes it. The divergence is the default profile: a new Annex B surface goes behind an `Engine.Compatibility` flag with a matching `--compat-*` flag, off by default, which the test262 runner turns on; the 0.18.0 Annex B work adds that flag. An Annex B surface that has not shipped yet is a conformance gap, not a divergence.
 
-Some individual Annex-B-shaped surfaces already exist because they are useful outside a browser-host profile or layer cleanly over existing primitives: `String.prototype.substr`, `Object.prototype.__proto__`, legacy object accessor helpers, `Date.prototype.toGMTString`, and sloppy block-function behavior behind `--compat-function` plus `--compat-non-strict-mode`. These do not imply a commitment to implement the rest of Annex B. Reconsider broad Annex B support only as part of a future Web API or browser-compatibility profile. See [ADR 0085](adr/0085-defer-annex-b-before-1-0.md).
+The Annex B surfaces that already ship stay as they are. Always on: `String.prototype.substr`, `String.prototype.trimLeft` and `trimRight`, `Date.prototype.toGMTString`, `RegExp.prototype.compile`, and part of the legacy RegExp pattern grammar in a pattern without the `u` or `v` flag (identity escapes such as `\a` for `a`, and a lone `{`, `}` or `]`). Behind existing flags: block-level and `if`-clause function declarations under `--compat-function` plus `--compat-non-strict-mode` ([`function` Keyword](#function-keyword)), labeled function declarations under `--compat-label`, `--compat-function` and `--compat-non-strict-mode` ([Labeled Statements](#labeled-statements)), and a `var` that redeclares a simple catch parameter under `--compat-var`. `Object.prototype.__proto__` and the legacy accessor helpers (`__defineGetter__` and its siblings) are always on as well; they moved from Annex B into the main specification in ES2022. [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md) lists each surface and what is still missing.
 
 ### Legacy Global Number Helpers
 

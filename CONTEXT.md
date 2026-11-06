@@ -491,12 +491,12 @@ The `/compatibility` page on the project website, rendered from the generated te
 _Avoid_: Conformance table, hand-typed pass rate, Performance Barometer.
 
 **Wrapper infrastructure failure**:
-A test262 result class for a case whose run failed outside the conformance contract — a signal-killed engine process, a Pascal-side error, or a negative-runtime path that emitted no marker at all. It is distinct from a conformance failure and from a timeout, and is gated to zero in continuous integration. See [test262](docs/test262.md).
+A test262 result class for a case whose run failed outside the conformance contract — a signal-killed engine process, a runner or harness protocol error outside engine execution, or a harness Script that failed before the test ran. It is distinct from a conformance failure and from a timeout, and is gated to zero in continuous integration. See [test262](docs/test262.md).
 _Avoid_: Conformance fail, flaky test, harness error.
 
 **Performance Barometer**:
-The public, directional view of GocciaScript performance against selected reference engines using retained, versioned benchmark reports. It is a north-star aid, not a product ranking.
-_Avoid_: Leaderboard, competitor comparison.
+The public view of GocciaScript performance against selected reference engines using retained, versioned benchmark reports. For the first performance target, an interpreter faster than QuickJS, QuickJS is the bar it measures progress against, not only a reference for scale. See [ADR 0176](docs/adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md).
+_Avoid_: Leaderboard, competitor ranking.
 
 **Reference engine**:
 An independently developed JavaScript engine or runtime measured beside GocciaScript to provide external scale and trend context. A reference engine is not assumed to share GocciaScript's goals or constraints.
@@ -507,8 +507,8 @@ A dimensionless comparison normalized so `1.00×` means aligned performance and 
 _Avoid_: Speedup, ranking score.
 
 **North-star trend**:
-The retained direction of compatible reference-ratio measurements over time. A trend line breaks when the corpus, subset, driver, or reference-engine version changes rather than implying continuity across different measurement contracts.
-_Avoid_: Release gate, competitive ranking.
+The retained direction of compatible reference-ratio measurements over time. A trend line breaks when the corpus, subset, driver, or reference-engine version changes rather than implying continuity across different measurement contracts. Target 1 of [ADR 0176](docs/adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md) is judged on the QuickJS ratios of this trend per platform at milestone acceptance, not on each PR.
+_Avoid_: Per-PR gate, competitive ranking.
 
 **Compile profile**:
 The profiler mode (`--profile=compile`) that reports, per source function, lex, parse and compile time and the compiler's work, recorded before execution. It is not part of `--profile=all`. See [Profiling](docs/profiling.md#compile-profile---profilecompile).

@@ -115,6 +115,9 @@ Object.defineProperty($262.AbstractModuleSource.prototype, "constructor", {
 });
 Object.defineProperty($262.AbstractModuleSource.prototype, Symbol.toStringTag, {
   get() {
+    // Strict, as a built-in getter is: this file runs as a non-strict
+    // Script, where a primitive this would be boxed into an object.
+    "use strict";
     return this &&
       typeof this === "object" &&
       this !== $262.AbstractModuleSource.prototype
