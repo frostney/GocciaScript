@@ -364,6 +364,15 @@ export async function readNewestValidTest262Report(
   return { latestReport: null, usableTimeline: timeline };
 }
 
+/** Whether a run covered test262's `annexB` category. Annex B is part of the
+ *  conformance target (ADR 0177) but not yet in the default run (#2069), so
+ *  site copy names the exclusion only while a run leaves it out. */
+export function test262RunIncludesAnnexB(
+  summary: Test262SuiteSummary,
+): boolean {
+  return summary.byCategory.some((entry) => entry.category === "annexB");
+}
+
 export function latestTest262Summary(
   data: Test262DashboardData,
 ): Test262SuiteSummary | null {

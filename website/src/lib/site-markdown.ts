@@ -40,6 +40,7 @@ import {
   latestTest262Summary,
   loadTest262DashboardData,
   type Test262DashboardData,
+  test262RunIncludesAnnexB,
 } from "@/lib/test262-dashboard";
 import { compatibilityPercent } from "@/lib/test262-percent";
 import { TOOL_CALL_FLOWS, TOOL_CALL_TASK } from "@/lib/tool-call-comparison";
@@ -167,7 +168,7 @@ export function renderHomeMarkdown(
 ): string {
   const summary = latestTest262Summary(compatibility);
   const conformanceFigure = summary
-    ? `The latest published run, Annex B excluded, has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} tests passing (${compatibilityPercent(summary.passed, summary.totalRun)}); see results `
+    ? `The latest published run${test262RunIncludesAnnexB(summary) ? "" : ", Annex B excluded,"} has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} tests passing (${compatibilityPercent(summary.passed, summary.totalRun)}); see results `
     : "See results ";
   const heroExample = pickExample("coffee-typed");
 
