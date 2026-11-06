@@ -205,16 +205,12 @@ parsing rules.
 ## Node compatibility, to a degree
 
 GocciaScript provides a Node.js capability when it fits the vision and cannot
-be shimmed in userland, and leaves the rest to userland. CommonJS, for example,
-is left to userland: a bundler from npm, such as `esbuild --format=esm` or
-Rollup with `@rollup/plugin-commonjs`, converts a CommonJS package to ESM, and
-the output runs with the compatibility flags, because the default profile
-rejects bundler output. Conversion does not solve a package that needs a Node
-built-in, such as `debug`, which requires `tty`; that is where the capability
-test applies, and the general `node:` modules are judged by it. What
-GocciaScript provides are runtime extensions a host installs: `node:async_hooks`; bare-specifier lookup through
+be shimmed in userland, and leaves what userland can shim to userland. The
+same rule covers CommonJS, the general `node:` modules and Web APIs; see
+[Module Resolution](docs/module-resolution.md) for how to bring a package in.
+What GocciaScript provides are runtime extensions a host installs: `node:async_hooks`; bare-specifier lookup through
 `node_modules` (ESM only, a subset of Node's resolver), which is opt-in with
-`--allow-import=node_modules` (see [Module Resolution](docs/module-resolution.md));
+`--allow-import=node_modules`;
 and a Node-compatible `fs` API over a virtual filesystem, which
 `GocciaRunner`'s sandbox mode provides:
 

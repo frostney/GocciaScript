@@ -1270,8 +1270,9 @@ export function Landing({
                 and Node-shaped errors. Node compatibility is to a degree, as
                 runtime extensions a host installs: GocciaScript provides a
                 Node.js capability when it fits the vision and cannot be shimmed
-                in userland, and leaves the rest to userland. CommonJS, for
-                example, is left to a bundler that converts it to ESM.
+                in userland, and leaves what userland can shim to userland. The
+                same rule covers CommonJS and the general{" "}
+                <code className={inlineCodeClass}>node:</code> modules.
                 Bare-specifier lookup through{" "}
                 <code className={inlineCodeClass}>node_modules</code> (ESM only)
                 is opt-in with{" "}

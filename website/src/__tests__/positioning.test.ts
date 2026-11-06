@@ -115,8 +115,8 @@ describe("GocciaScript positioning", () => {
   test("states the capability rule and the sandbox fs API", () => {
     expectConcepts(NODE_COMPATIBILITY_ANSWER, [
       /when it fits the vision and cannot be shimmed in userland/i,
-      /CommonJS.+bundler from npm converts a CommonJS package to ESM/i,
-      /package that needs a Node built-in is not solved that way/i,
+      /leaves what userland can shim to userland/i,
+      /same rule covers CommonJS and the general node: modules/i,
       /Node-compatible to a degree.+runtime extensions a host installs/i,
       /node:async_hooks/,
       /Node-compatible fs API/i,
@@ -137,6 +137,7 @@ describe("GocciaScript positioning", () => {
         /non-goal|not a (?:complete )?Node(?:\.js)? host/i,
       );
       expect(text).not.toMatch(/ESM-to-CommonJS/i);
+      expect(text).not.toMatch(/bundler|esbuild|rollup|\btty\b/i);
       expect(text).not.toMatch(/sandbox-first/i);
     }
     for (const { answer } of POSITIONING_FAQS)
