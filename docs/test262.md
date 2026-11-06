@@ -384,7 +384,7 @@ Atomics wait/notify tests.
 test262's `INTERPRETING.md` ("Strict Mode" and the `flags` list) requires each
 test to run in both modes unless a flag says otherwise. The runner reads the
 flags from the frontmatter, written inline (`flags: [noStrict]`) or as a YAML
-block list (`flags:` followed by `  - noStrict` lines, as `staging/sm` writes
+block list (`flags:` followed by indented `- noStrict` lines, as `staging/sm` writes
 them), and gives each file these runs, in this order of precedence:
 
 | Flag | Runs |
