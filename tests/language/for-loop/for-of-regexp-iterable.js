@@ -69,4 +69,53 @@ describe("for-of regexp iterable with traditional loops enabled", () => {
     for (holder.of of /a>/.exec("a>")) {}
     expect(holder.of).toBe("a>");
   });
+
+  test("prefix increment operand named of keeps its traditional header", () => {
+    let x;
+    for (x of /a>/.exec("a>")) {}
+    let of = 0;
+    for (++of; of < 2; of++) {}
+    expect(x).toBe("a>");
+    expect(of).toBe(2);
+  });
+
+  test("prefix decrement operand named of keeps its traditional header", () => {
+    let x;
+    for (x of /a>/.exec("a>")) {}
+    let of = 2;
+    for (--of; of > 0; of--) {}
+    expect(x).toBe("a>");
+    expect(of).toBe(0);
+  });
+
+  test("await operand named of keeps its traditional header", async () => {
+    let x;
+    for (x of /a>/.exec("a>")) {}
+    const of = Promise.resolve(2);
+    for (await of; false;) {}
+    expect(x).toBe("a>");
+    expect(await of).toBe(2);
+  });
+
+  test("yield operand named of keeps its traditional header", () => {
+    let x;
+    for (x of /a>/.exec("a>")) {}
+    const holder = {
+      *values() {
+        const of = 2;
+        for (yield of; false;) {}
+      }
+    };
+    expect(x).toBe("a>");
+    expect(holder.values().next().value).toBe(2);
+  });
+
+  test("a nested non-async arrow keeps await as an identifier", async () => {
+    let x;
+    for (x of /a>/.exec("a>")) {}
+    let callback;
+    for (callback = () => await / 2; false;) {}
+    expect(x).toBe("a>");
+    expect(typeof callback).toBe("function");
+  });
 });

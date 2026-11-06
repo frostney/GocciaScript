@@ -7433,6 +7433,7 @@ var
   ParenCount, BracketCount, BraceCount: Integer;
   CurrentType: TGocciaTokenType;
   NeedsOperand: Boolean;
+  CanBeForOfTarget: Boolean;
 
   function NextGoal: TGocciaLexicalGoal;
   begin
@@ -7455,6 +7456,7 @@ begin
     BracketCount := 0;
     BraceCount := 0;
     NeedsOperand := True;
+    CanBeForOfTarget := True;
 
     while True do
     begin
@@ -7473,10 +7475,28 @@ begin
         // this probe. Let the committed for-of parse select the regexp goal
         // for its iterable, rather than scanning it as a C-style initializer.
         // `of` can also be an operand or a member name in a traditional head.
-        if not NeedsOperand and
+        if CanBeForOfTarget and not NeedsOperand and
            not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
            CheckContextualKeyword(KEYWORD_OF) then
           Exit;
+
+        // Once an operator rules out a LeftHandSideExpression, keep scanning
+        // the traditional initializer. In particular, an operand named `of`
+        // after a prefix update, await, yield or async is not a separator.
+        // Do not change the lexical-goal heuristic for the expression's body.
+        if not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
+           (((CurrentType <> gttNew) and
+             TokenRequiresFollowingOperand(CurrentType)) or
+            (CurrentType in [gttIncrement, gttDecrement, gttAs]) or
+            CheckUnescapedIdentifierKeyword(KEYWORD_SATISFIES) or
+            (NeedsOperand and
+             ((CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and
+               (Previous.TokenType <> gttNew)) or
+              (((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
+               CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT)) or
+              ((FInGeneratorFunction > 0) and
+               CheckUnescapedIdentifierKeyword(KEYWORD_YIELD))))) then
+          CanBeForOfTarget := False;
       end;
 
       if CurrentType in [gttTemplateHead, gttTemplate] then
