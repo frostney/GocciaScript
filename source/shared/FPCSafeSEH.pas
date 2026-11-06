@@ -328,10 +328,24 @@ begin
     Result := ASource;
 end;
 
-function CreateRoutineLocator(const ARoot: string): TFPCRoutineLocator;
+// FPC searches its working directory for an include before the -Fi
+// directories. build.pas compiles from the repository root, and
+// .github/scripts/compile-programs.py from each program's unit directory,
+// which it passes to --apply as AObjectDirectory. --check has no unit
+// directory; one holds only compiler output, which no include names.
+function CreateRoutineLocator(const ARoot, AObjectDirectory: string): TFPCRoutineLocator;
+var
+  CompilerDirectories: array of string;
 begin
+  SetLength(CompilerDirectories, 1);
+  CompilerDirectories[0] := ARoot;
+  if AObjectDirectory <> '' then
+  begin
+    SetLength(CompilerDirectories, 2);
+    CompilerDirectories[1] := ExpandFileName(AObjectDirectory);
+  end;
   // The -Fi directories of config.cfg and .github/scripts/compile-programs.py.
-  Result := TFPCRoutineLocator.Create([
+  Result := TFPCRoutineLocator.Create(CompilerDirectories, [
     ARoot + PathDelim + 'source' + PathDelim + 'units',
     ARoot + PathDelim + 'source' + PathDelim + 'shared',
     ARoot + PathDelim + 'souffle']);
@@ -681,7 +695,7 @@ begin
     PE_OPTIONAL_OFFSET + PE_IMAGE_BASE_OFFSET);
   Sources := TStringList.Create;
   Receipt := TStringList.Create;
-  Manifest.Locator := CreateRoutineLocator(Manifest.Root);
+  Manifest.Locator := CreateRoutineLocator(Manifest.Root, AObjectDirectory);
   try
     CollectProjectSources(ProjectRoot(AManifestFile), Sources);
     if (AObjectDirectory = '') and FileExists(AMapFile + '.safeseh-inputs') then
@@ -780,7 +794,7 @@ begin
   if ManifestFile = '' then
     ManifestFile := ManifestFileName;
   ReadManifest(ManifestFile, Manifest);
-  Manifest.Locator := CreateRoutineLocator(Manifest.Root);
+  Manifest.Locator := CreateRoutineLocator(Manifest.Root, '');
   try
     for Symbol in Manifest.SourceSymbols do
     begin

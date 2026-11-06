@@ -44,10 +44,14 @@ type
   // once. Files must not change during the locator's lifetime.
   TFPCRoutineLocator = class
   private
+    // The compiler working directories, then the -Fi directories.
     FIncludeDirectories: array of string;
     FFiles: TStringList;
   public
-    constructor Create(const AIncludeDirectories: array of string);
+    // AIncludeDirectories are FPC's -Fi directories. ACompilerDirectories are
+    // the working directories the compiler may have run in, which FPC
+    // searches for an include between its includer's directory and them.
+    constructor Create(const ACompilerDirectories, AIncludeDirectories: array of string);
     destructor Destroy; override;
     function Locate(const ASourceFile, ASection: string): TFPCRoutineSpan;
   end;
@@ -64,9 +68,12 @@ type
 // parse sees: unparseable text, another lexing mode, macros, includes that
 // could hold routines or change the block structure, or conditionals that
 // change the parse between branches (ADR 0180). Include files are searched
-// beside their includer, then in AIncludeDirectories.
+// as FPC 3.2.4 searches them: beside their includer, then in
+// ACompilerDirectories, then in AIncludeDirectories. A name that matches
+// files with different text in any of these is refused, since the file FPC
+// takes then depends on its working directory and search order.
 function LocateFPCRoutine(const ASourceFile, ASection: string;
-  const AIncludeDirectories: array of string): TFPCRoutineSpan;
+  const ACompilerDirectories, AIncludeDirectories: array of string): TFPCRoutineSpan;
 
 // The unit-qualified routine an FPC section names, for diagnostics. Returns
 // the section itself when its shape is unsupported.
@@ -985,6 +992,8 @@ begin
     Mode := LowerCase(Directive.Argument);
     if (Directive.Name = 'macro') or ((Directive.Name = 'define') and (Pos(':=', Directive.Argument) > 0)) then
       Refuse(ASource.FileName, Directive.Line, 'macros can rename routines and are not supported');
+    if Directive.Name = 'includepath' then
+      Refuse(ASource.FileName, Directive.Line, '{$includepath} changes where FPC finds includes and is not supported');
     if ((Directive.Name = 'mode') and (Mode <> 'delphi') and (Mode <> 'delphiunicode')) or
       ((Directive.Name = 'modeswitch') and (Pos('nestedcomments', Mode) = 1)) then
       Refuse(ASource.FileName, Directive.Line, 'only Delphi-mode lexing is supported: {$' +
@@ -992,13 +1001,39 @@ begin
   end;
 end;
 
+// cfileutl.pas path_absolute on the host the compiler runs on.
+function IsAbsoluteIncludePath(const AName: string): Boolean;
+begin
+{$IFDEF MSWINDOWS}
+  Result := ((Length(AName) > 0) and CharInSet(AName[1], ['\', '/'])) or
+    ((Length(AName) > 2) and (AName[2] = ':') and CharInSet(AName[3], ['\', '/']));
+{$ELSE}
+  Result := (Length(AName) > 0) and (AName[1] = '/');
+{$ENDIF}
+end;
+
+function SameBytes(const ALeft, ARight: TBytes): Boolean;
+begin
+  Result := (Length(ALeft) = Length(ARight)) and
+    ((Length(ALeft) = 0) or CompareMem(@ALeft[0], @ARight[0], Length(ALeft)));
+end;
+
+// FPC 3.2.4 (scanner.pas dir_include and findincludefile, cfileutl.pas
+// FindFile and FileExistsNonCase) tries the name as written, then, without
+// an extension, with .inc, .pp and .pas. For each it searches the
+// includer's directory, the compiler's working directory, any
+// {$INCLUDEPATH}, then each -Fi directory, or only the named directory of an
+// absolute name. On a case-sensitive file system it tries each path as
+// written, lowercased, then uppercased. Every candidate is checked, and all
+// that exist must hold the same bytes, so FPC's choice cannot change the text.
 function ResolveInclude(const AIncluder: string; const ADirective: TDirective;
   const AIncludeDirectories: array of string): string;
 const
   EXTENSIONS: array[0..3] of string = ('', '.inc', '.pp', '.pas');
 var
-  Name, Directory, Extension, Candidate: string;
-  Directories: array of string;
+  Name, Directory, Extension, Candidate, Variant: string;
+  Directories, Variants: array of string;
+  Found: TBytes;
   Index: Integer;
 begin
   Name := Trim(ADirective.Argument);
@@ -1006,21 +1041,57 @@ begin
     Name := Copy(Name, 2, Length(Name) - 2);
   Name := StringReplace(Name, '\', string(PathDelim), [rfReplaceAll]);
   Name := StringReplace(Name, '/', string(PathDelim), [rfReplaceAll]);
-  SetLength(Directories, Length(AIncludeDirectories) + 1);
-  Directories[0] := ExtractFilePath(AIncluder);
-  for Index := 0 to High(AIncludeDirectories) do
-    Directories[Index + 1] := IncludeTrailingPathDelimiter(AIncludeDirectories[Index]);
-  for Directory in Directories do
-    for Extension in EXTENSIONS do
-    begin
-      if (Extension <> '') and (ExtractFileExt(Name) <> '') then
-        Continue;
-      Candidate := ExpandFileName(Directory + Name + Extension);
-      if FileExists(Candidate) then
-        Exit(Candidate);
-    end;
-  Refuse(AIncluder, ADirective.Line, 'include file not found: ' + Name);
+  // `*` names the including source file; a final `.` is retried without it.
+  // A drive-relative name such as C:name depends on the drive's directory.
+  if (ExtractFileName(Name) = '') or (ExtractFileName(Name)[1] = '*') or (Name[Length(Name)] = '.') or
+    ((Pos(':', Name) > 0) and not IsAbsoluteIncludePath(Name)) then
+    Refuse(AIncluder, ADirective.Line, 'unsupported include name: ' + Name);
+  if IsAbsoluteIncludePath(Name) then
+  begin
+    SetLength(Directories, 1);
+    Directories[0] := '';
+  end
+  else
+  begin
+    SetLength(Directories, Length(AIncludeDirectories) + 1);
+    Directories[0] := ExtractFilePath(AIncluder);
+    for Index := 0 to High(AIncludeDirectories) do
+      Directories[Index + 1] := IncludeTrailingPathDelimiter(AIncludeDirectories[Index]);
+  end;
   Result := '';
+  Found := nil;
+  for Extension in EXTENSIONS do
+  begin
+    if (Extension <> '') and (ExtractFileExt(Name) <> '') then
+      Continue;
+    for Directory in Directories do
+    begin
+      SetLength(Variants, 1);
+      Variants[0] := Name + Extension;
+      if FileNameCaseSensitive then
+      begin
+        SetLength(Variants, 3);
+        Variants[1] := LowerCase(Name + Extension);
+        Variants[2] := UpperCase(Name + Extension);
+      end;
+      for Variant in Variants do
+      begin
+        Candidate := ExpandFileName(Directory + Variant);
+        if not FileExists(Candidate) then
+          Continue;
+        if Result = '' then
+        begin
+          Result := Candidate;
+          Found := ReadSourceBytes(Candidate);
+        end
+        else if (Candidate <> Result) and not SameBytes(Found, ReadSourceBytes(Candidate)) then
+          Refuse(AIncluder, ADirective.Line, 'include ' + Name + ' names different files, ' + Result +
+            ' and ' + Candidate + ', so the one FPC reads depends on its working directory and search order');
+      end;
+    end;
+  end;
+  if Result = '' then
+    Refuse(AIncluder, ADirective.Line, 'include file not found: ' + Name);
 end;
 
 type
@@ -1316,14 +1387,16 @@ end;
 
 { TFPCRoutineLocator }
 
-constructor TFPCRoutineLocator.Create(const AIncludeDirectories: array of string);
+constructor TFPCRoutineLocator.Create(const ACompilerDirectories, AIncludeDirectories: array of string);
 var
   Index: Integer;
 begin
   inherited Create;
-  SetLength(FIncludeDirectories, Length(AIncludeDirectories));
+  SetLength(FIncludeDirectories, Length(ACompilerDirectories) + Length(AIncludeDirectories));
+  for Index := 0 to High(ACompilerDirectories) do
+    FIncludeDirectories[Index] := ACompilerDirectories[Index];
   for Index := 0 to High(AIncludeDirectories) do
-    FIncludeDirectories[Index] := AIncludeDirectories[Index];
+    FIncludeDirectories[Length(ACompilerDirectories) + Index] := AIncludeDirectories[Index];
   FFiles := TStringList.Create;
   FFiles.Sorted := True;
   FFiles.CaseSensitive := True;
@@ -1408,11 +1481,11 @@ begin
 end;
 
 function LocateFPCRoutine(const ASourceFile, ASection: string;
-  const AIncludeDirectories: array of string): TFPCRoutineSpan;
+  const ACompilerDirectories, AIncludeDirectories: array of string): TFPCRoutineSpan;
 var
   Locator: TFPCRoutineLocator;
 begin
-  Locator := TFPCRoutineLocator.Create(AIncludeDirectories);
+  Locator := TFPCRoutineLocator.Create(ACompilerDirectories, AIncludeDirectories);
   try
     Result := Locator.Locate(ASourceFile, ASection);
   finally

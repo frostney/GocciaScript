@@ -34,6 +34,7 @@ type
   private
     FDirectory: string;
     FSourceFile: string;
+    FCompilerDirectories: array of string;
     procedure WriteText(const AFileName, AText: string);
     function UnitText(const AImplementation: string; const AInterface: string = ''): string;
     function Locate(const AText, ASection: string): TFPCRoutineSpan;
@@ -56,6 +57,7 @@ type
     procedure TestAssembler;
     procedure TestIncludedBlocks;
     procedure TestLocatorCache;
+    procedure TestIncludeSearch;
   public
     constructor Create;
     destructor Destroy; override;
@@ -73,6 +75,8 @@ begin
   if not CreateDir(FDirectory) then
     raise Exception.Create('Cannot create routine source test directory');
   ForceDirectories(FDirectory + PathDelim + 'includes');
+  ForceDirectories(FDirectory + PathDelim + 'cwd');
+  ForceDirectories(FDirectory + PathDelim + 'absolute');
   FSourceFile := FDirectory + PathDelim + 'fixture.pas';
   WriteText(FDirectory + PathDelim + 'includes' + PathDelim + 'Shared.inc',
     '{$IFDEF FPC} {$mode delphiunicode} {$ENDIF}' + LineEnding);
@@ -84,6 +88,8 @@ begin
   DeleteFile(FDirectory + PathDelim + 'local.inc');
   DeleteFile(FDirectory + PathDelim + 'includes' + PathDelim + 'Shared.inc');
   RemoveDir(FDirectory + PathDelim + 'includes');
+  RemoveDir(FDirectory + PathDelim + 'cwd');
+  RemoveDir(FDirectory + PathDelim + 'absolute');
   RemoveDir(FDirectory);
   inherited Destroy;
 end;
@@ -115,7 +121,7 @@ end;
 function TFPCRoutineSourceTests.Locate(const AText, ASection: string): TFPCRoutineSpan;
 begin
   WriteText(FSourceFile, AText);
-  Result := LocateFPCRoutine(FSourceFile, ASection, [FDirectory + PathDelim + 'includes']);
+  Result := LocateFPCRoutine(FSourceFile, ASection, FCompilerDirectories, [FDirectory + PathDelim + 'includes']);
 end;
 
 procedure TFPCRoutineSourceTests.Refuse(const AText, ASection, AReason: string);
@@ -168,6 +174,7 @@ begin
   Test('reads assembler blocks and escaped words as the compiler does', TestAssembler);
   Test('refuses includes that change the block structure', TestIncludedBlocks);
   Test('parses each file once and keeps file refusals apart from routine refusals', TestLocatorCache);
+  Test('finds includes where FPC does and refuses names that match different files', TestIncludeSearch);
 end;
 
 procedure TFPCRoutineSourceTests.TestRoutineSpan;
@@ -280,7 +287,7 @@ begin
     'no implementation');
   DeleteFile(FSourceFile);
   try
-    LocateFPCRoutine(FSourceFile, ROUTINE_SECTION, []);
+    LocateFPCRoutine(FSourceFile, ROUTINE_SECTION, [], []);
     Fail('Expected a missing source to be refused');
   except
     on E: EFPCRoutineSource do
@@ -675,7 +682,7 @@ var
 
 begin
   WriteText(FSourceFile, UnitText(ROUTINE_TEXT + LineEnding + FIRST, TYPES));
-  Locator := TFPCRoutineLocator.Create([FDirectory + PathDelim + 'includes']);
+  Locator := TFPCRoutineLocator.Create([], [FDirectory + PathDelim + 'includes']);
   try
     Expect<string>(Locator.Locate(FSourceFile, ROUTINE_SECTION).Digest).ToBe(Digest(ROUTINE_TEXT));
     // The file is read once: later edits are not seen within one run.
@@ -689,7 +696,7 @@ begin
   end;
   // A file refusal repeats for every section and is not about the routine.
   WriteText(FSourceFile, UnitText(ROUTINE_TEXT) + OTHER_TEXT);
-  Locator := TFPCRoutineLocator.Create([FDirectory + PathDelim + 'includes']);
+  Locator := TFPCRoutineLocator.Create([], [FDirectory + PathDelim + 'includes']);
   try
     Scope := RefusalScope(ROUTINE_SECTION);
     Expect<Boolean>(Scope = frFile).ToBe(True);
@@ -699,6 +706,100 @@ begin
   finally
     Locator.Free;
   end;
+end;
+
+// FPC 3.2.4 tries each extension in turn and, for each, the includer's
+// directory, its working directory, then each -Fi directory.
+procedure TFPCRoutineSourceTests.TestIncludeSearch;
+const
+  CLOSES_BLOCK = '  end;';
+  NEUTRAL = '{ Settings. }';
+var
+  Local, Includes, WorkingDirectory, Absolute: string;
+  Created: TStringList;
+  Item: string;
+
+  procedure Put(const AFileName, AText: string);
+  begin
+    WriteText(AFileName, AText + LineEnding);
+    Created.Add(UTF8Encode(AFileName));
+  end;
+
+  procedure Remove;
+  var
+    Index: Integer;
+  begin
+    for Index := 0 to Created.Count - 1 do
+      DeleteFile(string(Created[Index]));
+    Created.Clear;
+  end;
+
+  function Including(const AName: string): string;
+  begin
+    Result := UnitText('{$I ' + AName + '}' + LineEnding + ROUTINE_TEXT);
+  end;
+
+begin
+  Local := FDirectory + PathDelim;
+  Includes := FDirectory + PathDelim + 'includes' + PathDelim;
+  WorkingDirectory := FDirectory + PathDelim + 'cwd';
+  Absolute := FDirectory + PathDelim + 'absolute' + PathDelim;
+  Created := TStringList.Create;
+  try
+    // The working directory comes before the -Fi directories, so a file
+    // there with other text could be the one FPC reads.
+    Put(Includes + 'search.inc', NEUTRAL);
+    Put(WorkingDirectory + PathDelim + 'search.inc', CLOSES_BLOCK);
+    Expect<string>(Locate(Including('search.inc'), ROUTINE_SECTION).Digest).ToBe(Digest(ROUTINE_TEXT));
+    SetLength(FCompilerDirectories, 1);
+    FCompilerDirectories[0] := WorkingDirectory;
+    Refuse(Including('search.inc'), ROUTINE_SECTION, 'include search.inc names different files');
+    // The same text in both places compiles the same either way.
+    Put(WorkingDirectory + PathDelim + 'search.inc', NEUTRAL);
+    Expect<string>(Locate(Including('search.inc'), ROUTINE_SECTION).Digest).ToBe(Digest(ROUTINE_TEXT));
+    // Only the working directory has it: that is the file checked.
+    Remove;
+    Put(WorkingDirectory + PathDelim + 'search.inc', CLOSES_BLOCK);
+    Refuse(Including('search.inc'), ROUTINE_SECTION, 'cwd' + PathDelim + 'search.inc:1: included text outside');
+    Remove;
+    FCompilerDirectories := nil;
+    // FPC tries the exact name in every directory before adding `.inc`, so
+    // -Fi's `search` competes with the includer's `search.inc`.
+    Put(Local + 'search.inc', NEUTRAL);
+    Put(Includes + 'search', CLOSES_BLOCK);
+    Refuse(Including('search'), ROUTINE_SECTION, 'include search names different files');
+    Remove;
+    Put(Includes + 'search.pp', CLOSES_BLOCK);
+    Refuse(Including('search'), ROUTINE_SECTION, 'search.pp:1: included text outside');
+    Remove;
+    // An absolute name is read from its own directory only.
+    Put(Local + 'search.inc', NEUTRAL);
+    Put(Absolute + 'search.inc', CLOSES_BLOCK);
+    Refuse(Including(Absolute + 'search.inc'), ROUTINE_SECTION,
+      'absolute' + PathDelim + 'search.inc:1: included text outside');
+    Refuse(Including(Absolute + 'missing.inc'), ROUTINE_SECTION, 'include file not found');
+    Remove;
+    if FileNameCaseSensitive then
+    begin
+      // FPC also tries the lowercased and uppercased name.
+      Put(Local + 'search.inc', CLOSES_BLOCK);
+      Refuse(Including('Search.inc'), ROUTINE_SECTION, 'search.inc:1: included text outside');
+      Put(Local + 'Search.inc', NEUTRAL);
+      Refuse(Including('Search.inc'), ROUTINE_SECTION, 'include Search.inc names different files');
+      Remove;
+    end;
+    // Names whose file FPC derives from elsewhere are refused.
+    Refuse(Including('*.inc'), ROUTINE_SECTION, 'unsupported include name');
+    Refuse(Including('search.'), ROUTINE_SECTION, 'unsupported include name');
+    Refuse(UnitText('{$INCLUDEPATH cwd}' + LineEnding + ROUTINE_TEXT), ROUTINE_SECTION,
+      '{$includepath} changes where FPC finds includes');
+  finally
+    FCompilerDirectories := nil;
+    Remove;
+    Created.Free;
+  end;
+  for Item in [Local + 'search.inc'] do
+    DeleteFile(Item);
 end;
 begin
   TestRunnerProgram.AddSuite(TFPCRoutineSourceTests.Create);

@@ -41,10 +41,19 @@ whenever it cannot be sure the text it hashes is the text that was compiled:
   `end.`. Text it cannot parse, a routine keyword inside a statement block,
   another `{$mode}` and `{$modeswitch nestedcomments}` are refused, so no
   implementation can go unseen.
-- An include inside the routine is refused. Every other include must resolve
-  (beside its includer, then `source/units`, `source/shared` and `souffle`, the
-  `-Fi` directories of `config.cfg` and CI) and must contain no routine or
-  module keyword, so it cannot hold an implementation the parse misses. The
+- An include inside the routine is refused. Every other include is searched
+  as FPC 3.2.4 searches it. FPC tries the name, then `.inc`, `.pp` and
+  `.pas`. For each, it looks beside the includer, then in the compiler's
+  working directory, then in `source/units`, `source/shared` and `souffle`
+  (the `-Fi` directories of `config.cfg` and CI). On a case-sensitive file
+  system it also tries the lowercased and uppercased name. An absolute name
+  is read only from its own directory. The working directory is the
+  repository root for `build.pas`, and the unit directory that
+  `compile-programs.py` passes to `--apply`. If a name matches files with
+  different text, the include is refused, because FPC's choice would depend
+  on where it ran. `{$INCLUDEPATH}`, `*` names and names ending in `.` are
+  refused. The include must contain no routine or module keyword, so it
+  cannot hold an implementation the parse misses. The
   parse does not read included text, so an include must also leave the block
   structure as it found it. In a statement block, its `begin`, `case`, `try`
   and `asm` blocks must close within it, in every branch of its
