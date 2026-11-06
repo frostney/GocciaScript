@@ -93,7 +93,8 @@ host enables the option, so a child realm there still gets its `eval`.
   and gives a present-but-throwing `eval` while it is off. See above.
 - **A `--unsafe-eval` flag and a config key.** The decision on #2065 is that
   `eval` is exposed through the engine API only, so a config file cannot turn on
-  dynamic code evaluation.
+  the global `eval`. The Function constructor and ShadowRealm keep their own
+  trust-gated `unsafe-*` keys.
 - **Keying the ShadowRealm child on the creator's global `eval`.** A script can
   change that, so it says nothing about what the host chose.
 - **A `Compatibility` flag.** `Engine.Compatibility` selects language-profile
