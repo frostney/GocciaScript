@@ -385,12 +385,13 @@ begin
     LineEnding + LineEnding + 'end.' + LineEnding;
 end;
 
+// The routine digest normalises line endings, and LineEnding is CRLF on Windows.
 function TextDigest(const AText: string): string;
 var
   Text: UTF8String;
   Bytes: TBytes;
 begin
-  Text := UTF8Encode(AText);
+  Text := UTF8Encode(StringReplace(AText, #13#10, #10, [rfReplaceAll]));
   SetLength(Bytes, Length(Text));
   Move(Text[1], Bytes[0], Length(Text));
   Result := SHA256Hex(Bytes);
