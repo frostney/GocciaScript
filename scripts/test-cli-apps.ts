@@ -1918,6 +1918,12 @@ await section("test262 runner: deterministic shards merge into one complete repo
       if (report.summary.totalDiscovered !== 12) {
         throw new Error(`test262 shard should preserve global discovery count: ${JSON.stringify(report.summary)}`);
       }
+      // The runner records the runs it planned, which the merge checks.
+      for (const mode of ["non-strict", "strict"]) {
+        const held = report.results.filter((result: { mode: string }) => result.mode === mode).length;
+        if (report.summary.expectedRuns?.[mode] !== held)
+          throw new Error(`test262 shard ${shard} should plan the ${held} ${mode} runs it holds: ${JSON.stringify(report.summary.expectedRuns)}`);
+      }
       for (const result of report.results) {
         const run = `${result.id} (${result.mode})`;
         if (seenTests.has(run)) {
@@ -2012,6 +2018,9 @@ await section("test262 runner: deterministic shards merge into one complete repo
     const strictRun = duplicateRun.results.find((result: { mode: string }) => result.mode === "strict");
     duplicateRun.results.push({ ...strictRun });
     duplicateRun.summary.totalRun = duplicateRun.results.length;
+    // Plan the extra run too, so the shard's own counts agree and only the
+    // duplicate check can reject it.
+    duplicateRun.summary.expectedRuns.strict++;
     const duplicateRunPath = join(tmp, "duplicate-run.json");
     writeFileSync(duplicateRunPath, JSON.stringify(duplicateRun));
     const duplicateRunProc = Bun.spawnSync(
@@ -2049,10 +2058,39 @@ await section("test262 runner: deterministic shards merge into one complete repo
     };
     const lostFileProc = mergeReplacingShard("lost-file", (report) => {
       report.results = report.results.filter((result: { id: string }) => result.id !== strictRun.id);
+      // The shard also dropped the file's runs from its plan, so only the
+      // by-file completeness check can see that the file is gone.
+      for (const mode of ["non-strict", "strict"])
+        report.summary.expectedRuns[mode] = report.results.filter((result: { mode: string }) => result.mode === mode).length;
     });
     if (lostFileProc.exitCode !== 1 ||
         !lostFileProc.stderr.toString().includes("Incomplete result set: discovered 12 files, merged runs of 11")) {
       throw new Error(`test262 merge should reject a lost file: ${lostFileProc.stderr.toString()}`);
+    }
+    // A shard that lost only the strict run of a file still has the file's
+    // non-strict run, so the by-file check passes; the runs the runner planned
+    // for the shard catch it, and so does a result with no mode.
+    const lostStrictProc = mergeReplacingShard("lost-strict", (report) => {
+      report.results = report.results.filter((result: { id: string; mode: string }) =>
+        !(result.id === strictRun.id && result.mode === "strict"));
+    });
+    if (lostStrictProc.exitCode !== 1 ||
+        !lostStrictProc.stderr.toString().includes("strict runs were planned, but the results hold")) {
+      throw new Error(`test262 merge should reject a shard missing a strict run: ${lostStrictProc.stderr.toString()}`);
+    }
+    const noModeProc = mergeReplacingShard("no-mode", (report) => {
+      delete report.results[0].mode;
+    });
+    if (noModeProc.exitCode !== 1 ||
+        !noModeProc.stderr.toString().includes(`result ${duplicateRun.results[0].id} has no mode`)) {
+      throw new Error(`test262 merge should reject a contract-4 result without a mode: ${noModeProc.stderr.toString()}`);
+    }
+    const noPlanProc = mergeReplacingShard("no-plan", (report) => {
+      delete report.summary.expectedRuns;
+    });
+    if (noPlanProc.exitCode !== 1 ||
+        !noPlanProc.stderr.toString().includes("summary.expectedRuns has no non-strict count")) {
+      throw new Error(`test262 merge should reject a shard without its planned runs: ${noPlanProc.stderr.toString()}`);
     }
     const badModeProc = mergeReplacingShard("bad-mode", (report) => {
       report.results[0].mode = "sloppy";

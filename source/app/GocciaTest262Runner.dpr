@@ -165,6 +165,7 @@ type
     FResults: array of TTest262Result;
     FResultSlots: array of TTest262ResultSlot;
     FTotalDiscovered: Integer;
+    FExpectedRuns: array[TTest262RunMode] of Integer;
     FDurationNanoseconds: Int64;
     procedure ParseArguments;
     procedure PrintUsage;
@@ -865,6 +866,8 @@ var
   RunCase: TTest262Case;
   Runs: TObjectList<TTest262Case>;
 begin
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+    FExpectedRuns[Mode] := 0;
   Runs := TObjectList<TTest262Case>.Create(True);
   try
     for I := 0 to FCases.Count - 1 do
@@ -891,6 +894,7 @@ begin
           RunCase.Path := FileCase.Path;
           RunCase.Mode := Mode;
           Runs.Add(RunCase);
+          Inc(FExpectedRuns[Mode]);
         end;
     end;
   except
@@ -1840,6 +1844,26 @@ begin
   Result := Result + '}';
 end;
 
+{ The runs ExpandRunModes planned for this report, by mode. The shard merge
+  checks the results against them, so a run that is absent from the results
+  is an error rather than a smaller report, without the merge applying the
+  flag rules itself. }
+function ExpectedRunsJSON(
+  const ACounts: array of Integer): string;
+var
+  Mode: TTest262RunMode;
+begin
+  Result := '{';
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+  begin
+    if Mode <> Low(TTest262RunMode) then
+      Result := Result + ', ';
+    Result := Result + JSONString(RunModeName(Mode)) + ': ' +
+      IntToStr(ACounts[Ord(Mode)]);
+  end;
+  Result := Result + '}';
+end;
+
 procedure BuildCategoryCounts(const AResults: array of TTest262Result;
   const ACategories: TStrings; var ACounts: array of TTest262ModeCounts);
 var
@@ -1911,6 +1935,7 @@ begin
     Lines.Add('    "durationSeconds": ' +
       Format('%.3f', [DurationSeconds], InvariantFormatSettings) + ',');
     Lines.Add('    "byMode": ' + ModeCountsJSON(ModeCounts) + ',');
+    Lines.Add('    "expectedRuns": ' + ExpectedRunsJSON(FExpectedRuns) + ',');
     Lines.Add('    "byCategory": [');
     for I := 0 to ReportedCategories.Count - 1 do
     begin
