@@ -39,11 +39,13 @@ Compatibility flags are supported customization for running the whole of ECMAScr
 
 ## Runtime Extensions for Different Use Cases
 
-Embedding means that different hosts need different things. GocciaScript provides them as runtime extensions and grants a host chooses, and aims to make each use case simple:
+Embedding means that different hosts need different things. GocciaScript provides them as runtime extensions and grants a host chooses, and aims to make each use case simple.
 
-- **React server rendering** — The Web APIs that a server renderer such as React's relies on, for example `MessageChannel`, `ReadableStream` and `crypto`, are in scope ([#1562](https://github.com/frostney/GocciaScript/issues/1562)). The runtime already provides `fetch`, `URL`, `TextEncoder`/`TextDecoder`, `Blob`, `AbortController` and `EventTarget` (see [Built-ins](docs/built-ins.md))
+One test decides what goes in: GocciaScript provides a capability when it fits this vision and cannot be shimmed in userland, because it needs the engine or the host. What userland or an npm package can shim stays out of the engine, since a script can already bring it. Today's examples of what goes in are `fetch`, which reaches the network through the engine's `net` capability and the platform TLS stack; the `fs` module over a virtual filesystem that the host fills and reads back; and `node:async_hooks`, whose `AsyncLocalStorage` relies on the engine propagating async context across `await` and promise reactions. CommonJS is an example of what stays out: an ESM-to-CommonJS tool from npm already shims it. So is Node's `Buffer`, which the pure-JavaScript `buffer` package on npm provides.
+
+- **React server rendering** — The Web APIs that a server renderer such as React's relies on, for example `MessageChannel`, `ReadableStream` and `crypto`, are planned for this use case ([#1562](https://github.com/frostney/GocciaScript/issues/1562)); none of them ships today, and each goes into the engine only if it passes this test. The runtime already provides `fetch`, `URL`, `TextEncoder`/`TextDecoder`, `Blob`, `AbortController` and `EventTarget` (see [Built-ins](docs/built-ins.md))
 - **A virtual filesystem** — A bounded, in-memory filesystem that the host fills and reads back, exposed to scripts as an `fs` module (see [Embedding — Sandbox filesystem](docs/embedding.md#sandbox-filesystem))
-- **Node.js compatibility, to a degree** — GocciaScript leans into the parts of Node compatibility that are fairly easy to provide, such as `node:async_hooks` (part of the loader runtime profile), a Node-compatible `fs` over the virtual filesystem, and opt-in ESM `node_modules` resolution (an `import` grant, `--allow-import=node_modules`), each of which a host chooses, rather than a Node host environment
+- **Node.js compatibility, to a degree** — GocciaScript leans into the parts of Node compatibility that are fairly easy to provide and need the engine or host, such as `node:async_hooks` (part of the loader runtime profile), a Node-compatible `fs` over the virtual filesystem, and opt-in ESM `node_modules` resolution (an `import` grant, `--allow-import=node_modules`), each of which a host chooses, rather than a Node host environment
 - **Web-interoperable runtimes** — Aligning selected runtime globals with WinterTC's Minimum Common Web API and the WHATWG standards remains a direction, taken where it serves an embedding use case
 
 ## Conformance
@@ -95,8 +97,8 @@ Testing is where an engine meets ordinary developer work. The built-in runner th
 
 ## What GocciaScript is Not
 
-- **Not a Node.js runtime** — Node compatibility is a set of runtime extensions a host installs, not the default surface, and GocciaScript does not aim to reproduce Node's whole host environment. CommonJS and the general `node:` module set are not provided. Node-authored scripts run when they use standard ECMAScript or the runtime extensions listed under [Runtime Extensions for Different Use Cases](#runtime-extensions-for-different-use-cases)
-- **Not a browser host environment today** — GocciaScript takes on Web APIs where they serve an embedding use case, such as the ones React server rendering needs, but it does not currently provide a DOM, Web Workers, storage APIs, a browser event loop or a full browser host environment
+- **Not a Node.js runtime** — Node compatibility is a set of runtime extensions a host installs, not the default surface. Under the test in [Runtime Extensions for Different Use Cases](#runtime-extensions-for-different-use-cases), a `node:` module ships when it needs the engine or host, as `node:async_hooks` does, and whatever userland can shim stays out: CommonJS does not ship as part of GocciaScript because an ESM-to-CommonJS tool from npm already shims it. Node-authored scripts run when they use standard ECMAScript or the runtime extensions listed under [Runtime Extensions for Different Use Cases](#runtime-extensions-for-different-use-cases)
+- **Not a browser host environment today** — GocciaScript takes on Web APIs where they serve an embedding use case and pass the same test, such as the ones React server rendering needs, but it does not currently provide a DOM, Web Workers, storage APIs, a browser event loop or a full browser host environment
 - **Not a set of presets** — A host sets the language and dynamic-code knobs one by one; GocciaScript does not bundle them into named modes
 - **Not a formally verified sandbox** — The sandbox reduces attack surface but has not been independently audited
 

@@ -200,7 +200,8 @@ The supported shapes, all of which are what packages in practice use:
 **Conditions.** Only `import` and `default` are understood. Node's default ESM
 condition set is `["node", "import"]`; `node` is deliberately absent because
 GocciaScript is not a Node host and a `node` branch usually leads to CommonJS
-or to `node:` built-ins that do not exist here. A condition key that is not
+or to `node:` built-ins that do not exist here (a runtime extension registers only
+a few, such as `node:async_hooks`). A condition key that is not
 `import` or `default` — `require`, `browser`, `types`, `node` — is skipped, and
 resolution continues with the next key. The remaining keys are tried in the
 order the manifest writes them, as Node's `PACKAGE_TARGET_RESOLVE` does, so a
@@ -321,11 +322,12 @@ resolution error rather than misbehaving:
 - The `imports` map and `#`-prefixed private specifiers
 - Package self-reference by the manifest's own `name`
 - The `require`, `node`, `browser`, `types`, and custom conditions
-- `node:` built-in modules, and any Node host API
+- `node:` built-in modules other than those a runtime extension registers (such as `node:async_hooks`), and any other Node host API
 - `package.json` `"type"` inheritance for files outside a package
 
-Loading CommonJS itself is not on the roadmap; see
-[VISION](../VISION.md#what-gocciascript-is-not).
+Loading CommonJS itself does not ship as part of GocciaScript: an
+ESM-to-CommonJS tool from npm already shims it, and what userland can shim stays
+out of the engine; see [VISION](../VISION.md#what-gocciascript-is-not).
 
 ## Runtime code frames
 
