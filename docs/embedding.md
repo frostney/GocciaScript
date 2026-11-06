@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 1120 -->
+<!-- doc-length-limit: 1130 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -577,15 +577,23 @@ When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh mod
 
 ## Changing the Defaults
 
-An engine starts with the recommended language profile and without dynamic code generation. These knobs change that; each is off by default and set before `Execute`, and there are no presets that bundle them:
+An engine starts with the recommended language profile and without dynamic code generation. Four switches change that, each off by default and set before `Execute`; the CLI hosts expose all but the last:
 
-| Knob | What it turns on | CLI |
-|------|------------------|-----|
-| `Engine.Compatibility` | The ECMAScript forms the recommended profile leaves out (`cfASI`, `cfVar`, `cfFunction`, `cfNonStrictMode`, ...); see [Preprocessors and Compatibility](#preprocessors-and-compatibility) and [Language — Compatibility Flags](language.md#compatibility-flags) | `--compat-*` |
-| `Engine.FunctionConstructor.Enabled := True` | The `Function` constructor, which is always present and throws a `TypeError` while disabled | `--unsafe-function-constructor` |
-| `EnableShadowRealm(Engine)` (`Goccia.Builtins.GlobalShadowRealm`) | The `globalThis.ShadowRealm` global, which is absent until installed; calling it again does nothing | `--unsafe-shadowrealm` |
+| Switch | What it turns on | CLI | Audit event |
+|--------|------------------|-----|-------------|
+| `Engine.Compatibility` | The ECMAScript forms the recommended profile leaves out (`cfASI`, `cfVar`, `cfFunction`, `cfNonStrictMode`, ...); see [Preprocessors and Compatibility](#preprocessors-and-compatibility) | `--compat-*` | none |
+| `Engine.FunctionConstructor.Enabled := True` | The `Function` constructor, which is always present and throws while disabled | `--unsafe-function-constructor` | `function.constructor` |
+| `EnableShadowRealm(Engine)` (`Goccia.Builtins.GlobalShadowRealm`) | Installs `globalThis.ShadowRealm` | `--unsafe-shadowrealm` | `shadow-realm.construct` |
+| `EnableEval(Engine)` (`Goccia.Builtins.GlobalEval`) | Installs `globalThis.eval` as the realm's `%eval%` | none; engine API only | `eval.call` |
 
-A fourth knob, an engine-API-only `eval` opt-in with no CLI flag or config key, is planned in [#2065](https://github.com/frostney/GocciaScript/issues/2065). `Function` and `ShadowRealm.prototype.evaluate` run any source text the script builds, with the engine's own capability set, so a host that runs untrusted code leaves them off.
+```pascal
+Engine.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
+Engine.FunctionConstructor.Enabled := True;
+EnableShadowRealm(Engine);
+EnableEval(Engine);
+```
+
+`EnableShadowRealm` and `EnableEval` install a global that is otherwise absent, so feature detection sees exactly what the host chose; both are idempotent, and an engine cannot turn them off again. For `eval` the option and the global are separate things: the global is writable and configurable, so a script can delete or replace `globalThis.eval`, and feature detection then stops showing it, but `IsEvalEnabled(Engine)` stays true and a `ShadowRealm` created afterwards still gets its own `eval`. If `EnableEval` throws, for example because the script made the global object non-extensible, the option stays off and a later call can retry. With `EnableEval`, a call written `eval(...)` is a direct eval that sees the caller's bindings and is strict when the caller is (ES2026 §13.3.6.1), but only while the name resolves to the realm's `%eval%`: once a script replaces the global, or binds the name to another function, the same syntax calls that function as an ordinary function. Any other call, such as `(0, eval)(...)`, is an indirect eval in the global scope that is strict only by its own `"use strict"` (§19.2.1). Without `cfNonStrictMode` every script is strict, so direct eval code is too, while indirect eval code still follows only its own directive. A `ShadowRealm` created by an engine with `EnableEval` gets its own `eval`, which evaluates in the child realm; `IsEvalEnabled(Engine)` reports whether the option is on. Every eval call reports an `eval.call` [audit event](capability-audit.md). `eval`, `Function` and `ShadowRealm.prototype.evaluate` all run any source text the script builds, with the engine's full capability set, so a host that runs untrusted code leaves them off.
 
 ## Injecting Custom Globals
 

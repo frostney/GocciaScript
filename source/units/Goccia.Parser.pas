@@ -9307,7 +9307,7 @@ begin
       IsGenerator := False;
       // ES2026 §15.8 / §15.6: AsyncMethod and AsyncGeneratorMethod are
       // `async [no LineTerminator here] ...`; after a line break `async` is
-      // the element's name, a field that ASI ends before the next element.
+      // the element's name; a following parameter list still continues a method.
       if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) and
          (FCurrent + 1 < FTokens.Count) and
          not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
@@ -9561,7 +9561,9 @@ begin
             InstancePropertyTypes.Add(MemberName, FieldType);
         end;
       end
-      else if (not IsGetter) and (not IsSetter) and CheckSemicolonOrASI then
+      // ES2026 §12.10.1: ASI cannot interrupt a valid method parameter list.
+      else if (not IsGetter) and (not IsSetter) and not Check(gttLeftParen) and
+        CheckSemicolonOrASI then
       begin
         if IsPrivate and not IsComputed and (MemberName <> '') then
           DeclarePrivateName(MemberName, pndField, IsStatic);

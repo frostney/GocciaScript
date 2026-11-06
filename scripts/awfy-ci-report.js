@@ -3,10 +3,10 @@
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 const { expandGocciaEngines } = require('./awfy-driver.js');
+const { ciProtocolFailures, ciReportEngines } = require('./cross-engine-report.js');
 
 const DEFAULT_MANIFEST = 'perf/awfy/manifest.json';
 const DEFAULT_OUTPUT = 'awfy-report.json';
-const DEFAULT_ENGINES = 'goccia,qjs,node';
 const DEFAULT_TIMEOUT_MS = 300000;
 
 function usage() {
@@ -17,7 +17,10 @@ function usage() {
     '  --manifest <path>    AWFY manifest path (default: perf/awfy/manifest.json)',
     '  --awfy-dir <path>    Path to are-we-fast-yet/benchmarks/JavaScript',
     '  --output <path>      Report path (default: awfy-report.json)',
-    '  --engines <csv>      Engine order (default: goccia,qjs,node)',
+    '  --engines <csv>      Engines and their order (default: the manifest\'s ciReport.engines)',
+    '  --qjs <path>         QuickJS shell path (default: qjs)',
+    '  --node <path>        Node.js path for node and node-jitless (default: current node)',
+    '  --jsc <path>         JavaScriptCore shell path for the jsc engine (default: jsc)',
     '  --goccia-baseline <path>',
     '                       Optional baseline Goccia binary, interleaved as goccia-baseline',
     '  --goccia-candidate <path>',
@@ -32,9 +35,12 @@ function parseArgs(argv) {
     manifestPath: DEFAULT_MANIFEST,
     awfyDir: '',
     output: DEFAULT_OUTPUT,
-    engines: DEFAULT_ENGINES,
+    engines: '',
     gocciaBaseline: '',
     gocciaCandidate: '',
+    qjs: '',
+    node: '',
+    jsc: '',
     timeoutMs: DEFAULT_TIMEOUT_MS,
     counters: false,
   };
@@ -62,6 +68,12 @@ function parseArgs(argv) {
       options.gocciaBaseline = nextValue();
     } else if (arg === '--goccia-candidate' || arg.startsWith('--goccia-candidate=')) {
       options.gocciaCandidate = nextValue();
+    } else if (arg === '--qjs' || arg.startsWith('--qjs=')) {
+      options.qjs = nextValue();
+    } else if (arg === '--node' || arg.startsWith('--node=')) {
+      options.node = nextValue();
+    } else if (arg === '--jsc' || arg.startsWith('--jsc=')) {
+      options.jsc = nextValue();
     } else if (arg === '--timeout-ms' || arg.startsWith('--timeout-ms=')) {
       options.timeoutMs = parsePositiveInteger(nextValue(), '--timeout-ms');
     } else if (arg === '--counters') {
@@ -116,11 +128,10 @@ function expectedEnginesForTarget(manifest, target, expectedEngines) {
 function validateReport(report, manifest, expectedEngines) {
   const config = reportConfig(manifest);
   const expectedRepetitions = config.repetitions || 5;
-  const failures = [];
-
-  if (report.metadata?.options?.repetitions !== expectedRepetitions) {
-    failures.push(`expected ${expectedRepetitions} repetitions, report recorded ${report.metadata?.options?.repetitions}`);
-  }
+  const failures = ciProtocolFailures(report, {
+    repetitions: expectedRepetitions,
+    driverVersion: manifest.driver?.version,
+  }, expectedEngines);
 
   for (const target of report.targets || []) {
     if (target.summary?.checksumAgreement?.ok === false) {
@@ -148,6 +159,7 @@ function validateReport(report, manifest, expectedEngines) {
 
 function runReport(options, manifest) {
   if (!options.awfyDir) throw new Error('--awfy-dir is required');
+  if (!options.engines) options.engines = ciReportEngines(reportConfig(manifest)).join(',');
 
   const config = reportConfig(manifest);
   const repetitions = config.repetitions || 5;
@@ -162,10 +174,14 @@ function runReport(options, manifest) {
   if (options.gocciaBaseline) args.push('--goccia-baseline', options.gocciaBaseline);
   if (options.gocciaCandidate) args.push('--goccia-candidate', options.gocciaCandidate);
   if (options.counters) args.push('--counters');
+  if (options.qjs) args.push('--qjs', options.qjs);
+  if (options.node) args.push('--node', options.node);
+  if (options.jsc) args.push('--jsc', options.jsc);
   args.push(
     '--repetitions', String(repetitions),
     '--timeout-ms', String(options.timeoutMs),
     '--engines', options.engines,
+    '--engine-order', 'alternate',
     '--output', options.output,
   );
 

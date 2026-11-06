@@ -33,7 +33,7 @@ An engine starts with modern defaults: the recommended language profile (arrow f
 - **`Engine.Compatibility`** — The ECMAScript forms the recommended profile leaves out, and new Annex B surfaces ([ADR 0177](docs/adr/0177-annex-b-is-part-of-the-test262-conformance-target.md)); the command-line hosts expose each as a `--compat-*` flag
 - **`Engine.FunctionConstructor.Enabled`** — The `Function()` constructor (`--unsafe-function-constructor`)
 - **`EnableShadowRealm`** — The `ShadowRealm` global (`--unsafe-shadowrealm`)
-- **A planned eval option** — `eval()`, through the engine API only, with no command-line flag or config key ([#2065](https://github.com/frostney/GocciaScript/issues/2065))
+- **`EnableEval`** — The `eval()` global, through the engine API only, with no command-line flag or config key ([ADR 0179](docs/adr/0179-eval-is-an-engine-only-opt-in-installer.md))
 
 Compatibility flags are supported customization for running the whole of ECMAScript, not escape hatches. What scripts may reach outside the process is a separate setting, the capability set the host grants. See [Language](docs/language.md) for the profile and every compatibility path, and [Embedding — Changing the Defaults](docs/embedding.md#changing-the-defaults) for the knobs together.
 
@@ -78,7 +78,7 @@ AI agents need to run the code they generate in a constrained environment. `Gocc
 
 See [Permissions — Sandbox mode](docs/permissions.md#sandbox-mode) for the full contract.
 
-The sandbox is a *reduced attack surface*, not a formally verified security boundary. The engine has not been audited by a third party. The sandboxing relies on the host not exposing dangerous APIs, on `eval` being absent from normal runtimes, on the test262 eval hook remaining private to `GocciaTest262Runner`, and on the host not opting in to `--unsafe-function-constructor` or `--unsafe-shadowrealm` (either of which would re-enable dynamic code generation, via `Function()` and `ShadowRealm.prototype.evaluate` respectively).
+The sandbox is a *reduced attack surface*, not a formally verified security boundary. The engine has not been audited by a third party. The sandboxing relies on the host not exposing dangerous APIs and not opting in to `eval` (`EnableEval`), `--unsafe-function-constructor` or `--unsafe-shadowrealm` (each of which re-enables dynamic code generation, via `eval()`, `Function()` and `ShadowRealm.prototype.evaluate` respectively).
 
 ## Toolchain
 

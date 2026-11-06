@@ -131,6 +131,7 @@ jobs:
             build/GocciaBenchmarkRunner
             build/GocciaRunner
 
+  # ci.yml runs the same steps on pushes to main. Keep the two lists identical.
   docs:
     runs-on: ubuntu-latest
     steps:
@@ -478,6 +479,9 @@ jobs:
       - name: Install QuickJS
         run: bash ./.github/scripts/install-quickjs.sh
 
+      - name: Install JavaScriptCore
+        run: bash ./.github/scripts/install-jsc.sh
+
       - name: Download build
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -588,6 +592,9 @@ jobs:
 
       - name: Install QuickJS
         run: bash ./.github/scripts/install-quickjs.sh
+
+      - name: Install JavaScriptCore
+        run: bash ./.github/scripts/install-jsc.sh
 
       - name: Download build
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
@@ -1092,7 +1099,8 @@ jobs:
         # 7-9s tests must not trip the deadline purely from contention.
         # --jobs=4 matches the 4 vCPUs on GH-hosted ubuntu-latest runners
         # for public repos. The runner forks, rather than execs, one isolated
-        # engine process per test and keeps at most four alive concurrently.
+        # engine process per run (a test file runs once per mode test262
+        # requires) and keeps at most four alive concurrently.
         run: |
           ./build/GocciaTest262Runner \
             --suite-dir=test262-suite \

@@ -34,6 +34,7 @@ type NormalizedReport = {
     driverVersion: number | null;
     corpusCommit: string;
     engineVersions: Record<string, string>;
+    engineNames: string[];
     repetitions: number | null;
   };
   geomeanRatios: Record<string, number>;
@@ -52,8 +53,12 @@ export type PerformanceTarget = {
   goccia: number | null;
   quickjs: number | null;
   node: number | null;
+  nodeJitless: number | null;
+  jsc: number | null;
   quickjsRatio: number | null;
   nodeRatio: number | null;
+  nodeJitlessRatio: number | null;
+  jscRatio: number | null;
 };
 
 export type PerformanceTimelinePoint = {
@@ -69,6 +74,8 @@ export type PerformanceTimelinePoint = {
   stale: boolean;
   quickjsRatio: number | null;
   nodeRatio: number | null;
+  nodeJitlessRatio: number | null;
+  jscRatio: number | null;
   failedWorkloadCount: number;
   workloadCount: number;
   repetitions: number | null;
@@ -113,11 +120,14 @@ type RunSummary = {
   referenceRatios?: {
     quickjs?: unknown;
     node?: unknown;
+    nodeJitless?: unknown;
+    jsc?: unknown;
   };
   engineVersions?: Record<string, unknown>;
   corpusCommit?: unknown;
   driverVersion?: unknown;
   targetNames?: unknown;
+  protocolKey?: unknown;
 };
 
 type RunWithSummary = RunMeta & { summary: RunSummary };
@@ -162,12 +172,17 @@ function normalizeReport(
     metadata.options && typeof metadata.options === "object"
       ? (metadata.options as Record<string, unknown>)
       : {};
+  const engineEntries = (
+    Array.isArray(metadata.engines) ? metadata.engines : []
+  ).filter(
+    (engine): engine is Record<string, unknown> =>
+      Boolean(engine) && typeof engine === "object",
+  );
+  const engineNames = engineEntries
+    .map((engine) => engine.name)
+    .filter((name): name is string => typeof name === "string");
   const engineVersions = Object.fromEntries(
-    (Array.isArray(metadata.engines) ? metadata.engines : [])
-      .filter(
-        (engine): engine is Record<string, unknown> =>
-          Boolean(engine) && typeof engine === "object",
-      )
+    engineEntries
       .filter(
         (engine) =>
           typeof engine.name === "string" && typeof engine.version === "string",
@@ -226,6 +241,7 @@ function normalizeReport(
           ? corpusObject.commit
           : "unknown",
       engineVersions,
+      engineNames,
       repetitions:
         typeof options.repetitions === "number" ? options.repetitions : null,
     },
@@ -236,9 +252,21 @@ function normalizeReport(
 
 function targetFailure(
   target: NormalizedReport["targets"][number],
+  reportEngineNames: string[],
 ): string | null {
   const failures: string[] = [];
-  for (const engine of ["goccia", "qjs", "node"]) {
+  const engines = ["goccia", "qjs", "node"];
+  // Reports from before the node-jitless and jsc comparators carry no stats
+  // for them and are not degraded for lacking them.
+  for (const comparator of ["node-jitless", "jsc"]) {
+    if (
+      target.engineStats[comparator] ||
+      reportEngineNames.includes(comparator)
+    ) {
+      engines.push(comparator);
+    }
+  }
+  for (const engine of engines) {
     const stats = target.engineStats[engine];
     if (!stats) {
       failures.push(`${engine}: missing`);
@@ -265,7 +293,7 @@ function targetsFromReport(
   if (!report) return [];
   const field = suite === "awfy" ? "medianMicros" : "medianScore";
   return report.targets.map((target) => {
-    const failure = targetFailure(target);
+    const failure = targetFailure(target, report.metadata.engineNames);
     return {
       name: target.name,
       status: failure ? "degraded" : "complete",
@@ -274,8 +302,14 @@ function targetsFromReport(
       goccia: finitePositive(target.engineStats.goccia?.[field]),
       quickjs: finitePositive(target.engineStats.qjs?.[field]),
       node: finitePositive(target.engineStats.node?.[field]),
+      nodeJitless: finitePositive(target.engineStats["node-jitless"]?.[field]),
+      jsc: finitePositive(target.engineStats.jsc?.[field]),
       quickjsRatio: finitePositive(target.ratios.goccia_over_qjs),
       nodeRatio: finitePositive(target.ratios.goccia_over_node),
+      nodeJitlessRatio: finitePositive(
+        target.ratios["goccia_over_node-jitless"],
+      ),
+      jscRatio: finitePositive(target.ratios.goccia_over_jsc),
     };
   });
 }
@@ -291,6 +325,10 @@ function timelinePoint(
   const failedWorkloadCount = nonNegativeInteger(summary?.failedWorkloadCount);
   const quickjsRatio = finitePositive(summary?.referenceRatios?.quickjs);
   const nodeRatio = finitePositive(summary?.referenceRatios?.node);
+  const nodeJitlessRatio = finitePositive(
+    summary?.referenceRatios?.nodeJitless,
+  );
+  const jscRatio = finitePositive(summary?.referenceRatios?.jsc);
   const engineVersions = Object.fromEntries(
     Object.entries(summary?.engineVersions ?? {}).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
@@ -317,6 +355,9 @@ function timelinePoint(
       typeof summary?.driverVersion === "number" ? summary.driverVersion : null,
     quickjs: engineVersions.qjs ?? "unknown",
     node: engineVersions.node ?? "unknown",
+    jsc: engineVersions.jsc ?? "unknown",
+    protocol:
+      typeof summary?.protocolKey === "string" ? summary.protocolKey : null,
     targets: targetNames.sort(),
   });
   return {
@@ -326,6 +367,8 @@ function timelinePoint(
     stale: false,
     quickjsRatio: complete ? quickjsRatio : null,
     nodeRatio: complete ? nodeRatio : null,
+    nodeJitlessRatio: complete ? nodeJitlessRatio : null,
+    jscRatio: complete ? jscRatio : null,
     failedWorkloadCount,
     workloadCount,
     repetitions:

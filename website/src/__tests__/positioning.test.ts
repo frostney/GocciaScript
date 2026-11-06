@@ -85,7 +85,7 @@ describe("GocciaScript positioning", () => {
       /for\.\.\.in/i,
       /while\/do\.\.\.while/i,
       /non-strict Script semantics/i,
-      /private test262 host.+conformance/i,
+      /embedder opts in through the engine's EnableEval option/i,
       /Annex B.+test262 conformance target/i,
       /new ones will go behind an opt-in compatibility flag/i,
     ]);
