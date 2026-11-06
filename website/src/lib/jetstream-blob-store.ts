@@ -19,6 +19,8 @@ export type JetStreamBlobAccess = BlobAccess;
 export type JetStreamReferenceRatios = {
   quickjs: number | null;
   node: number | null;
+  nodeJitless: number | null;
+  jsc: number | null;
 };
 
 export type JetStreamBlobRunSummary = {
@@ -30,6 +32,7 @@ export type JetStreamBlobRunSummary = {
   corpusCommit: string;
   driverVersion: number | null;
   targetNames: string[];
+  protocolKey: string | null;
 };
 
 export type JetStreamBlobReport = BlobReport;

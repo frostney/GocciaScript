@@ -104,3 +104,19 @@ export async function readProfileFiles(
       : undefined,
   };
 }
+
+// The engines a published report must have complete stats for. The
+// interpreter-class comparators joined later (ADR 0178), so a report counts
+// them only when its metadata lists them, and older reports are not marked
+// failed for lacking them.
+export function requiredReportEngines(
+  engines: ReadonlyArray<{ name?: unknown }> | undefined,
+): string[] {
+  const listed = new Set((engines ?? []).map((engine) => engine.name));
+  return [
+    "goccia",
+    "qjs",
+    "node",
+    ...["node-jitless", "jsc"].filter((comparator) => listed.has(comparator)),
+  ];
+}

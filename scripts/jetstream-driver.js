@@ -5,14 +5,21 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const {
+  DEFAULT_ENGINE_ORDER,
   buildGeomeanRatios,
   buildMetricTargetSummary,
   engineAllowedForTarget,
+  engineOrderForRepetition,
+  engineVersion,
+  parseEngineOrder,
   resolveEngines,
   runEngineSample,
 } = require('./cross-engine-report.js');
 
-const DRIVER_VERSION = 1;
+// Version 2 alternates the engine order from one repetition to the next and
+// records each sample's place in it (ADR 0178). Version 1 ran Goccia first in
+// every repetition.
+const DRIVER_VERSION = 2;
 const RESULT_MARKER = 'GOCCIA_JETSTREAM_RESULT ';
 const DEFAULT_MANIFEST = path.join('perf', 'jetstream', 'manifest.json');
 const DEFAULT_TIMEOUT_MS = 300000;
@@ -37,7 +44,8 @@ function usage() {
     'Inputs and engines:',
     '  --jetstream-dir <path>       Path to the pinned WebKit/JetStream checkout',
     '  --manifest <path>            Manifest path (default: perf/jetstream/manifest.json)',
-    '  --engines <csv>              Engine order (default: goccia,qjs,node)',
+    '  --engines <csv>              Engines and their order (default: goccia,qjs,node,node-jitless);',
+    '                               kinds: goccia, qjs, node, node-jitless, jsc',
     '  --goccia <path>              GocciaRunner path (default: build/GocciaRunner)',
     '  --goccia-baseline <path>     Optional baseline Goccia binary',
     '  --goccia-candidate <path>    Optional candidate Goccia binary',
@@ -45,12 +53,15 @@ function usage() {
     '  --goccia-baseline-commit <sha> Source revision for the baseline binary',
     '  --goccia-candidate-commit <sha> Source revision for the candidate binary',
     '  --qjs <path>                 QuickJS shell path (default: qjs)',
-    '  --node <path>                Node.js path (default: current node)',
+    '  --node <path>                Node.js path for node and node-jitless (default: current node)',
+    '  --jsc <path>                 JavaScriptCore shell path for jsc, run with --useJIT=false (default: jsc)',
     '  --goccia-flag <flag>         Extra Goccia flag; repeatable',
     '',
     'Measurement:',
     '  --repetitions <n>            Process samples per engine/workload (default: 3)',
     '  --iterations <n>             Override upstream iteration count for diagnostics',
+    '  --engine-order <mode>        alternate (default): reverse the engine order on every other',
+    '                               repetition; fixed: the --engines order in every repetition',
     '  --timeout-ms <n>             Per-sample timeout (default: 300000)',
     '  --output <path>              Write normalized JSON report',
     '  --keep-temp                  Keep generated shell bundles',
@@ -79,6 +90,8 @@ function parseArgs(argv) {
     gocciaCandidateCommit: '',
     qjs: 'qjs',
     node: process.execPath,
+    jsc: 'jsc',
+    engineOrder: DEFAULT_ENGINE_ORDER,
     gocciaFlags: [...JETSTREAM_GOCCIA_FLAGS],
     repetitions: DEFAULT_REPETITIONS,
     iterations: null,
@@ -112,6 +125,8 @@ function parseArgs(argv) {
     else if (arg === '--goccia-candidate-commit' || arg.startsWith('--goccia-candidate-commit=')) options.gocciaCandidateCommit = nextValue();
     else if (arg === '--qjs' || arg.startsWith('--qjs=')) options.qjs = nextValue();
     else if (arg === '--node' || arg.startsWith('--node=')) options.node = nextValue();
+    else if (arg === '--jsc' || arg.startsWith('--jsc=')) options.jsc = nextValue();
+    else if (arg === '--engine-order' || arg.startsWith('--engine-order=')) options.engineOrder = parseEngineOrder(nextValue());
     else if (arg === '--goccia-flag' || arg.startsWith('--goccia-flag=')) options.gocciaFlags.push(nextValue());
     else if (arg === '--repetitions' || arg.startsWith('--repetitions=')) options.repetitions = parsePositiveInteger(nextValue(), '--repetitions');
     else if (arg === '--iterations' || arg.startsWith('--iterations=')) options.iterations = parsePositiveInteger(nextValue(), '--iterations');
@@ -153,7 +168,11 @@ function buildJetStreamBundle({ jetStreamDir, name, benchmark }) {
   };
   const chunks = [
     `const __jetStreamConfig = ${JSON.stringify(config)};`,
-    'const __jetStreamNow = () => (typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());',
+    // Milliseconds. The JavaScriptCore shell coarsens performance.now() to 20
+    // microseconds, so its own preciseTime() (seconds) is read where it exists.
+    'const __jetStreamNow = () => (typeof preciseTime === "function" ? preciseTime() * 1000 : typeof performance !== "undefined" && performance.now ? performance.now() : Date.now());',
+    // The JavaScriptCore shell has print but no console.
+    'const __jetStreamLog = typeof console !== "undefined" && console && typeof console.log === "function" ? (text) => console.log(text) : (text) => print(text);',
   ];
   if (config.deterministicRandom) chunks.push(deterministicRandomSource());
   for (const relativeFile of benchmark.files) {
@@ -193,7 +212,7 @@ const __result = {
   verificationKind: __hasExplicitValidation ? "explicit" : "execution-only",
   iterations: __jetStreamConfig.iterations,
 };
-console.log(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(__result));
+__jetStreamLog(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(__result));
 `);
   return `${chunks.join('\n\n')}\n`;
 }
@@ -231,15 +250,6 @@ function commandText(command, args) {
   return proc.status === 0 ? (proc.stdout || proc.stderr || '').trim() : '';
 }
 
-function engineVersion(engine) {
-  if (engine.kind === 'node') return commandText(engine.command, ['--version']);
-  if (engine.kind === 'qjs') {
-    const proc = spawnSync(engine.command, ['-h'], { encoding: 'utf8' });
-    return `${proc.stdout || ''}${proc.stderr || ''}`.split(/\r?\n/)[0].trim();
-  }
-  return commandText(engine.command, ['--version']);
-}
-
 function collectMetadata(options, manifest, engines) {
   return {
     driver: { version: DRIVER_VERSION, script: 'scripts/jetstream-driver.js' },
@@ -259,8 +269,29 @@ function collectMetadata(options, manifest, engines) {
       version: engineVersion(engine),
       sourceCommit: engine.sourceCommit,
     })),
-    options: { repetitions: options.repetitions, timeoutMs: options.timeoutMs },
+    protocol: { engineOrder: options.engineOrder },
+    options: {
+      repetitions: options.repetitions,
+      timeoutMs: options.timeoutMs,
+      engineOrder: options.engineOrder,
+      engineOrderBase: engines.map((engine) => engine.name),
+    },
   };
+}
+
+// The engine order of each repetition, read back from the samples' recorded
+// positions, so that a checkpointed report shows the order of the samples it
+// holds.
+function executionOrderFromSamples(samples) {
+  const byRepetition = new Map();
+  for (const sample of samples) {
+    if (!byRepetition.has(sample.repetition)) byRepetition.set(sample.repetition, []);
+    byRepetition.get(sample.repetition).push(sample);
+  }
+  return [...byRepetition.keys()].sort((left, right) => left - right).map((repetition) => byRepetition.get(repetition)
+    .slice()
+    .sort((left, right) => (left.position ?? 0) - (right.position ?? 0))
+    .map((sample) => sample.engine));
 }
 
 function buildTargetReport(target, samples, generatedBundle = null) {
@@ -272,6 +303,7 @@ function buildTargetReport(target, samples, generatedBundle = null) {
     focusAreas: target.focusAreas,
     tags: target.tags,
     iterations: target.benchmark.iterations,
+    executionOrder: executionOrderFromSamples(samples),
     samples,
     summary: buildMetricTargetSummary(samples, {
       field: 'score',
@@ -334,13 +366,18 @@ function main(argv = process.argv.slice(2)) {
         ]));
       }
       for (let repetition = 0; repetition < options.repetitions; repetition += 1) {
-        for (const engine of engines) {
-          if (!engineAllowedForTarget(engine, target)) continue;
+        const order = engineOrderForRepetition(
+          engines.filter((engine) => engineAllowedForTarget(engine, target)),
+          repetition,
+          options.engineOrder,
+        );
+        for (const [position, engine] of order.entries()) {
           const sample = runEngineSample({
             engine,
             target,
             fileName: bundleFile,
             repetition,
+            position,
             options,
             marker: RESULT_MARKER,
             normalizeResult: normalizeJetStreamResult,
@@ -376,7 +413,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DRIVER_VERSION,
   RESULT_MARKER,
+  executionOrderFromSamples,
   buildReport,
   buildJetStreamBundle,
   buildTargetReport,
