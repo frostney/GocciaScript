@@ -5,10 +5,31 @@ unit FPCRoutineSource;
 interface
 
 uses
+  Classes,
   SysUtils;
 
 type
-  EFPCRoutineSource = class(Exception);
+  // A file refusal breaks every routine pinned in the file: its text cannot
+  // be parsed, or could compile to other text than the parse sees. A routine
+  // refusal concerns only the routine the section names.
+  TFPCRoutineRefusal = (frFile, frRoutine);
+
+  EFPCRoutineSource = class(Exception)
+  private
+    FSourceFile: string;
+    FLine: Integer;
+    FReason: string;
+    FScope: TFPCRoutineRefusal;
+  public
+    constructor CreateRefusal(const ASourceFile: string; const ALine: Integer;
+      const AReason: string; const AScope: TFPCRoutineRefusal);
+    // The file whose text is refused, which can be an include file.
+    property SourceFile: string read FSourceFile;
+    // 0 when the refusal has no line.
+    property Line: Integer read FLine;
+    property Reason: string read FReason;
+    property Scope: TFPCRoutineRefusal read FScope;
+  end;
 
   // The located implementation of one routine named by an FPC section.
   TFPCRoutineSpan = record
@@ -16,6 +37,19 @@ type
     FirstLine: Integer;
     LastLine: Integer;
     Digest: string;
+  end;
+
+  // Locates routines like LocateFPCRoutine, but parses and checks each source
+  // file once, so a manifest run with several routines in one file reads it
+  // once. Files must not change during the locator's lifetime.
+  TFPCRoutineLocator = class
+  private
+    FIncludeDirectories: array of string;
+    FFiles: TStringList;
+  public
+    constructor Create(const AIncludeDirectories: array of string);
+    destructor Destroy; override;
+    function Locate(const ASourceFile, ASection: string): TFPCRoutineSpan;
   end;
 
 // Locates the one implementation in ASourceFile that an FPC `.text.n_`
@@ -28,9 +62,9 @@ type
 // types), the source declares another unit or program, the routine is
 // missing or ambiguous, or the file could compile to other text than the
 // parse sees: unparseable text, another lexing mode, macros, includes that
-// could hold routines, or conditionals that change the parse between
-// branches (ADR 0180). Include files are searched beside their includer,
-// then in AIncludeDirectories.
+// could hold routines or change the block structure, or conditionals that
+// change the parse between branches (ADR 0180). Include files are searched
+// beside their includer, then in AIncludeDirectories.
 function LocateFPCRoutine(const ASourceFile, ASection: string;
   const AIncludeDirectories: array of string): TFPCRoutineSpan;
 
@@ -41,8 +75,6 @@ function FPCSectionRoutineName(const ASection: string): string;
 implementation
 
 uses
-  Classes,
-
   SHA256;
 
 const
@@ -52,12 +84,14 @@ const
   METHOD_SEPARATOR = '_$__$$_';
   PROGRAM_PREFIX = 'p$';
   MAX_INCLUDE_DEPTH = 8;
-  // Parser states recorded per token for the conditional check. Other tokens
-  // record their routine in the high half, and in the low half their block
-  // depth, or TYPE_DEPTH plus their type depth inside a type declaration.
+  // Parser states recorded per token for the conditional and include checks.
+  // Other tokens record their routine in the high half, and in the low half
+  // their block depth plus ASSEMBLER_STATE inside an assembler block, or
+  // TYPE_DEPTH plus their type depth inside a type declaration.
   STATE_UNSUPPORTED = -1;
   STATE_USES = -2;
   TYPE_DEPTH = $40000000;
+  ASSEMBLER_STATE = $20000000;
   MODULE_CODE = -1;
   // Tokens after which the parse decides nothing from its neighbours, so a
   // conditional may start or end a branch next to one at declaration level.
@@ -86,6 +120,12 @@ const
 
 type
   TTokenKind = (tkWord, tkSymbol, tkLiteral);
+  // The statement-part block structure: begin, case, try and asm open a
+  // block that end closes, and in an assembler block only end counts.
+  TBlockScan = record
+    Depth: Integer;
+    InAssembler: Boolean;
+  end;
   TToken = record
     Kind: TTokenKind;
     Text: string;
@@ -135,6 +175,7 @@ type
     FImplementationStart: Integer;
     procedure RefuseAt(const AIndex: Integer; const AMessage: string);
     function StateOf(const ARoutine, ADepth: Integer; const AInType: Boolean): Int64;
+    function StatementState(const AScan: TBlockScan): Int64;
     function IsWord(const AIndex: Integer; const AText: string): Boolean;
     function IsSymbol(const AIndex: Integer; const AText: Char): Boolean;
     function IsRoutineKeyword(const AIndex: Integer): Boolean;
@@ -160,11 +201,56 @@ type
     function IsNeutral(const AIndex: Integer): Boolean;
   end;
 
-procedure Refuse(const AFileName: string; const ALine: Integer; const AMessage: string);
+{ EFPCRoutineSource }
+
+constructor EFPCRoutineSource.CreateRefusal(const ASourceFile: string; const ALine: Integer;
+  const AReason: string; const AScope: TFPCRoutineRefusal);
 begin
   if ALine > 0 then
-    raise EFPCRoutineSource.Create(UTF8Encode(Format('%s:%d: %s', [AFileName, ALine, AMessage])));
-  raise EFPCRoutineSource.Create(UTF8Encode(AFileName + ': ' + AMessage));
+    inherited Create(UTF8Encode(Format('%s:%d: %s', [ASourceFile, ALine, AReason])))
+  else
+    inherited Create(UTF8Encode(ASourceFile + ': ' + AReason));
+  FSourceFile := ASourceFile;
+  FLine := ALine;
+  FReason := AReason;
+  FScope := AScope;
+end;
+
+procedure Refuse(const AFileName: string; const ALine: Integer; const AMessage: string);
+begin
+  raise EFPCRoutineSource.CreateRefusal(AFileName, ALine, AMessage, frFile);
+end;
+
+procedure RefuseRoutine(const AFileName: string; const ALine: Integer; const AMessage: string);
+begin
+  raise EFPCRoutineSource.CreateRefusal(AFileName, ALine, AMessage, frRoutine);
+end;
+
+function IsBlockWord(const AToken: TToken; const AText: string): Boolean;
+begin
+  Result := (AToken.Kind = tkWord) and not AToken.Escaped and (AToken.Text = AText);
+end;
+
+// Applies one statement-part token to AScan. Returns True when the token is
+// an `end` that closes a block.
+function StepBlock(var AScan: TBlockScan; const AToken: TToken): Boolean;
+begin
+  Result := IsBlockWord(AToken, 'end');
+  if Result then
+  begin
+    AScan.InAssembler := False;
+    Dec(AScan.Depth);
+  end
+  else if not AScan.InAssembler then
+  begin
+    if IsBlockWord(AToken, 'begin') or IsBlockWord(AToken, 'case') or IsBlockWord(AToken, 'try') then
+      Inc(AScan.Depth)
+    else if IsBlockWord(AToken, 'asm') then
+    begin
+      Inc(AScan.Depth);
+      AScan.InAssembler := True;
+    end;
+  end;
 end;
 
 function InList(const AText: string; const AList: array of string): Boolean;
@@ -229,10 +315,9 @@ end;
 procedure Tokenize(var ASource: TSourceText);
 var
   Bytes: TBytes;
-  Count, Position, Line, Start, StartLine, TokenCount, DirectiveCount, NameEnd: Integer;
+  Count, Position, Line, Start, StartLine, TokenCount, DirectiveCount: Integer;
   Character: Byte;
   Escaped, IsDirective: Boolean;
-  Content: string;
 
   function At(const AOffset: Integer): Byte;
   begin
@@ -256,6 +341,8 @@ var
   end;
 
   procedure AddDirective(const AText: string);
+  var
+    NameEnd: Integer;
   begin
     NameEnd := 1;
     while (NameEnd <= Length(AText)) and IsIdentifierPart(Ord(AText[NameEnd])) do
@@ -307,10 +394,7 @@ begin
       if Position >= Count then
         Refuse(ASource.FileName, StartLine, 'unterminated comment');
       if IsDirective then
-      begin
-        Content := ByteText(Bytes, Start + 2, Position);
-        AddDirective(Content);
-      end;
+        AddDirective(ByteText(Bytes, Start + 2, Position));
       Inc(Position);
     end
     else if (Character = Ord('(')) and (At(Position + 1) = Ord('*')) then
@@ -427,6 +511,15 @@ begin
     Result := Result + TYPE_DEPTH + ADepth
   else
     Result := Result + ADepth;
+end;
+
+// An assembler block's text is read differently, so its state differs from
+// the same depth outside one.
+function TRoutineParser.StatementState(const AScan: TBlockScan): Int64;
+begin
+  Result := StateOf(FCurrentRoutine, AScan.Depth, False);
+  if AScan.InAssembler then
+    Result := Result + ASSEMBLER_STATE;
 end;
 
 function TRoutineParser.IsNeutral(const AIndex: Integer): Boolean;
@@ -570,35 +663,19 @@ end;
 // the compiler's and is refused.
 procedure TRoutineParser.SkipCode(const AStartDepth: Integer);
 var
-  Depth: Integer;
-  InAssembler: Boolean;
+  Scan: TBlockScan;
 begin
-  Depth := AStartDepth;
-  InAssembler := False;
+  Scan := Default(TBlockScan);
+  Scan.Depth := AStartDepth;
   while FPosition < Length(FSource.Tokens) do
   begin
-    FStates[FPosition] := StateOf(FCurrentRoutine, Depth, False);
-    if IsWord(FPosition, 'end') then
-    begin
-      InAssembler := False;
-      Dec(Depth);
-      if Depth = 0 then
-        Exit;
-    end
-    else if not InAssembler then
-    begin
-      if IsWord(FPosition, 'begin') or IsWord(FPosition, 'case') or IsWord(FPosition, 'try') then
-        Inc(Depth)
-      else if IsWord(FPosition, 'asm') then
-      begin
-        Inc(Depth);
-        InAssembler := True;
-      end
-      else if IsRoutineKeyword(FPosition) or IsWord(FPosition, 'implementation') or
-        IsWord(FPosition, 'initialization') or
-        (IsWord(FPosition, 'finalization') and (AStartDepth = 0)) then
-        RefuseAt(FPosition, 'declaration keyword inside a statement block');
-    end;
+    FStates[FPosition] := StatementState(Scan);
+    if not Scan.InAssembler and (IsRoutineKeyword(FPosition) or IsWord(FPosition, 'implementation') or
+      IsWord(FPosition, 'initialization') or
+      (IsWord(FPosition, 'finalization') and (AStartDepth = 0))) then
+      RefuseAt(FPosition, 'declaration keyword inside a statement block');
+    if StepBlock(Scan, FSource.Tokens[FPosition]) and (Scan.Depth = 0) then
+      Exit;
     Inc(FPosition);
   end;
   RefuseAt(FPosition, 'unterminated block');
@@ -804,7 +881,8 @@ function IsPlainIdentifier(const AText: string): Boolean;
 var
   Index: Integer;
 begin
-  Result := (AText <> '') and IsIdentifierStart(Ord(AText[1])) and (Ord(AText[1]) < 128);
+  // The range check comes first: IsIdentifierStart takes a byte.
+  Result := (AText <> '') and (Ord(AText[1]) < 128) and IsIdentifierStart(Ord(AText[1]));
   for Index := 2 to Length(AText) do
     Result := Result and (Ord(AText[Index]) < 128) and IsIdentifierPart(Ord(AText[Index]));
 end;
@@ -926,8 +1004,8 @@ begin
   Name := Trim(ADirective.Argument);
   if (Length(Name) >= 2) and (Name[1] = '''') and (Name[Length(Name)] = '''') then
     Name := Copy(Name, 2, Length(Name) - 2);
-  Name := StringReplace(Name, '\', PathDelim, [rfReplaceAll]);
-  Name := StringReplace(Name, '/', PathDelim, [rfReplaceAll]);
+  Name := StringReplace(Name, '\', string(PathDelim), [rfReplaceAll]);
+  Name := StringReplace(Name, '/', string(PathDelim), [rfReplaceAll]);
   SetLength(Directories, Length(AIncludeDirectories) + 1);
   Directories[0] := ExtractFilePath(AIncluder);
   for Index := 0 to High(AIncludeDirectories) do
@@ -945,32 +1023,118 @@ begin
   Result := '';
 end;
 
-// An include's text is outside every digest, so it must not be able to hold
-// a routine or module part the including file's parse does not see.
-procedure CheckIncludes(const ASource: TSourceText;
-  const AIncludeDirectories: array of string; const ADepth: Integer);
+type
+  TIncludeContext = (icDeclarations, icStatements);
+
+// An include's text is outside every digest and outside the parse, so it
+// must leave the parse's view of its includer true. It must not declare a
+// routine or module part, change lexing, or leave a conditional open. In a
+// statement block its blocks must close within it, and its conditionals must
+// not change them between branches; anywhere else it may hold only
+// directives and comments, which cannot open or close a type or routine.
+procedure CheckIncludedText(const AIncluder: TSourceText; const ADirective: TDirective;
+  const AContext: TIncludeContext; const AIncludeDirectories: array of string;
+  const ADepth: Integer);
+var
+  Included: TSourceText;
+  Scan: TBlockScan;
+  Groups: array of TBlockScan;
+  Token: TToken;
+  Directive: TDirective;
+  TokenIndex, DirectiveIndex: Integer;
+
+  procedure RefuseDirective(const AReason: string);
+  begin
+    Refuse(Included.FileName, Directive.Line, '{$' + Directive.Name + '} ' + AReason);
+  end;
+
+begin
+  if ADepth >= MAX_INCLUDE_DEPTH then
+    Refuse(AIncluder.FileName, ADirective.Line, 'includes nest too deeply');
+  Included := LoadSource(ResolveInclude(AIncluder.FileName, ADirective, AIncludeDirectories));
+  for Token in Included.Tokens do
+    if (Token.Kind = tkWord) and not Token.Escaped and InList(Token.Text, INCLUDE_REFUSED_WORDS) then
+      Refuse(Included.FileName, Token.Line,
+        'included text can declare routines that no reviewed digest covers: ' + Token.Text);
+  RefuseLexingChanges(Included);
+  Scan := Default(TBlockScan);
+  Groups := nil;
+  TokenIndex := 0;
+  // Tokens and directives in text order; the last pass takes the tokens
+  // after the last directive.
+  for DirectiveIndex := 0 to Length(Included.Directives) do
+  begin
+    while (TokenIndex < Length(Included.Tokens)) and ((DirectiveIndex = Length(Included.Directives)) or
+      (Included.Tokens[TokenIndex].Start < Included.Directives[DirectiveIndex].Start)) do
+    begin
+      Token := Included.Tokens[TokenIndex];
+      if AContext <> icStatements then
+        Refuse(Included.FileName, Token.Line,
+          'included text outside a statement block must hold only directives and comments');
+      if StepBlock(Scan, Token) and (Scan.Depth < 0) then
+        Refuse(Included.FileName, Token.Line, 'included text closes a block it did not open');
+      Inc(TokenIndex);
+    end;
+    if DirectiveIndex = Length(Included.Directives) then
+      Break;
+    Directive := Included.Directives[DirectiveIndex];
+    if InList(Directive.Name, CONDITIONAL_DIRECTIVES) then
+    begin
+      if (Directive.Name = 'else') or (Directive.Name = 'elseif') or
+        (Directive.Name = 'endif') or (Directive.Name = 'ifend') then
+      begin
+        if Length(Groups) = 0 then
+          RefuseDirective('has no opening conditional in its include file');
+        if (Groups[High(Groups)].Depth <> Scan.Depth) or
+          (Groups[High(Groups)].InAssembler <> Scan.InAssembler) then
+          RefuseDirective('changes the block structure between conditional branches');
+        if (Directive.Name = 'endif') or (Directive.Name = 'ifend') then
+          SetLength(Groups, Length(Groups) - 1);
+      end
+      else
+      begin
+        SetLength(Groups, Length(Groups) + 1);
+        Groups[High(Groups)] := Scan;
+      end;
+    end
+    else if IsIncludeDirective(Directive) and (Copy(Directive.Argument, 1, 1) <> '%') then
+    begin
+      if Scan.InAssembler then
+        RefuseDirective('inside an assembler block is not supported');
+      CheckIncludedText(Included, Directive, AContext, AIncludeDirectories, ADepth + 1);
+    end;
+  end;
+  if Length(Groups) > 0 then
+    Refuse(Included.FileName, 0, 'a conditional is not closed in its include file');
+  if Scan.Depth <> 0 then
+    Refuse(Included.FileName, 0, 'included text leaves a block open');
+end;
+
+// `{$I %NAME%}` inserts a string literal, not a file.
+procedure CheckIncludes(const ASource: TSourceText; const AParser: TRoutineParser;
+  const AIncludeDirectories: array of string);
 var
   Directive: TDirective;
-  Included: TSourceText;
-  Token: TToken;
-  Index: Integer;
+  NextToken: Integer;
+  State, Low: Int64;
 begin
+  NextToken := 0;
   for Directive in ASource.Directives do
   begin
     if not IsIncludeDirective(Directive) or (Copy(Directive.Argument, 1, 1) = '%') then
       Continue;
-    if ADepth >= MAX_INCLUDE_DEPTH then
-      Refuse(ASource.FileName, Directive.Line, 'includes nest too deeply');
-    Included := LoadSource(ResolveInclude(ASource.FileName, Directive, AIncludeDirectories));
-    for Index := 0 to High(Included.Tokens) do
-    begin
-      Token := Included.Tokens[Index];
-      if (Token.Kind = tkWord) and not Token.Escaped and InList(Token.Text, INCLUDE_REFUSED_WORDS) then
-        Refuse(Included.FileName, Token.Line,
-          'included text can declare routines that no reviewed digest covers: ' + Token.Text);
-    end;
-    RefuseLexingChanges(Included);
-    CheckIncludes(Included, AIncludeDirectories, ADepth + 1);
+    while (NextToken < Length(ASource.Tokens)) and (ASource.Tokens[NextToken].Start < Directive.Start) do
+      Inc(NextToken);
+    // The included text takes the place of the parse state at the next token.
+    State := AParser.State(NextToken);
+    Low := State and $FFFFFFFF;
+    if (State < 0) or (Low = 0) or (Low >= TYPE_DEPTH) then
+      CheckIncludedText(ASource, Directive, icDeclarations, AIncludeDirectories, 0)
+    else if Low >= ASSEMBLER_STATE then
+      Refuse(ASource.FileName, Directive.Line, '{$' + Directive.Name +
+        '} inside an assembler block is not supported')
+    else
+      CheckIncludedText(ASource, Directive, icStatements, AIncludeDirectories, 0);
   end;
 end;
 
@@ -1053,7 +1217,7 @@ begin
   Finish := ASource.Tokens[ARoutine.LastToken].Finish;
   for Directive in ASource.Directives do
     if (Directive.Start >= First) and (Directive.Start < Finish) and IsIncludeDirective(Directive) then
-      Refuse(ASource.FileName, Directive.Line, '{$' + Directive.Name +
+      RefuseRoutine(ASource.FileName, Directive.Line, '{$' + Directive.Name +
         '} includes text that no reviewed digest covers in ' + ARoutine.Name);
 end;
 
@@ -1082,76 +1246,178 @@ begin
   Result := SHA256Hex(Normalised);
 end;
 
-function LocateFPCRoutine(const ASourceFile, ASection: string;
-  const AIncludeDirectories: array of string): TFPCRoutineSpan;
+type
+  TStoredRefusal = record
+    Refused: Boolean;
+    SourceFile: string;
+    Line: Integer;
+    Reason: string;
+  end;
+
+  // One source file's parse and whole-file checks.
+  TParsedSource = class
+  public
+    Source: TSourceText;
+    Module: string;
+    Routines: TRoutines;
+    // Raised before any routine is matched.
+    ParseRefusal: TStoredRefusal;
+    // Raised after the routine's own checks, as the checks ran before.
+    CheckRefusal: TStoredRefusal;
+  end;
+
+function StoredRefusal(const AError: EFPCRoutineSource): TStoredRefusal;
+begin
+  Result.Refused := True;
+  Result.SourceFile := AError.SourceFile;
+  Result.Line := AError.Line;
+  Result.Reason := AError.Reason;
+end;
+
+procedure RaiseStored(const ARefusal: TStoredRefusal);
+begin
+  if ARefusal.Refused then
+    Refuse(ARefusal.SourceFile, ARefusal.Line, ARefusal.Reason);
+end;
+
+function ParseSource(const AFileName: string; const AIncludeDirectories: array of string): TParsedSource;
+var
+  Parser: TRoutineParser;
+begin
+  Result := TParsedSource.Create;
+  try
+    Result.Source := LoadSource(AFileName);
+    RefuseLexingChanges(Result.Source);
+    Parser := TRoutineParser.Create(Result.Source);
+    try
+      Parser.Parse;
+      Result.Module := Parser.Module;
+      Result.Routines := Parser.Routines;
+      try
+        CheckConditionals(Result.Source, Parser);
+        CheckIncludes(Result.Source, Parser, AIncludeDirectories);
+      except
+        on E: EFPCRoutineSource do
+          Result.CheckRefusal := StoredRefusal(E);
+      end;
+    finally
+      Parser.Free;
+    end;
+  except
+    on E: EFPCRoutineSource do
+      Result.ParseRefusal := StoredRefusal(E);
+    else
+    begin
+      Result.Free;
+      raise;
+    end;
+  end;
+end;
+
+{ TFPCRoutineLocator }
+
+constructor TFPCRoutineLocator.Create(const AIncludeDirectories: array of string);
+var
+  Index: Integer;
+begin
+  inherited Create;
+  SetLength(FIncludeDirectories, Length(AIncludeDirectories));
+  for Index := 0 to High(AIncludeDirectories) do
+    FIncludeDirectories[Index] := AIncludeDirectories[Index];
+  FFiles := TStringList.Create;
+  FFiles.Sorted := True;
+  FFiles.CaseSensitive := True;
+  FFiles.OwnsObjects := True;
+end;
+
+destructor TFPCRoutineLocator.Destroy;
+begin
+  FFiles.Free;
+  inherited Destroy;
+end;
+
+function TFPCRoutineLocator.Locate(const ASourceFile, ASection: string): TFPCRoutineSpan;
 var
   Section: TSectionName;
-  Source: TSourceText;
-  Parser: TRoutineParser;
+  Parsed: TParsedSource;
   Routine, Found: TRoutine;
-  Error: string;
-  Matches, Last: Integer;
+  Error, Key: string;
+  Index, Matches, Last: Integer;
 begin
   Result := Default(TFPCRoutineSpan);
   Error := ParseSection(ASection, Section);
   if Error <> '' then
-    Refuse(ASourceFile, 0, Error + ': ' + ASection);
-  Source := LoadSource(ASourceFile);
-  RefuseLexingChanges(Source);
-  Found := Default(TRoutine);
-  Parser := TRoutineParser.Create(Source);
-  try
-    Parser.Parse;
-    if Parser.Module <> Section.Module then
-      Refuse(ASourceFile, 0, 'declares ' + Parser.Module + ', not ' + Section.Module);
-    Matches := 0;
-    for Routine in Parser.Routines do
-    begin
-      Last := High(Routine.Parts);
-      if Routine.Parts[Last] <> Section.Routine then
-        Continue;
-      if Section.TypeName = '' then
-      begin
-        if Last <> 0 then
-          Continue;
-        // A nested namesake has another section, but would make a parse
-        // disagreement on nesting select the wrong text.
-        if Routine.Level > 0 then
-          Refuse(ASourceFile, Source.Tokens[Routine.FirstToken].Line,
-            'a nested routine shares the reviewed routine''s name');
-      end
-      else
-      begin
-        if (Last = 0) or (Routine.Parts[Last - 1] <> Section.TypeName) then
-          Continue;
-        if (Last <> 1) or (Routine.Level > 0) then
-          Refuse(ASourceFile, Source.Tokens[Routine.FirstToken].Line,
-            'methods of nested types are not supported: ' + Routine.Name);
-      end;
-      if Routine.Generic then
-        Refuse(ASourceFile, Source.Tokens[Routine.FirstToken].Line,
-          'generic routines are not supported: ' + Routine.Name);
-      if not Routine.HasBody then
-        Continue;
-      Inc(Matches);
-      Found := Routine;
-    end;
-    if Matches = 0 then
-      Refuse(ASourceFile, 0, 'no implementation of ' + FPCSectionRoutineName(ASection));
-    if Matches > 1 then
-      Refuse(ASourceFile, 0, Format('%d implementations of %s; overloads cannot be told apart',
-        [Matches, FPCSectionRoutineName(ASection)]));
-    RefuseRoutineIncludes(Source, Found);
-    CheckConditionals(Source, Parser);
-  finally
-    Parser.Free;
+    RefuseRoutine(ASourceFile, 0, Error + ': ' + ASection);
+  Key := ExpandFileName(ASourceFile);
+  Index := FFiles.IndexOf(UTF8Encode(Key));
+  if Index >= 0 then
+    Parsed := TParsedSource(FFiles.Objects[Index])
+  else
+  begin
+    Parsed := ParseSource(ASourceFile, FIncludeDirectories);
+    FFiles.AddObject(UTF8Encode(Key), Parsed);
   end;
-  CheckIncludes(Source, AIncludeDirectories, 0);
+  RaiseStored(Parsed.ParseRefusal);
+  if Parsed.Module <> Section.Module then
+    RefuseRoutine(ASourceFile, 0, 'declares ' + Parsed.Module + ', not ' + Section.Module);
+  Found := Default(TRoutine);
+  Matches := 0;
+  for Routine in Parsed.Routines do
+  begin
+    Last := High(Routine.Parts);
+    if Routine.Parts[Last] <> Section.Routine then
+      Continue;
+    if Section.TypeName = '' then
+    begin
+      if Last <> 0 then
+        Continue;
+      // A nested namesake has another section, but would make a parse
+      // disagreement on nesting select the wrong text.
+      if Routine.Level > 0 then
+        RefuseRoutine(ASourceFile, Parsed.Source.Tokens[Routine.FirstToken].Line,
+          'a nested routine shares the reviewed routine''s name');
+    end
+    else
+    begin
+      if (Last = 0) or (Routine.Parts[Last - 1] <> Section.TypeName) then
+        Continue;
+      if (Last <> 1) or (Routine.Level > 0) then
+        RefuseRoutine(ASourceFile, Parsed.Source.Tokens[Routine.FirstToken].Line,
+          'methods of nested types are not supported: ' + Routine.Name);
+    end;
+    if Routine.Generic then
+      RefuseRoutine(ASourceFile, Parsed.Source.Tokens[Routine.FirstToken].Line,
+        'generic routines are not supported: ' + Routine.Name);
+    if not Routine.HasBody then
+      Continue;
+    Inc(Matches);
+    Found := Routine;
+  end;
+  if Matches = 0 then
+    RefuseRoutine(ASourceFile, 0, 'no implementation of ' + FPCSectionRoutineName(ASection));
+  if Matches > 1 then
+    RefuseRoutine(ASourceFile, 0, IntToStr(Matches) + ' implementations of ' +
+      FPCSectionRoutineName(ASection) + '; overloads cannot be told apart');
+  RefuseRoutineIncludes(Parsed.Source, Found);
+  RaiseStored(Parsed.CheckRefusal);
   Result.Name := Found.Name;
-  Result.FirstLine := Source.Tokens[Found.FirstToken].Line;
-  Result.LastLine := Source.Tokens[Found.LastToken].Line;
-  Result.Digest := NormalisedDigest(Source.Bytes, Source.Tokens[Found.FirstToken].Start,
-    Source.Tokens[Found.LastToken].Finish);
+  Result.FirstLine := Parsed.Source.Tokens[Found.FirstToken].Line;
+  Result.LastLine := Parsed.Source.Tokens[Found.LastToken].Line;
+  Result.Digest := NormalisedDigest(Parsed.Source.Bytes, Parsed.Source.Tokens[Found.FirstToken].Start,
+    Parsed.Source.Tokens[Found.LastToken].Finish);
+end;
+
+function LocateFPCRoutine(const ASourceFile, ASection: string;
+  const AIncludeDirectories: array of string): TFPCRoutineSpan;
+var
+  Locator: TFPCRoutineLocator;
+begin
+  Locator := TFPCRoutineLocator.Create(AIncludeDirectories);
+  try
+    Result := Locator.Locate(ASourceFile, ASection);
+  finally
+    Locator.Free;
+  end;
 end;
 
 end.

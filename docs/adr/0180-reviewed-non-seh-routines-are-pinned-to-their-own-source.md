@@ -44,8 +44,14 @@ whenever it cannot be sure the text it hashes is the text that was compiled:
 - An include inside the routine is refused. Every other include must resolve
   (beside its includer, then `source/units`, `source/shared` and `souffle`, the
   `-Fi` directories of `config.cfg` and CI) and must contain no routine or
-  module keyword, so it cannot hold an implementation the parse misses. Macros
-  are refused.
+  module keyword, so it cannot hold an implementation the parse misses. The
+  parse does not read included text, so an include must also leave the block
+  structure as it found it. In a statement block, its `begin`, `case`, `try`
+  and `asm` blocks must close within it, in every branch of its
+  conditionals. Anywhere else it may hold only directives and comments. An
+  include that closed a record could otherwise hide the compiled routine
+  from the parse. Includes inside an assembler block, and conditionals left
+  open in an include file, are refused. Macros are refused.
 - The parse reads every branch of a conditional, so in the implementation
   part each conditional group must leave the parse unchanged whichever branch
   the compiler takes. A group must stay within one routine's statements at one
@@ -73,8 +79,12 @@ name rule remains a review checkpoint, not a proof that no frame registers the
 routine; that proof is the machine-code analysis #2111 leaves out of scope.
 
 A construct the locator cannot parse fails the Win32 build of a file that has
-a pinned routine. Fix it by restructuring the code or by extending the locator
-with tests, never by weakening a refusal.
+a pinned routine, and the error says that the file cannot be parsed at that
+line rather than that the routine changed. Fix it by restructuring the code or
+by extending the locator with tests, never by weakening a refusal. Pull
+requests build on Linux only, so `FPCSafeSEH.Test` checks every entry of the
+repository manifest. An edited pinned routine, or a file the locator cannot
+parse, then fails before it merges rather than on the Win32 build of `main`.
 
 [Win32 exception metadata](../contributing/win32-safeseh.md) owns the
 procedure.

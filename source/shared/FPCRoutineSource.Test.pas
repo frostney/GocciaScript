@@ -52,6 +52,10 @@ type
     procedure TestModuleName;
     procedure TestIncompleteParse;
     procedure TestDeclarations;
+    procedure TestHeaderDirectives;
+    procedure TestAssembler;
+    procedure TestIncludedBlocks;
+    procedure TestLocatorCache;
   public
     constructor Create;
     destructor Destroy; override;
@@ -159,6 +163,11 @@ begin
   Test('requires the section''s unit or program', TestModuleName);
   Test('refuses source it cannot parse completely', TestIncompleteParse);
   Test('skips type declarations and procedural types', TestDeclarations);
+  Test('accepts conditional directives in the routine header only when the parse is the same',
+    TestHeaderDirectives);
+  Test('reads assembler blocks and escaped words as the compiler does', TestAssembler);
+  Test('refuses includes that change the block structure', TestIncludedBlocks);
+  Test('parses each file once and keeps file refusals apart from routine refusals', TestLocatorCache);
 end;
 
 procedure TFPCRoutineSourceTests.TestRoutineSpan;
@@ -176,16 +185,23 @@ end;
 procedure TFPCRoutineSourceTests.TestEditsOutsideRoutine;
 var
   Expected: string;
+  Span: TFPCRoutineSpan;
 begin
   Expected := Digest(ROUTINE_TEXT);
   Expect<string>(Locate(UnitText(ROUTINE_TEXT + LineEnding + OTHER_TEXT), ROUTINE_SECTION).Digest).ToBe(Expected);
   Expect<string>(Locate(UnitText('{ Moved and commented. }' + LineEnding + OTHER_TEXT + LineEnding +
     StringReplace(OTHER_TEXT, 'Unrelated', 'Added', []) + LineEnding + LineEnding + ROUTINE_TEXT,
     'procedure ReviewedRoutine(const AValue: Integer);'), ROUTINE_SECTION).Digest).ToBe(Expected);
-  Expect<string>(Locate(StringReplace(UnitText(ROUTINE_TEXT + LineEnding + OTHER_TEXT), LineEnding,
-    #13#10, [rfReplaceAll]), ROUTINE_SECTION).Digest).ToBe(Expected);
-  Expect<string>(Locate(StringReplace(UnitText(ROUTINE_TEXT + LineEnding + OTHER_TEXT), LineEnding,
-    #13, [rfReplaceAll]), ROUTINE_SECTION).Digest).ToBe(Expected);
+  Span := Locate(StringReplace(UnitText(ROUTINE_TEXT + LineEnding + OTHER_TEXT), LineEnding,
+    #13#10, [rfReplaceAll]), ROUTINE_SECTION);
+  Expect<string>(Span.Digest).ToBe(Expected);
+  Expect<Integer>(Span.FirstLine).ToBe(10);
+  Expect<Integer>(Span.LastLine).ToBe(22);
+  Span := Locate(StringReplace(UnitText(ROUTINE_TEXT + LineEnding + OTHER_TEXT), LineEnding,
+    #13, [rfReplaceAll]), ROUTINE_SECTION);
+  Expect<string>(Span.Digest).ToBe(Expected);
+  Expect<Integer>(Span.FirstLine).ToBe(10);
+  Expect<Integer>(Span.LastLine).ToBe(22);
 end;
 
 procedure TFPCRoutineSourceTests.TestEditsInsideRoutine;
@@ -323,6 +339,8 @@ begin
     ROUTINE_SECTION, '{$i} includes text that no reviewed digest covers in ReviewedRoutine');
   Refuse(UnitText(StringReplace(ROUTINE_TEXT, '  try', '  {$INCLUDE local.inc}' + LineEnding + '  try', [])),
     ROUTINE_SECTION, '{$include} includes text');
+  Refuse(UnitText(StringReplace(ROUTINE_TEXT, '  try', '  (*$I local.inc*)' + LineEnding + '  try', [])),
+    ROUTINE_SECTION, '{$i} includes text that no reviewed digest covers in ReviewedRoutine');
   // {$I+} and {$I-} switch I/O checking; they include nothing.
   Locate(UnitText(StringReplace(ROUTINE_TEXT, '  try', '  {$I-}' + LineEnding + '  try', [])),
     ROUTINE_SECTION);
@@ -340,6 +358,9 @@ begin
   WriteText(FDirectory + PathDelim + 'local.inc', '{$mode objfpc}' + LineEnding);
   Refuse(UnitText('{$I local.inc}' + LineEnding + ROUTINE_TEXT), ROUTINE_SECTION,
     'only Delphi-mode lexing is supported');
+  WriteText(FDirectory + PathDelim + 'local.inc', '(*$I local.inc*)' + LineEnding);
+  Refuse(UnitText('{$I local.inc}' + LineEnding + ROUTINE_TEXT), ROUTINE_SECTION,
+    'includes nest too deeply');
   DeleteFile(FDirectory + PathDelim + 'local.inc');
   Refuse(UnitText(Statements), ROUTINE_SECTION, 'include file not found: local.inc');
 end;
@@ -427,6 +448,12 @@ begin
     '.text.n_p$fixture.test_$$_reviewedroutine$longint');
   Expect<string>(Span.Digest).ToBe(Digest(ROUTINE_TEXT));
   Refuse(UnitText(ROUTINE_TEXT), '.data.n_fixture_$$_reviewedroutine', 'not a project text section');
+  // A name outside Latin-1 is unsupported, not a range error.
+  Expect<string>(FPCSectionRoutineName('.text.n_fixture_$$_' + #$0100 + 'routine')).ToBe(
+    '.text.n_fixture_$$_' + #$0100 + 'routine');
+  Expect<string>(FPCSectionRoutineName('.text.n_' + #$0100 + '_$$_reviewedroutine')).ToBe(
+    '.text.n_' + #$0100 + '_$$_reviewedroutine');
+  Refuse(UnitText(ROUTINE_TEXT), '.text.n_fixture_$$_' + #$0100 + 'routine', 'unsupported routine name');
 end;
 
 procedure TFPCRoutineSourceTests.TestIncompleteParse;
@@ -498,6 +525,181 @@ begin
   Expect<string>(Span.Digest).ToBe(Digest(ROUTINE_TEXT));
 end;
 
+
+procedure TFPCRoutineSourceTests.TestHeaderDirectives;
+const
+  INLINE_ROUTINE = 'function ReviewedRoutine(const AValue: Integer): Integer; {$IFDEF FPC}inline;{$ENDIF}' +
+    LineEnding + 'var' + LineEnding + '  Local: Integer;' + LineEnding + 'begin' + LineEnding +
+    '  Local := AValue;' + LineEnding + '  Result := Local;' + LineEnding + 'end;';
+  METHOD = 'procedure TFirst.ReviewedMethod; {$IFDEF FPC}inline;{$ENDIF}' + LineEnding + 'begin' +
+    LineEnding + 'end;';
+var
+  Expected: string;
+begin
+  // The house inline idiom keeps a pin: the digest is the routine's text.
+  Expected := Locate(UnitText(OTHER_TEXT + LineEnding + INLINE_ROUTINE), ROUTINE_SECTION).Digest;
+  Expect<string>(Expected).ToBe(Digest(INLINE_ROUTINE));
+  // The idiom cannot hide an edit: the directive and body stay in the text.
+  if Locate(UnitText(StringReplace(INLINE_ROUTINE, 'Result := Local;', 'Result := 0;', [])),
+    ROUTINE_SECTION).Digest = Expected then
+    Fail('Body edit under an inline idiom kept the digest');
+  if Locate(UnitText(StringReplace(INLINE_ROUTINE, '{$IFDEF FPC}inline;{$ENDIF}', '', [])),
+    ROUTINE_SECTION).Digest = Expected then
+    Fail('Removing the inline idiom kept the digest');
+  Expect<string>(Locate(UnitText('type' + LineEnding + '  TFirst = class' + LineEnding +
+    '    procedure ReviewedMethod; {$IFDEF FPC}inline;{$ENDIF}' + LineEnding + '  end;' + LineEnding +
+    LineEnding + METHOD), METHOD_SECTION).Digest).ToBe(Digest(METHOD));
+  // A branch that drops the body moves the compiled body out of the routine
+  // the parse sees, so it is refused, never hashed.
+  Refuse(UnitText('procedure ReviewedRoutine; {$IFDEF NEVER}forward;{$ENDIF}' + LineEnding + 'begin' +
+    LineEnding + 'end;'), ROUTINE_SECTION, 'expected the module''s final end.');
+  Refuse(UnitText('procedure ReviewedRoutine; {$IFDEF FPC}inline;{$ELSE}external ''x'';{$ENDIF}' +
+    LineEnding + 'begin' + LineEnding + 'end;'), ROUTINE_SECTION, 'expected the module''s final end.');
+  // With the dead routine's header and body in the parse's view, ReviewedRoutine
+  // would end at the parse's first end; X decides which body is compiled.
+  Refuse(UnitText('procedure ReviewedRoutine; {$IFDEF X}inline;' + LineEnding + 'begin' + LineEnding +
+    'end;' + LineEnding + 'procedure Other; {$ENDIF}' + LineEnding + 'begin' + LineEnding + '  Halt;' +
+    LineEnding + 'end;'), ROUTINE_SECTION,
+    '{$endif} changes the block structure between conditional branches');
+end;
+
+procedure TFPCRoutineSourceTests.TestAssembler;
+const
+  ASSEMBLER_ROUTINE = 'procedure ReviewedRoutine; assembler;' + LineEnding + 'asm' + LineEnding +
+    '@try:' + LineEnding + '  jmp @case' + LineEnding + '@case:' + LineEnding + 'end;';
+  ESCAPED_ROUTINE = 'procedure ReviewedRoutine;' + LineEnding + 'var' + LineEnding +
+    '  &end: Integer;' + LineEnding + 'begin' + LineEnding + '  &end := 1;' + LineEnding +
+    '  &begin(&end);' + LineEnding + 'end;';
+var
+  Span: TFPCRoutineSpan;
+begin
+  // In an assembler block only `end` closes; labels named try or case open nothing.
+  Span := Locate(UnitText(ASSEMBLER_ROUTINE + LineEnding + OTHER_TEXT), ROUTINE_SECTION);
+  Expect<string>(Span.Digest).ToBe(Digest(ASSEMBLER_ROUTINE));
+  Expect<Integer>(Span.LastLine).ToBe(15);
+  Span := Locate(UnitText('procedure ReviewedRoutine;' + LineEnding + 'begin' + LineEnding + '  asm' +
+    LineEnding + '@begin:' + LineEnding + '  end;' + LineEnding + 'end;' + LineEnding + OTHER_TEXT),
+    ROUTINE_SECTION);
+  Expect<Integer>(Span.LastLine).ToBe(15);
+  // `&end` is an identifier, not the end of a block.
+  Span := Locate(UnitText(ESCAPED_ROUTINE + LineEnding + OTHER_TEXT), ROUTINE_SECTION);
+  Expect<string>(Span.Digest).ToBe(Digest(ESCAPED_ROUTINE));
+  Expect<Integer>(Span.LastLine).ToBe(16);
+  // A branch that leaves the assembler block at the same depth changes how
+  // the compiler reads the text after it.
+  Refuse(UnitText('procedure ReviewedRoutine;' + LineEnding + 'begin' + LineEnding + '  asm' +
+    LineEnding + '    nop' + LineEnding + '{$IFDEF X}' + LineEnding + '  end;' + LineEnding + '  begin' +
+    LineEnding + '{$ENDIF}' + LineEnding + '  end;' + LineEnding + 'end;'), ROUTINE_SECTION,
+    '{$endif} changes the block structure between conditional branches');
+end;
+
+procedure TFPCRoutineSourceTests.TestIncludedBlocks;
+const
+  // The reviewed copy is dead; the compiled routine sits after the include.
+  HIDDEN = 'type' + LineEnding + '  TBox = record' + LineEnding + '    Value: Integer;' + LineEnding +
+    '{$I local.inc}' + LineEnding + 'procedure ReviewedRoutine;' + LineEnding + 'begin' + LineEnding +
+    '  Halt;' + LineEnding + 'end;' + LineEnding + '{$IFDEF NEVER}' + LineEnding +
+    'procedure ReviewedRoutine;' + LineEnding + 'begin' + LineEnding + 'end;' + LineEnding + '{$ENDIF}';
+  STATEMENTS = 'procedure Other;' + LineEnding + 'begin' + LineEnding + '  {$I local.inc}' + LineEnding +
+    'end;' + LineEnding + ROUTINE_TEXT;
+
+  procedure IncludeText(const AText: string);
+  begin
+    WriteText(FDirectory + PathDelim + 'local.inc', AText + LineEnding);
+  end;
+
+begin
+  // A record closed by an include would hide the compiled routine from the
+  // parse, which would hash the dead copy.
+  IncludeText('  end;');
+  Refuse(UnitText(HIDDEN), ROUTINE_SECTION,
+    'included text outside a statement block must hold only directives and comments');
+  IncludeText('  Extra: Integer;');
+  Refuse(UnitText(HIDDEN), ROUTINE_SECTION, 'outside a statement block');
+  // A statement include must close every block it opens, and open every
+  // block it closes.
+  IncludeText('  begin');
+  Refuse(UnitText(STATEMENTS), ROUTINE_SECTION, 'included text leaves a block open');
+  IncludeText('  end;' + LineEnding + '  begin');
+  Refuse(UnitText(STATEMENTS), ROUTINE_SECTION, 'included text closes a block it did not open');
+  IncludeText('  asm' + LineEnding + '    nop');
+  Refuse(UnitText(STATEMENTS), ROUTINE_SECTION, 'included text leaves a block open');
+  IncludeText('{$IFDEF X}' + LineEnding + '  begin' + LineEnding + '{$ENDIF}' + LineEnding + '  end;' +
+    LineEnding + '{$IFDEF X}' + LineEnding + '  begin' + LineEnding + '{$ENDIF}');
+  Refuse(UnitText(STATEMENTS), ROUTINE_SECTION,
+    '{$endif} changes the block structure between conditional branches');
+  IncludeText('{$IFDEF X}');
+  Refuse(UnitText(STATEMENTS), ROUTINE_SECTION, 'a conditional is not closed in its include file');
+  IncludeText('{$ELSE}');
+  Refuse(UnitText('{$IFDEF X}' + LineEnding + '{$I local.inc}' + LineEnding + '{$ENDIF}' + LineEnding +
+    ROUTINE_TEXT), ROUTINE_SECTION, '{$else} has no opening conditional in its include file');
+  IncludeText('  nop');
+  Refuse(UnitText('procedure Other; assembler;' + LineEnding + 'asm' + LineEnding + '  {$I local.inc}' +
+    LineEnding + 'end;' + LineEnding + ROUTINE_TEXT), ROUTINE_SECTION,
+    '{$i} inside an assembler block is not supported');
+  // Balanced statements, including blocks inside branches, are accepted.
+  IncludeText('  try' + LineEnding + '{$IFDEF X}' + LineEnding + '    begin' + LineEnding + '    end;' +
+    LineEnding + '{$ENDIF}' + LineEnding + '  finally' + LineEnding + '  end;');
+  Expect<string>(Locate(UnitText(STATEMENTS), ROUTINE_SECTION).Digest).ToBe(Digest(ROUTINE_TEXT));
+  // Directives and comments are accepted anywhere.
+  IncludeText('{ Settings. }' + LineEnding + '{$IFDEF X}' + LineEnding + '  {$DEFINE Y}' + LineEnding +
+    '{$ENDIF}');
+  Expect<string>(Locate(UnitText('{$I local.inc}' + LineEnding + STATEMENTS),
+    ROUTINE_SECTION).Digest).ToBe(Digest(ROUTINE_TEXT));
+end;
+
+procedure TFPCRoutineSourceTests.TestLocatorCache;
+const
+  TYPES = 'type' + LineEnding + '  TFirst = class' + LineEnding + '    procedure ReviewedMethod;' +
+    LineEnding + '  end;' + LineEnding;
+  FIRST = 'procedure TFirst.ReviewedMethod;' + LineEnding + 'begin' + LineEnding + 'end;';
+var
+  Locator: TFPCRoutineLocator;
+  Scope: TFPCRoutineRefusal;
+  RefusedFile: string;
+
+  function RefusalScope(const ASection: string): TFPCRoutineRefusal;
+  begin
+    Result := frRoutine;
+    try
+      Locator.Locate(FSourceFile, ASection);
+      Fail('Expected a refusal for ' + ASection);
+    except
+      on E: EFPCRoutineSource do
+      begin
+        Result := E.Scope;
+        RefusedFile := E.SourceFile;
+      end;
+    end;
+  end;
+
+begin
+  WriteText(FSourceFile, UnitText(ROUTINE_TEXT + LineEnding + FIRST, TYPES));
+  Locator := TFPCRoutineLocator.Create([FDirectory + PathDelim + 'includes']);
+  try
+    Expect<string>(Locator.Locate(FSourceFile, ROUTINE_SECTION).Digest).ToBe(Digest(ROUTINE_TEXT));
+    // The file is read once: later edits are not seen within one run.
+    WriteText(FSourceFile, UnitText(OTHER_TEXT));
+    Expect<string>(Locator.Locate(FSourceFile, METHOD_SECTION).Digest).ToBe(Digest(FIRST));
+    Scope := RefusalScope(OTHER_METHOD_SECTION);
+    Expect<Boolean>(Scope = frRoutine).ToBe(True);
+    Expect<string>(RefusedFile).ToBe(FSourceFile);
+  finally
+    Locator.Free;
+  end;
+  // A file refusal repeats for every section and is not about the routine.
+  WriteText(FSourceFile, UnitText(ROUTINE_TEXT) + OTHER_TEXT);
+  Locator := TFPCRoutineLocator.Create([FDirectory + PathDelim + 'includes']);
+  try
+    Scope := RefusalScope(ROUTINE_SECTION);
+    Expect<Boolean>(Scope = frFile).ToBe(True);
+    Expect<string>(RefusedFile).ToBe(FSourceFile);
+    Scope := RefusalScope(METHOD_SECTION);
+    Expect<Boolean>(Scope = frFile).ToBe(True);
+  finally
+    Locator.Free;
+  end;
+end;
 begin
   TestRunnerProgram.AddSuite(TFPCRoutineSourceTests.Create);
   TestRunnerProgram.Run;

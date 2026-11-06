@@ -53,6 +53,7 @@ type
     procedure TestHandlerOwnership;
     procedure TestSourceBinding;
     procedure TestRoutineDigestReport;
+    procedure TestReviewedManifest;
     procedure TestStagedProject;
     procedure TestProjectProvenance;
     procedure TestProgramAndMethodNames;
@@ -189,6 +190,7 @@ begin
   Test('binds handlers to the input object defining them', TestHandlerOwnership);
   Test('binds ordinary source exclusions to their routine''s reviewed text and owner', TestSourceBinding);
   Test('reports current routine digests for review', TestRoutineDigestReport);
+  Test('pins every reviewed routine of the repository manifest to its current text', TestReviewedManifest);
   Test('validates source-bound receipts after project scratch cleanup', TestStagedProject);
   Test('requires source identity and build-owned output provenance', TestProjectProvenance);
   Test('refuses program, static method and nested handler definitions and aliases', TestProgramAndMethodNames);
@@ -451,6 +453,26 @@ begin
   end;
 end;
 
+// Pull requests build and test on Linux only, and the post-link check runs
+// on the Win32 build of main. This finds the repository manifest as that
+// check does, so an edited pinned routine fails before it merges.
+procedure TFPCSafeSEHTests.TestReviewedManifest;
+var
+  Report: TStringList;
+  Reviewed: Boolean;
+begin
+  Report := TStringList.Create;
+  try
+    Reviewed := ReportReviewedRoutines('', Report);
+    if not Reviewed then
+      Fail('Reviewed non-SEH routines changed or cannot be located; review them and refresh their ' +
+        'lines with ./safeseh.pas --digests:' + LineEnding + string(Report.Text));
+    Expect<Boolean>(Reviewed).ToBe(True);
+  finally
+    Report.Free;
+  end;
+end;
+
 procedure TFPCSafeSEHTests.TestRoutineDigestReport;
 var
   SourcePath, Entry: string;
@@ -481,6 +503,16 @@ begin
     Report.LoadFromFile(FManifestFile);
     Found := Report.IndexOf(Entry) >= 0;
     Expect<Boolean>(Found).ToBe(True);
+    // Text the locator cannot parse fails every pin in the file. The error
+    // names that line once, by its repository path, and not the routine.
+    WriteText(SourcePath, OrdinarySource(ROUTINE_TEXT, OTHER_ROUTINE_TEXT) + OTHER_ROUTINE_TEXT);
+    Report.Clear;
+    Expect<Boolean>(ReportReviewedRoutines(FManifestFile, Report)).ToBe(False);
+    Expect<string>(Report[0]).ToBe('# ERROR Reviewed non-SEH routine ordinary.ordinaryhandler cannot be ' +
+      'located: source/shared/ordinary.pas:16 cannot be parsed: expected the module''s final end. Every ' +
+      'source-nonseh entry in source/shared/ordinary.pas fails until that text is restructured or the ' +
+      'routine locator supports it; do not widen the exclusion');
+    Expect<string>(Report[1]).ToBe(Entry);
     DeleteFile(SourcePath);
     Report.Clear;
     Expect<Boolean>(ReportReviewedRoutines(FManifestFile, Report)).ToBe(False);

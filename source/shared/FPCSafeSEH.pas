@@ -85,6 +85,8 @@ type
   TSourceSymbols = array of TSourceSymbol;
   TManifest = record
     Root: string;
+    // Parses each source file once per run; owned by the reader's caller.
+    Locator: TFPCRoutineLocator;
     Version: string;
     Objects: TManifestObjects;
     Symbols: TManifestSymbols;
@@ -326,21 +328,49 @@ begin
     Result := ASource;
 end;
 
+function CreateRoutineLocator(const ARoot: string): TFPCRoutineLocator;
+begin
+  // The -Fi directories of config.cfg and .github/scripts/compile-programs.py.
+  Result := TFPCRoutineLocator.Create([
+    ARoot + PathDelim + 'source' + PathDelim + 'units',
+    ARoot + PathDelim + 'source' + PathDelim + 'shared',
+    ARoot + PathDelim + 'souffle']);
+end;
+
+function Sentence(const AText: string): string;
+begin
+  if (AText <> '') and (AText[Length(AText)] = '.') then
+    Result := AText
+  else
+    Result := AText + '.';
+end;
+
 function LocateReviewedRoutine(const AManifest: TManifest;
   const ASymbol: TSourceSymbol): TFPCRoutineSpan;
+var
+  Where: string;
 begin
   try
-    // The -Fi directories of config.cfg and .github/scripts/compile-programs.py.
-    Result := LocateFPCRoutine(ASymbol.Source, ASymbol.Section, [
-      AManifest.Root + PathDelim + 'source' + PathDelim + 'units',
-      AManifest.Root + PathDelim + 'source' + PathDelim + 'shared',
-      AManifest.Root + PathDelim + 'souffle']);
+    Result := AManifest.Locator.Locate(ASymbol.Source, ASymbol.Section);
   except
     on E: EFPCRoutineSource do
+    begin
+      Where := SourceDisplayPath(AManifest, E.SourceFile);
+      if E.Line > 0 then
+        Where := Where + ':' + IntToStr(E.Line);
+      // A file refusal says nothing about the reviewed routine, which may be
+      // unchanged; the fix is in the text the locator cannot parse.
+      if E.Scope = frFile then
+        raise ESafeSEH.Create(UTF8Encode('Reviewed non-SEH routine ' +
+          FPCSectionRoutineName(ASymbol.Section) + ' cannot be located: ' + Where +
+          ' cannot be parsed: ' + Sentence(E.Reason) + ' Every source-nonseh entry in ' +
+          SourceDisplayPath(AManifest, ASymbol.Source) + ' fails until that text is restructured ' +
+          'or the routine locator supports it; do not widen the exclusion'));
       raise ESafeSEH.Create(UTF8Encode('Reviewed non-SEH routine ' +
-        FPCSectionRoutineName(ASymbol.Section) + ' cannot be located in ' +
-        SourceDisplayPath(AManifest, ASymbol.Source) + ': ' + UTF8Decode(E.Message) +
-        '. Review the routine again and update its source-nonseh entry; do not widen the exclusion'));
+        FPCSectionRoutineName(ASymbol.Section) + ' cannot be located in ' + Where + ': ' +
+        Sentence(E.Reason) + ' Review the routine again and update its source-nonseh entry; ' +
+        'do not widen the exclusion'));
+    end;
   end;
 end;
 
@@ -651,6 +681,7 @@ begin
     PE_OPTIONAL_OFFSET + PE_IMAGE_BASE_OFFSET);
   Sources := TStringList.Create;
   Receipt := TStringList.Create;
+  Manifest.Locator := CreateRoutineLocator(Manifest.Root);
   try
     CollectProjectSources(ProjectRoot(AManifestFile), Sources);
     if (AObjectDirectory = '') and FileExists(AMapFile + '.safeseh-inputs') then
@@ -660,6 +691,7 @@ begin
     if Receipt.Count > 0 then
       Require(AProjectLines.Count = Receipt.Count - 6, 'Unused or duplicate project input receipt rows');
   finally
+    Manifest.Locator.Free;
     Receipt.Free;
     Sources.Free;
   end;
@@ -709,48 +741,6 @@ begin
   end;
 end;
 
-function ManifestFileName: string; forward;
-
-function ReportReviewedRoutines(const AManifestFile: string;
-  const AOutput: TStrings): Boolean;
-var
-  Manifest: TManifest;
-  Symbol: TSourceSymbol;
-  Span: TFPCRoutineSpan;
-  ManifestFile, Status: string;
-begin
-  Result := True;
-  ManifestFile := AManifestFile;
-  if ManifestFile = '' then
-    ManifestFile := ManifestFileName;
-  ReadManifest(ManifestFile, Manifest);
-  for Symbol in Manifest.SourceSymbols do
-  begin
-    try
-      Require(FileExists(Symbol.Source), 'Reviewed non-SEH source unavailable: ' + Symbol.Source);
-      Span := LocateReviewedRoutine(Manifest, Symbol);
-    except
-      on E: ESafeSEH do
-      begin
-        Result := False;
-        AOutput.Add(UTF8Encode('# ERROR ' + UTF8Decode(E.Message)));
-        AOutput.Add(UTF8Encode('source-nonseh ' + Symbol.Path + ' ' + Symbol.Digest + ' ' + Symbol.Section));
-        Continue;
-      end;
-    end;
-    if Span.Digest = Symbol.Digest then
-      Status := 'unchanged'
-    else
-    begin
-      Status := 'CHANGED: review it again for SEH registration before replacing its line';
-      Result := False;
-    end;
-    AOutput.Add(UTF8Encode(Format('# %s, %s:%d-%d: %s', [Span.Name,
-      SourceDisplayPath(Manifest, Symbol.Source), Span.FirstLine, Span.LastLine, Status])));
-    AOutput.Add(UTF8Encode('source-nonseh ' + Symbol.Path + ' ' + Span.Digest + ' ' + Symbol.Section));
-  end;
-end;
-
 function ManifestFileName: string;
 var
   Directory, Parent: string;
@@ -776,6 +766,52 @@ begin
   Result := ExpandFileName(MANIFEST_NAME);
   Require(FileExists(Result), 'Set FPC_SAFESEH_MANIFEST to the reviewed manifest path');
 end;
+
+function ReportReviewedRoutines(const AManifestFile: string;
+  const AOutput: TStrings): Boolean;
+var
+  Manifest: TManifest;
+  Symbol: TSourceSymbol;
+  Span: TFPCRoutineSpan;
+  ManifestFile, Status: string;
+begin
+  Result := True;
+  ManifestFile := AManifestFile;
+  if ManifestFile = '' then
+    ManifestFile := ManifestFileName;
+  ReadManifest(ManifestFile, Manifest);
+  Manifest.Locator := CreateRoutineLocator(Manifest.Root);
+  try
+    for Symbol in Manifest.SourceSymbols do
+    begin
+      try
+        Require(FileExists(Symbol.Source), 'Reviewed non-SEH source unavailable: ' + Symbol.Source);
+        Span := LocateReviewedRoutine(Manifest, Symbol);
+      except
+        on E: ESafeSEH do
+        begin
+          Result := False;
+          AOutput.Add(UTF8Encode('# ERROR ' + UTF8Decode(E.Message)));
+          AOutput.Add(UTF8Encode('source-nonseh ' + Symbol.Path + ' ' + Symbol.Digest + ' ' + Symbol.Section));
+          Continue;
+        end;
+      end;
+      if Span.Digest = Symbol.Digest then
+        Status := 'unchanged'
+      else
+      begin
+        Status := 'CHANGED: review it again for SEH registration before replacing its line';
+        Result := False;
+      end;
+      AOutput.Add(UTF8Encode(Format('# %s, %s:%d-%d: %s', [Span.Name,
+        SourceDisplayPath(Manifest, Symbol.Source), Span.FirstLine, Span.LastLine, Status])));
+      AOutput.Add(UTF8Encode('source-nonseh ' + Symbol.Path + ' ' + Span.Digest + ' ' + Symbol.Section));
+    end;
+  finally
+    Manifest.Locator.Free;
+  end;
+end;
+
 
 function CompilerVersion: string;
 var

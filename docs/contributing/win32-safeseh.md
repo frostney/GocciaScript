@@ -93,9 +93,14 @@ refusal into a broad exclusion. A new handler-like routine needs its own entry.
 
 The locator refuses whatever it cannot pin exactly, and the build fails
 instead of falling back to a wider span. [ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)
-lists the cases, among them overloads of a reviewed name and conditionals
-that change what the parse sees. Rename or restructure the code, or extend
-`source/shared/FPCRoutineSource.pas` with tests.
+lists the cases, among them overloads of a reviewed name, conditionals that
+change what the parse sees, and includes that change the block structure.
+Rename or restructure the code, or extend `source/shared/FPCRoutineSource.pas`
+with tests. An error that says a file cannot be parsed names the line to fix;
+until then every entry in that file fails, whether or not its routine changed.
+
+`FPCSafeSEH.Test` runs the same check on the repository manifest in pull
+request CI, so an edited pinned routine fails there before the Win32 build.
 
 ## Re-auditing a toolchain update
 
