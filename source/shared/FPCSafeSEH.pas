@@ -330,6 +330,7 @@ function LocateReviewedRoutine(const AManifest: TManifest;
   const ASymbol: TSourceSymbol): TFPCRoutineSpan;
 begin
   try
+    // The -Fi directories of config.cfg and .github/scripts/compile-programs.py.
     Result := LocateFPCRoutine(ASymbol.Source, ASymbol.Section, [
       AManifest.Root + PathDelim + 'source' + PathDelim + 'units',
       AManifest.Root + PathDelim + 'source' + PathDelim + 'shared',

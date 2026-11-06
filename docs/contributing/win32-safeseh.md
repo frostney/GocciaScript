@@ -72,8 +72,9 @@ source-nonseh ../../source/units/Goccia.VM.pas <sha256> .text.n_goccia.vm$_$tgoc
 
 The digest covers the routine from its header through the semicolon after its
 final `end`, with line endings normalised to LF. Edits elsewhere in the file
-need no manifest change. When the routine itself changes, or is renamed or
-removed, finalization and `--check` fail with the routine, file and lines. Then:
+need no manifest change. When the routine itself changes, finalization and
+`--check` fail naming the routine, file and lines; when it is renamed or
+removed, they fail naming the routine and file. Then:
 
 1. Review the routine again: it must not be, or be installed as, an OS
    exception handler.
@@ -90,15 +91,11 @@ removed, finalization and `--check` fail with the routine, file and lines. Then:
 Do not refresh a digest you have not reviewed, and do not turn an unknown-name
 refusal into a broad exclusion. A new handler-like routine needs its own entry.
 
-The locator refuses whatever it cannot pin exactly, and the build fails instead
-of falling back to a wider span: nested routines, methods of nested or generic
-types, overloads of a reviewed name (the section's parameter suffix is not
-decoded), a nested routine sharing a reviewed unit-level routine's name, an
-include inside the routine or an include elsewhere that could declare a
-routine, macros, text it cannot parse, and conditional directives outside the
-routine's statement part or that change its block structure between branches.
-Rename or restructure the code, or extend `source/shared/FPCRoutineSource.pas`
-with tests; see [ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md).
+The locator refuses whatever it cannot pin exactly, and the build fails
+instead of falling back to a wider span. [ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)
+lists the cases, among them overloads of a reviewed name and conditionals
+that change what the parse sees. Rename or restructure the code, or extend
+`source/shared/FPCRoutineSource.pas` with tests.
 
 ## Re-auditing a toolchain update
 

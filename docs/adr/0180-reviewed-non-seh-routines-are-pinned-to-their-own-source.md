@@ -38,17 +38,21 @@ whenever it cannot be sure the text it hashes is the text that was compiled:
   scope: overloads are refused, and so is a nested routine with the same name
   as a reviewed unit-level routine.
 - It lexes the whole file in Delphi mode and parses it through the final
-  `end.`. Text it cannot parse, or a routine keyword inside a statement block,
-  is refused, so no implementation can go unseen.
+  `end.`. Text it cannot parse, a routine keyword inside a statement block,
+  another `{$mode}` and `{$modeswitch nestedcomments}` are refused, so no
+  implementation can go unseen.
 - An include inside the routine is refused. Every other include must resolve
   (beside its includer, then `source/units`, `source/shared` and `souffle`, the
-  directories CI passes with `-Fi`) and must contain no routine or module
-  keyword, so it cannot hold an implementation the parse misses. Macros are
-  refused.
-- A conditional directive is accepted only in the routine's statement part,
-  with each group opened and closed inside the routine and the same block
-  depth at each of its directives. Every branch is in the digest, and the
-  routine ends at the same `end` whichever branch the compiler takes.
+  `-Fi` directories of `config.cfg` and CI) and must contain no routine or
+  module keyword, so it cannot hold an implementation the parse misses. Macros
+  are refused.
+- The parse reads every branch of a conditional, so in the implementation
+  part each conditional group must leave the parse unchanged whichever branch
+  the compiler takes. A group must stay within one routine's statements at one
+  block depth, one declaration level or type body, or one uses clause, and at
+  declaration level each branch must begin and end next to `;` or a section
+  keyword. A dead branch therefore cannot hide the compiled routine, and the
+  digest covers every branch inside the reviewed routine.
 
 `safeseh --digests [manifest]` prints every entry with its routine's current
 digest, line range and status, and never rewrites the manifest. Unknown

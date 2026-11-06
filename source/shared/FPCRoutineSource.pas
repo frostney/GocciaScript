@@ -26,9 +26,11 @@ type
 // its scope. Raises EFPCRoutineSource, never a broader or empty span, when
 // the section shape is unsupported (nested routines, nested or generic
 // types), the source declares another unit or program, the routine is
-// missing or ambiguous, or an include or conditional directive could change
-// the routine's text without changing the digest. Include files are searched
-// beside their includer, then in AIncludeDirectories.
+// missing or ambiguous, or the file could compile to other text than the
+// parse sees: unparseable text, another lexing mode, macros, includes that
+// could hold routines, or conditionals that change the parse between
+// branches (ADR 0180). Include files are searched beside their includer,
+// then in AIncludeDirectories.
 function LocateFPCRoutine(const ASourceFile, ASection: string;
   const AIncludeDirectories: array of string): TFPCRoutineSpan;
 
@@ -50,6 +52,18 @@ const
   METHOD_SEPARATOR = '_$__$$_';
   PROGRAM_PREFIX = 'p$';
   MAX_INCLUDE_DEPTH = 8;
+  // Parser states recorded per token for the conditional check. Other tokens
+  // record their routine in the high half, and in the low half their block
+  // depth, or TYPE_DEPTH plus their type depth inside a type declaration.
+  STATE_UNSUPPORTED = -1;
+  STATE_USES = -2;
+  TYPE_DEPTH = $40000000;
+  MODULE_CODE = -1;
+  // Tokens after which the parse decides nothing from its neighbours, so a
+  // conditional may start or end a branch next to one at declaration level.
+  NEUTRAL_WORDS: array[0..10] of string = (
+    'implementation', 'const', 'var', 'type', 'threadvar', 'resourcestring',
+    'label', 'private', 'protected', 'public', 'published');
   // Delphi-mode reserved words. Any other word after a routine header is a
   // directive such as overload, inline or external.
   RESERVED_WORDS: array[0..63] of string = (
@@ -101,7 +115,6 @@ type
     HasBody: Boolean;
     Generic: Boolean;
     FirstToken: Integer;
-    BodyToken: Integer;
     LastToken: Integer;
   end;
   TRoutines = array of TRoutine;
@@ -117,7 +130,11 @@ type
     FPosition: Integer;
     FRoutines: TRoutines;
     FModule: string;
+    FStates: array of Int64;
+    FCurrentRoutine: Integer;
+    FImplementationStart: Integer;
     procedure RefuseAt(const AIndex: Integer; const AMessage: string);
+    function StateOf(const ARoutine, ADepth: Integer; const AInType: Boolean): Int64;
     function IsWord(const AIndex: Integer; const AText: string): Boolean;
     function IsSymbol(const AIndex: Integer; const AText: Char): Boolean;
     function IsRoutineKeyword(const AIndex: Integer): Boolean;
@@ -136,6 +153,11 @@ type
     procedure Parse;
     property Module: string read FModule;
     property Routines: TRoutines read FRoutines;
+    // The first token after `implementation`, or after a program's header.
+    // It always follows at least one token.
+    property ImplementationStart: Integer read FImplementationStart;
+    function State(const AIndex: Integer): Int64;
+    function IsNeutral(const AIndex: Integer): Boolean;
   end;
 
 procedure Refuse(const AFileName: string; const ALine: Integer; const AMessage: string);
@@ -380,9 +402,42 @@ end;
 { TRoutineParser }
 
 constructor TRoutineParser.Create(const ASource: TSourceText);
+var
+  Index: Integer;
 begin
   inherited Create;
   FSource := ASource;
+  SetLength(FStates, Length(FSource.Tokens));
+  for Index := 0 to High(FStates) do
+    FStates[Index] := STATE_UNSUPPORTED;
+  FCurrentRoutine := MODULE_CODE;
+end;
+
+function TRoutineParser.State(const AIndex: Integer): Int64;
+begin
+  if (AIndex < 0) or (AIndex >= Length(FStates)) then
+    Exit(STATE_UNSUPPORTED);
+  Result := FStates[AIndex];
+end;
+
+function TRoutineParser.StateOf(const ARoutine, ADepth: Integer; const AInType: Boolean): Int64;
+begin
+  Result := (Int64(ARoutine) + 2) shl 32;
+  if AInType and (ADepth > 0) then
+    Result := Result + TYPE_DEPTH + ADepth
+  else
+    Result := Result + ADepth;
+end;
+
+function TRoutineParser.IsNeutral(const AIndex: Integer): Boolean;
+begin
+  if IsSymbol(AIndex, ';') then
+    Exit(True);
+  if (AIndex < 0) or (AIndex >= Length(FSource.Tokens)) or (FSource.Tokens[AIndex].Kind <> tkWord) or
+    FSource.Tokens[AIndex].Escaped then
+    Exit(False);
+  Result := InList(FSource.Tokens[AIndex].Text, NEUTRAL_WORDS) and
+    not ((FSource.Tokens[AIndex].Text = 'type') and IsSymbol(AIndex - 1, '='));
 end;
 
 procedure TRoutineParser.RefuseAt(const AIndex: Integer; const AMessage: string);
@@ -520,6 +575,7 @@ begin
   InAssembler := False;
   while FPosition < Length(FSource.Tokens) do
   begin
+    FStates[FPosition] := StateOf(FCurrentRoutine, Depth, False);
     if IsWord(FPosition, 'end') then
     begin
       InAssembler := False;
@@ -556,6 +612,7 @@ begin
   TypeDepth := 0;
   while FPosition < Length(FSource.Tokens) do
   begin
+    FStates[FPosition] := StateOf(FCurrentRoutine, TypeDepth, True);
     if TypeDepth > 0 then
     begin
       if IsTypeOpener(FPosition) then
@@ -568,6 +625,21 @@ begin
     if IsRoutineStart(FPosition) then
     begin
       ParseRoutine(ALevel);
+      Continue;
+    end;
+    if IsWord(FPosition, 'uses') then
+    begin
+      // Only unit names, commas and `in` paths: a conditional may choose
+      // units here without changing what the parse sees.
+      Inc(FPosition);
+      while (FPosition < Length(FSource.Tokens)) and not IsSymbol(FPosition, ';') do
+      begin
+        FStates[FPosition] := STATE_USES;
+        Inc(FPosition);
+      end;
+      if FPosition < Length(FSource.Tokens) then
+        FStates[FPosition] := STATE_USES;
+      Inc(FPosition);
       Continue;
     end;
     if IsWord(FPosition, 'begin') or IsWord(FPosition, 'asm') then
@@ -604,7 +676,7 @@ end;
 procedure TRoutineParser.ParseRoutine(const ALevel: Integer);
 var
   Routine: TRoutine;
-  Index: Integer;
+  Index, Outer: Integer;
   Directive: string;
 begin
   Routine := Default(TRoutine);
@@ -645,16 +717,19 @@ begin
     Inc(FPosition)
   else
     RefuseAt(FPosition, 'expected ; after routine header');
+  Index := Length(FRoutines);
   while (FPosition < Length(FSource.Tokens)) and (FSource.Tokens[FPosition].Kind = tkWord) and
     not FSource.Tokens[FPosition].Escaped and
     not InList(FSource.Tokens[FPosition].Text, RESERVED_WORDS) do
   begin
+    // A directive such as `{$IFDEF FPC}inline;{$ENDIF}` leaves the routine's
+    // declaration part where it was.
+    FStates[FPosition] := StateOf(Index, 0, False);
     Directive := FSource.Tokens[FPosition].Text;
     if (Directive = 'forward') or (Directive = 'external') then
       Routine.HasBody := False;
     SkipPastSemicolon;
   end;
-  Index := Length(FRoutines);
   SetLength(FRoutines, Index + 1);
   FRoutines[Index] := Routine;
   if not Routine.HasBody then
@@ -662,11 +737,13 @@ begin
     FRoutines[Index].LastToken := FPosition - 1;
     Exit;
   end;
+  Outer := FCurrentRoutine;
+  FCurrentRoutine := Index;
   ParseDeclarations(ALevel + 1);
   if not (IsWord(FPosition, 'begin') or IsWord(FPosition, 'asm')) then
     RefuseAt(FPosition, 'expected routine body');
-  FRoutines[Index].BodyToken := FPosition;
   SkipCode(0);
+  FCurrentRoutine := Outer;
   Inc(FPosition);
   if not IsSymbol(FPosition, ';') then
     RefuseAt(FPosition, 'expected ; after routine body');
@@ -713,6 +790,7 @@ begin
   end
   else
     RefuseAt(0, 'expected a unit or program');
+  FImplementationStart := FPosition;
   ParseDeclarations(0);
   // The whole module must parse, so no later implementation goes unseen.
   if not (IsWord(FPosition, 'end') and IsSymbol(FPosition + 1, '.') and
@@ -814,13 +892,24 @@ begin
     (ADirective.Argument <> '') and not CharInSet(ADirective.Argument[1], ['+', '-']));
 end;
 
-procedure RefuseMacros(const ASource: TSourceText);
+// The lexer follows Delphi mode, where comments do not nest, and the parse
+// takes names literally. Another mode or a macro could make the compiler read
+// different text.
+procedure RefuseLexingChanges(const ASource: TSourceText);
 var
   Directive: TDirective;
+  Mode: string;
 begin
   for Directive in ASource.Directives do
+  begin
+    Mode := LowerCase(Directive.Argument);
     if (Directive.Name = 'macro') or ((Directive.Name = 'define') and (Pos(':=', Directive.Argument) > 0)) then
       Refuse(ASource.FileName, Directive.Line, 'macros can rename routines and are not supported');
+    if ((Directive.Name = 'mode') and (Mode <> 'delphi') and (Mode <> 'delphiunicode')) or
+      ((Directive.Name = 'modeswitch') and (Pos('nestedcomments', Mode) = 1)) then
+      Refuse(ASource.FileName, Directive.Line, 'only Delphi-mode lexing is supported: {$' +
+        Directive.Name + ' ' + Directive.Argument + '}');
+  end;
 end;
 
 function ResolveInclude(const AIncluder: string; const ADirective: TDirective;
@@ -878,71 +967,65 @@ begin
         Refuse(Included.FileName, Token.Line,
           'included text can declare routines that no reviewed digest covers: ' + Token.Text);
     end;
-    RefuseMacros(Included);
+    RefuseLexingChanges(Included);
     CheckIncludes(Included, AIncludeDirectories, ADepth + 1);
   end;
 end;
 
-// The digest covers every branch of a conditional inside the routine, but the
-// span must end at the same `end` whichever branch the compiler takes. A
-// group must therefore open and close inside the statement part, and leave
-// the block depth unchanged in each branch. Includes inside the routine are
-// refused because their text is outside the digest.
-procedure CheckRoutineDirectives(const ASource: TSourceText; const ARoutine: TRoutine);
+// The parse reads every branch of a conditional, but the compiler reads only
+// one, so branches must not change what the parse sees. In the implementation
+// part each group must stay in one routine's statements, one declaration
+// level or type body, or one uses clause, with the same depth at each of its
+// directives. At declaration level a branch must also begin and end next to a
+// token the parse decides nothing from (`;` or a section keyword). Then every
+// branch choice gives the same routines and spans, and the digest covers
+// every branch inside the reviewed routine.
+procedure CheckConditionals(const ASource: TSourceText; const AParser: TRoutineParser);
+type
+  TGroup = record
+    State: Int64;
+    Enforced: Boolean;
+  end;
 var
   Directive: TDirective;
-  Groups: array of Integer;
-  First, Finish, TokenIndex, Depth: Integer;
-  InAssembler: Boolean;
-  Token: TToken;
+  Groups: array of TGroup;
+  NextToken, ImplementationOffset: Integer;
+  State, Depth: Int64;
+  Enforced: Boolean;
 
   procedure RefuseDirective(const AReason: string);
   begin
-    Refuse(ASource.FileName, Directive.Line, '{$' + Directive.Name + '} ' + AReason + ' in ' + ARoutine.Name);
+    Refuse(ASource.FileName, Directive.Line, '{$' + Directive.Name + '} ' + AReason);
   end;
 
 begin
-  First := ASource.Tokens[ARoutine.FirstToken].Start;
-  Finish := ASource.Tokens[ARoutine.LastToken].Finish;
   Groups := nil;
-  TokenIndex := ARoutine.BodyToken;
-  Depth := 0;
-  InAssembler := False;
+  NextToken := 0;
+  // A directive between `implementation` and its first token belongs to it.
+  ImplementationOffset := ASource.Tokens[AParser.ImplementationStart - 1].Finish;
   for Directive in ASource.Directives do
   begin
-    if (Directive.Start < First) or (Directive.Start >= Finish) then
-      Continue;
-    if IsIncludeDirective(Directive) then
-      RefuseDirective('includes text that no reviewed digest covers');
     if not InList(Directive.Name, CONDITIONAL_DIRECTIVES) then
       Continue;
-    if Directive.Start < ASource.Tokens[ARoutine.BodyToken].Start then
-      RefuseDirective('is only supported in the statement part');
-    while (TokenIndex <= ARoutine.LastToken) and (ASource.Tokens[TokenIndex].Start < Directive.Start) do
+    while (NextToken < Length(ASource.Tokens)) and (ASource.Tokens[NextToken].Start < Directive.Start) do
+      Inc(NextToken);
+    State := AParser.State(NextToken);
+    Enforced := Directive.Start >= ImplementationOffset;
+    if Enforced then
     begin
-      Token := ASource.Tokens[TokenIndex];
-      if (Token.Kind = tkWord) and not Token.Escaped then
-      begin
-        if Token.Text = 'end' then
-        begin
-          InAssembler := False;
-          Dec(Depth);
-        end
-        else if not InAssembler and ((Token.Text = 'begin') or (Token.Text = 'case') or
-          (Token.Text = 'try') or (Token.Text = 'asm')) then
-        begin
-          Inc(Depth);
-          InAssembler := Token.Text = 'asm';
-        end;
-      end;
-      Inc(TokenIndex);
+      if State = STATE_UNSUPPORTED then
+        RefuseDirective('is not supported inside a routine header or directive in a file with a reviewed routine');
+      Depth := State and $FFFFFFFF;
+      if (State <> STATE_USES) and ((Depth = 0) or (Depth > TYPE_DEPTH)) and
+        not AParser.IsNeutral(NextToken - 1) then
+        RefuseDirective('must follow ; or a section keyword at declaration level in a file with a reviewed routine');
     end;
     if (Directive.Name = 'else') or (Directive.Name = 'elseif') or
       (Directive.Name = 'endif') or (Directive.Name = 'ifend') then
     begin
       if Length(Groups) = 0 then
-        RefuseDirective('closes a conditional opened outside the routine');
-      if Groups[High(Groups)] <> Depth then
+        RefuseDirective('has no opening conditional');
+      if Enforced and (not Groups[High(Groups)].Enforced or (Groups[High(Groups)].State <> State)) then
         RefuseDirective('changes the block structure between conditional branches');
       if (Directive.Name = 'endif') or (Directive.Name = 'ifend') then
         SetLength(Groups, Length(Groups) - 1);
@@ -950,12 +1033,26 @@ begin
     else
     begin
       SetLength(Groups, Length(Groups) + 1);
-      Groups[High(Groups)] := Depth;
+      Groups[High(Groups)].State := State;
+      Groups[High(Groups)].Enforced := Enforced;
     end;
   end;
   if Length(Groups) > 0 then
-    Refuse(ASource.FileName, ASource.Tokens[ARoutine.LastToken].Line,
-      'a conditional opened in ' + ARoutine.Name + ' closes after it');
+    Refuse(ASource.FileName, 0, 'a conditional is not closed');
+end;
+
+// An include inside the routine adds text that no digest covers.
+procedure RefuseRoutineIncludes(const ASource: TSourceText; const ARoutine: TRoutine);
+var
+  Directive: TDirective;
+  First, Finish: Integer;
+begin
+  First := ASource.Tokens[ARoutine.FirstToken].Start;
+  Finish := ASource.Tokens[ARoutine.LastToken].Finish;
+  for Directive in ASource.Directives do
+    if (Directive.Start >= First) and (Directive.Start < Finish) and IsIncludeDirective(Directive) then
+      Refuse(ASource.FileName, Directive.Line, '{$' + Directive.Name +
+        '} includes text that no reviewed digest covers in ' + ARoutine.Name);
 end;
 
 function NormalisedDigest(const ABytes: TBytes; const AStart, AFinish: Integer): string;
@@ -991,13 +1088,14 @@ var
   Parser: TRoutineParser;
   Routine, Found: TRoutine;
   Error: string;
-  Matches, Last, First, Finish: Integer;
+  Matches, Last: Integer;
 begin
   Result := Default(TFPCRoutineSpan);
   Error := ParseSection(ASection, Section);
   if Error <> '' then
     Refuse(ASourceFile, 0, Error + ': ' + ASection);
   Source := LoadSource(ASourceFile);
+  RefuseLexingChanges(Source);
   Found := Default(TRoutine);
   Parser := TRoutineParser.Create(Source);
   try
@@ -1041,18 +1139,17 @@ begin
     if Matches > 1 then
       Refuse(ASourceFile, 0, Format('%d implementations of %s; overloads cannot be told apart',
         [Matches, FPCSectionRoutineName(ASection)]));
+    RefuseRoutineIncludes(Source, Found);
+    CheckConditionals(Source, Parser);
   finally
     Parser.Free;
   end;
-  First := Source.Tokens[Found.FirstToken].Start;
-  Finish := Source.Tokens[Found.LastToken].Finish;
-  CheckRoutineDirectives(Source, Found);
-  RefuseMacros(Source);
   CheckIncludes(Source, AIncludeDirectories, 0);
   Result.Name := Found.Name;
   Result.FirstLine := Source.Tokens[Found.FirstToken].Line;
   Result.LastLine := Source.Tokens[Found.LastToken].Line;
-  Result.Digest := NormalisedDigest(Source.Bytes, First, Finish);
+  Result.Digest := NormalisedDigest(Source.Bytes, Source.Tokens[Found.FirstToken].Start,
+    Source.Tokens[Found.LastToken].Finish);
 end;
 
 end.

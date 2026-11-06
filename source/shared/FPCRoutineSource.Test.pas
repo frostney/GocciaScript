@@ -337,6 +337,9 @@ begin
   Refuse(UnitText(Statements), ROUTINE_SECTION, 'included text can declare routines');
   Refuse(UnitText('{$I local.inc}' + LineEnding + ROUTINE_TEXT), ROUTINE_SECTION,
     'included text can declare routines');
+  WriteText(FDirectory + PathDelim + 'local.inc', '{$mode objfpc}' + LineEnding);
+  Refuse(UnitText('{$I local.inc}' + LineEnding + ROUTINE_TEXT), ROUTINE_SECTION,
+    'only Delphi-mode lexing is supported');
   DeleteFile(FDirectory + PathDelim + 'local.inc');
   Refuse(UnitText(Statements), ROUTINE_SECTION, 'include file not found: local.inc');
 end;
@@ -365,21 +368,47 @@ begin
   Refuse(UnitText('procedure ReviewedRoutine;' + LineEnding + 'begin' + LineEnding + '  begin' +
     LineEnding + '{$IFDEF WINDOWS}' + LineEnding + '  begin' + LineEnding + '{$ELSE}' + LineEnding +
     '  end;' + LineEnding + '{$ENDIF}' + LineEnding + '  end;' + LineEnding + 'end;'), ROUTINE_SECTION,
-    '{$else} changes the block structure between conditional branches in ReviewedRoutine');
+    '{$else} changes the block structure between conditional branches');
+  // Without WINDOWS the compiled body is the one the parse gives to Unused.
   Refuse(UnitText('procedure ReviewedRoutine;' + LineEnding + '{$IFNDEF WINDOWS}' + LineEnding +
     'begin' + LineEnding + 'end;' + LineEnding + 'procedure Unused;' + LineEnding + '{$ENDIF}' +
     LineEnding + 'begin' + LineEnding + '  Exit;' + LineEnding + 'end;'), ROUTINE_SECTION,
-    '{$ifndef} is only supported in the statement part');
+    '{$endif} changes the block structure between conditional branches');
   Refuse(UnitText('{$IFDEF WINDOWS}' + LineEnding + 'procedure ReviewedRoutine;' + LineEnding +
     'begin' + LineEnding + '{$ELSE}' + LineEnding + 'procedure ReviewedRoutine;' + LineEnding +
     'begin' + LineEnding + '  Exit;' + LineEnding + '{$ENDIF}' + LineEnding + 'end;'),
     ROUTINE_SECTION, 'declaration keyword inside a statement block');
   Refuse(UnitText('procedure ReviewedRoutine;' + LineEnding + 'begin' + LineEnding +
     '{$IFDEF WINDOWS}' + LineEnding + '  Exit;' + LineEnding + 'end;' + LineEnding + '{$ENDIF}'),
-    ROUTINE_SECTION, 'a conditional opened in ReviewedRoutine closes after it');
+    ROUTINE_SECTION, '{$endif} changes the block structure between conditional branches');
   Refuse(UnitText('{$IFDEF WINDOWS}' + LineEnding + 'procedure ReviewedRoutine;' + LineEnding +
     'begin' + LineEnding + '{$ENDIF}' + LineEnding + 'end;'), ROUTINE_SECTION,
-    '{$endif} closes a conditional opened outside the routine');
+    '{$endif} changes the block structure between conditional branches');
+  // A dead branch that opens a type hides the compiled routine inside it,
+  // so the parse would hash the reviewed copy in the other dead branch.
+  Refuse(UnitText('{$IFDEF NEVER}' + LineEnding + 'type' + LineEnding + '  TNever = record' +
+    LineEnding + '{$ENDIF}' + LineEnding + 'procedure ReviewedRoutine;' + LineEnding + 'begin' +
+    LineEnding + '  Halt;' + LineEnding + 'end;' + LineEnding + '{$IFDEF NEVER}' + LineEnding +
+    'procedure ReviewedRoutine;' + LineEnding + 'begin' + LineEnding + 'end;' + LineEnding + '{$ENDIF}'),
+    ROUTINE_SECTION, '{$endif} must follow ; or a section keyword at declaration level');
+  // Every branch's implementation counts, so a dead reviewed copy is ambiguous.
+  Refuse(UnitText('{$IFDEF NEVER}' + LineEnding + ROUTINE_TEXT + LineEnding + '{$ELSE}' + LineEnding +
+    StringReplace(ROUTINE_TEXT, '#39', '#40', []) + LineEnding + '{$ENDIF}'), ROUTINE_SECTION,
+    '2 implementations');
+  Refuse(UnitText('procedure ReviewedRoutine; {$IFDEF FPC}external ''library''{$ENDIF};' + LineEnding +
+    ROUTINE_TEXT), ROUTINE_SECTION, '{$endif} is not supported inside a routine header');
+  // Common declaration-level choices keep the parse the same.
+  Expected := Digest('procedure ReviewedRoutine; {$IFDEF FPC}inline;{$ENDIF}' + LineEnding + 'begin' +
+    LineEnding + 'end;');
+  Expect<string>(Locate(UnitText('uses' + LineEnding + '  SysUtils{$IFDEF WINDOWS}, Windows{$ENDIF};' +
+    LineEnding + LineEnding + 'const' + LineEnding + '{$IFDEF CPU64}' + LineEnding + '  Size = 8;' +
+    LineEnding + '{$ELSE}' + LineEnding + '  Size = 4;' + LineEnding + '{$ENDIF}' + LineEnding +
+    'type' + LineEnding + '  TRecord = record' + LineEnding + '    Value: Integer;' + LineEnding +
+    '{$IFDEF DEBUG}' + LineEnding + '    Name: string;' + LineEnding + '{$ENDIF}' + LineEnding +
+    '  end;' + LineEnding + LineEnding + 'function Other: Boolean; {$IFDEF FPC}inline;{$ENDIF}' +
+    LineEnding + 'begin' + LineEnding + '  Result := True;' + LineEnding + 'end;' + LineEnding +
+    'procedure ReviewedRoutine; {$IFDEF FPC}inline;{$ENDIF}' + LineEnding + 'begin' + LineEnding +
+    'end;'), ROUTINE_SECTION).Digest).ToBe(Expected);
   // A conditional around the whole routine stays outside its text.
   Expect<string>(Locate(UnitText('{$IFDEF WINDOWS}' + LineEnding + ROUTINE_TEXT + LineEnding +
     '{$ENDIF}'), ROUTINE_SECTION).Digest).ToBe(Digest(ROUTINE_TEXT));
@@ -413,6 +442,15 @@ begin
     ROUTINE_SECTION, 'expected ; after routine body');
   Refuse('{$MACRO ON}' + LineEnding + UnitText(ROUTINE_TEXT), ROUTINE_SECTION, 'macros');
   Refuse(UnitText('{$DEFINE ReviewedRoutine:=Other}' + LineEnding + ROUTINE_TEXT), ROUTINE_SECTION, 'macros');
+  // Object Pascal mode nests comments, so the lexer would end one too early.
+  Refuse('{$mode objfpc}' + LineEnding + UnitText(ROUTINE_TEXT), ROUTINE_SECTION,
+    'only Delphi-mode lexing is supported: {$mode objfpc}');
+  Refuse('{$modeswitch nestedcomments}' + LineEnding + UnitText(ROUTINE_TEXT), ROUTINE_SECTION,
+    'only Delphi-mode lexing is supported');
+  Locate('{$mode delphiunicode}' + LineEnding + UnitText(ROUTINE_TEXT), ROUTINE_SECTION);
+  // A conditional opened in the interface must not close in the implementation.
+  Refuse(UnitText(ROUTINE_TEXT + LineEnding + '{$ENDIF}', '{$IFDEF NEVER}' + LineEnding),
+    ROUTINE_SECTION, '{$endif} changes the block structure between conditional branches');
 end;
 
 procedure TFPCRoutineSourceTests.TestDeclarations;
