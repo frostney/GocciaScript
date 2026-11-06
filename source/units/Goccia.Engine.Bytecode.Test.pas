@@ -11,13 +11,13 @@ uses
   TestingPascalLibrary,
 
   Goccia.Bytecode.Binary,
+  Goccia.Builtins.GlobalEval,
   Goccia.Bytecode.Module,
   Goccia.Engine,
   Goccia.Modules.ContentProvider,
   Goccia.Modules.Loader,
   Goccia.Sandbox.Modules,
   Goccia.SourcePipeline,
-  Goccia.Test262.Host,
   Goccia.TestSetup,
   Goccia.Values.Error,
   Goccia.Values.ObjectValue,
@@ -761,14 +761,9 @@ const
 var
   Source: TStringList;
   Engine: TGocciaEngine;
-  Host: TGocciaTest262Host;
-  HostOptions: TGocciaTest262EngineOptions;
   Bytes: TBytes;
   Linked, Buffered: Boolean;
 begin
-  HostOptions := Default(TGocciaTest262EngineOptions);
-  HostOptions.Compatibility := [cfVar];
-  HostOptions.SourceType := stModule;
   for Linked := False to True do
   begin
     Bytes := CompileBuffer(PROGRAM_SOURCE, 'memory:/compile/eval.mjs',
@@ -780,11 +775,8 @@ begin
         if not Buffered then
           Source.Text := PROGRAM_SOURCE;
         Engine := TGocciaEngine.Create(RuntimeAddress('eval.mjs'), Source);
-        Host := nil;
         try
-          Host := TGocciaTest262Host.Create(HostOptions);
-          Host.ConfigureHostEnvironment(Engine.HostEnvironment);
-          Host.Install(Engine);
+          EnableEval(Engine);
           Engine.SourceType := stModule;
           Engine.Compatibility := [cfVar];
           if Buffered then
@@ -794,7 +786,6 @@ begin
           Expect<string>(TGocciaObjectValue(Engine.Realm.GlobalObject)
             .GetProperty('answer').ToStringLiteral.Value).ToBe('42');
         finally
-          Host.Free;
           Engine.Free;
         end;
       finally

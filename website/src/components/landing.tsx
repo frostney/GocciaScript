@@ -1141,7 +1141,8 @@ export function Landing({
               are enabled by default; every standard core form disabled by the
               recommended profile has an explicit compatibility path. Normal
               hosts do not install <code className={inlineCodeClass}>eval</code>
-              , which is exposed only by the private test262 conformance host.
+              ; an embedder opts in through the engine&apos;s{" "}
+              <code className={inlineCodeClass}>EnableEval</code> option.
             </p>
             <p className="compat-note">
               <Link href="/compatibility" className="link-button">
