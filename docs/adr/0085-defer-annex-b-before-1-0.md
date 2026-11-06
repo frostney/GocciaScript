@@ -5,6 +5,11 @@
 **Issue:** [#853](https://github.com/frostney/GocciaScript/issues/853)
 **Supersedes:** [ADR 0061](0061-annex-b-labelled-functions.md) as a general Annex B policy statement; ADR 0061 remains the historical record for the labelled-function implementation boundary.
 
+**Superseded by [ADR 0177](0177-annex-b-is-part-of-the-test262-conformance-target.md):** the conformance
+target is now 100% of test262, Annex B included, so `annexB` joins the default
+categories and is a release gate from 0.18.0, and new Annex B surfaces go
+behind a compatibility flag.
+
 GocciaScript will not pursue broad ECMA-262 Annex B support for this release or before 1.0. Annex B is a web-browser legacy compatibility annex, not part of the core ECMAScript language, and ECMA-262 discourages non-browser implementations from adding those features unless they must run the same legacy web code as browsers. That does not match the current product direction in [VISION.md](../../VISION.md): sandbox-first execution for agents, embeddable desktop runtimes, and no full browser host environment today.
 
 The Annex B test262 baseline from #853 is retained as a measurement snapshot, not a release target: bytecode mode ran 1086 Annex B tests with 476 pass, 602 fail, 8 wrapper-infra failures, and 0 timeouts; interpreted mode ran the same 1086 tests with 495 pass, 583 fail, 8 wrapper-infra failures, and 0 timeouts. The existing passing surface mostly comes from features that were already implemented for broader ECMAScript compatibility or as targeted shims, such as `String.prototype.substr`, object legacy accessors, `Date.prototype.toGMTString`, and sloppy block-function behavior behind existing compatibility flags.

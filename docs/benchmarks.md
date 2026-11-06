@@ -12,7 +12,7 @@
 - **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, and Node without mixing them into the benchmark-runner corpus
 - **Work and placement** — `--counters` records instructions retired and instruction-cache, iTLB and branch misses per Goccia sample through Linux `perf_event`, and `--fresh-copies` samples page placements, so an A/B tells work from code layout
 - **JetStream 3 reference lane** — `scripts/jetstream-driver.js` runs a frozen, shell-portable subset of the pinned JetStream 3 corpus under the same three engines while preserving upstream workload source
-- **Performance Barometer** — Main-branch AWFY and JetStream reports feed the unified `/performance` dashboard with version-bounded history and visible failed-run gaps
+- **Performance Barometer** — Main-branch AWFY and JetStream reports feed the unified `/performance` dashboard with version-bounded history and visible failed-run gaps; the AWFY and JetStream QuickJS ratios are what the first performance target is judged on ([ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md))
 - **Web Tooling Goccia lane** — `scripts/web-tooling-driver.js` runs every pinned V8 Web Tooling workload under GocciaScript only and publishes retained JSON artifacts
 
 GocciaScript includes a benchmark runner for measuring execution performance. Benchmarks live in the `benchmarks/` directory and import the benchmark API from `"goccia:microbench"`.
@@ -549,9 +549,10 @@ profile evidence for the mechanism.
 ## JetStream 3 Reference Lane
 
 The JetStream lane supplements AWFY with a frozen set of modern, pure-JavaScript
-workloads from [`WebKit/JetStream`](https://github.com/WebKit/JetStream). It is a
-directional reference-engine barometer, not an attempt to reproduce the official
-browser suite or rank runtimes with different goals.
+workloads from [`WebKit/JetStream`](https://github.com/WebKit/JetStream). It is
+one of the two lanes (with AWFY) that measure the interpreter against QuickJS for
+the first performance target ([ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)), not an attempt to
+reproduce the official browser suite.
 
 ```bash
 # List the frozen workload set

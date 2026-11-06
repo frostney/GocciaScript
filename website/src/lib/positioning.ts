@@ -16,7 +16,7 @@ export const ECMASCRIPT_SCOPE_QUESTION =
   "Does GocciaScript implement only a subset of JavaScript?";
 
 export const ECMASCRIPT_SCOPE_ANSWER =
-  "GocciaScript implements core ECMAScript and publishes generated test262 results. Its recommended profile keeps var, traditional function syntax, loose equality, labels, traditional for loops, for...in, while/do...while, ASI, arguments, and non-strict Script semantics disabled by default, but each has an explicit compatibility path. Those defaults are product policy, not the implementation ceiling. Normal hosts do not install eval; an embedder opts in through the engine's EnableEval option. Broad Annex B browser compatibility is not a pre-1.0 target.";
+  "GocciaScript implements core ECMAScript and publishes generated test262 results. Its recommended profile keeps var, traditional function syntax, loose equality, labels, traditional for loops, for...in, while/do...while, ASI, arguments, and non-strict Script semantics disabled by default, but each has an explicit compatibility path. Those defaults are product policy, not the implementation ceiling. Normal hosts do not install eval; an embedder opts in through the engine's EnableEval option. Annex B's legacy browser features are part of the test262 conformance target; new ones will go behind an opt-in compatibility flag.";
 
 export const TYPE_ANNOTATIONS_QUESTION =
   "How do type annotations and --strict-types relate?";
