@@ -105,9 +105,11 @@ See [docs/testing.md](docs/testing.md) for the full testing guide including dire
 ### 4. Language Profile and Restrictions
 
 GocciaScript's recommended profile deliberately keeps selected implemented
-ECMAScript forms behind compatibility or unsafe opt-ins, while other surfaces
-such as broad Annex B support remain deferred. Do **not** remove those gates or
-add deferred features without an explicit project decision. See
+ECMAScript forms behind compatibility or unsafe opt-ins, and new Annex B
+surfaces go behind a compatibility flag
+([ADR 0177](docs/adr/0177-annex-b-is-part-of-the-test262-conformance-target.md)).
+Do **not** remove those gates or add deferred features without an explicit
+project decision. See
 [docs/language.md](docs/language.md) for the implementation, profile, and
 compatibility-path detail.
 
