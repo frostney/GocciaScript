@@ -14,10 +14,11 @@
 //
 // $262 is the only global binding this file creates.  Everything else lives
 // inside the function below, because a test may declare any other name at
-// its top level: the annexB emulates-undefined tests start with
-// `var IsHTMLDDA = $262.IsHTMLDDA;`, and a global `const IsHTMLDDA` here
-// would make that a SyntaxError (ES2026 §16.1.7 GlobalDeclarationInstantiation
-// step 4.a: a var name may not already be a global lexical binding).
+// its top level: the annexB emulates-undefined tests declare IsHTMLDDA there,
+// most as `var IsHTMLDDA = $262.IsHTMLDDA;` and some with const, and a global
+// `const IsHTMLDDA` here would make either a SyntaxError (ES2026 §16.1.7
+// GlobalDeclarationInstantiation steps 3.a and 4.a: no global lexical binding
+// may already have the name).
 
 if (typeof Goccia === "undefined" || Goccia.test262Host !== true) {
   throw new Error("$262 host hooks require GocciaTest262Runner");

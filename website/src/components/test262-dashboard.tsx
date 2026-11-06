@@ -29,7 +29,6 @@ const CATEGORY_COLORS: Record<string, string | undefined> = {
 };
 
 const GENERATED_CATEGORY_COLORS = [
-  "#2f6f73",
   "#8a6f2a",
   "#9a5d7a",
   "#5f6ea6",

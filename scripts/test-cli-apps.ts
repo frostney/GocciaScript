@@ -1095,10 +1095,11 @@ await section("test262 runner: computed imports and importValue may read the sui
 });
 
 await section("test262 runner: annexB runs by default and $262 leaves a test's top-level names free...", async () => {
-  // The annexB emulates-undefined tests start with `var IsHTMLDDA =
-  // $262.IsHTMLDDA;`. A global lexical IsHTMLDDA from the runner's $262.js
-  // would make that a SyntaxError (ES2026 §16.1.7 step 4.a), so $262 is the
-  // only global binding the harness may create (#2069).
+  // The annexB emulates-undefined tests declare IsHTMLDDA at the top level,
+  // with var or const. A global lexical IsHTMLDDA from the runner's $262.js
+  // would make that a SyntaxError (ES2026 §16.1.7 steps 3.a and 4.a), so
+  // $262 is the only global binding the harness may create (#2069). The host
+  // object is also callable and returns null, as INTERPRETING.md requires.
   const tmp = makeTmp();
   try {
     const suite = join(tmp, "suite");
@@ -1114,12 +1115,19 @@ await section("test262 runner: annexB runs by default and $262 leaves a test's t
       "---*/",
       "var IsHTMLDDA = $262.IsHTMLDDA;",
       "var AbstractModuleSource = $262.AbstractModuleSource;",
-      "var installRealm262 = 0;",
-      "var host262 = 0;",
       "if (typeof IsHTMLDDA !== 'undefined') throw new Error('typeof is ' + typeof IsHTMLDDA);",
       "if (!(IsHTMLDDA == null)) throw new Error('IsHTMLDDA should be loosely null');",
       "if (IsHTMLDDA === undefined) throw new Error('IsHTMLDDA should be an object');",
+      "if (IsHTMLDDA() !== null || IsHTMLDDA('') !== null) throw new Error('IsHTMLDDA() should return null');",
       "if (typeof AbstractModuleSource !== 'function') throw new Error('AbstractModuleSource');",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "const-isHTMLDDA.js"), [
+      "/*---",
+      "features: [IsHTMLDDA]",
+      "---*/",
+      "const IsHTMLDDA = $262.IsHTMLDDA;",
+      "if (!(IsHTMLDDA == undefined)) throw new Error('IsHTMLDDA should be loosely undefined');",
       "",
     ].join("\n"));
     writeFileSync(join(tests, "no-harness-globals.js"), [
@@ -1133,8 +1141,6 @@ await section("test262 runner: annexB runs by default and $262 leaves a test's t
       "  }",
       "  if (leaked) throw new Error('$262.js declared a global ' + name);",
       "}",
-      "if (typeof $262.IsHTMLDDA !== 'undefined' || $262.IsHTMLDDA === undefined)",
-      "  throw new Error('$262.IsHTMLDDA should still be the [[IsHTMLDDA]] object');",
       "",
     ].join("\n"));
     const out = join(tmp, "annexb.json");
@@ -1146,7 +1152,7 @@ await section("test262 runner: annexB runs by default and $262 leaves a test's t
     const report = JSON.parse(readFileSync(out, "utf8"));
     const failures = report.results.filter((r: { status: string }) => r.status !== "PASS");
     // Each unflagged file runs once per mode.
-    if (proc.exitCode !== 0 || report.summary.totalRun !== 4 || failures.length !== 0)
+    if (proc.exitCode !== 0 || report.summary.totalRun !== 6 || failures.length !== 0)
       throw new Error(`annexB fixtures should run by default and pass in both modes, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
     if (!report.run.categories.includes("annexB") ||
         !report.summary.byCategory.some((c: { category: string }) => c.category === "annexB"))

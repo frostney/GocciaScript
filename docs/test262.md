@@ -330,9 +330,11 @@ Bodies see only the identifiers stock test262 expects:
   `AbstractModuleSource`, and `IsHTMLDDA`. `$262` is the only global
   binding `scripts/test262_harness/$262.js` creates, so a test may declare
   any other name at its top level. The `annexB` emulates-undefined tests
-  begin with `var IsHTMLDDA = $262.IsHTMLDDA;`, which a global lexical
-  `IsHTMLDDA` would turn into a `SyntaxError` (ES2026 §16.1.7
-  GlobalDeclarationInstantiation, step 4.a).
+  declare `IsHTMLDDA` there, most as `var IsHTMLDDA = $262.IsHTMLDDA;`,
+  which a global lexical `IsHTMLDDA` would turn into a `SyntaxError`
+  (ES2026 §16.1.7 GlobalDeclarationInstantiation, steps 3.a and 4.a).
+  `$262.IsHTMLDDA` is callable and returns `null`, as `INTERPRETING.md`
+  requires.
 - `$262.agent` helpers used by Atomics tests: `start`, `broadcast`,
   `receiveBroadcast`, `report`, `getReport`, `sleep`, `monotonicNow`, and
   `leaving`
@@ -442,7 +444,8 @@ conformance failures, not as wrapper-infra failures.
 Every test runs with ASI, `var`, `function` declarations, traditional `for`,
 `while`/`do...while`, loose equality, labels, `for...in`, and implicit
 `arguments` objects enabled, because test262 uses those forms across both
-harness helpers and test bodies. The test's source type and
+harness helpers and test bodies. That flag set is `TEST262_COMPATIBILITY` in
+`GocciaTest262Runner.dpr`, and `--eval-host` probes use it too. The test's source type and
 strictness still decide strict-mode semantics; `--compat-arguments-object`
 only enables the implicit `arguments` binding. Strictness and parameter-list
 shape decide whether that binding is unmapped or mapped.
@@ -474,9 +477,8 @@ staging`, every top-level category in `suite/test`.
   and a release gate from 0.18.0. It runs by default and counts toward
   the published pass rate and the PR comparison like any other category.
   New Annex B surfaces will go behind a compatibility flag, added by the
-  0.18.0 Annex B work, that the runner turns on by adding it to
-  `TEST262_COMPATIBILITY` in `GocciaTest262Runner.dpr`, the flag set every
-  test262 engine runs with. See
+  0.18.0 Annex B work, that the runner turns on by adding it to its
+  [flag set](#strict-mode). See
   [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 - `intl402` covers Intl APIs (ECMA-402); tests exercise
   `Intl.getCanonicalLocales`, constructors, and formatting operations.

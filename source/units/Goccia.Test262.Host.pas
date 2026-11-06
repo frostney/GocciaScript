@@ -94,8 +94,17 @@ type
   TTest262AgentThread = class;
   TTest262HostImplementation = class;
 
-  TGocciaTest262IsHTMLDDAValue = class(TGocciaObjectValue)
+  { $262.IsHTMLDDA as test262's INTERPRETING.md defines it: an object with
+    an [[IsHTMLDDA]] internal slot (ES2026 §B.3.6) that returns null when
+    called with no arguments or with "". The String.prototype method tests
+    pass it as a custom matcher and read it through GetMethod, which throws
+    unless it is callable. }
+  TGocciaTest262IsHTMLDDAValue = class(TGocciaNativeFunctionValue)
+  private
+    function ReturnNull(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   public
+    constructor CreateHost;
     function HasHTMLDDAInternalSlot: Boolean; override;
     function TypeOf: string; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
@@ -250,11 +259,23 @@ begin
   Test262Object.AssignProperty('abstractModuleSourcePrototype',
     TGocciaModuleSourceValue.SharedPrototype);
   Test262Object.AssignProperty('isHTMLDDA',
-    TGocciaTest262IsHTMLDDAValue.Create);
+    TGocciaTest262IsHTMLDDAValue.CreateHost);
   Test262Object.AssignProperty('agent', AHost.CreateAgentObject);
   AEngine.GocciaGlobal.AssignProperty('test262', Test262Object);
   AEngine.RefreshGlobalThis;
   InstallTest262EvalGlobal(AEngine, AEvalHost);
+end;
+
+constructor TGocciaTest262IsHTMLDDAValue.CreateHost;
+begin
+  inherited CreateWithoutPrototype(ReturnNull, '', 0);
+end;
+
+function TGocciaTest262IsHTMLDDAValue.ReturnNull(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaNullLiteralValue.NullValue;
 end;
 
 function TGocciaTest262IsHTMLDDAValue.HasHTMLDDAInternalSlot: Boolean;
