@@ -49,8 +49,9 @@ realm's `%eval%` is what makes a call written `eval(...)` a direct eval
 (§13.3.6.1) at the VM call site, by the identity check from
 [ADR 0134](0134-direct-eval-compiles-as-a-closure-of-its-call-site.md); the
 realm keeps the function, so that check still holds after a script replaces or
-deletes the global. Any other call is an indirect eval (§19.2.1) and runs in
-the global scope.
+deletes the global. Any other call of the installed `%eval%` is an indirect
+eval (§19.2.1) and runs in the global scope; a function a script puts in
+`globalThis.eval`'s place is called as an ordinary function.
 
 ### No CLI flag and no config key
 
