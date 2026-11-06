@@ -30,8 +30,8 @@ type
 
   { The goal symbol an entry's source is parsed and run with (ES2026 §16.1
     Script, §16.2 Module). stDetect leaves it to the source (ADR 0140): a
-    top-level import or export declaration makes it a Module, and anything
-    else a Script. A parse settles it; see
+    top-level import or export declaration or valid top-level await makes
+    it a Module; ambiguous await may fall back to Script. A parse settles it; see
     TGocciaSourcePipelineResult.SourceType. }
   TGocciaSourceType = (stScript, stModule, stDetect);
 
@@ -633,7 +633,8 @@ function ParseSourceWithGoal(const ASource: TStringList;
   const AFileName: string;
   const AOptions: TGocciaSourcePipelineOptions;
   const ADeclaredPrivateNames: TStrings;
-  out AParseAsModule: Boolean): TGocciaSourcePipelineResult;
+  out AParseAsModule, AAmbiguousAwait: Boolean;
+  const AScriptAwaitFallback: Boolean = False): TGocciaSourcePipelineResult;
 var
   SourceText, OriginalSourceText: string;
   Lexer: TGocciaLexer;
@@ -647,6 +648,7 @@ var
   OrigLine, OrigCol, I: Integer;
 begin
   AParseAsModule := False;
+  AAmbiguousAwait := False;
   Result := TGocciaSourcePipelineResult.Create;
   try
     StartTime := GetNanoseconds;
@@ -690,6 +692,7 @@ begin
           Lexer.SourceLines);
         BuildParserOptionsForSourcePipeline(AOptions, ParserOptions);
         ParserOptions.DetectModuleGoal := AOptions.SourceType = stDetect;
+        ParserOptions.ScriptAwaitFallback := AScriptAwaitFallback;
         Parser.ApplyOptions(ParserOptions);
         try
           ParseStart := GetNanoseconds;
@@ -760,6 +763,7 @@ begin
               OrigLine, OrigCol, ParserWarning.Line, ParserWarning.Column);
           end;
         finally
+          AAmbiguousAwait := Parser.AmbiguousTopLevelAwait;
           Parser.Free;
         end;
       finally
@@ -786,23 +790,61 @@ class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
   const ADeclaredPrivateNames: TStrings): TGocciaSourcePipelineResult;
 var
   ModuleOptions: TGocciaSourcePipelineOptions;
-  ParseAsModule: Boolean;
+  ParseAsModule, AmbiguousAwait, RetryAmbiguousAwait: Boolean;
   DetectLexTime, DetectParseTime: Int64;
 begin
-  Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
-    ADeclaredPrivateNames, ParseAsModule);
+  try
+    Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
+      ADeclaredPrivateNames, ParseAsModule, AmbiguousAwait);
+  except
+    on E: TGocciaSyntaxError do
+    begin
+      if (AOptions.SourceType <> stDetect) or not AmbiguousAwait then
+        raise;
+      // Only the ambiguous top-level await reading permits a Script retry.
+      // If that also fails, preserve the first (Module reading) diagnostic.
+      try
+        Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
+          ADeclaredPrivateNames, ParseAsModule, RetryAmbiguousAwait, True);
+      except
+        on ScriptError: TGocciaSyntaxError do
+          Result := nil;
+      end;
+      if not Assigned(Result) then
+        raise;
+      Exit;
+    end;
+  end;
   if not ParseAsModule then
     Exit;
-  { Only a detected Module under --compat-non-strict-mode parses twice: the
-    first parse was sloppy, and sloppy code is not a strict Module's. The
-    reported lex and parse times cover both passes. }
+  { A detected Module under --compat-non-strict-mode needs a strict parse.
+    Only ambiguous await may fall back to Script if that strict parse fails. }
   DetectLexTime := Result.FLexTimeNanoseconds;
   DetectParseTime := Result.FParseTimeNanoseconds;
   Result.Free;
   ModuleOptions := AOptions;
   ModuleOptions.SourceType := stModule;
-  Result := ParseSourceWithGoal(ASource, AFileName, ModuleOptions,
-    ADeclaredPrivateNames, ParseAsModule);
+  try
+    Result := ParseSourceWithGoal(ASource, AFileName, ModuleOptions,
+      ADeclaredPrivateNames, ParseAsModule, RetryAmbiguousAwait);
+  except
+    on E: TGocciaSyntaxError do
+    begin
+      if (AOptions.SourceType <> stDetect) or
+         not (cfNonStrictMode in AOptions.Compatibility) or not AmbiguousAwait then
+        raise;
+      // The strict Module diagnostic wins if Script also fails.
+      try
+        Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
+          ADeclaredPrivateNames, ParseAsModule, RetryAmbiguousAwait, True);
+      except
+        on ScriptError: TGocciaSyntaxError do
+          Result := nil;
+      end;
+      if not Assigned(Result) then
+        raise;
+    end;
+  end;
   Inc(Result.FLexTimeNanoseconds, DetectLexTime);
   Inc(Result.FParseTimeNanoseconds, DetectParseTime);
 end;

@@ -26,6 +26,9 @@ type
     procedure TestModuleImportDeclarationsParseInLinearTime;
     procedure TestModuleEarlyErrorNamesTheFirstImportInSourceOrder;
     procedure TestModuleEarlyErrorNamesTheFirstVarInSourceOrder;
+    procedure TestAwaitSourceGoal;
+    procedure TestAwaitModuleError;
+    procedure TestSloppyAwaitFallback;
   public
     procedure SetupTests; override;
   end;
@@ -55,6 +58,9 @@ end;
 
 procedure TSourcePipelineTests.SetupTests;
 begin
+  Test('Sloppy ambiguous await falls back after strict Module failure', TestSloppyAwaitFallback);
+  Test('Ambiguous bare await selects Module', TestAwaitSourceGoal);
+  Test('Failed await fallback preserves Module error', TestAwaitModuleError);
   Test('Module const declarations parse in linear time',
     TestModuleConstDeclarationsParseInLinearTime);
   Test('Module let declarations parse in linear time',
@@ -148,6 +154,79 @@ procedure TSourcePipelineTests.TestModuleImportDeclarationsParseInLinearTime;
 begin
   ExpectModuleParseLinear('import { x as a%0:d } from "./m.js";',
     'const a%0:d = x;');
+end;
+
+procedure TSourcePipelineTests.TestAwaitSourceGoal;
+var
+  Lines: TStringList;
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaSourcePipelineResult;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.Text := 'await[0];';
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.SourceType := stDetect;
+    Parsed := TGocciaSourcePipeline.Parse(Lines, '<test>', Options);
+    try
+      Expect<Boolean>(Parsed.SourceType = stModule).ToBe(True);
+    finally
+      Parsed.Free;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TSourcePipelineTests.TestSloppyAwaitFallback;
+var
+  Lines: TStringList;
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaSourcePipelineResult;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.Text := 'globalThis.await = {0: 1}; await[0]; delete missing;';
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.SourceType := stDetect;
+    Options.Compatibility := [cfNonStrictMode];
+    Parsed := TGocciaSourcePipeline.Parse(Lines, '<test>', Options);
+    try
+      Expect<Boolean>(Parsed.SourceType = stScript).ToBe(True);
+    finally
+      Parsed.Free;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TSourcePipelineTests.TestAwaitModuleError;
+var
+  Lines: TStringList;
+  Options: TGocciaSourcePipelineOptions;
+  Goal: TGocciaSourceType;
+  Message: string;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.Text := 'const await = () => 1; await(); export {};';
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    for Goal in [stModule, stDetect] do
+    begin
+      Options.SourceType := Goal;
+      Message := '';
+      try
+        TGocciaSourcePipeline.Parse(Lines, '<test>', Options).Free;
+      except
+        on E: TGocciaSyntaxError do
+          Message := E.Message;
+      end;
+      Expect<string>(Message).ToBe('Module code must not use await as an identifier');
+    end;
+  finally
+    Lines.Free;
+  end;
 end;
 
 function EarlyErrorOf(const ASource: string;
