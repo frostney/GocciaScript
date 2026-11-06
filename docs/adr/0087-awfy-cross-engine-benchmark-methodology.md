@@ -77,3 +77,5 @@ Consequences:
 - Strict-types probes are Goccia-only because type annotations are not portable
   JavaScript syntax for Node or QuickJS; they are paired with untyped probes for
   cross-engine context.
+
+**Superseded in part by [ADR 0178](0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md):** AWFY samples are timed warm, engines alternate their order from one repetition to the next over six repetitions, and `node-jitless` and `jsc` (JavaScriptCore with its JIT off) run beside QuickJS and Node.js.

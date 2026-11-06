@@ -8,7 +8,11 @@ import {
   jetStreamBlobReportPathForArtifactId,
   publishJetStreamReportsToBlob,
 } from "../src/lib/jetstream-blob-store";
-import { currentRunMetadata, timestampFromEnv } from "./lib/report-publishing";
+import {
+  currentRunMetadata,
+  requiredReportEngines,
+  timestampFromEnv,
+} from "./lib/report-publishing";
 
 type EngineStats = {
   ok?: number;
@@ -29,10 +33,11 @@ export type JetStreamReport = {
       };
     };
     engines?: Array<{ name?: unknown; version?: unknown }>;
-    options?: { repetitions?: unknown };
+    options?: { repetitions?: unknown; engineOrder?: unknown };
   };
   targets?: Array<{
     name?: unknown;
+    iterations?: unknown;
     summary?: {
       engineStats?: Record<string, EngineStats>;
       checksumAgreement?: { ok?: unknown };
@@ -45,6 +50,22 @@ function finiteRatio(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : null;
+}
+
+// The engine order and per-target iteration counts can change without a
+// driver-version bump, so the trend line also breaks on this key. Reports
+// without a recorded engine order (driver 1) have none.
+function protocolKeyFromReport(report: JetStreamReport): string | null {
+  const engineOrder = report.metadata?.options?.engineOrder;
+  if (typeof engineOrder !== "string") return null;
+  const targets = (Array.isArray(report.targets) ? report.targets : [])
+    .filter(
+      (target): target is typeof target & { name: string } =>
+        typeof target.name === "string",
+    )
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map((target) => `${target.name}:${target.iterations}`);
+  return `${engineOrder}|${targets.join(",")}`;
 }
 
 export function summaryFromReport(report: JetStreamReport) {
@@ -63,7 +84,7 @@ export function summaryFromReport(report: JetStreamReport) {
   const missingWorkloadCount = targetNames.filter(
     (name) => !reportedTargetNames.includes(name),
   ).length;
-  const requiredEngines = ["goccia", "qjs", "node"];
+  const requiredEngines = requiredReportEngines(report.metadata?.engines);
   const failedWorkloadCount =
     missingWorkloadCount +
     targets.filter((target) => {
@@ -103,6 +124,10 @@ export function summaryFromReport(report: JetStreamReport) {
     referenceRatios: {
       quickjs: finiteRatio(report.geomeanRatios?.goccia_over_qjs),
       node: finiteRatio(report.geomeanRatios?.goccia_over_node),
+      nodeJitless: finiteRatio(
+        report.geomeanRatios?.["goccia_over_node-jitless"],
+      ),
+      jsc: finiteRatio(report.geomeanRatios?.goccia_over_jsc),
     },
     engineVersions,
     corpusCommit:
@@ -114,6 +139,7 @@ export function summaryFromReport(report: JetStreamReport) {
         ? report.metadata.driver.version
         : null,
     targetNames,
+    protocolKey: protocolKeyFromReport(report),
   };
 }
 
