@@ -35,7 +35,7 @@ An engine starts with modern defaults: the recommended language profile (arrow f
 - **`EnableShadowRealm`** — The `ShadowRealm` global (`--unsafe-shadowrealm`)
 - **The eval option** — `eval()`, through the engine API only, with no command-line flag or config key ([#2065](https://github.com/frostney/GocciaScript/issues/2065))
 
-Compatibility flags are supported customisation for running the whole of ECMAScript, not escape hatches. There are no presets: a host sets the knobs its scripts need. See [Language](docs/language.md) for the profile and every compatibility path, and [Embedding](docs/embedding.md) for the engine options.
+Compatibility flags are supported customisation for running the whole of ECMAScript, not escape hatches. There are no presets: a host sets the knobs its scripts need. See [Language](docs/language.md) for the profile and every compatibility path, and [Embedding — Changing the Defaults](docs/embedding.md#changing-the-defaults) for the knobs together.
 
 ## Capabilities for Different Use Cases
 
@@ -43,7 +43,7 @@ Embedding means that different hosts need different things. GocciaScript provide
 
 - **React server rendering** — The Web APIs that a server renderer such as React's relies on, for example `MessageChannel`, `ReadableStream` and `crypto`, are in scope ([#1562](https://github.com/frostney/GocciaScript/issues/1562)). The runtime already provides `fetch`, `URL`, `TextEncoder`/`TextDecoder`, `Blob`, `AbortController` and `EventTarget` (see [Built-ins](docs/built-ins.md))
 - **A virtual file system** — A bounded, in-memory file system that the host fills and reads back, exposed to scripts as an `fs` module (see [Embedding — Sandbox filesystem](docs/embedding.md#sandbox-filesystem))
-- **Node.js compatibility, to a degree** — GocciaScript leans into the parts of Node compatibility that are fairly easy to provide, such as `node:async_hooks` and opt-in ESM `node_modules` resolution (`--allow-import=node_modules`), as capabilities a host installs rather than the default surface
+- **Node.js compatibility, to a degree** — GocciaScript leans into the parts of Node compatibility that are fairly easy to provide, such as `node:async_hooks`, a Node-compatible `fs` over the virtual file system, and opt-in ESM `node_modules` resolution (`--allow-import=node_modules`), as capabilities a host installs rather than the default surface
 - **Web-interoperable runtimes** — Aligning selected runtime globals with WinterTC's Minimum Common Web API and the WHATWG standards remains a direction, taken where it serves an embedding use case
 
 ## Conformance

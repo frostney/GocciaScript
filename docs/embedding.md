@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 1100 -->
+<!-- doc-length-limit: 1120 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -574,6 +574,18 @@ end;
 When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source, and any other entry is detected ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)): the default, `stDetect`, settles the goal in the parse the engine does anyway, so a top-level `import` or `export` declaration makes the entry module source and anything else, a dynamic `import()` or an `import.meta` reference alone included, script source. `Execute` settles the goal of each run and leaves `SourceType` at `stDetect`, so a long-lived engine settles each source on its own. An embedder that wants every entry to run as script source, the behaviour before ADR 0140, sets `Engine.SourceType := stScript`; `stModule` makes every entry module source. A host that parses the entry itself passes `Engine.SourceType` as the source type of its `TGocciaSourcePipelineOptions` and, before `CompileModule` and `RunModuleForSourceType`, assigns the goal the parse settled (`TGocciaSourcePipelineResult.SourceType`, never `stDetect`) to `Engine.SourceType`; those two run anything but `stModule` as script source. A host configures the engine before the parse, so it sets `Engine.GlobalBackedTopLevel := Engine.SourceType <> stModule`, and the engine turns the flag off itself for a run that settles on module source.
 
 **Top-level binding persistence differs between source types.** With `SourceType = stScript` and `GlobalBackedTopLevel` set, the engine binds each run's top-level declarations in its global scope (`Engine.GlobalScope`), which it reuses across every call to `Execute`; that is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. Without `GlobalBackedTopLevel` they stay in the run's own frame, and the next `Execute` throws a `ReferenceError` for `x`. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, set `SourceType` to `stScript` (with the default `stDetect`, a source with an `import` or `export` declaration runs as module source) and set `GlobalBackedTopLevel`, or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.GlobalScope.DefineLexicalBinding(...)`).
+
+## Changing the Defaults
+
+An engine starts with the recommended language profile and without dynamic code generation. These knobs change that; each is off by default and set before `Execute`, and there are no presets that bundle them:
+
+| Knob | What it turns on | CLI |
+|------|------------------|-----|
+| `Engine.Compatibility` | The ECMAScript forms the recommended profile leaves out (`cfASI`, `cfVar`, `cfFunction`, `cfNonStrictMode`, ...); see [Preprocessors and Compatibility](#preprocessors-and-compatibility) and [Language — Compatibility Flags](language.md#compatibility-flags) | `--compat-*` |
+| `Engine.FunctionConstructor.Enabled := True` | The `Function` constructor, which is always present and throws a `TypeError` while disabled | `--unsafe-function-constructor` |
+| `EnableShadowRealm(Engine)` (`Goccia.Builtins.GlobalShadowRealm`) | Installs `globalThis.ShadowRealm`; calling it again does nothing | `--unsafe-shadowrealm` |
+
+`eval` is the fourth knob: an engine-API-only opt-in with no CLI flag or config key, tracked in [#2065](https://github.com/frostney/GocciaScript/issues/2065). `Function`, `ShadowRealm.prototype.evaluate` and `eval` all run any source text the script builds, with the engine's full capability set, so a host that runs untrusted code leaves them off.
 
 ## Injecting Custom Globals
 
