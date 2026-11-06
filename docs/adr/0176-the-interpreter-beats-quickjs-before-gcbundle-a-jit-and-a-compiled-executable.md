@@ -164,3 +164,5 @@ and 0.22.0 carry targets 1 and 2.
   template JIT modeled on wasmlight, opt-in. #863 is re-scoped to the wasmlight
   template design and the question of sharing the backend through lwpt, in
   1.1.0.
+
+**Refined by [ADR 0178](0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md):** the measurement protocol #2066 settles: AWFY is timed warm, both lanes alternate the engine order over six repetitions and record each sample's place, and `node --jitless` and JavaScriptCore with its JIT off run as context comparators that target 1 does not count.

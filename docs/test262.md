@@ -412,11 +412,17 @@ run is identified by the pair. The report counts runs: `summary.totalRun`
 and every pass, fail, timeout and wrapper-infra count, overall and per
 `byCategory` entry, are run counts, and `summary.byMode` and each category's
 `byMode` break them down per mode, always listing both modes.
-`summary.totalDiscovered` still counts test files. The merge and the PR
-comparison key results by (id, mode), so a run that regresses only in strict
-mode blocks a merge like any other; a run with no counterpart in the
-baseline, such as a file's first strict run, is new rather than a
-regression. A strict run's profile is written to
+`summary.totalDiscovered` still counts test files.
+
+A shard report also records `summary.expectedRuns`, the runs the runner
+planned per mode from the flag rules above. The merge rejects a shard whose
+results do not match it, and a contract-4 result without `mode`, so a missing
+strict run of a file that still has its non-strict run is an error and the
+merge never re-implements the frontmatter rules. A merged report leaves the
+field out. The merge and the PR comparison key results by (id, mode), so a
+run that regresses only in strict mode blocks a merge like any other; a run
+with no counterpart in the baseline, such as a file's first strict run, is new
+rather than a regression. A strict run's profile is written to
 `per-test/<id>.strict.profile.json`, beside the non-strict run's
 `per-test/<id>.profile.json`.
 

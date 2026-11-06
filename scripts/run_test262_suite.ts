@@ -100,6 +100,13 @@ interface SuiteSummary {
   durationSeconds: number;
   /** Absent in reports graded before contract 4. */
   byMode?: ModeCounts;
+  /**
+   * Runs the native runner planned for this report, by mode, from the same
+   * flag rules that gave each file its modes. A shard report carries it so
+   * the merge can tell a missing run from a file that never had one.
+   * Absent in merged reports and in reports graded before contract 4.
+   */
+  expectedRuns?: Record<RunMode, number>;
   byCategory: CategorySummary[];
 }
 
@@ -801,6 +808,48 @@ function parseMergeArgs(argv: string[]): MergeArgs {
   return out;
 }
 
+/**
+ * From contract 4 every result names its mode, and the shard planned a number
+ * of runs per mode (summary.expectedRuns) that its results must match. The
+ * native runner decides each file's modes, so the merge compares counts
+ * instead of parsing frontmatter itself. A shard that lost a strict run of a
+ * file still seen through its non-strict run is caught here, where the
+ * by-file completeness check in mergeShardReports cannot see it.
+ */
+function validateRunCoverage(report: SuiteReport, path: string): void {
+  const counted: Record<RunMode, number> = { "non-strict": 0, strict: 0 };
+  for (const result of report.results) {
+    if (result.mode === undefined) {
+      throw new Error(
+        `Invalid shard report ${path}: result ${result.id} has no mode, ` +
+          `which grading contract ${gradingContractOf(report.run)} requires`,
+      );
+    }
+    if (!RUN_MODES.includes(result.mode)) {
+      throw new Error(
+        `Invalid strictness mode ${JSON.stringify(result.mode)} for ${result.id} in ${path}`,
+      );
+    }
+    counted[result.mode]++;
+  }
+  const expected = report.summary.expectedRuns;
+  for (const mode of RUN_MODES) {
+    const planned = expected?.[mode];
+    if (typeof planned !== "number" || !Number.isInteger(planned) || planned < 0) {
+      throw new Error(
+        `Invalid shard report ${path}: summary.expectedRuns has no ${mode} count, ` +
+          `which grading contract ${gradingContractOf(report.run)} requires`,
+      );
+    }
+    if (counted[mode] !== planned) {
+      throw new Error(
+        `Invalid shard report ${path}: ${planned} ${mode} runs were planned, ` +
+          `but the results hold ${counted[mode]}`,
+      );
+    }
+  }
+}
+
 function readShardReport(path: string): SuiteReport {
   let report: SuiteReport;
   try {
@@ -818,6 +867,7 @@ function readShardReport(path: string): SuiteReport {
         `does not match ${report.results.length} results`,
     );
   }
+  if (gradingContractOf(report.run) >= 4) validateRunCoverage(report, path);
   // The run signature no longer carries a mode, so an older stored report
   // from another execution mode would otherwise merge with bytecode shards.
   if (report.run.mode !== undefined && report.run.mode !== "bytecode") {
@@ -1256,7 +1306,7 @@ function buildCommentMarkdown(
   const baselineNote = hasBaseline
     ? " Δ vs main compares against the most recent cached `main` baseline."
     : " No `main` baseline cached yet — Δ columns will appear once a `main` run completes.";
-  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64. Areas grouped by the first two test262 path components; minimum 25 attempted runs, areas already at 100% excluded. Each test file runs once per mode test262 requires, and runs compare by file and mode.${baselineNote}</sub>\n`;
+  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64. Areas grouped by the first two test262 path components; minimum 25 attempted runs, areas that already pass in full excluded. Each test file runs once per mode test262 requires, and runs compare by file and mode.${baselineNote}</sub>\n`;
 
   return { markdown: marker + "\n" + body, regressed };
 }
