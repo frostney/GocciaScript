@@ -4,14 +4,14 @@
 
 ## Executive Summary
 
-- **Familiar syntax** — GocciaScript runs modern ECMAScript syntax with sandbox-first recommended defaults; `.js` files, no transpilation needed
+- **Familiar syntax** — GocciaScript runs modern ECMAScript syntax with modern recommended defaults that a host can change; `.js` files, no transpilation needed
 - **Key differences** — No `var`, `function`, traditional `for` loops, or `while` loops by default; use `let`/`const`, arrow functions, strict equality, `for...of`/array methods
 - **Full walkthrough** — Variables, arrow functions, arrays, objects, classes, modules, async/await
 - **Next steps** — Links to the recommended profile and its compatibility paths, built-in API reference, and example programs
 
 ## What is GocciaScript?
 
-GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first recommended defaults. It keeps modern JavaScript syntax front and center — arrow functions, classes with private fields, async/await, modules, and implicit strict mode — while legacy forms such as `var`, `function`, loose equality, traditional `for` loops, and `while` loops are available through compatibility flags when conformance or host requirements need them. If you've written modern JavaScript, you already know most of GocciaScript.
+GocciaScript is an ECMAScript engine for embedding, implemented in FreePascal, with sensible, modern recommended defaults. It keeps modern JavaScript syntax front and center — arrow functions, classes with private fields, async/await, modules, and implicit strict mode — while legacy forms such as `var`, `function`, loose equality, traditional `for` loops, and `while` loops are available through compatibility flags, which a host turns on when its code needs them. If you've written modern JavaScript, you already know most of GocciaScript.
 
 ## Prerequisites
 

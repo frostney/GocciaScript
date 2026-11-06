@@ -66,6 +66,6 @@ cache key derived from the pinned integrity value.
 The runner enables only the compatibility syntax and semantics required by the
 published library. It does not enable the unsafe Function constructor and does
 not install `Buffer`, `process`, or `Blob` stubs. This keeps the evidence aligned
-with [Vision](../VISION.md): Node host compatibility is not a goal, broader web
-host APIs remain a product boundary, and dynamic code generation stays disabled
-by default.
+with [Vision](../VISION.md): Node compatibility is a capability a host installs,
+not the default surface, Web APIs are added where they serve an embedding use
+case, and dynamic code generation stays disabled by default.

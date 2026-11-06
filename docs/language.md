@@ -12,7 +12,7 @@
 - **TC39 proposals and extensions** — The TC39 Type Annotations proposal uses types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement
 - **Annex B policy** — Annex B is part of the test262 conformance target; new Annex B surfaces go behind a compatibility flag that the test262 runner turns on
 
-GocciaScript implements ECMAScript with curated recommended defaults. Calling it merely a JavaScript-like subset is misleading: the engine's implemented language capability, its recommended profile, and its host APIs are separate dimensions. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For current generated evidence, use the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility); for quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
+GocciaScript implements ECMAScript with sensible recommended defaults that a host can change. Calling it merely a JavaScript-like subset is misleading: the engine's implemented language capability, its recommended profile, and its host APIs are separate dimensions. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For current generated evidence, use the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility); for quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
 
 ## Guiding Principle
 
@@ -20,7 +20,7 @@ GocciaScript implements ECMAScript with curated recommended defaults. Calling it
 
 ## Compatibility Flags
 
-Compatibility flags are parser and runtime policy switches for ECMAScript conformance work, test262 execution, and hosts that deliberately need legacy JavaScript behavior. They are not the recommended starting point for generated code or ordinary userland scripts. AI coding agents should usually emit the default forms first, then enable a flag only when the surrounding project, test, or host explicitly needs the legacy semantics.
+Compatibility flags are parser and runtime switches that turn on the parts of ECMAScript the recommended profile leaves out. They are supported customisation, not escape hatches: a host that runs existing JavaScript or a library that uses those forms turns on the flags it needs, and the test262 runner turns on every flag in the table below. New code can start from the default forms, which the table lists beside each flag. Guidance for code that AI agents generate lives with the sandbox host, under [Permissions — Sandbox mode](permissions.md#sandbox-mode).
 
 Annex B is part of the test262 conformance target, and new Annex B surfaces go behind an off-by-default compatibility flag; see [Annex B Web-Browser Legacy Features](#annex-b-web-browser-legacy-features).
 
