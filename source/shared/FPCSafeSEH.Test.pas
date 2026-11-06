@@ -52,6 +52,7 @@ type
     procedure TestUnreviewedInput;
     procedure TestHandlerOwnership;
     procedure TestSourceBinding;
+    procedure TestRoutineDigestReport;
     procedure TestStagedProject;
     procedure TestProjectProvenance;
     procedure TestProgramAndMethodNames;
@@ -123,7 +124,7 @@ begin
   Text := 'reviewed object bytes';
   SetLength(Bytes, Length(Text));
   Move(Text[1], Bytes[0], Length(Text));
-  Result := 'FPC-SAFESEH 1' + LineEnding +
+  Result := 'FPC-SAFESEH 2' + LineEnding +
     'version ' + FIXTURE_VERSION + LineEnding +
     'target i386-win32' + LineEnding +
     'required-object rtl/system.o ' + SHA256Hex(Bytes) + LineEnding +
@@ -186,7 +187,8 @@ begin
   Test('rejects malformed or truncated handler addresses', TestMalformedMap);
   Test('refuses unreviewed toolchain inputs', TestUnreviewedInput);
   Test('binds handlers to the input object defining them', TestHandlerOwnership);
-  Test('binds ordinary source exclusions to reviewed bytes and owner', TestSourceBinding);
+  Test('binds ordinary source exclusions to their routine''s reviewed text and owner', TestSourceBinding);
+  Test('reports current routine digests for review', TestRoutineDigestReport);
   Test('validates source-bound receipts after project scratch cleanup', TestStagedProject);
   Test('requires source identity and build-owned output provenance', TestProjectProvenance);
   Test('refuses program, static method and nested handler definitions and aliases', TestProgramAndMethodNames);
@@ -336,7 +338,10 @@ end;
 
 procedure TFPCSafeSEHTests.TestMalformedManifest;
 begin
-  Reject(StringReplace(Manifest, 'FPC-SAFESEH 1', 'FPC-SAFESEH 2', []), Map, 'Unsupported');
+  Reject(StringReplace(Manifest, 'FPC-SAFESEH 2', 'FPC-SAFESEH 3', []), Map, 'Unsupported');
+  // Format 1 digests whole files; reading one as a routine digest would misread it.
+  Reject(StringReplace(Manifest, 'FPC-SAFESEH 2', 'FPC-SAFESEH 1', []), Map,
+    'format 1 pins whole source files');
   Reject(Manifest + 'version ' + FIXTURE_VERSION, Map, 'Invalid manifest version');
   Reject(Manifest + 'target x86_64-win64', Map, 'Invalid manifest target');
   Reject(Manifest + 'object rtl/other.o not-a-digest', Map, 'Invalid manifest SHA-256');
@@ -367,33 +372,122 @@ begin
     'no linked input object');
 end;
 
-procedure TFPCSafeSEHTests.TestSourceBinding;
 const
-  SourceText: UTF8String = 'procedure OrdinaryHandler; begin end;';
-  SourceSection = '.text.n_ordinary_$$_ordinaryhandler';
+  ROUTINE_TEXT = 'procedure OrdinaryHandler;' + LineEnding + 'begin' + LineEnding +
+    '  Exit;' + LineEnding + 'end;';
+  OTHER_ROUTINE_TEXT = 'procedure Unrelated;' + LineEnding + 'begin' + LineEnding + 'end;';
+  SOURCE_SECTION = '.text.n_ordinary_$$_ordinaryhandler';
+
+function OrdinarySource(const ARoutine, AOther: string): string;
+begin
+  Result := 'unit Ordinary;' + LineEnding + LineEnding + 'interface' + LineEnding + LineEnding +
+    'implementation' + LineEnding + LineEnding + ARoutine + LineEnding + LineEnding + AOther +
+    LineEnding + LineEnding + 'end.' + LineEnding;
+end;
+
+function TextDigest(const AText: string): string;
+var
+  Text: UTF8String;
+  Bytes: TBytes;
+begin
+  Text := UTF8Encode(AText);
+  SetLength(Bytes, Length(Text));
+  Move(Text[1], Bytes[0], Length(Text));
+  Result := SHA256Hex(Bytes);
+end;
+
+procedure TFPCSafeSEHTests.TestSourceBinding;
 var
   SourcePath, ReviewedManifest, SourceMap: string;
-  Bytes: TBytes;
   Entries: TSERvaArray;
 begin
   SourcePath := FDirectory + PathDelim + 'source' + PathDelim + 'shared' + PathDelim + 'ordinary.pas';
-  SetLength(Bytes, Length(SourceText));
-  Move(SourceText[1], Bytes[0], Length(SourceText));
   ReviewedManifest := Manifest + 'source-nonseh ../../source/shared/ordinary.pas ' +
-    SHA256Hex(Bytes) + ' ' + SourceSection + LineEnding;
-  SourceMap := Map + ' ' + SourceSection + LineEnding + ' 0x10001100 0x10 ordinary.o';
-  WriteText(SourcePath, string(SourceText));
+    TextDigest(ROUTINE_TEXT) + ' ' + SOURCE_SECTION + LineEnding;
+  SourceMap := Map + ' ' + SOURCE_SECTION + LineEnding + ' 0x10001100 0x10 ordinary.o';
+  WriteText(SourcePath, OrdinarySource(ROUTINE_TEXT, OTHER_ROUTINE_TEXT));
   try
     Entries := Resolve(ReviewedManifest, SourceMap);
     Expect<Integer>(Length(Entries)).ToBe(1);
+    // An unknown handler-like name still needs its own entry and owner.
     Reject(Manifest, SourceMap, 'Unreviewed handler-like');
     Reject(ReviewedManifest, StringReplace(SourceMap, '0x10 ordinary.o', '0x10 different.o', []),
       'Unreviewed handler-like');
-    WriteText(SourcePath, 'changed source');
-    Reject(ReviewedManifest, SourceMap, 'source SHA-256 mismatch');
+    // Edits elsewhere in the file, and CRLF line endings, keep the pin.
+    WriteText(SourcePath, '{ Moved. }' + LineEnding + OrdinarySource(OTHER_ROUTINE_TEXT + LineEnding +
+      '{ Added. }' + LineEnding + StringReplace(OTHER_ROUTINE_TEXT, 'Unrelated', 'Added', []),
+      ROUTINE_TEXT));
+    Entries := Resolve(ReviewedManifest, SourceMap);
+    Expect<Integer>(Length(Entries)).ToBe(1);
+    WriteText(SourcePath, StringReplace(OrdinarySource(ROUTINE_TEXT, OTHER_ROUTINE_TEXT), LineEnding,
+      #13#10, [rfReplaceAll]));
+    Entries := Resolve(ReviewedManifest, SourceMap);
+    Expect<Integer>(Length(Entries)).ToBe(1);
+    // An edited, renamed or removed routine fails, naming routine and file.
+    WriteText(SourcePath, OrdinarySource(StringReplace(ROUTINE_TEXT, 'Exit;', 'Halt;', []),
+      OTHER_ROUTINE_TEXT));
+    Reject(ReviewedManifest, SourceMap,
+      'Reviewed non-SEH routine changed: OrdinaryHandler in source/shared/ordinary.pas:7-10');
+    WriteText(SourcePath, OrdinarySource(StringReplace(ROUTINE_TEXT, 'OrdinaryHandler', 'RenamedHandler', []),
+      OTHER_ROUTINE_TEXT));
+    Reject(ReviewedManifest, SourceMap,
+      'Reviewed non-SEH routine ordinary.ordinaryhandler cannot be located in source/shared/ordinary.pas');
+    WriteText(SourcePath, OrdinarySource(OTHER_ROUTINE_TEXT, ''));
+    Reject(ReviewedManifest, SourceMap, 'no implementation of ordinary.ordinaryhandler');
+    // A second implementation could be the one the section names.
+    WriteText(SourcePath, OrdinarySource(ROUTINE_TEXT, StringReplace(ROUTINE_TEXT, 'Handler;',
+      'Handler(const AValue: Integer);', [])));
+    Reject(ReviewedManifest, SourceMap, 'overloads cannot be told apart');
+    // A whole-file digest of format 1 is not a routine digest.
+    WriteText(SourcePath, OrdinarySource(ROUTINE_TEXT, OTHER_ROUTINE_TEXT));
+    Reject(StringReplace(ReviewedManifest, TextDigest(ROUTINE_TEXT),
+      TextDigest(OrdinarySource(ROUTINE_TEXT, OTHER_ROUTINE_TEXT)), []), SourceMap,
+      'Reviewed non-SEH routine changed');
     DeleteFile(SourcePath);
     Reject(ReviewedManifest, SourceMap, 'source unavailable');
   finally
+    DeleteFile(SourcePath);
+  end;
+end;
+
+procedure TFPCSafeSEHTests.TestRoutineDigestReport;
+var
+  SourcePath, Entry: string;
+  Report: TStringList;
+  Found: Boolean;
+begin
+  SourcePath := FDirectory + PathDelim + 'source' + PathDelim + 'shared' + PathDelim + 'ordinary.pas';
+  Entry := 'source-nonseh ../../source/shared/ordinary.pas ' + TextDigest(ROUTINE_TEXT) + ' ' +
+    SOURCE_SECTION;
+  Report := TStringList.Create;
+  try
+    WriteText(SourcePath, OrdinarySource(ROUTINE_TEXT, OTHER_ROUTINE_TEXT));
+    WriteText(FManifestFile, Manifest + Entry + LineEnding);
+    Expect<Boolean>(ReportReviewedRoutines(FManifestFile, Report)).ToBe(True);
+    Expect<Integer>(Report.Count).ToBe(2);
+    Expect<string>(Report[0]).ToBe('# OrdinaryHandler, source/shared/ordinary.pas:7-10: unchanged');
+    Expect<string>(Report[1]).ToBe(Entry);
+    // A changed routine is reported with its current digest, never written back.
+    WriteText(SourcePath, OrdinarySource(StringReplace(ROUTINE_TEXT, 'Exit;', 'Halt;', []),
+      OTHER_ROUTINE_TEXT));
+    Report.Clear;
+    Expect<Boolean>(ReportReviewedRoutines(FManifestFile, Report)).ToBe(False);
+    Found := Pos('CHANGED', Report[0]) > 0;
+    Expect<Boolean>(Found).ToBe(True);
+    Expect<string>(Report[1]).ToBe('source-nonseh ../../source/shared/ordinary.pas ' +
+      TextDigest(StringReplace(ROUTINE_TEXT, 'Exit;', 'Halt;', [])) + ' ' + SOURCE_SECTION);
+    Report.Clear;
+    Report.LoadFromFile(FManifestFile);
+    Found := Report.IndexOf(Entry) >= 0;
+    Expect<Boolean>(Found).ToBe(True);
+    DeleteFile(SourcePath);
+    Report.Clear;
+    Expect<Boolean>(ReportReviewedRoutines(FManifestFile, Report)).ToBe(False);
+    Found := Pos('# ERROR', Report[0]) = 1;
+    Expect<Boolean>(Found).ToBe(True);
+    Expect<string>(Report[1]).ToBe(Entry);
+  finally
+    Report.Free;
     DeleteFile(SourcePath);
   end;
 end;

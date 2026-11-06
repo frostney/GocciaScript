@@ -1,4 +1,4 @@
-FPC-SAFESEH 1
+FPC-SAFESEH 2
 # Reviewed input identities for the supplied FPC 3.2.4-rc2+1 Win32 units.
 # Hashes cover whole objects, including registrations through pointer stores.
 # Only linked objects are required and hashed. A new unit must be audited.
@@ -188,38 +188,41 @@ nonseh rtl/system.o .text.n_fpc_safecallhandler
 nonseh rtl/sysutils.o .text.n_sysutils_$$_asserterrorhandler$shortstring$shortstring$longint$pointer
 
 # Exact source-bound exclusions for ordinary functions, not OS handlers.
-# Paths are relative to this manifest. Re-review and refresh after a source edit.
-source-nonseh ../../source/units/Goccia.Values.IteratorValue.pas b7832a1b5c60744db09d3106f9c8cf6321a1dd3008c14c91a0b652a56677e5d6 .text.n_goccia.values.iteratorvalue_$$_preservecurrentexceptionacrossnestedhandler
-source-nonseh ../../source/units/Goccia.Builtins.GlobalRegExp.pas c798e396902ee3a8b5d73849a5ce8baa1f09e38ce07ec5afffc752cb96e2d6b0 .text.n_goccia.builtins.globalregexp_$$_handleregexpscanerror$tgocciaobjectvalue$longint$exception
-source-nonseh ../../source/shared/PESafeSEH.pas 68994cb9ce2099453a858a2c4b931c8b4509eba2f811c5188cbea81d5e0b8c46 .text.n_pesafeseh_$$_sortedhandlers$tpeimage$tservaarray$$tservaarray
-source-nonseh ../../source/units/Goccia.VM.pas 357637390bca50f8e239d2eeb549608425596868e50401fb20ed5663054b68f2 .text.n_goccia.vm_$$_snapshothandlerkey$longint$word$tgocciabytecodehandlerkind$$int64
+# Paths are relative to this manifest. Each digest covers only the named
+# routine's own implementation, so edits elsewhere in its file need no change.
+# After a routine changes, review it again, then copy its line from
+# `./safeseh.pas --digests`.
+source-nonseh ../../source/units/Goccia.Values.IteratorValue.pas d96cefb0f6a9a39171dd87d5a41c17e2a4be8f73bf6d69ae85d96251782cd4d7 .text.n_goccia.values.iteratorvalue_$$_preservecurrentexceptionacrossnestedhandler
+source-nonseh ../../source/units/Goccia.Builtins.GlobalRegExp.pas 8b726e1c5ba684afffef5ef58a9dccc60cd53fec65ffd6a5565004a6d88e9c9e .text.n_goccia.builtins.globalregexp_$$_handleregexpscanerror$tgocciaobjectvalue$longint$exception
+source-nonseh ../../source/shared/PESafeSEH.pas 408a3d1893b1f43f65a761f97abd36dc21fc39330bf22d9f3178a1b7c90c1908 .text.n_pesafeseh_$$_sortedhandlers$tpeimage$tservaarray$$tservaarray
+source-nonseh ../../source/units/Goccia.VM.pas f6148c531c4264ba2573f98fca233e38aada2d03938edc521d0e4f60c1d9fd08 .text.n_goccia.vm_$$_snapshothandlerkey$longint$word$tgocciabytecodehandlerkind$$int64
 
 # Reviewed ordinary methods and test fixtures. No mangling-shape exemption.
-source-nonseh ../../source/units/Goccia.Bytecode.Chunk.pas ccaf7eee25d5d486900deb8e1bed36470ccccc262d714879a688a7e51e82c74f .text.n_goccia.bytecode.chunk$_$tgocciafunctiontemplate_$__$$_addexceptionhandler$crc68eec1e9
-source-nonseh ../../source/units/Goccia.RuntimeExtensions.Sandbox.pas 22c94ed40c336be85b03a2ac24eaa546caecb6a15cf11d83ef3b01c54b233f85 .text.n_goccia.runtimeextensions.sandbox$_$tgocciasandboxruntimeextension_$__$$_handlerootclamp$crc066a5453
-source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 2b139dddb5ceaeb796213d991f9deb2aecfed4b71db77f8c2b93cf121fa3c0c8 .text.n_goccia.values.eventtargetvalue$_$tgocciaeventtargetvalue_$__$$_eventhandlervalue$crcd95711d6
-source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 2b139dddb5ceaeb796213d991f9deb2aecfed4b71db77f8c2b93cf121fa3c0c8 .text.n_goccia.values.eventtargetvalue$_$tgocciaeventtargetvalue_$__$$_findeventhandlerlistener$crca9efb927
-source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 2b139dddb5ceaeb796213d991f9deb2aecfed4b71db77f8c2b93cf121fa3c0c8 .text.n_goccia.values.eventtargetvalue$_$tgocciaeventtargetvalue_$__$$_seteventhandlervalue$crce545fb3e
-source-nonseh ../../source/units/Goccia.VM.pas 357637390bca50f8e239d2eeb549608425596868e50401fb20ed5663054b68f2 .text.n_goccia.vm$_$tgocciabytecodegeneratorobjectvalue_$__$$_prepareawaithandlers$crcc0181dbf
-source-nonseh ../../source/units/Goccia.VM.pas 357637390bca50f8e239d2eeb549608425596868e50401fb20ed5663054b68f2 .text.n_goccia.vm$_$tgocciavm_$__$$_growhandlerstack$longint
-source-nonseh ../../source/units/Goccia.VM.pas 357637390bca50f8e239d2eeb549608425596868e50401fb20ed5663054b68f2 .text.n_goccia.vm$_$tgocciavm_$__$$_tryunwindtohandler$crce3b93773
-source-nonseh ../../source/units/Goccia.VM.pas 357637390bca50f8e239d2eeb549608425596868e50401fb20ed5663054b68f2 .text.n_goccia.vm$_$tgocciavmasyncawaitcontinuationvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
-source-nonseh ../../source/units/Goccia.VM.pas 357637390bca50f8e239d2eeb549608425596868e50401fb20ed5663054b68f2 .text.n_goccia.vm$_$tgocciavmasyncfromsyncfulfillvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
-source-nonseh ../../source/units/Goccia.VM.pas 357637390bca50f8e239d2eeb549608425596868e50401fb20ed5663054b68f2 .text.n_goccia.vm$_$tgocciavmasyncfromsyncrejectvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
-source-nonseh ../../source/units/Goccia.VM.pas 357637390bca50f8e239d2eeb549608425596868e50401fb20ed5663054b68f2 .text.n_goccia.vm$_$tsnapshotframeinfo_$__$$_hashandler$longint$word$tgocciabytecodehandlerkind$$boolean
-source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 57725eff690fbe61fd45da3c7b29fac1540e61aa1ef81059a7e48437cf2639c9 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testhandlerownership
-source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 57725eff690fbe61fd45da3c7b29fac1540e61aa1ef81059a7e48437cf2639c9 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testmissinghandler
-source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 57725eff690fbe61fd45da3c7b29fac1540e61aa1ef81059a7e48437cf2639c9 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testunknownhandler
-source-nonseh ../../source/units/Goccia.Bytecode.Binary.Test.pas 0e5f913fd15e2c52f6c6be7a5eba9c5604a8acfb15e0b287b4ad26be3c7e58ff .text.n_p$goccia.bytecode.binary.test$_$tbytecodebinarytests_$__$$_testroundtripsexceptionhandlers
-source-nonseh ../../source/units/Goccia.Compiler.Test.pas 1b8ac07ca254585f147452922493f3ef99f4c7ff89b784d1f987371058914229 .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofskipshandlerwithoutabruptclose
-source-nonseh ../../source/units/Goccia.Compiler.Test.pas 1b8ac07ca254585f147452922493f3ef99f4c7ff89b784d1f987371058914229 .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofuseshandlerforexpressionbody
-source-nonseh ../../source/units/Goccia.Compiler.Test.pas 1b8ac07ca254585f147452922493f3ef99f4c7ff89b784d1f987371058914229 .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofusesoneiteratorclosehandler
-source-nonseh ../../source/units/Goccia.HeapSnapshot.Test.pas 4d4264c00f0a541bdf073c623e1a1fe4da90c2099834a1d2b1088fb1990cae62 .text.n_p$goccia.heapsnapshot.test$_$theapsnapshottests_$__$$_testgeneratorkeepsitshandlers
-source-nonseh ../../source/shared/PESafeSEH.Test.pas 700b53e7fe7586c5f2ed20980c9952320113c2508cdb4bf272e2a883adf59cf3 .text.n_p$pesafeseh.test$_$tpesafesehtests_$__$$_testhandlerrefusals
-source-nonseh ../../source/shared/PESafeSEH.Test.pas 700b53e7fe7586c5f2ed20980c9952320113c2508cdb4bf272e2a883adf59cf3 .text.n_p$pesafeseh.test_$$_handlers$$tservaarray
-source-nonseh ../../source/shared/SandboxVirtualFileSystem.Test.pas 8e3006b803baf8a8327bf88b0db84c7181ea63f5124dfe36b65d6beb7544d888 .text.n_p$sandboxvirtualfilesystemtest$_$ttestsandboxvirtualfilesystem_$__$$_handlerootclamp$crc066a5453
+source-nonseh ../../source/units/Goccia.Bytecode.Chunk.pas f4b56f93d5400f079939a4e5d34688cd1a00b05c8072e98beba12983f1891c95 .text.n_goccia.bytecode.chunk$_$tgocciafunctiontemplate_$__$$_addexceptionhandler$crc68eec1e9
+source-nonseh ../../source/units/Goccia.RuntimeExtensions.Sandbox.pas 174d72e219336e802a098f93fc73bbe459b79088c88f82c2aeebff22d759ef50 .text.n_goccia.runtimeextensions.sandbox$_$tgocciasandboxruntimeextension_$__$$_handlerootclamp$crc066a5453
+source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 84e6cafacfc8e717c59a179a5ad4fb4aa277e2d780ea3a9e25ef18d205c19093 .text.n_goccia.values.eventtargetvalue$_$tgocciaeventtargetvalue_$__$$_eventhandlervalue$crcd95711d6
+source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 3571dc8b39848abe3a4b8c9f22133779a74ecbe96cbf25fad9dd881213c974b4 .text.n_goccia.values.eventtargetvalue$_$tgocciaeventtargetvalue_$__$$_findeventhandlerlistener$crca9efb927
+source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 72f8ac923c9cfc76bdb48dfbb330a35ebf29ef61167cfbd6b222b2e5da98ebfb .text.n_goccia.values.eventtargetvalue$_$tgocciaeventtargetvalue_$__$$_seteventhandlervalue$crce545fb3e
+source-nonseh ../../source/units/Goccia.VM.pas b8c0fec9d90bcaad0165a7507995132c52f6dcedd77f6ce1d677355837025818 .text.n_goccia.vm$_$tgocciabytecodegeneratorobjectvalue_$__$$_prepareawaithandlers$crcc0181dbf
+source-nonseh ../../source/units/Goccia.VM.pas 31e56cc1f8f3c03fcf0001831b875a500d29f0dad6a985529ef4558756a4ace4 .text.n_goccia.vm$_$tgocciavm_$__$$_growhandlerstack$longint
+source-nonseh ../../source/units/Goccia.VM.pas fd70f78698e1b13d2b1be1f793b4758337f46f054d41bf31a5bc522ff462e88d .text.n_goccia.vm$_$tgocciavm_$__$$_tryunwindtohandler$crce3b93773
+source-nonseh ../../source/units/Goccia.VM.pas 9bc54f040f8461ad570052a51b25d519f79a0150108a72efc33cea40060c65db .text.n_goccia.vm$_$tgocciavmasyncawaitcontinuationvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
+source-nonseh ../../source/units/Goccia.VM.pas d663249918661b2d20a5ebb9381931462a5c1c7a196d8f2b2893978c4555ff23 .text.n_goccia.vm$_$tgocciavmasyncfromsyncfulfillvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
+source-nonseh ../../source/units/Goccia.VM.pas cad009adcd12916f019cd4beab91faf396c2bd8ac039f537baa651e98eb459d3 .text.n_goccia.vm$_$tgocciavmasyncfromsyncrejectvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
+source-nonseh ../../source/units/Goccia.VM.pas 9a7b06c7265311de1ab31b2d29480e3626b62e0198be84efd74bf3a33e152072 .text.n_goccia.vm$_$tsnapshotframeinfo_$__$$_hashandler$longint$word$tgocciabytecodehandlerkind$$boolean
+source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 70d65e61362cb11efea55f1a410a418b77489c9f214aeee466614f5160193611 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testhandlerownership
+source-nonseh ../../source/shared/FPCSafeSEH.Test.pas e42b5c416b983b801feb8942702de52d18c85e9911a2de4324bdfe9be342a5b3 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testmissinghandler
+source-nonseh ../../source/shared/FPCSafeSEH.Test.pas 881d370ff5f118c767c24891b1088a757e6200de05ad1745b42101e884011916 .text.n_p$fpcsafeseh.test$_$tfpcsafesehtests_$__$$_testunknownhandler
+source-nonseh ../../source/units/Goccia.Bytecode.Binary.Test.pas 6e3de3de42519d4a595047ce25596ea749cf818b6bbfe63950d6a0a831087031 .text.n_p$goccia.bytecode.binary.test$_$tbytecodebinarytests_$__$$_testroundtripsexceptionhandlers
+source-nonseh ../../source/units/Goccia.Compiler.Test.pas 1343f1911c92c5cc5ad11f256c335498e0cd6dc772b74ec2a95dbe9cb0b20edb .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofskipshandlerwithoutabruptclose
+source-nonseh ../../source/units/Goccia.Compiler.Test.pas bed840355c5bbdaaec3586e8d6e1954f222f47a4e712afd166a57297652c6e69 .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofuseshandlerforexpressionbody
+source-nonseh ../../source/units/Goccia.Compiler.Test.pas 82428b1761f91d4130a9117d89d15285a31cf737049748bae00684e762d0096d .text.n_p$goccia.compiler.test$_$ttestcompiler_$__$$_testforofusesoneiteratorclosehandler
+source-nonseh ../../source/units/Goccia.HeapSnapshot.Test.pas 1050ae68095dd52ef28e8e50d80d31866563d4707816a7615bc22762a329586a .text.n_p$goccia.heapsnapshot.test$_$theapsnapshottests_$__$$_testgeneratorkeepsitshandlers
+source-nonseh ../../source/shared/PESafeSEH.Test.pas cb3cfa2d8461eaa717413a629706af3b37fbc90644decda2e6de80a866b23052 .text.n_p$pesafeseh.test$_$tpesafesehtests_$__$$_testhandlerrefusals
+source-nonseh ../../source/shared/PESafeSEH.Test.pas 88727df35e64d65145eedfb433cb363fe02b29e5570f57b0b0b845748a1d3dc8 .text.n_p$pesafeseh.test_$$_handlers$$tservaarray
+source-nonseh ../../source/shared/SandboxVirtualFileSystem.Test.pas cbf92d05e38f075923e8831477570a73bc61728acb9f497766242f9926d1e3d6 .text.n_p$sandboxvirtualfilesystemtest$_$ttestsandboxvirtualfilesystem_$__$$_handlerootclamp$crc066a5453
 nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandler$formal
 nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandlerstr$formal
 
 # Guest bytecode metadata accessor, retained by unoptimized builds.
-source-nonseh ../../source/units/Goccia.Bytecode.Chunk.pas ccaf7eee25d5d486900deb8e1bed36470ccccc262d714879a688a7e51e82c74f .text.n_goccia.bytecode.chunk$_$tgocciafunctiontemplate_$__$$_getexceptionhandler$crc4b9bae09
+source-nonseh ../../source/units/Goccia.Bytecode.Chunk.pas dde80cb95a6bb1fd121a311f755f3a4ec8d1be68504d80bb4a716019f040a87c .text.n_goccia.bytecode.chunk$_$tgocciafunctiontemplate_$__$$_getexceptionhandler$crc4b9bae09
