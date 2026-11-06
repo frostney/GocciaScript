@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-- **Familiar syntax** — GocciaScript runs modern ECMAScript syntax with modern recommended defaults that a host can change; `.js` files, no transpilation needed
+- **Familiar syntax** — GocciaScript runs modern ECMAScript syntax with recommended defaults that a host can change; `.js` files, no transpilation needed
 - **Key differences** — No `var`, `function`, traditional `for` loops, or `while` loops by default; use `let`/`const`, arrow functions, strict equality, `for...of`/array methods
 - **Full walkthrough** — Variables, arrow functions, arrays, objects, classes, modules, async/await
 - **Next steps** — Links to the recommended profile and its compatibility paths, built-in API reference, and example programs

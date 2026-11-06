@@ -583,9 +583,9 @@ An engine starts with the recommended language profile and without dynamic code 
 |------|------------------|-----|
 | `Engine.Compatibility` | The ECMAScript forms the recommended profile leaves out (`cfASI`, `cfVar`, `cfFunction`, `cfNonStrictMode`, ...); see [Preprocessors and Compatibility](#preprocessors-and-compatibility) and [Language — Compatibility Flags](language.md#compatibility-flags) | `--compat-*` |
 | `Engine.FunctionConstructor.Enabled := True` | The `Function` constructor, which is always present and throws a `TypeError` while disabled | `--unsafe-function-constructor` |
-| `EnableShadowRealm(Engine)` (`Goccia.Builtins.GlobalShadowRealm`) | Installs `globalThis.ShadowRealm`; calling it again does nothing | `--unsafe-shadowrealm` |
+| `EnableShadowRealm(Engine)` (`Goccia.Builtins.GlobalShadowRealm`) | The `globalThis.ShadowRealm` global, which is absent until installed; calling it again does nothing | `--unsafe-shadowrealm` |
 
-`eval` is the fourth knob: an engine-API-only opt-in with no CLI flag or config key, tracked in [#2065](https://github.com/frostney/GocciaScript/issues/2065). `Function`, `ShadowRealm.prototype.evaluate` and `eval` all run any source text the script builds, with the engine's full capability set, so a host that runs untrusted code leaves them off.
+A fourth knob, an engine-API-only `eval` opt-in with no CLI flag or config key, is planned in [#2065](https://github.com/frostney/GocciaScript/issues/2065). `Function` and `ShadowRealm.prototype.evaluate` run any source text the script builds, with the engine's own capability set, so a host that runs untrusted code leaves them off.
 
 ## Injecting Custom Globals
 

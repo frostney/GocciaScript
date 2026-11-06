@@ -5,7 +5,7 @@ Use this gate before implementing an issue, idea, refactor, or documentation cha
 ## Ready to Investigate
 
 - The desired outcome, current behavior, affected user or contributor surface, and non-goals are clear enough to verify later.
-- The work has been checked against [VISION.md](VISION.md). Any conflict with the embedding-first direction (sensible defaults that are easy to customise, full test262 conformance, an interpreter faster than QuickJS) is explicit and accepted before implementation.
+- The work has been checked against [VISION.md](VISION.md). Any conflict with the embedding-first direction its [Executive Summary](VISION.md#executive-summary) sets out is explicit and accepted before implementation.
 - The relevant architecture, testing, and code-style docs have been identified before forming a plan. Start with [Architecture](docs/architecture.md), [Core patterns](docs/core-patterns.md), [Code Style](docs/contributing/code-style.md), and [Testing](docs/testing.md), then narrow by affected area.
 
 ## Ready to Plan

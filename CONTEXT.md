@@ -7,11 +7,11 @@ GocciaScript is a FreePascal implementation of ECMAScript for embedding, with se
 ### Project And Layers
 
 **GocciaScript**:
-An ECMAScript engine for embedding, with sensible defaults that are easy to customise, an explicit host-defined capability model, and generated test262 evidence. It is implemented in FreePascal, supports Delphi, and ships a toolchain of CLI hosts; `GocciaRunner`'s sandbox mode for AI agents is a reference host built on it.
+An ECMAScript engine for embedding, with sensible defaults that are easy to customize, an explicit host-defined capability model, and generated test262 evidence. It is implemented in FreePascal, supports Delphi, and ships a toolchain of CLI hosts; `GocciaRunner`'s sandbox mode for AI agents is a reference host built on the engine.
 _Avoid_: JS engine when the recommended defaults or host-tooling shape matters.
 
 **Recommended defaults**:
-The recommended out-of-the-box way to use GocciaScript: modern, without dynamic code generation or capabilities, and intentionally conservative about legacy JavaScript forms. It describes guidance for new code, not the limit of what the engine or runtime can support: a host changes it through `Engine.Compatibility`, `FunctionConstructor.Enabled`, `EnableShadowRealm` and the eval option, and there are no presets.
+The recommended out-of-the-box way to use GocciaScript: modern, without dynamic code generation, and intentionally conservative about legacy JavaScript forms. It describes guidance for new code, not the limit of what the engine or runtime can support: a host changes it through the knobs in [Embedding — Changing the Defaults](docs/embedding.md#changing-the-defaults), and there are no presets.
 _Avoid_: Language ceiling, hard limit.
 
 **Recommended profile**:

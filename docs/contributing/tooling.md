@@ -300,7 +300,7 @@ US-ASCII, which produces the same bytes without an iconv call.
 `GocciaFuzzHarness` drives a single input through lex, parse, bytecode
 compilation, and the VM under tight instruction, timeout, memory, and stack bounds. It exists
 because the engine is a from-scratch, manually memory-managed implementation
-whose hosts, the sandbox among them, run untrusted input — see
+whose hosts, sandbox mode among them, run untrusted input — see
 [VISION.md](../../VISION.md).
 
 The harness classifies every outcome the engine models — parse error, runtime
