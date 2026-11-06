@@ -647,12 +647,19 @@ const BARE_COUNT_AFTER =
 const FRACTION_WORDS =
   "(?:half|halves|thirds?|quarters?|fourths?|fifths?|sixths?|sevenths?|eighths?|ninths?|tenths?)";
 const NUMBER_WORDS = "(?:one|two|three|four|five|six|seven|eight|nine|ten)";
+const NUMBER_WORD_VALUES: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twenty: 20,
+};
+
+/** A ratio term written as digits or as a word ("9", "nine"). */
+const ratioTermValue = (term: string): number =>
+  /^\d+$/.test(term) ? Number(term) : NUMBER_WORD_VALUES[term.toLowerCase()];
 const FRACTION_RE = new RegExp(
   [
     // "four fifths", "nine-tenths", "three quarters", "one half"
     String.raw`\b${NUMBER_WORDS}[-\s]+${FRACTION_WORDS}\b`,
-    // "9 in 10", "19 out of 20" — the denominator is checked in code
-    String.raw`(?<![\w.,/-])\d{1,2}\s+(?:in|out\s+of)\s+\d{1,3}\b(?![.,]?\d)`,
+    // "9 in 10", "nine out of ten", "19 out of 20" — the terms are checked in code
+    String.raw`(?<![\w.,/-])(?:\d{1,2}|${NUMBER_WORDS})\s+(?:in|out\s+of)\s+(?:\d{1,3}|${NUMBER_WORDS}|twenty)\b(?![.,]?\d)`,
     // "9/10"
     String.raw`(?<![\w.,/-])\d{1,2}/(?:2|3|4|5|6|8|10|20)\b(?![\w/-])`,
   ].join("|"),
@@ -706,9 +713,12 @@ const findClaimsInSpan = (span: string, countsAllowed: boolean): { claim: string
   }
 
   for (const m of span.matchAll(FRACTION_RE)) {
-    const ratio = m[0].match(/^(\d+)\s+(?:in|out\s+of)\s+(\d+)$/i);
+    const ratio = m[0].match(/^(\w+)\s+(?:in|out\s+of)\s+(\w+)$/i);
     // "5 in 1000" is not a ratio claim and "10 in 5" is not a fraction.
-    if (ratio !== null && !(Number(ratio[1]) < Number(ratio[2]) && Number(ratio[2]) <= 100)) continue;
+    if (ratio !== null) {
+      const [numerator, denominator] = [ratioTermValue(ratio[1]), ratioTermValue(ratio[2])];
+      if (!(numerator < denominator && denominator <= 100)) continue;
+    }
     claims.push({
       claim: m[0].replace(/\s+/g, " ").trim(),
       reason: "hand-typed conformance fraction",
@@ -1205,11 +1215,37 @@ const SELF_TEST_CASES: SelfTestCase[] = [
     claims: ["four fifths"],
   },
   {
-    name: "N-in-M ratio is caught",
+    name: "N-in-M ratio with digits is caught",
     path: "docs/demo.md",
-    content: "Nine in 10 test262 tests pass.\n\nOr put another way, 9 in 10 test262 tests pass.\n",
+    content: "9 in 10 test262 tests pass.\n",
     expected: 1,
     claims: ["9 in 10"],
+  },
+  {
+    name: "a spelled-out N out of M ratio is caught",
+    path: "docs/demo.md",
+    content: "Nine out of ten test262 tests pass.\n",
+    expected: 1,
+    claims: ["Nine out of ten"],
+  },
+  {
+    name: "a spelled-out numerator over a numeric denominator is caught",
+    path: "docs/demo.md",
+    content: "Nine in 10 test262 tests pass.\n",
+    expected: 1,
+    claims: ["Nine in 10"],
+  },
+  {
+    name: "a spelled-out ratio without test262 vocabulary stays clean",
+    path: "docs/demo.md",
+    content: "One in ten sample files pass the linter.\n",
+    expected: 0,
+  },
+  {
+    name: "a spelled-out ratio that is not below one stays clean",
+    path: "docs/demo.md",
+    content: "The test262 job passes ten in ten shards, then three in two retries.\n",
+    expected: 0,
   },
   {
     name: "slash fraction is caught",
