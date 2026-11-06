@@ -836,7 +836,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript for?",
     answer:
-      "It is an ECMAScript engine for embedding: an application adds scripting by embedding it, installs the runtime surface it needs, and grants capabilities explicitly. Different hosts get runtime extensions for their use case: a virtual filesystem, Node.js compatibility to a degree, and web-standard APIs, with the ones React server rendering relies on in scope next. GocciaRunner's sandbox mode, a runtime for code that AI agents generate, is a reference host built on the same capability model.",
+      "It is an ECMAScript engine for embedding: an application adds scripting by embedding it, installs the runtime surface it needs, and grants capabilities explicitly. Different hosts get runtime extensions for their use case: a virtual filesystem, Node.js compatibility to a degree, and web-standard APIs, with the ones React server rendering relies on planned and none of them shipped yet. GocciaRunner's sandbox mode, a runtime for code that AI agents generate, is a reference host built on the same capability model.",
   },
   {
     question: ECMASCRIPT_SCOPE_QUESTION,
@@ -857,7 +857,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "Is GocciaScript a browser runtime?",
     answer:
-      "No. It provides a web-standard API when it fits the vision and cannot be shimmed in userland, and the ones React server rendering needs are in scope, but it does not currently provide a DOM, Web Workers, storage APIs, or a full browser event loop.",
+      "No. It provides a web-standard API when it fits the vision and cannot be shimmed in userland, and the APIs React server rendering needs are planned, but it does not currently provide a DOM, Web Workers, storage APIs, or a full browser event loop.",
   },
   {
     question: COMPILER_SUPPORT_QUESTION,
@@ -1271,7 +1271,7 @@ export function Landing({
                 runtime extensions a host installs: GocciaScript provides a
                 Node.js capability when it fits the vision and cannot be shimmed
                 in userland, and leaves the rest to userland. CommonJS, for
-                example, is left to an ESM-to-CommonJS tool from npm.
+                example, is left to a bundler that converts it to ESM.
                 Bare-specifier lookup through{" "}
                 <code className={inlineCodeClass}>node_modules</code> (ESM only)
                 is opt-in with{" "}

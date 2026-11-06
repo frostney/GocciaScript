@@ -112,10 +112,11 @@ describe("GocciaScript positioning", () => {
     ]);
   });
 
-  test("distinguishes the Node host from the sandbox fs API", () => {
+  test("states the capability rule and the sandbox fs API", () => {
     expectConcepts(NODE_COMPATIBILITY_ANSWER, [
       /when it fits the vision and cannot be shimmed in userland/i,
-      /CommonJS.+ESM-to-CommonJS tool from npm/i,
+      /CommonJS.+bundler from npm converts a CommonJS package to ESM/i,
+      /package that needs a Node built-in is not solved that way/i,
       /Node-compatible to a degree.+runtime extensions a host installs/i,
       /node:async_hooks/,
       /Node-compatible fs API/i,
@@ -123,6 +124,23 @@ describe("GocciaScript positioning", () => {
       /synchronous, callback, and promise-based methods/i,
       /does not expose the ambient host filesystem/i,
     ]);
+  });
+
+  test("never words Node compatibility as a non-goal", () => {
+    for (const text of [
+      NODE_COMPATIBILITY_ANSWER,
+      PRODUCTION_READY_ANSWER,
+      GOCCIASCRIPT_SUMMARY,
+      GOCCIASCRIPT_META_DESCRIPTION,
+    ]) {
+      expect(text).not.toMatch(
+        /non-goal|not a (?:complete )?Node(?:\.js)? host/i,
+      );
+      expect(text).not.toMatch(/ESM-to-CommonJS/i);
+      expect(text).not.toMatch(/sandbox-first/i);
+    }
+    for (const { answer } of POSITIONING_FAQS)
+      expect(answer).not.toMatch(/sandbox-first/i);
   });
 
   test("frames Vitest compatibility as a direction with its gaps named", () => {

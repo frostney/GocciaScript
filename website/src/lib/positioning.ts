@@ -4,10 +4,13 @@ export const GOCCIASCRIPT_SUMMARY =
 export const GOCCIASCRIPT_META_DESCRIPTION =
   "An ECMAScript engine for embedding, with sensible defaults that are easy to customize, host-defined capabilities and limits, and live test262 evidence.";
 
+export const GOCCIASCRIPT_PURPOSE =
+  "GocciaScript is an ECMAScript engine for embedding, with sensible defaults that are easy to customize; the host sets the capabilities and execution limits, and GocciaRunner's sandbox mode is a reference host for code that AI agents generate.";
+
 export const PRODUCTION_READY_QUESTION = "Is GocciaScript production-ready?";
 
 export const PRODUCTION_READY_ANSWER =
-  "It runs in production as the engine behind Shotcup's hosted sandboxes (shotcup.dev). test262 runs on every pull request, where a regression fails CI, with the live result on the compatibility page; 17,000+ tests run on every change, and the engine is fuzzed and run under memory checkers every night and GC-stress-tested every week. It is pre-1.0, so the host API and command-line flags can change between releases: pin a version, and check that the supported surface (ES modules; capabilities that userland can shim, such as CommonJS through an ESM-to-CommonJS tool from npm, are left to userland) covers what you run.";
+  "It runs in production as the engine behind Shotcup's hosted sandboxes (shotcup.dev). test262 runs on every pull request, where a regression fails CI, with the live result on the compatibility page; 17,000+ tests run on every change, and the engine is fuzzed and run under memory checkers every night and GC-stress-tested every week. It is pre-1.0, so the host API and command-line flags can change between releases: pin a version, and check that the supported surface (ES modules, with CommonJS packages converted to ESM by a bundler) covers what you run.";
 
 export const NATIVE_PLATFORM_DESCRIPTION =
   "Native binaries for macOS, Linux and Windows, with GocciaScript's own compiler, VM and garbage collector and no other engine underneath: no other runtime to install beside the binary (HTTPS on Linux uses the system OpenSSL). FreePascal builds them, and Delphi 12 covers the Win32 and Win64 application matrix. Native applications can embed the engine with their own globals, modules, capabilities and limits.";
@@ -33,7 +36,7 @@ export const TYPESCRIPT_JSX_ANSWER =
 export const NODE_COMPATIBILITY_QUESTION = "Is GocciaScript Node-compatible?";
 
 export const NODE_COMPATIBILITY_ANSWER =
-  "GocciaScript provides a Node.js capability when it fits the vision and cannot be shimmed in userland, and leaves what userland or npm can shim to userland: CommonJS, for example, is left to an ESM-to-CommonJS tool from npm, and the general node: modules are judged by the same test. It is Node-compatible to a degree, through runtime extensions a host installs: node:async_hooks; bare-specifier lookup through node_modules (ESM only, a subset of Node's resolver), which is opt-in with --allow-import=node_modules; and a Node-compatible fs API over a virtual filesystem, which GocciaRunner's sandbox mode provides, with synchronous, callback, and promise-based methods, Stats objects, and Node-shaped errors. The documented method set stays inside the virtual filesystem and does not expose the ambient host filesystem.";
+  "GocciaScript provides a Node.js capability when it fits the vision and cannot be shimmed in userland, and leaves what userland or npm can shim to userland: CommonJS, for example, is left to userland, because a bundler from npm converts a CommonJS package to ESM and the output runs with the compatibility flags; a package that needs a Node built-in is not solved that way, and the general node: modules are judged by the capability test. It is Node-compatible to a degree, through runtime extensions a host installs: node:async_hooks; bare-specifier lookup through node_modules (ESM only, a subset of Node's resolver), which is opt-in with --allow-import=node_modules; and a Node-compatible fs API over a virtual filesystem, which GocciaRunner's sandbox mode provides, with synchronous, callback, and promise-based methods, Stats objects, and Node-shaped errors. The documented method set stays inside the virtual filesystem and does not expose the ambient host filesystem.";
 
 export const VITEST_COMPATIBILITY_QUESTION =
   "Can I run my Vitest tests on GocciaScript?";

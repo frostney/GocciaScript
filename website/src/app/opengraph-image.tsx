@@ -133,7 +133,7 @@ export default async function OpenGraphImage() {
             ECMAScript engine for embedding.
           </span>
           <span style={{ display: "flex", color: "#5f523b" }}>
-            Sensible defaults. Easy to customize. Host-controlled.
+            Sensible defaults. Host-controlled.
           </span>
         </div>
       </div>

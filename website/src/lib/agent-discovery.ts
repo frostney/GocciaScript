@@ -9,6 +9,7 @@ import {
 import {
   COMPILER_SUPPORT_ANSWER,
   ECMASCRIPT_SCOPE_ANSWER,
+  GOCCIASCRIPT_PURPOSE,
   GOCCIASCRIPT_SUMMARY,
   NODE_COMPATIBILITY_ANSWER,
   PRODUCTION_READY_ANSWER,
@@ -150,7 +151,7 @@ Concise live compatibility summary: ${absoluteUrl(origin, COMPATIBILITY_MARKDOWN
 
 ## Important distinctions
 
-- Purpose: GocciaScript is an ECMAScript engine for embedding, with sensible defaults that are easy to customize; the host sets the capabilities and execution limits, and GocciaRunner's sandbox mode is a reference host for code that AI agents generate.
+- Purpose: ${GOCCIASCRIPT_PURPOSE}
 - Evidence: test262 on every pull request (a regression fails CI), live results on the compatibility page; 17,000+ tests; nightly fuzzing and memory checks; weekly GC stress; the engine behind Shotcup's hosted sandboxes (shotcup.dev).
 - Production readiness: ${PRODUCTION_READY_ANSWER}
 - ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}
@@ -210,7 +211,7 @@ export function buildLlmsTxt(origin: string) {
 
 ## Important distinctions
 
-- Purpose: GocciaScript is an ECMAScript engine for embedding, with sensible defaults that are easy to customize; the host sets the capabilities and execution limits, and GocciaRunner's sandbox mode is a reference host for code that AI agents generate.
+- Purpose: ${GOCCIASCRIPT_PURPOSE}
 - Evidence: test262 on every pull request (a regression fails CI), live results on the compatibility page; 17,000+ tests; nightly fuzzing and memory checks; weekly GC stress; the engine behind Shotcup's hosted sandboxes (shotcup.dev).
 - Production readiness: ${PRODUCTION_READY_ANSWER}
 - ECMAScript language support: ${ECMASCRIPT_SCOPE_ANSWER}

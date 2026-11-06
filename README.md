@@ -36,10 +36,6 @@ Today the host is a FreePascal or Delphi application; see
 - **In production.** GocciaScript is the engine behind
   [Shotcup](https://shotcup.dev)'s hosted sandboxes, where every run gets a
   fresh engine with hard limits.
-- **Made to be embedded.** The defaults are modern and easy to change, the
-  host installs only the runtime extensions it needs, and a script reaches
-  only the capabilities and limits the host sets. See
-  [Embed it](#embed-it).
 - **Native, with nothing underneath.** Its own compiler, bytecode VM and
   garbage collector, built with FreePascal into native binaries: no Node.js,
   V8 or other runtime to install beside the binary (HTTPS on Linux uses the
@@ -66,9 +62,9 @@ needs the FreePascal compiler; see [Getting Started](#getting-started).
 
 GocciaScript provides a Node.js or Web API capability when it fits the vision
 and cannot be shimmed in userland, and leaves what userland or npm can shim to
-userland. CommonJS, for example, is left to an ESM-to-CommonJS tool from npm.
-What it does provide is a set of runtime extensions a host installs, not a
-default host environment.
+userland; see [Node compatibility](#node-compatibility-to-a-degree). What it
+provides is a set of runtime extensions a host installs, not a default host
+environment.
 
 ## Embed it
 
@@ -94,11 +90,14 @@ presets:
 The host also chooses its runtime extensions: `fetch`, `URL`,
 `TextEncoder`/`TextDecoder`, `Blob`, `AbortController` and `EventTarget` today,
 a virtual filesystem, and Node.js compatibility to a degree. The Web APIs React
-server rendering relies on are in scope next.
+server rendering relies on, such as `MessageChannel`, `ReadableStream` and
+`crypto`, are planned ([#1562](https://github.com/frostney/GocciaScript/issues/1562));
+none of them ships yet.
 
 ## Where it is going
 
-The goals, in the order [VISION.md](VISION.md) sets them:
+The goals, in the order [VISION.md](VISION.md) sets them. The stable C ABI and
+`.gcbundle` are planned; neither ships yet.
 
 - **Conformance.** All of test262 in every mode it requires, strict and
   non-strict, Annex B and staging included. Progress is on the
@@ -206,10 +205,14 @@ parsing rules.
 ## Node compatibility, to a degree
 
 GocciaScript provides a Node.js capability when it fits the vision and cannot
-be shimmed in userland, and leaves the rest to userland: CommonJS, for example,
-is left to an ESM-to-CommonJS tool from npm, and the general `node:` modules
-are judged by the same test. What it provides are runtime extensions a host
-installs: `node:async_hooks`; bare-specifier lookup through
+be shimmed in userland, and leaves the rest to userland. CommonJS, for example,
+is left to userland: a bundler from npm, such as `esbuild --format=esm` or
+Rollup with `@rollup/plugin-commonjs`, converts a CommonJS package to ESM, and
+the output runs with the compatibility flags, because the default profile
+rejects bundler output. Conversion does not solve a package that needs a Node
+built-in, such as `debug`, which requires `tty`; that is where the capability
+test applies, and the general `node:` modules are judged by it. What
+GocciaScript provides are runtime extensions a host installs: `node:async_hooks`; bare-specifier lookup through
 `node_modules` (ESM only, a subset of Node's resolver), which is opt-in with
 `--allow-import=node_modules` (see [Module Resolution](docs/module-resolution.md));
 and a Node-compatible `fs` API over a virtual filesystem, which
