@@ -200,14 +200,17 @@ async function runTest262(
     );
   }
   const report = JSON.parse(readFileSync(output, "utf8")) as {
-    results: { id: string; status: Outcome; message: string }[];
+    results: { id: string; mode?: string; status: Outcome; message: string }[];
   };
   if (!Array.isArray(report.results) || report.results.length === 0) {
     throw new InfrastructureError(`test262 ${build} report has no results: ${output}`);
   }
   const outcomes = new Map<string, TestOutcome>();
   for (const result of report.results) {
-    outcomes.set(result.id, { status: result.status, message: result.message ?? "" });
+    // A file can run in both modes (docs/test262.md, "Strict mode"), so a
+    // run is keyed by file and mode.
+    const key = result.mode ? `${result.id} (${result.mode})` : result.id;
+    outcomes.set(key, { status: result.status, message: result.message ?? "" });
   }
   return outcomes;
 }

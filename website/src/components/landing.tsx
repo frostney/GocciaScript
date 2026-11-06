@@ -62,6 +62,10 @@ import {
   VITEST_COMPATIBILITY_ANSWER,
   VITEST_COMPATIBILITY_QUESTION,
 } from "@/lib/positioning";
+import {
+  type Test262ModeBreakdown,
+  test262ModeRates,
+} from "@/lib/test262-modes";
 import { compatibilityPercent } from "@/lib/test262-percent";
 
 const FEATURE_ICONS: Record<
@@ -916,6 +920,8 @@ export function Landing({
     passed: number;
     totalRun: number;
     annexBIncluded: boolean;
+    /** Per-mode figures; absent for a report that predates them. */
+    byMode?: Test262ModeBreakdown;
   } | null;
   release?: ReleaseInfo | null;
   /** BCP-47 locale tag from `Accept-Language` so the release-date in
@@ -923,6 +929,7 @@ export function Landing({
    *  the browser. */
   locale: string;
 }) {
+  const modeRates = test262ModeRates(compatibility?.byMode);
   return (
     <>
       <section className="hero">
@@ -1040,11 +1047,12 @@ export function Landing({
                         {compatibility.passed.toLocaleString(locale)} of{" "}
                         {compatibility.totalRun.toLocaleString(locale)}
                       </strong>{" "}
-                      cases passing (
+                      runs passing (
                       {compatibilityPercent(
                         compatibility.passed,
                         compatibility.totalRun,
                       )}
+                      {modeRates ? `; ${modeRates}` : ""}
                       ); see results{" "}
                     </>
                   ) : (
@@ -1133,7 +1141,8 @@ export function Landing({
               are enabled by default; every standard core form disabled by the
               recommended profile has an explicit compatibility path. Normal
               hosts do not install <code className={inlineCodeClass}>eval</code>
-              , which is exposed only by the private test262 conformance host.
+              ; an embedder opts in through the engine&apos;s{" "}
+              <code className={inlineCodeClass}>EnableEval</code> option.
             </p>
             <p className="compat-note">
               <Link href="/compatibility" className="link-button">

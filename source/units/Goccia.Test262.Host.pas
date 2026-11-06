@@ -68,6 +68,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Builtins.Atomics,
+  Goccia.Builtins.GlobalEval,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Error,
   Goccia.ExecutionContext,
@@ -84,7 +85,6 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
   Goccia.VM.Exception;
 
@@ -106,8 +106,6 @@ type
     FEngine: TGocciaEngine;
   public
     constructor Create(const AEngine: TGocciaEngine);
-    function Eval(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
     function EvalScript(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
@@ -208,28 +206,16 @@ begin
   AEngine.ExperimentalJSModuleSourceEnabled :=
     AOptions.ExperimentalJSModuleSourceEnabled;
   AEngine.SourceType := AOptions.SourceType;
+  { test262 runs eval through the engine's supported option, the one an
+    embedder uses, rather than a conformance-only copy. }
   AEngine.FunctionConstructor.Enabled := True;
+  EnableEval(AEngine);
   if AOptions.UnsafeShadowRealm then
     EnableShadowRealm(AEngine);
   SetAtomicsAgentCanSuspend(AOptions.AgentCanSuspend);
   AEngine.ModuleLoader.SetContentProvider(
     TGocciaFileSystemModuleContentProvider.Create, True);
   AEngine.GlobalBackedTopLevel := AOptions.SourceType = stScript;
-end;
-
-procedure InstallTest262EvalGlobal(const AEngine: TGocciaEngine;
-  const AEvalHost: TTest262EvalHost);
-var
-  EvalFunction: TGocciaNativeFunctionValue;
-  GlobalObject: TGocciaObjectValue;
-begin
-  EvalFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    AEvalHost.Eval, 'eval', 1);
-  InstallRealmEvalFunction(AEngine.Realm, EvalFunction);
-  GlobalObject := TGocciaObjectValue(AEngine.Realm.GlobalObject);
-  GlobalObject.DefineProperty('eval',
-    TGocciaPropertyDescriptorData.Create(EvalFunction,
-      [pfWritable, pfConfigurable]));
 end;
 
 procedure InstallTest262HostGlobals(const AEngine: TGocciaEngine;
@@ -254,7 +240,6 @@ begin
   Test262Object.AssignProperty('agent', AHost.CreateAgentObject);
   AEngine.GocciaGlobal.AssignProperty('test262', Test262Object);
   AEngine.RefreshGlobalThis;
-  InstallTest262EvalGlobal(AEngine, AEvalHost);
 end;
 
 function TGocciaTest262IsHTMLDDAValue.HasHTMLDDAInternalSlot: Boolean;
@@ -277,25 +262,6 @@ constructor TTest262EvalHost.Create(const AEngine: TGocciaEngine);
 begin
   inherited Create;
   FEngine := AEngine;
-end;
-
-// ES2026 §19.2.1.1.1 eval ( x ), called indirectly: PerformEval(x, false,
-// false) in this host's realm. A direct eval never reaches this function; the
-// VM evaluates it at the call site.
-function TTest262EvalHost.Eval(const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  SourceValue: TGocciaValue;
-  Stage: TGocciaGlobalEvalStage;
-begin
-  if AArgs.Length = 0 then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  SourceValue := AArgs.GetElement(0);
-  if not (SourceValue is TGocciaStringLiteralValue) then
-    Exit(SourceValue);
-  Result := FEngine.EvaluateGlobalEval(
-    TGocciaStringLiteralValue(SourceValue).Value, '<test262-realm-eval>',
-    Stage);
 end;
 
 function EvaluateTest262Script(const AEngine: TGocciaEngine;

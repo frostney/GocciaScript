@@ -209,7 +209,7 @@ export const PROFILE_DISABLED_FEATURES: ProfileDisabledFeature[] = [
     name: "eval",
     implemented: true,
     defaultProfile: "Not installed",
-    enablement: "private GocciaTest262Runner conformance host",
+    enablement: "engine option EnableEval only (no CLI flag)",
     standardsSource: "ECMA-262 core",
     why: "normal hosts do not expose dynamic source evaluation",
   },

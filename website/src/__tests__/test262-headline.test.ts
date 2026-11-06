@@ -12,6 +12,19 @@ describe("test262 headline endpoint", () => {
           latest: { summary: { passed: 2, totalRun: 3 } },
           timeline: [{ summary: { passed: 3, totalRun: 3 } }],
         },
+        {
+          status: "ready",
+          latest: {
+            summary: {
+              passed: 5,
+              totalRun: 8,
+              byMode: {
+                "non-strict": { run: 4, passed: 3 },
+                strict: { run: 4, passed: 2 },
+              },
+            },
+          },
+        },
         { status: "ready", latest: null },
         { status: "error", latest: { summary: { passed: 3, totalRun: 3 } } },
       ];
@@ -22,7 +35,7 @@ describe("test262 headline endpoint", () => {
       }));
       const { GET } = await import(${JSON.stringify(import.meta.resolve("@/app/api/test262/headline/route"))});
       const responses = [];
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 4; i++) {
         const response = await GET();
         responses.push({
           status: response.status,
@@ -41,7 +54,20 @@ describe("test262 headline endpoint", () => {
       {
         status: 200,
         cacheControl: TEST262_DASHBOARD_CACHE_CONTROL,
-        body: { passed: 2, totalRun: 3, percent: "66.7%" },
+        body: { passed: 2, totalRun: 3, percent: "66.7%", byMode: null },
+      },
+      {
+        status: 200,
+        cacheControl: TEST262_DASHBOARD_CACHE_CONTROL,
+        body: {
+          passed: 5,
+          totalRun: 8,
+          percent: "62.5%",
+          byMode: {
+            "non-strict": { passed: 3, run: 4, percent: "75.0%" },
+            strict: { passed: 2, run: 4, percent: "50.0%" },
+          },
+        },
       },
       ...Array.from({ length: 2 }, () => ({
         status: 503,
