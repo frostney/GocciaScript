@@ -505,8 +505,10 @@ function TRoutineParser.IsTypeOpener(const AIndex: Integer): Boolean;
 var
   Next: Integer;
 begin
+  // `record` is also a generic constraint: `<T: record>`, `<T: record, U>`
+  // or `<T: record; U: class>`.
   if IsWord(AIndex, 'record') then
-    Exit(not (IsSymbol(AIndex + 1, '>') or IsSymbol(AIndex + 1, ',')));
+    Exit(not (IsSymbol(AIndex + 1, '>') or IsSymbol(AIndex + 1, ',') or IsSymbol(AIndex + 1, ';')));
   if IsWord(AIndex, 'object') then
     Exit(not IsWord(AIndex - 1, 'of'));
   if not (IsWord(AIndex, 'class') or IsWord(AIndex, 'interface') or

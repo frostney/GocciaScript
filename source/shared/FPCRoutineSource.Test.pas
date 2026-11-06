@@ -470,6 +470,9 @@ const
     '      0: (Value: Integer);' + LineEnding +
     '      1: (Nested: record Inner: Byte; end);' + LineEnding +
     '  end;' + LineEnding +
+    '  TBox<T: record; U: class> = class' + LineEnding +
+    '    Value: T;' + LineEnding +
+    '  end;' + LineEnding +
     '  IReviewed = interface' + LineEnding +
     '    procedure ReviewedRoutine;' + LineEnding +
     '  end;' + LineEnding +
