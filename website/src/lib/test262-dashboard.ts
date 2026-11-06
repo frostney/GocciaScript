@@ -455,8 +455,9 @@ export async function readNewestValidTest262Report(
 }
 
 /** Whether a run covered test262's `annexB` category. Annex B is part of the
- *  conformance target (ADR 0177) but not yet in the default run (#2069), so
- *  site copy names the exclusion only while a run leaves it out. */
+ *  conformance target (ADR 0177) and in the default run since #2069, but a
+ *  run published before that left it out, so site copy names the exclusion
+ *  only while the run it quotes leaves it out. */
 export function test262RunIncludesAnnexB(
   summary: Test262SuiteSummary,
 ): boolean {

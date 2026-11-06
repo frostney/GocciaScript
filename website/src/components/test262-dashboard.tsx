@@ -25,6 +25,7 @@ const CATEGORY_COLORS: Record<string, string | undefined> = {
   intl402: "#8b5fa8",
   staging: "#b45f67",
   harness: "#6f7d42",
+  annexB: "#2f6f73",
 };
 
 const GENERATED_CATEGORY_COLORS = [

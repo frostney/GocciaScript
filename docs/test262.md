@@ -142,7 +142,7 @@ recommendations.
 
 ```text
 GocciaTest262Runner
-  → discover tests under suite/test/{built-ins,harness,intl402,language,staging}
+  → discover tests under suite/test/{annexB,built-ins,harness,intl402,language,staging}
   → optionally select one deterministic --shard-index/--shard-count partition
   → read each selected file's flags and expand it into its runs, one per mode
     (see "Strict mode")
@@ -327,7 +327,12 @@ Bodies see only the identifiers stock test262 expects:
   `doneprintHandle.js` uses it for async markers)
 - `$262` helpers implemented by Goccia's bundled host object:
   `detachArrayBuffer`, `evalScript`, `gc`, `global`, `createRealm`,
-  `AbstractModuleSource`, and `IsHTMLDDA`
+  `AbstractModuleSource`, and `IsHTMLDDA`. `$262` is the only global
+  binding `scripts/test262_harness/$262.js` creates, so a test may declare
+  any other name at its top level. The `annexB` emulates-undefined tests
+  begin with `var IsHTMLDDA = $262.IsHTMLDDA;`, which a global lexical
+  `IsHTMLDDA` would turn into a `SyntaxError` (ES2026 §16.1.7
+  GlobalDeclarationInstantiation, step 4.a).
 - `$262.agent` helpers used by Atomics tests: `start`, `broadcast`,
   `receiveBroadcast`, `report`, `getReport`, `sleep`, `monotonicNow`, and
   `leaving`
@@ -462,16 +467,16 @@ test produces the same ID on both platforms.
 
 ## Test corpus
 
-Default categories: `built-ins, harness, intl402, language, staging`
-(everything except `annexB`).
+Default categories: `annexB, built-ins, harness, intl402, language,
+staging`, every top-level category in `suite/test`.
 
 - `annexB` (legacy browser behavior) is part of the conformance target
-  and a release gate from 0.18.0. It is not in the default run yet:
-  [#2069](https://github.com/frostney/GocciaScript/issues/2069) adds it
-  once the runner's `IsHTMLDDA` harness clash is fixed. Until then, run it with
-  `--categories=annexB`. New Annex B surfaces will go behind a
-  compatibility flag, added by the 0.18.0 Annex B work, that the runner's
-  engine profile turns on. See
+  and a release gate from 0.18.0. It runs by default and counts toward
+  the published pass rate and the PR comparison like any other category.
+  New Annex B surfaces will go behind a compatibility flag, added by the
+  0.18.0 Annex B work, that the runner turns on by adding it to
+  `TEST262_COMPATIBILITY` in `GocciaTest262Runner.dpr`, the flag set every
+  test262 engine runs with. See
   [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 - `intl402` covers Intl APIs (ECMA-402); tests exercise
   `Intl.getCanonicalLocales`, constructors, and formatting operations.
