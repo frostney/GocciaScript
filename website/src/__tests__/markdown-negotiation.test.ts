@@ -264,7 +264,7 @@ describe("createSiteMarkdown", () => {
       markdown.indexOf("## Quick install"),
     );
     expect(markdown).toContain(
-      `${passed} of ${totalRun} tests passing (${compatibilityPercent(passed, totalRun)})`,
+      `${passed} of ${totalRun} runs passing (${compatibilityPercent(passed, totalRun)})`,
     );
     expect(markdown).toContain(
       "The latest published run, Annex B excluded, has",
@@ -326,7 +326,7 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain(
       "by area on the compatibility dashboard](/compatibility)",
     );
-    expect(markdown).not.toContain("tests passing (");
+    expect(markdown).not.toContain("runs passing (");
     expect(markdown).not.toContain("undefined");
   });
 
@@ -337,14 +337,58 @@ describe("createSiteMarkdown", () => {
       "concise Markdown representation of the authoritative GocciaScript compatibility page",
     );
     expect(markdown).toContain(
-      "Overall test262 corpus pass rate: **99.0%** (99 passed / 100 run)",
+      "Overall test262 corpus pass rate: **99.0%** (99 passed / 100 runs)",
     );
-    expect(markdown).toContain("| language | 100.0% | 50 / 50 |");
+    expect(markdown).toContain("| language | 100.0% | 50 / 50 | n/a | n/a |");
+    expect(markdown).toContain("- Test files discovered: 100");
+    expect(markdown).toContain("Every figure counts runs, not test files");
+    // A report without modes must not show a guessed split.
+    expect(markdown).toContain("Per-mode figures are not available");
+    expect(markdown).not.toContain("| Mode |");
     expect(markdown).toContain("- Commit: `0466e9bc`");
     expect(markdown).toContain(
       "- CI run: [#829](https://github.com/frostney/GocciaScript/actions/runs/100)",
     );
     expect(markdown).not.toContain("/api/test262/latest");
+  });
+
+  test("renders strict and non-strict figures when the report records modes", () => {
+    const counts = { failed: 0, wrapperInfra: 0, timeouts: 0 };
+    const summary = compatibilityData.latest.summary;
+    const withModes = {
+      ...compatibilityData,
+      latest: {
+        ...compatibilityData.latest,
+        summary: {
+          ...summary,
+          byMode: {
+            "non-strict": { run: 60, passed: 60, ...counts },
+            strict: { run: 40, passed: 39, ...counts, failed: 1 },
+          },
+          byCategory: summary.byCategory.map((category) => ({
+            ...category,
+            byMode: {
+              "non-strict": { run: 25, passed: 25, ...counts },
+              strict: { run: 25, passed: category.passed - 25, ...counts },
+            },
+          })),
+        },
+      },
+    };
+    const markdown = renderCompatibilityMarkdown(withModes);
+
+    expect(markdown).toContain("| Non-strict | 100.0% | 60 / 60 | 0 | 0 |");
+    expect(markdown).toContain("| Strict | 97.5% | 39 / 40 | 1 | 0 |");
+    expect(markdown).toContain(
+      "| language | 100.0% | 50 / 50 | 100.0% | 100.0% |",
+    );
+    expect(markdown).toContain(
+      "| staging | 98.0% | 49 / 50 | 100.0% | 96.0% |",
+    );
+    expect(markdown).not.toContain("Per-mode figures are not available");
+    expect(renderHomeMarkdown(null, withModes)).toContain(
+      "(99.0%; non-strict 100.0%, strict 97.5%)",
+    );
   });
 
   test("renders a performance alternate from dashboard data", () => {

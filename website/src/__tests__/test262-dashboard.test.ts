@@ -1,19 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { deflateRawSync } from "node:zlib";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   formatTest262CategoryLabel,
   formatTest262DurationTooltip,
+  formatTest262ModeRates,
   formatTest262TimelineTooltip,
+  Test262Dashboard,
 } from "@/components/test262-dashboard";
 import type { Test262BlobRun } from "@/lib/test262-blob-store";
 import {
+  createTest262DashboardData,
   createTest262DashboardFallback,
   extractJsonFromZip,
+  groupCoverage,
   latestTest262Summary,
   normalizeTest262Report,
   rankGroupCoverage,
   readNewestValidTest262Report,
   type Test262DashboardData,
+  type Test262Record,
+  type Test262SuiteSummary,
   test262RunIncludesAnnexB,
 } from "@/lib/test262-dashboard";
 
@@ -175,6 +183,121 @@ describe("test262 dashboard data helpers", () => {
       attempted: 30,
       passed: 6,
     });
+  });
+
+  const modeCounts = (run: number, passed: number) => ({
+    run,
+    passed,
+    failed: run - passed,
+    wrapperInfra: 0,
+    timeouts: 0,
+  });
+
+  test("keeps mode and byMode, and counts both runs of a file in group coverage", () => {
+    const report = normalizeTest262Report({
+      summary: {
+        totalDiscovered: 30,
+        totalRun: 60,
+        passed: 45,
+        failed: 15,
+        byMode: {
+          "non-strict": modeCounts(30, 30),
+          strict: modeCounts(30, 15),
+        },
+        byCategory: [
+          {
+            category: "language",
+            run: 60,
+            passed: 45,
+            failed: 15,
+            byMode: {
+              "non-strict": modeCounts(30, 30),
+              strict: modeCounts(30, 15),
+            },
+          },
+        ],
+      },
+      results: Array.from({ length: 30 }, (_, i) => [
+        { id: `language/types/t-${i}.js`, mode: "non-strict", status: "PASS" },
+        {
+          id: `language/types/t-${i}.js`,
+          mode: "strict",
+          status: i < 15 ? "PASS" : "FAIL",
+        },
+      ]).flat(),
+    });
+    if (!report) throw new Error("expected normalized report");
+
+    expect(report.summary.totalDiscovered).toBe(30);
+    expect(report.summary.totalRun).toBe(60);
+    expect(report.summary.byMode?.strict).toEqual(modeCounts(30, 15));
+    expect(report.summary.byCategory[0]?.byMode?.["non-strict"].passed).toBe(
+      30,
+    );
+    expect(report.results.filter((r) => r.mode === "strict")).toHaveLength(30);
+
+    // 30 files x 2 runs clears the 25-run floor that 30 runs alone would not
+    // for a 15-file group.
+    const [group] = groupCoverage(report);
+    expect(group).toMatchObject({
+      key: "language/types",
+      attempted: 60,
+      passed: 45,
+      failed: 15,
+    });
+    expect(group?.byMode?.["non-strict"]).toEqual(modeCounts(30, 30));
+    expect(group?.byMode?.strict).toEqual(modeCounts(30, 15));
+    expect(groupCoverage(report, 61)).toEqual([]);
+  });
+
+  test("does not invent modes for a report that predates them", () => {
+    const report = normalizeTest262Report({
+      summary: {
+        totalDiscovered: 40,
+        totalRun: 40,
+        passed: 30,
+        failed: 10,
+        byCategory: [{ category: "language", run: 40, passed: 30, failed: 10 }],
+      },
+      results: Array.from({ length: 40 }, (_, i) => ({
+        id: `language/types/t-${i}.js`,
+        status: i < 30 ? "PASS" : "FAIL",
+      })),
+    });
+    if (!report) throw new Error("expected normalized report");
+
+    expect(report.summary.byMode).toBeUndefined();
+    expect(report.summary.byCategory[0]?.byMode).toBeUndefined();
+    expect("byMode" in report.summary).toBe(false);
+    expect(report.results.every((r) => r.mode === undefined)).toBe(true);
+    const [group] = groupCoverage(report);
+    expect(group).toMatchObject({ attempted: 40, passed: 30 });
+    expect(group?.byMode).toBeUndefined();
+    // The published (re-serialized) report must not gain a mode either.
+    expect(JSON.stringify(report)).not.toContain("byMode");
+    expect(JSON.stringify(report)).not.toContain('"mode"');
+  });
+
+  test("treats a partial byMode or an unknown mode as unavailable", () => {
+    const report = normalizeTest262Report({
+      summary: {
+        totalRun: 2,
+        passed: 2,
+        byMode: { strict: modeCounts(1, 1) },
+        byCategory: [
+          { category: "language", run: 2, passed: 2, byMode: "strict" },
+        ],
+      },
+      results: [
+        { id: "language/a.js", mode: "module", status: "PASS" },
+        { id: "language/b.js", mode: "strict", status: "PASS" },
+      ],
+    });
+    if (!report) throw new Error("expected normalized report");
+
+    expect(report.summary.byMode).toBeUndefined();
+    expect(report.summary.byCategory[0]?.byMode).toBeUndefined();
+    expect(report.results.map((r) => r.mode)).toEqual([undefined, "strict"]);
   });
 
   test("extracts the JSON report from a GitHub artifact ZIP", () => {
@@ -339,5 +462,100 @@ describe("test262 dashboard component helpers", () => {
     expect(formatTest262CategoryLabel("future-category")).toBe(
       "Future-Category",
     );
+  });
+});
+
+describe("test262 dashboard per-mode rendering", () => {
+  const counts = (run: number, passed: number) => ({
+    run,
+    passed,
+    failed: run - passed,
+    wrapperInfra: 0,
+    timeouts: 0,
+  });
+  const summary = {
+    totalDiscovered: 50,
+    totalRun: 100,
+    passed: 90,
+    failed: 10,
+    wrapperInfraFailures: 0,
+    timeouts: 0,
+    durationSeconds: 60,
+    byCategory: [
+      { category: "language", ...counts(100, 90) },
+    ] as Test262SuiteSummary["byCategory"],
+  };
+  const point = (s: Test262SuiteSummary) => ({
+    runId: 1,
+    runNumber: 7,
+    title: "CI",
+    headSha: "abc1234",
+    shortSha: "abc1234",
+    runUrl: "https://example.test/runs/1",
+    createdAt: "2026-06-10T01:00:00.000Z",
+    updatedAt: "2026-06-10T01:05:00.000Z",
+    artifactId: 1,
+    artifactCreatedAt: "2026-06-10T01:05:00.000Z",
+    jsonUrl: "/api/test262/results/1",
+    summary: s,
+  });
+  const html = (s: Test262SuiteSummary, results: Test262Record[] = []) => {
+    const report = { summary: s, results };
+    return renderToStaticMarkup(
+      createElement(Test262Dashboard, {
+        data: createTest262DashboardData({
+          generatedAt: "2026-06-10T02:00:00.000Z",
+          timeline: [point(s)],
+          latestReport: report,
+        }),
+      }),
+    );
+  };
+
+  test("formats per-mode rates, and returns null without modes", () => {
+    expect(formatTest262ModeRates(undefined)).toBeNull();
+    expect(
+      formatTest262ModeRates({
+        "non-strict": counts(50, 49),
+        strict: counts(50, 41),
+      }),
+    ).toBe("non-strict 98.0% · strict 82.0%");
+    expect(
+      formatTest262ModeRates({
+        "non-strict": counts(50, 49),
+        strict: counts(0, 0),
+      }),
+    ).toBe("non-strict 98.0% · strict n/a");
+  });
+
+  test("shows strict and non-strict side by side when the report has modes", () => {
+    const markup = html({
+      ...summary,
+      byMode: { "non-strict": counts(50, 49), strict: counts(50, 41) },
+      byCategory: [
+        {
+          ...summary.byCategory[0],
+          byMode: { "non-strict": counts(50, 49), strict: counts(50, 41) },
+        },
+      ] as Test262SuiteSummary["byCategory"],
+    });
+
+    expect(markup).toContain("Strict and non-strict");
+    expect(markup).toContain("98.0%");
+    expect(markup).toContain("82.0%");
+    expect(markup).toContain("49 passed / 50 run");
+    expect(markup).toContain("non-strict 98.0% · strict 82.0%");
+    expect(markup).toContain("90 / 100 runs");
+    expect(markup).toContain("50 test files");
+    expect(markup).not.toContain("Per-mode figures are not available");
+  });
+
+  test("shows modes as unavailable, not guessed, for a legacy report", () => {
+    const markup = html(summary);
+
+    expect(markup).toContain("Strict and non-strict");
+    expect(markup).toContain("Per-mode figures are not available");
+    expect(markup).not.toContain("non-strict 9");
+    expect(markup).not.toContain(">Strict<");
   });
 });

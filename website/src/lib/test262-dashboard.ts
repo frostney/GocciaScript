@@ -19,8 +19,29 @@ export const TEST262_DASHBOARD_CACHE_CONTROL =
 
 export type Test262Outcome = "PASS" | "FAIL" | "WRAPPER_INFRA" | "TIMEOUT";
 
+/** How a run executed the test: the same file runs once per mode it allows. */
+export type Test262Mode = "non-strict" | "strict";
+
+export const TEST262_MODES: readonly Test262Mode[] = ["non-strict", "strict"];
+
+export type Test262ModeCounts = {
+  run: number;
+  passed: number;
+  failed: number;
+  wrapperInfra: number;
+  timeouts: number;
+};
+
+/** Per-mode counts. Absent (`undefined`) on reports from before the runner
+ *  recorded the mode; never derive it for those. */
+export type Test262ModeBreakdown = Record<Test262Mode, Test262ModeCounts>;
+
+/** One run of a test file. A file appears once per mode it ran in, so
+ *  `id` alone is not unique in a current report. `mode` is absent on
+ *  historical reports, where each file ran once in an unrecorded mode. */
 export type Test262Record = {
   id: string;
+  mode?: Test262Mode;
   status: Test262Outcome;
   durationMs?: number;
   message?: string;
@@ -34,16 +55,20 @@ export type Test262CategorySummary = {
   failed: number;
   wrapperInfra: number;
   timeouts: number;
+  byMode?: Test262ModeBreakdown;
 };
 
 export type Test262SuiteSummary = {
+  /** Test files discovered, not runs. */
   totalDiscovered: number;
+  /** Runs executed: a file that runs in both modes counts twice. */
   totalRun: number;
   passed: number;
   failed: number;
   wrapperInfraFailures: number;
   timeouts: number;
   durationSeconds: number;
+  byMode?: Test262ModeBreakdown;
   byCategory: Test262CategorySummary[];
 };
 
@@ -75,12 +100,15 @@ export type Test262TimelinePoint = Test262RunMeta & {
 
 export type Test262GroupCoverage = {
   key: string;
+  /** Runs attempted in the group; both runs of a file count. */
   attempted: number;
   passed: number;
   failed: number;
   wrapperInfra: number;
   timeouts: number;
   passRate: number;
+  /** Present only when every run in the group recorded its mode. */
+  byMode?: Test262ModeBreakdown;
 };
 
 export type Test262DashboardData = {
@@ -127,10 +155,55 @@ function isOutcome(value: unknown): value is Test262Outcome {
   );
 }
 
+function isMode(value: unknown): value is Test262Mode {
+  return value === "non-strict" || value === "strict";
+}
+
+function normalizeModeCounts(value: unknown): Test262ModeCounts | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  return {
+    run: Number(v.run) || 0,
+    passed: Number(v.passed) || 0,
+    failed: Number(v.failed) || 0,
+    wrapperInfra: Number(v.wrapperInfra) || 0,
+    timeouts: Number(v.timeouts) || 0,
+  };
+}
+
+/** A breakdown is usable only with both modes present; a partial or missing
+ *  object is "unavailable", not zero. */
+function normalizeModeBreakdown(value: unknown): Test262ModeBreakdown | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const nonStrict = normalizeModeCounts(v["non-strict"]);
+  const strict = normalizeModeCounts(v.strict);
+  if (!nonStrict || !strict) return null;
+  return { "non-strict": nonStrict, strict };
+}
+
+function emptyModeCounts(): Test262ModeCounts {
+  return { run: 0, passed: 0, failed: 0, wrapperInfra: 0, timeouts: 0 };
+}
+
+function countOutcome(
+  counts: Pick<
+    Test262ModeCounts,
+    "passed" | "failed" | "wrapperInfra" | "timeouts"
+  >,
+  status: Test262Outcome,
+) {
+  if (status === "PASS") counts.passed++;
+  else if (status === "FAIL") counts.failed++;
+  else if (status === "WRAPPER_INFRA") counts.wrapperInfra++;
+  else if (status === "TIMEOUT") counts.timeouts++;
+}
+
 function normalizeCategory(value: unknown): Test262CategorySummary | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
   if (typeof v.category !== "string") return null;
+  const byMode = normalizeModeBreakdown(v.byMode);
   return {
     category: v.category,
     run: Number(v.run) || 0,
@@ -138,6 +211,7 @@ function normalizeCategory(value: unknown): Test262CategorySummary | null {
     failed: Number(v.failed) || 0,
     wrapperInfra: Number(v.wrapperInfra) || 0,
     timeouts: Number(v.timeouts) || 0,
+    ...(byMode ? { byMode } : {}),
   };
 }
 
@@ -160,6 +234,7 @@ export function normalizeTest262Report(value: unknown): Test262Report | null {
       if (typeof rec.id !== "string" || !isOutcome(rec.status)) return null;
       return {
         id: rec.id,
+        mode: isMode(rec.mode) ? rec.mode : undefined,
         status: rec.status,
         durationMs:
           typeof rec.durationMs === "number" ? rec.durationMs : undefined,
@@ -170,6 +245,8 @@ export function normalizeTest262Report(value: unknown): Test262Report | null {
     })
     .filter((r): r is Test262Record => r !== null);
 
+  const summaryByMode = normalizeModeBreakdown(summary.byMode);
+
   return {
     summary: {
       totalDiscovered: Number(summary.totalDiscovered) || 0,
@@ -179,17 +256,22 @@ export function normalizeTest262Report(value: unknown): Test262Report | null {
       wrapperInfraFailures: Number(summary.wrapperInfraFailures) || 0,
       timeouts: Number(summary.timeouts) || 0,
       durationSeconds: Number(summary.durationSeconds) || 0,
+      ...(summaryByMode ? { byMode: summaryByMode } : {}),
       byCategory,
     },
     results: normalizedResults,
   };
 }
 
+/** Groups results by their first two path segments. Every record is one
+ *  run, so a file that ran in both modes adds two to `attempted`. */
 export function groupCoverage(
   report: Test262Report,
   minTests = MIN_GROUP_TESTS,
 ): Test262GroupCoverage[] {
   const groups = new Map<string, Test262GroupCoverage>();
+  const modeCounts = new Map<string, Test262ModeBreakdown>();
+  const unmoded = new Set<string>();
   for (const result of report.results) {
     const parts = result.id.split("/");
     if (parts.length < GROUP_SEGMENTS) continue;
@@ -206,19 +288,32 @@ export function groupCoverage(
         passRate: 0,
       } satisfies Test262GroupCoverage);
     group.attempted++;
-    if (result.status === "PASS") group.passed++;
-    else if (result.status === "FAIL") group.failed++;
-    else if (result.status === "WRAPPER_INFRA") group.wrapperInfra++;
-    else if (result.status === "TIMEOUT") group.timeouts++;
+    countOutcome(group, result.status);
     groups.set(key, group);
+
+    if (result.mode) {
+      const breakdown = modeCounts.get(key) ?? {
+        "non-strict": emptyModeCounts(),
+        strict: emptyModeCounts(),
+      };
+      breakdown[result.mode].run++;
+      countOutcome(breakdown[result.mode], result.status);
+      modeCounts.set(key, breakdown);
+    } else {
+      unmoded.add(key);
+    }
   }
 
   return Array.from(groups.values())
     .filter((group) => group.attempted >= minTests)
-    .map((group) => ({
-      ...group,
-      passRate: pct(group.passed, group.attempted),
-    }));
+    .map((group) => {
+      const byMode = modeCounts.get(group.key);
+      return {
+        ...group,
+        passRate: pct(group.passed, group.attempted),
+        ...(byMode && !unmoded.has(group.key) ? { byMode } : {}),
+      };
+    });
 }
 
 export function rankGroupCoverage(report: Test262Report) {

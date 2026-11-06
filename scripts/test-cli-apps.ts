@@ -1374,6 +1374,52 @@ await section("test262 runner: a growable SharedArrayBuffer keeps one block whil
   }
 });
 
+type Test262Run = { id: string; mode: string; status: string; message?: string; diagnostic?: string };
+
+/** A report's runs, by file id and then by mode ("non-strict" or "strict"). */
+function test262RunsByFile(report: { results: Test262Run[] }): Map<string, Map<string, Test262Run>> {
+  const byFile = new Map<string, Map<string, Test262Run>>();
+  for (const run of report.results) {
+    if (run.mode !== "non-strict" && run.mode !== "strict")
+      throw new Error(`test262 run has an invalid mode: ${JSON.stringify(run)}`);
+    const modes = byFile.get(run.id) ?? new Map<string, Test262Run>();
+    if (modes.has(run.mode)) throw new Error(`test262 run is duplicated: ${JSON.stringify(run)}`);
+    modes.set(run.mode, run);
+    byFile.set(run.id, modes);
+  }
+  return byFile;
+}
+
+/**
+ * Checks every run of each file: an expectation is either one [status,
+ * fragment] for every run, or one per mode, which also fixes the modes the
+ * file runs in. Without per-mode expectations a file runs in both modes
+ * unless its flags (module, raw, onlyStrict, noStrict) name one.
+ */
+type Test262Expectation = [string, string] | Record<string, [string, string]>;
+function expectTest262Runs(
+  byFile: Map<string, Map<string, Test262Run>>,
+  id: string,
+  flags: string[],
+  expected: Test262Expectation,
+): void {
+  const runs = byFile.get(id);
+  let modes: string[];
+  if (!Array.isArray(expected)) modes = Object.keys(expected).sort();
+  else if (flags.includes("module") || flags.includes("onlyStrict")) modes = ["strict"];
+  else if (flags.includes("raw") || flags.includes("noStrict")) modes = ["non-strict"];
+  else modes = ["non-strict", "strict"];
+  const actualModes = Array.from(runs?.keys() ?? []).sort();
+  if (JSON.stringify(actualModes) !== JSON.stringify(modes))
+    throw new Error(`${id}: expected runs ${JSON.stringify(modes)}, got ${JSON.stringify(actualModes)}`);
+  for (const mode of modes) {
+    const [status, fragment] = Array.isArray(expected) ? expected : expected[mode];
+    const result = runs!.get(mode)!;
+    if (result.status !== status || !(result.message ?? "").includes(fragment))
+      throw new Error(`${id} (${mode}): expected ${status} "${fragment}", got ${JSON.stringify(result)}`);
+  }
+}
+
 await section("test262 runner: negative tests need the expected error in the expected phase...", async () => {
   // #1571: a parse or resolution negative passes only when the source is
   // rejected before evaluation with negative.type. A body that runs reaches
@@ -1440,15 +1486,12 @@ await section("test262 runner: negative tests need the expected error in the exp
       { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
     );
     const report = JSON.parse(readFileSync(out, "utf8"));
-    if (report.run?.gradingContract !== 3)
-      throw new Error(`test262 report should publish gradingContract 3, got ${JSON.stringify(report.run)}`);
-    const byId = new Map<string, { status: string; message?: string }>(
-      report.results.map((r: { id: string; status: string; message?: string }) => [r.id, r]),
-    );
-    for (const [file, , status, fragment] of cases) {
-      const result = byId.get(`language/${file}`);
-      if (!result || result.status !== status || !(result.message ?? "").includes(fragment))
-        throw new Error(`${file}: expected ${status} "${fragment}", got ${JSON.stringify(result)}`);
+    if (report.run?.gradingContract !== 4)
+      throw new Error(`test262 report should publish gradingContract 4, got ${JSON.stringify(report.run)}`);
+    const byFile = test262RunsByFile(report);
+    for (const [file, lines, status, fragment] of cases) {
+      const flagsLine = lines.find((line) => line.startsWith("flags: ")) ?? "";
+      expectTest262Runs(byFile, `language/${file}`, flagsLine.slice("flags: ".length).replace(/[\[\]]/g, "").split(", "), [status, fragment]);
     }
   } finally {
     clean(tmp);
@@ -1515,6 +1558,8 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
         'if (!threw) throw new Error("the test body is not strict");',
       ]), "PASS", ""],
       ["module-harness-sloppy.js", test(["module"], ["sloppyHelper.js"], [...harnessIsSloppy, "export {};"]), "PASS", ""],
+      // #2068: an unflagged test also runs strict, with the prefix on its
+      // own source, where the assignment is a ReferenceError (see below).
       ["sloppy-body.js", test([], [], ["undeclaredInBody = 1;"]), "PASS", ""],
       // A harness Script that fails means the test never ran.
       ["broken-include.js", test([], ["brokenHelper.js"], ["var x = 1;"]), "WRAPPER_INFRA", "harness include brokenHelper.js failed"],
@@ -1585,21 +1630,144 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
       { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
     );
     const report = JSON.parse(readFileSync(out, "utf8"));
-    const byId = new Map<string, { status: string; message?: string; diagnostic?: string }>(
-      report.results.map((r: { id: string; status: string; message?: string; diagnostic?: string }) => [r.id, r]),
-    );
-    for (const [file, , status, fragment] of cases) {
-      const result = byId.get(`language/${file}`);
-      if (!result || result.status !== status || !(result.message ?? "").includes(fragment))
-        throw new Error(`${file}: expected ${status} "${fragment}", got ${JSON.stringify(result)}`);
+    const byFile = test262RunsByFile(report);
+    const perMode: Record<string, Test262Expectation> = {
+      "sloppy-body.js": { "non-strict": ["PASS", ""], strict: ["FAIL", "undeclaredInBody"] },
+    };
+    for (const [file, lines, status, fragment] of cases) {
+      const flagsLine = lines.find((line) => line.startsWith("flags: ")) ?? "";
+      expectTest262Runs(byFile, `language/${file}`, flagsLine.slice("flags: ".length).replace(/[\[\]]/g, "").split(", "),
+        perMode[file] ?? [status, fragment]);
     }
-    const positions = byId.get("language/positions.js");
-    if (!(positions?.diagnostic ?? "").includes("positions.js:6:1"))
-      throw new Error(`positions.js should report the file's line 6, got ${JSON.stringify(positions)}`);
+    // The strict run's prefix is one line, so its positions are one past the file's.
+    const positions = byFile.get("language/positions.js");
+    if (!(positions?.get("non-strict")?.diagnostic ?? "").includes("positions.js:6:1") ||
+        !(positions?.get("strict")?.diagnostic ?? "").includes("positions.js:7:1"))
+      throw new Error(`positions.js should report line 6, and line 7 when strict, got ${JSON.stringify([...positions?.values() ?? []])}`);
     // An error a harness function raises names the harness file it came from.
-    const helperPositions = byId.get("language/helper-positions.js");
-    if (!(helperPositions?.diagnostic ?? "").includes("throwingHelper.js:2:"))
-      throw new Error(`helper-positions.js should report throwingHelper.js:2, got ${JSON.stringify(helperPositions)}`);
+    for (const helperPositions of byFile.get("language/helper-positions.js")?.values() ?? [])
+      if (!(helperPositions.diagnostic ?? "").includes("throwingHelper.js:2:"))
+        throw new Error(`helper-positions.js should report throwingHelper.js:2, got ${JSON.stringify(helperPositions)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 runner: frontmatter flags, inline or a block list, decide the modes a test runs in...", async () => {
+  // #2068 (INTERPRETING.md, "Strict Mode" and "flags"): an unflagged Script
+  // test runs twice, non-strict and then strict; noStrict and raw run once,
+  // non-strict; onlyStrict runs once, strict; module runs once, as module
+  // code. Flags appear inline (`flags: [noStrict]`) or as a YAML block list,
+  // which staging/sm uses, and both forms must decide the same modes. Every
+  // body throws a message naming the strictness it actually ran in.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "staging");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    const body = [
+      "var ranStrict = (function () { return this === undefined; })();",
+      'throw new Error(ranStrict ? "ran strict" : "ran non-strict");',
+    ];
+    const inline = (flags: string[]) => ["/*---", "description: flag forms", `flags: [${flags.join(", ")}]`, "---*/", ...body];
+    const block = (flags: string[]) => ["/*---", "description: flag forms", "flags:", ...flags.map((flag) => `  - ${flag}`), "---*/", ...body];
+    const nonStrict: Test262Expectation = { "non-strict": ["FAIL", "ran non-strict"] };
+    const strict: Test262Expectation = { strict: ["FAIL", "ran strict"] };
+    const both: Test262Expectation = { "non-strict": ["FAIL", "ran non-strict"], strict: ["FAIL", "ran strict"] };
+    const cases: [string, string[], Test262Expectation][] = [
+      ["unflagged.js", ["/*---", "description: flag forms", "---*/", ...body], both],
+      ["inline-other-flag.js", inline(["CanBlockIsFalse"]), both],
+      ["block-other-flag.js", block(["CanBlockIsFalse"]), both],
+      ["inline-no-strict.js", inline(["noStrict"]), nonStrict],
+      ["block-no-strict.js", block(["noStrict"]), nonStrict],
+      ["block-no-strict-second.js", block(["CanBlockIsFalse", "noStrict"]), nonStrict],
+      ["inline-only-strict.js", inline(["onlyStrict"]), strict],
+      ["block-only-strict.js", block(["onlyStrict"]), strict],
+      ["inline-module.js", inline(["module"]), strict],
+      ["block-module.js", block(["module"]), strict],
+      ["inline-raw.js", inline(["raw"]), nonStrict],
+      ["block-raw.js", block(["raw"]), nonStrict],
+    ];
+    for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
+
+    const out = join(tmp, "flags.json");
+    Bun.spawnSync(
+      [TEST262RUNNER, "--suite-dir", suite, "--categories", "staging", "--jobs=2", "--output", out],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    const byFile = test262RunsByFile(report);
+    for (const [file, , expected] of cases) expectTest262Runs(byFile, `staging/${file}`, [], expected);
+    // Files are counted once; runs once per mode, also per category.
+    const runs = cases.reduce((total, [, , expected]) => total + Object.keys(expected).length, 0);
+    const strictRuns = cases.filter(([, , expected]) => "strict" in expected).length;
+    const summary = report.summary;
+    const category = summary.byCategory.find((entry: { category: string }) => entry.category === "staging");
+    if (summary.totalDiscovered !== cases.length || summary.totalRun !== runs ||
+        summary.byMode?.strict?.run !== strictRuns || summary.byMode?.["non-strict"]?.run !== runs - strictRuns ||
+        summary.byMode.strict.failed !== strictRuns || category?.run !== runs ||
+        category?.byMode?.strict?.run !== strictRuns)
+      throw new Error(`test262 summary should count ${cases.length} files and ${runs} runs (${strictRuns} strict): ${JSON.stringify(summary)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 comment: runs compare by file and mode, so a strict-only regression blocks...", async () => {
+  const tmp = makeTmp();
+  try {
+    type Run = { id: string; mode?: string; status: string };
+    const report = (results: Run[], gradingContract: number) => {
+      const passed = results.filter((r) => r.status === "PASS").length;
+      return {
+        summary: {
+          totalDiscovered: new Set(results.map((r) => r.id)).size, totalRun: results.length, passed,
+          failed: results.length - passed, wrapperInfraFailures: 0, timeouts: 0, durationSeconds: 1,
+          byCategory: [{ category: "language", run: results.length, passed, failed: results.length - passed,
+            wrapperInfra: 0, timeouts: 0 }],
+        },
+        results: results.map((r) => ({ ...r, durationMs: 1 })),
+        run: { gradingContract },
+      };
+    };
+    const write = (name: string, value: unknown) => {
+      const path = join(tmp, name);
+      writeFileSync(path, JSON.stringify(value));
+      return path;
+    };
+    const baseline = write("baseline.json", report([
+      { id: "language/a.js", mode: "non-strict", status: "PASS" },
+      { id: "language/a.js", mode: "strict", status: "PASS" },
+      { id: "language/b.js", mode: "non-strict", status: "PASS" },
+      { id: "language/b.js", mode: "strict", status: "FAIL" },
+    ], 4));
+    const comment = (results: string, base: string) => Bun.spawnSync(
+      ["bun", "scripts/run_test262_suite.ts", "--comment", results, base],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    // a.js regresses in strict mode only; b.js keeps its strict failure.
+    const strictRegression = comment(write("strict.json", report([
+      { id: "language/a.js", mode: "non-strict", status: "PASS" },
+      { id: "language/a.js", mode: "strict", status: "FAIL" },
+      { id: "language/b.js", mode: "non-strict", status: "PASS" },
+      { id: "language/b.js", mode: "strict", status: "FAIL" },
+    ], 4)), baseline);
+    const strictMarkdown = strictRegression.stdout.toString();
+    if (strictRegression.exitCode !== 1 || !strictMarkdown.includes("`language/a.js (strict)`") ||
+        strictMarkdown.includes("`language/a.js (non-strict)`") || strictMarkdown.includes("`language/b.js"))
+      throw new Error(`a strict-only PASS -> FAIL should block and name the strict run: ${strictMarkdown}`);
+    // A strict run with no baseline counterpart is new, not a regression.
+    const legacyBaseline = write("legacy.json", report([{ id: "language/a.js", status: "PASS" }], 4));
+    const newRun = comment(write("new-run.json", report([
+      { id: "language/a.js", mode: "non-strict", status: "PASS" },
+      { id: "language/a.js", mode: "strict", status: "FAIL" },
+    ], 4)), legacyBaseline);
+    if (newRun.exitCode !== 0 || newRun.stdout.toString().includes("Regression vs cached"))
+      throw new Error(`a strict run missing from the baseline should not block: ${newRun.stdout.toString()}`);
   } finally {
     clean(tmp);
   }
@@ -1673,6 +1841,7 @@ await section("test262 runner: deterministic shards merge into one complete repo
 
     const shardReports: string[] = [];
     const seenTests = new Set<string>();
+    const seenFiles = new Map<string, number[]>();
     for (let shard = 0; shard < 4; shard++) {
       const reportPath = join(tmp, `shard-${shard}.json`);
       shardReports.push(reportPath);
@@ -1702,14 +1871,19 @@ await section("test262 runner: deterministic shards merge into one complete repo
         throw new Error(`test262 shard should preserve global discovery count: ${JSON.stringify(report.summary)}`);
       }
       for (const result of report.results) {
-        if (seenTests.has(result.id)) {
-          throw new Error(`test262 shard duplicated ${result.id}`);
+        const run = `${result.id} (${result.mode})`;
+        if (seenTests.has(run)) {
+          throw new Error(`test262 shard duplicated ${run}`);
         }
-        seenTests.add(result.id);
+        seenTests.add(run);
+        // Sharding is by file, so both runs of a file share a shard.
+        seenFiles.set(result.id, [...(seenFiles.get(result.id) ?? []), shard]);
       }
     }
-    if (seenTests.size !== 12) {
-      throw new Error(`test262 shards should cover all 12 tests, got ${seenTests.size}`);
+    // Each of the 12 unflagged files runs non-strict and strict.
+    if (seenTests.size !== 24 || seenFiles.size !== 12 ||
+        [...seenFiles.values()].some((shards) => shards.length !== 2 || shards[0] !== shards[1])) {
+      throw new Error(`test262 shards should cover both runs of all 12 tests in one shard each, got ${JSON.stringify([...seenFiles])}`);
     }
     if (existsSync(join(profileDir, "aggregate.json"))) {
       throw new Error("individual test262 shards must not write partial profile aggregates");
@@ -1737,12 +1911,24 @@ await section("test262 runner: deterministic shards merge into one complete repo
       );
     }
     const merged = JSON.parse(readFileSync(mergedPath, "utf8"));
-    if (merged.summary.totalRun !== 12 || merged.summary.passed !== 12 ||
-        merged.results?.length !== 12 || merged.run?.jobs !== 4) {
+    if (merged.summary.totalDiscovered !== 12 || merged.summary.totalRun !== 24 ||
+        merged.summary.passed !== 24 || merged.results?.length !== 24 || merged.run?.jobs !== 4 ||
+        merged.summary.byMode?.strict?.passed !== 12 || merged.summary.byMode?.["non-strict"]?.passed !== 12 ||
+        merged.summary.byCategory?.[0]?.byMode?.strict?.run !== 12) {
       throw new Error(`test262 merged report is incomplete: ${JSON.stringify(merged.summary)}`);
     }
+    // Merged runs are ordered by file, then non-strict before strict.
+    if (merged.results[0].id !== merged.results[1].id ||
+        merged.results[0].mode !== "non-strict" || merged.results[1].mode !== "strict") {
+      throw new Error(`test262 merged runs should be ordered by file and mode: ${JSON.stringify(merged.results.slice(0, 2))}`);
+    }
+    // A strict run keeps a profile of its own beside the non-strict one.
+    if (!existsSync(join(profileDir, "per-test", "built-ins", "shard-0.js.profile.json")) ||
+        !existsSync(join(profileDir, "per-test", "built-ins", "shard-0.js.strict.profile.json"))) {
+      throw new Error("test262 should write a profile for each run of a file");
+    }
     const profileSummary = JSON.parse(readFileSync(profileSummaryPath, "utf8"));
-    if (profileSummary.profileCount !== 12 ||
+    if (profileSummary.profileCount !== 24 ||
         profileSummary.missingProfileCount !== 0 ||
         !existsSync(profileMarkdownPath)) {
       throw new Error(
@@ -1767,6 +1953,33 @@ await section("test262 runner: deterministic shards merge into one complete repo
         !duplicateProc.stderr.toString().includes("Duplicate or invalid shard index")) {
       throw new Error(
         `test262 merge should reject duplicate shards: ${duplicateProc.stderr.toString()}`,
+      );
+    }
+
+    // Runs are unique by file and mode: a second strict run of a file is a
+    // duplicate even though the file's non-strict run shares its id.
+    const duplicateShard = shardReports.findIndex((path) =>
+      JSON.parse(readFileSync(path, "utf8")).results.length > 0);
+    const duplicateRun = JSON.parse(readFileSync(shardReports[duplicateShard], "utf8"));
+    const strictRun = duplicateRun.results.find((result: { mode: string }) => result.mode === "strict");
+    duplicateRun.results.push({ ...strictRun });
+    duplicateRun.summary.totalRun = duplicateRun.results.length;
+    const duplicateRunPath = join(tmp, "duplicate-run.json");
+    writeFileSync(duplicateRunPath, JSON.stringify(duplicateRun));
+    const duplicateRunProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "duplicate-run-merged.json"),
+        ...shardReports.map((path, index) => index === duplicateShard ? duplicateRunPath : path),
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (duplicateRunProc.exitCode !== 1 ||
+        !duplicateRunProc.stderr.toString().includes(`Duplicate test result ${strictRun.id} (strict)`)) {
+      throw new Error(
+        `test262 merge should reject a duplicated strict run: ${duplicateRunProc.stderr.toString()}`,
       );
     }
 

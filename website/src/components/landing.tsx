@@ -62,7 +62,11 @@ import {
   VITEST_COMPATIBILITY_ANSWER,
   VITEST_COMPATIBILITY_QUESTION,
 } from "@/lib/positioning";
-import { compatibilityPercent } from "@/lib/test262-percent";
+import type { Test262ModeBreakdown } from "@/lib/test262-dashboard";
+import {
+  compatibilityModeRates,
+  compatibilityPercent,
+} from "@/lib/test262-percent";
 
 const FEATURE_ICONS: Record<
   FeatureIcon,
@@ -916,6 +920,8 @@ export function Landing({
     passed: number;
     totalRun: number;
     annexBIncluded: boolean;
+    /** Per-mode figures; absent for a report that predates them. */
+    byMode?: Test262ModeBreakdown;
   } | null;
   release?: ReleaseInfo | null;
   /** BCP-47 locale tag from `Accept-Language` so the release-date in
@@ -1040,11 +1046,14 @@ export function Landing({
                         {compatibility.passed.toLocaleString(locale)} of{" "}
                         {compatibility.totalRun.toLocaleString(locale)}
                       </strong>{" "}
-                      cases passing (
+                      runs passing (
                       {compatibilityPercent(
                         compatibility.passed,
                         compatibility.totalRun,
                       )}
+                      {compatibilityModeRates(compatibility.byMode)
+                        ? `; ${compatibilityModeRates(compatibility.byMode)}`
+                        : ""}
                       ); see results{" "}
                     </>
                   ) : (
