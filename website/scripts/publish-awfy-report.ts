@@ -7,7 +7,11 @@ import {
   awfyBlobReportPathForArtifactId,
   publishAwfyReportsToBlob,
 } from "../src/lib/awfy-blob-store";
-import { currentRunMetadata, timestampFromEnv } from "./lib/report-publishing";
+import {
+  currentRunMetadata,
+  requiredReportEngines,
+  timestampFromEnv,
+} from "./lib/report-publishing";
 
 type AwfyReport = {
   metadata?: {
@@ -105,18 +109,7 @@ export function summaryFromReport(report: AwfyReport) {
   const missingWorkloadCount = targetNames.filter(
     (name) => !reportedTargetNames.includes(name),
   ).length;
-  const requiredEngines = ["goccia", "qjs", "node"];
-  // Reports from before the node-jitless and jsc comparators do not list
-  // them, and must not be marked failed for lacking them.
-  for (const comparator of ["node-jitless", "jsc"]) {
-    if (
-      (report.metadata?.engines ?? []).some(
-        (engine) => engine.name === comparator,
-      )
-    ) {
-      requiredEngines.push(comparator);
-    }
-  }
+  const requiredEngines = requiredReportEngines(report.metadata?.engines);
   const failedWorkloadCount =
     missingWorkloadCount +
     workloadTargets.filter((target) => {

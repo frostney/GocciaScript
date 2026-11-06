@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { DEFAULT_ENGINES, buildMetricTargetSummary, engineOrderForRepetition, resolveEngines } = require('./cross-engine-report.js');
+const { buildMetricTargetSummary, resolveEngines } = require('./cross-engine-report.js');
 const {
   DRIVER_VERSION,
   buildJetStreamBundle,
@@ -15,7 +15,6 @@ const {
 } = require('./jetstream-driver.js');
 const { buildJetStreamComment } = require('./jetstream-comment.js');
 const {
-  ciEngines,
   parseArgs: parseCiArgs,
   reportBenchmarks,
   validationFailures,
@@ -78,20 +77,6 @@ console.log('jetstream-driver: CLI parsing...');
   throws(() => parseDriverArgs(['--engine-order', 'random']), /--engine-order must be one of/, 'rejects an unknown engine order');
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'perf', 'jetstream', 'manifest.json'), 'utf8'));
   equal(manifest.driver.version, DRIVER_VERSION, 'the manifest names the driver version the driver reports');
-  equal(ciEngines(manifest), 'goccia,qjs,node,node-jitless,jsc', 'CI adds JSC with its JIT off to the default engines');
-  equal(ciEngines({ ciReport: {} }), DEFAULT_ENGINES.join(','), 'a manifest without ciReport.engines runs the driver defaults');
-  equal(manifest.ciReport.repetitions, 6, 'CI runs six repetitions');
-  const ciEngineNames = ciEngines(manifest).split(',');
-  const orders = Array.from({ length: manifest.ciReport.repetitions }, (_, repetition) => (
-    engineOrderForRepetition(ciEngineNames, repetition, 'alternate')
-  ));
-  for (const first of ciEngineNames) {
-    for (const second of ciEngineNames) {
-      if (first === second) continue;
-      const ahead = orders.filter((order) => order.indexOf(first) < order.indexOf(second)).length;
-      equal(ahead * 2, orders.length, `${first} runs before ${second} in half the repetitions`);
-    }
-  }
 }
 
 console.log('jetstream-driver: engine order and positions...');

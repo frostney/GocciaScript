@@ -8,8 +8,11 @@ set -euo pipefail
 
 package="libjavascriptcoregtk-bin"
 started="$(date +%s)"
-sudo apt-get install -y --no-install-recommends "$package" \
-  || { sudo apt-get update && sudo apt-get install -y --no-install-recommends "$package"; }
+# The index is refreshed first, so that the parallel JetStream shards, whose
+# reports the merge requires to name one JSC version, install the archive's
+# current package rather than whatever each runner image cached.
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends "$package"
 finished="$(date +%s)"
 
 version="$(dpkg-query -W -f='${Version}' "$package")"

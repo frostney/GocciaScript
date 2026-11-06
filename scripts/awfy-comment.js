@@ -7,6 +7,7 @@ const COMPARISON_PAIR = 'goccia-candidate_over_goccia-baseline';
 const LEGACY_MARKER = '<!-- awfy-smoke -->';
 // The engines a report without engine metadata is read as having run.
 const DEFAULT_COMMENT_ENGINES = ['goccia', 'qjs', 'node'];
+const DEFAULT_COMPARISON_COMMENT_ENGINES = ['goccia-baseline', 'goccia-candidate', 'qjs', 'node'];
 // Column order: Goccia, QuickJS (the first performance target's comparator),
 // the interpreter-class context engines, then JIT-enabled Node.js (ADR 0178).
 const ALL_COMMENT_ENGINES = ['goccia', 'qjs', 'node-jitless', 'jsc', 'node'];
@@ -50,7 +51,7 @@ function commentEngines(report) {
   const comparison = reportHasGocciaComparison(report);
   const ran = new Set((report?.metadata?.engines || []).map((engine) => engine.name));
   if (ran.size > 0) return (comparison ? COMPARISON_COMMENT_ENGINES : ALL_COMMENT_ENGINES).filter((engine) => ran.has(engine));
-  return comparison ? ['goccia-baseline', 'goccia-candidate', 'qjs', 'node'] : DEFAULT_COMMENT_ENGINES;
+  return comparison ? DEFAULT_COMPARISON_COMMENT_ENGINES : DEFAULT_COMMENT_ENGINES;
 }
 
 // Whether the report times warm (driver version 2 and later, ADR 0178).

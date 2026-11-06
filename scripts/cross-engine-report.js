@@ -58,6 +58,39 @@ function engineOrderForRepetition(engines, repetition, mode = DEFAULT_ENGINE_ORD
   return engines;
 }
 
+// The engines a CI report runs: those its manifest config lists, which add
+// JSC with its JIT off to the defaults (ADR 0178), or the defaults when it
+// lists none.
+function ciReportEngines(config) {
+  const configured = config?.engines;
+  return Array.isArray(configured) && configured.length > 0 ? configured : DEFAULT_ENGINES;
+}
+
+// The protocol checks every CI report makes before it reads any target: the
+// repetition count and driver version its manifest names, the alternate engine
+// order, and, when it measured JSC, a recorded JavaScriptCore version. The
+// shell comes from a distribution package whose version moves with the runner
+// image, so the report must say which one ran (ADR 0178).
+function ciProtocolFailures(report, { repetitions, driverVersion }, engines) {
+  const failures = [];
+  if (report.metadata?.options?.repetitions !== repetitions) {
+    failures.push(`expected ${repetitions} repetitions, report recorded ${report.metadata?.options?.repetitions}`);
+  }
+  if (driverVersion !== undefined && report.metadata?.driver?.version !== driverVersion) {
+    failures.push(`expected driver version ${driverVersion}, report recorded ${report.metadata?.driver?.version}`);
+  }
+  if (report.metadata?.options?.engineOrder !== 'alternate') {
+    failures.push(`expected the alternate engine order, report recorded ${report.metadata?.options?.engineOrder}`);
+  }
+  if (engines.includes('jsc')) {
+    const entry = (report.metadata?.engines || []).find((engine) => engine.name === 'jsc');
+    if (!(entry && typeof entry.version === 'string' && entry.version.trim() !== '')) {
+      failures.push('jsc: the report records no JavaScriptCore version');
+    }
+  }
+  return failures;
+}
+
 function resolveEngines(options) {
   const requested = options.engines || DEFAULT_ENGINES;
   const engines = [];
@@ -499,6 +532,8 @@ function buildGeomeanRatios(targetReports) {
 }
 
 module.exports = {
+  ciProtocolFailures,
+  ciReportEngines,
   COUNTER_EVENTS,
   COUNTER_KEYS,
   DEFAULT_ENGINE_ORDER,

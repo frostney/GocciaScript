@@ -10,6 +10,7 @@ const {
   DRIVER_VERSION,
   RESULT_MARKER,
   buildAwfyBundle,
+  buildProbeBundle,
   buildGeomeanRatios,
   buildTargetSummary,
   normalizeAwfyResult,
@@ -27,6 +28,9 @@ const { MARKER, buildAwfyReportComment, commentEngines, counterDeltaCell, format
 const {
   DEFAULT_ENGINES,
   buildMetricTargetSummary,
+  ciProtocolFailures,
+  ciReportEngines,
+  jscVersion,
   counterCommand,
   engineOrderForRepetition,
   parseEngineOrder,
@@ -36,9 +40,7 @@ const {
   uncountedProcess,
 } = require('./cross-engine-report.js');
 const {
-  ciEngines,
   expectedEnginesForRun,
-  jscVersionFailures,
   parseArgs: parseCiReportArgs,
   reportConfig,
   targetSpecs,
@@ -185,7 +187,7 @@ console.log('awfy-driver: portable AWFY bundle...');
       'let calls = 0;',
       'class Flaky extends Benchmark {',
       '  benchmark() { calls += 1; return calls; }',
-      '  verifyResult(result) { return result < 3; }',
+      '  verifyResult(result) { return result !== 3; }',
       '}',
       'exports.newInstance = () => new Flaky();',
       '',
@@ -198,7 +200,7 @@ console.log('awfy-driver: portable AWFY bundle...');
       warmupIterations: 1,
       measuredIterations: 5,
     }));
-    assertEqual(flaky.result.verificationPassed, false, 'a failure in the measured window fails the sample');
+    assertEqual(flaky.result.verificationPassed, false, 'a failure in the measured window fails the sample, even when later iterations would pass');
     assertEqual(flaky.result.durationMicros, null, 'a failed sample has no headline time');
     assertEqual(flaky.result.checksum, 'failed', 'a failed sample says so in its checksum');
     assert(flaky.run.status !== 0, 'a failed bundle exits with an error');
@@ -222,6 +224,37 @@ console.log('awfy-driver: portable AWFY bundle...');
     const shellResult = parseResult(printed.join('\n'));
     assert(shellResult !== null, 'a shell without console reports through print');
     assert(Math.abs(shellResult.firstIterationMicros - 1000) < 1e-6, 'a shell with preciseTime is timed by it, in microseconds');
+
+    // A probe's verifier runs outside the timed spans: its run() advances the
+    // clock by 1 ms, its verify() by 100 ms.
+    const probeFile = path.join(tmp, 'probe.js');
+    fs.writeFileSync(probeFile, [
+      '__gocciaRegisterProbe({',
+      '  run(inner) { tick(1000); return inner; },',
+      '  verify(checksum) { verifyCalls += 1; tick(100000); return checksum === 1; },',
+      '});',
+      '',
+    ].join('\n'));
+    const probeOutput = [];
+    let probeClock = 0;
+    const probeContext = {
+      console: undefined,
+      print: (text) => probeOutput.push(String(text)),
+      performance: { now: () => probeClock / 1000 },
+      tick: (micros) => { probeClock += micros; },
+      verifyCalls: 0,
+    };
+    vm.runInNewContext(buildProbeBundle({
+      probe: { name: 'clocked', file: probeFile },
+      innerIterations: 1,
+      warmupIterations: 2,
+      measuredIterations: 3,
+    }), probeContext);
+    const probeResult = parseResult(probeOutput.join('\n'));
+    assert(Math.abs(probeResult.durationMicros - 1000) < 1e-6, 'a probe\'s headline time leaves its verifier out');
+    assert(probeResult.warmupMicros.every((micros) => Math.abs(micros - 1000) < 1e-6), 'a probe\'s warm-up times leave its verifier out');
+    assertEqual(probeContext.verifyCalls, 3, 'a probe verifies each warm-up result and the window\'s last result');
+    assertEqual(probeResult.verificationPassed, true, 'a verified probe passes');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -754,9 +787,37 @@ console.log('awfy-driver: a run records engine order and positions...');
     assert(target.samples.every((sample) => sample.outcome === 'ok' && sample.warmupMicros.length === 2), 'every sample ran its warm-up');
     assert(typeof report.geomeanRatios['node_over_node-jitless'] === 'number', 'the report has a ratio for each pair of engines');
     assert(typeof target.summary.engineStats['node-jitless'].medianFirstIterationMicros === 'number', 'the cold figure is summarized');
+
+    // An unrecorded --warmup round takes the first place in the alternation.
+    const warmedOutput = path.join(tmp, 'warmed.json');
+    const warmed = spawnSync(process.execPath, [
+      path.join(__dirname, 'awfy-driver.js'),
+      '--manifest', manifestFile,
+      '--awfy-dir', tmp,
+      '--benchmark', 'Tiny',
+      '--engines', 'node,node-jitless',
+      '--warmup', '1',
+      '--repetitions', '2',
+      '--output', warmedOutput,
+    ], { encoding: 'utf8' });
+    assertEqual(warmed.status, 0, `the driver runs a warm-up round: ${warmed.stderr}`);
+    assertEqual(JSON.stringify(JSON.parse(fs.readFileSync(warmedOutput, 'utf8')).targets[0].executionOrder), JSON.stringify([
+      ['node-jitless', 'node'],
+      ['node', 'node-jitless'],
+    ]), 'executionOrder records only the recorded rounds, which follow the warm-up round\'s order');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+console.log('awfy-comment: a column per comparator...');
+{
+  const ran = (names) => ({ metadata: { engines: names.map((name) => ({ name })) } });
+  assertEqual(commentEngines(ran(['goccia', 'qjs', 'node', 'node-jitless', 'jsc'])).join(','), 'goccia,qjs,node-jitless,jsc,node',
+    'the comment shows QuickJS, the interpreter-class engines, then JIT Node.js');
+  assertEqual(commentEngines(ran(['goccia-baseline', 'goccia-candidate', 'qjs', 'node', 'node-jitless', 'jsc'])).join(','),
+    'goccia-baseline,goccia-candidate,qjs,node-jitless,jsc,node', 'a PR comparison shows every comparator it ran');
+  assertEqual(commentEngines(ran(['goccia', 'qjs', 'node'])).join(','), 'goccia,qjs,node', 'a report without the new comparators has no empty columns');
 }
 
 console.log('awfy-ci-report: manifest helpers...');
@@ -865,19 +926,18 @@ console.log('awfy-ci-report: validation...');
   assert(true, 'ci report validation accepts jsc samples with a recorded version');
   assertThrows(() => validateReport(withJsc(''), manifest, ['goccia', 'jsc']),
     'ci report validation requires a recorded JavaScriptCore version');
-  assertEqual(jscVersionFailures(withJsc(''), ['goccia']).length, 0, 'the JSC version is required only when JSC was measured');
+  assertEqual(ciProtocolFailures(withJsc(''), { repetitions: 5, driverVersion: 2 }, ['goccia']).length, 0, 'the JSC version is required only when JSC was measured');
 }
 
-console.log('awfy-ci-report: the CI comparator set and repetitions...');
-{
-  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'perf', 'awfy', 'manifest.json'), 'utf8'));
-  assertEqual(ciEngines(manifest), 'goccia,qjs,node,node-jitless,jsc', 'CI adds JSC with its JIT off to the default engines');
-  assertEqual(ciEngines({ ciReport: {} }), DEFAULT_ENGINES.join(','), 'a manifest without ciReport.engines runs the driver defaults');
+console.log('ci reports: the CI comparator set and repetitions...');
+for (const lane of ['awfy', 'jetstream']) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'perf', lane, 'manifest.json'), 'utf8'));
+  const engines = ciReportEngines(manifest.ciReport);
+  assertEqual(engines.join(','), 'goccia,qjs,node,node-jitless,jsc', `${lane} CI adds JSC with its JIT off to the default engines`);
   const repetitions = manifest.ciReport.repetitions;
-  assertEqual(repetitions, 6, 'CI runs six repetitions');
+  assertEqual(repetitions, 6, `${lane} CI runs six repetitions`);
   // With the alternate order, each engine runs before each other engine in
   // exactly half the repetitions only when the repetition count is even.
-  const engines = ciEngines(manifest).split(',');
   const orders = Array.from({ length: repetitions }, (_, repetition) => (
     engineOrderForRepetition(engines, repetition, 'alternate')
   ));
@@ -885,8 +945,40 @@ console.log('awfy-ci-report: the CI comparator set and repetitions...');
     for (const second of engines) {
       if (first === second) continue;
       const ahead = orders.filter((order) => order.indexOf(first) < order.indexOf(second)).length;
-      assertEqual(ahead * 2, repetitions, `${first} runs before ${second} in half the repetitions`);
+      assertEqual(ahead * 2, repetitions, `${lane}: ${first} runs before ${second} in half the repetitions`);
     }
+  }
+}
+assertEqual(ciReportEngines({}).join(','), DEFAULT_ENGINES.join(','), 'a CI config without engines runs the driver defaults');
+
+console.log('cross-engine-report: the JavaScriptCore version from its package...');
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'awfy-jsc-version-'));
+  const savedPath = process.env.PATH;
+  try {
+    const shell = path.join(tmp, 'jsc');
+    fs.writeFileSync(shell, '#!/bin/sh\n', { mode: 0o755 });
+    // A stand-in dpkg-query: -S names the owner the test asks for, and -W
+    // prints a version only for the package name it is given back.
+    const owner = path.join(tmp, 'owner');
+    fs.writeFileSync(path.join(tmp, 'dpkg-query'), [
+      '#!/bin/sh',
+      `if [ "$1" = "-S" ]; then echo "$(cat ${JSON.stringify(owner)}): $2"; exit 0; fi`,
+      'if [ "$1" = "-W" ]; then [ "$3" = "libjavascriptcoregtk-bin" ] || [ "$3" = "libjavascriptcoregtk-bin:amd64" ] || exit 1; printf "2.52.6-0ubuntu0.24.04.1"; exit 0; fi',
+      'exit 1',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    process.env.PATH = `${tmp}${path.delimiter}${savedPath}`;
+    fs.writeFileSync(owner, 'libjavascriptcoregtk-bin');
+    assertEqual(jscVersion(shell, 'linux'), 'libjavascriptcoregtk-bin 2.52.6-0ubuntu0.24.04.1', 'the version is the owning package\'s');
+    assertEqual(jscVersion('jsc', 'linux'), 'libjavascriptcoregtk-bin 2.52.6-0ubuntu0.24.04.1', 'a bare shell name is found on PATH');
+    fs.writeFileSync(owner, 'libjavascriptcoregtk-bin:amd64');
+    assertEqual(jscVersion(shell, 'linux'), 'libjavascriptcoregtk-bin:amd64 2.52.6-0ubuntu0.24.04.1', 'an architecture-qualified owner keeps its qualifier');
+    assertEqual(jscVersion(path.join(tmp, 'missing-jsc'), 'linux'), '', 'a missing shell has no version');
+    assertEqual(jscVersion(shell, 'darwin'), '', 'a macOS shell outside the framework has no version');
+  } finally {
+    process.env.PATH = savedPath;
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 

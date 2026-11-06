@@ -24,6 +24,8 @@ const DEFAULT_MEASURED_ITERATIONS = 1;
 const PORTABLE_OUTPUT_SHIM = 'const __awfyLog = typeof console !== "undefined" && console && typeof console.log === "function" ? (text) => console.log(text) : (text) => print(text);';
 // Microseconds. The JavaScriptCore shell coarsens performance.now() to 20
 // microseconds, so its own preciseTime() (seconds) is read where it exists.
+// preciseTime() is wall-clock time, not monotonic: a clock step during a
+// window spoils that one sample, which the median over repetitions absorbs.
 const PORTABLE_CLOCK = '(typeof preciseTime === "function" ? preciseTime() * 1000000 : typeof performance !== "undefined" && performance.now ? performance.now() * 1000 : Date.now() * 1000)';
 
 function usage() {
@@ -248,7 +250,10 @@ function collectAwfyModules(awfyDir, entryId) {
 // resolution. The first warm-up iteration is the cold figure. Verification
 // runs on every iteration, inside the timing as in upstream AWFY's harness, and
 // the first failure stops the loop.
-function warmLoopSource({ configName, nowName, runStatement }) {
+// `runStatement` is timed. `verifyStatement`, when given, checks a result
+// outside the timed spans: after each warm-up iteration and after the measured
+// window, on the window's last result.
+function warmLoopSource({ configName, nowName, runStatement, verifyStatement = '' }) {
   return [
     'const __warmupMicros = [];',
     'let __passed = true;',
@@ -257,6 +262,7 @@ function warmLoopSource({ configName, nowName, runStatement }) {
     `  const __iterationStarted = ${nowName}();`,
     `  ${runStatement}`,
     `  __warmupMicros.push(${nowName}() - __iterationStarted);`,
+    `  ${verifyStatement}`,
     '}',
     'let __measuredTotalMicros = null;',
     'if (__passed) {',
@@ -265,6 +271,7 @@ function warmLoopSource({ configName, nowName, runStatement }) {
     `    ${runStatement}`,
     '  }',
     `  __measuredTotalMicros = ${nowName}() - __windowStarted;`,
+    `  ${verifyStatement}`,
     '}',
     'const __verificationPassed = __passed;',
     `const __durationMicros = __passed ? __measuredTotalMicros / ${configName}.measuredIterations : null;`,
@@ -340,7 +347,8 @@ function buildProbeBundle({
     warmLoopSource({
       configName: '__probeConfig',
       nowName: '__probeNowMicros',
-      runStatement: '__checksum = __probe.run(__probeConfig.innerIterations); __passed = __probe.verify ? (__probe.verify(__checksum, __probeConfig.innerIterations) === true) : true;',
+      runStatement: '__checksum = __probe.run(__probeConfig.innerIterations);',
+      verifyStatement: '__passed = __probe.verify ? (__probe.verify(__checksum, __probeConfig.innerIterations) === true) : true;',
     }),
     `const __result = { kind: "probe", name: __probeConfig.name, ${warmResultFields('__probeConfig')}, checksum: String(__checksum), verificationPassed: __verificationPassed };`,
     `__awfyLog(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(__result));`,
@@ -357,7 +365,7 @@ function writeBundle(tempDir, target, source) {
 
 // A target's iteration counts. An option overrides a `Name:inner` suffix,
 // which overrides the manifest's warm protocol for the benchmark (or a probe's
-// own defaults), which overrides one cold iteration.
+// default inner count), which overrides one cold iteration.
 function iterationCounts(options, parsed, protocol) {
   const pick = (optionValue, ...fallbacks) => {
     if (optionValue !== null && optionValue !== undefined) return optionValue;
@@ -413,11 +421,7 @@ function resolveTargets(options, manifest) {
       kind: 'probe',
       name: probe.name,
       probe,
-      ...iterationCounts(options, parsed, {
-        innerIterations: probe.defaultInnerIterations,
-        warmupIterations: probe.defaultWarmupIterations,
-        measuredIterations: probe.defaultMeasuredIterations,
-      }),
+      ...iterationCounts(options, parsed, { innerIterations: probe.defaultInnerIterations }),
       focusAreas: probe.focusAreas || [],
       tags: probe.tags || [],
       source: probe.file,

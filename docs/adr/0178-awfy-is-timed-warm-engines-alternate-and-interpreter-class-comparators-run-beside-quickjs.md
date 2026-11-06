@@ -4,7 +4,7 @@
 **Area:** `benchmarking`, `ci`, `website`
 **Issue:** [#2066](https://github.com/frostney/GocciaScript/issues/2066)
 **Supersedes:** in part [ADR 0087](0087-awfy-cross-engine-benchmark-methodology.md) and [ADR 0091](0091-unified-performance-barometer.md)
-**Related:** [ADR 0076](0076-same-runner-benchmark-comparison.md), [ADR 0176](0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md), [#2102](https://github.com/frostney/GocciaScript/issues/2102)
+**Related:** [ADR 0076](0076-same-runner-benchmark-comparison.md), refines [ADR 0176](0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md), [#2102](https://github.com/frostney/GocciaScript/issues/2102)
 
 ## Context
 
@@ -49,9 +49,9 @@ listed sizes (`Mandelbrot` 500, `NBody` 250000) cost Goccia 1.2 s and 8.3 s per
 iteration. A change of any count changes the barometer's protocol key and
 breaks the trend line.
 
-**Engines alternate their order (both lanes, driver version 2).** Repetition 0
-runs the `--engines` order, and every next repetition runs the reverse of the
-one before, so every pair of engines swaps places from one repetition to the
+**Engines alternate their order (both lanes, driver version 2).** The first
+round runs the `--engines` order, and every next round runs the reverse of the
+one before (unrecorded `--warmup` rounds count as rounds; CI runs none), so every pair of engines swaps places from one repetition to the
 next. The order is deterministic, so a report can be rerun in the same order,
 and over an even number of repetitions each engine of a pair runs first
 equally often. CI runs six repetitions in both lanes, so the `--engines` order
@@ -101,9 +101,13 @@ barometer as an outside reference.
   with four engines, against 139 s for the cold protocol with three, most of
   it `Havlak`'s two Goccia iterations per process. The PR lane runs two Goccia
   binaries, so its share of `Havlak` doubles.
-- CI runs six repetitions instead of five and a fifth engine, which costs
-  each AWFY and JetStream job about a fifth more time again, and the JSC
-  install adds a step to each of them.
+- CI runs six repetitions instead of five, and JSC joins `node-jitless` as a
+  new engine, so the AWFY lane takes six samples per target and engine where
+  it took five, from five engines (six in the PR lane), and the JetStream lane
+  goes from three engines (four in the PR lane) to five (six). Both new
+  engines are interpreters, but each costs far less than Goccia, whose
+  samples dominate both lanes. Every AWFY and JetStream job also installs
+  JSC.
 - Per-platform measurement and JavaScriptCore on macOS runners stay with
   #2102.
 - What stays: ADR 0076's same-runner rule, ADR 0087's target, then repetition,

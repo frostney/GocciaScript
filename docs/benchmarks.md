@@ -639,9 +639,11 @@ node scripts/jetstream-driver.js \
   --engines goccia,qjs,node,node-jitless \
   --output tmp/jetstream-report.json
 
-# Run the retained CI report contract
+# Run the retained CI report contract: the manifest's ciReport engines,
+# which include jsc, so a JavaScriptCore shell must be on PATH or given
 node scripts/jetstream-ci-report.js \
   --jetstream-dir /path/to/JetStream \
+  --jsc /usr/bin/jsc \
   --output tmp/jetstream-report.json
 ```
 
@@ -671,7 +673,8 @@ score.
 
 Reports retain raw scores, subscores, medians, IQR/min/max/CV, explicit upstream
 validation availability and outcomes, failure stdout/stderr, corpus and driver
-versions, per-binary Goccia source revisions/FPC, and QuickJS/Node versions.
+versions, per-binary Goccia source revisions/FPC, and the QuickJS, Node.js and
+JavaScriptCore package versions.
 Driver version 2 runs `node-jitless` by default, accepts `jsc` like the AWFY
 driver (CI adds it through the manifest's `ciReport.engines`), and alternates the engine order from one repetition to the next; each
 sample records its `position` and each target its `executionOrder`
@@ -688,7 +691,7 @@ sample so an outer cancellation still leaves diagnostic report data.
 The public Performance Barometer normalizes both external lanes so `1.00×` means
 aligned performance and values above one mean GocciaScript was proportionally
 slower. AWFY uses `Goccia time / reference time`; JetStream uses
-`reference score / Goccia score`. QuickJS, `node --jitless` and Node.js stay
+`reference score / Goccia score`. QuickJS, `node --jitless`, JSC (no JIT) and Node.js stay
 separate reference engines, each with its own ratio. Main publishes JetStream reports under the independent `jetstream/`
 Blob namespace, and `/performance` combines their history with AWFY. Daily
 pointers carry the normalized timeline summary, so the dashboard reads retained

@@ -34,13 +34,13 @@ const SERIES = [
   },
   {
     key: "nodeJitlessRatio",
-    label: "Node.js --jitless (interpreter-class context)",
+    label: "Node.js --jitless, interpreter-class context",
     color: "var(--perf-node-jitless)",
     dash: "6 4",
   },
   {
     key: "jscRatio",
-    label: "JSC (no JIT) (interpreter-class context)",
+    label: "JSC (no JIT), interpreter-class context",
     color: "var(--perf-jsc)",
     dash: "2 4",
   },
@@ -346,9 +346,9 @@ function LatestMetric({
       <strong>{point ? ratio(point.quickjsRatio) : "—"}</strong>
       <small>QuickJS (interpreter target)</small>
       <strong>{point ? ratio(point.nodeJitlessRatio) : "—"}</strong>
-      <small>Node.js --jitless (interpreter-class context)</small>
+      <small>Node.js --jitless, interpreter-class context</small>
       <strong>{point ? ratio(point.jscRatio) : "—"}</strong>
-      <small>JSC (no JIT) (interpreter-class context)</small>
+      <small>JSC (no JIT), interpreter-class context</small>
       <strong>{point ? ratio(point.nodeRatio) : "—"}</strong>
       <small>Node.js with JIT (for scale)</small>
       <p>

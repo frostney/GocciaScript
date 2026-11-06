@@ -8,7 +8,11 @@ import {
   jetStreamBlobReportPathForArtifactId,
   publishJetStreamReportsToBlob,
 } from "../src/lib/jetstream-blob-store";
-import { currentRunMetadata, timestampFromEnv } from "./lib/report-publishing";
+import {
+  currentRunMetadata,
+  requiredReportEngines,
+  timestampFromEnv,
+} from "./lib/report-publishing";
 
 type EngineStats = {
   ok?: number;
@@ -80,18 +84,7 @@ export function summaryFromReport(report: JetStreamReport) {
   const missingWorkloadCount = targetNames.filter(
     (name) => !reportedTargetNames.includes(name),
   ).length;
-  const requiredEngines = ["goccia", "qjs", "node"];
-  // Reports from before the node-jitless and jsc comparators do not list
-  // them, and must not be marked failed for lacking them.
-  for (const comparator of ["node-jitless", "jsc"]) {
-    if (
-      (report.metadata?.engines ?? []).some(
-        (engine) => engine.name === comparator,
-      )
-    ) {
-      requiredEngines.push(comparator);
-    }
-  }
+  const requiredEngines = requiredReportEngines(report.metadata?.engines);
   const failedWorkloadCount =
     missingWorkloadCount +
     targets.filter((target) => {

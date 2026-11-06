@@ -2,17 +2,10 @@
 
 const fs = require('fs');
 const { spawnSync } = require('child_process');
-const { DEFAULT_ENGINES: DRIVER_DEFAULT_ENGINES, expandGocciaEngines } = require('./cross-engine-report.js');
+const { ciProtocolFailures, ciReportEngines, expandGocciaEngines } = require('./cross-engine-report.js');
 
 const DEFAULT_MANIFEST = 'perf/jetstream/manifest.json';
 const DEFAULT_OUTPUT = 'jetstream-report.json';
-// CI measures the engines the manifest's ciReport names, which add JSC with
-// its JIT off to the driver's defaults (ADR 0178); the driver defaults apply
-// when the manifest names none.
-function ciEngines(manifest) {
-  const configured = manifest.ciReport?.engines;
-  return (Array.isArray(configured) && configured.length > 0 ? configured : DRIVER_DEFAULT_ENGINES).join(',');
-}
 const DEFAULT_TIMEOUT_MS = 300000;
 
 function usage() {
@@ -105,33 +98,14 @@ function reportBenchmarks(manifest, requested = []) {
   return benchmarks;
 }
 
-// The JavaScriptCore shell comes from a distribution package whose version
-// moves with the runner image, so a report that measured JSC must say which
-// version it was (ADR 0178).
-function jscVersionFailures(report, engines) {
-  if (!engines.includes('jsc')) return [];
-  const entry = (report.metadata?.engines || []).find((engine) => engine.name === 'jsc');
-  return entry && typeof entry.version === 'string' && entry.version.trim() !== ''
-    ? []
-    : ['jsc: the report records no JavaScriptCore version'];
-}
-
 function validationFailures(report, manifest, engines, expectedBenchmarks = null) {
-  const failures = [];
   const benchmarks = expectedBenchmarks || reportBenchmarks(manifest);
   const expectedRepetitions = manifest.ciReport?.repetitions || 5;
   const targets = new Map((report.targets || []).map((target) => [target.name, target]));
-  if (report.metadata?.options?.repetitions !== expectedRepetitions) {
-    failures.push(`expected ${expectedRepetitions} repetitions, report recorded ${report.metadata?.options?.repetitions}`);
-  }
-  const expectedDriverVersion = manifest.driver?.version;
-  if (expectedDriverVersion !== undefined && report.metadata?.driver?.version !== expectedDriverVersion) {
-    failures.push(`expected driver version ${expectedDriverVersion}, report recorded ${report.metadata?.driver?.version}`);
-  }
-  if (report.metadata?.options?.engineOrder !== 'alternate') {
-    failures.push(`expected the alternate engine order, report recorded ${report.metadata?.options?.engineOrder}`);
-  }
-  failures.push(...jscVersionFailures(report, engines));
+  const failures = ciProtocolFailures(report, {
+    repetitions: expectedRepetitions,
+    driverVersion: manifest.driver?.version,
+  }, engines);
   for (const name of benchmarks) {
     const target = targets.get(name);
     if (!target) {
@@ -157,7 +131,7 @@ function validationFailures(report, manifest, engines, expectedBenchmarks = null
 
 function runReport(options, manifest) {
   if (!options.jetStreamDir) throw new Error('--jetstream-dir is required');
-  if (!options.engines) options.engines = ciEngines(manifest);
+  if (!options.engines) options.engines = ciReportEngines(manifest.ciReport).join(',');
   const args = ['scripts/jetstream-driver.js', '--jetstream-dir', options.jetStreamDir];
   const benchmarks = reportBenchmarks(manifest, options.benchmarks);
   for (const benchmark of benchmarks) args.push('--benchmark', benchmark);
@@ -208,9 +182,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  ciEngines,
   expectedEngines,
-  jscVersionFailures,
   parseArgs,
   reportBenchmarks,
   runReport,
