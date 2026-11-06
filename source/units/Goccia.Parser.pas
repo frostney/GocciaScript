@@ -7475,25 +7475,28 @@ begin
         // this probe. Let the committed for-of parse select the regexp goal
         // for its iterable, rather than scanning it as a C-style initializer.
         // `of` can also be an operand or a member name in a traditional head.
-        if CanBeForOfTarget and not NeedsOperand and
+        // A keyword used as a member name still ends an operand.
+        if CanBeForOfTarget and
+           (not NeedsOperand or
+            ((FCurrent >= 2) and
+             (FTokens[FCurrent - 2].TokenType in [gttDot, gttOptionalChaining]))) and
            not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
            CheckContextualKeyword(KEYWORD_OF) then
           Exit;
 
         // Once an operator rules out a LeftHandSideExpression, keep scanning
         // the traditional initializer. In particular, an operand named `of`
-        // after a prefix update, await, yield or async is not a separator.
+        // after a prefix update, await or yield is not a separator.
         // Do not change the lexical-goal heuristic for the expression's body.
-        if not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
+        if CanBeForOfTarget and
+           not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
            (((CurrentType <> gttNew) and
              TokenRequiresFollowingOperand(CurrentType)) or
-            (CurrentType in [gttIncrement, gttDecrement, gttAs]) or
-            CheckUnescapedIdentifierKeyword(KEYWORD_SATISFIES) or
+            (CurrentType in [gttIncrement, gttDecrement]) or
             (NeedsOperand and
-             ((CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and
-               (Previous.TokenType <> gttNew)) or
-              (((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
-               CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT)) or
+             ((((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
+               CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
+               IsAwaitOperandStart) or
               ((FInGeneratorFunction > 0) and
                CheckUnescapedIdentifierKeyword(KEYWORD_YIELD))))) then
           CanBeForOfTarget := False;

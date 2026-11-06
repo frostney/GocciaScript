@@ -118,4 +118,41 @@ describe("for-of regexp iterable with traditional loops enabled", () => {
     expect(x).toBe("a>");
     expect(typeof callback).toBe("function");
   });
+
+  test("satisfies identifier", () => {
+    let satisfies;
+    for (satisfies of /a>/.exec("a>")) {}
+    expect(satisfies).toBe("a>");
+  });
+
+  test("as identifier", () => {
+    let as;
+    for (as of /a>/.exec("a>")) {}
+    expect(as).toBe("a>");
+  });
+
+  test("async member target", () => {
+    const async = {};
+    for (async.x of /a>/.exec("a>")) {}
+    expect(async.x).toBe("a>");
+  });
+
+  test("async arrow parameters named of keep their traditional header", () => {
+    let x;
+    for (x of /a>/.exec("a>")) {}
+    for (async of => of; false;) {}
+    expect(x).toBe("a>");
+  });
+
+  test("an operator keyword used as a member name ends the target", () => {
+    const holder = {};
+    for (holder.in of /a>/.exec("a>")) {}
+    expect(holder.in).toBe("a>");
+  });
+
+  test("await used as a script identifier can start a member target", () => {
+    const await = {};
+    for (await.x of /a>/.exec("a>")) {}
+    expect(await.x).toBe("a>");
+  });
 });
