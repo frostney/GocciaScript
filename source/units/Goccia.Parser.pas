@@ -7469,6 +7469,14 @@ begin
           Exit(True);
         if CurrentType = gttRightParen then
           Exit;
+        // ES2027 §14.7.5: contextual `of` after the assignment target ends
+        // this probe. Let the committed for-of parse select the regexp goal
+        // for its iterable, rather than scanning it as a C-style initializer.
+        // `of` can also be an operand or a member name in a traditional head.
+        if not NeedsOperand and
+           not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
+           CheckContextualKeyword(KEYWORD_OF) then
+          Exit;
       end;
 
       if CurrentType in [gttTemplateHead, gttTemplate] then
