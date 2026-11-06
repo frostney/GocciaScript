@@ -636,7 +636,7 @@ const COUNT_RE = /\d{1,3}(?:(?:[,.\u00A0\u2009\u202F])\d{3})+|\d{4,}/g;
 // A bare three-digit number is too common to convict on its own ("500 ms",
 // "port 443"); it is a pass count only when a pass word sits right beside it:
 // "passes 940 of the language tests", "940 tests pass".
-const BARE_COUNT_RE = /(?<![\w.,-])\d{3}(?![\w.,%-])/g;
+const BARE_COUNT_RE = /(?<![\w.,-])\d{3}(?![\w%-]|[.,]\d)/g;
 const BARE_COUNT_BEFORE = /\bpass(?:es|ed|ing)?\W+(?:(?:about|around|exactly|just|nearly|only|over|roughly)\W+)?$/i;
 const BARE_COUNT_AFTER =
   /^\W*(?:of\b|(?:[a-z-]+\W+){0,3}(?:tests?|cases?|checks?|specs?)\W+pass(?:es|ed|ing)?\b)/i;
@@ -1169,6 +1169,26 @@ const SELF_TEST_CASES: SelfTestCase[] = [
     name: "three-digit duration and port beside test262 stay clean",
     path: "docs/demo.md",
     content: "The test262 runner uses port 443 and passes a 500 ms timeout to every test.\n",
+    expected: 0,
+  },
+  {
+    name: "a three-digit count ending the sentence is caught",
+    path: "docs/demo.md",
+    content: "On the pinned test262 run, GocciaScript passes 940.\n",
+    expected: 1,
+    claims: ["940"],
+  },
+  {
+    name: "a three-digit count followed by a comma is caught",
+    path: "docs/demo.md",
+    content: "test262 passed 940, failed 12 on the pinned run.\n",
+    expected: 1,
+    claims: ["940"],
+  },
+  {
+    name: "a three-digit decimal tail beside a pass word stays clean",
+    path: "docs/demo.md",
+    content: "The test262 runner passes 940.5 ms of budget.\n",
     expected: 0,
   },
   {
