@@ -213,7 +213,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
                 </span>
               </div>
               <small className="text-ink-3 text-[0.82rem]">
-                — A drop of JavaScript, sandboxed by default.
+                — A drop of JavaScript, built for embedding.
               </small>
             </div>
           </div>

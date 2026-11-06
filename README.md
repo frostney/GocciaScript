@@ -2,14 +2,17 @@
 
 ![GocciaScript logo](./logo.png)
 
-A drop of JavaScript, sandboxed by default.
+A drop of JavaScript, built for embedding.
 
-GocciaScript is a JavaScript engine for running code that AI agents and people
-write, under the capabilities and limits the host sets. A script sees no
-filesystem, network or process unless the host grants it
+GocciaScript is an ECMAScript engine for embedding, with sensible defaults that
+are easy to customize. An application embeds it to add scripting: the host
+chooses the runtime surface, grants the capabilities a script may use, and
+bounds a run by time, instructions and memory. A script sees no filesystem,
+network or process unless the host grants it
 ([permissions](docs/permissions.md), [capability audit events](docs/capability-audit.md)),
-and a run can be bounded by time, instructions and memory and made
-deterministic, with a fixed clock and seeded randomness.
+and a run can be made deterministic, with a fixed clock and seeded randomness.
+Today the host is a FreePascal or Delphi application; see
+[Embedding the Engine](docs/embedding.md).
 
 [![test262 pass rate on main, live from the compatibility dashboard](https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.gocciascript.dev%2Fapi%2Ftest262%2Fbadge)](https://www.gocciascript.dev/compatibility)
 [![CI](https://github.com/frostney/GocciaScript/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/frostney/GocciaScript/actions/workflows/ci.yml)
@@ -33,15 +36,21 @@ deterministic, with a fixed clock and seeded randomness.
 - **In production.** GocciaScript is the engine behind
   [Shotcup](https://shotcup.dev)'s hosted sandboxes, where every run gets a
   fresh engine with hard limits.
+- **Made to be embedded.** The defaults are modern and easy to change, the
+  host installs only the runtime extensions it needs, and a script reaches
+  only the capabilities and limits the host sets. See
+  [Embed it](#embed-it).
 - **Native, with nothing underneath.** Its own compiler, bytecode VM and
   garbage collector, built with FreePascal into native binaries: no Node.js,
   V8 or other runtime to install beside the binary (HTTPS on Linux uses the
   system's OpenSSL). Prebuilt for
   macOS and Linux (x64 and arm64) and Windows (x64 and x86), and embeddable
-  in FreePascal applications.
+  in FreePascal and Delphi applications.
 - **Modern JavaScript and TypeScript.** ES modules, classes with private
   fields, async/await, Temporal, Intl, TC39 type annotations run directly, and
-  a Vitest-compatible test runner.
+  a Vitest-compatible test runner. GocciaScript also tracks TC39 proposals,
+  including stage 1 and 2, and `goccia:ast` gives formatters and codemods the
+  tree GocciaScript's own parser produces.
 - **Status: pre-1.0.** The language follows ECMAScript; the host API and
   command-line flags may change between releases, so pin a version and read
   the [changelog](CHANGELOG.md) before you upgrade.
@@ -55,13 +64,57 @@ also `brew install frostney/tap/gocciascript`. Or try it in the
 [Playground](https://www.gocciascript.dev/playground). Building from source
 needs the FreePascal compiler; see [Getting Started](#getting-started).
 
-It is not trying to become Node.js or a browser host: the primary goal is
-running agent code under an explicit host-defined capability model, and native
-embedding is the second.
+GocciaScript provides a Node.js or Web API capability when it fits the vision
+and cannot be shimmed in userland, and leaves what userland or npm can shim to
+userland. CommonJS, for example, is left to an ESM-to-CommonJS tool from npm.
+What it does provide is a set of runtime extensions a host installs, not a
+default host environment.
 
-## Start with an agent sandbox
+## Embed it
 
-`GocciaRunner`'s sandbox mode copies explicit host paths into an in-memory
+Native hosts can embed GocciaScript to run portable JavaScript with
+application-specific globals, modules, capabilities, and limits. A host can
+answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
+mark sandbox paths read-only, stop a run from another thread through an
+[abort handle](docs/embedding.md#aborting-a-run-from-another-thread), and snapshot a paused run's heap to restore it in
+a fresh engine ([Heap Snapshots](docs/heap-snapshots.md)). See
+[Embedding the Engine](docs/embedding.md).
+
+An engine starts with the recommended language profile and without dynamic code
+generation. A host changes that with a few knobs, one by one; there are no
+presets:
+
+- `Engine.Compatibility` turns on the ECMAScript forms the recommended profile
+  leaves out (`--compat-*` on the command-line hosts);
+- `Engine.FunctionConstructor.Enabled` turns on the `Function()` constructor
+  (`--unsafe-function-constructor`);
+- `EnableShadowRealm` installs the `ShadowRealm` global
+  (`--unsafe-shadowrealm`).
+
+The host also chooses its runtime extensions: `fetch`, `URL`,
+`TextEncoder`/`TextDecoder`, `Blob`, `AbortController` and `EventTarget` today,
+a virtual filesystem, and Node.js compatibility to a degree. The Web APIs React
+server rendering relies on are in scope next.
+
+## Where it is going
+
+The goals, in the order [VISION.md](VISION.md) sets them:
+
+- **Conformance.** All of test262 in every mode it requires, strict and
+  non-strict, Annex B and staging included. Progress is on the
+  [compatibility dashboard](https://www.gocciascript.dev/compatibility).
+- **Performance.** An interpreter faster than QuickJS first, then `.gcbundle`
+  bytecode artifacts, an opt-in baseline JIT and a compiled executable; see
+  [Benchmarks](docs/benchmarks.md).
+- **1.0.** A stable C ABI and public API, all of test262, an interpreter faster
+  than QuickJS, and `.gcbundle`.
+
+## Reference host: a sandbox for AI agents
+
+`GocciaRunner`'s sandbox mode is a reference host and an example of what an
+embedder can build on the capability model, the virtual filesystem and the
+runtime extensions: a runtime for code that AI agents generate. It copies
+explicit host paths into an in-memory
 virtual filesystem, runs an entry script with host-owned limits, and reports
 sandbox changes as a diff. Copies are snapshots, not live mounts, and scripts
 receive no ambient host filesystem access.
@@ -107,9 +160,9 @@ main-branch data on the live
 [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility);
 canonical prose does not freeze a historical percentage.
 
-The recommended language profile is modern by default, so code an agent writes
-stays explicit, and each core form it disables has a flag. It is product policy, not
-the implementation ceiling. Standard core forms disabled by default all have
+The recommended language profile is modern by default, so new code stays
+explicit, and each core form it disables has a flag a host can turn on. It is
+product policy, not the implementation ceiling. Standard core forms disabled by default all have
 explicit compatibility paths:
 
 | Form | Default | Enablement / exposure |
@@ -150,14 +203,17 @@ structural type checker such as `tsc`. See
 [Type Annotations](docs/type-annotations.md) for the supported syntax and its
 parsing rules.
 
-## Node host compatibility and sandbox `fs`
+## Node compatibility, to a degree
 
-GocciaScript is not a complete Node.js host: it does not provide CommonJS,
-`process`, `Buffer`, or the general `node:` module set. Bare-specifier lookup
-through `node_modules` (ESM only, a subset of Node's resolver) is opt-in with
-`--allow-import=node_modules`; see [Module Resolution](docs/module-resolution.md).
-`GocciaRunner`'s sandbox mode does provide a Node-compatible `fs` API over its
-virtual filesystem:
+GocciaScript provides a Node.js capability when it fits the vision and cannot
+be shimmed in userland, and leaves the rest to userland: CommonJS, for example,
+is left to an ESM-to-CommonJS tool from npm, and the general `node:` modules
+are judged by the same test. What it provides are runtime extensions a host
+installs: `node:async_hooks`; bare-specifier lookup through
+`node_modules` (ESM only, a subset of Node's resolver), which is opt-in with
+`--allow-import=node_modules` (see [Module Resolution](docs/module-resolution.md));
+and a Node-compatible `fs` API over a virtual filesystem, which
+`GocciaRunner`'s sandbox mode provides:
 
 - synchronous forms such as `readFileSync`, `writeFileSync`, `mkdirSync`,
   `readdirSync`, `statSync`, `rmSync`, `renameSync`, and `copyFileSync`;
@@ -467,12 +523,7 @@ as the FreePascal build. Delphi 12 Community Edition contributors validate that
 contract through the IDE; see [Delphi Validation](docs/contributing/delphi.md)
 and [Build System](docs/build-system.md#prerequisites).
 
-Native hosts can embed GocciaScript to run portable JavaScript with
-application-specific globals, modules, capabilities, and limits. A host can
-answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
-mark sandbox paths read-only, stop a run from another thread through an
-[abort handle](docs/embedding.md#aborting-a-run-from-another-thread), and snapshot a paused run's heap to restore it in
-a fresh engine ([Heap Snapshots](docs/heap-snapshots.md)). See
+Embedding is covered under [Embed it](#embed-it) and in
 [Embedding the Engine](docs/embedding.md).
 
 ## Architecture
@@ -503,7 +554,7 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 
 | Document | Description |
 |----------|-------------|
-| [Vision](VISION.md) | Why GocciaScript exists: sandboxed AI agent runtime and embeddable desktop platform |
+| [Vision](VISION.md) | Why GocciaScript exists: an ECMAScript engine for embedding, its conformance and performance goals, and the AI-agent sandbox as a reference host |
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [Language](docs/language.md) | ECMAScript support, recommended defaults, compatibility flags, and rationale |
 | [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |

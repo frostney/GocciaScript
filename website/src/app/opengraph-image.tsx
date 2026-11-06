@@ -130,10 +130,10 @@ export default async function OpenGraphImage() {
           }}
         >
           <span style={{ display: "flex" }}>
-            Sandbox-first ECMAScript runtime.
+            ECMAScript engine for embedding.
           </span>
           <span style={{ display: "flex", color: "#5f523b" }}>
-            Portable. Embeddable. Host-controlled.
+            Sensible defaults. Easy to customize. Host-controlled.
           </span>
         </div>
       </div>

@@ -1,13 +1,13 @@
 export const GOCCIASCRIPT_SUMMARY =
-  "GocciaScript is a JavaScript engine for running code that AI agents and people write: a sandbox-first ECMAScript runtime. Hosts define the available capabilities, runtime surface, and execution limits. test262 runs on every pull request, where a regression fails CI, with live results; 17,000+ tests run on every change, the engine is fuzzed and memory-checked every night, and it runs in production as the engine behind Shotcup's hosted sandboxes. It has its own compiler, bytecode VM and garbage collector with no other engine underneath, built with FreePascal into native binaries, and can be embedded in native applications.";
+  "GocciaScript is an ECMAScript engine for embedding, with sensible defaults that are easy to customize. Hosts define the available capabilities, runtime surface, and execution limits, and GocciaRunner's sandbox mode is a reference host for code that AI agents generate. test262 runs on every pull request, where a regression fails CI, with live results; 17,000+ tests run on every change, the engine is fuzzed and memory-checked every night, and it runs in production as the engine behind Shotcup's hosted sandboxes. It has its own compiler, bytecode VM and garbage collector with no other engine underneath, built with FreePascal into native binaries and made for embedding in native applications.";
 
 export const GOCCIASCRIPT_META_DESCRIPTION =
-  "A JavaScript engine for code that AI agents and people write, with host-defined capabilities and limits, live test262 evidence and native application embedding.";
+  "An ECMAScript engine for embedding, with sensible defaults that are easy to customize, host-defined capabilities and limits, and live test262 evidence.";
 
 export const PRODUCTION_READY_QUESTION = "Is GocciaScript production-ready?";
 
 export const PRODUCTION_READY_ANSWER =
-  "It runs in production as the engine behind Shotcup's hosted sandboxes (shotcup.dev). test262 runs on every pull request, where a regression fails CI, with the live result on the compatibility page; 17,000+ tests run on every change, and the engine is fuzzed and run under memory checkers every night and GC-stress-tested every week. It is pre-1.0, so the host API and command-line flags can change between releases: pin a version, and check that the supported surface (ES modules, no CommonJS, no general node: modules) covers what you run.";
+  "It runs in production as the engine behind Shotcup's hosted sandboxes (shotcup.dev). test262 runs on every pull request, where a regression fails CI, with the live result on the compatibility page; 17,000+ tests run on every change, and the engine is fuzzed and run under memory checkers every night and GC-stress-tested every week. It is pre-1.0, so the host API and command-line flags can change between releases: pin a version, and check that the supported surface (ES modules; capabilities that userland can shim, such as CommonJS through an ESM-to-CommonJS tool from npm, are left to userland) covers what you run.";
 
 export const NATIVE_PLATFORM_DESCRIPTION =
   "Native binaries for macOS, Linux and Windows, with GocciaScript's own compiler, VM and garbage collector and no other engine underneath: no other runtime to install beside the binary (HTTPS on Linux uses the system OpenSSL). FreePascal builds them, and Delphi 12 covers the Win32 and Win64 application matrix. Native applications can embed the engine with their own globals, modules, capabilities and limits.";
@@ -16,7 +16,7 @@ export const ECMASCRIPT_SCOPE_QUESTION =
   "Does GocciaScript implement only a subset of JavaScript?";
 
 export const ECMASCRIPT_SCOPE_ANSWER =
-  "GocciaScript implements core ECMAScript and publishes generated test262 results. Its recommended profile keeps var, traditional function syntax, loose equality, labels, traditional for loops, for...in, while/do...while, ASI, arguments, and non-strict Script semantics disabled by default, but each has an explicit compatibility path. Those defaults are product policy, not the implementation ceiling. Normal hosts do not install eval; the private test262 host exposes it for conformance. Annex B's legacy browser features are part of the test262 conformance target; new ones will go behind an opt-in compatibility flag.";
+  "GocciaScript implements core ECMAScript and publishes generated test262 results; it aims to pass all of test262 in every mode test262 requires, strict and non-strict, and it tracks TC39 proposals, including stage 1 and 2. Its recommended profile keeps var, traditional function syntax, loose equality, labels, traditional for loops, for...in, while/do...while, ASI, arguments, and non-strict Script semantics disabled by default, but each has an explicit compatibility path. Those defaults are product policy, not the implementation ceiling: a host changes them with Engine.Compatibility, and there are no presets. Normal hosts do not install eval; the private test262 host exposes it for conformance. Annex B's legacy browser features are part of the test262 conformance target; new ones will go behind an opt-in compatibility flag.";
 
 export const TYPE_ANNOTATIONS_QUESTION =
   "How do type annotations and --strict-types relate?";
@@ -33,7 +33,7 @@ export const TYPESCRIPT_JSX_ANSWER =
 export const NODE_COMPATIBILITY_QUESTION = "Is GocciaScript Node-compatible?";
 
 export const NODE_COMPATIBILITY_ANSWER =
-  "GocciaScript is not a complete Node.js host: it does not provide CommonJS, process, Buffer, or the general node: module set; bare-specifier lookup through node_modules (ESM only, a subset of Node's resolver) is opt-in with --allow-import=node_modules. GocciaRunner's sandbox mode does provide a Node-compatible fs API over its virtual filesystem, with synchronous, callback, and promise-based methods, Stats objects, and Node-shaped errors. The documented method set stays inside the sandbox and does not expose the ambient host filesystem.";
+  "GocciaScript provides a Node.js capability when it fits the vision and cannot be shimmed in userland, and leaves what userland or npm can shim to userland: CommonJS, for example, is left to an ESM-to-CommonJS tool from npm, and the general node: modules are judged by the same test. It is Node-compatible to a degree, through runtime extensions a host installs: node:async_hooks; bare-specifier lookup through node_modules (ESM only, a subset of Node's resolver), which is opt-in with --allow-import=node_modules; and a Node-compatible fs API over a virtual filesystem, which GocciaRunner's sandbox mode provides, with synchronous, callback, and promise-based methods, Stats objects, and Node-shaped errors. The documented method set stays inside the virtual filesystem and does not expose the ambient host filesystem.";
 
 export const VITEST_COMPATIBILITY_QUESTION =
   "Can I run my Vitest tests on GocciaScript?";
