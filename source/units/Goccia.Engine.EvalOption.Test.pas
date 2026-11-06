@@ -18,6 +18,7 @@ uses
 
   Goccia.Builtins.GlobalEval,
   Goccia.Builtins.GlobalShadowRealm,
+  Goccia.CallStack,
   Goccia.CapabilityAudit,
   Goccia.Engine,
   Goccia.Runtime,
@@ -38,6 +39,7 @@ type
     FEvents: TStringList;
     FEventReasons: TStringList;
     FEventLines: TStringList;
+    FEventTraces: TStringList;
     procedure RecordEvent(const AEvent: TGocciaCapabilityAuditEvent);
     function Run(const ASource: string; const ASetups: TEvalSetups;
       const ACompatibility: TGocciaCompatibilityFlags): string;
@@ -58,6 +60,7 @@ type
     procedure TestOptionOutlivesTheGlobalBinding;
     procedure TestFailedEnableEvalLeavesTheOptionOff;
     procedure TestEvalCallsAreAudited;
+    procedure TestAuditSinkSeesTheEvalCallInItsStackTrace;
   public
     procedure BeforeAll; override;
     procedure AfterAll; override;
@@ -70,6 +73,7 @@ begin
   FEvents := TStringList.Create;
   FEventReasons := TStringList.Create;
   FEventLines := TStringList.Create;
+  FEventTraces := TStringList.Create;
 end;
 
 procedure TEvalOptionTests.AfterAll;
@@ -77,6 +81,7 @@ begin
   FEvents.Free;
   FEventReasons.Free;
   FEventLines.Free;
+  FEventTraces.Free;
 end;
 
 procedure TEvalOptionTests.BeforeEach;
@@ -84,6 +89,7 @@ begin
   FEvents.Clear;
   FEventReasons.Clear;
   FEventLines.Clear;
+  FEventTraces.Clear;
 end;
 
 procedure TEvalOptionTests.SetupTests;
@@ -115,6 +121,8 @@ begin
     TestFailedEnableEvalLeavesTheOptionOff);
   Test('Direct and indirect eval calls report eval.call audit events',
     TestEvalCallsAreAudited);
+  Test('A sink that captures a stack trace sees the eval call as the frame''s position',
+    TestAuditSinkSeesTheEvalCallInItsStackTrace);
 end;
 
 procedure TEvalOptionTests.RecordEvent(
@@ -123,6 +131,7 @@ begin
   FEvents.Add(CapabilityKindName(AEvent.Kind) + '|' +
     CapabilityDecisionName(AEvent.Decision) + '|' + AEvent.Subject);
   FEventReasons.Add(AEvent.Reason);
+  FEventTraces.Add(TGocciaCallStack.Instance.CaptureStackTrace('Error', ''));
   FEventLines.Add(ExtractFileName(AEvent.Source.FilePath) + ':' +
     IntToStr(AEvent.Source.Line));
 end;
@@ -455,6 +464,34 @@ begin
     Engine.Free;
     Source.Free;
   end;
+end;
+
+procedure TEvalOptionTests.TestAuditSinkSeesTheEvalCallInItsStackTrace;
+var
+  Lines: string;
+  EventIndex: Integer;
+begin
+  { A sink may capture a stack while it handles the event. The innermost frame
+    must be at the eval call, not at an argument that precedes it: the
+    argument is on its own line here. }
+  Expect<string>(Run(
+    'function f() {' + sLineBreak +
+    '  return eval(' + sLineBreak +
+    '    "1"' + sLineBreak +
+    '  );' + sLineBreak +
+    '}' + sLineBreak +
+    'f();' + sLineBreak +
+    'globalThis.result = "done";',
+    [esEval], NON_STRICT_COMPATIBILITY)).ToBe('done');
+  Expect<Integer>(CountEvents('eval.call|allow|eval',
+    'direct eval is enabled', Lines)).ToBe(1);
+  Expect<string>(Lines).ToBe('eval-option.js:2');
+  EventIndex := FEvents.IndexOf('eval.call|allow|eval');
+  Expect<Boolean>(EventIndex >= 0).ToBe(True);
+  Expect<Boolean>(Pos('at f (eval-option.js:2:', FEventTraces[EventIndex]) > 0)
+    .ToBe(True);
+  Expect<Boolean>(Pos('eval-option.js:3:', FEventTraces[EventIndex]) = 0)
+    .ToBe(True);
 end;
 
 procedure TEvalOptionTests.TestEvalCallsAreAudited;

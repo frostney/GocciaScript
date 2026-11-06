@@ -15504,8 +15504,6 @@ begin
      TGocciaNativeFunctionValue(FRegisters[ACalleeReg].ObjectValue).DirectEvalHost and
      IsRealmEvalFunction(FRealm, FRegisters[ACalleeReg].ObjectValue)) then
     Exit;
-  if Assigned(FCapabilityAuditEmitter) then
-    AuditDirectEval(ATemplate, AIP);
   CallIP := AIP;
   CallInstruction := ATemplate.GetInstructionUnchecked(CallIP);
   Inc(CallIP);
@@ -15522,6 +15520,11 @@ begin
   Flags := WideC or DecodeC(CallInstruction);
   AInstructionStartIP := AIP;
   AIP := CallIP;
+  // The frame's instruction pointer is past the call now, as it is for a
+  // native call, so a sink that captures a stack trace places this frame at
+  // the eval call and not at the instruction before it.
+  if Assigned(FCapabilityAuditEmitter) then
+    AuditDirectEval(ATemplate, AInstructionStartIP);
 
   EvalSourceValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   if (Flags and CALL_FLAG_SPREAD) <> 0 then
