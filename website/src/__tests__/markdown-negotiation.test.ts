@@ -341,7 +341,9 @@ describe("createSiteMarkdown", () => {
     );
     expect(markdown).toContain("| language | 100.0% | 50 / 50 | n/a | n/a |");
     expect(markdown).toContain("- Test files discovered: 100");
-    expect(markdown).toContain("Every figure counts runs, not test files");
+    expect(markdown).toContain(
+      "Every pass and fail count is a count of runs, not of test files",
+    );
     // A report without modes must not show a guessed split.
     expect(markdown).toContain("Per-mode figures are not available");
     expect(markdown).not.toContain("| Mode |");

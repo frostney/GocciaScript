@@ -2,8 +2,8 @@ import {
   latestTest262Summary,
   loadTest262DashboardData,
   TEST262_DASHBOARD_CACHE_CONTROL,
-  TEST262_MODES,
 } from "@/lib/test262-dashboard";
+import { TEST262_MODES } from "@/lib/test262-modes";
 import { compatibilityPercent } from "@/lib/test262-percent";
 
 export const dynamic = "force-dynamic";

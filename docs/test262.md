@@ -200,6 +200,10 @@ bun scripts/run_test262_suite.ts \
   shard-*.json
 ```
 
+Sharding is by file, so a shard's run count is about twice its file count;
+the shard count and job timeouts were checked against that two-mode load
+when it began (#2068).
+
 The merged duration is the slowest shard duration, matching the effective CI
 wall-clock. On main, shard jobs upload disjoint per-test profile details; merge
 mode rebuilds the single aggregate JSON and Markdown reports from their union.
@@ -244,7 +248,7 @@ also a property of `globalThis`. A test file a test imports, such as one that
 already run in the realm.
 
 The test file is evaluated whole, frontmatter comment included, so
-diagnostics report its own lines. A strict run (`onlyStrict`) inserts
+diagnostics report its own lines. A strict Script run inserts
 `"use strict";` and a newline as the initial characters of the test file,
 and of nothing else; its diagnostics are therefore one line past the file's.
 A `raw` test runs alone: no harness Script, no prefix, the file exactly as
@@ -477,7 +481,7 @@ Default categories: `built-ins, harness, intl402, language, staging`
 
 There is no eligibility filter. Every discovered test runs. Tests
 that depend on missing features fail with a real diagnostic, not an
-invisible skip. On POSIX, each worker process owns exactly one test, so its
+invisible skip. On POSIX, each worker process owns exactly one run, so its
 heap, roots, queues, VM, engine, and realm cannot leak into the next case.
 Process exit also returns allocator-retained storage to the operating system.
 Cooperative timeouts (`--timeout`, default `20s`), per-test memory ceilings
@@ -511,8 +515,9 @@ harness file as a separate non-strict Script, applies `"use strict";` to the
 test file only, and grades every negative-runtime test on its own escaped
 throw, with no `try` wrapper. Contract 4 (#2068) runs each unflagged Script
 test in both modes and records each result's `mode`; a contract-3 baseline
-has one run per file and no modes, so its results compare as non-strict
-runs and the gate does not block on them.
+has one run per file and no modes, so each of its results pairs with the
+file's only run, or with its non-strict run when the file now runs in both
+modes, and the gate does not block on them.
 
 `scripts/test-cli-apps.ts` covers the negative grading paths with a small
 synthetic suite. After any grading or harness-evaluation change, also verify against the

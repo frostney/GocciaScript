@@ -39,18 +39,19 @@ import { SITE_DESCRIPTION } from "@/lib/site-url";
 import {
   latestTest262Summary,
   loadTest262DashboardData,
-  TEST262_MODES,
   type Test262CategorySummary,
   type Test262DashboardData,
-  type Test262Mode,
-  type Test262ModeBreakdown,
   type Test262SuiteSummary,
   test262RunIncludesAnnexB,
 } from "@/lib/test262-dashboard";
 import {
-  compatibilityModeRates,
-  compatibilityPercent,
-} from "@/lib/test262-percent";
+  TEST262_MODE_LABELS,
+  TEST262_MODES,
+  type Test262ModeBreakdown,
+  test262ModeRate,
+  test262ModeRates,
+} from "@/lib/test262-modes";
+import { compatibilityPercent } from "@/lib/test262-percent";
 import { TOOL_CALL_FLOWS, TOOL_CALL_TASK } from "@/lib/tool-call-comparison";
 
 export type MarkdownRoute =
@@ -340,14 +341,9 @@ function compatibilityNumber(value: number): string {
 }
 
 function modeClause(byMode: Test262ModeBreakdown | undefined): string {
-  const rates = compatibilityModeRates(byMode);
+  const rates = test262ModeRates(byMode);
   return rates ? `; ${rates}` : "";
 }
-
-const MODE_LABELS: Record<Test262Mode, string> = {
-  "non-strict": "Non-strict",
-  strict: "Strict",
-};
 
 /** Per-mode section. A report from before the runner recorded modes gets an
  *  explicit "not available" line instead of a guessed split. */
@@ -363,15 +359,15 @@ function modeBreakdownLines(summary: Test262SuiteSummary): string[] {
   return [
     "### Strict and non-strict",
     "",
-    "Each test that allows both modes runs once non-strict and once strict; flagged tests (`noStrict`, `raw`, `onlyStrict`, modules) run once.",
+    "Each test that allows both modes runs once non-strict and once strict. Flagged tests run once and count under the mode they run in: `noStrict` and `raw` non-strict, `onlyStrict` strict, and module code counts as strict.",
     "",
     "| Mode | Pass rate | Passing runs | Failed | Timeouts |",
     "|------|-----------|--------------|--------|----------|",
     ...TEST262_MODES.map((mode) => {
       const counts = byMode[mode];
-      return `| ${MODE_LABELS[mode]} | ${compatibilityPercent(
-        counts.passed,
-        counts.run,
+      return `| ${TEST262_MODE_LABELS[mode]} | ${test262ModeRate(
+        byMode,
+        mode,
       )} | ${compatibilityNumber(counts.passed)} / ${compatibilityNumber(
         counts.run,
       )} | ${compatibilityNumber(counts.failed)} | ${compatibilityNumber(
@@ -383,10 +379,9 @@ function modeBreakdownLines(summary: Test262SuiteSummary): string[] {
 
 function categoryModeCells(category: Test262CategorySummary): string {
   if (!category.byMode) return "n/a | n/a";
-  return TEST262_MODES.map((mode) => {
-    const counts = category.byMode?.[mode];
-    return counts ? compatibilityPercent(counts.passed, counts.run) : "n/a";
-  }).join(" | ");
+  return TEST262_MODES.map((mode) =>
+    test262ModeRate(category.byMode, mode),
+  ).join(" | ");
 }
 
 function compatibilityDate(value: string): string {
@@ -467,7 +462,7 @@ export function renderCompatibilityMarkdown(
     "",
     "The overall corpus pass rate describes this pinned test262 run. Read the top-level groups separately when evaluating core language, built-ins, ECMA-402, or staging coverage.",
     "",
-    "Every figure counts runs, not test files: a test that allows both modes runs once non-strict and once strict. Reports published before the runner recorded the mode ran each file once and carry no strict or non-strict split.",
+    "Every pass and fail count is a count of runs, not of test files: a test that allows both modes runs once non-strict and once strict. Reports published before the runner recorded the mode ran each file once and carry no strict or non-strict split.",
     "",
     ...currentResult,
     "",

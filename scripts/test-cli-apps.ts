@@ -1406,8 +1406,11 @@ function expectTest262Runs(
   const runs = byFile.get(id);
   let modes: string[];
   if (!Array.isArray(expected)) modes = Object.keys(expected).sort();
-  else if (flags.includes("module") || flags.includes("onlyStrict")) modes = ["strict"];
-  else if (flags.includes("raw") || flags.includes("noStrict")) modes = ["non-strict"];
+  // The precedence docs/test262.md ("Strict mode") gives.
+  else if (flags.includes("module")) modes = ["strict"];
+  else if (flags.includes("raw")) modes = ["non-strict"];
+  else if (flags.includes("onlyStrict")) modes = ["strict"];
+  else if (flags.includes("noStrict")) modes = ["non-strict"];
   else modes = ["non-strict", "strict"];
   const actualModes = Array.from(runs?.keys() ?? []).sort();
   if (JSON.stringify(actualModes) !== JSON.stringify(modes))
@@ -1565,6 +1568,8 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
       ["broken-include.js", test([], ["brokenHelper.js"], ["var x = 1;"]), "WRAPPER_INFRA", "harness include brokenHelper.js failed"],
       // Positions are the test file's own lines, the frontmatter included.
       ["positions.js", test([], [], ["", "missingBinding;"]), "FAIL", "missingBinding"],
+      // A module test is strict as module code: no prefix shifts its lines.
+      ["positions-module.js", test(["module"], [], ["", "missingModuleBinding;"]), "FAIL", "missingModuleBinding"],
       ["helper-positions.js", test([], ["throwingHelper.js"], ["throwFromHelper();"]), "FAIL", "TypeError"],
       // A broken include is never the parse error a negative test expects.
       ["parse-broken-include.js", test([], ["syntaxErrorHelper.js"], ["var = ;"],
@@ -1644,6 +1649,9 @@ await section("test262 runner: harness includes run as separate non-strict Scrip
     if (!(positions?.get("non-strict")?.diagnostic ?? "").includes("positions.js:6:1") ||
         !(positions?.get("strict")?.diagnostic ?? "").includes("positions.js:7:1"))
       throw new Error(`positions.js should report line 6, and line 7 when strict, got ${JSON.stringify([...positions?.values() ?? []])}`);
+    const modulePositions = byFile.get("language/positions-module.js")?.get("strict");
+    if (!(modulePositions?.diagnostic ?? "").includes("positions-module.js:7:1"))
+      throw new Error(`positions-module.js should report the file's own line 7, got ${JSON.stringify(modulePositions)}`);
     // An error a harness function raises names the harness file it came from.
     for (const helperPositions of byFile.get("language/helper-positions.js")?.values() ?? [])
       if (!(helperPositions.diagnostic ?? "").includes("throwingHelper.js:2:"))
@@ -1721,14 +1729,23 @@ await section("test262 comment: runs compare by file and mode, so a strict-only 
   const tmp = makeTmp();
   try {
     type Run = { id: string; mode?: string; status: string };
+    const counts = (results: Run[]) => {
+      const passed = results.filter((r) => r.status === "PASS").length;
+      return { run: results.length, passed, failed: results.length - passed, wrapperInfra: 0, timeouts: 0 };
+    };
     const report = (results: Run[], gradingContract: number) => {
       const passed = results.filter((r) => r.status === "PASS").length;
+      // Reports graded before contract 4 have no per-mode counts.
+      const byMode = gradingContract < 4 ? undefined : {
+        "non-strict": counts(results.filter((r) => r.mode === "non-strict")),
+        strict: counts(results.filter((r) => r.mode === "strict")),
+      };
       return {
         summary: {
           totalDiscovered: new Set(results.map((r) => r.id)).size, totalRun: results.length, passed,
           failed: results.length - passed, wrapperInfraFailures: 0, timeouts: 0, durationSeconds: 1,
-          byCategory: [{ category: "language", run: results.length, passed, failed: results.length - passed,
-            wrapperInfra: 0, timeouts: 0 }],
+          byMode,
+          byCategory: [{ category: "language", ...counts(results), byMode }],
         },
         results: results.map((r) => ({ ...r, durationMs: 1 })),
         run: { gradingContract },
@@ -1760,14 +1777,30 @@ await section("test262 comment: runs compare by file and mode, so a strict-only 
     if (strictRegression.exitCode !== 1 || !strictMarkdown.includes("`language/a.js (strict)`") ||
         strictMarkdown.includes("`language/a.js (non-strict)`") || strictMarkdown.includes("`language/b.js"))
       throw new Error(`a strict-only PASS -> FAIL should block and name the strict run: ${strictMarkdown}`);
-    // A strict run with no baseline counterpart is new, not a regression.
-    const legacyBaseline = write("legacy.json", report([{ id: "language/a.js", status: "PASS" }], 4));
-    const newRun = comment(write("new-run.json", report([
+    // The per-mode rows carry their own deltas against a baseline that has them.
+    if (!strictMarkdown.includes("| _strict runs_ | 2 | 0 | -1 |") ||
+        !strictMarkdown.includes("| _non-strict runs_ | 2 | 2 | ±0 |"))
+      throw new Error(`the comment should render per-mode rows with deltas: ${strictMarkdown}`);
+    // A contract-3 baseline ran each file once and records no mode: that run
+    // pairs with the file's only run (only.js is onlyStrict, so strict) or
+    // its non-strict run. a.js's new strict run has no counterpart and is
+    // new, not a transition. The contract changed, so nothing blocks.
+    const legacyBaseline = write("legacy.json", report([
+      { id: "language/a.js", status: "PASS" },
+      { id: "language/only.js", status: "PASS" },
+    ], 3));
+    const legacy = comment(write("after-legacy.json", report([
       { id: "language/a.js", mode: "non-strict", status: "PASS" },
       { id: "language/a.js", mode: "strict", status: "FAIL" },
+      { id: "language/only.js", mode: "strict", status: "FAIL" },
     ], 4)), legacyBaseline);
-    if (newRun.exitCode !== 0 || newRun.stdout.toString().includes("Regression vs cached"))
-      throw new Error(`a strict run missing from the baseline should not block: ${newRun.stdout.toString()}`);
+    const legacyMarkdown = legacy.stdout.toString();
+    if (legacy.exitCode !== 0 || !legacyMarkdown.includes("Grading contract changed (v3 → v4)") ||
+        !legacyMarkdown.includes("`language/only.js (strict)`") || legacyMarkdown.includes("`language/a.js"))
+      throw new Error(`a contract-3 baseline should pair each run with the file's only or non-strict run: ${legacyMarkdown}`);
+    // A baseline without per-mode counts shows the per-mode deltas as new.
+    if (!legacyMarkdown.includes("| _strict runs_ | 2 | 0 | 🆕 |"))
+      throw new Error(`per-mode rows against a baseline without them should show 🆕: ${legacyMarkdown}`);
   } finally {
     clean(tmp);
   }
@@ -1981,6 +2014,37 @@ await section("test262 runner: deterministic shards merge into one complete repo
       throw new Error(
         `test262 merge should reject a duplicated strict run: ${duplicateRunProc.stderr.toString()}`,
       );
+    }
+
+    // Coverage counts files: a shard that lost every run of a file leaves the
+    // merged set incomplete. A run's mode must be one of the two modes.
+    const mergeReplacingShard = (name: string, edit: (report: any) => void) => {
+      const report = JSON.parse(readFileSync(shardReports[duplicateShard], "utf8"));
+      edit(report);
+      report.summary.totalRun = report.results.length;
+      const path = join(tmp, `${name}.json`);
+      writeFileSync(path, JSON.stringify(report));
+      return Bun.spawnSync(
+        [
+          "bun", "scripts/run_test262_suite.ts", "--merge-shards", "--output", join(tmp, `${name}-merged.json`),
+          ...shardReports.map((shardPath, index) => index === duplicateShard ? path : shardPath),
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+      );
+    };
+    const lostFileProc = mergeReplacingShard("lost-file", (report) => {
+      report.results = report.results.filter((result: { id: string }) => result.id !== strictRun.id);
+    });
+    if (lostFileProc.exitCode !== 1 ||
+        !lostFileProc.stderr.toString().includes("Incomplete result set: discovered 12 files, merged runs of 11")) {
+      throw new Error(`test262 merge should reject a lost file: ${lostFileProc.stderr.toString()}`);
+    }
+    const badModeProc = mergeReplacingShard("bad-mode", (report) => {
+      report.results[0].mode = "sloppy";
+    });
+    if (badModeProc.exitCode !== 1 ||
+        !badModeProc.stderr.toString().includes('Invalid strictness mode "sloppy"')) {
+      throw new Error(`test262 merge should reject an unknown mode: ${badModeProc.stderr.toString()}`);
     }
 
     const missingProc = Bun.spawnSync(

@@ -752,7 +752,8 @@ jobs:
         # 7-9s tests must not trip the deadline purely from contention.
         # --jobs=4 matches the 4 vCPUs on GH-hosted ubuntu-latest runners
         # for public repos. The runner forks, rather than execs, one isolated
-        # engine process per test and keeps at most four alive concurrently.
+        # engine process per run (a test file runs once per mode test262
+        # requires) and keeps at most four alive concurrently.
         run: |
           profile_args=()
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then

@@ -862,7 +862,7 @@ var
   Metadata: TTest262Metadata;
   Mode: TTest262RunMode;
   Modes: TTest262RunModes;
-  Run: TTest262Case;
+  RunCase: TTest262Case;
   Runs: TObjectList<TTest262Case>;
 begin
   Runs := TObjectList<TTest262Case>.Create(True);
@@ -877,7 +877,7 @@ begin
           if ParseTest(ReadUTF8FileText(FileCase.Path), Metadata) then
             Modes := RunModesFor(Metadata);
         except
-          on E: Exception do
+          on Exception do
             Modes := [trmNonStrict];
         end;
       finally
@@ -886,11 +886,11 @@ begin
       for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
         if Mode in Modes then
         begin
-          Run := TTest262Case.Create;
-          Run.Id := FileCase.Id;
-          Run.Path := FileCase.Path;
-          Run.Mode := Mode;
-          Runs.Add(Run);
+          RunCase := TTest262Case.Create;
+          RunCase.Id := FileCase.Id;
+          RunCase.Path := FileCase.Path;
+          RunCase.Mode := Mode;
+          Runs.Add(RunCase);
         end;
     end;
   except
@@ -1364,7 +1364,8 @@ begin
       end;
       { The case's mode is the one place strictness is decided. A strict
         Script run gets the "use strict" prefix; a module test's run is
-        strict as module code and keeps its source as written. }
+        strict as module code and keeps its source as written
+        (INTERPRETING.md, the module flag). }
       StrictMode := (ACase.Mode = trmStrict) and
         not Metadata.HasFlag('module');
       Source := CreateECMAScriptSourceLines(
@@ -1737,17 +1738,6 @@ begin
     Result := AId;
 end;
 
-function CountOutcome(const AResults: array of TTest262Result;
-  const AOutcome: TTest262Outcome): Integer;
-var
-  I: Integer;
-begin
-  Result := 0;
-  for I := 0 to High(AResults) do
-    if AResults[I].Status = AOutcome then
-      Inc(Result);
-end;
-
 function PercentageText(const ANumerator, ADenominator: Integer): string;
 begin
   if ADenominator = 0 then
@@ -1795,30 +1785,24 @@ end;
 
 procedure TTest262App.PrintSummary;
 var
-  Failed: Integer;
   I: Integer;
-  Infrastructure: Integer;
   Mode: TTest262RunMode;
   ModeCounts: TTest262ModeCounts;
-  Passed: Integer;
-  TimedOut: Integer;
+  Totals: TTest262Counts;
 begin
-  Passed := CountOutcome(FResults, toPass);
-  Failed := CountOutcome(FResults, toFail);
-  Infrastructure := CountOutcome(FResults, toWrapperInfra);
-  TimedOut := CountOutcome(FResults, toTimeout);
+  ModeCounts := ModeCountsFor(FResults);
+  Totals := CountsTotal(ModeCounts);
   WriteLn('');
   WriteLn('test262 conformance');
   WriteLn('  Discovered:       ', FTotalDiscovered);
   WriteLn('  Run:              ', Length(FResults));
-  WriteLn('  Passed:           ', Passed, ' (',
-    PercentageText(Passed, Length(FResults)), ')');
-  WriteLn('  Failed:           ', Failed);
-  WriteLn('  Wrapper infra:    ', Infrastructure);
-  WriteLn('  Timeouts:         ', TimedOut);
+  WriteLn('  Passed:           ', Totals.Passed, ' (',
+    PercentageText(Totals.Passed, Totals.Run), ')');
+  WriteLn('  Failed:           ', Totals.Failed);
+  WriteLn('  Wrapper infra:    ', Totals.WrapperInfra);
+  WriteLn('  Timeouts:         ', Totals.Timeouts);
   WriteLn('  Duration:         ',
     FormatFloat('0.0', FDurationNanoseconds / 1000000000), 's');
-  ModeCounts := ModeCountsFor(FResults);
   for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
     WriteLn('  ', PadRight(RunModeName(Mode) + ' runs:', 18),
       ModeCounts[Mode].Run, ', passed ', ModeCounts[Mode].Passed, ' (',
@@ -1882,8 +1866,10 @@ var
   I: Integer;
   Index: Integer;
   Lines: TStringList;
+  ModeCounts: TTest262ModeCounts;
   ReportedCategories: TStringList;
   Test262SHA: string;
+  Totals: TTest262Counts;
 begin
   if FOptions.OutputPath = '' then
     Exit;
@@ -1897,6 +1883,8 @@ begin
     Categories.DelimitedText := FOptions.Categories;
     for I := 0 to Categories.Count - 1 do
       Categories[I] := Trim(Categories[I]);
+    ModeCounts := ModeCountsFor(FResults);
+    Totals := CountsTotal(ModeCounts);
     SetLength(CategoryCounts, Categories.Count);
     BuildCategoryCounts(FResults, Categories, CategoryCounts);
     DurationSeconds := FDurationNanoseconds / 1000000000;
@@ -1913,16 +1901,16 @@ begin
     Lines.Add('    "totalDiscovered": ' + IntToStr(FTotalDiscovered) + ',');
     Lines.Add('    "totalRun": ' + IntToStr(Length(FResults)) + ',');
     Lines.Add('    "passed": ' +
-      IntToStr(CountOutcome(FResults, toPass)) + ',');
+      IntToStr(Totals.Passed) + ',');
     Lines.Add('    "failed": ' +
-      IntToStr(CountOutcome(FResults, toFail)) + ',');
+      IntToStr(Totals.Failed) + ',');
     Lines.Add('    "wrapperInfraFailures": ' +
-      IntToStr(CountOutcome(FResults, toWrapperInfra)) + ',');
+      IntToStr(Totals.WrapperInfra) + ',');
     Lines.Add('    "timeouts": ' +
-      IntToStr(CountOutcome(FResults, toTimeout)) + ',');
+      IntToStr(Totals.Timeouts) + ',');
     Lines.Add('    "durationSeconds": ' +
       Format('%.3f', [DurationSeconds], InvariantFormatSettings) + ',');
-    Lines.Add('    "byMode": ' + ModeCountsJSON(ModeCountsFor(FResults)) + ',');
+    Lines.Add('    "byMode": ' + ModeCountsJSON(ModeCounts) + ',');
     Lines.Add('    "byCategory": [');
     for I := 0 to ReportedCategories.Count - 1 do
     begin
@@ -2019,10 +2007,11 @@ begin
 end;
 
 function TTest262App.FailureCount: Integer;
+var
+  Totals: TTest262Counts;
 begin
-  Result := CountOutcome(FResults, toFail) +
-    CountOutcome(FResults, toWrapperInfra) +
-    CountOutcome(FResults, toTimeout);
+  Totals := CountsTotal(ModeCountsFor(FResults));
+  Result := Totals.Run - Totals.Passed;
 end;
 
 function TTest262App.RunHostEval: Integer;

@@ -5,15 +5,18 @@ import {
   SegmentedControlItem,
 } from "@astryxdesign/core/SegmentedControl";
 import { type CSSProperties, useMemo, useRef, useState } from "react";
-import {
-  TEST262_MODES,
-  type Test262CategorySummary,
-  type Test262DashboardData,
-  type Test262GroupCoverage,
-  type Test262Mode,
-  type Test262ModeBreakdown,
-  type Test262TimelinePoint,
+import type {
+  Test262CategorySummary,
+  Test262DashboardData,
+  Test262GroupCoverage,
+  Test262TimelinePoint,
 } from "@/lib/test262-dashboard";
+import {
+  TEST262_MODE_LABELS,
+  TEST262_MODES,
+  test262ModeRate,
+  test262ModeRates,
+} from "@/lib/test262-modes";
 
 const CATEGORY_COLORS: Record<string, string | undefined> = {
   total: "#2d4a2b",
@@ -44,6 +47,11 @@ const TIMELINE_RANGES: { value: TimelineRange; label: string; days: number }[] =
     { value: "all", label: "All time", days: Number.POSITIVE_INFINITY },
   ];
 
+/** Earlier points ran each file once, so run totals, the pass rate and the
+ *  duration step where reports began running both modes. */
+const MODE_CUTOVER_NOTE =
+  "Points from before the runner ran both modes ran each test file once, so the totals, the pass rate and the duration step where both modes begin.";
+
 function fmt(value: number): string {
   return value.toLocaleString("en-US");
 }
@@ -58,30 +66,6 @@ function minutes(seconds: number): string {
 
 function passRate(passed: number, run: number): number {
   return run > 0 ? passed / run : 0;
-}
-
-const MODE_LABELS: Record<Test262Mode, string> = {
-  "non-strict": "Non-strict",
-  strict: "Strict",
-};
-
-/** `98.0%` for a mode with runs, `n/a` for one without; callers pass
- *  `undefined` for a report that does not record modes. */
-function modeRate(byMode: Test262ModeBreakdown | undefined, mode: Test262Mode) {
-  const counts = byMode?.[mode];
-  return counts && counts.run > 0
-    ? percent(passRate(counts.passed, counts.run))
-    : "n/a";
-}
-
-/** Per-mode rates for a category line; null when the report has no modes. */
-export function formatTest262ModeRates(
-  byMode: Test262ModeBreakdown | undefined,
-): string | null {
-  if (!byMode) return null;
-  return TEST262_MODES.map(
-    (mode) => `${MODE_LABELS[mode].toLowerCase()} ${modeRate(byMode, mode)}`,
-  ).join(" · ");
 }
 
 export function formatTest262CategoryLabel(category: string): string {
@@ -416,6 +400,7 @@ function CoverageTimeline({ points }: { points: Test262TimelinePoint[] }) {
       <div className="section-head">
         <p className="section-kicker">time diagram</p>
         <h2 id="test262-timeline">test262 pass rate over time</h2>
+        <p>{MODE_CUTOVER_NOTE}</p>
       </div>
       <div className="compat-chart-shell" ref={shellRef}>
         <div className="compat-chart-wrap">
@@ -597,6 +582,7 @@ function DurationTimeline({ points }: { points: Test262TimelinePoint[] }) {
       <div className="section-head">
         <p className="section-kicker">performance</p>
         <h2 id="test262-duration">test262 runtime over time</h2>
+        <p>{MODE_CUTOVER_NOTE}</p>
       </div>
       <div className="compat-chart-shell" ref={shellRef}>
         <div className="compat-chart-wrap">
@@ -778,9 +764,10 @@ function ModeSplit({ point }: { point: Test262TimelinePoint }) {
         <h2 id="test262-modes">Strict and non-strict</h2>
         <p>
           A test that allows both modes runs once non-strict and once strict, so
-          every count on this page is a count of runs, not of test files.
-          Flagged tests (<code>noStrict</code>, <code>raw</code>,{" "}
-          <code>onlyStrict</code>, modules) run once.
+          every pass and fail count on this page is a count of runs, not of test
+          files. Flagged tests run once and count under the mode they run in:{" "}
+          <code>noStrict</code> and <code>raw</code> non-strict,{" "}
+          <code>onlyStrict</code> strict, and module code counts as strict.
         </p>
       </div>
       {byMode ? (
@@ -791,8 +778,8 @@ function ModeSplit({ point }: { point: Test262TimelinePoint }) {
             return (
               <div className="compat-category" key={mode}>
                 <div className="compat-category-head">
-                  <h3>{MODE_LABELS[mode]}</h3>
-                  <strong>{modeRate(byMode, mode)}</strong>
+                  <h3>{TEST262_MODE_LABELS[mode]}</h3>
+                  <strong>{test262ModeRate(byMode, mode)}</strong>
                 </div>
                 <div
                   className="compat-bar"
@@ -829,6 +816,7 @@ function CategorySplit({ point }: { point: Test262TimelinePoint }) {
       <div className="compat-category-grid">
         {point.summary.byCategory.map((category) => {
           const rate = passRate(category.passed, category.run);
+          const modeRates = test262ModeRates(category.byMode, " · ");
           return (
             <div className="compat-category" key={category.category}>
               <div className="compat-category-head">
@@ -843,9 +831,7 @@ function CategorySplit({ point }: { point: Test262TimelinePoint }) {
               <p>
                 {fmt(category.passed)} passed / {fmt(category.run)} run
               </p>
-              {formatTest262ModeRates(category.byMode) && (
-                <p>{formatTest262ModeRates(category.byMode)}</p>
-              )}
+              {modeRates && <p>{modeRates}</p>}
             </div>
           );
         })}
@@ -875,7 +861,7 @@ function GroupTable({
             <th>Passing runs</th>
             {showModes &&
               TEST262_MODES.map((mode) => (
-                <th key={mode}>{MODE_LABELS[mode]}</th>
+                <th key={mode}>{TEST262_MODE_LABELS[mode]}</th>
               ))}
           </tr>
         </thead>
@@ -904,7 +890,7 @@ function GroupTable({
               </td>
               {showModes &&
                 TEST262_MODES.map((mode) => (
-                  <td key={mode}>{modeRate(group.byMode, mode)}</td>
+                  <td key={mode}>{test262ModeRate(group.byMode, mode)}</td>
                 ))}
             </tr>
           ))}

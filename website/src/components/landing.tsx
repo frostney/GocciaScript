@@ -62,11 +62,11 @@ import {
   VITEST_COMPATIBILITY_ANSWER,
   VITEST_COMPATIBILITY_QUESTION,
 } from "@/lib/positioning";
-import type { Test262ModeBreakdown } from "@/lib/test262-dashboard";
 import {
-  compatibilityModeRates,
-  compatibilityPercent,
-} from "@/lib/test262-percent";
+  type Test262ModeBreakdown,
+  test262ModeRates,
+} from "@/lib/test262-modes";
+import { compatibilityPercent } from "@/lib/test262-percent";
 
 const FEATURE_ICONS: Record<
   FeatureIcon,
@@ -929,6 +929,7 @@ export function Landing({
    *  the browser. */
   locale: string;
 }) {
+  const modeRates = test262ModeRates(compatibility?.byMode);
   return (
     <>
       <section className="hero">
@@ -1051,9 +1052,7 @@ export function Landing({
                         compatibility.passed,
                         compatibility.totalRun,
                       )}
-                      {compatibilityModeRates(compatibility.byMode)
-                        ? `; ${compatibilityModeRates(compatibility.byMode)}`
-                        : ""}
+                      {modeRates ? `; ${modeRates}` : ""}
                       ); see results{" "}
                     </>
                   ) : (

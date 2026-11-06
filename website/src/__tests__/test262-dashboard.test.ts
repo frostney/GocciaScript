@@ -5,7 +5,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   formatTest262CategoryLabel,
   formatTest262DurationTooltip,
-  formatTest262ModeRates,
   formatTest262TimelineTooltip,
   Test262Dashboard,
 } from "@/components/test262-dashboard";
@@ -24,6 +23,7 @@ import {
   type Test262SuiteSummary,
   test262RunIncludesAnnexB,
 } from "@/lib/test262-dashboard";
+import { test262ModeRates } from "@/lib/test262-modes";
 
 function buildZip(name: string, text: string): Uint8Array {
   const nameBytes = Buffer.from(name);
@@ -513,19 +513,19 @@ describe("test262 dashboard per-mode rendering", () => {
   };
 
   test("formats per-mode rates, and returns null without modes", () => {
-    expect(formatTest262ModeRates(undefined)).toBeNull();
+    expect(test262ModeRates(undefined)).toBeNull();
     expect(
-      formatTest262ModeRates({
-        "non-strict": counts(50, 49),
-        strict: counts(50, 41),
-      }),
+      test262ModeRates(
+        { "non-strict": counts(50, 49), strict: counts(50, 41) },
+        " · ",
+      ),
     ).toBe("non-strict 98.0% · strict 82.0%");
     expect(
-      formatTest262ModeRates({
+      test262ModeRates({
         "non-strict": counts(50, 49),
         strict: counts(0, 0),
       }),
-    ).toBe("non-strict 98.0% · strict n/a");
+    ).toBe("non-strict 98.0%, strict n/a");
   });
 
   test("shows strict and non-strict side by side when the report has modes", () => {
@@ -550,6 +550,34 @@ describe("test262 dashboard per-mode rendering", () => {
     expect(markup).not.toContain("Per-mode figures are not available");
   });
 
+  test("renders per-mode group columns, with n/a for a mode a group never ran", () => {
+    const rec = (id: string, mode: Test262Record["mode"], pass: boolean) =>
+      ({ id, mode, status: pass ? "PASS" : "FAIL" }) as Test262Record;
+    // language/both: 25 files in both modes; strict fails 5 of them.
+    // language/strictonly: 25 onlyStrict files, so no non-strict run at all.
+    const results = [
+      ...Array.from({ length: 25 }, (_, i) => [
+        rec(`language/both/t-${i}.js`, "non-strict", true),
+        rec(`language/both/t-${i}.js`, "strict", i >= 5),
+      ]).flat(),
+      ...Array.from({ length: 25 }, (_, i) =>
+        rec(`language/strictonly/t-${i}.js`, "strict", true),
+      ),
+    ];
+    const markup = html(
+      {
+        ...summary,
+        byMode: { "non-strict": counts(25, 25), strict: counts(50, 45) },
+      },
+      results,
+    );
+
+    expect(markup).toContain("<th>Non-strict</th>");
+    expect(markup).toContain("<th>Strict</th>");
+    expect(markup).toContain("<td>100.0%</td><td>80.0%</td>");
+    expect(markup).toContain("<td>n/a</td><td>100.0%</td>");
+  });
+
   test("shows modes as unavailable, not guessed, for a legacy report", () => {
     const markup = html(summary);
 
@@ -557,5 +585,8 @@ describe("test262 dashboard per-mode rendering", () => {
     expect(markup).toContain("Per-mode figures are not available");
     expect(markup).not.toContain("non-strict 9");
     expect(markup).not.toContain(">Strict<");
+    expect(markup).not.toContain("<th>Strict</th>");
+    // The timeline says earlier points ran each file once.
+    expect(markup).toContain("ran each test file once");
   });
 });

@@ -7,6 +7,18 @@ import {
   readTest262BlobReportJsonByArtifactId,
   type Test262BlobRun,
 } from "@/lib/test262-blob-store";
+import type {
+  Test262Mode,
+  Test262ModeBreakdown,
+  Test262ModeCounts,
+} from "@/lib/test262-modes";
+
+export type {
+  Test262Mode,
+  Test262ModeBreakdown,
+  Test262ModeCounts,
+} from "@/lib/test262-modes";
+export { TEST262_MODES } from "@/lib/test262-modes";
 
 const TEST262_WORKFLOW = "ci.yml";
 const TEST262_ARTIFACT_NAME = "test262-results";
@@ -18,23 +30,6 @@ export const TEST262_DASHBOARD_CACHE_CONTROL =
   "public, max-age=0, s-maxage=900, stale-while-revalidate=3600";
 
 export type Test262Outcome = "PASS" | "FAIL" | "WRAPPER_INFRA" | "TIMEOUT";
-
-/** How a run executed the test: the same file runs once per mode it allows. */
-export type Test262Mode = "non-strict" | "strict";
-
-export const TEST262_MODES: readonly Test262Mode[] = ["non-strict", "strict"];
-
-export type Test262ModeCounts = {
-  run: number;
-  passed: number;
-  failed: number;
-  wrapperInfra: number;
-  timeouts: number;
-};
-
-/** Per-mode counts. Absent (`undefined`) on reports from before the runner
- *  recorded the mode; never derive it for those. */
-export type Test262ModeBreakdown = Record<Test262Mode, Test262ModeCounts>;
 
 /** One run of a test file. A file appears once per mode it ran in, so
  *  `id` alone is not unique in a current report. `mode` is absent on

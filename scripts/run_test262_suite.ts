@@ -31,8 +31,9 @@ const RUN_MODES: readonly RunMode[] = ["non-strict", "strict"];
 interface PerTestRecord {
   id: string;
   /**
-   * Absent in reports graded before contract 4, which ran each file once;
-   * {@link modeOf} reads those runs as non-strict.
+   * Absent in reports graded before contract 4, which ran each file once.
+   * {@link modeOf} reads such a run as non-strict for counting; the PR
+   * comparison pairs it as computeRegression describes.
    */
   mode?: RunMode;
   status: Outcome;
@@ -110,6 +111,14 @@ function emptyModeCounts(): ModeCounts {
   return { "non-strict": emptyCounts(), strict: emptyCounts() };
 }
 
+function totalOf(byMode: ModeCounts): RunCounts {
+  const total = emptyCounts();
+  for (const mode of RUN_MODES) {
+    for (const key of Object.keys(total) as (keyof RunCounts)[]) total[key] += byMode[mode][key];
+  }
+  return total;
+}
+
 function addOutcome(counts: RunCounts, status: Outcome): void {
   counts.run++;
   switch (status) {
@@ -156,24 +165,22 @@ function aggregate(
   durationSeconds: number,
   totalDiscovered: number,
 ): SuiteSummary {
-  const byCat = new Map<string, CategorySummary & { byMode: ModeCounts }>();
-  const total = emptyCounts();
+  const byCat = new Map<string, ModeCounts>();
   const byMode = emptyModeCounts();
   for (const r of results) {
     const cat = r.id.split("/")[0] || "unknown";
     let entry = byCat.get(cat);
     if (!entry) {
-      entry = { category: cat, ...emptyCounts(), byMode: emptyModeCounts() };
+      entry = emptyModeCounts();
       byCat.set(cat, entry);
     }
-    addOutcome(entry, r.status);
-    addOutcome(entry.byMode[modeOf(r)], r.status);
-    addOutcome(total, r.status);
+    addOutcome(entry[modeOf(r)], r.status);
     addOutcome(byMode[modeOf(r)], r.status);
   }
-  const sorted = Array.from(byCat.values()).sort((a, b) =>
-    a.category.localeCompare(b.category),
-  );
+  const total = totalOf(byMode);
+  const sorted: CategorySummary[] = Array.from(byCat.entries())
+    .map(([category, counts]) => ({ category, ...totalOf(counts), byMode: counts }))
+    .sort((a, b) => a.category.localeCompare(b.category));
   return {
     totalDiscovered,
     totalRun: total.run,
@@ -886,7 +893,7 @@ function mergeShardReports(paths: string[]): SuiteReport {
       }
       if (result.mode !== undefined && !RUN_MODES.includes(result.mode)) {
         throw new Error(
-          `Invalid run mode ${JSON.stringify(result.mode)} for ${result.id} in ${path}`,
+          `Invalid strictness mode ${JSON.stringify(result.mode)} for ${result.id} in ${path}`,
         );
       }
       const key = runKey(result);
@@ -1039,10 +1046,23 @@ function computeRegression(
     // mode, so a strict-only regression shows up like any other. A run with
     // no baseline counterpart, such as the first strict run of a file, is new
     // and not a transition.
+    //
+    // A baseline graded before contract 4 ran each file once and records no
+    // mode. That one run was strict for an onlyStrict or module file and
+    // non-strict otherwise, so it pairs with the current file's only run, or
+    // with its non-strict run when the file now runs in both modes.
     const prevByRun = new Map<string, Outcome>();
-    for (const r of baseline!.results || []) prevByRun.set(runKey(r), r.status);
+    const prevLegacy = new Map<string, Outcome>();
+    for (const r of baseline!.results || []) {
+      if (r.mode === undefined) prevLegacy.set(r.id, r.status);
+      else prevByRun.set(runKey(r), r.status);
+    }
+    const runsPerFile = new Map<string, number>();
+    for (const r of data.results) runsPerFile.set(r.id, (runsPerFile.get(r.id) ?? 0) + 1);
     for (const r of data.results) {
-      const prev = prevByRun.get(runKey(r));
+      const pairsWithLegacy = runsPerFile.get(r.id) === 1 || modeOf(r) === "non-strict";
+      const prev = prevByRun.get(runKey(r)) ??
+        (pairsWithLegacy ? prevLegacy.get(r.id) : undefined);
       if (!prev) continue;
       const label = runLabel(r);
       if (prev !== "TIMEOUT" && r.status === "TIMEOUT") newTimeouts.push(label);
