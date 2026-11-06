@@ -28,7 +28,15 @@ type
     procedure TestModuleEarlyErrorNamesTheFirstVarInSourceOrder;
     procedure TestAwaitSourceGoal;
     procedure TestAwaitModuleError;
+    procedure ExpectModuleErrorPreserved(const ASource: string;
+      const ACompatibility: TGocciaCompatibilityFlags);
     procedure TestSloppyAwaitFallback;
+    procedure ExpectParsePasses(const ASource: string;
+      const ASourceType, AExpectedGoal: TGocciaSourceType;
+      const ACompatibility: TGocciaCompatibilityFlags;
+      const AExpectedPasses: Integer);
+    procedure TestExplicitGoalsParseOnce;
+    procedure TestDetectionParsePassBounds;
   public
     procedure SetupTests; override;
   end;
@@ -58,6 +66,8 @@ end;
 
 procedure TSourcePipelineTests.SetupTests;
 begin
+  Test('Explicit source goals parse once', TestExplicitGoalsParseOnce);
+  Test('Detection respects parse pass bounds', TestDetectionParsePassBounds);
   Test('Sloppy ambiguous await falls back after strict Module failure', TestSloppyAwaitFallback);
   Test('Ambiguous bare await selects Module', TestAwaitSourceGoal);
   Test('Failed await fallback preserves Module error', TestAwaitModuleError);
@@ -156,6 +166,66 @@ begin
     'const a%0:d = x;');
 end;
 
+procedure TSourcePipelineTests.ExpectParsePasses(const ASource: string;
+  const ASourceType, AExpectedGoal: TGocciaSourceType;
+  const ACompatibility: TGocciaCompatibilityFlags;
+  const AExpectedPasses: Integer);
+var
+  Lines: TStringList;
+  Options: TGocciaSourcePipelineOptions;
+  Parsed: TGocciaSourcePipelineResult;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.Text := ASource;
+    Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.SourceType := ASourceType;
+    Options.Compatibility := ACompatibility;
+    Parsed := TGocciaSourcePipeline.Parse(Lines, '<test>', Options);
+    try
+      Expect<Boolean>(Parsed.SourceType = AExpectedGoal).ToBe(True);
+      Expect<Integer>(Parsed.ParsePassCount).ToBe(AExpectedPasses);
+      Expect<Boolean>(Parsed.LexTimeNanoseconds >= 0).ToBe(True);
+      Expect<Boolean>(Parsed.ParseTimeNanoseconds >= 0).ToBe(True);
+    finally
+      Parsed.Free;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure TSourcePipelineTests.TestExplicitGoalsParseOnce;
+begin
+  ExpectParsePasses('const await = {0: 1}; await[0];',
+    stScript, stScript, [], 1);
+  ExpectParsePasses('await[0]; export {};', stModule, stModule, [], 1);
+  ExpectParsePasses('globalThis.await = {0: 1}; await[0]; delete missing;',
+    stScript, stScript, [cfNonStrictMode], 1);
+  ExpectParsePasses('await[0]; export {};',
+    stModule, stModule, [cfNonStrictMode], 1);
+end;
+
+procedure TSourcePipelineTests.TestDetectionParsePassBounds;
+begin
+  ExpectParsePasses('1;', stDetect, stScript, [], 1);
+  ExpectParsePasses('export {};', stDetect, stModule, [], 1);
+  ExpectParsePasses('await[0];', stDetect, stModule, [], 1);
+  ExpectParsePasses('await[0]; export {};', stDetect, stModule, [], 1);
+  // Failure of the Module reading must return the second parse, never a third.
+  ExpectParsePasses('const await = {0: 1}; await[0];',
+    stDetect, stScript, [], 2);
+  ExpectParsePasses('const await = () => 1; await();',
+    stDetect, stScript, [], 2);
+  ExpectParsePasses('1;', stDetect, stScript, [cfNonStrictMode], 1);
+  ExpectParsePasses('export {};', stDetect, stModule, [cfNonStrictMode], 2);
+  ExpectParsePasses('await[0];', stDetect, stModule, [cfNonStrictMode], 2);
+  ExpectParsePasses('const await = {0: 1}; await[0];',
+    stDetect, stScript, [cfNonStrictMode], 2);
+  ExpectParsePasses('globalThis.await = {0: 1}; await[0]; delete missing;',
+    stDetect, stScript, [cfNonStrictMode], 3);
+end;
+
 procedure TSourcePipelineTests.TestAwaitSourceGoal;
 var
   Lines: TStringList;
@@ -170,6 +240,7 @@ begin
     Parsed := TGocciaSourcePipeline.Parse(Lines, '<test>', Options);
     try
       Expect<Boolean>(Parsed.SourceType = stModule).ToBe(True);
+      Expect<Integer>(Parsed.ParsePassCount).ToBe(1);
     finally
       Parsed.Free;
     end;
@@ -193,6 +264,7 @@ begin
     Parsed := TGocciaSourcePipeline.Parse(Lines, '<test>', Options);
     try
       Expect<Boolean>(Parsed.SourceType = stScript).ToBe(True);
+      Expect<Integer>(Parsed.ParsePassCount).ToBe(3);
     finally
       Parsed.Free;
     end;
@@ -201,32 +273,66 @@ begin
   end;
 end;
 
-procedure TSourcePipelineTests.TestAwaitModuleError;
+procedure TSourcePipelineTests.ExpectModuleErrorPreserved(const ASource: string;
+  const ACompatibility: TGocciaCompatibilityFlags);
 var
   Lines: TStringList;
   Options: TGocciaSourcePipelineOptions;
   Goal: TGocciaSourceType;
-  Message: string;
+  Message, ModuleMessage: string;
+  Line, Column, ModuleLine, ModuleColumn: Integer;
 begin
   Lines := TStringList.Create;
   try
-    Lines.Text := 'const await = () => 1; await(); export {};';
+    Lines.Text := ASource;
     Options := TGocciaSourcePipeline.DefaultOptions;
+    Options.Compatibility := ACompatibility;
+    ModuleMessage := '';
+    ModuleLine := -1;
+    ModuleColumn := -1;
+    // Capture the explicit Module diagnostic before trying detection.
     for Goal in [stModule, stDetect] do
     begin
       Options.SourceType := Goal;
       Message := '';
+      Line := -1;
+      Column := -1;
       try
         TGocciaSourcePipeline.Parse(Lines, '<test>', Options).Free;
       except
         on E: TGocciaSyntaxError do
+        begin
           Message := E.Message;
+          Line := E.Line;
+          Column := E.Column;
+        end;
       end;
-      Expect<string>(Message).ToBe('Module code must not use await as an identifier');
+      Expect<Boolean>(Message <> '').ToBe(True);
+      if Goal = stModule then
+      begin
+        ModuleMessage := Message;
+        ModuleLine := Line;
+        ModuleColumn := Column;
+      end
+      else
+      begin
+        Expect<string>(Message).ToBe(ModuleMessage);
+        Expect<Integer>(Line).ToBe(ModuleLine);
+        Expect<Integer>(Column).ToBe(ModuleColumn);
+      end;
     end;
   finally
     Lines.Free;
   end;
+end;
+
+procedure TSourcePipelineTests.TestAwaitModuleError;
+begin
+  ExpectModuleErrorPreserved(
+    'const await = () => 1;' + LineEnding + 'await(); export {};', []);
+  ExpectModuleErrorPreserved(
+    'globalThis.await = {0: 1};' + LineEnding +
+    'await[0]; delete missing; export {};', [cfNonStrictMode]);
 end;
 
 function EarlyErrorOf(const ASource: string;
