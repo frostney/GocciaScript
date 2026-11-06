@@ -1087,8 +1087,13 @@ await section("test262 runner: computed imports and importValue may read the sui
       { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
     );
     const report = JSON.parse(readFileSync(out, "utf8"));
-    if (proc.exitCode !== 0 || report.summary.passed !== 2)
-      throw new Error(`computed fixture imports should pass, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    // Two files, each run twice (non-strict, then strict): four passing runs.
+    if (proc.exitCode !== 0 || report.summary.totalDiscovered !== 2 || report.summary.totalRun !== 4 ||
+        report.summary.passed !== 4)
+      throw new Error(`computed fixture imports should pass in both modes, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    const byFile = test262RunsByFile(report);
+    for (const id of ["language/computed-import.js", "language/import-value.js"])
+      expectTest262Runs(byFile, id, ["async"], ["PASS", ""]);
   } finally {
     clean(tmp);
   }
@@ -1123,10 +1128,11 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     if (timeoutProc.exitCode !== 1)
       throw new Error(`test262 timeout fixture should exit 1, got ${timeoutProc.exitCode}: ${timeoutProc.stderr.toString()}`);
     const timeoutJson = JSON.parse(readFileSync(timeoutOut, "utf8"));
-    if (timeoutJson.summary.timeouts !== 1 || timeoutJson.summary.failed !== 0)
-      throw new Error(`engine timeout should be TIMEOUT, got summary ${JSON.stringify(timeoutJson.summary)}`);
-    if (timeoutJson.results?.[0]?.status !== "TIMEOUT")
-      throw new Error(`engine timeout result should be TIMEOUT, got ${timeoutJson.results?.[0]?.status}`);
+    // One file, run in both modes: the summary counts two timed-out runs.
+    if (timeoutJson.summary.totalDiscovered !== 1 || timeoutJson.summary.totalRun !== 2 ||
+        timeoutJson.summary.timeouts !== 2 || timeoutJson.summary.failed !== 0)
+      throw new Error(`engine timeout should be TIMEOUT in both modes, got summary ${JSON.stringify(timeoutJson.summary)}`);
+    expectTest262Runs(test262RunsByFile(timeoutJson), "built-ins/timeout-loop.js", [], ["TIMEOUT", ""]);
 
     const thrownErrorTest = join(tests, "timeout-like-error.js");
     writeFileSync(thrownErrorTest, 'throw new Error("file timed out after 50ms");\n');
@@ -1138,7 +1144,10 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-like-error.js",
         "--jobs=1",
-        "--timeout=50ms",
+        // Far above the fixture's runtime: only the engine-timeout fixture
+        // above should ever time out, however loaded the machine is, and a
+        // file now runs twice.
+        "--timeout=5000ms",
         "--output", thrownErrorOut,
       ],
       { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
@@ -1146,10 +1155,10 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     if (thrownErrorProc.exitCode !== 1)
       throw new Error(`test262 thrown timeout-like error should exit 1, got ${thrownErrorProc.exitCode}: ${thrownErrorProc.stderr.toString()}`);
     const thrownErrorJson = JSON.parse(readFileSync(thrownErrorOut, "utf8"));
-    if (thrownErrorJson.summary.failed !== 1 || thrownErrorJson.summary.timeouts !== 0)
-      throw new Error(`timeout-like user Error should remain FAIL, got summary ${JSON.stringify(thrownErrorJson.summary)}`);
-    if (thrownErrorJson.results?.[0]?.status !== "FAIL")
-      throw new Error(`timeout-like user Error result should be FAIL, got ${thrownErrorJson.results?.[0]?.status}`);
+    if (thrownErrorJson.summary.totalRun !== 2 || thrownErrorJson.summary.failed !== 2 ||
+        thrownErrorJson.summary.timeouts !== 0)
+      throw new Error(`timeout-like user Error should remain FAIL in both modes, got summary ${JSON.stringify(thrownErrorJson.summary)}`);
+    expectTest262Runs(test262RunsByFile(thrownErrorJson), "built-ins/timeout-like-error.js", [], ["FAIL", ""]);
 
     const markerErrorTest = join(tests, "timeout-marker-error.js");
     writeFileSync(markerErrorTest, 'throw new Error("\\nGocciaTest262:Timeout:50");\n');
@@ -1161,7 +1170,10 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-marker-error.js",
         "--jobs=1",
-        "--timeout=50ms",
+        // Far above the fixture's runtime: only the engine-timeout fixture
+        // above should ever time out, however loaded the machine is, and a
+        // file now runs twice.
+        "--timeout=5000ms",
         "--output", markerErrorOut,
       ],
       { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
@@ -1169,10 +1181,10 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     if (markerErrorProc.exitCode !== 1)
       throw new Error(`test262 marker-like user Error should exit 1, got ${markerErrorProc.exitCode}: ${markerErrorProc.stderr.toString()}`);
     const markerErrorJson = JSON.parse(readFileSync(markerErrorOut, "utf8"));
-    if (markerErrorJson.summary.failed !== 1 || markerErrorJson.summary.timeouts !== 0)
-      throw new Error(`marker-like user Error should remain FAIL, got summary ${JSON.stringify(markerErrorJson.summary)}`);
-    if (markerErrorJson.results?.[0]?.status !== "FAIL")
-      throw new Error(`marker-like user Error result should be FAIL, got ${markerErrorJson.results?.[0]?.status}`);
+    if (markerErrorJson.summary.totalRun !== 2 || markerErrorJson.summary.failed !== 2 ||
+        markerErrorJson.summary.timeouts !== 0)
+      throw new Error(`marker-like user Error should remain FAIL in both modes, got summary ${JSON.stringify(markerErrorJson.summary)}`);
+    expectTest262Runs(test262RunsByFile(markerErrorJson), "built-ins/timeout-marker-error.js", [], ["FAIL", ""]);
 
     const engineFaultTest = join(tests, "engine-fault.js");
     writeFileSync(engineFaultTest, [
@@ -1203,14 +1215,13 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     if (engineFaultProc.exitCode !== 1)
       throw new Error(`test262 engine-fault fixture should exit 1, got ${engineFaultProc.exitCode}: ${engineFaultProc.stderr.toString()}`);
     const engineFaultJson = JSON.parse(readFileSync(engineFaultOut, "utf8"));
-    if (engineFaultJson.summary.failed !== 1 ||
+    if (engineFaultJson.summary.totalRun !== 2 || engineFaultJson.summary.failed !== 2 ||
         engineFaultJson.summary.wrapperInfraFailures !== 0) {
       throw new Error(
-        `engine execution fault should remain FAIL, got summary ${JSON.stringify(engineFaultJson.summary)}`,
+        `engine execution fault should remain FAIL in both modes, got summary ${JSON.stringify(engineFaultJson.summary)}`,
       );
     }
-    if (engineFaultJson.results?.[0]?.status !== "FAIL")
-      throw new Error(`engine execution fault should be FAIL, got ${engineFaultJson.results?.[0]?.status}`);
+    expectTest262Runs(test262RunsByFile(engineFaultJson), "built-ins/engine-fault.js", [], ["FAIL", ""]);
   } finally {
     clean(tmp);
   }
@@ -1362,13 +1373,17 @@ await section("test262 runner: a growable SharedArrayBuffer keeps one block whil
     );
     const report = JSON.parse(readFileSync(out, "utf8"));
     const results = report.results ?? [];
-    if (proc.exitCode !== 0 || results.length !== 2 ||
+    // Two files, each run twice (non-strict, then strict): four passing runs.
+    if (proc.exitCode !== 0 || results.length !== 4 ||
         results.some((result: { status: string }) => result.status !== "PASS")) {
       throw new Error(
         `growing a SharedArrayBuffer under other agents should keep their writes and grows, got exit ${proc.exitCode}: ` +
         `${JSON.stringify(results)}\n${proc.stderr.toString()}`,
       );
     }
+    const byFile = test262RunsByFile(report);
+    for (const id of ["built-ins/sab-grow-keeps-writes.js", "built-ins/sab-racing-grows.js"])
+      expectTest262Runs(byFile, id, [], ["PASS", ""]);
   } finally {
     clean(tmp);
   }
