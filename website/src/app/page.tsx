@@ -24,11 +24,13 @@ export default async function HomePage() {
   ]);
   const locale = parseAcceptLanguage(hdrs.get("accept-language"));
   const summary = latestTest262Summary(compatibilityData);
-  // Only the two counts and the Annex B scope cross into the client component.
+  // Only the counts, the per-mode figures and the Annex B scope cross into the
+  // client component.
   const compatibility = summary
     ? {
         passed: summary.passed,
         totalRun: summary.totalRun,
+        byMode: summary.byMode,
         annexBIncluded: test262RunIncludesAnnexB(summary),
       }
     : null;

@@ -39,9 +39,18 @@ import { SITE_DESCRIPTION } from "@/lib/site-url";
 import {
   latestTest262Summary,
   loadTest262DashboardData,
+  type Test262CategorySummary,
   type Test262DashboardData,
+  type Test262SuiteSummary,
   test262RunIncludesAnnexB,
 } from "@/lib/test262-dashboard";
+import {
+  TEST262_MODE_LABELS,
+  TEST262_MODES,
+  type Test262ModeBreakdown,
+  test262ModeRate,
+  test262ModeRates,
+} from "@/lib/test262-modes";
 import { compatibilityPercent } from "@/lib/test262-percent";
 import { TOOL_CALL_FLOWS, TOOL_CALL_TASK } from "@/lib/tool-call-comparison";
 
@@ -168,7 +177,7 @@ export function renderHomeMarkdown(
 ): string {
   const summary = latestTest262Summary(compatibility);
   const conformanceFigure = summary
-    ? `The latest published run${test262RunIncludesAnnexB(summary) ? "" : ", Annex B excluded,"} has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} tests passing (${compatibilityPercent(summary.passed, summary.totalRun)}); see results `
+    ? `The latest published run${test262RunIncludesAnnexB(summary) ? "" : ", Annex B excluded,"} has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} runs passing (${compatibilityPercent(summary.passed, summary.totalRun)}${modeClause(summary.byMode)}); see results `
     : "See results ";
   const heroExample = pickExample("coffee-typed");
 
@@ -331,6 +340,50 @@ function compatibilityNumber(value: number): string {
   return value.toLocaleString("en-US");
 }
 
+function modeClause(byMode: Test262ModeBreakdown | undefined): string {
+  const rates = test262ModeRates(byMode);
+  return rates ? `; ${rates}` : "";
+}
+
+/** Per-mode section. A report from before the runner recorded modes gets an
+ *  explicit "not available" line instead of a guessed split. */
+function modeBreakdownLines(summary: Test262SuiteSummary): string[] {
+  if (!summary.byMode) {
+    return [
+      "### Strict and non-strict",
+      "",
+      "Per-mode figures are not available for this report: it predates the runner recording the mode of each run.",
+    ];
+  }
+  const byMode = summary.byMode;
+  return [
+    "### Strict and non-strict",
+    "",
+    "Each test that allows both modes runs once non-strict and once strict. Flagged tests run once and count under the mode they run in: `noStrict` and `raw` non-strict, `onlyStrict` strict, and module code counts as strict.",
+    "",
+    "| Mode | Pass rate | Passing runs | Failed | Timeouts |",
+    "|------|-----------|--------------|--------|----------|",
+    ...TEST262_MODES.map((mode) => {
+      const counts = byMode[mode];
+      return `| ${TEST262_MODE_LABELS[mode]} | ${test262ModeRate(
+        byMode,
+        mode,
+      )} | ${compatibilityNumber(counts.passed)} / ${compatibilityNumber(
+        counts.run,
+      )} | ${compatibilityNumber(counts.failed)} | ${compatibilityNumber(
+        counts.timeouts,
+      )} |`;
+    }),
+  ];
+}
+
+function categoryModeCells(category: Test262CategorySummary): string {
+  if (!category.byMode) return "n/a | n/a";
+  return TEST262_MODES.map((mode) =>
+    test262ModeRate(category.byMode, mode),
+  ).join(" | ");
+}
+
 function compatibilityDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -352,7 +405,14 @@ export function renderCompatibilityMarkdown(
             summary.totalRun,
           )}** (${compatibilityNumber(
             summary.passed,
-          )} passed / ${compatibilityNumber(summary.totalRun)} run)`,
+          )} passed / ${compatibilityNumber(summary.totalRun)} runs)`,
+          ...(summary.totalDiscovered > 0
+            ? [
+                `- Test files discovered: ${compatibilityNumber(
+                  summary.totalDiscovered,
+                )}`,
+              ]
+            : []),
           `- Failed: ${compatibilityNumber(summary.failed)}`,
           `- Timeouts: ${compatibilityNumber(summary.timeouts)}`,
           `- Wrapper infrastructure failures: ${compatibilityNumber(
@@ -362,10 +422,12 @@ export function renderCompatibilityMarkdown(
           `- CI run: [#${latest.runNumber}](${latest.runUrl})`,
           `- Run date: ${compatibilityDate(latest.createdAt)}`,
           "",
+          ...modeBreakdownLines(summary),
+          "",
           "### Top-level test262 groups",
           "",
-          "| Group | Pass rate | Passing |",
-          "|-------|-----------|---------|",
+          "| Group | Pass rate | Passing runs | Non-strict | Strict |",
+          "|-------|-----------|--------------|------------|--------|",
           ...summary.byCategory.map(
             (category) =>
               `| ${category.category} | ${compatibilityPercent(
@@ -373,7 +435,9 @@ export function renderCompatibilityMarkdown(
                 category.run,
               )} | ${compatibilityNumber(
                 category.passed,
-              )} / ${compatibilityNumber(category.run)} |`,
+              )} / ${compatibilityNumber(category.run)} | ${categoryModeCells(
+                category,
+              )} |`,
           ),
         ]
       : [
@@ -397,6 +461,8 @@ export function renderCompatibilityMarkdown(
     "This is the concise Markdown representation of the authoritative GocciaScript compatibility page. It is generated from the same published main-branch test262 data as the HTML dashboard; it is not a second scorecard.",
     "",
     "The overall corpus pass rate describes this pinned test262 run. Read the top-level groups separately when evaluating core language, built-ins, ECMA-402, or staging coverage.",
+    "",
+    "Every pass and fail count is a count of runs, not of test files: a test that allows both modes runs once non-strict and once strict. Reports published before the runner recorded the mode ran each file once and carry no strict or non-strict split.",
     "",
     ...currentResult,
     "",
