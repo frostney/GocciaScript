@@ -326,7 +326,7 @@ resolution error rather than misbehaving:
 - `package.json` `"type"` inheritance for files outside a package
 
 Loading CommonJS itself does not ship as part of GocciaScript, because userland
-can shim it: convert the package to ESM with a bundler (`esbuild --format=esm`,
+can shim it: convert the package to ESM with a bundler (`esbuild --bundle --format=esm`,
 or Rollup with `@rollup/plugin-commonjs`) and run the output with the
 compatibility flags, since the default profile rejects bundler output. A package
 that needs a Node built-in is not solved that way; see
