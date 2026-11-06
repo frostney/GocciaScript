@@ -325,9 +325,12 @@ resolution error rather than misbehaving:
 - `node:` built-in modules other than those a runtime extension registers (such as `node:async_hooks`), and any other Node host API
 - `package.json` `"type"` inheritance for files outside a package
 
-Loading CommonJS itself does not ship as part of GocciaScript: an
-ESM-to-CommonJS tool from npm already shims it, and what userland can shim stays
-out of the engine; see [VISION](../VISION.md#what-gocciascript-is-not).
+Loading CommonJS itself does not ship as part of GocciaScript, because userland
+can shim it: convert the package to ESM with a bundler (`esbuild --format=esm`,
+or Rollup with `@rollup/plugin-commonjs`) and run the output with the
+compatibility flags, since the default profile rejects bundler output. A package
+that needs a Node built-in is not solved that way; see
+[VISION](../VISION.md#what-gocciascript-is-not).
 
 ## Runtime code frames
 
