@@ -840,7 +840,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript for?",
     answer:
-      "Its primary goal is JavaScript execution for AI agents under an explicit, host-defined capability model. The same runtime and toolchain also serve sandboxed automation, portable native applications, plugins, and desktop scripting; native embedding is an important secondary goal.",
+      "It is an ECMAScript engine for embedding: an application adds scripting by embedding it, installs the runtime surface it needs, and grants capabilities explicitly. Different hosts get runtime extensions for their use case: a virtual filesystem, Node.js compatibility to a degree, and web-standard APIs, with the ones React server rendering relies on planned and none of them shipped yet. GocciaRunner's sandbox mode, a runtime for code that AI agents generate, is a reference host built on the same capability model.",
   },
   {
     question: ECMASCRIPT_SCOPE_QUESTION,
@@ -861,7 +861,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "Is GocciaScript a browser runtime?",
     answer:
-      "No. It implements selected web-standard APIs where they fit the sandboxed runtime and embeddable-platform goals, but it does not provide a DOM, Web Workers, storage APIs, or a full browser event loop.",
+      "No. It provides a web-standard API when it fits the vision and cannot be shimmed in userland, and the APIs React server rendering needs are planned, but it does not currently provide a DOM, Web Workers, storage APIs, or a full browser event loop.",
   },
   {
     question: COMPILER_SUPPORT_QUESTION,
@@ -872,9 +872,9 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
     answer: PRODUCTION_READY_ANSWER,
   },
   {
-    question: "How does the sandbox model work?",
+    question: "How does GocciaRunner's sandbox mode work?",
     answer:
-      "Scripts have no ambient host filesystem, process, native FFI, or network authority by default. GocciaRunner's sandbox mode copies explicit inputs into a virtual filesystem, exposes fs, goccia and goccia:search as import-only modules, and reports sandbox writes as diffs; only inputs copied with --copy-rw are written back, and only after a successful run.",
+      "Scripts have no ambient host filesystem, process, native FFI, or network authority by default. Sandbox mode, the reference host for code that AI agents generate, copies explicit inputs into a virtual filesystem, exposes fs, goccia and goccia:search as import-only modules, and reports sandbox writes as diffs; only inputs copied with --copy-rw are written back, and only after a successful run.",
   },
   {
     question: "How compatible is it with ECMAScript?",
@@ -940,8 +940,7 @@ export function Landing({
                 A Java<span className="script">Script</span> engine.
               </h1>
               <p className="hero-lede">
-                A JavaScript engine for running code that AI agents and people
-                write: a sandbox-first{" "}
+                An{" "}
                 <a
                   href="https://tc39.es/ecma262/"
                   target="_blank"
@@ -960,7 +959,8 @@ export function Landing({
                     conformance with generated test262 reports.
                   </span>
                 </a>{" "}
-                runtime. The host defines the available capabilities, runtime
+                engine for embedding, with sensible defaults that are easy to
+                customize. The host defines the available capabilities, runtime
                 surface, and execution limits.
               </p>
               <div className="hero-cta-row">
@@ -1276,11 +1276,12 @@ export function Landing({
                 The sandbox <code className={inlineCodeClass}>fs</code> module
                 provides Node-compatible synchronous, callback, and promise
                 methods over that virtual filesystem, including Stats objects
-                and Node-shaped errors. GocciaScript is not a complete Node.js
-                host: it does not provide CommonJS,{" "}
-                <code className={inlineCodeClass}>process</code>,{" "}
-                <code className={inlineCodeClass}>Buffer</code>, or the general{" "}
-                <code className={inlineCodeClass}>node:</code> module set.
+                and Node-shaped errors. Node compatibility is to a degree, as
+                runtime extensions a host installs: GocciaScript provides a
+                Node.js capability when it fits the vision and cannot be shimmed
+                in userland, and leaves what userland can shim to userland. The
+                same rule covers CommonJS and the general{" "}
+                <code className={inlineCodeClass}>node:</code> modules.
                 Bare-specifier lookup through{" "}
                 <code className={inlineCodeClass}>node_modules</code> (ESM only)
                 is opt-in with{" "}
@@ -1323,8 +1324,8 @@ export function Landing({
           <div className="section-head">
             <div className="section-kicker">Native platform</div>
             <AnchorH2 id="native-platform">
-              Portable by design,{" "}
-              <span className="wave-under">embeddable by choice.</span>
+              Made for embedding,{" "}
+              <span className="wave-under">portable by design.</span>
             </AnchorH2>
             <p>{NATIVE_PLATFORM_DESCRIPTION}</p>
           </div>

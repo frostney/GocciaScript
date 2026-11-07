@@ -69,11 +69,12 @@ Priority: optional
 Architecture: ${ARCH}
 Maintainer: GocciaScript contributors <hello@gocciascript.dev>
 Homepage: https://gocciascript.dev
-Description: Sandbox-first ECMAScript runtime
- GocciaScript is a strict subset of ECMAScript 2027+ implemented from
- scratch in FreePascal. Single self-contained binary; no Node.js, no
- toolchain, no global state. Designed for tinkerers, embedding, and
- AI agents.
+Description: ECMAScript engine for embedding
+ GocciaScript is an ECMAScript engine for embedding, with sensible
+ defaults that are easy to customize, implemented from scratch in
+ FreePascal. Single self-contained binary; no Node.js, no toolchain,
+ no global state. GocciaRunner's sandbox mode is a reference host for
+ code that AI agents generate.
 EOF
 
 OUT="gocciascript_${VERSION}_${ARCH}.deb"

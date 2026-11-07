@@ -5,6 +5,7 @@ import {
   COMPILER_SUPPORT_ANSWER,
   ECMASCRIPT_SCOPE_ANSWER,
   ECMASCRIPT_SCOPE_QUESTION,
+  GOCCIASCRIPT_META_DESCRIPTION,
   GOCCIASCRIPT_SUMMARY,
   NODE_COMPATIBILITY_ANSWER,
   POSITIONING_FAQS,
@@ -40,23 +41,29 @@ function expectConcepts(text: string, concepts: readonly RegExp[]) {
 }
 
 describe("GocciaScript positioning", () => {
-  test("keeps the canonical summary centered on the runtime purpose", () => {
+  test("keeps the canonical summary centered on embedding", () => {
     expectConcepts(GOCCIASCRIPT_SUMMARY, [
-      /sandbox-first ECMAScript runtime/i,
-      /AI agents/i,
+      /ECMAScript engine for embedding/i,
+      /sensible defaults that are easy to customize/i,
       /hosts define.+capabilities.+runtime surface.+execution limits/i,
-      /embedded in native applications/i,
+      /sandbox mode is a reference host for code that AI agents generate/i,
+      /made for embedding in native applications/i,
     ]);
     expect(GOCCIASCRIPT_SUMMARY).toMatch(
-      /AI agents[\s\S]+sandbox-first ECMAScript runtime[\s\S]+Hosts define[\s\S]+embedded in native applications/,
+      /ECMAScript engine for embedding[\s\S]+Hosts define[\s\S]+reference host[\s\S]+made for embedding in native applications/,
     );
-    expect(GOCCIASCRIPT_SUMMARY.indexOf("AI agents")).toBeLessThan(
-      GOCCIASCRIPT_SUMMARY.indexOf("FreePascal"),
+    expect(GOCCIASCRIPT_SUMMARY).not.toMatch(/sandbox-first/i);
+    expect(GOCCIASCRIPT_SUMMARY.indexOf("engine for embedding")).toBeLessThan(
+      GOCCIASCRIPT_SUMMARY.indexOf("AI agents"),
     );
     expect(GOCCIASCRIPT_SUMMARY.indexOf("test262")).toBeLessThan(
       GOCCIASCRIPT_SUMMARY.indexOf("FreePascal"),
     );
     expect(GOCCIASCRIPT_SUMMARY).toContain("Shotcup");
+    expect(GOCCIASCRIPT_META_DESCRIPTION).toMatch(
+      /^An ECMAScript engine for embedding/,
+    );
+    expect(GOCCIASCRIPT_META_DESCRIPTION).not.toMatch(/AI agents/);
   });
 
   test("states production use and pre-1.0 upgrade guidance together", () => {
@@ -88,6 +95,9 @@ describe("GocciaScript positioning", () => {
       /embedder opts in through the engine's EnableEval option/i,
       /Annex B.+test262 conformance target/i,
       /new ones will go behind an opt-in compatibility flag/i,
+      /all of test262 in every mode test262 requires/i,
+      /tracks TC39 proposals, including stage 1 and 2/i,
+      /there are no presets/i,
     ]);
     expect(ECMASCRIPT_SCOPE_ANSWER).not.toMatch(/not a pre-1\.0 target/i);
   });
@@ -102,14 +112,36 @@ describe("GocciaScript positioning", () => {
     ]);
   });
 
-  test("distinguishes the Node host from the sandbox fs API", () => {
+  test("states the capability rule and the sandbox fs API", () => {
     expectConcepts(NODE_COMPATIBILITY_ANSWER, [
-      /not a complete Node\.js host/i,
+      /when it fits the vision and cannot be shimmed in userland/i,
+      /leaves what userland can shim to userland/i,
+      /same rule covers CommonJS and the general node: modules/i,
+      /Node-compatible to a degree.+runtime extensions a host installs/i,
+      /node:async_hooks/,
       /Node-compatible fs API/i,
       /virtual filesystem/i,
       /synchronous, callback, and promise-based methods/i,
       /does not expose the ambient host filesystem/i,
     ]);
+  });
+
+  test("never words Node compatibility as a non-goal", () => {
+    for (const text of [
+      NODE_COMPATIBILITY_ANSWER,
+      PRODUCTION_READY_ANSWER,
+      GOCCIASCRIPT_SUMMARY,
+      GOCCIASCRIPT_META_DESCRIPTION,
+    ]) {
+      expect(text).not.toMatch(
+        /non-goal|not a (?:complete )?Node(?:\.js)? host/i,
+      );
+      expect(text).not.toMatch(/ESM-to-CommonJS/i);
+      expect(text).not.toMatch(/bundler|esbuild|rollup|\btty\b/i);
+      expect(text).not.toMatch(/sandbox-first/i);
+    }
+    for (const { answer } of POSITIONING_FAQS)
+      expect(answer).not.toMatch(/sandbox-first/i);
   });
 
   test("frames Vitest compatibility as a direction with its gaps named", () => {
@@ -245,6 +277,12 @@ describe("GocciaScript positioning", () => {
         output.indexOf("## Important distinctions"),
       );
       expect(distinctions).toMatch(/## Important distinctions\s+- Purpose:/);
+      expect(distinctions).toContain(
+        "- Purpose: GocciaScript is an ECMAScript engine for embedding",
+      );
+      expect(distinctions).toContain(
+        "a reference host for code that AI agents generate",
+      );
       expect(distinctions).toContain(
         "- Evidence: test262 on every pull request",
       );

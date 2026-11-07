@@ -333,7 +333,7 @@ const RESERVED_BINDING_WORDS = new Set([
  *  source (visible in tool-call logs) explains what GocciaScript is. */
 const GOCCIA_SYSTEM_PROMPT = `\
 // ─── system ───
-// GocciaScript is sandbox-first with modern recommended ECMAScript defaults.
+// This sandbox host runs GocciaScript with modern recommended ECMAScript defaults.
 // No eval, no dynamic import, no ambient fs/env, no ambient globals.
 // No var, no function declarations, no loose equality (== / !=).
 // Only the injected globals below are available to the script.`;
