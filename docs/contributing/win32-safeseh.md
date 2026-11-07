@@ -94,11 +94,15 @@ A format 1 manifest (`FPC-SAFESEH 1`), which pinned whole files, is refused,
 and `--digests` refuses it too, because the helper reads the manifest the same
 way. To migrate one, for example on a branch that predates format 2:
 
-1. In your working copy, change the manifest's first line to `FPC-SAFESEH 2`.
+1. Bring the format 2 tooling onto the branch first (merge `main`, which has
+   `safeseh.pas`, `FPCSafeSEH.pas` and the `FPCRoutineSource.pas` locator),
+   keeping the branch's own manifest to migrate; format 1 tooling cannot
+   produce routine digests.
+2. In your working copy, change the manifest's first line to `FPC-SAFESEH 2`.
    Its whole-file hashes then read as routine digests that do not match.
-2. Run `./safeseh.pas --digests` and review every routine it lists, as in step 1
-   above.
-3. Replace every `source-nonseh` digest with the reported one before the
+3. Run `./safeseh.pas --digests` and review every routine it lists, as in the
+   review steps above.
+4. Replace every `source-nonseh` digest with the reported one before the
    manifest is used for a build.
 
 Do not refresh a digest you have not reviewed, and do not turn an unknown-name
