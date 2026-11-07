@@ -1556,6 +1556,11 @@ await section("test262 runner: negative tests need the expected error in the exp
       // raw source runs exactly as written: its own directive prologue
       // still opens the Script, which a wrapper in front of it would end.
       ["runtime-raw.js", ['"use strict";', ...negative("runtime", "ReferenceError", ["raw"]), "undeclaredInRaw = 1;"], "PASS", ""],
+      // #2069: a runtime negative whose source does not parse is a
+      // conformance failure, not wrapper-infra, raw or not (the annexB
+      // HTML-like comment tests until the parser accepts them).
+      ["runtime-parse-error.js", [...negative("runtime", "Test262Error"), "var = ;"], "FAIL", "expected Test262Error, got SyntaxError"],
+      ["runtime-raw-parse-error.js", [...negative("runtime", "Test262Error", ["raw"]), "var = ;"], "FAIL", "expected Test262Error, got SyntaxError"],
     ];
     writeFileSync(join(tests, "resolution_FIXTURE.js"), "export var present;\n");
     for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
