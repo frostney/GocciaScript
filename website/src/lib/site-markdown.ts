@@ -177,7 +177,7 @@ export function renderHomeMarkdown(
 ): string {
   const summary = latestTest262Summary(compatibility);
   const conformanceFigure = summary
-    ? `The latest published run${test262RunIncludesAnnexB(summary) ? "" : ", Annex B excluded,"} has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} runs passing (${compatibilityPercent(summary.passed, summary.totalRun)}${modeClause(summary.byMode)}); see results `
+    ? `The latest published report${test262RunIncludesAnnexB(summary) ? "" : ", Annex B excluded,"} has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} runs passing (${compatibilityPercent(summary.passed, summary.totalRun)}${modeClause(summary.byMode)}); see results `
     : "See results ";
   const heroExample = pickExample("coffee-typed");
 
@@ -234,7 +234,7 @@ export function renderHomeMarkdown(
     "",
     "## Recommended language profile",
     "",
-    "The recommended profile is policy, not the implementation ceiling. Every standard core form it disables has an explicit compatibility path. Dynamic source exposure remains a separate host decision: normal hosts do not install `eval`, while `Function()` requires an explicit unsafe opt-in.",
+    "The recommended profile is policy, not the implementation ceiling. Every standard core form it disables has an explicit compatibility path. Dynamic source exposure remains a separate host decision: `eval` is installed only when an embedder opts in through the engine's `EnableEval` option, with no CLI flag or config key, while `Function()` requires an explicit unsafe opt-in.",
     "",
     "| Form | Implemented | Default profile | Enablement / exposure | Standards source |",
     "|------|-------------|-----------------|-----------------------|------------------|",
@@ -460,7 +460,7 @@ export function renderCompatibilityMarkdown(
     "",
     "This is the concise Markdown representation of the authoritative GocciaScript compatibility page. It is generated from the same published main-branch test262 data as the HTML dashboard; it is not a second scorecard.",
     "",
-    "The overall corpus pass rate describes this pinned test262 run. Read the top-level groups separately when evaluating core language, built-ins, ECMA-402, or staging coverage.",
+    "The overall corpus pass rate describes this pinned test262 run. Read the top-level groups separately when evaluating core language, built-ins, Annex B, ECMA-402, or staging coverage.",
     "",
     "Every pass and fail count is a count of runs, not of test files: a test that allows both modes runs once non-strict and once strict. Reports published before the runner recorded the mode ran each file once and carry no strict or non-strict split.",
     "",
@@ -632,7 +632,7 @@ console.log(audit.diff);`;
     "",
     "# Sandbox",
     "",
-    "GocciaScript runs AI-agent scripts under an explicit host-defined capability model. Scripts receive only the data, modules, and capabilities the host provides, run with explicit limits, and return structured results that the host can inspect.",
+    "GocciaRunner's sandbox mode, a reference host built on the engine's capability model, runs AI-agent scripts under an explicit host-defined capability model. Scripts receive only the data, modules, and capabilities the host provides, run with explicit limits, and return structured results that the host can inspect.",
     "",
     "Filesystem workflows use GocciaRunner's sandbox mode. Host paths are copied into a virtual filesystem, sandbox writes stay in that filesystem, and changes are surfaced as explicit diffs.",
     "",
