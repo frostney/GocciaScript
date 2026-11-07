@@ -6,21 +6,21 @@
 ## Executive Summary
 
 - **Implementation vs profile** — GocciaScript implements core ECMAScript; modern recommended defaults are product policy rather than the language ceiling
-- **Conformance evidence** — Generated test262 reports measure the release-track objective; canonical prose links to current results instead of freezing a percentage
+- **Conformance evidence** — Generated test262 reports measure progress toward the [conformance target](../VISION.md#conformance); canonical prose links to current results instead of freezing a percentage
 - **Compatibility paths** — Every standard core form disabled by the recommended profile has a targeted `--compat-*` path
 - **Host exposure** — `eval` is installed only by an embedder that opts in through the engine's `EnableEval` option; the shipped CLIs do not, apart from the `GocciaTest262Runner` conformance host, which also exposes `evalScript` and `createRealm`
 - **TC39 proposals and extensions** — The TC39 Type Annotations proposal uses types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement
 - **Annex B policy** — Annex B is part of the test262 conformance target; new Annex B surfaces go behind a compatibility flag that the test262 runner turns on
 
-GocciaScript implements ECMAScript with curated recommended defaults. Calling it merely a JavaScript-like subset is misleading: the engine's implemented language capability, its recommended profile, and its host APIs are separate dimensions. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For current generated evidence, use the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility); for quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
+GocciaScript implements ECMAScript with sensible recommended defaults that a host can change. Calling it merely a JavaScript-like subset is misleading: the engine's implemented language capability, its recommended profile, and its host APIs are separate dimensions. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For current generated evidence, use the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility); for quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
 
 ## Guiding Principle
 
-> **A drop of JavaScript** — GocciaScript recommends the parts of JavaScript that lead to clear, predictable, and secure code by default. Legacy features that are error-prone, redundant, or security risks are isolated behind compatibility flags or shims where conformance requires them.
+> **A drop of JavaScript** — GocciaScript recommends the parts of JavaScript that lead to clear, predictable, and secure code by default. Legacy features that are error-prone, redundant, or security risks are off by default, behind compatibility flags or shims that a host turns on when its code needs them.
 
 ## Compatibility Flags
 
-Compatibility flags are parser and runtime policy switches for ECMAScript conformance work, test262 execution, and hosts that deliberately need legacy JavaScript behavior. They are not the recommended starting point for generated code or ordinary userland scripts. AI coding agents should usually emit the default forms first, then enable a flag only when the surrounding project, test, or host explicitly needs the legacy semantics.
+Compatibility flags are parser and runtime switches that turn on the parts of ECMAScript the recommended profile leaves out. They are supported customization, not escape hatches: a host that runs existing JavaScript, or a library that uses those forms, turns on the flags it needs, and the test262 runner turns on every flag in the table below. New code can start from the default forms, which the table lists beside each flag. Guidance for code that AI agents generate lives with the sandbox host, under [Permissions — Sandbox mode](permissions.md#sandbox-mode).
 
 Annex B is part of the test262 conformance target, and new Annex B surfaces go behind an off-by-default compatibility flag; see [Annex B Web-Browser Legacy Features](#annex-b-web-browser-legacy-features).
 
