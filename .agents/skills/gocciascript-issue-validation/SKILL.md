@@ -58,10 +58,11 @@ empty unit directories on purpose (see `docs/contributing/tooling.md`
 § Stale FPC Build Artifacts).
 
 5. Run the exact issue paths from the repository root. The runner resolves its
-   bundled harness files relative to the working directory, and every test
-   reports `WRAPPER_INFRA` from anywhere else. `--filter` is a glob over test
-   IDs (paths relative to `test/`), `--categories` narrows the top-level
-   categories, and `--verbose` prints every result:
+   bundled `$262.js` relative to the working directory (stock harness files
+   come from `--suite-dir`), and every test that loads it (all but `raw`
+   tests) reports `WRAPPER_INFRA` from anywhere else. `--filter` is a glob
+   over test IDs (paths relative to `test/`), `--categories` narrows the
+   top-level categories, and `--verbose` prints every result:
 
 ```bash
 ./build/GocciaTest262Runner \
@@ -75,9 +76,12 @@ empty unit directories on purpose (see `docs/contributing/tooling.md`
 
 The runner supplies the compatibility flags, host hooks, harness handling,
 strict and non-strict runs, timeout and memory limits, and the
-PASS/FAIL/WRAPPER_INFRA/TIMEOUT classification that CI reports. Pass
-`--timeout=<duration>` and `--max-memory=<size>` only to match a specific CI
-step or to cap a broad probe. For a wide `--categories` or `--filter` run,
+PASS/FAIL/WRAPPER_INFRA/TIMEOUT classification that CI reports. An unflagged
+Script test reports two results, `[non-strict]` and `[strict]`, and the JSON
+report gives each its `mode`; state in the issue which mode fails (see the
+strict-mode section of `docs/test262.md`). Pass `--timeout=<duration>` and
+`--max-memory=<size>` only to match a specific CI step or to cap a broad
+probe. For a wide `--categories` or `--filter` run,
 cap the process too, as `AGENTS.md` describes. Direct loader experiments are
 only supplemental after the runner result is known.
 

@@ -770,7 +770,7 @@ docs, test-structure (no build)
 
 **`release`** (same gates, tags only) — Packages and publishes release archives.
 
-The `test`, `awfy`, `jetstream`, `web-tooling`, `benchmark`, `cli`, `toml-compliance`, `json5-compliance`, and `test262` lanes run in parallel after `build`. Every lane reuses the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (AWFY, JetStream, Web Tooling, and test262 run on Linux only since those outcomes are platform-independent for this engine).
+The `test`, `awfy`, `jetstream`, `web-tooling`, `benchmark`, `cli`, `toml-compliance`, `json5-compliance`, and `test262` lanes run in parallel after `build`. Every lane reuses the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (test262 runs on Linux only because its outcomes are platform-independent for this engine; AWFY, JetStream and Web Tooling run on Linux x64 only for now, and measuring them on the other shipped platforms, which [ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)'s first target is judged on, is tracked in [#2102](https://github.com/frostney/GocciaScript/issues/2102)).
 
 ### PR Workflow (`.github/workflows/pr.yml`)
 

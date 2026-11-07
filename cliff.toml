@@ -69,6 +69,11 @@ commit_parsers = [
   # before the tag) so the release commit never appears in a later changelog.
   { message = "^(Website: )?chore\\(release\\)", skip = true },
 
+  # 0.17.0: #2113 is a test262 runner fix filed under Website only because
+  # most of its paths are the compatibility dashboard's; #2116 sits under
+  # Fixed. Placed before the Website rule so it wins.
+  { message = "^(Website: )?fix\\(test262\\): run each unflagged script test in both strict and non-strict mode \\(#2113\\)", group = "🐛 Fixed" },
+
   { message = "^Website: ", group = "🌐 Website" },
 
   # Sentence-style 0.15.0 subjects that no verb rule below files correctly.
@@ -86,6 +91,11 @@ commit_parsers = [
   { message = "^feat\\(examples\\): expression-style .* \\(#2034\\)", group = "🏗️ Internal" },
   { message = "^feat\\(examples\\): expression-style .* \\(#2039\\)", group = "🏗️ Internal" },
   { message = "^feat\\(examples\\): expression-style .* \\(#2043\\)", group = "🏗️ Internal" },
+
+  # 0.17.0: benchmark methodology and Win32 SafeSEH build tooling, not engine
+  # speed or runtime behavior. Each pattern matches exactly one PR's subject.
+  { message = "^perf\\(benchmarks\\): time AWFY warm, .* \\(#2112\\)", group = "🏗️ Internal" },
+  { message = "^fix\\(windows\\): pin reviewed SafeSEH non-handler routines .* \\(#2115\\)", group = "🏗️ Internal" },
 
   { message = "^Wasm support", group = "🚀 Added" },
   { message = "^Add ", group = "🚀 Added" },

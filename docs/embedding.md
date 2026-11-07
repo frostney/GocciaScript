@@ -542,7 +542,7 @@ FsClock.Free;
 | System | Type | Default | Purpose |
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
-| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
+| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | The ECMAScript forms the recommended profile leaves out, as supported customization ([Changing the Defaults](#changing-the-defaults)); leave empty for the recommended defaults |
 | `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
 | `SourceType` | `TGocciaSourceType` | `stDetect` | Load entry as module source when it has a top-level `import` or `export` (`stDetect`), or always as script (`stScript`) or module (`stModule`) source; `.mjs` and `.mts` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations; applies to code compiled after it is set, and the setter updates the global scope |

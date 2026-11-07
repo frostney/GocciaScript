@@ -14,20 +14,20 @@ function conformanceSentence(
       locale="en-US"
     />,
   ).replace(/<[^>]+>/g, "");
-  const start = text.indexOf("The latest published run");
+  const start = text.indexOf("The latest published report");
   return text.slice(start, text.indexOf("); see results", start));
 }
 
 describe("landing conformance sentence", () => {
   test("names the Annex B exclusion while the run leaves annexB out", () => {
     expect(conformanceSentence(false)).toBe(
-      "The latest published run, Annex B excluded, has 10 of 20 runs passing (50.0%",
+      "The latest published report, Annex B excluded, has 10 of 20 runs passing (50.0%",
     );
   });
 
   test("drops the exclusion once the run includes annexB", () => {
     expect(conformanceSentence(true)).toBe(
-      "The latest published run has 10 of 20 runs passing (50.0%",
+      "The latest published report has 10 of 20 runs passing (50.0%",
     );
   });
 
@@ -39,7 +39,7 @@ describe("landing conformance sentence", () => {
         strict: { run: 10, passed: 4, ...counts },
       }),
     ).toBe(
-      "The latest published run has 10 of 20 runs passing (50.0%; non-strict 60.0%, strict 40.0%",
+      "The latest published report has 10 of 20 runs passing (50.0%; non-strict 60.0%, strict 40.0%",
     );
   });
 });
