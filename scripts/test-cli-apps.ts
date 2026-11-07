@@ -1099,6 +1099,74 @@ await section("test262 runner: computed imports and importValue may read the sui
   }
 });
 
+await section("test262 runner: annexB runs by default and $262 leaves a test's top-level names free...", async () => {
+  // The annexB emulates-undefined tests declare IsHTMLDDA at the top level,
+  // with var or const. A global lexical IsHTMLDDA from the runner's $262.js
+  // would make that a SyntaxError (ES2026 §16.1.7 steps 3.a and 4.a), so
+  // $262 is the only global binding the harness may create (#2069). The host
+  // object is also callable and returns null, as INTERPRETING.md requires.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "annexB");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(tests, "var-isHTMLDDA.js"), [
+      "/*---",
+      "features: [IsHTMLDDA]",
+      "---*/",
+      "var IsHTMLDDA = $262.IsHTMLDDA;",
+      "var AbstractModuleSource = $262.AbstractModuleSource;",
+      "if (typeof IsHTMLDDA !== 'undefined') throw new Error('typeof is ' + typeof IsHTMLDDA);",
+      "if (!(IsHTMLDDA == null)) throw new Error('IsHTMLDDA should be loosely null');",
+      "if (IsHTMLDDA === undefined) throw new Error('IsHTMLDDA should be an object');",
+      "if (IsHTMLDDA() !== null || IsHTMLDDA('') !== null) throw new Error('IsHTMLDDA() should return null');",
+      "if (typeof AbstractModuleSource !== 'function') throw new Error('AbstractModuleSource');",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "const-isHTMLDDA.js"), [
+      "/*---",
+      "features: [IsHTMLDDA]",
+      "---*/",
+      "const IsHTMLDDA = $262.IsHTMLDDA;",
+      "if (!(IsHTMLDDA == undefined)) throw new Error('IsHTMLDDA should be loosely undefined');",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "no-harness-globals.js"), [
+      "/*---",
+      "---*/",
+      "for (const name of ['IsHTMLDDA', 'AbstractModuleSource', 'installRealm262', 'host262']) {",
+      "  let leaked = true;",
+      "  try { $262.evalScript(name); } catch (e) {",
+      "    if (!(e instanceof ReferenceError)) throw e;",
+      "    leaked = false;",
+      "  }",
+      "  if (leaked) throw new Error('$262.js declared a global ' + name);",
+      "}",
+      "",
+    ].join("\n"));
+    const out = join(tmp, "annexb.json");
+    // No --categories: the default set must include annexB.
+    const proc = Bun.spawnSync(
+      [TEST262RUNNER, "--suite-dir", suite, "--jobs=1", "--output", out],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    const failures = report.results.filter((r: { status: string }) => r.status !== "PASS");
+    // Each unflagged file runs once per mode.
+    if (proc.exitCode !== 0 || report.summary.totalRun !== 6 || failures.length !== 0)
+      throw new Error(`annexB fixtures should run by default and pass in both modes, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    if (!report.run.categories.includes("annexB") ||
+        !report.summary.byCategory.some((c: { category: string }) => c.category === "annexB"))
+      throw new Error(`the default run should report annexB as a category, got ${JSON.stringify(report.run.categories)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("test262 runner: engine timeout is classified as TIMEOUT...", async () => {
   const tmp = makeTmp();
   try {
@@ -1488,6 +1556,11 @@ await section("test262 runner: negative tests need the expected error in the exp
       // raw source runs exactly as written: its own directive prologue
       // still opens the Script, which a wrapper in front of it would end.
       ["runtime-raw.js", ['"use strict";', ...negative("runtime", "ReferenceError", ["raw"]), "undeclaredInRaw = 1;"], "PASS", ""],
+      // #2069: a runtime negative whose source does not parse is a
+      // conformance failure, not wrapper-infra, raw or not (the annexB
+      // HTML-like comment tests until the parser accepts them).
+      ["runtime-parse-error.js", [...negative("runtime", "Test262Error"), "var = ;"], "FAIL", "expected Test262Error, got SyntaxError"],
+      ["runtime-raw-parse-error.js", [...negative("runtime", "Test262Error", ["raw"]), "var = ;"], "FAIL", "expected Test262Error, got SyntaxError"],
     ];
     writeFileSync(join(tests, "resolution_FIXTURE.js"), "export var present;\n");
     for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");

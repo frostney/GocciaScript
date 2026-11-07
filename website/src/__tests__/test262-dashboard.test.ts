@@ -578,6 +578,55 @@ describe("test262 dashboard per-mode rendering", () => {
     expect(markup).toContain("<td>n/a</td><td>100.0%</td>");
   });
 
+  test("starts a category's timeline line at the first run that covers it", () => {
+    // Runs published before #2069 have no annexB entry. Its line must start
+    // at the first run that has one, not at 0% for every earlier run.
+    const withAnnexB = {
+      ...summary,
+      byCategory: [
+        ...summary.byCategory,
+        { category: "annexB", ...counts(10, 5) },
+      ] as Test262SuiteSummary["byCategory"],
+    };
+    const markup = renderToStaticMarkup(
+      createElement(Test262Dashboard, {
+        data: createTest262DashboardData({
+          generatedAt: "2026-06-12T02:00:00.000Z",
+          timeline: [
+            { ...point(summary), runId: 1 },
+            {
+              ...point(summary),
+              runId: 2,
+              createdAt: "2026-06-11T01:00:00.000Z",
+            },
+            {
+              ...point(withAnnexB),
+              runId: 3,
+              createdAt: "2026-06-12T01:00:00.000Z",
+            },
+          ],
+          latestReport: { summary: withAnnexB, results: [] },
+        }),
+      }),
+    );
+    const annexBPaths = [
+      ...markup.matchAll(
+        /<path d="([^"]*)" class="compat-chart-line" style="--series-color:#2f6f73"/g,
+      ),
+    ].map((match) => match[1]);
+    const languagePaths = [
+      ...markup.matchAll(
+        /<path d="([^"]*)" class="compat-chart-line" style="--series-color:#4d7fb8"/g,
+      ),
+    ].map((match) => match[1]);
+
+    expect(annexBPaths).toHaveLength(1);
+    // One point, so one move and no line segment back to earlier runs.
+    expect(annexBPaths[0]).toMatch(/^M [\d.]+ [\d.]+$/);
+    expect(languagePaths[0].match(/[ML]/g)).toEqual(["M", "L", "L"]);
+    expect(markup).toContain("starts at the first run that covers it");
+  });
+
   test("shows modes as unavailable, not guessed, for a legacy report", () => {
     const markup = html(summary);
 

@@ -45,7 +45,9 @@ uses
   Goccia.VM.Exception;
 
 const
-  DEFAULT_CATEGORIES = 'built-ins,harness,intl402,language,staging';
+  { Every top-level test262 category. annexB is part of the conformance
+    target (ADR 0177), so it runs and counts like the others. }
+  DEFAULT_CATEGORIES = 'annexB,built-ins,harness,intl402,language,staging';
   DEFAULT_JOBS = 4;
   DEFAULT_TIMEOUT_MS = 20000;
   DEFAULT_MAX_MEMORY_BYTES = Int64(2) * 1024 * 1024 * 1024;
@@ -64,6 +66,15 @@ const
     between PASS and FAIL without an engine change, so the PR comparison
     does not block on a baseline graded under the old contract. }
   GRADING_CONTRACT_VERSION = 4;
+  { The compatibility flags every test262 engine runs with, test cases and
+    --eval-host probes alike: test262 uses these forms across its harness
+    and its tests. A test's own source type and strictness still decide
+    strict-mode semantics. An Annex B surface added behind its own flag
+    (ADR 0177) joins this set, so the runner tests it while the default
+    engine profile stays without it. }
+  TEST262_COMPATIBILITY: TGocciaCompatibilityFlags = [cfASI, cfVar,
+    cfFunction, cfTraditionalFor, cfWhileLoops, cfLooseEquality,
+    cfArgumentsObject, cfLabel, cfForIn, cfNonStrictMode];
 
 type
   TTest262Outcome = (toPass, toFail, toWrapperInfra, toTimeout);
@@ -1381,9 +1392,7 @@ begin
         $262.evalScript, indirect eval or Function, are non-strict unless
         their own source opts in. }
       EngineOptions := Default(TGocciaTest262EngineOptions);
-      EngineOptions.Compatibility := [cfASI, cfVar, cfFunction,
-        cfTraditionalFor, cfWhileLoops, cfLooseEquality, cfArgumentsObject,
-        cfLabel, cfForIn, cfNonStrictMode];
+      EngineOptions.Compatibility := TEST262_COMPATIBILITY;
       EngineOptions.ExperimentalJSModuleSourceEnabled :=
         Metadata.HasFeature('source-phase-imports-module-source');
       if EngineOptions.ExperimentalJSModuleSourceEnabled then
@@ -2054,9 +2063,7 @@ begin
   PrintHost := nil;
   try
     EngineOptions := Default(TGocciaTest262EngineOptions);
-    EngineOptions.Compatibility := [cfASI, cfVar, cfFunction,
-      cfTraditionalFor, cfWhileLoops, cfLooseEquality, cfNonStrictMode,
-      cfArgumentsObject, cfLabel, cfForIn];
+    EngineOptions.Compatibility := TEST262_COMPATIBILITY;
     EngineOptions.UnsafeShadowRealm := True;
     EngineOptions.AgentCanSuspend := True;
     EngineOptions.SourceType := FOptions.HostEvalSourceType;

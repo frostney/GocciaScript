@@ -25,10 +25,10 @@ const CATEGORY_COLORS: Record<string, string | undefined> = {
   intl402: "#8b5fa8",
   staging: "#b45f67",
   harness: "#6f7d42",
+  annexB: "#2f6f73",
 };
 
 const GENERATED_CATEGORY_COLORS = [
-  "#2f6f73",
   "#8a6f2a",
   "#9a5d7a",
   "#5f6ea6",
@@ -50,7 +50,7 @@ const TIMELINE_RANGES: { value: TimelineRange; label: string; days: number }[] =
 /** Earlier points ran each file once, so run totals, the pass rate and the
  *  duration step where reports began running both modes. */
 const MODE_CUTOVER_NOTE =
-  "Points from before the runner ran both modes ran each test file once, so the totals, the pass rate and the duration step where both modes begin.";
+  "Points from before the runner ran both modes ran each test file once, so the totals, the pass rate and the duration step where both modes begin. A category's line starts at the first run that covers it, as annexB's does.";
 
 function fmt(value: number): string {
   return value.toLocaleString("en-US");
@@ -141,12 +141,18 @@ function filterTimeline(
   });
 }
 
-function categoryRate(point: Test262TimelinePoint, category: string): number {
+/** A category's pass rate at a point, or null when that run did not cover
+ *  the category (annexB before it joined the default run, #2069), so the
+ *  chart leaves a gap instead of plotting 0%. */
+function categoryRate(
+  point: Test262TimelinePoint,
+  category: string,
+): number | null {
   if (category === "total") {
     return passRate(point.summary.passed, point.summary.totalRun);
   }
   const item = point.summary.byCategory.find((c) => c.category === category);
-  return item ? passRate(item.passed, item.run) : 0;
+  return item ? passRate(item.passed, item.run) : null;
 }
 
 function xForPoint(
@@ -238,21 +244,27 @@ function DurationTooltipContent({ point }: { point: Test262TimelinePoint }) {
 
 function linePath(
   points: Test262TimelinePoint[],
-  yForPoint: (point: Test262TimelinePoint) => number,
+  yForPoint: (point: Test262TimelinePoint) => number | null,
   width: number,
   height: number,
   padX: number,
   padY: number,
 ): string {
-  if (points.length === 0) return "";
   const usableH = height - padY * 2;
-  return points
-    .map((point, index) => {
-      const x = xForPoint(points, index, width, padX);
-      const y = padY + usableH * (1 - yForPoint(point));
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(" ");
+  const segments: string[] = [];
+  let drawing = false;
+  points.forEach((point, index) => {
+    const value = yForPoint(point);
+    if (value === null) {
+      drawing = false;
+      return;
+    }
+    const x = xForPoint(points, index, width, padX);
+    const y = padY + usableH * (1 - value);
+    segments.push(`${drawing ? "L" : "M"} ${x.toFixed(2)} ${y.toFixed(2)}`);
+    drawing = true;
+  });
+  return segments.join(" ");
 }
 
 function ChartHoverTargets({
@@ -482,10 +494,10 @@ function CoverageTimeline({ points }: { points: Test262TimelinePoint[] }) {
               ))}
               {points.map((point, index) =>
                 categories.map((category) => {
+                  const rate = categoryRate(point, category);
+                  if (rate === null) return null;
                   const x = xForPoint(points, index, width, padX);
-                  const y =
-                    padY +
-                    (height - padY * 2) * (1 - categoryRate(point, category));
+                  const y = padY + (height - padY * 2) * (1 - rate);
                   return (
                     <circle
                       key={`${point.runId}-${category}`}
