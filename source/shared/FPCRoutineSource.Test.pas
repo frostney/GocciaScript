@@ -796,6 +796,28 @@ begin
       Refuse(Including('Search.inc'), ROUTINE_SECTION, 'include Search.inc names different files');
     end;
     Remove;
+    // FPC searches a nested include beside the parent it read. Identical
+    // parents in two directories could each find another child, so a
+    // parent that includes more must be found in one directory only.
+    SetLength(FCompilerDirectories, 2);
+    FCompilerDirectories[0] := WorkingDirectory;
+    FCompilerDirectories[1] := Absolute;
+    ForceDirectories(WorkingDirectory + PathDelim + 'nested');
+    ForceDirectories(Absolute + 'nested');
+    Put(WorkingDirectory + PathDelim + 'nested' + PathDelim + 'parent.inc', '{$I child.inc}');
+    Put(Absolute + 'nested' + PathDelim + 'parent.inc', '{$I child.inc}');
+    Put(WorkingDirectory + PathDelim + 'nested' + PathDelim + 'child.inc', NEUTRAL);
+    Put(Absolute + 'nested' + PathDelim + 'child.inc', CLOSES_BLOCK);
+    Refuse(Including('nested/parent.inc'), ROUTINE_SECTION,
+      'include nested/parent.inc is found in more than one directory');
+    // A parent that includes nothing more reads the same text from either.
+    Put(Absolute + 'nested' + PathDelim + 'parent.inc', NEUTRAL);
+    Put(WorkingDirectory + PathDelim + 'nested' + PathDelim + 'parent.inc', NEUTRAL);
+    Expect<string>(Locate(Including('nested/parent.inc'), ROUTINE_SECTION).Digest).ToBe(Digest(ROUTINE_TEXT));
+    Remove;
+    RemoveDir(WorkingDirectory + PathDelim + 'nested');
+    RemoveDir(Absolute + 'nested');
+    FCompilerDirectories := nil;
     // Names whose file FPC derives from elsewhere are refused.
     Refuse(Including('*.inc'), ROUTINE_SECTION, 'unsupported include name');
     Refuse(Including('search.'), ROUTINE_SECTION, 'unsupported include name');

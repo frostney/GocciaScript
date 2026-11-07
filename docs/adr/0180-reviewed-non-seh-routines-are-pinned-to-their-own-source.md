@@ -52,7 +52,9 @@ whenever it cannot be sure the text it hashes is the text that was compiled:
   repository root for `build.pas`, and the unit directory that
   `compile-programs.py` passes to `--apply`. If a name matches files with
   different text, the include is refused, because FPC's choice would depend
-  on where it ran. `{$INCLUDEPATH}`, `*` names and names ending in `.` are
+  on where it ran. FPC searches an include's own includes beside the copy it
+  read, so an include found in more than one directory may not include more.
+  `{$INCLUDEPATH}`, `*` names and names ending in `.` are
   refused. The include must contain no routine or module keyword, so it
   cannot hold an implementation the parse misses. The
   parse does not read included text, so an include must also leave the block

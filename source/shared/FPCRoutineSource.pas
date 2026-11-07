@@ -1025,12 +1025,14 @@ end;
 // {$INCLUDEPATH}, then each -Fi directory, or only the named directory of an
 // absolute name. On Linux and Darwin it tries each path as written,
 // lowercased, then uppercased. Every candidate is checked, and all that exist
-// must hold the same bytes, so FPC's choice cannot change the text. On a
+// must hold the same bytes, so FPC's choice cannot change the text.
+// AManyDirectories reports matches in more than one directory: FPC
+// searches the chosen file's own includes beside it. On a
 // case-insensitive file system the spellings name one file; the included
 // text is never part of a digest, so the spelling found first only changes
 // the path an error names.
 function ResolveInclude(const AIncluder: string; const ADirective: TDirective;
-  const AIncludeDirectories: array of string): string;
+  const AIncludeDirectories: array of string; out AManyDirectories: Boolean): string;
 const
   EXTENSIONS: array[0..3] of string = ('', '.inc', '.pp', '.pas');
 var
@@ -1063,6 +1065,7 @@ begin
   end;
   Result := '';
   Found := nil;
+  AManyDirectories := False;
   for Extension in EXTENSIONS do
   begin
     if (Extension <> '') and (ExtractFileExt(Name) <> '') then
@@ -1086,9 +1089,14 @@ begin
           Result := Candidate;
           Found := ReadSourceBytes(Candidate);
         end
-        else if (Candidate <> Result) and not SameBytes(Found, ReadSourceBytes(Candidate)) then
-          Refuse(AIncluder, ADirective.Line, 'include ' + Name + ' names different files, ' + Result +
-            ' and ' + Candidate + ', so the one FPC reads depends on its working directory and search order');
+        else if Candidate <> Result then
+        begin
+          if not SameBytes(Found, ReadSourceBytes(Candidate)) then
+            Refuse(AIncluder, ADirective.Line, 'include ' + Name + ' names different files, ' + Result +
+              ' and ' + Candidate + ', so the one FPC reads depends on its working directory and search order');
+          if ExtractFilePath(Candidate) <> ExtractFilePath(Result) then
+            AManyDirectories := True;
+        end;
       end;
     end;
   end;
@@ -1115,6 +1123,7 @@ var
   Token: TToken;
   Directive: TDirective;
   TokenIndex, DirectiveIndex: Integer;
+  ManyDirectories: Boolean;
 
   procedure RefuseDirective(const AReason: string);
   begin
@@ -1124,7 +1133,16 @@ var
 begin
   if ADepth >= MAX_INCLUDE_DEPTH then
     Refuse(AIncluder.FileName, ADirective.Line, 'includes nest too deeply');
-  Included := LoadSource(ResolveInclude(AIncluder.FileName, ADirective, AIncludeDirectories));
+  Included := LoadSource(ResolveInclude(AIncluder.FileName, ADirective, AIncludeDirectories,
+    ManyDirectories));
+  // Its own includes are searched beside whichever copy FPC reads, so
+  // identical copies in two directories could include different text.
+  if ManyDirectories then
+    for Directive in Included.Directives do
+      if IsIncludeDirective(Directive) and (Copy(Directive.Argument, 1, 1) <> '%') then
+        Refuse(AIncluder.FileName, ADirective.Line, 'include ' + Trim(ADirective.Argument) +
+          ' is found in more than one directory and includes ' + Trim(Directive.Argument) +
+          ', which FPC would search beside the copy it reads');
   for Token in Included.Tokens do
     if (Token.Kind = tkWord) and not Token.Escaped and InList(Token.Text, INCLUDE_REFUSED_WORDS) then
       Refuse(Included.FileName, Token.Line,
