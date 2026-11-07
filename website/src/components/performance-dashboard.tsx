@@ -528,7 +528,7 @@ export function PerformanceDashboard({
           </strong>
           <small>
             Lines break when the corpus, driver, subset, reference-engine
-            versions or measurement protocol change.
+            versions, engine order or per-benchmark iteration counts change.
           </small>
         </div>
         <SegmentedControl
