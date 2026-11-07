@@ -711,6 +711,11 @@ only with what the host copies in, and can import `"fs"` and `"goccia"`
 The options and diff output are listed under
 [Build System — GocciaRunner sandbox mode](build-system.md#gocciarunner-sandbox-mode).
 
+Sandbox mode is the reference host for code that AI agents generate. An agent
+writing for it should emit the recommended default forms first and add a
+[compatibility flag](language.md#compatibility-flags) only when the surrounding
+project, test or host needs the semantics it enables.
+
 ### What sandbox mode honors
 
 The guest reaches files only through the virtual filesystem, so `net` is the

@@ -10,7 +10,7 @@
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-Native application embedding is an important secondary GocciaScript goal. `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, `goccia:test`, and `node:async_hooks`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
+Embedding is GocciaScript's primary goal ([Vision](../VISION.md#primary-an-engine-for-embedding)). `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, `goccia:test`, and `node:async_hooks`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
 
 ## Quick Start
 
@@ -597,7 +597,7 @@ EnableEval(Engine);
 
 ## Injecting Custom Globals
 
-You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly.
+You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly. The capability set governs only the access the engine makes itself, such as `fetch`, imports and FFI; a function you inject is host code that the engine does not check, so authorize what it reaches yourself.
 
 ### Injecting a Value
 

@@ -200,7 +200,8 @@ The supported shapes, all of which are what packages in practice use:
 **Conditions.** Only `import` and `default` are understood. Node's default ESM
 condition set is `["node", "import"]`; `node` is deliberately absent because
 GocciaScript is not a Node host and a `node` branch usually leads to CommonJS
-or to `node:` built-ins that do not exist here. A condition key that is not
+or to `node:` built-ins that do not exist here (a runtime extension registers only
+a few, such as `node:async_hooks`). A condition key that is not
 `import` or `default` — `require`, `browser`, `types`, `node` — is skipped, and
 resolution continues with the next key. The remaining keys are tried in the
 order the manifest writes them, as Node's `PACKAGE_TARGET_RESOLVE` does, so a
@@ -321,11 +322,23 @@ resolution error rather than misbehaving:
 - The `imports` map and `#`-prefixed private specifiers
 - Package self-reference by the manifest's own `name`
 - The `require`, `node`, `browser`, `types`, and custom conditions
-- `node:` built-in modules, and any Node host API
+- `node:` built-in modules other than those a runtime extension registers (such as `node:async_hooks`), and Node host APIs other than the subsets that runtime extensions provide (such as the sandbox `fs` module)
 - `package.json` `"type"` inheritance for files outside a package
 
-Loading CommonJS itself is not on the roadmap; see
-[VISION](../VISION.md#what-gocciascript-is-not).
+Loading CommonJS itself does not ship as part of GocciaScript, because userland
+can shim it: convert the package to ESM with a bundler (`esbuild --bundle --format=esm`,
+or Rollup with `@rollup/plugin-commonjs`) and run the output with the
+compatibility flags, since the default profile rejects bundler output. For a
+CommonJS entry point esbuild emits only a default export (`export default
+require_x()`), so a consumer that uses named imports needs a small ESM wrapper
+that re-exports the names it wants from that default. The converted output is
+module code, which is always strict, so a package that relies on non-strict
+behaviour (such as mapped `arguments`) can behave differently after
+conversion. esbuild targets the browser platform by default, so a dependency
+can resolve to a browser build that expects a DOM; choose the bundler's
+platform and conditions to suit the host (the bundler's own documentation
+covers these options). A package that needs a Node built-in is not solved that
+way; see [VISION](../VISION.md#what-gocciascript-is-not).
 
 ## Runtime code frames
 

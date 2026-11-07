@@ -1,17 +1,17 @@
 # GocciaScript Context
 
-GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first recommended defaults and opt-in compatibility/runtime surfaces. This glossary is the canonical language for project-specific terms used in code, docs, issues, and reviews.
+GocciaScript is a FreePascal implementation of ECMAScript for embedding, with sensible recommended defaults and opt-in compatibility/runtime surfaces. This glossary is the canonical language for project-specific terms used in code, docs, issues, and reviews.
 
 ## Language
 
 ### Project And Layers
 
 **GocciaScript**:
-A sandbox-first ECMAScript runtime and toolchain for AI agents, with an explicit host-defined capability model and generated test262 evidence. It is implemented in FreePascal, supports Delphi, and can also be embedded in native applications as an important secondary goal.
+An ECMAScript engine for embedding, with sensible defaults that are easy to customize, an explicit host-defined capability model, and generated test262 evidence. It is implemented in FreePascal, supports Delphi, and ships a toolchain of CLI hosts; `GocciaRunner`'s sandbox mode for AI agents is a reference host built on the engine.
 _Avoid_: JS engine when the recommended defaults or host-tooling shape matters.
 
 **Recommended defaults**:
-The recommended out-of-the-box way to use GocciaScript: sandbox-first, modern, and intentionally conservative about legacy JavaScript forms. It describes guidance for new code, not the limit of what the engine or runtime can support when a host opts into compatibility or custom runtime capabilities.
+The recommended out-of-the-box way to use GocciaScript: modern, without dynamic code generation, and intentionally conservative about legacy JavaScript forms. It describes guidance for new code, not the limit of what the engine or runtime can support: a host changes it through the knobs in [Embedding — Changing the Defaults](docs/embedding.md#changing-the-defaults), and there are no presets.
 _Avoid_: Language ceiling, hard limit.
 
 **Recommended profile**:
@@ -151,7 +151,7 @@ The open product direction of aligning selected runtime globals and host behavio
 _Avoid_: WHATWG API compatibility, browser host environment, Node.js host compatibility.
 
 **WHATWG API compatibility**:
-The open product direction of implementing selected WHATWG browser and web-platform APIs when they fit GocciaScript's sandboxed runtime and embeddable platform goals. It does not imply a full browser host environment.
+The open product direction of implementing selected WHATWG browser and web-platform APIs when they serve an embedding use case, such as the APIs React server rendering needs. It does not imply a full browser host environment.
 _Avoid_: WinterTC compatibility, browser host environment, DOM compatibility.
 
 **Built-in**:
@@ -447,7 +447,7 @@ The Runner's default mode: source runs against the host filesystem, and what it 
 _Avoid_: Loader mode, normal mode.
 
 **Sandbox mode**:
-The Runner mode, enabled by `--sandbox`, a copy input, or a trusted `sandbox` config section, in which the entry runs inside an isolated sandbox virtual filesystem initialised from a seed baseline, can import `fs`, `goccia` and `goccia:search`, and may reach only the `net` capability. It reports a structured run result and, on request, a diff. See [Permissions](docs/permissions.md#sandbox-mode) and [Build System](docs/build-system.md).
+The Runner mode, enabled by `--sandbox`, a copy input, or a trusted `sandbox` config section, in which the entry runs inside an isolated sandbox virtual filesystem initialised from a seed baseline, can import `fs`, `goccia` and `goccia:search`, and may reach only the `net` capability. It reports a structured run result and, on request, a diff. It is the reference host for code that AI agents generate, built on the capability model and runtime extensions any embedder can install. See [Permissions](docs/permissions.md#sandbox-mode) and [Build System](docs/build-system.md).
 _Avoid_: Sandbox Runner, `GocciaSandboxRunner`.
 
 **Install mode**:
