@@ -41,12 +41,13 @@ modules commonly have their entry in such a cycle (`main.js` and `state.js`).
 - **Without a named source type, the entry's syntax picks its goal.** When
   neither a source type setting nor a `.mjs` or `.mts` file name has already
   selected the goal, an entry with a top-level `import` declaration or
-  `export` declaration runs as a Module, and any other entry runs as a
-  Script, as before. This reverses
+  `export` declaration, or a valid top-level await expression, runs as a
+  Module. An ambiguous await reading tries Module first and falls back to
+  Script when only that reading parses successfully. This reverses
   #1484 for entries that have module syntax: the entry is one Module Record,
   so an import of its file gets that record, and each module of a cycle
   evaluates once (§16.2.1.6.1.3.1 InnerModuleEvaluation, step 3).
-- **Detection is syntactic, and the one parse does it.** The parser notes
+- **Detection is syntactic, with narrow reparse exceptions.** The parser notes
   whether a top-level statement starts an import or export declaration, with
   the same dispatch it uses to parse one (`import(` and `import.` begin an
   expression). A dynamic `import()` or an `import.meta` reference does not
@@ -55,8 +56,30 @@ modules commonly have their entry in such a cycle (`main.js` and `state.js`).
   (a SyntaxError in a Script, §13.3.12) and a `with` statement (a SyntaxError
   in a Module, which is strict, §11.2.2). The settled goal then raises the one
   that applies. A Module's other early errors are checked after the parse, as
-  for any Module. Only with `--compat-non-strict-mode` does a detected Module
-  parse twice: the first parse was sloppy Script code, and a Module is not.
+  for any Module. With `--compat-non-strict-mode`, a detected Module needs
+  a strict reparse: the first parse was sloppy Script code, and a Module is not.
+  A second exception is an ambiguous top-level `await` expression. The parser
+  tries the Module reading first, holding goal-dependent identifier errors;
+  if it fails, the pipeline retries with Script's await-identifier grammar.
+  This retry cannot accept an import or export declaration, including one
+  later in the file. If both readings fail, the original Module-reading
+  diagnostic is reported. `await[0]` therefore selects Module, while
+  `const await = {0: "x"}; console.log(await[0]);` selects Script. An explicit
+  source type disables this fallback and parses once. Ordinary source and
+  errors without ambiguous top-level await do not trigger a Script retry.
+  The maximum pass counts are:
+
+  - Explicit Script or Module: **one**, regardless of compatibility flags.
+  - Ordinary detection without ambiguous await: **one**, or **two** when
+    `--compat-non-strict-mode` detects a Module and reparses it strictly.
+  - Ambiguous await under the default profile: **two** (Module reading,
+    then Script only if that reading fails).
+  - Ambiguous await with `--compat-non-strict-mode`: **three**. If the first
+    detection succeeds as Module but its strict reparse fails, Script is
+    tried once. For example, `globalThis.await = {0: 1}; await[0]; delete missing;`
+    succeeds as Script. If the first detection already fails, Script is
+    the second and final pass. If Script also fails after the strict Module
+    reparse, that strict Module diagnostic is preserved.
 - **`stDetect` is the engine's default source type.** `TGocciaSourceType` has
   a third value. `TGocciaEngine.SourceType` defaults to it unless the entry
   is `.mjs` or `.mts`. An embedder that names `stScript` or `stModule` gets
@@ -95,9 +118,14 @@ modules commonly have their entry in such a cycle (`main.js` and `state.js`).
 
 Node.js also counts `import.meta`, top-level `await` and a lexical
 redeclaration of a CommonJS wrapper name as module syntax. GocciaScript has no
-CommonJS wrapper, allows top-level `await` in Script source, and keeps
-`import.meta` an error in a Script, so only import and export declarations
-decide. Node.js detects a file whose nearest `package.json` has no `"type"`;
+CommonJS wrapper and keeps `import.meta` an error in a Script. Its
+await fallback reverses the order described in the official
+[Node.js 24 package documentation](https://nodejs.org/docs/latest-v24.x/api/packages.html#determining-module-system):
+Node tries CommonJS first, then ES modules on module syntax. The
+[syntax-detection section](https://nodejs.org/docs/latest-v24.x/api/packages.html#syntax-detection)
+lists top-level await among that syntax. GocciaScript tries Module first to
+preserve bare top-level await, while an explicit Script uses await as an
+identifier outside async functions. Node.js detects a file whose nearest `package.json` has no `"type"`;
 GocciaScript has no package-level type and uses `goccia.json`'s
 `"source-type"` instead. A type-only `import type` or `export type`
 declaration counts, as it does for TypeScript; Node.js v24.21.0 runs a `.ts`
@@ -118,8 +146,8 @@ file whose only module syntax is `export type` as CommonJS.
   `"source-type": "module"` directory have a top-level import or export, so
   the test runner now runs them as modules. The suite passes without changes
   to them.
-- Detection costs one check per top-level statement of the parse it
-  already does. Under callgrind, with a production build, a 228 KB Script
+- Apart from the reparse exceptions above, detection costs one check per
+  top-level statement of the parse it already does. Under callgrind, with a production build, a 228 KB Script
   entry of 3,001 top-level statements ran 8,856,448,966 instructions, against
   8,856,019,736 before (+0.005%), and the same file with one `export` added
   ran 12,464,797,818 detected against 12,464,180,646 as an explicit Module

@@ -9,10 +9,10 @@ features: [compat-var, dynamic-import]
 
 var dynamicImportScriptVar = "global";
 const topLevelThis = this;
-const loadedNamespace = await import("../../../../fixtures/modules/detected-dynamic-target.js");
 
 describe("an entry whose only import is dynamic", () => {
-  test("the dynamic import loads the module", () => {
+  test("the dynamic import loads the module", async () => {
+    const loadedNamespace = await import("../../../../fixtures/modules/detected-dynamic-target.js");
     expect(loadedNamespace.dynamicValue).toBe("loaded");
   });
 
