@@ -44,6 +44,8 @@ const awfyPoint = {
   stale: false,
   quickjsRatio: 1.5,
   nodeRatio: 12.25,
+  nodeJitlessRatio: 3.5,
+  jscRatio: 2.75,
   failedWorkloadCount: 0,
   workloadCount: 14,
   repetitions: 3,
@@ -76,8 +78,12 @@ const performanceData: PerformanceDashboardData = {
         goccia: null,
         quickjs: 10,
         node: 1,
+        nodeJitless: null,
+        jsc: null,
         quickjsRatio: null,
         nodeRatio: null,
+        nodeJitlessRatio: null,
+        jscRatio: null,
       },
     ],
   },
@@ -264,7 +270,7 @@ describe("createSiteMarkdown", () => {
       markdown.indexOf("## Quick install"),
     );
     expect(markdown).toContain(
-      `${passed} of ${totalRun} tests passing (${compatibilityPercent(passed, totalRun)})`,
+      `${passed} of ${totalRun} runs passing (${compatibilityPercent(passed, totalRun)})`,
     );
     expect(markdown).toContain(
       "The latest published run, Annex B excluded, has",
@@ -326,7 +332,7 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain(
       "by area on the compatibility dashboard](/compatibility)",
     );
-    expect(markdown).not.toContain("tests passing (");
+    expect(markdown).not.toContain("runs passing (");
     expect(markdown).not.toContain("undefined");
   });
 
@@ -337,14 +343,60 @@ describe("createSiteMarkdown", () => {
       "concise Markdown representation of the authoritative GocciaScript compatibility page",
     );
     expect(markdown).toContain(
-      "Overall test262 corpus pass rate: **99.0%** (99 passed / 100 run)",
+      "Overall test262 corpus pass rate: **99.0%** (99 passed / 100 runs)",
     );
-    expect(markdown).toContain("| language | 100.0% | 50 / 50 |");
+    expect(markdown).toContain("| language | 100.0% | 50 / 50 | n/a | n/a |");
+    expect(markdown).toContain("- Test files discovered: 100");
+    expect(markdown).toContain(
+      "Every pass and fail count is a count of runs, not of test files",
+    );
+    // A report without modes must not show a guessed split.
+    expect(markdown).toContain("Per-mode figures are not available");
+    expect(markdown).not.toContain("| Mode |");
     expect(markdown).toContain("- Commit: `0466e9bc`");
     expect(markdown).toContain(
       "- CI run: [#829](https://github.com/frostney/GocciaScript/actions/runs/100)",
     );
     expect(markdown).not.toContain("/api/test262/latest");
+  });
+
+  test("renders strict and non-strict figures when the report records modes", () => {
+    const counts = { failed: 0, wrapperInfra: 0, timeouts: 0 };
+    const summary = compatibilityData.latest.summary;
+    const withModes = {
+      ...compatibilityData,
+      latest: {
+        ...compatibilityData.latest,
+        summary: {
+          ...summary,
+          byMode: {
+            "non-strict": { run: 60, passed: 60, ...counts },
+            strict: { run: 40, passed: 39, ...counts, failed: 1 },
+          },
+          byCategory: summary.byCategory.map((category) => ({
+            ...category,
+            byMode: {
+              "non-strict": { run: 25, passed: 25, ...counts },
+              strict: { run: 25, passed: category.passed - 25, ...counts },
+            },
+          })),
+        },
+      },
+    };
+    const markdown = renderCompatibilityMarkdown(withModes);
+
+    expect(markdown).toContain("| Non-strict | 100.0% | 60 / 60 | 0 | 0 |");
+    expect(markdown).toContain("| Strict | 97.5% | 39 / 40 | 1 | 0 |");
+    expect(markdown).toContain(
+      "| language | 100.0% | 50 / 50 | 100.0% | 100.0% |",
+    );
+    expect(markdown).toContain(
+      "| staging | 98.0% | 49 / 50 | 100.0% | 96.0% |",
+    );
+    expect(markdown).not.toContain("Per-mode figures are not available");
+    expect(renderHomeMarkdown(null, withModes)).toContain(
+      "(99.0%; non-strict 100.0%, strict 97.5%)",
+    );
   });
 
   test("renders a performance alternate from dashboard data", () => {
@@ -353,7 +405,16 @@ describe("createSiteMarkdown", () => {
     expect(markdown).toContain("# Performance Barometer");
     expect(markdown).toContain("## Are We Fast Yet");
     expect(markdown).toContain("- QuickJS reference ratio: **1.50x**");
+    expect(markdown).toContain(
+      "- Node.js --jitless reference ratio (interpreter-class context): **3.50x**",
+    );
+    expect(markdown).toContain(
+      "- JSC (no JIT) reference ratio (interpreter-class context): **2.75x**",
+    );
     expect(markdown).toContain("- Node.js reference ratio: **12.25x**");
+    expect(markdown).toContain(
+      "Node.js with --jitless and JavaScriptCore (JSC) with its JIT off are interpreter-class context comparators that the target does not count",
+    );
     expect(markdown).toContain("- Workloads: 14 (0 failed)");
     expect(markdown).toContain(
       "- CI run: [#912](https://github.com/frostney/GocciaScript/actions/runs/200)",

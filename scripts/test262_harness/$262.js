@@ -11,19 +11,50 @@
 // Only methods Goccia can implement are provided.  Missing methods cause
 // the stock harness to throw Test262Error, which the runner classifies as
 // an honest FAIL.
+//
+// $262 is the only global binding this file creates.  Everything else lives
+// inside the function below, because a test may declare any other name at
+// its top level: the annexB emulates-undefined tests declare IsHTMLDDA there,
+// most as `var IsHTMLDDA = $262.IsHTMLDDA;` and some with const, and a global
+// `const IsHTMLDDA` here would make either a SyntaxError (ES2026 §16.1.7
+// GlobalDeclarationInstantiation steps 3.a and 4.a: no global lexical binding
+// may already have the name).
 
 if (typeof Goccia === "undefined" || Goccia.test262Host !== true) {
   throw new Error("$262 host hooks require GocciaTest262Runner");
 }
 
-const AbstractModuleSource = () => {
-  throw new TypeError("%AbstractModuleSource% is not a constructor");
-};
-const IsHTMLDDA = Goccia.test262.isHTMLDDA;
+var $262 = (function () {
+  const AbstractModuleSource = () => {
+    throw new TypeError("%AbstractModuleSource% is not a constructor");
+  };
+  const IsHTMLDDA = Goccia.test262.isHTMLDDA;
 
-function installRealm262(realm) {
-  const realm262 = {
-    global: realm.global,
+  function installRealm262(realm) {
+    const realm262 = {
+      global: realm.global,
+      AbstractModuleSource,
+      IsHTMLDDA,
+
+      detachArrayBuffer(buffer) {
+        if (buffer.detached) return;
+        buffer.transfer();
+      },
+
+      evalScript(sourceText) {
+        return realm.evalScript(sourceText);
+      },
+
+      createRealm() {
+        return installRealm262(realm.createRealm());
+      },
+    };
+    realm.global.$262 = realm262;
+    return realm262;
+  }
+
+  const host262 = {
+    global: globalThis,
     AbstractModuleSource,
     IsHTMLDDA,
 
@@ -33,97 +64,78 @@ function installRealm262(realm) {
     },
 
     evalScript(sourceText) {
-      return realm.evalScript(sourceText);
+      return Goccia.test262.evalScript(sourceText);
+    },
+
+    gc() {
+      Goccia.gc();
     },
 
     createRealm() {
-      return installRealm262(realm.createRealm());
+      return installRealm262(Goccia.test262.createRealm());
+    },
+
+    agent: {
+      broadcast(value) {
+        return Goccia.test262.agent.broadcast(value);
+      },
+
+      getReport() {
+        return Goccia.test262.agent.getReport();
+      },
+
+      leaving() {
+        return Goccia.test262.agent.leaving();
+      },
+
+      monotonicNow() {
+        return Goccia.test262.agent.monotonicNow();
+      },
+
+      receiveBroadcast(callback) {
+        return Goccia.test262.agent.receiveBroadcast(callback);
+      },
+
+      report(value) {
+        return Goccia.test262.agent.report(value);
+      },
+
+      sleep(ms) {
+        return Goccia.test262.agent.sleep(ms);
+      },
+
+      start(sourceText) {
+        return Goccia.test262.agent.start(sourceText);
+      },
     },
   };
-  realm.global.$262 = realm262;
-  return realm262;
-}
 
-var $262 = {
-  global: globalThis,
-  AbstractModuleSource,
-  IsHTMLDDA,
-
-  detachArrayBuffer(buffer) {
-    if (buffer.detached) return;
-    buffer.transfer();
-  },
-
-  evalScript(sourceText) {
-    return Goccia.test262.evalScript(sourceText);
-  },
-
-  gc() {
-    Goccia.gc();
-  },
-
-  createRealm() {
-    return installRealm262(Goccia.test262.createRealm());
-  },
-
-  agent: {
-    broadcast(value) {
-      return Goccia.test262.agent.broadcast(value);
+  Object.defineProperty(AbstractModuleSource, "prototype", {
+    value: Goccia.test262.abstractModuleSourcePrototype,
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+  Object.defineProperty(AbstractModuleSource.prototype, "constructor", {
+    value: AbstractModuleSource,
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+  Object.defineProperty(AbstractModuleSource.prototype, Symbol.toStringTag, {
+    get() {
+      // Strict, as a built-in getter is: this file runs as a non-strict
+      // Script, where a primitive this would be boxed into an object.
+      "use strict";
+      return this &&
+        typeof this === "object" &&
+        this !== AbstractModuleSource.prototype
+        ? "ModuleSource"
+        : undefined;
     },
+    enumerable: false,
+    configurable: true,
+  });
 
-    getReport() {
-      return Goccia.test262.agent.getReport();
-    },
-
-    leaving() {
-      return Goccia.test262.agent.leaving();
-    },
-
-    monotonicNow() {
-      return Goccia.test262.agent.monotonicNow();
-    },
-
-    receiveBroadcast(callback) {
-      return Goccia.test262.agent.receiveBroadcast(callback);
-    },
-
-    report(value) {
-      return Goccia.test262.agent.report(value);
-    },
-
-    sleep(ms) {
-      return Goccia.test262.agent.sleep(ms);
-    },
-
-    start(sourceText) {
-      return Goccia.test262.agent.start(sourceText);
-    },
-  },
-};
-
-Object.defineProperty($262.AbstractModuleSource, "prototype", {
-  value: Goccia.test262.abstractModuleSourcePrototype,
-  writable: false,
-  enumerable: false,
-  configurable: false,
-});
-Object.defineProperty($262.AbstractModuleSource.prototype, "constructor", {
-  value: $262.AbstractModuleSource,
-  writable: true,
-  enumerable: false,
-  configurable: true,
-});
-Object.defineProperty($262.AbstractModuleSource.prototype, Symbol.toStringTag, {
-  get() {
-    // Strict, as a built-in getter is: this file runs as a non-strict
-    // Script, where a primitive this would be boxed into an object.
-    "use strict";
-    return this &&
-      typeof this === "object" &&
-      this !== $262.AbstractModuleSource.prototype
-      ? "ModuleSource"
-      : undefined;
-  },
-  enumerable: false,
-  configurable: true,
-});
+  return host262;
+})();

@@ -9,9 +9,9 @@
 - **Profiler-backed runs** — Bytecode benchmark runs can emit opcode/function profiles with `--profile`, including deterministic single-run capture
 - **CI integration** — PR workflow posts benchmark comparison comments with range-overlap classification; main CI retains deterministic profile reports
 - **Environment tuning** — Calibration time, warmup iterations, and measurement rounds configurable via environment variables
-- **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, and Node without mixing them into the benchmark-runner corpus
+- **Cross-engine AWFY lane** — `scripts/awfy-driver.js` runs pinned AWFY and `perf/probes/` diagnostics under GocciaScript, QuickJS, `node --jitless`, JavaScriptCore with its JIT off, and Node, timed warm with the engine order alternating, without mixing them into the benchmark-runner corpus
 - **Work and placement** — `--counters` records instructions retired and instruction-cache, iTLB and branch misses per Goccia sample through Linux `perf_event`, and `--fresh-copies` samples page placements, so an A/B tells work from code layout
-- **JetStream 3 reference lane** — `scripts/jetstream-driver.js` runs a frozen, shell-portable subset of the pinned JetStream 3 corpus under the same three engines while preserving upstream workload source
+- **JetStream 3 reference lane** — `scripts/jetstream-driver.js` runs a frozen, shell-portable subset of the pinned JetStream 3 corpus under the same engines while preserving upstream workload source
 - **Performance Barometer** — Main-branch AWFY and JetStream reports feed the unified `/performance` dashboard with version-bounded history and visible failed-run gaps; the AWFY and JetStream QuickJS ratios are what the first performance target is judged on ([ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md))
 - **Web Tooling Goccia lane** — `scripts/web-tooling-driver.js` runs every pinned V8 Web Tooling workload under GocciaScript only and publishes retained JSON artifacts
 
@@ -390,14 +390,22 @@ Use `scripts/awfy-driver.js` for #856/#862 investigation:
 # List pinned AWFY benchmark names and Goccia-owned probes
 node scripts/awfy-driver.js --list
 
-# Run one AWFY benchmark from a local upstream checkout
+# Run one AWFY benchmark from a local upstream checkout, with its warm
+# protocol from the manifest
 node scripts/awfy-driver.js \
   --awfy-dir /path/to/are-we-fast-yet/benchmarks/JavaScript \
   --benchmark NBody \
-  --inner-iterations 1 \
   --repetitions 5 \
-  --engines goccia,qjs,node \
+  --engines goccia,qjs,node,node-jitless \
   --output tmp/awfy-report.json
+
+# Add JavaScriptCore with its JIT off, from a local jsc shell
+node scripts/awfy-driver.js \
+  --awfy-dir /path/to/are-we-fast-yet/benchmarks/JavaScript \
+  --benchmark NBody \
+  --engines goccia,qjs,node-jitless,jsc \
+  --jsc /path/to/jsc \
+  --output tmp/awfy-jsc-report.json
 
 # Run one diagnostic probe through the same normalized report schema
 node scripts/awfy-driver.js \
@@ -407,6 +415,64 @@ node scripts/awfy-driver.js \
   --engines goccia,qjs,node \
   --output tmp/probe-report.json
 ```
+
+### Warm timing and engine order
+
+AWFY samples are timed warm ([ADR 0178](adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
+Each sample is one process that creates one benchmark instance, runs
+`warmupIterations` iterations timed one by one, and then runs
+`measuredIterations` iterations timed as one window. An iteration is one
+`innerBenchmarkLoop(innerIterations)` call, verified as upstream's harness
+does. The sample's `durationMicros` is the window divided by
+`measuredIterations`, the steady-state time of one iteration; the comment, the
+ratios and the barometer use it. `firstIterationMicros` is the first warm-up
+iteration, the cold figure, and `warmupMicros` holds each warm-up iteration's
+time. Each engine's stats add `medianFirstIterationMicros`.
+
+The counts live per benchmark under `warmProtocol` in
+`perf/awfy/manifest.json`, so a local `--benchmark NBody` runs the same
+protocol as CI. `--inner-iterations`, `--warmup-iterations` and
+`--measured-iterations` override them for every target, a `Name:inner`
+suffix overrides one target's inner count, and a target with no protocol runs
+one cold iteration. `--warmup <n>` is different: it runs whole unrecorded
+process repetitions first. The manifest keeps each benchmark's problem size
+(`innerIterations`), runs five warm-up iterations, and runs enough measured
+iterations for QuickJS's window to last about 50 ms or more; `Havlak`, at over
+20 s per Goccia iteration, runs one of each. The 0.5 ms timer floor applies to
+the window, so a row's per-iteration time can be far below it.
+
+Engines alternate their order by default (`--engine-order alternate`): the
+first repetition runs the `--engines` order and every next one runs the
+reverse of the one before, warm-up repetitions included.
+`--engine-order fixed` runs one order every time. Every sample records
+`engine`, `repetition` and `position`, its place in that repetition's order;
+each target records `executionOrder`, and `metadata.options` names the order
+mode and its base order. The JetStream driver alternates the same way.
+
+### Comparator engines
+
+| Engine | What runs | Role |
+|---|---|---|
+| `qjs` | QuickJS at the version `.github/scripts/install-quickjs.sh` pins | The comparator for the first performance target ([ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)) |
+| `node-jitless` | `node --jitless`: V8's Ignition interpreter, no JIT tier, from the `--node` binary | Interpreter-class context; runs in CI |
+| `jsc` | The `--jsc` shell with `--useJIT=false` (as `JSC_useJIT=false`): JavaScriptCore's LLInt | Interpreter-class context; runs in CI, opt-in locally |
+| `node` | `node` with its JIT | Outside reference, for scale |
+
+Both drivers run `goccia,qjs,node,node-jitless` unless `--engines` says
+otherwise, because a local machine may have no JavaScriptCore shell. The CI
+reports run the engines each manifest's `ciReport.engines` lists, which adds
+`jsc`. `jsc` needs a JavaScriptCore shell: on Ubuntu the
+`libjavascriptcoregtk-bin` package installs one as `/usr/bin/jsc`, which is
+how `.github/scripts/install-jsc.sh` provides it to every AWFY and JetStream CI
+job, and macOS has one inside its JavaScriptCore framework (macOS runners stay
+with [#2102](https://github.com/frostney/GocciaScript/issues/2102)). The JIT flags are passed as
+arguments, so each sample's recorded command shows them. The report records the
+JavaScriptCore version from the package or framework that provides the shell,
+since the shell has no version option. The Ubuntu archive drops a version
+once an update supersedes it, so CI records the version rather than pinning it,
+and the CI reports fail when a report that measured JSC records no version.
+`geomeanRatios` holds one ratio for each
+pair of engines, so Goccia's ratio against each comparator stands on its own.
 
 `perf/awfy/manifest.json` records the upstream AWFY repository, pinned commit,
 JavaScript corpus path, driver version, and diagnostic probe catalog. The driver
@@ -432,7 +498,8 @@ bun scripts/awfy-bump-pin.ts <40-hex-sha>
 
 The normalized report records:
 
-- raw samples for every engine/target/repetition
+- raw samples for every engine/target/repetition, each with its place in the
+  repetition's engine order, its warm-up times and its measured window
 - medians, IQR-filtered medians, min/max, coefficient of variation, and
   geomean pairwise ratios
 - checksum/verification results and cross-engine checksum agreement
@@ -442,21 +509,26 @@ The normalized report records:
 
 Pull requests run an AWFY report lane from `.github/workflows/pr.yml`.
 The target set is recorded in `perf/awfy/manifest.json` under `ciReport`: all
-pinned AWFY benchmarks under the production-built PR `GocciaRunner`, the production-built `main` baseline `GocciaRunner`, QuickJS, and the latest Node Current
-release resolved by `actions/setup-node` at workflow time, with five raw samples
-per engine.
+pinned AWFY benchmarks under the production-built PR `GocciaRunner`, the production-built `main` baseline `GocciaRunner`, QuickJS, `node --jitless`, JavaScriptCore with its JIT off, and the latest Node Current
+release resolved by `actions/setup-node` at workflow time, with six raw samples
+per engine, so each engine order runs three times, each timed warm under the manifest's `warmProtocol`.
 Sampling is interleaved as target -> repetition -> engine, so every repetition
 runs the selected engines next to each other instead of collecting engine-sized
-batches. The workflow uploads the normalized JSON report and posts an
+batches, and the engine order alternates from one repetition to the next. The
+CI report fails when the report's driver version differs from the manifest's,
+its engine order is not `alternate`, or it measured JSC without recording its
+version. The workflow uploads the normalized JSON report and posts an
 `AWFY Results` PR comment with main/PR Goccia medians, the per-target PR-vs-main
-delta, and reference-engine medians; min/max/CV and raw samples stay in the
+delta, and a median column per comparator; min/max/CV and raw samples stay in the
 `awfy-report` artifact. Diagnostic probes remain available through the same
 driver for focused engine work, but they are not mixed into the PR AWFY summary.
 
-AWFY rows with sub-0.5ms medians are useful for verifying that the benchmark
-runs consistently, but they are timer-floor sensitive. Before using one of those
-rows as evidence for a broad runtime claim, rerun that target with a higher
-`--inner-iterations` value and inspect the artifact's min/max/CV.
+Under driver version 1, each sample timed one cold iteration, and rows with
+sub-0.5ms medians were timer-floor sensitive. Under the warm protocol the floor
+applies to each sample's measured window (`measuredTotalMicros`), not to the
+per-iteration time a row shows. Before using a row as evidence for a broad
+runtime claim, check that its window is well above the floor for every engine
+and inspect the artifact's min/max/CV.
 
 Full CI runs the same AWFY report on the ubuntu-latest x64 build. It uploads the
 `awfy-report` artifact on every full CI run. On `main`, when
@@ -501,8 +573,9 @@ change did more or less work. Four driver options separate the two:
   measuring one.
 - `--cpu <n>` pins every sample to one CPU with `taskset`; pick one whose SMT
   sibling is idle, since the sibling shares the instruction cache.
-- `--alternate-order` reverses the engine order on every other repetition, and
-  `--warmup <n>` runs unrecorded repetitions first.
+- `--engine-order alternate` (the default; `--alternate-order` is the same)
+  reverses the engine order on every other repetition, and `--warmup <n>` runs
+  unrecorded repetitions first.
 
 `scripts/awfy-comment.js` turns such a report into the PR comment's table, with
 `Instructions` and `L1i misses` columns next to the time delta when both
@@ -563,12 +636,14 @@ node scripts/jetstream-driver.js \
   --jetstream-dir /path/to/JetStream \
   --benchmark hash-map \
   --repetitions 1 \
-  --engines goccia,qjs,node \
+  --engines goccia,qjs,node,node-jitless \
   --output tmp/jetstream-report.json
 
-# Run the retained CI report contract
+# Run the retained CI report contract: the manifest's ciReport engines,
+# which include jsc, so a JavaScriptCore shell must be on PATH or given
 node scripts/jetstream-ci-report.js \
   --jetstream-dir /path/to/JetStream \
+  --jsc /usr/bin/jsc \
   --output tmp/jetstream-report.json
 ```
 
@@ -592,13 +667,18 @@ The driver concatenates the listed upstream files unchanged into one generated
 shell entry per workload. The generic adapter supplies timing, deterministic
 randomness where the manifest requests it, and result serialization. Each suite
 iteration uses JetStream's First/Worst/Average subscore formula; CI deliberately
-uses three suite iterations and five process repetitions. Therefore the result is
+uses three suite iterations and six process repetitions. Therefore the result is
 a stable GocciaScript project measurement, not an official full-suite JetStream
 score.
 
 Reports retain raw scores, subscores, medians, IQR/min/max/CV, explicit upstream
 validation availability and outcomes, failure stdout/stderr, corpus and driver
-versions, per-binary Goccia source revisions/FPC, and QuickJS/Node versions.
+versions, per-binary Goccia source revisions/FPC, and the QuickJS, Node.js and
+JavaScriptCore package versions.
+Driver version 2 runs `node-jitless` by default, accepts `jsc` like the AWFY
+driver (CI adds it through the manifest's `ciReport.engines`), and alternates the engine order from one repetition to the next; each
+sample records its `position` and each target its `executionOrder`
+([ADR 0178](adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
 Workloads without an upstream `validate()` hook are labeled `execution-only`; the
 adapter does not invent a checksum or claim that validation passed. Timeouts,
 crashes, OOMs, missing results, and verification failures remain structurally
@@ -611,13 +691,14 @@ sample so an outer cancellation still leaves diagnostic report data.
 The public Performance Barometer normalizes both external lanes so `1.00×` means
 aligned performance and values above one mean GocciaScript was proportionally
 slower. AWFY uses `Goccia time / reference time`; JetStream uses
-`reference score / Goccia score`. QuickJS and Node.js stay separate reference
-engines. Main publishes JetStream reports under the independent `jetstream/`
+`reference score / Goccia score`. QuickJS, `node --jitless`, JSC (no JIT) and Node.js stay
+separate reference engines, each with its own ratio. Main publishes JetStream reports under the independent `jetstream/`
 Blob namespace, and `/performance` combines their history with AWFY. Daily
 pointers carry the normalized timeline summary, so the dashboard reads retained
 history without downloading every full report; only the latest report is fetched
 for the workload-detail tables. Trend lines break when corpus, subset, driver, or
-reference-engine versions change. Failed runs remain visible as gaps; the most
+reference-engine versions change, and when a summary's `protocolKey` (the
+engine order plus each target's iteration counts) changes. Failed runs remain visible as gaps; the most
 recent complete point is labeled stale instead of being silently carried forward.
 
 ## Web Tooling Goccia Lane

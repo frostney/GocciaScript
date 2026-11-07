@@ -28,13 +28,27 @@ const RANGE_OPTIONS: Array<{
 const SERIES = [
   {
     key: "quickjsRatio",
-    label: "QuickJS reference",
+    label: "QuickJS (interpreter target)",
     color: "var(--perf-quickjs)",
+    dash: undefined,
+  },
+  {
+    key: "nodeJitlessRatio",
+    label: "Node.js --jitless, interpreter-class context",
+    color: "var(--perf-node-jitless)",
+    dash: "6 4",
+  },
+  {
+    key: "jscRatio",
+    label: "JSC (no JIT), interpreter-class context",
+    color: "var(--perf-jsc)",
+    dash: "2 4",
   },
   {
     key: "nodeRatio",
-    label: "Node.js reference",
+    label: "Node.js with JIT (for scale)",
     color: "var(--perf-node)",
+    dash: undefined,
   },
 ] as const;
 
@@ -91,7 +105,7 @@ function pointLabel(point: PerformanceTimelinePoint): string {
   if (!point.complete) {
     return `${dateLabel(point.createdAt)}: incomplete; ${point.failedWorkloadCount} failed workload${point.failedWorkloadCount === 1 ? "" : "s"}`;
   }
-  return `${dateLabel(point.createdAt)}: QuickJS ${ratio(point.quickjsRatio)}, Node.js ${ratio(point.nodeRatio)}`;
+  return `${dateLabel(point.createdAt)}: QuickJS ${ratio(point.quickjsRatio)}, Node.js --jitless ${ratio(point.nodeJitlessRatio)}, JSC (no JIT) ${ratio(point.jscRatio)}, Node.js ${ratio(point.nodeRatio)}`;
 }
 
 function timelineSegments(
@@ -114,6 +128,28 @@ function timelineSegments(
   return segments;
 }
 
+type SeriesKey = (typeof SERIES)[number]["key"];
+
+function seriesRuns(
+  segment: PerformanceTimelinePoint[],
+  key: SeriesKey,
+): Array<Array<{ point: PerformanceTimelinePoint; value: number }>> {
+  const runs: Array<Array<{ point: PerformanceTimelinePoint; value: number }>> =
+    [];
+  let current: Array<{ point: PerformanceTimelinePoint; value: number }> = [];
+  for (const point of segment) {
+    const value = point[key];
+    if (value === null) {
+      if (current.length > 0) runs.push(current);
+      current = [];
+    } else {
+      current.push({ point, value });
+    }
+  }
+  if (current.length > 0) runs.push(current);
+  return runs;
+}
+
 function PerformanceChart({
   suite,
   points,
@@ -133,9 +169,12 @@ function PerformanceChart({
   const padX = 58;
   const padY = 40;
   const values = points.flatMap((point) =>
-    [point.quickjsRatio, point.nodeRatio].filter(
-      (value): value is number => value !== null,
-    ),
+    [
+      point.quickjsRatio,
+      point.nodeJitlessRatio,
+      point.jscRatio,
+      point.nodeRatio,
+    ].filter((value): value is number => value !== null),
   );
   const maximum = Math.max(1, ...values);
   const minimum = Math.min(1, ...values);
@@ -170,9 +209,13 @@ function PerformanceChart({
           id={`${suite}-chart-title`}
         >{`${suiteLabel(suite)} reference ratio over time`}</title>
         <desc id={`${suite}-chart-description`}>
-          QuickJS and Node.js reference ratios on a logarithmic scale. One means
-          aligned; values above one mean Goccia was proportionally slower. Lines
-          break when a run is incomplete or measurement versions change.
+          QuickJS, Node.js --jitless, JSC (no JIT) and Node.js reference ratios
+          on a logarithmic scale. QuickJS is the bar for the interpreter-speed
+          target; Node.js --jitless and JSC with its JIT off are
+          interpreter-class context the target does not count; Node.js with its
+          JIT is shown for scale. One means aligned; values above one mean
+          Goccia was proportionally slower. Lines break when a run is incomplete
+          or measurement versions change.
         </desc>
         {ticks.map((tick) => (
           <g key={tick}>
@@ -196,24 +239,27 @@ function PerformanceChart({
           className="perf-chart-parity"
         />
         {SERIES.flatMap((series) =>
-          segments.map((segment, segmentIndex) => {
-            const path = segment
-              .map((point, index) => {
-                const timelineIndex = pointIndex.get(point.runId) ?? 0;
-                const value = point[series.key];
-                return `${index === 0 ? "M" : "L"} ${x(timelineIndex).toFixed(2)} ${y(value ?? 1).toFixed(2)}`;
-              })
-              .join(" ");
-            return (
-              <path
-                key={`${series.key}-${segmentIndex}`}
-                d={path}
-                fill="none"
-                stroke={series.color}
-                className="perf-chart-line"
-              />
-            );
-          }),
+          segments.flatMap((segment, segmentIndex) =>
+            // A run without this series (an older report) splits the line.
+            seriesRuns(segment, series.key).map((run, runIndex) => {
+              const path = run
+                .map(({ point, value }, index) => {
+                  const timelineIndex = pointIndex.get(point.runId) ?? 0;
+                  return `${index === 0 ? "M" : "L"} ${x(timelineIndex).toFixed(2)} ${y(value).toFixed(2)}`;
+                })
+                .join(" ");
+              return (
+                <path
+                  key={`${series.key}-${segmentIndex}-${runIndex}`}
+                  d={path}
+                  fill="none"
+                  stroke={series.color}
+                  strokeDasharray={series.dash}
+                  className="perf-chart-line"
+                />
+              );
+            }),
+          ),
         )}
         {points.map((point, index) =>
           point.complete ? (
@@ -298,9 +344,13 @@ function LatestMetric({
     <article className="compat-metric perf-metric">
       <span>{suiteLabel(suite)}</span>
       <strong>{point ? ratio(point.quickjsRatio) : "—"}</strong>
-      <small>QuickJS reference</small>
+      <small>QuickJS (interpreter target)</small>
+      <strong>{point ? ratio(point.nodeJitlessRatio) : "—"}</strong>
+      <small>Node.js --jitless, interpreter-class context</small>
+      <strong>{point ? ratio(point.jscRatio) : "—"}</strong>
+      <small>JSC (no JIT), interpreter-class context</small>
       <strong>{point ? ratio(point.nodeRatio) : "—"}</strong>
-      <small>Node.js reference</small>
+      <small>Node.js with JIT (for scale)</small>
       <p>
         {point
           ? `${point.stale ? "Last complete" : "Latest"} · ${dateLabel(point.createdAt)}`
@@ -326,6 +376,8 @@ function TimelineTable({
             <tr>
               <th scope="col">Date</th>
               <th scope="col">QuickJS</th>
+              <th scope="col">Node.js --jitless</th>
+              <th scope="col">JSC (no JIT)</th>
               <th scope="col">Node.js</th>
               <th scope="col">Status</th>
               <th scope="col">Commit</th>
@@ -336,6 +388,8 @@ function TimelineTable({
               <tr key={point.runId}>
                 <th scope="row">{dateLabel(point.createdAt)}</th>
                 <td>{ratio(point.quickjsRatio)}</td>
+                <td>{ratio(point.nodeJitlessRatio)}</td>
+                <td>{ratio(point.jscRatio)}</td>
                 <td>{ratio(point.nodeRatio)}</td>
                 <td>{point.complete ? "Complete" : "Incomplete"}</td>
                 <td>
@@ -368,8 +422,12 @@ function WorkloadTable({
               <th scope="col">Workload</th>
               <th scope="col">Goccia</th>
               <th scope="col">QuickJS</th>
+              <th scope="col">Node.js --jitless</th>
+              <th scope="col">JSC (no JIT)</th>
               <th scope="col">Node.js</th>
               <th scope="col">QJS ratio</th>
+              <th scope="col">Node --jitless ratio</th>
+              <th scope="col">JSC ratio</th>
               <th scope="col">Node ratio</th>
               <th scope="col">Status</th>
             </tr>
@@ -380,8 +438,12 @@ function WorkloadTable({
                 <th scope="row">{target.name}</th>
                 <td>{measurement(target, target.goccia)}</td>
                 <td>{measurement(target, target.quickjs)}</td>
+                <td>{measurement(target, target.nodeJitless)}</td>
+                <td>{measurement(target, target.jsc)}</td>
                 <td>{measurement(target, target.node)}</td>
                 <td>{ratio(target.quickjsRatio)}</td>
+                <td>{ratio(target.nodeJitlessRatio)}</td>
+                <td>{ratio(target.jscRatio)}</td>
                 <td>{ratio(target.nodeRatio)}</td>
                 <td>{target.failure ?? "Complete"}</td>
               </tr>
@@ -430,8 +492,10 @@ export function PerformanceDashboard({
             The first performance target is an interpreter faster than QuickJS:
             both QuickJS geomean ratios (AWFY and JetStream) below 1.00× on
             every shipped platform. This page tracks it on Linux x64 with pinned
-            AWFY and JetStream 3 workloads; Node.js, with its JIT, is shown for
-            scale.
+            AWFY and JetStream 3 workloads. Node.js with --jitless and
+            JavaScriptCore with its JIT off are interpreter-class context
+            comparators that the target does not count; Node.js, with its JIT,
+            is shown for scale.
           </p>
         </div>
         <div className="compat-hero-actions">
@@ -517,8 +581,11 @@ export function PerformanceDashboard({
       </section>
 
       <p className="compat-note">
-        Incomplete runs remain visible as gaps. The last complete measurement is
-        labeled stale rather than carried forward as current.
+        QuickJS is the bar for the interpreter-speed target. Node.js --jitless
+        and JSC with its JIT off are interpreter-class context the target does
+        not count, and Node.js with its JIT is shown for scale. Incomplete runs
+        remain visible as gaps. The last complete measurement is labeled stale
+        rather than carried forward as current.
       </p>
     </div>
   );
