@@ -88,6 +88,23 @@ removed, they fail naming the routine and file. Then:
 3. Copy the reported line for the routine you reviewed into
    `config/win32-safeseh/fpc-3.2.4.manifest`.
 
+These per-routine digests are manifest format 2, whose first line is
+`FPC-SAFESEH 2` ([ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)).
+A format 1 manifest (`FPC-SAFESEH 1`), which pinned whole files, is refused,
+and `--digests` refuses it too, because the helper reads the manifest the same
+way. To migrate one, for example on a branch that predates format 2:
+
+1. Bring the format 2 tooling onto the branch first (merge `main`, which has
+   `safeseh.pas`, `FPCSafeSEH.pas` and the `FPCRoutineSource.pas` locator),
+   keeping the branch's own manifest to migrate; format 1 tooling cannot
+   produce routine digests.
+2. In your working copy, change the manifest's first line to `FPC-SAFESEH 2`.
+   Its whole-file hashes then read as routine digests that do not match.
+3. Run `./safeseh.pas --digests` and review every routine it lists, as in the
+   review steps above.
+4. Replace every `source-nonseh` digest with the reported one before the
+   manifest is used for a build.
+
 Do not refresh a digest you have not reviewed, and do not turn an unknown-name
 refusal into a broad exclusion. A new handler-like routine needs its own entry.
 

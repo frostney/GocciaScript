@@ -18,13 +18,15 @@ and a run can be made deterministic, with a fixed clock and seeded randomness.
 Today the host is a FreePascal or Delphi application; see
 [Embedding the Engine](docs/embedding.md).
 
-[![test262 pass rate on main, live from the compatibility dashboard](https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.gocciascript.dev%2Fapi%2Ftest262%2Fbadge)](https://www.gocciascript.dev/compatibility)
+[![test262 pass rate on main, runs in both modes combined, live from the compatibility dashboard](https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.gocciascript.dev%2Fapi%2Ftest262%2Fbadge)](https://www.gocciascript.dev/compatibility)
 [![CI](https://github.com/frostney/GocciaScript/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/frostney/GocciaScript/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/frostney/GocciaScript?label=release)](https://github.com/frostney/GocciaScript/releases)
 
 - **Conformance you can check.** test262, the official ECMAScript conformance
-  suite, runs on every pull request and on main, and a pull request that turns
-  a passing test into a failure fails CI. The
+  suite, runs on every pull request and on main. When the run produces results
+  and a cached main baseline graded under the same contract is available, a
+  pull request that turns a passing test into a failure other than a timeout,
+  compared in the same mode, fails CI. The
   [compatibility dashboard](https://www.gocciascript.dev/compatibility) shows
   the current result by area, rendered from the published reports.
 - **Tested beyond the spec.** 17,000+ JavaScript tests run on every pull
@@ -95,7 +97,13 @@ presets:
 - `Engine.FunctionConstructor.Enabled` turns on the `Function()` constructor
   (`--unsafe-function-constructor`);
 - `EnableShadowRealm` installs the `ShadowRealm` global
-  (`--unsafe-shadowrealm`).
+  (`--unsafe-shadowrealm`);
+- `EnableEval` installs `eval()`; only an embedder can call it, since no
+  command-line flag or config key turns it on
+  ([ADR 0179](docs/adr/0179-eval-is-an-engine-only-opt-in-installer.md)).
+
+[Embedding — Changing the Defaults](docs/embedding.md#changing-the-defaults)
+documents each knob.
 
 The host also chooses its runtime extensions: `fetch`, `URL`,
 `TextEncoder`/`TextDecoder`, `Blob`, `AbortController` and `EventTarget` today,
@@ -315,7 +323,7 @@ Linux (x64 and arm64) and Windows (x64 and x86):
 curl -fsSL https://www.gocciascript.dev/install | sh
 
 # a pinned version
-curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.16.0 sh
+curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.17.0 sh
 
 # macOS with Homebrew
 brew install frostney/tap/gocciascript

@@ -273,7 +273,7 @@ describe("createSiteMarkdown", () => {
       `${passed} of ${totalRun} runs passing (${compatibilityPercent(passed, totalRun)})`,
     );
     expect(markdown).toContain(
-      "The latest published run, Annex B excluded, has",
+      "The latest published report, Annex B excluded, has",
     );
     expect(markdown).toContain(
       "by area on the compatibility dashboard](/compatibility)",
@@ -318,7 +318,7 @@ describe("createSiteMarkdown", () => {
       },
     });
 
-    expect(markdown).toContain("The latest published run has ");
+    expect(markdown).toContain("The latest published report has ");
     expect(markdown).not.toContain("Annex B excluded");
   });
 

@@ -94,7 +94,7 @@ describe("GocciaScript positioning", () => {
       /non-strict Script semantics/i,
       /embedder opts in through the engine's EnableEval option/i,
       /Annex B.+test262 conformance target/i,
-      /new ones will go behind an opt-in compatibility flag/i,
+      /the ones that already ship stay as they are, always on or behind their existing flags, and new ones will go behind an opt-in Engine\.Compatibility flag/i,
       /all of test262 in every mode test262 requires/i,
       /tracks TC39 proposals, including stage 1 and 2/i,
       /there are no presets/i,

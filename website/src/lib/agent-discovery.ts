@@ -189,13 +189,13 @@ POST JSON to \`/api/test\` with the same fields. The code should contain GocciaS
 
 ## Recommended defaults and compatibility flags
 
-Prefer modern JavaScript forms that GocciaScript supports by default. Compatibility flags exist primarily for ECMAScript conformance and legacy host requirements, so userland examples should enable them only when those semantics are explicitly needed:
+Prefer modern JavaScript forms that GocciaScript supports by default. Compatibility flags are supported customization, not escape hatches; userland examples should still enable them only when they need those semantics:
 
 - Use \`let\` and \`const\`, not \`var\` unless \`compatVar\` is enabled.
 - Use arrow functions, method shorthand, async methods, and class methods; the \`function\` keyword requires \`compatFunction\`.
 - Use \`===\` and \`!==\`, not \`==\` or \`!=\`.
 - Use \`for...of\`, \`for await...of\`, array methods, and iterators by default; traditional \`for\`, \`while\`, and \`do...while\` loops require compatibility flags.
-- Avoid dynamic code and scope-changing forms. Normal runtimes do not install \`eval\`; \`Function()\` requires \`--unsafe-function-constructor\`; \`arguments\` and \`with\` require compatibility flags.
+- Avoid dynamic code and scope-changing forms. The website API never installs \`eval\` (only an embedder can, through the engine's \`EnableEval\` option); \`Function()\` requires \`--unsafe-function-constructor\`; \`arguments\` and \`with\` require compatibility flags.
 - Prefer named ES module imports/exports for internal examples. Default imports/exports, side-effect-only imports, and wildcard re-exports are also supported.
 
 ## Limits

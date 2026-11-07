@@ -437,8 +437,9 @@ suffix overrides one target's inner count, and a target with no protocol runs
 one cold iteration. `--warmup <n>` is different: it runs whole unrecorded
 process repetitions first. The manifest keeps each benchmark's problem size
 (`innerIterations`), runs five warm-up iterations, and runs enough measured
-iterations for QuickJS's window to last about 50 ms or more; `Havlak`, at over
-20 s per Goccia iteration, runs one of each. The 0.5 ms timer floor applies to
+iterations for QuickJS's window to last about 50 ms or more on a 2022 laptop
+core (100 times the 0.5 ms floor); `Havlak`, at over 20 s per Goccia
+iteration, runs one of each. The 0.5 ms timer floor applies to
 the window, so a row's per-iteration time can be far below it.
 
 Engines alternate their order by default (`--engine-order alternate`): the

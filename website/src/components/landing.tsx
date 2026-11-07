@@ -549,8 +549,7 @@ console.log("total:", total);`;
           constructs (<code className={inlineCodeClass}>var</code>,{" "}
           <code className={inlineCodeClass}>==</code>,{" "}
           <code className={inlineCodeClass}>with</code>) unless their explicit
-          compatibility flags are enabled. Normal runtimes do not install{" "}
-          <code className={inlineCodeClass}>eval</code>.
+          compatibility flags are enabled.
         </>
       ),
       docId: "language",
@@ -840,7 +839,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript for?",
     answer:
-      "It is an ECMAScript engine for embedding: an application adds scripting by embedding it, installs the runtime surface it needs, and grants capabilities explicitly. Different hosts get runtime extensions for their use case: a virtual filesystem, Node.js compatibility to a degree, and web-standard APIs, with the ones React server rendering relies on planned and none of them shipped yet. GocciaRunner's sandbox mode, a runtime for code that AI agents generate, is a reference host built on the same capability model.",
+      "It is an ECMAScript engine for embedding: an application adds scripting by embedding it, installs the runtime surface it needs, and grants capabilities explicitly. Different hosts get runtime extensions for their use case: a virtual filesystem, Node.js compatibility to a degree, and web-standard APIs (fetch, URL, TextEncoder/TextDecoder, Blob, AbortController and EventTarget today, with the ones React server rendering relies on, such as MessageChannel, ReadableStream and crypto, planned). GocciaRunner's sandbox mode, a runtime for code that AI agents generate, is a reference host built on the same capability model.",
   },
   {
     question: ECMASCRIPT_SCOPE_QUESTION,
@@ -1038,7 +1037,7 @@ export function Landing({
                   fails the pull request.{" "}
                   {compatibility ? (
                     <>
-                      The latest published run
+                      The latest published report
                       {compatibility.annexBIncluded
                         ? ""
                         : ", Annex B excluded,"}{" "}
@@ -1229,11 +1228,14 @@ export function Landing({
                 </table>
               </section>
               <p className="compat-note">
-                Compatibility flags primarily serve ECMAScript conformance and
-                existing code. Dynamic source exposure is separate: normal hosts
-                do not install <code className={inlineCodeClass}>eval</code>,
-                and <code className={inlineCodeClass}>Function()</code> requires
-                the explicit{" "}
+                Compatibility flags are supported customization: each turns on
+                an implemented form the recommended profile leaves out. Dynamic
+                source exposure is separate:{" "}
+                <code className={inlineCodeClass}>eval</code> is installed only
+                when an embedder opts in through the engine&apos;s{" "}
+                <code className={inlineCodeClass}>EnableEval</code> option, and{" "}
+                <code className={inlineCodeClass}>Function()</code> requires the
+                explicit{" "}
                 <code className={inlineCodeClass}>
                   --unsafe-function-constructor
                 </code>{" "}

@@ -227,9 +227,10 @@ export function Install({
                 Get Goccia<em>Script</em> on your machine.
               </h1>
               <p>
-                Pick the install method that fits your platform. The runtime is
-                a single self-contained binary — no Node.js, no toolchain, no
-                global state.
+                Pick the install method that fits your platform. Each release
+                ships native binaries with GocciaScript&apos;s own compiler, VM
+                and garbage collector, and no Node.js or other runtime
+                underneath.
               </p>
             </div>
           </div>

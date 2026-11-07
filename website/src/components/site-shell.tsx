@@ -180,7 +180,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
                       <Link
                         className="nav-conformance"
                         href="/compatibility"
-                        aria-label={`test262 ${conformancePercent}: live pass rate on main. Open the compatibility dashboard`}
+                        aria-label={`test262 ${conformancePercent}: live pass rate on main, runs in both modes combined. Open the compatibility dashboard`}
                       >
                         test262 {conformancePercent}
                       </Link>
