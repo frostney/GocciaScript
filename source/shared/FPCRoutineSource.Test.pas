@@ -779,15 +779,23 @@ begin
       'absolute' + PathDelim + 'search.inc:1: included text outside');
     Refuse(Including(Absolute + 'missing.inc'), ROUTINE_SECTION, 'include file not found');
     Remove;
-    if FileNameCaseSensitive then
+    // FPC also tries the lowercased and uppercased name. macOS and Windows
+    // volumes usually ignore case, so the spellings name one file there.
+    Put(Local + 'search.inc', CLOSES_BLOCK);
+    if FileExists(Local + 'SEARCH.INC') then
     begin
-      // FPC also tries the lowercased and uppercased name.
-      Put(Local + 'search.inc', CLOSES_BLOCK);
+      // The spelling as written is tried first and opens the one file.
+      Refuse(Including('Search.inc'), ROUTINE_SECTION, 'Search.inc:1: included text outside');
+      Put(Local + 'Search.inc', NEUTRAL);
+      Expect<string>(Locate(Including('Search.inc'), ROUTINE_SECTION).Digest).ToBe(Digest(ROUTINE_TEXT));
+    end
+    else
+    begin
       Refuse(Including('Search.inc'), ROUTINE_SECTION, 'search.inc:1: included text outside');
       Put(Local + 'Search.inc', NEUTRAL);
       Refuse(Including('Search.inc'), ROUTINE_SECTION, 'include Search.inc names different files');
-      Remove;
     end;
+    Remove;
     // Names whose file FPC derives from elsewhere are refused.
     Refuse(Including('*.inc'), ROUTINE_SECTION, 'unsupported include name');
     Refuse(Including('search.'), ROUTINE_SECTION, 'unsupported include name');

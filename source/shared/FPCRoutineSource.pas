@@ -1023,9 +1023,12 @@ end;
 // an extension, with .inc, .pp and .pas. For each it searches the
 // includer's directory, the compiler's working directory, any
 // {$INCLUDEPATH}, then each -Fi directory, or only the named directory of an
-// absolute name. On a case-sensitive file system it tries each path as
-// written, lowercased, then uppercased. Every candidate is checked, and all
-// that exist must hold the same bytes, so FPC's choice cannot change the text.
+// absolute name. On Linux and Darwin it tries each path as written,
+// lowercased, then uppercased. Every candidate is checked, and all that exist
+// must hold the same bytes, so FPC's choice cannot change the text. On a
+// case-insensitive file system the spellings name one file; the included
+// text is never part of a digest, so the spelling found first only changes
+// the path an error names.
 function ResolveInclude(const AIncluder: string; const ADirective: TDirective;
   const AIncludeDirectories: array of string): string;
 const
@@ -1066,14 +1069,13 @@ begin
       Continue;
     for Directory in Directories do
     begin
-      SetLength(Variants, 1);
+      // FPC tries all three on Linux and Darwin, which it treats as case
+      // sensitive even on a case-insensitive volume, and only the first on
+      // Windows. Trying all three everywhere is a superset of FPC's search.
+      SetLength(Variants, 3);
       Variants[0] := Name + Extension;
-      if FileNameCaseSensitive then
-      begin
-        SetLength(Variants, 3);
-        Variants[1] := LowerCase(Name + Extension);
-        Variants[2] := UpperCase(Name + Extension);
-      end;
+      Variants[1] := LowerCase(Name + Extension);
+      Variants[2] := UpperCase(Name + Extension);
       for Variant in Variants do
       begin
         Candidate := ExpandFileName(Directory + Variant);

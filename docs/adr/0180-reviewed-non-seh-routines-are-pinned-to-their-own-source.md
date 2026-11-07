@@ -45,8 +45,9 @@ whenever it cannot be sure the text it hashes is the text that was compiled:
   as FPC 3.2.4 searches it. FPC tries the name, then `.inc`, `.pp` and
   `.pas`. For each, it looks beside the includer, then in the compiler's
   working directory, then in `source/units`, `source/shared` and `souffle`
-  (the `-Fi` directories of `config.cfg` and CI). On a case-sensitive file
-  system it also tries the lowercased and uppercased name. An absolute name
+  (the `-Fi` directories of `config.cfg` and CI). On Linux and macOS it also
+  tries the lowercased and uppercased name, which the locator tries on every
+  host. An absolute name
   is read only from its own directory. The working directory is the
   repository root for `build.pas`, and the unit directory that
   `compile-programs.py` passes to `--apply`. If a name matches files with
