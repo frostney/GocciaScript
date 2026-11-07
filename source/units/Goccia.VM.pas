@@ -1055,6 +1055,15 @@ begin
       PGocciaInstructionLimitState(APolls^.InstructionLimitState));
 end;
 
+{ One element of a spread of a native array: the polls an armed run makes,
+  and a unit of the instruction budget, which no dispatched instruction has
+  counted. }
+procedure SpendSpreadBudget(const APolls: PGocciaThreadPolls);
+begin
+  IncrementInstructionCounter;
+  RunArmedPolls(APolls);
+end;
+
 function BytecodeFunctionIntrinsicKind(const ATemplate: TGocciaFunctionTemplate):
   TGocciaFunctionObjectIntrinsicKind; {$IFDEF FPC}inline;{$ENDIF}
 begin
@@ -10479,7 +10488,12 @@ begin
           (I < Min(SourceArray.StoredLength, High(Integer))) do
     begin
       if Polls^.Any <> 0 then
-        RunArmedPolls(Polls);
+      begin
+        // The spread of a huge array is native work no instruction counts, so
+        // it spends the budget itself (the chokepoint rule in Goccia.Timeout).
+        // Out of line, so that the unarmed loop is the code it always was.
+        SpendSpreadBudget(Polls);
+      end;
       Target.Add(ArrayIteratorValueAt(SourceArray, I));
       Inc(I);
     end;

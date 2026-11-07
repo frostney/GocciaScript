@@ -46,6 +46,13 @@ type
       that never arrives, so the poll runs and TimeoutArmed stays the one
       mirror. }
     AbortRequested: PLongInt;
+    { True while an instruction budget is active on this thread
+      (Goccia.InstructionLimit). Like an armed abort it gives a thread with no
+      deadline the placeholder one, so that CheckExecutionTimeout, the poll of
+      every native loop, reaches its slow path and spends the budget there. }
+    BudgetArmed: Boolean;
+    // Polls of native loops since the budget was last spent.
+    NativeCounter: Integer;
   end;
   PGocciaTimeoutPollState = ^TGocciaTimeoutPollState;
 
@@ -105,6 +112,11 @@ function RemainingExecutionTimeoutMilliseconds: Integer;
   word stays valid until DisarmTimeoutAbort, on the same thread. }
 procedure ArmTimeoutAbort(const AAbortRequested: PLongInt);
 procedure DisarmTimeoutAbort;
+{ For Goccia.InstructionLimit alone: whether an instruction budget is active on
+  the calling thread. While it is, CheckExecutionTimeout spends one unit of it
+  per poll of a native loop, so a budget (like a deadline) ends a loop that no
+  dispatched instruction counts. }
+procedure SetTimeoutBudgetArmed(const AArmed: Boolean);
 
 implementation
 
@@ -168,10 +180,11 @@ begin
       Poll^.DurationMs := GTimeoutStack[I].DurationMs;
     end;
   end;
-  if (Poll^.DeadlineNs = 0) and (Poll^.AbortRequested <> nil) then
+  if (Poll^.DeadlineNs = 0) and
+     ((Poll^.AbortRequested <> nil) or Poll^.BudgetArmed) then
   begin
-    // Abort only: nothing to read the clock for, so poll the request word at
-    // the same rate as a long deadline.
+    // Abort or budget only: nothing to read the clock for, so poll the request
+    // word, and spend the budget, at the same rate as a long deadline.
     Poll^.DeadlineNs := ABORT_ONLY_DEADLINE_NS;
     Poll^.CheckMask := TIMEOUT_CHECK_INTERVAL - 1;
   end
@@ -254,8 +267,27 @@ begin
 end;
 
 procedure CheckExecutionTimeout;
+var
+  Poll: PGocciaTimeoutPollState;
 begin
-  PollExecutionTimeout(@GTimeoutPoll);
+  Poll := @GTimeoutPoll;
+  if Poll^.DeadlineNs <> 0 then
+  begin
+    Inc(Poll^.CheckCounter);
+    if (Poll^.CheckCounter and Poll^.CheckMask) = 0 then
+      CheckExecutionTimeoutDeadline(Poll);
+    { The polls of a native loop are the elements it has walked: one unit of
+      the instruction budget each, the chokepoint rule for every limit. Counted
+      apart from the deadline's counter, which allocations and calls share, so
+      that a loop that polls on every other count is not always the caller that
+      misses the sample. }
+    if Poll^.BudgetArmed then
+    begin
+      Inc(Poll^.NativeCounter);
+      if (Poll^.NativeCounter and (TIMEOUT_CHECK_INTERVAL - 1)) = 0 then
+        SpendInstructions(TIMEOUT_CHECK_INTERVAL);
+    end;
+  end;
 end;
 
 procedure CheckExecutionTimeoutNow;
@@ -297,6 +329,16 @@ begin
   if GTimeoutPoll.AbortRequested = nil then
     Exit;
   GTimeoutPoll.AbortRequested := nil;
+  RecomputeMinDeadline;
+end;
+
+procedure SetTimeoutBudgetArmed(const AArmed: Boolean);
+begin
+  // Every start or clear of a budget begins a fresh sample.
+  GTimeoutPoll.NativeCounter := 0;
+  if GTimeoutPoll.BudgetArmed = AArmed then
+    Exit;
+  GTimeoutPoll.BudgetArmed := AArmed;
   RecomputeMinDeadline;
 end;
 

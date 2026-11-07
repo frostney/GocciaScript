@@ -16,7 +16,9 @@
 
     TimeoutArmed            Goccia.Timeout: a scope with a deadline is active
                             (the soonest deadline is not 0), or an abort
-                            handle is armed and the deadline is a placeholder.
+                            handle or an instruction budget is armed and the
+                            deadline is a placeholder, so that a native loop's
+                            CheckExecutionTimeout reaches its slow path.
     InstructionLimitActive  Goccia.InstructionLimit: the state's Active flag.
 
   An armed abort handle (Goccia.ExecutionAbort) sets both of them, with no

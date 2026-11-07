@@ -524,6 +524,8 @@ begin
           IterResult := Iterator.AdvanceNext;
           while not IteratorResultDone(IterResult) do
           begin
+            // An iterable of script-controlled length: the chokepoint rule.
+            CheckExecutionTimeout;
             KValue := IteratorResultValue(IterResult);
             try
               if Mapping then
@@ -569,6 +571,7 @@ begin
             // Step 12: Iterate array-like
             for K := 0 to Len - 1 do
             begin
+              CheckExecutionTimeout;
               // Step 12b: Let kValue = Get(arrayLike, Pk)
               KValue := ArrayLike.GetProperty(IntToStr(K));
               if not Assigned(KValue) then
