@@ -625,12 +625,6 @@ const DEFAULT_TOKENS = [
   "Temporal.Instant",
   "JSON.parse",
   "JSON.stringify",
-  "JSON5.parse",
-  "TOML.parse",
-  "YAML.parse",
-  "CSV.parse",
-  "TSV.parse",
-  "JSONL.parse",
 ];
 
 const TEST_TOKENS = [

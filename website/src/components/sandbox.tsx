@@ -693,11 +693,10 @@ export function Sandbox({
           <p>
             GocciaRunner&apos;s sandbox mode is a reference host built on the
             engine&apos;s capability model. Provide AI-agent scripts with
-            explicit data, modules, capabilities, and limits. Filesystem
-            workflows use GocciaRunner&apos;s sandbox mode: host paths are
-            copied into a virtual filesystem, sandbox writes stay in that
-            filesystem, and the host receives structured output plus explicit
-            diffs.
+            explicit data, modules, capabilities, and limits. In filesystem
+            workflows, host paths are copied into a virtual filesystem, sandbox
+            writes stay in that filesystem, and the host receives structured
+            output plus explicit diffs.
           </p>
         </div>
 

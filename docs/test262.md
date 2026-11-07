@@ -451,9 +451,10 @@ conformance failures, not as wrapper-infra failures.
 
 Every test runs with ASI, `var`, `function` declarations, traditional `for`,
 `while`/`do...while`, loose equality, labels, `for...in`, implicit
-`arguments` objects, and non-strict Script semantics (`--compat-non-strict-mode`)
-enabled, because test262 uses those forms across both
-harness helpers and test bodies. That flag set is `TEST262_COMPATIBILITY` in
+`arguments` objects, and non-strict Script semantics
+(`--compat-non-strict-mode`) enabled, because test262 uses those forms across
+both harness helpers and test bodies
+([ADR 0175](adr/0175-test262-harness-includes-are-separate-non-strict-scripts.md)). That flag set is `TEST262_COMPATIBILITY` in
 `GocciaTest262Runner.dpr`, and `--eval-host` probes use it too. The test's source type and
 strictness still decide strict-mode semantics; `--compat-arguments-object`
 only enables the implicit `arguments` binding. Strictness and parameter-list

@@ -549,10 +549,7 @@ console.log("total:", total);`;
           constructs (<code className={inlineCodeClass}>var</code>,{" "}
           <code className={inlineCodeClass}>==</code>,{" "}
           <code className={inlineCodeClass}>with</code>) unless their explicit
-          compatibility flags are enabled.{" "}
-          <code className={inlineCodeClass}>eval</code> is installed only when
-          an embedder opts in through the engine&apos;s{" "}
-          <code className={inlineCodeClass}>EnableEval</code> option.
+          compatibility flags are enabled.
         </>
       ),
       docId: "language",
@@ -842,7 +839,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript for?",
     answer:
-      "It is an ECMAScript engine for embedding: an application adds scripting by embedding it, installs the runtime surface it needs, and grants capabilities explicitly. Different hosts get runtime extensions for their use case: a virtual filesystem, Node.js compatibility to a degree, and web-standard APIs: fetch, URL, TextEncoder/TextDecoder, Blob, AbortController and EventTarget today, with the ones React server rendering relies on, such as MessageChannel, ReadableStream and crypto, planned. GocciaRunner's sandbox mode, a runtime for code that AI agents generate, is a reference host built on the same capability model.",
+      "It is an ECMAScript engine for embedding: an application adds scripting by embedding it, installs the runtime surface it needs, and grants capabilities explicitly. Different hosts get runtime extensions for their use case: a virtual filesystem, Node.js compatibility to a degree, and web-standard APIs (fetch, URL, TextEncoder/TextDecoder, Blob, AbortController and EventTarget today, with the ones React server rendering relies on, such as MessageChannel, ReadableStream and crypto, planned). GocciaRunner's sandbox mode, a runtime for code that AI agents generate, is a reference host built on the same capability model.",
   },
   {
     question: ECMASCRIPT_SCOPE_QUESTION,
@@ -1235,8 +1232,7 @@ export function Landing({
                 whole of ECMAScript. Dynamic source exposure is separate:{" "}
                 <code className={inlineCodeClass}>eval</code> is installed only
                 when an embedder opts in through the engine&apos;s{" "}
-                <code className={inlineCodeClass}>EnableEval</code> option, with
-                no CLI flag or config key, and{" "}
+                <code className={inlineCodeClass}>EnableEval</code> option, and{" "}
                 <code className={inlineCodeClass}>Function()</code> requires the
                 explicit{" "}
                 <code className={inlineCodeClass}>

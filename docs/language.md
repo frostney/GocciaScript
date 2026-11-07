@@ -779,7 +779,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 - A semicolon is inserted before `}` or at EOF
 - Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules
 - Only a newline between two tokens counts, including one inside a multi-line comment. A newline inside a token, such as a multi-line template literal or a string's line continuation, is part of that token: `return`, `throw` or `yield` followed on the same line by a template that spans lines returns, throws or yields the template
-- With or without ASI, a line break between `yield` and `*` or before an arrow function's `=>` is a `SyntaxError`, and a line break after `async` before a method name or `*` makes `async` a property name rather than an async method's prefix: an object literal then needs a comma, and in a class body it is a field named `async` that ASI ends. A parameter list on the next line still continues the element, because ASI never ends a valid parameter list: `async⏎() {}` in a class body is a method named `async`
+- With or without ASI, a line break between `yield` and `*` or before an arrow function's `=>` is a `SyntaxError`, and a line break after `async` before a method name or `*` makes `async` a property name rather than an async method's prefix: an object literal then needs a comma, and in a class body it is a field named `async` that ASI ends. A parameter list on the next line still continues the element, because `(` may follow the name `async` and so no semicolon is inserted before it: `async⏎() {}` in a class body is a method named `async`
 
 ### Traditional `for(init; test; update)` Loop
 

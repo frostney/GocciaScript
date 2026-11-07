@@ -459,7 +459,7 @@ The Runner mode, enabled by `--sandbox`, a copy input, or a trusted `sandbox` co
 _Avoid_: Sandbox Runner, `GocciaSandboxRunner`.
 
 **Reference host**:
-A host the project ships as an example of what an embedder can build on the engine's capability model and runtime extensions. Sandbox mode is the reference host for code that AI agents generate; it is neither the limit of the engine nor its primary audience.
+A host the project ships as an example of what an embedder can build on the engine's capability model and runtime extensions; it is neither the limit of the engine nor its primary audience. Sandbox mode is one.
 _Avoid_: Primary product, headline, agent runtime.
 
 **Install mode**:
@@ -499,7 +499,7 @@ A JavaScript-visible hook exposed on the `Goccia` namespace only by the dedicate
 _Avoid_: Runtime global, compatibility flag.
 
 **test262 run**:
-One execution of one test262 file in one test262 mode. A file that allows both modes has two runs, non-strict then strict, and report pass, fail and timeout counts count runs, not files.
+One execution of one test262 file in one test262 mode. A file that allows both modes has two runs, non-strict then strict, and a report's pass, fail and timeout counts are counts of runs, not of files.
 _Avoid_: Test or case when counting results.
 
 **test262 mode**:
@@ -523,23 +523,19 @@ The public view of GocciaScript performance against selected reference engines u
 _Avoid_: Leaderboard, competitor ranking.
 
 **Reference engine**:
-An independently developed JavaScript engine or runtime measured beside GocciaScript to provide external scale and trend context. A reference engine is not assumed to share GocciaScript's goals or constraints. QuickJS is also the comparator the first performance target is judged against ([ADR 0176](docs/adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)).
-_Avoid_: Competitor, baseline engine.
-
-**Comparator**:
-A reference engine that GocciaScript gets its own reference ratio against in the Performance Barometer. QuickJS is the target-1 comparator; JIT-enabled Node.js is shown for scale only.
-_Avoid_: Competitor, target engine.
+An independently developed JavaScript engine or runtime measured beside GocciaScript, each with its own reference ratio, to provide external scale and trend context; benchmark reports and ADRs also call it a comparator. A reference engine is not assumed to share GocciaScript's goals or constraints.
+_Avoid_: Competitor, baseline engine, target engine.
 
 **Interpreter-class comparator**:
-A comparator that runs with its JIT disabled, `node --jitless` or `jsc --useJIT=false`. It gives interpreter-to-interpreter context, and the first performance target does not count it ([ADR 0178](docs/adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
+A reference engine that runs with its JIT disabled, `node --jitless` or `jsc --useJIT=false`. It gives interpreter-to-interpreter context, and the first performance target does not count it ([ADR 0178](docs/adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
 _Avoid_: Target engine.
 
 **Warm timing**:
-The AWFY protocol that times a window of measured iterations after in-process warm-up iterations, so a sample is the steady-state time of one iteration. The first warm-up iteration is kept as the cold figure, which no ratio uses.
+The AWFY protocol that times a window of measured iterations after in-process warm-up iterations, so a sample is the steady-state time of one iteration. The first warm-up iteration is kept as the cold figure, which no ratio uses ([ADR 0178](docs/adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
 _Avoid_: Cold sample, single-call timing.
 
 **Alternating engine order**:
-The benchmark repetition scheme in which each repetition runs the engines in the reverse order of the one before, so over an even number of repetitions each engine of a pair runs first equally often.
+The benchmark repetition scheme in which each repetition runs the engines in the reverse order of the one before, so over an even number of repetitions each engine of a pair runs first equally often ([ADR 0178](docs/adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
 _Avoid_: Randomized order, fixed order.
 
 **Reference ratio**:

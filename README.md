@@ -96,9 +96,12 @@ presets:
   (`--unsafe-function-constructor`);
 - `EnableShadowRealm` installs the `ShadowRealm` global
   (`--unsafe-shadowrealm`);
-- `EnableEval` installs the `eval()` global, through the engine API only, with
-  no command-line flag or config key
+- `EnableEval` installs `eval()`; only an embedder can call it, since no
+  command-line flag or config key turns it on
   ([ADR 0179](docs/adr/0179-eval-is-an-engine-only-opt-in-installer.md)).
+
+[Embedding — Changing the Defaults](docs/embedding.md#changing-the-defaults)
+documents each knob.
 
 The host also chooses its runtime extensions: `fetch`, `URL`,
 `TextEncoder`/`TextDecoder`, `Blob`, `AbortController` and `EventTarget` today,

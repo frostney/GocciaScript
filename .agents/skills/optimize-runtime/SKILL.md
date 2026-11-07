@@ -24,10 +24,10 @@ opt-in baseline JIT, and a compiled executable.
 
 ## Establish the experiment
 
-1. Read `.agent/HANDOFF.md` when it exists, `VISION.md` (its Performance section
-   states the ADR 0176 targets), `CONTEXT.md`, the
-   hot-path policy in `docs/contributing/code-style.md` and
-   `docs/core-patterns.md`, `docs/testing.md`, `docs/benchmarks.md`,
+1. Read `.agent/HANDOFF.md` when it exists, `VISION.md` (its Performance
+   section states the ADR 0176 targets), `CONTEXT.md`, the hot-path policy
+   in `docs/contributing/code-style.md` and `docs/core-patterns.md`,
+   `docs/testing.md`, `docs/benchmarks.md`,
    `docs/profiling.md`, `docs/bytecode-vm.md`, and the ADRs governing the
    affected seam (especially 0005, 0065, 0076, 0081, 0087, 0088, 0091, 0138,
    0176, 0178).
