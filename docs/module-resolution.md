@@ -331,9 +331,14 @@ or Rollup with `@rollup/plugin-commonjs`) and run the output with the
 compatibility flags, since the default profile rejects bundler output. For a
 CommonJS entry point esbuild emits only a default export (`export default
 require_x()`), so a consumer that uses named imports needs a small ESM wrapper
-that re-exports the names it wants from that default. A package that needs a
-Node built-in is not solved that way; see
-[VISION](../VISION.md#what-gocciascript-is-not).
+that re-exports the names it wants from that default. The converted output is
+module code, which is always strict, so a package that relies on non-strict
+behaviour (such as mapped `arguments`) can behave differently after
+conversion. esbuild targets the browser platform by default, so a dependency
+can resolve to a browser build that expects a DOM; choose the bundler's
+platform and conditions to suit the host (the bundler's own documentation
+covers these options). A package that needs a Node built-in is not solved that
+way; see [VISION](../VISION.md#what-gocciascript-is-not).
 
 ## Runtime code frames
 
