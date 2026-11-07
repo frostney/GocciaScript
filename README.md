@@ -7,8 +7,9 @@ A drop of JavaScript, built for embedding.
 GocciaScript is an ECMAScript engine for embedding, with sensible defaults that
 are easy to customize. An application embeds it to add scripting: the host
 chooses the runtime surface, grants the capabilities a script may use, and
-bounds a run by time, instructions and memory. A script sees no filesystem,
-network or process unless the host grants it
+bounds a run by time, instructions and memory. Beyond the files of its own
+project's static module graph, a script reaches no filesystem, network or
+process unless the host grants it
 ([permissions](docs/permissions.md), [capability audit events](docs/capability-audit.md)),
 and a run can be made deterministic, with a fixed clock and seeded randomness.
 Today the host is a FreePascal or Delphi application; see
