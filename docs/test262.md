@@ -8,9 +8,10 @@ errors.
 ## What test262 is, and why we run it
 
 [test262](https://github.com/tc39/test262) is the TC39-maintained
-conformance suite for ECMAScript. ~52K tests cover every observable
-behavior in the language and built-ins, plus Intl, staging proposals,
-and the harness itself. We run it as an indicator metric and regression
+conformance suite for ECMAScript. Over 50,000 test files, most of them
+run twice (non-strict and strict), cover every observable behavior in
+the language and built-ins, plus Annex B, Intl, staging proposals, and
+the harness itself. We run it as an indicator metric and regression
 signal to track which spec corners GocciaScript implements, where the
 engine diverges, and how each PR moves those numbers. The generated
 reports are the source of truth for ECMAScript compatibility status.
@@ -449,8 +450,9 @@ GocciaScript still does not provide and fail naturally as ordinary
 conformance failures, not as wrapper-infra failures.
 
 Every test runs with ASI, `var`, `function` declarations, traditional `for`,
-`while`/`do...while`, loose equality, labels, `for...in`, and implicit
-`arguments` objects enabled, because test262 uses those forms across both
+`while`/`do...while`, loose equality, labels, `for...in`, implicit
+`arguments` objects, and non-strict Script semantics (`--compat-non-strict-mode`)
+enabled, because test262 uses those forms across both
 harness helpers and test bodies. That flag set is `TEST262_COMPATIBILITY` in
 `GocciaTest262Runner.dpr`, and `--eval-host` probes use it too. The test's source type and
 strictness still decide strict-mode semantics; `--compat-arguments-object`

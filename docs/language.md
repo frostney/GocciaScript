@@ -442,7 +442,7 @@ The transformer generates an internal source map for accurate error line/column 
 - Flags: `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
 - RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`, `unicodeSets`, `hasIndices`
 - Match indices through the `d` flag, exposed as UTF-16 code unit `[start, end]` pairs on `match.indices` and `match.indices.groups`
-- `RegExp.escape()` (ES2026)
+- `RegExp.escape()` (ES2025)
 - Named capture group names are validated as identifier-name code points. Duplicate named capture groups may appear in different alternatives of a disjunction (`|`), e.g., `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property returns the value from whichever alternative participated, and `\k<name>` backreferences resolve to the correct group within each alternative.
 - `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
 - String integrations for `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search`, including custom protocol objects with the corresponding well-known symbol methods
@@ -779,7 +779,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 - A semicolon is inserted before `}` or at EOF
 - Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules
 - Only a newline between two tokens counts, including one inside a multi-line comment. A newline inside a token, such as a multi-line template literal or a string's line continuation, is part of that token: `return`, `throw` or `yield` followed on the same line by a template that spans lines returns, throws or yields the template
-- With or without ASI, a line break between `yield` and `*` or before an arrow function's `=>` is a `SyntaxError`, and a line break after `async` before a method name or `*` makes `async` a property name rather than an async method's prefix: an object literal then needs a comma, and in a class body it is a field named `async` that ASI ends
+- With or without ASI, a line break between `yield` and `*` or before an arrow function's `=>` is a `SyntaxError`, and a line break after `async` before a method name or `*` makes `async` a property name rather than an async method's prefix: an object literal then needs a comma, and in a class body it is a field named `async` that ASI ends. A parameter list on the next line still continues the element, because ASI never ends a valid parameter list: `async⏎() {}` in a class body is a method named `async`
 
 ### Traditional `for(init; test; update)` Loop
 

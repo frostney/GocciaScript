@@ -72,7 +72,11 @@ source-nonseh ../../source/units/Goccia.VM.pas <sha256> .text.n_goccia.vm$_$tgoc
 
 The digest covers the routine from its header through the semicolon after its
 final `end`, with line endings normalised to LF. Edits elsewhere in the file
-need no manifest change. When the routine itself changes, finalization and
+need no manifest change. These per-routine digests are manifest format 2,
+whose first line is `FPC-SAFESEH 2` ([ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)).
+A format 1 manifest (`FPC-SAFESEH 1`), which pinned whole files, is refused
+with a message to migrate its entries with `./safeseh.pas --digests`, not read
+as routine digests. When the routine itself changes, finalization and
 `--check` fail naming the routine, file and lines; when it is renamed or
 removed, they fail naming the routine and file. Then:
 
