@@ -597,7 +597,7 @@ EnableEval(Engine);
 
 ## Injecting Custom Globals
 
-You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly.
+You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly. The capability set governs only the access the engine makes itself, such as `fetch`, imports and FFI; a function you inject is host code that the engine does not check, so authorize what it reaches yourself.
 
 ### Injecting a Value
 
