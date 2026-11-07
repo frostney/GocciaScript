@@ -7,7 +7,10 @@ A drop of JavaScript, built for embedding.
 GocciaScript is an ECMAScript engine for embedding, with sensible defaults that
 are easy to customize. An application embeds it to add scripting: the host
 chooses the runtime surface, grants the capabilities a script may use, and
-bounds a run by time, instructions and memory. Beyond the files of its own
+bounds a run by time, instructions and a memory budget. The budget gates
+allocations and does not cap resident memory, so a hard ceiling also needs an
+operating-system limit
+([Garbage Collector](docs/garbage-collector.md#gated-growth-points)). Beyond the files of its own
 project's static module graph, a script reaches no filesystem, network or
 process unless the host grants it
 ([permissions](docs/permissions.md), [capability audit events](docs/capability-audit.md)),
@@ -72,9 +75,15 @@ environment.
 Native hosts can embed GocciaScript to run portable JavaScript with
 application-specific globals, modules, capabilities, and limits. A host can
 answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
-mark sandbox paths read-only, stop a run from another thread through an
-[abort handle](docs/embedding.md#aborting-a-run-from-another-thread), and snapshot a paused run's heap to restore it in
-a fresh engine ([Heap Snapshots](docs/heap-snapshots.md)). See
+mark sandbox paths read-only, and stop a run from another thread through an
+[abort handle](docs/embedding.md#aborting-a-run-from-another-thread). A stop
+takes effect at the engine's next check, so a native call blocked outside the
+engine is not interrupted until it returns; give such calls their own deadlines
+or isolate the process. A host can also snapshot the object graphs the snapshot
+codecs cover and restore them in a fresh engine. A graph it cannot write is
+refused, and the host resumes by replay instead; a run paused at a checkpoint
+still holds pending promises with no codec, so its snapshot is refused today
+([Heap Snapshots](docs/heap-snapshots.md)). See
 [Embedding the Engine](docs/embedding.md).
 
 An engine starts with the recommended language profile and without dynamic code
