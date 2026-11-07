@@ -54,6 +54,7 @@ type
     procedure TestSourceBinding;
     procedure TestRoutineDigestReport;
     procedure TestReviewedManifest;
+    procedure TestUnreadableSource;
     procedure TestStagedProject;
     procedure TestProjectProvenance;
     procedure TestProgramAndMethodNames;
@@ -191,6 +192,7 @@ begin
   Test('binds ordinary source exclusions to their routine''s reviewed text and owner', TestSourceBinding);
   Test('reports current routine digests for review', TestRoutineDigestReport);
   Test('pins every reviewed routine of the repository manifest to its current text', TestReviewedManifest);
+  Test('reports an unreadable source as an error and still fails verification', TestUnreadableSource);
   Test('validates source-bound receipts after project scratch cleanup', TestStagedProject);
   Test('requires source identity and build-owned output provenance', TestProjectProvenance);
   Test('refuses program, static method and nested handler definitions and aliases', TestProgramAndMethodNames);
@@ -470,6 +472,67 @@ begin
     Expect<Boolean>(Reviewed).ToBe(True);
   finally
     Report.Free;
+  end;
+end;
+
+// A source held with an exclusive share lock cannot be opened for reading.
+procedure TFPCSafeSEHTests.TestUnreadableSource;
+const
+  SECOND_SECTION = '.text.n_second_$$_ordinaryhandler';
+var
+  SourcePath, SecondPath, Entry, SecondEntry, Message: string;
+  Lock, Probe: TFileStream;
+  Report: TStringList;
+  Enforced, Accepted, Raised: Boolean;
+begin
+  SourcePath := FDirectory + PathDelim + 'source' + PathDelim + 'shared' + PathDelim + 'ordinary.pas';
+  SecondPath := FDirectory + PathDelim + 'source' + PathDelim + 'shared' + PathDelim + 'second.pas';
+  Entry := 'source-nonseh ../../source/shared/ordinary.pas ' + TextDigest(ROUTINE_TEXT) + ' ' + SOURCE_SECTION;
+  SecondEntry := 'source-nonseh ../../source/shared/second.pas ' + TextDigest(ROUTINE_TEXT) + ' ' +
+    SECOND_SECTION;
+  WriteText(SourcePath, OrdinarySource(ROUTINE_TEXT, OTHER_ROUTINE_TEXT));
+  WriteText(SecondPath, StringReplace(OrdinarySource(ROUTINE_TEXT, OTHER_ROUTINE_TEXT), 'unit Ordinary;',
+    'unit Second;', []));
+  Report := TStringList.Create;
+  Lock := TFileStream.Create(UTF8Encode(SourcePath), fmOpenRead or fmShareExclusive);
+  try
+    Enforced := False;
+    try
+      Probe := TFileStream.Create(UTF8Encode(SourcePath), fmOpenRead or fmShareDenyWrite);
+      Probe.Free;
+    except
+      on E: EFOpenError do
+        Enforced := True;
+    end;
+    Expect<Boolean>(Enforced).ToBe(True);
+    WriteText(FManifestFile, Manifest + Entry + LineEnding + SecondEntry + LineEnding);
+    // The unreadable entry fails with its manifest line; the next still reports.
+    Expect<Boolean>(ReportReviewedRoutines(FManifestFile, Report)).ToBe(False);
+    Expect<Integer>(Report.Count).ToBe(4);
+    Message := string(Report[0]);
+    Expect<Boolean>(Pos('# ERROR Reviewed non-SEH routine ordinary.ordinaryhandler cannot be read from ' +
+      'source/shared/ordinary.pas: EFOpenError: ', Message) = 1).ToBe(True);
+    Expect<string>(Report[1]).ToBe(Entry);
+    Expect<string>(Report[2]).ToBe('# OrdinaryHandler, source/shared/second.pas:7-10: unchanged');
+    Expect<string>(Report[3]).ToBe(SecondEntry);
+    // Verification never accepts what it cannot read.
+    Accepted := False;
+    Raised := False;
+    try
+      Resolve(Manifest + Entry + LineEnding, Map + ' ' + SOURCE_SECTION + LineEnding +
+        ' 0x10001100 0x10 ordinary.o');
+      Accepted := True;
+    except
+      on E: Exception do
+        Raised := True;
+    end;
+    Expect<Boolean>(Accepted).ToBe(False);
+    Expect<Boolean>(Raised).ToBe(True);
+  finally
+    Lock.Free;
+    Report.Free;
+    DeleteFile(SourcePath);
+    DeleteFile(SecondPath);
   end;
 end;
 

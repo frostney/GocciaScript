@@ -802,10 +802,18 @@ begin
         Require(FileExists(Symbol.Source), 'Reviewed non-SEH source unavailable: ' + Symbol.Source);
         Span := LocateReviewedRoutine(Manifest, Symbol);
       except
-        on E: ESafeSEH do
+        // The report lists every entry, so a source it cannot read fails
+        // only its own entry. The --apply and --check paths let such an
+        // error stop the build.
+        on E: Exception do
         begin
           Result := False;
-          AOutput.Add(UTF8Encode('# ERROR ' + UTF8Decode(E.Message)));
+          if E is ESafeSEH then
+            AOutput.Add(UTF8Encode('# ERROR ' + UTF8Decode(E.Message)))
+          else
+            AOutput.Add(UTF8Encode('# ERROR Reviewed non-SEH routine ' + FPCSectionRoutineName(Symbol.Section) +
+              ' cannot be read from ' + SourceDisplayPath(Manifest, Symbol.Source) + ': ' + E.ClassName + ': ' +
+              UTF8Decode(E.Message)));
           AOutput.Add(UTF8Encode('source-nonseh ' + Symbol.Path + ' ' + Symbol.Digest + ' ' + Symbol.Section));
           Continue;
         end;
