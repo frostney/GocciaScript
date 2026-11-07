@@ -72,8 +72,10 @@ Homepage: https://gocciascript.dev
 Description: ECMAScript engine for embedding
  GocciaScript is an ECMAScript engine for embedding, with sensible
  defaults that are easy to customize, implemented from scratch in
- FreePascal. Single self-contained binary; no Node.js, no toolchain,
- no global state. GocciaRunner's sandbox mode is a reference host for
+ FreePascal. Native binaries with GocciaScript's own compiler, VM and
+ garbage collector; no Node.js or other runtime underneath (HTTPS uses
+ the system OpenSSL). Intrinsic state does not leak between engine
+ instances. GocciaRunner's sandbox mode is a reference host for
  code that AI agents generate.
 EOF
 
