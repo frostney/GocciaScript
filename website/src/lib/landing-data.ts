@@ -247,7 +247,7 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   {
     icon: "leaf",
     title: "Explicit over clever",
-    body: "Strict equality and explicit imports by default; compatibility flags are supported customization for the rest of ECMAScript.",
+    body: "Strict equality and explicit imports by default; compatibility flags are supported customization that turns on implemented forms the recommended profile leaves out.",
   },
   {
     icon: "clock",

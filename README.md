@@ -23,8 +23,10 @@ Today the host is a FreePascal or Delphi application; see
 [![Latest release](https://img.shields.io/github/v/release/frostney/GocciaScript?label=release)](https://github.com/frostney/GocciaScript/releases)
 
 - **Conformance you can check.** test262, the official ECMAScript conformance
-  suite, runs on every pull request and on main, and a pull request that turns
-  a passing test into a failure, in either mode, fails CI. The
+  suite, runs on every pull request and on main. When the run produces results
+  and a cached main baseline graded under the same contract is available, a
+  pull request that turns a passing test into a failure other than a timeout,
+  compared in the same mode, fails CI. The
   [compatibility dashboard](https://www.gocciascript.dev/compatibility) shows
   the current result by area, rendered from the published reports.
 - **Tested beyond the spec.** 17,000+ JavaScript tests run on every pull

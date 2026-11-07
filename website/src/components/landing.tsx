@@ -1228,8 +1228,9 @@ export function Landing({
                 </table>
               </section>
               <p className="compat-note">
-                Compatibility flags are supported customization for running the
-                whole of ECMAScript. Dynamic source exposure is separate:{" "}
+                Compatibility flags are supported customization: each turns on
+                an implemented form the recommended profile leaves out. Dynamic
+                source exposure is separate:{" "}
                 <code className={inlineCodeClass}>eval</code> is installed only
                 when an embedder opts in through the engine&apos;s{" "}
                 <code className={inlineCodeClass}>EnableEval</code> option, and{" "}

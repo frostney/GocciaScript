@@ -72,11 +72,7 @@ source-nonseh ../../source/units/Goccia.VM.pas <sha256> .text.n_goccia.vm$_$tgoc
 
 The digest covers the routine from its header through the semicolon after its
 final `end`, with line endings normalised to LF. Edits elsewhere in the file
-need no manifest change. These per-routine digests are manifest format 2,
-whose first line is `FPC-SAFESEH 2` ([ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)).
-A format 1 manifest (`FPC-SAFESEH 1`), which pinned whole files, is refused
-with a message to migrate its entries with `./safeseh.pas --digests`, not read
-as routine digests. When the routine itself changes, finalization and
+need no manifest change. When the routine itself changes, finalization and
 `--check` fail naming the routine, file and lines; when it is renamed or
 removed, they fail naming the routine and file. Then:
 
@@ -91,6 +87,19 @@ removed, they fail naming the routine and file. Then:
 
 3. Copy the reported line for the routine you reviewed into
    `config/win32-safeseh/fpc-3.2.4.manifest`.
+
+These per-routine digests are manifest format 2, whose first line is
+`FPC-SAFESEH 2` ([ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)).
+A format 1 manifest (`FPC-SAFESEH 1`), which pinned whole files, is refused,
+and `--digests` refuses it too, because the helper reads the manifest the same
+way. To migrate one, for example on a branch that predates format 2:
+
+1. In your working copy, change the manifest's first line to `FPC-SAFESEH 2`.
+   Its whole-file hashes then read as routine digests that do not match.
+2. Run `./safeseh.pas --digests` and review every routine it lists, as in step 1
+   above.
+3. Replace every `source-nonseh` digest with the reported one before the
+   manifest is used for a build.
 
 Do not refresh a digest you have not reviewed, and do not turn an unknown-name
 refusal into a broad exclusion. A new handler-like routine needs its own entry.
