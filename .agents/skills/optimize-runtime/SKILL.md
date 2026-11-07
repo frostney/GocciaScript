@@ -24,13 +24,13 @@ opt-in baseline JIT, and a compiled executable.
 
 ## Establish the experiment
 
-1. Read `.agent/HANDOFF.md` when it exists, `VISION.md` (its throughput stance is
-   superseded by ADR 0176 until #2070 rewrites it), `CONTEXT.md`, the
+1. Read `.agent/HANDOFF.md` when it exists, `VISION.md` (its Performance section
+   states the ADR 0176 targets), `CONTEXT.md`, the
    hot-path policy in `docs/contributing/code-style.md` and
    `docs/core-patterns.md`, `docs/testing.md`, `docs/benchmarks.md`,
    `docs/profiling.md`, `docs/bytecode-vm.md`, and the ADRs governing the
    affected seam (especially 0005, 0065, 0076, 0081, 0087, 0088, 0091, 0138,
-   0176).
+   0176, 0178).
 2. Apply `git-workflow`. Never benchmark an unexplained dirty or
    mixed-revision tree.
 3. State the target workload, expected invariant, guard workloads, platforms,
@@ -52,8 +52,9 @@ Goccia score` geomean below `1.00×`. The target counts only when both hold on
 every shipped platform, so name the platform each measurement covers. A wave
 that narrows the gap without closing it still reports the remaining ratio.
 Record the exact convention used in the wave handoff. QuickJS is the target-1
-comparator; JIT-enabled engines such as Node.js or V8 are references, not
-targets.
+comparator. `node --jitless` and `jsc --useJIT=false` are interpreter-class
+context that target 1 does not count, and JIT-enabled Node.js is a reference
+for scale ([ADR 0178](../../../docs/adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
 
 ## Capture the baseline
 
@@ -67,7 +68,9 @@ targets.
 
 2. Stop competing benchmark processes. Serialize measurements through one
    shared exclusive lock, conventionally `/tmp/gocciascript-perf-gate.lock`.
-3. Discard at least one warm-up. Default to seven measured samples and report
+3. Discard at least one warm-up. AWFY processes already warm up in process
+   (the manifest's `warmProtocol`); the driver's `--warmup <n>` adds
+   unrecorded whole-process rounds. Default to seven measured samples and report
    the median plus the sample spread. Use fewer only for an expensive workload
    and record why. AWFY/JetStream drivers default to fewer repetitions; raise
    `--repetitions` for accept/reject decisions.
@@ -80,8 +83,8 @@ targets.
      sole merge criterion for a VM change.
    Keep iteration counts large enough to escape timer quantization.
 5. Record the exact commit, command, OS, architecture, workload size, warm-up
-   count, sample count, order, median, spread, QuickJS version, and verified
-   result.
+   count, sample count, order, median, spread, QuickJS version (and the
+   JavaScriptCore package version when `jsc` ran), and verified result.
 6. When comparing QuickJS, run an identical portable bundle and entry point
    through `scripts/awfy-driver.js` / `scripts/jetstream-driver.js`, exclude
    compilation from both sides where the driver already does so, verify
@@ -151,7 +154,11 @@ to at least one representative AWFY (or JetStream) guard before integration.
 ## Accept or reject a candidate
 
 1. Run an immediate same-load A/B comparison using retained baseline and
-   candidate binaries. Confirm in reverse order or an ABBA sequence.
+   candidate binaries. The drivers alternate the engine order by default
+   (`--engine-order alternate`, which also covers `--goccia-baseline` and
+   `--goccia-candidate`); use an even repetition count so each order runs
+   equally often, or confirm an ad-hoc A/B in reverse order or an ABBA
+   sequence.
 2. Accept only a repeatable positive target delta that exceeds observed noise
    and timer resolution. A single favorable sample or a one-millisecond shift
    at one-millisecond resolution is not evidence.
