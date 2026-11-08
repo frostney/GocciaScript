@@ -46,6 +46,8 @@ import { verifyAotModules } from "./test-cli-aot";
 import { verifyBundlerLayout } from "./test-cli-bundler-layout";
 import { verifyBundlerReproducibility, verifyBundlerPrivateIsolation } from "./test-cli-bundler-reproducibility";
 
+import { verifyTestSummary } from "./test-cli-test-summary";
+
 const makeTmp = makeTmpFactory("goccia-apps-");
 // The runner reports canonical host paths. On Windows the temp directory's
 // own spelling can be the 8.3 short form (RUNNER~1), so sandbox-mode tests
@@ -6750,6 +6752,8 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
 // ============================================================================
 // GocciaTestRunner
 // ============================================================================
+
+await section("TestRunner: human-readable summaries...", () => verifyTestSummary());
 
 await section("TestRunner: Vitest-compatible snapshot lifecycle...", async () => {
   const tmp = makeTmp();

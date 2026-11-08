@@ -459,21 +459,21 @@ end;
 procedure MergeFileResult(const ATarget: TGocciaObjectValue; const AFileResult: TGocciaObjectValue);
 begin
   if AFileResult = nil then Exit;
-  if AFileResult.GetProperty('totalRunTests').ToStringLiteral.Value <> 'undefined' then
+  if AFileResult.GetProperty('totalRunTests') <> TGocciaUndefinedLiteralValue.UndefinedValue then
     ATarget.AssignProperty('totalRunTests', AFileResult.GetProperty('totalRunTests'));
-  if AFileResult.GetProperty('passed').ToStringLiteral.Value <> 'undefined' then
+  if AFileResult.GetProperty('passed') <> TGocciaUndefinedLiteralValue.UndefinedValue then
     ATarget.AssignProperty('passed', AFileResult.GetProperty('passed'));
-  if AFileResult.GetProperty('failed').ToStringLiteral.Value <> 'undefined' then
+  if AFileResult.GetProperty('failed') <> TGocciaUndefinedLiteralValue.UndefinedValue then
     ATarget.AssignProperty('failed', AFileResult.GetProperty('failed'));
-  if AFileResult.GetProperty('skipped').ToStringLiteral.Value <> 'undefined' then
+  if AFileResult.GetProperty('skipped') <> TGocciaUndefinedLiteralValue.UndefinedValue then
     ATarget.AssignProperty('skipped', AFileResult.GetProperty('skipped'));
-  if AFileResult.GetProperty('suiteErrors').ToStringLiteral.Value <> 'undefined' then
+  if AFileResult.GetProperty('suiteErrors') <> TGocciaUndefinedLiteralValue.UndefinedValue then
     ATarget.AssignProperty('suiteErrors', AFileResult.GetProperty('suiteErrors'));
-  if AFileResult.GetProperty('assertions').ToStringLiteral.Value <> 'undefined' then
+  if AFileResult.GetProperty('assertions') <> TGocciaUndefinedLiteralValue.UndefinedValue then
     ATarget.AssignProperty('assertions', AFileResult.GetProperty('assertions'));
-  if AFileResult.GetProperty('duration').ToStringLiteral.Value <> 'undefined' then
+  if AFileResult.GetProperty('duration') <> TGocciaUndefinedLiteralValue.UndefinedValue then
     ATarget.AssignProperty('duration', AFileResult.GetProperty('duration'));
-  if AFileResult.GetProperty('failedTests').ToStringLiteral.Value <> 'undefined' then
+  if AFileResult.GetProperty('failedTests') <> TGocciaUndefinedLiteralValue.UndefinedValue then
     ATarget.AssignProperty('failedTests', AFileResult.GetProperty('failedTests'));
 end;
 
@@ -2300,6 +2300,8 @@ var
   PerTestNanoseconds: Int64;
   IsParallel: Boolean;
   CurrentOutputFile: string;
+  FailedNames: TStringBuilder;
+  I, J: Integer;
 begin
   ExitCode := 0;
   TestResult := AResult.TestResult;
@@ -2349,7 +2351,21 @@ begin
            FormatDuration(AResult.TotalCompileNanoseconds), FormatDuration(AResult.TotalExecNanoseconds),
            FormatDuration(AResult.TotalLexNanoseconds + AResult.TotalParseNanoseconds + AResult.TotalCompileNanoseconds + AResult.TotalExecNanoseconds)]));
       end;
-      Writeln(Format('Test Results Failed Tests: %s', [TestResult.GetProperty('failedTests').ToStringLiteral.Value]));
+      { Report records contain native strings and need no JavaScript realm or
+        user-defined coercion, just as in WriteFileResults. }
+      FailedNames := TStringBuilder.Create;
+      try
+        for I := 0 to Length(AResult.FileResults) - 1 do
+          for J := 0 to Length(AResult.FileResults[I].FailedTests) - 1 do
+          begin
+            if FailedNames.Length > 0 then
+              FailedNames.Append(',');
+            FailedNames.Append(AResult.FileResults[I].FailedTests[J]);
+          end;
+        Writeln(Format('Test Results Failed Tests: %s', [FailedNames.ToString]));
+      finally
+        FailedNames.Free;
+      end;
     end;
   end;
 

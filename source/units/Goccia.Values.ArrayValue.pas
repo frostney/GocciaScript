@@ -17,6 +17,9 @@ uses
 type
   TGocciaArrayValue = class(TGocciaInstanceValue)
   private
+    // Active receivers belong to the realm's native method host. Each join
+    // roots its receiver separately and removes this non-owning entry on exit.
+    FJoinReceivers: TGocciaValueList;
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const AMethodName: string; const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
@@ -37,7 +40,6 @@ type
 
     function ToStringTag: string; override;
 
-    function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
 
     // The length and whether it is writable, read without creating a value
@@ -165,6 +167,7 @@ uses
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
   Goccia.NativeLimits,
+  Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -1312,6 +1315,7 @@ end;
 
 destructor TGocciaArrayValue.Destroy;
 begin
+  FJoinReceivers.Free;
   FElements.Free;
   inherited;
 end;
@@ -1986,7 +1990,12 @@ var
   ResultString: string;
   Element: TGocciaValue;
   ViewRoots: TGocciaActiveRootFrame;
+  StackLimit: NativeUInt;
 begin
+  if not Assigned(FJoinReceivers) then
+    FJoinReceivers := TGocciaValueList.Create(False);
+  StackLimit := NATIVE_STACK_LIMIT_UNSET;
+  CheckNativeStackHeadroom(FJoinReceivers.Count + 1, StackLimit);
   // Step 1: Let O be ToObject(this value)
   View.Init(AThisValue);
   // The receiver object (a fresh wrapper for a primitive this) and the
@@ -2003,24 +2012,33 @@ begin
     else
       Separator := AArgs.GetElement(0).ToStringLiteral.Value;
 
-    // Steps 5-8: Build result string, treating undefined/null elements as empty string
-    ResultString := '';
-    for I := 0 to View.Len - 1 do
-    begin
-      if I > 0 then
-        ResultString := ResultString + Separator;
-      // Step 7b: If element is undefined or null, let next be ""
-      Element := View.Get(I);
-      if (Element is TGocciaUndefinedLiteralValue) or
-         (Element is TGocciaNullLiteralValue) then
-        Continue
-      else
-        // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
-        ResultString := ResultString + Element.ToStringLiteral.Value;
-    end;
+    // Match cyclic join behavior without suppressing the observable length
+    // and separator conversions above. Only active ancestors count as cycles.
+    if FJoinReceivers.Contains(View.Obj) then
+      Exit(TGocciaStringLiteralValue.Create(''));
+    FJoinReceivers.Add(View.Obj);
+    try
+      // Steps 5-8: Build result string, treating undefined/null elements as empty string
+      ResultString := '';
+      for I := 0 to View.Len - 1 do
+      begin
+        if I > 0 then
+          ResultString := ResultString + Separator;
+        // Step 7b: If element is undefined or null, let next be ""
+        Element := View.Get(I);
+        if (Element is TGocciaUndefinedLiteralValue) or
+           (Element is TGocciaNullLiteralValue) then
+          Continue
+        else
+          // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
+          ResultString := ResultString + Element.ToStringLiteral.Value;
+      end;
 
-    // Step 9: Return R
-    Result := TGocciaStringLiteralValue.Create(ResultString);
+      // Step 9: Return R
+      Result := TGocciaStringLiteralValue.Create(ResultString);
+    finally
+      FJoinReceivers.Delete(FJoinReceivers.Count - 1);
+    end;
   finally
     ViewRoots.Clear;
   end;
@@ -3912,28 +3930,6 @@ begin
   finally
     Roots.Clear;
   end;
-end;
-
-function TGocciaArrayValue.ToStringLiteral: TGocciaStringLiteralValue;
-var
-  I: Integer;
-  SB: TStringBuffer;
-begin
-  if FElements.Count = 0 then
-  begin
-    Result := TGocciaStringLiteralValue.Create('');
-    Exit;
-  end;
-
-  SB := TStringBuffer.Create;
-  for I := 0 to FElements.Count - 1 do
-  begin
-    if I > 0 then
-      SB.AppendChar(',');
-    if not IsArrayHole(FElements[I]) then
-      SB.Append(FElements[I].ToStringLiteral.Value);
-  end;
-  Result := TGocciaStringLiteralValue.Create(SB.ToString);
 end;
 
 function TGocciaArrayValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
