@@ -7477,12 +7477,30 @@ var
   ParenCount, BracketCount, BraceCount: Integer;
   CurrentType: TGocciaTokenType;
   NeedsOperand: Boolean;
+  CanBeForOfTarget: Boolean;
 
   function NextGoal: TGocciaLexicalGoal;
   begin
     if NeedsOperand then
       Exit(glgInputElementRegExp);
     Result := glgInputElementDiv;
+  end;
+
+  function AwaitRulesOutTarget: Boolean;
+  begin
+    Result := ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
+      CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and IsAwaitOperandStart;
+    if not Result then
+      Exit;
+
+    // ES2027 §13.1: in a Script, await can be an IdentifierReference.
+    // These tokens can continue that identifier as a member, call or tag.
+    // Leave the committed parser to distinguish them from unary await.
+    if (FInAsyncFunction = 0) and not FModuleSource and
+       not FModuleSyntaxDetected and
+       (FTokens[FCurrent + 1].TokenType in
+        [gttLeftBracket, gttLeftParen, gttTemplate, gttTemplateHead]) then
+      Result := False;
   end;
 
 begin
@@ -7499,6 +7517,7 @@ begin
     BracketCount := 0;
     BraceCount := 0;
     NeedsOperand := True;
+    CanBeForOfTarget := True;
 
     while True do
     begin
@@ -7513,6 +7532,36 @@ begin
           Exit(True);
         if CurrentType = gttRightParen then
           Exit;
+        // ES2027 §14.7.5: contextual `of` after the assignment target ends
+        // this probe. Let the committed for-of parse select the regexp goal
+        // for its iterable, rather than scanning it as a C-style initializer.
+        // `of` can also be an operand or a member name in a traditional head.
+        // A keyword used as a member name still ends an operand.
+        if CanBeForOfTarget and
+           (not NeedsOperand or
+            ((FCurrent >= 2) and
+             (FTokens[FCurrent - 2].TokenType in [gttDot, gttOptionalChaining]))) and
+           not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
+           CheckContextualKeyword(KEYWORD_OF) and
+           // An initializer makes `of` a binding name, as in `using of =`.
+           // Otherwise the next token begins the iterable, so request regexp.
+           not CheckNextWithLexicalGoal(gttAssign, glgInputElementRegExp) then
+          Exit;
+
+        // Once an operator rules out a LeftHandSideExpression, keep scanning
+        // the traditional initializer. In particular, an operand named `of`
+        // after a prefix update, await or yield is not a separator.
+        // Do not change the lexical-goal heuristic for the expression's body.
+        if CanBeForOfTarget and
+           not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
+           (((CurrentType <> gttNew) and
+             TokenRequiresFollowingOperand(CurrentType)) or
+            (CurrentType in [gttIncrement, gttDecrement]) or
+            (NeedsOperand and
+             (AwaitRulesOutTarget or
+              ((FInGeneratorFunction > 0) and
+               CheckUnescapedIdentifierKeyword(KEYWORD_YIELD))))) then
+          CanBeForOfTarget := False;
       end;
 
       if CurrentType in [gttTemplateHead, gttTemplate] then
