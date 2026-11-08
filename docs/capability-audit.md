@@ -50,6 +50,7 @@ The remaining kinds report engine features that are not capabilities:
 |------|---------|
 | `function.constructor` | Dynamic Function construction was allowed or denied |
 | `shadow-realm.construct` | An installed ShadowRealm constructor was invoked |
+| `eval.call` | An installed `eval` was called; `reason` says whether the call was a direct or an indirect eval |
 | `sandbox.fs.path` | A sandbox path attempted to cross above the virtual root |
 | `config.permissions` | A host's [trust](permissions.md#config-trust) decision on a config's permission requests; `subject` is the config path |
 
@@ -66,7 +67,7 @@ Static imports inside the project are exempt from `read`
 ([the module graph](permissions.md#the-module-graph-exemption)) and emit
 nothing.
 
-Disabled `FFI` and `ShadowRealm` remain absent globals. Auditing does not
+Disabled `FFI`, `ShadowRealm` and `eval` remain absent globals. Auditing does not
 install throwing stubs or alter feature detection. Their use events therefore
 exist only when the host has installed those capabilities.
 

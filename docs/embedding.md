@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 1100 -->
+<!-- doc-length-limit: 1130 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -10,7 +10,7 @@
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-Native application embedding is an important secondary GocciaScript goal. `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, `goccia:test`, and `node:async_hooks`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
+Embedding is GocciaScript's primary goal ([Vision](../VISION.md#primary-an-engine-for-embedding)). `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, `goccia:test`, and `node:async_hooks`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
 
 ## Quick Start
 
@@ -47,7 +47,7 @@ These helpers create, execute, and clean up in a single call. The `TGocciaEngine
 | `TGocciaRuntime.RunScriptFromStringList(Source, FileName)` | Execute from a `TStringList` through the runtime layer |
 All methods return `TGocciaScriptResult` — a record containing the result value, per-phase timing (in microseconds), and the filename.
 
-`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` or `.mts` infer module source unless an explicit source type is provided; any other entry defaults to `stDetect`, which runs it as module source when it has a top-level `import` or `export` declaration and as script source otherwise ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md); see [Preprocessors and Compatibility](#preprocessors-and-compatibility)). File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
+`SourceType` is an engine-level language option, not a runtime option. Set `Engine.SourceType` (or use the CLI `--source-type=script|module`) to choose script source or module source for the entry file. File names ending in `.mjs` or `.mts` infer module source unless an explicit source type is provided; any other entry defaults to `stDetect`, which applies the [entry source type policy](language.md#modules), including Module-first detection of ambiguous top-level `await` (see [Preprocessors and Compatibility](#preprocessors-and-compatibility)). File loading is separate: `TGocciaEngine` one-shot helpers accept source text or caller-provided `TStringList` instances only, while `TGocciaRuntime.RunScriptFromFile` is the runtime convenience API for loading an entry file.
 
 `TGocciaEngine.Execute` remains the public "run the whole source pipeline and execute" API for embedders. Hosts that need parse artifacts without executing can call `TGocciaSourcePipeline.Parse` directly; its result object owns the AST and source map until the caller frees the result or transfers ownership with `TakeProgramNode` / `TakeSourceMap`. Hosts should use the source-pipeline entry points for module source, dynamic `Function` validation, and expression fragments rather than constructing `TGocciaParser` directly; this keeps parser policy in one place. For compiled libraries and buffered imports, see [Precompiled bytecode modules](bytecode-loading.md).
 
@@ -91,7 +91,7 @@ begin
 end;
 ```
 
-The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. With `GlobalBackedTopLevel` set, variables, functions, and classes defined in previous executions remain available. Each source above has no `import` or `export` declaration, so the default `SourceType` (`stDetect`) runs it as script source. A session whose input may contain such declarations and must keep sharing one global scope sets `Engine.SourceType := stScript`, as `GocciaREPL` does; see [Preprocessors and Compatibility](#preprocessors-and-compatibility).
+The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. With `GlobalBackedTopLevel` set, variables, functions, and classes defined in previous executions remain available. The sources above select Script under the [entry source type policy](language.md#modules). A session that must keep sharing one global scope sets `Engine.SourceType := stScript`, as `GocciaREPL` does; see [Preprocessors and Compatibility](#preprocessors-and-compatibility).
 
 ### Engine Constructor
 
@@ -105,9 +105,9 @@ GocciaScript 0.15.0 removed the tree-walk interpreter and folded the executor in
 - **Settings.** Set `GlobalBackedTopLevel` on the engine where 0.14 code set it on the executor. `StrictTypes` and `Compatibility` were already engine properties.
 - **Global scope.** Read `Engine.GlobalScope` where 0.14 code read the global scope through `Engine.Interpreter`. `Engine.Interpreter` and `Engine.Executor` are removed.
 - **Compiled modules.** `CompileModule`, `RetainModule`, `RunModule`, `RunModuleInScope` and `RunModuleForSourceType` take or return `TGocciaBytecodeModule`.
-- **Behavior.** A host that created an interpreter executor now runs bytecode. Where the two executors behaved differently, the bytecode behavior applies. `SourceType` now defaults to `stDetect`, so an entry with a top-level `import` or `export` runs as module source; set `stScript` to keep Script semantics ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). A promise a run leaves rejected with no handler now raises from the run; set `UnhandledRejections := urIgnore` to keep it on the queue ([ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md)).
+- **Behavior.** A host that created an interpreter executor now runs bytecode. Where the two executors behaved differently, the bytecode behavior applies. `SourceType` now defaults to `stDetect`: top-level `import` or `export` selects Module, while ambiguous top-level `await` tries Module first and can fall back to Script when only the Script reading succeeds; set `stScript` to explicitly keep Script semantics ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). A promise a run leaves rejected with no handler now raises from the run; set `UnhandledRejections := urIgnore` to keep it on the queue ([ADR 0124](adr/0124-unhandled-rejections-fail-the-run.md)).
 
-CLI users see three changes: `--mode` and the `"mode"` config key now exit with status 2 ([Build System — Execution Mode](build-system.md#execution-mode)); an entry with a top-level `import` or `export` runs as a module unless `--source-type=script` is given; and an unhandled promise rejection fails the run with exit 1 ([Errors](errors.md#unhandled-promise-rejections)).
+CLI users see three changes: `--mode` and the `"mode"` config key now exit with status 2 ([Build System — Execution Mode](build-system.md#execution-mode)); automatic source detection selects Module for top-level `import` or `export`, and tries Module first with a Script fallback for ambiguous top-level `await`, while `--source-type=script` explicitly keeps Script semantics; and an unhandled promise rejection fails the run with exit 1 ([Errors](errors.md#unhandled-promise-rejections)).
 
 ### Automatic Semicolon Insertion
 
@@ -542,9 +542,9 @@ FsClock.Free;
 | System | Type | Default | Purpose |
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
-| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
+| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | The ECMAScript forms the recommended profile leaves out, as supported customization ([Changing the Defaults](#changing-the-defaults)); leave empty for the recommended defaults |
 | `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
-| `SourceType` | `TGocciaSourceType` | `stDetect` | Load entry as module source when it has a top-level `import` or `export` (`stDetect`), or always as script (`stScript`) or module (`stModule`) source; `.mjs` and `.mts` file names infer `stModule` |
+| `SourceType` | `TGocciaSourceType` | `stDetect` | Apply [entry source type detection](language.md#modules) (`stDetect`), or always use script (`stScript`) or module (`stModule`) source; `.mjs` and `.mts` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations; applies to code compiled after it is set, and the setter updates the global scope |
 | `GlobalBackedTopLevel` | `Boolean` | `False` | Bind a program's top-level declarations in the global scope, as a Script's are; see [Engine Constructor](#engine-constructor) |
 
@@ -571,13 +571,33 @@ finally
 end;
 ```
 
-When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source, and any other entry is detected ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)): the default, `stDetect`, settles the goal in the parse the engine does anyway, so a top-level `import` or `export` declaration makes the entry module source and anything else, a dynamic `import()` or an `import.meta` reference alone included, script source. `Execute` settles the goal of each run and leaves `SourceType` at `stDetect`, so a long-lived engine settles each source on its own. An embedder that wants every entry to run as script source, the behaviour before ADR 0140, sets `Engine.SourceType := stScript`; `stModule` makes every entry module source. A host that parses the entry itself passes `Engine.SourceType` as the source type of its `TGocciaSourcePipelineOptions` and, before `CompileModule` and `RunModuleForSourceType`, assigns the goal the parse settled (`TGocciaSourcePipelineResult.SourceType`, never `stDetect`) to `Engine.SourceType`; those two run anything but `stModule` as script source. A host configures the engine before the parse, so it sets `Engine.GlobalBackedTopLevel := Engine.SourceType <> stModule`, and the engine turns the flag off itself for a run that settles on module source.
+When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh module scope (`skModule`) with `this = undefined`, mirroring the semantics imported modules already receive from the module loader (ES2026 §16.2.1.6.4). The CLI surface for this is `--source-type=script|module` and the matching `goccia.json` key `"source-type"`. Without an explicit source type, `.mjs` and `.mts` entry files are loaded as module source, and any other entry is detected ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)): the default, `stDetect`, applies the [entry source type policy](language.md#modules), with a bounded Script fallback when an ambiguous Module-first await reading fails. A dynamic `import()` or an `import.meta` reference alone does not select Module. `Execute` settles the goal of each run and leaves `SourceType` at `stDetect`, so a long-lived engine settles each source on its own. An embedder that wants every entry to run as script source, the behaviour before ADR 0140, sets `Engine.SourceType := stScript`; `stModule` makes every entry module source. A host that parses the entry itself passes `Engine.SourceType` as the source type of its `TGocciaSourcePipelineOptions` and, before `CompileModule` and `RunModuleForSourceType`, assigns the goal the parse settled (`TGocciaSourcePipelineResult.SourceType`, never `stDetect`) to `Engine.SourceType`; those two run anything but `stModule` as script source. A host configures the engine before the parse, so it sets `Engine.GlobalBackedTopLevel := Engine.SourceType <> stModule`, and the engine turns the flag off itself for a run that settles on module source.
 
 **Top-level binding persistence differs between source types.** With `SourceType = stScript` and `GlobalBackedTopLevel` set, the engine binds each run's top-level declarations in its global scope (`Engine.GlobalScope`), which it reuses across every call to `Execute`; that is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. Without `GlobalBackedTopLevel` they stay in the run's own frame, and the next `Execute` throws a `ReferenceError` for `x`. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, set `SourceType` to `stScript` (with the default `stDetect`, a source with an `import` or `export` declaration runs as module source) and set `GlobalBackedTopLevel`, or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.GlobalScope.DefineLexicalBinding(...)`).
 
+## Changing the Defaults
+
+An engine starts with the recommended language profile and without dynamic code generation. Four switches change that, each off by default and set before `Execute`; the CLI hosts expose all but the last:
+
+| Switch | What it turns on | CLI | Audit event |
+|--------|------------------|-----|-------------|
+| `Engine.Compatibility` | The ECMAScript forms the recommended profile leaves out (`cfASI`, `cfVar`, `cfFunction`, `cfNonStrictMode`, ...); see [Preprocessors and Compatibility](#preprocessors-and-compatibility) | `--compat-*` | none |
+| `Engine.FunctionConstructor.Enabled := True` | The `Function` constructor, which is always present and throws while disabled | `--unsafe-function-constructor` | `function.constructor` |
+| `EnableShadowRealm(Engine)` (`Goccia.Builtins.GlobalShadowRealm`) | Installs `globalThis.ShadowRealm` | `--unsafe-shadowrealm` | `shadow-realm.construct` |
+| `EnableEval(Engine)` (`Goccia.Builtins.GlobalEval`) | Installs `globalThis.eval` as the realm's `%eval%` | none; engine API only | `eval.call` |
+
+```pascal
+Engine.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
+Engine.FunctionConstructor.Enabled := True;
+EnableShadowRealm(Engine);
+EnableEval(Engine);
+```
+
+`EnableShadowRealm` and `EnableEval` install a global that is otherwise absent, so feature detection sees exactly what the host chose; both are idempotent, and an engine cannot turn them off again. For `eval` the option and the global are separate things: the global is writable and configurable, so a script can delete or replace `globalThis.eval`, and feature detection then stops showing it, but `IsEvalEnabled(Engine)` stays true and a `ShadowRealm` created afterwards still gets its own `eval`. If `EnableEval` throws, for example because the script made the global object non-extensible, the option stays off and a later call can retry. With `EnableEval`, a call written `eval(...)` is a direct eval that sees the caller's bindings and is strict when the caller is (ES2026 §13.3.6.1), but only while the name resolves to the realm's `%eval%`: once a script replaces the global, or binds the name to another function, the same syntax calls that function as an ordinary function. Any other call, such as `(0, eval)(...)`, is an indirect eval in the global scope that is strict only by its own `"use strict"` (§19.2.1). Without `cfNonStrictMode` every script is strict, so direct eval code is too, while indirect eval code still follows only its own directive. A `ShadowRealm` created by an engine with `EnableEval` gets its own `eval`, which evaluates in the child realm; `IsEvalEnabled(Engine)` reports whether the option is on. Every eval call reports an `eval.call` [audit event](capability-audit.md). `eval`, `Function` and `ShadowRealm.prototype.evaluate` all run any source text the script builds, with the engine's full capability set, so a host that runs untrusted code leaves them off.
+
 ## Injecting Custom Globals
 
-You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly.
+You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly. The capability set governs only the access the engine makes itself, such as `fetch`, imports and FFI; a function you inject is host code that the engine does not check, so authorize what it reaches yourself.
 
 ### Injecting a Value
 

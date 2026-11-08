@@ -17,6 +17,7 @@ uses
   Goccia.Bytecode.Chunk,
   Goccia.Bytecode.Module,
   Goccia.CallStack,
+  Goccia.CapabilityAudit,
   Goccia.EvaluationContext,
   Goccia.ExecutionContext,
   Goccia.GarbageCollector,
@@ -243,6 +244,7 @@ type
     FLoadDeferredModule: TLoadDeferredModuleCallback;
     FResolveModuleURL: TResolveModuleURLCallback;
     FCompileDirectEval: TGocciaCompileDirectEvalCallback;
+    FCapabilityAuditEmitter: TGocciaCapabilityAuditEmitter;
     FCurrentClosure: TGocciaBytecodeClosure;
     FHandlerStack: TGocciaBytecodeHandlerStack;
     FFrameDepth: Integer;
@@ -682,6 +684,8 @@ type
     function ExecuteDirectEvalSite(const ACalleeReg: UInt16;
       const ASiteIndex: Integer; const ATemplate: TGocciaFunctionTemplate;
       var AIP, AInstructionStartIP: Integer): TGocciaBytecodeClosure;
+    procedure AuditDirectEval(const ATemplate: TGocciaFunctionTemplate;
+      const ACallIP: Integer);
     procedure InstantiateDirectEvalDeclarations(
       const ATemplate: TGocciaFunctionTemplate; const ASiteIndex: Integer;
       const ASite: TGocciaDirectEvalEnvironment; const AStandardVarNames,
@@ -825,6 +829,9 @@ type
     property LoadModule: TLoadModuleCallback read FLoadModule write FLoadModule;
     property CompileDirectEval: TGocciaCompileDirectEvalCallback
       read FCompileDirectEval write FCompileDirectEval;
+    { Reports each direct eval of the realm's %eval% (eval.call). }
+    property CapabilityAuditEmitter: TGocciaCapabilityAuditEmitter
+      read FCapabilityAuditEmitter write FCapabilityAuditEmitter;
     property LoadModuleSource: TLoadModuleSourceCallback
       read FLoadModuleSource write FLoadModuleSource;
     property LoadDeferredModule: TLoadDeferredModuleCallback
@@ -890,7 +897,6 @@ uses
   Goccia.AST.BindingPatterns,
   Goccia.AST.Statements,
   Goccia.Bytecode.Debug,
-  Goccia.CapabilityAudit,
   Goccia.Constants,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -15514,6 +15520,11 @@ begin
   Flags := WideC or DecodeC(CallInstruction);
   AInstructionStartIP := AIP;
   AIP := CallIP;
+  // The frame's instruction pointer is past the call now, as it is for a
+  // native call, so a sink that captures a stack trace places this frame at
+  // the eval call and not at the instruction before it.
+  if Assigned(FCapabilityAuditEmitter) then
+    AuditDirectEval(ATemplate, AInstructionStartIP);
 
   EvalSourceValue := TGocciaUndefinedLiteralValue.UndefinedValue;
   if (Flags and CALL_FLAG_SPREAD) <> 0 then
@@ -16373,6 +16384,31 @@ begin
   end;
 end;
 
+// Reports a direct eval of %eval% (eval.call), located at the eval call
+// expression, as a native callee's audit event is located at its call.
+// ACallIP is the call instruction that OP_DIRECT_EVAL stands in front of.
+procedure TGocciaVM.AuditDirectEval(const ATemplate: TGocciaFunctionTemplate;
+  const ACallIP: Integer);
+var
+  Location: TGocciaFrameLocation;
+  SourceFile: string;
+  PreviousCallSite: TGocciaCallSite;
+begin
+  Location := Default(TGocciaFrameLocation);
+  LocateFrameAt(ATemplate, ACallIP, Location);
+  SourceFile := '';
+  if Assigned(ATemplate.DebugInfo) then
+    SourceFile := ATemplate.DebugInfo.SourceFile;
+  EnterGocciaCallSite(SourceFile, Location.Line, Location.Column,
+    PreviousCallSite);
+  try
+    FCapabilityAuditEmitter(gckEval, gcdAllow, 'eval',
+      'direct eval is enabled');
+  finally
+    LeaveGocciaCallSite(PreviousCallSite);
+  end;
+end;
+
 { A suspended frame's saved instruction pointer is the instruction after the
   call it is making, and so is an executing frame's, which the dispatch loop
   advances past an instruction before running it. That instruction is one
@@ -16722,6 +16758,8 @@ end;
   of line: neither runs unless asked for. }
 procedure TGocciaVM.NoteFrameEntry(const ATemplate: TGocciaFunctionTemplate;
   var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
+var
+  ResumingModule: Boolean;
 begin
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
@@ -16751,7 +16789,18 @@ begin
         ATemplate.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
           ATemplate.Name, '', 0);
     end;
-    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex);
+    // Await resumes the same module evaluation. Keep a balanced timing
+    // segment for it, but count only its initial entry. A nested generator
+    // can inherit the module promise, so require a non-generator async body
+    // and the exact continuation/VM/closure before suppressing the count.
+    ResumingModule := ATemplate.IsAsync and not ATemplate.IsGenerator and
+      Assigned(GActiveBytecodeGenerator) and
+      (GActiveBytecodeGenerator.FVM = Self) and
+      (GActiveBytecodeGenerator.FClosure = FCurrentClosure) and
+      GActiveBytecodeGenerator.FHasContinuation and
+      Assigned(FCurrentAsyncPromise) and FCurrentAsyncPromise.IsModuleEvaluation;
+    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex,
+      not ResumingModule);
   end;
 
   if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and

@@ -56,6 +56,7 @@ type
       statement, are held until Parse returns, which settles the goal and
       raises the one that applies. }
     DetectModuleGoal: Boolean;
+    ScriptAwaitFallback: Boolean;
     LabelStatementsEnabled: Boolean;
     ForInLoopsEnabled: Boolean;
     WarningUnsupportedFeatures: Boolean;
@@ -158,6 +159,10 @@ type
     FModuleSource: Boolean;
     FImportMetaAllowed: Boolean;
     FDetectModuleGoal: Boolean;
+    FScriptAwaitFallback: Boolean;
+    FAmbiguousTopLevelAwait: Boolean;
+    FDeferredAwaitIdentifier: TGocciaToken;
+    FStaticBlockFunctionDepth: Integer;
     FRecordTypeRanges: Boolean;
     // The last overload signature ParseFunctionBodyExpression read, for the
     // statement that erases it.
@@ -316,6 +321,7 @@ type
     function StatementIsDirective(const AStatement: TGocciaStatement;
       out AIsUseStrict, AHasStrictForbiddenEscape: Boolean): Boolean;
     function IsAwaitUsingDeclarationStart: Boolean;
+    procedure ValidateAwaitIdentifier(const AToken: TGocciaToken);
     procedure ValidateIdentifierReference(const AToken: TGocciaToken);
     procedure ValidateIdentifierBinding(const AToken: TGocciaToken);
     function ConsumeIdentifierBinding(const AMessage: string): TGocciaToken; overload;
@@ -563,6 +569,7 @@ type
     property WarningCount: Integer read FWarningCount;
     { With DetectModuleGoal: whether the last Parse found a top-level import
       or export declaration, so the source is a Module. }
+    property AmbiguousTopLevelAwait: Boolean read FAmbiguousTopLevelAwait;
     property ModuleSyntaxDetected: Boolean read FModuleSyntaxDetected;
   end;
 
@@ -763,6 +770,7 @@ begin
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
+  FStaticBlockFunctionDepth := -1;
   FInGeneratorFunction := 0;
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
@@ -786,6 +794,7 @@ begin
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
+  FStaticBlockFunctionDepth := -1;
   FInGeneratorFunction := 0;
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
@@ -844,6 +853,7 @@ begin
   FModuleSource := AOptions.ModuleSource;
   FImportMetaAllowed := AOptions.ImportMetaAllowed;
   FDetectModuleGoal := AOptions.DetectModuleGoal;
+  FScriptAwaitFallback := AOptions.ScriptAwaitFallback;
   FLabelStatementsEnabled := AOptions.LabelStatementsEnabled;
   FForInLoopsEnabled := AOptions.ForInLoopsEnabled;
   FWarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
@@ -863,6 +873,7 @@ begin
   Result.ModuleSource := FModuleSource;
   Result.ImportMetaAllowed := FImportMetaAllowed;
   Result.DetectModuleGoal := FDetectModuleGoal;
+  Result.ScriptAwaitFallback := FScriptAwaitFallback;
   Result.LabelStatementsEnabled := FLabelStatementsEnabled;
   Result.ForInLoopsEnabled := FForInLoopsEnabled;
   Result.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
@@ -1316,12 +1327,16 @@ end;
 
 function TGocciaParser.ParseClassStaticBlockBody: TGocciaBlockStatement;
 var
+  SavedStaticBlockFunctionDepth: Integer;
   OuterDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   OuterDirectEvalUsage := EnterDirectEvalScope;
+  SavedStaticBlockFunctionDepth := FStaticBlockFunctionDepth;
+  FStaticBlockFunctionDepth := FFunctionDepth;
   try
     Result := BlockStatement(True);
   finally
+    FStaticBlockFunctionDepth := SavedStaticBlockFunctionDepth;
     LeaveDirectEvalScope(OuterDirectEvalUsage);
   end;
 end;
@@ -2284,8 +2299,22 @@ begin
     not HasLineTerminatorBetween(UsingToken, BindingToken);
 end;
 
+// ES2026 §13.1.1: await is reserved in Module identifiers. During
+// detection defer the diagnostic until the source goal has settled.
+procedure TGocciaParser.ValidateAwaitIdentifier(const AToken: TGocciaToken);
+begin
+  if AToken.Lexeme <> KEYWORD_AWAIT then
+    Exit;
+  if FModuleSource then
+    raise TGocciaSyntaxError.Create('Module code must not use await as an identifier',
+      AToken.Line, AToken.Column, FFileName, FSourceLines);
+  if FDetectModuleGoal and not Assigned(FDeferredAwaitIdentifier) then
+    FDeferredAwaitIdentifier := AToken;
+end;
+
 procedure TGocciaParser.ValidateIdentifierReference(const AToken: TGocciaToken);
 begin
+  ValidateAwaitIdentifier(AToken);
   if AToken.ContainsEscape and IsReservedKeywordName(AToken.Lexeme) then
     raise TGocciaSyntaxError.Create(
       'Keyword must not contain escaped characters',
@@ -2299,6 +2328,7 @@ end;
 
 procedure TGocciaParser.ValidateIdentifierBinding(const AToken: TGocciaToken);
 begin
+  ValidateAwaitIdentifier(AToken);
   if AToken.ContainsEscape and IsReservedKeywordName(AToken.Lexeme) then
     raise TGocciaSyntaxError.Create(
       'Keyword must not contain escaped characters',
@@ -2783,8 +2813,22 @@ var
   PrivateName: string;
   Right: TGocciaExpression;
 begin
-  // ES2026 §16.1 top-level await / §15.8.2 AwaitExpression: await UnaryExpression
-  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
+  // ES2026 §15.8.2: AwaitExpression is available only with +Await.
+  // Detection tries the Module reading first; an explicit Script does not.
+  if FDetectModuleGoal and not FScriptAwaitFallback and
+     (FFunctionDepth = 0) and (FStaticBlockFunctionDepth < 0) and
+     CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and IsAwaitOperandStart then
+  begin
+    FAmbiguousTopLevelAwait := True;
+    if Assigned(FDeferredAwaitIdentifier) then
+      raise TGocciaSyntaxError.Create('Module code must not use await as an identifier',
+        FDeferredAwaitIdentifier.Line, FDeferredAwaitIdentifier.Column,
+        FFileName, FSourceLines);
+  end;
+  if ((FInAsyncFunction > 0) or
+      (FStaticBlockFunctionDepth = FFunctionDepth) or
+      ((FFunctionDepth = 0) and (FModuleSource or
+       (FDetectModuleGoal and not FScriptAwaitFallback)))) and
      CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
      IsAwaitOperandStart then
   begin
@@ -7442,6 +7486,23 @@ var
     Result := glgInputElementDiv;
   end;
 
+  function AwaitRulesOutTarget: Boolean;
+  begin
+    Result := ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
+      CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and IsAwaitOperandStart;
+    if not Result then
+      Exit;
+
+    // ES2027 §13.1: in a Script, await can be an IdentifierReference.
+    // These tokens can continue that identifier as a member, call or tag.
+    // Leave the committed parser to distinguish them from unary await.
+    if (FInAsyncFunction = 0) and not FModuleSource and
+       not FModuleSyntaxDetected and
+       (FTokens[FCurrent + 1].TokenType in
+        [gttLeftBracket, gttLeftParen, gttTemplate, gttTemplateHead]) then
+      Result := False;
+  end;
+
 begin
   Result := False;
   SavedCurrent := FCurrent;
@@ -7494,9 +7555,7 @@ begin
              TokenRequiresFollowingOperand(CurrentType)) or
             (CurrentType in [gttIncrement, gttDecrement]) or
             (NeedsOperand and
-             ((((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
-               CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
-               IsAwaitOperandStart) or
+             (AwaitRulesOutTarget or
               ((FInGeneratorFunction > 0) and
                CheckUnescapedIdentifierKeyword(KEYWORD_YIELD))))) then
           CanBeForOfTarget := False;
@@ -9870,8 +9929,17 @@ end;
   raise the one the settled goal makes an error. }
 procedure TGocciaParser.SettleDetectedModuleGoal;
 begin
+  if FScriptAwaitFallback and FModuleSyntaxDetected then
+    raise TGocciaSyntaxError.Create('Module declarations prevent Script fallback',
+      Peek.Line, Peek.Column, FFileName, FSourceLines);
+  if FAmbiguousTopLevelAwait then
+    FModuleSyntaxDetected := True;
   if FModuleSyntaxDetected then
   begin
+    if Assigned(FDeferredAwaitIdentifier) then
+      raise TGocciaSyntaxError.Create('Module code must not use await as an identifier',
+        FDeferredAwaitIdentifier.Line, FDeferredAwaitIdentifier.Column,
+        FFileName, FSourceLines);
     if FDeferredWithLine > 0 then
       RaiseModuleWithStatementError(FDeferredWithLine, FDeferredWithColumn);
     Exit;
@@ -9971,6 +10039,8 @@ begin
   FStrictModeSourceActive := FInheritedStrictMode;
   FHasTopLevelAwait := False;
   FModuleSyntaxDetected := False;
+  FAmbiguousTopLevelAwait := False;
+  FDeferredAwaitIdentifier := nil;
   FDeferredImportMetaLine := 0;
   FDeferredImportMetaColumn := 0;
   FDeferredWithLine := 0;

@@ -11,6 +11,12 @@ import type {
   Test262GroupCoverage,
   Test262TimelinePoint,
 } from "@/lib/test262-dashboard";
+import {
+  TEST262_MODE_LABELS,
+  TEST262_MODES,
+  test262ModeRate,
+  test262ModeRates,
+} from "@/lib/test262-modes";
 
 const CATEGORY_COLORS: Record<string, string | undefined> = {
   total: "#2d4a2b",
@@ -19,10 +25,10 @@ const CATEGORY_COLORS: Record<string, string | undefined> = {
   intl402: "#8b5fa8",
   staging: "#b45f67",
   harness: "#6f7d42",
+  annexB: "#2f6f73",
 };
 
 const GENERATED_CATEGORY_COLORS = [
-  "#2f6f73",
   "#8a6f2a",
   "#9a5d7a",
   "#5f6ea6",
@@ -40,6 +46,11 @@ const TIMELINE_RANGES: { value: TimelineRange; label: string; days: number }[] =
     { value: "30d", label: "Last 30 days", days: 30 },
     { value: "all", label: "All time", days: Number.POSITIVE_INFINITY },
   ];
+
+/** Earlier points ran each file once, so run totals, the pass rate and the
+ *  duration step where reports began running both modes. */
+const MODE_CUTOVER_NOTE =
+  "Points from before the runner ran both modes ran each test file once, so the totals, the pass rate and the duration step where both modes begin. A category's line starts at the first run that covers it, as annexB's does.";
 
 function fmt(value: number): string {
   return value.toLocaleString("en-US");
@@ -130,12 +141,18 @@ function filterTimeline(
   });
 }
 
-function categoryRate(point: Test262TimelinePoint, category: string): number {
+/** A category's pass rate at a point, or null when that run did not cover
+ *  the category (annexB before it joined the default run, #2069), so the
+ *  chart leaves a gap instead of plotting 0%. */
+function categoryRate(
+  point: Test262TimelinePoint,
+  category: string,
+): number | null {
   if (category === "total") {
     return passRate(point.summary.passed, point.summary.totalRun);
   }
   const item = point.summary.byCategory.find((c) => c.category === category);
-  return item ? passRate(item.passed, item.run) : 0;
+  return item ? passRate(item.passed, item.run) : null;
 }
 
 function xForPoint(
@@ -227,21 +244,27 @@ function DurationTooltipContent({ point }: { point: Test262TimelinePoint }) {
 
 function linePath(
   points: Test262TimelinePoint[],
-  yForPoint: (point: Test262TimelinePoint) => number,
+  yForPoint: (point: Test262TimelinePoint) => number | null,
   width: number,
   height: number,
   padX: number,
   padY: number,
 ): string {
-  if (points.length === 0) return "";
   const usableH = height - padY * 2;
-  return points
-    .map((point, index) => {
-      const x = xForPoint(points, index, width, padX);
-      const y = padY + usableH * (1 - yForPoint(point));
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(" ");
+  const segments: string[] = [];
+  let drawing = false;
+  points.forEach((point, index) => {
+    const value = yForPoint(point);
+    if (value === null) {
+      drawing = false;
+      return;
+    }
+    const x = xForPoint(points, index, width, padX);
+    const y = padY + usableH * (1 - value);
+    segments.push(`${drawing ? "L" : "M"} ${x.toFixed(2)} ${y.toFixed(2)}`);
+    drawing = true;
+  });
+  return segments.join(" ");
 }
 
 function ChartHoverTargets({
@@ -389,6 +412,7 @@ function CoverageTimeline({ points }: { points: Test262TimelinePoint[] }) {
       <div className="section-head">
         <p className="section-kicker">time diagram</p>
         <h2 id="test262-timeline">test262 pass rate over time</h2>
+        <p>{MODE_CUTOVER_NOTE}</p>
       </div>
       <div className="compat-chart-shell" ref={shellRef}>
         <div className="compat-chart-wrap">
@@ -470,10 +494,10 @@ function CoverageTimeline({ points }: { points: Test262TimelinePoint[] }) {
               ))}
               {points.map((point, index) =>
                 categories.map((category) => {
+                  const rate = categoryRate(point, category);
+                  if (rate === null) return null;
                   const x = xForPoint(points, index, width, padX);
-                  const y =
-                    padY +
-                    (height - padY * 2) * (1 - categoryRate(point, category));
+                  const y = padY + (height - padY * 2) * (1 - rate);
                   return (
                     <circle
                       key={`${point.runId}-${category}`}
@@ -570,6 +594,7 @@ function DurationTimeline({ points }: { points: Test262TimelinePoint[] }) {
       <div className="section-head">
         <p className="section-kicker">performance</p>
         <h2 id="test262-duration">test262 runtime over time</h2>
+        <p>{MODE_CUTOVER_NOTE}</p>
       </div>
       <div className="compat-chart-shell" ref={shellRef}>
         <div className="compat-chart-wrap">
@@ -742,6 +767,57 @@ function Metric({
   );
 }
 
+function ModeSplit({ point }: { point: Test262TimelinePoint }) {
+  const byMode = point.summary.byMode;
+  return (
+    <section className="compat-section" aria-labelledby="test262-modes">
+      <div className="section-head">
+        <p className="section-kicker">modes</p>
+        <h2 id="test262-modes">Strict and non-strict</h2>
+        <p>
+          A test that allows both modes runs once non-strict and once strict, so
+          every pass and fail count on this page is a count of runs, not of test
+          files. Flagged tests run once and count under the mode they run in:{" "}
+          <code>noStrict</code> and <code>raw</code> non-strict,{" "}
+          <code>onlyStrict</code> strict, and module code counts as strict.
+        </p>
+      </div>
+      {byMode ? (
+        <div className="compat-category-grid">
+          {TEST262_MODES.map((mode) => {
+            const counts = byMode[mode];
+            const rate = passRate(counts.passed, counts.run);
+            return (
+              <div className="compat-category" key={mode}>
+                <div className="compat-category-head">
+                  <h3>{TEST262_MODE_LABELS[mode]}</h3>
+                  <strong>{test262ModeRate(byMode, mode)}</strong>
+                </div>
+                <div
+                  className="compat-bar"
+                  style={{ "--coverage-rate": percent(rate) } as CSSProperties}
+                  aria-hidden="true"
+                />
+                <p>
+                  {fmt(counts.passed)} passed / {fmt(counts.run)} run
+                </p>
+                <p>
+                  {fmt(counts.failed)} failed · {fmt(counts.timeouts)} timeouts
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p>
+          Per-mode figures are not available for this report: it predates the
+          runner recording the mode of each run.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function CategorySplit({ point }: { point: Test262TimelinePoint }) {
   return (
     <section className="compat-section" aria-labelledby="test262-categories">
@@ -752,6 +828,7 @@ function CategorySplit({ point }: { point: Test262TimelinePoint }) {
       <div className="compat-category-grid">
         {point.summary.byCategory.map((category) => {
           const rate = passRate(category.passed, category.run);
+          const modeRates = test262ModeRates(category.byMode, " · ");
           return (
             <div className="compat-category" key={category.category}>
               <div className="compat-category-head">
@@ -766,6 +843,7 @@ function CategorySplit({ point }: { point: Test262TimelinePoint }) {
               <p>
                 {fmt(category.passed)} passed / {fmt(category.run)} run
               </p>
+              {modeRates && <p>{modeRates}</p>}
             </div>
           );
         })}
@@ -783,6 +861,7 @@ function GroupTable({
   id: string;
   groups: Test262GroupCoverage[];
 }) {
+  const showModes = groups.some((group) => group.byMode);
   return (
     <section className="compat-group-table" aria-labelledby={id}>
       <h3 id={id}>{title}</h3>
@@ -791,7 +870,11 @@ function GroupTable({
           <tr>
             <th>Group</th>
             <th>Pass rate</th>
-            <th>Passing</th>
+            <th>Passing runs</th>
+            {showModes &&
+              TEST262_MODES.map((mode) => (
+                <th key={mode}>{TEST262_MODE_LABELS[mode]}</th>
+              ))}
           </tr>
         </thead>
         <tbody>
@@ -817,6 +900,10 @@ function GroupTable({
               <td>
                 {fmt(group.passed)} / {fmt(group.attempted)}
               </td>
+              {showModes &&
+                TEST262_MODES.map((mode) => (
+                  <td key={mode}>{test262ModeRate(group.byMode, mode)}</td>
+                ))}
             </tr>
           ))}
         </tbody>
@@ -883,10 +970,14 @@ export function Test262Dashboard({ data }: { data: Test262DashboardData }) {
           value={percent(totalRate)}
           detail={`${fmt(latest.summary.passed)} / ${fmt(
             latest.summary.totalRun,
-          )}`}
+          )} runs${
+            latest.summary.totalDiscovered > 0
+              ? ` · ${fmt(latest.summary.totalDiscovered)} test files`
+              : ""
+          }`}
         />
         <Metric
-          label="Failed"
+          label="Failed runs"
           value={fmt(latest.summary.failed)}
           detail={`${fmt(latest.summary.timeouts)} timeouts`}
         />
@@ -905,6 +996,7 @@ export function Test262Dashboard({ data }: { data: Test262DashboardData }) {
       />
       <CoverageTimeline points={visibleTimeline} />
       <DurationTimeline points={visibleTimeline} />
+      <ModeSplit point={latest} />
       <CategorySplit point={latest} />
 
       <section className="compat-section">
@@ -913,7 +1005,8 @@ export function Test262Dashboard({ data }: { data: Test262DashboardData }) {
           <h2>Grouped by test262 path</h2>
           <p>
             Groups use the first two path segments and include at least{" "}
-            {data.source.minGroupTests} attempted tests.
+            {data.source.minGroupTests} attempted runs; a file that runs in both
+            modes counts twice.
           </p>
         </div>
         <div className="compat-groups-grid compat-groups-grid-single">

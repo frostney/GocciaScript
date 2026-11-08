@@ -4,14 +4,14 @@
 
 ## Executive Summary
 
-- **Familiar syntax** — GocciaScript runs modern ECMAScript syntax with sandbox-first recommended defaults; `.js` files, no transpilation needed
+- **Familiar syntax** — GocciaScript runs modern ECMAScript syntax with recommended defaults that a host can change; `.js` files, no transpilation needed
 - **Key differences** — No `var`, `function`, traditional `for` loops, or `while` loops by default; use `let`/`const`, arrow functions, strict equality, `for...of`/array methods
 - **Full walkthrough** — Variables, arrow functions, arrays, objects, classes, modules, async/await
 - **Next steps** — Links to the recommended profile and its compatibility paths, built-in API reference, and example programs
 
 ## What is GocciaScript?
 
-GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first recommended defaults. It keeps modern JavaScript syntax front and center — arrow functions, classes with private fields, async/await, modules, and implicit strict mode — while legacy forms such as `var`, `function`, loose equality, traditional `for` loops, and `while` loops are available through compatibility flags when conformance or host requirements need them. If you've written modern JavaScript, you already know most of GocciaScript.
+GocciaScript is an ECMAScript engine for embedding, implemented in FreePascal, with sensible, modern recommended defaults. It keeps modern JavaScript syntax front and center — arrow functions, classes with private fields, async/await, modules, and implicit strict mode — while legacy forms such as `var`, `function`, loose equality, traditional `for` loops, and `while` loops are available through compatibility flags, which a host turns on when its code needs them. If you've written modern JavaScript, you already know most of GocciaScript.
 
 ## Prerequisites
 
@@ -317,7 +317,7 @@ Here's a quick reference of what the recommended profile turns off by default, a
 | `for (init; test; update)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-traditional-for-loop` for JavaScript compatibility |
 | `for (key in object)` | Off by default | `Object.keys()` / `Object.entries()` with `for...of`, or `--compat-for-in-loop` for JavaScript compatibility |
 | `while (...)` / `do ... while (...)` | Off by default | `for...of`, `.map()`, `.forEach()`, `.reduce()`, or `--compat-while-loops` for JavaScript compatibility |
-| `eval("code")` | Not installed by normal hosts | No alternative (by design) |
+| `eval("code")` | Not installed by default; embedders opt in with the engine's `EnableEval` option | No alternative (by design) |
 | `arguments` | Off by default | Prefer rest parameters (`...args`) or `--compat-arguments-object` |
 | sloppy assignment failures | Strict by default | script source `--compat-non-strict-mode` when porting code that expects failed property writes to be ignored |
 | sloppy function `this` | Strict by default | script source `--compat-non-strict-mode` when porting scripts that expect `globalThis` |

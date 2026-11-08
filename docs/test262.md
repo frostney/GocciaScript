@@ -8,9 +8,10 @@ errors.
 ## What test262 is, and why we run it
 
 [test262](https://github.com/tc39/test262) is the TC39-maintained
-conformance suite for ECMAScript. ~52K tests cover every observable
-behavior in the language and built-ins, plus Intl, staging proposals,
-and the harness itself. We run it as an indicator metric and regression
+conformance suite for ECMAScript. Over 50,000 test files, most of them
+run twice (non-strict and strict), cover every observable behavior in
+the language and built-ins, plus Annex B, Intl, staging proposals, and
+the harness itself. We run it as an indicator metric and regression
 signal to track which spec corners GocciaScript implements, where the
 engine diverges, and how each PR moves those numbers. The generated
 reports are the source of truth for ECMAScript compatibility status.
@@ -33,9 +34,11 @@ replacement is recorded in
   Test262 runner.
 - Test feature metadata may add explicit engine options when test262 splits
   proposal layers more narrowly than the base engine flag set.
-- Each harness file runs as a non-strict global Script of its own before
-  the test, and a strict run adds `"use strict";` to the test's own source
-  only. The runner catches engine outcomes directly; the stock async markers
+- Each test file runs once per mode test262 requires: an unflagged Script
+  test runs twice, non-strict and strict, and each result records its
+  `mode`. Each harness file runs as a non-strict global Script of its own
+  before the test, and a strict run adds `"use strict";` to the test's own
+  source only. The runner catches engine outcomes directly; the stock async markers
   are the only JavaScript-to-host verdict protocol.
 - Wrapper-infrastructure failures are classified separately from
   conformance failures and gated to zero in CI.
@@ -56,7 +59,11 @@ replacement is recorded in
 The public compatibility dashboard lives at `/compatibility`. It reads the
 latest available main-branch test262 report for each UTC day, renders pass-rate
 and runtime timelines, shows the top-level test262 category split, and ranks the
-five least-covered path groups from the latest report. The "JSON result" link
+five least-covered path groups from the latest report. Its figures count runs,
+not files (see "Strict mode"), and it shows the strict and non-strict runs
+separately for reports that record each run's mode; reports graded before
+contract 4 ran each file once and show no per-mode figures, so the pass-rate
+timeline steps where the two-mode runs begin. The "JSON result" link
 on the dashboard points back to the exact report used for the latest view.
 
 Dashboard data is built from Vercel Blob at request time and served with CDN
@@ -136,11 +143,13 @@ recommendations.
 
 ```text
 GocciaTest262Runner
-  → discover tests under suite/test/{built-ins,harness,intl402,language,staging}
+  → discover tests under suite/test/{annexB,built-ins,harness,intl402,language,staging}
   → optionally select one deterministic --shard-index/--shard-count partition
-  → dispatch tests to native workers (--jobs=N)
-  → on POSIX, fork one short-lived child per test without starting a new binary
-  → for each test in its owning worker process:
+  → read each selected file's flags and expand it into its runs, one per mode
+    (see "Strict mode")
+  → dispatch runs to native workers (--jobs=N)
+  → on POSIX, fork one short-lived child per run without starting a new binary
+  → for each run in its owning worker process:
       → create one runtime, heap, engine, and realm
       → read frontmatter, classify by phase (parse / runtime / positive)
       → install the Test262-only host, evaluate each harness file as its
@@ -148,10 +157,10 @@ GocciaTest262Runner
         in a strict run) as a Script or Module, in process
       → classify into PASS / FAIL / WRAPPER_INFRA / TIMEOUT
       → return the Pascal result and exit the worker process
-  → aggregate per top-level category
+  → aggregate per top-level category and per mode
   → emit JSON and a console summary
 scripts/run_test262_suite.ts --merge-shards
-  → validate all shard indexes and test IDs, then emit one
+  → validate all shard indexes and runs, keyed by (test ID, mode), then emit one
     canonical report (and one aggregate profile from the merged details)
   → render the GitHub Step Summary and PR comment outside the native binary
 ```
@@ -159,7 +168,8 @@ scripts/run_test262_suite.ts --merge-shards
 ## CI sharding
 
 PR and main workflows run a matrix of independent Test262 shards. Membership is the
-FNV-1a hash of the normalized test ID modulo the shard count, so it is stable
+FNV-1a hash of the normalized test ID modulo the shard count, so both runs of a
+file land in the same shard, and membership is stable
 across platforms, independent of filesystem discovery order, and insensitive
 to unrelated directory insertions. The workflow matrix is the only place that
 sets parallelism. GitHub's `strategy.job-index` and `strategy.job-total`
@@ -180,8 +190,9 @@ is resolved relative to the working directory, and every test reports
 ```
 
 After all shards finish, merge mode rejects missing or duplicate shard indexes,
-run-metadata mismatches, duplicate tests, tests assigned to the wrong shard,
-and incomplete corpus coverage before writing the canonical report:
+run-metadata mismatches, duplicate runs (the same test ID and mode twice),
+tests assigned to the wrong shard, and incomplete corpus coverage (a
+discovered file with no run) before writing the canonical report:
 
 ```bash
 bun scripts/run_test262_suite.ts \
@@ -189,6 +200,10 @@ bun scripts/run_test262_suite.ts \
   --output test262-results.json \
   shard-*.json
 ```
+
+Sharding is by file, so a shard's run count is about twice its file count;
+the shard count and job timeouts were checked against that two-mode load
+when it began (#2068).
 
 The merged duration is the slowest shard duration, matching the effective CI
 wall-clock. On main, shard jobs upload disjoint per-test profile details; merge
@@ -234,12 +249,11 @@ also a property of `globalThis`. A test file a test imports, such as one that
 already run in the realm.
 
 The test file is evaluated whole, frontmatter comment included, so
-diagnostics report its own lines. A strict run (`onlyStrict`) inserts
+diagnostics report its own lines. A strict Script run inserts
 `"use strict";` and a newline as the initial characters of the test file,
 and of nothing else; its diagnostics are therefore one line past the file's.
 A `raw` test runs alone: no harness Script, no prefix, the file exactly as
-written. Every test runs once; `noStrict` and unflagged Script tests run
-without the prefix.
+written. Which runs a test gets is described under "Strict mode".
 
 No test source is wrapped. A negative-runtime test is graded on the
 completion of its own Script or Module: the error that escapes it must have
@@ -314,7 +328,14 @@ Bodies see only the identifiers stock test262 expects:
   `doneprintHandle.js` uses it for async markers)
 - `$262` helpers implemented by Goccia's bundled host object:
   `detachArrayBuffer`, `evalScript`, `gc`, `global`, `createRealm`,
-  `AbstractModuleSource`, and `IsHTMLDDA`
+  `AbstractModuleSource`, and `IsHTMLDDA`. `$262` is the only global
+  binding `scripts/test262_harness/$262.js` creates, so a test may declare
+  any other name at its top level. The `annexB` emulates-undefined tests
+  declare `IsHTMLDDA` there, most as `var IsHTMLDDA = $262.IsHTMLDDA;`,
+  which a global lexical `IsHTMLDDA` would turn into a `SyntaxError`
+  (ES2026 §16.1.7 GlobalDeclarationInstantiation, steps 3.a and 4.a).
+  `$262.IsHTMLDDA` is callable and returns `null`, as `INTERPRETING.md`
+  requires.
 - `$262.agent` helpers used by Atomics tests: `start`, `broadcast`,
   `receiveBroadcast`, `report`, `getReport`, `sleep`, `monotonicNow`, and
   `leaving`
@@ -355,8 +376,9 @@ engine/realm, returns a host record with the child realm's `globalThis`, its
 own `evalScript`, and `createRealm`, and keeps the child engine alive for the
 duration of the test run so cross-realm intrinsics remain valid.
 
-`eval` is also host-gated. The Test262 runner installs the official host eval;
-default Bare execution does not expose it. Bytecode direct calls preserve
+`eval` is also host-gated. The Test262 runner installs it through the
+engine's `EnableEval` option, the one embedders use; default Bare execution
+does not expose it. Bytecode direct calls preserve
 the caller realm and caller lexical bindings, while shadowed or indirect eval
 calls use ordinary function-call semantics.
 
@@ -367,6 +389,44 @@ agent threads, and `report`/`getReport` provide the report queue used by
 Atomics wait/notify tests.
 
 ## Strict mode
+
+test262's `INTERPRETING.md` ("Strict Mode" and the `flags` list) requires each
+test to run in both modes unless a flag says otherwise. The runner reads the
+flags from the frontmatter, written inline (`flags: [noStrict]`) or as a YAML
+block list (`flags:` followed by indented `- noStrict` lines, as `staging/sm` writes
+them), and gives each file these runs, in this order of precedence:
+
+| Flag | Runs |
+|------|------|
+| `module` | once, as module code, recorded as `strict` (module code is strict); no prefix |
+| `raw` | once, `non-strict`, the file exactly as written |
+| `onlyStrict` | once, `strict` |
+| `noStrict` | once, `non-strict` |
+| none of these | twice: `non-strict`, then `strict` |
+
+A strict Script run inserts `"use strict";` and a newline in front of the
+test file only (see "Harness evaluation"). `TTest262App.ExpandRunModes` turns
+each selected file into its runs after sharding, and `ExecuteOne` takes the
+strictness from the run, the one place it is decided.
+
+Each result carries `"mode": "non-strict" | "strict"` beside `id`, and a
+run is identified by the pair. The report counts runs: `summary.totalRun`
+and every pass, fail, timeout and wrapper-infra count, overall and per
+`byCategory` entry, are run counts, and `summary.byMode` and each category's
+`byMode` break them down per mode, always listing both modes.
+`summary.totalDiscovered` still counts test files.
+
+A shard report also records `summary.expectedRuns`, the runs the runner
+planned per mode from the flag rules above. The merge rejects a shard whose
+results do not match it, and a contract-4 result without `mode`, so a missing
+strict run of a file that still has its non-strict run is an error and the
+merge never re-implements the frontmatter rules. A merged report leaves the
+field out. The merge and the PR comparison key results by (id, mode), so a
+run that regresses only in strict mode blocks a merge like any other; a run
+with no counterpart in the baseline, such as a file's first strict run, is new
+rather than a regression. A strict run's profile is written to
+`per-test/<id>.strict.profile.json`, beside the non-strict run's
+`per-test/<id>.profile.json`.
 
 GocciaScript recognizes strict directive prologues at execution time for
 the compatibility behaviors that otherwise depend on Script non-strict
@@ -383,15 +443,19 @@ and the `Function` constructor. `onlyStrict` tests also receive the flag,
 but the directive inserted in front of the test file keeps `with`,
 non-strict assignment failures, legacy `delete` return values, and
 regular-function nullish `this` coercion on the strict path for the test's
-own code, while the harness Scripts stay non-strict. Remaining
+own code, while the harness Scripts stay non-strict. A strict run of an
+unflagged test is set up the same way. Remaining
 `noStrict` tests rely on sloppy-only behaviors that
 GocciaScript still does not provide and fail naturally as ordinary
 conformance failures, not as wrapper-infra failures.
 
 Every test runs with ASI, `var`, `function` declarations, traditional `for`,
-`while`/`do...while`, loose equality, labels, `for...in`, and implicit
-`arguments` objects enabled, because test262 uses those forms across both
-harness helpers and test bodies. The test's source type and
+`while`/`do...while`, loose equality, labels, `for...in`, implicit
+`arguments` objects, and non-strict Script semantics
+(`--compat-non-strict-mode`) enabled, because test262 uses those forms across
+both harness helpers and test bodies
+([ADR 0175](adr/0175-test262-harness-includes-are-separate-non-strict-scripts.md)). That flag set is `TEST262_COMPATIBILITY` in
+`GocciaTest262Runner.dpr`, and `--eval-host` probes use it too. The test's source type and
 strictness still decide strict-mode semantics; `--compat-arguments-object`
 only enables the implicit `arguments` binding. Strictness and parameter-list
 shape decide whether that binding is unmapped or mapped.
@@ -416,16 +480,15 @@ test produces the same ID on both platforms.
 
 ## Test corpus
 
-Default categories: `built-ins, harness, intl402, language, staging`
-(everything except `annexB`).
+Default categories: `annexB, built-ins, harness, intl402, language,
+staging`, every top-level category in `suite/test`.
 
 - `annexB` (legacy browser behavior) is part of the conformance target
-  and a release gate from 0.18.0. It is not in the default run yet:
-  [#2069](https://github.com/frostney/GocciaScript/issues/2069) adds it
-  once the runner's `IsHTMLDDA` harness clash is fixed. Until then, run it with
-  `--categories=annexB`. New Annex B surfaces will go behind a
-  compatibility flag, added by the 0.18.0 Annex B work, that the runner's
-  engine profile turns on. See
+  and a release gate from 0.18.0. It runs by default and counts toward
+  the published pass rate and the PR comparison like any other category.
+  New Annex B surfaces will go behind a compatibility flag, added by the
+  0.18.0 Annex B work, that the runner turns on by adding it to its
+  [flag set](#strict-mode). See
   [ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 - `intl402` covers Intl APIs (ECMA-402); tests exercise
   `Intl.getCanonicalLocales`, constructors, and formatting operations.
@@ -435,7 +498,7 @@ Default categories: `built-ins, harness, intl402, language, staging`
 
 There is no eligibility filter. Every discovered test runs. Tests
 that depend on missing features fail with a real diagnostic, not an
-invisible skip. On POSIX, each worker process owns exactly one test, so its
+invisible skip. On POSIX, each worker process owns exactly one run, so its
 heap, roots, queues, VM, engine, and realm cannot leak into the next case.
 Process exit also returns allocator-retained storage to the operating system.
 Cooperative timeouts (`--timeout`, default `20s`), per-test memory ceilings
@@ -467,7 +530,11 @@ contract. Contract 2 (#1571) made negative parse and resolution tests require a
 pre-evaluation error of `negative.type`. Contract 3 (#2067) evaluates each
 harness file as a separate non-strict Script, applies `"use strict";` to the
 test file only, and grades every negative-runtime test on its own escaped
-throw, with no `try` wrapper.
+throw, with no `try` wrapper. Contract 4 (#2068) runs each unflagged Script
+test in both modes and records each result's `mode`; a contract-3 baseline
+has one run per file and no modes, so each of its results pairs with the
+file's only run, or with its non-strict run when the file now runs in both
+modes, and the gate does not block on them.
 
 `scripts/test-cli-apps.ts` covers the negative grading paths with a small
 synthetic suite. After any grading or harness-evaluation change, also verify against the

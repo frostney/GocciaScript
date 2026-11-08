@@ -5,6 +5,7 @@
 - Every FPC Win32 executable gets a checked SafeSEH table after linking.
 - The table lists the handlers from reviewed, pinned toolchain inputs.
 - Unsupported images or changed audited inputs fail the build.
+- Ordinary project routines with handler-like names are pinned to their own source text.
 - Windows CI compares exception behavior before and after the metadata change.
 
 ## Build behavior
@@ -58,6 +59,66 @@ Chain-restoration operations reuse saved frames instead of adding new entries.
 An unlinked optional unit needs no table entry. A linked handler can be absent
 only when the linker explicitly records its section as removed.
 
+## Ordinary project helper names
+
+A project routine whose name contains `handler` fails the build as a possible
+SEH handler until the manifest classifies it. An ordinary routine gets a
+`source-nonseh` entry that names its source file, the SHA-256 of its own
+implementation, and its section:
+
+```text
+source-nonseh ../../source/units/Goccia.VM.pas <sha256> .text.n_goccia.vm$_$tgocciavm_$__$$_growhandlerstack$longint
+```
+
+The digest covers the routine from its header through the semicolon after its
+final `end`, with line endings normalised to LF. Edits elsewhere in the file
+need no manifest change. When the routine itself changes, finalization and
+`--check` fail naming the routine, file and lines; when it is renamed or
+removed, they fail naming the routine and file. Then:
+
+1. Review the routine again: it must not be, or be installed as, an OS
+   exception handler.
+2. Run the helper, which prints every entry with its routine's current digest
+   and status and never edits the manifest:
+
+   ```bash
+   ./safeseh.pas --digests
+   ```
+
+3. Copy the reported line for the routine you reviewed into
+   `config/win32-safeseh/fpc-3.2.4.manifest`.
+
+These per-routine digests are manifest format 2, whose first line is
+`FPC-SAFESEH 2` ([ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)).
+A format 1 manifest (`FPC-SAFESEH 1`), which pinned whole files, is refused,
+and `--digests` refuses it too, because the helper reads the manifest the same
+way. To migrate one, for example on a branch that predates format 2:
+
+1. Bring the format 2 tooling onto the branch first (merge `main`, which has
+   `safeseh.pas`, `FPCSafeSEH.pas` and the `FPCRoutineSource.pas` locator),
+   keeping the branch's own manifest to migrate; format 1 tooling cannot
+   produce routine digests.
+2. In your working copy, change the manifest's first line to `FPC-SAFESEH 2`.
+   Its whole-file hashes then read as routine digests that do not match.
+3. Run `./safeseh.pas --digests` and review every routine it lists, as in the
+   review steps above.
+4. Replace every `source-nonseh` digest with the reported one before the
+   manifest is used for a build.
+
+Do not refresh a digest you have not reviewed, and do not turn an unknown-name
+refusal into a broad exclusion. A new handler-like routine needs its own entry.
+
+The locator refuses whatever it cannot pin exactly, and the build fails
+instead of falling back to a wider span. [ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)
+lists the cases, among them overloads of a reviewed name, conditionals that
+change what the parse sees, and includes that change the block structure.
+Rename or restructure the code, or extend `source/shared/FPCRoutineSource.pas`
+with tests. An error that says a file cannot be parsed names the line to fix;
+until then every entry in that file fails, whether or not its routine changed.
+
+`FPCSafeSEH.Test` runs the same check on the repository manifest in pull
+request CI, so an edited pinned routine fails there before the Win32 build.
+
 ## Re-auditing a toolchain update
 
 The reviewed inputs are recorded in [`config/win32-safeseh/fpc-3.2.4.manifest`](../../config/win32-safeseh/fpc-3.2.4.manifest). A toolchain bump requires a new audit, not merely replacing hashes. Inspect the
@@ -70,10 +131,10 @@ faults, nested exceptions, and the Proxy recursion case with a temporary copy
 whose SafeSEH directory reference is removed. Both variants must preserve the
 same outcomes. See [the decision](../adr/0169-win32-safeseh-post-link.md).
 
-Ordinary project helper names that resemble handlers have explicit `source-nonseh`
-classifications bound to their source file hashes. After editing one of those
-files, review the named helper again before refreshing its hash; do not turn an
-unknown-name refusal into a broad exclusion.
+A toolchain bump also re-checks the
+[reviewed project routines](#ordinary-project-helper-names): run
+`./safeseh.pas --digests`, and confirm that the new compiler still names
+project sections in the shapes the routine locator accepts.
 
 Retain the new compiler and unit archive, query the actual compiler with
 `fpc -Pi386 -Twin32 -iW`, and inspect object disassembly with relocations

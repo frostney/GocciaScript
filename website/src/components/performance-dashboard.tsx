@@ -527,8 +527,8 @@ export function PerformanceDashboard({
               : RANGE_OPTIONS.find((option) => option.value === range)?.label}
           </strong>
           <small>
-            Lines break when corpus, driver, subset, or reference-engine
-            versions change.
+            Lines break when the corpus, driver, subset, reference-engine
+            versions, engine-order mode or per-benchmark iteration counts change.
           </small>
         </div>
         <SegmentedControl

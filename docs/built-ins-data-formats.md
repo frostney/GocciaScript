@@ -150,8 +150,15 @@ After `import * as TOML from "goccia:toml"`, `TOML.parse` delegates to the stand
 
 TOML date/time values currently map to validated string scalars rather than Temporal values. This keeps the runtime and module-import behavior stable for v1 while leaving room for future Temporal-aware interop.
 
-Compatibility goal: GocciaScript is targeting full TOML 1.1.0 support over
-time. Historical decision context lives in
-[Architecture Decision Records](adr/). The native
-`GocciaTOMLComplianceRunner` verifies and runs a prepared pinned `toml-test`
-checkout; see [Testing](testing.md#running-tests).
+TOML integers become JavaScript numbers, which are IEEE-754 doubles, so `TOML.parse` loses precision for an integer outside ±2^53: `9223372036854775807` becomes the double 2^63, which prints as `9223372036854776000`.
+
+Compatibility: the parser passes every case of the official `toml-test`
+TOML 1.1.0 suite at the pinned commit. The native `GocciaTOMLComplianceRunner`
+checks the parser's tagged document tree (`ParseDocument`), which keeps each
+scalar's TOML kind and canonical value, rather than the values `TOML.parse`
+returns, so the integer limit above does not show there. Main-branch and
+release CI run it on every target, and any failing case fails that run
+([Testing — CI Integration](testing.md#ci-integration)). The runner verifies
+and runs a prepared pinned `toml-test` checkout; see
+[Testing](testing.md#running-tests). Historical decision context lives in
+[Architecture Decision Records](adr/).
