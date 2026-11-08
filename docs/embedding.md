@@ -91,7 +91,7 @@ begin
 end;
 ```
 
-The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. With `GlobalBackedTopLevel` set, variables, functions, and classes defined in previous executions remain available. Each source above has no `import` or `export` declaration, so the default `SourceType` (`stDetect`) runs it as script source. A session whose input may contain such declarations and must keep sharing one global scope sets `Engine.SourceType := stScript`, as `GocciaREPL` does; see [Preprocessors and Compatibility](#preprocessors-and-compatibility).
+The `TStringList` is passed by reference — update its contents and call `Execute` again to run new code in the same global scope. With `GlobalBackedTopLevel` set, variables, functions, and classes defined in previous executions remain available. The sources above select Script under the [entry source type policy](language.md#modules). A session that must keep sharing one global scope sets `Engine.SourceType := stScript`, as `GocciaREPL` does; see [Preprocessors and Compatibility](#preprocessors-and-compatibility).
 
 ### Engine Constructor
 
