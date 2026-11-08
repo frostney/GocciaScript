@@ -1299,7 +1299,7 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
 // -- Entry source-type detection (#1626, ADR 0140) ---------------------------
 
 // With no explicit source type, an entry that has a top-level import or
-// export declaration runs as a Module and any other entry as a Script. Node.js
+// export declaration or valid top-level await runs as a Module. Node.js
 // prints "y" for cyc.js and "yh" for fcyc.js.
 console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, Bundler, LoaderBare, sandbox)...");
 {
@@ -1312,6 +1312,8 @@ console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, B
       "fd.js": 'import { h2 } from "./fcyc.js";\nexport const y2 = "y" + h2();\n',
       "script.js": 'var scriptVar = 1;\nconsole.log(typeof globalThis.scriptVar, this === globalThis);\n',
       "dynamic.js":
+        'var dynamicVar = 1;\nimport("./lib.js").then((m) => console.log(m.v, typeof globalThis.dynamicVar, this === globalThis));\n',
+      "await-dynamic.js":
         'var dynamicVar = 1;\nconst m = await import("./lib.js");\nconsole.log(m.v, typeof globalThis.dynamicVar, this === globalThis);\n',
       "lib.js": 'export const v = "lib";\n',
       // A detected Module's top-level lexical declarations stay in the module
@@ -1356,6 +1358,8 @@ console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, B
       run(RUNNER, ["script.js", "--compat-var"]), "number true");
     expectLine("entry with only dynamic import() stays a Script",
       run(RUNNER, ["dynamic.js", "--compat-var"]), "lib number true");
+    expectLine("top-level await import() selects a Module",
+      run(RUNNER, ["await-dynamic.js", "--compat-var"]), "lib undefined false");
     expectFailure("import.meta alone stays a Script error",
       run(RUNNER, ["meta.js"]), "import.meta is only allowed in module code");
     // An explicit Script keeps today's behaviour: d.js's import of the entry

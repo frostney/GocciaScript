@@ -323,7 +323,7 @@ The path may be either a **file** (any registered extension — `.json`, `.json5
 
 Relative paths are resolved against the current working directory. A missing file or a directory with no recognised `goccia.*` is a hard error so a typo is not silently ignored. CLI options still take precedence over values from the file, and per-file configs continue to be discovered normally for individual files.
 
-`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source, and any other entry, stdin included, is module source when it has a top-level `import` or `export` declaration and script source otherwise ([ADR 0140](adr/0140-an-entry-with-module-syntax-runs-as-a-module.md)). `"source-type": "script"` keeps such an entry script source. The REPL runs script source unless `--source-type=module` names otherwise. A `.gbc` entry adopts its recorded compile-time goal unless an explicit source type is supplied; a conflicting explicit goal is rejected.
+`source-type` follows that same precedence. Without an explicit CLI or config value, `.mjs` and `.mts` entry files are parsed and evaluated as module source, and any other entry, stdin included, uses [automatic source-goal detection](language.md#modules), including Module-first detection of ambiguous top-level `await`. `"source-type": "script"` keeps such an entry script source. The REPL runs script source unless `--source-type=module` names otherwise. A `.gbc` entry adopts its recorded compile-time goal unless an explicit source type is supplied; a conflicting explicit goal is rejected.
 
 ```json
 {

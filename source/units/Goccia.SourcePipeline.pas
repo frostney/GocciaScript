@@ -30,8 +30,8 @@ type
 
   { The goal symbol an entry's source is parsed and run with (ES2026 §16.1
     Script, §16.2 Module). stDetect leaves it to the source (ADR 0140): a
-    top-level import or export declaration makes it a Module, and anything
-    else a Script. A parse settles it; see
+    top-level import or export declaration or valid top-level await makes
+    it a Module; ambiguous await may fall back to Script. A parse settles it; see
     TGocciaSourcePipelineResult.SourceType. }
   TGocciaSourceType = (stScript, stModule, stDetect);
 
@@ -93,6 +93,7 @@ type
     FGeneratedSourceLines: TStringList;
     FLexTimeNanoseconds: Int64;
     FParseTimeNanoseconds: Int64;
+    FParsePassCount: Integer;
     FComments: TGocciaCommentSpanArray;
     FTokens: TGocciaSourceTokenArray;
     FJSXTokens: TGocciaJSXTokenArray;
@@ -124,6 +125,8 @@ type
     { Empty unless the run asked for tokens and the JSX preprocessor rewrote
       the text. In source order, and measured in the original text. }
     property JSXTokens: TGocciaJSXTokenArray read FJSXTokens;
+    { Totals include failed attempts before a successful fallback. }
+    property ParsePassCount: Integer read FParsePassCount;
     property LexTimeNanoseconds: Int64 read FLexTimeNanoseconds;
     property ParseTimeNanoseconds: Int64 read FParseTimeNanoseconds;
     { The goal the source was parsed with: the options' SourceType, or for
@@ -633,7 +636,10 @@ function ParseSourceWithGoal(const ASource: TStringList;
   const AFileName: string;
   const AOptions: TGocciaSourcePipelineOptions;
   const ADeclaredPrivateNames: TStrings;
-  out AParseAsModule: Boolean): TGocciaSourcePipelineResult;
+  var ALexTime, AParseTime: Int64;
+  var AParsePassCount: Integer;
+  out AParseAsModule, AAmbiguousAwait: Boolean;
+  const AScriptAwaitFallback: Boolean = False): TGocciaSourcePipelineResult;
 var
   SourceText, OriginalSourceText: string;
   Lexer: TGocciaLexer;
@@ -647,6 +653,7 @@ var
   OrigLine, OrigCol, I: Integer;
 begin
   AParseAsModule := False;
+  AAmbiguousAwait := False;
   Result := TGocciaSourcePipelineResult.Create;
   try
     StartTime := GetNanoseconds;
@@ -690,46 +697,48 @@ begin
           Lexer.SourceLines);
         BuildParserOptionsForSourcePipeline(AOptions, ParserOptions);
         ParserOptions.DetectModuleGoal := AOptions.SourceType = stDetect;
+        ParserOptions.ScriptAwaitFallback := AScriptAwaitFallback;
         Parser.ApplyOptions(ParserOptions);
         try
-          ParseStart := GetNanoseconds;
-          if Assigned(ADeclaredPrivateNames) then
-            Result.FProgramNode :=
-              Parser.ParseWithPrivateNames(ADeclaredPrivateNames)
-          else
-            Result.FProgramNode := Parser.Parse;
-          Result.FSourceType := AOptions.SourceType;
-          if AOptions.SourceType = stDetect then
-          begin
-            if Parser.ModuleSyntaxDetected then
-              Result.FSourceType := stModule
+          try
+            Inc(AParsePassCount);
+            ParseStart := GetNanoseconds;
+            if Assigned(ADeclaredPrivateNames) then
+              Result.FProgramNode :=
+                Parser.ParseWithPrivateNames(ADeclaredPrivateNames)
             else
-              Result.FSourceType := stScript;
-            AParseAsModule := (Result.FSourceType = stModule) and
-              ParserOptions.NonStrictModeEnabled;
+              Result.FProgramNode := Parser.Parse;
+            Result.FSourceType := AOptions.SourceType;
+            if AOptions.SourceType = stDetect then
+            begin
+              if Parser.ModuleSyntaxDetected then
+                Result.FSourceType := stModule
+              else
+                Result.FSourceType := stScript;
+              AParseAsModule := (Result.FSourceType = stModule) and
+                ParserOptions.NonStrictModeEnabled;
+            end;
+            // ES2027 §16.1.1 / §8.6.6: ScriptBody must not ContainsUsing.
+            // Wait for source-goal detection: a later export makes this a module.
+            if Result.FSourceType = stScript then
+              for I := 0 to Result.FProgramNode.Body.Count - 1 do
+                if Result.FProgramNode.Body[I] is TGocciaUsingDeclaration then
+                  raise TGocciaSyntaxError.Create(
+                    'Using declarations are not allowed at the top level of a script',
+                    Result.FProgramNode.Body[I].Line,
+                    Result.FProgramNode.Body[I].Column, AFileName,
+                    Lexer.SourceLines);
+            if (Result.FSourceType = stModule) and not AParseAsModule then
+              ValidateModuleEarlyErrors(Result.FProgramNode, AFileName,
+                Lexer.SourceLines);
+          finally
+            // Capture even a failed parse, while the lexer still owns its scan time.
+            ParseEnd := GetNanoseconds;
+            Inc(ALexTime, (ParseStart - StartTime) + Lexer.ScanTimeNanoseconds);
+            ParsePhaseTime := ParseEnd - ParseStart;
+            if ParsePhaseTime > Lexer.ScanTimeNanoseconds then
+              Inc(AParseTime, ParsePhaseTime - Lexer.ScanTimeNanoseconds);
           end;
-          // ES2027 §16.1.1 / §8.6.6: ScriptBody must not ContainsUsing.
-          // Wait for source-goal detection: a later export makes this a module.
-          if Result.FSourceType = stScript then
-            for I := 0 to Result.FProgramNode.Body.Count - 1 do
-              if Result.FProgramNode.Body[I] is TGocciaUsingDeclaration then
-                raise TGocciaSyntaxError.Create(
-                  'Using declarations are not allowed at the top level of a script',
-                  Result.FProgramNode.Body[I].Line,
-                  Result.FProgramNode.Body[I].Column, AFileName,
-                  Lexer.SourceLines);
-          if (Result.FSourceType = stModule) and not AParseAsModule then
-            ValidateModuleEarlyErrors(Result.FProgramNode, AFileName,
-              Lexer.SourceLines);
-          ParseEnd := GetNanoseconds;
-          Result.FLexTimeNanoseconds :=
-            (ParseStart - StartTime) + Lexer.ScanTimeNanoseconds;
-          ParsePhaseTime := ParseEnd - ParseStart;
-          if ParsePhaseTime > Lexer.ScanTimeNanoseconds then
-            Result.FParseTimeNanoseconds :=
-              ParsePhaseTime - Lexer.ScanTimeNanoseconds
-          else
-            Result.FParseTimeNanoseconds := 0;
           Result.FGeneratedSourceLines := CloneStringList(Lexer.SourceLines);
           if AOptions.CollectComments then
             Result.FComments := Lexer.TakeComments;
@@ -760,6 +769,7 @@ begin
               OrigLine, OrigCol, ParserWarning.Line, ParserWarning.Column);
           end;
         finally
+          AAmbiguousAwait := Parser.AmbiguousTopLevelAwait;
           Parser.Free;
         end;
       finally
@@ -774,6 +784,9 @@ begin
         raise;
       end;
     end;
+    Result.FLexTimeNanoseconds := ALexTime;
+    Result.FParseTimeNanoseconds := AParseTime;
+    Result.FParsePassCount := AParsePassCount;
   except
     Result.Free;
     raise;
@@ -786,25 +799,67 @@ class function TGocciaSourcePipeline.Parse(const ASource: TStringList;
   const ADeclaredPrivateNames: TStrings): TGocciaSourcePipelineResult;
 var
   ModuleOptions: TGocciaSourcePipelineOptions;
-  ParseAsModule: Boolean;
-  DetectLexTime, DetectParseTime: Int64;
+  ParseAsModule, AmbiguousAwait, RetryAmbiguousAwait: Boolean;
+  LexTime, ParseTime: Int64;
+  ParsePassCount: Integer;
 begin
-  Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
-    ADeclaredPrivateNames, ParseAsModule);
+  LexTime := 0;
+  ParseTime := 0;
+  ParsePassCount := 0;
+  try
+    Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
+      ADeclaredPrivateNames, LexTime, ParseTime, ParsePassCount,
+      ParseAsModule, AmbiguousAwait);
+  except
+    on E: TGocciaSyntaxError do
+    begin
+      if (AOptions.SourceType <> stDetect) or not AmbiguousAwait then
+        raise;
+      // Only the ambiguous top-level await reading permits a Script retry.
+      // If that also fails, preserve the first (Module reading) diagnostic.
+      try
+        Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
+          ADeclaredPrivateNames, LexTime, ParseTime, ParsePassCount,
+          ParseAsModule, RetryAmbiguousAwait, True);
+      except
+        on ScriptError: TGocciaSyntaxError do
+          Result := nil;
+      end;
+      if not Assigned(Result) then
+        raise;
+      Exit;
+    end;
+  end;
   if not ParseAsModule then
     Exit;
-  { Only a detected Module under --compat-non-strict-mode parses twice: the
-    first parse was sloppy, and sloppy code is not a strict Module's. The
-    reported lex and parse times cover both passes. }
-  DetectLexTime := Result.FLexTimeNanoseconds;
-  DetectParseTime := Result.FParseTimeNanoseconds;
-  Result.Free;
+  { A detected Module under --compat-non-strict-mode needs a strict parse.
+    Only ambiguous await may fall back to Script if that strict parse fails. }
+  FreeAndNil(Result);
   ModuleOptions := AOptions;
   ModuleOptions.SourceType := stModule;
-  Result := ParseSourceWithGoal(ASource, AFileName, ModuleOptions,
-    ADeclaredPrivateNames, ParseAsModule);
-  Inc(Result.FLexTimeNanoseconds, DetectLexTime);
-  Inc(Result.FParseTimeNanoseconds, DetectParseTime);
+  try
+    Result := ParseSourceWithGoal(ASource, AFileName, ModuleOptions,
+      ADeclaredPrivateNames, LexTime, ParseTime, ParsePassCount,
+      ParseAsModule, RetryAmbiguousAwait);
+  except
+    on E: TGocciaSyntaxError do
+    begin
+      if (AOptions.SourceType <> stDetect) or
+         not (cfNonStrictMode in AOptions.Compatibility) or not AmbiguousAwait then
+        raise;
+      // The strict Module diagnostic wins if Script also fails.
+      try
+        Result := ParseSourceWithGoal(ASource, AFileName, AOptions,
+          ADeclaredPrivateNames, LexTime, ParseTime, ParsePassCount,
+          ParseAsModule, RetryAmbiguousAwait, True);
+      except
+        on ScriptError: TGocciaSyntaxError do
+          Result := nil;
+      end;
+      if not Assigned(Result) then
+        raise;
+    end;
+  end;
 end;
 
 class function TGocciaSourcePipeline.ParseModuleSource(const ASource: string;
