@@ -2,6 +2,39 @@
 
 All notable changes to GocciaScript are documented in this file.
 
+## [0.17.0] - 2026-11-07
+
+### 🌐 Website
+
+- docs: reposition the README, website and package metadata for embedding first (#2114)
+
+### 🏗️ Internal
+
+- docs: bring docs, website and glossary in line with 0.17.0 before the release (#2123)
+- fix(windows): pin reviewed SafeSEH non-handler routines to their own source (#2115)
+- docs(vision): make GocciaScript embedding-first, with the sandbox as a reference host (#2110)
+- docs(orchestration): drop the per-lane context-size limits (#2117)
+- test(docs): the conformance-claim sentinel covers scripts, workflows, skills and every README (#2109)
+- perf(benchmarks): time AWFY warm, alternate the engine order, and add node --jitless and JSC comparators (#2112)
+- docs(skills): point issue validation at GocciaTest262Runner and the pin file (#2108)
+- docs(adr): put Annex B in the test262 conformance target (ADR 0177) (#2105)
+- docs(adr): record performance targets: the interpreter beats QuickJS, then .gcbundle, an opt-in JIT and a compiled executable (#2103)
+- chore(skills): sync provisioned skills (#2097)
+
+### 🐛 Fixed
+
+- fix(test262): run annexB by default, with $262 as the harness's only global (#2116)
+- fix(test262): run each unflagged script test in both strict and non-strict mode (#2113)
+- fix(parser): allow newlines before async-named method parameters (#2120)
+- fix(windows): console output shows characters outside the console's code page (#2106)
+- fix(test262): evaluate harness includes as separate non-strict Scripts and apply "use strict" to the test only (#2101)
+- fix(generator): restore specific async yield delegation errors (#2104)
+
+### 🚀 Added
+
+- feat(engine): embedders opt into a supported global eval through EnableEval (#2107)
+- feat(runtime): the File API's Blob global (#2048)
+
 ## [0.16.0] - 2026-11-05
 
 ### ⚡ Performance

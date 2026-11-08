@@ -1,4 +1,4 @@
-<!-- doc-length-limit: 1100 -->
+<!-- doc-length-limit: 1130 -->
 # Embedding the Engine
 
 *For Pascal developers who want to embed the GocciaScript engine in their own applications.*
@@ -10,7 +10,7 @@
 - **Module resolution** — Pluggable resolver with extensionless imports, import maps, custom content providers, virtual modules, and host modules
 - **Transparent GC** — Mark-and-sweep GC initializes automatically; FPU exceptions are masked for IEEE 754 semantics
 
-Native application embedding is an important secondary GocciaScript goal. `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, `goccia:test`, and `node:async_hooks`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
+Embedding is GocciaScript's primary goal ([Vision](../VISION.md#primary-an-engine-for-embedding)). `TGocciaRuntime` is the shared Pascal embedding entry point for the runtime layer: filesystem module content loading, runtime module dispatch, and extension installation. Runtime globals such as `console`, `fetch`, and `URL`, plus import-only modules such as `goccia:json5`, `goccia:toml`, `goccia:yaml`, `goccia:csv`, `goccia:tsv`, `goccia:jsonl`, `goccia:semver`, `goccia:test`, and `node:async_hooks`, usually come from `ApplyLoaderRuntimeProfile`. `TGocciaEngine` remains available through `Runtime.Engine` and as a core-language-only API for embedders that intentionally do not want runtime globals or runtime modules.
 
 ## Quick Start
 
@@ -542,7 +542,7 @@ FsClock.Free;
 | System | Type | Default | Purpose |
 |--------|------|---------|---------|
 | `Preprocessors` | `TGocciaPreprocessors` | `[ppJSX]` | Source transformations before parsing |
-| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | ECMAScript conformance and legacy-behavior toggles; leave empty for the recommended defaults |
+| `Compatibility` | `TGocciaCompatibilityFlags` | `[]` | The ECMAScript forms the recommended profile leaves out, as supported customization ([Changing the Defaults](#changing-the-defaults)); leave empty for the recommended defaults |
 | `WarningUnsupportedFeatures` | `Boolean` | `False` | Parser diagnostic policy for disabled syntax; `True` restores warning/no-op recovery without enabling compatibility semantics |
 | `SourceType` | `TGocciaSourceType` | `stDetect` | Apply [entry source type detection](language.md#modules) (`stDetect`), or always use script (`stScript`) or module (`stModule`) source; `.mjs` and `.mts` file names infer `stModule` |
 | `StrictTypes` | `Boolean` | `False` | Runtime enforcement of type annotations; applies to code compiled after it is set, and the setter updates the global scope |
@@ -575,9 +575,29 @@ When `SourceType` is `stModule`, `Execute` runs the entry program in a fresh mod
 
 **Top-level binding persistence differs between source types.** With `SourceType = stScript` and `GlobalBackedTopLevel` set, the engine binds each run's top-level declarations in its global scope (`Engine.GlobalScope`), which it reuses across every call to `Execute`; that is what makes the [long-lived engine pattern](#instance-usage-long-lived-engine) above work: `const x = 42` defined in one `Execute` is visible to the next. Without `GlobalBackedTopLevel` they stay in the run's own frame, and the next `Execute` throws a `ReferenceError` for `x`. With `SourceType = stModule`, each `Execute` allocates a brand-new `skModule` child scope, so top-level `let`/`const`/`class` declarations live and die with that single call. If callers need cross-`Execute` persistence, set `SourceType` to `stScript` (with the default `stDetect`, a source with an `import` or `export` declaration runs as module source) and set `GlobalBackedTopLevel`, or expose the desired symbols through the global scope (e.g. `Engine.RegisterGlobal(...)` or `Engine.GlobalScope.DefineLexicalBinding(...)`).
 
+## Changing the Defaults
+
+An engine starts with the recommended language profile and without dynamic code generation. Four switches change that, each off by default and set before `Execute`; the CLI hosts expose all but the last:
+
+| Switch | What it turns on | CLI | Audit event |
+|--------|------------------|-----|-------------|
+| `Engine.Compatibility` | The ECMAScript forms the recommended profile leaves out (`cfASI`, `cfVar`, `cfFunction`, `cfNonStrictMode`, ...); see [Preprocessors and Compatibility](#preprocessors-and-compatibility) | `--compat-*` | none |
+| `Engine.FunctionConstructor.Enabled := True` | The `Function` constructor, which is always present and throws while disabled | `--unsafe-function-constructor` | `function.constructor` |
+| `EnableShadowRealm(Engine)` (`Goccia.Builtins.GlobalShadowRealm`) | Installs `globalThis.ShadowRealm` | `--unsafe-shadowrealm` | `shadow-realm.construct` |
+| `EnableEval(Engine)` (`Goccia.Builtins.GlobalEval`) | Installs `globalThis.eval` as the realm's `%eval%` | none; engine API only | `eval.call` |
+
+```pascal
+Engine.Compatibility := [cfASI, cfVar, cfFunction, cfNonStrictMode];
+Engine.FunctionConstructor.Enabled := True;
+EnableShadowRealm(Engine);
+EnableEval(Engine);
+```
+
+`EnableShadowRealm` and `EnableEval` install a global that is otherwise absent, so feature detection sees exactly what the host chose; both are idempotent, and an engine cannot turn them off again. For `eval` the option and the global are separate things: the global is writable and configurable, so a script can delete or replace `globalThis.eval`, and feature detection then stops showing it, but `IsEvalEnabled(Engine)` stays true and a `ShadowRealm` created afterwards still gets its own `eval`. If `EnableEval` throws, for example because the script made the global object non-extensible, the option stays off and a later call can retry. With `EnableEval`, a call written `eval(...)` is a direct eval that sees the caller's bindings and is strict when the caller is (ES2026 §13.3.6.1), but only while the name resolves to the realm's `%eval%`: once a script replaces the global, or binds the name to another function, the same syntax calls that function as an ordinary function. Any other call, such as `(0, eval)(...)`, is an indirect eval in the global scope that is strict only by its own `"use strict"` (§19.2.1). Without `cfNonStrictMode` every script is strict, so direct eval code is too, while indirect eval code still follows only its own directive. A `ShadowRealm` created by an engine with `EnableEval` gets its own `eval`, which evaluates in the child realm; `IsEvalEnabled(Engine)` reports whether the option is on. Every eval call reports an `eval.call` [audit event](capability-audit.md). `eval`, `Function` and `ShadowRealm.prototype.evaluate` all run any source text the script builds, with the engine's full capability set, so a host that runs untrusted code leaves them off.
+
 ## Injecting Custom Globals
 
-You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly.
+You can inject Pascal functions and values into the script's global scope by working with the engine's global scope (`Engine.GlobalScope`) directly. The capability set governs only the access the engine makes itself, such as `fetch`, imports and FFI; a function you inject is host code that the engine does not check, so authorize what it reaches yourself.
 
 ### Injecting a Value
 

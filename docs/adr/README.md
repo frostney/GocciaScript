@@ -188,3 +188,5 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0176 — Performance is a goal: the interpreter beats QuickJS first, then .gcbundle, an opt-in JIT and a compiled executable](0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)
 - [0177 — Annex B is part of the test262 conformance target, and new Annex B surfaces sit behind a compatibility flag](0177-annex-b-is-part-of-the-test262-conformance-target.md)
 - [0178 — AWFY is timed warm, engines alternate their order, and interpreter-class comparators run beside QuickJS](0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)
+- [0179 — eval is an engine-only, opt-in installer, `EnableEval`, with no CLI flag and no config key](0179-eval-is-an-engine-only-opt-in-installer.md)
+- [0180 — A reviewed non-SEH routine is pinned to its own source text, not its whole file](0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)

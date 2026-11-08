@@ -6,21 +6,21 @@
 ## Executive Summary
 
 - **Implementation vs profile** — GocciaScript implements core ECMAScript; modern recommended defaults are product policy rather than the language ceiling
-- **Conformance evidence** — Generated test262 reports measure the release-track objective; canonical prose links to current results instead of freezing a percentage
+- **Conformance evidence** — Generated test262 reports measure progress toward the [conformance target](../VISION.md#conformance); canonical prose links to current results instead of freezing a percentage
 - **Compatibility paths** — Every standard core form disabled by the recommended profile has a targeted `--compat-*` path
-- **Host exposure** — Normal hosts do not install `eval`; the private `GocciaTest262Runner` conformance host exposes `eval`, `evalScript`, and `createRealm`
+- **Host exposure** — `eval` is installed only by an embedder that opts in through the engine's `EnableEval` option; the shipped CLIs do not, apart from the `GocciaTest262Runner` conformance host, which also exposes `evalScript` and `createRealm`
 - **TC39 proposals and extensions** — The TC39 Type Annotations proposal uses types-as-comments semantics by default; GocciaScript's optional `--strict-types` extension adds runtime enforcement
 - **Annex B policy** — Annex B is part of the test262 conformance target; new Annex B surfaces go behind a compatibility flag that the test262 runner turns on
 
-GocciaScript implements ECMAScript with curated recommended defaults. Calling it merely a JavaScript-like subset is misleading: the engine's implemented language capability, its recommended profile, and its host APIs are separate dimensions. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For current generated evidence, use the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility); for quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
+GocciaScript implements ECMAScript with sensible recommended defaults that a host can change. Calling it merely a JavaScript-like subset is misleading: the engine's implemented language capability, its recommended profile, and its host APIs are separate dimensions. This document details what's supported by default, what lives behind compatibility flags, what is shimmed for legacy conformance, and the rationale for each decision. For current generated evidence, use the live [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility); for quick-reference tables of every feature and TC39 proposal, see [Language Tables](language-tables.md).
 
 ## Guiding Principle
 
-> **A drop of JavaScript** — GocciaScript recommends the parts of JavaScript that lead to clear, predictable, and secure code by default. Legacy features that are error-prone, redundant, or security risks are isolated behind compatibility flags or shims where conformance requires them.
+> **A drop of JavaScript** — GocciaScript recommends the parts of JavaScript that lead to clear, predictable, and secure code by default. Legacy features that are error-prone, redundant, or security risks are off by default, behind compatibility flags or shims that a host turns on when its code needs them.
 
 ## Compatibility Flags
 
-Compatibility flags are parser and runtime policy switches for ECMAScript conformance work, test262 execution, and hosts that deliberately need legacy JavaScript behavior. They are not the recommended starting point for generated code or ordinary userland scripts. AI coding agents should usually emit the default forms first, then enable a flag only when the surrounding project, test, or host explicitly needs the legacy semantics.
+Compatibility flags are parser and runtime switches that turn on the parts of ECMAScript the recommended profile leaves out. They are supported customization, not escape hatches: a host that runs existing JavaScript, or a library that uses those forms, turns on the flags it needs, and the test262 runner turns on every flag in the table below. New code can start from the default forms, which the table lists beside each flag. Guidance for code that AI agents generate lives with the sandbox host, under [Permissions — Sandbox mode](permissions.md#sandbox-mode).
 
 Annex B is part of the test262 conformance target, and new Annex B surfaces go behind an off-by-default compatibility flag; see [Annex B Web-Browser Legacy Features](#annex-b-web-browser-legacy-features).
 
@@ -446,7 +446,7 @@ The transformer generates an internal source map for accurate error line/column 
 - Flags: `d`, `g`, `i`, `m`, `s`, `u`, `v`, `y`
 - RegExp instance properties: `source`, canonicalized `flags`, `lastIndex`, `global`, `ignoreCase`, `multiline`, `dotAll`, `unicode`, `sticky`, `unicodeSets`, `hasIndices`
 - Match indices through the `d` flag, exposed as UTF-16 code unit `[start, end]` pairs on `match.indices` and `match.indices.groups`
-- `RegExp.escape()` (ES2026)
+- `RegExp.escape()` (ES2025)
 - Named capture group names are validated as identifier-name code points. Duplicate named capture groups may appear in different alternatives of a disjunction (`|`), e.g., `/(?<year>\d{4})-\d{2}|\d{2}-(?<year>\d{4})/`. The `groups` property returns the value from whichever alternative participated, and `\k<name>` backreferences resolve to the correct group within each alternative.
 - `RegExp.prototype.exec()`, `test()`, `toString()`, and the `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, and `Symbol.split` hooks
 - String integrations for `replace`, `replaceAll`, `split`, `match`, `matchAll`, and `search`, including custom protocol objects with the corresponding well-known symbol methods
@@ -735,9 +735,9 @@ Strict equality requires matching types, eliminating this entire class of bugs.
 
 ### `eval()`
 
-**Implemented; not installed by normal hosts.** `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and default `GocciaScriptLoaderBare` do not expose runtime `eval`.
+**Implemented; off by default.** `GocciaRunner` (host and sandbox mode), `GocciaREPL`, `GocciaTestRunner`, and `GocciaScriptLoaderBare` do not expose `eval`, and no CLI flag or config key turns it on.
 
-`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. The only implementation is a private conformance host hook: `GocciaTest262Runner` installs the official test262 host `eval`, plus `evalScript(sourceText)` and `createRealm()` properties on the private test262 host object, so the stock test262 harness can exercise ECMAScript direct-eval and realm semantics. Those hooks are not exposed outside conformance runs and should not be used as an application API.
+`eval` is a security risk — it executes arbitrary strings as code. In an embedded scripting environment, this is especially dangerous. An embedder that wants it calls `EnableEval(Engine)`, which installs `globalThis.eval` with direct and indirect eval semantics; see [Embedding — Changing the Defaults](embedding.md#changing-the-defaults). `GocciaTest262Runner` uses the same option, and adds `evalScript(sourceText)` and `createRealm()` on its private test262 host object so the stock test262 harness can exercise realm semantics.
 
 ### `arguments` Object
 
@@ -783,7 +783,7 @@ When enabled, GocciaScript follows the ECMAScript ASI rules (ES2026 §12.10):
 - A semicolon is inserted before `}` or at EOF
 - Restricted productions (`return`, `throw`, `break`) follow the `[no LineTerminator here]` rules
 - Only a newline between two tokens counts, including one inside a multi-line comment. A newline inside a token, such as a multi-line template literal or a string's line continuation, is part of that token: `return`, `throw` or `yield` followed on the same line by a template that spans lines returns, throws or yields the template
-- With or without ASI, a line break between `yield` and `*` or before an arrow function's `=>` is a `SyntaxError`, and a line break after `async` before a method name or `*` makes `async` a property name rather than an async method's prefix: an object literal then needs a comma, and in a class body it is a field named `async` that ASI ends
+- With or without ASI, a line break between `yield` and `*` or before an arrow function's `=>` is a `SyntaxError`, and a line break after `async` before a method name or `*` makes `async` a property name rather than an async method's prefix: an object literal then needs a comma, and in a class body it is a field named `async` that ASI ends. A parameter list on the next line still continues the element, because `(` may follow the name `async` and so no semicolon is inserted before it: `async⏎() {}` in a class body is a method named `async`
 
 ### Traditional `for(init; test; update)` Loop
 

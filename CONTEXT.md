@@ -1,17 +1,17 @@
 # GocciaScript Context
 
-GocciaScript is a FreePascal implementation of ECMAScript with sandbox-first recommended defaults and opt-in compatibility/runtime surfaces. This glossary is the canonical language for project-specific terms used in code, docs, issues, and reviews.
+GocciaScript is a FreePascal implementation of ECMAScript for embedding, with sensible recommended defaults and opt-in compatibility/runtime surfaces. This glossary is the canonical language for project-specific terms used in code, docs, issues, and reviews.
 
 ## Language
 
 ### Project And Layers
 
 **GocciaScript**:
-A sandbox-first ECMAScript runtime and toolchain for AI agents, with an explicit host-defined capability model and generated test262 evidence. It is implemented in FreePascal, supports Delphi, and can also be embedded in native applications as an important secondary goal.
+An ECMAScript engine for embedding, with sensible defaults that are easy to customize, an explicit host-defined capability model, and generated test262 evidence. It is implemented in FreePascal, supports Delphi, and ships a toolchain of CLI hosts; `GocciaRunner`'s sandbox mode for AI agents is a reference host built on the engine.
 _Avoid_: JS engine when the recommended defaults or host-tooling shape matters.
 
 **Recommended defaults**:
-The recommended out-of-the-box way to use GocciaScript: sandbox-first, modern, and intentionally conservative about legacy JavaScript forms. It describes guidance for new code, not the limit of what the engine or runtime can support when a host opts into compatibility or custom runtime capabilities.
+The recommended out-of-the-box way to use GocciaScript: modern, without dynamic code generation, and intentionally conservative about legacy JavaScript forms. It describes guidance for new code, not the limit of what the engine or runtime can support: a host changes it through the knobs in [Embedding — Changing the Defaults](docs/embedding.md#changing-the-defaults), and there are no presets.
 _Avoid_: Language ceiling, hard limit.
 
 **Recommended profile**:
@@ -151,7 +151,7 @@ The open product direction of aligning selected runtime globals and host behavio
 _Avoid_: WHATWG API compatibility, browser host environment, Node.js host compatibility.
 
 **WHATWG API compatibility**:
-The open product direction of implementing selected WHATWG browser and web-platform APIs when they fit GocciaScript's sandboxed runtime and embeddable platform goals. It does not imply a full browser host environment.
+The open product direction of implementing selected WHATWG browser and web-platform APIs when they serve an embedding use case, such as the APIs React server rendering needs. It does not imply a full browser host environment.
 _Avoid_: WinterTC compatibility, browser host environment, DOM compatibility.
 
 **Built-in**:
@@ -271,6 +271,14 @@ _Avoid_: VM mode, bytecode mode, execution mode, interpreted mode, tree-walk exe
 **Goccia bytecode**:
 The GocciaScript-owned instruction format used by bytecode execution and stored in `.gbc` artifacts.
 _Avoid_: Generic VM bytecode.
+
+**`.gcbundle`**:
+The planned bytecode artifact a host ships instead of source, the second performance target of [ADR 0176](docs/adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md). It is not shipped yet and is distinct from today's `.gbc` artifact.
+_Avoid_: `.gbc`, bundle, snapshot.
+
+**Eval engine option**:
+The engine knob, `EnableEval`, that installs the `eval()` global; it is off by default and exists only in the engine API, with no CLI flag or config key ([ADR 0179](docs/adr/0179-eval-is-an-engine-only-opt-in-installer.md)).
+_Avoid_: Eval flag, `--unsafe-eval`, eval config key.
 
 **Goccia VM**:
 The virtual machine that executes Goccia bytecode for GocciaScript.
@@ -447,8 +455,12 @@ The Runner's default mode: source runs against the host filesystem, and what it 
 _Avoid_: Loader mode, normal mode.
 
 **Sandbox mode**:
-The Runner mode, enabled by `--sandbox`, a copy input, or a trusted `sandbox` config section, in which the entry runs inside an isolated sandbox virtual filesystem initialised from a seed baseline, can import `fs`, `goccia` and `goccia:search`, and may reach only the `net` capability. It reports a structured run result and, on request, a diff. See [Permissions](docs/permissions.md#sandbox-mode) and [Build System](docs/build-system.md).
+The Runner mode, enabled by `--sandbox`, a copy input, or a trusted `sandbox` config section, in which the entry runs inside an isolated sandbox virtual filesystem initialised from a seed baseline, can import `fs`, `goccia` and `goccia:search`, and may reach only the `net` capability. It reports a structured run result and, on request, a diff. It is the reference host for code that AI agents generate, built on the capability model and runtime extensions any embedder can install. See [Permissions](docs/permissions.md#sandbox-mode) and [Build System](docs/build-system.md).
 _Avoid_: Sandbox Runner, `GocciaSandboxRunner`.
+
+**Reference host**:
+A host the project ships as an example of what an embedder can build on the engine's capability model and runtime extensions; it is neither the limit of the engine nor its primary audience. Sandbox mode is one.
+_Avoid_: Primary product, headline, agent runtime.
 
 **Install mode**:
 The Runner mode, enabled by `--add`, `--remove`, `--install`, or `--update`, that resolves provider-package refs and writes the lockfile and then the import map. It runs no script and takes no input files.
@@ -486,12 +498,24 @@ _Avoid_: Vitest compatible as an unqualified claim, full parity.
 A JavaScript-visible hook exposed on the `Goccia` namespace only by the dedicated `GocciaTest262Runner` conformance host. It is not a core language built-in and not part of the normal runtime surface.
 _Avoid_: Runtime global, compatibility flag.
 
+**test262 run**:
+One execution of one test262 file in one test262 mode. A file that allows both modes has two runs, non-strict then strict, and a report's pass, fail and timeout counts are counts of runs, not of files.
+_Avoid_: Test or case when counting results.
+
+**test262 mode**:
+The strictness a test262 run executes in, `non-strict` or `strict`. Every run records its mode, and a report gives per-mode results beside the combined figure.
+_Avoid_: Execution mode, strict flag.
+
+**Grading contract**:
+The versioned rules that decide whether a test262 run passes, recorded in every report. A grading change that can move a run between pass and fail without an engine change gets a new contract version.
+_Avoid_: test262 version, suite pin.
+
 **Compatibility dashboard**:
 The `/compatibility` page on the project website, rendered from the generated test262 reports. It is the canonical home of conformance figures; documentation and website copy link to it instead of quoting a pass rate.
 _Avoid_: Conformance table, hand-typed pass rate, Performance Barometer.
 
 **Wrapper infrastructure failure**:
-A test262 result class for a case whose run failed outside the conformance contract — a signal-killed engine process, a runner or harness protocol error outside engine execution, or a harness Script that failed before the test ran. It is distinct from a conformance failure and from a timeout, and is gated to zero in continuous integration. See [test262](docs/test262.md).
+A test262 result class for a run that failed outside the conformance contract — a signal-killed engine process, a runner or harness protocol error outside engine execution, or a harness Script that failed before the test ran. It is distinct from a conformance failure and from a timeout, and is gated to zero in continuous integration. See [test262](docs/test262.md).
 _Avoid_: Conformance fail, flaky test, harness error.
 
 **Performance Barometer**:
@@ -499,15 +523,27 @@ The public view of GocciaScript performance against selected reference engines u
 _Avoid_: Leaderboard, competitor ranking.
 
 **Reference engine**:
-An independently developed JavaScript engine or runtime measured beside GocciaScript to provide external scale and trend context. A reference engine is not assumed to share GocciaScript's goals or constraints.
-_Avoid_: Competitor, baseline engine.
+An independently developed JavaScript engine or runtime measured beside GocciaScript, each with its own reference ratio, to provide external scale and trend context; benchmark reports and ADRs also call it a comparator. A reference engine is not assumed to share GocciaScript's goals or constraints.
+_Avoid_: Competitor, baseline engine, target engine.
+
+**Interpreter-class comparator**:
+A reference engine that runs with its JIT disabled, `node --jitless` or `jsc --useJIT=false`. It gives interpreter-to-interpreter context, and the first performance target does not count it ([ADR 0178](docs/adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
+_Avoid_: Target engine.
+
+**Warm timing**:
+The AWFY protocol that times a window of measured iterations after in-process warm-up iterations, so a sample is the steady-state time of one iteration. The first warm-up iteration is kept as the cold figure, which no ratio uses ([ADR 0178](docs/adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
+_Avoid_: Cold sample, single-call timing.
+
+**Alternating engine order**:
+The benchmark repetition scheme in which each repetition runs the engines in the reverse order of the one before, so over an even number of repetitions each engine of a pair runs first equally often ([ADR 0178](docs/adr/0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)).
+_Avoid_: Randomized order, fixed order.
 
 **Reference ratio**:
 A dimensionless comparison normalized so `1.00×` means aligned performance and a value above `1.00×` means GocciaScript was proportionally slower. For elapsed-time suites it is Goccia time divided by reference time; for score suites it is reference score divided by Goccia score.
 _Avoid_: Speedup, ranking score.
 
 **North-star trend**:
-The retained direction of compatible reference-ratio measurements over time. A trend line breaks when the corpus, subset, driver, or reference-engine version changes rather than implying continuity across different measurement contracts. Target 1 of [ADR 0176](docs/adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md) is judged on the QuickJS ratios of this trend per platform at milestone acceptance, not on each PR.
+The retained direction of compatible reference-ratio measurements over time. A trend line breaks when the corpus, subset, driver, reference-engine version, or measurement protocol changes rather than implying continuity across different measurement contracts. Target 1 of [ADR 0176](docs/adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md) is judged on the QuickJS ratios of this trend per platform at milestone acceptance, not on each PR.
 _Avoid_: Per-PR gate, competitive ranking.
 
 **Compile profile**:
@@ -579,7 +615,7 @@ A class or object shorthand function that receives its call-site receiver as `th
 _Avoid_: Arrow method.
 
 **Compatibility flag**:
-An explicit boolean CLI flag or config value, using canonical `compat-*` spelling, that enables an ECMAScript behavior disabled by the recommended profile.
+An explicit boolean switch, a member of `Engine.Compatibility` in the engine and a canonical `compat-*` CLI flag or config key on the CLI hosts, that enables an ECMAScript form the recommended profile leaves out or a new Annex B surface ([ADR 0177](docs/adr/0177-annex-b-is-part-of-the-test262-conformance-target.md)). It is supported customization, not an escape hatch.
 _Avoid_: Feature flag when the option exists for compatibility semantics.
 
 **Compatibility flag set**:
@@ -593,6 +629,9 @@ Use **Runtime** for the host integration layer. Use **runtime value**, **runtime
 
 **Execution mode, executor, tree-walk execution**:
 Retired in 0.15.0, when the tree-walk interpreter, the `--mode` option and the executor were removed. Use them only for releases up to 0.14 and in historical records such as ADRs; say **bytecode execution**, **engine**, or **Goccia VM** for current behavior.
+
+**test262 mode vs execution mode**:
+Use **test262 mode** only for the strictness of a test262 run. It is unrelated to the retired execution mode (`--mode`, still rejected), to the Runner's host, sandbox and install modes, and to `--profile-mode`.
 
 **Read-only path vs copy input**:
 Use **read-only path** only for a virtual-filesystem path whose changes fail with `EROFS`. A `--copy` input is not read-only: the script may change it, and the change is discarded rather than written back.
