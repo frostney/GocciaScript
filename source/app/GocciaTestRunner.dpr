@@ -11,6 +11,7 @@ uses
   TimingUtils,
   OrderedStringMap,
   UnicodeStringList,
+  StringBuffer,
   CriticalSections,
 
   Goccia.Arguments.Collection,
@@ -2300,7 +2301,7 @@ var
   PerTestNanoseconds: Int64;
   IsParallel: Boolean;
   CurrentOutputFile: string;
-  FailedNames: TStringBuilder;
+  FailedNames: TStringBuffer;
   I, J: Integer;
 begin
   ExitCode := 0;
@@ -2353,19 +2354,15 @@ begin
       end;
       { Report records contain native strings and need no JavaScript realm or
         user-defined coercion, just as in WriteFileResults. }
-      FailedNames := TStringBuilder.Create;
-      try
-        for I := 0 to Length(AResult.FileResults) - 1 do
-          for J := 0 to Length(AResult.FileResults[I].FailedTests) - 1 do
-          begin
-            if FailedNames.Length > 0 then
-              FailedNames.Append(',');
-            FailedNames.Append(AResult.FileResults[I].FailedTests[J]);
-          end;
-        Writeln(Format('Test Results Failed Tests: %s', [FailedNames.ToString]));
-      finally
-        FailedNames.Free;
-      end;
+      FailedNames := TStringBuffer.Create;
+      for I := 0 to Length(AResult.FileResults) - 1 do
+        for J := 0 to Length(AResult.FileResults[I].FailedTests) - 1 do
+        begin
+          if FailedNames.Length > 0 then
+            FailedNames.AppendChar(',');
+          FailedNames.Append(AResult.FileResults[I].FailedTests[J]);
+        end;
+      Writeln(Format('Test Results Failed Tests: %s', [FailedNames.ToString]));
     end;
   end;
 
