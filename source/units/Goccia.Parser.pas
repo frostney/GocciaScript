@@ -7542,7 +7542,10 @@ begin
             ((FCurrent >= 2) and
              (FTokens[FCurrent - 2].TokenType in [gttDot, gttOptionalChaining]))) and
            not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
-           CheckContextualKeyword(KEYWORD_OF) then
+           CheckContextualKeyword(KEYWORD_OF) and
+           // An initializer makes `of` a binding name, as in `using of =`.
+           // Otherwise the next token begins the iterable, so request regexp.
+           not CheckNextWithLexicalGoal(gttAssign, glgInputElementRegExp) then
           Exit;
 
         // Once an operator rules out a LeftHandSideExpression, keep scanning
