@@ -5293,7 +5293,9 @@ console.log("--max-memory stack refusal is located at the call...");
         join(tmp, name),
         [
           "const keep = [];",
-          "for (let i = 0; i < 25000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
+          // Leave headroom for per-object size changes: the preload must fit
+          // inside 8 MiB so stack growth, not array construction, is refused.
+          "for (let i = 0; i < 20000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
           ...body,
           "console.log(r(1000000));",
           "",
