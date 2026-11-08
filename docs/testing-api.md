@@ -570,7 +570,7 @@ Three Vitest behaviors follow from that structure rather than from emulation:
 
   | Source type | Mocked module imported | Factory referencing a test-file `const` |
   |---|---|---|
-  | Module (`.mjs`, a test file with a top-level `import` or `export`, `--source-type=module`, or `source-type: module`) | statically or dynamically | `ReferenceError` — matches Vitest |
+  | Module (`.mjs`, a test file [detected as Module](language.md#modules), `--source-type=module`, or `source-type: module`) | statically or dynamically | `ReferenceError` — matches Vitest |
   | Script (`--source-type=script` or `source-type: script`) | statically | `ReferenceError` (TDZ: `Cannot access 'x' before initialization`) |
   | Script (a `.js` test file without `import` or `export`, or an explicit script source type) | dynamically, via `await import()` | **Resolves the variable** — looser than Vitest |
 
