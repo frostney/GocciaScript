@@ -41,7 +41,7 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
-import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
+import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyModuleProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
 import { verifyBundlerLayout } from "./test-cli-bundler-layout";
 import { verifyBundlerReproducibility, verifyBundlerPrivateIsolation } from "./test-cli-bundler-reproducibility";
@@ -8547,7 +8547,8 @@ await section("Compile profiling: per-function parse and compile records...", ve
 await section("Compile profiling: every counter grows with its shape...", verifyCompileCounterGrowth);
 
 await section("Directory profiling: all files, modes and deterministic captures...", verifyDirectoryProfiles);
-await section("Function profiling: recursive totals stay within <module>'s...", verifyRecursiveTotals);
+await section("Function profiling: module evaluation across awaits and source-goal retries...", verifyModuleProfiles);
+await section("Function profiling: recursive totals stay within profiled time...", verifyRecursiveTotals);
 
 await section("BenchmarkRunner: results are reported under a polluted Array.prototype...", async () => {
   // The results array is new, so its elements are made with

@@ -16722,6 +16722,8 @@ end;
   of line: neither runs unless asked for. }
 procedure TGocciaVM.NoteFrameEntry(const ATemplate: TGocciaFunctionTemplate;
   var APrevCovLine: UInt32; var AProfileTimestamp: Int64);
+var
+  ResumingModule: Boolean;
 begin
   if FCoverageEnabled and (TGocciaCoverageTracker.Instance <> nil) and
      Assigned(ATemplate.DebugInfo) and
@@ -16751,7 +16753,18 @@ begin
         ATemplate.ProfileIndex := TGocciaProfiler.Instance.RegisterTemplate(
           ATemplate.Name, '', 0);
     end;
-    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex);
+    // Await resumes the same module evaluation. Keep a balanced timing
+    // segment for it, but count only its initial entry. A nested generator
+    // can inherit the module promise, so require a non-generator async body
+    // and the exact continuation/VM/closure before suppressing the count.
+    ResumingModule := ATemplate.IsAsync and not ATemplate.IsGenerator and
+      Assigned(GActiveBytecodeGenerator) and
+      (GActiveBytecodeGenerator.FVM = Self) and
+      (GActiveBytecodeGenerator.FClosure = FCurrentClosure) and
+      GActiveBytecodeGenerator.FHasContinuation and
+      Assigned(FCurrentAsyncPromise) and FCurrentAsyncPromise.IsModuleEvaluation;
+    TGocciaProfiler.Instance.PushFunction(ATemplate.ProfileIndex,
+      not ResumingModule);
   end;
 
   if FCoverageEnabled and Assigned(ATemplate.DebugInfo) and
