@@ -4291,7 +4291,8 @@ var
   VS: PValue;
   NS, NL: PByte;   { the nursery, which no collection moves while FastLoop runs }
   I: QWord;
-  A, CI, NP: Integer;
+  A: NativeInt;   { pointer-sized: R[A] needs no sign extension }
+  CI, NP: Integer;
   VA, VB, V: TValue;
   Sum: Int64;
   O, O2: PObj;
@@ -4302,15 +4303,17 @@ var
   U: PUpval;
   P: PByte;
   Bool: Boolean;
+  IP: PQWord;   { the next instruction: a pointer, not Code[PC], saves FastLoop's spilled Code load per step }
 begin
+  IP := @Code[PC];
   VS := VStack;
   NS := NurseryStart;
   NL := NurseryLimit;
   Changed := False;
   while True do
   begin
-    I := Code[PC];
-    Inc(PC);
+    I := IP^;
+    Inc(IP);
     A := (I shr 8) and $FFFF;
     case TOp(I and $FF) of
       opNop: ;
@@ -4700,15 +4703,22 @@ begin
           else goto LBail;
           R[A] := MkBool(Bool);
         end;
-      opJmp: Inc(PC, SarInt64(Int64(I), 40));
-      opJT, opJF:
+      opJmp: Inc(IP, SarInt64(Int64(I), 40));
+      { a boolean first: most conditions are comparison results }
+      opJT:
         begin
-          if ToBool(R[A]) = (TOp(I and $FF) = opJT) then Inc(PC, SarInt64(Int64(I), 40));
+          V := R[A];
+          if (V = VTrue) or ((V <> VFalse) and ToBool(V)) then Inc(IP, SarInt64(Int64(I), 40));
         end;
-      opJNullish: if (R[A] = VUndefined) or (R[A] = VNull) then Inc(PC, SarInt64(Int64(I), 40));
-      opJNotNullish: if (R[A] <> VUndefined) and (R[A] <> VNull) then Inc(PC, SarInt64(Int64(I), 40));
-      opJUndef: if R[A] = VUndefined then Inc(PC, SarInt64(Int64(I), 40));
-      opJNotUndef: if R[A] <> VUndefined then Inc(PC, SarInt64(Int64(I), 40));
+      opJF:
+        begin
+          V := R[A];
+          if (V = VFalse) or ((V <> VTrue) and not ToBool(V)) then Inc(IP, SarInt64(Int64(I), 40));
+        end;
+      opJNullish: if (R[A] = VUndefined) or (R[A] = VNull) then Inc(IP, SarInt64(Int64(I), 40));
+      opJNotNullish: if (R[A] <> VUndefined) and (R[A] <> VNull) then Inc(IP, SarInt64(Int64(I), 40));
+      opJUndef: if R[A] = VUndefined then Inc(IP, SarInt64(Int64(I), 40));
+      opJNotUndef: if R[A] <> VUndefined then Inc(IP, SarInt64(Int64(I), 40));
       opJNLt, opJNLe, opJNGt, opJNGe:
         begin
           VA := R[A];
@@ -4732,7 +4742,7 @@ begin
             end;
           end
           else goto LBail;
-          if not Bool then Inc(PC, SarInt64(Int64(I), 40));
+          if not Bool then Inc(IP, SarInt64(Int64(I), 40));
         end;
       opJNSEq, opJSEq:
         begin
@@ -4746,7 +4756,7 @@ begin
           else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
           else if IsBigInt(VA) and IsBigInt(VB) then goto LBail
           else Bool := False;   { objects and symbols: the same one only }
-          if Bool = (TOp(I and $FF) = opJSEq) then Inc(PC, SarInt64(Int64(I), 40));
+          if Bool = (TOp(I and $FF) = opJSEq) then Inc(IP, SarInt64(Int64(I), 40));
         end;
       opCall:
         begin
@@ -4763,7 +4773,7 @@ begin
           Argc := (I shr 24) and $FFFF;
           if (I shr 40) and 1 <> 0 then R[A + 1] := VUndefined;
           if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
-          Fr^.PC := PC;
+          Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
           R := @VS[Base];
           if not T^.IsStrict and not T^.IsArrow then
           begin
@@ -4777,11 +4787,10 @@ begin
             else goto LBail;
           end;
           if Argc < T^.NumParams then J := Argc + 1 else J := T^.NumParams + 1;
-          while J < T^.MaxRegs do
-          begin
-            R[J] := VUndefined;
-            Inc(J);
-          end;
+          { the registers past the arguments start undefined (FillQWord: FastLoop's register pressure made an
+            inline loop cost about seven instructions a register) }
+          NP := T^.MaxRegs;
+          if J < NP then FillQWord(R[J], NP - J, VUndefined);
           Fr := @Frames[FrameTop];
           Fr^.Closure := VA;
           Fr^.NewTarget := VUndefined;
@@ -4794,7 +4803,7 @@ begin
           Inc(FrameTop);
           StackTop := Base + T^.MaxRegs;
           Code := @T^.Code[0];
-          PC := T^.EntryPC;
+          IP := @Code[T^.EntryPC];
           if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
           if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
           Changed := True;
@@ -4837,7 +4846,7 @@ begin
           T := Fr^.Tpl;
           StackTop := Fr^.Base + T^.MaxRegs;
           Code := @T^.Code[0];
-          PC := Fr^.PC;
+          IP := @Code[Fr^.PC];
           R := @VS[Fr^.Base];
           if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
           if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
@@ -4849,6 +4858,7 @@ begin
   end;
 LBail:
   { the instruction at PC - 1 is Execute's }
+  PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
   {$IFDEF G2_BAILSTATS}Inc(BailCounts[Code[PC - 1] and $FF]);{$ENDIF}
   if Changed then
   begin

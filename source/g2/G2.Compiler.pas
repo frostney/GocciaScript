@@ -63,7 +63,27 @@ threadvar
 implementation
 
 uses
-  G2.VM;
+  TypInfo, G2.VM;
+
+{ G2_DUMP=<name part>: the bytecode of each compiled function whose name contains it, on stderr (a debugging aid) }
+procedure DumpTemplates(T: PFuncTemplate; const Pat: UnicodeString);
+var I: Integer; Q: QWord; Nm: UnicodeString;
+begin
+  if T = nil then Exit;
+  Nm := '';
+  if T^.Name <> nil then Nm := StrToUnicode(T^.Name);
+  if (Pat = '*') or (Pos(Pat, Nm) > 0) then
+  begin
+    WriteLn(StdErr, '== ', Nm, ' (params ', T^.NumParams, ', regs ', T^.MaxRegs, ')');
+    for I := 0 to T^.CodeLen - 1 do
+    begin
+      Q := T^.Code[I];
+      WriteLn(StdErr, Format('%4d  %-16s A=%d B=%d C=%d', [I, GetEnumName(TypeInfo(TOp), Q and $FF),
+        (Q shr 8) and $FFFF, (Q shr 24) and $FFFF, SarInt64(Int64(Q), 40)]));
+    end;
+  end;
+  for I := 0 to High(T^.Children) do DumpTemplates(T^.Children[I], Pat);
+end;
 
 procedure PatternNames(P: TGocciaDestructuringPattern; L: TStringList); forward;
 
@@ -227,6 +247,10 @@ type
       outermost node patches to give undefined }
     ChainLink: Boolean;
     ChainJumps: TJumpList;
+    { the value of the assignment or update being compiled is unused (an expression statement or a for head's
+      init or update): its copy into the destination register can go. Set only for such a top-level node, and
+      cleared by CompileAssign / CompileIncrement on entry }
+    TopDiscard: Boolean;
     EvalDepth: array of Integer;    { goal 4: per caller binding, how many functions out of the caller it is }
     EvalVarEnv: UnicodeString;      { goal 4: the caller's eval variable environment binding ('' none) }
     EvalEnvNames: TStringList;      { goal 4: the var names the eval code adds to that environment }
@@ -345,6 +369,7 @@ type
     procedure CompileConditional(C: TGocciaConditionalExpression; Dest: Integer);
     procedure RaiseUnsupported(const AWhat: UnicodeString; N: TObject);
     function ExprAny(E: TGocciaExpression): Integer;
+    function IsDiscardable(E: TGocciaExpression): Boolean;
     procedure BranchFalse(E: TGocciaExpression; var L: TJumpList);
     procedure BranchTrue(E: TGocciaExpression; var L: TJumpList);
     procedure LoadIdent(const N: UnicodeString; Dest: Integer);
@@ -2575,7 +2600,9 @@ begin
   case K of
     0: begin
          R := FS.FreeReg;
+         TopDiscard := IsDiscardable(TGocciaExpressionStatement(S).Expression);
          ExprAny(TGocciaExpressionStatement(S).Expression);
+         TopDiscard := False;
          FreeTo(R);
        end;
     1: CompileVarDecl(TGocciaVariableDeclaration(S));
@@ -2770,7 +2797,9 @@ begin
   if S.Init is TGocciaExpressionStatement then
   begin
     R0 := FS.FreeReg;
+    TopDiscard := IsDiscardable(TGocciaExpressionStatement(S.Init).Expression);
     ExprAny(TGocciaExpressionStatement(S.Init).Expression);
+    TopDiscard := False;
     FreeTo(R0);
   end
   else if Assigned(S.Init) then Stmt(S.Init);
@@ -2792,7 +2821,9 @@ begin
   end;
   if Assigned(S.Update) then
   begin
+    TopDiscard := IsDiscardable(S.Update);
     ExprAny(S.Update);
+    TopDiscard := False;
     FreeTo(FS.Scopes[FS.ScopeCount - 1].BaseReg + FS.Scopes[FS.ScopeCount - 1].Count);
   end;
   PatchTo(EmitJ(opJmp, 0, 0), Top);
@@ -3284,6 +3315,12 @@ begin
   else
     raise ECompileError.CreateFmt('unsupported binary operator %d', [Ord(T)]);
   end;
+end;
+
+{ an assignment or update whose value, when unused, need not be copied (TopDiscard) }
+function TCompiler.IsDiscardable(E: TGocciaExpression): Boolean;
+begin
+  Result := (E is TGocciaAssignmentExpression) or (E is TGocciaIncrementExpression);
 end;
 
 function TCompiler.ExprAny(E: TGocciaExpression): Integer;
@@ -4673,7 +4710,7 @@ procedure TCompiler.CompileAssign(E: TGocciaExpression; Dest: Integer);
 var Save, O, K, V, R, J: Integer; A: TGocciaAssignmentExpression; PA: TGocciaPropertyAssignmentExpression;
   CA: TGocciaComputedPropertyAssignmentExpression; CO: TGocciaCompoundAssignmentExpression;
   PC: TGocciaPropertyCompoundAssignmentExpression; CC: TGocciaComputedPropertyCompoundAssignmentExpression;
-  Op: TGocciaTokenType; IC: Integer; AName: UnicodeString;
+  Op: TGocciaTokenType; IC: Integer; AName: UnicodeString; Discard: Boolean;
   { Name: the identifier a logical assignment assigns to, for the NamedEvaluation of an anonymous function or class
     (13.15.2: &&=, ||= and ??= only) }
   procedure Combine(Op: TGocciaTokenType; Cur, ValE: TGocciaExpression; CurReg, Dst: Integer; out ShortJ: Integer;
@@ -4694,6 +4731,8 @@ var Save, O, K, V, R, J: Integer; A: TGocciaAssignmentExpression; PA: TGocciaPro
   end;
 begin
   Save := FS.FreeReg;
+  Discard := TopDiscard;
+  TopDiscard := False;
   if E is TGocciaAssignmentExpression then
   begin
     A := TGocciaAssignmentExpression(E);
@@ -4707,7 +4746,7 @@ begin
       else if (A.Value is TGocciaClassExpression) and (TGocciaClassExpression(A.Value).ClassDefinition.Name = '') then
         CompileClass(TGocciaClassExpression(A.Value).ClassDefinition, R, AName)
       else ExprTo(A.Value, R);
-      if Dest <> R then Emit(Ins(opMov, Dest, R, 0));
+      if (Dest <> R) and not Discard then Emit(Ins(opMov, Dest, R, 0));
     end
     else if WithsFor(A.Name, WithIdxScratch) > 0 then
     begin
@@ -4851,8 +4890,11 @@ end;
 
 procedure TCompiler.CompileIncrement(E: TGocciaIncrementExpression; Dest: Integer);
 var Save, O, K, Cur, Nw: Integer; M: TGocciaMemberExpression; Delta: Integer; Name: UnicodeString; R: Integer;
+  Discard: Boolean;
 begin
   Save := FS.FreeReg;
+  Discard := TopDiscard;
+  TopDiscard := False;
   if E.Operator = gttIncrement then Delta := 1 else Delta := -1;
   if E.Operand is TGocciaIdentifierExpression then
   begin
@@ -4860,10 +4902,11 @@ begin
     if ResolveLocal(FS, Name, R) and not BindingIsConst(Name) and not InTDZ(Name) and
        ((WithCount = 0) or (WithsFor(Name, WithIdxScratch) = 0)) then
     begin
-      if E.IsPrefix then
+      { an unused x++ is ++x: no copy of the old value }
+      if E.IsPrefix or Discard then
       begin
         Emit(Ins(opIncI, R, R, Delta));
-        if Dest <> R then Emit(Ins(opMov, Dest, R, 0));
+        if (Dest <> R) and not Discard then Emit(Ins(opMov, Dest, R, 0));
       end
       else
       begin
@@ -5896,6 +5939,7 @@ begin
     begin
       for I := 0 to Prog.Body.Count - 1 do Nodes.Add(Prog.Body[I]);
       Result := C.CompileFunction('<script>', Params, nil, False, False, False, False, False, False, nil, Nodes);
+      if GetEnvironmentVariable('G2_DUMP') <> '' then DumpTemplates(Result, UnicodeString(GetEnvironmentVariable('G2_DUMP')));
     end;
   finally
     MI.Free;
