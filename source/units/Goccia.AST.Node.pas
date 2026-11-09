@@ -45,11 +45,19 @@ type
     FArena: TGocciaASTArena;
     { Its slot in FArena, so leaving the arena costs O(1). }
     FArenaIndex: Integer;
+    { Its memory is in an arena chunk, not a heap block of its own. }
+    FInArenaMemory: Boolean;
   protected
     { False for an object that owns its arena instead of belonging to one:
       TGocciaProgram. }
     class function JoinsArena: Boolean; virtual;
   public
+    { During a parse, an object that joins the arena is placed in the arena's
+      memory: a bump in a large chunk instead of a heap block, whose size
+      classes rounded a 96-112 byte node up to 128 bytes. Freeing such an
+      object early finalizes its fields; its memory goes with the arena. }
+    class function NewInstance: TObject; override;
+    procedure FreeInstance; override;
     procedure AfterConstruction; override;
     procedure BeforeDestruction; override;
   end;
@@ -59,6 +67,18 @@ type
   TGocciaASTArena = class
   private
     FObjects: TFPList;
+    FChunks: array of Pointer;
+    FChunkCount: Integer;
+    FBump, FBumpEnd: PByte;
+    FAbandoned: Boolean;
+    { The sources the tree's spans point into, held for as long as the tree:
+      a span keeps only a plain reference, and the lexer that created the
+      coordinates is usually freed once parsing ends. FLastCoordinates is the
+      last one kept, so a node from the same source costs one comparison. }
+    FKeptCoordinates: array of IGocciaSourceCoordinates;
+    FLastCoordinates: TGocciaSourceCoordinates;
+    procedure KeepNewCoordinates(const ACoordinates: TGocciaSourceCoordinates);
+    function AllocateInstance(const ASize: PtrUInt): Pointer;
     procedure Adopt(const AObject: TGocciaASTObject);
     procedure Forget(const AObject: TGocciaASTObject);
     function GetCount: Integer;
@@ -66,6 +86,17 @@ type
     constructor Create;
     destructor Destroy; override;
     property Count: Integer read GetCount;
+    { Gives the chunk memory back without destroying the objects in it, for
+      a caller that is done with the whole tree and wants its memory sooner
+      than destroying half a million objects one by one allows. What the
+      objects own outside the chunks (child lists, strings, literal values)
+      stays allocated. After this no object of the arena may be used, and
+      destroying the arena frees only the arena itself. }
+    procedure AbandonMemory;
+    { Keeps ACoordinates (nil is ignored) alive until the arena is destroyed. }
+    procedure KeepCoordinates(const ACoordinates: TGocciaSourceCoordinates); inline;
+    { diagnostics: instance bytes per class, largest first }
+    function ClassStats(const AMax: Integer): string;
   end;
 
   TGocciaASTNode = class;
@@ -304,6 +335,9 @@ type
     FHasTopLevelAwait: Boolean;
     FDirectEvalUsage: TGocciaDirectEvalUsage;
     FNodeArena: TGocciaASTArena;
+  public
+    property NodeArena: TGocciaASTArena read FNodeArena;
+  private
   protected
     class function JoinsArena: Boolean; override;
   public
@@ -375,6 +409,9 @@ function FunctionSourceMayReferenceArgumentsObject(
   const ASourceText: string): Boolean;
 
 implementation
+
+uses
+  SysUtils;
 
 threadvar
   GActiveASTArena: TGocciaASTArena;
@@ -534,10 +571,38 @@ begin
   Result := True;
 end;
 
+const
+  AST_CHUNK_BYTES = 256 * 1024;
+  AST_MAX_ARENA_INSTANCE = 4 * 1024;
+
+class function TGocciaASTObject.NewInstance: TObject;
+var
+  Arena: TGocciaASTArena;
+  Size: PtrUInt;
+begin
+  Arena := GActiveASTArena;
+  Size := InstanceSize;
+  if (Arena = nil) or (Size > AST_MAX_ARENA_INSTANCE) or not JoinsArena then
+    Exit(inherited NewInstance);
+  Result := InitInstance(Arena.AllocateInstance(Size));
+  TGocciaASTObject(Result).FInArenaMemory := True;
+  Arena.Adopt(TGocciaASTObject(Result));
+end;
+
+procedure TGocciaASTObject.FreeInstance;
+begin
+  if FInArenaMemory then
+    CleanupInstance
+  else
+    inherited FreeInstance;
+end;
+
 procedure TGocciaASTObject.AfterConstruction;
 begin
   inherited;
-  if Assigned(GActiveASTArena) and JoinsArena then
+  // NewInstance adopted an object placed in arena memory; one too large for
+  // a chunk joins here.
+  if (not FInArenaMemory) and Assigned(GActiveASTArena) and JoinsArena then
     GActiveASTArena.Adopt(Self);
 end;
 
@@ -556,6 +621,40 @@ begin
   FObjects := TFPList.Create;
 end;
 
+procedure TGocciaASTArena.KeepCoordinates(
+  const ACoordinates: TGocciaSourceCoordinates);
+begin
+  if (ACoordinates <> FLastCoordinates) and Assigned(ACoordinates) then
+    KeepNewCoordinates(ACoordinates);
+end;
+
+procedure TGocciaASTArena.KeepNewCoordinates(
+  const ACoordinates: TGocciaSourceCoordinates);
+var
+  I: Integer;
+begin
+  FLastCoordinates := ACoordinates;
+  for I := 0 to High(FKeptCoordinates) do
+    if FKeptCoordinates[I] = IGocciaSourceCoordinates(ACoordinates) then
+      Exit;
+  SetLength(FKeptCoordinates, Length(FKeptCoordinates) + 1);
+  FKeptCoordinates[High(FKeptCoordinates)] := ACoordinates;
+end;
+
+procedure TGocciaASTArena.AbandonMemory;
+var
+  I: Integer;
+begin
+  for I := 0 to FChunkCount - 1 do
+    FreeMem(FChunks[I]);
+  FChunks := nil;
+  FChunkCount := 0;
+  FBump := nil;
+  FBumpEnd := nil;
+  FObjects.Count := 0;
+  FAbandoned := True;
+end;
+
 destructor TGocciaASTArena.Destroy;
 var
   I: Integer;
@@ -570,7 +669,29 @@ begin
     AObject.Free;
   end;
   FObjects.Free;
+  // Every object placed in a chunk has been freed above, or earlier.
+  for I := 0 to FChunkCount - 1 do
+    FreeMem(FChunks[I]);
+  FChunks := nil;
   inherited;
+end;
+
+function TGocciaASTArena.AllocateInstance(const ASize: PtrUInt): Pointer;
+var
+  Size: PtrUInt;
+begin
+  Size := (ASize + 7) and not PtrUInt(7);
+  if (FBump = nil) or (PtrUInt(FBumpEnd - FBump) < Size) then
+  begin
+    if FChunkCount = Length(FChunks) then
+      SetLength(FChunks, FChunkCount * 2 + 16);
+    FBump := GetMem(AST_CHUNK_BYTES);
+    FBumpEnd := FBump + AST_CHUNK_BYTES;
+    FChunks[FChunkCount] := FBump;
+    Inc(FChunkCount);
+  end;
+  Result := FBump;
+  Inc(FBump, Size);
 end;
 
 procedure TGocciaASTArena.Adopt(const AObject: TGocciaASTObject);
@@ -597,6 +718,55 @@ begin
   AObject.FArena := nil;
 end;
 
+function TGocciaASTArena.ClassStats(const AMax: Integer): string;
+var
+  Names: TStringList;
+  I, J, Idx: Integer;
+  Sizes: array of Int64;
+  Counts: array of Int64;
+  Total: Int64;
+  Best: Integer;
+  Obj: TObject;
+begin
+  Names := TStringList.Create;
+  try
+    Names.Sorted := False;
+    SetLength(Sizes, 0);
+    SetLength(Counts, 0);
+    Total := 0;
+    for I := 0 to FObjects.Count - 1 do
+    begin
+      Obj := TObject(FObjects[I]);
+      if Obj = nil then Continue;
+      Idx := Names.IndexOf(Obj.ClassName);
+      if Idx < 0 then
+      begin
+        Idx := Names.Add(Obj.ClassName);
+        SetLength(Sizes, Names.Count);
+        SetLength(Counts, Names.Count);
+        Sizes[Idx] := 0;
+        Counts[Idx] := 0;
+      end;
+      Inc(Sizes[Idx], Obj.InstanceSize);
+      Inc(Counts[Idx]);
+      Inc(Total, Obj.InstanceSize);
+    end;
+    Result := Format('arena objects %d, instance bytes %d KB', [FObjects.Count, Total div 1024]) + LineEnding;
+    for J := 1 to AMax do
+    begin
+      Best := -1;
+      for I := 0 to Names.Count - 1 do
+        if (Sizes[I] > 0) and ((Best < 0) or (Sizes[I] > Sizes[Best])) then Best := I;
+      if Best < 0 then Break;
+      Result := Result + Format('  %8d KB %9d x %4d B  %s', [Sizes[Best] div 1024, Counts[Best],
+        Sizes[Best] div Counts[Best], Names[Best]]) + LineEnding;
+      Sizes[Best] := 0;
+    end;
+  finally
+    Names.Free;
+  end;
+end;
+
 function TGocciaASTArena.GetCount: Integer;
 begin
   Result := FObjects.Count;
@@ -614,6 +784,12 @@ end;
 constructor TGocciaASTNode.Create(const ASpan: TGocciaSourceSpan);
 begin
   FSpan := ASpan;
+  // A node too large for an arena chunk joins its arena only after this
+  // constructor, so the active arena stands in for it here.
+  if Assigned(FArena) then
+    FArena.KeepCoordinates(ASpan.Coordinates)
+  else if Assigned(GActiveASTArena) then
+    GActiveASTArena.KeepCoordinates(ASpan.Coordinates);
 end;
 
 procedure TGocciaASTNode.ForEachChild(

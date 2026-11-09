@@ -691,6 +691,7 @@ begin
 
     try
       Lexer := TGocciaLexer.Create(SourceText, AFileName);
+      Lexer.MeasureScanTime := True;
       Lexer.CollectComments := AOptions.CollectComments;
       try
         Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName,
@@ -994,6 +995,7 @@ begin
     end;
     try
       Lexer := TGocciaLexer.Create(Source, AFileName);
+      Lexer.MeasureScanTime := True;
       try
         Parser := TGocciaParser.CreateFromLexer(Lexer, AFileName,
           Lexer.SourceLines);

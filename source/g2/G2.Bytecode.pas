@@ -119,14 +119,6 @@ type
     PolyCount, PolyNext: Byte;
   end;
 
-  { a function's source text (Function.prototype.toString), as the front end gives it }
-  TG2SourceText = record
-    Text: string;
-    function Get: string; inline;
-    procedure SetText(const AText: string); inline;
-    function IsEmpty: Boolean; inline;
-  end;
-
   TFuncTemplate = record
     Name: PStr;
     Code: array of QWord;
@@ -148,7 +140,7 @@ type
     ExpectedProps: Integer;
     FieldInit: PFuncTemplate;   { class field initializer, run on construction }
     SourceName: UnicodeString;
-    SourceRange: TG2SourceText;   { the function's source text, for Function.prototype.toString }
+    SourceRange: TGocciaLazySourceText;   { the function's source for Function.prototype.toString: a range of the parse's source, copied only when read }
     Length: Integer;          { function.length }
     { the top level of a Script (GdiKind 1) or of non-strict eval code (2): its global declarations }
     GdiKind: Byte;
@@ -174,21 +166,6 @@ procedure RegisterTemplate(T: PFuncTemplate);
 procedure FreeAllTemplates;
 
 implementation
-
-function TG2SourceText.Get: string;
-begin
-  Result := Text;
-end;
-
-procedure TG2SourceText.SetText(const AText: string);
-begin
-  Text := AText;
-end;
-
-function TG2SourceText.IsEmpty: Boolean;
-begin
-  Result := Text = '';
-end;
 
 function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;
 begin

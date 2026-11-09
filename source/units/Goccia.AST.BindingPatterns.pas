@@ -76,6 +76,9 @@ procedure CollectLexicallyDeclaredNames(const ANode: TGocciaASTNode;
 
 implementation
 
+uses
+  Goccia.ClassMask;
+
 function VarBindingNameCollectionMode(
   const ANonStrictMode, ACompatibilityNonStrictMode: Boolean):
   TGocciaVarBindingNameCollectionMode;
@@ -584,6 +587,27 @@ begin
   Result := False;
 end;
 
+threadvar   { per thread: each one fills its own, so none reads a half-written entry }
+  VarMaskCache: TClassMaskCache;
+const
+  VarMaskClasses: array[0..15] of TClass = (
+    TGocciaExportVariableDeclaration,
+    TGocciaExportDestructuringDeclaration,
+    TGocciaVariableDeclaration,
+    TGocciaFunctionDeclaration,
+    TGocciaExportFunctionDeclaration,
+    TGocciaDestructuringDeclaration,
+    TGocciaBlockStatement,
+    TGocciaIfStatement,
+    TGocciaForOfStatement,
+    TGocciaForInStatement,
+    TGocciaForStatement,
+    TGocciaWhileStatement,
+    TGocciaDoWhileStatement,
+    TGocciaWithStatement,
+    TGocciaTryStatement,
+    TGocciaSwitchStatement);
+
 procedure CollectVarBindingNamesFromNodeInternal(const ANode: TGocciaASTNode;
   const ANames: TUnicodeStringList;
   const AMode: TGocciaVarBindingNameCollectionMode;
@@ -604,55 +628,57 @@ var
   ExportDestructDecl: TGocciaExportDestructuringDeclaration;
   ExportVarDecl: TGocciaExportVariableDeclaration;
   I, J: Integer;
+  VarMask: Cardinal;
 begin
   if not Assigned(ANode) then
     Exit;
+    VarMask := ClassMaskOf(VarMaskCache, VarMaskClasses, ANode);
 
-  if ANode is TGocciaExportVariableDeclaration then
+  if ((VarMask and Cardinal(1)) <> 0) then
   begin
     ExportVarDecl := TGocciaExportVariableDeclaration(ANode);
     CollectVarBindingNamesFromNodeInternal(ExportVarDecl.Declaration, ANames,
       AMode, AAtVarScopedLevel);
   end
-  else if ANode is TGocciaExportDestructuringDeclaration then
+  else if ((VarMask and Cardinal(2)) <> 0) then
   begin
     ExportDestructDecl := TGocciaExportDestructuringDeclaration(ANode);
     CollectVarBindingNamesFromNodeInternal(ExportDestructDecl.Declaration,
       ANames, AMode, AAtVarScopedLevel);
   end
-  else if ANode is TGocciaVariableDeclaration then
+  else if ((VarMask and Cardinal(4)) <> 0) then
   begin
     VarDecl := TGocciaVariableDeclaration(ANode);
     if VarDecl.IsVar then
       CollectVariableDeclarationBindingNames(VarDecl, ANames, True);
   end
-  else if (ANode is TGocciaFunctionDeclaration) and
+  else if (((VarMask and Cardinal(8)) <> 0)) and
           (AAtVarScopedLevel or
           ((AMode = vbnNonStrictScriptCompatibility) and
           not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsAsync and
           not TGocciaFunctionDeclaration(ANode).FunctionExpression.IsGenerator)) then
     AddBindingName(ANames, TGocciaFunctionDeclaration(ANode).Name, True)
-  else if (ANode is TGocciaExportFunctionDeclaration) and
+  else if (((VarMask and Cardinal(16)) <> 0)) and
           (AAtVarScopedLevel or
           ((AMode = vbnNonStrictScriptCompatibility) and
           not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsAsync and
           not TGocciaExportFunctionDeclaration(ANode).Declaration.FunctionExpression.IsGenerator)) then
     AddBindingName(ANames,
       TGocciaExportFunctionDeclaration(ANode).Declaration.Name, True)
-  else if ANode is TGocciaDestructuringDeclaration then
+  else if ((VarMask and Cardinal(32)) <> 0) then
   begin
     DestructDecl := TGocciaDestructuringDeclaration(ANode);
     if DestructDecl.IsVar then
       CollectPatternBindingNames(DestructDecl.Pattern, ANames, True);
   end
-  else if ANode is TGocciaBlockStatement then
+  else if ((VarMask and Cardinal(64)) <> 0) then
   begin
     Block := TGocciaBlockStatement(ANode);
     for I := 0 to Block.Nodes.Count - 1 do
       CollectVarBindingNamesFromNodeInternal(Block.Nodes[I], ANames,
         AMode, False);
   end
-  else if ANode is TGocciaIfStatement then
+  else if ((VarMask and Cardinal(128)) <> 0) then
   begin
     IfStmt := TGocciaIfStatement(ANode);
     CollectVarBindingNamesFromNodeInternal(IfStmt.Consequent, ANames,
@@ -660,7 +686,7 @@ begin
     CollectVarBindingNamesFromNodeInternal(IfStmt.Alternate, ANames,
       AMode, False);
   end
-  else if ANode is TGocciaForOfStatement then
+  else if ((VarMask and Cardinal(256)) <> 0) then
   begin
     ForOf := TGocciaForOfStatement(ANode);
     if ForOf.IsVar then
@@ -673,7 +699,7 @@ begin
     CollectVarBindingNamesFromNodeInternal(ForOf.Body, ANames,
       AMode, False);
   end
-  else if ANode is TGocciaForInStatement then
+  else if ((VarMask and Cardinal(512)) <> 0) then
   begin
     ForIn := TGocciaForInStatement(ANode);
     if ForIn.IsVar then
@@ -686,7 +712,7 @@ begin
     CollectVarBindingNamesFromNodeInternal(ForIn.Body, ANames,
       AMode, False);
   end
-  else if ANode is TGocciaForStatement then
+  else if ((VarMask and Cardinal(1024)) <> 0) then
   begin
     ForStmt := TGocciaForStatement(ANode);
     if Assigned(ForStmt.Init) then
@@ -695,25 +721,25 @@ begin
     CollectVarBindingNamesFromNodeInternal(ForStmt.Body, ANames,
       AMode, False);
   end
-  else if ANode is TGocciaWhileStatement then
+  else if ((VarMask and Cardinal(2048)) <> 0) then
   begin
     WhileStmt := TGocciaWhileStatement(ANode);
     CollectVarBindingNamesFromNodeInternal(WhileStmt.Body, ANames,
       AMode, False);
   end
-  else if ANode is TGocciaDoWhileStatement then
+  else if ((VarMask and Cardinal(4096)) <> 0) then
   begin
     DoWhileStmt := TGocciaDoWhileStatement(ANode);
     CollectVarBindingNamesFromNodeInternal(DoWhileStmt.Body, ANames,
       AMode, False);
   end
-  else if ANode is TGocciaWithStatement then
+  else if ((VarMask and Cardinal(8192)) <> 0) then
   begin
     WithStmt := TGocciaWithStatement(ANode);
     CollectVarBindingNamesFromNodeInternal(WithStmt.Body, ANames,
       AMode, False);
   end
-  else if ANode is TGocciaTryStatement then
+  else if ((VarMask and Cardinal(16384)) <> 0) then
   begin
     TryStmt := TGocciaTryStatement(ANode);
     CollectVarBindingNamesFromNodeInternal(TryStmt.Block, ANames,
@@ -723,7 +749,7 @@ begin
     CollectVarBindingNamesFromNodeInternal(TryStmt.FinallyBlock, ANames,
       AMode, False);
   end
-  else if ANode is TGocciaSwitchStatement then
+  else if ((VarMask and Cardinal(32768)) <> 0) then
   begin
     SwitchStmt := TGocciaSwitchStatement(ANode);
     for I := 0 to SwitchStmt.Cases.Count - 1 do
@@ -768,6 +794,22 @@ begin
     CollectVarBindingNamesFromNodeInternal(ANodes[I], ANames, AMode, True);
 end;
 
+threadvar   { per thread: each one fills its own, so none reads a half-written entry }
+  LexMaskCache: TClassMaskCache;
+const
+  LexMaskClasses: array[0..10] of TClass = (
+    TGocciaVariableDeclaration,
+    TGocciaExportVariableDeclaration,
+    TGocciaDestructuringDeclaration,
+    TGocciaExportDestructuringDeclaration,
+    TGocciaExportClassDeclaration,
+    TGocciaImportDeclaration,
+    TGocciaExportDefaultDeclaration,
+    TGocciaUsingDeclaration,
+    TGocciaClassDeclaration,
+    TGocciaEnumDeclaration,
+    TGocciaExportEnumDeclaration);
+
 procedure CollectLexicallyDeclaredNames(const ANode: TGocciaASTNode;
   const ANames: TUnicodeStringList);
 var
@@ -776,30 +818,32 @@ var
   ImportPair: TStringStringMap.TKeyValuePair;
   DefaultDecl: TGocciaExportDefaultDeclaration;
   I: Integer;
+  LexMask: Cardinal;
 begin
   VarDecl := nil;
-  if ANode is TGocciaVariableDeclaration then
+  LexMask := ClassMaskOf(LexMaskCache, LexMaskClasses, ANode);
+  if ((LexMask and Cardinal(1)) <> 0) then
     VarDecl := TGocciaVariableDeclaration(ANode)
-  else if ANode is TGocciaExportVariableDeclaration then
+  else if ((LexMask and Cardinal(2)) <> 0) then
     VarDecl := TGocciaExportVariableDeclaration(ANode).Declaration;
   if Assigned(VarDecl) then
   begin
     if not VarDecl.IsVar then
       CollectVariableDeclarationBindingNames(VarDecl, ANames);
   end
-  else if ANode is TGocciaDestructuringDeclaration then
+  else if ((LexMask and Cardinal(4)) <> 0) then
   begin
     if not TGocciaDestructuringDeclaration(ANode).IsVar then
       CollectPatternBindingNames(
         TGocciaDestructuringDeclaration(ANode).Pattern, ANames);
   end
-  else if ANode is TGocciaExportDestructuringDeclaration then
+  else if ((LexMask and Cardinal(8)) <> 0) then
     CollectLexicallyDeclaredNames(
       TGocciaExportDestructuringDeclaration(ANode).Declaration, ANames)
-  else if ANode is TGocciaExportClassDeclaration then
+  else if ((LexMask and Cardinal(16)) <> 0) then
     CollectLexicallyDeclaredNames(
       TGocciaExportClassDeclaration(ANode).Declaration, ANames)
-  else if ANode is TGocciaImportDeclaration then
+  else if ((LexMask and Cardinal(32)) <> 0) then
   begin
     ImportDecl := TGocciaImportDeclaration(ANode);
     AddBindingName(ANames, ImportDecl.NamespaceName, False);
@@ -808,25 +852,25 @@ begin
     // The import map retains one entry when two specifiers bind one name.
     AddBindingName(ANames, ImportDecl.DuplicateBinding, False);
   end
-  else if ANode is TGocciaExportDefaultDeclaration then
+  else if ((LexMask and Cardinal(64)) <> 0) then
   begin
     DefaultDecl := TGocciaExportDefaultDeclaration(ANode);
     if DefaultDecl.IsDirectDeclaration and
        (DefaultDecl.LocalName <> GOCCIA_DEFAULT_EXPORT_BINDING) then
       AddBindingName(ANames, DefaultDecl.LocalName, False);
   end
-  else if ANode is TGocciaUsingDeclaration then
+  else if ((LexMask and Cardinal(128)) <> 0) then
   begin
     for I := 0 to High(TGocciaUsingDeclaration(ANode).Variables) do
       CollectVariableInfoBindingNames(
         TGocciaUsingDeclaration(ANode).Variables[I], ANames);
   end
-  else if ANode is TGocciaClassDeclaration then
+  else if ((LexMask and Cardinal(256)) <> 0) then
     AddBindingName(ANames,
       TGocciaClassDeclaration(ANode).ClassDefinition.Name, False)
-  else if ANode is TGocciaEnumDeclaration then
+  else if ((LexMask and Cardinal(512)) <> 0) then
     AddBindingName(ANames, TGocciaEnumDeclaration(ANode).Name, False)
-  else if ANode is TGocciaExportEnumDeclaration then
+  else if ((LexMask and Cardinal(1024)) <> 0) then
     AddBindingName(ANames,
       TGocciaExportEnumDeclaration(ANode).Declaration.Name, False);
 end;

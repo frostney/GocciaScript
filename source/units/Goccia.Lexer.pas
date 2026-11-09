@@ -55,8 +55,9 @@ type
   TGocciaLexer = class
   private
     FSource: string;
-    FSourceCoordinates: IGocciaSourceCoordinates;
-    FTokens: TObjectList<TGocciaToken>;
+    FSourceCoordinatesRef: IGocciaSourceCoordinates; // keeps FSourceCoordinates alive
+    FSourceCoordinates: TGocciaSourceCoordinates;
+    FTokens: TGocciaTokenList;
     FCurrent: Integer;
     FLine: Integer;
     FColumn: Integer;
@@ -67,10 +68,31 @@ type
     FHashbangSkipped: Boolean;
     FEOFEmitted: Boolean;
     FScanTimeNanoseconds: Int64;
+    FMeasureScanTime: Boolean;
     FCollectComments: Boolean;
     FComments: TGocciaCommentSpanArray;
     FCommentCount: Integer;
+    // Lexemes are shared: one string per distinct identifier or keyword
+    // spelling, and the last string seen per token type for fixed-text tokens.
+    FIdentTexts: array of string;
+    FIdentTypes: array of TGocciaTokenType;
+    FIdentHashes: array of Cardinal;
+    FIdentCount: Integer;
+    FTypeTexts: array[TGocciaTokenType] of string;
+    procedure InternIdentifier(const AStart, ALength: Integer;
+      out AText: string; out ATokenType: TGocciaTokenType);
+    // The hot paths below hold no managed local or temporary: in FPC one
+    // gives the whole routine an implicit exception frame (setjmp) per call.
+    procedure AddInternedIdentifier(const AStart, ALength: Integer);
+    procedure AddNewIdentifier(const AStart, ALength: Integer);
+    procedure RefreshTypeText(const ATokenType: TGocciaTokenType);
+    procedure RaiseUnexpectedCharacter(const AChar: Char);
+    procedure AppendStringEscape(var ASB: TStringBuffer; const AKind: Char;
+      const AOctalValue: Integer);
+    procedure ScanIdentifierSlow;
+    procedure GrowIdentTable;
     function GetSourceLines: TStringList;
+    function ScanNextTokenUntimed(const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
     procedure RecordComment(const AKind: TGocciaCommentKind;
       const AStartOffset, AEndOffset: Integer);
 
@@ -139,7 +161,9 @@ type
     property CollectComments: Boolean read FCollectComments
       write FCollectComments;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
-    property Tokens: TObjectList<TGocciaToken> read FTokens;
+    // Two clock reads per token: off unless a profile asks for the lexing time.
+    property MeasureScanTime: Boolean read FMeasureScanTime write FMeasureScanTime;
+    property Tokens: TGocciaTokenList read FTokens;
     property Source: string read FSource;
     property SourceLines: TStringList read GetSourceLines;
   end;
@@ -157,6 +181,13 @@ uses
   Goccia.Identifier,
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved;
+
+// SysUtils.CharInSet for WideChar is not inline, which makes every character
+// test in the scanning loops a call. Same test, inlined.
+function CharInSet(const AChar: WideChar; const ASet: TSysCharSet): Boolean; inline;
+begin
+  Result := (Ord(AChar) <= $FF) and (AnsiChar(Byte(AChar)) in ASet);
+end;
 
 const
   // ES2026 §12.3 Line Terminators.
@@ -322,8 +353,9 @@ constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
   FSource := ASource;
   FSourceCoordinates := TGocciaSourceCoordinates.Create(ASource);
+  FSourceCoordinatesRef := FSourceCoordinates;
   FFileName := AFileName;
-  FTokens := TObjectList<TGocciaToken>.Create(True);
+  FTokens := TGocciaTokenList.Create(FSourceCoordinates);
   FSourceLines := nil;
   FCurrent := 1;
   FLine := 1;
@@ -455,23 +487,156 @@ begin
   Result := True;
 end;
 
-procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType);
+procedure TGocciaLexer.RefreshTypeText(const ATokenType: TGocciaTokenType);
 begin
-  AddToken(ATokenType, Copy(FSource, FStart, FCurrent - FStart));
+  FTypeTexts[ATokenType] := Copy(FSource, FStart, FCurrent - FStart);
 end;
+
+procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType);
+var
+  Len: Integer;
+begin
+  Len := FCurrent - FStart;
+  if (Length(FTypeTexts[ATokenType]) <> Len) or ((Len > 0) and
+     not CompareMem(Pointer(FTypeTexts[ATokenType]), @FSource[FStart], Len * SizeOf(Char))) then
+    RefreshTypeText(ATokenType);
+  FTokens.Add(ATokenType, FTypeTexts[ATokenType],
+    FStart - 1, FCurrent - 1, False);
+end;
+
+// Wrapping arithmetic (hash, SWAR): no overflow or range checks, which a
+// development build turns on.
+{$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
+procedure TGocciaLexer.AddInternedIdentifier(const AStart, ALength: Integer);
+var
+  H: Cardinal;
+  I, Mask, Slot: Integer;
+  P: PChar;
+begin
+  P := @FSource[AStart];
+  H := 2166136261;
+  for I := 0 to ALength - 1 do
+    H := (H xor Ord(P[I])) * 16777619;
+  H := H xor (H shr 16);
+  H := H * $85EBCA6B;
+  H := H xor (H shr 13);
+  if FIdentCount * 2 < Length(FIdentTexts) then
+  begin
+    Mask := High(FIdentTexts);
+    Slot := Integer(H and Cardinal(Mask));
+    while Pointer(FIdentTexts[Slot]) <> nil do
+    begin
+      if (FIdentHashes[Slot] = H) and (Length(FIdentTexts[Slot]) = ALength) and
+         CompareMem(Pointer(FIdentTexts[Slot]), P, ALength * SizeOf(Char)) then
+      begin
+        FTokens.Add(FIdentTypes[Slot], FIdentTexts[Slot], FStart - 1, FCurrent - 1, False);
+        Exit;
+      end;
+      Slot := (Slot + 1) and Mask;
+    end;
+  end;
+  AddNewIdentifier(AStart, ALength);
+end;
+{$POP}
+
+procedure TGocciaLexer.AddNewIdentifier(const AStart, ALength: Integer);
+var
+  Text: string;
+  TokenType: TGocciaTokenType;
+begin
+  InternIdentifier(AStart, ALength, Text, TokenType);
+  AddToken(TokenType, Text, False);
+end;
+
+procedure TGocciaLexer.RaiseUnexpectedCharacter(const AChar: Char);
+begin
+  raise TGocciaLexerError.Create(Format('Unexpected character: %s', [AChar]),
+    FLine, FStartColumn, FFileName, GetSourceLines,
+    SSuggestInvalidCharacter);
+end;
+
+procedure TGocciaLexer.GrowIdentTable;
+var
+  OldTexts: array of string;
+  OldTypes: array of TGocciaTokenType;
+  OldHashes: array of Cardinal;
+  I, Mask, Slot, NewCap: Integer;
+begin
+  OldTexts := FIdentTexts;
+  OldTypes := FIdentTypes;
+  OldHashes := FIdentHashes;
+  if Length(OldTexts) = 0 then NewCap := 1024 else NewCap := Length(OldTexts) * 2;
+  FIdentTexts := nil;
+  FIdentTypes := nil;
+  FIdentHashes := nil;
+  SetLength(FIdentTexts, NewCap);
+  SetLength(FIdentTypes, NewCap);
+  SetLength(FIdentHashes, NewCap);
+  Mask := NewCap - 1;
+  for I := 0 to High(OldTexts) do
+    if Pointer(OldTexts[I]) <> nil then
+    begin
+      Slot := Integer(OldHashes[I] and Cardinal(Mask));
+      while Pointer(FIdentTexts[Slot]) <> nil do Slot := (Slot + 1) and Mask;
+      FIdentTexts[Slot] := OldTexts[I];
+      FIdentTypes[Slot] := OldTypes[I];
+      FIdentHashes[Slot] := OldHashes[I];
+    end;
+end;
+
+// Wrapping arithmetic (hash, SWAR): no overflow or range checks, which a
+// development build turns on.
+{$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
+procedure TGocciaLexer.InternIdentifier(const AStart, ALength: Integer;
+  out AText: string; out ATokenType: TGocciaTokenType);
+var
+  H: Cardinal;
+  I, Mask, Slot: Integer;
+  P: PChar;
+begin
+  P := @FSource[AStart];
+  H := 2166136261;
+  for I := 0 to ALength - 1 do
+    H := (H xor Ord(P[I])) * 16777619;
+  // FNV's low bits mix poorly and the table uses them: finish with a murmur3 step.
+  H := H xor (H shr 16);
+  H := H * $85EBCA6B;
+  H := H xor (H shr 13);
+  if FIdentCount * 2 >= Length(FIdentTexts) then GrowIdentTable;
+  Mask := High(FIdentTexts);
+  Slot := Integer(H and Cardinal(Mask));
+  while Pointer(FIdentTexts[Slot]) <> nil do
+  begin
+    if (FIdentHashes[Slot] = H) and (Length(FIdentTexts[Slot]) = ALength) and
+       CompareMem(@FIdentTexts[Slot][1], P, ALength * SizeOf(Char)) then
+    begin
+      AText := FIdentTexts[Slot];
+      ATokenType := FIdentTypes[Slot];
+      Exit;
+    end;
+    Slot := (Slot + 1) and Mask;
+  end;
+  AText := Copy(FSource, AStart, ALength);
+  if not TryKeywordToken(AText, ATokenType) then ATokenType := gttIdentifier;
+  FIdentTexts[Slot] := AText;
+  FIdentTypes[Slot] := ATokenType;
+  FIdentHashes[Slot] := H;
+  Inc(FIdentCount);
+end;
+{$POP}
 
 procedure TGocciaLexer.AddToken(const ATokenType: TGocciaTokenType; const ALiteral: string;
   const AContainsEscape: Boolean);
 begin
-  FTokens.Add(TGocciaToken.Create(ATokenType, ALiteral, FSourceCoordinates,
-    FStart - 1, FCurrent - 1, AContainsEscape));
+  FTokens.Add(ATokenType, ALiteral,
+    FStart - 1, FCurrent - 1, AContainsEscape);
 end;
 
 procedure TGocciaLexer.AddTemplateToken(const ATokenType: TGocciaTokenType;
   const ACooked, ARaw: string; const ACookedValid: Boolean);
 begin
-  FTokens.Add(TGocciaToken.CreateTemplate(ATokenType, ACooked, ARaw,
-    ACookedValid, FSourceCoordinates, FStart - 1, FCurrent - 1));
+  FTokens.AddTemplate(ATokenType, ACooked, ARaw,
+    ACookedValid, FStart - 1, FCurrent - 1);
 end;
 
 // ES2026 §12.3 LineTerminator :: <LF> | <CR> | <LS> | <PS>
@@ -501,11 +666,41 @@ begin
   FColumn := 1;
 end;
 
+// ConsumeLineTerminatorBytes without the terminator's text: SkipWhitespace
+// calls this for every whitespace character, and the discarded string cost an
+// initialization, a finalization and an exception frame each time.
 function TGocciaLexer.ConsumeLineTerminator: Boolean;
-var
-  Bytes: string;
 begin
-  Result := ConsumeLineTerminatorBytes(Bytes);
+  if IsAtEnd then
+    Exit(False);
+
+  case FSource[FCurrent] of
+    #13:
+      begin
+        Inc(FCurrent);
+        if (not IsAtEnd) and (FSource[FCurrent] = #10) then
+          Inc(FCurrent);
+        Inc(FLine);
+        FColumn := 1;
+        Result := True;
+      end;
+    #10:
+      begin
+        Inc(FCurrent);
+        Inc(FLine);
+        FColumn := 1;
+        Result := True;
+      end;
+    LINE_SEPARATOR,
+    PARAGRAPH_SEPARATOR:
+      begin
+        Result := IsUnicodeLineTerminator;
+        if Result then
+          ConsumeUnicodeLineTerminator;
+      end;
+  else
+    Result := False;
+  end;
 end;
 
 function TGocciaLexer.ConsumeLineTerminatorBytes(out ABytes: string): Boolean;
@@ -600,9 +795,24 @@ begin
 end;
 
 procedure TGocciaLexer.SkipWhitespace;
+var
+  C: Char;
 begin
   while not IsAtEnd do
   begin
+    // Spaces and tabs inline, and a printable ASCII character other than
+    // '/' ends the run at once: it is neither a line terminator nor
+    // whitespace (ES2026 §12.2, §12.3), so the general steps below would
+    // only rule it out one call at a time.
+    C := FSource[FCurrent];
+    if (C = ' ') or (C = #9) then
+    begin
+      Inc(FCurrent);
+      Inc(FColumn);
+      Continue;
+    end;
+    if (Ord(C) > $20) and (Ord(C) < $80) and (C <> '/') then
+      Break;
     if ConsumeLineTerminator then
       Continue;
 
@@ -860,6 +1070,17 @@ begin
   Result := TextEncoding.CodePointToUTF16(CodePoint);
 end;
 
+procedure TGocciaLexer.AppendStringEscape(var ASB: TStringBuffer;
+  const AKind: Char; const AOctalValue: Integer);
+begin
+  case AKind of
+    'u': ASB.Append(ScanUnicodeEscape);
+    'x': ASB.Append(ScanHexEscape);
+  else
+    ASB.Append(TextEncoding.CodePointToUTF16(AOctalValue));
+  end;
+end;
+
 procedure TGocciaLexer.ProcessEscapeSequence(var ASB: TStringBuffer);
 var
   FirstDigit: Char;
@@ -901,10 +1122,10 @@ begin
           OctalValue := OctalValue * 8 + Ord(Peek) - Ord('0');
           Advance;
         end;
-        ASB.Append(TextEncoding.CodePointToUTF16(OctalValue));
+        AppendStringEscape(ASB, '0', OctalValue);
       end;
-    'u': begin Advance; ASB.Append(ScanUnicodeEscape); end;
-    'x': begin Advance; ASB.Append(ScanHexEscape); end;
+    'u': begin Advance; AppendStringEscape(ASB, 'u', 0); end;
+    'x': begin Advance; AppendStringEscape(ASB, 'x', 0); end;
   else
     ASB.AppendChar(Peek);
     Advance;
@@ -1500,6 +1721,28 @@ end;
 
 procedure TGocciaLexer.ScanIdentifier;
 var
+  Start, Stop: Integer;
+begin
+  // Most identifiers are ASCII letters, digits, _ and $: intern them from the
+  // source in one piece. A backslash or a non-ASCII character takes the
+  // general path from the identifier's start.
+  Start := FCurrent;
+  Stop := Start;
+  while (Stop <= Length(FSource)) and CharInSet(FSource[Stop],
+    ['A'..'Z', 'a'..'z', '0'..'9', '_', '$']) do
+    Inc(Stop);
+  if (Stop > Length(FSource)) or (Ord(FSource[Stop]) < $80) and (FSource[Stop] <> '\') then
+  begin
+    Inc(FColumn, Stop - Start);
+    FCurrent := Stop;
+    AddInternedIdentifier(Start, Stop - Start);
+    Exit;
+  end;
+  ScanIdentifierSlow;
+end;
+
+procedure TGocciaLexer.ScanIdentifierSlow;
+var
   ByteLength, Index: Integer;
   CodePoint: Cardinal;
   SB: TStringBuffer;
@@ -1508,6 +1751,7 @@ var
   HadEscape: Boolean;
   TokenType: TGocciaTokenType;
 begin
+  // An identifier with an escape or a non-ASCII character, from its start.
   SB := TStringBuffer.Create(32);
   HadEscape := False;
   while not IsAtEnd and not IsLineTerminator do
@@ -1737,8 +1981,7 @@ begin
       begin
         { a PrivateIdentifier is # immediately followed by an IdentifierName (no space between) }
         if not (CharInSet(Peek, ['a'..'z', 'A'..'Z', '$', '_', '\']) or (Ord(Peek) >= $80)) then
-          raise TGocciaLexerError.Create('Unexpected character: #', FLine, FStartColumn, FFileName,
-            GetSourceLines, SSuggestInvalidCharacter);
+          RaiseUnexpectedCharacter('#');
         AddToken(gttHash);
       end;
     '@': AddToken(gttAt);
@@ -1767,9 +2010,7 @@ begin
          IsSourceIdentifierStartCodePoint(CodePoint) then
         ScanIdentifier
       else
-        raise TGocciaLexerError.Create(Format('Unexpected character: %s', [C]),
-          FLine, FStartColumn, FFileName, GetSourceLines,
-          SSuggestInvalidCharacter);
+        RaiseUnexpectedCharacter(C);
     end
   end;
 end;
@@ -1779,39 +2020,47 @@ function TGocciaLexer.ScanNextToken(
 var
   StartTime: Int64;
 begin
+  if not FMeasureScanTime then
+    Exit(ScanNextTokenUntimed(ALexicalGoal));
   StartTime := GetNanoseconds;
   try
-    if FEOFEmitted then
-      Exit(FTokens[FTokens.Count - 1]);
-
-    if not FHashbangSkipped then
-    begin
-      if ALexicalGoal = glgInputElementHashbangOrRegExp then
-        SkipHashbang;
-      FHashbangSkipped := True;
-    end;
-
-    if LexicalGoalRequiresTemplateContinuation(ALexicalGoal) then
-    begin
-      ScanTemplateContinuation;
-      Result := FTokens[FTokens.Count - 1];
-      Exit;
-    end;
-
-    SkipWhitespace;
-    if IsAtEnd then
-    begin
-      FEOFEmitted := True;
-      FTokens.Add(TGocciaToken.Create(gttEOF, '', FSourceCoordinates,
-        Length(FSource), Length(FSource)));
-      Exit(FTokens[FTokens.Count - 1]);
-    end;
-
-    ScanToken(ALexicalGoal);
-    Result := FTokens[FTokens.Count - 1];
+    Result := ScanNextTokenUntimed(ALexicalGoal);
   finally
     Inc(FScanTimeNanoseconds, GetNanoseconds - StartTime);
   end;
+end;
+
+function TGocciaLexer.ScanNextTokenUntimed(
+  const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
+begin
+  if FEOFEmitted then
+    Exit(FTokens[FTokens.Count - 1]);
+
+  if not FHashbangSkipped then
+  begin
+    if ALexicalGoal = glgInputElementHashbangOrRegExp then
+      SkipHashbang;
+    FHashbangSkipped := True;
+  end;
+
+  if LexicalGoalRequiresTemplateContinuation(ALexicalGoal) then
+  begin
+    ScanTemplateContinuation;
+    Result := FTokens[FTokens.Count - 1];
+    Exit;
+  end;
+
+  SkipWhitespace;
+  if IsAtEnd then
+  begin
+    FEOFEmitted := True;
+    FTokens.Add(gttEOF, '',
+      Length(FSource), Length(FSource));
+    Exit(FTokens[FTokens.Count - 1]);
+  end;
+
+  ScanToken(ALexicalGoal);
+  Result := FTokens[FTokens.Count - 1];
 end;
 
 end.

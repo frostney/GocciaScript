@@ -280,8 +280,10 @@ type
     FIsGenerator: Boolean;
     FReturnType: string;
     FGenericParams: string;
-    FSourceText: string;
+    FSourceRange: TGocciaLazySourceText;
     FDirectEvalUsage: TGocciaDirectEvalUsage;
+    function GetSourceText: string;
+    procedure SetSourceText(const AValue: string);
   public
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AName: string; const AParameters: TGocciaParameterArray;
@@ -294,7 +296,8 @@ type
     property IsGenerator: Boolean read FIsGenerator write FIsGenerator;
     property ReturnType: string read FReturnType write FReturnType;
     property GenericParams: string read FGenericParams write FGenericParams;
-    property SourceText: string read FSourceText write FSourceText;
+    property SourceText: string read GetSourceText write SetSourceText;
+    property SourceRange: TGocciaLazySourceText read FSourceRange write FSourceRange;
     property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
       write FDirectEvalUsage;
   end;
@@ -381,6 +384,8 @@ type
 
   // Shared class definition structure
   TGocciaClassDefinition = class(TGocciaASTObject)
+    function GetSourceText: string;
+    procedure SetSourceText(const AValue: string);
   public
     FName: string;
     FSuperClass: string;
@@ -409,7 +414,7 @@ type
     FDecorators: TGocciaDecoratorList;
     FElements: TGocciaClassElementArray;
     FFieldOrder: TGocciaFieldOrderEntryArray;
-    FSourceText: string;
+    FSourceRange: TGocciaLazySourceText;
 
     constructor Create(const AName, ASuperClass: string;
       const AMethods: TGocciaClassMethodMap;
@@ -425,7 +430,8 @@ type
     destructor Destroy; override;
     property Name: string read FName;
     property SuperClass: string read FSuperClass;
-    property SourceText: string read FSourceText write FSourceText;
+    property SourceText: string read GetSourceText write SetSourceText;
+    property SourceRange: TGocciaLazySourceText read FSourceRange write FSourceRange;
     property SuperClassExpression: TGocciaExpression read FSuperClassExpression;
     property Methods: TGocciaClassMethodMap read FMethods;
     property StaticMethods: TGocciaClassMethodMap read FStaticMethods;
@@ -1766,6 +1772,27 @@ begin
   VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfTypeParameters);
   ForEachParameterChild(AVisitor, FSignatureParameters);
   VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfAfterTypeParameters);
+end;
+
+
+function TGocciaClassMethod.GetSourceText: string;
+begin
+  Result := FSourceRange.Get;
+end;
+
+procedure TGocciaClassMethod.SetSourceText(const AValue: string);
+begin
+  FSourceRange.SetText(AValue);
+end;
+
+function TGocciaClassDefinition.GetSourceText: string;
+begin
+  Result := FSourceRange.Get;
+end;
+
+procedure TGocciaClassDefinition.SetSourceText(const AValue: string);
+begin
+  FSourceRange.SetText(AValue);
 end;
 
 end.

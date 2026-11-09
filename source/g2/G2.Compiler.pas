@@ -1350,7 +1350,7 @@ begin
   begin
     AE := TGocciaArrowFunctionExpression(E);
     T := CompileFunction(NameHint, AE.Parameters, AE.Body, True, False, False, False, False, AE.IsAsync);
-    T^.SourceRange.SetText(AE.SourceText);
+    T^.SourceRange := AE.SourceRange;
     EmitClosure(Dest, T);
   end
   else if E is TGocciaFunctionExpression then
@@ -1378,7 +1378,7 @@ begin
       T := CompileFunction(FE.Name, FE.Parameters, FE.Body, False, False, False, False, FE.IsGenerator, FE.IsAsync)
     else
       T := CompileFunction(NameHint, FE.Parameters, FE.Body, False, False, False, False, FE.IsGenerator, FE.IsAsync);
-    T^.SourceRange.SetText(FE.SourceText);
+    T^.SourceRange := FE.SourceRange;
     if NameScope then
     begin
       EmitClosure(Self_, T);
@@ -1888,7 +1888,7 @@ begin
       PendingStrict := Ord(FD.FunctionExpression.ParsedInStrictMode);
       T := CompileFunction(FD.Name, FD.FunctionExpression.Parameters, FD.FunctionExpression.Body, False, False, False,
         False, FD.FunctionExpression.IsGenerator, FD.FunctionExpression.IsAsync);
-      T^.SourceRange.SetText(FD.FunctionExpression.SourceText);
+      T^.SourceRange := FD.FunctionExpression.SourceRange;
       if GlobalTop then
       begin
         { 16.1.7 step 16: CreateGlobalFunctionBinding, in declaration order (the last one of a name wins) }
@@ -4774,7 +4774,7 @@ begin
         if D.LocalName = GOCCIA_DEFAULT_EXPORT_BINDING then
           T := CompileFunction('default', Parameters, Body, False, False, False, False, IsGenerator, IsAsync)
         else T := CompileFunction(D.LocalName, Parameters, Body, False, False, False, False, IsGenerator, IsAsync);
-        T^.SourceRange.SetText(SourceText);
+        T^.SourceRange := SourceRange;
       end;
       EmitClosure(R, T);
     end

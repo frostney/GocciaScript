@@ -12,19 +12,17 @@ It is not wired into `build.pas`, the CI or the release, and nothing in Goccia d
 | Measure | Value |
 |---|---|
 | test262 (pin 91c70759, contract 4, all six categories) | 82,569 / 103,264 runs (80.0%) |
-| JetStream, 6 bundles, wall clock | QuickJS time / G2 time 0.84 (below 1: QuickJS faster) |
-| Web Tooling, 18 bundles, wall clock | 1.00, or 0.84 without coffeescript (QuickJS runs it 22x slower) |
+| JetStream, 6 bundles, wall clock | QuickJS time / G2 time 0.87 (below 1: QuickJS faster) |
+| Web Tooling, 18 bundles, wall clock | 1.23, or 1.03 without coffeescript (QuickJS runs it 25x slower) |
 
-Wall clock is best of 3, one engine at a time, on a quiet machine, from `scripts/g2/wallclock.sh`. On the
-front-end copy G2 was developed against, the same engine ran JetStream at 0.90 and Web Tooling at 1.22
-(1.02 without coffeescript): that copy had parser changes this repository's front end lacks (no line and
-column computation per node, spans without reference-counted fields, lazily copied function source text).
-Typescript and prettier spend about 1.7x as long here, most of the difference in parsing.
+Wall clock is best of 3, one engine at a time, on a quiet machine, from `scripts/g2/wallclock.sh`. The front-end
+changes below made Web Tooling 1.21x faster end to end than on this repository's front end before them
+(typescript 1.55x, prettier 1.68x), and JetStream, which spends little of its time parsing, 1.03x.
 
 Largest remaining test262 gaps: Temporal (about 13,300 runs including intl402), Intl (about 6,700), RegExp
 property escapes and `v` flag, Date, realms (`$262.createRealm`, ShadowRealm), import defer, Atomics.waitAsync.
-Largest performance gaps: generators (lazy-collections 0.63), float arithmetic on typed arrays
-(gaussian-blur 0.74), string-heavy bundles (source-map 0.81).
+Largest performance gaps: generators (lazy-collections 0.61), float arithmetic on typed arrays
+(gaussian-blur 0.71), hash maps (hash-map 0.80), string-heavy bundles (source-map 0.81).
 
 ## Layout
 
@@ -67,8 +65,23 @@ with a 256 KB nursery and `--gc-verify`. The digest bundles print `DIGEST n:hash
 
 ## Changes to Goccia's front end
 
-G2 uses `source/units` as it is, with two additions on this branch:
+G2 parses with `source/units`. This branch changes it in three ways, each checked against Goccia's tests and
+its Pascal unit tests:
 
+- Speed. Parsing and compiling the typescript bundle took about half the instructions afterwards (6.5 G to
+  3.1 G, measured in the spike), with identical bytecode on all 18 Web Tooling bundles:
+  - a source span holds a plain reference to the source's coordinates instead of a reference-counted
+    interface, so copying a span into a token or node no longer initializes, finalizes and counts a
+    reference; the AST arena keeps the coordinates alive for as long as the tree
+    (`TGocciaASTArena.KeepCoordinates`);
+  - line and column are computed from offsets when read, not stored per node;
+  - a function's source text is a range of the parse's source, copied only when read;
+  - tokens are records in chunks owned by a `TGocciaTokenList`, and punctuators share one lexeme string per
+    token type;
+  - source lines are split only when an error is raised, and the lexer reads the clock only when asked to;
+  - error messages and suggestions are constants rather than `resourcestring`, which FPC converts and
+    allocates at every call;
+  - `Goccia.ClassMask` replaces chains of `is` tests with one cached bit mask per class.
 - `Goccia.Values.FunctionBase`: `{$OPTIMIZATION NODFA}` under FPC 3.3.1 and later, whose DFA pass hangs on
   `ConstructValue` at -O3 and above.
 - `Goccia.Lexer`: `#` must be followed directly by an identifier name (`# x` is a SyntaxError).

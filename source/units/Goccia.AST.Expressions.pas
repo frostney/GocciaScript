@@ -412,8 +412,10 @@ type
     FBody: TGocciaASTNode;
     FReturnType: string;
     FIsAsync: Boolean;
-    FSourceText: string;
+    FSourceRange: TGocciaLazySourceText;
     FDirectEvalUsage: TGocciaDirectEvalUsage;
+    function GetSourceText: string;
+    procedure SetSourceText(const AValue: string);
   public
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
@@ -422,7 +424,8 @@ type
     property Body: TGocciaASTNode read FBody;
     property ReturnType: string read FReturnType write FReturnType;
     property IsAsync: Boolean read FIsAsync write FIsAsync;
-    property SourceText: string read FSourceText write FSourceText;
+    property SourceText: string read GetSourceText write SetSourceText;
+    property SourceRange: TGocciaLazySourceText read FSourceRange write FSourceRange;
     property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
       write FDirectEvalUsage;
   end;
@@ -435,9 +438,11 @@ type
     FIsGenerator: Boolean;
     FHasOwnPrototype: Boolean;
     FParsedInStrictMode: Boolean;
-    FSourceText: string;
+    FSourceRange: TGocciaLazySourceText;
     FName: string;
     FDirectEvalUsage: TGocciaDirectEvalUsage;
+    function GetSourceText: string;
+    procedure SetSourceText(const AValue: string);
   public
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AParameters: TGocciaParameterArray; const ABody: TGocciaASTNode;
@@ -453,7 +458,8 @@ type
     // arrow functions, getters/setters, and plain async functions.
     property HasOwnPrototype: Boolean read FHasOwnPrototype write FHasOwnPrototype;
     property ParsedInStrictMode: Boolean read FParsedInStrictMode write FParsedInStrictMode;
-    property SourceText: string read FSourceText write FSourceText;
+    property SourceText: string read GetSourceText write SetSourceText;
+    property SourceRange: TGocciaLazySourceText read FSourceRange write FSourceRange;
     property Name: string read FName write FName;
     property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
       write FDirectEvalUsage;
@@ -568,13 +574,16 @@ type
   TGocciaGetterExpression = class(TGocciaExpression)
   private
     FBody: TGocciaASTNode;
-    FSourceText: string;
+    FSourceRange: TGocciaLazySourceText;
     FDirectEvalUsage: TGocciaDirectEvalUsage;
+    function GetSourceText: string;
+    procedure SetSourceText(const AValue: string);
   public
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const ABody: TGocciaASTNode; const ASpan: TGocciaSourceSpan);
     property Body: TGocciaASTNode read FBody;
-    property SourceText: string read FSourceText write FSourceText;
+    property SourceText: string read GetSourceText write SetSourceText;
+    property SourceRange: TGocciaLazySourceText read FSourceRange write FSourceRange;
     property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
       write FDirectEvalUsage;
   end;
@@ -585,8 +594,10 @@ type
     FParameter: string;
     FParameters: TGocciaParameterArray;
     FBody: TGocciaASTNode;
-    FSourceText: string;
+    FSourceRange: TGocciaLazySourceText;
     FDirectEvalUsage: TGocciaDirectEvalUsage;
+    function GetSourceText: string;
+    procedure SetSourceText(const AValue: string);
   public
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AParameter: string; const ABody: TGocciaASTNode; const ASpan: TGocciaSourceSpan); overload;
@@ -594,7 +605,8 @@ type
     property Parameter: string read FParameter;
     property Parameters: TGocciaParameterArray read FParameters;
     property Body: TGocciaASTNode read FBody;
-    property SourceText: string read FSourceText write FSourceText;
+    property SourceText: string read GetSourceText write SetSourceText;
+    property SourceRange: TGocciaLazySourceText read FSourceRange write FSourceRange;
     property DirectEvalUsage: TGocciaDirectEvalUsage read FDirectEvalUsage
       write FDirectEvalUsage;
   end;
@@ -2370,11 +2382,53 @@ begin
   AVisitor.VisitChild(FDefaultExpression);
 end;
 
+function TGocciaArrowFunctionExpression.GetSourceText: string;
+begin
+  Result := FSourceRange.Get;
+end;
+
+procedure TGocciaArrowFunctionExpression.SetSourceText(const AValue: string);
+begin
+  FSourceRange.SetText(AValue);
+end;
+
+function TGocciaFunctionExpression.GetSourceText: string;
+begin
+  Result := FSourceRange.Get;
+end;
+
+procedure TGocciaFunctionExpression.SetSourceText(const AValue: string);
+begin
+  FSourceRange.SetText(AValue);
+end;
+
+function TGocciaGetterExpression.GetSourceText: string;
+begin
+  Result := FSourceRange.Get;
+end;
+
+procedure TGocciaGetterExpression.SetSourceText(const AValue: string);
+begin
+  FSourceRange.SetText(AValue);
+end;
+
+function TGocciaSetterExpression.GetSourceText: string;
+begin
+  Result := FSourceRange.Get;
+end;
+
+procedure TGocciaSetterExpression.SetSourceText(const AValue: string);
+begin
+  FSourceRange.SetText(AValue);
+end;
+
+
 initialization
   CriticalSectionInit(GTemplateSiteIdLock);
   GNextTemplateSiteId := 0;
 
 finalization
   CriticalSectionDone(GTemplateSiteIdLock);
+
 
 end.

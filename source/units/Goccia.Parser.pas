@@ -111,7 +111,7 @@ type
         afcReady        // 'function' consumed; caller should proceed with parsing
       );
   private
-    FTokens: TObjectList<TGocciaToken>;
+    FTokens: TGocciaTokenList;
     FLexer: TGocciaLexer;
     // The thread's compile profile when --profile=compile is on, else nil
     // (Goccia.Profiler.Compile).
@@ -127,7 +127,12 @@ type
     FNotTypeArgumentStarts: THashMap<Integer, Boolean>;
     // Constructor probes have different accepted followers and bracket rules.
     FNotNewTypeArgumentStarts: THashMap<Integer, Boolean>;
-    FSourceLines: TStringList;
+    FSourceLinesField: TStringList;
+    function GetSourceLinesLazily: TStringList;
+    // Only error messages read the source lines: built on first use (from the
+    // lexer, which builds them lazily too) when none were passed in.
+    property FSourceLines: TStringList read GetSourceLinesLazily;
+  private
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
     FInAsyncFunction: Integer;
@@ -324,6 +329,12 @@ type
     procedure ValidateAwaitIdentifier(const AToken: TGocciaToken);
     procedure ValidateIdentifierReference(const AToken: TGocciaToken);
     procedure ValidateIdentifierBinding(const AToken: TGocciaToken);
+    // Raised out of line: a message built by concatenation is a managed
+    // temporary, which in FPC gives the routine that holds it an implicit
+    // exception frame on every call, not only when it raises.
+    procedure RaiseReservedWordError(const AToken: TGocciaToken;
+      const APrefix, ASuffix: string);
+    function ConvertFractionLiteral(const ADigits: string): Double;
     function ConsumeIdentifierBinding(const AMessage: string): TGocciaToken; overload;
     function ConsumeIdentifierBinding(const AMessage,
       ASuggestion: string): TGocciaToken; overload;
@@ -334,6 +345,7 @@ type
       const ATypeStart, ATypeEnd: Integer): Boolean;
     procedure SkipAssignmentExpressionForProbe;
     function ExtractSourceRange(const AStartLine, AStartColumn: Integer): string;
+    function ExtractSourceRangeLazy(const AStartLine, AStartColumn: Integer): TGocciaLazySourceText;
     function ConvertNumberLiteral(const ALexeme: string): Double;
     function ConvertBigIntLiteralName(const ALexeme: string): string;
     function ConvertBigIntLiteral(const ALexeme: string): TGocciaValue;
@@ -472,12 +484,16 @@ type
     function BitwiseAnd: TGocciaExpression;
     function Equality: TGocciaExpression;
     function Comparison: TGocciaExpression;
+    function ComparisonSlow: TGocciaExpression;
+    function ComparisonTail(const ALeft: TGocciaExpression): TGocciaExpression;
     function Shift: TGocciaExpression;
     function Addition: TGocciaExpression;
     function Multiplication: TGocciaExpression;
     function Exponentiation: TGocciaExpression;
     function Unary: TGocciaExpression;
+    function UnarySlow: TGocciaExpression;
     function Call: TGocciaExpression;
+    function CallTail(const ACallee: TGocciaExpression): TGocciaExpression;
     function ParseTaggedTemplate(const ATag: TGocciaExpression;
       const ATemplateToken: TGocciaToken): TGocciaTaggedTemplateExpression;
     function ParseTemplateLiteral(const AToken: TGocciaToken): TGocciaExpression;
@@ -485,6 +501,7 @@ type
     function ParseImportCallExpression(const AToken: TGocciaToken;
       const APhase: TGocciaImportCallPhase): TGocciaImportCallExpression;
     function Primary: TGocciaExpression;
+    function PrimarySlow: TGocciaExpression;
     function ArrayLiteral: TGocciaExpression;
     function ObjectLiteral: TGocciaExpression;
     function ArrowFunction(const AIsAsync: Boolean = False;
@@ -492,6 +509,7 @@ type
     function Assignment: TGocciaExpression;
     function AssignmentInheritingConsequentDepth: TGocciaExpression;
     function UnguardedAssignment: TGocciaExpression;
+    function UnguardedAssignmentRest(const ALeft: TGocciaExpression): TGocciaExpression;
     function AssignmentAllowIn: TGocciaExpression;
     function AssignmentNoIn: TGocciaExpression;
     function ExpressionAllowIn: TGocciaExpression;
@@ -552,7 +570,7 @@ type
     procedure BeginProfiledFunction(const ALine, AColumn: Integer);
     procedure EndProfiledFunction;
   public
-    constructor Create(const ATokens: TObjectList<TGocciaToken>;
+    constructor Create(const ATokens: TGocciaTokenList;
       const AFileName: string; const ASourceLines: TStringList);
     constructor CreateFromLexer(const ALexer: TGocciaLexer;
       const AFileName: string; const ASourceLines: TStringList);
@@ -586,6 +604,7 @@ uses
   TextSemantics,
 
   Goccia.AST.BindingPatterns,
+  Goccia.ClassMask,
   Goccia.Constants,
   Goccia.Error,
   Goccia.Error.Messages,
@@ -629,6 +648,9 @@ const
 // inside braces, where this check does not apply.
 type
   TGocciaTokenTypeSet = set of TGocciaTokenType;
+  // Source lines only feed error messages; building them is a pass over the
+  // whole source, so validators that may raise get them on demand.
+  TGocciaSourceLinesFunc = function: TStringList of object;
 
 const
   EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS: TGocciaTokenTypeSet = [
@@ -758,7 +780,7 @@ begin
   Result := FReferences[AIndex];
 end;
 
-constructor TGocciaParser.Create(const ATokens: TObjectList<TGocciaToken>;
+constructor TGocciaParser.Create(const ATokens: TGocciaTokenList;
   const AFileName: string; const ASourceLines: TStringList);
 begin
   FTokens := ATokens;
@@ -766,7 +788,7 @@ begin
   FCompileProfile := TGocciaCompileProfiler.Instance;
   FFileName := AFileName;
   FAllowsTypeScriptOnlySyntax := IsTypeScriptFileName(AFileName);
-  FSourceLines := ASourceLines;
+  FSourceLinesField := ASourceLines;
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
@@ -782,6 +804,13 @@ begin
   FConditionalConsequentDepth := 0;
 end;
 
+function TGocciaParser.GetSourceLinesLazily: TStringList;
+begin
+  if not Assigned(FSourceLinesField) and Assigned(FLexer) then
+    FSourceLinesField := FLexer.SourceLines;
+  Result := FSourceLinesField;
+end;
+
 constructor TGocciaParser.CreateFromLexer(const ALexer: TGocciaLexer;
   const AFileName: string; const ASourceLines: TStringList);
 begin
@@ -790,7 +819,7 @@ begin
   FCompileProfile := TGocciaCompileProfiler.Instance;
   FFileName := AFileName;
   FAllowsTypeScriptOnlySyntax := IsTypeScriptFileName(AFileName);
-  FSourceLines := ASourceLines;
+  FSourceLinesField := ASourceLines;
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
@@ -1069,6 +1098,26 @@ begin
   Result := Copy(SourceText, StartOffset + 1, EndOffset - StartOffset);
 end;
 
+// ExtractSourceRange without the copy: the range of the source the node keeps
+// until its text is read.
+function TGocciaParser.ExtractSourceRangeLazy(const AStartLine, AStartColumn: Integer): TGocciaLazySourceText;
+var
+  StartOffset, EndOffset: Integer;
+  SourceText: string;
+begin
+  Result := Default(TGocciaLazySourceText);
+  StartOffset := Previous.Span.OffsetAtPosition(AStartLine, AStartColumn);
+  if StartOffset < 0 then
+    Exit;
+  SourceText := Previous.Span.Source;
+  EndOffset := Previous.Span.EndOffset;
+  if (StartOffset > Length(SourceText)) or (EndOffset < StartOffset) then
+    Exit;
+  if EndOffset > Length(SourceText) then
+    EndOffset := Length(SourceText);
+  Result.SetRange(SourceText, StartOffset, EndOffset - StartOffset);
+end;
+
 procedure TGocciaParser.PushPrivateClassContext;
 begin
   FPrivateClassContexts.Add(TGocciaPrivateClassContext.Create);
@@ -1152,11 +1201,18 @@ end;
   scoped in function bodies and static blocks. Only ordinary block functions
   may repeat in non-strict compatibility code (B.3.2). Membership is hashed;
   the lists retain duplicates within a binding pattern until checked here. }
+threadvar   { per thread: each one fills its own, so none reads a half-written entry }
+  DeclMaskCache: TClassMaskCache;
+const
+  DeclMaskClasses: array[0..1] of TClass = (
+    TGocciaFunctionDeclaration,
+    TGocciaExportFunctionDeclaration);
+
 procedure ValidateStatementListDeclarations(
   const ANodes: array of TGocciaASTNode;
   const AFunctionsAreVar, AAllowDuplicateFunctions: Boolean;
   const AParameterNames: TUnicodeStringList;
-  const AFileName: string; const ASourceLines: TStringList);
+  const AFileName: string; const ASourceLines: TGocciaSourceLinesFunc);
 var
   Profile: TGocciaCompileProfiler;
   LexicalNames, VarNames, FunctionNames, StatementNames: TUnicodeStringList;
@@ -1164,12 +1220,13 @@ var
   Declaration: TGocciaFunctionDeclaration;
   IsLexicalFunction, AllowRepeatedFunction: Boolean;
   I, J: Integer;
+  DeclMask: Cardinal;
 
   procedure RaiseAlreadyDeclared(const AName: string);
   begin
     raise TGocciaSyntaxError.Create(
       Format(SErrorIdentifierAlreadyDeclared, [AName]), Node.Line,
-      Node.Column, AFileName, ASourceLines, SSuggestAlreadyDeclared);
+      Node.Column, AFileName, ASourceLines(), SSuggestAlreadyDeclared);
   end;
 
 begin
@@ -1184,10 +1241,11 @@ begin
     for I := 0 to High(ANodes) do
     begin
       Node := ANodes[I];
+DeclMask := ClassMaskOf(DeclMaskCache, DeclMaskClasses, Node);
       Declaration := nil;
-      if Node is TGocciaFunctionDeclaration then
+      if ((DeclMask and Cardinal(1)) <> 0) then
         Declaration := TGocciaFunctionDeclaration(Node)
-      else if Node is TGocciaExportFunctionDeclaration then
+      else if ((DeclMask and Cardinal(2)) <> 0) then
         Declaration := TGocciaExportFunctionDeclaration(Node).Declaration;
       IsLexicalFunction := not AFunctionsAreVar and Assigned(Declaration);
       AllowRepeatedFunction := False;
@@ -1238,8 +1296,8 @@ end;
 // ES2026 §14.7.4.1, §14.7.5.1 and §14.15.1: loop/catch bindings
 // cannot repeat, or conflict with vars in their body. A simple catch parameter
 // permits the legacy var redeclaration (B.3.4), but never a lexical declaration.
-procedure ValidateScopedStatementBindings(const ANode: TGocciaStatement;
-  const AFileName: string; const ASourceLines: TStringList);
+procedure ValidateScopedStatementBindingsOf(const ANode: TGocciaStatement;
+  const AFileName: string; const ASourceLines: TGocciaSourceLinesFunc);
 var
   Profile: TGocciaCompileProfiler;
   Names, SeenNames, VarNames: TUnicodeStringList;
@@ -1307,7 +1365,7 @@ begin
       if BindingNameSeen(SeenNames, Names[I], Profile) or BindingNameSeen(VarNames, Names[I], Profile) then
         raise TGocciaSyntaxError.Create(
           Format(SErrorIdentifierAlreadyDeclared, [Names[I]]), ANode.Line,
-          ANode.Column, AFileName, ASourceLines, SSuggestAlreadyDeclared);
+          ANode.Column, AFileName, ASourceLines(), SSuggestAlreadyDeclared);
       SeenNames.Add(Names[I]);
     end;
     if IsCatch and Assigned(Body) then
@@ -1323,6 +1381,29 @@ begin
     SeenNames.Free;
     Names.Free;
   end;
+end;
+
+// Called for every statement; only loops and try statements bind anything
+// here. The check runs before the validator's managed locals, which would
+// cost an exception frame per call.
+threadvar   { per thread: each one fills its own, so none reads a half-written entry }
+  ScopedMaskCache: TClassMaskCache;
+const
+  ScopedMaskClasses: array[0..3] of TClass = (
+    TGocciaForStatement,
+    TGocciaForOfStatement,
+    TGocciaForInStatement,
+    TGocciaTryStatement);
+
+procedure ValidateScopedStatementBindings(const ANode: TGocciaStatement;
+  const AFileName: string; const ASourceLines: TGocciaSourceLinesFunc);
+var
+  ScopedMask: Cardinal;
+begin
+ScopedMask := ClassMaskOf(ScopedMaskCache, ScopedMaskClasses, ANode);
+  if (((ScopedMask and Cardinal(1)) <> 0)) or (((ScopedMask and Cardinal(2)) <> 0)) or
+     (((ScopedMask and Cardinal(4)) <> 0)) or (((ScopedMask and Cardinal(8)) <> 0)) then
+    ValidateScopedStatementBindingsOf(ANode, AFileName, ASourceLines);
 end;
 
 function TGocciaParser.ParseClassStaticBlockBody: TGocciaBlockStatement;
@@ -1514,6 +1595,10 @@ end;
 
 function TGocciaParser.Peek: TGocciaToken;
 begin
+  // A token already scanned needs neither EnsureToken nor the list's
+  // range-checked getter.
+  if FCurrent < FTokens.Count then
+    Exit(FTokens.At(FCurrent));
   EnsureToken(FCurrent, DefaultLexicalGoal);
   Result := FTokens[FCurrent];
 end;
@@ -1521,17 +1606,27 @@ end;
 function TGocciaParser.PeekWithLexicalGoal(
   const ALexicalGoal: TGocciaLexicalGoal): TGocciaToken;
 begin
+  // EnsureToken only scans past the end, so a scanned token is final.
+  if FCurrent < FTokens.Count then
+    Exit(FTokens.At(FCurrent));
   EnsureToken(FCurrent, ALexicalGoal);
   Result := FTokens[FCurrent];
 end;
 
 function TGocciaParser.Previous: TGocciaToken;
 begin
+  if (FCurrent >= 1) and (FCurrent <= FTokens.Count) then
+    Exit(FTokens.At(FCurrent - 1));
   Result := FTokens[FCurrent - 1];
 end;
 
 function TGocciaParser.Advance: TGocciaToken;
 begin
+  if (FCurrent < FTokens.Count) and (FTokens.At(FCurrent).TokenType <> gttEOF) then
+  begin
+    Inc(FCurrent);
+    Exit(FTokens.At(FCurrent - 1));
+  end;
   EnsureToken(FCurrent, DefaultLexicalGoal);
   if FTokens[FCurrent].TokenType <> gttEOF then
   begin
@@ -1559,8 +1654,13 @@ function TGocciaParser.Check(const ATokenType: TGocciaTokenType): Boolean;
 var
   CurrentType: TGocciaTokenType;
 begin
-  EnsureToken(FCurrent, DefaultLexicalGoal);
-  CurrentType := FTokens[FCurrent].TokenType;
+  if FCurrent < FTokens.Count then
+    CurrentType := FTokens.At(FCurrent).TokenType
+  else
+  begin
+    EnsureToken(FCurrent, DefaultLexicalGoal);
+    CurrentType := FTokens[FCurrent].TokenType;
+  end;
   if ATokenType = gttEOF then
     Result := CurrentType = gttEOF
   else
@@ -1573,8 +1673,13 @@ function TGocciaParser.CheckWithLexicalGoal(
 var
   CurrentType: TGocciaTokenType;
 begin
-  EnsureToken(FCurrent, ALexicalGoal);
-  CurrentType := FTokens[FCurrent].TokenType;
+  if FCurrent < FTokens.Count then
+    CurrentType := FTokens.At(FCurrent).TokenType
+  else
+  begin
+    EnsureToken(FCurrent, ALexicalGoal);
+    CurrentType := FTokens[FCurrent].TokenType;
+  end;
   if ATokenType = gttEOF then
     Result := CurrentType = gttEOF
   else
@@ -2164,8 +2269,13 @@ function TGocciaParser.CheckUnescapedIdentifierKeywordWithLexicalGoal(
 var
   Token: TGocciaToken;
 begin
-  EnsureToken(FCurrent, ALexicalGoal);
-  Token := FTokens[FCurrent];
+  if FCurrent < FTokens.Count then
+    Token := FTokens.At(FCurrent)
+  else
+  begin
+    EnsureToken(FCurrent, ALexicalGoal);
+    Token := FTokens[FCurrent];
+  end;
   Result := (Token.TokenType = gttIdentifier) and
     (Token.Lexeme = AKeyword) and not Token.ContainsEscape;
 end;
@@ -2321,9 +2431,8 @@ begin
       AToken.Line, AToken.Column, FFileName, FSourceLines);
   if (not EffectiveNonStrictModeEnabled) and
      IsStrictModeReservedKeyword(AToken.Lexeme) then
-    raise TGocciaSyntaxError.Create(
-      'Strict mode code must not use reserved word ''' + AToken.Lexeme + ''' as an identifier',
-      AToken.Line, AToken.Column, FFileName, FSourceLines);
+    RaiseReservedWordError(AToken, 'Strict mode code must not use reserved word ''',
+      ''' as an identifier');
 end;
 
 procedure TGocciaParser.ValidateIdentifierBinding(const AToken: TGocciaToken);
@@ -2335,15 +2444,24 @@ begin
       AToken.Line, AToken.Column, FFileName, FSourceLines);
   if (not EffectiveNonStrictModeEnabled) and
      IsStrictModeReservedKeyword(AToken.Lexeme) then
-    raise TGocciaSyntaxError.Create(
-      'Strict mode code must not bind reserved word ''' + AToken.Lexeme + '''',
-      AToken.Line, AToken.Column, FFileName, FSourceLines);
+    RaiseReservedWordError(AToken, 'Strict mode code must not bind reserved word ''',
+      '''');
   if FStrictModeSourceActive and
      ((AToken.Lexeme = 'eval') or
       (AToken.Lexeme = IDENTIFIER_ARGUMENTS)) then
-    raise TGocciaSyntaxError.Create(
-      'Strict mode code must not bind ''' + AToken.Lexeme + '''',
-      AToken.Line, AToken.Column, FFileName, FSourceLines);
+    RaiseReservedWordError(AToken, 'Strict mode code must not bind ''', '''');
+end;
+
+procedure TGocciaParser.RaiseReservedWordError(const AToken: TGocciaToken;
+  const APrefix, ASuffix: string);
+begin
+  raise TGocciaSyntaxError.Create(APrefix + AToken.Lexeme + ASuffix,
+    AToken.Line, AToken.Column, FFileName, FSourceLines);
+end;
+
+function TGocciaParser.ConvertFractionLiteral(const ADigits: string): Double;
+begin
+  Result := ConvertNumberLiteral('.' + ADigits);
 end;
 
 function TGocciaParser.ConsumeIdentifierBinding(
@@ -2503,7 +2621,7 @@ begin
       Condition := Result;
       Consequent := TGocciaLiteralExpression.Create(
         TGocciaNumberLiteralValue.Create(
-          ConvertNumberLiteral('.' + NumberToken.Lexeme)),
+          ConvertFractionLiteral(NumberToken.Lexeme)),
         NumberToken.Span);
     end;
     Consume(gttColon, 'Expected ":" in conditional expression',
@@ -2654,7 +2772,35 @@ begin
   end;
 end;
 
+// The relational loop without the rest: `#x in`, `is`, `as` and `satisfies`
+// need string locals, which cost an exception frame on every call, so they
+// sit in ComparisonSlow and ComparisonTail.
 function TGocciaParser.Comparison: TGocciaExpression;
+var
+  Op, Next: TGocciaToken;
+begin
+  if Check(gttHash) then
+    Exit(ComparisonSlow);
+  Result := Shift;
+  while (PeekWithLexicalGoal(glgInputElementDiv).TokenType in
+         [gttGreater, gttGreaterEqual, gttLess, gttLessEqual, gttInstanceof,
+          gttIn]) and
+        (FAllowInExpression or
+         (PeekWithLexicalGoal(glgInputElementDiv).TokenType <> gttIn)) do
+  begin
+    Op := Advance;
+    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Shift,
+      Op.Span);
+    CountChainLink;
+  end;
+  Next := PeekWithLexicalGoal(glgInputElementDiv);
+  if (Next.TokenType = gttAs) or ((Next.TokenType = gttIdentifier) and
+     ((Next.Lexeme = KEYWORD_IS) or (Next.Lexeme = KEYWORD_AS) or
+      (Next.Lexeme = KEYWORD_SATISFIES))) then
+    Result := ComparisonTail(Result);
+end;
+
+function TGocciaParser.ComparisonSlow: TGocciaExpression;
 var
   Op: TGocciaToken;
   Pattern: TGocciaMatchPattern;
@@ -2754,6 +2900,72 @@ begin
   ParseIsExpressions;
 end;
 
+function TGocciaParser.ComparisonTail(const ALeft: TGocciaExpression): TGocciaExpression;
+var
+  Op: TGocciaToken;
+  Pattern: TGocciaMatchPattern;
+  TypeAnnotation: string;
+  PrivateToken: TGocciaToken;
+  PrivateName: string;
+  PrivateNameSpan: TGocciaSourceSpan;
+  AssertionStart, TypeStart: Integer;
+
+  procedure ParseIsExpressions;
+  begin
+    while MatchContextualKeywordWithLexicalGoal(KEYWORD_IS,
+      glgInputElementDiv) do
+    begin
+      Op := Previous;
+      Pattern := ParseMatchPattern;
+      Result := TGocciaIsExpression.Create(Result, Pattern, Op.Span);
+      CountChainLink;
+    end;
+  end;
+begin
+  Result := ALeft;
+  ParseIsExpressions;
+
+  while True do
+  begin
+    if CheckWithLexicalGoal(gttAs, glgInputElementDiv) then
+    begin
+      AssertionStart := Advance.Span.StartOffset;
+      TypeStart := FCurrent;
+      if Check(gttConst) then
+        Advance
+      else
+      begin
+        TypeAnnotation := CollectExpressionTypeAnnotation;
+        if TypeAnnotation = '' then
+          raise TGocciaSyntaxError.Create('Expected type annotation after "as"',
+            Peek.Line, Peek.Column, FFileName, FSourceLines);
+      end;
+      RecordTypeAssertion(Result, takAs, AssertionStart,
+        Previous.Span.EndOffset, TypeRangesBetween(tsType, TypeStart, FCurrent));
+      CountChainLink;
+    end
+    else if not HasLineTerminatorBeforePeek and
+      MatchContextualKeywordWithLexicalGoal(KEYWORD_SATISFIES,
+        glgInputElementDiv) then
+    begin
+      AssertionStart := Previous.Span.StartOffset;
+      TypeStart := FCurrent;
+      TypeAnnotation := CollectExpressionTypeAnnotation;
+      if TypeAnnotation = '' then
+        raise TGocciaSyntaxError.Create(
+          'Expected type annotation after "satisfies"',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+      RecordTypeAssertion(Result, takSatisfies, AssertionStart,
+        Previous.Span.EndOffset, TypeRangesBetween(tsType, TypeStart, FCurrent));
+      CountChainLink;
+    end
+    else
+      Break;
+  end;
+
+  ParseIsExpressions;
+end;
+
 function TGocciaParser.Addition: TGocciaExpression;
 var
   Op: TGocciaToken;
@@ -2806,7 +3018,25 @@ begin
   end;
 end;
 
+// Most unary levels hold no operator: go straight to Call. UnarySlow has a
+// string local (an `await #x` name), which costs an exception frame per call.
 function TGocciaParser.Unary: TGocciaExpression;
+var
+  Token: TGocciaToken;
+begin
+  Token := Peek;
+  case Token.TokenType of
+    gttNot, gttMinus, gttPlus, gttTypeof, gttVoid, gttBitwiseNot, gttDelete,
+    gttIncrement, gttDecrement:
+      Exit(UnarySlow);
+    gttIdentifier:
+      if (Token.Lexeme = KEYWORD_AWAIT) or (Token.Lexeme = KEYWORD_YIELD) then
+        Exit(UnarySlow);
+  end;
+  Result := Call;
+end;
+
+function TGocciaParser.UnarySlow: TGocciaExpression;
 var
   Operator: TGocciaToken;
   PrivateToken: TGocciaToken;
@@ -3051,7 +3281,21 @@ begin
   end;
 end;
 
+// Most primaries have no postfix part. The loop's locals are managed (type
+// argument arrays), which gives a function an implicit exception frame and
+// initialization on entry, so that loop sits in CallTail and only runs
+// when a postfix token follows.
 function TGocciaParser.Call: TGocciaExpression;
+begin
+  Result := Primary;
+  case PeekWithLexicalGoal(glgInputElementDiv).TokenType of
+    gttLeftParen, gttDot, gttOptionalChaining, gttHash, gttLeftBracket,
+    gttNot, gttIncrement, gttDecrement, gttTemplate, gttTemplateHead, gttLess:
+      Result := CallTail(Result);
+  end;
+end;
+
+function TGocciaParser.CallTail(const ACallee: TGocciaExpression): TGocciaExpression;
 var
   Arguments: TObjectList<TGocciaExpression>;
   Arg: TGocciaExpression;
@@ -3062,7 +3306,7 @@ var
   Line, Column: Integer;
   CurrentType: TGocciaTokenType;
 begin
-  Result := Primary;
+  Result := ACallee;
 
   while True do
   begin
@@ -3294,7 +3538,7 @@ begin
 end;
 
 procedure AppendTemplateSegment(const AToken: TGocciaToken;
-  const ATagged: Boolean; const AFileName: string; const ASourceLines: TStringList;
+  const ATagged: Boolean; const AFileName: string; const ASourceLines: TGocciaSourceLinesFunc;
   var ACookedStrings, ARawStrings: TGocciaTemplateStrings;
   var ACookedValid: TGocciaTemplateCookedValid);
 var
@@ -3306,7 +3550,7 @@ begin
   CookedIsValid := AToken.TemplateValue.CookedValid;
   if (not ATagged) and not CookedIsValid then
     raise TGocciaSyntaxError.Create('Invalid escape sequence in template literal',
-      AToken.Line, AToken.Column, AFileName, ASourceLines, '');
+      AToken.Line, AToken.Column, AFileName, ASourceLines(), '');
 
   AppendTemplateString(ACookedStrings, Cooked);
   AppendTemplateString(ARawStrings, Raw);
@@ -3341,7 +3585,7 @@ begin
 
   try
     repeat
-      AppendTemplateSegment(TemplateToken, True, FFileName, FSourceLines,
+      AppendTemplateSegment(TemplateToken, True, FFileName, GetSourceLinesLazily,
         CookedStrings, RawStrings, CookedValid);
       if TemplateToken.TokenType in [gttTemplate, gttTemplateTail] then
         Break;
@@ -3376,7 +3620,7 @@ begin
   SetLength(CookedSegments, 0);
   SetLength(RawSegments, 0);
   SetLength(CookedValid, 0);
-  AppendTemplateSegment(AToken, False, FFileName, FSourceLines,
+  AppendTemplateSegment(AToken, False, FFileName, GetSourceLinesLazily,
     CookedSegments, RawSegments, CookedValid);
 
   if AToken.TokenType = gttTemplate then
@@ -3400,7 +3644,7 @@ begin
         SSuggestCloseTemplate);
       TemplateToken := ConsumeTemplateContinuation;
 
-      AppendTemplateSegment(TemplateToken, False, FFileName, FSourceLines,
+      AppendTemplateSegment(TemplateToken, False, FFileName, GetSourceLinesLazily,
         CookedSegments, RawSegments, CookedValid);
       if TemplateToken.TokenType = gttTemplateTail then
       begin
@@ -3544,7 +3788,56 @@ begin
   end;
 end;
 
+// The common primaries without managed locals: PrimarySlow's strings and
+// arrays give it an implicit exception frame and initialization on entry.
 function TGocciaParser.Primary: TGocciaExpression;
+var
+  Token: TGocciaToken;
+begin
+  Token := Peek;
+  case Token.TokenType of
+    gttTrue:
+      begin
+        Token := Advance;
+        Exit(TGocciaLiteralExpression.Create(
+          TGocciaBooleanLiteralValue.TrueValue, Token.Span));
+      end;
+    gttFalse:
+      begin
+        Token := Advance;
+        Exit(TGocciaLiteralExpression.Create(
+          TGocciaBooleanLiteralValue.FalseValue, Token.Span));
+      end;
+    gttNull:
+      begin
+        Token := Advance;
+        Exit(TGocciaLiteralExpression.Create(
+          TGocciaNullLiteralValue.NullValue, Token.Span));
+      end;
+    gttNumber:
+      begin
+        Token := Advance;
+        Exit(TGocciaLiteralExpression.Create(
+          TGocciaNumberLiteralValue.Create(ConvertNumberLiteral(Token.Lexeme)), Token.Span));
+      end;
+    gttThis:
+      begin
+        Token := Advance;
+        Exit(TGocciaThisExpression.Create(Token.Span));
+      end;
+    gttIdentifier, gttAs, gttFrom, gttStatic:
+      // PrimarySlow's identifier branch, for a name that is not `async`.
+      if (Token.Lexeme <> KEYWORD_ASYNC) and not IsMatchExpressionAhead then
+      begin
+        Token := Advance;
+        ValidateIdentifierReference(Token);
+        Exit(TGocciaIdentifierExpression.Create(Token.Lexeme, Token.Span));
+      end;
+  end;
+  Result := PrimarySlow;
+end;
+
+function TGocciaParser.PrimarySlow: TGocciaExpression;
 var
   Token: TGocciaToken;
   Expr: TGocciaExpression;
@@ -3784,8 +4077,8 @@ begin
             Expr := ArrowFunction(True);
             TGocciaArrowFunctionExpression(Expr).IsAsync := True;
             // Override source text to include `async` prefix
-            TGocciaArrowFunctionExpression(Expr).SourceText :=
-              ExtractSourceRange(Token.Line, Token.Column);
+            TGocciaArrowFunctionExpression(Expr).SourceRange :=
+              ExtractSourceRangeLazy(Token.Line, Token.Column);
             Result := Expr;
           end
           else
@@ -3864,7 +4157,7 @@ begin
 
           ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, SourceSpanAtPosition(Line, Column));
           ArrowFn.IsAsync := True;
-          ArrowFn.SourceText := ExtractSourceRange(Line, Column);
+          ArrowFn.SourceRange := ExtractSourceRangeLazy(Line, Column);
           ArrowFn.DirectEvalUsage := ArrowDirectEvalUsage;
           Result := ArrowFn;
         end
@@ -3899,7 +4192,7 @@ begin
               ValidateStrictFunctionBindingName(Name,
                 TGocciaFunctionExpression(Result), AsyncStartLine,
                 AsyncStartColumn);
-              TGocciaFunctionExpression(Result).SourceText := ExtractSourceRange(AsyncStartLine, AsyncStartColumn);
+              TGocciaFunctionExpression(Result).SourceRange := ExtractSourceRangeLazy(AsyncStartLine, AsyncStartColumn);
               TGocciaFunctionExpression(Result).IsAsync := True;
               TGocciaFunctionExpression(Result).IsGenerator := IsGenerator;
               // ES2026 §15.6: AsyncGeneratorDeclaration / AsyncGeneratorExpression have
@@ -3969,7 +4262,7 @@ begin
           Result.AddTypeRanges(TypeRanges);
           ValidateStrictFunctionBindingName(Name,
             TGocciaFunctionExpression(Result), Token.Line, Token.Column);
-          TGocciaFunctionExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+          TGocciaFunctionExpression(Result).SourceRange := ExtractSourceRangeLazy(Token.Line, Token.Column);
           TGocciaFunctionExpression(Result).IsGenerator := True;
           // ES2026 §15.5: GeneratorDeclaration / GeneratorExpression have their own
           // `prototype` data property (per OrdinaryFunctionCreate + MakeConstructor).
@@ -3988,7 +4281,7 @@ begin
           Result.AddTypeRanges(TypeRanges);
           ValidateStrictFunctionBindingName(Name,
             TGocciaFunctionExpression(Result), Token.Line, Token.Column);
-          TGocciaFunctionExpression(Result).SourceText := ExtractSourceRange(Token.Line, Token.Column);
+          TGocciaFunctionExpression(Result).SourceRange := ExtractSourceRangeLazy(Token.Line, Token.Column);
           // ES2026 §15.2: FunctionDeclaration / FunctionExpression have their own
           // `prototype` data property whose `[[Value]]` is a fresh ordinary object
           // and whose `constructor` data property points back at the function.
@@ -4098,8 +4391,8 @@ begin
     GenericParametersEnd));
   // ArrowFunction anchors its source text at the '(' it was entered on; widen
   // it to include the type parameter list and any `async`.
-  TGocciaArrowFunctionExpression(AExpression).SourceText :=
-    ExtractSourceRange(Line, Column);
+  TGocciaArrowFunctionExpression(AExpression).SourceRange :=
+    ExtractSourceRangeLazy(Line, Column);
   Result := True;
 end;
 
@@ -4245,6 +4538,14 @@ function TGocciaParser.IsMatchExpressionAhead: Boolean;
 var
   LexError: Boolean;
 begin
+  // A match expression starts with an unescaped identifier `match`. An
+  // already-scanned name token reads the same under either goal, so any
+  // other spelling settles it here, without the probes' lexer checkpoint and
+  // exception frames: this runs for every identifier primary.
+  if (FCurrent < FTokens.Count) and
+     (FTokens.At(FCurrent).TokenType in [gttIdentifier, gttAs, gttFrom, gttStatic]) and
+     (FTokens.At(FCurrent).Lexeme <> KEYWORD_MATCH) then
+    Exit(False);
   Result := TryScanWithGoal(glgInputElementRegExp, LexError);
   if (not Result) and LexError then
     Result := TryScanWithGoal(glgInputElementDiv, LexError);
@@ -5003,7 +5304,7 @@ begin
       if IsGetter then
       begin
         GetterExpression := ParseGetterExpression;
-        GetterExpression.SourceText := ExtractSourceRange(MemberStartLine,
+        GetterExpression.SourceRange := ExtractSourceRangeLazy(MemberStartLine,
           MemberStartColumn);
 
         if IsComputed then
@@ -5039,7 +5340,7 @@ begin
       else if IsSetter then
       begin
         SetterExpression := ParseSetterExpression;
-        SetterExpression.SourceText := ExtractSourceRange(MemberStartLine,
+        SetterExpression.SourceRange := ExtractSourceRangeLazy(MemberStartLine,
           MemberStartColumn);
 
         if IsComputed then
@@ -5079,7 +5380,7 @@ begin
           MemberStartLine, MemberStartColumn, IsAsync, IsGenerator));
         ValidateParameterEarlyErrors(MethodFunction.Parameters,
           MemberStartLine, MemberStartColumn, True, False, False);
-        MethodFunction.SourceText := ExtractSourceRange(
+        MethodFunction.SourceRange := ExtractSourceRangeLazy(
           MemberStartLine, MemberStartColumn);
         if IsAsync then
           MethodFunction.IsAsync := True;
@@ -5682,7 +5983,7 @@ begin
           else
             ParameterNames.Add(AParameters[I].Name);
         ValidateStatementListDeclarations(Statements.ToArray, True, False,
-          ParameterNames, FFileName, FSourceLines);
+          ParameterNames, FFileName, GetSourceLinesLazily);
       finally
         ParameterNames.Free;
       end;
@@ -5792,7 +6093,7 @@ begin
     SourceSpanFromToken(SpanStart));
   ArrowFn.ReturnType := FnReturnType;
   ArrowFn.AddTypeRanges(ReturnType);
-  ArrowFn.SourceText := ExtractSourceRange(Line, Column);
+  ArrowFn.SourceRange := ExtractSourceRangeLazy(Line, Column);
   ArrowFn.DirectEvalUsage := ArrowDirectEvalUsage;
   Result := ArrowFn;
 end;
@@ -5827,7 +6128,25 @@ begin
   LeaveNesting;
 end;
 
+// Most assignment levels are a bare conditional. The arrow and assignment
+// forms need a parameter array, a managed local that costs an exception frame
+// on every call, so they sit in UnguardedAssignmentRest.
 function TGocciaParser.UnguardedAssignment: TGocciaExpression;
+var
+  Left: TGocciaExpression;
+begin
+  Left := Conditional;
+  if PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttArrow, gttAssign,
+    gttPlusAssign, gttMinusAssign, gttStarAssign, gttSlashAssign,
+    gttPercentAssign, gttPowerAssign, gttNullishCoalescingAssign,
+    gttLogicalAndAssign, gttLogicalOrAssign, gttBitwiseAndAssign,
+    gttBitwiseOrAssign, gttBitwiseXorAssign, gttLeftShiftAssign,
+    gttRightShiftAssign, gttUnsignedRightShiftAssign] then
+    Exit(UnguardedAssignmentRest(Left));
+  Result := Left;
+end;
+
+function TGocciaParser.UnguardedAssignmentRest(const ALeft: TGocciaExpression): TGocciaExpression;
 var
   Left, Right: TGocciaExpression;
   Line, Column: Integer;
@@ -5842,7 +6161,7 @@ var
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
   OuterDirectEvalUsage, ArrowDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
-  Left := Conditional;
+  Left := ALeft;
 
   // Single-parameter unparenthesized arrow: ident [no LineTerminator here] => body
   if Left is TGocciaIdentifierExpression then
@@ -5890,7 +6209,7 @@ begin
         ValidateParameterEarlyErrors(Parameters, Line, Column, True,
           False, False, True);
       ArrowFn := TGocciaArrowFunctionExpression.Create(Parameters, ArrowBody, SourceSpanAtPosition(Line, Column));
-      ArrowFn.SourceText := ExtractSourceRange(Line, Column);
+      ArrowFn.SourceRange := ExtractSourceRangeLazy(Line, Column);
       ArrowFn.DirectEvalUsage := ArrowDirectEvalUsage;
       Result := ArrowFn;
       Exit;
@@ -6014,7 +6333,7 @@ begin
     Name := ''; // Anonymous class
 
   ClassDef := ParseClassBody(Name);
-  ClassDef.SourceText := ExtractSourceRange(Line, Column);
+  ClassDef.SourceRange := ExtractSourceRangeLazy(Line, Column);
   if Assigned(AStart) then
     Result := TGocciaClassExpression.Create(ClassDef, SourceSpanFromToken(AStart))
   else
@@ -6025,7 +6344,7 @@ function TGocciaParser.Statement: TGocciaStatement;
 begin
   EnterNesting;
   Result := UnguardedStatement;
-  ValidateScopedStatementBindings(Result, FFileName, FSourceLines);
+  ValidateScopedStatementBindings(Result, FFileName, GetSourceLinesLazily);
   LeaveNesting;
 end;
 
@@ -6662,7 +6981,7 @@ begin
     Consume(gttRightBrace, 'Expected "}" after block',
       SSuggestCloseBlock);
     ValidateStatementListDeclarations(Nodes.ToArray, AFunctionsAreVar,
-      EffectiveNonStrictModeEnabled, nil, FFileName, FSourceLines);
+      EffectiveNonStrictModeEnabled, nil, FFileName, GetSourceLinesLazily);
   except
     Nodes.Free;
     raise;
@@ -7984,7 +8303,7 @@ begin
   FunctionExpr.AddTypeRanges(TypeParameters);
   ValidateStrictFunctionBindingName(NameToken.Lexeme, FunctionExpr, Line,
     Column);
-  FunctionExpr.SourceText := ExtractSourceRange(Line, Column);
+  FunctionExpr.SourceRange := ExtractSourceRangeLazy(Line, Column);
   FunctionExpr.IsAsync := AIsAsync;
   FunctionExpr.IsGenerator := AIsGenerator;
   // ES2026 §15.2 / §15.5 / §15.6: FunctionDeclaration, GeneratorDeclaration, and
@@ -8189,7 +8508,7 @@ begin
       Result.GenericParams := MethodGenericParams;
       Result.ReturnType := MethodReturnType;
       Result.AddTypeRanges(MethodTypeRanges);
-      Result.SourceText := ExtractSourceRange(Line, Column);
+      Result.SourceRange := ExtractSourceRangeLazy(Line, Column);
       Result.DirectEvalUsage := FDirectEvalUsage;
     finally
       LeaveFunctionLabelScope(SavedActiveLabels, SavedActiveIterationLabels,
@@ -8217,7 +8536,7 @@ begin
   Name := ConsumeIdentifierBinding('Expected class name',
     SSuggestProvideClassName).Lexeme;
   ClassDef := ParseClassBody(Name);
-  ClassDef.SourceText := ExtractSourceRange(Line, Column);
+  ClassDef.SourceRange := ExtractSourceRangeLazy(Line, Column);
   Result := TGocciaClassDeclaration.Create(ClassDef, SourceSpanAtPosition(Line, Column));
 end;
 
@@ -8335,7 +8654,7 @@ begin
   Name := ConsumeIdentifierBinding('Expected class name',
     SSuggestProvideClassName).Lexeme;
   ClassDef := ParseClassBody(Name);
-  ClassDef.SourceText := ExtractSourceRange(Line, Column);
+  ClassDef.SourceRange := ExtractSourceRangeLazy(Line, Column);
   ClassDef.FDecorators := ADecorators;
   Result := TGocciaClassDeclaration.Create(ClassDef, SourceSpanFromToken(AStart));
 end;
@@ -9727,7 +10046,7 @@ begin
           DeclarePrivateName(MemberName, pndGetter, IsStatic);
 
         Getter := ParseGetterExpression;
-        Getter.SourceText := ExtractSourceRange(MemberSourceLine, MemberSourceColumn);
+        Getter.SourceRange := ExtractSourceRangeLazy(MemberSourceLine, MemberSourceColumn);
 
         SetLength(Elements, Length(Elements) + 1);
         Elements[High(Elements)].Kind := cekGetter;
@@ -9769,7 +10088,7 @@ begin
           DeclarePrivateName(MemberName, pndSetter, IsStatic);
 
         Setter := ParseSetterExpression;
-        Setter.SourceText := ExtractSourceRange(MemberSourceLine, MemberSourceColumn);
+        Setter.SourceRange := ExtractSourceRangeLazy(MemberSourceLine, MemberSourceColumn);
 
         SetLength(Elements, Length(Elements) + 1);
         Elements[High(Elements)].Kind := cekSetter;
@@ -9817,7 +10136,7 @@ begin
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
         Method.IsGenerator := IsGenerator;
-        Method.SourceText := ExtractSourceRange(MemberSourceLine, MemberSourceColumn);
+        Method.SourceRange := ExtractSourceRangeLazy(MemberSourceLine, MemberSourceColumn);
 
         SetLength(Elements, Length(Elements) + 1);
         Elements[High(Elements)].Kind := cekMethod;
@@ -9961,6 +10280,8 @@ function TGocciaParser.Parse: TGocciaProgram;
 begin
   if not Assigned(FCompileProfile) then
     Exit(ParseInArena);
+  if Assigned(FLexer) then
+    FLexer.MeasureScanTime := True;
   // The top level of the file is line 0, column 0 of the compile profile.
   BeginProfiledFunction(0, 0);
   try
@@ -10098,7 +10419,7 @@ begin
         end;
       SetLength(DeclarationNodes, DeclarationCount);
       ValidateStatementListDeclarations(DeclarationNodes, not IsModuleGoal,
-        False, nil, FFileName, FSourceLines);
+        False, nil, FFileName, GetSourceLinesLazily);
       Result := TGocciaProgram.Create(Statements);
       Result.HasTopLevelAwait := FHasTopLevelAwait;
       Result.DirectEvalUsage := FDirectEvalUsage;
@@ -12267,7 +12588,7 @@ begin
         for J := 0 to Cases[I].Consequent.Count - 1 do
           DeclarationNodes.Add(Cases[I].Consequent[J]);
       ValidateStatementListDeclarations(DeclarationNodes.ToArray, False,
-        EffectiveNonStrictModeEnabled, nil, FFileName, FSourceLines);
+        EffectiveNonStrictModeEnabled, nil, FFileName, GetSourceLinesLazily);
     finally
       DeclarationNodes.Free;
     end;

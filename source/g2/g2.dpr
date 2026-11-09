@@ -413,6 +413,7 @@ begin
   Raw := '';
   T1 := GetTickCount64;
   L := TGocciaLexer.Create(SrcText, FileName);
+  L.MeasureScanTime := GetEnvironmentVariable('G2_PHASES') <> '';
   P := TGocciaParser.CreateFromLexer(L, FileName, nil);   { source lines: built only if an error needs them }
   Opts := P.Options;
   Opts.AutomaticSemicolonInsertion := True;
@@ -468,8 +469,10 @@ begin
   AgentCannotSuspend := GetEnvironmentVariable('G2_CANNOT_BLOCK') <> '';
   T3 := GetTickCount64;
   if GetEnvironmentVariable('G2_PHASES') <> '' then
-    WriteLn(ErrOutput, 'after parse: tokens ', NTokens, ' (', (H0 - H1) div 1024,
+    WriteLn(ErrOutput, 'after parse: tokens ', NTokens, ' (', SizeOf(TGocciaTokenRec), ' bytes each, ', (H0 - H1) div 1024,
       ' KB freed) heap used ', GetFPCHeapStatus.CurrHeapUsed div 1024, ' KB');
+  if GetEnvironmentVariable('G2_ASTSTATS') <> '' then
+    WriteLn(ErrOutput, Prog.NodeArena.ClassStats(30));
   if GetEnvironmentVariable('G2_MEMSPLIT') <> '' then
   begin
     H0 := GetFPCHeapStatus.CurrHeapUsed + (H0 - H1);
@@ -485,9 +488,12 @@ begin
     on E: Exception do begin WriteLn('compile error: ', E.Message); Halt(3); end;
   end;
   T4 := GetTickCount64;
-  { The templates hold nothing of the AST, which is never freed (its destructors cost typescript about 9% of
-    parsing and compiling); G2_FREEAST destroys the tree. }
-  if GetEnvironmentVariable('G2_FREEAST') <> '' then Prog.Free;
+  { The templates hold nothing of the AST. Its nodes' chunks go back to the heap without the destructors, which
+    for typescript cost 264 M instructions (+9% of parsing and compiling); what nodes own outside the chunks
+    stays. The program object is never freed after this. G2_FREEAST destroys the tree properly instead,
+    G2_KEEPAST keeps it. }
+  if GetEnvironmentVariable('G2_FREEAST') <> '' then Prog.Free
+  else if GetEnvironmentVariable('G2_KEEPAST') = '' then Prog.NodeArena.AbandonMemory;
   if GetEnvironmentVariable('G2_BCHASH') <> '' then
   begin
     WriteLn(ErrOutput, 'bytecode hash ', IntToHex(HashTemplate(T, 1469598103934665603), 16));
