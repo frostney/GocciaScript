@@ -6540,7 +6540,7 @@ LReload:
             environment lost }
           case (I shr 24) and $FFFF of
             1: ThrowError('ReferenceError', 'Unsupported reference to ''super''');
-            2: ThrowError('ReferenceError', StrToUnicode(PStr(PtrOf(K[I shr 40]))) + ' is not defined');
+            2: XThrowNotDefined(PStr(PtrOf(K[I shr 40])));
           else ThrowTypeError('Assignment to constant variable.');
           end;
           goto LThrow;
