@@ -2077,6 +2077,17 @@ begin
   Result := True;
 end;
 
+{ an append to a plain array meets no index accessor or frozen element on Array.prototype and Object.prototype
+  (10.1.9.2 OrdinarySetWithOwnDescriptor: a missing own index consults the prototype chain) }
+function AppendProtosPlain(O: PObj): Boolean; inline;
+var A: PObj;
+begin
+  A := ObjOf(ArrayProto);
+  Result := (O^.Shape^.Proto = ArrayProto) and not A^.Shape^.HasIndexKeys and ((A^.OFlags and 64) = 0) and
+            (A^.Shape^.Proto = ObjectProto) and not ObjOf(ObjectProto)^.Shape^.HasIndexKeys and
+            ((ObjOf(ObjectProto)^.OFlags and 64) = 0);
+end;
+
 function ProtosPlainForElem(O: PObj; Idx: Int64): Boolean;
 var P: TValue; Q: PObj;
 begin
@@ -5134,7 +5145,7 @@ begin
           CI := IntOf(VB);
           if (E <> nil) and (CI >= 0) and ((O^.OFlags and 64) = 0) and
              (((CI < Integer(E^.Len)) and (E^.Data[CI] <> VHole)) or
-              ((CI = Integer(E^.Len)) and (CI < Integer(E^.Cap)) and (O^.OKind = okArray))) then
+              ((CI = Integer(E^.Len)) and (CI < Integer(E^.Cap)) and (O^.OKind = okArray) and AppendProtosPlain(O))) then
           begin
             { a store the write barrier has to remember: an old container gets a nursery pointer }
             if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
@@ -6149,7 +6160,7 @@ LReload:
               Continue;
             end;
             if (E <> nil) and (CI = Integer(E^.Len)) and (CI < Integer(E^.Cap)) and ((O^.OFlags and 64) = 0) and
-               (O^.OKind = okArray) then
+               (O^.OKind = okArray) and AppendProtosPlain(O) then
             begin
               E^.Data[CI] := V;
               WriteBarrier(@E^.Hdr, V);
