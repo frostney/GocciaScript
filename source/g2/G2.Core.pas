@@ -64,6 +64,8 @@ const
   cfPermanent = 8;
   cfBuffered = 16;   { a ckString whose characters live in a ckStrBuf: the pointer sits where Chars starts }
   cfEmulatesUndefined = 32;   { B.3.6 [[IsHTMLDDA]]: typeof "undefined", ToBoolean false, == undefined and null }
+  cfSlice = 64;      { with cfBuffered: a ckString whose characters are a flat string's, at an Int32 offset after the
+                       pointer (a long substring shares its parent's characters instead of copying them) }
   ckStrBuf = 11;
 
   { property flags }
@@ -628,7 +630,7 @@ begin
     Inc(GCPromotedBytes, Size);
     Move((PByte(C) + 4)^, (PByte(Result) + 4)^, Size - 4);   { keep Result^.Size from AllocOld's class }
     Result^.Kind := C^.Kind;
-    Result^.Flags := cfOld or (C^.Flags and (cfBuffered or cfEmulatesUndefined));
+    Result^.Flags := cfOld or (C^.Flags and (cfBuffered or cfEmulatesUndefined or cfSlice));
     C^.Kind := ckForward;
     PPointer(PByte(C) + 8)^ := Result;
     PushGray(Result);
@@ -912,7 +914,11 @@ end;
 
 function StrChars(S: PStr): PWideChar; inline;
 begin
-  if (S^.Hdr.Flags and cfBuffered) <> 0 then Result := @PStrBuf(PPointer(@S^.Chars[0])^)^.Chars[0]
+  if (S^.Hdr.Flags and cfBuffered) <> 0 then
+  begin
+    if (S^.Hdr.Flags and cfSlice) <> 0 then Result := @PStr(PPointer(@S^.Chars[0])^)^.Chars[PInt32(@S^.Chars[4])^]
+    else Result := @PStrBuf(PPointer(@S^.Chars[0])^)^.Chars[0];
+  end
   else Result := @S^.Chars[0];
 end;
 
@@ -1149,7 +1155,7 @@ begin
     Exit(MkPtr(R));
   end;
   PushRoot(MkPtr(A)); PushRoot(MkPtr(B));
-  if ((A^.Hdr.Flags and cfBuffered) <> 0) and (StrBufOf(A)^.Used = LA) and (StrBufOf(A)^.Cap >= Total) then
+  if ((A^.Hdr.Flags and (cfBuffered or cfSlice)) = cfBuffered) and (StrBufOf(A)^.Used = LA) and (StrBufOf(A)^.Cap >= Total) then
     Buf := StrBufOf(A)   { A is the newest view and the buffer has room: append in place }
   else
   begin
@@ -1179,6 +1185,9 @@ begin
   Result := MkPtr(R);
 end;
 
+const
+  SLICE_MIN = 32;   { a substring at least this long shares its parent's characters (cfSlice) }
+
 function SubString(S: PStr; Start, Len: Integer): TValue;
 var R: PStr; C: Integer;
 begin
@@ -1193,6 +1202,27 @@ begin
       Exit(MkPtr(CharAtoms[C]));
     end;
     Exit(MkPtr(AtomOf(UnicodeString(StrChars(S)[Start]))));
+  end;
+  { a long substring of a flat string or a slice: a slice of the flat string (no copy) }
+  if (Len >= SLICE_MIN) and (((S^.Hdr.Flags and cfBuffered) = 0) or ((S^.Hdr.Flags and cfSlice) <> 0)) then
+  begin
+    if (S^.Hdr.Flags and cfSlice) <> 0 then
+    begin
+      Inc(Start, PInt32(@S^.Chars[4])^);
+      S := PStr(PPointer(@S^.Chars[0])^);
+    end;
+    PushRoot(MkPtr(S));
+    R := PStr(AllocCell(SizeOf(TStr) - SizeOf(WideChar) + 6 * SizeOf(WideChar), ckString));
+    S := StrOf(RootAt(TempTop - 1));
+    PopRoots(1);
+    R^.Len := Len;
+    R^.Hash := 0;
+    R^.Atom := nil;
+    R^.Hdr.Flags := R^.Hdr.Flags or cfBuffered or cfSlice;
+    PPointer(@R^.Chars[0])^ := S;
+    PInt32(@R^.Chars[4])^ := Start;
+    if (R^.Hdr.Flags and cfOld) <> 0 then Remember(@R^.Hdr);
+    Exit(MkPtr(R));
   end;
   PushRoot(MkPtr(S));
   R := NewString(Len);
