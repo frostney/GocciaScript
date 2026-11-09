@@ -2503,6 +2503,9 @@ begin
     end;
     if O^.OFlags = 4 then
     begin
+      { 23.1.5.1 step 2.b.ii: a typed array out of bounds (detached, or its resizable buffer shrunk) throws }
+      if (Src <> VUndefined) and TAOutOfBounds(ObjOf(Src)) then
+        Exit(ThrowTypeError('the typed array is detached or out of bounds'));
       if (Src = VUndefined) or (I >= TALength(ObjOf(Src))) then begin O^.Aux1 := VUndefined; Done := True; Exit(True); end;
       O^.Aux2 := MkInt(I + 1);
       Value := TAGet(ObjOf(Src), I);
@@ -2537,8 +2540,17 @@ begin
     end;
     { 23.1.5.1 CreateArrayIterator's closure: LengthOfArrayLike, then Get of the index (a hole reads through the
       prototype chain; accessors run) }
-    PushRoot(It);
-    if not LengthOfArrayLike(Src, Len) then begin PopRoots(1); Exit(False); end;
+    if ObjOf(Src)^.OKind = okTypedArray then
+    begin
+      if TAOutOfBounds(ObjOf(Src)) then Exit(ThrowTypeError('the typed array is detached or out of bounds'));
+      Len := TALength(ObjOf(Src));
+      PushRoot(It);
+    end
+    else
+    begin
+      PushRoot(It);
+      if not LengthOfArrayLike(Src, Len) then begin PopRoots(1); Exit(False); end;
+    end;
     O := ObjOf(RootAt(TempTop - 1));
     I := IntOf(O^.Aux2);
     if (O^.Aux1 = VUndefined) or (I >= Len) then
@@ -3362,8 +3374,9 @@ begin
     Res := ConcatStrings(StrOf(SA), StrOf(SB));
     Exit(True);
   end;
-  DA := PrimitiveToNumber(PA);
-  DB := PrimitiveToNumber(PB);
+  { ToNumeric of each: a Symbol throws }
+  if not ToNumberV(PA, DA) then Exit(False);
+  if not ToNumberV(PB, DB) then Exit(False);
   Res := MkNumber(DA + DB);
   Result := True;
 end;
@@ -4146,6 +4159,35 @@ begin
   end
   else Key := Tpl^.ICs[CI].Key;
   Result := GetFromObject(ObjOf(Base), Key, This, Res);
+end;
+
+{ 13.5.1.2 delete of a property reference whose base is not an object: ToObject (null and undefined throw), then
+  the key's ToPropertyKey (Key nil: KeyV), then [[Delete]] on the wrapper (a String's indices and length are not
+  configurable) }
+function XDeletePrim(Base, KeyV: TValue; Key: PStr; Strict: Boolean; var Res: Boolean): Boolean; noinline;
+var W: TValue; Ok: Boolean;
+begin
+  if IsNullish(Base) then Exit(ThrowTypeError('Cannot convert undefined or null to object'));
+  PushRoot(KeyV);
+  Ok := ToObjectHook(Base, W);
+  KeyV := RootAt(TempTop - 1);
+  PopRoots(1);
+  if not Ok then Exit(False);
+  if Key = nil then
+  begin
+    PushRoot(W);
+    Ok := ToPropKey(KeyV, Key);
+    W := RootAt(TempTop - 1);
+    PopRoots(1);
+    if not Ok then Exit(False);
+  end;
+  Res := DeleteIfConfigurable(ObjOf(W), Key);
+  if not Res and Strict then
+  begin
+    XThrowCannotDelete(Key);
+    Exit(False);
+  end;
+  Result := True;
 end;
 
 { the slow path of the immediate adds: opAddI is binary + (a string concatenates, a BigInt throws), opSubI binary
@@ -5273,7 +5315,12 @@ LReload:
             Fr^.PC := PC;
             if not ProxyDelete(VB, PStr(PtrOf(K[I shr 40])), Bool) then goto LThrow;
           end
-          else if IsObject(VB) then Bool := DeleteIfConfigurable(ObjOf(VB), PStr(PtrOf(K[I shr 40])));
+          else if IsObject(VB) then Bool := DeleteIfConfigurable(ObjOf(VB), PStr(PtrOf(K[I shr 40])))
+          else
+          begin
+            Fr^.PC := PC;
+            if not XDeletePrim(VB, VUndefined, PStr(PtrOf(K[I shr 40])), Tpl^.IsStrict, Bool) then goto LThrow;
+          end;
           { 13.5.1.2 step 5.e: in strict code a delete that returns false is a TypeError }
           if not Bool and Tpl^.IsStrict then
           begin
@@ -5309,7 +5356,8 @@ LReload:
                 goto LThrow;
               end;
             end;
-          end;
+          end
+          else if not XDeletePrim(VA, VB, nil, Tpl^.IsStrict, Bool) then goto LThrow;
           R[A] := MkBool(Bool);
         end;
       opIn:
