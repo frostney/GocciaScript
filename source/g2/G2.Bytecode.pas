@@ -157,6 +157,7 @@ type
     CtorRootShape: Pointer;
     FIShape: Pointer;
     FISlot: Integer;
+    NoHIShape: Pointer;   { instanceof: F's shape, known to have no own @@hasInstance under Function.prototype }
     FieldInit: PFuncTemplate;   { class field initializer, run on construction }
     SourceName: UnicodeString;
     SourceRange: TGocciaLazySourceText;   { the function's source for Function.prototype.toString: a range of the parse's source, copied only when read }

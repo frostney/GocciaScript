@@ -1143,6 +1143,14 @@ begin
   if Length(T^.Lines) > 0 then Result := Result + ':' + IntToStr(T^.Lines[0]);
 end;
 
+{ the GC-verify report of a closure made with a bad upvalue array (out of NewClosure: its strings would give it an
+  exception frame) }
+procedure XBadClosure(T: PFuncTemplate; C: PObj); noinline;
+begin
+  WriteLn(ErrOutput, 'closure ', DescribeTemplate(T), ' created with a bad upvalue array ', IntToHex(C^.Aux2, 16), ' minor ', GCMinorCount, ' temptop ', TempTop, ' cap ', Length(TempRoots));
+  Halt(9);
+end;
+
 function NewClosure(T: PFuncTemplate; Upvals: TValue): PObj;
 begin
   PushRoot(Upvals);
@@ -1154,11 +1162,7 @@ begin
   Result^.Aux2 := RootAt(TempTop - 1);
   Result^.Pad := UInt32(CurRealm) shl REALM_SHIFT;
   PopRoots(1);
-  if GCVerify and not NurseryCellOK(Result^.Aux2) then
-  begin
-    WriteLn(ErrOutput, 'closure ', DescribeTemplate(T), ' created with a bad upvalue array ', IntToHex(Result^.Aux2, 16), ' minor ', GCMinorCount, ' temptop ', TempTop, ' cap ', Length(TempRoots));
-    Halt(9);
-  end;
+  if GCVerify and not NurseryCellOK(Result^.Aux2) then XBadClosure(T, Result);
   if T^.IsArrow then Result^.OFlags := Result^.OFlags or 4;
   Result^.Slots[0] := MkInt(T^.Length);
   Result^.Slots[1] := MkPtr(T^.Name);
@@ -2276,6 +2280,7 @@ begin
     if O^.Shape^.IsDict or (ShapeLookup(O^.Shape, SymKey(SymHasInstance)) >= 0) then Exit;
     HIPlainShape := O^.Shape;
   end;
+  if O^.OKind = okFunction then PFuncTemplate(O^.Native)^.NoHIShape := O^.Shape;
   Result := True;
 end;
 
@@ -4553,8 +4558,8 @@ var
 
 procedure InitFastOps;
 const
-  Ops: array[0..68] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
-    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opGetGlobal, opSub,
+  Ops: array[0..69] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opGetGlobal, opInstanceof, opSub,
     opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
     opJNGt, opJNGe, opJNSEq, opJSEq, opCall, opRet, opRetUndef, opToNum, opToNumeric, opEq, opNe, opTypeof, opDefField);
@@ -4977,6 +4982,31 @@ begin
         end;
       { a TDZ check that passes stays here; the ReferenceError is Execute's }
       opCheckHole: if R[A] = VHole then goto LBail;
+      { x instanceof F for a bytecode function F whose shape Execute verified (no own @@hasInstance under an intact
+        Function.prototype, its prototype property's slot cached): the prototype chain walk, without proxies }
+      opInstanceof:
+        begin
+          VB := R[I shr 40];
+          if (VB and TAG_MASK) <> TAG_PTR then goto LBail;
+          O := PObj(PtrUInt(VB and PTR_MASK));
+          if (O^.Hdr.Kind <> ckObject) or (O^.OKind <> okFunction) or MultiRealmAny then goto LBail;
+          T := PFuncTemplate(O^.Native);
+          if (Pointer(O^.Shape) <> T^.NoHIShape) or (Pointer(O^.Shape) <> T^.CtorFnShape) or
+             (ObjOf(FunctionProto)^.Shape <> HIFPShape) then goto LBail;
+          V := GetSlot(O, T^.CtorProtoSlot);
+          if not IsObject(V) then goto LBail;
+          VA := R[(I shr 24) and $FFFF];
+          if not IsObject(VA) then begin R[A] := VFalse; Continue; end;
+          O2 := ObjOf(VA);
+          while True do
+          begin
+            if O2^.OKind = okProxy then goto LBail;
+            VB := O2^.Shape^.Proto;
+            if not IsObject(VB) then begin R[A] := VFalse; Break; end;
+            if VB = V then begin R[A] := VTrue; Break; end;
+            O2 := ObjOf(VB);
+          end;
+        end;
       { a global: the global object's cached slot, or a global lexical binding's cell (Execute's IC fill) }
       opGetGlobal:
         begin

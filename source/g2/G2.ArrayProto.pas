@@ -599,6 +599,12 @@ end;
 { ---- mutators ---- }
 
 { 23.1.3.23 push }
+{ push's TypeError past 2^53 - 1, out of AP_Push (its strings would give it an exception frame) }
+function XPushTooLong(Argc: Integer; Len: Int64): Boolean; noinline;
+begin
+  Result := ThrowTypeError('Pushing ' + IntToStr(Argc) + ' elements on an array-like of length ' + IntToStr(Len) + ' is disallowed');
+end;
+
 function AP_Push(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len: Int64; I: Integer;
 begin
@@ -610,7 +616,7 @@ begin
   end;
   if not ToObj(Args) then Exit(False);
   if not LengthOfArrayLike(Args[0], Len) then Exit(False);
-  if Len + Argc > MAX_SAFE then Exit(ThrowTypeError('Pushing ' + IntToStr(Argc) + ' elements on an array-like of length ' + IntToStr(Len) + ' is disallowed'));
+  if Len + Argc > MAX_SAFE then Exit(XPushTooLong(Argc, Len));
   for I := 1 to Argc do
   begin
     if not SetVS(Args[0], IdxKey(Len), Args[I], True) then Exit(False);

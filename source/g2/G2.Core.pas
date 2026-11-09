@@ -1185,6 +1185,12 @@ begin
   Result := MkPtr(R);
 end;
 
+{ the atom of one code unit (out of SubString: the UnicodeString temporary would give it an exception frame) }
+function CharAtom(C: WideChar): PStr; noinline;
+begin
+  Result := AtomOf(UnicodeString(C));
+end;
+
 const
   SLICE_MIN = 32;   { a substring at least this long shares its parent's characters (cfSlice) }
 
@@ -1198,10 +1204,10 @@ begin
     C := Ord(StrChars(S)[Start]);
     if C < 256 then
     begin
-      if CharAtoms[C] = nil then CharAtoms[C] := AtomOf(UnicodeString(WideChar(C)));
+      if CharAtoms[C] = nil then CharAtoms[C] := CharAtom(WideChar(C));
       Exit(MkPtr(CharAtoms[C]));
     end;
-    Exit(MkPtr(AtomOf(UnicodeString(StrChars(S)[Start]))));
+    Exit(MkPtr(CharAtom(StrChars(S)[Start])));
   end;
   { a long substring of a flat string or a slice: a slice of the flat string (no copy) }
   if (Len >= SLICE_MIN) and (((S^.Hdr.Flags and cfBuffered) = 0) or ((S^.Hdr.Flags and cfSlice) <> 0)) then
