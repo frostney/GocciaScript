@@ -716,6 +716,105 @@ begin
   end;
 end;
 
+const
+  // ECMA-262 Table "Binary Unicode property aliases": the only names a lone \p{...} may use, exactly as written
+  // (ICU, which the lookup falls back to, matches names loosely: case, spaces and underscores ignored)
+  RegExpBinaryProperties: array[0..97] of string = (
+    'ASCII', 'ASCII_Hex_Digit', 'AHex', 'Alphabetic', 'Alpha', 'Any', 'Assigned', 'Bidi_Control', 'Bidi_C',
+    'Bidi_Mirrored', 'Bidi_M', 'Case_Ignorable', 'CI', 'Cased', 'Changes_When_Casefolded', 'CWCF',
+    'Changes_When_Casemapped', 'CWCM', 'Changes_When_Lowercased', 'CWL', 'Changes_When_NFKC_Casefolded', 'CWKCF',
+    'Changes_When_Titlecased', 'CWT', 'Changes_When_Uppercased', 'CWU', 'Dash', 'Default_Ignorable_Code_Point', 'DI',
+    'Deprecated', 'Dep', 'Diacritic', 'Dia', 'Emoji', 'Emoji_Component', 'EComp', 'Emoji_Modifier', 'EMod',
+    'Emoji_Modifier_Base', 'EBase', 'Emoji_Presentation', 'EPres', 'Extended_Pictographic', 'ExtPict', 'Extender',
+    'Ext', 'Grapheme_Base', 'Gr_Base', 'Grapheme_Extend', 'Gr_Ext', 'Hex_Digit', 'Hex', 'IDS_Binary_Operator',
+    'IDSB', 'IDS_Trinary_Operator', 'IDST', 'ID_Continue', 'IDC', 'ID_Start', 'IDS', 'Ideographic', 'Ideo',
+    'Join_Control', 'Join_C', 'Logical_Order_Exception', 'LOE', 'Lowercase', 'Lower', 'Math',
+    'Noncharacter_Code_Point', 'NChar', 'Pattern_Syntax', 'Pat_Syn', 'Pattern_White_Space', 'Pat_WS',
+    'Quotation_Mark', 'QMark', 'Radical', 'Regional_Indicator', 'RI', 'Sentence_Terminal', 'STerm', 'Soft_Dotted',
+    'SD', 'Terminal_Punctuation', 'Term', 'Unified_Ideograph', 'UIdeo', 'Uppercase', 'Upper', 'Variation_Selector',
+    'VS', 'White_Space', 'space', 'XID_Continue', 'XIDC', 'XID_Start', 'XIDS');
+  // ECMA-262 Table "Value aliases and canonical values for General_Category"
+  RegExpGeneralCategoryValues: array[0..79] of string = (
+    'Cased_Letter', 'LC', 'Close_Punctuation', 'Pe', 'Connector_Punctuation', 'Pc', 'Control', 'Cc', 'cntrl',
+    'Currency_Symbol', 'Sc', 'Dash_Punctuation', 'Pd', 'Decimal_Number', 'Nd', 'digit', 'Enclosing_Mark', 'Me',
+    'Final_Punctuation', 'Pf', 'Format', 'Cf', 'Initial_Punctuation', 'Pi', 'Letter', 'L', 'Letter_Number', 'Nl',
+    'Line_Separator', 'Zl', 'Lowercase_Letter', 'Ll', 'Mark', 'M', 'Combining_Mark', 'Math_Symbol', 'Sm',
+    'Modifier_Letter', 'Lm', 'Modifier_Symbol', 'Sk', 'Nonspacing_Mark', 'Mn', 'Number', 'N', 'Open_Punctuation',
+    'Ps', 'Other', 'C', 'Other_Letter', 'Lo', 'Other_Number', 'No', 'Other_Punctuation', 'Po', 'Other_Symbol', 'So',
+    'Paragraph_Separator', 'Zp', 'Private_Use', 'Co', 'Punctuation', 'P', 'punct', 'Separator', 'Z',
+    'Space_Separator', 'Zs', 'Spacing_Mark', 'Mc', 'Surrogate', 'Cs', 'Symbol', 'S', 'Titlecase_Letter', 'Lt',
+    'Unassigned', 'Cn', 'Uppercase_Letter', 'Lu');
+
+function InNameList(const AName: string; const AList: array of string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 0 to High(AList) do
+    if AList[I] = AName then
+      Exit(True);
+  Result := False;
+end;
+
+// A script value as the Unicode tables spell it: words that start with a capital, joined by underscores
+// ("Old_Italic", "SignWriting", "Latn")
+function IsScriptValueSpelling(const AValue: string): Boolean;
+var
+  I: Integer;
+  AtWordStart: Boolean;
+begin
+  if AValue = '' then
+    Exit(False);
+  AtWordStart := True;
+  for I := 1 to Length(AValue) do
+  begin
+    if AValue[I] = '_' then
+    begin
+      if AtWordStart then
+        Exit(False);
+      AtWordStart := True;
+    end
+    else if AtWordStart then
+    begin
+      if not CharInSet(AValue[I], ['A'..'Z']) then
+        Exit(False);
+      AtWordStart := False;
+    end
+    else if not CharInSet(AValue[I], ['A'..'Z', 'a'..'z', '0'..'9']) then
+      Exit(False);
+  end;
+  Result := not AtWordStart;
+end;
+
+// The early error of a \p{...} whose name or value is not one ECMA-262 lists, exactly as written
+procedure ValidateUnicodePropertyName(const APropertyName: string);
+var
+  EqPos: Integer;
+  PropPart, ValuePart: string;
+begin
+  EqPos := Pos('=', APropertyName);
+  if EqPos = 0 then
+  begin
+    if InNameList(APropertyName, RegExpBinaryProperties) or
+       InNameList(APropertyName, RegExpGeneralCategoryValues) then
+      Exit;
+    raise EConvertError.Create('Invalid Unicode property name: ' + APropertyName);
+  end;
+  PropPart := Copy(APropertyName, 1, EqPos - 1);
+  ValuePart := Copy(APropertyName, EqPos + 1, MaxInt);
+  if (PropPart = 'General_Category') or (PropPart = 'gc') then
+  begin
+    if not InNameList(ValuePart, RegExpGeneralCategoryValues) then
+      raise EConvertError.Create('Invalid General_Category value: ' + ValuePart);
+  end
+  else if (PropPart = 'Script') or (PropPart = 'sc') or (PropPart = 'Script_Extensions') or (PropPart = 'scx') then
+  begin
+    if not IsScriptValueSpelling(ValuePart) then
+      raise EConvertError.Create('Invalid script value: ' + ValuePart);
+  end
+  else
+    raise EConvertError.Create('Invalid Unicode property name: ' + PropPart);
+end;
+
 procedure TRegExpCompiler.GetUnicodePropertyRanges(const APropertyName: string;
   var ARanges: array of TRegExpCharRange; var ARangeCount: Integer);
 var
@@ -798,6 +897,7 @@ var
   end;
 
 begin
+  ValidateUnicodePropertyName(APropertyName);
   EqPos := Pos('=', APropertyName);
   if EqPos > 0 then
   begin
