@@ -64,6 +64,9 @@ threadvar
   { goal 4 (a direct eval in function code): the caller's bindings, as G2.Compiler's direct-eval sites describe
     them (BuildEvalDesc): entries name #2 kind #2 index #2 flags, each ended by #1 }
   EvalOuterDesc: UnicodeString;
+  { 20.2.1.1.1 CreateDynamicFunction: the next function expression is the created function, whose name
+    'anonymous' is no binding of its scope }
+  DynFuncAnonymous: Boolean;
   { the next tagged template's site number (13.2.8.4: its template object is cached per site and realm) }
   TemplateSiteNext: Integer;
   { goal 3: the module info of the last CompileProgram (the caller owns it), and the module id its templates get }
@@ -1312,7 +1315,7 @@ function TCompiler.CompileFunction(const Name: UnicodeString; const Params: TGoc
 var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop: Integer; Names, TopLex: TStringList; ObjMeth, NoArgs, StaticBlk: Boolean;
   Nodes: TList<TGocciaASTNode>; Skip: Integer; Ret: Integer;
   Pair: TGocciaExpressionMap.TKeyValuePair; SavedGlobalTop, InitStatic, SavedParamInit: Boolean; PN: TStringList;
-  K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString;
+  K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString; ParamNames: TStringList;
 begin
   SavedGlobalTop := GlobalTop;   { a nested function's declarations are its own }
   SavedParamInit := InParamInit;
@@ -1502,8 +1505,16 @@ begin
     if Nodes <> nil then
     begin
       Names := NewNameList;
+      ParamNames := nil;
       try
         for I := 0 to Nodes.Count - 1 do CollectVarNames(Nodes[I], Names);
+        if not T^.SimpleParams then
+        begin
+          ParamNames := NewNameList;
+          for I := 0 to High(Params) do
+            if Params[I].IsPattern then PatternNames(Params[I].Pattern, ParamNames)
+            else ParamNames.Add(Params[I].Name);
+        end;
         if not T^.IsStrict and (Goal <> 3) then
         begin
           { B.3.2: block-level functions of non-strict code also get a var binding }
@@ -1528,10 +1539,29 @@ begin
         for I := 0 to Names.Count - 1 do
           if (Names[I] = 'arguments') and (F.ArgsReg >= 0) and (FS.Scopes[0].Find('arguments') < 0) then
           begin
-            { 10.2.11 step 27: a var named arguments is the arguments object's binding, initialized to it }
-            FS.Scopes[0].Add('arguments', F.ArgsReg, False);
+            { 10.2.11 step 27: a var named arguments is the arguments object's binding, initialized to it; with
+              parameter expressions (step 28) a binding of the separate variable environment, so closures in
+              the parameters keep seeing the object }
             F.ArgsUsed := True;
             F.ArgsEscaped := True;
+            if T^.SimpleParams then FS.Scopes[0].Add('arguments', F.ArgsReg, False)
+            else
+            begin
+              R := DeclareLocal('arguments', False);
+              Emit(Ins(opMov, R, F.ArgsReg, 0));
+            end;
+          end
+          else if not T^.SimpleParams and (ParamNames <> nil) and (ParamNames.IndexOf(Names[I]) >= 0) and
+                  (FS.Scopes[0].Find(Names[I]) >= 0) then
+          begin
+            { 10.2.11 step 28.f: a var named like a parameter is a new binding of the separate variable
+              environment, initialized to the parameter's value }
+            K := FS.Scopes[0].Find(Names[I]);
+            R := AllocReg;
+            if R >= Length(FS.VarRegs) then SetLength(FS.VarRegs, R * 2 + 16);
+            Inc(FS.VarRegs[R]);
+            Emit(Ins(opMov, R, FS.Scopes[0].Bindings[K].Reg, 0));
+            FS.Scopes[0].Bindings[K].Reg := R;
           end
           else if FS.Scopes[0].Find(Names[I]) < 0 then
           begin
@@ -1542,6 +1572,7 @@ begin
           end;
       finally
         Names.Free;
+        ParamNames.Free;
       end;
       if (EvalEnvNames <> nil) and (Outer <> nil) and Outer.IsEvalOuter then
       begin
@@ -1666,7 +1697,8 @@ begin
     if ((FE.Name = 'await') and FE.IsAsync) or ((FE.Name = 'yield') and (FE.IsGenerator or FE.ParsedInStrictMode)) then
       raise EEarlySyntaxError.Create('Unexpected reserved word ''' + FE.Name + '''');
     { a named function expression can call itself by name: bind it in a scope around the function }
-    NameScope := (FE.Name <> '');
+    NameScope := (FE.Name <> '') and not DynFuncAnonymous;
+    DynFuncAnonymous := False;
     if NameScope then
     begin
       PushScope;
@@ -3885,7 +3917,7 @@ begin
           end;
           if E.Kind in [cekGetter, cekAccessor] then
           begin
-            if Name <> '' then T := CompileFunction('get ' + Name, NoParams, E.GetterNode.Body, False, True, False,
+            if KeyReg < 0 then T := CompileFunction('get ' + Name, NoParams, E.GetterNode.Body, False, True, False,
               False, False, False)
             else T := CompileFunction('', NoParams, E.GetterNode.Body, False, True, False, False, False, False);
             T^.SourceRange := E.GetterNode.SourceRange;
@@ -3896,7 +3928,7 @@ begin
           end;
           if E.Kind in [cekSetter, cekAccessor] then
           begin
-            if Name <> '' then T := CompileFunction('set ' + Name, E.SetterNode.Parameters, E.SetterNode.Body, False,
+            if KeyReg < 0 then T := CompileFunction('set ' + Name, E.SetterNode.Parameters, E.SetterNode.Body, False,
               True, False, False, False, False)
             else T := CompileFunction('', E.SetterNode.Parameters, E.SetterNode.Body, False, True, False, False,
               False, False);

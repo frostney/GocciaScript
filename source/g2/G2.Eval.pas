@@ -132,6 +132,7 @@ const
   Heads: array[0..3] of UnicodeString = ('(function anonymous(', '(function* anonymous(', '(async function anonymous(',
     '(async function* anonymous(');
 var I: Integer; Params, Body, Src, Err: UnicodeString; S: TValue; T: PFuncTemplate; Clo: TValue; Kind: Integer;
+  Ok: Boolean;
 begin
   Kind := NativeData;
   Params := '';
@@ -147,7 +148,13 @@ begin
     end;
   end;
   Src := Heads[Kind] + Params + #10') {'#10 + Body + #10'})';
-  if not ParseAndCompile(Src, '<Function>', True, T, Err) then Exit(ThrowError('SyntaxError', Err));
+  DynFuncAnonymous := True;
+  try
+    Ok := ParseAndCompile(Src, '<Function>', True, T, Err);
+  finally
+    DynFuncAnonymous := False;
+  end;
+  if not Ok then Exit(ThrowError('SyntaxError', Err));
   if not MakeScriptClosure(T, Clo) then Exit(False);
   Result := CallValue(Clo, VUndefined, nil, 0, Res);
 end;
