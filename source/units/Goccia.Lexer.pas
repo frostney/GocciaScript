@@ -1520,6 +1520,7 @@ var
   HasSeparator: Boolean;
   HasDecimalOrExponent: Boolean;
   IsDecimal: Boolean;
+  LeadingZero: Boolean;
   Lexeme: string;
 
   procedure ConsumeDigitsWithSeparators(const AValidDigits: TSysCharSet);
@@ -1547,6 +1548,7 @@ begin
   HasSeparator := False;
   HasDecimalOrExponent := False;
   IsDecimal := True;
+  LeadingZero := False;
   Ch := Peek;
 
   if Ch = '0' then
@@ -1588,6 +1590,8 @@ begin
       if Peek = '_' then
         raise TGocciaLexerError.Create('Numeric separator cannot be used after leading 0',
           FLine, FColumn, FFileName, GetSourceLines, SSuggestNumericSeparator);
+      // LegacyOctalIntegerLiteral or NonOctalDecimalIntegerLiteral
+      LeadingZero := CharInSet(Peek, ['0'..'9']);
       while CharInSet(Peek, ['0'..'9']) do
         Advance;
     end;
@@ -1635,6 +1639,10 @@ begin
   // ES2026 §12.9.3 BigIntLiteralSuffix: check for 'n' suffix
   if (Peek = 'n') and (not HasDecimalOrExponent) then
   begin
+    // ES2026 §12.9.3: a BigIntLiteral's NonDecimalIntegerLiteral or DecimalIntegerLiteral has no leading 0
+    if LeadingZero then
+      raise TGocciaLexerError.Create('Invalid BigInt literal: a leading 0 is not allowed',
+        FLine, FColumn, FFileName, GetSourceLines, SSuggestNumberFormatValid);
     Advance;
     Lexeme := Copy(FSource, FStart, FCurrent - FStart - 1); // Exclude 'n'
     if HasSeparator then
@@ -1648,6 +1656,11 @@ begin
       Lexeme := StringReplace(Lexeme, '_', '', [rfReplaceAll]);
     AddToken(gttNumber, Lexeme);
   end;
+  // ES2026 §12.9.3: the source character immediately following a NumericLiteral must not be an IdentifierStart
+  // or DecimalDigit
+  if CharInSet(Peek, ['0'..'9', 'a'..'z', 'A'..'Z', '$', '_', '\']) then
+    raise TGocciaLexerError.Create('Identifier starts immediately after a numeric literal',
+      FLine, FColumn, FFileName, GetSourceLines, SSuggestNumberFormatValid);
 end;
 
 function TGocciaLexer.IsSourceIdentifierStartCodePoint(

@@ -168,6 +168,8 @@ type
     FAmbiguousTopLevelAwait: Boolean;
     FDeferredAwaitIdentifier: TGocciaToken;
     FStaticBlockFunctionDepth: Integer;
+    // super.x / super[x] is allowed here: false in a plain function's body and parameters (ES2026 15.2.1)
+    FSuperPropertyAllowed: Boolean;
     FRecordTypeRanges: Boolean;
     // The last overload signature ParseFunctionBodyExpression read, for the
     // statement that erases it.
@@ -376,7 +378,9 @@ type
 
     // Getter/setter expression parsing (shared by object literals and class bodies)
     function ParseGetterExpression: TGocciaGetterExpression;
+    function ParseGetterExpressionImpl: TGocciaGetterExpression;
     function ParseSetterExpression: TGocciaSetterExpression;
+    function ParseSetterExpressionImpl: TGocciaSetterExpression;
 
     // Auto-accessor desugaring (TC39 proposal-decorators)
     function AutoAccessorStorageName(const AMemberName: string;
@@ -387,7 +391,8 @@ type
       const ALine, AColumn: Integer): TGocciaSetterExpression;
 
     // Function body parsing: (params) { stmts } -> function expression
-    function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False; const AAllowSignature: Boolean = False): TGocciaExpression;
+    function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False; const AAllowSignature: Boolean = False; const AIsMethod: Boolean = False): TGocciaExpression;
+    function ParseFunctionBodyExpressionImpl(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean; const AAllowSignature: Boolean): TGocciaExpression;
     function ParseFunctionBodyBlock(const AParameters: TGocciaParameterArray = nil): TGocciaBlockStatement;
 
     // Destructuring pattern parsing
@@ -396,6 +401,7 @@ type
     function ParseArrayPattern: TGocciaArrayDestructuringPattern;
     function ParseObjectPattern: TGocciaObjectDestructuringPattern;
     function IsAssignmentPattern(const AExpr: TGocciaExpression): Boolean;
+    procedure CheckStrictAssignmentName(const AName: string; const ALine, AColumn: Integer);
     function ConvertToPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
     procedure SkipDestructuringPattern;
     procedure SkipExpression;
@@ -551,6 +557,7 @@ type
     function ThrowStatement: TGocciaStatement;
     function TryStatement: TGocciaStatement;
     function ClassMethod(const AIsStatic: Boolean = False; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaClassMethod;
+    function ClassMethodImpl(const AIsStatic: Boolean; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaClassMethod;
     function ClassDeclaration: TGocciaStatement;
     function DecoratedClassDeclaration(const ADecorators: TGocciaDecoratorList;
       const AStart: TGocciaToken): TGocciaStatement;
@@ -560,6 +567,7 @@ type
     function ImportDeclaration: TGocciaStatement;
     function ExportDeclaration: TGocciaStatement;
     function ParseClassBody(const AClassName: string): TGocciaClassDefinition;
+    function ParseClassBodyImpl(const AClassName: string): TGocciaClassDefinition;
     function UsingStatement: TGocciaStatement;
     function SwitchStatement: TGocciaStatement;
     function BreakStatement: TGocciaStatement;
@@ -613,6 +621,8 @@ uses
   Goccia.Keywords.Contextual,
   Goccia.Keywords.Reserved,
   Goccia.Values.BigIntValue;
+
+function IsInOptionalChain(AExpr: TGocciaExpression): Boolean; forward;
 
 // Terminators for the return-type annotation in the speculative arrow-function
 // probe (`(params) : Type => body`).
@@ -793,6 +803,7 @@ begin
   FWarningCount := 0;
   FInAsyncFunction := 0;
   FStaticBlockFunctionDepth := -1;
+  FSuperPropertyAllowed := True;
   FInGeneratorFunction := 0;
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
@@ -824,6 +835,7 @@ begin
   FWarningCount := 0;
   FInAsyncFunction := 0;
   FStaticBlockFunctionDepth := -1;
+  FSuperPropertyAllowed := True;
   FInGeneratorFunction := 0;
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
@@ -2425,6 +2437,10 @@ end;
 procedure TGocciaParser.ValidateIdentifierReference(const AToken: TGocciaToken);
 begin
   ValidateAwaitIdentifier(AToken);
+  // debugger is a reserved word (ES2026 12.7.2), however it is written
+  if AToken.Lexeme = KEYWORD_DEBUGGER then
+    raise TGocciaSyntaxError.Create('Unexpected reserved word "debugger"', AToken.Line, AToken.Column, FFileName,
+      FSourceLines);
   if AToken.ContainsEscape and IsReservedKeywordName(AToken.Lexeme) then
     raise TGocciaSyntaxError.Create(
       'Keyword must not contain escaped characters',
@@ -2438,6 +2454,10 @@ end;
 procedure TGocciaParser.ValidateIdentifierBinding(const AToken: TGocciaToken);
 begin
   ValidateAwaitIdentifier(AToken);
+  // debugger is a reserved word (ES2026 12.7.2), however it is written
+  if AToken.Lexeme = KEYWORD_DEBUGGER then
+    raise TGocciaSyntaxError.Create('Unexpected reserved word "debugger"', AToken.Line, AToken.Column, FFileName,
+      FSourceLines);
   if AToken.ContainsEscape and IsReservedKeywordName(AToken.Lexeme) then
     raise TGocciaSyntaxError.Create(
       'Keyword must not contain escaped characters',
@@ -3135,6 +3155,12 @@ begin
           raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
             Operator.Line, Operator.Column, FFileName, FSourceLines,
             SSuggestValidIncrementTarget);
+        if Right is TGocciaIdentifierExpression then
+          CheckStrictAssignmentName(TGocciaIdentifierExpression(Right).Name, Right.Line, Right.Column)
+        else if IsInOptionalChain(Right) then
+          raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
+            Operator.Line, Operator.Column, FFileName, FSourceLines,
+            SSuggestValidIncrementTarget);
 
         Result := TGocciaIncrementExpression.Create(Right, Operator.TokenType, True,
           Operator.Span);
@@ -3394,6 +3420,12 @@ begin
           if not ((Result is TGocciaIdentifierExpression) or
                   (Result is TGocciaMemberExpression) or
                   (Result is TGocciaPrivateMemberExpression)) then
+            raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
+              Line, Column, FFileName, FSourceLines,
+              SSuggestValidIncrementTarget);
+          if Result is TGocciaIdentifierExpression then
+            CheckStrictAssignmentName(TGocciaIdentifierExpression(Result).Name, Result.Line, Result.Column)
+          else if IsInOptionalChain(Result) then
             raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
               Line, Column, FFileName, FSourceLines,
               SSuggestValidIncrementTarget);
@@ -3922,6 +3954,9 @@ begin
     gttSuper:
       begin
         Token := Advance;
+        if not FSuperPropertyAllowed and (Check(gttDot) or Check(gttLeftBracket)) then
+          raise TGocciaSyntaxError.Create('"super" property access is only valid in methods', Token.Line, Token.Column,
+            FFileName, FSourceLines, '');
         Result := TGocciaSuperExpression.Create(Token.Span);
       end;
     gttImport:
@@ -5094,7 +5129,9 @@ function TGocciaParser.ArrayLiteral: TGocciaExpression;
 var
   Elements: TObjectList<TGocciaExpression>;
   Line, Column: Integer;
+  RestThenComma: Boolean;
 begin
+  RestThenComma := False;
   Line := Previous.Line;
   Column := Previous.Column;
   Elements := TObjectList<TGocciaExpression>.Create(True);
@@ -5112,6 +5149,8 @@ begin
         // Spread expression: ...array
         Elements.Add(TGocciaSpreadExpression.Create(AssignmentAllowIn,
           Previous.Span));
+        if Check(gttComma) then
+          RestThenComma := True;
       end
       else
       begin
@@ -5130,6 +5169,7 @@ begin
     raise;
   end;
   Result := TGocciaArrayExpression.Create(Elements, SourceSpanAtPosition(Line, Column));
+  TGocciaArrayExpression(Result).RestFollowedByComma := RestThenComma;
 end;
 
 function TGocciaParser.ObjectLiteral: TGocciaExpression;
@@ -5160,7 +5200,9 @@ var
   MemberStartOffset: Integer;
   KeyIdentifier: TGocciaExpression;
   KeyRange: TGocciaASTPartRange;
+  RestThenComma: Boolean;
 begin
+  RestThenComma := False;
   Line := Previous.Line;
   Column := Previous.Column;
   Properties := TGocciaExpressionMap.Create;
@@ -5256,6 +5298,7 @@ begin
         // For spread expressions, no further processing is needed
         if not Match(gttComma) then
           Break;
+        RestThenComma := True;
         Continue;
       end
       else if Match(gttLeftBracket) then
@@ -5377,7 +5420,7 @@ begin
       else if Check(gttLeftParen) then
       begin
         MethodFunction := TGocciaFunctionExpression(ParseFunctionBodyExpression(
-          MemberStartLine, MemberStartColumn, IsAsync, IsGenerator));
+          MemberStartLine, MemberStartColumn, IsAsync, IsGenerator, False, True));
         ValidateParameterEarlyErrors(MethodFunction.Parameters,
           MemberStartLine, MemberStartColumn, True, False, False);
         MethodFunction.SourceRange := ExtractSourceRangeLazy(
@@ -5489,6 +5532,7 @@ begin
     Consume(gttRightBrace, 'Expected "}" after object properties',
       SSuggestCloseObject);
     Result := TGocciaObjectExpression.Create(Properties, PropertyOrder, ComputedProperties, ComputedPropertiesInOrder, Getters, Setters, PropertySourceOrder, SourceSpanAtPosition(Line, Column));
+    TGocciaObjectExpression(Result).RestFollowedByComma := RestThenComma;
   except
     { The members belong to the arena; the containers are this method's
       until the node takes them. }
@@ -5646,7 +5690,21 @@ begin
   end;
 end;
 
+// ParseGetterExpression: a method's body allows super.x
 function TGocciaParser.ParseGetterExpression: TGocciaGetterExpression;
+var
+  SavedSuperPropertyAllowed: Boolean;
+begin
+  SavedSuperPropertyAllowed := FSuperPropertyAllowed;
+  FSuperPropertyAllowed := True;
+  try
+    Result := ParseGetterExpressionImpl;
+  finally
+    FSuperPropertyAllowed := SavedSuperPropertyAllowed;
+  end;
+end;
+
+function TGocciaParser.ParseGetterExpressionImpl: TGocciaGetterExpression;
 var
   Line, Column: Integer;
   ReturnType: TGocciaTypeRangeArray;
@@ -5749,7 +5807,21 @@ begin
     TGocciaBlockStatement.Create(Statements, Span), Span);
 end;
 
+// ParseSetterExpression: a method's body allows super.x
 function TGocciaParser.ParseSetterExpression: TGocciaSetterExpression;
+var
+  SavedSuperPropertyAllowed: Boolean;
+begin
+  SavedSuperPropertyAllowed := FSuperPropertyAllowed;
+  FSuperPropertyAllowed := True;
+  try
+    Result := ParseSetterExpressionImpl;
+  finally
+    FSuperPropertyAllowed := SavedSuperPropertyAllowed;
+  end;
+end;
+
+function TGocciaParser.ParseSetterExpressionImpl: TGocciaSetterExpression;
 var
   Params: TGocciaParameterArray;
   ReturnType: TGocciaTypeRangeArray;
@@ -5828,7 +5900,21 @@ end;
   nil. Its parameters and return type are type syntax for the implementation
   that follows: they are left in FSignatureParameters and
   FSignatureTypeRanges for the expression view, and nothing runs them. }
-function TGocciaParser.ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean; const AAllowSignature: Boolean): TGocciaExpression;
+// ParseFunctionBodyExpression: a function's body allows super.x only when it is a method (AIsMethod)
+function TGocciaParser.ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean; const AAllowSignature: Boolean; const AIsMethod: Boolean): TGocciaExpression;
+var
+  SavedSuperPropertyAllowed: Boolean;
+begin
+  SavedSuperPropertyAllowed := FSuperPropertyAllowed;
+  FSuperPropertyAllowed := AIsMethod;
+  try
+    Result := ParseFunctionBodyExpressionImpl(ALine, AColumn, AIsAsync, AIsGenerator, AAllowSignature);
+  finally
+    FSuperPropertyAllowed := SavedSuperPropertyAllowed;
+  end;
+end;
+
+function TGocciaParser.ParseFunctionBodyExpressionImpl(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean; const AAllowSignature: Boolean): TGocciaExpression;
 var
   Parameters: TGocciaParameterArray;
   ThisParameter, ReturnType: TGocciaTypeRangeArray;
@@ -6238,6 +6324,7 @@ begin
     // Only allow assignment to identifier or member expression
     else if Left is TGocciaIdentifierExpression then
     begin
+      CheckStrictAssignmentName(TGocciaIdentifierExpression(Left).Name, Left.Line, Left.Column);
       if Operator = gttAssign then
         Result := TGocciaAssignmentExpression.Create(
           TGocciaIdentifierExpression(Left).Name, Right, SourceSpanAtPosition(Line, Column),
@@ -6246,6 +6333,9 @@ begin
         Result := TGocciaCompoundAssignmentExpression.Create(
           TGocciaIdentifierExpression(Left).Name, Operator, Right, SourceSpanAtPosition(Line, Column), not TGocciaIdentifierExpression(Left).Parenthesized);
     end
+    else if ((Left is TGocciaMemberExpression) or (Left is TGocciaPrivateMemberExpression)) and IsInOptionalChain(Left) then
+      raise TGocciaSyntaxError.Create('Invalid assignment target', Left.Line, Left.Column, FFileName, FSourceLines,
+        SSuggestValidAssignmentTarget)
     else if Left is TGocciaMemberExpression then
     begin
       if TGocciaMemberExpression(Left).Computed then
@@ -6541,6 +6631,13 @@ begin
           TGocciaFunctionDeclaration(Result).FunctionExpression.IsAsync := True;
       end;
     end;
+  end
+  else if CheckUnescapedIdentifierKeyword(KEYWORD_DEBUGGER) then
+  begin
+    // ES2026 14.16 DebuggerStatement: no debugger is attached, so it does nothing
+    Advance;
+    ConsumeSemicolonOrASI('Expected ";" after debugger', SSuggestAddSemicolon);
+    Result := TGocciaEmptyStatement.Create(Previous.Span);
   end
   else if Match(gttSwitch) then
     Result := SwitchStatement
@@ -8322,6 +8419,10 @@ var
 begin
   Line := Previous.Line;
   Column := Previous.Column;
+  // ES2026 15.1.1 / 15.7.1: return is only valid in a function body, not in global or module code or a class
+  // static block
+  if (FFunctionDepth = 0) or (FStaticBlockFunctionDepth = FFunctionDepth) then
+    raise TGocciaSyntaxError.Create('Illegal return statement', Line, Column, FFileName, FSourceLines, '');
 
   // ES2026 §12.10.1 restricted production: return [no LineTerminator here] Expression
   if CheckSemicolonOrASI then
@@ -8439,7 +8540,21 @@ end;
 
 { Nil for an overload signature: a header that ends without a body, at a
   semicolon, the end of the class body, or under ASI a line break. }
+// ClassMethod: a method's body allows super.x
 function TGocciaParser.ClassMethod(const AIsStatic: Boolean; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaClassMethod;
+var
+  SavedSuperPropertyAllowed: Boolean;
+begin
+  SavedSuperPropertyAllowed := FSuperPropertyAllowed;
+  FSuperPropertyAllowed := True;
+  try
+    Result := ClassMethodImpl(AIsStatic, AIsAsync, AIsGenerator);
+  finally
+    FSuperPropertyAllowed := SavedSuperPropertyAllowed;
+  end;
+end;
+
+function TGocciaParser.ClassMethodImpl(const AIsStatic: Boolean; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaClassMethod;
 var
   Parameters: TGocciaParameterArray;
   Body: TGocciaASTNode;
@@ -9499,7 +9614,21 @@ begin
   AFieldMark := Length(AFieldOrder);
 end;
 
+// ParseClassBody: a method's body allows super.x
 function TGocciaParser.ParseClassBody(const AClassName: string): TGocciaClassDefinition;
+var
+  SavedSuperPropertyAllowed: Boolean;
+begin
+  SavedSuperPropertyAllowed := FSuperPropertyAllowed;
+  FSuperPropertyAllowed := True;
+  try
+    Result := ParseClassBodyImpl(AClassName);
+  finally
+    FSuperPropertyAllowed := SavedSuperPropertyAllowed;
+  end;
+end;
+
+function TGocciaParser.ParseClassBodyImpl(const AClassName: string): TGocciaClassDefinition;
 var
   MemberRangeStart, ElementMark, FieldMark: Integer;
   MemberKey: TGocciaASTPartRange;
@@ -11964,6 +12093,14 @@ begin
     end;
   end;
 
+  // ES2026 §12.9.3.1: a NonOctalDecimalIntegerLiteral (a leading 0, then a digit) is not allowed in strict mode
+  if FStrictModeActive and (Length(NormalizedLexeme) >= 2) and (NormalizedLexeme[1] = '0') and
+     (NormalizedLexeme[2] in ['0'..'9']) then
+    raise TGocciaSyntaxError.Create(
+      'Decimals with leading zeros are not allowed in strict mode',
+      Peek.Line, Peek.Column, FFileName, FSourceLines,
+      SSuggestNumberFormatValid);
+
   // NumericLiteral grammar is owned by the lexer/parser; NumericText owns the
   // exact decimal MV -> binary64 rounding shared with runtime coercion.
   Value := DecimalTextToNumber(NormalizedLexeme);
@@ -12281,6 +12418,46 @@ begin
   Result := False;
 end;
 
+// A member or call that is, or is reached through, an optional link (`a?.b`, `a?.b.c`): never an assignment
+// target. Parentheses end the chain: `(a?.b).c` is a target.
+function IsInOptionalChain(AExpr: TGocciaExpression): Boolean;
+begin
+  while Assigned(AExpr) do
+  begin
+    if AExpr is TGocciaMemberExpression then
+    begin
+      if TGocciaMemberExpression(AExpr).Optional then
+        Exit(True);
+      AExpr := TGocciaMemberExpression(AExpr).ObjectExpr;
+    end
+    else if AExpr is TGocciaPrivateMemberExpression then
+    begin
+      if TGocciaPrivateMemberExpression(AExpr).Optional then
+        Exit(True);
+      AExpr := TGocciaPrivateMemberExpression(AExpr).ObjectExpr;
+    end
+    else if AExpr is TGocciaCallExpression then
+    begin
+      if TGocciaCallExpression(AExpr).Optional then
+        Exit(True);
+      AExpr := TGocciaCallExpression(AExpr).Callee;
+    end
+    else
+      Exit(False);
+    if Assigned(AExpr) and AExpr.Parenthesized then
+      Exit(False);
+  end;
+  Result := False;
+end;
+
+// ES2026 13.15.1: in strict code `eval` and `arguments` are not simple assignment targets
+procedure TGocciaParser.CheckStrictAssignmentName(const AName: string; const ALine, AColumn: Integer);
+begin
+  if FStrictModeActive and ((AName = 'eval') or (AName = 'arguments')) then
+    raise TGocciaSyntaxError.Create('Unexpected eval or arguments in strict mode', ALine, AColumn, FFileName,
+      FSourceLines, SSuggestValidAssignmentTarget);
+end;
+
 function TGocciaParser.ConvertToPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
 var
   ArrayExpr: TGocciaArrayExpression;
@@ -12314,12 +12491,14 @@ begin
   if AExpr is TGocciaIdentifierExpression then
   begin
     IdentifierExpr := TGocciaIdentifierExpression(AExpr);
+    CheckStrictAssignmentName(IdentifierExpr.Name, AExpr.Line, AExpr.Column);
     Result := TGocciaIdentifierDestructuringPattern.Create(IdentifierExpr.Name, AExpr.Span);
   end
   else if AExpr is TGocciaAssignmentExpression then
   begin
     // Handle assignment expressions (for default values)
     AssignmentExpr := TGocciaAssignmentExpression(AExpr);
+    CheckStrictAssignmentName(AssignmentExpr.Name, AExpr.Line, AExpr.Column);
     { The target's own span when the parser kept the target, so the
       pattern's name is located at the name rather than at the `=`. }
     if Assigned(AssignmentExpr.Target) then
@@ -12353,9 +12532,18 @@ begin
           (ArrayExpr.Elements[I] is TGocciaHoleExpression) then
           Elements.Add(nil)  // Hole
         else if ArrayExpr.Elements[I] is TGocciaSpreadExpression then
+        begin
+          // AssignmentRestElement ends the list, without a comma after it or an initializer
+          if (I <> ArrayExpr.Elements.Count - 1) or ArrayExpr.RestFollowedByComma or
+             (TGocciaSpreadExpression(ArrayExpr.Elements[I]).Argument is TGocciaAssignmentExpression) or
+             (TGocciaSpreadExpression(ArrayExpr.Elements[I]).Argument is TGocciaDestructuringAssignmentExpression) then
+            raise TGocciaSyntaxError.Create('Rest element must be the last element',
+              ArrayExpr.Elements[I].Line, ArrayExpr.Elements[I].Column, FFileName, FSourceLines,
+              SSuggestDestructuringInvalidTarget);
           Elements.Add(TGocciaRestDestructuringPattern.Create(
             ConvertToPattern(TGocciaSpreadExpression(ArrayExpr.Elements[I]).Argument),
-            ArrayExpr.Elements[I].Span))
+            ArrayExpr.Elements[I].Span));
+        end
         else
           Elements.Add(ConvertToPattern(ArrayExpr.Elements[I]));
       end;
@@ -12396,6 +12584,13 @@ begin
                 SourceEntry.ComputedIndex];
               if ComputedPair.Key is TGocciaSpreadExpression then
               begin
+                // AssignmentRestProperty ends the list, without a comma after it; its target is not a pattern
+                if (I <> High(ObjectExpr.PropertySourceOrder)) or ObjectExpr.RestFollowedByComma or
+                   (TGocciaSpreadExpression(ComputedPair.Key).Argument is TGocciaArrayExpression) or
+                   (TGocciaSpreadExpression(ComputedPair.Key).Argument is TGocciaObjectExpression) then
+                  raise TGocciaSyntaxError.Create('Rest property must be the last property',
+                    ComputedPair.Key.Line, ComputedPair.Key.Column, FFileName, FSourceLines,
+                    SSuggestDestructuringInvalidTarget);
                 Prop := TGocciaDestructuringProperty.Create('',
                   TGocciaRestDestructuringPattern.Create(
                     ConvertToPattern(
@@ -12453,6 +12648,9 @@ begin
   end
   else if AExpr is TGocciaMemberExpression then
   begin
+    if IsInOptionalChain(AExpr) then
+      raise TGocciaSyntaxError.Create('Invalid destructuring target', AExpr.Line, AExpr.Column, FFileName,
+        FSourceLines, SSuggestDestructuringInvalidTarget);
     if ExpressionContainsCoverInitializedName(
        TGocciaMemberExpression(AExpr).ObjectExpr) then
       raise TGocciaSyntaxError.Create(
@@ -12464,6 +12662,9 @@ begin
   end
   else if AExpr is TGocciaPrivateMemberExpression then
   begin
+    if IsInOptionalChain(AExpr) then
+      raise TGocciaSyntaxError.Create('Invalid destructuring target', AExpr.Line, AExpr.Column, FFileName,
+        FSourceLines, SSuggestDestructuringInvalidTarget);
     PrivateMemberExpr := TGocciaPrivateMemberExpression(AExpr);
     Result := TGocciaPrivateMemberExpressionDestructuringPattern.Create(
       PrivateMemberExpr, AExpr.Span);

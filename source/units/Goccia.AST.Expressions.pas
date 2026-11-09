@@ -330,6 +330,9 @@ type
       const ASpan: TGocciaSourceSpan);
     destructor Destroy; override;
     property Elements: TObjectList<TGocciaExpression> read FElements;
+  public
+    // A spread element was followed by a comma: as an assignment pattern the rest element must end the list
+    RestFollowedByComma: Boolean;
   end;
 
   // Property source order tracking
@@ -398,6 +401,10 @@ type
 
     property Properties: TGocciaExpressionMap read FProperties;
     property PropertyInsertionOrder: TStringList read FPropertyInsertionOrder;
+  public
+    // A spread property was followed by a comma: as an assignment pattern the rest property must end the list
+    RestFollowedByComma: Boolean;
+  public
     property ComputedProperties: THashMap<TGocciaExpression, TGocciaExpression> read FComputedProperties;
     property ComputedPropertiesInOrder: TArray<TPair<TGocciaExpression, TGocciaExpression>> read FComputedPropertiesInOrder;
     property Getters: TGocciaGetterExpressionMap read FGetters;
