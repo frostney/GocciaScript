@@ -3274,6 +3274,30 @@ begin
   Result := False;
 end;
 
+{ an IC accessor entry for O's shape whose holder still checks out: 1 its getter called (Res its result), 0 the
+  getter threw, 2 no such entry }
+function ICAccGet(IC: PPropIC; O: PObj; Receiver: TValue; var Res: TValue): Integer;
+var E: PICEntry; P: PObj; D, I: Integer; G: TValue;
+begin
+  Result := 2;
+  E := nil;
+  if (IC^.Poly0.Shape = O^.Shape) and (IC^.Poly0.Kind = O^.OKind) then E := @IC^.Poly0
+  else
+    for I := 1 to IC^.PolyCount - 1 do
+      if (IC^.More^[I].Shape = O^.Shape) and (IC^.More^[I].Kind = O^.OKind) then begin E := @IC^.More^[I]; Break; end;
+  if (E = nil) or (E^.Acc = 0) then Exit;
+  P := O;
+  for D := 0 to E^.Depth - 1 do
+  begin
+    if ((E^.VerMask shr D) and 1 <> 0) and (P^.Shape^.Version <> E^.Vers[D]) then Exit;
+    P := ObjOf(P^.Shape^.Proto);
+    if P^.Shape <> E^.Holder[D] then Exit;
+  end;
+  G := PAccessor(PtrOf(GetSlot(P, E^.Slot)))^.Getter;
+  if G = VUndefined then begin Res := VUndefined; Exit(1); end;
+  if CallValue(G, Receiver, nil, 0, Res) then Result := 1 else Result := 0;
+end;
+
 { an IC miss: GetFromObject's walk (same order: own shape, virtual property, elements, function prototype,
   then the prototype), and an entry for the IC when the value is a data property the shapes alone decide }
 function ICGetMiss(IC: PPropIC; O: PObj; Receiver: TValue; var Res: TValue): Boolean;
@@ -4421,8 +4445,8 @@ var
 
 procedure InitFastOps;
 const
-  Ops: array[0..67] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
-    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opSub,
+  Ops: array[0..68] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opGetGlobal, opSub,
     opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
     opJNGt, opJNGe, opJNSEq, opJSEq, opCall, opRet, opRetUndef, opToNum, opToNumeric, opEq, opNe, opTypeof, opDefField);
@@ -4821,6 +4845,23 @@ begin
         end;
       { a TDZ check that passes stays here; the ReferenceError is Execute's }
       opCheckHole: if R[A] = VHole then goto LBail;
+      { a global: the global object's cached slot, or a global lexical binding's cell (Execute's IC fill) }
+      opGetGlobal:
+        begin
+          IC := @ICs[I shr 40];
+          O := ObjOf(GlobalObj);
+          if O^.Shape = IC^.Shape then R[A] := GetSlot(O, IC^.Slot)
+          else if IC^.Depth <= -2 then
+          begin
+            V := GLexCells[-2 - IC^.Depth];
+            if V = VUndefined then goto LBail;
+            U := PUpval(PtrOf(V));
+            if U^.StackIndex >= 0 then V := VS[U^.StackIndex] else V := U^.Value;
+            if V = VHole then goto LBail;
+            R[A] := V;
+          end
+          else goto LBail;
+        end;
       opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI:
         begin
           VA := R[(I shr 24) and $FFFF];
@@ -5244,6 +5285,9 @@ LReload:
             CI := GLexFind(IC^.Key);
             if CI >= 0 then
             begin
+              { a global lexical binding is never removed: FastLoop reads its cell from the IC (Depth -2 - index) }
+              IC^.Shape := nil;
+              IC^.Depth := -2 - CI;
               Fr^.PC := PC;
               if not GLexGet(CI, V) then goto LThrow;   { typeof of a binding in its TDZ throws too }
               R[A] := V;
@@ -5454,6 +5498,10 @@ LReload:
                 Continue;
               end;
               Fr^.PC := PC;
+              { an accessor entry: its getter called without the miss path's walk }
+              J := ICAccGet(IC, O, VB, V);
+              if J = 0 then goto LThrow;
+              if J = 1 then begin R[A] := V; Continue; end;
               if not ICGetMiss(IC, O, VB, V) then goto LThrow;
               R[A] := V;
               Continue;
