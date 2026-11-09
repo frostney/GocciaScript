@@ -5109,18 +5109,20 @@ begin
   else if E is TGocciaCompoundAssignmentExpression then
   begin
     CO := TGocciaCompoundAssignmentExpression(E);
+    { 13.15.2: NamedEvaluation only when the target IsIdentifierRef (a parenthesized one is not) }
+    if CO.InferName and not (Assigned(CO.Target) and CO.Target.Parenthesized) then AName := CO.Name else AName := '';
     R := AllocReg;
     if WithsFor(CO.Name, WithIdxScratch) > 0 then
     begin
       K := AllocReg;
       LoadIdentThis(CO.Name, R, K);
-      Combine(CO.Operator, nil, CO.Value, R, R, J, CO.Name);
+      Combine(CO.Operator, nil, CO.Value, R, R, J, AName);
       StoreIdentRef(CO.Name, K, R);
     end
     else
     begin
       LoadIdent(CO.Name, R);
-      Combine(CO.Operator, nil, CO.Value, R, R, J, CO.Name);
+      Combine(CO.Operator, nil, CO.Value, R, R, J, AName);
       StoreIdent(CO.Name, R);
     end;
     if J >= 0 then PatchHere(J);
