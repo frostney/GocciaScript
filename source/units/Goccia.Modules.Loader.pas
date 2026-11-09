@@ -108,6 +108,7 @@ type
     FForInLoopsEnabled: Boolean;
     FExperimentalJSModuleSourceEnabled: Boolean;
     FWarningUnsupportedFeatures: Boolean;
+    FSuppressWarnings: Boolean;
     FStrictTypesEnabled: Boolean;
     FContentProvider: TGocciaModuleContentProvider;
     FEvaluateModuleBody: TGocciaModuleBodyEvaluator;
@@ -223,6 +224,8 @@ type
       AImportingFilePath: string): Boolean;
 
     function ModulePipelineOptions: TGocciaSourcePipelineOptions;
+    procedure PrintParseWarnings(
+      const AParsed: TGocciaSourcePipelineModuleResult; const APath: string);
     function CaptureLoadStates: TList<TObject>;
     procedure DiscardLinkedModules(
       const APreservedStates: TList<TObject>);
@@ -420,6 +423,12 @@ type
       write FExperimentalJSModuleSourceEnabled;
     property WarningUnsupportedFeatures: Boolean
       read FWarningUnsupportedFeatures write FWarningUnsupportedFeatures;
+    { Mutes the parse warnings printed for an imported module, as
+      TGocciaEngine.SuppressWarnings mutes the entry's (the engine sets it).
+      A host whose standard output carries data, such as a JSON envelope,
+      sets it. }
+    property SuppressWarnings: Boolean
+      read FSuppressWarnings write FSuppressWarnings;
     property ASIEnabled: Boolean read GetASIEnabled write SetASIEnabled;
     property JSXEnabled: Boolean read GetJSXEnabled write SetJSXEnabled;
     property VarEnabled: Boolean read GetVarEnabled write SetVarEnabled;
@@ -482,6 +491,7 @@ uses
   Goccia.Packages.Store,
   Goccia.Realm,
   Goccia.Scope.Declarations,
+  Goccia.Threading.Flags,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.Error,
   Goccia.Values.ErrorHelper,
@@ -1566,7 +1576,6 @@ var
   Content: TGocciaModuleContent;
   Definition: TGocciaVirtualModuleDefinition;
   Parsed: TGocciaSourcePipelineModuleResult;
-  Warning: TGocciaSourcePipelineWarning;
   CompiledPath: string;
   Pending: TGocciaPendingBytecodeModule;
   CurrentModified: TDateTime;
@@ -1651,15 +1660,7 @@ begin
     Parsed := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
       AResolvedPath, AOptions);
     try
-      for I := 0 to Parsed.WarningCount - 1 do
-      begin
-        Warning := Parsed.Warnings[I];
-        WriteLn(Format('Warning: %s', [Warning.Message]));
-        if Warning.Suggestion <> '' then
-          WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
-        WriteLn(Format('  --> %s:%d:%d', [AResolvedPath, Warning.Line,
-          Warning.Column]));
-      end;
+      PrintParseWarnings(Parsed, AResolvedPath);
       Result := Parsed.TakeProgramNode;
     finally
       Parsed.Free;
@@ -2246,6 +2247,28 @@ procedure TGocciaModuleLoader.RetireModule(const AModule: TGocciaModule);
 begin
   if Assigned(AModule) and (FRetiredModules.IndexOf(AModule) < 0) then
     FRetiredModules.Add(AModule);
+end;
+
+{ The warnings an imported module's parse produced, on standard output as the
+  entry's are (TGocciaEngine.PrintSourcePipelineWarnings). Nothing is printed
+  once SuppressWarnings is set, or on a worker thread, where FPC's standard
+  output is not thread-safe: both rules the entry's warnings follow. }
+procedure TGocciaModuleLoader.PrintParseWarnings(
+  const AParsed: TGocciaSourcePipelineModuleResult; const APath: string);
+var
+  I: Integer;
+  Warning: TGocciaSourcePipelineWarning;
+begin
+  if FSuppressWarnings or GIsWorkerThread then
+    Exit;
+  for I := 0 to AParsed.WarningCount - 1 do
+  begin
+    Warning := AParsed.Warnings[I];
+    WriteLn(Format('Warning: %s', [Warning.Message]));
+    if Warning.Suggestion <> '' then
+      WriteLn(Format('  Suggestion: %s', [Warning.Suggestion]));
+    WriteLn(Format('  --> %s:%d:%d', [APath, Warning.Line, Warning.Column]));
+  end;
 end;
 
 // The options InstantiateModule parses a module's source with.
@@ -3556,7 +3579,6 @@ var
   I: Integer;
   IsHostOwned: Boolean;
   ModuleParseResult: TGocciaSourcePipelineModuleResult;
-  ModuleWarning: TGocciaSourcePipelineWarning;
   PipelineOptions: TGocciaSourcePipelineOptions;
   IsComputedRequest: Boolean;
   ModuleRequest: string;
@@ -3659,15 +3681,7 @@ begin
     ModuleParseResult := TGocciaSourcePipeline.ParseModuleSource(Content.Text,
       ResolvedPath, PipelineOptions);
     try
-      for I := 0 to ModuleParseResult.WarningCount - 1 do
-      begin
-        ModuleWarning := ModuleParseResult.Warnings[I];
-        WriteLn(Format('Warning: %s', [ModuleWarning.Message]));
-        if ModuleWarning.Suggestion <> '' then
-          WriteLn(Format('  Suggestion: %s', [ModuleWarning.Suggestion]));
-        WriteLn(Format('  --> %s:%d:%d', [ResolvedPath, ModuleWarning.Line,
-          ModuleWarning.Column]));
-      end;
+      PrintParseWarnings(ModuleParseResult, ResolvedPath);
 
       SourceValue := TGocciaModuleSourceValue.Create(ResolvedPath,
         Content.Text);

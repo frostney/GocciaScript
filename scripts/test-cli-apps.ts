@@ -16352,6 +16352,55 @@ await section("Runner sandbox mode: every host-set ceiling reports itself as one
   }
 });
 
+await section("Loader: an imported module's parse warnings never precede a JSON envelope...", async () => {
+  const tmp = makeTmp();
+  try {
+    // JSX in a .js file adds a parse warning ("JSX syntax found in source
+    // with a non-JSX extension"). The loader prints it for an imported module
+    // on standard output, so a JSON envelope has to be protected from it the
+    // way the entry file's own warnings already are.
+    writeFileSync(join(tmp, "comp.js"), "export const a = <div/>;\n");
+    const main = join(tmp, "main.mjs");
+    writeFileSync(main, 'import { a } from "./comp.js";\nconsole.log(typeof a);\n');
+    const entry = join(tmp, "entry.mjs");
+    writeFileSync(entry, "console.log(1);\n");
+    const source = join(tmp, "source.mjs");
+    writeFileSync(source, 'import source m from "./comp.js";\nconsole.log(typeof m);\n');
+    const test = join(tmp, "imports.test.js");
+    writeFileSync(test, 'import { a } from "./comp.js";\ntest("imports", () => { expect(typeof a).toBe("undefined"); });\n');
+    const run = (binary: string, args: string[]) => {
+      const proc = Bun.spawnSync([binary, ...args], { stdout: "pipe", stderr: "pipe" });
+      return proc.stdout.toString();
+    };
+    const warning = "Warning: JSX syntax found in source with a non-JSX extension";
+
+    // Control: a plain run prints the warning, for both import forms, so the
+    // cases below prove the mute and not an absent warning.
+    if (!run(RUNNER, [main]).includes(warning))
+      throw new Error("A plain run should print the imported module's warning");
+    if (!run(RUNNER, [source, "--experimental-js-module-source"]).includes(warning))
+      throw new Error("A plain source-phase import should print the imported module's warning");
+
+    const cases: [string, string, string[]][] = [
+      ["GocciaRunner --output=json", RUNNER, [main, "--output=json"]],
+      ["GocciaRunner --output=compact-json", RUNNER, [main, "--output=compact-json"]],
+      ["GocciaRunner --output=json --jobs=2", RUNNER, [main, entry, "--output=json", "--jobs=2"]],
+      ["GocciaRunner source-phase import --output=json", RUNNER, [source, "--experimental-js-module-source", "--output=json"]],
+      ["GocciaTestRunner --output=json", TESTRUNNER, ["-P", test, "--output=json"]],
+    ];
+    for (const [label, binary, args] of cases) {
+      const stdout = run(binary, args);
+      try {
+        JSON.parse(stdout);
+      } catch {
+        throw new Error(`${label}: stdout should be the JSON envelope alone, got:\n${stdout.slice(0, 400)}`);
+      }
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --output=json and --silent mute the goccia:test reporter...", async () => {
   const tmp = makeTmp();
   try {
