@@ -6482,8 +6482,9 @@ LReload:
           end
           else Argc := (I shr 24) and $FFFF;
           Fr^.PC := PC;
-          { 13.3.7.1 SuperCall: GetSuperConstructor is the running constructor's [[GetPrototypeOf]] }
-          VA := ObjOf(Fr^.Closure)^.Shape^.Proto;
+          { 13.3.7.1 SuperCall: GetSuperConstructor is the running constructor's [[GetPrototypeOf]], read before
+            the arguments into R[A + 1] when C is 1 }
+          if (I shr 40) = 1 then VA := R[A + 1] else VA := ObjOf(Fr^.Closure)^.Shape^.Proto;
           if not IsConstructorV(VA) then begin ThrowTypeError('Super constructor is not a constructor'); goto LThrow; end;
           StackTop := Max(StackTop, Fr^.Base + A + 2 + Argc);
           if not Construct(VA, @R[A + 2], Argc, Fr^.NewTarget, V) then goto LThrow;

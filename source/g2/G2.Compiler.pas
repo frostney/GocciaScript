@@ -3258,6 +3258,8 @@ begin
     { a throw leaves the try block's scopes without their opClose: the closures made in them keep their
       variables, whose registers the catch block may reuse }
     Emit(Ins(opClose, ExcReg + 1, 0, 0));
+    { 14.15.3: the statement's value is the catch block's, UpdateEmpty(C, undefined) }
+    if FS.CplP1 <> 0 then Emit(Ins(opLoadUndef, FS.CplP1 - 1, 0, 0));
     PushScope;
     if S.CatchParam <> '' then
     begin
@@ -4260,8 +4262,12 @@ begin
     { super(...): 15.7.1 a SyntaxError outside a derived class constructor (global eval code checks at run time) }
     if not (FS.Tpl^.IsClassCtor and FS.Tpl^.IsDerived) then
       raise EEarlySyntaxError.Create('''super'' keyword unexpected here');
+    { 13.3.7.1 step 3: GetSuperConstructor before the arguments; IsConstructor after them (C 1: it is in
+      R[A + 1]) }
+    Emit(Ins(opLoadCallee, Base + 1, 0, 0));
+    Emit(Ins(opSuperBase, Base + 1, Base + 1, 0));
     Argc := CompileArgs(E.Arguments, Base + 2, Spread);
-    if Spread then Emit(Ins(opSuperCallV, Base, 0, 0)) else Emit(Ins(opSuperCall, Base, Argc, 0));
+    if Spread then Emit(Ins(opSuperCallV, Base, 0, 1)) else Emit(Ins(opSuperCall, Base, Argc, 1));
     if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
     if Reuse then FreeTo(Base + 1) else FreeTo(Base);
     ChainEnd(IsLink, SavedJ, Base);
@@ -4446,25 +4452,31 @@ begin
 end;
 
 procedure TCompiler.EmitSuperSet(const Key: UnicodeString; KeyExpr, Value: TGocciaExpression; Dest: Integer);
-var H, Save, K, V: Integer;
+var H, Save, K, B, KeyOp, V: Integer;
 begin
   Save := FS.FreeReg;
+  { 13.3.7.1 the reference first: this, the key (ToPropertyKey), then MakeSuperPropertyReference's GetSuperBase;
+    the value after it, then PutValue }
+  B := AllocRegs(2);
+  LoadThis(B + 1);
+  if Assigned(KeyExpr) then
+  begin
+    K := AllocReg;
+    ExprTo(KeyExpr, K);
+    Emit(Ins(opToPropKey, K, K, 0));
+    KeyOp := -1 - K;
+  end
+  else KeyOp := NewIC(Key);
   H := HomeRegister;
   if H < 0 then
   begin
     H := AllocReg;
     LoadIdent('%home', H);
   end;
-  V := AllocRegs(2);
-  LoadThis(V + 1);
-  if Assigned(KeyExpr) then
-  begin
-    K := ExprAny(KeyExpr);
-    Emit(Ins(opToPropKey, K, K, 0));
-  end
-  else K := -1;
+  Emit(Ins(opSuperBase, B, H, 0));
+  V := AllocReg;
   ExprTo(Value, V);
-  if K >= 0 then Emit(Ins(opSetSuper, V, H, -1 - K)) else Emit(Ins(opSetSuper, V, H, NewIC(Key)));
+  Emit(Ins(opSetSuperB, V, B, KeyOp));
   if Dest <> V then Emit(Ins(opMov, Dest, V, 0));
   FreeTo(Save);
 end;
