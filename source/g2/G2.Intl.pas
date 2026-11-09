@@ -51,7 +51,7 @@ implementation
 
 uses
   SysUtils, Math, G2.Core, G2.Bytecode, G2.VM, G2.Snapshot, IntlTypes, BCP47, IntlLocaleResolver,
-  IntlICU, Goccia.Intl.CLDRData, Goccia.Temporal.TimeZone, G2.Temporal;
+  IntlICU, Goccia.Intl.CLDRData, Goccia.Temporal.TimeZone, G2.Temporal, G2.Builtins;
 
 {$I G2.Intl.inc}
 
@@ -279,8 +279,42 @@ begin
   Result.TimeZoneName := S(17);
 end;
 
+{ a string the UTF-8 round trip of the ICU calls keeps: no lone surrogate }
+function NoLoneSurrogate(const S: UnicodeString): Boolean;
+var I: Integer; C: Word;
+begin
+  I := 1;
+  while I <= Length(S) do
+  begin
+    C := Ord(S[I]);
+    if (C >= $D800) and (C <= $DBFF) and (I < Length(S)) and (Ord(S[I + 1]) >= $DC00) and (Ord(S[I + 1]) <= $DFFF) then
+      Inc(I, 2)
+    else if (C >= $D800) and (C <= $DFFF) then Exit(False)
+    else Inc(I);
+  end;
+  Result := True;
+end;
+
+{ G2.Builtins' CaseMapHook: ICU's full case mapping (Locale '' the root's) }
+function IntlCaseMap(const S: UnicodeString; const Locale: string; Upper: Boolean; var R: UnicodeString): Boolean;
+var O: string;
+begin
+  if not NoLoneSurrogate(S) then Exit(False);
+  if Upper then Result := TryICUUpperCase(Locale, UTF8Encode(S), O) else Result := TryICULowerCase(Locale, UTF8Encode(S), O);
+  if Result then R := UTF8Decode(O);
+end;
+
+{ G2.Builtins' NormalizeHook }
+function IntlNormalize(const S, Form: UnicodeString; var R: UnicodeString): Boolean;
+var O: string;
+begin
+  if not NoLoneSurrogate(S) then Exit(False);
+  Result := TryICUNormalize(UTF8Encode(Form), UTF8Encode(S), O);
+  if Result then R := UTF8Decode(O);
+end;
+
 function Intl_Op(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S, T, Sym1, Sym2: string; Sens: TIntlCollatorSensitivity; RP: TIntlRelativeTimePattern; BI: TIntlBreakIterator;
+var S, T, Sym1, Sym2: string; U: UnicodeString; Sens: TIntlCollatorSensitivity; RP: TIntlRelativeTimePattern; BI: TIntlBreakIterator;
   G: TIntlSegmenterGranularity; Pos: Integer; Dg, W1, W2, W3, W4: Integer; WA: PObj; A: IntlTypes.TStringArray; P: TIntlFormatPartArray; Rules: TIntlPluralRuleSet;
   Ordinal: Boolean; N: Integer;
   procedure Add(const C: string);
@@ -424,6 +458,13 @@ begin
           PopRoots(1);
         end;
       end;
+    60:
+      { the case mapping of String.prototype.toLocaleLowerCase / toLocaleUpperCase }
+      begin
+        if IntlCaseMap(StrToUnicode(StrOf(Args[3])), SArg(Args, Argc, 2), Args[4] = VTrue, U) then Res := StrFromUnicode(U)
+        else if Args[4] = VTrue then Res := StrFromUnicode(UnicodeUpperCase(StrToUnicode(StrOf(Args[3]))))
+        else Res := StrFromUnicode(UnicodeLowerCase(StrToUnicode(StrOf(Args[3]))));
+      end;
     41:
       if TryGetRelativeTimePattern(SArg(Args, Argc, 2), RelUnit(SArg(Args, Argc, 3)), RP) then
       begin
@@ -485,6 +526,8 @@ end;
 procedure InitIntl;
 var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..3] of TValue; Ok: Boolean;
 begin
+  CaseMapHook := @IntlCaseMap;
+  NormalizeHook := @IntlNormalize;
   if not CompilePrelude('<intl>', IntlSrc, T, Err) then raise Exception.Create('intl prelude: ' + string(Err));
   if not MakeScriptClosure(T, Clo) then raise Exception.Create('intl prelude closure');
   if not CallValue(Clo, VUndefined, nil, 0, Fn) then raise Exception.Create('intl prelude run');

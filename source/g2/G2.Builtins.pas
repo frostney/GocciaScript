@@ -11,6 +11,10 @@ uses
   SysUtils, Math, DateUtils, G2.Core, G2.Bytecode, G2.VM;
 
 procedure InitBuiltins;
+var
+  { G2.Intl's full Unicode case mapping (Locale '' the root's) and normalization (Form NFC, NFD, NFKC or NFKD) }
+  CaseMapHook: function(const S: UnicodeString; const Locale: string; Upper: Boolean; var R: UnicodeString): Boolean = nil;
+  NormalizeHook: function(const S, Form: UnicodeString; var R: UnicodeString): Boolean = nil;
 function NewSymbolValue(const Desc: UnicodeString): TValue;
 
 threadvar
@@ -1294,8 +1298,13 @@ function String_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var V: TValue; O: PObj;
 begin
   if Argc = 0 then V := MkPtr(AtomOf(''))
-  else if IsPtr(Args[1]) and (PCell(PtrOf(Args[1]))^.Kind = ckSymbol) then
-    V := StrFromUnicode('Symbol(' + StrToUnicode(StrOf(PValue(PByte(PtrOf(Args[1])) + 8)^)) + ')')
+  { 22.1.1.1 step 2.a: a symbol called without new is its SymbolDescriptiveString (new: ToString throws) }
+  else if (CurNewTarget = VUndefined) and IsPtr(Args[1]) and (PCell(PtrOf(Args[1]))^.Kind = ckSymbol) then
+  begin
+    V := PValue(PByte(PtrOf(Args[1])) + 8)^;
+    if IsString(V) then V := StrFromUnicode('Symbol(' + StrToUnicode(StrOf(V)) + ')')
+    else V := StrFromUnicode('Symbol()');
+  end
   else if not ToStringV(Args[1], V) then Exit(False);
   if CurNewTarget <> VUndefined then
   begin
@@ -1387,11 +1396,22 @@ begin
 end;
 
 function StrProto_LastIndexOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S, Sub: PStr; I, J, Start: Integer; Ok: Boolean; X: Int64;
+var S, Sub: PStr; I, J, Start: Integer; Ok: Boolean; X: Int64; D: Double;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if not StrArg(Args, Argc, 1, Sub) then Exit(False);
-  if not IntArg(Args, Argc, 2, MaxInt, X) then Exit(False);
+  { 22.1.3.11 step 5: a NaN position searches from the end }
+  if (Argc >= 2) and (Args[2] <> VUndefined) and not IsNumber(Args[2]) then
+  begin
+    PushRoot(MkPtr(Sub));
+    Ok := ToNumberV(Args[2], D);
+    Sub := StrOf(RootAt(TempTop - 1));
+    PopRoots(1);
+    if not Ok then Exit(False);
+    Args[2] := MkNumber(D);
+  end;
+  if (Argc >= 2) and IsNumber(Args[2]) and IsNaN(NumOf(Args[2])) then X := MaxInt
+  else if not IntArg(Args, Argc, 2, MaxInt, X) then Exit(False);
   S := StrOf(Args[0]);
   if X < 0 then X := 0;
   Start := S^.Len - Sub^.Len;
@@ -1407,10 +1427,31 @@ begin
   Result := True;
 end;
 
+{ 7.2.8 IsRegExp(argument) true is a TypeError for includes, startsWith and endsWith }
+function RejectRegExp(V: TValue; const Name: UnicodeString): Boolean;
+var M: TValue;
+begin
+  Result := True;
+  if not IsObject(V) then Exit;
+  PushRoot(V);
+  Result := GetElemV(V, SymMatch, M);
+  V := RootAt(TempTop - 1);
+  PopRoots(1);
+  if not Result then Exit;
+  if M <> VUndefined then
+  begin
+    if ToBool(M) then Result := ThrowTypeError('First argument to String.prototype.' + Name + ' must not be a regular expression');
+    Exit;
+  end;
+  if ObjOf(V)^.OKind = 17 then
+    Result := ThrowTypeError('First argument to String.prototype.' + Name + ' must not be a regular expression');
+end;
+
 function StrProto_Includes(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S, Sub: PStr; X: Int64;
 begin
   if not ThisStr(Args, S) then Exit(False);
+  if not RejectRegExp(Arg(Args, Argc, 1), 'includes') then Exit(False);
   if not StrArg(Args, Argc, 1, Sub) then Exit(False);
   if not IntArg(Args, Argc, 2, 0, X) then Exit(False);
   if X < 0 then X := 0;
@@ -1422,6 +1463,7 @@ function StrProto_StartsWith(Args: TArgs; Argc: Integer; var Res: TValue): Boole
 var S, Sub: PStr; X: Int64;
 begin
   if not ThisStr(Args, S) then Exit(False);
+  if not RejectRegExp(Arg(Args, Argc, 1), 'startsWith') then Exit(False);
   if not StrArg(Args, Argc, 1, Sub) then Exit(False);
   if not IntArg(Args, Argc, 2, 0, X) then Exit(False);
   S := StrOf(Args[0]);
@@ -1435,6 +1477,7 @@ function StrProto_EndsWith(Args: TArgs; Argc: Integer; var Res: TValue): Boolean
 var S, Sub: PStr; P: Integer; X: Int64;
 begin
   if not ThisStr(Args, S) then Exit(False);
+  if not RejectRegExp(Arg(Args, Argc, 1), 'endsWith') then Exit(False);
   if not StrArg(Args, Argc, 1, Sub) then Exit(False);
   if not IntArg(Args, Argc, 2, MaxInt, X) then Exit(False);
   S := StrOf(Args[0]);
@@ -1484,20 +1527,100 @@ begin
   Result := True;
 end;
 
+{ 22.1.3.28 / 22.1.3.30 toLowerCase / toUpperCase: ASCII in place (the string itself when nothing changes), the
+  rest by the full Unicode case mapping of CaseMapHook (G2.Intl: ICU's, special casing and final sigma included) }
+function CaseConvert(V: TValue; Upper: Boolean; var Res: TValue): Boolean;
+var S: PStr; I, N: Integer; C: WideChar; Ascii, Change: Boolean; U, R: UnicodeString;
+begin
+  S := StrOf(V);
+  N := S^.Len;
+  Ascii := True; Change := False;
+  for I := 0 to N - 1 do
+  begin
+    C := StrChars(S)[I];
+    if Ord(C) >= 128 then begin Ascii := False; Break; end;
+    if Upper then Change := Change or ((C >= 'a') and (C <= 'z'))
+    else Change := Change or ((C >= 'A') and (C <= 'Z'));
+  end;
+  if Ascii then
+  begin
+    if not Change then begin Res := V; Exit(True); end;
+    SetLength(U, N);
+    for I := 0 to N - 1 do
+    begin
+      C := StrChars(S)[I];
+      if Upper and (C >= 'a') and (C <= 'z') then C := WideChar(Ord(C) - 32)
+      else if not Upper and (C >= 'A') and (C <= 'Z') then C := WideChar(Ord(C) + 32);
+      U[I + 1] := C;
+    end;
+    Res := StrFromUnicode(U);
+    Exit(True);
+  end;
+  U := StrToUnicode(S);
+  if Assigned(CaseMapHook) and CaseMapHook(U, '', Upper, R) then Res := StrFromUnicode(R)
+  else if Upper then Res := StrFromUnicode(UnicodeUpperCase(U))
+  else Res := StrFromUnicode(UnicodeLowerCase(U));
+  Result := True;
+end;
+
 function StrProto_ToUpper(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: PStr;
 begin
   if not ThisStr(Args, S) then Exit(False);
-  Res := StrFromUnicode(UnicodeUpperCase(StrToUnicode(S)));
-  Result := True;
+  Result := CaseConvert(MkPtr(S), True, Res);
 end;
 
 function StrProto_ToLower(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: PStr;
 begin
   if not ThisStr(Args, S) then Exit(False);
-  Res := StrFromUnicode(UnicodeLowerCase(StrToUnicode(S)));
+  Result := CaseConvert(MkPtr(S), False, Res);
+end;
+
+{ 22.1.3.10 / 22.1.3.32 isWellFormed / toWellFormed: a lone surrogate (replaced by U+FFFD) }
+function WellFormed(Args: TArgs; Fix: Boolean; var Res: TValue): Boolean;
+var S: PStr; I, N: Integer; C: Word; Bad: Boolean; U: UnicodeString;
+begin
+  if not ThisStr(Args, S) then Exit(False);
+  S := StrOf(Args[0]);
+  N := S^.Len;
+  Bad := False;
+  I := 0;
+  while I < N do
+  begin
+    C := Ord(StrChars(S)[I]);
+    if (C >= $D800) and (C <= $DBFF) and (I + 1 < N) and (Ord(StrChars(S)[I + 1]) >= $DC00) and
+       (Ord(StrChars(S)[I + 1]) <= $DFFF) then Inc(I, 2)
+    else if (C >= $D800) and (C <= $DFFF) then begin Bad := True; Break; end
+    else Inc(I);
+  end;
+  if not Fix then begin Res := MkBool(not Bad); Exit(True); end;
+  if not Bad then begin Res := Args[0]; Exit(True); end;
+  U := StrToUnicode(S);
+  I := 1;
+  while I <= Length(U) do
+  begin
+    C := Ord(U[I]);
+    if (C >= $D800) and (C <= $DBFF) and (I < Length(U)) and (Ord(U[I + 1]) >= $DC00) and (Ord(U[I + 1]) <= $DFFF) then
+      Inc(I, 2)
+    else
+    begin
+      if (C >= $D800) and (C <= $DFFF) then U[I] := #$FFFD;
+      Inc(I);
+    end;
+  end;
+  Res := StrFromUnicode(U);
   Result := True;
+end;
+
+function StrProto_IsWellFormed(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Result := WellFormed(Args, False, Res);
+end;
+
+function StrProto_ToWellFormed(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Result := WellFormed(Args, True, Res);
 end;
 
 function IsJSWhite(C: WideChar): Boolean; inline;
@@ -1537,24 +1660,44 @@ begin
   Result := True;
 end;
 
+{ 22.1.3.15 String.prototype.normalize ( [ form ] ): NFC by default; an ASCII string is every form already }
 function StrProto_Normalize(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S: PStr;
+var S: PStr; F: TValue; Form: UnicodeString; I: Integer; Ascii: Boolean; R: UnicodeString;
 begin
-  { the spike's inputs are ASCII or already composed }
   if not ThisStr(Args, S) then Exit(False);
-  Res := Args[0];
+  if Arg(Args, Argc, 1) = VUndefined then Form := 'NFC'
+  else
+  begin
+    if not ToStringV(Args[1], F) then Exit(False);
+    Form := StrToUnicode(StrOf(F));
+  end;
+  if (Form <> 'NFC') and (Form <> 'NFD') and (Form <> 'NFKC') and (Form <> 'NFKD') then
+    Exit(ThrowError('RangeError', 'The normalization form should be one of NFC, NFD, NFKC, NFKD.'));
+  S := StrOf(Args[0]);
+  Ascii := True;
+  for I := 0 to S^.Len - 1 do
+    if Ord(StrChars(S)[I]) >= 128 then begin Ascii := False; Break; end;
+  if Ascii or not Assigned(NormalizeHook) or not NormalizeHook(StrToUnicode(S), Form, R) then Res := Args[0]
+  else Res := StrFromUnicode(R);
   Result := True;
 end;
 
+{ 22.1.3.19 String.prototype.repeat ( count ) }
 function StrProto_Repeat(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S: PStr; N: Int64; T, U: UnicodeString; I: Integer;
+var S: PStr; D: Double; N, I, L: Int64; U: UnicodeString;
 begin
   if not ThisStr(Args, S) then Exit(False);
-  if not IntArg(Args, Argc, 1, 0, N) then Exit(False);
-  if N < 0 then Exit(ThrowError('RangeError', 'Invalid count value'));
-  T := StrToUnicode(StrOf(Args[0]));
-  U := '';
-  for I := 1 to N do U := U + T;
+  if Arg(Args, Argc, 1) = VUndefined then D := 0
+  else if not NumArg(Args, Argc, 1, D) then Exit(False);
+  if IsNaN(D) then D := 0;
+  if (D < 0) or IsInfinite(D) then Exit(ThrowError('RangeError', 'Invalid count value: ' + FloatToStr(D)));
+  S := StrOf(Args[0]);
+  N := Trunc(D);
+  L := S^.Len;
+  if (N = 0) or (L = 0) then begin Res := MkPtr(AtomOf('')); Exit(True); end;
+  if L * N > 536870888 then Exit(ThrowError('RangeError', 'Invalid string length'));
+  SetLength(U, L * N);
+  for I := 0 to N - 1 do Move(StrChars(S)[0], U[I * L + 1], L * SizeOf(WideChar));
   Res := StrFromUnicode(U);
   Result := True;
 end;
@@ -1594,6 +1737,12 @@ begin
     if IsNaN(LimD) or IsInfinite(LimD) then Lim := 0
     else Lim := Int64(Trunc(LimD)) and $FFFFFFFF;   { ToUint32 }
   end;
+  { 22.1.3.23 steps 5-6: ToString(separator) before the limit's early return }
+  if Arg(Args, Argc, 1) <> VUndefined then
+  begin
+    if not StrArg(Args, Argc, 1, Sep) then Exit(False);
+    Args[1] := MkPtr(Sep);
+  end;
   A := NewArray(0, 8);
   PushRoot(MkPtr(A));
   if Lim = 0 then begin Res := RootAt(TempTop - 1); PopRoots(1); Exit(True); end;
@@ -1604,7 +1753,7 @@ begin
     PopRoots(1);
     Exit(True);
   end;
-  if not StrArg(Args, Argc, 1, Sep) then begin PopRoots(1); Exit(False); end;
+  Sep := StrOf(Args[1]);
   PushRoot(MkPtr(Sep));
   S := StrOf(Args[0]);
   if Sep^.Len = 0 then
@@ -3017,8 +3166,10 @@ begin
   N(StringProto, 'toLocaleUpperCase', StrProto_ToUpper, 0);
   N(StringProto, 'toLocaleLowerCase', StrProto_ToLower, 0);
   N(StringProto, 'repeat', StrProto_Repeat, 1);
-  N(StringProto, 'padStart', StrProto_PadStart, 2);
-  N(StringProto, 'padEnd', StrProto_PadEnd, 2);
+  N(StringProto, 'padStart', StrProto_PadStart, 1);
+  N(StringProto, 'padEnd', StrProto_PadEnd, 1);
+  N(StringProto, 'isWellFormed', StrProto_IsWellFormed, 0);
+  N(StringProto, 'toWellFormed', StrProto_ToWellFormed, 0);
   N(StringProto, 'split', StrProto_Split, 2);
   N(StringProto, 'replace', StrProto_ReplaceOne, 2);
   N(StringProto, 'replaceAll', StrProto_ReplaceAll, 2);

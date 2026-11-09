@@ -1506,6 +1506,24 @@
     cdp(r, "caseFirst", s.caseFirst);
     return r;
   } }.resolvedOptions);
+  // 19.1.2 / 19.1.3 String.prototype.toLocaleLowerCase / toLocaleUpperCase: TransformCase. Only az, lt and tr have
+  // language-sensitive case mappings (LookupMatchingLocaleByPrefix); the rest map as the root locale does.
+  function transformCase(S, locales, upper) {
+    var requested = CanonicalizeLocaleList(locales);
+    var requestedLocale = requested.length > 0 ? requested[0] : DefaultLocale();
+    var lang = removeUnicodeExtension(requestedLocale).split("-")[0];
+    if (lang !== "az" && lang !== "lt" && lang !== "tr") lang = "";
+    return intlOp(60, lang, S, upper);
+  }
+  def(String.prototype, "toLocaleLowerCase", { toLocaleLowerCase(locales = undefined) {
+    if (this === null || this === undefined) throw typeError("String.prototype.toLocaleLowerCase called on null or undefined");
+    return transformCase(Str(this), locales, false);
+  } }.toLocaleLowerCase);
+  def(String.prototype, "toLocaleUpperCase", { toLocaleUpperCase(locales = undefined) {
+    if (this === null || this === undefined) throw typeError("String.prototype.toLocaleUpperCase called on null or undefined");
+    return transformCase(Str(this), locales, true);
+  } }.toLocaleUpperCase);
+
   // 22.1.3.12 String.prototype.localeCompare (ECMA-402 19.1.1)
   def(String.prototype, "localeCompare", { localeCompare(that, locales = undefined, options = undefined) {
     if (this === null || this === undefined) throw typeError("String.prototype.localeCompare called on null or undefined");

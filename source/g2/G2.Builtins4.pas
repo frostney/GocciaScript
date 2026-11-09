@@ -760,11 +760,6 @@ const
     '  def(AP, "with", function (i, v) { var a = this.slice(), n = a.length; i = toInt(i); if (i < 0) i += n; if (i < 0 || i >= n) throw new RangeError("Invalid index"); a[i] = v; return a; });'#10 +
     '  def(AP, "toLocaleString", function toLocaleString(locales = undefined, options = undefined) { var a = Object(this), n = a.length >>> 0, r = "";'#10 +
     '    for (var i = 0; i < n; i++) { if (i > 0) r += ","; var x = a[i]; if (x != null) r += String(x.toLocaleString(locales, options)); } return r; });'#10 +
-    '  def(String, "fromCodePoint", function () { var s = ""; for (var i = 0; i < arguments.length; i++) { var c = +arguments[i];'#10 +
-    '    if (c !== toInt(c) || c < 0 || c > 0x10FFFF) throw new RangeError("Invalid code point " + c);'#10 +
-    '    if (c < 0x10000) s += String.fromCharCode(c); else { c -= 0x10000; s += String.fromCharCode(0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF)); } } return s; });'#10 +
-    '  def(String, "raw", function (strs) { var r = strs.raw, s = ""; for (var i = 0; i < r.length; i++) { s += r[i]; if (i + 1 < r.length && i + 1 < arguments.length) s += arguments[i + 1]; } return s; });'#10 +
-    '  def(String.prototype, "isWellFormed", function () { "use strict"; return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(this); });'#10 +
     '  def(Number.prototype, "toLocaleString", function () { return String(this.valueOf()); });'#10 +
     '  Object.defineProperty(Number, "MIN_VALUE", {value: 5e-324});'#10 +
     '  ["LOG10E", Math.LOG10E || 0.4342944819032518, "LOG2E", 1.4426950408889634, "SQRT1_2", 0.7071067811865476].forEach(function (v, i, a) { if (i % 2 === 0) Object.defineProperty(Math, v, {value: a[i + 1]}); });'#10 +

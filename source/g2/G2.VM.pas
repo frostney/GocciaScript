@@ -2399,7 +2399,8 @@ begin
       S := StrOf(Src);
       if I >= S^.Len then begin Done := True; Exit(True); end;
       C := 1;
-      if (Ord(StrChars(S)[I]) >= $D800) and (Ord(StrChars(S)[I]) <= $DBFF) and (I + 1 < S^.Len) then C := 2;
+      if (Ord(StrChars(S)[I]) >= $D800) and (Ord(StrChars(S)[I]) <= $DBFF) and (I + 1 < S^.Len) and
+         (Ord(StrChars(S)[I + 1]) >= $DC00) and (Ord(StrChars(S)[I + 1]) <= $DFFF) then C := 2;
       O^.Aux2 := MkInt(I + C);
       Value := SubString(S, I, C);
       Done := False;

@@ -838,4 +838,36 @@
   def(Object.prototype, "__lookupGetter__", legacyAccessors.__lookupGetter__);
   def(Object.prototype, "__lookupSetter__", legacyAccessors.__lookupSetter__);
 
+  // ---- 22.1.2.2 String.fromCodePoint, 22.1.2.4 String.raw (ToString as a template literal does it) ----
+  var fromCharCode = String.fromCharCode, floor = Math.floor, min = Math.min;
+  var stringStatics = {
+    fromCodePoint(codePoint) {
+      var s = "";
+      for (var i = 0; i < arguments.length; i++) {
+        var c = +arguments[i];
+        if (c !== c || c === Infinity || c === -Infinity || c !== (c < 0 ? -floor(-c) : floor(c)) || c < 0 || c > 0x10FFFF)
+          throw new RangeError("Invalid code point " + c);
+        if (c < 0x10000) s += fromCharCode(c);
+        else { c -= 0x10000; s += fromCharCode(0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF)); }
+      }
+      return s;
+    },
+    raw(template) {
+      if (template === undefined || template === null) throw new TypeErr("String.raw requires a template object");
+      var raw = ToObj(template).raw;
+      if (raw === undefined || raw === null) throw new TypeErr("String.raw requires a template object with raw strings");
+      var literals = ToObj(raw), len = +literals.length;
+      len = len !== len || len <= 0 ? 0 : (len === Infinity ? 9007199254740991 : min(floor(len), 9007199254740991));
+      if (len === 0) return "";
+      var r = "";
+      for (var i = 0; ; i++) {
+        r += `${literals[i]}`;
+        if (i + 1 === len) return r;
+        if (i + 1 < arguments.length) r += `${arguments[i + 1]}`;
+      }
+    }
+  };
+  def(String, "fromCodePoint", stringStatics.fromCodePoint);
+  def(String, "raw", stringStatics.raw);
+
 })
