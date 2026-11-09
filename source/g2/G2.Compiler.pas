@@ -5027,6 +5027,15 @@ begin
       CompileFieldValue(A.Value, Dest, AName);
       StoreIdentRef(A.Name, K, Dest);
     end
+    else if ResolveLocal(FS, A.Name, R) and (R = Dest) then
+    begin
+      { the binding's own register as the destination (let y = (y = 1)): the value goes elsewhere first, so the
+        store's TDZ check still sees the hole }
+      V := AllocReg;
+      CompileFieldValue(A.Value, V, AName);
+      StoreIdent(A.Name, V);
+      Emit(Ins(opMov, Dest, V, 0));
+    end
     else
     begin
       CompileFieldValue(A.Value, Dest, AName);   { NamedEvaluation of an anonymous function or class }
@@ -5198,10 +5207,24 @@ begin
   end
   else if E is TGocciaDestructuringAssignmentExpression then
   begin
-    ExprTo(TGocciaDestructuringAssignmentExpression(E).Right, Dest);
-    R := AllocReg;
-    Emit(Ins(opMov, R, Dest, 0));
-    BindPattern(TGocciaDestructuringAssignmentExpression(E).Left, R, False, False);
+    if (Dest < Length(FS.VarRegs)) and (FS.VarRegs[Dest] > 0) then
+    begin
+      { a binding's register as the destination (let y = [y] = []): the pattern's stores still see its hole, and
+        the expression's value is the right side's, whatever the pattern assigns to the binding }
+      R := AllocReg;
+      ExprTo(TGocciaDestructuringAssignmentExpression(E).Right, R);
+      V := AllocReg;
+      Emit(Ins(opMov, V, R, 0));
+      BindPattern(TGocciaDestructuringAssignmentExpression(E).Left, V, False, False);
+      Emit(Ins(opMov, Dest, R, 0));
+    end
+    else
+    begin
+      ExprTo(TGocciaDestructuringAssignmentExpression(E).Right, Dest);
+      R := AllocReg;
+      Emit(Ins(opMov, R, Dest, 0));
+      BindPattern(TGocciaDestructuringAssignmentExpression(E).Left, R, False, False);
+    end;
   end;
   FreeTo(Save);
 end;
