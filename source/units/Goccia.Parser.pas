@@ -1054,6 +1054,9 @@ procedure TGocciaParser.ValidateParameterEarlyErrors(
   const ALine, AColumn: Integer;
   const ARejectDuplicateBindingNames, ARejectAwaitExpression,
   ARejectYieldExpression, ARejectStrictBindingNames: Boolean);
+var
+  I: Integer;
+  Word: string;
 begin
   // ES2026 §15.1.1, §15.3.1, §15.4.1, §15.8.1, §15.9.1:
   // parameter-list early errors depend on the syntactic form and the
@@ -1084,6 +1087,24 @@ begin
     raise TGocciaSyntaxError.Create(
       'eval and arguments are not allowed in strict function parameters',
       ALine, AColumn, FFileName, FSourceLines);
+
+  // ES2026 §13.1.1: let, yield and the strict mode reserved words are no
+  // BindingIdentifier of strict mode code, which a function with a "use
+  // strict" directive makes of its parameters retroactively.
+  if ARejectStrictBindingNames then
+    for I := Low(StrictModeReservedKeywords) to High(StrictModeReservedKeywords) + 2 do
+    begin
+      if I <= High(StrictModeReservedKeywords) then
+        Word := StrictModeReservedKeywords[I]
+      else if I = High(StrictModeReservedKeywords) + 1 then
+        Word := KEYWORD_LET
+      else
+        Word := KEYWORD_YIELD;
+      if ParameterListBindsName(AParameters, Word) then
+        raise TGocciaSyntaxError.Create(
+          'Unexpected strict mode reserved word ''' + Word + ''' in parameters',
+          ALine, AColumn, FFileName, FSourceLines);
+    end;
 end;
 
 procedure TGocciaParser.ValidateStrictFunctionBindingName(
@@ -1094,6 +1115,11 @@ begin
      ((AName = 'eval') or (AName = IDENTIFIER_ARGUMENTS)) then
     raise TGocciaSyntaxError.Create(
       'eval and arguments are not allowed as strict function names',
+      ALine, AColumn, FFileName, FSourceLines);
+  if Assigned(AFunction) and AFunction.ParsedInStrictMode and
+     (IsStrictModeReservedKeyword(AName) or (AName = KEYWORD_LET)) then
+    raise TGocciaSyntaxError.Create(
+      'Unexpected strict mode reserved word ''' + AName + ''' as a function name',
       ALine, AColumn, FFileName, FSourceLines);
 end;
 
@@ -5657,7 +5683,7 @@ begin
         end
         else
         begin
-          ParamName := ConsumeIdentifierBinding('Expected parameter name after "..."',
+          ParamName := ConsumeVarBindingName('Expected parameter name after "..."',
             SSuggestProvideRestParameterName).Lexeme;
           Result[ParamCount].Name := ParamName;
           Result[ParamCount].IsPattern := False;
@@ -5696,7 +5722,7 @@ begin
       end
       else
       begin
-        ParamName := ConsumeIdentifierBinding('Expected parameter name',
+        ParamName := ConsumeVarBindingName('Expected parameter name',
           SSuggestProvideParameterName).Lexeme;
         Result[ParamCount].Name := ParamName;
         Result[ParamCount].IsPattern := False;
@@ -10761,7 +10787,9 @@ begin
             begin
               Advance;
               if IsIdentifierBindingToken(
-                PeekWithLexicalGoal(glgInputElementDiv).TokenType) then
+                PeekWithLexicalGoal(glgInputElementDiv).TokenType) or
+                 ((PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttLet) and
+                  EffectiveNonStrictModeEnabled) then
                 Advance;
               if CheckWithLexicalGoal(gttColon, glgInputElementDiv) then
               begin
