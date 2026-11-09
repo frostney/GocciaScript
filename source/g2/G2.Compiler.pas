@@ -211,6 +211,7 @@ type
     TryCount: Integer;
     IsArrow: Boolean;
     NoArguments: Boolean;
+    NoNewTarget: Boolean;   { goal 4: the caller has no non-arrow function around it (new.target a SyntaxError) }
     UsingCapReg: Integer;   { the innermost using block's dispose capability register, -1 none }
     IsStaticBlock: Boolean;   { ClassStaticBlockStatementList: await is reserved in it }   { a field initializer or static block: arguments is a SyntaxError in it and its arrows }
     HomeReg, NewTargetReg: Integer;   { reserved registers, -1 for arrows }
@@ -844,6 +845,10 @@ begin
     begin
       if (F = WithFuncs[I]) and (WithKinds[I] = 2) then
         Inside := EvalDepth[F.Scopes[S].Bindings[F.Scopes[S].Find(N)].Reg] <= WithDepths[I]
+      else if (F = WithFuncs[I]) and (WithKinds[I] = 3) then
+        { a with statement around the direct eval: the caller's bindings come innermost first, so one listed
+          before the with's object is inside its body }
+        Inside := F.Scopes[S].Find(N) < WithScopes[I]
       else if F = WithFuncs[I] then Inside := S >= WithScopes[I]
       else
       begin
@@ -877,7 +882,7 @@ begin
       gives undefined }
     if ThisReg >= 0 then
     begin
-      if ForCall and (WithKinds[Idx[I]] <> 0) then Emit(Ins(opLoadUndef, ThisReg, 0, 0))
+      if ForCall and (WithKinds[Idx[I]] in [1, 2]) then Emit(Ins(opLoadUndef, ThisReg, 0, 0))
       else Emit(Ins(opMov, ThisReg, T, 0));
     end;
     SetLength(Ends, Length(Ends) + 1);
@@ -1189,7 +1194,7 @@ var F: TFuncState;
 begin
   F := FS;
   while (F <> nil) and F.IsArrow do F := F.Parent;
-  Result := (F = nil) or ((F.Parent = nil) and not F.IsEvalOuter);
+  Result := (F = nil) or ((F.Parent = nil) and not F.IsEvalOuter) or (F.IsEvalOuter and F.NoNewTarget);
 end;
 
 { ---------------- literals ---------------- }
@@ -1844,6 +1849,12 @@ begin
     begin
       Seen.Add('%noargs');
       Add('%noargs', 0, 0, 0);
+    end;
+    { an arrow at a Script's top level: its eval code may not contain new.target (19.2.1.1 step 5.a) }
+    if NewTargetOutside then
+    begin
+      Seen.Add('%nonewtarget');
+      Add('%nonewtarget', 0, 0, 0);
     end;
     if (F <> nil) and not F.IsEvalOuter and (F.Parent <> nil) then
     begin
@@ -6038,6 +6049,7 @@ begin
         Delete(Desc, 1, P1);
         Fields := Entry.Split([#2]);
         if Fields[0] = '%noargs' then Outer.NoArguments := True;
+        if Fields[0] = '%nonewtarget' then Outer.NoNewTarget := True;
         { this code's own hidden with and eval environment names come after the caller's }
         if (Copy(Fields[0], 1, 8) = '%evalenv') and TryStrToInt(Copy(Fields[0], 9, 20), Ser) and (Ser >= C.WithSerial) then
           C.WithSerial := Ser + 1;
@@ -6061,12 +6073,19 @@ begin
       { the eval variable environments of the caller and the functions around it, outermost first: each holds
         the names no binding of its function (or one inside it) does }
       for D := 64 downto 0 do
+      begin
         for I := 0 to Outer.Scopes[0].Count - 1 do
           if (Copy(Outer.Scopes[0].Bindings[I].Name, 1, 8) = '%evalenv') and (C.EvalDepth[Outer.Scopes[0].Bindings[I].Reg] = D) then
           begin
             C.PushWithEntry(Outer.Scopes[0].Bindings[I].Name, Outer, 0, 2, D);
             if D = 0 then C.EvalVarEnv := Outer.Scopes[0].Bindings[I].Name;
           end;
+        { the with statements around the call, outermost first (the bindings come innermost first): kind 3,
+          Scope the object's position }
+        for I := Outer.Scopes[0].Count - 1 downto 0 do
+          if (Copy(Outer.Scopes[0].Bindings[I].Name, 1, 5) = '%with') and (C.EvalDepth[Outer.Scopes[0].Bindings[I].Reg] = D) then
+            C.PushWithEntry(Outer.Scopes[0].Bindings[I].Name, Outer, I, 3, D);
+      end;
       for I := 0 to Prog.Body.Count - 1 do Nodes.Add(Prog.Body[I]);
       try
         Result := C.CompileFunction('<eval>', Params, nil, True, False, False, False, False, False, nil, Nodes);
