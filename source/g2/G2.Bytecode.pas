@@ -149,6 +149,9 @@ type
     NewTargetReg: Integer;
     IsArrow, IsClassCtor, IsDerived, IsMethod, IsGenerator, IsAsync, IsStrict: Boolean;
     SimpleParams: Boolean;  { no rest, default or pattern parameter: a sloppy one gets a mapped arguments object }
+    { 10.4.4 the arguments object aliases the parameters (a sloppy function with simple parameters whose aliasing
+      the compiler could not rule out: a parameter written, arguments escaping, or a direct eval) }
+    MappedArgs: Boolean;
     ExpectedProps: Integer;
     { new F(...)'s caches (shapes live as long as the engine): F's shape and its prototype property's slot, the
       root shape of the last prototype, the field initializer's slot in F's shape }

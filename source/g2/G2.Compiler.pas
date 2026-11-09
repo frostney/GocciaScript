@@ -256,6 +256,10 @@ type
     TryCount: Integer;
     IsArrow: Boolean;
     NoArguments: Boolean;
+    { 10.4.4 whether a mapped arguments object's aliasing could show: a parameter (registers 1 .. NParamRegs)
+      written, or the arguments object used other than by reading its properties }
+    NParamRegs: Integer;
+    ParamWritten, ArgsEscaped: Boolean;
     NoNewTarget: Boolean;   { goal 4: the caller has no non-arrow function around it (new.target a SyntaxError) }
     UsingCapReg: Integer;   { the innermost using block's dispose capability register, -1 none }
     IsStaticBlock: Boolean;   { ClassStaticBlockStatementList: await is reserved in it }   { a field initializer or static block: arguments is a SyntaxError in it and its arrows }
@@ -307,6 +311,7 @@ type
       init or update): its copy into the destination register can go. Set only for such a top-level node, and
       cleared by CompileAssign / CompileIncrement on entry }
     TopDiscard: Boolean;
+    SafeArgsUse: Boolean;   { the arguments load being compiled is a property read's object (no escape) }
     EvalDepth: array of Integer;    { goal 4: per caller binding, how many functions out of the caller it is }
     EvalVarEnv: UnicodeString;      { goal 4: the caller's eval variable environment binding ('' none) }
     EvalEnvNames: TStringList;      { goal 4: the var names the eval code adds to that environment }
@@ -441,6 +446,9 @@ type
     procedure CompileBinary(E: TGocciaBinaryExpression; Dest: Integer);
     procedure CompileUnary(E: TGocciaUnaryExpression; Dest: Integer);
     function ArgumentsBound: Boolean;
+    procedure NoteWrite(const N: UnicodeString);
+    function ImplicitArgumentsFirst: Boolean;
+    function NoteWriteB(const N: UnicodeString): Boolean;
     procedure CompileCall(E: TGocciaCallExpression; Dest: Integer);
     procedure CompileNew(E: TGocciaNewExpression; Dest: Integer);
     function CompileArgs(Args: TObjectList<TGocciaExpression>; Base: Integer; out Spread: Boolean): Integer;
@@ -1014,12 +1022,15 @@ begin
     if InTDZ(N) then Emit(Ins(opCheckHole, Dest, 0, AtomConst(N)));
     Exit;
   end;
-  U := ResolveUpval(FS, N);
-  if U >= 0 then
+  if (N <> 'arguments') or not ImplicitArgumentsFirst then
   begin
-    Emit(Ins(opGetUpv, Dest, U, 0));
-    if InTDZ(N) then Emit(Ins(opCheckHole, Dest, 0, AtomConst(N)));
-    Exit;
+    U := ResolveUpval(FS, N);
+    if U >= 0 then
+    begin
+      Emit(Ins(opGetUpv, Dest, U, 0));
+      if InTDZ(N) then Emit(Ins(opCheckHole, Dest, 0, AtomConst(N)));
+      Exit;
+    end;
   end;
   if (Goal = 3) and (ModImportSlot(N) >= 0) then begin EmitModGet(ModImportSlot(N), Dest); Exit; end;
   if N = 'arguments' then
@@ -1037,6 +1048,7 @@ begin
     if (F <> nil) and ((F.Parent <> nil) or (Goal = 0)) then
     begin
       F.ArgsUsed := True;
+      if not SafeArgsUse then F.ArgsEscaped := True;
       if F = FS then Emit(Ins(opMov, Dest, F.ArgsReg, 0))
       else Emit(Ins(opGetUpv, Dest, ResolveUpval(FS, '%arguments'), 0));
       Exit;
@@ -1113,6 +1125,7 @@ end;
 procedure TCompiler.StoreIdentStatic(const N: UnicodeString; Src: Integer; IsInit: Boolean);
 var Reg, U, T: Integer; F: TFuncState;
 begin
+  NoteWrite(N);
   if ResolveLocal(FS, N, Reg) then
   begin
     if not IsInit then
@@ -1164,6 +1177,7 @@ begin
     if (F <> nil) and ((F.Parent <> nil) or (Goal = 0)) then
     begin
       F.ArgsUsed := True;
+      F.ArgsEscaped := True;
       if F = FS then begin if F.ArgsReg <> Src then Emit(Ins(opMov, F.ArgsReg, Src, 0)); end
       else Emit(Ins(opSetUpv, Src, ResolveUpval(FS, '%arguments'), 0));
       Exit;
@@ -1381,6 +1395,7 @@ begin
         end
         else DeclareLocal(Params[I].Name, False);
       end;
+    F.NParamRegs := J;
     if not IsArrow then
     begin
       F.HomeReg := DeclareInScope(FS.Scopes[0], '%home', True);
@@ -1516,6 +1531,7 @@ begin
             { 10.2.11 step 27: a var named arguments is the arguments object's binding, initialized to it }
             FS.Scopes[0].Add('arguments', F.ArgsReg, False);
             F.ArgsUsed := True;
+            F.ArgsEscaped := True;
           end
           else if FS.Scopes[0].Find(Names[I]) < 0 then
           begin
@@ -1590,6 +1606,8 @@ begin
       T^.HomeReg := F.HomeReg;
     end;
     if F.ArgsUsed then T^.ArgsReg := F.ArgsReg;
+    T^.MappedArgs := F.ArgsUsed and not T^.IsStrict and T^.SimpleParams and (F.NParamRegs > 0) and
+      (F.ParamWritten or F.ArgsEscaped or SloppyEval);
     if F.CtorUsed then T^.Code[CtorNop] := Ins(opLoadCallee, F.CtorReg, 0, 0);
     if F.NewTargetUsed then
     begin
@@ -2245,6 +2263,7 @@ begin
         FreeTo(R);
         Continue;
       end;
+      NoteWrite(FD.Name);
       EmitClosure(R, T);
     end;
   end;
@@ -2790,6 +2809,7 @@ begin
       FreeTo(T);
       Continue;
     end;
+    if D.IsVar and V.HasInitializer then NoteWrite(V.Name);
     if not D.IsVar then R := DeclareLocal(V.Name, D.IsConst)
     else if not ResolveLocal(FS, V.Name, R) then
     begin
@@ -4450,6 +4470,40 @@ end;
 
 { 13.5.1.2 delete IdentifierReference (non-strict code): a with object's or the global object's property is
   deleted; a declarative binding is not (false); an unresolvable name gives true }
+{ a store to N: when N is a parameter of its function, that function's arguments object (if any) would show the
+  aliasing (10.4.4): ParamWritten }
+{ arguments here is the nearest non-arrow function's own (10.2.11): a binding of that name outside that function
+  (an outer function's var arguments) is shadowed by it }
+function TCompiler.ImplicitArgumentsFirst: Boolean;
+var F, G, BF: TFuncState; S: TScope; J: Integer;
+begin
+  Result := False;
+  F := FS;
+  while (F <> nil) and F.IsArrow do F := F.Parent;
+  if (F = nil) or F.IsEvalOuter or ((F.Parent = nil) and (Goal <> 0)) then Exit;
+  if not FindBinding('arguments', BF, S, J) then Exit;
+  G := FS;
+  while G <> F.Parent do
+  begin
+    if G = BF then Exit;   { the binding is the function's own (a var or parameter named arguments) or an arrow's }
+    G := G.Parent;
+  end;
+  Result := True;
+end;
+
+procedure TCompiler.NoteWrite(const N: UnicodeString);
+var F: TFuncState; S: TScope; J: Integer;
+begin
+  if not FindBinding(N, F, S, J) then Exit;
+  if (S = F.Scopes[0]) and (S.Bindings[J].Reg >= 1) and (S.Bindings[J].Reg <= F.NParamRegs) then F.ParamWritten := True;
+end;
+
+function TCompiler.NoteWriteB(const N: UnicodeString): Boolean;
+begin
+  NoteWrite(N);
+  Result := True;
+end;
+
 { the name arguments is a function's arguments object binding here (as LoadIdentStatic resolves it) }
 function TCompiler.ArgumentsBound: Boolean;
 var F: TFuncState;
@@ -4571,7 +4625,11 @@ begin
   IsLink := ChainBegin(SavedJ);
   Save := FS.FreeReg;
   ChainObject(E.ObjectExpr);
+  { arguments.x and arguments[k] read the object only: no escape for its mapping (10.4.4) }
+  SafeArgsUse := (E.ObjectExpr is TGocciaIdentifierExpression) and
+    (TGocciaIdentifierExpression(E.ObjectExpr).Name = 'arguments');
   O := ExprAny(E.ObjectExpr);
+  SafeArgsUse := False;
   ChainLink := False;
   if E.Optional then ChainAdd(EmitJ(opJNullish, O, 0));
   if E.Computed then
@@ -4916,6 +4974,7 @@ begin
     A := TGocciaAssignmentExpression(E);
     { 13.15.2 step 1.c: NamedEvaluation only when the target IsIdentifierRef (a parenthesized one is not) }
     AName := A.Name;
+    NoteWrite(A.Name);
     if Assigned(A.Target) and A.Target.Parenthesized then AName := '';
     if ResolveLocal(FS, A.Name, R) and not BindingIsConst(A.Name) and not InTDZ(A.Name) and
        ((WithCount = 0) or (WithsFor(A.Name, WithIdxScratch) = 0)) then
@@ -4985,7 +5044,7 @@ begin
       Emit(Ins(opSetElem, O, K, V));
     end;
   end
-  else if (E is TGocciaCompoundAssignmentExpression) and
+  else if (E is TGocciaCompoundAssignmentExpression) and NoteWriteB(TGocciaCompoundAssignmentExpression(E).Name) and
           not (TGocciaCompoundAssignmentExpression(E).Operator in [gttLogicalAndAssign, gttLogicalOrAssign, gttNullishCoalescingAssign]) and
           PureRead(TGocciaCompoundAssignmentExpression(E).Value) and
           ResolveLocal(FS, TGocciaCompoundAssignmentExpression(E).Name, R) and
@@ -5122,6 +5181,7 @@ begin
   if E.Operand is TGocciaIdentifierExpression then
   begin
     Name := TGocciaIdentifierExpression(E.Operand).Name;
+    NoteWrite(Name);
     if ResolveLocal(FS, Name, R) and not BindingIsConst(Name) and not InTDZ(Name) and
        ((WithCount = 0) or (WithsFor(Name, WithIdxScratch) = 0)) then
     begin

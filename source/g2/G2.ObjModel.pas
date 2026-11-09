@@ -233,7 +233,21 @@ begin
   end;
 end;
 
+function GetOwnPropertyV0(O: TValue; Key: PStr; var D: TPropDesc; var Found: Boolean): Boolean; forward;
+
+{ 10.4.4.1 a mapped arguments object's [[GetOwnProperty]]: a mapped index's value is the parameter's }
 function GetOwnPropertyV(O: TValue; Key: PStr; var D: TPropDesc; var Found: Boolean): Boolean;
+var U: PUpval; Idx: Int64;
+begin
+  Result := GetOwnPropertyV0(O, Key, D, Found);
+  if Result and Found and IsObject(O) and (ObjOf(O)^.OKind = okArgumentsOrd) then
+  begin
+    U := ArgsMapCell(ObjOf(O), Key, Idx);
+    if U <> nil then D.Value := ArgsMapGet(U);
+  end;
+end;
+
+function GetOwnPropertyV0(O: TValue; Key: PStr; var D: TPropDesc; var Found: Boolean): Boolean;
 var P: PObj; S: Integer; Idx: Int64; V: TValue; F: Byte;
 begin
   Found := False;
@@ -534,7 +548,39 @@ begin
   Result := True;
 end;
 
+function DefineOwnPropertyV0(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean; forward;
+
+{ 10.4.4.2 a mapped arguments object's [[DefineOwnProperty]]: an accessor, or a non-writable data property, ends
+  the index's mapping; a value given goes to the parameter too; made non-writable without a value, it keeps the
+  parameter's }
 function DefineOwnPropertyV(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean;
+var U: PUpval; Idx: Int64; D: TPropDesc;
+begin
+  if not IsObject(O) or (ObjOf(O)^.OKind <> okArgumentsOrd) then Exit(DefineOwnPropertyV0(O, Key, DIn, Ok));
+  U := ArgsMapCell(ObjOf(O), Key, Idx);
+  if U = nil then Exit(DefineOwnPropertyV0(O, Key, DIn, Ok));
+  D := DIn;
+  if not IsAccessorDesc(D) and not D.HasValue and D.HasWritable and not D.Writable then
+  begin
+    D.HasValue := True;
+    D.Value := ArgsMapGet(U);
+  end;
+  PushRoot(O); PushRoot(D.Value);
+  Result := DefineOwnPropertyV0(O, Key, D, Ok);
+  D.Value := RootAt(TempTop - 1); O := RootAt(TempTop - 2);
+  PopRoots(2);
+  if not Result or not Ok then Exit;
+  U := ArgsMapCell(ObjOf(O), Key, Idx);
+  if U = nil then Exit;
+  if IsAccessorDesc(DIn) then ArgsUnmap(ObjOf(O), Idx)
+  else
+  begin
+    if DIn.HasValue then ArgsMapSet(U, D.Value);
+    if DIn.HasWritable and not DIn.Writable then ArgsUnmap(ObjOf(O), Idx);
+  end;
+end;
+
+function DefineOwnPropertyV0(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean;
 var P: PObj; Cur, M, D: TPropDesc; Found: Boolean; Idx: Int64; Ext: Boolean; Dbl: Double;
 begin
   D := DIn;
@@ -1018,6 +1064,9 @@ function SetWithReceiver(O: TValue; Key: PStr; V, Receiver: TValue; var Ok: Bool
 var D, Ex: TPropDesc; Found, FoundEx: Boolean; P, R: TValue; ND: TPropDesc; Idx: Int64;
 begin
   if ObjOf(O)^.OKind = okProxy then Exit(ProxySetOM(O, Key, V, Receiver, Ok));
+  { 10.4.4.4 a mapped arguments object as its own receiver: a mapped index's parameter too }
+  if (ObjOf(O)^.OKind = okArgumentsOrd) and (O = Receiver) and (ArgsMapCell(ObjOf(O), Key, Idx) <> nil) then
+    ArgsMapSet(ArgsMapCell(ObjOf(O), Key, Idx), V);
   { 10.4.6.9 a namespace's [[Set]]: false }
   if ObjOf(O)^.OKind = okModuleNS then begin Ok := False; Exit(True); end;
   { 10.4.5.5 a typed array's [[Set]] of a canonical numeric key: its own receiver stores (TypedArraySetElement,

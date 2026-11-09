@@ -260,6 +260,11 @@ function CanonicalNumericNonIndex(Key: PStr): Boolean;
 function TAStoreValue(O: TValue; Idx: Int64; V: TValue): Boolean;
 { [[Get]] with a receiver (proxies through their trap) }
 function GetFromObject(O: PObj; Key: PStr; Receiver: TValue; var Res: TValue): Boolean;
+{ a mapped arguments object's parameter map (10.4.4): the upvalue of index Key, nil when unmapped }
+function ArgsMapCell(O: PObj; Key: PStr; var Idx: Int64): PUpval;
+function ArgsMapGet(U: PUpval): TValue;
+procedure ArgsMapSet(U: PUpval; V: TValue);
+procedure ArgsUnmap(O: PObj; Idx: Int64);
 { [[Delete]] on an ordinary object (and the exotic ones G2 models in it): False for a non-configurable property }
 function DeleteIfConfigurable(O: PObj; Key: PStr): Boolean;
 function ProxyDelete(PV: TValue; Key: PStr; var Ok: Boolean): Boolean;
@@ -1373,7 +1378,76 @@ begin
 end;
 
 { [[Delete]] on an ordinary object: a non-configurable property stays (the delete reports false) }
+{ 10.4.4 a mapped arguments object: okArgumentsOrd whose Aux1 is the parameter map, a value array whose entry I
+  is parameter I's upvalue (open while the call runs, then closed) or undefined once the index is unmapped }
+function ArgsMapCell(O: PObj; Key: PStr; var Idx: Int64): PUpval;
+var E: PValueArray;
+begin
+  Result := nil;
+  if (O^.OKind <> okArgumentsOrd) or ((O^.Aux1 and TAG_MASK) <> TAG_PTR) then Exit;
+  if not IndexFromString(Key, Idx) then Exit;
+  E := PValueArray(PtrOf(O^.Aux1));
+  if (Idx >= E^.Len) or ((E^.Data[Idx] and TAG_MASK) <> TAG_PTR) then Exit;
+  Result := PUpval(PtrOf(E^.Data[Idx]));
+end;
+
+function ArgsMapGet(U: PUpval): TValue;
+begin
+  if U^.StackIndex >= 0 then Result := VStack[U^.StackIndex] else Result := U^.Value;
+end;
+
+procedure ArgsMapSet(U: PUpval; V: TValue);
+begin
+  if U^.StackIndex >= 0 then VStack[U^.StackIndex] := V
+  else
+  begin
+    U^.Value := V;
+    WriteBarrier(@U^.Hdr, V);
+  end;
+end;
+
+procedure ArgsUnmap(O: PObj; Idx: Int64);
+begin
+  ValueArrayStore(PValueArray(PtrOf(O^.Aux1)), Idx, VUndefined);
+end;
+
+{ CreateMappedArgumentsObject's parameter map: the arguments object in register ArgsReg made ordinary (its
+  indices shape properties), its first N indices aliasing the parameter registers 1 .. N }
+function XMapArguments(Base, N, ArgsReg: Integer): Boolean; noinline;
+var E: PValueArray; I: Integer; V: TValue;
+begin
+  VStack[Base + ArgsReg] := DemoteArguments(VStack[Base + ArgsReg]);
+  E := NewValueArray(N);
+  E^.Len := N;
+  for I := 0 to N - 1 do E^.Data[I] := VUndefined;
+  PushRoot(MkPtr(E));
+  for I := 0 to N - 1 do
+  begin
+    V := FindOrOpenUpval(Base + 1 + I);
+    ValueArrayStore(PValueArray(PtrOf(RootAt(TempTop - 1))), I, V);
+  end;
+  ObjOf(VStack[Base + ArgsReg])^.Aux1 := RootAt(TempTop - 1);
+  WriteBarrier(@ObjOf(VStack[Base + ArgsReg])^.Hdr, RootAt(TempTop - 1));
+  PopRoots(1);
+  Result := True;
+end;
+
+function DeleteIfConfigurable0(O: PObj; Key: PStr): Boolean; forward;
+
+{ 10.4.4.5 [[Delete]]: an index deleted from a mapped arguments object is unmapped }
 function DeleteIfConfigurable(O: PObj; Key: PStr): Boolean;
+var U: PUpval; Idx: Int64;
+begin
+  U := ArgsMapCell(O, Key, Idx);
+  if U = nil then Exit(DeleteIfConfigurable0(O, Key));
+  PushRoot(MkPtr(O));
+  Result := DeleteIfConfigurable0(O, Key);
+  O := ObjOf(RootAt(TempTop - 1));
+  PopRoots(1);
+  if Result then ArgsUnmap(O, Idx);
+end;
+
+function DeleteIfConfigurable0(O: PObj; Key: PStr): Boolean;
 var S: Integer; Idx: Int64; V: TValue; Found: Boolean;
 begin
   S := ShapeLookup(O^.Shape, Key);
@@ -1453,11 +1527,17 @@ end;
 function ProxyGet(PV: TValue; Key: PStr; Receiver: TValue; var Res: TValue): Boolean; forward;
 
 function GetFromObject(O: PObj; Key: PStr; Receiver: TValue; var Res: TValue): Boolean;
-var S: Integer; Flags: Byte; Acc: PAccessor; P: TValue; Idx: Int64; V: TValue; Found: Boolean;
+var S: Integer; Flags: Byte; Acc: PAccessor; P: TValue; Idx: Int64; V: TValue; Found: Boolean; U: PUpval;
 begin
   while True do
   begin
     if O^.OKind = okProxy then Exit(ProxyGet(MkPtr(O), Key, Receiver, Res));
+    { 10.4.4.3 [[Get]] of a mapped index: the parameter's current value }
+    if (O^.OKind = okArgumentsOrd) and ((O^.Aux1 and TAG_MASK) = TAG_PTR) then
+    begin
+      U := ArgsMapCell(O, Key, Idx);
+      if U <> nil then begin Res := ArgsMapGet(U); Exit(True); end;
+    end;
     if (O^.OKind = okModuleNS) and ((Key^.Hdr.Extra and kfSymbol) = 0) then
     begin
       if not NSLookup(O, Key, True, Res, Found) then Exit(False);
@@ -1684,6 +1764,7 @@ end;
 { 10.1.9.2 OrdinarySetWithOwnDescriptor (receiver = the object): Ok False where [[Set]] returns false }
 function SetOnObjectOk(Obj: TValue; Key: PStr; V: TValue; var Ok: Boolean): Boolean;
 var O, W: PObj; S: Integer; Flags: Byte; P: TValue; Acc: PAccessor; Idx: Int64; Dummy: TValue; D1, D2: Double;
+  U: PUpval;
 begin
   Ok := True;
   O := ObjOf(Obj);
@@ -1703,6 +1784,12 @@ begin
     end;
     if IndexFromString(Key, Idx) then Exit(TAStoreValue(Obj, Idx, V));
     if CanonicalNumericNonIndex(Key) then Exit(TAStoreValue(Obj, -1, V));
+  end;
+  { 10.4.4.4 [[Set]] with the arguments object as its own receiver: a mapped index's parameter too }
+  if (O^.OKind = okArgumentsOrd) and ((O^.Aux1 and TAG_MASK) = TAG_PTR) then
+  begin
+    U := ArgsMapCell(O, Key, Idx);
+    if U <> nil then ArgsMapSet(U, V);
   end;
   if (O^.OKind = okArguments) and ((Key = AtomLength) or (IndexFromString(Key, Idx) and (Idx >= O^.Elements^.Len))) then
   begin
@@ -3234,7 +3321,18 @@ begin
     I := Min(Argc, NP) + 1;
     if I < T^.MaxRegs then FillQWord(R[I], T^.MaxRegs - I, VUndefined);
     if T^.RestReg >= 0 then R[T^.RestReg] := Tmp;
-    if T^.ArgsReg >= 0 then R[T^.ArgsReg] := ArgsObj;
+    if T^.ArgsReg >= 0 then
+    begin
+      R[T^.ArgsReg] := ArgsObj;
+      if T^.MappedArgs and (Min(Argc, NP) > 0) then
+      begin
+        PushRoot(FV);
+        XMapArguments(Base, Min(Argc, NP), T^.ArgsReg);
+        FV := RootAt(TempTop - 1);
+        PopRoots(1);
+        FObj := ObjOf(FV);
+      end;
+    end;
   end
   else
   begin
@@ -3928,18 +4026,27 @@ end;
 
 { the newest frame becomes a suspended generator: its registers move into the generator object }
 function SuspendNewGenerator: TValue;
-var Fr: PFrame; T: PFuncTemplate; State: PValueArray; G: PObj; I: Integer; P: TValue;
+var Fr: PFrame; T: PFuncTemplate; State: PValueArray; G: PObj; I, NU: Integer; P: TValue;
 begin
   Fr := @Frames[FrameTop - 1];
   T := Fr^.Tpl;
-  State := NewValueArray(T^.MaxRegs + 4);
-  State^.Len := T^.MaxRegs + 4;
+  { the open upvalues of the frame: none, unless a mapped arguments object (10.4.4) opened its parameters' }
+  NU := 0;
+  while (OpenCount - 1 - NU >= 0) and (PUpval(PtrOf(OpenUpvals[OpenCount - 1 - NU]))^.StackIndex >= Fr^.Base) do Inc(NU);
+  State := NewValueArray(T^.MaxRegs + 4 + NU * 2);
+  State^.Len := T^.MaxRegs + 4 + NU * 2;
   Fr := @Frames[FrameTop - 1];
   Move(VStack[Fr^.Base], State^.Data[0], T^.MaxRegs * SizeOf(TValue));
   State^.Data[T^.MaxRegs] := MkInt(-1);
   State^.Data[T^.MaxRegs + 1] := MkInt(T^.MaxRegs);
   State^.Data[T^.MaxRegs + 2] := MkInt(0);
-  State^.Data[T^.MaxRegs + 3] := MkInt(0);   { no open upvalues: nothing ran yet }
+  State^.Data[T^.MaxRegs + 3] := MkInt(NU);
+  for I := 0 to NU - 1 do
+  begin
+    State^.Data[T^.MaxRegs + 4 + I * 2] := OpenUpvals[OpenCount - NU + I];
+    State^.Data[T^.MaxRegs + 5 + I * 2] := MkInt(PUpval(PtrOf(OpenUpvals[OpenCount - NU + I]))^.StackIndex - Fr^.Base);
+  end;
+  if (NU > 0) and ((State^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) then Remember(@State^.Hdr);
   PushRoot(MkPtr(State));
   { 27.5.3.1 OrdinaryCreateFromConstructor(functionObject, "%GeneratorPrototype%"): the function's prototype
     property (a data property: generator functions' is not configurable) }
