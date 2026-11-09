@@ -395,6 +395,7 @@ type
     procedure StoreIdent(const N: UnicodeString; Src: Integer; IsInit: Boolean = False);
     procedure CompileBinary(E: TGocciaBinaryExpression; Dest: Integer);
     procedure CompileUnary(E: TGocciaUnaryExpression; Dest: Integer);
+    function ArgumentsBound: Boolean;
     procedure CompileCall(E: TGocciaCallExpression; Dest: Integer);
     procedure CompileNew(E: TGocciaNewExpression; Dest: Integer);
     function CompileArgs(Args: TObjectList<TGocciaExpression>; Base: Integer; out Spread: Boolean): Integer;
@@ -1458,7 +1459,13 @@ begin
           Names.Clear;
         end;
         for I := 0 to Names.Count - 1 do
-          if FS.Scopes[0].Find(Names[I]) < 0 then
+          if (Names[I] = 'arguments') and (F.ArgsReg >= 0) and (FS.Scopes[0].Find('arguments') < 0) then
+          begin
+            { 10.2.11 step 27: a var named arguments is the arguments object's binding, initialized to it }
+            FS.Scopes[0].Add('arguments', F.ArgsReg, False);
+            F.ArgsUsed := True;
+          end
+          else if FS.Scopes[0].Find(Names[I]) < 0 then
           begin
             R := DeclareLocal(Names[I], False);
             { a call fills the registers past the arguments with undefined: only code that ran before
@@ -3195,6 +3202,9 @@ begin
     Emit(Ins(opEndTry, 0, 0, 0));
     JEnd := EmitJ(opJmp, 0, 0);
     PatchHere(Inner);
+    { a throw leaves the try block's scopes without their opClose: the closures made in them keep their
+      variables, whose registers the catch block may reuse }
+    Emit(Ins(opClose, ExcReg + 1, 0, 0));
     PushScope;
     if S.CatchParam <> '' then
     begin
@@ -3217,6 +3227,7 @@ begin
     FinallyStmt(S.FinallyBlock);
     JEnd2 := EmitJ(opJmp, 0, 0);
     PatchHere(Outer);
+    Emit(Ins(opClose, ExcReg + 1, 0, 0));
     FinallyStmt(S.FinallyBlock);
     Emit(Ins(opThrow, ExcReg, 0, 0));
     PatchHere(JEnd2);
@@ -4343,6 +4354,16 @@ end;
 
 { 13.5.1.2 delete IdentifierReference (non-strict code): a with object's or the global object's property is
   deleted; a declarative binding is not (false); an unresolvable name gives true }
+{ the name arguments is a function's arguments object binding here (as LoadIdentStatic resolves it) }
+function TCompiler.ArgumentsBound: Boolean;
+var F: TFuncState;
+begin
+  F := FS;
+  while (F <> nil) and F.IsArrow do F := F.Parent;
+  if (F <> nil) and F.IsEvalOuter then Exit(ResolveUpval(FS, '%arguments') >= 0);
+  Result := (F <> nil) and ((F.Parent <> nil) or (Goal = 0));
+end;
+
 procedure TCompiler.CompileDeleteIdent(const N: UnicodeString; Dest: Integer);
 var C, I, T, J, R: Integer; Ends: TJumpList;
 begin
@@ -4363,7 +4384,8 @@ begin
       FreeTo(T);
     end;
   end;
-  if ResolveLocal(FS, N, R) or (ResolveUpval(FS, N) >= 0) or ((Goal = 3) and (ModImportSlot(N) >= 0)) then
+  if ResolveLocal(FS, N, R) or (ResolveUpval(FS, N) >= 0) or ((Goal = 3) and (ModImportSlot(N) >= 0)) or
+     ((N = 'arguments') and ArgumentsBound) then
     Emit(Ins(opLoadFalse, Dest, 0, 0))
   else
     Emit(Ins(opDelGlobal, Dest, 0, AtomConst(N)));
