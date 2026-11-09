@@ -1482,7 +1482,9 @@ begin
   Result := False;
   if not IsObject(F) or (ObjOf(F)^.OKind <> okFunction) then Exit;
   T := PFuncTemplate(ObjOf(F)^.Native);
-  Result := not (T^.IsStrict or T^.IsArrow or T^.IsMethod or T^.IsClassCtor or T^.IsGenerator or T^.IsAsync);
+  { a Script's, a module's or eval code's own closure is no function of the program's }
+  Result := not (T^.IsStrict or T^.IsArrow or T^.IsMethod or T^.IsClassCtor or T^.IsGenerator or T^.IsAsync or
+    T^.TopLevel);
 end;
 
 { %ThrowTypeError%, the getter and setter of Function.prototype.caller and .arguments. Read on a non-strict
