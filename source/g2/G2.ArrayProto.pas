@@ -20,7 +20,7 @@ procedure InitArrayProto;
 implementation
 
 uses
-  SysUtils, Math, G2.Core, G2.VM, G2.ObjModel;
+  SysUtils, Math, G2.Core, G2.VM, G2.ObjModel, G2.BigIntV;
 
 const
   MAX_SAFE = 9007199254740991.0;   { 2^53 - 1 }
@@ -466,6 +466,16 @@ begin
     begin
       { no getters can run: scan the elements }
       E := ObjOf(Args[0])^.Elements;
+      { an object, symbol, boolean, null or undefined is strictly equal only to itself: compare the bits }
+      if not (IsNumber(X) or IsString(X) or IsBigInt(X)) then
+      begin
+        while (K < Len) and (K < E^.Len) do
+        begin
+          if E^.Data[K] = X then begin Res := IdxVal(K); Exit(True); end;
+          Inc(K);
+        end;
+        Exit(True);
+      end;
       while (K < Len) and (K < E^.Len) do
       begin
         V := E^.Data[K];
