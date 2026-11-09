@@ -75,6 +75,51 @@ implementation
 uses
   TypInfo, G2.VM;
 
+type
+  { an expression that makes a closure (a function, arrow, method, accessor or class) }
+  TClosureScan = class(TGocciaASTChildVisitor)
+  public
+    Found: Boolean;
+    procedure VisitChild(const ANode: TGocciaASTNode); override;
+    procedure EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+      const AFlags: TGocciaASTPartFlags); override;
+    procedure LeavePart; override;
+  end;
+
+procedure TClosureScan.VisitChild(const ANode: TGocciaASTNode);
+begin
+  if (ANode = nil) or Found then Exit;
+  if (ANode is TGocciaFunctionExpression) or (ANode is TGocciaArrowFunctionExpression) or
+     (ANode is TGocciaObjectMethodDefinition) or (ANode is TGocciaClassExpression) or
+     (ANode is TGocciaGetterExpression) or (ANode is TGocciaSetterExpression) then
+  begin
+    Found := True;
+    Exit;
+  end;
+  ANode.ForEachChild(Self);
+end;
+
+procedure TClosureScan.EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+  const AFlags: TGocciaASTPartFlags);
+begin
+end;
+
+procedure TClosureScan.LeavePart;
+begin
+end;
+
+function MakesClosure(N: TGocciaASTNode): Boolean;
+var Sc: TClosureScan;
+begin
+  Sc := TClosureScan.Create;
+  try
+    Sc.VisitChild(N);
+    Result := Sc.Found;
+  finally
+    Sc.Free;
+  end;
+end;
+
 { G2_DUMP=<name part>: the bytecode of each compiled function whose name contains it, on stderr (a debugging aid) }
 procedure DumpTemplates(T: PFuncTemplate; const Pat: UnicodeString);
 var I: Integer; Q: QWord; Nm: UnicodeString;
@@ -2548,13 +2593,15 @@ begin
   if IsBreak then AddJump(FS.Loops[Found].BreakJumps, J) else AddJump(FS.Loops[Found].ContJumps, J);
 end;
 
-{ a finally block's normal completion leaves the statement's completion value as it was (14.15.3) }
+{ a finally block's normal completion leaves the statement's completion value as it was (14.15.3); a break or
+  continue out of it carries the finally block's own value, undefined when none of its statements gave one }
 procedure TCompiler.FinallyStmt(B: TGocciaASTNode);
 var Sv: Integer;
 begin
   if FS.CplP1 = 0 then begin Stmt(B); Exit; end;
   Sv := AllocReg;
   Emit(Ins(opMov, Sv, FS.CplP1 - 1, 0));
+  Emit(Ins(opLoadUndef, FS.CplP1 - 1, 0, 0));
   Stmt(B);
   Emit(Ins(opMov, FS.CplP1 - 1, Sv, 0));
   FreeTo(Sv);
@@ -2712,10 +2759,12 @@ begin
     end;
     if D.IsVar and V.HasInitializer and (WithsFor(V.Name, WithIdxScratch) > 0) then
     begin
-      { 14.3.2.1: the initializer goes to ResolveBinding(name), which a with object around it can hold }
-      T := FS.FreeReg; AllocReg;
+      { 14.3.2.1: the initializer goes to ResolveBinding(name), resolved before it runs, which a with object
+        around it can hold }
+      T := FS.FreeReg; AllocRegs(2);
+      ResolveWithEnv(V.Name, T + 1);
       CompileFieldValue(V.Initializer, T, V.Name);
-      StoreIdent(V.Name, T, False);
+      StoreIdentRef(V.Name, T + 1, T);
       FreeTo(T);
       Continue;
     end;
@@ -2792,7 +2841,7 @@ begin
 end;
 
 procedure TCompiler.CompileFor(S: TGocciaForStatement);
-var Top, ContTarget, BreakTarget, R0, InitClose: Integer; FalseL: TJumpList; HeadDepth: Integer; HasCond: Boolean;
+var Top, ContTarget, BreakTarget, R0, InitClose, UpdClose: Integer; FalseL: TJumpList; HeadDepth: Integer; HasCond: Boolean;
   HL: TList<TGocciaASTNode>; UsingFor, Async: Boolean; Cap, ExcReg, OuterTry, SavedCap: Integer;
 begin
   CheckStatementBody(S.Body, False, FS.Tpl^.IsStrict);
@@ -2843,18 +2892,22 @@ begin
   BeginLoop(True);
   Stmt(S.Body);
   ContTarget := Here;
-  { per-iteration bindings: close the head scope's captures before the update }
-  if FS.Scopes[HeadDepth - 1].Captured then
-  begin
+  { per-iteration bindings: close the head scope's captures before the update (CreatePerIterationEnvironment);
+    a closure the update itself makes belongs to the next iteration's copy }
+  if Assigned(S.Update) and MakesClosure(S.Update) then UpdClose := Emit(Ins(opNop, 0, 0, 0)) else UpdClose := -1;
+  if FS.Scopes[HeadDepth - 1].Captured and (UpdClose < 0) then
     Emit(Ins(opClose, FS.Scopes[HeadDepth - 1].BaseReg, 0, 0));
-    FS.Tpl^.Code[InitClose] := Ins(opClose, FS.Scopes[HeadDepth - 1].BaseReg, 0, 0);
-  end;
   if Assigned(S.Update) then
   begin
     TopDiscard := IsDiscardable(S.Update);
     ExprAny(S.Update);
     TopDiscard := False;
     FreeTo(FS.Scopes[FS.ScopeCount - 1].BaseReg + FS.Scopes[FS.ScopeCount - 1].Count);
+  end;
+  if FS.Scopes[HeadDepth - 1].Captured then
+  begin
+    if UpdClose >= 0 then FS.Tpl^.Code[UpdClose] := Ins(opClose, FS.Scopes[HeadDepth - 1].BaseReg, 0, 0);
+    FS.Tpl^.Code[InitClose] := Ins(opClose, FS.Scopes[HeadDepth - 1].BaseReg, 0, 0);
   end;
   PatchTo(EmitJ(opJmp, 0, 0), Top);
   BreakTarget := Here;
