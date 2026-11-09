@@ -2348,7 +2348,12 @@ var I: Integer; Lbls: TStringList;
 begin
   { a label named arguments is not an IdentifierReference: only the reserved-word rules apply to labels }
   for I := 0 to St.LabelCount - 1 do
-    if St.Labels[I] <> 'arguments' then CheckIdent(St.Labels[I]);
+    if St.Labels[I] <> 'arguments' then
+    begin
+      CheckIdent(St.Labels[I]);
+      { await is a reserved word in module code (13.1.1) }
+      if (Goal = 3) and (St.Labels[I] = 'await') then raise EEarlySyntaxError.Create('Unexpected reserved word ''await''');
+    end;
   { 14.13.1 / B.3.1: only a plain function declaration can be labelled, and only in non-strict code }
   if (St is TGocciaFunctionDeclaration) and (FS.Tpl^.IsStrict or TGocciaFunctionDeclaration(St).FunctionExpression.IsAsync or
      TGocciaFunctionDeclaration(St).FunctionExpression.IsGenerator) then
@@ -4744,6 +4749,10 @@ begin
   end
   else if E is TGocciaAwaitExpression then
   begin
+    { 15.7.1: a class static block's body is not async code, whatever encloses the class }
+    F := FS;
+    while (F <> nil) and F.IsArrow do F := F.Parent;
+    if (F <> nil) and F.IsStaticBlock then raise EEarlySyntaxError.Create('await is not allowed in a class static block');
     Save := FS.FreeReg;
     R := AllocReg;
     ExprTo(TGocciaAwaitExpression(E).Operand, R);
@@ -5306,6 +5315,9 @@ var I, J, K: Integer; N: TGocciaASTNode; Names, ExpNames, ExpLocals: TStringList
   procedure AddImport(const Local, Req, Imported: UnicodeString);
   begin
     if C.ModImportNames.IndexOf(Local) >= 0 then raise EEarlySyntaxError.Create('Identifier ''' + Local + ''' has already been declared');
+    { module code is strict: eval and arguments are no BindingIdentifiers }
+    if (Local = 'eval') or (Local = 'arguments') then
+      raise EEarlySyntaxError.Create('Unexpected eval or arguments in strict mode');
     C.ModImportNames.Add(Local);
     SetLength(MI.Imports, Length(MI.Imports) + 1);
     with MI.Imports[High(MI.Imports)] do

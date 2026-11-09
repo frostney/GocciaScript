@@ -143,6 +143,10 @@ type
     FActiveLabels: TUnicodeStringList;
     FActiveIterationLabels: TUnicodeStringList;
     FDirectLabelStart: Integer;
+    // the next Statement is the body of if, a loop, with or a label (not a
+    // StatementListItem): `let` there is an identifier when a line break follows it
+    FSubStatementNext: Boolean;
+    FSubStatement: Boolean;
     { Where the last module specifier consumed was, for the declaration that
       is built after it (RecordModuleSpecifier). }
     FModuleSpecifierStart: Integer;
@@ -2329,11 +2333,23 @@ begin
   if NextToken.TokenType = gttLeftBracket then
     Exit(True);
 
+  // ES2026 §14.3.1: a LexicalDeclaration has no [no LineTerminator here] after
+  // let, so in a statement list `let` followed by a binding identifier on the
+  // next line declares it (`let \n yield` in a generator is then an early
+  // error, not two statements).
+  if not FSubStatement and (IsIdentifierBindingToken(NextToken.TokenType) or
+     ((NextToken.TokenType = gttIdentifier) and
+      ((NextToken.Lexeme = 'yield') or (NextToken.Lexeme = 'await')))) then
+    Exit(True);
+
+  if IsIdentifierBindingToken(NextToken.TokenType) and
+     not (FAutomaticSemicolonInsertion and HasLineTerminatorBetween(Peek, NextToken)) then
+    Exit(True);
+
   if FAutomaticSemicolonInsertion and HasLineTerminatorBetween(Peek, NextToken) then
     Exit(False);
 
-  Result := IsIdentifierBindingToken(NextToken.TokenType) or
-    (NextToken.TokenType = gttLeftBrace);
+  Result := NextToken.TokenType = gttLeftBrace;
 end;
 
 function TGocciaParser.IsForHeadLexicalDeclarationStart: Boolean;
@@ -6440,6 +6456,8 @@ end;
 function TGocciaParser.Statement: TGocciaStatement;
 begin
   EnterNesting;
+  FSubStatement := FSubStatementNext;
+  FSubStatementNext := False;
   Result := UnguardedStatement;
   ValidateScopedStatementBindings(Result, FFileName, GetSourceLinesLazily);
   LeaveNesting;
@@ -6721,6 +6739,7 @@ begin
   SavedDirectLabelStart := FDirectLabelStart;
   FDirectLabelStart := -1;
   try
+    FSubStatementNext := True;
     Result := Statement;
   finally
     FDirectLabelStart := SavedDirectLabelStart;
@@ -6742,6 +6761,7 @@ begin
 
   FDirectLabelStart := -1;
   try
+    FSubStatementNext := True;
     Result := Statement;
   finally
     while FActiveIterationLabels.Count > SavedIterationLabelCount do
@@ -6832,6 +6852,7 @@ begin
     FDirectLabelStart := FActiveLabels.Count;
   FActiveLabels.Add(LabelToken.Lexeme);
   try
+    FSubStatementNext := True;
     Result := Statement;
     if IsInvalidLabeledDeclaration(Result) then
     begin
@@ -7853,6 +7874,14 @@ begin
 
       if CheckContextualKeyword(KEYWORD_OF) then
       begin
+        // ES2026 §14.7.5: for ( [lookahead ∉ { let, async of }] LeftHandSideExpression of ...
+        if (TargetExpr is TGocciaIdentifierExpression) and (FCurrent > 0) and
+           not FTokens[FCurrent - 1].ContainsEscape and
+           (FTokens[FCurrent - 1].Lexeme = TGocciaIdentifierExpression(TargetExpr).Name) and
+           ((TGocciaIdentifierExpression(TargetExpr).Name = 'let') or
+            ((TGocciaIdentifierExpression(TargetExpr).Name = 'async') and not IsAwait)) then
+          raise TGocciaSyntaxError.Create('The left-hand side of a for-of loop may not be ''let'' or ''async''',
+            Peek.Line, Peek.Column, FFileName, FSourceLines);
         AssignmentTarget := ConvertToPattern(TargetExpr);
         Advance; // consume 'of'
         IterableExpr := Assignment;
