@@ -1653,6 +1653,8 @@ begin
   begin
     AE := TGocciaArrowFunctionExpression(E);
     NextSloppyEval := deuSloppyDirectEval in AE.DirectEvalUsage;
+    { an arrow's own "use strict" directive makes its code strict (11.2.2) }
+    if HasUseStrictDirective(AE.Body) then PendingStrict := 1;
     T := CompileFunction(NameHint, AE.Parameters, AE.Body, True, False, False, False, False, AE.IsAsync);
     T^.SourceRange := AE.SourceRange;
     EmitClosure(Dest, T);
