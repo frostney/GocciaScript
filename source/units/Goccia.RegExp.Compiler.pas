@@ -58,6 +58,13 @@ const
   SErrorRegExpNestingLimit = 'Invalid regular expression: nesting exceeds the supported limit of %d levels';
   SErrorRegExpNestingStack = 'Invalid regular expression: nesting is too deep for the native stack that is left';
 
+var
+  // ES2026 B.1.2 SourceCharacterIdentityEscape: without the u or v flag, a
+  // pattern with no group name reads \k as the identity escape k, so
+  // /\k<4>/ matches "k<4>". Off by default, where a malformed \k<name> is a
+  // SyntaxError; an embedder that follows Annex B turns it on.
+  RegExpIdentityK: Boolean = False;
+
 function CompileRegExp(const APattern, AFlags: string): TRegExpProgram;
 { An instruction word for AOp with operand AOperand. Raises EConvertError
   (a SyntaxError for the pattern) when AOperand does not fit in the 24-bit
@@ -198,6 +205,8 @@ type
     procedure CompileModifierGroup;
     function ParseGroupName: string;
     function ParseUnicodeEscape: Cardinal;
+    function ParseLegacyOctal: Cardinal;
+    function ParseUnicodeEscapeOrU: Cardinal;
     function ParseHexEscape(ADigits: Integer): Cardinal;
     function ParseQuantifierBound(out ADigits: string): Int64;
     procedure EmitCharMatch(ACodePoint: Cardinal);
@@ -2247,6 +2256,45 @@ begin
   end;
 end;
 
+// ES2026 B.1.2 LegacyOctalEscape (without the u or v flag), FPos at its
+// first digit: up to three octal digits when the first is 0-3, two when it
+// is 4-7.
+function TRegExpCompiler.ParseLegacyOctal: Cardinal;
+var
+  First: Cardinal;
+begin
+  First := Ord(Advance) - Ord('0');
+  Result := First;
+  if not AtEnd and (Peek >= '0') and (Peek <= '7') then
+  begin
+    Result := Result * 8 + Cardinal(Ord(Advance) - Ord('0'));
+    if (First <= 3) and not AtEnd and (Peek >= '0') and (Peek <= '7') then
+      Result := Result * 8 + Cardinal(Ord(Advance) - Ord('0'));
+  end;
+end;
+
+// \u: a RegExpUnicodeEscapeSequence; without the u or v flag an incomplete
+// one is the identity escape u (B.1.2 IdentityEscape).
+function TRegExpCompiler.ParseUnicodeEscapeOrU: Cardinal;
+var
+  Start: Integer;
+begin
+  if FUnicode then
+    Exit(ParseUnicodeEscape);
+  if Peek = '{' then
+    Exit(Ord('u'));
+  Start := FPos;
+  try
+    Result := ParseUnicodeEscape;
+  except
+    on E: EConvertError do
+    begin
+      FPos := Start;
+      Result := Ord('u');
+    end;
+  end;
+end;
+
 const
   // A string holds at most MaxInt code units.
   QUANTIFIER_UNREACHABLE_MIN = Int64(MaxInt) + 1;
@@ -2401,7 +2449,11 @@ begin
       end;
     'k':
       begin
-        if Match('<') then
+        // B.1.2: without the u or v flag and with no group name in the
+        // pattern, \k is the identity escape k
+        if RegExpIdentityK and not FUnicode and (Length(FNamedGroups) = 0) then
+          EmitCharMatch(Ord('k'))
+        else if Match('<') then
         begin
           GroupName := ParseGroupName;
           BackrefIdx := -1;
@@ -2440,6 +2492,7 @@ begin
       end;
     '1'..'9':
       begin
+        I := FPos - 1;
         BackrefIdx := Ord(C) - Ord('0');
         while not AtEnd and (Peek >= '0') and (Peek <= '9') do
         begin
@@ -2452,6 +2505,20 @@ begin
         if FUnicode and (BackrefIdx > FPreScanCaptureCount) then
           raise EConvertError.Create(
             'Invalid regular expression: invalid decimal escape in unicode mode');
+        // B.1.2: past the group count, without the u or v flag, \8 and \9 are
+        // identity escapes and \1-\7 start a legacy octal escape
+        if not FUnicode and (BackrefIdx > FPreScanCaptureCount) then
+        begin
+          FPos := I;
+          if (C = '8') or (C = '9') then
+          begin
+            Inc(FPos);
+            EmitCharMatch(Ord(C));
+          end
+          else
+            EmitCharMatch(ParseLegacyOctal);
+          Exit;
+        end;
         // The index shares its operand with three flag bits. (Without the u
         // flag, Annex B reads a number above the group count as an escape;
         // this engine treats it as a back reference, so a number past the
@@ -2470,8 +2537,12 @@ begin
         if FUnicode and not AtEnd and (Peek >= '0') and (Peek <= '9') then
           raise EConvertError.Create(
             'Invalid regular expression: invalid decimal escape in unicode mode');
-        if not AtEnd and (Peek >= '0') and (Peek <= '9') then
-          EmitCharMatch(Ord(C))
+        if not AtEnd and (Peek >= '0') and (Peek <= '7') then
+        begin
+          // B.1.2 LegacyOctalEscape
+          Dec(FPos);
+          EmitCharMatch(ParseLegacyOctal);
+        end
         else
           EmitCharMatch(0);
       end;
@@ -2494,12 +2565,7 @@ begin
         end;
       end;
     'u':
-      begin
-        if (not FUnicode) and (Peek = '{') then
-          EmitCharMatch(Ord('u'))
-        else
-          EmitCharMatch(ParseUnicodeEscape);
-      end;
+      EmitCharMatch(ParseUnicodeEscapeOrU);
     'c':
       begin
         if not AtEnd and (((Peek >= 'a') and (Peek <= 'z')) or
@@ -2509,7 +2575,12 @@ begin
           raise EConvertError.Create(
             'Invalid regular expression: invalid control escape in unicode mode')
         else
-          EmitCharMatch(Ord('c'));
+        begin
+          // B.1.2 ExtendedAtom :: \ [lookahead = c]: the backslash itself,
+          // then c as the next atom
+          Dec(FPos);
+          EmitCharMatch(Ord('\'));
+        end;
       end;
   else
     if FUnicode and not CharInSet(C, ['/', '^', '$', '\', '.', '*', '+',
@@ -2546,8 +2617,12 @@ begin
         if FUnicode and not AtEnd and (Peek >= '0') and (Peek <= '9') then
           raise EConvertError.Create(
             'Invalid regular expression: invalid decimal escape in unicode mode');
-        if not AtEnd and (Peek >= '0') and (Peek <= '9') then
-          AddRange(ARanges, ARangeCount, Ord(C), Ord(C))
+        if not AtEnd and (Peek >= '0') and (Peek <= '7') then
+        begin
+          Dec(FPos);
+          CodePoint := ParseLegacyOctal;
+          AddRange(ARanges, ARangeCount, CodePoint, CodePoint);
+        end
         else
           AddRange(ARanges, ARangeCount, 0, 0);
       end;
@@ -2572,13 +2647,19 @@ begin
       end;
     'u':
       begin
-        if (not FUnicode) and (Peek = '{') then
-          AddRange(ARanges, ARangeCount, Ord('u'), Ord('u'))
-        else
-        begin
-          CodePoint := ParseUnicodeEscape;
-          AddRange(ARanges, ARangeCount, CodePoint, CodePoint);
-        end;
+        CodePoint := ParseUnicodeEscapeOrU;
+        AddRange(ARanges, ARangeCount, CodePoint, CodePoint);
+      end;
+    '1'..'7':
+      if FUnicode then
+        raise EConvertError.Create(
+          'Invalid regular expression: invalid class escape in unicode mode')
+      else
+      begin
+        // B.1.2 ClassEscape: a legacy octal escape
+        Dec(FPos);
+        CodePoint := ParseLegacyOctal;
+        AddRange(ARanges, ARangeCount, CodePoint, CodePoint);
       end;
     'p', 'P':
       begin
@@ -2622,8 +2703,16 @@ begin
         else if FUnicode then
           raise EConvertError.Create(
             'Invalid regular expression: invalid control escape in unicode mode')
+        else if not AtEnd and (((Peek >= '0') and (Peek <= '9')) or (Peek = '_')) then
+          // B.1.2 ClassControlLetter: a decimal digit or _
+          AddRange(ARanges, ARangeCount, Ord(Advance) mod 32,
+            Ord(FPattern[FPos - 1]) mod 32)
         else
-          AddRange(ARanges, ARangeCount, Ord('c'), Ord('c'));
+        begin
+          // B.1.2 ClassAtomNoDash :: \ [lookahead = c]: the backslash, then c
+          Dec(FPos);
+          AddRange(ARanges, ARangeCount, Ord('\'), Ord('\'));
+        end;
       end;
   else
     if FUnicode and not CharInSet(C, ['/', '^', '$', '\', '.', '*', '+',
@@ -2652,15 +2741,19 @@ begin
     if Peek = '\' then
     begin
       Inc(FPos);
-      IsClassEscape := FUnicode and CharInSet(Peek,
-        ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P']);
+      IsClassEscape := CharInSet(Peek, ['d', 'D', 'w', 'W', 's', 'S']) or
+        (FUnicode and CharInSet(Peek, ['p', 'P']));
       SavePos := RangeCount;
       CompileEscape(Ranges, RangeCount);
       if (not AtEnd) and (Peek = '-') and (PeekAt(1) <> ']') then
       begin
-        if IsClassEscape then
+        if IsClassEscape and FUnicode then
           raise EConvertError.Create(
             'Invalid regular expression: character class escape in range');
+        // B.1.2 NonemptyClassRanges: without the u or v flag, a class escape
+        // before - makes no range; the - is the next class atom
+        if IsClassEscape then
+          Continue;
         if RangeCount > SavePos then
         begin
           Lo := Ranges[RangeCount - 1].Lo;
@@ -2673,6 +2766,14 @@ begin
                ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P']) then
               raise EConvertError.Create(
                 'Invalid regular expression: character class escape in range');
+            if CharInSet(Peek, ['d', 'D', 'w', 'W', 's', 'S']) then
+            begin
+              // B.1.2: a class escape after - makes no range either
+              AddRange(Ranges, RangeCount, Lo, Lo);
+              AddRange(Ranges, RangeCount, Ord('-'), Ord('-'));
+              CompileEscape(Ranges, RangeCount);
+              Continue;
+            end;
             SavePos := RangeCount;
             CompileEscape(Ranges, RangeCount);
             if RangeCount > SavePos then
@@ -2709,6 +2810,13 @@ begin
            ['d', 'D', 'w', 'W', 's', 'S', 'p', 'P']) then
           raise EConvertError.Create(
             'Invalid regular expression: character class escape in range');
+        if CharInSet(Peek, ['d', 'D', 'w', 'W', 's', 'S']) then
+        begin
+          AddRange(Ranges, RangeCount, Lo, Lo);
+          AddRange(Ranges, RangeCount, Ord('-'), Ord('-'));
+          CompileEscape(Ranges, RangeCount);
+          Continue;
+        end;
         CompileEscape(Ranges, RangeCount);
         if RangeCount > SavePos then
         begin

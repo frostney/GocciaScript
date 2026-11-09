@@ -1101,6 +1101,7 @@ var C, StrProto_, Getr, Setr: TValue; I, K: Integer; LName: UnicodeString;
     DefineOwn(RegExpProto, AtomOf(Name), F, pfConfigurable or pfAccessor);
   end;
 begin
+  RegExpIdentityK := True;   { Annex B.1.2: \k without group names is the letter k }
   if not RealmInit then Compiled := TDictionary<UnicodeString, PCompiled>.Create;
   RealmVals([@RegExpProto, @StrReplaceOrig, @StrSplitOrig, @StrReplaceAllOrig, @IntactOrig, @SpeciesOrig,
     @RegExpCtorV, @JSFns]);
