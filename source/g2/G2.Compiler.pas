@@ -2053,11 +2053,12 @@ end;
 threadvar
   HoistMaskCache: TClassMaskCache;
 const
-  HoistMaskClasses: array[0..3] of TClass = (
+  HoistMaskClasses: array[0..4] of TClass = (
     TGocciaVariableDeclaration,
     TGocciaDestructuringDeclaration,
     TGocciaClassDeclaration,
-    TGocciaFunctionDeclaration);
+    TGocciaFunctionDeclaration,
+    TGocciaUsingDeclaration);
 
 procedure TCompiler.HoistBlock(L: TList<TGocciaASTNode>);
 var I: Integer; N: TGocciaASTNode; VD: TGocciaVariableDeclaration; K: Integer; FD: TGocciaFunctionDeclaration;
@@ -2067,7 +2068,7 @@ begin
   begin
     N := L[I];
     HoistMask := ClassMaskOf(HoistMaskCache, HoistMaskClasses, N);
-    DeclaringLexical := (HoistMask and Cardinal(7)) <> 0;
+    DeclaringLexical := (HoistMask and Cardinal(7 or 16)) <> 0;
     if (((HoistMask and Cardinal(1)) <> 0)) and not TGocciaVariableDeclaration(N).IsVar then
     begin
       VD := TGocciaVariableDeclaration(N);
@@ -2079,6 +2080,12 @@ begin
       DeclarePatternNames(TGocciaDestructuringDeclaration(N).Pattern, TGocciaDestructuringDeclaration(N).IsConst)
     else if ((HoistMask and Cardinal(4)) <> 0) then
       DeclareLocal(TGocciaClassDeclaration(N).ClassDefinition.Name, False)
+    else if ((HoistMask and Cardinal(16)) <> 0) then
+    begin
+      { using and await using bindings: const, uninitialized until their declaration runs }
+      for K := 0 to High(TGocciaUsingDeclaration(N).Variables) do
+        DeclareLocal(TGocciaUsingDeclaration(N).Variables[K].Name, True);
+    end
     else if ((HoistMask and Cardinal(8)) <> 0) and not GlobalTop and
             ((EvalSkipLocal = nil) or (EvalSkipLocal.IndexOf(TGocciaFunctionDeclaration(N).Name) < 0)) then
       DeclareLocal(TGocciaFunctionDeclaration(N).Name, False);
@@ -3476,7 +3483,18 @@ begin
     raise EEarlySyntaxError.Create('Unexpected strict mode reserved word ''' + Def.Name + '''');
   Base := FS.FreeReg;
   PushScope;
-  if Def.Name <> '' then Self_ := DeclareLocal(Def.Name, True) else Self_ := -1;
+  { 15.7.14 step 4: the class scope's binding of its name is uninitialized until the elements are defined (its
+    heritage and computed keys see it in TDZ) }
+  if Def.Name <> '' then
+  begin
+    DeclaringLexical := True;
+    try
+      Self_ := DeclareLocal(Def.Name, True);
+    finally
+      DeclaringLexical := False;
+    end;
+  end
+  else Self_ := -1;
   Ctor := AllocReg;
   Proto := AllocReg;
   Parent := AllocReg;
