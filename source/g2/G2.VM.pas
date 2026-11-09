@@ -4621,6 +4621,13 @@ begin
               R[A] := MkInt(O^.Elements^.Len);
               Continue;
             end;
+            { the intrinsic length getter of a typed array without own properties over an ordinary buffer }
+            if (TOp(I and $FF) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) and
+               ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached)) = 0) then
+            begin
+              R[A] := MkInt(Int32(UInt32(O^.Aux2)));
+              Continue;
+            end;
             {$IFDEF G2_BAILSTATS}if IC^.PolyCount = 0 then Inc(BailCounts[248]) else if IC^.PolyCount < 4 then Inc(BailCounts[249]) else Inc(BailCounts[253]);{$ENDIF}
             goto LBail;
           end;
@@ -4653,9 +4660,15 @@ begin
           V := R[(I shr 24) and $FFFF];
           if IC^.Slot >= O^.InlineCap then
           begin
-            { an existing property in the overflow slots (SetSlot); an add there may grow them: Execute's }
-            if IC^.NewShape <> nil then goto LBail;
+            { a property in the overflow slots: an existing one, or an add into their spare capacity (growing them
+              allocates: Execute's) }
             E := O^.Overflow;
+            if IC^.NewShape <> nil then
+            begin
+              if (E = nil) or (IC^.Slot - O^.InlineCap >= Integer(E^.Cap)) then goto LBail;
+              if Integer(E^.Len) <= IC^.Slot - O^.InlineCap then E^.Len := IC^.Slot - O^.InlineCap + 1;
+              O^.Shape := IC^.NewShape;
+            end;
             if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
                (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@E^.Hdr);
             E^.Data[IC^.Slot - O^.InlineCap] := V;
@@ -4734,6 +4747,17 @@ begin
                (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@E^.Hdr);
             E^.Data[CI] := V;
             if CI = Integer(E^.Len) then E^.Len := CI + 1;
+            Continue;
+          end;
+          { a store into a hole of an extensible plain object or array: an add, unless a prototype has something
+            at the index (a setter, a read-only element) }
+          if (E <> nil) and (CI >= 0) and (CI < Integer(E^.Len)) and (E^.Data[CI] = VHole) and
+             (O^.OKind in [okPlain, okArray]) and ((O^.OFlags and (8 or 64)) = 0) and not O^.Shape^.HasIndexKeys and
+             ElemMissUndefined(O, CI) then
+          begin
+            if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@E^.Hdr);
+            E^.Data[CI] := V;
             Continue;
           end;
           if (O^.OKind <> okTypedArray) or (CI < 0) or
@@ -5546,6 +5570,14 @@ LReload:
                 O^.Shape := IC^.NewShape;
                 O^.Slots[IC^.Slot] := V;
                 WriteBarrier(@O^.Hdr, V);
+                Continue;
+              end;
+              { an add into the overflow slots' spare capacity }
+              if (O^.Overflow <> nil) and (IC^.Slot - O^.InlineCap < Integer(O^.Overflow^.Cap)) then
+              begin
+                if Integer(O^.Overflow^.Len) <= IC^.Slot - O^.InlineCap then O^.Overflow^.Len := IC^.Slot - O^.InlineCap + 1;
+                O^.Shape := IC^.NewShape;
+                SetSlot(O, IC^.Slot, V);
                 Continue;
               end;
             end;
