@@ -4463,15 +4463,14 @@ procedure TCompiler.EmitSuperSet(const Key: UnicodeString; KeyExpr, Value: TGocc
 var H, Save, K, B, KeyOp, V: Integer;
 begin
   Save := FS.FreeReg;
-  { 13.3.7.1 the reference first: this, the key (ToPropertyKey), then MakeSuperPropertyReference's GetSuperBase;
-    the value after it, then PutValue }
+  { 13.3.7.1 the reference first: this, the key's value, then MakeSuperPropertyReference's GetSuperBase; the
+    value after it, then PutValue (whose ToPropertyKey of the key opSetSuperB does) }
   B := AllocRegs(2);
   LoadThis(B + 1);
   if Assigned(KeyExpr) then
   begin
     K := AllocReg;
     ExprTo(KeyExpr, K);
-    Emit(Ins(opToPropKey, K, K, 0));
     KeyOp := -1 - K;
   end
   else KeyOp := NewIC(Key);
