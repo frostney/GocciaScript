@@ -640,6 +640,15 @@ begin
     PopRoots(1);
     Exit(True);
   end;
+  { 10.4.5.? a typed array's [[PreventExtensions]]: false unless it is fixed length (IsTypedArrayFixedLength: not
+    length-tracking, and its buffer fixed length or shared) }
+  if (ObjOf(O)^.OKind = okTypedArray) and
+     ((Int32(UInt32(ObjOf(O)^.Aux2)) < 0) or
+      ((ObjOf(ObjOf(O)^.Aux1)^.OFlags and (bfResizable or bfShared)) = bfResizable)) then
+  begin
+    Ok := False;
+    Exit(True);
+  end;
   if (ObjOf(O)^.OFlags and 8) = 0 then
     { a new shape: store caches holding an add transition from the old one must miss }
     ObjOf(O)^.Shape := ShapeFork(ObjOf(O)^.Shape);
