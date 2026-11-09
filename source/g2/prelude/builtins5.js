@@ -74,6 +74,8 @@
       return A;
     }
   }.fromAsync;
+  // a built-in function object: its [[Prototype]] is %Function.prototype%, not %AsyncFunction.prototype%
+  Object.setPrototypeOf(fromAsync, Function.prototype);
   def(Array, "fromAsync", fromAsync);
 
   // 7.3.35 GroupBy ( items, callback, keyCoercion )

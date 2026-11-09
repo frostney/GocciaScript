@@ -1037,15 +1037,16 @@ function Promise_Try(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Cap, R: TValue;
 begin
   if not IsObject(Args[0]) then Exit(ThrowTypeError('Promise.try called on a non-object'));
-  if not NewPromiseCapability(Args[0], Cap) then Exit(False);
-  PushRoot(Cap);
+  { the callback first; its value through PromiseResolve (a promise of this constructor comes back as is), its
+    throw through a new capability's reject }
   if CallValue(Arg(Args, Argc, 1), VUndefined, @Args[2], Max(0, Argc - 1), R) then
-  begin
-    if not CapSettle(RootAt(TempTop - 1), 0, R) then begin PopRoots(1); Exit(False); end;
-  end
-  else if not CapSettle(RootAt(TempTop - 1), 1, TakePending) then begin PopRoots(1); Exit(False); end;
+    Exit(PromiseResolveC(Args[0], R, Res));
+  PushRoot(TakePending);
+  if not NewPromiseCapability(Args[0], Cap) then begin PopRoots(1); Exit(False); end;
+  PushRoot(Cap);
+  if not CapSettle(RootAt(TempTop - 1), 1, RootAt(TempTop - 2)) then begin PopRoots(2); Exit(False); end;
   Res := CapPromise(RootAt(TempTop - 1));
-  PopRoots(1);
+  PopRoots(2);
   Result := True;
 end;
 

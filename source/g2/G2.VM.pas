@@ -2516,7 +2516,9 @@ end;
 function GetIterator(V: TValue; var It: TValue): Boolean;
 var F: TValue;
 begin
-  if IsObject(V) and (ObjOf(V)^.OKind = okArray) and (ObjOf(V)^.Shape^.Proto = ArrayProto) then
+  { an array whose @@iterator is the intrinsic one (no own property shadows it) }
+  if IsObject(V) and (ObjOf(V)^.OKind = okArray) and (ObjOf(V)^.Shape^.Proto = ArrayProto) and
+     (ShapeLookup(ObjOf(V)^.Shape, SymKey(SymIterator)) < 0) and ArrayIterationIntact then
   begin
     It := NewArrayIterator(V, 0);
     Exit(True);
