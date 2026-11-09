@@ -22,7 +22,9 @@ type
     opGetSuper, opSetSuper, opLoadHome, opLoadNewTarget,
     opAdd, opSub, opMul, opDiv, opMod, opPow,
     opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr,
-    opAddI,                  { R[A] = R[B] + C (immediate) }
+    opAddI,                  { R[A] = R[B] + C (immediate): binary +, so a string concatenates, a BigInt throws }
+    opSubI,                  { R[A] = R[B] - (-C): binary - of a Number constant, C holds the negated constant }
+    opIncI,                  { R[A] = ToNumeric(R[B]) + C: ++ and --, a BigInt steps by C }
     opNeg, opBitNot, opNot, opTypeof, opToNum, opToNumeric, opToStr, opToPropKey,
     opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe,
     opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef,

@@ -214,7 +214,15 @@ type
     WithNames: array of UnicodeString;
     WithFuncs: array of TFuncState;
     WithScopes: array of Integer;
+    { 0 a with statement; 1 the variable environment a non-strict direct eval adds its vars to (19.2.1.3 step 16),
+      seen from its function; 2 the same seen from eval code, holding the names its caller's bindings at depth
+      above WithDepths don't }
+    WithKinds, WithDepths: array of Integer;
     WithCount, WithSerial: Integer;
+    NextSloppyEval: Boolean;        { the next CompileFunction compiles a function with a non-strict direct eval }
+    EvalDepth: array of Integer;    { goal 4: per caller binding, how many functions out of the caller it is }
+    EvalVarEnv: UnicodeString;      { goal 4: the caller's eval variable environment binding ('' none) }
+    EvalEnvNames: TStringList;      { goal 4: the var names the eval code adds to that environment }
     WithIdxScratch: array[0..63] of Integer;            { eval code (direct or indirect): its top level allows no using }
     GlobalTop: Boolean;             { compiling that top level's own statements (not nested functions) }
     AnnexBFuncs: TDictionary<Pointer, Boolean>;   { B.3.2 declarations: copied to their var binding when evaluated }
@@ -259,11 +267,12 @@ type
     procedure StmtLabeled(St: TGocciaStatement);
     procedure CheckIdent(const N: UnicodeString);
     function WithsFor(const N: UnicodeString; var Idx: array of Integer): Integer;
-    procedure EmitWithChain(const N: UnicodeString; Dest, ThisReg: Integer; var Ends: TJumpList);
+    procedure EmitWithChain(const N: UnicodeString; Dest, ThisReg: Integer; var Ends: TJumpList; ForCall: Boolean = False);
+    procedure PushWithEntry(const Nm: UnicodeString; F: TFuncState; Scope, Kind, Depth: Integer);
     procedure CompileWith(S: TGocciaWithStatement);
     procedure LoadIdentStatic(const N: UnicodeString; Dest: Integer);
     procedure StoreIdentStatic(const N: UnicodeString; Src: Integer; IsInit: Boolean);
-    procedure LoadIdentThis(const N: UnicodeString; Dest, ThisReg: Integer);
+    procedure LoadIdentThis(const N: UnicodeString; Dest, ThisReg: Integer; ForCall: Boolean = False);
     function ModImportSlot(const N: UnicodeString): Integer;
     procedure EmitModGet(Slot: Integer; Dest: Integer);
     procedure EmitModulePrologue;
@@ -780,7 +789,9 @@ begin
     Inside := False;
     if Found then
     begin
-      if F = WithFuncs[I] then Inside := S >= WithScopes[I]
+      if (F = WithFuncs[I]) and (WithKinds[I] = 2) then
+        Inside := EvalDepth[F.Scopes[S].Bindings[F.Scopes[S].Find(N)].Reg] <= WithDepths[I]
+      else if F = WithFuncs[I] then Inside := S >= WithScopes[I]
       else
       begin
         { a function nested in the with's function, compiled now, is inside the with's body }
@@ -797,7 +808,7 @@ end;
 
 { for each applicable with object: if it has the binding, Dest := its value (ThisReg >= 0: the object), then jump
   to the end; the static lookup follows the chain }
-procedure TCompiler.EmitWithChain(const N: UnicodeString; Dest, ThisReg: Integer; var Ends: TJumpList);
+procedure TCompiler.EmitWithChain(const N: UnicodeString; Dest, ThisReg: Integer; var Ends: TJumpList; ForCall: Boolean);
 var Idx: array[0..63] of Integer; C, I, T, J: Integer;
 begin
   SetLength(Ends, 0);
@@ -809,7 +820,13 @@ begin
     Emit(Ins(opWithHas, T + 1, T, AtomConst(N)));
     J := EmitJ(opJF, T + 1, 0);
     Emit(Ins(opWithGet, Dest, T, AtomConst(N)));
-    if ThisReg >= 0 then Emit(Ins(opMov, ThisReg, T, 0));
+    { ThisReg: the reference's environment; a call's this, where an eval's variable environment (declarative)
+      gives undefined }
+    if ThisReg >= 0 then
+    begin
+      if ForCall and (WithKinds[Idx[I]] <> 0) then Emit(Ins(opLoadUndef, ThisReg, 0, 0))
+      else Emit(Ins(opMov, ThisReg, T, 0));
+    end;
     SetLength(Ends, Length(Ends) + 1);
     Ends[High(Ends)] := EmitJ(opJmp, 0, 0);
     PatchHere(J);
@@ -875,11 +892,11 @@ begin
 end;
 
 { a call's callee by name: this is the with object it came from, else undefined }
-procedure TCompiler.LoadIdentThis(const N: UnicodeString; Dest, ThisReg: Integer);
+procedure TCompiler.LoadIdentThis(const N: UnicodeString; Dest, ThisReg: Integer; ForCall: Boolean);
 var Ends: TJumpList; I: Integer;
 begin
   CheckIdent(N);
-  EmitWithChain(N, Dest, ThisReg, Ends);
+  EmitWithChain(N, Dest, ThisReg, Ends, ForCall);
   LoadIdentStatic(N, Dest);
   Emit(Ins(opLoadUndef, ThisReg, 0, 0));
   for I := 0 to High(Ends) do PatchHere(Ends[I]);
@@ -964,6 +981,18 @@ begin
   for I := 0 to High(Ends) do PatchHere(Ends[I]);
 end;
 
+procedure TCompiler.PushWithEntry(const Nm: UnicodeString; F: TFuncState; Scope, Kind, Depth: Integer);
+begin
+  if WithCount >= Length(WithNames) then
+  begin
+    SetLength(WithNames, WithCount * 2 + 4); SetLength(WithFuncs, WithCount * 2 + 4); SetLength(WithScopes, WithCount * 2 + 4);
+    SetLength(WithKinds, WithCount * 2 + 4); SetLength(WithDepths, WithCount * 2 + 4);
+  end;
+  WithNames[WithCount] := Nm; WithFuncs[WithCount] := F; WithScopes[WithCount] := Scope;
+  WithKinds[WithCount] := Kind; WithDepths[WithCount] := Depth;
+  Inc(WithCount);
+end;
+
 { 14.11.2 with (Object) Statement: ToObject, an object environment for the body (a hidden local, captured by the
   body's functions like any other) }
 procedure TCompiler.CompileWith(S: TGocciaWithStatement);
@@ -977,12 +1006,7 @@ begin
   R := DeclareLocal(Nm, True);
   ExprTo(S.ObjectExpression, R);
   Emit(Ins(opWithObj, R, 0, 0));
-  if WithCount >= Length(WithNames) then
-  begin
-    SetLength(WithNames, WithCount * 2 + 4); SetLength(WithFuncs, WithCount * 2 + 4); SetLength(WithScopes, WithCount * 2 + 4);
-  end;
-  WithNames[WithCount] := Nm; WithFuncs[WithCount] := FS; WithScopes[WithCount] := FS.ScopeCount;
-  Inc(WithCount);
+  PushWithEntry(Nm, FS, FS.ScopeCount, 0, 0);
   try
     Stmt(S.Body);
   finally
@@ -1169,7 +1193,7 @@ function TCompiler.CompileFunction(const Name: UnicodeString; const Params: TGoc
 var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop: Integer; Names, TopLex: TStringList; ObjMeth, NoArgs, StaticBlk: Boolean;
   Nodes: TList<TGocciaASTNode>; Skip: Integer; Ret: Integer;
   Pair: TGocciaExpressionMap.TKeyValuePair; SavedGlobalTop, InitStatic, SavedParamInit: Boolean; PN: TStringList;
-  K: Integer;
+  K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString;
 begin
   SavedGlobalTop := GlobalTop;   { a nested function's declarations are its own }
   SavedParamInit := InParamInit;
@@ -1177,6 +1201,9 @@ begin
   GlobalTop := False;
   InitStatic := PendingInitStatic;
   PendingInitStatic := False;
+  SloppyEval := NextSloppyEval;
+  NextSloppyEval := False;
+  SavedWith := WithCount;
   New(T);
   RegisterTemplate(T);
   FillChar(T^, SizeOf(TFuncTemplate), 0);
@@ -1365,6 +1392,38 @@ begin
       finally
         Names.Free;
       end;
+      if SloppyEval and not T^.IsStrict and not ((Outer <> nil) and Outer.IsEvalOuter) then
+      begin
+        { 10.2.11 / 19.2.1.3: the variable environment a non-strict direct eval in this function adds its var
+          and function declarations to, made on entry; the function's own bindings shadow it, so it sits between
+          them and the enclosing scopes }
+        EnvName := '%evalenv' + IntToStr(WithSerial);
+        Inc(WithSerial);
+        R := DeclareLocal(EnvName, False);
+        Tmp := AllocReg;
+        Emit(Ins(opNewObj, R, 0, 4));
+        Emit(Ins(opLoadNull, Tmp, 0, 0));
+        Emit(Ins(opSetProtoLit, R, Tmp, 0));
+        FreeTo(Tmp);
+        PushWithEntry(EnvName, FS, 0, 1, 0);
+      end;
+      if (EvalEnvNames <> nil) and (Outer <> nil) and Outer.IsEvalOuter then
+      begin
+        { 19.2.1.3 step 16.b: each var the caller's function does not bind becomes a deletable binding of its
+          eval environment, undefined unless it is already there }
+        Tmp := AllocRegs(2);
+        LoadIdentStatic(EvalVarEnv, Tmp);
+        for I := 0 to EvalEnvNames.Count - 1 do
+        begin
+          Emit(Ins(opWithHas, Tmp + 1, Tmp, AtomConst(EvalEnvNames[I])));
+          J := EmitJ(opJT, Tmp + 1, 0);
+          Emit(Ins(opLoadUndef, Tmp + 1, 0, 0));
+          Emit(Ins(opDefField, Tmp, Tmp + 1, NewIC(EvalEnvNames[I])));
+          PatchHere(J);
+        end;
+        FreeTo(Tmp);
+        FreeAndNil(EvalEnvNames);
+      end;
       HoistBlock(Nodes);
       FreeAndNil(EvalSkipLocal);
       if (Outer = nil) and (Goal = 3) then EmitModulePrologue;
@@ -1436,6 +1495,7 @@ begin
     F.Free;
     GlobalTop := SavedGlobalTop;
     InParamInit := SavedParamInit;
+    WithCount := SavedWith;
   end;
 end;
 
@@ -1454,6 +1514,7 @@ begin
   if E is TGocciaArrowFunctionExpression then
   begin
     AE := TGocciaArrowFunctionExpression(E);
+    NextSloppyEval := deuSloppyDirectEval in AE.DirectEvalUsage;
     T := CompileFunction(NameHint, AE.Parameters, AE.Body, True, False, False, False, False, AE.IsAsync);
     T^.SourceRange := AE.SourceRange;
     EmitClosure(Dest, T);
@@ -1479,6 +1540,7 @@ begin
     end
     else Self_ := -1;
     PendingStrict := Ord(FE.ParsedInStrictMode);
+    NextSloppyEval := deuSloppyDirectEval in FE.DirectEvalUsage;
     if FE.Name <> '' then
       T := CompileFunction(FE.Name, FE.Parameters, FE.Body, False, False, False, False, FE.IsGenerator, FE.IsAsync)
     else
@@ -1681,7 +1743,16 @@ begin
     if FS.Scopes[0].Bindings[J].Reg <> Src then Emit(Ins(opMov, FS.Scopes[0].Bindings[J].Reg, Src, 0));
     Exit;
   end;
-  { goal 4: the var binding is the eval's caller's }
+  { goal 4: the var binding is the caller's own, or one of its eval variable environment }
+  if (FS.Parent <> nil) and FS.Parent.IsEvalOuter and (EvalVarEnv <> '') and
+     ((EvalOuterFlags(FD.Name) < 0) or ((EvalOuterFlags(FD.Name) and efVarLevel) = 0)) then
+  begin
+    U := AllocReg;
+    LoadIdentStatic(EvalVarEnv, U);
+    Emit(Ins(opWithSet, U, Src, AtomConst(FD.Name)));
+    FreeTo(U);
+    Exit;
+  end;
   U := ResolveUpval(FS, FD.Name);
   if U >= 0 then Emit(Ins(opSetUpv, Src, U, 0))
   else if (FS.Parent = nil) and (Goal in [1, 2]) then Emit(Ins(opSetGlobal, Src, 0, NewIC(FD.Name)));
@@ -1691,10 +1762,10 @@ end;
   local register of this function or one of its upvalues (resolving an outer binding captures it), with what
   EvalDeclarationInstantiation needs to know about it }
 function TCompiler.BuildEvalDesc: UnicodeString;
-var Seen: TStringList; I, J, U, Fl: Integer; F: TFuncState; Sc: TScope;
-  procedure Add(const N: UnicodeString; Kind, Idx, Flags: Integer);
+var Seen: TStringList; I, J, U, Fl, D: Integer; F: TFuncState; Sc: TScope;
+  procedure Add(const N: UnicodeString; Kind, Idx, Flags: Integer; Depth: Integer = 0);
   begin
-    Result := Result + N + #2 + IntToStr(Kind) + #2 + IntToStr(Idx) + #2 + IntToStr(Flags) + #1;
+    Result := Result + N + #2 + IntToStr(Kind) + #2 + IntToStr(Idx) + #2 + IntToStr(Flags) + #2 + IntToStr(Depth) + #1;
   end;
 begin
   Result := '';
@@ -1759,8 +1830,9 @@ begin
         Add(Sc.Bindings[J].Name, 0, Sc.Bindings[J].Reg, Fl);
       end;
     end;
-    { the enclosing functions' bindings, as this function's upvalues }
+    { the enclosing functions' bindings, as this function's upvalues; Depth: functions out from the caller }
     F := FS.Parent;
+    D := 1;
     while F <> nil do
     begin
       for I := F.ScopeCount - 1 downto 0 do
@@ -1783,10 +1855,12 @@ begin
             if Sc.Bindings[J].IsConst then Fl := Fl or efConst;
             if Sc.Bindings[J].HoleNop >= 0 then F.Tpl^.Code[Sc.Bindings[J].HoleNop] := Ins(opLoadHole, Sc.Bindings[J].Reg, 0, 0);
           end;
-          Add(Sc.Bindings[J].Name, 1, U, Fl);
+          if F.IsEvalOuter then Add(Sc.Bindings[J].Name, 1, U, Fl, D - 1 + EvalDepth[Sc.Bindings[J].Reg])
+          else Add(Sc.Bindings[J].Name, 1, U, Fl, D);
         end;
       end;
       F := F.Parent;
+      Inc(D);
     end;
   finally
     Seen.Free;
@@ -1825,7 +1899,17 @@ begin
     begin
       N := All[I];
       Fl := EvalOuterFlags(N);
-      if Fl < 0 then Continue;
+      if Fl < 0 then
+      begin
+        if EvalVarEnv <> '' then
+        begin
+          if Names.IndexOf(N) >= 0 then Names.Delete(Names.IndexOf(N));
+          EvalSkipLocal.Add(N);
+          if EvalEnvNames = nil then EvalEnvNames := NewNameList;
+          if EvalEnvNames.IndexOf(N) < 0 then EvalEnvNames.Add(N);
+        end;
+        Continue;
+      end;
       if (Fl and efParamEnv) <> 0 then
         raise EEarlySyntaxError.Create('Identifier ''' + N + ''' has already been declared');
       if ((Fl and efLexical) <> 0) and ((Fl and efSameFunc) <> 0) then
@@ -1842,6 +1926,14 @@ begin
       begin
         if Names.IndexOf(N) >= 0 then Names.Delete(Names.IndexOf(N));
         EvalSkipLocal.Add(N);
+      end
+      else if EvalVarEnv <> '' then
+      begin
+        { not the caller function's own: a binding of its eval variable environment }
+        if Names.IndexOf(N) >= 0 then Names.Delete(Names.IndexOf(N));
+        EvalSkipLocal.Add(N);
+        if EvalEnvNames = nil then EvalEnvNames := NewNameList;
+        if EvalEnvNames.IndexOf(N) < 0 then EvalEnvNames.Add(N);
       end;
     end;
   finally
@@ -1998,6 +2090,7 @@ begin
     begin
       FD := TGocciaFunctionDeclaration(N);
       PendingStrict := Ord(FD.FunctionExpression.ParsedInStrictMode);
+      NextSloppyEval := deuSloppyDirectEval in FD.FunctionExpression.DirectEvalUsage;
       T := CompileFunction(FD.Name, FD.FunctionExpression.Parameters, FD.FunctionExpression.Body, False, False, False,
         False, FD.FunctionExpression.IsGenerator, FD.FunctionExpression.IsAsync);
       T^.SourceRange := FD.FunctionExpression.SourceRange;
@@ -3622,7 +3715,7 @@ begin
     if IsInt(V) and (Abs(IntOf(V)) < 4000000) then
     begin
       L := ExprAny(E.Left);
-      if Op = opAdd then Emit(Ins(opAddI, Dest, L, IntOf(V))) else Emit(Ins(opAddI, Dest, L, -IntOf(V)));
+      if Op = opAdd then Emit(Ins(opAddI, Dest, L, IntOf(V))) else Emit(Ins(opSubI, Dest, L, -IntOf(V)));
       FreeTo(Save);
       Exit;
     end;
@@ -3853,22 +3946,25 @@ begin
           (WithsFor(TGocciaIdentifierExpression(E.Callee).Name, WithIdxScratch) > 0) then
   begin
     { a name resolved in a with object: the call's this is that object (14.11 / 9.1.1.2.10 WithBaseObject) }
-    LoadIdentThis(TGocciaIdentifierExpression(E.Callee).Name, Base, Base + 1);
+    LoadIdentThis(TGocciaIdentifierExpression(E.Callee).Name, Base, Base + 1, True);
     UndefThis := False;
   end
   else
   begin
     ExprTo(E.Callee, Base);
     UndefThis := True;   { the call sets this to undefined (bit 40) }
-    { a direct eval: eval named by an identifier that resolves to no local binding }
-    if (E.Callee is TGocciaIdentifierExpression) and (TGocciaIdentifierExpression(E.Callee).Name = 'eval') and
-       not E.Optional and not ResolveLocal(FS, 'eval', K) and (ResolveUpval(FS, 'eval') < 0) then
-      { A: 2 global var declarations (non-strict Script top level), 1 a strict caller (19.2.1.1: the eval code is
-        strict), 0 its declarations stay its own }
-      if FS.Tpl^.IsStrict then EvalHint := 2
-      else EvalHint := Ord((FS.Parent = nil) and (Goal in [1, 2])) * 2 + 1;
+  end;
+  { a direct eval: eval named by an identifier that resolves to no local binding (a with object or an eval
+    environment may hold it: the call is direct when the value is %eval%, 13.3.6.1 step 6) }
+  if (E.Callee is TGocciaIdentifierExpression) and (TGocciaIdentifierExpression(E.Callee).Name = 'eval') and
+     not E.Optional and not ResolveLocal(FS, 'eval', K) and (ResolveUpval(FS, 'eval') < 0) then
+  begin
+    { A: 2 global var declarations (non-strict Script top level), 1 a strict caller (19.2.1.1: the eval code is
+      strict), 0 its declarations stay its own }
+    if FS.Tpl^.IsStrict then EvalHint := 2
+    else EvalHint := Ord((FS.Parent = nil) and (Goal in [1, 2])) * 2 + 1;
     { in function code the eval code gets the call site's bindings }
-    if (EvalHint > 0) and (FS.Parent <> nil) then EvalDescConst := AtomConst(BuildEvalDesc) + 1;
+    if FS.Parent <> nil then EvalDescConst := AtomConst(BuildEvalDesc) + 1;
   end;
   if E.Optional then
   begin
@@ -4139,6 +4235,7 @@ begin
           ObjLiteralMethod := True;
           { an accessor's own "use strict" directive (10.2.1.1: its code is strict mode code) }
           if HasUseStrictDirective(TGocciaGetterExpression(P.Accessor).Body) then PendingStrict := 1;
+          NextSloppyEval := deuSloppyDirectEval in TGocciaGetterExpression(P.Accessor).DirectEvalUsage;
           T := CompileFunction('get ' + P.StaticKey, NoParams, TGocciaGetterExpression(P.Accessor).Body,
             False, True, False, False, False, False);
           T^.SourceRange := TGocciaGetterExpression(P.Accessor).SourceRange;
@@ -4149,6 +4246,7 @@ begin
         begin
           ObjLiteralMethod := True;
           if HasUseStrictDirective(TGocciaSetterExpression(P.Accessor).Body) then PendingStrict := 1;
+          NextSloppyEval := deuSloppyDirectEval in TGocciaSetterExpression(P.Accessor).DirectEvalUsage;
           T := CompileFunction('set ' + P.StaticKey, TGocciaSetterExpression(P.Accessor).Parameters,
             TGocciaSetterExpression(P.Accessor).Body, False, True, False, False, False, False);
           T^.SourceRange := TGocciaSetterExpression(P.Accessor).SourceRange;
@@ -4163,6 +4261,7 @@ begin
           begin
             ObjLiteralMethod := True;
             if HasUseStrictDirective(TGocciaGetterExpression(Pair.Value).Body) then PendingStrict := 1;
+            NextSloppyEval := deuSloppyDirectEval in TGocciaGetterExpression(Pair.Value).DirectEvalUsage;
             T := CompileFunction('get', NoParams, TGocciaGetterExpression(Pair.Value).Body,
               False, True, False, False, False, False);
             T^.SourceRange := TGocciaGetterExpression(Pair.Value).SourceRange;
@@ -4174,6 +4273,7 @@ begin
           begin
             ObjLiteralMethod := True;
             if HasUseStrictDirective(TGocciaSetterExpression(Pair.Value).Body) then PendingStrict := 1;
+            NextSloppyEval := deuSloppyDirectEval in TGocciaSetterExpression(Pair.Value).DirectEvalUsage;
             T := CompileFunction('set', TGocciaSetterExpression(Pair.Value).Parameters,
               TGocciaSetterExpression(Pair.Value).Body, False, True, False, False, False, False);
             T^.SourceRange := TGocciaSetterExpression(Pair.Value).SourceRange;
@@ -4538,13 +4638,13 @@ begin
     begin
       if E.IsPrefix then
       begin
-        Emit(Ins(opAddI, R, R, Delta));
+        Emit(Ins(opIncI, R, R, Delta));
         if Dest <> R then Emit(Ins(opMov, Dest, R, 0));
       end
       else
       begin
         Emit(Ins(opToNumeric, Dest, R, 0));
-        Emit(Ins(opAddI, R, Dest, Delta));
+        Emit(Ins(opIncI, R, Dest, Delta));
       end;
       FreeTo(Save);
       Exit;
@@ -4555,14 +4655,14 @@ begin
       K := AllocReg;
       LoadIdentThis(Name, Cur, K);
       Emit(Ins(opToNumeric, Cur, Cur, 0));
-      Emit(Ins(opAddI, Nw, Cur, Delta));
+      Emit(Ins(opIncI, Nw, Cur, Delta));
       StoreIdentRef(Name, K, Nw);
     end
     else
     begin
       LoadIdent(Name, Cur);
       Emit(Ins(opToNumeric, Cur, Cur, 0));
-      Emit(Ins(opAddI, Nw, Cur, Delta));
+      Emit(Ins(opIncI, Nw, Cur, Delta));
       StoreIdent(Name, Nw);
     end;
   end
@@ -4573,7 +4673,7 @@ begin
     Cur := AllocReg; Nw := AllocReg;
     Emit(Ins(opGetSuperB, Cur, O, K));
     Emit(Ins(opToNumeric, Cur, Cur, 0));
-    Emit(Ins(opAddI, Nw, Cur, Delta));
+    Emit(Ins(opIncI, Nw, Cur, Delta));
     Emit(Ins(opSetSuperB, Nw, O, K));
   end
   else if E.Operand is TGocciaMemberExpression then
@@ -4587,14 +4687,14 @@ begin
       Emit(Ins(opToPropKey, K, K, O + 1));
       Emit(Ins(opGetElem, Cur, O, K));
       Emit(Ins(opToNumeric, Cur, Cur, 0));
-      Emit(Ins(opAddI, Nw, Cur, Delta));
+      Emit(Ins(opIncI, Nw, Cur, Delta));
       Emit(Ins(opSetElem, O, K, Nw));
     end
     else
     begin
       Emit(Ins(opGetProp, Cur, O, NewIC(M.PropertyName)));
       Emit(Ins(opToNumeric, Cur, Cur, 0));
-      Emit(Ins(opAddI, Nw, Cur, Delta));
+      Emit(Ins(opIncI, Nw, Cur, Delta));
       Emit(Ins(opSetProp, O, Nw, NewIC(M.PropertyName)));
     end;
   end
@@ -4605,7 +4705,7 @@ begin
     Cur := AllocReg; Nw := AllocReg;
     Emit(Ins(opGetPriv, Cur, O, K));
     Emit(Ins(opToNumeric, Cur, Cur, 0));
-    Emit(Ins(opAddI, Nw, Cur, Delta));
+    Emit(Ins(opIncI, Nw, Cur, Delta));
     Emit(Ins(opSetPriv, O, Nw, K));
   end
   else
@@ -5467,7 +5567,7 @@ function CompileProgram(Prog: TGocciaProgram; const SourceName: UnicodeString; R
   Goal: Integer): PFuncTemplate;
 var C: TCompiler; Params: TGocciaParameterArray; I: Integer; Nodes: TList<TGocciaASTNode>; Strict: Boolean;
   MI: TModuleInfo; Outer: TFuncState; OT: PFuncTemplate; Desc, Entry: UnicodeString; Fields: TUnicodeStringArray;
-  K, P1: Integer;
+  K, P1, D, Ser: Integer;
 begin
   C := TCompiler.Create;
   C.SourceName := SourceName;
@@ -5529,6 +5629,11 @@ begin
         Delete(Desc, 1, P1);
         Fields := Entry.Split([#2]);
         if Fields[0] = '%noargs' then Outer.NoArguments := True;
+        { this code's own hidden with and eval environment names come after the caller's }
+        if (Copy(Fields[0], 1, 8) = '%evalenv') and TryStrToInt(Copy(Fields[0], 9, 20), Ser) and (Ser >= C.WithSerial) then
+          C.WithSerial := Ser + 1;
+        if (Copy(Fields[0], 1, 5) = '%with') and TryStrToInt(Copy(Fields[0], 6, 20), Ser) and (Ser >= C.WithSerial) then
+          C.WithSerial := Ser + 1;
         Outer.Scopes[0].Add(Fields[0], K, (StrToInt(Fields[3]) and efConst) <> 0);
         with Outer.Scopes[0].Bindings[Outer.Scopes[0].Count - 1] do
         begin
@@ -5539,9 +5644,20 @@ begin
         end;
         SetLength(C.EvalFlags, K + 1);
         C.EvalFlags[K] := StrToInt(Fields[3]);
+        SetLength(C.EvalDepth, K + 1);
+        if Length(Fields) > 4 then C.EvalDepth[K] := StrToInt(Fields[4]) else C.EvalDepth[K] := 0;
         Inc(K);
       end;
       Outer.FreeReg := K;
+      { the eval variable environments of the caller and the functions around it, outermost first: each holds
+        the names no binding of its function (or one inside it) does }
+      for D := 64 downto 0 do
+        for I := 0 to Outer.Scopes[0].Count - 1 do
+          if (Copy(Outer.Scopes[0].Bindings[I].Name, 1, 8) = '%evalenv') and (C.EvalDepth[Outer.Scopes[0].Bindings[I].Reg] = D) then
+          begin
+            C.PushWithEntry(Outer.Scopes[0].Bindings[I].Name, Outer, 0, 2, D);
+            if D = 0 then C.EvalVarEnv := Outer.Scopes[0].Bindings[I].Name;
+          end;
       for I := 0 to Prog.Body.Count - 1 do Nodes.Add(Prog.Body[I]);
       try
         Result := C.CompileFunction('<eval>', Params, nil, True, False, False, False, False, False, nil, Nodes);

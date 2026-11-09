@@ -2145,10 +2145,40 @@ begin
   Result := StrictEquals(A, B);
 end;
 
-{ cold: the BigInteger temporaries out of LooseEquals's frame }
-function BigEqualsNumber(Big: TValue; D: Double): Boolean; noinline;
+{ a BigInt against a Number by their mathematical values (7.2.13 step 13, 7.2.12 step 4.i): -1, 0, 1; 2 when D is
+  NaN. Cold: the BigInteger temporaries stay out of the callers' frames }
+function BigCmpNum(Big: TValue; D: Double): Integer; noinline;
+var T: Double; C: Integer;
 begin
-  Result := ValueToBig(Big).ToDouble = D;
+  if IsNaN(D) then Exit(2);
+  if IsInfinite(D) then
+  begin
+    if D > 0 then Exit(-1);
+    Exit(1);
+  end;
+  T := Int(D);
+  C := ValueToBig(Big).Compare(TBigInteger.FromDouble(T));
+  if C < 0 then Exit(-1);
+  if C > 0 then Exit(1);
+  if D > T then Exit(-1);
+  if D < T then Exit(1);
+  Result := 0;
+end;
+
+function BigEqualsNumber(Big: TValue; D: Double): Boolean;
+begin
+  Result := BigCmpNum(Big, D) = 0;
+end;
+
+{ 7.2.13 steps 6-7: a BigInt against a String is StringToBigInt of the string, unequal when that fails }
+function BigEqualsString(Big, S: TValue; var Res: Boolean): Boolean; noinline;
+var B: TValue;
+begin
+  PushRoot(Big);
+  Result := True;
+  if not StringToBigIntV(StrToUnicode(StrOf(S)), B) then Res := False
+  else Res := BigEquals(RootAt(TempTop - 1), B);
+  PopRoots(1);
 end;
 
 function LooseEquals(A, B: TValue; var Res: Boolean): Boolean;
@@ -2161,8 +2191,10 @@ begin
   if IsBigInt(A) and IsBigInt(B) then begin Res := BigEquals(A, B); Exit; end;
   if IsBigInt(A) and IsNumber(B) then begin Res := BigEqualsNumber(A, NumOf(B)); Exit; end;
   if IsNumber(A) and IsBigInt(B) then begin Res := BigEqualsNumber(B, NumOf(A)); Exit; end;
-  if (A = VTrue) or (A = VFalse) then A := MkInt(Ord(A = VTrue));
-  if (B = VTrue) or (B = VFalse) then B := MkInt(Ord(B = VTrue));
+  if IsBigInt(A) and IsString(B) then Exit(BigEqualsString(A, B, Res));
+  if IsString(A) and IsBigInt(B) then Exit(BigEqualsString(B, A, Res));
+  if (A = VTrue) or (A = VFalse) then Exit(LooseEquals(MkInt(Ord(A = VTrue)), B, Res));
+  if (B = VTrue) or (B = VFalse) then Exit(LooseEquals(A, MkInt(Ord(B = VTrue)), Res));
   if IsNumber(A) and IsString(B) then begin Res := NumOf(A) = PrimitiveToNumber(B); Exit; end;
   if IsString(A) and IsNumber(B) then begin Res := PrimitiveToNumber(A) = NumOf(B); Exit; end;
   if IsObject(A) and IsObject(B) then begin Res := A = B; Exit; end;
@@ -3410,7 +3442,7 @@ begin
 end;
 
 function CompareSlow(A, B: TValue; var Res: Integer): Boolean;   { -1 less, 0 equal, 1 greater, 2 undefined (NaN) }
-var PA, PB: TValue; DA, DB: Double; C: Integer;
+var PA, PB, V: TValue; DA, DB: Double; C: Integer;
 begin
   PushRoot(B);
   if not ToPrimitiveV(A, False, PA) then begin PopRoots(1); Exit(False); end;
@@ -3418,17 +3450,39 @@ begin
   if not ToPrimitiveV(RootAt(TempTop - 2), False, PB) then begin PopRoots(2); Exit(False); end;
   PA := RootAt(TempTop - 1);
   PopRoots(2);
+  { 7.2.12 IsLessThan: a BigInt against a String goes through StringToBigInt (undefined when that fails), against
+    anything else through ToNumeric (a Symbol throws) and an exact comparison }
   if IsBigInt(PA) or IsBigInt(PB) then
   begin
     if IsBigInt(PA) and IsBigInt(PB) then C := BigCompare(PA, PB)
+    else if IsString(PA) or IsString(PB) then
+    begin
+      PushRoot(PA); PushRoot(PB);
+      if IsString(PA) then
+      begin
+        if not StringToBigIntV(StrToUnicode(StrOf(PA)), V) then begin PopRoots(2); Res := 2; Exit(True); end;
+        C := BigCompare(V, RootAt(TempTop - 1));
+      end
+      else
+      begin
+        if not StringToBigIntV(StrToUnicode(StrOf(PB)), V) then begin PopRoots(2); Res := 2; Exit(True); end;
+        C := BigCompare(RootAt(TempTop - 2), V);
+      end;
+      PopRoots(2);
+    end
+    else if IsBigInt(PA) then
+    begin
+      if not ToNumberV(PB, DB) then Exit(False);
+      C := BigCmpNum(PA, DB);
+    end
     else
     begin
-      if IsBigInt(PA) then DA := ValueToBig(PA).ToDouble else DA := PrimitiveToNumber(PA);
-      if IsBigInt(PB) then DB := ValueToBig(PB).ToDouble else DB := PrimitiveToNumber(PB);
-      if IsNaN(DA) or IsNaN(DB) then begin Res := 2; Exit(True); end;
-      if DA < DB then C := -1 else if DA > DB then C := 1 else C := 0;
+      if not ToNumberV(PA, DA) then Exit(False);
+      C := BigCmpNum(PB, DA);
+      if C <> 2 then C := -C;
     end;
-    if C < 0 then Res := -1 else if C > 0 then Res := 1 else Res := 0;
+    if C = 2 then Res := 2
+    else if C < 0 then Res := -1 else if C > 0 then Res := 1 else Res := 0;
     Exit(True);
   end;
   if IsString(PA) and IsString(PB) then
@@ -3437,8 +3491,8 @@ begin
     if C < 0 then Res := -1 else if C > 0 then Res := 1 else Res := 0;
     Exit(True);
   end;
-  DA := PrimitiveToNumber(PA);
-  DB := PrimitiveToNumber(PB);
+  if not ToNumberV(PA, DA) then Exit(False);
+  if not ToNumberV(PB, DB) then Exit(False);
   if IsNaN(DA) or IsNaN(DB) then Res := 2
   else if DA < DB then Res := -1 else if DA > DB then Res := 1 else Res := 0;
   Result := True;
@@ -4030,6 +4084,22 @@ begin
   Result := BigToValue(ValueToBig(V).Add(TBigInteger.FromInt64(N)));
 end;
 
+{ the slow path of the immediate adds: opAddI is binary + (a string concatenates, a BigInt throws), opSubI binary
+  - (C is the negated constant), opIncI ++ and -- (ToNumeric, then a BigInt steps by C) }
+function XAddImmSlow(Op: TOp; VA: TValue; CI: Integer; var Res: TValue): Boolean; noinline;
+begin
+  case Op of
+    opAddI: Result := AddNumbersSlow(VA, MkInt(CI), Res);
+    opSubI: Result := ArithSlow(opSub, VA, MkInt(-CI), Res);
+  else
+    begin
+      if not ToNumericV(VA, VA) then Exit(False);
+      if IsBigInt(VA) then Res := XBigAddInt(VA, CI) else Res := MkNumber(NumOf(VA) + CI);
+      Result := True;
+    end;
+  end;
+end;
+
 function XBigNegate(V: TValue): TValue; noinline;
 begin
   Result := BigToValue(ValueToBig(V).Negate);
@@ -4042,8 +4112,8 @@ var
 
 procedure InitFastOps;
 const
-  Ops: array[0..58] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
-    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSub,
+  Ops: array[0..60] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opSub,
     opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
     opJNGt, opJNGe, opJNSEq, opJSEq, opCall, opRet, opRetUndef, opToNum, opToNumeric, opEq, opNe, opTypeof, opDefField);
@@ -4322,7 +4392,7 @@ begin
           else if IsNumber(VA) and IsNumber(VB) then R[A] := MkArith(NumOf(VA) + NumOf(VB))
           else goto LBail;
         end;
-      opAddI:
+      opAddI, opSubI, opIncI:
         begin
           VA := R[(I shr 24) and $FFFF];
           CI := SarInt64(Int64(I), 40);
@@ -5256,7 +5326,7 @@ LReload:
             R[A] := V;
           end;
         end;
-      opAddI:
+      opAddI, opSubI, opIncI:
         begin
           VA := R[(I shr 24) and $FFFF];
           CI := SarInt64(Int64(I), 40);
@@ -5267,15 +5337,10 @@ LReload:
             else R[A] := MkDouble(Sum);
           end
           else if VA < DOUBLE_LIMIT then R[A] := MkDouble(PDouble(@VA)^ + CI)
-          else if IsBigInt(VA) then
-          begin
-            Fr^.PC := PC;
-            R[A] := XBigAddInt(VA, CI);
-          end
           else
           begin
             Fr^.PC := PC;
-            if not AddNumbersSlow(VA, MkInt(CI), V) then goto LThrow;
+            if not XAddImmSlow(TOp(I and $FF), VA, CI, V) then goto LThrow;
             R[A] := V;
           end;
         end;
