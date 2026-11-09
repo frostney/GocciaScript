@@ -95,6 +95,7 @@ var O: PObj;
 begin
   O := NewObject(RootShapeFor(Proto), 2, okRegExp);
   O^.Native := nil;
+  O^.Pad := CurRealm;   { [[Realm]] (the legacy RegExp features: compile is per realm) }
   if not Legacy then O^.OFlags := O^.OFlags or ofLegacyOff;
   AddProperty(O, AtomLastIndex, VUndefined, pfWritable);
   if Proto = RegExpProto then RegExpShape := O^.Shape;
@@ -683,10 +684,11 @@ begin
   Result := True;
 end;
 
-{ [[LegacyFeaturesEnabled]] }
+{ [[LegacyFeaturesEnabled]], and the RegExp's [[Realm]] the running one (B.2.4.1 RegExp.prototype.compile: thisRealm
+  and the RegExp's realm must be the same) }
 function N_Legacy(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Res := MkBool((ObjOf(Args[1])^.OFlags and ofLegacyOff) = 0);
+  Res := MkBool(((ObjOf(Args[1])^.OFlags and ofLegacyOff) = 0) and (Integer(ObjOf(Args[1])^.Pad) = CurRealm));
   Result := True;
 end;
 
