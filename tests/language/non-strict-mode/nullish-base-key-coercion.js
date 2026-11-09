@@ -118,3 +118,19 @@ describe("non-strict nullish-base computed access", () => {
     expect(coercions).toBe(1);
   });
 });
+
+for (const base of [null, undefined]) {
+  test(`non-strict ${base} writes name an array-element negative-zero key`, () => {
+    const keys = [-0];
+    let error;
+    try {
+      base[keys[0]] = 1;
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error instanceof TypeError).toBe(true);
+    expect(error.message).toBe(
+      `Cannot set properties of ${base} (setting '0')`
+    );
+  });
+}

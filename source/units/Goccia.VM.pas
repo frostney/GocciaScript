@@ -10080,6 +10080,11 @@ begin
     grkObject:
       if AKey.ObjectValue is TGocciaStringLiteralValue then
         Result := TGocciaStringLiteralValue(AKey.ObjectValue).Value
+      else if AKey.ObjectValue is TGocciaNumberLiteralValue then
+        // VM number fast paths retain boxed primitives such as negative zero.
+        // Read the numeric payload directly; diagnostic formatting must not
+        // invoke guest coercion on object keys.
+        Result := FormatDouble(TGocciaNumberLiteralValue(AKey.ObjectValue).Value)
       else if AKey.ObjectValue is TGocciaSymbolValue then
         Result := TGocciaSymbolValue(AKey.ObjectValue).ToDisplayString.Value
       else
