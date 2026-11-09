@@ -2,6 +2,9 @@ unit Goccia.Values.FunctionBase;
 
 {$I Goccia.inc}
 
+{ FPC 3.3.1 hangs in its DFA pass on ConstructValue (-O3 and above enable DFA); G2 builds with that toolchain. }
+{$IF FPC_FULLVERSION >= 30301}{$OPTIMIZATION NODFA}{$ENDIF}
+
 interface
 
 uses
