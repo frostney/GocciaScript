@@ -523,6 +523,17 @@ begin
   Result := True;
 end;
 
+
+{ CreateDataHook: 7.3.7 CreateDataPropertyOrThrow on an exotic object }
+function CreateDataOM(O: TValue; Key: PStr; V: TValue): Boolean;
+var D: TPropDesc; Ok: Boolean;
+begin
+  DataDesc(D, V, True, True, True);
+  if not DefineOwnPropertyV(O, Key, D, Ok) then Exit(False);
+  if not Ok then Exit(ThrowTypeError('Cannot define property ' + StrToUnicode(Key)));
+  Result := True;
+end;
+
 function DefineOwnPropertyV(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean;
 var P: PObj; Cur, M, D: TPropDesc; Found: Boolean; Idx: Int64; Ext: Boolean; Dbl: Double;
 begin
@@ -1603,6 +1614,7 @@ var O, R: TValue; Ok_: Boolean;
     PopRoots(1);
   end;
 begin
+  CreateDataHook := @CreateDataOM;
   ProxySetHook := @ProxySetOM;
   TemplateFreezeHook := @FreezeTemplate;
   TemplateCache := VUndefined;

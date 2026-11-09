@@ -879,9 +879,22 @@ begin
   Result := True;
 end;
 
+{ JSONTextHook: ParseJSONModule's JSON.parse of the source text }
+function JSONText(const S: UnicodeString; var Res: TValue): Boolean;
+var A: array[0..1] of TValue;
+begin
+  A[0] := VUndefined;
+  A[1] := StrFromUnicode(S);
+  PushRoot(A[1]);
+  A[1] := RootAt(TempTop - 1);
+  Result := JSON_Parse(@A[0], 1, Res);
+  PopRoots(1);
+end;
+
 procedure InitJSON;
 var JS: TValue;
 begin
+  JSONTextHook := @JSONText;
   if not GetV(GlobalObj, AtomOf('JSON'), JS) then Exit;
   PushRoot(JS);
   DefineNative(RootAt(TempTop - 1), 'parse', JSON_Parse, 2);

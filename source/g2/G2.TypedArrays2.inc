@@ -989,6 +989,19 @@ end;
 
 { ---------------- initialization ---------------- }
 
+{ BytesHook: the import bytes proposal's module value, a Uint8Array over an immutable ArrayBuffer of the bytes }
+function BytesModule(const B: RawByteString; var Res: TValue): Boolean;
+var Buf: TValue;
+begin
+  Buf := MkPtr(NewArrayBuffer(Length(B), ArrayBufferProtoV));
+  if Length(B) > 0 then Move(B[1], BufferData(ObjOf(Buf))^, Length(B));
+  ObjOf(Buf)^.OFlags := ObjOf(Buf)^.OFlags or bfImmutable;
+  PushRoot(Buf);
+  Res := MkPtr(NewTypedArray(taUint8, RootAt(TempTop - 1), 0, Length(B), TAProtosV[taUint8]));
+  PopRoots(1);
+  Result := True;
+end;
+
 procedure InitTypedArrays;
 const
   CtorFns: array[0..TAKindCount - 1] of TNativeFn = (TA_C0, TA_C1, TA_C2, TA_C3, TA_C4, TA_C5, TA_C6, TA_C7, TA_C8,
@@ -1024,6 +1037,7 @@ var I: Integer; F, AP, Tmp: TValue;
     PopRoots(2);
   end;
 begin
+  BytesHook := @BytesModule;
   RealmVals([@ArrayBufferCtor, @ArrayBufferProtoV, @TypedArrayCtorV, @TypedArrayProtoV, @DataViewProtoV, @TASortFn]);
   RealmValRange(@TACtors[0], Length(TACtors));
   RealmValRange(@TAProtosV[0], Length(TAProtosV));

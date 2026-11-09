@@ -37,7 +37,7 @@ type
     Deps: array of TModRec;
     destructor Destroy; override;
   end;
-  TResKind = (rkNull, rkAmbiguous, rkBinding, rkNamespace);
+  TResKind = (rkNull, rkAmbiguous, rkBinding, rkNamespace, rkDeferNS);
   TResolution = record
     Kind: TResKind;
     Module: TModRec;
@@ -46,7 +46,7 @@ type
 
 const
   { the values of a module kept in ModRoots at Id * RS + k }
-  RS = 5; rTable = 0; rGen = 1; rNS = 2; rMeta = 3; rError = 4;
+  RS = 6; rTable = 0; rGen = 1; rNS = 2; rMeta = 3; rError = 4; rDNS = 5;
 
 threadvar
   Mods: TList<TModRec>;
@@ -105,12 +105,80 @@ begin
   Result := True;
 end;
 
+{ a request key (ModuleRequestKey) resolved against its referrer: the resolved path, then its type suffix }
+function ResolveRequest(const Req, Referrer: UnicodeString): UnicodeString;
+var P: Integer;
+begin
+  P := Pos(#1, Req);
+  if P = 0 then Exit(ResolvePath(Req, Referrer));
+  Result := ResolvePath(Copy(Req, 1, P - 1), Referrer) + Copy(Req, P, MaxInt);
+end;
+
+function ReadBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
+var F: TFileStream;
+begin
+  Result := False;
+  B := '';
+  if not FileExists(string(Path)) then Exit;
+  F := TFileStream.Create(string(Path), fmOpenRead or fmShareDenyNone);
+  try
+    SetLength(B, F.Size);
+    if F.Size > 0 then F.ReadBuffer(B[1], F.Size);
+  finally
+    F.Free;
+  end;
+  Result := True;
+end;
+
 function FindModule(const Path: UnicodeString): TModRec;
 var M: TModRec;
 begin
   for M in Mods do
     if M.Path = Path then Exit(M);
   Result := nil;
+end;
+
+function ClosedCell(V: TValue): TValue; forward;
+
+{ a module of a non-JavaScript type, a Synthetic Module Record with the one export default, evaluated at once:
+  'json' (ParseJSONModule), 'text' (the import text proposal: the source decoded as UTF-8) and 'bytes' (the
+  import bytes proposal: a Uint8Array over an immutable ArrayBuffer) }
+function LoadTypedModule(const Key: UnicodeString; var M: TModRec): Boolean;
+var P: Integer; Path, AType, Src: UnicodeString; B: RawByteString; V, Tbl: TValue;
+begin
+  P := Pos(#1, Key);
+  Path := Copy(Key, 1, P - 1);
+  AType := Copy(Key, P + 1, MaxInt);
+  if (AType <> 'json') and (AType <> 'text') and (AType <> 'bytes') then
+    Exit(ThrowError('SyntaxError', 'Unsupported module type ''' + AType + ''''));
+  if AType = 'bytes' then
+  begin
+    if not ReadBytes(Path, B) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
+    if not BytesHook(B, V) then Exit(False);
+  end
+  else
+  begin
+    if not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
+    if AType = 'text' then V := StrFromUnicode(Src)
+    else if not JSONTextHook(Src, V) then Exit(False);
+  end;
+  PushRoot(V);
+  M := TModRec.Create;
+  M.Path := Key;
+  M.Id := Mods.Count;
+  Mods.Add(M);
+  SetRoot(M, rError, VUndefined);
+  M.Info := TModuleInfo.Create;
+  SetLength(M.Info.LocalExports, 1);
+  M.Info.LocalExports[0].ExportName := 'default';
+  M.Info.LocalExports[0].Slot := 0;
+  M.Info.SlotCount := 1;
+  Tbl := MkPtr(NewArray(0, 1));
+  SetRoot(M, rTable, Tbl);
+  ArrayPush(ObjOf(GetRoot(M, rTable)), ClosedCell(RootAt(TempTop - 1)));
+  PopRoots(1);
+  M.Status := msEvaluated;
+  Result := True;
 end;
 
 { 16.2.1.5.1 LoadRequestedModules (synchronously, from files): the module at Path and everything it requests }
@@ -123,6 +191,7 @@ begin
     if M.Errored and (M.Status = msNew) then begin Pending := GetRoot(M, rError); Exit(False); end;
     Exit(True);
   end;
+  if Pos(#1, Path) > 0 then Exit(LoadTypedModule(Path, M));
   if not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
   M := TModRec.Create;
   M.Path := Path;
@@ -139,7 +208,7 @@ begin
   SetLength(M.Deps, Length(M.Info.Requests));
   for I := 0 to High(M.Info.Requests) do
   begin
-    if not LoadModule(ResolvePath(M.Info.Requests[I], Path), D) then Exit(False);
+    if not LoadModule(ResolveRequest(M.Info.Requests[I], Path), D) then Exit(False);
     M.Deps[I] := D;
   end;
   Result := True;
@@ -179,6 +248,11 @@ begin
       if M.Info.IndirectExports[I].ImportName = ModNamespace then
       begin
         Result.Kind := rkNamespace; Result.Module := D;
+        Exit;
+      end;
+      if M.Info.IndirectExports[I].ImportName = ModDeferNamespace then
+      begin
+        Result.Kind := rkDeferNS; Result.Module := D;
         Exit;
       end;
       Exit(ResolveExport(D, M.Info.IndirectExports[I].ImportName, RS_));
@@ -270,7 +344,7 @@ begin
     for I := 0 to Names.Count - 1 do
     begin
       R := Resolve(M, Names[I]);
-      if not (R.Kind in [rkBinding, rkNamespace]) then Continue;
+      if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS]) then Continue;
       ArrayPush(ObjOf(RootAt(Base + 1)), MkPtr(AtomOf(Names[I])));
       ArrayPush(ObjOf(RootAt(Base + 1)), CellOf(R));
     end;
@@ -282,9 +356,46 @@ begin
   end;
 end;
 
+{ GetModuleNamespace(module, defer): the deferred namespace, a namespace object (OFlags 16, its module's Id in
+  Aux2) whose exports leave out "then", with @@toStringTag "Deferred Module" }
+function GetDeferredNamespace(M: TModRec): TValue;
+var Base, I: Integer; O: PObj; E: PValueArray;
+begin
+  Result := GetRoot(M, rDNS);
+  if IsObject(Result) then Exit;
+  Base := TempTop;
+  PushRoot(GetNamespace(M));
+  O := NewObject(RootShapeFor(VNull), 0, okModuleNS);
+  PushRoot(MkPtr(O));
+  DefineOwn(RootAt(Base + 1), SymKey(SymToStringTagW), StrFromUnicode('Deferred Module'), 0);
+  PushRoot(MkPtr(NewArray(0, 8)));
+  E := ObjOf(ObjOf(RootAt(Base))^.Aux1)^.Elements;
+  I := 0;
+  while I < Integer(E^.Len) div 2 do
+  begin
+    if StrToUnicode(PStr(PtrOf(E^.Data[I * 2]))) <> 'then' then
+    begin
+      ArrayPush(ObjOf(RootAt(Base + 2)), E^.Data[I * 2]);
+      E := ObjOf(ObjOf(RootAt(Base))^.Aux1)^.Elements;
+      ArrayPush(ObjOf(RootAt(Base + 2)), E^.Data[I * 2 + 1]);
+      E := ObjOf(ObjOf(RootAt(Base))^.Aux1)^.Elements;
+    end;
+    Inc(I);
+  end;
+  O := ObjOf(RootAt(Base + 1));
+  O^.Aux1 := RootAt(Base + 2);
+  O^.Aux2 := MkInt(M.Id);
+  O^.OFlags := O^.OFlags or 8 or 16;
+  O^.Shape := ShapeFork(O^.Shape);
+  SetRoot(M, rDNS, RootAt(Base + 1));
+  Result := RootAt(Base + 1);
+  PopRoots(3);
+end;
+
 function CellOf(const R: TResolution): TValue;
 begin
   if R.Kind = rkNamespace then Exit(ClosedCell(GetNamespace(R.Module)));
+  if R.Kind = rkDeferNS then Exit(ClosedCell(GetDeferredNamespace(R.Module)));
   Result := ObjOf(GetRoot(R.Module, rTable))^.Elements^.Data[R.Slot];
 end;
 
@@ -329,9 +440,10 @@ begin
     begin
       for I := 0 to High(M.Info.IndirectExports) do
       begin
-        if M.Info.IndirectExports[I].ImportName = ModNamespace then Continue;
+        if (M.Info.IndirectExports[I].ImportName = ModNamespace) or
+          (M.Info.IndirectExports[I].ImportName = ModDeferNamespace) then Continue;
         R := Resolve(DepOf(M, M.Info.IndirectExports[I].Request), M.Info.IndirectExports[I].ImportName);
-        if not (R.Kind in [rkBinding, rkNamespace]) then
+        if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS]) then
         begin
           ThrowError('SyntaxError', 'The requested module ''' + M.Info.IndirectExports[I].Request +
             ''' does not provide an export named ''' + M.Info.IndirectExports[I].ImportName + '''');
@@ -341,6 +453,12 @@ begin
       for I := 0 to High(M.Info.Imports) do
       begin
         D := DepOf(M, M.Info.Imports[I].Request);
+        if M.Info.Imports[I].ImportName = ModDeferNamespace then
+        begin
+          Tbl := ClosedCell(GetDeferredNamespace(D));
+          ValueArrayStore(ObjOf(GetRoot(M, rTable))^.Elements, M.Info.Imports[I].Slot, Tbl);
+          Continue;
+        end;
         if M.Info.Imports[I].ImportName = ModNamespace then
         begin
           R.Kind := rkNamespace; R.Module := D;
@@ -348,7 +466,7 @@ begin
         else
         begin
           R := Resolve(D, M.Info.Imports[I].ImportName);
-          if not (R.Kind in [rkBinding, rkNamespace]) then
+          if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS]) then
           begin
             if R.Kind = rkAmbiguous then
               ThrowError('SyntaxError', 'The requested module ''' + M.Info.Imports[I].Request +
@@ -392,8 +510,52 @@ begin
   Result := True;
 end;
 
+function Evaluate(M: TModRec): Boolean; forward;
+
+{ GatherAsynchronousTransitiveDependencies for a module imported only with defer: the modules with top-level
+  await in its graph are evaluated now (they cannot run synchronously later) }
+function EvaluateAsyncDeps(M: TModRec; Seen: TList<TModRec>): Boolean;
+var I: Integer;
+begin
+  Result := True;
+  if (M.Status in [msEvaluated, msEvaluating]) or (Seen.IndexOf(M) >= 0) then Exit;
+  Seen.Add(M);
+  if M.Info.HasTLA then Exit(Evaluate(M));
+  for I := 0 to High(M.Deps) do
+    if not EvaluateAsyncDeps(M.Deps[I], Seen) then Exit(False);
+end;
+
+{ ReadyForSyncExecution: no module of the graph is being evaluated or has top-level await still to run }
+function ReadyForSync(M: TModRec; Seen: TList<TModRec>): Boolean;
+var I: Integer;
+begin
+  Result := True;
+  if Seen.IndexOf(M) >= 0 then Exit;
+  Seen.Add(M);
+  if M.Status = msEvaluated then Exit;
+  if (M.Status = msEvaluating) or M.Info.HasTLA then Exit(False);
+  for I := 0 to High(M.Deps) do
+    if not ReadyForSync(M.Deps[I], Seen) then Exit(False);
+end;
+
+{ NSDeferHook: EnsureDeferredNamespaceEvaluation }
+function DeferEval(NS: TValue): Boolean;
+var M: TModRec; Seen: TList<TModRec>; Ready: Boolean;
+begin
+  M := Mods[IntOf(ObjOf(NS)^.Aux2)];
+  Seen := TList<TModRec>.Create;
+  try
+    Ready := ReadyForSync(M, Seen);
+  finally
+    Seen.Free;
+  end;
+  if not Ready then
+    Exit(ThrowTypeError('A deferred module cannot be evaluated while it or a dependency is evaluating or has top-level await'));
+  Result := Evaluate(M);
+end;
+
 function Evaluate(M: TModRec): Boolean;
-var D: TModRec; V: TValue; Done: Boolean;
+var D: TModRec; V: TValue; Done: Boolean; I: Integer; Seen: TList<TModRec>;
 begin
   if M.Status = msEvaluated then
   begin
@@ -403,8 +565,22 @@ begin
   if M.Status = msEvaluating then Exit(True);
   M.Status := msEvaluating;
   Result := True;
-  for D in M.Deps do
+  for I := 0 to High(M.Info.EvalOrder) do
+  begin
+    D := DepOf(M, M.Info.EvalOrder[I].Req);
+    if not M.Info.EvalOrder[I].Eager then
+    begin
+      { imported only with defer: its asynchronous dependencies now, itself on first use }
+      Seen := TList<TModRec>.Create;
+      try
+        if not EvaluateAsyncDeps(D, Seen) then begin Result := False; Break; end;
+      finally
+        Seen.Free;
+      end;
+      Continue;
+    end;
     if not Evaluate(D) then begin Result := False; Break; end;
+  end;
   if Result then
   begin
     if M.Info.HasTLA then Result := RunAsyncBody(GetRoot(M, rGen))
@@ -438,15 +614,34 @@ end;
 
 { the job that loads, links and evaluates a dynamic import's module (Data = its index in PendingImports) }
 function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var I: Integer; P, R, NS: TValue; M: TModRec; Phase: Integer; Ref, Spec: UnicodeString;
+var I: Integer; P, R, NS: TValue; M: TModRec; Phase: Integer; Ref, Spec: UnicodeString; Defer, Ok: Boolean;
+  Seen: TList<TModRec>;
 begin
-  I := NativeData;
+  { the native's data (24 bits): the pending import's index, bit 23 set for import.defer() }
+  I := NativeData and $7FFFFF;
+  Defer := (NativeData and $800000) <> 0;
   P := ObjOf(PendingImports)^.Elements^.Data[I * 3];
   Ref := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1]));
   Spec := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 2]));
-  if LoadLinkEvaluate(ResolvePath(Spec, Ref), M, Phase) then
+  if Defer then
   begin
-    NS := GetNamespace(M);
+    { import.defer(): loaded and linked; only the asynchronous modules of its graph evaluated now }
+    Ok := LoadModule(ResolveRequest(Spec, Ref), M);
+    if Ok and (M.Status = msNew) then Ok := Link(M);
+    if Ok then
+    begin
+      Seen := TList<TModRec>.Create;
+      try
+        Ok := EvaluateAsyncDeps(M, Seen);
+      finally
+        Seen.Free;
+      end;
+    end;
+  end
+  else Ok := LoadLinkEvaluate(ResolveRequest(Spec, Ref), M, Phase);
+  if Ok then
+  begin
+    if Defer then NS := GetDeferredNamespace(M) else NS := GetNamespace(M);
     P := ObjOf(PendingImports)^.Elements^.Data[I * 3];
     ResolvePendingPromise(P, NS);
   end
@@ -464,7 +659,7 @@ end;
 
 { 13.3.10.1 EvaluateImportCall from ToString(specifier) on: errors reject the promise }
 function DoImport(const Referrer: UnicodeString; ModuleId: Integer; Spec, Opts: TValue; var Res: TValue): Boolean;
-var P, S, W, Keys, V, F: TValue; I, N, Idx: Integer; Ref: UnicodeString;
+var P, S, W, Keys, V, F: TValue; I, N, Idx, Ph: Integer; Ref, AType, Key: UnicodeString;
   function Reject: Boolean;
   begin
     V := Pending;
@@ -475,6 +670,9 @@ var P, S, W, Keys, V, F: TValue; I, N, Idx: Integer; Ref: UnicodeString;
     Result := True;
   end;
 begin
+  { the phase read before ToString(specifier) can run code with an import() of its own }
+  Ph := ImportPhase;
+  ImportPhase := 0;
   PushRoot(Opts);
   PushRoot(Spec);
   P := NewPendingPromise;
@@ -486,6 +684,7 @@ begin
   Opts := RootAt(TempTop - 1);
   PopRoots(1);
   PushRoot(S);
+  AType := '';
   if Opts <> VUndefined then
   begin
     if not IsObject(Opts) then begin ThrowTypeError('The second argument of import() must be an object'); PopRoots(1); Exit(Reject); end;
@@ -502,21 +701,38 @@ begin
       begin
         if not GetV(RootAt(TempTop - 2), StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]), V) then begin PopRoots(3); Exit(Reject); end;
         if not IsString(V) then begin ThrowTypeError('import() attribute values must be strings'); PopRoots(3); Exit(Reject); end;
+        Key := StrToUnicode(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
+        if Key = 'type' then AType := StrToUnicode(StrOf(V));
       end;
+      { AllImportAttributesSupported: the host supports only type }
+      for I := 0 to N - 1 do
+        if StrToUnicode(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I])) <> 'type' then
+        begin
+          ThrowError('SyntaxError', 'Unsupported import attribute ''' +
+            StrToUnicode(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I])) + '''');
+          PopRoots(3);
+          Exit(Reject);
+        end;
       PopRoots(2);
     end;
   end;
   { import.source(): GetModuleSource of a Source Text Module Record throws (it has no source representation) }
-  if ImportPhase = 1 then
+  if Ph = 1 then
   begin
-    ImportPhase := 0;
     ThrowError('SyntaxError', 'A source text module has no source phase representation');
     PopRoots(1);
     Exit(Reject);
   end;
   { the loading runs as a job: import() never evaluates synchronously }
+  if AType <> '' then
+  begin
+    S := StrFromUnicode(ModuleRequestKey(StrToUnicode(StrOf(RootAt(TempTop - 1))), AType));
+    PopRoots(1);
+    PushRoot(S);
+  end;
   Ref := Referrer;
   Idx := ArrayLen(ObjOf(PendingImports)) div 3;
+  if Ph = 2 then Idx := Idx or $800000;
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 2));
   ArrayPush(ObjOf(PendingImports), StrFromUnicode(Ref));
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 1));
@@ -545,6 +761,7 @@ end;
 
 procedure InitModules;
 begin
+  NSDeferHook := @DeferEval;
   { the module map and the pending dynamic imports belong to the agent's first realm }
   if RealmInit then Exit;
   Mods := TList<TModRec>.Create;

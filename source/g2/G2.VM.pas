@@ -67,6 +67,14 @@ var
   GetProtoHook: function(O: TValue; var P: TValue): Boolean = nil;
   { G2.ObjModel's [[SetPrototypeOf]]: Ok its result }
   SetProtoHook: function(O, P: TValue; var Ok: Boolean): Boolean = nil;
+  { Deferring Module Evaluation (G2.Modules): a deferred namespace's module evaluated before a key's use }
+  NSDeferHook: function(NS: TValue): Boolean = nil;
+  { module types (G2.Modules): a JSON module's value parsed by %JSON.parse%'s grammar (G2.JSON), a bytes module's
+    Uint8Array over an immutable ArrayBuffer (G2.TypedArrays) }
+  JSONTextHook: function(const S: UnicodeString; var Res: TValue): Boolean = nil;
+  BytesHook: function(const B: RawByteString; var Res: TValue): Boolean = nil;
+  { CreateDataPropertyOrThrow on an exotic object through its [[DefineOwnProperty]] (G2.ObjModel) }
+  CreateDataHook: function(O: TValue; Key: PStr; V: TValue): Boolean = nil;
   { the native of %Function.prototype.call% (G2.Builtins): Execute calls f.call(t, ...)'s f itself }
   FuncCallNative: Pointer = nil;
   { 13.2.8.4 GetTemplateObject: SetIntegrityLevel(frozen) of the raw strings array and of the template (G2.ObjModel) }
@@ -1534,6 +1542,16 @@ var E: PValueArray; Lo, Hi, M, C: Integer; Cell: TValue;
 begin
   Found := False;
   Result := True;
+  { a deferred namespace (OFlags 16): "then" is no export of it; any other string key evaluates its module first }
+  if (O^.OFlags and 16) <> 0 then
+  begin
+    if StrToUnicode(Key) = 'then' then Exit;
+    PushRoot(MkPtr(O));
+    Result := NSDeferHook(RootAt(TempTop - 1));
+    O := ObjOf(RootAt(TempTop - 1));
+    PopRoots(1);
+    if not Result then Exit;
+  end;
   E := ObjOf(O^.Aux1)^.Elements;
   Lo := 0; Hi := E^.Len div 2 - 1;
   while Lo <= Hi do
@@ -2387,6 +2405,13 @@ begin
   if O^.OKind = okModuleNS then
   begin
     PushRoot(MkPtr(O));
+    { a deferred namespace's keys evaluate its module first }
+    if ((O^.OFlags and 16) <> 0) and not NSDeferHook(RootAt(TempTop - 1)) then
+    begin
+      OwnKeysFailed := True;
+      PopRoots(1);
+      Exit(MkPtr(NewArray(0, 0)));
+    end;
     A := NewArray(0, 8);
     PushRoot(MkPtr(A));
     for I := 0 to ObjOf(ObjOf(RootAt(TempTop - 2))^.Aux1)^.Elements^.Len div 2 - 1 do
@@ -4227,6 +4252,7 @@ var O: PObj; CI: Integer; Idx: Int64;
 begin
   O := ObjOf(Obj);
   if (O^.OKind = okArray) and IndexFromString(Key, Idx) then Exit(SetElemV(Obj, MkPtr(Key), V));
+  if O^.OKind in [okProxy, okModuleNS, okTypedArray, okArguments, okStringObj] then Exit(CreateDataHook(Obj, Key, V));
   CI := ShapeLookup(O^.Shape, Key);
   if CI >= 0 then
   begin

@@ -30,6 +30,7 @@ threadvar
 
 const
   ModNamespace = '*namespace*';   { an import or indirect export of a whole module namespace }
+  ModDeferNamespace = '*defernamespace*';   { import defer * as ns: the deferred namespace (Deferring Module Evaluation) }
 
 type
   TModEntry = record
@@ -45,10 +46,19 @@ type
     LocalExports: array of TModEntry;
     IndirectExports: array of TModEntry;
     StarExports: array of UnicodeString;
+    { the module requests in source order, one entry per phase: an eager one evaluates its module, a deferred
+      one only its asynchronous dependencies (the import defer proposal's [[RequestedModules]] order) }
+    EvalOrder: array of record Req: UnicodeString; Eager: Boolean; end;
     HasTLA: Boolean;
     SlotCount: Integer;
     procedure AddRequest(const R: UnicodeString);
+    procedure AddEager(const R: UnicodeString);
+    procedure AddDeferred(const R: UnicodeString);
+    function IsEager(const R: UnicodeString): Boolean;
   end;
+
+{ a ModuleRequest Record as a string: the specifier, then #1 and its type attribute when it has one }
+function ModuleRequestKey(const Spec, AType: UnicodeString): UnicodeString;
 
 threadvar
   { goal 4 (a direct eval in function code): the caller's bindings, as G2.Compiler's direct-eval sites describe
@@ -5606,6 +5616,32 @@ end;
 
 { ---------------- modules (goal 3) ---------------- }
 
+procedure TModuleInfo.AddEager(const R: UnicodeString);
+begin
+  if IsEager(R) then Exit;
+  SetLength(EvalOrder, Length(EvalOrder) + 1);
+  EvalOrder[High(EvalOrder)].Req := R;
+  EvalOrder[High(EvalOrder)].Eager := True;
+end;
+
+procedure TModuleInfo.AddDeferred(const R: UnicodeString);
+var I: Integer;
+begin
+  for I := 0 to High(EvalOrder) do
+    if (EvalOrder[I].Req = R) and not EvalOrder[I].Eager then Exit;
+  SetLength(EvalOrder, Length(EvalOrder) + 1);
+  EvalOrder[High(EvalOrder)].Req := R;
+  EvalOrder[High(EvalOrder)].Eager := False;
+end;
+
+function TModuleInfo.IsEager(const R: UnicodeString): Boolean;
+var I: Integer;
+begin
+  for I := 0 to High(EvalOrder) do
+    if (EvalOrder[I].Req = R) and EvalOrder[I].Eager then Exit(True);
+  Result := False;
+end;
+
 procedure TModuleInfo.AddRequest(const R: UnicodeString);
 var I: Integer;
 begin
@@ -5753,9 +5789,14 @@ end;
 
 { 16.2.1.7.1 ParseModule's entries, from the top level; Nodes gets the statements to compile (export wrappers
   unwrapped, imports and export lists dropped) }
+function ModuleRequestKey(const Spec, AType: UnicodeString): UnicodeString;
+begin
+  if AType = '' then Result := Spec else Result := Spec + #1 + AType;
+end;
+
 procedure CollectModule(Prog: TGocciaProgram; MI: TModuleInfo; Nodes: TList<TGocciaASTNode>; C: TCompiler);
 var I, J, K: Integer; N: TGocciaASTNode; Names, ExpNames, ExpLocals: TStringList; Pair: TStringStringMap.TKeyValuePair;
-  E: TModEntry; Scan: TTLAScan; MScan: TModDeclScan;
+  E: TModEntry; Scan: TTLAScan; MScan: TModDeclScan; ReqKey: UnicodeString;
   procedure AddImport(const Local, Req, Imported: UnicodeString);
   begin
     if C.ModImportNames.IndexOf(Local) >= 0 then raise EEarlySyntaxError.Create('Identifier ''' + Local + ''' has already been declared');
@@ -5799,9 +5840,19 @@ begin
         with TGocciaImportDeclaration(N) do
         begin
           if DuplicateBinding <> '' then raise EEarlySyntaxError.Create('Identifier ''' + DuplicateBinding + ''' has already been declared');
-          MI.AddRequest(ModulePath);
-          if NamespaceName <> '' then AddImport(NamespaceName, ModulePath, ModNamespace);
-          for Pair in Imports do AddImport(Pair.Key, ModulePath, Pair.Value);
+          ReqKey := ModuleRequestKey(ModulePath, AttributeType);
+          MI.AddRequest(ReqKey);
+          if Phase = icpDefer then
+          begin
+            MI.AddDeferred(ReqKey);
+            AddImport(NamespaceName, ReqKey, ModDeferNamespace);
+          end
+          else
+          begin
+            MI.AddEager(ReqKey);
+            if NamespaceName <> '' then AddImport(NamespaceName, ReqKey, ModNamespace);
+          end;
+          for Pair in Imports do AddImport(Pair.Key, ReqKey, Pair.Value);
         end;
         Continue;
       end;
@@ -5809,14 +5860,16 @@ begin
       begin
         with TGocciaReExportDeclaration(N) do
         begin
-          MI.AddRequest(ModulePath);
+          ReqKey := ModuleRequestKey(ModulePath, AttributeType);
+          MI.AddRequest(ReqKey);
+          MI.AddEager(ReqKey);
           if IsStarExport and (NamespaceName = '') then
           begin
             SetLength(MI.StarExports, Length(MI.StarExports) + 1);
-            MI.StarExports[High(MI.StarExports)] := ModulePath;
+            MI.StarExports[High(MI.StarExports)] := ReqKey;
           end
-          else if IsStarExport then AddIndirect(NamespaceName, ModulePath, ModNamespace)
-          else for Pair in ExportsTable do AddIndirect(Pair.Key, ModulePath, Pair.Value);
+          else if IsStarExport then AddIndirect(NamespaceName, ReqKey, ModNamespace)
+          else for Pair in ExportsTable do AddIndirect(Pair.Key, ReqKey, Pair.Value);
         end;
         Continue;
       end;
