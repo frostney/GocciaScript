@@ -16,14 +16,19 @@ uses
 {$I G2.Builtins5.inc}
 
 procedure InitBuiltins5;
-var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..1] of TValue; Ok: Boolean;
 begin
   if not CompilePrelude('<builtins5>', Builtins5Src, T, Err) then
     raise Exception.Create('builtins5 prelude: ' + string(Err));
   if not MakeScriptClosure(T, Clo) then raise Exception.Create('builtins5 prelude closure');
   if not CallValue(Clo, VUndefined, nil, 0, Fn) then raise Exception.Create('builtins5 prelude run');
   PushRoot(Fn);
-  if not CallValue(RootAt(TempTop - 1), VUndefined, @GlobalObj, 1, R) then
+  PushRoot(NewNativeFunction(MarkIntrinsicClass, 'markIntrinsic', 1));
+  CA[0] := GlobalObj;
+  CA[1] := RootAt(TempTop - 1);
+  Ok := CallValue(RootAt(TempTop - 2), VUndefined, @CA[0], 2, R);
+  PopRoots(1);
+  if not Ok then
   begin
     PopRoots(1);
     if ToStringV(Pending, R) and IsString(R) then

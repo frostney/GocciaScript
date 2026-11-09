@@ -1,4 +1,4 @@
-(function (G) {
+(function (G, markIntrinsic) {
   "use strict";
   // Array.fromAsync, Object.groupBy / Map.groupBy, Map / WeakMap getOrInsert and getOrInsertComputed, by the spec's
   // steps; the intrinsics used are captured here, so later changes to the globals are not observed.
@@ -324,6 +324,8 @@
 
   defineProperty(WeakMap.prototype, Symbol.toStringTag, { value: "WeakMap", writable: false, enumerable: false, configurable: true });
   defineProperty(WeakSet.prototype, Symbol.toStringTag, { value: "WeakSet", writable: false, enumerable: false, configurable: true });
+  markIntrinsic(WeakMap);
+  markIntrinsic(WeakSet);
   def(G, "WeakMap", WeakMap);
   def(G, "WeakSet", WeakSet);
 
@@ -627,5 +629,150 @@
   def(U8, "fromHex", u8Statics.fromHex);
   var u8k = ["setFromBase64", "setFromHex", "toBase64", "toHex"];
   for (var ui = 0; ui < u8k.length; ui++) def(U8.prototype, u8k[ui], u8Methods[u8k[ui]]);
+
+  // BigInt.asIntN / BigInt.asUintN (21.2.2.1, 21.2.2.2): ToIndex(bits), then ToBigInt(bigint)
+  var BigCtor = BigInt, SymToPrimitive = Symbol.toPrimitive, RangeErr = RangeError;
+  function toIndex(v) {
+    if (typeof v === "bigint") throw new TypeErr("Cannot convert a BigInt to a number");
+    var n = +v;
+    n = n !== n ? 0 : n === Infinity || n === -Infinity ? n : (n < 0 ? Math.ceil(n) : Math.floor(n));
+    if (n < 0 || n > 9007199254740991) throw new RangeErr("index out of range");
+    return n + 0;
+  }
+  function toBigInt(v) {
+    if (isObject(v)) {
+      var ex = v[SymToPrimitive], p;
+      if (ex !== undefined && ex !== null) {
+        if (typeof ex !== "function") throw new TypeErr("@@toPrimitive is not callable");
+        p = apply(ex, v, ["number"]);
+        if (isObject(p)) throw new TypeErr("@@toPrimitive returned an object");
+      } else {
+        var names = ["valueOf", "toString"], done = false;
+        for (var i = 0; i < 2 && !done; i++) {
+          var f = v[names[i]];
+          if (typeof f === "function") { p = apply(f, v, []); if (!isObject(p)) done = true; }
+        }
+        if (!done) throw new TypeErr("Cannot convert object to primitive value");
+      }
+      v = p;
+    }
+    if (typeof v === "number") throw new TypeErr("Cannot convert a Number to a BigInt");
+    return BigCtor(v);
+  }
+  function bitLength(b) { return (b < 0n ? -b : b).toString(2).length; }
+  var bigStatics = {
+    asIntN(bits, bigint) {
+      bits = toIndex(bits);
+      bigint = toBigInt(bigint);
+      if (bits === 0) return 0n;
+      if (bitLength(bigint) < bits) return bigint;
+      var m = 1n << BigCtor(bits), r = bigint % m;
+      if (r < 0n) r += m;
+      if (r >= (m >> 1n)) r -= m;
+      return r;
+    },
+    asUintN(bits, bigint) {
+      bits = toIndex(bits);
+      bigint = toBigInt(bigint);
+      if (bits === 0) return 0n;
+      if (bigint >= 0n && bitLength(bigint) <= bits) return bigint;
+      var m = 1n << BigCtor(bits), r = bigint % m;
+      if (r < 0n) r += m;
+      return r;
+    }
+  };
+  def(BigCtor, "asIntN", bigStatics.asIntN);
+  def(BigCtor, "asUintN", bigStatics.asUintN);
+
+  // WeakRef and FinalizationRegistry (26.1, 26.2). Liveness is the implementation's: G2 keeps targets alive and
+  // never calls cleanup callbacks, which the spec allows (an implementation may never collect).
+  var symKeyFor = Symbol.keyFor, SymToStringTag = Symbol.toStringTag;
+  function canBeHeldWeakly(v) {
+    if (isObject(v)) return true;
+    return typeof v === "symbol" && symKeyFor(v) === undefined;
+  }
+  function sameValue(a, b) { return a === b ? (a !== 0 || 1 / a === 1 / b) : (a !== a && b !== b); }
+  class WeakRef {
+    #target;
+    constructor(target) {
+      if (!canBeHeldWeakly(target)) throw new TypeErr("WeakRef: target must be an object or a non-registered symbol");
+      this.#target = target;
+    }
+    deref() { return this.#target; }
+  }
+  defineProperty(WeakRef.prototype, SymToStringTag, { value: "WeakRef", writable: false, enumerable: false, configurable: true });
+  markIntrinsic(WeakRef);
+  def(G, "WeakRef", WeakRef);
+  class FinalizationRegistry {
+    #cells;
+    constructor(cleanupCallback) {
+      if (typeof cleanupCallback !== "function") throw new TypeErr("FinalizationRegistry: cleanup must be callable");
+      this.#cells = [];
+    }
+    register(target, heldValue, unregisterToken = undefined) {
+      var cells = this.#cells;
+      if (!canBeHeldWeakly(target)) throw new TypeErr("register: target must be an object or a non-registered symbol");
+      if (sameValue(target, heldValue)) throw new TypeErr("register: target and held value must differ");
+      if (!canBeHeldWeakly(unregisterToken)) {
+        if (unregisterToken !== undefined) throw new TypeErr("register: invalid unregister token");
+        unregisterToken = undefined;
+      }
+      cells.push({ target: target, held: heldValue, token: unregisterToken });
+      return undefined;
+    }
+    unregister(unregisterToken) {
+      var cells = this.#cells;
+      if (!canBeHeldWeakly(unregisterToken)) throw new TypeErr("unregister: invalid unregister token");
+      var removed = false;
+      for (var i = cells.length - 1; i >= 0; i--) {
+        if (cells[i].token !== undefined && sameValue(cells[i].token, unregisterToken)) { cells.splice(i, 1); removed = true; }
+      }
+      return removed;
+    }
+  }
+  defineProperty(FinalizationRegistry.prototype, SymToStringTag, { value: "FinalizationRegistry", writable: false, enumerable: false, configurable: true });
+  markIntrinsic(FinalizationRegistry);
+  def(G, "FinalizationRegistry", FinalizationRegistry);
+
+  // escape and unescape (B.2.1.1, B.2.1.2)
+  var hexDigits = "0123456789ABCDEF", fromCharCode = String.fromCharCode;
+  var escapeOk = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@*_+-./";
+  var Str = String;
+  function toStr(v) { if (typeof v === "symbol") throw new TypeErr("Cannot convert a Symbol to a string"); return Str(v); }
+  var annexB = {
+    escape(string) {
+      var s = toStr(string), r = "";
+      for (var i = 0; i < s.length; i++) {
+        var c = s.charCodeAt(i);
+        if (escapeOk.indexOf(s.charAt(i)) >= 0) r += s.charAt(i);
+        else if (c < 256) r += "%" + hexDigits.charAt(c >> 4) + hexDigits.charAt(c & 15);
+        else r += "%u" + hexDigits.charAt(c >> 12) + hexDigits.charAt((c >> 8) & 15) + hexDigits.charAt((c >> 4) & 15) + hexDigits.charAt(c & 15);
+      }
+      return r;
+    },
+    unescape(string) {
+      var s = toStr(string), r = "", n = s.length;
+      function hex(i, k) {
+        var v = 0;
+        for (var j = 0; j < k; j++) {
+          var c = s.charCodeAt(i + j), d;
+          if (c >= 48 && c <= 57) d = c - 48; else if (c >= 65 && c <= 70) d = c - 55; else if (c >= 97 && c <= 102) d = c - 87; else return -1;
+          v = v * 16 + d;
+        }
+        return v;
+      }
+      for (var i = 0; i < n; i++) {
+        var ch = s.charAt(i);
+        if (ch === "%") {
+          if (i + 6 <= n && s.charAt(i + 1) === "u") { var u = hex(i + 2, 4); if (u >= 0) { r += fromCharCode(u); i += 5; continue; } }
+          if (i + 3 <= n) { var b = hex(i + 1, 2); if (b >= 0) { r += fromCharCode(b); i += 2; continue; } }
+        }
+        r += ch;
+      }
+      return r;
+    }
+  };
+  def(G, "escape", annexB.escape);
+  def(G, "unescape", annexB.unescape);
 
 })

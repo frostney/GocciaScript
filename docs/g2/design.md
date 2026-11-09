@@ -58,3 +58,9 @@ Most built-ins are native Pascal. Those whose spec steps matter more than their 
 (RegExp, String.prototype.replace / split / match), a native fast path runs instead while the objects
 involved are unmodified: the receiver's shape is the original one and the prototype's slots still hold the
 original methods.
+
+Temporal is such a prelude (`temporal.js`): the spec's operations in JS, exact times and time durations as BigInt
+nanoseconds, each class's internal slots in one private field. Time zones come from the TZif files and
+`tzdata.zi` of the zone directory (`GOCCIA_TZDIR`, else `/usr/share/zoneinfo`), which `G2.Temporal` reads for it.
+A prelude marks its classes as built-ins, so a construction whose new.target has no object `prototype` falls back
+to the class's own prototype, as a built-in constructor's does, rather than to `Object.prototype`.

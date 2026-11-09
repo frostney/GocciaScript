@@ -26,19 +26,27 @@ function CompilePrelude(const Name, Source: UnicodeString; var T: PFuncTemplate;
 implementation
 
 uses
-  G2.Eval;
+  BigInteger, G2.BigIntV, G2.Eval;
 
 {$I G2.PreludeSnapshot.inc}
 
 const
   SNAP_MAGIC = $31533247;   { 'G2S1' }
 
+{ identifies the prelude source a snapshot entry was made from: its length and about 4096 of its characters,
+  evenly spaced (the build makes the snapshot from the same sources; startup hashes every prelude) }
 function SourceHash(const S: UnicodeString): QWord;
-var I: Integer;
+var I, Stride: Integer;
 begin
   {$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
-  Result := 1469598103934665603;
-  for I := 1 to Length(S) do Result := (Result xor Ord(S[I])) * 1099511628211;
+  Result := 1469598103934665603 xor QWord(Length(S));
+  Stride := Length(S) div 4096 + 1;
+  I := 1;
+  while I <= Length(S) do
+  begin
+    Result := (Result xor Ord(S[I])) * 1099511628211;
+    Inc(I, Stride);
+  end;
   {$POP}
 end;
 
@@ -81,6 +89,7 @@ begin
     V := T^.Consts[I];
     if not IsPtr(V) then begin WriteU8(S, 0); WriteU64(S, V); end
     else if IsString(V) then begin WriteU8(S, 1); WriteStr(S, PStr(PtrOf(V))); end
+    else if IsBigInt(V) then begin WriteU8(S, 2); WriteText(S, BigToString(V)); end
     else raise ESnapshotUnsupported.Create('constant of a kind the snapshot cannot hold');
   end;
   WriteI32(S, Length(T^.Upvals));
@@ -199,7 +208,11 @@ begin
   for I := 0 to High(T^.Lines) do T^.Lines[I] := R.I32;
   SetLength(T^.Consts, R.I32);
   for I := 0 to High(T^.Consts) do
-    if R.U8 = 0 then T^.Consts[I] := R.U64 else T^.Consts[I] := MkPtr(R.Str);
+    case R.U8 of
+      0: T^.Consts[I] := R.U64;
+      1: T^.Consts[I] := MkPtr(R.Str);
+    else T^.Consts[I] := BigToValue(TBigInteger.FromDecimalString(string(StrToUnicode(R.Str))), True);   { a BigInt literal }
+    end;
   SetLength(T^.Upvals, R.I32);
   for I := 0 to High(T^.Upvals) do begin T^.Upvals[I].FromParentLocal := R.U8 <> 0; T^.Upvals[I].Index := R.I32; end;
   N := R.I32;

@@ -11,7 +11,7 @@ It is not wired into `build.pas`, the CI or the release, and nothing in Goccia d
 
 | Measure | Value |
 |---|---|
-| test262 (pin 91c70759, contract 4, all six categories) | 82,569 / 103,264 runs (80.0%) |
+| test262 (pin 91c70759, contract 4, all six categories) | 92,493 / 103,264 runs (89.6%) |
 | JetStream, 6 bundles, wall clock | QuickJS time / G2 time 0.92 (below 1: QuickJS faster) |
 | Web Tooling, 18 bundles, wall clock | 1.23, or 1.03 without coffeescript (QuickJS runs it 25x slower) |
 
@@ -20,8 +20,8 @@ shared machine at a load average of 5 to 10, so single bundles can be off by sev
 changes below made Web Tooling 1.21x faster end to end than on this repository's front end before them
 (typescript 1.55x, prettier 1.68x).
 
-Largest remaining test262 gaps: Temporal (about 13,300 runs including intl402), Intl (about 6,700), RegExp
-property escapes and `v` flag, Date, realms (`$262.createRealm`, ShadowRealm), import defer, Atomics.waitAsync.
+Largest remaining test262 gaps: Intl (about 6,300 runs, including Temporal's non-ISO calendars), realms
+(`$262.createRealm`, ShadowRealm: about 700), Date, import defer, Atomics on BigInt arrays, immutable ArrayBuffers.
 Largest performance gaps: generators (lazy-collections 0.67), float arithmetic on typed arrays
 (gaussian-blur 0.78), string-heavy bundles (source-map 0.85, buble 0.85), hash-map and sync-fs (0.88).
 

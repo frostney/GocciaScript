@@ -89,11 +89,18 @@ end;
 
 { ---------------- BigInt ---------------- }
 
+{ 21.2.1.1 BigInt(value): ToPrimitive(value, number), then NumberToBigInt of a Number or ToBigInt of the rest
+  (StringToBigInt with its SyntaxError for a string) }
 function BigInt_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var V, S: TValue; D: Double;
+var V, P: TValue; D: Double;
 begin
   V := Arg(Args, Argc, 1);
   if IsBigInt(V) then begin Res := V; Exit(True); end;
+  if IsObject(V) then
+  begin
+    if not ToPrimitiveHint(V, phNumber, P) then Exit(False);
+    V := P;
+  end;
   if IsNumber(V) then
   begin
     D := NumOf(V);
@@ -101,11 +108,7 @@ begin
     Res := BigToValue(TBigInteger.FromDouble(D));
     Exit(True);
   end;
-  if V = VTrue then begin Res := BigToValue(TBigInteger.One); Exit(True); end;
-  if V = VFalse then begin Res := BigToValue(TBigInteger.Zero); Exit(True); end;
-  if not ToStringV(V, S) then Exit(False);
-  Res := BigToValue(TBigInteger.FromDecimalString(Trim(StrToUnicode(StrOf(S)))));
-  Result := True;
+  Result := ToBigIntV(V, Res);
 end;
 
 { 21.2.3 thisBigIntValue: a BigInt, or a BigInt wrapper's value }

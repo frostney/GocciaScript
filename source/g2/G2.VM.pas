@@ -17,6 +17,7 @@ const
   FRAME_MAX = 200000;
   okAsyncGen = 26;  { an async generator: Aux1 closure, Aux2 state, as okGenerator }
   STACK_MAX = 4 * 1024 * 1024;
+  INTRINSIC_CLASS = $80000000;   { TObj.Pad of a function: a built-in class (MarkIntrinsicClass) }
 
 type
   PFrame = ^TFrame;
@@ -215,6 +216,8 @@ function DefineOwn(O: TValue; Key: PStr; V: TValue; Flags: Byte): Boolean;
 function GetIterator(V: TValue; var It: TValue): Boolean;
 function IteratorStep(It: TValue; var Value: TValue; var Done: Boolean): Boolean;
 function FunctionPrototypeOf(F: TValue): TValue;
+{ for preludes: marks a class as a built-in (its own prototype is its default prototype) }
+function MarkIntrinsicClass(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 function DemoteArguments(Obj: TValue): TValue;
 { 10.4.6 module namespace: Found when Key (a string) is an export; V its binding's value (False with a
   ReferenceError pending while it is uninitialized, when WantValue) }
@@ -307,17 +310,18 @@ end;
 { ---------------- upvalues ---------------- }
 
 function FindOrOpenUpval(Idx: Integer): TValue;
-var I, J: Integer; U: PUpval; V: TValue;
+var I, J, Lo, Hi, Mid: Integer; U: PUpval; V: TValue;
 begin
-  { OpenUpvals is sorted by stack index ascending }
-  I := OpenCount - 1;
-  while I >= 0 do
+  { OpenUpvals is sorted by stack index ascending: find the last one at or below Idx (a function that makes many
+    closures keeps many open, so a linear scan per capture was quadratic) }
+  Lo := 0; Hi := OpenCount - 1; I := -1;
+  while Lo <= Hi do
   begin
-    U := PUpval(PtrOf(OpenUpvals[I]));
-    if U^.StackIndex = Idx then Exit(OpenUpvals[I]);
-    if U^.StackIndex < Idx then Break;
-    Dec(I);
+    Mid := (Lo + Hi) shr 1;
+    if PUpval(PtrOf(OpenUpvals[Mid]))^.StackIndex <= Idx then begin I := Mid; Lo := Mid + 1; end
+    else Hi := Mid - 1;
   end;
+  if (I >= 0) and (PUpval(PtrOf(OpenUpvals[I]))^.StackIndex = Idx) then Exit(OpenUpvals[I]);
   U := NewUpval;
   U^.StackIndex := Idx;
   V := MkPtr(U);
@@ -940,6 +944,45 @@ begin
   AddProperty(ObjOf(F), AtomPrototype, RootAt(TempTop - 1), pfWritable);
   Result := RootAt(TempTop - 1);
   PopRoots(2);
+end;
+
+{ 10.1.14 GetPrototypeFromConstructor's Get(constructor, "prototype"): a function's own data property (made on
+  first use), else a full [[Get]] (an accessor, a proxy, a bound function's own property), which can run code }
+function PrototypeForConstruct(NewTarget: TValue; var Proto: TValue): Boolean;
+var O: PObj; S: Integer;
+begin
+  O := ObjOf(NewTarget);
+  S := ShapeLookup(O^.Shape, AtomPrototype);
+  if ((S >= 0) and ((O^.Shape^.PFlags[S] and pfAccessor) = 0)) or ((S < 0) and (O^.OKind = okFunction)) then
+  begin
+    Proto := FunctionPrototypeOf(NewTarget);
+    Exit(True);
+  end;
+  Result := GetV(NewTarget, AtomPrototype, Proto);
+end;
+
+{ OrdinaryCreateFromConstructor's intrinsicDefaultProto, used when newTarget's prototype is not an object: a
+  built-in class written in a prelude (marked by MarkIntrinsicClass) falls back to its own prototype property,
+  any other constructor to %Object.prototype% }
+function DefaultConstructProto(F: TValue): TValue;
+var O: PObj; S: Integer;
+begin
+  O := ObjOf(F);
+  if (O^.OKind = okFunction) and ((O^.Pad and INTRINSIC_CLASS) <> 0) then
+  begin
+    S := ShapeLookup(O^.Shape, AtomPrototype);
+    if (S >= 0) and ((O^.Shape^.PFlags[S] and pfAccessor) = 0) then Exit(GetSlot(O, S));
+  end;
+  Result := ObjectProto;
+end;
+
+{ markIntrinsic(C), for preludes: C is a built-in class (DefaultConstructProto) }
+function MarkIntrinsicClass(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if (Argc >= 1) and IsObject(Args[1]) and (ObjOf(Args[1])^.OKind = okFunction) then
+    ObjOf(Args[1])^.Pad := ObjOf(Args[1])^.Pad or INTRINSIC_CLASS;
+  Res := VUndefined;
+  Result := True;
 end;
 
 { ---------------- property access ---------------- }
@@ -2426,11 +2469,12 @@ begin
     Exit;
   end;
   PushRoot(F); PushRoot(NewTarget);
-  Proto := FunctionPrototypeOf(NewTarget);
-  if not IsObject(Proto) then Proto := ObjectProto;
-  ThisO := NewObject(RootShapeFor(Proto), Max(4, T^.ExpectedProps), okPlain);
-  F := RootAt(TempTop - 2); NewTarget := RootAt(TempTop - 1);
-  PopRoots(2);
+  if not PrototypeForConstruct(NewTarget, Proto) then begin PopRoots(2); Exit(False); end;
+  if not IsObject(Proto) then Proto := DefaultConstructProto(RootAt(TempTop - 2));
+  PushRoot(Proto);
+  ThisO := NewObject(RootShapeFor(RootAt(TempTop - 1)), Max(4, T^.ExpectedProps), okPlain);
+  F := RootAt(TempTop - 3); NewTarget := RootAt(TempTop - 2);
+  PopRoots(3);
   if Assigned(T^.FieldInit) and not T^.IsDerived then
   begin
     PushRoot(F); PushRoot(NewTarget); PushRoot(MkPtr(ThisO));
@@ -4995,9 +5039,11 @@ LReload:
                 if not PushBytecodeFrame(ObjOf(VA), VHole, @R[A + 2], Argc, Fr^.Base + A, 1, VA) then goto LThrow;
                 goto LReload;
               end;
-              V := FunctionPrototypeOf(VA);
-              if not IsObject(V) then V := ObjectProto;
-              O := NewObject(RootShapeFor(V), Max(4, T^.ExpectedProps), okPlain);
+              if not PrototypeForConstruct(VA, V) then goto LThrow;
+              if not IsObject(V) then V := DefaultConstructProto(R[A]);
+              PushRoot(V);
+              O := NewObject(RootShapeFor(RootAt(TempTop - 1)), Max(4, T^.ExpectedProps), okPlain);
+              PopRoots(1);
               R[A + 1] := MkPtr(O);
               VA := R[A];
               if Assigned(T^.FieldInit) and not T^.IsDerived then
