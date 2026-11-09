@@ -546,7 +546,7 @@ type
     function VarStatement: TGocciaStatement;
     function ForStatement: TGocciaStatement;
     function LooksLikeTraditionalForHeader: Boolean;
-    function ParseTraditionalForBody(const ALine, AColumn: Integer): TGocciaForStatement;
+    function ParseTraditionalForBody(const ALine, AColumn: Integer): TGocciaStatement;
     function WhileStatement: TGocciaStatement;
     function DoWhileStatement: TGocciaStatement;
     function WithStatement: TGocciaStatement;
@@ -8087,9 +8087,11 @@ begin
 end;
 
 function TGocciaParser.ParseTraditionalForBody(
-  const ALine, AColumn: Integer): TGocciaForStatement;
+  const ALine, AColumn: Integer): TGocciaStatement;
 var
   InitStmt: TGocciaStatement;
+  InExpr: TGocciaExpression;
+  HeadExprs: TObjectList<TGocciaExpression>;
   CondExpr, UpdateExpr, InitExpr: TGocciaExpression;
   BodyStmt: TGocciaStatement;
   IsConst, IsVarKeyword: Boolean;
@@ -8198,6 +8200,32 @@ begin
         VariableBindingNames.Free;
         BindingNames.Free;
       end;
+    end;
+
+    // ES2026 B.3.5 Initializers in ForIn Statement Heads (non-strict code):
+    // for (var x = init in obj) assigns init to x, then enumerates obj.
+    // The head becomes the expression (x = init, obj).
+    if IsVarKeyword and (VarCount = 1) and not Variables[0].IsPattern and
+       Variables[0].HasInitializer and Check(gttIn) and
+       EffectiveNonStrictModeEnabled and FForInLoopsEnabled then
+    begin
+      Advance; // consume 'in'
+      InExpr := Expression;
+      Consume(gttRightParen, 'Expected ")" after for...in expression',
+        SSuggestCloseParenForOf);
+      HeadExprs := TObjectList<TGocciaExpression>.Create(True);
+      HeadExprs.Add(TGocciaAssignmentExpression.Create(Variables[0].Name,
+        Variables[0].Initializer, SourceSpanAtPosition(DeclLine, DeclColumn)));
+      HeadExprs.Add(InExpr);
+      BodyStmt := IterationBodyStatement;
+      RejectLabelledFunctionStatementBody(BodyStmt, ALine, AColumn);
+      RejectFunctionStatementBody(BodyStmt, ALine, AColumn);
+      Result := TGocciaForInStatement.Create(False, Variables[0].Name, nil,
+        TGocciaSequenceExpression.Create(HeadExprs,
+          SourceSpanAtPosition(DeclLine, DeclColumn)),
+        BodyStmt, SourceSpanAtPosition(ALine, AColumn));
+      TGocciaForInStatement(Result).IsVar := True;
+      Exit;
     end;
 
     Consume(gttSemicolon, 'Expected '';'' after for-init declaration',
