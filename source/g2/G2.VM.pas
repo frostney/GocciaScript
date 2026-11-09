@@ -2601,7 +2601,21 @@ begin
     Exit(True);
   end;
   if (O^.OKind = okGenerator) and GeneratorNextIsIntrinsic(It) then
-    Exit(GeneratorResume(It, VUndefined, 0, Value, Done));
+  begin
+    { a yield* hands out the inner iterator's result object as is (GenYieldRaw): its done and value }
+    GenYieldRaw := False;
+    if not GeneratorResume(It, VUndefined, 0, Value, Done) then Exit(False);
+    if not GenYieldRaw then Exit(True);
+    GenYieldRaw := False;
+    PushRoot(Value);
+    if not GetV(RootAt(TempTop - 1), AtomDone, Value) then begin PopRoots(1); Exit(False); end;
+    Done := ToBool(Value);
+    Value := VUndefined;
+    if not Done then
+      if not GetV(RootAt(TempTop - 1), AtomValue, Value) then begin PopRoots(1); Exit(False); end;
+    PopRoots(1);
+    Exit(True);
+  end;
   PushRoot(It);
   if not GetV(It, AtomNext, NextF) then begin PopRoots(1); Exit(False); end;
   if not CallValue(NextF, RootAt(TempTop - 1), nil, 0, R) then begin PopRoots(1); Exit(False); end;
@@ -3912,6 +3926,104 @@ begin
     Done := True;
   end;
   Result := True;
+end;
+
+{ ---- generators resumed by for-of inside Execute (frame Kind 4) ----
+  A for-of step over a suspended generator whose next is the intrinsic one pushes the generator's frame above
+  the consumer's instead of a nested Execute: a yield saves it and hands the value to the consumer's register
+  (RetIdx); its completion marks it done and takes the consumer's opIterNext done jump; an exception through
+  it marks it done and leaves the consumer's iterator done (an abrupt next() is not closed). }
+
+{ the generator's frame, restored as GeneratorResume restores it for next(undefined) }
+function XGenInline(Gen: TValue; RetIdx: Integer): Boolean; noinline;
+var G: PObj; State: PValueArray; T: PFuncTemplate; Base, I, NH, NU, J, ResumeReg, NLive: Integer; Fr: PFrame;
+  U: PUpval;
+begin
+  G := ObjOf(Gen);
+  T := PFuncTemplate(ObjOf(G^.Aux1)^.Native);
+  State := PValueArray(PtrOf(G^.Aux2));
+  Base := StackTop;
+  if (Base + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
+    Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  NLive := IntOf(State^.Data[T^.MaxRegs + 1]);
+  Move(State^.Data[0], VStack[Base], NLive * SizeOf(TValue));
+  if NLive < T^.MaxRegs then FillQWord(VStack[Base + NLive], T^.MaxRegs - NLive, VUndefined);
+  ResumeReg := IntOf(State^.Data[T^.MaxRegs]);
+  if ResumeReg <= -2 then
+  begin
+    VStack[Base - ResumeReg - 2] := VUndefined;
+    VStack[Base - ResumeReg - 1] := MkInt(0);
+  end
+  else if ResumeReg >= 0 then VStack[Base + ResumeReg] := VUndefined;
+  Fr := @Frames[FrameTop];
+  Fr^.Closure := G^.Aux1;
+  Fr^.NewTarget := Gen;
+  Fr^.Tpl := T;
+  Fr^.Base := Base;
+  Fr^.PC := G^.Pad;
+  Fr^.RetIdx := RetIdx;
+  Fr^.Argc := 0;
+  Fr^.Kind := 4;
+  Inc(FrameTop);
+  NH := IntOf(State^.Data[T^.MaxRegs + 2]);
+  for I := 0 to NH - 1 do
+  begin
+    if HandlerTop >= Length(Handlers) then SetLength(Handlers, HandlerTop * 2 + 64);
+    Handlers[HandlerTop].Frame := FrameTop - 1;
+    Handlers[HandlerTop].PC := IntOf(State^.Data[T^.MaxRegs + 3 + I * 2]) and $0FFFFFFF;
+    Handlers[HandlerTop].Kind := IntOf(State^.Data[T^.MaxRegs + 3 + I * 2]) shr 28;
+    Handlers[HandlerTop].ExcIdx := Base + IntOf(State^.Data[T^.MaxRegs + 4 + I * 2]);
+    Inc(HandlerTop);
+  end;
+  NU := IntOf(State^.Data[T^.MaxRegs + 3 + NH * 2]);
+  for I := 0 to NU - 1 do
+  begin
+    U := PUpval(PtrOf(State^.Data[T^.MaxRegs + 4 + NH * 2 + I * 2]));
+    J := IntOf(State^.Data[T^.MaxRegs + 5 + NH * 2 + I * 2]);
+    if U^.StackIndex < 0 then
+    begin
+      VStack[Base + J] := U^.Value;
+      U^.StackIndex := Base + J;
+      if OpenCount >= Length(OpenUpvals) then SetLength(OpenUpvals, OpenCount * 2 + 64);
+      OpenUpvals[OpenCount] := MkPtr(U);
+      Inc(OpenCount);
+    end;
+  end;
+  StackTop := Base + T^.MaxRegs;
+  G^.OFlags := 2;
+  GenYielded := False;
+  Result := True;
+end;
+
+{ the consumer below a Kind 4 frame that is gone: its iterator register (opIterNext's B) done; Jump: also take
+  that instruction's done jump }
+procedure XGenConsumerDone(Jump: Boolean);
+var CF: PFrame; Ins: QWord;
+begin
+  CF := @Frames[FrameTop - 1];
+  Ins := CF^.Tpl^.Code[CF^.PC - 1];
+  VStack[CF^.Base + Integer((Ins shr 24) and $FFFF)] := VUndefined;
+  if Jump then Inc(CF^.PC, SarInt64(Int64(Ins), 40));
+end;
+
+{ a Kind 4 frame returned (the generator completed): it is done, the consumer's loop ends }
+procedure XGenInlineReturn(Fr: PFrame); noinline;
+begin
+  ObjOf(Fr^.NewTarget)^.OFlags := 3;
+  CloseUpvals(Fr^.Base);
+  while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
+  Dec(FrameTop);
+  XGenConsumerDone(True);
+end;
+
+{ an exception unwinds the frame at FrameTop - 1 (its upvalues closed by the caller): a Kind 4 one leaves its
+  generator done and its consumer's iterator done }
+procedure XGenUnwind; noinline;
+begin
+  ObjOf(Frames[FrameTop - 1].NewTarget)^.OFlags := 3;
+  Dec(FrameTop);
+  XGenConsumerDone(False);
+  Inc(FrameTop);
 end;
 
 { runs the instance field initializer of a class constructor on This, if it has one }
@@ -6058,6 +6170,11 @@ LReload:
 
       opRet, opRetUndef:
         begin
+          if Fr^.Kind = 4 then
+          begin
+            XGenInlineReturn(Fr);
+            goto LReload;
+          end;
           if TOp(I and $FF) = opRet then V := R[A] else V := VUndefined;
           if (Fr^.Kind = 1) and not IsObject(V) then
           begin
@@ -6386,6 +6503,12 @@ LReload:
             end;
           end;
           Fr^.PC := PC;
+          { a suspended generator with the intrinsic next: resumed in this Execute (Kind 4) }
+          if (O^.OKind = okGenerator) and (O^.OFlags <= 1) and (R[B + 1] = GenNextFn) and not MultiRealmAny then
+          begin
+            if not XGenInline(VB, Fr^.Base + A) then goto LThrow;
+            goto LReload;
+          end;
           if not IteratorStepRec(VB, R[B + 1], V, Done) then
           begin
             R[B] := VUndefined;   { an abrupt next() leaves the iterator done (7.4.8): it is not closed }
@@ -6447,6 +6570,17 @@ LReload:
             Continue;
           end;
           { yield the inner result as is; resume here with the next received value and mode }
+          if Fr^.Kind = 4 then
+          begin
+            { a for-of's generator (Kind 4): suspended at the step, the consumer gets the inner result's value }
+            V := R[B + 2];
+            J := Fr^.RetIdx;
+            SuspendKeep(Fr, Tpl, R, -(B + 2) - 2, PC - 1, Integer(Code[PC - 1] shr 40), V);
+            GenYielded := False;
+            if not GetV(V, AtomValue, V) then goto LThrow;
+            VStack[J] := V;
+            goto LReload;
+          end;
           if (Fr^.Kind <> 3) or (FrameTop - 1 <> StopFrame) then
           begin
             ThrowError('SyntaxError', 'yield outside a running generator');
@@ -6774,6 +6908,17 @@ LReload:
         begin
           Fr^.PC := PC;
           SuspendedByAwait := TOp(I and $FF) = opAwait;
+          if (Fr^.Kind = 4) and (TOp(I and $FF) = opYield) then
+          begin
+            { a for-of's generator yields: suspended, its value in the consumer's register }
+            PushRoot(R[(I shr 24) and $FFFF]);
+            J := Fr^.RetIdx;
+            SaveSuspension(Fr, Tpl, R, A, PC, Integer(Code[PC - 1] shr 40));
+            GenYielded := False;
+            VStack[J] := RootAt(TempTop - 1);
+            PopRoots(1);
+            goto LReload;
+          end;
           if (Fr^.Kind <> 3) or (FrameTop - 1 <> StopFrame) then
           begin
             ThrowError('SyntaxError', 'yield outside a running generator');
@@ -6884,6 +7029,7 @@ LThrow:
       while FrameTop - 1 > H^.Frame do
       begin
         CloseUpvals(Frames[FrameTop - 1].Base);
+        if Frames[FrameTop - 1].Kind = 4 then XGenUnwind;
         Dec(FrameTop);
       end;
       Frames[FrameTop - 1].PC := H^.PC;
@@ -6894,6 +7040,8 @@ LThrow:
     while FrameTop > StopFrame do
     begin
       CloseUpvals(Frames[FrameTop - 1].Base);
+      if (Frames[FrameTop - 1].Kind = 4) and (FrameTop - 1 > StopFrame) then XGenUnwind
+      else if Frames[FrameTop - 1].Kind = 4 then ObjOf(Frames[FrameTop - 1].NewTarget)^.OFlags := 3;
       Dec(FrameTop);
     end;
     Res := VUndefined;
