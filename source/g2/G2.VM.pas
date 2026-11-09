@@ -3600,9 +3600,26 @@ begin
   Result := True;
 end;
 
-function ForInKeys(V: TValue; var It: TValue): Boolean;
-var A, K, P: TValue; I, N: Integer; O: PObj;
+{ an own property of an ordinary object (a proxy's are not checked: it shadows nothing here) }
+function ForInOwnHas(O: PObj; Key: PStr): Boolean;
+var Idx: Int64; V: TValue;
 begin
+  if O^.OKind = okProxy then Exit(False);
+  if (O^.OKind = okTypedArray) and IndexFromString(Key, Idx) then Exit(Idx < TALength(O));
+  if (O^.Elements <> nil) and IndexFromString(Key, Idx) and (Idx < O^.Elements^.Len) and (O^.Elements^.Data[Idx] <> VHole) then
+    Exit(True);
+  Result := (ShapeLookup(O^.Shape, Key) >= 0) or VirtualProp(O, Key, V);
+end;
+
+{ 14.7.5.9 EnumerateObjectProperties: the enumerable string keys of V and its prototypes, each once, a prototype's
+  key left out when an object before it has that key as an own property (enumerable or not). Obj: ToObject(V), for
+  the loop's check that a key is still there when its turn comes }
+function ForInKeys(V: TValue; var It, Obj: TValue): Boolean;
+var A, K, P, Q: TValue; I, N, J, D: Integer; Key: PStr; Shadow: Boolean;
+begin
+  Obj := VUndefined;
+  if not IsNullish(V) and not IsObject(V) and Assigned(ToObjectHook) then
+    if not ToObjectHook(V, V) then Exit(False);
   if not IsObject(V) then
   begin
     A := MkPtr(NewArray(0, 0));
@@ -3614,18 +3631,36 @@ begin
   if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(1); Exit(False); end;
   PushRoot(A);
   P := ObjOf(RootAt(TempTop - 2))^.Shape^.Proto;
-  while IsObject(P) and (P <> ObjectProto) and (P <> ArrayProto) and (P <> FunctionProto) do
+  D := 1;
+  while IsObject(P) do
   begin
     PushRoot(P);
     K := OwnKeys(ObjOf(P), True);
     if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(3); Exit(False); end;
     N := ArrayLen(ObjOf(K));
-    PushRoot(K);
-    for I := 0 to N - 1 do ArrayPush(ObjOf(RootAt(TempTop - 3)), ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
-    P := ObjOf(RootAt(TempTop - 2))^.Shape^.Proto;
-    PopRoots(2);
+    if N > 0 then
+    begin
+      PushRoot(K);
+      for I := 0 to N - 1 do
+      begin
+        Key := Atomize(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
+        Shadow := False;
+        Q := RootAt(TempTop - 4);
+        for J := 0 to D - 1 do
+        begin
+          if ForInOwnHas(ObjOf(Q), Key) then begin Shadow := True; Break; end;
+          Q := ObjOf(Q)^.Shape^.Proto;
+        end;
+        if not Shadow then ArrayPush(ObjOf(RootAt(TempTop - 3)), ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
+      end;
+      PopRoots(1);
+    end;
+    P := ObjOf(RootAt(TempTop - 1))^.Shape^.Proto;
+    PopRoots(1);
+    Inc(D);
   end;
   It := NewArrayIterator(RootAt(TempTop - 1), 0);
+  Obj := RootAt(TempTop - 2);
   PopRoots(2);
   Result := True;
 end;
@@ -4082,6 +4117,26 @@ end;
 function XBigAddInt(V: TValue; N: Integer): TValue; noinline;
 begin
   Result := BigToValue(ValueToBig(V).Add(TBigInteger.FromInt64(N)));
+end;
+
+{ opGetSuper: 13.3.7.3 GetSuperBase, then GetValue: ToObject of the base (null throws), then the key's
+  ToPropertyKey (CI < 0: KeyV; else the IC's key), then [[Get]] with This as the receiver }
+function XGetSuper(Home, KeyV: TValue; CI: Integer; Tpl: PFuncTemplate; This: TValue; var Res: TValue): Boolean; noinline;
+var Base: TValue; Key: PStr; Ok: Boolean;
+begin
+  if IsObject(Home) then Base := ObjOf(Home)^.Shape^.Proto else Base := VUndefined;
+  if not IsObject(Base) then
+    Exit(ThrowTypeError('Cannot read a super property: the home object''s prototype is not an object'));
+  if CI < 0 then
+  begin
+    PushRoot(Base); PushRoot(This);
+    Ok := ToPropKey(KeyV, Key);
+    This := RootAt(TempTop - 1); Base := RootAt(TempTop - 2);
+    PopRoots(2);
+    if not Ok then Exit(False);
+  end
+  else Key := Tpl^.ICs[CI].Key;
+  Result := GetFromObject(ObjOf(Base), Key, This, Res);
 end;
 
 { the slow path of the immediate adds: opAddI is binary + (a string concatenates, a BigInt throws), opSubI binary
@@ -5293,15 +5348,8 @@ LReload:
         begin
           Fr^.PC := PC;
           CI := SarInt64(Int64(I), 40);
-          { a computed key: opToPropKey leaves integers as they are }
-          if CI < 0 then
-          begin
-            if not ToPropKey(R[-1 - CI], Key) then goto LThrow;
-          end
-          else Key := Tpl^.ICs[CI].Key;
-          VB := R[(I shr 24) and $FFFF];   { home object }
-          if not IsObject(VB) or not IsObject(ObjOf(VB)^.Shape^.Proto) then begin R[A] := VUndefined; Continue; end;
-          if not GetFromObject(ObjOf(ObjOf(VB)^.Shape^.Proto), Key, R[0], V) then goto LThrow;
+          if CI < 0 then VA := R[-1 - CI] else VA := VUndefined;
+          if not XGetSuper(R[(I shr 24) and $FFFF], VA, CI, Tpl, R[0], V) then goto LThrow;
           R[A] := V;
         end;
 
@@ -6046,8 +6094,9 @@ LReload:
       opForIn:
         begin
           Fr^.PC := PC;
-          if not ForInKeys(R[(I shr 24) and $FFFF], V) then goto LThrow;
+          if not ForInKeys(R[(I shr 24) and $FFFF], V, VB) then goto LThrow;
           R[A] := V;
+          R[I shr 40] := VB;
           R[A + 1] := ArrayIterNextFnOf;   { not the threadvar directly: FPC 3.3.1+3 gave this load an absolute
                                              relocation (R_X86_64_32S) here; tools/tlsscan.py caught it }
         end;

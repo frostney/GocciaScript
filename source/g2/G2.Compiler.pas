@@ -313,6 +313,8 @@ type
     procedure CompileForAwaitOf(S: TGocciaForOfStatement);
     procedure EmitAsyncIterClose(It, Tmp: Integer);
     procedure CompileForIn(S: TGocciaForInStatement);
+    procedure ForHeadExpr(E: TGocciaExpression; Dest: Integer; IsVar: Boolean; const BName: UnicodeString;
+      Pat: TGocciaDestructuringPattern);
     procedure CompileSwitch(S: TGocciaSwitchStatement);
     procedure CompileTry(S: TGocciaTryStatement);
     procedure CompileReturn(S: TGocciaReturnStatement);
@@ -2735,6 +2737,34 @@ end;
   runs, its errors ignored) and is rethrown; one from next() leaves the iterator done (opIterNext clears it),
   so nothing is closed. A break out of this loop reaches the close after the loop; a jump further out, or a
   return, closes it through the Tries entry (EmitFinallyUnwind). Exhaustion closes nothing. }
+{ 14.7.5.6 ForIn/OfHeadEvaluation step 2: a lexical declaration's names are uninitialized bindings of the scope the
+  expression runs in }
+procedure TCompiler.ForHeadExpr(E: TGocciaExpression; Dest: Integer; IsVar: Boolean; const BName: UnicodeString;
+  Pat: TGocciaDestructuringPattern);
+var L: TStringList; I: Integer;
+begin
+  if IsVar or ((BName = '') and (Pat = nil)) then begin ExprTo(E, Dest); Exit; end;
+  PushScope;
+  DeclaringLexical := True;
+  try
+    if BName <> '' then DeclareLocal(BName, False)
+    else
+    begin
+      L := NewNameList;
+      try
+        PatternNames(Pat, L);
+        for I := 0 to L.Count - 1 do DeclareLocal(L[I], False);
+      finally
+        L.Free;
+      end;
+    end;
+  finally
+    DeclaringLexical := False;
+  end;
+  ExprTo(E, Dest);
+  PopScope;
+end;
+
 procedure TCompiler.CompileForOf(S: TGocciaForOfStatement);
 var It, V, Top, Exit_, R, Exc, H, JDone, JBreak: Integer;
 begin
@@ -2745,7 +2775,7 @@ begin
   AllocReg;   { the iterator record's next method }
   V := AllocReg;
   Exc := AllocReg;
-  ExprTo(S.Iterable, It);
+  ForHeadExpr(S.Iterable, It, S.IsVar, S.BindingName, S.BindingPattern);
   Emit(Ins(opGetIter, It, It, 0));
   if FS.TryCount >= Length(FS.Tries) then SetLength(FS.Tries, FS.TryCount * 2 + 4);
   FS.Tries[FS.TryCount].Block := nil;
@@ -2819,7 +2849,7 @@ begin
   V := AllocReg;
   Exc := AllocReg;
   Exc2 := AllocReg;
-  ExprTo(S.Iterable, It);
+  ForHeadExpr(S.Iterable, It, S.IsVar, S.BindingName, S.BindingPattern);
   Emit(Ins(opGetAsyncIter, It, It, 0));
   if FS.TryCount >= Length(FS.Tries) then SetLength(FS.Tries, FS.TryCount * 2 + 4);
   FS.Tries[FS.TryCount].Block := nil;
@@ -2877,17 +2907,22 @@ begin
 end;
 
 procedure TCompiler.CompileForIn(S: TGocciaForInStatement);
-var It, V, Top, Exit_, R: Integer;
+var It, V, Top, Exit_, R, ObjR, Chk: Integer;
 begin
   CheckStatementBody(S.Body, False, FS.Tpl^.IsStrict);
   PushScope;
   It := AllocReg;
   AllocReg;   { opForIn's next method: the key iterator steps without a call }
   V := AllocReg;
-  ExprTo(S.ObjectExpression, It);
-  Emit(Ins(opForIn, It, It, 0));
+  ObjR := AllocReg;
+  Chk := AllocReg;
+  ForHeadExpr(S.ObjectExpression, It, S.IsVar, S.BindingName, S.BindingPattern);
+  Emit(Ins(opForIn, It, It, ObjR));
   Top := Here;
   Exit_ := Emit(Ins(opIterNext, V, It, 0));
+  { 14.7.5.9: a property deleted before its turn is not visited }
+  Emit(Ins(opIn, Chk, V, ObjR));
+  PatchTo(EmitJ(opJF, Chk, 0), Top);
   PushScope;
   if S.BindingName <> '' then
   begin
@@ -4023,10 +4058,16 @@ begin
     H := AllocReg;
     LoadIdent('%home', H);
   end;
+  { 13.3.7.1 step 2: GetThisBinding (a ReferenceError before super()) comes before the key expression }
+  if InDerivedCtor then
+  begin
+    K := AllocReg;
+    LoadThis(K);
+  end;
   if Assigned(KeyExpr) then
   begin
+    { the key's ToPropertyKey comes after GetSuperBase (13.3.7.3, 6.2.5.5 GetValue): opGetSuper does both }
     K := ExprAny(KeyExpr);
-    Emit(Ins(opToPropKey, K, K, 0));
     Emit(Ins(opGetSuper, Dest, H, -1 - K));
   end
   else
