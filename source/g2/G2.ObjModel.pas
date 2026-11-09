@@ -1465,30 +1465,58 @@ begin
 end;
 
 { 10.2.4.1 %ThrowTypeError% }
-{ %ThrowTypeError%, the getter and setter of Function.prototype.caller and .arguments: read on a non-strict
-  function (the legacy caller extension, 17.1 forbidden extensions), it is undefined (G2 reveals no caller) unless
-  that function's active call came from a strict function: then it throws, as an implementation that reveals
-  callers must }
-function LegacyCallerRead(F: TValue; var Res: TValue): Boolean;
-var T: PFuncTemplate; I: Integer;
+{ a function the legacy function reflection serves: non-strict and ordinary (no arrow, method, class, generator
+  or async function) }
+function IsSloppyOrdinary(F: TValue): Boolean;
+var T: PFuncTemplate;
 begin
   Result := False;
   if not IsObject(F) or (ObjOf(F)^.OKind <> okFunction) then Exit;
   T := PFuncTemplate(ObjOf(F)^.Native);
-  if T^.IsStrict or T^.IsArrow or T^.IsMethod or T^.IsClassCtor or T^.IsGenerator or T^.IsAsync then Exit;
+  Result := not (T^.IsStrict or T^.IsArrow or T^.IsMethod or T^.IsClassCtor or T^.IsGenerator or T^.IsAsync);
+end;
+
+{ %ThrowTypeError%, the getter and setter of Function.prototype.caller and .arguments. Read on a non-strict
+  ordinary function F (the legacy function reflection, es-legacy-function-reflection; 17.1 forbids a strict
+  caller only): caller is the function of the call below F's newest active call (eval code skipped), null when
+  F is not running or that caller is not a non-strict ordinary function; arguments is that call's arguments
+  object, null when F is not running. Key: the property being read (AccessorGetKey) }
+function LegacyCallerRead(F: TValue; Key: PStr; var Res: TValue): Boolean;
+var I, J: Integer; T: PFuncTemplate;
+begin
+  Result := False;
+  if not IsSloppyOrdinary(F) then Exit;
+  Result := True;
+  Res := VNull;
   for I := FrameTop - 1 downto 0 do
     if Frames[I].Closure = F then
     begin
-      if (I > 0) and Frames[I - 1].Tpl^.IsStrict and not Frames[I - 1].Tpl^.TopLevel then Exit;
-      Break;
+      if Key = AtomOf('arguments') then
+      begin
+        T := Frames[I].Tpl;
+        if (T^.ArgsReg >= 0) and IsObject(VStack[Frames[I].Base + T^.ArgsReg]) then
+          Res := VStack[Frames[I].Base + T^.ArgsReg]
+        else Res := NewArgumentsObject(@VStack[Frames[I].Base + 1], Min(Frames[I].Argc, T^.NumParams), False);
+        Exit;
+      end;
+      J := I - 1;
+      while (J >= 0) and (Frames[J].Tpl^.SourceName = '<eval>') do Dec(J);
+      if (J >= 0) and IsSloppyOrdinary(Frames[J].Closure) then Res := Frames[J].Closure;
+      Exit;
     end;
-  Res := VUndefined;
-  Result := True;
 end;
 
 function ThrowTypeError_Native(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var Key: PStr;
 begin
-  if LegacyCallerRead(Args[0], Res) then Exit(True);
+  Key := AccessorGetKey;
+  AccessorGetKey := nil;
+  { a read (no argument) through the caller or arguments accessor of a non-strict function; a write is ignored }
+  if LegacyCallerRead(Args[0], Key, Res) then
+  begin
+    if Argc > 0 then Res := VUndefined;
+    Exit(True);
+  end;
   Result := ThrowTypeError('''caller'', ''callee'', and ''arguments'' properties may not be accessed on strict mode functions or the arguments objects for calls to them');
 end;
 

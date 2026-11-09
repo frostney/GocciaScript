@@ -125,6 +125,8 @@ threadvar
   EvalDesc: TValue;   { TakeEvalHint: a direct eval's description of its caller's bindings (an atom), else undefined }
   { the native function object being called: a native reads its data (Aux1) from it before allocating }
   NativeSelf: TValue;
+  { the key whose accessor getter a property read is about to call (%ThrowTypeError% tells caller from arguments) }
+  AccessorGetKey: PStr;
   { set when a native constructor took its instance's prototype from new.target (ProtoFromNewTarget), at the
     step its algorithm does it; Construct gives the prototype to the instance of a native that did not }
   ConstructProto: TValue;
@@ -275,6 +277,8 @@ function HasPropertyV(Obj: TValue; Key: PStr; var Found: Boolean): Boolean;
 function DefineElemRaw(Obj: TValue; Idx: Int64; V: TValue): Boolean;
 { whether Proto is on the object V's prototype chain, through [[GetPrototypeOf]] }
 function ProtoChainHas(V, Proto: TValue; var Res: Boolean): Boolean;
+{ an arguments object over Argc values at Args (Mapped: a sloppy function's, with its parameter map shape) }
+function NewArgumentsObject(Args: PValue; Argc: Integer; Mapped: Boolean): TValue;
 function GeneratorResume(Gen: TValue; Arg: TValue; Mode: Integer; var Value: TValue; var Done: Boolean): Boolean;
 
 threadvar
@@ -1476,6 +1480,7 @@ begin
       begin
         Acc := PAccessor(PtrOf(V));
         if Acc^.Getter = VUndefined then begin Res := VUndefined; Exit(True); end;
+        AccessorGetKey := Key;
         Exit(CallValue(Acc^.Getter, Receiver, nil, 0, Res));
       end;
       Res := V;
@@ -3419,6 +3424,7 @@ begin
   end;
   G := PAccessor(PtrOf(GetSlot(P, E^.Slot)))^.Getter;
   if G = VUndefined then begin Res := VUndefined; Exit(1); end;
+  AccessorGetKey := IC^.Key;
   if CallValue(G, Receiver, nil, 0, Res) then Result := 1 else Result := 0;
 end;
 
@@ -3462,6 +3468,7 @@ begin
         end;
         Acc := PAccessor(PtrOf(V));
         if Acc^.Getter = VUndefined then begin Res := VUndefined; Exit(True); end;
+        AccessorGetKey := IC^.Key;
         Exit(CallValue(Acc^.Getter, Receiver, nil, 0, Res));
       end;
       Res := V;
