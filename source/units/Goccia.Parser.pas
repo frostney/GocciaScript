@@ -500,6 +500,12 @@ type
     function Addition: TGocciaExpression;
     function Multiplication: TGocciaExpression;
     function Exponentiation: TGocciaExpression;
+    // A BinaryExpression whose operands are checked: an arrow function or
+    // a yield is an AssignmentExpression, never an operand of an operator.
+    function MakeBinary(const ALeft: TGocciaExpression;
+      const AOperator: TGocciaTokenType; const ARight: TGocciaExpression;
+      const ASpan: TGocciaSourceSpan): TGocciaExpression;
+    procedure RejectAssignmentOnlyOperand(const AOperand: TGocciaExpression);
     function Unary: TGocciaExpression;
     function UnarySlow: TGocciaExpression;
     function Call: TGocciaExpression;
@@ -2755,7 +2761,7 @@ begin
       raise TGocciaSyntaxError.Create(
         'Nullish coalescing cannot be mixed with logical OR without parentheses',
         Op.Line, Op.Column, FFileName, FSourceLines);
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Right,
+    Result := MakeBinary(Result, Op.TokenType, Right,
       Op.Span);
     CountChainLink;
   end;
@@ -2780,7 +2786,7 @@ begin
       raise TGocciaSyntaxError.Create(
         'Nullish coalescing cannot be mixed with logical AND without parentheses',
         Op.Line, Op.Column, FFileName, FSourceLines);
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Right,
+    Result := MakeBinary(Result, Op.TokenType, Right,
       Op.Span);
     CountChainLink;
   end;
@@ -2794,7 +2800,7 @@ begin
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttAnd do
   begin
     Op := Advance;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+    Result := MakeBinary(Result, Op.TokenType,
       BitwiseOr, Op.Span);
     CountChainLink;
   end;
@@ -2814,7 +2820,7 @@ begin
     if Op.TokenType in [gttLooseEqual, gttLooseNotEqual] then
     begin
       if FLooseEqualityEnabled then
-        Result := TGocciaBinaryExpression.Create(
+        Result := MakeBinary(
           Result, Op.TokenType, Right, Op.Span)
       else
       begin
@@ -2837,7 +2843,7 @@ begin
       end;
     end
     else
-      Result := TGocciaBinaryExpression.Create(
+      Result := MakeBinary(
         Result, Op.TokenType, Right, Op.Span);
     CountChainLink;
   end;
@@ -2860,7 +2866,7 @@ begin
          (PeekWithLexicalGoal(glgInputElementDiv).TokenType <> gttIn)) do
   begin
     Op := Advance;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Shift,
+    Result := MakeBinary(Result, Op.TokenType, Shift,
       Op.Span);
     CountChainLink;
   end;
@@ -2907,7 +2913,7 @@ begin
     PrivateNameSpan := PrivateToken.Span.Cover(Previous.Span);
     Consume(gttIn, 'Expected "in" after private field name',
       SSuggestExpressionExpected);
-    Result := TGocciaBinaryExpression.Create(
+    Result := MakeBinary(
       TGocciaPrivateMemberExpression.Create(
         TGocciaThisExpression.Create(PrivateToken.Span),
         PrivateName, PrivateNameSpan),
@@ -2923,7 +2929,7 @@ begin
          (PeekWithLexicalGoal(glgInputElementDiv).TokenType <> gttIn)) do
   begin
     Op := Advance;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType, Shift,
+    Result := MakeBinary(Result, Op.TokenType, Shift,
       Op.Span);
     CountChainLink;
   end;
@@ -3045,7 +3051,7 @@ begin
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttPlus, gttMinus] do
   begin
     Op := Advance;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+    Result := MakeBinary(Result, Op.TokenType,
       Multiplication, Op.Span);
     CountChainLink;
   end;
@@ -3059,10 +3065,34 @@ begin
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttStar, gttSlash, gttPercent] do
   begin
     Op := Advance;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+    Result := MakeBinary(Result, Op.TokenType,
       Exponentiation, Op.Span);
     CountChainLink;
   end;
+end;
+
+procedure TGocciaParser.RejectAssignmentOnlyOperand(
+  const AOperand: TGocciaExpression);
+begin
+  // ES2026 §13.5 - §13.13: the operands of the unary and binary operators
+  // are UnaryExpression and narrower productions; ArrowFunction,
+  // AsyncArrowFunction and YieldExpression are AssignmentExpressions only.
+  if Assigned(AOperand) and not AOperand.Parenthesized and
+     ((AOperand is TGocciaArrowFunctionExpression) or
+      (AOperand is TGocciaYieldExpression)) then
+    raise TGocciaSyntaxError.Create(
+      'An arrow function or yield expression must be parenthesized to be an operand',
+      AOperand.Line, AOperand.Column, FFileName, FSourceLines,
+      SSuggestExpressionExpected);
+end;
+
+function TGocciaParser.MakeBinary(const ALeft: TGocciaExpression;
+  const AOperator: TGocciaTokenType; const ARight: TGocciaExpression;
+  const ASpan: TGocciaSourceSpan): TGocciaExpression;
+begin
+  RejectAssignmentOnlyOperand(ALeft);
+  RejectAssignmentOnlyOperand(ARight);
+  Result := TGocciaBinaryExpression.Create(ALeft, AOperator, ARight, ASpan);
 end;
 
 function TGocciaParser.Exponentiation: TGocciaExpression;
@@ -3084,7 +3114,7 @@ begin
     EnterNesting;
     Right := Exponentiation; // Right associative
     LeaveNesting;
-    Result := TGocciaBinaryExpression.Create(Result, Operator.TokenType,
+    Result := MakeBinary(Result, Operator.TokenType,
       Right, Operator.Span);
   end;
 end;
@@ -3184,6 +3214,7 @@ begin
       begin
         Operator := Advance;
         Right := NestedUnary;
+        RejectAssignmentOnlyOperand(Right);
         if (Operator.TokenType = gttDelete) and
            (Right is TGocciaIdentifierExpression) and
            not EffectiveNonStrictModeEnabled then
@@ -12141,7 +12172,7 @@ begin
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttBitwiseOr do
   begin
     Op := Advance;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+    Result := MakeBinary(Result, Op.TokenType,
       BitwiseXor, Op.Span);
     CountChainLink;
   end;
@@ -12155,7 +12186,7 @@ begin
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttBitwiseXor do
   begin
     Op := Advance;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+    Result := MakeBinary(Result, Op.TokenType,
       BitwiseAnd, Op.Span);
     CountChainLink;
   end;
@@ -12169,7 +12200,7 @@ begin
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttBitwiseAnd do
   begin
     Op := Advance;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+    Result := MakeBinary(Result, Op.TokenType,
       Equality, Op.Span);
     CountChainLink;
   end;
@@ -12183,7 +12214,7 @@ begin
   while PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttLeftShift, gttRightShift, gttUnsignedRightShift] do
   begin
     Op := Advance;
-    Result := TGocciaBinaryExpression.Create(Result, Op.TokenType,
+    Result := MakeBinary(Result, Op.TokenType,
       Addition, Op.Span);
     CountChainLink;
   end;
