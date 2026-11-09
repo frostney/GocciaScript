@@ -1939,6 +1939,22 @@ end;
 
 { 10.1.9.2 OrdinarySetWithOwnDescriptor for an absent own element: nothing on the prototype chain (a proxy, an
   exotic object, an index-keyed shape property, an element there) can intercept or forbid the new property }
+{ a [[Get]] of index Idx that O's own elements lack finds nothing on O's prototypes: none has index keys in its
+  shape or a non-hole element there, and each is a plain kind (no proxy, string or typed array exotics) }
+function ElemMissUndefined(O: PObj; Idx: Integer): Boolean;
+var P: TValue; Q: PObj;
+begin
+  P := O^.Shape^.Proto;
+  while IsObject(P) do
+  begin
+    Q := ObjOf(P);
+    if Q^.Shape^.HasIndexKeys or not (Q^.OKind in [okPlain, okArray, okFunction, okNative]) then Exit(False);
+    if (Q^.Elements <> nil) and (Idx < Integer(Q^.Elements^.Len)) and (Q^.Elements^.Data[Idx] <> VHole) then Exit(False);
+    P := Q^.Shape^.Proto;
+  end;
+  Result := True;
+end;
+
 function ProtosPlainForElem(O: PObj; Idx: Int64): Boolean;
 var P: TValue; Q: PObj;
 begin
@@ -4384,9 +4400,9 @@ begin
           else
           begin
             V := R[A];
-            { a store the write barrier might have to remember: Execute's }
+            { a store the write barrier has to remember: an old container gets a nursery pointer }
             if ((U^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
-               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@U^.Hdr);
             U^.Value := V;
           end;
         end;
@@ -4505,12 +4521,12 @@ begin
             if IC^.NewShape <> nil then goto LBail;
             E := O^.Overflow;
             if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
-               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@E^.Hdr);
             E^.Data[IC^.Slot - O^.InlineCap] := V;
             Continue;
           end;
           if ((O^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
-             (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+             (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@O^.Hdr);
           if IC^.NewShape <> nil then O^.Shape := IC^.NewShape;
           O^.Slots[IC^.Slot] := V;
         end;
@@ -4523,7 +4539,7 @@ begin
              ((O^.OFlags and 8) <> 0) then goto LBail;
           V := R[(I shr 24) and $FFFF];
           if ((O^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
-             (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+             (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@O^.Hdr);
           O^.Shape := IC^.NewShape;
           O^.Slots[IC^.Slot] := V;
         end;
@@ -4538,6 +4554,13 @@ begin
           if (E <> nil) and (CI >= 0) and (CI < Integer(E^.Len)) and (E^.Data[CI] <> VHole) then
           begin
             R[A] := E^.Data[CI];
+            Continue;
+          end;
+          { a hole or an index past the end of a plain object or array: undefined when no prototype has indexed
+            properties }
+          if (CI >= 0) and (O^.OKind in [okPlain, okArray]) and not O^.Shape^.HasIndexKeys and ElemMissUndefined(O, CI) then
+          begin
+            R[A] := VUndefined;
             Continue;
           end;
           { a typed array over an ordinary buffer (the length is the view's), of a kind read without a call }
@@ -4570,9 +4593,9 @@ begin
              (((CI < Integer(E^.Len)) and (E^.Data[CI] <> VHole)) or
               ((CI = Integer(E^.Len)) and (CI < Integer(E^.Cap)) and (O^.OKind = okArray))) then
           begin
-            { a store the write barrier might have to remember: Execute's }
+            { a store the write barrier has to remember: an old container gets a nursery pointer }
             if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
-               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@E^.Hdr);
             E^.Data[CI] := V;
             if CI = Integer(E^.Len) then E^.Len := CI + 1;
             Continue;
