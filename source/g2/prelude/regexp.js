@@ -24,6 +24,8 @@
   }
   // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
   function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
+  // an internal List: an array without a prototype, so filling it runs no Array.prototype index accessor
+  function list() { return setProto([], null); }
   function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
   function toStr(v) { return `${v}`; }
   function toIntegerOrInfinity(v) {
@@ -215,7 +217,7 @@
       var flags = toStr(rx.flags);
       var global = has(flags, "g");
       if (global) rx.lastIndex = 0;
-      var results = [], nr = 0;
+      var results = list(), nr = 0;
       for (;;) {
         var result = regExpExec(rx, S);
         if (result === null) break;
@@ -233,7 +235,7 @@
         var matchLength = matched.length;
         var position = toIntegerOrInfinity(result.index);
         position = MathMax(MathMin(position, lengthS), 0);
-        var captures = [];
+        var captures = list();
         for (var n = 1; n <= nCaptures; n++) {
           var capN = result[n];
           if (capN !== undefined) capN = toStr(capN);
@@ -242,7 +244,8 @@
         var namedCaptures = result.groups;
         var replacement;
         if (functionalReplace) {
-          var args = [matched];
+          var args = list();
+          args[0] = matched;
           for (n = 0; n < nCaptures; n++) args[n + 1] = captures[n];
           args[nCaptures + 1] = position;
           args[nCaptures + 2] = S;
