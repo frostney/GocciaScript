@@ -2338,6 +2338,7 @@ begin
   // next line declares it (`let \n yield` in a generator is then an early
   // error, not two statements).
   if not FSubStatement and (IsIdentifierBindingToken(NextToken.TokenType) or
+     (NextToken.TokenType = gttLet) or
      ((NextToken.TokenType = gttIdentifier) and
       ((NextToken.Lexeme = 'yield') or (NextToken.Lexeme = 'await')))) then
     Exit(True);
@@ -5481,6 +5482,10 @@ begin
             raise TGocciaSyntaxError.Create(
               'Object shorthand properties require an identifier',
               MemberStartLine, MemberStartColumn, FFileName, FSourceLines);
+          // ES2026 13.2.5.1: the shorthand is an IdentifierReference, so an
+          // escaped reserved word such as \u0064ebugger is a SyntaxError
+          if Previous.TokenType = gttIdentifier then
+            ValidateIdentifierReference(Previous);
 
           Value := TGocciaIdentifierExpression.Create(Key, Previous.Span);
 
