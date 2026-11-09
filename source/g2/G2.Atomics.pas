@@ -103,7 +103,7 @@ end;
 { ---------------- SharedArrayBuffer ---------------- }
 
 function SAB_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, MaxLen: Int64; Opts, M: TValue; B: PSharedBlock;
+var Len, MaxLen: Int64; Opts, M, P: TValue; B: PSharedBlock;
 begin
   if CurNewTarget = VUndefined then Exit(ThrowTypeError('Constructor SharedArrayBuffer requires ''new'''));
   if not ToIndexV(Arg(Args, Argc, 1), Len) then Exit(False);
@@ -118,10 +118,19 @@ begin
       if Len > MaxLen then Exit(ThrowError('RangeError', 'byteLength exceeds maxByteLength'));
     end;
   end;
+  { 25.2.2.1 AllocateSharedArrayBuffer: OrdinaryCreateFromConstructor (new.target's prototype) before
+    CreateSharedByteDataBlock }
+  if not ProtoFromNewTarget(SharedBufferProto, P) then Exit(False);
+  PushRoot(P);
   B := NewSharedBlock(Len, MaxLen);
-  if B = nil then Exit(ThrowError('RangeError', 'Array buffer allocation failed'));
+  if B = nil then begin PopRoots(1); Exit(ThrowError('RangeError', 'Array buffer allocation failed')); end;
   Res := WrapSharedBlock(B);
   ReleaseBlock(B);   { the object holds the reference }
+  PushRoot(Res);
+  if ObjOf(RootAt(TempTop - 1))^.Shape^.Proto <> RootAt(TempTop - 2) then
+    SetProto(ObjOf(RootAt(TempTop - 1)), RootAt(TempTop - 2));
+  Res := RootAt(TempTop - 1);
+  PopRoots(2);
   Result := True;
 end;
 

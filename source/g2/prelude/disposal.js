@@ -228,7 +228,7 @@
         if (ret === undefined || ret === null) { resolve(undefined); return; }
         if (!isCallable(ret)) { reject(new TypeErr("return is not a function")); return; }
         var r;
-        try { r = apply(ret, O, [undefined]); } catch (e) { reject(e); return; }
+        try { r = apply(ret, O, []); } catch (e) { reject(e); return; }   // Call(return, O): no arguments
         PromiseResolve(r).then(function () { resolve(undefined); }, reject);
       });
     }
