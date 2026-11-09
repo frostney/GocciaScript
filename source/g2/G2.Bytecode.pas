@@ -148,6 +148,7 @@ type
     Length: Integer;          { function.length }
     { the top level of a Script (GdiKind 1) or of non-strict eval code (2): its global declarations }
     GdiKind: Byte;
+    TopLevel: Boolean;   { the code of a Script, a module or eval code (no function of its own) }
     GdiLex: array of PStr;        { let, const and class names, in register order of GdiLexRegs }
     GdiLexConst: array of Boolean;
     GdiVars: array of PStr;       { var names (functions excluded) }

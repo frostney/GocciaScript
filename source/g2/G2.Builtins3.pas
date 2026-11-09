@@ -598,6 +598,19 @@ begin
   if IsNumber(V) then Tag := 'Number'
   else if IsString(V) then Tag := 'String'
   else if (V = VTrue) or (V = VFalse) then Tag := 'Boolean'
+  else if IsObject(V) and (ObjOf(V)^.OKind = okProxy) then
+  begin
+    { IsArray sees through proxies (a revoked one throws); a callable proxy is a function }
+    T := V;
+    while IsObject(T) and (ObjOf(T)^.OKind = okProxy) do
+    begin
+      if not IsObject(ObjOf(T)^.Aux2) then Exit(ThrowTypeError('Cannot perform ''IsArray'' on a proxy that has been revoked'));
+      T := ObjOf(T)^.Aux1;
+    end;
+    if IsObject(T) and (ObjOf(T)^.OKind = okArray) then Tag := 'Array'
+    else if IsCallable(V) then Tag := 'Function'
+    else Tag := 'Object';
+  end
   else if IsObject(V) then
     case ObjOf(V)^.OKind of
       okArray: Tag := 'Array';

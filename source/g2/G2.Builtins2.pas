@@ -72,18 +72,25 @@ function Gen_Return(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin
 
 { ---------------- __proto__ ---------------- }
 
+{ B.2.2.1.1 get Object.prototype.__proto__: ToObject(this).[[GetPrototypeOf]]() }
 function Proto_Get(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var O: TValue;
 begin
-  if IsObject(Args[0]) then Res := ObjOf(Args[0])^.Shape^.Proto else Res := VNull;
-  Result := True;
+  if not ToObjectHook(Args[0], O) then Exit(False);
+  Result := GetProtoHook(O, Res);
 end;
 
+{ B.2.2.1.2 set Object.prototype.__proto__: this.[[SetPrototypeOf]](proto) for an object this and an object or
+  null proto }
 function Proto_Set(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var P: TValue;
+var P: TValue; Ok: Boolean;
 begin
-  P := Arg(Args, Argc, 1);
-  if IsObject(Args[0]) and (IsObject(P) or (P = VNull)) then SetProto(ObjOf(Args[0]), P);
   Res := VUndefined;
+  if IsNullish(Args[0]) then Exit(ThrowTypeError('set Object.prototype.__proto__ called on null or undefined'));
+  P := Arg(Args, Argc, 1);
+  if (not IsObject(P) and (P <> VNull)) or not IsObject(Args[0]) then Exit(True);
+  if not SetProtoHook(Args[0], P, Ok) then Exit(False);
+  if not Ok then Exit(ThrowTypeError('Cannot set the prototype of this object'));
   Result := True;
 end;
 

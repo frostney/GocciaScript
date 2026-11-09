@@ -65,6 +65,8 @@ var
   ToObjectHook: function(V: TValue; var O: TValue): Boolean = nil;
   { G2.ObjModel's [[GetPrototypeOf]] (a proxy's trap with its invariants) }
   GetProtoHook: function(O: TValue; var P: TValue): Boolean = nil;
+  { G2.ObjModel's [[SetPrototypeOf]]: Ok its result }
+  SetProtoHook: function(O, P: TValue; var Ok: Boolean): Boolean = nil;
 threadvar
   { set when OwnKeys met a throwing proxy trap: the caller takes it with TakeOwnKeysFailure }
   OwnKeysFailed: Boolean;
@@ -261,6 +263,8 @@ function GeneratorResume(Gen: TValue; Arg: TValue; Mode: Integer; var Value: TVa
 
 threadvar
   ArrayValuesFnPublic: TValue;
+  StringIterProto: TValue;   { %StringIteratorPrototype% }
+  StringIterNextFn: TValue;  { %StringIteratorPrototype%.next }
   BigIntProto: TValue;
   ErrorProtoType, TypeErrorProto, RangeErrorProto, SyntaxErrorProto, ReferenceErrorProto: TValue;
   EvalErrorProto, URIErrorProto: TValue;
@@ -985,7 +989,10 @@ begin
   if (IsString(V) or (IsObject(V) and (ObjOf(V)^.OKind in [okArguments, okTypedArray]))) and ArrayIterationIntact then
   begin
     if not GetIterator(V, It) then Exit(False);
-    if IsObject(It) and (ObjOf(It)^.OKind = okIterator) then NextM := ArrayIterNextFn
+    if IsObject(It) and (ObjOf(It)^.OKind = okIterator) then
+    begin
+      if ObjOf(It)^.OFlags = 1 then NextM := StringIterNextFn else NextM := ArrayIterNextFn;
+    end
     else
     begin
       PushRoot(It);
@@ -1022,6 +1029,8 @@ begin
   if ((NextM = ArrayIterNextFn) or (NextM = MapIterNextFn) or (NextM = SetIterNextFn)) and IsObject(It) and
      (ObjOf(It)^.OKind = okIterator) and ((ObjOf(It)^.OFlags >= 5) = (NextM <> ArrayIterNextFn)) and
      ((ObjOf(It)^.OFlags >= 8) = (NextM = SetIterNextFn)) then
+    Exit(IteratorStep(It, Value, Done));
+  if (NextM = StringIterNextFn) and IsObject(It) and (ObjOf(It)^.OKind = okIterator) and (ObjOf(It)^.OFlags = 1) then
     Exit(IteratorStep(It, Value, Done));
   if (NextM = GenNextFn) and IsObject(It) and (ObjOf(It)^.OKind = okGenerator) then
   begin
@@ -2316,7 +2325,8 @@ function NewArrayIterator(V: TValue; Kind: Integer): TValue;
 var O: PObj;
 begin
   PushRoot(V);
-  O := NewObject(RootShapeFor(ArrayIteratorProto), 0, okIterator);
+  if (Kind = 1) and IsObject(StringIterProto) then O := NewObject(RootShapeFor(StringIterProto), 0, okIterator)
+  else O := NewObject(RootShapeFor(ArrayIteratorProto), 0, okIterator);
   O^.Aux1 := RootAt(TempTop - 1);
   O^.Aux2 := MkInt(0);
   O^.OFlags := Kind;   { 0 array values, 1 string code points, 2 keys, 3 entries }
@@ -6516,7 +6526,7 @@ begin
     @IteratorProto, @ArrayIteratorProto, @GeneratorProto, @MapProto, @SetProtoObj, @SymbolProto, @GlobalObj,
     @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @MapIterNextFn, @SetIterNextFn,
     @GenFunctionProto, @AsyncFunctionProto, @AsyncGenFunctionProto, @AsyncGeneratorProto, @AsyncIteratorProto,
-    @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
+    @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @StringIterProto, @StringIterNextFn, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
     @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto]);
   AddRoot(@IntrinsicList);
   IntrinsicList := VUndefined;

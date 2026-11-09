@@ -39,6 +39,7 @@ uses
 
 threadvar
   SharedBufferProto: TValue;
+  SABCtor: TValue;   { %SharedArrayBuffer% }
   AtomicsObj: TValue;
   Scratch: TValue;
   { pending waitAsync promises: AsyncPromises (a rooted array) holds the promise of token T at index T }
@@ -169,8 +170,10 @@ begin
 end;
 
 { 25.2.5.7 SharedArrayBuffer.prototype.slice (without species: the result is a plain SharedArrayBuffer) }
+{ 25.2.5.6 SharedArrayBuffer.prototype.slice ( start, end ): a buffer from SpeciesConstructor(O,
+  %SharedArrayBuffer%), checked, then filled }
 function SAB_Slice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var B, NB: PSharedBlock; Len, S, E: Int64; D: Double;
+var B, NB: PSharedBlock; Len, S, E, NewLen: Int64; D: Double; C, Sp, LV, N: TValue;
 begin
   if not ThisShared(Args, 'slice', B) then Exit(False);
   Len := BlockLength(B);
@@ -182,12 +185,27 @@ begin
     if not ToIntegerOrInf(Args[2], D) then Exit(False);
     if D < 0 then E := Trunc(Max(Len + D, 0)) else E := Trunc(Min(D, Len));
   end;
-  if E < S then E := S;
-  NB := NewSharedBlock(E - S, -1);
-  if NB = nil then Exit(ThrowError('RangeError', 'Array buffer allocation failed'));
-  if E > S then Move((B^.Data + S)^, NB^.Data^, E - S);
-  Res := WrapSharedBlock(NB);
-  ReleaseBlock(NB);
+  NewLen := Max(E - S, 0);
+  { 7.3.22 SpeciesConstructor }
+  if not GetV(Args[0], AtomConstructor, C) then Exit(False);
+  if C = VUndefined then C := SABCtor
+  else
+  begin
+    if not IsObject(C) then Exit(ThrowTypeError('object.constructor is not an object'));
+    if not GetElemV(C, SymSpecies, Sp) then Exit(False);
+    if IsNullish(Sp) then C := SABCtor
+    else if IsConstructorV(Sp) then C := Sp
+    else Exit(ThrowTypeError('object.constructor[Symbol.species] is not a constructor'));
+  end;
+  LV := MkNumber(NewLen);
+  if not Construct(C, @LV, 1, C, N) then Exit(False);
+  if not IsSharedBuffer(N) then Exit(ThrowTypeError('SharedArrayBuffer species constructor did not return a SharedArrayBuffer'));
+  NB := SharedBlockOf(N);
+  B := SharedBlockOf(Args[0]);
+  if NB = B then Exit(ThrowTypeError('SharedArrayBuffer species constructor returned the same buffer'));
+  if BlockLength(NB) < NewLen then Exit(ThrowTypeError('SharedArrayBuffer species constructor returned a too small buffer'));
+  if NewLen > 0 then Move((B^.Data + S)^, NB^.Data^, NewLen);
+  Res := N;
   Result := True;
 end;
 
@@ -529,8 +547,8 @@ end;
 procedure InitAtomics;
 var Sym, C: TValue; TagKey: PStr;
 begin
-  AddRoot(@SharedBufferProto); AddRoot(@AtomicsObj); AddRoot(@Scratch); AddRoot(@AsyncPromises);
-  RealmVals([@SharedBufferProto, @AtomicsObj]);
+  AddRoot(@SharedBufferProto); AddRoot(@AtomicsObj); AddRoot(@Scratch); AddRoot(@AsyncPromises); AddRoot(@SABCtor);
+  RealmVals([@SharedBufferProto, @AtomicsObj, @SABCtor]);
   if not RealmInit then
   begin
     { the agent's Atomics.waitAsync waiters }
@@ -540,6 +558,7 @@ begin
   SharedBufferProto := MkPtr(NewPlainObject(ObjectProto, 8));
   C := NewNativeFunction(SAB_Ctor, 'SharedArrayBuffer', 1);
   Scratch := C;
+  SABCtor := C;
   DefineOwn(Scratch, AtomPrototype, SharedBufferProto, 0);
   DefineOwn(SharedBufferProto, AtomConstructor, Scratch, pfHidden);
   DefineOwn(GlobalObj, AtomOf('SharedArrayBuffer'), Scratch, pfHidden);

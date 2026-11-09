@@ -775,4 +775,67 @@
   def(G, "escape", annexB.escape);
   def(G, "unescape", annexB.unescape);
 
+  // ---- 20.1.2.7 Object.fromEntries, 20.1.2.13 Object.hasOwn, B.2.2.2-5 the legacy accessor methods ----
+  var getOwnDesc = Object.getOwnPropertyDescriptor, getProto = Object.getPrototypeOf, ownKeys = Reflect.ownKeys;
+  var hasOwnProp = Object.prototype.hasOwnProperty, ToObj = Object;
+  var objectStatics = {
+    fromEntries(iterable) {
+      if (iterable === undefined || iterable === null) throw new TypeErr("Object.fromEntries called on null or undefined");
+      var o = {}, m = iterable[SymIterator];
+      if (typeof m !== "function") throw new TypeErr("Object.fromEntries: the argument is not iterable");
+      var it = apply(m, iterable, []);
+      if (!isObject(it)) throw new TypeErr("Object.fromEntries: the iterator is not an object");
+      var next = it.next;
+      for (;;) {
+        var r = apply(next, it, []);
+        if (!isObject(r)) throw new TypeErr("Object.fromEntries: the iterator result is not an object");
+        if (r.done) return o;
+        var e = r.value;
+        try {
+          if (!isObject(e)) throw new TypeErr("Object.fromEntries: an entry is not an object");
+          var k = e[0], v = e[1];
+          defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
+        } catch (err) {
+          // IteratorClose with a throw completion: the error of return() is not observed
+          try { var ret = it["return"]; if (ret !== undefined && ret !== null) apply(ret, it, []); } catch (ignored) {}
+          throw err;
+        }
+      }
+    },
+    hasOwn(o, k) {
+      if (o === undefined || o === null) throw new TypeErr("Object.hasOwn called on null or undefined");
+      return apply(hasOwnProp, ToObj(o), [k]);
+    }
+  };
+  def(Object, "fromEntries", objectStatics.fromEntries);
+  def(Object, "hasOwn", objectStatics.hasOwn);
+  var legacyAccessors = {
+    __defineGetter__(k, f) {
+      if (this === undefined || this === null) throw new TypeErr("Object.prototype.__defineGetter__ called on null or undefined");
+      var o = ToObj(this);
+      if (typeof f !== "function") throw new TypeErr("Object.prototype.__defineGetter__: the getter is not a function");
+      defineProperty(o, k, { get: f, enumerable: true, configurable: true });
+    },
+    __defineSetter__(k, f) {
+      if (this === undefined || this === null) throw new TypeErr("Object.prototype.__defineSetter__ called on null or undefined");
+      var o = ToObj(this);
+      if (typeof f !== "function") throw new TypeErr("Object.prototype.__defineSetter__: the setter is not a function");
+      defineProperty(o, k, { set: f, enumerable: true, configurable: true });
+    },
+    __lookupGetter__(k) {
+      if (this === undefined || this === null) throw new TypeErr("Object.prototype.__lookupGetter__ called on null or undefined");
+      var o = ToObj(this), key = ownKeys({ [k]: 0 })[0];
+      for (; o !== null; o = getProto(o)) { var d = getOwnDesc(o, key); if (d) return d.get; }
+    },
+    __lookupSetter__(k) {
+      if (this === undefined || this === null) throw new TypeErr("Object.prototype.__lookupSetter__ called on null or undefined");
+      var o = ToObj(this), key = ownKeys({ [k]: 0 })[0];
+      for (; o !== null; o = getProto(o)) { var d = getOwnDesc(o, key); if (d) return d.set; }
+    }
+  };
+  def(Object.prototype, "__defineGetter__", legacyAccessors.__defineGetter__);
+  def(Object.prototype, "__defineSetter__", legacyAccessors.__defineSetter__);
+  def(Object.prototype, "__lookupGetter__", legacyAccessors.__lookupGetter__);
+  def(Object.prototype, "__lookupSetter__", legacyAccessors.__lookupSetter__);
+
 })

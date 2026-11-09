@@ -1145,6 +1145,7 @@ begin
   if PendingStrict >= 0 then T^.IsStrict := PendingStrict = 1
   else if FS <> nil then T^.IsStrict := FS.Tpl^.IsStrict
   else T^.IsStrict := False;
+  T^.TopLevel := FS = nil;
   { class code is strict; an object literal's method is a method (no constructor, no prototype) but not strict }
   if (IsMethod and not ObjMeth) or IsClassCtor then T^.IsStrict := True;
   if ObjMeth then T^.IsMethod := True;

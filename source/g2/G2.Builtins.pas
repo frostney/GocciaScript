@@ -458,10 +458,19 @@ begin
   Result := True;
 end;
 
+{ 20.1.3.7 Object.prototype.valueOf: ToObject(this) }
 function ObjProto_ValueOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Res := Args[0];
-  Result := True;
+  Result := ToObjectHook(Args[0], Res);
+end;
+
+{ 20.1.3.5 Object.prototype.toLocaleString: Invoke(this, "toString") }
+function ObjProto_ToLocaleString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var F: TValue;
+begin
+  if IsNullish(Args[0]) then Exit(ThrowTypeError('Object.prototype.toLocaleString called on null or undefined'));
+  if not GetV(Args[0], AtomToString, F) then Exit(False);
+  Result := CallValue(F, Args[0], nil, 0, Res);
 end;
 
 function ObjProto_IsPrototypeOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -1226,10 +1235,13 @@ begin
   Result := True;
 end;
 
+{ %ArrayIteratorPrototype%.next (NativeData 0: OFlags 0, 2-4) and %StringIteratorPrototype%.next (NativeData 1:
+  OFlags 1) }
 function ArrIter_Next(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var V: TValue; Done: Boolean; O: PObj;
 begin
-  if not IsObject(Args[0]) or (ObjOf(Args[0])^.OKind <> okIterator) or (ObjOf(Args[0])^.OFlags > 4) then
+  if not IsObject(Args[0]) or (ObjOf(Args[0])^.OKind <> okIterator) or (ObjOf(Args[0])^.OFlags > 4) or
+     ((ObjOf(Args[0])^.OFlags = 1) <> (NativeData = 1)) then
     Exit(ThrowTypeError('next called on an object that is not an iterator of this kind'));
   if not IteratorStep(Args[0], V, Done) then Exit(False);
   PushRoot(V);
@@ -1239,6 +1251,16 @@ begin
   AddProperty(O, AtomValue, V, pfDefault);
   AddProperty(O, AtomDone, MkBool(Done), pfDefault);
   Res := MkPtr(O);
+  Result := True;
+end;
+
+{ 22.1.3.36 String.prototype [ @@iterator ] ( ): CreateStringIterator(ToString(this)) }
+function StrProto_Iterator(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var S: TValue;
+begin
+  if IsNullish(Args[0]) then Exit(ThrowTypeError('String.prototype[Symbol.iterator] called on null or undefined'));
+  if not ToStringV(Args[0], S) then Exit(False);
+  Res := NewArrayIterator(S, 1);
   Result := True;
 end;
 
@@ -2517,68 +2539,99 @@ begin
   SetMapCount(M, MapCount(M) + 1);
 end;
 
-function Map_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var M, It, V, K, X: TValue; Done: Boolean;
-begin
-  if CurNewTarget = VUndefined then Exit(ThrowTypeError('Constructor Map requires ''new'''));
-  M := NewMapLike(MapProto, okMap);
-  if (Argc >= 1) and not IsNullish(Args[1]) then
+{ 24.1.1.2 AddEntriesFromIterable (Pairs: [key, value] entry objects) / 24.2.1.1 Set step 8: Adder called on
+  Target for each value of Iterable; an abrupt completion closes the iterator }
+function AddFromIterable(Target, Iterable, Adder: TValue; Pairs: Boolean): Boolean;
+var It, NextM, V, R: TValue; Done: Boolean; Base, N: Integer; A: array[0..1] of TValue;
+  function Fail(Close: Boolean): Boolean;
   begin
-    PushRoot(M);
-    if not GetIterator(Args[1], It) then begin PopRoots(1); Exit(False); end;
-    PushRoot(It);
-    while True do
-    begin
-      if not IteratorStep(RootAt(TempTop - 1), V, Done) then begin PopRoots(2); Exit(False); end;
-      if Done then Break;
-      PushRoot(V);
-      if not GetElemV(V, MkInt(0), K) then begin PopRoots(3); Exit(False); end;
-      PushRoot(K);
-      if not GetElemV(RootAt(TempTop - 2), MkInt(1), X) then begin PopRoots(4); Exit(False); end;
-      K := RootAt(TempTop - 1);
-      PopRoots(2);
-      PushRoot(K); PushRoot(X);
-      MapEnsureIndex(RootAt(TempTop - 4));
-      X := RootAt(TempTop - 1); K := RootAt(TempTop - 2);
-      PopRoots(2);
-      if MapFind(RootAt(TempTop - 2), K) < 0 then MapAppend(RootAt(TempTop - 2), K, X);
-    end;
-    M := RootAt(TempTop - 2);
-    PopRoots(2);
+    if Close then IteratorCloseV(RootAt(Base + 2), True);
+    PopRoots(TempTop - Base);
+    Result := False;
   end;
-  Res := M;
+begin
+  Base := TempTop;
+  PushRoot(Target); PushRoot(Adder);
+  if not GetIteratorRec(Iterable, It, NextM) then Exit(Fail(False));
+  PushRoot(It); PushRoot(NextM);
+  while True do
+  begin
+    if not IteratorStepRec(RootAt(Base + 2), RootAt(Base + 3), V, Done) then Exit(Fail(False));
+    if Done then Break;
+    PushRoot(V);
+    if Pairs then
+    begin
+      if not IsObject(V) then
+      begin
+        ThrowTypeError('Iterator value is not an entry object');
+        Exit(Fail(True));
+      end;
+      if not GetElemV(V, MkInt(0), R) then Exit(Fail(True));
+      PushRoot(R);
+      if not GetElemV(RootAt(Base + 4), MkInt(1), V) then Exit(Fail(True));
+      A[0] := RootAt(Base + 5); A[1] := V;
+      N := 2;
+    end
+    else
+    begin
+      A[0] := V;
+      N := 1;
+    end;
+    { CallValue copies the arguments before it allocates }
+    if not CallValue(RootAt(Base + 1), RootAt(Base), @A[0], N, R) then Exit(Fail(True));
+    PopRoots(TempTop - Base - 4);
+  end;
+  PopRoots(4);
   Result := True;
 end;
 
-function Set_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var M, It, V: TValue; Done: Boolean;
+{ 24.1.1.1 Map ( [ iterable ] ) / 24.2.1.1 Set ( [ iterable ] ): Kind okMap or okSet }
+function MapLikeCtor(Args: TArgs; Argc: Integer; Kind: Byte; var Res: TValue): Boolean;
+var P, Adder: TValue;
 begin
-  if CurNewTarget = VUndefined then Exit(ThrowTypeError('Constructor Set requires ''new'''));
-  M := NewMapLike(SetProtoObj, okSet);
-  if (Argc >= 1) and not IsNullish(Args[1]) then
+  if CurNewTarget = VUndefined then
   begin
-    PushRoot(M);
-    if not GetIterator(Args[1], It) then begin PopRoots(1); Exit(False); end;
-    PushRoot(It);
-    while True do
-    begin
-      if not IteratorStep(RootAt(TempTop - 1), V, Done) then begin PopRoots(2); Exit(False); end;
-      if Done then Break;
-      PushRoot(V);
-      MapEnsureIndex(RootAt(TempTop - 3));
-      V := RootAt(TempTop - 1);
-      PopRoots(1);
-      if MapFind(RootAt(TempTop - 2), V) < 0 then MapAppend(RootAt(TempTop - 2), V, V);
-    end;
-    M := RootAt(TempTop - 2);
-    PopRoots(2);
+    if Kind = okMap then Exit(ThrowTypeError('Constructor Map requires ''new'''));
+    Exit(ThrowTypeError('Constructor Set requires ''new'''));
   end;
-  Res := M;
-  Result := True;
+  if Kind = okMap then P := MapProto else P := SetProtoObj;
+  if not ProtoFromNewTarget(P, P) then Exit(False);
+  Res := NewMapLike(P, Kind);
+  if (Argc < 1) or IsNullish(Args[1]) then Exit(True);
+  PushRoot(Res);
+  if Kind = okMap then Result := GetV(Res, AtomOf('set'), Adder) else Result := GetV(Res, AtomOf('add'), Adder);
+  if Result and not IsCallable(Adder) then
+  begin
+    if Kind = okMap then Result := ThrowTypeError('Map.prototype.set is not a function')
+    else Result := ThrowTypeError('Set.prototype.add is not a function');
+  end;
+  if Result then Result := AddFromIterable(RootAt(TempTop - 1), Args[1], Adder, Kind = okMap);
+  Res := RootAt(TempTop - 1);
+  PopRoots(1);
+end;
+
+function Map_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Result := MapLikeCtor(Args, Argc, okMap, Res);
+end;
+
+function Set_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Result := MapLikeCtor(Args, Argc, okSet, Res);
 end;
 
 function ThisMap(Args: TArgs; Kind: Byte): Boolean; inline;
 begin
+  Result := IsObject(Args[0]) and (ObjOf(Args[0])^.OKind = Kind);
+  if not Result then ThrowTypeError('incompatible receiver');
+end;
+
+{ the methods Map.prototype and Set.prototype share check their own brand: a Set's have NativeData 1 (read
+  before anything runs: a nested native call overwrites it) }
+function MapLikeThis(Args: TArgs): Boolean;
+var Kind: Byte;
+begin
+  if NativeData = 1 then Kind := okSet else Kind := okMap;
   Result := IsObject(Args[0]) and (ObjOf(Args[0])^.OKind = Kind);
   if not Result then ThrowTypeError('incompatible receiver');
 end;
@@ -2609,7 +2662,7 @@ end;
 
 function MapProto_Has(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsObject(Args[0]) or not (ObjOf(Args[0])^.OKind in [okMap, okSet]) then Exit(ThrowTypeError('incompatible receiver'));
+  if not MapLikeThis(Args) then Exit(False);
   MapEnsureIndex(Args[0]);
   Res := MkBool(MapFind(Args[0], Arg(Args, Argc, 1)) >= 0);
   Result := True;
@@ -2618,7 +2671,7 @@ end;
 function MapProto_Delete(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var I: Integer; E: PValueArray;
 begin
-  if not IsObject(Args[0]) or not (ObjOf(Args[0])^.OKind in [okMap, okSet]) then Exit(ThrowTypeError('incompatible receiver'));
+  if not MapLikeThis(Args) then Exit(False);
   MapEnsureIndex(Args[0]);
   I := MapFind(Args[0], Arg(Args, Argc, 1));
   if I < 0 then begin Res := VFalse; Exit(True); end;
@@ -2633,7 +2686,7 @@ end;
 function MapProto_Clear(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var E: PValueArray; I: Integer;
 begin
-  if not IsObject(Args[0]) or not (ObjOf(Args[0])^.OKind in [okMap, okSet]) then Exit(ThrowTypeError('incompatible receiver'));
+  if not MapLikeThis(Args) then Exit(False);
   E := MapEntries(Args[0]);
   for I := 0 to Integer(E^.Len) - 1 do E^.Data[I] := VUndefined;
   E^.Len := 0;
@@ -2645,7 +2698,7 @@ end;
 
 function MapProto_Size(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsObject(Args[0]) or not (ObjOf(Args[0])^.OKind in [okMap, okSet]) then Exit(ThrowTypeError('incompatible receiver'));
+  if not MapLikeThis(Args) then Exit(False);
   Res := MkInt(MapCount(Args[0]));
   Result := True;
 end;
@@ -2665,7 +2718,8 @@ end;
 function MapProto_ForEach(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var I: Integer; E: PValueArray; CallArgs: array[0..2] of TValue; R: TValue;
 begin
-  if not IsObject(Args[0]) or not (ObjOf(Args[0])^.OKind in [okMap, okSet]) then Exit(ThrowTypeError('incompatible receiver'));
+  if not MapLikeThis(Args) then Exit(False);
+  if not IsCallable(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('forEach callback is not a function'));
   I := 0;
   while True do
   begin
@@ -2691,7 +2745,7 @@ threadvar
 function MapIterKind(Args: TArgs; Kind: Integer; var Res: TValue): Boolean;
 var O: PObj; IsSet: Boolean;
 begin
-  if not IsObject(Args[0]) or not (ObjOf(Args[0])^.OKind in [okMap, okSet]) then Exit(ThrowTypeError('incompatible receiver'));
+  if not MapLikeThis(Args) then Exit(False);
   IsSet := ObjOf(Args[0])^.OKind = okSet;
   if IsSet then O := NewObject(RootShapeFor(SetIterProto), 0, okIterator)
   else O := NewObject(RootShapeFor(MapIterProto), 0, okIterator);
@@ -2759,6 +2813,15 @@ begin
   PopRoots(1);
 end;
 
+procedure DefineGetterData(O: TValue; const Name: UnicodeString; Fn: TNativeFn; Data: UInt32);
+begin
+  PushRoot(O);
+  PushRoot(NewNativeFunctionData(Fn, 'get ' + Name, 0, Data));
+  PushRoot(MkPtr(NewAccessor(RootAt(TempTop - 1), VUndefined)));
+  DefineOwn(RootAt(TempTop - 3), AtomOf(Name), RootAt(TempTop - 1), pfConfigurable or pfAccessor);
+  PopRoots(3);
+end;
+
 threadvar
   MathObj, JSONObj, ConsoleObj, PerfObj, DateObj, CtorTmp, ArrayValuesFnRoot: TValue;
 
@@ -2767,6 +2830,14 @@ var C, P, G: TValue;
   procedure N(O: TValue; const Name: UnicodeString; Fn: TNativeFn; Len: Integer);
   begin
     DefineNative(O, Name, Fn, Len);
+  end;
+  { a Set.prototype method shared with Map.prototype (MapLikeThis) }
+  procedure NS(O: TValue; const Name: UnicodeString; Fn: TNativeFn; Len: Integer);
+  begin
+    PushRoot(O);
+    PushRoot(NewNativeFunctionData(Fn, Name, Len, 1));
+    DefineOwn(RootAt(TempTop - 2), AtomOf(Name), RootAt(TempTop - 1), pfHidden);
+    PopRoots(2);
   end;
   function ErrorType(const Name: UnicodeString; Fn: TNativeFn; Parent: TValue): TValue;
   var EP, Ctor: TValue;
@@ -2855,7 +2926,7 @@ begin
   N(CtorTmp, 'getOwnPropertyNames', Object_GetOwnPropertyNames, 1);
   N(ObjectProto, 'hasOwnProperty', ObjProto_HasOwnProperty, 1);
   N(ObjectProto, 'toString', ObjProto_ToString, 0);
-  N(ObjectProto, 'toLocaleString', ObjProto_ToString, 0);
+  N(ObjectProto, 'toLocaleString', ObjProto_ToLocaleString, 0);
   N(ObjectProto, 'valueOf', ObjProto_ValueOf, 0);
   N(ObjectProto, 'isPrototypeOf', ObjProto_IsPrototypeOf, 1);
 
@@ -2908,6 +2979,14 @@ begin
   N(ArrayIteratorProto, 'next', ArrIter_Next, 0);
   AddRoot(@ArrayIterNextFn);
   GetV(ArrayIteratorProto, AtomNext, ArrayIterNextFn);
+  DefineOwn(ArrayIteratorProto, SymKey(SymToStringTagW), MkPtr(AtomOf('Array Iterator')), pfConfigurable);
+  { %StringIteratorPrototype% }
+  AddRoot(@StringIterProto);
+  StringIterProto := NewProtoObject(IteratorProto);
+  AddRoot(@StringIterNextFn);
+  StringIterNextFn := NewNativeFunctionData(ArrIter_Next, 'next', 0, 1);
+  DefineOwn(StringIterProto, AtomNext, StringIterNextFn, pfHidden);
+  DefineOwn(StringIterProto, SymKey(SymToStringTagW), MkPtr(AtomOf('String Iterator')), pfConfigurable);
   G := NewNativeFunction(Iter_Self, '[Symbol.iterator]', 0);
   DefineOwn(IteratorProto, PStr(PPointer(PByte(PtrOf(SymIterator)) + 16)^), G, pfHidden);
 
@@ -2947,7 +3026,7 @@ begin
   N(StringProto, 'toString', StrProto_ToString, 0);
   N(StringProto, 'valueOf', StrProto_ToString, 0);
   N(StringProto, 'localeCompare', StrProto_LocaleCompare, 1);
-  G := NewNativeFunction(ArrProto_Values, '[Symbol.iterator]', 0);
+  G := NewNativeFunction(StrProto_Iterator, '[Symbol.iterator]', 0);
   DefineOwn(StringProto, PStr(PPointer(PByte(PtrOf(SymIterator)) + 16)^), G, pfHidden);
 
   { Number, Boolean, Symbol }
@@ -3001,16 +3080,16 @@ begin
   DefineOwn(SetIterProto, SymKey(SymToStringTagW), MkPtr(AtomOf('Set Iterator')), pfConfigurable);
   C := MakeCtor(Set_Ctor, 'Set', 0, SetProtoObj);
   N(SetProtoObj, 'add', SetProto_Add, 1);
-  N(SetProtoObj, 'has', MapProto_Has, 1);
-  N(SetProtoObj, 'delete', MapProto_Delete, 1);
-  N(SetProtoObj, 'clear', MapProto_Clear, 0);
-  N(SetProtoObj, 'forEach', MapProto_ForEach, 1);
-  N(SetProtoObj, 'values', MapProto_Keys, 0);
+  NS(SetProtoObj, 'has', MapProto_Has, 1);
+  NS(SetProtoObj, 'delete', MapProto_Delete, 1);
+  NS(SetProtoObj, 'clear', MapProto_Clear, 0);
+  NS(SetProtoObj, 'forEach', MapProto_ForEach, 1);
+  NS(SetProtoObj, 'values', MapProto_Keys, 0);
   { 24.2.4.11 / 24.2.4.18: keys and @@iterator are the values function }
   GetV(SetProtoObj, AtomOf('values'), G);
   DefineOwn(SetProtoObj, AtomOf('keys'), G, pfHidden);
-  N(SetProtoObj, 'entries', MapProto_Entries, 0);
-  DefineGetter(SetProtoObj, 'size', MapProto_Size);
+  NS(SetProtoObj, 'entries', MapProto_Entries, 0);
+  DefineGetterData(SetProtoObj, 'size', MapProto_Size, 1);
   GetV(SetProtoObj, AtomOf('values'), G);
   DefineOwn(SetProtoObj, PStr(PPointer(PByte(PtrOf(SymIterator)) + 16)^), G, pfHidden);
 

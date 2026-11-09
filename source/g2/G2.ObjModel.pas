@@ -56,7 +56,7 @@ procedure InitObjModel;
 implementation
 
 uses
-  SysUtils, Math, G2.VM, G2.Typed;
+  SysUtils, Math, G2.Bytecode, G2.VM, G2.Typed;
 
 threadvar
   AtomEnumerable, AtomConfigurable, AtomWritable, AtomGet, AtomSet: PStr;
@@ -1380,8 +1380,30 @@ begin
 end;
 
 { 10.2.4.1 %ThrowTypeError% }
+{ %ThrowTypeError%, the getter and setter of Function.prototype.caller and .arguments: read on a non-strict
+  function (the legacy caller extension, 17.1 forbidden extensions), it is undefined (G2 reveals no caller) unless
+  that function's active call came from a strict function: then it throws, as an implementation that reveals
+  callers must }
+function LegacyCallerRead(F: TValue; var Res: TValue): Boolean;
+var T: PFuncTemplate; I: Integer;
+begin
+  Result := False;
+  if not IsObject(F) or (ObjOf(F)^.OKind <> okFunction) then Exit;
+  T := PFuncTemplate(ObjOf(F)^.Native);
+  if T^.IsStrict or T^.IsArrow or T^.IsMethod or T^.IsClassCtor or T^.IsGenerator or T^.IsAsync then Exit;
+  for I := FrameTop - 1 downto 0 do
+    if Frames[I].Closure = F then
+    begin
+      if (I > 0) and Frames[I - 1].Tpl^.IsStrict and not Frames[I - 1].Tpl^.TopLevel then Exit;
+      Break;
+    end;
+  Res := VUndefined;
+  Result := True;
+end;
+
 function ThrowTypeError_Native(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
+  if LegacyCallerRead(Args[0], Res) then Exit(True);
   Result := ThrowTypeError('''caller'', ''callee'', and ''arguments'' properties may not be accessed on strict mode functions or the arguments objects for calls to them');
 end;
 
@@ -1542,6 +1564,7 @@ var O, R: TValue; Ok_: Boolean;
 begin
   ProxySetHook := @ProxySetOM;
   SetReceiverHook := @SetWithReceiver;
+  SetProtoHook := @SetPrototypeOfV;
   ProxyCheckHook := @ProxyCheckOM;
   ToObjectHook := @ToObjectV;
   CopyDataPropsHook := @CopyDataPropsOM;
@@ -1569,6 +1592,12 @@ begin
   PushRoot(O);
   SetIntegrityLevel(RootAt(TempTop - 1), True, Ok_);
   ThrowerAcc := MkPtr(NewAccessor(RootAt(TempTop - 1), RootAt(TempTop - 1)));
+  { 10.2.4 AddRestrictedFunctionProperties(%Function.prototype%): caller and arguments (configurable: an accessor
+    cell of their own) }
+  O := MkPtr(NewAccessor(RootAt(TempTop - 1), RootAt(TempTop - 1)));
+  DefineOwn(FunctionProto, AtomOf('caller'), O, pfConfigurable or pfAccessor);
+  O := MkPtr(NewAccessor(RootAt(TempTop - 1), RootAt(TempTop - 1)));
+  DefineOwn(FunctionProto, AtomOf('arguments'), O, pfConfigurable or pfAccessor);
   PopRoots(1);
   AtomEnumerable := AtomOf('enumerable');
   AtomConfigurable := AtomOf('configurable');

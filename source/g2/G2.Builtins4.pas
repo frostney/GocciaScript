@@ -744,13 +744,7 @@ const
     '  function def(o, name, fn) { Object.defineProperty(o, name, {value: fn, writable: true, configurable: true}); }'#10 +
     '  var AP = Array.prototype, OP = Object.prototype, hasOwn = OP.hasOwnProperty;'#10 +
     '  function toInt(v) { v = +v; return v !== v ? 0 : (v < 0 ? Math.ceil(v) : Math.floor(v)); }'#10 +
-    '  def(Object, "fromEntries", function (it) { var o = {}; for (var e of it) o[e[0]] = e[1]; return o; });'#10 +
-    '  def(Object, "hasOwn", function (o, k) { return hasOwn.call(Object(o), k); });'#10 +
     '  def(Object, "groupBy", function (it, f) { var o = Object.create(null), i = 0; for (var x of it) { var k = f(x, i++); (o[k] || (o[k] = [])).push(x); } return o; });'#10 +
-    '  def(OP, "__defineGetter__", function (k, f) { Object.defineProperty(this, k, {get: f, enumerable: true, configurable: true}); });'#10 +
-    '  def(OP, "__defineSetter__", function (k, f) { Object.defineProperty(this, k, {set: f, enumerable: true, configurable: true}); });'#10 +
-    '  def(OP, "__lookupGetter__", function (k) { for (var o = this; o; o = Object.getPrototypeOf(o)) { var d = Object.getOwnPropertyDescriptor(o, k); if (d) return d.get; } });'#10 +
-    '  def(OP, "__lookupSetter__", function (k) { for (var o = this; o; o = Object.getPrototypeOf(o)) { var d = Object.getOwnPropertyDescriptor(o, k); if (d) return d.set; } });'#10 +
     '  def(AP, "at", function (i) { var n = this.length >>> 0; i = toInt(i); if (i < 0) i += n; return i < 0 || i >= n ? undefined : this[i]; });'#10 +
     '  def(AP, "keys", function () { var a = []; for (var i = 0, n = this.length >>> 0; i < n; i++) a.push(i); return a[Symbol.iterator](); });'#10 +
     '  def(AP, "entries", function () { var a = []; for (var i = 0, n = this.length >>> 0; i < n; i++) a.push([i, this[i]]); return a[Symbol.iterator](); });'#10 +
