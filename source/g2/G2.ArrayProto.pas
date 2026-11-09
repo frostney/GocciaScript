@@ -1127,10 +1127,9 @@ begin
         V := RootAt(TempTop - 1);
         PopRoots(1);
         if not IsCallable(F) then begin ThrowTypeError('toLocaleString is not a function'); Break; end;
-        { ECMA-262 23.1.3.32 invokes it with no arguments; ECMA-402 19.5.1 passes locales and options, once G2
-          has Intl }
+        { ECMA-402 19.5.1: locales and options pass through to each element }
         LA[0] := Arg(Args, Argc, 1); LA[1] := Arg(Args, Argc, 2);
-        if not CallValue(F, V, @LA[0], 0, V) then Break;
+        if not CallValue(F, V, @LA[0], 2, V) then Break;
       end;
       if not ToStringV(V, SV) then Break;
       Add(StrOf(SV));

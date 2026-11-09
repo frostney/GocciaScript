@@ -336,7 +336,7 @@ function TAP_LastIndexOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; 
 
 { 23.2.3.18 join and 23.2.3.31 toLocaleString }
 function TAJoin(Args: TArgs; Argc: Integer; var Res: TValue; Locale: Boolean): Boolean;
-var Len, K: Int64; Sep, SV, V, F: TValue; B: UnicodeString;
+var Len, K: Int64; Sep, SV, V, F: TValue; B: UnicodeString; LA: array[0..1] of TValue;
 begin
   if not ValidateTA(Args[0], Len) then Exit(False);
   if Locale or (Arg(Args, Argc, 1) = VUndefined) then Sep := StrFromUnicode(',')
@@ -355,7 +355,8 @@ begin
       V := RootAt(TempTop - 1);
       PopRoots(1);
       if not IsCallable(F) then begin PopRoots(1); Exit(ThrowTypeError('toLocaleString is not a function')); end;
-      if not CallValue(F, V, nil, 0, V) then begin PopRoots(1); Exit(False); end;
+      LA[0] := Arg(Args, Argc, 1); LA[1] := Arg(Args, Argc, 2);   { ECMA-402: locales and options pass through }
+      if not CallValue(F, V, @LA[0], 2, V) then begin PopRoots(1); Exit(False); end;
     end;
     if not ToStringV(V, SV) then begin PopRoots(1); Exit(False); end;
     B := B + StrToUnicode(StrOf(SV));

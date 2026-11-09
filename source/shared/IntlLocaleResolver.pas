@@ -16,6 +16,8 @@ function BestAvailableLocale(const AAvailableLocales: IntlTypes.TStringArray;
 function LookupMatcher(const AAvailableLocales, ARequestedLocales: IntlTypes.TStringArray): TIntlResolvedLocale;
 function BestFitMatcher(const AAvailableLocales, ARequestedLocales: IntlTypes.TStringArray): TIntlResolvedLocale;
 function DefaultLocale: string;
+{ the available locales: ICU's, canonicalized, the CLDR regional ones and the default (cached) }
+function AvailableLocaleList: IntlTypes.TStringArray;
 
 implementation
 
