@@ -42,7 +42,7 @@ const
 
   { object kinds (TObj.OKind) }
   okPlain = 0;
-  okArray = 1;
+  okArray = 1;      { OFlags ofBigLen: Aux2 holds the length (a Number), past the elements }
   okFunction = 2;   { bytecode closure: Native = PFuncTemplate, Aux2 = upvalue array }
   okNative = 3;     { native function: Native = TNativeFn, Aux1 = data }
   okBound = 4;      { Aux1 = target, Aux2 = value array [this, args...] }
@@ -56,6 +56,8 @@ const
   okIterator = 12;  { array/string iterator: Aux1 = iterated, Aux2 = index/kind }
   okGenerator = 13;
   okProxy = 21;     { Aux1 = target, Aux2 = handler (not an object once revoked); OFlags 16 = callable }
+  ofBigLen = 32;    { an array whose length is past its dense elements (see ArrayLength) }
+  ArrayDenseMax = 64 * 1024 * 1024;   { the longest an array's elements grow }
 
   { cell flags }
   cfMark = 1;
@@ -312,6 +314,14 @@ procedure SetProto(O: PObj; P: TValue);
 procedure ArraySetLength(A: PObj; NewLen: Integer);
 procedure ArrayPush(A: PObj; V: TValue);
 function ArrayLen(A: PObj): Integer; inline;
+{ an array's length: past its elements' when ofBigLen is set (the indices past them are shape properties) }
+function ArrayLength(A: PObj): Int64; inline;
+{ sets an array's length to any valid one (at most 2^32-1); the caller removed what lies at or past it }
+procedure ArraySetLengthAny(A: PObj; NewLen: Int64);
+{ an array's length past its elements, which stay as they are (NewLen at least their count) }
+procedure ArraySetLengthSparse(A: PObj; NewLen: Int64);
+{ deletes an array's shape index properties at or past NewLen from the last; Result the length left }
+function ArrayDropShapeIndices(P: PObj; NewLen: Int64): Int64;
 procedure EnsureElementsCap(A: PObj; Need: Integer);
 procedure ValueArrayStore(VA: PValueArray; I: Integer; V: TValue); inline;
 
@@ -1834,6 +1844,76 @@ end;
 function ArrayLen(A: PObj): Integer; inline;
 begin
   Result := A^.Elements^.Len;
+end;
+
+function ArrayLength(A: PObj): Int64; inline;
+begin
+  if (A^.OFlags and ofBigLen) <> 0 then Result := Trunc(DoubleOf(A^.Aux2))
+  else Result := A^.Elements^.Len;
+end;
+
+{ 10.4.2.4 steps 17-18 for the indices kept in the shape (the elements are configurable): deletes those at or
+  past NewLen from the last; Result the length left, one past a non-configurable index that stopped it }
+function ArrayDropShapeIndices(P: PObj; NewLen: Int64): Int64;
+var Idxs: array of Int64; N, I, J, Gap, S: Integer; Idx, T: Int64;
+begin
+  Result := NewLen;
+  if not P^.Shape^.HasIndexKeys then Exit;
+  N := 0;
+  SetLength(Idxs, P^.Shape^.Count);
+  for I := 0 to P^.Shape^.Count - 1 do
+    if (P^.Shape^.Keys[I]^.Hdr.Extra = 0) and IndexFromString(P^.Shape^.Keys[I], Idx) and (Idx >= NewLen) then
+    begin
+      Idxs[N] := Idx;
+      Inc(N);
+    end;
+  { descending (a shell sort) }
+  Gap := N div 2;
+  while Gap > 0 do
+  begin
+    for I := Gap to N - 1 do
+    begin
+      T := Idxs[I];
+      J := I;
+      while (J >= Gap) and (Idxs[J - Gap] < T) do
+      begin
+        Idxs[J] := Idxs[J - Gap];
+        Dec(J, Gap);
+      end;
+      Idxs[J] := T;
+    end;
+    Gap := Gap div 2;
+  end;
+  for I := 0 to N - 1 do
+  begin
+    S := ShapeLookup(P^.Shape, IntAtom(Idxs[I]));
+    if S < 0 then Continue;
+    if (P^.Shape^.PFlags[S] and pfConfigurable) = 0 then Exit(Idxs[I] + 1);
+    DeleteProperty(P, IntAtom(Idxs[I]));
+  end;
+end;
+
+procedure ArraySetLengthAny(A: PObj; NewLen: Int64);
+begin
+  if NewLen <= A^.Elements^.Len then
+  begin
+    ArraySetLength(A, NewLen);
+    if (A^.OFlags and ofBigLen) <> 0 then
+    begin
+      A^.OFlags := A^.OFlags and not ofBigLen;
+      A^.Aux2 := VUndefined;
+    end;
+  end
+  else if ((A^.OFlags and ofBigLen) = 0) and (NewLen <= ArrayDenseMax) then
+    ArraySetLength(A, NewLen)
+  else ArraySetLengthSparse(A, NewLen);
+end;
+
+procedure ArraySetLengthSparse(A: PObj; NewLen: Int64);
+begin
+  { every write to the array takes the checked path (G2.ObjModel ofElemGuard) }
+  A^.OFlags := A^.OFlags or ofBigLen or 64;
+  A^.Aux2 := MkDouble(NewLen);
 end;
 
 procedure EnsureElementsCap(A: PObj; Need: Integer);

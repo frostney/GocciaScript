@@ -292,7 +292,7 @@ begin
   end;
   if (P^.OKind = okArray) and (Key = AtomLength) then
   begin
-    DataDesc(D, MkInt(ArrayLen(P)), (P^.OFlags and ofLenReadOnly) = 0, False, False);
+    DataDesc(D, MkNumber(ArrayLength(P)), (P^.OFlags and ofLenReadOnly) = 0, False, False);
     Found := True;
     Exit;
   end;
@@ -390,7 +390,8 @@ begin
   Fl := FlagsOf(M);
   MV := M.Value; MG := M.Get; MS := M.Set_;
   if (P^.Elements <> nil) and IndexFromString(Key, Idx) and (ShapeLookup(P^.Shape, Key) < 0) and
-     (Fl = pfDefault) and ((P^.OKind <> okArray) or (Idx < P^.Elements^.Len) or ArrayDenseOK(P^.Elements, Idx)) then
+     (Fl = pfDefault) and ((P^.OKind <> okArray) or (Idx < P^.Elements^.Len) or
+      (((P^.OFlags and ofBigLen) = 0) and ArrayDenseOK(P^.Elements, Idx))) then
   begin
     { a default data property on an index: an element }
     if DefineElemRaw(O, Idx, M.Value) then Exit;
@@ -402,15 +403,16 @@ begin
     P^.OFlags := P^.OFlags or ofElemGuard;
   end;
   if (P^.OKind = okArray) and IndexFromString(Key, Idx) and (P^.Elements <> nil) and (Idx >= P^.Elements^.Len) and
-     (Idx < 64 * 1024 * 1024) then
+     (Idx >= ArrayLength(P)) then
   begin
     { an index at or past the length extends it (10.4.2.1 step 1.k) }
     PushRoot(O); PushRoot(MV); PushRoot(MG); PushRoot(MS);
-    ArraySetLength(P, Idx + 1);
+    if ((P^.OFlags and ofBigLen) = 0) and ArrayDenseOK(P^.Elements, Idx) then ArraySetLength(P, Idx + 1)
+    else ArraySetLengthSparse(P, Idx + 1);
     O := RootAt(TempTop - 4);   { the elements' allocation may have moved the array and the values }
     MV := RootAt(TempTop - 3); MG := RootAt(TempTop - 2); MS := RootAt(TempTop - 1);
     P := ObjOf(O);
-    P^.Elements^.Data[Idx] := VHole;
+    if Idx < P^.Elements^.Len then P^.Elements^.Data[Idx] := VHole;
     P^.OFlags := P^.OFlags or ofElemGuard;
     PopRoots(4);
   end;
@@ -450,12 +452,11 @@ begin
   PopRoots(1);
   if IsNaN(D2) or (D2 < 0) or (D2 > 4294967295.0) or (Frac(D2) <> 0) or (D1 <> D2) then
     Exit(ThrowError('RangeError', 'Invalid array length'));
-  if D2 > 64 * 1024 * 1024 then Exit(ThrowError('RangeError', 'Array length beyond G2''s dense arrays (no sparse arrays yet)'));
   P := ObjOf(O);
   if (D.HasConfigurable and D.Configurable) or (D.HasEnumerable and D.Enumerable) or IsAccessorDesc(D) then
     begin Ok := False; Exit(True); end;
   NewLen := Trunc(D2);
-  OldLen := ArrayLen(P);
+  OldLen := ArrayLength(P);
   ReadOnly := (P^.OFlags and ofLenReadOnly) <> 0;
   if ReadOnly then
   begin
@@ -465,30 +466,17 @@ begin
   end;
   if NewLen < OldLen then
   begin
-    { indices from the end down: a non-configurable one stops the deletion }
-    I := OldLen - 1;
-    while I >= NewLen do
+    { the indices from the end down: a non-configurable one stops the deletion }
+    I := ArrayDropShapeIndices(P, NewLen);
+    if I > NewLen then
     begin
-      K := IntAtom(I);
-      S := ShapeLookup(P^.Shape, K);
-      if S >= 0 then
-      begin
-        if (P^.Shape^.PFlags[S] and pfConfigurable) = 0 then
-        begin
-          ArraySetLength(P, I + 1);
-          if D.HasWritable and not D.Writable then P^.OFlags := P^.OFlags or ofLenReadOnly or ofElemGuard;
-          Ok := False;
-          Exit(True);
-        end;
-        PushRoot(O);
-        DeleteProperty(P, K);
-        P := ObjOf(RootAt(TempTop - 1));
-        PopRoots(1);
-      end;
-      Dec(I);
+      ArraySetLengthAny(P, I);
+      if D.HasWritable and not D.Writable then P^.OFlags := P^.OFlags or ofLenReadOnly or ofElemGuard;
+      Ok := False;
+      Exit(True);
     end;
   end;
-  ArraySetLength(P, NewLen);
+  ArraySetLengthAny(P, NewLen);
   if D.HasWritable and not D.Writable then P^.OFlags := P^.OFlags or ofLenReadOnly or ofElemGuard;
   Result := True;
 end;
@@ -632,7 +620,7 @@ begin
   P := ObjOf(O);
   Ext := (P^.OFlags and 8) = 0;
   if (P^.OKind = okArray) and IndexFromString(Key, Idx) and not Found and ((P^.OFlags and ofLenReadOnly) <> 0) and
-     (Idx >= ArrayLen(P)) then
+     (Idx >= ArrayLength(P)) then
   begin
     { 10.4.2.1: an index past a read-only length }
     PopRoots(1);

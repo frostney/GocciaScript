@@ -297,7 +297,7 @@ begin
     end
     else D := Len - 1;
     if IsInfinite(D) and (D < 0) then Exit(True);
-    if D >= 0 then D := Min(D, Len - 1) else D := Len + D;
+    if D >= 0 then D := Min(D, Double(Len - 1)) else D := Len + D;
     K := Trunc(D);
     while K >= 0 do
     begin

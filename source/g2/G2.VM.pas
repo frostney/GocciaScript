@@ -1374,7 +1374,8 @@ end;
 { an index write an array keeps dense: near its length, or anywhere below 4M elements }
 function ArrayDenseOK(E: PValueArray; Idx: Int64): Boolean; inline;
 begin
-  Result := (Idx < Int64(E^.Len) + 1024 + Int64(E^.Len) * 2) or (Idx < 4 * 1024 * 1024);
+  { past ArrayDenseMax an index is a property of the shape and the length is kept apart (ArraySetLengthSparse) }
+  Result := (Idx < ArrayDenseMax) and ((Idx < Int64(E^.Len) + 1024 + Int64(E^.Len) * 2) or (Idx < 4 * 1024 * 1024));
 end;
 
 { [[Delete]] on an ordinary object: a non-configurable property stays (the delete reports false) }
@@ -1510,7 +1511,7 @@ begin
   Result := False;
   case O^.OKind of
     okArray, okArguments:
-      if Key = AtomLength then begin Res := MkInt(ArrayLen(O)); Exit(True); end;
+      if Key = AtomLength then begin Res := MkNumber(ArrayLength(O)); Exit(True); end;
     okStringObj:
       begin
         if Key = AtomLength then begin Res := MkInt(StrOf(O^.Aux1)^.Len); Exit(True); end;
@@ -1833,47 +1834,30 @@ begin
     if Key = AtomLength then
     begin
       if (O^.OFlags and 128) <> 0 then begin Ok := False; Exit(True); end;   { a read-only length }
-      if (O^.OFlags and 64) <> 0 then
-      begin
-        { index properties in the shape: ArraySetLength's deletion from the end, stopped by a non-configurable one }
-        PushRoot(Obj); PushRoot(V);
-        if not ToNumberV(V, D1) or not ToNumberV(RootAt(TempTop - 1), D2) then begin PopRoots(2); Exit(False); end;
-        O := ObjOf(RootAt(TempTop - 2));
-        if IsNaN(D2) or (D2 < 0) or (D2 > 4294967295.0) or (Frac(D2) <> 0) then begin PopRoots(2); Exit(ThrowError('RangeError', 'Invalid array length')); end;
-        Idx := ArrayLen(O) - 1;
-        while Idx >= Trunc(D2) do
-        begin
-          S := ShapeLookup(O^.Shape, IntAtom(Idx));
-          if S >= 0 then
-          begin
-            if (O^.Shape^.PFlags[S] and pfConfigurable) = 0 then
-            begin
-              ArraySetLength(O, Idx + 1);
-              PopRoots(2);
-              Ok := False;
-              Exit(True);
-            end;
-            DeleteProperty(O, IntAtom(Idx));
-            O := ObjOf(RootAt(TempTop - 2));
-          end;
-          Dec(Idx);
-        end;
-        if D2 <= 64 * 1024 * 1024 then ArraySetLength(O, Trunc(D2));
-        PopRoots(2);
-        Exit(True);
-      end;
       { 10.4.2.4 ArraySetLength: ToUint32 and ToNumber of the value must agree }
       PushRoot(Obj); PushRoot(V);
       if not ToNumberV(V, D1) or not ToNumberV(RootAt(TempTop - 1), D2) then begin PopRoots(2); Exit(False); end;
       O := ObjOf(RootAt(TempTop - 2));
       PopRoots(2);
       if IsNaN(D2) or (D2 < 0) or (D2 > 4294967295.0) or (Frac(D2) <> 0) then Exit(ThrowError('RangeError', 'Invalid array length'));
-      if D2 > 64 * 1024 * 1024 then Exit(ThrowError('RangeError', 'Array length beyond G2''s dense arrays (no sparse arrays yet)'));
-      ArraySetLength(O, Trunc(D2));
+      { 10.2.4.? a read-only length the conversion made (a valueOf that froze the array): false }
+      if (O^.OFlags and 128) <> 0 then begin Ok := False; Exit(True); end;
+      if Trunc(D2) < ArrayLength(O) then
+      begin
+        { index properties in the shape: the deletion from the end, stopped by a non-configurable one }
+        Idx := ArrayDropShapeIndices(O, Trunc(D2));
+        if Idx > Trunc(D2) then
+        begin
+          ArraySetLengthAny(O, Idx);
+          Ok := False;
+          Exit(True);
+        end;
+      end;
+      ArraySetLengthAny(O, Trunc(D2));
       Exit(True);
     end;
     { a new index past a read-only length fails (10.4.2.1) }
-    if IndexFromString(Key, Idx) and ((O^.OFlags and 128) <> 0) and (Idx >= ArrayLen(O)) then
+    if IndexFromString(Key, Idx) and ((O^.OFlags and 128) <> 0) and (Idx >= ArrayLength(O)) then
     begin
       Ok := False;
       Exit(True);
@@ -1923,7 +1907,7 @@ begin
   if (O^.OFlags and 8) <> 0 then begin Ok := False; Exit(True); end;   { not extensible }
   { a new index of an object with elements: an element where the array stays dense }
   if (O^.Elements <> nil) and IndexFromString(Key, Idx) and (O^.OKind in [okArray, okArguments]) and
-     ((Idx < O^.Elements^.Len) or ArrayDenseOK(O^.Elements, Idx)) then
+     ((Idx < O^.Elements^.Len) or (((O^.OFlags and ofBigLen) = 0) and ArrayDenseOK(O^.Elements, Idx))) then
   begin
     PushRoot(Obj); PushRoot(V);
     if Idx >= O^.Elements^.Cap then EnsureElementsCap(O, Idx + 1);
@@ -1936,6 +1920,12 @@ begin
     Exit(True);
   end;
   AddProperty(O, Key, V, pfDefault);
+  { 10.4.2.1 step 1.k: an index at or past an array's length extends it; one too far for its elements stays a
+    property of the shape }
+  if (O^.OKind = okArray) and (O^.Elements <> nil) and IndexFromString(Key, Idx) and (Idx >= ArrayLength(O)) then
+    ArraySetLengthSparse(O, Idx + 1)
+  else if (O^.OKind = okArray) and IndexFromString(Key, Idx) then
+    O^.OFlags := O^.OFlags or 64;
   Result := True;
 end;
 
@@ -2596,7 +2586,7 @@ var V: TValue; D: Double;
 begin
   if IsObject(O) and (ObjOf(O)^.OKind in [okArray, okArguments]) and (ObjOf(O)^.Elements <> nil) then
   begin
-    Len := ObjOf(O)^.Elements^.Len;
+    if ObjOf(O)^.OKind = okArray then Len := ArrayLength(ObjOf(O)) else Len := ObjOf(O)^.Elements^.Len;
     Exit(True);
   end;
   if not GetV(O, AtomLength, V) then Exit(False);
@@ -5004,7 +4994,7 @@ begin
               Changed := True;
               Continue;
             end;
-            if (TOp(I and $FF) = opGetLength) and (O^.OKind = okArray) then
+            if (TOp(I and $FF) = opGetLength) and (O^.OKind = okArray) and ((O^.OFlags and ofBigLen) = 0) then
             begin
               R[A] := MkInt(O^.Elements^.Len);
               Continue;
@@ -6016,7 +6006,7 @@ LReload:
             if O^.Hdr.Kind = ckObject then
             begin
               if ICGet(IC, O, R[A]) then Continue;
-              if (TOp(I and $FF) = opGetLength) and (O^.OKind = okArray) then
+              if (TOp(I and $FF) = opGetLength) and (O^.OKind = okArray) and ((O^.OFlags and ofBigLen) = 0) then
               begin
                 R[A] := MkInt(O^.Elements^.Len);
                 Continue;

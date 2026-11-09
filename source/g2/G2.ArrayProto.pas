@@ -252,8 +252,13 @@ end;
 function ArrayCreate(Len: Int64; var A: TValue): Boolean;
 begin
   if Len > 4294967295 then Exit(ThrowError('RangeError', 'Invalid array length'));
-  if Len > 64 * 1024 * 1024 then
-    Exit(ThrowError('RangeError', 'Array length beyond G2''s dense arrays (no sparse arrays yet)'));
+  if Len > ArrayDenseMax then
+  begin
+    { a length past what elements hold: no elements (ArrayLength) }
+    A := MkPtr(NewArray(0, 0));
+    ArraySetLengthAny(ObjOf(A), Len);
+    Exit(True);
+  end;
   A := MkPtr(NewArray(Len, Len));
   Result := True;
 end;
@@ -806,7 +811,7 @@ begin
   else
   begin
     if not ToIntInf(Args[2], D) then Exit(False);
-    D := Min(Max(D, 0), Len - Start);
+    D := Min(Max(D, 0.0), Double(Len - Start));
     Skip := Trunc(D);
   end;
   if Len + ItemCount - Skip > MAX_SAFE then Exit(ThrowTypeError('Splice result exceeds the maximum array-like length'));
@@ -1376,7 +1381,7 @@ begin
   else
   begin
     if not ToIntInf(Args[2], D) then Exit(False);
-    Skip := Trunc(Min(Max(D, 0), Len - Start));
+    Skip := Trunc(Min(Max(D, 0.0), Double(Len - Start)));
   end;
   NewLen := Len + Ins - Skip;
   if NewLen > MAX_SAFE then Exit(ThrowTypeError('toSpliced result exceeds the maximum array-like length'));

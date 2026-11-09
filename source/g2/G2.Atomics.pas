@@ -189,12 +189,12 @@ begin
   if not ThisShared(Args, 'slice', B) then Exit(False);
   Len := BlockLength(B);
   if not ToIntegerOrInf(Arg(Args, Argc, 1), D) then Exit(False);
-  if D < 0 then S := Trunc(Max(Len + D, 0)) else S := Trunc(Min(D, Len));
+  if D < 0 then S := Trunc(Max(Len + D, 0.0)) else S := Trunc(Min(D, Double(Len)));
   if Arg(Args, Argc, 2) = VUndefined then E := Len
   else
   begin
     if not ToIntegerOrInf(Args[2], D) then Exit(False);
-    if D < 0 then E := Trunc(Max(Len + D, 0)) else E := Trunc(Min(D, Len));
+    if D < 0 then E := Trunc(Max(Len + D, 0.0)) else E := Trunc(Min(D, Double(Len)));
   end;
   NewLen := Max(E - S, 0);
   { 7.3.22 SpeciesConstructor }

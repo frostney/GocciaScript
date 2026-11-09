@@ -750,7 +750,12 @@ begin
   begin
     D := NumOf(Args[1]);
     if (D < 0) or (D > 4294967295.0) or (Frac(D) <> 0) then Exit(ThrowError('RangeError', 'Invalid array length'));
-    A := NewArray(Trunc(D), Trunc(D));
+    if D > ArrayDenseMax then
+    begin
+      A := NewArray(0, 0);
+      ArraySetLengthAny(A, Trunc(D));
+    end
+    else A := NewArray(Trunc(D), Trunc(D));
   end
   else
   begin
