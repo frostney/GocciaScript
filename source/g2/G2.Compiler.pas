@@ -5490,6 +5490,15 @@ var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuri
     if Declare then Exit;
     if Pat is TGocciaRestDestructuringPattern then Pat := TGocciaRestDestructuringPattern(Pat).Argument;
     if Pat is TGocciaAssignmentDestructuringPattern then Pat := TGocciaAssignmentDestructuringPattern(Pat).Left;
+    { an identifier a with object may hold: ResolveBinding before the value is read (Kind 5: O its environment) }
+    if (Pat is TGocciaIdentifierDestructuringPattern) and (WithCount > 0) and
+       (WithsFor(TGocciaIdentifierDestructuringPattern(Pat).Name, WithIdxScratch) > 0) then
+    begin
+      Result.O := AllocReg;
+      ResolveWithEnv(TGocciaIdentifierDestructuringPattern(Pat).Name, Result.O);
+      Result.Kind := 5;
+      Exit;
+    end;
     if Pat is TGocciaMemberExpressionDestructuringPattern then
     begin
       X := TGocciaMemberExpressionDestructuringPattern(Pat).Expression;
@@ -5544,7 +5553,24 @@ var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuri
   procedure Target(Pat: TGocciaDestructuringPattern; ValReg: Integer; const Rf: TRef);
   var Sk: Integer; AD: TGocciaAssignmentDestructuringPattern; Rg: Integer;
   begin
-    if Rf.Kind <> 0 then
+    if Rf.Kind = 5 then
+    begin
+      { an identifier through the with chain: the initializer gets its name (NamedEvaluation), PutValue last }
+      if Pat is TGocciaAssignmentDestructuringPattern then
+      begin
+        AD := TGocciaAssignmentDestructuringPattern(Pat);
+        Sk := EmitJ(opJNotUndef, ValReg, 0);
+        CompileFieldValue(AD.Right, ValReg, TGocciaIdentifierDestructuringPattern(AD.Left).Name);
+        PatchHere(Sk);
+        StoreIdentRef(TGocciaIdentifierDestructuringPattern(AD.Left).Name, Rf.O, ValReg);
+      end
+      else
+      begin
+        if Pat is TGocciaRestDestructuringPattern then Pat := TGocciaRestDestructuringPattern(Pat).Argument;
+        StoreIdentRef(TGocciaIdentifierDestructuringPattern(Pat).Name, Rf.O, ValReg);
+      end;
+    end
+    else if Rf.Kind <> 0 then
     begin
       if Pat is TGocciaAssignmentDestructuringPattern then
       begin
