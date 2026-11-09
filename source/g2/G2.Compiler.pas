@@ -3405,13 +3405,22 @@ begin
           begin
             R := DeclareLocal('%m' + IntToStr(I), True);
             case E.Kind of
-              cekMethod: T := CompileFunction(PrivKeyName(E.Name), E.MethodNode.Parameters, E.MethodNode.Body, False,
-                True, False, False, E.MethodNode.IsGenerator, E.MethodNode.IsAsync);
-              cekGetter: T := CompileFunction('get ' + PrivKeyName(E.Name), NoParams, E.GetterNode.Body, False, True,
-                False, False, False, False);
+              cekMethod:
+                begin
+                  T := CompileFunction(PrivKeyName(E.Name), E.MethodNode.Parameters, E.MethodNode.Body, False,
+                    True, False, False, E.MethodNode.IsGenerator, E.MethodNode.IsAsync);
+                  T^.SourceRange := E.MethodNode.SourceRange;
+                end;
+              cekGetter:
+                begin
+                  T := CompileFunction('get ' + PrivKeyName(E.Name), NoParams, E.GetterNode.Body, False, True,
+                    False, False, False, False);
+                  T^.SourceRange := E.GetterNode.SourceRange;
+                end;
             else
               T := CompileFunction('set ' + PrivKeyName(E.Name), E.SetterNode.Parameters, E.SetterNode.Body, False,
                 True, False, False, False, False);
+              T^.SourceRange := E.SetterNode.SourceRange;
             end;
             EmitClosure(R, T);
             Emit(Ins(opSetHome, R, Target, 0));
@@ -3431,6 +3440,7 @@ begin
           begin
             T := CompileFunction(Name, E.MethodNode.Parameters, E.MethodNode.Body, False, True, False, False,
               E.MethodNode.IsGenerator, E.MethodNode.IsAsync);
+            T^.SourceRange := E.MethodNode.SourceRange;
             EmitClosure(Tmp, T);
             if KeyReg >= 0 then Emit(Ins(opSetFnName, Tmp, KeyReg, 0));
             if KeyReg >= 0 then Emit(Ins(opDefMethodC, Target, Tmp, KeyReg))
@@ -3441,6 +3451,7 @@ begin
             if Name <> '' then T := CompileFunction('get ' + Name, NoParams, E.GetterNode.Body, False, True, False,
               False, False, False)
             else T := CompileFunction('', NoParams, E.GetterNode.Body, False, True, False, False, False, False);
+            T^.SourceRange := E.GetterNode.SourceRange;
             EmitClosure(Tmp, T);
             if KeyReg >= 0 then Emit(Ins(opSetFnName, Tmp, KeyReg, 1));
             if KeyReg >= 0 then Emit(Ins(opDefGetterC, Target, Tmp, KeyReg))
@@ -3452,6 +3463,7 @@ begin
               True, False, False, False, False)
             else T := CompileFunction('', E.SetterNode.Parameters, E.SetterNode.Body, False, True, False, False,
               False, False);
+            T^.SourceRange := E.SetterNode.SourceRange;
             EmitClosure(Tmp, T);
             if KeyReg >= 0 then Emit(Ins(opSetFnName, Tmp, KeyReg, 2));
             if KeyReg >= 0 then Emit(Ins(opDefSetterC, Target, Tmp, KeyReg))
@@ -4101,6 +4113,7 @@ begin
           if HasUseStrictDirective(TGocciaGetterExpression(P.Accessor).Body) then PendingStrict := 1;
           T := CompileFunction('get ' + P.StaticKey, NoParams, TGocciaGetterExpression(P.Accessor).Body,
             False, True, False, False, False, False);
+          T^.SourceRange := TGocciaGetterExpression(P.Accessor).SourceRange;
           EmitClosure(V, T);
           Emit(Ins(opDefGetter, Obj, V or $8000, AtomConst(P.StaticKey)));
         end;
@@ -4110,6 +4123,7 @@ begin
           if HasUseStrictDirective(TGocciaSetterExpression(P.Accessor).Body) then PendingStrict := 1;
           T := CompileFunction('set ' + P.StaticKey, TGocciaSetterExpression(P.Accessor).Parameters,
             TGocciaSetterExpression(P.Accessor).Body, False, True, False, False, False, False);
+          T^.SourceRange := TGocciaSetterExpression(P.Accessor).SourceRange;
           EmitClosure(V, T);
           Emit(Ins(opDefSetter, Obj, V or $8000, AtomConst(P.StaticKey)));
         end;
@@ -4123,6 +4137,7 @@ begin
             if HasUseStrictDirective(TGocciaGetterExpression(Pair.Value).Body) then PendingStrict := 1;
             T := CompileFunction('get', NoParams, TGocciaGetterExpression(Pair.Value).Body,
               False, True, False, False, False, False);
+            T^.SourceRange := TGocciaGetterExpression(Pair.Value).SourceRange;
             EmitClosure(V, T);
             Emit(Ins(opSetFnName, V, K, 1));
             Emit(Ins(opDefGetterC, Obj, V or $8000, K));
@@ -4133,6 +4148,7 @@ begin
             if HasUseStrictDirective(TGocciaSetterExpression(Pair.Value).Body) then PendingStrict := 1;
             T := CompileFunction('set', TGocciaSetterExpression(Pair.Value).Parameters,
               TGocciaSetterExpression(Pair.Value).Body, False, True, False, False, False, False);
+            T^.SourceRange := TGocciaSetterExpression(Pair.Value).SourceRange;
             EmitClosure(V, T);
             Emit(Ins(opSetFnName, V, K, 2));
             Emit(Ins(opDefSetterC, Obj, V or $8000, K));

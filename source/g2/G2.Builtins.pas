@@ -493,6 +493,14 @@ end;
 
 { ---------------- Function ---------------- }
 
+{ 20.2.3.6 Function.prototype [ @@hasInstance ] ( V ) }
+function FuncProto_HasInstance(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var B: Boolean;
+begin
+  Result := OrdinaryHasInstance(Args[0], Arg(Args, Argc, 1), B);
+  if Result then Res := MkBool(B);
+end;
+
 function FuncProto_Call(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
   if Argc >= 2 then Result := CallValue(Args[0], Args[1], @Args[2], Argc - 1, Res)
@@ -626,6 +634,32 @@ begin
   Result := True;
 end;
 
+{ the name in 20.2.3.5's NativeFunction syntax: an optional get / set, then a PropertyName (an identifier name or
+  a computed [key]); a name that is neither (a private #name, the legacy RegExp.$&) is left out }
+function NativeFunctionName(const Nm: UnicodeString): UnicodeString;
+var Prefix, Key: UnicodeString; I: Integer; Ok: Boolean;
+begin
+  Prefix := ''; Key := Nm;
+  if (Copy(Nm, 1, 4) = 'get ') or (Copy(Nm, 1, 4) = 'set ') then
+  begin
+    Prefix := Copy(Nm, 1, 4);
+    Key := Copy(Nm, 5, MaxInt);
+  end;
+  Ok := (Key <> '') and (Key[1] = '[') and (Key[Length(Key)] = ']');
+  if not Ok and (Key <> '') and not ((Key[1] >= '0') and (Key[1] <= '9')) then
+  begin
+    Ok := True;
+    for I := 1 to Length(Key) do
+      if not ((Key[I] = '$') or (Key[I] = '_') or ((Key[I] >= 'a') and (Key[I] <= 'z')) or
+              ((Key[I] >= 'A') and (Key[I] <= 'Z')) or ((Key[I] >= '0') and (Key[I] <= '9')) or (Ord(Key[I]) > 127)) then
+      begin
+        Ok := False;
+        Break;
+      end;
+  end;
+  if Ok then Result := Prefix + Key else Result := Prefix;
+end;
+
 function FuncProto_ToString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; T: PFuncTemplate; Nm: UnicodeString;
 begin
@@ -640,10 +674,12 @@ begin
       Res := StrFromUnicode(UTF8Decode(T^.SourceRange.Get));
       Exit(True);
     end;
-    if T^.Name <> nil then Nm := StrToUnicode(T^.Name);
+    { a built-in written in a prelude: its name property (set by SetFunctionName: "[Symbol.match]", "get x") }
+    if (ShapeLookup(O^.Shape, AtomName) = 1) and IsString(O^.Slots[1]) then Nm := StrToUnicode(StrOf(O^.Slots[1]))
+    else if T^.Name <> nil then Nm := StrToUnicode(T^.Name);
   end
   else if (O^.OKind = okNative) and IsString(O^.Aux1) then Nm := StrToUnicode(StrOf(O^.Aux1));
-  Res := StrFromUnicode('function ' + Nm + '() { [native code] }');
+  Res := StrFromUnicode('function ' + NativeFunctionName(Nm) + '() { [native code] }');
   Result := True;
 end;
 
@@ -3122,6 +3158,10 @@ begin
   { Function }
   C := MakeCtor(Object_Ctor, 'Function', 1, FunctionProto);
   N(FunctionProto, 'call', FuncProto_Call, 1);
+  { not writable, enumerable or configurable }
+  AddRoot(@FuncHasInstanceFn);
+  FuncHasInstanceFn := NewNativeFunction(FuncProto_HasInstance, '[Symbol.hasInstance]', 1);
+  DefineOwn(FunctionProto, SymKey(SymHasInstance), FuncHasInstanceFn, 0);
   N(FunctionProto, 'apply', FuncProto_Apply, 2);
   N(FunctionProto, 'bind', FuncProto_Bind, 1);
   N(FunctionProto, 'toString', FuncProto_ToString, 0);

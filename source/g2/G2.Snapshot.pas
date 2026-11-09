@@ -255,11 +255,24 @@ begin
   end;
 end;
 
+{ a prelude's functions are built-in functions: Function.prototype.toString gives them NativeFunction syntax (20.2.3.5
+  step 3), so their source is not kept }
+procedure DropSource(T: PFuncTemplate);
+var I: Integer;
+begin
+  T^.SourceRange.SetText('');
+  for I := 0 to High(T^.Children) do DropSource(T^.Children[I]);
+end;
+
 function CompilePrelude(const Name, Source: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString): Boolean;
 begin
   if FromSnapshot(Name, Source, T) then Exit(True);
   Result := ParseAndCompile(Source, Name, True, T, Err);
-  if Result then AppendEntry(Name, Source, T);
+  if Result then
+  begin
+    DropSource(T);
+    AppendEntry(Name, Source, T);
+  end;
 end;
 
 end.

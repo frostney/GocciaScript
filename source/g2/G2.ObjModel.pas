@@ -940,9 +940,25 @@ function ProxySetOM(PV: TValue; Key: PStr; V, Receiver: TValue; var Ok: Boolean)
 
 { 10.1.9.2 OrdinarySetWithOwnDescriptor with an explicit receiver (Reflect.set) }
 function SetWithReceiver(O: TValue; Key: PStr; V, Receiver: TValue; var Ok: Boolean): Boolean;
-var D, Ex: TPropDesc; Found, FoundEx: Boolean; P, R: TValue; ND: TPropDesc;
+var D, Ex: TPropDesc; Found, FoundEx: Boolean; P, R: TValue; ND: TPropDesc; Idx: Int64;
 begin
   if ObjOf(O)^.OKind = okProxy then Exit(ProxySetOM(O, Key, V, Receiver, Ok));
+  { 10.4.5.5 a typed array's [[Set]] of a canonical numeric key: its own receiver stores (TypedArraySetElement,
+    true); another receiver gets nothing for an invalid index (true), OrdinarySet for a valid one }
+  if (ObjOf(O)^.OKind = okTypedArray) and (CanonicalNumericNonIndex(Key) or IndexFromString(Key, Idx)) then
+  begin
+    if O = Receiver then
+    begin
+      Ok := True;
+      if CanonicalNumericNonIndex(Key) then Exit(TAStoreValue(O, -1, V));
+      Exit(TAStoreValue(O, Idx, V));
+    end;
+    if CanonicalNumericNonIndex(Key) or TAOutOfBounds(ObjOf(O)) or (Idx >= TALength(ObjOf(O))) then
+    begin
+      Ok := True;
+      Exit(True);
+    end;
+  end;
   Ok := False;
   PushRoot(O); PushRoot(V); PushRoot(Receiver);
   Result := False;

@@ -219,6 +219,8 @@ procedure DefineNative(O: TValue; const Name: UnicodeString; Fn: TNativeFn; Leng
 function StrictEquals(A, B: TValue): Boolean;
 function LooseEquals(A, B: TValue; var Res: Boolean): Boolean;
 function InstanceOf(V, C: TValue; var Res: Boolean): Boolean;
+{ 7.3.21 OrdinaryHasInstance(C, V) }
+function OrdinaryHasInstance(C, V: TValue; var Res: Boolean): Boolean;
 function OwnKeys(O: PObj; OnlyEnumerable: Boolean): TValue;   { array of string keys }
 function DefineOwn(O: TValue; Key: PStr; V: TValue; Flags: Byte): Boolean;
 function GetIterator(V: TValue; var It: TValue): Boolean;
@@ -265,6 +267,7 @@ threadvar
   ArrayValuesFnPublic: TValue;
   StringIterProto: TValue;   { %StringIteratorPrototype% }
   StringIterNextFn: TValue;  { %StringIteratorPrototype%.next }
+  FuncHasInstanceFn: TValue; { %Function.prototype%[@@hasInstance]: instanceof skips calling it }
   BigIntProto: TValue;
   ErrorProtoType, TypeErrorProto, RangeErrorProto, SyntaxErrorProto, ReferenceErrorProto: TValue;
   EvalErrorProto, URIErrorProto: TValue;
@@ -2166,7 +2169,7 @@ begin
     PushRoot(V); PushRoot(C);
     if not GetV(C, PStr(PPointer(PByte(PtrOf(SymHasInstance)) + 16)^), H) then begin PopRoots(2); Exit(False); end;
     C := RootAt(TempTop - 1); V := RootAt(TempTop - 2);
-    if not IsNullish(H) then
+    if not IsNullish(H) and (H <> FuncHasInstanceFn) then
     begin
       P := V;
       Result := CallValue(H, C, @P, 1, R);
@@ -2177,8 +2180,15 @@ begin
     PopRoots(2);
   end;
   if not IsCallable(C) then Exit(ThrowTypeError('Right-hand side of ''instanceof'' is not callable'));
-  if ObjOf(C)^.OKind = okBound then Exit(InstanceOf(V, ObjOf(C)^.Aux1, Res));
+  Result := OrdinaryHasInstance(C, V, Res);
+end;
+
+function OrdinaryHasInstance(C, V: TValue; var Res: Boolean): Boolean;
+var Proto: TValue;
+begin
   Res := False;
+  if not IsCallable(C) then Exit(True);
+  if ObjOf(C)^.OKind = okBound then Exit(InstanceOf(V, ObjOf(C)^.Aux1, Res));
   if not IsObject(V) then Exit(True);
   PushRoot(V);
   if not GetV(C, AtomPrototype, Proto) then begin PopRoots(1); Exit(False); end;
@@ -6577,7 +6587,7 @@ begin
     @IteratorProto, @ArrayIteratorProto, @GeneratorProto, @MapProto, @SetProtoObj, @SymbolProto, @GlobalObj,
     @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @MapIterNextFn, @SetIterNextFn,
     @GenFunctionProto, @AsyncFunctionProto, @AsyncGenFunctionProto, @AsyncGeneratorProto, @AsyncIteratorProto,
-    @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @StringIterProto, @StringIterNextFn, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
+    @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @StringIterProto, @StringIterNextFn, @FuncHasInstanceFn, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
     @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto]);
   AddRoot(@IntrinsicList);
   IntrinsicList := VUndefined;
