@@ -2372,8 +2372,18 @@ end;
 { 27.? DisposeResources of a using block: the helper (G2.Disposal) disposes the capability's resources in reverse
   order; ExcReg >= 0 is the block's exception (rethrown, or wrapped in SuppressedErrors), -1 a normal completion }
 procedure TCompiler.EmitUsingDispose(Cap: Integer; Async: Boolean; ExcReg: Integer);
-var B: Integer;
+var B, Skip: Integer;
 begin
+  Skip := -1;
+  if Async then
+  begin
+    { DisposeResources awaits only for resources it disposes: an await using never reached adds none, and the
+      block then completes without a tick (its capability empty: no call) }
+    B := AllocReg;
+    Emit(Ins(opGetLength, B, Cap, NewIC('length')));
+    Skip := EmitJ(opJF, B, 0);
+    FreeTo(B);
+  end;
   B := AllocRegs(5);
   if Async then Emit(Ins(opGetGlobal, B, 0, NewICKey(UsingKey(2))))
   else Emit(Ins(opGetGlobal, B, 0, NewICKey(UsingKey(1))));
@@ -2392,6 +2402,11 @@ begin
   Emit(Ins(opCall, B, 3, 0));
   if Async then Emit(Ins(opAwait, B, B, 0));
   FreeTo(B);
+  if Skip >= 0 then
+  begin
+    { with an empty capability, a throw completion in flight is rethrown by the caller (ExcReg) }
+    PatchHere(Skip);
+  end;
 end;
 
 { a statement list with using declarations (14.2.2 BlockDeclarationInstantiation + DisposeResources): its body
