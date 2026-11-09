@@ -72,6 +72,8 @@ begin
   RetainBlock(B);
   O := NewObject(RootShapeFor(SharedBufferProto), 0, okArrayBuffer);
   O^.OFlags := O^.OFlags or ofShared;
+  { a growable one is not fixed length: typed arrays and DataViews over it track its length (bfResizable) }
+  if B^.MaxByteLength >= 0 then O^.OFlags := O^.OFlags or bfResizable;
   O^.Native := B;
   O^.Aux1 := VUndefined;
   O^.Aux2 := MkInt(0);
