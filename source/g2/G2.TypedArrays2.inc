@@ -814,10 +814,73 @@ begin
 end;
 
 { 25.3.1.5 GetViewValue / 25.3.1.6 SetViewValue; Kind a typed array kind }
+{ GetViewValue / SetViewValue's common case: an int32 index, a Number value (set), a fixed-length view of a fixed,
+  unshared, mutable buffer, a non-BigInt kind (False: not this case, DVAccess2's general path takes it) }
+function DVAccessFast(Args: TArgs; Argc: Integer; var Res: TValue; Kind: Integer; IsSet: Boolean): Boolean;
+var O, B: PObj; Idx, ES, I, VL: Integer; LE, V: TValue; Little: Boolean; P: PByte; Bytes: array[0..7] of Byte;
+  D: Double;
+begin
+  Result := False;
+  if (Kind >= taBigInt64) or (Kind = taFloat16) or (Argc < 1) or not IsDV(Args[0]) or ((Args[1] and TAG_MASK) <> TAG_INT) then Exit;
+  Idx := Int32(UInt32(Args[1]));
+  if Idx < 0 then Exit;
+  O := ObjOf(Args[0]);
+  B := ObjOf(O^.Aux1);
+  if (B^.OFlags and (bfShared or bfResizable or bfDetached or bfImmutable)) <> 0 then Exit;
+  VL := IntOf(O^.Aux2);
+  ES := TAElemSize[Kind];
+  if (VL < 0) or (Int64(Idx) + ES > VL) or (Int64(O^.Pad) + VL > BufferLen(B)) then Exit;
+  { Args[1] the byte offset, then (set) the value, then littleEndian }
+  if IsSet then
+  begin
+    if Argc < 2 then Exit;
+    V := Args[2];
+    if not IsNumber(V) then Exit;
+    if Argc < 3 then LE := VUndefined else LE := Args[3];
+  end
+  else if Argc < 2 then LE := VUndefined else LE := Args[2];
+  if LE = VTrue then Little := True
+  else if (LE = VFalse) or (LE = VUndefined) then Little := False
+  else Exit;
+  P := BufferData(B) + O^.Pad + Idx;
+  if IsSet then
+  begin
+    D := NumOf(V);
+    case Kind of
+      taFloat32: PSingle(@Bytes[0])^ := D;
+      taFloat64: PDouble(@Bytes[0])^ := D;
+    else
+      if (V and TAG_MASK) = TAG_INT then PLongWord(@Bytes[0])^ := LongWord(Int32(UInt32(V)))
+      else Exit;
+    end;
+    for I := 0 to ES - 1 do
+      if Little then P[I] := Bytes[I] else P[I] := Bytes[ES - 1 - I];
+    Res := VUndefined;
+  end
+  else
+  begin
+    for I := 0 to ES - 1 do
+      if Little then Bytes[I] := P[I] else Bytes[I] := P[ES - 1 - I];
+    case Kind of
+      taInt8: Res := MkInt(PShortInt(@Bytes[0])^);
+      taUint8: Res := MkInt(Bytes[0]);
+      taInt16: Res := MkInt(PSmallInt(@Bytes[0])^);
+      taUint16: Res := MkInt(PWord(@Bytes[0])^);
+      taInt32: Res := MkInt(PLongInt(@Bytes[0])^);
+      taUint32: Res := MkNumber(PLongWord(@Bytes[0])^);
+      taFloat32: Res := MkNumber(PSingle(@Bytes[0])^);
+      taFloat64: Res := MkNumber(PDouble(@Bytes[0])^);
+    else Exit;
+    end;
+  end;
+  Result := True;
+end;
+
 function DVAccess2(Args: TArgs; Argc: Integer; var Res: TValue; Kind: Integer; IsSet: Boolean): Boolean;
 var Idx: Int64; Little: Boolean; N, LE: TValue; O: PObj; ES, I: Integer; Bytes: array[0..7] of Byte; P: PByte;
   Q: QWord; D: Double; Base: Integer;
 begin
+  if DVAccessFast(Args, Argc, Res, Kind, IsSet) then Exit(True);
   if not NeedDV(Args, 'get/set') then Exit(False);
   if IsSet and ViewImmutable(ObjOf(Args[0])) then Exit(ThrowTypeError('the DataView''s buffer is immutable'));
   if not ToIndex(Arg(Args, Argc, 1), Idx) then Exit(False);
