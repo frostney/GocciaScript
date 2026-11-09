@@ -125,3 +125,114 @@ describe("Array.prototype.toString with special values", () => {
     expect([1, [2, [3, [4]]]].toString()).toBe("1,2,3,4");
   });
 });
+
+
+describe("Array string conversion", () => {
+  test("template null element is empty", () => {
+    expect(`${[null]}`).toBe("");
+  });
+
+  test("nested null element is empty in concatenation", () => {
+    expect([1, [null]] + "").toBe("1,");
+  });
+
+  test("template undefined element is empty", () => {
+    expect(`${[undefined, 2]}`).toBe(",2");
+  });
+
+  test("String null element control", () => {
+    expect(String([null, 1])).toBe(",1");
+  });
+
+  test("concatenation null element control", () => {
+    expect([null] + "").toBe("");
+  });
+
+  test("non-callable own join uses the object tag on every path", () => {
+    const array = [1, 2];
+    array.join = 0;
+    expect(`${array}`).toBe("[object Array]");
+    expect(array + "").toBe("[object Array]");
+    expect(String(array)).toBe("[object Array]");
+    expect([array].toString()).toBe("[object Array]");
+    expect(new Error(array).message).toBe("[object Array]");
+    const object = { [array]: 7 };
+    expect(object["[object Array]"]).toBe(7);
+  });
+
+  test("callable own join receives the array and no arguments", () => {
+    const array = [null];
+    array.join = { method(...args) {
+      expect(this).toBe(array);
+      expect(args.length).toBe(0);
+      return "custom";
+    } }.method;
+    expect(`${array}`).toBe("custom");
+    expect([array].toString()).toBe("custom");
+    expect(new Error(array).message).toBe("custom");
+  });
+
+  test("nullish nested arrays agree for keys and Error messages", () => {
+    const array = [null, [undefined, 2]];
+    expect(new Error(array).message).toBe(",,2");
+    const object = { [array]: 7 };
+    expect(object[",,2"]).toBe(7);
+  });
+
+  test("null-prototype arrays have no implicit string conversion", () => {
+    const array = [1, 2];
+    Object.setPrototypeOf(array, null);
+    expect(() => `${array}`).toThrow(TypeError);
+    expect(() => new Error(array)).toThrow(TypeError);
+    expect(() => ({ [array]: 1 })).toThrow(TypeError);
+    array.toString = () => "explicit";
+    expect(`${array}`).toBe("explicit");
+  });
+
+  test("self-cycle contributes an empty string on every path", () => {
+    const array = [1];
+    array.push(array);
+    expect(array + "").toBe("1,");
+    expect(`${array}`).toBe("1,");
+    expect(String(array)).toBe("1,");
+    expect(new Error(array).message).toBe("1,");
+    const object = { [array]: 7 };
+    expect(object["1,"]).toBe(7);
+  });
+
+  test("mutual and deeper cycles preserve surrounding elements", () => {
+    const a = [1];
+    const b = [2, a, 3];
+    a.push(b, 4);
+    expect(`${a}`).toBe("1,2,,3,4");
+    const c = [5, a, 6];
+    b[1] = c;
+    expect(`${a}`).toBe("1,2,5,,6,3,4");
+  });
+
+  test("shared children are converted again after a join completes", () => {
+    const child = [null, 2];
+    expect(`${[child, child]}`).toBe(",2,,2");
+  });
+
+  test("moderately nested arrays preserve their leaf", () => {
+    let array = [null, 1, undefined];
+    for (const unused of Array.from({ length: 128 })) {
+      array = [array];
+    }
+    expect(`${array}`).toBe(",1,");
+  });
+
+  test("long nested arrays complete or throw a catchable RangeError", () => {
+    let array = [1];
+    for (const unused of Array.from({ length: 10000 })) {
+      array = [array];
+    }
+    try {
+      expect(`${array}`).toBe("1");
+    } catch (error) {
+      expect(error instanceof RangeError).toBe(true);
+    }
+    expect(`${[null, 2]}`).toBe(",2");
+  });
+});
