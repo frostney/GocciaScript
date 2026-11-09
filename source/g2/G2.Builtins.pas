@@ -256,8 +256,15 @@ begin
 end;
 
 function Object_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var V: TValue;
+var V, P: TValue;
 begin
+  { 20.1.1.1 step 1: a subclass's construction (new.target another function) ignores the value }
+  if (CurNewTarget <> VUndefined) and (CurNewTarget <> NativeSelf) then
+  begin
+    if not ProtoFromNewTarget(ObjectProto, P) then Exit(False);
+    Res := NewObjWithProto(P);
+    Exit(True);
+  end;
   V := Arg(Args, Argc, 1);
   if IsObject(V) then Res := V
   else if IsNullish(V) then Res := NewObjWithProto(ObjectProto)

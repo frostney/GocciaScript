@@ -935,6 +935,8 @@ begin
   PopRoots(2);
   if not Result or IsObject(P) then Exit;
   P := Default;
+  { step 3.a GetFunctionRealm: a revoked proxy throws even with one realm }
+  if not MultiRealm and IsObject(C) and (ObjOf(C)^.OKind = okProxy) and not GetFunctionRealm(C, R) then Exit(False);
   if MultiRealm then
   begin
     { step 3: the intrinsic of the constructor's realm }
@@ -1315,6 +1317,8 @@ begin
     end;
   end;
   Result := True;
+  { GetFunctionRealm(new.target): a revoked proxy throws even with one realm }
+  if not MultiRealm and IsObject(NT) and (ObjOf(NT)^.OKind = okProxy) and not GetFunctionRealm(NT, R) then Exit(False);
   if MultiRealm then
   begin
     if not GetFunctionRealm(NT, R) then Exit(False);
