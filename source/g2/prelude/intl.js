@@ -13,7 +13,13 @@
   var ArrayIsArray = Array.isArray;
   function typeError(m) { return new TypeError(m); }
   function rangeError(m) { return new RangeError(m); }
-  function isObject(v) { return v !== null && (typeof v === "object" || typeof v === "function"); }
+  // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
+  function isObject(v) {
+    var t = typeof v;
+    return (t === "object" && v !== null) || t === "function" || (t === "undefined" && v !== undefined);
+  }
+  // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
+  function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
   function ToObject(v) { if (v === null || v === undefined) throw typeError("Cannot convert undefined or null to object"); return Object(v); }
   function ToNumber(v) { return +v; }
   // ToString (the string hint first, unlike "" + v)
@@ -568,7 +574,7 @@
     if (!isObject(v)) return v;
     var ex = v[Sym.toPrimitive];
     if (ex !== undefined && ex !== null) {
-      if (typeof ex !== "function") throw typeError("@@toPrimitive is not a function");
+      if (!isCallable(ex)) throw typeError("@@toPrimitive is not a function");
       var r = ex.call(v, "number");
       if (isObject(r)) throw typeError("Cannot convert object to primitive value");
       return r;
@@ -576,7 +582,7 @@
     var names = ["valueOf", "toString"];
     for (var i = 0; i < 2; i++) {
       var f = v[names[i]];
-      if (typeof f === "function") { var x = f.call(v); if (!isObject(x)) return x; }
+      if (isCallable(f)) { var x = f.call(v); if (!isObject(x)) return x; }
     }
     throw typeError("Cannot convert object to primitive value");
   }

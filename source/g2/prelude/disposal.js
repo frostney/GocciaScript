@@ -9,7 +9,13 @@
   var TypeErr = TypeError, RefErr = ReferenceError, Err = Error, Str = String;
   var PromiseResolve = Promise.resolve.bind(Promise);
 
-  function isObject(v) { return (typeof v === "object" && v !== null) || typeof v === "function"; }
+  // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
+  function isObject(v) {
+    var t = typeof v;
+    return (t === "object" && v !== null) || t === "function" || (t === "undefined" && v !== undefined);
+  }
+  // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
+  function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
   function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
 
   // SuppressedError ( error, suppressed, message )
@@ -47,7 +53,7 @@
       if (m === undefined || m === null) {
         m = v[SymDispose];
         if (m === undefined || m === null) return undefined;
-        if (typeof m !== "function") throw new TypeErr("[Symbol.dispose] is not a function");
+        if (!isCallable(m)) throw new TypeErr("[Symbol.dispose] is not a function");
         var sync = m;
         return function () { apply(sync, this, []); };
       }
@@ -55,7 +61,7 @@
       m = v[SymDispose];
       if (m === undefined || m === null) return undefined;
     }
-    if (typeof m !== "function") throw new TypeErr("the dispose method is not a function");
+    if (!isCallable(m)) throw new TypeErr("the dispose method is not a function");
     return m;
   }
   // AddDisposableResource(capability, V, hint)
@@ -130,14 +136,14 @@
     adopt(value, onDispose) {
       DisposableStack.#check(this, "adopt");
       if (this.#state === "disposed") throw new RefErr("the DisposableStack is already disposed");
-      if (typeof onDispose !== "function") throw new TypeErr("onDispose is not a function");
+      if (!isCallable(onDispose)) throw new TypeErr("onDispose is not a function");
       addMethod(this.#cap, undefined, function () { return onDispose(value); }, false);
       return value;
     }
     defer(onDispose) {
       DisposableStack.#check(this, "defer");
       if (this.#state === "disposed") throw new RefErr("the DisposableStack is already disposed");
-      if (typeof onDispose !== "function") throw new TypeErr("onDispose is not a function");
+      if (!isCallable(onDispose)) throw new TypeErr("onDispose is not a function");
       addMethod(this.#cap, undefined, onDispose, false);
       return undefined;
     }
@@ -179,14 +185,14 @@
     adopt(value, onDisposeAsync) {
       AsyncDisposableStack.#check(this, "adopt");
       if (this.#state === "disposed") throw new RefErr("the AsyncDisposableStack is already disposed");
-      if (typeof onDisposeAsync !== "function") throw new TypeErr("onDisposeAsync is not a function");
+      if (!isCallable(onDisposeAsync)) throw new TypeErr("onDisposeAsync is not a function");
       addMethod(this.#cap, undefined, function () { return onDisposeAsync(value); }, true);
       return value;
     }
     defer(onDisposeAsync) {
       AsyncDisposableStack.#check(this, "defer");
       if (this.#state === "disposed") throw new RefErr("the AsyncDisposableStack is already disposed");
-      if (typeof onDisposeAsync !== "function") throw new TypeErr("onDisposeAsync is not a function");
+      if (!isCallable(onDisposeAsync)) throw new TypeErr("onDisposeAsync is not a function");
       addMethod(this.#cap, undefined, onDisposeAsync, true);
       return undefined;
     }
@@ -220,7 +226,7 @@
         var ret;
         try { ret = O.return; } catch (e) { reject(e); return; }
         if (ret === undefined || ret === null) { resolve(undefined); return; }
-        if (typeof ret !== "function") { reject(new TypeErr("return is not a function")); return; }
+        if (!isCallable(ret)) { reject(new TypeErr("return is not a function")); return; }
         var r;
         try { r = apply(ret, O, [undefined]); } catch (e) { reject(e); return; }
         PromiseResolve(r).then(function () { resolve(undefined); }, reject);

@@ -20,7 +20,13 @@
     for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); r += c >= 65 && c <= 90 ? StringFromCharCode(c + 32) : s.charAt(i); }
     return r;
   }
-  function isObject(v) { return (typeof v === "object" && v !== null) || typeof v === "function"; }
+  // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
+  function isObject(v) {
+    var t = typeof v;
+    return (t === "object" && v !== null) || t === "function" || (t === "undefined" && v !== undefined);
+  }
+  // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
+  function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
   function typeError(m) { return new TypeErr(m); }
   function rangeError(m) { return new RangeErr(m); }
   function def(o, k, v) { ObjectDefineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
@@ -78,7 +84,7 @@
     if (!isObject(v)) return v;
     var ex = v[SymToPrimitive];
     if (ex !== undefined && ex !== null) {
-      if (typeof ex !== "function") throw typeError("@@toPrimitive is not callable");
+      if (!isCallable(ex)) throw typeError("@@toPrimitive is not callable");
       var r = ex.call(v, "string");
       if (isObject(r)) throw typeError("@@toPrimitive returned an object");
       return r;
@@ -86,7 +92,7 @@
     var names = ["toString", "valueOf"];
     for (var i = 0; i < 2; i++) {
       var f = v[names[i]];
-      if (typeof f === "function") { var r2 = f.call(v); if (!isObject(r2)) return r2; }
+      if (isCallable(f)) { var r2 = f.call(v); if (!isObject(r2)) return r2; }
     }
     throw typeError("Cannot convert object to primitive value");
   }
@@ -3068,7 +3074,7 @@
   function ToPrimitiveNumberish(v) {
     var ex = v[SymToPrimitive];
     if (ex !== undefined && ex !== null) {
-      if (typeof ex !== "function") throw typeError("@@toPrimitive is not callable");
+      if (!isCallable(ex)) throw typeError("@@toPrimitive is not callable");
       var r = ex.call(v, "number");
       if (isObject(r)) throw typeError("@@toPrimitive returned an object");
       return r;
@@ -3076,7 +3082,7 @@
     var names = ["valueOf", "toString"];
     for (var i = 0; i < 2; i++) {
       var f = v[names[i]];
-      if (typeof f === "function") { var r2 = f.call(v); if (!isObject(r2)) return r2; }
+      if (isCallable(f)) { var r2 = f.call(v); if (!isObject(r2)) return r2; }
     }
     throw typeError("Cannot convert object to primitive value");
   }

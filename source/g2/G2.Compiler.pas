@@ -4050,7 +4050,7 @@ begin
 end;
 
 procedure TCompiler.CompileUnary(E: TGocciaUnaryExpression; Dest: Integer);
-var Save, R, K, J: Integer; M: TGocciaMemberExpression; WEnds: TJumpList;
+var Save, R, K, J, CI: Integer; M: TGocciaMemberExpression; WEnds, SavedJ: TJumpList;
 begin
   NoBareYield(E.Operand);
   Save := FS.FreeReg;
@@ -4112,8 +4112,14 @@ begin
         end
         else if E.Operand is TGocciaMemberExpression then
         begin
+          { the operand ends an optional chain: a short-circuit makes the delete true (13.5.1.2 step 2) }
           M := TGocciaMemberExpression(E.Operand);
+          ChainLink := False;
+          ChainBegin(SavedJ);
+          ChainObject(M.ObjectExpr);
           R := ExprAny(M.ObjectExpr);
+          ChainLink := False;
+          if M.Optional then ChainAdd(EmitJ(opJNullish, R, 0));
           if M.Computed then
           begin
             K := ExprAny(M.PropertyExpression);
@@ -4121,6 +4127,14 @@ begin
           end
           else
             Emit(Ins(opDelProp, Dest, R, AtomConst(M.PropertyName)));
+          if Length(ChainJumps) > 0 then
+          begin
+            J := EmitJ(opJmp, 0, 0);
+            for CI := 0 to High(ChainJumps) do PatchHere(ChainJumps[CI]);
+            Emit(Ins(opLoadTrue, Dest, 0, 0));
+            PatchHere(J);
+          end;
+          ChainJumps := SavedJ;
         end
         else if E.Operand is TGocciaIdentifierExpression then
           CompileDeleteIdent(TGocciaIdentifierExpression(E.Operand).Name, Dest)

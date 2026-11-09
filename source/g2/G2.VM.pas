@@ -5227,7 +5227,9 @@ begin
               ckString: R[A] := MkPtr(TA^.Str);
               ckSymbol: R[A] := MkPtr(TA^.Sym);
               9: R[A] := MkPtr(TA^.Big);
-              ckObject: if IsCallable(VA) then R[A] := MkPtr(TA^.Fn) else R[A] := MkPtr(TA^.Obj);
+              ckObject:
+                if (PCell(PtrOf(VA))^.Flags and cfEmulatesUndefined) <> 0 then R[A] := MkPtr(TA^.Undef)   { [[IsHTMLDDA]] }
+                else if IsCallable(VA) then R[A] := MkPtr(TA^.Fn) else R[A] := MkPtr(TA^.Obj);
             else R[A] := MkPtr(TA^.Undef);
             end;
         end;

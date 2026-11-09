@@ -17,7 +17,13 @@
   var strReplacePlain = N.strReplace, strReplaceAllPlain = N.strReplaceAll, strSplitPlain = N.strSplit;
   var objectIs = Object.is;
 
-  function isObject(v) { return (typeof v === "object" && v !== null) || typeof v === "function"; }
+  // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
+  function isObject(v) {
+    var t = typeof v;
+    return (t === "object" && v !== null) || t === "function" || (t === "undefined" && v !== undefined);
+  }
+  // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
+  function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
   function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
   function toStr(v) { return `${v}`; }
   function toIntegerOrInfinity(v) {
@@ -38,11 +44,11 @@
   function getMethod(v, k) {
     var f = v[k];
     if (f === undefined || f === null) return undefined;
-    if (typeof f !== "function") throw new TypeErr("the method is not callable");
+    if (!isCallable(f)) throw new TypeErr("the method is not callable");
     return f;
   }
   function isConstructor(f) {
-    if (typeof f !== "function") return false;
+    if (!isCallable(f)) return false;
     try { construct(Str, [], f); return true; } catch (e) { return false; }
   }
   // 7.3.22 SpeciesConstructor
@@ -75,7 +81,7 @@
   // 22.2.7.1 RegExpExec
   function regExpExec(R, S) {
     var exec = R.exec;
-    if (typeof exec === "function") {
+    if (isCallable(exec)) {
       var result = apply(exec, R, [S]);
       if (result !== null && !isObject(result)) throw new TypeErr("RegExp exec method returned something other than an Object or null");
       return result;
@@ -204,7 +210,7 @@
       var rx = this;
       if (!isObject(rx)) throw new TypeErr("RegExp.prototype[Symbol.replace] called on a non-object");
       var S = toStr(string), lengthS = S.length;
-      var functionalReplace = typeof replaceValue === "function";
+      var functionalReplace = isCallable(replaceValue);
       if (!functionalReplace) replaceValue = toStr(replaceValue);
       var flags = toStr(rx.flags);
       var global = has(flags, "g");

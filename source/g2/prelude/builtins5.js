@@ -9,15 +9,21 @@
   var MapCtor = Map, MP = Map.prototype, mapHas = MP.has, mapGet = MP.get, mapSet = MP.set;
 
   function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
-  function isObject(v) { return (typeof v === "object" && v !== null) || typeof v === "function"; }
+  // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
+  function isObject(v) {
+    var t = typeof v;
+    return (t === "object" && v !== null) || t === "function" || (t === "undefined" && v !== undefined);
+  }
+  // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
+  function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
   function isConstructor(f) {
-    if (typeof f !== "function") return false;
+    if (!isCallable(f)) return false;
     try { construct(String, [], f); return true; } catch (e) { return false; }
   }
   function getMethod(v, k) {
     var f = v[k];
     if (f === undefined || f === null) return undefined;
-    if (typeof f !== "function") throw new TypeErr("not a function");
+    if (!isCallable(f)) throw new TypeErr("not a function");
     return f;
   }
   function createDataProperty(o, k, v) {
@@ -35,7 +41,7 @@
     async fromAsync(asyncItems) {
       var C = this, mapfn = arguments.length > 1 ? arguments[1] : undefined, thisArg = arguments.length > 2 ? arguments[2] : undefined;
       var mapping = mapfn !== undefined;
-      if (mapping && typeof mapfn !== "function") throw new TypeErr("Array.fromAsync: the mapper is not a function");
+      if (mapping && !isCallable(mapfn)) throw new TypeErr("Array.fromAsync: the mapper is not a function");
       var usingAsync = getMethod(asyncItems, SymAsyncIterator), usingSync;
       if (usingAsync === undefined) usingSync = getMethod(asyncItems, SymIterator);
       var A, k = 0, v;
@@ -81,7 +87,7 @@
   // 7.3.35 GroupBy ( items, callback, keyCoercion )
   function groupBy(items, callback, property) {
     if (items === undefined || items === null) throw new TypeErr("groupBy called on null or undefined");
-    if (typeof callback !== "function") throw new TypeErr("groupBy: the callback is not a function");
+    if (!isCallable(callback)) throw new TypeErr("groupBy: the callback is not a function");
     var keys = [], groups = [];
     var m = getMethod(items, SymIterator);
     if (m === undefined) throw new TypeErr("groupBy: items is not iterable");
@@ -138,7 +144,7 @@
     },
     getOrInsertComputed(key, callbackfn) {
       apply(mapHas, this, [key]);
-      if (typeof callbackfn !== "function") throw new TypeErr("getOrInsertComputed: the callback is not a function");
+      if (!isCallable(callbackfn)) throw new TypeErr("getOrInsertComputed: the callback is not a function");
       if (key === 0) key = 0;
       if (apply(mapHas, this, [key])) return apply(mapGet, this, [key]);
       var value = callbackfn(key);
@@ -181,7 +187,7 @@
       var iterable = arguments.length > 0 ? arguments[0] : undefined;
       if (iterable === undefined || iterable === null) return;
       var adder = this.set;
-      if (typeof adder !== "function") throw new TypeErr("WeakMap.prototype.set is not a function");
+      if (!isCallable(adder)) throw new TypeErr("WeakMap.prototype.set is not a function");
       addEntries(this, iterable, adder, true);
     }
     static #check(o, name) { if (!isObject(o) || !(#m in o)) throw new TypeErr("WeakMap.prototype." + name + " called on an incompatible receiver"); }
@@ -204,7 +210,7 @@
     getOrInsertComputed(key, callbackfn) {
       WeakMap.#check(this, "getOrInsertComputed");
       if (!canHoldWeakly(key)) throw new TypeErr("Invalid value used as weak map key");
-      if (typeof callbackfn !== "function") throw new TypeErr("getOrInsertComputed: the callback is not a function");
+      if (!isCallable(callbackfn)) throw new TypeErr("getOrInsertComputed: the callback is not a function");
       if (apply(mapHas, this.#m, [key])) return apply(mapGet, this.#m, [key]);
       var value = callbackfn(key);
       apply(mapSet, this.#m, [key, value]);
@@ -217,7 +223,7 @@
       var iterable = arguments.length > 0 ? arguments[0] : undefined;
       if (iterable === undefined || iterable === null) return;
       var adder = this.add;
-      if (typeof adder !== "function") throw new TypeErr("WeakSet.prototype.add is not a function");
+      if (!isCallable(adder)) throw new TypeErr("WeakSet.prototype.add is not a function");
       addEntries(this, iterable, adder, false);
     }
     static #check(o, name) { if (!isObject(o) || !(#s in o)) throw new TypeErr("WeakSet.prototype." + name + " called on an incompatible receiver"); }
@@ -242,9 +248,9 @@
     if (size === 0) size = 0;
     if (size < 0) throw new RangeError("the argument's size is negative");
     var has = obj.has;
-    if (typeof has !== "function") throw new TypeErr("the argument's has is not a function");
+    if (!isCallable(has)) throw new TypeErr("the argument's has is not a function");
     var keys = obj.keys;
-    if (typeof keys !== "function") throw new TypeErr("the argument's keys is not a function");
+    if (!isCallable(keys)) throw new TypeErr("the argument's keys is not a function");
     return { set: obj, size: size, has: has, keys: keys };
   }
   function keysIter(rec) {
@@ -344,8 +350,8 @@
       reject = rej;
     });
     var promise = construct(C, [executor]);
-    if (typeof resolve !== "function") throw new TypeErr("Promise capability resolve is not callable");
-    if (typeof reject !== "function") throw new TypeErr("Promise capability reject is not callable");
+    if (!isCallable(resolve)) throw new TypeErr("Promise capability resolve is not callable");
+    if (!isCallable(reject)) throw new TypeErr("Promise capability reject is not callable");
     return { promise: promise, resolve: resolve, reject: reject };
   }
   function keyedResult(keys, values) {
@@ -358,7 +364,7 @@
     var promiseResolve;
     try {
       promiseResolve = C.resolve;
-      if (typeof promiseResolve !== "function") throw new TypeErr("Promise resolve is not callable");
+      if (!isCallable(promiseResolve)) throw new TypeErr("Promise resolve is not callable");
     } catch (e) {
       apply(cap.reject, undefined, [e]);
       return cap.promise;
@@ -645,14 +651,14 @@
     if (isObject(v)) {
       var ex = v[SymToPrimitive], p;
       if (ex !== undefined && ex !== null) {
-        if (typeof ex !== "function") throw new TypeErr("@@toPrimitive is not callable");
+        if (!isCallable(ex)) throw new TypeErr("@@toPrimitive is not callable");
         p = apply(ex, v, ["number"]);
         if (isObject(p)) throw new TypeErr("@@toPrimitive returned an object");
       } else {
         var names = ["valueOf", "toString"], done = false;
         for (var i = 0; i < 2 && !done; i++) {
           var f = v[names[i]];
-          if (typeof f === "function") { p = apply(f, v, []); if (!isObject(p)) done = true; }
+          if (isCallable(f)) { p = apply(f, v, []); if (!isObject(p)) done = true; }
         }
         if (!done) throw new TypeErr("Cannot convert object to primitive value");
       }
@@ -708,7 +714,7 @@
   class FinalizationRegistry {
     #cells;
     constructor(cleanupCallback) {
-      if (typeof cleanupCallback !== "function") throw new TypeErr("FinalizationRegistry: cleanup must be callable");
+      if (!isCallable(cleanupCallback)) throw new TypeErr("FinalizationRegistry: cleanup must be callable");
       this.#cells = [];
     }
     register(target, heldValue, unregisterToken = undefined) {
@@ -784,7 +790,7 @@
     fromEntries(iterable) {
       if (iterable === undefined || iterable === null) throw new TypeErr("Object.fromEntries called on null or undefined");
       var o = {}, m = iterable[SymIterator];
-      if (typeof m !== "function") throw new TypeErr("Object.fromEntries: the argument is not iterable");
+      if (!isCallable(m)) throw new TypeErr("Object.fromEntries: the argument is not iterable");
       var it = apply(m, iterable, []);
       if (!isObject(it)) throw new TypeErr("Object.fromEntries: the iterator is not an object");
       var next = it.next;
@@ -815,13 +821,13 @@
     __defineGetter__(k, f) {
       if (this === undefined || this === null) throw new TypeErr("Object.prototype.__defineGetter__ called on null or undefined");
       var o = ToObj(this);
-      if (typeof f !== "function") throw new TypeErr("Object.prototype.__defineGetter__: the getter is not a function");
+      if (!isCallable(f)) throw new TypeErr("Object.prototype.__defineGetter__: the getter is not a function");
       defineProperty(o, k, { get: f, enumerable: true, configurable: true });
     },
     __defineSetter__(k, f) {
       if (this === undefined || this === null) throw new TypeErr("Object.prototype.__defineSetter__ called on null or undefined");
       var o = ToObj(this);
-      if (typeof f !== "function") throw new TypeErr("Object.prototype.__defineSetter__: the setter is not a function");
+      if (!isCallable(f)) throw new TypeErr("Object.prototype.__defineSetter__: the setter is not a function");
       defineProperty(o, k, { set: f, enumerable: true, configurable: true });
     },
     __lookupGetter__(k) {

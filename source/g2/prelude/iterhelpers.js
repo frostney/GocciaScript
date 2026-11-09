@@ -14,7 +14,13 @@
   var genNext = GenProto.next, genReturn = GenProto.return;
   var DONE = {};
 
-  function isObject(v) { return (typeof v === "object" && v !== null) || typeof v === "function"; }
+  // an Object: typeof says "object" or "function", or "undefined" for an [[IsHTMLDDA]] object (B.3.6)
+  function isObject(v) {
+    var t = typeof v;
+    return (t === "object" && v !== null) || t === "function" || (t === "undefined" && v !== undefined);
+  }
+  // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
+  function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
   function def(o, k, v) { defineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
   function sameValueZero(a, b) { return a === b || (a !== a && b !== b); }
 
@@ -22,7 +28,7 @@
   function getMethod(v, k) {
     var f = v[k];
     if (f === undefined || f === null) return undefined;
-    if (typeof f !== "function") throw new TypeErr("not a function");
+    if (!isCallable(f)) throw new TypeErr("not a function");
     return f;
   }
   // 7.4.2 GetIteratorDirect
@@ -272,7 +278,7 @@
 
   function thisObj(o) { if (!isObject(o)) throw new TypeErr("Iterator.prototype method called on a non-object"); return o; }
   function fail(o, E, msg) { closeThrow(o); throw new E(msg); }
-  function needFn(o, f) { if (typeof f !== "function") fail(o, TypeErr, "callback is not a function"); }
+  function needFn(o, f) { if (!isCallable(f)) fail(o, TypeErr, "callback is not a function"); }
   function limitOf(o, limit) {
     var n;
     try { n = +limit; } catch (e) { closeThrow(o); throw e; }
