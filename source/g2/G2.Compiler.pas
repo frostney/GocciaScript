@@ -1295,6 +1295,21 @@ begin
       F.CtorReg := DeclareInScope(FS.Scopes[0], '%ctor', True);
       CtorNop := Emit(Ins(opNop, 0, 0, 0));
     end;
+    if SloppyEval and not T^.IsStrict and not ((Outer <> nil) and Outer.IsEvalOuter) then
+    begin
+      { 10.2.11 / 19.2.1.3: the variable environment a non-strict direct eval in this function (its parameter
+        expressions too) adds its var and function declarations to, made on entry; the function's own
+        bindings shadow it, so it sits between them and the enclosing scopes }
+      EnvName := '%evalenv' + IntToStr(WithSerial);
+      Inc(WithSerial);
+      R := DeclareLocal(EnvName, False);
+      Tmp := AllocReg;
+      Emit(Ins(opNewObj, R, 0, 4));
+      Emit(Ins(opLoadNull, Tmp, 0, 0));
+      Emit(Ins(opSetProtoLit, R, Tmp, 0));
+      FreeTo(Tmp);
+      PushWithEntry(EnvName, FS, 0, 1, 0);
+    end;
     { default values and destructuring of parameters }
     J := 0;
     InParamInit := True;
@@ -1393,21 +1408,6 @@ begin
           end;
       finally
         Names.Free;
-      end;
-      if SloppyEval and not T^.IsStrict and not ((Outer <> nil) and Outer.IsEvalOuter) then
-      begin
-        { 10.2.11 / 19.2.1.3: the variable environment a non-strict direct eval in this function adds its var
-          and function declarations to, made on entry; the function's own bindings shadow it, so it sits between
-          them and the enclosing scopes }
-        EnvName := '%evalenv' + IntToStr(WithSerial);
-        Inc(WithSerial);
-        R := DeclareLocal(EnvName, False);
-        Tmp := AllocReg;
-        Emit(Ins(opNewObj, R, 0, 4));
-        Emit(Ins(opLoadNull, Tmp, 0, 0));
-        Emit(Ins(opSetProtoLit, R, Tmp, 0));
-        FreeTo(Tmp);
-        PushWithEntry(EnvName, FS, 0, 1, 0);
       end;
       if (EvalEnvNames <> nil) and (Outer <> nil) and Outer.IsEvalOuter then
       begin
@@ -2656,7 +2656,7 @@ begin
 end;
 
 procedure TCompiler.CompileFor(S: TGocciaForStatement);
-var Top, ContTarget, BreakTarget, R0: Integer; FalseL: TJumpList; HeadDepth: Integer; HasCond: Boolean;
+var Top, ContTarget, BreakTarget, R0, InitClose: Integer; FalseL: TJumpList; HeadDepth: Integer; HasCond: Boolean;
   HL: TList<TGocciaASTNode>;
 begin
   CheckStatementBody(S.Body, False, FS.Tpl^.IsStrict);
@@ -2684,6 +2684,9 @@ begin
     FreeTo(R0);
   end
   else if Assigned(S.Init) then Stmt(S.Init);
+  { 14.7.4.2 step 3 CreatePerIterationEnvironment before the first test: closures the head made keep its
+    bindings, the first iteration gets copies (an opClose once the scope turns out captured) }
+  InitClose := Emit(Ins(opNop, 0, 0, 0));
   Top := Here;
   SetLength(FalseL, 0);
   HasCond := Assigned(S.Condition);
@@ -2692,7 +2695,11 @@ begin
   Stmt(S.Body);
   ContTarget := Here;
   { per-iteration bindings: close the head scope's captures before the update }
-  if FS.Scopes[HeadDepth - 1].Captured then Emit(Ins(opClose, FS.Scopes[HeadDepth - 1].BaseReg, 0, 0));
+  if FS.Scopes[HeadDepth - 1].Captured then
+  begin
+    Emit(Ins(opClose, FS.Scopes[HeadDepth - 1].BaseReg, 0, 0));
+    FS.Tpl^.Code[InitClose] := Ins(opClose, FS.Scopes[HeadDepth - 1].BaseReg, 0, 0);
+  end;
   if Assigned(S.Update) then
   begin
     ExprAny(S.Update);
