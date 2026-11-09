@@ -4250,6 +4250,21 @@ begin
   Result := ArithSlow(Base[Op], VA, MkInt(CI), Res);
 end;
 
+{ opNew: the instance field initializer of constructor C as a frame above C's just pushed frame (a native
+  or missing one: RunFieldInit now, before the body) }
+function XPushFieldInit(C: TValue): Boolean; noinline;
+var CI, J: Integer; V: TValue;
+begin
+  CI := ShapeLookup(ObjOf(C)^.Shape, AtomFieldInit);
+  if CI < 0 then Exit(True);
+  V := GetSlot(ObjOf(C), CI);
+  if not IsObject(V) or (ObjOf(V)^.OKind <> okFunction) then
+    Exit(RunFieldInit(C, VStack[Frames[FrameTop - 1].Base]));
+  J := Frames[FrameTop - 1].Base + Frames[FrameTop - 1].Tpl^.MaxRegs;
+  if J < StackTop then J := StackTop;
+  Result := PushBytecodeFrame(ObjOf(V), VStack[Frames[FrameTop - 1].Base], @VStack[J + 1], 0, J, 0, VUndefined);
+end;
+
 { the slow path of the immediate adds: opAddI is binary + (a string concatenates, a BigInt throws), opSubI binary
   - (C is the negated constant), opIncI ++ and -- (ToNumeric, then a BigInt steps by C) }
 function XAddImmSlow(Op: TOp; VA: TValue; CI: Integer; var Res: TValue): Boolean; noinline;
@@ -4278,8 +4293,8 @@ var
 
 procedure InitFastOps;
 const
-  Ops: array[0..66] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
-    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opSub,
+  Ops: array[0..67] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opSub,
     opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
     opJNGt, opJNGe, opJNSEq, opJSEq, opCall, opRet, opRetUndef, opToNum, opToNumeric, opEq, opNe, opTypeof, opDefField);
@@ -4669,6 +4684,8 @@ begin
           end
           else goto LBail;
         end;
+      { a TDZ check that passes stays here; the ReferenceError is Execute's }
+      opCheckHole: if R[A] = VHole then goto LBail;
       opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI:
         begin
           VA := R[(I shr 24) and $FFFF];
@@ -5925,14 +5942,12 @@ LReload:
               PopRoots(1);
               R[A + 1] := MkPtr(O);
               VA := R[A];
-              if Assigned(T^.FieldInit) and not T^.IsDerived then
-              begin
-                StackTop := Max(StackTop, Fr^.Base + A + 2 + Argc);
-                if not RunFieldInit(R[A], R[A + 1]) then goto LThrow;
-              end;
-              VA := R[A];
               StackTop := Max(StackTop, Fr^.Base + A + 2 + Argc);
               if not PushBytecodeFrame(ObjOf(VA), R[A + 1], @R[A + 2], Argc, Fr^.Base + A, 1, VA) then goto LThrow;
+              { 10.2.2 step 6.b InitializeInstanceElements before the body: the field initializer's frame goes above
+                the constructor's (which has not run yet), its result into its own first slot; its return resumes the
+                constructor at its entry, all in this Execute }
+              if Assigned(T^.FieldInit) and not T^.IsDerived and not XPushFieldInit(VA) then goto LThrow;
               goto LReload;
             end;
             { native or bound constructor }
