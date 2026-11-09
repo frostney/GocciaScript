@@ -240,10 +240,15 @@ end;
 
 { 25.4.3.2 ValidateAtomicAccess: the element's byte address }
 function ValidateAccess(O: PObj; Idx: TValue; var P: PByte; var ByteIdx: Int64): Boolean;
-var I: Int64;
+var I, Len: Int64;
 begin
-  if not ToIndexV(Idx, I) then Exit(False);
-  if I >= TALength(O) then Exit(ThrowError('RangeError', 'Atomics access index out of range'));
+  { 25.4.3.2 ValidateAtomicAccess: the length is the record's, taken before ToIndex (which may resize or detach) }
+  Len := TALength(O);
+  PushRoot(MkPtr(O));
+  if not ToIndexV(Idx, I) then begin PopRoots(1); Exit(False); end;
+  O := ObjOf(RootAt(TempTop - 1));
+  PopRoots(1);
+  if I >= Len then Exit(ThrowError('RangeError', 'Atomics access index out of range'));
   ByteIdx := Int64(O^.Pad) + I * TAElemSize[TAKind(O)];
   P := TAData(O) + I * TAElemSize[TAKind(O)];
   Result := True;
