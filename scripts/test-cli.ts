@@ -10,6 +10,7 @@
  */
 
 import { $ } from "bun";
+import { verifyOutputEncoding, verifyReporterEncoding } from "./test-cli-output-encoding";
 import {
   writeFileSync,
   readFileSync,
@@ -31,6 +32,9 @@ import {
 } from "./test-cli/binaries";
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
+
+verifyOutputEncoding();
+verifyReporterEncoding();
 
 // -- Stdin smoke (Loader) ------------------------------------------------------
 

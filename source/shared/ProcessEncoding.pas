@@ -25,7 +25,9 @@
   thread to write.
 
   On Linux and macOS this unit installs cwstring, which makes those
-  conversions through iconv, with a direct path for ASCII text in front of it. }
+  conversions through iconv, with a direct path for ASCII text in front of it.
+  UTF-8 output uses TextEncoding on every FPC platform so an unpaired UTF-16
+  surrogate becomes U+FFFD, independently of the platform converter. }
 
 unit ProcessEncoding;
 
@@ -35,11 +37,21 @@ interface
 
 implementation
 
-{$IF DEFINED(MSWINDOWS)}
 uses
+{$IF DEFINED(FPC) AND DEFINED(UNIX)}
+  cwstring,
+{$ENDIF}
+  SysUtils,
+{$IF DEFINED(MSWINDOWS)}
   Windows,
+{$ENDIF}
 
-  ConsoleOutput;
+{$IF DEFINED(MSWINDOWS)}
+  ConsoleOutput,
+{$ENDIF}
+  TextEncoding;
+
+{$IF DEFINED(MSWINDOWS)}
 
 const
   { At most as many UTF-16 code units as UTF-8 bytes: a one-byte to
@@ -103,31 +115,18 @@ begin
   Result := True;
 end;
 
-initialization
-  SetMultiByteConversionCodePage(CP_UTF8);
-  SetMultiByteRTLFileSystemCodePage(CP_UTF8);
-  // A GUI application's StdOut and StdErr show a message box, and its other
-  // standard files are not open, so they keep the RTL's settings.
-  if IsConsole then
-  begin
-    UseUnicodeOutput(Output, IsConsoleHandle, WriteConsoleUTF8);
-    UseUnicodeOutput(StdOut, IsConsoleHandle, WriteConsoleUTF8);
-    UseUnicodeOutput(ErrOutput, IsConsoleHandle, WriteConsoleUTF8);
-    UseUnicodeOutput(StdErr, IsConsoleHandle, WriteConsoleUTF8);
-  end;
-{$ELSEIF DEFINED(FPC) AND DEFINED(UNIX)}
-uses
-  cwstring;
+{$ENDIF}
 
+{$IFDEF FPC}
 { cwstring converts between UTF-16 and the system code page through iconv,
   which costs a converter lookup and a call per string. Most strings that
   cross the boundary are ASCII — resource strings, identifiers, file names —
-  and ASCII is the same bytes in UTF-8 and in ASCII, so those are converted
-  here and everything else is handed to cwstring as before. }
+  and ASCII is the same bytes in UTF-8 and in ASCII. Non-ASCII UTF-8 uses
+  the shared replacement encoder; other code pages retain the RTL policy. }
 var
-  GIconvUnicode2AnsiMove: procedure(ASource: PUnicodeChar;
+  GPlatformUnicode2AnsiMove: procedure(ASource: PUnicodeChar;
     var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
-  GIconvAnsi2UnicodeMove: procedure(ASource: PAnsiChar;
+  GPlatformAnsi2UnicodeMove: procedure(ASource: PAnsiChar;
     ACodePage: TSystemCodePage; var ADest: UnicodeString; ALength: SizeInt);
 
 function IsASCIICompatibleCodePage(const ACodePage: TSystemCodePage): Boolean;
@@ -135,11 +134,13 @@ begin
   Result := (ACodePage = CP_UTF8) or (ACodePage = CP_ASCII);
 end;
 
-procedure ASCIIUnicode2AnsiMove(ASource: PUnicodeChar;
+procedure OutputUnicode2AnsiMove(ASource: PUnicodeChar;
   var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
 var
   Target: PAnsiChar;
   I: SizeInt;
+  Text: UnicodeString;
+  Bytes: TBytes;
 begin
   if IsASCIICompatibleCodePage(ACodePage) then
   begin
@@ -156,7 +157,19 @@ begin
       Exit;
     end;
   end;
-  GIconvUnicode2AnsiMove(ASource, ADest, ACodePage, ALength);
+  if ACodePage = CP_UTF8 then
+  begin
+    // Preserve the explicit length, including NUL, without invoking another
+    // RTL conversion from inside its own string-manager callback.
+    SetString(Text, ASource, ALength);
+    Bytes := EncodeUTF8WithReplacement(Text);
+    SetLength(ADest, Length(Bytes));
+    if Length(Bytes) > 0 then
+      Move(Bytes[0], ADest[1], Length(Bytes));
+    SetCodePage(ADest, CP_UTF8, False);
+    Exit;
+  end;
+  GPlatformUnicode2AnsiMove(ASource, ADest, ACodePage, ALength);
 end;
 
 procedure ASCIIAnsi2UnicodeMove(ASource: PAnsiChar; ACodePage: TSystemCodePage;
@@ -179,19 +192,35 @@ begin
       Exit;
     end;
   end;
-  GIconvAnsi2UnicodeMove(ASource, ACodePage, ADest, ALength);
+  GPlatformAnsi2UnicodeMove(ASource, ACodePage, ADest, ALength);
 end;
 
-procedure InstallASCIIConversions;
+procedure InstallConversions;
 begin
-  GIconvUnicode2AnsiMove := WideStringManager.Unicode2AnsiMoveProc;
-  GIconvAnsi2UnicodeMove := WideStringManager.Ansi2UnicodeMoveProc;
-  WideStringManager.Unicode2AnsiMoveProc := ASCIIUnicode2AnsiMove;
+  GPlatformUnicode2AnsiMove := WideStringManager.Unicode2AnsiMoveProc;
+  GPlatformAnsi2UnicodeMove := WideStringManager.Ansi2UnicodeMoveProc;
+  WideStringManager.Unicode2AnsiMoveProc := OutputUnicode2AnsiMove;
   WideStringManager.Ansi2UnicodeMoveProc := ASCIIAnsi2UnicodeMove;
 end;
 
+{$ENDIF}
+
 initialization
-  InstallASCIIConversions;
+{$IF DEFINED(MSWINDOWS)}
+  SetMultiByteConversionCodePage(CP_UTF8);
+  SetMultiByteRTLFileSystemCodePage(CP_UTF8);
+  // A GUI application's StdOut and StdErr show a message box, and its other
+  // standard files are not open, so they keep the RTL's settings.
+  if IsConsole then
+  begin
+    UseUnicodeOutput(Output, IsConsoleHandle, WriteConsoleUTF8);
+    UseUnicodeOutput(StdOut, IsConsoleHandle, WriteConsoleUTF8);
+    UseUnicodeOutput(ErrOutput, IsConsoleHandle, WriteConsoleUTF8);
+    UseUnicodeOutput(StdErr, IsConsoleHandle, WriteConsoleUTF8);
+  end;
+{$ENDIF}
+{$IFDEF FPC}
+  InstallConversions;
 {$ENDIF}
 
 end.
