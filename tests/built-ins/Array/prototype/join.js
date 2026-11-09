@@ -84,3 +84,22 @@ describe("Array.prototype.join cycles", () => {
     expect(events).toEqual(["length", "element", "length", "separator"]);
   });
 });
+
+describe("Array.prototype.join callback stack protection", () => {
+  test("a bound native length getter throws a catchable RangeError", () => {
+    const object = {};
+    Object.defineProperty(object, "length", {
+      get: Array.prototype.join.bind(object)
+    });
+    expect(() => Array.prototype.join.call(object)).toThrow(RangeError);
+    expect([1, 2].join("-")).toBe("1-2");
+  });
+
+  test("a bound native separator conversion throws a catchable RangeError", () => {
+    const array = [1, 2];
+    const separator = {};
+    separator.toString = Array.prototype.join.bind(array, separator);
+    expect(() => array.join(separator)).toThrow(RangeError);
+    expect(array.join("-")).toBe("1-2");
+  });
+});

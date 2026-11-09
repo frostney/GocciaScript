@@ -28,6 +28,23 @@ export function verifyTestSummary(binary = TESTRUNNER): void {
         }
       }
     }
+    const helper = join(tmp, "helper.js");
+    writeFileSync(helper, 'export const match = value => expect(value).toMatchInlineSnapshot();\n');
+    writeFileSync(first, 'import { match } from "./helper.js"; test("left", () => match("left"));\n');
+    writeFileSync(second, 'import { match } from "./helper.js"; test("right", () => match("right"));\n');
+    for (const attributed of [false, true]) {
+      const paths = attributed ? [first, second, helper] : [first, second];
+      const proc = Bun.spawnSync([resolve(binary), "-P", "--no-progress", "--update-snapshots", "--jobs=2", ...paths], {
+        stdout: "pipe", stderr: "pipe",
+      });
+      const output = normalizeLineEndings(proc.stdout.toString());
+      const summary = output.split("\n").find(line => line.startsWith("Test Results Failed Tests: ")) ?? "";
+      if (proc.exitCode !== 1 ||
+          summary.split("Conflicting inline snapshots").length !== 2 ||
+          !summary.includes("helper.js")) {
+        throw new Error(`Finalization summary mismatch (attributed=${attributed}):\n${output}${proc.stderr.toString()}`);
+      }
+    }
   } finally {
     clean(tmp);
   }

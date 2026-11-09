@@ -2302,6 +2302,7 @@ var
   IsParallel: Boolean;
   CurrentOutputFile: string;
   FailedNames: TStringBuffer;
+  FinalizationErrorIncluded: Boolean;
   I, J: Integer;
 begin
   ExitCode := 0;
@@ -2355,13 +2356,22 @@ begin
       { Report records contain native strings and need no JavaScript realm or
         user-defined coercion, just as in WriteFileResults. }
       FailedNames := TStringBuffer.Create;
+      FinalizationErrorIncluded := False;
       for I := 0 to Length(AResult.FileResults) - 1 do
         for J := 0 to Length(AResult.FileResults[I].FailedTests) - 1 do
         begin
           if FailedNames.Length > 0 then
             FailedNames.AppendChar(',');
           FailedNames.Append(AResult.FileResults[I].FailedTests[J]);
+          if AResult.FileResults[I].FailedTests[J] = AResult.FinalizationError then
+            FinalizationErrorIncluded := True;
         end;
+      if (AResult.FinalizationError <> '') and not FinalizationErrorIncluded then
+      begin
+        if FailedNames.Length > 0 then
+          FailedNames.AppendChar(',');
+        FailedNames.Append(AResult.FinalizationError);
+      end;
       Writeln(Format('Test Results Failed Tests: %s', [FailedNames.ToString]));
     end;
   end;

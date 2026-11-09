@@ -20,6 +20,7 @@ type
     // Active receivers belong to the realm's native method host. Each join
     // roots its receiver separately and removes this non-owning entry on exit.
     FJoinReceivers: TGocciaValueList;
+    FJoinDepth: Integer;
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const AMethodName: string; const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
@@ -1992,55 +1993,62 @@ var
   ViewRoots: TGocciaActiveRootFrame;
   StackLimit: NativeUInt;
 begin
-  if not Assigned(FJoinReceivers) then
-    FJoinReceivers := TGocciaValueList.Create(False);
+  // Count the whole call: length getters and separator conversion can re-enter
+  // before cycle detection is allowed to register the receiver.
   StackLimit := NATIVE_STACK_LIMIT_UNSET;
-  CheckNativeStackHeadroom(FJoinReceivers.Count + 1, StackLimit);
-  // Step 1: Let O be ToObject(this value)
-  View.Init(AThisValue);
-  // The receiver object (a fresh wrapper for a primitive this) and the
-  // result are held only by locals while guest code (getters, proxy
-  // traps, callbacks, ToPrimitive) runs.
-  ViewRoots.Initialize;
+  CheckNativeStackHeadroom(FJoinDepth + 1, StackLimit);
+  Inc(FJoinDepth);
   try
-    ViewRoots.Add(View.Obj);
-
-    // Step 3: If separator is undefined, let sep be ","
-    // Step 4: Else let sep be ToString(separator)
-    if (AArgs.Length < 1) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
-      Separator := ','
-    else
-      Separator := AArgs.GetElement(0).ToStringLiteral.Value;
-
-    // Match cyclic join behavior without suppressing the observable length
-    // and separator conversions above. Only active ancestors count as cycles.
-    if FJoinReceivers.Contains(View.Obj) then
-      Exit(TGocciaStringLiteralValue.Create(''));
-    FJoinReceivers.Add(View.Obj);
+    if not Assigned(FJoinReceivers) then
+      FJoinReceivers := TGocciaValueList.Create(False);
+    // Step 1: Let O be ToObject(this value)
+    View.Init(AThisValue);
+    // The receiver object (a fresh wrapper for a primitive this) and the
+    // result are held only by locals while guest code (getters, proxy
+    // traps, callbacks, ToPrimitive) runs.
+    ViewRoots.Initialize;
     try
-      // Steps 5-8: Build result string, treating undefined/null elements as empty string
-      ResultString := '';
-      for I := 0 to View.Len - 1 do
-      begin
-        if I > 0 then
-          ResultString := ResultString + Separator;
-        // Step 7b: If element is undefined or null, let next be ""
-        Element := View.Get(I);
-        if (Element is TGocciaUndefinedLiteralValue) or
-           (Element is TGocciaNullLiteralValue) then
-          Continue
-        else
-          // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
-          ResultString := ResultString + Element.ToStringLiteral.Value;
-      end;
+      ViewRoots.Add(View.Obj);
 
-      // Step 9: Return R
-      Result := TGocciaStringLiteralValue.Create(ResultString);
+      // Step 3: If separator is undefined, let sep be ","
+      // Step 4: Else let sep be ToString(separator)
+      if (AArgs.Length < 1) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
+        Separator := ','
+      else
+        Separator := AArgs.GetElement(0).ToStringLiteral.Value;
+
+      // Match cyclic join behavior without suppressing the observable length
+      // and separator conversions above. Only active ancestors count as cycles.
+      if FJoinReceivers.Contains(View.Obj) then
+        Exit(TGocciaStringLiteralValue.Create(''));
+      FJoinReceivers.Add(View.Obj);
+      try
+        // Steps 5-8: Build result string, treating undefined/null elements as empty string
+        ResultString := '';
+        for I := 0 to View.Len - 1 do
+        begin
+          if I > 0 then
+            ResultString := ResultString + Separator;
+          // Step 7b: If element is undefined or null, let next be ""
+          Element := View.Get(I);
+          if (Element is TGocciaUndefinedLiteralValue) or
+             (Element is TGocciaNullLiteralValue) then
+            Continue
+          else
+            // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
+            ResultString := ResultString + Element.ToStringLiteral.Value;
+        end;
+
+        // Step 9: Return R
+        Result := TGocciaStringLiteralValue.Create(ResultString);
+      finally
+        FJoinReceivers.Delete(FJoinReceivers.Count - 1);
+      end;
     finally
-      FJoinReceivers.Delete(FJoinReceivers.Count - 1);
+      ViewRoots.Clear;
     end;
   finally
-    ViewRoots.Clear;
+    Dec(FJoinDepth);
   end;
 end;
 
