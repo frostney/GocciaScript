@@ -6843,9 +6843,10 @@ var N: UnicodeString; S: TValue;
 begin
   if (Key^.Hdr.Extra and kfSymbol) <> 0 then
   begin
-    { [description], or empty without one }
+    { [description] (an empty description gives "[]"), or empty without one (the symbol cell's Extra 1) }
     S := PValue(PByte(PtrOf(KeyPayload(Key)^)) + 8)^;
-    if IsString(S) and (StrOf(S)^.Len > 0) then N := '[' + StrToUnicode(StrOf(S)) + ']' else N := '';
+    if (PCell(PtrOf(KeyPayload(Key)^))^.Extra <> 1) and IsString(S) then N := '[' + StrToUnicode(StrOf(S)) + ']'
+    else N := '';
   end
   else if (Key^.Hdr.Extra and kfPrivate) <> 0 then N := StrToUnicode(Key)
   else N := StrToUnicode(Key);

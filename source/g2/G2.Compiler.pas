@@ -1349,7 +1349,9 @@ begin
       if Assigned(Params[I].DefaultValue) then
       begin
         Skip := EmitJ(opJNotUndef, R, 0);
-        ExprTo(Params[I].DefaultValue, R);
+        { 10.2.11 / 8.4.5: an anonymous function default of a plain parameter takes its name }
+        if Params[I].IsPattern then ExprTo(Params[I].DefaultValue, R)
+        else ExprToNamed(Params[I].DefaultValue, R, Params[I].Name);
         PatchHere(Skip);
       end;
       if Params[I].IsPattern then BindPattern(Params[I].Pattern, R, True, False);
@@ -4671,7 +4673,7 @@ procedure TCompiler.CompileAssign(E: TGocciaExpression; Dest: Integer);
 var Save, O, K, V, R, J: Integer; A: TGocciaAssignmentExpression; PA: TGocciaPropertyAssignmentExpression;
   CA: TGocciaComputedPropertyAssignmentExpression; CO: TGocciaCompoundAssignmentExpression;
   PC: TGocciaPropertyCompoundAssignmentExpression; CC: TGocciaComputedPropertyCompoundAssignmentExpression;
-  Op: TGocciaTokenType; IC: Integer;
+  Op: TGocciaTokenType; IC: Integer; AName: UnicodeString;
   { Name: the identifier a logical assignment assigns to, for the NamedEvaluation of an anonymous function or class
     (13.15.2: &&=, ||= and ??= only) }
   procedure Combine(Op: TGocciaTokenType; Cur, ValE: TGocciaExpression; CurReg, Dst: Integer; out ShortJ: Integer;
@@ -4695,12 +4697,15 @@ begin
   if E is TGocciaAssignmentExpression then
   begin
     A := TGocciaAssignmentExpression(E);
+    { 13.15.2 step 1.c: NamedEvaluation only when the target IsIdentifierRef (a parenthesized one is not) }
+    AName := A.Name;
+    if Assigned(A.Target) and A.Target.Parenthesized then AName := '';
     if ResolveLocal(FS, A.Name, R) and not BindingIsConst(A.Name) and not InTDZ(A.Name) and
        ((WithCount = 0) or (WithsFor(A.Name, WithIdxScratch) = 0)) then
     begin
-      if (A.Value is TGocciaFunctionExpression) or (A.Value is TGocciaArrowFunctionExpression) then CompileFuncExpr(A.Value, R, A.Name)
+      if (A.Value is TGocciaFunctionExpression) or (A.Value is TGocciaArrowFunctionExpression) then CompileFuncExpr(A.Value, R, AName)
       else if (A.Value is TGocciaClassExpression) and (TGocciaClassExpression(A.Value).ClassDefinition.Name = '') then
-        CompileClass(TGocciaClassExpression(A.Value).ClassDefinition, R, A.Name)
+        CompileClass(TGocciaClassExpression(A.Value).ClassDefinition, R, AName)
       else ExprTo(A.Value, R);
       if Dest <> R then Emit(Ins(opMov, Dest, R, 0));
     end
@@ -4709,12 +4714,12 @@ begin
       { 13.15.2 step 1.a: the reference is resolved before the value is evaluated }
       K := AllocReg;
       ResolveWithEnv(A.Name, K);
-      CompileFieldValue(A.Value, Dest, A.Name);
+      CompileFieldValue(A.Value, Dest, AName);
       StoreIdentRef(A.Name, K, Dest);
     end
     else
     begin
-      CompileFieldValue(A.Value, Dest, A.Name);   { NamedEvaluation of an anonymous function or class }
+      CompileFieldValue(A.Value, Dest, AName);   { NamedEvaluation of an anonymous function or class }
       StoreIdent(A.Name, Dest);
     end;
   end
