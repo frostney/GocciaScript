@@ -16,6 +16,8 @@
   }
   // IsCallable: typeof says "function", or "undefined" for a callable [[IsHTMLDDA]] object (B.3.6)
   function isCallable(f) { var t = typeof f; return t === "function" || (t === "undefined" && f !== undefined); }
+  // 7.4.11 IteratorClose with a throw completion: the return method's lookup and call errors are dropped
+  function closeQuiet(it) { try { var r = it.return; if (r !== undefined && r !== null) apply(r, it, []); } catch (e) {} }
   function isConstructor(f) {
     if (!isCallable(f)) return false;
     try { construct(String, [], f); return true; } catch (e) { return false; }
@@ -57,14 +59,14 @@
           if (r.done) { A.length = k; return A; }
           v = r.value;
           if (sync) {
-            try { v = await v; } catch (e) { var rf = it.return; if (rf !== undefined && rf !== null) { try { apply(rf, it, []); } catch (e2) {} } throw e; }
+            try { v = await v; } catch (e) { closeQuiet(it); throw e; }
           }
           if (mapping) {
             try { v = await apply(mapfn, thisArg, [v, k]); }
-            catch (e) { if (sync) { var rs = it.return; if (rs !== undefined && rs !== null) { try { apply(rs, it, []); } catch (e3) {} } } else await closeAsync(it); throw e; }
+            catch (e) { if (sync) { closeQuiet(it); } else await closeAsync(it); throw e; }
           }
           try { createDataProperty(A, k, v); }
-          catch (e) { if (sync) { var rt = it.return; if (rt !== undefined && rt !== null) { try { apply(rt, it, []); } catch (e4) {} } } else await closeAsync(it); throw e; }
+          catch (e) { if (sync) { closeQuiet(it); } else await closeAsync(it); throw e; }
           k++;
         }
       }
@@ -104,8 +106,7 @@
         if (property) key = typeof key === "symbol" ? key : (isObject(key) ? toPropertyKey(key) : String(key));
         else if (key === 0) key = 0;   // -0 to +0
       } catch (e) {
-        var rf = it.return;
-        if (rf !== undefined && rf !== null) { try { apply(rf, it, []); } catch (e2) {} }
+        closeQuiet(it);
         throw e;
       }
       var found = -1;
@@ -175,8 +176,7 @@
           apply(adder, target, [v[0], v[1]]);
         } else apply(adder, target, [v]);
       } catch (e) {
-        var rf = it.return;
-        if (rf !== undefined && rf !== null) { try { apply(rf, it, []); } catch (e2) {} }
+        closeQuiet(it);
         throw e;
       }
     }
