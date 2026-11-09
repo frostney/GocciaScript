@@ -1203,11 +1203,19 @@ end;
 function TGocciaParser.ParseClassFieldInitializer: TGocciaExpression;
 var
   OuterDirectEvalUsage: TGocciaDirectEvalUsage;
+  SavedInAsyncFunction: Integer;
 begin
   OuterDirectEvalUsage := EnterDirectEvalScope;
+  // An initializer runs as a method of its own (§15.7.10), never as part of
+  // the async function around the class: await there is no AwaitExpression
+  // but an identifier (a SyntaxError in module code, where await is
+  // reserved), as engines and test262's staging tests treat it
+  SavedInAsyncFunction := FInAsyncFunction;
+  FInAsyncFunction := 0;
   try
     Result := AssignmentAllowIn;
   finally
+    FInAsyncFunction := SavedInAsyncFunction;
     LeaveDirectEvalScope(OuterDirectEvalUsage);
   end;
 end;
@@ -9384,7 +9392,7 @@ begin
     EnsureToken(FCurrent + 1, glgInputElementRegExp);
     DirectDefaultDeclaration := Check(gttClass) or Check(gttFunction) or
       (Check(gttIdentifier) and (Peek.Lexeme = KEYWORD_ASYNC) and
-      (FCurrent + 1 < FTokens.Count) and
+      not Peek.ContainsEscape and (FCurrent + 1 < FTokens.Count) and
       (FTokens[FCurrent + 1].TokenType = gttFunction) and
       not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]));
     // ES2026 16.2.3: a HoistableDeclaration or ClassDeclaration ends with its
@@ -9620,7 +9628,14 @@ begin
   ExportsTable := TStringStringMap.Create;
   try
     for I := 0 to SpecifierCount - 1 do
+    begin
+      // ES2026 16.2.1.1: ExportedNames of a module may not repeat
+      if ExportsTable.ContainsKey(ExportedNames[I]) then
+        raise TGocciaSyntaxError.Create(
+          Format('Duplicate export of ''%s''', [ExportedNames[I]]),
+          LocalNameLines[I], LocalNameColumns[I], FFileName, FSourceLines);
       ExportsTable.Add(ExportedNames[I], LocalNames[I]);
+    end;
 
     if Match(gttFrom) then
     begin
