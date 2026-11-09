@@ -798,7 +798,8 @@ end;
 function DVP_ByteLength(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
   if not NeedDV(Args, 'byteLength') then Exit(False);
-  if DVOutOfBounds(ObjOf(Args[0])) then Exit(ThrowTypeError('the DataView is detached or out of bounds'));
+  { 25.3.4.2 step 5 (ECMA-262 main): a view out of bounds (or detached) has byte length +0 }
+  if DVOutOfBounds(ObjOf(Args[0])) then begin Res := MkInt(0); Exit(True); end;
   Res := MkNumber(DVLength(ObjOf(Args[0])));
   Result := True;
 end;
@@ -806,7 +807,8 @@ end;
 function DVP_ByteOffset(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
   if not NeedDV(Args, 'byteOffset') then Exit(False);
-  if DVOutOfBounds(ObjOf(Args[0])) then Exit(ThrowTypeError('the DataView is detached or out of bounds'));
+  { 25.3.4.3 step 5 (ECMA-262 main): +0 when the view is out of bounds }
+  if DVOutOfBounds(ObjOf(Args[0])) then begin Res := MkInt(0); Exit(True); end;
   Res := MkNumber(ObjOf(Args[0])^.Pad);
   Result := True;
 end;
