@@ -4704,6 +4704,26 @@ begin
   Result := True;
 end;
 
+{ FastLoop's opGetElem past its fast paths, as Execute's: GetElemV, its result in Dst^ }
+function XFastGetElem(VA, VB: TValue; Dst: PValue): Boolean; noinline;
+var V: TValue;
+begin
+  Result := GetElemV(VA, VB, V);
+  if Result then Dst^ := V;
+end;
+
+{ FastLoop's opGetProp on an object its IC misses, as Execute's: an accessor entry's getter, else ICGetMiss }
+function XFastGetPropMiss(IC: PPropIC; O: PObj; VB: TValue; Dst: PValue): Boolean; noinline;
+var V: TValue; J: Integer;
+begin
+  J := ICAccGet(IC, O, VB, V);
+  if J = 0 then Exit(False);
+  if J <> 1 then
+    if not ICGetMiss(IC, O, VB, V) then Exit(False);
+  Dst^ := V;
+  Result := True;
+end;
+
 { FastLoop's call of a native function O (as Execute's opCall): its result in R[A]; False with its throw pending.
   Apart from FastLoop, whose register allocation the call's work would spoil }
 function XFastNative(O: PObj; R: PValue; A: NativeInt; I: QWord; Fr: PFrame): Boolean; noinline;
@@ -4879,7 +4899,13 @@ begin
               Continue;
             end;
             {$IFDEF G2_BAILSTATS}if IC^.PolyCount = 0 then Inc(BailCounts[248]) else if IC^.PolyCount < 4 then Inc(BailCounts[249]) else Inc(BailCounts[253]);{$ENDIF}
-            goto LBail;
+            Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+            if not XFastGetPropMiss(IC, O, VB, @R[A]) then
+            begin
+              InjectThrow := True;
+              Exit(-1);
+            end;
+            Continue;
           end;
           if O^.Hdr.Kind = ckString then
           begin
@@ -4946,7 +4972,18 @@ begin
         begin
           VA := R[(I shr 24) and $FFFF];
           VB := R[I shr 40];
-          if not (IsInt(VB) and IsObject(VA)) then goto LBail;
+          if not (IsInt(VB) and IsObject(VA)) then
+          begin
+            { a string key, a primitive base: GetElemV, as Execute (a nullish base's error is Execute's) }
+            if (VA = VUndefined) or (VA = VNull) then goto LBail;
+            Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+            if not XFastGetElem(VA, VB, @R[A]) then
+            begin
+              InjectThrow := True;
+              Exit(-1);
+            end;
+            Continue;
+          end;
           O := ObjOf(VA);
           E := O^.Elements;
           CI := IntOf(VB);
