@@ -150,6 +150,13 @@ type
     IsArrow, IsClassCtor, IsDerived, IsMethod, IsGenerator, IsAsync, IsStrict: Boolean;
     SimpleParams: Boolean;  { no rest, default or pattern parameter: a sloppy one gets a mapped arguments object }
     ExpectedProps: Integer;
+    { new F(...)'s caches (shapes live as long as the engine): F's shape and its prototype property's slot, the
+      root shape of the last prototype, the field initializer's slot in F's shape }
+    CtorFnShape: Pointer;
+    CtorProtoSlot: Integer;
+    CtorRootShape: Pointer;
+    FIShape: Pointer;
+    FISlot: Integer;
     FieldInit: PFuncTemplate;   { class field initializer, run on construction }
     SourceName: UnicodeString;
     SourceRange: TGocciaLazySourceText;   { the function's source for Function.prototype.toString: a range of the parse's source, copied only when read }

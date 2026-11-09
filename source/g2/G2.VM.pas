@@ -3085,8 +3085,9 @@ begin
   SwitchRealm(R0);
 end;
 
-function PushBytecodeFrame(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
-  NewTarget: TValue): Boolean;
+{ PushBytecodeFrame's full case: another realm, a rest parameter or an arguments object, or a this to bind }
+function PushBytecodeFrameFull(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
+  NewTarget: TValue): Boolean; noinline;
 var T: PFuncTemplate; Base, I, NP, Extra: Integer; Fr: PFrame; R: PValue; A: PObj; FV, Tmp, ArgsObj: TValue; FI: Integer;
 begin
   if MultiRealmAny and (FnRealm(FObj) <> CurRealm) then
@@ -3149,6 +3150,37 @@ begin
   if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;
   Fr := @Frames[FrameTop];
   Fr^.Closure := FV;
+  Fr^.NewTarget := NewTarget;
+  Fr^.Tpl := T;
+  Fr^.Base := Base;
+  Fr^.PC := T^.EntryPC;
+  Fr^.RetIdx := RetIdx;
+  Fr^.Argc := Argc;
+  Fr^.Kind := Kind;
+  Inc(FrameTop);
+  Result := True;
+end;
+
+{ a bytecode function's frame: the arguments at Args (Args[-1] its this slot), Kind 0 call, 1 construct, 2
+  script; the common case here, the rest in PushBytecodeFrameFull }
+function PushBytecodeFrame(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
+  NewTarget: TValue): Boolean;
+var T: PFuncTemplate; Base, I: Integer; Fr: PFrame; R: PValue;
+begin
+  T := PFuncTemplate(FObj^.Native);
+  if MultiRealmAny or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) or
+     (not T^.IsStrict and not T^.IsArrow and not IsObject(This)) then
+    Exit(PushBytecodeFrameFull(FObj, This, Args, Argc, RetIdx, Kind, NewTarget));
+  Base := (Args - VStack) - 1;
+  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
+    Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  R := @VStack[Base];
+  R[0] := This;
+  I := Min(Argc, T^.NumParams) + 1;
+  if I < T^.MaxRegs then FillQWord(R[I], T^.MaxRegs - I, VUndefined);
+  if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;
+  Fr := @Frames[FrameTop];
+  Fr^.Closure := MkPtr(FObj);
   Fr^.NewTarget := NewTarget;
   Fr^.Tpl := T;
   Fr^.Base := Base;
@@ -4402,12 +4434,39 @@ begin
   Result := ArithSlow(Base[Op], VA, MkInt(CI), Res);
 end;
 
+{ new F: PrototypeForConstruct, and the prototype property's slot cached when it is an own data property }
+function XCtorProto(T: PFuncTemplate; F: TValue; var Proto: TValue): Boolean; noinline;
+var S: Integer; O: PObj;
+begin
+  PushRoot(F);
+  Result := PrototypeForConstruct(F, Proto);
+  O := ObjOf(RootAt(TempTop - 1));
+  PopRoots(1);
+  if not Result then Exit;
+  S := ShapeLookup(O^.Shape, AtomPrototype);
+  if (S >= 0) and ((O^.Shape^.PFlags[S] and pfAccessor) = 0) and not O^.Shape^.IsDict then
+  begin
+    T^.CtorFnShape := O^.Shape;
+    T^.CtorProtoSlot := S;
+  end;
+end;
+
 { opNew: the instance field initializer of constructor C as a frame above C's just pushed frame (a native
   or missing one: RunFieldInit now, before the body) }
 function XPushFieldInit(C: TValue): Boolean; noinline;
-var CI, J: Integer; V: TValue;
+var CI, J: Integer; V: TValue; T: PFuncTemplate;
 begin
-  CI := ShapeLookup(ObjOf(C)^.Shape, AtomFieldInit);
+  T := PFuncTemplate(ObjOf(C)^.Native);
+  if Pointer(ObjOf(C)^.Shape) = T^.FIShape then CI := T^.FISlot
+  else
+  begin
+    CI := ShapeLookup(ObjOf(C)^.Shape, AtomFieldInit);
+    if not ObjOf(C)^.Shape^.IsDict then
+    begin
+      T^.FIShape := ObjOf(C)^.Shape;
+      T^.FISlot := CI;
+    end;
+  end;
   if CI < 0 then Exit(True);
   V := GetSlot(ObjOf(C), CI);
   if not IsObject(V) or (ObjOf(V)^.OKind <> okFunction) then
@@ -6150,11 +6209,17 @@ LReload:
                 if not PushBytecodeFrame(ObjOf(VA), VHole, @R[A + 2], Argc, Fr^.Base + A, 1, VA) then goto LThrow;
                 goto LReload;
               end;
-              if not PrototypeForConstruct(VA, V) then goto LThrow;
+              { the prototype property's slot and the prototype's root shape from the template's caches }
+              if Pointer(O^.Shape) = T^.CtorFnShape then V := GetSlot(O, T^.CtorProtoSlot)
+              else if not XCtorProto(T, VA, V) then goto LThrow;
               if not IsObject(V) and not DefaultConstructProto(R[A], R[A], V) then goto LThrow;
-              PushRoot(V);
-              O := NewObject(RootShapeFor(RootAt(TempTop - 1)), Max(4, T^.ExpectedProps), okPlain);
-              PopRoots(1);
+              if (T^.CtorRootShape = nil) or (PShape(T^.CtorRootShape)^.Proto <> V) then
+              begin
+                PushRoot(V);
+                T^.CtorRootShape := RootShapeFor(RootAt(TempTop - 1));
+                PopRoots(1);
+              end;
+              O := NewObject(PShape(T^.CtorRootShape), Max(4, T^.ExpectedProps), okPlain);
               R[A + 1] := MkPtr(O);
               VA := R[A];
               StackTop := Max(StackTop, Fr^.Base + A + 2 + Argc);
