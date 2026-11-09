@@ -26,15 +26,20 @@ uses
   SysUtils, Classes, Generics.Collections, G2.Bytecode, G2.VM, G2.Compiler, G2.Eval, G2.Promise;
 
 type
-  TModStatus = (msNew, msLinking, msLinked, msEvaluating, msEvaluated);
+  TModStatus = (msNew, msLinking, msLinked, msEvaluating, msEvaluatingAsync, msEvaluated);
   TModRec = class
     Id: Integer;
     Path: UnicodeString;
     Info: TModuleInfo;
     Tpl: PFuncTemplate;
     Status: TModStatus;
-    Errored: Boolean;
+    Errored: Boolean;   { with Status msEvaluated: [[EvaluationError]] (rError); with msNew: a load error }
     Deps: array of TModRec;
+    { 16.2.1.6 Cyclic Module Record fields of the evaluation }
+    DFSAnc, PendingAsync: Integer;
+    CycleRoot: TModRec;
+    AsyncOrder: Int64;   { [[AsyncEvaluationOrder]]: 0 unset, -1 done }
+    AsyncParents: array of TModRec;
     destructor Destroy; override;
   end;
   TResKind = (rkNull, rkAmbiguous, rkBinding, rkNamespace, rkDeferNS);
@@ -46,10 +51,11 @@ type
 
 const
   { the values of a module kept in ModRoots at Id * RS + k }
-  RS = 6; rTable = 0; rGen = 1; rNS = 2; rMeta = 3; rError = 4; rDNS = 5;
+  RS = 7; rTable = 0; rGen = 1; rNS = 2; rMeta = 3; rError = 4; rDNS = 5; rCap = 6;
 
 threadvar
   Mods: TList<TModRec>;
+  AsyncEvalCount: Int64;   { IncrementModuleAsyncEvaluationCount }
   ModRoots: TValue;     { a rooted array: RS slots per module }
   PendingImports: TValue;   { a rooted array of [promise, referrer, specifier] per import() in flight }
 
@@ -491,56 +497,320 @@ end;
 
 { ---- 16.2.1.5.3 Evaluate (depth first; a cycle's member already evaluating is skipped) ---- }
 
-function RunAsyncBody(Gen: TValue): Boolean;
-var NextF, P, R: TValue; St: Integer;
+{ ---- 16.2.1.6.1.3 Evaluate, with the import defer proposal's changes (GatherAsynchronousTransitiveDependencies,
+  ReadyForSyncExecution, EvaluateModuleSync) ---- }
+
+function IsCyclic(M: TModRec): Boolean; inline;
 begin
-  PushRoot(Gen);
-  if not GetV(Gen, AtomNext, NextF) then begin PopRoots(1); Exit(False); end;
-  if not CallValue(NextF, RootAt(TempTop - 1), nil, 0, P) then begin PopRoots(1); Exit(False); end;
-  PopRoots(1);
-  PushRoot(P);
-  repeat
-    St := PromiseStatus(RootAt(TempTop - 1), R);
-    if St <> 0 then Break;
-    RunMicrotasks;
-    St := PromiseStatus(RootAt(TempTop - 1), R);
-  until St <> 0;
-  PopRoots(1);
-  if St = 2 then begin Pending := R; Exit(False); end;
-  Result := True;
+  Result := M.Tpl <> nil;   { a typed module (LoadTypedModule) is a Synthetic Module Record }
 end;
 
-function Evaluate(M: TModRec): Boolean; forward;
+function HasCap(M: TModRec): Boolean; inline;
+begin
+  Result := IsObject(GetRoot(M, rCap));
+end;
 
-{ GatherAsynchronousTransitiveDependencies for a module imported only with defer: the modules with top-level
-  await in its graph are evaluated now (they cannot run synchronously later) }
-function EvaluateAsyncDeps(M: TModRec; Seen: TList<TModRec>): Boolean;
+procedure SetEvalError(M: TModRec; E: TValue);
+begin
+  M.Errored := True;
+  SetRoot(M, rError, E);
+end;
+
+{ IsModuleSCCEvaluated }
+function SCCEvaluated(M: TModRec): Boolean;
+begin
+  if M.CycleRoot <> nil then Exit(M.CycleRoot.Status = msEvaluated);
+  Result := M.Status = msEvaluated;
+end;
+
+{ GatherAsynchronousTransitiveDependencies: the modules with top-level await a deferred module's evaluation will
+  need, gathered depth first and stopping at each }
+procedure GatherAsyncDeps(M: TModRec; Seen, Res: TList<TModRec>);
 var I: Integer;
 begin
-  Result := True;
-  if (M.Status in [msEvaluated, msEvaluating]) or (Seen.IndexOf(M) >= 0) then Exit;
+  if Seen.IndexOf(M) >= 0 then Exit;
   Seen.Add(M);
-  if M.Info.HasTLA then Exit(Evaluate(M));
-  for I := 0 to High(M.Deps) do
-    if not EvaluateAsyncDeps(M.Deps[I], Seen) then Exit(False);
+  if not IsCyclic(M) then Exit;
+  if (M.Status = msEvaluating) or SCCEvaluated(M) then Exit;
+  if M.Info.HasTLA then
+  begin
+    if Res.IndexOf(M) < 0 then Res.Add(M);
+    Exit;
+  end;
+  for I := 0 to High(M.Deps) do GatherAsyncDeps(M.Deps[I], Seen, Res);
 end;
 
-{ ReadyForSyncExecution: no module of the graph is being evaluated or has top-level await still to run }
+function AsyncDepsOf(M: TModRec): TList<TModRec>;
+var Seen: TList<TModRec>;
+begin
+  Result := TList<TModRec>.Create;
+  Seen := TList<TModRec>.Create;
+  try
+    GatherAsyncDeps(M, Seen, Result);
+  finally
+    Seen.Free;
+  end;
+end;
+
+{ ReadyForSyncExecution }
 function ReadyForSync(M: TModRec; Seen: TList<TModRec>): Boolean;
 var I: Integer;
 begin
   Result := True;
+  if not IsCyclic(M) then Exit;
   if Seen.IndexOf(M) >= 0 then Exit;
   Seen.Add(M);
-  if M.Status = msEvaluated then Exit;
-  if (M.Status = msEvaluating) or M.Info.HasTLA then Exit(False);
+  if SCCEvaluated(M) then Exit;
+  if M.Status in [msEvaluating, msEvaluatingAsync] then Exit(False);
+  if M.Info.HasTLA then Exit(False);
   for I := 0 to High(M.Deps) do
     if not ReadyForSync(M.Deps[I], Seen) then Exit(False);
 end;
 
-{ NSDeferHook: EnsureDeferredNamespaceEvaluation }
+{ ExecuteModule of a module without top-level await: its function run to the end }
+function ExecuteSync(M: TModRec): Boolean;
+var V: TValue; Done: Boolean;
+begin
+  Result := GeneratorResume(GetRoot(M, rGen), VUndefined, 0, V, Done);
+end;
+
+procedure ExecuteAsyncModule(M: TModRec); forward;
+
+{ AsyncModuleExecutionRejected }
+procedure AsyncRejected(M: TModRec; E: TValue);
+var I: Integer;
+begin
+  if M.Status = msEvaluated then Exit;
+  PushRoot(E);
+  SetEvalError(M, RootAt(TempTop - 1));
+  M.Status := msEvaluated;
+  M.AsyncOrder := -1;
+  if HasCap(M) then RejectPendingPromise(GetRoot(M, rCap), RootAt(TempTop - 1));
+  for I := 0 to High(M.AsyncParents) do AsyncRejected(M.AsyncParents[I], RootAt(TempTop - 1));
+  PopRoots(1);
+end;
+
+{ GatherAvailableAncestors }
+procedure GatherAncestors(M: TModRec; L: TList<TModRec>);
+var I: Integer; P, Root: TModRec;
+begin
+  for I := 0 to High(M.AsyncParents) do
+  begin
+    P := M.AsyncParents[I];
+    Root := P.CycleRoot;
+    if Root = nil then Root := P;
+    if (L.IndexOf(P) >= 0) or Root.Errored then Continue;
+    Dec(P.PendingAsync);
+    if P.PendingAsync = 0 then
+    begin
+      L.Add(P);
+      if not P.Info.HasTLA then GatherAncestors(P, L);
+    end;
+  end;
+end;
+
+{ AsyncModuleExecutionFulfilled }
+procedure AsyncFulfilled(M: TModRec);
+var L: TList<TModRec>; I, J: Integer; P: TModRec; E: TValue;
+begin
+  if M.Status = msEvaluated then Exit;
+  M.AsyncOrder := -1;
+  M.Status := msEvaluated;
+  if HasCap(M) then ResolvePendingPromise(GetRoot(M, rCap), VUndefined);
+  L := TList<TModRec>.Create;
+  try
+    GatherAncestors(M, L);
+    { sorted by [[AsyncEvaluationOrder]] }
+    for I := 1 to L.Count - 1 do
+    begin
+      P := L[I];
+      J := I - 1;
+      while (J >= 0) and (L[J].AsyncOrder > P.AsyncOrder) do
+      begin
+        L[J + 1] := L[J];
+        Dec(J);
+      end;
+      L[J + 1] := P;
+    end;
+    for I := 0 to L.Count - 1 do
+    begin
+      P := L[I];
+      if P.Status = msEvaluated then Continue;
+      if P.Info.HasTLA then ExecuteAsyncModule(P)
+      else if not ExecuteSync(P) then
+      begin
+        E := Pending;
+        Pending := VUndefined;
+        AsyncRejected(P, E);
+      end
+      else
+      begin
+        P.AsyncOrder := -1;
+        P.Status := msEvaluated;
+        if HasCap(P) then ResolvePendingPromise(GetRoot(P, rCap), VUndefined);
+      end;
+    end;
+  finally
+    L.Free;
+  end;
+end;
+
+function AsyncFulfilledFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  AsyncFulfilled(Mods[NativeData]);
+  Res := VUndefined;
+  Result := True;
+end;
+
+function AsyncRejectedFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var E: TValue;
+begin
+  if Argc >= 1 then E := Args[1] else E := VUndefined;
+  AsyncRejected(Mods[NativeData], E);
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ ExecuteAsyncModule: the body runs to its first await; the promise its function returns settles when it ends }
+procedure ExecuteAsyncModule(M: TModRec);
+var NextF, P, F: TValue;
+begin
+  if not GetV(GetRoot(M, rGen), AtomNext, NextF) or not CallValue(NextF, GetRoot(M, rGen), nil, 0, P) then
+  begin
+    P := Pending;
+    Pending := VUndefined;
+    PushRoot(P);
+    P := NewPendingPromise;
+    RejectPendingPromise(P, RootAt(TempTop - 1));
+    PopRoots(1);
+  end;
+  PushRoot(P);
+  PushRoot(NewNativeFunctionData(AsyncFulfilledFn, '', 0, M.Id));
+  F := NewNativeFunctionData(AsyncRejectedFn, '', 1, M.Id);
+  PushRoot(F);
+  PromiseThenNative(RootAt(TempTop - 3), RootAt(TempTop - 2), RootAt(TempTop - 1), VUndefined);
+  PopRoots(3);
+end;
+
+{ IncrementModuleAsyncEvaluationCount }
+function NextAsyncOrder: Int64; noinline;
+begin
+  Inc(AsyncEvalCount);
+  Result := AsyncEvalCount;
+end;
+
+procedure AddAsyncParent(D, M: TModRec);
+begin
+  SetLength(D.AsyncParents, Length(D.AsyncParents) + 1);
+  D.AsyncParents[High(D.AsyncParents)] := M;
+end;
+
+{ InnerModuleEvaluation }
+function InnerEval(M: TModRec; Stack: TList<TModRec>; var Index: Integer): Boolean;
+var L, G: TList<TModRec>; I, J, ModIndex: Integer; D: TModRec; Done: Boolean;
+begin
+  Result := True;
+  if not IsCyclic(M) then Exit;
+  if M.Status in [msEvaluatingAsync, msEvaluated] then
+  begin
+    if M.Errored then begin Pending := GetRoot(M, rError); Exit(False); end;
+    Exit;
+  end;
+  if M.Status = msEvaluating then Exit;
+  M.Status := msEvaluating;
+  ModIndex := Index;
+  M.DFSAnc := Index;
+  M.PendingAsync := 0;
+  Inc(Index);
+  L := TList<TModRec>.Create;
+  try
+    for I := 0 to High(M.Info.EvalOrder) do
+    begin
+      D := DepOf(M, M.Info.EvalOrder[I].Req);
+      if not M.Info.EvalOrder[I].Eager then
+      begin
+        G := AsyncDepsOf(D);
+        try
+          for J := 0 to G.Count - 1 do
+            if L.IndexOf(G[J]) < 0 then L.Add(G[J]);
+        finally
+          G.Free;
+        end;
+      end
+      else if L.IndexOf(D) < 0 then L.Add(D);
+    end;
+    Stack.Add(M);
+    for I := 0 to L.Count - 1 do
+    begin
+      D := L[I];
+      if not InnerEval(D, Stack, Index) then Exit(False);
+      if not IsCyclic(D) then Continue;
+      if D.Status = msEvaluating then
+      begin
+        if D.DFSAnc < M.DFSAnc then M.DFSAnc := D.DFSAnc;
+      end
+      else
+      begin
+        if D.CycleRoot <> nil then D := D.CycleRoot;
+        if D.Errored then begin Pending := GetRoot(D, rError); Exit(False); end;
+      end;
+      if D.AsyncOrder > 0 then
+      begin
+        Inc(M.PendingAsync);
+        AddAsyncParent(D, M);
+      end;
+    end;
+  finally
+    L.Free;
+  end;
+  if (M.PendingAsync > 0) or M.Info.HasTLA then
+  begin
+    M.AsyncOrder := NextAsyncOrder;
+    if M.PendingAsync = 0 then ExecuteAsyncModule(M);
+  end
+  else if not ExecuteSync(M) then Exit(False);
+  if M.DFSAnc = ModIndex then
+    repeat
+      D := Stack[Stack.Count - 1];
+      Stack.Delete(Stack.Count - 1);
+      if D.AsyncOrder > 0 then D.Status := msEvaluatingAsync else D.Status := msEvaluated;
+      Done := D = M;
+      D.CycleRoot := M;
+    until Done;
+end;
+
+{ Evaluate(): the promise of the module's evaluation (its cycle root's) }
+function EvaluateModule(M: TModRec): TValue;
+var Stack: TList<TModRec>; Index, I: Integer;
+begin
+  if (M.Status in [msEvaluatingAsync, msEvaluated]) and (M.CycleRoot <> nil) then M := M.CycleRoot;
+  if HasCap(M) then Exit(GetRoot(M, rCap));
+  SetRoot(M, rCap, NewPendingPromise);
+  Stack := TList<TModRec>.Create;
+  try
+    Index := 0;
+    if not InnerEval(M, Stack, Index) then
+    begin
+      PushRoot(Pending);
+      Pending := VUndefined;
+      for I := 0 to Stack.Count - 1 do
+      begin
+        Stack[I].Status := msEvaluated;
+        SetEvalError(Stack[I], RootAt(TempTop - 1));
+      end;
+      RejectPendingPromise(GetRoot(M, rCap), RootAt(TempTop - 1));
+      PopRoots(1);
+    end
+    else if M.Status = msEvaluated then ResolvePendingPromise(GetRoot(M, rCap), VUndefined);
+  finally
+    Stack.Free;
+  end;
+  Result := GetRoot(M, rCap);
+end;
+
+{ NSDeferHook: EnsureDeferredNamespaceEvaluation, EvaluateModuleSync }
 function DeferEval(NS: TValue): Boolean;
-var M: TModRec; Seen: TList<TModRec>; Ready: Boolean;
+var M: TModRec; Seen: TList<TModRec>; Ready: Boolean; P, R: TValue;
 begin
   M := Mods[IntOf(ObjOf(NS)^.Aux2)];
   Seen := TList<TModRec>.Create;
@@ -551,110 +821,132 @@ begin
   end;
   if not Ready then
     Exit(ThrowTypeError('A deferred module cannot be evaluated while it or a dependency is evaluating or has top-level await'));
-  Result := Evaluate(M);
+  P := EvaluateModule(M);
+  case PromiseStatus(P, R) of
+    1: Result := True;
+    2: begin Pending := R; Result := False; end;
+  else
+    Result := ThrowTypeError('A deferred module''s evaluation did not complete synchronously');
+  end;
 end;
 
-function Evaluate(M: TModRec): Boolean;
-var D: TModRec; V: TValue; Done: Boolean; I: Integer; Seen: TList<TModRec>;
+function LoadAndLink(const Path: UnicodeString; var M: TModRec): Boolean;
 begin
-  if M.Status = msEvaluated then
-  begin
-    if M.Errored then begin Pending := GetRoot(M, rError); Exit(False); end;
-    Exit(True);
-  end;
-  if M.Status = msEvaluating then Exit(True);
-  M.Status := msEvaluating;
-  Result := True;
-  for I := 0 to High(M.Info.EvalOrder) do
-  begin
-    D := DepOf(M, M.Info.EvalOrder[I].Req);
-    if not M.Info.EvalOrder[I].Eager then
-    begin
-      { imported only with defer: its asynchronous dependencies now, itself on first use }
-      Seen := TList<TModRec>.Create;
-      try
-        if not EvaluateAsyncDeps(D, Seen) then begin Result := False; Break; end;
-      finally
-        Seen.Free;
-      end;
-      Continue;
-    end;
-    if not Evaluate(D) then begin Result := False; Break; end;
-  end;
-  if Result then
-  begin
-    if M.Info.HasTLA then Result := RunAsyncBody(GetRoot(M, rGen))
-    else Result := GeneratorResume(GetRoot(M, rGen), VUndefined, 0, V, Done);
-  end;
-  M.Status := msEvaluated;
-  if not Result then
-  begin
-    M.Errored := True;
-    SetRoot(M, rError, Pending);
-  end;
+  Result := LoadModule(Path, M);
+  if Result and (M.Status = msNew) then Result := Link(M);
 end;
 
-function LoadLinkEvaluate(const Path: UnicodeString; var M: TModRec; var Phase: Integer): Boolean;
+{ the host's entry point: the module loaded, linked and evaluated, its evaluation's jobs run until it settles }
+function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
+var M: TModRec; P, R: TValue;
 begin
   Phase := 0;
-  if not LoadModule(Path, M) then Exit(False);
-  if M.Status = msNew then
-    if not Link(M) then Exit(False);
+  if not LoadAndLink(ResolvePath(Path, ''), M) then Exit(False);
   Phase := 1;
-  Result := Evaluate(M);
-end;
-
-function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
-var M: TModRec;
-begin
-  Result := LoadLinkEvaluate(ResolvePath(Path, ''), M, Phase);
+  PushRoot(EvaluateModule(M));
+  if PromiseStatus(RootAt(TempTop - 1), R) = 0 then
+    if not RunMicrotasks then begin PopRoots(1); Exit(False); end;
+  P := RootAt(TempTop - 1);
+  PopRoots(1);
+  if PromiseStatus(P, R) = 2 then begin Pending := R; Exit(False); end;
+  Result := True;
 end;
 
 { ---- 13.3.10 import() ---- }
 
-{ the job that loads, links and evaluates a dynamic import's module (Data = its index in PendingImports) }
-function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var I: Integer; P, R, NS: TValue; M: TModRec; Phase: Integer; Ref, Spec: UnicodeString; Defer, Ok: Boolean;
-  Seen: TList<TModRec>;
+{ a dynamic import's promise settled (once): PendingImports holds [promise, module id, deps left] per import }
+procedure SettleImport(I: Integer; Ok: Boolean; V: TValue);
+var P, R: TValue;
 begin
-  { the native's data (24 bits): the pending import's index, bit 23 set for import.defer() }
-  I := NativeData and $7FFFFF;
-  Defer := (NativeData and $800000) <> 0;
   P := ObjOf(PendingImports)^.Elements^.Data[I * 3];
+  if not IsObject(P) or (PromiseStatus(P, R) <> 0) then Exit;
+  ValueArrayStore(ObjOf(PendingImports)^.Elements, I * 3, VUndefined);
+  if Ok then ResolvePendingPromise(P, V) else RejectPendingPromise(P, V);
+end;
+
+{ fulfilledClosure: the namespace (deferred for import.defer()); Data = the import's index, bit 23 defer }
+procedure ImportFulfilled(Data: Integer);
+var I: Integer; M: TModRec; NS: TValue;
+begin
+  I := Data and $7FFFFF;
+  M := Mods[IntOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1])];
+  if (Data and $800000) <> 0 then NS := GetDeferredNamespace(M) else NS := GetNamespace(M);
+  SettleImport(I, True, NS);
+end;
+
+function ImportFulfilledFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  ImportFulfilled(NativeData);
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ import.defer(): one of the asynchronous dependencies evaluated; the namespace once all are }
+function ImportDepFulfilledFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var I, N: Integer;
+begin
+  I := NativeData and $7FFFFF;
+  N := IntOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 2]) - 1;
+  ValueArrayStore(ObjOf(PendingImports)^.Elements, I * 3 + 2, MkInt(N));
+  if N = 0 then ImportFulfilled(NativeData);
+  Res := VUndefined;
+  Result := True;
+end;
+
+function ImportRejectedFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var E: TValue;
+begin
+  if Argc >= 1 then E := Args[1] else E := VUndefined;
+  SettleImport(NativeData and $7FFFFF, False, E);
+  Res := VUndefined;
+  Result := True;
+end;
+
+procedure ThenImport(P: TValue; OnF: TNativeFn; Data: Integer);
+var F: TValue;
+begin
+  PushRoot(P);
+  PushRoot(NewNativeFunctionData(OnF, '', 0, Data));
+  F := NewNativeFunctionData(ImportRejectedFn, '', 1, Data);
+  PushRoot(F);
+  PromiseThenNative(RootAt(TempTop - 3), RootAt(TempTop - 2), RootAt(TempTop - 1), VUndefined);
+  PopRoots(3);
+end;
+
+{ the job that loads and links a dynamic import's module, then evaluates it (ContinueDynamicImport); Data = its
+  index in PendingImports, bit 23 set for import.defer() }
+function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var I, J, Data: Integer; M: TModRec; Ref, Spec: UnicodeString; G: TList<TModRec>; R: TValue;
+begin
+  Res := VUndefined;
+  Result := True;
+  { NativeData read once: the loading and linking below run other natives }
+  Data := NativeData;
+  I := Data and $7FFFFF;
   Ref := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1]));
   Spec := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 2]));
-  if Defer then
-  begin
-    { import.defer(): loaded and linked; only the asynchronous modules of its graph evaluated now }
-    Ok := LoadModule(ResolveRequest(Spec, Ref), M);
-    if Ok and (M.Status = msNew) then Ok := Link(M);
-    if Ok then
-    begin
-      Seen := TList<TModRec>.Create;
-      try
-        Ok := EvaluateAsyncDeps(M, Seen);
-      finally
-        Seen.Free;
-      end;
-    end;
-  end
-  else Ok := LoadLinkEvaluate(ResolveRequest(Spec, Ref), M, Phase);
-  if Ok then
-  begin
-    if Defer then NS := GetDeferredNamespace(M) else NS := GetNamespace(M);
-    P := ObjOf(PendingImports)^.Elements^.Data[I * 3];
-    ResolvePendingPromise(P, NS);
-  end
-  else
+  if not LoadAndLink(ResolveRequest(Spec, Ref), M) then
   begin
     R := Pending;
     Pending := VUndefined;
-    P := ObjOf(PendingImports)^.Elements^.Data[I * 3];
-    RejectPendingPromise(P, R);
+    SettleImport(I, False, R);
+    Exit;
   end;
-  ValueArrayStore(ObjOf(PendingImports)^.Elements, I * 3, VUndefined);
-  Res := VUndefined;
-  Result := True;
+  ValueArrayStore(ObjOf(PendingImports)^.Elements, I * 3 + 1, MkInt(M.Id));
+  if (Data and $800000) = 0 then
+  begin
+    ThenImport(EvaluateModule(M), ImportFulfilledFn, Data);
+    Exit;
+  end;
+  { import.defer(): only the asynchronous modules of its graph evaluated now }
+  G := AsyncDepsOf(M);
+  try
+    if G.Count = 0 then begin ImportFulfilled(Data); Exit; end;
+    ValueArrayStore(ObjOf(PendingImports)^.Elements, I * 3 + 2, MkInt(G.Count));
+    for J := 0 to G.Count - 1 do ThenImport(EvaluateModule(G[J]), ImportDepFulfilledFn, Data);
+  finally
+    G.Free;
+  end;
 end;
 
 { 13.3.10.1 EvaluateImportCall from ToString(specifier) on: errors reject the promise }

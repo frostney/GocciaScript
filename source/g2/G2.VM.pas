@@ -3978,14 +3978,6 @@ begin
   Move(State^.Data[0], VStack[Base], NLive * SizeOf(TValue));
   if NLive < T^.MaxRegs then FillQWord(VStack[Base + NLive], T^.MaxRegs - NLive, VUndefined);
   ResumeReg := IntOf(State^.Data[T^.MaxRegs]);
-  if ResumeReg <= -2 then
-  begin
-    { suspended in yield*: the step op gets the received value and mode and runs again }
-    VStack[Base - ResumeReg - 2] := Arg;
-    VStack[Base - ResumeReg - 1] := MkInt(Mode);
-    Mode := 0;
-  end
-  else if (ResumeReg >= 0) and (Mode = 0) then VStack[Base + ResumeReg] := Arg;
   Fr := @Frames[FrameTop];
   Fr^.Closure := G^.Aux1;
   Fr^.NewTarget := Gen;
@@ -4022,6 +4014,15 @@ begin
       Inc(OpenCount);
     end;
   end;
+  { the received value after the reopening: a captured register (y = yield x with y captured) takes it }
+  if ResumeReg <= -2 then
+  begin
+    { suspended in yield*: the step op gets the received value and mode and runs again }
+    VStack[Base - ResumeReg - 2] := Arg;
+    VStack[Base - ResumeReg - 1] := MkInt(Mode);
+    Mode := 0;
+  end
+  else if (ResumeReg >= 0) and (Mode = 0) then VStack[Base + ResumeReg] := Arg;
   StackTop := Base + T^.MaxRegs;
   G^.OFlags := 2;
   if Mode = 1 then
@@ -4094,12 +4095,6 @@ begin
   Move(State^.Data[0], VStack[Base], NLive * SizeOf(TValue));
   if NLive < T^.MaxRegs then FillQWord(VStack[Base + NLive], T^.MaxRegs - NLive, VUndefined);
   ResumeReg := IntOf(State^.Data[T^.MaxRegs]);
-  if ResumeReg <= -2 then
-  begin
-    VStack[Base - ResumeReg - 2] := VUndefined;
-    VStack[Base - ResumeReg - 1] := MkInt(0);
-  end
-  else if ResumeReg >= 0 then VStack[Base + ResumeReg] := VUndefined;
   Fr := @Frames[FrameTop];
   Fr^.Closure := G^.Aux1;
   Fr^.NewTarget := Gen;
@@ -4134,6 +4129,13 @@ begin
       Inc(OpenCount);
     end;
   end;
+  { next() with undefined, after the reopening (as GeneratorResume) }
+  if ResumeReg <= -2 then
+  begin
+    VStack[Base - ResumeReg - 2] := VUndefined;
+    VStack[Base - ResumeReg - 1] := MkInt(0);
+  end
+  else if ResumeReg >= 0 then VStack[Base + ResumeReg] := VUndefined;
   StackTop := Base + T^.MaxRegs;
   G^.OFlags := 2;
   GenYielded := False;
