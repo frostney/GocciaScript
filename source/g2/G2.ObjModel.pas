@@ -1584,6 +1584,16 @@ begin
   Result := True;
 end;
 
+{ 13.2.8.4 GetTemplateObject steps 11-13: the raw strings array, then the template, frozen }
+function FreezeTemplate(T: TValue): Boolean;
+var Raw: TValue; Ok: Boolean;
+begin
+  PushRoot(T);
+  Result := GetV(T, AtomOf('raw'), Raw) and SetIntegrityLevel(Raw, True, Ok) and
+    SetIntegrityLevel(RootAt(TempTop - 1), True, Ok);
+  PopRoots(1);
+end;
+
 procedure InitObjModel;
 var O, R: TValue; Ok_: Boolean;
   procedure Def(Target: TValue; const Name: UnicodeString; Fn: TNativeFn; Len: Integer; Data: UInt32 = 0);
@@ -1594,6 +1604,9 @@ var O, R: TValue; Ok_: Boolean;
   end;
 begin
   ProxySetHook := @ProxySetOM;
+  TemplateFreezeHook := @FreezeTemplate;
+  TemplateCache := VUndefined;
+  RealmVals([@TemplateCache]);
   SetReceiverHook := @SetWithReceiver;
   SetProtoHook := @SetPrototypeOfV;
   ProxyCheckHook := @ProxyCheckOM;

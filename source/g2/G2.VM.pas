@@ -67,6 +67,8 @@ var
   GetProtoHook: function(O: TValue; var P: TValue): Boolean = nil;
   { G2.ObjModel's [[SetPrototypeOf]]: Ok its result }
   SetProtoHook: function(O, P: TValue; var Ok: Boolean): Boolean = nil;
+  { 13.2.8.4 GetTemplateObject: SetIntegrityLevel(frozen) of the raw strings array and of the template (G2.ObjModel) }
+  TemplateFreezeHook: function(T: TValue): Boolean = nil;
 threadvar
   { set when OwnKeys met a throwing proxy trap: the caller takes it with TakeOwnKeysFailure }
   OwnKeysFailed: Boolean;
@@ -287,6 +289,9 @@ threadvar
   MultiRealm: Boolean;   { a second realm exists }
   RealmInit: Boolean;    { CreateRealm is running the Init procedures for a new realm }
   IntrinsicsInit: Boolean;   { InitIntrinsics is running: a native given a prototype property is a constructor }
+  { 13.2.8.4 the realm's [[TemplateMap]]: template objects by tagged-template site (an array, created on first use;
+    a realm slot registered by G2.ObjModel) }
+  TemplateCache: TValue;
 var
   { the Init procedures of the intrinsics, which CreateRealm runs for a new realm (nil: no realms) }
   RealmInitProc: procedure = nil;
@@ -4190,6 +4195,29 @@ begin
   Result := True;
 end;
 
+{ opTemplateObj: Mode 0 Res := the realm's template object for Site (undefined until made); Mode 1 freezes the
+  strings array T (and its raw array) and records it for Site (13.2.8.4 GetTemplateObject steps 2-14) }
+function XTemplateObj(Mode, Site: Integer; T: TValue; var Res: TValue): Boolean; noinline;
+var E: PValueArray;
+begin
+  Res := VUndefined;
+  if Mode = 0 then
+  begin
+    if IsObject(TemplateCache) then
+    begin
+      E := ObjOf(TemplateCache)^.Elements;
+      if (E <> nil) and (Site < Integer(E^.Len)) and (E^.Data[Site] <> VHole) then Res := E^.Data[Site];
+    end;
+    Exit(True);
+  end;
+  PushRoot(T);
+  if Assigned(TemplateFreezeHook) and not TemplateFreezeHook(RootAt(TempTop - 1)) then begin PopRoots(1); Exit(False); end;
+  if not IsObject(TemplateCache) then TemplateCache := MkPtr(NewArray(0, 16));
+  Result := SetElemV(TemplateCache, MkInt(Site), RootAt(TempTop - 1));
+  Res := RootAt(TempTop - 1);
+  PopRoots(1);
+end;
+
 { the slow path of the immediate adds: opAddI is binary + (a string concatenates, a BigInt throws), opSubI binary
   - (C is the negated constant), opIncI ++ and -- (ToNumeric, then a BigInt steps by C) }
 function XAddImmSlow(Op: TOp; VA: TValue; CI: Integer; var Res: TValue): Boolean; noinline;
@@ -5436,6 +5464,12 @@ LReload:
             if not AddNumbersSlow(VA, VB, V) then goto LThrow;
             R[A] := V;
           end;
+        end;
+      opTemplateObj:
+        begin
+          Fr^.PC := PC;
+          if not XTemplateObj((I shr 24) and $FFFF, I shr 40, R[A], V) then goto LThrow;
+          R[A] := V;
         end;
       opAddI, opSubI, opIncI:
         begin

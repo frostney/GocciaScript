@@ -54,6 +54,8 @@ threadvar
   { goal 4 (a direct eval in function code): the caller's bindings, as G2.Compiler's direct-eval sites describe
     them (BuildEvalDesc): entries name #2 kind #2 index #2 flags, each ended by #1 }
   EvalOuterDesc: UnicodeString;
+  { the next tagged template's site number (13.2.8.4: its template object is cached per site and realm) }
+  TemplateSiteNext: Integer;
   { goal 3: the module info of the last CompileProgram (the caller owns it), and the module id its templates get }
   LastModuleInfo: TModuleInfo;
   CompilingModuleId: Integer;
@@ -1378,7 +1380,7 @@ begin
     else Nodes := nil;
     if Nodes <> nil then
     begin
-      Names := TStringList.Create;
+      Names := NewNameList;
       try
         for I := 0 to Nodes.Count - 1 do CollectVarNames(Nodes[I], Names);
         if not T^.IsStrict and (Goal <> 3) then
@@ -2164,6 +2166,7 @@ begin
   T^.GdiKind := Goal;
   Funcs := TStringList.Create;
   try
+    Funcs.UseLocale := False;   { exact code-unit order: a locale collation equates distinct names }
     Funcs.Sorted := True;
     Funcs.Duplicates := dupIgnore;
     Funcs.CaseSensitive := True;
@@ -2518,7 +2521,7 @@ begin
   if (St is TGocciaFunctionDeclaration) and (FS.Tpl^.IsStrict or TGocciaFunctionDeclaration(St).FunctionExpression.IsAsync or
      TGocciaFunctionDeclaration(St).FunctionExpression.IsGenerator) then
     raise EEarlySyntaxError.Create('Labelled function declarations are only allowed for plain functions in non-strict code');
-  Lbls := TStringList.Create;
+  Lbls := NewNameList;
   for I := 0 to St.LabelCount - 1 do Lbls.Add(St.Labels[I]);
   FS.PendingLabels := Lbls;
   if (St is TGocciaForStatement) or (St is TGocciaWhileStatement) or (St is TGocciaDoWhileStatement) or
@@ -4503,7 +4506,7 @@ end;
 
 // a tagged template calls the tag with (strings, ...values); strings has a raw property
 procedure TCompiler.CompileTagged(E: TGocciaTaggedTemplateExpression; Dest: Integer);
-var Base, I, Strs, Raw, V: Integer; M: TGocciaMemberExpression; K: Integer;
+var Base, I, Strs, Raw, V: Integer; M: TGocciaMemberExpression; K, Site, JMade: Integer;
 begin
   Base := FS.FreeReg;
   AllocRegs(2);
@@ -4527,6 +4530,11 @@ begin
     Emit(Ins(opLoadUndef, Base + 1, 0, 0));
   end;
   Strs := AllocReg;
+  { 13.2.8.4 GetTemplateObject: one frozen template object per site and realm }
+  Site := TemplateSiteNext;
+  Inc(TemplateSiteNext);
+  Emit(Ins(opTemplateObj, Strs, 0, Site));
+  JMade := EmitJ(opJNotUndef, Strs, 0);
   Emit(Ins(opNewArr, Strs, 0, 0));
   V := AllocReg;
   for I := 0 to High(E.CookedStrings) do
@@ -4545,6 +4553,8 @@ begin
   end;
   Emit(Ins(opDefMethod, Strs, Raw, AtomConst('raw')));
   FreeTo(Strs + 1);
+  Emit(Ins(opTemplateObj, Strs, 1, Site));
+  PatchHere(JMade);
   for I := 0 to E.Expressions.Count - 1 do
   begin
     V := AllocReg;
