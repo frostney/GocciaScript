@@ -2487,6 +2487,11 @@ begin
         else if FUnicode then
           raise EConvertError.Create(
             'Invalid regular expression: invalid escape in unicode mode')
+        else if Length(FNamedGroups) > 0 then
+          // with a group name in the pattern, \k must name a group (B.1.2:
+          // k is no identity escape under [+NamedCaptureGroups])
+          raise EConvertError.Create(
+            'Invalid regular expression: invalid named reference')
         else
           EmitCharMatch(Ord('k'));
       end;
@@ -3445,9 +3450,10 @@ procedure TRegExpCompiler.CompileTerm;
 var
   AtomStart: Integer;
   C: Char;
-  IsAssertion: Boolean;
+  IsAssertion, IsLookahead: Boolean;
 begin
   C := Peek;
+  IsLookahead := (C = '(') and (PeekAt(1) = '?') and ((PeekAt(2) = '=') or (PeekAt(2) = '!'));
   if CharInSet(C, ['*', '+', '?']) or
      ((C = '{') and HasBracedQuantifierAtCurrentPosition) then
     raise EConvertError.Create('Invalid regular expression: nothing to repeat');
@@ -3459,9 +3465,13 @@ begin
     IsAssertion := True;
   AtomStart := CurrentPC;
   CompileAtom;
-  if (not AtEnd) and IsQuantifierChar(Peek) and IsAssertion and FUnicode then
+  // ES2026 B.1.2 QuantifiableAssertion: only a lookahead, and only without
+  // the u or v flag; ^, $, \b, \B and lookbehinds are never quantifiable
+  if (not AtEnd) and IsAssertion and
+     (CharInSet(Peek, ['*', '+', '?']) or ((Peek = '{') and HasBracedQuantifierAtCurrentPosition)) and
+     (FUnicode or not IsLookahead) then
     raise EConvertError.Create(
-      'Invalid regular expression: quantifier on assertion in unicode mode');
+      'Invalid regular expression: nothing to repeat');
   CompileQuantifier(AtomStart);
 end;
 
