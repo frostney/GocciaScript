@@ -370,6 +370,7 @@ type
     procedure RaiseUnsupported(const AWhat: UnicodeString; N: TObject);
     function ExprAny(E: TGocciaExpression): Integer;
     function IsDiscardable(E: TGocciaExpression): Boolean;
+    function PureRead(E: TGocciaExpression): Boolean;
     procedure BranchFalse(E: TGocciaExpression; var L: TJumpList);
     procedure BranchTrue(E: TGocciaExpression; var L: TJumpList);
     procedure LoadIdent(const N: UnicodeString; Dest: Integer);
@@ -3317,10 +3318,22 @@ begin
   end;
 end;
 
+{ evaluating E runs no code (so cannot reassign a local): a literal, or a local read straight from its register }
+function TCompiler.PureRead(E: TGocciaExpression): Boolean;
+var R: Integer;
+begin
+  if E is TGocciaLiteralExpression then Exit(True);
+  Result := (E is TGocciaIdentifierExpression) and ResolveLocal(FS, TGocciaIdentifierExpression(E).Name, R) and
+    not InTDZ(TGocciaIdentifierExpression(E).Name) and
+    ((WithCount = 0) or (WithsFor(TGocciaIdentifierExpression(E).Name, WithIdxScratch) = 0));
+end;
+
 { an assignment or update whose value, when unused, need not be copied (TopDiscard) }
 function TCompiler.IsDiscardable(E: TGocciaExpression): Boolean;
 begin
-  Result := (E is TGocciaAssignmentExpression) or (E is TGocciaIncrementExpression);
+  Result := (E is TGocciaAssignmentExpression) or (E is TGocciaIncrementExpression) or
+    (E is TGocciaPropertyAssignmentExpression) or (E is TGocciaComputedPropertyAssignmentExpression) or
+    (E is TGocciaCompoundAssignmentExpression);
 end;
 
 function TCompiler.ExprAny(E: TGocciaExpression): Integer;
@@ -3902,6 +3915,26 @@ begin
     begin
       L := ExprAny(E.Left);
       if Op = opAdd then Emit(Ins(opAddI, Dest, L, IntOf(V))) else Emit(Ins(opSubI, Dest, L, -IntOf(V)));
+      FreeTo(Save);
+      Exit;
+    end;
+  end;
+  { x op k for the bitwise and shift operators and an int32 literal k }
+  if (Op in [opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr]) and (E.Right is TGocciaLiteralExpression) and
+     (TGocciaLiteralExpression(E.Right).Value is TGocciaNumberLiteralValue) then
+  begin
+    V := MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(E.Right).Value).Value);
+    if IsInt(V) and (IntOf(V) >= -8388608) and (IntOf(V) < 8388608) then
+    begin
+      L := ExprAny(E.Left);
+      case Op of
+        opBitAnd: Emit(Ins(opBitAndI, Dest, L, IntOf(V)));
+        opBitOr: Emit(Ins(opBitOrI, Dest, L, IntOf(V)));
+        opBitXor: Emit(Ins(opBitXorI, Dest, L, IntOf(V)));
+        opShl: Emit(Ins(opShlI, Dest, L, IntOf(V)));
+        opShr: Emit(Ins(opShrI, Dest, L, IntOf(V)));
+      else Emit(Ins(opUShrI, Dest, L, IntOf(V)));
+      end;
       FreeTo(Save);
       Exit;
     end;
@@ -4710,7 +4743,7 @@ procedure TCompiler.CompileAssign(E: TGocciaExpression; Dest: Integer);
 var Save, O, K, V, R, J: Integer; A: TGocciaAssignmentExpression; PA: TGocciaPropertyAssignmentExpression;
   CA: TGocciaComputedPropertyAssignmentExpression; CO: TGocciaCompoundAssignmentExpression;
   PC: TGocciaPropertyCompoundAssignmentExpression; CC: TGocciaComputedPropertyCompoundAssignmentExpression;
-  Op: TGocciaTokenType; IC: Integer; AName: UnicodeString; Discard: Boolean;
+  Op: TGocciaTokenType; IC: Integer; AName: UnicodeString; Discard: Boolean; BOp: TOp;
   { Name: the identifier a logical assignment assigns to, for the NamedEvaluation of an anonymous function or class
     (13.15.2: &&=, ||= and ??= only) }
   procedure Combine(Op: TGocciaTokenType; Cur, ValE: TGocciaExpression; CurReg, Dst: Integer; out ShortJ: Integer;
@@ -4776,19 +4809,63 @@ begin
   end
   else if E is TGocciaPropertyAssignmentExpression then
   begin
+    { the base is read before the value: a local's own register only when the value cannot run code that
+      reassigns it }
     PA := TGocciaPropertyAssignmentExpression(E);
-    O := ExprAny(PA.ObjectExpr);
+    if PureRead(PA.Value) then O := ExprAny(PA.ObjectExpr) else begin O := AllocReg; ExprTo(PA.ObjectExpr, O); end;
     if O = Dest then begin O := AllocReg; Emit(Ins(opMov, O, Dest, 0)); end;
-    ExprTo(PA.Value, Dest);
-    Emit(Ins(opSetProp, O, Dest, NewIC(PA.PropertyName)));
+    if Discard and PureRead(PA.Value) then V := ExprAny(PA.Value)
+    else begin ExprTo(PA.Value, Dest); V := Dest; end;
+    Emit(Ins(opSetProp, O, V, NewIC(PA.PropertyName)));
   end
   else if E is TGocciaComputedPropertyAssignmentExpression then
   begin
+    { 13.15.2: base, then key, then value; locals' own registers where nothing evaluated later can reassign them }
     CA := TGocciaComputedPropertyAssignmentExpression(E);
-    O := AllocReg; ExprTo(CA.ObjectExpr, O);
-    K := AllocReg; ExprTo(CA.PropertyExpression, K);
-    ExprTo(CA.Value, Dest);
-    Emit(Ins(opSetElem, O, K, Dest));
+    if PureRead(CA.Value) and PureRead(CA.PropertyExpression) then O := ExprAny(CA.ObjectExpr)
+    else begin O := AllocReg; ExprTo(CA.ObjectExpr, O); end;
+    if PureRead(CA.Value) then K := ExprAny(CA.PropertyExpression)
+    else begin K := AllocReg; ExprTo(CA.PropertyExpression, K); end;
+    if (O = Dest) or (K = Dest) then
+    begin
+      R := AllocReg;
+      ExprTo(CA.Value, R);
+      Emit(Ins(opSetElem, O, K, R));
+      if not Discard then Emit(Ins(opMov, Dest, R, 0));
+    end
+    else
+    begin
+      if Discard and PureRead(CA.Value) then V := ExprAny(CA.Value)
+      else begin ExprTo(CA.Value, Dest); V := Dest; end;
+      Emit(Ins(opSetElem, O, K, V));
+    end;
+  end
+  else if (E is TGocciaCompoundAssignmentExpression) and
+          not (TGocciaCompoundAssignmentExpression(E).Operator in [gttLogicalAndAssign, gttLogicalOrAssign, gttNullishCoalescingAssign]) and
+          PureRead(TGocciaCompoundAssignmentExpression(E).Value) and
+          ResolveLocal(FS, TGocciaCompoundAssignmentExpression(E).Name, R) and
+          not BindingIsConst(TGocciaCompoundAssignmentExpression(E).Name) and
+          not InTDZ(TGocciaCompoundAssignmentExpression(E).Name) and
+          ((WithCount = 0) or (WithsFor(TGocciaCompoundAssignmentExpression(E).Name, WithIdxScratch) = 0)) then
+  begin
+    { x op= v on a local, v a literal or a local: in place (nothing between the read of x and the operation can
+      change it); x += k and x -= k for a small integer k as one immediate add }
+    CO := TGocciaCompoundAssignmentExpression(E);
+    BOp := BinOpFor(CO.Operator);
+    if (BOp in [opAdd, opSub]) and (CO.Value is TGocciaLiteralExpression) and
+       (TGocciaLiteralExpression(CO.Value).Value is TGocciaNumberLiteralValue) and
+       IsInt(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value)) and
+       (Abs(IntOf(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value))) < 4000000) then
+    begin
+      K := IntOf(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value));
+      if BOp = opAdd then Emit(Ins(opAddI, R, R, K)) else Emit(Ins(opSubI, R, R, -K));
+    end
+    else
+    begin
+      V := ExprAny(CO.Value);
+      Emit(Ins(BOp, R, R, V));
+    end;
+    if (Dest <> R) and not Discard then Emit(Ins(opMov, Dest, R, 0));
   end
   else if E is TGocciaCompoundAssignmentExpression then
   begin

@@ -4218,6 +4218,13 @@ begin
   PopRoots(1);
 end;
 
+{ the immediate bitwise and shift instructions outside FastLoop: the binary operator with a Number constant }
+function XBitImm(Op: TOp; VA: TValue; CI: Int32; var Res: TValue): Boolean; noinline;
+const Base: array[opBitAndI..opUShrI] of TOp = (opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr);
+begin
+  Result := ArithSlow(Base[Op], VA, MkInt(CI), Res);
+end;
+
 { the slow path of the immediate adds: opAddI is binary + (a string concatenates, a BigInt throws), opSubI binary
   - (C is the negated constant), opIncI ++ and -- (ToNumeric, then a BigInt steps by C) }
 function XAddImmSlow(Op: TOp; VA: TValue; CI: Integer; var Res: TValue): Boolean; noinline;
@@ -4246,8 +4253,8 @@ var
 
 procedure InitFastOps;
 const
-  Ops: array[0..60] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
-    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opSub,
+  Ops: array[0..66] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opSub,
     opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
     opJNGt, opJNGe, opJNSEq, opJSEq, opCall, opRet, opRetUndef, opToNum, opToNumeric, opEq, opNe, opTypeof, opDefField);
@@ -4542,25 +4549,36 @@ begin
           else if VA < DOUBLE_LIMIT then R[A] := MkArith(PDouble(@VA)^ + CI)
           else goto LBail;
         end;
-      opSub, opMul:
+      { int32 operands, then two doubles (the numeric kernels' common case), then mixed numbers }
+      opSub:
         begin
           VA := R[(I shr 24) and $FFFF];
           VB := R[I shr 40];
           if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
           begin
-            if TOp(I and $FF) = opSub then Sum := Int64(Int32(UInt32(VA))) - Int64(Int32(UInt32(VB)))
-            else Sum := Int64(Int32(UInt32(VA))) * Int64(Int32(UInt32(VB)));
-            if (Sum >= -2147483648) and (Sum <= 2147483647) and not ((Sum = 0) and (TOp(I and $FF) = opMul) and
-               ((Int32(UInt32(VA)) < 0) or (Int32(UInt32(VB)) < 0))) then
+            Sum := Int64(Int32(UInt32(VA))) - Int64(Int32(UInt32(VB)));
+            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+            else R[A] := MkDouble(Sum);
+          end
+          else if (VA < DOUBLE_LIMIT) and (VB < DOUBLE_LIMIT) then R[A] := MkArith(PDouble(@VA)^ - PDouble(@VB)^)
+          else if IsNumber(VA) and IsNumber(VB) then R[A] := MkArith(NumOf(VA) - NumOf(VB))
+          else goto LBail;
+        end;
+      opMul:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          begin
+            Sum := Int64(Int32(UInt32(VA))) * Int64(Int32(UInt32(VB)));
+            { a zero product of a negative operand is -0, a double }
+            if (Sum >= -2147483648) and (Sum <= 2147483647) and
+               not ((Sum = 0) and ((Int32(UInt32(VA)) < 0) or (Int32(UInt32(VB)) < 0))) then
               R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
-            else if TOp(I and $FF) = opSub then R[A] := MkDouble(Sum)
             else R[A] := MkDouble(Double(Int32(UInt32(VA))) * Double(Int32(UInt32(VB))));
           end
-          else if IsNumber(VA) and IsNumber(VB) then
-          begin
-            if TOp(I and $FF) = opSub then R[A] := MkArith(NumOf(VA) - NumOf(VB))
-            else R[A] := MkArith(NumOf(VA) * NumOf(VB));
-          end
+          else if (VA < DOUBLE_LIMIT) and (VB < DOUBLE_LIMIT) then R[A] := MkArith(PDouble(@VA)^ * PDouble(@VB)^)
+          else if IsNumber(VA) and IsNumber(VB) then R[A] := MkArith(NumOf(VA) * NumOf(VB))
           else goto LBail;
         end;
       opDiv:
@@ -4589,6 +4607,21 @@ begin
             else R[A] := MkNumber(UInt32(CI) shr (NP and 31));
           end
           else goto LBail;
+        end;
+      opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          NP := Int32(SarInt64(Int64(I), 40));
+          if (VA and TAG_MASK) = TAG_INT then CI := Int32(UInt32(VA))
+          else if not QuickInt32(VA, CI) then goto LBail;
+          case TOp(I and $FF) of
+            opBitAndI: R[A] := MkInt(CI and NP);
+            opBitOrI: R[A] := MkInt(CI or NP);
+            opBitXorI: R[A] := MkInt(CI xor NP);
+            opShlI: R[A] := MkInt(Int32(UInt32(CI) shl (NP and 31)));
+            opShrI: R[A] := MkInt(SarLongint(CI, NP and 31));
+          else R[A] := MkNumber(UInt32(CI) shr (NP and 31));
+          end;
         end;
       opBitAnd, opBitOr, opBitXor, opShl:
         begin
@@ -5552,6 +5585,12 @@ LReload:
             if not ArithSlow(opMod, VA, VB, V) then goto LThrow;
             R[A] := V;
           end;
+        end;
+      opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI:
+        begin
+          Fr^.PC := PC;
+          if not XBitImm(TOp(I and $FF), R[(I shr 24) and $FFFF], Int32(SarInt64(Int64(I), 40)), V) then goto LThrow;
+          R[A] := V;
         end;
       opPow, opShr, opUShr:
         begin

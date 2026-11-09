@@ -25,6 +25,7 @@ type
     opAddI,                  { R[A] = R[B] + C (immediate): binary +, so a string concatenates, a BigInt throws }
     opSubI,                  { R[A] = R[B] - (-C): binary - of a Number constant, C holds the negated constant }
     opIncI,                  { R[A] = ToNumeric(R[B]) + C: ++ and --, a BigInt steps by C }
+    opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI,   { R[A] = R[B] op C (an int32 immediate) }
     opNeg, opBitNot, opNot, opTypeof, opToNum, opToNumeric, opToStr, opToPropKey,
     opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe,
     opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef,
