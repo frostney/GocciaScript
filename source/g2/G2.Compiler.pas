@@ -877,7 +877,7 @@ begin
     LoadIdentStatic(WithNames[Idx[I]], T);
     Emit(Ins(opWithHas, T + 1, T, AtomConst(N)));
     J := EmitJ(opJF, T + 1, 0);
-    Emit(Ins(opWithGet, Dest, T, AtomConst(N)));
+    Emit(Ins(opWithGet, Dest, T, AtomConst(N)) or (QWord(Ord(FS.Tpl^.IsStrict)) shl 63));
     { ThisReg: the reference's environment; a call's this, where an eval's variable environment (declarative)
       gives undefined }
     if ThisReg >= 0 then
@@ -908,17 +908,8 @@ procedure TCompiler.StoreIdentRef(const N: UnicodeString; Env, Src: Integer);
 var J, J2, T: Integer;
 begin
   J := EmitJ(opJUndef, Env, 0);
-  if FS.Tpl^.IsStrict then
-  begin
-    { 9.1.1.2.5 SetMutableBinding of an object environment in strict code: the binding must still exist }
-    T := AllocReg;
-    Emit(Ins(opWithHas, T, Env, AtomConst(N)));
-    J2 := EmitJ(opJT, T, 0);
-    Emit(Ins(opThrowConst, 0, 2, AtomConst(N)));
-    PatchHere(J2);
-    FreeTo(T);
-  end;
-  Emit(Ins(opWithSet, Env, Src, AtomConst(N)));
+  { 9.1.1.2.5 SetMutableBinding of an object environment }
+  Emit(Ins(opWithSet, Env, Src, AtomConst(N)) or (QWord(2 + Ord(FS.Tpl^.IsStrict)) shl 62));
   J2 := EmitJ(opJmp, 0, 0);
   PatchHere(J);
   StoreIdentStatic(N, Src, False);
@@ -1029,7 +1020,7 @@ begin
     LoadIdentStatic(WithNames[Idx[I]], T);
     Emit(Ins(opWithHas, T + 1, T, AtomConst(N)));
     J := EmitJ(opJF, T + 1, 0);
-    Emit(Ins(opWithSet, T, Src, AtomConst(N)));
+    Emit(Ins(opWithSet, T, Src, AtomConst(N)) or (QWord(2 + Ord(FS.Tpl^.IsStrict)) shl 62));
     SetLength(Ends, Length(Ends) + 1);
     Ends[High(Ends)] := EmitJ(opJmp, 0, 0);
     PatchHere(J);

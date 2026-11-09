@@ -4387,6 +4387,41 @@ begin
   Result := ImportHook(T^.SourceName, T^.ModuleId, Spec, Opts, V);
 end;
 
+{ 9.1.1.2.6 GetBindingValue of an object environment: the property may have gone since HasBinding (undefined,
+  or a ReferenceError for a strict reference); C's bit 23 (I's bit 63) the reference's strictness }
+function XWithGet(Obj: TValue; Key: PStr; Strict: Boolean; var V: TValue): Boolean; noinline;
+var Found: Boolean;
+begin
+  PushRoot(Obj);
+  Result := HasPropertyV(Obj, Key, Found);
+  Obj := RootAt(TempTop - 1);
+  PopRoots(1);
+  if not Result then Exit;
+  if not Found then
+  begin
+    if Strict then Exit(ThrowError('ReferenceError', StrToUnicode(Key) + ' is not defined'));
+    V := VUndefined;
+    Exit(True);
+  end;
+  Result := GetV(Obj, Key, V);
+end;
+
+{ opWithSet. Mode (I's bits 63 and 62): 0 a plain Set (a var's initialization in an eval variable environment);
+  2 / 3 9.1.1.2.5 SetMutableBinding of an object environment, sloppy / strict: the property may have gone since
+  HasBinding (a ReferenceError for a strict reference), then Set(O, N, V, S) }
+function XWithSet(Obj: TValue; Key: PStr; V: TValue; Mode: Integer): Boolean; noinline;
+var Found: Boolean;
+begin
+  if Mode = 0 then Exit(SetVS(Obj, Key, V, False));
+  PushRoot(Obj); PushRoot(V);
+  Result := HasPropertyV(Obj, Key, Found);
+  V := RootAt(TempTop - 1); Obj := RootAt(TempTop - 2);
+  PopRoots(2);
+  if not Result then Exit;
+  if not Found and (Mode = 3) then Exit(ThrowError('ReferenceError', StrToUnicode(Key) + ' is not defined'));
+  Result := SetVS(Obj, Key, V, Mode = 3);
+end;
+
 function XThrowNotDefined(Key: PStr): Boolean; noinline;
 begin
   Result := ThrowError('ReferenceError', StrToUnicode(Key) + ' is not defined');
@@ -6564,13 +6599,13 @@ LReload:
       opWithGet:
         begin
           Fr^.PC := PC;
-          if not GetV(R[(I shr 24) and $FFFF], PStr(PtrOf(K[I shr 40])), V) then goto LThrow;
+          if not XWithGet(R[(I shr 24) and $FFFF], PStr(PtrOf(K[(I shr 40) and $7FFFFF])), (I shr 63) <> 0, V) then goto LThrow;
           R[A] := V;
         end;
       opWithSet:
         begin
           Fr^.PC := PC;
-          if not SetVS(R[A], PStr(PtrOf(K[I shr 40])), R[(I shr 24) and $FFFF], False) then goto LThrow;
+          if not XWithSet(R[A], PStr(PtrOf(K[(I shr 40) and $3FFFFF])), R[(I shr 24) and $FFFF], I shr 62) then goto LThrow;
         end;
       opMakeModCell:
         begin
