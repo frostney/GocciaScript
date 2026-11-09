@@ -26,3 +26,16 @@ var $262 = (function () {
   if ("IsHTMLDDA" in H) host262.IsHTMLDDA = H.IsHTMLDDA;
   return host262;
 })();
+
+// a host setTimeout for the harness's polling loops (atomicsHelper.js getReportAsync): the callback runs from a
+// microtask after a short blocking sleep, so a poll waits for agents without a timer queue in the engine
+if (typeof globalThis.setTimeout !== "function") {
+  globalThis.setTimeout = function (callback, ms) {
+    var args = Array.prototype.slice.call(arguments, 2);
+    Promise.resolve().then(function () {
+      if (ms > 0 && $262.agent && typeof $262.agent.sleep === "function") $262.agent.sleep(Math.min(ms, 20));
+      callback.apply(undefined, args);
+    });
+    return 0;
+  };
+}

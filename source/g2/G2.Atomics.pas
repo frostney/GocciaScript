@@ -192,16 +192,18 @@ end;
 
 { ---------------- Atomics ---------------- }
 
-{ 25.4.3.1 ValidateIntegerTypedArray; Waitable: Int32Array only (no BigInt64Array yet) }
+{ 25.4.3.1 ValidateIntegerTypedArray: an attached, in-bounds integer typed array; Waitable: Int32Array or
+  BigInt64Array }
 function ValidateIntTA(V: TValue; Waitable: Boolean; var O: PObj): Boolean;
 begin
   if not IsObject(V) or (ObjOf(V)^.OKind <> okTypedArray) then Exit(ThrowTypeError('Atomics operation on a non-TypedArray'));
   O := ObjOf(V);
+  if TAOutOfBounds(O) then Exit(ThrowTypeError('Atomics operation on a detached or out-of-bounds TypedArray'));
   if Waitable then
   begin
-    if TAKind(O) <> taInt32 then Exit(ThrowTypeError('Atomics.wait and notify require an Int32Array'));
+    if not (TAKind(O) in [taInt32, taBigInt64]) then Exit(ThrowTypeError('Atomics.wait and notify require an Int32Array or a BigInt64Array'));
   end
-  else if not (TAKind(O) in [taInt8, taUint8, taInt16, taUint16, taInt32, taUint32]) then
+  else if not (TAKind(O) in [taInt8, taUint8, taInt16, taUint16, taInt32, taUint32, taBigInt64, taBigUint64]) then
     Exit(ThrowTypeError('Atomics operations require an integer TypedArray'));
   Result := True;
 end;
@@ -217,6 +219,35 @@ begin
   Result := True;
 end;
 
+{ 25.4.3.4 RevalidateAtomicAccess: after the value's conversion, which may have detached or shrunk the buffer }
+function Revalidate(O: PObj; ByteIdx: Int64): Boolean;
+begin
+  if TAOutOfBounds(O) then Exit(ThrowTypeError('Atomics operation on a detached or out-of-bounds TypedArray'));
+  if ByteIdx - O^.Pad >= TALength(O) * TAElemSize[TAKind(O)] then
+    Exit(ThrowError('RangeError', 'Atomics access index out of range'));
+  Result := True;
+end;
+
+function Bits32(D: Double): QWord; forward;
+
+{ the operand of an operation on O: ToBigInt for a BigInt array (its two's complement bits), else
+  ToIntegerOrInfinity; V the converted value (what store returns) }
+function OperandBits(O: PObj; X: TValue; var Bits: QWord; var V: TValue): Boolean;
+var D: Double;
+begin
+  if TAKind(O) in [taBigInt64, taBigUint64] then
+  begin
+    if not ToBigIntV(X, V) then Exit(False);
+    Bits := BigToU64(V);
+    Exit(True);
+  end;
+  if not ToIntegerOrInf(X, D) then Exit(False);
+  if D = 0 then D := 0;   { -0 stores and returns +0 }
+  Bits := Bits32(D);
+  V := MkNumber(D);
+  Result := True;
+end;
+
 { the element's bits for D (an integer or an infinity), modulo 2^32: NumericToRawBytes through ToInt8..ToUint32 }
 function Bits32(D: Double): QWord;
 begin
@@ -229,6 +260,8 @@ end;
 function FromBits(Kind: Integer; B: QWord): TValue;
 begin
   case Kind of
+    taBigInt64: Result := BigFromInt64(Int64(B));
+    taBigUint64: Result := BigFromUInt64(B);
     taInt8: Result := MkInt(ShortInt(Byte(B)));
     taUint8: Result := MkInt(Byte(B));
     taInt16: Result := MkInt(SmallInt(Word(B)));
@@ -239,14 +272,15 @@ begin
 end;
 
 function DoRMW(Args: TArgs; Argc: Integer; Op: TAtomicOp; var Res: TValue): Boolean;
-var O: PObj; P: PByte; ByteIdx: Int64; D: Double; Old: QWord;
+var O: PObj; P: PByte; ByteIdx: Int64; Old, Bits: QWord; V: TValue;
 begin
   if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
   if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
-  if not ToIntegerOrInf(Arg(Args, Argc, 3), D) then Exit(False);
+  if not OperandBits(O, Arg(Args, Argc, 3), Bits, V) then Exit(False);
   O := ObjOf(Args[1]);   { a conversion may have run user code and collected garbage }
+  if not Revalidate(O, ByteIdx) then Exit(False);
   P := TAData(O) + (ByteIdx - O^.Pad);
-  Old := AtomicRMW(P, TAElemSize[TAKind(O)], Op, Bits32(D));
+  Old := AtomicRMW(P, TAElemSize[TAKind(O)], Op, Bits);
   Res := FromBits(TAKind(O), Old);
   Result := True;
 end;
@@ -259,17 +293,20 @@ function Atomics_Sub(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begi
 function Atomics_Xor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DoRMW(Args, Argc, aoXor, Res); end;
 
 function Atomics_CompareExchange(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var O: PObj; P: PByte; ByteIdx: Int64; E, R: Double; Old, Mask: QWord; W: Integer;
+var O: PObj; P: PByte; ByteIdx: Int64; EB, RB, Old, Mask: QWord; W: Integer; V: TValue;
 begin
   if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
   if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
-  if not ToIntegerOrInf(Arg(Args, Argc, 3), E) then Exit(False);
-  if not ToIntegerOrInf(Arg(Args, Argc, 4), R) then Exit(False);
+  if not OperandBits(O, Arg(Args, Argc, 3), EB, V) then Exit(False);
   O := ObjOf(Args[1]);
+  if not OperandBits(O, Arg(Args, Argc, 4), RB, V) then Exit(False);
+  O := ObjOf(Args[1]);
+  if not Revalidate(O, ByteIdx) then Exit(False);
   P := TAData(O) + (ByteIdx - O^.Pad);
   W := TAElemSize[TAKind(O)];
-  if W = 4 then Mask := $FFFFFFFF else Mask := (QWord(1) shl (8 * W)) - 1;
-  Old := AtomicCompareExchange(P, W, Bits32(E) and Mask, Bits32(R) and Mask);
+  if W = 8 then Mask := QWord($FFFFFFFFFFFFFFFF)
+  else if W = 4 then Mask := $FFFFFFFF else Mask := (QWord(1) shl (8 * W)) - 1;
+  Old := AtomicCompareExchange(P, W, EB and Mask, RB and Mask);
   Res := FromBits(TAKind(O), Old);
   Result := True;
 end;
@@ -285,15 +322,16 @@ end;
 
 { 25.4.11 Atomics.store returns the integer it stored, not the element }
 function Atomics_Store(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var O: PObj; P: PByte; ByteIdx: Int64; D: Double;
+var O: PObj; P: PByte; ByteIdx: Int64; Bits: QWord; V: TValue;
 begin
   if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
   if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
-  if not ToIntegerOrInf(Arg(Args, Argc, 3), D) then Exit(False);
+  if not OperandBits(O, Arg(Args, Argc, 3), Bits, V) then Exit(False);
   O := ObjOf(Args[1]);
+  if not Revalidate(O, ByteIdx) then Exit(False);
   P := TAData(O) + (ByteIdx - O^.Pad);
-  AtomicStore(P, TAElemSize[TAKind(O)], Bits32(D));
-  Res := MkNumber(D);
+  AtomicStore(P, TAElemSize[TAKind(O)], Bits);
+  Res := V;
   Result := True;
 end;
 
@@ -307,14 +345,38 @@ end;
 
 type
   TWaitCell = record
-    P: PLongInt;
-    Expected: LongInt;
+    P: PByte;
+    Wide: Boolean;       { a BigInt64Array element }
+    Expected: Int64;
   end;
   PWaitCell = ^TWaitCell;
 
+function CellValue(const C: TWaitCell): Int64; inline;
+begin
+  if C.Wide then Result := PInt64(C.P)^ else Result := PLongInt(C.P)^;
+end;
+
 function CellStillHolds(Data: Pointer): Boolean;
 begin
-  Result := PLongInt(PWaitCell(Data)^.P)^ = PWaitCell(Data)^.Expected;
+  Result := CellValue(PWaitCell(Data)^) = PWaitCell(Data)^.Expected;
+end;
+
+{ the value Atomics.wait / waitAsync compare against: ToBigInt64 or ToInt32 }
+function WaitExpected(O: PObj; X: TValue; var Cell: TWaitCell): Boolean;
+var D: Double; V: TValue;
+begin
+  Cell.Wide := TAKind(O) = taBigInt64;
+  if Cell.Wide then
+  begin
+    if not ToBigIntV(X, V) then Exit(False);
+    Cell.Expected := Int64(BigToU64(V));
+  end
+  else
+  begin
+    if not ToNumberV(X, D) then Exit(False);
+    Cell.Expected := LongInt(Cardinal(Bits32(D)));
+  end;
+  Result := True;
 end;
 
 { 25.4.13 Atomics.wait }
@@ -325,13 +387,12 @@ begin
   Buf := O^.Aux1;
   if not IsSharedBuffer(Buf) then Exit(ThrowTypeError('Atomics.wait requires a shared Int32Array'));
   if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
-  if not ToNumberV(Arg(Args, Argc, 3), D) then Exit(False);
+  if not WaitExpected(O, Arg(Args, Argc, 3), Cell) then Exit(False);
   if not ToNumberV(Arg(Args, Argc, 4), T) then Exit(False);
   if IsNaN(T) then T := Infinity else if T < 0 then T := 0;
   if AgentCannotSuspend then Exit(ThrowTypeError('Atomics.wait cannot be called in this agent'));
   O := ObjOf(Args[1]);
-  Cell.P := PLongInt(TAData(O) + (ByteIdx - O^.Pad));
-  Cell.Expected := LongInt(Cardinal(Bits32(D)));
+  Cell.P := TAData(O) + (ByteIdx - O^.Pad);
   R := SharedWait(SharedBlockOf(O^.Aux1), ByteIdx, @CellStillHolds, @Cell, T);
   case R of
     wrOk: Res := StrFromUnicode('ok');
@@ -378,13 +439,12 @@ begin
   if not ValidateIntTA(Arg(Args, Argc, 1), True, O) then Exit(False);
   if not IsSharedBuffer(O^.Aux1) then Exit(ThrowTypeError('Atomics.waitAsync requires a shared Int32Array'));
   if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
-  if not ToNumberV(Arg(Args, Argc, 3), D) then Exit(False);
+  if not WaitExpected(O, Arg(Args, Argc, 3), Cell) then Exit(False);
   if not ToNumberV(Arg(Args, Argc, 4), T) then Exit(False);
   if IsNaN(T) then T := Infinity else if T < 0 then T := 0;
   O := ObjOf(Args[1]);
-  Cell.P := PLongInt(TAData(O) + (ByteIdx - O^.Pad));
-  Cell.Expected := LongInt(Cardinal(Bits32(D)));
-  if Cell.P^ <> Cell.Expected then begin Res := ResultObject(False, StrFromUnicode('not-equal')); Exit(True); end;
+  Cell.P := TAData(O) + (ByteIdx - O^.Pad);
+  if CellValue(Cell) <> Cell.Expected then begin Res := ResultObject(False, StrFromUnicode('not-equal')); Exit(True); end;
   if T = 0 then begin Res := ResultObject(False, StrFromUnicode('timed-out')); Exit(True); end;
   Pr := NewPendingPromise;
   PushRoot(Pr);

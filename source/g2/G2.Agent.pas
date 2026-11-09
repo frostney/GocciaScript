@@ -211,7 +211,9 @@ begin
         PushRoot(Sab[0]);
         CbArgs[0] := RootAt(TempTop - 1);
         CbArgs[1] := MkNumber(Id);
-        if CallValue(BroadcastCallback, VUndefined, @CbArgs[0], 2, R) then RunMicrotasks;
+        { an async callback may wait (Atomics.waitAsync): the host loop settles its waiters }
+        if CallValue(BroadcastCallback, VUndefined, @CbArgs[0], 2, R) then
+          if RunMicrotasks then RunHostLoop;
         PopRoots(1);
       end;
     finally

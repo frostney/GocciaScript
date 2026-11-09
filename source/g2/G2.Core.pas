@@ -183,6 +183,9 @@ function MkPtr(P: Pointer): TValue; inline;
 function MkInt(I: Int32): TValue; inline;
 function IntOf(V: TValue): Int32; inline;
 function MkDouble(D: Double): TValue; inline;
+{ the result of + - * / on two Numbers: every boxed NaN is canonical, so a NaN result is either one of them
+  (propagated) or the x86 default NaN, the only one to fix }
+function MkArith(D: Double): TValue; inline;
 function DoubleOf(V: TValue): Double; inline;
 function MkNumber(D: Double): TValue; inline;
 { 6.1.6.1.3 Number::exponentiate }
@@ -330,6 +333,12 @@ function PtrOf(V: TValue): Pointer; inline; begin Result := Pointer(PtrUInt(V an
 function MkPtr(P: Pointer): TValue; inline; begin Result := TAG_PTR or QWord(PtrUInt(P)); end;
 function MkInt(I: Int32): TValue; inline; begin Result := TAG_INT or (QWord(Int64(I)) and $FFFFFFFF); end;
 function IntOf(V: TValue): Int32; inline; begin Result := Int32(UInt32(V)); end;
+function MkArith(D: Double): TValue; inline;
+begin
+  Result := PQWord(@D)^;
+  if Result = QWord($FFF8000000000000) then Result := CANON_NAN;
+end;
+
 function MkDouble(D: Double): TValue; inline;
 begin
   Result := PQWord(@D)^;
@@ -1377,20 +1386,39 @@ begin
   if IsObject(Proto) and (RootShapeCount < 65535) then ObjOf(Proto)^.Hdr.Extra := RootShapeCount;
 end;
 
+threadvar
+  LastPrimProto: TValue;
+  LastPrimShape: PShape;
+
 function RootShapeFor(Proto: TValue): PShape;
 var I: Integer; R: PRootShapeEntry;
 begin
   { prototypes are few; a linear scan over root shapes keyed by prototype (through a raw pointer: see
     ShapeLookup) }
   R := Pointer(RootShapes);
-  if IsObject(Proto) and (ObjOf(Proto)^.Hdr.Extra <> 0) then
+  if IsObject(Proto) then
   begin
-    I := ObjOf(Proto)^.Hdr.Extra - 1;
-    if (I < RootShapeCount) and (R[I].P = Proto) then Exit(R[I].S);
+    if ObjOf(Proto)^.Hdr.Extra <> 0 then
+    begin
+      I := ObjOf(Proto)^.Hdr.Extra - 1;
+      if (I < RootShapeCount) and (R[I].P = Proto) then Exit(R[I].S);
+    end
+    else if RootShapeCount < 65534 then
+      Exit(NewRootShape(Proto));   { never given one: its index would be in Extra }
+  end
+  else
+  begin
+    { null (Object.create(null), a class extending null) and the other primitives: the last one asked for }
+    if (Proto = LastPrimProto) and (LastPrimShape <> nil) then Exit(LastPrimShape);
   end;
   for I := 0 to RootShapeCount - 1 do
-    if R[I].P = Proto then Exit(R[I].S);
+    if R[I].P = Proto then
+    begin
+      if not IsObject(Proto) then begin LastPrimProto := Proto; LastPrimShape := R[I].S; end;
+      Exit(R[I].S);
+    end;
   Result := NewRootShape(Proto);
+  if not IsObject(Proto) then begin LastPrimProto := Proto; LastPrimShape := Result; end;
 end;
 
 procedure BuildHash(S: PShape); noinline;   { cold: inlined, its dynamic arrays put an exception frame on every ShapeLookup }

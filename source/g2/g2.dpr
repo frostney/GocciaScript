@@ -4,7 +4,7 @@ program g2;
 uses
   cthreads, Classes, SysUtils, Math,
   Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.Token,
-  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON;
+  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date;
 
 type
   TSampler = class(TThread)
@@ -466,6 +466,7 @@ begin
   InitBuiltins5;
   InitTemporal;
   InitJSON;
+  InitDate;
   { test262 hosts: $262agent (G2.Agent), and a main agent that may not block (flag CanBlockIsFalse) }
   if GetEnvironmentVariable('G2_AGENT') <> '' then InitAgentHost;
   AgentCannotSuspend := GetEnvironmentVariable('G2_CANNOT_BLOCK') <> '';

@@ -144,7 +144,7 @@ implementation
 
 uses
   Math, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, G2.Bytecode, G2.Compiler,
-  G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON;
+  G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date;
 
 const
   okHost = 30;
@@ -1399,6 +1399,7 @@ begin
   InitBuiltins5;
   InitTemporal;
   InitJSON;
+  InitDate;
   HostRootScanner := HostScanRoots;
   GCWeakHook := HostWeakHook;
   ObjMap := TDictionary<Pointer, PWeak>.Create;

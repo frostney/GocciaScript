@@ -202,6 +202,8 @@ type
 function ToPrimitiveV(V: TValue; HintString: Boolean; var Res: TValue): Boolean;
 { 7.1.1 ToPrimitive with its preferred type: binary + and == pass phDefault }
 function ToPrimitiveHint(V: TValue; Hint: TPrimHint; var Res: TValue): Boolean;
+{ 7.1.1.1 OrdinaryToPrimitive }
+function OrdinaryToPrimitive(V: TValue; StringFirst: Boolean; var Res: TValue): Boolean;
 threadvar
   { the key of Symbol.toPrimitive, set once the builtins created the symbol (nil before) }
   ToPrimitiveKey: PStr;
@@ -3875,7 +3877,8 @@ begin
             if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
             else R[A] := MkDouble(Sum);
           end
-          else if IsNumber(VA) and IsNumber(VB) then R[A] := MkDouble(NumOf(VA) + NumOf(VB))
+          else if (VA < DOUBLE_LIMIT) and (VB < DOUBLE_LIMIT) then R[A] := MkArith(PDouble(@VA)^ + PDouble(@VB)^)
+          else if IsNumber(VA) and IsNumber(VB) then R[A] := MkArith(NumOf(VA) + NumOf(VB))
           else goto LBail;
         end;
       opAddI:
@@ -3888,7 +3891,7 @@ begin
             if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
             else R[A] := MkDouble(Sum);
           end
-          else if VA < DOUBLE_LIMIT then R[A] := MkDouble(PDouble(@VA)^ + CI)
+          else if VA < DOUBLE_LIMIT then R[A] := MkArith(PDouble(@VA)^ + CI)
           else goto LBail;
         end;
       opSub, opMul:
@@ -3907,8 +3910,8 @@ begin
           end
           else if IsNumber(VA) and IsNumber(VB) then
           begin
-            if TOp(I and $FF) = opSub then R[A] := MkDouble(NumOf(VA) - NumOf(VB))
-            else R[A] := MkDouble(NumOf(VA) * NumOf(VB));
+            if TOp(I and $FF) = opSub then R[A] := MkArith(NumOf(VA) - NumOf(VB))
+            else R[A] := MkArith(NumOf(VA) * NumOf(VB));
           end
           else goto LBail;
         end;
