@@ -222,6 +222,11 @@ type
     WithKinds, WithDepths: array of Integer;
     WithCount, WithSerial: Integer;
     NextSloppyEval: Boolean;        { the next CompileFunction compiles a function with a non-strict direct eval }
+    { 13.3.9 an OptionalChain short-circuits as a whole: ChainLink is set while a chain node's object or callee is
+      compiled (that node is a link of the same chain), and a link's ?. jumps join ChainJumps, which the chain's
+      outermost node patches to give undefined }
+    ChainLink: Boolean;
+    ChainJumps: TJumpList;
     EvalDepth: array of Integer;    { goal 4: per caller binding, how many functions out of the caller it is }
     EvalVarEnv: UnicodeString;      { goal 4: the caller's eval variable environment binding ('' none) }
     EvalEnvNames: TStringList;      { goal 4: the var names the eval code adds to that environment }
@@ -357,6 +362,10 @@ type
     procedure CompileNew(E: TGocciaNewExpression; Dest: Integer);
     function CompileArgs(Args: TObjectList<TGocciaExpression>; Base: Integer; out Spread: Boolean): Integer;
     procedure CompileMember(E: TGocciaMemberExpression; Dest: Integer);
+    function ChainBegin(var Saved: TJumpList): Boolean;
+    procedure ChainEnd(IsLink: Boolean; var Saved: TJumpList; Dest: Integer);
+    procedure ChainObject(E: TGocciaExpression);
+    procedure ChainAdd(J: Integer);
     procedure CompileObject(E: TGocciaObjectExpression; Dest: Integer);
     procedure CompileArray(E: TGocciaArrayExpression; Dest: Integer);
     procedure CompileAssign(E: TGocciaExpression; Dest: Integer);
@@ -3325,23 +3334,19 @@ begin
 end;
 
 procedure TCompiler.CompilePrivateGet(E: TGocciaPrivateMemberExpression; Dest: Integer; ThisDest: Integer);
-var Save, O, K, J: Integer;
+var Save, O, K: Integer; IsLink: Boolean; SavedJ: TJumpList;
 begin
+  IsLink := ChainBegin(SavedJ);
   Save := FS.FreeReg;
   O := AllocReg;
+  ChainObject(E.ObjectExpr);
   ExprTo(E.ObjectExpr, O);
-  J := -1;
-  if E.Optional then J := EmitJ(opJNullish, O, 0);
+  ChainLink := False;
+  if E.Optional then ChainAdd(EmitJ(opJNullish, O, 0));
   K := AllocReg;
   LoadIdent(PrivKeyName(E.PrivateName), K);
   Emit(Ins(opGetPriv, Dest, O, K));
-  if J >= 0 then
-  begin
-    K := EmitJ(opJmp, 0, 0);
-    PatchHere(J);
-    Emit(Ins(opLoadUndef, Dest, 0, 0));
-    PatchHere(K);
-  end;
+  ChainEnd(IsLink, SavedJ, Dest);
   FreeTo(Save);
 end;
 
@@ -4002,11 +4007,25 @@ end;
 
 procedure TCompiler.CompileCall(E: TGocciaCallExpression; Dest: Integer);
 var Base, Argc, K: Integer; M: TGocciaMemberExpression; Spread: Boolean; J: Integer; NullJ: Integer; UndefThis: Boolean;
-  Reuse: Boolean; EvalHint, EvalDescConst: Integer; F: TFuncState;
+  Reuse: Boolean; EvalHint, EvalDescConst: Integer; F: TFuncState; Callee: TGocciaExpression; ParenChain: Boolean;
+  IsLink: Boolean; SavedJ: TJumpList;
 begin
+  IsLink := ChainBegin(SavedJ);
   UndefThis := False;
   EvalHint := 0;
   EvalDescConst := 0;
+  { (a?.b)(...): the parser closes the parenthesized chain in a one-element sequence; the call keeps its
+    reference (13.2.10.1 returns the reference) and so its this, but the parentheses end the chain: a nullish
+    base gives an undefined callee, which the call rejects }
+  Callee := E.Callee;
+  ParenChain := False;
+  if (Callee is TGocciaSequenceExpression) and (TGocciaSequenceExpression(Callee).Expressions.Count = 1) and
+     ((TGocciaSequenceExpression(Callee).Expressions[0] is TGocciaMemberExpression) or
+      (TGocciaSequenceExpression(Callee).Expressions[0] is TGocciaPrivateMemberExpression)) then
+  begin
+    Callee := TGocciaSequenceExpression(Callee).Expressions[0];
+    ParenChain := True;
+  end;
   { a destination that is the newest temporary can be the call's base: the result lands in place, without a
     move (no part of the call expression can read a temporary it did not allocate) }
   Reuse := (Dest >= 1) and (Dest = FS.FreeReg - 1) and not IsVarReg(Dest);
@@ -4021,9 +4040,9 @@ begin
     AllocRegs(2);  { callee, this }
   end;
   NullJ := -1;
-  if E.Callee is TGocciaMemberExpression then
+  if Callee is TGocciaMemberExpression then
   begin
-    M := TGocciaMemberExpression(E.Callee);
+    M := TGocciaMemberExpression(Callee);
     if M.ObjectExpr is TGocciaSuperExpression then
     begin
       LoadThis(Base + 1);
@@ -4032,7 +4051,9 @@ begin
     end
     else
     begin
+      if not ParenChain then ChainObject(M.ObjectExpr);
       ExprTo(M.ObjectExpr, Base + 1);
+      ChainLink := False;
       if M.Optional then NullJ := EmitJ(opJNullish, Base + 1, 0);
       if M.Computed then
       begin
@@ -4045,13 +4066,15 @@ begin
         Emit(Ins(opGetProp, Base, Base + 1, NewIC(M.PropertyName)));
     end;
   end
-  else if E.Callee is TGocciaPrivateMemberExpression then
+  else if Callee is TGocciaPrivateMemberExpression then
   begin
     { obj.#m(...): this is obj }
-    ExprTo(TGocciaPrivateMemberExpression(E.Callee).ObjectExpr, Base + 1);
-    if TGocciaPrivateMemberExpression(E.Callee).Optional then NullJ := EmitJ(opJNullish, Base + 1, 0);
+    if not ParenChain then ChainObject(TGocciaPrivateMemberExpression(Callee).ObjectExpr);
+    ExprTo(TGocciaPrivateMemberExpression(Callee).ObjectExpr, Base + 1);
+    ChainLink := False;
+    if TGocciaPrivateMemberExpression(Callee).Optional then NullJ := EmitJ(opJNullish, Base + 1, 0);
     K := AllocReg;
-    LoadIdent(PrivKeyName(TGocciaPrivateMemberExpression(E.Callee).PrivateName), K);
+    LoadIdent(PrivKeyName(TGocciaPrivateMemberExpression(Callee).PrivateName), K);
     Emit(Ins(opGetPriv, Base, Base + 1, K));
     FreeTo(Base + 2);
   end
@@ -4071,6 +4094,7 @@ begin
     Emit(Ins(opSuperCallUp, Base, Argc, ResolveUpval(FS, '%this')));
     if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
     if Reuse then FreeTo(Base + 1) else FreeTo(Base);
+    ChainEnd(IsLink, SavedJ, Base);
     Exit;
   end
   else if E.Callee is TGocciaSuperExpression then
@@ -4082,6 +4106,7 @@ begin
     if Spread then Emit(Ins(opSuperCallV, Base, 0, 0)) else Emit(Ins(opSuperCall, Base, Argc, 0));
     if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
     if Reuse then FreeTo(Base + 1) else FreeTo(Base);
+    ChainEnd(IsLink, SavedJ, Base);
     Exit;
   end
   else if (E.Callee is TGocciaIdentifierExpression) and (WithCount > 0) and
@@ -4093,8 +4118,24 @@ begin
   end
   else
   begin
+    ChainObject(E.Callee);
     ExprTo(E.Callee, Base);
+    ChainLink := False;
     UndefThis := True;   { the call sets this to undefined (bit 40) }
+  end;
+  if ParenChain and (NullJ >= 0) then
+  begin
+    J := EmitJ(opJmp, 0, 0);
+    PatchHere(NullJ);
+    Emit(Ins(opLoadUndef, Base, 0, 0));
+    Emit(Ins(opLoadUndef, Base + 1, 0, 0));
+    PatchHere(J);
+    NullJ := -1;
+  end
+  else if NullJ >= 0 then
+  begin
+    ChainAdd(NullJ);
+    NullJ := -1;
   end;
   { a direct eval: eval named by an identifier that resolves to no local binding (a with object or an eval
     environment may hold it: the call is direct when the value is %eval%, 13.3.6.1 step 6) }
@@ -4108,12 +4149,7 @@ begin
     { in function code the eval code gets the call site's bindings }
     if FS.Parent <> nil then EvalDescConst := AtomConst(BuildEvalDesc) + 1;
   end;
-  if E.Optional then
-  begin
-    J := EmitJ(opJNullish, Base, 0);
-    if NullJ < 0 then NullJ := J
-    else begin PatchHere(J); end;
-  end;
+  if E.Optional then ChainAdd(EmitJ(opJNullish, Base, 0));
   Argc := CompileArgs(E.Arguments, Base + 2, Spread);
   if EvalHint > 0 then
   begin
@@ -4122,13 +4158,7 @@ begin
   end;
   if Spread then Emit(Ins(opCallV, Base, 0, 0) or (QWord(Ord(UndefThis)) shl 40))
   else Emit(Ins(opCall, Base, Argc, 0) or (QWord(Ord(UndefThis)) shl 40));
-  if NullJ >= 0 then
-  begin
-    J := EmitJ(opJmp, 0, 0);
-    PatchHere(NullJ);
-    Emit(Ins(opLoadUndef, Base, 0, 0));
-    PatchHere(J);
-  end;
+  ChainEnd(IsLink, SavedJ, Base);
   if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
   if Reuse then FreeTo(Base + 1) else FreeTo(Base);
 end;
@@ -4270,23 +4300,63 @@ begin
   FreeTo(Save);
 end;
 
+{ a chain node starts: IsLink (the result) when it continues an enclosing node's chain, else it is the outermost
+  and gets a fresh jump list (the enclosing one saved) }
+function TCompiler.ChainBegin(var Saved: TJumpList): Boolean;
+begin
+  Result := ChainLink;
+  ChainLink := False;
+  if not Result then
+  begin
+    Saved := ChainJumps;
+    SetLength(ChainJumps, 0);
+  end;
+end;
+
+{ the outermost node of a chain: its short-circuits land here and give Dest undefined }
+procedure TCompiler.ChainEnd(IsLink: Boolean; var Saved: TJumpList; Dest: Integer);
+var J, I: Integer;
+begin
+  if IsLink then Exit;
+  if Length(ChainJumps) > 0 then
+  begin
+    J := EmitJ(opJmp, 0, 0);
+    for I := 0 to High(ChainJumps) do PatchHere(ChainJumps[I]);
+    Emit(Ins(opLoadUndef, Dest, 0, 0));
+    PatchHere(J);
+  end;
+  ChainJumps := Saved;
+end;
+
+{ the object or callee E of a chain node is a link of its chain when it is a member, call or private member
+  expression (a parenthesized one is a sequence: it ends its own chain) }
+procedure TCompiler.ChainObject(E: TGocciaExpression);
+begin
+  ChainLink := (E is TGocciaMemberExpression) or (E is TGocciaCallExpression) or (E is TGocciaPrivateMemberExpression);
+end;
+
+procedure TCompiler.ChainAdd(J: Integer);
+begin
+  SetLength(ChainJumps, Length(ChainJumps) + 1);
+  ChainJumps[High(ChainJumps)] := J;
+end;
+
 procedure TCompiler.CompileMember(E: TGocciaMemberExpression; Dest: Integer);
-var Save, O, K, J: Integer;
+var Save, O, K: Integer; IsLink: Boolean; SavedJ: TJumpList;
 begin
   if E.ObjectExpr is TGocciaSuperExpression then
   begin
+    ChainLink := False;
     if E.Computed then CompileSuperMember('', E.PropertyExpression, Dest)
     else CompileSuperMember(E.PropertyName, nil, Dest);
     Exit;
   end;
+  IsLink := ChainBegin(SavedJ);
   Save := FS.FreeReg;
+  ChainObject(E.ObjectExpr);
   O := ExprAny(E.ObjectExpr);
-  J := -1;
-  if E.Optional then
-  begin
-    if O <> Dest then begin Emit(Ins(opMov, Dest, O, 0)); O := Dest; end;
-    J := EmitJ(opJNullish, O, 0);
-  end;
+  ChainLink := False;
+  if E.Optional then ChainAdd(EmitJ(opJNullish, O, 0));
   if E.Computed then
   begin
     K := ExprAny(E.PropertyExpression);
@@ -4296,13 +4366,7 @@ begin
     Emit(Ins(opGetLength, Dest, O, NewIC('length')))
   else
     Emit(Ins(opGetProp, Dest, O, NewIC(E.PropertyName)));
-  if J >= 0 then
-  begin
-    K := EmitJ(opJmp, 0, 0);
-    PatchHere(J);
-    Emit(Ins(opLoadUndef, Dest, 0, 0));
-    PatchHere(K);
-  end;
+  ChainEnd(IsLink, SavedJ, Dest);
   FreeTo(Save);
 end;
 
