@@ -446,6 +446,16 @@
   for (var bi = 0; bi < 64; bi++) B64VAL[B64.charCodeAt(bi)] = bi;
   var SyntaxErr = SyntaxError;
   // 23.3.3.1 ValidateUint8Array, ValidateTypedArrayBounds (a detached buffer)
+  // IsImmutableBuffer of a typed array's buffer (the immutable ArrayBuffer proposal), read through the intrinsic
+  // getters (a SharedArrayBuffer has no immutable getter: false)
+  var abImmutableDesc = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "immutable");
+  var abImmutableGet = abImmutableDesc && abImmutableDesc.get;
+  var taBufferGet = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype), "buffer").get;
+  function viewImmutable(ta) {
+    if (!abImmutableGet) return false;
+    var b = apply(taBufferGet, ta, []);
+    try { return apply(abImmutableGet, b, []); } catch (e) { return false; }
+  }
   function validateU8(ta) {
     if (apply(taTag, ta, []) !== "Uint8Array") throw new TypeErr("not a Uint8Array");
   }
@@ -582,6 +592,7 @@
     setFromBase64(string, options) {
       var into = this;
       validateU8(into);
+      if (viewImmutable(into)) throw new TypeErr("setFromBase64 called on a view of an immutable ArrayBuffer");
       if (typeof string !== "string") throw new TypeErr("setFromBase64 requires a string");
       var opts = optionsObject(options);
       var alphabet = alphabetOf(opts), lch = lastChunkOf(opts);
@@ -594,6 +605,7 @@
     setFromHex(string) {
       var into = this;
       validateU8(into);
+      if (viewImmutable(into)) throw new TypeErr("setFromHex called on a view of an immutable ArrayBuffer");
       if (typeof string !== "string") throw new TypeErr("setFromHex requires a string");
       var byteLength = boundedLength(into);
       var r = fromHex(string, byteLength);

@@ -24,7 +24,7 @@
     var e = new Err();
     var p = new.target === undefined ? SEP : new.target.prototype;
     setProto(e, isObject(p) ? p : markIntrinsic(SEP, new.target));
-    if (message !== undefined) def(e, "message", Str(message));
+    if (message !== undefined) def(e, "message", `${message}`);   // ToString: a Symbol is a TypeError
     def(e, "error", error);
     def(e, "suppressed", suppressed);
     return e;
