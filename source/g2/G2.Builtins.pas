@@ -2004,6 +2004,23 @@ end;
 
 { ---------------- Math ---------------- }
 
+{$linklib m}
+{ the C library's math functions: correctly rounded or nearly so, with IEEE 754's signed zeros and infinities
+  (FPC's Math unit is neither) }
+function c_sin(X: Double): Double; cdecl; external 'm' name 'sin';
+function c_cos(X: Double): Double; cdecl; external 'm' name 'cos';
+function c_tan(X: Double): Double; cdecl; external 'm' name 'tan';
+function c_asin(X: Double): Double; cdecl; external 'm' name 'asin';
+function c_acos(X: Double): Double; cdecl; external 'm' name 'acos';
+function c_atan(X: Double): Double; cdecl; external 'm' name 'atan';
+function c_atan2(Y, X: Double): Double; cdecl; external 'm' name 'atan2';
+function c_exp(X: Double): Double; cdecl; external 'm' name 'exp';
+function c_log(X: Double): Double; cdecl; external 'm' name 'log';
+function c_log2(X: Double): Double; cdecl; external 'm' name 'log2';
+function c_log10(X: Double): Double; cdecl; external 'm' name 'log10';
+function c_cbrt(X: Double): Double; cdecl; external 'm' name 'cbrt';
+function c_hypot(X, Y: Double): Double; cdecl; external 'm' name 'hypot';
+
 function Math1(Args: TArgs; Argc: Integer; var Res: TValue; F: Integer): Boolean;
 var D: Double;
 begin
@@ -2014,19 +2031,19 @@ begin
     2: D := DCeil(D);
     3: D := DRound(D);
     4: D := Sqrt(D);
-    5: D := Sin(D);
-    6: D := Cos(D);
-    7: D := Tan(D);
-    8: D := ArcTan(D);
-    9: D := Exp(D);
-    10: if D > 0 then D := Ln(D) else if D = 0 then D := NegInfinity else D := NaN;
+    5: D := c_sin(D);
+    6: D := c_cos(D);
+    7: D := c_tan(D);
+    8: D := c_atan(D);
+    9: D := c_exp(D);
+    10: D := c_log(D);
     11: if not (IsNaN(D) or IsInfinite(D)) then D := Int(D);
     12: if D > 0 then D := 1 else if D < 0 then D := -1;
-    13: D := ArcSin(D);
-    14: D := ArcCos(D);
-    15: if D > 0 then D := Log2(D) else D := NaN;
-    16: if D > 0 then D := Log10(D) else D := NaN;
-    17: D := Power(Abs(D), 1 / 3) * Sign(D);
+    13: D := c_asin(D);
+    14: D := c_acos(D);
+    15: D := c_log2(D);
+    16: D := c_log10(D);
+    17: D := c_cbrt(D);
   end;
   Res := MkNumber(D);
   Result := True;
@@ -2079,7 +2096,12 @@ begin
     if not NumArg(Args, Argc, I, D) then Exit(False);
     if IsNaN(D) then R := NaN
     else if not IsNaN(R) then
-      if IsMax then begin if D > R then R := D; end else if D < R then R := D;
+      if IsMax then
+      begin
+        { +0 is larger than -0 }
+        if (D > R) or ((D = 0) and (R = 0) and (PQWord(@R)^ <> 0)) then R := D;
+      end
+      else if (D < R) or ((D = 0) and (R = 0) and (PQWord(@D)^ <> 0)) then R := D;
   end;
   Res := MkNumber(R);
   Result := True;
@@ -2101,22 +2123,40 @@ var A, B: Double;
 begin
   if not NumArg(Args, Argc, 1, A) then Exit(False);
   if not NumArg(Args, Argc, 2, B) then Exit(False);
-  Res := MkNumber(ArcTan2(A, B));
+  Res := MkNumber(c_atan2(A, B));
   Result := True;
 end;
 
+{ 21.3.2.18 Math.hypot: every argument coerced first; an infinity wins over NaN; scaled by the largest magnitude }
 function M_Hypot(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var I: Integer; D, S: Double;
+var I: Integer; D, S, M: Double; Vals: array of Double; Inf, NaNSeen: Boolean;
 begin
-  S := 0;
+  SetLength(Vals, Argc);
+  Inf := False; NaNSeen := False; M := 0;
   for I := 1 to Argc do
   begin
     if not NumArg(Args, Argc, I, D) then Exit(False);
-    S := S + D * D;
+    Vals[I - 1] := D;
+    if IsInfinite(D) then Inf := True
+    else if IsNaN(D) then NaNSeen := True
+    else if Abs(D) > M then M := Abs(D);
   end;
-  Res := MkNumber(Sqrt(S));
+  if Inf then begin Res := MkDouble(Infinity); Exit(True); end;
+  if NaNSeen then begin Res := MkDouble(NaN); Exit(True); end;
+  if M = 0 then begin Res := MkInt(0); Exit(True); end;
+  if Argc = 2 then begin Res := MkNumber(c_hypot(Vals[0], Vals[1])); Exit(True); end;
+  S := 0;
+  for I := 0 to Argc - 1 do S := S + Sqr(Vals[I] / M);
+  Res := MkNumber(Sqrt(S) * M);
   Result := True;
 end;
+
+const
+  MathPI: Double = 3.141592653589793;
+  MathE: Double = 2.718281828459045;
+  MathLN2: Double = 0.6931471805599453;
+  MathLN10: Double = 2.302585092994046;
+  MathSQRT2: Double = 1.4142135623730951;
 
 var
   RngState: QWord = 88172645463325252;
@@ -3275,11 +3315,12 @@ begin
   N(MathObj, 'trunc', M_Trunc, 1); N(MathObj, 'sign', M_Sign, 1); N(MathObj, 'max', M_Max, 2);
   N(MathObj, 'min', M_Min, 2); N(MathObj, 'pow', M_Pow, 2); N(MathObj, 'atan2', M_Atan2, 2);
   N(MathObj, 'hypot', M_Hypot, 2); N(MathObj, 'random', M_Random, 0);
-  DefineHidden(MathObj, 'PI', MkDouble(Pi));
-  DefineHidden(MathObj, 'E', MkDouble(Exp(1)));
-  DefineHidden(MathObj, 'LN2', MkDouble(Ln(2)));
-  DefineHidden(MathObj, 'LN10', MkDouble(Ln(10)));
-  DefineHidden(MathObj, 'SQRT2', MkDouble(Sqrt(2)));
+  { 21.3.1: the value properties are not writable, enumerable or configurable }
+  DefineOwn(MathObj, AtomOf('PI'), MkDouble(MathPI), 0);
+  DefineOwn(MathObj, AtomOf('E'), MkDouble(MathE), 0);
+  DefineOwn(MathObj, AtomOf('LN2'), MkDouble(MathLN2), 0);
+  DefineOwn(MathObj, AtomOf('LN10'), MkDouble(MathLN10), 0);
+  DefineOwn(MathObj, AtomOf('SQRT2'), MkDouble(MathSQRT2), 0);
 
   { JSON, console, performance, Date }
   JSONObj := NewProtoObject(ObjectProto);

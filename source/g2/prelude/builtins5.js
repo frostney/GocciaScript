@@ -870,4 +870,75 @@
   def(String, "fromCodePoint", stringStatics.fromCodePoint);
   def(String, "raw", stringStatics.raw);
 
+  // ---- 21.3.2.34 Math.sumPrecise ( items ): the exact sum rounded once (Shewchuk's partials, the 2^1024 overflow
+  // counted apart, then Python fsum's half-even correction) ----
+  var abs = Math.abs, MAX_DOUBLE = 1.7976931348623157e308, PENULTIMATE_DOUBLE = 1.7976931348623155e308;
+  var MAX_ULP = MAX_DOUBLE - PENULTIMATE_DOUBLE, TWO_1023 = 8.98846567431158e307;
+  var mathStatics = {
+    sumPrecise(items) {
+      if (items === undefined || items === null) throw new TypeErr("Math.sumPrecise called on null or undefined");
+      var partials = [], overflow = 0, state = 0;   // 0 minus zero, 1 finite, 2 +Infinity, 3 -Infinity, 4 NaN
+      var hi, lo, x, y, t, i, used;
+      for (var value of items) {
+        if (typeof value !== "number") throw new TypeErr("Math.sumPrecise: an item is not a number");
+        if (state === 4) continue;
+        if (value !== value) state = 4;
+        else if (value === Infinity) state = state === 3 ? 4 : 2;
+        else if (value === -Infinity) state = state === 2 ? 4 : 3;
+        else if ((value !== 0 || 1 / value > 0) && (state === 0 || state === 1)) {
+          state = 1;
+          x = value; used = 0;
+          for (i = 0; i < partials.length; i++) {
+            y = partials[i];
+            if (abs(x) < abs(y)) { t = x; x = y; y = t; }
+            hi = x + y; lo = y - (hi - x);
+            if (hi === Infinity || hi === -Infinity) {
+              var sign = hi === Infinity ? 1 : -1;
+              overflow += sign;
+              x = (x - sign * TWO_1023) - sign * TWO_1023;
+              if (abs(x) < abs(y)) { t = x; x = y; y = t; }
+              hi = x + y; lo = y - (hi - x);
+            }
+            if (lo !== 0) partials[used++] = lo;
+            x = hi;
+          }
+          partials.length = used;
+          if (x !== 0) partials.push(x);
+        }
+      }
+      if (state === 4) return NaN;
+      if (state === 2) return Infinity;
+      if (state === 3) return -Infinity;
+      if (state === 0) return -0;
+      var n = partials.length - 1;
+      hi = 0; lo = 0;
+      if (overflow !== 0) {
+        var next = n >= 0 ? partials[n] : 0;
+        n--;
+        if (abs(overflow) > 1 || (overflow > 0 && next > 0) || (overflow < 0 && next < 0))
+          return overflow > 0 ? Infinity : -Infinity;
+        x = overflow * TWO_1023; y = next / 2;
+        hi = x + y; lo = y - (hi - x);
+        lo *= 2;
+        if (abs(2 * hi) === Infinity) {
+          if (hi > 0) return hi === TWO_1023 && lo === -(MAX_ULP / 2) && n >= 0 && partials[n] < 0 ? MAX_DOUBLE : Infinity;
+          return hi === -TWO_1023 && lo === MAX_ULP / 2 && n >= 0 && partials[n] > 0 ? -MAX_DOUBLE : -Infinity;
+        }
+        if (lo !== 0) { partials[n + 1] = lo; n++; lo = 0; }
+        hi *= 2;
+      }
+      while (n >= 0) {
+        x = hi; y = partials[n]; n--;
+        hi = x + y; lo = y - (hi - x);
+        if (lo !== 0) break;
+      }
+      if (n >= 0 && ((lo < 0 && partials[n] < 0) || (lo > 0 && partials[n] > 0))) {
+        y = lo * 2; x = hi + y;
+        if (y === x - hi) hi = x;
+      }
+      return hi;
+    }
+  };
+  def(Math, "sumPrecise", mathStatics.sumPrecise);
+
 })

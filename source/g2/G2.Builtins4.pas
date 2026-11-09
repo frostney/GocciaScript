@@ -324,19 +324,30 @@ end;
 
 { ---------------- Math ---------------- }
 
+{$linklib m}
+function c_log1p(X: Double): Double; cdecl; external 'm' name 'log1p';
+function c_expm1(X: Double): Double; cdecl; external 'm' name 'expm1';
+function c_cosh(X: Double): Double; cdecl; external 'm' name 'cosh';
+function c_sinh(X: Double): Double; cdecl; external 'm' name 'sinh';
+function c_tanh(X: Double): Double; cdecl; external 'm' name 'tanh';
+function c_acosh(X: Double): Double; cdecl; external 'm' name 'acosh';
+function c_asinh(X: Double): Double; cdecl; external 'm' name 'asinh';
+function c_atanh(X: Double): Double; cdecl; external 'm' name 'atanh';
+
+{ the C library's functions (IEEE 754 signed zeros and infinities, nearly correctly rounded) }
 function MathFn(Args: TArgs; Argc: Integer; var Res: TValue; Which: Integer): Boolean;
 var X: Double;
 begin
   if not NumArg(Args, Argc, 1, X) then Exit(False);
   case Which of
-    0: if Abs(X) < 1e-5 then X := X - X * X / 2 + X * X * X / 3 else X := Ln(1 + X);   { log1p }
-    1: if Abs(X) < 1e-5 then X := X + X * X / 2 + X * X * X / 6 else X := Exp(X) - 1;   { expm1 }
-    2: X := Math.Cosh(X);
-    3: if X = 0 then X := X else X := Math.Sinh(X);
-    4: if X = 0 then X := X else if X > 20 then X := 1 else if X < -20 then X := -1 else X := Math.Tanh(X);
-    5: X := Math.ArcCosh(X);
-    6: if X = 0 then X := X else X := Math.ArcSinh(X);
-    7: if X = 0 then X := X else X := Math.ArcTanh(X);
+    0: X := c_log1p(X);
+    1: X := c_expm1(X);
+    2: X := c_cosh(X);
+    3: X := c_sinh(X);
+    4: X := c_tanh(X);
+    5: X := c_acosh(X);
+    6: X := c_asinh(X);
+    7: X := c_atanh(X);
     8: X := Single(X);   { fround }
     9: X := Ln(X) / Ln(2);   { fallback log2 }
   end;
