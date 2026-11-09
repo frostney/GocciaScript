@@ -2526,13 +2526,15 @@ begin
     FV := RootAt(TempTop - 1);
     PopRoots(1);
     StackTop := Max(StackTop, Base + T^.MaxRegs);
-    for I := Min(Argc, NP) + 1 to T^.MaxRegs - 1 do R[I] := VUndefined;
+    I := Min(Argc, NP) + 1;
+    if I < T^.MaxRegs then FillQWord(R[I], T^.MaxRegs - I, VUndefined);
     if T^.RestReg >= 0 then R[T^.RestReg] := Tmp;
     if T^.ArgsReg >= 0 then R[T^.ArgsReg] := ArgsObj;
   end
   else
   begin
-    for I := Min(Argc, NP) + 1 to T^.MaxRegs - 1 do R[I] := VUndefined;
+    I := Min(Argc, NP) + 1;
+    if I < T^.MaxRegs then FillQWord(R[I], T^.MaxRegs - I, VUndefined);
   end;
   if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;
   Fr := @Frames[FrameTop];
@@ -3019,13 +3021,14 @@ var Fr: PFrame; T: PFuncTemplate; State: PValueArray; G: PObj; I: Integer; P: TV
 begin
   Fr := @Frames[FrameTop - 1];
   T := Fr^.Tpl;
-  State := NewValueArray(T^.MaxRegs + 3);
-  State^.Len := T^.MaxRegs + 3;
+  State := NewValueArray(T^.MaxRegs + 4);
+  State^.Len := T^.MaxRegs + 4;
   Fr := @Frames[FrameTop - 1];
-  for I := 0 to T^.MaxRegs - 1 do State^.Data[I] := VStack[Fr^.Base + I];
+  Move(VStack[Fr^.Base], State^.Data[0], T^.MaxRegs * SizeOf(TValue));
   State^.Data[T^.MaxRegs] := MkInt(-1);
-  State^.Data[T^.MaxRegs + 1] := MkInt(0);
-  State^.Data[T^.MaxRegs + 2] := MkInt(0);   { no open upvalues: nothing ran yet }
+  State^.Data[T^.MaxRegs + 1] := MkInt(T^.MaxRegs);
+  State^.Data[T^.MaxRegs + 2] := MkInt(0);
+  State^.Data[T^.MaxRegs + 3] := MkInt(0);   { no open upvalues: nothing ran yet }
   PushRoot(MkPtr(State));
   { 27.5.3.1 OrdinaryCreateFromConstructor(functionObject, "%GeneratorPrototype%"): the function's prototype
     property (a data property: generator functions' is not configurable) }
@@ -3048,7 +3051,8 @@ end;
 
 { Mode: 0 next, 1 throw, 2 return }
 function GeneratorResume(Gen: TValue; Arg: TValue; Mode: Integer; var Value: TValue; var Done: Boolean): Boolean;
-var G: PObj; State: PValueArray; T: PFuncTemplate; Base, I, NH, NU, J, ResumeReg, SavedTop: Integer; Fr: PFrame; U: PUpval;
+var G: PObj; State: PValueArray; T: PFuncTemplate; Base, I, NH, NU, J, ResumeReg, SavedTop, NLive: Integer; Fr: PFrame;
+  U: PUpval;
   Res: TValue; Ok: Boolean;
 begin
   if not IsObject(Gen) or not (ObjOf(Gen)^.OKind in [okGenerator, okAsyncGen]) then Exit(ThrowTypeError('next method called on incompatible receiver'));
@@ -3077,7 +3081,11 @@ begin
   Base := StackTop;
   if (Base + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
     Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-  for I := 0 to T^.MaxRegs - 1 do VStack[Base + I] := State^.Data[I];
+  { the registers live at the suspension; the others read as a fresh frame's (and the collector, which scans
+    the stack, sees no stale value in them) }
+  NLive := IntOf(State^.Data[T^.MaxRegs + 1]);
+  Move(State^.Data[0], VStack[Base], NLive * SizeOf(TValue));
+  if NLive < T^.MaxRegs then FillQWord(VStack[Base + NLive], T^.MaxRegs - NLive, VUndefined);
   ResumeReg := IntOf(State^.Data[T^.MaxRegs]);
   if ResumeReg <= -2 then
   begin
@@ -3097,23 +3105,23 @@ begin
   Fr^.Argc := 0;
   Fr^.Kind := 3;
   Inc(FrameTop);
-  NH := IntOf(State^.Data[T^.MaxRegs + 1]);
+  NH := IntOf(State^.Data[T^.MaxRegs + 2]);
   for I := 0 to NH - 1 do
   begin
     if HandlerTop >= Length(Handlers) then SetLength(Handlers, HandlerTop * 2 + 64);
     Handlers[HandlerTop].Frame := FrameTop - 1;
-    Handlers[HandlerTop].PC := IntOf(State^.Data[T^.MaxRegs + 2 + I * 2]) and $0FFFFFFF;
-    Handlers[HandlerTop].Kind := IntOf(State^.Data[T^.MaxRegs + 2 + I * 2]) shr 28;
-    Handlers[HandlerTop].ExcIdx := Base + IntOf(State^.Data[T^.MaxRegs + 3 + I * 2]);
+    Handlers[HandlerTop].PC := IntOf(State^.Data[T^.MaxRegs + 3 + I * 2]) and $0FFFFFFF;
+    Handlers[HandlerTop].Kind := IntOf(State^.Data[T^.MaxRegs + 3 + I * 2]) shr 28;
+    Handlers[HandlerTop].ExcIdx := Base + IntOf(State^.Data[T^.MaxRegs + 4 + I * 2]);
     Inc(HandlerTop);
   end;
   { reopen the frame's upvalues on the new registers; a closure may have changed a variable meanwhile: its cell
     has the current value }
-  NU := IntOf(State^.Data[T^.MaxRegs + 2 + NH * 2]);
+  NU := IntOf(State^.Data[T^.MaxRegs + 3 + NH * 2]);
   for I := 0 to NU - 1 do
   begin
-    U := PUpval(PtrOf(State^.Data[T^.MaxRegs + 3 + NH * 2 + I * 2]));
-    J := IntOf(State^.Data[T^.MaxRegs + 4 + NH * 2 + I * 2]);
+    U := PUpval(PtrOf(State^.Data[T^.MaxRegs + 4 + NH * 2 + I * 2]));
+    J := IntOf(State^.Data[T^.MaxRegs + 5 + NH * 2 + I * 2]);
     if U^.StackIndex < 0 then
     begin
       VStack[Base + J] := U^.Value;
@@ -3292,40 +3300,58 @@ begin
   end;
 end;
 
-{ the running generator frame (the newest) suspends: its registers, the resume code (>= 0 a register for the
-  resumption value, <= -2 a yield* step's received value / mode registers) and its handlers go into its
-  generator object; it resumes at ResumePC }
-procedure SaveSuspension(Fr: PFrame; Tpl: PFuncTemplate; R: PValue; ResumeCode, ResumePC: Integer);
-var NP, NU, J, Off: Integer; O: PObj; E: PValueArray;
+{ the running generator frame (the newest) suspends: its live registers (Live, from the suspending instruction's C;
+  0 for all of them), the resume code (>= 0 a register for the resumption value, <= -2 a yield* step's received
+  value / mode registers) and its handlers go into its generator object; it resumes at ResumePC. The state array
+  holds the registers, then the resume code, the live register count, the handlers and the open upvalues. }
+procedure SaveSuspension(Fr: PFrame; Tpl: PFuncTemplate; R: PValue; ResumeCode, ResumePC, Live: Integer);
+var NP, NU, J, Off, N: Integer; O: PObj; E: PValueArray;
 begin
+  if (Live <= 0) or (Live > Tpl^.MaxRegs) then Live := Tpl^.MaxRegs;
   NP := 0;
-  while (HandlerTop - 1 - NP >= 0) and (Handlers[HandlerTop - 1 - NP].Frame = FrameTop - 1) do Inc(NP);
+  while (HandlerTop - 1 - NP >= 0) and (Handlers[HandlerTop - 1 - NP].Frame = FrameTop - 1) do
+  begin
+    if Handlers[HandlerTop - 1 - NP].ExcIdx - Fr^.Base >= Live then Live := Handlers[HandlerTop - 1 - NP].ExcIdx - Fr^.Base + 1;
+    Inc(NP);
+  end;
   { the frame's open upvalues (closures made in it): closed now, reopened on its registers when it resumes, so
     the closures and the frame keep sharing the variables }
   NU := 0;
   while (OpenCount - 1 - NU >= 0) and (PUpval(PtrOf(OpenUpvals[OpenCount - 1 - NU]))^.StackIndex >= Fr^.Base) do Inc(NU);
+  if ResumeCode >= Live then Live := ResumeCode + 1
+  else if (ResumeCode <= -2) and (-ResumeCode > Live) then Live := -ResumeCode;
+  if Live > Tpl^.MaxRegs then Live := Tpl^.MaxRegs;
+  N := Tpl^.MaxRegs + 4 + NP * 2 + NU * 2;
   O := ObjOf(Fr^.NewTarget);
   E := PValueArray(PtrOf(O^.Aux2));
-  if Integer(E^.Cap) < Tpl^.MaxRegs + 3 + NP * 2 + NU * 2 then
+  if Integer(E^.Cap) < N then
   begin
-    E := NewValueArray(Tpl^.MaxRegs + 3 + NP * 2 + NU * 2);
+    E := NewValueArray(N);
     O := ObjOf(Fr^.NewTarget);
     O^.Aux2 := MkPtr(E);
     WriteBarrier(@O^.Hdr, O^.Aux2);
   end;
-  E^.Len := Tpl^.MaxRegs + 3 + NP * 2 + NU * 2;
-  for J := 0 to Tpl^.MaxRegs - 1 do E^.Data[J] := R[J];
+  E^.Len := N;
+  Move(R^, E^.Data[0], Live * SizeOf(TValue));
   E^.Data[Tpl^.MaxRegs] := MkInt(ResumeCode);
-  E^.Data[Tpl^.MaxRegs + 1] := MkInt(NP);
+  E^.Data[Tpl^.MaxRegs + 1] := MkInt(Live);
+  E^.Data[Tpl^.MaxRegs + 2] := MkInt(NP);
   for J := 0 to NP - 1 do
   begin
-    E^.Data[Tpl^.MaxRegs + 2 + J * 2] := MkInt(Handlers[HandlerTop - NP + J].PC or (Handlers[HandlerTop - NP + J].Kind shl 28));
-    E^.Data[Tpl^.MaxRegs + 3 + J * 2] := MkInt(Handlers[HandlerTop - NP + J].ExcIdx - Fr^.Base);
+    E^.Data[Tpl^.MaxRegs + 3 + J * 2] := MkInt(Handlers[HandlerTop - NP + J].PC or (Handlers[HandlerTop - NP + J].Kind shl 28));
+    E^.Data[Tpl^.MaxRegs + 4 + J * 2] := MkInt(Handlers[HandlerTop - NP + J].ExcIdx - Fr^.Base);
   end;
-  Off := Tpl^.MaxRegs + 2 + NP * 2;
+  Off := Tpl^.MaxRegs + 3 + NP * 2;
   E^.Data[Off] := MkInt(NU);
   for J := 0 to NU - 1 do
   begin
+    { a captured variable outside the live registers would not come back: keep its register too }
+    if PUpval(PtrOf(OpenUpvals[OpenCount - NU + J]))^.StackIndex - Fr^.Base >= Live then
+    begin
+      Move(R[Live], E^.Data[Live], (PUpval(PtrOf(OpenUpvals[OpenCount - NU + J]))^.StackIndex - Fr^.Base + 1 - Live) * SizeOf(TValue));
+      Live := PUpval(PtrOf(OpenUpvals[OpenCount - NU + J]))^.StackIndex - Fr^.Base + 1;
+      E^.Data[Tpl^.MaxRegs + 1] := MkInt(Live);
+    end;
     E^.Data[Off + 1 + J * 2] := OpenUpvals[OpenCount - NU + J];
     E^.Data[Off + 2 + J * 2] := MkInt(PUpval(PtrOf(OpenUpvals[OpenCount - NU + J]))^.StackIndex - Fr^.Base);
   end;
@@ -3339,10 +3365,10 @@ begin
 end;
 
 { SaveSuspension can collect (it may grow the state array): V, the value the suspension hands out, stays rooted }
-procedure SuspendKeep(Fr: PFrame; Tpl: PFuncTemplate; R: PValue; ResumeCode, ResumePC: Integer; var V: TValue);
+procedure SuspendKeep(Fr: PFrame; Tpl: PFuncTemplate; R: PValue; ResumeCode, ResumePC, Live: Integer; var V: TValue);
 begin
   PushRoot(V);
-  SaveSuspension(Fr, Tpl, R, ResumeCode, ResumePC);
+  SaveSuspension(Fr, Tpl, R, ResumeCode, ResumePC, Live);
   V := RootAt(TempTop - 1);
   PopRoots(1);
 end;
@@ -4823,7 +4849,7 @@ LReload:
             goto LThrow;
           end;
           V := R[B + 2];
-          SuspendKeep(Fr, Tpl, R, -(B + 2) - 2, PC - 1, V);   { the step runs again }
+          SuspendKeep(Fr, Tpl, R, -(B + 2) - 2, PC - 1, Integer(Code[PC - 1] shr 40), V);   { the step runs again }
           GenYieldRaw := True;
           SuspendedByAwait := False;
           Res := V;
@@ -4982,7 +5008,7 @@ LReload:
                   end;
                 end;
                 { await VA, then run again }
-                SuspendKeep(Fr, Tpl, R, B + 2, PC - 1, VA);
+                SuspendKeep(Fr, Tpl, R, B + 2, PC - 1, Integer(Code[PC - 1] shr 40), VA);
                 SuspendedByAwait := True;
                 GenYieldRaw := False;
                 Res := VA;
@@ -4999,7 +5025,7 @@ LReload:
                   if J = 3 then
                   begin
                     R[B + 4] := MkInt(5);
-                    SuspendKeep(Fr, Tpl, R, B + 2, PC - 1, V);
+                    SuspendKeep(Fr, Tpl, R, B + 2, PC - 1, Integer(Code[PC - 1] shr 40), V);
                     SuspendedByAwait := True;
                     GenYieldRaw := False;
                     Res := V;
@@ -5011,7 +5037,7 @@ LReload:
                 end;
                 if not GetV(R[B + 2], AtomValue, V) then begin R[B + 4] := MkInt(0); goto LThrow; end;
                 R[B + 4] := MkInt(0);
-                SuspendKeep(Fr, Tpl, R, -(B + 2) - 2, PC - 1, V);
+                SuspendKeep(Fr, Tpl, R, -(B + 2) - 2, PC - 1, Integer(Code[PC - 1] shr 40), V);
                 SuspendedByAwait := False;
                 GenYieldRaw := False;
                 Res := V;
@@ -5102,7 +5128,7 @@ LReload:
           end;
           { SaveSuspension may grow the state array (a collection): the value is read back from a root }
           PushRoot(R[(I shr 24) and $FFFF]);
-          SaveSuspension(Fr, Tpl, R, A, PC);
+          SaveSuspension(Fr, Tpl, R, A, PC, Integer(Code[PC - 1] shr 40));
           Res := RootAt(TempTop - 1);
           PopRoots(1);
           Exit(True);
@@ -5116,7 +5142,7 @@ LReload:
           if not IsObject(V) then
             if Tpl^.IsAsync then V := AsyncGeneratorProto else V := GeneratorProto;
           PushRoot(V);
-          E := NewValueArray(Tpl^.MaxRegs + 3);
+          E := NewValueArray(Tpl^.MaxRegs + 4);
           PushRoot(MkPtr(E));
           O := NewObject(RootShapeFor(RootAt(TempTop - 2)), 0, okGenerator);
           O^.Aux1 := Fr^.Closure;
@@ -5124,7 +5150,7 @@ LReload:
           O^.OFlags := 0;
           PopRoots(2);
           Fr^.NewTarget := MkPtr(O);
-          SaveSuspension(Fr, Tpl, R, -1, PC);
+          SaveSuspension(Fr, Tpl, R, -1, PC, Integer(Code[PC - 1] shr 40));
           GenYielded := False;
           V := Fr^.NewTarget;
           ObjOf(V)^.OFlags := 0;   { suspended start }

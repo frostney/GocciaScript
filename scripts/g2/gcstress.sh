@@ -1,10 +1,11 @@
 #!/bin/bash
 # scripts/g2/gcstress.sh [KB]: every Web Tooling (digest) and JetStream bundle under a small nursery (default
 # 256 KB) with --gc-verify; a GC rooting bug shows here long before the default nursery does.
-#   G2_WT_DIR  the Web Tooling digest bundles; G2_JS_DIR  the JetStream bundles (jetstream-*.js)
+#   G2_WT_DIR  the Web Tooling digest bundles; G2_JS_DIR  the JetStream bundles (jetstream-*.js);
+#   G2_BIN  the binary (default build/g2/g2)
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$ROOT"
-G2=build/g2/g2; KB=${1:-256}; ref=scripts/g2/digests.txt
+G2=${G2_BIN:-build/g2/g2}; KB=${1:-256}; ref=scripts/g2/digests.txt
 run() {
   f=$1; n=$(basename $f .js)
   out=$(G2_NURSERY_KB=$KB timeout 1800 $G2 --gc-verify $f 2>&1)

@@ -417,9 +417,25 @@ end;
 { ---------------- emission ---------------- }
 
 function TCompiler.Emit(I: QWord): Integer;
-var T: PFuncTemplate;
+var T: PFuncTemplate; Live: Integer;
 begin
   T := FS.Tpl;
+  { A suspending instruction carries in C how many registers are live across it: those the allocator holds
+    (it frees registers last in, first out, so none above FreeReg is read again before it is written) and those
+    the instruction itself uses. A suspension saves only these. }
+  case TOp(I and $FF) of
+    opYield, opAwait, opYieldStar, opYieldStarAsync, opGenStart:
+      if (I shr 40) = 0 then
+      begin
+        Live := Max(FS.FreeReg, Integer((I shr 8) and $FFFF) + 1);
+        case TOp(I and $FF) of
+          opYieldStar: Live := Max(Live, Integer((I shr 24) and $FFFF) + 4);
+          opYieldStarAsync: Live := Max(Live, Integer((I shr 24) and $FFFF) + 5);
+        else Live := Max(Live, Integer((I shr 24) and $FFFF) + 1);
+        end;
+        I := I or (QWord(Live) shl 40);
+      end;
+  end;
   if T^.CodeLen >= Length(T^.Code) then
   begin
     SetLength(T^.Code, T^.CodeLen * 2 + 64);
