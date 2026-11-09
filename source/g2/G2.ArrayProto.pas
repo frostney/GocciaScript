@@ -325,10 +325,20 @@ begin
   K := 0;
   while K < Len do
   begin
-    if not HasIdx(Args[0], K, Has) then begin PopRoots(1); Exit(False); end;
+    { a dense array with clean prototypes (checked again each step: the callback may change it): its element,
+      or a hole that HasProperty would find nowhere }
+    if FastArr(Args[0]) then
+    begin
+      Has := (K < ObjOf(Args[0])^.Elements^.Len) and (ObjOf(Args[0])^.Elements^.Data[K] <> VHole);
+      if Has then V := ObjOf(Args[0])^.Elements^.Data[K];
+    end
+    else
+    begin
+      if not HasIdx(Args[0], K, Has) then begin PopRoots(1); Exit(False); end;
+      if Has and not GetIdx(Args[0], K, V) then begin PopRoots(1); Exit(False); end;
+    end;
     if Has then
     begin
-      if not GetIdx(Args[0], K, V) then begin PopRoots(1); Exit(False); end;
       PushRoot(V);
       CB[0] := V; CB[1] := IdxVal(K); CB[2] := Args[0];
       if not CallValue(Args[1], Arg(Args, Argc, 2), @CB[0], 3, R) then begin PopRoots(2); Exit(False); end;

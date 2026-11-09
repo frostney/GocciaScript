@@ -3224,6 +3224,9 @@ function PushBytecodeFrame(FObj: PObj; This: TValue; Args: PValue; Argc: Integer
 var T: PFuncTemplate; Base, I: Integer; Fr: PFrame; R: PValue;
 begin
   T := PFuncTemplate(FObj^.Native);
+  { a non-strict function's undefined or null this is the global object (OrdinaryCallBindThis) }
+  if not T^.IsStrict and not T^.IsArrow and ((This = VUndefined) or (This = VNull)) and not MultiRealmAny then
+    This := GlobalObj;
   if MultiRealmAny or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) or
      (not T^.IsStrict and not T^.IsArrow and not IsObject(This)) then
     Exit(PushBytecodeFrameFull(FObj, This, Args, Argc, RetIdx, Kind, NewTarget));
