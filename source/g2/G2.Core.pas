@@ -63,6 +63,7 @@ const
   cfRemembered = 4;
   cfPermanent = 8;
   cfBuffered = 16;   { a ckString whose characters live in a ckStrBuf: the pointer sits where Chars starts }
+  cfEmulatesUndefined = 32;   { B.3.6 [[IsHTMLDDA]]: typeof "undefined", ToBoolean false, == undefined and null }
   ckStrBuf = 11;
 
   { property flags }
@@ -627,7 +628,7 @@ begin
     Inc(GCPromotedBytes, Size);
     Move((PByte(C) + 4)^, (PByte(Result) + 4)^, Size - 4);   { keep Result^.Size from AllocOld's class }
     Result^.Kind := C^.Kind;
-    Result^.Flags := cfOld or (C^.Flags and cfBuffered);
+    Result^.Flags := cfOld or (C^.Flags and (cfBuffered or cfEmulatesUndefined));
     C^.Kind := ckForward;
     PPointer(PByte(C) + 8)^ := Result;
     PushGray(Result);
@@ -1859,7 +1860,7 @@ begin
   if (V and TAG_MASK) = TAG_SPECIAL then Exit(False);
   if IsString(V) then Exit(StrOf(V)^.Len > 0);
   if PCell(PtrOf(V))^.Kind = 9 then Exit(PInt32(PByte(PtrOf(V)) + 8)^ <> 0);
-  Result := True;
+  Result := (PCell(PtrOf(V))^.Flags and cfEmulatesUndefined) = 0;
 end;
 
 function TypeOfStr(V: TValue): UnicodeString;
@@ -1874,7 +1875,9 @@ begin
     ckString: Result := 'string';
     ckSymbol: Result := 'symbol';
     9: Result := 'bigint';
-    ckObject: if IsCallable(V) then Result := 'function' else Result := 'object';
+    ckObject:
+      if (PCell(PtrOf(V))^.Flags and cfEmulatesUndefined) <> 0 then Result := 'undefined'
+      else if IsCallable(V) then Result := 'function' else Result := 'object';
   else Result := 'undefined';
   end;
 end;

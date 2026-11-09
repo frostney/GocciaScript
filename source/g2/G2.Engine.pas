@@ -42,6 +42,7 @@ end;
 
 procedure InitIntrinsics;
 begin
+  IntrinsicsInit := True;
   InitBuiltins;
   InitBuiltins2;
   InitRegExp;
@@ -62,6 +63,7 @@ begin
   InitDate;
   InitIntl;
   InitShadowRealm;
+  IntrinsicsInit := False;
   RealmInitProc := @InitIntrinsics;
 end;
 

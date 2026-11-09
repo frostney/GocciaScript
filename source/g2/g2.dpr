@@ -277,6 +277,12 @@ begin
 end;
 
 { G2Host.detachArrayBuffer(buffer): $262.detachArrayBuffer (25.1.3.5 DetachArrayBuffer) }
+function Host_HTMLDDA(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := VNull;
+  Result := True;
+end;
+
 function Host_Detach(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   if Argc < 1 then Exit(DetachArrayBufferV(VUndefined));
@@ -330,6 +336,13 @@ begin
   DefineNative(H, 'detachArrayBuffer', Host_Detach, 1);
   GetV(GlobalObj, AtomOf('G2Host'), H);
   DefineNative(H, 'createRealm', Host_CreateRealm, 0);
+  { B.3.6 $262.IsHTMLDDA: a callable object that returns null and emulates undefined }
+  GetV(GlobalObj, AtomOf('G2Host'), H);
+  DefineNative(H, 'IsHTMLDDA', Host_HTMLDDA, 0);
+  GetV(GlobalObj, AtomOf('G2Host'), H);
+  GetV(H, AtomOf('IsHTMLDDA'), H);
+  PCell(PtrOf(H))^.Flags := PCell(PtrOf(H))^.Flags or cfEmulatesUndefined;
+  ObjOf(H)^.OFlags := ObjOf(H)^.OFlags and not 32;   { not a constructor }
 end;
 
 { G2Host.createRealm(): $262.createRealm, the $262 object of a new realm }

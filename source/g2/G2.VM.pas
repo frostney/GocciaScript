@@ -286,6 +286,7 @@ threadvar
   CurRealm: Integer;
   MultiRealm: Boolean;   { a second realm exists }
   RealmInit: Boolean;    { CreateRealm is running the Init procedures for a new realm }
+  IntrinsicsInit: Boolean;   { InitIntrinsics is running: a native given a prototype property is a constructor }
 var
   { the Init procedures of the intrinsics, which CreateRealm runs for a new realm (nil: no realms) }
   RealmInitProc: procedure = nil;
@@ -1183,7 +1184,7 @@ begin
   P := ObjOf(O);
   { the built-in constructors are the natives given a prototype property (Symbol and BigInt included: their
     [[Construct]] throws) }
-  if (Key = AtomPrototype) and (P^.OKind = okNative) then P^.OFlags := P^.OFlags or 32;
+  if (Key = AtomPrototype) and (P^.OKind = okNative) and IntrinsicsInit then P^.OFlags := P^.OFlags or 32;
   S := ShapeLookup(P^.Shape, Key);
   if S >= 0 then
   begin
@@ -2185,7 +2186,13 @@ function LooseEquals(A, B: TValue; var Res: Boolean): Boolean;
 var P: TValue;
 begin
   Result := True;
-  if IsNullish(A) or IsNullish(B) then begin Res := IsNullish(A) and IsNullish(B); Exit; end;
+  if IsNullish(A) or IsNullish(B) then
+  begin
+    { B.3.6.2: an [[IsHTMLDDA]] object is loosely equal to undefined and null }
+    Res := (IsNullish(A) or (IsObject(A) and ((PCell(PtrOf(A))^.Flags and cfEmulatesUndefined) <> 0))) and
+           (IsNullish(B) or (IsObject(B) and ((PCell(PtrOf(B))^.Flags and cfEmulatesUndefined) <> 0)));
+    Exit;
+  end;
   if IsNumber(A) and IsNumber(B) then begin Res := NumOf(A) = NumOf(B); Exit; end;
   if IsString(A) and IsString(B) then begin Res := StrEquals(StrOf(A), StrOf(B)); Exit; end;
   if IsBigInt(A) and IsBigInt(B) then begin Res := BigEquals(A, B); Exit; end;
@@ -3530,7 +3537,9 @@ begin
     ckString: Result := MkPtr(A^.Str);
     ckSymbol: Result := MkPtr(A^.Sym);
     9: Result := MkPtr(A^.Big);
-    ckObject: if IsCallable(V) then Result := MkPtr(A^.Fn) else Result := MkPtr(A^.Obj);
+    ckObject:
+      if (PCell(PtrOf(V))^.Flags and cfEmulatesUndefined) <> 0 then Result := MkPtr(A^.Undef)
+      else if IsCallable(V) then Result := MkPtr(A^.Fn) else Result := MkPtr(A^.Obj);
   else Result := MkPtr(A^.Undef);
   end;
 end;
@@ -4582,7 +4591,13 @@ begin
           VA := R[(I shr 24) and $FFFF];
           VB := R[I shr 40];
           if (VA = VUndefined) or (VA = VNull) or (VB = VUndefined) or (VB = VNull) then
-            Bool := ((VA = VUndefined) or (VA = VNull)) and ((VB = VUndefined) or (VB = VNull))
+          begin
+            Bool := ((VA = VUndefined) or (VA = VNull)) and ((VB = VUndefined) or (VB = VNull));
+            { B.3.6.2: an [[IsHTMLDDA]] object against undefined or null }
+            if not Bool and (((VA and TAG_MASK) = TAG_PTR) and ((PCell(PtrUInt(VA and PTR_MASK))^.Flags and cfEmulatesUndefined) <> 0) or
+               ((VB and TAG_MASK) = TAG_PTR) and ((PCell(PtrUInt(VB and PTR_MASK))^.Flags and cfEmulatesUndefined) <> 0)) then
+              Bool := True;
+          end
           else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
           else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
           else if (VA = VB) and not IsBigInt(VA) then Bool := True
