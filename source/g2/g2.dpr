@@ -464,6 +464,7 @@ begin
   Raw := '';
   T1 := GetTickCount64;
   L := TGocciaLexer.Create(SrcText, FileName);
+  L.HTMLComments := True;   { B.1.1: a Script }
   L.MeasureScanTime := GetEnvironmentVariable('G2_PHASES') <> '';
   P := TGocciaParser.CreateFromLexer(L, FileName, nil);   { source lines: built only if an error needs them }
   Opts := P.Options;

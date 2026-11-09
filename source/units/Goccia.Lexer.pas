@@ -70,6 +70,7 @@ type
     FScanTimeNanoseconds: Int64;
     FMeasureScanTime: Boolean;
     FCollectComments: Boolean;
+    FHTMLComments: Boolean;
     FComments: TGocciaCommentSpanArray;
     FCommentCount: Integer;
     // Lexemes are shared: one string per distinct identifier or keyword
@@ -160,6 +161,10 @@ type
     function TakeComments: TGocciaCommentSpanArray;
     property CollectComments: Boolean read FCollectComments
       write FCollectComments;
+    // ES2026 B.1.1 HTML-like comments (Script code of a web-compatible host):
+    // <!-- starts a single-line comment anywhere, --> at the start of a line
+    // or of the input. Off by default: module code and GocciaScript have none.
+    property HTMLComments: Boolean read FHTMLComments write FHTMLComments;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
     // Two clock reads per token: off unless a profile asks for the lexing time.
     property MeasureScanTime: Boolean read FMeasureScanTime write FMeasureScanTime;
@@ -797,7 +802,12 @@ end;
 procedure TGocciaLexer.SkipWhitespace;
 var
   C: Char;
+  LineStart: Boolean;
+  StartLine: Integer;
 begin
+  // B.1.1: an HTMLCloseComment needs a line terminator before it on this
+  // run (a MultiLineComment's own counts), or the start of the input
+  LineStart := FCurrent <= 1;
   while not IsAtEnd do
   begin
     // Spaces and tabs inline, and a printable ASCII character other than
@@ -811,10 +821,14 @@ begin
       Inc(FColumn);
       Continue;
     end;
-    if (Ord(C) > $20) and (Ord(C) < $80) and (C <> '/') then
+    if (Ord(C) > $20) and (Ord(C) < $80) and (C <> '/') and
+       (not FHTMLComments or ((C <> '<') and (C <> '-'))) then
       Break;
     if ConsumeLineTerminator then
+    begin
+      LineStart := True;
       Continue;
+    end;
 
     case Peek of
       ' ', #9, #11, #12:
@@ -823,7 +837,22 @@ begin
         if PeekNext = '/' then
           SkipComment
         else if PeekNext = '*' then
-          SkipBlockComment
+        begin
+          StartLine := FLine;
+          SkipBlockComment;
+          if FLine <> StartLine then
+            LineStart := True;
+        end
+        else
+          Break;
+      '<':
+        if Copy(FSource, FCurrent, 4) = '<!--' then
+          SkipUntilLineTerminator
+        else
+          Break;
+      '-':
+        if LineStart and (Copy(FSource, FCurrent, 3) = '-->') then
+          SkipUntilLineTerminator
         else
           Break;
     else
