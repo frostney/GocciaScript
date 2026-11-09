@@ -67,6 +67,8 @@ var
   GetProtoHook: function(O: TValue; var P: TValue): Boolean = nil;
   { G2.ObjModel's [[SetPrototypeOf]]: Ok its result }
   SetProtoHook: function(O, P: TValue; var Ok: Boolean): Boolean = nil;
+  { the native of %Function.prototype.call% (G2.Builtins): Execute calls f.call(t, ...)'s f itself }
+  FuncCallNative: Pointer = nil;
   { 13.2.8.4 GetTemplateObject: SetIntegrityLevel(frozen) of the raw strings array and of the template (G2.ObjModel) }
   TemplateFreezeHook: function(T: TValue): Boolean = nil;
 threadvar
@@ -6313,6 +6315,21 @@ LReload:
             if not Construct(VA, @R[A + 2], Argc, VA, V) then goto LThrow;
             R[A] := V;
             Continue;
+          end;
+          { f.call(t, ...args) with the intrinsic call and a bytecode or native f: the registers shift down a place
+            (f the callee, t its this) and f is called here, without the call native's nested Execute }
+          if (O^.OKind = okNative) and (O^.Native = FuncCallNative) and ((R[A + 1] and TAG_MASK) = TAG_PTR) and
+             (PCell(PtrUInt(R[A + 1] and PTR_MASK))^.Kind = ckObject) and (ObjOf(R[A + 1])^.OKind in [okFunction, okNative]) then
+          begin
+            VA := R[A + 1];
+            R[A] := VA;
+            if Argc = 0 then R[A + 1] := VUndefined
+            else
+            begin
+              for J := 0 to Argc - 1 do R[A + 1 + J] := R[A + 2 + J];
+              Dec(Argc);
+            end;
+            O := ObjOf(VA);
           end;
           if O^.OKind = okFunction then
           begin

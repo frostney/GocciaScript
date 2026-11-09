@@ -3158,6 +3158,7 @@ begin
   { Function }
   C := MakeCtor(Object_Ctor, 'Function', 1, FunctionProto);
   N(FunctionProto, 'call', FuncProto_Call, 1);
+  FuncCallNative := @FuncProto_Call;
   { not writable, enumerable or configurable }
   AddRoot(@FuncHasInstanceFn);
   FuncHasInstanceFn := NewNativeFunction(FuncProto_HasInstance, '[Symbol.hasInstance]', 1);
