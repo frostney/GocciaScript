@@ -279,6 +279,10 @@ type
     procedure EmitUsingDispose(Cap: Integer; Async: Boolean; ExcReg: Integer);
     procedure CompileUsingList(L: TList<TGocciaASTNode>; Stmts: TObjectList<TGocciaStatement>; Body: Boolean = False);
     procedure CompileUsingDecl(D: TGocciaUsingDeclaration);
+    procedure CompileForOfUsingBody(S: TGocciaForOfStatement; V: Integer);
+    procedure AddUsingResource(R: Integer; Async: Boolean);
+    procedure BeginUsingRegion(Async: Boolean; out Cap, ExcReg, OuterTry, SavedCap: Integer);
+    procedure EndUsingRegion(Cap, ExcReg, OuterTry, SavedCap: Integer; Async: Boolean);
     function NewICKey(Key: PStr): Integer;
     procedure ExprToNamed(E: TGocciaExpression; Dest: Integer; const Name: UnicodeString);
     procedure StmtCore(S: TGocciaASTNode);
@@ -2317,7 +2321,7 @@ end;
 { 14.3.1 using / await using: each binding is const; its value joins the block's capability
   (AddDisposableResource) }
 procedure TCompiler.CompileUsingDecl(D: TGocciaUsingDeclaration);
-var I, R, B: Integer; V: TGocciaVariableInfo;
+var I, R: Integer; V: TGocciaVariableInfo;
 begin
   if FS.UsingCapReg < 0 then raise EEarlySyntaxError.Create('using declarations are not allowed here');
   for I := 0 to High(D.Variables) do
@@ -2327,15 +2331,69 @@ begin
     if V.HasInitializer then ExprToNamed(V.Initializer, R, V.Name)
     else Emit(Ins(opLoadUndef, R, 0, 0));
     MarkInitialized(V.Name);
-    B := AllocRegs(5);
-    Emit(Ins(opGetGlobal, B, 0, NewICKey(UsingKey(0))));
-    Emit(Ins(opLoadUndef, B + 1, 0, 0));
-    Emit(Ins(opMov, B + 2, FS.UsingCapReg, 0));
-    Emit(Ins(opMov, B + 3, R, 0));
-    if D.IsAwait then Emit(Ins(opLoadTrue, B + 4, 0, 0)) else Emit(Ins(opLoadFalse, B + 4, 0, 0));
-    Emit(Ins(opCall, B, 3, 0));
-    FreeTo(B);
+    AddUsingResource(R, D.IsAwait);
   end;
+end;
+
+{ 14.7.5.7 ForIn/OfBodyEvaluation with a using ForDeclaration: each iteration's binding is a resource of that
+  iteration's capability, disposed when the iteration completes (continue and break included) }
+procedure TCompiler.CompileForOfUsingBody(S: TGocciaForOfStatement; V: Integer);
+var Cap, ExcReg, OuterTry, SavedCap, R: Integer;
+begin
+  BeginLoop(True);
+  BeginUsingRegion(S.IsAwaitUsing, Cap, ExcReg, OuterTry, SavedCap);
+  R := DeclareLocal(S.BindingName, True);
+  Emit(Ins(opMov, R, V, 0));
+  AddUsingResource(R, S.IsAwaitUsing);
+  Stmt(S.Body);
+  EndUsingRegion(Cap, ExcReg, OuterTry, SavedCap, S.IsAwaitUsing);
+end;
+
+{ AddDisposableResource(the innermost capability, R[R], sync-dispose or async-dispose) }
+procedure TCompiler.AddUsingResource(R: Integer; Async: Boolean);
+var B: Integer;
+begin
+  B := AllocRegs(5);
+  Emit(Ins(opGetGlobal, B, 0, NewICKey(UsingKey(0))));
+  Emit(Ins(opLoadUndef, B + 1, 0, 0));
+  Emit(Ins(opMov, B + 2, FS.UsingCapReg, 0));
+  Emit(Ins(opMov, B + 3, R, 0));
+  if Async then Emit(Ins(opLoadTrue, B + 4, 0, 0)) else Emit(Ins(opLoadFalse, B + 4, 0, 0));
+  Emit(Ins(opCall, B, 3, 0));
+  FreeTo(B);
+end;
+
+{ a region whose dispose capability DisposeResources empties when it completes: normally, by a jump out (the
+  try entry's UsingCap) or by an exception (disposed with it, then rethrown) }
+procedure TCompiler.BeginUsingRegion(Async: Boolean; out Cap, ExcReg, OuterTry, SavedCap: Integer);
+begin
+  Cap := AllocReg;
+  ExcReg := AllocReg;
+  Emit(Ins(opNewArr, Cap, 0, 0));
+  if FS.TryCount >= Length(FS.Tries) then SetLength(FS.Tries, FS.TryCount * 2 + 4);
+  FS.Tries[FS.TryCount].Block := nil;
+  FS.Tries[FS.TryCount].IterReg := -1;
+  FS.Tries[FS.TryCount].UsingCap := Cap;
+  FS.Tries[FS.TryCount].UsingAsync := Async;
+  FS.Tries[FS.TryCount].ScopeDepth := FS.ScopeCount;
+  Inc(FS.TryCount);
+  OuterTry := Emit(Ins(opTry, ExcReg, 1, 0));
+  SavedCap := FS.UsingCapReg;
+  FS.UsingCapReg := Cap;
+end;
+
+procedure TCompiler.EndUsingRegion(Cap, ExcReg, OuterTry, SavedCap: Integer; Async: Boolean);
+var J: Integer;
+begin
+  FS.UsingCapReg := SavedCap;
+  Dec(FS.TryCount);
+  Emit(Ins(opEndTry, 0, 0, 0));
+  EmitUsingDispose(Cap, Async, -1);
+  J := EmitJ(opJmp, 0, 0);
+  PatchHere(OuterTry);
+  EmitUsingDispose(Cap, Async, ExcReg);
+  Emit(Ins(opThrow, ExcReg, 0, 0));
+  PatchHere(J);
 end;
 
 procedure TCompiler.BeginLoop(IsLoop: Boolean);
@@ -2664,16 +2722,27 @@ end;
 
 procedure TCompiler.CompileFor(S: TGocciaForStatement);
 var Top, ContTarget, BreakTarget, R0, InitClose: Integer; FalseL: TJumpList; HeadDepth: Integer; HasCond: Boolean;
-  HL: TList<TGocciaASTNode>;
+  HL: TList<TGocciaASTNode>; UsingFor, Async: Boolean; Cap, ExcReg, OuterTry, SavedCap: Integer;
 begin
   CheckStatementBody(S.Body, False, FS.Tpl^.IsStrict);
+  { 14.7.4.2 a using declaration in the head: the loop runs in a region whose capability DisposeResources
+    empties when the for statement completes (the bindings are const: no per-iteration copies) }
+  UsingFor := S.Init is TGocciaUsingDeclaration;
+  Async := False; Cap := -1; ExcReg := -1; OuterTry := -1; SavedCap := -1;
+  if UsingFor then
+  begin
+    Async := TGocciaUsingDeclaration(S.Init).IsAwait;
+    BeginUsingRegion(Async, Cap, ExcReg, OuterTry, SavedCap);
+  end;
+  { the capability's registers sit below the head scope, whose update frees down to its bindings }
   PushScope;
   HeadDepth := FS.ScopeCount;
   { the head's let / const names first, as a block's are: a destructuring initializer's temporaries then sit
     above them }
   if Assigned(S.Init) and
      (((S.Init is TGocciaVariableDeclaration) and not TGocciaVariableDeclaration(S.Init).IsVar) or
-      ((S.Init is TGocciaDestructuringDeclaration) and not TGocciaDestructuringDeclaration(S.Init).IsVar)) then
+      ((S.Init is TGocciaDestructuringDeclaration) and not TGocciaDestructuringDeclaration(S.Init).IsVar) or
+      UsingFor) then
   begin
     HL := TList<TGocciaASTNode>.Create;
     try
@@ -2716,7 +2785,9 @@ begin
   BreakTarget := Here;
   PatchListHere(FalseL);
   EndLoop(ContTarget, BreakTarget);
+  if UsingFor then EndUsingRegion(Cap, ExcReg, OuterTry, SavedCap, Async);
   PopScope;
+  if UsingFor then FreeTo(Cap);
 end;
 
 procedure TCompiler.CompileWhile(S: TGocciaWhileStatement);
@@ -2801,21 +2872,25 @@ begin
   Top := Here;
   Exit_ := Emit(Ins(opIterNext, V, It, 0));
   PushScope;
-  if S.BindingName <> '' then
+  if (S.IsUsing or S.IsAwaitUsing) and (S.BindingName <> '') then CompileForOfUsingBody(S, V)
+  else
   begin
-    if S.IsVar then StoreIdent(S.BindingName, V)
-    else
+    if S.BindingName <> '' then
     begin
-      R := DeclareLocal(S.BindingName, S.IsConst);
-      Emit(Ins(opMov, R, V, 0));
-    end;
-  end
-  else if Assigned(S.BindingPattern) then
-    BindPattern(S.BindingPattern, V, not S.IsVar, S.IsConst)
-  else if Assigned(S.AssignmentTarget) then
-    BindPattern(S.AssignmentTarget, V, False, False);
-  BeginLoop(True);
-  Stmt(S.Body);
+      if S.IsVar then StoreIdent(S.BindingName, V)
+      else
+      begin
+        R := DeclareLocal(S.BindingName, S.IsConst);
+        Emit(Ins(opMov, R, V, 0));
+      end;
+    end
+    else if Assigned(S.BindingPattern) then
+      BindPattern(S.BindingPattern, V, not S.IsVar, S.IsConst)
+    else if Assigned(S.AssignmentTarget) then
+      BindPattern(S.AssignmentTarget, V, False, False);
+    BeginLoop(True);
+    Stmt(S.Body);
+  end;
   PopScope;
   PatchTo(EmitJ(opJmp, 0, 0), Top);
   Dec(FS.TryCount);
@@ -2880,21 +2955,25 @@ begin
   Exit_ := EmitJ(opIterUnpack, V, Sv);
   Emit(Ins(opMov, It, Sv, 0));
   PushScope;
-  if S.BindingName <> '' then
+  if (S.IsUsing or S.IsAwaitUsing) and (S.BindingName <> '') then CompileForOfUsingBody(S, V)
+  else
   begin
-    if S.IsVar then StoreIdent(S.BindingName, V)
-    else
+    if S.BindingName <> '' then
     begin
-      R := DeclareLocal(S.BindingName, S.IsConst);
-      Emit(Ins(opMov, R, V, 0));
-    end;
-  end
-  else if Assigned(S.BindingPattern) then
-    BindPattern(S.BindingPattern, V, not S.IsVar, S.IsConst)
-  else if Assigned(S.AssignmentTarget) then
-    BindPattern(S.AssignmentTarget, V, False, False);
-  BeginLoop(True);
-  Stmt(S.Body);
+      if S.IsVar then StoreIdent(S.BindingName, V)
+      else
+      begin
+        R := DeclareLocal(S.BindingName, S.IsConst);
+        Emit(Ins(opMov, R, V, 0));
+      end;
+    end
+    else if Assigned(S.BindingPattern) then
+      BindPattern(S.BindingPattern, V, not S.IsVar, S.IsConst)
+    else if Assigned(S.AssignmentTarget) then
+      BindPattern(S.AssignmentTarget, V, False, False);
+    BeginLoop(True);
+    Stmt(S.Body);
+  end;
   PopScope;
   PatchTo(EmitJ(opJmp, 0, 0), Top);
   Dec(FS.TryCount);
