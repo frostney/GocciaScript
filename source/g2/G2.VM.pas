@@ -4650,7 +4650,7 @@ var
 
 procedure InitFastOps;
 const
-  Ops: array[0..69] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+  Ops: array[0..71] of TOp = (opIterNext, opYield, opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
     opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opGetGlobal, opInstanceof, opSub,
     opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
@@ -5348,6 +5348,69 @@ begin
           if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
           if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
           Changed := True;
+        end;
+      opIterNext:
+        begin
+          { an array iterator's step; a suspended generator with the intrinsic next resumed in a Kind 4 frame
+            (as Execute's opIterNext); anything else is Execute's }
+          CI := (I shr 24) and $FFFF;
+          VB := R[CI];
+          if (VB and TAG_MASK) <> TAG_PTR then goto LBail;
+          O := PObj(PtrUInt(VB and PTR_MASK));
+          if O^.Hdr.Kind <> ckObject then goto LBail;
+          if (O^.OKind = okIterator) and (O^.OFlags = 0) and (R[CI + 1] = ArrayIterNextFn) then
+          begin
+            VA := O^.Aux1;
+            if not IsObject(VA) then goto LBail;
+            O2 := ObjOf(VA);
+            if (O2^.Elements = nil) or ((O2^.OFlags and 64) <> 0) or not (O2^.OKind in [okArray, okArguments]) then
+              goto LBail;
+            NP := IntOf(O^.Aux2);
+            if NP >= Integer(O2^.Elements^.Len) then goto LBail;
+            V := O2^.Elements^.Data[NP];
+            if V = VHole then goto LBail;
+            R[A] := V;
+            O^.Aux2 := MkInt(NP + 1);
+            Continue;
+          end;
+          if (O^.OKind = okGenerator) and (O^.OFlags <= 1) and (R[CI + 1] = GenNextFn) and not MultiRealmAny then
+          begin
+            T := PFuncTemplate(ObjOf(O^.Aux1)^.Native);
+            if (StackTop + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
+            Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+            if not XGenInline(VB, Fr^.Base + A) then goto LBail;
+            Fr := @Frames[FrameTop - 1];
+            T := Fr^.Tpl;
+            R := @VS[Fr^.Base];
+            Code := @T^.Code[0];
+            IP := @Code[Fr^.PC];
+            if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
+            if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+            Changed := True;
+            Continue;
+          end;
+          goto LBail;
+        end;
+      opYield:
+        begin
+          { a for-of's Kind 4 generator yields: suspended, its value in the consumer's register (as Execute) }
+          if (Fr^.Kind <> 4) or MultiRealmAny then goto LBail;
+          PushRoot(R[(I shr 24) and $FFFF]);
+          J := Fr^.RetIdx;
+          SaveSuspension(Fr, Fr^.Tpl, R, A, Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3), Integer(I shr 40));
+          GenYielded := False;
+          VS[J] := RootAt(TempTop - 1);
+          PopRoots(1);
+          Fr := @Frames[FrameTop - 1];
+          T := Fr^.Tpl;
+          StackTop := Fr^.Base + T^.MaxRegs;
+          R := @VS[Fr^.Base];
+          Code := @T^.Code[0];
+          IP := @Code[Fr^.PC];
+          if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
+          if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+          Changed := True;
+          Continue;
         end;
       opRet, opRetUndef:
         begin
