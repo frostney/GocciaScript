@@ -3339,6 +3339,12 @@ end;
 function TGocciaParser.Call: TGocciaExpression;
 begin
   Result := Primary;
+  // ES2026 §15.3: an ArrowFunction is an AssignmentExpression, never a
+  // MemberExpression, so a block-bodied one takes no call or member suffix:
+  // `() => {}` then `[` or `(` on the next line ends the statement by ASI
+  if (Result is TGocciaArrowFunctionExpression) and
+     (Previous.TokenType = gttRightBrace) then
+    Exit;
   case PeekWithLexicalGoal(glgInputElementDiv).TokenType of
     gttLeftParen, gttDot, gttOptionalChaining, gttHash, gttLeftBracket,
     gttNot, gttIncrement, gttDecrement, gttTemplate, gttTemplateHead, gttLess:
