@@ -1147,11 +1147,15 @@
   function hourCycle12(locale) { return locale.slice(0, 2) === "ja" ? "h11" : "h12"; }
   function hourCycle24(locale) { return "h23"; }
   // an offset time zone (+HH, +HHMM, +HH:MM) as +-HH:MM, or undefined
+  // an offset time zone (UTCOffset[~SubMinutePrecision], ASCII signs only): its normalized form, null for a
+  // string that starts like one but is not, undefined for a name
   function parseOffsetZone(tz) {
-    var m = /^([+\-\u2212])(\d{2})(?::?(\d{2}))?$/.exec(tz);
-    if (m === null) return undefined;
+    var c = tz.charCodeAt(0);
+    if (c !== 43 && c !== 45 && c !== 0x2212) return undefined;
+    var m = /^([+\-])(\d{2})(?::?(\d{2}))?$/.exec(tz);
+    if (m === null) return null;
     var h = +m[2], mi = m[3] === undefined ? 0 : +m[3];
-    if (h > 23 || mi > 59) return undefined;
+    if (h > 23 || mi > 59) return null;
     var sign = m[1] === "+" ? "+" : "-";
     if (h === 0 && mi === 0) sign = "+";
     return sign + (h < 10 ? "0" : "") + h + ":" + (mi < 10 ? "0" : "") + mi;
@@ -1224,6 +1228,7 @@
       if (toLocaleStringTimeZone !== undefined) throw typeError("timeZone is not allowed in ZonedDateTime.prototype.toLocaleString");
       timeZone = ToString(timeZone);
       var off = parseOffsetZone(timeZone);
+      if (off === null) throw rangeError("Invalid time zone specified: " + timeZone);
       if (off !== undefined) timeZone = off;
       else {
         var id = timeZone.indexOf("\0") >= 0 ? null : intlOp(26, timeZone);
