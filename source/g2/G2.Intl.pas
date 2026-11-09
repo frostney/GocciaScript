@@ -21,11 +21,23 @@ unit G2.Intl;
     20 formatNumber(locale, opts, x, isDecimalString, toParts) -> String or parts
     21 formatNumberRange(locale, opts, x, y, isDecimalString, toParts)
     22 currencyDigits(code)                 -> the currency's minor unit digits (2 if CLDR has none)
+    23 regionTimeZones(region)              -> Array, or undefined
+    24 textDirection(locale)                -> "ltr" or "rtl"
+    25 weekInfo(region)                     -> [firstDay, weekendStart, weekendEnd, minimalDays], or undefined
+    26 timeZoneId(tz)                       -> the identifier in its case from the time zone database, or null
+    27 systemTimeZone()                     -> String
+    41 relativeTimePattern(locale, unit)    -> [future, past] CLDR patterns with {0}, or undefined
+    40 compare(locale, a, b, sensitivity, ignorePunctuation, numeric, caseFirst) -> -1, 0 or 1
+    30 formatDateTime(locale, opts, ms, toParts)
+    31 formatDateTimeRange(locale, opts, ms1, ms2, toParts)
+  A date-time format's opts is an Array: dateStyle, timeStyle, calendar, numberingSystem, timeZone, hour12
+  (-1 unset, 0, 1), hourCycle, weekday, era, year, month, day, dayPeriod, hour, minute, second,
+  fractionalSecondDigits (-1 unset), timeZoneName.
   A number format's opts is an Array: style, currency, currencyDisplay, currencySign, unit, unitDisplay,
   notation, compactDisplay, signDisplay, useGrouping, roundingMode, trailingZeroDisplay, minimumIntegerDigits,
   minimumFractionDigits, maximumFractionDigits, minimumSignificantDigits, maximumSignificantDigits (-1 unset),
   roundingIncrement, roundingPriority, numberingSystem.
-  Parts are Arrays of [type, value] pairs, or [type, value, source] for a range. }
+  Parts are Arrays of [type, value], or [type, value, source] for a range, [type, value, source, unit] with a unit. }
 {$mode delphiunicode}{$H+}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
@@ -83,7 +95,8 @@ begin
     PushRoot(MkPtr(NewArray(0, 2)));
     ArrayPush(ObjOf(RootAt(TempTop - 1)), UStr(P[I].PartType));
     ArrayPush(ObjOf(RootAt(TempTop - 1)), UStr(P[I].Value));
-    if P[I].Source <> '' then ArrayPush(ObjOf(RootAt(TempTop - 1)), UStr(P[I].Source));
+    if (P[I].Source <> '') or (P[I].UnitIdentifier <> '') then ArrayPush(ObjOf(RootAt(TempTop - 1)), UStr(P[I].Source));
+    if P[I].UnitIdentifier <> '' then ArrayPush(ObjOf(RootAt(TempTop - 1)), UStr(P[I].UnitIdentifier));
     ArrayPush(ObjOf(RootAt(TempTop - 2)), RootAt(TempTop - 1));
     PopRoots(1);
   end;
@@ -218,8 +231,55 @@ begin
   Result.NumberingSystem := S(19);
 end;
 
+function StyleOf(const S: string): TIntlDateTimeStyle;
+begin
+  if S = 'full' then Result := idtsFull
+  else if S = 'long' then Result := idtsLong
+  else if S = 'medium' then Result := idtsMedium
+  else if S = 'short' then Result := idtsShort
+  else Result := idtsNone;
+end;
+
+{ the opts Array of a date-time format (see above) }
+function DTOpts(V: TValue): TIntlDateTimeFormatOptions;
+var A: PObj;
+  function E(I: Integer): TValue;
+  begin
+    if (A <> nil) and (I < ArrayLen(A)) then Result := A^.Elements^.Data[I] else Result := VUndefined;
+  end;
+  function S(I: Integer): string;
+  begin
+    if IsString(E(I)) then Result := UTF8Encode(StrToUnicode(StrOf(E(I)))) else Result := '';
+  end;
+  function N(I: Integer): Integer;
+  begin
+    if IsNumber(E(I)) then Result := Trunc(NumOf(E(I))) else Result := -1;
+  end;
+begin
+  FillChar(Result, SizeOf(Result), 0);
+  if IsObject(V) and (ObjOf(V)^.OKind = okArray) then A := ObjOf(V) else A := nil;
+  Result.DateStyle := StyleOf(S(0));
+  Result.TimeStyle := StyleOf(S(1));
+  Result.Calendar := S(2);
+  Result.NumberingSystem := S(3);
+  Result.TimeZone := S(4);
+  Result.Hour12 := N(5);
+  Result.HourCycle := S(6);
+  Result.Weekday := S(7);
+  Result.Era := S(8);
+  Result.Year := S(9);
+  Result.Month := S(10);
+  Result.Day := S(11);
+  Result.DayPeriod := S(12);
+  Result.Hour := S(13);
+  Result.Minute := S(14);
+  Result.Second := S(15);
+  Result.FractionalSecondDigits := N(16);
+  Result.TimeZoneName := S(17);
+end;
+
 function Intl_Op(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S, T, Sym1, Sym2: string; Dg: Integer; A: IntlTypes.TStringArray; P: TIntlFormatPartArray; Rules: TIntlPluralRuleSet;
+var S, T, Sym1, Sym2: string; Sens: TIntlCollatorSensitivity; RP: TIntlRelativeTimePattern; Dg, W1, W2, W3, W4: Integer; WA: PObj; A: IntlTypes.TStringArray; P: TIntlFormatPartArray; Rules: TIntlPluralRuleSet;
   Ordinal: Boolean; N: Integer;
   procedure Add(const C: string);
   begin
@@ -341,6 +401,61 @@ begin
         NumOpts(Args[3]), S) then Res := UStr(S);
     22:
       if TryGetCurrencyInfo('en', SArg(Args, Argc, 2), Sym1, Sym2, Dg) then Res := MkInt(Dg) else Res := MkInt(2);
+    41:
+      if TryGetRelativeTimePattern(SArg(Args, Argc, 2), RelUnit(SArg(Args, Argc, 3)), RP) then
+      begin
+        PushRoot(MkPtr(NewArray(0, 2)));
+        ArrayPush(ObjOf(RootAt(TempTop - 1)), UStr(RP.Future));
+        ArrayPush(ObjOf(RootAt(TempTop - 1)), UStr(RP.Past));
+        Res := RootAt(TempTop - 1);
+        PopRoots(1);
+      end;
+    40:
+      begin
+        T := SArg(Args, Argc, 5);
+        if T = 'base' then Sens := icsBase else if T = 'accent' then Sens := icsAccent
+        else if T = 'case' then Sens := icsCase else Sens := icsVariant;
+        if TryICUCompareStrings(SArg(Args, Argc, 2), SArg(Args, Argc, 3), SArg(Args, Argc, 4), Sens,
+           (Argc >= 6) and ToBool(Args[6]), (Argc >= 7) and ToBool(Args[7]), SArg(Args, Argc, 8), Dg) then
+          Res := MkInt(Sign(Dg))
+        else Res := MkInt(Sign(CompareStr(SArg(Args, Argc, 3), SArg(Args, Argc, 4))));
+      end;
+    26:
+      begin
+        S := SArg(Args, Argc, 2);
+        if SameText(S, 'UTC') then Res := UStr('UTC')
+        else if TryCanonicalizeTimeZoneIdentifierCase(S, T) and IsValidTimeZone(T) then Res := UStr(T)
+        else if IsValidTimeZone(S) then Res := UStr(S)
+        else Res := VNull;
+      end;
+    27: Res := UStr(GetSystemTimeZoneId);
+    30:
+      if (Argc >= 5) and ToBool(Args[5]) then
+      begin
+        if TryICUFormatDateTimeToParts(SArg(Args, Argc, 2), DArg(Args, Argc, 4), DTOpts(Args[3]), P) then
+          Res := PartsArray(P);
+      end
+      else if TryICUFormatDateTime(SArg(Args, Argc, 2), DArg(Args, Argc, 4), DTOpts(Args[3]), S) then Res := UStr(S);
+    31:
+      if (Argc >= 6) and ToBool(Args[6]) then
+      begin
+        if TryICUFormatDateTimeRangeToParts(SArg(Args, Argc, 2), DArg(Args, Argc, 4), DArg(Args, Argc, 5),
+           DTOpts(Args[3]), P) then Res := PartsArray(P);
+      end
+      else if TryICUFormatDateTimeRange(SArg(Args, Argc, 2), DArg(Args, Argc, 4), DArg(Args, Argc, 5),
+        DTOpts(Args[3]), S) then Res := UStr(S);
+    23:
+      if TryGetLocaleTimeZones(SArg(Args, Argc, 2), A) then Res := StrArray(A);
+    24:
+      if TryGetLocaleTextDirection(SArg(Args, Argc, 2), S) then Res := UStr(S) else Res := UStr('ltr');
+    25:
+      if TryGetLocaleWeekInfo(SArg(Args, Argc, 2), W1, W2, W3, W4) then
+      begin
+        WA := NewArray(4, 4);
+        WA^.Elements^.Data[0] := MkInt(W1); WA^.Elements^.Data[1] := MkInt(W2);
+        WA^.Elements^.Data[2] := MkInt(W3); WA^.Elements^.Data[3] := MkInt(W4);
+        Res := MkPtr(WA);
+      end;
   end;
 end;
 
