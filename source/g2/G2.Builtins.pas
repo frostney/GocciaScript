@@ -80,21 +80,54 @@ end;
 
 { ---------------- global functions ---------------- }
 
+{ TrimString(S, start): the StrWhiteSpaceChar code units (WhiteSpace and LineTerminator) at its start removed }
+function TrimJSStart(const S: UnicodeString): UnicodeString;
+var I: Integer;
+begin
+  I := 1;
+  while I <= Length(S) do
+  begin
+    case Ord(S[I]) of
+      9..13, 32, $A0, $1680, $2000..$200A, $2028, $2029, $202F, $205F, $3000, $FEFF: Inc(I);
+    else Break;
+    end;
+  end;
+  Result := Copy(S, I, MaxInt);
+end;
+
+{ 19.2.5 parseInt }
 function G_ParseInt(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S: PStr; T: UnicodeString; Radix: Int64; I, Sign, D: Integer; Acc: Double; Any: Boolean;
+var S: PStr; T: UnicodeString; I, J, Sign, D: Integer; Radix: Int64; RD: Double; Acc: Double; StripPrefix: Boolean;
 begin
   if not StrArg(Args, Argc, 1, S) then Exit(False);
-  if not IntArg(Args, Argc, 2, 0, Radix) then Exit(False);
-  T := Trim(StrToUnicode(S));
+  T := TrimJSStart(StrToUnicode(S));
+  { ToInt32(radix) }
+  if (Argc < 2) or (Args[2] = VUndefined) then RD := 0
+  else if not NumArg(Args, Argc, 2, RD) then Exit(False);
+  if IsNaN(RD) or IsInfinite(RD) then Radix := 0
+  else
+  begin
+    RD := Int(RD);
+    RD := RD - Floor(RD / 4294967296.0) * 4294967296.0;
+    Radix := Trunc(RD);
+    if Radix >= 2147483648 then Radix := Radix - 4294967296;
+  end;
   Sign := 1; I := 1;
   if (I <= Length(T)) and ((T[I] = '-') or (T[I] = '+')) then begin if T[I] = '-' then Sign := -1; Inc(I); end;
-  if Radix = 0 then
+  StripPrefix := True;
+  if Radix <> 0 then
   begin
-    Radix := 10;
-    if (I + 1 <= Length(T)) and (T[I] = '0') and ((T[I + 1] = 'x') or (T[I + 1] = 'X')) then begin Radix := 16; Inc(I, 2); end;
+    if (Radix < 2) or (Radix > 36) then begin Res := MkDouble(NaN); Exit(True); end;
+    if Radix <> 16 then StripPrefix := False;
   end
-  else if (Radix = 16) and (I + 1 <= Length(T)) and (T[I] = '0') and ((T[I + 1] = 'x') or (T[I + 1] = 'X')) then Inc(I, 2);
-  Acc := 0; Any := False;
+  else Radix := 10;
+  if StripPrefix and (I + 1 <= Length(T)) and (T[I] = '0') and ((T[I + 1] = 'x') or (T[I + 1] = 'X')) then
+  begin
+    Inc(I, 2);
+    Radix := 16;
+  end;
+  J := I;
+  Acc := 0;
   while I <= Length(T) do
   begin
     case T[I] of
@@ -105,33 +138,54 @@ begin
     end;
     if D >= Radix then Break;
     Acc := Acc * Radix + D;
-    Any := True;
     Inc(I);
   end;
-  if not Any then Res := MkDouble(NaN) else Res := MkNumber(Sign * Acc);
+  if I = J then begin Res := MkDouble(NaN); Exit(True); end;
+  { a long decimal numeral: its value rounded once (the accumulation above rounds at every digit) }
+  if (Radix = 10) and (I - J > 15) then Acc := StringToNumber(Copy(T, J, I - J));
+  if Acc = 0 then
+  begin
+    if Sign < 0 then Res := MkDouble(-0.0) else Res := MkInt(0);
+  end
+  else Res := MkNumber(Sign * Acc);
   Result := True;
 end;
 
+{ 19.2.4 parseFloat: the longest prefix that is a StrDecimalLiteral }
 function G_ParseFloat(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S: PStr; T: UnicodeString; I: Integer;
+var S: PStr; T: UnicodeString; I, J, P, Digits: Integer;
 begin
   if not StrArg(Args, Argc, 1, S) then Exit(False);
-  T := Trim(StrToUnicode(S));
+  T := TrimJSStart(StrToUnicode(S));
   I := 1;
   if (I <= Length(T)) and ((T[I] = '-') or (T[I] = '+')) then Inc(I);
-  if Copy(T, I, 8) = 'Infinity' then begin T := Copy(T, 1, I + 7); end
-  else
+  if Copy(T, I, 8) = 'Infinity' then
   begin
-    while (I <= Length(T)) and (CharInSet(T[I], ['0'..'9'])) do Inc(I);
-    if (I <= Length(T)) and (T[I] = '.') then begin Inc(I); while (I <= Length(T)) and CharInSet(T[I], ['0'..'9']) do Inc(I); end;
-    if (I < Length(T)) and CharInSet(T[I], ['e', 'E']) and (CharInSet(T[I + 1], ['0'..'9', '+', '-'])) then
-    begin
-      Inc(I, 2);
-      while (I <= Length(T)) and CharInSet(T[I], ['0'..'9']) do Inc(I);
-    end;
-    T := Copy(T, 1, I - 1);
+    if T[1] = '-' then Res := MkDouble(NegInfinity) else Res := MkDouble(Infinity);
+    Exit(True);
   end;
-  if (T = '') or (T = '-') or (T = '+') then Res := MkDouble(NaN) else Res := MkNumber(StringToNumber(T));
+  J := I;
+  while (I <= Length(T)) and CharInSet(T[I], ['0'..'9']) do Inc(I);
+  Digits := I - J;
+  if (I <= Length(T)) and (T[I] = '.') then
+  begin
+    P := I + 1;
+    while (P <= Length(T)) and CharInSet(T[P], ['0'..'9']) do Inc(P);
+    Inc(Digits, P - I - 1);
+    if Digits > 0 then I := P;
+  end;
+  if Digits = 0 then begin Res := MkDouble(NaN); Exit(True); end;
+  if (I <= Length(T)) and CharInSet(T[I], ['e', 'E']) then
+  begin
+    P := I + 1;
+    if (P <= Length(T)) and CharInSet(T[P], ['+', '-']) then Inc(P);
+    if (P <= Length(T)) and CharInSet(T[P], ['0'..'9']) then
+    begin
+      while (P <= Length(T)) and CharInSet(T[P], ['0'..'9']) do Inc(P);
+      I := P;
+    end;
+  end;
+  Res := MkNumber(StringToNumber(Copy(T, 1, I - 1)));
   Result := True;
 end;
 
