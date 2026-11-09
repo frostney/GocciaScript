@@ -1703,6 +1703,12 @@ begin
     { the nearest non-arrow function fills the registers eval code may read: home object, new.target, constructor }
     F := FS;
     while (F <> nil) and F.IsArrow do F := F.Parent;
+    { a class field initializer or static block: its eval code may not contain arguments (19.2.1.1 step 5.b) }
+    if (F <> nil) and F.NoArguments then
+    begin
+      Seen.Add('%noargs');
+      Add('%noargs', 0, 0, 0);
+    end;
     if (F <> nil) and not F.IsEvalOuter and (F.Parent <> nil) then
     begin
       if F.HomeReg >= 0 then F.HomeUsed := True;
@@ -2304,7 +2310,9 @@ begin
       Found := I; Break;
     end;
   end;
-  if Found < 0 then raise ECompileError.Create('break/continue target not found');
+  { 14.8.1 / 14.9.1: a break or continue without a target (or across a function or static block) is an early
+    error }
+  if Found < 0 then raise EEarlySyntaxError.Create('Illegal break or continue statement: no such target');
   EmitFinallyUnwind(FS.Loops[Found].TryDepth);
   EmitCloseFrom(FS.Loops[Found].ScopeDepth);
   J := EmitJ(opJmp, 0, 0);
@@ -4050,7 +4058,7 @@ begin
 end;
 
 procedure TCompiler.CompileObject(E: TGocciaObjectExpression; Dest: Integer);
-var Obj, V, K, I, Save, N: Integer; P: TGocciaPropertySourceOrder; T: PFuncTemplate; NoParams: TGocciaParameterArray; ProtoSetter: Boolean;
+var Obj, V, K, I, Save, N, ProtoCount: Integer; P: TGocciaPropertySourceOrder; T: PFuncTemplate; NoParams: TGocciaParameterArray; ProtoSetter: Boolean;
   Pair: TPair<TGocciaExpression, TGocciaExpression>;
 begin
   Save := FS.FreeReg;
@@ -4061,6 +4069,21 @@ begin
   V := AllocReg;
   K := AllocReg;
   SetLength(NoParams, 0);
+  { 13.2.5.1 early errors of an object literal that is not an assignment pattern: a CoverInitializedName
+    (a shorthand property with an initializer) and a second __proto__: v }
+  ProtoCount := 0;
+  for I := 0 to High(E.PropertySourceOrder) do
+  begin
+    P := E.PropertySourceOrder[I];
+    if P.PropertyType <> pstStatic then Continue;
+    if not P.UsesColonSyntax and (P.Expression is TGocciaAssignmentExpression) then
+      raise EEarlySyntaxError.Create('Invalid shorthand property initializer');
+    if (P.StaticKey = '__proto__') and P.UsesColonSyntax and not (P.Expression is TGocciaObjectMethodDefinition) then
+    begin
+      Inc(ProtoCount);
+      if ProtoCount > 1 then raise EEarlySyntaxError.Create('Duplicate __proto__ fields are not allowed in object literals');
+    end;
+  end;
   for I := 0 to High(E.PropertySourceOrder) do
   begin
     P := E.PropertySourceOrder[I];
@@ -4643,6 +4666,7 @@ begin
   end
   else if E is TGocciaNewTargetExpression then
   begin
+    if NewTargetOutside then raise EEarlySyntaxError.Create('new.target expression is not allowed here');
     if FS.IsArrow then
     begin
       { an arrow's new.target is its enclosing function's }
@@ -5451,6 +5475,11 @@ begin
   SetLength(Params, 0);
   MI := nil;
   try
+    { 16.1.1 / 19.2.1.1: import and export declarations belong to modules only }
+    if Goal <> 3 then
+      for I := 0 to Prog.Body.Count - 1 do
+        if (Prog.Body[I] is TGocciaImportDeclaration) or (Copy(Prog.Body[I].ClassName, 1, 13) = 'TGocciaExport') then
+          raise EEarlySyntaxError.Create('Cannot use import or export outside a module');
     if Goal = 3 then
     begin
       { 16.2.1.7.1 ParseModule: strict, the imports and exports collected, a generator whose start is the module's
@@ -5487,6 +5516,7 @@ begin
         Entry := Copy(Desc, 1, P1 - 1);
         Delete(Desc, 1, P1);
         Fields := Entry.Split([#2]);
+        if Fields[0] = '%noargs' then Outer.NoArguments := True;
         Outer.Scopes[0].Add(Fields[0], K, (StrToInt(Fields[3]) and efConst) <> 0);
         with Outer.Scopes[0].Bindings[Outer.Scopes[0].Count - 1] do
         begin

@@ -5343,6 +5343,13 @@ begin
       if not IsComputed then
         KeyRange := KeyRangeAtPrevious(False);
 
+      // ES2026 §13.2.5: an `async` or `*` prefix makes a method: a parameter
+      // list must follow the key.
+      if (IsAsync or IsGenerator) and not IsGetter and not IsSetter and
+         not Check(gttLeftParen) then
+        raise TGocciaSyntaxError.Create('Expected "(" after a method name',
+          Peek.Line, Peek.Column, FFileName, FSourceLines);
+
       // Handle getter/setter syntax
       if IsGetter then
       begin
