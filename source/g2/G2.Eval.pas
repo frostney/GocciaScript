@@ -147,6 +147,18 @@ begin
       Params := Params + StrToUnicode(StrOf(S));
     end;
   end;
+  { 20.2.1.1.1 steps 15-18: the parameters parse as FormalParameters on their own (a comment, template or
+    function they open does not end in the body) }
+  if Params <> '' then
+  begin
+    DynFuncAnonymous := True;
+    try
+      Ok := ParseAndCompile(Heads[Kind] + Params + #10') {'#10'})', '<Function>', True, T, Err);
+    finally
+      DynFuncAnonymous := False;
+    end;
+    if not Ok then Exit(ThrowError('SyntaxError', Err));
+  end;
   Src := Heads[Kind] + Params + #10') {'#10 + Body + #10'})';
   DynFuncAnonymous := True;
   try
@@ -157,6 +169,10 @@ begin
   if not Ok then Exit(ThrowError('SyntaxError', Err));
   if not MakeScriptClosure(T, Clo) then Exit(False);
   Result := CallValue(Clo, VUndefined, nil, 0, Res);
+  { and the body as a FunctionBody: the function the source makes ends at the brace added after it }
+  if Result and IsObject(Res) and (ObjOf(Res)^.OKind = okFunction) and
+     (UTF8Decode(PFuncTemplate(ObjOf(Res)^.Native)^.SourceRange.Get) <> Copy(Src, 2, Length(Src) - 2)) then
+    Result := ThrowError('SyntaxError', 'Function body is not a FunctionBody');
 end;
 
 function AsyncIter_Self(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
