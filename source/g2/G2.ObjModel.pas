@@ -364,10 +364,11 @@ end;
 
 { stores the complete descriptor M as an own property of P under Key }
 procedure StoreProperty(O: TValue; Key: PStr; const M: TPropDesc);
-var P: PObj; Idx: Int64; S: Integer; V: TValue; Fl: Byte;
+var P: PObj; Idx: Int64; S: Integer; V, MV, MG, MS: TValue; Fl: Byte;
 begin
   P := ObjOf(O);
   Fl := FlagsOf(M);
+  MV := M.Value; MG := M.Get; MS := M.Set_;
   if (P^.Elements <> nil) and IndexFromString(Key, Idx) and (ShapeLookup(P^.Shape, Key) < 0) and
      (Fl = pfDefault) and ((P^.OKind <> okArray) or (Idx < P^.Elements^.Len) or ArrayDenseOK(P^.Elements, Idx)) then
   begin
@@ -384,9 +385,11 @@ begin
      (Idx < 64 * 1024 * 1024) then
   begin
     { an index at or past the length extends it (10.4.2.1 step 1.k) }
-    PushRoot(O); PushRoot(M.Value); PushRoot(M.Get); PushRoot(M.Set_);
+    PushRoot(O); PushRoot(MV); PushRoot(MG); PushRoot(MS);
     ArraySetLength(P, Idx + 1);
-    P := ObjOf(RootAt(TempTop - 4));
+    O := RootAt(TempTop - 4);   { the elements' allocation may have moved the array and the values }
+    MV := RootAt(TempTop - 3); MG := RootAt(TempTop - 2); MS := RootAt(TempTop - 1);
+    P := ObjOf(O);
     P^.Elements^.Data[Idx] := VHole;
     P^.OFlags := P^.OFlags or ofElemGuard;
     PopRoots(4);
@@ -394,14 +397,14 @@ begin
   if M.HasGet then
   begin
     PushRoot(O);
-    V := MkPtr(NewAccessor(M.Get, M.Set_));
+    V := MkPtr(NewAccessor(MG, MS));
     DefineOwn(RootAt(TempTop - 1), Key, V, Fl);
     PopRoots(1);
   end
   else
   begin
     S := ShapeLookup(P^.Shape, Key);
-    DefineOwn(O, Key, M.Value, Fl);
+    DefineOwn(O, Key, MV, Fl);
   end;
 end;
 
@@ -797,6 +800,32 @@ end;
 function KeyOf(V: TValue): PStr;
 begin
   if IsString(V) then Result := Atomize(StrOf(V)) else Result := SymKey(V);
+end;
+
+{ 7.3.25 CopyDataProperties(target, source, « »): every own enumerable property, symbols too, read with [[Get]]
+  in [[OwnPropertyKeys]] order; a proxy's ownKeys, getOwnPropertyDescriptor and get traps run }
+function CopyDataPropsOM(Target, Src: TValue): Boolean;
+var Keys, V: TValue; I, N: Integer; K: PStr; D: TPropDesc; Found: Boolean;
+begin
+  if IsNullish(Src) then Exit(True);
+  PushRoot(Target);
+  if not ToObjectV(Src, Src) then begin PopRoots(1); Exit(False); end;
+  PushRoot(Src);
+  if not OwnPropertyKeysV(Src, Keys) then begin PopRoots(2); Exit(False); end;
+  PushRoot(Keys);
+  N := ArrayLen(ObjOf(Keys));
+  for I := 0 to N - 1 do
+  begin
+    K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
+    if not GetOwnPropertyV(RootAt(TempTop - 2), K, D, Found) then begin PopRoots(3); Exit(False); end;
+    if not Found or not D.Enumerable then Continue;
+    K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
+    if not GetV(RootAt(TempTop - 2), K, V) then begin PopRoots(3); Exit(False); end;
+    K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
+    DefineOwn(RootAt(TempTop - 3), K, V, pfDefault);
+  end;
+  PopRoots(3);
+  Result := True;
 end;
 
 function SetIntegrityLevel(O: TValue; Frozen: Boolean; var Ok: Boolean): Boolean;
@@ -1515,6 +1544,7 @@ begin
   SetReceiverHook := @SetWithReceiver;
   ProxyCheckHook := @ProxyCheckOM;
   ToObjectHook := @ToObjectV;
+  CopyDataPropsHook := @CopyDataPropsOM;
   GetProtoHook := @Object_GetPrototypeOfV;
   Def(SymbolProto, 'toString', SymProto_ToString2, 0);
   Def(SymbolProto, 'valueOf', SymProto_ValueOf, 0);

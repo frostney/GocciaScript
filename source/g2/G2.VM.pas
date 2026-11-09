@@ -54,6 +54,9 @@ var
     13.3.12 import.meta of module ModuleId }
   ImportHook: function(const Referrer: UnicodeString; ModuleId: Integer; Spec, Opts: TValue; var Res: TValue): Boolean = nil;
   ImportMetaHook: function(ModuleId: Integer; var Res: TValue): Boolean = nil;
+  { G2.ObjModel's 7.3.25 CopyDataProperties for a source the fast path does not take (an exotic object, a symbol
+    key, a primitive) }
+  CopyDataPropsHook: function(Target, Src: TValue): Boolean = nil;
 threadvar
   { opImport: the import call's phase while the hook runs (0 evaluation, 1 source, 2 defer) }
   ImportPhase: Integer;
@@ -122,6 +125,7 @@ threadvar
   { the intrinsic %ArrayIteratorPrototype%.next and %GeneratorPrototype%.next (G2.Builtins sets them): an
     iterator record whose next method is one of them steps without a call }
   ArrayIterNextFn, GenNextFn: TValue;
+  MapIterNextFn, SetIterNextFn: TValue;   { %MapIteratorPrototype%.next, %SetIteratorPrototype%.next }
   { the function and iterator intrinsics of generators and async code (G2.Promise makes them) }
   GenFunctionProto, AsyncFunctionProto, AsyncGenFunctionProto, AsyncGeneratorProto, AsyncIteratorProto,
     AsyncFromSyncIterProto: TValue;
@@ -257,6 +261,7 @@ threadvar
   ArrayValuesFnPublic: TValue;
   BigIntProto: TValue;
   ErrorProtoType, TypeErrorProto, RangeErrorProto, SyntaxErrorProto, ReferenceErrorProto: TValue;
+  EvalErrorProto, URIErrorProto: TValue;
   ArrayIterNative: TNativeFn;
 
 implementation
@@ -732,7 +737,9 @@ end;
 function IteratorStepRec(It, NextM: TValue; var Value: TValue; var Done: Boolean): Boolean;
 var R: TValue;
 begin
-  if (NextM = ArrayIterNextFn) and IsObject(It) and (ObjOf(It)^.OKind = okIterator) then
+  if ((NextM = ArrayIterNextFn) or (NextM = MapIterNextFn) or (NextM = SetIterNextFn)) and IsObject(It) and
+     (ObjOf(It)^.OKind = okIterator) and ((ObjOf(It)^.OFlags >= 5) = (NextM <> ArrayIterNextFn)) and
+     ((ObjOf(It)^.OFlags >= 8) = (NextM = SetIterNextFn)) then
     Exit(IteratorStep(It, Value, Done));
   if (NextM = GenNextFn) and IsObject(It) and (ObjOf(It)^.OKind = okGenerator) then
   begin
@@ -794,11 +801,12 @@ end;
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
 var O: PObj; M: TValue;
 begin
+  PushRoot(Proto);   { the message's allocation can move a young prototype }
   M := StrFromUnicode(Msg);
   PushRoot(M);
-  O := NewObject(RootShapeFor(Proto), 4, okError);
+  O := NewObject(RootShapeFor(RootAt(TempTop - 2)), 4, okError);
   M := RootAt(TempTop - 1);
-  PopRoots(1);
+  PopRoots(2);
   AddProperty(O, AtomMessage, M, pfHidden);
   Result := MkPtr(O);
 end;
@@ -810,6 +818,8 @@ begin
   else if Kind = 'RangeError' then P := RangeErrorProto
   else if Kind = 'SyntaxError' then P := SyntaxErrorProto
   else if Kind = 'ReferenceError' then P := ReferenceErrorProto
+  else if Kind = 'URIError' then P := URIErrorProto
+  else if Kind = 'EvalError' then P := EvalErrorProto
   else P := ErrorProto;
   Pending := MakeError(P, Msg);
   Result := False;
@@ -2022,7 +2032,7 @@ begin
 end;
 
 function IteratorStep(It: TValue; var Value: TValue; var Done: Boolean): Boolean;
-var O: PObj; I: Integer; Src: TValue; S: PStr; NextF, R: TValue; C: Integer; Len: Int64;
+var O: PObj; I: Integer; Src: TValue; S: PStr; NextF, R: TValue; C: Integer; Len: Int64; E: PValueArray;
 begin
   Value := VUndefined;   { a done step's value }
   O := ObjOf(It);
@@ -2039,6 +2049,33 @@ begin
       O^.Aux2 := MkInt(I + C);
       Value := SubString(S, I, C);
       Done := False;
+      Exit(True);
+    end;
+    if O^.OFlags >= 5 then
+    begin
+      { a Map or Set iterator (G2.Builtins): the next live entry of the map's entry list (Aux1 [k0, v0, k1, ...]),
+        undefined once done }
+      if Src = VUndefined then begin Done := True; Exit(True); end;
+      E := PValueArray(PtrOf(ObjOf(Src)^.Aux1));
+      while (I < Integer(E^.Len)) and (E^.Data[I] = VHole) do Inc(I, 2);
+      if I >= Integer(E^.Len) then begin O^.Aux1 := VUndefined; Done := True; Exit(True); end;
+      O^.Aux2 := MkInt(I + 2);
+      Done := False;
+      case O^.OFlags of
+        5, 8: Value := E^.Data[I];
+        6: Value := E^.Data[I + 1];
+      else
+        begin
+          PushRoot(It);
+          O := NewArray(2, 2);
+          E := PValueArray(PtrOf(ObjOf(ObjOf(RootAt(TempTop - 1))^.Aux1)^.Aux1));
+          O^.Elements^.Data[0] := E^.Data[I];
+          if ObjOf(RootAt(TempTop - 1))^.OFlags = 7 then O^.Elements^.Data[1] := E^.Data[I + 1]
+          else O^.Elements^.Data[1] := E^.Data[I];
+          PopRoots(1);
+          Value := MkPtr(O);
+        end;
+      end;
       Exit(True);
     end;
     if O^.OFlags = 4 then
@@ -2872,14 +2909,38 @@ begin
   Result := True;
 end;
 
+{ 7.1.3 ToNumeric: a BigInt stays one, anything else becomes a Number }
+function ToNumericV(V: TValue; var Res: TValue): Boolean;
+var D: Double;
+begin
+  if IsNumber(V) or IsBigInt(V) then begin Res := V; Exit(True); end;
+  if IsObject(V) then
+  begin
+    if not ToPrimitiveHint(V, phNumber, V) then Exit(False);
+    if IsBigInt(V) then begin Res := V; Exit(True); end;
+  end;
+  if not ToNumberV(V, D) then Exit(False);
+  Res := MkNumber(D);
+  Result := True;
+end;
+
 function ArithSlow(Op: TOp; A, B: TValue; var Res: TValue): Boolean;
 var DA, DB, R: Double; IA, IB: Int32;
 begin
-  if IsBigInt(A) or IsBigInt(B) then Exit(BigArith(Op, A, B, Res));
-  PushRoot(B);
-  if not ToNumberV(A, DA) then begin PopRoots(1); Exit(False); end;
-  if not ToNumberV(RootAt(TempTop - 1), DB) then begin PopRoots(1); Exit(False); end;
-  PopRoots(1);
+  { 13.15.3 ApplyStringOrNumericBinaryOperator: ToNumeric of both operands, left first; mixed types throw }
+  if not (IsNumber(A) and IsNumber(B)) then
+  begin
+    PushRoot(B);
+    if not ToNumericV(A, A) then begin PopRoots(1); Exit(False); end;
+    B := RootAt(TempTop - 1);
+    PushRoot(A);
+    if not ToNumericV(B, B) then begin PopRoots(2); Exit(False); end;
+    A := RootAt(TempTop - 1);
+    PopRoots(2);
+    if IsBigInt(A) or IsBigInt(B) then Exit(BigArith(Op, A, B, Res));
+  end;
+  DA := NumOf(A);
+  DB := NumOf(B);
   case Op of
     opSub: R := DA - DB;
     opMul: R := DA * DB;
@@ -3014,9 +3075,19 @@ begin
 end;
 
 function CopyDataProps(Target, Src: TValue): Boolean;
-var Keys, V: TValue; I, N: Integer; K: PStr;
+var Keys, V: TValue; I, N: Integer; K: PStr; S: PShape;
 begin
-  if not IsObject(Src) then Exit(True);
+  if IsNullish(Src) then Exit(True);
+  if not IsObject(Src) then
+  begin
+    { ToObject: only a String object has own enumerable properties }
+    if IsString(Src) and (StrOf(Src)^.Len > 0) then Exit(CopyDataPropsHook(Target, Src));
+    Exit(True);
+  end;
+  if not (ObjOf(Src)^.OKind in [okPlain, okArray, okFunction]) then Exit(CopyDataPropsHook(Target, Src));
+  S := ObjOf(Src)^.Shape;
+  for I := 0 to S^.Count - 1 do
+    if (S^.Keys[I]^.Hdr.Extra and kfSymbol) <> 0 then Exit(CopyDataPropsHook(Target, Src));
   PushRoot(Target); PushRoot(Src);
   Keys := OwnKeys(ObjOf(Src), True);
   if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(2); Exit(False); end;
@@ -4833,8 +4904,8 @@ LReload:
           else
           begin
             Fr^.PC := PC;
-            if not ToNumberV(VA, D) then goto LThrow;
-            R[A] := MkDouble(-D);
+            if not ToNumericV(VA, V) then goto LThrow;
+            if IsBigInt(V) then R[A] := XBigNegate(V) else R[A] := MkDouble(-NumOf(V));
           end;
         end;
       opBitNot:
@@ -4843,9 +4914,12 @@ LReload:
           if IsInt(VA) then R[A] := MkInt(not IntOf(VA))
           else
           begin
+            { 13.5.6: ~x of a BigInt is -x - 1 }
             Fr^.PC := PC;
-            if not ArithSlow(opBitXor, VA, MkInt(-1), V) then goto LThrow;
-            R[A] := V;
+            if not ToNumericV(VA, V) then goto LThrow;
+            if IsBigInt(V) then R[A] := XBigAddInt(XBigNegate(V), -1)
+            else if not ArithSlow(opBitXor, V, MkInt(-1), V) then goto LThrow
+            else R[A] := V;
           end;
         end;
       opNot: R[A] := MkBool(not ToBool(R[(I shr 24) and $FFFF]));
@@ -5292,7 +5366,9 @@ LReload:
           O := ObjOf(R[A]);
           V := R[(I shr 24) and $FFFF];
           CI := ShapeLookup(O^.Shape, Key);
-          if CI >= 0 then SetSlot(O, CI, V) else AddProperty(O, Key, V, pfDefault);
+          if CI < 0 then AddProperty(O, Key, V, pfDefault)
+          else if O^.Shape^.PFlags[CI] = pfDefault then SetSlot(O, CI, V)
+          else DefineOwn(R[A], Key, V, pfDefault);   { replaces an accessor of the same name }
         end;
       opDefPropC:
         begin
@@ -5772,6 +5848,14 @@ LReload:
         begin
           VB := R[A];
           R[A] := VUndefined;
+          { C = 1: R[B] is the completion; a generator's return completion closes as a normal one would (7.4.11
+            IteratorClose step 5: return()'s errors and a non-object result are thrown) }
+          if ((I shr 40) = 1) and IsRetComp(R[(I shr 24) and $FFFF]) then
+          begin
+            Fr^.PC := PC;
+            if not IteratorCloseV(VB, False) then goto LThrow;
+            Continue;
+          end;
           V := Pending;
           Pending := VUndefined;
           IteratorCloseV(VB, True);

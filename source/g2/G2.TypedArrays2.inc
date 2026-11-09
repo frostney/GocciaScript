@@ -537,7 +537,8 @@ begin
       N := 0;
       while K < Fin do
       begin
-        if not TAStoreValue(RootAt(TempTop - 1), N, TAGetV(Args[0], K)) then begin PopRoots(1); Exit(False); end;
+        LV := TAGetV(Args[0], K);   { may allocate (a BigInt): read before the rooted target }
+        if not TAStoreValue(RootAt(TempTop - 1), N, LV) then begin PopRoots(1); Exit(False); end;
         Inc(K); Inc(N);
       end;
       T := RootAt(TempTop - 1);
@@ -688,10 +689,22 @@ begin
   Base := TempTop;
   PushRoot(N);
   if not TACreateSameType(Args[0], Len, T) then begin PopRoots(1); Exit(False); end;
+  PushRoot(T);
   for K := 0 to Len - 1 do
-    if K = Idx then StoreElem(ObjOf(T), K, RootAt(Base))
-    else StoreElem(ObjOf(T), K, TAGetV(Args[0], K));
-  PopRoots(1);
+    if K = Idx then StoreElem(ObjOf(RootAt(Base + 1)), K, RootAt(Base))
+    else if K < TALength(ObjOf(Args[0])) then
+    begin
+      N := TAGetV(Args[0], K);   { a BigInt read allocates: the new array is re-read after it }
+      StoreElem(ObjOf(RootAt(Base + 1)), K, N);
+    end
+    else
+    begin
+      { the index's coercion shrank the buffer: Get reads undefined, which Set converts (ToBigInt throws) }
+      if TAIsBig(ObjOf(Args[0])) then begin PopRoots(2); Exit(ThrowTypeError('Cannot convert undefined to a BigInt')); end;
+      StoreElem(ObjOf(RootAt(Base + 1)), K, MkNumber(NaN));
+    end;
+  T := RootAt(Base + 1);
+  PopRoots(2);
   Res := T;
   Result := True;
 end;

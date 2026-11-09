@@ -529,11 +529,9 @@ begin
   if S >= 0 then
   begin
     P := GetSlot(F, S);
-    if IsProxy(P) then
-    begin
-      ObjOf(P)^.Aux1 := VNull;
-      ObjOf(P)^.Aux2 := VNull;
-    end;
+    { the handler marks revocation; the target stays, for an operation that was already past
+      ValidateNonRevokedProxy when a trap lookup revoked the proxy (it holds the target it read) }
+    if IsProxy(P) then ObjOf(P)^.Aux2 := VNull;
     SetSlot(F, S, VNull);
   end;
   Res := VUndefined;

@@ -117,7 +117,8 @@ begin
   begin
     if not NumArg(Args, Argc, 1, FD) then Exit(False);
     if IsNaN(FD) then FD := 0;
-    F := Trunc(FD);
+    if Abs(FD) > 1000 then F := 1000 else F := Trunc(FD);   { ToIntegerOrInfinity; anything past 100 is a RangeError }
+    if F = -1 then F := -2;
   end;
   if IsNaN(D) or IsInfinite(D) then begin Res := NumberToStr(D); Exit(True); end;
   if (F <> -1) and ((F < 0) or (F > 100)) then Exit(ThrowError('RangeError', 'toExponential() argument must be between 0 and 100'));
@@ -158,7 +159,7 @@ begin
   if Arg(Args, Argc, 1) <> VUndefined then
     if not NumArg(Args, Argc, 1, FD) then Exit(False);
   if IsNaN(FD) then FD := 0;
-  F := Trunc(FD);
+  if Abs(FD) > 1000 then F := 1000 else F := Trunc(FD);
   if (F < 0) or (F > 100) then Exit(ThrowError('RangeError', 'toFixed() digits argument must be between 0 and 100'));
   if IsNaN(D) or IsInfinite(D) or (Abs(D) >= 1e21) then begin Res := NumberToStr(D); Exit(True); end;
   Sign := '';
@@ -177,6 +178,125 @@ begin
   if Length(N) <= F then N := StringOfChar('0', F + 1 - Length(N)) + N;
   if F > 0 then N := Copy(N, 1, Length(N) - F) + '.' + Copy(N, Length(N) - F + 1, F);
   Res := StrFromUnicode(Sign + UnicodeString(N));
+  Result := True;
+end;
+
+{ 21.1.3.5 Number.prototype.toPrecision }
+function NumProto_ToPrecision(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var D, PD: Double; P, E: Integer; Dig, M: string; Carry: Boolean; Sign, S: UnicodeString;
+begin
+  if not ThisNumber(Args, D) then Exit(False);
+  if Arg(Args, Argc, 1) = VUndefined then begin Res := NumberToStr(D); Exit(True); end;
+  if not NumArg(Args, Argc, 1, PD) then Exit(False);
+  if IsNaN(PD) then PD := 0;
+  if Abs(PD) > 1000 then P := 1000 else P := Trunc(PD);
+  if IsNaN(D) or IsInfinite(D) then begin Res := NumberToStr(D); Exit(True); end;
+  if (P < 1) or (P > 100) then Exit(ThrowError('RangeError', 'toPrecision() argument must be between 1 and 100'));
+  Sign := '';
+  if D < 0 then begin Sign := '-'; D := -D; end;
+  if D = 0 then
+  begin
+    M := StringOfChar('0', P);
+    E := 0;
+  end
+  else
+  begin
+    ExactDecimal(D, Dig, E);
+    M := RoundDigits(Dig, P, Carry);
+    if Carry then begin Inc(E); M := Copy(M, 1, P); end;
+  end;
+  if (E < -6) or (E >= P) then
+  begin
+    S := UnicodeString(M[1]);
+    if P > 1 then S := S + '.' + UnicodeString(Copy(M, 2, MaxInt));
+    if E < 0 then S := S + 'e-' + UnicodeString(IntToStr(-E)) else S := S + 'e+' + UnicodeString(IntToStr(E));
+  end
+  else if E = P - 1 then S := UnicodeString(M)
+  else if E >= 0 then S := UnicodeString(Copy(M, 1, E + 1) + '.' + Copy(M, E + 2, MaxInt))
+  else S := '0.' + UnicodeString(StringOfChar('0', -(E + 1)) + M);
+  Res := StrFromUnicode(Sign + S);
+  Result := True;
+end;
+
+function NextDoubleUp(X: Double): Double;
+var B: QWord;
+begin
+  B := PQWord(@X)^ + 1;   { X > 0 and finite }
+  Result := PDouble(@B)^;
+end;
+
+{ 21.1.3.6 Number.prototype.toString(radix): for a radix other than 10, the digits of the shortest-enough
+  expansion (V8's DoubleToRadixCString: fraction digits up to the input's precision, rounded to even) }
+function NumProto_ToString4(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+const Chars: string = '0123456789abcdefghijklmnopqrstuvwxyz';
+  BufSize = 2200;
+var D, RD, IntPart, Frac_, Delta, Rem: Double; Radix, Digit, IC, FC: Integer; Neg: Boolean;
+  Buf: array[0..BufSize - 1] of Char; C: Char; S: string;
+begin
+  if not ThisNumber(Args, D) then Exit(False);
+  if Arg(Args, Argc, 1) = VUndefined then RD := 10
+  else
+  begin
+    if not NumArg(Args, Argc, 1, RD) then Exit(False);
+    if IsNaN(RD) then RD := 0;
+    RD := Int(RD);
+  end;
+  if (RD < 2) or (RD > 36) then Exit(ThrowError('RangeError', 'toString() radix must be between 2 and 36'));
+  Radix := Trunc(RD);
+  if (Radix = 10) or IsNaN(D) or IsInfinite(D) or (D = 0) then begin Res := NumberToStr(D); Exit(True); end;
+  Neg := D < 0;
+  if Neg then D := -D;
+  IC := BufSize div 2;
+  FC := IC;
+  IntPart := Int(D);
+  Frac_ := D - IntPart;
+  Delta := 0.5 * (NextDoubleUp(D) - D);
+  if Delta < 4.9406564584124654e-324 then Delta := 4.9406564584124654e-324;
+  if Frac_ >= Delta then
+  begin
+    Buf[FC] := '.'; Inc(FC);
+    repeat
+      Frac_ := Frac_ * Radix;
+      Delta := Delta * Radix;
+      Digit := Trunc(Frac_);
+      Buf[FC] := Chars[Digit + 1]; Inc(FC);
+      Frac_ := Frac_ - Digit;
+      if (Frac_ > 0.5) or ((Frac_ = 0.5) and ((Digit and 1) <> 0)) then
+        if Frac_ + Delta > 1 then
+        begin
+          { round up, carrying through the digits already written }
+          while True do
+          begin
+            Dec(FC);
+            if FC = BufSize div 2 then begin IntPart := IntPart + 1; Break; end;
+            C := Buf[FC];
+            if C > '9' then Digit := Ord(C) - Ord('a') + 10 else Digit := Ord(C) - Ord('0');
+            if Digit + 1 < Radix then
+            begin
+              Buf[FC] := Chars[Digit + 2]; Inc(FC);
+              Break;
+            end;
+          end;
+          Break;
+        end;
+    until Frac_ < Delta;
+  end;
+  { the integer digits; those below the double's precision are zeros }
+  while IntPart / Radix >= 9007199254740992.0 do
+  begin
+    IntPart := IntPart / Radix;
+    Dec(IC); Buf[IC] := '0';
+  end;
+  repeat
+    Rem := IntPart - Int(IntPart / Radix) * Radix;
+    if Rem < 0 then Rem := Rem + Radix;
+    if Rem >= Radix then Rem := Rem - Radix;
+    Dec(IC); Buf[IC] := Chars[Trunc(Rem) + 1];
+    IntPart := (IntPart - Rem) / Radix;
+  until IntPart <= 0;
+  SetString(S, PChar(@Buf[IC]), FC - IC);
+  if Neg then S := '-' + S;
+  Res := StrFromUnicode(UnicodeString(S));
   Result := True;
 end;
 
@@ -315,39 +435,63 @@ begin
   end;
 end;
 
+{ 19.2.6.5 Decode: each escape sequence is one UTF-8 encoded code point (no overlong form, no surrogate, at most
+  U+10FFFF); a single byte in Keep stays escaped }
 function URIDecode(const S: UnicodeString; const Keep: UnicodeString; var Res: TValue): Boolean;
-var I, B, N, K, Start: Integer; Out_: UnicodeString; Bytes: RawByteString; Dec_: UnicodeString;
+var I, B, N, K, Start, O: Integer; CP: Cardinal; Out_: UnicodeString;
+  function HexAt(P: Integer): Integer;
+  begin
+    if (P + 2 > Length(S)) or (S[P] <> '%') or (HexVal(S[P + 1]) < 0) or (HexVal(S[P + 2]) < 0) then Exit(-1);
+    Result := HexVal(S[P + 1]) * 16 + HexVal(S[P + 2]);
+  end;
+  procedure Put(C: WideChar); inline;
+  begin
+    Inc(O);
+    Out_[O] := C;
+  end;
 begin
-  Out_ := '';
+  SetLength(Out_, Length(S));   { each escape sequence decodes to fewer code units than it has }
+  O := 0;
   I := 1;
   while I <= Length(S) do
   begin
-    if S[I] <> '%' then begin Out_ := Out_ + S[I]; Inc(I); Continue; end;
+    if S[I] <> '%' then begin Put(S[I]); Inc(I); Continue; end;
     Start := I;
-    if (I + 2 > Length(S)) or (HexVal(S[I + 1]) < 0) or (HexVal(S[I + 2]) < 0) then Exit(ThrowError('URIError', 'URI malformed'));
-    B := HexVal(S[I + 1]) * 16 + HexVal(S[I + 2]);
+    B := HexAt(I);
+    if B < 0 then Exit(ThrowError('URIError', 'URI malformed'));
     Inc(I, 3);
     if B < $80 then
     begin
-      if Pos(WideChar(B), Keep) > 0 then Out_ := Out_ + Copy(S, Start, 3) else Out_ := Out_ + WideChar(B);
+      if Pos(WideChar(B), Keep) > 0 then
+      begin
+        Put(S[Start]); Put(S[Start + 1]); Put(S[Start + 2]);
+      end
+      else Put(WideChar(B));
       Continue;
     end;
-    if (B and $E0) = $C0 then N := 1 else if (B and $F0) = $E0 then N := 2 else if (B and $F8) = $F0 then N := 3
+    if (B and $E0) = $C0 then begin N := 1; CP := B and $1F; end
+    else if (B and $F0) = $E0 then begin N := 2; CP := B and $0F; end
+    else if (B and $F8) = $F0 then begin N := 3; CP := B and $07; end
     else Exit(ThrowError('URIError', 'URI malformed'));
-    Bytes := AnsiChar(B);
     for K := 1 to N do
     begin
-      if (I + 2 > Length(S)) or (S[I] <> '%') or (HexVal(S[I + 1]) < 0) or (HexVal(S[I + 2]) < 0) then
-        Exit(ThrowError('URIError', 'URI malformed'));
-      B := HexVal(S[I + 1]) * 16 + HexVal(S[I + 2]);
-      if (B and $C0) <> $80 then Exit(ThrowError('URIError', 'URI malformed'));
-      Bytes := Bytes + AnsiChar(B);
+      B := HexAt(I);
+      if (B < 0) or ((B and $C0) <> $80) then Exit(ThrowError('URIError', 'URI malformed'));
+      CP := (CP shl 6) or Cardinal(B and $3F);
       Inc(I, 3);
     end;
-    Dec_ := UTF8Decode(Bytes);
-    if Dec_ = '' then Exit(ThrowError('URIError', 'URI malformed'));
-    Out_ := Out_ + Dec_;
+    if ((N = 1) and (CP < $80)) or ((N = 2) and (CP < $800)) or ((N = 3) and (CP < $10000)) or
+       ((CP >= $D800) and (CP <= $DFFF)) or (CP > $10FFFF) then
+      Exit(ThrowError('URIError', 'URI malformed'));
+    if CP < $10000 then Put(WideChar(CP))
+    else
+    begin
+      Dec(CP, $10000);
+      Put(WideChar($D800 + (CP shr 10)));
+      Put(WideChar($DC00 + (CP and $3FF)));
+    end;
   end;
+  SetLength(Out_, O);
   Res := StrFromUnicode(Out_);
   Result := True;
 end;
@@ -405,6 +549,17 @@ begin
   Result := CallValue(Clo, VUndefined, nil, 0, Res);
 end;
 
+{ where a directive goes after a hashbang comment: past its line terminator (one is added when the comment ends
+  the source) }
+function AfterHashbang(var Src: UnicodeString): Integer;
+begin
+  Result := 1;
+  while (Result <= Length(Src)) and not CharInSet(Src[Result], [#10, #13]) and (Src[Result] <> #$2028) and
+        (Src[Result] <> #$2029) do Inc(Result);
+  if Result > Length(Src) then Src := Src + #10;
+  Inc(Result);
+end;
+
 function G_Eval(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var T: PFuncTemplate; Err, Src: UnicodeString; Clo: TValue; Goal, P: Integer;
 begin
@@ -419,11 +574,15 @@ begin
     if Goal = 1 then
     begin
       P := 1;
-      if (Length(Src) >= 2) and (Src[1] = '#') and (Src[2] = '!') then
-        while (P <= Length(Src)) and not CharInSet(Src[P], [#10, #13]) and (Src[P] <> #$2028) and (Src[P] <> #$2029) do Inc(P);
+      if (Length(Src) >= 2) and (Src[1] = '#') and (Src[2] = '!') then P := AfterHashbang(Src);
       Insert('"use strict";', Src, P);
     end;
-    Exit(EvalInCaller(Src, EvalDesc, Res));
+    EvalStrictPrefix := Goal = 1;
+    try
+      Exit(EvalInCaller(Src, EvalDesc, Res));
+    finally
+      EvalStrictPrefix := False;
+    end;
   end;
   if Goal = 1 then
   begin
@@ -431,12 +590,14 @@ begin
     Src := StrToUnicode(StrOf(Args[1]));
     { after a hashbang comment, which only the very start of the source may hold }
     P := 1;
-    if (Length(Src) >= 2) and (Src[1] = '#') and (Src[2] = '!') then
-    begin
-      while (P <= Length(Src)) and not CharInSet(Src[P], [#10, #13]) and (Src[P] <> #$2028) and (Src[P] <> #$2029) do Inc(P);
-    end;
+    if (Length(Src) >= 2) and (Src[1] = '#') and (Src[2] = '!') then P := AfterHashbang(Src);
     Insert('"use strict";', Src, P);
-    if not ParseAndCompile(Src, '<eval>', True, T, Err, 0) then Exit(ThrowError('SyntaxError', Err));
+    EvalStrictPrefix := True;
+    try
+      if not ParseAndCompile(Src, '<eval>', True, T, Err, 0) then Exit(ThrowError('SyntaxError', Err));
+    finally
+      EvalStrictPrefix := False;
+    end;
   end
   else if not ParseAndCompile(StrToUnicode(StrOf(Args[1])), '<eval>', True, T, Err, Goal) then Exit(ThrowError('SyntaxError', Err));
   if not MakeScriptClosure(T, Clo) then Exit(False);
@@ -609,10 +770,6 @@ const
     '    if (c < 0x10000) s += String.fromCharCode(c); else { c -= 0x10000; s += String.fromCharCode(0xD800 + (c >> 10), 0xDC00 + (c & 0x3FF)); } } return s; });'#10 +
     '  def(String, "raw", function (strs) { var r = strs.raw, s = ""; for (var i = 0; i < r.length; i++) { s += r[i]; if (i + 1 < r.length && i + 1 < arguments.length) s += arguments[i + 1]; } return s; });'#10 +
     '  def(String.prototype, "isWellFormed", function () { return !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(this); });'#10 +
-    '  def(Number.prototype, "toPrecision", function (p) { var x = Number(this.valueOf()); if (p === undefined) return String(x); p = toInt(p);'#10 +
-    '    if (x !== x || x === Infinity || x === -Infinity) return String(x); if (p < 1 || p > 100) throw new RangeError("toPrecision() argument must be between 1 and 100");'#10 +
-    '    if (x === 0) return p > 1 ? "0." + "0".repeat(p - 1) : "0";'#10 +
-    '    var s = x.toExponential(p - 1), e = +s.slice(s.indexOf("e") + 1); if (e < -6 || e >= p) return s; return x.toFixed(Math.max(0, p - 1 - e)); });'#10 +
     '  def(Number.prototype, "toLocaleString", function () { return String(this.valueOf()); });'#10 +
     '  Object.defineProperty(Number, "MIN_VALUE", {value: 5e-324});'#10 +
     '  ["LOG10E", Math.LOG10E || 0.4342944819032518, "LOG2E", 1.4426950408889634, "SQRT1_2", 0.7071067811865476].forEach(function (v, i, a) { if (i % 2 === 0) Object.defineProperty(Math, v, {value: a[i + 1]}); });'#10 +
@@ -635,11 +792,6 @@ const
     '  def(R, "isExtensible", Object.isExtensible);'#10 +
     '  def(R, "preventExtensions", function (o) { Object.preventExtensions(o); return true; });'#10 +
     '  def(R, "setPrototypeOf", function (o, p) { try { Object.setPrototypeOf(o, p); return true; } catch (e) { return false; } });'#10 +
-    '  function errType(name) { var C = function (m) { var e = new Error(m); Object.setPrototypeOf(e, this instanceof C ? Object.getPrototypeOf(this) : C.prototype); return e; };'#10 +
-    '    C.prototype = Object.create(Error.prototype); def(C.prototype, "constructor", C); def(C.prototype, "name", name); def(C, "name", name); Object.setPrototypeOf(C, Error); def(G, name, C); return C; }'#10 +
-    '  errType("EvalError"); errType("URIError");'#10 +
-    '  var AE = errType("AggregateError"); def(G, "AggregateError", function (errs, m) { var e = new Error(m); var p = new.target ? new.target.prototype : AE.prototype; Object.setPrototypeOf(e, p !== null && (typeof p === "object" || typeof p === "function") ? p : AE.prototype); e.errors = Array.from(errs); return e; });'#10 +
-    '  G.AggregateError.prototype = AE.prototype;'#10 +
     '  Object.defineProperty(G, "NaN", {value: NaN}); Object.defineProperty(G, "Infinity", {value: Infinity}); Object.defineProperty(G, "undefined", {value: undefined});'#10 +
     '})';
 
@@ -654,6 +806,13 @@ begin
   Scratch := Lookup(Lookup(GlobalObj, 'Number'), 'prototype');
   DefineNative(Scratch, 'toExponential', NumProto_ToExponential, 1);
   DefineNative(Scratch, 'toFixed', NumProto_ToFixed4, 1);
+  DefineNative(Scratch, 'toPrecision', NumProto_ToPrecision, 1);
+  DefineNative(Scratch, 'toString', NumProto_ToString4, 1);
+  { 21.1.2.12 / 21.1.2.13: Number.parseFloat and Number.parseInt are the global functions }
+  Scratch := Lookup(GlobalObj, 'Number');
+  DefineOwn(Scratch, AtomOf('parseFloat'), Lookup(GlobalObj, 'parseFloat'), pfHidden);
+  DefineOwn(Scratch, AtomOf('parseInt'), Lookup(GlobalObj, 'parseInt'), pfHidden);
+  Scratch := Lookup(Lookup(GlobalObj, 'Number'), 'prototype');
   Scratch := Lookup(Lookup(GlobalObj, 'Boolean'), 'prototype');
   DefineNative(Scratch, 'toString', BoolProto_ToString, 0);
   DefineNative(Scratch, 'valueOf', BoolProto_ValueOf, 0);

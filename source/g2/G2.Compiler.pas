@@ -24,6 +24,10 @@ type
 function CompileProgram(Prog: TGocciaProgram; const SourceName: UnicodeString; ReturnLast: Boolean = False;
   Goal: Integer = 0): PFuncTemplate;
 
+threadvar
+  { the eval code starts with a "use strict" directive the caller inserted to make it strict: not its value }
+  EvalStrictPrefix: Boolean;
+
 const
   ModNamespace = '*namespace*';   { an import or indirect export of a whole module namespace }
 
@@ -185,6 +189,9 @@ type
     CurLine: Integer;
     VarRegs: array of Integer;   { per register: bindings of the open scopes that use it }
     IsEvalOuter: Boolean;   { goal 4: the stand-in for a direct eval's caller, its bindings the caller's }
+    CplP1: Integer;         { 1 + the register of the script's completion value (eval code, ReturnLast), 0 none }
+    CplSkip: Boolean;       { the next expression statement is EvalStrictPrefix's directive }
+    ParamAwait: Boolean;    { compiling an arrow's parameters in a class static block: ArrowParameters[+Await] }
     ParamTDZ: TStringList;  { while parameter initializers compile: the parameters not yet initialized }
   end;
 
@@ -248,6 +255,7 @@ type
     procedure EmitClosure(Dest: Integer; T: PFuncTemplate);
     { statements }
     procedure Stmt(S: TGocciaASTNode);
+    procedure FinallyStmt(B: TGocciaASTNode);
     procedure StmtLabeled(St: TGocciaStatement);
     procedure CheckIdent(const N: UnicodeString);
     function WithsFor(const N: UnicodeString; var Idx: array of Integer): Integer;
@@ -591,7 +599,7 @@ begin
   begin
     { an arrow's concise body is [~Await]: only the async function's (or async arrow's) own code }
     F := FS;
-    if F.Tpl^.IsAsync or F.IsStaticBlock then
+    if F.Tpl^.IsAsync or F.IsStaticBlock or F.ParamAwait then
       raise EEarlySyntaxError.Create('Unexpected reserved word ''await''');
   end
   else if (N = 'yield') and (FS.Tpl^.IsStrict or (FS.Tpl^.IsGenerator and not FS.Tpl^.IsArrow)) then
@@ -912,6 +920,7 @@ procedure TCompiler.CompileWith(S: TGocciaWithStatement);
 var R: Integer; Nm: UnicodeString;
 begin
   if FS.Tpl^.IsStrict then raise EEarlySyntaxError.Create('Strict mode code may not include a with statement');
+  CheckStatementBody(S.Body, False, False);
   PushScope;
   Nm := '%with' + IntToStr(WithSerial);
   Inc(WithSerial);
@@ -1149,12 +1158,17 @@ begin
       if Params[I].IsRest or Assigned(Params[I].DefaultValue) then Break;
       Inc(T^.Length);
     end;
+    { 15.3 ArrowParameters[?Await]: in a class static block (15.7.1 ContainsAwait) await names nothing }
+    F.ParamAwait := IsArrow and (Outer <> nil) and (Outer.IsStaticBlock or Outer.ParamAwait);
     { parameter registers 1..NP, in order; patterns get a hidden name }
     J := 0;
     for I := 0 to High(Params) do
       if not Params[I].IsRest then
       begin
         Inc(J);
+        { 15.2.1 / 15.3.1: eval and arguments are not parameter names in strict code }
+        if T^.IsStrict and not Params[I].IsPattern and ((Params[I].Name = 'eval') or (Params[I].Name = 'arguments')) then
+          raise EEarlySyntaxError.Create('Unexpected eval or arguments in strict mode');
         if Params[I].IsPattern then DeclareLocal('%param' + IntToStr(J), False)
         else DeclareLocal(Params[I].Name, False);
       end;
@@ -1228,6 +1242,7 @@ begin
     end;
     FreeAndNil(FS.ParamTDZ);
     InParamInit := False;
+    F.ParamAwait := False;
     if DefaultSuperForward then
     begin
       // constructor(...args) { super(...args); }
@@ -1295,13 +1310,17 @@ begin
           Emit(Ins(opMakeGLex, R, 0, I));
         end;
       end;
-      if ReturnLast and ((Outer = nil) or Outer.IsEvalOuter) and (Nodes.Count > 0) and
-         (Nodes[Nodes.Count - 1] is TGocciaExpressionStatement) then
+      if ReturnLast and ((Outer = nil) or Outer.IsEvalOuter) and (Nodes.Count > 0) then
       begin
+        { the script's value: its statement list's completion value }
         ReturnLast := False;
-        for I := 0 to Nodes.Count - 2 do Stmt(Nodes[I]);
         Ret := AllocReg;
-        ExprTo(TGocciaExpressionStatement(Nodes[Nodes.Count - 1]).Expression, Ret);
+        Emit(Ins(opLoadUndef, Ret, 0, 0));
+        F.CplP1 := Ret + 1;
+        F.CplSkip := EvalStrictPrefix;
+        EvalStrictPrefix := False;   { consumed: eval code this code runs is compiled on its own }
+        StmtNodes(Nodes);
+        F.CplP1 := 0;
         Emit(Ins(opRet, Ret, 0, 0));
       end
       else
@@ -2186,7 +2205,7 @@ begin
     begin
       Saved := FS.TryCount;
       FS.TryCount := I;   { a jump inside the finally body must not re-run it }
-      Stmt(FS.Tries[I].Block);
+      FinallyStmt(FS.Tries[I].Block);
       FS.TryCount := Saved;
     end;
     if FS.Tries[I].UsingCap >= 0 then
@@ -2221,6 +2240,18 @@ begin
   if IsBreak then AddJump(FS.Loops[Found].BreakJumps, J) else AddJump(FS.Loops[Found].ContJumps, J);
 end;
 
+{ a finally block's normal completion leaves the statement's completion value as it was (14.15.3) }
+procedure TCompiler.FinallyStmt(B: TGocciaASTNode);
+var Sv: Integer;
+begin
+  if FS.CplP1 = 0 then begin Stmt(B); Exit; end;
+  Sv := AllocReg;
+  Emit(Ins(opMov, Sv, FS.CplP1 - 1, 0));
+  Stmt(B);
+  Emit(Ins(opMov, FS.CplP1 - 1, Sv, 0));
+  FreeTo(Sv);
+end;
+
 procedure TCompiler.Stmt(S: TGocciaASTNode);
 begin
   if S = nil then Exit;
@@ -2239,6 +2270,10 @@ begin
   { a label named arguments is not an IdentifierReference: only the reserved-word rules apply to labels }
   for I := 0 to St.LabelCount - 1 do
     if St.Labels[I] <> 'arguments' then CheckIdent(St.Labels[I]);
+  { 14.13.1 / B.3.1: only a plain function declaration can be labelled, and only in non-strict code }
+  if (St is TGocciaFunctionDeclaration) and (FS.Tpl^.IsStrict or TGocciaFunctionDeclaration(St).FunctionExpression.IsAsync or
+     TGocciaFunctionDeclaration(St).FunctionExpression.IsGenerator) then
+    raise EEarlySyntaxError.Create('Labelled function declarations are only allowed for plain functions in non-strict code');
   Lbls := TStringList.Create;
   for I := 0 to St.LabelCount - 1 do Lbls.Add(St.Labels[I]);
   FS.PendingLabels := Lbls;
@@ -2264,9 +2299,22 @@ const
     TGocciaEmptyStatement, TGocciaASTNode);
 
 procedure TCompiler.StmtCore(S: TGocciaASTNode);
-var R: Integer; T: TGocciaThrowStatement;
+var R, K: Integer; T: TGocciaThrowStatement;
 begin
-  case KindOf(StmtKinds, StmtClasses, S) of
+  K := KindOf(StmtKinds, StmtClasses, S);
+  if FS.CplP1 <> 0 then
+  begin
+    { completion values (UpdateEmpty): an expression statement's value replaces the script's; if, loops, switch, try and
+      with complete with UpdateEmpty(C, undefined), so their value is undefined until a statement in them sets it }
+    if (K = 0) and FS.CplSkip then FS.CplSkip := False
+    else if K = 0 then
+    begin
+      ExprTo(TGocciaExpressionStatement(S).Expression, FS.CplP1 - 1);
+      Exit;
+    end;
+    if (K in [5..10, 13, 15]) or (S is TGocciaWithStatement) then Emit(Ins(opLoadUndef, FS.CplP1 - 1, 0, 0));
+  end;
+  case K of
     0: begin
          R := FS.FreeReg;
          ExprAny(TGocciaExpressionStatement(S).Expression);
@@ -2420,7 +2468,7 @@ begin
 end;
 
 procedure TCompiler.CompileFor(S: TGocciaForStatement);
-var Top, ContTarget, BreakTarget: Integer; FalseL: TJumpList; HeadDepth: Integer; HasCond: Boolean;
+var Top, ContTarget, BreakTarget, R0: Integer; FalseL: TJumpList; HeadDepth: Integer; HasCond: Boolean;
   HL: TList<TGocciaASTNode>;
 begin
   CheckStatementBody(S.Body, False, FS.Tpl^.IsStrict);
@@ -2440,7 +2488,14 @@ begin
       HL.Free;
     end;
   end;
-  if Assigned(S.Init) then Stmt(S.Init);
+  { an init expression is not an expression statement: it has no completion value }
+  if S.Init is TGocciaExpressionStatement then
+  begin
+    R0 := FS.FreeReg;
+    ExprAny(TGocciaExpressionStatement(S.Init).Expression);
+    FreeTo(R0);
+  end
+  else if Assigned(S.Init) then Stmt(S.Init);
   Top := Here;
   SetLength(FalseL, 0);
   HasCond := Assigned(S.Condition);
@@ -2546,7 +2601,7 @@ begin
   R := EmitJ(opJmp, 0, 0);
   { an exception in the loop }
   PatchHere(H);
-  Emit(Ins(opIterCloseThrow, It, 0, 0));
+  Emit(Ins(opIterCloseThrow, It, Exc, 1));
   Emit(Ins(opThrow, Exc, 0, 0));
   PatchHere(JDone);
   PatchHere(R);
@@ -2681,8 +2736,26 @@ begin
   { 14.12.4: the case block's declarations are instantiated after the discriminant, before the case tests
     (which see them): lexical holes and function declarations come first }
   Nodes := TList<TGocciaASTNode>.Create;
+  DefaultIdx := -1;
   for I := 0 to S.Cases.Count - 1 do
-    for K := 0 to S.Cases[I].Consequent.Count - 1 do Nodes.Add(S.Cases[I].Consequent[K]);
+  begin
+    { 14.12.1: at most one default clause; 14.12.1 (explicit resource management): no using declaration directly
+      in a clause's statement list }
+    if S.Cases[I].Test = nil then
+    begin
+      if DefaultIdx >= 0 then begin Nodes.Free; raise EEarlySyntaxError.Create('More than one default clause in switch statement'); end;
+      DefaultIdx := I;
+    end;
+    for K := 0 to S.Cases[I].Consequent.Count - 1 do
+    begin
+      if S.Cases[I].Consequent[K] is TGocciaUsingDeclaration then
+      begin
+        Nodes.Free;
+        raise EEarlySyntaxError.Create('using declarations are not allowed directly in a switch case clause');
+      end;
+      Nodes.Add(S.Cases[I].Consequent[K]);
+    end;
+  end;
   HoistBlock(Nodes);
   Nodes.Free;
   SetLength(CaseJumps, S.Cases.Count);
@@ -2759,10 +2832,10 @@ begin
   begin
     Dec(FS.TryCount);
     Emit(Ins(opEndTry, 0, 0, 0));
-    Stmt(S.FinallyBlock);
+    FinallyStmt(S.FinallyBlock);
     JEnd2 := EmitJ(opJmp, 0, 0);
     PatchHere(Outer);
-    Stmt(S.FinallyBlock);
+    FinallyStmt(S.FinallyBlock);
     Emit(Ins(opThrow, ExcReg, 0, 0));
     PatchHere(JEnd2);
   end;
@@ -3166,6 +3239,11 @@ var Base, Ctor, Proto, Parent, Tmp, I, R, KeyReg, Target: Integer; CtorMethod: T
     if (N <> '') and (PrivNames.IndexOf(N) < 0) then PrivNames.Add(N);
   end;
 begin
+  { 15.7.1: all of a class, its name included, is strict mode code }
+  if (Def.Name = 'yield') or (Def.Name = 'let') or (Def.Name = 'static') or (Def.Name = 'implements') or
+     (Def.Name = 'interface') or (Def.Name = 'package') or (Def.Name = 'private') or (Def.Name = 'protected') or
+     (Def.Name = 'public') then
+    raise EEarlySyntaxError.Create('Unexpected strict mode reserved word ''' + Def.Name + '''');
   Base := FS.FreeReg;
   PushScope;
   if Def.Name <> '' then Self_ := DeclareLocal(Def.Name, True) else Self_ := -1;
@@ -3363,7 +3441,7 @@ begin
     raise EEarlySyntaxError.Create('Lexical declaration cannot appear in a single-statement context');
   if S is TGocciaFunctionDeclaration then
     if not IfClause or Strict or TGocciaFunctionDeclaration(S).FunctionExpression.IsAsync or
-       TGocciaFunctionDeclaration(S).FunctionExpression.IsGenerator then
+       TGocciaFunctionDeclaration(S).FunctionExpression.IsGenerator or (TGocciaStatement(S).LabelCount > 0) then
       raise EEarlySyntaxError.Create('In strict mode code or a loop body, functions can only be declared at top level or inside a block');
 end;
 
@@ -3473,6 +3551,8 @@ begin
     gttBitwiseNot: begin R := ExprAny(E.Operand); Emit(Ins(opBitNot, Dest, R, 0)); end;
     gttTypeof:
       begin
+        { typeof x reads the reference x: the same early errors (arguments in a field initializer, await, yield) }
+        if E.Operand is TGocciaIdentifierExpression then CheckIdent(TGocciaIdentifierExpression(E.Operand).Name);
         if (E.Operand is TGocciaIdentifierExpression) and (WithCount > 0) and
            (WithsFor(TGocciaIdentifierExpression(E.Operand).Name, WithIdxScratch) > 0) then
         begin
@@ -4393,6 +4473,8 @@ begin
   end
   else if E is TGocciaYieldExpression then
   begin
+    { only a generator's own code yields: not its arrows, static blocks or field initializers }
+    if not FS.Tpl^.IsGenerator or FS.Tpl^.IsArrow then raise EEarlySyntaxError.Create('Unexpected yield expression here');
     Save := FS.FreeReg;
     R := AllocReg;
     ExprTo(TGocciaYieldExpression(E).Operand, R);
@@ -4554,12 +4636,78 @@ end;
 { ---------------- destructuring ---------------- }
 
 procedure TCompiler.BindPattern(P: TGocciaDestructuringPattern; Src: Integer; Declare: Boolean; IsConst: Boolean);
-var Save, V, It, I, J, K, Tmp, Exc, H: Integer; OP: TGocciaObjectDestructuringPattern; AP: TGocciaArrayDestructuringPattern;
+type
+  TRef = record Kind, O, K: Integer; end;   { Kind 0: none, 1 named property (K the IC), 2 computed, 3 private }
+var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuringPattern; AP: TGocciaArrayDestructuringPattern;
   Prop: TGocciaDestructuringProperty; Name: UnicodeString; Keys, CompKeys: array of Integer; R: Integer; HasRest: Boolean;
-  procedure Target(Pat: TGocciaDestructuringPattern; ValReg: Integer);
+  Ref: TRef;
+  { 13.15.5.5 / 13.15.5.6: an assignment target that is not a pattern is evaluated (its reference: the base and the
+    key, not yet ToPropertyKey'd) before the value is read; PutValue comes after the initializer }
+  function EvalRef(Pat: TGocciaDestructuringPattern): TRef;
+  var X: TGocciaExpression; M: TGocciaMemberExpression;
+  begin
+    Result.Kind := 0;
+    if Declare then Exit;
+    if Pat is TGocciaRestDestructuringPattern then Pat := TGocciaRestDestructuringPattern(Pat).Argument;
+    if Pat is TGocciaAssignmentDestructuringPattern then Pat := TGocciaAssignmentDestructuringPattern(Pat).Left;
+    if Pat is TGocciaMemberExpressionDestructuringPattern then
+    begin
+      X := TGocciaMemberExpressionDestructuringPattern(Pat).Expression;
+      if not (X is TGocciaMemberExpression) then Exit;
+      M := TGocciaMemberExpression(X);
+      if M.ObjectExpr is TGocciaSuperExpression then Exit;
+      Result.O := AllocReg;
+      ExprTo(M.ObjectExpr, Result.O);
+      if M.Computed then
+      begin
+        Result.K := AllocReg;
+        ExprTo(M.PropertyExpression, Result.K);
+        Result.Kind := 2;
+      end
+      else
+      begin
+        Result.K := NewIC(M.PropertyName);
+        Result.Kind := 1;
+      end;
+    end
+    else if Pat is TGocciaPrivateMemberExpressionDestructuringPattern then
+    begin
+      X := TGocciaPrivateMemberExpressionDestructuringPattern(Pat).Expression;
+      Result.O := AllocReg;
+      ExprTo(TGocciaPrivateMemberExpression(X).ObjectExpr, Result.O);
+      Result.K := AllocReg;
+      LoadIdent(PrivKeyName(TGocciaPrivateMemberExpression(X).PrivateName), Result.K);
+      Result.Kind := 3;
+    end;
+  end;
+  function IsRefTarget(Pat: TGocciaDestructuringPattern): Boolean;
+  begin
+    if Pat is TGocciaAssignmentDestructuringPattern then Pat := TGocciaAssignmentDestructuringPattern(Pat).Left;
+    Result := not Declare and ((Pat is TGocciaMemberExpressionDestructuringPattern) or
+      (Pat is TGocciaPrivateMemberExpressionDestructuringPattern));
+  end;
+  procedure PutRef(const Rf: TRef; ValReg: Integer);
+  begin
+    case Rf.Kind of
+      1: Emit(Ins(opSetProp, Rf.O, ValReg, Rf.K));
+      2: Emit(Ins(opSetElem, Rf.O, Rf.K, ValReg));
+      3: Emit(Ins(opSetPriv, Rf.O, ValReg, Rf.K));
+    end;
+  end;
+  procedure Target(Pat: TGocciaDestructuringPattern; ValReg: Integer; const Rf: TRef);
   var Sk: Integer; AD: TGocciaAssignmentDestructuringPattern; Rg: Integer;
   begin
-    if Pat is TGocciaAssignmentDestructuringPattern then
+    if Rf.Kind <> 0 then
+    begin
+      if Pat is TGocciaAssignmentDestructuringPattern then
+      begin
+        Sk := EmitJ(opJNotUndef, ValReg, 0);
+        ExprTo(TGocciaAssignmentDestructuringPattern(Pat).Right, ValReg);
+        PatchHere(Sk);
+      end;
+      PutRef(Rf, ValReg);
+    end
+    else if Pat is TGocciaAssignmentDestructuringPattern then
     begin
       AD := TGocciaAssignmentDestructuringPattern(Pat);
       Sk := EmitJ(opJNotUndef, ValReg, 0);
@@ -4567,7 +4715,7 @@ var Save, V, It, I, J, K, Tmp, Exc, H: Integer; OP: TGocciaObjectDestructuringPa
         ExprToNamed(AD.Right, ValReg, TGocciaIdentifierDestructuringPattern(AD.Left).Name)
       else ExprTo(AD.Right, ValReg);
       PatchHere(Sk);
-      Target(AD.Left, ValReg);
+      Target(AD.Left, ValReg, Rf);
     end
     else if Pat is TGocciaIdentifierDestructuringPattern then
     begin
@@ -4606,7 +4754,9 @@ begin
     SetLength(Keys, 0);
     SetLength(CompKeys, 0);
     HasRest := (OP.Properties.Count > 0) and (OP.Properties[OP.Properties.Count - 1].Pattern is TGocciaRestDestructuringPattern);
-    if OP.Properties.Count = 0 then
+    { the first property read does the check, unless a key expression or a reference is evaluated before it }
+    if (OP.Properties.Count = 0) or OP.Properties[0].Computed or
+       (OP.Properties[0].Pattern is TGocciaRestDestructuringPattern) or IsRefTarget(OP.Properties[0].Pattern) then
     begin
       { 14.3.3.1 / 8.6.2: RequireObjectCoercible, with no property read to do it }
       V := AllocReg;
@@ -4625,12 +4775,22 @@ begin
         Emit(Ins(opToPropKey, K, K, 0));
         SetLength(CompKeys, Length(CompKeys) + 1);
         CompKeys[High(CompKeys)] := K;
+        RS := FS.FreeReg;
+        Ref := EvalRef(Prop.Pattern);
         V := AllocReg;
         Emit(Ins(opGetElem, V, Src, K));
-        Target(Prop.Pattern, V);
-        FreeTo(V);
+        Target(Prop.Pattern, V, Ref);
+        FreeTo(RS);
         Continue;
       end;
+      RS := FS.FreeReg;
+      if Prop.Computed and not (Prop.Pattern is TGocciaRestDestructuringPattern) then
+      begin
+        K := AllocReg;
+        ExprTo(Prop.KeyExpression, K);
+        Emit(Ins(opToPropKey, K, K, 0));
+      end;
+      Ref := EvalRef(Prop.Pattern);
       V := AllocReg;
       if Prop.Pattern is TGocciaRestDestructuringPattern then
       begin
@@ -4640,25 +4800,21 @@ begin
         { remove the keys already bound }
         for J := 0 to High(Keys) do Emit(Ins(opDelProp, Tmp, V, Keys[J]));
         for J := 0 to High(CompKeys) do Emit(Ins(opDelElem, Tmp, V, CompKeys[J]));
-        Target(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, V);
+        Target(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, V, Ref);
       end
       else
       begin
         if Prop.Computed then
-        begin
-          K := AllocReg;
-          ExprTo(Prop.KeyExpression, K);
-          Emit(Ins(opGetElem, V, Src, K));
-        end
+          Emit(Ins(opGetElem, V, Src, K))
         else
         begin
           Emit(Ins(opGetProp, V, Src, NewIC(Prop.Key)));
           SetLength(Keys, Length(Keys) + 1);
           Keys[High(Keys)] := AtomConst(Prop.Key);
         end;
-        Target(Prop.Pattern, V);
+        Target(Prop.Pattern, V, Ref);
       end;
-      FreeTo(V);
+      FreeTo(RS);
     end;
   end
   else if P is TGocciaArrayDestructuringPattern then
@@ -4681,6 +4837,9 @@ begin
     H := Emit(Ins(opTry, Exc, 1, 0));
     for I := 0 to AP.Elements.Count - 1 do
     begin
+      RS := FS.FreeReg;
+      Ref.Kind := 0;
+      if AP.Elements[I] <> nil then Ref := EvalRef(AP.Elements[I]);
       V := AllocReg;
       if (AP.Elements[I] <> nil) and (AP.Elements[I] is TGocciaRestDestructuringPattern) then
       begin
@@ -4691,22 +4850,22 @@ begin
         Emit(Ins(opArrPush, V, Tmp, 0));
         PatchTo(EmitJ(opJmp, 0, 0), J);
         PatchHere(K);
-        Target(TGocciaRestDestructuringPattern(AP.Elements[I]).Argument, V);
+        Target(TGocciaRestDestructuringPattern(AP.Elements[I]).Argument, V, Ref);
       end
       else
       begin
         Emit(Ins(opLoadUndef, V, 0, 0));
         K := Emit(Ins(opIterNext, V, It, 0));
         PatchHere(K);   { exhausted: value stays undefined }
-        if AP.Elements[I] <> nil then Target(AP.Elements[I], V);
+        if AP.Elements[I] <> nil then Target(AP.Elements[I], V, Ref);
       end;
-      FreeTo(V);
+      FreeTo(RS);
     end;
     Emit(Ins(opEndTry, 0, 0, 0));
     Emit(Ins(opIterClose, It, 0, 0));
     K := EmitJ(opJmp, 0, 0);
     PatchHere(H);
-    Emit(Ins(opIterCloseThrow, It, 0, 0));
+    Emit(Ins(opIterCloseThrow, It, Exc, 1));
     Emit(Ins(opThrow, Exc, 0, 0));
     PatchHere(K);
   end

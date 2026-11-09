@@ -1230,6 +1230,8 @@ end;
 function ArrIter_Next(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var V: TValue; Done: Boolean; O: PObj;
 begin
+  if not IsObject(Args[0]) or (ObjOf(Args[0])^.OKind <> okIterator) or (ObjOf(Args[0])^.OFlags > 4) then
+    Exit(ThrowTypeError('next called on an object that is not an iterator of this kind'));
   if not IteratorStep(Args[0], V, Done) then Exit(False);
   PushRoot(V);
   O := NewPlainObject(ObjectProto, 2);
@@ -2168,22 +2170,42 @@ end;
 
 { ---------------- Error ---------------- }
 
-function MakeErrorCtor(Proto: TValue; Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var M: TValue; O: PObj; P: TValue;
+threadvar
+  AtomCause, AtomErrors: PStr;
+
+{ 20.5.1.1 Error(message, options) and 20.5.6.1.1 NativeError: OrdinaryCreateFromConstructor, the message
+  (Args[MsgIdx]) and InstallErrorCause (20.5.8.1) from the options after it }
+function MakeErrorCtorAt(Proto: TValue; Args: TArgs; Argc, MsgIdx: Integer; var Res: TValue): Boolean;
+var M, Opt: TValue; O: PObj; P: TValue; Found: Boolean;
 begin
   if not ProtoFromNewTarget(Proto, P) then Exit(False);
   PushRoot(P);
   O := NewObject(RootShapeFor(P), 4, okError);
   PopRoots(1);
   PushRoot(MkPtr(O));
-  if (Argc >= 1) and (Args[1] <> VUndefined) then
+  if (Argc >= MsgIdx) and (Args[MsgIdx] <> VUndefined) then
   begin
-    if not ToStringV(Args[1], M) then begin PopRoots(1); Exit(False); end;
+    if not ToStringV(Args[MsgIdx], M) then begin PopRoots(1); Exit(False); end;
     AddProperty(ObjOf(RootAt(TempTop - 1)), AtomMessage, M, pfHidden);
+  end;
+  if (Argc >= MsgIdx + 1) and IsObject(Args[MsgIdx + 1]) then
+  begin
+    Opt := Args[MsgIdx + 1];
+    if not HasPropertyV(Opt, AtomCause, Found) then begin PopRoots(1); Exit(False); end;
+    if Found then
+    begin
+      if not GetV(Args[MsgIdx + 1], AtomCause, M) then begin PopRoots(1); Exit(False); end;
+      DefineOwn(RootAt(TempTop - 1), AtomCause, M, pfHidden);
+    end;
   end;
   Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
+end;
+
+function MakeErrorCtor(Proto: TValue; Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Result := MakeErrorCtorAt(Proto, Args, Argc, 1, Res);
 end;
 
 function Error_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -2196,10 +2218,39 @@ function SyntaxError_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin Result := MakeErrorCtor(SyntaxErrorProto, Args, Argc, Res); end;
 function ReferenceError_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin Result := MakeErrorCtor(ReferenceErrorProto, Args, Argc, Res); end;
+function EvalError_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin Result := MakeErrorCtor(EvalErrorProto, Args, Argc, Res); end;
+function URIError_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin Result := MakeErrorCtor(URIErrorProto, Args, Argc, Res); end;
+
+threadvar
+  AggregateErrorProto, ErrorCtorV: TValue;
+
+{ 20.5.7.1.1 AggregateError(errors, message, options): the errors property is the list the iterable yields }
+function AggregateError_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var It, V: TValue; Done: Boolean;
+begin
+  if not MakeErrorCtorAt(AggregateErrorProto, Args, Argc, 2, Res) then Exit(False);
+  PushRoot(Res);
+  PushRoot(MkPtr(NewArray(0, 4)));
+  if not GetIterator(Arg(Args, Argc, 1), It) then begin PopRoots(2); Exit(False); end;
+  PushRoot(It);
+  while True do
+  begin
+    if not IteratorStep(RootAt(TempTop - 1), V, Done) then begin PopRoots(3); Exit(False); end;
+    if Done then Break;
+    ArrayPush(ObjOf(RootAt(TempTop - 2)), V);
+  end;
+  DefineOwn(RootAt(TempTop - 3), AtomErrors, RootAt(TempTop - 2), pfHidden);
+  Res := RootAt(TempTop - 3);
+  PopRoots(3);
+  Result := True;
+end;
 
 function ErrProto_ToString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var N, M, SN, SM: TValue;
 begin
+  if not IsObject(Args[0]) then Exit(ThrowTypeError('Error.prototype.toString called on a non-object'));
   if not GetV(Args[0], AtomName, N) then Exit(False);
   PushRoot(N);
   if not GetV(Args[0], AtomMessage, M) then begin PopRoots(1); Exit(False); end;
@@ -2210,6 +2261,7 @@ begin
   else if not ToStringV(RootAt(TempTop - 1), SM) then begin PopRoots(2); Exit(False); end;
   PopRoots(2);
   if StrOf(SM)^.Len = 0 then Res := SN
+  else if StrOf(SN)^.Len = 0 then Res := SM
   else Res := StrFromUnicode(StrToUnicode(StrOf(SN)) + ': ' + StrToUnicode(StrOf(SM)));
   Result := True;
 end;
@@ -2630,39 +2682,48 @@ begin
   Result := True;
 end;
 
-{ Map/Set iterators: snapshot of the entries into an array, then an array iterator }
+threadvar
+  MapIterProto, SetIterProto: TValue;
+
+{ 24.1.5.1 CreateMapIterator / 24.2.6.1 CreateSetIterator: a live position in the entry list, which deletions
+  leave holes in and additions append to (okIterator, OFlags 5 keys, 6 values, 7 entries; a Set's values 8,
+  entries 9) }
 function MapIterKind(Args: TArgs; Kind: Integer; var Res: TValue): Boolean;
-var A, P: PObj; E: PValueArray; I, N: Integer; X: TValue;
+var O: PObj; IsSet: Boolean;
 begin
   if not IsObject(Args[0]) or not (ObjOf(Args[0])^.OKind in [okMap, okSet]) then Exit(ThrowTypeError('incompatible receiver'));
-  A := NewArray(0, 8);
-  PushRoot(MkPtr(A));
-  I := 0;
-  while True do
-  begin
-    E := MapEntries(Args[0]);
-    if I >= Integer(E^.Len) then Break;
-    if E^.Data[I] <> VHole then
-    begin
-      case Kind of
-        0: X := E^.Data[I];
-        1: X := E^.Data[I + 1];
-      else
-        begin
-          P := NewArray(2, 2);
-          E := MapEntries(Args[0]);
-          P^.Elements^.Data[0] := E^.Data[I];
-          P^.Elements^.Data[1] := E^.Data[I + 1];
-          X := MkPtr(P);
-        end;
-      end;
-      ArrayPush(ObjOf(RootAt(TempTop - 1)), X);
-    end;
-    Inc(I, 2);
-  end;
-  Result := GetIterator(RootAt(TempTop - 1), Res);
-  PopRoots(1);
+  IsSet := ObjOf(Args[0])^.OKind = okSet;
+  if IsSet then O := NewObject(RootShapeFor(SetIterProto), 0, okIterator)
+  else O := NewObject(RootShapeFor(MapIterProto), 0, okIterator);
+  O^.Aux1 := Args[0];
+  O^.Aux2 := MkInt(0);
+  if IsSet then begin if Kind = 2 then O^.OFlags := 9 else O^.OFlags := 8; end
+  else O^.OFlags := 5 + Kind;
+  Res := MkPtr(O);
+  Result := True;
 end;
+
+function MapSetIterNext(Args: TArgs; Lo, Hi: Integer; var Res: TValue): Boolean;
+var V: TValue; Done: Boolean; O: PObj;
+begin
+  if not IsObject(Args[0]) or (ObjOf(Args[0])^.OKind <> okIterator) or (ObjOf(Args[0])^.OFlags < Lo) or
+     (ObjOf(Args[0])^.OFlags > Hi) then
+    Exit(ThrowTypeError('next called on an object that is not an iterator of this kind'));
+  if not IteratorStep(Args[0], V, Done) then Exit(False);
+  PushRoot(V);
+  O := NewPlainObject(ObjectProto, 2);
+  V := RootAt(TempTop - 1);
+  PopRoots(1);
+  AddProperty(O, AtomValue, V, pfDefault);
+  AddProperty(O, AtomDone, MkBool(Done), pfDefault);
+  Res := MkPtr(O);
+  Result := True;
+end;
+
+function MapIter_Next(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin Result := MapSetIterNext(Args, 5, 7, Res); end;
+function SetIter_Next(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin Result := MapSetIterNext(Args, 8, 9, Res); end;
 
 function MapProto_Keys(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MapIterKind(Args, 0, Res); end;
 function MapProto_Values(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MapIterKind(Args, 1, Res); end;
@@ -2715,6 +2776,8 @@ var C, P, G: TValue;
     DefineHidden(CtorTmp, 'name', MkPtr(AtomOf(Name)));
     DefineHidden(CtorTmp, 'message', MkPtr(AtomOf('')));
     Ctor := MakeCtor(Fn, Name, 1, CtorTmp);
+    { 20.5.6.2: a NativeError constructor's [[Prototype]] is %Error% }
+    if Parent = ErrorProto then SetProto(ObjOf(Ctor), ErrorCtorV);
     Result := CtorTmp;
   end;
 begin
@@ -2722,6 +2785,8 @@ begin
   AddRoot(@NumberProto); AddRoot(@BooleanProto); AddRoot(@ErrorProto); AddRoot(@IteratorProto);
   AddRoot(@ArrayIteratorProto); AddRoot(@GeneratorProto); AddRoot(@MapProto); AddRoot(@SetProtoObj);
   AddRoot(@SymbolProto); AddRoot(@TypeErrorProto); AddRoot(@RangeErrorProto); AddRoot(@SyntaxErrorProto);
+  AddRoot(@EvalErrorProto); AddRoot(@URIErrorProto); AddRoot(@AggregateErrorProto); AddRoot(@ErrorCtorV);
+  AddRoot(@MapIterProto); AddRoot(@SetIterProto); AddRoot(@MapIterNextFn); AddRoot(@SetIterNextFn);
   AddRoot(@ReferenceErrorProto); AddRoot(@MathObj); AddRoot(@JSONObj); AddRoot(@ConsoleObj); AddRoot(@PerfObj);
   AddRoot(@DateObj); AddRoot(@CtorTmp); AddRoot(@ErrorProtoType); AddRoot(@SymIterator);
 
@@ -2888,13 +2953,14 @@ begin
   N(CtorTmp, 'isNaN', G_IsNaN, 1);
   N(CtorTmp, 'parseFloat', G_ParseFloat, 1);
   N(CtorTmp, 'parseInt', G_ParseInt, 2);
-  DefineHidden(CtorTmp, 'MAX_SAFE_INTEGER', MkDouble(9007199254740991.0));
-  DefineHidden(CtorTmp, 'MIN_SAFE_INTEGER', MkDouble(-9007199254740991.0));
-  DefineHidden(CtorTmp, 'MAX_VALUE', MkDouble(MaxDouble));
-  DefineHidden(CtorTmp, 'EPSILON', MkDouble(2.220446049250313e-16));
-  DefineHidden(CtorTmp, 'POSITIVE_INFINITY', MkDouble(Infinity));
-  DefineHidden(CtorTmp, 'NEGATIVE_INFINITY', MkDouble(NegInfinity));
-  DefineHidden(CtorTmp, 'NaN', MkDouble(NaN));
+  { 21.1.2: the constants are not writable, enumerable or configurable }
+  DefineOwn(CtorTmp, AtomOf('MAX_SAFE_INTEGER'), MkDouble(9007199254740991.0), 0);
+  DefineOwn(CtorTmp, AtomOf('MIN_SAFE_INTEGER'), MkDouble(-9007199254740991.0), 0);
+  DefineOwn(CtorTmp, AtomOf('MAX_VALUE'), MkDouble(MaxDouble), 0);
+  DefineOwn(CtorTmp, AtomOf('EPSILON'), MkDouble(2.220446049250313e-16), 0);
+  DefineOwn(CtorTmp, AtomOf('POSITIVE_INFINITY'), MkDouble(Infinity), 0);
+  DefineOwn(CtorTmp, AtomOf('NEGATIVE_INFINITY'), MkDouble(NegInfinity), 0);
+  DefineOwn(CtorTmp, AtomOf('NaN'), MkDouble(NaN), 0);
   N(NumberProto, 'toString', NumProto_ToString, 1);
   N(NumberProto, 'toFixed', NumProto_ToFixed, 1);
   N(NumberProto, 'valueOf', NumProto_ValueOf, 0);
@@ -2917,8 +2983,17 @@ begin
   N(MapProto, 'values', MapProto_Values, 0);
   N(MapProto, 'entries', MapProto_Entries, 0);
   DefineGetter(MapProto, 'size', MapProto_Size);
-  G := NewNativeFunction(MapProto_Entries, 'entries', 0);
+  { 24.1.3.12: Map.prototype[@@iterator] is the entries function }
+  GetV(MapProto, AtomOf('entries'), G);
   DefineOwn(MapProto, PStr(PPointer(PByte(PtrOf(SymIterator)) + 16)^), G, pfHidden);
+  MapIterProto := NewProtoObject(IteratorProto);
+  N(MapIterProto, 'next', MapIter_Next, 0);
+  GetV(MapIterProto, AtomNext, MapIterNextFn);
+  DefineOwn(MapIterProto, SymKey(SymToStringTagW), MkPtr(AtomOf('Map Iterator')), pfConfigurable);
+  SetIterProto := NewProtoObject(IteratorProto);
+  N(SetIterProto, 'next', SetIter_Next, 0);
+  GetV(SetIterProto, AtomNext, SetIterNextFn);
+  DefineOwn(SetIterProto, SymKey(SymToStringTagW), MkPtr(AtomOf('Set Iterator')), pfConfigurable);
   C := MakeCtor(Set_Ctor, 'Set', 0, SetProtoObj);
   N(SetProtoObj, 'add', SetProto_Add, 1);
   N(SetProtoObj, 'has', MapProto_Has, 1);
@@ -2926,10 +3001,12 @@ begin
   N(SetProtoObj, 'clear', MapProto_Clear, 0);
   N(SetProtoObj, 'forEach', MapProto_ForEach, 1);
   N(SetProtoObj, 'values', MapProto_Keys, 0);
-  N(SetProtoObj, 'keys', MapProto_Keys, 0);
+  { 24.2.4.11 / 24.2.4.18: keys and @@iterator are the values function }
+  GetV(SetProtoObj, AtomOf('values'), G);
+  DefineOwn(SetProtoObj, AtomOf('keys'), G, pfHidden);
   N(SetProtoObj, 'entries', MapProto_Entries, 0);
   DefineGetter(SetProtoObj, 'size', MapProto_Size);
-  G := NewNativeFunction(MapProto_Keys, 'values', 0);
+  GetV(SetProtoObj, AtomOf('values'), G);
   DefineOwn(SetProtoObj, PStr(PPointer(PByte(PtrOf(SymIterator)) + 16)^), G, pfHidden);
 
   { Errors }
@@ -2937,10 +3014,19 @@ begin
   DefineHidden(ErrorProto, 'message', MkPtr(AtomOf('')));
   N(ErrorProto, 'toString', ErrProto_ToString, 0);
   C := MakeCtor(Error_Ctor, 'Error', 1, ErrorProto);
+  ErrorCtorV := C;
+  AtomCause := AtomOf('cause');
+  AtomErrors := AtomOf('errors');
   TypeErrorProto := ErrorType('TypeError', TypeError_Ctor, ErrorProto);
   RangeErrorProto := ErrorType('RangeError', RangeError_Ctor, ErrorProto);
   SyntaxErrorProto := ErrorType('SyntaxError', SyntaxError_Ctor, ErrorProto);
   ReferenceErrorProto := ErrorType('ReferenceError', ReferenceError_Ctor, ErrorProto);
+  EvalErrorProto := ErrorType('EvalError', EvalError_Ctor, ErrorProto);
+  URIErrorProto := ErrorType('URIError', URIError_Ctor, ErrorProto);
+  AggregateErrorProto := ErrorType('AggregateError', AggregateError_Ctor, ErrorProto);
+  { AggregateError's length is 2 }
+  GetV(GlobalObj, AtomOf('AggregateError'), C);
+  DefineOwn(C, AtomOf('length'), MkInt(2), pfConfigurable);
 
   { Math }
   MathObj := NewProtoObject(ObjectProto);
