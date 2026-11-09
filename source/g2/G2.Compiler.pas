@@ -5923,13 +5923,13 @@ begin
       else Nodes.Add(N);
       for J := 0 to Names.Count - 1 do AddExport(Names[J], Names[J]);
     end;
-    { 16.2.1.7.1 step 10: a local export of an imported binding becomes an indirect export (a namespace import
-      stays local: its cell is the import's) }
+    { 16.2.1.7.1 step 10: a local export of an imported binding becomes an indirect export; a namespace import's
+      resolves to the imported module's namespace (two of them through export * are the same binding) }
     for I := 0 to ExpNames.Count - 1 do
     begin
       if ExpLocals[I] = #0 then Continue;
       K := C.ModImportNames.IndexOf(ExpLocals[I]);
-      if (K >= 0) and (MI.Imports[K].ImportName <> ModNamespace) then
+      if K >= 0 then
       begin
         SetLength(MI.IndirectExports, Length(MI.IndirectExports) + 1);
         with MI.IndirectExports[High(MI.IndirectExports)] do

@@ -424,7 +424,7 @@ begin
 end;
 
 function Link(Root: TModRec): Boolean;
-var L: TList<TModRec>; M: TModRec; I, J: Integer; Clo, Gen, Tbl: TValue; R: TResolution; D: TModRec;
+var L: TList<TModRec>; M: TModRec; I, J: Integer; Clo, Gen, Tbl: TValue; R: TResolution; D: TModRec; U: PUpval;
 begin
   L := TList<TModRec>.Create;
   try
@@ -441,6 +441,26 @@ begin
       PopRoots(1);
       SetRoot(M, rGen, Gen);
     end;
+    { the namespace imports first: a re-export of one (export of the ns binding) is a local export whose cell is the import's
+      table slot, which a named import or a namespace elsewhere in the graph may take. Their cells are made
+      before any namespace is (a namespace holds the cells of its exports), then given the namespaces }
+    for M in L do
+      for I := 0 to High(M.Info.Imports) do
+        if (M.Info.Imports[I].ImportName = ModNamespace) or (M.Info.Imports[I].ImportName = ModDeferNamespace) then
+        begin
+          Tbl := ClosedCell(VHole);
+          ValueArrayStore(ObjOf(GetRoot(M, rTable))^.Elements, M.Info.Imports[I].Slot, Tbl);
+        end;
+    for M in L do
+      for I := 0 to High(M.Info.Imports) do
+        if (M.Info.Imports[I].ImportName = ModNamespace) or (M.Info.Imports[I].ImportName = ModDeferNamespace) then
+        begin
+          if M.Info.Imports[I].ImportName = ModNamespace then Clo := GetNamespace(DepOf(M, M.Info.Imports[I].Request))
+          else Clo := GetDeferredNamespace(DepOf(M, M.Info.Imports[I].Request));
+          U := PUpval(PtrOf(ObjOf(GetRoot(M, rTable))^.Elements^.Data[M.Info.Imports[I].Slot]));
+          U^.Value := Clo;
+          WriteBarrier(@U^.Hdr, Clo);
+        end;
     { the imports and indirect exports resolved }
     for M in L do
     begin
@@ -459,17 +479,8 @@ begin
       for I := 0 to High(M.Info.Imports) do
       begin
         D := DepOf(M, M.Info.Imports[I].Request);
-        if M.Info.Imports[I].ImportName = ModDeferNamespace then
-        begin
-          Tbl := ClosedCell(GetDeferredNamespace(D));
-          ValueArrayStore(ObjOf(GetRoot(M, rTable))^.Elements, M.Info.Imports[I].Slot, Tbl);
+        if (M.Info.Imports[I].ImportName = ModDeferNamespace) or (M.Info.Imports[I].ImportName = ModNamespace) then
           Continue;
-        end;
-        if M.Info.Imports[I].ImportName = ModNamespace then
-        begin
-          R.Kind := rkNamespace; R.Module := D;
-        end
-        else
         begin
           R := Resolve(D, M.Info.Imports[I].ImportName);
           if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS]) then

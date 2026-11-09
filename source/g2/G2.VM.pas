@@ -4368,6 +4368,23 @@ end;
 { ---- Execute's cold paths: their strings out of its frame (managed temporaries would be initialized and
   finalized, under an exception frame, on every entry to Execute) ---- }
 
+{ opImport: the import call's referrer is the active script or module, the caller's for eval code and dynamic
+  functions (19.2.1.1 step 23: an eval context's ScriptOrModule is its caller's) }
+function XImport(Tpl: PFuncTemplate; Spec, Opts: TValue; var V: TValue): Boolean; noinline;
+var J: Integer; T: PFuncTemplate;
+begin
+  if not Assigned(ImportHook) then Exit(ThrowError('SyntaxError', 'import() is not supported by this host'));
+  T := Tpl;
+  J := FrameTop - 2;
+  while (T^.SourceName <> '') and (T^.SourceName[1] = '<') and (J >= 0) do
+  begin
+    if Frames[J].Tpl <> nil then T := Frames[J].Tpl;
+    Dec(J);
+  end;
+  if (T^.SourceName <> '') and (T^.SourceName[1] = '<') then T := Tpl;
+  Result := ImportHook(T^.SourceName, T^.ModuleId, Spec, Opts, V);
+end;
+
 function XThrowNotDefined(Key: PStr): Boolean; noinline;
 begin
   Result := ThrowError('ReferenceError', StrToUnicode(Key) + ' is not defined');
@@ -6581,8 +6598,7 @@ LReload:
           { C: options register ($FFFF none) in its low 16 bits, the phase (1 source, 2 defer) above }
           ImportPhase := (I shr 56) and $FF;
           if ((I shr 40) and $FFFF) = $FFFF then VB := VUndefined else VB := R[(I shr 40) and $FFFF];
-          if not Assigned(ImportHook) then begin ThrowError('SyntaxError', 'import() is not supported by this host'); goto LThrow; end;
-          if not ImportHook(Tpl^.SourceName, Tpl^.ModuleId, R[(I shr 24) and $FFFF], VB, V) then begin ImportPhase := 0; goto LThrow; end;
+          if not XImport(Tpl, R[(I shr 24) and $FFFF], VB, V) then begin ImportPhase := 0; goto LThrow; end;
           ImportPhase := 0;
           R[A] := V;
         end;
