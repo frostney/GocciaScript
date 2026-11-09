@@ -16,6 +16,8 @@ uses
   G2.Core;
 
 procedure InitModules;
+{ 28.1.1 %AbstractModuleSource% of the running realm (made when asked: no module source exists yet) }
+function AbstractModuleSourceIntrinsic: TValue;
 { loads, links and evaluates the module at Path (the host's entry point); False with the error pending, Phase
   0 when it is a parse or link (resolution) error, 1 an evaluation error }
 function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
@@ -1060,6 +1062,34 @@ begin
     SetRoot(M, rMeta, Res);
   end;
   Result := True;
+end;
+
+{ 28.1.1.1 AbstractModuleSource(): always a TypeError (it is abstract) }
+function AMS_Ctor(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Result := ThrowTypeError('AbstractModuleSource is an abstract class and cannot be constructed');
+end;
+
+{ 28.1.3.1 get %AbstractModuleSource%.prototype [ @@toStringTag ]: the [[ModuleSourceClassName]] of a module
+  source, else undefined (G2 has no module source objects) }
+function AMS_ToStringTag(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := VUndefined;
+  Result := True;
+end;
+
+function AbstractModuleSourceIntrinsic: TValue;
+var Base: Integer;
+begin
+  Base := TempTop;
+  PushRoot(NewNativeFunction(AMS_Ctor, 'AbstractModuleSource', 0));
+  ObjOf(RootAt(Base))^.OFlags := ObjOf(RootAt(Base))^.OFlags or 32;   { a constructor }
+  PushRoot(MkPtr(NewPlainObject(ObjectProto, 4)));
+  DefineOwn(RootAt(Base), AtomPrototype, RootAt(Base + 1), 0);
+  DefineOwn(RootAt(Base + 1), AtomConstructor, RootAt(Base), pfHidden);
+  DefineNativeGetterKey(RootAt(Base + 1), SymKey(SymToStringTagW), 'get [Symbol.toStringTag]', AMS_ToStringTag);
+  Result := RootAt(Base);
+  PopRoots(2);
 end;
 
 procedure InitModules;

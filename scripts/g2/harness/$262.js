@@ -24,6 +24,7 @@ var $262 = (function () {
     host262.createRealm = function () { return H.createRealm(); };
   }
   if ("IsHTMLDDA" in H) host262.IsHTMLDDA = H.IsHTMLDDA;
+  if ("AbstractModuleSource" in H) host262.AbstractModuleSource = H.AbstractModuleSource;
   return host262;
 })();
 

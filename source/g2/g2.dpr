@@ -342,7 +342,11 @@ begin
   GetV(GlobalObj, AtomOf('G2Host'), H);
   GetV(H, AtomOf('IsHTMLDDA'), H);
   PCell(PtrOf(H))^.Flags := PCell(PtrOf(H))^.Flags or cfEmulatesUndefined;
-  ObjOf(H)^.OFlags := ObjOf(H)^.OFlags and not 32;   { not a constructor }
+  ObjOf(H)^.OFlags := ObjOf(H)^.OFlags and not 32;   { not a constructor }  { $262.AbstractModuleSource: the realm's %AbstractModuleSource% }
+  PushRoot(AbstractModuleSourceIntrinsic);
+  GetV(GlobalObj, AtomOf('G2Host'), H);
+  DefineOwn(H, AtomOf('AbstractModuleSource'), RootAt(TempTop - 1), pfHidden);
+  PopRoots(1);
 end;
 
 { G2Host.createRealm(): $262.createRealm, the $262 object of a new realm }
