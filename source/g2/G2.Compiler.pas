@@ -4148,7 +4148,8 @@ begin
             R := FS.FreeReg; AllocReg;
             if not ResolveLocal(FS, TGocciaIdentifierExpression(E.Operand).Name, K) and
                (ResolveUpval(FS, TGocciaIdentifierExpression(E.Operand).Name) < 0) and
-               ((Goal <> 3) or (ModImportSlot(TGocciaIdentifierExpression(E.Operand).Name) < 0)) then
+               ((Goal <> 3) or (ModImportSlot(TGocciaIdentifierExpression(E.Operand).Name) < 0)) and
+               not ((TGocciaIdentifierExpression(E.Operand).Name = 'arguments') and ArgumentsBound) then
               Emit(Ins(opTypeofGlobal, Dest, 0, NewIC(TGocciaIdentifierExpression(E.Operand).Name)))
             else begin LoadIdentStatic(TGocciaIdentifierExpression(E.Operand).Name, R); Emit(Ins(opTypeof, Dest, R, 0)); end;
             FreeTo(R);
@@ -4162,7 +4163,9 @@ begin
         end
         else if (E.Operand is TGocciaIdentifierExpression) and not ResolveLocal(FS, TGocciaIdentifierExpression(E.Operand).Name, R)
            and (ResolveUpval(FS, TGocciaIdentifierExpression(E.Operand).Name) < 0) and
-           ((Goal <> 3) or (ModImportSlot(TGocciaIdentifierExpression(E.Operand).Name) < 0)) then
+           ((Goal <> 3) or (ModImportSlot(TGocciaIdentifierExpression(E.Operand).Name) < 0)) and
+           { a function's arguments object (no binding of the name, ArgumentsBound) }
+           not ((TGocciaIdentifierExpression(E.Operand).Name = 'arguments') and ArgumentsBound) then
           Emit(Ins(opTypeofGlobal, Dest, 0, NewIC(TGocciaIdentifierExpression(E.Operand).Name)))
         else begin R := ExprAny(E.Operand); Emit(Ins(opTypeof, Dest, R, 0)); end;
       end;
