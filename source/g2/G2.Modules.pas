@@ -8,6 +8,7 @@ unit G2.Modules;
   the import slots, so cycles see each other's functions. A module with top-level await is an async generator;
   its evaluation waits for it (a simplification of 16.2.1.5.3's asynchronous ordering). }
 {$mode delphiunicode}{$H+}
+{$MINFPCONSTPREC 64}
 
 interface
 

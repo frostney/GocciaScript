@@ -16,6 +16,7 @@ unit G2.Regex;
   The subject pointer is only used while Exec runs, which allocates nothing on the G2 heap, so a moving
   collection cannot invalidate it. }
 {$mode delphiunicode}{$H+}
+{$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$Q-}{$R-}
 {$goto on}

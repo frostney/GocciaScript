@@ -4,6 +4,7 @@ unit G2.Disposal;
   (src/prelude/disposal.js -> G2.Disposal.inc, t/lang/gen_prelude_inc.py) and snapshotted. The helpers live on the
   global object under internal keys (G2.Core UsingKey): no script can name them. }
 {$mode delphiunicode}{$H+}
+{$MINFPCONSTPREC 64}
 
 interface
 

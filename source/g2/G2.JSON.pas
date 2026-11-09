@@ -7,6 +7,7 @@ unit G2.JSON;
   a rooted array since the collector moves them. stringify appends to one growable buffer; a property whose
   value serializes to undefined is cut back off it. }
 {$mode delphiunicode}{$H+}
+{$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 { FPC 3.3.1's data flow analysis does not terminate on this unit at -O3 }
 {$OPTIMIZATION NODFA}

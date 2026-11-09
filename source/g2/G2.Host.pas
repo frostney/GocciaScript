@@ -13,6 +13,7 @@ unit G2.Host;
   Limits of this spike: one engine per process (G2 keeps its state in unit globals); x86-64 System V only
   (the small-record parameter rule below); destructors of engine-owned objects must not call the engine. }
 {$mode delphiunicode}{$H+}
+{$MINFPCONSTPREC 64}
 {$modeswitch functionreferences}
 {$modeswitch anonymousfunctions}
 {$modeswitch advancedrecords}

@@ -14,6 +14,7 @@ unit G2.Snapshot;
   and IC keys are atoms. Anything else makes the writer give up on that
   prelude, which is then parsed at startup. }
 {$mode delphiunicode}{$H+}
+{$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 
 interface

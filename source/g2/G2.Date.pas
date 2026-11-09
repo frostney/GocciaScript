@@ -8,6 +8,7 @@ unit G2.Date;
   Date.parse reads the Date Time String Format (21.4.1.32, with expanded years) and the formats toString and
   toUTCString produce. }
 {$mode delphiunicode}{$H+}
+{$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 
 interface
@@ -17,7 +18,7 @@ procedure InitDate;
 implementation
 
 uses
-  SysUtils, Math, Linux, UnixType, G2.Core, G2.VM;
+  BaseUnix, Unix, Linux, UnixType, SysUtils, Math, G2.Core, G2.VM;
 
 {$linklib c}
 
@@ -285,10 +286,11 @@ begin
 end;
 
 function NowMs: Double;
-var TS: TTimeSpec;
+var TV: TTimeVal;
 begin
-  clock_gettime(CLOCK_REALTIME, @TS);
-  Result := TS.tv_sec * 1000.0 + TS.tv_nsec div 1000000;
+  TV.tv_sec := 0; TV.tv_usec := 0;
+  fpgettimeofday(@TV, nil);
+  Result := Int64(TV.tv_sec) * 1000.0 + Int64(TV.tv_usec) div 1000;
 end;
 
 function Pad(N: Int64; W: Integer): UnicodeString;

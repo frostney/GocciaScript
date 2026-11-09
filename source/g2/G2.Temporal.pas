@@ -4,6 +4,7 @@ unit G2.Temporal;
   time zone. Zones come as TZif files from GOCCIA_TZDIR or /usr/share/zoneinfo, the zone and link names from that
   directory's tzdata.zi, as in Goccia (ADR 0034); the prelude parses them and caches each zone. }
 {$mode delphiunicode}{$H+}
+{$MINFPCONSTPREC 64}
 
 interface
 

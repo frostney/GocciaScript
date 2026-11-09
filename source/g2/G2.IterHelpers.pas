@@ -3,6 +3,7 @@ unit G2.IterHelpers;
   JS (src/prelude/iterhelpers.js, turned into G2.IterHelpers.inc by t/lang/gen_prelude_inc.py) and compiled once
   into the prelude snapshot like G2.Builtins4's prelude. }
 {$mode delphiunicode}{$H+}
+{$MINFPCONSTPREC 64}
 
 interface
 
