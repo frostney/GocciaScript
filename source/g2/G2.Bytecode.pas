@@ -107,6 +107,7 @@ type
     Kind: Byte;
     Depth: Byte;
     VerMask: Byte;                   { bit d: the object at depth d (before the holder) is a dictionary }
+    Acc: Byte;                       { 1: the slot holds an accessor (FastLoop calls a bytecode getter inline) }
     Slot: Integer;
     Holder: array[0..IC_MAX_DEPTH - 1] of PShape;
     Vers: array[0..IC_MAX_DEPTH - 1] of Cardinal;   { those dictionaries' versions when the entry was made }

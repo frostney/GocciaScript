@@ -3135,6 +3135,7 @@ end;
 function ICGetEntry(E: PICEntry; O: PObj; var Res: TValue): Boolean;
 var P: PObj; D: Integer;
 begin
+  if E^.Acc <> 0 then Exit(False);   { an accessor: the miss path calls the getter }
   P := O;
   for D := 0 to E^.Depth - 1 do
   begin
@@ -3160,7 +3161,7 @@ end;
 { a property get through the IC's entries: the receiver's shape and kind pick the entry }
 function ICGet(IC: PPropIC; O: PObj; var Res: TValue): Boolean; inline;
 begin
-  if (IC^.Poly0.Shape = O^.Shape) and (IC^.Poly0.Kind = O^.OKind) then
+  if (IC^.Poly0.Shape = O^.Shape) and (IC^.Poly0.Kind = O^.OKind) and (IC^.Poly0.Acc = 0) then
   begin
     {$IFDEF G2_ICSTATS}Inc(ICHit0);{$ENDIF}
     case IC^.Poly0.Depth of
@@ -3215,6 +3216,34 @@ begin
   end;
 end;
 
+{ the first shape stays in entry 0 (checked inline); later ones take entries 1-3 in turn }
+procedure ICAddEntry(IC: PPropIC; const E: TICEntry);
+var N: Integer;
+begin
+  if IC^.PolyCount = 0 then
+  begin
+    IC^.Poly0 := E;
+    IC^.PolyCount := 1;
+    IC^.PolyNext := 1;
+  end
+  else
+  begin
+    N := IC^.PolyNext;
+    if IC^.More = nil then IC^.More := AllocMem(SizeOf(TICEntryMore));
+    IC^.More^[N] := E;
+    if N >= IC^.PolyCount then IC^.PolyCount := N + 1;
+    if N = 3 then IC^.PolyNext := 1 else IC^.PolyNext := N + 1;
+  end;
+end;
+
+function ICHasShape(IC: PPropIC; O: PObj): Boolean;
+var I: Integer;
+begin
+  for I := 1 to IC^.PolyCount - 1 do
+    if (IC^.More^[I].Shape = O^.Shape) and (IC^.More^[I].Kind = O^.OKind) then Exit(True);
+  Result := False;
+end;
+
 { an IC miss: GetFromObject's walk (same order: own shape, virtual property, elements, function prototype,
   then the prototype), and an entry for the IC when the value is a data property the shapes alone decide }
 function ICGetMiss(IC: PPropIC; O: PObj; Receiver: TValue; var Res: TValue): Boolean;
@@ -3228,6 +3257,7 @@ begin
   E.Shape := O^.Shape;
   E.Kind := O^.OKind;
   E.VerMask := 0;
+  E.Acc := 0;
   P := O;
   D := 0;
   while True do
@@ -3243,6 +3273,15 @@ begin
       if (Flags and pfAccessor) <> 0 then
       begin
         {$IFDEF G2_ICSTATS}Inc(ICWhy[3]);{$ENDIF}
+        { an entry for the accessor, once (generic readers treat it as a miss and come back here): FastLoop calls a
+          bytecode getter from it without this walk }
+        if Cacheable and (IC^.Poly0.Shape <> O^.Shape) and not ICHasShape(IC, O) then
+        begin
+          E.Depth := D;
+          E.Slot := S;
+          E.Acc := 1;
+          ICAddEntry(IC, E);
+        end;
         Acc := PAccessor(PtrOf(V));
         if Acc^.Getter = VUndefined then begin Res := VUndefined; Exit(True); end;
         Exit(CallValue(Acc^.Getter, Receiver, nil, 0, Res));
@@ -3253,21 +3292,7 @@ begin
         {$IFDEF G2_ICSTATS}Inc(ICMissFill);{$ENDIF}
         E.Depth := D;
         E.Slot := S;
-        { the first shape stays in entry 0 (checked inline); later ones take entries 1-3 in turn }
-        if IC^.PolyCount = 0 then
-        begin
-          IC^.Poly0 := E;
-          IC^.PolyCount := 1;
-          IC^.PolyNext := 1;
-        end
-        else
-        begin
-          N := IC^.PolyNext;
-          if IC^.More = nil then IC^.More := AllocMem(SizeOf(TICEntryMore));
-          IC^.More^[N] := E;
-          if N >= IC^.PolyCount then IC^.PolyCount := N + 1;
-          if N = 3 then IC^.PolyNext := 1 else IC^.PolyNext := N + 1;
-        end;
+        ICAddEntry(IC, E);
       end;
       Exit(True);
     end;
@@ -4385,7 +4410,43 @@ begin
                   goto LBail;
                 end;
               end;
-              R[A] := GetSlot(O2, Ent^.Slot);
+              if Ent^.Acc = 0 then
+              begin
+                R[A] := GetSlot(O2, Ent^.Slot);
+                Continue;
+              end;
+              { an accessor: a bytecode getter runs in a frame of its own whose result lands in R[A] (opRet's RetIdx),
+                this the receiver; anything else is Execute's }
+              V := PAccessor(PtrOf(GetSlot(O2, Ent^.Slot)))^.Getter;
+              if V = VUndefined then begin R[A] := VUndefined; Continue; end;
+              if not IsObject(V) or MultiRealmAny then goto LBail;
+              O2 := ObjOf(V);
+              if (O2^.OKind <> okFunction) or ((O2^.OFlags and 1) <> 0) then goto LBail;
+              T := PFuncTemplate(O2^.Native);
+              if T^.IsAsync or T^.IsGenerator or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then goto LBail;
+              Base := StackTop;
+              if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
+              Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+              VS[Base] := VB;
+              if T^.MaxRegs > 1 then FillQWord(VS[Base + 1], T^.MaxRegs - 1, VUndefined);
+              J := Fr^.Base + A;
+              Fr := @Frames[FrameTop];
+              Fr^.Closure := V;
+              Fr^.NewTarget := VUndefined;
+              Fr^.Tpl := T;
+              Fr^.Base := Base;
+              Fr^.PC := T^.EntryPC;
+              Fr^.RetIdx := J;
+              Fr^.Argc := 0;
+              Fr^.Kind := 0;
+              Inc(FrameTop);
+              StackTop := Base + T^.MaxRegs;
+              R := @VS[Base];
+              Code := @T^.Code[0];
+              IP := @Code[T^.EntryPC];
+              if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
+              if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+              Changed := True;
               Continue;
             end;
             if (TOp(I and $FF) = opGetLength) and (O^.OKind = okArray) then
