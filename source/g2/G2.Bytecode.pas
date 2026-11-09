@@ -9,6 +9,10 @@ interface
 uses
   G2.Core, Goccia.SourceSpan;
 
+const
+  { prototype hops a get IC's entry follows to the property's holder (VerMask has a bit for each) }
+  IC_MAX_DEPTH = 8;
+
 type
   TOp = (
     opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opLoadHole,
@@ -97,8 +101,8 @@ type
     Depth: Byte;
     VerMask: Byte;                   { bit d: the object at depth d (before the holder) is a dictionary }
     Slot: Integer;
-    Holder: array[0..3] of PShape;
-    Vers: array[0..3] of Cardinal;   { those dictionaries' versions when the entry was made }
+    Holder: array[0..IC_MAX_DEPTH - 1] of PShape;
+    Vers: array[0..IC_MAX_DEPTH - 1] of Cardinal;   { those dictionaries' versions when the entry was made }
   end;
 
   TICEntryMore = array[1..3] of TICEntry;

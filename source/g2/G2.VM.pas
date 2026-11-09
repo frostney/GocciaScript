@@ -2709,7 +2709,7 @@ begin
     end;
     Pv := P^.Shape^.Proto;
     if not IsObject(Pv) then begin {$IFDEF G2_ICSTATS}Inc(ICWhy[2]);{$ENDIF} Res := VUndefined; Exit(True); end;
-    if D >= 4 then
+    if D >= IC_MAX_DEPTH then
     begin
       {$IFDEF G2_ICSTATS}if Cacheable then Inc(ICWhy[5]);{$ENDIF}
       Cacheable := False;
@@ -2721,8 +2721,25 @@ begin
       E.Vers[D] := P^.Shape^.Version;
     end;
     P := ObjOf(Pv);
-    if D < 4 then E.Holder[D] := P^.Shape;
+    if D < IC_MAX_DEPTH then E.Holder[D] := P^.Shape;
     Inc(D);
+  end;
+end;
+
+{ A property read on a string primitive: a cache of String.prototype's own data property, in the IC's receiver
+  shape and slot (a get IC's own entries are Poly0 and More). Deleting or redefining one of the prototype's
+  properties gives it a new shape; adding one keeps every key's slot. A string's own properties are its indices
+  and length, which no other key names. }
+procedure ICFillString(IC: PPropIC); noinline;
+var P: PObj; S: Integer;
+begin
+  if IC^.Key = AtomLength then Exit;
+  P := ObjOf(StringProto);
+  S := ShapeLookup(P^.Shape, IC^.Key);
+  if (S >= 0) and ((P^.Shape^.PFlags[S] and pfAccessor) = 0) then
+  begin
+    IC^.Shape := P^.Shape;
+    IC^.Slot := S;
   end;
 end;
 
@@ -3460,6 +3477,608 @@ begin
   Result := BigToValue(ValueToBig(V).Negate);
 end;
 
+{ the instructions FastLoop has a fast path for: Execute calls it only before one of them }
+var
+  FastOp: array[0..255] of Boolean;
+  {$IFDEF G2_BAILSTATS}BailCounts: array[0..255] of Int64; FastOpI: Integer;{$ENDIF}
+
+procedure InitFastOps;
+const
+  Ops: array[0..58] of TOp = (opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSub,
+    opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
+    opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
+    opJNGt, opJNGe, opJNSEq, opJSEq, opCall, opRet, opRetUndef, opToNum, opToNumeric, opEq, opNe, opTypeof, opDefField);
+var Op: TOp;
+begin
+  for Op in Ops do FastOp[Ord(Op)] := True;
+end;
+
+{ The hot instructions' fast paths, in a function small enough for FPC to keep its loop variables in registers.
+  FPC spills whole live ranges and picks the variable with the most interferences, so in Execute, whose size
+  gives the dispatch variables the most, PC, R and Code live in memory: every instruction loads and stores them,
+  and PC's store-to-load chain bounds the dispatch rate. FastLoop runs from PC until an instruction it does not
+  handle, or whose fast path does not apply, and returns that instruction's PC before doing any of it: Execute
+  runs it. Each case is Execute's fast path for the instruction. FastLoop calls nothing (a call would make the
+  loop variables compete for the callee-saved registers) and allocates nothing (no collection can move R's
+  values). Fr is the running frame (its closure's upvalue array is read through it: a collection in Execute
+  can move the array). A store the write barrier would have to remember is left to Execute.
+  A call of a plain bytecode function and its return run here too, so a call does not end the fast path.
+  FastLoop then returns -1: the frame it stopped in is no longer Execute's, and its PC is in the frame record.
+  It never returns from StopFrame, the frame Execute was entered for. }
+{ StrEquals without a call, for FastLoop: lengths, atoms, hashes, then the characters }
+function FastStrEquals(A, B: PStr): Boolean; inline;
+var P, Q: PWideChar; N: Integer;
+begin
+  if A^.Len <> B^.Len then Exit(False);
+  if (A^.Atom <> nil) and (A^.Atom = B^.Atom) then Exit(True);
+  if (A^.Hash <> 0) and (B^.Hash <> 0) and (A^.Hash <> B^.Hash) then Exit(False);
+  P := StrChars(A);
+  Q := StrChars(B);
+  for N := 0 to A^.Len - 1 do
+    if P[N] <> Q[N] then Exit(False);
+  Result := True;
+end;
+
+function FastLoop(Code: PQWord; PC: Integer; R, K: PValue; ICs: PPropIC; Fr: PFrame; StopFrame: Integer): Integer;
+label LBail;
+var
+  T: PFuncTemplate;
+  Base, Argc, J: Integer;
+  Changed: Boolean;
+  VS: PValue;
+  NS, NL: PByte;   { the nursery, which no collection moves while FastLoop runs }
+  I: QWord;
+  A, CI, NP: Integer;
+  VA, VB, V: TValue;
+  Sum: Int64;
+  O, O2: PObj;
+  Ent: PICEntry;
+  TA: PTypeofAtoms;
+  E: PValueArray;
+  IC: PPropIC;
+  U: PUpval;
+  P: PByte;
+  Bool: Boolean;
+begin
+  VS := VStack;
+  NS := NurseryStart;
+  NL := NurseryLimit;
+  Changed := False;
+  while True do
+  begin
+    I := Code[PC];
+    Inc(PC);
+    A := (I shr 8) and $FFFF;
+    case TOp(I and $FF) of
+      opNop: ;
+      opMov: R[A] := R[(I shr 24) and $FFFF];
+      opLoadK: R[A] := K[I shr 40];
+      opLoadI: R[A] := MkInt(SarInt64(Int64(I), 40));
+      opLoadUndef: R[A] := VUndefined;
+      opLoadNull: R[A] := VNull;
+      opLoadTrue: R[A] := VTrue;
+      opLoadFalse: R[A] := VFalse;
+      opLoadHole: R[A] := VHole;
+      opGetUpv:
+        begin
+          U := PUpval(PtrOf(PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[(I shr 24) and $FFFF]));
+          if U^.StackIndex >= 0 then R[A] := VS[U^.StackIndex] else R[A] := U^.Value;
+        end;
+      opSetUpv:
+        begin
+          U := PUpval(PtrOf(PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[(I shr 24) and $FFFF]));
+          if U^.StackIndex >= 0 then VS[U^.StackIndex] := R[A]
+          else
+          begin
+            V := R[A];
+            { a store the write barrier might have to remember: Execute's }
+            if ((U^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+            U^.Value := V;
+          end;
+        end;
+      opGetProp, opGetLength:
+        begin
+          VB := R[(I shr 24) and $FFFF];
+          if (VB and TAG_MASK) <> TAG_PTR then begin {$IFDEF G2_BAILSTATS}Inc(BailCounts[250]);{$ENDIF} goto LBail; end;
+          O := PObj(PtrUInt(VB and PTR_MASK));
+          if O^.Hdr.Kind = ckObject then
+          begin
+            IC := @ICs[I shr 40];
+            { ICGet: the entry for the receiver's shape, then its holder through the prototypes }
+            Ent := nil;
+            if (IC^.Poly0.Shape = O^.Shape) and (IC^.Poly0.Kind = O^.OKind) then Ent := @IC^.Poly0
+            else
+              for J := 1 to IC^.PolyCount - 1 do
+                if (IC^.More^[J].Shape = O^.Shape) and (IC^.More^[J].Kind = O^.OKind) then
+                begin
+                  Ent := @IC^.More^[J];
+                  Break;
+                end;
+            if Ent <> nil then
+            begin
+              O2 := O;
+              for J := 0 to Ent^.Depth - 1 do
+              begin
+                if ((Ent^.VerMask shr J) and 1 <> 0) and (O2^.Shape^.Version <> Ent^.Vers[J]) then
+                begin
+                  {$IFDEF G2_BAILSTATS}Inc(BailCounts[251]);{$ENDIF}
+                  goto LBail;
+                end;
+                O2 := ObjOf(O2^.Shape^.Proto);
+                if O2^.Shape <> Ent^.Holder[J] then
+                begin
+                  {$IFDEF G2_BAILSTATS}Inc(BailCounts[252]);{$ENDIF}
+                  goto LBail;
+                end;
+              end;
+              R[A] := GetSlot(O2, Ent^.Slot);
+              Continue;
+            end;
+            if (TOp(I and $FF) = opGetLength) and (O^.OKind = okArray) then
+            begin
+              R[A] := MkInt(O^.Elements^.Len);
+              Continue;
+            end;
+            {$IFDEF G2_BAILSTATS}if IC^.PolyCount = 0 then Inc(BailCounts[248]) else if IC^.PolyCount < 4 then Inc(BailCounts[249]) else Inc(BailCounts[253]);{$ENDIF}
+            goto LBail;
+          end;
+          if O^.Hdr.Kind = ckString then
+          begin
+            if TOp(I and $FF) = opGetLength then
+            begin
+              R[A] := MkInt(PStr(O)^.Len);
+              Continue;
+            end;
+            { ICFillString's cache of String.prototype's property }
+            O2 := ObjOf(StringProto);
+            IC := @ICs[I shr 40];
+            if O2^.Shape = IC^.Shape then
+            begin
+              R[A] := GetSlot(O2, IC^.Slot);
+              Continue;
+            end;
+          end;
+          goto LBail;
+        end;
+      opSetProp:
+        begin
+          { a cached own data store or add transition into an inline slot }
+          VA := R[A];
+          if not IsObject(VA) then goto LBail;
+          O := ObjOf(VA);
+          IC := @ICs[I shr 40];
+          if O^.Shape <> IC^.Shape then goto LBail;
+          V := R[(I shr 24) and $FFFF];
+          if IC^.Slot >= O^.InlineCap then
+          begin
+            { an existing property in the overflow slots (SetSlot); an add there may grow them: Execute's }
+            if IC^.NewShape <> nil then goto LBail;
+            E := O^.Overflow;
+            if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+            E^.Data[IC^.Slot - O^.InlineCap] := V;
+            Continue;
+          end;
+          if ((O^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+             (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+          if IC^.NewShape <> nil then O^.Shape := IC^.NewShape;
+          O^.Slots[IC^.Slot] := V;
+        end;
+      opDefField:
+        begin
+          { a class field's cached add transition (an extensible object with the cached shape) }
+          O := ObjOf(R[A]);
+          IC := @ICs[I shr 40];
+          if (O^.Shape <> IC^.Shape) or (IC^.NewShape = nil) or (IC^.Slot >= O^.InlineCap) or
+             ((O^.OFlags and 8) <> 0) then goto LBail;
+          V := R[(I shr 24) and $FFFF];
+          if ((O^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+             (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+          O^.Shape := IC^.NewShape;
+          O^.Slots[IC^.Slot] := V;
+        end;
+      opGetElem:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if not (IsInt(VB) and IsObject(VA)) then goto LBail;
+          O := ObjOf(VA);
+          E := O^.Elements;
+          CI := IntOf(VB);
+          if (E <> nil) and (CI >= 0) and (CI < Integer(E^.Len)) and (E^.Data[CI] <> VHole) then
+          begin
+            R[A] := E^.Data[CI];
+            Continue;
+          end;
+          { a typed array over an ordinary buffer (the length is the view's), of a kind read without a call }
+          if (O^.OKind <> okTypedArray) or (CI < 0) or
+             ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached)) <> 0) or
+             (CI >= Int32(UInt32(O^.Aux2))) then goto LBail;
+          P := @PBytes(PtrOf(ObjOf(O^.Aux1)^.Aux1))^.Data[0] + O^.Pad;
+          case O^.OFlags shr 4 of
+            taInt8: R[A] := MkInt(PShortInt(P)[CI]);
+            taUint8, taUint8C: R[A] := MkInt(P[CI]);
+            taInt16: R[A] := MkInt(PSmallInt(P)[CI]);
+            taUint16: R[A] := MkInt(PWord(P)[CI]);
+            taInt32: R[A] := MkInt(PLongInt(P)[CI]);
+            taUint32: R[A] := MkNumber(PLongWord(P)[CI]);
+            taFloat32: R[A] := MkNumber(PSingle(P)[CI]);
+            taFloat64: R[A] := MkNumber(PDouble(P)[CI]);
+          else goto LBail;
+          end;
+        end;
+      opSetElem:
+        begin
+          VA := R[A];
+          VB := R[(I shr 24) and $FFFF];
+          V := R[I shr 40];
+          if not (IsInt(VB) and IsObject(VA)) then goto LBail;
+          O := ObjOf(VA);
+          E := O^.Elements;
+          CI := IntOf(VB);
+          if (E <> nil) and (CI >= 0) and ((O^.OFlags and 64) = 0) and
+             (((CI < Integer(E^.Len)) and (E^.Data[CI] <> VHole)) or
+              ((CI = Integer(E^.Len)) and (CI < Integer(E^.Cap)) and (O^.OKind = okArray))) then
+          begin
+            { a store the write barrier might have to remember: Execute's }
+            if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+               (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then goto LBail;
+            E^.Data[CI] := V;
+            if CI = Integer(E^.Len) then E^.Len := CI + 1;
+            Continue;
+          end;
+          if (O^.OKind <> okTypedArray) or (CI < 0) or
+             ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached)) <> 0) or
+             (CI >= Int32(UInt32(O^.Aux2))) then goto LBail;
+          P := @PBytes(PtrOf(ObjOf(O^.Aux1)^.Aux1))^.Data[0] + O^.Pad;
+          if IsInt(V) then
+            case O^.OFlags shr 4 of
+              taInt8, taUint8: P[CI] := Byte(IntOf(V));
+              taInt16, taUint16: PWord(P)[CI] := Word(IntOf(V));
+              taInt32, taUint32: PLongWord(P)[CI] := LongWord(IntOf(V));
+              taFloat32: PSingle(P)[CI] := IntOf(V);
+              taFloat64: PDouble(P)[CI] := IntOf(V);
+            else goto LBail;
+            end
+          else if IsDouble(V) then
+            case O^.OFlags shr 4 of
+              taFloat32: PSingle(P)[CI] := DoubleOf(V);
+              taFloat64: PDouble(P)[CI] := DoubleOf(V);
+            else goto LBail;
+            end
+          else goto LBail;
+        end;
+      opAdd:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          begin
+            Sum := Int64(Int32(UInt32(VA))) + Int64(Int32(UInt32(VB)));
+            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+            else R[A] := MkDouble(Sum);
+          end
+          else if IsNumber(VA) and IsNumber(VB) then R[A] := MkDouble(NumOf(VA) + NumOf(VB))
+          else goto LBail;
+        end;
+      opAddI:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          CI := SarInt64(Int64(I), 40);
+          if (VA and TAG_MASK) = TAG_INT then
+          begin
+            Sum := Int64(Int32(UInt32(VA))) + CI;
+            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+            else R[A] := MkDouble(Sum);
+          end
+          else if VA < DOUBLE_LIMIT then R[A] := MkDouble(PDouble(@VA)^ + CI)
+          else goto LBail;
+        end;
+      opSub, opMul:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          begin
+            if TOp(I and $FF) = opSub then Sum := Int64(Int32(UInt32(VA))) - Int64(Int32(UInt32(VB)))
+            else Sum := Int64(Int32(UInt32(VA))) * Int64(Int32(UInt32(VB)));
+            if (Sum >= -2147483648) and (Sum <= 2147483647) and not ((Sum = 0) and (TOp(I and $FF) = opMul) and
+               ((Int32(UInt32(VA)) < 0) or (Int32(UInt32(VB)) < 0))) then
+              R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+            else if TOp(I and $FF) = opSub then R[A] := MkDouble(Sum)
+            else R[A] := MkDouble(Double(Int32(UInt32(VA))) * Double(Int32(UInt32(VB))));
+          end
+          else if IsNumber(VA) and IsNumber(VB) then
+          begin
+            if TOp(I and $FF) = opSub then R[A] := MkDouble(NumOf(VA) - NumOf(VB))
+            else R[A] := MkDouble(NumOf(VA) * NumOf(VB));
+          end
+          else goto LBail;
+        end;
+      opDiv:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if IsNumber(VA) and IsNumber(VB) then R[A] := MkNumber(NumOf(VA) / NumOf(VB))
+          else goto LBail;
+        end;
+      opMod:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) and (Int32(UInt32(VB)) > 0) and
+             (Int32(UInt32(VA)) >= 0) then
+            R[A] := MkInt(Int32(UInt32(VA)) mod Int32(UInt32(VB)))
+          else goto LBail;
+        end;
+      opShr, opUShr:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if QuickInt32(VA, CI) and QuickInt32(VB, NP) then
+          begin
+            if TOp(I and $FF) = opShr then R[A] := MkInt(SarLongint(CI, NP and 31))
+            else R[A] := MkNumber(UInt32(CI) shr (NP and 31));
+          end
+          else goto LBail;
+        end;
+      opBitAnd, opBitOr, opBitXor, opShl:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if not (QuickInt32(VA, CI) and QuickInt32(VB, NP)) then goto LBail;
+          case TOp(I and $FF) of
+            opBitAnd: R[A] := MkInt(CI and NP);
+            opBitOr: R[A] := MkInt(CI or NP);
+            opBitXor: R[A] := MkInt(CI xor NP);
+          else R[A] := MkInt(Int32(UInt32(CI) shl (NP and 31)));
+          end;
+        end;
+      opNeg:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          if IsInt(VA) and (IntOf(VA) <> 0) and (IntOf(VA) <> Low(Int32)) then R[A] := MkInt(-IntOf(VA))
+          else if VA < DOUBLE_LIMIT then R[A] := MkDouble(-PDouble(@VA)^)
+          else goto LBail;
+        end;
+      opBitNot:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          if IsInt(VA) then R[A] := MkInt(not IntOf(VA)) else goto LBail;
+        end;
+      opNot:
+        begin
+          R[A] := MkBool(not ToBool(R[(I shr 24) and $FFFF]));
+        end;
+      opSEq, opSNe:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          { StrictEquals }
+          if VA = VB then Bool := not IsDouble(VA) or (DoubleOf(VA) = DoubleOf(VA))
+          else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
+          else if ((VA and TAG_MASK) <> TAG_PTR) or ((VB and TAG_MASK) <> TAG_PTR) then
+            Bool := False   { different, and not both numbers: a non-pointer equals only itself }
+          else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
+          else if IsBigInt(VA) and IsBigInt(VB) then goto LBail
+          else Bool := False;   { objects and symbols: the same one only }
+          if TOp(I and $FF) = opSNe then Bool := not Bool;
+          R[A] := MkBool(Bool);
+        end;
+      opTypeof:
+        begin
+          { TypeofValue, once its atoms exist }
+          TA := TypeofAtoms;
+          if TA = nil then goto LBail;
+          VA := R[(I shr 24) and $FFFF];
+          if IsNumber(VA) then R[A] := MkPtr(TA^.Num)
+          else if (VA = VUndefined) or (VA = VHole) then R[A] := MkPtr(TA^.Undef)
+          else if VA = VNull then R[A] := MkPtr(TA^.Obj)
+          else if (VA = VTrue) or (VA = VFalse) then R[A] := MkPtr(TA^.Bool)
+          else
+            case PCell(PtrOf(VA))^.Kind of
+              ckString: R[A] := MkPtr(TA^.Str);
+              ckSymbol: R[A] := MkPtr(TA^.Sym);
+              9: R[A] := MkPtr(TA^.Big);
+              ckObject: if IsCallable(VA) then R[A] := MkPtr(TA^.Fn) else R[A] := MkPtr(TA^.Obj);
+            else R[A] := MkPtr(TA^.Undef);
+            end;
+        end;
+      opToNum, opToNumeric:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          if not IsNumber(VA) then goto LBail;
+          R[A] := VA;
+        end;
+      opEq, opNe:
+        begin
+          { LooseEquals' first cases: nullish, two numbers, two strings, the same value }
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if (VA = VUndefined) or (VA = VNull) or (VB = VUndefined) or (VB = VNull) then
+            Bool := ((VA = VUndefined) or (VA = VNull)) and ((VB = VUndefined) or (VB = VNull))
+          else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
+          else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
+          else if (VA = VB) and not IsBigInt(VA) then Bool := True
+          else goto LBail;
+          if TOp(I and $FF) = opNe then Bool := not Bool;
+          R[A] := MkBool(Bool);
+        end;
+      opLt, opLe, opGt, opGe:
+        begin
+          VA := R[(I shr 24) and $FFFF];
+          VB := R[I shr 40];
+          if IsInt(VA) and IsInt(VB) then
+          begin
+            case TOp(I and $FF) of
+              opLt: Bool := IntOf(VA) < IntOf(VB);
+              opLe: Bool := IntOf(VA) <= IntOf(VB);
+              opGt: Bool := IntOf(VA) > IntOf(VB);
+            else Bool := IntOf(VA) >= IntOf(VB);
+            end;
+          end
+          else if IsNumber(VA) and IsNumber(VB) then
+          begin
+            case TOp(I and $FF) of
+              opLt: Bool := NumOf(VA) < NumOf(VB);
+              opLe: Bool := NumOf(VA) <= NumOf(VB);
+              opGt: Bool := NumOf(VA) > NumOf(VB);
+            else Bool := NumOf(VA) >= NumOf(VB);
+            end;
+          end
+          else goto LBail;
+          R[A] := MkBool(Bool);
+        end;
+      opJmp: Inc(PC, SarInt64(Int64(I), 40));
+      opJT, opJF:
+        begin
+          if ToBool(R[A]) = (TOp(I and $FF) = opJT) then Inc(PC, SarInt64(Int64(I), 40));
+        end;
+      opJNullish: if (R[A] = VUndefined) or (R[A] = VNull) then Inc(PC, SarInt64(Int64(I), 40));
+      opJNotNullish: if (R[A] <> VUndefined) and (R[A] <> VNull) then Inc(PC, SarInt64(Int64(I), 40));
+      opJUndef: if R[A] = VUndefined then Inc(PC, SarInt64(Int64(I), 40));
+      opJNotUndef: if R[A] <> VUndefined then Inc(PC, SarInt64(Int64(I), 40));
+      opJNLt, opJNLe, opJNGt, opJNGe:
+        begin
+          VA := R[A];
+          VB := R[(I shr 24) and $FFFF];
+          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          begin
+            case TOp(I and $FF) of
+              opJNLt: Bool := Int32(UInt32(VA)) < Int32(UInt32(VB));
+              opJNLe: Bool := Int32(UInt32(VA)) <= Int32(UInt32(VB));
+              opJNGt: Bool := Int32(UInt32(VA)) > Int32(UInt32(VB));
+            else Bool := Int32(UInt32(VA)) >= Int32(UInt32(VB));
+            end;
+          end
+          else if IsNumber(VA) and IsNumber(VB) then
+          begin
+            case TOp(I and $FF) of
+              opJNLt: Bool := NumOf(VA) < NumOf(VB);
+              opJNLe: Bool := NumOf(VA) <= NumOf(VB);
+              opJNGt: Bool := NumOf(VA) > NumOf(VB);
+            else Bool := NumOf(VA) >= NumOf(VB);
+            end;
+          end
+          else goto LBail;
+          if not Bool then Inc(PC, SarInt64(Int64(I), 40));
+        end;
+      opJNSEq, opJSEq:
+        begin
+          VA := R[A];
+          VB := R[(I shr 24) and $FFFF];
+          { StrictEquals }
+          if VA = VB then Bool := not IsDouble(VA) or (DoubleOf(VA) = DoubleOf(VA))
+          else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
+          else if ((VA and TAG_MASK) <> TAG_PTR) or ((VB and TAG_MASK) <> TAG_PTR) then
+            Bool := False   { different, and not both numbers: a non-pointer equals only itself }
+          else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
+          else if IsBigInt(VA) and IsBigInt(VB) then goto LBail
+          else Bool := False;   { objects and symbols: the same one only }
+          if Bool = (TOp(I and $FF) = opJSEq) then Inc(PC, SarInt64(Int64(I), 40));
+        end;
+      opCall:
+        begin
+          { PushBytecodeFrame's work for a function with no rest parameter or arguments object, not async and
+            not a class constructor; the callee then runs here }
+          VA := R[A];
+          if not IsObject(VA) then goto LBail;
+          O := ObjOf(VA);
+          if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then goto LBail;
+          T := PFuncTemplate(O^.Native);
+          if T^.IsAsync or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then goto LBail;
+          Base := Fr^.Base + A + 1;
+          if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
+          Argc := (I shr 24) and $FFFF;
+          if (I shr 40) and 1 <> 0 then R[A + 1] := VUndefined;
+          if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
+          Fr^.PC := PC;
+          R := @VS[Base];
+          if not T^.IsStrict and not T^.IsArrow and ((R[0] = VUndefined) or (R[0] = VNull)) then R[0] := GlobalObj;
+          if Argc < T^.NumParams then J := Argc + 1 else J := T^.NumParams + 1;
+          while J < T^.MaxRegs do
+          begin
+            R[J] := VUndefined;
+            Inc(J);
+          end;
+          Fr := @Frames[FrameTop];
+          Fr^.Closure := VA;
+          Fr^.NewTarget := VUndefined;
+          Fr^.Tpl := T;
+          Fr^.Base := Base;
+          Fr^.PC := T^.EntryPC;
+          Fr^.RetIdx := Base - 1;
+          Fr^.Argc := Argc;
+          Fr^.Kind := 0;
+          Inc(FrameTop);
+          StackTop := Base + T^.MaxRegs;
+          Code := @T^.Code[0];
+          PC := T^.EntryPC;
+          if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
+          if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+          Changed := True;
+        end;
+      opRet, opRetUndef:
+        begin
+          { a call's or a construction's return to a bytecode caller inside this Execute }
+          if (Fr^.Kind > 1) or (FrameTop - 1 = StopFrame) then goto LBail;
+          if TOp(I and $FF) = opRet then V := R[A] else V := VUndefined;
+          if (Fr^.Kind = 1) and not IsObject(V) then
+          begin
+            { 10.2.2 [[Construct]] steps 10-12; a derived constructor's checks are Execute's }
+            T := Fr^.Tpl;
+            if T^.IsDerived and T^.IsClassCtor then goto LBail;
+            V := R[0];
+            if IsObject(V) and (T^.ExpectedProps < ObjOf(V)^.Shape^.Count) then
+              if ObjOf(V)^.Shape^.Count < 64 then T^.ExpectedProps := ObjOf(V)^.Shape^.Count else T^.ExpectedProps := 64;
+          end;
+          { CloseUpvals, once none of the frame's upvalues needs the write barrier to remember it }
+          J := OpenCount;
+          while (J > 0) and (PUpval(PtrOf(OpenUpvals[J - 1]))^.StackIndex >= Fr^.Base) do
+          begin
+            U := PUpval(PtrOf(OpenUpvals[J - 1]));
+            VB := VS[U^.StackIndex];
+            if ((U^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((VB and TAG_MASK) = TAG_PTR) and
+               (PByte(PtrUInt(VB and PTR_MASK)) >= NS) and (PByte(PtrUInt(VB and PTR_MASK)) < NL) then goto LBail;
+            Dec(J);
+          end;
+          while OpenCount > J do
+          begin
+            U := PUpval(PtrOf(OpenUpvals[OpenCount - 1]));
+            U^.Value := VS[U^.StackIndex];
+            U^.StackIndex := -1;
+            Dec(OpenCount);
+          end;
+          while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
+          Dec(FrameTop);
+          VS[Fr^.RetIdx] := V;
+          Fr := @Frames[FrameTop - 1];
+          T := Fr^.Tpl;
+          StackTop := Fr^.Base + T^.MaxRegs;
+          Code := @T^.Code[0];
+          PC := Fr^.PC;
+          R := @VS[Fr^.Base];
+          if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
+          if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+          Changed := True;
+        end;
+    else
+      goto LBail;
+    end;
+  end;
+LBail:
+  { the instruction at PC - 1 is Execute's }
+  {$IFDEF G2_BAILSTATS}Inc(BailCounts[Code[PC - 1] and $FF]);{$ENDIF}
+  if Changed then
+  begin
+    Fr^.PC := PC - 1;
+    Exit(-1);
+  end;
+  Result := PC - 1;
+end;
+
 function Execute(StopFrame: Integer; var Res: TValue): Boolean;
 label LThrow, LReload, LNext;
 var
@@ -3489,6 +4108,7 @@ var
   Ok: Boolean;
   SavedTop: Integer;
   NP2: Integer;
+  ICB: PPropIC;
 begin
 LReload:
   Fr := @Frames[FrameTop - 1];
@@ -3498,6 +4118,7 @@ LReload:
   PC := Fr^.PC;
   R := @VStack[Fr^.Base];
   if Length(Tpl^.Consts) > 0 then K := @Tpl^.Consts[0] else K := nil;
+  if Length(Tpl^.ICs) > 0 then ICB := @Tpl^.ICs[0] else ICB := nil;
   if InjectThrow then
   begin
     InjectThrow := False;
@@ -3505,6 +4126,13 @@ LReload:
   end;
   while True do
   begin
+    {$IFNDEF G2_OPSTATS}
+    if FastOp[Code[PC] and $FF] then
+    begin
+      PC := FastLoop(Code, PC, R, K, ICB, Fr, StopFrame);
+      if PC < 0 then goto LReload;
+    end;
+    {$ENDIF}
     I := Code[PC];
     Inc(PC);
     A := (I shr 8) and $FFFF;
@@ -3765,10 +4393,20 @@ LReload:
               R[A] := V;
               Continue;
             end
-            else if (O^.Hdr.Kind = ckString) and (TOp(I and $FF) = opGetLength) then
+            else if O^.Hdr.Kind = ckString then
             begin
-              R[A] := MkInt(PStr(O)^.Len);
-              Continue;
+              if TOp(I and $FF) = opGetLength then
+              begin
+                R[A] := MkInt(PStr(O)^.Len);
+                Continue;
+              end;
+              O := ObjOf(StringProto);
+              if O^.Shape = IC^.Shape then
+              begin
+                R[A] := GetSlot(O, IC^.Slot);
+                Continue;
+              end;
+              ICFillString(IC);
             end;
           end;
           Fr^.PC := PC;
@@ -5369,5 +6007,13 @@ begin
   if not PushBytecodeFrame(Clo, GlobalObj, @VStack[1], 0, 0, 2, VUndefined) then Exit(False);   { a Script's this: the global object }
   Result := Execute(0, Res);
 end;
+
+initialization
+  InitFastOps;
+{$IFDEF G2_BAILSTATS}
+finalization
+  for FastOpI := 0 to 255 do
+    if BailCounts[FastOpI] > 0 then WriteLn(ErrOutput, 'bail ', FastOpI, ' ', BailCounts[FastOpI]);
+{$ENDIF}
 
 end.

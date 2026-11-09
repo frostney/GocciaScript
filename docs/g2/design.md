@@ -34,8 +34,15 @@ Strings are UTF-16 cells with length and hash; long concatenations build growabl
 Register bytecode in 64-bit instructions: op (8 bits), A (16), B (16), C (24). One value stack; a frame's
 registers are R0 = this, then the parameters, locals and temporaries. Captured variables are upvalues that
 stay open on the stack while their frame lives and close into cells when it ends. JS exceptions unwind through
-the VM's own handler records: the dispatch loop has no Pascal `try`, so FPC keeps its locals in registers.
-Generators and async functions suspend by saving their frame's registers.
+the VM's own handler records: the dispatch loop has no Pascal `try`.
+Generators and async functions suspend by saving the registers live at the suspension.
+
+FPC's register allocator spills whole live ranges, the most-interfering first, so in `Execute`, the size of
+the whole instruction set, the dispatch variables (PC, the registers' base, the code) live in memory. The hot
+instructions therefore also run in `FastLoop`, a small function that makes no calls and allocates nothing, so
+its loop variables stay in machine registers. `Execute` enters it before any instruction it handles; it runs
+until an instruction it does not handle, or whose fast path does not apply, and hands that one back. It also
+runs calls of plain bytecode functions and their returns, so a call does not end the fast path.
 
 ## Compilation
 
