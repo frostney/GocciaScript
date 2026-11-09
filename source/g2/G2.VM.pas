@@ -2239,9 +2239,51 @@ begin
   Res := A = B;
 end;
 
+{ new's and instanceof's cache of F's prototype property: F's shape and the slot of an own data property }
+procedure CacheProtoSlot(F: PObj);
+var S: Integer;
+begin
+  if F^.Shape^.IsDict then Exit;
+  S := ShapeLookup(F^.Shape, AtomPrototype);
+  if (S < 0) or ((F^.Shape^.PFlags[S] and pfAccessor) <> 0) then Exit;
+  PFuncTemplate(F^.Native)^.CtorFnShape := F^.Shape;
+  PFuncTemplate(F^.Native)^.CtorProtoSlot := S;
+end;
+
+threadvar
+  { InstanceOf's fast path: Function.prototype's shape (and dictionary version) whose @@hasInstance was found
+    to be the intrinsic one, and the last function shape without an own @@hasInstance }
+  HIFPShape, HIPlainShape: PShape;
+  HIFPVer: Cardinal;
+
+{ C, an ordinary function, gets Function.prototype's intrinsic @@hasInstance: OrdinaryHasInstance decides }
+function HasInstanceIntrinsic(O: PObj): Boolean;
+var S: Integer; FP: PObj; K: PStr;
+begin
+  Result := False;
+  if (O^.Shape^.Proto <> FunctionProto) or not IsPtr(SymHasInstance) then Exit;
+  FP := ObjOf(FunctionProto);
+  if (FP^.Shape <> HIFPShape) or (FP^.Shape^.IsDict and (FP^.Shape^.Version <> HIFPVer)) then
+  begin
+    K := SymKey(SymHasInstance);
+    S := ShapeLookup(FP^.Shape, K);
+    if (S < 0) or ((FP^.Shape^.PFlags[S] and pfAccessor) <> 0) or (GetSlot(FP, S) <> FuncHasInstanceFn) then Exit;
+    HIFPShape := FP^.Shape;
+    HIFPVer := FP^.Shape^.Version;
+  end;
+  if O^.Shape <> HIPlainShape then
+  begin
+    if O^.Shape^.IsDict or (ShapeLookup(O^.Shape, SymKey(SymHasInstance)) >= 0) then Exit;
+    HIPlainShape := O^.Shape;
+  end;
+  Result := True;
+end;
+
 function InstanceOf(V, C: TValue; var Res: Boolean): Boolean;
 var P, Proto, H, R: TValue;
 begin
+  if IsObject(C) and (ObjOf(C)^.OKind = okFunction) and HasInstanceIntrinsic(ObjOf(C)) then
+    Exit(OrdinaryHasInstance(C, V, Res));
   { InstanceofOperator: a Symbol.hasInstance method on the right-hand side decides }
   if IsObject(C) and IsPtr(SymHasInstance) then
   begin
@@ -2269,10 +2311,17 @@ begin
   if not IsCallable(C) then Exit(True);
   if ObjOf(C)^.OKind = okBound then Exit(InstanceOf(V, ObjOf(C)^.Aux1, Res));
   if not IsObject(V) then Exit(True);
-  PushRoot(V);
-  if not GetV(C, AtomPrototype, Proto) then begin PopRoots(1); Exit(False); end;
-  V := RootAt(TempTop - 1);
-  PopRoots(1);
+  { a bytecode function's prototype property through new's cache (F's shape, the slot) }
+  if (ObjOf(C)^.OKind = okFunction) and (Pointer(ObjOf(C)^.Shape) = PFuncTemplate(ObjOf(C)^.Native)^.CtorFnShape) then
+    Proto := GetSlot(ObjOf(C), PFuncTemplate(ObjOf(C)^.Native)^.CtorProtoSlot)
+  else
+  begin
+    PushRoot(V); PushRoot(C);
+    if not GetV(C, AtomPrototype, Proto) then begin PopRoots(2); Exit(False); end;
+    C := RootAt(TempTop - 1); V := RootAt(TempTop - 2);
+    PopRoots(2);
+    if ObjOf(C)^.OKind = okFunction then CacheProtoSlot(ObjOf(C));
+  end;
   if not IsObject(Proto) then Exit(ThrowTypeError('Function has non-object prototype in instanceof check'));
   Result := ProtoChainHas(V, Proto, Res);
 end;
