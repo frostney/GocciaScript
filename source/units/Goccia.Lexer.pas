@@ -1733,7 +1733,14 @@ begin
       end
       else
         AddToken(gttDot);
-    '#': AddToken(gttHash);
+    '#':
+      begin
+        { a PrivateIdentifier is # immediately followed by an IdentifierName (no space between) }
+        if not (CharInSet(Peek, ['a'..'z', 'A'..'Z', '$', '_', '\']) or (Ord(Peek) >= $80)) then
+          raise TGocciaLexerError.Create('Unexpected character: #', FLine, FStartColumn, FFileName,
+            GetSourceLines, SSuggestInvalidCharacter);
+        AddToken(gttHash);
+      end;
     '@': AddToken(gttAt);
     '`':
       ScanTemplateStart;
