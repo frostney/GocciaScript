@@ -942,7 +942,7 @@ begin
 end;
 
 procedure TCompiler.StoreIdentStatic(const N: UnicodeString; Src: Integer; IsInit: Boolean);
-var Reg, U, T: Integer;
+var Reg, U, T: Integer; F: TFuncState;
 begin
   if ResolveLocal(FS, N, Reg) then
   begin
@@ -970,6 +970,25 @@ begin
     end;
     Emit(Ins(opSetUpv, Src, U, 0));
     Exit;
+  end;
+  if N = 'arguments' then
+  begin
+    { a non-strict function's arguments binding is mutable (10.2.11 step 22.f: CreateMutableBinding), as
+      LoadIdentStatic resolves it }
+    F := FS;
+    while (F <> nil) and F.IsArrow do F := F.Parent;
+    if (F <> nil) and F.IsEvalOuter then
+    begin
+      U := ResolveUpval(FS, '%arguments');
+      if U >= 0 then begin Emit(Ins(opSetUpv, Src, U, 0)); Exit; end;
+    end;
+    if (F <> nil) and ((F.Parent <> nil) or (Goal = 0)) then
+    begin
+      F.ArgsUsed := True;
+      if F = FS then begin if F.ArgsReg <> Src then Emit(Ins(opMov, F.ArgsReg, Src, 0)); end
+      else Emit(Ins(opSetUpv, Src, ResolveUpval(FS, '%arguments'), 0));
+      Exit;
+    end;
   end;
   U := GLexFind(AtomOf(N));
   if U >= 0 then begin Emit(Ins(opSetGLex, Src, 0, U)); Exit; end;

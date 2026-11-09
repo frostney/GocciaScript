@@ -30,6 +30,9 @@ procedure RejectPendingPromise(P, Reason: TValue);
 function PromiseStatus(P: TValue; var Result_: TValue): Integer;
 { a job that calls F with no arguments, after the current job (G2.Modules: import()'s loading) }
 procedure EnqueueCallback(F: TValue);
+{ 27.2.5.4.1 PerformPromiseThen(P, OnF, OnR, Cap) for a promise P of this engine; Cap a pending promise
+  (G2.ShadowRealm's importValue) }
+procedure PromiseThenNative(P, OnF, OnR, Cap: TValue);
 
 implementation
 
@@ -348,6 +351,11 @@ begin
     EnqueueJob(jkReaction, RootAt(TempTop - 1), O^.Aux1, MkInt(O^.Pad));
   ObjOf(RootAt(TempTop - 2))^.OFlags := ObjOf(RootAt(TempTop - 2))^.OFlags or 1;
   PopRoots(2);
+end;
+
+procedure PromiseThenNative(P, OnF, OnR, Cap: TValue);
+begin
+  PerformThen(P, rkThen, OnF, OnR, Cap);
 end;
 
 { 7.3.22 SpeciesConstructor(O, %Promise%) }
