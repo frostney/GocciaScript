@@ -14,7 +14,7 @@ implementation
 
 uses
   {$IFDEF UNIX}BaseUnix, Unix, Linux, UnixType, {$ENDIF}SysUtils, Classes, BigInteger, G2.Core, G2.Bytecode, G2.VM, G2.BigIntV,
-  G2.Snapshot;
+  G2.Snapshot, Goccia.Temporal.Utils, Goccia.Temporal.Calendar;
 
 {$I G2.Temporal.inc}
 
@@ -102,8 +102,97 @@ begin
   if S <> '' then Res := StrFromUnicode(UnicodeString(S));
 end;
 
+{ calOp(op, calendar, ...): the non-ISO calendars' arithmetic (Goccia.Temporal.Calendar, over ICU), all in ISO
+  and calendar year/month/day integers; null where the calendar cannot represent the date (reject) or ICU fails
+    0 ISOToDate(cal, y, m, d)  -> [year, month, monthCode, day, era, eraYear, dayOfWeek, dayOfYear, daysInMonth,
+                                    daysInYear, monthsInYear, inLeapYear] (era and eraYear undefined without eras)
+    1 DateToISO(cal, year, monthOrCode, isCode, isLeap, day, constrain) -> [y, m, d]
+    2 Add(cal, y, m, d, years, months, weeks, days, constrain)          -> [y, m, d]
+    3 MonthDayRef(cal, refYear, monthOrCode, isCode, isLeap, day)        -> [y, m, d]
+    4 YearFromEra(cal, era, eraYear)                                     -> year
+    5 MonthsInYear(cal, year)                                            -> count
+    6 UsesEra(cal)                                                        -> boolean
+    7 EraFromYear(cal, year)                                              -> [era, eraYear] }
+function Temporal_CalOp(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Op: Integer; Cal: string; D: TTemporalDateRecord; Info: TTemporalCalendarDateInfo; A: PObj; N, I: Integer;
+  Era: string; EraYear: Integer; HasEra: Boolean;
+  function IArg(K: Integer): Int64;
+  begin
+    if (K <= Argc) and IsNumber(Args[K]) then Result := Trunc(NumOf(Args[K])) else Result := 0;
+  end;
+  function BArg(K: Integer): Boolean;
+  begin
+    Result := (K <= Argc) and ToBool(Args[K]);
+  end;
+  function SArg(K: Integer): string;
+  begin
+    if (K <= Argc) and IsString(Args[K]) then Result := string(StrToUnicode(StrOf(Args[K]))) else Result := '';
+  end;
+  procedure Triple(const R: TTemporalDateRecord);
+  begin
+    A := NewArray(3, 3);
+    A^.Elements^.Data[0] := MkInt(R.Year);
+    A^.Elements^.Data[1] := MkInt(R.Month);
+    A^.Elements^.Data[2] := MkInt(R.Day);
+    Res := MkPtr(A);
+  end;
+begin
+  Result := True;
+  Res := VNull;
+  Op := IArg(1);
+  Cal := SArg(2);
+  case Op of
+    0:
+      if TryGetCalendarDateInfo(Cal, IArg(3), IArg(4), IArg(5), Info) then
+      begin
+        PushRoot(MkPtr(NewArray(12, 12)));
+        A := ObjOf(RootAt(TempTop - 1));
+        for I := 0 to 11 do A^.Elements^.Data[I] := VUndefined;
+        A^.Elements^.Data[0] := MkInt(Info.Date.Year);
+        A^.Elements^.Data[1] := MkInt(Info.Date.Month);
+        A^.Elements^.Data[3] := MkInt(Info.Date.Day);
+        A^.Elements^.Data[5] := MkInt(Info.EraYear);
+        A^.Elements^.Data[6] := MkInt(Info.DayOfWeek);
+        A^.Elements^.Data[7] := MkInt(Info.DayOfYear);
+        A^.Elements^.Data[8] := MkInt(Info.DaysInMonth);
+        A^.Elements^.Data[9] := MkInt(Info.DaysInYear);
+        A^.Elements^.Data[10] := MkInt(Info.MonthsInYear);
+        A^.Elements^.Data[11] := MkBool(Info.InLeapYear);
+        if not Info.HasEra then A^.Elements^.Data[5] := VUndefined;
+        { strings last: each allocation may move the array }
+        ValueArrayStore(ObjOf(RootAt(TempTop - 1))^.Elements, 2, StrFromUnicode(UnicodeString(Info.MonthCode)));
+        if Info.HasEra then
+          ValueArrayStore(ObjOf(RootAt(TempTop - 1))^.Elements, 4, StrFromUnicode(UnicodeString(Info.Era)));
+        Res := RootAt(TempTop - 1);
+        PopRoots(1);
+      end;
+    1:
+      if TryResolveCalendarDateToISO(Cal, IArg(3), IArg(4), IArg(7), BArg(5), BArg(6), BArg(8), D) then Triple(D);
+    2:
+      if TryAddCalendarDate(Cal, IArg(3), IArg(4), IArg(5), IArg(6), IArg(7), IArg(8), IArg(9), BArg(10), D) then
+        Triple(D);
+    3:
+      if TryCalendarMonthDayInISOYear(Cal, IArg(3), IArg(4), IArg(7), BArg(5), BArg(6), D) then Triple(D);
+    4:
+      if TryCalendarYearFromEra(Cal, SArg(3), IArg(4), N) then Res := MkInt(N);
+    5:
+      if TryCalendarMonthsInYear(Cal, IArg(3), N) then Res := MkInt(N);
+    6:
+      Res := MkBool(TemporalCalendarUsesEra(Cal));
+    7:
+      if TryCalendarEraFromYear(Cal, IArg(3), Era, EraYear, HasEra) and HasEra then
+      begin
+        PushRoot(MkPtr(NewArray(2, 2)));
+        ObjOf(RootAt(TempTop - 1))^.Elements^.Data[1] := MkInt(EraYear);
+        ValueArrayStore(ObjOf(RootAt(TempTop - 1))^.Elements, 0, StrFromUnicode(UnicodeString(Era)));
+        Res := RootAt(TempTop - 1);
+        PopRoots(1);
+      end;
+  end;
+end;
+
 procedure InitTemporal;
-var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..5] of TValue; I: Integer; Ok: Boolean;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..6] of TValue; I: Integer; Ok: Boolean;
 begin
   if not CompilePrelude('<temporal>', TemporalSrc, T, Err) then raise Exception.Create('temporal prelude: ' + string(Err));
   if not MakeScriptClosure(T, Clo) then raise Exception.Create('temporal prelude closure');
@@ -115,10 +204,11 @@ begin
   PushRoot(NewNativeFunction(Temporal_TzIndex, 'tzIndex', 0));
   PushRoot(NewNativeFunction(Temporal_SystemTZ, 'systemTZ', 0));
   PushRoot(NewNativeFunction(MarkIntrinsicClass, 'markIntrinsic', 1));
+  PushRoot(NewNativeFunction(Temporal_CalOp, 'calOp', 8));
   CA[0] := GlobalObj;
-  for I := 1 to 5 do CA[I] := RootAt(TempTop - 6 + I);
-  Ok := CallValue(RootAt(TempTop - 6), VUndefined, @CA[0], 6, R);
-  PopRoots(5);
+  for I := 1 to 6 do CA[I] := RootAt(TempTop - 7 + I);
+  Ok := CallValue(RootAt(TempTop - 7), VUndefined, @CA[0], 7, R);
+  PopRoots(6);
   if not Ok then
   begin
     PopRoots(1);

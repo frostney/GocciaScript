@@ -1,4 +1,4 @@
-(function (G, nowNs, tzData, tzIndex, systemTZ, markIntrinsic) {
+(function (G, nowNs, tzData, tzIndex, systemTZ, markIntrinsic, calOp) {
   "use strict";
   // Temporal (ECMA-262 Temporal): the abstract operations and the objects. Each Temporal class keeps its
   // internal slots in one private field (#s) and exports a brand check and a slot reader from a static block, so
@@ -1237,11 +1237,17 @@
     return "UTC";
   }
 
-  // ---------------- calendars (ISO 8601) ----------------
+  // ---------------- calendars ----------------
+  // the calendar types of the Intl era and monthCode proposal (Table 1); every one but iso8601 is computed by calOp
+  // (G2.Temporal: Goccia.Temporal.Calendar over ICU) and that proposal's operations further below
+  var CALENDAR_TYPES = ["buddhist", "chinese", "coptic", "dangi", "ethioaa", "ethiopic", "gregory", "hebrew", "indian",
+    "islamic-civil", "islamic-tbla", "islamic-umalqura", "iso8601", "japanese", "persian", "roc"];
   function CanonicalizeCalendar(id) {
     var l = asciiLower(id);
-    if (l !== "iso8601") throw rangeError("unsupported calendar: " + id);
-    return "iso8601";
+    if (l === "islamicc") return "islamic-civil";
+    if (l === "ethiopic-amete-alem") return "ethioaa";
+    if (CALENDAR_TYPES.indexOf(l) < 0) throw rangeError("unsupported calendar: " + id);
+    return l;
   }
   function CalendarEquals(a, b) { return a === b; }
   function FormatCalendarAnnotation(id, show) {
@@ -1271,6 +1277,8 @@
   // PrepareCalendarFields(calendar, fields, calendarFieldNames, nonCalendarFieldNames, required ("partial" or a list))
   function PrepareCalendarFields(calendar, obj, calNames, nonCalNames, required) {
     var names = calNames.concat(nonCalNames);
+    // CalendarExtraFields: era and eraYear with year, for a calendar with eras
+    if (calNames.indexOf("year") >= 0 && CalendarSupportsEra(calendar)) names.push("era", "eraYear");
     names.sort();
     var result = {}, any = false;
     for (var i = 0; i < names.length; i++) {
@@ -1295,10 +1303,13 @@
     return result;
   }
   function CalendarFieldKeysToIgnore(calendar, keys) {
-    var r = [];
+    var r = [], eras = calendar !== "iso8601" && CalendarSupportsEra(calendar), mid = calendar === "japanese";
     for (var i = 0; i < keys.length; i++) {
-      r.push(keys[i]);
-      if (keys[i] === "month") r.push("monthCode"); else if (keys[i] === "monthCode") r.push("month");
+      var k = keys[i];
+      r.push(k);
+      if (k === "month") r.push("monthCode"); else if (k === "monthCode") r.push("month");
+      if (eras && (k === "era" || k === "eraYear" || k === "year")) r.push("era", "eraYear", "year");
+      if (mid && (k === "day" || k === "month" || k === "monthCode")) r.push("era", "eraYear");
     }
     return r;
   }
@@ -1317,6 +1328,7 @@
     return merged;
   }
   function CalendarResolveFields(calendar, fields, type) {
+    if (calendar !== "iso8601") return NonISOResolveFields(calendar, fields, type);
     var needsYear = type === "date" || type === "year-month", needsDay = type === "date" || type === "month-day";
     if (needsYear && fields.year === undefined) throw typeError("year is required");
     if (needsDay && fields.day === undefined) throw typeError("day is required");
@@ -1331,11 +1343,19 @@
   }
   function CalendarDateFromFields(calendar, fields, overflow) {
     CalendarResolveFields(calendar, fields, "date");
-    var r = RegulateISODate(fields.year, fields.month, fields.day, overflow);
+    var r = calendar === "iso8601" ? RegulateISODate(fields.year, fields.month, fields.day, overflow) :
+      NonISOCalendarDateToISO(calendar, fields, overflow);
     if (!ISODateWithinLimits(r)) throw rangeError("date out of range");
     return r;
   }
   function CalendarYearMonthFromFields(calendar, fields, overflow) {
+    if (calendar !== "iso8601") {
+      CalendarResolveFields(calendar, fields, "year-month");
+      fields.day = 1;
+      var nr = NonISOCalendarDateToISO(calendar, fields, overflow);
+      if (!ISOYearMonthWithinLimits(nr)) throw rangeError("year-month out of range");
+      return nr;
+    }
     fields.day = 1;
     CalendarResolveFields(calendar, fields, "year-month");
     var r = RegulateISODate(fields.year, fields.month, fields.day, overflow);
@@ -1344,11 +1364,13 @@
   }
   function CalendarMonthDayFromFields(calendar, fields, overflow) {
     CalendarResolveFields(calendar, fields, "month-day");
+    if (calendar !== "iso8601") return NonISOMonthDayToISOReferenceDate(calendar, fields, overflow);
     var y = fields.year === undefined ? 1972 : fields.year;
     var r = RegulateISODate(y, fields.month, fields.day, overflow);
     return ISODate(1972, r.month, r.day);
   }
   function CalendarDateAdd(calendar, d, dur, overflow) {
+    if (calendar !== "iso8601") return NonISODateAdd(calendar, d, dur, overflow);
     var ym = BalanceISOYearMonth(d.year + dur.years, d.month + dur.months);
     var reg = RegulateISODate(ym.year, ym.month, d.day, overflow);
     var r = AddDaysToISODate(reg, dur.days + 7 * dur.weeks);
@@ -1380,6 +1402,7 @@
     return n;
   }
   function CalendarDateUntil(calendar, one, two, largestUnit) {
+    if (calendar !== "iso8601") return NonISODateUntil(calendar, one, two, largestUnit);
     var cmp = CompareISODate(one, two);
     if (cmp === 0) return { years: 0, months: 0, weeks: 0, days: 0 };
     var sg = -cmp;
@@ -1401,6 +1424,7 @@
     return CreateDateDurationRecord(years, months, weeks + 0, days + 0);
   }
   function CalendarISOToDate(calendar, d) {
+    if (calendar !== "iso8601") return NonISOCalendarISOToDate(calendar, d);
     var w = ISOWeekOfYear(d);
     return {
       era: undefined, eraYear: undefined, year: d.year, month: d.month, monthCode: CreateMonthCode(d.month, false),
@@ -1408,6 +1432,315 @@
       daysInMonth: ISODaysInMonth(d.year, d.month), daysInYear: daysInYear(d.year), monthsInYear: 12, inLeapYear: isLeap(d.year)
     };
   }
+
+  // ---------------- non-ISO calendars (the Intl era and monthCode proposal, 4.1) ----------------
+  // Table 2: each calendar's eras: [era, aliases, kind] with kind "e" (epoch), "n" (negative) or the offset year
+  var ERAS = ObjectCreate(null);
+  (function () {
+    var islamic = [["ah", [], "e"], ["bh", [], "n"]];
+    ERAS.buddhist = [["be", [], "e"]];
+    ERAS.coptic = [["am", [], "e"]];
+    ERAS.ethioaa = [["aa", [], "e"]];
+    ERAS.ethiopic = [["am", [], "e"], ["aa", [], -5499]];
+    ERAS.gregory = [["ce", ["ad"], "e"], ["bce", ["bc"], "n"]];
+    ERAS.hebrew = [["am", [], "e"]];
+    ERAS.indian = [["shaka", [], "e"]];
+    ERAS["islamic-civil"] = islamic; ERAS["islamic-tbla"] = islamic; ERAS["islamic-umalqura"] = islamic;
+    ERAS.japanese = [["reiwa", [], 2019], ["heisei", [], 1989], ["showa", [], 1926], ["taisho", [], 1912],
+      ["meiji", [], 1868], ["ce", ["ad"], "e"], ["bce", ["bc"], "n"]];
+    ERAS.persian = [["ap", [], "e"]];
+    ERAS.roc = [["roc", [], "e"], ["broc", [], "n"]];
+  })();
+  function CalendarSupportsEra(cal) { return cal !== "iso8601" && ERAS[cal] !== undefined; }
+  function eraRow(cal, era) {
+    var rows = ERAS[cal];
+    if (rows === undefined) return undefined;
+    for (var i = 0; i < rows.length; i++) if (rows[i][0] === era || rows[i][1].indexOf(era) >= 0) return rows[i];
+    return undefined;
+  }
+  function CanonicalizeEraInCalendar(cal, era) { var r = eraRow(cal, era); return r === undefined ? undefined : r[0]; }
+  function ArithmeticYearForEraYear(cal, era, eraYear) {
+    var k = eraRow(cal, era)[2];
+    if (k === "e") return eraYear;
+    if (k === "n") return 1 - eraYear;
+    return k + eraYear - 1;
+  }
+  // Table 3: the leap month codes and how a missing one is constrained
+  function leapKind(cal) {
+    if (cal === "chinese" || cal === "dangi") return "back";
+    if (cal === "hebrew") return "fwd";
+    return undefined;
+  }
+  function IsValidMonthCodeForCalendar(cal, mc) {
+    var pm = ParseMonthCode(mc), n = pm.monthNumber;
+    if (!pm.isLeapMonth) return (n >= 1 && n <= 12) || (n === 13 && (cal === "coptic" || cal === "ethiopic" || cal === "ethioaa"));
+    if (cal === "chinese" || cal === "dangi") return n >= 1 && n <= 12;
+    return cal === "hebrew" && n === 5;
+  }
+  function calRangeError() { return rangeError("date outside the range of the calendar"); }
+  var calCache = { cal: "", y: 0, m: 0, d: 0, r: null };
+  function NonISOCalendarISOToDate(cal, d) {
+    if (calCache.cal === cal && calCache.y === d.year && calCache.m === d.month && calCache.d === d.day) return calCache.r;
+    var a = calOp(0, cal, d.year, d.month, d.day);
+    if (a === null) throw calRangeError();
+    var r = {
+      era: a[4], eraYear: a[5], year: a[0], month: a[1], monthCode: a[2], day: a[3], dayOfWeek: a[6], dayOfYear: a[7],
+      weekOfYear: { week: undefined, year: undefined }, daysInWeek: 7, daysInMonth: a[8], daysInYear: a[9],
+      monthsInYear: a[10], inLeapYear: a[11]
+    };
+    if (!CalendarSupportsEra(cal)) { r.era = undefined; r.eraYear = undefined; }
+    calCache = { cal: cal, y: d.year, m: d.month, d: d.day, r: r };
+    return r;
+  }
+  // CalendarIntegersToISO: a RangeError for a date the calendar does not have
+  function CalendarIntegersToISO(cal, y, m, d) {
+    var a = calOp(1, cal, y, m, false, false, d, false);
+    if (a === null) throw calRangeError();
+    return ISODate(a[0], a[1], a[2]);
+  }
+  function CalendarMonthsInYear(cal, y) {
+    var n = calOp(5, cal, y);
+    if (n === null) n = NonISOCalendarISOToDate(cal, CalendarIntegersToISO(cal, y, 1, 1)).monthsInYear;
+    return n;
+  }
+  function CalendarDaysInMonth(cal, y, m) {
+    return NonISOCalendarISOToDate(cal, CalendarIntegersToISO(cal, y, m, 1)).daysInMonth;
+  }
+  // the ISO date of day 1 of month code mc in year y, or null when the year has no such month
+  function monthCodeStart(cal, y, mc) {
+    var pm = ParseMonthCode(mc);
+    var a = calOp(1, cal, y, pm.monthNumber, true, pm.isLeapMonth, 1, false);
+    if (a === null) return null;
+    var iso = ISODate(a[0], a[1], a[2]);
+    return NonISOCalendarISOToDate(cal, iso).monthCode === mc ? iso : null;
+  }
+  function YearContainsMonthCode(cal, y, mc) {
+    if (!ParseMonthCode(mc).isLeapMonth) return true;
+    return monthCodeStart(cal, y, mc) !== null;
+  }
+  function ConstrainMonthCode(cal, y, mc, overflow) {
+    if (YearContainsMonthCode(cal, y, mc)) return mc;
+    if (overflow === "reject") throw rangeError("month code " + mc + " does not occur in the year");
+    if (leapKind(cal) === "back") return CreateMonthCode(ParseMonthCode(mc).monthNumber, false);
+    return "M06";
+  }
+  function MonthCodeToOrdinal(cal, y, mc) {
+    if (leapKind(cal) === undefined) return ParseMonthCode(mc).monthNumber;
+    var iso = monthCodeStart(cal, y, mc);
+    if (iso === null) throw calRangeError();
+    return NonISOCalendarISOToDate(cal, iso).month;
+  }
+  function BalanceNonISODate(cal, y, m, d) {
+    var miy = CalendarMonthsInYear(cal, y);
+    while (m <= 0) { y--; miy = CalendarMonthsInYear(cal, y); m += miy; }
+    while (m > miy) { m -= miy; y++; miy = CalendarMonthsInYear(cal, y); }
+    var dim = CalendarDaysInMonth(cal, y, m);
+    while (d <= 0) {
+      m--;
+      if (m === 0) { y--; miy = CalendarMonthsInYear(cal, y); m = miy; }
+      dim = CalendarDaysInMonth(cal, y, m);
+      d += dim;
+    }
+    while (d > dim) {
+      d -= dim;
+      m++;
+      if (m > miy) { y++; miy = CalendarMonthsInYear(cal, y); m = 1; }
+      dim = CalendarDaysInMonth(cal, y, m);
+    }
+    return { year: y, month: m, day: d };
+  }
+  // CompareSurpasses(sign, year, monthOrCode, day, target)
+  function CompareSurpasses(sg, y, mOrCode, d, t) {
+    if (y !== t.year) return sg * (y - t.year) > 0;
+    if (typeof mOrCode === "string") {
+      if (mOrCode !== t.monthCode) return sg > 0 ? mOrCode > t.monthCode : t.monthCode > mOrCode;
+    } else if (mOrCode !== t.month) return sg * (mOrCode - t.month) > 0;
+    if (d !== t.day) return sg * (d - t.day) > 0;
+    return false;
+  }
+  function NonISODateSurpasses(cal, sg, from, to, years, months, weeks, days) {
+    var parts = NonISOCalendarISOToDate(cal, from), cd2 = NonISOCalendarISOToDate(cal, to);
+    var y0 = parts.year + years;
+    if (CompareSurpasses(sg, y0, parts.monthCode, parts.day, cd2)) return true;
+    var m0 = MonthCodeToOrdinal(cal, y0, ConstrainMonthCode(cal, y0, parts.monthCode, "constrain"));
+    var ma = BalanceNonISODate(cal, y0, m0 + months, 1);
+    if (CompareSurpasses(sg, ma.year, ma.month, parts.day, cd2)) return true;
+    if (weeks === 0 && days === 0) return false;
+    var eom = BalanceNonISODate(cal, ma.year, ma.month + 1, 0);
+    var rd = parts.day <= eom.day ? parts.day : eom.day;
+    var b = BalanceNonISODate(cal, eom.year, eom.month, rd + 7 * weeks + days);
+    return CompareSurpasses(sg, b.year, b.month, b.day, cd2);
+  }
+  function NonISODateAdd(cal, d, dur, overflow) {
+    var parts = NonISOCalendarISOToDate(cal, d);
+    var y0 = parts.year + dur.years;
+    var m0 = MonthCodeToOrdinal(cal, y0, ConstrainMonthCode(cal, y0, parts.monthCode, overflow));
+    var eom = BalanceNonISODate(cal, y0, m0 + dur.months + 1, 0);
+    var rd = parts.day;
+    if (rd > eom.day) {
+      if (overflow === "reject") throw rangeError("the day does not occur in that month");
+      rd = eom.day;
+    }
+    var r;
+    if (dur.weeks === 0 && dur.days === 0) r = CalendarIntegersToISO(cal, eom.year, eom.month, rd);
+    else {
+      // days and weeks move along the ISO days of the regulated date
+      r = AddDaysToISODate(CalendarIntegersToISO(cal, eom.year, eom.month, rd), 7 * dur.weeks + dur.days);
+    }
+    if (!ISODateWithinLimits(r)) throw rangeError("date out of range");
+    return r;
+  }
+  function NonISODateUntil(cal, one, two, largestUnit) {
+    var sg = -CompareISODate(one, two);
+    if (sg === 0) return ZeroDateDuration();
+    var years = 0, months = 0, weeks = 0, days = 0;
+    var p1 = NonISOCalendarISOToDate(cal, one), p2 = NonISOCalendarISOToDate(cal, two);
+    if (largestUnit === "year") {
+      years = largestNotSurpassing(sg, p2.year - p1.year, function (n) { return NonISODateSurpasses(cal, sg, one, two, n, 0, 0, 0); });
+    }
+    if (largestUnit === "year" || largestUnit === "month") {
+      var em = largestUnit === "month" ? (p2.year - p1.year) * 12 + (p2.month - p1.month) : 0;
+      months = largestNotSurpassing(sg, em, function (n) { return NonISODateSurpasses(cal, sg, one, two, years, n, 0, 0); });
+    }
+    // the week and day loops count ISO days from the regulated intermediate date
+    var y0 = p1.year + years;
+    var m0 = MonthCodeToOrdinal(cal, y0, ConstrainMonthCode(cal, y0, p1.monthCode, "constrain"));
+    var eom = BalanceNonISODate(cal, y0, m0 + months + 1, 0);
+    var base = CalendarIntegersToISO(cal, eom.year, eom.month, p1.day <= eom.day ? p1.day : eom.day);
+    days = ISODateToEpochDays(two.year, two.month, two.day) - ISODateToEpochDays(base.year, base.month, base.day);
+    if (largestUnit === "week") { weeks = MathTrunc(days / 7); days = days - weeks * 7; }
+    return CreateDateDurationRecord(years, months, weeks + 0, days + 0);
+  }
+  function NonISOResolveFields(cal, f, type) {
+    var needsYear = type === "date" || type === "year-month" || f.monthCode === undefined || f.month !== undefined;
+    var needsDay = type === "date" || type === "month-day";
+    var eras = CalendarSupportsEra(cal);
+    if (needsYear) {
+      if (f.year === undefined) {
+        if (!eras) throw typeError("year is required");
+        if (f.era === undefined || f.eraYear === undefined) throw typeError("year, or era and eraYear, are required");
+      }
+      if (eras) {
+        if (f.era !== undefined && f.eraYear === undefined) throw typeError("eraYear is required with era");
+        if (f.eraYear !== undefined && f.era === undefined) throw typeError("era is required with eraYear");
+      }
+    }
+    if (needsDay && f.day === undefined) throw typeError("day is required");
+    if (f.month === undefined && f.monthCode === undefined) throw typeError("month or monthCode is required");
+    if (eras && f.eraYear !== undefined) {
+      var era = CanonicalizeEraInCalendar(cal, f.era);
+      if (era === undefined) throw rangeError("invalid era: " + f.era);
+      var ay = ArithmeticYearForEraYear(cal, era, f.eraYear);
+      if (f.year !== undefined && f.year !== ay) throw rangeError("year and era/eraYear disagree");
+      f.year = ay;
+      f.era = undefined; f.eraYear = undefined;
+    }
+    if (f.monthCode !== undefined) {
+      if (!IsValidMonthCodeForCalendar(cal, f.monthCode)) throw rangeError("invalid monthCode for " + cal + ": " + f.monthCode);
+      if (f.year !== undefined) {
+        var cmc = YearContainsMonthCode(cal, f.year, f.monthCode) ? f.monthCode : ConstrainMonthCode(cal, f.year, f.monthCode, "constrain");
+        var m = MonthCodeToOrdinal(cal, f.year, cmc);
+        if (f.month !== undefined && f.month !== m) throw rangeError("month and monthCode disagree");
+        f.month = m;
+      }
+    }
+  }
+  // the calendar's arithmetic years in which an ISO date can lie (dates beyond them throw)
+  var yearBounds = ObjectCreate(null);
+  function yearInRange(cal, y) {
+    var b = yearBounds[cal];
+    if (b === undefined) {
+      var lo = -1e9, hi = 1e9;
+      try { lo = NonISOCalendarISOToDate(cal, ISODate(-271821, 4, 19)).year; } catch (e) { }
+      try { hi = NonISOCalendarISOToDate(cal, ISODate(275760, 9, 13)).year; } catch (e) { }
+      b = yearBounds[cal] = [lo, hi];
+    }
+    return y >= b[0] && y <= b[1];
+  }
+  function NonISOCalendarDateToISO(cal, f, overflow) {
+    if (!yearInRange(cal, f.year)) throw rangeError("date out of range");
+    if (f.monthCode !== undefined) ConstrainMonthCode(cal, f.year, f.monthCode, overflow);
+    var miy = CalendarMonthsInYear(cal, f.year), month = f.month;
+    if (month > miy) { if (overflow === "reject") throw rangeError("month out of range"); month = miy; }
+    var dim = CalendarDaysInMonth(cal, f.year, month), day = f.day;
+    if (day > dim) { if (overflow === "reject") throw rangeError("day out of range"); day = dim; }
+    return CalendarIntegersToISO(cal, f.year, month, day);
+  }
+  // Table 6: the reference years of chinese and dangi month codes: [days 1-29, day 30] (null: none)
+  var CHINESE_REF = {
+    M01: [1972, 1970], M01L: [null, null], M02: [1972, 1972], M02L: [1947, null], M03: [1972, 1966], M03L: [1966, 1955],
+    M04: [1972, 1970], M04L: [1963, 1944], M05: [1972, 1972], M05L: [1971, 1952], M06: [1972, 1971], M06L: [1960, 1941],
+    M07: [1972, 1972], M07L: [1968, 1938], M08: [1972, 1971], M08L: [1957, null], M09: [1972, 1972], M09L: [2014, null],
+    M10: [1972, 1972], M10L: [1984, null], M11: [1972, 1970], M11L: [2034, null], M12: [1972, 1972], M12L: [null, null]
+  };
+  // the ISO date of (mc, day) in the calendar year containing (or neighbouring) ISO year isoYear that lies in isoYear,
+  // the latest one; null if none
+  function monthDayInISOYear(cal, isoYear, mc, day) {
+    var best = null;
+    var cy = NonISOCalendarISOToDate(cal, ISODate(isoYear, 12, 31)).year;
+    for (var y = cy; y >= cy - 1; y--) {
+      var st = monthCodeStart(cal, y, mc);
+      if (st === null) continue;
+      if (day > NonISOCalendarISOToDate(cal, st).daysInMonth) continue;
+      var iso = AddDaysToISODate(st, day - 1);
+      if (iso.year === isoYear && (best === null || CompareISODate(iso, best) > 0)) best = iso;
+    }
+    return best;
+  }
+  function maxDaysInMonthCode(cal, mc) {
+    var cy = NonISOCalendarISOToDate(cal, ISODate(1972, 1, 1)).year, max = 0;
+    for (var y = cy - 12; y <= cy + 12; y++) {
+      var st = monthCodeStart(cal, y, mc);
+      if (st !== null) { var n = NonISOCalendarISOToDate(cal, st).daysInMonth; if (n > max) max = n; }
+    }
+    return max;
+  }
+  function NonISOMonthDayToISOReferenceDate(cal, f, overflow) {
+    var mc, dim, chinese = cal === "chinese" || cal === "dangi";
+    if (f.year !== undefined) {
+      if (!yearInRange(cal, f.year)) throw rangeError("year out of range");
+      var miy = CalendarMonthsInYear(cal, f.year), month = f.month;
+      if (month > miy) { if (overflow === "reject") throw rangeError("month out of range"); month = miy; }
+      if (f.monthCode === undefined) mc = NonISOCalendarISOToDate(cal, CalendarIntegersToISO(cal, f.year, month, 1)).monthCode;
+      else mc = ConstrainMonthCode(cal, f.year, f.monthCode, overflow);
+      dim = CalendarDaysInMonth(cal, f.year, month);
+    } else {
+      mc = f.monthCode;
+      dim = chinese ? 30 : maxDaysInMonthCode(cal, mc);
+    }
+    var day = f.day;
+    if (day > dim) { if (overflow === "reject") throw rangeError("day out of range"); day = dim; }
+    var r;
+    if (chinese) {
+      var row = CHINESE_REF[mc];
+      var refYear = day === 30 ? row[1] : row[0];
+      if (mc === "M03" && day === 30 && cal === "dangi") refYear = 1968;
+      if (mc === "M11L" && day <= 10) refYear = 2033;
+      if (refYear === null) {
+        if (overflow === "reject") throw rangeError("that month and day are not known to occur");
+        mc = CreateMonthCode(ParseMonthCode(mc).monthNumber, false);
+        row = CHINESE_REF[mc];
+        refYear = day === 30 ? row[1] : row[0];
+        if (mc === "M03" && day === 30 && cal === "dangi") refYear = 1968;
+      }
+      r = monthDayInISOYear(cal, refYear, mc, day);
+      if (r === null) throw calRangeError();
+      return r;
+    }
+    for (var y = 1972; y >= 1900; y--) { r = monthDayInISOYear(cal, y, mc, day); if (r !== null) return r; }
+    for (y = 1973; y <= 2035; y++) {
+      // the earliest in the year
+      var cy = NonISOCalendarISOToDate(cal, ISODate(y, 1, 1)).year;
+      for (var k = cy; k <= cy + 1; k++) {
+        var st = monthCodeStart(cal, k, mc);
+        if (st === null || day > NonISOCalendarISOToDate(cal, st).daysInMonth) continue;
+        var iso = AddDaysToISODate(st, day - 1);
+        if (iso.year === y) return iso;
+      }
+    }
+    throw calRangeError();
+  }
+
   function ISODateToFields(calendar, d, type) {
     var f = {};
     var cd = CalendarISOToDate(calendar, d);
