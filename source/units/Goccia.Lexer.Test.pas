@@ -222,13 +222,21 @@ end;
 procedure TLexerTests.TestHashbangRequiresHashbangLexicalGoal;
 var
   Lexer: TGocciaLexer;
-  Token: TGocciaToken;
+  Raised: Boolean;
 begin
+  // Outside the hashbang goal `#!` is no comment: `#` starts a private name,
+  // and `!` cannot follow it.
   Lexer := TGocciaLexer.Create('#!/usr/bin/env goccia' + sLineBreak +
     'const value = 1;', '<test>');
   try
-    Token := Lexer.ScanNextToken(glgInputElementDiv);
-    Expect<TGocciaTokenType>(Token.TokenType).ToBe(gttHash);
+    Raised := False;
+    try
+      Lexer.ScanNextToken(glgInputElementDiv);
+    except
+      on E: TGocciaLexerError do
+        Raised := Pos('Unexpected character: #', E.Message) > 0;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
   finally
     Lexer.Free;
   end;
