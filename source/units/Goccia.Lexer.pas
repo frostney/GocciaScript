@@ -71,6 +71,7 @@ type
     FMeasureScanTime: Boolean;
     FCollectComments: Boolean;
     FHTMLComments: Boolean;
+    FStandardIdentifiers: Boolean;
     FComments: TGocciaCommentSpanArray;
     FCommentCount: Integer;
     // Lexemes are shared: one string per distinct identifier or keyword
@@ -165,6 +166,11 @@ type
     // <!-- starts a single-line comment anywhere, --> at the start of a line
     // or of the input. Off by default: module code and GocciaScript have none.
     property HTMLComments: Boolean read FHTMLComments write FHTMLComments;
+    // ES2026 12.7: a source identifier's non-ASCII characters are ID_Start /
+    // ID_Continue only. Off by default: GocciaScript keeps its extension that
+    // accepts any non-ASCII character (emoji identifiers).
+    property StandardIdentifiers: Boolean read FStandardIdentifiers
+      write FStandardIdentifiers;
     property ScanTimeNanoseconds: Int64 read FScanTimeNanoseconds;
     // Two clock reads per token: off unless a profile asks for the lexing time.
     property MeasureScanTime: Boolean read FMeasureScanTime write FMeasureScanTime;
@@ -1704,7 +1710,8 @@ begin
   // GocciaScript intentionally keeps its historical non-ASCII identifier
   // extension, including emoji identifiers, while using the standard helper
   // for ordinary Unicode identifier code points.
-  Result := IsIdentifierStartCodePoint(ACodePoint) or (ACodePoint > $7F);
+  Result := IsIdentifierStartCodePoint(ACodePoint) or
+    ((ACodePoint > $7F) and not FStandardIdentifiers);
 end;
 
 function TGocciaLexer.IsSourceIdentifierPartCodePoint(
@@ -1716,7 +1723,8 @@ begin
   if IsECMAScriptWhitespaceCodePoint(ACodePoint) then
     Exit(False);
 
-  Result := IsIdentifierPartCodePoint(ACodePoint) or (ACodePoint > $7F);
+  Result := IsIdentifierPartCodePoint(ACodePoint) or
+    ((ACodePoint > $7F) and not FStandardIdentifiers);
 end;
 
 function TGocciaLexer.TryReadIdentifierCodePoint(out ACodePoint: Cardinal;

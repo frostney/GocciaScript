@@ -39,6 +39,7 @@ begin
   try
     try
       L := TGocciaLexer.Create(Source, FileName);
+      L.StandardIdentifiers := True;
       P := TGocciaParser.CreateFromLexer(L, FileName, nil);
       Opts := P.Options;
       Opts.AutomaticSemicolonInsertion := True;
@@ -85,6 +86,7 @@ begin
     try
       L := TGocciaLexer.Create(Source, FileName);
       L.HTMLComments := True;   { B.1.1: Script, eval and Function code }
+      L.StandardIdentifiers := True;
       P := TGocciaParser.CreateFromLexer(L, FileName, nil);   { source lines: built only if an error needs them }
       Opts := P.Options;
       Opts.AutomaticSemicolonInsertion := True;
