@@ -125,6 +125,18 @@ begin
   end;
 end;
 
+{ whether parameter text could open something (a comment, string, template, regular expression, bracket or
+  HTML-like comment) that the body text closes: only then do the parameters need a parse of their own }
+function ParamsMayEscape(const P: UnicodeString): Boolean;
+var I: Integer;
+begin
+  for I := 1 to Length(P) do
+    case P[I] of
+      '/', '`', '''', '"', '(', ')', '[', ']', '{', '}', '<', '-', '\': Exit(True);
+    end;
+  Result := False;
+end;
+
 { 20.2.1.1.1 CreateDynamicFunction: Function, GeneratorFunction, AsyncFunction and AsyncGeneratorFunction
   (NativeData 0-3) }
 function Function_Ctor(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
@@ -149,7 +161,7 @@ begin
   end;
   { 20.2.1.1.1 steps 15-18: the parameters parse as FormalParameters on their own (a comment, template or
     function they open does not end in the body) }
-  if Params <> '' then
+  if ParamsMayEscape(Params) then
   begin
     DynFuncAnonymous := True;
     try
