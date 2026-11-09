@@ -57,6 +57,8 @@ var
   { G2.ObjModel's 7.3.25 CopyDataProperties for a source the fast path does not take (an exotic object, a symbol
     key, a primitive) }
   CopyDataPropsHook: function(Target, Src: TValue): Boolean = nil;
+  { CopyDataProperties with excludedItems (an array of property keys), for an object rest (G2.ObjModel) }
+  CopyDataPropsExclHook: function(Target, Src, Excl: TValue): Boolean = nil;
 threadvar
   { opImport: the import call's phase while the hook runs (0 evaluation, 1 source, 2 defer) }
   ImportPhase: Integer;
@@ -6675,7 +6677,12 @@ LReload:
       opObjSpread, opCopyDataProps:
         begin
           Fr^.PC := PC;
-          if not CopyDataProps(R[A], R[(I shr 24) and $FFFF]) then goto LThrow;
+          if (I shr 40) <> 0 then
+          begin
+            { an object rest: the keys in the array R[C - 1] excluded }
+            if not CopyDataPropsExclHook(R[A], R[(I shr 24) and $FFFF], R[(I shr 40) - 1]) then goto LThrow;
+          end
+          else if not CopyDataProps(R[A], R[(I shr 24) and $FFFF]) then goto LThrow;
         end;
       opWithObj:
         begin

@@ -5612,12 +5612,19 @@ begin
       V := AllocReg;
       if Prop.Pattern is TGocciaRestDestructuringPattern then
       begin
-        Tmp := AllocReg;
         Emit(Ins(opNewObj, V, 0, 4));
-        Emit(Ins(opCopyDataProps, V, Src, 0));
-        { remove the keys already bound }
-        for J := 0 to High(Keys) do Emit(Ins(opDelProp, Tmp, V, Keys[J]));
-        for J := 0 to High(CompKeys) do Emit(Ins(opDelElem, Tmp, V, CompKeys[J]));
+        { 14.3.3.3 RestBindingInitialization: CopyDataProperties with the keys already bound excluded (they are
+          neither read nor asked for their descriptors); C: the excluded keys' array register + 1 }
+        if Length(Keys) + Length(CompKeys) = 0 then Emit(Ins(opCopyDataProps, V, Src, 0))
+        else
+        begin
+          Tmp := AllocReg;
+          K := AllocRegs(Length(Keys) + Length(CompKeys));
+          for J := 0 to High(Keys) do Emit(Ins(opLoadK, K + J, 0, Keys[J]));
+          for J := 0 to High(CompKeys) do Emit(Ins(opMov, K + Length(Keys) + J, CompKeys[J], 0));
+          Emit(Ins(opNewArr, Tmp, Length(Keys) + Length(CompKeys), K));
+          Emit(Ins(opCopyDataProps, V, Src, Tmp + 1));
+        end;
         Target(TGocciaRestDestructuringPattern(Prop.Pattern).Argument, V, Ref);
       end
       else

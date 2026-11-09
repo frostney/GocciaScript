@@ -853,6 +853,47 @@ begin
   Result := True;
 end;
 
+{ CopyDataPropsExclHook: 7.3.25 CopyDataProperties with excludedItems; an excluded key is skipped before its
+  [[GetOwnProperty]] }
+function CopyDataPropsExclOM(Target, Src, Excl: TValue): Boolean;
+var Keys, V: TValue; I, J, N: Integer; K, X: PStr; D: TPropDesc; Found, Skip: Boolean;
+begin
+  if IsNullish(Src) then Exit(True);
+  PushRoot(Excl);
+  PushRoot(Target);
+  if not ToObjectV(Src, Src) then begin PopRoots(2); Exit(False); end;
+  PushRoot(Src);
+  if not OwnPropertyKeysV(Src, Keys) then begin PopRoots(3); Exit(False); end;
+  PushRoot(Keys);
+  N := ArrayLen(ObjOf(Keys));
+  for I := 0 to N - 1 do
+  begin
+    K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
+    Skip := False;
+    for J := 0 to ArrayLen(ObjOf(RootAt(TempTop - 4))) - 1 do
+    begin
+      { an excluded key is a property key already (a string, a symbol, or an index as a number) }
+      if not ToPropKey(ObjOf(RootAt(TempTop - 4))^.Elements^.Data[J], X) then begin PopRoots(4); Exit(False); end;
+      K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
+      if (X = K) or (((X^.Hdr.Extra and kfSymbol) = 0) and ((K^.Hdr.Extra and kfSymbol) = 0) and
+         (StrCompare(X, K) = 0)) then
+      begin
+        Skip := True;
+        Break;
+      end;
+    end;
+    if Skip then Continue;
+    if not GetOwnPropertyV(RootAt(TempTop - 2), K, D, Found) then begin PopRoots(4); Exit(False); end;
+    if not Found or not D.Enumerable then Continue;
+    K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
+    if not GetV(RootAt(TempTop - 2), K, V) then begin PopRoots(4); Exit(False); end;
+    K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
+    DefineOwn(RootAt(TempTop - 3), K, V, pfDefault);
+  end;
+  PopRoots(4);
+  Result := True;
+end;
+
 function SetIntegrityLevel(O: TValue; Frozen: Boolean; var Ok: Boolean): Boolean;
 var Keys: TValue; I, N: Integer; K: PStr; D, Cur: TPropDesc; Found: Boolean;
 begin
@@ -1626,6 +1667,7 @@ begin
   ProxyCheckHook := @ProxyCheckOM;
   ToObjectHook := @ToObjectV;
   CopyDataPropsHook := @CopyDataPropsOM;
+  CopyDataPropsExclHook := @CopyDataPropsExclOM;
   GetProtoHook := @Object_GetPrototypeOfV;
   Def(SymbolProto, 'toString', SymProto_ToString2, 0);
   Def(SymbolProto, 'valueOf', SymProto_ValueOf, 0);
