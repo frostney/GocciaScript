@@ -4686,6 +4686,33 @@ begin
   Result := True;
 end;
 
+{ FastLoop's call of a native function O (as Execute's opCall): its result in R[A]; False with its throw pending.
+  Apart from FastLoop, whose register allocation the call's work would spoil }
+function XFastNative(O: PObj; R: PValue; A: NativeInt; I: QWord; Fr: PFrame): Boolean; noinline;
+var Argc, SavedTop, NP: Integer; V: TValue;
+begin
+  Argc := (I shr 24) and $FFFF;
+  if (I shr 40) and 1 <> 0 then R[A + 1] := VUndefined;
+  SavedTop := StackTop;
+  StackTop := Fr^.Base + A + 2 + Argc;
+  V := VUndefined;
+  PushRoot(CurNewTarget);   { a plain call: the native must not see an outer new.target }
+  CurNewTarget := VUndefined;
+  NP := TempTop;
+  NativeData := O^.Pad and $00FFFFFF;
+  NativeSelf := MkPtr(O);
+  Result := TNativeFn(O^.Native)(@R[A + 1], Argc, V);
+  if RootCheck and (TempTop <> NP) then
+  begin
+    XReportRootImbalance(O, TempTop - NP, Result, Fr^.Tpl);
+    Halt(9);
+  end;
+  CurNewTarget := RootAt(TempTop - 1);
+  PopRoots(1);
+  StackTop := SavedTop;
+  if Result then R[A] := V;
+end;
+
 function FastLoop(Code: PQWord; PC: Integer; R, K: PValue; ICs: PPropIC; Fr: PFrame; StopFrame: Integer): Integer;
 label LBail;
 var
@@ -5306,6 +5333,18 @@ begin
           VA := R[A];
           if not IsObject(VA) or MultiRealmAny then goto LBail;
           O := ObjOf(VA);
+          if (O^.OKind = okNative) and (O^.Native <> FuncCallNative) then
+          begin
+            { a native function, called here as Execute's opCall does (f.call(t, ...) is Execute's: it unwraps it);
+              its throw goes to Execute with the frame's PC past this call }
+            Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+            if not XFastNative(O, R, A, I, Fr) then
+            begin
+              InjectThrow := True;
+              Exit(-1);
+            end;
+            Continue;
+          end;
           if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then goto LBail;
           T := PFuncTemplate(O^.Native);
           if T^.IsAsync or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then goto LBail;
