@@ -305,3 +305,9 @@ test("\\p{ASCII} matches on large input without hitting step limit", () => {
   const s = "abcdefghij0123456789".repeat(50);
   expect(new RegExp("^\\p{ASCII}+$", "u").test(s)).toBe(true);
 });
+
+test("a lead surrogate escape before a braced escape is its own atom with u", () => {
+  // the trail of a \uXXXX pair is another \uXXXX escape only
+  expect(new RegExp("^\\uD83D\\u{41}$", "u").test("\uD83DA")).toBe(true);
+  expect(new RegExp("\\uD83D\\u{DC38}+", "u").source).toBe("\\uD83D\\u{DC38}+");
+});

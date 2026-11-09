@@ -1071,6 +1071,12 @@ begin
         FCurrent := SavedCurrent;
         FColumn := SavedColumn;
       end;
+    end
+    else
+    begin
+      // not a \uXXXX trail (for example \u{...}): the next escape is its own
+      FCurrent := SavedCurrent;
+      FColumn := SavedColumn;
     end;
   end;
 

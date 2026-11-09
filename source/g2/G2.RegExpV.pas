@@ -595,8 +595,8 @@ begin
     case Ord(C) of
       10: Result := Result + '\n';
       13: Result := Result + '\r';
-      $2028: Result := Result + ' ';
-      $2029: Result := Result + ' ';
+      $2028: Result := Result + '\u2028';
+      $2029: Result := Result + '\u2029';
     else
       begin
         if C = '[' then InClass := True

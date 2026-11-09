@@ -33,6 +33,14 @@ test("braced unicode escapes can produce lone surrogate code units", () => {
   expect("\u{DFFF}".charCodeAt(0)).toBe(0xdfff);
 });
 
+test("a lead surrogate escape before a braced escape stays a lone code unit", () => {
+  const s = "\uD83D\u{1F438}";
+  expect(s.length).toBe(3);
+  expect(s.charCodeAt(0)).toBe(0xd83d);
+  expect(s.codePointAt(1)).toBe(0x1f438);
+  expect("\uD83D\u{41}").toBe("\uD83DA");
+});
+
 test("template braced unicode escapes accept padded code points", () => {
   expect(`\u{00000000000001000}`.charCodeAt(0)).toBe(0x1000);
   expect(`\u{0000000000010FFFF}`).toBe(String.fromCodePoint(0x10ffff));

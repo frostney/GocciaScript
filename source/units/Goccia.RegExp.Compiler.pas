@@ -2201,6 +2201,12 @@ begin
   end;
 end;
 
+function IsHexChar(const C: Char): Boolean;
+begin
+  Result := ((C >= '0') and (C <= '9')) or ((C >= 'a') and (C <= 'f')) or
+    ((C >= 'A') and (C <= 'F'));
+end;
+
 function TRegExpCompiler.ParseUnicodeEscape: Cardinal;
 var
   Digit: Cardinal;
@@ -2240,7 +2246,11 @@ begin
   if FUnicode and (Result >= $D800) and (Result <= $DBFF) then
   begin
     HighSurrogate := Result;
-    if (Peek = '\') and (PeekAt(1) = 'u') then
+    // ES2026 22.2.1 RegExpUnicodeEscapeSequence[+UnicodeMode]: the trail half
+    // of a pair is a \uXXXX escape only; \u{...} after a lead surrogate is a
+    // code point of its own
+    if (Peek = '\') and (PeekAt(1) = 'u') and IsHexChar(PeekAt(2)) and
+      IsHexChar(PeekAt(3)) and IsHexChar(PeekAt(4)) and IsHexChar(PeekAt(5)) then
     begin
       Inc(FPos, 2);
       Result := ParseHexEscape(4);
