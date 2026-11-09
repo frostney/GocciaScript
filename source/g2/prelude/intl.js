@@ -229,6 +229,9 @@
         if (ov === "") ov = "true";
       }
       if (ov !== undefined && ov !== null && ov !== value && listIndexOf(keyLocaleData, ov) >= 0) { value = ov; sk = null; }
+      // 11.2.3: [[LocaleData]].[[hc]] holds null first, so an hourCycle reset by hour12 (CreateDateTimeFormat) drops
+      // the locale's hc keyword
+      if (ov === null && key === "hc" && value !== null) { value = null; sk = null; }
       if (sk !== null) append(supported, sk);
       result[key] = value;
     }
