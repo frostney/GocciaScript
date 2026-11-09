@@ -56,6 +56,11 @@ function CaptureInstructionLimitState: PGocciaInstructionLimitState; {$IFDEF FPC
 function InstructionLimitIsActive: Boolean; {$IFDEF FPC}inline;{$ENDIF}
 procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
 procedure CheckInstructionLimit;
+{ Native work that no dispatched instruction counts: adds ACount to the
+  budget (when one is active) and checks it, raising for a spent budget or a
+  requested abort. Goccia.Timeout's CheckExecutionTimeout calls it from the
+  slow path of a native loop's poll, one unit per element. }
+procedure SpendInstructions(const ACount: Int64);
 { CheckInstructionLimit through a captured handle: no thread-variable lookup.
   Goccia.ThreadPolls keeps the handle beside the InstructionLimitActive
   flag. }
@@ -87,7 +92,8 @@ implementation
 uses
   CriticalSections,
 
-  Goccia.ThreadPolls;
+  Goccia.ThreadPolls,
+  Goccia.Timeout;
 
 threadvar
   GInstructionLimitState: TGocciaInstructionLimitState;
@@ -141,6 +147,8 @@ begin
   // An armed abort keeps the poll running whether or not a budget is set.
   Armed := AActive or (GInstructionLimitState.AbortRequested <> nil);
   RecomputeNextLimitCount(@GInstructionLimitState);
+  // A budget makes native loops spend it from their timeout poll.
+  SetTimeoutBudgetArmed(AActive);
   GInstructionLimitState.Active := Armed;
   GThreadPolls.InstructionLimitState := @GInstructionLimitState;
   GThreadPolls.InstructionLimitActive := Armed;
@@ -237,6 +245,13 @@ begin
   // Nothing is spent: NextLimitCount was lowered from outside, or this is a
   // thread whose state was never started, where it is still 0.
   RecomputeNextLimitCount(AState);
+end;
+
+procedure SpendInstructions(const ACount: Int64);
+begin
+  if GInstructionLimitState.Active then
+    Inc(GInstructionLimitState.InstructionCount, ACount);
+  CheckInstructionLimitState(@GInstructionLimitState);
 end;
 
 function CaptureInstructionLimitState: PGocciaInstructionLimitState;
