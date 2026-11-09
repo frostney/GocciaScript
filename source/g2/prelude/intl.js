@@ -38,6 +38,17 @@
   function cdp(o, k, v) { ObjectDefineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true }); }
   // a list append that defines the index (a setter on Object.prototype must not see it)
   function append(list, v) { cdp(list, list.length, v); }
+  // internal lists use the primordial Array methods: the user may replace Array.prototype's
+  var ArrayProtoIndexOf = Array.prototype.indexOf, ArrayProtoSort = Array.prototype.sort, ArrayProtoJoin = Array.prototype.join;
+  var ReflectApply = Reflect.apply;
+  function listIndexOf(list, v) { for (var i = 0; i < list.length; i++) if (list[i] === v) return i; return -1; }
+  function listSort(list, cmp) { return cmp === undefined ? ReflectApply(ArrayProtoSort, list, []) : ReflectApply(ArrayProtoSort, list, [cmp]); }
+  function listJoin(list, sep) { return ReflectApply(ArrayProtoJoin, list, [sep]); }
+  function listCopy(list, from, to) {
+    var r = [], a = from === undefined ? 0 : from, b = to === undefined ? list.length : to;
+    for (var i = a; i < b; i++) append(r, list[i]);
+    return r;
+  }
   function def(o, k, v) { ObjectDefineProperty(o, k, { value: v, writable: true, enumerable: false, configurable: true }); }
   function getter(o, k, f) {
     ObjectDefineProperty(f, "name", { value: "get " + k, configurable: true });
@@ -116,7 +127,7 @@
       else t = ToString(kValue);
       if (!IsStructurallyValidLanguageTag(t)) throw rangeError("Incorrect locale information provided: " + t);
       var c = CanonicalizeUnicodeLocaleId(t);
-      if (seen.indexOf(c) < 0) append(seen, c);
+      if (listIndexOf(seen, c) < 0) append(seen, c);
     }
     return seen;
   }
@@ -167,7 +178,7 @@
         if (!dup) keyword = { key: sub, value: "" };
         else keyword = { key: sub, value: "", dup: true };
       } else if (keyword === null) {
-        if (attributes.indexOf(sub) < 0) append(attributes, sub);
+        if (listIndexOf(attributes, sub) < 0) append(attributes, sub);
       } else keyword.value = keyword.value === "" ? sub : keyword.value + "-" + sub;
     }
     if (keyword !== null) append(keywords, keyword);
@@ -208,8 +219,8 @@
         if (keywords[j].key !== key) continue;
         var rv = keywords[j].value;
         if (rv !== "") {
-          if (keyLocaleData.indexOf(rv) >= 0) { value = rv; sk = { key: key, value: value }; }
-        } else if (keyLocaleData.indexOf("true") >= 0) { value = "true"; sk = { key: key, value: "" }; }
+          if (listIndexOf(keyLocaleData, rv) >= 0) { value = rv; sk = { key: key, value: value }; }
+        } else if (listIndexOf(keyLocaleData, "true") >= 0) { value = "true"; sk = { key: key, value: "" }; }
         break;
       }
       var ov = options[key];
@@ -217,7 +228,7 @@
         ov = CanonicalizeUValue(asciiLower(key), ov);
         if (ov === "") ov = "true";
       }
-      if (ov !== undefined && ov !== null && ov !== value && keyLocaleData.indexOf(ov) >= 0) { value = ov; sk = null; }
+      if (ov !== undefined && ov !== null && ov !== value && listIndexOf(keyLocaleData, ov) >= 0) { value = ov; sk = null; }
       if (sk !== null) append(supported, sk);
       result[key] = value;
     }
@@ -235,7 +246,7 @@
     if (type === "boolean") value = Bool(value);
     else if (type === "number") { value = ToNumber(value); if (NumberIsNaN(value)) throw rangeError(property + " is not a number"); }
     else value = ToString(value);
-    if (values !== undefined && values.indexOf(value) < 0) throw rangeError("Value " + value + " out of range for " + property);
+    if (values !== undefined && listIndexOf(values, value) < 0) throw rangeError("Value " + value + " out of range for " + property);
     return value;
   }
   var REQUIRED = {};
@@ -246,7 +257,7 @@
     if (value === true) return true;
     if (!Bool(value)) return false;
     value = ToString(value);
-    if (stringValues.indexOf(value) < 0) throw rangeError("Value " + value + " out of range for " + property);
+    if (listIndexOf(stringValues, value) < 0) throw rangeError("Value " + value + " out of range for " + property);
     return value;
   }
   function GetOptionsObject(options) {
@@ -349,17 +360,17 @@
         for (var j = 0; j < a.length; j++) {
           var c = a[j];
           if (c === "phonebook") c = "phonebk"; else if (c === "traditional") c = "trad"; else if (c === "dictionary") c = "dict";
-          if (c !== "standard" && c !== "search" && set.indexOf(c) < 0) append(set, c);
+          if (c !== "standard" && c !== "search" && listIndexOf(set, c) < 0) append(set, c);
         }
       }
-      set.sort();
+      listSort(set);
       collationsList = set;
     }
     return collationsList;
   }
   var timeZonesList = null;
   function availableTimeZones() {
-    if (timeZonesList === null) { timeZonesList = intlOp(17); timeZonesList.sort(); }
+    if (timeZonesList === null) { timeZonesList = intlOp(17); listSort(timeZonesList); }
     return timeZonesList;
   }
   def(Intl, "supportedValuesOf", { supportedValuesOf(key) {
@@ -372,7 +383,7 @@
     else if (key === "timeZone") list = availableTimeZones();
     else if (key === "unit") list = UNITS;
     else throw rangeError("Invalid key: " + key);
-    return list.slice();
+    return listCopy(list);
   } }.supportedValuesOf);
 
   // ---------------- 16.1.2 SetNumberFormatDigitOptions ----------------
@@ -383,7 +394,7 @@
     var mnsd = options.minimumSignificantDigits, mxsd = options.maximumSignificantDigits;
     o.minimumIntegerDigits = mnid;
     var roundingIncrement = GetNumberOption(options, "roundingIncrement", 1, 5000, 1);
-    if (ROUNDING_INCREMENTS.indexOf(roundingIncrement) < 0) throw rangeError("Invalid roundingIncrement");
+    if (listIndexOf(ROUNDING_INCREMENTS, roundingIncrement) < 0) throw rangeError("Invalid roundingIncrement");
     var roundingMode = GetOption(options, "roundingMode", "string", ["ceil", "floor", "expand", "trunc", "halfCeil",
       "halfFloor", "halfExpand", "halfTrunc", "halfEven"], "halfExpand");
     var roundingPriority = GetOption(options, "roundingPriority", "string", ["auto", "morePrecision", "lessPrecision"], "auto");
@@ -501,7 +512,7 @@
     if (s.notation === "compact") cdp(r, "compactDisplay", s.compactDisplay);
     digitOptions(r, s);
     var cats = intlOp(11, s.locale, s.type === "ordinal"), order = ["zero", "one", "two", "few", "many", "other"], pc = [];
-    for (var i = 0; i < order.length; i++) if (cats.indexOf(order[i]) >= 0) append(pc, order[i]);
+    for (var i = 0; i < order.length; i++) if (listIndexOf(cats, order[i]) >= 0) append(pc, order[i]);
     cdp(r, "pluralCategories", pc);
     cdp(r, "roundingIncrement", s.roundingIncrement);
     cdp(r, "roundingMode", s.roundingMode);
@@ -549,14 +560,14 @@
     var items = StringListFromIterable(list);
     if (items.length === 0) return "";
     var r = intlOp(12, s.locale, items, s.type, s.style);
-    return r === undefined ? items.join(", ") : r;
+    return r === undefined ? listJoin(items, ", ") : r;
   } }.format);
   method(ListFormatProto, "formatToParts", { formatToParts(list) {
     var s = slotsOf(this, "ListFormat", "Intl.ListFormat.prototype.formatToParts");
     var items = StringListFromIterable(list);
     if (items.length === 0) return [];
     var p = intlOp(13, s.locale, items, s.type, s.style), out = [];
-    if (p === undefined) p = [["element", items.join(", ")]];
+    if (p === undefined) p = [["element", listJoin(items, ", ")]];
     for (var i = 0; i < p.length; i++) { var part = {}; cdp(part, "type", p[i][0]); cdp(part, "value", p[i][1]); cdp(out, i, part); }
     return out;
   } }.formatToParts);
@@ -621,11 +632,11 @@
   function isNaNValue(x) { return typeof x === "number" ? NumberIsNaN(x) : false; }
   var SIMPLE_UNITS = UNITS;
   function IsWellFormedUnitIdentifier(u) {
-    if (SIMPLE_UNITS.indexOf(u) >= 0) return true;
+    if (listIndexOf(SIMPLE_UNITS, u) >= 0) return true;
     var i = u.indexOf("-per-");
     if (i < 0) return false;
     var a = u.slice(0, i), b = u.slice(i + 5);
-    return SIMPLE_UNITS.indexOf(a) >= 0 && SIMPLE_UNITS.indexOf(b) >= 0;
+    return listIndexOf(SIMPLE_UNITS, a) >= 0 && listIndexOf(SIMPLE_UNITS, b) >= 0;
   }
   function IsWellFormedCurrencyCode(c) {
     if (c.length !== 3) return false;
@@ -849,7 +860,7 @@
     for (var i = 0; i < a.length; i++) {
       var c = a[i];
       if (c === "gregorian") c = "gregory"; else if (c === "ethiopic-amete-alem") c = "ethioaa"; else if (c === "islamicc") c = "islamic-civil";
-      if (r.indexOf(c) < 0) append(r, c);
+      if (listIndexOf(r, c) < 0) append(r, c);
     }
     return r;
   }
@@ -873,8 +884,8 @@
     if (i < parts.length && isRegionSubtag(parts[i])) r.region = parts[i++];
     var vs = [];
     while (i < parts.length && parts[i].length > 1 && isVariantSubtag(parts[i])) append(vs, parts[i++]);
-    if (vs.length > 0) r.variants = vs.join("-");
-    r.baseName = parts.slice(0, i).join("-");
+    if (vs.length > 0) r.variants = listJoin(vs, "-");
+    r.baseName = listJoin(listCopy(parts, 0, i), "-");
     return r;
   }
   function WeekdayToString(fw) {
@@ -929,7 +940,7 @@
       }
       result[key] = value;
     }
-    keywords.sort(function (a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : 0; });
+    listSort(keywords, function (a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : 0; });
     result.locale = attributes.length === 0 && keywords.length === 0 ? CanonicalizeUnicodeLocaleId(base) :
       InsertUnicodeExtensionAndCanonicalize(base, attributes, keywords);
     return result;
@@ -1038,9 +1049,9 @@
     for (var i = 0; i < a.length; i++) {
       var c = a[i];
       if (c === "phonebook") c = "phonebk"; else if (c === "traditional") c = "trad"; else if (c === "dictionary") c = "dict";
-      if (c !== "standard" && c !== "search" && r.indexOf(c) < 0) append(r, c);
+      if (c !== "standard" && c !== "search" && listIndexOf(r, c) < 0) append(r, c);
     }
-    r.sort();
+    listSort(r);
     return r.length > 0 ? r : ["emoji", "eor"];
   } }.getCollations);
   method(LocaleProto, "getHourCycles", { getHourCycles() {
@@ -1060,7 +1071,7 @@
     if (b.region === undefined) return undefined;
     var a = intlOp(23, b.region);
     if (a === undefined) return undefined;
-    a.sort();
+    listSort(a);
     return a;
   } }.getTimeZones);
   // the direction of the locale's (likely) script; undefined for an unknown or unregistered one
@@ -1081,8 +1092,8 @@
       if (m !== null) script = parseBaseName(m).script;
     }
     if (script === undefined) return undefined;
-    if (RTL_SCRIPTS.indexOf(script) >= 0) return "rtl";
-    return LTR_SCRIPTS.indexOf(script) >= 0 ? "ltr" : undefined;
+    if (listIndexOf(RTL_SCRIPTS, script) >= 0) return "rtl";
+    return listIndexOf(LTR_SCRIPTS, script) >= 0 ? "ltr" : undefined;
   }
   method(LocaleProto, "getTextInfo", { getTextInfo() {
     var s = loc(this, "getTextInfo"), r = {};
@@ -1093,12 +1104,12 @@
     var s = loc(this, "getWeekInfo"), w = intlOp(25, regionOf(s) || "001") || [1, 6, 7, 1], r = {};
     var first = w[0];
     if (s.firstDayOfWeek !== undefined) {
-      var days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], k = days.indexOf(s.firstDayOfWeek);
+      var days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], k = listIndexOf(days, s.firstDayOfWeek);
       if (k >= 0) first = k + 1;
     }
     var weekend = [];
     for (var d = w[1]; ; d = d % 7 + 1) { append(weekend, d); if (d === w[2]) break; }
-    weekend.sort(function (a, b) { return a - b; });
+    listSort(weekend, function (a, b) { return a - b; });
     cdp(r, "firstDay", first);
     cdp(r, "weekend", weekend);
     return r;
@@ -1453,7 +1464,7 @@
     for (var i = 0; i < a.length; i++) {
       var c = a[i];
       if (c === "phonebook") c = "phonebk"; else if (c === "traditional") c = "trad"; else if (c === "dictionary") c = "dict";
-      if (c !== "standard" && c !== "search" && r.indexOf(c) < 0) append(r, c);
+      if (c !== "standard" && c !== "search" && listIndexOf(r, c) < 0) append(r, c);
     }
     return r;
   }
@@ -1469,7 +1480,7 @@
     s.usage = GetOption(options, "usage", "string", ["sort", "search"], "sort");
     var res = ResolveOptions(availableLocales(), coData, ["co", "kf", "kn"],
       [["collation", "co", "string", undefined], ["numeric", "kn", "boolean", undefined], ["caseFirst", "kf", "string", ["upper", "lower", "false"]]],
-      requested.slice(), options, false);
+      listCopy(requested), options, false);
     var r = res.resolved;
     s.locale = r.locale;
     s.collation = r.co === null || r.co === undefined ? "default" : r.co;
@@ -1709,7 +1720,7 @@
       return asciiLower(code);
     }
     if (type === "dateTimeField") {
-      if (DATE_TIME_FIELDS.indexOf(code) < 0) throw rangeError("Invalid dateTimeField code: " + code);
+      if (listIndexOf(DATE_TIME_FIELDS, code) < 0) throw rangeError("Invalid dateTimeField code: " + code);
       return code;
     }
     if (!IsWellFormedCurrencyCode(code)) throw rangeError("Invalid currency code: " + code);
