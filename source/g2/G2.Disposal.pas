@@ -24,7 +24,7 @@ begin
 end;
 
 procedure InitDisposal;
-var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R, H: TValue; CA: array[0..1] of TValue; I: Integer;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R, H: TValue; CA: array[0..2] of TValue; I: Integer;
 const
   Names: array[0..2] of UnicodeString = ('add', 'dispose', 'disposeAsync');
 begin
@@ -32,10 +32,12 @@ begin
   if not MakeScriptClosure(T, Clo) then raise Exception.Create('disposal prelude closure');
   if not CallValue(Clo, VUndefined, nil, 0, Fn) then raise Exception.Create('disposal prelude run');
   PushRoot(Fn);
-  CA[0] := GlobalObj;
+  PushRoot(NewNativeFunction(MarkIntrinsicClass, 'markIntrinsic', 1));
   CA[1] := NewNativeFunction(IsRetComp_Native, 'isRetComp', 1);
+  CA[2] := RootAt(TempTop - 1);
   CA[0] := GlobalObj;
-  if not CallValue(RootAt(TempTop - 1), VUndefined, @CA[0], 2, R) then
+  PopRoots(1);
+  if not CallValue(RootAt(TempTop - 1), VUndefined, @CA[0], 3, R) then
   begin
     PopRoots(1);
     if ToStringV(Pending, R) and IsString(R) then

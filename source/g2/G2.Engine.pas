@@ -17,6 +17,8 @@ uses
 
 { builds this thread's engine: heap, VM, builtins and the JS preludes }
 procedure EngineInit(NurseryBytes: SizeInt = 8 * 1024 * 1024);
+{ a realm's intrinsics and global object (the builtins' Init procedures, after HeapInit and VMInit) }
+procedure InitIntrinsics;
 { frees this thread's engine; values, templates and closures from it are invalid afterwards }
 procedure EngineDone;
 { parses, compiles and runs Source as a script, then the microtasks it queued; Err gets an uncaught error's
@@ -35,6 +37,11 @@ begin
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   HeapInit(NurseryBytes);
   VMInit;
+  InitIntrinsics;
+end;
+
+procedure InitIntrinsics;
+begin
   InitBuiltins;
   InitBuiltins2;
   InitRegExp;
@@ -54,6 +61,7 @@ begin
   InitJSON;
   InitDate;
   InitIntl;
+  RealmInitProc := @InitIntrinsics;
 end;
 
 procedure EngineDone;

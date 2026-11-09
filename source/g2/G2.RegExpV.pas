@@ -1101,7 +1101,11 @@ var C, StrProto_, Getr, Setr: TValue; I, K: Integer; LName: UnicodeString;
     DefineOwn(RegExpProto, AtomOf(Name), F, pfConfigurable or pfAccessor);
   end;
 begin
-  Compiled := TDictionary<UnicodeString, PCompiled>.Create;
+  if not RealmInit then Compiled := TDictionary<UnicodeString, PCompiled>.Create;
+  RealmVals([@RegExpProto, @StrReplaceOrig, @StrSplitOrig, @StrReplaceAllOrig, @IntactOrig, @SpeciesOrig,
+    @RegExpCtorV, @JSFns]);
+  RealmPtrs([@RegExpShape, @MatchShape, @IntactShape, @Legacy]);
+  RealmInts([@IntactVersion]);
   AddRoot(@RegExpProto); AddRoot(@StrReplaceOrig); AddRoot(@StrSplitOrig); AddRoot(@StrReplaceAllOrig); AddRoot(@Scratch);
   AddRoot(@IntactOrig); AddRoot(@SpeciesOrig); AddRoot(@RegExpCtorV); AddRoot(@JSFns);
   New(Legacy);

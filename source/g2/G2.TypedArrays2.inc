@@ -955,6 +955,9 @@ var I: Integer; F, AP, Tmp: TValue;
     PopRoots(2);
   end;
 begin
+  RealmVals([@ArrayBufferCtor, @ArrayBufferProtoV, @TypedArrayCtorV, @TypedArrayProtoV, @DataViewProtoV, @TASortFn]);
+  RealmValRange(@TACtors[0], Length(TACtors));
+  RealmValRange(@TAProtosV[0], Length(TAProtosV));
   AddRoot(@ArrayBufferCtor); AddRoot(@ArrayBufferProtoV); AddRoot(@TypedArrayCtorV); AddRoot(@TypedArrayProtoV);
   AddRoot(@DataViewProtoV); AddRoot(@TASortFn);
   AddRootRange(@TACtors[0], TAKindCount);    { not @TACtors[I]: see AddRootRange }

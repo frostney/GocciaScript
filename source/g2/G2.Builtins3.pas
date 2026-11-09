@@ -736,7 +736,9 @@ var C, G: TValue; M: TValue;
 begin
   AddRoot(@DateProto); AddRoot(@WeakMapProto); AddRoot(@WeakSetProto); AddRoot(@Scratch); AddRoot(@Scratch2);
   AddRoot(@SymbolRegistry);
-  SymbolRegistry := MkPtr(NewPlainObject(VNull, 8));
+  RealmVals([@DateProto, @WeakMapProto, @WeakSetProto]);
+  { 20.4.2.2: the GlobalSymbolRegistry is shared by all realms }
+  if not RealmInit then SymbolRegistry := MkPtr(NewPlainObject(VNull, 8));
 
   { Date replaces the Date.now-only object }
   DateProto := MkPtr(NewPlainObject(ObjectProto, 16));
@@ -834,7 +836,7 @@ begin
   N(Scratch, 'isSafeInteger', Number_IsSafeInteger, 1);
 
   { Proxy }
-  RevokeKey := NewKeyAtom('%revocableProxy', kfInternal);
+  if not RealmInit then RevokeKey := NewKeyAtom('%revocableProxy', kfInternal);   { internal keys: one per agent }
   Scratch := NewNativeFunction(Proxy_Ctor, 'Proxy', 2);
   ObjOf(Scratch)^.OFlags := ObjOf(Scratch)^.OFlags or 32;   { a constructor without a prototype property }
   DefineOwn(GlobalObj, AtomOf('Proxy'), Scratch, pfHidden);

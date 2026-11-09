@@ -1,4 +1,4 @@
-(function (G, isRetComp) {
+(function (G, isRetComp, markIntrinsic) {
   "use strict";
   // Explicit resource management: SuppressedError, DisposableStack, AsyncDisposableStack, and the helpers the
   // compiler calls for using / await using blocks (AddDisposableResource, DisposeResources). A dispose
@@ -17,7 +17,7 @@
   function SuppressedError(error, suppressed, message) {
     var e = new Err();
     var p = new.target === undefined ? SEP : new.target.prototype;
-    setProto(e, isObject(p) ? p : SEP);
+    setProto(e, isObject(p) ? p : markIntrinsic(SEP, new.target));
     if (message !== undefined) def(e, "message", Str(message));
     def(e, "error", error);
     def(e, "suppressed", suppressed);
@@ -30,6 +30,7 @@
   def(SEP, "message", "");
   setProto(SuppressedError, Err);
   def(G, "SuppressedError", SuppressedError);
+  markIntrinsic(SuppressedError);
   function suppressed(error, previous) {
     var e = new Err();
     setProto(e, SEP);
@@ -206,7 +207,9 @@
   def(AP, SymAsyncDispose, AP.disposeAsync);
   defineProperty(AP, SymToStringTag, { value: "AsyncDisposableStack", writable: false, enumerable: false, configurable: true });
   def(G, "DisposableStack", DisposableStack);
+  markIntrinsic(DisposableStack);
   def(G, "AsyncDisposableStack", AsyncDisposableStack);
+  markIntrinsic(AsyncDisposableStack);
 
   // %AsyncIteratorPrototype% [ @@asyncDispose ] (27.1.4.1)
   var AIP = getProto(getProto(async function* () {}.prototype));

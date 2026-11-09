@@ -71,7 +71,7 @@
   // 10.1.13 OrdinaryCreateFromConstructor, with the intrinsic prototype as the fallback
   function createFrom(newTarget, fallback) {
     var p = newTarget.prototype;
-    if (!isObject(p)) p = fallback;
+    if (!isObject(p)) p = markIntrinsic(fallback, newTarget);   // the intrinsic of newTarget's realm
     return ObjectCreate(p);
   }
 
@@ -437,6 +437,7 @@
 
   // ---------------- 17 PluralRules ----------------
   var PluralRulesProto = {};
+  markIntrinsic(PluralRulesProto);
   function PluralRules(locales = undefined, options = undefined) {
     if (new.target === undefined) throw typeError("Constructor Intl.PluralRules requires 'new'");
     var o = createFrom(new.target, PluralRulesProto);
@@ -505,6 +506,7 @@
 
   // ---------------- 14 ListFormat ----------------
   var ListFormatProto = {};
+  markIntrinsic(ListFormatProto);
   function ListFormat(locales = undefined, options = undefined) {
     if (new.target === undefined) throw typeError("Constructor Intl.ListFormat requires 'new'");
     var o = createFrom(new.target, ListFormatProto);
@@ -656,6 +658,7 @@
     return r;
   }
   var NumberFormatProto = {};
+  markIntrinsic(NumberFormatProto);
   // 16.1.2 InitializeNumberFormat (with 16.1.1's ChainNumberFormat for a call)
   function NumberFormat(locales = undefined, options = undefined) {
     var nt = new.target === undefined ? NumberFormat : new.target;
@@ -926,6 +929,7 @@
     return result;
   }
   var LocaleProto = {};
+  markIntrinsic(LocaleProto);
   function Locale(tag, options = undefined) {
     if (new.target === undefined) throw typeError("Constructor Intl.Locale requires 'new'");
     var o = createFrom(new.target, LocaleProto);
@@ -1137,6 +1141,7 @@
   }
   function DefaultTimeZone() { var z = intlOp(27); return z ? z : "UTC"; }
   var DateTimeFormatProto = {};
+  markIntrinsic(DateTimeFormatProto);
   // Temporal: GetDateTimeFormat(formats, matcher, options, required, defaults, inherit) as a components record
   // (ICU picks the pattern), or null
   var DT_REQUIRED = { date: ["weekday", "year", "month", "day"], time: ["dayPeriod", "hour", "minute", "second", "fractionalSecondDigits"],
@@ -1447,6 +1452,7 @@
     return r;
   }
   var CollatorProto = {};
+  markIntrinsic(CollatorProto);
   function Collator(locales = undefined, options = undefined) {
     var nt = new.target === undefined ? Collator : new.target;
     var o = createFrom(nt, CollatorProto);
@@ -1510,6 +1516,7 @@
 
   // ---------------- 18 RelativeTimeFormat ----------------
   var RelativeTimeFormatProto = {};
+  markIntrinsic(RelativeTimeFormatProto);
   function RelativeTimeFormat(locales = undefined, options = undefined) {
     if (new.target === undefined) throw typeError("Constructor Intl.RelativeTimeFormat requires 'new'");
     var o = createFrom(new.target, RelativeTimeFormatProto);
@@ -1634,6 +1641,7 @@
 
   // ---------------- 12 DisplayNames ----------------
   var DisplayNamesProto = {};
+  markIntrinsic(DisplayNamesProto);
   function DisplayNames(locales, options) {
     if (new.target === undefined) throw typeError("Constructor Intl.DisplayNames requires 'new'");
     var o = createFrom(new.target, DisplayNamesProto);
@@ -1703,6 +1711,7 @@
 
   // ---------------- 19 Segmenter ----------------
   var SegmenterProto = {};
+  markIntrinsic(SegmenterProto);
   function Segmenter(locales = undefined, options = undefined) {
     if (new.target === undefined) throw typeError("Constructor Intl.Segmenter requires 'new'");
     var o = createFrom(new.target, SegmenterProto);
@@ -1754,6 +1763,7 @@
     return lo;
   }
   var SegmentsProto = {};
+  markIntrinsic(SegmentsProto);
   method(SegmenterProto, "segment", { segment(string) {
     var s = slotsOf(this, "Segmenter", "Intl.Segmenter.prototype.segment");
     var str = ToString(string), o = ObjectCreate(SegmentsProto), ss = rec();
@@ -1842,6 +1852,7 @@
     return r;
   }
   var DurationFormatProto = {};
+  markIntrinsic(DurationFormatProto);
   function DurationFormat(locales = undefined, options = undefined) {
     if (new.target === undefined) throw typeError("Constructor Intl.DurationFormat requires 'new'");
     var o = createFrom(new.target, DurationFormatProto);

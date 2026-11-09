@@ -3979,6 +3979,8 @@ begin
       pstGetter:
         begin
           ObjLiteralMethod := True;
+          { an accessor's own "use strict" directive (10.2.1.1: its code is strict mode code) }
+          if HasUseStrictDirective(TGocciaGetterExpression(P.Accessor).Body) then PendingStrict := 1;
           T := CompileFunction('get ' + P.StaticKey, NoParams, TGocciaGetterExpression(P.Accessor).Body,
             False, True, False, False, False, False);
           EmitClosure(V, T);
@@ -3987,6 +3989,7 @@ begin
       pstSetter:
         begin
           ObjLiteralMethod := True;
+          if HasUseStrictDirective(TGocciaSetterExpression(P.Accessor).Body) then PendingStrict := 1;
           T := CompileFunction('set ' + P.StaticKey, TGocciaSetterExpression(P.Accessor).Parameters,
             TGocciaSetterExpression(P.Accessor).Body, False, True, False, False, False, False);
           EmitClosure(V, T);
@@ -3999,6 +4002,7 @@ begin
           if P.PropertyType = pstComputedGetter then
           begin
             ObjLiteralMethod := True;
+            if HasUseStrictDirective(TGocciaGetterExpression(Pair.Value).Body) then PendingStrict := 1;
             T := CompileFunction('get', NoParams, TGocciaGetterExpression(Pair.Value).Body,
               False, True, False, False, False, False);
             EmitClosure(V, T);
@@ -4008,6 +4012,7 @@ begin
           else
           begin
             ObjLiteralMethod := True;
+            if HasUseStrictDirective(TGocciaSetterExpression(Pair.Value).Body) then PendingStrict := 1;
             T := CompileFunction('set', TGocciaSetterExpression(Pair.Value).Parameters,
               TGocciaSetterExpression(Pair.Value).Body, False, True, False, False, False, False);
             EmitClosure(V, T);

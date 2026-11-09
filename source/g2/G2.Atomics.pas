@@ -530,8 +530,13 @@ procedure InitAtomics;
 var Sym, C: TValue; TagKey: PStr;
 begin
   AddRoot(@SharedBufferProto); AddRoot(@AtomicsObj); AddRoot(@Scratch); AddRoot(@AsyncPromises);
-  AsyncPromises := MkPtr(NewArray(0, 8));
-  AsyncCount := 0; AsyncPending := 0; AsyncDeadlines := nil; AsyncLive := nil;
+  RealmVals([@SharedBufferProto, @AtomicsObj]);
+  if not RealmInit then
+  begin
+    { the agent's Atomics.waitAsync waiters }
+    AsyncPromises := MkPtr(NewArray(0, 8));
+    AsyncCount := 0; AsyncPending := 0; AsyncDeadlines := nil; AsyncLive := nil;
+  end;
   SharedBufferProto := MkPtr(NewPlainObject(ObjectProto, 8));
   C := NewNativeFunction(SAB_Ctor, 'SharedArrayBuffer', 1);
   Scratch := C;

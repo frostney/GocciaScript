@@ -276,12 +276,18 @@ begin
 end;
 
 function ArraySpeciesCreate(O: TValue; Len: Int64; var A: TValue): Boolean;
-var IsArr: Boolean; C: TValue; LV: TValue;
+var IsArr: Boolean; C: TValue; LV: TValue; R: Integer;
 begin
   if SpeciesIntact(O) then Exit(ArrayCreate(Len, A));
   if not IsArrayV(O, IsArr) then Exit(False);
   if not IsArr then Exit(ArrayCreate(Len, A));
   if not GetV(O, AtomConstructor, C) then Exit(False);
+  if MultiRealm and IsConstructorV(C) then
+  begin
+    { step 4.c: another realm's %Array% makes an array of this realm }
+    if not GetFunctionRealm(C, R) then Exit(False);
+    if (R <> CurRealm) and (C = MapIntrinsic(ArrayCtorV, CurRealm, R)) then C := VUndefined;
+  end;
   if IsObject(C) then
   begin
     if not GetElemV(C, SymSpecies, C) then Exit(False);
@@ -1561,6 +1567,9 @@ var Ctor, U: TValue; Key: PStr; I: Integer;
   end;
 begin
   AddRoot(@ObjProtoToStringFn); AddRoot(@JoinStack); AddRoot(@SortFn);
+  RealmVals([@ObjProtoToStringFn, @JoinStack, @SortFn, @ArrayCtorV, @ArraySpeciesFn]);
+  RealmPtrs([@CleanShapeA, @CleanShapeO]);
+  RealmInts([@CleanVerA, @CleanVerO]);
   CleanShapeA := nil; CleanShapeO := nil;
   SortFn := VUndefined;
   JoinStack := MkPtr(NewArray(0, 8));

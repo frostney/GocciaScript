@@ -98,9 +98,7 @@ end;
 { 10.1.14 GetPrototypeFromConstructor }
 function ProtoFromCtor(C, Default: TValue; var P: TValue): Boolean;
 begin
-  if not GetV(C, AtomPrototype, P) then Exit(False);
-  if not IsObject(P) then P := Default;
-  Result := True;
+  Result := GetPrototypeFromConstructor(C, Default, P);
 end;
 
 { 7.3.22 SpeciesConstructor }
@@ -407,8 +405,13 @@ end;
 function IterToList(Obj, Method: TValue; var L: TValue): Boolean;
 var It, NextM, V: TValue; Done: Boolean; Base: Integer;
 begin
+  { the list's allocation can move a young Obj or Method }
+  PushRoot(Obj); PushRoot(Method);
+  L := MkPtr(NewArray(0, 8));
+  Method := RootAt(TempTop - 1); Obj := RootAt(TempTop - 2);
+  PopRoots(2);
   Base := TempTop;
-  PushRoot(MkPtr(NewArray(0, 8)));
+  PushRoot(L);
   if not CallValue(Method, Obj, nil, 0, It) then begin PopRoots(1); Exit(False); end;
   if not IsObject(It) then begin PopRoots(1); Exit(ThrowTypeError('iterator is not an object')); end;
   PushRoot(It);

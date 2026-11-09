@@ -1171,7 +1171,6 @@ begin
   N := ArrayLen(A);
   SavedCmp := SortCmp;
   SortCmp := Arg(Args, Argc, 1);
-  AddRoot(@SortCmp);
   { stable merge sort into a scratch array; elements stay reachable from the array and the scratch }
   Tmp := NewArray(N, N);
   PushRoot(MkPtr(Tmp));
@@ -1721,11 +1720,12 @@ begin
   Result := True;
 end;
 
+{ 22.1.3.29 String.prototype.toString / 22.1.3.35 valueOf: thisStringValue (a string or a String object) }
 function StrProto_ToString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S: PStr;
 begin
-  if not ThisStr(Args, S) then Exit(False);
-  Res := MkPtr(S);
+  if IsString(Args[0]) then Res := Args[0]
+  else if IsObject(Args[0]) and (ObjOf(Args[0])^.OKind = okStringObj) then Res := ObjOf(Args[0])^.Aux1
+  else Exit(ThrowTypeError('String.prototype.valueOf requires that ''this'' be a String'));
   Result := True;
 end;
 
@@ -2788,7 +2788,9 @@ begin
   AddRoot(@EvalErrorProto); AddRoot(@URIErrorProto); AddRoot(@AggregateErrorProto); AddRoot(@ErrorCtorV);
   AddRoot(@MapIterProto); AddRoot(@SetIterProto); AddRoot(@MapIterNextFn); AddRoot(@SetIterNextFn);
   AddRoot(@ReferenceErrorProto); AddRoot(@MathObj); AddRoot(@JSONObj); AddRoot(@ConsoleObj); AddRoot(@PerfObj);
-  AddRoot(@DateObj); AddRoot(@CtorTmp); AddRoot(@ErrorProtoType); AddRoot(@SymIterator);
+  AddRoot(@DateObj); AddRoot(@CtorTmp); AddRoot(@ErrorProtoType); AddRoot(@SymIterator); AddRoot(@SortCmp);
+  RealmVals([@AggregateErrorProto, @ErrorCtorV, @MapIterProto, @SetIterProto, @MathObj, @JSONObj, @ConsoleObj,
+    @PerfObj, @DateObj, @CtorTmp, @ArrayValuesFnRoot]);
 
   ObjectProto := MkPtr(NewPlainObject(VNull, 16));
   { 20.2.3: %Function.prototype% is itself a built-in function: it accepts any arguments and returns undefined;
@@ -2814,10 +2816,12 @@ begin
   SetProtoObj := NewProtoObject(ObjectProto);
   ErrorProto := NewProtoObject(ObjectProto);
 
-  SymIterator := NewSymbol('Symbol.iterator');
   AddRoot(@SymHasInstance);
+  { the well-known symbols (6.1.5.1), made once (all realms share them); symbols are permanent cells }
+  if not RealmInit then
+  begin
+  SymIterator := NewSymbol('Symbol.iterator');
   SymHasInstance := NewSymbol('Symbol.hasInstance');
-  { the other well-known symbols (6.1.5.1), made once; symbols are permanent cells }
   SymAsyncIterator := NewSymbol('Symbol.asyncIterator');
   SymSpecies := NewSymbol('Symbol.species');
   SymToStringTagW := NewSymbol('Symbol.toStringTag');
@@ -2832,6 +2836,7 @@ begin
   SymDispose := NewSymbol('Symbol.dispose');
   SymAsyncDispose := NewSymbol('Symbol.asyncDispose');
   ToPrimitiveKey := SymKey(SymToPrimitive);
+  end;
 
   { Object }
   C := MakeCtor(Object_Ctor, 'Object', 1, ObjectProto);

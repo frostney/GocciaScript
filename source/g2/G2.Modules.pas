@@ -545,6 +545,8 @@ end;
 
 procedure InitModules;
 begin
+  { the module map and the pending dynamic imports belong to the agent's first realm }
+  if RealmInit then Exit;
   Mods := TList<TModRec>.Create;
   AddRoot(@ModRoots);
   AddRoot(@PendingImports);

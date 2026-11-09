@@ -17,14 +17,16 @@ uses
 {$I G2.IterHelpers.inc}
 
 procedure InitIterHelpers;
-var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..1] of TValue;
 begin
   if not CompilePrelude('<iterhelpers>', IterHelpersSrc, T, Err) then
     raise Exception.Create('iterator helpers prelude: ' + string(Err));
   if not MakeScriptClosure(T, Clo) then raise Exception.Create('iterator helpers prelude closure');
   if not CallValue(Clo, VUndefined, nil, 0, Fn) then raise Exception.Create('iterator helpers prelude run');
   PushRoot(Fn);
-  if not CallValue(RootAt(TempTop - 1), VUndefined, @GlobalObj, 1, R) then
+  CA[1] := NewNativeFunction(MarkIntrinsicClass, 'markIntrinsic', 1);
+  CA[0] := GlobalObj;
+  if not CallValue(RootAt(TempTop - 1), VUndefined, @CA[0], 2, R) then
   begin
     PopRoots(1);
     if ToStringV(Pending, R) and IsString(R) then

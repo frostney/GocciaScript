@@ -525,6 +525,8 @@ begin
   AddRootRange(@TAProtos[0], Length(TAProtos));   { not @TAProtos[I]: see AddRootRange }
   AddRoot(@TypedArrayProto); AddRoot(@ArrayBufferProto); AddRoot(@DataViewProto); AddRoot(@Scratch);
   AddRoot(@BigIntProto);
+  RealmValRange(@TAProtos[0], Length(TAProtos));
+  RealmVals([@TypedArrayProto, @ArrayBufferProto, @DataViewProto, @PromiseProto, @TypedArrayCtor]);
 
   { generators }
   GeneratorProto := MkPtr(NewPlainObject(IteratorProto, 4));

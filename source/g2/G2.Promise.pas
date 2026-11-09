@@ -1311,15 +1311,20 @@ begin
   AddRoot(@PromiseProto); AddRoot(@PromiseCtor); AddRoot(@ThenFn); AddRoot(@Jobs); AddRoot(@Scratch);
   AtomThen := AtomOf('then');
   AtomResolve := AtomOf('resolve');
-  Q := NewValueArray(256);
-  Q^.Len := 256;
-  for I := 0 to 255 do Q^.Data[I] := VUndefined;
-  Jobs := MkPtr(Q);
-  JobHead := 0; JobCount := 0;
+  RealmVals([@PromiseProto, @PromiseCtor, @ThenFn]);
+  { the agent's job queue (9.5): all realms share it }
+  if not RealmInit then
+  begin
+    Q := NewValueArray(256);
+    Q^.Len := 256;
+    for I := 0 to 255 do Q^.Data[I] := VUndefined;
+    Jobs := MkPtr(Q);
+    JobHead := 0; JobCount := 0;
+  end;
   AsyncStartHook := @AsyncStart;
   AsyncGenStartHook := @AsyncGenStart;
   AsyncFromSyncHook := @AsyncFromSync;
-  AtomAGQueue := NewKeyAtom('asyncGeneratorQueue', kfInternal);
+  if not RealmInit then AtomAGQueue := NewKeyAtom('asyncGeneratorQueue', kfInternal);   { one per agent }
   DefineOwn(AsyncGeneratorProto, AtomNext, NewNativeFunctionData(AsyncGen_Method, 'next', 1, 0), pfHidden);
   DefineOwn(AsyncGeneratorProto, AtomOf('return'), NewNativeFunctionData(AsyncGen_Method, 'return', 1, 2), pfHidden);
   DefineOwn(AsyncGeneratorProto, AtomOf('throw'), NewNativeFunctionData(AsyncGen_Method, 'throw', 1, 1), pfHidden);

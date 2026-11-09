@@ -266,6 +266,41 @@ threadvar
   EvalErrorProto, URIErrorProto: TValue;
   ArrayIterNative: TNativeFn;
 
+{ ---- realms (9.3) ----
+  A realm's intrinsics and global environment live in threadvars while it runs: SwitchRealm saves the running
+  realm's values and loads another's. The Init procedures register the threadvars that hold their realm's state
+  (RealmVals, RealmPtrs, RealmInts; ignored while CreateRealm reruns them for a new realm). A function object
+  carries its [[Realm]] in Pad bits 24-30: a call to a function of another realm switches to it, and the
+  caller's realm comes back when the callee returns. }
+const
+  REALM_SHIFT = 24;
+  REALM_MAX = 127;
+threadvar
+  CurRealm: Integer;
+  MultiRealm: Boolean;   { a second realm exists }
+  RealmInit: Boolean;    { CreateRealm is running the Init procedures for a new realm }
+var
+  { the Init procedures of the intrinsics, which CreateRealm runs for a new realm (nil: no realms) }
+  RealmInitProc: procedure = nil;
+  { some thread has a second realm: FastLoop leaves calls and returns to Execute (a global: cheaper there than
+    MultiRealm) }
+  MultiRealmAny: Boolean = False;
+procedure RealmVals(const P: array of PValue);
+procedure RealmValRange(P: PValue; N: Integer);
+procedure RealmPtrs(const P: array of Pointer);
+procedure RealmInts(const P: array of Pointer);
+procedure SwitchRealm(R: Integer);
+{ 9.3.1 InitializeHostDefinedRealm for a new realm, left as the running realm's sibling: R its index }
+function CreateRealm(var R: Integer): Boolean;
+function FnRealm(O: PObj): Integer; inline;
+{ 7.3.24 GetFunctionRealm }
+function GetFunctionRealm(F: TValue; var R: Integer): Boolean;
+{ V, an intrinsic of realm FromR, as the same intrinsic of realm ToR (V itself when it is none) }
+function MapIntrinsic(V: TValue; FromR, ToR: Integer): TValue;
+{ 10.1.14 GetPrototypeFromConstructor: C's prototype property, else Default (an intrinsic of the running realm)
+  as the intrinsic of C's realm }
+function GetPrototypeFromConstructor(C, Default: TValue; var P: TValue): Boolean;
+
 implementation
 
 function SuspendNewGenerator: TValue; forward;
@@ -274,7 +309,12 @@ function GeneratorNextIsIntrinsic(Gen: TValue): Boolean; forward;
 { ---------------- roots ---------------- }
 
 procedure AddRoot(P: PValue);
+var I: Integer;
 begin
+  { a new realm's Init procedures root the same threadvars again }
+  if RealmInit then
+    for I := 0 to ExtraRootCount - 1 do
+      if ExtraRoots[I] = P then Exit;
   if ExtraRootCount >= Length(ExtraRoots) then SetLength(ExtraRoots, ExtraRootCount * 2 + 64);
   ExtraRoots[ExtraRootCount] := P;
   Inc(ExtraRootCount);
@@ -284,6 +324,232 @@ procedure AddRootRange(P: PValue; N: Integer);
 var I: Integer;
 begin
   for I := 0 to N - 1 do AddRoot(P + I);
+end;
+
+{ ---------------- realms ---------------- }
+
+type
+  TRealmRec = record
+    Vals: array of TValue;
+    Ptrs: array of Pointer;
+    Ints: array of Integer;
+    GLexCells: array of TValue;
+    GLexNames: array of PStr;
+    GLexConst: array of Boolean;
+    GLexHash: array of Integer;
+    GLexCount: Integer;
+    GVarHash: array of PStr;
+    GVarCount: Integer;
+  end;
+
+threadvar
+  FunctionShape: PShape;
+  { the intrinsics the preludes registered with markIntrinsic, in order (a JS array): every realm runs the same
+    preludes, so a realm's K-th entry is the same intrinsic as another realm's K-th (MapIntrinsic) }
+  IntrinsicList: TValue;
+  IntrinsicListIdx: Integer;   { its index among the realm values }
+  Realms: array of TRealmRec;
+  RealmValSlots: array of PValue;
+  RealmPtrSlots: array of PPointer;
+  RealmIntSlots: array of PInteger;
+
+procedure RealmVals(const P: array of PValue);
+var I: Integer;
+begin
+  if RealmInit then Exit;
+  for I := 0 to High(P) do
+  begin
+    SetLength(RealmValSlots, Length(RealmValSlots) + 1);
+    RealmValSlots[High(RealmValSlots)] := P[I];
+  end;
+end;
+
+procedure RealmValRange(P: PValue; N: Integer);
+var I: Integer;
+begin
+  for I := 0 to N - 1 do RealmVals([P + I]);
+end;
+
+procedure RealmPtrs(const P: array of Pointer);
+var I: Integer;
+begin
+  if RealmInit then Exit;
+  for I := 0 to High(P) do
+  begin
+    SetLength(RealmPtrSlots, Length(RealmPtrSlots) + 1);
+    RealmPtrSlots[High(RealmPtrSlots)] := P[I];
+  end;
+end;
+
+procedure RealmInts(const P: array of Pointer);
+var I: Integer;
+begin
+  if RealmInit then Exit;
+  for I := 0 to High(P) do
+  begin
+    SetLength(RealmIntSlots, Length(RealmIntSlots) + 1);
+    RealmIntSlots[High(RealmIntSlots)] := P[I];
+  end;
+end;
+
+procedure SaveRealm(R: Integer);
+var I: Integer;
+begin
+  with Realms[R] do
+  begin
+    SetLength(Vals, Length(RealmValSlots));
+    for I := 0 to High(RealmValSlots) do Vals[I] := RealmValSlots[I]^;
+    SetLength(Ptrs, Length(RealmPtrSlots));
+    for I := 0 to High(RealmPtrSlots) do Ptrs[I] := RealmPtrSlots[I]^;
+    SetLength(Ints, Length(RealmIntSlots));
+    for I := 0 to High(RealmIntSlots) do Ints[I] := RealmIntSlots[I]^;
+  end;
+  Realms[R].GLexCells := GLexCells; Realms[R].GLexNames := GLexNames; Realms[R].GLexConst := GLexConst;
+  Realms[R].GLexHash := GLexHash; Realms[R].GLexCount := GLexCount;
+  Realms[R].GVarHash := GVarHash; Realms[R].GVarCount := GVarCount;
+end;
+
+procedure LoadRealm(R: Integer);
+var I: Integer;
+begin
+  with Realms[R] do
+  begin
+    for I := 0 to High(RealmValSlots) do RealmValSlots[I]^ := Vals[I];
+    for I := 0 to High(RealmPtrSlots) do RealmPtrSlots[I]^ := Ptrs[I];
+    for I := 0 to High(RealmIntSlots) do RealmIntSlots[I]^ := Ints[I];
+  end;
+  GLexCells := Realms[R].GLexCells; GLexNames := Realms[R].GLexNames; GLexConst := Realms[R].GLexConst;
+  GLexHash := Realms[R].GLexHash; GLexCount := Realms[R].GLexCount;
+  GVarHash := Realms[R].GVarHash; GVarCount := Realms[R].GVarCount;
+  { the running realm's state is in the threadvars only (a second reference would make SetLength copy) }
+  Realms[R].GLexCells := nil; Realms[R].GLexNames := nil; Realms[R].GLexConst := nil;
+  Realms[R].GLexHash := nil; Realms[R].GVarHash := nil;
+end;
+
+procedure SwitchRealm(R: Integer);
+begin
+  if R = CurRealm then Exit;
+  SaveRealm(CurRealm);
+  LoadRealm(R);
+  CurRealm := R;
+end;
+
+function ThreadPtr: PByte; assembler; nostackframe;
+asm
+  movq %fs:0, %rax
+end;
+
+function CreateRealm(var R: Integer): Boolean;
+var Old, NewR, I, TlsSize: Integer; Before, After: array of Byte; Base: PByte;
+begin
+  if not Assigned(RealmInitProc) then Exit(ThrowTypeError('this host cannot create realms'));
+  if Length(Realms) = 0 then SetLength(Realms, 1);
+  if Length(Realms) > REALM_MAX then Exit(ThrowError('RangeError', 'too many realms'));
+  { G2_REALMCHECK=<size of the TLS segment>: report the thread-local bytes the new realm's Init procedures changed
+    that the switch back did not restore (state a realm needs that no Init procedure registered) }
+  TlsSize := StrToIntDef(GetEnvironmentVariable('G2_REALMCHECK'), 0);
+  if TlsSize > 0 then
+  begin
+    Base := ThreadPtr - TlsSize;
+    SetLength(Before, TlsSize);
+    Move(Base^, Before[0], TlsSize);
+  end;
+  Old := CurRealm;
+  NewR := Length(Realms);
+  SaveRealm(Old);
+  SetLength(Realms, NewR + 1);
+  for I := 0 to High(RealmValSlots) do RealmValSlots[I]^ := VUndefined;
+  for I := 0 to High(RealmPtrSlots) do RealmPtrSlots[I]^ := nil;
+  for I := 0 to High(RealmIntSlots) do RealmIntSlots[I]^ := 0;
+  GLexCells := nil; GLexNames := nil; GLexConst := nil; GLexHash := nil; GLexCount := 0;
+  GVarHash := nil; GVarCount := 0;
+  FunctionShape := RootShapeFor(VNull);   { as VMInit: replaced once Function.prototype exists }
+  CurRealm := NewR;
+  MultiRealm := True;
+  MultiRealmAny := True;
+  RealmInit := True;
+  try
+    RealmInitProc;
+  finally
+    RealmInit := False;
+  end;
+  SaveRealm(NewR);
+  LoadRealm(Old);
+  CurRealm := Old;
+  if TlsSize > 0 then
+  begin
+    SetLength(After, TlsSize);
+    Move(Base^, After[0], TlsSize);
+    I := 0;
+    while I < TlsSize do
+    begin
+      if Before[I] <> After[I] then
+      begin
+        WriteLn(ErrOutput, 'realmcheck: TLS offset ', I, ' changed');
+        I := (I or 7) + 1;
+      end
+      else Inc(I);
+    end;
+  end;
+  R := NewR;
+  Result := True;
+end;
+
+function FnRealm(O: PObj): Integer; inline;
+begin
+  Result := (O^.Pad shr REALM_SHIFT) and REALM_MAX;
+end;
+
+function GetFunctionRealm(F: TValue; var R: Integer): Boolean;
+var O: PObj;
+begin
+  R := CurRealm;
+  if not IsObject(F) then Exit(True);
+  O := ObjOf(F);
+  case O^.OKind of
+    okFunction, okNative: R := FnRealm(O);
+    okBound: Exit(GetFunctionRealm(O^.Aux1, R));
+    okProxy:
+      begin
+        if not IsObject(O^.Aux2) then Exit(ThrowTypeError('Cannot get the realm of a revoked proxy'));
+        Exit(GetFunctionRealm(O^.Aux1, R));
+      end;
+  end;
+  Result := True;
+end;
+
+function MapIntrinsic(V: TValue; FromR, ToR: Integer): TValue;
+var I: Integer; LF, LT: TValue;
+begin
+  Result := V;
+  if (FromR = ToR) or (Length(Realms) = 0) then Exit;
+  for I := 0 to High(RealmValSlots) do
+    if ((FromR = CurRealm) and (RealmValSlots[I]^ = V)) or ((FromR <> CurRealm) and (Realms[FromR].Vals[I] = V)) then
+    begin
+      if ToR = CurRealm then Exit(RealmValSlots[I]^);
+      Exit(Realms[ToR].Vals[I]);
+    end;
+  { an intrinsic a prelude registered }
+  if FromR = CurRealm then LF := RealmValSlots[IntrinsicListIdx]^ else LF := Realms[FromR].Vals[IntrinsicListIdx];
+  if ToR = CurRealm then LT := RealmValSlots[IntrinsicListIdx]^ else LT := Realms[ToR].Vals[IntrinsicListIdx];
+  if not IsObject(LF) or not IsObject(LT) then Exit;
+  for I := 0 to Min(ArrayLen(ObjOf(LF)), ArrayLen(ObjOf(LT))) - 1 do
+    if ObjOf(LF)^.Elements^.Data[I] = V then Exit(ObjOf(LT)^.Elements^.Data[I]);
+end;
+
+procedure ScanRealms;
+var I, J: Integer;
+begin
+  { the running realm's state, in its threadvars (some are not rooted otherwise: the values a SaveRealm copies must
+    be current) }
+  for I := 0 to High(RealmValSlots) do GCVisit(RealmValSlots[I]^);
+  for J := 0 to High(Realms) do
+    if J <> CurRealm then
+      with Realms[J] do
+      begin
+        for I := 0 to High(Vals) do GCVisit(Vals[I]);
+        for I := 0 to GLexCount - 1 do GCVisit(GLexCells[I]);
+      end;
 end;
 
 procedure ScanRoots;
@@ -306,6 +572,7 @@ begin
   end;
   for I := 0 to OpenCount - 1 do GCVisit(OpenUpvals[I]);
   for I := 0 to GLexCount - 1 do GCVisit(GLexCells[I]);
+  ScanRealms;
   for I := 0 to ExtraRootCount - 1 do GCVisit(ExtraRoots[I]^);
   GCVisit(GlobalObj);
   GCVisit(Pending);
@@ -630,12 +897,25 @@ function ProtoFromNewTarget(Default: TValue; var P: TValue): Boolean;
 begin
   P := Default;
   ConstructProtoTaken := True;
-  if IsObject(CurNewTarget) then
-  begin
-    if not GetV(CurNewTarget, AtomPrototype, P) then Exit(False);
-    if not IsObject(P) then P := Default;
-  end;
+  if IsObject(CurNewTarget) then Exit(GetPrototypeFromConstructor(CurNewTarget, Default, P));
   Result := True;
+end;
+
+function GetPrototypeFromConstructor(C, Default: TValue; var P: TValue): Boolean;
+var R: Integer;
+begin
+  PushRoot(C); PushRoot(Default);
+  Result := GetV(C, AtomPrototype, P);
+  Default := RootAt(TempTop - 1); C := RootAt(TempTop - 2);
+  PopRoots(2);
+  if not Result or IsObject(P) then Exit;
+  P := Default;
+  if MultiRealm then
+  begin
+    { step 3: the intrinsic of the constructor's realm }
+    if not GetFunctionRealm(C, R) then Exit(False);
+    P := MapIntrinsic(Default, CurRealm, R);
+  end;
 end;
 
 function SymKey(Sym: TValue): PStr; inline;
@@ -834,9 +1114,6 @@ end;
 
 { ---------------- functions ---------------- }
 
-threadvar
-  FunctionShape: PShape;
-
 function DescribeTemplate(P: Pointer): string;
 var T: PFuncTemplate;
 begin
@@ -857,6 +1134,7 @@ begin
   else Result := NewObject(AsyncFunctionShape, 3, okFunction);
   Result^.Native := T;
   Result^.Aux2 := RootAt(TempTop - 1);
+  Result^.Pad := UInt32(CurRealm) shl REALM_SHIFT;
   PopRoots(1);
   if GCVerify and not NurseryCellOK(Result^.Aux2) then
   begin
@@ -873,6 +1151,7 @@ var O: PObj;
 begin
   O := NewObject(FunctionShape, 3, okNative);
   O^.Native := Pointer(@Fn);
+  O^.Pad := UInt32(CurRealm) shl REALM_SHIFT;
   O^.Aux1 := MkPtr(AtomOf(Name));
   O^.Aux2 := MkInt(Length);
   O^.Slots[0] := MkInt(Length);
@@ -883,7 +1162,7 @@ end;
 function NewNativeFunctionData(Fn: TNativeFn; const Name: UnicodeString; Length: Integer; Data: UInt32): TValue;
 begin
   Result := NewNativeFunction(Fn, Name, Length);
-  ObjOf(Result)^.Pad := Data;
+  ObjOf(Result)^.Pad := ObjOf(Result)^.Pad or Data;
 end;
 
 function DefineOwn(O: TValue; Key: PStr; V: TValue; Flags: Byte): Boolean;
@@ -926,20 +1205,20 @@ begin
 end;
 
 { a function's 'prototype' object, created on first use }
-function FunctionPrototypeOf(F: TValue): TValue;
-var O, P: PObj; S: Integer; T: PFuncTemplate;
+{ FunctionPrototypeOf's first use of a function's prototype property: made in the function's realm (MakeConstructor
+  ran when it was created) }
+function MakeFunctionPrototype(F: TValue): TValue; noinline;
+var O, P: PObj; T: PFuncTemplate;
 begin
   O := ObjOf(F);
-  S := ShapeLookup(O^.Shape, AtomPrototype);
-  if S >= 0 then Exit(GetSlot(O, S));
-  if O^.OKind <> okFunction then Exit(VUndefined);
   T := PFuncTemplate(O^.Native);
   if T^.IsGenerator then
   begin
     { 15.5.4 / 15.6.4: a generator's prototype inherits %GeneratorPrototype% (or the async one) and has no
       constructor property }
     PushRoot(F);
-    if T^.IsAsync then P := NewPlainObject(AsyncGeneratorProto, 4) else P := NewPlainObject(GeneratorProto, 4);
+    if T^.IsAsync then P := NewPlainObject(MapIntrinsic(AsyncGeneratorProto, CurRealm, FnRealm(O)), 4)
+    else P := NewPlainObject(MapIntrinsic(GeneratorProto, CurRealm, FnRealm(O)), 4);
     PushRoot(MkPtr(P));
     F := RootAt(TempTop - 2);
     AddProperty(ObjOf(F), AtomPrototype, RootAt(TempTop - 1), pfWritable);
@@ -949,13 +1228,23 @@ begin
   end;
   if T^.IsArrow or T^.IsMethod or T^.IsAsync then Exit(VUndefined);
   PushRoot(F);
-  P := NewPlainObject(ObjectProto, 4);
+  P := NewPlainObject(MapIntrinsic(ObjectProto, CurRealm, FnRealm(O)), 4);
   PushRoot(MkPtr(P));
   AddProperty(P, AtomConstructor, RootAt(TempTop - 2), pfHidden);
   F := RootAt(TempTop - 2);
   AddProperty(ObjOf(F), AtomPrototype, RootAt(TempTop - 1), pfWritable);
   Result := RootAt(TempTop - 1);
   PopRoots(2);
+end;
+
+function FunctionPrototypeOf(F: TValue): TValue;
+var O: PObj; S: Integer;
+begin
+  O := ObjOf(F);
+  S := ShapeLookup(O^.Shape, AtomPrototype);
+  if S >= 0 then Exit(GetSlot(O, S));
+  if O^.OKind <> okFunction then Exit(VUndefined);
+  Result := MakeFunctionPrototype(F);
 end;
 
 { 10.1.14 GetPrototypeFromConstructor's Get(constructor, "prototype"): a function's own data property (made on
@@ -973,28 +1262,64 @@ begin
   Result := GetV(NewTarget, AtomPrototype, Proto);
 end;
 
-{ OrdinaryCreateFromConstructor's intrinsicDefaultProto, used when newTarget's prototype is not an object: a
-  built-in class written in a prelude (marked by MarkIntrinsicClass) falls back to its own prototype property,
-  any other constructor to %Object.prototype% }
-function DefaultConstructProto(F: TValue): TValue;
-var O: PObj; S: Integer;
+{ OrdinaryCreateFromConstructor's intrinsicDefaultProto for constructor F, used when newTarget NT's prototype
+  is not an object (10.1.14 step 3: the intrinsic of NT's realm): a built-in class written in a prelude (marked
+  by MarkIntrinsicClass) falls back to its own prototype property, any other constructor to %Object.prototype% }
+function DefaultConstructProto(F, NT: TValue; var P: TValue): Boolean;
+var O: PObj; S, R, FR: Integer;
 begin
   O := ObjOf(F);
+  P := ObjectProto;
+  FR := CurRealm;
   if (O^.OKind = okFunction) and ((O^.Pad and INTRINSIC_CLASS) <> 0) then
   begin
     S := ShapeLookup(O^.Shape, AtomPrototype);
-    if (S >= 0) and ((O^.Shape^.PFlags[S] and pfAccessor) = 0) then Exit(GetSlot(O, S));
+    if (S >= 0) and ((O^.Shape^.PFlags[S] and pfAccessor) = 0) then
+    begin
+      P := GetSlot(O, S);
+      FR := FnRealm(O);
+    end;
   end;
-  Result := ObjectProto;
+  Result := True;
+  if MultiRealm then
+  begin
+    if not GetFunctionRealm(NT, R) then Exit(False);
+    P := MapIntrinsic(P, FR, R);
+  end;
 end;
 
-{ markIntrinsic(C), for preludes: C is a built-in class (DefaultConstructProto) }
-function MarkIntrinsicClass(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+procedure AppendIntrinsic(V: TValue);
 begin
-  if (Argc >= 1) and IsObject(Args[1]) and (ObjOf(Args[1])^.OKind = okFunction) then
-    ObjOf(Args[1])^.Pad := ObjOf(Args[1])^.Pad or INTRINSIC_CLASS;
+  PushRoot(V);
+  if not IsObject(IntrinsicList) then IntrinsicList := MkPtr(NewArray(0, 64));
+  ArrayPush(ObjOf(IntrinsicList), RootAt(TempTop - 1));
+  PopRoots(1);
+end;
+
+{ markIntrinsic(V), for preludes: V is an intrinsic. A function is a built-in class (DefaultConstructProto):
+  it and its prototype are registered.
+  markIntrinsic(V, C): V, an intrinsic of the running realm, as the same intrinsic of constructor C's realm
+  (10.1.14 GetPrototypeFromConstructor step 3 for a prelude's OrdinaryCreateFromConstructor) }
+function MarkIntrinsicClass(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var O: PObj; S, R: Integer;
+begin
   Res := VUndefined;
+  if Argc >= 2 then
+  begin
+    if not GetFunctionRealm(Args[2], R) then Exit(False);
+    Res := MapIntrinsic(Args[1], CurRealm, R);
+    Exit(True);
+  end;
   Result := True;
+  if (Argc < 1) or not IsObject(Args[1]) then Exit;
+  O := ObjOf(Args[1]);
+  AppendIntrinsic(Args[1]);
+  if O^.OKind <> okFunction then Exit;
+  O := ObjOf(Args[1]);
+  O^.Pad := O^.Pad or INTRINSIC_CLASS;
+  S := ShapeLookup(O^.Shape, AtomPrototype);
+  if (S >= 0) and ((O^.Shape^.PFlags[S] and pfAccessor) = 0) and IsObject(GetSlot(O, S)) then
+    AppendIntrinsic(GetSlot(O, S));
 end;
 
 { ---------------- property access ---------------- }
@@ -1476,13 +1801,21 @@ begin
 end;
 
 function SetVS(Obj: TValue; Key: PStr; V: TValue; Strict: Boolean): Boolean;
+var W: TValue; Ok: Boolean;
 begin
   if IsObject(Obj) then Exit(SetOnObjectS(Obj, Key, V, Strict));
   if IsNullish(Obj) then
     Exit(ThrowTypeError('Cannot set properties of ' + TypeOfStr(Obj) + ' (setting ''' + StrToUnicode(Key) + ''')'));
-  { a primitive base: there is no object to hold the property }
-  if Strict then Exit(ThrowTypeError('Cannot create property ''' + StrToUnicode(Key) + ''' on ' + TypeOfStr(Obj)));
-  Result := True;
+  { 6.2.5.6 PutValue step 5.b: ToObject(base).[[Set]](name, value, base) (a setter or a proxy on the prototype
+    chain sees the primitive as its receiver; nothing can be created on it) }
+  PushRoot(V); PushRoot(Obj);
+  if not ToObjectHook(Obj, W) then begin PopRoots(2); Exit(False); end;
+  Ok := False;
+  Result := SetReceiverHook(W, Key, RootAt(TempTop - 2), RootAt(TempTop - 1), Ok);
+  Obj := RootAt(TempTop - 1);
+  PopRoots(2);
+  if Result and not Ok and Strict then
+    Result := ThrowTypeError('Cannot create property ''' + StrToUnicode(Key) + ''' on ' + TypeOfStr(Obj));
 end;
 
 function SetVT(Obj: TValue; Key: PStr; V: TValue): Boolean;
@@ -2367,6 +2700,16 @@ begin
 end;
 
 
+{ 10.2.1 [[Call]] step 2 of a class constructor: the TypeError of its realm }
+function ThrowClassCall(F: PObj): Boolean;
+var R0: Integer;
+begin
+  R0 := CurRealm;
+  if MultiRealm then SwitchRealm(FnRealm(F));
+  Result := ThrowTypeError('Class constructor cannot be invoked without ''new''');
+  SwitchRealm(R0);
+end;
+
 function CallValue(F, This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; Base, I, ArgBase: Integer; BArgs: PValueArray; N: Integer; Tmp: array[0..15] of TValue;
   P: PValue; SavedTop: Integer;
@@ -2390,9 +2733,18 @@ begin
         PushRoot(CurNewTarget);
         CurNewTarget := ConstructNT;
         ConstructNT := VUndefined;
-        NativeData := O^.Pad;
+        NativeData := O^.Pad and $00FFFFFF;
         NativeSelf := MkPtr(O);
-        Result := TNativeFn(O^.Native)(@VStack[Base], Argc, Res);
+        if MultiRealmAny and (FnRealm(O) <> CurRealm) then
+        begin
+          { a built-in function runs in its own realm (10.3.1 [[Call]] step 6) }
+          I := CurRealm;
+          SwitchRealm(FnRealm(O));
+          Result := TNativeFn(O^.Native)(@VStack[Base], Argc, Res);
+          SwitchRealm(I);
+        end
+        else
+          Result := TNativeFn(O^.Native)(@VStack[Base], Argc, Res);
         CurNewTarget := RootAt(TempTop - 1);
         PopRoots(1);
         StackTop := SavedTop;
@@ -2413,7 +2765,7 @@ begin
   else
     begin
       if (O^.OFlags and 1) <> 0 then
-        Exit(ThrowTypeError('Class constructor cannot be invoked without ''new'''));
+        Exit(ThrowClassCall(O));
       SavedTop := StackTop;
       ArgBase := StackTop;
       if ArgBase + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
@@ -2462,7 +2814,17 @@ begin
       PushRoot(Res);
       if not GetV(RootAt(TempTop - 2), AtomPrototype, Proto) then Result := False
       else if IsObject(Proto) and (ObjOf(RootAt(TempTop - 1))^.Shape^.Proto <> Proto) then
-        SetProto(ObjOf(RootAt(TempTop - 1)), Proto);
+        SetProto(ObjOf(RootAt(TempTop - 1)), Proto)
+      else if not IsObject(Proto) and MultiRealm then
+      begin
+        { the default prototype of new.target's realm }
+        if not GetFunctionRealm(RootAt(TempTop - 2), N) then Result := False
+        else
+        begin
+          Proto := MapIntrinsic(ObjOf(RootAt(TempTop - 1))^.Shape^.Proto, FnRealm(ObjOf(RootAt(TempTop - 3))), N);
+          if ObjOf(RootAt(TempTop - 1))^.Shape^.Proto <> Proto then SetProto(ObjOf(RootAt(TempTop - 1)), Proto);
+        end;
+      end;
       Res := RootAt(TempTop - 1);
       PopRoots(1);
     end;
@@ -2509,7 +2871,11 @@ begin
   end;
   PushRoot(F); PushRoot(NewTarget);
   if not PrototypeForConstruct(NewTarget, Proto) then begin PopRoots(2); Exit(False); end;
-  if not IsObject(Proto) then Proto := DefaultConstructProto(RootAt(TempTop - 2));
+  if not IsObject(Proto) and not DefaultConstructProto(RootAt(TempTop - 2), RootAt(TempTop - 1), Proto) then
+  begin
+    PopRoots(2);
+    Exit(False);
+  end;
   PushRoot(Proto);
   ThisO := NewObject(RootShapeFor(RootAt(TempTop - 1)), Max(4, T^.ExpectedProps), okPlain);
   F := RootAt(TempTop - 3); NewTarget := RootAt(TempTop - 2);
@@ -2572,17 +2938,43 @@ begin
 end;
 
 { sets up a frame whose this is at Args[-1] (the slot before the first argument) }
+{ the frame of a function of another realm is set up in that realm (10.2.1.1 PrepareForOrdinaryCall: its this
+  binding, its arguments object); the caller's realm comes back until the callee runs (Execute's LReload) }
+function PushBytecodeFrameInRealm(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
+  NewTarget: TValue): Boolean;
+var R0: Integer;
+begin
+  R0 := CurRealm;
+  SwitchRealm(FnRealm(FObj));
+  Result := PushBytecodeFrame(FObj, This, Args, Argc, RetIdx, Kind, NewTarget);
+  SwitchRealm(R0);
+end;
+
 function PushBytecodeFrame(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
   NewTarget: TValue): Boolean;
 var T: PFuncTemplate; Base, I, NP, Extra: Integer; Fr: PFrame; R: PValue; A: PObj; FV, Tmp, ArgsObj: TValue; FI: Integer;
 begin
+  if MultiRealmAny and (FnRealm(FObj) <> CurRealm) then
+    Exit(PushBytecodeFrameInRealm(FObj, This, Args, Argc, RetIdx, Kind, NewTarget));
   T := PFuncTemplate(FObj^.Native);
   Base := (Args - VStack) - 1;
   if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
     Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
   FV := MkPtr(FObj);
   R := @VStack[Base];
-  if not T^.IsStrict and not T^.IsArrow and ((This = VUndefined) or (This = VNull)) then This := GlobalObj;
+  if not T^.IsStrict and not T^.IsArrow then
+    { 10.2.1.2 OrdinaryCallBindThis: the global object for undefined and null, a primitive as an object of the
+      callee's realm (the running one here) }
+    if (This = VUndefined) or (This = VNull) then This := GlobalObj
+    else if not IsObject(This) and (This <> VHole) then
+    begin
+      PushRoot(FV); PushRoot(NewTarget);
+      Tmp := This;
+      if not ToObjectHook(Tmp, This) then begin PopRoots(2); Exit(False); end;
+      NewTarget := RootAt(TempTop - 1); FV := RootAt(TempTop - 2);
+      PopRoots(2);
+      FObj := ObjOf(FV);
+    end;
   R[0] := This;
   NP := T^.NumParams;
   if (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then
@@ -4102,7 +4494,7 @@ begin
           { PushBytecodeFrame's work for a function with no rest parameter or arguments object, not async and
             not a class constructor; the callee then runs here }
           VA := R[A];
-          if not IsObject(VA) then goto LBail;
+          if not IsObject(VA) or MultiRealmAny then goto LBail;
           O := ObjOf(VA);
           if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then goto LBail;
           T := PFuncTemplate(O^.Native);
@@ -4114,7 +4506,17 @@ begin
           if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
           Fr^.PC := PC;
           R := @VS[Base];
-          if not T^.IsStrict and not T^.IsArrow and ((R[0] = VUndefined) or (R[0] = VNull)) then R[0] := GlobalObj;
+          if not T^.IsStrict and not T^.IsArrow then
+          begin
+            { a primitive this: Execute's PushBytecodeFrame boxes it (no frame is pushed yet) }
+            V := R[0];
+            if (V and TAG_MASK) = TAG_PTR then
+            begin
+              if PCell(PtrUInt(V and PTR_MASK))^.Kind <> ckObject then goto LBail;
+            end
+            else if (V = VUndefined) or (V = VNull) then R[0] := GlobalObj
+            else goto LBail;
+          end;
           if Argc < T^.NumParams then J := Argc + 1 else J := T^.NumParams + 1;
           while J < T^.MaxRegs do
           begin
@@ -4141,7 +4543,7 @@ begin
       opRet, opRetUndef:
         begin
           { a call's or a construction's return to a bytecode caller inside this Execute }
-          if (Fr^.Kind > 1) or (FrameTop - 1 = StopFrame) then goto LBail;
+          if (Fr^.Kind > 1) or (FrameTop - 1 = StopFrame) or MultiRealmAny then goto LBail;
           if TOp(I and $FF) = opRet then V := R[A] else V := VUndefined;
           if (Fr^.Kind = 1) and not IsObject(V) then
           begin
@@ -4197,8 +4599,34 @@ LBail:
   Result := PC - 1;
 end;
 
+{ Execute's frame Fr runs in its function's realm }
+procedure SyncFrameRealm(Fr: PFrame); noinline;
+begin
+  if IsObject(Fr^.Closure) and (ObjOf(Fr^.Closure)^.OKind = okFunction) and
+     (FnRealm(ObjOf(Fr^.Closure)) <> CurRealm) then
+    SwitchRealm(FnRealm(ObjOf(Fr^.Closure)));
+end;
+
+{ 10.2.2 [[Construct]] steps 10-12 of a derived constructor: its errors come after the caller's context is
+  restored, so from the caller's realm (Kind 0 the TypeError of a non-object result, 1 the ReferenceError of an
+  uninitialized this; EntryRealm the realm Execute was called from) }
+procedure XThrowConstructResult(Kind, StopFrame, EntryRealm: Integer); noinline;
+var R0, RC: Integer;
+begin
+  R0 := CurRealm;
+  RC := R0;
+  if MultiRealm then
+    if (FrameTop - 1 > StopFrame) and IsObject(Frames[FrameTop - 2].Closure) and
+       (ObjOf(Frames[FrameTop - 2].Closure)^.OKind = okFunction) then RC := FnRealm(ObjOf(Frames[FrameTop - 2].Closure))
+    else if FrameTop - 1 = StopFrame then RC := EntryRealm;
+  SwitchRealm(RC);
+  if Kind = 0 then ThrowTypeError('Derived constructors may only return object or undefined')
+  else ThrowError('ReferenceError', 'Must call super constructor in derived class before accessing ''this'' or returning from derived constructor');
+  SwitchRealm(R0);
+end;
+
 function Execute(StopFrame: Integer; var Res: TValue): Boolean;
-label LThrow, LReload, LNext;
+label LThrow, LReload, LNext, LDone;
 var
   Fr: PFrame;
   Tpl: PFuncTemplate;
@@ -4227,9 +4655,13 @@ var
   SavedTop: Integer;
   NP2: Integer;
   ICB: PPropIC;
+  R0: Integer;
 begin
+  R0 := CurRealm;   { the caller's realm, restored when this returns }
 LReload:
   Fr := @Frames[FrameTop - 1];
+  { the running function's realm (a call or a return crossed into another) }
+  if MultiRealmAny then SyncFrameRealm(Fr);
   Tpl := Fr^.Tpl;
   StackTop := Fr^.Base + Tpl^.MaxRegs;
   Code := @Tpl^.Code[0];
@@ -5117,7 +5549,7 @@ LReload:
                 goto LReload;
               end;
               if not PrototypeForConstruct(VA, V) then goto LThrow;
-              if not IsObject(V) then V := DefaultConstructProto(R[A]);
+              if not IsObject(V) and not DefaultConstructProto(R[A], R[A], V) then goto LThrow;
               PushRoot(V);
               O := NewObject(RootShapeFor(RootAt(TempTop - 1)), Max(4, T^.ExpectedProps), okPlain);
               PopRoots(1);
@@ -5142,7 +5574,7 @@ LReload:
           begin
             if (O^.OFlags and 1) <> 0 then
             begin
-              ThrowTypeError('Class constructor cannot be invoked without ''new''');
+              ThrowClassCall(O);
               goto LThrow;
             end;
             StackTop := Max(StackTop, Fr^.Base + A + 2 + Argc);
@@ -5157,7 +5589,7 @@ LReload:
             end;
             goto LReload;
           end;
-          if O^.OKind = okNative then
+          if (O^.OKind = okNative) and not MultiRealmAny then
           begin
             SavedTop := StackTop;
             StackTop := Fr^.Base + A + 2 + Argc;
@@ -5165,7 +5597,7 @@ LReload:
             PushRoot(CurNewTarget);   { a plain call: the native must not see an outer new.target }
             CurNewTarget := VUndefined;
             NP2 := TempTop;
-            NativeData := O^.Pad;
+            NativeData := O^.Pad and $00FFFFFF;
             NativeSelf := MkPtr(O);
             Ok := TNativeFn(O^.Native)(@R[A + 1], Argc, V);
             if RootCheck and (TempTop <> NP2) then
@@ -5227,12 +5659,12 @@ LReload:
               Fr^.PC := PC;
               if V <> VUndefined then
               begin
-                ThrowTypeError('Derived constructors may only return object or undefined');
+                XThrowConstructResult(0, StopFrame, R0);
                 goto LThrow;
               end;
               if R[0] = VHole then
               begin
-                ThrowError('ReferenceError', 'Must call super constructor in derived class before accessing ''this'' or returning from derived constructor');
+                XThrowConstructResult(1, StopFrame, R0);
                 goto LThrow;
               end;
             end;
@@ -5246,7 +5678,7 @@ LReload:
           if FrameTop = StopFrame then
           begin
             Res := V;
-            Exit(True);
+            begin Result := True; goto LDone; end;
           end;
           if Fr^.Kind <> 2 then VStack[Fr^.RetIdx] := V;
           goto LReload;
@@ -5616,7 +6048,7 @@ LReload:
           GenYieldRaw := True;
           SuspendedByAwait := False;
           Res := V;
-          Exit(True);
+          begin Result := True; goto LDone; end;
         end;
       opLoadCallee: R[A] := Fr^.Closure;
       opSuperCallUp:
@@ -5775,7 +6207,7 @@ LReload:
                 SuspendedByAwait := True;
                 GenYieldRaw := False;
                 Res := VA;
-                Exit(True);
+                begin Result := True; goto LDone; end;
               end;
             1, 3:
               begin
@@ -5792,7 +6224,7 @@ LReload:
                     SuspendedByAwait := True;
                     GenYieldRaw := False;
                     Res := V;
-                    Exit(True);
+                    begin Result := True; goto LDone; end;
                   end;
                   R[B + 4] := MkInt(0);
                   R[A] := V;
@@ -5804,7 +6236,7 @@ LReload:
                 SuspendedByAwait := False;
                 GenYieldRaw := False;
                 Res := V;
-                Exit(True);
+                begin Result := True; goto LDone; end;
               end;
             2:
               begin
@@ -5902,7 +6334,7 @@ LReload:
           SaveSuspension(Fr, Tpl, R, A, PC, Integer(Code[PC - 1] shr 40));
           Res := RootAt(TempTop - 1);
           PopRoots(1);
-          Exit(True);
+          begin Result := True; goto LDone; end;
         end;
       opGenStart:
         begin
@@ -5929,7 +6361,7 @@ LReload:
           if FrameTop = StopFrame then
           begin
             Res := V;
-            Exit(True);
+            begin Result := True; goto LDone; end;
           end;
           if Fr^.Kind <> 2 then VStack[Fr^.RetIdx] := V;
           goto LReload;
@@ -6015,8 +6447,10 @@ LThrow:
       Dec(FrameTop);
     end;
     Res := VUndefined;
-    Exit(False);
+    begin Result := False; goto LDone; end;
   end;
+LDone:
+  if CurRealm <> R0 then SwitchRealm(R0);
 end;
 
 { ---------------- entry ---------------- }
@@ -6077,6 +6511,19 @@ begin
   AtomByteOffset := AtomOf('byteOffset');
   AtomBuffer := AtomOf('buffer');
   FunctionShape := RootShapeFor(VNull);   { replaced once Function.prototype exists }
+  { a realm's intrinsics (the builtins' Init procedures make them) }
+  RealmVals([@ObjectProto, @FunctionProto, @ArrayProto, @StringProto, @NumberProto, @BooleanProto, @ErrorProto,
+    @IteratorProto, @ArrayIteratorProto, @GeneratorProto, @MapProto, @SetProtoObj, @SymbolProto, @GlobalObj,
+    @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @MapIterNextFn, @SetIterNextFn,
+    @GenFunctionProto, @AsyncFunctionProto, @AsyncGenFunctionProto, @AsyncGeneratorProto, @AsyncIteratorProto,
+    @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
+    @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto]);
+  AddRoot(@IntrinsicList);
+  IntrinsicList := VUndefined;
+  RealmVals([@IntrinsicList]);
+  IntrinsicListIdx := High(RealmValSlots);
+  RealmPtrs([@EmptyShapeForArray, @FunctionShape, @GenFunctionShape, @AsyncFunctionShape, @AsyncGenFunctionShape,
+    @ArgsShapeMapped, @ArgsShapeUnmapped]);
 end;
 
 procedure SetGenNextNative(P: Pointer);

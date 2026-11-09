@@ -209,6 +209,7 @@ procedure InitTemporal;
 var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..6] of TValue; I: Integer; Ok: Boolean;
 begin
   if not TemporalRooted then begin AddRoot(@TemporalInternalsV); TemporalRooted := True; end;
+  RealmVals([@TemporalInternalsV]);
   TemporalInternalsV := VUndefined;
   if not CompilePrelude('<temporal>', TemporalSrc, T, Err) then raise Exception.Create('temporal prelude: ' + string(Err));
   if not MakeScriptClosure(T, Clo) then raise Exception.Create('temporal prelude closure');

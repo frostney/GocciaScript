@@ -1,4 +1,4 @@
-(function (G) {
+(function (G, markIntrinsic) {
   "use strict";
   // ECMA-262 27.1 Iterator, %Iterator.prototype% helpers, %IteratorHelperPrototype%, %WrapForValidIteratorPrototype%,
   // Iterator.from / concat / zip / zipKeyed. A helper is a generator (the spec's CreateIteratorFromClosure) behind an
@@ -419,6 +419,7 @@
     if (new.target === undefined || new.target === Iterator) throw new TypeErr("Iterator is an abstract class and cannot be constructed directly");
   };
   defineProperty(Iterator, "prototype", { value: IterProto, writable: false, enumerable: false, configurable: false });
+  markIntrinsic(Iterator);
 
   function getOptions(options) {
     if (options === undefined) return create(null);

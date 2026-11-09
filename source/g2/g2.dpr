@@ -290,7 +290,8 @@ var T: PFuncTemplate; Err: UnicodeString; Clo, S: TValue;
 begin
   if Argc >= 1 then S := Args[1] else S := VUndefined;
   if not ToStringV(S, S) then Exit(False);
-  if not ParseAndCompile(StrToUnicode(StrOf(S)), '<evalScript>', False, T, Err, 1) then
+  { the Script's completion value is the result (ScriptEvaluation step 13) }
+  if not ParseAndCompile(StrToUnicode(StrOf(S)), '<evalScript>', True, T, Err, 1) then
   begin
     if CompileFailKind = 1 then Exit(ThrowError(ParseErrorName, Err));
     Exit(ThrowError('SyntaxError', 'G2 compile: ' + Err));
@@ -301,9 +302,50 @@ end;
 
 function Host_GC(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
+  { a full collection, as the allocator runs one: the nursery first }
+  CollectMinor;
   CollectMajor;
   Res := VUndefined;
   Result := True;
+end;
+
+var
+  { the $262.js harness file, which createRealm runs in each new realm }
+  HostHarnessSrc: UnicodeString;
+
+function Host_CreateRealm(Args: PValue; Argc: Integer; var Res: TValue): Boolean; forward;
+
+{ the hidden G2Host object $262.js reads, in the running realm }
+procedure InstallHostHooks;
+var H: TValue;
+begin
+  H := MkPtr(NewPlainObject(ObjectProto, 8));
+  DefineOwn(GlobalObj, AtomOf('G2Host'), H, pfHidden);
+  { H is re-read after each allocation: it may move }
+  GetV(GlobalObj, AtomOf('G2Host'), H);
+  DefineNative(H, 'evalScript', Host_EvalScript, 1);
+  GetV(GlobalObj, AtomOf('G2Host'), H);
+  DefineNative(H, 'gc', Host_GC, 0);
+  GetV(GlobalObj, AtomOf('G2Host'), H);
+  DefineNative(H, 'detachArrayBuffer', Host_Detach, 1);
+  GetV(GlobalObj, AtomOf('G2Host'), H);
+  DefineNative(H, 'createRealm', Host_CreateRealm, 0);
+end;
+
+{ G2Host.createRealm(): $262.createRealm, the $262 object of a new realm }
+function Host_CreateRealm(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var R, Old: Integer; T: PFuncTemplate; Err: UnicodeString; Clo: TValue;
+begin
+  if HostHarnessSrc = '' then Exit(ThrowTypeError('createRealm needs the $262.js harness'));
+  if not CreateRealm(R) then Exit(False);
+  Old := CurRealm;
+  SwitchRealm(R);
+  InstallHostHooks;
+  Result := ParseAndCompile(HostHarnessSrc, '$262.js', False, T, Err, 1);
+  if not Result then ThrowError('SyntaxError', Err)
+  else Result := MakeScriptClosure(T, Clo) and CallValue(Clo, GlobalObj, nil, 0, Res) and
+    GetV(GlobalObj, AtomOf('$262'), Res);
+  SwitchRealm(Old);
 end;
 
 procedure RunTest262Host;
@@ -325,19 +367,14 @@ begin
     else TestFile := ParamStr(I);
     Inc(I);
   end;
-  EngineInit;
+  { G2_NURSERY_KB and G2_GC_VERIFY: the GC stress settings of scripts/g2/gcstress.sh for test262 runs }
+  GCVerify := GetEnvironmentVariable('G2_GC_VERIFY') <> '';
+  if GetEnvironmentVariable('G2_NURSERY_KB') <> '' then EngineInit(StrToInt(GetEnvironmentVariable('G2_NURSERY_KB')) * 1024)
+  else EngineInit;
   AgentCannotSuspend := GetEnvironmentVariable('G2_CANNOT_BLOCK') <> '';
   InitAgentHost;
   { the host object $262.js reads: the agent API moves into it, so $262 stays the only harness global }
-  H := MkPtr(NewPlainObject(ObjectProto, 8));
-  DefineOwn(GlobalObj, AtomOf('G2Host'), H, pfHidden);
-  { H is re-read after each allocation: it may move }
-  GetV(GlobalObj, AtomOf('G2Host'), H);
-  DefineNative(H, 'evalScript', Host_EvalScript, 1);
-  GetV(GlobalObj, AtomOf('G2Host'), H);
-  DefineNative(H, 'gc', Host_GC, 0);
-  GetV(GlobalObj, AtomOf('G2Host'), H);
-  DefineNative(H, 'detachArrayBuffer', Host_Detach, 1);
+  InstallHostHooks;
   if GetV(GlobalObj, AtomOf('$262agent'), Agent) then
   begin
     GetV(GlobalObj, AtomOf('G2Host'), H);
@@ -353,6 +390,7 @@ begin
   for I := 0 to High(Harness) do
   begin
     if not ReadSourceFile(Harness[I], Src) then Outcome('harness', '', 'cannot read', UnicodeString(Harness[I]));
+    if ExtractFileName(Harness[I]) = '$262.js' then HostHarnessSrc := Src;
     if not ParseAndCompile(Src, UnicodeString(Harness[I]), False, T, Err, 1) then
       Outcome('harness', '', Err, UnicodeString(Harness[I]));
     if not (RunScript(T) and RunMicrotasks) then
@@ -449,25 +487,7 @@ begin
     with TSampler.Create(False) do FreeOnTerminate := True;
   if GetEnvironmentVariable('G2_WATCHDOG') <> '' then
     with TWatchdog.Create(True) do begin Secs := StrToInt(GetEnvironmentVariable('G2_WATCHDOG')); FreeOnTerminate := True; Start; end;
-  InitBuiltins;
-  InitBuiltins2;
-  InitRegExp;
-  InitEval;
-  InitPromise;
-  InitBuiltins3;
-  InitBuiltins4;
-  InitAtomics;
-  InitObjModel;
-  InitArrayProto;
-  InitIterHelpers;
-  InitTypedArrays;
-  InitDisposal;
-  InitModules;
-  InitBuiltins5;
-  InitTemporal;
-  InitJSON;
-  InitDate;
-  InitIntl;
+  InitIntrinsics;
   { test262 hosts: $262agent (G2.Agent), and a main agent that may not block (flag CanBlockIsFalse) }
   if GetEnvironmentVariable('G2_AGENT') <> '' then InitAgentHost;
   AgentCannotSuspend := GetEnvironmentVariable('G2_CANNOT_BLOCK') <> '';
