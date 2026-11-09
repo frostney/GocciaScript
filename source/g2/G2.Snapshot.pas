@@ -193,6 +193,9 @@ function ReadTemplate(var R: TReader): PFuncTemplate;
 var T: PFuncTemplate; I, N: Integer; Flags: Byte;
 begin
   New(T);
+  { every field starts zeroed (New leaves the unmanaged ones as garbage: the runtime caches, such as new's, must
+    start empty) }
+  FillChar(T^, SizeOf(TFuncTemplate), 0);
   RegisterTemplate(T);
   T^.Name := R.Str;
   T^.CodeLen := R.I32; T^.EntryPC := R.I32; T^.NumParams := R.I32; T^.MaxRegs := R.I32;
