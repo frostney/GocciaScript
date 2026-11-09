@@ -900,6 +900,8 @@ end;
 
 threadvar
   AtomTable: array of PStr;
+  { the atoms of the one-code-unit strings below U+0100, made on first use (SubString of length 1) }
+  CharAtoms: array[0..255] of PStr;
   AtomCount: Integer;
   AtomMask: Integer;
 
@@ -1178,11 +1180,20 @@ begin
 end;
 
 function SubString(S: PStr; Start, Len: Integer): TValue;
-var R: PStr;
+var R: PStr; C: Integer;
 begin
   if (Start = 0) and (Len = S^.Len) then Exit(MkPtr(S));
   if Len <= 0 then Exit(MkPtr(AtomOf('')));
-  if Len = 1 then Exit(MkPtr(AtomOf(UnicodeString(StrChars(S)[Start]))));
+  if Len = 1 then
+  begin
+    C := Ord(StrChars(S)[Start]);
+    if C < 256 then
+    begin
+      if CharAtoms[C] = nil then CharAtoms[C] := AtomOf(UnicodeString(WideChar(C)));
+      Exit(MkPtr(CharAtoms[C]));
+    end;
+    Exit(MkPtr(AtomOf(UnicodeString(StrChars(S)[Start]))));
+  end;
   PushRoot(MkPtr(S));
   R := NewString(Len);
   S := StrOf(RootAt(TempTop - 1));
@@ -1931,6 +1942,7 @@ begin
   NurseryStart := nil; NurseryTop := nil; NurseryLimit := nil;
   for I := 0 to High(AtomTable) do if AtomTable[I] <> nil then FreeMem(AtomTable[I]);
   AtomTable := nil; AtomCount := 0; AtomMask := 0;
+  FillChar(CharAtoms, SizeOf(CharAtoms), 0);
   for I := 0 to KeyAtomCount - 1 do FreeMem(KeyAtoms[I]);
   KeyAtoms := nil; KeyAtomCount := 0;
   for I := 0 to ShapeCount - 1 do Dispose(AllShapes[I]);
