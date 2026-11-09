@@ -1751,6 +1751,15 @@ begin
       W := ObjOf(P);
       { a proxy on the chain: its [[Set]] with this object as the receiver }
       if W^.OKind = okProxy then Exit(ProxySetHook(P, Key, V, Obj, Ok));
+      { 10.4.5.5 a typed array on the chain answers a canonical numeric key: an invalid index sets nothing (true), a
+        valid one is a writable data property, so the receiver gets its own }
+      if W^.OKind = okTypedArray then
+        if CanonicalNumericNonIndex(Key) then Exit(True)
+        else if IndexFromString(Key, Idx) then
+        begin
+          if TAOutOfBounds(W) or (Idx >= TALength(W)) then Exit(True);
+          Break;
+        end;
       S := ShapeLookup(W^.Shape, Key);
       if S >= 0 then
       begin
@@ -6285,8 +6294,49 @@ LReload:
       opThrowConst:
         begin
           Fr^.PC := PC;
-          ThrowTypeError('Assignment to constant variable.');
+          { B = 1: 13.5.1.2 delete of a super reference; 2: a strict assignment to a binding (Consts[C]) its object
+            environment lost }
+          case (I shr 24) and $FFFF of
+            1: ThrowError('ReferenceError', 'Unsupported reference to ''super''');
+            2: ThrowError('ReferenceError', StrToUnicode(PStr(PtrOf(K[I shr 40]))) + ' is not defined');
+          else ThrowTypeError('Assignment to constant variable.');
+          end;
           goto LThrow;
+        end;
+      opSuperBase:
+        begin
+          VB := R[(I shr 24) and $FFFF];
+          if IsObject(VB) then R[A] := ObjOf(VB)^.Shape^.Proto else R[A] := VUndefined;
+        end;
+      opGetSuperB, opSetSuperB:
+        begin
+          { GetValue / PutValue: ToObject(base) (null: TypeError), then ToPropertyKey, then [[Get]] / [[Set]] with
+            this as the receiver }
+          Fr^.PC := PC;
+          B := (I shr 24) and $FFFF;
+          CI := SarInt64(Int64(I), 40);
+          if not IsObject(R[B]) then
+          begin
+            if CI >= 0 then ThrowNullishBase(R[B], MkPtr(Tpl^.ICs[CI].Key), TOp(I and $FF) = opSetSuperB)
+            else ThrowNullishBase(R[B], R[-1 - CI], TOp(I and $FF) = opSetSuperB);
+            goto LThrow;
+          end;
+          if CI < 0 then
+          begin
+            if not ToPropKey(R[-1 - CI], Key) then goto LThrow;
+            R[-1 - CI] := KeyToValue(Key);
+          end
+          else Key := Tpl^.ICs[CI].Key;
+          if TOp(I and $FF) = opGetSuperB then
+          begin
+            if not GetFromObject(ObjOf(R[B]), Key, R[B + 1], V) then goto LThrow;
+            R[A] := V;
+          end
+          else
+          begin
+            if not SetReceiverHook(R[B], Key, R[A], R[B + 1], Bool) then goto LThrow;
+            if not Bool and Tpl^.IsStrict then begin XThrowReadOnlySuper(Key); goto LThrow; end;
+          end;
         end;
       opIterCloseThrow:
         if IsObject(R[A]) then

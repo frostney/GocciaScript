@@ -83,6 +83,10 @@ type
     ,opWithGet               { R[A] := Get(R[B], Consts[C]) }
     ,opWithSet               { Set(R[A], Consts[C], R[B], false) }
     ,opDelGlobal             { R[A] := delete of the global object's property Consts[C] (false for a global lexical) }
+    ,opSuperBase             { 13.3.7 a super reference's GetSuperBase: R[A] := the prototype of home object R[B] }
+    ,opGetSuperB             { R[A] := GetValue of the super reference with base R[B], this R[B + 1], key ICs[C] or
+                               R[-1 - C] (ToPropertyKey'd in place) }
+    ,opSetSuperB             { PutValue(that super reference, R[A]) }
   );
 
   PFuncTemplate = ^TFuncTemplate;

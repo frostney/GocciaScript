@@ -352,6 +352,9 @@ type
     procedure LoadString(const S: UnicodeString; Dest: Integer);
     function BinOpFor(T: TGocciaTokenType): TOp;
     procedure CompileSuperMember(const Key: UnicodeString; KeyExpr: TGocciaExpression; Dest: Integer);
+    procedure EvalSuperRef(const Key: UnicodeString; KeyExpr: TGocciaExpression; var Base, KeyOp: Integer);
+    procedure StoreIdentRef(const N: UnicodeString; Env, Src: Integer);
+    procedure ResolveWithEnv(const N: UnicodeString; Env: Integer);
     function HomeRegister: Integer;
     function NewTargetRegister: Integer;
     function NewTargetOutside: Boolean;
@@ -821,6 +824,53 @@ begin
   if WithCount = 0 then begin LoadIdentStatic(N, Dest); Exit; end;
   EmitWithChain(N, Dest, -1, Ends);
   LoadIdentStatic(N, Dest);
+  for I := 0 to High(Ends) do PatchHere(Ends[I]);
+end;
+
+{ PutValue to the reference LoadIdentThis resolved: Env the with object that held N, undefined for N's static
+  binding (a compound assignment resolves its reference once, before its right-hand side runs) }
+procedure TCompiler.StoreIdentRef(const N: UnicodeString; Env, Src: Integer);
+var J, J2, T: Integer;
+begin
+  J := EmitJ(opJUndef, Env, 0);
+  if FS.Tpl^.IsStrict then
+  begin
+    { 9.1.1.2.5 SetMutableBinding of an object environment in strict code: the binding must still exist }
+    T := AllocReg;
+    Emit(Ins(opWithHas, T, Env, AtomConst(N)));
+    J2 := EmitJ(opJT, T, 0);
+    Emit(Ins(opThrowConst, 0, 2, AtomConst(N)));
+    PatchHere(J2);
+    FreeTo(T);
+  end;
+  Emit(Ins(opWithSet, Env, Src, AtomConst(N)));
+  J2 := EmitJ(opJmp, 0, 0);
+  PatchHere(J);
+  StoreIdentStatic(N, Src, False);
+  PatchHere(J2);
+end;
+
+{ ResolveBinding(N) where with objects can hold it: Env the with object that has N, else undefined (N's static
+  binding), for StoreIdentRef }
+procedure TCompiler.ResolveWithEnv(const N: UnicodeString; Env: Integer);
+var Idx: array[0..63] of Integer; C, I, T, J: Integer; Ends: TJumpList;
+begin
+  CheckIdent(N);
+  SetLength(Ends, 0);
+  C := WithsFor(N, Idx);
+  for I := 0 to C - 1 do
+  begin
+    T := AllocRegs(2);
+    LoadIdentStatic(WithNames[Idx[I]], T);
+    Emit(Ins(opWithHas, T + 1, T, AtomConst(N)));
+    J := EmitJ(opJF, T + 1, 0);
+    Emit(Ins(opMov, Env, T, 0));
+    SetLength(Ends, Length(Ends) + 1);
+    Ends[High(Ends)] := EmitJ(opJmp, 0, 0);
+    PatchHere(J);
+    FreeTo(T);
+  end;
+  Emit(Ins(opLoadUndef, Env, 0, 0));
   for I := 0 to High(Ends) do PatchHere(Ends[I]);
 end;
 
@@ -1457,10 +1507,10 @@ end;
 threadvar
   VarNameKinds: TKindCache;
 const
-  VarNameClasses: array[0..10] of TClass = (TGocciaVariableDeclaration, TGocciaDestructuringDeclaration,
+  VarNameClasses: array[0..11] of TClass = (TGocciaVariableDeclaration, TGocciaDestructuringDeclaration,
     TGocciaBlockStatement, TGocciaIfStatement, TGocciaForStatement, TGocciaWhileStatement,
     TGocciaDoWhileStatement, TGocciaForOfStatement, TGocciaForInStatement, TGocciaTryStatement,
-    TGocciaSwitchStatement);
+    TGocciaSwitchStatement, TGocciaWithStatement);
 
 { runs for every statement; most hold no var binding, and CollectVarNamesOf's
   string temporaries cost an exception frame per call }
@@ -1877,7 +1927,8 @@ begin
     for I := 0 to TGocciaSwitchStatement(N).Cases.Count - 1 do
       for K := 0 to TGocciaSwitchStatement(N).Cases[I].Consequent.Count - 1 do
         CollectVarNames(TGocciaSwitchStatement(N).Cases[I].Consequent[K], Names);
-  end;
+  end
+  else if N is TGocciaWithStatement then CollectVarNames(TGocciaWithStatement(N).Body, Names);
 end;
 
 procedure TCompiler.DeclarePatternNames(P: TGocciaDestructuringPattern; IsConst: Boolean);
@@ -2412,6 +2463,15 @@ begin
       T := FS.FreeReg; AllocReg;
       ExprTo(V.Initializer, T);
       BindPattern(V.Pattern, T, not D.IsVar, D.IsConst);
+      FreeTo(T);
+      Continue;
+    end;
+    if D.IsVar and V.HasInitializer and (WithsFor(V.Name, WithIdxScratch) > 0) then
+    begin
+      { 14.3.2.1: the initializer goes to ResolveBinding(name), which a with object around it can hold }
+      T := FS.FreeReg; AllocReg;
+      CompileFieldValue(V.Initializer, T, V.Name);
+      StoreIdent(V.Name, T, False);
       FreeTo(T);
       Continue;
     end;
@@ -2984,8 +3044,10 @@ begin
   if E <> nil then
   begin
     K := KindOf(ExprKinds, ExprClasses, E);   { 1 identifier, 2 this, as in ExprTo }
+    { a local's register, unless a with object between the reference and the binding can hold the name }
     if (K = 1) and ResolveLocal(FS, TGocciaIdentifierExpression(E).Name, R) and
-       not InTDZ(TGocciaIdentifierExpression(E).Name) then
+       not InTDZ(TGocciaIdentifierExpression(E).Name) and
+       ((WithCount = 0) or (WithsFor(TGocciaIdentifierExpression(E).Name, WithIdxScratch) = 0)) then
       Exit(R);
     if (K = 2) and not FS.IsArrow then
     begin
@@ -3608,7 +3670,14 @@ begin
         raise EEarlySyntaxError.Create('Private fields can not be deleted')
       else
       begin
-        if E.Operand is TGocciaMemberExpression then
+        if (E.Operand is TGocciaMemberExpression) and (TGocciaMemberExpression(E.Operand).ObjectExpr is TGocciaSuperExpression) then
+        begin
+          { 13.5.1.2 step 5.a: the reference is evaluated, then a super reference is a ReferenceError }
+          M := TGocciaMemberExpression(E.Operand);
+          if M.Computed then EvalSuperRef('', M.PropertyExpression, R, K) else EvalSuperRef(M.PropertyName, nil, R, K);
+          Emit(Ins(opThrowConst, 0, 1, 0));
+        end
+        else if E.Operand is TGocciaMemberExpression then
         begin
           M := TGocciaMemberExpression(E.Operand);
           R := ExprAny(M.ObjectExpr);
@@ -3623,7 +3692,11 @@ begin
         else if E.Operand is TGocciaIdentifierExpression then
           CompileDeleteIdent(TGocciaIdentifierExpression(E.Operand).Name, Dest)
         else
+        begin
+          { not a reference: evaluated for its effects, then true }
+          ExprTo(E.Operand, Dest);
           Emit(Ins(opLoadTrue, Dest, 0, 0));
+        end;
       end;
   else
     raise ECompileError.CreateFmt('unsupported unary operator %d', [Ord(E.Operator)]);
@@ -3838,6 +3911,31 @@ begin
   else
     Emit(Ins(opGetSuper, Dest, H, NewIC(Key)));
   FreeTo(Save);
+end;
+
+{ 13.3.7.1 a SuperProperty evaluated as a reference: this (GetThisBinding: a ReferenceError before super() in a
+  derived constructor), then the key's value (ToPropertyKey comes with GetValue / PutValue), then GetSuperBase.
+  Base and Base + 1 hold the base and this; KeyOp is the C operand of opGetSuperB / opSetSuperB (an IC index, or
+  -1 - the key's register) }
+procedure TCompiler.EvalSuperRef(const Key: UnicodeString; KeyExpr: TGocciaExpression; var Base, KeyOp: Integer);
+var H, K: Integer;
+begin
+  Base := AllocRegs(2);
+  LoadThis(Base + 1);
+  if Assigned(KeyExpr) then
+  begin
+    K := AllocReg;
+    ExprTo(KeyExpr, K);
+    KeyOp := -1 - K;
+  end
+  else KeyOp := NewIC(Key);
+  H := HomeRegister;
+  if H < 0 then
+  begin
+    H := AllocReg;
+    LoadIdent('%home', H);
+  end;
+  Emit(Ins(opSuperBase, Base, H, 0));
 end;
 
 { the function just compiled (the newest child template) reads its home object (super) }
@@ -4174,6 +4272,12 @@ var Save, O, K: Integer; M: TGocciaMemberExpression;
 begin
   Save := FS.FreeReg;
   if T is TGocciaIdentifierExpression then StoreIdent(TGocciaIdentifierExpression(T).Name, Src)
+  else if (T is TGocciaMemberExpression) and (TGocciaMemberExpression(T).ObjectExpr is TGocciaSuperExpression) then
+  begin
+    M := TGocciaMemberExpression(T);
+    if M.Computed then EvalSuperRef('', M.PropertyExpression, O, K) else EvalSuperRef(M.PropertyName, nil, O, K);
+    Emit(Ins(opSetSuperB, Src, O, K));
+  end
   else if T is TGocciaMemberExpression then
   begin
     M := TGocciaMemberExpression(T);
@@ -4205,13 +4309,16 @@ var Save, O, K, V, R, J: Integer; A: TGocciaAssignmentExpression; PA: TGocciaPro
   CA: TGocciaComputedPropertyAssignmentExpression; CO: TGocciaCompoundAssignmentExpression;
   PC: TGocciaPropertyCompoundAssignmentExpression; CC: TGocciaComputedPropertyCompoundAssignmentExpression;
   Op: TGocciaTokenType; IC: Integer;
-  procedure Combine(Op: TGocciaTokenType; Cur, ValE: TGocciaExpression; CurReg, Dst: Integer; out ShortJ: Integer);
+  { Name: the identifier a logical assignment assigns to, for the NamedEvaluation of an anonymous function or class
+    (13.15.2: &&=, ||= and ??= only) }
+  procedure Combine(Op: TGocciaTokenType; Cur, ValE: TGocciaExpression; CurReg, Dst: Integer; out ShortJ: Integer;
+    const Name: UnicodeString = '');
   begin
     ShortJ := -1;
     case Op of
-      gttLogicalAndAssign: begin ShortJ := EmitJ(opJF, CurReg, 0); ExprTo(ValE, Dst); end;
-      gttLogicalOrAssign: begin ShortJ := EmitJ(opJT, CurReg, 0); ExprTo(ValE, Dst); end;
-      gttNullishCoalescingAssign: begin ShortJ := EmitJ(opJNotNullish, CurReg, 0); ExprTo(ValE, Dst); end;
+      gttLogicalAndAssign: begin ShortJ := EmitJ(opJF, CurReg, 0); CompileFieldValue(ValE, Dst, Name); end;
+      gttLogicalOrAssign: begin ShortJ := EmitJ(opJT, CurReg, 0); CompileFieldValue(ValE, Dst, Name); end;
+      gttNullishCoalescingAssign: begin ShortJ := EmitJ(opJNotNullish, CurReg, 0); CompileFieldValue(ValE, Dst, Name); end;
     else
       begin
         V := AllocReg;
@@ -4225,13 +4332,22 @@ begin
   if E is TGocciaAssignmentExpression then
   begin
     A := TGocciaAssignmentExpression(E);
-    if ResolveLocal(FS, A.Name, R) and not BindingIsConst(A.Name) and not InTDZ(A.Name) then
+    if ResolveLocal(FS, A.Name, R) and not BindingIsConst(A.Name) and not InTDZ(A.Name) and
+       ((WithCount = 0) or (WithsFor(A.Name, WithIdxScratch) = 0)) then
     begin
       if (A.Value is TGocciaFunctionExpression) or (A.Value is TGocciaArrowFunctionExpression) then CompileFuncExpr(A.Value, R, A.Name)
       else if (A.Value is TGocciaClassExpression) and (TGocciaClassExpression(A.Value).ClassDefinition.Name = '') then
         CompileClass(TGocciaClassExpression(A.Value).ClassDefinition, R, A.Name)
       else ExprTo(A.Value, R);
       if Dest <> R then Emit(Ins(opMov, Dest, R, 0));
+    end
+    else if WithsFor(A.Name, WithIdxScratch) > 0 then
+    begin
+      { 13.15.2 step 1.a: the reference is resolved before the value is evaluated }
+      K := AllocReg;
+      ResolveWithEnv(A.Name, K);
+      CompileFieldValue(A.Value, Dest, A.Name);
+      StoreIdentRef(A.Name, K, Dest);
     end
     else
     begin
@@ -4271,9 +4387,43 @@ begin
   begin
     CO := TGocciaCompoundAssignmentExpression(E);
     R := AllocReg;
-    LoadIdent(CO.Name, R);
-    Combine(CO.Operator, nil, CO.Value, R, R, J);
-    StoreIdent(CO.Name, R);
+    if WithsFor(CO.Name, WithIdxScratch) > 0 then
+    begin
+      K := AllocReg;
+      LoadIdentThis(CO.Name, R, K);
+      Combine(CO.Operator, nil, CO.Value, R, R, J, CO.Name);
+      StoreIdentRef(CO.Name, K, R);
+    end
+    else
+    begin
+      LoadIdent(CO.Name, R);
+      Combine(CO.Operator, nil, CO.Value, R, R, J, CO.Name);
+      StoreIdent(CO.Name, R);
+    end;
+    if J >= 0 then PatchHere(J);
+    Emit(Ins(opMov, Dest, R, 0));
+  end
+  else if (E is TGocciaPropertyCompoundAssignmentExpression) and
+          (TGocciaPropertyCompoundAssignmentExpression(E).ObjectExpr is TGocciaSuperExpression) then
+  begin
+    PC := TGocciaPropertyCompoundAssignmentExpression(E);
+    EvalSuperRef(PC.PropertyName, nil, O, K);
+    R := AllocReg;
+    Emit(Ins(opGetSuperB, R, O, K));
+    Combine(PC.Operator, nil, PC.Value, R, R, J);
+    Emit(Ins(opSetSuperB, R, O, K));
+    if J >= 0 then PatchHere(J);
+    Emit(Ins(opMov, Dest, R, 0));
+  end
+  else if (E is TGocciaComputedPropertyCompoundAssignmentExpression) and
+          (TGocciaComputedPropertyCompoundAssignmentExpression(E).ObjectExpr is TGocciaSuperExpression) then
+  begin
+    CC := TGocciaComputedPropertyCompoundAssignmentExpression(E);
+    EvalSuperRef('', CC.PropertyExpression, O, K);
+    R := AllocReg;
+    Emit(Ins(opGetSuperB, R, O, K));   { converts the key in place: PutValue does not repeat ToPropertyKey }
+    Combine(CC.Operator, nil, CC.Value, R, R, J);
+    Emit(Ins(opSetSuperB, R, O, K));
     if J >= 0 then PatchHere(J);
     Emit(Ins(opMov, Dest, R, 0));
   end
@@ -4339,7 +4489,8 @@ begin
   if E.Operand is TGocciaIdentifierExpression then
   begin
     Name := TGocciaIdentifierExpression(E.Operand).Name;
-    if ResolveLocal(FS, Name, R) and not BindingIsConst(Name) and not InTDZ(Name) then
+    if ResolveLocal(FS, Name, R) and not BindingIsConst(Name) and not InTDZ(Name) and
+       ((WithCount = 0) or (WithsFor(Name, WithIdxScratch) = 0)) then
     begin
       if E.IsPrefix then
       begin
@@ -4355,10 +4506,31 @@ begin
       Exit;
     end;
     Cur := AllocReg; Nw := AllocReg;
-    LoadIdent(Name, Cur);
+    if WithsFor(Name, WithIdxScratch) > 0 then
+    begin
+      K := AllocReg;
+      LoadIdentThis(Name, Cur, K);
+      Emit(Ins(opToNumeric, Cur, Cur, 0));
+      Emit(Ins(opAddI, Nw, Cur, Delta));
+      StoreIdentRef(Name, K, Nw);
+    end
+    else
+    begin
+      LoadIdent(Name, Cur);
+      Emit(Ins(opToNumeric, Cur, Cur, 0));
+      Emit(Ins(opAddI, Nw, Cur, Delta));
+      StoreIdent(Name, Nw);
+    end;
+  end
+  else if (E.Operand is TGocciaMemberExpression) and (TGocciaMemberExpression(E.Operand).ObjectExpr is TGocciaSuperExpression) then
+  begin
+    M := TGocciaMemberExpression(E.Operand);
+    if M.Computed then EvalSuperRef('', M.PropertyExpression, O, K) else EvalSuperRef(M.PropertyName, nil, O, K);
+    Cur := AllocReg; Nw := AllocReg;
+    Emit(Ins(opGetSuperB, Cur, O, K));
     Emit(Ins(opToNumeric, Cur, Cur, 0));
     Emit(Ins(opAddI, Nw, Cur, Delta));
-    StoreIdent(Name, Nw);
+    Emit(Ins(opSetSuperB, Nw, O, K));
   end
   else if E.Operand is TGocciaMemberExpression then
   begin
@@ -4562,6 +4734,9 @@ begin
       if Goal <> 3 then raise EEarlySyntaxError.Create('Cannot use ''import.meta'' outside a module');
       Emit(Ins(opImportMeta, Dest, 0, 0));
     end
+    { super outside a property access or call (super.#x included): 15.7.1 / 13.3.7 early errors }
+    else if E is TGocciaSuperExpression then
+      raise EEarlySyntaxError.Create('''super'' keyword unexpected here')
     else
     RaiseUnsupported('expression', E);
   end;
@@ -4662,7 +4837,8 @@ end;
 
 procedure TCompiler.BindPattern(P: TGocciaDestructuringPattern; Src: Integer; Declare: Boolean; IsConst: Boolean);
 type
-  TRef = record Kind, O, K: Integer; end;   { Kind 0: none, 1 named property (K the IC), 2 computed, 3 private }
+  TRef = record Kind, O, K: Integer; end;   { Kind 0: none, 1 named property (K the IC), 2 computed, 3 private,
+                                               4 super (EvalSuperRef: O the base, K the key operand) }
 var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuringPattern; AP: TGocciaArrayDestructuringPattern;
   Prop: TGocciaDestructuringProperty; Name: UnicodeString; Keys, CompKeys: array of Integer; R: Integer; HasRest: Boolean;
   Ref: TRef;
@@ -4680,7 +4856,13 @@ var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuri
       X := TGocciaMemberExpressionDestructuringPattern(Pat).Expression;
       if not (X is TGocciaMemberExpression) then Exit;
       M := TGocciaMemberExpression(X);
-      if M.ObjectExpr is TGocciaSuperExpression then Exit;
+      if M.ObjectExpr is TGocciaSuperExpression then
+      begin
+        if M.Computed then EvalSuperRef('', M.PropertyExpression, Result.O, Result.K)
+        else EvalSuperRef(M.PropertyName, nil, Result.O, Result.K);
+        Result.Kind := 4;
+        Exit;
+      end;
       Result.O := AllocReg;
       ExprTo(M.ObjectExpr, Result.O);
       if M.Computed then
@@ -4717,6 +4899,7 @@ var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuri
       1: Emit(Ins(opSetProp, Rf.O, ValReg, Rf.K));
       2: Emit(Ins(opSetElem, Rf.O, Rf.K, ValReg));
       3: Emit(Ins(opSetPriv, Rf.O, ValReg, Rf.K));
+      4: Emit(Ins(opSetSuperB, ValReg, Rf.O, Rf.K));
     end;
   end;
   procedure Target(Pat: TGocciaDestructuringPattern; ValReg: Integer; const Rf: TRef);
