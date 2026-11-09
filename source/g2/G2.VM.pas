@@ -1511,7 +1511,11 @@ begin
   Result := False;
   case O^.OKind of
     okArray, okArguments:
-      if Key = AtomLength then begin Res := MkNumber(ArrayLength(O)); Exit(True); end;
+      if Key = AtomLength then
+      begin
+        if (O^.OFlags and ofBigLen) = 0 then Res := MkInt(O^.Elements^.Len) else Res := MkNumber(ArrayLength(O));
+        Exit(True);
+      end;
     okStringObj:
       begin
         if Key = AtomLength then begin Res := MkInt(StrOf(O^.Aux1)^.Len); Exit(True); end;

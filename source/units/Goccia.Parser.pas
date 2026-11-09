@@ -3077,9 +3077,10 @@ begin
   // ES2026 §13.5 - §13.13: the operands of the unary and binary operators
   // are UnaryExpression and narrower productions; ArrowFunction,
   // AsyncArrowFunction and YieldExpression are AssignmentExpressions only.
+  // (exact classes: neither has subclasses, and a class walk per operand shows in parse time)
   if Assigned(AOperand) and not AOperand.Parenthesized and
-     ((AOperand is TGocciaArrowFunctionExpression) or
-      (AOperand is TGocciaYieldExpression)) then
+     ((AOperand.ClassType = TGocciaArrowFunctionExpression) or
+      (AOperand.ClassType = TGocciaYieldExpression)) then
     raise TGocciaSyntaxError.Create(
       'An arrow function or yield expression must be parenthesized to be an operand',
       AOperand.Line, AOperand.Column, FFileName, FSourceLines,
