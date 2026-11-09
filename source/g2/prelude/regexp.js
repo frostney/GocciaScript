@@ -487,7 +487,8 @@
   def(RP, "toString", methods.toString);
   var keys = [SymMatch, SymMatchAll, SymReplace, SymSearch, SymSplit];
   for (var k = 0; k < keys.length; k++) def(RP, keys[k], methods[keys[k]]);
-  def(RegExpCtor, "escape", escape);
+  // a built-in function, not a constructor: a method's function object (no [[Construct]], no prototype)
+  def(RegExpCtor, "escape", { escape(string) { return escape(string); } }.escape);
 
   // B.2.2.2-B.2.2.14 the String.prototype HTML methods, B.2.2.15-16 trimLeft / trimRight
   var SP = Str.prototype;

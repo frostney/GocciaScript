@@ -1372,6 +1372,13 @@ begin
         if T^.IsStrict and not Params[I].IsPattern and ((Params[I].Name = 'eval') or (Params[I].Name = 'arguments')) then
           raise EEarlySyntaxError.Create('Unexpected eval or arguments in strict mode');
         if Params[I].IsPattern then DeclareLocal('%param' + IntToStr(J), False)
+        else if FS.Scopes[FS.ScopeCount - 1].Find(Params[I].Name) >= 0 then
+        begin
+          { a repeated name (non-strict simple parameters): each position keeps its register, the name is the
+            last one's (10.2.11 step 22: the later binding's value wins) }
+          K := DeclareLocal('%dupparam' + IntToStr(J), False);
+          FS.Scopes[FS.ScopeCount - 1].Bindings[FS.Scopes[FS.ScopeCount - 1].Find(Params[I].Name)].Reg := K;
+        end
         else DeclareLocal(Params[I].Name, False);
       end;
     if not IsArrow then
@@ -3999,7 +4006,8 @@ begin
      (TGocciaLiteralExpression(E.Right).Value is TGocciaNumberLiteralValue) then
   begin
     V := MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(E.Right).Value).Value);
-    if IsInt(V) and (Abs(IntOf(V)) < 4000000) then
+    { x - 0 stays a subtraction: as an add of the negated immediate, -0 - 0 would give +0 }
+    if IsInt(V) and (Abs(IntOf(V)) < 4000000) and ((Op = opAdd) or (IntOf(V) <> 0)) then
     begin
       L := ExprAny(E.Left);
       if Op = opAdd then Emit(Ins(opAddI, Dest, L, IntOf(V))) else Emit(Ins(opSubI, Dest, L, -IntOf(V)));
@@ -4964,7 +4972,8 @@ begin
     if (BOp in [opAdd, opSub]) and (CO.Value is TGocciaLiteralExpression) and
        (TGocciaLiteralExpression(CO.Value).Value is TGocciaNumberLiteralValue) and
        IsInt(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value)) and
-       (Abs(IntOf(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value))) < 4000000) then
+       (Abs(IntOf(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value))) < 4000000) and
+       ((BOp = opAdd) or (IntOf(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value)) <> 0)) then
     begin
       K := IntOf(MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(CO.Value).Value).Value));
       if BOp = opAdd then Emit(Ins(opAddI, R, R, K)) else Emit(Ins(opSubI, R, R, -K));

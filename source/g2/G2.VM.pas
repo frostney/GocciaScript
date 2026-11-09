@@ -3593,7 +3593,12 @@ begin
     opMul: Z := X.Multiply(Y);
     opDiv: begin if Y.IsZero then Exit(ThrowError('RangeError', 'Division by zero')); Z := X.Divide(Y); end;
     opMod: begin if Y.IsZero then Exit(ThrowError('RangeError', 'Division by zero')); Z := X.Modulo(Y); end;
-    opPow: Z := X.Power(Y);
+    opPow:
+      begin
+        { 6.1.6.2.3 BigInt::exponentiate: a negative exponent is a RangeError }
+        if Y.IsNegative then Exit(ThrowError('RangeError', 'Exponent must be non-negative'));
+        Z := X.Power(Y);
+      end;
     opBitAnd: Z := X.BitwiseAnd(Y);
     opBitOr: Z := X.BitwiseOr(Y);
     opBitXor: Z := X.BitwiseXor(Y);
