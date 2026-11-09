@@ -351,6 +351,10 @@ var O: PObj; P: PByte; ByteIdx: Int64;
 begin
   if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
   if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
+  { 25.4.9 step 3 RevalidateAtomicAccess: the index's conversion may have detached or shrunk the buffer }
+  O := ObjOf(Args[1]);
+  if not Revalidate(O, ByteIdx) then Exit(False);
+  P := TAData(O) + (ByteIdx - O^.Pad);
   Res := FromBits(TAKind(O), AtomicLoad(P, TAElemSize[TAKind(O)]));
   Result := True;
 end;
