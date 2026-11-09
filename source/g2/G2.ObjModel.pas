@@ -968,6 +968,8 @@ function SetWithReceiver(O: TValue; Key: PStr; V, Receiver: TValue; var Ok: Bool
 var D, Ex: TPropDesc; Found, FoundEx: Boolean; P, R: TValue; ND: TPropDesc; Idx: Int64;
 begin
   if ObjOf(O)^.OKind = okProxy then Exit(ProxySetOM(O, Key, V, Receiver, Ok));
+  { 10.4.6.9 a namespace's [[Set]]: false }
+  if ObjOf(O)^.OKind = okModuleNS then begin Ok := False; Exit(True); end;
   { 10.4.5.5 a typed array's [[Set]] of a canonical numeric key: its own receiver stores (TypedArraySetElement,
     true); another receiver gets nothing for an invalid index (true), OrdinarySet for a valid one }
   if (ObjOf(O)^.OKind = okTypedArray) and (CanonicalNumericNonIndex(Key) or IndexFromString(Key, Idx)) then
@@ -1454,7 +1456,7 @@ end;
 function EnumerableOwn(O: TValue; Kind: Integer; var Res: TValue): Boolean;
 var Keys, V, KV, E: TValue; I, N: Integer; K: PStr; D: TPropDesc; Found: Boolean;
 begin
-  if (ObjOf(O)^.OKind <> okProxy) and (Kind = 0) then begin Res := OwnKeys(ObjOf(O), True); Exit(True); end;
+  if not (ObjOf(O)^.OKind in [okProxy, okModuleNS]) and (Kind = 0) then begin Res := OwnKeys(ObjOf(O), True); Exit(True); end;
   PushRoot(O);
   if ObjOf(O)^.OKind = okProxy then
   begin

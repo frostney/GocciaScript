@@ -3852,6 +3852,11 @@ begin
   A := OwnKeys(ObjOf(V), True);
   if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(1); Exit(False); end;
   PushRoot(A);
+  { a namespace's [[GetOwnProperty]] reads each export: an uninitialized one is a ReferenceError }
+  if ObjOf(RootAt(TempTop - 2))^.OKind = okModuleNS then
+    for I := 0 to ArrayLen(ObjOf(RootAt(TempTop - 1))) - 1 do
+      if not NSLookup(ObjOf(RootAt(TempTop - 2)), StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]), True, K,
+        Shadow) then begin PopRoots(2); Exit(False); end;
   P := ObjOf(RootAt(TempTop - 2))^.Shape^.Proto;
   D := 1;
   while IsObject(P) do

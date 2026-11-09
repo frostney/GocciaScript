@@ -1098,6 +1098,16 @@ begin
     Emit(Ins(opSetUpv, Src, U, 0));
     Exit;
   end;
+  if (Goal = 3) and (ModImportSlot(N) >= 0) then
+  begin
+    { an import binding is immutable (9.1.1.5.5 CreateImportBinding): a ReferenceError while its target is
+      uninitialized, otherwise a TypeError (module code is strict) }
+    T := AllocReg;
+    EmitModGet(ModImportSlot(N), T);
+    FreeTo(T);
+    Emit(Ins(opThrowConst, 0, 0, AtomConst(N)));
+    Exit;
+  end;
   if N = 'arguments' then
   begin
     { a non-strict function's arguments binding is mutable (10.2.11 step 22.f: CreateMutableBinding), as
@@ -5696,6 +5706,8 @@ begin
   begin
     if not ResolveLocal(FS, ModPublish[I], R) then
       raise EEarlySyntaxError.Create('Export ''' + ModPublish[I] + ''' is not defined in module');
+    { the cell reaches other modules and namespaces before the declaration runs: its entry stores the hole }
+    InTDZ(ModPublish[I]);
     Emit(Ins(opMakeModCell, R, TR, ModImportNames.Count + I));
   end;
 end;
