@@ -8888,8 +8888,10 @@ var
     AttributeKeyLine: Integer;
     AttributeKeyToken: TGocciaToken;
     AttributeValueToken: TGocciaToken;
+    SeenTypeAttribute: Boolean;
   begin
     Result := '';
+    SeenTypeAttribute := False;
     if not Match(gttWith) then
       Exit;
 
@@ -8910,6 +8912,12 @@ var
         'Expected string import attribute value',
         'Import attribute values must be string literals');
       RecordImportAttribute(AttributeKeyToken, AttributeValueToken);
+      // ES2026 16.2.1.1: WithClauseToAttributes may not list a key twice
+      if (AttributeKey = KEYWORD_TYPE) and SeenTypeAttribute then
+        raise TGocciaSyntaxError.Create(
+          Format('Duplicate import attribute "%s"', [AttributeKey]),
+          AttributeKeyLine, AttributeKeyColumn, FFileName, FSourceLines);
+      SeenTypeAttribute := SeenTypeAttribute or (AttributeKey = KEYWORD_TYPE);
       if AttributeKey <> KEYWORD_TYPE then
         raise TGocciaSyntaxError.Create(
           Format('Unsupported import attribute "%s"', [AttributeKey]),
@@ -9283,8 +9291,10 @@ var
     AttributeKeyLine: Integer;
     AttributeKeyToken: TGocciaToken;
     AttributeValueToken: TGocciaToken;
+    SeenTypeAttribute: Boolean;
   begin
     Result := '';
+    SeenTypeAttribute := False;
     if not Match(gttWith) then
       Exit;
 
@@ -9303,6 +9313,12 @@ var
         'Expected string import attribute value',
         'Import attribute values must be string literals');
       RecordImportAttribute(AttributeKeyToken, AttributeValueToken);
+      // ES2026 16.2.1.1: WithClauseToAttributes may not list a key twice
+      if (AttributeKey = KEYWORD_TYPE) and SeenTypeAttribute then
+        raise TGocciaSyntaxError.Create(
+          Format('Duplicate import attribute "%s"', [AttributeKey]),
+          AttributeKeyLine, AttributeKeyColumn, FFileName, FSourceLines);
+      SeenTypeAttribute := SeenTypeAttribute or (AttributeKey = KEYWORD_TYPE);
       if AttributeKey <> KEYWORD_TYPE then
         raise TGocciaSyntaxError.Create(
           Format('Unsupported import attribute "%s"', [AttributeKey]),
@@ -9371,7 +9387,13 @@ begin
       (FCurrent + 1 < FTokens.Count) and
       (FTokens[FCurrent + 1].TokenType = gttFunction) and
       not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]));
-    DefaultValue := Expression;
+    // ES2026 16.2.3: a HoistableDeclaration or ClassDeclaration ends with its
+    // body (`export default function () {}()` does not call it), and any
+    // other form is an AssignmentExpression, not a comma expression
+    if DirectDefaultDeclaration then
+      DefaultValue := Primary
+    else
+      DefaultValue := AssignmentAllowIn;
     DefaultLocalName := GOCCIA_DEFAULT_EXPORT_BINDING;
     if DirectDefaultDeclaration then
     begin
