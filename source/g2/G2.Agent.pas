@@ -14,11 +14,7 @@ unit G2.Agent;
 interface
 
 uses
-  Classes,
-  SysUtils,
-
-  G2.Core,
-  G2.VM;
+  SysUtils, Classes, G2.Core, G2.VM;
 
 { defines $262agent (main agent) on this engine's global object }
 procedure InitAgentHost;
@@ -26,10 +22,7 @@ procedure InitAgentHost;
 implementation
 
 uses
-  G2.Atomics,
-  G2.Engine,
-  G2.Promise,
-  G2.Shared;
+  G2.Engine, G2.Shared, G2.Atomics, G2.Promise;
 
 type
   TArgs = PValue;
@@ -59,47 +52,47 @@ threadvar
   BroadcastCallback: TValue;
   AgentObj: TValue;
 
-function Arg(AArgs: TArgs; AArgc, I: Integer): TValue; inline;
+function Arg(Args: TArgs; Argc, I: Integer): TValue; inline;
 begin
-  if I <= AArgc then Result := AArgs[I] else Result := VUndefined;
+  if I <= Argc then Result := Args[I] else Result := VUndefined;
 end;
 
-function Agent_Sleep(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Agent_Sleep(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var D: Double;
 begin
-  if not ToNumberV(Arg(AArgs, AArgc, 1), D) then Exit(False);
+  if not ToNumberV(Arg(Args, Argc, 1), D) then Exit(False);
   if D > 0 then Sleep(Trunc(D));
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
-function Agent_MonotonicNow(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Agent_MonotonicNow(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := MkNumber(GetTickCount64 - StartTicks);
+  Res := MkNumber(GetTickCount64 - StartTicks);
   Result := True;
 end;
 
 { ---------------- main agent ---------------- }
 
-function Agent_Start(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Agent_Start(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: TValue; A: TAgentThread;
 begin
-  if not ToStringV(Arg(AArgs, AArgc, 1), S) then Exit(False);
+  if not ToStringV(Arg(Args, Argc, 1), S) then Exit(False);
   A := TAgentThread.Create(StrToUnicode(StrOf(S)));
   EnterCriticalSection(AgentLock);
   Agents.Add(A);
   LeaveCriticalSection(AgentLock);
   A.Start;
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
-function Agent_Broadcast(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Agent_Broadcast(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PSharedBlock; Id: Double; I: Integer; A: TAgentThread; Waiting: Boolean;
 begin
-  if not IsSharedBuffer(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('broadcast requires a SharedArrayBuffer'));
-  B := SharedBlockOf(AArgs[1]);
-  if not ToNumberV(Arg(AArgs, AArgc, 2), Id) then Exit(False);
+  if not IsSharedBuffer(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('broadcast requires a SharedArrayBuffer'));
+  B := SharedBlockOf(Args[1]);
+  if not ToNumberV(Arg(Args, Argc, 2), Id) then Exit(False);
   EnterCriticalSection(AgentLock);
   for I := 0 to Agents.Count - 1 do
   begin
@@ -123,45 +116,45 @@ begin
     LeaveCriticalSection(AgentLock);
     if Waiting then Sleep(1);
   until not Waiting;
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
-function Agent_GetReport(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Agent_GetReport(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: UnicodeString; Have: Boolean;
 begin
   EnterCriticalSection(AgentLock);
   Have := Reports.Count > 0;
   if Have then begin S := UnicodeString(Reports[0]); Reports.Delete(0); end;
   LeaveCriticalSection(AgentLock);
-  if Have then ARes := StrFromUnicode(S) else ARes := VNull;
+  if Have then Res := StrFromUnicode(S) else Res := VNull;
   Result := True;
 end;
 
 { ---------------- agents ---------------- }
 
-function Agent_ReceiveBroadcast(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Agent_ReceiveBroadcast(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsCallable(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('receiveBroadcast requires a function'));
-  BroadcastCallback := AArgs[1];
-  ARes := VUndefined;
+  if not IsCallable(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('receiveBroadcast requires a function'));
+  BroadcastCallback := Args[1];
+  Res := VUndefined;
   Result := True;
 end;
 
-function Agent_Report(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Agent_Report(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: TValue;
 begin
-  if not ToStringV(Arg(AArgs, AArgc, 1), S) then Exit(False);
+  if not ToStringV(Arg(Args, Argc, 1), S) then Exit(False);
   EnterCriticalSection(AgentLock);
   Reports.Add(UTF8Encode(StrToUnicode(StrOf(S))));
   LeaveCriticalSection(AgentLock);
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
-function Agent_Leaving(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Agent_Leaving(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
@@ -225,7 +218,7 @@ begin
       EngineDone;
     end;
   except
-    on E: Exception do;
+    on E: Exception do ;
   end;
   EnterCriticalSection(AgentLock);
   Done := True;

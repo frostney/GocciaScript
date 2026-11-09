@@ -9,8 +9,7 @@ unit G2.Core;
 interface
 
 uses
-  Math,
-  SysUtils;
+  SysUtils, Math;
 
 type
   TValue = QWord;
@@ -217,11 +216,11 @@ threadvar
   GCMinorCount, GCMajorCount: Integer;
   GCPromotedBytes, GCOldBytes, GCOldBytesAtMajor: Int64;
 
-procedure HeapInit(ANurseryBytes: SizeInt);
+procedure HeapInit(NurseryBytes: SizeInt);
 { frees this thread's heap: every cell, atom and shape; nothing of the heap may be used after it }
 procedure HeapDone;
-function AllocCell(ASize: SizeInt; AKind: Byte): PCell;
-function AllocOld(ASize: SizeInt; AKind: Byte): PCell;
+function AllocCell(Size: SizeInt; Kind: Byte): PCell;
+function AllocOld(Size: SizeInt; Kind: Byte): PCell;
 procedure GCVisit(var V: TValue); inline;
 procedure GCVisitPtr(var P: Pointer);
 procedure CollectMinor;
@@ -233,8 +232,8 @@ var GCWeakHook: procedure = nil;
 var GCFinalizeHook: procedure = nil;
 function GCSurvives(var P: Pointer): Boolean;
 function GCInMinor: Boolean;
-procedure WriteBarrier(AContainer: PCell; V: TValue); inline;
-procedure Remember(AContainer: PCell);
+procedure WriteBarrier(Container: PCell; V: TValue); inline;
+procedure Remember(Container: PCell);
 
 { temp roots for native code: push values that must survive allocation }
 threadvar
@@ -247,7 +246,7 @@ procedure PopRoots(N: Integer); inline;
 { ---- strings and atoms ---- }
 function StrBufOf(S: PStr): PStrBuf; inline;
 function StrChars(S: PStr): PWideChar; inline;
-function NewString(ALen: Integer): PStr;
+function NewString(Len: Integer): PStr;
 function StrFromUnicode(const S: UnicodeString): TValue;
 function StrToUnicode(S: PStr): UnicodeString;
 function StrHash(S: PStr): UInt32;
@@ -261,26 +260,26 @@ function IntAtom(I: Int64): PStr;
   Text is only a description. Ordinary keys (atoms) have Extra 0. }
 const
   kfSymbol = 1; kfPrivate = 2; kfInternal = 4;
-function NewKeyAtom(const AText: UnicodeString; AFlags: Word): PStr;
+function NewKeyAtom(const Text: UnicodeString; Flags: Word): PStr;
 { the internal keys under which the global object holds the using-declaration helpers (G2.Disposal), for the
   compiler: 0 AddDisposableResource, 1 DisposeResources, 2 its async form }
 function UsingKey(I: Integer): PStr;
 function KeyPayload(K: PStr): PValue; inline;
 function ConcatStrings(A, B: PStr): TValue;
-function SubString(S: PStr; AStart, ALen: Integer): TValue;
+function SubString(S: PStr; Start, Len: Integer): TValue;
 function StrCompare(A, B: PStr): Integer;
 
 { ---- shapes ---- }
-function RootShapeFor(AProto: TValue): PShape;
-function NewDictShape(AProto: TValue): PShape;
+function RootShapeFor(Proto: TValue): PShape;
+function NewDictShape(Proto: TValue): PShape;
 { a fresh shape with S's properties and no transitions: an object that takes it misses every inline cache
   that recorded S (the global object, when a global lexical binding starts to shadow one of its properties) }
 function ShapeFork(S: PShape): PShape;
-function ShapeLookup(S: PShape; AKey: PStr): Integer;
-function ShapeAdd(S: PShape; AKey: PStr; AFlags: Byte): PShape;
+function ShapeLookup(S: PShape; Key: PStr): Integer;
+function ShapeAdd(S: PShape; Key: PStr; Flags: Byte): PShape;
 procedure ScanShapesForGC;
 function NurseryCellOK(V: TValue): Boolean;
-procedure CheckRoot(const V: TValue; const AWhere: string; I: Integer);
+procedure CheckRoot(const V: TValue; const Where: string; I: Integer);
 
 { ---- objects ---- }
 threadvar
@@ -288,33 +287,33 @@ threadvar
   ErrorProto, IteratorProto, ArrayIteratorProto, GeneratorProto, MapProto, SetProtoObj, SymbolProto: TValue;
   EmptyShapeForArray: PShape;
 
-function NewObject(AShape: PShape; AInlineCap: Integer; AOKind: Byte): PObj;
-function NewPlainObject(AProto: TValue; AInlineCap: Integer): PObj;
-function NewValueArray(ACap: Integer): PValueArray;
-function NewArray(ALen: Integer; ACap: Integer): PObj;
+function NewObject(Shape: PShape; InlineCap: Integer; OKind: Byte): PObj;
+function NewPlainObject(Proto: TValue; InlineCap: Integer): PObj;
+function NewValueArray(Cap: Integer): PValueArray;
+function NewArray(Len: Integer; Cap: Integer): PObj;
 function NewUpval: PUpval;
-function NewAccessor(AGetter, ASetter: TValue): PAccessor;
+function NewAccessor(Getter, Setter: TValue): PAccessor;
 function GetSlot(O: PObj; I: Integer): TValue; inline;
 procedure SetSlot(O: PObj; I: Integer; V: TValue); inline;
-function AddProperty(O: PObj; AKey: PStr; V: TValue; AFlags: Byte): Integer;
-function GetOwnSlot(O: PObj; AKey: PStr): Integer; inline;
-procedure DeleteProperty(O: PObj; AKey: PStr);
-procedure ChangeFlags(O: PObj; AKey: PStr; AFlags: Byte);
+function AddProperty(O: PObj; Key: PStr; V: TValue; Flags: Byte): Integer;
+function GetOwnSlot(O: PObj; Key: PStr): Integer; inline;
+procedure DeleteProperty(O: PObj; Key: PStr);
+procedure ChangeFlags(O: PObj; Key: PStr; Flags: Byte);
 function ProtoOf(O: PObj): TValue; inline;
 procedure SetProto(O: PObj; P: TValue);
-procedure ArraySetLength(A: PObj; ANewLen: Integer);
+procedure ArraySetLength(A: PObj; NewLen: Integer);
 procedure ArrayPush(A: PObj; V: TValue);
 function ArrayLen(A: PObj): Integer; inline;
-procedure EnsureElementsCap(A: PObj; ANeed: Integer);
-procedure ValueArrayStore(AVA: PValueArray; I: Integer; V: TValue); inline;
+procedure EnsureElementsCap(A: PObj; Need: Integer);
+procedure ValueArrayStore(VA: PValueArray; I: Integer; V: TValue); inline;
 
 { ---- conversions without calling JS ---- }
 function NumberToStr(D: Double): TValue;
 function PrimitiveToNumber(V: TValue): Double;
 function ToBool(V: TValue): Boolean; inline;
 function TypeOfStr(V: TValue): UnicodeString;
-function IndexFromValue(V: TValue; out AIdx: Int64): Boolean; inline;
-function IndexFromString(S: PStr; out AIdx: Int64): Boolean;
+function IndexFromValue(V: TValue; out Idx: Int64): Boolean; inline;
+function IndexFromString(S: PStr; out Idx: Int64): Boolean;
 
 implementation
 
@@ -472,17 +471,17 @@ threadvar
 { a major collection runs when old space has grown by the larger of this and its size after the last one }
 var GCMajorFloor: Int64 = 64 * 1024 * 1024; GCMajorGrowthPct: Int64 = 100;
 
-procedure HeapInit(ANurseryBytes: SizeInt);
+procedure HeapInit(NurseryBytes: SizeInt);
 var I, C: Integer;
 begin
   if GetEnvironmentVariable('G2_MAJOR_FLOOR_MB') <> '' then
     GCMajorFloor := Int64(StrToInt(GetEnvironmentVariable('G2_MAJOR_FLOOR_MB'))) * 1024 * 1024;
   if GetEnvironmentVariable('G2_MAJOR_GROWTH_PCT') <> '' then
     GCMajorGrowthPct := StrToInt(GetEnvironmentVariable('G2_MAJOR_GROWTH_PCT'));
-  NurserySize := ANurseryBytes;
-  NurseryStart := GetMem(ANurseryBytes);
+  NurserySize := NurseryBytes;
+  NurseryStart := GetMem(NurseryBytes);
   NurseryTop := NurseryStart;
-  NurseryLimit := NurseryStart + ANurseryBytes;
+  NurseryLimit := NurseryStart + NurseryBytes;
   C := 0;
   for I := 0 to High(ClassOf) do
   begin
@@ -496,32 +495,32 @@ begin
 end;
 
 
-function NewPage(ACls: Integer): PPage;
+function NewPage(Cls: Integer): PPage;
 begin
   New(Result);
   Result^.Base := GetMem(PAGE_SIZE);
-  Result^.CellSize := ClassSizes[ACls];
+  Result^.CellSize := ClassSizes[Cls];
   Result^.Bump := Result^.Base;
-  Result^.Limit := Result^.Base + (PAGE_SIZE div ClassSizes[ACls]) * ClassSizes[ACls];
+  Result^.Limit := Result^.Base + (PAGE_SIZE div ClassSizes[Cls]) * ClassSizes[Cls];
   if PageCount >= Length(Pages) then SetLength(Pages, PageCount * 2 + 16);
   Pages[PageCount] := Result;
   Inc(PageCount);
 end;
 
-function AllocOld(ASize: SizeInt; AKind: Byte): PCell;
+function AllocOld(Size: SizeInt; Kind: Byte): PCell;
 var Cls: Integer; F: PFreeCell; P: PPage; L: PLarge;
 begin
-  ASize := (ASize + 7) and not 7;
-  if ASize < 16 then ASize := 16;
-  if ASize > LARGE_LIMIT then
+  Size := (Size + 7) and not 7;
+  if Size < 16 then Size := 16;
+  if Size > LARGE_LIMIT then
   begin
-    Result := GetMem(ASize);
+    Result := GetMem(Size);
     New(L); L^.Cell := Result; L^.Next := LargeList; LargeList := L;
-    Result^.Size := ASize;
+    Result^.Size := Size;
   end
   else
   begin
-    Cls := ClassOf[ASize shr 3];
+    Cls := ClassOf[Size shr 3];
     F := FreeLists[Cls];
     if F <> nil then
     begin
@@ -541,38 +540,38 @@ begin
     end;
     Result^.Size := ClassSizes[Cls];
   end;
-  Result^.Kind := AKind;
+  Result^.Kind := Kind;
   Result^.Flags := cfOld;
   Result^.Extra := 0;
   Inc(GCOldBytes, Result^.Size);
 end;
 
-function AllocCell(ASize: SizeInt; AKind: Byte): PCell;
+function AllocCell(Size: SizeInt; Kind: Byte): PCell;
 begin
-  ASize := (ASize + 7) and not 7;
-  if ASize < 16 then ASize := 16;
+  Size := (Size + 7) and not 7;
+  if Size < 16 then Size := 16;
   { up to 1/16 of the nursery a cell starts young: big temporaries (string concatenation results)
     then die in a minor collection instead of filling old space }
-  if ASize > (NurseryLimit - NurseryStart) div 16 then
+  if Size > (NurseryLimit - NurseryStart) div 16 then
   begin
     { direct old-space allocation still counts toward the major trigger }
-    if GCOldBytes + ASize - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100) then
+    if GCOldBytes + Size - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100) then
     begin
       CollectMinor;
       CollectMajor;
     end;
-    Exit(AllocOld(ASize, AKind));
+    Exit(AllocOld(Size, Kind));
   end;
-  if (NurseryTop + ASize > NurseryLimit) or GCStress then
+  if (NurseryTop + Size > NurseryLimit) or GCStress then
   begin
     CollectMinor;
     if (GCOldBytes - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100)) or (GCStress and (GCMinorCount mod 8 = 0)) then
       CollectMajor;
   end;
   Result := PCell(NurseryTop);
-  Inc(NurseryTop, ASize);
-  Result^.Size := ASize;
-  Result^.Kind := AKind;
+  Inc(NurseryTop, Size);
+  Result^.Size := Size;
+  Result^.Kind := Kind;
   Result^.Flags := 0;
   Result^.Extra := 0;
 end;
@@ -582,19 +581,19 @@ begin
   Result := (PByte(P) >= NurseryStart) and (PByte(P) < NurseryLimit);
 end;
 
-procedure Remember(AContainer: PCell);
+procedure Remember(Container: PCell);
 begin
-  AContainer^.Flags := AContainer^.Flags or cfRemembered;
+  Container^.Flags := Container^.Flags or cfRemembered;
   if RememberedTop >= Length(RememberedList) then SetLength(RememberedList, RememberedTop * 2);
-  RememberedList[RememberedTop] := AContainer;
+  RememberedList[RememberedTop] := Container;
   Inc(RememberedTop);
 end;
 
-procedure WriteBarrier(AContainer: PCell; V: TValue); inline;
+procedure WriteBarrier(Container: PCell; V: TValue); inline;
 begin
-  if ((AContainer^.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+  if ((Container^.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
      IsYoung(Pointer(PtrUInt(V and PTR_MASK))) then
-    Remember(AContainer);
+    Remember(Container);
 end;
 
 procedure PushGray(P: Pointer); inline;
@@ -745,7 +744,7 @@ end;
 
 procedure FixOpenUpvalLinks; forward;
 procedure VerifyShapesAfterMinor; forward;
-procedure VerifyHeap(const APhase: string); forward;
+procedure VerifyHeap(const Phase: string); forward;
 
 function GCInMinor: Boolean;
 begin
@@ -905,10 +904,10 @@ begin
   else Result := @S^.Chars[0];
 end;
 
-function NewString(ALen: Integer): PStr;
+function NewString(Len: Integer): PStr;
 begin
-  Result := PStr(AllocCell(SizeOf(TStr) - SizeOf(WideChar) + ALen * SizeOf(WideChar), ckString));
-  Result^.Len := ALen;
+  Result := PStr(AllocCell(SizeOf(TStr) - SizeOf(WideChar) + Len * SizeOf(WideChar), ckString));
+  Result^.Len := Len;
   Result^.Hash := 0;
   Result^.Atom := nil;
 end;
@@ -927,11 +926,11 @@ begin
   if S^.Len > 0 then Move(StrChars(S)[0], Result[1], S^.Len * SizeOf(WideChar));
 end;
 
-function HashChars(P: PWideChar; ALen: Integer): UInt32;
+function HashChars(P: PWideChar; Len: Integer): UInt32;
 var I: Integer; H: UInt32;
 begin
   H := 2166136261;
-  for I := 0 to ALen - 1 do H := (H xor Ord(P[I])) * 16777619;
+  for I := 0 to Len - 1 do H := (H xor Ord(P[I])) * 16777619;
   if H = 0 then H := 1;
   Result := H;
 end;
@@ -978,7 +977,7 @@ begin
     end;
 end;
 
-function AtomFind(P: PWideChar; ALen: Integer; H: UInt32): PStr;
+function AtomFind(P: PWideChar; Len: Integer; H: UInt32): PStr;
 var J: Integer; A: PStr;
 begin
   if Length(AtomTable) = 0 then AtomGrow;
@@ -987,27 +986,27 @@ begin
   begin
     A := AtomTable[J];
     if A = nil then Exit(nil);
-    if (A^.Hash = H) and (A^.Len = ALen) and ((ALen = 0) or (CompareByte(StrChars(A)[0], P^, ALen * 2) = 0)) then
+    if (A^.Hash = H) and (A^.Len = Len) and ((Len = 0) or (CompareByte(StrChars(A)[0], P^, Len * 2) = 0)) then
       Exit(A);
     J := (J + 1) and AtomMask;
   end;
 end;
 
-function AtomInsert(P: PWideChar; ALen: Integer; H: UInt32): PStr;
+function AtomInsert(P: PWideChar; Len: Integer; H: UInt32): PStr;
 var J: Integer; Size: SizeInt;
 begin
   if (AtomCount + 1) * 2 > Length(AtomTable) then AtomGrow;
-  Size := (SizeOf(TStr) - SizeOf(WideChar) + ALen * 2 + 7) and not 7;
+  Size := (SizeOf(TStr) - SizeOf(WideChar) + Len * 2 + 7) and not 7;
   if Size < 16 then Size := 16;
   Result := GetMem(Size);
   Result^.Hdr.Size := Size;
   Result^.Hdr.Kind := ckString;
   Result^.Hdr.Flags := cfPermanent or cfOld;
-  Result^.Len := ALen;
+  Result^.Len := Len;
   Result^.Hash := H;
   Result^.Atom := Result;
   Result^.Hdr.Extra := 0;
-  if ALen > 0 then Move(P^, StrChars(Result)[0], ALen * 2);
+  if Len > 0 then Move(P^, StrChars(Result)[0], Len * 2);
   J := Integer(H) and AtomMask;
   while AtomTable[J] <> nil do J := (J + 1) and AtomMask;
   AtomTable[J] := Result;
@@ -1018,9 +1017,9 @@ threadvar
   KeyAtoms: array of PStr;
   KeyAtomCount: Integer;
 
-function KeyPayloadOffset(ALen: Integer): SizeInt; inline;
+function KeyPayloadOffset(Len: Integer): SizeInt; inline;
 begin
-  Result := (SizeOf(TStr) - SizeOf(WideChar) + ALen * 2 + 7) and not 7;
+  Result := (SizeOf(TStr) - SizeOf(WideChar) + Len * 2 + 7) and not 7;
 end;
 
 threadvar
@@ -1035,22 +1034,22 @@ begin
   end;
 end;
 
-function NewKeyAtom(const AText: UnicodeString; AFlags: Word): PStr;
+function NewKeyAtom(const Text: UnicodeString; Flags: Word): PStr;
 var Size: SizeInt;
 begin
-  Size := KeyPayloadOffset(Length(AText)) + 8;
+  Size := KeyPayloadOffset(Length(Text)) + 8;
   if Size < 16 then Size := 16;
   Result := GetMem(Size);
   Result^.Hdr.Size := Size;
   Result^.Hdr.Kind := ckString;
   Result^.Hdr.Flags := cfPermanent or cfOld;
-  Result^.Hdr.Extra := AFlags;
-  Result^.Len := Length(AText);
-  if AText <> '' then Move(AText[1], StrChars(Result)[0], Length(AText) * 2);
-  Result^.Hash := HashChars(StrChars(Result), Length(AText));
+  Result^.Hdr.Extra := Flags;
+  Result^.Len := Length(Text);
+  if Text <> '' then Move(Text[1], StrChars(Result)[0], Length(Text) * 2);
+  Result^.Hash := HashChars(StrChars(Result), Length(Text));
   if Result^.Hash = 0 then Result^.Hash := 1;
   Result^.Atom := Result;
-  PValue(PByte(Result) + KeyPayloadOffset(Length(AText)))^ := VUndefined;
+  PValue(PByte(Result) + KeyPayloadOffset(Length(Text)))^ := VUndefined;
   if KeyAtomCount >= Length(KeyAtoms) then SetLength(KeyAtoms, KeyAtomCount * 2 + 64);
   KeyAtoms[KeyAtomCount] := Result;
   Inc(KeyAtomCount);
@@ -1069,7 +1068,7 @@ begin
   Result := AtomFind(StrChars(S), S^.Len, H);
   if Result = nil then Result := AtomInsert(StrChars(S), S^.Len, H);
   S^.Atom := Result;
-  if (S^.Hdr.Flags and cfOld) <> 0 then;   { atoms are permanent: no barrier needed }
+  if (S^.Hdr.Flags and cfOld) <> 0 then ;   { atoms are permanent: no barrier needed }
 end;
 
 function AtomOf(const S: UnicodeString): PStr;
@@ -1168,17 +1167,17 @@ begin
   Result := MkPtr(R);
 end;
 
-function SubString(S: PStr; AStart, ALen: Integer): TValue;
+function SubString(S: PStr; Start, Len: Integer): TValue;
 var R: PStr;
 begin
-  if (AStart = 0) and (ALen = S^.Len) then Exit(MkPtr(S));
-  if ALen <= 0 then Exit(MkPtr(AtomOf('')));
-  if ALen = 1 then Exit(MkPtr(AtomOf(UnicodeString(StrChars(S)[AStart]))));
+  if (Start = 0) and (Len = S^.Len) then Exit(MkPtr(S));
+  if Len <= 0 then Exit(MkPtr(AtomOf('')));
+  if Len = 1 then Exit(MkPtr(AtomOf(UnicodeString(StrChars(S)[Start]))));
   PushRoot(MkPtr(S));
-  R := NewString(ALen);
+  R := NewString(Len);
   S := StrOf(RootAt(TempTop - 1));
   PopRoots(1);
-  Move(StrChars(S)[AStart], StrChars(R)[0], ALen * 2);
+  Move(StrChars(S)[Start], StrChars(R)[0], Len * 2);
   Result := MkPtr(R);
 end;
 
@@ -1194,12 +1193,12 @@ threadvar
   RootShapes: array of TRootShapeEntry;
   RootShapeCount: Integer;
 
-function NewShape(AParent: PShape; AProto: TValue): PShape;
+function NewShape(Parent: PShape; Proto: TValue): PShape;
 begin
   New(Result);
   FillChar(Result^, SizeOf(TShape), 0);
-  Result^.Proto := AProto;
-  Result^.Parent := AParent;
+  Result^.Proto := Proto;
+  Result^.Parent := Parent;
   Result^.HashMask := -1;
   if ShapeCount >= Length(AllShapes) then SetLength(AllShapes, ShapeCount * 2 + 1024);
   AllShapes[ShapeCount] := Result;
@@ -1207,9 +1206,9 @@ begin
 end;
 
 { a dictionary shape: unique to one object and changed in place by adds (see TShape.Version) }
-function NewDictShape(AProto: TValue): PShape;
+function NewDictShape(Proto: TValue): PShape;
 begin
-  Result := NewShape(nil, AProto);
+  Result := NewShape(nil, Proto);
   Result^.IsDict := True;
 end;
 
@@ -1227,29 +1226,29 @@ end;
 function ValidPtr(P: Pointer): Boolean; forward;
 
 { after a collection: no live old cell may point into the nursery or at a freed cell }
-procedure VerifyHeap(const APhase: string);
+procedure VerifyHeap(const Phase: string);
 var I: Integer; P: PPage; Q: PByte; C: PCell; L: PLarge;
-  procedure Bad(C: PCell; const AField: string; V: QWord);
+  procedure Bad(C: PCell; const Field: string; V: QWord);
   begin
     Write(ErrOutput, 'heap verify (', Phase, ' minor ', GCMinorCount, ' major ', GCMajorCount, '): cell ',
       IntToHex(PtrUInt(C), 16), ' kind ', C^.Kind, ' flags ', C^.Flags);
     if C^.Kind = ckObject then Write(ErrOutput, ' okind ', PObj(C)^.OKind, ' oflags ', PObj(C)^.OFlags);
-    WriteLn(ErrOutput, ' field ', AField, ' = ', IntToHex(V, 16));
+    WriteLn(ErrOutput, ' field ', Field, ' = ', IntToHex(V, 16));
     Halt(9);
   end;
-  procedure CheckP(C: PCell; const AField: string; APtr: Pointer);
+  procedure CheckP(C: PCell; const Field: string; Ptr: Pointer);
   var B: PByte;
   begin
-    if APtr = nil then Exit;
-    B := APtr;
-    if (B >= NurseryStart) and (B < NurseryLimit) then Bad(C, AField + ' (nursery)', PtrUInt(APtr));
+    if Ptr = nil then Exit;
+    B := Ptr;
+    if (B >= NurseryStart) and (B < NurseryLimit) then Bad(C, Field + ' (nursery)', PtrUInt(Ptr));
     if Phase = 'barrier' then Exit;
-    if not ValidPtr(APtr) then Bad(C, AField + ' (invalid)', PtrUInt(APtr));
-    if (PCell(APtr)^.Kind = ckFree) or (PCell(APtr)^.Kind = ckForward) then Bad(C, AField + ' (freed)', PtrUInt(APtr));
+    if not ValidPtr(Ptr) then Bad(C, Field + ' (invalid)', PtrUInt(Ptr));
+    if (PCell(Ptr)^.Kind = ckFree) or (PCell(Ptr)^.Kind = ckForward) then Bad(C, Field + ' (freed)', PtrUInt(Ptr));
   end;
-  procedure CheckV(C: PCell; const AField: string; V: TValue);
+  procedure CheckV(C: PCell; const Field: string; V: TValue);
   begin
-    if (V and TAG_MASK) = TAG_PTR then CheckP(C, AField, Pointer(PtrUInt(V and PTR_MASK)));
+    if (V and TAG_MASK) = TAG_PTR then CheckP(C, Field, Pointer(PtrUInt(V and PTR_MASK)));
   end;
   procedure CheckCell(C: PCell);
   var J: Integer; O: PObj; VA: PValueArray;
@@ -1316,11 +1315,11 @@ begin
   Result := (PtrUInt(P) and 7) = 0;   { permanent or large: at least aligned }
 end;
 
-procedure CheckRoot(const V: TValue; const AWhere: string; I: Integer);
+procedure CheckRoot(const V: TValue; const Where: string; I: Integer);
 begin
   if ((V and TAG_MASK) = TAG_PTR) and not ValidPtr(Pointer(PtrUInt(V and PTR_MASK))) then
   begin
-    WriteLn(ErrOutput, 'bad pointer ', IntToHex(V, 16), ' at ', AWhere, ' ', I, ' minor ', GCMinorCount, ' major ', GCMajorCount,
+    WriteLn(ErrOutput, 'bad pointer ', IntToHex(V, 16), ' at ', Where, ' ', I, ' minor ', GCMinorCount, ' major ', GCMajorCount,
       ' nursery ', IntToHex(PtrUInt(NurseryStart), 16));
     Halt(9);
   end;
@@ -1363,35 +1362,35 @@ begin
 end;
 
 { cold: a prototype's first root shape (and the verifier's report) out of RootShapeFor's frame }
-function NewRootShape(AProto: TValue): PShape; noinline;
+function NewRootShape(Proto: TValue): PShape; noinline;
 begin
-  if GCVerify and ((AProto and TAG_MASK) = TAG_PTR) and not NurseryCellOK(AProto) then
+  if GCVerify and ((Proto and TAG_MASK) = TAG_PTR) and not NurseryCellOK(Proto) then
   begin
-    WriteLn(ErrOutput, 'RootShapeFor: a stale prototype ', IntToHex(AProto, 16));
+    WriteLn(ErrOutput, 'RootShapeFor: a stale prototype ', IntToHex(Proto, 16));
     PInteger(nil)^ := 0;   { stop here under a debugger }
   end;
-  Result := NewShape(nil, AProto);
+  Result := NewShape(nil, Proto);
   if RootShapeCount >= Length(RootShapes) then SetLength(RootShapes, RootShapeCount * 2 + 256);
-  RootShapes[RootShapeCount].P := AProto;
+  RootShapes[RootShapeCount].P := Proto;
   RootShapes[RootShapeCount].S := Result;
   Inc(RootShapeCount);
-  if IsObject(AProto) and (RootShapeCount < 65535) then ObjOf(AProto)^.Hdr.Extra := RootShapeCount;
+  if IsObject(Proto) and (RootShapeCount < 65535) then ObjOf(Proto)^.Hdr.Extra := RootShapeCount;
 end;
 
-function RootShapeFor(AProto: TValue): PShape;
+function RootShapeFor(Proto: TValue): PShape;
 var I: Integer; R: PRootShapeEntry;
 begin
   { prototypes are few; a linear scan over root shapes keyed by prototype (through a raw pointer: see
     ShapeLookup) }
   R := Pointer(RootShapes);
-  if IsObject(AProto) and (ObjOf(AProto)^.Hdr.Extra <> 0) then
+  if IsObject(Proto) and (ObjOf(Proto)^.Hdr.Extra <> 0) then
   begin
-    I := ObjOf(AProto)^.Hdr.Extra - 1;
-    if (I < RootShapeCount) and (R[I].P = AProto) then Exit(R[I].S);
+    I := ObjOf(Proto)^.Hdr.Extra - 1;
+    if (I < RootShapeCount) and (R[I].P = Proto) then Exit(R[I].S);
   end;
   for I := 0 to RootShapeCount - 1 do
-    if R[I].P = AProto then Exit(R[I].S);
-  Result := NewRootShape(AProto);
+    if R[I].P = Proto then Exit(R[I].S);
+  Result := NewRootShape(Proto);
 end;
 
 procedure BuildHash(S: PShape); noinline;   { cold: inlined, its dynamic arrays put an exception frame on every ShapeLookup }
@@ -1412,7 +1411,7 @@ begin
   end;
 end;
 
-function ShapeLookup(S: PShape; AKey: PStr): Integer;
+function ShapeLookup(S: PShape; Key: PStr): Integer;
 var I, J, M: Integer; KP: ^PStr;
 begin
   { raw pointers into the arrays: at -O4 FPC otherwise hoists S^.Keys into a reference-counted temporary, an
@@ -1421,24 +1420,24 @@ begin
   begin
     KP := Pointer(S^.Keys);
     for I := S^.Count - 1 downto 0 do
-      if KP[I] = AKey then Exit(I);
+      if KP[I] = Key then Exit(I);
     Exit(-1);
   end;
   if S^.HashMask < 0 then BuildHash(S);
   KP := Pointer(S^.HashKeys);
   M := S^.HashMask;
-  J := Integer(AKey^.Hash) and M;
+  J := Integer(Key^.Hash) and M;
   while True do
   begin
-    if KP[J] = AKey then Exit(PInteger(Pointer(S^.HashSlots))[J]);
+    if KP[J] = Key then Exit(PInteger(Pointer(S^.HashSlots))[J]);
     if KP[J] = nil then Exit(-1);
     J := (J + 1) and M;
   end;
 end;
 
-function EdgeSlot(AKey: PStr; AFlags: Byte): Integer; inline;
+function EdgeSlot(Key: PStr; Flags: Byte): Integer; inline;
 begin
-  Result := Integer(AKey^.Hash xor (UInt32(AFlags) * 2654435761));
+  Result := Integer(Key^.Hash xor (UInt32(Flags) * 2654435761));
 end;
 
 { index edge E of S in its hash, rebuilding the table when it fills past half }
@@ -1468,14 +1467,14 @@ begin
 end;
 
 { a new transition, or a dictionary's in-place add: out of ShapeAdd's frame (its Copy calls need one) }
-function ShapeAddSlow(S: PShape; AKey: PStr; AFlags: Byte): PShape; noinline;
+function ShapeAddSlow(S: PShape; Key: PStr; Flags: Byte): PShape; noinline;
 var I, J: Integer; N: PShape; MakeDict: Boolean; Idx64: Int64;
 begin
   { very wide objects get a private dictionary shape, so they stop minting shared shapes }
   MakeDict := (S^.Count >= 64) and not S^.IsDict;
   if not S^.IsDict and not MakeDict then
     for I := 0 to S^.EdgeCount - 1 do
-      if (S^.Edges[I].Key = AKey) and (S^.Edges[I].Flags = AFlags) then Exit(S^.Edges[I].Child);
+      if (S^.Edges[I].Key = Key) and (S^.Edges[I].Flags = Flags) then Exit(S^.Edges[I].Child);
   if S^.IsDict then
   begin
     N := S;
@@ -1494,8 +1493,8 @@ begin
     else
     begin
       if S^.EdgeCount >= Length(S^.Edges) then SetLength(S^.Edges, S^.EdgeCount * 2 + 2);
-      S^.Edges[S^.EdgeCount].Key := AKey;
-      S^.Edges[S^.EdgeCount].Flags := AFlags;
+      S^.Edges[S^.EdgeCount].Key := Key;
+      S^.Edges[S^.EdgeCount].Flags := Flags;
       S^.Edges[S^.EdgeCount].Child := N;
       Inc(S^.EdgeCount);
       if S^.EdgeCount > 8 then EdgeIndexAdd(S, S^.EdgeCount - 1);
@@ -1506,18 +1505,18 @@ begin
     SetLength(N^.Keys, N^.Count * 2 + 4);
     SetLength(N^.PFlags, N^.Count * 2 + 4);
   end;
-  N^.Keys[N^.Count] := AKey;
-  N^.PFlags[N^.Count] := AFlags;
+  N^.Keys[N^.Count] := Key;
+  N^.PFlags[N^.Count] := Flags;
   Inc(N^.Count);
-  if (AFlags and pfAccessor) <> 0 then N^.HasAccessors := True;
-  if (AKey^.Hdr.Extra = 0) and IndexFromString(AKey, Idx64) then N^.HasIndexKeys := True;
+  if (Flags and pfAccessor) <> 0 then N^.HasAccessors := True;
+  if (Key^.Hdr.Extra = 0) and IndexFromString(Key, Idx64) then N^.HasIndexKeys := True;
   if N^.IsDict and (N^.HashMask >= 0) and (N^.Count * 2 <= N^.HashMask + 1) then
   begin
     { in-place dictionary: insert into the existing table }
-    if AKey^.Hash = 0 then StrHash(AKey);
-    J := Integer(AKey^.Hash) and N^.HashMask;
+    if Key^.Hash = 0 then StrHash(Key);
+    J := Integer(Key^.Hash) and N^.HashMask;
     while N^.HashKeys[J] <> nil do J := (J + 1) and N^.HashMask;
-    N^.HashKeys[J] := AKey;
+    N^.HashKeys[J] := Key;
     N^.HashSlots[J] := N^.Count - 1;
   end
   else
@@ -1525,75 +1524,75 @@ begin
   Result := N;
 end;
 
-function ShapeAdd(S: PShape; AKey: PStr; AFlags: Byte): PShape;
+function ShapeAdd(S: PShape; Key: PStr; Flags: Byte): PShape;
 var I, J: Integer; E: ^TShapeEdge; H: PInteger;
 begin
   if not S^.IsDict and (S^.Count < 64) then
   begin
     E := Pointer(S^.Edges);
-    if (S^.EdgeCount > 8) and (AKey^.Hash <> 0) then
+    if (S^.EdgeCount > 8) and (Key^.Hash <> 0) then
     begin
       H := Pointer(S^.EdgeHash);
-      J := EdgeSlot(AKey, AFlags) and S^.EdgeMask;
+      J := EdgeSlot(Key, Flags) and S^.EdgeMask;
       while H[J] <> 0 do
       begin
         I := H[J] - 1;
-        if (E[I].Key = AKey) and (E[I].Flags = AFlags) then Exit(E[I].Child);
+        if (E[I].Key = Key) and (E[I].Flags = Flags) then Exit(E[I].Child);
         J := (J + 1) and S^.EdgeMask;
       end;
     end
     else
       for I := 0 to S^.EdgeCount - 1 do
-        if (E[I].Key = AKey) and (E[I].Flags = AFlags) then Exit(E[I].Child);
+        if (E[I].Key = Key) and (E[I].Flags = Flags) then Exit(E[I].Child);
   end;
-  Result := ShapeAddSlow(S, AKey, AFlags);
+  Result := ShapeAddSlow(S, Key, Flags);
 end;
 
 { ---------------- objects ---------------- }
 
-function NewObject(AShape: PShape; AInlineCap: Integer; AOKind: Byte): PObj;
+function NewObject(Shape: PShape; InlineCap: Integer; OKind: Byte): PObj;
 var I: Integer;
 begin
-  Result := PObj(AllocCell(SizeOf(TObj) - SizeOf(TValue) + AInlineCap * SizeOf(TValue), ckObject));
-  Result^.Shape := AShape;
+  Result := PObj(AllocCell(SizeOf(TObj) - SizeOf(TValue) + InlineCap * SizeOf(TValue), ckObject));
+  Result^.Shape := Shape;
   Result^.Elements := nil;
   Result^.Overflow := nil;
   Result^.Native := nil;
   Result^.Aux1 := VUndefined;
   Result^.Aux2 := VUndefined;
-  Result^.InlineCap := AInlineCap;
-  Result^.OKind := AOKind;
+  Result^.InlineCap := InlineCap;
+  Result^.OKind := OKind;
   Result^.OFlags := 0;
   Result^.Pad := 0;
-  for I := 0 to AInlineCap - 1 do Result^.Slots[I] := VUndefined;
+  for I := 0 to InlineCap - 1 do Result^.Slots[I] := VUndefined;
 end;
 
-function NewPlainObject(AProto: TValue; AInlineCap: Integer): PObj;
+function NewPlainObject(Proto: TValue; InlineCap: Integer): PObj;
 begin
-  Result := NewObject(RootShapeFor(AProto), AInlineCap, okPlain);
+  Result := NewObject(RootShapeFor(Proto), InlineCap, okPlain);
 end;
 
-function NewValueArray(ACap: Integer): PValueArray;
+function NewValueArray(Cap: Integer): PValueArray;
 var I: Integer;
 begin
-  if ACap < 1 then ACap := 1;
-  Result := PValueArray(AllocCell(SizeOf(TValueArray) - SizeOf(TValue) + ACap * SizeOf(TValue), ckValueArray));
-  Result^.Cap := ACap;
+  if Cap < 1 then Cap := 1;
+  Result := PValueArray(AllocCell(SizeOf(TValueArray) - SizeOf(TValue) + Cap * SizeOf(TValue), ckValueArray));
+  Result^.Cap := Cap;
   Result^.Len := 0;
-  for I := 0 to ACap - 1 do Result^.Data[I] := VUndefined;
+  for I := 0 to Cap - 1 do Result^.Data[I] := VUndefined;
 end;
 
-function NewArray(ALen: Integer; ACap: Integer): PObj;
+function NewArray(Len: Integer; Cap: Integer): PObj;
 var E: PValueArray; I: Integer;
 begin
-  if ACap < ALen then ACap := ALen;
-  E := NewValueArray(ACap);
+  if Cap < Len then Cap := Len;
+  E := NewValueArray(Cap);
   PushRoot(MkPtr(E));
   Result := NewObject(EmptyShapeForArray, 0, okArray);
   E := PValueArray(PtrOf(RootAt(TempTop - 1)));
   PopRoots(1);
-  E^.Len := ALen;
-  for I := 0 to ALen - 1 do E^.Data[I] := VHole;
+  E^.Len := Len;
+  for I := 0 to Len - 1 do E^.Data[I] := VHole;
   Result^.Elements := E;
   WriteBarrier(@Result^.Hdr, MkPtr(E));
 end;
@@ -1606,19 +1605,19 @@ begin
   Result^.NextOpen := nil;
 end;
 
-function NewAccessor(AGetter, ASetter: TValue): PAccessor;
+function NewAccessor(Getter, Setter: TValue): PAccessor;
 begin
-  PushRoot(AGetter); PushRoot(ASetter);
+  PushRoot(Getter); PushRoot(Setter);
   Result := PAccessor(AllocCell(SizeOf(TAccessor), ckAccessor));
   Result^.Getter := RootAt(TempTop - 2);
   Result^.Setter := RootAt(TempTop - 1);
   PopRoots(2);
 end;
 
-procedure ValueArrayStore(AVA: PValueArray; I: Integer; V: TValue); inline;
+procedure ValueArrayStore(VA: PValueArray; I: Integer; V: TValue); inline;
 begin
-  AVA^.Data[I] := V;
-  WriteBarrier(@AVA^.Hdr, V);
+  VA^.Data[I] := V;
+  WriteBarrier(@VA^.Hdr, V);
 end;
 
 function GetSlot(O: PObj; I: Integer): TValue; inline;
@@ -1638,16 +1637,16 @@ begin
     ValueArrayStore(O^.Overflow, I - O^.InlineCap, V);
 end;
 
-function GetOwnSlot(O: PObj; AKey: PStr): Integer; inline;
+function GetOwnSlot(O: PObj; Key: PStr): Integer; inline;
 begin
-  Result := ShapeLookup(O^.Shape, AKey);
+  Result := ShapeLookup(O^.Shape, Key);
 end;
 
 { adds a property that is known to be absent; may allocate (overflow growth) }
-function AddProperty(O: PObj; AKey: PStr; V: TValue; AFlags: Byte): Integer;
+function AddProperty(O: PObj; Key: PStr; V: TValue; Flags: Byte): Integer;
 var NewShape: PShape; Idx, NewCap, I: Integer; NO: PValueArray;
 begin
-  NewShape := ShapeAdd(O^.Shape, AKey, AFlags);
+  NewShape := ShapeAdd(O^.Shape, Key, Flags);
   Idx := NewShape^.Count - 1;
   if Idx >= O^.InlineCap then
   begin
@@ -1673,10 +1672,10 @@ begin
   Result := Idx;
 end;
 
-procedure DeleteProperty(O: PObj; AKey: PStr);
+procedure DeleteProperty(O: PObj; Key: PStr);
 var Idx, I, J: Integer; Old: PShape; N: PShape; Vals: array of TValue;
 begin
-  Idx := ShapeLookup(O^.Shape, AKey);
+  Idx := ShapeLookup(O^.Shape, Key);
   if Idx < 0 then Exit;
   Old := O^.Shape;
   SetLength(Vals, Old^.Count);
@@ -1695,10 +1694,10 @@ begin
 end;
 
 { same keys in the same order, one key's attributes changed }
-procedure ChangeFlags(O: PObj; AKey: PStr; AFlags: Byte);
+procedure ChangeFlags(O: PObj; Key: PStr; Flags: Byte);
 var Idx, I: Integer; Old, N: PShape; Vals: array of TValue;
 begin
-  Idx := ShapeLookup(O^.Shape, AKey);
+  Idx := ShapeLookup(O^.Shape, Key);
   if Idx < 0 then Exit;
   Old := O^.Shape;
   if Old^.IsDict then
@@ -1708,8 +1707,8 @@ begin
     N^.Count := Old^.Count;
     N^.Keys := Copy(Old^.Keys, 0, Old^.Count);
     N^.PFlags := Copy(Old^.PFlags, 0, Old^.Count);
-    N^.PFlags[Idx] := AFlags;
-    N^.HasAccessors := Old^.HasAccessors or ((AFlags and pfAccessor) <> 0);
+    N^.PFlags[Idx] := Flags;
+    N^.HasAccessors := Old^.HasAccessors or ((Flags and pfAccessor) <> 0);
     N^.HasIndexKeys := Old^.HasIndexKeys;
     N^.IsDict := True;
     O^.Shape := N;
@@ -1719,7 +1718,7 @@ begin
   for I := 0 to Old^.Count - 1 do Vals[I] := GetSlot(O, I);
   O^.Shape := RootShapeFor(Old^.Proto);
   for I := 0 to Old^.Count - 1 do
-    if I = Idx then O^.Shape := ShapeAdd(O^.Shape, Old^.Keys[I], AFlags)
+    if I = Idx then O^.Shape := ShapeAdd(O^.Shape, Old^.Keys[I], Flags)
     else O^.Shape := ShapeAdd(O^.Shape, Old^.Keys[I], Old^.PFlags[I]);
   for I := 0 to Old^.Count - 1 do SetSlot(O, I, Vals[I]);
 end;
@@ -1744,13 +1743,13 @@ begin
   Result := A^.Elements^.Len;
 end;
 
-procedure EnsureElementsCap(A: PObj; ANeed: Integer);
+procedure EnsureElementsCap(A: PObj; Need: Integer);
 var E, NE: PValueArray; NewCap: Integer;
 begin
   E := A^.Elements;
-  if ANeed <= Integer(E^.Cap) then Exit;
+  if Need <= Integer(E^.Cap) then Exit;
   NewCap := Integer(E^.Cap) * 2;
-  if NewCap < ANeed then NewCap := ANeed;
+  if NewCap < Need then NewCap := Need;
   if NewCap < 8 then NewCap := 8;
   PushRoot(MkPtr(A));
   NE := NewValueArray(NewCap);
@@ -1764,20 +1763,20 @@ begin
   if (NE^.Hdr.Flags and cfOld) <> 0 then Remember(@NE^.Hdr);
 end;
 
-procedure ArraySetLength(A: PObj; ANewLen: Integer);
+procedure ArraySetLength(A: PObj; NewLen: Integer);
 var E: PValueArray; I: Integer;
 begin
-  if ANewLen > Integer(A^.Elements^.Cap) then
+  if NewLen > Integer(A^.Elements^.Cap) then
   begin
     PushRoot(MkPtr(A));
-    EnsureElementsCap(A, ANewLen);
+    EnsureElementsCap(A, NewLen);
     A := ObjOf(RootAt(TempTop - 1));
     PopRoots(1);
   end;
   E := A^.Elements;
-  for I := E^.Len to ANewLen - 1 do E^.Data[I] := VHole;
-  for I := ANewLen to Integer(E^.Len) - 1 do E^.Data[I] := VUndefined;
-  E^.Len := ANewLen;
+  for I := E^.Len to NewLen - 1 do E^.Data[I] := VHole;
+  for I := NewLen to Integer(E^.Len) - 1 do E^.Data[I] := VUndefined;
+  E^.Len := NewLen;
 end;
 
 procedure ArrayPush(A: PObj; V: TValue);
@@ -1852,38 +1851,38 @@ begin
   end;
 end;
 
-function IndexFromString(S: PStr; out AIdx: Int64): Boolean;
+function IndexFromString(S: PStr; out Idx: Int64): Boolean;
 var I: Integer; C: Integer;
 begin
   Result := False;
   if (S^.Len = 0) or (S^.Len > 10) then Exit;
   if S^.Hdr.Extra <> 0 then Exit;   { a symbol, private or internal key: its text is only a description }
   if (StrChars(S)[0] = '0') and (S^.Len > 1) then Exit;
-  AIdx := 0;
+  Idx := 0;
   for I := 0 to S^.Len - 1 do
   begin
     C := Ord(StrChars(S)[I]) - 48;
     if (C < 0) or (C > 9) then Exit;
-    AIdx := AIdx * 10 + C;
+    Idx := Idx * 10 + C;
   end;
-  Result := AIdx < 4294967295;
+  Result := Idx < 4294967295;
 end;
 
-function IndexFromValue(V: TValue; out AIdx: Int64): Boolean; inline;
+function IndexFromValue(V: TValue; out Idx: Int64): Boolean; inline;
 var D: Double;
 begin
   if (V and TAG_MASK) = TAG_INT then
   begin
-    AIdx := Int32(UInt32(V));
-    Exit(AIdx >= 0);
+    Idx := Int32(UInt32(V));
+    Exit(Idx >= 0);
   end;
   if V < DOUBLE_LIMIT then
   begin
     D := PDouble(@V)^;
-    if (D >= 0) and (D < 4294967295.0) and (Frac(D) = 0) then begin AIdx := Trunc(D); Exit(True); end;
+    if (D >= 0) and (D < 4294967295.0) and (Frac(D) = 0) then begin Idx := Trunc(D); Exit(True); end;
     Exit(False);
   end;
-  if IsString(V) then Exit(IndexFromString(StrOf(V), AIdx));
+  if IsString(V) then Exit(IndexFromString(StrOf(V), Idx));
   Result := False;
 end;
 

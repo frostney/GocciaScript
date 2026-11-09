@@ -12,13 +12,7 @@ unit G2.Atomics;
 interface
 
 uses
-  Math,
-  SysUtils,
-
-  G2.Core,
-  G2.Shared,
-  G2.Typed,
-  G2.VM;
+  SysUtils, Math, G2.Core, G2.VM, G2.Typed, G2.Shared;
 
 const
   ofShared = $20;
@@ -40,8 +34,7 @@ threadvar
 implementation
 
 uses
-  G2.Builtins2,
-  G2.Promise;
+  G2.Builtins2, G2.Promise;
 
 threadvar
   SharedBufferProto: TValue;
@@ -56,9 +49,9 @@ threadvar
 type
   TArgs = PValue;
 
-function Arg(AArgs: TArgs; AArgc, I: Integer): TValue; inline;
+function Arg(Args: TArgs; Argc, I: Integer): TValue; inline;
 begin
-  if I <= AArgc then Result := AArgs[I] else Result := VUndefined;
+  if I <= Argc then Result := Args[I] else Result := VUndefined;
 end;
 
 function IsSharedBuffer(V: TValue): Boolean;
@@ -107,13 +100,13 @@ end;
 
 { ---------------- SharedArrayBuffer ---------------- }
 
-function SAB_Ctor(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function SAB_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, MaxLen: Int64; Opts, M: TValue; B: PSharedBlock;
 begin
   if CurNewTarget = VUndefined then Exit(ThrowTypeError('Constructor SharedArrayBuffer requires ''new'''));
-  if not ToIndexV(Arg(AArgs, AArgc, 1), Len) then Exit(False);
+  if not ToIndexV(Arg(Args, Argc, 1), Len) then Exit(False);
   MaxLen := -1;
-  Opts := Arg(AArgs, AArgc, 2);
+  Opts := Arg(Args, Argc, 2);
   if IsObject(Opts) then
   begin
     if not GetV(Opts, AtomOf('maxByteLength'), M) then Exit(False);
@@ -125,74 +118,74 @@ begin
   end;
   B := NewSharedBlock(Len, MaxLen);
   if B = nil then Exit(ThrowError('RangeError', 'Array buffer allocation failed'));
-  ARes := WrapSharedBlock(B);
+  Res := WrapSharedBlock(B);
   ReleaseBlock(B);   { the object holds the reference }
   Result := True;
 end;
 
-function ThisShared(AArgs: TArgs; const AName: UnicodeString; var B: PSharedBlock): Boolean;
+function ThisShared(Args: TArgs; const Name: UnicodeString; var B: PSharedBlock): Boolean;
 begin
-  if not IsSharedBuffer(AArgs[0]) then Exit(ThrowTypeError('SharedArrayBuffer.prototype.' + AName + ' requires a SharedArrayBuffer'));
-  B := SharedBlockOf(AArgs[0]);
+  if not IsSharedBuffer(Args[0]) then Exit(ThrowTypeError('SharedArrayBuffer.prototype.' + Name + ' requires a SharedArrayBuffer'));
+  B := SharedBlockOf(Args[0]);
   Result := True;
 end;
 
-function SAB_ByteLength(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function SAB_ByteLength(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PSharedBlock;
 begin
-  if not ThisShared(AArgs, 'byteLength', B) then Exit(False);
-  ARes := MkNumber(BlockLength(B));
+  if not ThisShared(Args, 'byteLength', B) then Exit(False);
+  Res := MkNumber(BlockLength(B));
   Result := True;
 end;
 
-function SAB_Growable(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function SAB_Growable(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PSharedBlock;
 begin
-  if not ThisShared(AArgs, 'growable', B) then Exit(False);
-  if B^.MaxByteLength >= 0 then ARes := VTrue else ARes := VFalse;
+  if not ThisShared(Args, 'growable', B) then Exit(False);
+  if B^.MaxByteLength >= 0 then Res := VTrue else Res := VFalse;
   Result := True;
 end;
 
-function SAB_MaxByteLength(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function SAB_MaxByteLength(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PSharedBlock;
 begin
-  if not ThisShared(AArgs, 'maxByteLength', B) then Exit(False);
-  if B^.MaxByteLength >= 0 then ARes := MkNumber(B^.MaxByteLength) else ARes := MkNumber(BlockLength(B));
+  if not ThisShared(Args, 'maxByteLength', B) then Exit(False);
+  if B^.MaxByteLength >= 0 then Res := MkNumber(B^.MaxByteLength) else Res := MkNumber(BlockLength(B));
   Result := True;
 end;
 
 { 25.2.5.3 SharedArrayBuffer.prototype.grow }
-function SAB_Grow(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function SAB_Grow(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PSharedBlock; N: Int64;
 begin
-  if not ThisShared(AArgs, 'grow', B) then Exit(False);
+  if not ThisShared(Args, 'grow', B) then Exit(False);
   if B^.MaxByteLength < 0 then Exit(ThrowTypeError('SharedArrayBuffer is not growable'));
-  if not ToIndexV(Arg(AArgs, AArgc, 1), N) then Exit(False);
+  if not ToIndexV(Arg(Args, Argc, 1), N) then Exit(False);
   if N > B^.MaxByteLength then Exit(ThrowError('RangeError', 'Invalid length for grow'));
   if not GrowBlock(B, N) then Exit(ThrowError('RangeError', 'SharedArrayBuffer cannot shrink'));
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
 { 25.2.5.7 SharedArrayBuffer.prototype.slice (without species: the result is a plain SharedArrayBuffer) }
-function SAB_Slice(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function SAB_Slice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B, NB: PSharedBlock; Len, S, E: Int64; D: Double;
 begin
-  if not ThisShared(AArgs, 'slice', B) then Exit(False);
+  if not ThisShared(Args, 'slice', B) then Exit(False);
   Len := BlockLength(B);
-  if not ToIntegerOrInf(Arg(AArgs, AArgc, 1), D) then Exit(False);
+  if not ToIntegerOrInf(Arg(Args, Argc, 1), D) then Exit(False);
   if D < 0 then S := Trunc(Max(Len + D, 0)) else S := Trunc(Min(D, Len));
-  if Arg(AArgs, AArgc, 2) = VUndefined then E := Len
+  if Arg(Args, Argc, 2) = VUndefined then E := Len
   else
   begin
-    if not ToIntegerOrInf(AArgs[2], D) then Exit(False);
+    if not ToIntegerOrInf(Args[2], D) then Exit(False);
     if D < 0 then E := Trunc(Max(Len + D, 0)) else E := Trunc(Min(D, Len));
   end;
   if E < S then E := S;
   NB := NewSharedBlock(E - S, -1);
   if NB = nil then Exit(ThrowError('RangeError', 'Array buffer allocation failed'));
   if E > S then Move((B^.Data + S)^, NB^.Data^, E - S);
-  ARes := WrapSharedBlock(NB);
+  Res := WrapSharedBlock(NB);
   ReleaseBlock(NB);
   Result := True;
 end;
@@ -200,11 +193,11 @@ end;
 { ---------------- Atomics ---------------- }
 
 { 25.4.3.1 ValidateIntegerTypedArray; Waitable: Int32Array only (no BigInt64Array yet) }
-function ValidateIntTA(V: TValue; AWaitable: Boolean; var O: PObj): Boolean;
+function ValidateIntTA(V: TValue; Waitable: Boolean; var O: PObj): Boolean;
 begin
   if not IsObject(V) or (ObjOf(V)^.OKind <> okTypedArray) then Exit(ThrowTypeError('Atomics operation on a non-TypedArray'));
   O := ObjOf(V);
-  if AWaitable then
+  if Waitable then
   begin
     if TAKind(O) <> taInt32 then Exit(ThrowTypeError('Atomics.wait and notify require an Int32Array'));
   end
@@ -214,12 +207,12 @@ begin
 end;
 
 { 25.4.3.2 ValidateAtomicAccess: the element's byte address }
-function ValidateAccess(O: PObj; AIdx: TValue; var P: PByte; var AByteIdx: Int64): Boolean;
+function ValidateAccess(O: PObj; Idx: TValue; var P: PByte; var ByteIdx: Int64): Boolean;
 var I: Int64;
 begin
-  if not ToIndexV(AIdx, I) then Exit(False);
+  if not ToIndexV(Idx, I) then Exit(False);
   if I >= TALength(O) then Exit(ThrowError('RangeError', 'Atomics access index out of range'));
-  AByteIdx := Int64(O^.Pad) + I * TAElemSize[TAKind(O)];
+  ByteIdx := Int64(O^.Pad) + I * TAElemSize[TAKind(O)];
   P := TAData(O) + I * TAElemSize[TAKind(O)];
   Result := True;
 end;
@@ -233,9 +226,9 @@ begin
 end;
 
 { RawBytesToNumeric }
-function FromBits(AKind: Integer; B: QWord): TValue;
+function FromBits(Kind: Integer; B: QWord): TValue;
 begin
-  case AKind of
+  case Kind of
     taInt8: Result := MkInt(ShortInt(Byte(B)));
     taUint8: Result := MkInt(Byte(B));
     taInt16: Result := MkInt(SmallInt(Word(B)));
@@ -245,70 +238,70 @@ begin
   end;
 end;
 
-function DoRMW(AArgs: TArgs; AArgc: Integer; AOp: TAtomicOp; var ARes: TValue): Boolean;
+function DoRMW(Args: TArgs; Argc: Integer; Op: TAtomicOp; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64; D: Double; Old: QWord;
 begin
-  if not ValidateIntTA(Arg(AArgs, AArgc, 1), False, O) then Exit(False);
-  if not ValidateAccess(O, Arg(AArgs, AArgc, 2), P, ByteIdx) then Exit(False);
-  if not ToIntegerOrInf(Arg(AArgs, AArgc, 3), D) then Exit(False);
-  O := ObjOf(AArgs[1]);   { a conversion may have run user code and collected garbage }
+  if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
+  if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
+  if not ToIntegerOrInf(Arg(Args, Argc, 3), D) then Exit(False);
+  O := ObjOf(Args[1]);   { a conversion may have run user code and collected garbage }
   P := TAData(O) + (ByteIdx - O^.Pad);
-  Old := AtomicRMW(P, TAElemSize[TAKind(O)], AOp, Bits32(D));
-  ARes := FromBits(TAKind(O), Old);
+  Old := AtomicRMW(P, TAElemSize[TAKind(O)], Op, Bits32(D));
+  Res := FromBits(TAKind(O), Old);
   Result := True;
 end;
 
-function Atomics_Add(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DoRMW(AArgs, AArgc, aoAdd, ARes); end;
-function Atomics_And(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DoRMW(AArgs, AArgc, aoAnd, ARes); end;
-function Atomics_Exchange(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DoRMW(AArgs, AArgc, aoExchange, ARes); end;
-function Atomics_Or(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DoRMW(AArgs, AArgc, aoOr, ARes); end;
-function Atomics_Sub(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DoRMW(AArgs, AArgc, aoSub, ARes); end;
-function Atomics_Xor(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DoRMW(AArgs, AArgc, aoXor, ARes); end;
+function Atomics_Add(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DoRMW(Args, Argc, aoAdd, Res); end;
+function Atomics_And(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DoRMW(Args, Argc, aoAnd, Res); end;
+function Atomics_Exchange(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DoRMW(Args, Argc, aoExchange, Res); end;
+function Atomics_Or(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DoRMW(Args, Argc, aoOr, Res); end;
+function Atomics_Sub(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DoRMW(Args, Argc, aoSub, Res); end;
+function Atomics_Xor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DoRMW(Args, Argc, aoXor, Res); end;
 
-function Atomics_CompareExchange(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Atomics_CompareExchange(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64; E, R: Double; Old, Mask: QWord; W: Integer;
 begin
-  if not ValidateIntTA(Arg(AArgs, AArgc, 1), False, O) then Exit(False);
-  if not ValidateAccess(O, Arg(AArgs, AArgc, 2), P, ByteIdx) then Exit(False);
-  if not ToIntegerOrInf(Arg(AArgs, AArgc, 3), E) then Exit(False);
-  if not ToIntegerOrInf(Arg(AArgs, AArgc, 4), R) then Exit(False);
-  O := ObjOf(AArgs[1]);
+  if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
+  if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
+  if not ToIntegerOrInf(Arg(Args, Argc, 3), E) then Exit(False);
+  if not ToIntegerOrInf(Arg(Args, Argc, 4), R) then Exit(False);
+  O := ObjOf(Args[1]);
   P := TAData(O) + (ByteIdx - O^.Pad);
   W := TAElemSize[TAKind(O)];
   if W = 4 then Mask := $FFFFFFFF else Mask := (QWord(1) shl (8 * W)) - 1;
   Old := AtomicCompareExchange(P, W, Bits32(E) and Mask, Bits32(R) and Mask);
-  ARes := FromBits(TAKind(O), Old);
+  Res := FromBits(TAKind(O), Old);
   Result := True;
 end;
 
-function Atomics_Load(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Atomics_Load(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64;
 begin
-  if not ValidateIntTA(Arg(AArgs, AArgc, 1), False, O) then Exit(False);
-  if not ValidateAccess(O, Arg(AArgs, AArgc, 2), P, ByteIdx) then Exit(False);
-  ARes := FromBits(TAKind(O), AtomicLoad(P, TAElemSize[TAKind(O)]));
+  if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
+  if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
+  Res := FromBits(TAKind(O), AtomicLoad(P, TAElemSize[TAKind(O)]));
   Result := True;
 end;
 
 { 25.4.11 Atomics.store returns the integer it stored, not the element }
-function Atomics_Store(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Atomics_Store(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64; D: Double;
 begin
-  if not ValidateIntTA(Arg(AArgs, AArgc, 1), False, O) then Exit(False);
-  if not ValidateAccess(O, Arg(AArgs, AArgc, 2), P, ByteIdx) then Exit(False);
-  if not ToIntegerOrInf(Arg(AArgs, AArgc, 3), D) then Exit(False);
-  O := ObjOf(AArgs[1]);
+  if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
+  if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
+  if not ToIntegerOrInf(Arg(Args, Argc, 3), D) then Exit(False);
+  O := ObjOf(Args[1]);
   P := TAData(O) + (ByteIdx - O^.Pad);
   AtomicStore(P, TAElemSize[TAKind(O)], Bits32(D));
-  ARes := MkNumber(D);
+  Res := MkNumber(D);
   Result := True;
 end;
 
-function Atomics_IsLockFree(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Atomics_IsLockFree(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var D: Double;
 begin
-  if not ToIntegerOrInf(Arg(AArgs, AArgc, 1), D) then Exit(False);
-  if (D = 1) or (D = 2) or (D = 4) or (D = 8) then ARes := VTrue else ARes := VFalse;
+  if not ToIntegerOrInf(Arg(Args, Argc, 1), D) then Exit(False);
+  if (D = 1) or (D = 2) or (D = 4) or (D = 8) then Res := VTrue else Res := VFalse;
   Result := True;
 end;
 
@@ -319,87 +312,87 @@ type
   end;
   PWaitCell = ^TWaitCell;
 
-function CellStillHolds(AData: Pointer): Boolean;
+function CellStillHolds(Data: Pointer): Boolean;
 begin
-  Result := PLongInt(PWaitCell(AData)^.P)^ = PWaitCell(AData)^.Expected;
+  Result := PLongInt(PWaitCell(Data)^.P)^ = PWaitCell(Data)^.Expected;
 end;
 
 { 25.4.13 Atomics.wait }
-function Atomics_Wait(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Atomics_Wait(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64; D, T: Double; Cell: TWaitCell; R: TWaitResult; Buf: TValue;
 begin
-  if not ValidateIntTA(Arg(AArgs, AArgc, 1), True, O) then Exit(False);
+  if not ValidateIntTA(Arg(Args, Argc, 1), True, O) then Exit(False);
   Buf := O^.Aux1;
   if not IsSharedBuffer(Buf) then Exit(ThrowTypeError('Atomics.wait requires a shared Int32Array'));
-  if not ValidateAccess(O, Arg(AArgs, AArgc, 2), P, ByteIdx) then Exit(False);
-  if not ToNumberV(Arg(AArgs, AArgc, 3), D) then Exit(False);
-  if not ToNumberV(Arg(AArgs, AArgc, 4), T) then Exit(False);
+  if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
+  if not ToNumberV(Arg(Args, Argc, 3), D) then Exit(False);
+  if not ToNumberV(Arg(Args, Argc, 4), T) then Exit(False);
   if IsNaN(T) then T := Infinity else if T < 0 then T := 0;
   if AgentCannotSuspend then Exit(ThrowTypeError('Atomics.wait cannot be called in this agent'));
-  O := ObjOf(AArgs[1]);
+  O := ObjOf(Args[1]);
   Cell.P := PLongInt(TAData(O) + (ByteIdx - O^.Pad));
   Cell.Expected := LongInt(Cardinal(Bits32(D)));
   R := SharedWait(SharedBlockOf(O^.Aux1), ByteIdx, @CellStillHolds, @Cell, T);
   case R of
-    wrOk: ARes := StrFromUnicode('ok');
-    wrNotEqual: ARes := StrFromUnicode('not-equal');
-  else ARes := StrFromUnicode('timed-out');
+    wrOk: Res := StrFromUnicode('ok');
+    wrNotEqual: Res := StrFromUnicode('not-equal');
+  else Res := StrFromUnicode('timed-out');
   end;
   Result := True;
 end;
 
 { 25.4.15 Atomics.notify }
-function Atomics_Notify(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Atomics_Notify(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64; D: Double; C: Int64;
 begin
-  if not ValidateIntTA(Arg(AArgs, AArgc, 1), True, O) then Exit(False);
-  if not ValidateAccess(O, Arg(AArgs, AArgc, 2), P, ByteIdx) then Exit(False);
-  if Arg(AArgs, AArgc, 3) = VUndefined then C := -1
+  if not ValidateIntTA(Arg(Args, Argc, 1), True, O) then Exit(False);
+  if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
+  if Arg(Args, Argc, 3) = VUndefined then C := -1
   else
   begin
-    if not ToIntegerOrInf(AArgs[3], D) then Exit(False);
+    if not ToIntegerOrInf(Args[3], D) then Exit(False);
     if D <= 0 then C := 0 else if IsInfinite(D) or (D > 9e18) then C := -1 else C := Trunc(D);
   end;
-  O := ObjOf(AArgs[1]);
-  if not IsSharedBuffer(O^.Aux1) then begin ARes := MkInt(0); Exit(True); end;
-  ARes := MkNumber(SharedNotify(SharedBlockOf(O^.Aux1), ByteIdx, C));
+  O := ObjOf(Args[1]);
+  if not IsSharedBuffer(O^.Aux1) then begin Res := MkInt(0); Exit(True); end;
+  Res := MkNumber(SharedNotify(SharedBlockOf(O^.Aux1), ByteIdx, C));
   Result := True;
 end;
 
-function ResultObject(AIsAsync: Boolean; V: TValue): TValue;
+function ResultObject(IsAsync: Boolean; V: TValue): TValue;
 var O: TValue;
 begin
   PushRoot(V);
   O := MkPtr(NewPlainObject(ObjectProto, 2));
   PushRoot(O);
-  DefineOwn(O, AtomOf('async'), MkBool(AIsAsync), pfDefault);
+  DefineOwn(O, AtomOf('async'), MkBool(IsAsync), pfDefault);
   DefineOwn(RootAt(TempTop - 1), AtomOf('value'), RootAt(TempTop - 2), pfDefault);
   Result := RootAt(TempTop - 1);
   PopRoots(2);
 end;
 
 { 25.4.14 Atomics.waitAsync }
-function Atomics_WaitAsync(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Atomics_WaitAsync(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64; D, T: Double; Cell: TWaitCell; Token: Integer; Pr: TValue;
 begin
-  if not ValidateIntTA(Arg(AArgs, AArgc, 1), True, O) then Exit(False);
+  if not ValidateIntTA(Arg(Args, Argc, 1), True, O) then Exit(False);
   if not IsSharedBuffer(O^.Aux1) then Exit(ThrowTypeError('Atomics.waitAsync requires a shared Int32Array'));
-  if not ValidateAccess(O, Arg(AArgs, AArgc, 2), P, ByteIdx) then Exit(False);
-  if not ToNumberV(Arg(AArgs, AArgc, 3), D) then Exit(False);
-  if not ToNumberV(Arg(AArgs, AArgc, 4), T) then Exit(False);
+  if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
+  if not ToNumberV(Arg(Args, Argc, 3), D) then Exit(False);
+  if not ToNumberV(Arg(Args, Argc, 4), T) then Exit(False);
   if IsNaN(T) then T := Infinity else if T < 0 then T := 0;
-  O := ObjOf(AArgs[1]);
+  O := ObjOf(Args[1]);
   Cell.P := PLongInt(TAData(O) + (ByteIdx - O^.Pad));
   Cell.Expected := LongInt(Cardinal(Bits32(D)));
-  if Cell.P^ <> Cell.Expected then begin ARes := ResultObject(False, StrFromUnicode('not-equal')); Exit(True); end;
-  if T = 0 then begin ARes := ResultObject(False, StrFromUnicode('timed-out')); Exit(True); end;
+  if Cell.P^ <> Cell.Expected then begin Res := ResultObject(False, StrFromUnicode('not-equal')); Exit(True); end;
+  if T = 0 then begin Res := ResultObject(False, StrFromUnicode('timed-out')); Exit(True); end;
   Pr := NewPendingPromise;
   PushRoot(Pr);
   Token := AsyncCount;
-  if SharedWaitAsyncAdd(SharedBlockOf(ObjOf(AArgs[1])^.Aux1), ByteIdx, @CellStillHolds, @Cell, Token) = wrNotEqual then
+  if SharedWaitAsyncAdd(SharedBlockOf(ObjOf(Args[1])^.Aux1), ByteIdx, @CellStillHolds, @Cell, Token) = wrNotEqual then
   begin
     PopRoots(1);
-    ARes := ResultObject(False, StrFromUnicode('not-equal'));
+    Res := ResultObject(False, StrFromUnicode('not-equal'));
     Exit(True);
   end;
   ArrayPush(ObjOf(AsyncPromises), RootAt(TempTop - 1));
@@ -413,20 +406,20 @@ begin
   AsyncLive[Token] := True;
   Inc(AsyncCount);
   Inc(AsyncPending);
-  ARes := ResultObject(True, RootAt(TempTop - 1));
+  Res := ResultObject(True, RootAt(TempTop - 1));
   PopRoots(1);
   Result := True;
 end;
 
-procedure SettleAsync(AToken: Integer; const AOutcome: UnicodeString);
+procedure SettleAsync(Token: Integer; const Outcome: UnicodeString);
 var Pr: TValue;
 begin
-  if not AsyncLive[AToken] then Exit;
-  AsyncLive[AToken] := False;
+  if not AsyncLive[Token] then Exit;
+  AsyncLive[Token] := False;
   Dec(AsyncPending);
-  Pr := ObjOf(AsyncPromises)^.Elements^.Data[AToken];
-  ObjOf(AsyncPromises)^.Elements^.Data[AToken] := VUndefined;
-  ResolvePendingPromise(Pr, StrFromUnicode(AOutcome));
+  Pr := ObjOf(AsyncPromises)^.Elements^.Data[Token];
+  ObjOf(AsyncPromises)^.Elements^.Data[Token] := VUndefined;
+  ResolvePendingPromise(Pr, StrFromUnicode(Outcome));
 end;
 
 function RunHostLoop: Boolean;
@@ -452,23 +445,23 @@ begin
 end;
 
 { Atomics.pause: a hint; validates its argument }
-function Atomics_Pause(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Atomics_Pause(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var V: TValue;
 begin
-  V := Arg(AArgs, AArgc, 1);
+  V := Arg(Args, Argc, 1);
   if (V <> VUndefined) and (not IsNumber(V) or IsNaN(NumOf(V)) or IsInfinite(NumOf(V)) or (Frac(NumOf(V)) <> 0)) then
     Exit(ThrowTypeError('Atomics.pause argument must be an integral Number'));
   ReadWriteBarrier;
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
-procedure Getter(AObj: TValue; const AName: UnicodeString; AFn: TNativeFn);
+procedure Getter(Obj: TValue; const Name: UnicodeString; Fn: TNativeFn);
 var G: TValue;
 begin
-  G := NewNativeFunction(AFn, 'get ' + AName, 0);
+  G := NewNativeFunction(Fn, 'get ' + Name, 0);
   PushRoot(G);
-  DefineOwn(AObj, AtomOf(AName), MkPtr(NewAccessor(RootAt(TempTop - 1), VUndefined)), pfAccessor or pfConfigurable);
+  DefineOwn(Obj, AtomOf(Name), MkPtr(NewAccessor(RootAt(TempTop - 1), VUndefined)), pfAccessor or pfConfigurable);
   PopRoots(1);
 end;
 

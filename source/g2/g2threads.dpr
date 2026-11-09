@@ -4,12 +4,7 @@ program g2threads;
 {$mode delphiunicode}{$H+}
 
 uses
-  Classes,
-  SysUtils,
-
-  cthreads,
-  G2.Builtins,
-  G2.Engine;
+  cthreads, Classes, SysUtils, G2.Engine, G2.Builtins;
 
 type
   TRunner = class(TThread)
@@ -28,9 +23,9 @@ threadvar
   CurrentLines: TStringList;
 
 { benchmark timings differ between threads: only the other lines are compared }
-procedure CollectLine(const ALine: UnicodeString);
+procedure CollectLine(const Line: UnicodeString);
 begin
-  if (Pos('runs/s', ALine) = 0) and (Pos('Geometric mean', ALine) = 0) then CurrentLines.Add(UTF8Encode(ALine));
+  if (Pos('runs/s', Line) = 0) and (Pos('Geometric mean', Line) = 0) then CurrentLines.Add(UTF8Encode(Line));
 end;
 
 constructor TRunner.Create(const ASource, AFileName: UnicodeString);
@@ -63,10 +58,10 @@ begin
   end;
 end;
 
-function ReadSource(const APath: string): UnicodeString;
+function ReadSource(const Path: string): UnicodeString;
 var F: TFileStream; Raw: RawByteString;
 begin
-  F := TFileStream.Create(APath, fmOpenRead);
+  F := TFileStream.Create(Path, fmOpenRead);
   try
     SetLength(Raw, F.Size);
     if F.Size > 0 then F.ReadBuffer(Raw[1], F.Size);

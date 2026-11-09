@@ -21,18 +21,9 @@ unit G2.Host;
 interface
 
 uses
-  Classes,
-  Generics.Collections,
-  SysUtils,
-  TypInfo,
-
-  G2.Core,
-  G2.VM,
-  Rtti,
-
-  Goccia.FFI.ABI,
-  Goccia.FFI.Call,
-  Goccia.FFI.Types;
+  SysUtils, Classes, TypInfo, Rtti, Generics.Collections,
+  Goccia.FFI.Types, Goccia.FFI.ABI, Goccia.FFI.Call,
+  G2.Core, G2.VM;
 
 type
   TRawValue = G2.Core.TValue;
@@ -77,10 +68,10 @@ type
     function AsString: UnicodeString;
     function AsBoolean: Boolean;
     function AsObject: TObject;          { the Pascal object behind a host object, or nil }
-    function Get(const AName: UnicodeString): TG2Value;
-    procedure Put(const AName: UnicodeString; const V: TG2Value);
-    function Call(const AArgs: array of TG2Value): TG2Value;
-    function Invoke(const AMethod: UnicodeString; const AArgs: array of TG2Value): TG2Value;
+    function Get(const Name: UnicodeString): TG2Value;
+    procedure Put(const Name: UnicodeString; const V: TG2Value);
+    function Call(const Args: array of TG2Value): TG2Value;
+    function Invoke(const Method: UnicodeString; const Args: array of TG2Value): TG2Value;
   end;
 
   { what a host function or a raw host method receives }
@@ -127,15 +118,15 @@ type
 
   TG2Engine = class
   public
-    constructor Create(ANurseryBytes: SizeInt = 8 * 1024 * 1024);
+    constructor Create(NurseryBytes: SizeInt = 8 * 1024 * 1024);
     destructor Destroy; override;
-    function Eval(const ASource: UnicodeString; const AFileName: string = 'script.js'): TG2Value;
+    function Eval(const Source: UnicodeString; const FileName: string = 'script.js'): TG2Value;
     function Global: TG2Value;
-    procedure SetGlobal(const AName: UnicodeString; const V: TG2Value);
-    procedure DefineFunction(const AName: UnicodeString; ALength: Integer; const AFn: TG2Function);
+    procedure SetGlobal(const Name: UnicodeString; const V: TG2Value);
+    procedure DefineFunction(const Name: UnicodeString; Length: Integer; const Fn: TG2Function);
     function RegisterClass(AClass: TClass; const AName: UnicodeString = ''): TG2Value;   { the JS constructor }
-    function Wrap(AObj: TObject; AOwned: Boolean): TG2Value;   { the class (or an ancestor) must be registered }
-    procedure Forget(AObj: TObject);   { the host freed Obj: its wrapper throws from now on }
+    function Wrap(Obj: TObject; Owned: Boolean): TG2Value;   { the class (or an ancestor) must be registered }
+    procedure Forget(Obj: TObject);   { the host freed Obj: its wrapper throws from now on }
     procedure CollectGarbage;
     function LiveHostObjects: Integer;
   end;
@@ -146,34 +137,14 @@ function G2Number(D: Double): TG2Value;
 function G2Str(const S: UnicodeString): TG2Value;
 function G2Bool(B: Boolean): TG2Value;
 function G2Object: TG2Value;
-function G2Func(const AName: UnicodeString; ALength: Integer; const AFn: TG2Function): TG2Value;
+function G2Func(const Name: UnicodeString; Length: Integer; const Fn: TG2Function): TG2Value;
 function G2HandleCount: Integer;   { live handles, for leak checks }
 
 implementation
 
 uses
-  Math,
-
-  G2.ArrayProto,
-  G2.Builtins,
-  G2.Builtins2,
-  G2.Builtins3,
-  G2.Builtins4,
-  G2.Builtins5,
-  G2.Bytecode,
-  G2.Compiler,
-  G2.Disposal,
-  G2.Eval,
-  G2.IterHelpers,
-  G2.Modules,
-  G2.ObjModel,
-  G2.Promise,
-  G2.RegExpV,
-  G2.TypedArrays,
-
-  Goccia.AST.Node,
-  Goccia.Lexer,
-  Goccia.Parser;
+  Math, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, G2.Bytecode, G2.Compiler,
+  G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5;
 
 const
   okHost = 30;
@@ -304,9 +275,9 @@ end;
 { a Pascal exception leaving host code becomes the pending JS exception }
 var HostTrace: Boolean;
 
-function HostFail(E: Exception; ASavedTemp: Integer): Boolean;
+function HostFail(E: Exception; SavedTemp: Integer): Boolean;
 begin
-  TempTop := ASavedTemp;
+  TempTop := SavedTemp;
   if E = nil then
   begin
     ThrowError('Error', 'host code raised an object that is not an Exception');
@@ -376,46 +347,46 @@ function TG2Value.AsString: UnicodeString; begin Result := StrOrThrow(Raw); end;
 function TG2Value.AsBoolean: Boolean; begin Result := ToBool(Raw); end;
 function TG2Value.AsObject: TObject; begin Result := HostObjectOf(Raw); end;
 
-function TG2Value.Get(const AName: UnicodeString): TG2Value;
+function TG2Value.Get(const Name: UnicodeString): TG2Value;
 var Key: PStr; R: TRawValue;
 begin
-  Key := AtomOf(AName);   { atoms are permanent: they never move }
+  Key := AtomOf(Name);   { atoms are permanent: they never move }
   if not GetV(Raw, Key, R) then RaisePending;
   Result.SetRaw(R);
 end;
 
-procedure TG2Value.Put(const AName: UnicodeString; const V: TG2Value);
+procedure TG2Value.Put(const Name: UnicodeString; const V: TG2Value);
 var Key: PStr;
 begin
-  Key := AtomOf(AName);
+  Key := AtomOf(Name);
   if not SetV(Raw, Key, V.Raw) then RaisePending;
 end;
 
-function CallRaw(F, AThis: TRawValue; const AArgs: array of TG2Value): TG2Value;
+function CallRaw(F, This: TRawValue; const Args: array of TG2Value): TG2Value;
 var Base, I: Integer; R: TRawValue; Ok: Boolean;
 begin
   Base := TempTop;
-  if Base + System.Length(AArgs) + 2 > System.Length(TempRoots) then
+  if Base + System.Length(Args) + 2 > System.Length(TempRoots) then
     raise EG2RangeError.Create('too many arguments for a call from host code');
   PushRoot(F);
-  PushRoot(AThis);
-  for I := 0 to High(AArgs) do PushRoot(AArgs[I].Raw);
-  Ok := CallValue(RootAt(Base), RootAt(Base + 1), @TempRoots[Base + 2], Length(AArgs), R);
+  PushRoot(This);
+  for I := 0 to High(Args) do PushRoot(Args[I].Raw);
+  Ok := CallValue(RootAt(Base), RootAt(Base + 1), @TempRoots[Base + 2], Length(Args), R);
   TempTop := Base;
   if not Ok then RaisePending;
   Result.SetRaw(R);
 end;
 
-function TG2Value.Call(const AArgs: array of TG2Value): TG2Value;
+function TG2Value.Call(const Args: array of TG2Value): TG2Value;
 begin
-  Result := CallRaw(Raw, VUndefined, AArgs);
+  Result := CallRaw(Raw, VUndefined, Args);
 end;
 
-function TG2Value.Invoke(const AMethod: UnicodeString; const AArgs: array of TG2Value): TG2Value;
+function TG2Value.Invoke(const Method: UnicodeString; const Args: array of TG2Value): TG2Value;
 var F: TG2Value;
 begin
-  F := Get(AMethod);
-  Result := CallRaw(F.Raw, Raw, AArgs);
+  F := Get(Method);
+  Result := CallRaw(F.Raw, Raw, Args);
 end;
 
 function G2Undefined: TG2Value; begin Result.SetRaw(VUndefined); end;
@@ -573,19 +544,19 @@ end;
 
 { ================= host functions ================= }
 
-function HostFnTrampoline(AArgs: PRawValue; AArgc: Integer; var ARes: TRawValue): Boolean;
+function HostFnTrampoline(Args: PRawValue; Argc: Integer; var Res: TRawValue): Boolean;
 var Idx: UInt32; Saved: Integer; C: TG2Call; R: TG2Value; Fn: TG2Function;
 begin
   Idx := NativeData;   { read first: any nested native call overwrites it }
   Saved := TempTop;
   if PendingFreeCount + PendingFnCount > 0 then FlushFinalizers;
-  C.FArgs := AArgs;
-  C.FArgc := AArgc;
+  C.FArgs := Args;
+  C.FArgc := Argc;
   C.FInstance := nil;
   try
     Fn := HostFns[Idx];   { holds the closure while it runs }
     R := Fn(C);
-    ARes := R.Raw;
+    Res := R.Raw;
     Result := True;
   except
     on E: Exception do Result := HostFail(E, Saved);
@@ -593,7 +564,7 @@ begin
   end;
 end;
 
-function G2Func(const AName: UnicodeString; ALength: Integer; const AFn: TG2Function): TG2Value;
+function G2Func(const Name: UnicodeString; Length: Integer; const Fn: TG2Function): TG2Value;
 var Idx: Integer; W: PWeak;
 begin
   if HostFnFreeTop > 0 then
@@ -607,8 +578,8 @@ begin
     Idx := HostFnCount;
     Inc(HostFnCount);
   end;
-  HostFns[Idx] := AFn;
-  Result.SetRaw(NewNativeFunctionData(HostFnTrampoline, AName, ALength, Idx));
+  HostFns[Idx] := Fn;
+  Result.SetRaw(NewNativeFunctionData(HostFnTrampoline, Name, Length, Idx));
   New(W);
   W^.Cell := PtrOf(Result.Raw);
   W^.Obj := nil;
@@ -724,18 +695,18 @@ begin
   Result := S;
 end;
 
-function AttrName(const AAttrs: TCustomAttributeArray; const ADefault: UnicodeString): UnicodeString;
+function AttrName(const Attrs: TCustomAttributeArray; const Default: UnicodeString): UnicodeString;
 var A: TCustomAttribute;
 begin
-  for A in AAttrs do
+  for A in Attrs do
     if A is JSNameAttribute then Exit(JSNameAttribute(A).Name);
-  Result := ADefault;
+  Result := Default;
 end;
 
-function HasAttr(const AAttrs: TCustomAttributeArray; C: TClass): Boolean;
+function HasAttr(const Attrs: TCustomAttributeArray; C: TClass): Boolean;
 var A: TCustomAttribute;
 begin
-  for A in AAttrs do
+  for A in Attrs do
     if A is C then Exit(True);
   Result := False;
 end;
@@ -751,12 +722,12 @@ begin
 end;
 
 { the FFI argument kind of one parameter; False when this layer cannot pass it }
-function ParamKind(P: TRttiParameter; out K: TArgKind; out C: TClass; out AFT: TGocciaFFIType): Boolean;
+function ParamKind(P: TRttiParameter; out K: TArgKind; out C: TClass; out FT: TGocciaFFIType): Boolean;
 var T: TRttiType;
 begin
   Result := True;
   C := nil;
-  AFT := fftPointer;
+  FT := fftPointer;
   if pfSelf in P.Flags then begin K := akSelf; Exit; end;
   if pfVmt in P.Flags then begin K := akVmt; Exit; end;
   T := P.ParamType;
@@ -784,13 +755,13 @@ begin
     tkFloat:
       begin
         if not FloatKind(T, K) then Exit(False);
-        if K = akDouble then AFT := fftF64 else AFT := fftF32;
+        if K = akDouble then FT := fftF64 else FT := fftF32;
       end;
     tkInteger:
-      if TRttiOrdinalType(T).OrdType = otSLong then begin K := akInt32; AFT := fftI32; end else Exit(False);
-    tkInt64: begin K := akInt64; AFT := fftI64; end;
+      if TRttiOrdinalType(T).OrdType = otSLong then begin K := akInt32; FT := fftI32; end else Exit(False);
+    tkInt64: begin K := akInt64; FT := fftI64; end;
     tkBool:
-      if T.Handle = TypeInfo(Boolean) then begin K := akBool; AFT := fftBool; end else Exit(False);
+      if T.Handle = TypeInfo(Boolean) then begin K := akBool; FT := fftBool; end else Exit(False);
     tkUString: K := akUStr;
     tkAString: K := akAStr;
     tkClass: begin K := akObject; C := TRttiInstanceType(T).MetaclassType; end;
@@ -799,7 +770,7 @@ begin
       begin
         { a 4-byte record passed const arrives by value in a register (x86-64 System V): its slot }
         K := akValue;
-        AFT := fftI32;
+        FT := fftI32;
       end
       else if (T.Handle = TypeInfo(TG2Call)) and (pfConst in P.Flags) then
         K := akCall   { larger than a register: passed by reference }
@@ -808,37 +779,37 @@ begin
   end;
 end;
 
-function RetKindOf(T: TRttiType; out K: TRetKind; out C: TClass; out AFT: TGocciaFFIType): Boolean;
+function RetKindOf(T: TRttiType; out K: TRetKind; out C: TClass; out FT: TGocciaFFIType): Boolean;
 var AK: TArgKind;
 begin
   Result := True;
   C := nil;
-  AFT := fftVoid;
+  FT := fftVoid;
   K := rkVoid;
   if T = nil then Exit;
   case T.TypeKind of
     tkFloat:
       begin
         if not FloatKind(T, AK) then Exit(False);
-        if AK = akDouble then begin K := rkDouble; AFT := fftF64; end else begin K := rkSingle; AFT := fftF32; end;
+        if AK = akDouble then begin K := rkDouble; FT := fftF64; end else begin K := rkSingle; FT := fftF32; end;
       end;
     tkInteger:
-      if TRttiOrdinalType(T).OrdType = otSLong then begin K := rkInt32; AFT := fftI32; end else Exit(False);
-    tkInt64: begin K := rkInt64; AFT := fftI64; end;
+      if TRttiOrdinalType(T).OrdType = otSLong then begin K := rkInt32; FT := fftI32; end else Exit(False);
+    tkInt64: begin K := rkInt64; FT := fftI64; end;
     tkBool:
-      if T.Handle = TypeInfo(Boolean) then begin K := rkBool; AFT := fftBool; end else Exit(False);
-    tkClass: begin K := rkObject; C := TRttiInstanceType(T).MetaclassType; AFT := fftPointer; end;
+      if T.Handle = TypeInfo(Boolean) then begin K := rkBool; FT := fftBool; end else Exit(False);
+    tkClass: begin K := rkObject; C := TRttiInstanceType(T).MetaclassType; FT := fftPointer; end;
   else Exit(False);
   end;
 end;
 
-function BuildPlan(M: TRttiMethod; B: TBinding; const AJSName: UnicodeString): TPlan;
+function BuildPlan(M: TRttiMethod; B: TBinding; const JSName: UnicodeString): TPlan;
 var Ps: TRttiParameterArray; Descs: array of TGocciaFFITypeDescriptor; RetDesc: TGocciaFFITypeDescriptor;
   I, StrCount, ValCount: Integer; K: TArgKind; C: TClass; FT, RFT: TGocciaFFIType; HiddenResult: Boolean;
 begin
   Result := TPlan.Create;
   try
-    Result.JSName := AJSName;
+    Result.JSName := JSName;
     Result.Desc := B.Cls.ClassName + '.' + M.Name;
     Result.Binding := B;
     Result.Owner := TRttiInstanceType(M.Parent).MetaclassType;
@@ -905,55 +876,55 @@ begin
   end;
 end;
 
-function PickOverload(P: TPlan; AArgc: Integer): TPlan;
+function PickOverload(P: TPlan; Argc: Integer): TPlan;
 var Above, Best: TPlan;
 begin
   Above := nil;
   Best := P;
   while P <> nil do
   begin
-    if P.JSArgc = AArgc then Exit(P);
-    if (P.JSArgc > AArgc) and ((Above = nil) or (P.JSArgc < Above.JSArgc)) then Above := P;
+    if P.JSArgc = Argc then Exit(P);
+    if (P.JSArgc > Argc) and ((Above = nil) or (P.JSArgc < Above.JSArgc)) then Above := P;
     if P.JSArgc > Best.JSArgc then Best := P;
     P := P.Next;
   end;
   if Above <> nil then Result := Above else Result := Best;
 end;
 
-procedure RaiseUnregistered(AObj: TObject; AOwned: Boolean);
+procedure RaiseUnregistered(Obj: TObject; Owned: Boolean);
 var N: UnicodeString;
 begin
-  N := UnicodeString(AObj.ClassName);
-  if AOwned then
-    try AObj.Free; except end;   { it was handed to the engine, which cannot represent it }
+  N := UnicodeString(Obj.ClassName);
+  if Owned then
+    try Obj.Free; except end;   { it was handed to the engine, which cannot represent it }
   raise EG2TypeError.Create('class ' + N + ' is not registered');
 end;
 
 { Keeper: for a borrowed object, the JS object that owns it (a VM stack slot the GC updates, or nil).
   The wrapper keeps it alive, so the owner cannot be freed while JS can still reach the borrowed object. }
-function WrapObject(AObj: TObject; AOwned: Boolean; AKeeper: PRawValue = nil): TRawValue;
+function WrapObject(Obj: TObject; Owned: Boolean; Keeper: PRawValue = nil): TRawValue;
 var W: PWeak; B: TBinding; O: PObj;
 begin
-  if AObj = nil then Exit(VNull);
-  if ObjMap.TryGetValue(AObj, W) then Exit(MkPtr(W^.Cell));
-  B := FindBinding(AObj.ClassType);
-  if B = nil then RaiseUnregistered(AObj, AOwned);
+  if Obj = nil then Exit(VNull);
+  if ObjMap.TryGetValue(Obj, W) then Exit(MkPtr(W^.Cell));
+  B := FindBinding(Obj.ClassType);
+  if B = nil then RaiseUnregistered(Obj, Owned);
   O := NewObject(RootShapeFor(B.Proto.Raw), 2, okHost);
-  O^.Native := AObj;
+  O^.Native := Obj;
   O^.Pad := B.Index;
-  if (AKeeper <> nil) and not AOwned and G2.Core.IsObject(AKeeper^) then
+  if (Keeper <> nil) and not Owned and G2.Core.IsObject(Keeper^) then
   begin
-    O^.Aux1 := AKeeper^;   { read after the allocation: Keeper points at a slot the GC updated }
+    O^.Aux1 := Keeper^;   { read after the allocation: Keeper points at a slot the GC updated }
     WriteBarrier(@O^.Hdr, O^.Aux1);
   end;
   New(W);
   W^.Cell := O;
-  W^.Obj := AObj;
-  W^.Owned := AOwned;
+  W^.Obj := Obj;
+  W^.Owned := Owned;
   W^.FnIndex := -1;
-  ObjMap.Add(AObj, W);
+  ObjMap.Add(Obj, W);
   AddWeak(W);
-  if AOwned then Inc(LiveObjects);
+  if Owned then Inc(LiveObjects);
   Result := MkPtr(O);
 end;
 
@@ -971,9 +942,9 @@ type
     NS, NA, NV: Integer;
   end;
 
-procedure RaiseArgType(P: TPlan; AJSIndex, I: Integer);
+procedure RaiseArgType(P: TPlan; JSIndex, I: Integer);
 begin
-  raise EG2TypeError.Create(UnicodeString(P.Desc) + ': argument ' + UnicodeString(IntToStr(AJSIndex)) +
+  raise EG2TypeError.Create(UnicodeString(P.Desc) + ': argument ' + UnicodeString(IntToStr(JSIndex)) +
     ' must be a ' + ClassLabel(P.ArgClasses[I]));
 end;
 
@@ -991,10 +962,10 @@ begin
   Inc(T^.NA);
 end;
 
-procedure PutValue(T: PCallTemps; V: TRawValue; D: PByte; AByRef: Boolean);
+procedure PutValue(T: PCallTemps; V: TRawValue; D: PByte; ByRef: Boolean);
 begin
   T^.VH[T^.NV].SetRaw(V);
-  if AByRef then PPointer(D)^ := @T^.VH[T^.NV]
+  if ByRef then PPointer(D)^ := @T^.VH[T^.NV]
   else PInt32(D)^ := T^.VH[T^.NV].FSlot;   { the record's bits, passed by value }
   Inc(T^.NV);
 end;
@@ -1009,7 +980,7 @@ begin
 end;
 
 { converts the JS arguments, makes the FFI call, converts the result; T is nil for plans without temporaries }
-function InvokeWith(P: TPlan; AArgs: PRawValue; AArgc: Integer; ASelfPtr: Pointer; T: PCallTemps; ACallRec: Pointer): TRawValue;
+function InvokeWith(P: TPlan; Args: PRawValue; Argc: Integer; SelfPtr: Pointer; T: PCallTemps; CallRec: Pointer): TRawValue;
 var Buf: array[0..ARG_BUF_BYTES div 8 - 1] of Int64; RetBuf: array[0..1] of Int64;
   I, J: Integer; D: PByte; V: TRawValue; O: TObject; Code: CodePointer;
 begin
@@ -1018,14 +989,14 @@ begin
   begin
     D := PByte(@Buf[0]) + P.Sig.ArgumentDataOffset(I);
     case P.Kinds[I] of
-      akSelf: begin PPointer(D)^ := ASelfPtr; Continue; end;
+      akSelf: begin PPointer(D)^ := SelfPtr; Continue; end;
       akVmt: begin PPointer(D)^ := Pointer(1); Continue; end;   { 1: allocate (psub.pas: "if vmt=1 then newinstance") }
       akResUStr: begin PPointer(D)^ := @T^.ResU; Continue; end;
       akResAStr: begin PPointer(D)^ := @T^.ResA; Continue; end;
       akResValue: begin PPointer(D)^ := @T^.ResV; Continue; end;
-      akCall: begin PPointer(D)^ := ACallRec; Inc(J); Continue; end;   { stands for all JS arguments }
+      akCall: begin PPointer(D)^ := CallRec; Inc(J); Continue; end;   { stands for all JS arguments }
     end;
-    if J <= AArgc then V := AArgs[J] else V := VUndefined;
+    if J <= Argc then V := Args[J] else V := VUndefined;
     Inc(J);
     case P.Kinds[I] of
       akDouble: PDouble(D)^ := NumOrThrow(V);
@@ -1052,8 +1023,8 @@ begin
   Code := P.Code;
   { a virtual method dispatches through the receiver's VMT (the RTTI index counts from vmtMethodStart) }
   if P.VirtualIndex >= 0 then
-    if P.IsClassMethod then Code := PCodePointer(PByte(ASelfPtr) + vmtMethodStart + P.VirtualIndex * SizeOf(CodePointer))^
-    else Code := PCodePointer(PByte(PPointer(ASelfPtr)^) + vmtMethodStart + P.VirtualIndex * SizeOf(CodePointer))^;
+    if P.IsClassMethod then Code := PCodePointer(PByte(SelfPtr) + vmtMethodStart + P.VirtualIndex * SizeOf(CodePointer))^
+    else Code := PCodePointer(PByte(PPointer(SelfPtr)^) + vmtMethodStart + P.VirtualIndex * SizeOf(CodePointer))^;
   RetBuf[0] := 0;
   FFIInvokeCompiled(Code, P.Sig, @Buf[0], @RetBuf[0]);
   case P.Ret of
@@ -1065,36 +1036,36 @@ begin
     rkBool: Result := MkBool(PByte(@RetBuf[0])^ <> 0);
     rkObject:
       if P.Borrowed and not (P.IsCtor or P.IsClassMethod or P.IsStatic) then
-        Result := WrapObject(TObject(PPointer(@RetBuf[0])^), False, @AArgs[0])
+        Result := WrapObject(TObject(PPointer(@RetBuf[0])^), False, @Args[0])
       else
         Result := WrapObject(TObject(PPointer(@RetBuf[0])^), not P.Borrowed or P.IsCtor);
   else Result := TempResult(P, T);
   end;
 end;
 
-function InvokeWithTemps(P: TPlan; AArgs: PRawValue; AArgc: Integer; ASelfPtr: Pointer): TRawValue;
+function InvokeWithTemps(P: TPlan; Args: PRawValue; Argc: Integer; SelfPtr: Pointer): TRawValue;
 var T: TCallTemps; CallRec: TG2Call;
 begin
   T.NS := 0; T.NA := 0; T.NV := 0;
-  CallRec.FArgs := AArgs;
-  CallRec.FArgc := AArgc;
-  if P.IsCtor or P.IsClassMethod then CallRec.FInstance := nil else CallRec.FInstance := TObject(ASelfPtr);
-  Result := InvokeWith(P, AArgs, AArgc, ASelfPtr, @T, @CallRec);
+  CallRec.FArgs := Args;
+  CallRec.FArgc := Argc;
+  if P.IsCtor or P.IsClassMethod then CallRec.FInstance := nil else CallRec.FInstance := TObject(SelfPtr);
+  Result := InvokeWith(P, Args, Argc, SelfPtr, @T, @CallRec);
 end;
 
-function InvokePlan(P: TPlan; AArgs: PRawValue; AArgc: Integer; ASelfPtr: Pointer): TRawValue;
+function InvokePlan(P: TPlan; Args: PRawValue; Argc: Integer; SelfPtr: Pointer): TRawValue;
 begin
-  if P.NeedsTemps then Result := InvokeWithTemps(P, AArgs, AArgc, ASelfPtr)
-  else Result := InvokeWith(P, AArgs, AArgc, ASelfPtr, nil, nil);
+  if P.NeedsTemps then Result := InvokeWithTemps(P, Args, Argc, SelfPtr)
+  else Result := InvokeWith(P, Args, Argc, SelfPtr, nil, nil);
 end;
 
-function CtorTrampoline(AArgs: PRawValue; AArgc: Integer; var ARes: TRawValue): Boolean; forward;
+function CtorTrampoline(Args: PRawValue; Argc: Integer; var Res: TRawValue): Boolean; forward;
 
 { a class method's Self: the registered class this is (or a JS subclass of), as Pascal's TSub.Method }
-function ClassFromThis(AThis: TRawValue; ABase: TClass): TClass;
+function ClassFromThis(This: TRawValue; Base: TClass): TClass;
 var V: TRawValue; O: PObj; Depth: Integer; C: TClass;
 begin
-  V := AThis;
+  V := This;
   for Depth := 0 to 63 do
   begin
     if not G2.Core.IsObject(V) then Break;
@@ -1102,37 +1073,37 @@ begin
     if (O^.OKind = okNative) and (O^.Native = Pointer(@CtorTrampoline)) then
     begin
       C := Bindings[O^.Pad].Cls;
-      if C.InheritsFrom(ABase) then Exit(C);
+      if C.InheritsFrom(Base) then Exit(C);
       Break;
     end;
     V := ProtoOf(O);
   end;
-  Result := ABase;
+  Result := Base;
 end;
 
-function ReceiverOf(P: TPlan; AThis: TRawValue): Pointer;
+function ReceiverOf(P: TPlan; This: TRawValue): Pointer;
 var O: TObject;
 begin
   if P.IsStatic then Exit(nil);
-  if P.IsClassMethod then Exit(ClassFromThis(AThis, P.Owner));
-  if not G2.Core.IsObject(AThis) or (ObjOf(AThis)^.OKind <> okHost) then
+  if P.IsClassMethod then Exit(ClassFromThis(This, P.Owner));
+  if not G2.Core.IsObject(This) or (ObjOf(This)^.OKind <> okHost) then
     raise EG2TypeError.Create(UnicodeString(P.Desc) + ': this is not a ' + ClassLabel(P.Owner));
-  O := TObject(ObjOf(AThis)^.Native);
+  O := TObject(ObjOf(This)^.Native);
   if O = nil then raise EG2TypeError.Create(UnicodeString(P.Desc) + ': the object was released by the host');
   if not O.InheritsFrom(P.Owner) then
     raise EG2TypeError.Create(UnicodeString(P.Desc) + ': this is not a ' + ClassLabel(P.Owner));
   Result := O;
 end;
 
-function MethodTrampoline(AArgs: PRawValue; AArgc: Integer; var ARes: TRawValue): Boolean;
+function MethodTrampoline(Args: PRawValue; Argc: Integer; var Res: TRawValue): Boolean;
 var P: TPlan; Saved: Integer;
 begin
   P := Plans[NativeData];
   Saved := TempTop;
   if PendingFreeCount + PendingFnCount > 0 then FlushFinalizers;
   try
-    P := PickOverload(P, AArgc);
-    ARes := InvokePlan(P, AArgs, AArgc, ReceiverOf(P, AArgs[0]));
+    P := PickOverload(P, Argc);
+    Res := InvokePlan(P, Args, Argc, ReceiverOf(P, Args[0]));
     Result := True;
   except
     on E: Exception do Result := HostFail(E, Saved);
@@ -1140,7 +1111,7 @@ begin
   end;
 end;
 
-function CtorTrampoline(AArgs: PRawValue; AArgc: Integer; var ARes: TRawValue): Boolean;
+function CtorTrampoline(Args: PRawValue; Argc: Integer; var Res: TRawValue): Boolean;
 var B: TBinding; Saved: Integer; Proto: TG2Value; Obj: TObject; W: TRawValue;
 begin
   B := Bindings[NativeData];
@@ -1150,7 +1121,7 @@ begin
     if CurNewTarget = VUndefined then raise EG2TypeError.Create('Class constructor ' + B.JSName + ' requires ''new''');
     Proto.SetRaw(FunctionPrototypeOf(CurNewTarget));    { subclasses and Reflect.construct }
     if B.Ctors <> nil then
-      W := InvokePlan(PickOverload(B.Ctors, AArgc), AArgs, AArgc, B.Cls)
+      W := InvokePlan(PickOverload(B.Ctors, Argc), Args, Argc, B.Cls)
     else if B.HasHiddenCtor then
       raise EG2TypeError.Create(B.JSName + ' has no constructor available to JS')
     else
@@ -1160,7 +1131,7 @@ begin
     end;
     if not G2.Core.IsObject(W) then raise EG2TypeError.Create(B.JSName + ' constructor did not return an object');
     if G2.Core.IsObject(Proto.Raw) and (Proto.Raw <> B.Proto.Raw) then SetProto(ObjOf(W), Proto.Raw);
-    ARes := W;
+    Res := W;
     Result := True;
   except
     on E: Exception do Result := HostFail(E, Saved);
@@ -1168,28 +1139,28 @@ begin
   end;
 end;
 
-function PropThis(APP: TPropPlan; AThis: TRawValue): TObject;
+function PropThis(PP: TPropPlan; This: TRawValue): TObject;
 begin
-  Result := HostObjectOf(AThis);
-  if (Result = nil) or not Result.InheritsFrom(APP.Owner) then
-    raise EG2TypeError.Create(UnicodeString(APP.Desc) + ': this is not a ' + ClassLabel(APP.Owner));
+  Result := HostObjectOf(This);
+  if (Result = nil) or not Result.InheritsFrom(PP.Owner) then
+    raise EG2TypeError.Create(UnicodeString(PP.Desc) + ': this is not a ' + ClassLabel(PP.Owner));
 end;
 
-function PropGetTrampoline(AArgs: PRawValue; AArgc: Integer; var ARes: TRawValue): Boolean;
+function PropGetTrampoline(Args: PRawValue; Argc: Integer; var Res: TRawValue): Boolean;
 var PP: TPropPlan; Saved: Integer; O: TObject;
 begin
   PP := PropPlans[NativeData];
   Saved := TempTop;
   try
-    O := PropThis(PP, AArgs[0]);
+    O := PropThis(PP, Args[0]);
     case PP.Kind of
-      rkDouble, rkSingle: ARes := MkNumber(GetFloatProp(O, PP.Info));
-      rkInt32: ARes := MkNumber(GetOrdProp(O, PP.Info));
-      rkInt64: ARes := MkNumber(GetInt64Prop(O, PP.Info));
-      rkBool: ARes := MkBool(GetOrdProp(O, PP.Info) <> 0);
-      rkUStr: ARes := StrFromUnicode(GetUnicodeStrProp(O, PP.Info));
-      rkAStr: ARes := StrFromUnicode(UTF8Decode(GetStrProp(O, PP.Info)));
-      rkObject: ARes := WrapObject(GetObjectProp(O, PP.Info), False, @AArgs[0]);   { owned by its parent object }
+      rkDouble, rkSingle: Res := MkNumber(GetFloatProp(O, PP.Info));
+      rkInt32: Res := MkNumber(GetOrdProp(O, PP.Info));
+      rkInt64: Res := MkNumber(GetInt64Prop(O, PP.Info));
+      rkBool: Res := MkBool(GetOrdProp(O, PP.Info) <> 0);
+      rkUStr: Res := StrFromUnicode(GetUnicodeStrProp(O, PP.Info));
+      rkAStr: Res := StrFromUnicode(UTF8Decode(GetStrProp(O, PP.Info)));
+      rkObject: Res := WrapObject(GetObjectProp(O, PP.Info), False, @Args[0]);   { owned by its parent object }
     end;
     Result := True;
   except
@@ -1198,33 +1169,33 @@ begin
   end;
 end;
 
-function PropSetTrampoline(AArgs: PRawValue; AArgc: Integer; var ARes: TRawValue): Boolean;
+function PropSetTrampoline(Args: PRawValue; Argc: Integer; var Res: TRawValue): Boolean;
 var PP: TPropPlan; Saved: Integer; O, X: TObject; V: TRawValue; S: UnicodeString;
 begin
   PP := PropPlans[NativeData];
   Saved := TempTop;
   try
-    if AArgc >= 1 then V := AArgs[1] else V := VUndefined;
+    if Argc >= 1 then V := Args[1] else V := VUndefined;
     case PP.Kind of
-      rkDouble, rkSingle: SetFloatProp(PropThis(PP, AArgs[0]), PP.Info, NumOrThrow(V));
-      rkInt32: SetOrdProp(PropThis(PP, AArgs[0]), PP.Info, ToInt32JS(NumOrThrow(V)));
-      rkInt64: SetInt64Prop(PropThis(PP, AArgs[0]), PP.Info, ToInt64JS(NumOrThrow(V)));
-      rkBool: SetOrdProp(PropThis(PP, AArgs[0]), PP.Info, Ord(ToBool(V)));
-      rkUStr: begin S := StrOrThrow(V); SetUnicodeStrProp(PropThis(PP, AArgs[0]), PP.Info, S); end;
-      rkAStr: begin S := StrOrThrow(V); SetStrProp(PropThis(PP, AArgs[0]), PP.Info, UTF8Encode(S)); end;
+      rkDouble, rkSingle: SetFloatProp(PropThis(PP, Args[0]), PP.Info, NumOrThrow(V));
+      rkInt32: SetOrdProp(PropThis(PP, Args[0]), PP.Info, ToInt32JS(NumOrThrow(V)));
+      rkInt64: SetInt64Prop(PropThis(PP, Args[0]), PP.Info, ToInt64JS(NumOrThrow(V)));
+      rkBool: SetOrdProp(PropThis(PP, Args[0]), PP.Info, Ord(ToBool(V)));
+      rkUStr: begin S := StrOrThrow(V); SetUnicodeStrProp(PropThis(PP, Args[0]), PP.Info, S); end;
+      rkAStr: begin S := StrOrThrow(V); SetStrProp(PropThis(PP, Args[0]), PP.Info, UTF8Encode(S)); end;
       rkObject:
         begin
-          O := PropThis(PP, AArgs[0]);
+          O := PropThis(PP, Args[0]);
           if IsNullish(V) then X := nil else X := HostObjectOf(V);
           if (X = nil) and not IsNullish(V) or (X <> nil) and not X.InheritsFrom(PP.ObjClass) then
             raise EG2TypeError.Create(UnicodeString(PP.Desc) + ' must be a ' + ClassLabel(PP.ObjClass));
           SetObjectProp(O, PP.Info, X);
           { the parent now points at X: while the parent's wrapper lives, X's must too, or the engine
             would free X under the parent }
-          DefineOwn(AArgs[0], PP.KeepKey, V, pfWritable or pfConfigurable);
+          DefineOwn(Args[0], PP.KeepKey, V, pfWritable or pfConfigurable);
         end;
     end;
-    ARes := VUndefined;
+    Res := VUndefined;
     Result := True;
   except
     on E: Exception do Result := HostFail(E, Saved);
@@ -1232,11 +1203,11 @@ begin
   end;
 end;
 
-procedure DefineOn(ATarget: TG2Value; const AName: UnicodeString; const V: TG2Value; AFlags: Byte);
+procedure DefineOn(Target: TG2Value; const Name: UnicodeString; const V: TG2Value; Flags: Byte);
 var Key: PStr;
 begin
-  Key := AtomOf(AName);
-  DefineOwn(ATarget.Raw, Key, V.Raw, AFlags);
+  Key := AtomOf(Name);
+  DefineOwn(Target.Raw, Key, V.Raw, Flags);
 end;
 
 function RegisterClassRtti(AClass: TClass; const AName: UnicodeString): TG2Value;
@@ -1403,14 +1374,14 @@ constructor JSBorrowedAttribute.Create;
 begin
 end;
 
-constructor TG2Engine.Create(ANurseryBytes: SizeInt);
+constructor TG2Engine.Create(NurseryBytes: SizeInt);
 begin
   if EngineUsed then raise EG2Error.Create('Error', 'G2 supports one engine per process');
   EngineUsed := True;
   EngineLive := True;
   HostTrace := GetEnvironmentVariable('G2_HOSTTRACE') <> '';
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
-  HeapInit(ANurseryBytes);
+  HeapInit(NurseryBytes);
   VMInit;
   InitBuiltins;
   InitBuiltins2;
@@ -1464,16 +1435,16 @@ begin
   inherited;
 end;
 
-function TG2Engine.Eval(const ASource: UnicodeString; const AFileName: string): TG2Value;
+function TG2Engine.Eval(const Source: UnicodeString; const FileName: string): TG2Value;
 var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Opts: TGocciaParserOptions; T: PFuncTemplate;
   Res: TRawValue; Ok: Boolean;
 begin
   if FrameTop > 0 then raise EG2Error.Create('Error', 'Eval cannot run while a script is running');
-  L := TGocciaLexer.Create(ASource, AFileName);
+  L := TGocciaLexer.Create(Source, FileName);
   P := nil;
   Prog := nil;
   try
-    P := TGocciaParser.CreateFromLexer(L, AFileName, nil);   { source lines: built only if an error needs them }
+    P := TGocciaParser.CreateFromLexer(L, FileName, nil);   { source lines: built only if an error needs them }
     Opts := P.Options;
     Opts.AutomaticSemicolonInsertion := True;
     Opts.VarDeclarationsEnabled := True;
@@ -1490,7 +1461,7 @@ begin
     except
       on E: Exception do raise EG2SyntaxError.Create(E.Message);
     end;
-    T := CompileProgram(Prog, UnicodeString(AFileName), True);
+    T := CompileProgram(Prog, UnicodeString(FileName), True);
   finally
     Prog.Free;
     P.Free;
@@ -1509,16 +1480,16 @@ begin
   Result.SetRaw(GlobalObj);
 end;
 
-procedure TG2Engine.SetGlobal(const AName: UnicodeString; const V: TG2Value);
+procedure TG2Engine.SetGlobal(const Name: UnicodeString; const V: TG2Value);
 var Key: PStr;
 begin
-  Key := AtomOf(AName);
+  Key := AtomOf(Name);
   DefineOwn(GlobalObj, Key, V.Raw, pfHidden);
 end;
 
-procedure TG2Engine.DefineFunction(const AName: UnicodeString; ALength: Integer; const AFn: TG2Function);
+procedure TG2Engine.DefineFunction(const Name: UnicodeString; Length: Integer; const Fn: TG2Function);
 begin
-  SetGlobal(AName, G2Func(AName, ALength, AFn));
+  SetGlobal(Name, G2Func(Name, Length, Fn));
 end;
 
 function TG2Engine.RegisterClass(AClass: TClass; const AName: UnicodeString): TG2Value;
@@ -1526,16 +1497,16 @@ begin
   Result := RegisterClassRtti(AClass, AName);
 end;
 
-function TG2Engine.Wrap(AObj: TObject; AOwned: Boolean): TG2Value;
+function TG2Engine.Wrap(Obj: TObject; Owned: Boolean): TG2Value;
 begin
-  Result.SetRaw(WrapObject(AObj, AOwned));
+  Result.SetRaw(WrapObject(Obj, Owned));
 end;
 
-procedure TG2Engine.Forget(AObj: TObject);
+procedure TG2Engine.Forget(Obj: TObject);
 var W: PWeak;
 begin
-  if not ObjMap.TryGetValue(AObj, W) then Exit;
-  ObjMap.Remove(AObj);
+  if not ObjMap.TryGetValue(Obj, W) then Exit;
+  ObjMap.Remove(Obj);
   if W^.Owned then Dec(LiveObjects);
   PObj(W^.Cell)^.Native := nil;
   W^.Obj := nil;

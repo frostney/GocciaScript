@@ -12,16 +12,7 @@ procedure InitBuiltins2;
 implementation
 
 uses
-  Math,
-  SysUtils,
-
-  BigInteger,
-  G2.BigIntV,
-  G2.Builtins,
-  G2.Bytecode,
-  G2.Core,
-  G2.Typed,
-  G2.VM;
+  SysUtils, Math, BigInteger, G2.Core, G2.Bytecode, G2.VM, G2.BigIntV, G2.Typed, G2.Builtins;
 
 type
   TArgs = PValue;
@@ -30,90 +21,90 @@ threadvar
   TAProtos: array[0..8] of TValue;
   TypedArrayProto, ArrayBufferProto, DataViewProto, Scratch: TValue;
 
-function Arg(AArgs: TArgs; AArgc, I: Integer): TValue; inline;
+function Arg(Args: TArgs; Argc, I: Integer): TValue; inline;
 begin
-  if I <= AArgc then Result := AArgs[I] else Result := VUndefined;
+  if I <= Argc then Result := Args[I] else Result := VUndefined;
 end;
 
-function NumArg(AArgs: TArgs; AArgc, I: Integer; var D: Double): Boolean; inline;
+function NumArg(Args: TArgs; Argc, I: Integer; var D: Double): Boolean; inline;
 var V: TValue;
 begin
-  V := Arg(AArgs, AArgc, I);
+  V := Arg(Args, Argc, I);
   if IsInt(V) then begin D := IntOf(V); Exit(True); end;
   if IsDouble(V) then begin D := DoubleOf(V); Exit(True); end;
   Result := ToNumberV(V, D);
 end;
 
-function IntArg(AArgs: TArgs; AArgc, I: Integer; ADefault: Int64; var R: Int64): Boolean;
+function IntArg(Args: TArgs; Argc, I: Integer; Default: Int64; var R: Int64): Boolean;
 var D: Double;
 begin
-  if (I > AArgc) or (AArgs[I] = VUndefined) then begin R := ADefault; Exit(True); end;
-  if not NumArg(AArgs, AArgc, I, D) then Exit(False);
+  if (I > Argc) or (Args[I] = VUndefined) then begin R := Default; Exit(True); end;
+  if not NumArg(Args, Argc, I, D) then Exit(False);
   if IsNaN(D) then R := 0 else if D > 9e15 then R := High(Int32) else if D < -9e15 then R := Low(Int32) else R := Trunc(D);
   Result := True;
 end;
 
-function MakeIterResult(AValue: TValue; ADone: Boolean): TValue;
+function MakeIterResult(Value: TValue; Done: Boolean): TValue;
 var O: PObj;
 begin
-  PushRoot(AValue);
+  PushRoot(Value);
   O := NewPlainObject(ObjectProto, 2);
   AddProperty(O, AtomValue, RootAt(TempTop - 1), pfDefault);
-  AddProperty(O, AtomDone, MkBool(ADone), pfDefault);
+  AddProperty(O, AtomDone, MkBool(Done), pfDefault);
   PopRoots(1);
   Result := MkPtr(O);
 end;
 
 { ---------------- generators ---------------- }
 
-function GenResumeNative(AArgs: TArgs; AArgc: Integer; var ARes: TValue; AMode: Integer): Boolean;
+function GenResumeNative(Args: TArgs; Argc: Integer; var Res: TValue; Mode: Integer): Boolean;
 var V: TValue; Done: Boolean;
 begin
   GenYieldRaw := False;
-  if not GeneratorResume(AArgs[0], Arg(AArgs, AArgc, 1), AMode, V, Done) then Exit(False);
-  if GenYieldRaw then begin GenYieldRaw := False; ARes := V; Exit(True); end;
-  ARes := MakeIterResult(V, Done);
+  if not GeneratorResume(Args[0], Arg(Args, Argc, 1), Mode, V, Done) then Exit(False);
+  if GenYieldRaw then begin GenYieldRaw := False; Res := V; Exit(True); end;
+  Res := MakeIterResult(V, Done);
   Result := True;
 end;
-function Gen_Next(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := GenResumeNative(AArgs, AArgc, ARes, 0); end;
-function Gen_Throw(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := GenResumeNative(AArgs, AArgc, ARes, 1); end;
-function Gen_Return(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := GenResumeNative(AArgs, AArgc, ARes, 2); end;
+function Gen_Next(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := GenResumeNative(Args, Argc, Res, 0); end;
+function Gen_Throw(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := GenResumeNative(Args, Argc, Res, 1); end;
+function Gen_Return(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := GenResumeNative(Args, Argc, Res, 2); end;
 
 { ---------------- __proto__ ---------------- }
 
-function Proto_Get(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Proto_Get(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if IsObject(AArgs[0]) then ARes := ObjOf(AArgs[0])^.Shape^.Proto else ARes := VNull;
+  if IsObject(Args[0]) then Res := ObjOf(Args[0])^.Shape^.Proto else Res := VNull;
   Result := True;
 end;
 
-function Proto_Set(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Proto_Set(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var P: TValue;
 begin
-  P := Arg(AArgs, AArgc, 1);
-  if IsObject(AArgs[0]) and (IsObject(P) or (P = VNull)) then SetProto(ObjOf(AArgs[0]), P);
-  ARes := VUndefined;
+  P := Arg(Args, Argc, 1);
+  if IsObject(Args[0]) and (IsObject(P) or (P = VNull)) then SetProto(ObjOf(Args[0]), P);
+  Res := VUndefined;
   Result := True;
 end;
 
 { ---------------- BigInt ---------------- }
 
-function BigInt_Ctor(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function BigInt_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var V, S: TValue; D: Double;
 begin
-  V := Arg(AArgs, AArgc, 1);
-  if IsBigInt(V) then begin ARes := V; Exit(True); end;
+  V := Arg(Args, Argc, 1);
+  if IsBigInt(V) then begin Res := V; Exit(True); end;
   if IsNumber(V) then
   begin
     D := NumOf(V);
     if IsNaN(D) or IsInfinite(D) or (Frac(D) <> 0) then Exit(ThrowError('RangeError', 'The number cannot be converted to a BigInt because it is not an integer'));
-    ARes := BigToValue(TBigInteger.FromDouble(D));
+    Res := BigToValue(TBigInteger.FromDouble(D));
     Exit(True);
   end;
-  if V = VTrue then begin ARes := BigToValue(TBigInteger.One); Exit(True); end;
-  if V = VFalse then begin ARes := BigToValue(TBigInteger.Zero); Exit(True); end;
+  if V = VTrue then begin Res := BigToValue(TBigInteger.One); Exit(True); end;
+  if V = VFalse then begin Res := BigToValue(TBigInteger.Zero); Exit(True); end;
   if not ToStringV(V, S) then Exit(False);
-  ARes := BigToValue(TBigInteger.FromDecimalString(Trim(StrToUnicode(StrOf(S)))));
+  Res := BigToValue(TBigInteger.FromDecimalString(Trim(StrToUnicode(StrOf(S)))));
   Result := True;
 end;
 
@@ -126,90 +117,90 @@ begin
 end;
 
 { 21.2.3.3 toString ( [ radix ] ) }
-function BigProto_ToString(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function BigProto_ToString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Radix: Int64; B: TValue;
 begin
-  if not ThisBig(AArgs[0], B) then Exit(False);
+  if not ThisBig(Args[0], B) then Exit(False);
   PushRoot(B);
-  if (AArgc >= 1) and (AArgs[1] <> VUndefined) then
+  if (Argc >= 1) and (Args[1] <> VUndefined) then
   begin
-    if not IntArg(AArgs, AArgc, 1, 10, Radix) then begin PopRoots(1); Exit(False); end;
+    if not IntArg(Args, Argc, 1, 10, Radix) then begin PopRoots(1); Exit(False); end;
     if (Radix < 2) or (Radix > 36) then begin PopRoots(1); Exit(ThrowError('RangeError', 'toString() radix must be between 2 and 36')); end;
   end
   else Radix := 10;
-  ARes := StrFromUnicode(BigToString(RootAt(TempTop - 1), Radix));
+  Res := StrFromUnicode(BigToString(RootAt(TempTop - 1), Radix));
   PopRoots(1);
   Result := True;
 end;
 
 { 21.2.3.4 valueOf, 21.2.3.2 toLocaleString }
-function BigProto_ValueOf(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function BigProto_ValueOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Result := ThisBig(AArgs[0], ARes);
+  Result := ThisBig(Args[0], Res);
 end;
 
-function BigProto_ToLocaleString(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function BigProto_ToLocaleString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: TValue;
 begin
-  if not ThisBig(AArgs[0], B) then Exit(False);
-  ARes := StrFromUnicode(BigToString(B, 10));
+  if not ThisBig(Args[0], B) then Exit(False);
+  Res := StrFromUnicode(BigToString(B, 10));
   Result := True;
 end;
 
 { ---------------- ArrayBuffer ---------------- }
 
-function Buffer_Ctor(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Buffer_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var N: Int64;
 begin
-  if not IntArg(AArgs, AArgc, 1, 0, N) then Exit(False);
+  if not IntArg(Args, Argc, 1, 0, N) then Exit(False);
   if N < 0 then Exit(ThrowError('RangeError', 'Invalid array buffer length'));
-  ARes := MkPtr(NewArrayBuffer(N, ArrayBufferProto));
+  Res := MkPtr(NewArrayBuffer(N, ArrayBufferProto));
   Result := True;
 end;
 
-function Buffer_Slice(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Buffer_Slice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O, B: PObj; Len, S, E: Int64;
 begin
-  if not IsObject(AArgs[0]) or (ObjOf(AArgs[0])^.OKind <> okArrayBuffer) then Exit(ThrowTypeError('not an ArrayBuffer'));
-  Len := BufferLen(ObjOf(AArgs[0]));
-  if not IntArg(AArgs, AArgc, 1, 0, S) then Exit(False);
-  if not IntArg(AArgs, AArgc, 2, Len, E) then Exit(False);
+  if not IsObject(Args[0]) or (ObjOf(Args[0])^.OKind <> okArrayBuffer) then Exit(ThrowTypeError('not an ArrayBuffer'));
+  Len := BufferLen(ObjOf(Args[0]));
+  if not IntArg(Args, Argc, 1, 0, S) then Exit(False);
+  if not IntArg(Args, Argc, 2, Len, E) then Exit(False);
   if S < 0 then S := Max(0, S + Len) else S := Min(S, Len);
   if E < 0 then E := Max(0, E + Len) else E := Min(E, Len);
   if E < S then E := S;
   B := NewArrayBuffer(E - S, ArrayBufferProto);
-  O := ObjOf(AArgs[0]);
+  O := ObjOf(Args[0]);
   Move((BufferData(O) + S)^, BufferData(B)^, E - S);
-  ARes := MkPtr(B);
+  Res := MkPtr(B);
   Result := True;
 end;
 
 { ---------------- typed arrays ---------------- }
 
-function TypedCtor(AKind: Integer; AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TypedCtor(Kind: Integer; Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var A0, It, V, Buf: TValue; N, Off, I: Int64; T: PObj; Src: PObj; Done: Boolean; D: Double; Items: PObj;
 begin
-  if CurNewTarget = VUndefined then Exit(ThrowTypeError('Constructor ' + TANames[AKind] + ' requires ''new'''));
-  A0 := Arg(AArgs, AArgc, 1);
+  if CurNewTarget = VUndefined then Exit(ThrowTypeError('Constructor ' + TANames[Kind] + ' requires ''new'''));
+  A0 := Arg(Args, Argc, 1);
   if IsObject(A0) and (ObjOf(A0)^.OKind = okArrayBuffer) then
   begin
-    if not IntArg(AArgs, AArgc, 2, 0, Off) then Exit(False);
-    if (AArgc >= 3) and (AArgs[3] <> VUndefined) then
+    if not IntArg(Args, Argc, 2, 0, Off) then Exit(False);
+    if (Argc >= 3) and (Args[3] <> VUndefined) then
     begin
-      if not IntArg(AArgs, AArgc, 3, 0, N) then Exit(False);
+      if not IntArg(Args, Argc, 3, 0, N) then Exit(False);
     end
-    else N := (BufferLen(ObjOf(A0)) - Off) div TAElemSize[AKind];
-    if (Off mod TAElemSize[AKind] <> 0) or (Off + N * TAElemSize[AKind] > BufferLen(ObjOf(A0))) or (N < 0) then
+    else N := (BufferLen(ObjOf(A0)) - Off) div TAElemSize[Kind];
+    if (Off mod TAElemSize[Kind] <> 0) or (Off + N * TAElemSize[Kind] > BufferLen(ObjOf(A0))) or (N < 0) then
       Exit(ThrowError('RangeError', 'Invalid typed array length'));
-    ARes := MkPtr(NewTypedArray(AKind, A0, Off, N, TAProtos[AKind]));
+    Res := MkPtr(NewTypedArray(Kind, A0, Off, N, TAProtos[Kind]));
     Exit(True);
   end;
   if not IsObject(A0) then
   begin
-    if not IntArg(AArgs, AArgc, 1, 0, N) then Exit(False);
+    if not IntArg(Args, Argc, 1, 0, N) then Exit(False);
     if N < 0 then Exit(ThrowError('RangeError', 'Invalid typed array length'));
-    Buf := MkPtr(NewArrayBuffer(N * TAElemSize[AKind], ArrayBufferProto));
-    ARes := MkPtr(NewTypedArray(AKind, Buf, 0, N, TAProtos[AKind]));
+    Buf := MkPtr(NewArrayBuffer(N * TAElemSize[Kind], ArrayBufferProto));
+    Res := MkPtr(NewTypedArray(Kind, Buf, 0, N, TAProtos[Kind]));
     Exit(True);
   end;
   { from an array-like or iterable: collect the values first }
@@ -218,18 +209,18 @@ begin
   begin
     Src := ObjOf(A0);
     N := TALength(Src);
-    Buf := MkPtr(NewArrayBuffer(N * TAElemSize[AKind], ArrayBufferProto));
-    T := NewTypedArray(AKind, Buf, 0, N, TAProtos[AKind]);
-    Src := ObjOf(AArgs[1]);
+    Buf := MkPtr(NewArrayBuffer(N * TAElemSize[Kind], ArrayBufferProto));
+    T := NewTypedArray(Kind, Buf, 0, N, TAProtos[Kind]);
+    Src := ObjOf(Args[1]);
     for I := 0 to N - 1 do TASet(T, I, NumOf(TAGet(Src, I)));
-    ARes := MkPtr(T);
+    Res := MkPtr(T);
     Exit(True);
   end
   else
   begin
     Items := NewArray(0, 8);
     PushRoot(MkPtr(Items));
-    if not GetIterator(AArgs[1], It) then begin PopRoots(1); Exit(False); end;
+    if not GetIterator(Args[1], It) then begin PopRoots(1); Exit(False); end;
     PushRoot(It);
     while True do
     begin
@@ -242,8 +233,8 @@ begin
   end;
   PushRoot(MkPtr(Items));
   N := ArrayLen(Items);
-  Buf := MkPtr(NewArrayBuffer(N * TAElemSize[AKind], ArrayBufferProto));
-  T := NewTypedArray(AKind, Buf, 0, N, TAProtos[AKind]);
+  Buf := MkPtr(NewArrayBuffer(N * TAElemSize[Kind], ArrayBufferProto));
+  T := NewTypedArray(Kind, Buf, 0, N, TAProtos[Kind]);
   PushRoot(MkPtr(T));
   for I := 0 to N - 1 do
   begin
@@ -252,40 +243,40 @@ begin
     if not ToNumberV(V, D) then begin PopRoots(2); Exit(False); end;
     TASet(ObjOf(RootAt(TempTop - 1)), I, D);
   end;
-  ARes := RootAt(TempTop - 1);
+  Res := RootAt(TempTop - 1);
   PopRoots(2);
   Result := True;
 end;
 
-function TA_Int8(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TypedCtor(0, AArgs, AArgc, ARes); end;
-function TA_Uint8(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TypedCtor(1, AArgs, AArgc, ARes); end;
-function TA_Uint8C(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TypedCtor(2, AArgs, AArgc, ARes); end;
-function TA_Int16(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TypedCtor(3, AArgs, AArgc, ARes); end;
-function TA_Uint16(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TypedCtor(4, AArgs, AArgc, ARes); end;
-function TA_Int32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TypedCtor(5, AArgs, AArgc, ARes); end;
-function TA_Uint32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TypedCtor(6, AArgs, AArgc, ARes); end;
-function TA_Float32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TypedCtor(7, AArgs, AArgc, ARes); end;
-function TA_Float64(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TypedCtor(8, AArgs, AArgc, ARes); end;
+function TA_Int8(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TypedCtor(0, Args, Argc, Res); end;
+function TA_Uint8(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TypedCtor(1, Args, Argc, Res); end;
+function TA_Uint8C(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TypedCtor(2, Args, Argc, Res); end;
+function TA_Int16(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TypedCtor(3, Args, Argc, Res); end;
+function TA_Uint16(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TypedCtor(4, Args, Argc, Res); end;
+function TA_Int32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TypedCtor(5, Args, Argc, Res); end;
+function TA_Uint32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TypedCtor(6, Args, Argc, Res); end;
+function TA_Float32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TypedCtor(7, Args, Argc, Res); end;
+function TA_Float64(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TypedCtor(8, Args, Argc, Res); end;
 
-function ThisTA(AArgs: TArgs): Boolean; inline;
+function ThisTA(Args: TArgs): Boolean; inline;
 begin
-  Result := IsObject(AArgs[0]) and (ObjOf(AArgs[0])^.OKind = okTypedArray);
+  Result := IsObject(Args[0]) and (ObjOf(Args[0])^.OKind = okTypedArray);
   if not Result then ThrowTypeError('this is not a typed array');
 end;
 
-function TAProto_Set(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TAProto_Set(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Off: Int64; Src, T: PObj; I, N: Integer; V: TValue; D: Double;
 begin
-  if not ThisTA(AArgs) then Exit(False);
-  if not IntArg(AArgs, AArgc, 2, 0, Off) then Exit(False);
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('invalid source'));
-  Src := ObjOf(AArgs[1]);
+  if not ThisTA(Args) then Exit(False);
+  if not IntArg(Args, Argc, 2, 0, Off) then Exit(False);
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('invalid source'));
+  Src := ObjOf(Args[1]);
   if Src^.OKind = okTypedArray then N := TALength(Src) else if Src^.Elements <> nil then N := ArrayLen(Src)
   else Exit(ThrowTypeError('invalid source'));
-  if Off + N > TALength(ObjOf(AArgs[0])) then Exit(ThrowError('RangeError', 'offset is out of bounds'));
+  if Off + N > TALength(ObjOf(Args[0])) then Exit(ThrowError('RangeError', 'offset is out of bounds'));
   for I := 0 to N - 1 do
   begin
-    Src := ObjOf(AArgs[1]);
+    Src := ObjOf(Args[1]);
     if Src^.OKind = okTypedArray then D := NumOf(TAGet(Src, I))
     else
     begin
@@ -293,155 +284,155 @@ begin
       if V = VHole then V := VUndefined;
       if not ToNumberV(V, D) then Exit(False);
     end;
-    TASet(ObjOf(AArgs[0]), Off + I, D);
+    TASet(ObjOf(Args[0]), Off + I, D);
   end;
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
-function TAProto_Subarray(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TAProto_Subarray(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var T: PObj; Len, S, E: Int64;
 begin
-  if not ThisTA(AArgs) then Exit(False);
-  T := ObjOf(AArgs[0]);
+  if not ThisTA(Args) then Exit(False);
+  T := ObjOf(Args[0]);
   Len := TALength(T);
-  if not IntArg(AArgs, AArgc, 1, 0, S) then Exit(False);
-  if not IntArg(AArgs, AArgc, 2, Len, E) then Exit(False);
+  if not IntArg(Args, Argc, 1, 0, S) then Exit(False);
+  if not IntArg(Args, Argc, 2, Len, E) then Exit(False);
   if S < 0 then S := Max(0, S + Len) else S := Min(S, Len);
   if E < 0 then E := Max(0, E + Len) else E := Min(E, Len);
   if E < S then E := S;
-  T := ObjOf(AArgs[0]);
-  ARes := MkPtr(NewTypedArray(TAKind(T), T^.Aux1, T^.Pad + S * TAElemSize[TAKind(T)], E - S, T^.Shape^.Proto));
+  T := ObjOf(Args[0]);
+  Res := MkPtr(NewTypedArray(TAKind(T), T^.Aux1, T^.Pad + S * TAElemSize[TAKind(T)], E - S, T^.Shape^.Proto));
   Result := True;
 end;
 
-function TAProto_Slice(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TAProto_Slice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var T, R: PObj; Len, S, E: Int64; K: Integer; Buf: TValue;
 begin
-  if not ThisTA(AArgs) then Exit(False);
-  T := ObjOf(AArgs[0]);
+  if not ThisTA(Args) then Exit(False);
+  T := ObjOf(Args[0]);
   Len := TALength(T);
-  if not IntArg(AArgs, AArgc, 1, 0, S) then Exit(False);
-  if not IntArg(AArgs, AArgc, 2, Len, E) then Exit(False);
+  if not IntArg(Args, Argc, 1, 0, S) then Exit(False);
+  if not IntArg(Args, Argc, 2, Len, E) then Exit(False);
   if S < 0 then S := Max(0, S + Len) else S := Min(S, Len);
   if E < 0 then E := Max(0, E + Len) else E := Min(E, Len);
   if E < S then E := S;
-  K := TAKind(ObjOf(AArgs[0]));
+  K := TAKind(ObjOf(Args[0]));
   Buf := MkPtr(NewArrayBuffer((E - S) * TAElemSize[K], ArrayBufferProto));
-  R := NewTypedArray(K, Buf, 0, E - S, ObjOf(AArgs[0])^.Shape^.Proto);
-  T := ObjOf(AArgs[0]);
+  R := NewTypedArray(K, Buf, 0, E - S, ObjOf(Args[0])^.Shape^.Proto);
+  T := ObjOf(Args[0]);
   Move((TAData(T) + S * TAElemSize[K])^, TAData(R)^, (E - S) * TAElemSize[K]);
-  ARes := MkPtr(R);
+  Res := MkPtr(R);
   Result := True;
 end;
 
-function TAProto_Fill(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TAProto_Fill(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var T: PObj; Len, S, E, I: Int64; D: Double;
 begin
-  if not ThisTA(AArgs) then Exit(False);
-  if not NumArg(AArgs, AArgc, 1, D) then Exit(False);
-  T := ObjOf(AArgs[0]);
+  if not ThisTA(Args) then Exit(False);
+  if not NumArg(Args, Argc, 1, D) then Exit(False);
+  T := ObjOf(Args[0]);
   Len := TALength(T);
-  if not IntArg(AArgs, AArgc, 2, 0, S) then Exit(False);
-  if not IntArg(AArgs, AArgc, 3, Len, E) then Exit(False);
+  if not IntArg(Args, Argc, 2, 0, S) then Exit(False);
+  if not IntArg(Args, Argc, 3, Len, E) then Exit(False);
   if S < 0 then S := Max(0, S + Len) else S := Min(S, Len);
   if E < 0 then E := Max(0, E + Len) else E := Min(E, Len);
-  T := ObjOf(AArgs[0]);
+  T := ObjOf(Args[0]);
   for I := S to E - 1 do TASet(T, I, D);
-  ARes := AArgs[0];
+  Res := Args[0];
   Result := True;
 end;
 
-function TAProto_Join(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TAProto_Join(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var T: PObj; I: Integer; S: UnicodeString; V, SV: TValue; Sep: UnicodeString;
 begin
-  if not ThisTA(AArgs) then Exit(False);
+  if not ThisTA(Args) then Exit(False);
   Sep := ',';
-  if (AArgc >= 1) and IsString(AArgs[1]) then Sep := StrToUnicode(StrOf(AArgs[1]));
+  if (Argc >= 1) and IsString(Args[1]) then Sep := StrToUnicode(StrOf(Args[1]));
   S := '';
-  for I := 0 to TALength(ObjOf(AArgs[0])) - 1 do
+  for I := 0 to TALength(ObjOf(Args[0])) - 1 do
   begin
     if I > 0 then S := S + Sep;
-    V := TAGet(ObjOf(AArgs[0]), I);
+    V := TAGet(ObjOf(Args[0]), I);
     if not ToStringV(V, SV) then Exit(False);
     S := S + StrToUnicode(StrOf(SV));
   end;
-  ARes := StrFromUnicode(S);
+  Res := StrFromUnicode(S);
   Result := True;
 end;
 
-function TAProto_IndexOf(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TAProto_IndexOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var T: PObj; I: Integer; D: Double;
 begin
-  if not ThisTA(AArgs) then Exit(False);
-  if not IsNumber(Arg(AArgs, AArgc, 1)) then begin ARes := MkInt(-1); Exit(True); end;
-  D := NumOf(AArgs[1]);
-  T := ObjOf(AArgs[0]);
+  if not ThisTA(Args) then Exit(False);
+  if not IsNumber(Arg(Args, Argc, 1)) then begin Res := MkInt(-1); Exit(True); end;
+  D := NumOf(Args[1]);
+  T := ObjOf(Args[0]);
   for I := 0 to TALength(T) - 1 do
-    if NumOf(TAGet(T, I)) = D then begin ARes := MkInt(I); Exit(True); end;
-  ARes := MkInt(-1);
+    if NumOf(TAGet(T, I)) = D then begin Res := MkInt(I); Exit(True); end;
+  Res := MkInt(-1);
   Result := True;
 end;
 
-function TAProto_ForEach(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TAProto_ForEach(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var I: Integer; CallArgs: array[0..2] of TValue; R: TValue;
 begin
-  if not ThisTA(AArgs) then Exit(False);
-  for I := 0 to TALength(ObjOf(AArgs[0])) - 1 do
+  if not ThisTA(Args) then Exit(False);
+  for I := 0 to TALength(ObjOf(Args[0])) - 1 do
   begin
-    CallArgs[0] := TAGet(ObjOf(AArgs[0]), I); CallArgs[1] := MkInt(I); CallArgs[2] := AArgs[0];
-    if not CallValue(Arg(AArgs, AArgc, 1), Arg(AArgs, AArgc, 2), @CallArgs[0], 3, R) then Exit(False);
+    CallArgs[0] := TAGet(ObjOf(Args[0]), I); CallArgs[1] := MkInt(I); CallArgs[2] := Args[0];
+    if not CallValue(Arg(Args, Argc, 1), Arg(Args, Argc, 2), @CallArgs[0], 3, R) then Exit(False);
   end;
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
-function TAProto_Values(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TAProto_Values(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not ThisTA(AArgs) then Exit(False);
-  Result := GetIterator(AArgs[0], ARes);
+  if not ThisTA(Args) then Exit(False);
+  Result := GetIterator(Args[0], Res);
 end;
 
 { ---------------- DataView ---------------- }
 
-function DV_Ctor(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function DV_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Buf: TValue; Off, Len: Int64; O: PObj;
 begin
-  Buf := Arg(AArgs, AArgc, 1);
+  Buf := Arg(Args, Argc, 1);
   if not IsObject(Buf) or (ObjOf(Buf)^.OKind <> okArrayBuffer) then Exit(ThrowTypeError('First argument to DataView constructor must be an ArrayBuffer'));
-  if not IntArg(AArgs, AArgc, 2, 0, Off) then Exit(False);
-  if not IntArg(AArgs, AArgc, 3, BufferLen(ObjOf(AArgs[1])) - Off, Len) then Exit(False);
-  if (Off < 0) or (Len < 0) or (Off + Len > BufferLen(ObjOf(AArgs[1]))) then Exit(ThrowError('RangeError', 'Invalid DataView length'));
+  if not IntArg(Args, Argc, 2, 0, Off) then Exit(False);
+  if not IntArg(Args, Argc, 3, BufferLen(ObjOf(Args[1])) - Off, Len) then Exit(False);
+  if (Off < 0) or (Len < 0) or (Off + Len > BufferLen(ObjOf(Args[1]))) then Exit(ThrowError('RangeError', 'Invalid DataView length'));
   O := NewObject(RootShapeFor(DataViewProto), 0, okDataView);
-  O^.Aux1 := AArgs[1];
+  O^.Aux1 := Args[1];
   O^.Aux2 := MkInt(Len);
   O^.Pad := Off;
-  ARes := MkPtr(O);
+  Res := MkPtr(O);
   Result := True;
 end;
 
-function DVAccess(AArgs: TArgs; AArgc: Integer; var ARes: TValue; ASize: Integer; AIsSet: Boolean; AKind: Integer): Boolean;
+function DVAccess(Args: TArgs; Argc: Integer; var Res: TValue; Size: Integer; IsSet: Boolean; Kind: Integer): Boolean;
 { Kind: 0 int signed, 1 int unsigned, 2 float }
 var O: PObj; Off: Int64; P: PByte; Little: Boolean; B: array[0..7] of Byte; I: Integer; D: Double;
   U64: QWord; F: Single; LE: Integer;
 begin
-  if not IsObject(AArgs[0]) or (ObjOf(AArgs[0])^.OKind <> okDataView) then Exit(ThrowTypeError('not a DataView'));
-  if not IntArg(AArgs, AArgc, 1, 0, Off) then Exit(False);
-  if AIsSet then
+  if not IsObject(Args[0]) or (ObjOf(Args[0])^.OKind <> okDataView) then Exit(ThrowTypeError('not a DataView'));
+  if not IntArg(Args, Argc, 1, 0, Off) then Exit(False);
+  if IsSet then
   begin
-    if not NumArg(AArgs, AArgc, 2, D) then Exit(False);
+    if not NumArg(Args, Argc, 2, D) then Exit(False);
     LE := 3;
   end
   else LE := 2;
-  Little := ToBool(Arg(AArgs, AArgc, LE));
-  O := ObjOf(AArgs[0]);
-  if (Off < 0) or (Off + ASize > IntOf(O^.Aux2)) then Exit(ThrowError('RangeError', 'Offset is outside the bounds of the DataView'));
+  Little := ToBool(Arg(Args, Argc, LE));
+  O := ObjOf(Args[0]);
+  if (Off < 0) or (Off + Size > IntOf(O^.Aux2)) then Exit(ThrowError('RangeError', 'Offset is outside the bounds of the DataView'));
   P := BufferData(ObjOf(O^.Aux1)) + O^.Pad + Off;
-  if AIsSet then
+  if IsSet then
   begin
     FillChar(B, 8, 0);
-    case AKind of
-      2: if ASize = 4 then begin F := D; Move(F, B, 4); end else Move(D, B, 8);
+    case Kind of
+      2: if Size = 4 then begin F := D; Move(F, B, 4); end else Move(D, B, 8);
     else
       begin
         if IsNaN(D) or IsInfinite(D) then U64 := 0 else U64 := QWord(Int64(Trunc(D)));
@@ -449,50 +440,50 @@ begin
       end;
     end;
     { B holds little-endian bytes }
-    for I := 0 to ASize - 1 do
-      if Little then P[I] := B[I] else P[I] := B[ASize - 1 - I];
-    ARes := VUndefined;
+    for I := 0 to Size - 1 do
+      if Little then P[I] := B[I] else P[I] := B[Size - 1 - I];
+    Res := VUndefined;
     Exit(True);
   end;
   FillChar(B, 8, 0);
-  for I := 0 to ASize - 1 do
-    if Little then B[I] := P[I] else B[I] := P[ASize - 1 - I];
-  case AKind of
-    2: if ASize = 4 then begin Move(B, F, 4); ARes := MkNumber(F); end else begin Move(B, D, 8); ARes := MkNumber(D); end;
-    1: begin Move(B, U64, 8); ARes := MkNumber(U64); end;
+  for I := 0 to Size - 1 do
+    if Little then B[I] := P[I] else B[I] := P[Size - 1 - I];
+  case Kind of
+    2: if Size = 4 then begin Move(B, F, 4); Res := MkNumber(F); end else begin Move(B, D, 8); Res := MkNumber(D); end;
+    1: begin Move(B, U64, 8); Res := MkNumber(U64); end;
   else
-    case ASize of
-      1: ARes := MkInt(ShortInt(B[0]));
-      2: ARes := MkInt(SmallInt(PWord(@B[0])^));
-    else ARes := MkInt(LongInt(PLongWord(@B[0])^));
+    case Size of
+      1: Res := MkInt(ShortInt(B[0]));
+      2: Res := MkInt(SmallInt(PWord(@B[0])^));
+    else Res := MkInt(LongInt(PLongWord(@B[0])^));
     end;
   end;
   Result := True;
 end;
 
-function DV_GetInt8(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 1, False, 0); end;
-function DV_GetUint8(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 1, False, 1); end;
-function DV_GetInt16(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 2, False, 0); end;
-function DV_GetUint16(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 2, False, 1); end;
-function DV_GetInt32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 4, False, 0); end;
-function DV_GetUint32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 4, False, 1); end;
-function DV_GetFloat32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 4, False, 2); end;
-function DV_GetFloat64(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 8, False, 2); end;
-function DV_SetInt8(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 1, True, 0); end;
-function DV_SetUint8(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 1, True, 1); end;
-function DV_SetInt16(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 2, True, 0); end;
-function DV_SetUint16(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 2, True, 1); end;
-function DV_SetInt32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 4, True, 0); end;
-function DV_SetUint32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 4, True, 1); end;
-function DV_SetFloat32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 4, True, 2); end;
-function DV_SetFloat64(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DVAccess(AArgs, AArgc, ARes, 8, True, 2); end;
+function DV_GetInt8(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 1, False, 0); end;
+function DV_GetUint8(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 1, False, 1); end;
+function DV_GetInt16(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 2, False, 0); end;
+function DV_GetUint16(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 2, False, 1); end;
+function DV_GetInt32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 4, False, 0); end;
+function DV_GetUint32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 4, False, 1); end;
+function DV_GetFloat32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 4, False, 2); end;
+function DV_GetFloat64(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 8, False, 2); end;
+function DV_SetInt8(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 1, True, 0); end;
+function DV_SetUint8(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 1, True, 1); end;
+function DV_SetInt16(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 2, True, 0); end;
+function DV_SetUint16(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 2, True, 1); end;
+function DV_SetInt32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 4, True, 0); end;
+function DV_SetUint32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 4, True, 1); end;
+function DV_SetFloat32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 4, True, 2); end;
+function DV_SetFloat64(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DVAccess(Args, Argc, Res, 8, True, 2); end;
 
 { ---------------- Promise (constructor and prototype only, for instanceof checks) ---------------- }
 
 threadvar
   PromiseProto: TValue;
 
-function Promise_Ctor(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Promise_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
   Result := ThrowTypeError('Promise is not supported by the spike engine');
 end;
@@ -507,19 +498,19 @@ end;
 threadvar
   TypedArrayCtor: TValue;
 
-function TypedArray_Abstract(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TypedArray_Abstract(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
   Result := ThrowTypeError('Abstract class TypedArray not directly constructable');
 end;
 
-function Ctor(AFn: TNativeFn; const AName: UnicodeString; ALen: Integer; var AProto: TValue): TValue;
+function Ctor(Fn: TNativeFn; const Name: UnicodeString; Len: Integer; var Proto: TValue): TValue;
 var C: TValue;
 begin
-  C := NewNativeFunction(AFn, AName, ALen);
+  C := NewNativeFunction(Fn, Name, Len);
   Scratch := C;
-  DefineOwn(Scratch, AtomPrototype, AProto, 0);
-  DefineOwn(AProto, AtomConstructor, Scratch, pfHidden);
-  DefineOwn(GlobalObj, AtomOf(AName), Scratch, pfHidden);
+  DefineOwn(Scratch, AtomPrototype, Proto, 0);
+  DefineOwn(Proto, AtomConstructor, Scratch, pfHidden);
+  DefineOwn(GlobalObj, AtomOf(Name), Scratch, pfHidden);
   Result := Scratch;
 end;
 

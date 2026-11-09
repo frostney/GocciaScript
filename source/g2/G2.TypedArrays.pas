@@ -22,14 +22,7 @@ function DetachArrayBufferV(B: TValue): Boolean;
 implementation
 
 uses
-  Math,
-  SysUtils,
-
-  BigInteger,
-  G2.BigIntV,
-  G2.ObjModel,
-  G2.Typed,
-  G2.VM;
+  SysUtils, Math, BigInteger, G2.VM, G2.BigIntV, G2.Typed, G2.ObjModel;
 
 const
   MAX_SAFE = 9007199254740991.0;
@@ -43,9 +36,9 @@ threadvar
   TACtors, TAProtosV: array[0..TAKindCount - 1] of TValue;
   TASortFn: TValue;
 
-function Arg(AArgs: TArgs; AArgc, I: Integer): TValue; inline;
+function Arg(Args: TArgs; Argc, I: Integer): TValue; inline;
 begin
-  if I <= AArgc then Result := AArgs[I] else Result := VUndefined;
+  if I <= Argc then Result := Args[I] else Result := VUndefined;
 end;
 
 { 7.1.22 ToIndex }
@@ -72,17 +65,17 @@ begin
   Result := True;
 end;
 
-function RelIdx(V: TValue; ALen, ADefault: Int64; var R: Int64): Boolean;
+function RelIdx(V: TValue; Len, Default: Int64; var R: Int64): Boolean;
 var D: Double;
 begin
-  if V = VUndefined then begin R := ADefault; Exit(True); end;
+  if V = VUndefined then begin R := Default; Exit(True); end;
   if not ToIntInf(V, D) then Exit(False);
   if D < 0 then
   begin
-    D := ALen + D;
+    D := Len + D;
     if D < 0 then D := 0;
   end
-  else if D > ALen then D := ALen;
+  else if D > Len then D := Len;
   R := Trunc(D);
   Result := True;
 end;
@@ -103,33 +96,33 @@ begin
 end;
 
 { 10.1.14 GetPrototypeFromConstructor }
-function ProtoFromCtor(C, ADefault: TValue; var P: TValue): Boolean;
+function ProtoFromCtor(C, Default: TValue; var P: TValue): Boolean;
 begin
   if not GetV(C, AtomPrototype, P) then Exit(False);
-  if not IsObject(P) then P := ADefault;
+  if not IsObject(P) then P := Default;
   Result := True;
 end;
 
 { 7.3.22 SpeciesConstructor }
-function SpeciesCtor(O, ADefault: TValue; var C: TValue): Boolean;
+function SpeciesCtor(O, Default: TValue; var C: TValue): Boolean;
 var S: TValue;
 begin
   if not GetV(O, AtomConstructor, C) then Exit(False);
-  if C = VUndefined then begin C := ADefault; Exit(True); end;
+  if C = VUndefined then begin C := Default; Exit(True); end;
   if not IsObject(C) then Exit(ThrowTypeError('object.constructor is not an object'));
   if not GetElemV(C, SymSpecies, S) then Exit(False);
-  if IsNullish(S) then begin C := ADefault; Exit(True); end;
+  if IsNullish(S) then begin C := Default; Exit(True); end;
   if IsConstructorV(S) then begin C := S; Exit(True); end;
   Result := ThrowTypeError('object.constructor[Symbol.species] is not a constructor');
 end;
 
 { 23.2.4.4 ValidateTypedArray: the receiver's length; a TypeError for a non-typed-array or an out-of-bounds or
   detached one }
-function ValidateTA(V: TValue; var ALen: Int64): Boolean;
+function ValidateTA(V: TValue; var Len: Int64): Boolean;
 begin
   if not IsTA(V) then Exit(ThrowTypeError('this is not a typed array'));
   if TAOutOfBounds(ObjOf(V)) then Exit(ThrowTypeError('the typed array is detached or out of bounds'));
-  ALen := TALength(ObjOf(V));
+  Len := TALength(ObjOf(V));
   Result := True;
 end;
 
@@ -141,19 +134,19 @@ end;
 { ---------------- ArrayBuffer ---------------- }
 
 { 25.1.3.1 AllocateArrayBuffer (MaxLen < 0: fixed length) }
-function AllocBuffer(C: TValue; ALen, AMaxLen: Int64; var B: TValue): Boolean;
+function AllocBuffer(C: TValue; Len, MaxLen: Int64; var B: TValue): Boolean;
 var P: TValue;
 begin
-  if (AMaxLen >= 0) and (ALen > AMaxLen) then Exit(ThrowError('RangeError', 'byteLength exceeds maxByteLength'));
+  if (MaxLen >= 0) and (Len > MaxLen) then Exit(ThrowError('RangeError', 'byteLength exceeds maxByteLength'));
   if not ProtoFromCtor(C, ArrayBufferProtoV, P) then Exit(False);
-  if (ALen > MAX_ALLOC) or (AMaxLen > MAX_ALLOC) then Exit(ThrowError('RangeError', 'Array buffer allocation failed'));
-  if AMaxLen >= 0 then B := MkPtr(NewResizableBuffer(ALen, AMaxLen, P))
-  else B := MkPtr(NewArrayBuffer(ALen, P));
+  if (Len > MAX_ALLOC) or (MaxLen > MAX_ALLOC) then Exit(ThrowError('RangeError', 'Array buffer allocation failed'));
+  if MaxLen >= 0 then B := MkPtr(NewResizableBuffer(Len, MaxLen, P))
+  else B := MkPtr(NewArrayBuffer(Len, P));
   Result := True;
 end;
 
 { 25.1.4.1 ArrayBuffer ( length [ , options ] ) }
-function AB_Ctor(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AB_Ctor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, MaxLen: Int64; NT, M: TValue;
 begin
   NT := CurNewTarget;
@@ -161,78 +154,78 @@ begin
   PushRoot(NT);
   Result := False;
   MaxLen := -1;
-  if ToIndex(Arg(AArgs, AArgc, 1), Len) then
+  if ToIndex(Arg(Args, Argc, 1), Len) then
   begin
     { 25.1.3.7 GetArrayBufferMaxByteLengthOption }
     M := VUndefined;
-    if IsObject(Arg(AArgs, AArgc, 2)) and not GetV(AArgs[2], AtomOf('maxByteLength'), M) then begin PopRoots(1); Exit; end;
+    if IsObject(Arg(Args, Argc, 2)) and not GetV(Args[2], AtomOf('maxByteLength'), M) then begin PopRoots(1); Exit; end;
     if (M = VUndefined) or ToIndex(M, MaxLen) then
-      Result := AllocBuffer(RootAt(TempTop - 1), Len, MaxLen, ARes);
+      Result := AllocBuffer(RootAt(TempTop - 1), Len, MaxLen, Res);
   end;
   PopRoots(1);
   ConstructProtoTaken := True;
 end;
 
-function ThisBuffer(AArgs: TArgs; const AName: UnicodeString; var B: PObj): Boolean;
+function ThisBuffer(Args: TArgs; const Name: UnicodeString; var B: PObj): Boolean;
 begin
-  if not IsBuffer(AArgs[0]) or ((ObjOf(AArgs[0])^.OFlags and bfShared) <> 0) then
-    Exit(ThrowTypeError('ArrayBuffer.prototype.' + AName + ' called on an incompatible receiver'));
-  B := ObjOf(AArgs[0]);
+  if not IsBuffer(Args[0]) or ((ObjOf(Args[0])^.OFlags and bfShared) <> 0) then
+    Exit(ThrowTypeError('ArrayBuffer.prototype.' + Name + ' called on an incompatible receiver'));
+  B := ObjOf(Args[0]);
   Result := True;
 end;
 
-function AB_ByteLength(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AB_ByteLength(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PObj;
 begin
-  if not ThisBuffer(AArgs, 'byteLength', B) then Exit(False);
-  ARes := MkNumber(BufferLen(B));
+  if not ThisBuffer(Args, 'byteLength', B) then Exit(False);
+  Res := MkNumber(BufferLen(B));
   Result := True;
 end;
 
-function AB_MaxByteLength(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AB_MaxByteLength(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PObj;
 begin
-  if not ThisBuffer(AArgs, 'maxByteLength', B) then Exit(False);
-  ARes := MkNumber(BufferMaxLen(B));
+  if not ThisBuffer(Args, 'maxByteLength', B) then Exit(False);
+  Res := MkNumber(BufferMaxLen(B));
   Result := True;
 end;
 
-function AB_Resizable(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AB_Resizable(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PObj;
 begin
-  if not ThisBuffer(AArgs, 'resizable', B) then Exit(False);
-  ARes := MkBool((B^.OFlags and bfResizable) <> 0);
+  if not ThisBuffer(Args, 'resizable', B) then Exit(False);
+  Res := MkBool((B^.OFlags and bfResizable) <> 0);
   Result := True;
 end;
 
-function AB_Detached(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AB_Detached(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PObj;
 begin
-  if not ThisBuffer(AArgs, 'detached', B) then Exit(False);
-  ARes := MkBool(BufferDetached(B));
+  if not ThisBuffer(Args, 'detached', B) then Exit(False);
+  Res := MkBool(BufferDetached(B));
   Result := True;
 end;
 
 { 25.1.6.7 ArrayBuffer.prototype.slice }
-function AB_Slice(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AB_Slice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B, NB: PObj; Len, First, Fin, NewLen, Cnt, CurLen: Int64; C, LV, N: TValue;
 begin
-  if not ThisBuffer(AArgs, 'slice', B) then Exit(False);
+  if not ThisBuffer(Args, 'slice', B) then Exit(False);
   if BufferDetached(B) then Exit(ThrowTypeError('ArrayBuffer.prototype.slice called on a detached buffer'));
   Len := BufferLen(B);
-  if not RelIdx(Arg(AArgs, AArgc, 1), Len, 0, First) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 2), Len, Len, Fin) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 1), Len, 0, First) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 2), Len, Len, Fin) then Exit(False);
   NewLen := Max(Fin - First, 0);
-  if not SpeciesCtor(AArgs[0], ArrayBufferCtor, C) then Exit(False);
+  if not SpeciesCtor(Args[0], ArrayBufferCtor, C) then Exit(False);
   LV := IdxVal(NewLen);
   if not Construct(C, @LV, 1, C, N) then Exit(False);
   if not IsBuffer(N) or ((ObjOf(N)^.OFlags and bfShared) <> 0) then
     Exit(ThrowTypeError('ArrayBuffer species constructor did not return an ArrayBuffer'));
   NB := ObjOf(N);
   if BufferDetached(NB) then Exit(ThrowTypeError('ArrayBuffer species constructor returned a detached buffer'));
-  if N = AArgs[0] then Exit(ThrowTypeError('ArrayBuffer species constructor returned the same buffer'));
+  if N = Args[0] then Exit(ThrowTypeError('ArrayBuffer species constructor returned the same buffer'));
   if BufferLen(NB) < NewLen then Exit(ThrowTypeError('ArrayBuffer species constructor returned a too small buffer'));
-  B := ObjOf(AArgs[0]);
+  B := ObjOf(Args[0]);
   if BufferDetached(B) then Exit(ThrowTypeError('the ArrayBuffer was detached'));
   CurLen := BufferLen(B);
   if First < CurLen then
@@ -240,61 +233,61 @@ begin
     Cnt := Min(NewLen, CurLen - First);
     if Cnt > 0 then Move((BufferData(B) + First)^, BufferData(NB)^, Cnt);
   end;
-  ARes := N;
+  Res := N;
   Result := True;
 end;
 
 { 25.1.6.6 ArrayBuffer.prototype.resize }
-function AB_Resize(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AB_Resize(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: PObj; NewLen, Old: Int64;
 begin
-  if not ThisBuffer(AArgs, 'resize', B) or ((B^.OFlags and bfResizable) = 0) then
+  if not ThisBuffer(Args, 'resize', B) or ((B^.OFlags and bfResizable) = 0) then
     Exit(ThrowTypeError('ArrayBuffer.prototype.resize called on a fixed-length buffer'));
-  if not ToIndex(Arg(AArgs, AArgc, 1), NewLen) then Exit(False);
-  B := ObjOf(AArgs[0]);
+  if not ToIndex(Arg(Args, Argc, 1), NewLen) then Exit(False);
+  B := ObjOf(Args[0]);
   if BufferDetached(B) then Exit(ThrowTypeError('ArrayBuffer.prototype.resize called on a detached buffer'));
   if NewLen > BufferMaxLen(B) then Exit(ThrowError('RangeError', 'new length exceeds maxByteLength'));
   Old := BufferLen(B);
   { the bytes past the new length read as zero when the buffer grows again }
   if NewLen < Old then FillChar((BufferData(B) + NewLen)^, Old - NewLen, 0);
   B^.Aux2 := MkNumber(NewLen);
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
 { 25.1.3.3 ArrayBufferCopyAndDetach: transfer / transferToFixedLength }
-function CopyAndDetach(AArgs: TArgs; AArgc: Integer; var ARes: TValue; APreserve: Boolean; const AName: UnicodeString): Boolean;
+function CopyAndDetach(Args: TArgs; Argc: Integer; var Res: TValue; Preserve: Boolean; const Name: UnicodeString): Boolean;
 var B: PObj; NewLen, MaxLen: Int64; N: TValue;
 begin
-  if not ThisBuffer(AArgs, AName, B) then Exit(False);
-  if Arg(AArgs, AArgc, 1) = VUndefined then NewLen := BufferLen(B)
-  else if not ToIndex(AArgs[1], NewLen) then Exit(False);
-  B := ObjOf(AArgs[0]);
-  if BufferDetached(B) then Exit(ThrowTypeError('ArrayBuffer.prototype.' + AName + ' called on a detached buffer'));
-  if APreserve and ((B^.OFlags and bfResizable) <> 0) then MaxLen := BufferMaxLen(B) else MaxLen := -1;
+  if not ThisBuffer(Args, Name, B) then Exit(False);
+  if Arg(Args, Argc, 1) = VUndefined then NewLen := BufferLen(B)
+  else if not ToIndex(Args[1], NewLen) then Exit(False);
+  B := ObjOf(Args[0]);
+  if BufferDetached(B) then Exit(ThrowTypeError('ArrayBuffer.prototype.' + Name + ' called on a detached buffer'));
+  if Preserve and ((B^.OFlags and bfResizable) <> 0) then MaxLen := BufferMaxLen(B) else MaxLen := -1;
   if not AllocBuffer(ArrayBufferCtor, NewLen, MaxLen, N) then Exit(False);
-  B := ObjOf(AArgs[0]);
+  B := ObjOf(Args[0]);
   if Min(NewLen, BufferLen(B)) > 0 then Move(BufferData(B)^, BufferData(ObjOf(N))^, Min(NewLen, BufferLen(B)));
   DetachBuffer(B);
-  ARes := N;
+  Res := N;
   Result := True;
 end;
 
-function AB_Transfer(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
-begin Result := CopyAndDetach(AArgs, AArgc, ARes, True, 'transfer'); end;
-function AB_TransferToFixed(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
-begin Result := CopyAndDetach(AArgs, AArgc, ARes, False, 'transferToFixedLength'); end;
+function AB_Transfer(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin Result := CopyAndDetach(Args, Argc, Res, True, 'transfer'); end;
+function AB_TransferToFixed(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin Result := CopyAndDetach(Args, Argc, Res, False, 'transferToFixedLength'); end;
 
 { 25.1.5.1 ArrayBuffer.isView }
-function AB_IsView(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AB_IsView(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := MkBool(IsObject(Arg(AArgs, AArgc, 1)) and (ObjOf(AArgs[1])^.OKind in [okTypedArray, okDataView]));
+  Res := MkBool(IsObject(Arg(Args, Argc, 1)) and (ObjOf(Args[1])^.OKind in [okTypedArray, okDataView]));
   Result := True;
 end;
 
-function Species_Getter(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Species_Getter(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := AArgs[0];
+  Res := Args[0];
   Result := True;
 end;
 
@@ -308,35 +301,35 @@ end;
 
 { ---------------- typed array creation ---------------- }
 
-function NewTAOf(AKind: Integer; ALen: Int64; AProto: TValue; var T: TValue): Boolean;
+function NewTAOf(Kind: Integer; Len: Int64; Proto: TValue; var T: TValue): Boolean;
 var B: TValue;
 begin
-  if ALen * TAElemSize[AKind] > MAX_ALLOC then Exit(ThrowError('RangeError', 'Invalid typed array length: ' + IntToStr(ALen)));
-  PushRoot(AProto);
-  B := MkPtr(NewArrayBuffer(ALen * TAElemSize[AKind], ArrayBufferProtoV));
-  T := MkPtr(NewTypedArray(AKind, B, 0, ALen, RootAt(TempTop - 1)));
+  if Len * TAElemSize[Kind] > MAX_ALLOC then Exit(ThrowError('RangeError', 'Invalid typed array length: ' + IntToStr(Len)));
+  PushRoot(Proto);
+  B := MkPtr(NewArrayBuffer(Len * TAElemSize[Kind], ArrayBufferProtoV));
+  T := MkPtr(NewTypedArray(Kind, B, 0, Len, RootAt(TempTop - 1)));
   PopRoots(1);
   Result := True;
 end;
 
 { 23.2.5.1.2 InitializeTypedArrayFromTypedArray }
-function FromTypedArray(AKind: Integer; AProto, ASrc: TValue; var T: TValue): Boolean;
+function FromTypedArray(Kind: Integer; Proto, Src: TValue; var T: TValue): Boolean;
 var S: PObj; Len, I: Int64; SK: Integer;
 begin
-  S := ObjOf(ASrc);
+  S := ObjOf(Src);
   if TAOutOfBounds(S) then Exit(ThrowTypeError('the source typed array is detached or out of bounds'));
-  if TAIsBig(S) <> (AKind >= taBigInt64) then Exit(ThrowTypeError('Content type mismatch: BigInt and Number typed arrays'));
+  if TAIsBig(S) <> (Kind >= taBigInt64) then Exit(ThrowTypeError('Content type mismatch: BigInt and Number typed arrays'));
   Len := TALength(S);
-  PushRoot(ASrc);
-  if not NewTAOf(AKind, Len, AProto, T) then begin PopRoots(1); Exit(False); end;
+  PushRoot(Src);
+  if not NewTAOf(Kind, Len, Proto, T) then begin PopRoots(1); Exit(False); end;
   S := ObjOf(RootAt(TempTop - 1));
   PopRoots(1);
   SK := TAKind(S);
-  if SK = AKind then
+  if SK = Kind then
   begin
-    if Len > 0 then Move(TAData(S)^, TAData(ObjOf(T))^, Len * TAElemSize[AKind]);
+    if Len > 0 then Move(TAData(S)^, TAData(ObjOf(T))^, Len * TAElemSize[Kind]);
   end
-  else if AKind >= taBigInt64 then
+  else if Kind >= taBigInt64 then
     for I := 0 to Len - 1 do PQWord(TAData(ObjOf(T)))[I] := PQWord(TAData(S))[I]
   else
     for I := 0 to Len - 1 do TASet(ObjOf(T), I, NumOf(TAGet(S, I)));
@@ -344,15 +337,15 @@ begin
 end;
 
 { 23.2.5.1.3 InitializeTypedArrayFromArrayBuffer }
-function FromBuffer(AKind: Integer; AProto, ABuf, AOffV, ALenV: TValue; var T: TValue): Boolean;
+function FromBuffer(Kind: Integer; Proto, Buf, OffV, LenV: TValue; var T: TValue): Boolean;
 var Off, NewLen, BL, NewBL: Int64; ES: Integer; B: PObj; Fixed: Boolean;
 begin
-  ES := TAElemSize[AKind];
-  PushRoot(AProto); PushRoot(ABuf); PushRoot(ALenV);
+  ES := TAElemSize[Kind];
+  PushRoot(Proto); PushRoot(Buf); PushRoot(LenV);
   Result := False;
   try
-    if not ToIndex(AOffV, Off) then Exit;
-    if Off mod ES <> 0 then Exit(ThrowError('RangeError', 'start offset of ' + TANames[AKind] + ' should be a multiple of ' + IntToStr(ES)));
+    if not ToIndex(OffV, Off) then Exit;
+    if Off mod ES <> 0 then Exit(ThrowError('RangeError', 'start offset of ' + TANames[Kind] + ' should be a multiple of ' + IntToStr(ES)));
     NewLen := 0;
     if (RootAt(TempTop - 1) <> VUndefined) and not ToIndex(RootAt(TempTop - 1), NewLen) then Exit;
     B := ObjOf(RootAt(TempTop - 2));
@@ -362,12 +355,12 @@ begin
     if (RootAt(TempTop - 1) = VUndefined) and not Fixed then
     begin
       if Off > BL then Exit(ThrowError('RangeError', 'start offset ' + IntToStr(Off) + ' is outside the bounds of the buffer'));
-      T := MkPtr(NewTypedArray(AKind, RootAt(TempTop - 2), Off, -1, RootAt(TempTop - 3)));
+      T := MkPtr(NewTypedArray(Kind, RootAt(TempTop - 2), Off, -1, RootAt(TempTop - 3)));
       Exit(True);
     end;
     if RootAt(TempTop - 1) = VUndefined then
     begin
-      if BL mod ES <> 0 then Exit(ThrowError('RangeError', 'byte length of ' + TANames[AKind] + ' should be a multiple of ' + IntToStr(ES)));
+      if BL mod ES <> 0 then Exit(ThrowError('RangeError', 'byte length of ' + TANames[Kind] + ' should be a multiple of ' + IntToStr(ES)));
       NewBL := BL - Off;
       if NewBL < 0 then Exit(ThrowError('RangeError', 'start offset ' + IntToStr(Off) + ' is outside the bounds of the buffer'));
     end
@@ -377,7 +370,7 @@ begin
       if Off + NewBL > BL then Exit(ThrowError('RangeError', 'Invalid typed array length: ' + IntToStr(NewLen)));
     end;
     if NewBL div ES > High(Int32) then Exit(ThrowError('RangeError', 'Invalid typed array length'));
-    T := MkPtr(NewTypedArray(AKind, RootAt(TempTop - 2), Off, NewBL div ES, RootAt(TempTop - 3)));
+    T := MkPtr(NewTypedArray(Kind, RootAt(TempTop - 2), Off, NewBL div ES, RootAt(TempTop - 3)));
     Result := True;
   finally
     PopRoots(3);
@@ -385,19 +378,19 @@ begin
 end;
 
 { 23.2.5.1.4 / .5: from a list (a rooted array of the iterated values) or an array-like; Set(O, k, v, true) each }
-function FromValues(AKind: Integer; AProto, ASrc: TValue; AFromList: Boolean; var T: TValue): Boolean;
+function FromValues(Kind: Integer; Proto, Src: TValue; FromList: Boolean; var T: TValue): Boolean;
 var Len, K: Int64; V: TValue; Base: Integer;
 begin
   Base := TempTop;
-  PushRoot(ASrc); PushRoot(AProto);
+  PushRoot(Src); PushRoot(Proto);
   Result := False;
-  if AFromList then Len := ObjOf(ASrc)^.Elements^.Len
-  else if not LengthOfArrayLike(ASrc, Len) then begin PopRoots(2); Exit; end;
-  if not NewTAOf(AKind, Len, RootAt(Base + 1), T) then begin PopRoots(2); Exit; end;
+  if FromList then Len := ObjOf(Src)^.Elements^.Len
+  else if not LengthOfArrayLike(Src, Len) then begin PopRoots(2); Exit; end;
+  if not NewTAOf(Kind, Len, RootAt(Base + 1), T) then begin PopRoots(2); Exit; end;
   PushRoot(T);
   for K := 0 to Len - 1 do
   begin
-    if AFromList then
+    if FromList then
     begin
       V := ObjOf(RootAt(Base))^.Elements^.Data[K];
       if V = VHole then V := VUndefined;
@@ -411,12 +404,12 @@ begin
 end;
 
 { 7.4.x IteratorToList(GetIteratorFromMethod(obj, method)) into a new array }
-function IterToList(AObj, AMethod: TValue; var L: TValue): Boolean;
+function IterToList(Obj, Method: TValue; var L: TValue): Boolean;
 var It, NextM, V: TValue; Done: Boolean; Base: Integer;
 begin
   Base := TempTop;
   PushRoot(MkPtr(NewArray(0, 8)));
-  if not CallValue(AMethod, AObj, nil, 0, It) then begin PopRoots(1); Exit(False); end;
+  if not CallValue(Method, Obj, nil, 0, It) then begin PopRoots(1); Exit(False); end;
   if not IsObject(It) then begin PopRoots(1); Exit(ThrowTypeError('iterator is not an object')); end;
   PushRoot(It);
   if not GetV(It, AtomNext, NextM) then begin PopRoots(2); Exit(False); end;
@@ -433,16 +426,16 @@ begin
 end;
 
 { 23.2.5.1 TypedArray ( ...args ) }
-function TACtor(AKind: Integer; AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TACtor(Kind: Integer; Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var NT, Proto, A0, M, L: TValue; N: Int64;
 begin
   NT := CurNewTarget;
-  if NT = VUndefined then Exit(ThrowTypeError('Constructor ' + TANames[AKind] + ' requires ''new'''));
+  if NT = VUndefined then Exit(ThrowTypeError('Constructor ' + TANames[Kind] + ' requires ''new'''));
   ConstructProtoTaken := True;
-  A0 := Arg(AArgs, AArgc, 1);
+  A0 := Arg(Args, Argc, 1);
   if not IsObject(A0) then
   begin
-    if AArgc = 0 then N := 0
+    if Argc = 0 then N := 0
     else
     begin
       PushRoot(NT);
@@ -450,71 +443,71 @@ begin
       NT := RootAt(TempTop - 1);
       PopRoots(1);
     end;
-    if not ProtoFromCtor(NT, TAProtosV[AKind], Proto) then Exit(False);
-    Exit(NewTAOf(AKind, N, Proto, ARes));
+    if not ProtoFromCtor(NT, TAProtosV[Kind], Proto) then Exit(False);
+    Exit(NewTAOf(Kind, N, Proto, Res));
   end;
   { AllocateTypedArray first reads the prototype from new.target }
-  if not ProtoFromCtor(NT, TAProtosV[AKind], Proto) then Exit(False);
+  if not ProtoFromCtor(NT, TAProtosV[Kind], Proto) then Exit(False);
   PushRoot(Proto);
   Result := False;
-  A0 := AArgs[1];
-  if ObjOf(A0)^.OKind = okTypedArray then Result := FromTypedArray(AKind, RootAt(TempTop - 1), A0, ARes)
+  A0 := Args[1];
+  if ObjOf(A0)^.OKind = okTypedArray then Result := FromTypedArray(Kind, RootAt(TempTop - 1), A0, Res)
   else if ObjOf(A0)^.OKind = okArrayBuffer then
-    Result := FromBuffer(AKind, RootAt(TempTop - 1), A0, Arg(AArgs, AArgc, 2), Arg(AArgs, AArgc, 3), ARes)
+    Result := FromBuffer(Kind, RootAt(TempTop - 1), A0, Arg(Args, Argc, 2), Arg(Args, Argc, 3), Res)
   else
   begin
     if not GetElemV(A0, SymIterator, M) then begin PopRoots(1); Exit; end;
-    if ((M = VUndefined) or (M = VNull)) then Result := FromValues(AKind, RootAt(TempTop - 1), AArgs[1], False, ARes)
+    if ((M = VUndefined) or (M = VNull)) then Result := FromValues(Kind, RootAt(TempTop - 1), Args[1], False, Res)
     else if not IsCallable(M) then Result := ThrowTypeError('@@iterator is not a function')
-    else if IterToList(AArgs[1], M, L) then Result := FromValues(AKind, RootAt(TempTop - 1), L, True, ARes);
+    else if IterToList(Args[1], M, L) then Result := FromValues(Kind, RootAt(TempTop - 1), L, True, Res);
   end;
   PopRoots(1);
 end;
 
-function TA_C0(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(0, AArgs, AArgc, ARes); end;
-function TA_C1(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(1, AArgs, AArgc, ARes); end;
-function TA_C2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(2, AArgs, AArgc, ARes); end;
-function TA_C3(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(3, AArgs, AArgc, ARes); end;
-function TA_C4(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(4, AArgs, AArgc, ARes); end;
-function TA_C5(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(5, AArgs, AArgc, ARes); end;
-function TA_C6(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(6, AArgs, AArgc, ARes); end;
-function TA_C7(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(7, AArgs, AArgc, ARes); end;
-function TA_C8(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(8, AArgs, AArgc, ARes); end;
-function TA_C9(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(9, AArgs, AArgc, ARes); end;
-function TA_C10(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(10, AArgs, AArgc, ARes); end;
-function TA_C11(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := TACtor(11, AArgs, AArgc, ARes); end;
+function TA_C0(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(0, Args, Argc, Res); end;
+function TA_C1(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(1, Args, Argc, Res); end;
+function TA_C2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(2, Args, Argc, Res); end;
+function TA_C3(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(3, Args, Argc, Res); end;
+function TA_C4(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(4, Args, Argc, Res); end;
+function TA_C5(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(5, Args, Argc, Res); end;
+function TA_C6(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(6, Args, Argc, Res); end;
+function TA_C7(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(7, Args, Argc, Res); end;
+function TA_C8(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(8, Args, Argc, Res); end;
+function TA_C9(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(9, Args, Argc, Res); end;
+function TA_C10(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(10, Args, Argc, Res); end;
+function TA_C11(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := TACtor(11, Args, Argc, Res); end;
 
 { 23.2.1.1 %TypedArray% }
-function TA_Abstract(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function TA_Abstract(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
   Result := ThrowTypeError('Abstract class TypedArray not directly constructable');
 end;
 
 { 23.2.4.2 TypedArrayCreateFromConstructor (ArgLen >= 0: the argument list is that single number) }
-function TACreateFromCtor(C: TValue; AArgsP: PValue; ANArgs: Integer; AArgLen: Int64; var T: TValue): Boolean;
+function TACreateFromCtor(C: TValue; ArgsP: PValue; NArgs: Integer; ArgLen: Int64; var T: TValue): Boolean;
 var Len: Int64;
 begin
-  if not Construct(C, AArgsP, ANArgs, C, T) then Exit(False);
+  if not Construct(C, ArgsP, NArgs, C, T) then Exit(False);
   if not ValidateTA(T, Len) then Exit(False);
-  if (AArgLen >= 0) and (Len < AArgLen) then Exit(ThrowTypeError('the species constructor returned a too short typed array'));
+  if (ArgLen >= 0) and (Len < ArgLen) then Exit(ThrowTypeError('the species constructor returned a too short typed array'));
   Result := True;
 end;
 
 { 23.2.4.1 TypedArraySpeciesCreate }
-function TASpeciesCreate(AExemplar: TValue; AArgsP: PValue; ANArgs: Integer; AArgLen: Int64; var T: TValue): Boolean;
+function TASpeciesCreate(Exemplar: TValue; ArgsP: PValue; NArgs: Integer; ArgLen: Int64; var T: TValue): Boolean;
 var C: TValue; Big: Boolean;
 begin
-  Big := TAIsBig(ObjOf(AExemplar));
-  if not SpeciesCtor(AExemplar, TACtors[TAKind(ObjOf(AExemplar))], C) then Exit(False);
-  if not TACreateFromCtor(C, AArgsP, ANArgs, AArgLen, T) then Exit(False);
+  Big := TAIsBig(ObjOf(Exemplar));
+  if not SpeciesCtor(Exemplar, TACtors[TAKind(ObjOf(Exemplar))], C) then Exit(False);
+  if not TACreateFromCtor(C, ArgsP, NArgs, ArgLen, T) then Exit(False);
   if TAIsBig(ObjOf(T)) <> Big then Exit(ThrowTypeError('Content type mismatch: BigInt and Number typed arrays'));
   Result := True;
 end;
 
 { 23.2.4.3 TypedArrayCreateSameType }
-function TACreateSameType(AExemplar: TValue; ALen: Int64; var T: TValue): Boolean;
+function TACreateSameType(Exemplar: TValue; Len: Int64; var T: TValue): Boolean;
 begin
-  Result := NewTAOf(TAKind(ObjOf(AExemplar)), ALen, TAProtosV[TAKind(ObjOf(AExemplar))], T);
+  Result := NewTAOf(TAKind(ObjOf(Exemplar)), Len, TAProtosV[TAKind(ObjOf(Exemplar))], T);
 end;
 
 {$I G2.TypedArrays2.inc}

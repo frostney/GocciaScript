@@ -13,18 +13,7 @@ procedure InitBuiltins4;
 implementation
 
 uses
-  DateUtils,
-  Math,
-  SysUtils,
-
-  BigInteger,
-  G2.Builtins,
-  G2.Bytecode,
-  G2.Compiler,
-  G2.Core,
-  G2.Eval,
-  G2.Snapshot,
-  G2.VM;
+  SysUtils, Math, DateUtils, BigInteger, G2.Core, G2.Bytecode, G2.VM, G2.Builtins, G2.Eval, G2.Snapshot, G2.Compiler;
 
 type
   TArgs = PValue;
@@ -32,27 +21,27 @@ type
 threadvar
   Scratch: TValue;
 
-function Arg(AArgs: TArgs; AArgc, I: Integer): TValue; inline;
+function Arg(Args: TArgs; Argc, I: Integer): TValue; inline;
 begin
-  if I <= AArgc then Result := AArgs[I] else Result := VUndefined;
+  if I <= Argc then Result := Args[I] else Result := VUndefined;
 end;
 
-function NumArg(AArgs: TArgs; AArgc, I: Integer; var D: Double): Boolean;
+function NumArg(Args: TArgs; Argc, I: Integer; var D: Double): Boolean;
 begin
-  Result := ToNumberV(Arg(AArgs, AArgc, I), D);
+  Result := ToNumberV(Arg(Args, Argc, I), D);
 end;
 
-function ThisNumber(AArgs: TArgs; var D: Double): Boolean;
+function ThisNumber(Args: TArgs; var D: Double): Boolean;
 begin
-  if IsNumber(AArgs[0]) then begin D := NumOf(AArgs[0]); Exit(True); end;
-  if IsObject(AArgs[0]) and (ObjOf(AArgs[0])^.OKind = okNumber) then begin D := NumOf(ObjOf(AArgs[0])^.Aux1); Exit(True); end;
+  if IsNumber(Args[0]) then begin D := NumOf(Args[0]); Exit(True); end;
+  if IsObject(Args[0]) and (ObjOf(Args[0])^.OKind = okNumber) then begin D := NumOf(ObjOf(Args[0])^.Aux1); Exit(True); end;
   Result := ThrowTypeError('Number.prototype method called on incompatible receiver');
 end;
 
 { ---------------- Number.prototype.toExponential ---------------- }
 
 { decimal digits and exponent of |D|: D = 0.d1d2... x 10^(E+1), digits from the shortest round trip }
-procedure ShortestDigits(D: Double; out ADigits: UnicodeString; out E: Integer);
+procedure ShortestDigits(D: Double; out Digits: UnicodeString; out E: Integer);
 var S: UnicodeString; P, I, Exp10, DotPos: Integer; Mant: UnicodeString;
 begin
   S := StrToUnicode(StrOf(NumberToStr(Abs(D))));
@@ -70,13 +59,13 @@ begin
   { strip leading zeros, moving the point }
   I := 1;
   while (I < Length(Mant)) and (Mant[I] = '0') do Inc(I);
-  ADigits := Copy(Mant, I, MaxInt);
+  Digits := Copy(Mant, I, MaxInt);
   E := DotPos - 1 - I + Exp10;   { exponent of the first digit }
-  while (Length(ADigits) > 1) and (ADigits[Length(ADigits)] = '0') do Delete(ADigits, Length(ADigits), 1);
+  while (Length(Digits) > 1) and (Digits[Length(Digits)] = '0') do Delete(Digits, Length(Digits), 1);
 end;
 
 { the exact decimal expansion of D > 0: D = 0.Dig x 10^(E+1), so Dig[1] is the 10^E digit }
-procedure ExactDecimal(D: Double; out ADig: string; out E: Integer);
+procedure ExactDecimal(D: Double; out Dig: string; out E: Integer);
 var Bits: QWord; BE: Integer; M: Int64; N: TBigInteger;
 begin
   Bits := PQWord(@D)^;
@@ -86,51 +75,51 @@ begin
   if BE >= 0 then
   begin
     N := TBigInteger.FromInt64(M).Multiply(TBigInteger.FromInt64(2).Power(TBigInteger.FromInt64(BE)));
-    ADig := N.ToString;
-    E := Length(ADig) - 1;
+    Dig := N.ToString;
+    E := Length(Dig) - 1;
   end
   else
   begin
     N := TBigInteger.FromInt64(M).Multiply(TBigInteger.FromInt64(5).Power(TBigInteger.FromInt64(-BE)));
-    ADig := N.ToString;
-    E := Length(ADig) - 1 + BE;
+    Dig := N.ToString;
+    E := Length(Dig) - 1 + BE;
   end;
-  while (Length(ADig) > 1) and (ADig[Length(ADig)] = '0') do Delete(ADig, Length(ADig), 1);
+  while (Length(Dig) > 1) and (Dig[Length(Dig)] = '0') do Delete(Dig, Length(Dig), 1);
 end;
 
 { the first Keep digits of Dig rounded half up (the larger n on a tie); Carry when it became 10..0 }
-function RoundDigits(const ADig: string; AKeep: Integer; out ACarry: Boolean): string;
+function RoundDigits(const Dig: string; Keep: Integer; out Carry: Boolean): string;
 var I: Integer; Up: Boolean;
 begin
-  ACarry := False;
-  if AKeep <= 0 then
+  Carry := False;
+  if Keep <= 0 then
   begin
     { everything is below the kept place: 1 at that place or nothing }
-    ACarry := (AKeep = 0) and (ADig[1] >= '5');
+    Carry := (Keep = 0) and (Dig[1] >= '5');
     Exit('');
   end;
-  if AKeep >= Length(ADig) then Exit(ADig + StringOfChar('0', AKeep - Length(ADig)));
-  Result := Copy(ADig, 1, AKeep);
-  Up := ADig[AKeep + 1] >= '5';
+  if Keep >= Length(Dig) then Exit(Dig + StringOfChar('0', Keep - Length(Dig)));
+  Result := Copy(Dig, 1, Keep);
+  Up := Dig[Keep + 1] >= '5';
   if not Up then Exit;
-  I := AKeep;
+  I := Keep;
   while (I >= 1) and (Result[I] = '9') do begin Result[I] := '0'; Dec(I); end;
   if I >= 1 then Result[I] := Chr(Ord(Result[I]) + 1)
-  else begin Result := '1' + Result; ACarry := True; end;
+  else begin Result := '1' + Result; Carry := True; end;
 end;
 
-function NumProto_ToExponential(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function NumProto_ToExponential(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var D, FD: Double; F, E: Integer; Digits: UnicodeString; S, Sign, ExpStr: UnicodeString; Dig, R: string; Carry: Boolean;
 begin
-  if not ThisNumber(AArgs, D) then Exit(False);
-  if Arg(AArgs, AArgc, 1) = VUndefined then F := -1
+  if not ThisNumber(Args, D) then Exit(False);
+  if Arg(Args, Argc, 1) = VUndefined then F := -1
   else
   begin
-    if not NumArg(AArgs, AArgc, 1, FD) then Exit(False);
+    if not NumArg(Args, Argc, 1, FD) then Exit(False);
     if IsNaN(FD) then FD := 0;
     F := Trunc(FD);
   end;
-  if IsNaN(D) or IsInfinite(D) then begin ARes := NumberToStr(D); Exit(True); end;
+  if IsNaN(D) or IsInfinite(D) then begin Res := NumberToStr(D); Exit(True); end;
   if (F <> -1) and ((F < 0) or (F > 100)) then Exit(ThrowError('RangeError', 'toExponential() argument must be between 0 and 100'));
   Sign := '';
   if D < 0 then begin Sign := '-'; D := -D; end;
@@ -138,7 +127,7 @@ begin
   begin
     S := '0';
     if F > 0 then S := S + '.' + StringOfChar('0', F);
-    ARes := StrFromUnicode(Sign + S + 'e+0');
+    Res := StrFromUnicode(Sign + S + 'e+0');
     Exit(True);
   end;
   if F = -1 then
@@ -156,22 +145,22 @@ begin
     if F > 0 then S := S + '.' + UnicodeString(Copy(R, 2, MaxInt));
   end;
   if E < 0 then ExpStr := 'e-' + UnicodeString(IntToStr(-E)) else ExpStr := 'e+' + UnicodeString(IntToStr(E));
-  ARes := StrFromUnicode(Sign + S + ExpStr);
+  Res := StrFromUnicode(Sign + S + ExpStr);
   Result := True;
 end;
 
 { Number.prototype.toFixed: round(x * 10^f) from the exact expansion }
-function NumProto_ToFixed4(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function NumProto_ToFixed4(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var D, FD: Double; F, E, Keep: Integer; Dig, N: string; Carry: Boolean; Sign: UnicodeString;
 begin
-  if not ThisNumber(AArgs, D) then Exit(False);
+  if not ThisNumber(Args, D) then Exit(False);
   FD := 0;
-  if Arg(AArgs, AArgc, 1) <> VUndefined then
-    if not NumArg(AArgs, AArgc, 1, FD) then Exit(False);
+  if Arg(Args, Argc, 1) <> VUndefined then
+    if not NumArg(Args, Argc, 1, FD) then Exit(False);
   if IsNaN(FD) then FD := 0;
   F := Trunc(FD);
   if (F < 0) or (F > 100) then Exit(ThrowError('RangeError', 'toFixed() digits argument must be between 0 and 100'));
-  if IsNaN(D) or IsInfinite(D) or (Abs(D) >= 1e21) then begin ARes := NumberToStr(D); Exit(True); end;
+  if IsNaN(D) or IsInfinite(D) or (Abs(D) >= 1e21) then begin Res := NumberToStr(D); Exit(True); end;
   Sign := '';
   if D < 0 then begin Sign := '-'; D := -D; end;
   if D = 0 then N := '0'
@@ -187,39 +176,39 @@ begin
   end;
   if Length(N) <= F then N := StringOfChar('0', F + 1 - Length(N)) + N;
   if F > 0 then N := Copy(N, 1, Length(N) - F) + '.' + Copy(N, Length(N) - F + 1, F);
-  ARes := StrFromUnicode(Sign + UnicodeString(N));
+  Res := StrFromUnicode(Sign + UnicodeString(N));
   Result := True;
 end;
 
 { ---------------- Boolean.prototype ---------------- }
 
-function ThisBool(AArgs: TArgs; var B: TValue): Boolean;
+function ThisBool(Args: TArgs; var B: TValue): Boolean;
 begin
-  if (AArgs[0] = VTrue) or (AArgs[0] = VFalse) then begin B := AArgs[0]; Exit(True); end;
-  if IsObject(AArgs[0]) and (ObjOf(AArgs[0])^.OKind = okBoolean) then begin B := ObjOf(AArgs[0])^.Aux1; Exit(True); end;
+  if (Args[0] = VTrue) or (Args[0] = VFalse) then begin B := Args[0]; Exit(True); end;
+  if IsObject(Args[0]) and (ObjOf(Args[0])^.OKind = okBoolean) then begin B := ObjOf(Args[0])^.Aux1; Exit(True); end;
   Result := ThrowTypeError('Boolean.prototype method called on incompatible receiver');
 end;
 
-function BoolProto_ToString(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function BoolProto_ToString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: TValue;
 begin
-  if not ThisBool(AArgs, B) then Exit(False);
-  if B = VTrue then ARes := MkPtr(AtomOf('true')) else ARes := MkPtr(AtomOf('false'));
+  if not ThisBool(Args, B) then Exit(False);
+  if B = VTrue then Res := MkPtr(AtomOf('true')) else Res := MkPtr(AtomOf('false'));
   Result := True;
 end;
 
-function BoolProto_ValueOf(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function BoolProto_ValueOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Result := ThisBool(AArgs, ARes);
+  Result := ThisBool(Args, Res);
 end;
 
 { ---------------- Math ---------------- }
 
-function MathFn(AArgs: TArgs; AArgc: Integer; var ARes: TValue; AWhich: Integer): Boolean;
+function MathFn(Args: TArgs; Argc: Integer; var Res: TValue; Which: Integer): Boolean;
 var X: Double;
 begin
-  if not NumArg(AArgs, AArgc, 1, X) then Exit(False);
-  case AWhich of
+  if not NumArg(Args, Argc, 1, X) then Exit(False);
+  case Which of
     0: if Abs(X) < 1e-5 then X := X - X * X / 2 + X * X * X / 3 else X := Ln(1 + X);   { log1p }
     1: if Abs(X) < 1e-5 then X := X + X * X / 2 + X * X * X / 6 else X := Exp(X) - 1;   { expm1 }
     2: X := Math.Cosh(X);
@@ -231,18 +220,18 @@ begin
     8: X := Single(X);   { fround }
     9: X := Ln(X) / Ln(2);   { fallback log2 }
   end;
-  ARes := MkNumber(X);
+  Res := MkNumber(X);
   Result := True;
 end;
-function M_Log1p(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := MathFn(AArgs, AArgc, ARes, 0); end;
-function M_Expm1(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := MathFn(AArgs, AArgc, ARes, 1); end;
-function M_Cosh(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := MathFn(AArgs, AArgc, ARes, 2); end;
-function M_Sinh(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := MathFn(AArgs, AArgc, ARes, 3); end;
-function M_Tanh(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := MathFn(AArgs, AArgc, ARes, 4); end;
-function M_Acosh(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := MathFn(AArgs, AArgc, ARes, 5); end;
-function M_Asinh(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := MathFn(AArgs, AArgc, ARes, 6); end;
-function M_Atanh(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := MathFn(AArgs, AArgc, ARes, 7); end;
-function M_Fround(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := MathFn(AArgs, AArgc, ARes, 8); end;
+function M_Log1p(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 0); end;
+function M_Expm1(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 1); end;
+function M_Cosh(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 2); end;
+function M_Sinh(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 3); end;
+function M_Tanh(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 4); end;
+function M_Acosh(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 5); end;
+function M_Asinh(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 6); end;
+function M_Atanh(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 7); end;
+function M_Fround(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 8); end;
 
 function ToUint32D(D: Double): UInt32;
 begin
@@ -252,23 +241,23 @@ begin
   Result := UInt32(Trunc(D));
 end;
 
-function M_Imul(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function M_Imul(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var A, B: Double;
 begin
-  if not NumArg(AArgs, AArgc, 1, A) then Exit(False);
-  if not NumArg(AArgs, AArgc, 2, B) then Exit(False);
-  ARes := MkInt(Int32(UInt32(QWord(ToUint32D(A)) * QWord(ToUint32D(B)) and $FFFFFFFF)));
+  if not NumArg(Args, Argc, 1, A) then Exit(False);
+  if not NumArg(Args, Argc, 2, B) then Exit(False);
+  Res := MkInt(Int32(UInt32(QWord(ToUint32D(A)) * QWord(ToUint32D(B)) and $FFFFFFFF)));
   Result := True;
 end;
 
-function M_Clz32(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function M_Clz32(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var A: Double; U: UInt32; N: Integer;
 begin
-  if not NumArg(AArgs, AArgc, 1, A) then Exit(False);
+  if not NumArg(Args, Argc, 1, A) then Exit(False);
   U := ToUint32D(A);
   N := 32;
   while U <> 0 do begin U := U shr 1; Dec(N); end;
-  ARes := MkInt(N);
+  Res := MkInt(N);
   Result := True;
 end;
 
@@ -278,7 +267,7 @@ const
   URIUnreservedMarks = '-_.!~*''()';
   URIReserved = ';/?:@&=+$,#';
 
-function URIEncode(const S: UnicodeString; const AExtra: UnicodeString; var ARes: TValue): Boolean;
+function URIEncode(const S: UnicodeString; const Extra: UnicodeString; var Res: TValue): Boolean;
 var I, CP: Integer; C: WideChar; Out_, Hex: UnicodeString; U8: RawByteString; J: Integer;
 begin
   Out_ := '';
@@ -287,7 +276,7 @@ begin
   begin
     C := S[I];
     if ((C >= 'a') and (C <= 'z')) or ((C >= 'A') and (C <= 'Z')) or ((C >= '0') and (C <= '9')) or
-       (Pos(C, URIUnreservedMarks) > 0) or (Pos(C, AExtra) > 0) then
+       (Pos(C, URIUnreservedMarks) > 0) or (Pos(C, Extra) > 0) then
     begin
       Out_ := Out_ + C;
       Inc(I);
@@ -312,7 +301,7 @@ begin
       Out_ := Out_ + '%' + Hex;
     end;
   end;
-  ARes := StrFromUnicode(Out_);
+  Res := StrFromUnicode(Out_);
   Result := True;
 end;
 
@@ -326,7 +315,7 @@ begin
   end;
 end;
 
-function URIDecode(const S: UnicodeString; const AKeep: UnicodeString; var ARes: TValue): Boolean;
+function URIDecode(const S: UnicodeString; const Keep: UnicodeString; var Res: TValue): Boolean;
 var I, B, N, K, Start: Integer; Out_: UnicodeString; Bytes: RawByteString; Dec_: UnicodeString;
 begin
   Out_ := '';
@@ -340,7 +329,7 @@ begin
     Inc(I, 3);
     if B < $80 then
     begin
-      if Pos(WideChar(B), AKeep) > 0 then Out_ := Out_ + Copy(S, Start, 3) else Out_ := Out_ + WideChar(B);
+      if Pos(WideChar(B), Keep) > 0 then Out_ := Out_ + Copy(S, Start, 3) else Out_ := Out_ + WideChar(B);
       Continue;
     end;
     if (B and $E0) = $C0 then N := 1 else if (B and $F0) = $E0 then N := 2 else if (B and $F8) = $F0 then N := 3
@@ -359,74 +348,74 @@ begin
     if Dec_ = '' then Exit(ThrowError('URIError', 'URI malformed'));
     Out_ := Out_ + Dec_;
   end;
-  ARes := StrFromUnicode(Out_);
+  Res := StrFromUnicode(Out_);
   Result := True;
 end;
 
-function StrArg(AArgs: TArgs; AArgc, I: Integer; var S: UnicodeString): Boolean;
+function StrArg(Args: TArgs; Argc, I: Integer; var S: UnicodeString): Boolean;
 var V: TValue;
 begin
-  if not ToStringV(Arg(AArgs, AArgc, I), V) then Exit(False);
+  if not ToStringV(Arg(Args, Argc, I), V) then Exit(False);
   S := StrToUnicode(StrOf(V));
   Result := True;
 end;
 
-function G_EncodeURIComponent(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function G_EncodeURIComponent(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: UnicodeString;
 begin
-  if not StrArg(AArgs, AArgc, 1, S) then Exit(False);
-  Result := URIEncode(S, '', ARes);
+  if not StrArg(Args, Argc, 1, S) then Exit(False);
+  Result := URIEncode(S, '', Res);
 end;
 
-function G_EncodeURI(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function G_EncodeURI(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: UnicodeString;
 begin
-  if not StrArg(AArgs, AArgc, 1, S) then Exit(False);
-  Result := URIEncode(S, URIReserved, ARes);
+  if not StrArg(Args, Argc, 1, S) then Exit(False);
+  Result := URIEncode(S, URIReserved, Res);
 end;
 
-function G_DecodeURIComponent(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function G_DecodeURIComponent(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: UnicodeString;
 begin
-  if not StrArg(AArgs, AArgc, 1, S) then Exit(False);
-  Result := URIDecode(S, '', ARes);
+  if not StrArg(Args, Argc, 1, S) then Exit(False);
+  Result := URIDecode(S, '', Res);
 end;
 
-function G_DecodeURI(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function G_DecodeURI(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: UnicodeString;
 begin
-  if not StrArg(AArgs, AArgc, 1, S) then Exit(False);
-  Result := URIDecode(S, URIReserved, ARes);
+  if not StrArg(Args, Argc, 1, S) then Exit(False);
+  Result := URIDecode(S, URIReserved, Res);
 end;
 
 { ---------------- indirect eval ---------------- }
 
 { a direct eval in function code: compiled against its caller's bindings (goal 4), run as their closure }
-function EvalInCaller(const ASrc: UnicodeString; ADesc: TValue; var ARes: TValue): Boolean;
+function EvalInCaller(const Src: UnicodeString; Desc: TValue; var Res: TValue): Boolean;
 var T: PFuncTemplate; Err: UnicodeString; Clo: TValue; Ok: Boolean;
 begin
-  EvalOuterDesc := StrToUnicode(StrOf(ADesc));
+  EvalOuterDesc := StrToUnicode(StrOf(Desc));
   try
-    Ok := ParseAndCompile(ASrc, '<eval>', True, T, Err, 4);
+    Ok := ParseAndCompile(Src, '<eval>', True, T, Err, 4);
   finally
     EvalOuterDesc := '';
   end;
   if not Ok then Exit(ThrowError('SyntaxError', Err));
-  if not MakeEvalClosure(T, ADesc, Clo) then Exit(False);
-  Result := CallValue(Clo, VUndefined, nil, 0, ARes);
+  if not MakeEvalClosure(T, Desc, Clo) then Exit(False);
+  Result := CallValue(Clo, VUndefined, nil, 0, Res);
 end;
 
-function G_Eval(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function G_Eval(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var T: PFuncTemplate; Err, Src: UnicodeString; Clo: TValue; Goal, P: Integer;
 begin
   { indirect eval, and direct eval at a non-strict Script's top level, declare globals (goal 2); other direct
     evals keep their declarations to themselves until G2 gives them their caller's scope }
   Goal := TakeEvalHint;
   if Goal < 0 then Goal := 2;
-  if not IsString(Arg(AArgs, AArgc, 1)) then begin ARes := Arg(AArgs, AArgc, 1); Exit(True); end;
+  if not IsString(Arg(Args, Argc, 1)) then begin Res := Arg(Args, Argc, 1); Exit(True); end;
   if (Goal in [0, 1]) and IsString(EvalDesc) then
   begin
-    Src := StrToUnicode(StrOf(AArgs[1]));
+    Src := StrToUnicode(StrOf(Args[1]));
     if Goal = 1 then
     begin
       P := 1;
@@ -434,12 +423,12 @@ begin
         while (P <= Length(Src)) and not CharInSet(Src[P], [#10, #13]) and (Src[P] <> #$2028) and (Src[P] <> #$2029) do Inc(P);
       Insert('"use strict";', Src, P);
     end;
-    Exit(EvalInCaller(Src, EvalDesc, ARes));
+    Exit(EvalInCaller(Src, EvalDesc, Res));
   end;
   if Goal = 1 then
   begin
     { a direct eval from strict code: strict eval code, its declarations its own }
-    Src := StrToUnicode(StrOf(AArgs[1]));
+    Src := StrToUnicode(StrOf(Args[1]));
     { after a hashbang comment, which only the very start of the source may hold }
     P := 1;
     if (Length(Src) >= 2) and (Src[1] = '#') and (Src[2] = '!') then
@@ -449,9 +438,9 @@ begin
     Insert('"use strict";', Src, P);
     if not ParseAndCompile(Src, '<eval>', True, T, Err, 0) then Exit(ThrowError('SyntaxError', Err));
   end
-  else if not ParseAndCompile(StrToUnicode(StrOf(AArgs[1])), '<eval>', True, T, Err, Goal) then Exit(ThrowError('SyntaxError', Err));
+  else if not ParseAndCompile(StrToUnicode(StrOf(Args[1])), '<eval>', True, T, Err, Goal) then Exit(ThrowError('SyntaxError', Err));
   if not MakeScriptClosure(T, Clo) then Exit(False);
-  Result := CallValue(Clo, GlobalObj, nil, 0, ARes);   { indirect eval: the global environment's this }
+  Result := CallValue(Clo, GlobalObj, nil, 0, Res);   { indirect eval: the global environment's this }
 end;
 
 { ---------------- Date: UTC fields, setters, parse ---------------- }
@@ -464,72 +453,72 @@ begin
   Result := UnixToDateTime(Trunc(T / 1000.0), True) + (T - Trunc(T / 1000.0) * 1000.0) / 86400000.0;
 end;
 
-function MsOf(ADT: TDateTime): Double;
+function MsOf(DT: TDateTime): Double;
 begin
-  Result := Round((ADT - UnixDateDelta) * 86400000.0);
+  Result := Round((DT - UnixDateDelta) * 86400000.0);
 end;
 
-function ThisDate(AArgs: TArgs; var T: Double): Boolean;
+function ThisDate(Args: TArgs; var T: Double): Boolean;
 begin
-  if not IsObject(AArgs[0]) or (ObjOf(AArgs[0])^.OKind <> okDate) then Exit(ThrowTypeError('this is not a Date object.'));
-  T := NumOf(ObjOf(AArgs[0])^.Aux1);
+  if not IsObject(Args[0]) or (ObjOf(Args[0])^.OKind <> okDate) then Exit(ThrowTypeError('this is not a Date object.'));
+  T := NumOf(ObjOf(Args[0])^.Aux1);
   Result := True;
 end;
 
 { MakeDate from components; months and days may overflow, as in the spec }
-function MakeTime(Y, AMo, D, H, AMi, S, AMs: Double): Double;
+function MakeTime(Y, Mo, D, H, Mi, S, Ms: Double): Double;
 var YY, MM: Integer; Days: Double;
 begin
-  if IsNaN(Y) or IsNaN(AMo) or IsNaN(D) or IsNaN(H) or IsNaN(AMi) or IsNaN(S) or IsNaN(AMs) or
-     IsInfinite(Y) or IsInfinite(AMo) or IsInfinite(D) then Exit(NaN);
-  YY := Trunc(Y) + Floor(Trunc(AMo) / 12);
-  MM := Trunc(AMo) - Floor(Trunc(AMo) / 12) * 12;
+  if IsNaN(Y) or IsNaN(Mo) or IsNaN(D) or IsNaN(H) or IsNaN(Mi) or IsNaN(S) or IsNaN(Ms) or
+     IsInfinite(Y) or IsInfinite(Mo) or IsInfinite(D) then Exit(NaN);
+  YY := Trunc(Y) + Floor(Trunc(Mo) / 12);
+  MM := Trunc(Mo) - Floor(Trunc(Mo) / 12) * 12;
   if (YY < 1) or (YY > 9999) then Exit(NaN);
   Days := EncodeDate(YY, MM + 1, 1) - UnixDateDelta + Trunc(D) - 1;
-  Result := Days * 86400000.0 + Trunc(H) * 3600000.0 + Trunc(AMi) * 60000.0 + Trunc(S) * 1000.0 + Trunc(AMs);
+  Result := Days * 86400000.0 + Trunc(H) * 3600000.0 + Trunc(Mi) * 60000.0 + Trunc(S) * 1000.0 + Trunc(Ms);
 end;
 
-function Date_UTC(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Date_UTC(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var C: array[1..7] of Double; I: Integer;
 begin
   C[1] := NaN; C[2] := 0; C[3] := 1; C[4] := 0; C[5] := 0; C[6] := 0; C[7] := 0;
   for I := 1 to 7 do
-    if I <= AArgc then if not NumArg(AArgs, AArgc, I, C[I]) then Exit(False);
+    if I <= Argc then if not NumArg(Args, Argc, I, C[I]) then Exit(False);
   if (not IsNaN(C[1])) and (Trunc(C[1]) >= 0) and (Trunc(C[1]) <= 99) then C[1] := 1900 + Trunc(C[1]);
-  ARes := MkNumber(MakeTime(C[1], C[2], C[3], C[4], C[5], C[6], C[7]));
+  Res := MkNumber(MakeTime(C[1], C[2], C[3], C[4], C[5], C[6], C[7]));
   Result := True;
 end;
 
-function Date_Parse(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Date_Parse(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: UnicodeString; DT: TDateTime;
 begin
-  if not StrArg(AArgs, AArgc, 1, S) then Exit(False);
-  if TryISO8601ToDate(string(S), DT, True) then ARes := MkNumber(MsOf(DT)) else ARes := MkDouble(NaN);
+  if not StrArg(Args, Argc, 1, S) then Exit(False);
+  if TryISO8601ToDate(string(S), DT, True) then Res := MkNumber(MsOf(DT)) else Res := MkDouble(NaN);
   Result := True;
 end;
 
 { which: 0 time, 1 ms, 2 seconds, 3 minutes, 4 hours, 5 date, 6 month, 7 full year }
-function DateSet(AArgs: TArgs; AArgc: Integer; var ARes: TValue; AWhich: Integer): Boolean;
+function DateSet(Args: TArgs; Argc: Integer; var Res: TValue; Which: Integer): Boolean;
 var T, V: Double; DT: TDateTime; Y, Mo, D, H, Mi, S, Ms: Word; C: array[0..6] of Double; I, N, K: Integer;
 begin
-  if not ThisDate(AArgs, T) then Exit(False);
-  if AWhich = 0 then
+  if not ThisDate(Args, T) then Exit(False);
+  if Which = 0 then
   begin
-    if not NumArg(AArgs, AArgc, 1, V) then Exit(False);
+    if not NumArg(Args, Argc, 1, V) then Exit(False);
     if IsNaN(V) or (Abs(V) > 8.64e15) then V := NaN else V := Trunc(V);
   end
   else
   begin
     if IsNaN(T) then
     begin
-      if AWhich <> 7 then begin ARes := MkDouble(NaN); Exit(True); end;
+      if Which <> 7 then begin Res := MkDouble(NaN); Exit(True); end;
       T := 0;
     end;
     DT := DateTimeOf(T);
     DecodeDateTime(DT, Y, Mo, D, H, Mi, S, Ms);
     C[0] := Y; C[1] := Mo - 1; C[2] := D; C[3] := H; C[4] := Mi; C[5] := S; C[6] := Ms;
     { the setter's first argument and the optional ones after it, from most to least significant }
-    case AWhich of
+    case Which of
       1: begin I := 6; N := 1; end;
       2: begin I := 5; N := 2; end;
       3: begin I := 4; N := 3; end;
@@ -539,54 +528,54 @@ begin
     else begin I := 0; N := 3; end;
     end;
     for K := 0 to N - 1 do
-      if (K + 1 <= AArgc) and (I + K <= 6) then
-        if not NumArg(AArgs, AArgc, K + 1, C[I + K]) then Exit(False);
+      if (K + 1 <= Argc) and (I + K <= 6) then
+        if not NumArg(Args, Argc, K + 1, C[I + K]) then Exit(False);
     V := MakeTime(C[0], C[1], C[2], C[3], C[4], C[5], C[6]);
   end;
-  ObjOf(AArgs[0])^.Aux1 := MkNumber(V);
-  ARes := MkNumber(V);
+  ObjOf(Args[0])^.Aux1 := MkNumber(V);
+  Res := MkNumber(V);
   Result := True;
 end;
-function Date_SetTime(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateSet(AArgs, AArgc, ARes, 0); end;
-function Date_SetMs(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateSet(AArgs, AArgc, ARes, 1); end;
-function Date_SetSeconds(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateSet(AArgs, AArgc, ARes, 2); end;
-function Date_SetMinutes(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateSet(AArgs, AArgc, ARes, 3); end;
-function Date_SetHours(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateSet(AArgs, AArgc, ARes, 4); end;
-function Date_SetDate(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateSet(AArgs, AArgc, ARes, 5); end;
-function Date_SetMonth(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateSet(AArgs, AArgc, ARes, 6); end;
-function Date_SetFullYear(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateSet(AArgs, AArgc, ARes, 7); end;
+function Date_SetTime(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateSet(Args, Argc, Res, 0); end;
+function Date_SetMs(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateSet(Args, Argc, Res, 1); end;
+function Date_SetSeconds(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateSet(Args, Argc, Res, 2); end;
+function Date_SetMinutes(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateSet(Args, Argc, Res, 3); end;
+function Date_SetHours(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateSet(Args, Argc, Res, 4); end;
+function Date_SetDate(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateSet(Args, Argc, Res, 5); end;
+function Date_SetMonth(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateSet(Args, Argc, Res, 6); end;
+function Date_SetFullYear(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateSet(Args, Argc, Res, 7); end;
 
-function DateGet(AArgs: TArgs; var ARes: TValue; AWhich: Integer): Boolean;
+function DateGet(Args: TArgs; var Res: TValue; Which: Integer): Boolean;
 var T: Double; DT: TDateTime;
 const Days: array[1..7] of UnicodeString = ('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat');
   Months: array[1..12] of UnicodeString = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec');
 begin
-  if not ThisDate(AArgs, T) then Exit(False);
+  if not ThisDate(Args, T) then Exit(False);
   if IsNaN(T) then
   begin
-    if AWhich >= 2 then ARes := StrFromUnicode('Invalid Date') else ARes := MkDouble(NaN);
+    if Which >= 2 then Res := StrFromUnicode('Invalid Date') else Res := MkDouble(NaN);
     Exit(True);
   end;
   DT := DateTimeOf(T);
-  case AWhich of
-    0: ARes := MkInt(DayOfWeek(DT) - 1);
-    1: ARes := MkInt(Trunc(T) mod 1000);
-    2: ARes := StrFromUnicode(Days[DayOfWeek(DT)] + ', ' + UnicodeString(FormatDateTime('dd', DT)) + ' ' +
+  case Which of
+    0: Res := MkInt(DayOfWeek(DT) - 1);
+    1: Res := MkInt(Trunc(T) mod 1000);
+    2: Res := StrFromUnicode(Days[DayOfWeek(DT)] + ', ' + UnicodeString(FormatDateTime('dd', DT)) + ' ' +
          Months[MonthOf(DT)] + ' ' + UnicodeString(FormatDateTime('yyyy hh:nn:ss', DT)) + ' GMT');
-    3: ARes := StrFromUnicode(Days[DayOfWeek(DT)] + ' ' + Months[MonthOf(DT)] + ' ' +
+    3: Res := StrFromUnicode(Days[DayOfWeek(DT)] + ' ' + Months[MonthOf(DT)] + ' ' +
          UnicodeString(FormatDateTime('dd yyyy', DT)));
-    4: ARes := StrFromUnicode(UnicodeString(FormatDateTime('hh:nn:ss', DT)) + ' GMT+0000 (Coordinated Universal Time)');
-    5: ARes := StrFromUnicode(Days[DayOfWeek(DT)] + ' ' + Months[MonthOf(DT)] + ' ' +
+    4: Res := StrFromUnicode(UnicodeString(FormatDateTime('hh:nn:ss', DT)) + ' GMT+0000 (Coordinated Universal Time)');
+    5: Res := StrFromUnicode(Days[DayOfWeek(DT)] + ' ' + Months[MonthOf(DT)] + ' ' +
          UnicodeString(FormatDateTime('dd yyyy hh:nn:ss', DT)) + ' GMT+0000 (Coordinated Universal Time)');
   end;
   Result := True;
 end;
-function Date_GetUTCDay(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateGet(AArgs, ARes, 0); end;
-function Date_GetUTCMs(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateGet(AArgs, ARes, 1); end;
-function Date_ToUTCString(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateGet(AArgs, ARes, 2); end;
-function Date_ToDateString(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateGet(AArgs, ARes, 3); end;
-function Date_ToTimeString(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateGet(AArgs, ARes, 4); end;
-function Date_ToString(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := DateGet(AArgs, ARes, 5); end;
+function Date_GetUTCDay(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateGet(Args, Res, 0); end;
+function Date_GetUTCMs(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateGet(Args, Res, 1); end;
+function Date_ToUTCString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateGet(Args, Res, 2); end;
+function Date_ToDateString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateGet(Args, Res, 3); end;
+function Date_ToTimeString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateGet(Args, Res, 4); end;
+function Date_ToString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := DateGet(Args, Res, 5); end;
 
 const
   Prelude =
@@ -656,9 +645,9 @@ const
 
 procedure InitBuiltins4;
 var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue;
-  function Lookup(AObj: TValue; const AName: UnicodeString): TValue;
+  function Lookup(Obj: TValue; const Name: UnicodeString): TValue;
   begin
-    if not IsObject(AObj) or not GetV(AObj, AtomOf(AName), Result) then Result := VUndefined;
+    if not IsObject(Obj) or not GetV(Obj, AtomOf(Name), Result) then Result := VUndefined;
   end;
 begin
   AddRoot(@Scratch);

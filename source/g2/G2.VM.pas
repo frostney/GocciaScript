@@ -145,110 +145,110 @@ procedure AddRoot(P: PValue);
 procedure AddRootRange(P: PValue; N: Integer);
 procedure SetFunctionProto(P: TValue);
 { a function shape: the prototype's root shape with length then name (10.2.9, 10.2.10: configurable only) }
-function FnShapeFor(AProto: TValue): PShape;
+function FnShapeFor(Proto: TValue): PShape;
 { 10.2.9 SetFunctionName from a property key (a symbol's description in brackets), with an optional prefix }
-procedure SetFnNameFromKey(F: TValue; AKey: PStr; const APrefix: UnicodeString);
+procedure SetFnNameFromKey(F: TValue; Key: PStr; const Prefix: UnicodeString);
 procedure SetGenNextNative(P: Pointer);
 { the global lexical bindings (let, const and class at the top level of Scripts): index of Key, -1 if none }
-function GLexFind(AKey: PStr): Integer;
+function GLexFind(Key: PStr): Integer;
 function GLexIsConst(I: Integer): Boolean;
 { 7.2.4 IsConstructor }
 function IsConstructorV(V: TValue): Boolean;
 { 7.4.11 IteratorClose: Throwing keeps the pending exception (errors of return() are ignored, False returned) }
-function IteratorCloseV(AIt: TValue; AThrowing: Boolean): Boolean;
+function IteratorCloseV(It: TValue; Throwing: Boolean): Boolean;
 { 7.4.2 GetIterator(obj, sync) as an iterator record: the iterator and its next method }
-function GetIteratorRec(V: TValue; var AIt, ANextM: TValue): Boolean;
+function GetIteratorRec(V: TValue; var It, NextM: TValue): Boolean;
 { 7.4.8 IteratorStep(record) }
-function IteratorStepRec(AIt, ANextM: TValue; var AValue: TValue; var ADone: Boolean): Boolean;
+function IteratorStepRec(It, NextM: TValue; var Value: TValue; var Done: Boolean): Boolean;
 { the key of a Symbol value }
-function SymKey(ASym: TValue): PStr; inline;
+function SymKey(Sym: TValue): PStr; inline;
 { the prototype a native constructor gives its instance: ConstructProto when Construct fetched one, else
   new.target's prototype property, else Default }
-function ProtoFromNewTarget(ADefault: TValue; var P: TValue): Boolean;
+function ProtoFromNewTarget(Default: TValue; var P: TValue): Boolean;
 { an accessor property with a native getter under Key (a symbol key too) }
-procedure DefineNativeGetterKey(O: TValue; AKey: PStr; const AName: UnicodeString; AFn: TNativeFn);
+procedure DefineNativeGetterKey(O: TValue; Key: PStr; const Name: UnicodeString; Fn: TNativeFn);
 { called by the eval native: the opEvalHint mode (0 or 2) when its caller is a direct eval call, else -1 }
 function TakeEvalHint: Integer;
-function MakeEvalClosure(T: PFuncTemplate; ADesc: TValue; var AClo: TValue): Boolean;
+function MakeEvalClosure(T: PFuncTemplate; Desc: TValue; var Clo: TValue): Boolean;
 function RunScript(T: PFuncTemplate): Boolean;
-function RunScriptRes(T: PFuncTemplate; var ARes: TValue): Boolean;   { Res: the completion value }
-function MakeScriptClosure(T: PFuncTemplate; var AClo: TValue): Boolean;
+function RunScriptRes(T: PFuncTemplate; var Res: TValue): Boolean;   { Res: the completion value }
+function MakeScriptClosure(T: PFuncTemplate; var Clo: TValue): Boolean;
 
 { helpers for natives (all may allocate and run JS) }
-function CallValue(F, AThis: TValue; AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
-function Construct(F: TValue; AArgs: PValue; AArgc: Integer; ANewTarget: TValue; var ARes: TValue): Boolean;
-function GetV(AObj: TValue; AKey: PStr; var ARes: TValue): Boolean;
-function SetV(AObj: TValue; AKey: PStr; V: TValue): Boolean;
-function GetElemV(AObj, AKey: TValue; var ARes: TValue): Boolean;
-function SetElemV(AObj, AKey, V: TValue): Boolean;
+function CallValue(F, This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+function Construct(F: TValue; Args: PValue; Argc: Integer; NewTarget: TValue; var Res: TValue): Boolean;
+function GetV(Obj: TValue; Key: PStr; var Res: TValue): Boolean;
+function SetV(Obj: TValue; Key: PStr; V: TValue): Boolean;
+function GetElemV(Obj, Key: TValue; var Res: TValue): Boolean;
+function SetElemV(Obj, Key, V: TValue): Boolean;
 { strict / throwing [[Set]] (PutValue in strict code; Set(O, P, V, true) of the built-ins) }
-function SetVS(AObj: TValue; AKey: PStr; V: TValue; AStrict: Boolean): Boolean;
-function SetVT(AObj: TValue; AKey: PStr; V: TValue): Boolean;
-function SetElemVS(AObj, AKey, V: TValue; AStrict: Boolean): Boolean;
-function SetElemVT(AObj, AKey, V: TValue): Boolean;
-function ProxyGetTrap(APV: TValue; const AName: UnicodeString; var ATrap: TValue): Boolean;
-function ProxyCallTrap(APV, ATrap: TValue; AArgc: Integer; AA1, AA2, AA3: TValue; var ARes: TValue): Boolean;
-function ArrayDenseOK(E: PValueArray; AIdx: Int64): Boolean; inline;
-function ToPropKey(V: TValue; var AKey: PStr): Boolean;
-function ToStringV(V: TValue; var ARes: TValue): Boolean;
+function SetVS(Obj: TValue; Key: PStr; V: TValue; Strict: Boolean): Boolean;
+function SetVT(Obj: TValue; Key: PStr; V: TValue): Boolean;
+function SetElemVS(Obj, Key, V: TValue; Strict: Boolean): Boolean;
+function SetElemVT(Obj, Key, V: TValue): Boolean;
+function ProxyGetTrap(PV: TValue; const Name: UnicodeString; var Trap: TValue): Boolean;
+function ProxyCallTrap(PV, Trap: TValue; Argc: Integer; A1, A2, A3: TValue; var Res: TValue): Boolean;
+function ArrayDenseOK(E: PValueArray; Idx: Int64): Boolean; inline;
+function ToPropKey(V: TValue; var Key: PStr): Boolean;
+function ToStringV(V: TValue; var Res: TValue): Boolean;
 function ToNumberV(V: TValue; var D: Double): Boolean;
 type
   TPrimHint = (phDefault, phNumber, phString);
-function ToPrimitiveV(V: TValue; AHintString: Boolean; var ARes: TValue): Boolean;
+function ToPrimitiveV(V: TValue; HintString: Boolean; var Res: TValue): Boolean;
 { 7.1.1 ToPrimitive with its preferred type: binary + and == pass phDefault }
-function ToPrimitiveHint(V: TValue; AHint: TPrimHint; var ARes: TValue): Boolean;
+function ToPrimitiveHint(V: TValue; Hint: TPrimHint; var Res: TValue): Boolean;
 threadvar
   { the key of Symbol.toPrimitive, set once the builtins created the symbol (nil before) }
   ToPrimitiveKey: PStr;
-function ThrowError(const AKind, AMsg: UnicodeString): Boolean;
-function ThrowTypeError(const AMsg: UnicodeString): Boolean;
-function MakeError(AProto: TValue; const AMsg: UnicodeString): TValue;
-function NewNativeFunction(AFn: TNativeFn; const AName: UnicodeString; ALength: Integer): TValue;
-function NewNativeFunctionData(AFn: TNativeFn; const AName: UnicodeString; ALength: Integer; AData: UInt32): TValue;
-procedure DefineHidden(O: TValue; const AName: UnicodeString; V: TValue);
-procedure DefineNative(O: TValue; const AName: UnicodeString; AFn: TNativeFn; ALength: Integer);
+function ThrowError(const Kind, Msg: UnicodeString): Boolean;
+function ThrowTypeError(const Msg: UnicodeString): Boolean;
+function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
+function NewNativeFunction(Fn: TNativeFn; const Name: UnicodeString; Length: Integer): TValue;
+function NewNativeFunctionData(Fn: TNativeFn; const Name: UnicodeString; Length: Integer; Data: UInt32): TValue;
+procedure DefineHidden(O: TValue; const Name: UnicodeString; V: TValue);
+procedure DefineNative(O: TValue; const Name: UnicodeString; Fn: TNativeFn; Length: Integer);
 function StrictEquals(A, B: TValue): Boolean;
-function LooseEquals(A, B: TValue; var ARes: Boolean): Boolean;
-function InstanceOf(V, C: TValue; var ARes: Boolean): Boolean;
-function OwnKeys(O: PObj; AOnlyEnumerable: Boolean): TValue;   { array of string keys }
-function DefineOwn(O: TValue; AKey: PStr; V: TValue; AFlags: Byte): Boolean;
-function GetIterator(V: TValue; var AIt: TValue): Boolean;
-function IteratorStep(AIt: TValue; var AValue: TValue; var ADone: Boolean): Boolean;
+function LooseEquals(A, B: TValue; var Res: Boolean): Boolean;
+function InstanceOf(V, C: TValue; var Res: Boolean): Boolean;
+function OwnKeys(O: PObj; OnlyEnumerable: Boolean): TValue;   { array of string keys }
+function DefineOwn(O: TValue; Key: PStr; V: TValue; Flags: Byte): Boolean;
+function GetIterator(V: TValue; var It: TValue): Boolean;
+function IteratorStep(It: TValue; var Value: TValue; var Done: Boolean): Boolean;
 function FunctionPrototypeOf(F: TValue): TValue;
-function DemoteArguments(AObj: TValue): TValue;
+function DemoteArguments(Obj: TValue): TValue;
 { 10.4.6 module namespace: Found when Key (a string) is an export; V its binding's value (False with a
   ReferenceError pending while it is uninitialized, when WantValue) }
-function NSLookup(O: PObj; AKey: PStr; AWantValue: Boolean; var V: TValue; var AFound: Boolean): Boolean;
+function NSLookup(O: PObj; Key: PStr; WantValue: Boolean; var V: TValue; var Found: Boolean): Boolean;
 { a return completion in flight (generator return(), carried as an exception through finally handlers) }
 function IsRetCompV(V: TValue): Boolean;
 { 7.1.13 ToBigInt }
 function ToBigIntV(V: TValue; var B: TValue): Boolean;
 { 7.1.21 CanonicalNumericIndexString is not undefined for a key that is not an array index ("-0", "1.5", "-1",
   "Infinity", an index past 2^32 - 2): a typed array has no such property }
-function CanonicalNumericNonIndex(AKey: PStr): Boolean;
+function CanonicalNumericNonIndex(Key: PStr): Boolean;
 { 10.4.5.16 TypedArraySetElement: ToBigInt or ToNumber of V, then the store if Idx is still a valid index (-1:
   a canonical numeric key that is not an index) }
-function TAStoreValue(O: TValue; AIdx: Int64; V: TValue): Boolean;
+function TAStoreValue(O: TValue; Idx: Int64; V: TValue): Boolean;
 { [[Get]] with a receiver (proxies through their trap) }
-function GetFromObject(O: PObj; AKey: PStr; AReceiver: TValue; var ARes: TValue): Boolean;
+function GetFromObject(O: PObj; Key: PStr; Receiver: TValue; var Res: TValue): Boolean;
 { [[Delete]] on an ordinary object (and the exotic ones G2 models in it): False for a non-configurable property }
-function DeleteIfConfigurable(O: PObj; AKey: PStr): Boolean;
-function ProxyDelete(APV: TValue; AKey: PStr; var AOk: Boolean): Boolean;
+function DeleteIfConfigurable(O: PObj; Key: PStr): Boolean;
+function ProxyDelete(PV: TValue; Key: PStr; var Ok: Boolean): Boolean;
 function ArrayIterationIntact: Boolean;
 { 7.3.18 LengthOfArrayLike: ToLength(Get(O, "length")) }
-function LengthOfArrayLike(O: TValue; var ALen: Int64): Boolean;
-function OwnVirtual(O: PObj; AKey: PStr; var V: TValue; var AFlags: Byte): Boolean;
-function NewArrayIterator(V: TValue; AKind: Integer): TValue;
-procedure RegisterSymbolKey(AKey: PStr; ASym: TValue);
-function KeyToValue(AKey: PStr): TValue;
-function ProxyInvoke(APV: TValue; const ATrapName: UnicodeString; AA1: TValue; AArgc: Integer; var ARes: TValue;
-  var AHadTrap: Boolean): Boolean;
-function ProxyOwnKeys(APV: TValue; var ARes: TValue): Boolean;
-function HasPropertyV(AObj: TValue; AKey: PStr; var AFound: Boolean): Boolean;
-function DefineElemRaw(AObj: TValue; AIdx: Int64; V: TValue): Boolean;
+function LengthOfArrayLike(O: TValue; var Len: Int64): Boolean;
+function OwnVirtual(O: PObj; Key: PStr; var V: TValue; var Flags: Byte): Boolean;
+function NewArrayIterator(V: TValue; Kind: Integer): TValue;
+procedure RegisterSymbolKey(Key: PStr; Sym: TValue);
+function KeyToValue(Key: PStr): TValue;
+function ProxyInvoke(PV: TValue; const TrapName: UnicodeString; A1: TValue; Argc: Integer; var Res: TValue;
+  var HadTrap: Boolean): Boolean;
+function ProxyOwnKeys(PV: TValue; var Res: TValue): Boolean;
+function HasPropertyV(Obj: TValue; Key: PStr; var Found: Boolean): Boolean;
+function DefineElemRaw(Obj: TValue; Idx: Int64; V: TValue): Boolean;
 { whether Proto is on the object V's prototype chain, through [[GetPrototypeOf]] }
-function ProtoChainHas(V, AProto: TValue; var ARes: Boolean): Boolean;
-function GeneratorResume(AGen: TValue; AArg: TValue; AMode: Integer; var AValue: TValue; var ADone: Boolean): Boolean;
+function ProtoChainHas(V, Proto: TValue; var Res: Boolean): Boolean;
+function GeneratorResume(Gen: TValue; Arg: TValue; Mode: Integer; var Value: TValue; var Done: Boolean): Boolean;
 
 threadvar
   ArrayValuesFnPublic: TValue;
@@ -259,7 +259,7 @@ threadvar
 implementation
 
 function SuspendNewGenerator: TValue; forward;
-function GeneratorNextIsIntrinsic(AGen: TValue): Boolean; forward;
+function GeneratorNextIsIntrinsic(Gen: TValue): Boolean; forward;
 
 { ---------------- roots ---------------- }
 
@@ -306,7 +306,7 @@ end;
 
 { ---------------- upvalues ---------------- }
 
-function FindOrOpenUpval(AIdx: Integer): TValue;
+function FindOrOpenUpval(Idx: Integer): TValue;
 var I, J: Integer; U: PUpval; V: TValue;
 begin
   { OpenUpvals is sorted by stack index ascending }
@@ -314,12 +314,12 @@ begin
   while I >= 0 do
   begin
     U := PUpval(PtrOf(OpenUpvals[I]));
-    if U^.StackIndex = AIdx then Exit(OpenUpvals[I]);
-    if U^.StackIndex < AIdx then Break;
+    if U^.StackIndex = Idx then Exit(OpenUpvals[I]);
+    if U^.StackIndex < Idx then Break;
     Dec(I);
   end;
   U := NewUpval;
-  U^.StackIndex := AIdx;
+  U^.StackIndex := Idx;
   V := MkPtr(U);
   if OpenCount >= Length(OpenUpvals) then SetLength(OpenUpvals, OpenCount * 2 + 64);
   for J := OpenCount - 1 downto I + 1 do OpenUpvals[J + 1] := OpenUpvals[J];
@@ -328,13 +328,13 @@ begin
   Result := V;
 end;
 
-procedure CloseUpvals(AFromIdx: Integer); inline;
+procedure CloseUpvals(FromIdx: Integer); inline;
 var U: PUpval;
 begin
   while OpenCount > 0 do
   begin
     U := PUpval(PtrOf(OpenUpvals[OpenCount - 1]));
-    if U^.StackIndex < AFromIdx then Break;
+    if U^.StackIndex < FromIdx then Break;
     U^.Value := VStack[U^.StackIndex];
     WriteBarrier(@U^.Hdr, U^.Value);
     U^.StackIndex := -1;
@@ -344,19 +344,19 @@ end;
 
 { ---------------- global declarations ---------------- }
 
-function AtomSlot(AKey: PStr; AMask: Integer): Integer; inline;
+function AtomSlot(Key: PStr; Mask: Integer): Integer; inline;
 begin
-  Result := Integer((PtrUInt(AKey) shr 3) * 2654435761) and AMask;
+  Result := Integer((PtrUInt(Key) shr 3) * 2654435761) and Mask;
 end;
 
-function GLexFind(AKey: PStr): Integer;
+function GLexFind(Key: PStr): Integer;
 var J: Integer;
 begin
   if GLexHash = nil then Exit(-1);
-  J := AtomSlot(AKey, High(GLexHash));
+  J := AtomSlot(Key, High(GLexHash));
   while GLexHash[J] <> 0 do
   begin
-    if GLexNames[GLexHash[J] - 1] = AKey then Exit(GLexHash[J] - 1);
+    if GLexNames[GLexHash[J] - 1] = Key then Exit(GLexHash[J] - 1);
     J := (J + 1) and High(GLexHash);
   end;
   Result := -1;
@@ -367,7 +367,7 @@ begin
   Result := GLexConst[I];
 end;
 
-function GLexAdd(AKey: PStr; AIsConst: Boolean): Integer;
+function GLexAdd(Key: PStr; IsConst: Boolean): Integer;
 var I, J: Integer;
 begin
   if GLexCount >= Length(GLexNames) then
@@ -377,8 +377,8 @@ begin
     SetLength(GLexCells, Length(GLexNames));
   end;
   Result := GLexCount;
-  GLexNames[Result] := AKey;
-  GLexConst[Result] := AIsConst;
+  GLexNames[Result] := Key;
+  GLexConst[Result] := IsConst;
   GLexCells[Result] := VUndefined;
   Inc(GLexCount);
   if GLexCount * 2 > Length(GLexHash) then
@@ -396,29 +396,29 @@ begin
   end
   else
   begin
-    J := AtomSlot(AKey, High(GLexHash));
+    J := AtomSlot(Key, High(GLexHash));
     while GLexHash[J] <> 0 do J := (J + 1) and High(GLexHash);
     GLexHash[J] := Result + 1;
   end;
 end;
 
-function GVarHas(AKey: PStr): Boolean;
+function GVarHas(Key: PStr): Boolean;
 var J: Integer;
 begin
   if GVarHash = nil then Exit(False);
-  J := AtomSlot(AKey, High(GVarHash));
+  J := AtomSlot(Key, High(GVarHash));
   while GVarHash[J] <> nil do
   begin
-    if GVarHash[J] = AKey then Exit(True);
+    if GVarHash[J] = Key then Exit(True);
     J := (J + 1) and High(GVarHash);
   end;
   Result := False;
 end;
 
-procedure GVarAdd(AKey: PStr);
+procedure GVarAdd(Key: PStr);
 var Old: array of PStr; I, J, N: Integer;
 begin
-  if GVarHas(AKey) then Exit;
+  if GVarHas(Key) then Exit;
   if (GVarCount + 1) * 2 > Length(GVarHash) then
   begin
     Old := GVarHash;
@@ -434,20 +434,20 @@ begin
         GVarHash[J] := Old[I];
       end;
   end;
-  J := AtomSlot(AKey, High(GVarHash));
+  J := AtomSlot(Key, High(GVarHash));
   while GVarHash[J] <> nil do J := (J + 1) and High(GVarHash);
-  GVarHash[J] := AKey;
+  GVarHash[J] := Key;
   Inc(GVarCount);
 end;
 
 { the global object's own property Key: its flags, False if absent }
-function GlobalOwn(AKey: PStr; var AFlags: Byte): Boolean;
+function GlobalOwn(Key: PStr; var Flags: Byte): Boolean;
 var S: Integer; P: PObj;
 begin
   P := ObjOf(GlobalObj);
-  S := ShapeLookup(P^.Shape, AKey);
+  S := ShapeLookup(P^.Shape, Key);
   Result := S >= 0;
-  if Result then AFlags := P^.Shape^.PFlags[S];
+  if Result then Flags := P^.Shape^.PFlags[S];
 end;
 
 function GlobalExtensible: Boolean; inline;
@@ -456,47 +456,47 @@ begin
 end;
 
 { 9.1.1.4.15 CanDeclareGlobalFunction }
-function CanDeclareGlobalFunction(AKey: PStr): Boolean;
+function CanDeclareGlobalFunction(Key: PStr): Boolean;
 var F: Byte;
 begin
-  if not GlobalOwn(AKey, F) then Exit(GlobalExtensible);
+  if not GlobalOwn(Key, F) then Exit(GlobalExtensible);
   Result := ((F and pfConfigurable) <> 0) or
     (((F and pfAccessor) = 0) and ((F and pfWritable) <> 0) and ((F and pfEnumerable) <> 0));
 end;
 
 { 9.1.1.4.16 CanDeclareGlobalVar }
-function CanDeclareGlobalVar(AKey: PStr): Boolean;
+function CanDeclareGlobalVar(Key: PStr): Boolean;
 var F: Byte;
 begin
-  Result := GlobalOwn(AKey, F) or GlobalExtensible;
+  Result := GlobalOwn(Key, F) or GlobalExtensible;
 end;
 
 { 9.1.1.4.17 CreateGlobalVarBinding }
-procedure CreateGlobalVarBinding(AKey: PStr; ADeletable: Boolean);
+procedure CreateGlobalVarBinding(Key: PStr; Deletable: Boolean);
 var F: Byte;
 begin
-  if not GlobalOwn(AKey, F) and GlobalExtensible then
-    DefineOwn(GlobalObj, AKey, VUndefined, pfWritable or pfEnumerable or Ord(ADeletable) * pfConfigurable);
-  GVarAdd(AKey);
+  if not GlobalOwn(Key, F) and GlobalExtensible then
+    DefineOwn(GlobalObj, Key, VUndefined, pfWritable or pfEnumerable or Ord(Deletable) * pfConfigurable);
+  GVarAdd(Key);
 end;
 
 { 9.1.1.4.18 CreateGlobalFunctionBinding }
-procedure CreateGlobalFunctionBinding(AKey: PStr; V: TValue; ADeletable: Boolean);
+procedure CreateGlobalFunctionBinding(Key: PStr; V: TValue; Deletable: Boolean);
 var F: Byte; P: PObj;
 begin
-  if not GlobalOwn(AKey, F) or ((F and pfConfigurable) <> 0) then
-    DefineOwn(GlobalObj, AKey, V, pfWritable or pfEnumerable or Ord(ADeletable) * pfConfigurable)
+  if not GlobalOwn(Key, F) or ((F and pfConfigurable) <> 0) then
+    DefineOwn(GlobalObj, Key, V, pfWritable or pfEnumerable or Ord(Deletable) * pfConfigurable)
   else
   begin
     P := ObjOf(GlobalObj);
-    SetSlot(P, ShapeLookup(P^.Shape, AKey), V);   { CanDeclareGlobalFunction held: a writable data property }
+    SetSlot(P, ShapeLookup(P^.Shape, Key), V);   { CanDeclareGlobalFunction held: a writable data property }
   end;
-  GVarAdd(AKey);
+  GVarAdd(Key);
 end;
 
-function ThrowRedeclared(AKey: PStr): Boolean;
+function ThrowRedeclared(Key: PStr): Boolean;
 begin
-  Result := ThrowError('SyntaxError', 'Identifier ''' + StrToUnicode(AKey) + ''' has already been declared');
+  Result := ThrowError('SyntaxError', 'Identifier ''' + StrToUnicode(Key) + ''' has already been declared');
 end;
 
 { 16.1.7 GlobalDeclarationInstantiation (GdiKind 1), and 19.2.1.3 EvalDeclarationInstantiation of non-strict
@@ -573,16 +573,16 @@ begin
   EvalHintMode := 0;
 end;
 
-function NewClosure(T: PFuncTemplate; AUpvals: TValue): PObj; forward;
+function NewClosure(T: PFuncTemplate; Upvals: TValue): PObj; forward;
 
 { goal 4: the closure of a direct eval's code (compiled as an arrow in a stand-in for its caller): each upvalue the
   caller's binding the description names, a register of the calling frame (opened as an upvalue) or one of its
   closure's upvalues }
-function MakeEvalClosure(T: PFuncTemplate; ADesc: TValue; var AClo: TValue): Boolean;
+function MakeEvalClosure(T: PFuncTemplate; Desc: TValue; var Clo: TValue): Boolean;
 var Fr: ^TFrame; Kinds, Idxs: array of Integer; D, Entry: UnicodeString; P, N, J, K: Integer; Fields: TUnicodeStringArray;
   Ups: PValueArray; V: TValue;
 begin
-  D := StrToUnicode(StrOf(ADesc));
+  D := StrToUnicode(StrOf(Desc));
   N := 0;
   SetLength(Kinds, 0); SetLength(Idxs, 0);
   while D <> '' do
@@ -597,7 +597,7 @@ begin
     Inc(N);
   end;
   K := Length(T^.Upvals);
-  if K = 0 then begin AClo := MkPtr(NewClosure(T, VUndefined)); Exit(True); end;
+  if K = 0 then begin Clo := MkPtr(NewClosure(T, VUndefined)); Exit(True); end;
   Ups := NewValueArray(K);
   Ups^.Len := K;
   for J := 0 to K - 1 do Ups^.Data[J] := VUndefined;
@@ -610,54 +610,54 @@ begin
     else V := PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[Idxs[P]];
     ValueArrayStore(PValueArray(PtrOf(RootAt(TempTop - 1))), J, V);
   end;
-  AClo := MkPtr(NewClosure(T, RootAt(TempTop - 1)));
+  Clo := MkPtr(NewClosure(T, RootAt(TempTop - 1)));
   PopRoots(1);
   Result := True;
 end;
 
-function ProtoFromNewTarget(ADefault: TValue; var P: TValue): Boolean;
+function ProtoFromNewTarget(Default: TValue; var P: TValue): Boolean;
 begin
-  P := ADefault;
+  P := Default;
   ConstructProtoTaken := True;
   if IsObject(CurNewTarget) then
   begin
     if not GetV(CurNewTarget, AtomPrototype, P) then Exit(False);
-    if not IsObject(P) then P := ADefault;
+    if not IsObject(P) then P := Default;
   end;
   Result := True;
 end;
 
-function SymKey(ASym: TValue): PStr; inline;
+function SymKey(Sym: TValue): PStr; inline;
 begin
-  Result := PStr(PPointer(PByte(PtrOf(ASym)) + 16)^);
+  Result := PStr(PPointer(PByte(PtrOf(Sym)) + 16)^);
 end;
 
-procedure DefineNativeGetterKey(O: TValue; AKey: PStr; const AName: UnicodeString; AFn: TNativeFn);
+procedure DefineNativeGetterKey(O: TValue; Key: PStr; const Name: UnicodeString; Fn: TNativeFn);
 var F, A: TValue;
 begin
   PushRoot(O);
-  F := NewNativeFunction(AFn, AName, 0);
+  F := NewNativeFunction(Fn, Name, 0);
   PushRoot(F);
   A := MkPtr(NewAccessor(RootAt(TempTop - 1), VUndefined));
-  DefineOwn(RootAt(TempTop - 2), AKey, A, pfConfigurable or pfAccessor);
+  DefineOwn(RootAt(TempTop - 2), Key, A, pfConfigurable or pfAccessor);
   PopRoots(2);
 end;
 
-function IteratorCloseV(AIt: TValue; AThrowing: Boolean): Boolean;
+function IteratorCloseV(It: TValue; Throwing: Boolean): Boolean;
 var Ret, R, Saved: TValue;
 begin
-  if AThrowing then
+  if Throwing then
   begin
     Saved := Pending;
     Pending := VUndefined;
-    PushRoot(Saved); PushRoot(AIt);
-    if GetV(AIt, AtomOf('return'), Ret) and IsCallable(Ret) then CallValue(Ret, RootAt(TempTop - 1), nil, 0, R);
+    PushRoot(Saved); PushRoot(It);
+    if GetV(It, AtomOf('return'), Ret) and IsCallable(Ret) then CallValue(Ret, RootAt(TempTop - 1), nil, 0, R);
     Pending := RootAt(TempTop - 2);
     PopRoots(2);
     Exit(False);
   end;
-  PushRoot(AIt);
-  if not GetV(AIt, AtomOf('return'), Ret) then begin PopRoots(1); Exit(False); end;
+  PushRoot(It);
+  if not GetV(It, AtomOf('return'), Ret) then begin PopRoots(1); Exit(False); end;
   if IsNullish(Ret) then begin PopRoots(1); Exit(True); end;
   if not CallValue(Ret, RootAt(TempTop - 1), nil, 0, R) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
@@ -687,19 +687,19 @@ begin
     (GetSlot(B, AISlotB) = ArrayIterNextFn);
 end;
 
-function GetIteratorRec(V: TValue; var AIt, ANextM: TValue): Boolean;
+function GetIteratorRec(V: TValue; var It, NextM: TValue): Boolean;
 var F: TValue;
 begin
   { strings, arguments objects and typed arrays iterate like arrays while the intrinsics are in place }
   if (IsString(V) or (IsObject(V) and (ObjOf(V)^.OKind in [okArguments, okTypedArray]))) and ArrayIterationIntact then
   begin
-    if not GetIterator(V, AIt) then Exit(False);
-    if IsObject(AIt) and (ObjOf(AIt)^.OKind = okIterator) then ANextM := ArrayIterNextFn
+    if not GetIterator(V, It) then Exit(False);
+    if IsObject(It) and (ObjOf(It)^.OKind = okIterator) then NextM := ArrayIterNextFn
     else
     begin
-      PushRoot(AIt);
-      Result := GetV(AIt, AtomNext, ANextM);
-      AIt := RootAt(TempTop - 1);
+      PushRoot(It);
+      Result := GetV(It, AtomNext, NextM);
+      It := RootAt(TempTop - 1);
       PopRoots(1);
       Exit;
     end;
@@ -708,48 +708,48 @@ begin
   if IsObject(V) and (ObjOf(V)^.OKind = okArray) and (ObjOf(V)^.Shape^.Proto = ArrayProto) and
      (ShapeLookup(ObjOf(V)^.Shape, SymKey(SymIterator)) < 0) and ArrayIterationIntact then
   begin
-    AIt := NewArrayIterator(V, 0);
-    ANextM := ArrayIterNextFn;
+    It := NewArrayIterator(V, 0);
+    NextM := ArrayIterNextFn;
     Exit(True);
   end;
   PushRoot(V);
   if not GetElemV(V, SymIterator, F) then begin PopRoots(1); Exit(False); end;
   if not IsCallable(F) then begin PopRoots(1); Exit(ThrowTypeError('value is not iterable')); end;
-  if not CallValue(F, RootAt(TempTop - 1), nil, 0, AIt) then begin PopRoots(1); Exit(False); end;
+  if not CallValue(F, RootAt(TempTop - 1), nil, 0, It) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
-  if not IsObject(AIt) then Exit(ThrowTypeError('iterator is not an object'));
-  PushRoot(AIt);
-  if not GetV(AIt, AtomNext, ANextM) then begin PopRoots(1); Exit(False); end;
-  AIt := RootAt(TempTop - 1);
+  if not IsObject(It) then Exit(ThrowTypeError('iterator is not an object'));
+  PushRoot(It);
+  if not GetV(It, AtomNext, NextM) then begin PopRoots(1); Exit(False); end;
+  It := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
 end;
 
-function IteratorStepRec(AIt, ANextM: TValue; var AValue: TValue; var ADone: Boolean): Boolean;
+function IteratorStepRec(It, NextM: TValue; var Value: TValue; var Done: Boolean): Boolean;
 var R: TValue;
 begin
-  if (ANextM = ArrayIterNextFn) and IsObject(AIt) and (ObjOf(AIt)^.OKind = okIterator) then
-    Exit(IteratorStep(AIt, AValue, ADone));
-  if (ANextM = GenNextFn) and IsObject(AIt) and (ObjOf(AIt)^.OKind = okGenerator) then
+  if (NextM = ArrayIterNextFn) and IsObject(It) and (ObjOf(It)^.OKind = okIterator) then
+    Exit(IteratorStep(It, Value, Done));
+  if (NextM = GenNextFn) and IsObject(It) and (ObjOf(It)^.OKind = okGenerator) then
   begin
     GenYieldRaw := False;
-    if not GeneratorResume(AIt, VUndefined, 0, AValue, ADone) then Exit(False);
+    if not GeneratorResume(It, VUndefined, 0, Value, Done) then Exit(False);
     if not GenYieldRaw then Exit(True);
     GenYieldRaw := False;
-    R := AValue;
+    R := Value;
   end
   else
   begin
-    if not IsCallable(ANextM) then Exit(ThrowTypeError('iterator.next is not a function'));
-    if not CallValue(ANextM, AIt, nil, 0, R) then Exit(False);
+    if not IsCallable(NextM) then Exit(ThrowTypeError('iterator.next is not a function'));
+    if not CallValue(NextM, It, nil, 0, R) then Exit(False);
   end;
   if not IsObject(R) then Exit(ThrowTypeError('iterator result is not an object'));
   PushRoot(R);
-  if not GetV(R, AtomDone, AValue) then begin PopRoots(1); Exit(False); end;
-  ADone := ToBool(AValue);
-  AValue := VUndefined;
-  if not ADone then
-    if not GetV(RootAt(TempTop - 1), AtomValue, AValue) then begin PopRoots(1); Exit(False); end;
+  if not GetV(R, AtomDone, Value) then begin PopRoots(1); Exit(False); end;
+  Done := ToBool(Value);
+  Value := VUndefined;
+  if not Done then
+    if not GetV(RootAt(TempTop - 1), AtomValue, Value) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
   Result := True;
 end;
@@ -787,33 +787,33 @@ end;
 
 { ---------------- errors ---------------- }
 
-function MakeError(AProto: TValue; const AMsg: UnicodeString): TValue;
+function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
 var O: PObj; M: TValue;
 begin
-  M := StrFromUnicode(AMsg);
+  M := StrFromUnicode(Msg);
   PushRoot(M);
-  O := NewObject(RootShapeFor(AProto), 4, okError);
+  O := NewObject(RootShapeFor(Proto), 4, okError);
   M := RootAt(TempTop - 1);
   PopRoots(1);
   AddProperty(O, AtomMessage, M, pfHidden);
   Result := MkPtr(O);
 end;
 
-function ThrowError(const AKind, AMsg: UnicodeString): Boolean;
+function ThrowError(const Kind, Msg: UnicodeString): Boolean;
 var P: TValue;
 begin
-  if AKind = 'TypeError' then P := TypeErrorProto
-  else if AKind = 'RangeError' then P := RangeErrorProto
-  else if AKind = 'SyntaxError' then P := SyntaxErrorProto
-  else if AKind = 'ReferenceError' then P := ReferenceErrorProto
+  if Kind = 'TypeError' then P := TypeErrorProto
+  else if Kind = 'RangeError' then P := RangeErrorProto
+  else if Kind = 'SyntaxError' then P := SyntaxErrorProto
+  else if Kind = 'ReferenceError' then P := ReferenceErrorProto
   else P := ErrorProto;
-  Pending := MakeError(P, AMsg);
+  Pending := MakeError(P, Msg);
   Result := False;
 end;
 
-function ThrowTypeError(const AMsg: UnicodeString): Boolean;
+function ThrowTypeError(const Msg: UnicodeString): Boolean;
 begin
-  Result := ThrowError('TypeError', AMsg);
+  Result := ThrowError('TypeError', Msg);
 end;
 
 { ---------------- functions ---------------- }
@@ -832,9 +832,9 @@ begin
   if Length(T^.Lines) > 0 then Result := Result + ':' + IntToStr(T^.Lines[0]);
 end;
 
-function NewClosure(T: PFuncTemplate; AUpvals: TValue): PObj;
+function NewClosure(T: PFuncTemplate; Upvals: TValue): PObj;
 begin
-  PushRoot(AUpvals);
+  PushRoot(Upvals);
   if not (T^.IsGenerator or T^.IsAsync) or (GenFunctionShape = nil) then Result := NewObject(FunctionShape, 3, okFunction)
   else if T^.IsGenerator and T^.IsAsync then Result := NewObject(AsyncGenFunctionShape, 3, okFunction)
   else if T^.IsGenerator then Result := NewObject(GenFunctionShape, 3, okFunction)
@@ -852,61 +852,61 @@ begin
   Result^.Slots[1] := MkPtr(T^.Name);
 end;
 
-function NewNativeFunction(AFn: TNativeFn; const AName: UnicodeString; ALength: Integer): TValue;
+function NewNativeFunction(Fn: TNativeFn; const Name: UnicodeString; Length: Integer): TValue;
 var O: PObj;
 begin
   O := NewObject(FunctionShape, 3, okNative);
-  O^.Native := Pointer(@AFn);
-  O^.Aux1 := MkPtr(AtomOf(AName));
-  O^.Aux2 := MkInt(ALength);
-  O^.Slots[0] := MkInt(ALength);
-  O^.Slots[1] := MkPtr(AtomOf(AName));
+  O^.Native := Pointer(@Fn);
+  O^.Aux1 := MkPtr(AtomOf(Name));
+  O^.Aux2 := MkInt(Length);
+  O^.Slots[0] := MkInt(Length);
+  O^.Slots[1] := MkPtr(AtomOf(Name));
   Result := MkPtr(O);
 end;
 
-function NewNativeFunctionData(AFn: TNativeFn; const AName: UnicodeString; ALength: Integer; AData: UInt32): TValue;
+function NewNativeFunctionData(Fn: TNativeFn; const Name: UnicodeString; Length: Integer; Data: UInt32): TValue;
 begin
-  Result := NewNativeFunction(AFn, AName, ALength);
-  ObjOf(Result)^.Pad := AData;
+  Result := NewNativeFunction(Fn, Name, Length);
+  ObjOf(Result)^.Pad := Data;
 end;
 
-function DefineOwn(O: TValue; AKey: PStr; V: TValue; AFlags: Byte): Boolean;
+function DefineOwn(O: TValue; Key: PStr; V: TValue; Flags: Byte): Boolean;
 var P: PObj; S: Integer;
 begin
   P := ObjOf(O);
   { the built-in constructors are the natives given a prototype property (Symbol and BigInt included: their
     [[Construct]] throws) }
-  if (AKey = AtomPrototype) and (P^.OKind = okNative) then P^.OFlags := P^.OFlags or 32;
-  S := ShapeLookup(P^.Shape, AKey);
+  if (Key = AtomPrototype) and (P^.OKind = okNative) then P^.OFlags := P^.OFlags or 32;
+  S := ShapeLookup(P^.Shape, Key);
   if S >= 0 then
   begin
-    if P^.Shape^.PFlags[S] <> AFlags then
+    if P^.Shape^.PFlags[S] <> Flags then
     begin
       { flags change: same position, new attributes }
-      ChangeFlags(P, AKey, AFlags);
+      ChangeFlags(P, Key, Flags);
       SetSlot(P, S, V);
     end
     else
       SetSlot(P, S, V);
   end
   else
-    AddProperty(P, AKey, V, AFlags);
+    AddProperty(P, Key, V, Flags);
   Result := True;
 end;
 
-procedure DefineHidden(O: TValue; const AName: UnicodeString; V: TValue);
+procedure DefineHidden(O: TValue; const Name: UnicodeString; V: TValue);
 begin
-  DefineOwn(O, AtomOf(AName), V, pfHidden);
+  DefineOwn(O, AtomOf(Name), V, pfHidden);
 end;
 
-procedure DefineNative(O: TValue; const AName: UnicodeString; AFn: TNativeFn; ALength: Integer);
+procedure DefineNative(O: TValue; const Name: UnicodeString; Fn: TNativeFn; Length: Integer);
 var F: TValue;
 begin
   PushRoot(O);
-  F := NewNativeFunction(AFn, AName, ALength);
+  F := NewNativeFunction(Fn, Name, Length);
   O := RootAt(TempTop - 1);
   PopRoots(1);
-  DefineOwn(O, AtomOf(AName), F, pfHidden);
+  DefineOwn(O, AtomOf(Name), F, pfHidden);
 end;
 
 { a function's 'prototype' object, created on first use }
@@ -945,34 +945,34 @@ end;
 { ---------------- property access ---------------- }
 
 { an index write an array keeps dense: near its length, or anywhere below 4M elements }
-function ArrayDenseOK(E: PValueArray; AIdx: Int64): Boolean; inline;
+function ArrayDenseOK(E: PValueArray; Idx: Int64): Boolean; inline;
 begin
-  Result := (AIdx < Int64(E^.Len) + 1024 + Int64(E^.Len) * 2) or (AIdx < 4 * 1024 * 1024);
+  Result := (Idx < Int64(E^.Len) + 1024 + Int64(E^.Len) * 2) or (Idx < 4 * 1024 * 1024);
 end;
 
 { [[Delete]] on an ordinary object: a non-configurable property stays (the delete reports false) }
-function DeleteIfConfigurable(O: PObj; AKey: PStr): Boolean;
+function DeleteIfConfigurable(O: PObj; Key: PStr): Boolean;
 var S: Integer; Idx: Int64; V: TValue; Found: Boolean;
 begin
-  S := ShapeLookup(O^.Shape, AKey);
+  S := ShapeLookup(O^.Shape, Key);
   if (S >= 0) and ((O^.Shape^.PFlags[S] and pfConfigurable) = 0) then Exit(False);
-  if (O^.OKind = okTypedArray) and (S < 0) and CanonicalNumericNonIndex(AKey) then Exit(True);
-  if (O^.OKind = okModuleNS) and ((AKey^.Hdr.Extra and kfSymbol) = 0) then
+  if (O^.OKind = okTypedArray) and (S < 0) and CanonicalNumericNonIndex(Key) then Exit(True);
+  if (O^.OKind = okModuleNS) and ((Key^.Hdr.Extra and kfSymbol) = 0) then
   begin
-    NSLookup(O, AKey, False, V, Found);
+    NSLookup(O, Key, False, V, Found);
     Exit(not Found);   { 10.4.6.10 }
   end;
   { an array's length, a String object's length and characters: non-configurable }
-  if (S < 0) and (O^.OKind = okArray) and (AKey = AtomLength) then Exit(False);
+  if (S < 0) and (O^.OKind = okArray) and (Key = AtomLength) then Exit(False);
   if (S < 0) and (O^.OKind = okStringObj) and
-     ((AKey = AtomLength) or (IndexFromString(AKey, Idx) and (Idx < StrOf(O^.Aux1)^.Len))) then Exit(False);
-  if (O^.OKind = okArguments) and (AKey = AtomLength) then
+     ((Key = AtomLength) or (IndexFromString(Key, Idx) and (Idx < StrOf(O^.Aux1)^.Len))) then Exit(False);
+  if (O^.OKind = okArguments) and (Key = AtomLength) then
   begin
     O := ObjOf(DemoteArguments(MkPtr(O)));
-    DeleteProperty(O, AKey);
+    DeleteProperty(O, Key);
     Exit(True);
   end;
-  if (S < 0) and IndexFromString(AKey, Idx) then
+  if (S < 0) and IndexFromString(Key, Idx) then
   begin
     { 10.4.5.6: a typed array's in-bounds element is not deletable }
     if O^.OKind = okTypedArray then Exit(Idx >= TALength(O));
@@ -984,18 +984,18 @@ begin
     end;
   end;
   { a function's 'prototype' not created yet is non-configurable too }
-  if (S < 0) and (O^.OKind = okFunction) and (AKey = AtomPrototype) and ((O^.OFlags and 4) = 0) and
+  if (S < 0) and (O^.OKind = okFunction) and (Key = AtomPrototype) and ((O^.OFlags and 4) = 0) and
      (PFuncTemplate(O^.Native)^.IsGenerator or
       not (PFuncTemplate(O^.Native)^.IsArrow or PFuncTemplate(O^.Native)^.IsMethod or PFuncTemplate(O^.Native)^.IsAsync)) then
     Exit(False);
-  DeleteProperty(O, AKey);
+  DeleteProperty(O, Key);
   Result := True;
 end;
 
-function TypeErrorRead(AObj: TValue; AKey: PStr): Boolean;
+function TypeErrorRead(Obj: TValue; Key: PStr): Boolean;
 begin
-  if AObj = VNull then Result := ThrowTypeError('Cannot read properties of null (reading ''' + StrToUnicode(AKey) + ''')')
-  else Result := ThrowTypeError('Cannot read properties of undefined (reading ''' + StrToUnicode(AKey) + ''')');
+  if Obj = VNull then Result := ThrowTypeError('Cannot read properties of null (reading ''' + StrToUnicode(Key) + ''')')
+  else Result := ThrowTypeError('Cannot read properties of undefined (reading ''' + StrToUnicode(Key) + ''')');
 end;
 
 function ProtoForPrimitive(V: TValue): TValue; inline;
@@ -1008,19 +1008,19 @@ begin
   else Result := VNull;
 end;
 
-function VirtualProp(O: PObj; AKey: PStr; var ARes: TValue): Boolean;
+function VirtualProp(O: PObj; Key: PStr; var Res: TValue): Boolean;
 var T: PFuncTemplate; Idx: Int64;
 begin
   Result := False;
   case O^.OKind of
     okArray, okArguments:
-      if AKey = AtomLength then begin ARes := MkInt(ArrayLen(O)); Exit(True); end;
+      if Key = AtomLength then begin Res := MkInt(ArrayLen(O)); Exit(True); end;
     okStringObj:
       begin
-        if AKey = AtomLength then begin ARes := MkInt(StrOf(O^.Aux1)^.Len); Exit(True); end;
-        if IndexFromString(AKey, Idx) and (Idx < StrOf(O^.Aux1)^.Len) then
+        if Key = AtomLength then begin Res := MkInt(StrOf(O^.Aux1)^.Len); Exit(True); end;
+        if IndexFromString(Key, Idx) and (Idx < StrOf(O^.Aux1)^.Len) then
         begin
-          ARes := SubString(StrOf(O^.Aux1), Idx, 1);
+          Res := SubString(StrOf(O^.Aux1), Idx, 1);
           Exit(True);
         end;
       end;
@@ -1028,28 +1028,28 @@ begin
 end;
 
 { property lookup on an object chain; Receiver is the this for getters }
-function ProxyGet(APV: TValue; AKey: PStr; AReceiver: TValue; var ARes: TValue): Boolean; forward;
+function ProxyGet(PV: TValue; Key: PStr; Receiver: TValue; var Res: TValue): Boolean; forward;
 
-function GetFromObject(O: PObj; AKey: PStr; AReceiver: TValue; var ARes: TValue): Boolean;
+function GetFromObject(O: PObj; Key: PStr; Receiver: TValue; var Res: TValue): Boolean;
 var S: Integer; Flags: Byte; Acc: PAccessor; P: TValue; Idx: Int64; V: TValue; Found: Boolean;
 begin
   while True do
   begin
-    if O^.OKind = okProxy then Exit(ProxyGet(MkPtr(O), AKey, AReceiver, ARes));
-    if (O^.OKind = okModuleNS) and ((AKey^.Hdr.Extra and kfSymbol) = 0) then
+    if O^.OKind = okProxy then Exit(ProxyGet(MkPtr(O), Key, Receiver, Res));
+    if (O^.OKind = okModuleNS) and ((Key^.Hdr.Extra and kfSymbol) = 0) then
     begin
-      if not NSLookup(O, AKey, True, ARes, Found) then Exit(False);
-      if not Found then ARes := VUndefined;
+      if not NSLookup(O, Key, True, Res, Found) then Exit(False);
+      if not Found then Res := VUndefined;
       Exit(True);
     end;
     { 10.4.5.4: a typed array's integer index is its element or undefined, never inherited }
-    if (O^.OKind = okTypedArray) and IndexFromString(AKey, Idx) then
+    if (O^.OKind = okTypedArray) and IndexFromString(Key, Idx) then
     begin
-      if Idx < TALength(O) then ARes := TAGet(O, Idx) else ARes := VUndefined;
+      if Idx < TALength(O) then Res := TAGet(O, Idx) else Res := VUndefined;
       Exit(True);
     end;
-    if (O^.OKind = okTypedArray) and CanonicalNumericNonIndex(AKey) then begin ARes := VUndefined; Exit(True); end;
-    S := ShapeLookup(O^.Shape, AKey);
+    if (O^.OKind = okTypedArray) and CanonicalNumericNonIndex(Key) then begin Res := VUndefined; Exit(True); end;
+    S := ShapeLookup(O^.Shape, Key);
     if S >= 0 then
     begin
       Flags := O^.Shape^.PFlags[S];
@@ -1057,61 +1057,61 @@ begin
       if (Flags and pfAccessor) <> 0 then
       begin
         Acc := PAccessor(PtrOf(V));
-        if Acc^.Getter = VUndefined then begin ARes := VUndefined; Exit(True); end;
-        Exit(CallValue(Acc^.Getter, AReceiver, nil, 0, ARes));
+        if Acc^.Getter = VUndefined then begin Res := VUndefined; Exit(True); end;
+        Exit(CallValue(Acc^.Getter, Receiver, nil, 0, Res));
       end;
-      ARes := V;
+      Res := V;
       Exit(True);
     end;
-    if VirtualProp(O, AKey, ARes) then Exit(True);
-    if (O^.Elements <> nil) and IndexFromString(AKey, Idx) then
+    if VirtualProp(O, Key, Res) then Exit(True);
+    if (O^.Elements <> nil) and IndexFromString(Key, Idx) then
     begin
       if Idx < O^.Elements^.Len then
       begin
-        ARes := O^.Elements^.Data[Idx];
-        if ARes <> VHole then Exit(True);
+        Res := O^.Elements^.Data[Idx];
+        if Res <> VHole then Exit(True);
       end;
     end;
-    if (O^.OKind = okFunction) and (AKey = AtomPrototype) then
+    if (O^.OKind = okFunction) and (Key = AtomPrototype) then
     begin
-      ARes := FunctionPrototypeOf(MkPtr(O));
+      Res := FunctionPrototypeOf(MkPtr(O));
       Exit(True);
     end;
     P := O^.Shape^.Proto;
-    if not IsObject(P) then begin ARes := VUndefined; Exit(True); end;
+    if not IsObject(P) then begin Res := VUndefined; Exit(True); end;
     O := ObjOf(P);
   end;
 end;
 
-function GetV(AObj: TValue; AKey: PStr; var ARes: TValue): Boolean;
+function GetV(Obj: TValue; Key: PStr; var Res: TValue): Boolean;
 var Idx: Int64; S: PStr; P: TValue;
 begin
-  if IsObject(AObj) then Exit(GetFromObject(ObjOf(AObj), AKey, AObj, ARes));
-  if IsNullish(AObj) then Exit(TypeErrorRead(AObj, AKey));
-  if IsString(AObj) then
+  if IsObject(Obj) then Exit(GetFromObject(ObjOf(Obj), Key, Obj, Res));
+  if IsNullish(Obj) then Exit(TypeErrorRead(Obj, Key));
+  if IsString(Obj) then
   begin
-    S := StrOf(AObj);
-    if AKey = AtomLength then begin ARes := MkInt(S^.Len); Exit(True); end;
-    if IndexFromString(AKey, Idx) then
+    S := StrOf(Obj);
+    if Key = AtomLength then begin Res := MkInt(S^.Len); Exit(True); end;
+    if IndexFromString(Key, Idx) then
     begin
-      if Idx < S^.Len then ARes := SubString(S, Idx, 1) else ARes := VUndefined;
+      if Idx < S^.Len then Res := SubString(S, Idx, 1) else Res := VUndefined;
       Exit(True);
     end;
   end;
-  P := ProtoForPrimitive(AObj);
-  if not IsObject(P) then begin ARes := VUndefined; Exit(True); end;
-  Result := GetFromObject(ObjOf(P), AKey, AObj, ARes);
+  P := ProtoForPrimitive(Obj);
+  if not IsObject(P) then begin Res := VUndefined; Exit(True); end;
+  Result := GetFromObject(ObjOf(P), Key, Obj, Res);
 end;
 
 
 { An arguments object keeps its length equal to its element count, which the array fast paths rely on. An
   operation that would break that (a new index, a write, define or delete of length) first turns it into an
   ordinary object with the indices and length as shape properties. Returns the object (it may have moved). }
-function DemoteArguments(AObj: TValue): TValue;
+function DemoteArguments(Obj: TValue): TValue;
 var I, N: Integer; K: PStr; V: TValue;
 begin
-  PushRoot(AObj);
-  N := ObjOf(AObj)^.Elements^.Len;
+  PushRoot(Obj);
+  N := ObjOf(Obj)^.Elements^.Len;
   for I := 0 to N - 1 do
   begin
     K := IntAtom(I);
@@ -1125,26 +1125,26 @@ begin
   PopRoots(1);
 end;
 
-function NSLookup(O: PObj; AKey: PStr; AWantValue: Boolean; var V: TValue; var AFound: Boolean): Boolean;
+function NSLookup(O: PObj; Key: PStr; WantValue: Boolean; var V: TValue; var Found: Boolean): Boolean;
 var E: PValueArray; Lo, Hi, M, C: Integer; Cell: TValue;
 begin
-  AFound := False;
+  Found := False;
   Result := True;
   E := ObjOf(O^.Aux1)^.Elements;
   Lo := 0; Hi := E^.Len div 2 - 1;
   while Lo <= Hi do
   begin
     M := (Lo + Hi) div 2;
-    C := StrCompare(PStr(PtrOf(E^.Data[M * 2])), AKey);
+    C := StrCompare(PStr(PtrOf(E^.Data[M * 2])), Key);
     if C = 0 then
     begin
-      AFound := True;
-      if not AWantValue then Exit;
+      Found := True;
+      if not WantValue then Exit;
       Cell := E^.Data[M * 2 + 1];
       if PUpval(PtrOf(Cell))^.StackIndex >= 0 then V := VStack[PUpval(PtrOf(Cell))^.StackIndex]
       else V := PUpval(PtrOf(Cell))^.Value;
       if V = VHole then
-        Exit(ThrowError('ReferenceError', 'Cannot access ''' + StrToUnicode(AKey) + ''' before initialization'));
+        Exit(ThrowError('ReferenceError', 'Cannot access ''' + StrToUnicode(Key) + ''' before initialization'));
       Exit;
     end;
     if C < 0 then Lo := M + 1 else Hi := M - 1;
@@ -1152,10 +1152,10 @@ begin
 end;
 
 { 7.1.14 StringToBigInt (decimal, or 0x / 0o / 0b without a sign); False: not a StringIntegerLiteral }
-function StringToBigIntV(const AS0: UnicodeString; var B: TValue): Boolean;
+function StringToBigIntV(const S0: UnicodeString; var B: TValue): Boolean;
 var S: UnicodeString; I, Radix, D: Integer; Neg: Boolean; R: TBigInteger;
 begin
-  S := Trim(AS0);
+  S := Trim(S0);
   Result := False;
   Neg := False;
   Radix := 10;
@@ -1216,18 +1216,18 @@ begin
   Result := ThrowTypeError('Cannot convert ' + TypeOfStr(V) + ' to a BigInt');
 end;
 
-function CanonicalNumericNonIndex(AKey: PStr): Boolean;
+function CanonicalNumericNonIndex(Key: PStr): Boolean;
 var C: WideChar; Idx: Int64;
 begin
   Result := False;
-  if (AKey^.Hdr.Extra <> 0) or (AKey^.Len = 0) or IndexFromString(AKey, Idx) then Exit;
-  C := StrChars(AKey)[0];
+  if (Key^.Hdr.Extra <> 0) or (Key^.Len = 0) or IndexFromString(Key, Idx) then Exit;
+  C := StrChars(Key)[0];
   if not ((C = '-') or ((C >= '0') and (C <= '9')) or (C = 'I') or (C = 'N')) then Exit;
-  if StrToUnicode(AKey) = '-0' then Exit(True);
-  Result := StrToUnicode(StrOf(NumberToStr(PrimitiveToNumber(MkPtr(AKey))))) = StrToUnicode(AKey);
+  if StrToUnicode(Key) = '-0' then Exit(True);
+  Result := StrToUnicode(StrOf(NumberToStr(PrimitiveToNumber(MkPtr(Key))))) = StrToUnicode(Key);
 end;
 
-function TAStoreValue(O: TValue; AIdx: Int64; V: TValue): Boolean;
+function TAStoreValue(O: TValue; Idx: Int64; V: TValue): Boolean;
 var D: Double; B: TValue; P: PObj;
 begin
   PushRoot(O);
@@ -1235,60 +1235,60 @@ begin
   begin
     if not ToBigIntV(V, B) then begin PopRoots(1); Exit(False); end;
     P := ObjOf(RootAt(TempTop - 1));
-    if (AIdx >= 0) and (AIdx < TALength(P)) then TASetBig(P, AIdx, BigToU64(B));
+    if (Idx >= 0) and (Idx < TALength(P)) then TASetBig(P, Idx, BigToU64(B));
   end
   else
   begin
     if IsInt(V) then D := IntOf(V)
     else if not ToNumberV(V, D) then begin PopRoots(1); Exit(False); end;
     P := ObjOf(RootAt(TempTop - 1));
-    if (AIdx >= 0) and (AIdx < TALength(P)) then TASet(P, AIdx, D);
+    if (Idx >= 0) and (Idx < TALength(P)) then TASet(P, Idx, D);
   end;
   PopRoots(1);
   Result := True;
 end;
 
 { 10.1.9.2 OrdinarySetWithOwnDescriptor (receiver = the object): Ok False where [[Set]] returns false }
-function SetOnObjectOk(AObj: TValue; AKey: PStr; V: TValue; var AOk: Boolean): Boolean;
+function SetOnObjectOk(Obj: TValue; Key: PStr; V: TValue; var Ok: Boolean): Boolean;
 var O, W: PObj; S: Integer; Flags: Byte; P: TValue; Acc: PAccessor; Idx: Int64; Dummy: TValue; D1, D2: Double;
 begin
-  AOk := True;
-  O := ObjOf(AObj);
-  if O^.OKind = okProxy then Exit(ProxySetHook(AObj, AKey, V, AObj, AOk));
-  if O^.OKind = okModuleNS then begin AOk := False; Exit(True); end;   { 10.4.6.9 [[Set]]: false }
+  Ok := True;
+  O := ObjOf(Obj);
+  if O^.OKind = okProxy then Exit(ProxySetHook(Obj, Key, V, Obj, Ok));
+  if O^.OKind = okModuleNS then begin Ok := False; Exit(True); end;   { 10.4.6.9 [[Set]]: false }
   { 10.4.3: a String object's characters and length are non-writable own properties }
-  if (O^.OKind = okStringObj) and ((AKey = AtomLength) or (IndexFromString(AKey, Idx) and (Idx < StrOf(O^.Aux1)^.Len))) then
-  begin AOk := False; Exit(True); end;
+  if (O^.OKind = okStringObj) and ((Key = AtomLength) or (IndexFromString(Key, Idx) and (Idx < StrOf(O^.Aux1)^.Len))) then
+  begin Ok := False; Exit(True); end;
   { 10.4.5.5 [[Set]] with the typed array as its own receiver: TypedArraySetElement, always true }
   if O^.OKind = okTypedArray then
   begin
-    if IndexFromString(AKey, Idx) then Exit(TAStoreValue(AObj, Idx, V));
-    if CanonicalNumericNonIndex(AKey) then Exit(TAStoreValue(AObj, -1, V));
+    if IndexFromString(Key, Idx) then Exit(TAStoreValue(Obj, Idx, V));
+    if CanonicalNumericNonIndex(Key) then Exit(TAStoreValue(Obj, -1, V));
   end;
-  if (O^.OKind = okArguments) and ((AKey = AtomLength) or (IndexFromString(AKey, Idx) and (Idx >= O^.Elements^.Len))) then
+  if (O^.OKind = okArguments) and ((Key = AtomLength) or (IndexFromString(Key, Idx) and (Idx >= O^.Elements^.Len))) then
   begin
     PushRoot(V);
-    AObj := DemoteArguments(AObj);
+    Obj := DemoteArguments(Obj);
     V := RootAt(TempTop - 1);
     PopRoots(1);
-    O := ObjOf(AObj);
+    O := ObjOf(Obj);
   end;
-  S := ShapeLookup(O^.Shape, AKey);
+  S := ShapeLookup(O^.Shape, Key);
   if S >= 0 then
   begin
     Flags := O^.Shape^.PFlags[S];
     if (Flags and pfAccessor) <> 0 then
     begin
       Acc := PAccessor(PtrOf(GetSlot(O, S)));
-      if Acc^.Setter = VUndefined then begin AOk := False; Exit(True); end;
-      Exit(CallValue(Acc^.Setter, AObj, @V, 1, Dummy));
+      if Acc^.Setter = VUndefined then begin Ok := False; Exit(True); end;
+      Exit(CallValue(Acc^.Setter, Obj, @V, 1, Dummy));
     end;
-    if (Flags and pfWritable) = 0 then begin AOk := False; Exit(True); end;
+    if (Flags and pfWritable) = 0 then begin Ok := False; Exit(True); end;
     SetSlot(O, S, V);
     Exit(True);
   end;
   { a function's own 'prototype' not created yet (FunctionPrototypeOf): writable, so the value just becomes it }
-  if (O^.OKind = okFunction) and (AKey = AtomPrototype) and ((O^.OFlags and 4) = 0) and
+  if (O^.OKind = okFunction) and (Key = AtomPrototype) and ((O^.OFlags and 4) = 0) and
      (PFuncTemplate(O^.Native)^.IsGenerator or
       not (PFuncTemplate(O^.Native)^.IsArrow or PFuncTemplate(O^.Native)^.IsMethod or PFuncTemplate(O^.Native)^.IsAsync)) then
   begin
@@ -1296,7 +1296,7 @@ begin
     Exit(True);
   end;
   { an own element (a default data property) }
-  if (O^.Elements <> nil) and IndexFromString(AKey, Idx) and (Idx < O^.Elements^.Len) and
+  if (O^.Elements <> nil) and IndexFromString(Key, Idx) and (Idx < O^.Elements^.Len) and
      (O^.Elements^.Data[Idx] <> VHole) and (O^.OKind <> okTypedArray) then
   begin
     ValueArrayStore(O^.Elements, Idx, V);
@@ -1304,13 +1304,13 @@ begin
   end;
   if O^.OKind = okArray then
   begin
-    if AKey = AtomLength then
+    if Key = AtomLength then
     begin
-      if (O^.OFlags and 128) <> 0 then begin AOk := False; Exit(True); end;   { a read-only length }
+      if (O^.OFlags and 128) <> 0 then begin Ok := False; Exit(True); end;   { a read-only length }
       if (O^.OFlags and 64) <> 0 then
       begin
         { index properties in the shape: ArraySetLength's deletion from the end, stopped by a non-configurable one }
-        PushRoot(AObj); PushRoot(V);
+        PushRoot(Obj); PushRoot(V);
         if not ToNumberV(V, D1) or not ToNumberV(RootAt(TempTop - 1), D2) then begin PopRoots(2); Exit(False); end;
         O := ObjOf(RootAt(TempTop - 2));
         if IsNaN(D2) or (D2 < 0) or (D2 > 4294967295.0) or (Frac(D2) <> 0) then begin PopRoots(2); Exit(ThrowError('RangeError', 'Invalid array length')); end;
@@ -1324,7 +1324,7 @@ begin
             begin
               ArraySetLength(O, Idx + 1);
               PopRoots(2);
-              AOk := False;
+              Ok := False;
               Exit(True);
             end;
             DeleteProperty(O, IntAtom(Idx));
@@ -1337,7 +1337,7 @@ begin
         Exit(True);
       end;
       { 10.4.2.4 ArraySetLength: ToUint32 and ToNumber of the value must agree }
-      PushRoot(AObj); PushRoot(V);
+      PushRoot(Obj); PushRoot(V);
       if not ToNumberV(V, D1) or not ToNumberV(RootAt(TempTop - 1), D2) then begin PopRoots(2); Exit(False); end;
       O := ObjOf(RootAt(TempTop - 2));
       PopRoots(2);
@@ -1347,9 +1347,9 @@ begin
       Exit(True);
     end;
     { a new index past a read-only length fails (10.4.2.1) }
-    if IndexFromString(AKey, Idx) and ((O^.OFlags and 128) <> 0) and (Idx >= ArrayLen(O)) then
+    if IndexFromString(Key, Idx) and ((O^.OFlags and 128) <> 0) and (Idx >= ArrayLen(O)) then
     begin
-      AOk := False;
+      Ok := False;
       Exit(True);
     end;
   end;
@@ -1361,31 +1361,31 @@ begin
     begin
       W := ObjOf(P);
       { a proxy on the chain: its [[Set]] with this object as the receiver }
-      if W^.OKind = okProxy then Exit(ProxySetHook(P, AKey, V, AObj, AOk));
-      S := ShapeLookup(W^.Shape, AKey);
+      if W^.OKind = okProxy then Exit(ProxySetHook(P, Key, V, Obj, Ok));
+      S := ShapeLookup(W^.Shape, Key);
       if S >= 0 then
       begin
         Flags := W^.Shape^.PFlags[S];
         if (Flags and pfAccessor) <> 0 then
         begin
           Acc := PAccessor(PtrOf(GetSlot(W, S)));
-          if Acc^.Setter = VUndefined then begin AOk := False; Exit(True); end;
-          Exit(CallValue(Acc^.Setter, AObj, @V, 1, Dummy));
+          if Acc^.Setter = VUndefined then begin Ok := False; Exit(True); end;
+          Exit(CallValue(Acc^.Setter, Obj, @V, 1, Dummy));
         end;
         { an inherited read-only data property: the assignment fails (10.1.9.2 step 2.a) }
-        if (Flags and pfWritable) = 0 then begin AOk := False; Exit(True); end;
+        if (Flags and pfWritable) = 0 then begin Ok := False; Exit(True); end;
         Break;
       end;
       P := W^.Shape^.Proto;
     end;
   end;
-  O := ObjOf(AObj);
-  if (O^.OFlags and 8) <> 0 then begin AOk := False; Exit(True); end;   { not extensible }
+  O := ObjOf(Obj);
+  if (O^.OFlags and 8) <> 0 then begin Ok := False; Exit(True); end;   { not extensible }
   { a new index of an object with elements: an element where the array stays dense }
-  if (O^.Elements <> nil) and IndexFromString(AKey, Idx) and (O^.OKind in [okArray, okArguments]) and
+  if (O^.Elements <> nil) and IndexFromString(Key, Idx) and (O^.OKind in [okArray, okArguments]) and
      ((Idx < O^.Elements^.Len) or ArrayDenseOK(O^.Elements, Idx)) then
   begin
-    PushRoot(AObj); PushRoot(V);
+    PushRoot(Obj); PushRoot(V);
     if Idx >= O^.Elements^.Cap then EnsureElementsCap(O, Idx + 1);
     O := ObjOf(RootAt(TempTop - 2));
     V := RootAt(TempTop - 1);
@@ -1395,125 +1395,125 @@ begin
     ValueArrayStore(O^.Elements, Idx, V);
     Exit(True);
   end;
-  AddProperty(O, AKey, V, pfDefault);
+  AddProperty(O, Key, V, pfDefault);
   Result := True;
 end;
 
-function SetOnObject(AObj: TValue; AKey: PStr; V: TValue): Boolean;
+function SetOnObject(Obj: TValue; Key: PStr; V: TValue): Boolean;
 var Ok: Boolean;
 begin
-  Result := SetOnObjectOk(AObj, AKey, V, Ok);
+  Result := SetOnObjectOk(Obj, Key, V, Ok);
 end;
 
 { cold: the message's strings out of SetOnObjectS's frame }
-function ThrowReadOnly(AKey: PStr): Boolean; noinline;
+function ThrowReadOnly(Key: PStr): Boolean; noinline;
 begin
-  Result := ThrowTypeError('Cannot assign to read only property ''' + StrToUnicode(AKey) + ''' of object');
+  Result := ThrowTypeError('Cannot assign to read only property ''' + StrToUnicode(Key) + ''' of object');
 end;
 
 { PutValue: in strict code a failed [[Set]] is a TypeError }
-function SetOnObjectS(AObj: TValue; AKey: PStr; V: TValue; AStrict: Boolean): Boolean;
+function SetOnObjectS(Obj: TValue; Key: PStr; V: TValue; Strict: Boolean): Boolean;
 var Ok: Boolean;
 begin
-  if not SetOnObjectOk(AObj, AKey, V, Ok) then Exit(False);
-  if not Ok and AStrict then Exit(ThrowReadOnly(AKey));
+  if not SetOnObjectOk(Obj, Key, V, Ok) then Exit(False);
+  if not Ok and Strict then Exit(ThrowReadOnly(Key));
   Result := True;
 end;
 
-function SetVS(AObj: TValue; AKey: PStr; V: TValue; AStrict: Boolean): Boolean;
+function SetVS(Obj: TValue; Key: PStr; V: TValue; Strict: Boolean): Boolean;
 begin
-  if IsObject(AObj) then Exit(SetOnObjectS(AObj, AKey, V, AStrict));
-  if IsNullish(AObj) then
-    Exit(ThrowTypeError('Cannot set properties of ' + TypeOfStr(AObj) + ' (setting ''' + StrToUnicode(AKey) + ''')'));
+  if IsObject(Obj) then Exit(SetOnObjectS(Obj, Key, V, Strict));
+  if IsNullish(Obj) then
+    Exit(ThrowTypeError('Cannot set properties of ' + TypeOfStr(Obj) + ' (setting ''' + StrToUnicode(Key) + ''')'));
   { a primitive base: there is no object to hold the property }
-  if AStrict then Exit(ThrowTypeError('Cannot create property ''' + StrToUnicode(AKey) + ''' on ' + TypeOfStr(AObj)));
+  if Strict then Exit(ThrowTypeError('Cannot create property ''' + StrToUnicode(Key) + ''' on ' + TypeOfStr(Obj)));
   Result := True;
 end;
 
-function SetVT(AObj: TValue; AKey: PStr; V: TValue): Boolean;
+function SetVT(Obj: TValue; Key: PStr; V: TValue): Boolean;
 begin
-  Result := SetVS(AObj, AKey, V, True);
+  Result := SetVS(Obj, Key, V, True);
 end;
 
-function SetV(AObj: TValue; AKey: PStr; V: TValue): Boolean;
+function SetV(Obj: TValue; Key: PStr; V: TValue): Boolean;
 begin
-  if IsObject(AObj) then Exit(SetOnObject(AObj, AKey, V));
-  if IsNullish(AObj) then
-    Exit(ThrowTypeError('Cannot set properties of undefined (setting ''' + StrToUnicode(AKey) + ''')'));
+  if IsObject(Obj) then Exit(SetOnObject(Obj, Key, V));
+  if IsNullish(Obj) then
+    Exit(ThrowTypeError('Cannot set properties of undefined (setting ''' + StrToUnicode(Key) + ''')'));
   Result := True;
 end;
 
-function ToPropKey(V: TValue; var AKey: PStr): Boolean;
+function ToPropKey(V: TValue; var Key: PStr): Boolean;
 var S: TValue;
 begin
-  if IsString(V) then begin AKey := Atomize(StrOf(V)); Exit(True); end;
+  if IsString(V) then begin Key := Atomize(StrOf(V)); Exit(True); end;
   if IsPtr(V) and (PCell(PtrOf(V))^.Kind = ckSymbol) then
   begin
-    AKey := PStr(PPointer(PByte(PtrOf(V)) + 16)^);
+    Key := PStr(PPointer(PByte(PtrOf(V)) + 16)^);
     Exit(True);
   end;
-  if IsInt(V) then begin AKey := IntAtom(IntOf(V)); Exit(True); end;
+  if IsInt(V) then begin Key := IntAtom(IntOf(V)); Exit(True); end;
   { 7.1.19 ToPropertyKey: ToPrimitive(hint string), and a symbol is the key }
   if IsObject(V) then
   begin
     if not ToPrimitiveV(V, True, S) then Exit(False);
-    Exit(ToPropKey(S, AKey));
+    Exit(ToPropKey(S, Key));
   end;
   if not ToStringV(V, S) then Exit(False);
-  AKey := Atomize(StrOf(S));
+  Key := Atomize(StrOf(S));
   Result := True;
 end;
 
 { cold: the TypeError for a property access on undefined or null, naming the key when it is a primitive }
-function ThrowNullishBase(AObj, AKey: TValue; ASetting: Boolean): Boolean; noinline;
+function ThrowNullishBase(Obj, Key: TValue; Setting: Boolean): Boolean; noinline;
 var N, T: UnicodeString; V: TValue;
 begin
   N := '';
-  if IsString(AKey) then N := StrToUnicode(StrOf(AKey))
-  else if IsNumber(AKey) and ToStringV(AKey, V) then N := StrToUnicode(StrOf(V));
-  if AObj = VNull then T := 'null' else T := 'undefined';
-  if ASetting then
+  if IsString(Key) then N := StrToUnicode(StrOf(Key))
+  else if IsNumber(Key) and ToStringV(Key, V) then N := StrToUnicode(StrOf(V));
+  if Obj = VNull then T := 'null' else T := 'undefined';
+  if Setting then
     Result := ThrowTypeError('Cannot set properties of ' + T + ' (setting ''' + N + ''')')
   else
     Result := ThrowTypeError('Cannot read properties of ' + T + ' (reading ''' + N + ''')');
 end;
 
-function GetElemV(AObj, AKey: TValue; var ARes: TValue): Boolean;
+function GetElemV(Obj, Key: TValue; var Res: TValue): Boolean;
 var Idx: Int64; O: PObj; K: PStr; S: PStr;
 begin
-  if IsObject(AObj) and (ObjOf(AObj)^.OKind = okTypedArray) and IndexFromValue(AKey, Idx) then
+  if IsObject(Obj) and (ObjOf(Obj)^.OKind = okTypedArray) and IndexFromValue(Key, Idx) then
   begin
-    O := ObjOf(AObj);
-    if Idx < TALength(O) then ARes := TAGet(O, Idx) else ARes := VUndefined;
+    O := ObjOf(Obj);
+    if Idx < TALength(O) then Res := TAGet(O, Idx) else Res := VUndefined;
     Exit(True);
   end;
-  if IsObject(AObj) and IndexFromValue(AKey, Idx) and not IsString(AKey) then
+  if IsObject(Obj) and IndexFromValue(Key, Idx) and not IsString(Key) then
   begin
-    O := ObjOf(AObj);
+    O := ObjOf(Obj);
     if (O^.Elements <> nil) and (Idx < O^.Elements^.Len) then
     begin
-      ARes := O^.Elements^.Data[Idx];
-      if ARes <> VHole then Exit(True);
+      Res := O^.Elements^.Data[Idx];
+      if Res <> VHole then Exit(True);
     end;
   end
-  else if IsString(AObj) and IndexFromValue(AKey, Idx) and not IsString(AKey) then
+  else if IsString(Obj) and IndexFromValue(Key, Idx) and not IsString(Key) then
   begin
-    S := StrOf(AObj);
-    if Idx < S^.Len then ARes := SubString(S, Idx, 1) else ARes := VUndefined;
+    S := StrOf(Obj);
+    if Idx < S^.Len then Res := SubString(S, Idx, 1) else Res := VUndefined;
     Exit(True);
   end;
   { 13.3.2.1 / 6.2.5.5 GetValue: ToObject(base) comes before ToPropertyKey(name) }
-  if IsNullish(AObj) then Exit(ThrowNullishBase(AObj, AKey, False));
-  PushRoot(AObj);
-  if not ToPropKey(AKey, K) then begin PopRoots(1); Exit(False); end;
-  AObj := RootAt(TempTop - 1);
+  if IsNullish(Obj) then Exit(ThrowNullishBase(Obj, Key, False));
+  PushRoot(Obj);
+  if not ToPropKey(Key, K) then begin PopRoots(1); Exit(False); end;
+  Obj := RootAt(TempTop - 1);
   PopRoots(1);
-  Result := GetV(AObj, K, ARes);
+  Result := GetV(Obj, K, Res);
 end;
 
 { 10.1.9.2 OrdinarySetWithOwnDescriptor for an absent own element: nothing on the prototype chain (a proxy, an
   exotic object, an index-keyed shape property, an element there) can intercept or forbid the new property }
-function ProtosPlainForElem(O: PObj; AIdx: Int64): Boolean;
+function ProtosPlainForElem(O: PObj; Idx: Int64): Boolean;
 var P: TValue; Q: PObj;
 begin
   P := O^.Shape^.Proto;
@@ -1521,7 +1521,7 @@ begin
   begin
     Q := ObjOf(P);
     if Q^.Shape^.HasIndexKeys or not (Q^.OKind in [okPlain, okArray, okFunction, okNative]) then Exit(False);
-    if (Q^.Elements <> nil) and (AIdx < Q^.Elements^.Len) and (Q^.Elements^.Data[AIdx] <> VHole) and
+    if (Q^.Elements <> nil) and (Idx < Q^.Elements^.Len) and (Q^.Elements^.Data[Idx] <> VHole) and
        ((Q^.OFlags and 64) <> 0) then Exit(False);   { ofElemGuard: a frozen or sealed element }
     P := Q^.Shape^.Proto;
   end;
@@ -1530,43 +1530,43 @@ end;
 
 { an own default data element at Idx without [[Set]] (CreateDataProperty's store): False when the object's
   elements cannot hold it }
-function DefineElemRaw(AObj: TValue; AIdx: Int64; V: TValue): Boolean;
+function DefineElemRaw(Obj: TValue; Idx: Int64; V: TValue): Boolean;
 var O: PObj; E: PValueArray; I: Integer;
 begin
-  O := ObjOf(AObj);
+  O := ObjOf(Obj);
   E := O^.Elements;
   if E = nil then Exit(False);
-  if AIdx < E^.Len then
+  if Idx < E^.Len then
   begin
-    E^.Data[AIdx] := V;
+    E^.Data[Idx] := V;
     WriteBarrier(@E^.Hdr, V);
     Exit(True);
   end;
-  if (O^.OKind <> okArray) or not ArrayDenseOK(E, AIdx) then Exit(False);
-  if AIdx >= E^.Cap then
+  if (O^.OKind <> okArray) or not ArrayDenseOK(E, Idx) then Exit(False);
+  if Idx >= E^.Cap then
   begin
-    PushRoot(AObj); PushRoot(V);
-    EnsureElementsCap(O, AIdx + 1);
-    AObj := RootAt(TempTop - 2); V := RootAt(TempTop - 1);
+    PushRoot(Obj); PushRoot(V);
+    EnsureElementsCap(O, Idx + 1);
+    Obj := RootAt(TempTop - 2); V := RootAt(TempTop - 1);
     PopRoots(2);
-    O := ObjOf(AObj);
+    O := ObjOf(Obj);
     E := O^.Elements;
   end;
-  for I := E^.Len to AIdx - 1 do E^.Data[I] := VHole;
-  E^.Data[AIdx] := V;
+  for I := E^.Len to Idx - 1 do E^.Data[I] := VHole;
+  E^.Data[Idx] := V;
   WriteBarrier(@E^.Hdr, V);
-  if AIdx >= E^.Len then E^.Len := AIdx + 1;
+  if Idx >= E^.Len then E^.Len := Idx + 1;
   Result := True;
 end;
 
-function SetElemVS(AObj, AKey, V: TValue; AStrict: Boolean): Boolean;
+function SetElemVS(Obj, Key, V: TValue; Strict: Boolean): Boolean;
 var Idx: Int64; O: PObj; E: PValueArray; K: PStr; I: Integer; D: Double;
 begin
-  if IsObject(AObj) and (ObjOf(AObj)^.OKind = okTypedArray) and IndexFromValue(AKey, Idx) then
-    Exit(TAStoreValue(AObj, Idx, V));
-  if IsObject(AObj) and IndexFromValue(AKey, Idx) and ((ObjOf(AObj)^.OFlags and 64) = 0) then
+  if IsObject(Obj) and (ObjOf(Obj)^.OKind = okTypedArray) and IndexFromValue(Key, Idx) then
+    Exit(TAStoreValue(Obj, Idx, V));
+  if IsObject(Obj) and IndexFromValue(Key, Idx) and ((ObjOf(Obj)^.OFlags and 64) = 0) then
   begin
-    O := ObjOf(AObj);
+    O := ObjOf(Obj);
     if O^.Elements <> nil then
     begin
       E := O^.Elements;
@@ -1580,11 +1580,11 @@ begin
       begin
         if Idx >= E^.Cap then
         begin
-          PushRoot(AObj); PushRoot(V);
+          PushRoot(Obj); PushRoot(V);
           EnsureElementsCap(O, Idx + 1);
-          AObj := RootAt(TempTop - 2); V := RootAt(TempTop - 1);
+          Obj := RootAt(TempTop - 2); V := RootAt(TempTop - 1);
           PopRoots(2);
-          O := ObjOf(AObj);
+          O := ObjOf(Obj);
           E := O^.Elements;
         end;
         for I := E^.Len to Idx - 1 do E^.Data[I] := VHole;
@@ -1596,39 +1596,39 @@ begin
     end;
   end;
   { 6.2.5.6 PutValue: ToObject(base) before ToPropertyKey(name) }
-  if IsNullish(AObj) then Exit(ThrowNullishBase(AObj, AKey, True));
-  PushRoot(AObj); PushRoot(V);
-  if not ToPropKey(AKey, K) then begin PopRoots(2); Exit(False); end;
-  AObj := RootAt(TempTop - 2); V := RootAt(TempTop - 1);
+  if IsNullish(Obj) then Exit(ThrowNullishBase(Obj, Key, True));
+  PushRoot(Obj); PushRoot(V);
+  if not ToPropKey(Key, K) then begin PopRoots(2); Exit(False); end;
+  Obj := RootAt(TempTop - 2); V := RootAt(TempTop - 1);
   PopRoots(2);
-  Result := SetVS(AObj, K, V, AStrict);
+  Result := SetVS(Obj, K, V, Strict);
 end;
 
-function SetElemV(AObj, AKey, V: TValue): Boolean;
+function SetElemV(Obj, Key, V: TValue): Boolean;
 begin
-  Result := SetElemVS(AObj, AKey, V, False);
+  Result := SetElemVS(Obj, Key, V, False);
 end;
 
-function SetElemVT(AObj, AKey, V: TValue): Boolean;
+function SetElemVT(Obj, Key, V: TValue): Boolean;
 begin
-  Result := SetElemVS(AObj, AKey, V, True);
+  Result := SetElemVS(Obj, Key, V, True);
 end;
 
 { ---------------- conversions that may call JS ---------------- }
 
 { 7.1.1.1 OrdinaryToPrimitive }
-function OrdinaryToPrimitive(V: TValue; AStringFirst: Boolean; var ARes: TValue): Boolean;
+function OrdinaryToPrimitive(V: TValue; StringFirst: Boolean; var Res: TValue): Boolean;
 var F, R: TValue; I: Integer; Key: PStr;
 begin
   PushRoot(V);
   for I := 0 to 1 do
   begin
-    if (I = 0) = AStringFirst then Key := AtomToString else Key := AtomValueOf;
+    if (I = 0) = StringFirst then Key := AtomToString else Key := AtomValueOf;
     if not GetV(RootAt(TempTop - 1), Key, F) then begin PopRoots(1); Exit(False); end;
     if IsCallable(F) then
     begin
       if not CallValue(F, RootAt(TempTop - 1), nil, 0, R) then begin PopRoots(1); Exit(False); end;
-      if not IsObject(R) then begin ARes := R; PopRoots(1); Exit(True); end;
+      if not IsObject(R) then begin Res := R; PopRoots(1); Exit(True); end;
     end;
   end;
   PopRoots(1);
@@ -1636,11 +1636,11 @@ begin
 end;
 
 { 7.1.1 ToPrimitive }
-function ToPrimitiveHint(V: TValue; AHint: TPrimHint; var ARes: TValue): Boolean;
+function ToPrimitiveHint(V: TValue; Hint: TPrimHint; var Res: TValue): Boolean;
 const HintNames: array[TPrimHint] of UnicodeString = ('default', 'number', 'string');
 var F, R, H: TValue;
 begin
-  if not IsObject(V) then begin ARes := V; Exit(True); end;
+  if not IsObject(V) then begin Res := V; Exit(True); end;
   if ToPrimitiveKey <> nil then
   begin
     PushRoot(V);
@@ -1648,41 +1648,41 @@ begin
     if (F <> VUndefined) and (F <> VNull) then
     begin
       if not IsCallable(F) then begin PopRoots(1); Exit(ThrowTypeError('Symbol.toPrimitive is not a function')); end;
-      H := MkPtr(AtomOf(HintNames[AHint]));
+      H := MkPtr(AtomOf(HintNames[Hint]));
       if not CallValue(F, RootAt(TempTop - 1), @H, 1, R) then begin PopRoots(1); Exit(False); end;
       PopRoots(1);
       if IsObject(R) then Exit(ThrowTypeError('Cannot convert object to primitive value'));
-      ARes := R;
+      Res := R;
       Exit(True);
     end;
     V := RootAt(TempTop - 1);
     PopRoots(1);
   end;
-  Result := OrdinaryToPrimitive(V, AHint = phString, ARes);
+  Result := OrdinaryToPrimitive(V, Hint = phString, Res);
 end;
 
-function ToPrimitiveV(V: TValue; AHintString: Boolean; var ARes: TValue): Boolean;
+function ToPrimitiveV(V: TValue; HintString: Boolean; var Res: TValue): Boolean;
 begin
-  if AHintString then Result := ToPrimitiveHint(V, phString, ARes) else Result := ToPrimitiveHint(V, phNumber, ARes);
+  if HintString then Result := ToPrimitiveHint(V, phString, Res) else Result := ToPrimitiveHint(V, phNumber, Res);
 end;
 
-function ToStringV(V: TValue; var ARes: TValue): Boolean;
+function ToStringV(V: TValue; var Res: TValue): Boolean;
 var P: TValue;
 begin
-  if IsString(V) then begin ARes := V; Exit(True); end;
-  if IsInt(V) then begin ARes := StrFromUnicode(IntToStr(IntOf(V))); Exit(True); end;
-  if IsDouble(V) then begin ARes := NumberToStr(DoubleOf(V)); Exit(True); end;
+  if IsString(V) then begin Res := V; Exit(True); end;
+  if IsInt(V) then begin Res := StrFromUnicode(IntToStr(IntOf(V))); Exit(True); end;
+  if IsDouble(V) then begin Res := NumberToStr(DoubleOf(V)); Exit(True); end;
   case V of
-    VUndefined, VHole: begin ARes := MkPtr(AtomOf('undefined')); Exit(True); end;
-    VNull: begin ARes := MkPtr(AtomOf('null')); Exit(True); end;
-    VTrue: begin ARes := MkPtr(AtomOf('true')); Exit(True); end;
-    VFalse: begin ARes := MkPtr(AtomOf('false')); Exit(True); end;
+    VUndefined, VHole: begin Res := MkPtr(AtomOf('undefined')); Exit(True); end;
+    VNull: begin Res := MkPtr(AtomOf('null')); Exit(True); end;
+    VTrue: begin Res := MkPtr(AtomOf('true')); Exit(True); end;
+    VFalse: begin Res := MkPtr(AtomOf('false')); Exit(True); end;
   end;
   if IsPtr(V) and (PCell(PtrOf(V))^.Kind = ckSymbol) then
     Exit(ThrowTypeError('Cannot convert a Symbol value to a string'));
-  if IsBigInt(V) then begin ARes := StrFromUnicode(BigToString(V)); Exit(True); end;
+  if IsBigInt(V) then begin Res := StrFromUnicode(BigToString(V)); Exit(True); end;
   if not ToPrimitiveV(V, True, P) then Exit(False);
-  Result := ToStringV(P, ARes);
+  Result := ToStringV(P, Res);
 end;
 
 function ToNumberV(V: TValue; var D: Double): Boolean;
@@ -1718,40 +1718,40 @@ begin
 end;
 
 { cold: the BigInteger temporaries out of LooseEquals's frame }
-function BigEqualsNumber(ABig: TValue; D: Double): Boolean; noinline;
+function BigEqualsNumber(Big: TValue; D: Double): Boolean; noinline;
 begin
-  Result := ValueToBig(ABig).ToDouble = D;
+  Result := ValueToBig(Big).ToDouble = D;
 end;
 
-function LooseEquals(A, B: TValue; var ARes: Boolean): Boolean;
+function LooseEquals(A, B: TValue; var Res: Boolean): Boolean;
 var P: TValue;
 begin
   Result := True;
-  if IsNullish(A) or IsNullish(B) then begin ARes := IsNullish(A) and IsNullish(B); Exit; end;
-  if IsNumber(A) and IsNumber(B) then begin ARes := NumOf(A) = NumOf(B); Exit; end;
-  if IsString(A) and IsString(B) then begin ARes := StrEquals(StrOf(A), StrOf(B)); Exit; end;
-  if IsBigInt(A) and IsBigInt(B) then begin ARes := BigEquals(A, B); Exit; end;
-  if IsBigInt(A) and IsNumber(B) then begin ARes := BigEqualsNumber(A, NumOf(B)); Exit; end;
-  if IsNumber(A) and IsBigInt(B) then begin ARes := BigEqualsNumber(B, NumOf(A)); Exit; end;
+  if IsNullish(A) or IsNullish(B) then begin Res := IsNullish(A) and IsNullish(B); Exit; end;
+  if IsNumber(A) and IsNumber(B) then begin Res := NumOf(A) = NumOf(B); Exit; end;
+  if IsString(A) and IsString(B) then begin Res := StrEquals(StrOf(A), StrOf(B)); Exit; end;
+  if IsBigInt(A) and IsBigInt(B) then begin Res := BigEquals(A, B); Exit; end;
+  if IsBigInt(A) and IsNumber(B) then begin Res := BigEqualsNumber(A, NumOf(B)); Exit; end;
+  if IsNumber(A) and IsBigInt(B) then begin Res := BigEqualsNumber(B, NumOf(A)); Exit; end;
   if (A = VTrue) or (A = VFalse) then A := MkInt(Ord(A = VTrue));
   if (B = VTrue) or (B = VFalse) then B := MkInt(Ord(B = VTrue));
-  if IsNumber(A) and IsString(B) then begin ARes := NumOf(A) = PrimitiveToNumber(B); Exit; end;
-  if IsString(A) and IsNumber(B) then begin ARes := PrimitiveToNumber(A) = NumOf(B); Exit; end;
-  if IsObject(A) and IsObject(B) then begin ARes := A = B; Exit; end;
+  if IsNumber(A) and IsString(B) then begin Res := NumOf(A) = PrimitiveToNumber(B); Exit; end;
+  if IsString(A) and IsNumber(B) then begin Res := PrimitiveToNumber(A) = NumOf(B); Exit; end;
+  if IsObject(A) and IsObject(B) then begin Res := A = B; Exit; end;
   if IsObject(A) then
   begin
     if not ToPrimitiveHint(A, phDefault, P) then Exit(False);
-    Exit(LooseEquals(P, B, ARes));
+    Exit(LooseEquals(P, B, Res));
   end;
   if IsObject(B) then
   begin
     if not ToPrimitiveHint(B, phDefault, P) then Exit(False);
-    Exit(LooseEquals(A, P, ARes));
+    Exit(LooseEquals(A, P, Res));
   end;
-  ARes := A = B;
+  Res := A = B;
 end;
 
-function InstanceOf(V, C: TValue; var ARes: Boolean): Boolean;
+function InstanceOf(V, C: TValue; var Res: Boolean): Boolean;
 var P, Proto, H, R: TValue;
 begin
   { InstanceofOperator: a Symbol.hasInstance method on the right-hand side decides }
@@ -1765,45 +1765,45 @@ begin
       P := V;
       Result := CallValue(H, C, @P, 1, R);
       PopRoots(2);
-      if Result then ARes := ToBool(R);
+      if Result then Res := ToBool(R);
       Exit;
     end;
     PopRoots(2);
   end;
   if not IsCallable(C) then Exit(ThrowTypeError('Right-hand side of ''instanceof'' is not callable'));
-  if ObjOf(C)^.OKind = okBound then Exit(InstanceOf(V, ObjOf(C)^.Aux1, ARes));
-  ARes := False;
+  if ObjOf(C)^.OKind = okBound then Exit(InstanceOf(V, ObjOf(C)^.Aux1, Res));
+  Res := False;
   if not IsObject(V) then Exit(True);
   PushRoot(V);
   if not GetV(C, AtomPrototype, Proto) then begin PopRoots(1); Exit(False); end;
   V := RootAt(TempTop - 1);
   PopRoots(1);
   if not IsObject(Proto) then Exit(ThrowTypeError('Function has non-object prototype in instanceof check'));
-  Result := ProtoChainHas(V, Proto, ARes);
+  Result := ProtoChainHas(V, Proto, Res);
 end;
 
 { 20.1.3.3 / 7.3.21 steps 4-6: whether Proto is on V's prototype chain, through [[GetPrototypeOf]] (a proxy's trap) }
-function ProtoChainHas(V, AProto: TValue; var ARes: Boolean): Boolean;
+function ProtoChainHas(V, Proto: TValue; var Res: Boolean): Boolean;
 var P: TValue;
 begin
-  ARes := False;
+  Res := False;
   P := V;
   while True do
   begin
     if ObjOf(P)^.OKind = okProxy then
     begin
-      PushRoot(AProto);
+      PushRoot(Proto);
       if not GetProtoHook(P, P) then begin PopRoots(1); Exit(False); end;
-      AProto := RootAt(TempTop - 1);
+      Proto := RootAt(TempTop - 1);
       PopRoots(1);
     end
     else P := ObjOf(P)^.Shape^.Proto;
     if not IsObject(P) then Exit(True);
-    if P = AProto then begin ARes := True; Exit(True); end;
+    if P = Proto then begin Res := True; Exit(True); end;
   end;
 end;
 
-function OwnKeys(O: PObj; AOnlyEnumerable: Boolean): TValue;
+function OwnKeys(O: PObj; OnlyEnumerable: Boolean): TValue;
 var A: PObj; I, N, NI: Integer; S: PShape; Key: PStr; OV: TValue; Idxs: array of Int64; Idx: Int64;
   HasShapeIdx: Boolean;
   procedure AddIdx(X: Int64);
@@ -1906,52 +1906,52 @@ end;
 { ---------------- iteration ---------------- }
 
 
-function LengthOfArrayLike(O: TValue; var ALen: Int64): Boolean;
+function LengthOfArrayLike(O: TValue; var Len: Int64): Boolean;
 var V: TValue; D: Double;
 begin
   if IsObject(O) and (ObjOf(O)^.OKind in [okArray, okArguments]) and (ObjOf(O)^.Elements <> nil) then
   begin
-    ALen := ObjOf(O)^.Elements^.Len;
+    Len := ObjOf(O)^.Elements^.Len;
     Exit(True);
   end;
   if not GetV(O, AtomLength, V) then Exit(False);
   if IsInt(V) then D := IntOf(V)
   else if not ToNumberV(V, D) then Exit(False);
   { 7.1.20 ToLength }
-  if IsNaN(D) or (D <= 0) then ALen := 0
-  else if D >= 9007199254740991.0 then ALen := 9007199254740991
-  else ALen := Trunc(D);
+  if IsNaN(D) or (D <= 0) then Len := 0
+  else if D >= 9007199254740991.0 then Len := 9007199254740991
+  else Len := Trunc(D);
   Result := True;
 end;
 
-function NewArrayIterator(V: TValue; AKind: Integer): TValue;
+function NewArrayIterator(V: TValue; Kind: Integer): TValue;
 var O: PObj;
 begin
   PushRoot(V);
   O := NewObject(RootShapeFor(ArrayIteratorProto), 0, okIterator);
   O^.Aux1 := RootAt(TempTop - 1);
   O^.Aux2 := MkInt(0);
-  O^.OFlags := AKind;   { 0 array values, 1 string code points, 2 keys, 3 entries }
+  O^.OFlags := Kind;   { 0 array values, 1 string code points, 2 keys, 3 entries }
   PopRoots(1);
   Result := MkPtr(O);
 end;
 
-function GetIterator(V: TValue; var AIt: TValue): Boolean;
+function GetIterator(V: TValue; var It: TValue): Boolean;
 var F: TValue;
 begin
   if IsObject(V) and (ObjOf(V)^.OKind = okArray) and (ObjOf(V)^.Shape^.Proto = ArrayProto) then
   begin
-    AIt := NewArrayIterator(V, 0);
+    It := NewArrayIterator(V, 0);
     Exit(True);
   end;
   if IsString(V) then
   begin
-    AIt := NewArrayIterator(V, 1);
+    It := NewArrayIterator(V, 1);
     Exit(True);
   end;
   if IsObject(V) and (ObjOf(V)^.OKind = okTypedArray) and (ObjOf(V)^.Shape^.Proto <> VNull) then
   begin
-    AIt := NewArrayIterator(V, 4);
+    It := NewArrayIterator(V, 4);
     Exit(True);
   end;
   PushRoot(V);
@@ -1971,18 +1971,18 @@ begin
   end;
   if (F = ArrayValuesFnPublic) and IsObject(V) and (ObjOf(V)^.OKind in [okArray, okArguments]) then
   begin
-    AIt := NewArrayIterator(V, 0);
+    It := NewArrayIterator(V, 0);
     Exit(True);
   end;
-  Result := CallValue(F, V, nil, 0, AIt);
-  if Result and not IsObject(AIt) then Result := ThrowTypeError('iterator is not an object');
+  Result := CallValue(F, V, nil, 0, It);
+  if Result and not IsObject(It) then Result := ThrowTypeError('iterator is not an object');
 end;
 
-function IteratorStep(AIt: TValue; var AValue: TValue; var ADone: Boolean): Boolean;
+function IteratorStep(It: TValue; var Value: TValue; var Done: Boolean): Boolean;
 var O: PObj; I: Integer; Src: TValue; S: PStr; NextF, R: TValue; C: Integer; Len: Int64;
 begin
-  AValue := VUndefined;   { a done step's value }
-  O := ObjOf(AIt);
+  Value := VUndefined;   { a done step's value }
+  O := ObjOf(It);
   if O^.OKind = okIterator then
   begin
     I := IntOf(O^.Aux2);
@@ -1990,23 +1990,23 @@ begin
     if O^.OFlags = 1 then
     begin
       S := StrOf(Src);
-      if I >= S^.Len then begin ADone := True; Exit(True); end;
+      if I >= S^.Len then begin Done := True; Exit(True); end;
       C := 1;
       if (Ord(StrChars(S)[I]) >= $D800) and (Ord(StrChars(S)[I]) <= $DBFF) and (I + 1 < S^.Len) then C := 2;
       O^.Aux2 := MkInt(I + C);
-      AValue := SubString(S, I, C);
-      ADone := False;
+      Value := SubString(S, I, C);
+      Done := False;
       Exit(True);
     end;
     if O^.OFlags = 4 then
     begin
-      if (Src = VUndefined) or (I >= TALength(ObjOf(Src))) then begin O^.Aux1 := VUndefined; ADone := True; Exit(True); end;
+      if (Src = VUndefined) or (I >= TALength(ObjOf(Src))) then begin O^.Aux1 := VUndefined; Done := True; Exit(True); end;
       O^.Aux2 := MkInt(I + 1);
-      AValue := TAGet(ObjOf(Src), I);
-      ADone := False;
+      Value := TAGet(ObjOf(Src), I);
+      Done := False;
       Exit(True);
     end;
-    if Src = VUndefined then begin ADone := True; Exit(True); end;
+    if Src = VUndefined then begin Done := True; Exit(True); end;
     { an array or arguments object whose indices are all elements: read them directly }
     if (ObjOf(Src)^.Elements <> nil) and ((ObjOf(Src)^.OFlags and 64) = 0) and
        (ObjOf(Src)^.OKind in [okArray, okArguments]) then
@@ -2014,27 +2014,27 @@ begin
       if I >= ObjOf(Src)^.Elements^.Len then
       begin
         O^.Aux1 := VUndefined;
-        ADone := True;
+        Done := True;
         Exit(True);
       end;
       if O^.OFlags = 2 then
       begin
         O^.Aux2 := MkInt(I + 1);
-        AValue := MkInt(I);
-        ADone := False;
+        Value := MkInt(I);
+        Done := False;
         Exit(True);
       end;
-      AValue := ObjOf(Src)^.Elements^.Data[I];
-      if (AValue <> VHole) and (O^.OFlags = 0) then
+      Value := ObjOf(Src)^.Elements^.Data[I];
+      if (Value <> VHole) and (O^.OFlags = 0) then
       begin
         O^.Aux2 := MkInt(I + 1);
-        ADone := False;
+        Done := False;
         Exit(True);
       end;
     end;
     { 23.1.5.1 CreateArrayIterator's closure: LengthOfArrayLike, then Get of the index (a hole reads through the
       prototype chain; accessors run) }
-    PushRoot(AIt);
+    PushRoot(It);
     if not LengthOfArrayLike(Src, Len) then begin PopRoots(1); Exit(False); end;
     O := ObjOf(RootAt(TempTop - 1));
     I := IntOf(O^.Aux2);
@@ -2042,51 +2042,51 @@ begin
     begin
       O^.Aux1 := VUndefined;
       PopRoots(1);
-      AValue := VUndefined;
-      ADone := True;
+      Value := VUndefined;
+      Done := True;
       Exit(True);
     end;
     O^.Aux2 := MkInt(I + 1);
-    if O^.OFlags = 2 then AValue := MkInt(I)
-    else if not GetElemV(O^.Aux1, MkInt(I), AValue) then begin PopRoots(1); Exit(False); end;
+    if O^.OFlags = 2 then Value := MkInt(I)
+    else if not GetElemV(O^.Aux1, MkInt(I), Value) then begin PopRoots(1); Exit(False); end;
     if O^.OFlags = 3 then
     begin
       { entries: CreateArrayFromList(« index, value ») }
-      PushRoot(AValue);
+      PushRoot(Value);
       O := NewArray(2, 2);
       O^.Elements^.Data[0] := MkInt(I);
       O^.Elements^.Data[1] := RootAt(TempTop - 1);
       WriteBarrier(@O^.Elements^.Hdr, RootAt(TempTop - 1));
       PopRoots(1);
-      AValue := MkPtr(O);
+      Value := MkPtr(O);
     end;
     PopRoots(1);
-    ADone := False;
+    Done := False;
     Exit(True);
   end;
-  if (O^.OKind = okGenerator) and GeneratorNextIsIntrinsic(AIt) then
-    Exit(GeneratorResume(AIt, VUndefined, 0, AValue, ADone));
-  PushRoot(AIt);
-  if not GetV(AIt, AtomNext, NextF) then begin PopRoots(1); Exit(False); end;
+  if (O^.OKind = okGenerator) and GeneratorNextIsIntrinsic(It) then
+    Exit(GeneratorResume(It, VUndefined, 0, Value, Done));
+  PushRoot(It);
+  if not GetV(It, AtomNext, NextF) then begin PopRoots(1); Exit(False); end;
   if not CallValue(NextF, RootAt(TempTop - 1), nil, 0, R) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
   if not IsObject(R) then Exit(ThrowTypeError('iterator result is not an object'));
   PushRoot(R);
-  if not GetV(R, AtomDone, AValue) then begin PopRoots(1); Exit(False); end;
-  ADone := ToBool(AValue);
-  if not ADone then
-    if not GetV(RootAt(TempTop - 1), AtomValue, AValue) then begin PopRoots(1); Exit(False); end;
+  if not GetV(R, AtomDone, Value) then begin PopRoots(1); Exit(False); end;
+  Done := ToBool(Value);
+  if not Done then
+    if not GetV(RootAt(TempTop - 1), AtomValue, Value) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
   Result := True;
 end;
 
 { ---------------- calls from natives ---------------- }
 
-function Execute(AStopFrame: Integer; var ARes: TValue): Boolean; forward;
-function RunFieldInit(ACtor, AThis: TValue): Boolean; forward;
+function Execute(StopFrame: Integer; var Res: TValue): Boolean; forward;
+function RunFieldInit(Ctor, This: TValue): Boolean; forward;
 
-function PushBytecodeFrame(AFObj: PObj; AThis: TValue; AArgs: PValue; AArgc: Integer; ARetIdx: Integer; AKind: Byte;
-  ANewTarget: TValue): Boolean; forward;
+function PushBytecodeFrame(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
+  NewTarget: TValue): Boolean; forward;
 
 { ---------------- Proxy objects (ECMA-262 Proxy Object Internal Methods, without the invariant checks) ---------------- }
 
@@ -2094,215 +2094,215 @@ threadvar
   SymbolKeys: array of record Key: PStr; Sym: TValue; end;
   SymbolKeyCount: Integer;
 
-procedure RegisterSymbolKey(AKey: PStr; ASym: TValue);
+procedure RegisterSymbolKey(Key: PStr; Sym: TValue);
 begin
   if SymbolKeyCount >= Length(SymbolKeys) then SetLength(SymbolKeys, SymbolKeyCount * 2 + 64);
-  SymbolKeys[SymbolKeyCount].Key := AKey;
-  SymbolKeys[SymbolKeyCount].Sym := ASym;   { symbols are permanent cells }
+  SymbolKeys[SymbolKeyCount].Key := Key;
+  SymbolKeys[SymbolKeyCount].Sym := Sym;   { symbols are permanent cells }
   Inc(SymbolKeyCount);
 end;
 
 { the property key as a JS value: the Symbol for a symbol key, the string otherwise }
-function KeyToValue(AKey: PStr): TValue;
+function KeyToValue(Key: PStr): TValue;
 var I: Integer;
 begin
-  if (AKey^.Hdr.Extra and kfSymbol) <> 0 then Exit(KeyPayload(AKey)^);
-  Result := MkPtr(AKey);
+  if (Key^.Hdr.Extra and kfSymbol) <> 0 then Exit(KeyPayload(Key)^);
+  Result := MkPtr(Key);
 end;
 
 { the handler's trap (undefined when absent); PV stays rooted by the caller }
-function ProxyGetTrap(APV: TValue; const AName: UnicodeString; var ATrap: TValue): Boolean;
+function ProxyGetTrap(PV: TValue; const Name: UnicodeString; var Trap: TValue): Boolean;
 var H: TValue;
 begin
-  H := ObjOf(APV)^.Aux2;
-  if not IsObject(H) then Exit(ThrowTypeError('Cannot perform ''' + AName + ''' on a proxy that has been revoked'));
-  Result := GetV(H, AtomOf(AName), ATrap);
+  H := ObjOf(PV)^.Aux2;
+  if not IsObject(H) then Exit(ThrowTypeError('Cannot perform ''' + Name + ''' on a proxy that has been revoked'));
+  Result := GetV(H, AtomOf(Name), Trap);
 end;
 
 { call Trap(target, A1, A2, A3) with the handler as this; Argc counts the extra arguments }
-function ProxyCallTrap(APV, ATrap: TValue; AArgc: Integer; AA1, AA2, AA3: TValue; var ARes: TValue): Boolean;
+function ProxyCallTrap(PV, Trap: TValue; Argc: Integer; A1, A2, A3: TValue; var Res: TValue): Boolean;
 var A: array[0..3] of TValue;
 begin
-  A[0] := ObjOf(APV)^.Aux1; A[1] := AA1; A[2] := AA2; A[3] := AA3;
-  Result := CallValue(ATrap, ObjOf(APV)^.Aux2, @A[0], AArgc + 1, ARes);
+  A[0] := ObjOf(PV)^.Aux1; A[1] := A1; A[2] := A2; A[3] := A3;
+  Result := CallValue(Trap, ObjOf(PV)^.Aux2, @A[0], Argc + 1, Res);
 end;
 
-function ProxyGet(APV: TValue; AKey: PStr; AReceiver: TValue; var ARes: TValue): Boolean;
+function ProxyGet(PV: TValue; Key: PStr; Receiver: TValue; var Res: TValue): Boolean;
 var Trap: TValue;
 begin
-  PushRoot(APV); PushRoot(AReceiver);
-  if not ProxyGetTrap(APV, 'get', Trap) then begin PopRoots(2); Exit(False); end;
-  APV := RootAt(TempTop - 2); AReceiver := RootAt(TempTop - 1);
-  if IsNullish(Trap) then Result := GetFromObject(ObjOf(ObjOf(APV)^.Aux1), AKey, AReceiver, ARes)
+  PushRoot(PV); PushRoot(Receiver);
+  if not ProxyGetTrap(PV, 'get', Trap) then begin PopRoots(2); Exit(False); end;
+  PV := RootAt(TempTop - 2); Receiver := RootAt(TempTop - 1);
+  if IsNullish(Trap) then Result := GetFromObject(ObjOf(ObjOf(PV)^.Aux1), Key, Receiver, Res)
   else
   begin
-    Result := ProxyCallTrap(APV, Trap, 2, KeyToValue(AKey), AReceiver, VUndefined, ARes);
-    if Result then Result := ProxyCheckHook(0, RootAt(TempTop - 2), AKey, ARes);
+    Result := ProxyCallTrap(PV, Trap, 2, KeyToValue(Key), Receiver, VUndefined, Res);
+    if Result then Result := ProxyCheckHook(0, RootAt(TempTop - 2), Key, Res);
   end;
   PopRoots(2);
 end;
 
-function ProxyHas(APV: TValue; AKey: PStr; var AFound: Boolean): Boolean;
+function ProxyHas(PV: TValue; Key: PStr; var Found: Boolean): Boolean;
 var Trap, R: TValue;
 begin
-  PushRoot(APV);
-  if not ProxyGetTrap(APV, 'has', Trap) then begin PopRoots(1); Exit(False); end;
-  APV := RootAt(TempTop - 1);
-  if IsNullish(Trap) then Result := HasPropertyV(ObjOf(APV)^.Aux1, AKey, AFound)
+  PushRoot(PV);
+  if not ProxyGetTrap(PV, 'has', Trap) then begin PopRoots(1); Exit(False); end;
+  PV := RootAt(TempTop - 1);
+  if IsNullish(Trap) then Result := HasPropertyV(ObjOf(PV)^.Aux1, Key, Found)
   else
   begin
-    Result := ProxyCallTrap(APV, Trap, 1, KeyToValue(AKey), VUndefined, VUndefined, R);
-    if Result then AFound := ToBool(R);
-    if Result and not AFound then Result := ProxyCheckHook(1, RootAt(TempTop - 1), AKey, R);
+    Result := ProxyCallTrap(PV, Trap, 1, KeyToValue(Key), VUndefined, VUndefined, R);
+    if Result then Found := ToBool(R);
+    if Result and not Found then Result := ProxyCheckHook(1, RootAt(TempTop - 1), Key, R);
   end;
   PopRoots(1);
 end;
 
-function HasPropertyV(AObj: TValue; AKey: PStr; var AFound: Boolean): Boolean;
+function HasPropertyV(Obj: TValue; Key: PStr; var Found: Boolean): Boolean;
 var O: PObj; V: TValue; Idx: Int64;
 begin
-  AFound := False;
+  Found := False;
   Result := True;
-  if not IsObject(AObj) then Exit;
-  O := ObjOf(AObj);
+  if not IsObject(Obj) then Exit;
+  O := ObjOf(Obj);
   while True do
   begin
-    if O^.OKind = okProxy then Exit(ProxyHas(MkPtr(O), AKey, AFound));
-    if (O^.OKind = okModuleNS) and ((AKey^.Hdr.Extra and kfSymbol) = 0) then Exit(NSLookup(O, AKey, False, V, AFound));
+    if O^.OKind = okProxy then Exit(ProxyHas(MkPtr(O), Key, Found));
+    if (O^.OKind = okModuleNS) and ((Key^.Hdr.Extra and kfSymbol) = 0) then Exit(NSLookup(O, Key, False, V, Found));
     { 10.4.5.2: a typed array has an integer index exactly when it is in range, and never looks further }
-    if (O^.OKind = okTypedArray) and IndexFromString(AKey, Idx) then begin AFound := Idx < TALength(O); Exit; end;
-    if (O^.OKind = okTypedArray) and CanonicalNumericNonIndex(AKey) then Exit;
-    if (O^.Elements <> nil) and IndexFromString(AKey, Idx) and (Idx < O^.Elements^.Len) and (O^.Elements^.Data[Idx] <> VHole) then
-    begin AFound := True; Exit; end;
-    if (ShapeLookup(O^.Shape, AKey) >= 0) or VirtualProp(O, AKey, V) then begin AFound := True; Exit; end;
+    if (O^.OKind = okTypedArray) and IndexFromString(Key, Idx) then begin Found := Idx < TALength(O); Exit; end;
+    if (O^.OKind = okTypedArray) and CanonicalNumericNonIndex(Key) then Exit;
+    if (O^.Elements <> nil) and IndexFromString(Key, Idx) and (Idx < O^.Elements^.Len) and (O^.Elements^.Data[Idx] <> VHole) then
+    begin Found := True; Exit; end;
+    if (ShapeLookup(O^.Shape, Key) >= 0) or VirtualProp(O, Key, V) then begin Found := True; Exit; end;
     if not IsObject(O^.Shape^.Proto) then Exit;
     O := ObjOf(O^.Shape^.Proto);
   end;
 end;
 
-function ProxyDelete(APV: TValue; AKey: PStr; var AOk: Boolean): Boolean;
+function ProxyDelete(PV: TValue; Key: PStr; var Ok: Boolean): Boolean;
 var Trap, R: TValue;
 begin
-  PushRoot(APV);
-  if not ProxyGetTrap(APV, 'deleteProperty', Trap) then begin PopRoots(1); Exit(False); end;
-  APV := RootAt(TempTop - 1);
-  AOk := True;
+  PushRoot(PV);
+  if not ProxyGetTrap(PV, 'deleteProperty', Trap) then begin PopRoots(1); Exit(False); end;
+  PV := RootAt(TempTop - 1);
+  Ok := True;
   if IsNullish(Trap) then
   begin
-    if IsObject(ObjOf(APV)^.Aux1) and (ObjOf(ObjOf(APV)^.Aux1)^.OKind = okProxy) then Result := ProxyDelete(ObjOf(APV)^.Aux1, AKey, AOk)
-    else begin AOk := DeleteIfConfigurable(ObjOf(ObjOf(APV)^.Aux1), AKey); Result := True; end;
+    if IsObject(ObjOf(PV)^.Aux1) and (ObjOf(ObjOf(PV)^.Aux1)^.OKind = okProxy) then Result := ProxyDelete(ObjOf(PV)^.Aux1, Key, Ok)
+    else begin Ok := DeleteIfConfigurable(ObjOf(ObjOf(PV)^.Aux1), Key); Result := True; end;
   end
   else
   begin
-    Result := ProxyCallTrap(APV, Trap, 1, KeyToValue(AKey), VUndefined, VUndefined, R);
-    if Result then AOk := ToBool(R);
-    if Result and AOk then Result := ProxyCheckHook(2, RootAt(TempTop - 1), AKey, R);
+    Result := ProxyCallTrap(PV, Trap, 1, KeyToValue(Key), VUndefined, VUndefined, R);
+    if Result then Ok := ToBool(R);
+    if Result and Ok then Result := ProxyCheckHook(2, RootAt(TempTop - 1), Key, R);
   end;
   PopRoots(1);
 end;
 
-function ProxyOwnKeys(APV: TValue; var ARes: TValue): Boolean;
+function ProxyOwnKeys(PV: TValue; var Res: TValue): Boolean;
 var Trap: TValue;
 begin
-  PushRoot(APV);
-  if not ProxyGetTrap(APV, 'ownKeys', Trap) then begin PopRoots(1); Exit(False); end;
-  APV := RootAt(TempTop - 1);
-  if IsNullish(Trap) then Result := ProxyCheckHook(4, APV, nil, ARes)
+  PushRoot(PV);
+  if not ProxyGetTrap(PV, 'ownKeys', Trap) then begin PopRoots(1); Exit(False); end;
+  PV := RootAt(TempTop - 1);
+  if IsNullish(Trap) then Result := ProxyCheckHook(4, PV, nil, Res)
   else
   begin
-    Result := ProxyCallTrap(APV, Trap, 0, VUndefined, VUndefined, VUndefined, ARes);
-    if Result then Result := ProxyCheckHook(3, RootAt(TempTop - 1), nil, ARes);
+    Result := ProxyCallTrap(PV, Trap, 0, VUndefined, VUndefined, VUndefined, Res);
+    if Result then Result := ProxyCheckHook(3, RootAt(TempTop - 1), nil, Res);
   end;
   PopRoots(1);
 end;
 
 { an invariant-free trap call for the Object statics: HadTrap False means fall back to the target }
-function ProxyInvoke(APV: TValue; const ATrapName: UnicodeString; AA1: TValue; AArgc: Integer; var ARes: TValue;
-  var AHadTrap: Boolean): Boolean;
+function ProxyInvoke(PV: TValue; const TrapName: UnicodeString; A1: TValue; Argc: Integer; var Res: TValue;
+  var HadTrap: Boolean): Boolean;
 var Trap: TValue;
 begin
-  PushRoot(APV); PushRoot(AA1);
-  AHadTrap := False;
-  if not ProxyGetTrap(APV, ATrapName, Trap) then begin PopRoots(2); Exit(False); end;
-  APV := RootAt(TempTop - 2); AA1 := RootAt(TempTop - 1);
+  PushRoot(PV); PushRoot(A1);
+  HadTrap := False;
+  if not ProxyGetTrap(PV, TrapName, Trap) then begin PopRoots(2); Exit(False); end;
+  PV := RootAt(TempTop - 2); A1 := RootAt(TempTop - 1);
   Result := True;
   if not IsNullish(Trap) then
   begin
-    AHadTrap := True;
-    Result := ProxyCallTrap(APV, Trap, AArgc, AA1, VUndefined, VUndefined, ARes);
+    HadTrap := True;
+    Result := ProxyCallTrap(PV, Trap, Argc, A1, VUndefined, VUndefined, Res);
   end;
   PopRoots(2);
 end;
 
-function ProxyCall(APV, AThis: TValue; AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function ProxyCall(PV, This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var Trap: TValue; A: PObj; Base, SavedTop, I: Integer;
 begin
   { the arguments go to the value stack first: Args may be an unrooted buffer }
   SavedTop := StackTop;
   Base := StackTop;
-  if Base + AArgc + 4 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-  VStack[Base] := APV; VStack[Base + 1] := AThis;
-  if AArgs <> nil then Move(AArgs^, VStack[Base + 2], AArgc * SizeOf(TValue));
-  StackTop := Base + AArgc + 2;
-  if not ProxyGetTrap(APV, 'apply', Trap) then begin StackTop := SavedTop; Exit(False); end;
+  if Base + Argc + 4 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  VStack[Base] := PV; VStack[Base + 1] := This;
+  if Args <> nil then Move(Args^, VStack[Base + 2], Argc * SizeOf(TValue));
+  StackTop := Base + Argc + 2;
+  if not ProxyGetTrap(PV, 'apply', Trap) then begin StackTop := SavedTop; Exit(False); end;
   if IsNullish(Trap) then
-    Result := CallValue(ObjOf(VStack[Base])^.Aux1, VStack[Base + 1], @VStack[Base + 2], AArgc, ARes)
+    Result := CallValue(ObjOf(VStack[Base])^.Aux1, VStack[Base + 1], @VStack[Base + 2], Argc, Res)
   else
   begin
     PushRoot(Trap);
-    A := NewArray(AArgc, AArgc);
-    for I := 0 to AArgc - 1 do ValueArrayStore(A^.Elements, I, VStack[Base + 2 + I]);
+    A := NewArray(Argc, Argc);
+    for I := 0 to Argc - 1 do ValueArrayStore(A^.Elements, I, VStack[Base + 2 + I]);
     Trap := RootAt(TempTop - 1);
     PopRoots(1);
-    Result := ProxyCallTrap(VStack[Base], Trap, 2, VStack[Base + 1], MkPtr(A), VUndefined, ARes);
+    Result := ProxyCallTrap(VStack[Base], Trap, 2, VStack[Base + 1], MkPtr(A), VUndefined, Res);
   end;
   StackTop := SavedTop;
 end;
 
-function ProxyConstruct(APV: TValue; AArgs: PValue; AArgc: Integer; ANewTarget: TValue; var ARes: TValue): Boolean;
+function ProxyConstruct(PV: TValue; Args: PValue; Argc: Integer; NewTarget: TValue; var Res: TValue): Boolean;
 var Trap: TValue; A: PObj; Base, SavedTop, I: Integer;
 begin
   SavedTop := StackTop;
   Base := StackTop;
-  if Base + AArgc + 4 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-  VStack[Base] := APV; VStack[Base + 1] := ANewTarget;
-  if AArgs <> nil then Move(AArgs^, VStack[Base + 2], AArgc * SizeOf(TValue));
-  StackTop := Base + AArgc + 2;
-  if not ProxyGetTrap(APV, 'construct', Trap) then begin StackTop := SavedTop; Exit(False); end;
+  if Base + Argc + 4 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  VStack[Base] := PV; VStack[Base + 1] := NewTarget;
+  if Args <> nil then Move(Args^, VStack[Base + 2], Argc * SizeOf(TValue));
+  StackTop := Base + Argc + 2;
+  if not ProxyGetTrap(PV, 'construct', Trap) then begin StackTop := SavedTop; Exit(False); end;
   if IsNullish(Trap) then
-    Result := Construct(ObjOf(VStack[Base])^.Aux1, @VStack[Base + 2], AArgc, VStack[Base + 1], ARes)
+    Result := Construct(ObjOf(VStack[Base])^.Aux1, @VStack[Base + 2], Argc, VStack[Base + 1], Res)
   else
   begin
     PushRoot(Trap);
-    A := NewArray(AArgc, AArgc);
-    for I := 0 to AArgc - 1 do ValueArrayStore(A^.Elements, I, VStack[Base + 2 + I]);
+    A := NewArray(Argc, Argc);
+    for I := 0 to Argc - 1 do ValueArrayStore(A^.Elements, I, VStack[Base + 2 + I]);
     Trap := RootAt(TempTop - 1);
     PopRoots(1);
-    Result := ProxyCallTrap(VStack[Base], Trap, 2, MkPtr(A), VStack[Base + 1], VUndefined, ARes);
-    if Result and not IsObject(ARes) then Result := ThrowTypeError('proxy [[Construct]] must return an object');
+    Result := ProxyCallTrap(VStack[Base], Trap, 2, MkPtr(A), VStack[Base + 1], VUndefined, Res);
+    if Result and not IsObject(Res) then Result := ThrowTypeError('proxy [[Construct]] must return an object');
   end;
   StackTop := SavedTop;
 end;
 
 
-function CallValue(F, AThis: TValue; AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function CallValue(F, This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; Base, I, ArgBase: Integer; BArgs: PValueArray; N: Integer; Tmp: array[0..15] of TValue;
   P: PValue; SavedTop: Integer;
 begin
   if not IsCallable(F) then Exit(ThrowTypeError('value is not a function'));
   O := ObjOf(F);
   case O^.OKind of
-    okProxy: Result := ProxyCall(F, AThis, AArgs, AArgc, ARes);
+    okProxy: Result := ProxyCall(F, This, Args, Argc, Res);
     okNative:
       begin
         SavedTop := StackTop;
         Base := StackTop;
-        if Base + AArgc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+        if Base + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
         { args may point into the value stack: copy before writing }
-        VStack[Base] := AThis;
-        if AArgs <> nil then Move(AArgs^, VStack[Base + 1], AArgc * SizeOf(TValue));
-        StackTop := Base + AArgc + 1;
-        ARes := VUndefined;
+        VStack[Base] := This;
+        if Args <> nil then Move(Args^, VStack[Base + 1], Argc * SizeOf(TValue));
+        StackTop := Base + Argc + 1;
+        Res := VUndefined;
         { a native sees new.target only when Construct called it; the caller's value comes back afterwards
           (saved on the root stack: a raw local would go stale if the native collects) }
         PushRoot(CurNewTarget);
@@ -2310,7 +2310,7 @@ begin
         ConstructNT := VUndefined;
         NativeData := O^.Pad;
         NativeSelf := MkPtr(O);
-        Result := TNativeFn(O^.Native)(@VStack[Base], AArgc, ARes);
+        Result := TNativeFn(O^.Native)(@VStack[Base], Argc, Res);
         CurNewTarget := RootAt(TempTop - 1);
         PopRoots(1);
         StackTop := SavedTop;
@@ -2321,11 +2321,11 @@ begin
         N := BArgs^.Len - 1;
         SavedTop := StackTop;
         Base := StackTop;
-        if Base + N + AArgc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+        if Base + N + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
         for I := 0 to N - 1 do VStack[Base + I] := BArgs^.Data[I + 1];
-        if AArgs <> nil then Move(AArgs^, VStack[Base + N], AArgc * SizeOf(TValue));
-        StackTop := Base + N + AArgc;
-        Result := CallValue(O^.Aux1, BArgs^.Data[0], @VStack[Base], N + AArgc, ARes);
+        if Args <> nil then Move(Args^, VStack[Base + N], Argc * SizeOf(TValue));
+        StackTop := Base + N + Argc;
+        Result := CallValue(O^.Aux1, BArgs^.Data[0], @VStack[Base], N + Argc, Res);
         StackTop := SavedTop;
       end;
   else
@@ -2334,30 +2334,30 @@ begin
         Exit(ThrowTypeError('Class constructor cannot be invoked without ''new'''));
       SavedTop := StackTop;
       ArgBase := StackTop;
-      if ArgBase + AArgc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-      VStack[ArgBase] := AThis;
-      if AArgs <> nil then Move(AArgs^, VStack[ArgBase + 1], AArgc * SizeOf(TValue));
-      StackTop := ArgBase + AArgc + 1;
-      if not PushBytecodeFrame(O, VStack[ArgBase], @VStack[ArgBase + 1], AArgc, ArgBase, 0, VUndefined) then
+      if ArgBase + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+      VStack[ArgBase] := This;
+      if Args <> nil then Move(Args^, VStack[ArgBase + 1], Argc * SizeOf(TValue));
+      StackTop := ArgBase + Argc + 1;
+      if not PushBytecodeFrame(O, VStack[ArgBase], @VStack[ArgBase + 1], Argc, ArgBase, 0, VUndefined) then
       begin
         StackTop := SavedTop;
         Exit(False);
       end;
       if Frames[FrameTop - 1].Tpl^.IsAsync and not Frames[FrameTop - 1].Tpl^.IsGenerator then
       begin
-        ARes := SuspendNewGenerator;
+        Res := SuspendNewGenerator;
         StackTop := SavedTop;
-        ARes := AsyncStartHook(ARes);
+        Res := AsyncStartHook(Res);
         Result := True;
       end
       else
-        Result := Execute(FrameTop - 1, ARes);
+        Result := Execute(FrameTop - 1, Res);
       StackTop := SavedTop;
     end;
   end;
 end;
 
-function Construct(F: TValue; AArgs: PValue; AArgc: Integer; ANewTarget: TValue; var ARes: TValue): Boolean;
+function Construct(F: TValue; Args: PValue; Argc: Integer; NewTarget: TValue; var Res: TValue): Boolean;
 var O, ThisO: PObj; Proto, SavedNT: TValue; ArgBase, SavedTop: Integer; T: PFuncTemplate; BArgs: PValueArray;
   N, Base, I: Integer;
 begin
@@ -2369,19 +2369,19 @@ begin
     { a subclass (new.target other than the built-in): a native that takes its prototype from new.target
       does so at its step (ProtoFromNewTarget); for the others it is given to the instance afterwards, so
       their argument checks still come first }
-    PushRoot(F); PushRoot(ANewTarget);
+    PushRoot(F); PushRoot(NewTarget);
     ConstructProtoTaken := False;
-    ConstructNT := ANewTarget;
-    Result := CallValue(F, VUndefined, AArgs, AArgc, ARes);
+    ConstructNT := NewTarget;
+    Result := CallValue(F, VUndefined, Args, Argc, Res);
     ConstructNT := VUndefined;
-    if Result and IsObject(ARes) and not ConstructProtoTaken and (RootAt(TempTop - 1) <> RootAt(TempTop - 2)) and
+    if Result and IsObject(Res) and not ConstructProtoTaken and (RootAt(TempTop - 1) <> RootAt(TempTop - 2)) and
        IsObject(RootAt(TempTop - 1)) then
     begin
-      PushRoot(ARes);
+      PushRoot(Res);
       if not GetV(RootAt(TempTop - 2), AtomPrototype, Proto) then Result := False
       else if IsObject(Proto) and (ObjOf(RootAt(TempTop - 1))^.Shape^.Proto <> Proto) then
         SetProto(ObjOf(RootAt(TempTop - 1)), Proto);
-      ARes := RootAt(TempTop - 1);
+      Res := RootAt(TempTop - 1);
       PopRoots(1);
     end;
     ConstructProtoTaken := False;
@@ -2395,16 +2395,16 @@ begin
     N := BArgs^.Len - 1;
     SavedTop := StackTop;
     Base := StackTop;
-    if Base + N + AArgc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+    if Base + N + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
     for I := 0 to N - 1 do VStack[Base + I] := BArgs^.Data[I + 1];
-    if AArgs <> nil then Move(AArgs^, VStack[Base + N], AArgc * SizeOf(TValue));
-    StackTop := Base + N + AArgc;
-    if ANewTarget = F then ANewTarget := O^.Aux1;
-    Result := Construct(O^.Aux1, @VStack[Base], N + AArgc, ANewTarget, ARes);
+    if Args <> nil then Move(Args^, VStack[Base + N], Argc * SizeOf(TValue));
+    StackTop := Base + N + Argc;
+    if NewTarget = F then NewTarget := O^.Aux1;
+    Result := Construct(O^.Aux1, @VStack[Base], N + Argc, NewTarget, Res);
     StackTop := SavedTop;
     Exit;
   end;
-  if O^.OKind = okProxy then Exit(ProxyConstruct(F, AArgs, AArgc, ANewTarget, ARes));
+  if O^.OKind = okProxy then Exit(ProxyConstruct(F, Args, Argc, NewTarget, Res));
   T := PFuncTemplate(O^.Native);
   if T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsAsync then
     Exit(ThrowTypeError('not a constructor'));
@@ -2414,41 +2414,41 @@ begin
     SavedTop := StackTop;
     ArgBase := StackTop;
     VStack[ArgBase] := VHole;
-    if AArgs <> nil then Move(AArgs^, VStack[ArgBase + 1], AArgc * SizeOf(TValue));
-    StackTop := ArgBase + AArgc + 1;
-    if not PushBytecodeFrame(ObjOf(F), VHole, @VStack[ArgBase + 1], AArgc, ArgBase, 1, ANewTarget) then
+    if Args <> nil then Move(Args^, VStack[ArgBase + 1], Argc * SizeOf(TValue));
+    StackTop := ArgBase + Argc + 1;
+    if not PushBytecodeFrame(ObjOf(F), VHole, @VStack[ArgBase + 1], Argc, ArgBase, 1, NewTarget) then
     begin
       StackTop := SavedTop;
       Exit(False);
     end;
-    Result := Execute(FrameTop - 1, ARes);
+    Result := Execute(FrameTop - 1, Res);
     StackTop := SavedTop;
     Exit;
   end;
-  PushRoot(F); PushRoot(ANewTarget);
-  Proto := FunctionPrototypeOf(ANewTarget);
+  PushRoot(F); PushRoot(NewTarget);
+  Proto := FunctionPrototypeOf(NewTarget);
   if not IsObject(Proto) then Proto := ObjectProto;
   ThisO := NewObject(RootShapeFor(Proto), Max(4, T^.ExpectedProps), okPlain);
-  F := RootAt(TempTop - 2); ANewTarget := RootAt(TempTop - 1);
+  F := RootAt(TempTop - 2); NewTarget := RootAt(TempTop - 1);
   PopRoots(2);
   if Assigned(T^.FieldInit) and not T^.IsDerived then
   begin
-    PushRoot(F); PushRoot(ANewTarget); PushRoot(MkPtr(ThisO));
+    PushRoot(F); PushRoot(NewTarget); PushRoot(MkPtr(ThisO));
     if not RunFieldInit(F, MkPtr(ThisO)) then begin PopRoots(3); Exit(False); end;
-    ThisO := ObjOf(RootAt(TempTop - 1)); ANewTarget := RootAt(TempTop - 2); F := RootAt(TempTop - 3);
+    ThisO := ObjOf(RootAt(TempTop - 1)); NewTarget := RootAt(TempTop - 2); F := RootAt(TempTop - 3);
     PopRoots(3);
   end;
   SavedTop := StackTop;
   ArgBase := StackTop;
   VStack[ArgBase] := MkPtr(ThisO);
-  if AArgs <> nil then Move(AArgs^, VStack[ArgBase + 1], AArgc * SizeOf(TValue));
-  StackTop := ArgBase + AArgc + 1;
-  if not PushBytecodeFrame(ObjOf(F), VStack[ArgBase], @VStack[ArgBase + 1], AArgc, ArgBase, 1, ANewTarget) then
+  if Args <> nil then Move(Args^, VStack[ArgBase + 1], Argc * SizeOf(TValue));
+  StackTop := ArgBase + Argc + 1;
+  if not PushBytecodeFrame(ObjOf(F), VStack[ArgBase], @VStack[ArgBase + 1], Argc, ArgBase, 1, NewTarget) then
   begin
     StackTop := SavedTop;
     Exit(False);
   end;
-  Result := Execute(FrameTop - 1, ARes);
+  Result := Execute(FrameTop - 1, Res);
   StackTop := SavedTop;
 end;
 
@@ -2458,7 +2458,7 @@ end;
 threadvar
   ArgsShapeMapped, ArgsShapeUnmapped: PShape;
 
-function NewArgumentsObject(AArgs: PValue; AArgc: Integer; AMapped: Boolean): TValue;
+function NewArgumentsObject(Args: PValue; Argc: Integer; Mapped: Boolean): TValue;
 var O: PObj; E: PValueArray; I: Integer; IterKey: PStr;
 begin
   if ArgsShapeMapped = nil then
@@ -2473,34 +2473,34 @@ begin
     AddProperty(O, AtomCallee, VUndefined, pfAccessor);
     ArgsShapeUnmapped := O^.Shape;
   end;
-  E := NewValueArray(AArgc);
+  E := NewValueArray(Argc);
   PushRoot(MkPtr(E));
-  if AMapped then O := NewObject(ArgsShapeMapped, 2, okArguments)
+  if Mapped then O := NewObject(ArgsShapeMapped, 2, okArguments)
   else O := NewObject(ArgsShapeUnmapped, 2, okArguments);
   E := PValueArray(PtrOf(RootAt(TempTop - 1)));
   PopRoots(1);
-  for I := 0 to AArgc - 1 do E^.Data[I] := AArgs[I];
-  E^.Len := AArgc;
+  for I := 0 to Argc - 1 do E^.Data[I] := Args[I];
+  E^.Len := Argc;
   O^.Elements := E;
   WriteBarrier(@O^.Hdr, MkPtr(E));
   SetSlot(O, 0, ArrayValuesFnPublic);
-  if AMapped then SetSlot(O, 1, RootAt(TempTop - 1)) else SetSlot(O, 1, ThrowerAcc);
+  if Mapped then SetSlot(O, 1, RootAt(TempTop - 1)) else SetSlot(O, 1, ThrowerAcc);
   Result := MkPtr(O);
 end;
 
 { sets up a frame whose this is at Args[-1] (the slot before the first argument) }
-function PushBytecodeFrame(AFObj: PObj; AThis: TValue; AArgs: PValue; AArgc: Integer; ARetIdx: Integer; AKind: Byte;
-  ANewTarget: TValue): Boolean;
+function PushBytecodeFrame(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
+  NewTarget: TValue): Boolean;
 var T: PFuncTemplate; Base, I, NP, Extra: Integer; Fr: PFrame; R: PValue; A: PObj; FV, Tmp, ArgsObj: TValue; FI: Integer;
 begin
-  T := PFuncTemplate(AFObj^.Native);
-  Base := (AArgs - VStack) - 1;
+  T := PFuncTemplate(FObj^.Native);
+  Base := (Args - VStack) - 1;
   if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
     Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-  FV := MkPtr(AFObj);
+  FV := MkPtr(FObj);
   R := @VStack[Base];
-  if not T^.IsStrict and not T^.IsArrow and ((AThis = VUndefined) or (AThis = VNull)) then AThis := GlobalObj;
-  R[0] := AThis;
+  if not T^.IsStrict and not T^.IsArrow and ((This = VUndefined) or (This = VNull)) then This := GlobalObj;
+  R[0] := This;
   NP := T^.NumParams;
   if (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then
   begin
@@ -2508,7 +2508,7 @@ begin
     PushRoot(FV);
     if T^.RestReg >= 0 then
     begin
-      Extra := AArgc - NP;
+      Extra := Argc - NP;
       if Extra < 0 then Extra := 0;
       A := NewArray(Extra, Extra);
       for I := 0 to Extra - 1 do A^.Elements^.Data[I] := VStack[Base + 1 + NP + I];
@@ -2519,38 +2519,38 @@ begin
     begin
       PushRoot(Tmp);
       PushRoot(RootAt(TempTop - 2));   { the function, for a mapped object's callee }
-      ArgsObj := NewArgumentsObject(AArgs, AArgc, not T^.IsStrict and T^.SimpleParams);
+      ArgsObj := NewArgumentsObject(Args, Argc, not T^.IsStrict and T^.SimpleParams);
       Tmp := RootAt(TempTop - 2);
       PopRoots(2);
     end;
     FV := RootAt(TempTop - 1);
     PopRoots(1);
     StackTop := Max(StackTop, Base + T^.MaxRegs);
-    for I := Min(AArgc, NP) + 1 to T^.MaxRegs - 1 do R[I] := VUndefined;
+    for I := Min(Argc, NP) + 1 to T^.MaxRegs - 1 do R[I] := VUndefined;
     if T^.RestReg >= 0 then R[T^.RestReg] := Tmp;
     if T^.ArgsReg >= 0 then R[T^.ArgsReg] := ArgsObj;
   end
   else
   begin
-    for I := Min(AArgc, NP) + 1 to T^.MaxRegs - 1 do R[I] := VUndefined;
+    for I := Min(Argc, NP) + 1 to T^.MaxRegs - 1 do R[I] := VUndefined;
   end;
   if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;
   Fr := @Frames[FrameTop];
   Fr^.Closure := FV;
-  Fr^.NewTarget := ANewTarget;
+  Fr^.NewTarget := NewTarget;
   Fr^.Tpl := T;
   Fr^.Base := Base;
   Fr^.PC := T^.EntryPC;
-  Fr^.RetIdx := ARetIdx;
-  Fr^.Argc := AArgc;
-  Fr^.Kind := AKind;
+  Fr^.RetIdx := RetIdx;
+  Fr^.Argc := Argc;
+  Fr^.Kind := Kind;
   Inc(FrameTop);
   Result := True;
 end;
 
 { ---------------- the interpreter ---------------- }
 
-function ICGetEntry(E: PICEntry; O: PObj; var ARes: TValue): Boolean;
+function ICGetEntry(E: PICEntry; O: PObj; var Res: TValue): Boolean;
 var P: PObj; D: Integer;
 begin
   P := O;
@@ -2561,87 +2561,87 @@ begin
     P := ObjOf(P^.Shape^.Proto);
     if P^.Shape <> E^.Holder[D] then begin {$IFDEF G2_ICSTATS}Inc(ICMissDepthFail);{$ENDIF} Exit(False); end;
   end;
-  ARes := GetSlot(P, E^.Slot);
+  Res := GetSlot(P, E^.Slot);
   Result := True;
 end;
 
 { the IC's other entries (out of line: the dispatch loop stays small) }
-function ICGetOther(AIC: PPropIC; O: PObj; var ARes: TValue): Boolean;
+function ICGetOther(IC: PPropIC; O: PObj; var Res: TValue): Boolean;
 var I: Integer;
 begin
-  for I := 1 to AIC^.PolyCount - 1 do
-    if (AIC^.More^[I].Shape = O^.Shape) and (AIC^.More^[I].Kind = O^.OKind) then
-      begin {$IFDEF G2_ICSTATS}Inc(ICHitOther);{$ENDIF} Exit(ICGetEntry(@AIC^.More^[I], O, ARes)); end;
+  for I := 1 to IC^.PolyCount - 1 do
+    if (IC^.More^[I].Shape = O^.Shape) and (IC^.More^[I].Kind = O^.OKind) then
+      begin {$IFDEF G2_ICSTATS}Inc(ICHitOther);{$ENDIF} Exit(ICGetEntry(@IC^.More^[I], O, Res)); end;
   Result := False;
 end;
 
 { a property get through the IC's entries: the receiver's shape and kind pick the entry }
-function ICGet(AIC: PPropIC; O: PObj; var ARes: TValue): Boolean; inline;
+function ICGet(IC: PPropIC; O: PObj; var Res: TValue): Boolean; inline;
 begin
-  if (AIC^.Poly0.Shape = O^.Shape) and (AIC^.Poly0.Kind = O^.OKind) then
+  if (IC^.Poly0.Shape = O^.Shape) and (IC^.Poly0.Kind = O^.OKind) then
   begin
     {$IFDEF G2_ICSTATS}Inc(ICHit0);{$ENDIF}
-    case AIC^.Poly0.Depth of
+    case IC^.Poly0.Depth of
       0:
         begin
-          ARes := GetSlot(O, AIC^.Poly0.Slot);
+          Res := GetSlot(O, IC^.Poly0.Slot);
           Exit(True);
         end;
       1:
         { a method on the prototype: the common case, inline }
-        if (AIC^.Poly0.VerMask = 0) and (ObjOf(O^.Shape^.Proto)^.Shape = AIC^.Poly0.Holder[0]) then
+        if (IC^.Poly0.VerMask = 0) and (ObjOf(O^.Shape^.Proto)^.Shape = IC^.Poly0.Holder[0]) then
         begin
-          ARes := GetSlot(ObjOf(O^.Shape^.Proto), AIC^.Poly0.Slot);
+          Res := GetSlot(ObjOf(O^.Shape^.Proto), IC^.Poly0.Slot);
           Exit(True);
         end;
     end;
-    Exit(ICGetEntry(@AIC^.Poly0, O, ARes));
+    Exit(ICGetEntry(@IC^.Poly0, O, Res));
   end;
-  Result := (AIC^.PolyCount > 1) and ICGetOther(AIC, O, ARes);
+  Result := (IC^.PolyCount > 1) and ICGetOther(IC, O, Res);
 end;
 
-function InheritedHas(O: PObj; AKey: PStr): Boolean;
+function InheritedHas(O: PObj; Key: PStr): Boolean;
 var Pv: TValue;
 begin
   Pv := O^.Shape^.Proto;
   while IsObject(Pv) do
   begin
-    if ShapeLookup(ObjOf(Pv)^.Shape, AKey) >= 0 then Exit(True);
+    if ShapeLookup(ObjOf(Pv)^.Shape, Key) >= 0 then Exit(True);
     Pv := ObjOf(Pv)^.Shape^.Proto;
   end;
   Result := False;
 end;
 
 { own properties the object model computes instead of storing: value and the spec's attributes }
-function OwnVirtual(O: PObj; AKey: PStr; var V: TValue; var AFlags: Byte): Boolean;
+function OwnVirtual(O: PObj; Key: PStr; var V: TValue; var Flags: Byte): Boolean;
 begin
   Result := False;
   if not (O^.OKind in [okArray, okArguments, okFunction, okNative, okStringObj]) then Exit;
-  if VirtualProp(O, AKey, V) then
+  if VirtualProp(O, Key, V) then
   begin
-    if O^.OKind in [okFunction, okNative] then AFlags := pfConfigurable
-    else if O^.OKind = okArguments then AFlags := pfWritable or pfConfigurable
-    else if O^.OKind = okArray then AFlags := pfWritable
-    else AFlags := 0;
+    if O^.OKind in [okFunction, okNative] then Flags := pfConfigurable
+    else if O^.OKind = okArguments then Flags := pfWritable or pfConfigurable
+    else if O^.OKind = okArray then Flags := pfWritable
+    else Flags := 0;
     Exit(True);
   end;
-  if (O^.OKind = okFunction) and (AKey = AtomPrototype) and ((O^.OFlags and 4) = 0) then
+  if (O^.OKind = okFunction) and (Key = AtomPrototype) and ((O^.OFlags and 4) = 0) then
   begin
     V := FunctionPrototypeOf(MkPtr(O));
-    AFlags := pfWritable;
+    Flags := pfWritable;
     Result := not IsNullish(V);
   end;
 end;
 
 { an IC miss: GetFromObject's walk (same order: own shape, virtual property, elements, function prototype,
   then the prototype), and an entry for the IC when the value is a data property the shapes alone decide }
-function ICGetMiss(AIC: PPropIC; O: PObj; AReceiver: TValue; var ARes: TValue): Boolean;
+function ICGetMiss(IC: PPropIC; O: PObj; Receiver: TValue; var Res: TValue): Boolean;
 var P: PObj; S, D, N: Integer; Flags: Byte; Acc: PAccessor; Pv, V: TValue; Idx: Int64; E: TICEntry; Cacheable: Boolean;
 begin
   { an index-like key can hit virtual properties that depend on more than the shape (a String object's
     characters): never cached }
   {$IFDEF G2_ICSTATS}Inc(ICMissN);{$ENDIF}
-  Cacheable := not IndexFromString(AIC^.Key, Idx);
+  Cacheable := not IndexFromString(IC^.Key, Idx);
   {$IFDEF G2_ICSTATS}if not Cacheable then Inc(ICWhy[1]);{$ENDIF}
   E.Shape := O^.Shape;
   E.Kind := O^.OKind;
@@ -2650,10 +2650,10 @@ begin
   D := 0;
   while True do
   begin
-    if P^.OKind = okProxy then begin {$IFDEF G2_ICSTATS}Inc(ICWhy[6]);{$ENDIF} Exit(ProxyGet(MkPtr(P), AIC^.Key, AReceiver, ARes)); end;
+    if P^.OKind = okProxy then begin {$IFDEF G2_ICSTATS}Inc(ICWhy[6]);{$ENDIF} Exit(ProxyGet(MkPtr(P), IC^.Key, Receiver, Res)); end;
     { a module namespace's exports are live bindings: never cached }
-    if P^.OKind = okModuleNS then Exit(GetFromObject(P, AIC^.Key, AReceiver, ARes));
-    S := ShapeLookup(P^.Shape, AIC^.Key);
+    if P^.OKind = okModuleNS then Exit(GetFromObject(P, IC^.Key, Receiver, Res));
+    S := ShapeLookup(P^.Shape, IC^.Key);
     if S >= 0 then
     begin
       Flags := P^.Shape^.PFlags[S];
@@ -2662,51 +2662,51 @@ begin
       begin
         {$IFDEF G2_ICSTATS}Inc(ICWhy[3]);{$ENDIF}
         Acc := PAccessor(PtrOf(V));
-        if Acc^.Getter = VUndefined then begin ARes := VUndefined; Exit(True); end;
-        Exit(CallValue(Acc^.Getter, AReceiver, nil, 0, ARes));
+        if Acc^.Getter = VUndefined then begin Res := VUndefined; Exit(True); end;
+        Exit(CallValue(Acc^.Getter, Receiver, nil, 0, Res));
       end;
-      ARes := V;
+      Res := V;
       if Cacheable then
       begin
         {$IFDEF G2_ICSTATS}Inc(ICMissFill);{$ENDIF}
         E.Depth := D;
         E.Slot := S;
         { the first shape stays in entry 0 (checked inline); later ones take entries 1-3 in turn }
-        if AIC^.PolyCount = 0 then
+        if IC^.PolyCount = 0 then
         begin
-          AIC^.Poly0 := E;
-          AIC^.PolyCount := 1;
-          AIC^.PolyNext := 1;
+          IC^.Poly0 := E;
+          IC^.PolyCount := 1;
+          IC^.PolyNext := 1;
         end
         else
         begin
-          N := AIC^.PolyNext;
-          if AIC^.More = nil then AIC^.More := AllocMem(SizeOf(TICEntryMore));
-          AIC^.More^[N] := E;
-          if N >= AIC^.PolyCount then AIC^.PolyCount := N + 1;
-          if N = 3 then AIC^.PolyNext := 1 else AIC^.PolyNext := N + 1;
+          N := IC^.PolyNext;
+          if IC^.More = nil then IC^.More := AllocMem(SizeOf(TICEntryMore));
+          IC^.More^[N] := E;
+          if N >= IC^.PolyCount then IC^.PolyCount := N + 1;
+          if N = 3 then IC^.PolyNext := 1 else IC^.PolyNext := N + 1;
         end;
       end;
       Exit(True);
     end;
-    if VirtualProp(P, AIC^.Key, ARes) then begin {$IFDEF G2_ICSTATS}Inc(ICWhy[4]);{$ENDIF} Exit(True); end;
-    if (P^.Elements <> nil) and IndexFromString(AIC^.Key, Idx) then
+    if VirtualProp(P, IC^.Key, Res) then begin {$IFDEF G2_ICSTATS}Inc(ICWhy[4]);{$ENDIF} Exit(True); end;
+    if (P^.Elements <> nil) and IndexFromString(IC^.Key, Idx) then
     begin
       Cacheable := False;   { elements change without a shape change }
       if Idx < P^.Elements^.Len then
       begin
-        ARes := P^.Elements^.Data[Idx];
-        if ARes <> VHole then Exit(True);
+        Res := P^.Elements^.Data[Idx];
+        if Res <> VHole then Exit(True);
       end;
     end;
-    if (P^.OKind = okFunction) and (AIC^.Key = AtomPrototype) then
+    if (P^.OKind = okFunction) and (IC^.Key = AtomPrototype) then
     begin
       {$IFDEF G2_ICSTATS}Inc(ICWhy[7]);{$ENDIF}
-      ARes := FunctionPrototypeOf(MkPtr(P));
+      Res := FunctionPrototypeOf(MkPtr(P));
       Exit(True);
     end;
     Pv := P^.Shape^.Proto;
-    if not IsObject(Pv) then begin {$IFDEF G2_ICSTATS}Inc(ICWhy[2]);{$ENDIF} ARes := VUndefined; Exit(True); end;
+    if not IsObject(Pv) then begin {$IFDEF G2_ICSTATS}Inc(ICWhy[2]);{$ENDIF} Res := VUndefined; Exit(True); end;
     if D >= 4 then
     begin
       {$IFDEF G2_ICSTATS}if Cacheable then Inc(ICWhy[5]);{$ENDIF}
@@ -2724,37 +2724,37 @@ begin
   end;
 end;
 
-procedure ICFillGet(AIC: PPropIC; O: PObj);
+procedure ICFillGet(IC: PPropIC; O: PObj);
 var P: PObj; D, S: Integer; Pv: TValue;
 begin
-  AIC^.Shape := nil;
+  IC^.Shape := nil;
   if O^.Shape^.IsDict then Exit;
   P := O;
   D := 0;
   while True do
   begin
-    S := ShapeLookup(P^.Shape, AIC^.Key);
+    S := ShapeLookup(P^.Shape, IC^.Key);
     if S >= 0 then
     begin
       if (P^.Shape^.PFlags[S] and pfAccessor) <> 0 then Exit;
-      AIC^.Shape := O^.Shape;
-      AIC^.Depth := D;
-      AIC^.Slot := S;
+      IC^.Shape := O^.Shape;
+      IC^.Depth := D;
+      IC^.Slot := S;
       Exit;
     end;
     { a dictionary prototype changes in place, so a shadowing key added to it would go unseen }
-    if (D > 0) and P^.Shape^.IsDict then begin AIC^.Shape := nil; Exit; end;
+    if (D > 0) and P^.Shape^.IsDict then begin IC^.Shape := nil; Exit; end;
     if P^.OKind in [okArray, okFunction, okNative, okStringObj, okArguments] then
-      if (AIC^.Key = AtomLength) or (AIC^.Key = AtomName) or (AIC^.Key = AtomPrototype) then Exit;
+      if (IC^.Key = AtomLength) or (IC^.Key = AtomName) or (IC^.Key = AtomPrototype) then Exit;
     Pv := P^.Shape^.Proto;
     if not IsObject(Pv) or (D >= 4) then Exit;
     P := ObjOf(Pv);
-    AIC^.Holder[D] := P^.Shape;
+    IC^.Holder[D] := P^.Shape;
     Inc(D);
   end;
 end;
 
-function AddNumbersSlow(A, B: TValue; var ARes: TValue): Boolean;
+function AddNumbersSlow(A, B: TValue; var Res: TValue): Boolean;
 var PA, PB, SA, SB: TValue; DA, DB: Double;
 begin
   PushRoot(B);
@@ -2766,7 +2766,7 @@ begin
   if (IsBigInt(PA) or IsBigInt(PB)) and not (IsString(PA) or IsString(PB)) then
   begin
     if not (IsBigInt(PA) and IsBigInt(PB)) then Exit(ThrowTypeError('Cannot mix BigInt and other types, use explicit conversions'));
-    ARes := BigToValue(ValueToBig(PA).Add(ValueToBig(PB)));
+    Res := BigToValue(ValueToBig(PA).Add(ValueToBig(PB)));
     Exit(True);
   end;
   if IsString(PA) or IsString(PB) then
@@ -2777,21 +2777,21 @@ begin
     if not ToStringV(RootAt(TempTop - 2), SB) then begin PopRoots(2); Exit(False); end;
     SA := RootAt(TempTop - 1);
     PopRoots(2);
-    ARes := ConcatStrings(StrOf(SA), StrOf(SB));
+    Res := ConcatStrings(StrOf(SA), StrOf(SB));
     Exit(True);
   end;
   DA := PrimitiveToNumber(PA);
   DB := PrimitiveToNumber(PB);
-  ARes := MkNumber(DA + DB);
+  Res := MkNumber(DA + DB);
   Result := True;
 end;
 
-function BigArith(AOp: TOp; A, B: TValue; var ARes: TValue): Boolean;
+function BigArith(Op: TOp; A, B: TValue; var Res: TValue): Boolean;
 var X, Y, Z: TBigInteger;
 begin
   if not (IsBigInt(A) and IsBigInt(B)) then Exit(ThrowTypeError('Cannot mix BigInt and other types, use explicit conversions'));
   X := ValueToBig(A); Y := ValueToBig(B);
-  case AOp of
+  case Op of
     opSub: Z := X.Subtract(Y);
     opMul: Z := X.Multiply(Y);
     opDiv: begin if Y.IsZero then Exit(ThrowError('RangeError', 'Division by zero')); Z := X.Divide(Y); end;
@@ -2805,19 +2805,19 @@ begin
   else
     Exit(ThrowTypeError('BigInts have no unsigned right shift, use >> instead'));
   end;
-  ARes := BigToValue(Z);
+  Res := BigToValue(Z);
   Result := True;
 end;
 
-function ArithSlow(AOp: TOp; A, B: TValue; var ARes: TValue): Boolean;
+function ArithSlow(Op: TOp; A, B: TValue; var Res: TValue): Boolean;
 var DA, DB, R: Double; IA, IB: Int32;
 begin
-  if IsBigInt(A) or IsBigInt(B) then Exit(BigArith(AOp, A, B, ARes));
+  if IsBigInt(A) or IsBigInt(B) then Exit(BigArith(Op, A, B, Res));
   PushRoot(B);
   if not ToNumberV(A, DA) then begin PopRoots(1); Exit(False); end;
   if not ToNumberV(RootAt(TempTop - 1), DB) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
-  case AOp of
+  case Op of
     opSub: R := DA - DB;
     opMul: R := DA * DB;
     opDiv: R := DA / DB;
@@ -2827,22 +2827,22 @@ begin
     begin
       if IsNaN(DA) or IsInfinite(DA) then IA := 0 else IA := Int32(UInt32(Int64(Trunc(DA)) and $FFFFFFFF));
       if IsNaN(DB) or IsInfinite(DB) then IB := 0 else IB := Int32(UInt32(Int64(Trunc(DB)) and $FFFFFFFF));
-      case AOp of
-        opBitAnd: ARes := MkInt(IA and IB);
-        opBitOr: ARes := MkInt(IA or IB);
-        opBitXor: ARes := MkInt(IA xor IB);
-        opShl: ARes := MkInt(Int32(UInt32(IA) shl (IB and 31)));
-        opShr: ARes := MkInt(SarLongint(IA, IB and 31));
-        opUShr: ARes := MkNumber(UInt32(IA) shr (IB and 31));
+      case Op of
+        opBitAnd: Res := MkInt(IA and IB);
+        opBitOr: Res := MkInt(IA or IB);
+        opBitXor: Res := MkInt(IA xor IB);
+        opShl: Res := MkInt(Int32(UInt32(IA) shl (IB and 31)));
+        opShr: Res := MkInt(SarLongint(IA, IB and 31));
+        opUShr: Res := MkNumber(UInt32(IA) shr (IB and 31));
       end;
       Exit(True);
     end;
   end;
-  ARes := MkNumber(R);
+  Res := MkNumber(R);
   Result := True;
 end;
 
-function CompareSlow(A, B: TValue; var ARes: Integer): Boolean;   { -1 less, 0 equal, 1 greater, 2 undefined (NaN) }
+function CompareSlow(A, B: TValue; var Res: Integer): Boolean;   { -1 less, 0 equal, 1 greater, 2 undefined (NaN) }
 var PA, PB: TValue; DA, DB: Double; C: Integer;
 begin
   PushRoot(B);
@@ -2858,22 +2858,22 @@ begin
     begin
       if IsBigInt(PA) then DA := ValueToBig(PA).ToDouble else DA := PrimitiveToNumber(PA);
       if IsBigInt(PB) then DB := ValueToBig(PB).ToDouble else DB := PrimitiveToNumber(PB);
-      if IsNaN(DA) or IsNaN(DB) then begin ARes := 2; Exit(True); end;
+      if IsNaN(DA) or IsNaN(DB) then begin Res := 2; Exit(True); end;
       if DA < DB then C := -1 else if DA > DB then C := 1 else C := 0;
     end;
-    if C < 0 then ARes := -1 else if C > 0 then ARes := 1 else ARes := 0;
+    if C < 0 then Res := -1 else if C > 0 then Res := 1 else Res := 0;
     Exit(True);
   end;
   if IsString(PA) and IsString(PB) then
   begin
     C := StrCompare(StrOf(PA), StrOf(PB));
-    if C < 0 then ARes := -1 else if C > 0 then ARes := 1 else ARes := 0;
+    if C < 0 then Res := -1 else if C > 0 then Res := 1 else Res := 0;
     Exit(True);
   end;
   DA := PrimitiveToNumber(PA);
   DB := PrimitiveToNumber(PB);
-  if IsNaN(DA) or IsNaN(DB) then ARes := 2
-  else if DA < DB then ARes := -1 else if DA > DB then ARes := 1 else ARes := 0;
+  if IsNaN(DA) or IsNaN(DB) then Res := 2
+  else if DA < DB then Res := -1 else if DA > DB then Res := 1 else Res := 0;
   Result := True;
 end;
 
@@ -2914,16 +2914,16 @@ begin
   end;
 end;
 
-function SpreadIntoArray(AArr, ASrc: TValue): Boolean;
+function SpreadIntoArray(Arr, Src: TValue): Boolean;
 var It, V: TValue; Done: Boolean; E: PValueArray; I, N: Integer;
 begin
   { an array iterated by the intact intrinsics, with all its indices as elements: read them directly (a hole
     reads through the prototype chain, as the iterator's Get would) }
-  if IsObject(ASrc) and (ObjOf(ASrc)^.OKind = okArray) and (ObjOf(ASrc)^.Shape^.Proto = ArrayProto) and
-     ((ObjOf(ASrc)^.OFlags and 64) = 0) and (ShapeLookup(ObjOf(ASrc)^.Shape, SymKey(SymIterator)) < 0) and
+  if IsObject(Src) and (ObjOf(Src)^.OKind = okArray) and (ObjOf(Src)^.Shape^.Proto = ArrayProto) and
+     ((ObjOf(Src)^.OFlags and 64) = 0) and (ShapeLookup(ObjOf(Src)^.Shape, SymKey(SymIterator)) < 0) and
      ArrayIterationIntact then
   begin
-    PushRoot(AArr); PushRoot(ASrc);
+    PushRoot(Arr); PushRoot(Src);
     I := 0;
     while True do
     begin
@@ -2937,8 +2937,8 @@ begin
     PopRoots(2);
     Exit(True);
   end;
-  PushRoot(AArr);
-  if not GetIterator(ASrc, It) then begin PopRoots(1); Exit(False); end;
+  PushRoot(Arr);
+  if not GetIterator(Src, It) then begin PopRoots(1); Exit(False); end;
   PushRoot(It);
   while True do
   begin
@@ -2950,12 +2950,12 @@ begin
   Result := True;
 end;
 
-function CopyDataProps(ATarget, ASrc: TValue): Boolean;
+function CopyDataProps(Target, Src: TValue): Boolean;
 var Keys, V: TValue; I, N: Integer; K: PStr;
 begin
-  if not IsObject(ASrc) then Exit(True);
-  PushRoot(ATarget); PushRoot(ASrc);
-  Keys := OwnKeys(ObjOf(ASrc), True);
+  if not IsObject(Src) then Exit(True);
+  PushRoot(Target); PushRoot(Src);
+  Keys := OwnKeys(ObjOf(Src), True);
   if OwnKeysFailed then begin OwnKeysFailed := False; PopRoots(2); Exit(False); end;
   PushRoot(Keys);
   N := ArrayLen(ObjOf(Keys));
@@ -2969,13 +2969,13 @@ begin
   Result := True;
 end;
 
-function ForInKeys(V: TValue; var AIt: TValue): Boolean;
+function ForInKeys(V: TValue; var It: TValue): Boolean;
 var A, K, P: TValue; I, N: Integer; O: PObj;
 begin
   if not IsObject(V) then
   begin
     A := MkPtr(NewArray(0, 0));
-    AIt := NewArrayIterator(A, 0);
+    It := NewArrayIterator(A, 0);
     Exit(True);
   end;
   PushRoot(V);
@@ -2994,7 +2994,7 @@ begin
     P := ObjOf(RootAt(TempTop - 2))^.Shape^.Proto;
     PopRoots(2);
   end;
-  AIt := NewArrayIterator(RootAt(TempTop - 1), 0);
+  It := NewArrayIterator(RootAt(TempTop - 1), 0);
   PopRoots(2);
   Result := True;
 end;
@@ -3004,12 +3004,12 @@ end;
 threadvar
   GenNextNative: Pointer;
 
-function GeneratorNextIsIntrinsic(AGen: TValue): Boolean;
+function GeneratorNextIsIntrinsic(Gen: TValue): Boolean;
 var F: TValue;
 begin
   Result := False;
-  if ShapeLookup(ObjOf(AGen)^.Shape, AtomNext) >= 0 then Exit;
-  if not GetFromObject(ObjOf(AGen), AtomNext, AGen, F) then begin Pending := VUndefined; Exit; end;
+  if ShapeLookup(ObjOf(Gen)^.Shape, AtomNext) >= 0 then Exit;
+  if not GetFromObject(ObjOf(Gen), AtomNext, Gen, F) then begin Pending := VUndefined; Exit; end;
   Result := IsObject(F) and (ObjOf(F)^.OKind = okNative) and (ObjOf(F)^.Native = GenNextNative);
 end;
 
@@ -3047,28 +3047,28 @@ begin
 end;
 
 { Mode: 0 next, 1 throw, 2 return }
-function GeneratorResume(AGen: TValue; AArg: TValue; AMode: Integer; var AValue: TValue; var ADone: Boolean): Boolean;
+function GeneratorResume(Gen: TValue; Arg: TValue; Mode: Integer; var Value: TValue; var Done: Boolean): Boolean;
 var G: PObj; State: PValueArray; T: PFuncTemplate; Base, I, NH, NU, J, ResumeReg, SavedTop: Integer; Fr: PFrame; U: PUpval;
   Res: TValue; Ok: Boolean;
 begin
-  if not IsObject(AGen) or not (ObjOf(AGen)^.OKind in [okGenerator, okAsyncGen]) then Exit(ThrowTypeError('next method called on incompatible receiver'));
-  G := ObjOf(AGen);
+  if not IsObject(Gen) or not (ObjOf(Gen)^.OKind in [okGenerator, okAsyncGen]) then Exit(ThrowTypeError('next method called on incompatible receiver'));
+  G := ObjOf(Gen);
   case G^.OFlags of
     2: Exit(ThrowTypeError('Generator is already running'));
     3:
       begin
-        ADone := True;
-        if AMode = 1 then begin Pending := AArg; Exit(False); end;
-        if AMode = 2 then AValue := AArg else AValue := VUndefined;
+        Done := True;
+        if Mode = 1 then begin Pending := Arg; Exit(False); end;
+        if Mode = 2 then Value := Arg else Value := VUndefined;
         Exit(True);
       end;
   end;
-  if (G^.OFlags = 0) and (AMode <> 0) then
+  if (G^.OFlags = 0) and (Mode <> 0) then
   begin
     G^.OFlags := 3;
-    ADone := True;
-    if AMode = 1 then begin Pending := AArg; Exit(False); end;
-    AValue := AArg;
+    Done := True;
+    if Mode = 1 then begin Pending := Arg; Exit(False); end;
+    Value := Arg;
     Exit(True);
   end;
   T := PFuncTemplate(ObjOf(G^.Aux1)^.Native);
@@ -3082,14 +3082,14 @@ begin
   if ResumeReg <= -2 then
   begin
     { suspended in yield*: the step op gets the received value and mode and runs again }
-    VStack[Base - ResumeReg - 2] := AArg;
-    VStack[Base - ResumeReg - 1] := MkInt(AMode);
-    AMode := 0;
+    VStack[Base - ResumeReg - 2] := Arg;
+    VStack[Base - ResumeReg - 1] := MkInt(Mode);
+    Mode := 0;
   end
-  else if (ResumeReg >= 0) and (AMode = 0) then VStack[Base + ResumeReg] := AArg;
+  else if (ResumeReg >= 0) and (Mode = 0) then VStack[Base + ResumeReg] := Arg;
   Fr := @Frames[FrameTop];
   Fr^.Closure := G^.Aux1;
-  Fr^.NewTarget := AGen;
+  Fr^.NewTarget := Gen;
   Fr^.Tpl := T;
   Fr^.Base := Base;
   Fr^.PC := G^.Pad;
@@ -3125,62 +3125,62 @@ begin
   end;
   StackTop := Base + T^.MaxRegs;
   G^.OFlags := 2;
-  if AMode = 1 then
+  if Mode = 1 then
   begin
-    Pending := AArg;
+    Pending := Arg;
     InjectThrow := True;
   end
-  else if AMode = 2 then
+  else if Mode = 2 then
   begin
     { 27.5.3.4 GeneratorResumeAbrupt: a return completion at the yield, through the finally blocks }
-    PushRoot(AGen);
-    Pending := NewRetComp(AArg);
-    AGen := RootAt(TempTop - 1);
+    PushRoot(Gen);
+    Pending := NewRetComp(Arg);
+    Gen := RootAt(TempTop - 1);
     PopRoots(1);
     InjectThrow := True;
   end;
   GenYielded := False;
   { the generator may move while it runs: read it back from a root afterwards }
-  PushRoot(AGen);
+  PushRoot(Gen);
   Ok := Execute(FrameTop - 1, Res);
-  AGen := RootAt(TempTop - 1);
+  Gen := RootAt(TempTop - 1);
   PopRoots(1);
   StackTop := SavedTop;
-  G := ObjOf(AGen);
+  G := ObjOf(Gen);
   if not Ok then
   begin
     G^.OFlags := 3;
     if IsRetComp(Pending) then
     begin
-      AValue := ObjOf(Pending)^.Aux1;
+      Value := ObjOf(Pending)^.Aux1;
       Pending := VUndefined;
-      ADone := True;
+      Done := True;
       GenYieldRaw := False;
       Exit(True);
     end;
     Exit(False);
   end;
-  AValue := Res;
+  Value := Res;
   if GenYielded then
   begin
     GenYielded := False;
-    ADone := False;
+    Done := False;
   end
   else
   begin
     G^.OFlags := 3;
-    ADone := True;
+    Done := True;
   end;
   Result := True;
 end;
 
 { runs the instance field initializer of a class constructor on This, if it has one }
-function RunFieldInit(ACtor, AThis: TValue): Boolean;
+function RunFieldInit(Ctor, This: TValue): Boolean;
 var CI: Integer; V: TValue;
 begin
-  CI := ShapeLookup(ObjOf(ACtor)^.Shape, AtomFieldInit);
+  CI := ShapeLookup(ObjOf(Ctor)^.Shape, AtomFieldInit);
   if CI < 0 then Exit(True);
-  Result := CallValue(GetSlot(ObjOf(ACtor), CI), AThis, nil, 0, V);
+  Result := CallValue(GetSlot(ObjOf(Ctor), CI), This, nil, 0, V);
 end;
 
 function DescribeValue(V: TValue): UnicodeString;
@@ -3202,14 +3202,14 @@ end;
 
 { for a failed call: the property or variable the callee register was loaded from, when the previous
   instruction loaded it }
-function CalleeDescription(T: PFuncTemplate; ACallPC, AReg: Integer): UnicodeString;
+function CalleeDescription(T: PFuncTemplate; CallPC, Reg: Integer): UnicodeString;
 var P: Integer; I: QWord;
 begin
   Result := 'value';
-  for P := ACallPC - 1 downto Max(0, ACallPC - 64) do
+  for P := CallPC - 1 downto Max(0, CallPC - 64) do
   begin
     I := T^.Code[P];
-    if ((I shr 8) and $FFFF) <> QWord(AReg) then Continue;
+    if ((I shr 8) and $FFFF) <> QWord(Reg) then Continue;
     case TOp(I and $FF) of
       opGetProp, opGetLength, opGetGlobal: Exit(StrToUnicode(T^.ICs[I shr 40].Key));
       opGetSuper: if SarInt64(Int64(I), 40) >= 0 then Exit('super.' + StrToUnicode(T^.ICs[I shr 40].Key));
@@ -3220,55 +3220,55 @@ end;
 
 { ---------------- private elements (7.3.31 PrivateGet, 7.3.32 PrivateSet) ---------------- }
 
-function PrivateGet(AObj: TValue; AKey: PStr; var V: TValue): Boolean;
+function PrivateGet(Obj: TValue; Key: PStr; var V: TValue): Boolean;
 var O: PObj; CI: Integer; A: PAccessor;
 begin
-  if not IsObject(AObj) then Exit(ThrowTypeError('Cannot read private member ' + StrToUnicode(AKey) + ' from a primitive'));
-  O := ObjOf(AObj);
-  CI := ShapeLookup(O^.Shape, AKey);
+  if not IsObject(Obj) then Exit(ThrowTypeError('Cannot read private member ' + StrToUnicode(Key) + ' from a primitive'));
+  O := ObjOf(Obj);
+  CI := ShapeLookup(O^.Shape, Key);
   if CI < 0 then
-    Exit(ThrowTypeError('Cannot read private member ' + StrToUnicode(AKey) + ' from an object whose class did not declare it'));
+    Exit(ThrowTypeError('Cannot read private member ' + StrToUnicode(Key) + ' from an object whose class did not declare it'));
   if (O^.Shape^.PFlags[CI] and pfAccessor) = 0 then begin V := GetSlot(O, CI); Exit(True); end;
   A := PAccessor(PtrOf(GetSlot(O, CI)));
-  if not IsCallable(A^.Getter) then Exit(ThrowTypeError('''' + StrToUnicode(AKey) + ''' was defined without a getter'));
-  Result := CallValue(A^.Getter, AObj, nil, 0, V);
+  if not IsCallable(A^.Getter) then Exit(ThrowTypeError('''' + StrToUnicode(Key) + ''' was defined without a getter'));
+  Result := CallValue(A^.Getter, Obj, nil, 0, V);
 end;
 
-function PrivateSet(AObj: TValue; AKey: PStr; V: TValue): Boolean;
+function PrivateSet(Obj: TValue; Key: PStr; V: TValue): Boolean;
 var O: PObj; CI: Integer; F: Byte; A: PAccessor; R: TValue;
 begin
-  if not IsObject(AObj) then Exit(ThrowTypeError('Cannot write private member ' + StrToUnicode(AKey) + ' to a primitive'));
-  O := ObjOf(AObj);
-  CI := ShapeLookup(O^.Shape, AKey);
+  if not IsObject(Obj) then Exit(ThrowTypeError('Cannot write private member ' + StrToUnicode(Key) + ' to a primitive'));
+  O := ObjOf(Obj);
+  CI := ShapeLookup(O^.Shape, Key);
   if CI < 0 then
-    Exit(ThrowTypeError('Cannot write private member ' + StrToUnicode(AKey) + ' to an object whose class did not declare it'));
+    Exit(ThrowTypeError('Cannot write private member ' + StrToUnicode(Key) + ' to an object whose class did not declare it'));
   F := O^.Shape^.PFlags[CI];
   if (F and pfAccessor) <> 0 then
   begin
     A := PAccessor(PtrOf(GetSlot(O, CI)));
-    if not IsCallable(A^.Setter) then Exit(ThrowTypeError('''' + StrToUnicode(AKey) + ''' was defined without a setter'));
-    Exit(CallValue(A^.Setter, AObj, @V, 1, R));
+    if not IsCallable(A^.Setter) then Exit(ThrowTypeError('''' + StrToUnicode(Key) + ''' was defined without a setter'));
+    Exit(CallValue(A^.Setter, Obj, @V, 1, R));
   end;
-  if (F and pfWritable) = 0 then Exit(ThrowTypeError('Private method ' + StrToUnicode(AKey) + ' is not writable'));
+  if (F and pfWritable) = 0 then Exit(ThrowTypeError('Private method ' + StrToUnicode(Key) + ' is not writable'));
   SetSlot(O, CI, V);
   Result := True;
 end;
 
 { 7.3.7 CreateDataPropertyOrThrow for class fields }
-function CreateDataPropOrThrow(AObj: TValue; AKey: PStr; V: TValue): Boolean;
+function CreateDataPropOrThrow(Obj: TValue; Key: PStr; V: TValue): Boolean;
 var O: PObj; CI: Integer; Idx: Int64;
 begin
-  O := ObjOf(AObj);
-  if (O^.OKind = okArray) and IndexFromString(AKey, Idx) then Exit(SetElemV(AObj, MkPtr(AKey), V));
-  CI := ShapeLookup(O^.Shape, AKey);
+  O := ObjOf(Obj);
+  if (O^.OKind = okArray) and IndexFromString(Key, Idx) then Exit(SetElemV(Obj, MkPtr(Key), V));
+  CI := ShapeLookup(O^.Shape, Key);
   if CI >= 0 then
   begin
     if (O^.Shape^.PFlags[CI] and pfConfigurable) = 0 then
-      Exit(ThrowTypeError('Cannot redefine property: ' + StrToUnicode(AKey)));
+      Exit(ThrowTypeError('Cannot redefine property: ' + StrToUnicode(Key)));
   end
   else if (O^.OFlags and 8) <> 0 then
-    Exit(ThrowTypeError('Cannot define property ' + StrToUnicode(AKey) + ', object is not extensible'));
-  DefineOwn(AObj, AKey, V, pfDefault);
+    Exit(ThrowTypeError('Cannot define property ' + StrToUnicode(Key) + ', object is not extensible'));
+  DefineOwn(Obj, Key, V, pfDefault);
   Result := True;
 end;
 
@@ -3295,7 +3295,7 @@ end;
 { the running generator frame (the newest) suspends: its registers, the resume code (>= 0 a register for the
   resumption value, <= -2 a yield* step's received value / mode registers) and its handlers go into its
   generator object; it resumes at ResumePC }
-procedure SaveSuspension(AFr: PFrame; ATpl: PFuncTemplate; R: PValue; AResumeCode, AResumePC: Integer);
+procedure SaveSuspension(Fr: PFrame; Tpl: PFuncTemplate; R: PValue; ResumeCode, ResumePC: Integer);
 var NP, NU, J, Off: Integer; O: PObj; E: PValueArray;
 begin
   NP := 0;
@@ -3303,46 +3303,46 @@ begin
   { the frame's open upvalues (closures made in it): closed now, reopened on its registers when it resumes, so
     the closures and the frame keep sharing the variables }
   NU := 0;
-  while (OpenCount - 1 - NU >= 0) and (PUpval(PtrOf(OpenUpvals[OpenCount - 1 - NU]))^.StackIndex >= AFr^.Base) do Inc(NU);
-  O := ObjOf(AFr^.NewTarget);
+  while (OpenCount - 1 - NU >= 0) and (PUpval(PtrOf(OpenUpvals[OpenCount - 1 - NU]))^.StackIndex >= Fr^.Base) do Inc(NU);
+  O := ObjOf(Fr^.NewTarget);
   E := PValueArray(PtrOf(O^.Aux2));
-  if Integer(E^.Cap) < ATpl^.MaxRegs + 3 + NP * 2 + NU * 2 then
+  if Integer(E^.Cap) < Tpl^.MaxRegs + 3 + NP * 2 + NU * 2 then
   begin
-    E := NewValueArray(ATpl^.MaxRegs + 3 + NP * 2 + NU * 2);
-    O := ObjOf(AFr^.NewTarget);
+    E := NewValueArray(Tpl^.MaxRegs + 3 + NP * 2 + NU * 2);
+    O := ObjOf(Fr^.NewTarget);
     O^.Aux2 := MkPtr(E);
     WriteBarrier(@O^.Hdr, O^.Aux2);
   end;
-  E^.Len := ATpl^.MaxRegs + 3 + NP * 2 + NU * 2;
-  for J := 0 to ATpl^.MaxRegs - 1 do E^.Data[J] := R[J];
-  E^.Data[ATpl^.MaxRegs] := MkInt(AResumeCode);
-  E^.Data[ATpl^.MaxRegs + 1] := MkInt(NP);
+  E^.Len := Tpl^.MaxRegs + 3 + NP * 2 + NU * 2;
+  for J := 0 to Tpl^.MaxRegs - 1 do E^.Data[J] := R[J];
+  E^.Data[Tpl^.MaxRegs] := MkInt(ResumeCode);
+  E^.Data[Tpl^.MaxRegs + 1] := MkInt(NP);
   for J := 0 to NP - 1 do
   begin
-    E^.Data[ATpl^.MaxRegs + 2 + J * 2] := MkInt(Handlers[HandlerTop - NP + J].PC or (Handlers[HandlerTop - NP + J].Kind shl 28));
-    E^.Data[ATpl^.MaxRegs + 3 + J * 2] := MkInt(Handlers[HandlerTop - NP + J].ExcIdx - AFr^.Base);
+    E^.Data[Tpl^.MaxRegs + 2 + J * 2] := MkInt(Handlers[HandlerTop - NP + J].PC or (Handlers[HandlerTop - NP + J].Kind shl 28));
+    E^.Data[Tpl^.MaxRegs + 3 + J * 2] := MkInt(Handlers[HandlerTop - NP + J].ExcIdx - Fr^.Base);
   end;
-  Off := ATpl^.MaxRegs + 2 + NP * 2;
+  Off := Tpl^.MaxRegs + 2 + NP * 2;
   E^.Data[Off] := MkInt(NU);
   for J := 0 to NU - 1 do
   begin
     E^.Data[Off + 1 + J * 2] := OpenUpvals[OpenCount - NU + J];
-    E^.Data[Off + 2 + J * 2] := MkInt(PUpval(PtrOf(OpenUpvals[OpenCount - NU + J]))^.StackIndex - AFr^.Base);
+    E^.Data[Off + 2 + J * 2] := MkInt(PUpval(PtrOf(OpenUpvals[OpenCount - NU + J]))^.StackIndex - Fr^.Base);
   end;
   if (E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld then Remember(@E^.Hdr);
   Dec(HandlerTop, NP);
-  O^.Pad := AResumePC;
+  O^.Pad := ResumePC;
   O^.OFlags := 1;
-  CloseUpvals(AFr^.Base);
+  CloseUpvals(Fr^.Base);
   Dec(FrameTop);
   GenYielded := True;
 end;
 
 { SaveSuspension can collect (it may grow the state array): V, the value the suspension hands out, stays rooted }
-procedure SuspendKeep(AFr: PFrame; ATpl: PFuncTemplate; R: PValue; AResumeCode, AResumePC: Integer; var V: TValue);
+procedure SuspendKeep(Fr: PFrame; Tpl: PFuncTemplate; R: PValue; ResumeCode, ResumePC: Integer; var V: TValue);
 begin
   PushRoot(V);
-  SaveSuspension(AFr, ATpl, R, AResumeCode, AResumePC);
+  SaveSuspension(Fr, Tpl, R, ResumeCode, ResumePC);
   V := RootAt(TempTop - 1);
   PopRoots(1);
 end;
@@ -3350,29 +3350,29 @@ end;
 { ---- Execute's cold paths: their strings out of its frame (managed temporaries would be initialized and
   finalized, under an exception frame, on every entry to Execute) ---- }
 
-function XThrowNotDefined(AKey: PStr): Boolean; noinline;
+function XThrowNotDefined(Key: PStr): Boolean; noinline;
 begin
-  Result := ThrowError('ReferenceError', StrToUnicode(AKey) + ' is not defined');
+  Result := ThrowError('ReferenceError', StrToUnicode(Key) + ' is not defined');
 end;
 
-function XPrivateKey(AName: PStr): PStr; noinline;
+function XPrivateKey(Name: PStr): PStr; noinline;
 begin
-  Result := NewKeyAtom(StrToUnicode(AName), kfPrivate);
+  Result := NewKeyAtom(StrToUnicode(Name), kfPrivate);
 end;
 
-function XThrowInitTwice(AKey: PStr): Boolean; noinline;
+function XThrowInitTwice(Key: PStr): Boolean; noinline;
 begin
-  Result := ThrowTypeError('Cannot initialize ' + StrToUnicode(AKey) + ' twice on the same object');
+  Result := ThrowTypeError('Cannot initialize ' + StrToUnicode(Key) + ' twice on the same object');
 end;
 
-function XThrowCannotDelete(AKey: PStr): Boolean; noinline;
+function XThrowCannotDelete(Key: PStr): Boolean; noinline;
 begin
-  Result := ThrowTypeError('Cannot delete property ''' + StrToUnicode(AKey) + ''' of object');
+  Result := ThrowTypeError('Cannot delete property ''' + StrToUnicode(Key) + ''' of object');
 end;
 
-function XThrowNotFunction(ATpl: PFuncTemplate; APC, A: Integer): Boolean; noinline;
+function XThrowNotFunction(Tpl: PFuncTemplate; PC, A: Integer): Boolean; noinline;
 begin
-  Result := ThrowTypeError(CalleeDescription(ATpl, APC, A) + ' is not a function');
+  Result := ThrowTypeError(CalleeDescription(Tpl, PC, A) + ' is not a function');
 end;
 
 function XThrowNotCtor(T: PFuncTemplate): Boolean; noinline;
@@ -3380,33 +3380,33 @@ begin
   Result := ThrowTypeError(StrToUnicode(T^.Name) + ' is not a constructor');
 end;
 
-function XThrowTDZ(AKey: PStr): Boolean; noinline;
+function XThrowTDZ(Key: PStr): Boolean; noinline;
 begin
-  Result := ThrowError('ReferenceError', 'Cannot access ''' + StrToUnicode(AKey) + ''' before initialization');
+  Result := ThrowError('ReferenceError', 'Cannot access ''' + StrToUnicode(Key) + ''' before initialization');
 end;
 
-function XThrowReadOnlySuper(AKey: PStr): Boolean; noinline;
+function XThrowReadOnlySuper(Key: PStr): Boolean; noinline;
 begin
-  Result := ThrowTypeError('Cannot assign to read only property ''' + StrToUnicode(AKey) + ''' through super');
+  Result := ThrowTypeError('Cannot assign to read only property ''' + StrToUnicode(Key) + ''' through super');
 end;
 
-function XThrowUnimplemented(AOp: Integer): Boolean; noinline;
+function XThrowUnimplemented(Op: Integer): Boolean; noinline;
 begin
-  Result := ThrowError('Error', 'unimplemented opcode ' + IntToStr(AOp));
+  Result := ThrowError('Error', 'unimplemented opcode ' + IntToStr(Op));
 end;
 
-procedure XReportRootImbalance(O: PObj; ADelta: Integer; AOk: Boolean; ATpl: PFuncTemplate); noinline;
+procedure XReportRootImbalance(O: PObj; Delta: Integer; Ok: Boolean; Tpl: PFuncTemplate); noinline;
 begin
-  if IsString(O^.Aux1) then WriteLn(ErrOutput, 'root imbalance ', ADelta, ' after native ',
-    UTF8Encode(StrToUnicode(StrOf(O^.Aux1))), ' ok=', AOk, ' in ', DescribeTemplate(ATpl))
-  else WriteLn(ErrOutput, 'root imbalance ', ADelta, ' after an unnamed native ok=', AOk, ' in ', DescribeTemplate(ATpl));
+  if IsString(O^.Aux1) then WriteLn(ErrOutput, 'root imbalance ', Delta, ' after native ',
+    UTF8Encode(StrToUnicode(StrOf(O^.Aux1))), ' ok=', Ok, ' in ', DescribeTemplate(Tpl))
+  else WriteLn(ErrOutput, 'root imbalance ', Delta, ' after an unnamed native ok=', Ok, ' in ', DescribeTemplate(Tpl));
 end;
 
-procedure XReportBadUps(J, AGcBefore, AReg, ABase: Integer; ATpl: PFuncTemplate); noinline;
+procedure XReportBadUps(J, GcBefore, Reg, Base: Integer; Tpl: PFuncTemplate); noinline;
 begin
-  WriteLn(ErrOutput, 'opClosure: ups went bad at J=', J, ' gc before ', AGcBefore, ' after ', GCMinorCount,
-    ' StackTop ', StackTop, ' reg ', AReg, ' base ', ABase, ' maxregs ', ATpl^.MaxRegs, ' frames ', FrameTop,
-    ' fn ', DescribeTemplate(ATpl));
+  WriteLn(ErrOutput, 'opClosure: ups went bad at J=', J, ' gc before ', GcBefore, ' after ', GCMinorCount,
+    ' StackTop ', StackTop, ' reg ', Reg, ' base ', Base, ' maxregs ', Tpl^.MaxRegs, ' frames ', FrameTop,
+    ' fn ', DescribeTemplate(Tpl));
 end;
 
 procedure XTraceThrow; noinline;
@@ -3434,7 +3434,7 @@ begin
   Result := BigToValue(ValueToBig(V).Negate);
 end;
 
-function Execute(AStopFrame: Integer; var ARes: TValue): Boolean;
+function Execute(StopFrame: Integer; var Res: TValue): Boolean;
 label LThrow, LReload, LNext;
 var
   Fr: PFrame;
@@ -3484,7 +3484,7 @@ LReload:
     A := (I shr 8) and $FFFF;
     {$IFDEF G2_OPSTATS}Inc(OpCounts[I and $FF]); Inc(PairCounts[PrevOp * 256 + (I and $FF)]); PrevOp := I and $FF;{$ENDIF}
     case TOp(I and $FF) of
-      opNop:;
+      opNop: ;
       opMov: R[A] := R[(I shr 24) and $FFFF];
       opLoadK: R[A] := K[I shr 40];
       opLoadI: R[A] := MkInt(SarInt64(Int64(I), 40));
@@ -4456,9 +4456,9 @@ LReload:
           CloseUpvals(Fr^.Base);
           while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
           Dec(FrameTop);
-          if FrameTop = AStopFrame then
+          if FrameTop = StopFrame then
           begin
-            ARes := V;
+            Res := V;
             Exit(True);
           end;
           if Fr^.Kind <> 2 then VStack[Fr^.RetIdx] := V;
@@ -4817,7 +4817,7 @@ LReload:
             Continue;
           end;
           { yield the inner result as is; resume here with the next received value and mode }
-          if (Fr^.Kind <> 3) or (FrameTop - 1 <> AStopFrame) then
+          if (Fr^.Kind <> 3) or (FrameTop - 1 <> StopFrame) then
           begin
             ThrowError('SyntaxError', 'yield outside a running generator');
             goto LThrow;
@@ -4826,7 +4826,7 @@ LReload:
           SuspendKeep(Fr, Tpl, R, -(B + 2) - 2, PC - 1, V);   { the step runs again }
           GenYieldRaw := True;
           SuspendedByAwait := False;
-          ARes := V;
+          Res := V;
           Exit(True);
         end;
       opLoadCallee: R[A] := Fr^.Closure;
@@ -4932,7 +4932,7 @@ LReload:
             2 throw without a throw method: the closing return() result awaited, then a TypeError; 4 return
             without a return method: the received value awaited, then the return }
           Fr^.PC := PC;
-          if (Fr^.Kind <> 3) or (FrameTop - 1 <> AStopFrame) then
+          if (Fr^.Kind <> 3) or (FrameTop - 1 <> StopFrame) then
           begin
             ThrowError('SyntaxError', 'yield outside a running generator');
             goto LThrow;
@@ -4985,7 +4985,7 @@ LReload:
                 SuspendKeep(Fr, Tpl, R, B + 2, PC - 1, VA);
                 SuspendedByAwait := True;
                 GenYieldRaw := False;
-                ARes := VA;
+                Res := VA;
                 Exit(True);
               end;
             1, 3:
@@ -5002,7 +5002,7 @@ LReload:
                     SuspendKeep(Fr, Tpl, R, B + 2, PC - 1, V);
                     SuspendedByAwait := True;
                     GenYieldRaw := False;
-                    ARes := V;
+                    Res := V;
                     Exit(True);
                   end;
                   R[B + 4] := MkInt(0);
@@ -5014,7 +5014,7 @@ LReload:
                 SuspendKeep(Fr, Tpl, R, -(B + 2) - 2, PC - 1, V);
                 SuspendedByAwait := False;
                 GenYieldRaw := False;
-                ARes := V;
+                Res := V;
                 Exit(True);
               end;
             2:
@@ -5095,7 +5095,7 @@ LReload:
         begin
           Fr^.PC := PC;
           SuspendedByAwait := TOp(I and $FF) = opAwait;
-          if (Fr^.Kind <> 3) or (FrameTop - 1 <> AStopFrame) then
+          if (Fr^.Kind <> 3) or (FrameTop - 1 <> StopFrame) then
           begin
             ThrowError('SyntaxError', 'yield outside a running generator');
             goto LThrow;
@@ -5103,7 +5103,7 @@ LReload:
           { SaveSuspension may grow the state array (a collection): the value is read back from a root }
           PushRoot(R[(I shr 24) and $FFFF]);
           SaveSuspension(Fr, Tpl, R, A, PC);
-          ARes := RootAt(TempTop - 1);
+          Res := RootAt(TempTop - 1);
           PopRoots(1);
           Exit(True);
         end;
@@ -5129,9 +5129,9 @@ LReload:
           V := Fr^.NewTarget;
           ObjOf(V)^.OFlags := 0;   { suspended start }
           if Tpl^.IsAsync then V := AsyncGenStartHook(V);
-          if FrameTop = AStopFrame then
+          if FrameTop = StopFrame then
           begin
-            ARes := V;
+            Res := V;
             Exit(True);
           end;
           if Fr^.Kind <> 2 then VStack[Fr^.RetIdx] := V;
@@ -5196,9 +5196,9 @@ LThrow:
     if ThrowTrace then XTraceThrow;
     { find a handler in a frame this activation owns; a generator's return completion passes catch handlers }
     if IsRetComp(Pending) then
-      while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= AStopFrame) and (Handlers[HandlerTop - 1].Kind = 0) do
+      while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= StopFrame) and (Handlers[HandlerTop - 1].Kind = 0) do
         Dec(HandlerTop);
-    if (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= AStopFrame) then
+    if (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= StopFrame) then
     begin
       Dec(HandlerTop);
       H := @Handlers[HandlerTop];
@@ -5212,12 +5212,12 @@ LThrow:
       Pending := VUndefined;
       goto LReload;
     end;
-    while FrameTop > AStopFrame do
+    while FrameTop > StopFrame do
     begin
       CloseUpvals(Frames[FrameTop - 1].Base);
       Dec(FrameTop);
     end;
-    ARes := VUndefined;
+    Res := VUndefined;
     Exit(False);
   end;
 end;
@@ -5287,23 +5287,23 @@ begin
   GenNextNative := P;
 end;
 
-function FnShapeFor(AProto: TValue): PShape;
+function FnShapeFor(Proto: TValue): PShape;
 begin
-  Result := ShapeAdd(ShapeAdd(RootShapeFor(AProto), AtomOf('length'), pfConfigurable), AtomOf('name'), pfConfigurable);
+  Result := ShapeAdd(ShapeAdd(RootShapeFor(Proto), AtomOf('length'), pfConfigurable), AtomOf('name'), pfConfigurable);
 end;
 
-procedure SetFnNameFromKey(F: TValue; AKey: PStr; const APrefix: UnicodeString);
+procedure SetFnNameFromKey(F: TValue; Key: PStr; const Prefix: UnicodeString);
 var N: UnicodeString; S: TValue;
 begin
-  if (AKey^.Hdr.Extra and kfSymbol) <> 0 then
+  if (Key^.Hdr.Extra and kfSymbol) <> 0 then
   begin
     { [description], or empty without one }
-    S := PValue(PByte(PtrOf(KeyPayload(AKey)^)) + 8)^;
+    S := PValue(PByte(PtrOf(KeyPayload(Key)^)) + 8)^;
     if IsString(S) and (StrOf(S)^.Len > 0) then N := '[' + StrToUnicode(StrOf(S)) + ']' else N := '';
   end
-  else if (AKey^.Hdr.Extra and kfPrivate) <> 0 then N := StrToUnicode(AKey)
-  else N := StrToUnicode(AKey);
-  if APrefix <> '' then N := APrefix + ' ' + N;
+  else if (Key^.Hdr.Extra and kfPrivate) <> 0 then N := StrToUnicode(Key)
+  else N := StrToUnicode(Key);
+  if Prefix <> '' then N := Prefix + ' ' + N;
   PushRoot(F);
   S := StrFromUnicode(N);
   DefineOwn(RootAt(TempTop - 1), AtomName, S, pfConfigurable);
@@ -5315,9 +5315,9 @@ begin
   FunctionShape := FnShapeFor(P);
 end;
 
-function MakeScriptClosure(T: PFuncTemplate; var AClo: TValue): Boolean;
+function MakeScriptClosure(T: PFuncTemplate; var Clo: TValue): Boolean;
 begin
-  AClo := MkPtr(NewClosure(T, VUndefined));
+  Clo := MkPtr(NewClosure(T, VUndefined));
   Result := True;
 end;
 
@@ -5332,16 +5332,16 @@ begin
   Result := Execute(0, Res);
 end;
 
-function RunScriptRes(T: PFuncTemplate; var ARes: TValue): Boolean;
+function RunScriptRes(T: PFuncTemplate; var Res: TValue): Boolean;
 var Clo: PObj;
 begin
   FunctionShape := FnShapeFor(FunctionProto);
   Clo := NewClosure(T, VUndefined);
   VStack[0] := VUndefined;
   StackTop := 1;
-  ARes := VUndefined;
+  Res := VUndefined;
   if not PushBytecodeFrame(Clo, GlobalObj, @VStack[1], 0, 0, 2, VUndefined) then Exit(False);   { a Script's this: the global object }
-  Result := Execute(0, ARes);
+  Result := Execute(0, Res);
 end;
 
 end.

@@ -57,7 +57,7 @@ for anything near allocation or rooting, a GC stress run:
 
 ```sh
 G2_TEST262=/path/to/test262 G2_WT_DIR=/path/to/wt-verify sh scripts/g2/gate.sh NEW BASE
-G2_WT_DIR=... G2_JS_DIR=/path/to/jetstream sh scripts/g2/gcstress.sh
+G2_WT_DIR=... G2_JS_DIR=/path/to/jetstream scripts/g2/gcstress.sh
 G2_QJS=/path/to/qjs G2_WT_DIR=... G2_JS_DIR=... scripts/g2/wallclock.sh build/g2/g2 [other-g2]
 ```
 
@@ -67,13 +67,15 @@ with a 256 KB nursery and `--gc-verify`. The digest bundles print `DIGEST n:hash
 
 ## Changes to Goccia's front end
 
-G2 uses `source/units` as it is, with three additions on this branch:
+G2 uses `source/units` as it is, with two additions on this branch:
 
 - `Goccia.Values.FunctionBase`: `{$OPTIMIZATION NODFA}` under FPC 3.3.1 and later, whose DFA pass hangs on
   `ConstructValue` at -O3 and above.
 - `Goccia.Lexer`: `#` must be followed directly by an identifier name (`# x` is a SyntaxError).
-- `Goccia.RegExp.Compiler`: an always-consuming atom repeated 2^30 times or more compiles to a failing match
-  instead of an error (no string that long fits in memory).
+
+Goccia's RegExp compiler rejects a repetition count too large to copy; G2 treats that as a limit of the
+implementation rather than an early error, so such a literal throws when it is evaluated instead of when the
+script is parsed.
 
 ## Working rules
 
@@ -82,5 +84,8 @@ G2 uses `source/units` as it is, with three additions on this branch:
 - Keep strings, dynamic arrays and other managed temporaries out of hot functions and out of `Execute`:
   FPC gives such a function an exception frame and initialize / finalize calls on every call. Put the cold
   path in a `noinline` helper, and check hot functions' disassembly for `fpc_pushexceptaddr`.
+- G2's Pascal is outside `./format.pas` (which covers `source/app`, `source/units` and `source/shared`), and
+  the pre-commit format hook skips `source/g2`: the formatter's parameter renaming does not follow G2's nested
+  routines and `with` blocks.
 - Write a built-in in a prelude when its spec steps are what matter and its speed does not; keep a native fast
   path, guarded on the objects involved being unmodified, where it does.

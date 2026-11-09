@@ -12,18 +12,13 @@ procedure InitDisposal;
 implementation
 
 uses
-  SysUtils,
-
-  G2.Bytecode,
-  G2.Core,
-  G2.Snapshot,
-  G2.VM;
+  SysUtils, G2.Core, G2.Bytecode, G2.VM, G2.Snapshot;
 
 {$I G2.Disposal.inc}
 
-function IsRetComp_Native(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function IsRetComp_Native(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := MkBool((AArgc >= 1) and IsRetCompV(AArgs[1]));
+  Res := MkBool((Argc >= 1) and IsRetCompV(Args[1]));
   Result := True;
 end;
 

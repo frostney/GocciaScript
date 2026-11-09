@@ -7,9 +7,7 @@ unit G2.Bytecode;
 interface
 
 uses
-  G2.Core,
-
-  Goccia.SourceSpan;
+  G2.Core, Goccia.SourceSpan;
 
 type
   TOp = (
@@ -163,7 +161,7 @@ type
     ModuleId: Integer;            { the Source Text Module Record (G2.Modules) whose code this is, 0 none }
   end;
 
-function Ins(AOp: TOp; A, B: Integer; C: Integer): QWord; inline;
+function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;
 function InsOp(I: QWord): TOp; inline;
 function InsA(I: QWord): Integer; inline;
 function InsB(I: QWord): Integer; inline;
@@ -192,9 +190,9 @@ begin
   Result := Text = '';
 end;
 
-function Ins(AOp: TOp; A, B: Integer; C: Integer): QWord; inline;
+function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;
 begin
-  Result := QWord(Ord(AOp)) or (QWord(A and $FFFF) shl 8) or (QWord(B and $FFFF) shl 24) or
+  Result := QWord(Ord(Op)) or (QWord(A and $FFFF) shl 8) or (QWord(B and $FFFF) shl 24) or
     (QWord(C and $FFFFFF) shl 40);
 end;
 function InsOp(I: QWord): TOp; inline; begin Result := TOp(I and $FF); end;

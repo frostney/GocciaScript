@@ -20,12 +20,7 @@ procedure InitArrayProto;
 implementation
 
 uses
-  Math,
-  SysUtils,
-
-  G2.Core,
-  G2.ObjModel,
-  G2.VM;
+  SysUtils, Math, G2.Core, G2.VM, G2.ObjModel;
 
 const
   MAX_SAFE = 9007199254740991.0;   { 2^53 - 1 }
@@ -40,9 +35,9 @@ threadvar
   ArrayCtorV, ArraySpeciesFn: TValue;   { %Array% and its @@species getter, for ArraySpeciesCreate's fast case }
   JoinStack: TValue;            { arrays being joined: a cycle joins as the empty string }
 
-function Arg(AArgs: TArgs; AArgc, I: Integer): TValue; inline;
+function Arg(Args: TArgs; Argc, I: Integer): TValue; inline;
 begin
-  if I <= AArgc then Result := AArgs[I] else Result := VUndefined;
+  if I <= Argc then Result := Args[I] else Result := VUndefined;
 end;
 
 function ShapeHasIndex(S: PShape): Boolean;
@@ -102,16 +97,16 @@ begin
 end;
 
 { 7.3.12 HasProperty(O, ToString(K)) }
-function HasIdx(O: TValue; K: Int64; var AHas: Boolean): Boolean;
+function HasIdx(O: TValue; K: Int64; var Has: Boolean): Boolean;
 var E: PValueArray;
 begin
   if FastArr(O) then
   begin
     E := ObjOf(O)^.Elements;
-    AHas := (K < E^.Len) and (E^.Data[K] <> VHole);
+    Has := (K < E^.Len) and (E^.Data[K] <> VHole);
     Exit(True);
   end;
-  Result := HasPropertyV(O, IdxKey(K), AHas);
+  Result := HasPropertyV(O, IdxKey(K), Has);
 end;
 
 { 7.3.2 Get(O, ToString(K)) }
@@ -167,15 +162,15 @@ begin
 end;
 
 { 7.3.10 DeletePropertyOrThrow }
-function DeleteKeyOrThrow(O: TValue; AKey: PStr): Boolean;
+function DeleteKeyOrThrow(O: TValue; Key: PStr): Boolean;
 var Ok: Boolean;
 begin
   if ObjOf(O)^.OKind = okProxy then
   begin
-    if not ProxyDelete(O, AKey, Ok) then Exit(False);
+    if not ProxyDelete(O, Key, Ok) then Exit(False);
   end
-  else Ok := DeleteIfConfigurable(ObjOf(O), AKey);
-  if not Ok then Exit(ThrowTypeError('Cannot delete property ''' + StrToUnicode(AKey) + ''''));
+  else Ok := DeleteIfConfigurable(ObjOf(O), Key);
+  if not Ok then Exit(ThrowTypeError('Cannot delete property ''' + StrToUnicode(Key) + ''''));
   Result := True;
 end;
 
@@ -214,27 +209,27 @@ begin
 end;
 
 { a relative index (start / end arguments): undefined is Default, then clamped to 0 .. Len }
-function RelIdx(V: TValue; ALen, ADefault: Int64; var R: Int64): Boolean;
+function RelIdx(V: TValue; Len, Default: Int64; var R: Int64): Boolean;
 var D: Double;
 begin
-  if V = VUndefined then begin R := ADefault; Exit(True); end;
+  if V = VUndefined then begin R := Default; Exit(True); end;
   if not ToIntInf(V, D) then Exit(False);
   if D < 0 then
   begin
-    D := ALen + D;
+    D := Len + D;
     if D < 0 then D := 0;
   end
-  else if D > ALen then D := ALen;
+  else if D > Len then D := Len;
   R := Trunc(D);
   Result := True;
 end;
 
-function ToObj(AArgs: TArgs): Boolean; inline;
+function ToObj(Args: TArgs): Boolean; inline;
 var O: TValue;
 begin
-  if IsObject(AArgs[0]) then Exit(True);
-  if not ToObjectV(AArgs[0], O) then Exit(False);
-  AArgs[0] := O;
+  if IsObject(Args[0]) then Exit(True);
+  if not ToObjectV(Args[0], O) then Exit(False);
+  Args[0] := O;
   Result := True;
 end;
 
@@ -254,12 +249,12 @@ begin
 end;
 
 { 10.4.2.2 ArrayCreate }
-function ArrayCreate(ALen: Int64; var A: TValue): Boolean;
+function ArrayCreate(Len: Int64; var A: TValue): Boolean;
 begin
-  if ALen > 4294967295 then Exit(ThrowError('RangeError', 'Invalid array length'));
-  if ALen > 64 * 1024 * 1024 then
+  if Len > 4294967295 then Exit(ThrowError('RangeError', 'Invalid array length'));
+  if Len > 64 * 1024 * 1024 then
     Exit(ThrowError('RangeError', 'Array length beyond G2''s dense arrays (no sparse arrays yet)'));
-  A := MkPtr(NewArray(ALen, ALen));
+  A := MkPtr(NewArray(Len, Len));
   Result := True;
 end;
 
@@ -280,22 +275,22 @@ begin
   Result := PAccessor(PtrOf(GetSlot(C, S)))^.Getter = ArraySpeciesFn;
 end;
 
-function ArraySpeciesCreate(O: TValue; ALen: Int64; var A: TValue): Boolean;
+function ArraySpeciesCreate(O: TValue; Len: Int64; var A: TValue): Boolean;
 var IsArr: Boolean; C: TValue; LV: TValue;
 begin
-  if SpeciesIntact(O) then Exit(ArrayCreate(ALen, A));
+  if SpeciesIntact(O) then Exit(ArrayCreate(Len, A));
   if not IsArrayV(O, IsArr) then Exit(False);
-  if not IsArr then Exit(ArrayCreate(ALen, A));
+  if not IsArr then Exit(ArrayCreate(Len, A));
   if not GetV(O, AtomConstructor, C) then Exit(False);
   if IsObject(C) then
   begin
     if not GetElemV(C, SymSpecies, C) then Exit(False);
     if C = VNull then C := VUndefined;
   end;
-  if C = VUndefined then Exit(ArrayCreate(ALen, A));
+  if C = VUndefined then Exit(ArrayCreate(Len, A));
   if not IsConstructorV(C) then Exit(ThrowTypeError('object.constructor[Symbol.species] is not a constructor'));
-  if C = ArrayCtorV then Exit(ArrayCreate(ALen, A));   { %Array%(len) }
-  LV := IdxVal(ALen);
+  if C = ArrayCtorV then Exit(ArrayCreate(Len, A));   { %Array%(len) }
+  LV := IdxVal(Len);
   Result := Construct(C, @LV, 1, C, A);
 end;
 
@@ -305,35 +300,35 @@ type
   TIterKind = (ikForEach, ikMap, ikFilter, ikSome, ikEvery);
 
 { 23.1.3.15 forEach, .21 map, .8 filter, .29 some, .6 every }
-function IterateCB(AArgs: TArgs; AArgc: Integer; var ARes: TValue; AKind: TIterKind): Boolean;
+function IterateCB(Args: TArgs; Argc: Integer; var Res: TValue; Kind: TIterKind): Boolean;
 var Len, K, ToIdx: Int64; Has: Boolean; V, R, A: TValue; CB: array[0..2] of TValue; Base: Integer;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not IsCallable(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('callback is not a function'));
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not IsCallable(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('callback is not a function'));
   A := VUndefined;
-  if AKind = ikMap then
+  if Kind = ikMap then
   begin
-    if not ArraySpeciesCreate(AArgs[0], Len, A) then Exit(False);
+    if not ArraySpeciesCreate(Args[0], Len, A) then Exit(False);
   end
-  else if AKind = ikFilter then
-    if not ArraySpeciesCreate(AArgs[0], 0, A) then Exit(False);
+  else if Kind = ikFilter then
+    if not ArraySpeciesCreate(Args[0], 0, A) then Exit(False);
   Base := TempTop;
   PushRoot(A);
   ToIdx := 0;
   K := 0;
   while K < Len do
   begin
-    if not HasIdx(AArgs[0], K, Has) then begin PopRoots(1); Exit(False); end;
+    if not HasIdx(Args[0], K, Has) then begin PopRoots(1); Exit(False); end;
     if Has then
     begin
-      if not GetIdx(AArgs[0], K, V) then begin PopRoots(1); Exit(False); end;
+      if not GetIdx(Args[0], K, V) then begin PopRoots(1); Exit(False); end;
       PushRoot(V);
-      CB[0] := V; CB[1] := IdxVal(K); CB[2] := AArgs[0];
-      if not CallValue(AArgs[1], Arg(AArgs, AArgc, 2), @CB[0], 3, R) then begin PopRoots(2); Exit(False); end;
+      CB[0] := V; CB[1] := IdxVal(K); CB[2] := Args[0];
+      if not CallValue(Args[1], Arg(Args, Argc, 2), @CB[0], 3, R) then begin PopRoots(2); Exit(False); end;
       V := RootAt(TempTop - 1);
       PopRoots(1);
-      case AKind of
+      case Kind of
         ikMap: if not CreateIdx(RootAt(Base), K, R) then begin PopRoots(1); Exit(False); end;
         ikFilter:
           if ToBool(R) then
@@ -341,62 +336,62 @@ begin
             if not CreateIdx(RootAt(Base), ToIdx, V) then begin PopRoots(1); Exit(False); end;
             Inc(ToIdx);
           end;
-        ikSome: if ToBool(R) then begin PopRoots(1); ARes := VTrue; Exit(True); end;
-        ikEvery: if not ToBool(R) then begin PopRoots(1); ARes := VFalse; Exit(True); end;
+        ikSome: if ToBool(R) then begin PopRoots(1); Res := VTrue; Exit(True); end;
+        ikEvery: if not ToBool(R) then begin PopRoots(1); Res := VFalse; Exit(True); end;
       end;
     end;
     Inc(K);
   end;
-  case AKind of
-    ikForEach: ARes := VUndefined;
-    ikMap, ikFilter: ARes := RootAt(Base);
-    ikSome: ARes := VFalse;
-    ikEvery: ARes := VTrue;
+  case Kind of
+    ikForEach: Res := VUndefined;
+    ikMap, ikFilter: Res := RootAt(Base);
+    ikSome: Res := VFalse;
+    ikEvery: Res := VTrue;
   end;
   PopRoots(1);
   Result := True;
 end;
 
-function AP_ForEach(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := IterateCB(AArgs, AArgc, ARes, ikForEach); end;
-function AP_Map(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := IterateCB(AArgs, AArgc, ARes, ikMap); end;
-function AP_Filter(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := IterateCB(AArgs, AArgc, ARes, ikFilter); end;
-function AP_Some(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := IterateCB(AArgs, AArgc, ARes, ikSome); end;
-function AP_Every(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := IterateCB(AArgs, AArgc, ARes, ikEvery); end;
+function AP_ForEach(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := IterateCB(Args, Argc, Res, ikForEach); end;
+function AP_Map(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := IterateCB(Args, Argc, Res, ikMap); end;
+function AP_Filter(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := IterateCB(Args, Argc, Res, ikFilter); end;
+function AP_Some(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := IterateCB(Args, Argc, Res, ikSome); end;
+function AP_Every(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := IterateCB(Args, Argc, Res, ikEvery); end;
 
 { 23.1.3.9 find, .10 findIndex, .11 findLast, .12 findLastIndex (FindViaPredicate: every index is read) }
-function FindVia(AArgs: TArgs; AArgc: Integer; var ARes: TValue; ALast, AWantIndex: Boolean): Boolean;
+function FindVia(Args: TArgs; Argc: Integer; var Res: TValue; Last, WantIndex: Boolean): Boolean;
 var Len, K: Int64; V, R: TValue; CB: array[0..2] of TValue;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not IsCallable(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('predicate is not a function'));
-  if ALast then K := Len - 1 else K := 0;
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not IsCallable(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('predicate is not a function'));
+  if Last then K := Len - 1 else K := 0;
   while (K >= 0) and (K < Len) do
   begin
-    if not GetIdx(AArgs[0], K, V) then Exit(False);
+    if not GetIdx(Args[0], K, V) then Exit(False);
     PushRoot(V);
-    CB[0] := V; CB[1] := IdxVal(K); CB[2] := AArgs[0];
-    if not CallValue(AArgs[1], Arg(AArgs, AArgc, 2), @CB[0], 3, R) then begin PopRoots(1); Exit(False); end;
+    CB[0] := V; CB[1] := IdxVal(K); CB[2] := Args[0];
+    if not CallValue(Args[1], Arg(Args, Argc, 2), @CB[0], 3, R) then begin PopRoots(1); Exit(False); end;
     V := RootAt(TempTop - 1);
     PopRoots(1);
     if ToBool(R) then
     begin
-      if AWantIndex then ARes := IdxVal(K) else ARes := V;
+      if WantIndex then Res := IdxVal(K) else Res := V;
       Exit(True);
     end;
-    if ALast then Dec(K) else Inc(K);
+    if Last then Dec(K) else Inc(K);
   end;
-  if AWantIndex then ARes := MkInt(-1) else ARes := VUndefined;
+  if WantIndex then Res := MkInt(-1) else Res := VUndefined;
   Result := True;
 end;
 
-function AP_Find(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FindVia(AArgs, AArgc, ARes, False, False); end;
-function AP_FindIndex(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FindVia(AArgs, AArgc, ARes, False, True); end;
-function AP_FindLast(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FindVia(AArgs, AArgc, ARes, True, False); end;
-function AP_FindLastIndex(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FindVia(AArgs, AArgc, ARes, True, True); end;
+function AP_Find(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := FindVia(Args, Argc, Res, False, False); end;
+function AP_FindIndex(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := FindVia(Args, Argc, Res, False, True); end;
+function AP_FindLast(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := FindVia(Args, Argc, Res, True, False); end;
+function AP_FindLastIndex(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := FindVia(Args, Argc, Res, True, True); end;
 
 { 23.1.3.24 reduce, .25 reduceRight }
-function ReduceVia(AArgs: TArgs; AArgc: Integer; var ARes: TValue; ARight: Boolean): Boolean;
+function ReduceVia(Args: TArgs; Argc: Integer; var Res: TValue; Right: Boolean): Boolean;
 var Len, K: Int64; Has: Boolean; V, R: TValue; CB: array[0..3] of TValue; Base: Integer;
   function InRange: Boolean; begin if Right then Result := K >= 0 else Result := K < Len; end;
   procedure Step; begin if Right then Dec(K) else Inc(K); end;
@@ -441,43 +436,43 @@ begin
   Result := True;
 end;
 
-function AP_Reduce(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := ReduceVia(AArgs, AArgc, ARes, False); end;
-function AP_ReduceRight(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := ReduceVia(AArgs, AArgc, ARes, True); end;
+function AP_Reduce(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := ReduceVia(Args, Argc, Res, False); end;
+function AP_ReduceRight(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := ReduceVia(Args, Argc, Res, True); end;
 
 { ---- search ---- }
 
 { 23.1.3.17 indexOf }
-function AP_IndexOf(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_IndexOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, K: Int64; D: Double; Has: Boolean; V, X: TValue; E: PValueArray;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  ARes := MkInt(-1);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  Res := MkInt(-1);
   if Len = 0 then Exit(True);
-  if not ToIntInf(Arg(AArgs, AArgc, 2), D) then Exit(False);
+  if not ToIntInf(Arg(Args, Argc, 2), D) then Exit(False);
   if D >= Len then Exit(True);
   if D < 0 then begin D := Len + D; if D < 0 then D := 0; end;
   K := Trunc(D);
-  X := Arg(AArgs, AArgc, 1);
+  X := Arg(Args, Argc, 1);
   while K < Len do
   begin
-    if FastArr(AArgs[0]) then
+    if FastArr(Args[0]) then
     begin
       { no getters can run: scan the elements }
-      E := ObjOf(AArgs[0])^.Elements;
+      E := ObjOf(Args[0])^.Elements;
       while (K < Len) and (K < E^.Len) do
       begin
         V := E^.Data[K];
-        if (V <> VHole) and StrictEquals(V, X) then begin ARes := IdxVal(K); Exit(True); end;
+        if (V <> VHole) and StrictEquals(V, X) then begin Res := IdxVal(K); Exit(True); end;
         Inc(K);
       end;
       Exit(True);
     end;
-    if not HasIdx(AArgs[0], K, Has) then Exit(False);
+    if not HasIdx(Args[0], K, Has) then Exit(False);
     if Has then
     begin
-      if not GetIdx(AArgs[0], K, V) then Exit(False);
-      if StrictEquals(V, Arg(AArgs, AArgc, 1)) then begin ARes := IdxVal(K); Exit(True); end;
+      if not GetIdx(Args[0], K, V) then Exit(False);
+      if StrictEquals(V, Arg(Args, Argc, 1)) then begin Res := IdxVal(K); Exit(True); end;
     end;
     Inc(K);
   end;
@@ -485,16 +480,16 @@ begin
 end;
 
 { 23.1.3.20 lastIndexOf }
-function AP_LastIndexOf(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_LastIndexOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, K: Int64; D: Double; Has: Boolean; V: TValue; E: PValueArray;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  ARes := MkInt(-1);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  Res := MkInt(-1);
   if Len = 0 then Exit(True);
-  if AArgc >= 2 then
+  if Argc >= 2 then
   begin
-    if not ToIntInf(AArgs[2], D) then Exit(False);
+    if not ToIntInf(Args[2], D) then Exit(False);
   end
   else D := Len - 1;
   if IsInfinite(D) and (D < 0) then Exit(True);
@@ -504,25 +499,25 @@ begin
   end
   else D := Len + D;
   K := Trunc(D);
-  if FastArr(AArgs[0]) then
+  if FastArr(Args[0]) then
   begin
     { no getters can run: scan the elements }
-    E := ObjOf(AArgs[0])^.Elements;
+    E := ObjOf(Args[0])^.Elements;
     if K >= E^.Len then K := E^.Len - 1;
     while K >= 0 do
     begin
-      if (E^.Data[K] <> VHole) and StrictEquals(E^.Data[K], Arg(AArgs, AArgc, 1)) then begin ARes := IdxVal(K); Exit(True); end;
+      if (E^.Data[K] <> VHole) and StrictEquals(E^.Data[K], Arg(Args, Argc, 1)) then begin Res := IdxVal(K); Exit(True); end;
       Dec(K);
     end;
     Exit(True);
   end;
   while K >= 0 do
   begin
-    if not HasIdx(AArgs[0], K, Has) then Exit(False);
+    if not HasIdx(Args[0], K, Has) then Exit(False);
     if Has then
     begin
-      if not GetIdx(AArgs[0], K, V) then Exit(False);
-      if StrictEquals(V, Arg(AArgs, AArgc, 1)) then begin ARes := IdxVal(K); Exit(True); end;
+      if not GetIdx(Args[0], K, V) then Exit(False);
+      if StrictEquals(V, Arg(Args, Argc, 1)) then begin Res := IdxVal(K); Exit(True); end;
     end;
     Dec(K);
   end;
@@ -540,211 +535,211 @@ begin
 end;
 
 { 23.1.3.16 includes }
-function AP_Includes(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Includes(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, K: Int64; D: Double; V: TValue; E: PValueArray;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  ARes := VFalse;
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  Res := VFalse;
   if Len = 0 then Exit(True);
-  if not ToIntInf(Arg(AArgs, AArgc, 2), D) then Exit(False);
+  if not ToIntInf(Arg(Args, Argc, 2), D) then Exit(False);
   if D >= Len then Exit(True);
   if D < 0 then begin D := Len + D; if D < 0 then D := 0; end;
   K := Trunc(D);
-  if FastArr(AArgs[0]) then
+  if FastArr(Args[0]) then
   begin
     { no getters can run; a hole reads as undefined }
-    E := ObjOf(AArgs[0])^.Elements;
+    E := ObjOf(Args[0])^.Elements;
     while K < Len do
     begin
       if K < E^.Len then V := E^.Data[K] else V := VHole;
       if V = VHole then V := VUndefined;
-      if SameValueZeroV(V, Arg(AArgs, AArgc, 1)) then begin ARes := VTrue; Exit(True); end;
+      if SameValueZeroV(V, Arg(Args, Argc, 1)) then begin Res := VTrue; Exit(True); end;
       Inc(K);
     end;
     Exit(True);
   end;
   while K < Len do
   begin
-    if not GetIdx(AArgs[0], K, V) then Exit(False);
-    if SameValueZeroV(V, Arg(AArgs, AArgc, 1)) then begin ARes := VTrue; Exit(True); end;
+    if not GetIdx(Args[0], K, V) then Exit(False);
+    if SameValueZeroV(V, Arg(Args, Argc, 1)) then begin Res := VTrue; Exit(True); end;
     Inc(K);
   end;
   Result := True;
 end;
 
 { 23.1.3.1 at }
-function AP_At(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_At(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len: Int64; D: Double;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not ToIntInf(Arg(AArgs, AArgc, 1), D) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not ToIntInf(Arg(Args, Argc, 1), D) then Exit(False);
   if D < 0 then D := Len + D;
-  if (D < 0) or (D >= Len) then begin ARes := VUndefined; Exit(True); end;
-  Result := GetIdx(AArgs[0], Trunc(D), ARes);
+  if (D < 0) or (D >= Len) then begin Res := VUndefined; Exit(True); end;
+  Result := GetIdx(Args[0], Trunc(D), Res);
 end;
 
 { ---- mutators ---- }
 
 { 23.1.3.23 push }
-function AP_Push(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Push(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len: Int64; I: Integer;
 begin
-  if FastArr(AArgs[0]) and ((ObjOf(AArgs[0])^.OFlags and 8) = 0) then
+  if FastArr(Args[0]) and ((ObjOf(Args[0])^.OFlags and 8) = 0) then
   begin
-    for I := 1 to AArgc do ArrayPush(ObjOf(AArgs[0]), AArgs[I]);
-    ARes := MkInt(ObjOf(AArgs[0])^.Elements^.Len);
+    for I := 1 to Argc do ArrayPush(ObjOf(Args[0]), Args[I]);
+    Res := MkInt(ObjOf(Args[0])^.Elements^.Len);
     Exit(True);
   end;
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if Len + AArgc > MAX_SAFE then Exit(ThrowTypeError('Pushing ' + IntToStr(AArgc) + ' elements on an array-like of length ' + IntToStr(Len) + ' is disallowed'));
-  for I := 1 to AArgc do
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if Len + Argc > MAX_SAFE then Exit(ThrowTypeError('Pushing ' + IntToStr(Argc) + ' elements on an array-like of length ' + IntToStr(Len) + ' is disallowed'));
+  for I := 1 to Argc do
   begin
-    if not SetVS(AArgs[0], IdxKey(Len), AArgs[I], True) then Exit(False);
+    if not SetVS(Args[0], IdxKey(Len), Args[I], True) then Exit(False);
     Inc(Len);
   end;
-  if not SetVS(AArgs[0], AtomLength, IdxVal(Len), True) then Exit(False);
-  ARes := IdxVal(Len);
+  if not SetVS(Args[0], AtomLength, IdxVal(Len), True) then Exit(False);
+  Res := IdxVal(Len);
   Result := True;
 end;
 
 { 23.1.3.22 pop }
-function AP_Pop(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Pop(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len: Int64; E: PValueArray;
 begin
-  if FastArr(AArgs[0]) then
+  if FastArr(Args[0]) then
   begin
-    E := ObjOf(AArgs[0])^.Elements;
-    if E^.Len = 0 then begin ARes := VUndefined; Exit(True); end;
-    ARes := E^.Data[E^.Len - 1];
-    if ARes = VHole then ARes := VUndefined;
-    ArraySetLength(ObjOf(AArgs[0]), E^.Len - 1);
+    E := ObjOf(Args[0])^.Elements;
+    if E^.Len = 0 then begin Res := VUndefined; Exit(True); end;
+    Res := E^.Data[E^.Len - 1];
+    if Res = VHole then Res := VUndefined;
+    ArraySetLength(ObjOf(Args[0]), E^.Len - 1);
     Exit(True);
   end;
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
   if Len = 0 then
   begin
-    if not SetVS(AArgs[0], AtomLength, MkInt(0), True) then Exit(False);
-    ARes := VUndefined;
+    if not SetVS(Args[0], AtomLength, MkInt(0), True) then Exit(False);
+    Res := VUndefined;
     Exit(True);
   end;
-  if not GetIdx(AArgs[0], Len - 1, ARes) then Exit(False);
-  PushRoot(ARes);
-  if not DelIdx(AArgs[0], Len - 1) or not SetVS(AArgs[0], AtomLength, IdxVal(Len - 1), True) then
+  if not GetIdx(Args[0], Len - 1, Res) then Exit(False);
+  PushRoot(Res);
+  if not DelIdx(Args[0], Len - 1) or not SetVS(Args[0], AtomLength, IdxVal(Len - 1), True) then
   begin PopRoots(1); Exit(False); end;
-  ARes := RootAt(TempTop - 1);
+  Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
 end;
 
 { moves Count properties From.. to To.. one at a time (Dir 1 ascending, -1 descending), the shared loop of shift,
   unshift, splice and copyWithin: HasProperty, then Set or DeletePropertyOrThrow }
-function MoveRange(O: TValue; AFrom, ATo_, ACount: Int64; ADir: Integer): Boolean;
+function MoveRange(O: TValue; From, To_, Count: Int64; Dir: Integer): Boolean;
 var Has: Boolean; V: TValue;
 begin
-  while ACount > 0 do
+  while Count > 0 do
   begin
-    if not HasIdx(O, AFrom, Has) then Exit(False);
+    if not HasIdx(O, From, Has) then Exit(False);
     if Has then
     begin
-      if not GetIdx(O, AFrom, V) then Exit(False);
-      if not SetIdx(O, ATo_, V) then Exit(False);
+      if not GetIdx(O, From, V) then Exit(False);
+      if not SetIdx(O, To_, V) then Exit(False);
     end
-    else if not DelIdx(O, ATo_) then Exit(False);
-    Inc(AFrom, ADir); Inc(ATo_, ADir);
-    Dec(ACount);
+    else if not DelIdx(O, To_) then Exit(False);
+    Inc(From, Dir); Inc(To_, Dir);
+    Dec(Count);
   end;
   Result := True;
 end;
 
 { 23.1.3.27 shift }
-function AP_Shift(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Shift(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len: Int64; E: PValueArray;
 begin
-  if FastArr(AArgs[0]) then
+  if FastArr(Args[0]) then
   begin
-    E := ObjOf(AArgs[0])^.Elements;
-    if E^.Len = 0 then begin ARes := VUndefined; Exit(True); end;
-    ARes := E^.Data[0];
-    if ARes = VHole then ARes := VUndefined;
+    E := ObjOf(Args[0])^.Elements;
+    if E^.Len = 0 then begin Res := VUndefined; Exit(True); end;
+    Res := E^.Data[0];
+    if Res = VHole then Res := VUndefined;
     Move(E^.Data[1], E^.Data[0], (E^.Len - 1) * SizeOf(TValue));
-    ArraySetLength(ObjOf(AArgs[0]), E^.Len - 1);
+    ArraySetLength(ObjOf(Args[0]), E^.Len - 1);
     Exit(True);
   end;
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
   if Len = 0 then
   begin
-    if not SetVS(AArgs[0], AtomLength, MkInt(0), True) then Exit(False);
-    ARes := VUndefined;
+    if not SetVS(Args[0], AtomLength, MkInt(0), True) then Exit(False);
+    Res := VUndefined;
     Exit(True);
   end;
-  if not GetIdx(AArgs[0], 0, ARes) then Exit(False);
-  PushRoot(ARes);
-  if not MoveRange(AArgs[0], 1, 0, Len - 1, 1) or not DelIdx(AArgs[0], Len - 1) or
-     not SetVS(AArgs[0], AtomLength, IdxVal(Len - 1), True) then begin PopRoots(1); Exit(False); end;
-  ARes := RootAt(TempTop - 1);
+  if not GetIdx(Args[0], 0, Res) then Exit(False);
+  PushRoot(Res);
+  if not MoveRange(Args[0], 1, 0, Len - 1, 1) or not DelIdx(Args[0], Len - 1) or
+     not SetVS(Args[0], AtomLength, IdxVal(Len - 1), True) then begin PopRoots(1); Exit(False); end;
+  Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
 end;
 
 { 23.1.3.34 unshift }
-function AP_Unshift(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Unshift(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len: Int64; I: Integer; E: PValueArray;
 begin
-  if FastArr(AArgs[0]) and ((ObjOf(AArgs[0])^.OFlags and 8) = 0) then
+  if FastArr(Args[0]) and ((ObjOf(Args[0])^.OFlags and 8) = 0) then
   begin
-    Len := ObjOf(AArgs[0])^.Elements^.Len;
-    if Len + AArgc > 64 * 1024 * 1024 then
+    Len := ObjOf(Args[0])^.Elements^.Len;
+    if Len + Argc > 64 * 1024 * 1024 then
       Exit(ThrowError('RangeError', 'Array length beyond G2''s dense arrays (no sparse arrays yet)'));
-    if AArgc > 0 then
+    if Argc > 0 then
     begin
-      EnsureElementsCap(ObjOf(AArgs[0]), Len + AArgc);
-      E := ObjOf(AArgs[0])^.Elements;
-      Move(E^.Data[0], E^.Data[AArgc], Len * SizeOf(TValue));
-      for I := 0 to AArgc - 1 do E^.Data[I] := VHole;
-      E^.Len := Len + AArgc;
-      for I := 0 to AArgc - 1 do ValueArrayStore(E, I, AArgs[I + 1]);
+      EnsureElementsCap(ObjOf(Args[0]), Len + Argc);
+      E := ObjOf(Args[0])^.Elements;
+      Move(E^.Data[0], E^.Data[Argc], Len * SizeOf(TValue));
+      for I := 0 to Argc - 1 do E^.Data[I] := VHole;
+      E^.Len := Len + Argc;
+      for I := 0 to Argc - 1 do ValueArrayStore(E, I, Args[I + 1]);
     end;
-    ARes := IdxVal(Len + AArgc);
+    Res := IdxVal(Len + Argc);
     Exit(True);
   end;
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if AArgc > 0 then
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if Argc > 0 then
   begin
-    if Len + AArgc > MAX_SAFE then Exit(ThrowTypeError('Unshift of ' + IntToStr(AArgc) + ' elements on an array-like of length ' + IntToStr(Len) + ' is disallowed'));
-    if not MoveRange(AArgs[0], Len - 1, Len + AArgc - 1, Len, -1) then Exit(False);
-    for I := 0 to AArgc - 1 do
-      if not SetIdx(AArgs[0], I, AArgs[I + 1]) then Exit(False);
+    if Len + Argc > MAX_SAFE then Exit(ThrowTypeError('Unshift of ' + IntToStr(Argc) + ' elements on an array-like of length ' + IntToStr(Len) + ' is disallowed'));
+    if not MoveRange(Args[0], Len - 1, Len + Argc - 1, Len, -1) then Exit(False);
+    for I := 0 to Argc - 1 do
+      if not SetIdx(Args[0], I, Args[I + 1]) then Exit(False);
   end;
-  if not SetVS(AArgs[0], AtomLength, IdxVal(Len + AArgc), True) then Exit(False);
-  ARes := IdxVal(Len + AArgc);
+  if not SetVS(Args[0], AtomLength, IdxVal(Len + Argc), True) then Exit(False);
+  Res := IdxVal(Len + Argc);
   Result := True;
 end;
 
 { 23.1.3.28 slice }
-function AP_Slice(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Slice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, K, Fin, N: Int64; Has: Boolean; V, A: TValue; Base: Integer;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 1), Len, 0, K) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 2), Len, Len, Fin) then Exit(False);
-  if not ArraySpeciesCreate(AArgs[0], Max(Fin - K, 0), A) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 1), Len, 0, K) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 2), Len, Len, Fin) then Exit(False);
+  if not ArraySpeciesCreate(Args[0], Max(Fin - K, 0), A) then Exit(False);
   { no user code runs from here: a plain array into a fresh one is a copy of the elements (holes stay holes) }
-  if FastArr(AArgs[0]) and FastArr(A) and (ObjOf(A)^.Elements^.Len = Max(Fin - K, 0)) and
-     (Fin <= ObjOf(AArgs[0])^.Elements^.Len) then
+  if FastArr(Args[0]) and FastArr(A) and (ObjOf(A)^.Elements^.Len = Max(Fin - K, 0)) and
+     (Fin <= ObjOf(Args[0])^.Elements^.Len) then
   begin
     if Fin > K then
     begin
-      Move(ObjOf(AArgs[0])^.Elements^.Data[K], ObjOf(A)^.Elements^.Data[0], (Fin - K) * SizeOf(TValue));
+      Move(ObjOf(Args[0])^.Elements^.Data[K], ObjOf(A)^.Elements^.Data[0], (Fin - K) * SizeOf(TValue));
       WriteBarrierAll(ObjOf(A)^.Elements);
     end;
-    ARes := A;
+    Res := A;
     Exit(True);
   end;
   Base := TempTop;
@@ -752,57 +747,57 @@ begin
   N := 0;
   while K < Fin do
   begin
-    if not HasIdx(AArgs[0], K, Has) then begin PopRoots(1); Exit(False); end;
+    if not HasIdx(Args[0], K, Has) then begin PopRoots(1); Exit(False); end;
     if Has then
     begin
-      if not GetIdx(AArgs[0], K, V) then begin PopRoots(1); Exit(False); end;
+      if not GetIdx(Args[0], K, V) then begin PopRoots(1); Exit(False); end;
       if not CreateIdx(RootAt(Base), N, V) then begin PopRoots(1); Exit(False); end;
     end;
     Inc(K); Inc(N);
   end;
   if not SetLen(RootAt(Base), N) then begin PopRoots(1); Exit(False); end;
-  ARes := RootAt(Base);
+  Res := RootAt(Base);
   PopRoots(1);
   Result := True;
 end;
 
 { 23.1.3.31 splice }
-function AP_Splice(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Splice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, Start, Skip, ItemCount, K: Int64; D: Double; Has: Boolean; V, A: TValue; Base, I: Integer; E: PValueArray;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 1), Len, 0, Start) then Exit(False);
-  ItemCount := Max(AArgc - 2, 0);
-  if AArgc = 0 then Skip := 0
-  else if AArgc = 1 then Skip := Len - Start
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 1), Len, 0, Start) then Exit(False);
+  ItemCount := Max(Argc - 2, 0);
+  if Argc = 0 then Skip := 0
+  else if Argc = 1 then Skip := Len - Start
   else
   begin
-    if not ToIntInf(AArgs[2], D) then Exit(False);
+    if not ToIntInf(Args[2], D) then Exit(False);
     D := Min(Max(D, 0), Len - Start);
     Skip := Trunc(D);
   end;
   if Len + ItemCount - Skip > MAX_SAFE then Exit(ThrowTypeError('Splice result exceeds the maximum array-like length'));
-  if not ArraySpeciesCreate(AArgs[0], Skip, A) then Exit(False);
+  if not ArraySpeciesCreate(Args[0], Skip, A) then Exit(False);
   { a plain array spliced into a fresh result: moves of the elements (no user code can run) }
-  if FastArr(AArgs[0]) and ((ObjOf(AArgs[0])^.OFlags and 8) = 0) and FastArr(A) and
-     (ObjOf(A)^.Elements^.Len = Skip) and (Len = ObjOf(AArgs[0])^.Elements^.Len) and
+  if FastArr(Args[0]) and ((ObjOf(Args[0])^.OFlags and 8) = 0) and FastArr(A) and
+     (ObjOf(A)^.Elements^.Len = Skip) and (Len = ObjOf(Args[0])^.Elements^.Len) and
      (Len - Skip + ItemCount <= 64 * 1024 * 1024) then
   begin
     PushRoot(A);
     if Skip > 0 then
     begin
-      Move(ObjOf(AArgs[0])^.Elements^.Data[Start], ObjOf(RootAt(TempTop - 1))^.Elements^.Data[0], Skip * SizeOf(TValue));
+      Move(ObjOf(Args[0])^.Elements^.Data[Start], ObjOf(RootAt(TempTop - 1))^.Elements^.Data[0], Skip * SizeOf(TValue));
       WriteBarrierAll(ObjOf(RootAt(TempTop - 1))^.Elements);
     end;
-    if ItemCount > Skip then EnsureElementsCap(ObjOf(AArgs[0]), Len - Skip + ItemCount);
-    E := ObjOf(AArgs[0])^.Elements;
+    if ItemCount > Skip then EnsureElementsCap(ObjOf(Args[0]), Len - Skip + ItemCount);
+    E := ObjOf(Args[0])^.Elements;
     if (ItemCount <> Skip) and (Len - Start - Skip > 0) then
       Move(E^.Data[Start + Skip], E^.Data[Start + ItemCount], (Len - Start - Skip) * SizeOf(TValue));
     E^.Len := Len - Skip + ItemCount;
-    for I := 0 to ItemCount - 1 do ValueArrayStore(E, Start + I, AArgs[3 + I]);
+    for I := 0 to ItemCount - 1 do ValueArrayStore(E, Start + I, Args[3 + I]);
     for K := E^.Len to Len - 1 do E^.Data[K] := VUndefined;   { the vacated tail: no stale references }
-    ARes := RootAt(TempTop - 1);
+    Res := RootAt(TempTop - 1);
     PopRoots(1);
     Exit(True);
   end;
@@ -810,117 +805,117 @@ begin
   PushRoot(A);
   for K := 0 to Skip - 1 do
   begin
-    if not HasIdx(AArgs[0], Start + K, Has) then begin PopRoots(1); Exit(False); end;
+    if not HasIdx(Args[0], Start + K, Has) then begin PopRoots(1); Exit(False); end;
     if Has then
     begin
-      if not GetIdx(AArgs[0], Start + K, V) then begin PopRoots(1); Exit(False); end;
+      if not GetIdx(Args[0], Start + K, V) then begin PopRoots(1); Exit(False); end;
       if not CreateIdx(RootAt(Base), K, V) then begin PopRoots(1); Exit(False); end;
     end;
   end;
   if not SetLen(RootAt(Base), Skip) then begin PopRoots(1); Exit(False); end;
   if ItemCount < Skip then
   begin
-    if not MoveRange(AArgs[0], Start + Skip, Start + ItemCount, Len - Skip - Start, 1) then begin PopRoots(1); Exit(False); end;
+    if not MoveRange(Args[0], Start + Skip, Start + ItemCount, Len - Skip - Start, 1) then begin PopRoots(1); Exit(False); end;
     K := Len;
     while K > Len - Skip + ItemCount do
     begin
-      if not DelIdx(AArgs[0], K - 1) then begin PopRoots(1); Exit(False); end;
+      if not DelIdx(Args[0], K - 1) then begin PopRoots(1); Exit(False); end;
       Dec(K);
     end;
   end
   else if ItemCount > Skip then
   begin
-    if not MoveRange(AArgs[0], Len - 1, Len - 1 - Skip + ItemCount, Len - Skip - Start, -1) then begin PopRoots(1); Exit(False); end;
+    if not MoveRange(Args[0], Len - 1, Len - 1 - Skip + ItemCount, Len - Skip - Start, -1) then begin PopRoots(1); Exit(False); end;
   end;
   for I := 0 to ItemCount - 1 do
-    if not SetIdx(AArgs[0], Start + I, AArgs[3 + I]) then begin PopRoots(1); Exit(False); end;
-  if not SetVS(AArgs[0], AtomLength, IdxVal(Len - Skip + ItemCount), True) then begin PopRoots(1); Exit(False); end;
-  ARes := RootAt(Base);
+    if not SetIdx(Args[0], Start + I, Args[3 + I]) then begin PopRoots(1); Exit(False); end;
+  if not SetVS(Args[0], AtomLength, IdxVal(Len - Skip + ItemCount), True) then begin PopRoots(1); Exit(False); end;
+  Res := RootAt(Base);
   PopRoots(1);
   Result := True;
 end;
 
 { 23.1.3.26 reverse }
-function AP_Reverse(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Reverse(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, Lower, Upper: Int64; LE, UE: Boolean; LV, UV: TValue; Base: Integer;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
   Base := TempTop;
   PushRoot(VUndefined); PushRoot(VUndefined);
   Lower := 0;
   while Lower <> Len div 2 do
   begin
     Upper := Len - Lower - 1;
-    if not HasIdx(AArgs[0], Lower, LE) then begin PopRoots(2); Exit(False); end;
+    if not HasIdx(Args[0], Lower, LE) then begin PopRoots(2); Exit(False); end;
     if LE then
     begin
-      if not GetIdx(AArgs[0], Lower, LV) then begin PopRoots(2); Exit(False); end;
+      if not GetIdx(Args[0], Lower, LV) then begin PopRoots(2); Exit(False); end;
       TempRoots[Base] := LV;
     end;
-    if not HasIdx(AArgs[0], Upper, UE) then begin PopRoots(2); Exit(False); end;
+    if not HasIdx(Args[0], Upper, UE) then begin PopRoots(2); Exit(False); end;
     if UE then
     begin
-      if not GetIdx(AArgs[0], Upper, UV) then begin PopRoots(2); Exit(False); end;
+      if not GetIdx(Args[0], Upper, UV) then begin PopRoots(2); Exit(False); end;
       TempRoots[Base + 1] := UV;
     end;
     if LE and UE then
     begin
-      if not SetIdx(AArgs[0], Lower, RootAt(Base + 1)) or not SetIdx(AArgs[0], Upper, RootAt(Base)) then begin PopRoots(2); Exit(False); end;
+      if not SetIdx(Args[0], Lower, RootAt(Base + 1)) or not SetIdx(Args[0], Upper, RootAt(Base)) then begin PopRoots(2); Exit(False); end;
     end
     else if UE then
     begin
-      if not SetIdx(AArgs[0], Lower, RootAt(Base + 1)) or not DelIdx(AArgs[0], Upper) then begin PopRoots(2); Exit(False); end;
+      if not SetIdx(Args[0], Lower, RootAt(Base + 1)) or not DelIdx(Args[0], Upper) then begin PopRoots(2); Exit(False); end;
     end
     else if LE then
     begin
-      if not DelIdx(AArgs[0], Lower) or not SetIdx(AArgs[0], Upper, RootAt(Base)) then begin PopRoots(2); Exit(False); end;
+      if not DelIdx(Args[0], Lower) or not SetIdx(Args[0], Upper, RootAt(Base)) then begin PopRoots(2); Exit(False); end;
     end;
     Inc(Lower);
   end;
   PopRoots(2);
-  ARes := AArgs[0];
+  Res := Args[0];
   Result := True;
 end;
 
 { 23.1.3.7 fill }
-function AP_Fill(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Fill(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, K, Fin: Int64;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 2), Len, 0, K) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 3), Len, Len, Fin) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 2), Len, 0, K) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 3), Len, Len, Fin) then Exit(False);
   while K < Fin do
   begin
-    if FastArr(AArgs[0]) and (K < ObjOf(AArgs[0])^.Elements^.Len) then
-      ValueArrayStore(ObjOf(AArgs[0])^.Elements, K, Arg(AArgs, AArgc, 1))
-    else if not SetVS(AArgs[0], IdxKey(K), Arg(AArgs, AArgc, 1), True) then Exit(False);
+    if FastArr(Args[0]) and (K < ObjOf(Args[0])^.Elements^.Len) then
+      ValueArrayStore(ObjOf(Args[0])^.Elements, K, Arg(Args, Argc, 1))
+    else if not SetVS(Args[0], IdxKey(K), Arg(Args, Argc, 1), True) then Exit(False);
     Inc(K);
   end;
-  ARes := AArgs[0];
+  Res := Args[0];
   Result := True;
 end;
 
 { 23.1.3.4 copyWithin }
-function AP_CopyWithin(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_CopyWithin(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, To_, From, Fin, Count: Int64;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 1), Len, 0, To_) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 2), Len, 0, From) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 3), Len, Len, Fin) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 1), Len, 0, To_) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 2), Len, 0, From) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 3), Len, Len, Fin) then Exit(False);
   Count := Min(Fin - From, Len - To_);
   if Count > 0 then
   begin
     if (From < To_) and (To_ < From + Count) then
     begin
-      if not MoveRange(AArgs[0], From + Count - 1, To_ + Count - 1, Count, -1) then Exit(False);
+      if not MoveRange(Args[0], From + Count - 1, To_ + Count - 1, Count, -1) then Exit(False);
     end
-    else if not MoveRange(AArgs[0], From, To_, Count, 1) then Exit(False);
+    else if not MoveRange(Args[0], From, To_, Count, 1) then Exit(False);
   end;
-  ARes := AArgs[0];
+  Res := Args[0];
   Result := True;
 end;
 
@@ -938,19 +933,19 @@ begin
 end;
 
 { 23.1.3.2 concat }
-function AP_Concat(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Concat(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var A, E, V: TValue; N, Len, K: Int64; I, Base: Integer; Spread, Has: Boolean;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not ArraySpeciesCreate(AArgs[0], 0, A) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not ArraySpeciesCreate(Args[0], 0, A) then Exit(False);
   Base := TempTop;
   PushRoot(A);
   N := 0;
-  for I := 0 to AArgc do
+  for I := 0 to Argc do
   begin
-    E := AArgs[I];
+    E := Args[I];
     if not IsConcatSpreadable(E, Spread) then begin PopRoots(1); Exit(False); end;
-    E := AArgs[I];
+    E := Args[I];
     if Spread then
     begin
       if not LengthOfArrayLike(E, Len) then begin PopRoots(1); Exit(False); end;
@@ -961,7 +956,7 @@ begin
       begin
         EnsureElementsCap(ObjOf(RootAt(Base)), N + Len);
         if Len > 0 then
-          Move(ObjOf(AArgs[I])^.Elements^.Data[0], ObjOf(RootAt(Base))^.Elements^.Data[N], Len * SizeOf(TValue));
+          Move(ObjOf(Args[I])^.Elements^.Data[0], ObjOf(RootAt(Base))^.Elements^.Data[N], Len * SizeOf(TValue));
         ObjOf(RootAt(Base))^.Elements^.Len := N + Len;
         WriteBarrierAll(ObjOf(RootAt(Base))^.Elements);
         Inc(N, Len);
@@ -970,10 +965,10 @@ begin
       K := 0;
       while K < Len do
       begin
-        if not HasIdx(AArgs[I], K, Has) then begin PopRoots(1); Exit(False); end;
+        if not HasIdx(Args[I], K, Has) then begin PopRoots(1); Exit(False); end;
         if Has then
         begin
-          if not GetIdx(AArgs[I], K, V) then begin PopRoots(1); Exit(False); end;
+          if not GetIdx(Args[I], K, V) then begin PopRoots(1); Exit(False); end;
           if not CreateIdx(RootAt(Base), N, V) then begin PopRoots(1); Exit(False); end;
         end;
         Inc(N); Inc(K);
@@ -987,52 +982,52 @@ begin
     end;
   end;
   if not SetLen(RootAt(Base), N) then begin PopRoots(1); Exit(False); end;
-  ARes := RootAt(Base);
+  Res := RootAt(Base);
   PopRoots(1);
   Result := True;
 end;
 
 { 23.1.3.13.1 FlattenIntoArray: Target, Source (and the mapper's this) are roots at Base, Base + 1, Base + 2 }
-function FlattenInto(ABase: Integer; ASourceLen, AStart: Int64; ADepth: Double; AMapper: TValue; var ATargetIdx: Int64): Boolean;
+function FlattenInto(Base: Integer; SourceLen, Start: Int64; Depth: Double; Mapper: TValue; var TargetIdx: Int64): Boolean;
 var SI, ELen: Int64; Has, IsArr: Boolean; V: TValue; CB: array[0..2] of TValue; SB: Integer;
 begin
-  ATargetIdx := AStart;
+  TargetIdx := Start;
   SI := 0;
-  while SI < ASourceLen do
+  while SI < SourceLen do
   begin
-    if not HasIdx(RootAt(ABase + 1), SI, Has) then Exit(False);
+    if not HasIdx(RootAt(Base + 1), SI, Has) then Exit(False);
     if Has then
     begin
-      if not GetIdx(RootAt(ABase + 1), SI, V) then Exit(False);
-      if AMapper <> VUndefined then
+      if not GetIdx(RootAt(Base + 1), SI, V) then Exit(False);
+      if Mapper <> VUndefined then
       begin
-        PushRoot(AMapper);
-        CB[0] := V; CB[1] := IdxVal(SI); CB[2] := RootAt(ABase + 1);
-        if not CallValue(AMapper, RootAt(ABase + 2), @CB[0], 3, V) then begin PopRoots(1); Exit(False); end;
-        AMapper := RootAt(TempTop - 1);
+        PushRoot(Mapper);
+        CB[0] := V; CB[1] := IdxVal(SI); CB[2] := RootAt(Base + 1);
+        if not CallValue(Mapper, RootAt(Base + 2), @CB[0], 3, V) then begin PopRoots(1); Exit(False); end;
+        Mapper := RootAt(TempTop - 1);
         PopRoots(1);
       end;
       IsArr := False;
-      if ADepth > 0 then
+      if Depth > 0 then
         if not IsArrayV(V, IsArr) then Exit(False);
       if IsArr then
       begin
-        PushRoot(AMapper);
+        PushRoot(Mapper);
         SB := TempTop;
-        PushRoot(RootAt(ABase)); PushRoot(V); PushRoot(VUndefined);
+        PushRoot(RootAt(Base)); PushRoot(V); PushRoot(VUndefined);
         if not LengthOfArrayLike(V, ELen) or
-           not FlattenInto(SB, ELen, ATargetIdx, ADepth - 1, VUndefined, ATargetIdx) then begin PopRoots(4); Exit(False); end;
-        AMapper := RootAt(SB - 1);
+           not FlattenInto(SB, ELen, TargetIdx, Depth - 1, VUndefined, TargetIdx) then begin PopRoots(4); Exit(False); end;
+        Mapper := RootAt(SB - 1);
         PopRoots(4);
       end
       else
       begin
-        if ATargetIdx >= MAX_SAFE then Exit(ThrowTypeError('Flattened array exceeds the maximum array-like length'));
-        PushRoot(AMapper);
-        if not CreateIdx(RootAt(ABase), ATargetIdx, V) then begin PopRoots(1); Exit(False); end;
-        AMapper := RootAt(TempTop - 1);
+        if TargetIdx >= MAX_SAFE then Exit(ThrowTypeError('Flattened array exceeds the maximum array-like length'));
+        PushRoot(Mapper);
+        if not CreateIdx(RootAt(Base), TargetIdx, V) then begin PopRoots(1); Exit(False); end;
+        Mapper := RootAt(TempTop - 1);
         PopRoots(1);
-        Inc(ATargetIdx);
+        Inc(TargetIdx);
       end;
     end;
     Inc(SI);
@@ -1041,38 +1036,38 @@ begin
 end;
 
 { 23.1.3.13 flat }
-function AP_Flat(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Flat(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, T: Int64; D: Double; A: TValue; Base: Integer;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
   D := 1;
-  if Arg(AArgs, AArgc, 1) <> VUndefined then
+  if Arg(Args, Argc, 1) <> VUndefined then
   begin
-    if not ToIntInf(AArgs[1], D) then Exit(False);
+    if not ToIntInf(Args[1], D) then Exit(False);
     if D < 0 then D := 0;
   end;
-  if not ArraySpeciesCreate(AArgs[0], 0, A) then Exit(False);
+  if not ArraySpeciesCreate(Args[0], 0, A) then Exit(False);
   Base := TempTop;
-  PushRoot(A); PushRoot(AArgs[0]); PushRoot(VUndefined);
+  PushRoot(A); PushRoot(Args[0]); PushRoot(VUndefined);
   if not FlattenInto(Base, Len, 0, D, VUndefined, T) then begin PopRoots(3); Exit(False); end;
-  ARes := RootAt(Base);
+  Res := RootAt(Base);
   PopRoots(3);
   Result := True;
 end;
 
 { 23.1.3.14 flatMap }
-function AP_FlatMap(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_FlatMap(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, T: Int64; A: TValue; Base: Integer;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not IsCallable(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('flatMap mapper is not a function'));
-  if not ArraySpeciesCreate(AArgs[0], 0, A) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not IsCallable(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('flatMap mapper is not a function'));
+  if not ArraySpeciesCreate(Args[0], 0, A) then Exit(False);
   Base := TempTop;
-  PushRoot(A); PushRoot(AArgs[0]); PushRoot(Arg(AArgs, AArgc, 2));
-  if not FlattenInto(Base, Len, 0, 1, AArgs[1], T) then begin PopRoots(3); Exit(False); end;
-  ARes := RootAt(Base);
+  PushRoot(A); PushRoot(Args[0]); PushRoot(Arg(Args, Argc, 2));
+  if not FlattenInto(Base, Len, 0, 1, Args[1], T) then begin PopRoots(3); Exit(False); end;
+  Res := RootAt(Base);
   PopRoots(3);
   Result := True;
 end;
@@ -1097,7 +1092,7 @@ end;
 
 { 23.1.3.18 join and 23.1.3.32 toLocaleString (Locale: each element's toLocaleString(locales, options), ECMA-402
   19.5.1), with a cycle joined as the empty string }
-function JoinVia(AArgs: TArgs; AArgc: Integer; var ARes: TValue; ALocale: Boolean): Boolean;
+function JoinVia(Args: TArgs; Argc: Integer; var Res: TValue; Locale: Boolean): Boolean;
 var Len, K: Int64; Sep, SV, V, F: TValue; B: UnicodeString; Used: Integer; LA: array[0..1] of TValue; Base: Integer;
   procedure Add(S: PStr);
   begin
@@ -1152,17 +1147,17 @@ begin
   end;
 end;
 
-function AP_Join(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := JoinVia(AArgs, AArgc, ARes, False); end;
-function AP_ToLocaleString(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean; begin Result := JoinVia(AArgs, AArgc, ARes, True); end;
+function AP_Join(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := JoinVia(Args, Argc, Res, False); end;
+function AP_ToLocaleString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := JoinVia(Args, Argc, Res, True); end;
 
 { 23.1.3.36 toString }
-function AP_ToString(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_ToString(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var F: TValue;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not GetV(AArgs[0], AtomOf('join'), F) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not GetV(Args[0], AtomOf('join'), F) then Exit(False);
   if not IsCallable(F) then F := ObjProtoToStringFn;
-  Result := CallValue(F, AArgs[0], nil, 0, ARes);
+  Result := CallValue(F, Args[0], nil, 0, Res);
 end;
 
 { ---- sort ---- }
@@ -1171,24 +1166,24 @@ threadvar
   SortFn: TValue;
 
 { 23.1.3.30.2 SortCompare: Less when x sorts before y (a stable sort keeps equal ones in order) }
-function SortLessThan(X, Y: TValue; var ALess: Boolean): Boolean;
+function SortLessThan(X, Y: TValue; var Less: Boolean): Boolean;
 var CB: array[0..1] of TValue; R, SX, SY: TValue; D: Double;
 begin
-  ALess := False;
+  Less := False;
   if X = VUndefined then Exit(True);
-  if Y = VUndefined then begin ALess := True; Exit(True); end;
+  if Y = VUndefined then begin Less := True; Exit(True); end;
   if SortFn <> VUndefined then
   begin
     CB[0] := X; CB[1] := Y;
     if not CallValue(SortFn, VUndefined, @CB[0], 2, R) then Exit(False);
     if not ToNumberV(R, D) then Exit(False);
-    ALess := D < 0;
+    Less := D < 0;
     Exit(True);
   end;
   if IsInt(X) and IsInt(Y) and (IntOf(X) >= 0) and (IntOf(Y) >= 0) and
      ((IntOf(X) < 10) = (IntOf(Y) < 10)) and (IntOf(X) < 10) then
   begin
-    ALess := IntOf(X) < IntOf(Y);
+    Less := IntOf(X) < IntOf(Y);
     Exit(True);
   end;
   PushRoot(Y);
@@ -1197,33 +1192,33 @@ begin
   if not ToStringV(RootAt(TempTop - 2), SY) then begin PopRoots(2); Exit(False); end;
   SX := RootAt(TempTop - 1);
   PopRoots(2);
-  ALess := StrCompare(StrOf(SX), StrOf(SY)) < 0;
+  Less := StrCompare(StrOf(SX), StrOf(SY)) < 0;
   Result := True;
 end;
 
 { 23.1.3.30.1 SortIndexedProperties: the values (holes skipped when SkipHoles) into a new array at root Base,
   sorted by a stable bottom-up merge sort through a scratch array }
-function SortIndexed(O: TValue; ALen: Int64; ASkipHoles: Boolean; ABase: Integer): Boolean;
+function SortIndexed(O: TValue; Len: Int64; SkipHoles: Boolean; Base: Integer): Boolean;
 var K, N, W, I, L, M, R_, J: Int64; Has, Less: Boolean; V: TValue; Src, Dst: PValueArray; T: TValue;
 begin
   PushRoot(O);
-  TempRoots[ABase] := MkPtr(NewArray(0, Min(ALen, 1024)));
+  TempRoots[Base] := MkPtr(NewArray(0, Min(Len, 1024)));
   K := 0;
-  while K < ALen do
+  while K < Len do
   begin
     Has := True;
-    if ASkipHoles then
+    if SkipHoles then
       if not HasIdx(RootAt(TempTop - 1), K, Has) then begin PopRoots(1); Exit(False); end;
     if Has then
     begin
       if not GetIdx(RootAt(TempTop - 1), K, V) then begin PopRoots(1); Exit(False); end;
-      ArrayPush(ObjOf(RootAt(ABase)), V);
+      ArrayPush(ObjOf(RootAt(Base)), V);
     end;
     Inc(K);
   end;
   PopRoots(1);
-  N := ObjOf(RootAt(ABase))^.Elements^.Len;
-  TempRoots[ABase + 1] := MkPtr(NewArray(N, N));
+  N := ObjOf(RootAt(Base))^.Elements^.Len;
+  TempRoots[Base + 1] := MkPtr(NewArray(N, N));
   W := 1;
   while W < N do
   begin
@@ -1234,46 +1229,46 @@ begin
       J := I;
       while (L < Min(I + W, N)) or (M < R_) do
       begin
-        Src := ObjOf(RootAt(ABase))^.Elements;
+        Src := ObjOf(RootAt(Base))^.Elements;
         if L >= Min(I + W, N) then begin V := Src^.Data[M]; Inc(M); end
         else if M >= R_ then begin V := Src^.Data[L]; Inc(L); end
         else
         begin
           if not SortLessThan(Src^.Data[M], Src^.Data[L], Less) then Exit(False);
-          Src := ObjOf(RootAt(ABase))^.Elements;
+          Src := ObjOf(RootAt(Base))^.Elements;
           if Less then begin V := Src^.Data[M]; Inc(M); end
           else begin V := Src^.Data[L]; Inc(L); end;
         end;
-        Dst := ObjOf(RootAt(ABase + 1))^.Elements;
+        Dst := ObjOf(RootAt(Base + 1))^.Elements;
         ValueArrayStore(Dst, J, V);
         Inc(J);
       end;
       Inc(I, 2 * W);
     end;
-    T := TempRoots[ABase]; TempRoots[ABase] := TempRoots[ABase + 1]; TempRoots[ABase + 1] := T;
+    T := TempRoots[Base]; TempRoots[Base] := TempRoots[Base + 1]; TempRoots[Base + 1] := T;
     W := W * 2;
   end;
   Result := True;
 end;
 
-function SortSetup(AArgs: TArgs; AArgc: Integer; var ASaved: TValue): Boolean;
+function SortSetup(Args: TArgs; Argc: Integer; var Saved: TValue): Boolean;
 begin
-  if (Arg(AArgs, AArgc, 1) <> VUndefined) and not IsCallable(AArgs[1]) then
+  if (Arg(Args, Argc, 1) <> VUndefined) and not IsCallable(Args[1]) then
     Exit(ThrowTypeError('The comparison function must be either a function or undefined'));
-  ASaved := SortFn;
-  SortFn := Arg(AArgs, AArgc, 1);
+  Saved := SortFn;
+  SortFn := Arg(Args, Argc, 1);
   Result := True;
 end;
 
 { 23.1.3.30 sort }
-function AP_Sort(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Sort(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, J, N: Int64; Saved: TValue; Base: Integer; E: PValueArray;
 begin
-  if not SortSetup(AArgs, AArgc, Saved) then Exit(False);
+  if not SortSetup(Args, Argc, Saved) then Exit(False);
   Result := False;
   Base := TempTop;
   PushRoot(Saved); PushRoot(VUndefined); PushRoot(VUndefined);
-  if ToObj(AArgs) and LengthOfArrayLike(AArgs[0], Len) and SortIndexed(AArgs[0], Len, True, Base + 1) then
+  if ToObj(Args) and LengthOfArrayLike(Args[0], Len) and SortIndexed(Args[0], Len, True, Base + 1) then
   begin
     N := ObjOf(RootAt(Base + 1))^.Elements^.Len;
     J := 0;
@@ -1281,35 +1276,35 @@ begin
     while Result and (J < N) do
     begin
       E := ObjOf(RootAt(Base + 1))^.Elements;
-      Result := SetIdx(AArgs[0], J, E^.Data[J]);
+      Result := SetIdx(Args[0], J, E^.Data[J]);
       Inc(J);
     end;
     while Result and (J < Len) do
     begin
-      Result := DelIdx(AArgs[0], J);
+      Result := DelIdx(Args[0], J);
       Inc(J);
     end;
   end;
   SortFn := RootAt(Base);
   PopRoots(3);
-  if Result then ARes := AArgs[0];
+  if Result then Res := Args[0];
 end;
 
 { 23.1.3.35 toSorted }
-function AP_ToSorted(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_ToSorted(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len: Int64; Saved: TValue; Base: Integer;
 begin
-  if not SortSetup(AArgs, AArgc, Saved) then Exit(False);
+  if not SortSetup(Args, Argc, Saved) then Exit(False);
   Result := False;
   Base := TempTop;
   PushRoot(Saved); PushRoot(VUndefined); PushRoot(VUndefined);
-  if ToObj(AArgs) and LengthOfArrayLike(AArgs[0], Len) and
+  if ToObj(Args) and LengthOfArrayLike(Args[0], Len) and
      ((Len <= 4294967295) or ThrowError('RangeError', 'Invalid array length')) then
     { ArrayCreate(len) filled from the sorted list, which has len values (holes read as undefined): the list
       itself is that array }
-    if SortIndexed(AArgs[0], Len, False, Base + 1) then
+    if SortIndexed(Args[0], Len, False, Base + 1) then
     begin
-      ARes := RootAt(Base + 1);
+      Res := RootAt(Base + 1);
       Result := True;
     end;
   SortFn := RootAt(Base);
@@ -1319,37 +1314,37 @@ end;
 { ---- copying methods ---- }
 
 { 23.1.3.33 toReversed }
-function AP_ToReversed(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_ToReversed(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, K: Int64; A, V: TValue; Base: Integer;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
   if not ArrayCreate(Len, A) then Exit(False);
   Base := TempTop;
   PushRoot(A);
   for K := 0 to Len - 1 do
   begin
-    if not GetIdx(AArgs[0], Len - K - 1, V) then begin PopRoots(1); Exit(False); end;
+    if not GetIdx(Args[0], Len - K - 1, V) then begin PopRoots(1); Exit(False); end;
     if not CreateIdx(RootAt(Base), K, V) then begin PopRoots(1); Exit(False); end;
   end;
-  ARes := RootAt(Base);
+  Res := RootAt(Base);
   PopRoots(1);
   Result := True;
 end;
 
 { 23.1.3.35 toSpliced }
-function AP_ToSpliced(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_ToSpliced(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, Start, Skip, Ins, NewLen, I, R_: Int64; D: Double; A, V: TValue; Base, J: Integer;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not RelIdx(Arg(AArgs, AArgc, 1), Len, 0, Start) then Exit(False);
-  Ins := Max(AArgc - 2, 0);
-  if AArgc = 0 then Skip := 0
-  else if AArgc = 1 then Skip := Len - Start
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 1), Len, 0, Start) then Exit(False);
+  Ins := Max(Argc - 2, 0);
+  if Argc = 0 then Skip := 0
+  else if Argc = 1 then Skip := Len - Start
   else
   begin
-    if not ToIntInf(AArgs[2], D) then Exit(False);
+    if not ToIntInf(Args[2], D) then Exit(False);
     Skip := Trunc(Min(Max(D, 0), Len - Start));
   end;
   NewLen := Len + Ins - Skip;
@@ -1361,31 +1356,31 @@ begin
   R_ := Start + Skip;
   while I < Start do
   begin
-    if not GetIdx(AArgs[0], I, V) or not CreateIdx(RootAt(Base), I, V) then begin PopRoots(1); Exit(False); end;
+    if not GetIdx(Args[0], I, V) or not CreateIdx(RootAt(Base), I, V) then begin PopRoots(1); Exit(False); end;
     Inc(I);
   end;
   for J := 0 to Ins - 1 do
   begin
-    if not CreateIdx(RootAt(Base), I, AArgs[3 + J]) then begin PopRoots(1); Exit(False); end;
+    if not CreateIdx(RootAt(Base), I, Args[3 + J]) then begin PopRoots(1); Exit(False); end;
     Inc(I);
   end;
   while I < NewLen do
   begin
-    if not GetIdx(AArgs[0], R_, V) or not CreateIdx(RootAt(Base), I, V) then begin PopRoots(1); Exit(False); end;
+    if not GetIdx(Args[0], R_, V) or not CreateIdx(RootAt(Base), I, V) then begin PopRoots(1); Exit(False); end;
     Inc(I); Inc(R_);
   end;
-  ARes := RootAt(Base);
+  Res := RootAt(Base);
   PopRoots(1);
   Result := True;
 end;
 
 { 23.1.3.39 with }
-function AP_With(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_With(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, K, Idx: Int64; D: Double; A, V: TValue; Base: Integer;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  if not LengthOfArrayLike(AArgs[0], Len) then Exit(False);
-  if not ToIntInf(Arg(AArgs, AArgc, 1), D) then Exit(False);
+  if not ToObj(Args) then Exit(False);
+  if not LengthOfArrayLike(Args[0], Len) then Exit(False);
+  if not ToIntInf(Arg(Args, Argc, 1), D) then Exit(False);
   if D < 0 then D := Len + D;
   if (D >= Len) or (D < 0) then Exit(ThrowError('RangeError', 'Invalid index'));
   Idx := Trunc(D);
@@ -1394,11 +1389,11 @@ begin
   PushRoot(A);
   for K := 0 to Len - 1 do
   begin
-    if K = Idx then V := Arg(AArgs, AArgc, 2)
-    else if not GetIdx(AArgs[0], K, V) then begin PopRoots(1); Exit(False); end;
+    if K = Idx then V := Arg(Args, Argc, 2)
+    else if not GetIdx(Args[0], K, V) then begin PopRoots(1); Exit(False); end;
     if not CreateIdx(RootAt(Base), K, V) then begin PopRoots(1); Exit(False); end;
   end;
-  ARes := RootAt(Base);
+  Res := RootAt(Base);
   PopRoots(1);
   Result := True;
 end;
@@ -1406,86 +1401,86 @@ end;
 { ---- iterators ---- }
 
 { 23.1.3.5 entries, .19 keys, .38 values: CreateArrayIterator(ToObject(this), kind) }
-function AP_Entries(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Entries(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  ARes := NewArrayIterator(AArgs[0], 3);
+  if not ToObj(Args) then Exit(False);
+  Res := NewArrayIterator(Args[0], 3);
   Result := True;
 end;
 
-function AP_Keys(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Keys(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  ARes := NewArrayIterator(AArgs[0], 2);
+  if not ToObj(Args) then Exit(False);
+  Res := NewArrayIterator(Args[0], 2);
   Result := True;
 end;
 
-function AP_Values(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function AP_Values(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not ToObj(AArgs) then Exit(False);
-  ARes := NewArrayIterator(AArgs[0], 0);
+  if not ToObj(Args) then Exit(False);
+  Res := NewArrayIterator(Args[0], 0);
   Result := True;
 end;
 
 { ---- the constructor's functions ---- }
 
 { 23.1.2.2 Array.isArray }
-function Array_IsArray2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Array_IsArray2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var R: Boolean;
 begin
-  if not IsArrayV(Arg(AArgs, AArgc, 1), R) then Exit(False);
-  ARes := MkBool(R);
+  if not IsArrayV(Arg(Args, Argc, 1), R) then Exit(False);
+  Res := MkBool(R);
   Result := True;
 end;
 
 { IsConstructor(C) ? Construct(C, « Len » or « ») : ArrayCreate(Len) }
-function CreateFromThis(C: TValue; ALen: Int64; AWithLen: Boolean; var A: TValue): Boolean;
+function CreateFromThis(C: TValue; Len: Int64; WithLen: Boolean; var A: TValue): Boolean;
 var LV: TValue;
 begin
   if IsConstructorV(C) then
   begin
-    LV := IdxVal(ALen);
-    if AWithLen then Result := Construct(C, @LV, 1, C, A)
+    LV := IdxVal(Len);
+    if WithLen then Result := Construct(C, @LV, 1, C, A)
     else Result := Construct(C, nil, 0, C, A);
     Exit;
   end;
-  if AWithLen then Result := ArrayCreate(ALen, A) else Result := ArrayCreate(0, A);
+  if WithLen then Result := ArrayCreate(Len, A) else Result := ArrayCreate(0, A);
 end;
 
 { 23.1.2.3 Array.of }
-function Array_Of2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Array_Of2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var A: TValue; K, Base: Integer;
 begin
-  if not CreateFromThis(AArgs[0], AArgc, True, A) then Exit(False);
+  if not CreateFromThis(Args[0], Argc, True, A) then Exit(False);
   Base := TempTop;
   PushRoot(A);
-  for K := 0 to AArgc - 1 do
-    if not CreateIdx(RootAt(Base), K, AArgs[K + 1]) then begin PopRoots(1); Exit(False); end;
-  if not SetVS(RootAt(Base), AtomLength, MkInt(AArgc), True) then begin PopRoots(1); Exit(False); end;
-  ARes := RootAt(Base);
+  for K := 0 to Argc - 1 do
+    if not CreateIdx(RootAt(Base), K, Args[K + 1]) then begin PopRoots(1); Exit(False); end;
+  if not SetVS(RootAt(Base), AtomLength, MkInt(Argc), True) then begin PopRoots(1); Exit(False); end;
+  Res := RootAt(Base);
   PopRoots(1);
   Result := True;
 end;
 
 { 23.1.2.1 Array.from }
-function Array_From2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Array_From2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Mapping, Done: Boolean; UsingIt, A, It, NextM, V, AL: TValue; K, Len: Int64; CB: array[0..1] of TValue;
   Base: Integer;
 begin
-  Mapping := Arg(AArgs, AArgc, 2) <> VUndefined;
-  if Mapping and not IsCallable(AArgs[2]) then Exit(ThrowTypeError('Array.from: the mapper is not a function'));
+  Mapping := Arg(Args, Argc, 2) <> VUndefined;
+  if Mapping and not IsCallable(Args[2]) then Exit(ThrowTypeError('Array.from: the mapper is not a function'));
   { 7.3.11 GetMethod(items, @@iterator): a nullish items throws in GetV }
-  if not GetElemV(Arg(AArgs, AArgc, 1), SymIterator, UsingIt) then Exit(False);
+  if not GetElemV(Arg(Args, Argc, 1), SymIterator, UsingIt) then Exit(False);
   if IsNullish(UsingIt) then UsingIt := VUndefined
   else if not IsCallable(UsingIt) then Exit(ThrowTypeError('Array.from: @@iterator is not a function'));
   Base := TempTop;
   if UsingIt <> VUndefined then
   begin
     PushRoot(UsingIt);
-    if not CreateFromThis(AArgs[0], 0, False, A) then begin PopRoots(1); Exit(False); end;
+    if not CreateFromThis(Args[0], 0, False, A) then begin PopRoots(1); Exit(False); end;
     TempRoots[Base] := A;
     { 7.4.4 GetIteratorFromMethod }
-    if not CallValue(UsingIt, AArgs[1], nil, 0, It) then begin PopRoots(1); Exit(False); end;
+    if not CallValue(UsingIt, Args[1], nil, 0, It) then begin PopRoots(1); Exit(False); end;
     if not IsObject(It) then begin PopRoots(1); Exit(ThrowTypeError('Array.from: the iterator is not an object')); end;
     PushRoot(It);
     if not GetV(It, AtomNext, NextM) then begin PopRoots(2); Exit(False); end;
@@ -1497,14 +1492,14 @@ begin
       if Done then
       begin
         if not SetVS(RootAt(Base), AtomLength, IdxVal(K), True) then begin PopRoots(3); Exit(False); end;
-        ARes := RootAt(Base);
+        Res := RootAt(Base);
         PopRoots(3);
         Exit(True);
       end;
       if Mapping then
       begin
         CB[0] := V; CB[1] := IdxVal(K);
-        if not CallValue(AArgs[2], Arg(AArgs, AArgc, 3), @CB[0], 2, V) then
+        if not CallValue(Args[2], Arg(Args, Argc, 3), @CB[0], 2, V) then
         begin
           IteratorCloseV(RootAt(Base + 1), True);
           PopRoots(3);
@@ -1521,9 +1516,9 @@ begin
     end;
   end;
   { an array-like }
-  if not ToObjectV(AArgs[1], AL) then Exit(False);
+  if not ToObjectV(Args[1], AL) then Exit(False);
   PushRoot(AL);
-  if not LengthOfArrayLike(AL, Len) or not CreateFromThis(AArgs[0], Len, True, A) then begin PopRoots(1); Exit(False); end;
+  if not LengthOfArrayLike(AL, Len) or not CreateFromThis(Args[0], Len, True, A) then begin PopRoots(1); Exit(False); end;
   PushRoot(A);
   K := 0;
   while K < Len do
@@ -1532,21 +1527,21 @@ begin
     if Mapping then
     begin
       CB[0] := V; CB[1] := IdxVal(K);
-      if not CallValue(AArgs[2], Arg(AArgs, AArgc, 3), @CB[0], 2, V) then begin PopRoots(2); Exit(False); end;
+      if not CallValue(Args[2], Arg(Args, Argc, 3), @CB[0], 2, V) then begin PopRoots(2); Exit(False); end;
     end;
     if not CreateIdx(RootAt(Base + 1), K, V) then begin PopRoots(2); Exit(False); end;
     Inc(K);
   end;
   if not SetVS(RootAt(Base + 1), AtomLength, IdxVal(Len), True) then begin PopRoots(2); Exit(False); end;
-  ARes := RootAt(Base + 1);
+  Res := RootAt(Base + 1);
   PopRoots(2);
   Result := True;
 end;
 
 { 23.1.2.5 get Array [ @@species ] }
-function Array_Species(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Array_Species(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := AArgs[0];
+  Res := Args[0];
   Result := True;
 end;
 
@@ -1555,15 +1550,15 @@ const
 
 procedure InitArrayProto;
 var Ctor, U: TValue; Key: PStr; I: Integer;
-  procedure Def(ATarget: TValue; const AName: UnicodeString; AFn: TNativeFn; ALen: Integer);
+  procedure Def(Target: TValue; const Name: UnicodeString; Fn: TNativeFn; Len: Integer);
   begin
-    PushRoot(ATarget);
-    DefineOwn(RootAt(TempTop - 1), AtomOf(AName), NewNativeFunction(AFn, AName, ALen), pfHidden);
+    PushRoot(Target);
+    DefineOwn(RootAt(TempTop - 1), AtomOf(Name), NewNativeFunction(Fn, Name, Len), pfHidden);
     PopRoots(1);
   end;
-  procedure Unscop(const AName: UnicodeString);
+  procedure Unscop(const Name: UnicodeString);
   begin
-    DefineOwn(RootAt(TempTop - 1), AtomOf(AName), VTrue, pfDefault);
+    DefineOwn(RootAt(TempTop - 1), AtomOf(Name), VTrue, pfDefault);
   end;
 begin
   AddRoot(@ObjProtoToStringFn); AddRoot(@JoinStack); AddRoot(@SortFn);

@@ -19,13 +19,9 @@ unit G2.Snapshot;
 interface
 
 uses
-  Classes,
-  SysUtils,
+  SysUtils, Classes, G2.Core, G2.Bytecode;
 
-  G2.Bytecode,
-  G2.Core;
-
-function CompilePrelude(const AName, ASource: UnicodeString; var T: PFuncTemplate; var AErr: UnicodeString): Boolean;
+function CompilePrelude(const Name, Source: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString): Boolean;
 
 implementation
 
@@ -109,7 +105,7 @@ end;
 var SnapshotStarted: Boolean = False;
 
 { G2_SNAPSHOT_OUT names the file the entries are appended to (build.sh turns it into the include) }
-procedure AppendEntry(const AName, ASource: UnicodeString; T: PFuncTemplate);
+procedure AppendEntry(const Name, Source: UnicodeString; T: PFuncTemplate);
 var Path: string; F: TFileStream; M: TMemoryStream;
 begin
   Path := GetEnvironmentVariable('G2_SNAPSHOT_OUT');
@@ -121,7 +117,7 @@ begin
     except
       on E: ESnapshotUnsupported do
       begin
-        WriteLn(ErrOutput, 'snapshot: ', AName, ' left out: ', E.Message);
+        WriteLn(ErrOutput, 'snapshot: ', Name, ' left out: ', E.Message);
         Exit;
       end;
     end;
@@ -134,8 +130,8 @@ begin
     end;
     try
       F.Seek(0, soEnd);
-      WriteText(F, AName);
-      WriteU64(F, SourceHash(ASource));
+      WriteText(F, Name);
+      WriteU64(F, SourceHash(Source));
       WriteI32(F, M.Size);
       F.CopyFrom(M, 0);
     finally
@@ -222,7 +218,7 @@ begin
   Result := T;
 end;
 
-function FromSnapshot(const AName, ASource: UnicodeString; var T: PFuncTemplate): Boolean;
+function FromSnapshot(const Name, Source: UnicodeString; var T: PFuncTemplate): Boolean;
 var R: TReader; EntryName: UnicodeString; Hash: QWord; Len: Integer;
 begin
   Result := False;
@@ -235,9 +231,9 @@ begin
     EntryName := R.Text;
     Hash := R.U64;
     Len := R.I32;
-    if EntryName = AName then
+    if EntryName = Name then
     begin
-      if Hash <> SourceHash(ASource) then Exit;   { the prelude changed since the snapshot: parse it }
+      if Hash <> SourceHash(Source) then Exit;   { the prelude changed since the snapshot: parse it }
       T := ReadTemplate(R);
       Exit(True);
     end;
@@ -245,11 +241,11 @@ begin
   end;
 end;
 
-function CompilePrelude(const AName, ASource: UnicodeString; var T: PFuncTemplate; var AErr: UnicodeString): Boolean;
+function CompilePrelude(const Name, Source: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString): Boolean;
 begin
-  if FromSnapshot(AName, ASource, T) then Exit(True);
-  Result := ParseAndCompile(ASource, AName, True, T, AErr);
-  if Result then AppendEntry(AName, ASource, T);
+  if FromSnapshot(Name, Source, T) then Exit(True);
+  Result := ParseAndCompile(Source, Name, True, T, Err);
+  if Result then AppendEntry(Name, Source, T);
 end;
 
 end.

@@ -16,9 +16,7 @@ unit G2.Shared;
 interface
 
 uses
-  SysUtils,
-
-  G2.Core;
+  SysUtils, G2.Core;
 
 type
   PSharedBlock = ^TSharedBlock;
@@ -29,12 +27,12 @@ type
     Data: PByte;            { MaxByteLength (or ByteLength) bytes, zeroed, 16-byte aligned }
   end;
 
-function NewSharedBlock(ALen, AMaxLen: Int64): PSharedBlock;   { nil when the memory cannot be had }
+function NewSharedBlock(Len, MaxLen: Int64): PSharedBlock;   { nil when the memory cannot be had }
 procedure RetainBlock(B: PSharedBlock);
 procedure ReleaseBlock(B: PSharedBlock);
 function BlockLength(B: PSharedBlock): Int64; inline;
 { grows B to NewLen (<= MaxByteLength); False if another thread grew it past NewLen first }
-function GrowBlock(B: PSharedBlock; ANewLen: Int64): Boolean;
+function GrowBlock(B: PSharedBlock; NewLen: Int64): Boolean;
 
 { This engine's SharedArrayBuffer objects: a block reference is released when its object is collected. }
 procedure RegisterSharedBuffer(O: PObj; B: PSharedBlock);
@@ -44,10 +42,10 @@ type
 
 { Read-modify-write on the Width-byte (1, 2, 4, 8) integer at P, sequentially consistent; returns the old
   value's bits, zero-extended. 1- and 2-byte cells use a compare-and-swap on their aligned 4-byte word. }
-function AtomicRMW(P: PByte; AWidth: Integer; AOp: TAtomicOp; AOperand: QWord): QWord;
-function AtomicCompareExchange(P: PByte; AWidth: Integer; AExpected, AReplacement: QWord): QWord;
-function AtomicLoad(P: PByte; AWidth: Integer): QWord;
-procedure AtomicStore(P: PByte; AWidth: Integer; V: QWord);
+function AtomicRMW(P: PByte; Width: Integer; Op: TAtomicOp; Operand: QWord): QWord;
+function AtomicCompareExchange(P: PByte; Width: Integer; Expected, Replacement: QWord): QWord;
+function AtomicLoad(P: PByte; Width: Integer): QWord;
+procedure AtomicStore(P: PByte; Width: Integer; V: QWord);
 
 type
   TWaitResult = (wrOk, wrNotEqual, wrTimedOut);
@@ -56,19 +54,19 @@ type
 
 { Atomics.wait: suspends the calling thread on (Block, ByteIndex) if Check holds, until notified or
   TimeoutMs passes. TimeoutMs is +Infinity or >= 0 (25.4.13: NaN is +Infinity, a negative time 0). }
-function SharedWait(ABlock: PSharedBlock; AByteIndex: Int64; ACheck: TWaitCheck; ACheckData: Pointer;
-  ATimeoutMs: Double): TWaitResult;
+function SharedWait(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
+  TimeoutMs: Double): TWaitResult;
 { Atomics.waitAsync: adds an async waiter for this thread with Token if Check holds (wrOk), else wrNotEqual.
   A notify posts Token to this thread's mailbox (SharedAsyncPoll). }
-function SharedWaitAsyncAdd(ABlock: PSharedBlock; AByteIndex: Int64; ACheck: TWaitCheck; ACheckData: Pointer;
-  AToken: Integer): TWaitResult;
+function SharedWaitAsyncAdd(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
+  Token: Integer): TWaitResult;
 { removes this thread's async waiter Token if it is still waiting (its timeout fired first): True if removed }
-function SharedAsyncCancel(AToken: Integer): Boolean;
+function SharedAsyncCancel(Token: Integer): Boolean;
 { waits up to TimeoutMs for this thread's async waiters to be notified; returns their tokens }
-function SharedAsyncPoll(ATimeoutMs: Cardinal): TBoundArray;
+function SharedAsyncPoll(TimeoutMs: Cardinal): TBoundArray;
 { Atomics.notify: wakes up to Count (negative: all) waiters on (Block, ByteIndex), oldest first, sync and
   async alike; returns how many it woke }
-function SharedNotify(ABlock: PSharedBlock; AByteIndex: Int64; ACount: Int64): Int64;
+function SharedNotify(Block: PSharedBlock; ByteIndex: Int64; Count: Int64): Int64;
 
 implementation
 
@@ -77,12 +75,12 @@ uses
 
 { ---------------- blocks ---------------- }
 
-function NewSharedBlock(ALen, AMaxLen: Int64): PSharedBlock;
+function NewSharedBlock(Len, MaxLen: Int64): PSharedBlock;
 var Cap: Int64; Raw: PByte;
 begin
   Result := nil;
-  if AMaxLen >= 0 then Cap := AMaxLen else Cap := ALen;
-  if (ALen < 0) or (Cap < ALen) or (Cap > High(PtrInt) - 64) then Exit;
+  if MaxLen >= 0 then Cap := MaxLen else Cap := Len;
+  if (Len < 0) or (Cap < Len) or (Cap > High(PtrInt) - 64) then Exit;
   try
     Raw := AllocMem(Cap + 1);   { +1: a zero-length block still has an address }
   except
@@ -91,8 +89,8 @@ begin
   if Raw = nil then Exit;
   New(Result);
   Result^.RefCount := 1;
-  Result^.ByteLength := ALen;
-  Result^.MaxByteLength := AMaxLen;
+  Result^.ByteLength := Len;
+  Result^.MaxByteLength := MaxLen;
   Result^.Data := Raw;
 end;
 
@@ -115,14 +113,14 @@ begin
   Result := InterlockedCompareExchange64(B^.ByteLength, 0, 0);
 end;
 
-function GrowBlock(B: PSharedBlock; ANewLen: Int64): Boolean;
+function GrowBlock(B: PSharedBlock; NewLen: Int64): Boolean;
 var Cur: Int64;
 begin
   repeat
     Cur := BlockLength(B);
-    if ANewLen < Cur then Exit(False);
-    if ANewLen = Cur then Exit(True);
-  until InterlockedCompareExchange64(B^.ByteLength, ANewLen, Cur) = Cur;
+    if NewLen < Cur then Exit(False);
+    if NewLen = Cur then Exit(True);
+  until InterlockedCompareExchange64(B^.ByteLength, NewLen, Cur) = Cur;
   Result := True;
 end;
 
@@ -167,81 +165,81 @@ end;
 
 { ---------------- atomics ---------------- }
 
-function Width4Mask(AShift, AWidth: Integer): Cardinal; inline;
+function Width4Mask(Shift, Width: Integer): Cardinal; inline;
 begin
-  if AWidth = 1 then Result := Cardinal($FF) shl AShift else Result := Cardinal($FFFF) shl AShift;
+  if Width = 1 then Result := Cardinal($FF) shl Shift else Result := Cardinal($FFFF) shl Shift;
 end;
 
-function Apply(AOp: TAtomicOp; AOld, AOperand: QWord): QWord; inline;
+function Apply(Op: TAtomicOp; Old, Operand: QWord): QWord; inline;
 begin
-  case AOp of
-    aoAdd: Result := AOld + AOperand;
-    aoSub: Result := AOld - AOperand;
-    aoAnd: Result := AOld and AOperand;
-    aoOr: Result := AOld or AOperand;
-    aoXor: Result := AOld xor AOperand;
-  else Result := AOperand;
+  case Op of
+    aoAdd: Result := Old + Operand;
+    aoSub: Result := Old - Operand;
+    aoAnd: Result := Old and Operand;
+    aoOr: Result := Old or Operand;
+    aoXor: Result := Old xor Operand;
+  else Result := Operand;
   end;
 end;
 
 { 1- and 2-byte cells: a CAS on the aligned 4-byte word that holds them }
-function SubWordUpdate(P: PByte; AWidth: Integer; AOp: TAtomicOp; AOperand: QWord; AIsCAS: Boolean;
-  AExpected: QWord): QWord;
+function SubWordUpdate(P: PByte; Width: Integer; Op: TAtomicOp; Operand: QWord; IsCAS: Boolean;
+  Expected: QWord): QWord;
 var W: PLongInt; Shift: Integer; Mask: Cardinal; Old, New_: LongInt; Cell, NewCell: Cardinal;
 begin
   W := PLongInt(PtrUInt(P) and not PtrUInt(3));
   Shift := (PtrUInt(P) and 3) * 8;
-  Mask := Width4Mask(Shift, AWidth);
+  Mask := Width4Mask(Shift, Width);
   repeat
     Old := W^;
     Cell := (Cardinal(Old) and Mask) shr Shift;
-    if AIsCAS then
+    if IsCAS then
     begin
-      if Cell <> (Cardinal(AExpected) and (Mask shr Shift)) then Exit(Cell);
-      NewCell := Cardinal(AOperand);
+      if Cell <> (Cardinal(Expected) and (Mask shr Shift)) then Exit(Cell);
+      NewCell := Cardinal(Operand);
     end
     else
-      NewCell := Cardinal(Apply(AOp, Cell, AOperand));
+      NewCell := Cardinal(Apply(Op, Cell, Operand));
     New_ := LongInt((Cardinal(Old) and not Mask) or ((NewCell shl Shift) and Mask));
   until InterlockedCompareExchange(W^, New_, Old) = Old;
   Result := Cell;
 end;
 
-function AtomicRMW(P: PByte; AWidth: Integer; AOp: TAtomicOp; AOperand: QWord): QWord;
+function AtomicRMW(P: PByte; Width: Integer; Op: TAtomicOp; Operand: QWord): QWord;
 var Old32, New32: LongInt; Old64, New64: Int64;
 begin
-  case AWidth of
-    1, 2: Result := SubWordUpdate(P, AWidth, AOp, AOperand, False, 0);
+  case Width of
+    1, 2: Result := SubWordUpdate(P, Width, Op, Operand, False, 0);
     4:
       repeat
         Old32 := PLongInt(P)^;
-        New32 := LongInt(Cardinal(Apply(AOp, Cardinal(Old32), AOperand)));
+        New32 := LongInt(Cardinal(Apply(Op, Cardinal(Old32), Operand)));
         Result := Cardinal(Old32);
       until InterlockedCompareExchange(PLongInt(P)^, New32, Old32) = Old32;
   else
     repeat
       Old64 := PInt64(P)^;
-      New64 := Int64(Apply(AOp, QWord(Old64), AOperand));
+      New64 := Int64(Apply(Op, QWord(Old64), Operand));
       Result := QWord(Old64);
     until InterlockedCompareExchange64(PInt64(P)^, New64, Old64) = Old64;
   end;
 end;
 
-function AtomicCompareExchange(P: PByte; AWidth: Integer; AExpected, AReplacement: QWord): QWord;
+function AtomicCompareExchange(P: PByte; Width: Integer; Expected, Replacement: QWord): QWord;
 begin
-  case AWidth of
-    1, 2: Result := SubWordUpdate(P, AWidth, aoExchange, AReplacement, True, AExpected);
-    4: Result := Cardinal(InterlockedCompareExchange(PLongInt(P)^, LongInt(Cardinal(AReplacement)),
-         LongInt(Cardinal(AExpected))));
-  else Result := QWord(InterlockedCompareExchange64(PInt64(P)^, Int64(AReplacement), Int64(AExpected)));
+  case Width of
+    1, 2: Result := SubWordUpdate(P, Width, aoExchange, Replacement, True, Expected);
+    4: Result := Cardinal(InterlockedCompareExchange(PLongInt(P)^, LongInt(Cardinal(Replacement)),
+         LongInt(Cardinal(Expected))));
+  else Result := QWord(InterlockedCompareExchange64(PInt64(P)^, Int64(Replacement), Int64(Expected)));
   end;
 end;
 
-function AtomicLoad(P: PByte; AWidth: Integer): QWord;
+function AtomicLoad(P: PByte; Width: Integer): QWord;
 begin
   { an aligned load is atomic on x86-64; the barrier orders it after earlier stores (seq_cst) }
   ReadWriteBarrier;
-  case AWidth of
+  case Width of
     1: Result := P^;
     2: Result := PWord(P)^;
     4: Result := PCardinal(P)^;
@@ -250,10 +248,10 @@ begin
   ReadWriteBarrier;
 end;
 
-procedure AtomicStore(P: PByte; AWidth: Integer; V: QWord);
+procedure AtomicStore(P: PByte; Width: Integer; V: QWord);
 begin
-  case AWidth of
-    1, 2: SubWordUpdate(P, AWidth, aoExchange, V, False, 0);
+  case Width of
+    1, 2: SubWordUpdate(P, Width, aoExchange, V, False, 0);
     4: InterLockedExchange(PLongInt(P)^, LongInt(Cardinal(V)));
   else InterLockedExchange64(PInt64(P)^, Int64(V));
   end;
@@ -309,22 +307,22 @@ begin
   if WaitTail = W then WaitTail := Prev;
 end;
 
-function SharedWait(ABlock: PSharedBlock; AByteIndex: Int64; ACheck: TWaitCheck; ACheckData: Pointer;
-  ATimeoutMs: Double): TWaitResult;
+function SharedWait(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
+  TimeoutMs: Double): TWaitResult;
 var W: TWaiter; Ms: Cardinal; Deadline, Now_: QWord;
 begin
   EnterCriticalSection(WaitLock);
-  if not ACheck(ACheckData) then
+  if not Check(CheckData) then
   begin
     LeaveCriticalSection(WaitLock);
     Exit(wrNotEqual);
   end;
-  W.Block := ABlock; W.ByteIndex := AByteIndex; W.Notified := False; W.Next := nil; W.Mailbox := nil; W.Token := 0;
+  W.Block := Block; W.ByteIndex := ByteIndex; W.Notified := False; W.Next := nil; W.Mailbox := nil; W.Token := 0;
   W.Event := RTLEventCreate;
   if WaitTail = nil then WaitHead := @W else WaitTail^.Next := @W;
   WaitTail := @W;
   LeaveCriticalSection(WaitLock);
-  if IsInfinite(ATimeoutMs) then
+  if IsInfinite(TimeoutMs) then
     repeat
       RTLEventWaitFor(W.Event);
       EnterCriticalSection(WaitLock);
@@ -333,7 +331,7 @@ begin
     until Now_ <> 0
   else
   begin
-    Deadline := GetTickCount64 + QWord(Ceil(ATimeoutMs));
+    Deadline := GetTickCount64 + QWord(Ceil(TimeoutMs));
     repeat
       EnterCriticalSection(WaitLock);
       Now_ := Ord(W.Notified);
@@ -356,23 +354,23 @@ begin
   RTLEventDestroy(W.Event);
 end;
 
-function SharedWaitAsyncAdd(ABlock: PSharedBlock; AByteIndex: Int64; ACheck: TWaitCheck; ACheckData: Pointer;
-  AToken: Integer): TWaitResult;
+function SharedWaitAsyncAdd(Block: PSharedBlock; ByteIndex: Int64; Check: TWaitCheck; CheckData: Pointer;
+  Token: Integer): TWaitResult;
 var W: PWaiter; M: PMailbox;
 begin
   M := Mailbox;
   EnterCriticalSection(WaitLock);
-  if not ACheck(ACheckData) then begin LeaveCriticalSection(WaitLock); Exit(wrNotEqual); end;
+  if not Check(CheckData) then begin LeaveCriticalSection(WaitLock); Exit(wrNotEqual); end;
   New(W);
-  W^.Block := ABlock; W^.ByteIndex := AByteIndex; W^.Event := nil; W^.Notified := False; W^.Next := nil;
-  W^.Mailbox := M; W^.Token := AToken;
+  W^.Block := Block; W^.ByteIndex := ByteIndex; W^.Event := nil; W^.Notified := False; W^.Next := nil;
+  W^.Mailbox := M; W^.Token := Token;
   if WaitTail = nil then WaitHead := W else WaitTail^.Next := W;
   WaitTail := W;
   LeaveCriticalSection(WaitLock);
   Result := wrOk;
 end;
 
-function SharedAsyncCancel(AToken: Integer): Boolean;
+function SharedAsyncCancel(Token: Integer): Boolean;
 var P: PWaiter; M: PMailbox;
 begin
   M := Mailbox;
@@ -381,7 +379,7 @@ begin
   P := WaitHead;
   while P <> nil do
   begin
-    if (P^.Mailbox = M) and (P^.Token = AToken) then
+    if (P^.Mailbox = M) and (P^.Token = Token) then
     begin
       Unlink(P);
       Dispose(P);
@@ -393,14 +391,14 @@ begin
   LeaveCriticalSection(WaitLock);
 end;
 
-function SharedAsyncPoll(ATimeoutMs: Cardinal): TBoundArray;
+function SharedAsyncPoll(TimeoutMs: Cardinal): TBoundArray;
 var M: PMailbox; I: Integer;
 begin
   M := Mailbox;
   EnterCriticalSection(WaitLock);
   I := M^.DoneCount;
   LeaveCriticalSection(WaitLock);
-  if (I = 0) and (ATimeoutMs > 0) then RTLEventWaitFor(M^.Event, ATimeoutMs);
+  if (I = 0) and (TimeoutMs > 0) then RTLEventWaitFor(M^.Event, TimeoutMs);
   EnterCriticalSection(WaitLock);
   SetLength(Result, M^.DoneCount);
   for I := 0 to M^.DoneCount - 1 do Result[I] := M^.Done[I];
@@ -408,16 +406,16 @@ begin
   LeaveCriticalSection(WaitLock);
 end;
 
-function SharedNotify(ABlock: PSharedBlock; AByteIndex: Int64; ACount: Int64): Int64;
+function SharedNotify(Block: PSharedBlock; ByteIndex: Int64; Count: Int64): Int64;
 var P, Nx: PWaiter; M: PMailbox;
 begin
   Result := 0;
   EnterCriticalSection(WaitLock);
   P := WaitHead;
-  while (P <> nil) and ((ACount < 0) or (Result < ACount)) do
+  while (P <> nil) and ((Count < 0) or (Result < Count)) do
   begin
     Nx := P^.Next;
-    if (P^.Block = ABlock) and (P^.ByteIndex = AByteIndex) then
+    if (P^.Block = Block) and (P^.ByteIndex = ByteIndex) then
     begin
       Unlink(P);
       if P^.Mailbox <> nil then

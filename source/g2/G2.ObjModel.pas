@@ -31,20 +31,20 @@ const
 { 6.2.6.5 ToPropertyDescriptor; the descriptor's values are rooted by the caller }
 function ToPropertyDescriptor(V: TValue; var D: TPropDesc): Boolean;
 { 6.2.6.4 FromPropertyDescriptor (undefined when not Found) }
-function FromPropertyDescriptor(const D: TPropDesc; AFound: Boolean): TValue;
+function FromPropertyDescriptor(const D: TPropDesc; Found: Boolean): TValue;
 { [[GetOwnProperty]] }
-function GetOwnPropertyV(O: TValue; AKey: PStr; var D: TPropDesc; var AFound: Boolean): Boolean;
+function GetOwnPropertyV(O: TValue; Key: PStr; var D: TPropDesc; var Found: Boolean): Boolean;
 { [[DefineOwnProperty]]: Ok the success flag (DefinePropertyOrThrow turns False into a TypeError) }
-function DefineOwnPropertyV(O: TValue; AKey: PStr; const ADIn: TPropDesc; var AOk: Boolean): Boolean;
-function DefinePropertyOrThrow(O: TValue; AKey: PStr; const D: TPropDesc): Boolean;
+function DefineOwnPropertyV(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean;
+function DefinePropertyOrThrow(O: TValue; Key: PStr; const D: TPropDesc): Boolean;
 { 7.3.15 SetIntegrityLevel (Frozen: frozen, else sealed); Ok False when a proxy refused }
-function SetIntegrityLevel(O: TValue; AFrozen: Boolean; var AOk: Boolean): Boolean;
+function SetIntegrityLevel(O: TValue; Frozen: Boolean; var Ok: Boolean): Boolean;
 { 7.3.16 TestIntegrityLevel }
-function TestIntegrityLevel(O: TValue; AFrozen: Boolean; var ARes: Boolean): Boolean;
+function TestIntegrityLevel(O: TValue; Frozen: Boolean; var Res: Boolean): Boolean;
 { [[PreventExtensions]] }
-function PreventExtensionsV(O: TValue; var AOk: Boolean): Boolean;
+function PreventExtensionsV(O: TValue; var Ok: Boolean): Boolean;
 { [[OwnPropertyKeys]] as an array: integer keys ascending, strings in order, then symbols }
-function OwnPropertyKeysV(O: TValue; var ARes: TValue): Boolean;
+function OwnPropertyKeysV(O: TValue; var Res: TValue): Boolean;
 { 7.1.18 ToObject }
 function ToObjectV(V: TValue; var O: TValue): Boolean;
 { a data descriptor with all fields present }
@@ -56,11 +56,7 @@ procedure InitObjModel;
 implementation
 
 uses
-  Math,
-  SysUtils,
-
-  G2.Typed,
-  G2.VM;
+  SysUtils, Math, G2.VM, G2.Typed;
 
 threadvar
   AtomEnumerable, AtomConfigurable, AtomWritable, AtomGet, AtomSet: PStr;
@@ -83,11 +79,11 @@ end;
 
 function ToPropertyDescriptor(V: TValue; var D: TPropDesc): Boolean;
 var T: TValue; Has: Boolean; Base: Integer;
-  function Field(AKey: PStr; var APresent: Boolean; var ARes: TValue): Boolean;
+  function Field(Key: PStr; var Present: Boolean; var Res: TValue): Boolean;
   begin
-    ARes := VUndefined;
-    if not HasPropertyV(RootAt(Base), AKey, APresent) then Exit(False);
-    if APresent then Result := GetV(RootAt(Base), AKey, ARes) else Result := True;
+    Res := VUndefined;
+    if not HasPropertyV(RootAt(Base), Key, Present) then Exit(False);
+    if Present then Result := GetV(RootAt(Base), Key, Res) else Result := True;
   end;
 begin
   EmptyDesc(D);
@@ -128,10 +124,10 @@ begin
   Result := True;
 end;
 
-function FromPropertyDescriptor(const D: TPropDesc; AFound: Boolean): TValue;
+function FromPropertyDescriptor(const D: TPropDesc; Found: Boolean): TValue;
 var O: TValue;
 begin
-  if not AFound then Exit(VUndefined);
+  if not Found then Exit(VUndefined);
   PushRoot(D.Value); PushRoot(D.Get); PushRoot(D.Set_);
   O := MkPtr(NewPlainObject(ObjectProto, 4));
   PushRoot(O);
@@ -177,27 +173,27 @@ end;
 
 { 10.5.5 [[GetOwnProperty]] of a proxy, through its trap (the invariant checks against the target are not
   enforced yet) }
-function IsExtensibleOM(O: TValue; var AExt: Boolean): Boolean; forward;
-function Compatible(AExtensible: Boolean; const D: TPropDesc; AFound: Boolean; const ACur: TPropDesc): Boolean; forward;
+function IsExtensibleOM(O: TValue; var Ext: Boolean): Boolean; forward;
+function Compatible(Extensible: Boolean; const D: TPropDesc; Found: Boolean; const Cur: TPropDesc): Boolean; forward;
 
-function ProxyGetOwnProperty(APV: TValue; AKey: PStr; var D: TPropDesc; var AFound: Boolean): Boolean;
+function ProxyGetOwnProperty(PV: TValue; Key: PStr; var D: TPropDesc; var Found: Boolean): Boolean;
 var Trap, R: TValue; TD: TPropDesc; TF, Ext: Boolean;
 begin
-  PushRoot(APV);
-  if not ProxyGetTrap(APV, 'getOwnPropertyDescriptor', Trap) then begin PopRoots(1); Exit(False); end;
-  APV := RootAt(TempTop - 1);
+  PushRoot(PV);
+  if not ProxyGetTrap(PV, 'getOwnPropertyDescriptor', Trap) then begin PopRoots(1); Exit(False); end;
+  PV := RootAt(TempTop - 1);
   PopRoots(1);
-  if IsNullish(Trap) then Exit(GetOwnPropertyV(ObjOf(APV)^.Aux1, AKey, D, AFound));
-  PushRoot(APV);
-  if not ProxyCallTrap(APV, Trap, 1, KeyToValue(AKey), VUndefined, VUndefined, R) then begin PopRoots(1); Exit(False); end;
+  if IsNullish(Trap) then Exit(GetOwnPropertyV(ObjOf(PV)^.Aux1, Key, D, Found));
+  PushRoot(PV);
+  if not ProxyCallTrap(PV, Trap, 1, KeyToValue(Key), VUndefined, VUndefined, R) then begin PopRoots(1); Exit(False); end;
   if (R <> VUndefined) and not IsObject(R) then
   begin PopRoots(1); Exit(ThrowTypeError('getOwnPropertyDescriptor trap returned neither object nor undefined')); end;
   PushRoot(R);
   { 10.5.5: the target's descriptor and extensibility bound what the trap may report }
-  if not GetOwnPropertyV(ObjOf(RootAt(TempTop - 2))^.Aux1, AKey, TD, TF) then begin PopRoots(2); Exit(False); end;
+  if not GetOwnPropertyV(ObjOf(RootAt(TempTop - 2))^.Aux1, Key, TD, TF) then begin PopRoots(2); Exit(False); end;
   if R = VUndefined then
   begin
-    AFound := False;
+    Found := False;
     if not TF then begin PopRoots(2); Exit(True); end;
     if not TD.Configurable then begin PopRoots(2); Exit(ThrowTypeError('proxy getOwnPropertyDescriptor reported a non-configurable property as absent')); end;
     if not IsExtensibleOM(ObjOf(RootAt(TempTop - 2))^.Aux1, Ext) then begin PopRoots(2); Exit(False); end;
@@ -214,7 +210,7 @@ begin
   { CompletePropertyDescriptor }
   if Result then
   begin
-    AFound := True;
+    Found := True;
     if not IsAccessorDesc(D) then
     begin
       if not D.HasValue then begin D.HasValue := True; D.Value := VUndefined; end;
@@ -237,65 +233,65 @@ begin
   end;
 end;
 
-function GetOwnPropertyV(O: TValue; AKey: PStr; var D: TPropDesc; var AFound: Boolean): Boolean;
+function GetOwnPropertyV(O: TValue; Key: PStr; var D: TPropDesc; var Found: Boolean): Boolean;
 var P: PObj; S: Integer; Idx: Int64; V: TValue; F: Byte;
 begin
-  AFound := False;
+  Found := False;
   EmptyDesc(D);
   if not IsObject(O) then Exit(True);
   P := ObjOf(O);
-  if P^.OKind = okProxy then Exit(ProxyGetOwnProperty(O, AKey, D, AFound));
+  if P^.OKind = okProxy then Exit(ProxyGetOwnProperty(O, Key, D, Found));
   { 10.4.6.4 a namespace's export: writable, enumerable, not configurable (its value read now) }
-  if (P^.OKind = okModuleNS) and ((AKey^.Hdr.Extra and kfSymbol) = 0) then
+  if (P^.OKind = okModuleNS) and ((Key^.Hdr.Extra and kfSymbol) = 0) then
   begin
-    if not NSLookup(P, AKey, True, V, AFound) then Exit(False);
-    if AFound then DataDesc(D, V, True, True, False);
+    if not NSLookup(P, Key, True, V, Found) then Exit(False);
+    if Found then DataDesc(D, V, True, True, False);
     Exit(True);
   end;
   Result := True;
-  if (AKey^.Hdr.Extra and (kfPrivate or kfInternal)) <> 0 then Exit;
-  if (P^.OKind = okTypedArray) and IndexFromString(AKey, Idx) then
+  if (Key^.Hdr.Extra and (kfPrivate or kfInternal)) <> 0 then Exit;
+  if (P^.OKind = okTypedArray) and IndexFromString(Key, Idx) then
   begin
     { 10.4.5.1: an integer index is a property exactly when it is in range }
-    if Idx < TALength(P) then begin DataDesc(D, TAGet(P, Idx), True, True, True); AFound := True; end;
+    if Idx < TALength(P) then begin DataDesc(D, TAGet(P, Idx), True, True, True); Found := True; end;
     Exit;
   end;
-  if (P^.OKind = okTypedArray) and CanonicalNumericNonIndex(AKey) then Exit;
-  S := ShapeLookup(P^.Shape, AKey);
+  if (P^.OKind = okTypedArray) and CanonicalNumericNonIndex(Key) then Exit;
+  S := ShapeLookup(P^.Shape, Key);
   if S >= 0 then
   begin
     DescFromSlot(P, S, D);
-    AFound := True;
+    Found := True;
     Exit;
   end;
-  if (P^.Elements <> nil) and IndexFromString(AKey, Idx) and (Idx < P^.Elements^.Len) and (P^.Elements^.Data[Idx] <> VHole) then
+  if (P^.Elements <> nil) and IndexFromString(Key, Idx) and (Idx < P^.Elements^.Len) and (P^.Elements^.Data[Idx] <> VHole) then
   begin
     DataDesc(D, P^.Elements^.Data[Idx], True, True, True);
-    AFound := True;
+    Found := True;
     Exit;
   end;
-  if (P^.OKind = okArray) and (AKey = AtomLength) then
+  if (P^.OKind = okArray) and (Key = AtomLength) then
   begin
     DataDesc(D, MkInt(ArrayLen(P)), (P^.OFlags and ofLenReadOnly) = 0, False, False);
-    AFound := True;
+    Found := True;
     Exit;
   end;
   if P^.OKind = okStringObj then
   begin
-    if AKey = AtomLength then begin DataDesc(D, MkInt(StrOf(P^.Aux1)^.Len), False, False, False); AFound := True; Exit; end;
-    if IndexFromString(AKey, Idx) and (Idx < StrOf(P^.Aux1)^.Len) then
+    if Key = AtomLength then begin DataDesc(D, MkInt(StrOf(P^.Aux1)^.Len), False, False, False); Found := True; Exit; end;
+    if IndexFromString(Key, Idx) and (Idx < StrOf(P^.Aux1)^.Len) then
     begin
       DataDesc(D, SubString(StrOf(P^.Aux1), Idx, 1), False, True, False);
-      AFound := True;
+      Found := True;
       Exit;
     end;
     Exit;
   end;
-  if OwnVirtual(P, AKey, V, F) then
+  if OwnVirtual(P, Key, V, F) then
   begin
     { a function's prototype made on first use, and the remaining virtual properties }
     DataDesc(D, V, (F and pfWritable) <> 0, (F and pfEnumerable) <> 0, (F and pfConfigurable) <> 0);
-    AFound := True;
+    Found := True;
   end;
 end;
 
@@ -312,51 +308,51 @@ begin
 end;
 
 { 10.1.6.3 ValidateAndApplyPropertyDescriptor, steps 1-6 (the check against the current descriptor) }
-function Compatible(AExtensible: Boolean; const D: TPropDesc; AFound: Boolean; const ACur: TPropDesc): Boolean;
+function Compatible(Extensible: Boolean; const D: TPropDesc; Found: Boolean; const Cur: TPropDesc): Boolean;
 begin
-  if not AFound then Exit(AExtensible);
-  if ACur.Configurable then Exit(True);
+  if not Found then Exit(Extensible);
+  if Cur.Configurable then Exit(True);
   { a non-configurable property }
   if D.HasConfigurable and D.Configurable then Exit(False);
-  if D.HasEnumerable and (D.Enumerable <> ACur.Enumerable) then Exit(False);
+  if D.HasEnumerable and (D.Enumerable <> Cur.Enumerable) then Exit(False);
   if IsAccessorDesc(D) or IsDataDesc(D) then
   begin
-    if IsAccessorDesc(D) <> IsAccessorDesc(ACur) then Exit(False);
-    if IsAccessorDesc(ACur) then
+    if IsAccessorDesc(D) <> IsAccessorDesc(Cur) then Exit(False);
+    if IsAccessorDesc(Cur) then
     begin
-      if D.HasGet and not SameValueV(D.Get, ACur.Get) then Exit(False);
-      if D.HasSet and not SameValueV(D.Set_, ACur.Set_) then Exit(False);
+      if D.HasGet and not SameValueV(D.Get, Cur.Get) then Exit(False);
+      if D.HasSet and not SameValueV(D.Set_, Cur.Set_) then Exit(False);
     end
-    else if not ACur.Writable then
+    else if not Cur.Writable then
     begin
       if D.HasWritable and D.Writable then Exit(False);
-      if D.HasValue and not SameValueV(D.Value, ACur.Value) then Exit(False);
+      if D.HasValue and not SameValueV(D.Value, Cur.Value) then Exit(False);
     end;
   end;
   Result := True;
 end;
 
 { the merged descriptor: what D gives, the rest from the current one (or the defaults) }
-procedure MergeDesc(const D: TPropDesc; AFound: Boolean; const ACur: TPropDesc; var M: TPropDesc);
+procedure MergeDesc(const D: TPropDesc; Found: Boolean; const Cur: TPropDesc; var M: TPropDesc);
 var ToAccessor: Boolean;
 begin
   EmptyDesc(M);
-  if AFound then ToAccessor := IsAccessorDesc(D) or (IsAccessorDesc(ACur) and not IsDataDesc(D))
+  if Found then ToAccessor := IsAccessorDesc(D) or (IsAccessorDesc(Cur) and not IsDataDesc(D))
   else ToAccessor := IsAccessorDesc(D);
-  if D.HasEnumerable then M.Enumerable := D.Enumerable else if AFound then M.Enumerable := ACur.Enumerable;
-  if D.HasConfigurable then M.Configurable := D.Configurable else if AFound then M.Configurable := ACur.Configurable;
+  if D.HasEnumerable then M.Enumerable := D.Enumerable else if Found then M.Enumerable := Cur.Enumerable;
+  if D.HasConfigurable then M.Configurable := D.Configurable else if Found then M.Configurable := Cur.Configurable;
   M.HasEnumerable := True; M.HasConfigurable := True;
   if ToAccessor then
   begin
     M.HasGet := True; M.HasSet := True;
-    if D.HasGet then M.Get := D.Get else if AFound and IsAccessorDesc(ACur) then M.Get := ACur.Get;
-    if D.HasSet then M.Set_ := D.Set_ else if AFound and IsAccessorDesc(ACur) then M.Set_ := ACur.Set_;
+    if D.HasGet then M.Get := D.Get else if Found and IsAccessorDesc(Cur) then M.Get := Cur.Get;
+    if D.HasSet then M.Set_ := D.Set_ else if Found and IsAccessorDesc(Cur) then M.Set_ := Cur.Set_;
   end
   else
   begin
     M.HasValue := True; M.HasWritable := True;
-    if D.HasValue then M.Value := D.Value else if AFound and IsDataDesc(ACur) then M.Value := ACur.Value;
-    if D.HasWritable then M.Writable := D.Writable else if AFound and IsDataDesc(ACur) then M.Writable := ACur.Writable;
+    if D.HasValue then M.Value := D.Value else if Found and IsDataDesc(Cur) then M.Value := Cur.Value;
+    if D.HasWritable then M.Writable := D.Writable else if Found and IsDataDesc(Cur) then M.Writable := Cur.Writable;
   end;
 end;
 
@@ -367,24 +363,24 @@ begin
 end;
 
 { stores the complete descriptor M as an own property of P under Key }
-procedure StoreProperty(O: TValue; AKey: PStr; const M: TPropDesc);
+procedure StoreProperty(O: TValue; Key: PStr; const M: TPropDesc);
 var P: PObj; Idx: Int64; S: Integer; V: TValue; Fl: Byte;
 begin
   P := ObjOf(O);
   Fl := FlagsOf(M);
-  if (P^.Elements <> nil) and IndexFromString(AKey, Idx) and (ShapeLookup(P^.Shape, AKey) < 0) and
+  if (P^.Elements <> nil) and IndexFromString(Key, Idx) and (ShapeLookup(P^.Shape, Key) < 0) and
      (Fl = pfDefault) and ((P^.OKind <> okArray) or (Idx < P^.Elements^.Len) or ArrayDenseOK(P^.Elements, Idx)) then
   begin
     { a default data property on an index: an element }
     if DefineElemRaw(O, Idx, M.Value) then Exit;
   end;
-  if (P^.Elements <> nil) and IndexFromString(AKey, Idx) and (Idx < P^.Elements^.Len) then
+  if (P^.Elements <> nil) and IndexFromString(Key, Idx) and (Idx < P^.Elements^.Len) then
   begin
     { the index moves from the elements to the shape }
     P^.Elements^.Data[Idx] := VHole;
     P^.OFlags := P^.OFlags or ofElemGuard;
   end;
-  if (P^.OKind = okArray) and IndexFromString(AKey, Idx) and (P^.Elements <> nil) and (Idx >= P^.Elements^.Len) and
+  if (P^.OKind = okArray) and IndexFromString(Key, Idx) and (P^.Elements <> nil) and (Idx >= P^.Elements^.Len) and
      (Idx < 64 * 1024 * 1024) then
   begin
     { an index at or past the length extends it (10.4.2.1 step 1.k) }
@@ -399,29 +395,29 @@ begin
   begin
     PushRoot(O);
     V := MkPtr(NewAccessor(M.Get, M.Set_));
-    DefineOwn(RootAt(TempTop - 1), AKey, V, Fl);
+    DefineOwn(RootAt(TempTop - 1), Key, V, Fl);
     PopRoots(1);
   end
   else
   begin
-    S := ShapeLookup(P^.Shape, AKey);
-    DefineOwn(O, AKey, M.Value, Fl);
+    S := ShapeLookup(P^.Shape, Key);
+    DefineOwn(O, Key, M.Value, Fl);
   end;
 end;
 
 { 10.4.2.4 ArraySetLength with a descriptor }
-function ArrayDefineLength(O: TValue; const D: TPropDesc; var AOk: Boolean): Boolean;
+function ArrayDefineLength(O: TValue; const D: TPropDesc; var Ok: Boolean): Boolean;
 var P: PObj; NewLen, OldLen, I: Int64; D1, D2: Double; Cur: TPropDesc; Found: Boolean; S: Integer; K: PStr;
   ReadOnly: Boolean;
 begin
-  AOk := True;
+  Ok := True;
   P := ObjOf(O);
   if not D.HasValue then
   begin
     { only attributes: length is writable-only-to-false, never configurable or enumerable }
     if (D.HasConfigurable and D.Configurable) or (D.HasEnumerable and D.Enumerable) or IsAccessorDesc(D) then
-      begin AOk := False; Exit(True); end;
-    if D.HasWritable and D.Writable and ((P^.OFlags and ofLenReadOnly) <> 0) then begin AOk := False; Exit(True); end;
+      begin Ok := False; Exit(True); end;
+    if D.HasWritable and D.Writable and ((P^.OFlags and ofLenReadOnly) <> 0) then begin Ok := False; Exit(True); end;
     if D.HasWritable and not D.Writable then P^.OFlags := P^.OFlags or ofLenReadOnly or ofElemGuard;
     Exit(True);
   end;
@@ -434,14 +430,14 @@ begin
   if D2 > 64 * 1024 * 1024 then Exit(ThrowError('RangeError', 'Array length beyond G2''s dense arrays (no sparse arrays yet)'));
   P := ObjOf(O);
   if (D.HasConfigurable and D.Configurable) or (D.HasEnumerable and D.Enumerable) or IsAccessorDesc(D) then
-    begin AOk := False; Exit(True); end;
+    begin Ok := False; Exit(True); end;
   NewLen := Trunc(D2);
   OldLen := ArrayLen(P);
   ReadOnly := (P^.OFlags and ofLenReadOnly) <> 0;
   if ReadOnly then
   begin
-    if D.HasWritable and D.Writable then begin AOk := False; Exit(True); end;
-    AOk := NewLen = OldLen;
+    if D.HasWritable and D.Writable then begin Ok := False; Exit(True); end;
+    Ok := NewLen = OldLen;
     Exit(True);
   end;
   if NewLen < OldLen then
@@ -458,7 +454,7 @@ begin
         begin
           ArraySetLength(P, I + 1);
           if D.HasWritable and not D.Writable then P^.OFlags := P^.OFlags or ofLenReadOnly or ofElemGuard;
-          AOk := False;
+          Ok := False;
           Exit(True);
         end;
         PushRoot(O);
@@ -475,26 +471,26 @@ begin
 end;
 
 { 10.5.6 [[DefineOwnProperty]] of a proxy, through its trap }
-function ProxyDefineOwnProperty(APV: TValue; AKey: PStr; const D: TPropDesc; var AOk: Boolean): Boolean;
+function ProxyDefineOwnProperty(PV: TValue; Key: PStr; const D: TPropDesc; var Ok: Boolean): Boolean;
 var Trap, R, DO_: TValue; TD, DD: TPropDesc; TF, Ext, SettingConfigFalse: Boolean;
 begin
-  PushRoot(APV);
-  if not ProxyGetTrap(APV, 'defineProperty', Trap) then begin PopRoots(1); Exit(False); end;
-  APV := RootAt(TempTop - 1);
+  PushRoot(PV);
+  if not ProxyGetTrap(PV, 'defineProperty', Trap) then begin PopRoots(1); Exit(False); end;
+  PV := RootAt(TempTop - 1);
   if IsNullish(Trap) then
   begin
     PopRoots(1);
-    Exit(DefineOwnPropertyV(ObjOf(APV)^.Aux1, AKey, D, AOk));
+    Exit(DefineOwnPropertyV(ObjOf(PV)^.Aux1, Key, D, Ok));
   end;
   PushRoot(Trap);
   PushRoot(D.Value); PushRoot(D.Get); PushRoot(D.Set_);
   DO_ := FromPropertyDescriptor(D, True);
-  if not ProxyCallTrap(RootAt(TempTop - 5), RootAt(TempTop - 4), 3, KeyToValue(AKey), DO_, VUndefined, R) then
+  if not ProxyCallTrap(RootAt(TempTop - 5), RootAt(TempTop - 4), 3, KeyToValue(Key), DO_, VUndefined, R) then
   begin PopRoots(5); Exit(False); end;
-  AOk := ToBool(R);
-  if not AOk then begin PopRoots(5); Exit(True); end;
+  Ok := ToBool(R);
+  if not Ok then begin PopRoots(5); Exit(True); end;
   { 10.5.6 steps 9-16: the trap cannot report a definition the target contradicts }
-  if not GetOwnPropertyV(ObjOf(RootAt(TempTop - 5))^.Aux1, AKey, TD, TF) then begin PopRoots(5); Exit(False); end;
+  if not GetOwnPropertyV(ObjOf(RootAt(TempTop - 5))^.Aux1, Key, TD, TF) then begin PopRoots(5); Exit(False); end;
   PushRoot(TD.Value); PushRoot(TD.Get); PushRoot(TD.Set_);
   if not IsExtensibleOM(ObjOf(RootAt(TempTop - 8))^.Aux1, Ext) then begin PopRoots(8); Exit(False); end;
   TD.Value := RootAt(TempTop - 3); TD.Get := RootAt(TempTop - 2); TD.Set_ := RootAt(TempTop - 1);
@@ -518,22 +514,22 @@ begin
   Result := True;
 end;
 
-function DefineOwnPropertyV(O: TValue; AKey: PStr; const ADIn: TPropDesc; var AOk: Boolean): Boolean;
+function DefineOwnPropertyV(O: TValue; Key: PStr; const DIn: TPropDesc; var Ok: Boolean): Boolean;
 var P: PObj; Cur, M, D: TPropDesc; Found: Boolean; Idx: Int64; Ext: Boolean; Dbl: Double;
 begin
-  D := ADIn;
-  AOk := False;
+  D := DIn;
+  Ok := False;
   if not IsObject(O) then Exit(ThrowTypeError('Object.defineProperty called on non-object'));
   P := ObjOf(O);
-  if P^.OKind = okProxy then Exit(ProxyDefineOwnProperty(O, AKey, D, AOk));
+  if P^.OKind = okProxy then Exit(ProxyDefineOwnProperty(O, Key, D, Ok));
   { 10.4.6.6 a namespace's string key: no change but to what it already is }
-  if (P^.OKind = okModuleNS) and ((AKey^.Hdr.Extra and kfSymbol) = 0) then
+  if (P^.OKind = okModuleNS) and ((Key^.Hdr.Extra and kfSymbol) = 0) then
   begin
-    if not GetOwnPropertyV(O, AKey, Cur, Found) then Exit(False);
+    if not GetOwnPropertyV(O, Key, Cur, Found) then Exit(False);
     if not Found then Exit(True);
     if (D.HasConfigurable and D.Configurable) or (D.HasEnumerable and not D.Enumerable) or IsAccessorDesc(D) or
        (D.HasWritable and not D.Writable) then Exit(True);
-    AOk := not D.HasValue or SameValueV(D.Value, Cur.Value);
+    Ok := not D.HasValue or SameValueV(D.Value, Cur.Value);
     Exit(True);
   end;
   if P^.OKind = okArguments then
@@ -544,24 +540,24 @@ begin
     PopRoots(3);
     P := ObjOf(O);
   end;
-  if (P^.OKind = okTypedArray) and IndexFromString(AKey, Idx) then
+  if (P^.OKind = okTypedArray) and IndexFromString(Key, Idx) then
   begin
     { 10.4.5.3 }
     if Idx >= TALength(P) then Exit(True);
     if (D.HasConfigurable and not D.Configurable) or (D.HasEnumerable and not D.Enumerable) or IsAccessorDesc(D) or
        (D.HasWritable and not D.Writable) then Exit(True);
     if D.HasValue and not TAStoreValue(O, Idx, D.Value) then Exit(False);
-    AOk := True;
+    Ok := True;
     Exit(True);
   end;
-  if (P^.OKind = okTypedArray) and CanonicalNumericNonIndex(AKey) then Exit(True);
-  if (P^.OKind = okArray) and (AKey = AtomLength) then Exit(ArrayDefineLength(O, D, AOk));
+  if (P^.OKind = okTypedArray) and CanonicalNumericNonIndex(Key) then Exit(True);
+  if (P^.OKind = okArray) and (Key = AtomLength) then Exit(ArrayDefineLength(O, D, Ok));
   PushRoot(O);
-  if not GetOwnPropertyV(O, AKey, Cur, Found) then begin PopRoots(1); Exit(False); end;
+  if not GetOwnPropertyV(O, Key, Cur, Found) then begin PopRoots(1); Exit(False); end;
   O := RootAt(TempTop - 1);
   P := ObjOf(O);
   Ext := (P^.OFlags and 8) = 0;
-  if (P^.OKind = okArray) and IndexFromString(AKey, Idx) and not Found and ((P^.OFlags and ofLenReadOnly) <> 0) and
+  if (P^.OKind = okArray) and IndexFromString(Key, Idx) and not Found and ((P^.OFlags and ofLenReadOnly) <> 0) and
      (Idx >= ArrayLen(P)) then
   begin
     { 10.4.2.1: an index past a read-only length }
@@ -573,29 +569,29 @@ begin
   begin
     { a String object's characters and length are immutable: Compatible held, nothing changes }
     PopRoots(1);
-    AOk := True;
+    Ok := True;
     Exit(True);
   end;
   MergeDesc(D, Found, Cur, M);
   PushRoot(M.Value); PushRoot(M.Get); PushRoot(M.Set_);
-  StoreProperty(RootAt(TempTop - 4), AKey, M);
+  StoreProperty(RootAt(TempTop - 4), Key, M);
   PopRoots(4);
-  AOk := True;
+  Ok := True;
   Result := True;
 end;
 
-function DefinePropertyOrThrow(O: TValue; AKey: PStr; const D: TPropDesc): Boolean;
+function DefinePropertyOrThrow(O: TValue; Key: PStr; const D: TPropDesc): Boolean;
 var Ok: Boolean;
 begin
-  if not DefineOwnPropertyV(O, AKey, D, Ok) then Exit(False);
-  if not Ok then Exit(ThrowTypeError('Cannot redefine property: ' + StrToUnicode(AKey)));
+  if not DefineOwnPropertyV(O, Key, D, Ok) then Exit(False);
+  if not Ok then Exit(ThrowTypeError('Cannot redefine property: ' + StrToUnicode(Key)));
   Result := True;
 end;
 
-function PreventExtensionsV(O: TValue; var AOk: Boolean): Boolean;
+function PreventExtensionsV(O: TValue; var Ok: Boolean): Boolean;
 var Trap, R: TValue; Ext: Boolean;
 begin
-  AOk := True;
+  Ok := True;
   if not IsObject(O) then Exit(True);
   if ObjOf(O)^.OKind = okProxy then
   begin
@@ -603,12 +599,12 @@ begin
     if not ProxyGetTrap(O, 'preventExtensions', Trap) then begin PopRoots(1); Exit(False); end;
     O := RootAt(TempTop - 1);
     PopRoots(1);
-    if IsNullish(Trap) then Exit(PreventExtensionsV(ObjOf(O)^.Aux1, AOk));
+    if IsNullish(Trap) then Exit(PreventExtensionsV(ObjOf(O)^.Aux1, Ok));
     PushRoot(O);
     if not ProxyCallTrap(O, Trap, 0, VUndefined, VUndefined, VUndefined, R) then begin PopRoots(1); Exit(False); end;
-    AOk := ToBool(R);
+    Ok := ToBool(R);
     { 10.5.4 step 8: true only for a target that is no longer extensible }
-    if AOk then
+    if Ok then
     begin
       if not IsExtensibleOM(ObjOf(RootAt(TempTop - 1))^.Aux1, Ext) then begin PopRoots(1); Exit(False); end;
       if Ext then begin PopRoots(1); Exit(ThrowTypeError('proxy preventExtensions trap returned true but the target is extensible')); end;
@@ -625,10 +621,10 @@ begin
 end;
 
 { [[IsExtensible]] }
-function IsExtensibleOM(O: TValue; var AExt: Boolean): Boolean;
+function IsExtensibleOM(O: TValue; var Ext: Boolean): Boolean;
 var Trap, R: TValue; TE: Boolean;
 begin
-  AExt := False;
+  Ext := False;
   if not IsObject(O) then Exit(True);
   if ObjOf(O)^.OKind = okProxy then
   begin
@@ -636,27 +632,27 @@ begin
     if not ProxyGetTrap(O, 'isExtensible', Trap) then begin PopRoots(1); Exit(False); end;
     O := RootAt(TempTop - 1);
     PopRoots(1);
-    if IsNullish(Trap) then Exit(IsExtensibleOM(ObjOf(O)^.Aux1, AExt));
+    if IsNullish(Trap) then Exit(IsExtensibleOM(ObjOf(O)^.Aux1, Ext));
     PushRoot(O);
     if not ProxyCallTrap(O, Trap, 0, VUndefined, VUndefined, VUndefined, R) then begin PopRoots(1); Exit(False); end;
     { 10.5.3 step 8: the trap must agree with the target }
     if not IsExtensibleOM(ObjOf(RootAt(TempTop - 1))^.Aux1, TE) then begin PopRoots(1); Exit(False); end;
     PopRoots(1);
-    AExt := ToBool(R);
-    if AExt <> TE then Exit(ThrowTypeError('proxy isExtensible trap result does not reflect the target'));
+    Ext := ToBool(R);
+    if Ext <> TE then Exit(ThrowTypeError('proxy isExtensible trap result does not reflect the target'));
     Exit(True);
   end;
-  AExt := (ObjOf(O)^.OFlags and 8) = 0;
+  Ext := (ObjOf(O)^.OFlags and 8) = 0;
   Result := True;
 end;
 
-function EnumerableOwn(O: TValue; AKind: Integer; var ARes: TValue): Boolean; forward;
+function EnumerableOwn(O: TValue; Kind: Integer; var Res: TValue): Boolean; forward;
 
 { a proxy's string keys, through its ownKeys trap }
-function Obj_StringKeys(APV: TValue; var ARes: TValue): Boolean;
+function Obj_StringKeys(PV: TValue; var Res: TValue): Boolean;
 var Keys, KV: TValue; I, N: Integer;
 begin
-  if not OwnPropertyKeysV(APV, Keys) then Exit(False);
+  if not OwnPropertyKeysV(PV, Keys) then Exit(False);
   PushRoot(Keys);
   PushRoot(MkPtr(NewArray(0, 4)));
   N := ArrayLen(ObjOf(RootAt(TempTop - 2)));   { Keys moved if the allocation above collected }
@@ -665,31 +661,31 @@ begin
     KV := ObjOf(RootAt(TempTop - 2))^.Elements^.Data[I];
     if IsString(KV) then ArrayPush(ObjOf(RootAt(TempTop - 1)), KV);
   end;
-  ARes := RootAt(TempTop - 1);
+  Res := RootAt(TempTop - 1);
   PopRoots(2);
   Result := True;
 end;
 
 { 10.5.8 / 10.5.7 / 10.5.10 / 10.5.11: what a proxy trap may report given its target (G2.VM's ProxyCheckHook) }
-function ProxyCheckOM(AKind: Integer; APV: TValue; AKey: PStr; var ARes: TValue): Boolean;
+function ProxyCheckOM(Kind: Integer; PV: TValue; Key: PStr; var Res: TValue): Boolean;
 var D: TPropDesc; Found, Ext: Boolean; Len, I, J: Int64; V, TK: TValue; K: PStr; Keys: array of PStr;
   Used: array of Boolean; NonCfg: array of PStr; Cfg: array of PStr; N: Integer;
 begin
   Result := True;
-  case AKind of
+  case Kind of
     0, 1, 2:
       begin
-        PushRoot(APV); PushRoot(ARes);
-        if not GetOwnPropertyV(ObjOf(APV)^.Aux1, AKey, D, Found) then begin PopRoots(2); Exit(False); end;
-        if AKind = 0 then
+        PushRoot(PV); PushRoot(Res);
+        if not GetOwnPropertyV(ObjOf(PV)^.Aux1, Key, D, Found) then begin PopRoots(2); Exit(False); end;
+        if Kind = 0 then
         begin
-          ARes := RootAt(TempTop - 1);
+          Res := RootAt(TempTop - 1);
           PopRoots(2);
           if Found and not D.Configurable then
           begin
-            if not IsAccessorDesc(D) and not D.Writable and not SameValueV(ARes, D.Value) then
+            if not IsAccessorDesc(D) and not D.Writable and not SameValueV(Res, D.Value) then
               Exit(ThrowTypeError('proxy get trap result differs from a non-writable, non-configurable property'));
-            if IsAccessorDesc(D) and (D.Get = VUndefined) and (ARes <> VUndefined) then
+            if IsAccessorDesc(D) and (D.Get = VUndefined) and (Res <> VUndefined) then
               Exit(ThrowTypeError('proxy get trap returned a value for a non-configurable accessor without a getter'));
           end;
           Exit(True);
@@ -698,26 +694,26 @@ begin
         if not D.Configurable then
         begin
           PopRoots(2);
-          if AKind = 1 then Exit(ThrowTypeError('proxy has trap reported a non-configurable property as absent'));
+          if Kind = 1 then Exit(ThrowTypeError('proxy has trap reported a non-configurable property as absent'));
           Exit(ThrowTypeError('proxy deleteProperty trap deleted a non-configurable property'));
         end;
         if not IsExtensibleOM(ObjOf(RootAt(TempTop - 2))^.Aux1, Ext) then begin PopRoots(2); Exit(False); end;
         PopRoots(2);
         if not Ext then
         begin
-          if AKind = 1 then Exit(ThrowTypeError('proxy has trap reported an existing property of a non-extensible target as absent'));
+          if Kind = 1 then Exit(ThrowTypeError('proxy has trap reported an existing property of a non-extensible target as absent'));
           Exit(ThrowTypeError('proxy deleteProperty trap deleted a property of a non-extensible target'));
         end;
       end;
-    4: Exit(OwnPropertyKeysV(ObjOf(APV)^.Aux1, ARes));
-    5: Exit(Obj_StringKeys(APV, ARes));
-    6: Exit(EnumerableOwn(APV, 0, ARes));
+    4: Exit(OwnPropertyKeysV(ObjOf(PV)^.Aux1, Res));
+    5: Exit(Obj_StringKeys(PV, Res));
+    6: Exit(EnumerableOwn(PV, 0, Res));
     3:
       begin
         { CreateListFromArrayLike(trapResultArray, « String, Symbol ») into a fresh array of atoms }
-        if not IsObject(ARes) then Exit(ThrowTypeError('proxy ownKeys trap result is not an object'));
-        PushRoot(APV); PushRoot(ARes);
-        if not LengthOfArrayLike(ARes, Len) then begin PopRoots(2); Exit(False); end;
+        if not IsObject(Res) then Exit(ThrowTypeError('proxy ownKeys trap result is not an object'));
+        PushRoot(PV); PushRoot(Res);
+        if not LengthOfArrayLike(Res, Len) then begin PopRoots(2); Exit(False); end;
         PushRoot(MkPtr(NewArray(0, 8)));
         SetLength(Keys, 0);
         I := 0;
@@ -751,7 +747,7 @@ begin
           else
           begin SetLength(Cfg, Length(Cfg) + 1); Cfg[High(Cfg)] := K; end;
         end;
-        ARes := RootAt(TempTop - 2);
+        Res := RootAt(TempTop - 2);
         PopRoots(4);
         if Ext and (Length(NonCfg) = 0) then Exit(True);
         SetLength(Used, Length(Keys));
@@ -777,10 +773,10 @@ begin
   end;
 end;
 
-function OwnPropertyKeysV(O: TValue; var ARes: TValue): Boolean;
+function OwnPropertyKeysV(O: TValue; var Res: TValue): Boolean;
 var Keys, Syms: TValue; I, N: Integer; A: PObj;
 begin
-  if ObjOf(O)^.OKind = okProxy then Exit(ProxyOwnKeys(O, ARes));
+  if ObjOf(O)^.OKind = okProxy then Exit(ProxyOwnKeys(O, Res));
   PushRoot(O);
   Keys := OwnKeys(ObjOf(O), False);
   PushRoot(Keys);
@@ -793,7 +789,7 @@ begin
       ArrayPush(ObjOf(RootAt(TempTop - 1)), Syms);
       A := ObjOf(RootAt(TempTop - 2));
     end;
-  ARes := RootAt(TempTop - 1);
+  Res := RootAt(TempTop - 1);
   PopRoots(2);
   Result := True;
 end;
@@ -803,12 +799,12 @@ begin
   if IsString(V) then Result := Atomize(StrOf(V)) else Result := SymKey(V);
 end;
 
-function SetIntegrityLevel(O: TValue; AFrozen: Boolean; var AOk: Boolean): Boolean;
+function SetIntegrityLevel(O: TValue; Frozen: Boolean; var Ok: Boolean): Boolean;
 var Keys: TValue; I, N: Integer; K: PStr; D, Cur: TPropDesc; Found: Boolean;
 begin
   PushRoot(O);
-  if not PreventExtensionsV(O, AOk) then begin PopRoots(1); Exit(False); end;
-  if not AOk then begin PopRoots(1); Exit(True); end;
+  if not PreventExtensionsV(O, Ok) then begin PopRoots(1); Exit(False); end;
+  if not Ok then begin PopRoots(1); Exit(True); end;
   if not OwnPropertyKeysV(RootAt(TempTop - 1), Keys) then begin PopRoots(1); Exit(False); end;
   PushRoot(Keys);
   N := ArrayLen(ObjOf(Keys));
@@ -817,7 +813,7 @@ begin
     K := KeyOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]);
     EmptyDesc(D);
     D.HasConfigurable := True; D.Configurable := False;
-    if AFrozen then
+    if Frozen then
     begin
       if not GetOwnPropertyV(RootAt(TempTop - 2), K, Cur, Found) then begin PopRoots(2); Exit(False); end;
       if not Found then Continue;
@@ -825,16 +821,16 @@ begin
     end;
     if not DefinePropertyOrThrow(RootAt(TempTop - 2), K, D) then begin PopRoots(2); Exit(False); end;
   end;
-  if (ObjOf(RootAt(TempTop - 2))^.OKind = okArray) and AFrozen then
+  if (ObjOf(RootAt(TempTop - 2))^.OKind = okArray) and Frozen then
     ObjOf(RootAt(TempTop - 2))^.OFlags := ObjOf(RootAt(TempTop - 2))^.OFlags or ofLenReadOnly or ofElemGuard;
   PopRoots(2);
   Result := True;
 end;
 
-function TestIntegrityLevel(O: TValue; AFrozen: Boolean; var ARes: Boolean): Boolean;
+function TestIntegrityLevel(O: TValue; Frozen: Boolean; var Res: Boolean): Boolean;
 var Keys: TValue; I, N: Integer; K: PStr; Cur: TPropDesc; Found, Ext: Boolean;
 begin
-  ARes := False;
+  Res := False;
   PushRoot(O);
   if not IsExtensibleOM(O, Ext) then begin PopRoots(1); Exit(False); end;
   if Ext then begin PopRoots(1); Exit(True); end;
@@ -847,10 +843,10 @@ begin
     if not GetOwnPropertyV(RootAt(TempTop - 2), K, Cur, Found) then begin PopRoots(2); Exit(False); end;
     if not Found then Continue;
     if Cur.Configurable then begin PopRoots(2); Exit(True); end;
-    if AFrozen and IsDataDesc(Cur) and Cur.Writable then begin PopRoots(2); Exit(True); end;
+    if Frozen and IsDataDesc(Cur) and Cur.Writable then begin PopRoots(2); Exit(True); end;
   end;
   PopRoots(2);
-  ARes := True;
+  Res := True;
   Result := True;
 end;
 
@@ -906,28 +902,28 @@ begin
   Result := True;
 end;
 
-function Arg(AArgs: TArgs; AArgc, I: Integer): TValue; inline;
+function Arg(Args: TArgs; Argc, I: Integer): TValue; inline;
 begin
-  if I <= AArgc then Result := AArgs[I] else Result := VUndefined;
+  if I <= Argc then Result := Args[I] else Result := VUndefined;
 end;
 
-function ProxySetOM(APV: TValue; AKey: PStr; V, AReceiver: TValue; var AOk: Boolean): Boolean; forward;
+function ProxySetOM(PV: TValue; Key: PStr; V, Receiver: TValue; var Ok: Boolean): Boolean; forward;
 
 { 10.1.9.2 OrdinarySetWithOwnDescriptor with an explicit receiver (Reflect.set) }
-function SetWithReceiver(O: TValue; AKey: PStr; V, AReceiver: TValue; var AOk: Boolean): Boolean;
+function SetWithReceiver(O: TValue; Key: PStr; V, Receiver: TValue; var Ok: Boolean): Boolean;
 var D, Ex: TPropDesc; Found, FoundEx: Boolean; P, R: TValue; ND: TPropDesc;
 begin
-  if ObjOf(O)^.OKind = okProxy then Exit(ProxySetOM(O, AKey, V, AReceiver, AOk));
-  AOk := False;
-  PushRoot(O); PushRoot(V); PushRoot(AReceiver);
+  if ObjOf(O)^.OKind = okProxy then Exit(ProxySetOM(O, Key, V, Receiver, Ok));
+  Ok := False;
+  PushRoot(O); PushRoot(V); PushRoot(Receiver);
   Result := False;
-  if not GetOwnPropertyV(O, AKey, D, Found) then begin PopRoots(3); Exit; end;
+  if not GetOwnPropertyV(O, Key, D, Found) then begin PopRoots(3); Exit; end;
   if not Found then
   begin
     if not Object_GetPrototypeOfV(RootAt(TempTop - 3), P) then begin PopRoots(3); Exit; end;
     if IsObject(P) then
     begin
-      Result := SetWithReceiver(P, AKey, RootAt(TempTop - 2), RootAt(TempTop - 1), AOk);
+      Result := SetWithReceiver(P, Key, RootAt(TempTop - 2), RootAt(TempTop - 1), Ok);
       PopRoots(3);
       Exit;
     end;
@@ -937,7 +933,7 @@ begin
   begin
     if not D.Writable then begin PopRoots(3); Exit(True); end;
     if not IsObject(RootAt(TempTop - 1)) then begin PopRoots(3); Exit(True); end;
-    if not GetOwnPropertyV(RootAt(TempTop - 1), AKey, Ex, FoundEx) then begin PopRoots(3); Exit; end;
+    if not GetOwnPropertyV(RootAt(TempTop - 1), Key, Ex, FoundEx) then begin PopRoots(3); Exit; end;
     EmptyDesc(ND);
     ND.HasValue := True; ND.Value := RootAt(TempTop - 2);
     if FoundEx then
@@ -950,37 +946,37 @@ begin
       ND.HasEnumerable := True; ND.Enumerable := True;
       ND.HasConfigurable := True; ND.Configurable := True;
     end;
-    Result := DefineOwnPropertyV(RootAt(TempTop - 1), AKey, ND, AOk);
+    Result := DefineOwnPropertyV(RootAt(TempTop - 1), Key, ND, Ok);
     PopRoots(3);
     Exit;
   end;
   if not IsCallable(D.Set_) then begin PopRoots(3); Exit(True); end;
   V := RootAt(TempTop - 2);
   Result := CallValue(D.Set_, RootAt(TempTop - 1), @V, 1, R);
-  AOk := Result;
+  Ok := Result;
   PopRoots(3);
 end;
 
 { 10.5.9 Proxy [[Set]] (P, V, Receiver) }
-function ProxySetOM(APV: TValue; AKey: PStr; V, AReceiver: TValue; var AOk: Boolean): Boolean;
+function ProxySetOM(PV: TValue; Key: PStr; V, Receiver: TValue; var Ok: Boolean): Boolean;
 var Trap, R: TValue; D: TPropDesc; Found: Boolean; Base: Integer;
 begin
-  AOk := False;
+  Ok := False;
   Result := False;
   Base := TempTop;
-  PushRoot(APV); PushRoot(V); PushRoot(AReceiver);
-  if not ProxyGetTrap(APV, 'set', Trap) then begin PopRoots(3); Exit; end;   { a revoked proxy throws here }
+  PushRoot(PV); PushRoot(V); PushRoot(Receiver);
+  if not ProxyGetTrap(PV, 'set', Trap) then begin PopRoots(3); Exit; end;   { a revoked proxy throws here }
   PushRoot(ObjOf(RootAt(Base))^.Aux1);   { the target, Base + 3 }
   if IsNullish(Trap) then
   begin
-    Result := SetWithReceiver(RootAt(Base + 3), AKey, RootAt(Base + 1), RootAt(Base + 2), AOk);
+    Result := SetWithReceiver(RootAt(Base + 3), Key, RootAt(Base + 1), RootAt(Base + 2), Ok);
     PopRoots(4);
     Exit;
   end;
-  if not ProxyCallTrap(RootAt(Base), Trap, 3, KeyToValue(AKey), RootAt(Base + 1), RootAt(Base + 2), R) then
+  if not ProxyCallTrap(RootAt(Base), Trap, 3, KeyToValue(Key), RootAt(Base + 1), RootAt(Base + 2), R) then
   begin PopRoots(4); Exit; end;
   if not ToBool(R) then begin PopRoots(4); Exit(True); end;
-  if not GetOwnPropertyV(RootAt(Base + 3), AKey, D, Found) then begin PopRoots(4); Exit; end;
+  if not GetOwnPropertyV(RootAt(Base + 3), Key, D, Found) then begin PopRoots(4); Exit; end;
   if Found and not D.Configurable then
   begin
     if IsDataDesc(D) and not D.Writable and not SameValueV(RootAt(Base + 1), D.Value) then
@@ -995,41 +991,41 @@ begin
     end;
   end;
   PopRoots(4);
-  AOk := True;
+  Ok := True;
   Result := True;
 end;
 
-function Obj_DefineProperty(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_DefineProperty(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var K: PStr; D: TPropDesc;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('Object.defineProperty called on non-object'));
-  if not ToPropKey(Arg(AArgs, AArgc, 2), K) then Exit(False);
-  if not ToPropertyDescriptor(Arg(AArgs, AArgc, 3), D) then Exit(False);
-  if not DefinePropertyOrThrow(AArgs[1], K, D) then Exit(False);
-  ARes := AArgs[1];
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Object.defineProperty called on non-object'));
+  if not ToPropKey(Arg(Args, Argc, 2), K) then Exit(False);
+  if not ToPropertyDescriptor(Arg(Args, Argc, 3), D) then Exit(False);
+  if not DefinePropertyOrThrow(Args[1], K, D) then Exit(False);
+  Res := Args[1];
   Result := True;
 end;
 
-function Reflect_DefineProperty(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_DefineProperty(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var K: PStr; D: TPropDesc; Ok: Boolean;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('Reflect.defineProperty called on non-object'));
-  if not ToPropKey(Arg(AArgs, AArgc, 2), K) then Exit(False);
-  if not ToPropertyDescriptor(Arg(AArgs, AArgc, 3), D) then Exit(False);
-  if not DefineOwnPropertyV(AArgs[1], K, D, Ok) then Exit(False);
-  ARes := MkBool(Ok);
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Reflect.defineProperty called on non-object'));
+  if not ToPropKey(Arg(Args, Argc, 2), K) then Exit(False);
+  if not ToPropertyDescriptor(Arg(Args, Argc, 3), D) then Exit(False);
+  if not DefineOwnPropertyV(Args[1], K, D, Ok) then Exit(False);
+  Res := MkBool(Ok);
   Result := True;
 end;
 
 { 20.1.2.3.1 ObjectDefineProperties }
-function ObjectDefineProperties(O, AProps: TValue): Boolean;
+function ObjectDefineProperties(O, Props: TValue): Boolean;
 var P, Keys, DV: TValue; I, N, J: Integer; K: PStr; Cur: TPropDesc; Found: Boolean;
   Descs: array of TPropDesc; DKeys: array of PStr; Base: Integer;
 begin
   Base := TempTop;   { O, P, Keys sit at Base..Base+2; the loop pushes three roots per descriptor }
   PushRoot(O);
   Result := False;
-  if not ToObjectV(AProps, P) then begin PopRoots(1); Exit; end;
+  if not ToObjectV(Props, P) then begin PopRoots(1); Exit; end;
   PushRoot(P);
   if not OwnPropertyKeysV(P, Keys) then begin PopRoots(2); Exit; end;
   PushRoot(Keys);
@@ -1058,35 +1054,35 @@ begin
   Result := True;
 end;
 
-function Obj_DefineProperties(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_DefineProperties(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('Object.defineProperties called on non-object'));
-  if not ObjectDefineProperties(AArgs[1], Arg(AArgs, AArgc, 2)) then Exit(False);
-  ARes := AArgs[1];
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Object.defineProperties called on non-object'));
+  if not ObjectDefineProperties(Args[1], Arg(Args, Argc, 2)) then Exit(False);
+  Res := Args[1];
   Result := True;
 end;
 
-function Obj_GetOwnPropertyDescriptor(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_GetOwnPropertyDescriptor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: TValue; K: PStr; D: TPropDesc; Found: Boolean;
 begin
-  if not ToObjectV(Arg(AArgs, AArgc, 1), O) then Exit(False);
+  if not ToObjectV(Arg(Args, Argc, 1), O) then Exit(False);
   PushRoot(O);
-  if not ToPropKey(Arg(AArgs, AArgc, 2), K) then begin PopRoots(1); Exit(False); end;
+  if not ToPropKey(Arg(Args, Argc, 2), K) then begin PopRoots(1); Exit(False); end;
   Result := GetOwnPropertyV(RootAt(TempTop - 1), K, D, Found);
   PopRoots(1);
-  if Result then ARes := FromPropertyDescriptor(D, Found);
+  if Result then Res := FromPropertyDescriptor(D, Found);
 end;
 
-function Reflect_GetOwnPropertyDescriptor(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_GetOwnPropertyDescriptor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('Reflect.getOwnPropertyDescriptor called on non-object'));
-  Result := Obj_GetOwnPropertyDescriptor(AArgs, AArgc, ARes);
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Reflect.getOwnPropertyDescriptor called on non-object'));
+  Result := Obj_GetOwnPropertyDescriptor(Args, Argc, Res);
 end;
 
-function Obj_GetOwnPropertyDescriptors(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_GetOwnPropertyDescriptors(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O, Keys, R, DO_: TValue; I, N: Integer; K: PStr; D: TPropDesc; Found: Boolean;
 begin
-  if not ToObjectV(Arg(AArgs, AArgc, 1), O) then Exit(False);
+  if not ToObjectV(Arg(Args, Argc, 1), O) then Exit(False);
   PushRoot(O);
   if not OwnPropertyKeysV(O, Keys) then begin PopRoots(1); Exit(False); end;
   PushRoot(Keys);
@@ -1101,80 +1097,80 @@ begin
     DO_ := FromPropertyDescriptor(D, True);
     DefineOwn(RootAt(TempTop - 1), K, DO_, pfDefault);
   end;
-  ARes := RootAt(TempTop - 1);
+  Res := RootAt(TempTop - 1);
   PopRoots(3);
   Result := True;
 end;
 
-function Obj_Integrity(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_Integrity(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Ok: Boolean;
 begin
-  ARes := Arg(AArgs, AArgc, 1);
-  if not IsObject(ARes) then Exit(True);
-  if NativeData = 2 then Result := PreventExtensionsV(ARes, Ok)
-  else Result := SetIntegrityLevel(ARes, NativeData = 1, Ok);
+  Res := Arg(Args, Argc, 1);
+  if not IsObject(Res) then Exit(True);
+  if NativeData = 2 then Result := PreventExtensionsV(Res, Ok)
+  else Result := SetIntegrityLevel(Res, NativeData = 1, Ok);
   if Result and not Ok then Result := ThrowTypeError('Cannot change the extensibility of the object');
 end;
 
-function Obj_TestIntegrity(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_TestIntegrity(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: Boolean;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then begin ARes := MkBool(NativeData <> 2); Exit(True); end;
-  if NativeData = 2 then Result := IsExtensibleOM(AArgs[1], B)
-  else Result := TestIntegrityLevel(AArgs[1], NativeData = 1, B);
-  ARes := MkBool(B);
+  if not IsObject(Arg(Args, Argc, 1)) then begin Res := MkBool(NativeData <> 2); Exit(True); end;
+  if NativeData = 2 then Result := IsExtensibleOM(Args[1], B)
+  else Result := TestIntegrityLevel(Args[1], NativeData = 1, B);
+  Res := MkBool(B);
 end;
 
-function Reflect_PreventExtensions(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_PreventExtensions(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Ok: Boolean;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('Reflect.preventExtensions called on non-object'));
-  Result := PreventExtensionsV(AArgs[1], Ok);
-  ARes := MkBool(Ok);
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Reflect.preventExtensions called on non-object'));
+  Result := PreventExtensionsV(Args[1], Ok);
+  Res := MkBool(Ok);
 end;
 
-function Reflect_IsExtensible(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_IsExtensible(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var B: Boolean;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('Reflect.isExtensible called on non-object'));
-  Result := IsExtensibleOM(AArgs[1], B);
-  ARes := MkBool(B);
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Reflect.isExtensible called on non-object'));
+  Result := IsExtensibleOM(Args[1], B);
+  Res := MkBool(B);
 end;
 
-function Reflect_Set(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_Set(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var K: PStr; Ok: Boolean; Rcv: TValue;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('Reflect.set called on non-object'));
-  if not ToPropKey(Arg(AArgs, AArgc, 2), K) then Exit(False);
-  if AArgc >= 4 then Rcv := AArgs[4] else Rcv := AArgs[1];
-  Result := SetWithReceiver(AArgs[1], K, Arg(AArgs, AArgc, 3), Rcv, Ok);
-  ARes := MkBool(Ok);
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Reflect.set called on non-object'));
+  if not ToPropKey(Arg(Args, Argc, 2), K) then Exit(False);
+  if Argc >= 4 then Rcv := Args[4] else Rcv := Args[1];
+  Result := SetWithReceiver(Args[1], K, Arg(Args, Argc, 3), Rcv, Ok);
+  Res := MkBool(Ok);
 end;
 
 { 20.1.3.2 Object.prototype.hasOwnProperty: ToPropertyKey, then ToObject(this), then [[GetOwnProperty]] }
-function ObjProto_HasOwn(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function ObjProto_HasOwn(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var K: PStr; O: TValue; D: TPropDesc; Found: Boolean;
 begin
-  if not ToPropKey(Arg(AArgs, AArgc, 1), K) then Exit(False);
-  if IsObject(AArgs[0]) and (ObjOf(AArgs[0])^.OKind = okPlain) and (ObjOf(AArgs[0])^.Elements = nil) then
+  if not ToPropKey(Arg(Args, Argc, 1), K) then Exit(False);
+  if IsObject(Args[0]) and (ObjOf(Args[0])^.OKind = okPlain) and (ObjOf(Args[0])^.Elements = nil) then
   begin
-    ARes := MkBool(ShapeLookup(ObjOf(AArgs[0])^.Shape, K) >= 0);
+    Res := MkBool(ShapeLookup(ObjOf(Args[0])^.Shape, K) >= 0);
     Exit(True);
   end;
-  if not ToObjectV(AArgs[0], O) then Exit(False);
+  if not ToObjectV(Args[0], O) then Exit(False);
   if not GetOwnPropertyV(O, K, D, Found) then Exit(False);
-  ARes := MkBool(Found);
+  Res := MkBool(Found);
   Result := True;
 end;
 
 { 20.1.3.4 Object.prototype.propertyIsEnumerable }
-function ObjProto_PropIsEnum(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function ObjProto_PropIsEnum(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var K: PStr; O: TValue; D: TPropDesc; Found: Boolean;
 begin
-  if not ToPropKey(Arg(AArgs, AArgc, 1), K) then Exit(False);
-  if not ToObjectV(AArgs[0], O) then Exit(False);
+  if not ToPropKey(Arg(Args, Argc, 1), K) then Exit(False);
+  if not ToObjectV(Args[0], O) then Exit(False);
   if not GetOwnPropertyV(O, K, D, Found) then Exit(False);
-  ARes := MkBool(Found and D.Enumerable);
+  Res := MkBool(Found and D.Enumerable);
   Result := True;
 end;
 
@@ -1193,64 +1189,64 @@ begin
 end;
 
 { 20.4.3.3 get Symbol.prototype.description }
-function SymProto_Description(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function SymProto_Description(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S: TValue;
 begin
-  if not ThisSymbol(AArgs[0], S) then Exit(False);
-  ARes := SymbolDescription(S);
+  if not ThisSymbol(Args[0], S) then Exit(False);
+  Res := SymbolDescription(S);
   Result := True;
 end;
 
 { 20.4.3.4 toString: 20.4.3.4.1 SymbolDescriptiveString }
-function SymProto_ToString2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function SymProto_ToString2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S, D: TValue;
 begin
-  if not ThisSymbol(AArgs[0], S) then Exit(False);
+  if not ThisSymbol(Args[0], S) then Exit(False);
   D := SymbolDescription(S);
-  if D = VUndefined then ARes := StrFromUnicode('Symbol()')
-  else ARes := StrFromUnicode('Symbol(' + StrToUnicode(StrOf(D)) + ')');
+  if D = VUndefined then Res := StrFromUnicode('Symbol()')
+  else Res := StrFromUnicode('Symbol(' + StrToUnicode(StrOf(D)) + ')');
   Result := True;
 end;
 
 { 20.4.3.5 valueOf and 20.4.3.6 [ @@toPrimitive ] }
-function SymProto_ValueOf(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function SymProto_ValueOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Result := ThisSymbol(AArgs[0], ARes);
+  Result := ThisSymbol(Args[0], Res);
 end;
 
 { 20.1.2.12 Object.getPrototypeOf: ToObject, then [[GetPrototypeOf]] }
-function Obj_GetPrototypeOf2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_GetPrototypeOf2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: TValue;
 begin
-  if not ToObjectV(Arg(AArgs, AArgc, 1), O) then Exit(False);
-  Result := Object_GetPrototypeOfV(O, ARes);
+  if not ToObjectV(Arg(Args, Argc, 1), O) then Exit(False);
+  Result := Object_GetPrototypeOfV(O, Res);
 end;
 
 { 28.1.8 Reflect.getPrototypeOf }
-function Reflect_GetPrototypeOf2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_GetPrototypeOf2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('Reflect.getPrototypeOf called on non-object'));
-  Result := Object_GetPrototypeOfV(AArgs[1], ARes);
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Reflect.getPrototypeOf called on non-object'));
+  Result := Object_GetPrototypeOfV(Args[1], Res);
 end;
 
 { [[SetPrototypeOf]]: 10.1.2.1 OrdinarySetPrototypeOf (with 10.4.7 immutable %Object.prototype%) and 10.5.2 for
   proxies (the trap's result, its invariant for a non-extensible target not checked) }
-function SetPrototypeOfV(O, V: TValue; var AOk: Boolean): Boolean;
+function SetPrototypeOfV(O, V: TValue; var Ok: Boolean): Boolean;
 var Trap, R, P: TValue; Ext: Boolean;
 begin
-  AOk := False;
+  Ok := False;
   if ObjOf(O)^.OKind = okProxy then
   begin
     PushRoot(O); PushRoot(V);
     if not ProxyGetTrap(O, 'setPrototypeOf', Trap) then begin PopRoots(2); Exit(False); end;
     O := RootAt(TempTop - 2); V := RootAt(TempTop - 1);
     PopRoots(2);
-    if IsNullish(Trap) then Exit(SetPrototypeOfV(ObjOf(O)^.Aux1, V, AOk));
+    if IsNullish(Trap) then Exit(SetPrototypeOfV(ObjOf(O)^.Aux1, V, Ok));
     PushRoot(O); PushRoot(V);
     if not ProxyCallTrap(O, Trap, 1, V, VUndefined, VUndefined, R) then begin PopRoots(2); Exit(False); end;
-    AOk := ToBool(R);
+    Ok := ToBool(R);
     { 10.5.2 steps 9-14 }
-    if AOk then
+    if Ok then
     begin
       if not IsExtensibleOM(ObjOf(RootAt(TempTop - 2))^.Aux1, Ext) then begin PopRoots(2); Exit(False); end;
       if not Ext then
@@ -1263,7 +1259,7 @@ begin
     Exit(True);
   end;
   Result := True;
-  if ObjOf(O)^.Shape^.Proto = V then begin AOk := True; Exit; end;
+  if ObjOf(O)^.Shape^.Proto = V then begin Ok := True; Exit; end;
   if O = ObjectProto then Exit;
   if not IsExtensibleOM(O, Ext) then Exit(False);
   if not Ext then Exit;
@@ -1275,97 +1271,97 @@ begin
     P := ObjOf(P)^.Shape^.Proto;
   end;
   SetProto(ObjOf(O), V);
-  AOk := True;
+  Ok := True;
 end;
 
 { 20.1.2.23 Object.setPrototypeOf }
-function Obj_SetPrototypeOf2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_SetPrototypeOf2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Ok: Boolean;
 begin
-  if IsNullish(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('Object.setPrototypeOf called on null or undefined'));
-  if not IsObject(Arg(AArgs, AArgc, 2)) and (Arg(AArgs, AArgc, 2) <> VNull) then
+  if IsNullish(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('Object.setPrototypeOf called on null or undefined'));
+  if not IsObject(Arg(Args, Argc, 2)) and (Arg(Args, Argc, 2) <> VNull) then
     Exit(ThrowTypeError('Object prototype may only be an Object or null'));
-  ARes := AArgs[1];
-  if not IsObject(ARes) then Exit(True);
-  if not SetPrototypeOfV(AArgs[1], AArgs[2], Ok) then Exit(False);
+  Res := Args[1];
+  if not IsObject(Res) then Exit(True);
+  if not SetPrototypeOfV(Args[1], Args[2], Ok) then Exit(False);
   if not Ok then Exit(ThrowTypeError('Cannot set the prototype of this object'));
-  ARes := AArgs[1];
+  Res := Args[1];
   Result := True;
 end;
 
-function NeedTarget(AArgs: TArgs; AArgc: Integer; const AName: UnicodeString): Boolean; inline;
+function NeedTarget(Args: TArgs; Argc: Integer; const Name: UnicodeString): Boolean; inline;
 begin
-  Result := IsObject(Arg(AArgs, AArgc, 1));
-  if not Result then ThrowTypeError('Reflect.' + AName + ' called on non-object');
+  Result := IsObject(Arg(Args, Argc, 1));
+  if not Result then ThrowTypeError('Reflect.' + Name + ' called on non-object');
 end;
 
 { 28.1.14 Reflect.setPrototypeOf }
-function Reflect_SetPrototypeOf2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_SetPrototypeOf2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Ok: Boolean;
 begin
-  if not NeedTarget(AArgs, AArgc, 'setPrototypeOf') then Exit(False);
-  if not IsObject(Arg(AArgs, AArgc, 2)) and (Arg(AArgs, AArgc, 2) <> VNull) then
+  if not NeedTarget(Args, Argc, 'setPrototypeOf') then Exit(False);
+  if not IsObject(Arg(Args, Argc, 2)) and (Arg(Args, Argc, 2) <> VNull) then
     Exit(ThrowTypeError('Object prototype may only be an Object or null'));
-  if not SetPrototypeOfV(AArgs[1], AArgs[2], Ok) then Exit(False);
-  ARes := MkBool(Ok);
+  if not SetPrototypeOfV(Args[1], Args[2], Ok) then Exit(False);
+  Res := MkBool(Ok);
   Result := True;
 end;
 
 { 28.1.6 Reflect.get }
-function Reflect_Get2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_Get2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var K: PStr; Rcv: TValue;
 begin
-  if not NeedTarget(AArgs, AArgc, 'get') then Exit(False);
-  if not ToPropKey(Arg(AArgs, AArgc, 2), K) then Exit(False);
-  if AArgc >= 3 then Rcv := AArgs[3] else Rcv := AArgs[1];
-  Result := GetFromObject(ObjOf(AArgs[1]), K, Rcv, ARes);
+  if not NeedTarget(Args, Argc, 'get') then Exit(False);
+  if not ToPropKey(Arg(Args, Argc, 2), K) then Exit(False);
+  if Argc >= 3 then Rcv := Args[3] else Rcv := Args[1];
+  Result := GetFromObject(ObjOf(Args[1]), K, Rcv, Res);
 end;
 
 { 28.1.4 Reflect.deleteProperty }
-function Reflect_DeleteProperty2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_DeleteProperty2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var K: PStr; Ok: Boolean;
 begin
-  if not NeedTarget(AArgs, AArgc, 'deleteProperty') then Exit(False);
-  if not ToPropKey(Arg(AArgs, AArgc, 2), K) then Exit(False);
-  if ObjOf(AArgs[1])^.OKind = okProxy then
+  if not NeedTarget(Args, Argc, 'deleteProperty') then Exit(False);
+  if not ToPropKey(Arg(Args, Argc, 2), K) then Exit(False);
+  if ObjOf(Args[1])^.OKind = okProxy then
   begin
-    if not ProxyDelete(AArgs[1], K, Ok) then Exit(False);
+    if not ProxyDelete(Args[1], K, Ok) then Exit(False);
   end
-  else Ok := DeleteIfConfigurable(ObjOf(AArgs[1]), K);
-  ARes := MkBool(Ok);
+  else Ok := DeleteIfConfigurable(ObjOf(Args[1]), K);
+  Res := MkBool(Ok);
   Result := True;
 end;
 
 { 28.1.9 Reflect.has }
-function Reflect_Has2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_Has2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var K: PStr; Found: Boolean;
 begin
-  if not NeedTarget(AArgs, AArgc, 'has') then Exit(False);
-  if not ToPropKey(Arg(AArgs, AArgc, 2), K) then Exit(False);
-  if not HasPropertyV(AArgs[1], K, Found) then Exit(False);
-  ARes := MkBool(Found);
+  if not NeedTarget(Args, Argc, 'has') then Exit(False);
+  if not ToPropKey(Arg(Args, Argc, 2), K) then Exit(False);
+  if not HasPropertyV(Args[1], K, Found) then Exit(False);
+  Res := MkBool(Found);
   Result := True;
 end;
 
 { 28.1.11 Reflect.ownKeys }
-function Reflect_OwnKeys2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Reflect_OwnKeys2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not NeedTarget(AArgs, AArgc, 'ownKeys') then Exit(False);
-  Result := OwnPropertyKeysV(AArgs[1], ARes);
+  if not NeedTarget(Args, Argc, 'ownKeys') then Exit(False);
+  Result := OwnPropertyKeysV(Args[1], Res);
 end;
 
 { 10.2.4.1 %ThrowTypeError% }
-function ThrowTypeError_Native(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function ThrowTypeError_Native(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
   Result := ThrowTypeError('''caller'', ''callee'', and ''arguments'' properties may not be accessed on strict mode functions or the arguments objects for calls to them');
 end;
 
 
 { 7.3.23 EnumerableOwnProperties (Kind 0 keys, 1 values, 2 entries) }
-function EnumerableOwn(O: TValue; AKind: Integer; var ARes: TValue): Boolean;
+function EnumerableOwn(O: TValue; Kind: Integer; var Res: TValue): Boolean;
 var Keys, V, KV, E: TValue; I, N: Integer; K: PStr; D: TPropDesc; Found: Boolean;
 begin
-  if (ObjOf(O)^.OKind <> okProxy) and (AKind = 0) then begin ARes := OwnKeys(ObjOf(O), True); Exit(True); end;
+  if (ObjOf(O)^.OKind <> okProxy) and (Kind = 0) then begin Res := OwnKeys(ObjOf(O), True); Exit(True); end;
   PushRoot(O);
   if ObjOf(O)^.OKind = okProxy then
   begin
@@ -1382,9 +1378,9 @@ begin
     K := KeyOf(KV);
     if not GetOwnPropertyV(RootAt(TempTop - 3), K, D, Found) then begin PopRoots(3); Exit(False); end;
     if not Found or not D.Enumerable then Continue;
-    if AKind = 0 then begin ArrayPush(ObjOf(RootAt(TempTop - 1)), MkPtr(K)); Continue; end;
+    if Kind = 0 then begin ArrayPush(ObjOf(RootAt(TempTop - 1)), MkPtr(K)); Continue; end;
     if not GetV(RootAt(TempTop - 3), K, V) then begin PopRoots(3); Exit(False); end;
-    if AKind = 2 then
+    if Kind = 2 then
     begin
       PushRoot(V);
       E := MkPtr(NewArray(0, 2));
@@ -1395,74 +1391,74 @@ begin
     end;
     ArrayPush(ObjOf(RootAt(TempTop - 1)), V);
   end;
-  ARes := RootAt(TempTop - 1);
+  Res := RootAt(TempTop - 1);
   PopRoots(3);
   Result := True;
 end;
 
 { get Error.prototype.stack (error stack accessor): an implementation-defined string for an object with
   [[ErrorData]] (G2 keeps no trace: empty), undefined for any other object }
-function Err_StackGet(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Err_StackGet(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsObject(AArgs[0]) then Exit(ThrowTypeError('Error.prototype.stack getter called on a non-object'));
-  if ObjOf(AArgs[0])^.OKind = okError then ARes := MkPtr(AtomOf('')) else ARes := VUndefined;
+  if not IsObject(Args[0]) then Exit(ThrowTypeError('Error.prototype.stack getter called on a non-object'));
+  if ObjOf(Args[0])^.OKind = okError then Res := MkPtr(AtomOf('')) else Res := VUndefined;
   Result := True;
 end;
 
 { set Error.prototype.stack: SetterThatIgnoresPrototypeProperties(this, %Error.prototype%, "stack", v) }
-function Err_StackSet(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Err_StackSet(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var D: TPropDesc; Found: Boolean; V: TValue; K: PStr;
 begin
-  ARes := VUndefined;
-  if not IsObject(AArgs[0]) then Exit(ThrowTypeError('Error.prototype.stack setter called on a non-object'));
-  V := Arg(AArgs, AArgc, 1);
+  Res := VUndefined;
+  if not IsObject(Args[0]) then Exit(ThrowTypeError('Error.prototype.stack setter called on a non-object'));
+  V := Arg(Args, Argc, 1);
   if not IsString(V) then Exit(ThrowTypeError('Error.prototype.stack must be set to a string'));
-  if AArgs[0] = ErrorProto then Exit(ThrowTypeError('Cannot assign to read only property ''stack'' of Error.prototype'));
+  if Args[0] = ErrorProto then Exit(ThrowTypeError('Cannot assign to read only property ''stack'' of Error.prototype'));
   K := AtomOf('stack');
-  if not GetOwnPropertyV(AArgs[0], K, D, Found) then Exit(False);
-  V := AArgs[1];
+  if not GetOwnPropertyV(Args[0], K, D, Found) then Exit(False);
+  V := Args[1];
   if not Found then
   begin
     DataDesc(D, V, True, True, True);
-    Exit(DefinePropertyOrThrow(AArgs[0], K, D));
+    Exit(DefinePropertyOrThrow(Args[0], K, D));
   end;
-  Result := SetVT(AArgs[0], K, V);
+  Result := SetVT(Args[0], K, V);
 end;
 
 { 20.5.2.1 Error.isError ( arg ) }
-function Error_IsError(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Error_IsError(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := MkBool(IsObject(Arg(AArgs, AArgc, 1)) and (ObjOf(AArgs[1])^.OKind = okError));
+  Res := MkBool(IsObject(Arg(Args, Argc, 1)) and (ObjOf(Args[1])^.OKind = okError));
   Result := True;
 end;
 
 { 20.1.3.3 Object.prototype.isPrototypeOf }
-function ObjProto_IsPrototypeOf2(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function ObjProto_IsPrototypeOf2(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: TValue; B: Boolean;
 begin
-  ARes := VFalse;
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(True);
-  PushRoot(AArgs[1]);
-  if not ToObjectV(AArgs[0], O) then begin PopRoots(1); Exit(False); end;
+  Res := VFalse;
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(True);
+  PushRoot(Args[1]);
+  if not ToObjectV(Args[0], O) then begin PopRoots(1); Exit(False); end;
   Result := ProtoChainHas(RootAt(TempTop - 1), O, B);
   PopRoots(1);
-  if Result then ARes := MkBool(B);
+  if Result then Res := MkBool(B);
 end;
 
-function Obj_Keys(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_Keys(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: TValue;
 begin
-  if not ToObjectV(Arg(AArgs, AArgc, 1), O) then Exit(False);
-  Result := EnumerableOwn(O, NativeData, ARes);
+  if not ToObjectV(Arg(Args, Argc, 1), O) then Exit(False);
+  Result := EnumerableOwn(O, NativeData, Res);
 end;
 
 { 20.1.2.11.1 GetOwnPropertyKeys: Data 0 strings, 1 symbols }
-function Obj_OwnKeysOfType(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_OwnKeysOfType(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O, Keys, KV: TValue; I, N: Integer; Sym: Boolean;
 begin
-  if not ToObjectV(Arg(AArgs, AArgc, 1), O) then Exit(False);
+  if not ToObjectV(Arg(Args, Argc, 1), O) then Exit(False);
   Sym := NativeData = 1;
-  if (ObjOf(O)^.OKind <> okProxy) and not Sym then begin ARes := OwnKeys(ObjOf(O), False); Exit(True); end;
+  if (ObjOf(O)^.OKind <> okProxy) and not Sym then begin Res := OwnKeys(ObjOf(O), False); Exit(True); end;
   if not OwnPropertyKeysV(O, Keys) then Exit(False);
   PushRoot(Keys);
   PushRoot(MkPtr(NewArray(0, 4)));
@@ -1472,21 +1468,21 @@ begin
     KV := ObjOf(RootAt(TempTop - 2))^.Elements^.Data[I];
     if IsString(KV) <> Sym then ArrayPush(ObjOf(RootAt(TempTop - 1)), KV);
   end;
-  ARes := RootAt(TempTop - 1);
+  Res := RootAt(TempTop - 1);
   PopRoots(2);
   Result := True;
 end;
 
 { 20.1.2.1 Object.assign }
-function Obj_Assign(AArgs: TArgs; AArgc: Integer; var ARes: TValue): Boolean;
+function Obj_Assign(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var T, F, Keys, V: TValue; I, J, N: Integer; K: PStr; D: TPropDesc; Found: Boolean;
 begin
-  if not ToObjectV(Arg(AArgs, AArgc, 1), T) then Exit(False);
+  if not ToObjectV(Arg(Args, Argc, 1), T) then Exit(False);
   PushRoot(T);
-  for I := 2 to AArgc do
+  for I := 2 to Argc do
   begin
-    if IsNullish(AArgs[I]) then Continue;
-    if not ToObjectV(AArgs[I], F) then begin PopRoots(1); Exit(False); end;
+    if IsNullish(Args[I]) then Continue;
+    if not ToObjectV(Args[I], F) then begin PopRoots(1); Exit(False); end;
     PushRoot(F);
     if not OwnPropertyKeysV(F, Keys) then begin PopRoots(2); Exit(False); end;
     PushRoot(Keys);
@@ -1501,17 +1497,17 @@ begin
     end;
     PopRoots(2);
   end;
-  ARes := RootAt(TempTop - 1);
+  Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
 end;
 
 procedure InitObjModel;
 var O, R: TValue; Ok_: Boolean;
-  procedure Def(ATarget: TValue; const AName: UnicodeString; AFn: TNativeFn; ALen: Integer; AData: UInt32 = 0);
+  procedure Def(Target: TValue; const Name: UnicodeString; Fn: TNativeFn; Len: Integer; Data: UInt32 = 0);
   begin
-    PushRoot(ATarget);
-    DefineOwn(RootAt(TempTop - 1), AtomOf(AName), NewNativeFunctionData(AFn, AName, ALen, AData), pfHidden);
+    PushRoot(Target);
+    DefineOwn(RootAt(TempTop - 1), AtomOf(Name), NewNativeFunctionData(Fn, Name, Len, Data), pfHidden);
     PopRoots(1);
   end;
 begin

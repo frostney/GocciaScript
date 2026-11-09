@@ -17,20 +17,12 @@ uses
 procedure InitModules;
 { loads, links and evaluates the module at Path (the host's entry point); False with the error pending, Phase
   0 when it is a parse or link (resolution) error, 1 an evaluation error }
-function RunModuleFile(const APath: UnicodeString; var APhase: Integer): Boolean;
+function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
 
 implementation
 
 uses
-  Classes,
-  Generics.Collections,
-  SysUtils,
-
-  G2.Bytecode,
-  G2.Compiler,
-  G2.Eval,
-  G2.Promise,
-  G2.VM;
+  SysUtils, Classes, Generics.Collections, G2.Bytecode, G2.VM, G2.Compiler, G2.Eval, G2.Promise;
 
 type
   TModStatus = (msNew, msLinking, msLinked, msEvaluating, msEvaluated);
@@ -85,21 +77,21 @@ end;
 
 { ---- loading ---- }
 
-function ResolvePath(const ASpec, AReferrer: UnicodeString): UnicodeString;
+function ResolvePath(const Spec, Referrer: UnicodeString): UnicodeString;
 var Base: UnicodeString;
 begin
-  if (ASpec <> '') and (ASpec[1] = '/') then Exit(UnicodeString(ExpandFileName(string(ASpec))));
-  if (AReferrer = '') or (AReferrer[1] = '<') then Base := UnicodeString(GetCurrentDir) + '/'
-  else Base := UnicodeString(ExtractFilePath(ExpandFileName(string(AReferrer))));
-  Result := UnicodeString(ExpandFileName(string(Base + ASpec)));
+  if (Spec <> '') and (Spec[1] = '/') then Exit(UnicodeString(ExpandFileName(string(Spec))));
+  if (Referrer = '') or (Referrer[1] = '<') then Base := UnicodeString(GetCurrentDir) + '/'
+  else Base := UnicodeString(ExtractFilePath(ExpandFileName(string(Referrer))));
+  Result := UnicodeString(ExpandFileName(string(Base + Spec)));
 end;
 
-function ReadSource(const APath: UnicodeString; var ASrc: UnicodeString): Boolean;
+function ReadSource(const Path: UnicodeString; var Src: UnicodeString): Boolean;
 var F: TFileStream; B: RawByteString;
 begin
   Result := False;
-  if not FileExists(string(APath)) then Exit;
-  F := TFileStream.Create(string(APath), fmOpenRead or fmShareDenyNone);
+  if not FileExists(string(Path)) then Exit;
+  F := TFileStream.Create(string(Path), fmOpenRead or fmShareDenyNone);
   try
     SetLength(B, F.Size);
     if F.Size > 0 then F.ReadBuffer(B[1], F.Size);
@@ -107,36 +99,36 @@ begin
     F.Free;
   end;
   SetCodePage(B, CP_UTF8, False);
-  ASrc := UnicodeString(UTF8Decode(B));
-  if (ASrc <> '') and (ASrc[1] = #$FEFF) then Delete(ASrc, 1, 1);
+  Src := UnicodeString(UTF8Decode(B));
+  if (Src <> '') and (Src[1] = #$FEFF) then Delete(Src, 1, 1);
   Result := True;
 end;
 
-function FindModule(const APath: UnicodeString): TModRec;
+function FindModule(const Path: UnicodeString): TModRec;
 var M: TModRec;
 begin
   for M in Mods do
-    if M.Path = APath then Exit(M);
+    if M.Path = Path then Exit(M);
   Result := nil;
 end;
 
 { 16.2.1.5.1 LoadRequestedModules (synchronously, from files): the module at Path and everything it requests }
-function LoadModule(const APath: UnicodeString; var M: TModRec): Boolean;
+function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
 var Src, Err, ErrName: UnicodeString; I: Integer; D: TModRec;
 begin
-  M := FindModule(APath);
+  M := FindModule(Path);
   if Assigned(M) then
   begin
     if M.Errored and (M.Status = msNew) then begin Pending := GetRoot(M, rError); Exit(False); end;
     Exit(True);
   end;
-  if not ReadSource(APath, Src) then Exit(ThrowTypeError('Cannot find module ''' + APath + ''''));
+  if not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
   M := TModRec.Create;
-  M.Path := APath;
+  M.Path := Path;
   M.Id := Mods.Count;
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
-  if not ParseAndCompileModule(Src, APath, M.Id + 1, M.Tpl, M.Info, Err, ErrName) then
+  if not ParseAndCompileModule(Src, Path, M.Id + 1, M.Tpl, M.Info, Err, ErrName) then
   begin
     M.Errored := True;
     ThrowError(ErrName, Err);
@@ -146,17 +138,17 @@ begin
   SetLength(M.Deps, Length(M.Info.Requests));
   for I := 0 to High(M.Info.Requests) do
   begin
-    if not LoadModule(ResolvePath(M.Info.Requests[I], APath), D) then Exit(False);
+    if not LoadModule(ResolvePath(M.Info.Requests[I], Path), D) then Exit(False);
     M.Deps[I] := D;
   end;
   Result := True;
 end;
 
-function DepOf(M: TModRec; const AReq: UnicodeString): TModRec;
+function DepOf(M: TModRec; const Req: UnicodeString): TModRec;
 var I: Integer;
 begin
   for I := 0 to High(M.Info.Requests) do
-    if M.Info.Requests[I] = AReq then Exit(M.Deps[I]);
+    if M.Info.Requests[I] = Req then Exit(M.Deps[I]);
   Result := nil;
 end;
 
@@ -165,22 +157,22 @@ end;
 type
   TResolveSet = array of record M: TModRec; N: UnicodeString; end;
 
-function ResolveExport(M: TModRec; const AName: UnicodeString; var ARS_: TResolveSet): TResolution;
+function ResolveExport(M: TModRec; const Name: UnicodeString; var RS_: TResolveSet): TResolution;
 var I: Integer; R: TResolution; Star: TResolution; D: TModRec;
 begin
   Result.Kind := rkNull; Result.Module := nil; Result.Slot := -1;
-  for I := 0 to High(ARS_) do
-    if (ARS_[I].M = M) and (ARS_[I].N = AName) then Exit;   { a circular import request }
-  SetLength(ARS_, Length(ARS_) + 1);
-  ARS_[High(ARS_)].M := M; ARS_[High(ARS_)].N := AName;
+  for I := 0 to High(RS_) do
+    if (RS_[I].M = M) and (RS_[I].N = Name) then Exit;   { a circular import request }
+  SetLength(RS_, Length(RS_) + 1);
+  RS_[High(RS_)].M := M; RS_[High(RS_)].N := Name;
   for I := 0 to High(M.Info.LocalExports) do
-    if M.Info.LocalExports[I].ExportName = AName then
+    if M.Info.LocalExports[I].ExportName = Name then
     begin
       Result.Kind := rkBinding; Result.Module := M; Result.Slot := M.Info.LocalExports[I].Slot;
       Exit;
     end;
   for I := 0 to High(M.Info.IndirectExports) do
-    if M.Info.IndirectExports[I].ExportName = AName then
+    if M.Info.IndirectExports[I].ExportName = Name then
     begin
       D := DepOf(M, M.Info.IndirectExports[I].Request);
       if M.Info.IndirectExports[I].ImportName = ModNamespace then
@@ -188,13 +180,13 @@ begin
         Result.Kind := rkNamespace; Result.Module := D;
         Exit;
       end;
-      Exit(ResolveExport(D, M.Info.IndirectExports[I].ImportName, ARS_));
+      Exit(ResolveExport(D, M.Info.IndirectExports[I].ImportName, RS_));
     end;
-  if AName = 'default' then Exit;
+  if Name = 'default' then Exit;
   Star.Kind := rkNull;
   for I := 0 to High(M.Info.StarExports) do
   begin
-    R := ResolveExport(DepOf(M, M.Info.StarExports[I]), AName, ARS_);
+    R := ResolveExport(DepOf(M, M.Info.StarExports[I]), Name, RS_);
     if R.Kind = rkAmbiguous then Exit(R);
     if R.Kind = rkNull then Continue;
     if Star.Kind = rkNull then Star := R
@@ -207,28 +199,28 @@ begin
   Result := Star;
 end;
 
-function Resolve(M: TModRec; const AName: UnicodeString): TResolution;
+function Resolve(M: TModRec; const Name: UnicodeString): TResolution;
 var RS_: TResolveSet;
 begin
   SetLength(RS_, 0);
-  Result := ResolveExport(M, AName, RS_);
+  Result := ResolveExport(M, Name, RS_);
 end;
 
-procedure ExportedNames(M: TModRec; ASeen: TList<TModRec>; ANames: TStringList);
+procedure ExportedNames(M: TModRec; Seen: TList<TModRec>; Names: TStringList);
 var I, J: Integer; S: TStringList;
 begin
-  if ASeen.IndexOf(M) >= 0 then Exit;
-  ASeen.Add(M);
-  for I := 0 to High(M.Info.LocalExports) do ANames.Add(M.Info.LocalExports[I].ExportName);
-  for I := 0 to High(M.Info.IndirectExports) do ANames.Add(M.Info.IndirectExports[I].ExportName);
+  if Seen.IndexOf(M) >= 0 then Exit;
+  Seen.Add(M);
+  for I := 0 to High(M.Info.LocalExports) do Names.Add(M.Info.LocalExports[I].ExportName);
+  for I := 0 to High(M.Info.IndirectExports) do Names.Add(M.Info.IndirectExports[I].ExportName);
   for I := 0 to High(M.Info.StarExports) do
   begin
     S := TStringList.Create;
     S.UseLocale := False; S.CaseSensitive := True;
     try
-      ExportedNames(DepOf(M, M.Info.StarExports[I]), ASeen, S);
+      ExportedNames(DepOf(M, M.Info.StarExports[I]), Seen, S);
       for J := 0 to S.Count - 1 do
-        if (S[J] <> 'default') and (ANames.IndexOf(S[J]) < 0) then ANames.Add(S[J]);
+        if (S[J] <> 'default') and (Names.IndexOf(S[J]) < 0) then Names.Add(S[J]);
     finally
       S.Free;
     end;
@@ -313,12 +305,12 @@ begin
   Result := False;
 end;
 
-function Link(ARoot: TModRec): Boolean;
+function Link(Root: TModRec): Boolean;
 var L: TList<TModRec>; M: TModRec; I, J: Integer; Clo, Gen, Tbl: TValue; R: TResolution; D: TModRec;
 begin
   L := TList<TModRec>.Create;
   try
-    CollectGraph(ARoot, L);
+    CollectGraph(Root, L);
     { every module's InitializeEnvironment start: its table, then its function run to its first suspension }
     for M in L do
     begin
@@ -380,11 +372,11 @@ end;
 
 { ---- 16.2.1.5.3 Evaluate (depth first; a cycle's member already evaluating is skipped) ---- }
 
-function RunAsyncBody(AGen: TValue): Boolean;
+function RunAsyncBody(Gen: TValue): Boolean;
 var NextF, P, R: TValue; St: Integer;
 begin
-  PushRoot(AGen);
-  if not GetV(AGen, AtomNext, NextF) then begin PopRoots(1); Exit(False); end;
+  PushRoot(Gen);
+  if not GetV(Gen, AtomNext, NextF) then begin PopRoots(1); Exit(False); end;
   if not CallValue(NextF, RootAt(TempTop - 1), nil, 0, P) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
   PushRoot(P);
@@ -425,26 +417,26 @@ begin
   end;
 end;
 
-function LoadLinkEvaluate(const APath: UnicodeString; var M: TModRec; var APhase: Integer): Boolean;
+function LoadLinkEvaluate(const Path: UnicodeString; var M: TModRec; var Phase: Integer): Boolean;
 begin
-  APhase := 0;
-  if not LoadModule(APath, M) then Exit(False);
+  Phase := 0;
+  if not LoadModule(Path, M) then Exit(False);
   if M.Status = msNew then
     if not Link(M) then Exit(False);
-  APhase := 1;
+  Phase := 1;
   Result := Evaluate(M);
 end;
 
-function RunModuleFile(const APath: UnicodeString; var APhase: Integer): Boolean;
+function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
 var M: TModRec;
 begin
-  Result := LoadLinkEvaluate(ResolvePath(APath, ''), M, APhase);
+  Result := LoadLinkEvaluate(ResolvePath(Path, ''), M, Phase);
 end;
 
 { ---- 13.3.10 import() ---- }
 
 { the job that loads, links and evaluates a dynamic import's module (Data = its index in PendingImports) }
-function ImportJob(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var I: Integer; P, R, NS: TValue; M: TModRec; Phase: Integer; Ref, Spec: UnicodeString;
 begin
   I := NativeData;
@@ -465,12 +457,12 @@ begin
     RejectPendingPromise(P, R);
   end;
   ValueArrayStore(ObjOf(PendingImports)^.Elements, I * 3, VUndefined);
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
 { 13.3.10.1 EvaluateImportCall from ToString(specifier) on: errors reject the promise }
-function DoImport(const AReferrer: UnicodeString; AModuleId: Integer; ASpec, AOpts: TValue; var ARes: TValue): Boolean;
+function DoImport(const Referrer: UnicodeString; ModuleId: Integer; Spec, Opts: TValue; var Res: TValue): Boolean;
 var P, S, W, Keys, V, F: TValue; I, N, Idx: Integer; Ref: UnicodeString;
   function Reject: Boolean;
   begin
@@ -536,16 +528,16 @@ begin
 end;
 
 { 13.3.12.1 import.meta: an object with a null prototype, made once per module }
-function DoImportMeta(AModuleId: Integer; var ARes: TValue): Boolean;
+function DoImportMeta(ModuleId: Integer; var Res: TValue): Boolean;
 var M: TModRec;
 begin
-  if (AModuleId < 1) or (AModuleId > Mods.Count) then Exit(ThrowError('SyntaxError', 'import.meta outside a module'));
-  M := Mods[AModuleId - 1];
-  ARes := GetRoot(M, rMeta);
-  if not IsObject(ARes) then
+  if (ModuleId < 1) or (ModuleId > Mods.Count) then Exit(ThrowError('SyntaxError', 'import.meta outside a module'));
+  M := Mods[ModuleId - 1];
+  Res := GetRoot(M, rMeta);
+  if not IsObject(Res) then
   begin
-    ARes := MkPtr(NewPlainObject(VNull, 4));
-    SetRoot(M, rMeta, ARes);
+    Res := MkPtr(NewPlainObject(VNull, 4));
+    SetRoot(M, rMeta, Res);
   end;
   Result := True;
 end;

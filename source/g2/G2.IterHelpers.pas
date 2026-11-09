@@ -11,12 +11,7 @@ procedure InitIterHelpers;
 implementation
 
 uses
-  SysUtils,
-
-  G2.Bytecode,
-  G2.Core,
-  G2.Snapshot,
-  G2.VM;
+  SysUtils, G2.Core, G2.Bytecode, G2.VM, G2.Snapshot;
 
 {$I G2.IterHelpers.inc}
 

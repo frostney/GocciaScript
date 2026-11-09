@@ -23,10 +23,7 @@ unit G2.Regex;
 interface
 
 uses
-  SysUtils,
-
-  Goccia.RegExp.&Program,
-  Goccia.RegExp.Compiler;
+  SysUtils, Goccia.RegExp.&Program, Goccia.RegExp.Compiler;
 
 type
   ERegexRuntime = class(Exception);
@@ -83,21 +80,21 @@ type
     FStepLimit: Int64;
     FMatchIndex, FMatchEnd: Integer;
     FErr: Integer;                   { 0, or why the last Exec stopped (step limit, backtrack cap, stack, bytecode) }
-    function Ctx(ADepth: Integer): PDepthCtx;
-    function Run(ADepth: Integer; ASlots: PInteger; AStartPos, AStartPC: Integer; AEndPos: PInteger;
-      ABackward, AScan: Boolean): Boolean;
+    function Ctx(Depth: Integer): PDepthCtx;
+    function Run(Depth: Integer; Slots: PInteger; StartPos, StartPC: Integer; EndPos: PInteger;
+      Backward, Scan: Boolean): Boolean;
     function Candidate(P: Integer): Integer;
     function AnalyzeAnchor: Integer;
     procedure AnalyzeFirst;
     procedure AnalyzePossessive;
-    function FirstSetFrom(APC: Integer; var ABits: TClassBits): Boolean;
+    function FirstSetFrom(PC: Integer; var Bits: TClassBits): Boolean;
     procedure Peephole;
   public
     constructor Create(const AProg: TRegExpProgram; const APattern: UnicodeString);
     destructor Destroy; override;
     { the first match at Start or later (only at Start when RequireStart); Chars/Len: the subject }
-    function Exec(AChars: PWideChar; ALen, AStart: Integer; ARequireStart: Boolean): Boolean;
-    function TryGetGroup(G: Integer; out ASt, AEn: Integer): Boolean;
+    function Exec(Chars: PWideChar; Len, Start: Integer; RequireStart: Boolean): Boolean;
+    function TryGetGroup(G: Integer; out St, En: Integer): Boolean;
     function CaptureCount: Integer; inline;
     function HasNamedGroups: Boolean; inline;
     function NamedGroups: TGocciaRegExpNamedGroups; inline;
@@ -112,8 +109,7 @@ type
 implementation
 
 uses
-  Goccia.NestingLimit,
-  Goccia.RegExp.UnicodeData;
+  Goccia.NestingLimit, Goccia.RegExp.UnicodeData;
 
 const
   MIN_STEP_LIMIT = 10000000;
@@ -144,67 +140,67 @@ begin
     ((C >= Ord('0')) and (C <= Ord('9'))) or (C = Ord('_'));
 end;
 
-function IsWordChar(C: Cardinal; AUnicodeAware, AIgnoreCase: Boolean): Boolean; inline;
+function IsWordChar(C: Cardinal; UnicodeAware, IgnoreCase: Boolean): Boolean; inline;
 begin
   if IsBasicWordChar(C) then Exit(True);
-  if not AUnicodeAware or not AIgnoreCase then Exit(False);
-  Result := IsBasicWordChar(RegExpCanonicalizeCodePoint(C, AUnicodeAware, AIgnoreCase));
+  if not UnicodeAware or not IgnoreCase then Exit(False);
+  Result := IsBasicWordChar(RegExpCanonicalizeCodePoint(C, UnicodeAware, IgnoreCase));
 end;
 
 { the code point at Pos and its width in code units (a surrogate pair is one code point in Unicode mode) }
-function ReadCP(P: PWideChar; ALen, APos: Integer; AUni: Boolean; out ACP: Cardinal; out W: Integer): Boolean; inline;
+function ReadCP(P: PWideChar; Len, Pos: Integer; Uni: Boolean; out CP: Cardinal; out W: Integer): Boolean; inline;
 var U: Cardinal;
 begin
-  if (APos < 0) or (APos >= ALen) then begin ACP := 0; W := 0; Exit(False); end;
-  U := Ord(P[APos]);
-  if AUni and IsHigh(U) and (APos + 1 < ALen) and IsLow(Ord(P[APos + 1])) then
+  if (Pos < 0) or (Pos >= Len) then begin CP := 0; W := 0; Exit(False); end;
+  U := Ord(P[Pos]);
+  if Uni and IsHigh(U) and (Pos + 1 < Len) and IsLow(Ord(P[Pos + 1])) then
   begin
-    ACP := PairCP(U, Ord(P[APos + 1]));
+    CP := PairCP(U, Ord(P[Pos + 1]));
     W := 2;
   end
   else
   begin
-    ACP := U;
+    CP := U;
     W := 1;
   end;
   Result := True;
 end;
 
 { the code point that ends at Pos }
-function ReadCPBefore(P: PWideChar; APos: Integer; AUni: Boolean; out ACP: Cardinal; out W: Integer): Boolean; inline;
+function ReadCPBefore(P: PWideChar; Pos: Integer; Uni: Boolean; out CP: Cardinal; out W: Integer): Boolean; inline;
 var U: Cardinal;
 begin
-  if APos <= 0 then begin ACP := 0; W := 0; Exit(False); end;
-  U := Ord(P[APos - 1]);
-  if AUni and IsLow(U) and (APos >= 2) and IsHigh(Ord(P[APos - 2])) then
+  if Pos <= 0 then begin CP := 0; W := 0; Exit(False); end;
+  U := Ord(P[Pos - 1]);
+  if Uni and IsLow(U) and (Pos >= 2) and IsHigh(Ord(P[Pos - 2])) then
   begin
-    ACP := PairCP(Ord(P[APos - 2]), U);
+    CP := PairCP(Ord(P[Pos - 2]), U);
     W := 2;
   end
   else
   begin
-    ACP := U;
+    CP := U;
     W := 1;
   end;
   Result := True;
 end;
 
-function ClassContains(const C: TRegExpCharClass; ACP: Cardinal): Boolean; inline;
+function ClassContains(const C: TRegExpCharClass; CP: Cardinal): Boolean; inline;
 var Hi, I, N, Lo, Mid: Integer;
 begin
   N := Length(C.Ranges);
   if N <= 8 then
   begin
     for I := 0 to N - 1 do
-      if (ACP >= C.Ranges[I].Lo) and (ACP <= C.Ranges[I].Hi) then Exit(True);
+      if (CP >= C.Ranges[I].Lo) and (CP <= C.Ranges[I].Hi) then Exit(True);
     Exit(False);
   end;
   if Length(C.PageFirstRange) = REGEXP_CHAR_CLASS_PAGE_COUNT then
   begin
-    I := C.PageFirstRange[ACP shr REGEXP_CHAR_CLASS_PAGE_BITS];
-    while (I <= High(C.Ranges)) and (C.Ranges[I].Lo <= ACP) do
+    I := C.PageFirstRange[CP shr REGEXP_CHAR_CLASS_PAGE_BITS];
+    while (I <= High(C.Ranges)) and (C.Ranges[I].Lo <= CP) do
     begin
-      if ACP <= C.Ranges[I].Hi then Exit(True);
+      if CP <= C.Ranges[I].Hi then Exit(True);
       Inc(I);
     end;
     Exit(False);
@@ -214,8 +210,8 @@ begin
   while Lo <= Hi do
   begin
     Mid := Lo + (Hi - Lo) div 2;
-    if ACP < C.Ranges[Mid].Lo then Hi := Mid - 1
-    else if ACP > C.Ranges[Mid].Hi then Lo := Mid + 1
+    if CP < C.Ranges[Mid].Lo then Hi := Mid - 1
+    else if CP > C.Ranges[Mid].Hi then Lo := Mid + 1
     else Exit(True);
   end;
   Result := False;
@@ -224,46 +220,46 @@ end;
 
 { ---------------- memo: (PC, position) pairs where a path has failed ---------------- }
 
-function MemoHash(APC, APos, ACap: Integer): Integer; inline;
+function MemoHash(PC, Pos, Cap: Integer): Integer; inline;
 var H: Cardinal;
 begin
-  H := Cardinal(APC);
-  H := (H shl 5) xor (H shr 3) xor Cardinal(APos);
+  H := Cardinal(PC);
+  H := (H shl 5) xor (H shr 3) xor Cardinal(Pos);
   H := H xor (H shr 7) xor (H shr 15);
-  Result := Integer(H and Cardinal(ACap - 1));
+  Result := Integer(H and Cardinal(Cap - 1));
 end;
 
-function MemoContains(C: PDepthCtx; APC, APos: Integer): Boolean; inline;
+function MemoContains(C: PDepthCtx; PC, Pos: Integer): Boolean; inline;
 var Cap, Idx, I: Integer;
 begin
   Cap := Length(C^.Memo);
   if (Cap = 0) or (C^.MemoCount = 0) then Exit(False);
-  Idx := MemoHash(APC, APos, Cap);
+  Idx := MemoHash(PC, Pos, Cap);
   for I := 0 to MEMO_MAX_PROBES - 1 do
   begin
     if C^.Memo[Idx].Gen <> C^.MemoGen then Exit(False);
-    if (C^.Memo[Idx].PC = APC) and (C^.Memo[Idx].Pos = APos) then Exit(True);
+    if (C^.Memo[Idx].PC = PC) and (C^.Memo[Idx].Pos = Pos) then Exit(True);
     Idx := (Idx + 1) and (Cap - 1);
   end;
   Result := False;
 end;
 
-function MemoTryAdd(C: PDepthCtx; APC, APos: Integer): Boolean;
+function MemoTryAdd(C: PDepthCtx; PC, Pos: Integer): Boolean;
 var Cap, Idx, I: Integer;
 begin
   Cap := Length(C^.Memo);
-  Idx := MemoHash(APC, APos, Cap);
+  Idx := MemoHash(PC, Pos, Cap);
   for I := 0 to MEMO_MAX_PROBES - 1 do
   begin
     if C^.Memo[Idx].Gen <> C^.MemoGen then
     begin
       C^.Memo[Idx].Gen := C^.MemoGen;
-      C^.Memo[Idx].PC := APC;
-      C^.Memo[Idx].Pos := APos;
+      C^.Memo[Idx].PC := PC;
+      C^.Memo[Idx].Pos := Pos;
       Inc(C^.MemoCount);
       Exit(True);
     end;
-    if (C^.Memo[Idx].PC = APC) and (C^.Memo[Idx].Pos = APos) then Exit(True);
+    if (C^.Memo[Idx].PC = PC) and (C^.Memo[Idx].Pos = Pos) then Exit(True);
     Idx := (Idx + 1) and (Cap - 1);
   end;
   Result := False;
@@ -286,7 +282,7 @@ begin
     if Old[I].Gen = Gen then MemoTryAdd(C, Old[I].PC, Old[I].Pos);
 end;
 
-procedure MemoAdd(C: PDepthCtx; APC, APos: Integer);
+procedure MemoAdd(C: PDepthCtx; PC, Pos: Integer);
 var Cap: Integer;
 begin
   if Length(C^.Memo) = 0 then
@@ -299,29 +295,29 @@ begin
     Cap := Length(C^.Memo);
     if (Cap = MEMO_MAX_CAPACITY) and (C^.MemoCount * 4 >= Cap * 3) then Exit;
     if (C^.MemoCount * 4 >= Cap * 3) and (Cap < MEMO_MAX_CAPACITY) then MemoGrow(C);
-    if MemoTryAdd(C, APC, APos) then Exit;
+    if MemoTryAdd(C, PC, Pos) then Exit;
     if Cap >= MEMO_MAX_CAPACITY then Exit;
     MemoGrow(C);
   end;
 end;
 
 { the bit-set memo }
-function BitsContains(C: PDepthCtx; ABit: Integer): Boolean; inline;
+function BitsContains(C: PDepthCtx; Bit: Integer): Boolean; inline;
 begin
-  Result := (C^.DirtyCount > 0) and (((C^.Bits[ABit shr 6] shr (ABit and 63)) and 1) <> 0);
+  Result := (C^.DirtyCount > 0) and (((C^.Bits[Bit shr 6] shr (Bit and 63)) and 1) <> 0);
 end;
 
-procedure BitsAdd(C: PDepthCtx; ABit: Integer); inline;
+procedure BitsAdd(C: PDepthCtx; Bit: Integer); inline;
 var W: Integer;
 begin
-  W := ABit shr 6;
+  W := Bit shr 6;
   if C^.Bits[W] = 0 then
   begin
     if C^.DirtyCount >= Length(C^.Dirty) then SetLength(C^.Dirty, C^.DirtyCount * 2 + 64);
     C^.Dirty[C^.DirtyCount] := W;
     Inc(C^.DirtyCount);
   end;
-  C^.Bits[W] := C^.Bits[W] or (UInt64(1) shl (ABit and 63));
+  C^.Bits[W] := C^.Bits[W] or (UInt64(1) shl (Bit and 63));
 end;
 
 procedure BitsReset(C: PDepthCtx); inline;
@@ -345,45 +341,45 @@ end;
 
 { ---------------- matcher ---------------- }
 
-function InClass(const ACB: TClassBits; const C: TRegExpCharClass; ACP: Cardinal): Boolean; inline;
+function InClass(const CB: TClassBits; const C: TRegExpCharClass; CP: Cardinal): Boolean; inline;
 begin
-  if ACP <= $FF then Result := (ACB.Bits[ACP shr 5] and (UInt32(1) shl (ACP and 31))) <> 0
-  else if not ACB.HasHigh then Result := False
-  else Result := ClassContains(C, ACP);
+  if CP <= $FF then Result := (CB.Bits[CP shr 5] and (UInt32(1) shl (CP and 31))) <> 0
+  else if not CB.HasHigh then Result := False
+  else Result := ClassContains(C, CP);
 end;
 
-function MatchSeq(P: PWideChar; ALen, APos: Integer; AUni: Boolean; const ASeq: TRegExpStringSequence; out AEnd: Integer): Boolean;
+function MatchSeq(P: PWideChar; Len, Pos: Integer; Uni: Boolean; const ASeq: TRegExpStringSequence; out AEnd: Integer): Boolean;
 var I, W: Integer; CP: Cardinal;
 begin
   for I := 0 to High(ASeq.CodePoints) do
   begin
-    if not ReadCP(P, ALen, APos, AUni, CP, W) or (CP <> ASeq.CodePoints[I]) then Exit(False);
-    Inc(APos, W);
+    if not ReadCP(P, Len, Pos, Uni, CP, W) or (CP <> ASeq.CodePoints[I]) then Exit(False);
+    Inc(Pos, W);
   end;
-  AEnd := APos;
+  AEnd := Pos;
   Result := True;
 end;
 
-function WidthBefore(P: PWideChar; APos, ALow: Integer; AUni: Boolean): Integer; inline;
+function WidthBefore(P: PWideChar; APos, ALow: Integer; Uni: Boolean): Integer; inline;
 begin
-  if AUni and (APos - 2 >= ALow) and IsLow(Ord(P[APos - 1])) and IsHigh(Ord(P[APos - 2])) then Result := 2
+  if Uni and (APos - 2 >= ALow) and IsLow(Ord(P[APos - 1])) and IsHigh(Ord(P[APos - 2])) then Result := 2
   else Result := 1;
 end;
 
-function SeenAt(C: PDepthCtx; AUseBits: Boolean; AStride, APC, APos: Integer): Boolean; inline;
+function SeenAt(C: PDepthCtx; UseBits: Boolean; Stride, PC, Pos: Integer): Boolean; inline;
 begin
-  if AUseBits then Result := BitsContains(C, APC * AStride + APos)
-  else Result := MemoContains(C, APC, APos);
+  if UseBits then Result := BitsContains(C, PC * Stride + Pos)
+  else Result := MemoContains(C, PC, Pos);
 end;
 
-procedure GrowStack(C: PDepthCtx; ANeed: Integer);
+procedure GrowStack(C: PDepthCtx; Need: Integer);
 begin
-  SetLength(C^.Stack, ANeed * 2 + 256);
+  SetLength(C^.Stack, Need * 2 + 256);
 end;
 
-procedure GrowRep(C: PDepthCtx; ANeed: Integer);
+procedure GrowRep(C: PDepthCtx; Need: Integer);
 begin
-  SetLength(C^.Rep, ANeed * 2 + 8);
+  SetLength(C^.Rep, Need * 2 + 8);
 end;
 
 constructor TRegexMatcher.Create(const AProg: TRegExpProgram; const APattern: UnicodeString);
@@ -465,16 +461,16 @@ begin
   inherited;
 end;
 
-function TRegexMatcher.Ctx(ADepth: Integer): PDepthCtx;
+function TRegexMatcher.Ctx(Depth: Integer): PDepthCtx;
 var I, Old: Integer;
 begin
-  if ADepth >= Length(FCtx) then
+  if Depth >= Length(FCtx) then
   begin
     Old := Length(FCtx);
-    SetLength(FCtx, ADepth + 4);
+    SetLength(FCtx, Depth + 4);
     for I := Old to High(FCtx) do FCtx[I] := nil;
   end;
-  Result := FCtx[ADepth];
+  Result := FCtx[Depth];
   if Result = nil then
   begin
     New(Result);
@@ -483,7 +479,7 @@ begin
     Result^.DirtyCount := 0;
     SetLength(Result^.Stack, 256);
     SetLength(Result^.Rep, 8);
-    FCtx[ADepth] := Result;
+    FCtx[Depth] := Result;
   end;
 end;
 
@@ -584,13 +580,13 @@ var
     Ranges := Outp;
   end;
   { the least number of characters any path from From to To consumes; -1 when a path leaves [From, To] }
-  function MinConsumed(AFrom, ATo_: Integer): Integer;
+  function MinConsumed(From, To_: Integer): Integer;
   var J, Pass, D, Nx, Cost: Integer; Moved: Boolean;
-    procedure Relax(ATarget, AValue: Integer);
+    procedure Relax(Target, Value: Integer);
     begin
-      while (ATarget >= From) and (ATarget < To_) and Dead[ATarget] do Inc(ATarget);   { dead code falls through }
-      if (ATarget < From) or (ATarget > To_) then begin Escapes := True; Exit; end;
-      if AValue < Dist[ATarget] then begin Dist[ATarget] := AValue; Moved := True; end;
+      while (Target >= From) and (Target < To_) and Dead[Target] do Inc(Target);   { dead code falls through }
+      if (Target < From) or (Target > To_) then begin Escapes := True; Exit; end;
+      if Value < Dist[Target] then begin Dist[Target] := Value; Moved := True; end;
     end;
   begin
     for J := From to To_ do Dist[J] := MaxInt;
@@ -609,7 +605,7 @@ var
           RX_SPLIT, RX_SPLIT_LAZY: begin Relax(J + 1, D); Relax(BxAt(J), D); end;
           RX_LOOKAHEAD, RX_LOOKBEHIND: Relax(BxAt(J) and LOOK_TARGET_MASK, D);
           RX_CAPTURE_UNDEFINED_JUMP: begin Relax(J + 2, D); if J + 1 < N then Relax(BxAt(J + 1), D); end;
-          RX_FAIL:;
+          RX_FAIL: ;
           RX_MATCH: Escapes := True;
         else Relax(J + 1, D);   { zero-width, or may consume nothing (backreference, string set) }
         end;
@@ -789,20 +785,20 @@ var Seen: array of Boolean;
     else if (A = 2) or (B = 2) then Result := 2
     else Result := 1;
   end;
-  function Walk(APC: Integer): Integer;
+  function Walk(PC: Integer): Integer;
   var Op: TRegExpOpCode; Bx: Integer;
   begin
     while True do
     begin
-      if (APC < 0) or (APC >= FCodeLen) then Exit(0);
-      if Seen[APC] then Exit(1);   { already explored: its result is part of the combination }
-      Seen[APC] := True;
-      Op := TRegExpOpCode(FCode[APC] and $FF);
-      Bx := Integer(FCode[APC] shr 8);
+      if (PC < 0) or (PC >= FCodeLen) then Exit(0);
+      if Seen[PC] then Exit(1);   { already explored: its result is part of the combination }
+      Seen[PC] := True;
+      Op := TRegExpOpCode(FCode[PC] and $FF);
+      Bx := Integer(FCode[PC] shr 8);
       case Op of
-        RX_SAVE, RX_CLEAR_CAPTURES, RX_REPEAT_ENTER, RX_REPEAT_CHECK: Inc(APC);
-        RX_JUMP: APC := Bx;
-        RX_SPLIT, RX_SPLIT_LAZY: Exit(Combine(Walk(APC + 1), Walk(Bx)));
+        RX_SAVE, RX_CLEAR_CAPTURES, RX_REPEAT_ENTER, RX_REPEAT_CHECK: Inc(PC);
+        RX_JUMP: PC := Bx;
+        RX_SPLIT, RX_SPLIT_LAZY: Exit(Combine(Walk(PC + 1), Walk(Bx)));
         RX_ASSERT_START: if Bx = 0 then Exit(1) else Exit(2);
       else Exit(0);
       end;
@@ -818,25 +814,25 @@ end;
   path can match without consuming (or starts with something this does not follow) }
 procedure TRegexMatcher.AnalyzeFirst;
 var Seen: array of Boolean; I: Integer;
-  function Walk(APC: Integer): Boolean;
+  function Walk(PC: Integer): Boolean;
   var Op: TRegExpOpCode; Bx, K: Integer;
   begin
     while True do
     begin
-      if (APC < 0) or (APC >= FCodeLen) then Exit(False);
-      if Seen[APC] then Exit(True);
-      Seen[APC] := True;
-      Op := TRegExpOpCode(FCode[APC] and $FF);
-      Bx := Integer(FCode[APC] shr 8);
+      if (PC < 0) or (PC >= FCodeLen) then Exit(False);
+      if Seen[PC] then Exit(True);
+      Seen[PC] := True;
+      Op := TRegExpOpCode(FCode[PC] and $FF);
+      Bx := Integer(FCode[PC] shr 8);
       case Op of
         { zero-width: the first consumed code unit comes later }
         RX_SAVE, RX_CLEAR_CAPTURES, RX_REPEAT_ENTER, RX_REPEAT_CHECK, RX_ASSERT_START, RX_ASSERT_END, RX_ASSERT_WORD:
-          Inc(APC);
-        RX_LOOKAHEAD, RX_LOOKBEHIND: APC := Bx and LOOK_TARGET_MASK;
-        RX_JUMP: APC := Bx;
-        RX_SPLIT, RX_SPLIT_LAZY: Exit(Walk(APC + 1) and Walk(Bx));
+          Inc(PC);
+        RX_LOOKAHEAD, RX_LOOKBEHIND: PC := Bx and LOOK_TARGET_MASK;
+        RX_JUMP: PC := Bx;
+        RX_SPLIT, RX_SPLIT_LAZY: Exit(Walk(PC + 1) and Walk(Bx));
         RX_CAPTURE_UNDEFINED_JUMP:
-          if APC + 1 < FCodeLen then Exit(Walk(APC + 2) and Walk(Integer(FCode[APC + 1] shr 8))) else Exit(False);
+          if PC + 1 < FCodeLen then Exit(Walk(PC + 2) and Walk(Integer(FCode[PC + 1] shr 8))) else Exit(False);
         RX_CHAR:
           begin
             if Cardinal(Bx) <= $FF then FFirst[Bx shr 5] := FFirst[Bx shr 5] or (UInt32(1) shl (Bx and 31))
@@ -891,26 +887,26 @@ end;
 
 { the code units a path from PC must consume first; False when some path can match, or reach something this
   does not follow, before consuming }
-function TRegexMatcher.FirstSetFrom(APC: Integer; var ABits: TClassBits): Boolean;
+function TRegexMatcher.FirstSetFrom(PC: Integer; var Bits: TClassBits): Boolean;
 var Seen: array of Boolean;
-  function Walk(APC: Integer): Boolean;
+  function Walk(PC: Integer): Boolean;
   var Op: TRegExpOpCode; Bx, K: Integer;
   begin
     while True do
     begin
-      if (APC < 0) or (APC >= FCodeLen) then Exit(False);
-      if Seen[APC] then Exit(True);
-      Seen[APC] := True;
-      Op := TRegExpOpCode(FCode[APC] and $FF);
-      Bx := Integer(FCode[APC] shr 8);
+      if (PC < 0) or (PC >= FCodeLen) then Exit(False);
+      if Seen[PC] then Exit(True);
+      Seen[PC] := True;
+      Op := TRegExpOpCode(FCode[PC] and $FF);
+      Bx := Integer(FCode[PC] shr 8);
       case Op of
         RX_SAVE, RX_CLEAR_CAPTURES, RX_REPEAT_ENTER, RX_REPEAT_CHECK, RX_ASSERT_START, RX_ASSERT_END, RX_ASSERT_WORD:
-          Inc(APC);
-        RX_LOOKAHEAD, RX_LOOKBEHIND: APC := Bx and LOOK_TARGET_MASK;
-        RX_JUMP: APC := Bx;
-        RX_SPLIT, RX_SPLIT_LAZY: Exit(Walk(APC + 1) and Walk(Bx));
+          Inc(PC);
+        RX_LOOKAHEAD, RX_LOOKBEHIND: PC := Bx and LOOK_TARGET_MASK;
+        RX_JUMP: PC := Bx;
+        RX_SPLIT, RX_SPLIT_LAZY: Exit(Walk(PC + 1) and Walk(Bx));
         RX_CAPTURE_UNDEFINED_JUMP:
-          if APC + 1 < FCodeLen then Exit(Walk(APC + 2) and Walk(Integer(FCode[APC + 1] shr 8))) else Exit(False);
+          if PC + 1 < FCodeLen then Exit(Walk(PC + 2) and Walk(Integer(FCode[PC + 1] shr 8))) else Exit(False);
         RX_CHAR:
           begin
             if Cardinal(Bx) <= $FF then Bits.Bits[Bx shr 5] := Bits.Bits[Bx shr 5] or (UInt32(1) shl (Bx and 31))
@@ -1007,32 +1003,32 @@ function TRegexMatcher.CaptureCount: Integer; begin Result := FProg.CaptureCount
 function TRegexMatcher.HasNamedGroups: Boolean; begin Result := Length(FProg.NamedGroups) > 0; end;
 function TRegexMatcher.NamedGroups: TGocciaRegExpNamedGroups; begin Result := FProg.NamedGroups; end;
 
-function TRegexMatcher.TryGetGroup(G: Integer; out ASt, AEn: Integer): Boolean;
+function TRegexMatcher.TryGetGroup(G: Integer; out St, En: Integer): Boolean;
 begin
   if G = 0 then
   begin
-    ASt := FMatchIndex;
-    AEn := FMatchEnd;
+    St := FMatchIndex;
+    En := FMatchEnd;
   end
   else if FEmpty or (G * 2 + 1 >= FSlotCount) then
   begin
-    ASt := -1;
-    AEn := -1;
+    St := -1;
+    En := -1;
   end
   else
   begin
-    ASt := FSlots[G * 2];
-    AEn := FSlots[G * 2 + 1];
+    St := FSlots[G * 2];
+    En := FSlots[G * 2 + 1];
   end;
-  Result := (ASt >= 0) and (AEn >= ASt) and (AEn <= FLen);
+  Result := (St >= 0) and (En >= St) and (En <= FLen);
 end;
 
 { Match attempts from StartPos at StartPC with Goccia's RunVM semantics. Scan: after a failed attempt, try
   the next candidate start position (top level only). Slots: SlotCount capture slots.
   One loop, no nested procedures: a failed instruction jumps to LFail, which records the failure in the memo
   and pops the next backtrack frame (LPop). The push sequence is written out at each site. }
-function TRegexMatcher.Run(ADepth: Integer; ASlots: PInteger; AStartPos, AStartPC: Integer; AEndPos: PInteger;
-  ABackward, AScan: Boolean): Boolean;
+function TRegexMatcher.Run(Depth: Integer; Slots: PInteger; StartPos, StartPC: Integer; EndPos: PInteger;
+  Backward, Scan: Boolean): Boolean;
 label LAttempt, LFail, LPop;
 var
   C, NC: PDepthCtx;
@@ -1049,7 +1045,7 @@ var
   Stk, Rep: PInteger;
 begin
   Result := False;
-  if ADepth = 0 then C := FCtx0 else C := Ctx(ADepth);
+  if Depth = 0 then C := FCtx0 else C := Ctx(Depth);
   UseBits := FUseBits;
   Stride := FStride;
   NoMemo := FProg.HasBackreferences;
@@ -1071,11 +1067,11 @@ begin
     SetLength(C^.Bits, ((CodeLen + 1) * Stride + 63) shr 6 + 64);
     FillChar(C^.Bits[0], Length(C^.Bits) * SizeOf(UInt64), 0);
   end;
-  ScanPos := AStartPos;
+  ScanPos := StartPos;
 
 LAttempt:
-  if AScan then FillChar(ASlots^, SlotCount * SizeOf(Integer), $FF);
-  PC := AStartPC;
+  if Scan then FillChar(Slots^, SlotCount * SizeOf(Integer), $FF);
+  PC := StartPC;
   InputPos := ScanPos;
   Top := 0;
   Entries := 0;
@@ -1094,7 +1090,7 @@ LAttempt:
     case Op of
       RX_CHAR, RX_CHAR_CLASS, RX_CHAR_CLASS_NEG, RX_ANY:
         begin
-          if ABackward then
+          if Backward then
           begin
             if not ReadCPBefore(Inp, InputPos, Uni, CP, W) then goto LFail;
           end
@@ -1106,13 +1102,13 @@ LAttempt:
           else Matched := (Bx <> 0) or not IsLineTerminator(CP);
           end;
           if not Matched then goto LFail;
-          if ABackward then Dec(InputPos, W) else Inc(InputPos, W);
+          if Backward then Dec(InputPos, W) else Inc(InputPos, W);
           Inc(PC);
         end;
 
       RX_SPLIT:
         begin
-          if (FPossBody[PC] >= 0) and not ABackward then
+          if (FPossBody[PC] >= 0) and not Backward then
           begin
             { possessive: no frame; the next character decides between the body and the exit }
             K := FPossBody[PC];
@@ -1150,7 +1146,7 @@ LAttempt:
             if Matched then Inc(PC) else PC := Bx;
             Continue;
           end;
-          if FSimpleLoop[PC] and not ABackward and ((Len - InputPos) >= SIMPLE_GREEDY_LOOP_MIN_REMAINING) then
+          if FSimpleLoop[PC] and not Backward and ((Len - InputPos) >= SIMPLE_GREEDY_LOOP_MIN_REMAINING) then
           begin
             { a loop whose body is one character instruction consumes its whole run in one step; one frame
               stands for every shorter count }
@@ -1179,7 +1175,7 @@ LAttempt:
                 if Entries >= BACKTRACK_CAP then begin FErr := 2; Exit(False); end;
                 K := Top + SlotCount + RepeatDepth + 4;
                 if K > Cap then begin GrowStack(C, K); Stk := @C^.Stack[0]; Cap := Length(C^.Stack); end;
-                for J := 0 to SlotCount - 1 do Stk[Top + J] := ASlots[J];
+                for J := 0 to SlotCount - 1 do Stk[Top + J] := Slots[J];
                 Inc(Top, SlotCount);
                 for J := 0 to RepeatDepth - 1 do Stk[Top + J] := Rep[J];
                 Inc(Top, RepeatDepth);
@@ -1200,7 +1196,7 @@ LAttempt:
             if Entries >= BACKTRACK_CAP then begin FErr := 2; Exit(False); end;
             K := Top + SlotCount + RepeatDepth + 4;
             if K > Cap then begin GrowStack(C, K); Stk := @C^.Stack[0]; Cap := Length(C^.Stack); end;
-            for J := 0 to SlotCount - 1 do Stk[Top + J] := ASlots[J];
+            for J := 0 to SlotCount - 1 do Stk[Top + J] := Slots[J];
             Inc(Top, SlotCount);
             for J := 0 to RepeatDepth - 1 do Stk[Top + J] := Rep[J];
             Inc(Top, RepeatDepth);
@@ -1221,7 +1217,7 @@ LAttempt:
             if Entries >= BACKTRACK_CAP then begin FErr := 2; Exit(False); end;
             K := Top + SlotCount + RepeatDepth + 4;
             if K > Cap then begin GrowStack(C, K); Stk := @C^.Stack[0]; Cap := Length(C^.Stack); end;
-            for J := 0 to SlotCount - 1 do Stk[Top + J] := ASlots[J];
+            for J := 0 to SlotCount - 1 do Stk[Top + J] := Slots[J];
             Inc(Top, SlotCount);
             for J := 0 to RepeatDepth - 1 do Stk[Top + J] := Rep[J];
             Inc(Top, RepeatDepth);
@@ -1243,7 +1239,7 @@ LAttempt:
             { back at a loop's split with no progress: take its exit with the state the entry saved }
             PC := Integer(Code[Bx] shr 8);
             RD := Stk[Top - 4];
-            for J := 0 to SlotCount - 1 do ASlots[J] := Stk[Top - 4 - RD - SlotCount + J];
+            for J := 0 to SlotCount - 1 do Slots[J] := Stk[Top - 4 - RD - SlotCount + J];
             RepeatDepth := RD;
             Top := Top - 4 - RD - SlotCount;
             Dec(Entries);
@@ -1254,7 +1250,7 @@ LAttempt:
 
       RX_SAVE:
         begin
-          if Bx < SlotCount then ASlots[Bx] := InputPos;
+          if Bx < SlotCount then Slots[Bx] := InputPos;
           Inc(PC);
         end;
 
@@ -1264,8 +1260,8 @@ LAttempt:
           RefEnd := RefStart + (Bx and CLEAR_CAPTURE_COUNT_MASK) - 1;
           for RefPos := RefStart to RefEnd do
           begin
-            if RefPos * 2 < SlotCount then ASlots[RefPos * 2] := -1;
-            if RefPos * 2 + 1 < SlotCount then ASlots[RefPos * 2 + 1] := -1;
+            if RefPos * 2 < SlotCount then Slots[RefPos * 2] := -1;
+            if RefPos * 2 + 1 < SlotCount then Slots[RefPos * 2 + 1] := -1;
           end;
           Inc(PC);
         end;
@@ -1291,15 +1287,15 @@ LAttempt:
           if PC + 1 >= CodeLen then begin FErr := 4; Exit(False); end;
           RefStart := -1;
           RefEnd := -1;
-          if Bx * 2 < SlotCount then RefStart := ASlots[Bx * 2];
-          if Bx * 2 + 1 < SlotCount then RefEnd := ASlots[Bx * 2 + 1];
+          if Bx * 2 < SlotCount then RefStart := Slots[Bx * 2];
+          if Bx * 2 + 1 < SlotCount then RefEnd := Slots[Bx * 2 + 1];
           if (RefStart < 0) or (RefEnd < 0) or (RefStart > RefEnd) then PC := Integer(Code[PC + 1] shr 8)
           else Inc(PC, 2);
         end;
 
       RX_STRING_SET:
         begin
-          if ABackward or (Bx < 0) or (Bx > High(FProg.StringSets)) then goto LFail;
+          if Backward or (Bx < 0) or (Bx > High(FProg.StringSets)) then goto LFail;
           FirstIndex := -1;
           FirstEnd := -1;
           for K := 0 to High(FProg.StringSets[Bx].Strings) do
@@ -1338,7 +1334,7 @@ LAttempt:
             if Entries >= BACKTRACK_CAP then begin FErr := 2; Exit(False); end;
             H := Top + SlotCount + RepeatDepth + 4;
             if H > Cap then begin GrowStack(C, H); Stk := @C^.Stack[0]; Cap := Length(C^.Stack); end;
-            for J := 0 to SlotCount - 1 do Stk[Top + J] := ASlots[J];
+            for J := 0 to SlotCount - 1 do Stk[Top + J] := Slots[J];
             Inc(Top, SlotCount);
             for J := 0 to RepeatDepth - 1 do Stk[Top + J] := Rep[J];
             Inc(Top, RepeatDepth);
@@ -1361,8 +1357,8 @@ LAttempt:
           K := Bx and BACKREF_INDEX_MASK;
           RefStart := -1;
           RefEnd := -1;
-          if K * 2 < SlotCount then RefStart := ASlots[K * 2];
-          if K * 2 + 1 < SlotCount then RefEnd := ASlots[K * 2 + 1];
+          if K * 2 < SlotCount then RefStart := Slots[K * 2];
+          if K * 2 + 1 < SlotCount then RefEnd := Slots[K * 2 + 1];
           if (RefStart < 0) or (RefEnd < 0) or (RefStart > RefEnd) then
           begin
             if Negated then goto LFail;
@@ -1370,7 +1366,7 @@ LAttempt:
             Continue;
           end;
           ComparePos := InputPos;
-          if ABackward then
+          if Backward then
           begin
             ComparePos := InputPos - (RefEnd - RefStart);
             if ComparePos < 0 then goto LFail;
@@ -1401,7 +1397,7 @@ LAttempt:
             Inc(ComparePos, InW);
           end;
           if not Matched then goto LFail;
-          if ABackward then InputPos := InputPos - (RefEnd - RefStart) else InputPos := ComparePos;
+          if Backward then InputPos := InputPos - (RefEnd - RefStart) else InputPos := ComparePos;
           Inc(PC);
         end;
 
@@ -1454,21 +1450,21 @@ LAttempt:
             PC := LookEnd;
             Continue;
           end;
-          NC := Ctx(ADepth + 1);
+          NC := Ctx(Depth + 1);
           if Length(NC^.Slots) < SlotCount then SetLength(NC^.Slots, SlotCount);
-          for J := 0 to SlotCount - 1 do NC^.Slots[J] := ASlots[J];
-          if (ADepth >= NESTING_UNCHECKED_DEPTH) and NativeStackNearlyExhausted then begin FErr := 3; Exit(False); end;
-          Matched := Run(ADepth + 1, @NC^.Slots[0], InputPos, PC + 1, nil, Op = RX_LOOKBEHIND, False);
+          for J := 0 to SlotCount - 1 do NC^.Slots[J] := Slots[J];
+          if (Depth >= NESTING_UNCHECKED_DEPTH) and NativeStackNearlyExhausted then begin FErr := 3; Exit(False); end;
+          Matched := Run(Depth + 1, @NC^.Slots[0], InputPos, PC + 1, nil, Op = RX_LOOKBEHIND, False);
           if FErr <> 0 then Exit(False);
           if Negated = Matched then goto LFail;
           if not Negated then
-            for J := 0 to SlotCount - 1 do ASlots[J] := NC^.Slots[J];
+            for J := 0 to SlotCount - 1 do Slots[J] := NC^.Slots[J];
           PC := LookEnd;
         end;
 
       RX_MATCH:
         begin
-          if AEndPos <> nil then AEndPos^ := InputPos;
+          if EndPos <> nil then EndPos^ := InputPos;
           Exit(True);
         end;
 
@@ -1485,7 +1481,7 @@ LAttempt:
   LPop:
     if Top = 0 then
     begin
-      if not AScan then Exit(False);
+      if not Scan then Exit(False);
       { the next start position }
       if ScanPos >= Len then Exit(False);
       if Uni and IsHigh(Ord(Inp[ScanPos])) and (ScanPos + 1 < Len) and IsLow(Ord(Inp[ScanPos + 1])) then Inc(ScanPos, 2)
@@ -1504,7 +1500,7 @@ LAttempt:
       if RD > RepCap then begin GrowRep(C, RD); Rep := @C^.Rep[0]; RepCap := Length(C^.Rep); end;
       for J := 0 to RD - 1 do Rep[J] := Stk[H - RD + J];
     end;
-    for J := 0 to SlotCount - 1 do ASlots[J] := Stk[H - RD - SlotCount + J];
+    for J := 0 to SlotCount - 1 do Slots[J] := Stk[H - RD - SlotCount + J];
     if PC >= 0 then
     begin
       Top := H - RD - SlotCount;
@@ -1541,34 +1537,34 @@ begin
   end;
 end;
 
-function TRegexMatcher.Exec(AChars: PWideChar; ALen, AStart: Integer; ARequireStart: Boolean): Boolean;
+function TRegexMatcher.Exec(Chars: PWideChar; Len, Start: Integer; RequireStart: Boolean): Boolean;
 var P, I: Integer;
 begin
   FErr := 0;
   FMatchIndex := -1;
   FMatchEnd := -1;
-  FIn := AChars;
-  FLen := ALen;
-  if AStart > ALen then Exit(False);
+  FIn := Chars;
+  FLen := Len;
+  if Start > Len then Exit(False);
   if FEmpty then
   begin
     for I := 0 to FSlotCount - 1 do FSlots[I] := -1;
-    FMatchIndex := AStart;
-    FMatchEnd := AStart;
+    FMatchIndex := Start;
+    FMatchEnd := Start;
     Exit(True);
   end;
-  FStride := ALen + 1;
+  FStride := Len + 1;
   FUseBits := Int64(FCodeLen + 1) * FStride <= 1 shl 24;   { at most 2 MB of bits per depth }
-  FStepLimit := Int64(ALen) * STEPS_PER_INPUT_UNIT;
+  FStepLimit := Int64(Len) * STEPS_PER_INPUT_UNIT;
   if FStepLimit < MIN_STEP_LIMIT then FStepLimit := MIN_STEP_LIMIT;
-  P := AStart;
+  P := Start;
   { a start inside a surrogate pair moves to the pair (Unicode mode) }
-  if FUnicode and (P > 0) and (P < ALen) and IsLow(Ord(AChars[P])) and IsHigh(Ord(AChars[P - 1])) then Dec(P);
+  if FUnicode and (P > 0) and (P < Len) and IsLow(Ord(Chars[P])) and IsHigh(Ord(Chars[P - 1])) then Dec(P);
   Result := False;
-  if ARequireStart or (FAnchor = 1) then
+  if RequireStart or (FAnchor = 1) then
   begin
     { ^ (without m) holds only at the input start }
-    if ARequireStart or (P = 0) then
+    if RequireStart or (P = 0) then
     begin
       FillChar(FSlots[0], FSlotCount * SizeOf(Integer), $FF);
       Result := Run(0, @FSlots[0], P, 0, nil, False, False);
@@ -1577,7 +1573,7 @@ begin
   else
   begin
     P := Candidate(P);
-    if P <= ALen then Result := Run(0, @FSlots[0], P, 0, nil, False, True);
+    if P <= Len then Result := Run(0, @FSlots[0], P, 0, nil, False, True);
   end;
   if FErr <> 0 then Result := False;
   if Result then

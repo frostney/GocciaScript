@@ -2,37 +2,9 @@ program g2;
 {$mode delphiunicode}{$H+}
 {$MINFPCONSTPREC 64}
 uses
-  Classes,
-  Math,
-  SysUtils,
-
-  cthreads,
-  G2.Agent,
-  G2.ArrayProto,
-  G2.Atomics,
-  G2.Builtins,
-  G2.Builtins2,
-  G2.Builtins3,
-  G2.Builtins4,
-  G2.Builtins5,
-  G2.Bytecode,
-  G2.Compiler,
-  G2.Core,
-  G2.Disposal,
-  G2.Engine,
-  G2.Eval,
-  G2.IterHelpers,
-  G2.Modules,
-  G2.ObjModel,
-  G2.Promise,
-  G2.RegExpV,
-  G2.TypedArrays,
-  G2.VM,
-
-  Goccia.AST.Node,
-  Goccia.Lexer,
-  Goccia.Parser,
-  Goccia.Token;
+  cthreads, Classes, SysUtils, Math,
+  Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.Token,
+  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5;
 
 type
   TSampler = class(TThread)
@@ -112,13 +84,13 @@ end;
   above U+10FFFF, truncated) sends the whole input to UTF8Decode, so its
   replacement behaviour is unchanged. }
 {$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
-function DecodeSource(const ARaw: RawByteString): UnicodeString;
+function DecodeSource(const Raw: RawByteString): UnicodeString;
 var I, N, J: Integer; P: PByte; D: PWideChar; B, C: Cardinal; Q: QWord;
 begin
-  N := Length(ARaw);
+  N := Length(Raw);
   SetLength(Result, N);
   if N = 0 then Exit;
-  P := PByte(ARaw); D := PWideChar(Result);
+  P := PByte(Raw); D := PWideChar(Result);
   I := 0; J := 0;
   while I < N do
   begin
@@ -142,19 +114,19 @@ begin
     else if (B >= $E0) and (B <= $EF) and (I + 2 < N) and (P[I + 1] and $C0 = $80) and (P[I + 2] and $C0 = $80) then
     begin
       C := ((B and $0F) shl 12) or ((P[I + 1] and $3F) shl 6) or (P[I + 2] and $3F);
-      if (C < $800) or ((C >= $D800) and (C <= $DFFF)) then Exit(UTF8Decode(ARaw));
+      if (C < $800) or ((C >= $D800) and (C <= $DFFF)) then Exit(UTF8Decode(Raw));
       D[J] := WideChar(C); Inc(I, 3); Inc(J);
     end
     else if (B >= $F0) and (B <= $F4) and (I + 3 < N) and (P[I + 1] and $C0 = $80) and (P[I + 2] and $C0 = $80) and
       (P[I + 3] and $C0 = $80) then
     begin
       C := ((B and $07) shl 18) or ((P[I + 1] and $3F) shl 12) or ((P[I + 2] and $3F) shl 6) or (P[I + 3] and $3F);
-      if (C < $10000) or (C > $10FFFF) then Exit(UTF8Decode(ARaw));
+      if (C < $10000) or (C > $10FFFF) then Exit(UTF8Decode(Raw));
       Dec(C, $10000);
       D[J] := WideChar($D800 + (C shr 10)); D[J + 1] := WideChar($DC00 + (C and $3FF)); Inc(I, 4); Inc(J, 2);
     end
     else
-      Exit(UTF8Decode(ARaw));
+      Exit(UTF8Decode(Raw));
   end;
   SetLength(Result, J);
 end;
@@ -225,23 +197,23 @@ begin
   Result := UTF8Encode(R + '"');
 end;
 
-procedure Outcome(const AKind, AName, AMsg, F: UnicodeString);
+procedure Outcome(const Kind, Name, Msg, F: UnicodeString);
 begin
-  WriteLn(#$1E'G2T262 {"kind":', JsonStr(AKind), ',"name":', JsonStr(AName), ',"message":', JsonStr(Copy(AMsg, 1, 400)),
+  WriteLn(#$1E'G2T262 {"kind":', JsonStr(Kind), ',"name":', JsonStr(Name), ',"message":', JsonStr(Copy(Msg, 1, 400)),
     ',"file":', JsonStr(F), '}');
   Flush(Output);
   Halt(0);
 end;
 
 { Key along O's prototype chain as a data property; False at an accessor, a proxy or the end of the chain }
-function DataProp(O: TValue; AKey: PStr; var V: TValue): Boolean;
+function DataProp(O: TValue; Key: PStr; var V: TValue): Boolean;
 var P: PObj; S: Integer;
 begin
   while IsObject(O) do
   begin
     P := ObjOf(O);
     if P^.OKind = okProxy then Exit(False);
-    S := ShapeLookup(P^.Shape, AKey);
+    S := ShapeLookup(P^.Shape, Key);
     if S >= 0 then
     begin
       if (P^.Shape^.PFlags[S] and pfAccessor) <> 0 then Exit(False);
@@ -253,7 +225,7 @@ begin
   Result := False;
 end;
 
-procedure ThrownOutcomeKind(E: TValue; const AKind: UnicodeString);
+procedure ThrownOutcomeKind(E: TValue; const Kind: UnicodeString);
 var C, N, M, S: TValue; Name, Msg: UnicodeString;
 begin
   Name := ''; Msg := '';
@@ -276,7 +248,7 @@ begin
     Pending := VUndefined;
     if ToStringV(E, S) and IsString(S) then Msg := StrToUnicode(StrOf(S));
   end;
-  Outcome(AKind, Name, Msg, '');
+  Outcome(Kind, Name, Msg, '');
 end;
 
 procedure ThrownOutcome(E: TValue);
@@ -284,12 +256,12 @@ begin
   ThrownOutcomeKind(E, 'throw');
 end;
 
-function ReadSourceFile(const APath: string; var ASrc: UnicodeString): Boolean;
+function ReadSourceFile(const Path: string; var Src: UnicodeString): Boolean;
 var FS: TFileStream; Raw: RawByteString;
 begin
   Result := False;
   try
-    FS := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+    FS := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
     try
       SetLength(Raw, FS.Size);
       if FS.Size > 0 then FS.ReadBuffer(Raw[1], FS.Size);
@@ -300,23 +272,23 @@ begin
     Exit;
   end;
   if (Length(Raw) >= 3) and (Raw[1] = #$EF) and (Raw[2] = #$BB) and (Raw[3] = #$BF) then Delete(Raw, 1, 3);
-  ASrc := DecodeSource(Raw);
+  Src := DecodeSource(Raw);
   Result := True;
 end;
 
 { G2Host.detachArrayBuffer(buffer): $262.detachArrayBuffer (25.1.3.5 DetachArrayBuffer) }
-function Host_Detach(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Host_Detach(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if AArgc < 1 then Exit(DetachArrayBufferV(VUndefined));
-  Result := DetachArrayBufferV(AArgs[1]);
-  ARes := VNull;
+  if Argc < 1 then Exit(DetachArrayBufferV(VUndefined));
+  Result := DetachArrayBufferV(Args[1]);
+  Res := VNull;
 end;
 
 { G2Host.evalScript(source): $262.evalScript, a global Script run in this realm }
-function Host_EvalScript(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Host_EvalScript(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var T: PFuncTemplate; Err: UnicodeString; Clo, S: TValue;
 begin
-  if AArgc >= 1 then S := AArgs[1] else S := VUndefined;
+  if Argc >= 1 then S := Args[1] else S := VUndefined;
   if not ToStringV(S, S) then Exit(False);
   if not ParseAndCompile(StrToUnicode(StrOf(S)), '<evalScript>', False, T, Err, 1) then
   begin
@@ -324,13 +296,13 @@ begin
     Exit(ThrowError('SyntaxError', 'G2 compile: ' + Err));
   end;
   if not MakeScriptClosure(T, Clo) then Exit(False);
-  Result := CallValue(Clo, GlobalObj, nil, 0, ARes);
+  Result := CallValue(Clo, GlobalObj, nil, 0, Res);
 end;
 
-function Host_GC(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Host_GC(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
   CollectMajor;
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 

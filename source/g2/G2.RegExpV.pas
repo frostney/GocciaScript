@@ -9,12 +9,7 @@ unit G2.RegExpV;
 interface
 
 uses
-  Generics.Collections,
-  Math,
-  SysUtils,
-
-  G2.Core,
-  G2.VM;
+  SysUtils, Math, Generics.Collections, G2.Core, G2.VM;
 
 const
   okRegExp = 17;
@@ -22,18 +17,12 @@ const
 procedure InitRegExp;
 { the spec layer in prelude/regexp.js: after every other built-in }
 procedure InitRegExpPrelude;
-function CreateRegExp(APattern, AFlags: PStr; var ARes: TValue): Boolean;
+function CreateRegExp(Pattern, Flags: PStr; var Res: TValue): Boolean;
 
 implementation
 
 uses
-  G2.Bytecode,
-  G2.Regex,
-  G2.Snapshot,
-
-  Goccia.RegExp.&Program,
-  Goccia.RegExp.Compiler,
-  Goccia.RegExp.Engine;
+  Goccia.RegExp.&Program, Goccia.RegExp.Compiler, Goccia.RegExp.Engine, G2.Regex, G2.Bytecode, G2.Snapshot;
 
 {$I G2.RegExpPrelude.inc}
 
@@ -53,47 +42,47 @@ threadvar
   RegExpShape: PShape;    { a RegExp object's shape while lastIndex is its only own property: it is slot 0 }
   MatchShape: PShape;     { an exec() result's shape with index, input and groups, once one has been built }
 
-function Arg(AArgs: PValue; AArgc, I: Integer): TValue; inline;
+function Arg(Args: PValue; Argc, I: Integer): TValue; inline;
 begin
-  if I <= AArgc then Result := AArgs[I] else Result := VUndefined;
+  if I <= Argc then Result := Args[I] else Result := VUndefined;
 end;
 
 { the compiled pattern (cached), or False with the SyntaxError's message in Msg }
-function TryCompile(const APattern, AFlags: UnicodeString; var C: PCompiled; var AMsg: UnicodeString): Boolean;
+function TryCompile(const Pattern, Flags: UnicodeString; var C: PCompiled; var Msg: UnicodeString): Boolean;
 var Key: UnicodeString; P: TRegExpProgram;
 begin
-  Key := AFlags + '/' + APattern;
+  Key := Flags + '/' + Pattern;
   if Compiled.TryGetValue(Key, C) then Exit(True);
   try
-    ValidateRegExpFlags(AFlags);
-    P := CompileRegExp(APattern, AFlags);
+    ValidateRegExpFlags(Flags);
+    P := CompileRegExp(Pattern, Flags);
   except
     on E: Exception do
     begin
-      AMsg := 'Invalid regular expression: /' + APattern + '/' + AFlags + ': ' + UnicodeString(E.Message);
+      Msg := 'Invalid regular expression: /' + Pattern + '/' + Flags + ': ' + UnicodeString(E.Message);
       Exit(False);
     end;
   end;
   New(C);
   C^.Prog := P;
-  C^.Pattern := APattern;
-  C^.Flags := AFlags;
-  C^.Global := Pos('g', AFlags) > 0;
-  C^.Sticky := Pos('y', AFlags) > 0;
-  C^.IgnoreCase := Pos('i', AFlags) > 0;
-  C^.Multiline := Pos('m', AFlags) > 0;
-  C^.Unicode := (Pos('u', AFlags) > 0) or (Pos('v', AFlags) > 0);
-  C^.DotAll := Pos('s', AFlags) > 0;
-  C^.HasIndices := Pos('d', AFlags) > 0;
-  C^.M := TRegexMatcher.Create(P, APattern);
+  C^.Pattern := Pattern;
+  C^.Flags := Flags;
+  C^.Global := Pos('g', Flags) > 0;
+  C^.Sticky := Pos('y', Flags) > 0;
+  C^.IgnoreCase := Pos('i', Flags) > 0;
+  C^.Multiline := Pos('m', Flags) > 0;
+  C^.Unicode := (Pos('u', Flags) > 0) or (Pos('v', Flags) > 0);
+  C^.DotAll := Pos('s', Flags) > 0;
+  C^.HasIndices := Pos('d', Flags) > 0;
+  C^.M := TRegexMatcher.Create(P, Pattern);
   Compiled.Add(Key, C);
   Result := True;
 end;
 
-function GetCompiled(const APattern, AFlags: UnicodeString; var C: PCompiled): Boolean;
+function GetCompiled(const Pattern, Flags: UnicodeString; var C: PCompiled): Boolean;
 var Msg: UnicodeString;
 begin
-  Result := TryCompile(APattern, AFlags, C, Msg);
+  Result := TryCompile(Pattern, Flags, C, Msg);
   if not Result then ThrowError('SyntaxError', Msg);
 end;
 
@@ -101,23 +90,23 @@ end;
 const
   ofLegacyOff = 32;   { a RegExp made with a new.target other than %RegExp%: no legacy static properties }
 
-function AllocRegExp(AProto: TValue; ALegacy: Boolean = True): TValue;
+function AllocRegExp(Proto: TValue; Legacy: Boolean = True): TValue;
 var O: PObj;
 begin
-  O := NewObject(RootShapeFor(AProto), 2, okRegExp);
+  O := NewObject(RootShapeFor(Proto), 2, okRegExp);
   O^.Native := nil;
-  if not ALegacy then O^.OFlags := O^.OFlags or ofLegacyOff;
+  if not Legacy then O^.OFlags := O^.OFlags or ofLegacyOff;
   AddProperty(O, AtomLastIndex, VUndefined, pfWritable);
-  if AProto = RegExpProto then RegExpShape := O^.Shape;
+  if Proto = RegExpProto then RegExpShape := O^.Shape;
   Result := MkPtr(O);
 end;
 
 { 13.2.7.2 a literal's early errors: the pattern compiled now (and cached), or the error message }
-function ValidateLiteral(const APattern, AFlags: UnicodeString): UnicodeString;
+function ValidateLiteral(const Pattern, Flags: UnicodeString): UnicodeString;
 var C: PCompiled;
 begin
   Result := '';
-  if not TryCompile(APattern, AFlags, C, Result) then
+  if not TryCompile(Pattern, Flags, C, Result) then
   begin
     { an implementation limit (a repetition count Goccia's RegExp compiler cannot copy) is not a syntax error of
       the literal: it throws when the literal is evaluated }
@@ -134,11 +123,11 @@ begin
   ObjOf(Result)^.Slots[0] := MkInt(0);
 end;
 
-function CreateRegExp(APattern, AFlags: PStr; var ARes: TValue): Boolean;
+function CreateRegExp(Pattern, Flags: PStr; var Res: TValue): Boolean;
 var C: PCompiled;
 begin
-  if not GetCompiled(StrToUnicode(APattern), StrToUnicode(AFlags), C) then Exit(False);
-  ARes := NewRegExpObject(C);
+  if not GetCompiled(StrToUnicode(Pattern), StrToUnicode(Flags), C) then Exit(False);
+  Res := NewRegExpObject(C);
   Result := True;
 end;
 
@@ -171,11 +160,11 @@ threadvar
   Legacy: PLegacy;
 
 { UpdateLegacyRegExpStaticProperties / InvalidateLegacyRegExpStaticProperties after a successful match }
-procedure RecordLegacy(ARe: TValue; ASc: TRegexMatcher; S: PStr);
+procedure RecordLegacy(Re: TValue; Sc: TRegexMatcher; S: PStr);
 var I, St, En, N, M: Integer; L: PLegacy;
 begin
   L := Legacy;
-  if (ObjOf(ARe)^.OFlags and ofLegacyOff) <> 0 then
+  if (ObjOf(Re)^.OFlags and ofLegacyOff) <> 0 then
   begin
     L^.State := 2;
     L^.MatchStr := VUndefined;
@@ -185,36 +174,36 @@ begin
   L^.State := 1;
   L^.MatchStr := MkPtr(S);
   L^.InputStr := MkPtr(S);
-  N := ASc.CaptureCount;
+  N := Sc.CaptureCount;
   L^.N := N;
   if N > 9 then M := 9 else M := N;
   for I := 0 to M do
   begin
-    if not ASc.TryGetGroup(I, St, En) then begin St := -1; En := -1; end;
+    if not Sc.TryGetGroup(I, St, En) then begin St := -1; En := -1; end;
     L^.Pos[I * 2] := St;
     L^.Pos[I * 2 + 1] := En;
   end;
   if N > 9 then
   begin
-    if not ASc.TryGetGroup(N, St, En) then begin St := -1; En := -1; end;
+    if not Sc.TryGetGroup(N, St, En) then begin St := -1; En := -1; end;
     L^.Pos[20] := St;
     L^.Pos[21] := En;
   end;
 end;
 
 { the getters, by NativeData: 0 input, 1 lastMatch, 2 lastParen, 3 leftContext, 4 rightContext, 5-13 $1-$9 }
-function Legacy_Get(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Legacy_Get(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var K, St, En: Integer; S: PStr;
 begin
-  if AArgs[0] <> RegExpCtorV then Exit(ThrowTypeError('RegExp legacy static property read through a receiver other than RegExp'));
+  if Args[0] <> RegExpCtorV then Exit(ThrowTypeError('RegExp legacy static property read through a receiver other than RegExp'));
   if Legacy^.State = 2 then Exit(ThrowTypeError('RegExp legacy static properties are not available after a subclass match'));
   K := NativeData;
   if K = 0 then
   begin
-    if IsString(Legacy^.InputStr) then ARes := Legacy^.InputStr else ARes := MkPtr(AtomOf(''));
+    if IsString(Legacy^.InputStr) then Res := Legacy^.InputStr else Res := MkPtr(AtomOf(''));
     Exit(True);
   end;
-  if Legacy^.State = 0 then begin ARes := MkPtr(AtomOf('')); Exit(True); end;
+  if Legacy^.State = 0 then begin Res := MkPtr(AtomOf('')); Exit(True); end;
   S := StrOf(Legacy^.MatchStr);
   case K of
     1: begin St := Legacy^.Pos[0]; En := Legacy^.Pos[1]; end;
@@ -228,19 +217,19 @@ begin
     if K - 4 > Legacy^.N then St := -1
     else begin St := Legacy^.Pos[(K - 4) * 2]; En := Legacy^.Pos[(K - 4) * 2 + 1]; end;
   end;
-  if St < 0 then begin ARes := MkPtr(AtomOf('')); Exit(True); end;
-  ARes := SubString(S, St, En - St);
+  if St < 0 then begin Res := MkPtr(AtomOf('')); Exit(True); end;
+  Res := SubString(S, St, En - St);
   Result := True;
 end;
 
 { set RegExp.input / RegExp.$_ }
-function Legacy_SetInput(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Legacy_SetInput(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var V: TValue;
 begin
-  if AArgs[0] <> RegExpCtorV then Exit(ThrowTypeError('RegExp.input set through a receiver other than RegExp'));
-  if not ToStringV(Arg(AArgs, AArgc, 1), V) then Exit(False);
+  if Args[0] <> RegExpCtorV then Exit(ThrowTypeError('RegExp.input set through a receiver other than RegExp'));
+  if not ToStringV(Arg(Args, Argc, 1), V) then Exit(False);
   Legacy^.InputStr := V;
-  ARes := VUndefined;
+  Res := VUndefined;
   Result := True;
 end;
 
@@ -263,7 +252,7 @@ const
   JSF_Search = 6; JSF_Split = 7;
 
 { RegExp.prototype still holds the original value of every slot in Mask (bit I: IntactKeys[I]) }
-function ProtoIntact(AMask: Cardinal): Boolean;
+function ProtoIntact(Mask: Cardinal): Boolean;
 var P: PObj; I: Integer; E: PValueArray;
 begin
   if not IsObject(IntactOrig) then Exit(False);
@@ -276,11 +265,11 @@ begin
   end;
   E := ObjOf(IntactOrig)^.Elements;
   I := 0;
-  while AMask <> 0 do
+  while Mask <> 0 do
   begin
-    if (AMask and 1) <> 0 then
+    if (Mask and 1) <> 0 then
       if (IntactSlots[I] < 0) or (GetSlot(P, IntactSlots[I]) <> E^.Data[I]) then Exit(False);
-    AMask := AMask shr 1;
+    Mask := Mask shr 1;
     Inc(I);
   end;
   Result := True;
@@ -299,9 +288,9 @@ const
   MaskSplit = MK_Exec or MK_Flags or MK_Split or MK_Ctor;
 
 { R is an unmodified RegExp: its own lastIndex an integer, its prototype RegExp.prototype as built }
-function FastRe(R: TValue; AMask: Cardinal): Boolean; inline;
+function FastRe(R: TValue; Mask: Cardinal): Boolean; inline;
 begin
-  Result := IsRegExpV(R) and (ObjOf(R)^.Shape = RegExpShape) and IsInt(ObjOf(R)^.Slots[0]) and ProtoIntact(AMask);
+  Result := IsRegExpV(R) and (ObjOf(R)^.Shape = RegExpShape) and IsInt(ObjOf(R)^.Slots[0]) and ProtoIntact(Mask);
 end;
 
 function SpeciesIntact: Boolean;
@@ -311,45 +300,45 @@ begin
   Result := (S >= 0) and (GetSlot(ObjOf(RegExpCtorV), S) = SpeciesOrig);
 end;
 
-function CallJS(AIdx: Integer; AThis: TValue; AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function CallJS(Idx: Integer; This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Result := CallValue(ObjOf(JSFns)^.Elements^.Data[AIdx], AThis, AArgs, AArgc, ARes);
+  Result := CallValue(ObjOf(JSFns)^.Elements^.Data[Idx], This, Args, Argc, Res);
 end;
 
 { ---- RegExpBuiltinExec ---- }
 
 { ToLength(Get(R, "lastIndex")) }
-function GetLastIndex(ARe: TValue; var AIdx: Int64): Boolean;
+function GetLastIndex(Re: TValue; var Idx: Int64): Boolean;
 var V: TValue; D: Double;
 begin
-  if (ObjOf(ARe)^.Shape = RegExpShape) and IsInt(ObjOf(ARe)^.Slots[0]) then
+  if (ObjOf(Re)^.Shape = RegExpShape) and IsInt(ObjOf(Re)^.Slots[0]) then
   begin
-    AIdx := IntOf(ObjOf(ARe)^.Slots[0]);
-    if AIdx < 0 then AIdx := 0;
+    Idx := IntOf(ObjOf(Re)^.Slots[0]);
+    if Idx < 0 then Idx := 0;
     Exit(True);
   end;
-  if not GetV(ARe, AtomLastIndex, V) then Exit(False);
+  if not GetV(Re, AtomLastIndex, V) then Exit(False);
   if not ToNumberV(V, D) then Exit(False);
-  if IsNaN(D) or (D <= 0) then AIdx := 0 else if D > 9007199254740991.0 then AIdx := 9007199254740991 else AIdx := Trunc(D);
+  if IsNaN(D) or (D <= 0) then Idx := 0 else if D > 9007199254740991.0 then Idx := 9007199254740991 else Idx := Trunc(D);
   Result := True;
 end;
 
 { Set(R, "lastIndex", I, true): R is a RegExp, whose lastIndex is a non-configurable own data property }
-function SetLastIndex(ARe: TValue; I: Int64): Boolean; inline;
+function SetLastIndex(Re: TValue; I: Int64): Boolean; inline;
 begin
-  if ObjOf(ARe)^.Shape = RegExpShape then
+  if ObjOf(Re)^.Shape = RegExpShape then
   begin
-    ObjOf(ARe)^.Slots[0] := MkNumber(I);
+    ObjOf(Re)^.Slots[0] := MkNumber(I);
     Exit(True);
   end;
-  Result := SetVT(ARe, AtomLastIndex, MkNumber(I));
+  Result := SetVT(Re, AtomLastIndex, MkNumber(I));
 end;
 
 { the [start, end] pair array of capture I, or undefined }
-function IndexPair(ASc: TRegexMatcher; I: Integer): TValue;
+function IndexPair(Sc: TRegexMatcher; I: Integer): TValue;
 var A: PObj; St, En: Integer;
 begin
-  if not ASc.TryGetGroup(I, St, En) then Exit(VUndefined);
+  if not Sc.TryGetGroup(I, St, En) then Exit(VUndefined);
   A := NewArray(2, 2);
   A^.Elements^.Data[0] := MkInt(St);
   A^.Elements^.Data[1] := MkInt(En);
@@ -357,27 +346,27 @@ begin
 end;
 
 { the named groups in capture order (a name listed once per group that has it) }
-procedure GroupsInOrder(ASc: TRegexMatcher; var ANG: TGocciaRegExpNamedGroups);
+procedure GroupsInOrder(Sc: TRegexMatcher; var NG: TGocciaRegExpNamedGroups);
 var I, J: Integer; T: TGocciaRegExpNamedGroup;
 begin
-  ANG := Copy(ASc.NamedGroups);
-  for I := 1 to High(ANG) do
+  NG := Copy(Sc.NamedGroups);
+  for I := 1 to High(NG) do
   begin
-    T := ANG[I];
+    T := NG[I];
     J := I - 1;
-    while (J >= 0) and (ANG[J].Index > T.Index) do begin ANG[J + 1] := ANG[J]; Dec(J); end;
-    ANG[J + 1] := T;
+    while (J >= 0) and (NG[J].Index > T.Index) do begin NG[J + 1] := NG[J]; Dec(J); end;
+    NG[J + 1] := T;
   end;
 end;
 
 { the groups object of the current match (22.2.7.2 steps 33-34): a name shared by several groups gets the
   value of the one that participated }
-function GroupsObject(ASc: TRegexMatcher; S: PStr; AIndices: TValue): TValue;
+function GroupsObject(Sc: TRegexMatcher; S: PStr; Indices: TValue): TValue;
 var G: PObj; NG: TGocciaRegExpNamedGroups; I, St, En, K: Integer; V: TValue; Seen: array of PStr; Key: PStr;
   Dup: Boolean;
 begin
-  GroupsInOrder(ASc, NG);
-  PushRoot(MkPtr(S)); PushRoot(AIndices);
+  GroupsInOrder(Sc, NG);
+  PushRoot(MkPtr(S)); PushRoot(Indices);
   G := NewPlainObject(VNull, 4);
   PushRoot(MkPtr(G));
   SetLength(Seen, 0);
@@ -389,7 +378,7 @@ begin
     if Dup then Continue;
     if IsObject(RootAt(TempTop - 2)) then
       V := ObjOf(RootAt(TempTop - 2))^.Elements^.Data[NG[I].Index]
-    else if ASc.TryGetGroup(NG[I].Index, St, En) then V := SubString(StrOf(RootAt(TempTop - 3)), St, En - St)
+    else if Sc.TryGetGroup(NG[I].Index, St, En) then V := SubString(StrOf(RootAt(TempTop - 3)), St, En - St)
     else V := VUndefined;
     DefineOwn(RootAt(TempTop - 1), Key, V, pfDefault);
     if V <> VUndefined then
@@ -403,12 +392,12 @@ begin
 end;
 
 { the exec() result array of the scanner's current match }
-function MatchArray(ASc: TRegexMatcher; C: PCompiled; S: PStr): TValue;
+function MatchArray(Sc: TRegexMatcher; C: PCompiled; S: PStr): TValue;
 var A: PObj; I, St, En: Integer; V: TValue; N: Integer; VA: PValueArray;
 begin
-  N := ASc.CaptureCount;
+  N := Sc.CaptureCount;
   PushRoot(MkPtr(S));
-  if (MatchShape <> nil) and not ASc.HasNamedGroups and not C^.HasIndices then
+  if (MatchShape <> nil) and not Sc.HasNamedGroups and not C^.HasIndices then
   begin
     { the shape every exec() result without named groups has, with index, input and groups inline }
     VA := NewValueArray(N + 1);
@@ -420,13 +409,13 @@ begin
     PopRoots(1);
     A^.Elements := VA;
     WriteBarrier(@A^.Hdr, MkPtr(VA));
-    A^.Slots[0] := MkInt(ASc.MatchIndex);
+    A^.Slots[0] := MkInt(Sc.MatchIndex);
     A^.Slots[1] := RootAt(TempTop - 1);
     A^.Slots[2] := VUndefined;
     PushRoot(MkPtr(A));
     for I := 0 to N do
     begin
-      if ASc.TryGetGroup(I, St, En) then V := SubString(StrOf(RootAt(TempTop - 2)), St, En - St) else V := VUndefined;
+      if Sc.TryGetGroup(I, St, En) then V := SubString(StrOf(RootAt(TempTop - 2)), St, En - St) else V := VUndefined;
       ValueArrayStore(ObjOf(RootAt(TempTop - 1))^.Elements, I, V);
     end;
     Result := RootAt(TempTop - 1);
@@ -437,14 +426,14 @@ begin
   PushRoot(MkPtr(A));
   for I := 0 to N do
   begin
-    if ASc.TryGetGroup(I, St, En) then V := SubString(StrOf(RootAt(TempTop - 2)), St, En - St) else V := VUndefined;
+    if Sc.TryGetGroup(I, St, En) then V := SubString(StrOf(RootAt(TempTop - 2)), St, En - St) else V := VUndefined;
     ValueArrayStore(ObjOf(RootAt(TempTop - 1))^.Elements, I, V);
   end;
-  AddProperty(ObjOf(RootAt(TempTop - 1)), AtomIndex, MkInt(ASc.MatchIndex), pfDefault);
+  AddProperty(ObjOf(RootAt(TempTop - 1)), AtomIndex, MkInt(Sc.MatchIndex), pfDefault);
   AddProperty(ObjOf(RootAt(TempTop - 1)), AtomInput, RootAt(TempTop - 2), pfDefault);
-  if ASc.HasNamedGroups then
+  if Sc.HasNamedGroups then
   begin
-    V := GroupsObject(ASc, StrOf(RootAt(TempTop - 2)), VUndefined);
+    V := GroupsObject(Sc, StrOf(RootAt(TempTop - 2)), VUndefined);
     AddProperty(ObjOf(RootAt(TempTop - 1)), AtomGroups, V, pfDefault);
   end
   else
@@ -461,10 +450,10 @@ begin
     PushRoot(MkPtr(A));
     for I := 0 to N do
     begin
-      V := IndexPair(ASc, I);
+      V := IndexPair(Sc, I);
       ValueArrayStore(ObjOf(RootAt(TempTop - 1))^.Elements, I, V);
     end;
-    if ASc.HasNamedGroups then V := GroupsObject(ASc, StrOf(RootAt(TempTop - 3)), RootAt(TempTop - 1))
+    if Sc.HasNamedGroups then V := GroupsObject(Sc, StrOf(RootAt(TempTop - 3)), RootAt(TempTop - 1))
     else V := VUndefined;
     AddProperty(ObjOf(RootAt(TempTop - 1)), AtomGroups, V, pfDefault);
     AddProperty(ObjOf(RootAt(TempTop - 2)), AtomOf('indices'), RootAt(TempTop - 1), pfDefault);
@@ -475,106 +464,106 @@ begin
 end;
 
 { 22.2.7.2 RegExpBuiltinExec: Res the match array (WantArray) or null; Matched whether it matched }
-function BuiltinExec(ARe: TValue; S: PStr; AWantArray: Boolean; var ARes: TValue; var AMatched: Boolean): Boolean;
+function BuiltinExec(Re: TValue; S: PStr; WantArray: Boolean; var Res: TValue; var Matched: Boolean): Boolean;
 var C: PCompiled; LI: Int64; Sc: TRegexMatcher; GS: Boolean;
 begin
-  AMatched := False;
-  ARes := VNull;
-  C := CompiledOf(ARe);
-  if (ObjOf(ARe)^.Shape = RegExpShape) and IsInt(ObjOf(ARe)^.Slots[0]) then
+  Matched := False;
+  Res := VNull;
+  C := CompiledOf(Re);
+  if (ObjOf(Re)^.Shape = RegExpShape) and IsInt(ObjOf(Re)^.Slots[0]) then
   begin
     { an integer own lastIndex: read and written in place, no code runs, so nothing needs a root }
     GS := C^.Global or C^.Sticky;
     if GS then
     begin
-      LI := IntOf(ObjOf(ARe)^.Slots[0]);
+      LI := IntOf(ObjOf(Re)^.Slots[0]);
       if LI < 0 then LI := 0;
-      if LI > S^.Len then begin ObjOf(ARe)^.Slots[0] := MkInt(0); Exit(True); end;
+      if LI > S^.Len then begin ObjOf(Re)^.Slots[0] := MkInt(0); Exit(True); end;
     end
     else LI := 0;
     Sc := C^.M;
-    AMatched := Sc.Exec(StrChars(S), S^.Len, LI, C^.Sticky);
+    Matched := Sc.Exec(StrChars(S), S^.Len, LI, C^.Sticky);
     if Sc.Failed then Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
-    if not AMatched then
+    if not Matched then
     begin
-      if GS then ObjOf(ARe)^.Slots[0] := MkInt(0);
+      if GS then ObjOf(Re)^.Slots[0] := MkInt(0);
       Exit(True);
     end;
-    RecordLegacy(ARe, Sc, S);
-    if GS then ObjOf(ARe)^.Slots[0] := MkInt(Sc.MatchEnd);
-    if AWantArray then ARes := MatchArray(Sc, C, S);
+    RecordLegacy(Re, Sc, S);
+    if GS then ObjOf(Re)^.Slots[0] := MkInt(Sc.MatchEnd);
+    if WantArray then Res := MatchArray(Sc, C, S);
     Exit(True);
   end;
-  PushRoot(ARe); PushRoot(MkPtr(S));
-  if not GetLastIndex(ARe, LI) then begin PopRoots(2); Exit(False); end;
-  ARe := RootAt(TempTop - 2); S := StrOf(RootAt(TempTop - 1));
-  C := CompiledOf(ARe);
+  PushRoot(Re); PushRoot(MkPtr(S));
+  if not GetLastIndex(Re, LI) then begin PopRoots(2); Exit(False); end;
+  Re := RootAt(TempTop - 2); S := StrOf(RootAt(TempTop - 1));
+  C := CompiledOf(Re);
   GS := C^.Global or C^.Sticky;
   if not GS then LI := 0;
   if LI > S^.Len then
   begin
     PopRoots(2);
-    if GS then Exit(SetLastIndex(ARe, 0));
+    if GS then Exit(SetLastIndex(Re, 0));
     Exit(True);
   end;
   Sc := C^.M;
-  AMatched := Sc.Exec(StrChars(S), S^.Len, LI, C^.Sticky);
+  Matched := Sc.Exec(StrChars(S), S^.Len, LI, C^.Sticky);
   if Sc.Failed then begin PopRoots(2); Exit(ThrowError('SyntaxError', Sc.ErrorMessage)); end;
-  if not AMatched then
+  if not Matched then
   begin
     PopRoots(2);
-    if GS then Exit(SetLastIndex(ARe, 0));
+    if GS then Exit(SetLastIndex(Re, 0));
     Exit(True);
   end;
   RecordLegacy(RootAt(TempTop - 2), Sc, StrOf(RootAt(TempTop - 1)));
-  if GS and not SetLastIndex(ARe, Sc.MatchEnd) then begin PopRoots(2); Exit(False); end;
-  if AWantArray then ARes := MatchArray(Sc, C, StrOf(RootAt(TempTop - 1)));
+  if GS and not SetLastIndex(Re, Sc.MatchEnd) then begin PopRoots(2); Exit(False); end;
+  if WantArray then Res := MatchArray(Sc, C, StrOf(RootAt(TempTop - 1)));
   PopRoots(2);
   Result := True;
 end;
 
 { AdvanceStringIndex: past an empty match by one code point (a surrogate pair is one under the u flag) }
-function NextIndex(S: PStr; I: Integer; AUni: Boolean): Integer;
+function NextIndex(S: PStr; I: Integer; Uni: Boolean): Integer;
 var P: PWideChar;
 begin
   Result := I + 1;
-  if not AUni or (I + 1 >= S^.Len) then Exit;
+  if not Uni or (I + 1 >= S^.Len) then Exit;
   P := StrChars(S);
   if (Ord(P[I]) >= $D800) and (Ord(P[I]) <= $DBFF) and (Ord(P[I + 1]) >= $DC00) and (Ord(P[I + 1]) <= $DFFF) then
     Result := I + 2;
 end;
 
-function StrArg(AArgs: PValue; AArgc, I: Integer; var S: PStr): Boolean;
+function StrArg(Args: PValue; Argc, I: Integer; var S: PStr): Boolean;
 var V: TValue;
 begin
-  if not ToStringV(Arg(AArgs, AArgc, I), V) then Exit(False);
+  if not ToStringV(Arg(Args, Argc, I), V) then Exit(False);
   S := StrOf(V);
   Result := True;
 end;
 
 { 22.2.6.2 RegExp.prototype.exec ( string ) }
-function Re_Exec(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Re_Exec(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var S: PStr; M: Boolean;
 begin
-  if not IsRegExpV(AArgs[0]) then Exit(ThrowTypeError('RegExp.prototype.exec called on an incompatible receiver'));
-  if not StrArg(AArgs, AArgc, 1, S) then Exit(False);
-  Result := BuiltinExec(AArgs[0], S, True, ARes, M);
+  if not IsRegExpV(Args[0]) then Exit(ThrowTypeError('RegExp.prototype.exec called on an incompatible receiver'));
+  if not StrArg(Args, Argc, 1, S) then Exit(False);
+  Result := BuiltinExec(Args[0], S, True, Res, M);
 end;
 
 { 22.2.6.16 RegExp.prototype.test ( S ): the builtin exec for an unmodified RegExp, else the prelude's }
-function Re_Test(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Re_Test(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var S: PStr; M: Boolean; V: TValue;
 begin
-  if not IsObject(AArgs[0]) then Exit(ThrowTypeError('RegExp.prototype.test called on a non-object'));
-  if not StrArg(AArgs, AArgc, 1, S) then Exit(False);
-  if FastRe(AArgs[0], MaskTest) then
+  if not IsObject(Args[0]) then Exit(ThrowTypeError('RegExp.prototype.test called on a non-object'));
+  if not StrArg(Args, Argc, 1, S) then Exit(False);
+  if FastRe(Args[0], MaskTest) then
   begin
-    if not BuiltinExec(AArgs[0], S, False, V, M) then Exit(False);
-    ARes := MkBool(M);
+    if not BuiltinExec(Args[0], S, False, V, M) then Exit(False);
+    Res := MkBool(M);
     Exit(True);
   end;
   V := MkPtr(S);
-  Result := CallJS(JSF_Test, AArgs[0], @V, 1, ARes);
+  Result := CallJS(JSF_Test, Args[0], @V, 1, Res);
 end;
 
 { 22.2.6.13.1 EscapeRegExpPattern }
@@ -620,135 +609,135 @@ begin
 end;
 
 { 22.2.6.13 get RegExp.prototype.source }
-function Re_Source(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Re_Source(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsObject(AArgs[0]) then Exit(ThrowTypeError('RegExp.prototype.source getter called on a non-object'));
-  if not IsRegExpV(AArgs[0]) then
+  if not IsObject(Args[0]) then Exit(ThrowTypeError('RegExp.prototype.source getter called on a non-object'));
+  if not IsRegExpV(Args[0]) then
   begin
-    if AArgs[0] = RegExpProto then begin ARes := StrFromUnicode('(?:)'); Exit(True); end;
+    if Args[0] = RegExpProto then begin Res := StrFromUnicode('(?:)'); Exit(True); end;
     Exit(ThrowTypeError('RegExp.prototype.source getter called on an incompatible receiver'));
   end;
-  ARes := StrFromUnicode(EscapePattern(CompiledOf(AArgs[0])^.Pattern));
+  Res := StrFromUnicode(EscapePattern(CompiledOf(Args[0])^.Pattern));
   Result := True;
 end;
 
 { 22.2.6.4.1 RegExpHasFlag }
-function FlagGetter(AArgs: PValue; var ARes: TValue; F: Char): Boolean;
+function FlagGetter(Args: PValue; var Res: TValue; F: Char): Boolean;
 begin
-  if not IsObject(AArgs[0]) then Exit(ThrowTypeError('RegExp flag getter called on a non-object'));
-  if not IsRegExpV(AArgs[0]) then
+  if not IsObject(Args[0]) then Exit(ThrowTypeError('RegExp flag getter called on a non-object'));
+  if not IsRegExpV(Args[0]) then
   begin
-    if AArgs[0] = RegExpProto then begin ARes := VUndefined; Exit(True); end;
+    if Args[0] = RegExpProto then begin Res := VUndefined; Exit(True); end;
     Exit(ThrowTypeError('RegExp flag getter called on an incompatible receiver'));
   end;
-  ARes := MkBool(Pos(F, CompiledOf(AArgs[0])^.Flags) > 0);
+  Res := MkBool(Pos(F, CompiledOf(Args[0])^.Flags) > 0);
   Result := True;
 end;
-function Re_Global(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FlagGetter(AArgs, ARes, 'g'); end;
-function Re_IgnoreCase(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FlagGetter(AArgs, ARes, 'i'); end;
-function Re_Multiline(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FlagGetter(AArgs, ARes, 'm'); end;
-function Re_Sticky(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FlagGetter(AArgs, ARes, 'y'); end;
-function Re_Unicode(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FlagGetter(AArgs, ARes, 'u'); end;
-function Re_UnicodeSets(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FlagGetter(AArgs, ARes, 'v'); end;
-function Re_DotAll(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FlagGetter(AArgs, ARes, 's'); end;
-function Re_HasIndices(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean; begin Result := FlagGetter(AArgs, ARes, 'd'); end;
+function Re_Global(Args: PValue; Argc: Integer; var Res: TValue): Boolean; begin Result := FlagGetter(Args, Res, 'g'); end;
+function Re_IgnoreCase(Args: PValue; Argc: Integer; var Res: TValue): Boolean; begin Result := FlagGetter(Args, Res, 'i'); end;
+function Re_Multiline(Args: PValue; Argc: Integer; var Res: TValue): Boolean; begin Result := FlagGetter(Args, Res, 'm'); end;
+function Re_Sticky(Args: PValue; Argc: Integer; var Res: TValue): Boolean; begin Result := FlagGetter(Args, Res, 'y'); end;
+function Re_Unicode(Args: PValue; Argc: Integer; var Res: TValue): Boolean; begin Result := FlagGetter(Args, Res, 'u'); end;
+function Re_UnicodeSets(Args: PValue; Argc: Integer; var Res: TValue): Boolean; begin Result := FlagGetter(Args, Res, 'v'); end;
+function Re_DotAll(Args: PValue; Argc: Integer; var Res: TValue): Boolean; begin Result := FlagGetter(Args, Res, 's'); end;
+function Re_HasIndices(Args: PValue; Argc: Integer; var Res: TValue): Boolean; begin Result := FlagGetter(Args, Res, 'd'); end;
 
 { 22.2.4.1 RegExp ( pattern, flags ): string arguments under RegExp itself build directly; the rest goes
   through the prelude's steps }
-function Re_Ctor(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Re_Ctor(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var P, F: TValue; PS, FS: UnicodeString; C: PCompiled; CA: array[0..2] of TValue;
 begin
-  P := Arg(AArgs, AArgc, 1);
-  F := Arg(AArgs, AArgc, 2);
+  P := Arg(Args, Argc, 1);
+  F := Arg(Args, Argc, 2);
   if ((P = VUndefined) or IsString(P)) and ((F = VUndefined) or IsString(F)) and
      ((CurNewTarget = VUndefined) or (CurNewTarget = RegExpCtorV)) then
   begin
     if P = VUndefined then PS := '' else PS := StrToUnicode(StrOf(P));
     if F = VUndefined then FS := '' else FS := StrToUnicode(StrOf(F));
     if not GetCompiled(PS, FS, C) then Exit(False);
-    ARes := NewRegExpObject(C);
+    Res := NewRegExpObject(C);
     Exit(True);
   end;
   CA[0] := P; CA[1] := F; CA[2] := CurNewTarget;
-  Result := CallJS(JSF_Construct, VUndefined, @CA[0], 3, ARes);
+  Result := CallJS(JSF_Construct, VUndefined, @CA[0], 3, Res);
 end;
 
 { ---- the prelude's natives ---- }
 
-function N_Exec(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function N_Exec(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var M: Boolean;
 begin
-  if not IsRegExpV(Arg(AArgs, AArgc, 1)) then Exit(ThrowTypeError('RegExp exec called on an incompatible receiver'));
-  Result := BuiltinExec(AArgs[1], StrOf(AArgs[2]), True, ARes, M);
+  if not IsRegExpV(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('RegExp exec called on an incompatible receiver'));
+  Result := BuiltinExec(Args[1], StrOf(Args[2]), True, Res, M);
 end;
 
-function N_IsRE(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function N_IsRE(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := MkBool(IsRegExpV(Arg(AArgs, AArgc, 1)));
+  Res := MkBool(IsRegExpV(Arg(Args, Argc, 1)));
   Result := True;
 end;
 
-function N_Alloc(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function N_Alloc(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := AllocRegExp(AArgs[1], ToBool(Arg(AArgs, AArgc, 2)));
+  Res := AllocRegExp(Args[1], ToBool(Arg(Args, Argc, 2)));
   Result := True;
 end;
 
 { [[LegacyFeaturesEnabled]] }
-function N_Legacy(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function N_Legacy(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := MkBool((ObjOf(AArgs[1])^.OFlags and ofLegacyOff) = 0);
+  Res := MkBool((ObjOf(Args[1])^.OFlags and ofLegacyOff) = 0);
   Result := True;
 end;
 
 { RegExpInitialize's parse: N.init(O, P, F) with P and F strings }
-function N_Init(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function N_Init(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var C: PCompiled;
 begin
-  if not GetCompiled(StrToUnicode(StrOf(AArgs[2])), StrToUnicode(StrOf(AArgs[3])), C) then Exit(False);
-  ObjOf(AArgs[1])^.Native := C;
-  ARes := VUndefined;
+  if not GetCompiled(StrToUnicode(StrOf(Args[2])), StrToUnicode(StrOf(Args[3])), C) then Exit(False);
+  ObjOf(Args[1])^.Native := C;
+  Res := VUndefined;
   Result := True;
 end;
 
-function N_Source(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function N_Source(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := StrFromUnicode(CompiledOf(AArgs[1])^.Pattern);
+  Res := StrFromUnicode(CompiledOf(Args[1])^.Pattern);
   Result := True;
 end;
 
-function N_Flags(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function N_Flags(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  ARes := StrFromUnicode(CompiledOf(AArgs[1])^.Flags);
+  Res := StrFromUnicode(CompiledOf(Args[1])^.Flags);
   Result := True;
 end;
 
 { ---- String methods with a RegExp argument ---- }
 
 { this a String value and the argument an unmodified RegExp: the native path stands in for the spec's }
-function FastStrRe(AArgs: PValue; AArgc: Integer; AMask: Cardinal): Boolean; inline;
+function FastStrRe(Args: PValue; Argc: Integer; Mask: Cardinal): Boolean; inline;
 begin
-  Result := IsString(AArgs[0]) and (AArgc >= 1) and FastRe(AArgs[1], AMask);
+  Result := IsString(Args[0]) and (Argc >= 1) and FastRe(Args[1], Mask);
 end;
 
 { a primitive pattern and an unmodified RegExp.prototype: RegExpCreate(pattern) is unobservable }
-function FastStrPattern(AArgs: PValue; AArgc: Integer; AMask: Cardinal): Boolean; inline;
+function FastStrPattern(Args: PValue; Argc: Integer; Mask: Cardinal): Boolean; inline;
 begin
-  Result := IsString(AArgs[0]) and not IsObject(Arg(AArgs, AArgc, 1)) and ProtoIntact(AMask);
+  Result := IsString(Args[0]) and not IsObject(Arg(Args, Argc, 1)) and ProtoIntact(Mask);
 end;
 
-function CallJSMethod(AIdx: Integer; AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function CallJSMethod(Idx: Integer; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Result := CallJS(AIdx, AArgs[0], @AArgs[1], AArgc, ARes);
+  Result := CallJS(Idx, Args[0], @Args[1], Argc, Res);
 end;
 
-function MatchGlobal(AArgs: PValue; C: PCompiled; var ARes: TValue): Boolean;
+function MatchGlobal(Args: PValue; C: PCompiled; var Res: TValue): Boolean;
 var A: PObj; S: PStr; Sc: TRegexMatcher; Ok: Boolean; St, En: Integer; M: TValue;
 begin
-  if not SetLastIndex(AArgs[1], 0) then Exit(False);
+  if not SetLastIndex(Args[1], 0) then Exit(False);
   A := NewArray(0, 4);
   PushRoot(MkPtr(A));
-  S := StrOf(AArgs[0]);
+  S := StrOf(Args[0]);
   St := 0;
   while St <= S^.Len do
   begin
@@ -756,120 +745,120 @@ begin
     Ok := Sc.Exec(StrChars(S), S^.Len, St, C^.Sticky);
     if Sc.Failed then begin PopRoots(1); Exit(ThrowError('SyntaxError', Sc.ErrorMessage)); end;
     if not Ok then Break;
-    RecordLegacy(AArgs[1], Sc, StrOf(AArgs[0]));
+    RecordLegacy(Args[1], Sc, StrOf(Args[0]));
     Sc.TryGetGroup(0, St, En);
-    M := SubString(StrOf(AArgs[0]), St, En - St);
+    M := SubString(StrOf(Args[0]), St, En - St);
     ArrayPush(ObjOf(RootAt(TempTop - 1)), M);
-    if En = St then St := NextIndex(StrOf(AArgs[0]), En, C^.Unicode) else St := En;
-    S := StrOf(AArgs[0]);
+    if En = St then St := NextIndex(StrOf(Args[0]), En, C^.Unicode) else St := En;
+    S := StrOf(Args[0]);
   end;
-  if ArrayLen(ObjOf(RootAt(TempTop - 1))) = 0 then ARes := VNull else ARes := RootAt(TempTop - 1);
+  if ArrayLen(ObjOf(RootAt(TempTop - 1))) = 0 then Res := VNull else Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
 end;
 
 { 22.1.3.13 String.prototype.match }
-function Str_Match(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Str_Match(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var C: PCompiled; M: Boolean; PS: UnicodeString; V: TValue;
 begin
-  if FastStrPattern(AArgs, AArgc, MaskMatch) then
+  if FastStrPattern(Args, Argc, MaskMatch) then
   begin
     { RegExpCreate(pattern, undefined), then its Symbol.match }
-    if Arg(AArgs, AArgc, 1) = VUndefined then PS := ''
-    else begin if not ToStringV(AArgs[1], V) then Exit(False); PS := StrToUnicode(StrOf(V)); end;
+    if Arg(Args, Argc, 1) = VUndefined then PS := ''
+    else begin if not ToStringV(Args[1], V) then Exit(False); PS := StrToUnicode(StrOf(V)); end;
     if not GetCompiled(PS, '', C) then Exit(False);
     V := NewRegExpObject(C);
-    if AArgc < 1 then Exit(BuiltinExec(V, StrOf(AArgs[0]), True, ARes, M));
-    AArgs[1] := V;   { a stack slot: it keeps the new RegExp rooted }
+    if Argc < 1 then Exit(BuiltinExec(V, StrOf(Args[0]), True, Res, M));
+    Args[1] := V;   { a stack slot: it keeps the new RegExp rooted }
   end
-  else if not FastStrRe(AArgs, AArgc, MaskMatch) then Exit(CallJSMethod(JSF_Match, AArgs, AArgc, ARes));
-  C := CompiledOf(AArgs[1]);
-  if not C^.Global then Exit(BuiltinExec(AArgs[1], StrOf(AArgs[0]), True, ARes, M));
-  Result := MatchGlobal(AArgs, C, ARes);
+  else if not FastStrRe(Args, Argc, MaskMatch) then Exit(CallJSMethod(JSF_Match, Args, Argc, Res));
+  C := CompiledOf(Args[1]);
+  if not C^.Global then Exit(BuiltinExec(Args[1], StrOf(Args[0]), True, Res, M));
+  Result := MatchGlobal(Args, C, Res);
 end;
 
 { 22.1.3.14 String.prototype.matchAll: the RegExp String Iterator is the prelude's }
-function Str_MatchAll(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Str_MatchAll(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Result := CallJSMethod(JSF_MatchAll, AArgs, AArgc, ARes);
+  Result := CallJSMethod(JSF_MatchAll, Args, Argc, Res);
 end;
 
 { 22.1.3.22 String.prototype.search }
-function Str_Search(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Str_Search(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var S: PStr; Sc: TRegexMatcher; Ok: Boolean; C: PCompiled; PS: UnicodeString; V: TValue;
 begin
-  if FastStrPattern(AArgs, AArgc, MaskSearch) then
+  if FastStrPattern(Args, Argc, MaskSearch) then
   begin
-    if Arg(AArgs, AArgc, 1) = VUndefined then PS := ''
-    else begin if not ToStringV(AArgs[1], V) then Exit(False); PS := StrToUnicode(StrOf(V)); end;
+    if Arg(Args, Argc, 1) = VUndefined then PS := ''
+    else begin if not ToStringV(Args[1], V) then Exit(False); PS := StrToUnicode(StrOf(V)); end;
     if not GetCompiled(PS, '', C) then Exit(False);
   end
-  else if FastStrRe(AArgs, AArgc, MaskSearch) then C := CompiledOf(AArgs[1])
-  else Exit(CallJSMethod(JSF_Search, AArgs, AArgc, ARes));
+  else if FastStrRe(Args, Argc, MaskSearch) then C := CompiledOf(Args[1])
+  else Exit(CallJSMethod(JSF_Search, Args, Argc, Res));
   { lastIndex is set to 0 for the search and back afterwards: unchanged }
-  S := StrOf(AArgs[0]);
+  S := StrOf(Args[0]);
   Sc := C^.M;
   Ok := Sc.Exec(StrChars(S), S^.Len, 0, C^.Sticky);
   if Sc.Failed then Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
   if Ok then
   begin
-    if IsObject(Arg(AArgs, AArgc, 1)) then RecordLegacy(AArgs[1], Sc, StrOf(AArgs[0]))
-    else RecordLegacy(RegExpProto, Sc, StrOf(AArgs[0]));
-    ARes := MkInt(Sc.MatchIndex);
+    if IsObject(Arg(Args, Argc, 1)) then RecordLegacy(Args[1], Sc, StrOf(Args[0]))
+    else RecordLegacy(RegExpProto, Sc, StrOf(Args[0]));
+    Res := MkInt(Sc.MatchIndex);
   end
-  else ARes := MkInt(-1);
+  else Res := MkInt(-1);
   Result := True;
 end;
 
 { $-substitutions of a replacement string (22.1.3.19.1 GetSubstitution) from a recorded match: Caps holds
   start/end pairs (-1 when a group did not participate) }
-function Substitute(const ARep, ASubject: UnicodeString; ACaps: PInteger; ABase, N: Integer;
-  const ANG: TGocciaRegExpNamedGroups): UnicodeString;
+function Substitute(const Rep, Subject: UnicodeString; Caps: PInteger; Base, N: Integer;
+  const NG: TGocciaRegExpNamedGroups): UnicodeString;
 var I, G, K, J, MS, ME: Integer; C: WideChar; Name: UnicodeString; Found: Boolean;
 begin
   Result := '';
-  MS := ACaps[ABase]; ME := ACaps[ABase + 1];
+  MS := Caps[Base]; ME := Caps[Base + 1];
   I := 1;
-  while I <= Length(ARep) do
+  while I <= Length(Rep) do
   begin
-    C := ARep[I];
-    if (C = '$') and (I < Length(ARep)) then
+    C := Rep[I];
+    if (C = '$') and (I < Length(Rep)) then
     begin
-      case ARep[I + 1] of
+      case Rep[I + 1] of
         '$': begin Result := Result + '$'; Inc(I, 2); Continue; end;
-        '&': begin Result := Result + Copy(ASubject, MS + 1, ME - MS); Inc(I, 2); Continue; end;
-        '`': begin Result := Result + Copy(ASubject, 1, MS); Inc(I, 2); Continue; end;
-        '''': begin Result := Result + Copy(ASubject, ME + 1, MaxInt); Inc(I, 2); Continue; end;
+        '&': begin Result := Result + Copy(Subject, MS + 1, ME - MS); Inc(I, 2); Continue; end;
+        '`': begin Result := Result + Copy(Subject, 1, MS); Inc(I, 2); Continue; end;
+        '''': begin Result := Result + Copy(Subject, ME + 1, MaxInt); Inc(I, 2); Continue; end;
         '0'..'9':
           begin
-            G := Ord(ARep[I + 1]) - 48;
+            G := Ord(Rep[I + 1]) - 48;
             K := 2;
-            if (I + 2 <= Length(ARep)) and CharInSet(ARep[I + 2], ['0'..'9']) and (G * 10 + Ord(ARep[I + 2]) - 48 <= N) then
+            if (I + 2 <= Length(Rep)) and CharInSet(Rep[I + 2], ['0'..'9']) and (G * 10 + Ord(Rep[I + 2]) - 48 <= N) then
             begin
-              G := G * 10 + Ord(ARep[I + 2]) - 48;
+              G := G * 10 + Ord(Rep[I + 2]) - 48;
               K := 3;
             end;
             if (G >= 1) and (G <= N) then
             begin
-              if ACaps[ABase + G * 2] >= 0 then
-                Result := Result + Copy(ASubject, ACaps[ABase + G * 2] + 1, ACaps[ABase + G * 2 + 1] - ACaps[ABase + G * 2]);
+              if Caps[Base + G * 2] >= 0 then
+                Result := Result + Copy(Subject, Caps[Base + G * 2] + 1, Caps[Base + G * 2 + 1] - Caps[Base + G * 2]);
               Inc(I, K);
               Continue;
             end;
           end;
         '<':
-          if Length(ANG) > 0 then
+          if Length(NG) > 0 then
           begin
-            K := Pos('>', Copy(ARep, I + 2, MaxInt));
+            K := Pos('>', Copy(Rep, I + 2, MaxInt));
             if K > 0 then
             begin
-              Name := Copy(ARep, I + 2, K - 1);
+              Name := Copy(Rep, I + 2, K - 1);
               Found := False;
-              for J := 0 to High(ANG) do
-                if not Found and (UnicodeString(ANG[J].Name) = Name) and (ACaps[ABase + ANG[J].Index * 2] >= 0) then
+              for J := 0 to High(NG) do
+                if not Found and (UnicodeString(NG[J].Name) = Name) and (Caps[Base + NG[J].Index * 2] >= 0) then
                 begin
-                  G := ANG[J].Index;
-                  Result := Result + Copy(ASubject, ACaps[ABase + G * 2] + 1, ACaps[ABase + G * 2 + 1] - ACaps[ABase + G * 2]);
+                  G := NG[J].Index;
+                  Result := Result + Copy(Subject, Caps[Base + G * 2] + 1, Caps[Base + G * 2 + 1] - Caps[Base + G * 2]);
                   Found := True;
                 end;
               Inc(I, K + 2);
@@ -885,23 +874,23 @@ end;
 
 { 22.2.6.11 for an unmodified RegExp: every match is recorded first, then the replacements are made (a
   replacer function runs after the matching, as in the spec) }
-function ReplaceWithRegExp(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function ReplaceWithRegExp(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var S: PStr; C: PCompiled; Subject, Out_, Rep: UnicodeString; Sc: TRegexMatcher; Ok, Global, IsFn: Boolean;
   St, En, G, K, N, NM, Pos_, I: Integer; RV, SV, GV: TValue; CallArgs: array of TValue; Start: Int64;
   CapsDyn: array of Integer; CapsBuf: array[0..63] of Integer; Caps: PInteger; CapsLen: Integer;
   NG: TGocciaRegExpNamedGroups; Rooted: Integer; GObj: PObj; Key: PStr;
 begin
-  C := CompiledOf(AArgs[1]);
+  C := CompiledOf(Args[1]);
   Global := C^.Global;
-  IsFn := IsCallable(Arg(AArgs, AArgc, 2));
-  if not IsFn then Rep := StrToUnicode(StrOf(AArgs[2]));
-  Subject := StrToUnicode(StrOf(AArgs[0]));
+  IsFn := IsCallable(Arg(Args, Argc, 2));
+  if not IsFn then Rep := StrToUnicode(StrOf(Args[2]));
+  Subject := StrToUnicode(StrOf(Args[0]));
   Start := 0;
   if Global then
   begin
-    if not SetLastIndex(AArgs[1], 0) then Exit(False);
+    if not SetLastIndex(Args[1], 0) then Exit(False);
   end
-  else if not GetLastIndex(AArgs[1], Start) then Exit(False)
+  else if not GetLastIndex(Args[1], Start) then Exit(False)
   else if not C^.Sticky then Start := 0;
   { the matches }
   Sc := C^.M;
@@ -913,12 +902,12 @@ begin
   St := Start;
   while St <= Length(Subject) do
   begin
-    S := StrOf(AArgs[0]);
+    S := StrOf(Args[0]);
     Sc := C^.M;
     Ok := Sc.Exec(StrChars(S), S^.Len, St, C^.Sticky);
     if Sc.Failed then Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
     if not Ok then Break;
-    RecordLegacy(AArgs[1], Sc, StrOf(AArgs[0]));
+    RecordLegacy(Args[1], Sc, StrOf(Args[0]));
     if CapsLen < (NM + 1) * (N + 1) * 2 then
     begin
       { the matches outgrow the stack buffer: on to the heap }
@@ -941,19 +930,19 @@ begin
     Inc(NM);
     Sc.TryGetGroup(0, St, En);
     if not Global then Break;
-    if En = St then St := NextIndex(StrOf(AArgs[0]), En, C^.Unicode) else St := En;
+    if En = St then St := NextIndex(StrOf(Args[0]), En, C^.Unicode) else St := En;
   end;
   { lastIndex as the spec's last RegExpBuiltinExec leaves it }
   if Global then
   begin
-    if not SetLastIndex(AArgs[1], 0) then Exit(False);
+    if not SetLastIndex(Args[1], 0) then Exit(False);
   end
   else if C^.Sticky then
   begin
-    if NM = 0 then Ok := SetLastIndex(AArgs[1], 0) else Ok := SetLastIndex(AArgs[1], Caps[1]);
+    if NM = 0 then Ok := SetLastIndex(Args[1], 0) else Ok := SetLastIndex(Args[1], Caps[1]);
     if not Ok then Exit(False);
   end;
-  if NM = 0 then begin ARes := AArgs[0]; Exit(True); end;
+  if NM = 0 then begin Res := Args[0]; Exit(True); end;
   { the replacements }
   Out_ := '';
   Pos_ := 0;
@@ -992,9 +981,9 @@ begin
       end;
       for G := 0 to N do CallArgs[G] := RootAt(TempTop - Rooted + G);
       CallArgs[N + 1] := MkInt(St);
-      CallArgs[N + 2] := AArgs[0];
+      CallArgs[N + 2] := Args[0];
       if Length(NG) > 0 then CallArgs[N + 3] := RootAt(TempTop - 1);
-      if not CallValue(AArgs[2], VUndefined, @CallArgs[0], Length(CallArgs), RV) then begin PopRoots(Rooted); Exit(False); end;
+      if not CallValue(Args[2], VUndefined, @CallArgs[0], Length(CallArgs), RV) then begin PopRoots(Rooted); Exit(False); end;
       PopRoots(Rooted);
       if not ToStringV(RV, SV) then Exit(False);
       Out_ := Out_ + StrToUnicode(StrOf(SV));
@@ -1004,34 +993,34 @@ begin
     Pos_ := En;
   end;
   Out_ := Out_ + Copy(Subject, Pos_ + 1, MaxInt);
-  ARes := StrFromUnicode(Out_);
+  Res := StrFromUnicode(Out_);
   Result := True;
 end;
 
 { the replace value is a string or a function: converting it runs no code }
-function FastReplaceValue(AArgs: PValue; AArgc: Integer): Boolean; inline;
+function FastReplaceValue(Args: PValue; Argc: Integer): Boolean; inline;
 begin
-  Result := (AArgc >= 2) and (IsString(AArgs[2]) or IsCallable(AArgs[2]));
+  Result := (Argc >= 2) and (IsString(Args[2]) or IsCallable(Args[2]));
 end;
 
 { 22.1.3.19 String.prototype.replace }
-function Str_Replace(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Str_Replace(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(TNativeFn(ObjOf(StrReplaceOrig)^.Native)(AArgs, AArgc, ARes));
-  if FastStrRe(AArgs, AArgc, MaskReplace) and FastReplaceValue(AArgs, AArgc) then Exit(ReplaceWithRegExp(AArgs, AArgc, ARes));
-  Result := CallJSMethod(JSF_Replace, AArgs, AArgc, ARes);
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(TNativeFn(ObjOf(StrReplaceOrig)^.Native)(Args, Argc, Res));
+  if FastStrRe(Args, Argc, MaskReplace) and FastReplaceValue(Args, Argc) then Exit(ReplaceWithRegExp(Args, Argc, Res));
+  Result := CallJSMethod(JSF_Replace, Args, Argc, Res);
 end;
 
 { 22.1.3.20 String.prototype.replaceAll }
-function Str_ReplaceAll(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Str_ReplaceAll(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(TNativeFn(ObjOf(StrReplaceAllOrig)^.Native)(AArgs, AArgc, ARes));
-  if FastStrRe(AArgs, AArgc, MaskReplaceAll) and FastReplaceValue(AArgs, AArgc) then
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(TNativeFn(ObjOf(StrReplaceAllOrig)^.Native)(Args, Argc, Res));
+  if FastStrRe(Args, Argc, MaskReplaceAll) and FastReplaceValue(Args, Argc) then
   begin
-    if not CompiledOf(AArgs[1])^.Global then Exit(ThrowTypeError('String.prototype.replaceAll called with a non-global RegExp'));
-    Exit(ReplaceWithRegExp(AArgs, AArgc, ARes));
+    if not CompiledOf(Args[1])^.Global then Exit(ThrowTypeError('String.prototype.replaceAll called with a non-global RegExp'));
+    Exit(ReplaceWithRegExp(Args, Argc, Res));
   end;
-  Result := CallJSMethod(JSF_ReplaceAll, AArgs, AArgc, ARes);
+  Result := CallJSMethod(JSF_ReplaceAll, Args, Argc, Res);
 end;
 
 { ToUint32 }
@@ -1044,72 +1033,72 @@ begin
 end;
 
 { 22.2.6.14 for an unmodified RegExp (and RegExp's own species): the sticky splitter is unobservable }
-function Str_Split(AArgs: PValue; AArgc: Integer; var ARes: TValue): Boolean;
+function Str_Split(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var S: PStr; C: PCompiled; A: PObj; Sc: TRegexMatcher; Ok: Boolean; P, Q, St, En, G, K, L: Integer;
   Lim: Int64; V: TValue;
 begin
-  if not IsObject(Arg(AArgs, AArgc, 1)) then Exit(TNativeFn(ObjOf(StrSplitOrig)^.Native)(AArgs, AArgc, ARes));
-  if not (FastStrRe(AArgs, AArgc, MaskSplit) and ((AArgc < 2) or (AArgs[2] = VUndefined) or IsNumber(AArgs[2])) and SpeciesIntact) then
-    Exit(CallJSMethod(JSF_Split, AArgs, AArgc, ARes));
+  if not IsObject(Arg(Args, Argc, 1)) then Exit(TNativeFn(ObjOf(StrSplitOrig)^.Native)(Args, Argc, Res));
+  if not (FastStrRe(Args, Argc, MaskSplit) and ((Argc < 2) or (Args[2] = VUndefined) or IsNumber(Args[2])) and SpeciesIntact) then
+    Exit(CallJSMethod(JSF_Split, Args, Argc, Res));
   Lim := 4294967295;
-  if (AArgc >= 2) and (AArgs[2] <> VUndefined) then Lim := ToUint32Of(NumOf(AArgs[2]));
-  C := CompiledOf(AArgs[1]);
+  if (Argc >= 2) and (Args[2] <> VUndefined) then Lim := ToUint32Of(NumOf(Args[2]));
+  C := CompiledOf(Args[1]);
   A := NewArray(0, 8);
   PushRoot(MkPtr(A));
-  S := StrOf(AArgs[0]);
-  if Lim = 0 then begin ARes := RootAt(TempTop - 1); PopRoots(1); Exit(True); end;
+  S := StrOf(Args[0]);
+  if Lim = 0 then begin Res := RootAt(TempTop - 1); PopRoots(1); Exit(True); end;
   if S^.Len = 0 then
   begin
     Sc := C^.M;
     Ok := Sc.Exec(StrChars(S), S^.Len, 0, True);
     if Sc.Failed then begin PopRoots(1); Exit(ThrowError('SyntaxError', Sc.ErrorMessage)); end;
-    if Ok then RecordLegacy(RegExpProto, Sc, StrOf(AArgs[0]));
-    if not Ok then ArrayPush(ObjOf(RootAt(TempTop - 1)), AArgs[0]);
-    ARes := RootAt(TempTop - 1);
+    if Ok then RecordLegacy(RegExpProto, Sc, StrOf(Args[0]));
+    if not Ok then ArrayPush(ObjOf(RootAt(TempTop - 1)), Args[0]);
+    Res := RootAt(TempTop - 1);
     PopRoots(1);
     Exit(True);
   end;
   P := 0; Q := 0;
   while Q < S^.Len do
   begin
-    S := StrOf(AArgs[0]);
+    S := StrOf(Args[0]);
     Sc := C^.M;
     Ok := Sc.Exec(StrChars(S), S^.Len, Q, True);
     if Sc.Failed then begin PopRoots(1); Exit(ThrowError('SyntaxError', Sc.ErrorMessage)); end;
     if not Ok then begin Q := NextIndex(S, Q, C^.Unicode); Continue; end;
-    RecordLegacy(RegExpProto, Sc, StrOf(AArgs[0]));
+    RecordLegacy(RegExpProto, Sc, StrOf(Args[0]));
     Sc.TryGetGroup(0, St, En);
     if En > S^.Len then En := S^.Len;
     if En = P then begin Q := NextIndex(S, Q, C^.Unicode); Continue; end;
     V := SubString(S, P, Q - P);
     ArrayPush(ObjOf(RootAt(TempTop - 1)), V);
-    if ArrayLen(ObjOf(RootAt(TempTop - 1))) >= Lim then begin ARes := RootAt(TempTop - 1); PopRoots(1); Exit(True); end;
+    if ArrayLen(ObjOf(RootAt(TempTop - 1))) >= Lim then begin Res := RootAt(TempTop - 1); PopRoots(1); Exit(True); end;
     for G := 1 to Sc.CaptureCount do
     begin
-      S := StrOf(AArgs[0]);
+      S := StrOf(Args[0]);
       if Sc.TryGetGroup(G, K, L) then V := SubString(S, K, L - K) else V := VUndefined;
       ArrayPush(ObjOf(RootAt(TempTop - 1)), V);
-      if ArrayLen(ObjOf(RootAt(TempTop - 1))) >= Lim then begin ARes := RootAt(TempTop - 1); PopRoots(1); Exit(True); end;
+      if ArrayLen(ObjOf(RootAt(TempTop - 1))) >= Lim then begin Res := RootAt(TempTop - 1); PopRoots(1); Exit(True); end;
     end;
     P := En;
     Q := P;
   end;
-  S := StrOf(AArgs[0]);
+  S := StrOf(Args[0]);
   V := SubString(S, P, S^.Len - P);
   ArrayPush(ObjOf(RootAt(TempTop - 1)), V);
-  ARes := RootAt(TempTop - 1);
+  Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
 end;
 
 procedure InitRegExp;
 var C, StrProto_, Getr, Setr: TValue; I, K: Integer; LName: UnicodeString;
-  procedure Getter(const AName: UnicodeString; AFn: TNativeFn);
+  procedure Getter(const Name: UnicodeString; Fn: TNativeFn);
   var F: TValue;
   begin
-    F := NewNativeFunction(AFn, 'get ' + AName, 0);
+    F := NewNativeFunction(Fn, 'get ' + Name, 0);
     F := MkPtr(NewAccessor(F, VUndefined));
-    DefineOwn(RegExpProto, AtomOf(AName), F, pfConfigurable or pfAccessor);
+    DefineOwn(RegExpProto, AtomOf(Name), F, pfConfigurable or pfAccessor);
   end;
 begin
   Compiled := TDictionary<UnicodeString, PCompiled>.Create;
@@ -1180,14 +1169,14 @@ var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R, NObj, V: TValue; I, S: Int
 const
   JSNames: array[0..7] of UnicodeString = ('construct', 'test', 'match', 'matchAll', 'replace', 'replaceAll',
     'search', 'split');
-  procedure Nat(const AName: UnicodeString; F: TNativeFn; ALen: Integer);
+  procedure Nat(const Name: UnicodeString; F: TNativeFn; Len: Integer);
   begin
-    V := NewNativeFunction(F, AName, ALen);
-    DefineOwn(RootAt(TempTop - 1), AtomOf(AName), V, pfDefault);
+    V := NewNativeFunction(F, Name, Len);
+    DefineOwn(RootAt(TempTop - 1), AtomOf(Name), V, pfDefault);
   end;
-  procedure Val(const AName: UnicodeString; X: TValue);
+  procedure Val(const Name: UnicodeString; X: TValue);
   begin
-    DefineOwn(RootAt(TempTop - 1), AtomOf(AName), X, pfDefault);
+    DefineOwn(RootAt(TempTop - 1), AtomOf(Name), X, pfDefault);
   end;
 begin
   if not CompilePrelude('<regexp>', RegExpSrc, T, Err) then raise Exception.Create('regexp prelude: ' + string(Err));

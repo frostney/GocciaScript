@@ -16,13 +16,7 @@ unit G2.Typed;
 interface
 
 uses
-  Math,
-  SysUtils,
-
-  BigInteger,
-  G2.BigIntV,
-  G2.Core,
-  G2.Shared;
+  SysUtils, Math, BigInteger, G2.Core, G2.Shared, G2.BigIntV;
 
 const
   ckBytes = 10;
@@ -50,16 +44,16 @@ type
     Data: array[0..0] of Byte;
   end;
 
-function NewArrayBuffer(ALen: Int64; AProto: TValue): PObj;
+function NewArrayBuffer(Len: Int64; Proto: TValue): PObj;
 { a resizable buffer: MaxLen bytes reserved, Len in use }
-function NewResizableBuffer(ALen, AMaxLen: Int64; AProto: TValue): PObj;
-function BufferData(ABuf: PObj): PByte; inline;
+function NewResizableBuffer(Len, MaxLen: Int64; Proto: TValue): PObj;
+function BufferData(Buf: PObj): PByte; inline;
 { the current byte length (0 once detached) }
-function BufferLen(ABuf: PObj): Int64; inline;
-function BufferMaxLen(ABuf: PObj): Int64;
-function BufferDetached(ABuf: PObj): Boolean; inline;
+function BufferLen(Buf: PObj): Int64; inline;
+function BufferMaxLen(Buf: PObj): Int64;
+function BufferDetached(Buf: PObj): Boolean; inline;
 { 25.1.3.5 DetachArrayBuffer: the bytes go, every view sees length 0 }
-procedure DetachBuffer(ABuf: PObj);
+procedure DetachBuffer(Buf: PObj);
 function TAKind(O: PObj): Integer; inline;
 function TAIsBig(O: PObj): Boolean; inline;
 function TALength(O: PObj): Integer; inline;
@@ -67,13 +61,13 @@ function TALengthSlow(O: PObj): Integer;
 { 10.4.5.12 IsTypedArrayOutOfBounds (a detached buffer counts as out of bounds) }
 function TAOutOfBounds(O: PObj): Boolean;
 function TAData(O: PObj): PByte; inline;
-function TAGet(O: PObj; AIdx: Integer): TValue; inline;
+function TAGet(O: PObj; Idx: Integer): TValue; inline;
 { number kinds (a BigInt kind ignores these: its stores go through TASetBig) }
-procedure TASet(O: PObj; AIdx: Integer; D: Double); inline;
-procedure TASetInt(O: PObj; AIdx: Integer; I: Int32); inline;
+procedure TASet(O: PObj; Idx: Integer; D: Double); inline;
+procedure TASetInt(O: PObj; Idx: Integer; I: Int32); inline;
 { BigInt64 / BigUint64: the value's low 64 bits }
-procedure TASetBig(O: PObj; AIdx: Integer; Q: QWord);
-function NewTypedArray(AKind: Integer; ABuf: TValue; AByteOffset, ALen: Integer; AProto: TValue): PObj;
+procedure TASetBig(O: PObj; Idx: Integer; Q: QWord);
+function NewTypedArray(Kind: Integer; Buf: TValue; ByteOffset, Len: Integer; Proto: TValue): PObj;
 
 { IEEE 754 binary16 (Float16Array, DataView, Math.f16round): round to nearest, ties to even }
 function DoubleToHalf(D: Double): Word;
@@ -85,67 +79,67 @@ function BigToU64(V: TValue): QWord;
 
 implementation
 
-function NewBuffer(ACap, ALen: Int64; AProto: TValue; AFlags: Byte): PObj;
+function NewBuffer(Cap, Len: Int64; Proto: TValue; Flags: Byte): PObj;
 var B: PBytes;
 begin
-  PushRoot(AProto);   { the bytes' allocation can move a young prototype }
-  B := PBytes(AllocCell(SizeOf(TBytesCell) - 1 + Max(ACap, 1), ckBytes));
-  B^.Len := ACap;
-  FillChar(B^.Data[0], Max(ACap, 1), 0);
+  PushRoot(Proto);   { the bytes' allocation can move a young prototype }
+  B := PBytes(AllocCell(SizeOf(TBytesCell) - 1 + Max(Cap, 1), ckBytes));
+  B^.Len := Cap;
+  FillChar(B^.Data[0], Max(Cap, 1), 0);
   PushRoot(MkPtr(B));
   Result := NewObject(RootShapeFor(RootAt(TempTop - 2)), 0, okArrayBuffer);
   Result^.Aux1 := RootAt(TempTop - 1);
-  Result^.Aux2 := MkNumber(ALen);
-  Result^.OFlags := AFlags;
+  Result^.Aux2 := MkNumber(Len);
+  Result^.OFlags := Flags;
   PopRoots(2);
 end;
 
-function NewArrayBuffer(ALen: Int64; AProto: TValue): PObj;
+function NewArrayBuffer(Len: Int64; Proto: TValue): PObj;
 begin
-  Result := NewBuffer(ALen, ALen, AProto, 0);
+  Result := NewBuffer(Len, Len, Proto, 0);
 end;
 
-function NewResizableBuffer(ALen, AMaxLen: Int64; AProto: TValue): PObj;
+function NewResizableBuffer(Len, MaxLen: Int64; Proto: TValue): PObj;
 begin
-  Result := NewBuffer(AMaxLen, ALen, AProto, bfResizable);
+  Result := NewBuffer(MaxLen, Len, Proto, bfResizable);
 end;
 
 { a SharedArrayBuffer (bfShared, G2.Atomics) keeps its bytes in a G2.Shared block outside the heap }
-function BufferData(ABuf: PObj): PByte; inline;
+function BufferData(Buf: PObj): PByte; inline;
 begin
-  if (ABuf^.OFlags and bfShared) <> 0 then Exit(PSharedBlock(ABuf^.Native)^.Data);
-  Result := @PBytes(PtrOf(ABuf^.Aux1))^.Data[0];
+  if (Buf^.OFlags and bfShared) <> 0 then Exit(PSharedBlock(Buf^.Native)^.Data);
+  Result := @PBytes(PtrOf(Buf^.Aux1))^.Data[0];
 end;
 
-function BufferLen(ABuf: PObj): Int64; inline;
+function BufferLen(Buf: PObj): Int64; inline;
 begin
-  if (ABuf^.OFlags and (bfShared or bfDetached)) = 0 then Exit(Trunc(NumOf(ABuf^.Aux2)));
-  if (ABuf^.OFlags and bfShared) <> 0 then Exit(BlockLength(PSharedBlock(ABuf^.Native)));
+  if (Buf^.OFlags and (bfShared or bfDetached)) = 0 then Exit(Trunc(NumOf(Buf^.Aux2)));
+  if (Buf^.OFlags and bfShared) <> 0 then Exit(BlockLength(PSharedBlock(Buf^.Native)));
   Result := 0;
 end;
 
-function BufferMaxLen(ABuf: PObj): Int64;
+function BufferMaxLen(Buf: PObj): Int64;
 begin
-  if (ABuf^.OFlags and bfShared) <> 0 then
+  if (Buf^.OFlags and bfShared) <> 0 then
   begin
-    if PSharedBlock(ABuf^.Native)^.MaxByteLength < 0 then Exit(BlockLength(PSharedBlock(ABuf^.Native)));
-    Exit(PSharedBlock(ABuf^.Native)^.MaxByteLength);
+    if PSharedBlock(Buf^.Native)^.MaxByteLength < 0 then Exit(BlockLength(PSharedBlock(Buf^.Native)));
+    Exit(PSharedBlock(Buf^.Native)^.MaxByteLength);
   end;
-  if (ABuf^.OFlags and bfDetached) <> 0 then Exit(0);
-  if (ABuf^.OFlags and bfResizable) <> 0 then Exit(PBytes(PtrOf(ABuf^.Aux1))^.Len);
-  Result := BufferLen(ABuf);
+  if (Buf^.OFlags and bfDetached) <> 0 then Exit(0);
+  if (Buf^.OFlags and bfResizable) <> 0 then Exit(PBytes(PtrOf(Buf^.Aux1))^.Len);
+  Result := BufferLen(Buf);
 end;
 
-function BufferDetached(ABuf: PObj): Boolean; inline;
+function BufferDetached(Buf: PObj): Boolean; inline;
 begin
-  Result := (ABuf^.OFlags and bfDetached) <> 0;
+  Result := (Buf^.OFlags and bfDetached) <> 0;
 end;
 
-procedure DetachBuffer(ABuf: PObj);
+procedure DetachBuffer(Buf: PObj);
 begin
-  ABuf^.OFlags := ABuf^.OFlags or bfDetached;
-  ABuf^.Aux1 := VUndefined;
-  ABuf^.Aux2 := MkInt(0);
+  Buf^.OFlags := Buf^.OFlags or bfDetached;
+  Buf^.Aux1 := VUndefined;
+  Buf^.Aux2 := MkInt(0);
 end;
 
 function TAKind(O: PObj): Integer; inline;
@@ -248,16 +242,16 @@ end;
 
 { ---- 64-bit BigInts ---- }
 
-function BigFromUInt64Sign(AMag: QWord; ANeg: Boolean): TValue;
+function BigFromUInt64Sign(Mag: QWord; Neg: Boolean): TValue;
 var C: PBigCell; N: Integer;
 begin
-  if AMag = 0 then Exit(BigToValue(TBigInteger.Zero));
-  if (AMag shr 32) <> 0 then N := 2 else N := 1;
+  if Mag = 0 then Exit(BigToValue(TBigInteger.Zero));
+  if (Mag shr 32) <> 0 then N := 2 else N := 1;
   C := PBigCell(AllocCell(SizeOf(TBigCell) - SizeOf(Cardinal) + N * SizeOf(Cardinal), ckBigInt));
   C^.Count := N;
-  C^.Negative := Ord(ANeg);
-  C^.Limbs[0] := Cardinal(AMag);
-  if N = 2 then C^.Limbs[1] := Cardinal(AMag shr 32);
+  C^.Negative := Ord(Neg);
+  C^.Limbs[0] := Cardinal(Mag);
+  if N = 2 then C^.Limbs[1] := Cardinal(Mag shr 32);
   Result := MkPtr(C);
 end;
 
@@ -284,22 +278,22 @@ end;
 
 { ---- elements ---- }
 
-function TAGet(O: PObj; AIdx: Integer): TValue; inline;
+function TAGet(O: PObj; Idx: Integer): TValue; inline;
 var P: PByte;
 begin
   P := TAData(O);
   case TAKind(O) of
-    taInt8: Result := MkInt(PShortInt(P)[AIdx]);
-    taUint8, taUint8C: Result := MkInt(P[AIdx]);
-    taInt16: Result := MkInt(PSmallInt(P)[AIdx]);
-    taUint16: Result := MkInt(PWord(P)[AIdx]);
-    taInt32: Result := MkInt(PLongInt(P)[AIdx]);
-    taUint32: Result := MkNumber(PLongWord(P)[AIdx]);
-    taFloat32: Result := MkNumber(PSingle(P)[AIdx]);
-    taFloat16: Result := MkNumber(HalfToDouble(PWord(P)[AIdx]));
-    taBigInt64: Result := BigFromInt64(PInt64(P)[AIdx]);
-    taBigUint64: Result := BigFromUInt64(PQWord(P)[AIdx]);
-  else Result := MkNumber(PDouble(P)[AIdx]);
+    taInt8: Result := MkInt(PShortInt(P)[Idx]);
+    taUint8, taUint8C: Result := MkInt(P[Idx]);
+    taInt16: Result := MkInt(PSmallInt(P)[Idx]);
+    taUint16: Result := MkInt(PWord(P)[Idx]);
+    taInt32: Result := MkInt(PLongInt(P)[Idx]);
+    taUint32: Result := MkNumber(PLongWord(P)[Idx]);
+    taFloat32: Result := MkNumber(PSingle(P)[Idx]);
+    taFloat16: Result := MkNumber(HalfToDouble(PWord(P)[Idx]));
+    taBigInt64: Result := BigFromInt64(PInt64(P)[Idx]);
+    taBigUint64: Result := BigFromUInt64(PQWord(P)[Idx]);
+  else Result := MkNumber(PDouble(P)[Idx]);
   end;
 end;
 
@@ -320,58 +314,58 @@ begin
   Result := Round(D);   { FPC's Round: half to even, as ToUint8Clamp }
 end;
 
-procedure TASet(O: PObj; AIdx: Integer; D: Double); inline;
+procedure TASet(O: PObj; Idx: Integer; D: Double); inline;
 var P: PByte; I: Int32;
 begin
   P := TAData(O);
   case TAKind(O) of
-    taFloat32: PSingle(P)[AIdx] := D;
-    taFloat64: PDouble(P)[AIdx] := D;
-    taFloat16: PWord(P)[AIdx] := DoubleToHalf(D);
-    taUint8C: P[AIdx] := Uint8Clamp(D);
-    taBigInt64, taBigUint64:;
+    taFloat32: PSingle(P)[Idx] := D;
+    taFloat64: PDouble(P)[Idx] := D;
+    taFloat16: PWord(P)[Idx] := DoubleToHalf(D);
+    taUint8C: P[Idx] := Uint8Clamp(D);
+    taBigInt64, taBigUint64: ;
   else
     begin
       I := ToInt32Wrap(D);
       case TAKind(O) of
-        taInt8, taUint8: P[AIdx] := Byte(I);
-        taInt16, taUint16: PWord(P)[AIdx] := Word(I);
-      else PLongWord(P)[AIdx] := LongWord(I);
+        taInt8, taUint8: P[Idx] := Byte(I);
+        taInt16, taUint16: PWord(P)[Idx] := Word(I);
+      else PLongWord(P)[Idx] := LongWord(I);
       end;
     end;
   end;
 end;
 
-procedure TASetInt(O: PObj; AIdx: Integer; I: Int32); inline;
+procedure TASetInt(O: PObj; Idx: Integer; I: Int32); inline;
 var P: PByte;
 begin
   P := TAData(O);
   case TAKind(O) of
-    taInt8, taUint8: P[AIdx] := Byte(I);
-    taUint8C: if I < 0 then P[AIdx] := 0 else if I > 255 then P[AIdx] := 255 else P[AIdx] := I;
-    taInt16, taUint16: PWord(P)[AIdx] := Word(I);
-    taInt32, taUint32: PLongWord(P)[AIdx] := LongWord(I);
-    taFloat32: PSingle(P)[AIdx] := I;
-    taFloat16: PWord(P)[AIdx] := DoubleToHalf(I);
-    taBigInt64, taBigUint64:;
-  else PDouble(P)[AIdx] := I;
+    taInt8, taUint8: P[Idx] := Byte(I);
+    taUint8C: if I < 0 then P[Idx] := 0 else if I > 255 then P[Idx] := 255 else P[Idx] := I;
+    taInt16, taUint16: PWord(P)[Idx] := Word(I);
+    taInt32, taUint32: PLongWord(P)[Idx] := LongWord(I);
+    taFloat32: PSingle(P)[Idx] := I;
+    taFloat16: PWord(P)[Idx] := DoubleToHalf(I);
+    taBigInt64, taBigUint64: ;
+  else PDouble(P)[Idx] := I;
   end;
 end;
 
-procedure TASetBig(O: PObj; AIdx: Integer; Q: QWord);
+procedure TASetBig(O: PObj; Idx: Integer; Q: QWord);
 begin
-  if TAIsBig(O) then PQWord(TAData(O))[AIdx] := Q;
+  if TAIsBig(O) then PQWord(TAData(O))[Idx] := Q;
 end;
 
-function NewTypedArray(AKind: Integer; ABuf: TValue; AByteOffset, ALen: Integer; AProto: TValue): PObj;
+function NewTypedArray(Kind: Integer; Buf: TValue; ByteOffset, Len: Integer; Proto: TValue): PObj;
 begin
-  PushRoot(ABuf);
-  Result := NewObject(RootShapeFor(AProto), 0, okTypedArray);
+  PushRoot(Buf);
+  Result := NewObject(RootShapeFor(Proto), 0, okTypedArray);
   Result^.Aux1 := RootAt(TempTop - 1);
   PopRoots(1);
-  Result^.Aux2 := MkInt(ALen);
-  Result^.Pad := AByteOffset;
-  Result^.OFlags := AKind shl 4;
+  Result^.Aux2 := MkInt(Len);
+  Result^.Pad := ByteOffset;
+  Result^.OFlags := Kind shl 4;
 end;
 
 end.
