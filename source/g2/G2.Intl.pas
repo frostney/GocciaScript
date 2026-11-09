@@ -26,6 +26,7 @@ unit G2.Intl;
     25 weekInfo(region)                     -> [firstDay, weekendStart, weekendEnd, minimalDays], or undefined
     26 timeZoneId(tz)                       -> the identifier in its case from the time zone database, or null
     27 systemTimeZone()                     -> String
+    50 boundaries(locale, granularity, text) -> [end, wordLike, end, wordLike, ...] in UTF-16 units, or undefined
     41 relativeTimePattern(locale, unit)    -> [future, past] CLDR patterns with {0}, or undefined
     40 compare(locale, a, b, sensitivity, ignorePunctuation, numeric, caseFirst) -> -1, 0 or 1
     30 formatDateTime(locale, opts, ms, toParts)
@@ -50,7 +51,7 @@ implementation
 
 uses
   SysUtils, Math, G2.Core, G2.Bytecode, G2.VM, G2.Snapshot, IntlTypes, BCP47, IntlLocaleResolver,
-  IntlICU, Goccia.Intl.CLDRData, Goccia.Temporal.TimeZone;
+  IntlICU, Goccia.Intl.CLDRData, Goccia.Temporal.TimeZone, G2.Temporal;
 
 {$I G2.Intl.inc}
 
@@ -279,7 +280,8 @@ begin
 end;
 
 function Intl_Op(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var S, T, Sym1, Sym2: string; Sens: TIntlCollatorSensitivity; RP: TIntlRelativeTimePattern; Dg, W1, W2, W3, W4: Integer; WA: PObj; A: IntlTypes.TStringArray; P: TIntlFormatPartArray; Rules: TIntlPluralRuleSet;
+var S, T, Sym1, Sym2: string; Sens: TIntlCollatorSensitivity; RP: TIntlRelativeTimePattern; BI: TIntlBreakIterator;
+  G: TIntlSegmenterGranularity; Pos: Integer; Dg, W1, W2, W3, W4: Integer; WA: PObj; A: IntlTypes.TStringArray; P: TIntlFormatPartArray; Rules: TIntlPluralRuleSet;
   Ordinal: Boolean; N: Integer;
   procedure Add(const C: string);
   begin
@@ -401,6 +403,27 @@ begin
         NumOpts(Args[3]), S) then Res := UStr(S);
     22:
       if TryGetCurrencyInfo('en', SArg(Args, Argc, 2), Sym1, Sym2, Dg) then Res := MkInt(Dg) else Res := MkInt(2);
+    50:
+      begin
+        T := SArg(Args, Argc, 3);
+        if T = 'word' then G := isgWord else if T = 'sentence' then G := isgSentence else G := isgGrapheme;
+        if TryICUCreateBreakIterator(SArg(Args, Argc, 2), G, SArg(Args, Argc, 4), BI) then
+        begin
+          PushRoot(MkPtr(NewArray(0, 16)));
+          try
+            while TryICUBreakIteratorNext(BI, Pos) do
+            begin
+              ArrayPush(ObjOf(RootAt(TempTop - 1)), MkInt(Pos));
+              if G = isgWord then ArrayPush(ObjOf(RootAt(TempTop - 1)), MkBool(TryICUBreakIteratorGetRuleStatus(BI) >= 100))
+              else ArrayPush(ObjOf(RootAt(TempTop - 1)), VFalse);
+            end;
+          finally
+            ICUBreakIteratorClose(BI);
+          end;
+          Res := RootAt(TempTop - 1);
+          PopRoots(1);
+        end;
+      end;
     41:
       if TryGetRelativeTimePattern(SArg(Args, Argc, 2), RelUnit(SArg(Args, Argc, 3)), RP) then
       begin
@@ -460,7 +483,7 @@ begin
 end;
 
 procedure InitIntl;
-var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..2] of TValue; Ok: Boolean;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..3] of TValue; Ok: Boolean;
 begin
   if not CompilePrelude('<intl>', IntlSrc, T, Err) then raise Exception.Create('intl prelude: ' + string(Err));
   if not MakeScriptClosure(T, Clo) then raise Exception.Create('intl prelude closure');
@@ -471,7 +494,8 @@ begin
   CA[0] := GlobalObj;
   CA[1] := RootAt(TempTop - 2);
   CA[2] := RootAt(TempTop - 1);
-  Ok := CallValue(RootAt(TempTop - 3), VUndefined, @CA[0], 3, R);
+  CA[3] := TemporalInternals;
+  Ok := CallValue(RootAt(TempTop - 3), VUndefined, @CA[0], 4, R);
   PopRoots(2);
   if not Ok then
   begin

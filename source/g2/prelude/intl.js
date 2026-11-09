@@ -1,4 +1,4 @@
-(function (G, intlOp, markIntrinsic) {
+(function (G, intlOp, markIntrinsic, temporal) {
   "use strict";
   // Intl (ECMA-402): the objects, their option processing and resolution follow the spec; locale data and the
   // formatting itself come from intlOp (G2.Intl: BCP47, IntlLocaleResolver, IntlICU and the embedded CLDR data).
@@ -1137,8 +1137,46 @@
   }
   function DefaultTimeZone() { var z = intlOp(27); return z ? z : "UTC"; }
   var DateTimeFormatProto = {};
+  // Temporal: GetDateTimeFormat(formats, matcher, options, required, defaults, inherit) as a components record
+  // (ICU picks the pattern), or null
+  var DT_REQUIRED = { date: ["weekday", "year", "month", "day"], time: ["dayPeriod", "hour", "minute", "second", "fractionalSecondDigits"],
+    "year-month": ["year", "month"], "month-day": ["month", "day"],
+    any: ["weekday", "year", "month", "day", "dayPeriod", "hour", "minute", "second", "fractionalSecondDigits"] };
+  var DT_DEFAULTS = { date: ["year", "month", "day"], time: ["hour", "minute", "second"], "year-month": ["year", "month"],
+    "month-day": ["month", "day"], "zoned-date-time": ["year", "month", "day", "hour", "minute", "second"],
+    all: ["year", "month", "day", "hour", "minute", "second"] };
+  function GetDateTimeFormat(options, required, defaults, inheritAll) {
+    var req = DT_REQUIRED[required], f = rec(), i;
+    if (inheritAll) { for (var k in options) f[k] = options[k]; }
+    else if (required === "date" || required === "year-month" || required === "any") f.era = options.era;
+    var any = false, all9 = DT_REQUIRED.any;
+    for (i = 0; i < all9.length; i++) if (options[all9[i]] !== undefined) any = true;
+    var need = true;
+    for (i = 0; i < req.length; i++) if (options[req[i]] !== undefined) { f[req[i]] = options[req[i]]; need = false; }
+    if (need) {
+      if (any && !inheritAll) return null;
+      var d = DT_DEFAULTS[defaults];
+      for (i = 0; i < d.length; i++) f[d[i]] = "numeric";
+      if (defaults === "zoned-date-time" && f.timeZoneName === undefined) f.timeZoneName = "short";
+    }
+    return f;
+  }
+  // the Temporal formats of dateStyle / timeStyle (AdjustDateTimeStyleFormat): a style, or the fields it allows
+  function monthForStyle(st) { return st === "full" || st === "long" ? "long" : st === "medium" ? "short" : "numeric"; }
+  function styleTemporalFormats(s) {
+    var ds = s.dateStyle, ts = s.timeStyle, pts = ts === "full" || ts === "long" ? "medium" : ts;
+    function style(d, t) { var f = rec(); f.dateStyle = d; f.timeStyle = t; return f; }
+    if (ds !== undefined) {
+      s.tPlainDate = style(ds, undefined);
+      var ym = rec(); ym.year = "numeric"; ym.month = monthForStyle(ds); s.tPlainYearMonth = ym;
+      var md = rec(); md.month = monthForStyle(ds); md.day = "numeric"; s.tPlainMonthDay = md;
+    } else { s.tPlainDate = null; s.tPlainYearMonth = null; s.tPlainMonthDay = null; }
+    s.tPlainTime = ts !== undefined ? style(undefined, pts) : null;
+    s.tPlainDateTime = style(ds, pts);
+    s.tInstant = style(ds, ts);
+  }
   // 11.1.2 CreateDateTimeFormat (Temporal's required and defaults)
-  function CreateDateTimeFormat(locales, options, required, defaults) {
+  function CreateDateTimeFormat(locales, options, required, defaults, toLocaleStringTimeZone) {
     var hour12;
     var res = ResolveOptions(availableLocales(), dtfData, ["ca", "hc", "nu"],
       [["calendar", "ca", "string", undefined], ["numberingSystem", "nu", "string", undefined],
@@ -1159,8 +1197,9 @@
     else if (hour12 === "false" || hour12 === false) hc = hourCycle24(dataLocale);
     else hc = r.hc;
     var timeZone = options.timeZone;
-    if (timeZone === undefined) timeZone = DefaultTimeZone();
+    if (timeZone === undefined) timeZone = toLocaleStringTimeZone !== undefined ? toLocaleStringTimeZone : DefaultTimeZone();
     else {
+      if (toLocaleStringTimeZone !== undefined) throw typeError("timeZone is not allowed in ZonedDateTime.prototype.toLocaleString");
       timeZone = ToString(timeZone);
       var off = parseOffsetZone(timeZone);
       if (off !== undefined) timeZone = off;
@@ -1182,12 +1221,15 @@
     GetOption(options, "formatMatcher", "string", ["basic", "best fit"], "best fit");
     s.dateStyle = GetOption(options, "dateStyle", "string", ["full", "long", "medium", "short"], undefined);
     s.timeStyle = GetOption(options, "timeStyle", "string", ["full", "long", "medium", "short"], undefined);
+    var raw = rec();
+    for (var rk in fmt) raw[rk] = fmt[rk];
     if (s.dateStyle !== undefined || s.timeStyle !== undefined) {
       if (explicit) throw typeError("dateStyle and timeStyle may not be used with other date-time components");
       if (required === "date" && s.timeStyle !== undefined) throw typeError("timeStyle is not allowed here");
       if (required === "time" && s.dateStyle !== undefined) throw typeError("dateStyle is not allowed here");
       fmt = rec();
       if (s.timeStyle !== undefined) fmt.hour = "numeric";
+      styleTemporalFormats(s);
     } else {
       var need = true;
       if (required === "date" || required === "any") {
@@ -1199,6 +1241,12 @@
       }
       if (need && (defaults === "date" || defaults === "all")) { fmt.year = "numeric"; fmt.month = "numeric"; fmt.day = "numeric"; }
       if (need && (defaults === "time" || defaults === "all")) { fmt.hour = "numeric"; fmt.minute = "numeric"; fmt.second = "numeric"; }
+      s.tPlainDate = GetDateTimeFormat(raw, "date", "date", false);
+      s.tPlainYearMonth = GetDateTimeFormat(raw, "year-month", "year-month", false);
+      s.tPlainMonthDay = GetDateTimeFormat(raw, "month-day", "month-day", false);
+      s.tPlainTime = GetDateTimeFormat(raw, "time", "time", false);
+      s.tPlainDateTime = GetDateTimeFormat(raw, "any", "all", false);
+      s.tInstant = GetDateTimeFormat(raw, "any", toLocaleStringTimeZone !== undefined ? "zoned-date-time" : "all", true);
     }
     s.format = fmt;
     if (fmt.hour !== undefined) {
@@ -1219,15 +1267,19 @@
     return o;
   }
   makeService(DateTimeFormat, "DateTimeFormat", 0, DateTimeFormatProto);
+  // the native's options for a format record: a plain value formats in UTC, without a time zone name
+  function optsFor(s, f, plain) {
+    var tz = plain ? "UTC" : s.timeZone, ds, ts;
+    if (tz[0] === "+" || tz[0] === "-") tz = "GMT" + tz;
+    if (f === s.format) { ds = s.dateStyle; ts = s.timeStyle; } else { ds = f.dateStyle; ts = f.timeStyle; }
+    var hasHour = f.hour !== undefined || ts !== undefined, hc = hasHour ? (s.hourCycle !== undefined ? s.hourCycle : localeHourCycle(s.locale)) : undefined;
+    return [ds, ts, s.calendar, s.numberingSystem, tz,
+      hc === undefined ? -1 : hc === "h11" || hc === "h12" ? 1 : 0, hc,
+      f.weekday, f.era, f.year, f.month, f.day, f.dayPeriod, f.hour, f.minute, f.second,
+      f.fractionalSecondDigits === undefined ? -1 : f.fractionalSecondDigits, plain ? undefined : f.timeZoneName];
+  }
   function dtfOpts(s) {
-    if (s.opts === undefined) {
-      var f = s.format, tz = s.timeZone;
-      if (tz[0] === "+" || tz[0] === "-") tz = "GMT" + tz;
-      s.opts = [s.dateStyle, s.timeStyle, s.calendar, s.numberingSystem, tz,
-        s.hourCycle === undefined ? -1 : s.hourCycle === "h11" || s.hourCycle === "h12" ? 1 : 0, s.hourCycle,
-        f.weekday, f.era, f.year, f.month, f.day, f.dayPeriod, f.hour, f.minute, f.second,
-        f.fractionalSecondDigits === undefined ? -1 : f.fractionalSecondDigits, f.timeZoneName];
-    }
+    if (s.opts === undefined) s.opts = optsFor(s, s.format, false);
     return s.opts;
   }
   function dtfLocale(s) {
@@ -1243,19 +1295,46 @@
     if (!isFinite(t) || MathAbs(t) > 8.64e15) return NaN;
     return t < 0 ? -MathFloor(-t) + 0 : MathFloor(t) + 0;
   }
-  // the time value a format step formats (a Date or a Number; Temporal objects come later)
+  function temporalKind(v) { return temporal !== undefined && isObject(v) ? temporal.kind(v) : undefined; }
+  // ToDateTimeFormattable: a Temporal object stays one, anything else becomes a Number
   function dateArg(date) {
-    var x = date === undefined ? DateNow() : ToNumber(date);
-    x = TimeClip(x);
-    if (NumberIsNaN(x)) throw rangeError("Invalid time value");
-    return x;
+    if (date === undefined) return DateNow();
+    var k = temporalKind(date);
+    if (k !== undefined && k !== "Duration") return date;
+    return ToNumber(date);
+  }
+  // HandleDateTimeValue: { ms, format, plain }
+  function HandleDateTimeValue(s, x) {
+    var r = rec();
+    if (typeof x === "number") {
+      x = TimeClip(x);
+      if (NumberIsNaN(x)) throw rangeError("Invalid time value");
+      r.ms = x; r.format = s.format; r.plain = false;
+      return r;
+    }
+    var k = temporal.kind(x), cal, f;
+    if (k === "ZonedDateTime") throw typeError("Temporal.ZonedDateTime cannot be formatted by Intl.DateTimeFormat; use toLocaleString");
+    if (k === "PlainDate" || k === "PlainDateTime") {
+      cal = temporal.calendar(x);
+      if (cal !== "iso8601" && cal !== s.calendar) throw rangeError("calendar " + cal + " does not match the formatter's " + s.calendar);
+    } else if (k === "PlainYearMonth" || k === "PlainMonthDay") {
+      cal = temporal.calendar(x);
+      if (cal !== s.calendar) throw rangeError("calendar " + cal + " does not match the formatter's " + s.calendar);
+    }
+    f = k === "PlainDate" ? s.tPlainDate : k === "PlainYearMonth" ? s.tPlainYearMonth : k === "PlainMonthDay" ? s.tPlainMonthDay :
+      k === "PlainTime" ? s.tPlainTime : k === "PlainDateTime" ? s.tPlainDateTime : s.tInstant;
+    if (f === null || f === undefined) throw typeError("the formatter's options do not apply to Temporal." + k);
+    r.ms = temporal.ms(x); r.format = f; r.plain = k !== "Instant";
+    return r;
   }
   function FormatDateTime(s, x) {
-    var r = intlOp(30, dtfLocale(s), dtfOpts(s), x, false);
-    return r === undefined ? new Date(x).toString() : r;
+    var h = HandleDateTimeValue(s, x);
+    var r = intlOp(30, dtfLocale(s), h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain), h.ms, false);
+    return r === undefined ? new Date(h.ms).toString() : r;
   }
   function FormatDateTimeToParts(s, x) {
-    var p = intlOp(30, dtfLocale(s), dtfOpts(s), x, true);
+    var h = HandleDateTimeValue(s, x);
+    var p = intlOp(30, dtfLocale(s), h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain), h.ms, true);
     if (p === undefined) p = [["literal", FormatDateTime(s, x)]];
     return partsToArray(p, false);
   }
@@ -1278,21 +1357,25 @@
     var s = slotsOf(this, "DateTimeFormat", "Intl.DateTimeFormat.prototype.formatToParts");
     return FormatDateTimeToParts(s, dateArg(date));
   } }.formatToParts);
-  function dtRange(start, end) {
+  // PartitionDateTimeRangePattern's checks: both Numbers or both the same Temporal type
+  function dtRange(s, start, end) {
     if (start === undefined || end === undefined) throw typeError("startDate and endDate are required");
-    var x = TimeClip(ToNumber(start)), y = TimeClip(ToNumber(end));
-    if (NumberIsNaN(x) || NumberIsNaN(y)) throw rangeError("Invalid time value");
-    return [x, y];
+    var x = dateArg(start), y = dateArg(end);
+    if ((typeof x === "number") !== (typeof y === "number") || typeof x !== "number" && temporal.kind(x) !== temporal.kind(y))
+      throw typeError("startDate and endDate must be of the same type");
+    var hx = HandleDateTimeValue(s, x), hy = HandleDateTimeValue(s, y);
+    return [hx, hy];
   }
+  function rangeOpts(s, h) { return h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain); }
   method(DateTimeFormatProto, "formatRange", { formatRange(startDate, endDate) {
     var s = slotsOf(this, "DateTimeFormat", "Intl.DateTimeFormat.prototype.formatRange");
-    var xy = dtRange(startDate, endDate), r = intlOp(31, dtfLocale(s), dtfOpts(s), xy[0], xy[1], false);
-    return r === undefined ? FormatDateTime(s, xy[0]) + " \u2013 " + FormatDateTime(s, xy[1]) : r;
+    var h = dtRange(s, startDate, endDate), r = intlOp(31, dtfLocale(s), rangeOpts(s, h[0]), h[0].ms, h[1].ms, false);
+    return r === undefined ? "" + h[0].ms + " \u2013 " + h[1].ms : r;
   } }.formatRange);
   method(DateTimeFormatProto, "formatRangeToParts", { formatRangeToParts(startDate, endDate) {
     var s = slotsOf(this, "DateTimeFormat", "Intl.DateTimeFormat.prototype.formatRangeToParts");
-    var xy = dtRange(startDate, endDate), p = intlOp(31, dtfLocale(s), dtfOpts(s), xy[0], xy[1], true);
-    if (p === undefined) p = [["literal", FormatDateTime(s, xy[0]), "startRange"], ["literal", " \u2013 ", "shared"], ["literal", FormatDateTime(s, xy[1]), "endRange"]];
+    var h = dtRange(s, startDate, endDate), p = intlOp(31, dtfLocale(s), rangeOpts(s, h[0]), h[0].ms, h[1].ms, true);
+    if (p === undefined) p = [["literal", "" + h[0].ms, "startRange"], ["literal", " \u2013 ", "shared"], ["literal", "" + h[1].ms, "endRange"]];
     return partsToArray(p, true);
   } }.formatRangeToParts);
   method(DateTimeFormatProto, "resolvedOptions", { resolvedOptions() {
@@ -1325,6 +1408,31 @@
   def(Date.prototype, "toLocaleString", { toLocaleString(locales = undefined, options = undefined) { return dateLocale(this, locales, options, "any", "all"); } }.toLocaleString);
   def(Date.prototype, "toLocaleDateString", { toLocaleDateString(locales = undefined, options = undefined) { return dateLocale(this, locales, options, "date", "date"); } }.toLocaleDateString);
   def(Date.prototype, "toLocaleTimeString", { toLocaleTimeString(locales = undefined, options = undefined) { return dateLocale(this, locales, options, "time", "time"); } }.toLocaleTimeString);
+  // the Temporal prototypes' toLocaleString (the Temporal proposal's ECMA-402 amendments)
+  if (temporal !== undefined) {
+    var TP = G.Temporal;
+    var tls = function (cls, kind, required, defaults) {
+      def(TP[cls].prototype, "toLocaleString", { toLocaleString(locales = undefined, options = undefined) {
+        if (temporal.kind(this) !== kind) throw typeError("Temporal." + cls + ".prototype.toLocaleString called on an incompatible receiver");
+        return FormatDateTime(CreateDateTimeFormat(locales, options, required, defaults), this);
+      } }.toLocaleString);
+    };
+    tls("Instant", "Instant", "any", "all");
+    tls("PlainDate", "PlainDate", "date", "date");
+    tls("PlainDateTime", "PlainDateTime", "any", "all");
+    tls("PlainMonthDay", "PlainMonthDay", "date", "date");
+    tls("PlainTime", "PlainTime", "time", "time");
+    tls("PlainYearMonth", "PlainYearMonth", "date", "date");
+    def(TP.ZonedDateTime.prototype, "toLocaleString", { toLocaleString(locales = undefined, options = undefined) {
+      if (temporal.kind(this) !== "ZonedDateTime") throw typeError("Temporal.ZonedDateTime.prototype.toLocaleString called on an incompatible receiver");
+      var tz = temporal.timeZone(this);
+      var s = CreateDateTimeFormat(locales, options, "any", "all", tz);
+      var cal = temporal.calendar(this);
+      if (cal !== "iso8601" && cal !== s.calendar) throw rangeError("calendar " + cal + " does not match the formatter's " + s.calendar);
+      var r = intlOp(30, dtfLocale(s), optsFor(s, s.tInstant, false), temporal.ms(this), false);
+      return r === undefined ? "" + temporal.ms(this) : r;
+    } }.toLocaleString);
+  }
 
   // ---------------- 10 Collator ----------------
   function coData(locale, key) {
@@ -1523,6 +1631,409 @@
     cdp(r, "numberingSystem", s.numberingSystem);
     return r;
   } }.resolvedOptions);
+
+  // ---------------- 12 DisplayNames ----------------
+  var DisplayNamesProto = {};
+  function DisplayNames(locales, options) {
+    if (new.target === undefined) throw typeError("Constructor Intl.DisplayNames requires 'new'");
+    var o = createFrom(new.target, DisplayNamesProto);
+    var res = ResolveOptions(availableLocales(), noData, [], [], locales, options, false, true);
+    options = res.options;
+    var s = rec();
+    s.kind = "DisplayNames";
+    s.style = GetOption(options, "style", "string", ["narrow", "short", "long"], "long");
+    s.type = GetOption(options, "type", "string", ["language", "region", "script", "currency", "calendar", "dateTimeField"], undefined);
+    if (s.type === undefined) throw typeError("type is required");
+    s.fallback = GetOption(options, "fallback", "string", ["code", "none"], "code");
+    s.locale = res.resolved.locale;
+    var ld = GetOption(options, "languageDisplay", "string", ["dialect", "standard"], "dialect");
+    if (s.type === "language") s.languageDisplay = ld;
+    new Slots(o, s);
+    return o;
+  }
+  makeService(DisplayNames, "DisplayNames", 2, DisplayNamesProto);
+  var DATE_TIME_FIELDS = ["era", "year", "quarter", "month", "weekOfYear", "weekday", "day", "dayPeriod", "hour", "minute",
+    "second", "timeZoneName"];
+  // 12.5.1 CanonicalCodeForDisplayNames
+  function CanonicalCodeForDisplayNames(type, code) {
+    if (type === "language") {
+      var parts = code.split("-");
+      for (var i = 0; i < parts.length; i++) if (parts[i].length === 1) throw rangeError("Invalid language code: " + code);
+      if (!IsStructurallyValidLanguageTag(code)) throw rangeError("Invalid language code: " + code);
+      var b = parseBaseName(code);
+      if (!isLanguageSubtag(b.language) || b.baseName !== code) throw rangeError("Invalid language code: " + code);
+      return CanonicalizeUnicodeLocaleId(code);
+    }
+    if (type === "region") {
+      if (!isRegionSubtag(code)) throw rangeError("Invalid region code: " + code);
+      return asciiUpper(code);
+    }
+    if (type === "script") {
+      if (!isScriptSubtag(code)) throw rangeError("Invalid script code: " + code);
+      return asciiUpper(code[0]) + asciiLower(code.slice(1));
+    }
+    if (type === "calendar") {
+      if (!isUnicodeType(code) || code.indexOf("_") >= 0) throw rangeError("Invalid calendar code: " + code);
+      return asciiLower(code);
+    }
+    if (type === "dateTimeField") {
+      if (DATE_TIME_FIELDS.indexOf(code) < 0) throw rangeError("Invalid dateTimeField code: " + code);
+      return code;
+    }
+    if (!IsWellFormedCurrencyCode(code)) throw rangeError("Invalid currency code: " + code);
+    return asciiUpper(code);
+  }
+  method(DisplayNamesProto, "of", { of(code) {
+    var s = slotsOf(this, "DisplayNames", "Intl.DisplayNames.prototype.of");
+    code = ToString(code);
+    code = CanonicalCodeForDisplayNames(s.type, code);
+    var name = intlOp(16, s.locale, code, s.type, s.style);
+    if (name !== undefined) return name;
+    return s.fallback === "code" ? code : undefined;
+  } }.of);
+  method(DisplayNamesProto, "resolvedOptions", { resolvedOptions() {
+    var s = slotsOf(this, "DisplayNames", "Intl.DisplayNames.prototype.resolvedOptions"), r = {};
+    cdp(r, "locale", s.locale);
+    cdp(r, "style", s.style);
+    cdp(r, "type", s.type);
+    cdp(r, "fallback", s.fallback);
+    if (s.type === "language") cdp(r, "languageDisplay", s.languageDisplay);
+    return r;
+  } }.resolvedOptions);
+
+  // ---------------- 19 Segmenter ----------------
+  var SegmenterProto = {};
+  function Segmenter(locales = undefined, options = undefined) {
+    if (new.target === undefined) throw typeError("Constructor Intl.Segmenter requires 'new'");
+    var o = createFrom(new.target, SegmenterProto);
+    var res = ResolveOptions(availableLocales(), noData, [], [], locales, options, false);
+    options = res.options;
+    var s = rec();
+    s.kind = "Segmenter";
+    s.locale = res.resolved.locale;
+    s.granularity = GetOption(options, "granularity", "string", ["grapheme", "word", "sentence"], "grapheme");
+    new Slots(o, s);
+    return o;
+  }
+  makeService(Segmenter, "Segmenter", 0, SegmenterProto);
+  // the segment boundaries of a string: starts and word-likeness, computed once per Segments object
+  function segmentTable(seg, str) {
+    var b = str === "" ? [] : intlOp(50, seg.locale, seg.granularity, str), starts = [0], wl = [];
+    if (b === undefined) {
+      // no ICU: code points
+      b = [];
+      for (var i = 0; i < str.length; i++) {
+        var c = str.charCodeAt(i);
+        if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) i++;
+        append(b, i + 1); append(b, false);
+      }
+    }
+    for (var k = 0; k < b.length; k += 2) {
+      if (b[k] <= starts[starts.length - 1]) continue;
+      append(wl, b[k + 1]);
+      append(starts, b[k]);
+    }
+    if (starts[starts.length - 1] !== str.length && str.length > 0) { append(wl, false); append(starts, str.length); }
+    return { starts: starts, wordLike: wl };
+  }
+  // 19.7.1 CreateSegmentDataObject
+  function segmentData(seg, str, t, i) {
+    var r = {}, start = t.starts[i], end = t.starts[i + 1];
+    cdp(r, "segment", str.slice(start, end));
+    cdp(r, "index", start);
+    cdp(r, "input", str);
+    if (seg.granularity === "word") cdp(r, "isWordLike", t.wordLike[i]);
+    return r;
+  }
+  function segmentIndexAt(t, n) {
+    var lo = 0, hi = t.starts.length - 2;
+    while (lo < hi) {
+      var mid = (lo + hi + 1) >> 1;
+      if (t.starts[mid] <= n) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  }
+  var SegmentsProto = {};
+  method(SegmenterProto, "segment", { segment(string) {
+    var s = slotsOf(this, "Segmenter", "Intl.Segmenter.prototype.segment");
+    var str = ToString(string), o = ObjectCreate(SegmentsProto), ss = rec();
+    ss.kind = "Segments"; ss.segmenter = s; ss.string = str; ss.table = undefined;
+    new Slots(o, ss);
+    return o;
+  } }.segment);
+  function tableOf(ss) { if (ss.table === undefined) ss.table = segmentTable(ss.segmenter, ss.string); return ss.table; }
+  method(SegmentsProto, "containing", { containing(index) {
+    var ss = slotsOf(this, "Segments", "%Segments.prototype%.containing");
+    var n = ToNumber(index);
+    n = NumberIsNaN(n) ? 0 : n < 0 ? -MathFloor(-n) : MathFloor(n);
+    if (n < 0 || n >= ss.string.length) return undefined;
+    var t = tableOf(ss);
+    return segmentData(ss.segmenter, ss.string, t, segmentIndexAt(t, n));
+  } }.containing);
+  var IteratorPrototype = ObjectGetPrototypeOf(ObjectGetPrototypeOf([][Sym.iterator]()));
+  var SegmentIteratorProto = ObjectCreate(IteratorPrototype);
+  tag(SegmentIteratorProto, "Segmenter String Iterator");
+  def(SegmentsProto, Sym.iterator, { [Sym.iterator]() {
+    var ss = slotsOf(this, "Segments", "%Segments.prototype%[@@iterator]");
+    var it = ObjectCreate(SegmentIteratorProto), si = rec();
+    si.kind = "SegmentIterator"; si.segments = ss; si.position = 0;
+    new Slots(it, si);
+    return it;
+  } }[Sym.iterator]);
+  method(SegmentIteratorProto, "next", { next() {
+    var si = slotsOf(this, "SegmentIterator", "%SegmentIterator.prototype%.next"), ss = si.segments, r = {};
+    if (si.position >= ss.string.length) { cdp(r, "value", undefined); cdp(r, "done", true); return r; }
+    var t = tableOf(ss), i = segmentIndexAt(t, si.position);
+    si.position = t.starts[i + 1];
+    cdp(r, "value", segmentData(ss.segmenter, ss.string, t, i));
+    cdp(r, "done", false);
+    return r;
+  } }.next);
+  method(SegmenterProto, "resolvedOptions", { resolvedOptions() {
+    var s = slotsOf(this, "Segmenter", "Intl.Segmenter.prototype.resolvedOptions"), r = {};
+    cdp(r, "locale", s.locale);
+    cdp(r, "granularity", s.granularity);
+    return r;
+  } }.resolvedOptions);
+
+  // ---------------- 13 DurationFormat ----------------
+  // [unit, styles, digitalBase, NumberFormat unit]
+  var DURATION_UNITS = [
+    ["years", ["long", "short", "narrow"], "short", "year"], ["months", ["long", "short", "narrow"], "short", "month"],
+    ["weeks", ["long", "short", "narrow"], "short", "week"], ["days", ["long", "short", "narrow"], "short", "day"],
+    ["hours", ["long", "short", "narrow", "numeric", "2-digit"], "numeric", "hour"],
+    ["minutes", ["long", "short", "narrow", "numeric", "2-digit"], "numeric", "minute"],
+    ["seconds", ["long", "short", "narrow", "numeric", "2-digit"], "numeric", "second"],
+    ["milliseconds", ["long", "short", "narrow", "numeric"], "numeric", "millisecond"],
+    ["microseconds", ["long", "short", "narrow", "numeric"], "numeric", "microsecond"],
+    ["nanoseconds", ["long", "short", "narrow", "numeric"], "numeric", "nanosecond"]];
+  var TemporalDurationFrom = G.Temporal !== undefined ? G.Temporal.Duration.from : undefined;
+  var durationGetters = rec();
+  if (G.Temporal !== undefined) {
+    for (var dui = 0; dui < DURATION_UNITS.length; dui++) {
+      var duName = DURATION_UNITS[dui][0];
+      durationGetters[duName] = Object.getOwnPropertyDescriptor(G.Temporal.Duration.prototype, duName).get;
+    }
+    durationGetters.sign = Object.getOwnPropertyDescriptor(G.Temporal.Duration.prototype, "sign").get;
+  }
+  // 13.5.6 GetDurationUnitOptions
+  function GetDurationUnitOptions(unit, options, baseStyle, styles, digitalBase, prevStyle, twoDigitHours) {
+    var style = GetOption(options, unit, "string", styles, undefined), displayDefault = "always";
+    var hms = unit === "hours" || unit === "minutes" || unit === "seconds";
+    if (style === undefined) {
+      if (baseStyle === "digital") { if (!hms) displayDefault = "auto"; style = digitalBase; }
+      else if (prevStyle === "fractional" || prevStyle === "numeric" || prevStyle === "2-digit") {
+        if (unit !== "minutes" && unit !== "seconds") displayDefault = "auto";
+        style = "numeric";
+      } else { displayDefault = "auto"; style = baseStyle; }
+    }
+    if (style === "numeric" && (unit === "milliseconds" || unit === "microseconds" || unit === "nanoseconds")) {
+      style = "fractional"; displayDefault = "auto";
+    }
+    var display = GetOption(options, unit + "Display", "string", ["auto", "always"], displayDefault);
+    if (display === "always" && style === "fractional") throw rangeError(unit + "Display cannot be always with a fractional style");
+    if (prevStyle === "fractional" && style !== "fractional") throw rangeError(unit + " must be fractional after a fractional unit");
+    if (prevStyle === "numeric" || prevStyle === "2-digit") {
+      if (style !== "fractional" && style !== "numeric" && style !== "2-digit") throw rangeError(unit + " must be numeric after a numeric unit");
+      if (unit === "minutes" || unit === "seconds") style = "2-digit";
+    }
+    if (unit === "hours" && twoDigitHours) style = "2-digit";
+    var r = rec(); r.style = style; r.display = display;
+    return r;
+  }
+  var DurationFormatProto = {};
+  function DurationFormat(locales = undefined, options = undefined) {
+    if (new.target === undefined) throw typeError("Constructor Intl.DurationFormat requires 'new'");
+    var o = createFrom(new.target, DurationFormatProto);
+    var res = ResolveOptions(availableLocales(), nuData, ["nu"], [["numberingSystem", "nu", "string", undefined]], locales, options, false);
+    options = res.options;
+    var s = rec();
+    s.kind = "DurationFormat";
+    s.locale = res.resolved.locale;
+    s.numberingSystem = res.resolved.nu;
+    s.style = GetOption(options, "style", "string", ["long", "short", "narrow", "digital"], "short");
+    var prev = "";
+    s.units = rec();
+    for (var i = 0; i < DURATION_UNITS.length; i++) {
+      var u = DURATION_UNITS[i];
+      var uo = GetDurationUnitOptions(u[0], options, s.style, u[1], u[2], prev, false);
+      s.units[u[0]] = uo;
+      if (u[0] === "hours" || u[0] === "minutes" || u[0] === "seconds" || u[0] === "milliseconds" || u[0] === "microseconds") prev = uo.style;
+    }
+    s.fractionalDigits = GetNumberOption(options, "fractionalDigits", 0, 9, undefined);
+    new Slots(o, s);
+    return o;
+  }
+  makeService(DurationFormat, "DurationFormat", 0, DurationFormatProto);
+  function durationRecord(d) {
+    if (TemporalDurationFrom === undefined) throw typeError("Temporal is not available");
+    var td = TemporalDurationFrom(d), r = rec();
+    for (var i = 0; i < DURATION_UNITS.length; i++) r[DURATION_UNITS[i][0]] = durationGetters[DURATION_UNITS[i][0]].call(td);
+    r.sign = durationGetters.sign.call(td);
+    return r;
+  }
+  // a decimal string of seconds-like value + the fractional units: exact (BigInt nanoseconds)
+  function withFraction(s, d, unit) {
+    var scale = { seconds: [1000000000n, ["milliseconds", 1000000n], ["microseconds", 1000n], ["nanoseconds", 1n]],
+      milliseconds: [1000000n, ["microseconds", 1000n], ["nanoseconds", 1n]], microseconds: [1000n, ["nanoseconds", 1n]] }[unit];
+    var total = BigInt(d[unit]) * scale[0], digits = 0;
+    for (var i = 1; i < scale.length; i++) {
+      if (s.units[scale[i][0]].style === "fractional") total += BigInt(d[scale[i][0]]) * scale[i][1];
+    }
+    var neg = total < 0n;
+    if (neg) total = -total;
+    var str = "" + total, places = ("" + scale[0]).length - 1;
+    while (str.length <= places) str = "0" + str;
+    var dec = str.slice(0, str.length - places) + "." + str.slice(str.length - places);
+    return { d: (neg ? "-" : "") + dec };
+  }
+  function NextUnitFractional(s, unit) {
+    if (unit === "seconds") return s.units.milliseconds.style === "fractional";
+    if (unit === "milliseconds") return s.units.microseconds.style === "fractional";
+    if (unit === "microseconds") return s.units.nanoseconds.style === "fractional";
+    return false;
+  }
+  function durationNF(s, opts) {
+    var o = {};
+    for (var k in opts) cdp(o, k, opts[k]);
+    return initNumberFormat(s.locale, o);
+  }
+  function unitParts(s, nfopts, value, unit) {
+    var p = FormatNumericToParts(durationNF(s, nfopts), value), out = [];
+    for (var i = 0; i < p.length; i++) append(out, [p[i].type, p[i].value, unit]);
+    return out;
+  }
+  function negZero(v) { return typeof v === "number" ? -0 : { d: "-0" }; }
+  function isZero(v) { return typeof v === "number" ? v === 0 : /^-?0*\.?0*$/.test(v.d); }
+  function FormatNumericUnits(s, d, first, signDisplayed) {
+    var out = [], hv = d.hours, mv = d.minutes, sv = d.seconds;
+    if (d.milliseconds !== 0 || d.microseconds !== 0 || d.nanoseconds !== 0) sv = withFraction(s, d, "seconds");
+    var hf = first === "hours" && (hv !== 0 || s.units.hours.display === "always");
+    var sf = !isZero(typeof sv === "number" ? sv : sv) || s.units.seconds.display === "always";
+    var mf = false;
+    if (first === "hours" || first === "minutes") {
+      if (hf && sf) mf = true;
+      else if (mv !== 0 || s.units.minutes.display === "always") mf = true;
+    }
+    function opts(unit, sd) {
+      var o = rec();
+      o.numberingSystem = s.numberingSystem;
+      if (s.units[unit].style === "2-digit") o.minimumIntegerDigits = 2;
+      if (!sd) o.signDisplay = "never";
+      o.useGrouping = false;
+      return o;
+    }
+    if (hf) {
+      if (signDisplayed && hv === 0 && d.sign === -1) hv = -0;
+      var p = unitParts(s, opts("hours", signDisplayed), hv, "hour");
+      for (var i = 0; i < p.length; i++) append(out, p[i]);
+      signDisplayed = false;
+    }
+    if (mf) {
+      if (signDisplayed && mv === 0 && d.sign === -1) mv = -0;
+      if (hf) append(out, ["literal", ":"]);
+      p = unitParts(s, opts("minutes", signDisplayed), mv, "minute");
+      for (i = 0; i < p.length; i++) append(out, p[i]);
+      signDisplayed = false;
+    }
+    if (sf) {
+      if (mf) append(out, ["literal", ":"]);
+      var so = opts("seconds", signDisplayed);
+      if (s.fractionalDigits === undefined) { so.maximumFractionDigits = 9; so.minimumFractionDigits = 0; }
+      else { so.maximumFractionDigits = s.fractionalDigits; so.minimumFractionDigits = s.fractionalDigits; }
+      so.roundingMode = "trunc";
+      if (typeof sv === "number" && signDisplayed && sv === 0 && d.sign === -1) sv = -0;
+      p = unitParts(s, so, sv, "second");
+      for (i = 0; i < p.length; i++) append(out, p[i]);
+    }
+    return out;
+  }
+  // 13.5.15 PartitionDurationFormatPattern
+  function PartitionDurationFormatPattern(s, d) {
+    var result = [], signDisplayed = true, numericFound = false;
+    for (var i = 0; i < DURATION_UNITS.length && !numericFound; i++) {
+      var unit = DURATION_UNITS[i][0], nfUnit = DURATION_UNITS[i][3], uo = s.units[unit], value = d[unit];
+      if (uo.style === "numeric" || uo.style === "2-digit") {
+        var np = FormatNumericUnits(s, d, unit, signDisplayed);
+        if (np.length > 0) append(result, np);
+        numericFound = true;
+      } else {
+        var o = rec();
+        if (NextUnitFractional(s, unit)) {
+          value = withFraction(s, d, unit);
+          if (s.fractionalDigits === undefined) { o.maximumFractionDigits = 9; o.minimumFractionDigits = 0; }
+          else { o.maximumFractionDigits = s.fractionalDigits; o.minimumFractionDigits = s.fractionalDigits; }
+          o.roundingMode = "trunc";
+          numericFound = true;
+        }
+        if (uo.display === "always" || !isZero(typeof value === "number" ? value : value)) {
+          o.numberingSystem = s.numberingSystem;
+          if (signDisplayed) {
+            signDisplayed = false;
+            if (isZero(typeof value === "number" ? value : value) && d.sign === -1) value = negZero(value);
+          } else o.signDisplay = "never";
+          o.style = "unit"; o.unit = nfUnit; o.unitDisplay = uo.style;
+          append(result, unitParts(s, o, value, nfUnit));
+        }
+      }
+    }
+    // 13.5.14 ListFormatParts
+    var ls = s.style === "digital" ? "short" : s.style, strings = [];
+    for (i = 0; i < result.length; i++) {
+      var str = "";
+      for (var j = 0; j < result[i].length; j++) str += result[i][j][1];
+      append(strings, str);
+    }
+    if (strings.length === 0) return [];
+    var lp = intlOp(13, removeUnicodeExtension(s.locale), strings, "unit", ls), out = [], k = 0;
+    if (lp === undefined) { lp = []; for (i = 0; i < strings.length; i++) { if (i > 0) append(lp, ["literal", ", "]); append(lp, ["element", strings[i]]); } }
+    for (i = 0; i < lp.length; i++) {
+      if (lp[i][0] === "element") { var parts = result[k++]; for (j = 0; j < parts.length; j++) append(out, parts[j]); }
+      else append(out, ["literal", lp[i][1]]);
+    }
+    return out;
+  }
+  method(DurationFormatProto, "format", { format(duration) {
+    var s = slotsOf(this, "DurationFormat", "Intl.DurationFormat.prototype.format");
+    var p = PartitionDurationFormatPattern(s, durationRecord(duration)), r = "";
+    for (var i = 0; i < p.length; i++) r += p[i][1];
+    return r;
+  } }.format);
+  method(DurationFormatProto, "formatToParts", { formatToParts(duration) {
+    var s = slotsOf(this, "DurationFormat", "Intl.DurationFormat.prototype.formatToParts");
+    var p = PartitionDurationFormatPattern(s, durationRecord(duration)), out = [];
+    for (var i = 0; i < p.length; i++) {
+      var part = {};
+      cdp(part, "type", p[i][0]);
+      cdp(part, "value", p[i][1]);
+      if (p[i].length > 2 && p[i][2] !== undefined) cdp(part, "unit", p[i][2]);
+      cdp(out, i, part);
+    }
+    return out;
+  } }.formatToParts);
+  method(DurationFormatProto, "resolvedOptions", { resolvedOptions() {
+    var s = slotsOf(this, "DurationFormat", "Intl.DurationFormat.prototype.resolvedOptions"), r = {};
+    cdp(r, "locale", s.locale);
+    cdp(r, "numberingSystem", s.numberingSystem);
+    cdp(r, "style", s.style);
+    for (var i = 0; i < DURATION_UNITS.length; i++) {
+      var u = DURATION_UNITS[i][0], uo = s.units[u], st = uo.style;
+      if (st === "fractional") st = "numeric";
+      cdp(r, u, st);
+      cdp(r, u + "Display", uo.display);
+    }
+    if (s.fractionalDigits !== undefined) cdp(r, "fractionalDigits", s.fractionalDigits);
+    return r;
+  } }.resolvedOptions);
+
+  if (temporal !== undefined) {
+    def(G.Temporal.Duration.prototype, "toLocaleString", { toLocaleString(locales = undefined, options = undefined) {
+      if (temporal.kind(this) !== "Duration") throw typeError("Temporal.Duration.prototype.toLocaleString called on an incompatible receiver");
+      var df = new DurationFormat(locales, options), p = PartitionDurationFormatPattern(Slots.get(df), durationRecord(this)), r = "";
+      for (var i = 0; i < p.length; i++) r += p[i][1];
+      return r;
+    } }.toLocaleString);
+  }
 
   def(G, "Intl", Intl);
 })

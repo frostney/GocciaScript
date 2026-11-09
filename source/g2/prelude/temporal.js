@@ -3441,4 +3441,33 @@
   def(Temporal, "Now", NowObj);
   ObjectDefineProperty(Temporal, SymToStringTag, { value: "Temporal", writable: false, enumerable: false, configurable: true });
   def(G, "Temporal", Temporal);
+
+  // what Intl (prelude/intl.js) needs to format Temporal values: the brand, and the instant to format in
+  // milliseconds (a plain value as UTC: a date at noon, a time on 1970-01-01)
+  function msOfNs(ns) { var q = ns / 1000000n; if (ns < 0n && q * 1000000n !== ns) q -= 1n; return Num(q); }
+  return {
+    kind(v) {
+      if (!isObject(v)) return undefined;
+      if (isPlainDate(v)) return "PlainDate";
+      if (isPlainYearMonth(v)) return "PlainYearMonth";
+      if (isPlainMonthDay(v)) return "PlainMonthDay";
+      if (isPlainTime(v)) return "PlainTime";
+      if (isPlainDateTime(v)) return "PlainDateTime";
+      if (isInstant(v)) return "Instant";
+      if (isZonedDateTime(v)) return "ZonedDateTime";
+      if (isDuration(v)) return "Duration";
+      return undefined;
+    },
+    calendar(v) { return calendarSlotOf(v); },
+    timeZone(v) { return getZDT(v).timeZone; },
+    ms(v) {
+      if (isPlainDate(v)) return msOfNs(GetUTCEpochNanoseconds(DateTime(getPD(v).isoDate, Time(12, 0, 0, 0, 0, 0))));
+      if (isPlainYearMonth(v)) return msOfNs(GetUTCEpochNanoseconds(DateTime(getPYM(v).isoDate, Time(12, 0, 0, 0, 0, 0))));
+      if (isPlainMonthDay(v)) return msOfNs(GetUTCEpochNanoseconds(DateTime(getPMD(v).isoDate, Time(12, 0, 0, 0, 0, 0))));
+      if (isPlainTime(v)) return msOfNs(GetUTCEpochNanoseconds(DateTime(ISODate(1970, 1, 1), getPT(v).time)));
+      if (isPlainDateTime(v)) return msOfNs(GetUTCEpochNanoseconds(getPDT(v).isoDateTime));
+      if (isInstant(v)) return msOfNs(getInst(v).ns);
+      return msOfNs(getZDT(v).ns);
+    }
+  };
 })

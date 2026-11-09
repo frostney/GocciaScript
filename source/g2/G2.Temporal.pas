@@ -8,12 +8,17 @@ unit G2.Temporal;
 
 interface
 
+uses
+  G2.Core;
+
 procedure InitTemporal;
+{ the internals the Temporal prelude returns, for the Intl prelude (undefined before InitTemporal) }
+function TemporalInternals: TValue;
 
 implementation
 
 uses
-  {$IFDEF UNIX}BaseUnix, Unix, Linux, UnixType, {$ENDIF}SysUtils, Classes, BigInteger, G2.Core, G2.Bytecode, G2.VM, G2.BigIntV,
+  {$IFDEF UNIX}BaseUnix, Unix, Linux, UnixType, {$ENDIF}SysUtils, Classes, BigInteger, G2.Bytecode, G2.VM, G2.BigIntV,
   G2.Snapshot, Goccia.Temporal.Utils, Goccia.Temporal.Calendar;
 
 {$I G2.Temporal.inc}
@@ -191,9 +196,20 @@ begin
   end;
 end;
 
+threadvar
+  TemporalInternalsV: TValue;
+  TemporalRooted: Boolean;
+
+function TemporalInternals: TValue;
+begin
+  if TemporalRooted then Result := TemporalInternalsV else Result := VUndefined;
+end;
+
 procedure InitTemporal;
 var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..6] of TValue; I: Integer; Ok: Boolean;
 begin
+  if not TemporalRooted then begin AddRoot(@TemporalInternalsV); TemporalRooted := True; end;
+  TemporalInternalsV := VUndefined;
   if not CompilePrelude('<temporal>', TemporalSrc, T, Err) then raise Exception.Create('temporal prelude: ' + string(Err));
   if not MakeScriptClosure(T, Clo) then raise Exception.Create('temporal prelude closure');
   if not CallValue(Clo, VUndefined, nil, 0, Fn) then raise Exception.Create('temporal prelude run');
@@ -209,6 +225,7 @@ begin
   for I := 1 to 6 do CA[I] := RootAt(TempTop - 7 + I);
   Ok := CallValue(RootAt(TempTop - 7), VUndefined, @CA[0], 7, R);
   PopRoots(6);
+  if Ok then TemporalInternalsV := R;
   if not Ok then
   begin
     PopRoots(1);
