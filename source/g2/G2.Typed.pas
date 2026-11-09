@@ -24,6 +24,7 @@ const
   okArrayBuffer = 15;
   okDataView = 16;
 
+  bfImmutable = $10;   { an immutable ArrayBuffer (the Immutable ArrayBuffer proposal): its bytes never change }
   bfShared = $20;
   bfResizable = $40;
   bfDetached = $80;
@@ -54,6 +55,8 @@ function BufferMaxLen(Buf: PObj): Int64;
 function BufferDetached(Buf: PObj): Boolean; inline;
 { 25.1.3.5 DetachArrayBuffer: the bytes go, every view sees length 0 }
 procedure DetachBuffer(Buf: PObj);
+{ IsImmutableBuffer of a typed array's or a DataView's buffer }
+function ViewImmutable(V: PObj): Boolean; inline;
 function TAKind(O: PObj): Integer; inline;
 function TAIsBig(O: PObj): Boolean; inline;
 function TALength(O: PObj): Integer; inline;
@@ -133,6 +136,11 @@ end;
 function BufferDetached(Buf: PObj): Boolean; inline;
 begin
   Result := (Buf^.OFlags and bfDetached) <> 0;
+end;
+
+function ViewImmutable(V: PObj): Boolean; inline;
+begin
+  Result := IsObject(V^.Aux1) and ((ObjOf(V^.Aux1)^.OFlags and bfImmutable) <> 0);
 end;
 
 procedure DetachBuffer(Buf: PObj);

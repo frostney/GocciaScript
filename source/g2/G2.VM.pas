@@ -1651,9 +1651,15 @@ begin
   { 10.4.3: a String object's characters and length are non-writable own properties }
   if (O^.OKind = okStringObj) and ((Key = AtomLength) or (IndexFromString(Key, Idx) and (Idx < StrOf(O^.Aux1)^.Len))) then
   begin Ok := False; Exit(True); end;
-  { 10.4.5.5 [[Set]] with the typed array as its own receiver: TypedArraySetElement, always true }
+  { 10.4.5.5 [[Set]] with the typed array as its own receiver: TypedArraySetElement, always true (false on an
+    immutable buffer) }
   if O^.OKind = okTypedArray then
   begin
+    if ViewImmutable(O) and (IndexFromString(Key, Idx) or CanonicalNumericNonIndex(Key)) then
+    begin
+      Ok := False;
+      Exit(True);
+    end;
     if IndexFromString(Key, Idx) then Exit(TAStoreValue(Obj, Idx, V));
     if CanonicalNumericNonIndex(Key) then Exit(TAStoreValue(Obj, -1, V));
   end;
@@ -1757,7 +1763,12 @@ begin
       { 10.4.5.5 a typed array on the chain answers a canonical numeric key: an invalid index sets nothing (true), a
         valid one is a writable data property, so the receiver gets its own }
       if W^.OKind = okTypedArray then
-        if CanonicalNumericNonIndex(Key) then Exit(True)
+        if ViewImmutable(W) and (CanonicalNumericNonIndex(Key) or IndexFromString(Key, Idx)) then
+        begin
+          Ok := False;
+          Exit(True);
+        end
+        else if CanonicalNumericNonIndex(Key) then Exit(True)
         else if IndexFromString(Key, Idx) then
         begin
           if TAOutOfBounds(W) or (Idx >= TALength(W)) then Exit(True);
@@ -1972,7 +1983,15 @@ function SetElemVS(Obj, Key, V: TValue; Strict: Boolean): Boolean;
 var Idx: Int64; O: PObj; E: PValueArray; K: PStr; I: Integer; D: Double;
 begin
   if IsObject(Obj) and (ObjOf(Obj)^.OKind = okTypedArray) and IndexFromValue(Key, Idx) then
+  begin
+    { 10.4.5.5: an immutable buffer's element is not set ([[Set]] false) }
+    if ViewImmutable(ObjOf(Obj)) then
+    begin
+      if Strict then Exit(ThrowTypeError('Cannot assign to an element of a typed array with an immutable buffer'));
+      Exit(True);
+    end;
     Exit(TAStoreValue(Obj, Idx, V));
+  end;
   if IsObject(Obj) and IndexFromValue(Key, Idx) and ((ObjOf(Obj)^.OFlags and 64) = 0) then
   begin
     O := ObjOf(Obj);
@@ -4269,7 +4288,7 @@ begin
             Continue;
           end;
           if (O^.OKind <> okTypedArray) or (CI < 0) or
-             ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached)) <> 0) or
+             ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached or bfImmutable)) <> 0) or
              (CI >= Int32(UInt32(O^.Aux2))) then goto LBail;
           P := @PBytes(PtrOf(ObjOf(O^.Aux1)^.Aux1))^.Data[0] + O^.Pad;
           if IsInt(V) then
@@ -5095,7 +5114,8 @@ LReload:
               E^.Len := CI + 1;
               Continue;
             end;
-            if (O^.OKind = okTypedArray) and (CI >= 0) and (CI < TALength(O)) and not TAIsBig(O) then
+            if (O^.OKind = okTypedArray) and (CI >= 0) and (CI < TALength(O)) and not TAIsBig(O) and
+               not ViewImmutable(O) then
             begin
               if IsInt(V) then begin TASetInt(O, CI, IntOf(V)); Continue; end;
               if IsDouble(V) then begin TASet(O, CI, DoubleOf(V)); Continue; end;

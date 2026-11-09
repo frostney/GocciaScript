@@ -253,7 +253,13 @@ begin
   if (P^.OKind = okTypedArray) and IndexFromString(Key, Idx) then
   begin
     { 10.4.5.1: an integer index is a property exactly when it is in range }
-    if Idx < TALength(P) then begin DataDesc(D, TAGet(P, Idx), True, True, True); Found := True; end;
+    if Idx < TALength(P) then
+    begin
+      { an immutable buffer's elements are not writable or configurable }
+      if ViewImmutable(P) then DataDesc(D, TAGet(P, Idx), False, True, False)
+      else DataDesc(D, TAGet(P, Idx), True, True, True);
+      Found := True;
+    end;
     Exit;
   end;
   if (P^.OKind = okTypedArray) and CanonicalNumericNonIndex(Key) then Exit;
@@ -547,6 +553,14 @@ begin
   begin
     { 10.4.5.3 }
     if Idx >= TALength(P) then Exit(True);
+    if ViewImmutable(P) then
+    begin
+      { ValidateAndApplyPropertyDescriptor against the current non-writable, non-configurable element }
+      if (D.HasConfigurable and D.Configurable) or (D.HasEnumerable and not D.Enumerable) or IsAccessorDesc(D) or
+         (D.HasWritable and D.Writable) or (D.HasValue and not SameValueV(D.Value, TAGet(P, Idx))) then Exit(True);
+      Ok := True;
+      Exit(True);
+    end;
     if (D.HasConfigurable and not D.Configurable) or (D.HasEnumerable and not D.Enumerable) or IsAccessorDesc(D) or
        (D.HasWritable and not D.Writable) then Exit(True);
     if D.HasValue and not TAStoreValue(O, Idx, D.Value) then Exit(False);
@@ -947,6 +961,7 @@ begin
     true); another receiver gets nothing for an invalid index (true), OrdinarySet for a valid one }
   if (ObjOf(O)^.OKind = okTypedArray) and (CanonicalNumericNonIndex(Key) or IndexFromString(Key, Idx)) then
   begin
+    if ViewImmutable(ObjOf(O)) then begin Ok := False; Exit(True); end;
     if O = Receiver then
     begin
       Ok := True;

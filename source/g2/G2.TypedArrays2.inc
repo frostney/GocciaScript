@@ -141,7 +141,7 @@ end;
 function TAP_CopyWithin(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, To_, From, Fin, Count, NewLen: Int64; ES: Integer; O: PObj;
 begin
-  if not ValidateTA(Args[0], Len) then Exit(False);
+  if not ValidateTAWrite(Args[0], Len) then Exit(False);
   if not RelIdx(Arg(Args, Argc, 1), Len, 0, To_) then Exit(False);
   if not RelIdx(Arg(Args, Argc, 2), Len, 0, From) then Exit(False);
   if not RelIdx(Arg(Args, Argc, 3), Len, Len, Fin) then Exit(False);
@@ -220,7 +220,7 @@ function TAP_FindLastIndex(Args: TArgs; Argc: Integer; var Res: TValue): Boolean
 function TAP_Fill(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, K, Fin: Int64; N: TValue; O: PObj;
 begin
-  if not ValidateTA(Args[0], Len) then Exit(False);
+  if not ValidateTAWrite(Args[0], Len) then Exit(False);
   if not ElemValue(Args[0], Arg(Args, Argc, 1), N) then Exit(False);
   PushRoot(N);
   Result := False;
@@ -426,7 +426,7 @@ function TAP_ReduceRight(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; 
 function TAP_Reverse(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var Len, Lo, Hi: Int64; ES, J: Integer; P: PByte; T: Byte;
 begin
-  if not ValidateTA(Args[0], Len) then Exit(False);
+  if not ValidateTAWrite(Args[0], Len) then Exit(False);
   ES := TAElemSize[TAKind(ObjOf(Args[0]))];
   P := TAData(ObjOf(Args[0]));
   Lo := 0; Hi := Len - 1;
@@ -448,6 +448,7 @@ var D: Double; Off, TLen, SLen, K: Int64; T, S: PObj; Src, V: TValue; Clone: arr
   SK, TK, ES: Integer; Tmp: PObj;
 begin
   if not NeedTA(Args, 'set') then Exit(False);
+  if ViewImmutable(ObjOf(Args[0])) then Exit(ThrowTypeError('the typed array''s buffer is immutable'));
   if not ToIntInf(Arg(Args, Argc, 2), D) then Exit(False);
   if D < 0 then Exit(ThrowError('RangeError', 'offset is out of bounds'));
   Src := Arg(Args, Argc, 1);
@@ -616,6 +617,8 @@ var Len, K: Int64; Saved, T: TValue; Base: Integer;
 begin
   if (Arg(Args, Argc, 1) <> VUndefined) and not IsCallable(Args[1]) then
     Exit(ThrowTypeError('The comparison function must be either a function or undefined'));
+  if not Copy and IsTA(Args[0]) and ViewImmutable(ObjOf(Args[0])) then
+    Exit(ThrowTypeError('the typed array''s buffer is immutable'));
   if not ValidateTA(Args[0], Len) then Exit(False);
   Base := TempTop;
   PushRoot(TASortFn); PushRoot(VUndefined); PushRoot(VUndefined); PushRoot(VUndefined);
@@ -662,7 +665,7 @@ begin
   ES := TAElemSize[TAKind(O)];
   CA[0] := O^.Aux1;
   CA[1] := MkNumber(O^.Pad + B * ES);
-  Result := TASpeciesCreate(Args[0], @CA[0], N, -1, Res);
+  Result := TASpeciesCreate(Args[0], @CA[0], N, -1, Res, False);
 end;
 
 { 23.2.3.33 toReversed }
@@ -814,6 +817,7 @@ var Idx: Int64; Little: Boolean; N, LE: TValue; O: PObj; ES, I: Integer; Bytes: 
   Q: QWord; D: Double; Base: Integer;
 begin
   if not NeedDV(Args, 'get/set') then Exit(False);
+  if IsSet and ViewImmutable(ObjOf(Args[0])) then Exit(ThrowTypeError('the DataView''s buffer is immutable'));
   if not ToIndex(Arg(Args, Argc, 1), Idx) then Exit(False);
   Base := TempTop;
   N := VUndefined;
@@ -979,6 +983,9 @@ begin
   Def(ArrayBufferProtoV, 'resize', AB_Resize, 1);
   Def(ArrayBufferProtoV, 'transfer', AB_Transfer, 0);
   Def(ArrayBufferProtoV, 'transferToFixedLength', AB_TransferToFixed, 0);
+  Def(ArrayBufferProtoV, 'transferToImmutable', AB_TransferToImmutable, 0);
+  Def(ArrayBufferProtoV, 'sliceToImmutable', AB_SliceToImmutable, 2);
+  Getter(ArrayBufferProtoV, 'immutable', AB_Immutable);
   Tag(ArrayBufferProtoV, 'ArrayBuffer');
 
   { %TypedArray% and %TypedArray%.prototype }

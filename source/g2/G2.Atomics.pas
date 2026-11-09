@@ -213,10 +213,12 @@ end;
 
 { 25.4.3.1 ValidateIntegerTypedArray: an attached, in-bounds integer typed array; Waitable: Int32Array or
   BigInt64Array }
-function ValidateIntTA(V: TValue; Waitable: Boolean; var O: PObj): Boolean;
+{ Write: the operation stores (ValidateTypedArray's write access: an immutable buffer is a TypeError) }
+function ValidateIntTA(V: TValue; Waitable: Boolean; var O: PObj; Write: Boolean = False): Boolean;
 begin
   if not IsObject(V) or (ObjOf(V)^.OKind <> okTypedArray) then Exit(ThrowTypeError('Atomics operation on a non-TypedArray'));
   O := ObjOf(V);
+  if Write and ViewImmutable(O) then Exit(ThrowTypeError('Atomics operation on a TypedArray with an immutable buffer'));
   if TAOutOfBounds(O) then Exit(ThrowTypeError('Atomics operation on a detached or out-of-bounds TypedArray'));
   if Waitable then
   begin
@@ -293,7 +295,7 @@ end;
 function DoRMW(Args: TArgs; Argc: Integer; Op: TAtomicOp; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64; Old, Bits: QWord; V: TValue;
 begin
-  if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
+  if not ValidateIntTA(Arg(Args, Argc, 1), False, O, True) then Exit(False);
   if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
   if not OperandBits(O, Arg(Args, Argc, 3), Bits, V) then Exit(False);
   O := ObjOf(Args[1]);   { a conversion may have run user code and collected garbage }
@@ -314,7 +316,7 @@ function Atomics_Xor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begi
 function Atomics_CompareExchange(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64; EB, RB, Old, Mask: QWord; W: Integer; V: TValue;
 begin
-  if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
+  if not ValidateIntTA(Arg(Args, Argc, 1), False, O, True) then Exit(False);
   if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
   if not OperandBits(O, Arg(Args, Argc, 3), EB, V) then Exit(False);
   O := ObjOf(Args[1]);
@@ -343,7 +345,7 @@ end;
 function Atomics_Store(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; P: PByte; ByteIdx: Int64; Bits: QWord; V: TValue;
 begin
-  if not ValidateIntTA(Arg(Args, Argc, 1), False, O) then Exit(False);
+  if not ValidateIntTA(Arg(Args, Argc, 1), False, O, True) then Exit(False);
   if not ValidateAccess(O, Arg(Args, Argc, 2), P, ByteIdx) then Exit(False);
   if not OperandBits(O, Arg(Args, Argc, 3), Bits, V) then Exit(False);
   O := ObjOf(Args[1]);

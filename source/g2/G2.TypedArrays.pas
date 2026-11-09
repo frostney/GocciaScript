@@ -124,6 +124,14 @@ begin
   Result := True;
 end;
 
+{ 23.2.4.4 ValidateTypedArray(O, seq-cst, write): an immutable buffer's view takes no writes }
+function ValidateTAWrite(V: TValue; var Len: Int64): Boolean;
+begin
+  if not IsTA(V) then Exit(ThrowTypeError('this is not a typed array'));
+  if ViewImmutable(ObjOf(V)) then Exit(ThrowTypeError('the typed array''s buffer is immutable'));
+  Result := ValidateTA(V, Len);
+end;
+
 function TAGetV(O: TValue; K: Int64): TValue; inline;
 begin
   if (K >= 0) and (K < TALength(ObjOf(O))) then Result := TAGet(ObjOf(O), K) else Result := VUndefined;
@@ -221,6 +229,7 @@ begin
     Exit(ThrowTypeError('ArrayBuffer species constructor did not return an ArrayBuffer'));
   NB := ObjOf(N);
   if BufferDetached(NB) then Exit(ThrowTypeError('ArrayBuffer species constructor returned a detached buffer'));
+  if (NB^.OFlags and bfImmutable) <> 0 then Exit(ThrowTypeError('ArrayBuffer species constructor returned an immutable buffer'));
   if N = Args[0] then Exit(ThrowTypeError('ArrayBuffer species constructor returned the same buffer'));
   if BufferLen(NB) < NewLen then Exit(ThrowTypeError('ArrayBuffer species constructor returned a too small buffer'));
   B := ObjOf(Args[0]);
@@ -254,7 +263,9 @@ begin
 end;
 
 { 25.1.3.3 ArrayBufferCopyAndDetach: transfer / transferToFixedLength }
-function CopyAndDetach(Args: TArgs; Argc: Integer; var Res: TValue; Preserve: Boolean; const Name: UnicodeString): Boolean;
+{ Immutable: transferToImmutable (the result is an immutable buffer) }
+function CopyAndDetach(Args: TArgs; Argc: Integer; var Res: TValue; Preserve: Boolean; const Name: UnicodeString;
+  Immutable: Boolean = False): Boolean;
 var B: PObj; NewLen, MaxLen: Int64; N: TValue;
 begin
   if not ThisBuffer(Args, Name, B) then Exit(False);
@@ -262,10 +273,13 @@ begin
   else if not ToIndex(Args[1], NewLen) then Exit(False);
   B := ObjOf(Args[0]);
   if BufferDetached(B) then Exit(ThrowTypeError('ArrayBuffer.prototype.' + Name + ' called on a detached buffer'));
+  if (B^.OFlags and bfImmutable) <> 0 then
+    Exit(ThrowTypeError('ArrayBuffer.prototype.' + Name + ' called on an immutable buffer'));
   if Preserve and ((B^.OFlags and bfResizable) <> 0) then MaxLen := BufferMaxLen(B) else MaxLen := -1;
   if not AllocBuffer(ArrayBufferCtor, NewLen, MaxLen, N) then Exit(False);
   B := ObjOf(Args[0]);
   if Min(NewLen, BufferLen(B)) > 0 then Move(BufferData(B)^, BufferData(ObjOf(N))^, Min(NewLen, BufferLen(B)));
+  if Immutable then ObjOf(N)^.OFlags := ObjOf(N)^.OFlags or bfImmutable;
   DetachBuffer(B);
   Res := N;
   Result := True;
@@ -275,6 +289,39 @@ function AB_Transfer(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin Result := CopyAndDetach(Args, Argc, Res, True, 'transfer'); end;
 function AB_TransferToFixed(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin Result := CopyAndDetach(Args, Argc, Res, False, 'transferToFixedLength'); end;
+{ 25.1.6.9 ArrayBuffer.prototype.transferToImmutable ( [ newLength ] ) }
+function AB_TransferToImmutable(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+begin Result := CopyAndDetach(Args, Argc, Res, False, 'transferToImmutable', True); end;
+
+{ 25.1.6.1 get ArrayBuffer.prototype.immutable }
+function AB_Immutable(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var B: PObj;
+begin
+  if not ThisBuffer(Args, 'immutable', B) then Exit(False);
+  Res := MkBool((B^.OFlags and bfImmutable) <> 0);
+  Result := True;
+end;
+
+{ 25.1.6.8 ArrayBuffer.prototype.sliceToImmutable ( start , end ): AllocateImmutableArrayBuffer of the range }
+function AB_SliceToImmutable(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var B: PObj; Len, First, Fin, NewLen: Int64; N: TValue;
+begin
+  if not ThisBuffer(Args, 'sliceToImmutable', B) then Exit(False);
+  if BufferDetached(B) then Exit(ThrowTypeError('ArrayBuffer.prototype.sliceToImmutable called on a detached buffer'));
+  Len := BufferLen(B);
+  if not RelIdx(Arg(Args, Argc, 1), Len, 0, First) then Exit(False);
+  if not RelIdx(Arg(Args, Argc, 2), Len, Len, Fin) then Exit(False);
+  NewLen := Max(Fin - First, 0);
+  B := ObjOf(Args[0]);
+  if BufferDetached(B) then Exit(ThrowTypeError('the ArrayBuffer was detached'));
+  if BufferLen(B) < Fin then Exit(ThrowError('RangeError', 'the ArrayBuffer was resized below the end of the slice'));
+  if not AllocBuffer(ArrayBufferCtor, NewLen, -1, N) then Exit(False);
+  B := ObjOf(Args[0]);
+  if NewLen > 0 then Move((BufferData(B) + First)^, BufferData(ObjOf(N))^, NewLen);
+  ObjOf(N)^.OFlags := ObjOf(N)^.OFlags or bfImmutable;
+  Res := N;
+  Result := True;
+end;
 
 { 25.1.5.1 ArrayBuffer.isView }
 function AB_IsView(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
@@ -293,6 +340,7 @@ function DetachArrayBufferV(B: TValue): Boolean;
 begin
   if not IsBuffer(B) or ((ObjOf(B)^.OFlags and bfShared) <> 0) then
     Exit(ThrowTypeError('detachArrayBuffer: not an ArrayBuffer'));
+  if (ObjOf(B)^.OFlags and bfImmutable) <> 0 then Exit(ThrowTypeError('an immutable ArrayBuffer cannot be detached'));
   DetachBuffer(ObjOf(B));
   Result := True;
 end;
@@ -487,22 +535,29 @@ begin
 end;
 
 { 23.2.4.2 TypedArrayCreateFromConstructor (ArgLen >= 0: the argument list is that single number) }
-function TACreateFromCtor(C: TValue; ArgsP: PValue; NArgs: Integer; ArgLen: Int64; var T: TValue): Boolean;
+function TACreateFromCtor(C: TValue; ArgsP: PValue; NArgs: Integer; ArgLen: Int64; var T: TValue;
+  Write: Boolean = True): Boolean;
 var Len: Int64;
 begin
   if not Construct(C, ArgsP, NArgs, C, T) then Exit(False);
-  if not ValidateTA(T, Len) then Exit(False);
+  { the immutable ArrayBuffer proposal: a result that is written must not view an immutable buffer }
+  if Write then
+  begin
+    if not ValidateTAWrite(T, Len) then Exit(False);
+  end
+  else if not ValidateTA(T, Len) then Exit(False);
   if (ArgLen >= 0) and (Len < ArgLen) then Exit(ThrowTypeError('the species constructor returned a too short typed array'));
   Result := True;
 end;
 
 { 23.2.4.1 TypedArraySpeciesCreate }
-function TASpeciesCreate(Exemplar: TValue; ArgsP: PValue; NArgs: Integer; ArgLen: Int64; var T: TValue): Boolean;
+function TASpeciesCreate(Exemplar: TValue; ArgsP: PValue; NArgs: Integer; ArgLen: Int64; var T: TValue;
+  Write: Boolean = True): Boolean;
 var C: TValue; Big: Boolean;
 begin
   Big := TAIsBig(ObjOf(Exemplar));
   if not SpeciesCtor(Exemplar, TACtors[TAKind(ObjOf(Exemplar))], C) then Exit(False);
-  if not TACreateFromCtor(C, ArgsP, NArgs, ArgLen, T) then Exit(False);
+  if not TACreateFromCtor(C, ArgsP, NArgs, ArgLen, T, Write) then Exit(False);
   if TAIsBig(ObjOf(T)) <> Big then Exit(ThrowTypeError('Content type mismatch: BigInt and Number typed arrays'));
   Result := True;
 end;
