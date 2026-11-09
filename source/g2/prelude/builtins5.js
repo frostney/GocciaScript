@@ -288,7 +288,10 @@
     difference(other) {
       var O = thisSet(this), rec = setRecord(other), r = copySet(O), v;
       if (apply(setSize, O, []) <= rec.size) {
-        eachOf(O, function (e) { if (apply(rec.has, rec.set, [e])) apply(setDelete, r, [e]); });
+        // step 6: the elements of the copy as it was (has may change the this-value, not the copy)
+        var elems = [], n = 0;
+        eachOf(r, function (e) { defineProperty(elems, n++, { value: e, writable: true, enumerable: true, configurable: true }); });
+        for (var i = 0; i < n; i++) if (apply(rec.has, rec.set, [elems[i]])) apply(setDelete, r, [elems[i]]);
       } else {
         var k = keysIter(rec);
         while ((v = stepValue(k)) !== DONE) apply(setDelete, r, [canon(v)]);
