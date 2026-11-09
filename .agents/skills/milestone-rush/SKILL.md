@@ -177,8 +177,8 @@ Unsupported passive waiting required by repository policy blocks spawning.
   path requires a concrete decision, not an invented publisher or an assumed
   successful release.
 - Close the milestone only after its required release outcome is verified.
-  Remove only clean, merged worktrees created by this run; preserve and report
-  every other worktree.
+  [Remove merged worktrees](../git-workflow/SKILL.md#remove-merged-worktrees)
+  and report every worktree kept.
 
 ## Report
 

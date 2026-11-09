@@ -164,8 +164,8 @@ it is no gate and its adapter posts no trigger.
     with `delivery-wait`'s `workflow-terminal` wait, then recheck. If the
     gate still holds or the host cannot wait, return `ready` and unmerged
     with the default branch's state as the blocker. After the merge, sync the local
-    default branch, remove only
-    clean worktrees owned by this run, and report the merged PR, final head,
-    validation, reviews, and cleanup. For a native
+    default branch,
+    [remove merged worktrees](../../git-workflow/SKILL.md#remove-merged-worktrees),
+    and report the merged PR, final head, validation, reviews, and cleanup. For a native
     stack member, return `ready` without merging so the stack owner can recheck
     it.
