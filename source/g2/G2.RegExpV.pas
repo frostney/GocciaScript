@@ -1026,10 +1026,7 @@ end;
 { ToUint32 }
 function ToUint32Of(D: Double): Int64;
 begin
-  if IsNaN(D) or IsInfinite(D) then Exit(0);
-  D := Int(D);
-  D := D - 4294967296.0 * Floor(D / 4294967296.0);
-  Result := Trunc(D);
+  Result := DoubleToUint32Mod(D);
 end;
 
 { 22.2.6.14 for an unmodified RegExp (and RegExp's own species): the sticky splitter is unobservable }

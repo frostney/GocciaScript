@@ -184,6 +184,8 @@ function IsPtr(V: TValue): Boolean; inline;
 function PtrOf(V: TValue): Pointer; inline;
 function MkPtr(P: Pointer): TValue; inline;
 function MkInt(I: Int32): TValue; inline;
+{ 7.1.6 / 7.1.7: the integer part of D modulo 2^32, exactly (NaN and the infinities give 0); ToInt32 is its Int32 }
+function DoubleToUint32Mod(D: Double): UInt32;
 function IntOf(V: TValue): Int32; inline;
 function MkDouble(D: Double): TValue; inline;
 { the result of + - * / on two Numbers: every boxed NaN is canonical, so a NaN result is either one of them
@@ -336,6 +338,21 @@ function PtrOf(V: TValue): Pointer; inline; begin Result := Pointer(PtrUInt(V an
 function MkPtr(P: Pointer): TValue; inline; begin Result := TAG_PTR or QWord(PtrUInt(P)); end;
 function MkInt(I: Int32): TValue; inline; begin Result := TAG_INT or (QWord(Int64(I)) and $FFFFFFFF); end;
 function IntOf(V: TValue): Int32; inline; begin Result := Int32(UInt32(V)); end;
+
+function DoubleToUint32Mod(D: Double): UInt32;
+var Bits, M: QWord; E: Integer;
+begin
+  Bits := PQWord(@D)^;
+  E := Integer((Bits shr 52) and $7FF);
+  if (E = $7FF) or (E = 0) then Exit(0);   { NaN, an infinity; zero or below 1 }
+  M := (Bits and $FFFFFFFFFFFFF) or (QWord(1) shl 52);
+  E := E - 1075;   { D = M * 2^E }
+  if E >= 32 then Result := 0
+  else if E >= 0 then Result := UInt32(M shl E)
+  else if E > -53 then Result := UInt32(M shr (-E))
+  else Result := 0;
+  if (Bits shr 63) <> 0 then Result := UInt32(-Int64(Result));
+end;
 function MkArith(D: Double): TValue; inline;
 begin
   Result := PQWord(@D)^;

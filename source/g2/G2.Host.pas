@@ -304,13 +304,8 @@ begin
 end;
 
 function ToInt32JS(D: Double): Int32;
-var M: Double;
 begin
-  if IsNan(D) or IsInfinite(D) then Exit(0);
-  M := Int(D);
-  M := M - DFloor(M / 4294967296.0) * 4294967296.0;
-  if M >= 2147483648.0 then M := M - 4294967296.0;
-  Result := Int32(Trunc(M));
+  Result := Int32(DoubleToUint32Mod(D));
 end;
 
 function ToInt64JS(D: Double): Int64;

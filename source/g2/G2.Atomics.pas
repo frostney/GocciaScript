@@ -272,9 +272,7 @@ end;
 { the element's bits for D (an integer or an infinity), modulo 2^32: NumericToRawBytes through ToInt8..ToUint32 }
 function Bits32(D: Double): QWord;
 begin
-  if IsNaN(D) or IsInfinite(D) then Exit(0);
-  D := D - 4294967296.0 * DFloor(D / 4294967296.0);
-  Result := QWord(Trunc(D)) and $FFFFFFFF;
+  Result := DoubleToUint32Mod(D);
 end;
 
 { RawBytesToNumeric }

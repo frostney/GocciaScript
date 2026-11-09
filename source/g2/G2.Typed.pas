@@ -309,9 +309,7 @@ function ToInt32Wrap(D: Double): Int32; inline;
 begin
   if IsNaN(D) or IsInfinite(D) then Exit(0);
   if (D >= -2147483648.0) and (D <= 2147483647.0) then Exit(Trunc(D));
-  D := Int(D);
-  D := D - 4294967296.0 * DFloor(D / 4294967296.0);
-  Result := Int32(UInt32(Trunc(D)));
+  Result := Int32(DoubleToUint32Mod(D));
 end;
 
 { 7.1.12 ToUint8Clamp: round half to even }

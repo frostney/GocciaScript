@@ -922,8 +922,7 @@ begin
           taFloat16: PWord(@Bytes[0])^ := DoubleToHalf(D);
         else
           begin
-            if IsNaN(D) or IsInfinite(D) then Q := 0
-            else Q := QWord(Int64(Trunc(Int(D) - 4294967296.0 * DFloor(Int(D) / 4294967296.0))));
+            Q := DoubleToUint32Mod(D);
             PLongWord(@Bytes[0])^ := LongWord(Q);
           end;
         end;

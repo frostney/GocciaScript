@@ -366,10 +366,7 @@ function M_Fround(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin R
 
 function ToUint32D(D: Double): UInt32;
 begin
-  if IsNaN(D) or IsInfinite(D) then Exit(0);
-  D := Int(D);
-  D := D - DFloor(D / 4294967296.0) * 4294967296.0;
-  Result := UInt32(Trunc(D));
+  Result := DoubleToUint32Mod(D);
 end;
 
 function M_Imul(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;

@@ -107,10 +107,7 @@ begin
   if IsNaN(RD) or IsInfinite(RD) then Radix := 0
   else
   begin
-    RD := Int(RD);
-    RD := RD - Floor(RD / 4294967296.0) * 4294967296.0;
-    Radix := Trunc(RD);
-    if Radix >= 2147483648 then Radix := Radix - 4294967296;
+    Radix := Int32(DoubleToUint32Mod(RD));
   end;
   Sign := 1; I := 1;
   if (I <= Length(T)) and ((T[I] = '-') or (T[I] = '+')) then begin if T[I] = '-' then Sign := -1; Inc(I); end;

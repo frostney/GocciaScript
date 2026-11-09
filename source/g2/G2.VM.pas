@@ -3657,8 +3657,8 @@ begin
     opPow: R := NumberExponentiate(DA, DB);
   else
     begin
-      if IsNaN(DA) or IsInfinite(DA) then IA := 0 else IA := Int32(UInt32(Int64(Trunc(DA)) and $FFFFFFFF));
-      if IsNaN(DB) or IsInfinite(DB) then IB := 0 else IB := Int32(UInt32(Int64(Trunc(DB)) and $FFFFFFFF));
+      IA := Int32(DoubleToUint32Mod(DA));
+      IB := Int32(DoubleToUint32Mod(DB));
       case Op of
         opBitAnd: Res := MkInt(IA and IB);
         opBitOr: Res := MkInt(IA or IB);
