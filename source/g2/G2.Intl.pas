@@ -87,6 +87,41 @@ begin
   PopRoots(1);
 end;
 
+{ a number the host ICU formatted with ASCII digits for a numbering system it does not know (one newer than its
+  data): the system's own digits, from its zero digit (hanidec's are not contiguous: ICU knows it) }
+function MapDigits(const S, NS: string): string;
+var Z: UnicodeString; Zero, CP: Cardinal; I: Integer; U: UnicodeString;
+begin
+  Result := S;
+  if (NS = '') or (NS = 'latn') or (NS = 'hanidec') then Exit;
+  for I := 1 to Length(S) do
+    if S[I] in ['0'..'9'] then Break
+    else if I = Length(S) then Exit;
+  Z := DateTimeZeroDigit(UnicodeString(NS));
+  if Z = '' then Exit;
+  if (Length(Z) = 2) and (Ord(Z[1]) >= $D800) and (Ord(Z[1]) <= $DBFF) then
+    Zero := $10000 + (Cardinal(Ord(Z[1])) - $D800) shl 10 + (Cardinal(Ord(Z[2])) - $DC00)
+  else Zero := Ord(Z[1]);
+  U := UTF8Decode(S);
+  Result := '';
+  for I := 1 to Length(U) do
+    if (U[I] >= '0') and (U[I] <= '9') then
+    begin
+      CP := Zero + Cardinal(Ord(U[I]) - Ord('0'));
+      if CP >= $10000 then
+        Result := Result + UTF8Encode(UnicodeString(WideChar($D800 + ((CP - $10000) shr 10))) +
+          UnicodeString(WideChar($DC00 + ((CP - $10000) and $3FF))))
+      else Result := Result + UTF8Encode(UnicodeString(WideChar(CP)));
+    end
+    else Result := Result + UTF8Encode(UnicodeString(U[I]));
+end;
+
+procedure MapPartDigits(var P: TIntlFormatPartArray; const NS: string);
+var I: Integer;
+begin
+  for I := 0 to High(P) do P[I].Value := MapDigits(P[I].Value, NS);
+end;
+
 function PartsArray(const P: TIntlFormatPartArray): TValue;
 var I: Integer;
 begin
@@ -313,6 +348,48 @@ begin
   if Result then R := UTF8Decode(O);
 end;
 
+{ intlOp 20: a number (or a decimal string) formatted, as a string or parts. A numbering system newer than the
+  host ICU's data fails there: the number is then formatted in Latin digits and mapped to the system's }
+procedure FormatNumberOp(Args: TArgs; Argc: Integer; var Res: TValue);
+var Loc, NS, S: string; Opts: TIntlNumberFormatOptions; P: TIntlFormatPartArray; Dec, Parts, Ok: Boolean; Pass: Integer;
+begin
+  Loc := SArg(Args, Argc, 2);
+  Opts := NumOpts(Args[3]);
+  NS := Opts.NumberingSystem;
+  Dec := (Argc >= 5) and ToBool(Args[5]);
+  Parts := (Argc >= 6) and ToBool(Args[6]);
+  for Pass := 0 to 1 do
+  begin
+    if Pass = 1 then
+    begin
+      if (NS = '') or (DateTimeZeroDigit(UnicodeString(NS)) = '') then Exit;
+      Opts.NumberingSystem := '';
+      Loc := StringReplace(Loc, '-u-nu-' + NS, '', []);
+    end;
+    if Parts then
+    begin
+      if Dec then Ok := TryICUFormatNumberDecimalToParts(Loc, SArg(Args, Argc, 4), Opts, P)
+      else Ok := TryICUFormatNumberToParts(Loc, DArg(Args, Argc, 4), Opts, P);
+      if Ok then
+      begin
+        MapPartDigits(P, NS);
+        Res := PartsArray(P);
+        Exit;
+      end;
+    end
+    else
+    begin
+      if Dec then Ok := TryICUFormatNumberDecimal(Loc, SArg(Args, Argc, 4), Opts, S)
+      else Ok := TryICUFormatNumber(Loc, DArg(Args, Argc, 4), Opts, S);
+      if Ok then
+      begin
+        Res := UStr(MapDigits(S, NS));
+        Exit;
+      end;
+    end;
+  end;
+end;
+
 function Intl_Op(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 var S, T, Sym1, Sym2: string; U: UnicodeString; Sens: TIntlCollatorSensitivity; RP: TIntlRelativeTimePattern; BI: TIntlBreakIterator;
   G: TIntlSegmenterGranularity; Pos: Integer; Dg, W1, W2, W3, W4: Integer; WA: PObj; A: IntlTypes.TStringArray; P: TIntlFormatPartArray; Rules: TIntlPluralRuleSet;
@@ -399,24 +476,7 @@ begin
            DisplayStyle(SArg(Args, Argc, 5)), S) and (S <> '') then Res := UStr(S);
       end;
     17: Res := StrArray(IntlTypes.TStringArray(GetAvailablePrimaryTimeZoneIdentifiers));
-    20:
-      if (Argc >= 5) and ToBool(Args[5]) then
-      begin
-        { a decimal string: BigInts and exact decimals }
-        if (Argc >= 6) and ToBool(Args[6]) then
-        begin
-          if TryICUFormatNumberDecimalToParts(SArg(Args, Argc, 2), SArg(Args, Argc, 4), NumOpts(Args[3]), P) then
-            Res := PartsArray(P);
-        end
-        else if TryICUFormatNumberDecimal(SArg(Args, Argc, 2), SArg(Args, Argc, 4), NumOpts(Args[3]), S) then
-          Res := UStr(S);
-      end
-      else if (Argc >= 6) and ToBool(Args[6]) then
-      begin
-        if TryICUFormatNumberToParts(SArg(Args, Argc, 2), DArg(Args, Argc, 4), NumOpts(Args[3]), P) then
-          Res := PartsArray(P);
-      end
-      else if TryICUFormatNumber(SArg(Args, Argc, 2), DArg(Args, Argc, 4), NumOpts(Args[3]), S) then Res := UStr(S);
+    20: FormatNumberOp(Args, Argc, Res);
     21:
       if (Argc >= 6) and ToBool(Args[6]) then
       begin

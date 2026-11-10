@@ -98,6 +98,11 @@ function TryICUNormalize(const AForm, AStr: string; out AResult: string): Boolea
 function TryICUUpperCase(const ALocale, AStr: string; out AResult: string): Boolean;
 function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Boolean;
 
+// The zero digit of a numbering system with contiguous decimal digits (UTF-16,
+// one code point), '' when there is none. Lets a caller map ASCII digits when
+// the host ICU predates the numbering system.
+function DateTimeZeroDigit(const ANumberingSystem: string): string;
+
 implementation
 
 {$IFDEF LAKON}
@@ -366,6 +371,11 @@ function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Bool
 begin
   AResult := '';
   Result := False;
+end;
+
+function DateTimeZeroDigit(const ANumberingSystem: string): string;
+begin
+  Result := '';
 end;
 
 {$ELSE}
