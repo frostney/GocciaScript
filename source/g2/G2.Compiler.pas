@@ -89,6 +89,37 @@ type
     procedure LeavePart; override;
   end;
 
+type
+  { finds a yield or await expression (one inside a nested function too: conservative) }
+  TSuspendScan = class(TGocciaASTChildVisitor)
+  public
+    Found: Boolean;
+    procedure VisitChild(const ANode: TGocciaASTNode); override;
+    procedure EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+      const AFlags: TGocciaASTPartFlags); override;
+    procedure LeavePart; override;
+  end;
+
+procedure TSuspendScan.VisitChild(const ANode: TGocciaASTNode);
+begin
+  if (ANode = nil) or Found then Exit;
+  if (ANode is TGocciaYieldExpression) or (ANode is TGocciaAwaitExpression) then
+  begin
+    Found := True;
+    Exit;
+  end;
+  ANode.ForEachChild(Self);
+end;
+
+procedure TSuspendScan.EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+  const AFlags: TGocciaASTPartFlags);
+begin
+end;
+
+procedure TSuspendScan.LeavePart;
+begin
+end;
+
 procedure TClosureScan.VisitChild(const ANode: TGocciaASTNode);
 begin
   if (ANode = nil) or Found then Exit;
@@ -421,6 +452,9 @@ type
     procedure CompileReturn(S: TGocciaReturnStatement);
     procedure CompileBreakContinue(IsBreak: Boolean; const Lbl: UnicodeString);
     procedure CompileClass(Def: TGocciaClassDefinition; Dest: Integer; const NameHint: UnicodeString = '');
+    { 15.7.1 a class head (heritage, computed keys) is strict mode code: in non-strict code, run as a strict
+      arrow called at once }
+    procedure ClassHeadExprTo(E: TGocciaExpression; Dest: Integer);
     procedure CompileFieldValue(V: TGocciaExpression; Dest: Integer; const Name: UnicodeString);
     procedure EmitPrivateMethods(Def: TGocciaClassDefinition; Obj: Integer; Static: Boolean);
     procedure EmitClassInit(Def: TGocciaClassDefinition; Static: Boolean);
@@ -3780,6 +3814,31 @@ begin
   end;
 end;
 
+procedure TCompiler.ClassHeadExprTo(E: TGocciaExpression; Dest: Integer);
+var Scan: TSuspendScan; Suspends: Boolean; T: PFuncTemplate; Base: Integer; NoP: TGocciaParameterArray;
+begin
+  if FS.Tpl^.IsStrict then begin ExprTo(E, Dest); Exit; end;
+  Scan := TSuspendScan.Create;
+  try
+    Scan.VisitChild(E);
+    Suspends := Scan.Found;
+  finally
+    Scan.Free;
+  end;
+  { a yield or await belongs to the enclosing function: left as it is }
+  if Suspends then begin ExprTo(E, Dest); Exit; end;
+  SetLength(NoP, 0);
+  PendingStrict := 1;
+  T := CompileFunction('', NoP, E, True, False, False, False, False, False);
+  Base := AllocReg;
+  AllocReg;
+  EmitClosure(Base, T);
+  Emit(Ins(opLoadUndef, Base + 1, 0, 0));
+  Emit(Ins(opCall, Base, 0, 0));
+  if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
+  FreeTo(Base);
+end;
+
 procedure TCompiler.CompileClass(Def: TGocciaClassDefinition; Dest: Integer; const NameHint: UnicodeString);
 var Base, Ctor, Proto, Parent, Tmp, I, R, KeyReg, Target: Integer; CtorMethod: TGocciaClassMethod; T: PFuncTemplate;
   Derived: Boolean; NoParams: TGocciaParameterArray; Self_: Integer; E: TGocciaClassElement;
@@ -3815,7 +3874,7 @@ begin
   Derived := Assigned(Def.SuperClassExpression) or (Def.SuperClass <> '');
   if Derived then
   begin
-    if Assigned(Def.SuperClassExpression) then ExprTo(Def.SuperClassExpression, Parent)
+    if Assigned(Def.SuperClassExpression) then ClassHeadExprTo(Def.SuperClassExpression, Parent)
     else LoadIdent(Def.SuperClass, Parent);
   end;
   { 15.7.1 early errors; ClassHeritage is a LeftHandSideExpression: an arrow only in parentheses }
@@ -3912,7 +3971,7 @@ begin
           if E.IsComputed then
           begin
             KeyReg := AllocReg;
-            ExprTo(E.ComputedKeyExpression, KeyReg);
+            ClassHeadExprTo(E.ComputedKeyExpression, KeyReg);
             Emit(Ins(opToPropKey, KeyReg, KeyReg, 0));
             Name := '';
           end;
@@ -3957,7 +4016,7 @@ begin
         begin
           { ClassFieldDefinitionEvaluation: the key now, the value at initialization }
           R := DeclareLocal('%k' + IntToStr(I), True);
-          ExprTo(E.ComputedKeyExpression, R);
+          ClassHeadExprTo(E.ComputedKeyExpression, R);
           Emit(Ins(opToPropKey, R, R, 0));
         end;
     end;
