@@ -472,6 +472,91 @@ begin
   Result := TimeClip(T);
 end;
 
+{ one or two digits }
+function Digits12(var R: TDP; out V: Integer): Boolean;
+begin
+  if not Digits(R, 1, V) then Exit(False);
+  if (Peek(R) >= '0') and (Peek(R) <= '9') then V := V * 10 + Ord(Peek(R)) - Ord('0') else Exit(True);
+  Inc(R.P);
+  Result := True;
+end;
+
+{ an implementation-defined fallback (21.4.3.2) web engines accept: the date of the ISO form with one or two digit
+  month and day, a space, then H:M[:S[.fraction]] with one or two digit fields and an optional offset (Z, +HH,
+  +HHMM or +HH:MM); local time without one ("1997-3-8 1:1:1.01"). A T-separated string stays strictly ISO. }
+function ParseSpaceForm(const S: UnicodeString): Double;
+var R: TDP; Y, Mo, D, H, Mi, Sec, Ms, OH, OM, I, Sign: Integer; HasOffset: Boolean; OffMs, T: Double;
+begin
+  Result := NaN;
+  R.S := S; R.P := 1;
+  Sign := 1;
+  if (Peek(R) = '+') or (Peek(R) = '-') then
+  begin
+    if Peek(R) = '-' then Sign := -1;
+    Inc(R.P);
+    if not Digits(R, 6, Y) then Exit;
+    if (Sign = -1) and (Y = 0) then Exit;
+    Y := Y * Sign;
+  end
+  else if not Digits(R, 4, Y) then Exit;
+  if Peek(R) <> '-' then Exit;
+  Inc(R.P);
+  if not Digits12(R, Mo) then Exit;
+  if Peek(R) <> '-' then Exit;
+  Inc(R.P);
+  if not Digits12(R, D) then Exit;
+  if (Mo < 1) or (Mo > 12) or (D < 1) or (D > DaysInMonth(Y, Mo)) then Exit;
+  if Peek(R) <> ' ' then Exit;
+  Inc(R.P);
+  Sec := 0; Ms := 0;
+  if not Digits12(R, H) or (Peek(R) <> ':') then Exit;
+  Inc(R.P);
+  if not Digits12(R, Mi) then Exit;
+  if Peek(R) = ':' then
+  begin
+    Inc(R.P);
+    if not Digits12(R, Sec) then Exit;
+    if Peek(R) = '.' then
+    begin
+      Inc(R.P);
+      if (Peek(R) < '0') or (Peek(R) > '9') then Exit;
+      I := 0;
+      while (Peek(R) >= '0') and (Peek(R) <= '9') do
+      begin
+        if I < 3 then Ms := Ms * 10 + Ord(Peek(R)) - Ord('0');
+        Inc(I);
+        Inc(R.P);
+      end;
+      while I < 3 do begin Ms := Ms * 10; Inc(I); end;
+    end;
+  end;
+  if (H > 23) or (Mi > 59) or (Sec > 59) then Exit;
+  HasOffset := False;
+  OffMs := 0;
+  if Peek(R) = 'Z' then begin HasOffset := True; Inc(R.P); end
+  else if (Peek(R) = '+') or (Peek(R) = '-') then
+  begin
+    if Peek(R) = '-' then Sign := -1 else Sign := 1;
+    Inc(R.P);
+    if not Digits(R, 2, OH) then Exit;
+    OM := 0;
+    if Peek(R) = ':' then
+    begin
+      Inc(R.P);
+      if not Digits(R, 2, OM) then Exit;
+    end
+    else if (Peek(R) >= '0') and (Peek(R) <= '9') then
+      if not Digits(R, 2, OM) then Exit;
+    if (OH > 23) or (OM > 59) then Exit;
+    HasOffset := True;
+    OffMs := Sign * (OH * msPerHour + OM * msPerMinute);
+  end;
+  if R.P <= Length(R.S) then Exit;
+  T := MakeDate(MakeDay(Y, Mo - 1, D), MakeTime(H, Mi, Sec, Ms));
+  if HasOffset then T := T - OffMs else T := UTCOf(T);
+  Result := TimeClip(T);
+end;
+
 function MonthIndex(const S: UnicodeString): Integer;
 var I: Integer;
 begin
@@ -571,6 +656,7 @@ var T: UnicodeString;
 begin
   T := Trim(S);
   Result := ParseISO(T);
+  if IsNaN(Result) then Result := ParseSpaceForm(T);
   if IsNaN(Result) then Result := ParseToStringForm(T);
 end;
 
