@@ -166,9 +166,10 @@ begin
   Src := Arg(Args, Argc, 1);
   if not IsString(Src) then Exit(ThrowTypeError('ShadowRealm.prototype.evaluate requires a string'));
   CallerRealm := CurRealm;
-  { compiled in the evaluation realm: a Script's global declarations are its global environment's }
+  { compiled in the evaluation realm as an indirect eval's code (PerformShadowRealmEval): its vars are the realm's
+    globals, its lexical declarations a new environment of each evaluation }
   SwitchRealm(EvalRealm);
-  if not ParseAndCompile(StrToUnicode(StrOf(Src)), '<ShadowRealm>', True, T, Err, 1) then
+  if not ParseAndCompile(StrToUnicode(StrOf(Src)), '<ShadowRealm>', True, T, Err, 2) then
   begin
     SwitchRealm(CallerRealm);
     Exit(ThrowError('SyntaxError', Err));
