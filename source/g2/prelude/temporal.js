@@ -1506,11 +1506,19 @@
   }
   function CalendarMonthsInYear(cal, y) {
     var n = calOp(5, cal, y);
-    if (n === null) n = NonISOCalendarISOToDate(cal, CalendarIntegersToISO(cal, y, 1, 1)).monthsInYear;
+    if (n === null) n = NonISOCalendarISOToDate(cal, someDayOfMonth(cal, y, 1)).monthsInYear;
     return n;
   }
+  // an ISO date in month m of year y: day 1, or (in the months at the edge of the representable range, whose first
+  // days lie outside it) the first day of the month that converts
+  function someDayOfMonth(cal, y, m) {
+    var a = calOp(1, cal, y, m, false, false, 1, false);
+    for (var d = 2; a === null && d <= 31; d++) a = calOp(1, cal, y, m, false, false, d, false);
+    if (a === null) throw calRangeError();
+    return ISODate(a[0], a[1], a[2]);
+  }
   function CalendarDaysInMonth(cal, y, m) {
-    return NonISOCalendarISOToDate(cal, CalendarIntegersToISO(cal, y, m, 1)).daysInMonth;
+    return NonISOCalendarISOToDate(cal, someDayOfMonth(cal, y, m)).daysInMonth;
   }
   // the ISO date of day 1 of month code mc in year y, or null when the year has no such month
   function monthCodeStart(cal, y, mc) {
@@ -1707,7 +1715,7 @@
       if (!yearInRange(cal, f.year)) throw rangeError("year out of range");
       var miy = CalendarMonthsInYear(cal, f.year), month = f.month;
       if (month > miy) { if (overflow === "reject") throw rangeError("month out of range"); month = miy; }
-      if (f.monthCode === undefined) mc = NonISOCalendarISOToDate(cal, CalendarIntegersToISO(cal, f.year, month, 1)).monthCode;
+      if (f.monthCode === undefined) mc = NonISOCalendarISOToDate(cal, someDayOfMonth(cal, f.year, month)).monthCode;
       else mc = ConstrainMonthCode(cal, f.year, f.monthCode, overflow);
       dim = CalendarDaysInMonth(cal, f.year, month);
     } else {
