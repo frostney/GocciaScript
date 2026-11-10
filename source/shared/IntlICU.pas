@@ -65,6 +65,11 @@ function TryICUFormatDateTimeRangeToParts(const ALocale: string; AStartMillis, A
 
 function TryICUSelectPlural(const ALocale: string; AValue: Double;
   APluralType: TIntlPluralType; out ACategory: string): Boolean;
+// The plural category of AValue as the number skeleton ASkeleton formats it
+// (compact notation: its exponent is the CLDR plural operand e).
+function TryICUSelectPluralFormatted(const ALocale: string; AValue: Double;
+  APluralType: TIntlPluralType; const ASkeleton: string;
+  out ACategory: string): Boolean;
 
 function TryICUGetDisplayName(const ALocale, ACode: string;
   ADisplayType: TIntlDisplayNameType; AStyle: TIntlDisplayNameStyle;
@@ -279,6 +284,14 @@ end;
 
 function TryICUSelectPlural(const ALocale: string; AValue: Double;
   APluralType: TIntlPluralType; out ACategory: string): Boolean;
+begin
+  ACategory := '';
+  Result := False;
+end;
+
+function TryICUSelectPluralFormatted(const ALocale: string; AValue: Double;
+  APluralType: TIntlPluralType; const ASkeleton: string;
+  out ACategory: string): Boolean;
 begin
   ACategory := '';
   Result := False;
@@ -688,6 +701,9 @@ type
   TUplrulesSelect = function(ARules: Pointer; ANumber: Double;
     AKeyword: PUChar; ACapacity: LongInt;
     var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUplrulesSelectFormatted = function(ARules: Pointer; const ANumber: Pointer;
+    AKeyword: PUChar; ACapacity: LongInt;
+    var AStatus: TICUErrorCode): LongInt; cdecl;
   TUbrkOpen = function(AType: LongInt; const ALocale: PAnsiChar;
     const AText: PUChar; ATextLength: LongInt;
     var AStatus: TICUErrorCode): Pointer; cdecl;
@@ -823,6 +839,7 @@ type
     UplrulesOpenForType: TUplrulesOpenForType;
     UplrulesClose: TUplrulesClose;
     UplrulesSelect: TUplrulesSelect;
+    UplrulesSelectFormatted: TUplrulesSelectFormatted;
     UbrkOpen: TUbrkOpen;
     UbrkClose: TUbrkClose;
     UbrkNext: TUbrkNext;
@@ -1137,6 +1154,8 @@ begin
   if Assigned(S) then F.UplrulesClose := TUplrulesClose(S);
   S := ResolveSymbol(AHandle, 'uplrules_select');
   if Assigned(S) then F.UplrulesSelect := TUplrulesSelect(S);
+  S := ResolveSymbol(AHandle, 'uplrules_selectFormatted');
+  if Assigned(S) then F.UplrulesSelectFormatted := TUplrulesSelectFormatted(S);
   S := ResolveSymbol(AHandle, 'ubrk_open');
   if Assigned(S) then F.UbrkOpen := TUbrkOpen(S);
   S := ResolveSymbol(AHandle, 'ubrk_close');
@@ -3817,6 +3836,71 @@ begin
     Result := True;
   finally
     IntlFunctions.UplrulesClose(Rules);
+  end;
+end;
+
+function TryICUSelectPluralFormatted(const ALocale: string; AValue: Double;
+  APluralType: TIntlPluralType; const ASkeleton: string;
+  out ACategory: string): Boolean;
+var
+  Status: TICUErrorCode;
+  Rules, Formatter, Formatted: Pointer;
+  Buffer: array[0..63] of WideChar;
+  ResultLen: LongInt;
+  LocaleBytes: TBytes;
+  ICUType: LongInt;
+begin
+  Result := False;
+  ACategory := 'other';
+  if not EnsureLoaded then
+    Exit;
+  if not Assigned(IntlFunctions.UplrulesOpenForType) or
+     not Assigned(IntlFunctions.UplrulesClose) or
+     not Assigned(IntlFunctions.UplrulesSelectFormatted) or
+     not Assigned(IntlFunctions.UnumfOpenForSkeletonAndLocale) or
+     not Assigned(IntlFunctions.UnumfOpenResult) or
+     not Assigned(IntlFunctions.UnumfFormatDouble) or
+     not Assigned(IntlFunctions.UnumfClose) or
+     not Assigned(IntlFunctions.UnumfCloseResult) then
+    Exit;
+  if not TryEncodeASCIIBytes(ALocale, LocaleBytes) then
+    Exit;
+  if APluralType = iptOrdinal then
+    ICUType := UPLURAL_TYPE_ORDINAL
+  else
+    ICUType := UPLURAL_TYPE_CARDINAL;
+
+  Status := ICU_SUCCESS;
+  Formatter := IntlFunctions.UnumfOpenForSkeletonAndLocale(PWideChar(ASkeleton),
+    Length(ASkeleton), BytePointer(LocaleBytes), Status);
+  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+    Exit;
+  Formatted := nil;
+  Rules := nil;
+  try
+    Formatted := IntlFunctions.UnumfOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(Formatted) then
+      Exit;
+    IntlFunctions.UnumfFormatDouble(Formatter, AValue, Formatted, Status);
+    if not ICUSucceeded(Status) then
+      Exit;
+    Rules := IntlFunctions.UplrulesOpenForType(BytePointer(LocaleBytes),
+      ICUType, Status);
+    if not ICUSucceeded(Status) or not Assigned(Rules) then
+      Exit;
+    FillChar(Buffer, SizeOf(Buffer), 0);
+    ResultLen := IntlFunctions.UplrulesSelectFormatted(Rules, Formatted,
+      @Buffer[0], 64, Status);
+    if not ICUSucceeded(Status) or (ResultLen <= 0) then
+      Exit;
+    ACategory := UnicodeToString(Buffer, ResultLen);
+    Result := True;
+  finally
+    if Assigned(Rules) then
+      IntlFunctions.UplrulesClose(Rules);
+    if Assigned(Formatted) then
+      IntlFunctions.UnumfCloseResult(Formatted);
+    IntlFunctions.UnumfClose(Formatter);
   end;
 end;
 

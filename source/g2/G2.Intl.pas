@@ -436,6 +436,10 @@ begin
           if TryICUSelectPlural(SArg(Args, Argc, 2), DArg(Args, Argc, 3), iptOrdinal, S) then Res := UStr(S)
           else Res := UStr('other');
         end
+        { a compact notation's exponent is a plural operand (CLDR e): selected on the formatted number }
+        else if (Argc >= 5) and IsString(Args[5]) and
+                TryICUSelectPluralFormatted(SArg(Args, Argc, 2), DArg(Args, Argc, 3), iptCardinal,
+                  UTF8Decode(SArg(Args, Argc, 5)), S) then Res := UStr(S)
         else if TryICUSelectPlural(SArg(Args, Argc, 2), DArg(Args, Argc, 3), iptCardinal, S) then Res := UStr(S)
         else Res := UStr('other');
       end;

@@ -489,6 +489,12 @@
     return r;
   }
   function selectCategory(s, n) {
+    // compact notation: the plural rules see the compact form's exponent (CLDR operand e), so ICU selects on the
+    // formatted number
+    if (s.notation === "compact" && s.type === "cardinal" && isFinite(n)) {
+      var cc = intlOp(10, s.locale, n, false, s.compactDisplay === "long" ? "compact-long" : "compact-short");
+      if (cc !== undefined) return cc;
+    }
     var x = pluralValue(s, n);
     var cat = intlOp(10, s.locale, x, s.type === "ordinal");
     // a visible fraction digit (minimumFractionDigits) makes 1 plural in most locales
