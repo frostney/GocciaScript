@@ -814,6 +814,11 @@ end;
 
 { $-substitutions of a replacement string (22.1.3.19.1 GetSubstitution) from a recorded match: Caps holds
   start/end pairs (-1 when a group did not participate) }
+const
+  { the longest string replace builds (as String.prototype.repeat): past it a RangeError, not the host's
+    out-of-memory abort }
+  ReplaceMaxLen = 536870888;
+
 function Substitute(const Rep, Subject: UnicodeString; Caps: PInteger; Base, N: Integer;
   const NG: TGocciaRegExpNamedGroups): UnicodeString;
 var I, G, K, J, MS, ME: Integer; C: WideChar; Name: UnicodeString; Found: Boolean;
@@ -823,6 +828,7 @@ begin
   I := 1;
   while I <= Length(Rep) do
   begin
+    if Length(Result) > ReplaceMaxLen then Exit;   { the caller sees the length and throws }
     C := Rep[I];
     if (C = '$') and (I < Length(Rep)) then
     begin
@@ -992,6 +998,7 @@ begin
     end
     else
       Out_ := Out_ + Substitute(Rep, Subject, Caps, I * (N + 1) * 2, N, NG);
+    if Length(Out_) > ReplaceMaxLen then Exit(ThrowError('RangeError', 'Invalid string length'));
     Pos_ := En;
   end;
   Out_ := Out_ + Copy(Subject, Pos_ + 1, MaxInt);
