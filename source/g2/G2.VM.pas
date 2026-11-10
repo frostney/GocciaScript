@@ -7423,6 +7423,12 @@ LReload:
           XThrowTDZ(PStr(PtrOf(K[I shr 40])));
           goto LThrow;
         end;
+      opHasGlobalRef:
+        begin
+          IC := @Tpl^.ICs[I shr 40];
+          O := ObjOf(GlobalObj);
+          R[A] := MkBool((GLexFind(IC^.Key) >= 0) or (ShapeLookup(O^.Shape, IC^.Key) >= 0) or InheritedHas(O, IC^.Key));
+        end;
       opThrowConst:
         begin
           Fr^.PC := PC;

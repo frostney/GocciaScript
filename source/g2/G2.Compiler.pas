@@ -366,6 +366,8 @@ type
     procedure PushWithEntry(const Nm: UnicodeString; F: TFuncState; Scope, Kind, Depth: Integer);
     procedure CompileWith(S: TGocciaWithStatement);
     procedure LoadIdentStatic(const N: UnicodeString; Dest: Integer);
+    { N resolves to the global environment: no local, upvalue, import, arguments object or global lexical }
+    function IsGlobalRef(const N: UnicodeString): Boolean;
     procedure StoreIdentStatic(const N: UnicodeString; Src: Integer; IsInit: Boolean);
     procedure LoadIdentThis(const N: UnicodeString; Dest, ThisReg: Integer; ForCall: Boolean = False);
     function ModImportSlot(const N: UnicodeString): Integer;
@@ -1123,6 +1125,14 @@ begin
     Dec(WithCount);
   end;
   PopScope;
+end;
+
+function TCompiler.IsGlobalRef(const N: UnicodeString): Boolean;
+var R: Integer;
+begin
+  Result := not ResolveLocal(FS, N, R) and (ResolveUpval(FS, N) < 0) and not ((Goal = 3) and (ModImportSlot(N) >= 0)) and
+    not ((N = 'arguments') and ArgumentsBound) and (GLexFind(AtomOf(N)) < 0) and
+    ((WithCount = 0) or (WithsFor(N, WithIdxScratch) = 0));
 end;
 
 procedure TCompiler.StoreIdentStatic(const N: UnicodeString; Src: Integer; IsInit: Boolean);
@@ -5038,6 +5048,18 @@ begin
       CompileFieldValue(A.Value, V, AName);
       StoreIdent(A.Name, V);
       Emit(Ins(opMov, Dest, V, 0));
+    end
+    else if FS.Tpl^.IsStrict and not PureRead(A.Value) and IsGlobalRef(A.Name) then
+    begin
+      { 13.15.2 step 1.a: a strict assignment's reference is resolved before the value runs: a global the value
+        creates leaves it unresolvable (6.2.5.6 PutValue step 3.a: a ReferenceError) }
+      V := AllocReg;
+      Emit(Ins(opHasGlobalRef, V, 0, NewIC(A.Name)));
+      CompileFieldValue(A.Value, Dest, AName);
+      K := EmitJ(opJT, V, 0);
+      Emit(Ins(opThrowConst, 0, 2, AtomConst(A.Name)));
+      PatchHere(K);
+      StoreIdent(A.Name, Dest);
     end
     else
     begin

@@ -90,6 +90,8 @@ type
     ,opGetSuperB             { R[A] := GetValue of the super reference with base R[B], this R[B + 1], key ICs[C] or
                                R[-1 - C] (ToPropertyKey'd in place) }
     ,opSetSuperB             { PutValue(that super reference, R[A]) }
+    ,opHasGlobalRef          { R[A] := whether the global environment has a binding for ICs[C].Key (9.1.1.4.1
+                               HasBinding: a strict assignment's reference, resolved before its value) }
   );
 
   PFuncTemplate = ^TFuncTemplate;
