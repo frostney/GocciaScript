@@ -23,6 +23,9 @@ procedure InitAtomics;
   async waits as other threads notify them or their timeouts pass, running the jobs that follow, until none
   is pending. False if a job threw. }
 function RunHostLoop: Boolean;
+{ one turn of that loop without blocking (a host timer tick): settles the async waits other threads notified
+  and those whose timeouts passed; their reactions run as jobs }
+procedure PumpAsyncWaits;
 { a SharedArrayBuffer object of this engine for B; takes a reference to B }
 function WrapSharedBlock(B: PSharedBlock): TValue;
 function IsSharedBuffer(V: TValue): Boolean;
@@ -541,6 +544,17 @@ begin
       if AsyncLive[I] and (AsyncDeadlines[I] <= Now_) and SharedAsyncCancel(I) then SettleAsync(I, 'timed-out');
     if not RunMicrotasks then Exit(False);
   end;
+end;
+
+procedure PumpAsyncWaits;
+var Done: TBoundArray; I: Integer; Now_: QWord;
+begin
+  if AsyncPending <= 0 then Exit;
+  Done := SharedAsyncPoll(0);
+  for I := 0 to High(Done) do SettleAsync(Done[I], 'ok');
+  Now_ := GetTickCount64;
+  for I := 0 to AsyncCount - 1 do
+    if AsyncLive[I] and (AsyncDeadlines[I] <= Now_) and SharedAsyncCancel(I) then SettleAsync(I, 'timed-out');
 end;
 
 { Atomics.pause: a hint; validates its argument }

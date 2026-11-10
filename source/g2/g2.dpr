@@ -321,6 +321,14 @@ var
 
 function Host_CreateRealm(Args: PValue; Argc: Integer; var Res: TValue): Boolean; forward;
 
+{ G2Host.pumpAsyncWaits(): a timer tick of the host's event loop settles the Atomics.waitAsync waits that are due }
+function Host_PumpAsyncWaits(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  PumpAsyncWaits;
+  Res := VUndefined;
+  Result := True;
+end;
+
 { the hidden G2Host object $262.js reads, in the running realm }
 procedure InstallHostHooks;
 var H: TValue;
@@ -336,6 +344,8 @@ begin
   DefineNative(H, 'detachArrayBuffer', Host_Detach, 1);
   GetV(GlobalObj, AtomOf('G2Host'), H);
   DefineNative(H, 'createRealm', Host_CreateRealm, 0);
+  GetV(GlobalObj, AtomOf('G2Host'), H);
+  DefineNative(H, 'pumpAsyncWaits', Host_PumpAsyncWaits, 0);
   { B.3.6 $262.IsHTMLDDA: a callable object that returns null and emulates undefined }
   GetV(GlobalObj, AtomOf('G2Host'), H);
   DefineNative(H, 'IsHTMLDDA', Host_HTMLDDA, 0);

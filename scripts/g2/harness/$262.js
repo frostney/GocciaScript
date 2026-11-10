@@ -29,14 +29,18 @@ var $262 = (function () {
 })();
 
 // a host setTimeout for the harness's polling loops (atomicsHelper.js getReportAsync): the callback runs from a
-// microtask after a short blocking sleep, so a poll waits for agents without a timer queue in the engine
+// microtask after a short blocking sleep, so a poll waits for agents without a timer queue in the engine. Each
+// tick also lets the host settle the Atomics.waitAsync waits that are due, as an event loop turn would.
 if (typeof globalThis.setTimeout !== "function") {
-  globalThis.setTimeout = function (callback, ms) {
-    var args = Array.prototype.slice.call(arguments, 2);
-    Promise.resolve().then(function () {
-      if (ms > 0 && $262.agent && typeof $262.agent.sleep === "function") $262.agent.sleep(Math.min(ms, 20));
-      callback.apply(undefined, args);
-    });
-    return 0;
-  };
+  (function (pump) {
+    globalThis.setTimeout = function (callback, ms) {
+      var args = Array.prototype.slice.call(arguments, 2);
+      Promise.resolve().then(function () {
+        if (ms > 0 && $262.agent && typeof $262.agent.sleep === "function") $262.agent.sleep(Math.min(ms, 20));
+        if (typeof pump === "function") pump();
+        callback.apply(undefined, args);
+      });
+      return 0;
+    };
+  })(G2Host.pumpAsyncWaits);
 }
