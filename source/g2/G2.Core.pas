@@ -292,7 +292,18 @@ function NurseryCellOK(V: TValue): Boolean;
 procedure CheckRoot(const V: TValue; const Where: string; I: Integer);
 
 { ---- objects ---- }
+var
+  { bumped when an object used as a prototype (one with a root shape: Hdr.Extra) gains an accessor or a
+    read-only property, or a new prototype: a cached add transition (G2.VM opSetProp) holds the epoch it was
+    made in, as its proof that no setter or read-only property on the chain applies. Shared by the agents'
+    threads (a global loads cheaper than a threadvar): another agent's bump only costs a cache miss. }
+  ProtoEpoch: Integer;
+  { G2.VM's: forgets the cached add transitions of this agent's code (a bump is rare: the walk is cheap enough) }
+  ProtoChangeHook: procedure = nil;
 threadvar
+  { no add transition is cached once a proxy is some object's prototype (its [[Set]] is the handler's) or the
+    prototypes outnumber the root shape indices (ProtoChanged would miss changes to the rest) }
+  AddICUnsafe: Boolean;
   ObjectProto, FunctionProto, ArrayProto, StringProto, NumberProto, BooleanProto,
   ErrorProto, IteratorProto, ArrayIteratorProto, GeneratorProto, MapProto, SetProtoObj, SymbolProto: TValue;
   EmptyShapeForArray: PShape;
@@ -311,6 +322,7 @@ procedure DeleteProperty(O: PObj; Key: PStr);
 procedure ChangeFlags(O: PObj; Key: PStr; Flags: Byte);
 function ProtoOf(O: PObj): TValue; inline;
 procedure SetProto(O: PObj; P: TValue);
+procedure ProtoChanged;
 procedure ArraySetLength(A: PObj; NewLen: Integer);
 procedure ArrayPush(A: PObj; V: TValue);
 function ArrayLen(A: PObj): Integer; inline;
@@ -1459,6 +1471,11 @@ begin
   RootShapes[RootShapeCount].S := Result;
   Inc(RootShapeCount);
   if IsObject(Proto) and (RootShapeCount < 65535) then ObjOf(Proto)^.Hdr.Extra := RootShapeCount;
+  if IsObject(Proto) and not AddICUnsafe and ((ObjOf(Proto)^.OKind = okProxy) or (RootShapeCount >= 65535)) then
+  begin
+    AddICUnsafe := True;
+    ProtoChanged;
+  end;
 end;
 
 threadvar
@@ -1749,6 +1766,7 @@ end;
 function AddProperty(O: PObj; Key: PStr; V: TValue; Flags: Byte): Integer;
 var NewShape: PShape; Idx, NewCap, I: Integer; NO: PValueArray;
 begin
+  if ((Flags and (pfAccessor or pfWritable)) <> pfWritable) and (O^.Hdr.Extra <> 0) then ProtoChanged;
   NewShape := ShapeAdd(O^.Shape, Key, Flags);
   Idx := NewShape^.Count - 1;
   if Idx >= O^.InlineCap then
@@ -1800,6 +1818,7 @@ end;
 procedure ChangeFlags(O: PObj; Key: PStr; Flags: Byte);
 var Idx, I: Integer; Old, N: PShape; Vals: array of TValue;
 begin
+  if ((Flags and (pfAccessor or pfWritable)) <> pfWritable) and (O^.Hdr.Extra <> 0) then ProtoChanged;
   Idx := ShapeLookup(O^.Shape, Key);
   if Idx < 0 then Exit;
   Old := O^.Shape;
@@ -1826,6 +1845,12 @@ begin
   for I := 0 to Old^.Count - 1 do SetSlot(O, I, Vals[I]);
 end;
 
+procedure ProtoChanged;
+begin
+  Inc(ProtoEpoch);
+  if Assigned(ProtoChangeHook) then ProtoChangeHook;
+end;
+
 function ProtoOf(O: PObj): TValue; inline;
 begin
   Result := O^.Shape^.Proto;
@@ -1836,6 +1861,7 @@ var Old, N: PShape; I: Integer;
 begin
   Old := O^.Shape;
   if Old^.Proto = P then Exit;
+  if O^.Hdr.Extra <> 0 then ProtoChanged;
   N := RootShapeFor(P);
   for I := 0 to Old^.Count - 1 do N := ShapeAdd(N, Old^.Keys[I], Old^.PFlags[I]);
   O^.Shape := N;

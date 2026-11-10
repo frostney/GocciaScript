@@ -188,6 +188,8 @@ function InsCU(I: QWord): Integer; inline;     { unsigned }
   engine (closures and the code of running functions point at them). }
 procedure RegisterTemplate(T: PFuncTemplate);
 procedure FreeAllTemplates;
+{ clears every cached add transition of this thread's templates (G2.Core ProtoChanged) }
+procedure ForgetAddTransitions;
 
 implementation
 
@@ -214,6 +216,21 @@ begin
   Inc(TemplateCount);
 end;
 
+procedure ForgetAddTransitions;
+var I, J: Integer; T: PFuncTemplate;
+begin
+  for I := 0 to TemplateCount - 1 do
+  begin
+    T := AllTemplates[I];
+    for J := 0 to High(T^.ICs) do
+      if T^.ICs[J].NewShape <> nil then
+      begin
+        T^.ICs[J].Shape := nil;
+        T^.ICs[J].NewShape := nil;
+      end;
+  end;
+end;
+
 procedure FreeAllTemplates;
 var I, J: Integer; T: PFuncTemplate;
 begin
@@ -226,4 +243,6 @@ begin
   AllTemplates := nil;
   TemplateCount := 0;
 end;
+initialization
+  ProtoChangeHook := @ForgetAddTransitions;
 end.

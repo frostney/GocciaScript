@@ -6093,13 +6093,14 @@ LReload:
             end;
             if CI < 0 then
             begin
-              IC^.Misses := IC^.Misses;
+              IC^.Depth := ProtoEpoch;   { an add transition is cached only if no prototype changed meanwhile }
               VB := MkPtr(O^.Shape);
               if not SetOnObjectS(VA, IC^.Key, V, Tpl^.IsStrict) then goto LThrow;
               O := ObjOf(R[A]);
               if (O^.OKind = okPlain) and (O^.Shape^.Parent = PShape(PtrOf(VB))) and (O^.Shape^.Count > 0) and
-                 (O^.Shape^.Keys[O^.Shape^.Count - 1] = IC^.Key) then
+                 (O^.Shape^.Keys[O^.Shape^.Count - 1] = IC^.Key) and (IC^.Depth = ProtoEpoch) and not AddICUnsafe then
               begin
+                { G2.Core ProtoChanged forgets it when a prototype gains a setter or read-only property }
                 IC^.Shape := PShape(PtrOf(VB));
                 IC^.NewShape := O^.Shape;
                 IC^.Slot := O^.Shape^.Count - 1;
