@@ -1129,7 +1129,7 @@ begin
   end;
 end;
 
-function TryGetLunisolarDateParts(const ACalendarId: string; const AISOYear,
+function TryGetICULunisolarDateParts(const ACalendarId: string; const AISOYear,
   AISOMonth, AISODay: Integer; out AParts: TLunisolarDateParts): Boolean;
 var
   ICUFunctions: TTemporalCalendarICU;
@@ -1198,6 +1198,243 @@ begin
     LunisolarPartsCache[CacheIndex].ISODay := AISODay;
     LunisolarPartsCache[CacheIndex].Parts := AParts;
   end;
+end;
+
+// Chinese and Dangi years beyond +/-10000 have no astronomical calendar to
+// follow (ICU's calendar-to-ISO direction stops working past them), so they
+// use a mean lunisolar model, as ICU4X approximates them: months of 29 or
+// 30 days from the mean synodic month, a year that starts with the month
+// nearest its share of mean Gregorian years (so a year's new year stays in
+// January or February of the ISO year of its number, as other code here
+// assumes), and a thirteenth month (M12L) at the end of a leap year. The model starts at the
+// new year that ICU gives for year 10001 and ends at the one for year -10000,
+// so each date converts the same way in both directions.
+const
+  LUNISOLAR_MODEL_LIMIT_YEAR = 10000;
+  LUNISOLAR_MEAN_SYNODIC_MONTH = 29.530588853;
+  LUNISOLAR_MEAN_YEAR = 365.2425;
+
+type
+  TLunisolarModelAnchors = record
+    Valid: Boolean;
+    Upper, Lower: Int64;
+  end;
+
+var
+  LunisolarModelAnchors: array[1..2] of TLunisolarModelAnchors;
+
+function TryFindICULunisolarNewYear(const ACalendarId: string;
+  const AYear: Integer; out ADays: Int64): Boolean;
+var
+  Start: Int64;
+  Offset: Integer;
+  DateRec: TTemporalDateRecord;
+  Parts: TLunisolarDateParts;
+begin
+  Result := False;
+  ADays := 0;
+  Start := DateToEpochDays(AYear, 1, 1);
+  for Offset := 0 to 119 do
+  begin
+    DateRec := EpochDaysToDate(Start + Offset);
+    if TryGetICULunisolarDateParts(ACalendarId, DateRec.Year, DateRec.Month,
+         DateRec.Day, Parts) and (Parts.Year = AYear) and
+       (Parts.MonthCodeMonth = 1) and not Parts.IsLeapMonth and
+       (Parts.Day = 1) then
+    begin
+      ADays := Start + Offset;
+      Exit(True);
+    end;
+  end;
+end;
+
+function TryGetLunisolarModelAnchors(const ACalendarId: string;
+  out AUpper, ALower: Int64): Boolean;
+var
+  Code: Integer;
+begin
+  AUpper := 0;
+  ALower := 0;
+  Code := LunisolarCalendarCode(ACalendarId);
+  if Code = 0 then
+    Exit(False);
+  if not LunisolarModelAnchors[Code].Valid then
+  begin
+    if not TryFindICULunisolarNewYear(ACalendarId,
+         LUNISOLAR_MODEL_LIMIT_YEAR + 1, LunisolarModelAnchors[Code].Upper) or
+       not TryFindICULunisolarNewYear(ACalendarId,
+         -LUNISOLAR_MODEL_LIMIT_YEAR, LunisolarModelAnchors[Code].Lower) then
+      Exit(False);
+    LunisolarModelAnchors[Code].Valid := True;
+  end;
+  AUpper := LunisolarModelAnchors[Code].Upper;
+  ALower := LunisolarModelAnchors[Code].Lower;
+  Result := True;
+end;
+
+// the months before the year AYears years from a model side's anchor: 12 or
+// 13 a year
+function LunisolarModelMonthsBefore(const AYears: Int64): Int64; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := Floor(AYears * (LUNISOLAR_MEAN_YEAR /
+    LUNISOLAR_MEAN_SYNODIC_MONTH) + 0.5);
+end;
+
+// the epoch day month N (relative to the anchor) starts on
+function LunisolarModelMonthStart(const AAnchor, AMonth: Int64): Int64;
+begin
+  Result := AAnchor + Floor(AMonth * LUNISOLAR_MEAN_SYNODIC_MONTH + 0.5);
+end;
+
+function IsLunisolarModelYear(const ACalendarId: string;
+  const AYear: Integer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+begin
+  Result := IsLunisolarCalendar(ACalendarId) and
+    ((AYear > LUNISOLAR_MODEL_LIMIT_YEAR) or
+     (AYear < -LUNISOLAR_MODEL_LIMIT_YEAR));
+end;
+
+// the first month of model year AYear relative to its side's anchor, its
+// month count and that anchor
+function TryLunisolarModelYear(const ACalendarId: string; const AYear: Integer;
+  out AFirstMonth: Int64; out AMonthCount: Integer; out AAnchor: Int64): Boolean;
+var
+  Upper, Lower, Years: Int64;
+begin
+  AFirstMonth := 0;
+  AMonthCount := 0;
+  AAnchor := 0;
+  Result := IsLunisolarModelYear(ACalendarId, AYear) and
+    TryGetLunisolarModelAnchors(ACalendarId, Upper, Lower);
+  if not Result then
+    Exit;
+  if AYear > 0 then
+  begin
+    Years := Int64(AYear) - (LUNISOLAR_MODEL_LIMIT_YEAR + 1);
+    AFirstMonth := LunisolarModelMonthsBefore(Years);
+    AMonthCount := LunisolarModelMonthsBefore(Years + 1) - AFirstMonth;
+    AAnchor := Upper;
+  end
+  else
+  begin
+    Years := -LUNISOLAR_MODEL_LIMIT_YEAR - Int64(AYear);
+    AFirstMonth := -LunisolarModelMonthsBefore(Years);
+    AMonthCount := LunisolarModelMonthsBefore(Years) -
+      LunisolarModelMonthsBefore(Years - 1);
+    AAnchor := Lower;
+  end;
+end;
+
+// calendar date to epoch day; AMonth is an ordinal month, or with
+// AMatchMonthCode the month code's number (AIsLeapMonth: M12L)
+function TryLunisolarModelDateToEpochDays(const ACalendarId: string;
+  const AYear, AMonth, ADay: Integer; const AMatchMonthCode,
+  AIsLeapMonth: Boolean; out ADays: Int64): Boolean;
+var
+  FirstMonth, Anchor, Month, Start: Int64;
+  MonthCount, Ordinal: Integer;
+begin
+  ADays := 0;
+  Result := False;
+  if not TryLunisolarModelYear(ACalendarId, AYear, FirstMonth, MonthCount,
+    Anchor) then
+    Exit;
+  Ordinal := AMonth;
+  if AMatchMonthCode then
+  begin
+    if AIsLeapMonth then
+    begin
+      if (AMonth <> 12) or (MonthCount < 13) then
+        Exit;
+      Ordinal := 13;
+    end
+    else if AMonth > 12 then
+      Exit;
+  end;
+  if (Ordinal < 1) or (Ordinal > MonthCount) or (ADay < 1) then
+    Exit;
+  Month := FirstMonth + Ordinal - 1;
+  Start := LunisolarModelMonthStart(Anchor, Month);
+  if ADay > LunisolarModelMonthStart(Anchor, Month + 1) - Start then
+    Exit;
+  ADays := Start + ADay - 1;
+  Result := True;
+end;
+
+// epoch day to calendar date (ordinal month); False inside ICU's range
+function TryLunisolarModelEpochDaysToDate(const ACalendarId: string;
+  const ADays: Int64; out AYear, AMonth, ADay: Integer): Boolean;
+var
+  Upper, Lower, Anchor, Month, Years, Months: Int64;
+begin
+  AYear := 0;
+  AMonth := 0;
+  ADay := 0;
+  Result := IsLunisolarCalendar(ACalendarId) and
+    TryGetLunisolarModelAnchors(ACalendarId, Upper, Lower) and
+    ((ADays >= Upper) or (ADays < Lower));
+  if not Result then
+    Exit;
+  if ADays >= Upper then
+    Anchor := Upper
+  else
+    Anchor := Lower;
+  Month := Floor((ADays - Anchor) / LUNISOLAR_MEAN_SYNODIC_MONTH);
+  while LunisolarModelMonthStart(Anchor, Month) > ADays do
+    Dec(Month);
+  while LunisolarModelMonthStart(Anchor, Month + 1) <= ADays do
+    Inc(Month);
+  ADay := Integer(ADays - LunisolarModelMonthStart(Anchor, Month)) + 1;
+  if Anchor = Upper then
+  begin
+    Years := Floor(Month * (LUNISOLAR_MEAN_SYNODIC_MONTH /
+      LUNISOLAR_MEAN_YEAR));
+    while LunisolarModelMonthsBefore(Years) > Month do
+      Dec(Years);
+    while LunisolarModelMonthsBefore(Years + 1) <= Month do
+      Inc(Years);
+    AYear := Integer(LUNISOLAR_MODEL_LIMIT_YEAR + 1 + Years);
+    AMonth := Integer(Month - LunisolarModelMonthsBefore(Years)) + 1;
+  end
+  else
+  begin
+    // year -10000 - Years holds months -MonthsBefore(Years) .. -MonthsBefore(Years - 1) - 1
+    Months := -Month;
+    Years := Floor(Months * (LUNISOLAR_MEAN_SYNODIC_MONTH /
+      LUNISOLAR_MEAN_YEAR));
+    if Years < 1 then
+      Years := 1;
+    while LunisolarModelMonthsBefore(Years) < Months do
+      Inc(Years);
+    while (Years > 1) and (LunisolarModelMonthsBefore(Years - 1) >= Months) do
+      Dec(Years);
+    AYear := Integer(-LUNISOLAR_MODEL_LIMIT_YEAR - Years);
+    AMonth := Integer(Month + LunisolarModelMonthsBefore(Years)) + 1;
+  end;
+end;
+
+function TryGetLunisolarDateParts(const ACalendarId: string; const AISOYear,
+  AISOMonth, AISODay: Integer; out AParts: TLunisolarDateParts): Boolean;
+var
+  Year, Month, Day: Integer;
+begin
+  if IsLunisolarCalendar(ACalendarId) and
+     IsValidDate(AISOYear, AISOMonth, AISODay) and
+     TryLunisolarModelEpochDaysToDate(ACalendarId,
+       DateToEpochDays(AISOYear, AISOMonth, AISODay), Year, Month, Day) then
+  begin
+    FillChar(AParts, SizeOf(AParts), 0);
+    AParts.Year := Year;
+    AParts.IsLeapMonth := Month = 13;
+    if AParts.IsLeapMonth then
+      AParts.MonthCodeMonth := 12
+    else
+      AParts.MonthCodeMonth := Month;
+    AParts.Day := Day;
+    Exit(True);
+  end;
+  Result := TryGetICULunisolarDateParts(ACalendarId, AISOYear, AISOMonth,
+    AISODay, AParts);
 end;
 
 function TryLunisolarMonthIndexAt(const ACalendarId: string;
@@ -1878,31 +2115,15 @@ function TryRawICUCalendarDateToISO(const ACalendarId: string; const AYear,
   out AISODate: TTemporalDateRecord): Boolean; forward;
 
 function TryApproximateExtremeLunisolarDateToISO(const ACalendarId: string;
-  const AYear, AMonth, ADay: Integer; out AISODate: TTemporalDateRecord): Boolean;
+  const AYear, AMonth, ADay: Integer; const AMatchMonthCode,
+  AIsLeapMonth: Boolean; out AISODate: TTemporalDateRecord): Boolean;
+var
+  Days: Int64;
 begin
-  Result := False;
-  if (AMonth < 1) or (AMonth > 13) or (ADay < 1) or (ADay > 30) then
-    Exit;
-
-  if ((ACalendarId = 'chinese') and
-      ((AYear < -10000) or (AYear > 10000))) or
-     ((ACalendarId = 'dangi') and
-      ((AYear < -10000) or (AYear > 10000))) then
-  begin
-    if AYear < 0 then
-    begin
-      AISODate.Year := -271821;
-      AISODate.Month := 4;
-      AISODate.Day := 20;
-    end
-    else
-    begin
-      AISODate.Year := 275760;
-      AISODate.Month := 9;
-      AISODate.Day := 13;
-    end;
-    Exit(True);
-  end;
+  Result := TryLunisolarModelDateToEpochDays(ACalendarId, AYear, AMonth, ADay,
+    AMatchMonthCode, AIsLeapMonth, Days);
+  if Result then
+    AISODate := EpochDaysToDate(Days);
 end;
 
 function TryFindLunisolarYearStart(const ACalendarId: string;
@@ -1965,9 +2186,10 @@ begin
   if (AMonth < 1) or (ADay < 1) then
     Exit;
 
-  if TryApproximateExtremeLunisolarDateToISO(ACalendarId, AYear, AMonth, ADay,
-    AISODate) then
-    Exit(True);
+  // a model year has no other conversion: a date it does not have is none
+  if IsLunisolarModelYear(ACalendarId, AYear) then
+    Exit(TryApproximateExtremeLunisolarDateToISO(ACalendarId, AYear, AMonth,
+      ADay, AMatchMonthCode, AIsLeapMonth, AISODate));
 
   CacheCode := LunisolarCalendarCode(ACalendarId);
   CacheIndex := LunisolarDateToISOIndex(CacheCode, AYear, AMonth, ADay,
@@ -2081,6 +2303,11 @@ begin
   ACalendarDate.Day := 0;
   if not IsValidDate(AISOYear, AISOMonth, AISODay) then
     Exit;
+
+  if TryLunisolarModelEpochDaysToDate(ACalendarId,
+       DateToEpochDays(AISOYear, AISOMonth, AISODay), ACalendarDate.Year,
+       ACalendarDate.Month, ACalendarDate.Day) then
+    Exit(True);
 
   CacheCode := LunisolarCalendarCode(ACalendarId);
   CacheIndex := LunisolarCacheIndex(CacheCode, AISOYear, AISOMonth, AISODay);
@@ -2921,6 +3148,7 @@ var
   DateRec: TTemporalDateRecord;
   Parts, CandidateParts: TLunisolarDateParts;
   FoundNextStart: Boolean;
+  ModelFirstMonth, ModelAnchor: Int64;
 begin
   AMonthsInYear := 0;
   if ACalendarId = 'iso8601' then
@@ -2942,6 +3170,10 @@ begin
     AMonthsInYear := 12;
     Exit(True);
   end;
+
+  if IsLunisolarModelYear(ACalendarId, AYear) then
+    Exit(TryLunisolarModelYear(ACalendarId, AYear, ModelFirstMonth,
+      AMonthsInYear, ModelAnchor));
 
   if IsLunisolarCalendar(ACalendarId) then
   begin
