@@ -27,6 +27,10 @@ implementation
 uses
   SysUtils, Classes, Generics.Collections, G2.Bytecode, G2.VM, G2.Compiler, G2.Eval, G2.Promise;
 
+const
+  { the test262 host's module with a source phase representation (INTERPRETING.md: "<module source>") }
+  HostSourceSpecifier = '<module source>';
+
 type
   TModStatus = (msNew, msLinking, msLinked, msEvaluating, msEvaluatingAsync, msEvaluated);
   TModRec = class
@@ -44,7 +48,7 @@ type
     AsyncParents: array of TModRec;
     destructor Destroy; override;
   end;
-  TResKind = (rkNull, rkAmbiguous, rkBinding, rkNamespace, rkDeferNS);
+  TResKind = (rkNull, rkAmbiguous, rkBinding, rkNamespace, rkDeferNS, rkSource);
   TResolution = record
     Kind: TResKind;
     Module: TModRec;
@@ -60,6 +64,8 @@ threadvar
   AsyncEvalCount: Int64;   { IncrementModuleAsyncEvaluationCount }
   ModRoots: TValue;     { a rooted array: RS slots per module }
   PendingImports: TValue;   { a rooted array of [promise, referrer, specifier] per import() in flight }
+  AMSCtor: TValue;        { the realm's %AbstractModuleSource% (made when first asked for) }
+  HostModSource: TValue;  { the realm's source object of the host's source module }
 
 destructor TModRec.Destroy;
 begin
@@ -117,6 +123,7 @@ end;
 function ResolveRequest(const Req, Referrer: UnicodeString): UnicodeString;
 var P: Integer;
 begin
+  if Req = HostSourceSpecifier then Exit(Req);
   P := Pos(#1, Req);
   if P = 0 then Exit(ResolvePath(Req, Referrer));
   Result := ResolvePath(Copy(Req, 1, P - 1), Referrer) + Copy(Req, P, MaxInt);
@@ -147,6 +154,8 @@ begin
 end;
 
 function ClosedCell(V: TValue): TValue; forward;
+function HasModuleSource(M: TModRec): Boolean; forward;
+function ModuleSourceOf(M: TModRec): TValue; forward;
 
 { a module of a non-JavaScript type, a Synthetic Module Record with the one export default, evaluated at once:
   'json' (ParseJSONModule), 'text' (the import text proposal: the source decoded as UTF-8) and 'bytes' (the
@@ -200,6 +209,20 @@ begin
     Exit(True);
   end;
   if Pos(#1, Path) > 0 then Exit(LoadTypedModule(Path, M));
+  if Path = HostSourceSpecifier then
+  begin
+    { a module record without exports or evaluation, only a source phase representation }
+    M := TModRec.Create;
+    M.Path := Path;
+    M.Id := Mods.Count;
+    Mods.Add(M);
+    SetRoot(M, rError, VUndefined);
+    M.Info := TModuleInfo.Create;
+    M.Info.SlotCount := 0;
+    SetRoot(M, rTable, MkPtr(NewArray(0, 0)));
+    M.Status := msEvaluated;
+    Exit(True);
+  end;
   if not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
   M := TModRec.Create;
   M.Path := Path;
@@ -261,6 +284,12 @@ begin
       if M.Info.IndirectExports[I].ImportName = ModDeferNamespace then
       begin
         Result.Kind := rkDeferNS; Result.Module := D;
+        Exit;
+      end;
+      { a re-exported source-phase import: the imported module's source object (Source Phase Imports) }
+      if M.Info.IndirectExports[I].ImportName = ModSource then
+      begin
+        Result.Kind := rkSource; Result.Module := D;
         Exit;
       end;
       Exit(ResolveExport(D, M.Info.IndirectExports[I].ImportName, RS_));
@@ -352,7 +381,7 @@ begin
     for I := 0 to Names.Count - 1 do
     begin
       R := Resolve(M, Names[I]);
-      if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS]) then Continue;
+      if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then Continue;
       ArrayPush(ObjOf(RootAt(Base + 1)), MkPtr(AtomOf(Names[I])));
       ArrayPush(ObjOf(RootAt(Base + 1)), CellOf(R));
     end;
@@ -402,6 +431,7 @@ end;
 
 function CellOf(const R: TResolution): TValue;
 begin
+  if R.Kind = rkSource then Exit(ClosedCell(ModuleSourceOf(R.Module)));
   if R.Kind = rkNamespace then Exit(ClosedCell(GetNamespace(R.Module)));
   if R.Kind = rkDeferNS then Exit(ClosedCell(GetDeferredNamespace(R.Module)));
   Result := ObjOf(GetRoot(R.Module, rTable))^.Elements^.Data[R.Slot];
@@ -423,6 +453,12 @@ var M: TModRec;
 begin
   for M in L do M.Status := msNew;
   Result := False;
+end;
+
+function NoSourceFail(L: TList<TModRec>): Boolean;
+begin
+  ThrowError('SyntaxError', 'A source text module has no source phase representation');
+  Result := LinkFail(L);
 end;
 
 function Link(Root: TModRec): Boolean;
@@ -470,8 +506,13 @@ begin
       begin
         if (M.Info.IndirectExports[I].ImportName = ModNamespace) or
           (M.Info.IndirectExports[I].ImportName = ModDeferNamespace) then Continue;
+        if M.Info.IndirectExports[I].ImportName = ModSource then
+        begin
+          if not HasModuleSource(DepOf(M, M.Info.IndirectExports[I].Request)) then Exit(NoSourceFail(L));
+          Continue;
+        end;
         R := Resolve(DepOf(M, M.Info.IndirectExports[I].Request), M.Info.IndirectExports[I].ImportName);
-        if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS]) then
+        if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then
         begin
           ThrowError('SyntaxError', 'The requested module ''' + M.Info.IndirectExports[I].Request +
             ''' does not provide an export named ''' + M.Info.IndirectExports[I].ImportName + '''');
@@ -483,9 +524,17 @@ begin
         D := DepOf(M, M.Info.Imports[I].Request);
         if (M.Info.Imports[I].ImportName = ModDeferNamespace) or (M.Info.Imports[I].ImportName = ModNamespace) then
           Continue;
+        if M.Info.Imports[I].ImportName = ModSource then
+        begin
+          { GetModuleSource of the module: a SyntaxError when it has no source representation }
+          if not HasModuleSource(D) then Exit(NoSourceFail(L));
+          R.Kind := rkSource; R.Module := D; R.Slot := -1;
+        end
+        else
         begin
           R := Resolve(D, M.Info.Imports[I].ImportName);
-          if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS]) then
+          if (R.Kind = rkSource) and not HasModuleSource(R.Module) then Exit(NoSourceFail(L));
+          if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then
           begin
             if R.Kind = rkAmbiguous then
               ThrowError('SyntaxError', 'The requested module ''' + M.Info.Imports[I].Request +
@@ -1021,7 +1070,16 @@ begin
       PopRoots(2);
     end;
   end;
-  { import.source(): GetModuleSource of a Source Text Module Record throws (it has no source representation) }
+  { import.source(): the host's source module gives its source object; GetModuleSource of a Source Text Module
+    Record throws (it has no source representation) }
+  if (Ph = 1) and (StrToUnicode(StrOf(RootAt(TempTop - 1))) = HostSourceSpecifier) then
+  begin
+    PopRoots(1);
+    ResolvePendingPromise(RootAt(TempTop - 1), ModuleSourceOf(nil));
+    Res := RootAt(TempTop - 1);
+    PopRoots(1);
+    Exit(True);
+  end;
   if Ph = 1 then
   begin
     ThrowError('SyntaxError', 'A source text module has no source phase representation');
@@ -1074,13 +1132,15 @@ end;
   source, else undefined (G2 has no module source objects) }
 function AMS_ToStringTag(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Res := VUndefined;
+  if IsObject(HostModSource) and (Args[0] = HostModSource) then Res := StrFromUnicode('ModuleSource')
+  else Res := VUndefined;
   Result := True;
 end;
 
 function AbstractModuleSourceIntrinsic: TValue;
 var Base: Integer;
 begin
+  if IsObject(AMSCtor) then Exit(AMSCtor);
   Base := TempTop;
   PushRoot(NewNativeFunction(AMS_Ctor, 'AbstractModuleSource', 0));
   ObjOf(RootAt(Base))^.OFlags := ObjOf(RootAt(Base))^.OFlags or 32;   { a constructor }
@@ -1088,13 +1148,36 @@ begin
   DefineOwn(RootAt(Base), AtomPrototype, RootAt(Base + 1), 0);
   DefineOwn(RootAt(Base + 1), AtomConstructor, RootAt(Base), pfHidden);
   DefineNativeGetterKey(RootAt(Base + 1), SymKey(SymToStringTagW), 'get [Symbol.toStringTag]', AMS_ToStringTag);
+  AMSCtor := RootAt(Base);
   Result := RootAt(Base);
   PopRoots(2);
+end;
+
+{ the realm's source object of the host's source module: an object whose prototype inherits from
+  %AbstractModuleSource%.prototype (a WebAssembly.Module, say, in a host that has those) }
+function ModuleSourceOf(M: TModRec): TValue;
+var C, P: TValue;
+begin
+  if IsObject(HostModSource) then Exit(HostModSource);
+  C := AbstractModuleSourceIntrinsic;
+  PushRoot(C);
+  GetV(RootAt(TempTop - 1), AtomPrototype, P);
+  PushRoot(MkPtr(NewPlainObject(P, 4)));
+  HostModSource := MkPtr(NewPlainObject(RootAt(TempTop - 1), 4));
+  PopRoots(2);
+  Result := HostModSource;
+end;
+
+function HasModuleSource(M: TModRec): Boolean;
+begin
+  Result := Assigned(M) and (M.Path = HostSourceSpecifier);
 end;
 
 procedure InitModules;
 begin
   NSDeferHook := @DeferEval;
+  AddRoot(@AMSCtor); AddRoot(@HostModSource);
+  RealmVals([@AMSCtor, @HostModSource]);
   { the module map and the pending dynamic imports belong to the agent's first realm }
   if RealmInit then Exit;
   Mods := TList<TModRec>.Create;

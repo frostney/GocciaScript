@@ -31,6 +31,7 @@ threadvar
 const
   ModNamespace = '*namespace*';   { an import or indirect export of a whole module namespace }
   ModDeferNamespace = '*defernamespace*';   { import defer * as ns: the deferred namespace (Deferring Module Evaluation) }
+  ModSource = '*source*';   { import source x: the module's source object (Source Phase Imports) }
 
 type
   TModEntry = record
@@ -6293,6 +6294,12 @@ begin
           if DuplicateBinding <> '' then raise EEarlySyntaxError.Create('Identifier ''' + DuplicateBinding + ''' has already been declared');
           ReqKey := ModuleRequestKey(ModulePath, AttributeType);
           MI.AddRequest(ReqKey);
+          if Phase = icpSource then
+          begin
+            { the source phase loads the module, never evaluates it }
+            for Pair in Imports do AddImport(Pair.Key, ReqKey, ModSource);
+            Continue;
+          end;
           if Phase = icpDefer then
           begin
             MI.AddDeferred(ReqKey);
