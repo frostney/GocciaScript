@@ -576,7 +576,9 @@ begin
   Goal := TakeEvalHint;
   if Goal < 0 then Goal := 2;
   if not IsString(Arg(Args, Argc, 1)) then begin Res := Arg(Args, Argc, 1); Exit(True); end;
-  if (Goal in [0, 1]) and IsString(EvalDesc) then
+  { a description of the caller's bindings: compiled in the caller's scope (goal 4); at a non-strict Script's top
+    level (goal 2) the description makes the global object its variable environment }
+  if IsString(EvalDesc) then
   begin
     Src := StrToUnicode(StrOf(Args[1]));
     if Goal = 1 then

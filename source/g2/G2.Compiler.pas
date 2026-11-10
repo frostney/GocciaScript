@@ -431,6 +431,10 @@ type
     function LastChildUsesHome: Boolean;
     procedure CompileDeleteIdent(const N: UnicodeString; Dest: Integer);
     function BuildEvalDesc: UnicodeString;
+    { a direct eval at a Script's (or global eval code's) top level inside blocks: the block bindings and this, and
+      in non-strict code the global object as the eval's variable environment }
+    function BuildEvalDescTop: UnicodeString;
+    function TopLevelBlockBindings: Boolean;
     function EmitConstStore(const N: UnicodeString): Boolean;
     procedure EvalDeclarations(Nodes: TList<TGocciaASTNode>; Names: TStringList; Strict: Boolean);
     function EvalOuterFlags(const N: UnicodeString): Integer;
@@ -1977,6 +1981,62 @@ end;
 { 19.2.1.1 PerformEval for a direct eval in function code: every binding the call site sees, innermost first, as a
   local register of this function or one of its upvalues (resolving an outer binding captures it), with what
   EvalDeclarationInstantiation needs to know about it }
+function TCompiler.TopLevelBlockBindings: Boolean;
+var I: Integer;
+begin
+  Result := False;
+  for I := 1 to FS.ScopeCount - 1 do
+    if FS.Scopes[I].Count > 0 then Exit(True);
+end;
+
+function TCompiler.BuildEvalDescTop: UnicodeString;
+var Seen: TStringList; I, J, Fl: Integer; Sc: TScope;
+  procedure Add(const N: UnicodeString; Kind, Idx, Flags: Integer);
+  begin
+    Result := Result + N + #2 + IntToStr(Kind) + #2 + IntToStr(Idx) + #2 + IntToStr(Flags) + #2 + '0' + #1;
+  end;
+begin
+  Result := '';
+  Seen := NewNameList;
+  try
+    { 19.2.1.1 step 5.a: no new.target outside a function }
+    Add('%nonewtarget', 0, 0, 0);
+    for I := FS.ScopeCount - 1 downto 1 do
+    begin
+      Sc := FS.Scopes[I];
+      for J := Sc.Count - 1 downto 0 do
+      begin
+        if (Sc.Bindings[J].Name = '') or (Sc.Bindings[J].Name[1] = '%') then Continue;
+        if Seen.IndexOf(Sc.Bindings[J].Name) >= 0 then Continue;
+        Seen.Add(Sc.Bindings[J].Name);
+        Fl := efSameFunc;
+        if Sc.Bindings[J].IsConst then Fl := Fl or efConst;
+        if Sc.Bindings[J].IsFnName then Fl := Fl or efFnName;
+        if Sc.Bindings[J].IsLexical then
+        begin
+          Fl := Fl or efLexical;
+          if Sc.Bindings[J].Initialized and not Sc.IsSwitch then Fl := Fl or efInitialized
+          else if Sc.Bindings[J].HoleNop >= 0 then
+            FS.Tpl^.Code[Sc.Bindings[J].HoleNop] := Ins(opLoadHole, Sc.Bindings[J].Reg, 0, 0);
+        end
+        else Fl := Fl or efInitialized;
+        MarkCaptured(FS, Sc.Bindings[J].Reg);
+        Add(Sc.Bindings[J].Name, 0, Sc.Bindings[J].Reg, Fl);
+      end;
+    end;
+    { this (register 0): the global object of a Script and of global eval code }
+    Add('%this', 0, 0, efSameFunc or efInitialized or efVarLevel);
+    { a non-strict eval declares its vars and functions as the global object's properties (19.2.1.3 step 16) }
+    if not FS.Tpl^.IsStrict then
+    begin
+      Add('%evalenv' + IntToStr(WithSerial), 0, 0, efSameFunc or efInitialized or efVarLevel);
+      Inc(WithSerial);
+    end;
+  finally
+    Seen.Free;
+  end;
+end;
+
 function TCompiler.BuildEvalDesc: UnicodeString;
 var Seen: TStringList; I, J, U, Fl, D: Integer; F: TFuncState; Sc: TScope;
   procedure Add(const N: UnicodeString; Kind, Idx, Flags: Integer; Depth: Integer = 0);
@@ -4476,7 +4536,8 @@ begin
     if FS.Tpl^.IsStrict then EvalHint := 2
     else EvalHint := Ord((FS.Parent = nil) and (Goal in [1, 2])) * 2 + 1;
     { in function code the eval code gets the call site's bindings }
-    if FS.Parent <> nil then EvalDescConst := AtomConst(BuildEvalDesc) + 1;
+    if FS.Parent <> nil then EvalDescConst := AtomConst(BuildEvalDesc) + 1
+    else if (Goal in [1, 2]) and TopLevelBlockBindings then EvalDescConst := AtomConst(BuildEvalDescTop) + 1;
   end;
   if E.Optional then ChainAdd(EmitJ(opJNullish, Base, 0));
   Argc := CompileArgs(E.Arguments, Base + 2, Spread);
