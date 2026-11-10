@@ -24,7 +24,7 @@ threadvar
 implementation
 
 uses
-  NumericText, Linux, UnixType, G2.ObjModel, BigInteger, G2.BigIntV;
+  NumericText, Linux, UnixType, G2.ObjModel, BigInteger, G2.BigIntV, TextSemantics;
 
 type
   TArgs = PValue;
@@ -1627,7 +1627,7 @@ begin
 end;
 
 { 22.1.3.28 / 22.1.3.30 toLowerCase / toUpperCase: ASCII in place (the string itself when nothing changes), the
-  rest by the full Unicode case mapping of CaseMapHook (G2.Intl: ICU's, special casing and final sigma included) }
+  rest by the full default case mapping (special casing and final sigma included) }
 function CaseConvert(V: TValue; Upper: Boolean; var Res: TValue): Boolean;
 var S: PStr; I, N: Integer; C: WideChar; Ascii, Change: Boolean; U, R: UnicodeString;
 begin
@@ -1655,10 +1655,11 @@ begin
     Res := StrFromUnicode(U);
     Exit(True);
   end;
+  { the default case mapping (Unicode's, with special casing and final sigma) of the engine's own generated
+    Unicode data: the host ICU's may be older }
   U := StrToUnicode(S);
-  if Assigned(CaseMapHook) and CaseMapHook(U, '', Upper, R) then Res := StrFromUnicode(R)
-  else if Upper then Res := StrFromUnicode(UnicodeUpperCase(U))
-  else Res := StrFromUnicode(UnicodeLowerCase(U));
+  if Upper then R := ECMAScriptDefaultUpperCase(U) else R := ECMAScriptDefaultLowerCase(U);
+  Res := StrFromUnicode(R);
   Result := True;
 end;
 
