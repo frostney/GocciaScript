@@ -915,6 +915,9 @@
   function TimeZoneEquals(a, b) {
     if (a === b) return true;
     if (!IsOffsetTimeZoneIdentifier(a) && !IsOffsetTimeZoneIdentifier(b)) {
+      // the primary identifiers Intl.supportedValuesOf lists (Goccia.Temporal.TimeZone's), not the tz index's links
+      var eq = calOp(8, a, b);
+      if (eq === true || eq === false) return eq;
       var ra = GetAvailableNamedTimeZoneIdentifier(a), rb = GetAvailableNamedTimeZoneIdentifier(b);
       if (ra !== undefined && rb !== undefined && ra.primaryIdentifier === rb.primaryIdentifier) return true;
     }
@@ -1060,7 +1063,10 @@
   function getZone(id) {
     var z = zoneCache[id];
     if (z !== undefined) return z;
-    var data = id === "UTC" ? undefined : tzData(id);
+    // a link's rules are its primary zone's (CET is Europe/Brussels's), whatever the tz files keep under its name
+    var primary = id === "UTC" ? undefined : calOp(9, id);
+    var data = id === "UTC" ? undefined : tzData(typeof primary === "string" ? primary : id);
+    if (typeof primary === "string" && typeof data !== "string") data = tzData(id);
     z = typeof data === "string" ? parseTZif(data) : null;
     if (z === null) z = { transitions: [], offsets: [], initial: 0, rule: null };
     zoneCache[id] = z;

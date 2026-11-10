@@ -19,7 +19,7 @@ implementation
 
 uses
   {$IFDEF UNIX}BaseUnix, Unix, Linux, UnixType, {$ENDIF}SysUtils, Classes, BigInteger, G2.Bytecode, G2.VM, G2.BigIntV,
-  G2.Snapshot, Goccia.Temporal.Utils, Goccia.Temporal.Calendar;
+  G2.Snapshot, Goccia.Temporal.Utils, Goccia.Temporal.Calendar, Goccia.Temporal.TimeZone;
 
 {$I G2.Temporal.inc}
 
@@ -117,7 +117,10 @@ end;
     4 YearFromEra(cal, era, eraYear)                                     -> year
     5 MonthsInYear(cal, year)                                            -> count
     6 UsesEra(cal)                                                        -> boolean
-    7 EraFromYear(cal, year)                                              -> [era, eraYear] }
+    7 EraFromYear(cal, year)                                              -> [era, eraYear]
+    8 TimeZoneEquals(zone, otherZone)                                     -> boolean (named zones: the same primary
+                                                                             identifier, as Intl.supportedValuesOf lists them)
+    9 PrimaryTimeZone(zone)                                               -> the zone's primary identifier, if known }
 function Temporal_CalOp(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var Op: Integer; Cal: string; D: TTemporalDateRecord; Info: TTemporalCalendarDateInfo; A: PObj; N, I: Integer;
   Era: string; EraYear: Integer; HasEra: Boolean;
@@ -193,6 +196,10 @@ begin
         Res := RootAt(TempTop - 1);
         PopRoots(1);
       end;
+    8:
+      Res := MkBool(TimeZoneIdentifiersEqual(Cal, SArg(3)));
+    9:
+      if TryKnownPrimaryTimeZoneIdentifier(Cal, Era) then Res := StrFromUnicode(UnicodeString(Era));
   end;
 end;
 

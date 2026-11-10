@@ -22,6 +22,10 @@ function GetAvailablePrimaryTimeZoneIdentifiers: TTemporalTimeZoneIdentifierArra
 function TryCanonicalizeTimeZoneIdentifierCase(const ATimeZone: string;
   out ACanonicalTimeZone: string): Boolean;
 function TimeZoneIdentifiersEqual(const ALeft, ARight: string): Boolean;
+// The primary identifier of a named zone or link (CLDR's primary, as
+// GetAvailablePrimaryTimeZoneIdentifiers lists them), when it is known.
+function TryKnownPrimaryTimeZoneIdentifier(const ATimeZone: string;
+  out APrimaryTimeZone: string): Boolean;
 function GetUtcOffsetSeconds(const ATimeZone: string; const AEpochSeconds: Int64): Integer;
 function TryGetTimeZoneTransitionMilliseconds(const ATimeZone: string;
   const AEpochMilliseconds: Int64; const ASubMillisecondNanoseconds: Integer;
