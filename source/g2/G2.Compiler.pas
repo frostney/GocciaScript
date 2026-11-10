@@ -3865,6 +3865,8 @@ begin
   else
     T := CompileFunction(CName, NoParams, nil, False, True, True, Derived, False, False, nil);
   CtorT := T;
+  { 20.2.3.5 Function.prototype.toString of a class: the class's source text }
+  T^.SourceRange := Def.SourceRange;
   EmitClosure(Ctor, T);
   if Derived then Emit(Ins(opClassSetup, Ctor, Parent, 1))
   else Emit(Ins(opClassSetup, Ctor, Parent, 0));
