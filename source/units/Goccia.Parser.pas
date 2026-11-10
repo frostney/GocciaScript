@@ -410,6 +410,10 @@ type
     function IsAssignmentPattern(const AExpr: TGocciaExpression): Boolean;
     procedure CheckStrictAssignmentName(const AName: string; const ALine, AColumn: Integer);
     function ConvertToPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
+    // the target of a for-in / for-of head: ES2026 B.3.9 lets non-strict code
+    // name a call there, which calls, then throws a ReferenceError on each
+    // iteration (a member target whose base expression does that)
+    function ForHeadTargetPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
     procedure SkipDestructuringPattern;
     procedure SkipExpression;
     procedure SkipExpressionWithLexicalGoal(
@@ -7958,7 +7962,7 @@ begin
           Exit;
         end;
 
-        AssignmentTarget := ConvertToPattern(TargetExpr);
+        AssignmentTarget := ForHeadTargetPattern(TargetExpr);
         Advance; // consume 'in'
         IterableExpr := Expression;
         Consume(gttRightParen, 'Expected ")" after for...in expression',
@@ -7987,7 +7991,7 @@ begin
             ((TGocciaIdentifierExpression(TargetExpr).Name = 'async') and not IsAwait)) then
           raise TGocciaSyntaxError.Create('The left-hand side of a for-of loop may not be ''let'' or ''async''',
             Peek.Line, Peek.Column, FFileName, FSourceLines);
-        AssignmentTarget := ConvertToPattern(TargetExpr);
+        AssignmentTarget := ForHeadTargetPattern(TargetExpr);
         Advance; // consume 'of'
         IterableExpr := Assignment;
         Consume(gttRightParen, 'Expected ")" after for...of expression',
@@ -12656,6 +12660,17 @@ begin
   if FStrictModeActive and ((AName = 'eval') or (AName = 'arguments')) then
     raise TGocciaSyntaxError.Create('Unexpected eval or arguments in strict mode', ALine, AColumn, FFileName,
       FSourceLines, SSuggestValidAssignmentTarget);
+end;
+
+function TGocciaParser.ForHeadTargetPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
+var Member: TGocciaMemberExpression;
+begin
+  if not IsWebCompatCallTarget(AExpr) then
+    Exit(ConvertToPattern(AExpr));
+  Member := TGocciaMemberExpression.Create(
+    TGocciaCallAssignmentTargetExpression.Create(AExpr, AExpr.Span),
+    'value', False, AExpr.Span);
+  Result := TGocciaMemberExpressionDestructuringPattern.Create(Member, AExpr.Span);
 end;
 
 function TGocciaParser.ConvertToPattern(const AExpr: TGocciaExpression): TGocciaDestructuringPattern;
