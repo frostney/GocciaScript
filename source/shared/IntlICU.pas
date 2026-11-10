@@ -622,6 +622,12 @@ type
     const APattern: PUChar; APatternLength: LongInt;
     var AStatus: TICUErrorCode): Pointer; cdecl;
   TUdatClose = procedure(AFormat: Pointer); cdecl;
+  TUdatGetCalendar = function(AFormat: Pointer): Pointer; cdecl;
+  TUdatSetCalendar = procedure(AFormat: Pointer; const ACalendar: Pointer); cdecl;
+  TUcalClone = function(const ACalendar: Pointer; var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUcalClose = procedure(ACalendar: Pointer); cdecl;
+  TUcalSetGregorianChange = procedure(ACalendar: Pointer; ADate: Double;
+    var AStatus: TICUErrorCode); cdecl;
   TUdatFormat = function(AFormat: Pointer; ADateToFormat: Double;
     AResult: PUChar; AResultLength: LongInt; APosition: Pointer;
     var AStatus: TICUErrorCode): LongInt; cdecl;
@@ -778,6 +784,11 @@ type
     UnumfClose: TUnumfClose;
     UnumfCloseResult: TUnumfCloseResult;
     UdatOpen: TUdatOpen;
+    UdatGetCalendar: TUdatGetCalendar;
+    UdatSetCalendar: TUdatSetCalendar;
+    UcalClone: TUcalClone;
+    UcalClose: TUcalClose;
+    UcalSetGregorianChange: TUcalSetGregorianChange;
     UdatClose: TUdatClose;
     UdatFormat: TUdatFormat;
     UdatFormatForFields: TUdatFormatForFields;
@@ -1014,6 +1025,18 @@ begin
   S := ResolveSymbol(AHandle, 'udat_close');
   if not Assigned(S) then Exit;
   F.UdatClose := TUdatClose(S);
+
+  // optional: the proleptic Gregorian calendar ECMA-402 requires
+  S := ResolveSymbol(AHandle, 'udat_getCalendar');
+  if Assigned(S) then F.UdatGetCalendar := TUdatGetCalendar(S);
+  S := ResolveSymbol(AHandle, 'udat_setCalendar');
+  if Assigned(S) then F.UdatSetCalendar := TUdatSetCalendar(S);
+  S := ResolveSymbol(AHandle, 'ucal_clone');
+  if Assigned(S) then F.UcalClone := TUcalClone(S);
+  S := ResolveSymbol(AHandle, 'ucal_close');
+  if Assigned(S) then F.UcalClose := TUcalClose(S);
+  S := ResolveSymbol(AHandle, 'ucal_setGregorianChange');
+  if Assigned(S) then F.UcalSetGregorianChange := TUcalSetGregorianChange(S);
 
   S := ResolveSymbol(AHandle, 'udat_format');
   if not Assigned(S) then Exit;
@@ -3412,6 +3435,32 @@ begin
   end;
 end;
 
+// ECMA-402 uses the proleptic Gregorian calendar (ECMA-262 §21.4.1), so
+// ICU's switch to the Julian calendar before 1582 moves to its earliest
+// instant. A calendar that is not Gregorian ignores it.
+procedure MakeProlepticGregorian(const AFormatter: Pointer);
+const
+  ICU_MIN_MILLIS = -184303902528000000.0;
+var
+  Calendar: Pointer;
+  Status: TICUErrorCode;
+begin
+  if not (Assigned(IntlFunctions.UdatGetCalendar) and
+     Assigned(IntlFunctions.UdatSetCalendar) and
+     Assigned(IntlFunctions.UcalClone) and Assigned(IntlFunctions.UcalClose) and
+     Assigned(IntlFunctions.UcalSetGregorianChange)) then
+    Exit;
+  Status := ICU_SUCCESS;
+  Calendar := IntlFunctions.UcalClone(
+    IntlFunctions.UdatGetCalendar(AFormatter), Status);
+  if not ICUSucceeded(Status) or not Assigned(Calendar) then
+    Exit;
+  IntlFunctions.UcalSetGregorianChange(Calendar, ICU_MIN_MILLIS, Status);
+  if ICUSucceeded(Status) then
+    IntlFunctions.UdatSetCalendar(AFormatter, Calendar);
+  IntlFunctions.UcalClose(Calendar);
+end;
+
 function OpenDateFormatter(const ALocale: string;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
 var
@@ -3471,6 +3520,8 @@ begin
     BytePointer(LocaleBytes), TzPtr, TzLen, PWideChar(Pattern),
     Length(Pattern), Status);
   Result := ICUSucceeded(Status) and Assigned(AFormatter);
+  if Result then
+    MakeProlepticGregorian(AFormatter);
 end;
 
 function TryICUOpenDateTimeFormatter(const ALocale: string;
