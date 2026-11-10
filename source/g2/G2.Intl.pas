@@ -505,7 +505,9 @@ begin
       begin
         T := SArg(Args, Argc, 3);
         if T = 'word' then G := isgWord else if T = 'sentence' then G := isgSentence else G := isgGrapheme;
-        if TryICUCreateBreakIterator(SArg(Args, Argc, 2), G, SArg(Args, Argc, 4), BI) then
+        { the text as UTF-16, lone surrogates and all (a UTF-8 round trip would merge them) }
+        if (Argc >= 4) and IsString(Args[4]) then U := StrToUnicode(StrOf(Args[4])) else U := '';
+        if TryICUCreateBreakIterator(SArg(Args, Argc, 2), G, U, BI) then
         begin
           PushRoot(MkPtr(NewArray(0, 16)));
           try
