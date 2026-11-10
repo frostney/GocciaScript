@@ -3287,8 +3287,11 @@
       var dt = GetISODateTimeFor(s.timeZone, s.ns), ns;
       if (smallest === "day") {
         var startNs = GetStartOfDay(s.timeZone, dt.isoDate), endNs = GetStartOfDay(s.timeZone, AddDaysToISODate(dt.isoDate, 1));
-        var len = endNs - startNs;
-        ns = startNs + roundBigToIncrement(s.ns - startNs, len, mode);
+        var len = endNs - startNs, progress = s.ns - startNs;
+        // the result is a start of day: the date's own or the next one's, even when a backward shift puts this
+        // instant after the next date's start (proposal-temporal #3312: midnight occurs twice)
+        if (progress >= len) progress = len - 1n;
+        ns = startNs + roundBigToIncrement(progress, len, mode);
       } else {
         var rr = RoundISODateTime(dt, inc, smallest, mode);
         var off = GetOffsetNanosecondsFor(s.timeZone, s.ns);
