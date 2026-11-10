@@ -307,6 +307,7 @@ const
   );
 
 var
+  HebrewDate: TTemporalDateRecord;
   CalendarICU: TTemporalCalendarICU;
   CalendarICULoadAttempted: Boolean;
   CalendarICUAvailable: Boolean;
@@ -3179,6 +3180,17 @@ begin
      (ShouldUseArithmeticHebrewISOYear(AISOYear) or
       ShouldUseArithmeticHebrewISODateOverride(AISOYear, AISOMonth, AISODay)) then
     Exit(TryISODateToHebrew(AISOYear, AISOMonth, AISODay, ACalendarDate));
+
+  // The years whose calendar-to-ISO direction is arithmetic
+  // (ShouldUseArithmeticHebrewOverrideYear) convert back arithmetically too,
+  // or a date would not round-trip.
+  if (ACalendarId = 'hebrew') and
+     TryISODateToHebrew(AISOYear, AISOMonth, AISODay, HebrewDate) and
+     ShouldUseArithmeticHebrewOverrideYear(HebrewDate.Year) then
+  begin
+    ACalendarDate := HebrewDate;
+    Exit(True);
+  end;
 
   if ACalendarId = 'indian' then
     Exit(TryISODateToIndian(AISOYear, AISOMonth, AISODay, ACalendarDate));
