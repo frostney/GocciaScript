@@ -496,7 +496,7 @@ begin
   PushRoot(Trap);
   PushRoot(D.Value); PushRoot(D.Get); PushRoot(D.Set_);
   DO_ := FromPropertyDescriptor(D, True);
-  if not ProxyCallTrap(RootAt(TempTop - 5), RootAt(TempTop - 4), 3, KeyToValue(Key), DO_, VUndefined, R) then
+  if not ProxyCallTrap(RootAt(TempTop - 5), RootAt(TempTop - 4), 2, KeyToValue(Key), DO_, VUndefined, R) then
   begin PopRoots(5); Exit(False); end;
   Ok := ToBool(R);
   if not Ok then begin PopRoots(5); Exit(True); end;
