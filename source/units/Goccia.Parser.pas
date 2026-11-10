@@ -346,6 +346,9 @@ type
       ASuggestion: string): TGocciaToken; overload;
     function ConsumeVarBindingName(const AMessage,
       ASuggestion: string): TGocciaToken;
+    // ES2026 B.3.?: outside strict mode code a (non-optional) call expression
+    // is an assignment target that throws a ReferenceError when evaluated
+    function IsWebCompatCallTarget(const AExpr: TGocciaExpression): Boolean;
     function IsArrowFunction: Boolean;
     function ReturnTypedArrowClosesConsequents(
       const ATypeStart, ATypeEnd: Integer): Boolean;
@@ -2567,6 +2570,12 @@ begin
   ValidateIdentifierBinding(Result);
 end;
 
+function TGocciaParser.IsWebCompatCallTarget(const AExpr: TGocciaExpression): Boolean;
+begin
+  Result := EffectiveNonStrictModeEnabled and (AExpr is TGocciaCallExpression) and
+    not IsInOptionalChain(AExpr);
+end;
+
 function TGocciaParser.ConsumeVarBindingName(const AMessage,
   ASuggestion: string): TGocciaToken;
 begin
@@ -3231,6 +3240,9 @@ begin
         Operator := Advance;
         Right := NestedUnary;
 
+        // ES2026 B.3.?: ++f() calls, then throws a ReferenceError
+        if IsWebCompatCallTarget(Right) then
+          Exit(TGocciaCallAssignmentTargetExpression.Create(Right, Operator.Span));
         // Only allow on identifiers and member expressions
         if not ((Right is TGocciaIdentifierExpression) or
                 (Right is TGocciaMemberExpression) or
@@ -3505,22 +3517,28 @@ begin
           Line := Token.Line;
           Column := Token.Column;
 
-          // Only allow on identifiers and member expressions
-          if not ((Result is TGocciaIdentifierExpression) or
-                  (Result is TGocciaMemberExpression) or
-                  (Result is TGocciaPrivateMemberExpression)) then
-            raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
-              Line, Column, FFileName, FSourceLines,
-              SSuggestValidIncrementTarget);
-          if Result is TGocciaIdentifierExpression then
-            CheckStrictAssignmentName(TGocciaIdentifierExpression(Result).Name, Result.Line, Result.Column)
-          else if IsInOptionalChain(Result) then
-            raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
-              Line, Column, FFileName, FSourceLines,
-              SSuggestValidIncrementTarget);
+          // ES2026 B.3.?: f()++ calls, then throws a ReferenceError
+          if IsWebCompatCallTarget(Result) then
+            Result := TGocciaCallAssignmentTargetExpression.Create(Result, Token.Span)
+          else
+          begin
+            // Only allow on identifiers and member expressions
+            if not ((Result is TGocciaIdentifierExpression) or
+                    (Result is TGocciaMemberExpression) or
+                    (Result is TGocciaPrivateMemberExpression)) then
+              raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
+                Line, Column, FFileName, FSourceLines,
+                SSuggestValidIncrementTarget);
+            if Result is TGocciaIdentifierExpression then
+              CheckStrictAssignmentName(TGocciaIdentifierExpression(Result).Name, Result.Line, Result.Column)
+            else if IsInOptionalChain(Result) then
+              raise TGocciaSyntaxError.Create('Invalid target for increment/decrement',
+                Line, Column, FFileName, FSourceLines,
+                SSuggestValidIncrementTarget);
 
-          Result := TGocciaIncrementExpression.Create(Result, Token.TokenType, False,
-            SourceSpanAtPosition(Line, Column));
+            Result := TGocciaIncrementExpression.Create(Result, Token.TokenType, False,
+              SourceSpanAtPosition(Line, Column));
+          end;
         end;
       gttTemplate, gttTemplateHead:
         begin
@@ -6496,6 +6514,14 @@ begin
           Right,
           SourceSpanAtPosition(Line, Column)
         );
+    end
+    else if IsWebCompatCallTarget(Left) and
+            not (Operator in [gttLogicalAndAssign, gttLogicalOrAssign, gttNullishCoalescingAssign]) then
+    begin
+      // ES2026 B.3.?: the call runs, then a ReferenceError; the value is
+      // never evaluated
+      Right.Free;
+      Result := TGocciaCallAssignmentTargetExpression.Create(Left, SourceSpanAtPosition(Line, Column));
     end
     else
       raise TGocciaSyntaxError.Create('Invalid assignment target', Left.Line, Left.Column, FFileName, FSourceLines,

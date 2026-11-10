@@ -70,6 +70,9 @@ procedure CompileArrowFunction(const ACtx: TGocciaCompilationContext;
 procedure CompileCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt16;
   const ATail: Boolean = False; const ANeedsResult: Boolean = True);
+// throws a ReferenceError (a new ReferenceError of AMessage)
+procedure EmitReferenceError(const ACtx: TGocciaCompilationContext;
+  const AMessage: string);
 procedure CompileMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaMemberExpression; const ADest: UInt16);
 procedure CompileConditional(const ACtx: TGocciaCompilationContext;

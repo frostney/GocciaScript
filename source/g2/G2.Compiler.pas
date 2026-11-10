@@ -5530,6 +5530,15 @@ begin
     for I := 0 to SE.Expressions.Count - 2 do begin ExprAny(SE.Expressions[I]); FreeTo(Save); end;
     ExprTo(SE.Expressions[SE.Expressions.Count - 1], Dest);
   end
+  else if E is TGocciaCallAssignmentTargetExpression then
+  begin
+    { Annex B: the call runs, then a ReferenceError }
+    Save := FS.FreeReg;
+    ExprAny(TGocciaCallAssignmentTargetExpression(E).Call);
+    FreeTo(Save);
+    Emit(Ins(opThrowConst, 0, 3, AtomConst('Invalid assignment target')));
+    Emit(Ins(opLoadUndef, Dest, 0, 0));
+  end
   else if E is TGocciaNewTargetExpression then
   begin
     if NewTargetOutside then raise EEarlySyntaxError.Create('new.target expression is not allowed here');

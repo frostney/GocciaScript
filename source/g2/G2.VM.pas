@@ -7505,10 +7505,11 @@ LReload:
         begin
           Fr^.PC := PC;
           { B = 1: 13.5.1.2 delete of a super reference; 2: a strict assignment to a binding (Consts[C]) its object
-            environment lost }
+            environment lost; 3: a ReferenceError with the message Consts[C] (Annex B call assignment targets) }
           case (I shr 24) and $FFFF of
             1: ThrowError('ReferenceError', 'Unsupported reference to ''super''');
             2: XThrowNotDefined(PStr(PtrOf(K[I shr 40])));
+            3: ThrowError('ReferenceError', StrToUnicode(PStr(PtrOf(K[I shr 40]))));
           else ThrowTypeError('Assignment to constant variable.');
           end;
           goto LThrow;

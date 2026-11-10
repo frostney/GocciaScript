@@ -153,6 +153,19 @@ type
     property Expressions: TObjectList<TGocciaExpression> read FExpressions;
   end;
 
+  // ES2026 B.3.? (web compatibility): a call expression as the target of an
+  // assignment, update or compound assignment outside strict mode code is no
+  // early error; evaluating it calls, then throws a ReferenceError (the
+  // value is not evaluated, nothing is assigned).
+  TGocciaCallAssignmentTargetExpression = class(TGocciaExpression)
+  private
+    FCall: TGocciaExpression;
+  public
+    procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
+    constructor Create(const ACall: TGocciaExpression; const ASpan: TGocciaSourceSpan);
+    property Call: TGocciaExpression read FCall;
+  end;
+
   TGocciaUnaryExpression = class(TGocciaExpression)
   private
     FOperator: TGocciaTokenType;
@@ -1162,6 +1175,13 @@ end;
 
 { TGocciaUnaryExpression }
 
+constructor TGocciaCallAssignmentTargetExpression.Create(
+  const ACall: TGocciaExpression; const ASpan: TGocciaSourceSpan);
+begin
+  inherited Create(ASpan);
+  FCall := ACall;
+end;
+
 constructor TGocciaUnaryExpression.Create(const AOperator: TGocciaTokenType;
   const AOperand: TGocciaExpression; const ASpan: TGocciaSourceSpan);
 begin
@@ -1982,6 +2002,12 @@ procedure TGocciaSequenceExpression.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
   VisitExpressionList(AVisitor, FExpressions);
+end;
+
+procedure TGocciaCallAssignmentTargetExpression.ForEachChild(
+  const AVisitor: TGocciaASTChildVisitor);
+begin
+  AVisitor.VisitChild(FCall);
 end;
 
 procedure TGocciaUnaryExpression.ForEachChild(

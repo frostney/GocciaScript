@@ -543,6 +543,13 @@ begin
     Goccia.Compiler.Expressions.CompileBinary(Ctx, TGocciaBinaryExpression(AExpr), ADest)
   else if AExpr is TGocciaSequenceExpression then
     Goccia.Compiler.Expressions.CompileSequence(Ctx, TGocciaSequenceExpression(AExpr), ADest)
+  else if AExpr is TGocciaCallAssignmentTargetExpression then
+  begin
+    // ES2026 B.3.?: a call as an assignment target calls, then throws a
+    // ReferenceError
+    DoCompileExpression(TGocciaCallAssignmentTargetExpression(AExpr).Call, ADest);
+    Goccia.Compiler.Expressions.EmitReferenceError(Ctx, 'Invalid assignment target');
+  end
   else if AExpr is TGocciaUnaryExpression then
     Goccia.Compiler.Expressions.CompileUnary(Ctx, TGocciaUnaryExpression(AExpr), ADest)
   else if AExpr is TGocciaPropertyCompoundAssignmentExpression then
