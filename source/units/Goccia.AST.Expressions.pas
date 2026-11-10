@@ -153,7 +153,7 @@ type
     property Expressions: TObjectList<TGocciaExpression> read FExpressions;
   end;
 
-  // ES2026 B.3.? (web compatibility): a call expression as the target of an
+  // ES2026 B.3.9 (web compatibility): a call expression as the target of an
   // assignment, update or compound assignment outside strict mode code is no
   // early error; evaluating it calls, then throws a ReferenceError (the
   // value is not evaluated, nothing is assigned).

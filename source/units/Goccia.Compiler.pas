@@ -545,7 +545,7 @@ begin
     Goccia.Compiler.Expressions.CompileSequence(Ctx, TGocciaSequenceExpression(AExpr), ADest)
   else if AExpr is TGocciaCallAssignmentTargetExpression then
   begin
-    // ES2026 B.3.?: a call as an assignment target calls, then throws a
+    // ES2026 B.3.9: a call as an assignment target calls, then throws a
     // ReferenceError
     DoCompileExpression(TGocciaCallAssignmentTargetExpression(AExpr).Call, ADest);
     Goccia.Compiler.Expressions.EmitReferenceError(Ctx, 'Invalid assignment target');

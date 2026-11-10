@@ -5532,7 +5532,7 @@ begin
   end
   else if E is TGocciaCallAssignmentTargetExpression then
   begin
-    { Annex B: the call runs, then a ReferenceError }
+    { B.3.9 Runtime Errors for Function Call Assignment Targets: the call runs, then a ReferenceError }
     Save := FS.FreeReg;
     ExprAny(TGocciaCallAssignmentTargetExpression(E).Call);
     FreeTo(Save);
