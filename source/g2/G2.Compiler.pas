@@ -1982,15 +1982,18 @@ end;
   local register of this function or one of its upvalues (resolving an outer binding captures it), with what
   EvalDeclarationInstantiation needs to know about it }
 function TCompiler.TopLevelBlockBindings: Boolean;
-var I: Integer;
+var I, J, From: Integer;
 begin
   Result := False;
-  for I := 1 to FS.ScopeCount - 1 do
-    if FS.Scopes[I].Count > 0 then Exit(True);
+  { isolated code (goal 0: a strict direct eval's) keeps its vars in registers too }
+  if Goal = 0 then From := 0 else From := 1;
+  for I := From to FS.ScopeCount - 1 do
+    for J := 0 to FS.Scopes[I].Count - 1 do
+      if (FS.Scopes[I].Bindings[J].Name <> '') and (FS.Scopes[I].Bindings[J].Name[1] <> '%') then Exit(True);
 end;
 
 function TCompiler.BuildEvalDescTop: UnicodeString;
-var Seen: TStringList; I, J, Fl: Integer; Sc: TScope;
+var Seen: TStringList; I, J, Fl, From: Integer; Sc: TScope;
   procedure Add(const N: UnicodeString; Kind, Idx, Flags: Integer);
   begin
     Result := Result + N + #2 + IntToStr(Kind) + #2 + IntToStr(Idx) + #2 + IntToStr(Flags) + #2 + '0' + #1;
@@ -2001,7 +2004,8 @@ begin
   try
     { 19.2.1.1 step 5.a: no new.target outside a function }
     Add('%nonewtarget', 0, 0, 0);
-    for I := FS.ScopeCount - 1 downto 1 do
+    if Goal = 0 then From := 0 else From := 1;
+    for I := FS.ScopeCount - 1 downto From do
     begin
       Sc := FS.Scopes[I];
       for J := Sc.Count - 1 downto 0 do
@@ -2020,6 +2024,7 @@ begin
             FS.Tpl^.Code[Sc.Bindings[J].HoleNop] := Ins(opLoadHole, Sc.Bindings[J].Reg, 0, 0);
         end
         else Fl := Fl or efInitialized;
+        if (I = 0) and not Sc.Bindings[J].IsLexical then Fl := Fl or efVarLevel;
         MarkCaptured(FS, Sc.Bindings[J].Reg);
         Add(Sc.Bindings[J].Name, 0, Sc.Bindings[J].Reg, Fl);
       end;
@@ -4537,7 +4542,7 @@ begin
     else EvalHint := Ord((FS.Parent = nil) and (Goal in [1, 2])) * 2 + 1;
     { in function code the eval code gets the call site's bindings }
     if FS.Parent <> nil then EvalDescConst := AtomConst(BuildEvalDesc) + 1
-    else if (Goal in [1, 2]) and TopLevelBlockBindings then EvalDescConst := AtomConst(BuildEvalDescTop) + 1;
+    else if (Goal in [0, 1, 2]) and TopLevelBlockBindings then EvalDescConst := AtomConst(BuildEvalDescTop) + 1;
   end;
   if E.Optional then ChainAdd(EmitJ(opJNullish, Base, 0));
   Argc := CompileArgs(E.Arguments, Base + 2, Spread);
