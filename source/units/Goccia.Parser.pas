@@ -4397,9 +4397,11 @@ begin
         else
         begin
           Name := '';
-          if IsIdentifierBindingToken(Peek.TokenType) then
-            Name := ConsumeIdentifierBinding(
-              'Expected function name').Lexeme;
+          // (let names a function expression outside strict mode code)
+          if IsIdentifierBindingToken(Peek.TokenType) or
+             (Check(gttLet) and EffectiveNonStrictModeEnabled) then
+            Name := ConsumeVarBindingName(
+              'Expected function name', '').Lexeme;
           CollectGenericParameters(TypeRanges);
           Result := ParseFunctionBodyExpression(Token.Line, Token.Column);
           Result.AddTypeRanges(TypeRanges);
@@ -8522,7 +8524,7 @@ begin
   if AIsGenerator then
     Consume(gttStar, 'Expected "*" after "function" in generator declaration');
 
-  NameToken := ConsumeIdentifierBinding('Expected function name',
+  NameToken := ConsumeVarBindingName('Expected function name',
     'Provide a name for the function declaration');
 
   CollectGenericParameters(TypeParameters);
@@ -8635,7 +8637,7 @@ begin
         CatchBindingPattern := ParsePattern
       else
       begin
-        CatchParam := ConsumeIdentifierBinding('Expected catch parameter',
+        CatchParam := ConsumeVarBindingName('Expected catch parameter',
           SSuggestProvideCatchParameter).Lexeme;
         if Check(gttColon) then
         begin
