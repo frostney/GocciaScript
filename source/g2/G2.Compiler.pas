@@ -1848,7 +1848,9 @@ begin
         FD := TGocciaFunctionDeclaration(L[I]);
         E2.Add(FD.Name);
         if FD.FunctionExpression.IsGenerator or FD.FunctionExpression.IsAsync then Continue;
-        if (Encl.IndexOf(FD.Name) >= 0) or (Lex.IndexOf(FD.Name) >= 0) or (FD.Name = 'arguments') then Continue;
+        { 10.2.11 web-compat steps: a function named arguments qualifies too unless a parameter has that name (TopLex
+          holds the parameter names); it then shares the arguments object's binding, like a var arguments }
+        if (Encl.IndexOf(FD.Name) >= 0) or (Lex.IndexOf(FD.Name) >= 0) then Continue;
         if AnnexBFuncs = nil then AnnexBFuncs := TDictionary<Pointer, Boolean>.Create;
         AnnexBFuncs.AddOrSetValue(FD, True);
         if Names.IndexOf(FD.Name) < 0 then Names.Add(FD.Name);
@@ -1955,7 +1957,7 @@ end;
 { B.3.2.1 step 29.a.ii.2 (and the global and eval forms): when the declaration is evaluated, the var binding
   gets the block binding's value }
 procedure TCompiler.EmitAnnexBCopy(FD: TGocciaFunctionDeclaration);
-var Src, J, U: Integer;
+var Src, J, U: Integer; F: TFuncState;
 begin
   if not ResolveLocal(FS, FD.Name, Src) then Exit;
   J := FS.Scopes[0].Find(FD.Name);
@@ -1973,6 +1975,17 @@ begin
     Emit(Ins(opWithSet, U, Src, AtomConst(FD.Name)));
     FreeTo(U);
     Exit;
+  end;
+  { goal 4: a function named arguments sets the caller's arguments binding (B.3.2.3, as for a var arguments) }
+  if FD.Name = 'arguments' then
+  begin
+    F := FS;
+    while (F <> nil) and F.IsArrow do F := F.Parent;
+    if (F <> nil) and F.IsEvalOuter then
+    begin
+      U := ResolveUpval(FS, '%arguments');
+      if U >= 0 then begin Emit(Ins(opSetUpv, Src, U, 0)); Exit; end;
+    end;
   end;
   U := ResolveUpval(FS, FD.Name);
   if U >= 0 then Emit(Ins(opSetUpv, Src, U, 0))
