@@ -666,6 +666,14 @@ type
     AResult: PUChar; AResultCapacity: LongInt; APosition: Pointer;
     var AStatus: TICUErrorCode): LongInt; cdecl;
   TUdtitvfmtOpenResult = function(var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUdtitvfmtFormatCalendarToResult = procedure(AFormatter: Pointer;
+    AFromCalendar, AToCalendar: Pointer; AResult: Pointer;
+    var AStatus: TICUErrorCode); cdecl;
+  TUcalOpen = function(const AZoneId: PUChar; AZoneIdLength: LongInt;
+    const ALocale: PAnsiChar; ACalendarType: LongInt;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
+  TUcalSetMillis = procedure(ACalendar: Pointer; ADate: Double;
+    var AStatus: TICUErrorCode); cdecl;
   TUdtitvfmtFormatToResult = procedure(AFormatter: Pointer; AFromDate, AToDate: Double;
     AResult: Pointer; var AStatus: TICUErrorCode); cdecl;
   TUdtitvfmtResultAsValue = function(AResult: Pointer; var AStatus: TICUErrorCode): Pointer; cdecl;
@@ -819,6 +827,9 @@ type
     UdtitvfmtFormat: TUdtitvfmtFormat;
     UdtitvfmtOpenResult: TUdtitvfmtOpenResult;
     UdtitvfmtFormatToResult: TUdtitvfmtFormatToResult;
+    UdtitvfmtFormatCalendarToResult: TUdtitvfmtFormatCalendarToResult;
+    UcalOpen: TUcalOpen;
+    UcalSetMillis: TUcalSetMillis;
     UdtitvfmtResultAsValue: TUdtitvfmtResultAsValue;
     UdtitvfmtCloseResult: TUdtitvfmtCloseResult;
     UcfposOpen: TUcfposOpen;
@@ -1112,6 +1123,13 @@ begin
   if Assigned(S) then F.UdtitvfmtOpenResult := TUdtitvfmtOpenResult(S);
   S := ResolveSymbol(AHandle, 'udtitvfmt_formatToResult');
   if Assigned(S) then F.UdtitvfmtFormatToResult := TUdtitvfmtFormatToResult(S);
+  // optional (ICU 67+): ranges of calendars, made proleptic Gregorian
+  S := ResolveSymbol(AHandle, 'udtitvfmt_formatCalendarToResult');
+  if Assigned(S) then F.UdtitvfmtFormatCalendarToResult := TUdtitvfmtFormatCalendarToResult(S);
+  S := ResolveSymbol(AHandle, 'ucal_open');
+  if Assigned(S) then F.UcalOpen := TUcalOpen(S);
+  S := ResolveSymbol(AHandle, 'ucal_setMillis');
+  if Assigned(S) then F.UcalSetMillis := TUcalSetMillis(S);
   S := ResolveSymbol(AHandle, 'udtitvfmt_resultAsValue');
   if Assigned(S) then F.UdtitvfmtResultAsValue := TUdtitvfmtResultAsValue(S);
   S := ResolveSymbol(AHandle, 'udtitvfmt_closeResult');
@@ -3710,18 +3728,129 @@ begin
   Result := ICUSucceeded(Status) and Assigned(AFormatter);
 end;
 
+// A calendar of ALocale's calendar type in the options' time zone at AMillis,
+// its switch to the Julian calendar moved to ICU's earliest instant (the
+// proleptic Gregorian calendar ECMA-402 requires); nil when ICU cannot.
+function OpenProlepticCalendar(const ALocaleBytes: TBytes;
+  const AOptions: TIntlDateTimeFormatOptions; AMillis: Double): Pointer;
+const
+  ICU_MIN_MILLIS = -184303902528000000.0;
+var
+  Status: TICUErrorCode;
+  TzUnicode: string;
+  TzPtr: PUChar;
+  TzLen: LongInt;
+begin
+  Result := nil;
+  if AOptions.TimeZone <> '' then
+  begin
+    TzUnicode := string(AOptions.TimeZone);
+    TzPtr := PWideChar(TzUnicode);
+    TzLen := Length(TzUnicode);
+  end
+  else
+  begin
+    TzPtr := nil;
+    TzLen := 0;
+  end;
+  Status := ICU_SUCCESS;
+  Result := IntlFunctions.UcalOpen(TzPtr, TzLen, BytePointer(ALocaleBytes), 0,
+    Status);
+  if not ICUSucceeded(Status) or not Assigned(Result) then
+  begin
+    if Assigned(Result) then
+      IntlFunctions.UcalClose(Result);
+    Exit(nil);
+  end;
+  // a calendar that is not Gregorian ignores the change
+  IntlFunctions.UcalSetGregorianChange(Result, ICU_MIN_MILLIS, Status);
+  Status := ICU_SUCCESS;
+  IntlFunctions.UcalSetMillis(Result, AMillis, Status);
+  if not ICUSucceeded(Status) then
+  begin
+    IntlFunctions.UcalClose(Result);
+    Result := nil;
+  end;
+end;
+
+// A date range formatted from two proleptic calendars (see
+// OpenProlepticCalendar), as a string and its parts. False when this ICU lacks
+// udtitvfmt_formatCalendarToResult; the millisecond path is the fallback.
+function TryFormatRangeOfCalendars(const ALocale: string; AStartMillis,
+  AEndMillis: Double; const AOptions: TIntlDateTimeFormatOptions;
+  out AFormatted: string; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter, RangeResult, FormattedValue, FromCal, ToCal: Pointer;
+  LocaleBytes: TBytes;
+begin
+  Result := False;
+  AFormatted := '';
+  SetLength(AParts, 0);
+  if not (Assigned(IntlFunctions.UdtitvfmtFormatCalendarToResult) and
+     Assigned(IntlFunctions.UcalOpen) and Assigned(IntlFunctions.UcalClose) and
+     Assigned(IntlFunctions.UcalSetMillis) and
+     Assigned(IntlFunctions.UcalSetGregorianChange) and
+     Assigned(IntlFunctions.UdtitvfmtOpenResult) and
+     Assigned(IntlFunctions.UdtitvfmtResultAsValue) and
+     Assigned(IntlFunctions.UdtitvfmtCloseResult)) then
+    Exit;
+  if not TryEncodeASCIIBytes(ApplyDateTimeLocaleOptions(ALocale, AOptions),
+     LocaleBytes) then
+    Exit;
+  if not OpenDateIntervalFormatter(ALocale, AOptions, Formatter) then
+    Exit;
+  FromCal := nil;
+  ToCal := nil;
+  RangeResult := nil;
+  try
+    FromCal := OpenProlepticCalendar(LocaleBytes, AOptions, AStartMillis);
+    ToCal := OpenProlepticCalendar(LocaleBytes, AOptions, AEndMillis);
+    if not Assigned(FromCal) or not Assigned(ToCal) then
+      Exit;
+    Status := ICU_SUCCESS;
+    RangeResult := IntlFunctions.UdtitvfmtOpenResult(Status);
+    if not ICUSucceeded(Status) or not Assigned(RangeResult) then
+      Exit;
+    IntlFunctions.UdtitvfmtFormatCalendarToResult(Formatter, FromCal, ToCal,
+      RangeResult, Status);
+    if not ICUSucceeded(Status) then
+      Exit;
+    FormattedValue := IntlFunctions.UdtitvfmtResultAsValue(RangeResult, Status);
+    if not ICUSucceeded(Status) or not Assigned(FormattedValue) then
+      Exit;
+    Result := FormattedValueToParts(FormattedValue, UFIELD_CATEGORY_DATE,
+      UFIELD_CATEGORY_DATE_INTERVAL_SPAN, DateFieldToPartType,
+      AFormatted, AParts);
+  finally
+    if Assigned(RangeResult) then
+      IntlFunctions.UdtitvfmtCloseResult(RangeResult);
+    if Assigned(FromCal) then
+      IntlFunctions.UcalClose(FromCal);
+    if Assigned(ToCal) then
+      IntlFunctions.UcalClose(ToCal);
+    IntlFunctions.UdtitvfmtClose(Formatter);
+  end;
+end;
+
 function TryICUFormatDateTimeRange(const ALocale: string; AStartMillis, AEndMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
 var
   Status: TICUErrorCode;
   Formatter: Pointer;
+  Parts: TIntlFormatPartArray;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
 begin
   Result := False;
   AFormatted := '';
 
-  if not EnsureLoaded or not Assigned(IntlFunctions.UdtitvfmtFormat) then
+  if not EnsureLoaded then
+    Exit;
+  if TryFormatRangeOfCalendars(ALocale, AStartMillis, AEndMillis, AOptions,
+     AFormatted, Parts) then
+    Exit(True);
+  if not Assigned(IntlFunctions.UdtitvfmtFormat) then
     Exit;
 
   if not OpenDateIntervalFormatter(ALocale, AOptions, Formatter) then
@@ -3751,8 +3880,12 @@ begin
   Result := False;
   SetLength(AParts, 0);
 
-  if not EnsureLoaded or
-     not Assigned(IntlFunctions.UdtitvfmtOpenResult) or
+  if not EnsureLoaded then
+    Exit;
+  if TryFormatRangeOfCalendars(ALocale, AStartMillis, AEndMillis, AOptions,
+     Formatted, AParts) then
+    Exit(True);
+  if not Assigned(IntlFunctions.UdtitvfmtOpenResult) or
      not Assigned(IntlFunctions.UdtitvfmtFormatToResult) or
      not Assigned(IntlFunctions.UdtitvfmtResultAsValue) or
      not Assigned(IntlFunctions.UdtitvfmtCloseResult) then
