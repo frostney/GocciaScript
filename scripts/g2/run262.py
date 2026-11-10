@@ -79,6 +79,9 @@ def run_one(job):
             for h in hs: cmd += ['--harness', h]
         cmd.append(path)
         env = dict(os.environ)
+        # the suite assumes a zone whose offset never changed (Date toISOString edge dates read the 1970 offset and
+        # apply it in year -271821): run in UTC as the repository's CI does, unless G2_TEST262_TZ names another
+        env['TZ'] = os.environ.get('G2_TEST262_TZ', 'UTC')
         if 'CanBlockIsFalse' in flags: env['G2_CANNOT_BLOCK'] = '1'
         try:
             p = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT_S, preexec_fn=limit, env=env)
