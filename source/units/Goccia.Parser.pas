@@ -1123,7 +1123,7 @@ begin
       'eval and arguments are not allowed as strict function names',
       ALine, AColumn, FFileName, FSourceLines);
   if Assigned(AFunction) and AFunction.ParsedInStrictMode and
-     (IsStrictModeReservedKeyword(AName) or (AName = KEYWORD_LET)) then
+     (IsStrictModeReservedKeyword(AName) or (AName = KEYWORD_LET) or (AName = KEYWORD_YIELD)) then
     raise TGocciaSyntaxError.Create(
       'Unexpected strict mode reserved word ''' + AName + ''' as a function name',
       ALine, AColumn, FFileName, FSourceLines);
