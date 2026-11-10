@@ -123,6 +123,7 @@ threadvar
   GVarCount: Integer;
   EvalHintMode, EvalHintFrame, EvalHintPC, EvalHintDesc: Integer;
   EvalDesc: TValue;   { TakeEvalHint: a direct eval's description of its caller's bindings (an atom), else undefined }
+  RealmEvalFn: TValue;   { the running realm's %eval%: a call is a direct eval only of this function (13.3.6.1) }
   { the native function object being called: a native reads its data (Aux1) from it before allocating }
   NativeSelf: TValue;
   { the key whose accessor getter a property read is about to call (%ThrowTypeError% tells caller from arguments) }
@@ -5997,7 +5998,13 @@ LReload:
         end;
       opEvalHint:
         begin
-          EvalHintMode := A + 1; EvalHintFrame := FrameTop; EvalHintPC := PC; EvalHintDesc := I shr 40;
+          { 13.3.6.1 step 6: direct only when the callee (the next call's base register) is this realm's %eval%
+            itself: not a bound eval, nor another realm's }
+          if R[(Code[PC] shr 8) and $FFFF] = RealmEvalFn then
+          begin
+            EvalHintMode := A + 1; EvalHintFrame := FrameTop; EvalHintPC := PC; EvalHintDesc := I shr 40;
+          end
+          else EvalHintMode := 0;
         end;
 
       opGetProp, opGetLength:

@@ -831,6 +831,9 @@ begin
   DefineNative(GlobalObj, 'decodeURIComponent', G_DecodeURIComponent, 1);
   DefineNative(GlobalObj, 'decodeURI', G_DecodeURI, 1);
   DefineNative(GlobalObj, 'eval', G_Eval, 1);
+  AddRoot(@RealmEvalFn);
+  RealmVals([@RealmEvalFn]);
+  RealmEvalFn := Lookup(GlobalObj, 'eval');
   Scratch := Lookup(GlobalObj, 'Date');
   DefineNative(Scratch, 'UTC', Date_UTC, 7);
   DefineNative(Scratch, 'parse', Date_Parse, 1);

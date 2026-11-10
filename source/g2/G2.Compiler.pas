@@ -4405,10 +4405,10 @@ begin
     ChainAdd(NullJ);
     NullJ := -1;
   end;
-  { a direct eval: eval named by an identifier that resolves to no local binding (a with object or an eval
-    environment may hold it: the call is direct when the value is %eval%, 13.3.6.1 step 6) }
+  { a direct eval: a call of the identifier eval, whatever binding holds it (a parameter, a var, a with object or
+    an eval environment): the call is direct when the value is %eval% (13.3.6.1 step 6) }
   if (E.Callee is TGocciaIdentifierExpression) and (TGocciaIdentifierExpression(E.Callee).Name = 'eval') and
-     not E.Optional and not ResolveLocal(FS, 'eval', K) and (ResolveUpval(FS, 'eval') < 0) then
+     not E.Optional then
   begin
     { A: 2 global var declarations (non-strict Script top level), 1 a strict caller (19.2.1.1: the eval code is
       strict), 0 its declarations stay its own }
