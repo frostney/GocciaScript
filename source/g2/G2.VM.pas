@@ -4584,6 +4584,38 @@ begin
   Result := NewKeyAtom(StrToUnicode(Name), kfPrivate);
 end;
 
+threadvar
+  PreludePrivAt: array of UnicodeString;   { the opNewPrivName instructions of prelude code, and their names }
+  PreludePrivKey: array of PStr;
+  PreludePrivCount: Integer;
+
+{ a private name of a prelude's class: one per instruction for all of this agent's realms, so a built-in's internal
+  slots (private fields) are the same slots whichever realm's methods check them (an iterator helper's next from
+  another realm, say). The prelude's classes are evaluated once per realm. }
+function XPrivateKeyAt(Tpl: PFuncTemplate; PC: Integer; Name: PStr): PStr; noinline;
+var SN, At: UnicodeString; I: Integer;
+begin
+  SN := Tpl^.SourceName;
+  if (SN = '') or (SN[1] <> '<') or (SN = '<eval>') or (SN = '<Function>') or (SN = '<ShadowRealm>') then
+    Exit(XPrivateKey(Name));
+  { a realm runs its own copy of the prelude's templates: the instruction is named by the prelude, the function
+    and its index }
+  At := SN + '/';
+  if Tpl^.Name <> nil then At := At + StrToUnicode(Tpl^.Name);
+  At := At + '/' + IntToStr(PC) + '/' + StrToUnicode(Name);
+  for I := 0 to PreludePrivCount - 1 do
+    if PreludePrivAt[I] = At then Exit(PreludePrivKey[I]);
+  Result := XPrivateKey(Name);
+  if PreludePrivCount >= Length(PreludePrivAt) then
+  begin
+    SetLength(PreludePrivAt, PreludePrivCount * 2 + 32);
+    SetLength(PreludePrivKey, PreludePrivCount * 2 + 32);
+  end;
+  PreludePrivAt[PreludePrivCount] := At;
+  PreludePrivKey[PreludePrivCount] := Result;
+  Inc(PreludePrivCount);
+end;
+
 function XThrowInitTwice(Key: PStr): Boolean; noinline;
 begin
   Result := ThrowTypeError('Cannot initialize ' + StrToUnicode(Key) + ' twice on the same object');
@@ -5925,7 +5957,7 @@ LReload:
       opSetGLex:
         if not GLexSet(I shr 40, R[A]) then begin Fr^.PC := PC; goto LThrow; end;
       opNewPrivName:
-        R[A] := MkPtr(XPrivateKey(PStr(PtrOf(K[I shr 40]))));
+        R[A] := MkPtr(XPrivateKeyAt(Tpl, PC, PStr(PtrOf(K[I shr 40]))));
       opGetPriv:
         begin
           Fr^.PC := PC;
