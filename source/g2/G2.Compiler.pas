@@ -424,6 +424,7 @@ type
     procedure CollectVarNames(N: TGocciaASTNode; Names: TStringList); noinline;   { inlined, its threadvar cache trips the FPC TLS miscompile }
     { B.3.2: the block-level function declarations of a non-strict body that also get a var binding (their names
       into Names, the declarations into AnnexBFuncs); TopLex the names a var could not share at the top }
+    procedure NoteLegacyArgumentsRead(O: TGocciaExpression);
     procedure CollectAnnexB(Nodes: TList<TGocciaASTNode>; TopLex, Names: TStringList);
     procedure AnnexBWalk(N: TGocciaASTNode; Encl, Names: TStringList);
     procedure AnnexBWalkList(L: TList<TGocciaASTNode>; Encl, Names: TStringList);
@@ -4800,6 +4801,30 @@ begin
   ChainJumps[High(ChainJumps)] := J;
 end;
 
+{ F.arguments (the legacy function reflection) is the arguments object of F's newest active call, with every
+  argument passed. A call keeps only its declared parameters unless the function has an arguments object, so a
+  read of N.arguments or X.N.arguments gives the enclosing non-strict function named N one }
+procedure TCompiler.NoteLegacyArgumentsRead(O: TGocciaExpression);
+var N: UnicodeString; F: TFuncState;
+begin
+  if O is TGocciaIdentifierExpression then N := TGocciaIdentifierExpression(O).Name
+  else if (O is TGocciaMemberExpression) and not TGocciaMemberExpression(O).Computed then
+    N := TGocciaMemberExpression(O).PropertyName
+  else Exit;
+  if N = '' then Exit;
+  F := FS;
+  while F <> nil do
+  begin
+    if not F.IsArrow and (F.ArgsReg >= 0) and not F.Tpl^.IsStrict and (F.Tpl^.Name = AtomOf(N)) then
+    begin
+      F.ArgsUsed := True;
+      F.ArgsEscaped := True;
+      Exit;
+    end;
+    F := F.Parent;
+  end;
+end;
+
 procedure TCompiler.CompileMember(E: TGocciaMemberExpression; Dest: Integer);
 var Save, O, K: Integer; IsLink: Boolean; SavedJ: TJumpList;
 begin
@@ -4810,6 +4835,7 @@ begin
     else CompileSuperMember(E.PropertyName, nil, Dest);
     Exit;
   end;
+  if not E.Computed and (E.PropertyName = 'arguments') then NoteLegacyArgumentsRead(E.ObjectExpr);
   IsLink := ChainBegin(SavedJ);
   Save := FS.FreeReg;
   ChainObject(E.ObjectExpr);
