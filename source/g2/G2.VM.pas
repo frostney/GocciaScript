@@ -3137,6 +3137,12 @@ begin
       if not GetV(RootAt(TempTop - 2), AtomPrototype, Proto) then Result := False
       else if IsObject(Proto) and (ObjOf(RootAt(TempTop - 1))^.Shape^.Proto <> Proto) then
         SetProto(ObjOf(RootAt(TempTop - 1)), Proto)
+      else if not IsObject(Proto) and not MultiRealm then
+      begin
+        { 10.1.14 step 3.a GetFunctionRealm(new.target): a revoked proxy throws even with one realm }
+        if (ObjOf(RootAt(TempTop - 2))^.OKind = okProxy) and not GetFunctionRealm(RootAt(TempTop - 2), N) then
+          Result := False;
+      end
       else if not IsObject(Proto) and MultiRealm then
       begin
         { the default prototype of new.target's realm }
@@ -3444,6 +3450,21 @@ begin
     Exit(ICGetEntry(@IC^.Poly0, O, Res));
   end;
   Result := (IC^.PolyCount > 1) and ICGetOther(IC, O, Res);
+end;
+
+{ HasProperty on O's prototypes for a global name: a proxy on the chain answers through its has trap }
+function InheritedHasV(O: PObj; Key: PStr; var Found: Boolean): Boolean;
+var Pv: TValue;
+begin
+  Found := False;
+  Result := True;
+  Pv := O^.Shape^.Proto;
+  while IsObject(Pv) do
+  begin
+    if ObjOf(Pv)^.OKind = okProxy then Exit(HasPropertyV(Pv, Key, Found));
+    if ShapeLookup(ObjOf(Pv)^.Shape, Key) >= 0 then begin Found := True; Exit; end;
+    Pv := ObjOf(Pv)^.Shape^.Proto;
+  end;
 end;
 
 function InheritedHas(O: PObj; Key: PStr): Boolean;
@@ -5824,7 +5845,9 @@ LReload:
             if CI < 0 then
             begin
               { the global object inherits from Object.prototype: a bare hasOwnProperty resolves there }
-              if InheritedHas(O, IC^.Key) then
+              Fr^.PC := PC;
+              if not InheritedHasV(O, IC^.Key, Bool) then goto LThrow;
+              if Bool then
               begin
                 Fr^.PC := PC;
                 if not GetV(GlobalObj, IC^.Key, V) then goto LThrow;
@@ -5875,10 +5898,14 @@ LReload:
               Continue;
             end;
             { 6.2.5.6 PutValue: an unresolvable reference in strict code throws }
-            if (CI < 0) and Tpl^.IsStrict and not InheritedHas(O, IC^.Key) then
+            if (CI < 0) and Tpl^.IsStrict then
             begin
-              XThrowNotDefined(IC^.Key);
-              goto LThrow;
+              if not InheritedHasV(O, IC^.Key, Bool) then goto LThrow;
+              if not Bool then
+              begin
+                XThrowNotDefined(IC^.Key);
+                goto LThrow;
+              end;
             end;
             if not SetVS(GlobalObj, IC^.Key, R[A], Tpl^.IsStrict) then goto LThrow;
           end;
@@ -7434,7 +7461,13 @@ LReload:
         begin
           IC := @Tpl^.ICs[I shr 40];
           O := ObjOf(GlobalObj);
-          R[A] := MkBool((GLexFind(IC^.Key) >= 0) or (ShapeLookup(O^.Shape, IC^.Key) >= 0) or InheritedHas(O, IC^.Key));
+          Bool := (GLexFind(IC^.Key) >= 0) or (ShapeLookup(O^.Shape, IC^.Key) >= 0);
+          if not Bool then
+          begin
+            Fr^.PC := PC;
+            if not InheritedHasV(O, IC^.Key, Bool) then goto LThrow;
+          end;
+          R[A] := MkBool(Bool);
         end;
       opThrowConst:
         begin
