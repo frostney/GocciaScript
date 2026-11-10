@@ -54,7 +54,9 @@ inline replies, thread resolution, monitoring, recording results where the PR
 procedure directs, and the review-automation
 retrigger that the PR procedure permits for an exact head without a completed
 verdict. `automatic-merge` additionally authorizes one ordinary ready PR's
-squash merge and owned cleanup. A PR that is a stack member returns readiness
+squash merge and the
+[merged-worktree cleanup](../git-workflow/SKILL.md#remove-merged-worktrees)
+that follows it. A PR that is a stack member returns readiness
 to the stack owner without merging.
 
 Normal stack mode additionally authorizes review triggers and new top fix layers,
