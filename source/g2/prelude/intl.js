@@ -1513,7 +1513,9 @@
     if (s.icuLocale === undefined) {
       var l = removeUnicodeExtension(s.locale), px = l.indexOf("-x-");
       if (px >= 0) l = l.slice(0, px);
-      s.icuLocale = s.collation !== "default" ? l + "-u-co-" + s.collation : l;
+      // usage "search": the locale's search collation (10.3.1: [[Usage]] selects the locale data)
+      if (s.usage === "search") s.icuLocale = l + "-u-co-search";
+      else s.icuLocale = s.collation !== "default" ? l + "-u-co-" + s.collation : l;
     }
     return s.icuLocale;
   }
