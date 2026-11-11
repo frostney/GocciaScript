@@ -173,6 +173,9 @@ type
     HasAccessors: Boolean;
     HasIndexKeys: Boolean;  { some key is an array index: element writes into holes consult it }
     IsDict: Boolean;        { unique to one object, mutated in place }
+    { a child shape extends this shape's Keys and PFlags in place (shared arrays: a shape reads only its first
+      Count entries, and only a dictionary's are written below its Count); the next child copies them }
+    KeysLent: Boolean;
     Version: Cardinal;      { a dictionary's in-place adds: an inline cache that passed it records this }
     ProtoChild: array of record P: TValue; S: PShape; end;  { root shapes per prototype }
   end;
@@ -1567,7 +1570,20 @@ begin
       if KP[I] = Key then Exit(I);
     Exit(-1);
   end;
-  if S^.HashMask < 0 then BuildHash(S);
+  if S^.HashMask < 0 then
+  begin
+    { without a hash, HashMask counts down the lookups: a shape looked up only a few times (a prototype's shapes
+      while its methods are defined one by one) is scanned, not hashed }
+    if (S^.HashMask > -4) and (S^.Count <= 64) then
+    begin
+      Dec(S^.HashMask);
+      KP := Pointer(S^.Keys);
+      for I := S^.Count - 1 downto 0 do
+        if KP[I] = Key then Exit(I);
+      Exit(-1);
+    end;
+    BuildHash(S);
+  end;
   KP := Pointer(S^.HashKeys);
   M := S^.HashMask;
   J := Integer(Key^.Hash) and M;
@@ -1628,8 +1644,17 @@ begin
   begin
     N := NewShape(S, S^.Proto);
     N^.Count := S^.Count;
-    N^.Keys := Copy(S^.Keys, 0, S^.Count);
-    N^.PFlags := Copy(S^.PFlags, 0, S^.Count);
+    if not MakeDict and not S^.KeysLent then
+    begin
+      N^.Keys := S^.Keys;
+      N^.PFlags := S^.PFlags;
+      S^.KeysLent := True;
+    end
+    else
+    begin
+      N^.Keys := Copy(S^.Keys, 0, S^.Count);
+      N^.PFlags := Copy(S^.PFlags, 0, S^.Count);
+    end;
     N^.HasAccessors := S^.HasAccessors;
     N^.HasIndexKeys := S^.HasIndexKeys;
     if MakeDict then
