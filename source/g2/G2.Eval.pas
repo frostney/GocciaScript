@@ -28,7 +28,7 @@ implementation
 
 uses
   Classes, Linux, UnixType, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
-  G2.PreParse, G2.Lazy;
+  G2.PreParse, G2.Lazy, G2.Snapshot;
 
 threadvar
   LazyMode: Integer;   { G2_LAZY: 0 not read yet, 1 off (G2_LAZY=0), 2 on (the default) }
@@ -264,6 +264,7 @@ var St: PLazyStub; LS, PrevSrc: TLazySource; R: ^TLazyRec; L: TGocciaLexer; P: T
 begin
   clock_gettime(CLOCK_MONOTONIC, @TS0);
   St := PLazyStub(T^.Lazy);
+  if St^.Src = nil then Exit(MaterializeSnapshotTemplate(T));
   LS := St^.Src;
   R := @LS.Recs[St^.Id];
   if LazyDebug < 0 then

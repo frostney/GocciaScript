@@ -12,7 +12,14 @@ unit G2.Snapshot;
   holds what a template's code depends on: constants are numbers and the
   like (stored as their bits) or strings (stored as text and interned again),
   and IC keys are atoms. Anything else makes the writer give up on that
-  prelude, which is then parsed at startup. }
+  prelude, which is then parsed at startup.
+
+  A template is its header (what making a closure of it reads: name, register
+  layout, flags, upvalues) and its body (code, constants, ICs, nested
+  templates), the body's length first. A nested function's body is read on its
+  first call (a lazy template, G2.Eval's LazyCompile calls
+  MaterializeSnapshotTemplate): most of the preludes' functions (Temporal,
+  Intl) are never called. }
 {$mode delphiunicode}{$H+}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
@@ -23,16 +30,18 @@ uses
   SysUtils, Classes, G2.Core, G2.Bytecode;
 
 function CompilePrelude(const Name, Source: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString): Boolean;
+{ reads the body of T, a template whose body the snapshot reader skipped (T^.Lazy a PLazyStub with Src nil) }
+function MaterializeSnapshotTemplate(T: PFuncTemplate): Boolean;
 
 implementation
 
 uses
-  BigInteger, G2.BigIntV, G2.Eval;
+  BigInteger, G2.BigIntV, G2.Eval, G2.Lazy;
 
 {$I G2.PreludeSnapshot.inc}
 
 const
-  SNAP_MAGIC = $31533247;   { 'G2S1' }
+  SNAP_MAGIC = $32533247;   { 'G2S2' }
 
 { identifies the prelude source a snapshot entry was made from: its length and about 4096 of its characters,
   evenly spaced (the build makes the snapshot from the same sources; startup hashes every prelude) }
@@ -71,16 +80,12 @@ begin
   if P = nil then WriteI32(S, -1) else WriteText(S, StrToUnicode(P));
 end;
 
-procedure WriteTemplate(S: TStream; T: PFuncTemplate);
-var I: Integer; V: TValue; Flags: Byte;
+procedure WriteTemplate(S: TStream; T: PFuncTemplate); forward;
+
+procedure WriteBody(S: TStream; T: PFuncTemplate);
+var I: Integer; V: TValue;
 begin
-  WriteStr(S, T^.Name);
-  WriteI32(S, T^.CodeLen); WriteI32(S, T^.EntryPC); WriteI32(S, T^.NumParams); WriteI32(S, T^.MaxRegs);
-  WriteI32(S, T^.RestReg); WriteI32(S, T^.ArgsReg); WriteI32(S, T^.HomeReg); WriteI32(S, T^.NewTargetReg);
-  WriteI32(S, T^.ExpectedProps); WriteI32(S, T^.Length); WriteI32(S, T^.AsyncReg);
-  Flags := Ord(T^.IsArrow) or Ord(T^.IsClassCtor) shl 1 or Ord(T^.IsDerived) shl 2 or Ord(T^.IsMethod) shl 3 or
-    Ord(T^.IsGenerator) shl 4 or Ord(T^.IsAsync) shl 5 or Ord(T^.IsStrict) shl 6 or Ord(T^.SimpleParams) shl 7;
-  WriteU8(S, Flags);
+  WriteI32(S, T^.CodeLen); WriteI32(S, T^.EntryPC);
   for I := 0 to T^.CodeLen - 1 do WriteU64(S, T^.Code[I]);
   WriteI32(S, Length(T^.Lines));
   for I := 0 to High(T^.Lines) do WriteI32(S, T^.Lines[I]);
@@ -93,8 +98,6 @@ begin
     else if IsBigInt(V) then begin WriteU8(S, 2); WriteText(S, BigToString(V)); end
     else raise ESnapshotUnsupported.Create('constant of a kind the snapshot cannot hold');
   end;
-  WriteI32(S, Length(T^.Upvals));
-  for I := 0 to High(T^.Upvals) do begin WriteU8(S, Ord(T^.Upvals[I].FromParentLocal)); WriteI32(S, T^.Upvals[I].Index); end;
   WriteI32(S, Length(T^.ICs));
   for I := 0 to High(T^.ICs) do
   begin
@@ -110,6 +113,28 @@ begin
   if T^.FieldInit <> nil then WriteTemplate(S, T^.FieldInit);
   WriteText(S, T^.SourceName);
   WriteText(S, T^.SourceRange.Get);
+end;
+
+procedure WriteTemplate(S: TStream; T: PFuncTemplate);
+var I: Integer; Flags: Byte; Body: TMemoryStream;
+begin
+  WriteStr(S, T^.Name);
+  WriteI32(S, T^.NumParams); WriteI32(S, T^.MaxRegs);
+  WriteI32(S, T^.RestReg); WriteI32(S, T^.ArgsReg); WriteI32(S, T^.HomeReg); WriteI32(S, T^.NewTargetReg);
+  WriteI32(S, T^.ExpectedProps); WriteI32(S, T^.Length); WriteI32(S, T^.AsyncReg);
+  Flags := Ord(T^.IsArrow) or Ord(T^.IsClassCtor) shl 1 or Ord(T^.IsDerived) shl 2 or Ord(T^.IsMethod) shl 3 or
+    Ord(T^.IsGenerator) shl 4 or Ord(T^.IsAsync) shl 5 or Ord(T^.IsStrict) shl 6 or Ord(T^.SimpleParams) shl 7;
+  WriteU8(S, Flags);
+  WriteI32(S, Length(T^.Upvals));
+  for I := 0 to High(T^.Upvals) do begin WriteU8(S, Ord(T^.Upvals[I].FromParentLocal)); WriteI32(S, T^.Upvals[I].Index); end;
+  Body := TMemoryStream.Create;
+  try
+    WriteBody(Body, T);
+    WriteI32(S, Body.Size);
+    S.CopyFrom(Body, 0);
+  finally
+    Body.Free;
+  end;
 end;
 
 var SnapshotStarted: Boolean = False;
@@ -154,6 +179,17 @@ end;
 
 { ---------------- reading ---------------- }
 
+var
+  { G2_SNAPSHOT_EAGER set: every body is read at startup (1), or not (0); -1 not read yet }
+  SnapshotEager: Integer = -1;
+
+function GetSnapshotEager: Integer;
+begin
+  if SnapshotEager < 0 then
+    if GetEnvironmentVariable('G2_SNAPSHOT_EAGER') <> '' then SnapshotEager := 1 else SnapshotEager := 0;
+  Result := SnapshotEager;
+end;
+
 type
   TReader = record
     P, Limit: PByte;
@@ -179,37 +215,26 @@ begin
 end;
 
 function TReader.Str: PStr;
-var N: Integer; U: UnicodeString;
+var N: Integer;
 begin
   N := I32;
   if N < 0 then Exit(nil);
-  SetLength(U, N);
-  if N > 0 then Move(P^, U[1], N * 2);
+  Result := AtomOfChars(PWideChar(P), N);
   Inc(P, N * 2);
-  Result := AtomOf(U);
 end;
 
-function ReadTemplate(var R: TReader): PFuncTemplate;
-var T: PFuncTemplate; I, N: Integer; Flags: Byte;
+function ReadTemplate(var R: TReader; Lazy: Boolean): PFuncTemplate; forward;
+
+procedure ReadBody(var R: TReader; T: PFuncTemplate);
+var I, N: Integer;
 begin
-  New(T);
-  { every field starts zeroed (New leaves the unmanaged ones as garbage: the runtime caches, such as new's, must
-    start empty) }
-  FillChar(T^, SizeOf(TFuncTemplate), 0);
-  RegisterTemplate(T);
-  T^.Name := R.Str;
-  T^.CodeLen := R.I32; T^.EntryPC := R.I32; T^.NumParams := R.I32; T^.MaxRegs := R.I32;
-  T^.RestReg := R.I32; T^.ArgsReg := R.I32; T^.HomeReg := R.I32; T^.NewTargetReg := R.I32;
-  T^.ExpectedProps := R.I32; T^.Length := R.I32; T^.AsyncReg := R.I32;
-  T^.GdiKind := 0; T^.GdiLexBase := 0;   { prelude templates are never Script tops }
-  Flags := R.U8;
-  T^.IsArrow := Flags and 1 <> 0; T^.IsClassCtor := Flags and 2 <> 0; T^.IsDerived := Flags and 4 <> 0;
-  T^.IsMethod := Flags and 8 <> 0; T^.IsGenerator := Flags and 16 <> 0; T^.IsAsync := Flags and 32 <> 0;
-  T^.IsStrict := Flags and 64 <> 0; T^.SimpleParams := Flags and 128 <> 0;
+  T^.CodeLen := R.I32; T^.EntryPC := R.I32;
   SetLength(T^.Code, T^.CodeLen);
-  for I := 0 to T^.CodeLen - 1 do T^.Code[I] := R.U64;
+  if T^.CodeLen > 0 then Move(R.P^, T^.Code[0], T^.CodeLen * 8);
+  Inc(R.P, T^.CodeLen * 8);
   SetLength(T^.Lines, R.I32);
-  for I := 0 to High(T^.Lines) do T^.Lines[I] := R.I32;
+  if Length(T^.Lines) > 0 then Move(R.P^, T^.Lines[0], Length(T^.Lines) * 4);
+  Inc(R.P, Length(T^.Lines) * 4);
   SetLength(T^.Consts, R.I32);
   for I := 0 to High(T^.Consts) do
     case R.U8 of
@@ -217,8 +242,6 @@ begin
       1: T^.Consts[I] := MkPtr(R.Str);
     else T^.Consts[I] := BigToValue(TBigInteger.FromDecimalString(string(StrToUnicode(R.Str))), True);   { a BigInt literal }
     end;
-  SetLength(T^.Upvals, R.I32);
-  for I := 0 to High(T^.Upvals) do begin T^.Upvals[I].FromParentLocal := R.U8 <> 0; T^.Upvals[I].Index := R.I32; end;
   N := R.I32;
   SetLength(T^.ICs, N);
   for I := 0 to N - 1 do
@@ -228,12 +251,59 @@ begin
     T^.ICs[I].Slot := R.I32;
   end;
   SetLength(T^.Children, R.I32);
-  for I := 0 to High(T^.Children) do T^.Children[I] := ReadTemplate(R);
-  if R.U8 <> 0 then T^.FieldInit := ReadTemplate(R) else T^.FieldInit := nil;
+  for I := 0 to High(T^.Children) do T^.Children[I] := ReadTemplate(R, True);
+  { a class's field initializer runs from its constructor's construction: read now }
+  if R.U8 <> 0 then T^.FieldInit := ReadTemplate(R, False) else T^.FieldInit := nil;
   T^.SourceName := R.Text;
   T^.SourceRange.SetText(R.Text);
   FinishTemplate(T);
+end;
+
+{ Lazy: a function whose body is read on its first call (not a class constructor: its construction reads more of
+  the template than a call's frame does) }
+function ReadTemplate(var R: TReader; Lazy: Boolean): PFuncTemplate;
+var T: PFuncTemplate; I, BodyLen: Integer; Flags: Byte; St: PLazyStub;
+begin
+  New(T);
+  { every field starts zeroed (New leaves the unmanaged ones as garbage: the runtime caches, such as new's, must
+    start empty) }
+  FillChar(T^, SizeOf(TFuncTemplate), 0);
+  RegisterTemplate(T);
+  T^.Name := R.Str;
+  T^.NumParams := R.I32; T^.MaxRegs := R.I32;
+  T^.RestReg := R.I32; T^.ArgsReg := R.I32; T^.HomeReg := R.I32; T^.NewTargetReg := R.I32;
+  T^.ExpectedProps := R.I32; T^.Length := R.I32; T^.AsyncReg := R.I32;
+  T^.GdiKind := 0; T^.GdiLexBase := 0;   { prelude templates are never Script tops }
+  Flags := R.U8;
+  T^.IsArrow := Flags and 1 <> 0; T^.IsClassCtor := Flags and 2 <> 0; T^.IsDerived := Flags and 4 <> 0;
+  T^.IsMethod := Flags and 8 <> 0; T^.IsGenerator := Flags and 16 <> 0; T^.IsAsync := Flags and 32 <> 0;
+  T^.IsStrict := Flags and 64 <> 0; T^.SimpleParams := Flags and 128 <> 0;
+  SetLength(T^.Upvals, R.I32);
+  for I := 0 to High(T^.Upvals) do begin T^.Upvals[I].FromParentLocal := R.U8 <> 0; T^.Upvals[I].Index := R.I32; end;
+  BodyLen := R.I32;
+  if Lazy and not T^.IsClassCtor and (GetSnapshotEager = 0) then
+  begin
+    New(St);
+    St^.Src := nil;
+    St^.SnapPos := R.P;
+    T^.Lazy := St;
+    T^.FastCall := False;
+    Inc(R.P, BodyLen);
+  end
+  else ReadBody(R, T);
   Result := T;
+end;
+
+function MaterializeSnapshotTemplate(T: PFuncTemplate): Boolean;
+var R: TReader; St: PLazyStub;
+begin
+  St := PLazyStub(T^.Lazy);
+  R.P := St^.SnapPos;
+  R.Limit := PByte(@G2PreludeSnapshot[0]) + G2PreludeSnapshotSize;
+  T^.Lazy := nil;
+  Dispose(St);
+  ReadBody(R, T);
+  Result := True;
 end;
 
 function FromSnapshot(const Name, Source: UnicodeString; var T: PFuncTemplate): Boolean;
@@ -252,7 +322,7 @@ begin
     if EntryName = Name then
     begin
       if Hash <> SourceHash(Source) then Exit;   { the prelude changed since the snapshot: parse it }
-      T := ReadTemplate(R);
+      T := ReadTemplate(R, False);
       Exit(True);
     end;
     Inc(R.P, Len);

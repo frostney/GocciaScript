@@ -53,7 +53,8 @@ type
   { TFuncTemplate.Lazy: a stub template's compilation, deferred }
   PLazyStub = ^TLazyStub;
   TLazyStub = record
-    Src: TLazySource;
+    Src: TLazySource;            { nil: a snapshot template's body not read yet (G2.Snapshot), at SnapPos }
+    SnapPos: PByte;
     Id: Integer;                 { its record in Src }
     CompileName: UnicodeString;  { the name CompileFunction was given }
     IsArrow, IsGenerator, IsAsync, IsStrict: Boolean;
