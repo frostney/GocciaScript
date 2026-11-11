@@ -20,6 +20,11 @@ const
   TAG_SPECIAL = QWord($FFFA000000000000);
   TAG_PTR     = QWord($FFFB000000000000);
   TAG_MASK    = QWord($FFFF000000000000);
+  { the tags' top 16 bits: V shr 48 against these is a shift and a compare (V and TAG_MASK against a tag loads two
+    64-bit immediates) }
+  TAG_INT_HI     = $FFF9;
+  TAG_SPECIAL_HI = $FFFA;
+  TAG_PTR_HI     = $FFFB;
   PTR_MASK    = QWord($0000FFFFFFFFFFFF);
   DOUBLE_LIMIT = QWord($FFF9000000000000);
   CANON_NAN   = QWord($7FF8000000000000);
@@ -353,12 +358,12 @@ uses
 { ---------------- values ---------------- }
 
 function IsDouble(V: TValue): Boolean; inline; begin Result := V < DOUBLE_LIMIT; end;
-function IsInt(V: TValue): Boolean; inline; begin Result := (V and TAG_MASK) = TAG_INT; end;
-function IsNumber(V: TValue): Boolean; inline; begin Result := (V < DOUBLE_LIMIT) or ((V and TAG_MASK) = TAG_INT); end;
-function IsPtr(V: TValue): Boolean; inline; begin Result := (V and TAG_MASK) = TAG_PTR; end;
+function IsInt(V: TValue): Boolean; inline; begin Result := (V shr 48) = TAG_INT_HI; end;
+function IsNumber(V: TValue): Boolean; inline; begin Result := (V < DOUBLE_LIMIT) or ((V shr 48) = TAG_INT_HI); end;
+function IsPtr(V: TValue): Boolean; inline; begin Result := (V shr 48) = TAG_PTR_HI; end;
 function PtrOf(V: TValue): Pointer; inline; begin Result := Pointer(PtrUInt(V and PTR_MASK)); end;
 function MkPtr(P: Pointer): TValue; inline; begin Result := TAG_PTR or QWord(PtrUInt(P)); end;
-function MkInt(I: Int32): TValue; inline; begin Result := TAG_INT or (QWord(Int64(I)) and $FFFFFFFF); end;
+function MkInt(I: Int32): TValue; inline; begin Result := TAG_INT or QWord(UInt32(I)); end;
 function IntOf(V: TValue): Int32; inline; begin Result := Int32(UInt32(V)); end;
 
 function DoubleToUint32Mod(D: Double): UInt32;
@@ -436,7 +441,7 @@ end;
 function QuickInt32(V: TValue; out I: Int32): Boolean; inline;
 var D: Double;
 begin
-  if (V and TAG_MASK) = TAG_INT then begin I := Int32(UInt32(V)); Exit(True); end;
+  if (V shr 48) = TAG_INT_HI then begin I := Int32(UInt32(V)); Exit(True); end;
   if V >= DOUBLE_LIMIT then Exit(False);
   D := PDouble(@V)^;
   { below 2^53 the truncation is exact in an Int64, and ToInt32 is its low 32 bits (NaN fails both tests) }
@@ -462,9 +467,9 @@ function NumOf(V: TValue): Double; inline;
 begin if V < DOUBLE_LIMIT then Result := PDouble(@V)^ else Result := Int32(UInt32(V)); end;
 function MkBool(B: Boolean): TValue; inline; begin if B then Result := VTrue else Result := VFalse; end;
 function IsString(V: TValue): Boolean; inline;
-begin Result := ((V and TAG_MASK) = TAG_PTR) and (PCell(PtrUInt(V and PTR_MASK))^.Kind = ckString); end;
+begin Result := ((V shr 48) = TAG_PTR_HI) and (PCell(PtrUInt(V and PTR_MASK))^.Kind = ckString); end;
 function IsObject(V: TValue): Boolean; inline;
-begin Result := ((V and TAG_MASK) = TAG_PTR) and (PCell(PtrUInt(V and PTR_MASK))^.Kind = ckObject); end;
+begin Result := ((V shr 48) = TAG_PTR_HI) and (PCell(PtrUInt(V and PTR_MASK))^.Kind = ckObject); end;
 function ObjOf(V: TValue): PObj; inline; begin Result := PObj(PtrUInt(V and PTR_MASK)); end;
 function StrOf(V: TValue): PStr; inline; begin Result := PStr(PtrUInt(V and PTR_MASK)); end;
 function IsNullish(V: TValue): Boolean; inline; begin Result := (V = VUndefined) or (V = VNull); end;
@@ -642,7 +647,7 @@ end;
 
 procedure WriteBarrier(Container: PCell; V: TValue); inline;
 begin
-  if ((Container^.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+  if ((Container^.Flags and (cfOld or cfRemembered)) = cfOld) and ((V shr 48) = TAG_PTR_HI) and
      IsYoung(Pointer(PtrUInt(V and PTR_MASK))) then
     Remember(Container);
 end;
@@ -700,7 +705,7 @@ end;
 procedure GCVisit(var V: TValue); inline;
 var P: Pointer;
 begin
-  if (V and TAG_MASK) = TAG_PTR then
+  if (V shr 48) = TAG_PTR_HI then
   begin
     P := Pointer(PtrUInt(V and PTR_MASK));
     if InMinor then
@@ -717,7 +722,7 @@ function NurseryCellOK(V: TValue): Boolean;
 var P, Q: PByte;
 begin
   Result := True;
-  if (V and TAG_MASK) <> TAG_PTR then Exit;
+  if (V shr 48) <> TAG_PTR_HI then Exit;
   P := PByte(PtrUInt(V and PTR_MASK));
   if (P < NurseryStart) or (P >= NurseryLimit) then Exit;
   if P >= NurseryTop then Exit(False);
@@ -1344,7 +1349,7 @@ var I: Integer; P: PPage; Q: PByte; C: PCell; L: PLarge;
   end;
   procedure CheckV(C: PCell; const Field: string; V: TValue);
   begin
-    if (V and TAG_MASK) = TAG_PTR then CheckP(C, Field, Pointer(PtrUInt(V and PTR_MASK)));
+    if (V shr 48) = TAG_PTR_HI then CheckP(C, Field, Pointer(PtrUInt(V and PTR_MASK)));
   end;
   procedure CheckCell(C: PCell);
   var J: Integer; O: PObj; VA: PValueArray;
@@ -1394,7 +1399,7 @@ var I: Integer;
 begin
 
   for I := 0 to ShapeCount - 1 do
-    if ((AllShapes[I]^.Proto and TAG_MASK) = TAG_PTR) and IsYoung(PtrOf(AllShapes[I]^.Proto)) then
+    if ((AllShapes[I]^.Proto shr 48) = TAG_PTR_HI) and IsYoung(PtrOf(AllShapes[I]^.Proto)) then
     begin
       WriteLn(ErrOutput, 'after minor ', GCMinorCount, ': shape ', I, ' still points into the nursery: ', IntToHex(AllShapes[I]^.Proto, 16));
       Halt(9);
@@ -1413,7 +1418,7 @@ end;
 
 procedure CheckRoot(const V: TValue; const Where: string; I: Integer);
 begin
-  if ((V and TAG_MASK) = TAG_PTR) and not ValidPtr(Pointer(PtrUInt(V and PTR_MASK))) then
+  if ((V shr 48) = TAG_PTR_HI) and not ValidPtr(Pointer(PtrUInt(V and PTR_MASK))) then
   begin
     WriteLn(ErrOutput, 'bad pointer ', IntToHex(V, 16), ' at ', Where, ' ', I, ' minor ', GCMinorCount, ' major ', GCMajorCount,
       ' nursery ', IntToHex(PtrUInt(NurseryStart), 16));
@@ -1436,7 +1441,7 @@ begin
     begin
       CheckRoot(AllShapes[I]^.Proto, 'shape', I);
       V := AllShapes[I]^.Proto;
-      if ((V and TAG_MASK) = TAG_PTR) and ((PCell(PtrOf(V))^.Kind > 40) or (PCell(PtrOf(V))^.Size = 0) or
+      if ((V shr 48) = TAG_PTR_HI) and ((PCell(PtrOf(V))^.Kind > 40) or (PCell(PtrOf(V))^.Size = 0) or
          (PCell(PtrOf(V))^.Size > 1 shl 30)) then
       begin
         Write(ErrOutput, 'shape ', I, ' of ', ShapeCount, ' (dict ', AllShapes[I]^.IsDict, ', count ', AllShapes[I]^.Count,
@@ -1460,7 +1465,7 @@ end;
 { cold: a prototype's first root shape (and the verifier's report) out of RootShapeFor's frame }
 function NewRootShape(Proto: TValue): PShape; noinline;
 begin
-  if GCVerify and ((Proto and TAG_MASK) = TAG_PTR) and not NurseryCellOK(Proto) then
+  if GCVerify and ((Proto shr 48) = TAG_PTR_HI) and not NurseryCellOK(Proto) then
   begin
     WriteLn(ErrOutput, 'RootShapeFor: a stale prototype ', IntToHex(Proto, 16));
     PInteger(nil)^ := 0;   { stop here under a debugger }
@@ -2011,7 +2016,7 @@ end;
 function PrimitiveToNumber(V: TValue): Double;
 begin
   if V < DOUBLE_LIMIT then Exit(PDouble(@V)^);
-  if (V and TAG_MASK) = TAG_INT then Exit(Int32(UInt32(V)));
+  if (V shr 48) = TAG_INT_HI then Exit(Int32(UInt32(V)));
   case V of
     VUndefined: Result := NaN;
     VNull, VFalse: Result := 0;
@@ -2024,10 +2029,10 @@ end;
 
 function ToBool(V: TValue): Boolean; inline;
 begin
-  if (V and TAG_MASK) = TAG_INT then Exit(UInt32(V) <> 0);
+  if (V shr 48) = TAG_INT_HI then Exit(UInt32(V) <> 0);
   if V < DOUBLE_LIMIT then Exit((PDouble(@V)^ <> 0) and (V <> CANON_NAN));
   if V = VTrue then Exit(True);
-  if (V and TAG_MASK) = TAG_SPECIAL then Exit(False);
+  if (V shr 48) = TAG_SPECIAL_HI then Exit(False);
   if IsString(V) then Exit(StrOf(V)^.Len > 0);
   if PCell(PtrOf(V))^.Kind = 9 then Exit(PInt32(PByte(PtrOf(V)) + 8)^ <> 0);
   Result := (PCell(PtrOf(V))^.Flags and cfEmulatesUndefined) = 0;
@@ -2072,7 +2077,7 @@ end;
 function IndexFromValue(V: TValue; out Idx: Int64): Boolean; inline;
 var D: Double;
 begin
-  if (V and TAG_MASK) = TAG_INT then
+  if (V shr 48) = TAG_INT_HI then
   begin
     Idx := Int32(UInt32(V));
     Exit(Idx >= 0);

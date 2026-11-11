@@ -1386,10 +1386,10 @@ function ArgsMapCell(O: PObj; Key: PStr; var Idx: Int64): PUpval;
 var E: PValueArray;
 begin
   Result := nil;
-  if (O^.OKind <> okArgumentsOrd) or ((O^.Aux1 and TAG_MASK) <> TAG_PTR) then Exit;
+  if (O^.OKind <> okArgumentsOrd) or ((O^.Aux1 shr 48) <> TAG_PTR_HI) then Exit;
   if not IndexFromString(Key, Idx) then Exit;
   E := PValueArray(PtrOf(O^.Aux1));
-  if (Idx >= E^.Len) or ((E^.Data[Idx] and TAG_MASK) <> TAG_PTR) then Exit;
+  if (Idx >= E^.Len) or ((E^.Data[Idx] shr 48) <> TAG_PTR_HI) then Exit;
   Result := PUpval(PtrOf(E^.Data[Idx]));
 end;
 
@@ -1539,7 +1539,7 @@ begin
   begin
     if O^.OKind = okProxy then Exit(ProxyGet(MkPtr(O), Key, Receiver, Res));
     { 10.4.4.3 [[Get]] of a mapped index: the parameter's current value }
-    if (O^.OKind = okArgumentsOrd) and ((O^.Aux1 and TAG_MASK) = TAG_PTR) then
+    if (O^.OKind = okArgumentsOrd) and ((O^.Aux1 shr 48) = TAG_PTR_HI) then
     begin
       U := ArgsMapCell(O, Key, Idx);
       if U <> nil then begin Res := ArgsMapGet(U); Exit(True); end;
@@ -1792,7 +1792,7 @@ begin
     if CanonicalNumericNonIndex(Key) then Exit(TAStoreValue(Obj, -1, V));
   end;
   { 10.4.4.4 [[Set]] with the arguments object as its own receiver: a mapped index's parameter too }
-  if (O^.OKind = okArgumentsOrd) and ((O^.Aux1 and TAG_MASK) = TAG_PTR) then
+  if (O^.OKind = okArgumentsOrd) and ((O^.Aux1 shr 48) = TAG_PTR_HI) then
   begin
     U := ArgsMapCell(O, Key, Idx);
     if U <> nil then ArgsMapSet(U, V);
@@ -4995,7 +4995,7 @@ begin
           begin
             V := R[A];
             { a store the write barrier has to remember: an old container gets a nursery pointer }
-            if ((U^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+            if ((U^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V shr 48) = TAG_PTR_HI) and
                (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@U^.Hdr);
             U^.Value := V;
           end;
@@ -5010,7 +5010,7 @@ begin
         begin
 LGetProp:
           VB := R[PWord(PByte(IP) - 5)^];
-          if (VB and TAG_MASK) <> TAG_PTR then begin {$IFDEF G2_BAILSTATS}Inc(BailCounts[250]);{$ENDIF} goto LBail; end;
+          if (VB shr 48) <> TAG_PTR_HI then begin {$IFDEF G2_BAILSTATS}Inc(BailCounts[250]);{$ENDIF} goto LBail; end;
           O := PObj(PtrUInt(VB and PTR_MASK));
           if O^.Hdr.Kind = ckObject then
           begin
@@ -5141,12 +5141,12 @@ LGetProp:
               if Integer(E^.Len) <= IC^.Slot - O^.InlineCap then E^.Len := IC^.Slot - O^.InlineCap + 1;
               O^.Shape := IC^.NewShape;
             end;
-            if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+            if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V shr 48) = TAG_PTR_HI) and
                (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@E^.Hdr);
             E^.Data[IC^.Slot - O^.InlineCap] := V;
             Continue;
           end;
-          if ((O^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+          if ((O^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V shr 48) = TAG_PTR_HI) and
              (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@O^.Hdr);
           if IC^.NewShape <> nil then O^.Shape := IC^.NewShape;
           O^.Slots[IC^.Slot] := V;
@@ -5159,7 +5159,7 @@ LGetProp:
           if (O^.Shape <> IC^.Shape) or (IC^.NewShape = nil) or (IC^.Slot >= O^.InlineCap) or
              ((O^.OFlags and 8) <> 0) then goto LBail;
           V := R[PWord(PByte(IP) - 5)^];
-          if ((O^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+          if ((O^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V shr 48) = TAG_PTR_HI) and
              (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@O^.Hdr);
           O^.Shape := IC^.NewShape;
           O^.Slots[IC^.Slot] := V;
@@ -5226,7 +5226,7 @@ LGetProp:
               ((CI = Integer(E^.Len)) and (CI < Integer(E^.Cap)) and (O^.OKind = okArray) and AppendProtosPlain(O))) then
           begin
             { a store the write barrier has to remember: an old container gets a nursery pointer }
-            if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+            if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V shr 48) = TAG_PTR_HI) and
                (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@E^.Hdr);
             E^.Data[CI] := V;
             if CI = Integer(E^.Len) then E^.Len := CI + 1;
@@ -5238,7 +5238,7 @@ LGetProp:
              (O^.OKind in [okPlain, okArray]) and ((O^.OFlags and (8 or 64)) = 0) and not O^.Shape^.HasIndexKeys and
              ElemMissUndefined(O, CI) then
           begin
-            if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
+            if ((E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V shr 48) = TAG_PTR_HI) and
                (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@E^.Hdr);
             E^.Data[CI] := V;
             Continue;
@@ -5268,10 +5268,10 @@ LGetProp:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
-          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             Sum := Int64(Int32(UInt32(VA))) + Int64(Int32(UInt32(VB)));
-            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or QWord(UInt32(Sum))
             else R[A] := MkDouble(Sum);
           end
           else if (VA < DOUBLE_LIMIT) and (VB < DOUBLE_LIMIT) then R[A] := MkArith(PDouble(@VA)^ + PDouble(@VB)^)
@@ -5282,10 +5282,10 @@ LGetProp:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
           CI := SarInt64(Int64(I), 40);
-          if (VA and TAG_MASK) = TAG_INT then
+          if (VA shr 48) = TAG_INT_HI then
           begin
             Sum := Int64(Int32(UInt32(VA))) + CI;
-            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or QWord(UInt32(Sum))
             else R[A] := MkDouble(Sum);
           end
           else if VA < DOUBLE_LIMIT then R[A] := MkArith(PDouble(@VA)^ + CI)
@@ -5296,10 +5296,10 @@ LGetProp:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
-          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             Sum := Int64(Int32(UInt32(VA))) - Int64(Int32(UInt32(VB)));
-            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or QWord(UInt32(Sum))
             else R[A] := MkDouble(Sum);
           end
           else if (VA < DOUBLE_LIMIT) and (VB < DOUBLE_LIMIT) then R[A] := MkArith(PDouble(@VA)^ - PDouble(@VB)^)
@@ -5310,13 +5310,13 @@ LGetProp:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
-          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             Sum := Int64(Int32(UInt32(VA))) * Int64(Int32(UInt32(VB)));
             { a zero product of a negative operand is -0, a double }
             if (Sum >= -2147483648) and (Sum <= 2147483647) and
                not ((Sum = 0) and ((Int32(UInt32(VA)) < 0) or (Int32(UInt32(VB)) < 0))) then
-              R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+              R[A] := TAG_INT or QWord(UInt32(Sum))
             else R[A] := MkDouble(Double(Int32(UInt32(VA))) * Double(Int32(UInt32(VB))));
           end
           else if (VA < DOUBLE_LIMIT) and (VB < DOUBLE_LIMIT) then R[A] := MkArith(PDouble(@VA)^ * PDouble(@VB)^)
@@ -5334,7 +5334,7 @@ LGetProp:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
-          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) and (Int32(UInt32(VB)) > 0) and
+          if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) and (Int32(UInt32(VB)) > 0) and
              (Int32(UInt32(VA)) >= 0) then
             R[A] := MkInt(Int32(UInt32(VA)) mod Int32(UInt32(VB)))
           else goto LBail;
@@ -5357,7 +5357,7 @@ LGetProp:
       opInstanceof:
         begin
           VB := R[I shr 40];
-          if (VB and TAG_MASK) <> TAG_PTR then goto LBail;
+          if (VB shr 48) <> TAG_PTR_HI then goto LBail;
           O := PObj(PtrUInt(VB and PTR_MASK));
           if (O^.Hdr.Kind <> ckObject) or (O^.OKind <> okFunction) or MultiRealmAny then goto LBail;
           T := PFuncTemplate(O^.Native);
@@ -5398,7 +5398,7 @@ LGetProp:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
           NP := Int32(SarInt64(Int64(I), 40));
-          if (VA and TAG_MASK) = TAG_INT then CI := Int32(UInt32(VA))
+          if (VA shr 48) = TAG_INT_HI then CI := Int32(UInt32(VA))
           else if not QuickInt32(VA, CI) then goto LBail;
           case TOp(I and $FF) of
             opBitAndI: R[A] := MkInt(CI and NP);
@@ -5444,7 +5444,7 @@ LGetProp:
           { StrictEquals }
           if VA = VB then Bool := not IsDouble(VA) or (PDouble(@VA)^ = PDouble(@VA)^)
           else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
-          else if ((VA and TAG_MASK) <> TAG_PTR) or ((VB and TAG_MASK) <> TAG_PTR) then
+          else if ((VA shr 48) <> TAG_PTR_HI) or ((VB shr 48) <> TAG_PTR_HI) then
             Bool := False   { different, and not both numbers: a non-pointer equals only itself }
           else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
           else if IsBigInt(VA) and IsBigInt(VB) then goto LBail
@@ -5488,8 +5488,8 @@ LGetProp:
           begin
             Bool := ((VA = VUndefined) or (VA = VNull)) and ((VB = VUndefined) or (VB = VNull));
             { B.3.6.2: an [[IsHTMLDDA]] object against undefined or null }
-            if not Bool and (((VA and TAG_MASK) = TAG_PTR) and ((PCell(PtrUInt(VA and PTR_MASK))^.Flags and cfEmulatesUndefined) <> 0) or
-               ((VB and TAG_MASK) = TAG_PTR) and ((PCell(PtrUInt(VB and PTR_MASK))^.Flags and cfEmulatesUndefined) <> 0)) then
+            if not Bool and (((VA shr 48) = TAG_PTR_HI) and ((PCell(PtrUInt(VA and PTR_MASK))^.Flags and cfEmulatesUndefined) <> 0) or
+               ((VB shr 48) = TAG_PTR_HI) and ((PCell(PtrUInt(VB and PTR_MASK))^.Flags and cfEmulatesUndefined) <> 0)) then
               Bool := True;
           end
           else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
@@ -5544,7 +5544,7 @@ LGetProp:
         begin
           VA := R[A];
           VB := R[PWord(PByte(IP) - 5)^];
-          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             case TOp(I and $FF) of
               opJNLt: Bool := Int32(UInt32(VA)) < Int32(UInt32(VB));
@@ -5572,7 +5572,7 @@ LGetProp:
           { StrictEquals }
           if VA = VB then Bool := not IsDouble(VA) or (PDouble(@VA)^ = PDouble(@VA)^)
           else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
-          else if ((VA and TAG_MASK) <> TAG_PTR) or ((VB and TAG_MASK) <> TAG_PTR) then
+          else if ((VA shr 48) <> TAG_PTR_HI) or ((VB shr 48) <> TAG_PTR_HI) then
             Bool := False   { different, and not both numbers: a non-pointer equals only itself }
           else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
           else if IsBigInt(VA) and IsBigInt(VB) then goto LBail
@@ -5612,7 +5612,7 @@ LGetProp:
           begin
             { a primitive this: Execute's PushBytecodeFrame boxes it (no frame is pushed yet) }
             V := R[0];
-            if (V and TAG_MASK) = TAG_PTR then
+            if (V shr 48) = TAG_PTR_HI then
             begin
               if PCell(PtrUInt(V and PTR_MASK))^.Kind <> ckObject then goto LBail;
             end
@@ -5647,7 +5647,7 @@ LGetProp:
             (as Execute's opIterNext); anything else is Execute's }
           CI := PWord(PByte(IP) - 5)^;
           VB := R[CI];
-          if (VB and TAG_MASK) <> TAG_PTR then goto LBail;
+          if (VB shr 48) <> TAG_PTR_HI then goto LBail;
           O := PObj(PtrUInt(VB and PTR_MASK));
           if O^.Hdr.Kind <> ckObject then goto LBail;
           if (O^.OKind = okIterator) and (O^.OFlags = 0) and (R[CI + 1] = ArrayIterNextFn) then
@@ -5724,7 +5724,7 @@ LGetProp:
           begin
             U := PUpval(PtrOf(OpenUpvals[J - 1]));
             VB := VS[U^.StackIndex];
-            if ((U^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((VB and TAG_MASK) = TAG_PTR) and
+            if ((U^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((VB shr 48) = TAG_PTR_HI) and
                (PByte(PtrUInt(VB and PTR_MASK)) >= NS) and (PByte(PtrUInt(VB and PTR_MASK)) < NL) then goto LBail;
             Dec(J);
           end;
@@ -6106,7 +6106,7 @@ LReload:
           end;
           VB := R[(I shr 24) and $FFFF];
           IC := @Tpl^.ICs[I shr 40];
-          if (VB and TAG_MASK) = TAG_PTR then
+          if (VB shr 48) = TAG_PTR_HI then
           begin
             O := PObj(PtrUInt(VB and PTR_MASK));
             if O^.Hdr.Kind = ckObject then
@@ -6388,10 +6388,10 @@ LReload:
         begin
           VA := R[(I shr 24) and $FFFF];
           VB := R[I shr 40];
-          if ((VA and VB and TAG_MASK) = TAG_INT) and ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          if ((VA and VB and TAG_MASK) = TAG_INT) and ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             Sum := Int64(Int32(UInt32(VA))) + Int64(Int32(UInt32(VB)));
-            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or QWord(UInt32(Sum))
             else R[A] := MkDouble(Sum);
           end
           else if IsNumber(VA) and IsNumber(VB) then
@@ -6415,10 +6415,10 @@ LReload:
         begin
           VA := R[(I shr 24) and $FFFF];
           CI := SarInt64(Int64(I), 40);
-          if (VA and TAG_MASK) = TAG_INT then
+          if (VA shr 48) = TAG_INT_HI then
           begin
             Sum := Int64(Int32(UInt32(VA))) + CI;
-            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+            if (Sum >= -2147483648) and (Sum <= 2147483647) then R[A] := TAG_INT or QWord(UInt32(Sum))
             else R[A] := MkDouble(Sum);
           end
           else if VA < DOUBLE_LIMIT then R[A] := MkDouble(PDouble(@VA)^ + CI)
@@ -6433,13 +6433,13 @@ LReload:
         begin
           VA := R[(I shr 24) and $FFFF];
           VB := R[I shr 40];
-          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             if TOp(I and $FF) = opSub then Sum := Int64(Int32(UInt32(VA))) - Int64(Int32(UInt32(VB)))
             else Sum := Int64(Int32(UInt32(VA))) * Int64(Int32(UInt32(VB)));
             if (Sum >= -2147483648) and (Sum <= 2147483647) and not ((Sum = 0) and (TOp(I and $FF) = opMul) and
                ((Int32(UInt32(VA)) < 0) or (Int32(UInt32(VB)) < 0))) then
-              R[A] := TAG_INT or (QWord(Sum) and $FFFFFFFF)
+              R[A] := TAG_INT or QWord(UInt32(Sum))
             else if TOp(I and $FF) = opSub then R[A] := MkDouble(Sum)
             else R[A] := MkDouble(Double(Int32(UInt32(VA))) * Double(Int32(UInt32(VB))));
           end
@@ -6471,7 +6471,7 @@ LReload:
         begin
           VA := R[(I shr 24) and $FFFF];
           VB := R[I shr 40];
-          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) and (Int32(UInt32(VB)) > 0) and
+          if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) and (Int32(UInt32(VB)) > 0) and
              (Int32(UInt32(VA)) >= 0) then
             R[A] := MkInt(Int32(UInt32(VA)) mod Int32(UInt32(VB)))
           else if IsNumber(VA) and IsNumber(VB) then
@@ -6511,7 +6511,7 @@ LReload:
         begin
           VA := R[(I shr 24) and $FFFF];
           VB := R[I shr 40];
-          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             case TOp(I and $FF) of
               opBitAnd: R[A] := MkInt(IntOf(VA) and IntOf(VB));
@@ -6665,7 +6665,7 @@ LReload:
         begin
           VA := R[A];
           VB := R[(I shr 24) and $FFFF];
-          if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
+          if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             case TOp(I and $FF) of
               opJNLt: Bool := Int32(UInt32(VA)) < Int32(UInt32(VB));
@@ -6782,7 +6782,7 @@ LReload:
           end;
           { f.call(t, ...args) with the intrinsic call and a bytecode or native f: the registers shift down a place
             (f the callee, t its this) and f is called here, without the call native's nested Execute }
-          if (O^.OKind = okNative) and (O^.Native = FuncCallNative) and ((R[A + 1] and TAG_MASK) = TAG_PTR) and
+          if (O^.OKind = okNative) and (O^.Native = FuncCallNative) and ((R[A + 1] shr 48) = TAG_PTR_HI) and
              (PCell(PtrUInt(R[A + 1] and PTR_MASK))^.Kind = ckObject) and (ObjOf(R[A + 1])^.OKind in [okFunction, okNative]) then
           begin
             VA := R[A + 1];

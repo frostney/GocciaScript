@@ -34,7 +34,7 @@ implementation
 
 function IsBigInt(V: TValue): Boolean; inline;
 begin
-  Result := ((V and TAG_MASK) = TAG_PTR) and (PCell(PtrUInt(V and PTR_MASK))^.Kind = ckBigInt);
+  Result := ((V shr 48) = TAG_PTR_HI) and (PCell(PtrUInt(V and PTR_MASK))^.Kind = ckBigInt);
 end;
 
 function BigToValue(const B: TBigInteger; Permanent: Boolean): TValue;

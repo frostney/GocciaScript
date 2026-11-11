@@ -821,7 +821,7 @@ var O, B: PObj; Idx, ES, I, VL: Integer; LE, V: TValue; Little: Boolean; P: PByt
   D: Double;
 begin
   Result := False;
-  if (Kind >= taBigInt64) or (Kind = taFloat16) or (Argc < 1) or not IsDV(Args[0]) or ((Args[1] and TAG_MASK) <> TAG_INT) then Exit;
+  if (Kind >= taBigInt64) or (Kind = taFloat16) or (Argc < 1) or not IsDV(Args[0]) or ((Args[1] shr 48) <> TAG_INT_HI) then Exit;
   Idx := Int32(UInt32(Args[1]));
   if Idx < 0 then Exit;
   O := ObjOf(Args[0]);
@@ -850,7 +850,7 @@ begin
       taFloat32: PSingle(@Bytes[0])^ := D;
       taFloat64: PDouble(@Bytes[0])^ := D;
     else
-      if (V and TAG_MASK) = TAG_INT then PLongWord(@Bytes[0])^ := LongWord(Int32(UInt32(V)))
+      if (V shr 48) = TAG_INT_HI then PLongWord(@Bytes[0])^ := LongWord(Int32(UInt32(V)))
       else Exit;
     end;
     for I := 0 to ES - 1 do
