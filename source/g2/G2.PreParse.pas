@@ -202,6 +202,7 @@ type
     function TokName: string;
     function StartsExpression: Boolean;
     function IsIdentName: Boolean; inline;
+    function LoneLiteral(Close: WideChar): Boolean; inline;
     { scopes and names }
     procedure PushScope(K: TScopeKind);
     procedure PopScope;
@@ -544,6 +545,20 @@ end;
 function TPreParser.IsId(A: PStr): Boolean;
 begin
   Result := (S.Kind = tkIdent) and (S.Atom = A) and not S.Escaped;
+end;
+
+{ the current token is a number or string literal that a comma or Close follows on its line (an element or
+  property value that is just the literal: data) }
+function TPreParser.LoneLiteral(Close: WideChar): Boolean;
+var P: Integer;
+begin
+  if (S.Kind <> tkNumber) and (S.Kind <> tkString) then Exit(False);
+  P := S.TokEnd;
+  while (P < S.Len) and ((S.Src[P] = ' ') or (S.Src[P] = #9)) do Inc(P);
+  Result := (P < S.Len) and ((S.Src[P] = ',') or (S.Src[P] = Close));
+  if Result and S.LegacyOctal and Ctxs[F].IsStrict then
+    if S.Kind = tkNumber then ErrHere('Octal literals are not allowed in strict mode.')
+    else ErrHere('Octal escape sequences are not allowed in strict mode.');
 end;
 
 function TPreParser.IsIdentName: Boolean;
@@ -1656,8 +1671,12 @@ begin
       S.Next(sgRegExp);
       Continue;
     end;
-    if S.Kind = tkEllipsis then S.Next(sgRegExp);
-    ParseAssignment(afAllowCover);
+    if LoneLiteral(']') then S.Next(sgDiv)
+    else
+    begin
+      if S.Kind = tkEllipsis then S.Next(sgRegExp);
+      ParseAssignment(afAllowCover);
+    end;
     if S.Kind = tkComma then S.Next(sgRegExp)
     else if S.Kind <> tkRBracket then Unexpected;
   end;
@@ -1768,7 +1787,7 @@ begin
         if S.Kind = tkColon then
         begin
           S.Next(sgRegExp);
-          ParseAssignment(afAllowCover);
+          if LoneLiteral('}') then S.Next(sgDiv) else ParseAssignment(afAllowCover);
           if not IsComputed and (Name = AProto) then
           begin
             Inc(ProtoCount);
