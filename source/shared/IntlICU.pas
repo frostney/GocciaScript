@@ -108,6 +108,18 @@ function TryICULowerCase(const ALocale, AStr: string; out AResult: string): Bool
 // the host ICU predates the numbering system.
 function DateTimeZeroDigit(const ANumberingSystem: string): string;
 
+type
+  // Temporal's date in a Chinese or Dangi calendar (ACalendar) for an ISO
+  // date: the related ISO year, the month code's number and leap flag, and
+  // the day. The Temporal calendar sets it; its data corrects ICU's calendar
+  // in some years, and date formatting then shows the same date.
+  TIntlLunisolarDateHook = function(const ACalendar: string; AISOYear,
+    AISOMonth, AISODay: Integer; out AYear, AMonth: Integer;
+    out AIsLeapMonth: Boolean; out ADay: Integer): Boolean;
+
+var
+  IntlLunisolarDateHook: TIntlLunisolarDateHook = nil;
+
 implementation
 
 {$IFDEF LAKON}
@@ -674,6 +686,15 @@ type
     var AStatus: TICUErrorCode): Pointer; cdecl;
   TUcalSetMillis = procedure(ACalendar: Pointer; ADate: Double;
     var AStatus: TICUErrorCode); cdecl;
+  TUcalGet = function(const ACalendar: Pointer; AField: LongInt;
+    var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUcalGetType = function(const ACalendar: Pointer;
+    var AStatus: TICUErrorCode): PAnsiChar; cdecl;
+  TUdatCountSymbols = function(const AFormat: Pointer; AType: LongInt): LongInt; cdecl;
+  TUdatToPattern = function(const AFormat: Pointer; ALocalized: ShortInt;
+    AResult: PUChar; AResultLength: LongInt; var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUdatGetSymbols = function(const AFormat: Pointer; AType, AIndex: LongInt;
+    AResult: PUChar; AResultLength: LongInt; var AStatus: TICUErrorCode): LongInt; cdecl;
   TUdtitvfmtFormatToResult = procedure(AFormatter: Pointer; AFromDate, AToDate: Double;
     AResult: Pointer; var AStatus: TICUErrorCode); cdecl;
   TUdtitvfmtResultAsValue = function(AResult: Pointer; var AStatus: TICUErrorCode): Pointer; cdecl;
@@ -830,6 +851,11 @@ type
     UdtitvfmtFormatCalendarToResult: TUdtitvfmtFormatCalendarToResult;
     UcalOpen: TUcalOpen;
     UcalSetMillis: TUcalSetMillis;
+    UcalGet: TUcalGet;
+    UcalGetType: TUcalGetType;
+    UdatCountSymbols: TUdatCountSymbols;
+    UdatToPattern: TUdatToPattern;
+    UdatGetSymbols: TUdatGetSymbols;
     UdtitvfmtResultAsValue: TUdtitvfmtResultAsValue;
     UdtitvfmtCloseResult: TUdtitvfmtCloseResult;
     UcfposOpen: TUcfposOpen;
@@ -1130,6 +1156,17 @@ begin
   if Assigned(S) then F.UcalOpen := TUcalOpen(S);
   S := ResolveSymbol(AHandle, 'ucal_setMillis');
   if Assigned(S) then F.UcalSetMillis := TUcalSetMillis(S);
+  // optional: eras where ICU and CLDR differ (ApplyCLDREras)
+  S := ResolveSymbol(AHandle, 'ucal_get');
+  if Assigned(S) then F.UcalGet := TUcalGet(S);
+  S := ResolveSymbol(AHandle, 'ucal_getType');
+  if Assigned(S) then F.UcalGetType := TUcalGetType(S);
+  S := ResolveSymbol(AHandle, 'udat_countSymbols');
+  if Assigned(S) then F.UdatCountSymbols := TUdatCountSymbols(S);
+  S := ResolveSymbol(AHandle, 'udat_toPattern');
+  if Assigned(S) then F.UdatToPattern := TUdatToPattern(S);
+  S := ResolveSymbol(AHandle, 'udat_getSymbols');
+  if Assigned(S) then F.UdatGetSymbols := TUdatGetSymbols(S);
   S := ResolveSymbol(AHandle, 'udtitvfmt_resultAsValue');
   if Assigned(S) then F.UdtitvfmtResultAsValue := TUdtitvfmtResultAsValue(S);
   S := ResolveSymbol(AHandle, 'udtitvfmt_closeResult');
@@ -3581,6 +3618,514 @@ begin
   end;
 end;
 
+{ Era names where ICU's calendars and current CLDR differ. ICU's Islamic
+  calendars have one era, AH, and show a date before the Hijra as year 0 or
+  below in it; CLDR names a second era for those dates (BH, "Before Hijrah"),
+  shown with the year counted back from 1, as Temporal's eraYear (1 - year).
+  ICU's Coptic calendar puts dates before year 1 in an era 0 that CLDR no
+  longer has; CLDR and Temporal keep them in AM as year 0 and below. ICU 74's
+  data names the Coptic and Ethiopic eras ERA0 and ERA1. Names come from ICU's
+  locale data when it has them (ICU 79 has BH and Anno Martyrum), otherwise
+  from CLDR's root abbreviations. }
+function DateFormatSymbol(const AFormatter: Pointer; AType, AIndex: LongInt;
+  out ASymbol: string): Boolean;
+var
+  Status: TICUErrorCode;
+  Buffer: array[0..127] of WideChar;
+  Len: LongInt;
+begin
+  ASymbol := '';
+  Result := False;
+  if IntlFunctions.UdatCountSymbols(AFormatter, AType) <= AIndex then
+    Exit;
+  Status := ICU_SUCCESS;
+  Len := IntlFunctions.UdatGetSymbols(AFormatter, AType, AIndex, @Buffer[0],
+    Length(Buffer), Status);
+  if not ICUSucceeded(Status) or (Len <= 0) or (Len > Length(Buffer)) then
+    Exit;
+  ASymbol := string(UnicodeToString(Buffer, Len));
+  Result := True;
+end;
+
+{ the formatter's calendar type when its eras may need ApplyCLDREras }
+function EraFallbackCalendar(const AFormatter: Pointer;
+  out ACalendarType: string): Boolean;
+var
+  Status: TICUErrorCode;
+  CalendarType: PAnsiChar;
+begin
+  ACalendarType := '';
+  Result := False;
+  if not (Assigned(IntlFunctions.UdatGetCalendar) and
+     Assigned(IntlFunctions.UcalClone) and Assigned(IntlFunctions.UcalClose) and
+     Assigned(IntlFunctions.UcalSetMillis) and Assigned(IntlFunctions.UcalGet) and
+     Assigned(IntlFunctions.UcalGetType) and
+     Assigned(IntlFunctions.UdatCountSymbols) and
+     Assigned(IntlFunctions.UdatGetSymbols)) then
+    Exit;
+  Status := ICU_SUCCESS;
+  CalendarType := IntlFunctions.UcalGetType(
+    IntlFunctions.UdatGetCalendar(AFormatter), Status);
+  if not ICUSucceeded(Status) or (CalendarType = nil) then
+    Exit;
+  ACalendarType := string(AnsiString(CalendarType));
+  Result := (Copy(ACalendarType, 1, 7) = 'islamic') or
+    (ACalendarType = 'coptic') or (Copy(ACalendarType, 1, 8) = 'ethiopic') or
+    (ACalendarType = 'chinese') or (ACalendarType = 'dangi');
+end;
+
+{ ICU's extended year of AMillis in the formatter's calendar }
+function TryFormatterExtendedYear(const AFormatter: Pointer; AMillis: Double;
+  out AYear: Integer): Boolean;
+const
+  UCAL_EXTENDED_YEAR = 19;
+var
+  Calendar: Pointer;
+  Status: TICUErrorCode;
+begin
+  AYear := 0;
+  Status := ICU_SUCCESS;
+  Calendar := IntlFunctions.UcalClone(IntlFunctions.UdatGetCalendar(AFormatter),
+    Status);
+  if not ICUSucceeded(Status) or not Assigned(Calendar) then
+    Exit(False);
+  try
+    IntlFunctions.UcalSetMillis(Calendar, AMillis, Status);
+    AYear := IntlFunctions.UcalGet(Calendar, UCAL_EXTENDED_YEAR, Status);
+    Result := ICUSucceeded(Status);
+  finally
+    IntlFunctions.UcalClose(Calendar);
+  end;
+end;
+
+{ AValue in the digits of AShown, whose last digit stands for AShownValue;
+  APad: at least as many digits as AShown has }
+function NumberInDigitsOf(const AShown: string; AShownValue, AValue: Integer;
+  APad: Boolean; out AText: string): Boolean;
+var
+  Shown, Text: UnicodeString;
+  Digits: string;
+  J, LastDigit, ZeroDigit, ShownDigits: Integer;
+begin
+  AText := '';
+  Shown := UnicodeString(AShown);
+  LastDigit := 0;
+  ShownDigits := 0;
+  for J := Length(Shown) downto 1 do
+    if (Shown[J] <> '-') and (Ord(Shown[J]) > $20) and
+       not ((Ord(Shown[J]) >= $200E) and (Ord(Shown[J]) <= $200F)) and
+       (Ord(Shown[J]) <> $061C) then
+    begin
+      if LastDigit = 0 then
+        LastDigit := Ord(Shown[J]);
+      Inc(ShownDigits);
+    end;
+  if LastDigit = 0 then
+    Exit(False);
+  ZeroDigit := LastDigit - (Abs(AShownValue) mod 10);
+  Digits := IntToStr(Abs(AValue));
+  if APad then
+    while Length(Digits) < ShownDigits do
+      Digits := '0' + Digits;
+  Text := '';
+  if AValue < 0 then
+    Text := '-';
+  for J := 1 to Length(Digits) do
+    Text := Text + WideChar(ZeroDigit + Ord(Digits[J]) - Ord('0'));
+  AText := string(Text);
+  Result := True;
+end;
+
+const
+  UDAT_ERAS = 0;
+  UDAT_ERA_NAMES = 7;
+
+{ era 1's symbol in AWidth (UDAT_ERA_NAMES or UDAT_ERAS), or, when AWidth is
+  -1, in the width AShownEra belongs to; ADefault when the data has none }
+function EraOneSymbolLike(const AFormatter: Pointer; const AShownEra: string;
+  AWidth: LongInt; const ADefault: string): string;
+var
+  Width: LongInt;
+  Shown0, Shown1: string;
+begin
+  Result := ADefault;
+  for Width in [UDAT_ERA_NAMES, UDAT_ERAS] do
+  begin
+    if not DateFormatSymbol(AFormatter, Width, 0, Shown0) then
+      Shown0 := '';
+    if not DateFormatSymbol(AFormatter, Width, 1, Shown1) then
+      Shown1 := '';
+    if (Width = AWidth) or
+       ((AWidth < 0) and (AShownEra <> '') and
+        ((Shown0 = AShownEra) or (Shown1 = AShownEra))) then
+    begin
+      if (Shown1 <> '') and (Copy(Shown1, 1, 3) <> 'ERA') then
+        Result := Shown1;
+      Exit;
+    end;
+  end;
+end;
+
+{ an era ICU's data names with an empty string (ICU 79's Coptic era 0) leaves
+  no part: an empty era part at its place in the formatter's pattern, and the
+  width the pattern asks for (G to GGG abbreviated, GGGG long) }
+function InsertEmptyEraPart(const AFormatter: Pointer;
+  var AParts: TIntlFormatPartArray; out AWidth: LongInt): Boolean;
+var
+  Status: TICUErrorCode;
+  Buffer: array[0..255] of WideChar;
+  Len, I, J, P, Run: Integer;
+  Pattern: UnicodeString;
+  C: WideChar;
+  InQuote: Boolean;
+
+  procedure SkipLiteralPart;
+  begin
+    if (P <= High(AParts)) and (AParts[P].PartType = 'literal') then
+      Inc(P);
+  end;
+
+begin
+  Result := False;
+  AWidth := UDAT_ERAS;
+  if not Assigned(IntlFunctions.UdatToPattern) then
+    Exit;
+  Status := ICU_SUCCESS;
+  Len := IntlFunctions.UdatToPattern(AFormatter, 0, @Buffer[0], Length(Buffer),
+    Status);
+  if not ICUSucceeded(Status) or (Len <= 0) or (Len > Length(Buffer)) then
+    Exit;
+  Pattern := UnicodeToString(Buffer, Len);
+  P := 0;
+  I := 1;
+  InQuote := False;
+  while I <= Length(Pattern) do
+  begin
+    C := Pattern[I];
+    if C = '''' then
+    begin
+      InQuote := not InQuote;
+      Inc(I);
+      Continue;
+    end;
+    if InQuote or not (((C >= 'a') and (C <= 'z')) or ((C >= 'A') and (C <= 'Z'))) then
+    begin
+      { literal text: its part, once per run }
+      J := I;
+      while (J <= Length(Pattern)) and (Pattern[J] <> '''') and
+            not (((Pattern[J] >= 'a') and (Pattern[J] <= 'z')) or
+                 ((Pattern[J] >= 'A') and (Pattern[J] <= 'Z'))) do
+        Inc(J);
+      if J = I then
+        J := I + 1;
+      SkipLiteralPart;
+      I := J;
+      Continue;
+    end;
+    Run := 0;
+    while (I + Run <= Length(Pattern)) and (Pattern[I + Run] = C) do
+      Inc(Run);
+    Inc(I, Run);
+    if C = 'G' then
+    begin
+      if (P <= High(AParts)) and (AParts[P].PartType = 'era') then
+        Exit;
+      SetLength(AParts, Length(AParts) + 1);
+      for J := High(AParts) downto P + 1 do
+        AParts[J] := AParts[J - 1];
+      AParts[P].PartType := 'era';
+      AParts[P].Value := '';
+      AParts[P].Source := '';
+      AParts[P].UnitIdentifier := '';
+      if Run = 4 then
+        AWidth := UDAT_ERA_NAMES;
+      Exit(True);
+    end;
+    { a field: its part }
+    if (P > High(AParts)) or (AParts[P].PartType = 'literal') then
+      Exit;
+    Inc(P);
+  end;
+end;
+
+const
+  MS_PER_DAY_DOUBLE = 86400000.0;
+
+function FormatDatePartsRaw(const AFormatter: TIntlDateTimeFormatter;
+  AMillis: Double; const AOptions: TIntlDateTimeFormatOptions;
+  out AParts: TIntlFormatPartArray): Boolean; forward;
+
+{ ICU's fields of AMillis in the formatter's calendar, in its time zone:
+  extended year, month (0-based), leap flag, day and Julian day }
+function TryFormatterCalendarFields(const ACalendar: Pointer; AMillis: Double;
+  out AExtYear, AMonth, ALeap, ADay, AJulianDay: Integer): Boolean;
+const
+  UCAL_MONTH = 2;
+  UCAL_DATE = 5;
+  UCAL_EXTENDED_YEAR = 19;
+  UCAL_JULIAN_DAY = 20;
+  UCAL_IS_LEAP_MONTH = 22;
+var
+  Status: TICUErrorCode;
+begin
+  Status := ICU_SUCCESS;
+  IntlFunctions.UcalSetMillis(ACalendar, AMillis, Status);
+  AExtYear := IntlFunctions.UcalGet(ACalendar, UCAL_EXTENDED_YEAR, Status);
+  AMonth := IntlFunctions.UcalGet(ACalendar, UCAL_MONTH, Status);
+  ALeap := IntlFunctions.UcalGet(ACalendar, UCAL_IS_LEAP_MONTH, Status);
+  ADay := IntlFunctions.UcalGet(ACalendar, UCAL_DATE, Status);
+  AJulianDay := IntlFunctions.UcalGet(ACalendar, UCAL_JULIAN_DAY, Status);
+  Result := ICUSucceeded(Status);
+end;
+
+{ the proleptic Gregorian date of a day count from 1970-01-01 }
+procedure CivilFromEpochDays(ADays: Int64; out AYear, AMonth, ADay: Integer);
+var
+  Z, Era, DayOfEra, YearOfEra, DayOfYear, MP: Int64;
+begin
+  Z := ADays + 719468;
+  if Z >= 0 then
+    Era := Z div 146097
+  else
+    Era := (Z - 146096) div 146097;
+  DayOfEra := Z - Era * 146097;
+  YearOfEra := (DayOfEra - DayOfEra div 1460 + DayOfEra div 36524 -
+    DayOfEra div 146096) div 365;
+  DayOfYear := DayOfEra - (365 * YearOfEra + YearOfEra div 4 - YearOfEra div 100);
+  MP := (5 * DayOfYear + 2) div 153;
+  ADay := Integer(DayOfYear - (153 * MP + 2) div 5 + 1);
+  if MP < 10 then
+    AMonth := Integer(MP + 3)
+  else
+    AMonth := Integer(MP - 9);
+  AYear := Integer(YearOfEra + Era * 400);
+  if AMonth <= 2 then
+    Inc(AYear);
+end;
+
+{ the month part ICU shows for month AMonth (0-based) of a non-leap or leap
+  month at an instant within ASpanDays days of AMillis, '' when none is }
+function MonthTextNear(const AFormatter, ACalendar: Pointer; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; AMonth: Integer;
+  AAnyMonth, ALeap: Boolean; ASpanDays: Integer; out AFoundMonth: Integer): string;
+const
+  STEP_DAYS = 15;
+var
+  K, Sign, ExtYear, Month, Leap, Day, JulianDay, I: Integer;
+  At: Double;
+  Parts: TIntlFormatPartArray;
+begin
+  Result := '';
+  AFoundMonth := -1;
+  for K := 0 to ASpanDays div STEP_DAYS do
+    for Sign := 0 to 1 do
+    begin
+      if (K = 0) and (Sign = 1) then
+        Continue;
+      if Sign = 0 then
+        At := AMillis + K * STEP_DAYS * MS_PER_DAY_DOUBLE
+      else
+        At := AMillis - K * STEP_DAYS * MS_PER_DAY_DOUBLE;
+      if not TryFormatterCalendarFields(ACalendar, At, ExtYear, Month, Leap,
+           Day, JulianDay) then
+        Exit;
+      if ((Leap <> 0) <> ALeap) or (not AAnyMonth and (Month <> AMonth)) then
+        Continue;
+      if not FormatDatePartsRaw(AFormatter, At, AOptions, Parts) then
+        Exit;
+      for I := 0 to High(Parts) do
+        if Parts[I].PartType = 'month' then
+        begin
+          AFoundMonth := Month;
+          Exit(Parts[I].Value);
+        end;
+      Exit;
+    end;
+end;
+
+{ ICU's Chinese and Dangi calendars disagree with the published calendars in
+  some years, which Temporal's data corrects (IntlLunisolarDateHook). Parts
+  show Temporal's date: the day and related year in the digits shown, the
+  month as ICU shows that month elsewhere (a leap month: ICU's text for some
+  leap month near, with its month's name or number replaced) }
+{ The day, related year and month text ICU shows for AMillis in a Chinese or Dangi formatter, and what the
+  Temporal calendar (through IntlLunisolarDateHook) says they are: False when they agree or nothing is known }
+function TryLunisolarCorrection(const AFormatter: Pointer; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; const ACalendarType: string;
+  out AShownDay, ADay, AShownYear, AYear: Integer; out AMonthText: string): Boolean;
+var
+  Calendar: Pointer;
+  Status: TICUErrorCode;
+  ExtYear, Month, Leap, JulianDay, ISOYear, ISOMonth, ISODay: Integer;
+  TMonth, FoundMonth: Integer;
+  TLeap: Boolean;
+  Text, LeapText, PlainText: string;
+begin
+  Result := False;
+  AShownDay := 0;
+  ADay := 0;
+  AShownYear := 0;
+  AYear := 0;
+  AMonthText := '';
+  if not Assigned(IntlLunisolarDateHook) then
+    Exit;
+  Status := ICU_SUCCESS;
+  Calendar := IntlFunctions.UcalClone(IntlFunctions.UdatGetCalendar(AFormatter),
+    Status);
+  if not ICUSucceeded(Status) or not Assigned(Calendar) then
+    Exit;
+  try
+    if TryFormatterCalendarFields(Calendar, AMillis, ExtYear, Month, Leap,
+         AShownDay, JulianDay) then
+    begin
+      CivilFromEpochDays(Int64(JulianDay) - 2440588, ISOYear, ISOMonth, ISODay);
+      if IntlLunisolarDateHook(ACalendarType, ISOYear, ISOMonth, ISODay,
+           AYear, TMonth, TLeap, ADay) then
+      begin
+        { ICU 74 counts the extended year from the cycle's epoch (2637 BCE, 2333 BCE for Dangi); newer ICU
+          counts it as the related Gregorian year. The related year is the ISO year or the one before it }
+        if ACalendarType = 'dangi' then
+          AShownYear := ExtYear - 2333
+        else
+          AShownYear := ExtYear - 2637;
+        if (AShownYear < ISOYear - 1) or (AShownYear > ISOYear) then
+          AShownYear := ExtYear;
+        if (AShownYear < ISOYear - 1) or (AShownYear > ISOYear) then
+          Exit;
+        Result := (AShownYear <> AYear) or (Month + 1 <> TMonth) or
+          ((Leap <> 0) <> TLeap) or (AShownDay <> ADay);
+        if Result and ((Month + 1 <> TMonth) or ((Leap <> 0) <> TLeap)) then
+        begin
+          PlainText := MonthTextNear(AFormatter, Calendar, AMillis, AOptions,
+            TMonth - 1, False, False, 450, FoundMonth);
+          if not TLeap then
+            AMonthText := PlainText
+          else if PlainText <> '' then
+          begin
+            LeapText := MonthTextNear(AFormatter, Calendar, AMillis, AOptions,
+              TMonth - 1, True, True, 1500, FoundMonth);
+            if LeapText <> '' then
+            begin
+              Text := MonthTextNear(AFormatter, Calendar, AMillis, AOptions,
+                FoundMonth, False, False, 1900, FoundMonth);
+              if (Text <> '') and (Pos(Text, LeapText) > 0) then
+                AMonthText := StringReplace(LeapText, Text, PlainText, []);
+            end;
+          end;
+        end;
+      end;
+    end;
+  finally
+    IntlFunctions.UcalClose(Calendar);
+  end;
+end;
+
+{ Temporal's Chinese and Dangi data overrides ICU's where they differ (ICU4C puts some leap months elsewhere):
+  rewrite the day, related year and month parts to the Temporal date }
+procedure CorrectLunisolarParts(const AFormatter: Pointer; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; const ACalendarType: string;
+  var AParts: TIntlFormatPartArray);
+var
+  ShownDay, Day, ShownYear, Year, I: Integer;
+  MonthText, Text: string;
+begin
+  if not TryLunisolarCorrection(AFormatter, AMillis, AOptions, ACalendarType,
+       ShownDay, Day, ShownYear, Year, MonthText) then
+    Exit;
+  for I := 0 to High(AParts) do
+    if (AParts[I].PartType = 'day') and (ShownDay <> Day) then
+    begin
+      if NumberInDigitsOf(AParts[I].Value, ShownDay, Day, True, Text) then
+        AParts[I].Value := Text;
+    end
+    else if (AParts[I].PartType = 'relatedYear') and (ShownYear <> Year) then
+    begin
+      if NumberInDigitsOf(AParts[I].Value, ShownYear, Year, False, Text) then
+        AParts[I].Value := Text;
+    end
+    else if (AParts[I].PartType = 'month') and (MonthText <> '') then
+      AParts[I].Value := MonthText;
+end;
+
+function ApplyCLDREras(const AFormatter: Pointer; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions;
+  var AParts: TIntlFormatPartArray): Boolean;
+var
+  CalendarType, Era, YearText: string;
+  Year, I, EraIndex, YearIndex: Integer;
+  Width: LongInt;
+
+  procedure FindParts;
+  var
+    K: Integer;
+  begin
+    EraIndex := -1;
+    YearIndex := -1;
+    for K := 0 to High(AParts) do
+      if AParts[K].PartType = 'era' then
+        EraIndex := K
+      else if AParts[K].PartType = 'year' then
+        YearIndex := K;
+  end;
+
+begin
+  Result := False;
+  if not EraFallbackCalendar(AFormatter, CalendarType) then
+    Exit;
+  if (CalendarType = 'chinese') or (CalendarType = 'dangi') then
+  begin
+    CorrectLunisolarParts(AFormatter, AMillis, AOptions, CalendarType, AParts);
+    Exit;
+  end;
+  if not TryFormatterExtendedYear(AFormatter, AMillis, Year) then
+    Exit;
+  FindParts;
+  Width := -1;
+  if (EraIndex < 0) and (CalendarType = 'coptic') and (Year <= 0) then
+  begin
+    if not InsertEmptyEraPart(AFormatter, AParts, Width) then
+      Exit;
+    FindParts;
+  end;
+  if EraIndex < 0 then
+    Exit;
+  Era := AParts[EraIndex].Value;
+
+  if (Copy(CalendarType, 1, 7) = 'islamic') and (Year <= 0) then
+  begin
+    { ICU shows the year itself }
+    if (YearIndex >= 0) and
+       NumberInDigitsOf(AParts[YearIndex].Value, Year, 1 - Year, False,
+         YearText) then
+      AParts[YearIndex].Value := YearText;
+    AParts[EraIndex].Value := EraOneSymbolLike(AFormatter, Era, -1, 'BH');
+    Exit(True);
+  end;
+
+  if (CalendarType = 'coptic') and (Year <= 0) then
+  begin
+    { ICU shows era 0's year, 1 - Year }
+    if (YearIndex >= 0) and
+       NumberInDigitsOf(AParts[YearIndex].Value, 1 - Year, Year, False,
+         YearText) then
+      AParts[YearIndex].Value := YearText;
+    AParts[EraIndex].Value := EraOneSymbolLike(AFormatter, Era, Width, 'AM');
+    Exit(True);
+  end;
+
+  { placeholder names of ICU 74's data: CLDR root's abbreviations }
+  if (Era = 'ERA0') and (Copy(CalendarType, 1, 8) = 'ethiopic') then
+  begin
+    AParts[EraIndex].Value := 'AA';
+    Result := True;
+  end
+  else if Era = 'ERA1' then
+  begin
+    AParts[EraIndex].Value := 'AM';
+    Result := True;
+  end;
+end;
+
 function TryICUFormatDateTimeWithFormatter(
   const AFormatter: TIntlDateTimeFormatter; AMillis: Double;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
@@ -3588,12 +4133,26 @@ var
   Status: TICUErrorCode;
   Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
   ResultLen: LongInt;
+  Parts: TIntlFormatPartArray;
+  I: Integer;
+  CalendarType: string;
 begin
   Result := False;
   AFormatted := '';
 
   if not Assigned(AFormatter) or not Assigned(IntlFunctions.UdatFormat) then
     Exit;
+
+  { a calendar whose eras ApplyCLDREras corrects: from the parts, which carry
+    the correction }
+  if EraFallbackCalendar(AFormatter, CalendarType) and
+     TryICUFormatDateTimeToPartsWithFormatter(AFormatter, AMillis, AOptions,
+       Parts) then
+  begin
+    for I := 0 to High(Parts) do
+      AFormatted := AFormatted + Parts[I].Value;
+    Exit(True);
+  end;
 
   FillChar(Buffer, SizeOf(Buffer), 0);
   Status := ICU_SUCCESS;
@@ -3607,9 +4166,8 @@ begin
   Result := True;
 end;
 
-function TryICUFormatDateTimeToPartsWithFormatter(
-  const AFormatter: TIntlDateTimeFormatter; AMillis: Double;
-  const AOptions: TIntlDateTimeFormatOptions;
+function FormatDatePartsRaw(const AFormatter: TIntlDateTimeFormatter;
+  AMillis: Double; const AOptions: TIntlDateTimeFormatOptions;
   out AParts: TIntlFormatPartArray): Boolean;
 var
   Status: TICUErrorCode;
@@ -3651,6 +4209,16 @@ begin
   finally
     IntlFunctions.UfieldpositerClose(Iterator);
   end;
+end;
+
+function TryICUFormatDateTimeToPartsWithFormatter(
+  const AFormatter: TIntlDateTimeFormatter; AMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions;
+  out AParts: TIntlFormatPartArray): Boolean;
+begin
+  Result := FormatDatePartsRaw(AFormatter, AMillis, AOptions, AParts);
+  if Result then
+    ApplyCLDREras(AFormatter, AMillis, AOptions, AParts);
 end;
 
 function TryICUFormatDateTime(const ALocale: string; AMillis: Double;

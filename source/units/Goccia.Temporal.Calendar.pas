@@ -72,6 +72,7 @@ uses
   SysUtils,
 
   ICU,
+  IntlICU,
   TextEncoding,
 
   Goccia.ThreadCleanupRegistry;
@@ -3658,7 +3659,30 @@ begin
   end;
 end;
 
+{ IntlLunisolarDateHook: Intl.DateTimeFormat shows a Chinese or Dangi date as
+  Temporal reads it }
+function TemporalLunisolarDate(const ACalendar: string; AISOYear, AISOMonth,
+  AISODay: Integer; out AYear, AMonth: Integer; out AIsLeapMonth: Boolean;
+  out ADay: Integer): Boolean;
+var
+  Info: TTemporalCalendarDateInfo;
+begin
+  AYear := 0;
+  AMonth := 0;
+  AIsLeapMonth := False;
+  ADay := 0;
+  Result := IsLunisolarCalendar(ACalendar) and
+    TryGetCalendarDateInfo(ACalendar, AISOYear, AISOMonth, AISODay, Info) and
+    TryParseTemporalMonthCode(Info.MonthCode, AMonth, AIsLeapMonth);
+  if Result then
+  begin
+    AYear := Info.Date.Year;
+    ADay := Info.Date.Day;
+  end;
+end;
+
 initialization
+  IntlLunisolarDateHook := @TemporalLunisolarDate;
   CriticalSectionInit(CalendarICULock);
   CalendarICULoadAttempted := False;
   CalendarICUAvailable := False;
