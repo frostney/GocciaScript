@@ -593,6 +593,10 @@ function TCompiler.Emit(I: QWord): Integer;
 var T: PFuncTemplate; Live: Integer;
 begin
   T := FS.Tpl;
+  { an await only suspends an async function: one anywhere else would end its frame without a completion (as a
+    module's top-level await did when the module was not compiled async) }
+  if ((TOp(I and $FF) = opAwait) or (TOp(I and $FF) = opYieldStarAsync)) and not T^.IsAsync then
+    raise ECompileError.Create('internal: await compiled outside an async function');
   { A suspending instruction carries in C how many registers are live across it: those the allocator holds
     (it frees registers last in, first out, so none above FreeReg is read again before it is written) and those
     the instruction itself uses. A suspension saves only these. }
@@ -6212,14 +6216,33 @@ begin
 end;
 
 procedure TTLAScan.VisitChild(const ANode: TGocciaASTNode);
+var Def: TGocciaClassDefinition; I, J: Integer;
 begin
   if (ANode = nil) or Found then Exit;
+  { 15.7.14 ClassDefinitionEvaluation: a class's heritage, decorators and computed keys are evaluated in the
+    enclosing context, so an await there is the module's own; its bodies, initializers and static blocks are
+    functions of their own }
+  if (ANode is TGocciaClassExpression) or (ANode is TGocciaClassDeclaration) then
+  begin
+    if ANode is TGocciaClassExpression then Def := TGocciaClassExpression(ANode).ClassDefinition
+    else Def := TGocciaClassDeclaration(ANode).ClassDefinition;
+    if Def = nil then Exit;
+    for I := 0 to High(Def.Decorators) do VisitChild(Def.Decorators[I]);
+    VisitChild(Def.SuperClassExpression);
+    for I := 0 to High(Def.FElements) do
+    begin
+      for J := 0 to High(Def.FElements[I].Decorators) do VisitChild(Def.FElements[I].Decorators[J]);
+      if Def.FElements[I].IsComputed then VisitChild(Def.FElements[I].ComputedKeyExpression);
+    end;
+    Exit;
+  end;
   if (ANode is TGocciaFunctionExpression) or (ANode is TGocciaArrowFunctionExpression) or
      (ANode is TGocciaFunctionDeclaration) or (ANode is TGocciaObjectMethodDefinition) or
-     (ANode is TGocciaClassExpression) or (ANode is TGocciaClassDeclaration) or
      (ANode is TGocciaGetterExpression) or (ANode is TGocciaSetterExpression) then Exit;
+  { a for (await using x of ...) head disposes each value with an await (14.7.5.7 ForIn/OfBodyEvaluation) }
   if (ANode is TGocciaAwaitExpression) or (ANode is TGocciaForAwaitOfStatement) or
-     ((ANode is TGocciaUsingDeclaration) and TGocciaUsingDeclaration(ANode).IsAwait) then
+     ((ANode is TGocciaUsingDeclaration) and TGocciaUsingDeclaration(ANode).IsAwait) or
+     ((ANode is TGocciaForOfStatement) and TGocciaForOfStatement(ANode).IsAwaitUsing) then
   begin
     Found := True;
     Exit;
