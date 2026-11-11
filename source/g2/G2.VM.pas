@@ -5682,7 +5682,7 @@ LGetProp:
             inline loop cost about seven instructions a register) }
           NP := T^.MaxRegs;
           if J < NP then FillUndef(@R[J], NP - J);
-          Fr := @Frames[FrameTop];
+          Inc(Fr);   { the callee's frame, after the caller's at FrameTop - 1 (Frames never moves) }
           Fr^.Closure := VA;
           Fr^.NewTarget := VUndefined;
           Fr^.Tpl := T;
@@ -5795,10 +5795,11 @@ LGetProp:
             U^.StackIndex := -1;
             Dec(OpenCount);
           end;
-          while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
+          if not Fr^.Tpl^.NoHandlers then
+            while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
           Dec(FrameTop);
           VS[Fr^.RetIdx] := V;
-          Fr := @Frames[FrameTop - 1];
+          Dec(Fr);   { the caller's frame: Frames never moves (allocated once, FRAME_MAX long) }
           T := Fr^.Tpl;
           StackTop := Fr^.Base + T^.MaxRegs;
           Code := @T^.Code[0];

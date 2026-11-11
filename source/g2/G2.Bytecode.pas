@@ -148,6 +148,8 @@ type
     { no upvalue can be open on its frame's registers: no nested function, no arguments object, no direct eval,
       not a Script's or module's top level (their lexical cells) }
     NoCaptures: Boolean;
+    { no opTry: a return from its frame has no exception handlers of the frame's to pop }
+    NoHandlers: Boolean;
     Consts: array of TValue;
     Children: array of PFuncTemplate;
     Upvals: array of TUpvalDesc;
@@ -224,6 +226,13 @@ begin
   if Length(T^.Consts) > 0 then T^.KBase := @T^.Consts[0] else T^.KBase := nil;
   if Length(T^.ICs) > 0 then T^.ICBase := @T^.ICs[0] else T^.ICBase := nil;
   T^.FastCall := not T^.IsAsync and (T^.RestReg < 0) and (T^.ArgsReg < 0);
+  T^.NoHandlers := True;
+  for I := 0 to T^.CodeLen - 1 do
+    if InsOp(T^.Code[I]) = opTry then
+    begin
+      T^.NoHandlers := False;
+      Break;
+    end;
   T^.NoCaptures := (Length(T^.Children) = 0) and (T^.FieldInit = nil) and (T^.ArgsReg < 0) and not T^.TopLevel;
   if T^.NoCaptures then
     for I := 0 to T^.CodeLen - 1 do
