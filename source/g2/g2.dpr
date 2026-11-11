@@ -477,9 +477,10 @@ begin
   SrcText := DecodeSource(Raw);
   Raw := '';
   T1 := GetTickCount64;
-  { G2_LAZY=1: the functions the pre-parse finds eligible are compiled on their first call (G2.Lazy) }
+  { the functions the pre-parse finds eligible are compiled on their first call (G2.Lazy); G2_LAZY=0 compiles
+    everything now }
   LazySrc := nil;
-  if GetEnvironmentVariable('G2_LAZY') = '1' then
+  if GetEnvironmentVariable('G2_LAZY') <> '0' then
   begin
     PP := TPreParser.Create(PWideChar(SrcText), Length(SrcText), pgScript, False);
     try

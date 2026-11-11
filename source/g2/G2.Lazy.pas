@@ -1,9 +1,9 @@
 unit G2.Lazy;
-{ Lazy compilation (G2_LAZY=1): a Script is pre-parsed (G2.PreParse: syntax, early errors, every function's free
-  names), then Goccia's parser builds the AST with the bodies of the eligible functions skipped
-  (TGocciaLazyFunctionBody), and G2.Compiler makes each a stub template: its header, and upvalues for the names the
-  pre-parse found it uses. The first call compiles it (G2.Eval's LazyCompile): Goccia's parser on the function's
-  own source range, compiled with the stub's upvalues as its outer environment.
+{ Lazy compilation (the default; G2_LAZY=0 turns it off): a Script is pre-parsed (G2.PreParse: syntax, early
+  errors, every function's free names), then Goccia's parser builds the AST with the bodies of the eligible
+  functions skipped (TGocciaLazyFunctionBody), and G2.Compiler makes each a stub template: its header, and
+  upvalues for the names the pre-parse found it uses. The first call compiles it (G2.Eval's LazyCompile):
+  Goccia's parser on the function's own source range, compiled with the stub's upvalues as its outer environment.
   A TLazySource is one pre-parsed source: its text, the line index Goccia's lexer built for it, and per function
   record the offsets and what the compiler needs. Offsets are UTF-16 indices, Goccia's as G2.Scan's. }
 {$mode delphiunicode}{$H+}

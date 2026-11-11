@@ -31,12 +31,12 @@ uses
   G2.PreParse, G2.Lazy;
 
 threadvar
-  LazyMode: Integer;   { G2_LAZY: 0 not read yet, 1 off, 2 on }
+  LazyMode: Integer;   { G2_LAZY: 0 not read yet, 1 off (G2_LAZY=0), 2 on (the default) }
 
 function LazyOn: Boolean;
 begin
   if LazyMode = 0 then
-    if GetEnvironmentVariable('G2_LAZY') = '1' then LazyMode := 2 else LazyMode := 1;
+    if GetEnvironmentVariable('G2_LAZY') = '0' then LazyMode := 1 else LazyMode := 2;
   Result := LazyMode = 2;
 end;
 
