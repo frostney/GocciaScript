@@ -4262,7 +4262,17 @@ function ICGetHit(O: PObj; IC: PPropIC; Dst: PValue): Boolean; noinline;
 var E: PICEntry; O2: PObj; J, Slot: Integer;
 begin
   E := @IC^.Poly0;
-  if (E^.Shape <> O^.Shape) or (E^.Kind <> O^.OKind) or (E^.Acc <> 0) then Exit(False);
+  if E^.Shape <> O^.Shape then Exit(False);
+  { the commonest hit, an own data property: Kind, Depth, VerMask and Acc (four adjacent bytes) are the
+    receiver's kind, 0, 0 and 0, one 32-bit compare }
+  if PCardinal(@E^.Kind)^ = O^.OKind then
+  begin
+    Slot := E^.Slot;
+    if Slot < O^.InlineCap then Dst^ := O^.Slots[Slot]
+    else Dst^ := O^.Overflow^.Data[Slot - O^.InlineCap];
+    Exit(True);
+  end;
+  if (E^.Kind <> O^.OKind) or (E^.Acc <> 0) then Exit(False);
   O2 := O;
   for J := 0 to E^.Depth - 1 do
   begin
