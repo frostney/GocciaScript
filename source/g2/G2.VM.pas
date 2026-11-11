@@ -5662,19 +5662,20 @@ LGetProp:
           if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
           Argc := PWord(PByte(IP) - 5)^;
           if (PByte(IP)[-3] and 1) <> 0 then R[A + 1] := VUndefined;
-          if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
           Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
           R := @VS[Base];
           if not T^.IsStrict and not T^.IsArrow then
           begin
-            { a primitive this: Execute's PushBytecodeFrame boxes it (no frame is pushed yet) }
+            { a primitive this: Execute's PushBytecodeFrame boxes it (no frame is pushed yet; the stack covers the
+              arguments when Execute takes over) }
             V := R[0];
-            if (V shr 48) = TAG_PTR_HI then
-            begin
-              if PCell(PtrUInt(V and PTR_MASK))^.Kind <> ckObject then goto LBail;
-            end
+            if ((V shr 48) = TAG_PTR_HI) and (PCell(PtrUInt(V and PTR_MASK))^.Kind = ckObject) then
             else if (V = VUndefined) or (V = VNull) then R[0] := GlobalObj
-            else goto LBail;
+            else
+            begin
+              if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
+              goto LBail;
+            end;
           end;
           if Argc < T^.NumParams then J := Argc + 1 else J := T^.NumParams + 1;
           { the registers past the arguments start undefined (FillQWord: FastLoop's register pressure made an
@@ -5686,14 +5687,14 @@ LGetProp:
           Fr^.NewTarget := VUndefined;
           Fr^.Tpl := T;
           Fr^.Base := Base;
-          Fr^.PC := T^.EntryPC;
+          Fr^.PC := 0;   { EntryPC: CompactNops leaves every function starting at its first instruction }
           Fr^.RetIdx := Base - 1;
           Fr^.Argc := Argc;
           Fr^.Kind := 0;
           Inc(FrameTop);
           StackTop := Base + T^.MaxRegs;
           Code := @T^.Code[0];
-          IP := @Code[T^.EntryPC];
+          IP := Code;
           K := T^.KBase;
           ICs := T^.ICBase;
           Changed := True;
