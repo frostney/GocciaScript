@@ -5397,6 +5397,17 @@ begin
       Combine(CO.Operator, nil, CO.Value, R, R, J, AName);
       StoreIdentRef(CO.Name, K, R);
     end
+    else if not (CO.Operator in [gttLogicalAndAssign, gttLogicalOrAssign, gttNullishCoalescingAssign]) and
+       ResolveLocal(FS, CO.Name, K) and not BindingIsConst(CO.Name) and not InTDZ(CO.Name) then
+    begin
+      { a local: its value read first (the operand may change it), the result written to its register directly }
+      LoadIdent(CO.Name, R);
+      NoteWrite(CO.Name);
+      Combine(CO.Operator, nil, CO.Value, R, K, J, AName);
+      if (Dest <> K) and not Discard then Emit(Ins(opMov, Dest, K, 0));
+      FreeTo(Save);
+      Exit;
+    end
     else
     begin
       LoadIdent(CO.Name, R);
@@ -5404,7 +5415,7 @@ begin
       StoreIdent(CO.Name, R);
     end;
     if J >= 0 then PatchHere(J);
-    Emit(Ins(opMov, Dest, R, 0));
+    if not Discard then Emit(Ins(opMov, Dest, R, 0));
   end
   else if (E is TGocciaPropertyCompoundAssignmentExpression) and
           (TGocciaPropertyCompoundAssignmentExpression(E).ObjectExpr is TGocciaSuperExpression) then
