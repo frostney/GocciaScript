@@ -145,6 +145,9 @@ type
     KBase: PValue;
     ICBase: PPropIC;
     FastCall: Boolean;
+    { no upvalue can be open on its frame's registers: no nested function, no arguments object, no direct eval,
+      not a Script's or module's top level (their lexical cells) }
+    NoCaptures: Boolean;
     Consts: array of TValue;
     Children: array of PFuncTemplate;
     Upvals: array of TUpvalDesc;
@@ -216,10 +219,19 @@ function InsCU(I: QWord): Integer; inline; begin Result := I shr 40; end;
 
 
 procedure FinishTemplate(T: PFuncTemplate);
+var I: Integer;
 begin
   if Length(T^.Consts) > 0 then T^.KBase := @T^.Consts[0] else T^.KBase := nil;
   if Length(T^.ICs) > 0 then T^.ICBase := @T^.ICs[0] else T^.ICBase := nil;
   T^.FastCall := not T^.IsAsync and (T^.RestReg < 0) and (T^.ArgsReg < 0);
+  T^.NoCaptures := (Length(T^.Children) = 0) and (T^.FieldInit = nil) and (T^.ArgsReg < 0) and not T^.TopLevel;
+  if T^.NoCaptures then
+    for I := 0 to T^.CodeLen - 1 do
+      if InsOp(T^.Code[I]) in [opEvalHint, opMakeGLex, opMakeModCell, opClosure] then
+      begin
+        T^.NoCaptures := False;
+        Break;
+      end;
 end;
 
 threadvar

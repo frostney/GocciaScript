@@ -5748,6 +5748,8 @@ LGetProp:
           end;
           { CloseUpvals, once none of the frame's upvalues needs the write barrier to remember it }
           J := OpenCount;
+          { a template that cannot capture its registers has nothing open here: no scan, nothing to close }
+          if not Fr^.Tpl^.NoCaptures then
           while (J > 0) and (PUpval(PtrOf(OpenUpvals[J - 1]))^.StackIndex >= Fr^.Base) do
           begin
             U := PUpval(PtrOf(OpenUpvals[J - 1]));
