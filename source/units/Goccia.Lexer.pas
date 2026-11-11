@@ -851,13 +851,17 @@ begin
         end
         else
           Break;
+      // B.1.1 HTML-like comments, compared a character at a time: a Copy
+      // temporary would give every call an implicit exception frame
       '<':
-        if Copy(FSource, FCurrent, 4) = '<!--' then
+        if (FCurrent + 3 <= Length(FSource)) and (FSource[FCurrent + 1] = '!') and
+           (FSource[FCurrent + 2] = '-') and (FSource[FCurrent + 3] = '-') then
           SkipUntilLineTerminator
         else
           Break;
       '-':
-        if LineStart and (Copy(FSource, FCurrent, 3) = '-->') then
+        if LineStart and (FCurrent + 2 <= Length(FSource)) and
+           (FSource[FCurrent + 1] = '-') and (FSource[FCurrent + 2] = '>') then
           SkipUntilLineTerminator
         else
           Break;
