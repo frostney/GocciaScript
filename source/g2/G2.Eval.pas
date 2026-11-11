@@ -27,7 +27,7 @@ threadvar
 implementation
 
 uses
-  Classes, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.Error, Goccia.SourceSpan, G2.Scan,
+  Classes, Linux, UnixType, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.Error, Goccia.SourceSpan, G2.Scan,
   G2.PreParse, G2.Lazy;
 
 threadvar
@@ -122,8 +122,9 @@ end;
 function LazyCompile(T: PFuncTemplate): Boolean;
 var St: PLazyStub; LS, PrevSrc: TLazySource; R: ^TLazyRec; L: TGocciaLexer; P: TGocciaParser; E: TGocciaExpression;
   NT: PFuncTemplate; SaveUp: array of TUpvalDesc; SaveName: PStr; SaveRange: TGocciaLazySourceText;
-  Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString;
+  Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString; TS0, TS1, TSa, TSb: TTimeSpec;
 begin
+  clock_gettime(CLOCK_MONOTONIC, @TS0);
   St := PLazyStub(T^.Lazy);
   LS := St^.Src;
   R := @LS.Recs[St^.Id];
@@ -142,12 +143,18 @@ begin
       P.SetFunctionBodySkipper(@LazyBodySkipper, LS);
       LS.Compiling := St^.Id;
       PrevArena := ActivateASTArena(Arena);
+      clock_gettime(CLOCK_MONOTONIC, @TSa);
       try
         E := P.ParseExpressionUnchecked;
       finally
         RestoreASTArena(PrevArena);
         LS.Compiling := -1;
       end;
+      clock_gettime(CLOCK_MONOTONIC, @TSb);
+      Inc(LazySetupNs, (Int64(TSa.tv_sec) - TS0.tv_sec) * 1000000000 + (TSa.tv_nsec - TS0.tv_nsec));
+      Inc(LazyParseNs, (Int64(TSb.tv_sec) - TSa.tv_sec) * 1000000000 + (TSb.tv_nsec - TSa.tv_nsec));
+      Inc(LazyTokens, L.Tokens.Count);
+      Inc(LazyChars, R^.Stop - R^.Start);
       if not ((E is TGocciaFunctionExpression) or (E is TGocciaArrowFunctionExpression)) or not P.AtEnd then
         raise Exception.Create('lazy compile: the source range is not one function');
       PrevSrc := CurLazySource;
@@ -178,6 +185,9 @@ begin
     L.Free;
     Arena.Free;
   end;
+  clock_gettime(CLOCK_MONOTONIC, @TS1);
+  Inc(LazyCompileCount);
+  Inc(LazyCompileNs, (Int64(TS1.tv_sec) - TS0.tv_sec) * 1000000000 + (TS1.tv_nsec - TS0.tv_nsec));
   if Msg <> '' then Exit(ThrowError('SyntaxError', Msg));
   Result := True;
 end;

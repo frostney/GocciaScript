@@ -64,6 +64,9 @@ function LazyBodySkipper(const AData: Pointer; const ABodyOffset: Integer; out A
 threadvar
   { the source G2.Compiler is compiling with skipped bodies (their records), nil otherwise }
   CurLazySource: TLazySource;
+  { G2_PHASES: the functions compiled on their first call, and the time that took }
+  LazyCompileCount: Integer;
+  LazyCompileNs, LazySetupNs, LazyParseNs, LazyTokens, LazyChars: Int64;
 
 { every TLazySource made by this thread's engine }
 procedure FreeLazySources;

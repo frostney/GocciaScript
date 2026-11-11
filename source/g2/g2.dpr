@@ -600,7 +600,10 @@ begin
       ' accessor ', ICWhy[3], ' virtual ', ICWhy[4], ' dict/deep-proto ', ICWhy[5], ' proxy ', ICWhy[6], ' fn-proto ', ICWhy[7]);
   if GetEnvironmentVariable('G2_PHASES') <> '' then
     WriteLn(ErrOutput, 'phases ms: load ', T1 - T0, ' lexer+parser setup ', T2 - T1, ' parse ', T3 - T2, ' compile ', T4 - T3,
-      ' run ', GetTickCount64 - T4, ' (lexer scanning inside parse: ', L.ScanTimeNanoseconds div 1000000, ')');
+      ' run ', GetTickCount64 - T4, ' (lexer scanning inside parse: ', L.ScanTimeNanoseconds div 1000000,
+      '; lazily compiled: ', LazyCompileCount, ' functions in ', LazyCompileNs div 1000000, ' ms: setup ',
+      LazySetupNs div 1000000, ' parse ', LazyParseNs div 1000000, ', ', LazyTokens, ' tokens, ', LazyChars,
+      ' chars)');
   if GetEnvironmentVariable('G2_SAMPLE') <> '' then ReportSamples;
   if not Ok then
   begin
