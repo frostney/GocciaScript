@@ -4297,6 +4297,21 @@ begin
   Result := True;
 end;
 
+{ FastLoop's instanceof walk (out of line for registers, as ICGetHit): 1 when Target (an object) is on O's
+  prototype chain, 0 when the chain ends first (a prototype is an object or null), 2 at a proxy (Execute's) }
+function FastProtoChainHas(O: PObj; Target: TValue): Integer; noinline;
+var P: TValue;
+begin
+  while True do
+  begin
+    if O^.OKind = okProxy then Exit(2);
+    P := O^.Shape^.Proto;
+    if P = Target then Exit(1);
+    if (P shr 48) <> TAG_PTR_HI then Exit(0);
+    O := PObj(PtrUInt(P and PTR_MASK));
+  end;
+end;
+
 function XGenInline(Gen: TValue; RetIdx: Integer): Boolean; noinline;
 var G: PObj; State: PValueArray; T: PFuncTemplate; Base, I, NH, NU, J, ResumeReg, NLive: Integer; Fr: PFrame;
   U: PUpval;
@@ -5407,15 +5422,9 @@ LGetProp:
           if not IsObject(V) then goto LBail;
           VA := R[PWord(PByte(IP) - 5)^];
           if not IsObject(VA) then begin R[A] := VFalse; Continue; end;
-          O2 := ObjOf(VA);
-          while True do
-          begin
-            if O2^.OKind = okProxy then goto LBail;
-            VB := O2^.Shape^.Proto;
-            if not IsObject(VB) then begin R[A] := VFalse; Break; end;
-            if VB = V then begin R[A] := VTrue; Break; end;
-            O2 := ObjOf(VB);
-          end;
+          CI := FastProtoChainHas(ObjOf(VA), V);
+          if CI = 2 then goto LBail;
+          R[A] := MkBool(CI = 1);
         end;
       { a global: the global object's cached slot, or a global lexical binding's cell (Execute's IC fill) }
       opGetGlobal:
