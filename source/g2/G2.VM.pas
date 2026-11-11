@@ -4966,7 +4966,6 @@ var
   Changed: Boolean;
   VS: PValue;
   NS, NL: PByte;   { the nursery, which no collection moves while FastLoop runs }
-  I: QWord;
   A: NativeInt;   { pointer-sized: R[A] needs no sign extension }
   CI, NP: Integer;
   VA, VB, V: TValue;
@@ -4988,15 +4987,15 @@ begin
   Changed := False;
   while True do
   begin
-    I := IP^;
-    { A is the instruction's bytes 1-2 (little-endian): one 16-bit load instead of shift, mask and move }
+    { the operands are read from the instruction in memory (A its bytes 1-2, B 3-4, C the 24 bits above): no
+      register holds the instruction word }
     A := PWord(PByte(IP) + 1)^;
     Inc(IP);
-    case TOp(I and $FF) of
+    case TOp(PByte(IP)[-8]) of
       opNop: ;
       opMov: R[A] := R[PWord(PByte(IP) - 5)^];
-      opLoadK: R[A] := K[I shr 40];
-      opLoadI: R[A] := MkInt(SarInt64(Int64(I), 40));
+      opLoadK: R[A] := K[(PCardinal(PByte(IP) - 4)^ shr 8)];
+      opLoadI: R[A] := MkInt(SarLongint(PLongInt(PByte(IP) - 4)^, 8));
       opLoadUndef: R[A] := VUndefined;
       opLoadNull: R[A] := VNull;
       opLoadTrue: R[A] := VTrue;
@@ -5034,8 +5033,8 @@ LGetProp:
           O := PObj(PtrUInt(VB and PTR_MASK));
           if O^.Hdr.Kind = ckObject then
           begin
-            if ICGetHit(O, @ICs[I shr 40], @R[A]) then Continue;
-            IC := @ICs[I shr 40];
+            if ICGetHit(O, @ICs[(PCardinal(PByte(IP) - 4)^ shr 8)], @R[A]) then Continue;
+            IC := @ICs[(PCardinal(PByte(IP) - 4)^ shr 8)];
             { ICGet: the entry for the receiver's shape, then its holder through the prototypes }
             Ent := nil;
             if (IC^.Poly0.Shape = O^.Shape) and (IC^.Poly0.Kind = O^.OKind) then Ent := @IC^.Poly0
@@ -5102,13 +5101,13 @@ LGetProp:
               Changed := True;
               Continue;
             end;
-            if (TOp(I and $FF) = opGetLength) and (O^.OKind = okArray) and ((O^.OFlags and ofBigLen) = 0) then
+            if (TOp(PByte(IP)[-8]) = opGetLength) and (O^.OKind = okArray) and ((O^.OFlags and ofBigLen) = 0) then
             begin
               R[A] := MkInt(O^.Elements^.Len);
               Continue;
             end;
             { the intrinsic length getter of a typed array without own properties over an ordinary buffer }
-            if (TOp(I and $FF) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) and
+            if (TOp(PByte(IP)[-8]) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) and
                ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached)) = 0) then
             begin
               R[A] := MkInt(Int32(UInt32(O^.Aux2)));
@@ -5125,14 +5124,14 @@ LGetProp:
           end;
           if O^.Hdr.Kind = ckString then
           begin
-            if TOp(I and $FF) = opGetLength then
+            if TOp(PByte(IP)[-8]) = opGetLength then
             begin
               R[A] := MkInt(PStr(O)^.Len);
               Continue;
             end;
             { ICFillString's cache of String.prototype's property }
             O2 := ObjOf(StringProto);
-            IC := @ICs[I shr 40];
+            IC := @ICs[(PCardinal(PByte(IP) - 4)^ shr 8)];
             if O2^.Shape = IC^.Shape then
             begin
               R[A] := GetSlot(O2, IC^.Slot);
@@ -5147,7 +5146,7 @@ LGetProp:
           VA := R[A];
           if not IsObject(VA) then goto LBail;
           O := ObjOf(VA);
-          IC := @ICs[I shr 40];
+          IC := @ICs[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if O^.Shape <> IC^.Shape then goto LBail;
           V := R[PWord(PByte(IP) - 5)^];
           if IC^.Slot >= O^.InlineCap then
@@ -5175,7 +5174,7 @@ LGetProp:
         begin
           { a class field's cached add transition (an extensible object with the cached shape) }
           O := ObjOf(R[A]);
-          IC := @ICs[I shr 40];
+          IC := @ICs[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if (O^.Shape <> IC^.Shape) or (IC^.NewShape = nil) or (IC^.Slot >= O^.InlineCap) or
              ((O^.OFlags and 8) <> 0) then goto LBail;
           V := R[PWord(PByte(IP) - 5)^];
@@ -5187,7 +5186,7 @@ LGetProp:
       opGetElem:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if not (IsInt(VB) and IsObject(VA)) then
           begin
             { a string key, a primitive base: GetElemV, as Execute (a nullish base's error is Execute's) }
@@ -5236,7 +5235,7 @@ LGetProp:
         begin
           VA := R[A];
           VB := R[PWord(PByte(IP) - 5)^];
-          V := R[I shr 40];
+          V := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if not (IsInt(VB) and IsObject(VA)) then goto LBail;
           O := ObjOf(VA);
           E := O^.Elements;
@@ -5287,7 +5286,7 @@ LGetProp:
       opAdd:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             Sum := Int64(Int32(UInt32(VA))) + Int64(Int32(UInt32(VB)));
@@ -5301,7 +5300,7 @@ LGetProp:
       opAddI, opSubI, opIncI:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          CI := SarInt64(Int64(I), 40);
+          CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8);
           if (VA shr 48) = TAG_INT_HI then
           begin
             Sum := Int64(Int32(UInt32(VA))) + CI;
@@ -5315,7 +5314,7 @@ LGetProp:
       opSub:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             Sum := Int64(Int32(UInt32(VA))) - Int64(Int32(UInt32(VB)));
@@ -5329,7 +5328,7 @@ LGetProp:
       opMul:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
             Sum := Int64(Int32(UInt32(VA))) * Int64(Int32(UInt32(VB)));
@@ -5346,14 +5345,14 @@ LGetProp:
       opDiv:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if IsNumber(VA) and IsNumber(VB) then R[A] := MkNumber(NumOf(VA) / NumOf(VB))
           else goto LBail;
         end;
       opMod:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) and (Int32(UInt32(VB)) > 0) and
              (Int32(UInt32(VA)) >= 0) then
             R[A] := MkInt(Int32(UInt32(VA)) mod Int32(UInt32(VB)))
@@ -5362,10 +5361,10 @@ LGetProp:
       opShr, opUShr:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if QuickInt32(VA, CI) and QuickInt32(VB, NP) then
           begin
-            if TOp(I and $FF) = opShr then R[A] := MkInt(SarLongint(CI, NP and 31))
+            if TOp(PByte(IP)[-8]) = opShr then R[A] := MkInt(SarLongint(CI, NP and 31))
             else R[A] := MkNumber(UInt32(CI) shr (NP and 31));
           end
           else goto LBail;
@@ -5376,7 +5375,7 @@ LGetProp:
         Function.prototype, its prototype property's slot cached): the prototype chain walk, without proxies }
       opInstanceof:
         begin
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if (VB shr 48) <> TAG_PTR_HI then goto LBail;
           O := PObj(PtrUInt(VB and PTR_MASK));
           if (O^.Hdr.Kind <> ckObject) or (O^.OKind <> okFunction) or MultiRealmAny then goto LBail;
@@ -5400,7 +5399,7 @@ LGetProp:
       { a global: the global object's cached slot, or a global lexical binding's cell (Execute's IC fill) }
       opGetGlobal:
         begin
-          IC := @ICs[I shr 40];
+          IC := @ICs[(PCardinal(PByte(IP) - 4)^ shr 8)];
           O := ObjOf(GlobalObj);
           if O^.Shape = IC^.Shape then R[A] := GetSlot(O, IC^.Slot)
           else if IC^.Depth <= -2 then
@@ -5417,10 +5416,10 @@ LGetProp:
       opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          NP := Int32(SarInt64(Int64(I), 40));
+          NP := Int32(SarLongint(PLongInt(PByte(IP) - 4)^, 8));
           if (VA shr 48) = TAG_INT_HI then CI := Int32(UInt32(VA))
           else if not QuickInt32(VA, CI) then goto LBail;
-          case TOp(I and $FF) of
+          case TOp(PByte(IP)[-8]) of
             opBitAndI: R[A] := MkInt(CI and NP);
             opBitOrI: R[A] := MkInt(CI or NP);
             opBitXorI: R[A] := MkInt(CI xor NP);
@@ -5432,9 +5431,9 @@ LGetProp:
       opBitAnd, opBitOr, opBitXor, opShl:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if not (QuickInt32(VA, CI) and QuickInt32(VB, NP)) then goto LBail;
-          case TOp(I and $FF) of
+          case TOp(PByte(IP)[-8]) of
             opBitAnd: R[A] := MkInt(CI and NP);
             opBitOr: R[A] := MkInt(CI or NP);
             opBitXor: R[A] := MkInt(CI xor NP);
@@ -5460,7 +5459,7 @@ LGetProp:
       opSEq, opSNe:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           { StrictEquals }
           if VA = VB then Bool := not IsDouble(VA) or (PDouble(@VA)^ = PDouble(@VA)^)
           else if ((VA shr 48) = TAG_PTR_HI) and ((VB shr 48) = TAG_PTR_HI) then
@@ -5473,7 +5472,7 @@ LGetProp:
             the specials, a pointer and a non-pointer) differs }
           else if (VA < DOUBLE_LIMIT) or (VB < DOUBLE_LIMIT) then Bool := IsNumber(VA) and IsNumber(VB) and (NumOf(VA) = NumOf(VB))
           else Bool := False;
-          if TOp(I and $FF) = opSNe then Bool := not Bool;
+          if TOp(PByte(IP)[-8]) = opSNe then Bool := not Bool;
           R[A] := MkBool(Bool);
         end;
       opTypeof:
@@ -5507,7 +5506,7 @@ LGetProp:
         begin
           { LooseEquals' first cases: nullish, two numbers, two strings, the same value }
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if (VA = VUndefined) or (VA = VNull) or (VB = VUndefined) or (VB = VNull) then
           begin
             Bool := ((VA = VUndefined) or (VA = VNull)) and ((VB = VUndefined) or (VB = VNull));
@@ -5520,16 +5519,16 @@ LGetProp:
           else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
           else if (VA = VB) and not IsBigInt(VA) then Bool := True
           else goto LBail;
-          if TOp(I and $FF) = opNe then Bool := not Bool;
+          if TOp(PByte(IP)[-8]) = opNe then Bool := not Bool;
           R[A] := MkBool(Bool);
         end;
       opLt, opLe, opGt, opGe:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
-          VB := R[I shr 40];
+          VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if IsInt(VA) and IsInt(VB) then
           begin
-            case TOp(I and $FF) of
+            case TOp(PByte(IP)[-8]) of
               opLt: Bool := IntOf(VA) < IntOf(VB);
               opLe: Bool := IntOf(VA) <= IntOf(VB);
               opGt: Bool := IntOf(VA) > IntOf(VB);
@@ -5538,7 +5537,7 @@ LGetProp:
           end
           else if IsNumber(VA) and IsNumber(VB) then
           begin
-            case TOp(I and $FF) of
+            case TOp(PByte(IP)[-8]) of
               opLt: Bool := NumOf(VA) < NumOf(VB);
               opLe: Bool := NumOf(VA) <= NumOf(VB);
               opGt: Bool := NumOf(VA) > NumOf(VB);
@@ -5548,29 +5547,29 @@ LGetProp:
           else goto LBail;
           R[A] := MkBool(Bool);
         end;
-      opJmp: Inc(IP, SarInt64(Int64(I), 40));
+      opJmp: Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
       { a boolean first: most conditions are comparison results }
       opJT:
         begin
           V := R[A];
-          if (V = VTrue) or ((V <> VFalse) and ToBool(V)) then Inc(IP, SarInt64(Int64(I), 40));
+          if (V = VTrue) or ((V <> VFalse) and ToBool(V)) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
         end;
       opJF:
         begin
           V := R[A];
-          if (V = VFalse) or ((V <> VTrue) and not ToBool(V)) then Inc(IP, SarInt64(Int64(I), 40));
+          if (V = VFalse) or ((V <> VTrue) and not ToBool(V)) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
         end;
-      opJNullish: if (R[A] = VUndefined) or (R[A] = VNull) then Inc(IP, SarInt64(Int64(I), 40));
-      opJNotNullish: if (R[A] <> VUndefined) and (R[A] <> VNull) then Inc(IP, SarInt64(Int64(I), 40));
-      opJUndef: if R[A] = VUndefined then Inc(IP, SarInt64(Int64(I), 40));
-      opJNotUndef: if R[A] <> VUndefined then Inc(IP, SarInt64(Int64(I), 40));
+      opJNullish: if (R[A] = VUndefined) or (R[A] = VNull) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
+      opJNotNullish: if (R[A] <> VUndefined) and (R[A] <> VNull) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
+      opJUndef: if R[A] = VUndefined then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
+      opJNotUndef: if R[A] <> VUndefined then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
       opJNLt, opJNLe, opJNGt, opJNGe:
         begin
           VA := R[A];
           VB := R[PWord(PByte(IP) - 5)^];
           if ((VA shr 48) = TAG_INT_HI) and ((VB shr 48) = TAG_INT_HI) then
           begin
-            case TOp(I and $FF) of
+            case TOp(PByte(IP)[-8]) of
               opJNLt: Bool := Int32(UInt32(VA)) < Int32(UInt32(VB));
               opJNLe: Bool := Int32(UInt32(VA)) <= Int32(UInt32(VB));
               opJNGt: Bool := Int32(UInt32(VA)) > Int32(UInt32(VB));
@@ -5579,7 +5578,7 @@ LGetProp:
           end
           else if IsNumber(VA) and IsNumber(VB) then
           begin
-            case TOp(I and $FF) of
+            case TOp(PByte(IP)[-8]) of
               opJNLt: Bool := NumOf(VA) < NumOf(VB);
               opJNLe: Bool := NumOf(VA) <= NumOf(VB);
               opJNGt: Bool := NumOf(VA) > NumOf(VB);
@@ -5587,7 +5586,7 @@ LGetProp:
             end;
           end
           else goto LBail;
-          if not Bool then Inc(IP, SarInt64(Int64(I), 40));
+          if not Bool then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
         end;
       opJNSEq, opJSEq:
         begin
@@ -5605,7 +5604,7 @@ LGetProp:
             the specials, a pointer and a non-pointer) differs }
           else if (VA < DOUBLE_LIMIT) or (VB < DOUBLE_LIMIT) then Bool := IsNumber(VA) and IsNumber(VB) and (NumOf(VA) = NumOf(VB))
           else Bool := False;
-          if Bool = (TOp(I and $FF) = opJSEq) then Inc(IP, SarInt64(Int64(I), 40));
+          if Bool = (TOp(PByte(IP)[-8]) = opJSEq) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
         end;
       opCall:
         begin
@@ -5619,7 +5618,7 @@ LGetProp:
             { a native function, called here as Execute's opCall does (f.call(t, ...) is Execute's: it unwraps it);
               its throw goes to Execute with the frame's PC past this call }
             Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
-            if not XFastNative(O, R, A, I, Fr) then
+            if not XFastNative(O, R, A, PQWord(IP)[-1], Fr) then
             begin
               InjectThrow := True;
               Exit(-1);
@@ -5632,7 +5631,7 @@ LGetProp:
           Base := Fr^.Base + A + 1;
           if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
           Argc := PWord(PByte(IP) - 5)^;
-          if (I shr 40) and 1 <> 0 then R[A + 1] := VUndefined;
+          if (PByte(IP)[-3] and 1) <> 0 then R[A + 1] := VUndefined;
           if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
           Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
           R := @VS[Base];
@@ -5717,7 +5716,7 @@ LGetProp:
           if (Fr^.Kind <> 4) or MultiRealmAny then goto LBail;
           PushRoot(R[PWord(PByte(IP) - 5)^]);
           J := Fr^.RetIdx;
-          SaveSuspension(Fr, Fr^.Tpl, R, A, Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3), Integer(I shr 40));
+          SaveSuspension(Fr, Fr^.Tpl, R, A, Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3), Integer((PCardinal(PByte(IP) - 4)^ shr 8)));
           GenYielded := False;
           VS[J] := RootAt(TempTop - 1);
           PopRoots(1);
@@ -5736,7 +5735,7 @@ LGetProp:
         begin
           { a call's or a construction's return to a bytecode caller inside this Execute }
           if (Fr^.Kind > 1) or (FrameTop - 1 = StopFrame) or MultiRealmAny then goto LBail;
-          if TOp(I and $FF) = opRet then V := R[A] else V := VUndefined;
+          if TOp(PByte(IP)[-8]) = opRet then V := R[A] else V := VUndefined;
           if (Fr^.Kind = 1) and not IsObject(V) then
           begin
             { 10.2.2 [[Construct]] steps 10-12; a derived constructor's checks are Execute's }
