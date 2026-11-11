@@ -281,6 +281,8 @@ type
   TFuncState = class
     Parent: TFuncState;
     Tpl: PFuncTemplate;
+    { Relative[PC]: the instruction's C is a jump offset (PatchTo wrote it), for CompactNops }
+    Relative: array of Boolean;
     Scopes: array of TScope;
     ScopeCount: Integer;
     FreeReg: Integer;
@@ -477,6 +479,7 @@ type
     function ExprAny(E: TGocciaExpression): Integer;
     function IsDiscardable(E: TGocciaExpression): Boolean;
     function PureRead(E: TGocciaExpression): Boolean;
+    function StableBase(E: TGocciaExpression): Boolean;
     procedure BranchFalse(E: TGocciaExpression; var L: TJumpList);
     procedure BranchTrue(E: TGocciaExpression; var L: TJumpList);
     procedure LoadIdent(const N: UnicodeString; Dest: Integer);
@@ -634,6 +637,45 @@ var I: QWord;
 begin
   I := FS.Tpl^.Code[PC];
   FS.Tpl^.Code[PC] := (I and $000000FFFFFFFFFF) or (QWord((Target - (PC + 1)) and $FFFFFF) shl 40);
+  if PC >= Length(FS.Relative) then SetLength(FS.Relative, Max(PC + 1, Length(FS.Relative) * 2 + 64));
+  FS.Relative[PC] := True;
+end;
+
+{ drops the no-ops a finished function's code still holds (block-entry TDZ placeholders and prologue placeholders
+  nothing needed), which every pass through a loop body would otherwise dispatch: jump offsets (the instructions
+  PatchTo wrote) are remapped, a jump to a dropped no-op going to the instruction after it, and the line table
+  follows the code. An offset no PatchTo wrote is 0 (the next instruction), which stays right. }
+procedure CompactNops(T: PFuncTemplate; const Relative: array of Boolean);
+var NewIdx: array of Integer; I, N, Target, C: Integer; Ins_: QWord;
+begin
+  N := 0;
+  for I := 0 to T^.CodeLen - 1 do
+    if InsOp(T^.Code[I]) = opNop then Inc(N);
+  if N = 0 then Exit;
+  SetLength(NewIdx, T^.CodeLen + 1);
+  N := 0;
+  for I := 0 to T^.CodeLen - 1 do
+  begin
+    NewIdx[I] := N;
+    if InsOp(T^.Code[I]) <> opNop then Inc(N);
+  end;
+  NewIdx[T^.CodeLen] := N;
+  for I := 0 to T^.CodeLen - 1 do
+  begin
+    Ins_ := T^.Code[I];
+    if InsOp(Ins_) = opNop then Continue;
+    if (I <= High(Relative)) and Relative[I] then
+    begin
+      Target := I + 1 + InsC(Ins_);
+      if Target < 0 then Target := 0;
+      if Target > T^.CodeLen then Target := T^.CodeLen;
+      C := NewIdx[Target] - (NewIdx[I] + 1);
+      Ins_ := (Ins_ and $000000FFFFFFFFFF) or (QWord(C and $FFFFFF) shl 40);
+    end;
+    T^.Code[NewIdx[I]] := Ins_;
+    T^.Lines[NewIdx[I]] := T^.Lines[I];
+  end;
+  T^.CodeLen := N;
 end;
 
 procedure TCompiler.PatchHere(PC: Integer);
@@ -1708,12 +1750,11 @@ begin
     end;
     if T^.MaxRegs < NP + 4 then T^.MaxRegs := NP + 4;
     Inc(T^.MaxRegs, 2);   { scratch for natives }
+    { the unused placeholders (the prologue's included) are dropped: calls start at the first instruction }
+    CompactNops(T, F.Relative);
     SetLength(T^.Code, T^.CodeLen);
     SetLength(T^.Lines, T^.CodeLen);
-    { the home-object and new.target placeholders stay no-ops when unused: calls start after them
-      (nothing jumps into the prologue) }
     T^.EntryPC := 0;
-    while (T^.EntryPC < 2) and (T^.EntryPC < T^.CodeLen) and (InsOp(T^.Code[T^.EntryPC]) = opNop) do Inc(T^.EntryPC);
     Result := T;
   finally
     FS := Outer;
@@ -3622,6 +3663,23 @@ begin
     ((WithCount = 0) or (WithsFor(TGocciaIdentifierExpression(E).Name, WithIdxScratch) = 0));
 end;
 
+{ an object expression ExprAny reads from a register that nothing evaluated after it can reassign: this outside a
+  derived constructor (where super() binds it) and outside arrows, or a local const binding }
+function TCompiler.StableBase(E: TGocciaExpression): Boolean;
+var I, J: Integer; N: UnicodeString;
+begin
+  if E is TGocciaThisExpression then Exit(not FS.IsArrow and not InDerivedCtor);
+  if not (E is TGocciaIdentifierExpression) then Exit(False);
+  N := TGocciaIdentifierExpression(E).Name;
+  if InTDZ(N) or ((WithCount > 0) and (WithsFor(N, WithIdxScratch) > 0)) then Exit(False);
+  for I := FS.ScopeCount - 1 downto 0 do
+  begin
+    J := FS.Scopes[I].Find(N);
+    if J >= 0 then Exit(FS.Scopes[I].Bindings[J].IsConst);
+  end;
+  Result := False;
+end;
+
 { an assignment or update whose value, when unused, need not be copied (TopDiscard) }
 function TCompiler.IsDiscardable(E: TGocciaExpression): Boolean;
 begin
@@ -5257,7 +5315,8 @@ begin
     { the base is read before the value: a local's own register only when the value cannot run code that
       reassigns it }
     PA := TGocciaPropertyAssignmentExpression(E);
-    if PureRead(PA.Value) then O := ExprAny(PA.ObjectExpr) else begin O := AllocReg; ExprTo(PA.ObjectExpr, O); end;
+    if PureRead(PA.Value) or StableBase(PA.ObjectExpr) then O := ExprAny(PA.ObjectExpr)
+    else begin O := AllocReg; ExprTo(PA.ObjectExpr, O); end;
     if O = Dest then begin O := AllocReg; Emit(Ins(opMov, O, Dest, 0)); end;
     if Discard and PureRead(PA.Value) then V := ExprAny(PA.Value)
     else begin ExprTo(PA.Value, Dest); V := Dest; end;
@@ -5267,9 +5326,10 @@ begin
   begin
     { 13.15.2: base, then key, then value; locals' own registers where nothing evaluated later can reassign them }
     CA := TGocciaComputedPropertyAssignmentExpression(E);
-    if PureRead(CA.Value) and PureRead(CA.PropertyExpression) then O := ExprAny(CA.ObjectExpr)
+    if (PureRead(CA.Value) and PureRead(CA.PropertyExpression)) or StableBase(CA.ObjectExpr) then
+      O := ExprAny(CA.ObjectExpr)
     else begin O := AllocReg; ExprTo(CA.ObjectExpr, O); end;
-    if PureRead(CA.Value) then K := ExprAny(CA.PropertyExpression)
+    if PureRead(CA.Value) or StableBase(CA.PropertyExpression) then K := ExprAny(CA.PropertyExpression)
     else begin K := AllocReg; ExprTo(CA.PropertyExpression, K); end;
     if (O = Dest) or (K = Dest) then
     begin
