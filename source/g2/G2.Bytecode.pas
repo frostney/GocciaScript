@@ -189,6 +189,9 @@ type
     GdiLexBase: Integer;          { first global lexical binding index, set when the declarations run }
     AsyncReg: Integer;            { an async function's register holding its promise, -1 otherwise }
     ModuleId: Integer;            { the Source Text Module Record (G2.Modules) whose code this is, 0 none }
+    { a lazily compiled function not compiled yet (G2.Lazy's PLazyStub): no code, FastCall False; its first call
+      compiles it (LazyCompileHook) }
+    Lazy: Pointer;
   end;
 
 function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;

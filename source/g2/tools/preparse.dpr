@@ -124,6 +124,43 @@ begin
   WriteLn(Format('files %d, runs %d, false rejects %d, false accepts %d', [Files, Runs, FalseRejects, FalseAccepts]));
 end;
 
+{ --lazystats FILE: why functions are not compiled lazily (counts and source size of the outermost such function
+  per reason, the size counted once per reason) }
+procedure LazyStats(const Src: UnicodeString);
+const Names: array[0..9] of string = ('expression body', 'method/accessor/ctor', 'field/static block',
+  'direct eval in it', 'eval inside', 'in eval scope', 'in with', 'private name', 'arrow super/new.target/arguments',
+  'eligible');
+var P: TPreParser; I, J, K: Integer; Cnt, Size: array[0..9] of Int64; F: TFuncFlags; CoverEnd: array[0..9] of Integer;
+begin
+  P := TPreParser.Create(PWideChar(Src), Length(Src), pgScript, False);
+  P.ParseProgram;
+  FillChar(Cnt, SizeOf(Cnt), 0);
+  FillChar(Size, SizeOf(Size), 0);
+  FillChar(CoverEnd, SizeOf(CoverEnd), 0);
+  for I := 0 to P.FuncCount - 1 do
+  begin
+    F := P.Funcs[I].Flags;
+    if P.Funcs[I].BodyStart < 0 then K := 0
+    else if F * [ffMethod, ffGetter, ffSetter, ffClassCtor] <> [] then K := 1
+    else if F * [ffFieldInit, ffStaticBlock] <> [] then K := 2
+    else if ffDirectEval in F then K := 3
+    else if ffInnerEval in F then K := 4
+    else if ffEvalScope in F then K := 5
+    else if ffInWith in F then K := 6
+    else if ffPrivateRef in F then K := 7
+    else if (ffArrow in F) and (F * [ffSuperProp, ffSuperCall, ffNewTarget, ffUsesArguments] <> []) then K := 8
+    else K := 9;
+    Inc(Cnt[K]);
+    if P.Funcs[I].Start >= CoverEnd[K] then
+    begin
+      Inc(Size[K], P.Funcs[I].Stop - P.Funcs[I].Start);
+      CoverEnd[K] := P.Funcs[I].Stop;
+    end;
+  end;
+  for J := 0 to 9 do WriteLn(Format('%-34s %7d functions %9d chars', [Names[J], Cnt[J], Size[J]]));
+  P.Free;
+end;
+
 procedure Bench(const FN: string; Module: Boolean);
 var Src: UnicodeString; R: Integer; T0, Best: QWord; P: TPreParser; G: TParseGoal;
 begin
@@ -151,6 +188,12 @@ begin
   PreParseRegExpCheck := RegExpValidateHook;
   Module := False;
   DoBench := False;
+  if (ParamCount >= 2) and (ParamStr(1) = '--lazystats') then
+  begin
+    Src := ReadFileText(ParamStr(2));
+    LazyStats(Src);
+    Exit;
+  end;
   if (ParamCount >= 2) and (ParamStr(1) = '--list') then
   begin
     Prefixes := TStringList.Create;

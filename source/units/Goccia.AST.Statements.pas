@@ -96,6 +96,18 @@ type
     property Nodes: TObjectList<TGocciaASTNode> read FNodes;
   end;
 
+  { A function body the parser skipped for a host that compiles it when the
+    function is first called, as SetFunctionBodySkipper in Goccia.Parser
+    describes: an empty block standing for the braces, with the host's id
+    for the function. }
+  TGocciaLazyFunctionBody = class(TGocciaBlockStatement)
+  private
+    FLazyId: Integer;
+  public
+    constructor Create(const ALazyId: Integer; const ASpan: TGocciaSourceSpan);
+    property LazyId: Integer read FLazyId;
+  end;
+
   TGocciaIfStatement = class(TGocciaStatement)
   private
     FCondition: TGocciaExpression;
@@ -888,6 +900,13 @@ end;
   begin
     inherited Create(ASpan);
     FNodes := ANodes;
+  end;
+
+  constructor TGocciaLazyFunctionBody.Create(const ALazyId: Integer;
+    const ASpan: TGocciaSourceSpan);
+  begin
+    inherited Create(TObjectList<TGocciaASTNode>.Create(True), ASpan);
+    FLazyId := ALazyId;
   end;
 
   { TGocciaClassDefinition }

@@ -4,7 +4,7 @@ program g2;
 uses
   cthreads, Classes, SysUtils, Math,
   Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.Token,
-  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl;
+  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl;
 
 type
   TSampler = class(TThread)
@@ -453,7 +453,7 @@ begin
 end;
 
 var
-  FS: TFileStream; Raw: RawByteString; SrcText: UnicodeString; L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; T: PFuncTemplate;
+  FS: TFileStream; Raw: RawByteString; SrcText: UnicodeString; PP: TPreParser; LazySrc: TLazySource; L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; T: PFuncTemplate;
   Opts: TGocciaParserOptions; Ok: Boolean; S: TValue; FileName: string; I, NTokens: Integer; T0, T1, T2, T3, T4, H0, H1: QWord;
 begin
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
@@ -477,7 +477,30 @@ begin
   SrcText := DecodeSource(Raw);
   Raw := '';
   T1 := GetTickCount64;
+  { G2_LAZY=1: the functions the pre-parse finds eligible are compiled on their first call (G2.Lazy) }
+  LazySrc := nil;
+  if GetEnvironmentVariable('G2_LAZY') = '1' then
+  begin
+    PP := TPreParser.Create(PWideChar(SrcText), Length(SrcText), pgScript, False);
+    try
+      try
+        PP.ParseProgram;
+        LazySrc := BuildLazySource(SrcText, FileName, PP);
+      except
+        on EScanError do LazySrc := nil;
+      end;
+    finally
+      PP.Free;
+    end;
+    if GetEnvironmentVariable('G2_PHASES') <> '' then
+      WriteLn(ErrOutput, 'pre-parse ', GetTickCount64 - T1, ' ms');
+  end;
   L := TGocciaLexer.Create(SrcText, FileName);
+  if LazySrc <> nil then
+  begin
+    LazySrc.Coords := L.SourceCoordinates;
+    LazySrc.CoordsRef := LazySrc.Coords;
+  end;
   L.HTMLComments := True;   { B.1.1: a Script }
   L.StandardIdentifiers := True;
   L.MeasureScanTime := GetEnvironmentVariable('G2_PHASES') <> '';
@@ -493,6 +516,7 @@ begin
   Opts.LabelStatementsEnabled := True;
   Opts.ForInLoopsEnabled := True;
   P.ApplyOptions(Opts);
+  if LazySrc <> nil then P.SetFunctionBodySkipper(@LazyBodySkipper, LazySrc);
   T2 := GetTickCount64;
   try
     Prog := P.Parse;
@@ -536,7 +560,9 @@ begin
     Halt(0);
   end;
   try
+    CurLazySource := LazySrc;
     T := CompileProgram(Prog, FileName, False, 1);
+    CurLazySource := nil;
   except
     on E: Exception do begin WriteLn('compile error: ', E.Message); Halt(3); end;
   end;

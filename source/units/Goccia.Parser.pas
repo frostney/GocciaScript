@@ -101,6 +101,13 @@ type
     function GetReference(const AIndex: Integer): TGocciaPrivateNameReference;
   end;
 
+  { A host that compiles function bodies on demand (lazy compilation): given
+    the 0-based source offset of a function body's opening brace, whether the
+    parser should skip the body, the offset of its closing brace and the
+    host's id for the function. }
+  TGocciaFunctionBodySkipper = function(const AData: Pointer;
+    const ABodyOffset: Integer; out ACloseOffset, ALazyId: Integer): Boolean;
+
   TGocciaParser = class
   private
     type
@@ -189,6 +196,8 @@ type
     FWarningUnsupportedFeatures: Boolean;
     FStrictModeActive: Boolean;
     FStrictModeSourceActive: Boolean;
+    FBodySkipper: TGocciaFunctionBodySkipper;
+    FBodySkipperData: Pointer;
     FAllowInExpression: Boolean;
     // Levels of nesting open at the current token; see EnterNesting and
     // Goccia.NestingLimit.
@@ -604,6 +613,14 @@ type
     function ParseUnchecked: TGocciaProgram;
     function ParseWithPrivateNames(const ADeclaredNames: TStrings): TGocciaProgram;
     function ParseExpressionUnchecked: TGocciaExpression;
+    { Skips the function bodies ASkipper chooses: each becomes a
+      TGocciaLazyFunctionBody (a host's lazy compilation; the host has checked
+      the bodies' syntax itself) }
+    procedure SetFunctionBodySkipper(const ASkipper: TGocciaFunctionBodySkipper;
+      const AData: Pointer);
+    { Parses as strict mode code from the start: a function of strict code
+      that a host parses on its own }
+    procedure SetStrictMode(const AStrict: Boolean);
     function Expression: TGocciaExpression;
     function AtEnd: Boolean;
     function GetWarning(const AIndex: Integer): TGocciaParserWarning; {$IFDEF FPC}inline;{$ENDIF}
@@ -1608,6 +1625,19 @@ begin
   finally
     Dec(FSkipPrivateNameValidation);
   end;
+end;
+
+procedure TGocciaParser.SetFunctionBodySkipper(
+  const ASkipper: TGocciaFunctionBodySkipper; const AData: Pointer);
+begin
+  FBodySkipper := ASkipper;
+  FBodySkipperData := AData;
+end;
+
+procedure TGocciaParser.SetStrictMode(const AStrict: Boolean);
+begin
+  FStrictModeActive := AStrict;
+  FStrictModeSourceActive := AStrict;
 end;
 
 function TGocciaParser.ParseUnchecked: TGocciaProgram;
@@ -6140,9 +6170,20 @@ var
   IsUseStrict: Boolean;
   DirectiveHasForbiddenEscape: Boolean;
   PrologueHasForbiddenEscape: Boolean;
+  CloseOffset, LazyId: Integer;
 begin
   BraceLine := Previous.Line;
   BraceColumn := Previous.Column;
+  if Assigned(FBodySkipper) and Assigned(FLexer) and
+     FBodySkipper(FBodySkipperData, Previous.Span.StartOffset, CloseOffset, LazyId) then
+  begin
+    // the next token is the closing brace
+    FLexer.SkipTo(CloseOffset, FCurrent);
+    Consume(gttRightBrace, 'Expected "}" after function body',
+      SSuggestCloseBlock);
+    Exit(TGocciaLazyFunctionBody.Create(LazyId,
+      SourceSpanAtPosition(BraceLine, BraceColumn)));
+  end;
   SavedStrictModeActive := FStrictModeActive;
   SavedStrictModeSourceActive := FStrictModeSourceActive;
   SavedAllowInExpression := FAllowInExpression;

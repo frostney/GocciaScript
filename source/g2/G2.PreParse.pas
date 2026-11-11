@@ -24,12 +24,16 @@ type
 
   TFuncFlag = (ffArrow, ffAsync, ffGenerator, ffMethod, ffGetter, ffSetter, ffClassCtor, ffDerivedCtor,
     ffFieldInit, ffStaticBlock, ffStrict, ffSimpleParams, ffUsesThis, ffUsesArguments, ffDirectEval,
-    ffSuperProp, ffSuperCall, ffNewTarget, ffInnerEval, ffExpression, ffDeclaration);
+    ffSuperProp, ffSuperCall, ffNewTarget, ffInnerEval, ffExpression, ffDeclaration,
+    { for lazy compilation: inside a with body; inside or around a direct eval's function (its names are
+      dynamic); uses a private name (here or in an inner function) }
+    ffInWith, ffEvalScope, ffPrivateRef);
   TFuncFlags = set of TFuncFlag;
 
   { a function the pre-parser met: enough for a lazy stub, and to skip it when its parent is parsed again }
   TFuncRecord = record
     Start, Stop: Integer;     { its source text (Function.prototype.toString), Stop exclusive }
+    BodyStart: Integer;       { the body's left brace, or -1 (an arrow's expression body) }
     Name: PStr;               { a declaration's or named expression's own name, else nil }
     ParamCount: Integer;      { ExpectedArgumentCount }
     Flags: TFuncFlags;
@@ -183,6 +187,7 @@ type
     FModuleExports: TAtomMap;
     FExportLocals: array of TPrivRef;
     FExportLocalTop: Integer;
+    FWithDepth: Integer;
     { errors }
     procedure Err(const Msg: string; Pos: Integer);
     procedure ErrHere(const Msg: string);
@@ -310,6 +315,9 @@ function PreParseSource(const Src: UnicodeString; Goal: TParseGoal; Strict: Bool
   out Line, Col: Integer): Boolean;
 
 implementation
+
+uses
+  Goccia.RegExp.Engine;
 
 const
   { expression flags }
@@ -465,7 +473,8 @@ end;
 constructor TPreParser.Create(ASrc: PWideChar; ALen: Integer; AGoal: TParseGoal; AStrict: Boolean);
 begin
   inherited Create;
-  if not AtomsReady then InitAtoms;
+  { the atoms are looked up again: an engine's HeapInit after an earlier pre-parse starts a new atom table }
+  InitAtoms;
   S := TScanner.Create(ASrc, ALen);
   S.HTMLComments := AGoal <> pgModule;
   FGoal := AGoal;
@@ -829,6 +838,7 @@ begin
   if Ctxs[C].Kind = fkArrow then
     Ctxs[P].UsesF := Ctxs[P].UsesF + Ctxs[C].UsesF * [ffUsesThis, ffUsesArguments, ffSuperProp, ffSuperCall, ffNewTarget];
   if Ctxs[C].UsesF * [ffDirectEval, ffInnerEval] <> [] then Include(Ctxs[P].UsesF, ffInnerEval);
+  if ffPrivateRef in Ctxs[C].UsesF then Include(Ctxs[P].UsesF, ffPrivateRef);
   LabelTop := Ctxs[C].LabelBase;
   Dec(CtxTop);
 end;
@@ -840,7 +850,9 @@ begin
   Inc(FuncCount);
   FillChar(Funcs[Result], SizeOf(TFuncRecord), 0);
   Funcs[Result].Start := Start;
+  Funcs[Result].BodyStart := -1;
   Funcs[Result].FreeStart := -1;
+  if FWithDepth > 0 then Include(Funcs[Result].Flags, ffInWith);
 end;
 
 { after the function's scope has ended: its unresolved references, once each, become its free names and
@@ -867,6 +879,10 @@ begin
   if Rec < 0 then Exit;
   Funcs[Rec].Stop := Stop;
   Funcs[Rec].Flags := Funcs[Rec].Flags + Ctxs[C].UsesF;
+  { the functions inside one with a direct eval: their free names may be the eval's own var bindings (the eval's
+    var declarations go to this function's variable environment, not to the functions around it) }
+  if ffDirectEval in Ctxs[C].UsesF then
+    for R := Rec + 1 to FuncCount - 1 do Include(Funcs[R].Flags, ffEvalScope);
   if Ctxs[C].IsStrict then Include(Funcs[Rec].Flags, ffStrict);
   if Ctxs[C].SimpleParams then Include(Funcs[Rec].Flags, ffSimpleParams);
   Funcs[Rec].FreeStart := FreeCount;
@@ -1425,10 +1441,18 @@ end;
 procedure TPreParser.CheckRegExp;
 var Pat, Fl, Msg: UnicodeString;
 begin
-  if not Assigned(PreParseRegExpCheck) then Exit;
   SetString(Pat, S.Src + S.RegexBodyStart, S.RegexBodyLen);
   SetString(Fl, S.Src + S.RegexFlagsStart, S.RegexFlagsLen);
-  Msg := PreParseRegExpCheck(Pat, Fl);
+  if Assigned(PreParseRegExpCheck) then Msg := PreParseRegExpCheck(Pat, Fl)
+  else
+    { before the engine exists: Goccia's RegExp compiler, as G2.RegExpV's literal check uses it }
+    try
+      ValidateRegExpPattern(string(Pat), string(Fl));
+      Msg := '';
+    except
+      on E: Exception do
+        if Pos('quantifier bound too large', E.Message) > 0 then Msg := '' else Msg := UnicodeString(E.Message);
+    end;
   if Msg <> '' then ErrHere('Invalid regular expression: ' + UTF8Encode(Msg));
 end;
 
@@ -2039,6 +2063,7 @@ end;
 
 procedure TPreParser.ParseFunctionBody;
 begin
+  if (S.Kind = tkLBrace) and (Ctxs[F].Rec >= 0) then Funcs[Ctxs[F].Rec].BodyStart := S.TokStart;
   Expect(tkLBrace, sgRegExp);
   ParseDirectives;
   ParseStatementList(tkRBrace);
@@ -2263,6 +2288,7 @@ procedure TPreParser.UsePrivate(A: PStr; Pos: Integer);
 begin
   if PrivClassTop = 0 then
     Err('Private field ''#' + NameOf(A) + ''' must be declared in an enclosing class', Pos);
+  Include(Ctxs[F].UsesF, ffPrivateRef);
   if PrivRefTop >= Length(PrivRefs) then SetLength(PrivRefs, PrivRefTop * 2);
   PrivRefs[PrivRefTop].Atom := A;
   PrivRefs[PrivRefTop].Pos := Pos;
@@ -2844,7 +2870,9 @@ begin
   Expect(tkLParen, sgRegExp);
   ParseExpression(0);
   Expect(tkRParen, sgRegExp);
+  Inc(FWithDepth);
   ParseStatement(scOther);
+  Dec(FWithDepth);
 end;
 
 procedure TPreParser.ParseSwitch;

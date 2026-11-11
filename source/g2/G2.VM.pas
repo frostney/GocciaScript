@@ -104,6 +104,8 @@ threadvar
   RegExpCreateHook: function(Pattern, Flags: PStr; var Res: TValue): Boolean;
   { G2.RegExpV: the early-error check of a regular expression literal ('' when valid) }
   RegExpValidateHook: function(const Pattern, Flags: UnicodeString): UnicodeString;
+  { compiles a lazy template (TFuncTemplate.Lazy, G2.Lazy) before its first frame; False with an exception pending }
+  LazyCompileHook: function(T: PFuncTemplate): Boolean;
   InjectThrow: Boolean;
   TypedArrayValuesFn: TValue;
   AtomLength, AtomPrototype, AtomConstructor, AtomName, AtomMessage, AtomNext, AtomDone, AtomValue,
@@ -3306,6 +3308,7 @@ begin
   if MultiRealmAny and (FnRealm(FObj) <> CurRealm) then
     Exit(PushBytecodeFrameInRealm(FObj, This, Args, Argc, RetIdx, Kind, NewTarget));
   T := PFuncTemplate(FObj^.Native);
+  if (T^.Lazy <> nil) and not LazyCompileHook(T) then Exit(False);
   Base := (Args - VStack) - 1;
   if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
     Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
@@ -3392,6 +3395,7 @@ function PushBytecodeFrame(FObj: PObj; This: TValue; Args: PValue; Argc: Integer
 var T: PFuncTemplate; Base, I: Integer; Fr: PFrame; R: PValue;
 begin
   T := PFuncTemplate(FObj^.Native);
+  if (T^.Lazy <> nil) and not LazyCompileHook(T) then Exit(False);
   { a non-strict function's undefined or null this is the global object (OrdinaryCallBindThis) }
   if not T^.IsStrict and not T^.IsArrow and ((This = VUndefined) or (This = VNull)) and not MultiRealmAny then
     This := GlobalObj;
@@ -5111,7 +5115,8 @@ LGetProp:
               O2 := ObjOf(V);
               if (O2^.OKind <> okFunction) or ((O2^.OFlags and 1) <> 0) then goto LBail;
               T := PFuncTemplate(O2^.Native);
-              if T^.IsAsync or T^.IsGenerator or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then goto LBail;
+              if T^.IsAsync or T^.IsGenerator or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) or (T^.Lazy <> nil) then
+                goto LBail;
               Base := StackTop;
               if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
               Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);

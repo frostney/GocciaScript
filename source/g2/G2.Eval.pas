@@ -27,7 +27,160 @@ threadvar
 implementation
 
 uses
-  Classes, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.Error;
+  Classes, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.Error, Goccia.SourceSpan, G2.Scan,
+  G2.PreParse, G2.Lazy;
+
+threadvar
+  LazyMode: Integer;   { G2_LAZY: 0 not read yet, 1 off, 2 on }
+
+function LazyOn: Boolean;
+begin
+  if LazyMode = 0 then
+    if GetEnvironmentVariable('G2_LAZY') = '1' then LazyMode := 2 else LazyMode := 1;
+  Result := LazyMode = 2;
+end;
+
+procedure ScriptOptions(P: TGocciaParser);
+var Opts: TGocciaParserOptions;
+begin
+  Opts := P.Options;
+  Opts.AutomaticSemicolonInsertion := True;
+  Opts.VarDeclarationsEnabled := True;
+  Opts.FunctionDeclarationsEnabled := True;
+  Opts.TraditionalForLoopsEnabled := True;
+  Opts.WhileLoopsEnabled := True;
+  Opts.LooseEqualityEnabled := True;
+  Opts.NonStrictModeEnabled := True;
+  Opts.LabelStatementsEnabled := True;
+  Opts.ForInLoopsEnabled := True;
+  P.ApplyOptions(Opts);
+end;
+
+{ a Script with lazy functions (G2.Lazy): pre-parsed, then parsed with the eligible bodies skipped and compiled
+  with stubs for them. False when the source goes the eager way (a syntax error, whose message the eager parse
+  gives, or nothing to defer); otherwise Ok and Err are the result }
+function LazyParseAndCompile(const Source, FileName: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString;
+  out Ok: Boolean): Boolean;
+var PP: TPreParser; LS: TLazySource; L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram;
+begin
+  Result := False;
+  Ok := False;
+  LS := nil;
+  PP := TPreParser.Create(PWideChar(Source), Length(Source), pgScript, False);
+  try
+    try
+      PP.ParseProgram;
+      LS := BuildLazySource(Source, FileName, PP);
+    except
+      on EScanError do Exit;
+    end;
+  finally
+    PP.Free;
+  end;
+  if LS = nil then Exit;
+  Result := True;
+  CompileFailKind := 1;
+  L := nil; P := nil; Prog := nil;
+  try
+    try
+      L := TGocciaLexer.Create(LS.Text, FileName);
+      LS.Coords := L.SourceCoordinates;
+      LS.CoordsRef := LS.Coords;
+      L.HTMLComments := True;
+      L.StandardIdentifiers := True;
+      P := TGocciaParser.CreateFromLexer(L, FileName, nil);
+      ScriptOptions(P);
+      P.SetFunctionBodySkipper(@LazyBodySkipper, LS);
+      Prog := P.Parse;
+      L.Tokens.Clear;
+      CompileFailKind := 2;
+      CurLazySource := LS;
+      try
+        T := CompileProgram(Prog, FileName, False, 1);
+      finally
+        CurLazySource := nil;
+      end;
+      CompileFailKind := 0;
+      Ok := True;
+    except
+      on E: Exception do
+      begin
+        Err := UnicodeString(E.Message);
+        if E is EEarlySyntaxError then CompileFailKind := 1;
+        if E is TGocciaReferenceError then ParseErrorName := 'ReferenceError' else ParseErrorName := 'SyntaxError';
+      end;
+    end;
+  finally
+    Prog.Free;
+    P.Free;
+    L.Free;
+  end;
+end;
+
+{ LazyCompileHook: a lazy template's function, parsed from its own source range and compiled, moved into the
+  template (its closures keep the stub's upvalues, name and source text) }
+function LazyCompile(T: PFuncTemplate): Boolean;
+var St: PLazyStub; LS, PrevSrc: TLazySource; R: ^TLazyRec; L: TGocciaLexer; P: TGocciaParser; E: TGocciaExpression;
+  NT: PFuncTemplate; SaveUp: array of TUpvalDesc; SaveName: PStr; SaveRange: TGocciaLazySourceText;
+  Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString;
+begin
+  St := PLazyStub(T^.Lazy);
+  LS := St^.Src;
+  R := @LS.Recs[St^.Id];
+  L := nil; P := nil;
+  Msg := '';
+  Arena := TGocciaASTArena.Create;
+  try
+    try
+      L := TGocciaLexer.Create(LS.Text, LS.FileName, LS.Coords);
+      L.HTMLComments := True;
+      L.StandardIdentifiers := True;
+      L.SetRange(R^.Start, R^.Stop);
+      P := TGocciaParser.CreateFromLexer(L, LS.FileName, nil);
+      ScriptOptions(P);
+      P.SetStrictMode(St^.IsStrict);
+      P.SetFunctionBodySkipper(@LazyBodySkipper, LS);
+      LS.Compiling := St^.Id;
+      PrevArena := ActivateASTArena(Arena);
+      try
+        E := P.ParseExpressionUnchecked;
+      finally
+        RestoreASTArena(PrevArena);
+        LS.Compiling := -1;
+      end;
+      if not ((E is TGocciaFunctionExpression) or (E is TGocciaArrowFunctionExpression)) or not P.AtEnd then
+        raise Exception.Create('lazy compile: the source range is not one function');
+      PrevSrc := CurLazySource;
+      CurLazySource := LS;
+      try
+        NT := CompileLazyFunction(E, St, LS.FileName);
+      finally
+        CurLazySource := PrevSrc;
+      end;
+      SaveUp := T^.Upvals;
+      SaveName := T^.Name;
+      SaveRange := T^.SourceRange;
+      T^ := NT^;
+      T^.Upvals := SaveUp;
+      T^.Name := SaveName;
+      T^.SourceRange := SaveRange;
+      T^.Lazy := nil;
+      FinishTemplate(T);
+      { NT stays registered, emptied: T owns its arrays and IC memory now }
+      Finalize(NT^);
+      FillChar(NT^, SizeOf(TFuncTemplate), 0);
+      Dispose(St);
+    except
+      on Ex: Exception do Msg := UnicodeString(Ex.Message);
+    end;
+  finally
+    P.Free;
+    L.Free;
+    Arena.Free;
+  end;
+  if Msg <> '' then Exit(ThrowError('SyntaxError', Msg));
+  Result := True;
+end;
 
 function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Integer; var T: PFuncTemplate;
   var Info: TModuleInfo; var Err, ErrName: UnicodeString): Boolean;
@@ -79,6 +232,7 @@ function ParseAndCompile(const Source, FileName: UnicodeString; AsExpression: Bo
   var Err: UnicodeString; Goal: Integer): Boolean;
 var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Opts: TGocciaParserOptions;
 begin
+  if (Goal = 1) and not AsExpression and LazyOn and LazyParseAndCompile(Source, FileName, T, Err, Result) then Exit;
   Result := False;
   CompileFailKind := 1;
   L := nil; P := nil; Prog := nil;
@@ -217,6 +371,8 @@ var F: TValue;
     DefineOwn(O, SymKey(SymToStringTagW), MkPtr(AtomOf(T)), pfConfigurable);
   end;
 begin
+  LazyCompileHook := @LazyCompile;
+  PreParseRegExpCheck := RegExpValidateHook;
   F := NewNativeFunction(Function_Ctor, 'Function', 1);
   PushRoot(F);
   DefineOwn(RootAt(TempTop - 1), AtomPrototype, FunctionProto, 0);

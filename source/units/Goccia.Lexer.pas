@@ -55,6 +55,8 @@ type
   TGocciaLexer = class
   private
     FSource: string;
+    // The last byte to scan (1-based): Length(FSource), or the end of SetRange's range
+    FLimit: Integer;
     FSourceCoordinatesRef: IGocciaSourceCoordinates; // keeps FSourceCoordinates alive
     FSourceCoordinates: TGocciaSourceCoordinates;
     FTokens: TGocciaTokenList;
@@ -146,7 +148,19 @@ type
     function AppendTemplateLineContinuation(var ARawSB: TStringBuffer): Boolean;
     procedure ConsumeUnicodeLineTerminator; {$IFDEF FPC}inline;{$ENDIF}
   public
-    constructor Create(const ASource, AFileName: string);
+    constructor Create(const ASource, AFileName: string); overload;
+    // A lexer over ASource whose line index is ACoordinates (built for the
+    // same source), so that lexing a range of a large source again does not
+    // index all of it again
+    constructor Create(const ASource, AFileName: string;
+      const ACoordinates: TGocciaSourceCoordinates); overload;
+    // Scans only the bytes AStartOffset ..< AEndOffset (0-based) of the
+    // source, from the start of that range: a host compiling one function of
+    // a larger source on demand
+    procedure SetRange(const AStartOffset, AEndOffset: Integer);
+    // Drops the tokens after the first AKeepTokens and continues scanning at
+    // AOffset (0-based): a parser skipping a function body it compiles later
+    procedure SkipTo(const AOffset, AKeepTokens: Integer);
     destructor Destroy; override;
     function CreateCheckpoint: TGocciaLexerCheckpoint;
     procedure RestoreCheckpoint(const ACheckpoint: TGocciaLexerCheckpoint);
@@ -175,6 +189,7 @@ type
     // Two clock reads per token: off unless a profile asks for the lexing time.
     property MeasureScanTime: Boolean read FMeasureScanTime write FMeasureScanTime;
     property Tokens: TGocciaTokenList read FTokens;
+    property SourceCoordinates: TGocciaSourceCoordinates read FSourceCoordinates;
     property Source: string read FSource;
     property SourceLines: TStringList read GetSourceLines;
   end;
@@ -362,8 +377,15 @@ end;
 
 constructor TGocciaLexer.Create(const ASource, AFileName: string);
 begin
+  Create(ASource, AFileName, TGocciaSourceCoordinates.Create(ASource));
+end;
+
+constructor TGocciaLexer.Create(const ASource, AFileName: string;
+  const ACoordinates: TGocciaSourceCoordinates);
+begin
   FSource := ASource;
-  FSourceCoordinates := TGocciaSourceCoordinates.Create(ASource);
+  FLimit := Length(FSource);
+  FSourceCoordinates := ACoordinates;
   FSourceCoordinatesRef := FSourceCoordinates;
   FFileName := AFileName;
   FTokens := TGocciaTokenList.Create(FSourceCoordinates);
@@ -374,6 +396,26 @@ begin
   FHashbangSkipped := False;
   FEOFEmitted := False;
   FScanTimeNanoseconds := 0;
+end;
+
+procedure TGocciaLexer.SetRange(const AStartOffset, AEndOffset: Integer);
+begin
+  FCurrent := AStartOffset + 1;
+  FLimit := AEndOffset;
+  if FLimit > Length(FSource) then
+    FLimit := Length(FSource);
+  // a hashbang is only at the source's start
+  FHashbangSkipped := True;
+  FSourceCoordinates.PositionAtOffset(AStartOffset, FLine, FColumn);
+end;
+
+procedure TGocciaLexer.SkipTo(const AOffset, AKeepTokens: Integer);
+begin
+  while FTokens.Count > AKeepTokens do
+    FTokens.Delete(FTokens.Count - 1);
+  FCurrent := AOffset + 1;
+  FEOFEmitted := False;
+  FSourceCoordinates.PositionAtOffset(AOffset, FLine, FColumn);
 end;
 
 destructor TGocciaLexer.Destroy;
@@ -453,7 +495,7 @@ end;
 
 function TGocciaLexer.IsAtEnd: Boolean;
 begin
-  Result := FCurrent > Length(FSource);
+  Result := FCurrent > FLimit;
 end;
 
 function TGocciaLexer.Advance: Char;
@@ -473,7 +515,7 @@ end;
 
 function TGocciaLexer.PeekNext: Char;
 begin
-  if FCurrent + 1 > Length(FSource) then
+  if FCurrent + 1 > FLimit then
     Result := #0
   else
     Result := FSource[FCurrent + 1];
@@ -854,13 +896,13 @@ begin
       // B.1.1 HTML-like comments, compared a character at a time: a Copy
       // temporary would give every call an implicit exception frame
       '<':
-        if (FCurrent + 3 <= Length(FSource)) and (FSource[FCurrent + 1] = '!') and
+        if (FCurrent + 3 <= FLimit) and (FSource[FCurrent + 1] = '!') and
            (FSource[FCurrent + 2] = '-') and (FSource[FCurrent + 3] = '-') then
           SkipUntilLineTerminator
         else
           Break;
       '-':
-        if LineStart and (FCurrent + 2 <= Length(FSource)) and
+        if LineStart and (FCurrent + 2 <= FLimit) and
            (FSource[FCurrent + 1] = '-') and (FSource[FCurrent + 2] = '>') then
           SkipUntilLineTerminator
         else
@@ -1788,10 +1830,10 @@ begin
   // general path from the identifier's start.
   Start := FCurrent;
   Stop := Start;
-  while (Stop <= Length(FSource)) and CharInSet(FSource[Stop],
+  while (Stop <= FLimit) and CharInSet(FSource[Stop],
     ['A'..'Z', 'a'..'z', '0'..'9', '_', '$']) do
     Inc(Stop);
-  if (Stop > Length(FSource)) or (Ord(FSource[Stop]) < $80) and (FSource[Stop] <> '\') then
+  if (Stop > FLimit) or (Ord(FSource[Stop]) < $80) and (FSource[Stop] <> '\') then
   begin
     Inc(FColumn, Stop - Start);
     FCurrent := Stop;
@@ -2115,7 +2157,7 @@ begin
   begin
     FEOFEmitted := True;
     FTokens.Add(gttEOF, '',
-      Length(FSource), Length(FSource));
+      FLimit, FLimit);
     Exit(FTokens[FTokens.Count - 1]);
   end;
 

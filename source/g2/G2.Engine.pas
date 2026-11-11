@@ -28,7 +28,7 @@ function EngineRunScript(const Source, FileName: UnicodeString; var Err: Unicode
 implementation
 
 uses
-  G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.ShadowRealm;
+  G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.ShadowRealm;
 
 procedure EngineInit(NurseryBytes: SizeInt);
 begin
@@ -72,6 +72,7 @@ begin
   VMDone;
   HeapDone;
   FreeAllTemplates;
+  FreeLazySources;
 end;
 
 function EngineRunScript(const Source, FileName: UnicodeString; var Err: UnicodeString): Boolean;

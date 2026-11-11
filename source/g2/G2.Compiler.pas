@@ -28,6 +28,10 @@ threadvar
   { the eval code starts with a "use strict" directive the caller inserted to make it strict: not its value }
   EvalStrictPrefix: Boolean;
 
+{ a lazy stub's function (G2.Lazy), from Goccia's parse of its own source range: compiled in a stand-in for its
+  enclosing code whose bindings are the stub's upvalues, in the stub's order }
+function CompileLazyFunction(E: TGocciaExpression; Stub: Pointer; const SourceName: UnicodeString): PFuncTemplate;
+
 const
   ModNamespace = '*namespace*';   { an import or indirect export of a whole module namespace }
   ModDeferNamespace = '*defernamespace*';   { import defer * as ns: the deferred namespace (Deferring Module Evaluation) }
@@ -77,7 +81,7 @@ threadvar
 implementation
 
 uses
-  TypInfo, G2.VM;
+  TypInfo, G2.VM, G2.Lazy, G2.PreParse;
 
 type
   { an expression that makes a closure (a function, arrow, method, accessor or class) }
@@ -319,6 +323,7 @@ type
     CplSkip: Boolean;       { the next expression statement is EvalStrictPrefix's directive }
     ParamAwait: Boolean;    { compiling an arrow's parameters in a class static block: ArrowParameters[+Await] }
     ParamTDZ: TStringList;  { while parameter initializers compile: the parameters not yet initialized }
+    IsLazyOuter: Boolean;   { the stand-in for a lazily compiled function's enclosing code (CompileLazyFunction) }
     function FindUpvalName(const N: UnicodeString): Integer;
     procedure AddUpvalName(const N: UnicodeString);
   end;
@@ -334,6 +339,8 @@ type
     PendingStaticBlock: Boolean;   { the next CompileFunction is a field initializer or static block (15.7.1: no arguments) }   { a function expression's own name: checked in its own context instead }
     ReturnLast: Boolean;            { the script returns the value of its last expression statement }
     Goal: Integer;                  { see CompileProgram; the top level of goals 1 and 2 declares globals }
+    { the next CompileFunction's upvalues, in order (a lazy compile: the stub's) }
+    PresetUpvals: array of UnicodeString;
     IsEvalCode: Boolean;
     ModImportNames: TStringList;    { goal 3: local names of imports (slot = index) }
     ModPublish: TStringList;        { goal 3: exported local bindings (slot = imports + index) }
@@ -394,6 +401,8 @@ type
     function ResolveUpval(F: TFuncState; const N: UnicodeString): Integer;
     procedure EmitCloseFrom(Depth: Integer);
     { functions }
+    procedure MakeLazyStub(T: PFuncTemplate; const Name: UnicodeString; Id: Integer; IsArrow, IsGenerator,
+      IsAsync: Boolean);
     function CompileFunction(const Name: UnicodeString; const Params: TGocciaParameterArray; Body: TGocciaASTNode;
       IsArrow, IsMethod, IsClassCtor, IsDerived, IsGenerator, IsAsync: Boolean; FieldInit: TGocciaClassDefinition = nil;
       BodyNodes: TList<TGocciaASTNode> = nil): PFuncTemplate;
@@ -1508,6 +1517,49 @@ begin
   if Body is TGocciaBlockStatement then Result := TGocciaBlockStatement(Body).Nodes else Result := nil;
 end;
 
+{ a lazy stub (G2.Lazy): the names its function uses that the enclosing code binds become its upvalues now, as they
+  would when compiling it here; per name what its binding is (const, a TDZ check needed, a function expression's
+  own name), for the stand-in of the compile on its first call }
+procedure TCompiler.MakeLazyStub(T: PFuncTemplate; const Name: UnicodeString; Id: Integer; IsArrow, IsGenerator,
+  IsAsync: Boolean);
+var Src: TLazySource; R: ^TLazyRec; Stub: PLazyStub; I, J, Fl: Integer; BF: TFuncState; S: TScope;
+begin
+  Src := CurLazySource;
+  R := @Src.Recs[Id];
+  if ffStrict in R^.Flags then T^.IsStrict := True;
+  for I := 0 to High(R^.Free) do ResolveUpval(FS, R^.Free[I]);
+  if IsArrow and (ffUsesThis in R^.Flags) then ResolveUpval(FS, '%this');
+  { a named function expression calls itself by its name, bound around it (CompileFuncExpr) }
+  if (ffExpression in R^.Flags) and (R^.Name <> '') then ResolveUpval(FS, R^.Name);
+  New(Stub);
+  Stub^.Src := Src;
+  Stub^.Id := Id;
+  Stub^.CompileName := Name;
+  Stub^.IsArrow := IsArrow;
+  Stub^.IsGenerator := IsGenerator;
+  Stub^.IsAsync := IsAsync;
+  Stub^.IsStrict := T^.IsStrict;
+  Stub^.InDerivedCtor := IsArrow and InDerivedCtor;
+  SetLength(Stub^.Names, Length(T^.Upvals));
+  SetLength(Stub^.Flags, Length(T^.Upvals));
+  for I := 0 to High(T^.Upvals) do
+  begin
+    Stub^.Names[I] := FS.UpvalNames[I];
+    Fl := 0;
+    if FindBinding(Stub^.Names[I], BF, S, J) then
+    begin
+      if S.Bindings[J].IsConst then Fl := Fl or efConst;
+      if S.Bindings[J].IsFnName then Fl := Fl or efFnName;
+      { a write through the upvalue may alias a mapped arguments object (10.4.4): assume one }
+      if (S = BF.Scopes[0]) and (S.Bindings[J].Reg >= 1) and (S.Bindings[J].Reg <= BF.NParamRegs) then
+        BF.ParamWritten := True;
+    end;
+    if InTDZ(Stub^.Names[I]) then Fl := Fl or efLexical;
+    Stub^.Flags[I] := Fl;
+  end;
+  T^.Lazy := Stub;
+end;
+
 function TCompiler.CompileFunction(const Name: UnicodeString; const Params: TGocciaParameterArray; Body: TGocciaASTNode;
   IsArrow, IsMethod, IsClassCtor, IsDerived, IsGenerator, IsAsync: Boolean; FieldInit: TGocciaClassDefinition;
   BodyNodes: TList<TGocciaASTNode>): PFuncTemplate;
@@ -1559,6 +1611,17 @@ begin
   F.IsStaticBlock := StaticBlk;
   if Outer <> nil then F.CurLine := Outer.CurLine;
   FS := F;
+  if Length(PresetUpvals) > 0 then
+  begin
+    SetLength(T^.Upvals, Length(PresetUpvals));
+    for I := 0 to High(PresetUpvals) do
+    begin
+      F.AddUpvalName(PresetUpvals[I]);
+      T^.Upvals[I].FromParentLocal := True;
+      T^.Upvals[I].Index := I;
+    end;
+    PresetUpvals := nil;
+  end;
   try
     PushScope(True);
     { R0 = this }
@@ -1578,6 +1641,17 @@ begin
     end;
     { 15.3 ArrowParameters[?Await]: in a class static block (15.7.1 ContainsAwait) await names nothing }
     F.ParamAwait := IsArrow and (Outer <> nil) and (Outer.IsStaticBlock or Outer.ParamAwait);
+    { a body the parser skipped (G2.Lazy): the header and the upvalues; the first call compiles it }
+    if Body is TGocciaLazyFunctionBody then
+    begin
+      MakeLazyStub(T, Name, TGocciaLazyFunctionBody(Body).LazyId, IsArrow, IsGenerator, IsAsync);
+      while FS.ScopeCount > 0 do
+      begin
+        Dec(FS.ScopeCount);
+        FS.Scopes[FS.ScopeCount].Free;
+      end;
+      Exit(T);
+    end;
     { parameter registers 1..NP, in order; patterns get a hidden name }
     J := 0;
     for I := 0 to High(Params) do
@@ -6659,6 +6733,65 @@ begin
     end;
   finally
     Names.Free; ExpNames.Free; ExpLocals.Free;
+  end;
+end;
+
+function CompileLazyFunction(E: TGocciaExpression; Stub: Pointer; const SourceName: UnicodeString): PFuncTemplate;
+var C: TCompiler; Outer: TFuncState; OT: PFuncTemplate; St: PLazyStub; I: Integer; AE: TGocciaArrowFunctionExpression;
+  FE: TGocciaFunctionExpression;
+begin
+  St := PLazyStub(Stub);
+  C := TCompiler.Create;
+  Outer := TFuncState.Create;
+  New(OT);
+  FillChar(OT^, SizeOf(TFuncTemplate), 0);
+  try
+    C.SourceName := SourceName;
+    C.Goal := 1;
+    OT^.IsStrict := St^.IsStrict;
+    { an arrow's this in a derived constructor: checked until super() (InDerivedCtor) }
+    OT^.IsClassCtor := St^.InDerivedCtor;
+    OT^.IsDerived := St^.InDerivedCtor;
+    Outer.Tpl := OT;
+    Outer.IsLazyOuter := True;
+    Outer.ArgsReg := -1; Outer.HomeReg := -1; Outer.NewTargetReg := -1; Outer.CtorReg := -1; Outer.UsingCapReg := -1;
+    C.FS := Outer;
+    C.PushScope(True);
+    for I := 0 to High(St^.Names) do
+    begin
+      Outer.Scopes[0].Add(St^.Names[I], I, (St^.Flags[I] and efConst) <> 0);
+      with Outer.Scopes[0].Bindings[Outer.Scopes[0].Count - 1] do
+      begin
+        IsLexical := (St^.Flags[I] and efLexical) <> 0;
+        Initialized := not IsLexical;
+        IsFnName := (St^.Flags[I] and efFnName) <> 0;
+        HoleNop := -1;
+      end;
+    end;
+    Outer.FreeReg := Length(St^.Names);
+    C.PresetUpvals := Copy(St^.Names);
+    C.PendingStrict := Ord(St^.IsStrict);
+    if E is TGocciaArrowFunctionExpression then
+    begin
+      AE := TGocciaArrowFunctionExpression(E);
+      Result := C.CompileFunction(St^.CompileName, AE.Parameters, AE.Body, True, False, False, False, False,
+        AE.IsAsync);
+    end
+    else
+    begin
+      FE := TGocciaFunctionExpression(E);
+      Result := C.CompileFunction(St^.CompileName, FE.Parameters, FE.Body, False, False, False, False,
+        FE.IsGenerator, FE.IsAsync);
+    end;
+  finally
+    while Outer.ScopeCount > 0 do
+    begin
+      Dec(Outer.ScopeCount);
+      Outer.Scopes[Outer.ScopeCount].Free;
+    end;
+    Outer.Free;
+    Dispose(OT);
+    C.Free;
   end;
 end;
 
