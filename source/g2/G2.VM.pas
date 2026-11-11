@@ -4969,11 +4969,12 @@ begin
   while True do
   begin
     I := IP^;
+    { A is the instruction's bytes 1-2 (little-endian): one 16-bit load instead of shift, mask and move }
+    A := PWord(PByte(IP) + 1)^;
     Inc(IP);
-    A := (I shr 8) and $FFFF;
     case TOp(I and $FF) of
       opNop: ;
-      opMov: R[A] := R[(I shr 24) and $FFFF];
+      opMov: R[A] := R[PWord(PByte(IP) - 5)^];
       opLoadK: R[A] := K[I shr 40];
       opLoadI: R[A] := MkInt(SarInt64(Int64(I), 40));
       opLoadUndef: R[A] := VUndefined;
@@ -4983,12 +4984,12 @@ begin
       opLoadHole: R[A] := VHole;
       opGetUpv:
         begin
-          U := PUpval(PtrOf(PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[(I shr 24) and $FFFF]));
+          U := PUpval(PtrOf(PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[PWord(PByte(IP) - 5)^]));
           if U^.StackIndex >= 0 then R[A] := VS[U^.StackIndex] else R[A] := U^.Value;
         end;
       opSetUpv:
         begin
-          U := PUpval(PtrOf(PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[(I shr 24) and $FFFF]));
+          U := PUpval(PtrOf(PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[PWord(PByte(IP) - 5)^]));
           if U^.StackIndex >= 0 then VS[U^.StackIndex] := R[A]
           else
           begin
@@ -5001,7 +5002,7 @@ begin
         end;
       opGetProp, opGetLength:
         begin
-          VB := R[(I shr 24) and $FFFF];
+          VB := R[PWord(PByte(IP) - 5)^];
           if (VB and TAG_MASK) <> TAG_PTR then begin {$IFDEF G2_BAILSTATS}Inc(BailCounts[250]);{$ENDIF} goto LBail; end;
           O := PObj(PtrUInt(VB and PTR_MASK));
           if O^.Hdr.Kind = ckObject then
@@ -5121,7 +5122,7 @@ begin
           O := ObjOf(VA);
           IC := @ICs[I shr 40];
           if O^.Shape <> IC^.Shape then goto LBail;
-          V := R[(I shr 24) and $FFFF];
+          V := R[PWord(PByte(IP) - 5)^];
           if IC^.Slot >= O^.InlineCap then
           begin
             { a property in the overflow slots: an existing one, or an add into their spare capacity (growing them
@@ -5150,7 +5151,7 @@ begin
           IC := @ICs[I shr 40];
           if (O^.Shape <> IC^.Shape) or (IC^.NewShape = nil) or (IC^.Slot >= O^.InlineCap) or
              ((O^.OFlags and 8) <> 0) then goto LBail;
-          V := R[(I shr 24) and $FFFF];
+          V := R[PWord(PByte(IP) - 5)^];
           if ((O^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld) and ((V and TAG_MASK) = TAG_PTR) and
              (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@O^.Hdr);
           O^.Shape := IC^.NewShape;
@@ -5158,7 +5159,7 @@ begin
         end;
       opGetElem:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if not (IsInt(VB) and IsObject(VA)) then
           begin
@@ -5207,7 +5208,7 @@ begin
       opSetElem:
         begin
           VA := R[A];
-          VB := R[(I shr 24) and $FFFF];
+          VB := R[PWord(PByte(IP) - 5)^];
           V := R[I shr 40];
           if not (IsInt(VB) and IsObject(VA)) then goto LBail;
           O := ObjOf(VA);
@@ -5258,7 +5259,7 @@ begin
         end;
       opAdd:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
           begin
@@ -5272,7 +5273,7 @@ begin
         end;
       opAddI, opSubI, opIncI:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           CI := SarInt64(Int64(I), 40);
           if (VA and TAG_MASK) = TAG_INT then
           begin
@@ -5286,7 +5287,7 @@ begin
       { int32 operands, then two doubles (the numeric kernels' common case), then mixed numbers }
       opSub:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
           begin
@@ -5300,7 +5301,7 @@ begin
         end;
       opMul:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
           begin
@@ -5317,14 +5318,14 @@ begin
         end;
       opDiv:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if IsNumber(VA) and IsNumber(VB) then R[A] := MkNumber(NumOf(VA) / NumOf(VB))
           else goto LBail;
         end;
       opMod:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) and (Int32(UInt32(VB)) > 0) and
              (Int32(UInt32(VA)) >= 0) then
@@ -5333,7 +5334,7 @@ begin
         end;
       opShr, opUShr:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if QuickInt32(VA, CI) and QuickInt32(VB, NP) then
           begin
@@ -5357,7 +5358,7 @@ begin
              (ObjOf(FunctionProto)^.Shape <> HIFPShape) then goto LBail;
           V := GetSlot(O, T^.CtorProtoSlot);
           if not IsObject(V) then goto LBail;
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           if not IsObject(VA) then begin R[A] := VFalse; Continue; end;
           O2 := ObjOf(VA);
           while True do
@@ -5388,7 +5389,7 @@ begin
         end;
       opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           NP := Int32(SarInt64(Int64(I), 40));
           if (VA and TAG_MASK) = TAG_INT then CI := Int32(UInt32(VA))
           else if not QuickInt32(VA, CI) then goto LBail;
@@ -5403,7 +5404,7 @@ begin
         end;
       opBitAnd, opBitOr, opBitXor, opShl:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if not (QuickInt32(VA, CI) and QuickInt32(VB, NP)) then goto LBail;
           case TOp(I and $FF) of
@@ -5415,23 +5416,23 @@ begin
         end;
       opNeg:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           if IsInt(VA) and (IntOf(VA) <> 0) and (IntOf(VA) <> Low(Int32)) then R[A] := MkInt(-IntOf(VA))
           else if VA < DOUBLE_LIMIT then R[A] := MkDouble(-PDouble(@VA)^)
           else goto LBail;
         end;
       opBitNot:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           if IsInt(VA) then R[A] := MkInt(not IntOf(VA)) else goto LBail;
         end;
       opNot:
         begin
-          R[A] := MkBool(not ToBool(R[(I shr 24) and $FFFF]));
+          R[A] := MkBool(not ToBool(R[PWord(PByte(IP) - 5)^]));
         end;
       opSEq, opSNe:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           { StrictEquals }
           if VA = VB then Bool := not IsDouble(VA) or (DoubleOf(VA) = DoubleOf(VA))
@@ -5449,7 +5450,7 @@ begin
           { TypeofValue, once its atoms exist }
           TA := TypeofAtoms;
           if TA = nil then goto LBail;
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           if IsNumber(VA) then R[A] := MkPtr(TA^.Num)
           else if (VA = VUndefined) or (VA = VHole) then R[A] := MkPtr(TA^.Undef)
           else if VA = VNull then R[A] := MkPtr(TA^.Obj)
@@ -5467,14 +5468,14 @@ begin
         end;
       opToNum, opToNumeric:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           if not IsNumber(VA) then goto LBail;
           R[A] := VA;
         end;
       opEq, opNe:
         begin
           { LooseEquals' first cases: nullish, two numbers, two strings, the same value }
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if (VA = VUndefined) or (VA = VNull) or (VB = VUndefined) or (VB = VNull) then
           begin
@@ -5493,7 +5494,7 @@ begin
         end;
       opLt, opLe, opGt, opGe:
         begin
-          VA := R[(I shr 24) and $FFFF];
+          VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           if IsInt(VA) and IsInt(VB) then
           begin
@@ -5535,7 +5536,7 @@ begin
       opJNLt, opJNLe, opJNGt, opJNGe:
         begin
           VA := R[A];
-          VB := R[(I shr 24) and $FFFF];
+          VB := R[PWord(PByte(IP) - 5)^];
           if ((VA and TAG_MASK) = TAG_INT) and ((VB and TAG_MASK) = TAG_INT) then
           begin
             case TOp(I and $FF) of
@@ -5560,7 +5561,7 @@ begin
       opJNSEq, opJSEq:
         begin
           VA := R[A];
-          VB := R[(I shr 24) and $FFFF];
+          VB := R[PWord(PByte(IP) - 5)^];
           { StrictEquals }
           if VA = VB then Bool := not IsDouble(VA) or (DoubleOf(VA) = DoubleOf(VA))
           else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
@@ -5595,7 +5596,7 @@ begin
           if not T^.FastCall then goto LBail;
           Base := Fr^.Base + A + 1;
           if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
-          Argc := (I shr 24) and $FFFF;
+          Argc := PWord(PByte(IP) - 5)^;
           if (I shr 40) and 1 <> 0 then R[A + 1] := VUndefined;
           if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
           Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
@@ -5637,7 +5638,7 @@ begin
         begin
           { an array iterator's step; a suspended generator with the intrinsic next resumed in a Kind 4 frame
             (as Execute's opIterNext); anything else is Execute's }
-          CI := (I shr 24) and $FFFF;
+          CI := PWord(PByte(IP) - 5)^;
           VB := R[CI];
           if (VB and TAG_MASK) <> TAG_PTR then goto LBail;
           O := PObj(PtrUInt(VB and PTR_MASK));
@@ -5679,7 +5680,7 @@ begin
         begin
           { a for-of's Kind 4 generator yields: suspended, its value in the consumer's register (as Execute) }
           if (Fr^.Kind <> 4) or MultiRealmAny then goto LBail;
-          PushRoot(R[(I shr 24) and $FFFF]);
+          PushRoot(R[PWord(PByte(IP) - 5)^]);
           J := Fr^.RetIdx;
           SaveSuspension(Fr, Fr^.Tpl, R, A, Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3), Integer(I shr 40));
           GenYielded := False;
@@ -5841,8 +5842,8 @@ LReload:
     end;
     {$ENDIF}
     I := Code[PC];
+    A := PWord(PByte(@Code[PC]) + 1)^;
     Inc(PC);
-    A := (I shr 8) and $FFFF;
     {$IFDEF G2_OPSTATS}Inc(OpCounts[I and $FF]); Inc(PairCounts[PrevOp * 256 + (I and $FF)]); PrevOp := I and $FF;{$ENDIF}
     case TOp(I and $FF) of
       opNop: ;
