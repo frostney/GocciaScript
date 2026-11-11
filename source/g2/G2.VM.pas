@@ -4262,7 +4262,18 @@ function ICGetHit(O: PObj; IC: PPropIC; Dst: PValue): Boolean; noinline;
 var E: PICEntry; O2: PObj; J, Slot: Integer;
 begin
   E := @IC^.Poly0;
-  if E^.Shape <> O^.Shape then Exit(False);
+  if E^.Shape <> O^.Shape then
+  begin
+    { a polymorphic site: its other entries, here too (FastLoop searches them with its values in memory) }
+    E := nil;
+    for J := 1 to IC^.PolyCount - 1 do
+      if IC^.More^[J].Shape = O^.Shape then
+      begin
+        E := @IC^.More^[J];
+        Break;
+      end;
+    if E = nil then Exit(False);
+  end;
   { the commonest hit, an own data property: Kind, Depth, VerMask and Acc (four adjacent bytes) are the
     receiver's kind, 0, 0 and 0, one 32-bit compare }
   if PCardinal(@E^.Kind)^ = O^.OKind then
