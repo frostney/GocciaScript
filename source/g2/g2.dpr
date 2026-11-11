@@ -517,7 +517,11 @@ begin
   Opts.LabelStatementsEnabled := True;
   Opts.ForInLoopsEnabled := True;
   P.ApplyOptions(Opts);
-  if LazySrc <> nil then P.SetFunctionBodySkipper(@LazyBodySkipper, LazySrc);
+  if LazySrc <> nil then
+  begin
+    P.SetFunctionBodySkipper(@LazyBodySkipper, LazySrc);
+    P.SetEarlyErrorsChecked(True);
+  end;
   T2 := GetTickCount64;
   try
     Prog := P.Parse;

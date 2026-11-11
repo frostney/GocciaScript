@@ -119,6 +119,8 @@ type
     // Only the last token can be deleted.
     procedure Delete(const AIndex: Integer);
     procedure Clear;
+    // Clear, keeping the token storage for the next tokens
+    procedure Reset;
     // Unchecked: AIndex must be below Count.
     function At(const AIndex: Integer): TGocciaToken; inline;
     property Count: Integer read FCount;
@@ -295,6 +297,23 @@ begin
   for I := 0 to High(FChunks) do
     FreeMem(FChunks[I]);
   FChunks := nil;
+end;
+
+procedure TGocciaTokenList.Reset;
+var
+  I: Integer;
+begin
+  // A slot is zeroed for reuse, as Delete leaves it (see NewSlot).
+  for I := 0 to FCount - 1 do
+  begin
+    At(I)^.FLexeme := '';
+    FillChar(At(I)^, SizeOf(TGocciaTokenRec), 0);
+  end;
+  FCount := 0;
+  for I := 0 to High(FTemplateValues) do
+    Dispose(FTemplateValues[I]);
+  FTemplateTokens := nil;
+  FTemplateValues := nil;
 end;
 
 function TGocciaTokenList.GetItem(const AIndex: Integer): TGocciaToken;

@@ -158,6 +158,11 @@ type
     // source, from the start of that range: a host compiling one function of
     // a larger source on demand
     procedure SetRange(const AStartOffset, AEndOffset: Integer);
+    // Drops every token and comment and scans AStartOffset ..< AEndOffset
+    // next, as a new lexer over the same source would, but keeping its
+    // identifier table and token storage: a host compiling many functions of
+    // one source on demand
+    procedure Restart(const AStartOffset, AEndOffset: Integer);
     // Drops the tokens after the first AKeepTokens and continues scanning at
     // AOffset (0-based): a parser skipping a function body it compiles later
     procedure SkipTo(const AOffset, AKeepTokens: Integer);
@@ -407,6 +412,14 @@ begin
   // a hashbang is only at the source's start
   FHashbangSkipped := True;
   FSourceCoordinates.PositionAtOffset(AStartOffset, FLine, FColumn);
+end;
+
+procedure TGocciaLexer.Restart(const AStartOffset, AEndOffset: Integer);
+begin
+  FTokens.Reset;
+  FCommentCount := 0;
+  FEOFEmitted := False;
+  SetRange(AStartOffset, AEndOffset);
 end;
 
 procedure TGocciaLexer.SkipTo(const AOffset, AKeepTokens: Integer);

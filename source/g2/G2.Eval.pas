@@ -114,6 +114,7 @@ begin
       P := TGocciaParser.CreateFromLexer(L, FileName, nil);
       ModuleOptions(P);
       P.SetFunctionBodySkipper(@LazyBodySkipper, LS);
+      P.SetEarlyErrorsChecked(True);
       Prog := P.Parse;
       L.Tokens.Clear;
       CompilingModuleId := Id;
@@ -175,6 +176,7 @@ begin
       P := TGocciaParser.CreateFromLexer(L, FileName, nil);
       ScriptOptions(P);
       P.SetFunctionBodySkipper(@LazyBodySkipper, LS);
+      P.SetEarlyErrorsChecked(True);
       Prog := P.Parse;
       L.Tokens.Clear;
       CompileFailKind := 2;
@@ -250,17 +252,23 @@ end;
 
 { LazyCompileHook: a lazy template's function, parsed from its own source range and compiled, moved into the
   template (its closures keep the stub's upvalues, name and source text) }
+var
+  { G2_LAZY_DEBUG set: 1, not: 0, not read yet: -1 }
+  LazyDebug: Integer = -1;
+
 function LazyCompile(T: PFuncTemplate): Boolean;
 var St: PLazyStub; LS, PrevSrc: TLazySource; R: ^TLazyRec; L: TGocciaLexer; P: TGocciaParser; E: TGocciaExpression;
   NT: PFuncTemplate; SaveUp: array of TUpvalDesc; SaveName: PStr; SaveRange: TGocciaLazySourceText;
   Finder: TBodyFinder; IsMethod: Boolean; PrevModule: Integer;
-  Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString; TS0, TS1, TSa, TSb: TTimeSpec;
+  Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString; TS0, TS1, TSa, TSb: TTimeSpec; RStart, RStop: Integer;
 begin
   clock_gettime(CLOCK_MONOTONIC, @TS0);
   St := PLazyStub(T^.Lazy);
   LS := St^.Src;
   R := @LS.Recs[St^.Id];
-  if GetEnvironmentVariable('G2_LAZY_DEBUG') <> '' then
+  if LazyDebug < 0 then
+    if GetEnvironmentVariable('G2_LAZY_DEBUG') <> '' then LazyDebug := 1 else LazyDebug := 0;
+  if LazyDebug = 1 then
     WriteLn(ErrOutput, 'lazy compile ', St^.CompileName, ' (', LS.FileName, ' ', R^.Start, '..', R^.Stop, ', module ',
       LS.IsModule, ', method ', R^.CStart >= 0, ')');
   L := nil; P := nil; Finder := nil;
@@ -269,11 +277,23 @@ begin
   Arena := TGocciaASTArena.Create;
   try
     try
-      L := TGocciaLexer.Create(LS.Text, LS.FileName, LS.Coords);
-      L.HTMLComments := not LS.IsModule;
-      L.StandardIdentifiers := True;
       { a method is parsed with its object literal or class, the other bodies there skipped }
-      if IsMethod then L.SetRange(R^.CStart, R^.CStop) else L.SetRange(R^.Start, R^.Stop);
+      if IsMethod then begin RStart := R^.CStart; RStop := R^.CStop; end
+      else begin RStart := R^.Start; RStop := R^.Stop; end;
+      if (LS.Lexer <> nil) and not LS.LexerBusy then
+      begin
+        L := TGocciaLexer(LS.Lexer);
+        L.Restart(RStart, RStop);
+      end
+      else
+      begin
+        L := TGocciaLexer.Create(LS.Text, LS.FileName, LS.Coords);
+        L.HTMLComments := not LS.IsModule;
+        L.StandardIdentifiers := True;
+        L.SetRange(RStart, RStop);
+        if LS.Lexer = nil then LS.Lexer := L;
+      end;
+      if L = LS.Lexer then LS.LexerBusy := True;
       P := TGocciaParser.CreateFromLexer(L, LS.FileName, nil);
       if LS.IsModule then ModuleOptions(P) else ScriptOptions(P);
       if IsMethod then
@@ -284,6 +304,7 @@ begin
       end
       else P.SetStrictMode(St^.IsStrict);
       P.SetFunctionBodySkipper(@LazyBodySkipper, LS);
+      P.SetEarlyErrorsChecked(True);
       LS.Compiling := St^.Id;
       LS.SkipOutside := IsMethod;
       LS.TargetStart := R^.Start;
@@ -337,7 +358,12 @@ begin
   finally
     Finder.Free;
     P.Free;
-    L.Free;
+    if L = LS.Lexer then
+    begin
+      LS.LexerBusy := False;
+      L.Tokens.Reset;
+    end
+    else L.Free;
     Arena.Free;
   end;
   clock_gettime(CLOCK_MONOTONIC, @TS1);

@@ -196,6 +196,7 @@ type
     FWarningUnsupportedFeatures: Boolean;
     FStrictModeActive: Boolean;
     FStrictModeSourceActive: Boolean;
+    FEarlyErrorsChecked: Boolean;
     FBodySkipper: TGocciaFunctionBodySkipper;
     FBodySkipperData: Pointer;
     FAllowInExpression: Boolean;
@@ -624,6 +625,11 @@ type
     { Parses as the body of an async function or a generator from the
       start: code of such a function that a host parses on its own }
     procedure SetFunctionContext(const AAsync, AGenerator: Boolean);
+    { Skips the checks for early errors that only reject a source (reserved
+      words, duplicate and conflicting bindings, parameter restrictions): a
+      host whose own pre-parse already checked this source for every early
+      error }
+    procedure SetEarlyErrorsChecked(const AChecked: Boolean);
     function Expression: TGocciaExpression;
     function AtEnd: Boolean;
     function GetWarning(const AIndex: Integer): TGocciaParserWarning; {$IFDEF FPC}inline;{$ENDIF}
@@ -1091,6 +1097,8 @@ var
   I: Integer;
   Word: string;
 begin
+  if FEarlyErrorsChecked then
+    Exit;
   // ES2026 §15.1.1, §15.3.1, §15.4.1, §15.8.1, §15.9.1:
   // parameter-list early errors depend on the syntactic form and the
   // active Await/Yield grammar parameters.
@@ -1641,6 +1649,11 @@ procedure TGocciaParser.SetStrictMode(const AStrict: Boolean);
 begin
   FStrictModeActive := AStrict;
   FStrictModeSourceActive := AStrict;
+end;
+
+procedure TGocciaParser.SetEarlyErrorsChecked(const AChecked: Boolean);
+begin
+  FEarlyErrorsChecked := AChecked;
 end;
 
 procedure TGocciaParser.SetFunctionContext(const AAsync, AGenerator: Boolean);
@@ -2542,6 +2555,8 @@ end;
 procedure TGocciaParser.ValidateIdentifierReference(const AToken: TGocciaToken);
 begin
   ValidateAwaitIdentifier(AToken);
+  if FEarlyErrorsChecked then
+    Exit;
   // debugger is a reserved word (ES2026 12.7.2), however it is written
   if AToken.Lexeme = KEYWORD_DEBUGGER then
     raise TGocciaSyntaxError.Create('Unexpected reserved word "debugger"', AToken.Line, AToken.Column, FFileName,
@@ -2559,6 +2574,8 @@ end;
 procedure TGocciaParser.ValidateIdentifierBinding(const AToken: TGocciaToken);
 begin
   ValidateAwaitIdentifier(AToken);
+  if FEarlyErrorsChecked then
+    Exit;
   // debugger is a reserved word (ES2026 12.7.2), however it is written
   if AToken.Lexeme = KEYWORD_DEBUGGER then
     raise TGocciaSyntaxError.Create('Unexpected reserved word "debugger"', AToken.Line, AToken.Column, FFileName,
@@ -6237,17 +6254,20 @@ begin
 
       Consume(gttRightBrace, 'Expected "}" after function body',
         SSuggestCloseBlock);
-      ParameterNames := TUnicodeStringList.Create;
-      try
-        for I := 0 to High(AParameters) do
-          if AParameters[I].IsPattern then
-            CollectPatternBindingNames(AParameters[I].Pattern, ParameterNames, True)
-          else
-            ParameterNames.Add(AParameters[I].Name);
-        ValidateStatementListDeclarations(Statements.ToArray, True, False,
-          ParameterNames, FFileName, GetSourceLinesLazily);
-      finally
-        ParameterNames.Free;
+      if not FEarlyErrorsChecked then
+      begin
+        ParameterNames := TUnicodeStringList.Create;
+        try
+          for I := 0 to High(AParameters) do
+            if AParameters[I].IsPattern then
+              CollectPatternBindingNames(AParameters[I].Pattern, ParameterNames, True)
+            else
+              ParameterNames.Add(AParameters[I].Name);
+          ValidateStatementListDeclarations(Statements.ToArray, True, False,
+            ParameterNames, FFileName, GetSourceLinesLazily);
+        finally
+          ParameterNames.Free;
+        end;
       end;
       Result := TGocciaBlockStatement.Create(Statements,
         SourceSpanAtPosition(BraceLine, BraceColumn));
@@ -6620,7 +6640,8 @@ begin
   FSubStatement := FSubStatementNext;
   FSubStatementNext := False;
   Result := UnguardedStatement;
-  ValidateScopedStatementBindings(Result, FFileName, GetSourceLinesLazily);
+  if not FEarlyErrorsChecked then
+    ValidateScopedStatementBindings(Result, FFileName, GetSourceLinesLazily);
   LeaveNesting;
 end;
 
@@ -7266,8 +7287,9 @@ begin
 
     Consume(gttRightBrace, 'Expected "}" after block',
       SSuggestCloseBlock);
-    ValidateStatementListDeclarations(Nodes.ToArray, AFunctionsAreVar,
-      EffectiveNonStrictModeEnabled, nil, FFileName, GetSourceLinesLazily);
+    if not FEarlyErrorsChecked then
+      ValidateStatementListDeclarations(Nodes.ToArray, AFunctionsAreVar,
+        EffectiveNonStrictModeEnabled, nil, FFileName, GetSourceLinesLazily);
   except
     Nodes.Free;
     raise;
@@ -10801,8 +10823,9 @@ begin
           Inc(DeclarationCount);
         end;
       SetLength(DeclarationNodes, DeclarationCount);
-      ValidateStatementListDeclarations(DeclarationNodes, not IsModuleGoal,
-        False, nil, FFileName, GetSourceLinesLazily);
+      if not FEarlyErrorsChecked then
+        ValidateStatementListDeclarations(DeclarationNodes, not IsModuleGoal,
+          False, nil, FFileName, GetSourceLinesLazily);
       Result := TGocciaProgram.Create(Statements);
       Result.HasTopLevelAwait := FHasTopLevelAwait;
       Result.DirectEvalUsage := FDirectEvalUsage;
@@ -13055,8 +13078,9 @@ begin
       for I := 0 to Cases.Count - 1 do
         for J := 0 to Cases[I].Consequent.Count - 1 do
           DeclarationNodes.Add(Cases[I].Consequent[J]);
-      ValidateStatementListDeclarations(DeclarationNodes.ToArray, False,
-        EffectiveNonStrictModeEnabled, nil, FFileName, GetSourceLinesLazily);
+      if not FEarlyErrorsChecked then
+        ValidateStatementListDeclarations(DeclarationNodes.ToArray, False,
+          EffectiveNonStrictModeEnabled, nil, FFileName, GetSourceLinesLazily);
     finally
       DeclarationNodes.Free;
     end;

@@ -43,6 +43,10 @@ type
     ModuleId: Integer;
     ModImports: array of UnicodeString;
     HaveImports: Boolean;
+    { the Goccia lexer the lazy compiles reuse (its identifier table and token storage), while not Busy }
+    Lexer: TObject;
+    LexerBusy: Boolean;
+    destructor Destroy; override;
     function Lookup(Body: Integer): Integer;
   end;
 
@@ -102,6 +106,12 @@ end;
 function HashOffset(V: Integer): Integer; inline;
 begin
   Result := Integer((Cardinal(V) * Cardinal(2654435769)) shr 8);
+end;
+
+destructor TLazySource.Destroy;
+begin
+  Lexer.Free;
+  inherited Destroy;
 end;
 
 function TLazySource.Lookup(Body: Integer): Integer;
