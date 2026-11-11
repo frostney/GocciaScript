@@ -1193,7 +1193,9 @@ begin
     if Reg <> Src then Emit(Ins(opMov, Reg, Src, 0));
     Exit;
   end;
-  U := ResolveUpval(FS, N);
+  { as LoadIdentStatic: a function's own arguments binding shadows an outer one (a global let arguments) }
+  if (N = 'arguments') and ImplicitArgumentsFirst then U := -1
+  else U := ResolveUpval(FS, N);
   if U >= 0 then
   begin
     if not IsInit then
