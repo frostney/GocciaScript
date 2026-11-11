@@ -2043,8 +2043,10 @@ begin
     Result := ThrowTypeError('Cannot read properties of ' + T + ' (reading ''' + N + ''')');
 end;
 
+function ElemMissUndefined(O: PObj; Idx: Integer): Boolean; forward;
+
 function GetElemV(Obj, Key: TValue; var Res: TValue): Boolean;
-var Idx: Int64; O: PObj; K: PStr; S: PStr;
+var Idx: Int64; O: PObj; K: PStr; S: PStr; J: Integer;
 begin
   if IsObject(Obj) and (ObjOf(Obj)^.OKind = okTypedArray) and IndexFromValue(Key, Idx) then
   begin
@@ -2060,6 +2062,29 @@ begin
       Res := O^.Elements^.Data[Idx];
       if Res <> VHole then Exit(True);
     end;
+    { a missing index of a plain object or array with no index-keyed properties (its own or its prototypes'):
+      undefined, without the key's string }
+    if (Idx <= High(Integer)) and ((O^.OKind = okPlain) or (O^.OKind = okArray)) then
+      if not O^.Shape^.HasIndexKeys then
+      begin
+        if ElemMissUndefined(O, Integer(Idx)) then
+        begin
+          Res := VUndefined;
+          Exit(True);
+        end;
+      end
+      else if O^.OKind = okPlain then
+      begin
+        { an own data property keyed by the index in the shape (an object literal's key 10): its slot (atoms
+          live outside the heap: IntAtom cannot collect) }
+        K := IntAtom(Idx);
+        J := ShapeLookup(O^.Shape, K);
+        if (J >= 0) and ((O^.Shape^.PFlags[J] and pfAccessor) = 0) then
+        begin
+          Res := GetSlot(O, J);
+          Exit(True);
+        end;
+      end;
   end
   else if IsString(Obj) and IndexFromValue(Key, Idx) and not IsString(Key) then
   begin

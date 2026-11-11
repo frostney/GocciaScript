@@ -1470,16 +1470,26 @@ begin
 end;
 
 function FindIn(S, Sub: PStr; From: Integer): Integer;
-var I, J: Integer; Ok: Boolean;
+var I, J, N, Last: Integer; P, Q: PWideChar; F: WideChar;
 begin
   if From > S^.Len then From := S^.Len;
   if Sub^.Len = 0 then Exit(Max(From, 0));
-  for I := Max(From, 0) to S^.Len - Sub^.Len do
+  { nothing here allocates: the character pointers stay valid }
+  P := StrChars(S);
+  Q := StrChars(Sub);
+  N := Sub^.Len;
+  F := Q[0];
+  Last := S^.Len - N;
+  I := Max(From, 0);
+  while I <= Last do
   begin
-    Ok := True;
-    for J := 0 to Sub^.Len - 1 do
-      if StrChars(S)[I + J] <> StrChars(Sub)[J] then begin Ok := False; Break; end;
-    if Ok then Exit(I);
+    if P[I] = F then
+    begin
+      J := 1;
+      while (J < N) and (P[I + J] = Q[J]) do Inc(J);
+      if J = N then Exit(I);
+    end;
+    Inc(I);
   end;
   Result := -1;
 end;
