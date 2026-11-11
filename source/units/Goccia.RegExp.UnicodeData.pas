@@ -48,6 +48,12 @@ type
 
   TCodePointPairArray = array of TCodePointPair;
 
+  // Indexes into a TCodePointPairArray, two per pair: [2 * I] is the first
+  // pair with pair I's target, [2 * I + 1] the next pair after I with that
+  // target, or -1. Following them visits the pairs with one target in source
+  // order, as a scan of the whole table would.
+  TPairGroupArray = array of Integer;
+
 const
   UCD_RANGE_SIZE = 8;
   CASE_FOLDING_ENTRY_KEY = 'CaseFolding/Simple';
@@ -172,6 +178,9 @@ var
   UCDResourceCache: TLazyPublishedCache<TBytes>;
   CaseFoldPairsCache: TLazyPublishedCache<TCodePointPairArray>;
   NonUnicodeUppercasePairsCache: TLazyPublishedCache<TCodePointPairArray>;
+  // Per pair table, the pairs that share a target (see BuildPairGroups).
+  CaseFoldGroupsCache: TLazyPublishedCache<TPairGroupArray>;
+  NonUnicodeUppercaseGroupsCache: TLazyPublishedCache<TPairGroupArray>;
 
 {$IFDEF LAKON}
 function LoadUCDResource(const AKey: string; out ABuffer: TBytes): Boolean;
@@ -284,6 +293,77 @@ function EnsureNonUnicodeUppercasePairsReady: Boolean;
 begin
   Result := NonUnicodeUppercasePairsCache.Ensure(NON_UNICODE_UPPERCASE_ENTRY_KEY,
     @LoadEmbeddedPairs);
+end;
+
+function BuildPairGroups(const APairs: TCodePointPairArray): TPairGroupArray;
+var
+  Order: array of Integer;
+  I, J, K, Gap, Tmp, First: Integer;
+
+  function Less(const A, B: Integer): Boolean;
+  begin
+    Result := (APairs[A].Target < APairs[B].Target) or
+      ((APairs[A].Target = APairs[B].Target) and (A < B));
+  end;
+
+begin
+  SetLength(Result, 2 * Length(APairs));
+  SetLength(Order, Length(APairs));
+  for I := 0 to High(Order) do
+    Order[I] := I;
+  // Shell sort by (target, index): once per table.
+  Gap := Length(Order) div 2;
+  while Gap > 0 do
+  begin
+    for I := Gap to High(Order) do
+    begin
+      Tmp := Order[I];
+      J := I;
+      while (J >= Gap) and Less(Tmp, Order[J - Gap]) do
+      begin
+        Order[J] := Order[J - Gap];
+        Dec(J, Gap);
+      end;
+      Order[J] := Tmp;
+    end;
+    Gap := Gap div 2;
+  end;
+  I := 0;
+  while I <= High(Order) do
+  begin
+    First := Order[I];
+    J := I;
+    while (J + 1 <= High(Order)) and
+          (APairs[Order[J + 1]].Target = APairs[First].Target) do
+      Inc(J);
+    for K := I to J do
+    begin
+      Result[2 * Order[K]] := First;
+      if K < J then
+        Result[2 * Order[K] + 1] := Order[K + 1]
+      else
+        Result[2 * Order[K] + 1] := -1;
+    end;
+    I := J + 1;
+  end;
+end;
+
+function LoadPairGroups(const AKey: string;
+  out AGroups: TPairGroupArray): Boolean;
+begin
+  SetLength(AGroups, 0);
+  if AKey = CASE_FOLDING_ENTRY_KEY then
+  begin
+    Result := EnsureCaseFoldPairsReady;
+    if Result then
+      AGroups := BuildPairGroups(CaseFoldPairsCache.Data);
+  end
+  else
+  begin
+    Result := EnsureNonUnicodeUppercasePairsReady;
+    if Result then
+      AGroups := BuildPairGroups(NonUnicodeUppercasePairsCache.Data);
+  end;
 end;
 
 function TryFindPairTarget(const APairs: TCodePointPairArray;
@@ -450,11 +530,10 @@ begin
 end;
 
 procedure ExpandCaseEquivalence(var ARanges: TUnicodePropertyRangeArray;
-  const APairs: TCodePointPairArray);
+  const APairs: TCodePointPairArray; const AGroups: TPairGroupArray);
 var
   OriginalRanges: TUnicodePropertyRangeArray;
   I, J: Integer;
-  Target: Cardinal;
 begin
   SetLength(OriginalRanges, Length(ARanges));
   for I := 0 to High(ARanges) do
@@ -465,19 +544,24 @@ begin
        not RangeContainsCodePoint(OriginalRanges, APairs[I].Target) then
       Continue;
 
-    Target := APairs[I].Target;
-    AddFoldRange(ARanges, Target);
-    for J := 0 to High(APairs) do
-      if APairs[J].Target = Target then
-        AddFoldRange(ARanges, APairs[J].Source);
+    AddFoldRange(ARanges, APairs[I].Target);
+    // every pair with this target, in table order
+    J := AGroups[2 * I];
+    while J >= 0 do
+    begin
+      AddFoldRange(ARanges, APairs[J].Source);
+      J := AGroups[2 * J + 1];
+    end;
   end;
 end;
 
 procedure ExpandUnicodeSimpleCaseFolding(
   var ARanges: TUnicodePropertyRangeArray);
 begin
-  if EnsureCaseFoldPairsReady then
-    ExpandCaseEquivalence(ARanges, CaseFoldPairsCache.Data);
+  if EnsureCaseFoldPairsReady and
+     CaseFoldGroupsCache.Ensure(CASE_FOLDING_ENTRY_KEY, @LoadPairGroups) then
+    ExpandCaseEquivalence(ARanges, CaseFoldPairsCache.Data,
+      CaseFoldGroupsCache.Data);
 end;
 
 procedure ReduceUnicodeSimpleCaseFoldClosed(
@@ -524,16 +608,23 @@ end;
 procedure ExpandRegExpNonUnicodeCaseFolding(
   var ARanges: TUnicodePropertyRangeArray);
 begin
-  if EnsureNonUnicodeUppercasePairsReady then
-    ExpandCaseEquivalence(ARanges, NonUnicodeUppercasePairsCache.Data);
+  if EnsureNonUnicodeUppercasePairsReady and
+     NonUnicodeUppercaseGroupsCache.Ensure(NON_UNICODE_UPPERCASE_ENTRY_KEY,
+       @LoadPairGroups) then
+    ExpandCaseEquivalence(ARanges, NonUnicodeUppercasePairsCache.Data,
+      NonUnicodeUppercaseGroupsCache.Data);
 end;
 
 initialization
   UCDResourceCache.Init;
   CaseFoldPairsCache.Init;
   NonUnicodeUppercasePairsCache.Init;
+  CaseFoldGroupsCache.Init;
+  NonUnicodeUppercaseGroupsCache.Init;
 
 finalization
+  NonUnicodeUppercaseGroupsCache.Done;
+  CaseFoldGroupsCache.Done;
   NonUnicodeUppercasePairsCache.Done;
   CaseFoldPairsCache.Done;
   UCDResourceCache.Done;
