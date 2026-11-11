@@ -138,6 +138,11 @@ type
     Code: array of QWord;
     CodeLen: Integer;
     EntryPC: Integer;        { first instruction a call runs: the prologue's unused placeholders are skipped }
+    { set by FinishTemplate once the arrays are final: the first constant and IC (nil when there are none), and
+      whether a call can push the frame directly (not async, no rest parameter, no arguments object) }
+    KBase: PValue;
+    ICBase: PPropIC;
+    FastCall: Boolean;
     Consts: array of TValue;
     Children: array of PFuncTemplate;
     Upvals: array of TUpvalDesc;
@@ -189,6 +194,7 @@ function InsCU(I: QWord): Integer; inline;     { unsigned }
 { Every template this thread's engine made, so EngineDone can free them: templates live as long as the
   engine (closures and the code of running functions point at them). }
 procedure RegisterTemplate(T: PFuncTemplate);
+procedure FinishTemplate(T: PFuncTemplate);
 procedure FreeAllTemplates;
 { clears every cached add transition of this thread's templates (G2.Core ProtoChanged) }
 procedure ForgetAddTransitions;
@@ -206,6 +212,13 @@ function InsB(I: QWord): Integer; inline; begin Result := (I shr 24) and $FFFF; 
 function InsC(I: QWord): Integer; inline; begin Result := SarInt64(Int64(I), 40); end;
 function InsCU(I: QWord): Integer; inline; begin Result := I shr 40; end;
 
+
+procedure FinishTemplate(T: PFuncTemplate);
+begin
+  if Length(T^.Consts) > 0 then T^.KBase := @T^.Consts[0] else T^.KBase := nil;
+  if Length(T^.ICs) > 0 then T^.ICBase := @T^.ICs[0] else T^.ICBase := nil;
+  T^.FastCall := not T^.IsAsync and (T^.RestReg < 0) and (T^.ArgsReg < 0);
+end;
 
 threadvar
   AllTemplates: array of PFuncTemplate;

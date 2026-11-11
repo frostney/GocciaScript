@@ -1755,6 +1755,7 @@ begin
     SetLength(T^.Code, T^.CodeLen);
     SetLength(T^.Lines, T^.CodeLen);
     T^.EntryPC := 0;
+    FinishTemplate(T);
     Result := T;
   finally
     FS := Outer;

@@ -4235,6 +4235,27 @@ end;
   it marks it done and leaves the consumer's iterator done (an abrupt next() is not closed). }
 
 { the generator's frame, restored as GeneratorResume restores it for next(undefined) }
+{ FastLoop's opGetProp hit on its first IC entry: a data property, own or on a prototype the entry vouches for.
+  Out of line so it gets registers of its own (FastLoop's locals live in memory); False leaves the get to the
+  general path, which checks the same entry again. }
+function ICGetHit(O: PObj; IC: PPropIC; Dst: PValue): Boolean; noinline;
+var E: PICEntry; O2: PObj; J, Slot: Integer;
+begin
+  E := @IC^.Poly0;
+  if (E^.Shape <> O^.Shape) or (E^.Kind <> O^.OKind) or (E^.Acc <> 0) then Exit(False);
+  O2 := O;
+  for J := 0 to E^.Depth - 1 do
+  begin
+    if ((E^.VerMask shr J) and 1 <> 0) and (O2^.Shape^.Version <> E^.Vers[J]) then Exit(False);
+    O2 := PObj(PtrUInt(O2^.Shape^.Proto and PTR_MASK));
+    if O2^.Shape <> E^.Holder[J] then Exit(False);
+  end;
+  Slot := E^.Slot;
+  if Slot < O2^.InlineCap then Dst^ := O2^.Slots[Slot]
+  else Dst^ := O2^.Overflow^.Data[Slot - O2^.InlineCap];
+  Result := True;
+end;
+
 function XGenInline(Gen: TValue; RetIdx: Integer): Boolean; noinline;
 var G: PObj; State: PValueArray; T: PFuncTemplate; Base, I, NH, NU, J, ResumeReg, NLive: Integer; Fr: PFrame;
   U: PUpval;
@@ -4985,6 +5006,7 @@ begin
           O := PObj(PtrUInt(VB and PTR_MASK));
           if O^.Hdr.Kind = ckObject then
           begin
+            if ICGetHit(O, @ICs[I shr 40], @R[A]) then Continue;
             IC := @ICs[I shr 40];
             { ICGet: the entry for the receiver's shape, then its holder through the prototypes }
             Ent := nil;
@@ -5047,8 +5069,8 @@ begin
               R := @VS[Base];
               Code := @T^.Code[0];
               IP := @Code[T^.EntryPC];
-              if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
-              if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+              K := T^.KBase;
+              ICs := T^.ICBase;
               Changed := True;
               Continue;
             end;
@@ -5570,7 +5592,7 @@ begin
           end;
           if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then goto LBail;
           T := PFuncTemplate(O^.Native);
-          if T^.IsAsync or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then goto LBail;
+          if not T^.FastCall then goto LBail;
           Base := Fr^.Base + A + 1;
           if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
           Argc := (I shr 24) and $FFFF;
@@ -5607,8 +5629,8 @@ begin
           StackTop := Base + T^.MaxRegs;
           Code := @T^.Code[0];
           IP := @Code[T^.EntryPC];
-          if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
-          if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+          K := T^.KBase;
+          ICs := T^.ICBase;
           Changed := True;
         end;
       opIterNext:
@@ -5646,8 +5668,8 @@ begin
             R := @VS[Fr^.Base];
             Code := @T^.Code[0];
             IP := @Code[Fr^.PC];
-            if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
-            if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+            K := T^.KBase;
+            ICs := T^.ICBase;
             Changed := True;
             Continue;
           end;
@@ -5669,8 +5691,8 @@ begin
           R := @VS[Fr^.Base];
           Code := @T^.Code[0];
           IP := @Code[Fr^.PC];
-          if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
-          if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+          K := T^.KBase;
+          ICs := T^.ICBase;
           Changed := True;
           Continue;
         end;
@@ -5714,8 +5736,8 @@ begin
           Code := @T^.Code[0];
           IP := @Code[Fr^.PC];
           R := @VS[Fr^.Base];
-          if Length(T^.Consts) > 0 then K := @T^.Consts[0] else K := nil;
-          if Length(T^.ICs) > 0 then ICs := @T^.ICs[0] else ICs := nil;
+          K := T^.KBase;
+          ICs := T^.ICBase;
           Changed := True;
         end;
     else
@@ -5802,8 +5824,8 @@ LReload:
   Code := @Tpl^.Code[0];
   PC := Fr^.PC;
   R := @VStack[Fr^.Base];
-  if Length(Tpl^.Consts) > 0 then K := @Tpl^.Consts[0] else K := nil;
-  if Length(Tpl^.ICs) > 0 then ICB := @Tpl^.ICs[0] else ICB := nil;
+  K := Tpl^.KBase;
+  ICB := Tpl^.ICBase;
   if InjectThrow then
   begin
     InjectThrow := False;

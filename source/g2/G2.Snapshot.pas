@@ -232,6 +232,7 @@ begin
   if R.U8 <> 0 then T^.FieldInit := ReadTemplate(R) else T^.FieldInit := nil;
   T^.SourceName := R.Text;
   T^.SourceRange.SetText(R.Text);
+  FinishTemplate(T);
   Result := T;
 end;
 
