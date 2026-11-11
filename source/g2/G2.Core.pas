@@ -270,6 +270,8 @@ function Atomize(S: PStr): PStr;
 function AtomOf(const S: UnicodeString): PStr;
 { the atom for Len characters at P (interned on first sight): the scanner's identifiers, straight from the source }
 function AtomOfChars(P: PWideChar; Len: Integer): PStr;
+{ AtomOfChars with the characters' FNV-1a hash already computed (HashChars' loop, before its 0 -> 1) }
+function AtomOfCharsHashed(P: PWideChar; Len: Integer; H: UInt32): PStr;
 { the atom of an integer's decimal text (ToString of an integral Number), without an RTL string }
 function IntAtom(I: Int64): PStr;
 { Key atoms no source text can name: kept out of the atom table, told apart by Hdr.Extra (kfSymbol: a
@@ -1133,6 +1135,13 @@ begin
   if Result = nil then Result := AtomInsert(StrChars(S), S^.Len, H);
   S^.Atom := Result;
   if (S^.Hdr.Flags and cfOld) <> 0 then ;   { atoms are permanent: no barrier needed }
+end;
+
+function AtomOfCharsHashed(P: PWideChar; Len: Integer; H: UInt32): PStr;
+begin
+  if H = 0 then H := 1;
+  Result := AtomFind(P, Len, H);
+  if Result = nil then Result := AtomInsert(P, Len, H);
 end;
 
 function AtomOfChars(P: PWideChar; Len: Integer): PStr;

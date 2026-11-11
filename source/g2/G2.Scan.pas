@@ -55,6 +55,9 @@ type
     FLine, FLineStart: Integer;
     FAtLineStart: Boolean;  { for '-->' (B.1.1): only whitespace and comments since the line began }
     procedure Fail(const Msg: string; APos: Integer);
+    procedure Op(K: TTok; W: Integer); inline;
+    procedure NextOther(Goal: TScanGoal);
+    function At(I: Integer): WideChar; inline;
     procedure SkipTrivia;
     procedure SkipBlockComment;
     procedure SkipLineRest;
@@ -120,10 +123,23 @@ const
 
 var
   CClass: array[0..127] of Byte;
+  { SkipTrivia's classes of ASCII: 0 not trivia, 1 whitespace, 2 LF, 3 CR, 4 '/', 5 '<', 6 '-' }
+  TrivClass: array[0..127] of Byte;
+  { the punctuators that are one character whatever follows, tkEOF for the others }
+  Punct1: array[0..127] of TTok;
 
 procedure InitCClass;
 var C: Integer;
 begin
+  FillChar(TrivClass, SizeOf(TrivClass), 0);
+  TrivClass[32] := 1; TrivClass[9] := 1; TrivClass[11] := 1; TrivClass[12] := 1;
+  TrivClass[10] := 2; TrivClass[13] := 3;
+  TrivClass[Ord('/')] := 4; TrivClass[Ord('<')] := 5; TrivClass[Ord('-')] := 6;
+  for C := 0 to 127 do Punct1[C] := tkEOF;
+  Punct1[Ord('{')] := tkLBrace; Punct1[Ord('}')] := tkRBrace; Punct1[Ord('(')] := tkLParen;
+  Punct1[Ord(')')] := tkRParen; Punct1[Ord('[')] := tkLBracket; Punct1[Ord(']')] := tkRBracket;
+  Punct1[Ord(';')] := tkSemi; Punct1[Ord(',')] := tkComma; Punct1[Ord(':')] := tkColon;
+  Punct1[Ord('~')] := tkTilde; Punct1[Ord('@')] := tkAt;
   for C := 0 to 127 do
   begin
     CClass[C] := 0;
@@ -167,6 +183,8 @@ var
   { the reserved words by first letter, as UTF-16 text, for KeywordOfChars }
   KwText: array[0..35] of UnicodeString;
   KwByFirst: array[0..25] of array of Integer;
+  { per first letter: bit L set when a reserved word of length L starts with it }
+  KwLenMask: array[0..25] of Cardinal;
 
 procedure InitKeywords;
 var I, F: Integer; W: UnicodeString;
@@ -177,6 +195,7 @@ begin
     KwText[I] := W;
     KwAtoms[I] := AtomOfChars(PWideChar(W), Length(W));
     F := Ord(W[1]) - Ord('a');
+    KwLenMask[F] := KwLenMask[F] or (Cardinal(1) shl Length(W));
     SetLength(KwByFirst[F], Length(KwByFirst[F]) + 1);
     KwByFirst[F][High(KwByFirst[F])] := I;
   end;
@@ -381,51 +400,52 @@ begin
 end;
 
 procedure TScanner.SkipTrivia;
-var C: WideChar;
+var C: Integer;
 begin
   while FPos < FLen do
   begin
-    C := FSrc[FPos];
-    case C of
-      ' ', #9, #11, #12, #$A0, #$FEFF: Inc(FPos);
-      #10:
-        begin
-          NewLine(1);
-          NewlineBefore := True;
-        end;
-      #13:
-        begin
-          if (FPos + 1 < FLen) and (FSrc[FPos + 1] = #10) then NewLine(2) else NewLine(1);
-          NewlineBefore := True;
-        end;
-      LS, PS:
-        begin
-          NewLine(1);
-          NewlineBefore := True;
-        end;
-      '/':
-        if FPos + 1 < FLen then
-        begin
-          if FSrc[FPos + 1] = '/' then SkipLineRest
-          else if FSrc[FPos + 1] = '*' then SkipBlockComment
+    C := Ord(FSrc[FPos]);
+    if C < 128 then
+      case TrivClass[C] of
+        0: Exit;
+        1: Inc(FPos);
+        2:
+          begin
+            NewLine(1);
+            NewlineBefore := True;
+          end;
+        3:
+          begin
+            if (FPos + 1 < FLen) and (FSrc[FPos + 1] = #10) then NewLine(2) else NewLine(1);
+            NewlineBefore := True;
+          end;
+        4:
+          if FPos + 1 < FLen then
+          begin
+            if FSrc[FPos + 1] = '/' then SkipLineRest
+            else if FSrc[FPos + 1] = '*' then SkipBlockComment
+            else Exit;
+          end
           else Exit;
-        end
-        else Exit;
-      '<':
-        { B.1.1 SingleLineHTMLOpenComment }
-        if HTMLComments and (FPos + 3 < FLen) and (FSrc[FPos + 1] = '!') and (FSrc[FPos + 2] = '-') and
-           (FSrc[FPos + 3] = '-') then SkipLineRest
-        else Exit;
-      '-':
+        5:
+          { B.1.1 SingleLineHTMLOpenComment }
+          if HTMLComments and (FPos + 3 < FLen) and (FSrc[FPos + 1] = '!') and (FSrc[FPos + 2] = '-') and
+             (FSrc[FPos + 3] = '-') then SkipLineRest
+          else Exit;
+      else
         { B.1.1 HTMLCloseComment: at the start of the input or after a line terminator, with only whitespace and
           comments between }
         if HTMLComments and FAtLineStart and (FPos + 2 < FLen) and (FSrc[FPos + 1] = '-') and
            (FSrc[FPos + 2] = '>') then SkipLineRest
         else Exit;
-    else
-      if (Ord(C) > $7F) and IsECMAScriptWhitespaceCodePoint(Ord(C)) then Inc(FPos)
-      else Exit;
-    end;
+      end
+    else if (C = $2028) or (C = $2029) then
+    begin
+      NewLine(1);
+      NewlineBefore := True;
+    end
+    else if (C = $A0) or (C = $FEFF) or IsECMAScriptWhitespaceCodePoint(C) then Inc(FPos)
+    else Exit;
   end;
 end;
 
@@ -554,14 +574,21 @@ begin
   else Kind := tkIdent;
 end;
 
+{$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
 procedure TScanner.ScanIdentOrKeyword;
-var Start: Integer; C: WideChar;
+var Start, L: Integer; C: WideChar; H: UInt32;
 begin
   Start := FPos;
+  { G2.Core's HashChars, as the characters go by }
+  H := 2166136261;
   while FPos < FLen do
   begin
     C := FSrc[FPos];
-    if (CCls(C) and ccPart) <> 0 then Inc(FPos)
+    if (CCls(C) and ccPart) <> 0 then
+    begin
+      H := (H xor Ord(C)) * 16777619;
+      Inc(FPos);
+    end
     else if (C = '\') or (Ord(C) >= $80) then
     begin
       FPos := Start;
@@ -571,9 +598,14 @@ begin
     else Break;
   end;
   { a reserved word needs no atom (TokAtom makes one where it is a property name); an identifier is interned }
-  Kind := KeywordOfChars(@FSrc[Start], FPos - Start);
-  if Kind = tkIdent then Atom := AtomOfChars(@FSrc[Start], FPos - Start);
+  L := FPos - Start;
+  Kind := tkIdent;
+  if (L >= 2) and (L <= 10) and (Ord(FSrc[Start]) >= Ord('b')) and (Ord(FSrc[Start]) <= Ord('w')) and
+     ((KwLenMask[Ord(FSrc[Start]) - Ord('a')] and (1 shl L)) <> 0) then
+    Kind := KeywordOfChars(@FSrc[Start], L);
+  if Kind = tkIdent then Atom := AtomOfCharsHashed(@FSrc[Start], L, H);
 end;
+{$POP}
 
 function TScanner.TokAtom: PStr;
 begin
@@ -1019,50 +1051,24 @@ end;
 
 { ---- the next token ---- }
 
-procedure TScanner.Next(Goal: TScanGoal);
-var C, C1: WideChar;
-
-  procedure Op(K: TTok; W: Integer); inline;
-  begin
-    Kind := K;
-    Inc(FPos, W);
-  end;
-
-  function At(I: Integer): WideChar; inline;
-  begin
-    if FPos + I < FLen then Result := FSrc[FPos + I] else Result := #0;
-  end;
-
+procedure TScanner.Op(K: TTok; W: Integer);
 begin
-  PrevEnd := TokEnd;
-  NewlineBefore := False;
-  Escaped := False;
-  EscapedReserved := tkIdent;
-  Atom := nil;
-  SkipTrivia;
-  if (Goal = sgTemplateTail) and (FPos < FLen) and (FSrc[FPos] = '}') then
-  begin
-    TokStart := FPos;
-    TokLine := FLine;
-    TokCol := FPos - FLineStart + 1;
-    ScanTemplate(True);
-    TokEnd := FPos;
-    FAtLineStart := False;
-    Exit;
-  end;
-  TokStart := FPos;
-  TokLine := FLine;
-  TokCol := FPos - FLineStart + 1;
-  if FPos >= FLen then
-  begin
-    Kind := tkEOF;
-    TokEnd := FPos;
-    Exit;
-  end;
+  Kind := K;
+  Inc(FPos, W);
+end;
+
+function TScanner.At(I: Integer): WideChar;
+begin
+  if FPos + I < FLen then Result := FSrc[FPos + I] else Result := #0;
+end;
+
+{ the tokens other than identifiers and one-character punctuators, at FPos }
+procedure TScanner.NextOther(Goal: TScanGoal);
+var C, C1: WideChar;
+begin
   C := FSrc[FPos];
   C1 := At(1);
   case C of
-    'a'..'z', 'A'..'Z', '$', '_': ScanIdentOrKeyword;
     '\': ScanIdentSlow(FPos, False);
     '0'..'9': ScanNumber;
     '"', '''': ScanString(C);
@@ -1076,17 +1082,6 @@ begin
         end
         else Fail('Invalid or unexpected token', FPos);
       end;
-    '{': Op(tkLBrace, 1);
-    '}': Op(tkRBrace, 1);
-    '(': Op(tkLParen, 1);
-    ')': Op(tkRParen, 1);
-    '[': Op(tkLBracket, 1);
-    ']': Op(tkRBracket, 1);
-    ';': Op(tkSemi, 1);
-    ',': Op(tkComma, 1);
-    ':': Op(tkColon, 1);
-    '~': Op(tkTilde, 1);
-    '@': Op(tkAt, 1);
     '.':
       if IsDigitW(C1) then ScanNumber
       else if (C1 = '.') and (At(2) = '.') then Op(tkEllipsis, 3)
@@ -1171,6 +1166,58 @@ begin
   end;
   TokEnd := FPos;
   FAtLineStart := False;
+end;
+
+
+procedure TScanner.Next(Goal: TScanGoal);
+var C: WideChar; K: TTok;
+begin
+  PrevEnd := TokEnd;
+  NewlineBefore := False;
+  Escaped := False;
+  EscapedReserved := tkIdent;
+  Atom := nil;
+  SkipTrivia;
+  if (Goal = sgTemplateTail) and (FPos < FLen) and (FSrc[FPos] = '}') then
+  begin
+    TokStart := FPos;
+    TokLine := FLine;
+    TokCol := FPos - FLineStart + 1;
+    ScanTemplate(True);
+    TokEnd := FPos;
+    FAtLineStart := False;
+    Exit;
+  end;
+  TokStart := FPos;
+  TokLine := FLine;
+  TokCol := FPos - FLineStart + 1;
+  if FPos >= FLen then
+  begin
+    Kind := tkEOF;
+    TokEnd := FPos;
+    Exit;
+  end;
+  C := FSrc[FPos];
+  if (CCls(C) and ccStart) <> 0 then
+  begin
+    ScanIdentOrKeyword;
+    TokEnd := FPos;
+    FAtLineStart := False;
+    Exit;
+  end;
+  if Ord(C) < 128 then
+  begin
+    K := Punct1[Ord(C)];
+    if K <> tkEOF then
+    begin
+      Kind := K;
+      Inc(FPos);
+      TokEnd := FPos;
+      FAtLineStart := False;
+      Exit;
+    end;
+  end;
+  NextOther(Goal);
 end;
 
 end.

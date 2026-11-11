@@ -191,6 +191,7 @@ type
     { errors }
     procedure Err(const Msg: string; Pos: Integer);
     procedure ErrHere(const Msg: string);
+    procedure ErrName(const Prefix: string; A: PStr; const Suffix: string; Pos: Integer);
     procedure Unexpected;
     { tokens }
     function F: Integer; inline;
@@ -511,6 +512,13 @@ begin
   raise EScanError.CreatePos(Msg, Pos);
 end;
 
+{ an error naming A: out of line, so that the routines raising it need no string temporary (each would give them
+  an exception frame) }
+procedure TPreParser.ErrName(const Prefix: string; A: PStr; const Suffix: string; Pos: Integer);
+begin
+  Err(Prefix + UTF8Encode(StrToUnicode(A)) + Suffix, Pos);
+end;
+
 procedure TPreParser.ErrHere(const Msg: string);
 begin
   Err(Msg, S.TokStart);
@@ -677,18 +685,18 @@ begin
     DK := Decls[D].Kind;
     case K of
       dkLet, dkConst, dkClass, dkUsing, dkImport, dkClassName:
-        if DK <> dkFuncName then Err('Identifier ''' + NameOf(A) + ''' has already been declared', Pos);
+        if DK <> dkFuncName then ErrName('Identifier ''', A, ''' has already been declared', Pos);
       dkLexFunction:
         if DK = dkFuncName then
         else if (DK = dkLexFunction) and Decls[D].Plain and Plain and not Ctxs[F].IsStrict then
-        else Err('Identifier ''' + NameOf(A) + ''' has already been declared', Pos);
+        else ErrName('Identifier ''', A, ''' has already been declared', Pos);
       dkFunction:
-        if DK in LexicalKinds then Err('Identifier ''' + NameOf(A) + ''' has already been declared', Pos);
+        if DK in LexicalKinds then ErrName('Identifier ''', A, ''' has already been declared', Pos);
       dkParam:
         if (DK = dkParam) and (Ctxs[F].DupParamPos < 0) then Ctxs[F].DupParamPos := Pos;
       dkCatchParam, dkCatchPattern:
         if DK in [dkCatchParam, dkCatchPattern] then
-          Err('Identifier ''' + NameOf(A) + ''' has already been declared', Pos);
+          ErrName('Identifier ''', A, ''' has already been declared', Pos);
     end;
   end;
   PushDecl(A, K, Pos, Plain);
@@ -730,10 +738,10 @@ begin
         begin
           if D <> VarLog[I].Decl then VarLog[I].Dropped := True;
         end
-        else Err('Identifier ''' + NameOf(VarLog[I].Atom) + ''' has already been declared', VarLog[I].Pos);
+        else ErrName('Identifier ''', VarLog[I].Atom, ''' has already been declared', VarLog[I].Pos);
       dkCatchPattern:
         if VarLog[I].AnnexB then VarLog[I].Dropped := True
-        else Err('Identifier ''' + NameOf(VarLog[I].Atom) + ''' has already been declared', VarLog[I].Pos);
+        else ErrName('Identifier ''', VarLog[I].Atom, ''' has already been declared', VarLog[I].Pos);
       dkParam:
         if VarLog[I].AnnexB then VarLog[I].Dropped := True;
     end;
@@ -923,7 +931,7 @@ begin
     spAwait:
       if (FGoal = pgModule) or Ctxs[F].AwaitOp or Ctxs[F].AwaitBanned then Err('Unexpected reserved word ''await''', Pos);
     spLet, spStrictReserved:
-      if Ctxs[F].IsStrict then Err('Unexpected strict mode reserved word ''' + NameOf(A) + '''', Pos);
+      if Ctxs[F].IsStrict then ErrName('Unexpected strict mode reserved word ''', A, '''', Pos);
     spArguments:
       begin
         if Ctxs[F].ArgsBanned then
@@ -945,7 +953,7 @@ begin
     spAwait:
       if (FGoal = pgModule) or Ctxs[F].AwaitOp or Ctxs[F].AwaitBanned then Err('Unexpected reserved word ''await''', Pos);
     spLet, spStrictReserved:
-      if Ctxs[F].IsStrict then Err('Unexpected strict mode reserved word ''' + NameOf(A) + '''', Pos);
+      if Ctxs[F].IsStrict then ErrName('Unexpected strict mode reserved word ''', A, '''', Pos);
   end;
 end;
 
@@ -956,7 +964,7 @@ begin
   case SpecOf(A) of
     spEval, spArguments: Err('Unexpected eval or arguments in strict mode', Pos);
     spYield: Err('Unexpected identifier ''yield''', Pos);
-    spLet, spStrictReserved: Err('Unexpected strict mode reserved word ''' + NameOf(A) + '''', Pos);
+    spLet, spStrictReserved: ErrName('Unexpected strict mode reserved word ''', A, '''', Pos);
   end;
 end;
 
@@ -2293,7 +2301,7 @@ begin
         PrivNames[I].Kind := 3;
         Exit;
       end;
-      Err('Identifier ''#' + NameOf(A) + ''' has already been declared', Pos);
+      ErrName('Identifier ''#', A, ''' has already been declared', Pos);
     end;
   if PrivNameTop >= Length(PrivNames) then SetLength(PrivNames, PrivNameTop * 2);
   PrivNames[PrivNameTop].Atom := A;
@@ -2306,7 +2314,7 @@ end;
 procedure TPreParser.UsePrivate(A: PStr; Pos: Integer);
 begin
   if PrivClassTop = 0 then
-    Err('Private field ''#' + NameOf(A) + ''' must be declared in an enclosing class', Pos);
+    ErrName('Private field ''#', A, ''' must be declared in an enclosing class', Pos);
   Include(Ctxs[F].UsesF, ffPrivateRef);
   if PrivRefTop >= Length(PrivRefs) then SetLength(PrivRefs, PrivRefTop * 2);
   PrivRefs[PrivRefTop].Atom := A;
@@ -2335,8 +2343,7 @@ begin
     if FSeen.Get(PrivRefs[I].Atom) <> FStamp then
     begin
       if CI = 0 then
-        Err('Private field ''#' + NameOf(PrivRefs[I].Atom) + ''' must be declared in an enclosing class',
-          PrivRefs[I].Pos);
+        ErrName('Private field ''#', PrivRefs[I].Atom, ''' must be declared in an enclosing class', PrivRefs[I].Pos);
       PrivRefs[W] := PrivRefs[I];
       Inc(W);
     end;
@@ -2859,11 +2866,11 @@ begin
       if Labels[I].Atom = S.Atom then
       begin
         if not IsBreak and not Labels[I].Loop then
-          ErrHere('Illegal continue statement: ''' + NameOf(S.Atom) + ''' does not denote an iteration statement');
+          ErrName('Illegal continue statement: ''', S.Atom, ''' does not denote an iteration statement', S.TokStart);
         Found := True;
         Break;
       end;
-    if not Found then ErrHere('Undefined label ''' + NameOf(S.Atom) + '''');
+    if not Found then ErrName('Undefined label ''', S.Atom, '''', S.TokStart);
     S.Next(sgDiv);
   end
   else if IsBreak then
@@ -2994,7 +3001,7 @@ begin
     A := X.A;
     if not IsLabel and (RefTop > 0) and (Refs[RefTop - 1].Atom = A) then Dec(RefTop);
     for I := Ctxs[F].LabelBase to LabelTop - 1 do
-      if Labels[I].Atom = A then ErrHere('Label ''' + NameOf(A) + ''' has already been declared');
+      if Labels[I].Atom = A then ErrName('Label ''', A, ''' has already been declared', S.TokStart);
     if LabelTop >= Length(Labels) then SetLength(Labels, LabelTop * 2);
     Labels[LabelTop].Atom := A;
     Labels[LabelTop].Loop := False;
@@ -3164,7 +3171,7 @@ begin
     else if IsIdentName then A := S.TokAtom
     else Unexpected;
     for I := 0 to N - 1 do
-      if Keys[I] = A then ErrHere('Import attribute has duplicate key ''' + NameOf(A) + '''');
+      if Keys[I] = A then ErrName('Import attribute has duplicate key ''', A, '''', S.TokStart);
     if N >= Length(Keys) then SetLength(Keys, N * 2);
     Keys[N] := A;
     Inc(N);
@@ -3211,7 +3218,7 @@ end;
 
 procedure TPreParser.AddExport(A: PStr; Pos: Integer);
 begin
-  if FModuleExports.Get(A) >= 0 then Err('Duplicate export of ''' + NameOf(A) + '''', Pos);
+  if FModuleExports.Get(A) >= 0 then ErrName('Duplicate export of ''', A, '''', Pos);
   FModuleExports.Put(A, 1);
 end;
 
@@ -3493,7 +3500,7 @@ begin
     begin
       D := FMap.Get(FExportLocals[I].Atom);
       if ((D < 0) or (Decls[D].Scope <> SI)) and (FSeen.Get(FExportLocals[I].Atom) <> FStamp) then
-        Err('Export ''' + NameOf(FExportLocals[I].Atom) + ''' is not defined in module', FExportLocals[I].Pos);
+        ErrName('Export ''', FExportLocals[I].Atom, ''' is not defined in module', FExportLocals[I].Pos);
     end;
   end;
   PopScope;
