@@ -338,6 +338,26 @@ function GetPrototypeFromConstructor(C, Default: TValue; var P: TValue): Boolean
 
 implementation
 
+{ N registers from P set to undefined: a frame's registers past its arguments. A call clears about ten, which
+  FillQWord's set-up costs more than (about 29 instructions in Richards); this loop stores four per step }
+procedure FillUndef(P: PValue; N: Integer); noinline;
+var V: TValue;
+begin
+  V := VUndefined;
+  while N >= 4 do
+  begin
+    P[0] := V; P[1] := V; P[2] := V; P[3] := V;
+    Inc(P, 4);
+    Dec(N, 4);
+  end;
+  while N > 0 do
+  begin
+    P^ := V;
+    Inc(P);
+    Dec(N);
+  end;
+end;
+
 function SuspendNewGenerator: TValue; forward;
 function GeneratorNextIsIntrinsic(Gen: TValue): Boolean; forward;
 
@@ -3331,7 +3351,7 @@ begin
     PopRoots(1);
     StackTop := Max(StackTop, Base + T^.MaxRegs);
     I := Min(Argc, NP) + 1;
-    if I < T^.MaxRegs then FillQWord(R[I], T^.MaxRegs - I, VUndefined);
+    if I < T^.MaxRegs then FillUndef(@R[I], T^.MaxRegs - I);
     if T^.RestReg >= 0 then R[T^.RestReg] := Tmp;
     if T^.ArgsReg >= 0 then
     begin
@@ -3349,7 +3369,7 @@ begin
   else
   begin
     I := Min(Argc, NP) + 1;
-    if I < T^.MaxRegs then FillQWord(R[I], T^.MaxRegs - I, VUndefined);
+    if I < T^.MaxRegs then FillUndef(@R[I], T^.MaxRegs - I);
   end;
   if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;
   Fr := @Frames[FrameTop];
@@ -3384,7 +3404,7 @@ begin
   R := @VStack[Base];
   R[0] := This;
   I := Min(Argc, T^.NumParams) + 1;
-  if I < T^.MaxRegs then FillQWord(R[I], T^.MaxRegs - I, VUndefined);
+  if I < T^.MaxRegs then FillUndef(@R[I], T^.MaxRegs - I);
   if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;
   Fr := @Frames[FrameTop];
   Fr^.Closure := MkPtr(FObj);
@@ -5061,7 +5081,7 @@ LGetProp:
               if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
               Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
               VS[Base] := VB;
-              if T^.MaxRegs > 1 then FillQWord(VS[Base + 1], T^.MaxRegs - 1, VUndefined);
+              if T^.MaxRegs > 1 then FillUndef(@VS[Base + 1], T^.MaxRegs - 1);
               J := Fr^.Base + A;
               Fr := @Frames[FrameTop];
               Fr^.Closure := V;
@@ -5623,7 +5643,7 @@ LGetProp:
           { the registers past the arguments start undefined (FillQWord: FastLoop's register pressure made an
             inline loop cost about seven instructions a register) }
           NP := T^.MaxRegs;
-          if J < NP then FillQWord(R[J], NP - J, VUndefined);
+          if J < NP then FillUndef(@R[J], NP - J);
           Fr := @Frames[FrameTop];
           Fr^.Closure := VA;
           Fr^.NewTarget := VUndefined;
