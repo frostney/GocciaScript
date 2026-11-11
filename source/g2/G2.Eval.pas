@@ -56,6 +56,90 @@ begin
   P.ApplyOptions(Opts);
 end;
 
+{ LastModuleInfo, taken: through a noinline routine (an inline threadvar load here got FPC 3.3.1's absolute
+  relocation, tlsscan.py) }
+function TakeLastModuleInfo: TModuleInfo; noinline;
+begin
+  Result := LastModuleInfo;
+  LastModuleInfo := nil;
+end;
+
+procedure ModuleOptions(P: TGocciaParser);
+var Opts: TGocciaParserOptions;
+begin
+  Opts := P.Options;
+  Opts.AutomaticSemicolonInsertion := True;
+  Opts.VarDeclarationsEnabled := True;
+  Opts.FunctionDeclarationsEnabled := True;
+  Opts.TraditionalForLoopsEnabled := True;
+  Opts.WhileLoopsEnabled := True;
+  Opts.LooseEqualityEnabled := True;
+  Opts.LabelStatementsEnabled := True;
+  Opts.ForInLoopsEnabled := True;
+  Opts.ModuleSource := True;
+  Opts.ImportMetaAllowed := True;
+  P.ApplyOptions(Opts);
+end;
+
+{ a module with lazy functions: as LazyParseAndCompile, goal 3 }
+function LazyParseAndCompileModule(const Source, FileName: UnicodeString; Id: Integer; var T: PFuncTemplate;
+  var Info: TModuleInfo; var Err, ErrName: UnicodeString; out Ok: Boolean): Boolean;
+var PP: TPreParser; LS: TLazySource; L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram;
+begin
+  Result := False;
+  Ok := False;
+  LS := nil;
+  PP := TPreParser.Create(PWideChar(Source), Length(Source), pgModule, True);
+  try
+    try
+      PP.ParseProgram;
+      LS := BuildLazySource(Source, FileName, PP);
+    except
+      on EScanError do Exit;
+    end;
+  finally
+    PP.Free;
+  end;
+  if LS = nil then Exit;
+  Result := True;
+  LS.IsModule := True;
+  LS.ModuleId := Id;
+  L := nil; P := nil; Prog := nil;
+  try
+    try
+      L := TGocciaLexer.Create(LS.Text, FileName);
+      LS.Coords := L.SourceCoordinates;
+      LS.CoordsRef := LS.Coords;
+      L.StandardIdentifiers := True;
+      P := TGocciaParser.CreateFromLexer(L, FileName, nil);
+      ModuleOptions(P);
+      P.SetFunctionBodySkipper(@LazyBodySkipper, LS);
+      Prog := P.Parse;
+      L.Tokens.Clear;
+      CompilingModuleId := Id;
+      CurLazySource := LS;
+      try
+        T := CompileProgram(Prog, FileName, False, 3);
+      finally
+        CurLazySource := nil;
+      end;
+      Info := TakeLastModuleInfo;
+      Ok := True;
+    except
+      on E: Exception do
+      begin
+        Err := UnicodeString(E.Message);
+        if E is TGocciaReferenceError then ErrName := 'ReferenceError' else ErrName := 'SyntaxError';
+      end;
+    end;
+  finally
+    CompilingModuleId := 0;
+    Prog.Free;
+    P.Free;
+    L.Free;
+  end;
+end;
+
 { a Script with lazy functions (G2.Lazy): pre-parsed, then parsed with the eligible bodies skipped and compiled
   with stubs for them. False when the source goes the eager way (a syntax error, whose message the eager parse
   gives, or nothing to defer); otherwise Ok and Err are the result }
@@ -169,13 +253,16 @@ end;
 function LazyCompile(T: PFuncTemplate): Boolean;
 var St: PLazyStub; LS, PrevSrc: TLazySource; R: ^TLazyRec; L: TGocciaLexer; P: TGocciaParser; E: TGocciaExpression;
   NT: PFuncTemplate; SaveUp: array of TUpvalDesc; SaveName: PStr; SaveRange: TGocciaLazySourceText;
-  Finder: TBodyFinder; IsMethod: Boolean;
+  Finder: TBodyFinder; IsMethod: Boolean; PrevModule: Integer;
   Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString; TS0, TS1, TSa, TSb: TTimeSpec;
 begin
   clock_gettime(CLOCK_MONOTONIC, @TS0);
   St := PLazyStub(T^.Lazy);
   LS := St^.Src;
   R := @LS.Recs[St^.Id];
+  if GetEnvironmentVariable('G2_LAZY_DEBUG') <> '' then
+    WriteLn(ErrOutput, 'lazy compile ', St^.CompileName, ' (', LS.FileName, ' ', R^.Start, '..', R^.Stop, ', module ',
+      LS.IsModule, ', method ', R^.CStart >= 0, ')');
   L := nil; P := nil; Finder := nil;
   Msg := '';
   IsMethod := R^.CStart >= 0;
@@ -183,12 +270,12 @@ begin
   try
     try
       L := TGocciaLexer.Create(LS.Text, LS.FileName, LS.Coords);
-      L.HTMLComments := True;
+      L.HTMLComments := not LS.IsModule;
       L.StandardIdentifiers := True;
       { a method is parsed with its object literal or class, the other bodies there skipped }
       if IsMethod then L.SetRange(R^.CStart, R^.CStop) else L.SetRange(R^.Start, R^.Stop);
       P := TGocciaParser.CreateFromLexer(L, LS.FileName, nil);
-      ScriptOptions(P);
+      if LS.IsModule then ModuleOptions(P) else ScriptOptions(P);
       if IsMethod then
       begin
         { the container's own context }
@@ -222,11 +309,14 @@ begin
         raise Exception.Create('lazy compile: the function is not in its source range (' + E.ClassName + ' found ' +
           BoolToStr(Finder.Found, True) + ' at end ' + BoolToStr(P.AtEnd, True) + ')');
       PrevSrc := CurLazySource;
+      PrevModule := CompilingModuleId;
       CurLazySource := LS;
+      if LS.IsModule then CompilingModuleId := LS.ModuleId else CompilingModuleId := 0;
       try
         NT := CompileLazyFunction(Finder.Params, Finder.Body, St, LS.FileName);
       finally
         CurLazySource := PrevSrc;
+        CompilingModuleId := PrevModule;
       end;
       SaveUp := T^.Upvals;
       SaveName := T^.Name;
@@ -261,8 +351,9 @@ function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Intege
   var Info: TModuleInfo; var Err, ErrName: UnicodeString): Boolean;
 var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Opts: TGocciaParserOptions;
 begin
-  Result := False;
   Info := nil;
+  if LazyOn and LazyParseAndCompileModule(Source, FileName, Id, T, Info, Err, ErrName, Result) then Exit;
+  Result := False;
   L := nil; P := nil; Prog := nil;
   try
     try

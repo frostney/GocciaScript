@@ -38,6 +38,11 @@ type
     { a method's lazy compile parses its container: every body outside the method's range is skipped then }
     SkipOutside: Boolean;
     TargetStart, TargetStop: Integer;
+    { a module (goal 3): its id (G2.Modules) and its import names in slot order, set by the first stub }
+    IsModule: Boolean;
+    ModuleId: Integer;
+    ModImports: array of UnicodeString;
+    HaveImports: Boolean;
     function Lookup(Body: Integer): Integer;
   end;
 

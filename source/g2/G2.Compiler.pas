@@ -1542,7 +1542,16 @@ begin
   { a method using super needs its home object, which the code defining it sets when HomeReg says so
     (LastChildUsesHome); the compiled template's own value replaces this }
   if (IsMethod or ObjMeth) and (ffSuperProp in R^.Flags) then T^.HomeReg := 0;
-  for I := 0 to High(R^.Free) do ResolveUpval(FS, R^.Free[I]);
+  for I := 0 to High(R^.Free) do
+    { a module's import: read through the module's cell table (EmitModGet) }
+    if (ResolveUpval(FS, R^.Free[I]) < 0) and (Goal = 3) and (ModImportSlot(R^.Free[I]) >= 0) then
+      ResolveUpval(FS, '%modcells');
+  if (Goal = 3) and not Src.HaveImports and (ModImportNames <> nil) then
+  begin
+    SetLength(Src.ModImports, ModImportNames.Count);
+    for I := 0 to ModImportNames.Count - 1 do Src.ModImports[I] := ModImportNames[I];
+    Src.HaveImports := True;
+  end;
   if IsArrow and (ffUsesThis in R^.Flags) then ResolveUpval(FS, '%this');
   { a named function expression calls itself by its name, bound around it (CompileFuncExpr) }
   if (ffExpression in R^.Flags) and (R^.Name <> '') then ResolveUpval(FS, R^.Name);
@@ -6770,6 +6779,14 @@ begin
   try
     C.SourceName := SourceName;
     C.Goal := 1;
+    if St^.Src.IsModule then
+    begin
+      C.Goal := 3;
+      C.ModImportNames := TStringList.Create;
+      C.ModImportNames.UseLocale := False;
+      C.ModImportNames.CaseSensitive := True;
+      for I := 0 to High(St^.Src.ModImports) do C.ModImportNames.Add(St^.Src.ModImports[I]);
+    end;
     OT^.IsStrict := St^.IsStrict;
     { an arrow's this in a derived constructor: checked until super() (InDerivedCtor) }
     OT^.IsClassCtor := St^.InDerivedCtor;
@@ -6806,6 +6823,7 @@ begin
     end;
     Outer.Free;
     Dispose(OT);
+    C.ModImportNames.Free;
     C.Free;
   end;
 end;
