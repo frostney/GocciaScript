@@ -48,10 +48,11 @@ type
 
   TCodePointPairArray = array of TCodePointPair;
 
-  // Indexes into a TCodePointPairArray, two per pair: [2 * I] is the first
-  // pair with pair I's target, [2 * I + 1] the next pair after I with that
-  // target, or -1. Following them visits the pairs with one target in source
-  // order, as a scan of the whole table would.
+  // Indexes into a TCodePointPairArray of N pairs, two per pair: [2 * I] is
+  // the first pair with pair I's target, [2 * I + 1] the next pair after I
+  // with that target, or -1. Following them visits the pairs with one target
+  // in table order, as a scan of the whole table would. Then [2 * N + K] is
+  // the K-th pair in (target, index) order.
   TPairGroupArray = array of Integer;
 
 const
@@ -307,7 +308,7 @@ var
   end;
 
 begin
-  SetLength(Result, 2 * Length(APairs));
+  SetLength(Result, 3 * Length(APairs));
   SetLength(Order, Length(APairs));
   for I := 0 to High(Order) do
     Order[I] := I;
@@ -346,6 +347,8 @@ begin
     end;
     I := J + 1;
   end;
+  for I := 0 to High(Order) do
+    Result[2 * Length(APairs) + I] := Order[I];
 end;
 
 function LoadPairGroups(const AKey: string;
@@ -529,28 +532,139 @@ begin
   end;
 end;
 
+type
+  TPairIndexArray = array of Integer;
+
+const
+  // Classes of at most this many code points find their pairs by lookup
+  // instead of testing every pair (a case-insensitive literal character is
+  // a class of one).
+  SMALL_CLASS_CODE_POINTS = 256;
+
+// The pairs whose source or target is in ARanges (at most
+// SMALL_CLASS_CODE_POINTS code points), in table order.
+function SmallClassPairs(const ARanges: TUnicodePropertyRangeArray;
+  const APairs: TCodePointPairArray; const AGroups: TPairGroupArray): TPairIndexArray;
+var
+  Count, I, Lo, Hi, Mid, K, N, Tmp, J: Integer;
+  C: Cardinal;
+
+  procedure Add(const AIndex: Integer);
+  begin
+    if Count = Length(Result) then
+      SetLength(Result, Count * 2 + 8);
+    Result[Count] := AIndex;
+    Inc(Count);
+  end;
+
+begin
+  Count := 0;
+  N := Length(APairs);
+  Result := nil;
+  for I := 0 to High(ARanges) do
+  begin
+    C := ARanges[I].Lo;
+    while C <= ARanges[I].Hi do
+    begin
+      // by source (the table's order)
+      Lo := 0;
+      Hi := N - 1;
+      while Lo < Hi do
+      begin
+        Mid := (Lo + Hi) div 2;
+        if APairs[Mid].Source < C then Lo := Mid + 1 else Hi := Mid;
+      end;
+      K := Lo;
+      while (K < N) and (APairs[K].Source = C) do
+      begin
+        Add(K);
+        Inc(K);
+      end;
+      // by target ([2 * N + K]: the pairs in target order)
+      Lo := 0;
+      Hi := N - 1;
+      while Lo < Hi do
+      begin
+        Mid := (Lo + Hi) div 2;
+        if APairs[AGroups[2 * N + Mid]].Target < C then Lo := Mid + 1 else Hi := Mid;
+      end;
+      K := Lo;
+      while (K < N) and (APairs[AGroups[2 * N + K]].Target = C) do
+      begin
+        Add(AGroups[2 * N + K]);
+        Inc(K);
+      end;
+      if C = High(Cardinal) then Break;
+      Inc(C);
+    end;
+  end;
+  // table order, once each
+  for I := 1 to Count - 1 do
+  begin
+    Tmp := Result[I];
+    J := I - 1;
+    while (J >= 0) and (Result[J] > Tmp) do
+    begin
+      Result[J + 1] := Result[J];
+      Dec(J);
+    end;
+    Result[J + 1] := Tmp;
+  end;
+  K := 0;
+  for I := 0 to Count - 1 do
+    if (K = 0) or (Result[K - 1] <> Result[I]) then
+    begin
+      Result[K] := Result[I];
+      Inc(K);
+    end;
+  SetLength(Result, K);
+end;
+
+function ClassCodePointCount(const ARanges: TUnicodePropertyRangeArray): Int64;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to High(ARanges) do
+    if ARanges[I].Hi >= ARanges[I].Lo then
+      Inc(Result, Int64(ARanges[I].Hi) - ARanges[I].Lo + 1);
+end;
+
 procedure ExpandCaseEquivalence(var ARanges: TUnicodePropertyRangeArray;
   const APairs: TCodePointPairArray; const AGroups: TPairGroupArray);
 var
   OriginalRanges: TUnicodePropertyRangeArray;
-  I, J: Integer;
+  Hits: TPairIndexArray;
+  I, J, H: Integer;
+  Small: Boolean;
 begin
   SetLength(OriginalRanges, Length(ARanges));
   for I := 0 to High(ARanges) do
     OriginalRanges[I] := ARanges[I];
-  for I := 0 to High(APairs) do
+  Small := (Length(APairs) > 0) and
+    (ClassCodePointCount(OriginalRanges) <= SMALL_CLASS_CODE_POINTS);
+  if Small then
+    Hits := SmallClassPairs(OriginalRanges, APairs, AGroups);
+  if Small then H := Length(Hits) else H := Length(APairs);
+  for J := 0 to H - 1 do
   begin
-    if not RangeContainsCodePoint(OriginalRanges, APairs[I].Source) and
-       not RangeContainsCodePoint(OriginalRanges, APairs[I].Target) then
-      Continue;
+    if Small then
+      I := Hits[J]
+    else
+    begin
+      I := J;
+      if not RangeContainsCodePoint(OriginalRanges, APairs[I].Source) and
+         not RangeContainsCodePoint(OriginalRanges, APairs[I].Target) then
+        Continue;
+    end;
 
     AddFoldRange(ARanges, APairs[I].Target);
     // every pair with this target, in table order
-    J := AGroups[2 * I];
-    while J >= 0 do
+    I := AGroups[2 * I];
+    while I >= 0 do
     begin
-      AddFoldRange(ARanges, APairs[J].Source);
-      J := AGroups[2 * J + 1];
+      AddFoldRange(ARanges, APairs[I].Source);
+      I := AGroups[2 * I + 1];
     end;
   end;
 end;
