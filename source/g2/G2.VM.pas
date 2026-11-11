@@ -5463,12 +5463,16 @@ LGetProp:
           VB := R[I shr 40];
           { StrictEquals }
           if VA = VB then Bool := not IsDouble(VA) or (PDouble(@VA)^ = PDouble(@VA)^)
-          else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
-          else if ((VA shr 48) <> TAG_PTR_HI) or ((VB shr 48) <> TAG_PTR_HI) then
-            Bool := False   { different, and not both numbers: a non-pointer equals only itself }
-          else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
-          else if IsBigInt(VA) and IsBigInt(VB) then goto LBail
-          else Bool := False;   { objects and symbols: the same one only }
+          else if ((VA shr 48) = TAG_PTR_HI) and ((VB shr 48) = TAG_PTR_HI) then
+          begin
+            if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
+            else if IsBigInt(VA) and IsBigInt(VB) then goto LBail
+            else Bool := False;   { objects and symbols: the same one only }
+          end
+          { a double against a Number: equal by value (1 and 1.0, 0 and -0); any other pair of different bits (ints,
+            the specials, a pointer and a non-pointer) differs }
+          else if (VA < DOUBLE_LIMIT) or (VB < DOUBLE_LIMIT) then Bool := IsNumber(VA) and IsNumber(VB) and (NumOf(VA) = NumOf(VB))
+          else Bool := False;
           if TOp(I and $FF) = opSNe then Bool := not Bool;
           R[A] := MkBool(Bool);
         end;
@@ -5591,12 +5595,16 @@ LGetProp:
           VB := R[PWord(PByte(IP) - 5)^];
           { StrictEquals }
           if VA = VB then Bool := not IsDouble(VA) or (PDouble(@VA)^ = PDouble(@VA)^)
-          else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
-          else if ((VA shr 48) <> TAG_PTR_HI) or ((VB shr 48) <> TAG_PTR_HI) then
-            Bool := False   { different, and not both numbers: a non-pointer equals only itself }
-          else if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
-          else if IsBigInt(VA) and IsBigInt(VB) then goto LBail
-          else Bool := False;   { objects and symbols: the same one only }
+          else if ((VA shr 48) = TAG_PTR_HI) and ((VB shr 48) = TAG_PTR_HI) then
+          begin
+            if IsString(VA) and IsString(VB) then Bool := FastStrEquals(StrOf(VA), StrOf(VB))
+            else if IsBigInt(VA) and IsBigInt(VB) then goto LBail
+            else Bool := False;   { objects and symbols: the same one only }
+          end
+          { a double against a Number: equal by value (1 and 1.0, 0 and -0); any other pair of different bits (ints,
+            the specials, a pointer and a non-pointer) differs }
+          else if (VA < DOUBLE_LIMIT) or (VB < DOUBLE_LIMIT) then Bool := IsNumber(VA) and IsNumber(VB) and (NumOf(VA) = NumOf(VB))
+          else Bool := False;
           if Bool = (TOp(I and $FF) = opJSEq) then Inc(IP, SarInt64(Int64(I), 40));
         end;
       opCall:
