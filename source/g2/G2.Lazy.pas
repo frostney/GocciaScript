@@ -16,6 +16,8 @@ uses
 type
   TLazyRec = record
     Start, Stop, Body, Close: Integer;   { 0-based offsets; Close the body's right brace }
+    CStart, CStop: Integer;   { a method's object literal or class, parsed to compile it; -1 none }
+    Eligible: Boolean;
     Flags: TFuncFlags;
     Name: UnicodeString;
     Free: array of UnicodeString;
@@ -28,11 +30,14 @@ type
     Coords: TGocciaSourceCoordinates;
     CoordsRef: IGocciaSourceCoordinates;
     Recs: array of TLazyRec;
-    { body offset -> record index (open addressing), for the eligible records only }
+    { body offset -> record index (open addressing), for every record with a block body }
     BodyKeys, BodyVals: array of Integer;
     BodyMask: Integer;
     { the record a lazy compile is parsing: its own body is not skipped }
     Compiling: Integer;
+    { a method's lazy compile parses its container: every body outside the method's range is skipped then }
+    SkipOutside: Boolean;
+    TargetStart, TargetStop: Integer;
     function Lookup(Body: Integer): Integer;
   end;
 
@@ -43,6 +48,8 @@ type
     Id: Integer;                 { its record in Src }
     CompileName: UnicodeString;  { the name CompileFunction was given }
     IsArrow, IsGenerator, IsAsync, IsStrict: Boolean;
+    { CompileFunction's other arguments and pending flags, replayed }
+    IsMethod, IsClassCtor, IsDerived, ObjLiteralMethod, NoArguments, StaticBlock: Boolean;
     InDerivedCtor: Boolean;      { an arrow whose this is a derived constructor's (TDZ until super()) }
     { the stub's upvalues, in order: the captured names, and per name efConst / efLexical (a TDZ check needed) /
       efFnName }
@@ -80,9 +87,11 @@ threadvar
 function LazyEligible(const R: TFuncRecord): Boolean;
 begin
   Result := (R.BodyStart >= 0) and
-    (R.Flags * [ffMethod, ffGetter, ffSetter, ffClassCtor, ffFieldInit, ffStaticBlock, ffDirectEval, ffInnerEval,
-      ffEvalScope, ffInWith, ffPrivateRef] = []) and
-    not ((ffArrow in R.Flags) and (R.Flags * [ffSuperProp, ffSuperCall, ffNewTarget, ffUsesArguments] <> []));
+    (R.Flags * [ffClassCtor, ffFieldInit, ffStaticBlock, ffDirectEval, ffInnerEval, ffEvalScope, ffInWith,
+      ffPrivateRef] = []) and
+    not ((ffArrow in R.Flags) and (R.Flags * [ffSuperProp, ffSuperCall, ffNewTarget, ffUsesArguments] <> [])) and
+    { a method compiles from a parse of its object literal or class }
+    (not (ffMethod in R.Flags) or ((R.CStart >= 0) and (R.CStop > R.CStart)));
 end;
 
 function HashOffset(V: Integer): Integer; inline;
@@ -110,6 +119,9 @@ begin
   Src := TLazySource(AData);
   Id := Src.Lookup(ABodyOffset);
   if (Id < 0) or (Id = Src.Compiling) then Exit(False);
+  if not Src.Recs[Id].Eligible and
+     not (Src.SkipOutside and ((Src.Recs[Id].Start < Src.TargetStart) or (Src.Recs[Id].Start >= Src.TargetStop))) then
+    Exit(False);
   ACloseOffset := Src.Recs[Id].Close;
   ALazyId := Id;
   Result := True;
@@ -137,13 +149,19 @@ begin
     R^.Stop := P.Funcs[I].Stop;
     R^.Body := P.Funcs[I].BodyStart;
     R^.Close := P.Funcs[I].Stop - 1;
-    if LazyEligible(P.Funcs[I]) then
+    R^.CStart := P.Funcs[I].CStart;
+    R^.CStop := P.Funcs[I].CStop;
+    R^.Eligible := LazyEligible(P.Funcs[I]);
+    if R^.Eligible then
     begin
       SetLength(R^.Free, P.Funcs[I].FreeCount);
       for J := 0 to P.Funcs[I].FreeCount - 1 do
         R^.Free[J] := StrToUnicode(P.FreeNames[P.Funcs[I].FreeStart + J]);
     end;
   end;
+  Eligible := 0;
+  for I := 0 to P.FuncCount - 1 do
+    if P.Funcs[I].BodyStart >= 0 then Inc(Eligible);
   K := 16;
   while K < Eligible * 2 do K := K * 2;
   SetLength(Result.BodyKeys, K);
@@ -151,7 +169,7 @@ begin
   for I := 0 to K - 1 do Result.BodyKeys[I] := -1;
   Result.BodyMask := K - 1;
   for I := 0 to P.FuncCount - 1 do
-    if LazyEligible(P.Funcs[I]) then
+    if P.Funcs[I].BodyStart >= 0 then
     begin
       J := HashOffset(Result.Recs[I].Body) and Result.BodyMask;
       while Result.BodyKeys[J] <> -1 do J := (J + 1) and Result.BodyMask;

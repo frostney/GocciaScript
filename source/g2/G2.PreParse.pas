@@ -27,13 +27,17 @@ type
     ffSuperProp, ffSuperCall, ffNewTarget, ffInnerEval, ffExpression, ffDeclaration,
     { for lazy compilation: inside a with body; inside or around a direct eval's function (its names are
       dynamic); uses a private name (here or in an inner function) }
-    ffInWith, ffEvalScope, ffPrivateRef);
+    ffInWith, ffEvalScope, ffPrivateRef,
+    { a method's container context: yield / await are operators there, it is strict code }
+    ffCtxYield, ffCtxAwait, ffCtxStrict);
   TFuncFlags = set of TFuncFlag;
 
   { a function the pre-parser met: enough for a lazy stub, and to skip it when its parent is parsed again }
   TFuncRecord = record
     Start, Stop: Integer;     { its source text (Function.prototype.toString), Stop exclusive }
     BodyStart: Integer;       { the body's left brace, or -1 (an arrow's expression body) }
+    { a method's or accessor's object literal or class (from its left brace or class keyword), else -1 }
+    CStart, CStop: Integer;
     Name: PStr;               { a declaration's or named expression's own name, else nil }
     ParamCount: Integer;      { ExpectedArgumentCount }
     Flags: TFuncFlags;
@@ -188,6 +192,8 @@ type
     FExportLocals: array of TPrivRef;
     FExportLocalTop: Integer;
     FWithDepth: Integer;
+    FContainerStart: Integer;   { the object literal or class whose methods are being parsed, -1 none }
+    procedure EndContainer(Start, FirstRec, Stop: Integer);
     { errors }
     procedure Err(const Msg: string; Pos: Integer);
     procedure ErrHere(const Msg: string);
@@ -261,7 +267,7 @@ type
     procedure ParseMethod(Start: Integer; K: TFuncKind; IsAsync, IsGen: Boolean);
     function ParsePropertyName(out Name: PStr; out IsComputed: Boolean): Boolean;
     procedure ParseClass(Start: Integer; IsExpr: Boolean; DefaultExport: Boolean);
-    procedure ParseClassBody(Derived: Boolean);
+    procedure ParseClassBody(Derived: Boolean; CStart: Integer);
     procedure ParseDecorators;
     procedure DeclarePrivate(A: PStr; Pos: Integer; Kind: Byte; IsSt: Boolean);
     procedure UsePrivate(A: PStr; Pos: Integer);
@@ -495,6 +501,7 @@ begin
   SetLength(Funcs, 64);
   SetLength(FreeNames, 256);
   FCoverErr := -1;
+  FContainerStart := -1;
   CtxTop := 0;
   if AGoal = pgModule then PushCtx(fkModule, False, False) else PushCtx(fkScript, False, False);
   Ctxs[0].IsStrict := AStrict or (AGoal = pgModule);
@@ -874,6 +881,8 @@ begin
   FillChar(Funcs[Result], SizeOf(TFuncRecord), 0);
   Funcs[Result].Start := Start;
   Funcs[Result].BodyStart := -1;
+  Funcs[Result].CStart := -1;
+  Funcs[Result].CStop := -1;
   Funcs[Result].FreeStart := -1;
   if FWithDepth > 0 then Include(Funcs[Result].Flags, ffInWith);
 end;
@@ -1729,8 +1738,11 @@ end;
 
 function TPreParser.ParseObjectLiteral: TX;
 var ProtoCount, ProtoPos, PStart, KeyPos: Integer; IsAsync, IsGen, IsComputed, IsIdent, Named: Boolean;
-  Acc: Integer; Name: PStr; FK: TFuncKind;
+  Acc: Integer; Name: PStr; FK: TFuncKind; SavedContainer, OStart, FirstRec: Integer;
 begin
+  OStart := S.TokStart;
+  FirstRec := FuncCount;
+  SavedContainer := FContainerStart;
   S.Next(sgDiv);
   ProtoCount := 0;
   ProtoPos := -1;
@@ -1787,7 +1799,9 @@ begin
       if S.Kind = tkLParen then
       begin
         if Acc = 1 then FK := fkGetter else if Acc = 2 then FK := fkSetter else FK := fkMethod;
+        FContainerStart := OStart;
         ParseMethod(PStart, FK, IsAsync, IsGen);
+        FContainerStart := SavedContainer;
       end
       else
       begin
@@ -1826,6 +1840,7 @@ begin
     else if S.Kind <> tkRBrace then Unexpected;
   end;
   if ProtoCount > 1 then CoverError(ProtoPos, 'Duplicate __proto__ fields are not allowed in object literals');
+  EndContainer(OStart, FirstRec, S.TokEnd);
   S.Next(sgDiv);
   Result := MakeX(xObject);
 end;
@@ -2236,6 +2251,10 @@ procedure TPreParser.ParseMethod(Start: Integer; K: TFuncKind; IsAsync, IsGen: B
 var Rec: Integer;
 begin
   Rec := NewRecord(Start);
+  Funcs[Rec].CStart := FContainerStart;
+  if Ctxs[F].YieldOp then Include(Funcs[Rec].Flags, ffCtxYield);
+  if Ctxs[F].AwaitOp then Include(Funcs[Rec].Flags, ffCtxAwait);
+  if Ctxs[F].IsStrict then Include(Funcs[Rec].Flags, ffCtxStrict);
   case K of
     fkGetter: Include(Funcs[Rec].Flags, ffGetter);
     fkSetter: Include(Funcs[Rec].Flags, ffSetter);
@@ -2285,6 +2304,14 @@ begin
   FinishFunction(Rec);
   PopCtx;
   S.Next(sgDiv);
+end;
+
+{ the methods of the container that began at Start end with it }
+procedure TPreParser.EndContainer(Start, FirstRec, Stop: Integer);
+var I: Integer;
+begin
+  for I := FirstRec to FuncCount - 1 do
+    if (Funcs[I].CStart = Start) and (Funcs[I].CStop < 0) then Funcs[I].CStop := Stop;
 end;
 
 { classes }
@@ -2408,19 +2435,21 @@ begin
     if X.K = xArrow then ErrHere('Unexpected token: an arrow function is not a class heritage');
     Derived := True;
   end;
-  ParseClassBody(Derived);
+  ParseClassBody(Derived, Start);
   PopScope;
   Ctxs[F].IsStrict := OldStrict;
   if IsExpr then S.Next(sgDiv) else S.Next(sgRegExp);
 end;
 
-procedure TPreParser.ParseClassBody(Derived: Boolean);
-var PStart, KeyPos: Integer; IsStatic, IsAsync, IsGen, IsAccessor, IsComputed, IsPrivate, Named, HasCtor: Boolean;
+procedure TPreParser.ParseClassBody(Derived: Boolean; CStart: Integer);
+var FirstRec, SavedContainer: Integer; PStart, KeyPos: Integer; IsStatic, IsAsync, IsGen, IsAccessor, IsComputed, IsPrivate, Named, HasCtor: Boolean;
   Acc: Integer; Name: PStr; K: TFuncKind;
 begin
   Expect(tkLBrace, sgDiv);
   PushPrivClass;
   HasCtor := False;
+  FirstRec := FuncCount;
+  SavedContainer := FContainerStart;
   while S.Kind <> tkRBrace do
   begin
     if S.Kind = tkSemi then
@@ -2542,7 +2571,9 @@ begin
         if IsStatic and (Name = APrototype) then
           Err('Classes may not have a static property named ''prototype''', KeyPos);
       end;
+      FContainerStart := CStart;
       ParseMethod(PStart, K, IsAsync, IsGen);
+      FContainerStart := SavedContainer;
     end
     else
     begin
@@ -2573,6 +2604,7 @@ begin
     end;
   end;
   PopPrivClass;
+  EndContainer(CStart, FirstRec, S.TokEnd);
 end;
 
 { statements }

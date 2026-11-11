@@ -27,7 +27,7 @@ threadvar
 implementation
 
 uses
-  Classes, Linux, UnixType, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.Error, Goccia.SourceSpan, G2.Scan,
+  Classes, Linux, UnixType, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
   G2.PreParse, G2.Lazy;
 
 threadvar
@@ -117,31 +117,90 @@ begin
   end;
 end;
 
+type
+  { the function node whose body block starts at Target (a lazily compiled method, in its container's parse) }
+  TBodyFinder = class(TGocciaASTChildVisitor)
+  public
+    Target: Integer;
+    Found: Boolean;
+    Params: TGocciaParameterArray;
+    Body: TGocciaASTNode;
+    procedure VisitChild(const ANode: TGocciaASTNode); override;
+    procedure EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+      const AFlags: TGocciaASTPartFlags); override;
+    procedure LeavePart; override;
+  end;
+
+procedure TBodyFinder.VisitChild(const ANode: TGocciaASTNode);
+var B: TGocciaASTNode;
+begin
+  if (ANode = nil) or Found then Exit;
+  B := nil;
+  if ANode is TGocciaFunctionExpression then B := TGocciaFunctionExpression(ANode).Body
+  else if ANode is TGocciaArrowFunctionExpression then B := TGocciaArrowFunctionExpression(ANode).Body
+  else if ANode is TGocciaGetterExpression then B := TGocciaGetterExpression(ANode).Body
+  else if ANode is TGocciaSetterExpression then B := TGocciaSetterExpression(ANode).Body
+  else if ANode is TGocciaClassMethod then B := TGocciaClassMethod(ANode).Body;
+  if (B <> nil) and (B is TGocciaBlockStatement) and (B.Span.StartOffset = Target) then
+  begin
+    Found := True;
+    Body := B;
+    if ANode is TGocciaFunctionExpression then Params := TGocciaFunctionExpression(ANode).Parameters
+    else if ANode is TGocciaArrowFunctionExpression then Params := TGocciaArrowFunctionExpression(ANode).Parameters
+    else if ANode is TGocciaSetterExpression then Params := TGocciaSetterExpression(ANode).Parameters
+    else if ANode is TGocciaClassMethod then Params := TGocciaClassMethod(ANode).Parameters
+    else Params := nil;
+    Exit;
+  end;
+  ANode.ForEachChild(Self);
+end;
+
+procedure TBodyFinder.EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+  const AFlags: TGocciaASTPartFlags);
+begin
+end;
+
+procedure TBodyFinder.LeavePart;
+begin
+end;
+
 { LazyCompileHook: a lazy template's function, parsed from its own source range and compiled, moved into the
   template (its closures keep the stub's upvalues, name and source text) }
 function LazyCompile(T: PFuncTemplate): Boolean;
 var St: PLazyStub; LS, PrevSrc: TLazySource; R: ^TLazyRec; L: TGocciaLexer; P: TGocciaParser; E: TGocciaExpression;
   NT: PFuncTemplate; SaveUp: array of TUpvalDesc; SaveName: PStr; SaveRange: TGocciaLazySourceText;
+  Finder: TBodyFinder; IsMethod: Boolean;
   Arena, PrevArena: TGocciaASTArena; Msg: UnicodeString; TS0, TS1, TSa, TSb: TTimeSpec;
 begin
   clock_gettime(CLOCK_MONOTONIC, @TS0);
   St := PLazyStub(T^.Lazy);
   LS := St^.Src;
   R := @LS.Recs[St^.Id];
-  L := nil; P := nil;
+  L := nil; P := nil; Finder := nil;
   Msg := '';
+  IsMethod := R^.CStart >= 0;
   Arena := TGocciaASTArena.Create;
   try
     try
       L := TGocciaLexer.Create(LS.Text, LS.FileName, LS.Coords);
       L.HTMLComments := True;
       L.StandardIdentifiers := True;
-      L.SetRange(R^.Start, R^.Stop);
+      { a method is parsed with its object literal or class, the other bodies there skipped }
+      if IsMethod then L.SetRange(R^.CStart, R^.CStop) else L.SetRange(R^.Start, R^.Stop);
       P := TGocciaParser.CreateFromLexer(L, LS.FileName, nil);
       ScriptOptions(P);
-      P.SetStrictMode(St^.IsStrict);
+      if IsMethod then
+      begin
+        { the container's own context }
+        P.SetStrictMode(ffCtxStrict in R^.Flags);
+        P.SetFunctionContext(ffCtxAwait in R^.Flags, ffCtxYield in R^.Flags);
+      end
+      else P.SetStrictMode(St^.IsStrict);
       P.SetFunctionBodySkipper(@LazyBodySkipper, LS);
       LS.Compiling := St^.Id;
+      LS.SkipOutside := IsMethod;
+      LS.TargetStart := R^.Start;
+      LS.TargetStop := R^.Stop;
       PrevArena := ActivateASTArena(Arena);
       clock_gettime(CLOCK_MONOTONIC, @TSa);
       try
@@ -149,18 +208,23 @@ begin
       finally
         RestoreASTArena(PrevArena);
         LS.Compiling := -1;
+        LS.SkipOutside := False;
       end;
       clock_gettime(CLOCK_MONOTONIC, @TSb);
       Inc(LazySetupNs, (Int64(TSa.tv_sec) - TS0.tv_sec) * 1000000000 + (TSa.tv_nsec - TS0.tv_nsec));
       Inc(LazyParseNs, (Int64(TSb.tv_sec) - TSa.tv_sec) * 1000000000 + (TSb.tv_nsec - TSa.tv_nsec));
       Inc(LazyTokens, L.Tokens.Count);
       Inc(LazyChars, R^.Stop - R^.Start);
-      if not ((E is TGocciaFunctionExpression) or (E is TGocciaArrowFunctionExpression)) or not P.AtEnd then
-        raise Exception.Create('lazy compile: the source range is not one function');
+      Finder := TBodyFinder.Create;
+      Finder.Target := R^.Body;
+      Finder.VisitChild(E);
+      if not Finder.Found or not P.AtEnd then
+        raise Exception.Create('lazy compile: the function is not in its source range (' + E.ClassName + ' found ' +
+          BoolToStr(Finder.Found, True) + ' at end ' + BoolToStr(P.AtEnd, True) + ')');
       PrevSrc := CurLazySource;
       CurLazySource := LS;
       try
-        NT := CompileLazyFunction(E, St, LS.FileName);
+        NT := CompileLazyFunction(Finder.Params, Finder.Body, St, LS.FileName);
       finally
         CurLazySource := PrevSrc;
       end;
@@ -181,6 +245,7 @@ begin
       on Ex: Exception do Msg := UnicodeString(Ex.Message);
     end;
   finally
+    Finder.Free;
     P.Free;
     L.Free;
     Arena.Free;

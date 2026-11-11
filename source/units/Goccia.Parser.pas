@@ -621,6 +621,9 @@ type
     { Parses as strict mode code from the start: a function of strict code
       that a host parses on its own }
     procedure SetStrictMode(const AStrict: Boolean);
+    { Parses as the body of an async function or a generator from the
+      start: code of such a function that a host parses on its own }
+    procedure SetFunctionContext(const AAsync, AGenerator: Boolean);
     function Expression: TGocciaExpression;
     function AtEnd: Boolean;
     function GetWarning(const AIndex: Integer): TGocciaParserWarning; {$IFDEF FPC}inline;{$ENDIF}
@@ -1638,6 +1641,14 @@ procedure TGocciaParser.SetStrictMode(const AStrict: Boolean);
 begin
   FStrictModeActive := AStrict;
   FStrictModeSourceActive := AStrict;
+end;
+
+procedure TGocciaParser.SetFunctionContext(const AAsync, AGenerator: Boolean);
+begin
+  FInAsyncFunction := Ord(AAsync);
+  FInGeneratorFunction := Ord(AGenerator);
+  if AAsync or AGenerator then
+    FFunctionDepth := 1;
 end;
 
 function TGocciaParser.ParseUnchecked: TGocciaProgram;
