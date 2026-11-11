@@ -287,6 +287,13 @@ type
     ScopeCount: Integer;
     FreeReg: Integer;
     UpvalNames: array of UnicodeString;
+    { open-addressing index over UpvalNames (slot = name index + 1), built once there are more than 8: a large
+      function's upvalue lookups used to compare every name (5% of compiling a 6.8 MB bundle) }
+    UpvalIndex: array of Integer;
+    { constants and ICs in use: the template's arrays grow by doubling during compilation (FinishFuncArrays trims
+      them), and ConstIndex (open addressing, slot = constant index + 1) finds a repeated constant }
+    NConsts, NICs: Integer;
+    ConstIndex: array of Integer;
     Loops: array of TLoopInfo;
     LoopCount: Integer;
     Tries: array of TFinallyInfo;
@@ -312,6 +319,8 @@ type
     CplSkip: Boolean;       { the next expression statement is EvalStrictPrefix's directive }
     ParamAwait: Boolean;    { compiling an arrow's parameters in a class static block: ArrowParameters[+Await] }
     ParamTDZ: TStringList;  { while parameter initializers compile: the parameters not yet initialized }
+    function FindUpvalName(const N: UnicodeString): Integer;
+    procedure AddUpvalName(const N: UnicodeString);
   end;
 
   TCompiler = class
@@ -480,6 +489,7 @@ type
     function IsDiscardable(E: TGocciaExpression): Boolean;
     function PureRead(E: TGocciaExpression): Boolean;
     function StableBase(E: TGocciaExpression): Boolean;
+    function NewICSlot: Integer;
     procedure BranchFalse(E: TGocciaExpression; var L: TJumpList);
     procedure BranchTrue(E: TGocciaExpression; var L: TJumpList);
     procedure LoadIdent(const N: UnicodeString; Dest: Integer);
@@ -535,6 +545,53 @@ var I: Integer;
 begin
   Result := 2166136261;
   for I := 1 to Length(N) do Result := (Result xor Ord(N[I])) * 16777619;
+end;
+
+function TFuncState.FindUpvalName(const N: UnicodeString): Integer;
+var I, Mask, H: Integer;
+begin
+  if Length(UpvalIndex) = 0 then
+  begin
+    for I := 0 to High(UpvalNames) do
+      if UpvalNames[I] = N then Exit(I);
+    Exit(-1);
+  end;
+  Mask := High(UpvalIndex);
+  H := Integer(NameHash(N) and Cardinal(Mask));
+  while UpvalIndex[H] <> 0 do
+  begin
+    if UpvalNames[UpvalIndex[H] - 1] = N then Exit(UpvalIndex[H] - 1);
+    H := (H + 1) and Mask;
+  end;
+  Result := -1;
+end;
+
+procedure TFuncState.AddUpvalName(const N: UnicodeString);
+var I, Mask, H, Cap, Count: Integer;
+begin
+  SetLength(UpvalNames, Length(UpvalNames) + 1);
+  UpvalNames[High(UpvalNames)] := N;
+  Count := Length(UpvalNames);
+  if Count <= 8 then Exit;
+  if Count * 2 > Length(UpvalIndex) then
+  begin
+    Cap := 32;
+    while Cap < Count * 4 do Cap := Cap * 2;
+    UpvalIndex := nil;
+    SetLength(UpvalIndex, Cap);
+    Mask := Cap - 1;
+    for I := 0 to Count - 1 do
+    begin
+      H := Integer(NameHash(UpvalNames[I]) and Cardinal(Mask));
+      while UpvalIndex[H] <> 0 do H := (H + 1) and Mask;
+      UpvalIndex[H] := I + 1;
+    end;
+    Exit;
+  end;
+  Mask := High(UpvalIndex);
+  H := Integer(NameHash(N) and Cardinal(Mask));
+  while UpvalIndex[H] <> 0 do H := (H + 1) and Mask;
+  UpvalIndex[H] := Count;
 end;
 
 function TScope.Find(const N: UnicodeString): Integer;
@@ -700,15 +757,66 @@ begin
   Result := FS.Tpl^.CodeLen;
 end;
 
+function ConstHash(V: TValue): Cardinal; inline;
+begin
+  Result := Cardinal(V xor (V shr 29) xor (V shr 47)) * 2654435761;
+end;
+
 function TCompiler.AddConst(V: TValue): Integer;
-var T: PFuncTemplate; I: Integer;
+var T: PFuncTemplate; I, Mask, H, Cap: Integer;
 begin
   T := FS.Tpl;
-  for I := 0 to High(T^.Consts) do
-    if T^.Consts[I] = V then Exit(I);
-  SetLength(T^.Consts, Length(T^.Consts) + 1);
-  T^.Consts[High(T^.Consts)] := V;
-  Result := High(T^.Consts);
+  if Length(FS.ConstIndex) = 0 then
+  begin
+    for I := 0 to FS.NConsts - 1 do
+      if T^.Consts[I] = V then Exit(I);
+  end
+  else
+  begin
+    Mask := High(FS.ConstIndex);
+    H := Integer(ConstHash(V) and Cardinal(Mask));
+    while FS.ConstIndex[H] <> 0 do
+    begin
+      if T^.Consts[FS.ConstIndex[H] - 1] = V then Exit(FS.ConstIndex[H] - 1);
+      H := (H + 1) and Mask;
+    end;
+  end;
+  if FS.NConsts >= Length(T^.Consts) then SetLength(T^.Consts, FS.NConsts * 2 + 8);
+  Result := FS.NConsts;
+  T^.Consts[Result] := V;
+  Inc(FS.NConsts);
+  if FS.NConsts <= 8 then Exit;
+  if FS.NConsts * 2 > Length(FS.ConstIndex) then
+  begin
+    Cap := 32;
+    while Cap < FS.NConsts * 4 do Cap := Cap * 2;
+    FS.ConstIndex := nil;
+    SetLength(FS.ConstIndex, Cap);
+    Mask := Cap - 1;
+    for I := 0 to FS.NConsts - 1 do
+    begin
+      H := Integer(ConstHash(T^.Consts[I]) and Cardinal(Mask));
+      while FS.ConstIndex[H] <> 0 do H := (H + 1) and Mask;
+      FS.ConstIndex[H] := I + 1;
+    end;
+    Exit;
+  end;
+  Mask := High(FS.ConstIndex);
+  H := Integer(ConstHash(V) and Cardinal(Mask));
+  while FS.ConstIndex[H] <> 0 do H := (H + 1) and Mask;
+  FS.ConstIndex[H] := FS.NConsts;
+end;
+
+{ a new IC in the current template (its array grows by doubling; FinishFuncArrays trims it) }
+function TCompiler.NewICSlot: Integer;
+var T: PFuncTemplate;
+begin
+  T := FS.Tpl;
+  if FS.NICs >= Length(T^.ICs) then SetLength(T^.ICs, FS.NICs * 2 + 8);
+  Result := FS.NICs;
+  Inc(FS.NICs);
+  FillChar(T^.ICs[Result], SizeOf(TPropIC), 0);
+  T^.ICs[Result].Slot := -1;
 end;
 
 function TCompiler.AtomConst(const S: UnicodeString): Integer;
@@ -717,14 +825,9 @@ begin
 end;
 
 function TCompiler.NewIC(const Key: UnicodeString): Integer;
-var T: PFuncTemplate;
 begin
-  T := FS.Tpl;
-  SetLength(T^.ICs, Length(T^.ICs) + 1);
-  Result := High(T^.ICs);
-  FillChar(T^.ICs[Result], SizeOf(TPropIC), 0);
-  T^.ICs[Result].Key := AtomOf(Key);
-  T^.ICs[Result].Slot := -1;
+  Result := NewICSlot;
+  FS.Tpl^.ICs[Result].Key := AtomOf(Key);
 end;
 
 { ---------------- registers and scopes ---------------- }
@@ -874,15 +977,14 @@ end;
 function TCompiler.ResolveUpval(F: TFuncState; const N: UnicodeString): Integer;
 var I, Reg, PIdx: Integer; T: PFuncTemplate;
 begin
-  for I := 0 to High(F.UpvalNames) do
-    if F.UpvalNames[I] = N then Exit(I);
+  I := F.FindUpvalName(N);
+  if I >= 0 then Exit(I);
   if F.Parent = nil then Exit(-1);
   T := F.Tpl;
   if ResolveLocal(F.Parent, N, Reg) then
   begin
     MarkCaptured(F.Parent, Reg);
-    SetLength(F.UpvalNames, Length(F.UpvalNames) + 1);
-    F.UpvalNames[High(F.UpvalNames)] := N;
+    F.AddUpvalName(N);
     SetLength(T^.Upvals, Length(T^.Upvals) + 1);
     T^.Upvals[High(T^.Upvals)].FromParentLocal := True;
     T^.Upvals[High(T^.Upvals)].Index := Reg;
@@ -890,8 +992,7 @@ begin
   end;
   PIdx := ResolveUpval(F.Parent, N);
   if PIdx < 0 then Exit(-1);
-  SetLength(F.UpvalNames, Length(F.UpvalNames) + 1);
-  F.UpvalNames[High(F.UpvalNames)] := N;
+  F.AddUpvalName(N);
   SetLength(T^.Upvals, Length(T^.Upvals) + 1);
   T^.Upvals[High(T^.Upvals)].FromParentLocal := False;
   T^.Upvals[High(T^.Upvals)].Index := PIdx;
@@ -1752,6 +1853,8 @@ begin
     Inc(T^.MaxRegs, 2);   { scratch for natives }
     { the unused placeholders (the prologue's included) are dropped: calls start at the first instruction }
     CompactNops(T, F.Relative);
+    SetLength(T^.Consts, F.NConsts);
+    SetLength(T^.ICs, F.NICs);
     SetLength(T^.Code, T^.CodeLen);
     SetLength(T^.Lines, T^.CodeLen);
     T^.EntryPC := 0;
@@ -2584,14 +2687,9 @@ begin
 end;
 
 function TCompiler.NewICKey(Key: PStr): Integer;
-var T: PFuncTemplate;
 begin
-  T := FS.Tpl;
-  SetLength(T^.ICs, Length(T^.ICs) + 1);
-  Result := High(T^.ICs);
-  FillChar(T^.ICs[Result], SizeOf(TPropIC), 0);
-  T^.ICs[Result].Key := Key;
-  T^.ICs[Result].Slot := -1;
+  Result := NewICSlot;
+  FS.Tpl^.ICs[Result].Key := Key;
 end;
 
 { 27.? DisposeResources of a using block: the helper (G2.Disposal) disposes the capability's resources in reverse
