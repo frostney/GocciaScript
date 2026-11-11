@@ -92,6 +92,8 @@ type
     ,opSetSuperB             { PutValue(that super reference, R[A]) }
     ,opHasGlobalRef          { R[A] := whether the global environment has a binding for ICs[C].Key (9.1.1.4.1
                                HasBinding: a strict assignment's reference, resolved before its value) }
+    ,opGetMethod             { a method call's callee and this: R[A + 1] := R[B], then R[A] := R[A + 1].ICs[C] (as
+                               opGetProp) }
   );
 
   PFuncTemplate = ^TFuncTemplate;

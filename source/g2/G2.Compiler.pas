@@ -4519,6 +4519,16 @@ begin
       if M.Computed then CompileSuperMember('', M.PropertyExpression, Base)
       else CompileSuperMember(M.PropertyName, nil, Base);
     end
+    else if not M.Computed and not M.Optional and
+       (((M.ObjectExpr is TGocciaIdentifierExpression) and PureRead(M.ObjectExpr)) or
+        ((M.ObjectExpr is TGocciaThisExpression) and not FS.IsArrow)) then
+    begin
+      { a receiver in a register of its own: one instruction copies it to this and reads the method }
+      if not ParenChain then ChainObject(M.ObjectExpr);
+      K := ExprAny(M.ObjectExpr);
+      ChainLink := False;
+      Emit(Ins(opGetMethod, Base, K, NewIC(M.PropertyName)));
+    end
     else
     begin
       if not ParenChain then ChainObject(M.ObjectExpr);

@@ -4385,7 +4385,7 @@ begin
     I := T^.Code[P];
     if ((I shr 8) and $FFFF) <> QWord(Reg) then Continue;
     case TOp(I and $FF) of
-      opGetProp, opGetLength, opGetGlobal: Exit(StrToUnicode(T^.ICs[I shr 40].Key));
+      opGetProp, opGetLength, opGetGlobal, opGetMethod: Exit(StrToUnicode(T^.ICs[I shr 40].Key));
       opGetSuper: if SarInt64(Int64(I), 40) >= 0 then Exit('super.' + StrToUnicode(T^.ICs[I shr 40].Key));
     end;
     Exit;
@@ -4855,8 +4855,8 @@ var
 
 procedure InitFastOps;
 const
-  Ops: array[0..71] of TOp = (opIterNext, opYield, opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
-    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opGetGlobal, opInstanceof, opSub,
+  Ops: array[0..72] of TOp = (opIterNext, opYield, opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+    opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opGetMethod, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opGetGlobal, opInstanceof, opSub,
     opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
     opJNGt, opJNGe, opJNSEq, opJSEq, opCall, opRet, opRetUndef, opToNum, opToNumeric, opEq, opNe, opTypeof, opDefField);
@@ -4939,7 +4939,7 @@ begin
 end;
 
 function FastLoop(Code: PQWord; PC: Integer; R, K: PValue; ICs: PPropIC; Fr: PFrame; StopFrame: Integer): Integer;
-label LBail;
+label LBail, LGetProp;
 var
   T: PFuncTemplate;
   Base, Argc, J: Integer;
@@ -5000,8 +5000,15 @@ begin
             U^.Value := V;
           end;
         end;
+      opGetMethod:
+        begin
+          { this := the receiver, then the method as opGetProp reads it (from the receiver's register) }
+          R[A + 1] := R[PWord(PByte(IP) - 5)^];
+          goto LGetProp;
+        end;
       opGetProp, opGetLength:
         begin
+LGetProp:
           VB := R[PWord(PByte(IP) - 5)^];
           if (VB and TAG_MASK) <> TAG_PTR then begin {$IFDEF G2_BAILSTATS}Inc(BailCounts[250]);{$ENDIF} goto LBail; end;
           O := PObj(PtrUInt(VB and PTR_MASK));
@@ -5435,7 +5442,7 @@ begin
           VA := R[PWord(PByte(IP) - 5)^];
           VB := R[I shr 40];
           { StrictEquals }
-          if VA = VB then Bool := not IsDouble(VA) or (DoubleOf(VA) = DoubleOf(VA))
+          if VA = VB then Bool := not IsDouble(VA) or (PDouble(@VA)^ = PDouble(@VA)^)
           else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
           else if ((VA and TAG_MASK) <> TAG_PTR) or ((VB and TAG_MASK) <> TAG_PTR) then
             Bool := False   { different, and not both numbers: a non-pointer equals only itself }
@@ -5563,7 +5570,7 @@ begin
           VA := R[A];
           VB := R[PWord(PByte(IP) - 5)^];
           { StrictEquals }
-          if VA = VB then Bool := not IsDouble(VA) or (DoubleOf(VA) = DoubleOf(VA))
+          if VA = VB then Bool := not IsDouble(VA) or (PDouble(@VA)^ = PDouble(@VA)^)
           else if IsNumber(VA) and IsNumber(VB) then Bool := NumOf(VA) = NumOf(VB)
           else if ((VA and TAG_MASK) <> TAG_PTR) or ((VB and TAG_MASK) <> TAG_PTR) then
             Bool := False   { different, and not both numbers: a non-pointer equals only itself }
@@ -6089,8 +6096,14 @@ LReload:
           else EvalHintMode := 0;
         end;
 
-      opGetProp, opGetLength:
+      opGetProp, opGetLength, opGetMethod:
         begin
+          if TOp(I and $FF) = opGetMethod then
+          begin
+            { this := the receiver; the rest is opGetProp's, reading the receiver from A + 1 }
+            R[A + 1] := R[(I shr 24) and $FFFF];
+            I := (I and $FFFFFF0000FFFF00) or (QWord(A + 1) shl 24) or QWord(Ord(opGetProp));
+          end;
           VB := R[(I shr 24) and $FFFF];
           IC := @Tpl^.ICs[I shr 40];
           if (VB and TAG_MASK) = TAG_PTR then
