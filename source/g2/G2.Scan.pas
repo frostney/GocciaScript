@@ -76,9 +76,11 @@ type
     { the current token }
     Kind: TTok;
     TokStart, TokEnd: Integer;   { 0-based offsets, TokEnd exclusive }
+    PrevEnd: Integer;            { the previous token's TokEnd }
     TokLine, TokCol: Integer;    { 1-based start line and column (UTF-16 units) }
     NewlineBefore: Boolean;      { a LineTerminator (or a multi-line comment holding one) precedes it }
     Escaped: Boolean;            { an identifier or keyword written with a \u escape }
+    EscapedReserved: TTok;       { an escaped identifier: the reserved word it spells, else tkIdent }
     Atom: PStr;                  { tkIdent, tkPrivateName (without '#'): the name; also set for keywords }
     Num: Double;                 { tkNumber }
     LegacyOctal: Boolean;        { a LegacyOctal / NonOctalDecimal literal, or a string with a legacy escape }
@@ -90,6 +92,9 @@ type
     procedure Next(Goal: TScanGoal);
     function Save: TScanState;
     procedure Restore(const S: TScanState);
+    { scans the current token again with another goal (a slash read as division that starts a regular
+      expression, a right brace that continues a template) }
+    procedure Rescan(Goal: TScanGoal);
     function BufText: UnicodeString;
     function TokText: UnicodeString;
     { the atom of an identifier or reserved word (reserved words get theirs on demand) }
@@ -256,6 +261,20 @@ begin
   FLine := S.Line;
   FLineStart := S.LineStart;
   FAtLineStart := S.AfterLine;
+end;
+
+procedure TScanner.Rescan(Goal: TScanGoal);
+var NL: Boolean; PE: Integer;
+begin
+  NL := NewlineBefore;
+  PE := PrevEnd;
+  FPos := TokStart;
+  FLine := TokLine;
+  FLineStart := TokStart - TokCol + 1;
+  FAtLineStart := False;
+  Next(Goal);
+  NewlineBefore := NL;
+  PrevEnd := PE;
 end;
 
 procedure TScanner.NewLine(Width: Integer);
@@ -526,7 +545,11 @@ begin
   begin
     { an escaped reserved word is an identifier token the parser rejects where a keyword or identifier is
       expected (§12.7.2 static semantics); Escaped tells it }
-    if Escaped then Kind := tkIdent;
+    if Escaped then
+    begin
+      EscapedReserved := Kind;
+      Kind := tkIdent;
+    end;
   end
   else Kind := tkIdent;
 end;
@@ -1011,8 +1034,10 @@ var C, C1: WideChar;
   end;
 
 begin
+  PrevEnd := TokEnd;
   NewlineBefore := False;
   Escaped := False;
+  EscapedReserved := tkIdent;
   Atom := nil;
   SkipTrivia;
   if (Goal = sgTemplateTail) and (FPos < FLen) and (FSrc[FPos] = '}') then
