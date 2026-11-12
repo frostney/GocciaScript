@@ -329,6 +329,9 @@ function NewAccessor(Getter, Setter: TValue): PAccessor;
 function GetSlot(O: PObj; I: Integer): TValue; inline;
 procedure SetSlot(O: PObj; I: Integer; V: TValue); inline;
 function AddProperty(O: PObj; Key: PStr; V: TValue; Flags: Byte): Integer;
+{ AddProperty's store once its new shape is known (NewShape: O's shape plus the property in its last slot, an
+  add transition an inline cache recorded): the overflow slots grown as needed; can collect }
+function AddPropertyTo(O: PObj; NewShape: PShape; V: TValue): Integer;
 function GetOwnSlot(O: PObj; Key: PStr): Integer; inline;
 procedure DeleteProperty(O: PObj; Key: PStr);
 procedure ChangeFlags(O: PObj; Key: PStr; Flags: Byte);
@@ -1813,10 +1816,14 @@ end;
 
 { adds a property that is known to be absent; may allocate (overflow growth) }
 function AddProperty(O: PObj; Key: PStr; V: TValue; Flags: Byte): Integer;
-var NewShape: PShape; Idx, NewCap, I: Integer; NO: PValueArray;
 begin
   if ((Flags and (pfAccessor or pfWritable)) <> pfWritable) and (O^.Hdr.Extra <> 0) then ProtoChanged;
-  NewShape := ShapeAdd(O^.Shape, Key, Flags);
+  Result := AddPropertyTo(O, ShapeAdd(O^.Shape, Key, Flags), V);
+end;
+
+function AddPropertyTo(O: PObj; NewShape: PShape; V: TValue): Integer;
+var Idx, NewCap, I: Integer; NO: PValueArray;
+begin
   Idx := NewShape^.Count - 1;
   if Idx >= O^.InlineCap then
   begin

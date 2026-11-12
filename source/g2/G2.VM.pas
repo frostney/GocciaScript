@@ -5118,6 +5118,70 @@ begin
   Result := 2;
 end;
 
+{ opSetProp past its cache (Execute's and FastLoop's): the store to the object or primitive in Reg^ (a register,
+  read again after the store, which can collect), then the cache of an own data store or an add transition }
+function XSetPropSlow(IC: PPropIC; Reg: PValue; V: TValue; Strict: Boolean): Boolean; noinline;
+var VA, VB: TValue; O: PObj; CI: Integer;
+begin
+  VA := Reg^;
+  if not IsObject(VA) then Exit(SetVS(VA, IC^.Key, V, Strict));
+  O := ObjOf(VA);
+  if (O^.Shape = IC^.Shape) and (IC^.NewShape <> nil) then
+  begin
+    { the cached add transition, its overflow slots full: grown here (the callers took every other case) }
+    AddPropertyTo(O, IC^.NewShape, V);
+    Exit(True);
+  end;
+  CI := ShapeLookup(O^.Shape, IC^.Key);
+  if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) and not O^.Shape^.IsDict then
+  begin
+    IC^.Shape := O^.Shape; IC^.Slot := CI; IC^.NewShape := nil;
+    SetSlot(O, CI, V);
+    Exit(True);
+  end;
+  if CI < 0 then
+  begin
+    IC^.Depth := ProtoEpoch;   { an add transition is cached only if no prototype changed meanwhile }
+    VB := MkPtr(O^.Shape);
+    if not SetOnObjectS(VA, IC^.Key, V, Strict) then Exit(False);
+    O := ObjOf(Reg^);
+    if (O^.OKind = okPlain) and (O^.Shape^.Parent = PShape(PtrOf(VB))) and (O^.Shape^.Count > 0) and
+       (O^.Shape^.Keys[O^.Shape^.Count - 1] = IC^.Key) and (IC^.Depth = ProtoEpoch) and not AddICUnsafe then
+    begin
+      { G2.Core ProtoChanged forgets it when a prototype gains a setter or read-only property }
+      IC^.Shape := PShape(PtrOf(VB));
+      IC^.NewShape := O^.Shape;
+      IC^.Slot := O^.Shape^.Count - 1;
+    end;
+    Exit(True);
+  end;
+  Result := SetOnObjectS(VA, IC^.Key, V, Strict);
+end;
+
+{ FastLoop's f.call(t, ...args) (R[A] the intrinsic call, R[A + 1] f, Argc counting t): 1 when FastLoop can run
+  it once the registers are shifted, a native f or a bytecode f that FastLoop's opCall takes (FastCall, not a
+  class constructor, room on the stacks, a this it needs not box); 0 for Execute }
+function XFastCallCheck(R: PValue; A: NativeInt; Argc: Integer): Integer; noinline;
+var VB, This: TValue; O: PObj; T: PFuncTemplate;
+begin
+  Result := 0;
+  VB := R[A + 1];
+  if not IsObject(VB) then Exit;
+  O := ObjOf(VB);
+  if O^.OKind = okNative then
+  begin
+    if O^.Native = FuncCallNative then Exit;
+    Exit(1);
+  end;
+  if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then Exit;
+  T := PFuncTemplate(O^.Native);
+  if not T^.FastCall then Exit;
+  if (Frames[FrameTop - 1].Base + A + 1 + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit;
+  if Argc = 0 then This := VUndefined else This := R[A + 2];
+  if not T^.IsStrict and not T^.IsArrow and not IsObject(This) and (This <> VUndefined) and (This <> VNull) then Exit;
+  Result := 1;
+end;
+
 { FastLoop's opNewObj (as Execute's): an object literal's object with room for N properties in R[A] }
 procedure XFastNewObj(R: PValue; A: NativeInt; N: Integer); noinline;
 begin
@@ -5171,7 +5235,7 @@ begin
 end;
 
 function FastLoop(Code: PQWord; PC: Integer; R, K: PValue; ICs: PPropIC; Fr: PFrame; StopFrame: Integer): Integer;
-label LBail, LGetProp;
+label LBail, LGetProp, LSetPropSlow;
 var
   T: PFuncTemplate;
   Base, Argc, J: Integer;
@@ -5374,21 +5438,21 @@ LGetProp:
         end;
       opSetProp:
         begin
-          { a cached own data store or add transition into an inline slot }
+          { a cached own data store or add transition into an inline slot; anything else XSetPropSlow's }
           VA := R[A];
-          if not IsObject(VA) then goto LBail;
-          O := ObjOf(VA);
           IC := @ICs[(PCardinal(PByte(IP) - 4)^ shr 8)];
-          if O^.Shape <> IC^.Shape then goto LBail;
+          if not IsObject(VA) then goto LSetPropSlow;
+          O := ObjOf(VA);
+          if O^.Shape <> IC^.Shape then goto LSetPropSlow;
           V := R[PWord(PByte(IP) - 5)^];
           if IC^.Slot >= O^.InlineCap then
           begin
             { a property in the overflow slots: an existing one, or an add into their spare capacity (growing them
-              allocates: Execute's) }
+              allocates: XSetPropSlow's) }
             E := O^.Overflow;
             if IC^.NewShape <> nil then
             begin
-              if (E = nil) or (IC^.Slot - O^.InlineCap >= Integer(E^.Cap)) then goto LBail;
+              if (E = nil) or (IC^.Slot - O^.InlineCap >= Integer(E^.Cap)) then goto LSetPropSlow;
               if Integer(E^.Len) <= IC^.Slot - O^.InlineCap then E^.Len := IC^.Slot - O^.InlineCap + 1;
               O^.Shape := IC^.NewShape;
             end;
@@ -5401,6 +5465,14 @@ LGetProp:
              (PByte(PtrUInt(V and PTR_MASK)) >= NS) and (PByte(PtrUInt(V and PTR_MASK)) < NL) then Remember(@O^.Hdr);
           if IC^.NewShape <> nil then O^.Shape := IC^.NewShape;
           O^.Slots[IC^.Slot] := V;
+          Continue;
+LSetPropSlow:
+          Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+          if not XSetPropSlow(IC, @R[A], R[PWord(PByte(IP) - 5)^], Fr^.Tpl^.IsStrict) then
+          begin
+            InjectThrow := True;
+            Exit(-1);
+          end;
         end;
       opDefField:
         begin
@@ -5844,10 +5916,40 @@ LGetProp:
           VA := R[A];
           if not IsObject(VA) or MultiRealmAny then goto LBail;
           O := ObjOf(VA);
-          if (O^.OKind = okNative) and (O^.Native <> FuncCallNative) then
+          Argc := PWord(PByte(IP) - 5)^;
+          if (PByte(IP)[-3] and 1) <> 0 then R[A + 1] := VUndefined;
+          if (O^.OKind = okNative) and (O^.Native = FuncCallNative) then
           begin
-            { a native function, called here as Execute's opCall does (f.call(t, ...) is Execute's: it unwraps it);
-              its throw goes to Execute with the frame's PC past this call }
+            { f.call(t, ...args) with the intrinsic call (as Execute's opCall): the registers shift down a place, f
+              the callee and t its this, f called here; checked before the shift (a bail after it would run the
+              call again on the shifted registers) }
+            if XFastCallCheck(R, A, Argc) = 0 then goto LBail;
+            VA := R[A + 1];
+            R[A] := VA;
+            if Argc = 0 then R[A + 1] := VUndefined
+            else
+            begin
+              for J := 0 to Argc - 1 do R[A + 1 + J] := R[A + 2 + J];
+              Dec(Argc);
+            end;
+            O := ObjOf(VA);
+            if O^.OKind = okNative then
+            begin
+              Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+              { XFastNative's operands: Argc, this already in R[A + 1] }
+              if not XFastNative(O, R, A, (PQWord(IP)[-1] and not ((QWord($FFFF) shl 24) or (QWord(1) shl 40))) or
+                (QWord(Argc) shl 24), Fr) then
+              begin
+                InjectThrow := True;
+                Exit(-1);
+              end;
+              Continue;
+            end;
+          end
+          else if O^.OKind = okNative then
+          begin
+            { a native function, called here as Execute's opCall does; its throw goes to Execute with the frame's
+              PC past this call }
             Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
             if not XFastNative(O, R, A, PQWord(IP)[-1], Fr) then
             begin
@@ -5861,8 +5963,6 @@ LGetProp:
           if not T^.FastCall then goto LBail;
           Base := Fr^.Base + A + 1;
           if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
-          Argc := PWord(PByte(IP) - 5)^;
-          if (PByte(IP)[-3] and 1) <> 0 then R[A + 1] := VUndefined;
           Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
           R := @VS[Base];
           if not T^.IsStrict and not T^.IsArrow then
@@ -6485,36 +6585,9 @@ LReload:
                 Continue;
               end;
             end;
-            { slow path, then try to cache an own data store or an add transition }
-            Fr^.PC := PC;
-            CI := ShapeLookup(O^.Shape, IC^.Key);
-            if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) and not O^.Shape^.IsDict then
-            begin
-              IC^.Shape := O^.Shape; IC^.Slot := CI; IC^.NewShape := nil;
-              SetSlot(O, CI, V);
-              Continue;
-            end;
-            if CI < 0 then
-            begin
-              IC^.Depth := ProtoEpoch;   { an add transition is cached only if no prototype changed meanwhile }
-              VB := MkPtr(O^.Shape);
-              if not SetOnObjectS(VA, IC^.Key, V, Tpl^.IsStrict) then goto LThrow;
-              O := ObjOf(R[A]);
-              if (O^.OKind = okPlain) and (O^.Shape^.Parent = PShape(PtrOf(VB))) and (O^.Shape^.Count > 0) and
-                 (O^.Shape^.Keys[O^.Shape^.Count - 1] = IC^.Key) and (IC^.Depth = ProtoEpoch) and not AddICUnsafe then
-              begin
-                { G2.Core ProtoChanged forgets it when a prototype gains a setter or read-only property }
-                IC^.Shape := PShape(PtrOf(VB));
-                IC^.NewShape := O^.Shape;
-                IC^.Slot := O^.Shape^.Count - 1;
-              end;
-              Continue;
-            end;
-            if not SetOnObjectS(VA, IC^.Key, V, Tpl^.IsStrict) then goto LThrow;
-            Continue;
           end;
           Fr^.PC := PC;
-          if not SetVS(VA, IC^.Key, V, Tpl^.IsStrict) then goto LThrow;
+          if not XSetPropSlow(IC, @R[A], V, Tpl^.IsStrict) then goto LThrow;
         end;
 
       opGetElem:
