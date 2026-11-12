@@ -268,6 +268,42 @@ begin
   PatchHere(Done);
 end;
 
+{ cvttsd2si R64, xmmX }
+procedure CvtTX64(R, X: Integer);
+begin JB($F2); JRex(True, R, 0, X); JB($0F); JB($2C); JModRR(R, X); end;
+
+{ cvttsd2si R32, xmmX }
+procedure CvtTX32(R, X: Integer);
+begin JB($F2); JRex(False, R, 0, X); JB($0F); JB($2C); JModRR(R, X); end;
+
+{ the value in V (rax or rcx) as an int32 in V's low half (QuickInt32: an int, or a double of magnitude below 2^53
+  truncated); anything else PC's slow path. Uses rdx, r8, xmm0-2 }
+procedure ToInt32Of(V, PC: Integer);
+var IsIntL, Done: Integer;
+begin
+  TagOf(jDX, V);
+  AluRI(7, jDX, TAG_INT_HI, False);
+  IsIntL := JccFwd(ccE);
+  MovRI(jR8, DOUBLE_LIMIT);
+  AluRR($39, V, jR8, True);
+  JccExit(ccAE, PC);
+  MovqXR(0, V);
+  MovRI(jR8, $4340000000000000);   { 2^53 }
+  MovqXR(1, jR8);
+  SseRR($66, $2E, 0, 1);
+  JccExit(ccAE, PC);
+  JccExit(ccP, PC);
+  MovRI(jR8, $C340000000000000);   { -2^53 }
+  MovqXR(2, jR8);
+  SseRR($66, $2E, 0, 2);
+  JccExit(ccBE, PC);
+  CvtTX64(V, 0);
+  Done := JmpFwd;
+  PatchHere(IsIntL);
+  PatchHere(Done);
+end;
+
+
 { xmm0 to a Number in rax (MkArith: the canonical NaN), stored in R[A] }
 procedure StoreArith(A: Integer);
 var L: Integer;
@@ -287,6 +323,30 @@ begin
   MovRI(jCX, TAG_INT);
   AluRR($09, jAX, jCX, True);
   MovMR(jBX, A * 8, jAX);
+end;
+
+{ xmm0 to a Number in R[A] as MkNumber makes it: an int when it is one (not -0), else the double }
+procedure StoreNumber(A: Integer);
+var NotInt, Done, L_NZ, L_NEG, L_END: Integer;
+begin
+  CvtTX32(jCX, 0);
+  Cvt32ToX(1, jCX);
+  SseRR($66, $2E, 0, 1);
+  NotInt := JccFwd(ccNE);
+  Done := JccFwd(ccP);
+  { 0: -0 stays a double }
+  AluRR($85, jCX, jCX, False);
+  L_NZ := JccFwd(ccNE);
+  MovqRX(jAX, 0);
+  AluRR($85, jAX, jAX, True);
+  L_NEG := JccFwd(ccS);
+  PatchHere(L_NZ);
+  JRex(False, jAX, 0, jCX); JB($8B); JModRR(jAX, jCX);   { mov eax, ecx }
+  StoreInt(A);
+  L_END := JmpFwd;
+  PatchHere(NotInt); PatchHere(Done); PatchHere(L_NEG);
+  StoreArith(A);
+  PatchHere(L_END);
 end;
 
 { the int test of the value in V: not an int goes to the returned forward jump }
@@ -347,6 +407,8 @@ procedure JitCompile(T: PFuncTemplate); forward;
 procedure XJitRet(Fr: PFrame; V: TValue);
 var CF: PFrame;
 begin
+  { a construction (XJitNew's frame, a base constructor): an object result, else this (10.2.2 steps 10-12) }
+  if (Fr^.Kind = 1) and not IsObject(V) then V := VStack[Fr^.Base];
   CloseUpvals(Fr^.Base);
   if not Fr^.Tpl^.NoHandlers then
     while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
@@ -362,13 +424,48 @@ end;
   -1 a throw pending (the frames above the caller gone). A callee whose code stops early is finished by a nested
   Execute; one that throws out of a nested call is handed to it with the throw. Fr^.PC is past the call. }
 function XJitCall(Fr: PFrame; A, Argc, ThisFlag: Integer): Integer;
-var VA, V: TValue; O: PObj; T: PFuncTemplate; Base, J, Res: Integer; NF: PFrame; R: PValue;
+var VA, VB, V, This: TValue; O, O2: PObj; T: PFuncTemplate; Base, J, Res: Integer; NF: PFrame; R: PValue;
 begin
   if MultiRealmAny or (JitDepth >= JIT_MAX_DEPTH) then Exit(1);
   R := @VStack[Fr^.Base];
   VA := R[A];
   if not IsObject(VA) then Exit(1);
   O := ObjOf(VA);
+  if (O^.OKind = okNative) and (O^.Native = FuncCallNative) then
+  begin
+    { f.call(t, ...args) (as FastLoop's opCall): the registers shift down a place, f the callee; every
+      condition that would leave the call to the interpreter is checked before the shift }
+    if ThisFlag <> 0 then R[A + 1] := VUndefined;
+    VB := R[A + 1];
+    if not IsObject(VB) then Exit(1);
+    O2 := ObjOf(VB);
+    if O2^.OKind = okNative then
+    begin
+      if O2^.Native = FuncCallNative then Exit(1);
+    end
+    else
+    begin
+      if (O2^.OKind <> okFunction) or ((O2^.OFlags and 1) <> 0) then Exit(1);
+      T := PFuncTemplate(O2^.Native);
+      if T^.IsAsync or T^.IsGenerator or (T^.JitState <> 1) or (PPtrUInt(T^.JitTable)[0] = 0) then Exit(1);
+      if (Fr^.Base + A + 1 + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+      if T^.FastCall and not T^.IsStrict and not T^.IsArrow then
+      begin
+        if Argc = 0 then This := VUndefined else This := R[A + 2];
+        if not IsObject(This) and (This <> VUndefined) and (This <> VNull) then Exit(1);
+      end;
+    end;
+    R[A] := VB;
+    if Argc = 0 then R[A + 1] := VUndefined
+    else
+    begin
+      for J := 0 to Argc - 1 do R[A + 1 + J] := R[A + 2 + J];
+      Dec(Argc);
+    end;
+    ThisFlag := 0;
+    VA := VB;
+    O := O2;
+  end;
   if (O^.OKind = okNative) and (O^.Native <> FuncCallNative) then
   begin
     { a native function, as FastLoop's opCall calls it }
@@ -377,7 +474,7 @@ begin
   end;
   if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then Exit(1);
   T := PFuncTemplate(O^.Native);
-  if not T^.FastCall then Exit(1);
+  if T^.IsAsync or T^.IsGenerator then Exit(1);
   if T^.JitState <> 1 then
   begin
     if T^.JitState = 0 then
@@ -391,34 +488,136 @@ begin
   Base := Fr^.Base + A + 1;
   if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
   if ThisFlag <> 0 then R[A + 1] := VUndefined;
-  if not T^.IsStrict and not T^.IsArrow then
+  if T^.FastCall then
   begin
-    { a primitive this is boxed by the interpreter's call }
-    V := R[A + 1];
-    if IsObject(V) then
-    else if (V = VUndefined) or (V = VNull) then R[A + 1] := GlobalObj
-    else Exit(1);
+    if not T^.IsStrict and not T^.IsArrow then
+    begin
+      { a primitive this is boxed by the interpreter's call }
+      V := R[A + 1];
+      if IsObject(V) then
+      else if (V = VUndefined) or (V = VNull) then R[A + 1] := GlobalObj
+      else Exit(1);
+    end;
+    if Argc < T^.NumParams then J := Argc + 1 else J := T^.NumParams + 1;
+    if J < T^.MaxRegs then FillUndef(@VStack[Base + J], T^.MaxRegs - J);
+    NF := @Frames[FrameTop];
+    NF^.Closure := VA;
+    NF^.NewTarget := VUndefined;
+    NF^.Tpl := T;
+    NF^.Base := Base;
+    NF^.PC := 0;
+    NF^.RetIdx := Base - 1;
+    NF^.Argc := Argc;
+    NF^.Kind := 0;
+    Inc(FrameTop);
+    StackTop := Base + T^.MaxRegs;
+  end
+  else
+  begin
+    { a rest parameter or an arguments object: PushBytecodeFrame's work (it can collect and throw) }
+    if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
+    if not PushBytecodeFrame(O, R[A + 1], @R[A + 2], Argc, Base - 1, 0, VUndefined) then Exit(-1);
+    NF := @Frames[FrameTop - 1];
+    if PPtrUInt(T^.JitTable)[NF^.PC] = 0 then
+    begin
+      { its first instruction is not the code's: the interpreter runs the frame }
+      if not Execute(FrameTop - 1, V) then
+      begin
+        StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+        Exit(-1);
+      end;
+      VStack[Base - 1] := V;
+      StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+      Exit(0);
+    end;
   end;
-  if Argc < T^.NumParams then J := Argc + 1 else J := T^.NumParams + 1;
-  if J < T^.MaxRegs then FillUndef(@VStack[Base + J], T^.MaxRegs - J);
-  NF := @Frames[FrameTop];
-  NF^.Closure := VA;
-  NF^.NewTarget := VUndefined;
-  NF^.Tpl := T;
-  NF^.Base := Base;
-  NF^.PC := 0;
-  NF^.RetIdx := Base - 1;
-  NF^.Argc := Argc;
-  NF^.Kind := 0;
-  Inc(FrameTop);
-  StackTop := Base + T^.MaxRegs;
   Inc(JitDepth);
-  Res := TJitFn(T^.Jit)(@VStack[Base], Pointer(PPtrUInt(T^.JitTable)[0]), NF, 1);
+  Res := TJitFn(T^.Jit)(@VStack[NF^.Base], Pointer(PPtrUInt(T^.JitTable)[NF^.PC]), NF, 1);
   Dec(JitDepth);
   {$IFDEF G2_JITSTATS}if Res >= 0 then Inc(JitNestedExits[T^.Code[Res] and $FF]);{$ENDIF}
   if Res = -2 then Exit(0);   { returned through XJitRet }
   {$IFDEF G2_JITSTATS}Inc(JitFallbacks);{$ENDIF}
   { the rest of the callee (from its PC, or its pending throw) in a nested Execute }
+  if Res = -1 then InjectThrow := True else NF^.PC := Res;
+  if not Execute(FrameTop - 1, V) then
+  begin
+    StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+    Exit(-1);
+  end;
+  VStack[Base - 1] := V;
+  StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+  Result := 0;
+end;
+
+{ compiled code's new (opNew A, Argc arguments at A + 2): a built-in constructor through Construct; a compiled base
+  constructor whose prototype caches hold (as XFastNew) with this allocated, its field initializer run first (as
+  Construct does) and its frame (Kind 1) run natively. 0 done (the object in R[A]), 1 the interpreter's (nothing
+  changed), -1 a throw pending. Fr^.PC is past the instruction. }
+function XJitNew(Fr: PFrame; A, Argc: Integer): Integer;
+var VA, V: TValue; O: PObj; T: PFuncTemplate; Base, J, Res: Integer; NF: PFrame; R: PValue;
+begin
+  if MultiRealmAny or (JitDepth >= JIT_MAX_DEPTH) then Exit(1);
+  R := @VStack[Fr^.Base];
+  VA := R[A];
+  if not IsObject(VA) then Exit(1);
+  O := ObjOf(VA);
+  Base := Fr^.Base + A + 1;
+  if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
+  if (O^.OKind = okNative) and ((O^.OFlags and 32) <> 0) then
+  begin
+    V := VUndefined;
+    if not Construct(VA, @R[A + 2], Argc, VA, V) then Exit(-1);
+    VStack[Base - 1] := V;
+    StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+    Exit(0);
+  end;
+  if O^.OKind <> okFunction then Exit(1);
+  T := PFuncTemplate(O^.Native);
+  if T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsAsync or T^.IsDerived or
+     not T^.FastCall then Exit(1);
+  if T^.JitState <> 1 then
+  begin
+    if T^.JitState = 0 then
+    begin
+      Inc(T^.JitCount);
+      if (T^.JitCount >= JIT_HOT) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
+    end;
+    if T^.JitState <> 1 then Exit(1);
+  end;
+  if (PPtrUInt(T^.JitTable)[0] = 0) or (Pointer(O^.Shape) <> T^.CtorFnShape) or (T^.CtorRootShape = nil) or
+     (PShape(T^.CtorRootShape)^.Proto <> GetSlot(O, T^.CtorProtoSlot)) then Exit(1);
+  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+  R[A + 1] := MkPtr(NewObject(PShape(T^.CtorRootShape), Max(4, T^.ExpectedProps), okPlain));
+  if Assigned(T^.FieldInit) then
+  begin
+    { 10.2.2 step 6.b: the instance fields before the body }
+    R := @VStack[Fr^.Base];
+    if not RunFieldInit(R[A], R[A + 1]) then
+    begin
+      StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+      Exit(-1);
+    end;
+  end;
+  R := @VStack[Fr^.Base];
+  VA := R[A];
+  if Argc < T^.NumParams then J := Argc + 1 else J := T^.NumParams + 1;
+  if J < T^.MaxRegs then FillUndef(@VStack[Base + J], T^.MaxRegs - J);
+  NF := @Frames[FrameTop];
+  NF^.Closure := VA;
+  NF^.NewTarget := VA;
+  NF^.Tpl := T;
+  NF^.Base := Base;
+  NF^.PC := 0;
+  NF^.RetIdx := Base - 1;
+  NF^.Argc := Argc;
+  NF^.Kind := 1;
+  Inc(FrameTop);
+  StackTop := Base + T^.MaxRegs;
+  Inc(JitDepth);
+  Res := TJitFn(T^.Jit)(@VStack[Base], Pointer(PPtrUInt(T^.JitTable)[0]), NF, 1);
+  Dec(JitDepth);
+  if Res = -2 then Exit(0);
+  {$IFDEF G2_JITSTATS}Inc(JitFallbacks);{$ENDIF}
   if Res = -1 then InjectThrow := True else NF^.PC := Res;
   if not Execute(FrameTop - 1, V) then
   begin
@@ -703,7 +902,7 @@ begin
   VA := R[(I shr 24) and $FFFF];
   { C is a register only for the two-operand instructions (the immediates' and unary ones' C is not) }
   case Op of
-    opAdd, opSub, opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl: VB := R[I shr 40];
+    opAdd, opSub, opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opPow: VB := R[I shr 40];
   else VB := VUndefined;
   end;
   case Op of
@@ -773,6 +972,13 @@ begin
         if not XBitImm(Op, VA, Int32(SarInt64(Int64(I), 40)), V) then Exit(False);
         VStack[Fr^.Base + A] := V;
       end;
+    opPow:
+      if IsNumber(VA) and IsNumber(VB) then R[A] := MkNumber(NumberExponentiate(NumOf(VA), NumOf(VB)))
+      else
+      begin
+        if not ArithSlow(opPow, VA, VB, V) then Exit(False);
+        VStack[Fr^.Base + A] := V;
+      end;
     opShr, opUShr:
       if QuickInt32(VA, CI) and QuickInt32(VB, NP) then
       begin
@@ -821,6 +1027,86 @@ begin
       begin
         if not ToNumberV(VA, D) then Exit(False);
         VStack[Fr^.Base + A] := MkNumber(D);
+      end;
+  end;
+  Result := True;
+end;
+
+function JH_Misc(Fr: PFrame; I: QWord): Boolean;
+var R: PValue; A, B, C, J: Integer; V: TValue; O: PObj; Bool: Boolean; Idx: Int64; Key: PStr; U: PUpval;
+begin
+  R := @VStack[Fr^.Base];
+  A := (I shr 8) and $FFFF;
+  B := (I shr 24) and $FFFF;
+  C := I shr 40;
+  case TOp(I and $FF) of
+    opInstanceof:
+      begin
+        if not InstanceOf(R[B], R[C], Bool) then Exit(False);
+        VStack[Fr^.Base + A] := MkBool(Bool);
+      end;
+    opIn:
+      begin
+        if not IsObject(R[C]) then
+          Exit(ThrowTypeError('Cannot use ''in'' operator to search for a key in a non-object'));
+        O := ObjOf(R[C]);
+        Bool := False;
+        if IndexFromValue(R[B], Idx) and (O^.Elements <> nil) and (Idx < O^.Elements^.Len) and
+           (O^.Elements^.Data[Idx] <> VHole) then Bool := True
+        else
+        begin
+          if not ToPropKey(R[B], Key) then Exit(False);
+          if not HasPropertyV(VStack[Fr^.Base + C], Key, Bool) then Exit(False);
+        end;
+        VStack[Fr^.Base + A] := MkBool(Bool);
+      end;
+    opNewArr:
+      begin
+        O := NewArray(B, Max(B, 4));
+        R := @VStack[Fr^.Base];
+        if (O^.Elements^.Hdr.Flags and cfOld) <> 0 then
+          for J := 0 to B - 1 do ValueArrayStore(O^.Elements, J, R[C + J])
+        else
+          for J := 0 to B - 1 do O^.Elements^.Data[J] := R[C + J];
+        R[A] := MkPtr(O);
+      end;
+    opArrPush: ArrayPush(ObjOf(R[A]), R[B]);
+    opArrHole: ArrayPush(ObjOf(R[A]), VHole);
+    opClose: CloseUpvals(Fr^.Base + A);
+    opToStr:
+      if not IsString(R[B]) then
+      begin
+        if not ToStringV(R[B], V) then Exit(False);
+        VStack[Fr^.Base + A] := V;
+      end
+      else R[A] := R[B];
+    opRegExp:
+      begin
+        if not Assigned(RegExpCreateHook) then Exit(ThrowError('SyntaxError', 'RegExp is not available'));
+        if not RegExpCreateHook(PStr(PtrOf(Fr^.Tpl^.Consts[B])), PStr(PtrOf(Fr^.Tpl^.Consts[C])), V) then Exit(False);
+        VStack[Fr^.Base + A] := V;
+      end;
+    opGetPriv:
+      begin
+        if not PrivateGet(R[B], PStr(PtrOf(R[C])), V) then Exit(False);
+        VStack[Fr^.Base + A] := V;
+      end;
+    opSetPriv: if not PrivateSet(R[A], PStr(PtrOf(R[C])), R[B]) then Exit(False);
+    opPrivIn:
+      begin
+        if not IsObject(R[B]) then
+          Exit(ThrowTypeError('Cannot use ''in'' operator to search for a private field in a non-object'));
+        if ShapeLookup(ObjOf(R[B])^.Shape, PStr(PtrOf(R[C]))) >= 0 then R[A] := VTrue else R[A] := VFalse;
+      end;
+    opSetUpv:
+      begin
+        U := PUpval(PtrOf(PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[B]));
+        if U^.StackIndex >= 0 then VStack[U^.StackIndex] := R[A]
+        else
+        begin
+          U^.Value := R[A];
+          WriteBarrier(@U^.Hdr, R[A]);
+        end;
       end;
   end;
   Result := True;
@@ -1035,9 +1321,7 @@ begin
     opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI:
       begin
         MovRM(jAX, jBX, B * 8);
-        TagOf(jDX, jAX);
-        AluRI(7, jDX, TAG_INT_HI, False);
-        JccExit(ccNE, PC);
+        ToInt32Of(jAX, PC);
         case Op of
           opBitAndI: AluRI(4, jAX, C, False);
           opBitOrI: AluRI(1, jAX, C, False);
@@ -1281,8 +1565,57 @@ begin
         JitInstr(T, PC, (I and $FFFFFF0000FFFF00) or (QWord(A + 1) shl 24) or QWord(Ord(opGetProp)));
       end;
     opSEq, opSNe, opEq, opNe, opLt, opLe, opGt, opGe: EmitHelper(@JH_Compare, PC, I);
-    opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opToNum, opToNumeric, opUShrI:
+    opShr, opUShr, opNeg, opBitNot, opToNum, opToNumeric, opUShrI, opPow:
       EmitHelper(@JH_Arith, PC, I);
+    opInstanceof, opIn, opNewArr, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn,
+    opSetUpv:
+      EmitHelper(@JH_Misc, PC, I);
+    opBitAnd, opBitOr, opBitXor, opShl:
+      begin
+        MovRM(jAX, jBX, B * 8);
+        ToInt32Of(jAX, PC);
+        MovRR(jR9, jAX);
+        MovRM(jCX, jBX, CU * 8);
+        ToInt32Of(jCX, PC);
+        MovRR(jAX, jR9);
+        case Op of
+          opBitAnd: AluRR($21, jAX, jCX, False);
+          opBitOr: AluRR($09, jAX, jCX, False);
+          opBitXor: AluRR($31, jAX, jCX, False);
+        else begin JB($D3); JB($E0); end;                  { shl eax, cl }
+        end;
+        JRex(False, jAX, 0, jAX); JB($8B); JModRR(jAX, jAX); { mov eax, eax }
+        StoreInt(A);
+      end;
+    opDiv:
+      begin
+        MovRM(jAX, jBX, B * 8);
+        MovRM(jCX, jBX, CU * 8);
+        ToXmm(0, jAX, PC);
+        ToXmm(1, jCX, PC);
+        SseRR($F2, $5E, 0, 1);                              { divsd }
+        StoreNumber(A);
+      end;
+    opMod:
+      begin
+        { a non-negative int by a positive one; the rest JH_Arith's }
+        MovRM(jAX, jBX, B * 8);
+        MovRM(jCX, jBX, CU * 8);
+        TagOf(jDX, jAX);
+        AluRI(7, jDX, TAG_INT_HI, False);
+        JccExit(ccNE, PC);
+        TagOf(jDX, jCX);
+        AluRI(7, jDX, TAG_INT_HI, False);
+        JccExit(ccNE, PC);
+        AluRR($85, jAX, jAX, False);
+        JccExit(ccS, PC);
+        AluRR($85, jCX, jCX, False);
+        JccExit(ccLE, PC);
+        AluRR($31, jDX, jDX, False);                        { xor edx, edx }
+        JB($F7); JB($F1);                                   { div ecx }
+        JRex(False, jAX, 0, jDX); JB($8B); JModRR(jAX, jDX);  { mov eax, edx }
+        StoreInt(A);
+      end;
     opJUndef, opJNotUndef, opJNullish, opJNotNullish:
       begin
         MovRM(jAX, jBX, A * 8);
@@ -1310,6 +1643,22 @@ begin
       end;
     opGetGlobal, opTypeofGlobal: EmitHelper(@JH_GetGlobal, PC, I);
     opClosure, opNewObj, opDefProp, opNot, opTypeof: EmitHelper(@JH_Alloc, PC, I);
+    opNew:
+      begin
+        { Fr^.PC past it, then XJitNew: 0 done, 1 the interpreter's, -1 a throw }
+        JRex(False, 0, 0, jR12); JB($C7); JMem(0, jR12, PtrInt(@PFrame(nil)^.PC)); JD(Cardinal(PC + 1));
+        MovRR(jDI, jR12);
+        MovRI(jSI, Cardinal(A));
+        MovRI(jDX, Cardinal(B));
+        CallAbs(@XJitNew);
+        AluRR($85, jAX, jAX, False);
+        L1 := JccFwd(ccE);
+        AluRI(7, jAX, 1, False);
+        JccExit(ccE, PC);
+        MovRI(jAX, $FFFFFFFF);
+        JmpEpilogue;
+        PatchHere(L1);
+      end;
     opRet, opRetUndef:
       begin
         { only in a frame XJitCall pushed (ebp 1): XJitRet, then -2 to it; otherwise the interpreter's }
@@ -1338,7 +1687,8 @@ begin
     opSetProp: JitSlow := @JH_SetProp;
     opGetElem: JitSlow := @JH_GetElem;
     opSetElem: JitSlow := @JH_SetElem;
-    opAdd, opSub, opMul, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI:
+    opAdd, opSub, opMul, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opBitAnd, opBitOr,
+    opBitXor, opShl, opDiv, opMod:
       JitSlow := @JH_Arith;
     opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq:
       begin
