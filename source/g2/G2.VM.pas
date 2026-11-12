@@ -3079,6 +3079,10 @@ begin
   SwitchRealm(R0);
 end;
 
+{$IFDEF CPUX86_64}
+function JitRunPushed(var Res: TValue; var Ok: Boolean): Boolean; forward;
+{$ENDIF}
+
 function CallValue(F, This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; Base, I, ArgBase: Integer; BArgs: PValueArray; N: Integer; Tmp: array[0..15] of TValue;
   P: PValue; SavedTop: Integer;
@@ -3154,6 +3158,10 @@ begin
         Result := True;
       end
       else
+      {$IFDEF CPUX86_64}
+      { the callee's compiled code, run natively when it has some (a callback from a native) }
+      if not JitRunPushed(Res, Result) then
+      {$ENDIF}
         Result := Execute(FrameTop - 1, Res);
       StackTop := SavedTop;
     end;
