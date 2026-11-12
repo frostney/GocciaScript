@@ -8479,6 +8479,7 @@ initialization
 {$IFDEF G2_JITSTATS}
 finalization
   WriteLn(ErrOutput, 'jitentries ', JitEntries);
+  WriteLn(ErrOutput, 'jitfallbacks ', JitFallbacks);
   for FastOpI := 0 to 255 do
   begin
     if JitExits[FastOpI] > 0 then WriteLn(ErrOutput, 'jitexit ', FastOpI, ' ', JitExits[FastOpI]);
