@@ -4917,6 +4917,84 @@ begin
   Result := PushBytecodeFrame(ObjOf(V), VStack[Frames[FrameTop - 1].Base], @VStack[J + 1], 0, J, 0, VUndefined);
 end;
 
+{ 13.3.7.1 SuperCall in the running frame (A its register, the arguments at A + 2, Argc of them) with a bytecode
+  parent VA: the parent's [[Construct]] (10.2.2) as Construct's, its frame pushed as Kind 5 instead of run in a
+  nested Execute (this from new.target's prototype, unbound for a derived parent; the parent's field
+  initializer's frame above it); the Kind 5 return binds this (XSuperReturn). 1 pushed, 0 for Construct (a
+  constructor it rejects), -1 a throw pending (from the parent's frame when it was pushed) }
+function XSuperPush(VA: TValue; A, Argc: Integer): Integer; noinline;
+var Fr: PFrame; T: PFuncTemplate; Proto, NT, This: TValue; ThisO: PObj; Base: Integer;
+begin
+  Fr := @Frames[FrameTop - 1];
+  T := PFuncTemplate(ObjOf(VA)^.Native);
+  if T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsAsync then Exit(0);
+  NT := Fr^.NewTarget;
+  Base := Fr^.Base + A + 1;
+  if T^.IsDerived then This := VHole
+  else
+  begin
+    PushRoot(VA); PushRoot(NT);
+    if not PrototypeForConstruct(NT, Proto) then begin PopRoots(2); Exit(-1); end;
+    if not IsObject(Proto) and not DefaultConstructProto(RootAt(TempTop - 2), RootAt(TempTop - 1), Proto) then
+    begin
+      PopRoots(2);
+      Exit(-1);
+    end;
+    PushRoot(Proto);
+    ThisO := NewObject(RootShapeFor(RootAt(TempTop - 1)), Max(4, T^.ExpectedProps), okPlain);
+    VA := RootAt(TempTop - 3); NT := RootAt(TempTop - 2);
+    PopRoots(3);
+    This := MkPtr(ThisO);
+  end;
+  VStack[Base] := This;
+  if not PushBytecodeFrame(ObjOf(VA), This, @VStack[Base + 1], Argc, Base - 1, 5, NT) then Exit(-1);
+  { the frame holds the parent: read it there (pushing the frame can collect) }
+  if not T^.IsDerived and Assigned(T^.FieldInit) and not XPushFieldInit(Frames[FrameTop - 1].Closure) then Exit(-1);
+  Result := 1;
+end;
+
+{ a Kind 5 frame (XSuperPush's) returned V, the parent's constructed object; FrameTop is past it, Fr its record:
+  13.3.7.1 SuperCall steps 7-11 in the frame that called super, BindThisValue (a second super() throws), the
+  result in the call's register, then that constructor's field initializers (as RunFieldInit) }
+function XSuperReturn(Fr: PFrame; V: TValue): Boolean; noinline;
+var CF: PFrame;
+begin
+  CF := @Frames[FrameTop - 1];
+  if VStack[CF^.Base] <> VHole then Exit(ThrowError('ReferenceError', 'Super constructor may only be called once'));
+  VStack[CF^.Base] := V;
+  VStack[Fr^.RetIdx] := V;
+  Result := XPushFieldInit(CF^.Closure);
+end;
+
+{ FastLoop's opSuperCall (A its register, Argc arguments at A + 2, C 1 when the super constructor was read
+  into A + 1 before them): XSuperPush's result for a bytecode parent, 0 (Execute's) for anything else }
+function XFastSuper(A, Argc, C: Integer; Spread: Boolean): Integer; noinline;
+var Fr: PFrame; VA, V: TValue; T: PFuncTemplate; O: PObj; J: Integer;
+begin
+  if MultiRealmAny then Exit(0);
+  Fr := @Frames[FrameTop - 1];
+  if C = 1 then VA := VStack[Fr^.Base + A + 1] else VA := ObjOf(Fr^.Closure)^.Shape^.Proto;
+  if not IsObject(VA) or (ObjOf(VA)^.OKind <> okFunction) or not IsConstructorV(VA) then Exit(0);
+  T := PFuncTemplate(ObjOf(VA)^.Native);
+  if T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsAsync then Exit(0);
+  if Spread then
+  begin
+    { super(...args): the array in A + 2 spread into the registers from there (as Execute), once nothing can
+      send the call back to Execute }
+    O := ObjOf(VStack[Fr^.Base + A + 2]);
+    Argc := ArrayLen(O);
+    if Fr^.Base + A + 2 + Argc + 4 >= STACK_MAX then Exit(0);
+    for J := 0 to Argc - 1 do
+    begin
+      V := O^.Elements^.Data[J];
+      if V = VHole then V := VUndefined;
+      VStack[Fr^.Base + A + 2 + J] := V;
+    end;
+  end;
+  if StackTop < Fr^.Base + A + 2 + Argc then StackTop := Fr^.Base + A + 2 + Argc;
+  Result := XSuperPush(VA, A, Argc);
+end;
+
 { the slow path of the immediate adds: opAddI is binary + (a string concatenates, a BigInt throws), opSubI binary
   - (C is the negated constant), opIncI ++ and -- (ToNumeric, then a BigInt steps by C) }
 function XAddImmSlow(Op: TOp; VA: TValue; CI: Integer; var Res: TValue): Boolean; noinline;
@@ -4945,7 +5023,7 @@ var
 
 procedure InitFastOps;
 const
-  Ops: array[0..76] of TOp = (opClosure, opNew, opNewObj, opDefProp, opIterNext, opYield, opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+  Ops: array[0..78] of TOp = (opSuperCall, opSuperCallV, opClosure, opNew, opNewObj, opDefProp, opIterNext, opYield, opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
     opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opGetMethod, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opGetGlobal, opInstanceof, opSub,
     opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
@@ -5090,17 +5168,36 @@ begin
   end;
   if O^.OKind <> okFunction then Exit(0);
   T := PFuncTemplate(O^.Native);
-  if not T^.FastCall or T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsDerived or
-     (Pointer(O^.Shape) <> T^.CtorFnShape) or (T^.CtorRootShape = nil) or
-     (PShape(T^.CtorRootShape)^.Proto <> GetSlot(O, T^.CtorProtoSlot)) then Exit(0);
+  if T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsAsync then Exit(0);
   Fr := @Frames[FrameTop - 1];
   Base := Fr^.Base + A + 1;
-  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(0);
+  if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
+  if T^.IsDerived then
+  begin
+    { this is bound by super() }
+    R[A + 1] := VHole;
+    if not PushBytecodeFrame(O, VHole, @R[A + 2], Argc, Base - 1, 1, VA) then Exit(-1);
+    Exit(2);
+  end;
+  if (Pointer(O^.Shape) <> T^.CtorFnShape) or (T^.CtorRootShape = nil) or
+     (PShape(T^.CtorRootShape)^.Proto <> GetSlot(O, T^.CtorProtoSlot)) then Exit(0);
   { the arguments are roots while the new object is allocated (a collection can move the callee: read again
     from its register) }
-  if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
   R[A + 1] := MkPtr(NewObject(PShape(T^.CtorRootShape), Max(4, T^.ExpectedProps), okPlain));
   VA := R[A];
+  if not T^.FastCall then
+  begin
+    { a rest parameter, an arguments object, not compiled yet: PushBytecodeFrame's work }
+    if not PushBytecodeFrame(ObjOf(VA), R[A + 1], @R[A + 2], Argc, Base - 1, 1, VA) then Exit(-1);
+    if Assigned(T^.FieldInit) and not XPushFieldInit(Frames[FrameTop - 1].Closure) then Exit(-1);
+    Exit(2);
+  end;
+  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
+  begin
+    { PushBytecodeFrame's RangeError }
+    if not PushBytecodeFrame(ObjOf(VA), R[A + 1], @R[A + 2], Argc, Base - 1, 1, VA) then Exit(-1);
+    Exit(2);
+  end;
   if Argc < T^.NumParams then J := Argc + 1 else J := T^.NumParams + 1;
   if J < T^.MaxRegs then FillUndef(@VStack[Base + J], T^.MaxRegs - J);
   Inc(Fr);
@@ -6000,6 +6097,26 @@ LSetPropSlow:
           ICs := T^.ICBase;
           Changed := True;
         end;
+      opSuperCall, opSuperCallV:
+        begin
+          { 13.3.7.1 SuperCall with a bytecode parent (XFastSuper): its frame pushed as Kind 5, or Execute's }
+          Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+          J := XFastSuper(A, PWord(PByte(IP) - 5)^, PCardinal(PByte(IP) - 4)^ shr 8, TOp(PByte(IP)[-8]) = opSuperCallV);
+          if J = 0 then goto LBail;
+          if J < 0 then
+          begin
+            InjectThrow := True;
+            Exit(-1);
+          end;
+          Fr := @Frames[FrameTop - 1];
+          T := Fr^.Tpl;
+          R := @VS[Fr^.Base];
+          Code := @T^.Code[0];
+          IP := @Code[Fr^.PC];
+          K := T^.KBase;
+          ICs := T^.ICBase;
+          Changed := True;
+        end;
       opNew:
         begin
           { 10.2.2 [[Construct]] (XFastNew): a frame pushed, the result of a built-in constructor in R[A], or Execute's }
@@ -6090,31 +6207,36 @@ LSetPropSlow:
         begin
           { a call's or a construction's return to a bytecode caller inside this Execute }
           if (FrameTop - 1 = StopFrame) or MultiRealmAny then goto LBail;
-          if Fr^.Kind = 4 then
-          begin
-            { a for-of's generator completes (as Execute): done, its consumer's loop ends }
-            XGenInlineReturn(Fr);
-            Fr := @Frames[FrameTop - 1];
-            T := Fr^.Tpl;
-            StackTop := Fr^.Base + T^.MaxRegs;
-            R := @VS[Fr^.Base];
-            Code := @T^.Code[0];
-            IP := @Code[Fr^.PC];
-            K := T^.KBase;
-            ICs := T^.ICBase;
-            Changed := True;
-            Continue;
-          end;
-          if Fr^.Kind > 1 then goto LBail;
           if TOp(PByte(IP)[-8]) = opRet then V := R[A] else V := VUndefined;
-          if (Fr^.Kind = 1) and not IsObject(V) then
+          if Fr^.Kind <> 0 then
           begin
-            { 10.2.2 [[Construct]] steps 10-12; a derived constructor's checks are Execute's }
-            T := Fr^.Tpl;
-            if T^.IsDerived and T^.IsClassCtor then goto LBail;
-            V := R[0];
-            if IsObject(V) and (T^.ExpectedProps < ObjOf(V)^.Shape^.Count) then
-              if ObjOf(V)^.Shape^.Count < 64 then T^.ExpectedProps := ObjOf(V)^.Shape^.Count else T^.ExpectedProps := 64;
+            if Fr^.Kind = 4 then
+            begin
+              { a for-of's generator completes (as Execute): done, its consumer's loop ends }
+              XGenInlineReturn(Fr);
+              Fr := @Frames[FrameTop - 1];
+              T := Fr^.Tpl;
+              StackTop := Fr^.Base + T^.MaxRegs;
+              R := @VS[Fr^.Base];
+              Code := @T^.Code[0];
+              IP := @Code[Fr^.PC];
+              K := T^.KBase;
+              ICs := T^.ICBase;
+              Changed := True;
+              Continue;
+            end;
+            if (Fr^.Kind <> 1) and (Fr^.Kind <> 5) then goto LBail;
+            if not IsObject(V) then
+            begin
+              { 10.2.2 [[Construct]] steps 10-12 (Kind 1, and Kind 5's super() construction); a derived
+                constructor's checks are Execute's }
+              T := Fr^.Tpl;
+              { a derived constructor: undefined with this bound returns this; its throws are Execute's }
+              if T^.IsDerived and T^.IsClassCtor and ((V <> VUndefined) or (R[0] = VHole)) then goto LBail;
+              V := R[0];
+              if IsObject(V) and (T^.ExpectedProps < ObjOf(V)^.Shape^.Count) then
+                if ObjOf(V)^.Shape^.Count < 64 then T^.ExpectedProps := ObjOf(V)^.Shape^.Count else T^.ExpectedProps := 64;
+            end;
           end;
           { CloseUpvals, once none of the frame's upvalues needs the write barrier to remember it }
           J := OpenCount;
@@ -6138,8 +6260,22 @@ LSetPropSlow:
           if not Fr^.Tpl^.NoHandlers then
             while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
           Dec(FrameTop);
-          VS[Fr^.RetIdx] := V;
-          Dec(Fr);   { the caller's frame: Frames never moves (allocated once, FRAME_MAX long) }
+          if Fr^.Kind = 5 then
+          begin
+            { super()'s construction: this bound in the frame that called it, its field initializers' frame
+              above it (XSuperReturn); a second super() throws from that frame }
+            if not XSuperReturn(Fr, V) then
+            begin
+              InjectThrow := True;
+              Exit(-1);
+            end;
+            Fr := @Frames[FrameTop - 1];
+          end
+          else
+          begin
+            VS[Fr^.RetIdx] := V;
+            Dec(Fr);   { the caller's frame: Frames never moves (allocated once, FRAME_MAX long) }
+          end;
           T := Fr^.Tpl;
           StackTop := Fr^.Base + T^.MaxRegs;
           Code := @T^.Code[0];
@@ -7235,6 +7371,13 @@ LReload:
           if (I shr 40) = 1 then VA := R[A + 1] else VA := ObjOf(Fr^.Closure)^.Shape^.Proto;
           if not IsConstructorV(VA) then begin ThrowTypeError('Super constructor is not a constructor'); goto LThrow; end;
           StackTop := Max(StackTop, Fr^.Base + A + 2 + Argc);
+          if (ObjOf(VA)^.OKind = okFunction) and not MultiRealmAny then
+          begin
+            { a bytecode parent's frame, in this Execute (XSuperPush; its return binds this) }
+            J := XSuperPush(VA, A, Argc);
+            if J < 0 then goto LThrow;
+            if J > 0 then goto LReload;
+          end;
           if not Construct(VA, @R[A + 2], Argc, Fr^.NewTarget, V) then goto LThrow;
           StackTop := Fr^.Base + Tpl^.MaxRegs;
           { BindThisValue }
@@ -7256,7 +7399,7 @@ LReload:
             goto LReload;
           end;
           if TOp(I and $FF) = opRet then V := R[A] else V := VUndefined;
-          if (Fr^.Kind = 1) and not IsObject(V) then
+          if ((Fr^.Kind = 1) or (Fr^.Kind = 5)) and not IsObject(V) then
           begin
             { 10.2.2 [[Construct]] steps 10-12 }
             if Tpl^.IsDerived and Tpl^.IsClassCtor then
@@ -7284,6 +7427,12 @@ LReload:
           begin
             Res := V;
             begin Result := True; goto LDone; end;
+          end;
+          if Fr^.Kind = 5 then
+          begin
+            { the parent's construction for super(): this bound in the frame that called it }
+            if not XSuperReturn(Fr, V) then InjectThrow := True;
+            goto LReload;
           end;
           if Fr^.Kind <> 2 then VStack[Fr^.RetIdx] := V;
           goto LReload;
