@@ -461,6 +461,10 @@ begin
       AMultiLine)
   else if ANested and (AValue is TGocciaStringLiteralValue) then
     Result := QuoteString(AValue.ToStringLiteral.Value)
+  // console output keeps the sign of zero (ToString(-0) is "0"), as Node's and QuickJS's consoles do
+  else if AOptions.Console and (AValue is TGocciaNumberLiteralValue) and
+          TGocciaNumberLiteralValue(AValue).IsNegativeZero then
+    Result := '-0'
   else
     Result := AValue.ToStringLiteral.Value;
 end;

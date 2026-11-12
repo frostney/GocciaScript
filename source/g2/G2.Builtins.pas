@@ -210,8 +210,14 @@ begin
   Line := '';
   for I := 1 to Argc do
   begin
-    if not ToStringV(Args[I], S) then Exit(False);
     if I > 1 then Line := Line + ' ';
+    { the sign of zero, which ToString drops, as Node's and QuickJS's consoles show it }
+    if Args[I] = QWord($8000000000000000) then
+    begin
+      Line := Line + '-0';
+      Continue;
+    end;
+    if not ToStringV(Args[I], S) then Exit(False);
     Line := Line + StrToUnicode(StrOf(S));
   end;
   if Assigned(ConsoleSink) then ConsoleSink(Line) else WriteLn(UTF8Encode(Line));
