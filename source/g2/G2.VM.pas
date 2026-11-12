@@ -6218,6 +6218,15 @@ LSetPropSlow:
             K := T^.KBase;
             ICs := T^.ICBase;
             Changed := True;
+            { the generator's compiled code from its resumption }
+            {$IFDEF CPUX86_64}
+            if (JitEnabled = 1) and (T^.JitState <> 2) then
+            begin
+              CI := XJitRun(Fr, Fr^.PC);
+              if CI < 0 then begin InjectThrow := True; Exit(-1); end;
+              IP := @Code[CI];
+            end;
+            {$ENDIF}
             Continue;
           end;
           goto LBail;
@@ -6241,6 +6250,15 @@ LSetPropSlow:
           K := T^.KBase;
           ICs := T^.ICBase;
           Changed := True;
+          { the consumer's compiled code past its opIterNext }
+          {$IFDEF CPUX86_64}
+          if (JitEnabled = 1) and (T^.JitState = 1) then
+          begin
+            CI := XJitRun(Fr, Fr^.PC);
+            if CI < 0 then begin InjectThrow := True; Exit(-1); end;
+            IP := @Code[CI];
+          end;
+          {$ENDIF}
           Continue;
         end;
       opRet, opRetUndef:
@@ -6263,6 +6281,14 @@ LSetPropSlow:
               K := T^.KBase;
               ICs := T^.ICBase;
               Changed := True;
+              {$IFDEF CPUX86_64}
+              if (JitEnabled = 1) and (T^.JitState = 1) then
+              begin
+                CI := XJitRun(Fr, Fr^.PC);
+                if CI < 0 then begin InjectThrow := True; Exit(-1); end;
+                IP := @Code[CI];
+              end;
+              {$ENDIF}
               Continue;
             end;
             if (Fr^.Kind <> 1) and (Fr^.Kind <> 5) then goto LBail;

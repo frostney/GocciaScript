@@ -31,6 +31,7 @@ const
 var
   JitEnabled: Integer = -1;        { -1 not read yet (G2_JIT), 0 off, 1 on }
   JitBuf: array of Byte;           { the code being emitted }
+  JitCap: Integer = 0;             { JitGrow's limit: past it the next JB, JD or JQ grows JitBuf }
   JitLen: Integer;
   JitFixes: array of TJitFix;
   JitFixCount: Integer;
@@ -53,21 +54,32 @@ var
   JitSlowList: array of Integer;
   JitSlowCount: Integer;
 
+{ JitBuf's room past JitLen: at least 8 bytes, so one check covers a dword or a qword }
+procedure JitGrow; noinline;
+begin
+  SetLength(JitBuf, JitLen * 2 + 4096);
+  JitCap := Length(JitBuf) - 8;
+end;
+
 procedure JB(X: Byte); inline;
 begin
-  if JitLen >= Length(JitBuf) then SetLength(JitBuf, JitLen * 2 + 4096);
+  if JitLen >= JitCap then JitGrow;
   JitBuf[JitLen] := X;
   Inc(JitLen);
 end;
 
-procedure JD(X: Cardinal);
+procedure JD(X: Cardinal); inline;
 begin
-  JB(X and $FF); JB((X shr 8) and $FF); JB((X shr 16) and $FF); JB(X shr 24);
+  if JitLen >= JitCap then JitGrow;
+  PCardinal(@JitBuf[JitLen])^ := X;
+  Inc(JitLen, 4);
 end;
 
 procedure JQ(X: QWord);
 begin
-  JD(Cardinal(X and $FFFFFFFF)); JD(Cardinal(X shr 32));
+  if JitLen >= JitCap then JitGrow;
+  PQWord(@JitBuf[JitLen])^ := X;
+  Inc(JitLen, 8);
 end;
 
 { a REX prefix when W or a register past r7 needs one }
@@ -611,6 +623,7 @@ begin
   if (JitEnabled <> 1) or MultiRealmAny or (JitDepth >= JIT_MAX_DEPTH) then Exit(False);
   NF := @Frames[FrameTop - 1];
   T := NF^.Tpl;
+  if T^.IsGenerator then Exit(False);
   if T^.JitState <> 1 then
   begin
     if T^.JitState = 0 then
@@ -800,6 +813,55 @@ begin
   Result := XSetPropSlow(@Fr^.Tpl^.ICs[I shr 40], @R[A], R[(I shr 24) and $FFFF], Fr^.Tpl^.IsStrict);
 end;
 
+{ FastLoop's typed-array element read and write (an ordinary buffer, the view's length, a kind done without a
+  call): False leaves it to the general path }
+function JitTAGet(O: PObj; CI: Integer; var V: TValue): Boolean; inline;
+var P: PByte;
+begin
+  Result := False;
+  if (CI < 0) or ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached)) <> 0) or
+     (CI >= Int32(UInt32(O^.Aux2))) then Exit;
+  P := @PBytes(PtrOf(ObjOf(O^.Aux1)^.Aux1))^.Data[0] + O^.Pad;
+  case O^.OFlags shr 4 of
+    taInt8: V := MkInt(PShortInt(P)[CI]);
+    taUint8, taUint8C: V := MkInt(P[CI]);
+    taInt16: V := MkInt(PSmallInt(P)[CI]);
+    taUint16: V := MkInt(PWord(P)[CI]);
+    taInt32: V := MkInt(PLongInt(P)[CI]);
+    taUint32: V := MkNumber(PLongWord(P)[CI]);
+    taFloat32: V := MkNumber(PSingle(P)[CI]);
+    taFloat64: V := MkNumber(PDouble(P)[CI]);
+  else Exit;
+  end;
+  Result := True;
+end;
+
+function JitTASet(O: PObj; CI: Integer; V: TValue): Boolean; inline;
+var P: PByte;
+begin
+  Result := False;
+  if (CI < 0) or ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached or bfImmutable)) <> 0) or
+     (CI >= Int32(UInt32(O^.Aux2))) then Exit;
+  P := @PBytes(PtrOf(ObjOf(O^.Aux1)^.Aux1))^.Data[0] + O^.Pad;
+  if IsInt(V) then
+    case O^.OFlags shr 4 of
+      taInt8, taUint8: P[CI] := Byte(IntOf(V));
+      taInt16, taUint16: PWord(P)[CI] := Word(IntOf(V));
+      taInt32, taUint32: PLongWord(P)[CI] := LongWord(IntOf(V));
+      taFloat32: PSingle(P)[CI] := IntOf(V);
+      taFloat64: PDouble(P)[CI] := IntOf(V);
+    else Exit;
+    end
+  else if IsDouble(V) then
+    case O^.OFlags shr 4 of
+      taFloat32: PSingle(P)[CI] := DoubleOf(V);
+      taFloat64: PDouble(P)[CI] := DoubleOf(V);
+    else Exit;
+    end
+  else Exit;
+  Result := True;
+end;
+
 function JH_GetElem(Fr: PFrame; I: QWord): Boolean;
 var R: PValue; A, CI: Integer; VA, VB, V: TValue; O: PObj; E: PValueArray;
 begin
@@ -817,9 +879,9 @@ begin
       R[A] := E^.Data[CI];
       Exit(True);
     end;
-    if (O^.OKind = okTypedArray) and (CI >= 0) and (CI < TALength(O)) then
+    if (O^.OKind = okTypedArray) and JitTAGet(O, CI, V) then
     begin
-      R[A] := TAGet(O, CI);
+      R[A] := V;
       Exit(True);
     end;
   end;
@@ -855,12 +917,7 @@ begin
       E^.Len := CI + 1;
       Exit(True);
     end;
-    if (O^.OKind = okTypedArray) and (CI >= 0) and (CI < TALength(O)) and not TAIsBig(O) and
-       not ViewImmutable(O) then
-    begin
-      if IsInt(V) then begin TASetInt(O, CI, IntOf(V)); Exit(True); end;
-      if IsDouble(V) then begin TASet(O, CI, DoubleOf(V)); Exit(True); end;
-    end;
+    if (O^.OKind = okTypedArray) and JitTASet(O, CI, V) then Exit(True);
   end;
   Result := SetElemVS(VA, VB, V, Fr^.Tpl^.IsStrict);
 end;
@@ -1141,7 +1198,7 @@ begin
 end;
 
 function JH_Misc(Fr: PFrame; I: QWord): Boolean;
-var R: PValue; A, B, C, J: Integer; V: TValue; O: PObj; Bool: Boolean; Idx: Int64; Key: PStr; U: PUpval;
+var R: PValue; A, B, C, J: Integer; V, VB: TValue; O: PObj; Bool: Boolean; Idx: Int64; Key: PStr; U: PUpval;
 begin
   R := @VStack[Fr^.Base];
   A := (I shr 8) and $FFFF;
@@ -1150,6 +1207,25 @@ begin
   case TOp(I and $FF) of
     opInstanceof:
       begin
+        { FastLoop's case: a bytecode function whose shape InstanceOf verified and whose prototype slot is cached,
+          walked without proxies }
+        V := R[C];
+        if IsObject(V) and not MultiRealmAny then
+        begin
+          O := ObjOf(V);
+          if (O^.OKind = okFunction) and (Pointer(O^.Shape) = PFuncTemplate(O^.Native)^.NoHIShape) and
+             (Pointer(O^.Shape) = PFuncTemplate(O^.Native)^.CtorFnShape) and
+             (ObjOf(FunctionProto)^.Shape = HIFPShape) then
+          begin
+            V := GetSlot(O, PFuncTemplate(O^.Native)^.CtorProtoSlot);
+            if IsObject(V) then
+            begin
+              if not IsObject(R[B]) then begin R[A] := VFalse; Exit(True); end;
+              J := FastProtoChainHas(ObjOf(R[B]), V);
+              if J <> 2 then begin R[A] := MkBool(J = 1); Exit(True); end;
+            end;
+          end;
+        end;
         if not InstanceOf(R[B], R[C], Bool) then Exit(False);
         VStack[Fr^.Base + A] := MkBool(Bool);
       end;
@@ -1177,6 +1253,19 @@ begin
         else
           for J := 0 to B - 1 do O^.Elements^.Data[J] := R[C + J];
         R[A] := MkPtr(O);
+      end;
+    opGetIter:
+      begin
+        if not GetIteratorRec(R[B], V, VB) then Exit(False);
+        VStack[Fr^.Base + A] := V;
+        VStack[Fr^.Base + A + 1] := VB;
+      end;
+    opForIn:
+      begin
+        if not ForInKeys(R[B], V, VB) then Exit(False);
+        VStack[Fr^.Base + A] := V;
+        VStack[Fr^.Base + C] := VB;
+        VStack[Fr^.Base + A + 1] := ArrayIterNextFnOf;
       end;
     opArrPush: ArrayPush(ObjOf(R[A]), R[B]);
     opArrHole: ArrayPush(ObjOf(R[A]), VHole);
@@ -1251,14 +1340,57 @@ begin
   Result := Ord(not Bool);
 end;
 
-{ the call of JH_JumpCmp for instruction PC: jumps to Target, falls through, or returns -1 }
+{ opIterNext's slow path (Execute's, a suspended generator resumed through GeneratorResume): 1 done (the jump),
+  0 the value in R[A], -1 a throw pending }
+function JH_IterNext(Fr: PFrame; I: QWord): Integer;
+var A, B, CI: Integer; VA, VB, V: TValue; O: PObj; Done: Boolean;
+begin
+  A := (I shr 8) and $FFFF;
+  B := (I shr 24) and $FFFF;
+  VB := VStack[Fr^.Base + B];
+  { a done iterator record: no next() call, the value stays as it is }
+  if not IsObject(VB) then Exit(1);
+  O := ObjOf(VB);
+  if (O^.OKind = okIterator) and (O^.OFlags = 0) and (VStack[Fr^.Base + B + 1] = ArrayIterNextFnOf) then
+  begin
+    VA := O^.Aux1;
+    if VA = VUndefined then
+    begin
+      VStack[Fr^.Base + B] := VUndefined;
+      Exit(1);
+    end;
+    CI := IntOf(O^.Aux2);
+    if (ObjOf(VA)^.Elements <> nil) and ((ObjOf(VA)^.OFlags and 64) = 0) and
+       (ObjOf(VA)^.OKind in [okArray, okArguments]) and (CI >= Integer(ObjOf(VA)^.Elements^.Len)) then
+    begin
+      O^.Aux1 := VUndefined;
+      VStack[Fr^.Base + B] := VUndefined;
+      Exit(1);
+    end;
+  end;
+  if not IteratorStepRec(VB, VStack[Fr^.Base + B + 1], V, Done) then
+  begin
+    VStack[Fr^.Base + B] := VUndefined;   { an abrupt next() leaves the iterator done (7.4.8): it is not closed }
+    Exit(-1);
+  end;
+  if Done then
+  begin
+    VStack[Fr^.Base + B] := VUndefined;
+    Exit(1);
+  end;
+  VStack[Fr^.Base + A] := V;
+  Result := 0;
+end;
+
+{ the call of the jump helper JitSlow (JH_JumpCmp, JH_IterNext) for instruction PC: jumps to Target, falls
+  through, or returns -1 }
 procedure EmitJumpHelper(PC: Integer; I: QWord; Target: Integer);
 var L: Integer;
 begin
   JRex(False, 0, 0, jR12); JB($C7); JMem(0, jR12, PtrInt(@PFrame(nil)^.PC)); JD(Cardinal(PC + 1));
   MovRR(jDI, jR12);
   MovRI(jSI, I);
-  CallAbs(@JH_JumpCmp);
+  CallAbs(JitSlow);
   AluRR($85, jAX, jAX, False);
   L := JccFwd(ccS);
   JccPC(ccNE, Target);
@@ -1278,7 +1410,7 @@ end;
 procedure JitInstr(T: PFuncTemplate; PC: Integer; I: QWord); forward;
 
 procedure JitInstr0(T: PFuncTemplate; PC: Integer; I: QWord);
-var A, B, C: Integer; CU: Cardinal; Op: TOp; L1, L2, L3, L4, LS, LA: Integer; IC: PPropIC; CC: Integer;
+var Saved: Pointer; A, B, C: Integer; CU: Cardinal; Op: TOp; L1, L2, L3, L4, LS, LA: Integer; IC: PPropIC; CC: Integer;
 begin
   Op := TOp(I and $FF);
   A := (I shr 8) and $FFFF;
@@ -1665,6 +1797,7 @@ begin
         TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 1); AddSlow(JccFwd(ccNE));
         MovRM(jSI, jAX, PtrInt(@PObj(nil)^.Native));
         CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.FastCall), 0); AddSlow(JccFwd(ccE));
+        CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsGenerator), 0); AddSlow(JccFwd(ccNE));
         CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.JitState), 1); AddSlow(JccFwd(ccNE));
         { this: a strict or arrow callee takes it as it is (undefined for the flag); a sloppy one an object }
         CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsStrict), 0); L1 := JccFwd(ccNE);
@@ -1784,10 +1917,135 @@ begin
         MovMR(jBX, (A + 1) * 8, jAX);
         JitInstr(T, PC, (I and $FFFFFF0000FFFF00) or (QWord(A + 1) shl 24) or QWord(Ord(opGetProp)));
       end;
-    opSEq, opSNe, opEq, opNe, opLt, opLe, opGt, opGe: EmitHelper(@JH_Compare, PC, I);
+    opSEq, opSNe, opEq, opNe:
+      begin
+        { equal bits: equal, but for a NaN; different bits: two ints or a pointer against a non-pointer differ
+          (strictly), the nullish pair is loosely equal; two pointers, a double, or a loose pair needing
+          conversion are JH_Compare's }
+        MovRM(jAX, jBX, B * 8);
+        MovRM(jCX, jBX, CU * 8);
+        AluRR($39, jAX, jCX, True);
+        L1 := JccFwd(ccNE);
+        MovRI(jR8, DOUBLE_LIMIT);
+        AluRR($39, jAX, jR8, True);
+        L2 := JccFwd(ccAE);
+        MovqXR(0, jAX);
+        SseRR($66, $2E, 0, 0);
+        L3 := JccFwd(ccP);
+        PatchHere(L2);
+        { equal }
+        if (Op = opSEq) or (Op = opEq) then MovRI(jAX, VTrue) else MovRI(jAX, VFalse);
+        L4 := JmpFwd;
+        PatchHere(L1);
+        if (Op = opSEq) or (Op = opSNe) then
+        begin
+          TagOf(jDX, jAX);
+          AluRI(7, jDX, TAG_PTR_HI, False);
+          L2 := JccFwd(ccNE);
+          TagOf(jDX, jCX);
+          AluRI(7, jDX, TAG_PTR_HI, False);
+          JccExit(ccE, PC);
+          PatchHere(L2);
+          MovRI(jR8, DOUBLE_LIMIT);
+          AluRR($39, jAX, jR8, True);
+          JccExit(ccB, PC);
+          AluRR($39, jCX, jR8, True);
+          JccExit(ccB, PC);
+        end
+        else
+        begin
+          { a nullish: equal to the other nullish; a pointer (an [[IsHTMLDDA]] object) is the helper's; else not }
+          MovRI(jR8, VNull);
+          MovRR(jDX, jAX);
+          AluRI(1, jDX, 1, True);
+          AluRR($39, jDX, jR8, True);
+          L2 := JccFwd(ccNE);
+          MovRR(jDX, jCX);
+          AluRI(1, jDX, 1, True);
+          AluRR($39, jDX, jR8, True);
+          LS := JccFwd(ccE);
+          TagOf(jDX, jCX);
+          AluRI(7, jDX, TAG_PTR_HI, False);
+          JccExit(ccE, PC);
+          LA := JmpFwd;
+          PatchHere(L2);
+          MovRR(jDX, jCX);
+          AluRI(1, jDX, 1, True);
+          AluRR($39, jDX, jR8, True);
+          L2 := JccFwd(ccNE);
+          TagOf(jDX, jAX);
+          AluRI(7, jDX, TAG_PTR_HI, False);
+          JccExit(ccE, PC);
+          L1 := JmpFwd;
+          PatchHere(L2);
+          { two ints differ; anything else is the helper's }
+          TagOf(jDX, jAX);
+          AluRI(7, jDX, TAG_INT_HI, False);
+          JccExit(ccNE, PC);
+          TagOf(jDX, jCX);
+          AluRI(7, jDX, TAG_INT_HI, False);
+          JccExit(ccNE, PC);
+          PatchHere(L1);
+          PatchHere(LA);
+          L1 := JmpFwd;
+          PatchHere(LS);
+          if Op = opEq then MovRI(jAX, VTrue) else MovRI(jAX, VFalse);
+          L2 := JmpFwd;
+          PatchHere(L1);
+          PatchHere(L3);
+          if Op = opEq then MovRI(jAX, VFalse) else MovRI(jAX, VTrue);
+          PatchHere(L2);
+          PatchHere(L4);
+          MovMR(jBX, A * 8, jAX);
+          Exit;
+        end;
+        { not equal }
+        PatchHere(L3);
+        if Op = opSEq then MovRI(jAX, VFalse) else MovRI(jAX, VTrue);
+        PatchHere(L4);
+        MovMR(jBX, A * 8, jAX);
+      end;
+    opLt, opLe, opGt, opGe:
+      begin
+        MovRM(jAX, jBX, B * 8);
+        MovRM(jCX, jBX, CU * 8);
+        L1 := IfNotInt(jAX);
+        TagOf(jDX, jCX);
+        AluRI(7, jDX, TAG_INT_HI, False);
+        L2 := JccFwd(ccNE);
+        AluRR($39, jAX, jCX, False);
+        case Op of
+          opLt: CC := ccL;
+          opLe: CC := ccLE;
+          opGt: CC := ccG;
+        else CC := ccGE;
+        end;
+        L3 := JccFwd(CC);
+        L4 := JmpFwd;
+        PatchHere(L1);
+        PatchHere(L2);
+        ToXmm(0, jAX, PC);
+        ToXmm(1, jCX, PC);
+        { a < b is b above a (unordered clears neither CF nor ZF: false), a <= b is b above or equal }
+        case Op of
+          opLt: begin SseRR($66, $2E, 1, 0); CC := ccA; end;
+          opLe: begin SseRR($66, $2E, 1, 0); CC := ccAE; end;
+          opGt: begin SseRR($66, $2E, 0, 1); CC := ccA; end;
+        else begin SseRR($66, $2E, 0, 1); CC := ccAE; end;
+        end;
+        L1 := JccFwd(CC);
+        PatchHere(L4);
+        MovRI(jAX, VFalse);
+        L2 := JmpFwd;
+        PatchHere(L1);
+        PatchHere(L3);
+        MovRI(jAX, VTrue);
+        PatchHere(L2);
+        MovMR(jBX, A * 8, jAX);
+      end;
     opShr, opUShr, opNeg, opBitNot, opToNum, opToNumeric, opUShrI, opPow:
       EmitHelper(@JH_Arith, PC, I);
-    opInstanceof, opIn, opNewArr, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn,
+    opGetIter, opForIn, opInstanceof, opIn, opNewArr, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn,
     opSetUpv:
       EmitHelper(@JH_Misc, PC, I);
     opBitAnd, opBitOr, opBitXor, opShl:
@@ -1873,6 +2131,13 @@ begin
         AluRI(7, jDX, ckObject, False);
         JccExit(ccNE, PC);
         MovzxBRM(jDX, jAX, PtrInt(@PObj(nil)^.OKind));
+        { a generator: the interpreter's (it resumes the body inline in its own frames, cheaper than
+          JH_IterNext's GeneratorResume) }
+        AluRI(7, jDX, okGenerator, False);
+        Saved := JitSlow;
+        JitSlow := nil;
+        JccExit(ccE, PC);
+        JitSlow := Saved;
         AluRI(7, jDX, okIterator, False);
         JccExit(ccNE, PC);
         MovzxBRM(jDX, jAX, PtrInt(@PObj(nil)^.OFlags));
@@ -1930,6 +2195,13 @@ begin
       end;
     opRet, opRetUndef:
       begin
+        { a generator's completion is the interpreter's }
+        if T^.IsGenerator then
+        begin
+          JmpExit(PC);
+          JitTaken := False;
+          Exit;
+        end;
         { only in a frame XJitCall pushed (ebp 1): XJitRet, then -2 to it; otherwise the interpreter's }
         JB($85); JB($ED);                       { test ebp, ebp }
         JccExit(ccE, PC);
@@ -1986,6 +2258,12 @@ begin
     opAdd, opSub, opMul, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opBitAnd, opBitOr,
     opBitXor, opShl, opDiv, opMod:
       JitSlow := @JH_Arith;
+    opSEq, opSNe, opEq, opNe, opLt, opLe, opGt, opGe: JitSlow := @JH_Compare;
+    opIterNext:
+      begin
+        JitSlow := @JH_IterNext;
+        JitSlowJump := PC + 1 + Integer(SarInt64(Int64(I), 40));
+      end;
     opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq:
       begin
         JitSlow := @JH_JumpCmp;
@@ -2034,7 +2312,8 @@ procedure JitCompile(T: PFuncTemplate);
 var PC, I, Exit0, Target: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal;
 begin
   T^.JitState := 2;
-  if (T^.Lazy <> nil) or (T^.CodeLen = 0) or T^.IsGenerator or T^.IsAsync then Exit;
+  { a generator's body runs compiled between its suspensions (its yields and returns are the interpreter's) }
+  if (T^.Lazy <> nil) or (T^.CodeLen = 0) or T^.IsAsync then Exit;
   JitLen := 0;
   JitFixCount := 0;
   SetLength(JitNative, T^.CodeLen);
