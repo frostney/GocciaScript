@@ -192,6 +192,13 @@ type
     { a lazily compiled function not compiled yet (G2.Lazy's PLazyStub): no code, FastCall False; its first call
       compiles it (LazyCompileHook) }
     Lazy: Pointer;
+    { the baseline JIT (G2.Jit.inc): Jit the machine code (nil: none), JitTable its entry address for each
+      instruction, JitState 0 not tried, 1 compiled, 2 not compiled (unsupported template) }
+    Jit: Pointer;
+    JitTable: Pointer;
+    JitState: Byte;
+    JitCount: Integer;   { entries before it is compiled (the JIT compiles hot templates only) }
+    JitComplete: Boolean;   { the code takes every instruction but returns (XJitCall's callees) }
   end;
 
 function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;

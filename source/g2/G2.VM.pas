@@ -5331,6 +5331,8 @@ begin
   if Result then Dst^ := V;
 end;
 
+{$I G2.Jit.inc}
+
 function FastLoop(Code: PQWord; PC: Integer; R, K: PValue; ICs: PPropIC; Fr: PFrame; StopFrame: Integer): Integer;
 label LBail, LGetProp, LSetPropSlow;
 var
@@ -5353,6 +5355,14 @@ var
   Bool: Boolean;
   IP: PQWord;   { the next instruction: a pointer, not Code[PC], saves FastLoop's spilled Code load per step }
 begin
+  {$IFDEF CPUX86_64}
+  { a compiled template's code first (it stops at an instruction it does not take) }
+  if (JitEnabled = 1) and (Fr^.Tpl^.JitState <> 2) then
+  begin
+    PC := XJitRun(Fr, PC);
+    if PC < 0 then begin InjectThrow := True; Exit(-1); end;   { a throw out of a call the code made }
+  end;
+  {$ENDIF}
   IP := @Code[PC];
   VS := VStack;
   NS := NurseryStart;
@@ -5947,7 +5957,20 @@ LSetPropSlow:
           else goto LBail;
           R[A] := MkBool(Bool);
         end;
-      opJmp: Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
+      opJmp:
+        begin
+          CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8);
+          Inc(IP, CI);
+          {$IFDEF CPUX86_64}
+          { a loop's back edge: into the compiled loop }
+          if (JitEnabled = 1) and (CI < 0) and (Fr^.Tpl^.JitState <> 2) then
+          begin
+            CI := XJitRun(Fr, Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3));
+            if CI < 0 then begin InjectThrow := True; Exit(-1); end;
+            IP := @Code[CI];
+          end;
+          {$ENDIF}
+        end;
       { a boolean first: most conditions are comparison results }
       opJT:
         begin
@@ -6096,6 +6119,14 @@ LSetPropSlow:
           K := T^.KBase;
           ICs := T^.ICBase;
           Changed := True;
+          {$IFDEF CPUX86_64}
+          if (JitEnabled = 1) and (T^.JitState <> 2) then
+          begin
+            CI := XJitRun(Fr, 0);
+            if CI < 0 then begin InjectThrow := True; Exit(-1); end;
+            IP := @Code[CI];
+          end;
+          {$ENDIF}
         end;
       opSuperCall, opSuperCallV:
         begin
@@ -6284,6 +6315,14 @@ LSetPropSlow:
           K := T^.KBase;
           ICs := T^.ICBase;
           Changed := True;
+          {$IFDEF CPUX86_64}
+          if (JitEnabled = 1) and (T^.JitState = 1) then
+          begin
+            CI := XJitRun(Fr, Fr^.PC);
+            if CI < 0 then begin InjectThrow := True; Exit(-1); end;
+            IP := @Code[CI];
+          end;
+          {$ENDIF}
         end;
     else
       goto LBail;
@@ -8435,6 +8474,7 @@ end;
 
 initialization
   InitFastOps;
+  {$IFDEF CPUX86_64}JitOn;{$ENDIF}
 {$IFDEF G2_BAILSTATS}
 finalization
   for FastOpI := 0 to 255 do
