@@ -4940,7 +4940,7 @@ var
 
 procedure InitFastOps;
 const
-  Ops: array[0..72] of TOp = (opIterNext, opYield, opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
+  Ops: array[0..76] of TOp = (opClosure, opNew, opNewObj, opDefProp, opIterNext, opYield, opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse,
     opLoadHole, opGetUpv, opSetUpv, opGetProp, opGetLength, opGetMethod, opSetProp, opGetElem, opSetElem, opAdd, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opCheckHole, opGetGlobal, opInstanceof, opSub,
     opMul, opDiv, opMod, opShr, opUShr, opBitAnd, opBitOr, opBitXor, opShl, opNeg, opBitNot, opNot, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
@@ -4955,9 +4955,10 @@ end;
   gives the dispatch variables the most, PC, R and Code live in memory: every instruction loads and stores them,
   and PC's store-to-load chain bounds the dispatch rate. FastLoop runs from PC until an instruction it does not
   handle, or whose fast path does not apply, and returns that instruction's PC before doing any of it: Execute
-  runs it. Each case is Execute's fast path for the instruction. FastLoop calls nothing (a call would make the
-  loop variables compete for the callee-saved registers) and allocates nothing (no collection can move R's
-  values). Fr is the running frame (its closure's upvalue array is read through it: a collection in Execute
+  runs it. Each case is Execute's fast path for the instruction. FastLoop calls little (a call would make the
+  loop variables compete for the callee-saved registers), out of line (XFastNative, XFastNativeGetter). Where it
+  allocates or calls a native, which can collect, no local holds a cell across it: the registers are roots up to
+  StackTop and every instruction reads them afresh. Fr is the running frame (its closure's upvalue array is read through it: a collection in Execute
   can move the array). A store the write barrier would have to remember is left to Execute.
   A call of a plain bytecode function and its return run here too, so a call does not end the fast path.
   FastLoop then returns -1: the frame it stopped in is no longer Execute's, and its PC is in the frame record.
@@ -5021,6 +5022,147 @@ begin
   PopRoots(1);
   StackTop := SavedTop;
   if Result then R[A] := V;
+end;
+
+{ ToInt32 (7.1.6) of a double QuickInt32 leaves (|D| >= 2^53, an integer, or NaN or an infinity, 0): its low
+  32 bits, from the mantissa shifted to the units }
+function BigDoubleToInt32(V: TValue): Int32; noinline;
+var E: Integer; L: UInt32;
+begin
+  E := Integer((V shr 52) and $7FF) - 1075;   { the weight of the mantissa's last bit: 2^E }
+  if (E < 0) or (E >= 32) then Exit(0);
+  L := UInt32(((V and $000FFFFFFFFFFFFF) or $0010000000000000) shl E);
+  if (V shr 63) <> 0 then L := UInt32(0) - L;
+  Result := Int32(L);
+end;
+
+{ FastLoop's opClosure (as Execute's): the closure of the running frame's child template Idx in R[A] }
+procedure XFastClosure(Fr: PFrame; R: PValue; A: NativeInt; Idx: Integer); noinline;
+var T: PFuncTemplate; NP, J, NP2: Integer; Ups: PValueArray; V: TValue; O: PObj;
+begin
+  T := Fr^.Tpl^.Children[Idx];
+  NP := Length(T^.Upvals);
+  if NP > 0 then
+  begin
+    Ups := NewValueArray(NP);
+    Ups^.Len := NP;
+    R[A] := MkPtr(Ups);   { keep it rooted while upvalues allocate }
+    for J := 0 to NP - 1 do
+    begin
+      NP2 := GCMinorCount;
+      if T^.Upvals[J].FromParentLocal then V := FindOrOpenUpval(Fr^.Base + T^.Upvals[J].Index)
+      else V := PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[T^.Upvals[J].Index];
+      if GCVerify and not NurseryCellOK(R[A]) then
+      begin
+        XReportBadUps(J, NP2, Fr^.Base + A, Fr^.Base, Fr^.Tpl);
+        Halt(9);
+      end;
+      ValueArrayStore(PValueArray(PtrOf(R[A])), J, V);
+    end;
+    O := NewClosure(T, R[A]);
+  end
+  else
+    O := NewClosure(T, VUndefined);
+  R[A] := MkPtr(O);
+end;
+
+{ FastLoop's opNew (as Execute's, which takes anything else): 0 for Execute; 1 a built-in constructor's result in
+  R[A]; 2 a base constructor's frame pushed (10.2.2 [[Construct]]: this from the template's caches of the
+  prototype slot and its root shape; the field initializer's frame above it, step 6.b) with StackTop set; -1 a
+  throw pending (from the constructor's frame when it was pushed). The caller saved the frame's PC. }
+function XFastNew(R: PValue; A: NativeInt; Argc: Integer): Integer; noinline;
+var VA, V: TValue; O: PObj; T: PFuncTemplate; Base, J: Integer; Fr: PFrame;
+begin
+  VA := R[A];
+  if not IsObject(VA) or MultiRealmAny then Exit(0);
+  O := ObjOf(VA);
+  if (O^.OKind = okNative) and ((O^.OFlags and 32) <> 0) then
+  begin
+    V := VUndefined;
+    if not Construct(VA, @R[A + 2], Argc, VA, V) then Exit(-1);
+    R[A] := V;
+    Exit(1);
+  end;
+  if O^.OKind <> okFunction then Exit(0);
+  T := PFuncTemplate(O^.Native);
+  if not T^.FastCall or T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsDerived or
+     (Pointer(O^.Shape) <> T^.CtorFnShape) or (T^.CtorRootShape = nil) or
+     (PShape(T^.CtorRootShape)^.Proto <> GetSlot(O, T^.CtorProtoSlot)) then Exit(0);
+  Fr := @Frames[FrameTop - 1];
+  Base := Fr^.Base + A + 1;
+  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(0);
+  { the arguments are roots while the new object is allocated (a collection can move the callee: read again
+    from its register) }
+  if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
+  R[A + 1] := MkPtr(NewObject(PShape(T^.CtorRootShape), Max(4, T^.ExpectedProps), okPlain));
+  VA := R[A];
+  if Argc < T^.NumParams then J := Argc + 1 else J := T^.NumParams + 1;
+  if J < T^.MaxRegs then FillUndef(@VStack[Base + J], T^.MaxRegs - J);
+  Inc(Fr);
+  Fr^.Closure := VA;
+  Fr^.NewTarget := VA;
+  Fr^.Tpl := T;
+  Fr^.Base := Base;
+  Fr^.PC := 0;   { EntryPC, as opCall's }
+  Fr^.RetIdx := Base - 1;
+  Fr^.Argc := Argc;
+  Fr^.Kind := 1;
+  Inc(FrameTop);
+  StackTop := Base + T^.MaxRegs;
+  if Assigned(T^.FieldInit) and not XPushFieldInit(VA) then Exit(-1);
+  Result := 2;
+end;
+
+{ FastLoop's opNewObj (as Execute's): an object literal's object with room for N properties in R[A] }
+procedure XFastNewObj(R: PValue; A: NativeInt; N: Integer); noinline;
+begin
+  R[A] := MkPtr(NewObject(RootShapeFor(ObjectProto), Max(4, N), okPlain));
+end;
+
+{ FastLoop's opDefProp (as Execute's): an object literal's data property Key on Obj }
+procedure XFastDefProp(Obj: TValue; Key: PStr; V: TValue); noinline;
+var O: PObj; CI: Integer;
+begin
+  O := ObjOf(Obj);
+  CI := ShapeLookup(O^.Shape, Key);
+  if CI < 0 then AddProperty(O, Key, V, pfDefault)
+  else if O^.Shape^.PFlags[CI] = pfDefault then SetSlot(O, CI, V)
+  else DefineOwn(Obj, Key, V, pfDefault);   { replaces an accessor of the same name }
+end;
+
+{ ToInt32 of a Number (False for anything else), out of line for FastLoop's two-operand bitwise operators }
+function NumToInt32(V: TValue; out I: Int32): Boolean; noinline;
+begin
+  if QuickInt32(V, I) then Exit(True);
+  if V >= DOUBLE_LIMIT then Exit(False);
+  I := BigDoubleToInt32(V);
+  Result := True;
+end;
+
+{ FastLoop's call of a native getter O on This (an accessor property's [[Get]], as ICAccGet's CallValue): its
+  result in Dst^; False with its throw pending. The caller checked the stack has room for the receiver }
+function XFastNativeGetter(O: PObj; This: TValue; Dst: PValue): Boolean; noinline;
+var SavedTop, NP: Integer; V: TValue;
+begin
+  SavedTop := StackTop;
+  VStack[SavedTop] := This;
+  StackTop := SavedTop + 1;
+  V := VUndefined;
+  PushRoot(CurNewTarget);   { a plain call: the native must not see an outer new.target }
+  CurNewTarget := VUndefined;
+  NP := TempTop;
+  NativeData := O^.Pad and $00FFFFFF;
+  NativeSelf := MkPtr(O);
+  Result := TNativeFn(O^.Native)(@VStack[SavedTop], 0, V);
+  if RootCheck and (TempTop <> NP) then
+  begin
+    XReportRootImbalance(O, TempTop - NP, Result, nil);
+    Halt(9);
+  end;
+  CurNewTarget := RootAt(TempTop - 1);
+  PopRoots(1);
+  StackTop := SavedTop;
+  if Result then Dst^ := V;
 end;
 
 function FastLoop(Code: PQWord; PC: Integer; R, K: PValue; ICs: PPropIC; Fr: PFrame; StopFrame: Integer): Integer;
@@ -5138,6 +5280,17 @@ LGetProp:
               if V = VUndefined then begin R[A] := VUndefined; Continue; end;
               if not IsObject(V) or MultiRealmAny then goto LBail;
               O2 := ObjOf(V);
+              if (O2^.OKind = okNative) and (StackTop + 2 < STACK_MAX) then
+              begin
+                { a built-in getter (byteLength, size): called here, its throw Execute's with the PC past this }
+                Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+                if not XFastNativeGetter(O2, VB, @R[A]) then
+                begin
+                  InjectThrow := True;
+                  Exit(-1);
+                end;
+                Continue;
+              end;
               if (O2^.OKind <> okFunction) or ((O2^.OFlags and 1) <> 0) then goto LBail;
               T := PFuncTemplate(O2^.Native);
               if T^.IsAsync or T^.IsGenerator or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) or (T^.Lazy <> nil) then
@@ -5205,6 +5358,14 @@ LGetProp:
             end;
           end;
           goto LBail;
+        end;
+      opClosure: XFastClosure(Fr, R, A, PCardinal(PByte(IP) - 4)^ shr 8);
+      opDefProp: XFastDefProp(R[A], PStr(PtrOf(K[PCardinal(PByte(IP) - 4)^ shr 8])), R[PWord(PByte(IP) - 5)^]);
+      opNewObj:
+        begin
+          { an object literal's object, as Execute (a collection here is safe: no local holds a cell across
+            instructions, the registers are roots up to StackTop) }
+          XFastNewObj(R, A, PCardinal(PByte(IP) - 4)^ shr 8);
         end;
       opSetProp:
         begin
@@ -5478,7 +5639,11 @@ LGetProp:
           VA := R[PWord(PByte(IP) - 5)^];
           NP := Int32(SarLongint(PLongInt(PByte(IP) - 4)^, 8));
           if (VA shr 48) = TAG_INT_HI then CI := Int32(UInt32(VA))
-          else if not QuickInt32(VA, CI) then goto LBail;
+          else if not QuickInt32(VA, CI) then
+          begin
+            if VA >= DOUBLE_LIMIT then goto LBail;
+            CI := BigDoubleToInt32(VA);
+          end;
           case TOp(PByte(IP)[-8]) of
             opBitAndI: R[A] := MkInt(CI and NP);
             opBitOrI: R[A] := MkInt(CI or NP);
@@ -5492,7 +5657,8 @@ LGetProp:
         begin
           VA := R[PWord(PByte(IP) - 5)^];
           VB := R[(PCardinal(PByte(IP) - 4)^ shr 8)];
-          if not (QuickInt32(VA, CI) and QuickInt32(VB, NP)) then goto LBail;
+          if not (QuickInt32(VA, CI) and QuickInt32(VB, NP)) then
+            if not (NumToInt32(VA, CI) and NumToInt32(VB, NP)) then goto LBail;
           case TOp(PByte(IP)[-8]) of
             opBitAnd: R[A] := MkInt(CI and NP);
             opBitOr: R[A] := MkInt(CI or NP);
@@ -5729,6 +5895,29 @@ LGetProp:
           ICs := T^.ICBase;
           Changed := True;
         end;
+      opNew:
+        begin
+          { 10.2.2 [[Construct]] (XFastNew): a frame pushed, the result of a built-in constructor in R[A], or Execute's }
+          Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
+          J := XFastNew(R, A, PWord(PByte(IP) - 5)^);
+          if J = 0 then goto LBail;
+          if J < 0 then
+          begin
+            InjectThrow := True;
+            Exit(-1);
+          end;
+          if J = 2 then
+          begin
+            Fr := @Frames[FrameTop - 1];
+            T := Fr^.Tpl;
+            R := @VS[Fr^.Base];
+            Code := @T^.Code[0];
+            IP := @Code[Fr^.PC];
+            K := T^.KBase;
+            ICs := T^.ICBase;
+            Changed := True;
+          end;
+        end;
       opIterNext:
         begin
           { an array iterator's step; a suspended generator with the intrinsic next resumed in a Kind 4 frame
@@ -5795,7 +5984,23 @@ LGetProp:
       opRet, opRetUndef:
         begin
           { a call's or a construction's return to a bytecode caller inside this Execute }
-          if (Fr^.Kind > 1) or (FrameTop - 1 = StopFrame) or MultiRealmAny then goto LBail;
+          if (FrameTop - 1 = StopFrame) or MultiRealmAny then goto LBail;
+          if Fr^.Kind = 4 then
+          begin
+            { a for-of's generator completes (as Execute): done, its consumer's loop ends }
+            XGenInlineReturn(Fr);
+            Fr := @Frames[FrameTop - 1];
+            T := Fr^.Tpl;
+            StackTop := Fr^.Base + T^.MaxRegs;
+            R := @VS[Fr^.Base];
+            Code := @T^.Code[0];
+            IP := @Code[Fr^.PC];
+            K := T^.KBase;
+            ICs := T^.ICBase;
+            Changed := True;
+            Continue;
+          end;
+          if Fr^.Kind > 1 then goto LBail;
           if TOp(PByte(IP)[-8]) = opRet then V := R[A] else V := VUndefined;
           if (Fr^.Kind = 1) and not IsObject(V) then
           begin
