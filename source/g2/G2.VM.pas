@@ -3356,7 +3356,9 @@ begin
   NP := T^.NumParams;
   if (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then
   begin
-    { collect extra / all arguments before the locals overwrite them }
+    { collect extra / all arguments before the locals overwrite them (the rest array and the arguments object
+      allocate: new.target and the function stay rooted, read back afterwards) }
+    PushRoot(NewTarget);
     PushRoot(FV);
     if T^.RestReg >= 0 then
     begin
@@ -3376,7 +3378,8 @@ begin
       PopRoots(2);
     end;
     FV := RootAt(TempTop - 1);
-    PopRoots(1);
+    NewTarget := RootAt(TempTop - 2);
+    PopRoots(2);
     StackTop := Max(StackTop, Base + T^.MaxRegs);
     I := Min(Argc, NP) + 1;
     if I < T^.MaxRegs then FillUndef(@R[I], T^.MaxRegs - I);
@@ -3386,10 +3389,12 @@ begin
       R[T^.ArgsReg] := ArgsObj;
       if T^.MappedArgs and (Min(Argc, NP) > 0) then
       begin
+        PushRoot(NewTarget);
         PushRoot(FV);
         XMapArguments(Base, Min(Argc, NP), T^.ArgsReg);
         FV := RootAt(TempTop - 1);
-        PopRoots(1);
+        NewTarget := RootAt(TempTop - 2);
+        PopRoots(2);
         FObj := ObjOf(FV);
       end;
     end;
