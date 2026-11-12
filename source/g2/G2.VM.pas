@@ -5020,6 +5020,7 @@ end;
 var
   FastOp: array[0..255] of Boolean;
   {$IFDEF G2_BAILSTATS}BailCounts: array[0..255] of Int64; FastOpI: Integer;{$ENDIF}
+  {$IFDEF G2_JITSTATS}{$IFNDEF G2_BAILSTATS}FastOpI: Integer;{$ENDIF}{$ENDIF}
 
 procedure InitFastOps;
 const
@@ -8475,6 +8476,16 @@ end;
 initialization
   InitFastOps;
   {$IFDEF CPUX86_64}JitOn;{$ENDIF}
+{$IFDEF G2_JITSTATS}
+finalization
+  WriteLn(ErrOutput, 'jitentries ', JitEntries);
+  for FastOpI := 0 to 255 do
+  begin
+    if JitExits[FastOpI] > 0 then WriteLn(ErrOutput, 'jitexit ', FastOpI, ' ', JitExits[FastOpI]);
+    if JitNestedExits[FastOpI] > 0 then WriteLn(ErrOutput, 'jitnested ', FastOpI, ' ', JitNestedExits[FastOpI]);
+    if JitNoEntry[FastOpI] > 0 then WriteLn(ErrOutput, 'jitnoentry ', FastOpI, ' ', JitNoEntry[FastOpI]);
+  end;
+{$ENDIF}
 {$IFDEF G2_BAILSTATS}
 finalization
   for FastOpI := 0 to 255 do

@@ -42,6 +42,7 @@ var
 
 const
   JIT_HOT = 20;                    { a template's entries before it is compiled }
+  JIT_MAX_DEPTH = 256;             { code activations nested on the native stack (XJitRun, XJitCall) }
 
 procedure JB(X: Byte); inline;
 begin
@@ -292,6 +293,12 @@ begin
   PatchHere(L1); PatchHere(L2); PatchHere(L3); PatchHere(L4);
 end;
 
+{$IFDEF G2_JITSTATS}
+var
+  JitExits, JitNestedExits, JitNoEntry: array[0..255] of Int64;   { G2_JITSTATS: where the code stops, by opcode }
+  JitEntries: Int64;
+{$ENDIF}
+
 threadvar
   JitDepth: Integer;               { native calls of compiled code in progress (XJitCall) }
 
@@ -318,7 +325,7 @@ end;
 function XJitCall(Fr: PFrame; A, Argc, ThisFlag: Integer): Integer;
 var VA, V: TValue; O: PObj; T: PFuncTemplate; Base, J, Res: Integer; NF: PFrame; R: PValue;
 begin
-  if MultiRealmAny or (JitDepth >= 400) then Exit(1);
+  if MultiRealmAny or (JitDepth >= JIT_MAX_DEPTH) then Exit(1);
   R := @VStack[Fr^.Base];
   VA := R[A];
   if not IsObject(VA) then Exit(1);
@@ -364,6 +371,7 @@ begin
   Inc(JitDepth);
   Res := TJitFn(T^.Jit)(@VStack[Base], $40000000, NF, VStack, NurseryStart, NurseryLimit);
   Dec(JitDepth);
+  {$IFDEF G2_JITSTATS}if Res >= 0 then Inc(JitNestedExits[T^.Code[Res] and $FF]);{$ENDIF}
   if Res = -2 then Exit(0);   { returned through XJitRet }
   { the rest of the callee (from its PC, or its pending throw) in a nested Execute }
   if Res = -1 then InjectThrow := True else NF^.PC := Res;
@@ -890,8 +898,18 @@ begin
     if T^.JitCount < JIT_HOT then Exit(PC);
     if GetCurrentThreadId = JitMainThread then JitCompile(T) else Exit(PC);
   end;
-  if (T^.Jit = nil) or (PPtrUInt(T^.JitTable)[PC] = 0) then Exit(PC);
+  if (T^.Jit = nil) or (PPtrUInt(T^.JitTable)[PC] = 0) then
+  begin
+    {$IFDEF G2_JITSTATS}if T^.Jit <> nil then Inc(JitNoEntry[T^.Code[PC] and $FF]);{$ENDIF}
+    Exit(PC);
+  end;
+  { the native stack: code entered inside code's call (XJitCall's nested Execute) counts; past the bound the
+    interpreter runs the frames, which keeps a deep recursion's native depth bounded }
+  if JitDepth >= JIT_MAX_DEPTH then Exit(PC);
+  Inc(JitDepth);
   Result := TJitFn(T^.Jit)(@VStack[Fr^.Base], PC, Fr, VStack, NurseryStart, NurseryLimit);
+  Dec(JitDepth);
+  {$IFDEF G2_JITSTATS}Inc(JitEntries); if Result >= 0 then Inc(JitExits[T^.Code[Result] and $FF]);{$ENDIF}
 end;
 
 function JitOn: Boolean;
