@@ -647,6 +647,7 @@ type
   TOptInfo = record
     Count: Integer;                { counts down at the baseline code's PC 0 and back edges }
     Deopts, Recompiles: Integer;
+    Fails: Integer;                { regions not optimized: each one makes the counter's next run longer }
     BaseTable: PPtrUInt;           { the baseline code's entry per instruction }
     Table: PPtrUInt;               { BaseTable with the optimized regions' entries, nil when none }
     Tried: array of Byte;          { per region entry: 1 optimized, 2 not }
@@ -2953,8 +2954,48 @@ begin
   JitCallStub := P;
 end;
 
+{ the slow blocks JitInstr deferred (JitDefer), each back to the instruction after its own }
+procedure JitEmitDeferred(T: PFuncTemplate);
+var N, K, PC: Integer; Saved: Pointer;
+begin
+  Saved := JitSlow;
+  for N := 0 to JitDeferCount - 1 do
+  begin
+    for K := JitDefer[N].First to JitDefer[N].First + JitDefer[N].Count - 1 do PatchHere(JitDeferJumps[K]);
+    JitSlow := JitDefer[N].H;
+    PC := JitDefer[N].PC;
+    case JitDefer[N].Kind of
+      1:
+        begin
+          { ICGetHit: its answer in R[A] goes on, else the helper }
+          MovRR(jDI, jAX);
+          LeaRM(jDX, jBX, JitDefer[N].A * 8);
+          CallAbs(@JitICGetHit);
+          JB($84); JB($C0);   { test al, al: the Boolean }
+          JccPC(ccNE, PC + 1);
+        end;
+      2, 3:
+        begin
+          { the typed array's element; its other kinds and failed guards the helper }
+          JitSlowCount := 0;
+          EmitTAElem(JitDefer[N].Kind = 3, JitDefer[N].A, JitDefer[N].V, PC);
+          for K := 0 to JitTAEndCount - 1 do JmpFixTo(JitTAEnds[K], PC + 1);
+          JitTAEndCount := 0;
+          for K := 0 to JitSlowCount - 1 do PatchHere(JitSlowList[K]);
+          JitSlowCount := 0;
+        end;
+    end;
+    if JitDefer[N].Jump >= 0 then EmitJumpHelper(PC, JitDefer[N].I, JitDefer[N].Jump)
+    else EmitHelper(JitDefer[N].H, PC, JitDefer[N].I);
+    if PC + 1 < T^.CodeLen then JmpPC(PC + 1) else JmpExit(PC);
+  end;
+  JitSlow := Saved;
+  JitDeferCount := 0;
+  JitDeferJumpCount := 0;
+end;
+
 procedure JitCompile(T: PFuncTemplate);
-var PC, I, N, K, Exit0, Throw0, Target: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal; Saved: Pointer;
+var PC, I, Exit0, Throw0, Target: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal;
   Info: POptInfo;
 begin
   T^.JitState := 2;
@@ -3001,39 +3042,7 @@ begin
   end;
   { past the end (never reached: the last instruction is a return) }
   JmpExit(T^.CodeLen - 1);
-  { the slow blocks, each back to the instruction after its own }
-  Saved := JitSlow;
-  for N := 0 to JitDeferCount - 1 do
-  begin
-    for K := JitDefer[N].First to JitDefer[N].First + JitDefer[N].Count - 1 do PatchHere(JitDeferJumps[K]);
-    JitSlow := JitDefer[N].H;
-    PC := JitDefer[N].PC;
-    case JitDefer[N].Kind of
-      1:
-        begin
-          { ICGetHit: its answer in R[A] goes on, else the helper }
-          MovRR(jDI, jAX);
-          LeaRM(jDX, jBX, JitDefer[N].A * 8);
-          CallAbs(@JitICGetHit);
-          JB($84); JB($C0);   { test al, al: the Boolean }
-          JccPC(ccNE, PC + 1);
-        end;
-      2, 3:
-        begin
-          { the typed array's element; its other kinds and failed guards the helper }
-          JitSlowCount := 0;
-          EmitTAElem(JitDefer[N].Kind = 3, JitDefer[N].A, JitDefer[N].V, PC);
-          for K := 0 to JitTAEndCount - 1 do JmpFixTo(JitTAEnds[K], PC + 1);
-          JitTAEndCount := 0;
-          for K := 0 to JitSlowCount - 1 do PatchHere(JitSlowList[K]);
-          JitSlowCount := 0;
-        end;
-    end;
-    if JitDefer[N].Jump >= 0 then EmitJumpHelper(PC, JitDefer[N].I, JitDefer[N].Jump)
-    else EmitHelper(JitDefer[N].H, PC, JitDefer[N].I);
-    if PC + 1 < T^.CodeLen then JmpPC(PC + 1) else JmpExit(PC);
-  end;
-  JitSlow := Saved;
+  JitEmitDeferred(T);
   { the exits: eax the PC the interpreter runs; the epilogue }
   Exit0 := JitLen;
   JB($41); JB($5E); JB($41); JB($5D); JB($5D); JB($41); JB($5C); JB($5B); JB($C3);  { pop r14; pop r13; pop rbp; pop r12; pop rbx; ret }
@@ -3148,6 +3157,7 @@ begin
   if GetEnvironmentVariable('G2_OPT') = '0' then OptEnabled := 0;
   OptLog := GetEnvironmentVariable('G2_OPTLOG') = '1';
   OptMax := StrToIntDef(GetEnvironmentVariable('G2_OPTMAX'), -1);
+  OptReadNoEmbed;
   Result := JitEnabled = 1;
 end;
 {$ENDIF}
