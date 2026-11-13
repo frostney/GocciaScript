@@ -198,6 +198,7 @@ type
     JitTable: Pointer;
     JitState: Byte;
     JitCount: Integer;   { entries before it is compiled (the JIT compiles hot templates only) }
+    Opt: Pointer;        { the optimizing tier's state (G2.Opt.inc's POptInfo), nil when the template is not eligible }
     JitComplete: Boolean;   { the code takes every instruction but returns (XJitCall's callees) }
   end;
 

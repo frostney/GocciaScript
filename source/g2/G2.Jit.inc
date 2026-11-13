@@ -636,6 +636,26 @@ begin
   PatchHere(L1); PatchHere(L2); PatchHere(L3); PatchHere(L4);
 end;
 
+const
+  OPT_HOT = 1000;                  { a template's function entries and loop iterations in baseline code before its
+                                     region is optimized (G2.Opt.inc) }
+  OPT_MAX_DEOPTS = 200;
+
+type
+  { a template's optimizing tier state (G2.Opt.inc) }
+  POptInfo = ^TOptInfo;
+  TOptInfo = record
+    Count: Integer;                { counts down at the baseline code's PC 0 and back edges }
+    Deopts, Recompiles: Integer;
+    BaseTable: PPtrUInt;           { the baseline code's entry per instruction }
+    Table: PPtrUInt;               { BaseTable with the optimized regions' entries, nil when none }
+    Tried: array of Byte;          { per region entry: 1 optimized, 2 not }
+    Feedback: array of Byte;       { per instruction: the guards that failed there (1 int overflow, 2 an entry kind) }
+  end;
+
+var
+  OptEnabled: Integer = 1;         { G2_OPT=0 turns the optimizing tier off }
+
 var
   JitHot: Integer = JIT_HOT;
   JitCallStub: Pointer = nil;   { JitBuildCallStub's code: opCall's call, shared by every call site }
@@ -1884,6 +1904,18 @@ begin
   Result := ICGetHit(O, IC, Dst);
 end;
 
+var
+  JitInfo: POptInfo;   { the template being compiled's optimizing tier state (nil: none) }
+
+{ the optimizing tier's counter (a function entry, a loop's back edge to PC): when it runs out, the exit to PC, where
+  XJitRun optimizes the region }
+procedure JitCountDown(PC: Integer);
+begin
+  MovRI(jAX, QWord(PtrUInt(@JitInfo^.Count)));
+  JB($FF); JB($08);                                { dec dword [rax] }
+  JB($0F); JB($84); AddFix(-1 - PC);               { jz: the exit at PC }
+end;
+
 { a cold block of Kind (JitDefer) for instruction PC (I), entered by the forward jump At; its helper is JitSlow }
 procedure DeferCold(Kind, PC: Integer; I: QWord; A, V: Integer; const At: array of Integer);
 var K: Integer;
@@ -1972,7 +2004,11 @@ begin
         PatchHere(L2);
         MovMR(jBX, A * 8, jAX);
       end;
-    opJmp: JmpPC(PC + 1 + C);
+    opJmp:
+      begin
+        if (C < 0) and (JitInfo <> nil) then JitCountDown(PC + 1 + C);
+        JmpPC(PC + 1 + C);
+      end;
     opJT, opJF:
       begin
         { true, false, undefined, null and ints decided here; anything else is the interpreter's ToBool }
@@ -2919,6 +2955,7 @@ end;
 
 procedure JitCompile(T: PFuncTemplate);
 var PC, I, N, K, Exit0, Throw0, Target: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal; Saved: Pointer;
+  Info: POptInfo;
 begin
   T^.JitState := 2;
   { a generator's body runs compiled between its suspensions (its yields and returns are the interpreter's) }
@@ -2933,6 +2970,17 @@ begin
   SetLength(JitExitOf, T^.CodeLen);
   for PC := 0 to T^.CodeLen - 1 do JitExitOf[PC] := -1;
   Table := GetMem(T^.CodeLen * SizeOf(PtrUInt));
+  Info := nil;
+  if (OptEnabled = 1) and T^.NoHandlers and T^.NoCaptures and not T^.IsGenerator and not T^.IsAsync and
+     (T^.ArgsReg < 0) and (T^.RestReg < 0) and not T^.TopLevel then
+  begin
+    New(Info);
+    FillChar(Info^, SizeOf(TOptInfo), 0);
+    Info^.Count := OPT_HOT;
+    SetLength(Info^.Tried, T^.CodeLen + 1);
+    SetLength(Info^.Feedback, T^.CodeLen + 1);
+  end;
+  JitInfo := Info;
   { prologue: the three callee-saved registers the code keeps, then the instruction's code (rsi) }
   { push rbx; push r12; push rbp; push r13; push r14: rsp 16-byte aligned for calls }
   JB($53); JB($41); JB($54); JB($55); JB($41); JB($55); JB($41); JB($56);
@@ -2946,6 +2994,7 @@ begin
   begin
     JitNative[PC] := JitLen;
     JitTaken := True;
+    if (PC = 0) and (Info <> nil) then JitCountDown(0);
     JitInstr(T, PC, T^.Code[PC]);
     {$IFDEF G2_JITSTATS}Inc(JitOpBytes[T^.Code[PC] and $FF], JitLen - JitNative[PC]); Inc(JitOpCount[T^.Code[PC] and $FF]);{$ENDIF}
     JitTakenAt[PC] := JitTaken;
@@ -3029,7 +3078,14 @@ begin
   T^.JitTable := Table;
   T^.Jit := Code;
   T^.JitState := 1;
+  if Info <> nil then
+  begin
+    Info^.BaseTable := Table;
+    T^.Opt := Info;
+  end;
 end;
+
+{$I G2.Opt.inc}
 
 { FastLoop's entry into frame Fr's code at PC: the PC the interpreter goes on with (compiles the template first
   when it has not been tried) }
@@ -3044,6 +3100,8 @@ begin
     if T^.JitCount < JitHot then Exit(PC);
     if GetCurrentThreadId = JitMainThread then JitCompile(T) else Exit(PC);
   end;
+  if (T^.Opt <> nil) and ((POptInfo(T^.Opt)^.Count <= 0) or (POptInfo(T^.Opt)^.Deopts > OPT_MAX_DEOPTS)) then
+    OptMaybe(Fr, PC);
   if (T^.Jit = nil) or (PPtrUInt(T^.JitTable)[PC] = 0) then
   begin
     {$IFDEF G2_JITSTATS}if T^.Jit <> nil then Inc(JitNoEntry[T^.Code[PC] and $FF]);{$ENDIF}
@@ -3087,6 +3145,9 @@ begin
   if JitEnabled < 0 then
     if GetEnvironmentVariable('G2_JIT') = '0' then JitEnabled := 0 else JitEnabled := 1;   { on unless G2_JIT=0 }
   if JitEnabled = 1 then JitReadHot;
+  if GetEnvironmentVariable('G2_OPT') = '0' then OptEnabled := 0;
+  OptLog := GetEnvironmentVariable('G2_OPTLOG') = '1';
+  OptMax := StrToIntDef(GetEnvironmentVariable('G2_OPTMAX'), -1);
   Result := JitEnabled = 1;
 end;
 {$ENDIF}
