@@ -1562,6 +1562,36 @@ begin
   Result := CreateDataPropOrThrow(R[A], Key, R[(I shr 24) and $FFFF]);
 end;
 
+{ instanceof's walks, cached by the receiver's shape and the prototype looked for (main thread only): valid while no
+  prototype changed (ProtoEpoch; not when AddICUnsafe says it would not be bumped) and no collection moved or freed
+  an object (a prototype's address could be another object's after one) }
+type
+  TInstOfEntry = record Shape: Pointer; Target: TValue; Epoch, Minor, Major: Integer; Res: Integer; end;
+var
+  InstOfCache: array[0..1023] of TInstOfEntry;
+
+{ (the walk and the store on their own: AddICUnsafe is a threadvar, which inlined loads FPC miscompiles) }
+function CachedProtoChainMiss(O: PObj; Target: TValue; E: Pointer): Integer; noinline;
+var P: ^TInstOfEntry;
+begin
+  Result := FastProtoChainHas(O, Target);
+  if (Result <> 2) and not AddICUnsafe and (GetCurrentThreadId = JitMainThread) then
+  begin
+    P := E;
+    P^.Shape := O^.Shape; P^.Target := Target; P^.Epoch := ProtoEpoch;
+    P^.Minor := GCMinorCount; P^.Major := GCMajorCount; P^.Res := Result;
+  end;
+end;
+
+function CachedProtoChainHas(O: PObj; Target: TValue): Integer; inline;
+var E: ^TInstOfEntry;
+begin
+  E := @InstOfCache[((PtrUInt(O^.Shape) shr 4) xor (PtrUInt(Target) shr 3)) and 1023];
+  if (E^.Shape = Pointer(O^.Shape)) and (E^.Target = Target) and (E^.Epoch = ProtoEpoch) and
+     (E^.Minor = GCMinorCount) and (E^.Major = GCMajorCount) then Exit(E^.Res);
+  Result := CachedProtoChainMiss(O, Target, E);
+end;
+
 { instanceof (JH_Misc's case on its own, so the hot path keeps its locals in registers): FastLoop's guarded
   prototype-chain walk for a bytecode constructor, else InstanceOf }
 function JH_InstanceOf(Fr: PFrame; I: QWord): Boolean;
@@ -1581,7 +1611,7 @@ begin
       if IsObject(V) then
       begin
         if not IsObject(VB) then begin R[(I shr 8) and $FFFF] := VFalse; Exit(True); end;
-        J := FastProtoChainHas(ObjOf(VB), V);
+        J := CachedProtoChainHas(ObjOf(VB), V);
         if J <> 2 then begin R[(I shr 8) and $FFFF] := MkBool(J = 1); Exit(True); end;
       end;
     end;
@@ -2029,16 +2059,36 @@ begin
         TagOf(jDX, jAX);
         AluRI(7, jDX, TAG_INT_HI, False);
         L4 := JccFwd(ccE);
+        { an object (not [[IsHTMLDDA]]) is true, a string by its length }
+        AluRI(7, jDX, TAG_PTR_HI, False);
+        L5 := JccFwd(ccNE);
+        MovRR(jCX, jAX);
+        AluRR($31, jCX, jR13, True);
+        CmpBMI(jCX, 4, ckObject);
+        L6 := JccFwd(ccNE);
+        TestBMI(jCX, 5, cfEmulatesUndefined);
+        LS := JccFwd(ccNE);
+        if Op = opJT then JmpPC(PC + 1 + C) else LA := JmpFwd;
+        PatchHere(L6);
+        CmpBMI(jCX, 4, ckString);
+        L6 := JccFwd(ccNE);
+        Mov32RM(jDX, jCX, PtrInt(@PStr(nil)^.Len));
+        AluRR($85, jDX, jDX, False);
+        if Op = opJT then JccPC(ccNE, PC + 1 + C) else JccPC(ccE, PC + 1 + C);
+        CC := JmpFwd;
         { anything else: ToBool (it calls nothing) }
+        PatchHere(L5); PatchHere(L6); PatchHere(LS);
         MovRR(jDI, jAX);
         CallAbs(@JH_ToBool);
         JB($84); JB($C0);                        { test al, al }
         if Op = opJT then JccPC(ccNE, PC + 1 + C) else JccPC(ccE, PC + 1 + C);
-        CC := JmpFwd;
+        L5 := JmpFwd;
         PatchHere(L4);
         AluRR($85, jAX, jAX, False);
         if Op = opJT then JccPC(ccNE, PC + 1 + C) else JccPC(ccE, PC + 1 + C);
         PatchHere(CC);
+        PatchHere(L5);
+        if Op = opJF then PatchHere(LA);
         { JT: the falsy values fall through here; JF: true does }
         PatchHere(L1);
         if Op = opJT then begin PatchHere(L2); PatchHere(L3); end;
