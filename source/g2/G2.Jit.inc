@@ -29,7 +29,7 @@ const
   JIT_CHUNK = 4 * 1024 * 1024;
 
 var
-  JitEnabled: Integer = -1;        { -1 not read yet (G2_JIT), 0 off, 1 on }
+  JitEnabled: Integer = -1;        { -1 not read yet (G2_JIT=0 turns the JIT off), 0 off, 1 on }
   JitBuf: array of Byte;           { the code being emitted }
   JitCap: Integer = 0;             { JitGrow's limit: past it the next JB, JD or JQ grows JitBuf }
   JitLen: Integer;
@@ -3085,7 +3085,7 @@ begin
      (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) then
     JitEnabled := 0;
   if JitEnabled < 0 then
-    if GetEnvironmentVariable('G2_JIT') = '1' then JitEnabled := 1 else JitEnabled := 0;
+    if GetEnvironmentVariable('G2_JIT') = '0' then JitEnabled := 0 else JitEnabled := 1;   { on unless G2_JIT=0 }
   if JitEnabled = 1 then JitReadHot;
   Result := JitEnabled = 1;
 end;
