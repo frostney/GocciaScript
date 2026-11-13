@@ -44,7 +44,7 @@ var
   JitTaken: Boolean;               { JitInstr compiled the instruction (False: its code is only its exit) }
 
 const
-  JIT_HOT = 20;                    { a template's entries before it is compiled }
+  JIT_HOT = 20;                    { a template's entries before it is compiled (G2_JIT_HOT overrides) }
   JIT_MAX_DEPTH = 256;             { code activations nested on the native stack (XJitRun, XJitCall) }
 
 var
@@ -53,6 +53,12 @@ var
   JitSlow: Pointer = nil;              { the helper the instruction's failed guards call (nil: they exit) }
   JitSlowList: array of Integer;
   JitSlowCount: Integer;
+  { the slow blocks JitCompile emits past the code: instruction PC (I), its helper, its jump target (or -1), its
+    guards' forward jumps JitDeferJumps[First .. First + Count - 1] }
+  JitDefer: array of record PC: Integer; I: QWord; H: Pointer; Jump, First, Count: Integer; end;
+  JitDeferCount: Integer;
+  JitDeferJumps: array of Integer;
+  JitDeferJumpCount: Integer;
 
 { JitBuf's room past JitLen: at least 8 bytes, so one check covers a dword or a qword }
 procedure JitGrow; noinline;
@@ -95,19 +101,30 @@ begin
 end;
 
 { ModRM (and SIB) for [Base + Disp32] }
-procedure JMem(Reg, Base, Disp: Integer);
+{ the ModRM byte (Reg, RM), the SIB byte when Sib >= 0, then the displacement in its shortest form: none for 0
+  (unless the base is rbp or r13, whose mod 00 means no base), a byte for -128 .. 127, else 32 bits }
+procedure JModDisp(Reg, RM, Base, Disp, Sib: Integer);
+var Md: Integer;
 begin
-  JB($80 or ((Reg and 7) shl 3) or (Base and 7));
-  if (Base and 7) = 4 then JB($24);
-  JD(Cardinal(Disp));
+  if (Disp = 0) and ((Base and 7) <> 5) then Md := $00
+  else if (Disp >= -128) and (Disp <= 127) then Md := $40
+  else Md := $80;
+  JB(Md or ((Reg and 7) shl 3) or RM);
+  if Sib >= 0 then JB(Sib);
+  if Md = $40 then JB(Byte(Disp and $FF))
+  else if Md = $80 then JD(Cardinal(Disp));
 end;
 
-{ [Base + Index * 8 + Disp32] (Index not rsp) }
+procedure JMem(Reg, Base, Disp: Integer);
+begin
+  if (Base and 7) = 4 then JModDisp(Reg, 4, Base, Disp, $24)
+  else JModDisp(Reg, Base and 7, Base, Disp, -1);
+end;
+
+{ [Base + Index * 8 + Disp] (Index not rsp) }
 procedure JMemIdx(Reg, Base, Index, Disp: Integer);
 begin
-  JB($80 or ((Reg and 7) shl 3) or 4);
-  JB($C0 or ((Index and 7) shl 3) or (Base and 7));
-  JD(Cardinal(Disp));
+  JModDisp(Reg, 4, Base, Disp, $C0 or ((Index and 7) shl 3) or (Base and 7));
 end;
 
 procedure JModRR(Reg, RM: Integer);
@@ -155,9 +172,13 @@ begin JRex(True, Src, 0, Dst); JB($89); JModRR(Src, Dst); end;
 procedure AluRR(Op: Byte; Dst, Src: Integer; W: Boolean);
 begin JRex(W, Src, 0, Dst); JB(Op); JModRR(Src, Dst); end;
 
-{ /N Dst, Imm32: 0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp }
+{ /N Dst, Imm (8 bits sign-extended when it fits, else 32): 0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp }
 procedure AluRI(N, Dst, Imm: Integer; W: Boolean);
-begin JRex(W, 0, 0, Dst); JB($81); JModRR(N, Dst); JD(Cardinal(Imm)); end;
+begin
+  JRex(W, 0, 0, Dst);
+  if (Imm >= -128) and (Imm <= 127) then begin JB($83); JModRR(N, Dst); JB(Byte(Imm and $FF)); end
+  else begin JB($81); JModRR(N, Dst); JD(Cardinal(Imm)); end;
+end;
 
 procedure Cmp32RM(Reg, Base, Disp: Integer);        { cmp Reg32, [Base + Disp] }
 begin JRex(False, Reg, 0, Base); JB($3B); JMem(Reg, Base, Disp); end;
@@ -189,9 +210,13 @@ begin JB($E9); AddFix(PC); end;
 
 const
   JIT_EPILOGUE = MaxInt;           { a fix's Target: the epilogue (eax already the result) }
+  JIT_THROW = MaxInt - 1;          { a fix's Target: the shared throw exit (eax -1, then the epilogue) }
 
 procedure JmpEpilogue;
 begin JB($E9); AddFix(JIT_EPILOGUE); end;
+
+procedure JccThrow(CC: Integer);                    { jcc to the code's throw exit: it returns -1 }
+begin JB($0F); JB($80 or CC); AddFix(JIT_THROW); end;
 
 function JccFwd(CC: Integer): Integer; forward;
 function JmpFwd: Integer; forward;
@@ -413,16 +438,14 @@ begin
   Result := JccFwd(ccNE);
 end;
 
-{ Op [Base + Index * 2^Scale + Disp32] with Reg (Prefix 0: none; a mandatory prefix goes before REX) }
+{ Op [Base + Index * 2^Scale + Disp] with Reg (Prefix 0: none; a mandatory prefix goes before REX) }
 procedure SibOp(Prefix: Byte; W: Boolean; const Ops: array of Byte; Reg, Base, Index, Scale, Disp: Integer);
 var K: Integer;
 begin
   if Prefix <> 0 then JB(Prefix);
   JRex(W, Reg, Index, Base);
   for K := 0 to High(Ops) do JB(Ops[K]);
-  JB($84 or ((Reg and 7) shl 3));
-  JB((Scale shl 6) or ((Index and 7) shl 3) or (Base and 7));
-  JD(Cardinal(Disp));
+  JModDisp(Reg, 4, Base, Disp, (Scale shl 6) or ((Index and 7) shl 3) or (Base and 7));
 end;
 
 { strict equality of two pointer values of different bits, rax and rcx (FastLoop's case): edx 1 equal, 0 not.
@@ -611,10 +634,15 @@ begin
   PatchHere(L1); PatchHere(L2); PatchHere(L3); PatchHere(L4);
 end;
 
+var
+  JitHot: Integer = JIT_HOT;
+  JitCallStub: Pointer = nil;   { JitBuildCallStub's code: opCall's call, shared by every call site }
+
 {$IFDEF G2_JITSTATS}
 var
   JitExits, JitNestedExits, JitNoEntry: array[0..255] of Int64;   { G2_JITSTATS: where the code stops, by opcode }
-  JitEntries, JitFallbacks: Int64;
+  JitEntries, JitFallbacks, JitCompiles, JitCodeBytes: Int64;
+  JitOpBytes, JitOpCount: array[0..255] of Int64;
 {$ENDIF}
 
 threadvar
@@ -703,7 +731,7 @@ begin
     if T^.JitState = 0 then
     begin
       Inc(T^.JitCount);
-      if (T^.JitCount >= JIT_HOT) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
+      if (T^.JitCount >= JitHot) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
     end;
     if T^.JitState <> 1 then Exit(1);
   end;
@@ -792,7 +820,7 @@ begin
     if T^.JitState = 0 then
     begin
       Inc(T^.JitCount);
-      if (T^.JitCount >= JIT_HOT) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
+      if (T^.JitCount >= JitHot) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
     end;
     if T^.JitState <> 1 then Exit(False);
   end;
@@ -860,7 +888,7 @@ begin
     if T^.JitState = 0 then
     begin
       Inc(T^.JitCount);
-      if (T^.JitCount >= JIT_HOT) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
+      if (T^.JitCount >= JitHot) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
     end;
     if T^.JitState <> 1 then Exit(1);
   end;
@@ -1208,17 +1236,13 @@ end;
 
 { the call of helper H (Fr, I) for instruction PC; a False result returns -1 (the throw pending) }
 procedure EmitHelper(H: Pointer; PC: Integer; I: QWord);
-var L: Integer;
 begin
   JRex(False, 0, 0, jR12); JB($C7); JMem(0, jR12, PtrInt(@PFrame(nil)^.PC)); JD(Cardinal(PC + 1));
   MovRR(jDI, jR12);
   MovRI(jSI, I);
   CallAbs(H);
   JB($84); JB($C0);                                { test al, al }
-  L := JccFwd(ccNE);
-  MovRI(jAX, $FFFFFFFF);
-  JmpEpilogue;
-  PatchHere(L);
+  JccThrow(ccE);
 end;
 
 function JH_Arith(Fr: PFrame; I: QWord): Boolean;
@@ -1547,7 +1571,7 @@ begin
     if T^.JitState = 0 then
     begin
       Inc(T^.JitCount);
-      if (T^.JitCount >= JIT_HOT) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
+      if (T^.JitCount >= JitHot) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
     end;
     if T^.JitState <> 1 then Exit(2);
   end;
@@ -1694,13 +1718,8 @@ begin
   MovRI(jSI, I);
   CallAbs(JitSlow);
   AluRR($85, jAX, jAX, False);
-  L := JccFwd(ccS);
+  JccThrow(ccS);
   JccPC(ccNE, Target);
-  CC_Skip := JmpFwd;
-  PatchHere(L);
-  MovRI(jAX, $FFFFFFFF);
-  JmpEpilogue;
-  PatchHere(CC_Skip);
 end;
 
 function JitICGetHit(O: PObj; IC: PPropIC; Dst: PValue): Boolean;
@@ -2103,133 +2122,18 @@ begin
       end;
     opCall:
       begin
-        { a compiled bytecode callee that takes FastCall's frame, inline: the checks, the registers past the
-          arguments undefined, the frame record, then its code called; anything else XJitCall's }
+        { JitCallStub with ecx A, edx Argc and the this flag (bit 16): 0 goes on, 1 is the interpreter's (PC
+          again), -1 a throw }
         Mov32MI(jR12, PtrInt(@PFrame(nil)^.PC), Cardinal(PC + 1));
-        JitSlowCount := 0;
-        MovRM(jAX, jBX, A * 8);
-        TagOf(jDX, jAX);
-        AluRI(7, jDX, TAG_PTR_HI, False);
-        AddSlow(JccFwd(ccNE));
-        MovRI(jDX, PTR_MASK);
-        AluRR($21, jAX, jDX, True);
-        CmpBMI(jAX, 4, ckObject); AddSlow(JccFwd(ccNE));
-        CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction); AddSlow(JccFwd(ccNE));
-        TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 1); AddSlow(JccFwd(ccNE));
-        MovRM(jSI, jAX, PtrInt(@PObj(nil)^.Native));
-        CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.FastCall), 0); AddSlow(JccFwd(ccE));
-        CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsGenerator), 0); AddSlow(JccFwd(ccNE));
-        CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.JitState), 1); AddSlow(JccFwd(ccNE));
-        { this: a strict or arrow callee takes it as it is (undefined for the flag); a sloppy one an object }
-        CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsStrict), 0); L1 := JccFwd(ccNE);
-        CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsArrow), 0); L2 := JccFwd(ccNE);
-        if (CU and 1) <> 0 then AddSlow(JmpFwd)
-        else
-        begin
-          MovRM(jCX, jBX, (A + 1) * 8);
-          TagOf(jDX, jCX);
-          AluRI(7, jDX, TAG_PTR_HI, False);
-          AddSlow(JccFwd(ccNE));
-          MovRI(jDX, PTR_MASK);
-          AluRR($21, jCX, jDX, True);
-          CmpBMI(jCX, 4, ckObject); AddSlow(JccFwd(ccNE));
-        end;
-        PatchHere(L1); PatchHere(L2);
-        if (CU and 1) <> 0 then begin MovRI(jCX, VUndefined); MovMR(jBX, (A + 1) * 8, jCX); end;
-        MovRM(jDI, jSI, PtrInt(@PFuncTemplate(nil)^.JitTable));
-        MovRM(jDI, jDI, 0);
-        AluRR($85, jDI, jDI, True); AddSlow(JccFwd(ccE));
-        MovsxdRM(jCX, jR12, PtrInt(@PFrame(nil)^.Base));
-        AluRI(0, jCX, A + 1, True);                                 { rcx: the callee's Base }
-        MovsxdRM(jDX, jSI, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
-        JRex(True, jR8, jDX, jCX); JB($8D); JB($04 or ((jR8 and 7) shl 3)); JB(((jDX and 7) shl 3) or (jCX and 7));  { lea r8, [rcx + rdx] }
-        AluRI(7, jR8, STACK_MAX, True); AddSlow(JccFwd(ccAE));
-        Mov32RFs(jR9, JitFsFrameTop);
-        AluRI(7, jR9, FRAME_MAX - 2, False); AddSlow(JccFwd(ccAE));
-        Mov32RFs(jR10, JitFsJitDepth);
-        AluRI(7, jR10, JIT_MAX_DEPTH, False); AddSlow(JccFwd(ccAE));
-        { the registers from min(Argc, NumParams) + 1 to MaxRegs - 1: undefined }
-        MovRI(jR11, Cardinal(B));
-        JRex(False, jR11, 0, jSI); JB($3B); JMem(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));  { cmp r11d, NumParams }
-        L1 := JccFwd(ccLE);
-        Mov32RM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));
-        PatchHere(L1);
-        AluRI(0, jR11, 1, False);
-        MovRI(jR10, VUndefined);
-        L2 := JitLen;
-        AluRR($39, jR11, jDX, True);
-        L3 := JccFwd(ccGE);
-        MovMRIdx(jBX, jR11, (A + 1) * 8, jR10);
-        AluRI(0, jR11, 1, True);
-        JB($E9); JD(Cardinal(L2 - (JitLen + 4)));
-        PatchHere(L3);
-        { the frame record Frames[FrameTop] }
-        MovRFs(jAX, JitFsFrames);
-        ImulRRI(jR10, jR9, SizeOf(TFrame));
-        AluRR($01, jAX, jR10, True);
-        MovRM(jR10, jBX, A * 8);
-        MovMR(jAX, PtrInt(@PFrame(nil)^.Closure), jR10);
-        MovRI(jR10, VUndefined);
-        MovMR(jAX, PtrInt(@PFrame(nil)^.NewTarget), jR10);
-        MovMR(jAX, PtrInt(@PFrame(nil)^.Tpl), jSI);
-        Mov32MR(jAX, PtrInt(@PFrame(nil)^.Base), jCX);
-        Mov32MI(jAX, PtrInt(@PFrame(nil)^.PC), 0);
-        LeaRM(jR10, jCX, -1);
-        Mov32MR(jAX, PtrInt(@PFrame(nil)^.RetIdx), jR10);
-        Mov32MI(jAX, PtrInt(@PFrame(nil)^.Argc), Cardinal(B));
-        Mov8MI(jAX, PtrInt(@PFrame(nil)^.Kind), 0);
-        AluRI(0, jR9, 1, False);
-        Mov32FsR(JitFsFrameTop, jR9);
-        Mov32FsR(JitFsStackTop, jR8);
-        Mov32RFs(jR10, JitFsJitDepth);
-        AluRI(0, jR10, 1, False);
-        Mov32FsR(JitFsJitDepth, jR10);
-        { the callee's code: R', its entry, the frame, nested (1) }
-        MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.Jit));
-        MovRR(jSI, jDI);
-        LeaRM(jDI, jBX, (A + 1) * 8);
-        MovRR(jDX, jAX);
-        MovRI(jCX, 1);
-        JRex(False, 0, 0, jR11); JB($FF); JB($D0 or (jR11 and 7));   { call r11 }
-        Mov32RFs(jR10, JitFsJitDepth);
-        AluRI(5, jR10, 1, False);
-        Mov32FsR(JitFsJitDepth, jR10);
-        AluRI(7, jAX, -2, False);
-        L1 := JccFwd(ccNE);
-        { returned: this frame's StackTop }
-        Mov32RM(jCX, jR12, PtrInt(@PFrame(nil)^.Base));
-        AluRI(0, jCX, T^.MaxRegs, False);
-        Mov32FsR(JitFsStackTop, jCX);
-        L2 := JmpFwd;
-        PatchHere(L1);
-        { stopped part way or threw: XJitCallPost }
-        MovRR(jDI, jR12);
-        MovRI(jSI, Cardinal(A));
-        JRex(False, jDX, 0, jAX); JB($8B); JModRR(jDX, jAX);         { mov edx, eax }
-        CallAbs(@XJitCallPost);
-        AluRR($85, jAX, jAX, False);
-        L3 := JccFwd(ccE);
-        MovRI(jAX, $FFFFFFFF);
-        JmpEpilogue;
-        PatchHere(L3);
-        L4 := JmpFwd;
-        { the general call: XJitCall }
-        for CC := 0 to JitSlowCount - 1 do PatchHere(JitSlowList[CC]);
-        JitSlowCount := 0;
-        MovRR(jDI, jR12);
-        MovRI(jSI, Cardinal(A));
-        MovRI(jDX, Cardinal(B));
-        MovRI(jCX, CU and 1);
-        CallAbs(@XJitCall);
+        MovRI(jCX, Cardinal(A));
+        MovRI(jDX, Cardinal(B) or ((CU and 1) shl 16));
+        CallAbs(JitCallStub);
         AluRR($85, jAX, jAX, False);
         L1 := JccFwd(ccE);
         AluRI(7, jAX, 1, False);
         JccExit(ccE, PC);
-        MovRI(jAX, $FFFFFFFF);
         JmpEpilogue;
         PatchHere(L1);
-        PatchHere(L2);
-        PatchHere(L4);
       end;
     opGetMethod:
       begin
@@ -2514,8 +2418,7 @@ begin
         L1 := JccFwd(ccE);
         AluRI(7, jAX, 1, False);
         JccExit(ccE, PC);
-        MovRI(jAX, $FFFFFFFF);
-        JmpEpilogue;
+        JccThrow(ccNE);
         PatchHere(L1);
       end;
     opRet, opRetUndef:
@@ -2572,7 +2475,7 @@ begin
 end;
 
 procedure JitInstr(T: PFuncTemplate; PC: Integer; I: QWord);
-var Skip, K: Integer; Saved: Pointer;
+var K: Integer; Saved: Pointer;
 begin
   Saved := JitSlow;
   case TOp(I and $FF) of
@@ -2600,11 +2503,20 @@ begin
   JitInstr0(T, PC, I);
   if JitSlowCount > 0 then
   begin
-    { the failed guards' block: the helper, then on to the next instruction }
-    Skip := JmpFwd;
-    for K := 0 to JitSlowCount - 1 do PatchHere(JitSlowList[K]);
-    if JitSlowJump >= 0 then EmitJumpHelper(PC, I, JitSlowJump) else EmitHelper(JitSlow, PC, I);
-    PatchHere(Skip);
+    { the failed guards' block (the helper, then on to the next instruction), emitted past the code so the
+      fast paths stay together }
+    if JitDeferCount >= Length(JitDefer) then SetLength(JitDefer, JitDeferCount * 2 + 64);
+    JitDefer[JitDeferCount].PC := PC;
+    JitDefer[JitDeferCount].I := I;
+    JitDefer[JitDeferCount].H := JitSlow;
+    JitDefer[JitDeferCount].Jump := JitSlowJump;
+    JitDefer[JitDeferCount].First := JitDeferJumpCount;
+    JitDefer[JitDeferCount].Count := JitSlowCount;
+    Inc(JitDeferCount);
+    if JitDeferJumpCount + JitSlowCount > Length(JitDeferJumps) then
+      SetLength(JitDeferJumps, (JitDeferJumpCount + JitSlowCount) * 2 + 256);
+    for K := 0 to JitSlowCount - 1 do JitDeferJumps[JitDeferJumpCount + K] := JitSlowList[K];
+    Inc(JitDeferJumpCount, JitSlowCount);
   end;
   JitSlowCount := 0;
   JitSlowJump := -1;
@@ -2633,14 +2545,165 @@ begin
 end;
 
 { compiles T (JitState 1, Jit and JitTable set) or marks it not compiled (2) }
+{ opCall's code, shared: rbx R, r12 the frame (its PC already past the call), ecx A, edx Argc | this flag
+  shl 16. A compiled bytecode callee that takes FastCall's frame is called inline: the checks, the registers past
+  the arguments undefined, the frame record, then its code. Anything else is XJitCall's. eax: 0 go on, 1 the
+  interpreter runs the call, -1 a throw. Keeps rbx, r12, rbp (and r13 - r15, its own) }
+procedure JitBuildCallStub;
+var Slow: array[0..31] of Integer; NSlow, K, L1, L2, L3, LRet0, LRet1, LRet2, LRet3, LRet4: Integer; P: PByte;
+  procedure AddS(L: Integer); begin Slow[NSlow] := L; Inc(NSlow); end;
+begin
+  JitLen := 0;
+  NSlow := 0;
+  JB($41); JB($55); JB($41); JB($56); JB($41); JB($57);          { push r13; push r14; push r15: rsp aligned }
+  JB($4C); JB($8D); JB($2C); JB($CB);                              { lea r13, [rbx + rcx * 8]: &R[A] }
+  MovRR(jR15, jCX);                                                { r15: A }
+  MovRR(jR14, jDX);                                                { r14: Argc | flag shl 16 }
+  MovRM(jAX, jR13, 0);
+  TagOf(jDX, jAX);
+  AluRI(7, jDX, TAG_PTR_HI, False);
+  AddS(JccFwd(ccNE));
+  MovRI(jDX, PTR_MASK);
+  AluRR($21, jAX, jDX, True);
+  CmpBMI(jAX, 4, ckObject); AddS(JccFwd(ccNE));
+  CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction); AddS(JccFwd(ccNE));
+  TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 1); AddS(JccFwd(ccNE));
+  MovRM(jSI, jAX, PtrInt(@PObj(nil)^.Native));
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.FastCall), 0); AddS(JccFwd(ccE));
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsGenerator), 0); AddS(JccFwd(ccNE));
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.JitState), 1); AddS(JccFwd(ccNE));
+  { this: a strict or arrow callee takes it as it is (undefined for the flag); a sloppy one an object }
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsStrict), 0); L1 := JccFwd(ccNE);
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsArrow), 0); L2 := JccFwd(ccNE);
+  JB($41); JB($F7); JB($C6); JD($10000);                           { test r14d, $10000 }
+  AddS(JccFwd(ccNE));
+  MovRM(jCX, jR13, 8);
+  TagOf(jDX, jCX);
+  AluRI(7, jDX, TAG_PTR_HI, False);
+  AddS(JccFwd(ccNE));
+  MovRI(jDX, PTR_MASK);
+  AluRR($21, jCX, jDX, True);
+  CmpBMI(jCX, 4, ckObject); AddS(JccFwd(ccNE));
+  PatchHere(L1); PatchHere(L2);
+  JB($41); JB($F7); JB($C6); JD($10000);                           { test r14d, $10000 }
+  L1 := JccFwd(ccE);
+  MovRI(jCX, VUndefined); MovMR(jR13, 8, jCX);
+  PatchHere(L1);
+  MovRM(jDI, jSI, PtrInt(@PFuncTemplate(nil)^.JitTable));
+  MovRM(jDI, jDI, 0);
+  AluRR($85, jDI, jDI, True); AddS(JccFwd(ccE));
+  MovsxdRM(jCX, jR12, PtrInt(@PFrame(nil)^.Base));
+  AluRR($01, jCX, jR15, True);
+  AluRI(0, jCX, 1, True);                                          { rcx: the callee's Base }
+  MovsxdRM(jDX, jSI, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
+  JRex(True, jR8, jDX, jCX); JB($8D); JB($04 or ((jR8 and 7) shl 3)); JB(((jDX and 7) shl 3) or (jCX and 7));  { lea r8, [rcx + rdx] }
+  AluRI(7, jR8, STACK_MAX, True); AddS(JccFwd(ccAE));
+  Mov32RFs(jR9, JitFsFrameTop);
+  AluRI(7, jR9, FRAME_MAX - 2, False); AddS(JccFwd(ccAE));
+  Mov32RFs(jR10, JitFsJitDepth);
+  AluRI(7, jR10, JIT_MAX_DEPTH, False); AddS(JccFwd(ccAE));
+  { the registers from min(Argc, NumParams) + 1 to MaxRegs - 1: undefined }
+  MovRR(jR11, jR14);
+  AluRI(4, jR11, $FFFF, False);
+  JRex(False, jR11, 0, jSI); JB($3B); JMem(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));  { cmp r11d, NumParams }
+  L1 := JccFwd(ccLE);
+  Mov32RM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));
+  PatchHere(L1);
+  AluRI(0, jR11, 1, False);
+  MovRI(jR10, VUndefined);
+  L2 := JitLen;
+  AluRR($39, jR11, jDX, True);
+  L3 := JccFwd(ccGE);
+  MovMRIdx(jR13, jR11, 8, jR10);
+  AluRI(0, jR11, 1, True);
+  JB($E9); JD(Cardinal(L2 - (JitLen + 4)));
+  PatchHere(L3);
+  { the frame record Frames[FrameTop] }
+  MovRFs(jAX, JitFsFrames);
+  ImulRRI(jR10, jR9, SizeOf(TFrame));
+  AluRR($01, jAX, jR10, True);
+  MovRM(jR10, jR13, 0);
+  MovMR(jAX, PtrInt(@PFrame(nil)^.Closure), jR10);
+  MovRI(jR10, VUndefined);
+  MovMR(jAX, PtrInt(@PFrame(nil)^.NewTarget), jR10);
+  MovMR(jAX, PtrInt(@PFrame(nil)^.Tpl), jSI);
+  Mov32MR(jAX, PtrInt(@PFrame(nil)^.Base), jCX);
+  Mov32MI(jAX, PtrInt(@PFrame(nil)^.PC), 0);
+  LeaRM(jR10, jCX, -1);
+  Mov32MR(jAX, PtrInt(@PFrame(nil)^.RetIdx), jR10);
+  MovRR(jR11, jR14);
+  AluRI(4, jR11, $FFFF, False);
+  Mov32MR(jAX, PtrInt(@PFrame(nil)^.Argc), jR11);
+  Mov8MI(jAX, PtrInt(@PFrame(nil)^.Kind), 0);
+  AluRI(0, jR9, 1, False);
+  Mov32FsR(JitFsFrameTop, jR9);
+  Mov32FsR(JitFsStackTop, jR8);
+  Mov32RFs(jR10, JitFsJitDepth);
+  AluRI(0, jR10, 1, False);
+  Mov32FsR(JitFsJitDepth, jR10);
+  { the callee's code: R', its entry, the frame, nested (1) }
+  MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.Jit));
+  MovRR(jSI, jDI);
+  LeaRM(jDI, jR13, 8);
+  MovRR(jDX, jAX);
+  MovRI(jCX, 1);
+  JRex(False, 0, 0, jR11); JB($FF); JB($D0 or (jR11 and 7));   { call r11 }
+  Mov32RFs(jR10, JitFsJitDepth);
+  AluRI(5, jR10, 1, False);
+  Mov32FsR(JitFsJitDepth, jR10);
+  AluRI(7, jAX, -2, False);
+  L1 := JccFwd(ccNE);
+  { returned: this frame's StackTop (its Base + its template's MaxRegs) }
+  MovRM(jR10, jR12, PtrInt(@PFrame(nil)^.Tpl));
+  Mov32RM(jCX, jR10, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
+  JRex(False, jCX, 0, jR12); JB($03); JMem(jCX, jR12, PtrInt(@PFrame(nil)^.Base));   { add ecx, Base }
+  Mov32FsR(JitFsStackTop, jCX);
+  AluRR($31, jAX, jAX, False);
+  LRet0 := JmpFwd;
+  PatchHere(L1);
+  { stopped part way or threw: XJitCallPost (0 goes on, else a throw) }
+  MovRR(jDI, jR12);
+  MovRR(jSI, jR15);
+  JRex(False, jDX, 0, jAX); JB($8B); JModRR(jDX, jAX);         { mov edx, eax }
+  CallAbs(@XJitCallPost);
+  AluRR($85, jAX, jAX, False);
+  LRet1 := JccFwd(ccE);
+  MovRI(jAX, $FFFFFFFF);
+  LRet2 := JmpFwd;
+  { the general call: XJitCall (0 goes on, 1 the interpreter's, else a throw) }
+  for K := 0 to NSlow - 1 do PatchHere(Slow[K]);
+  MovRR(jDI, jR12);
+  MovRR(jSI, jR15);
+  MovRR(jDX, jR14);
+  AluRI(4, jDX, $FFFF, False);
+  MovRR(jCX, jR14);
+  JB($C1); JB($E9); JB(16);                                        { shr ecx, 16 }
+  CallAbs(@XJitCall);
+  AluRR($85, jAX, jAX, False);
+  LRet3 := JccFwd(ccE);
+  AluRI(7, jAX, 1, False);
+  LRet4 := JccFwd(ccE);
+  MovRI(jAX, $FFFFFFFF);
+  PatchHere(LRet0); PatchHere(LRet1); PatchHere(LRet2); PatchHere(LRet3); PatchHere(LRet4);
+  JB($41); JB($5F); JB($41); JB($5E); JB($41); JB($5D); JB($C3);  { pop r15; pop r14; pop r13; ret }
+  P := JitAlloc(JitLen);
+  if P = nil then Exit;
+  Move(JitBuf[0], P^, JitLen);
+  JitCallStub := P;
+end;
+
 procedure JitCompile(T: PFuncTemplate);
-var PC, I, Exit0, Target: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal;
+var PC, I, N, K, Exit0, Throw0, Target: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal; Saved: Pointer;
 begin
   T^.JitState := 2;
   { a generator's body runs compiled between its suspensions (its yields and returns are the interpreter's) }
   if (T^.Lazy <> nil) or (T^.CodeLen = 0) or T^.IsAsync then Exit;
+  if JitCallStub = nil then JitBuildCallStub;
+  if JitCallStub = nil then Exit;
   JitLen := 0;
   JitFixCount := 0;
+  JitDeferCount := 0;
+  JitDeferJumpCount := 0;
   SetLength(JitNative, T^.CodeLen);
   SetLength(JitExitOf, T^.CodeLen);
   for PC := 0 to T^.CodeLen - 1 do JitExitOf[PC] := -1;
@@ -2656,13 +2719,29 @@ begin
     JitNative[PC] := JitLen;
     JitTaken := True;
     JitInstr(T, PC, T^.Code[PC]);
+    {$IFDEF G2_JITSTATS}Inc(JitOpBytes[T^.Code[PC] and $FF], JitLen - JitNative[PC]); Inc(JitOpCount[T^.Code[PC] and $FF]);{$ENDIF}
     JitTakenAt[PC] := JitTaken;
   end;
   { past the end (never reached: the last instruction is a return) }
   JmpExit(T^.CodeLen - 1);
+  { the slow blocks, each back to the instruction after its own }
+  Saved := JitSlow;
+  for N := 0 to JitDeferCount - 1 do
+  begin
+    for K := JitDefer[N].First to JitDefer[N].First + JitDefer[N].Count - 1 do PatchHere(JitDeferJumps[K]);
+    JitSlow := JitDefer[N].H;
+    if JitDefer[N].Jump >= 0 then EmitJumpHelper(JitDefer[N].PC, JitDefer[N].I, JitDefer[N].Jump)
+    else EmitHelper(JitDefer[N].H, JitDefer[N].PC, JitDefer[N].I);
+    if JitDefer[N].PC + 1 < T^.CodeLen then JmpPC(JitDefer[N].PC + 1) else JmpExit(JitDefer[N].PC);
+  end;
+  JitSlow := Saved;
   { the exits: eax the PC the interpreter runs; the epilogue }
   Exit0 := JitLen;
   JB($5D); JB($41); JB($5C); JB($5B); JB($C3);  { pop rbp; pop r12; pop rbx; ret }
+  { the throw exit: -1 }
+  Throw0 := JitLen;
+  MovRI(jAX, $FFFFFFFF);
+  JB($E9); JD(Cardinal(Exit0 - (JitLen + 4)));
   for I := 0 to JitFixCount - 1 do
     if JitFixes[I].Target < 0 then
     begin
@@ -2677,6 +2756,7 @@ begin
   for I := 0 to JitFixCount - 1 do
   begin
     if JitFixes[I].Target = JIT_EPILOGUE then Target := Exit0
+    else if JitFixes[I].Target = JIT_THROW then Target := Throw0
     else if JitFixes[I].Target < 0 then Target := JitExitOf[-1 - JitFixes[I].Target]
     else Target := JitNative[JitFixes[I].Target];
     D := Cardinal(Target - (JitFixes[I].At + 4));
@@ -2685,6 +2765,7 @@ begin
   end;
   Code := JitAlloc(JitLen);
   if Code = nil then begin FreeMem(Table); Exit; end;
+  {$IFDEF G2_JITSTATS}Inc(JitCompiles); Inc(JitCodeBytes, JitLen);{$ENDIF}
   Move(JitBuf[0], Code^, JitLen);
   { an instruction the code only exits at has no entry: FastLoop does not go in to come straight back out }
   T^.JitComplete := True;
@@ -2710,7 +2791,7 @@ begin
   if T^.JitState = 0 then
   begin
     Inc(T^.JitCount);
-    if T^.JitCount < JIT_HOT then Exit(PC);
+    if T^.JitCount < JitHot then Exit(PC);
     if GetCurrentThreadId = JitMainThread then JitCompile(T) else Exit(PC);
   end;
   if (T^.Jit = nil) or (PPtrUInt(T^.JitTable)[PC] = 0) then
@@ -2725,6 +2806,12 @@ begin
   Result := TJitFn(T^.Jit)(@VStack[Fr^.Base], Pointer(PPtrUInt(T^.JitTable)[PC]), Fr, 0);
   Dec(JitDepth);
   {$IFDEF G2_JITSTATS}Inc(JitEntries); if Result >= 0 then Inc(JitExits[T^.Code[Result] and $FF]);{$ENDIF}
+end;
+
+procedure JitReadHot; noinline;
+begin
+  JitHot := StrToIntDef(GetEnvironmentVariable('G2_JIT_HOT'), JIT_HOT);
+  if JitHot < 1 then JitHot := 1;
 end;
 
 function JitOn: Boolean;
@@ -2745,6 +2832,7 @@ begin
     JitEnabled := 0;
   if JitEnabled < 0 then
     if GetEnvironmentVariable('G2_JIT') = '1' then JitEnabled := 1 else JitEnabled := 0;
+  if JitEnabled = 1 then JitReadHot;
   Result := JitEnabled = 1;
 end;
 {$ENDIF}

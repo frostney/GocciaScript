@@ -8514,11 +8514,13 @@ initialization
 finalization
   WriteLn(ErrOutput, 'jitentries ', JitEntries);
   WriteLn(ErrOutput, 'jitfallbacks ', JitFallbacks);
+  WriteLn(ErrOutput, 'jitcompiles ', JitCompiles, ' bytes ', JitCodeBytes);
   for FastOpI := 0 to 255 do
   begin
     if JitExits[FastOpI] > 0 then WriteLn(ErrOutput, 'jitexit ', FastOpI, ' ', JitExits[FastOpI]);
     if JitNestedExits[FastOpI] > 0 then WriteLn(ErrOutput, 'jitnested ', FastOpI, ' ', JitNestedExits[FastOpI]);
     if JitNoEntry[FastOpI] > 0 then WriteLn(ErrOutput, 'jitnoentry ', FastOpI, ' ', JitNoEntry[FastOpI]);
+    if JitOpCount[FastOpI] > 0 then WriteLn(ErrOutput, 'jitopbytes ', FastOpI, ' ', JitOpCount[FastOpI], ' ', JitOpBytes[FastOpI]);
   end;
 {$ENDIF}
 {$IFDEF G2_BAILSTATS}
