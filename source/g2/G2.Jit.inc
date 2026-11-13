@@ -425,6 +425,62 @@ begin
   JD(Cardinal(Disp));
 end;
 
+{ strict equality of two pointer values of different bits, rax and rcx (FastLoop's case): edx 1 equal, 0 not.
+  Two strings differ by length, by computed hashes, or as different atoms, and are the same atom's text equal;
+  a string against any other cell differs, and so does any pair but two BigInts. Two BigInts and two strings
+  without the atoms to tell are PC's slow path }
+procedure EmitPtrPairEq(PC: Integer);
+var LA, LN1, LN2, LN3, LN4, LH1, LH2, LH3, LE: Integer;
+begin
+  MovRI(jDX, PTR_MASK);
+  MovRR(jR8, jAX); AluRR($21, jR8, jDX, True);
+  MovRR(jR9, jCX); AluRR($21, jR9, jDX, True);
+  MovzxBRM(jR10, jR8, 4);
+  MovzxBRM(jR11, jR9, 4);
+  AluRR($31, jDX, jDX, False);
+  AluRI(7, jR10, ckString, False);
+  LA := JccFwd(ccNE);
+  AluRI(7, jR11, ckString, False);
+  LN1 := JccFwd(ccNE);
+  Mov32RM(jR10, jR8, PtrInt(@PStr(nil)^.Len));
+  Cmp32RM(jR10, jR9, PtrInt(@PStr(nil)^.Len));
+  LN2 := JccFwd(ccNE);
+  { both hashes computed and different: not equal }
+  Mov32RM(jR10, jR8, PtrInt(@PStr(nil)^.Hash));
+  AluRR($85, jR10, jR10, False);
+  LH1 := JccFwd(ccE);
+  Mov32RM(jR11, jR9, PtrInt(@PStr(nil)^.Hash));
+  AluRR($85, jR11, jR11, False);
+  LH2 := JccFwd(ccE);
+  AluRR($39, jR10, jR11, False);
+  LN3 := JccFwd(ccNE);
+  PatchHere(LH1);
+  PatchHere(LH2);
+  { both atoms known: equal exactly when they are the same atom }
+  MovRM(jR10, jR8, PtrInt(@PStr(nil)^.Atom));
+  AluRR($85, jR10, jR10, True);
+  JccExit(ccE, PC);
+  MovRM(jR11, jR9, PtrInt(@PStr(nil)^.Atom));
+  AluRR($85, jR11, jR11, True);
+  JccExit(ccE, PC);
+  AluRR($39, jR10, jR11, True);
+  LH3 := JccFwd(ccNE);
+  MovRI(jDX, 1);
+  LE := JmpFwd;
+  PatchHere(LA);
+  { not a string: two BigInts are the slow path's, anything else differs }
+  AluRI(7, jR10, 9, False);
+  LN4 := JccFwd(ccNE);
+  AluRI(7, jR11, 9, False);
+  JccExit(ccE, PC);
+  PatchHere(LN1);
+  PatchHere(LN2);
+  PatchHere(LN3);
+  PatchHere(LN4);
+  PatchHere(LH3);
+  PatchHere(LE);
+end;
+
 { a typed array's element (FastLoop's case: an ordinary buffer, the view's length, a kind done without a call),
   rax the object, rcx the index (an int value); a load into R[A], a store of R[V]. Anything else is PC's slow
   path. The forward jumps in JitTAEnds (JitTAEndCount of them) end the instruction: the caller patches them }
@@ -1304,6 +1360,35 @@ begin
   Result := True;
 end;
 
+{ instanceof (JH_Misc's case on its own, so the hot path keeps its locals in registers): FastLoop's guarded
+  prototype-chain walk for a bytecode constructor, else InstanceOf }
+function JH_InstanceOf(Fr: PFrame; I: QWord): Boolean;
+var R: PValue; V, VB: TValue; O: PObj; Tpl: PFuncTemplate; J: Integer; Bool: Boolean;
+begin
+  R := @VStack[Fr^.Base];
+  V := R[I shr 40];
+  VB := R[(I shr 24) and $FFFF];
+  if IsObject(V) and not MultiRealmAny then
+  begin
+    O := ObjOf(V);
+    Tpl := PFuncTemplate(O^.Native);
+    if (O^.OKind = okFunction) and (Pointer(O^.Shape) = Tpl^.NoHIShape) and (Pointer(O^.Shape) = Tpl^.CtorFnShape) and
+       (ObjOf(FunctionProto)^.Shape = HIFPShape) then
+    begin
+      V := GetSlot(O, Tpl^.CtorProtoSlot);
+      if IsObject(V) then
+      begin
+        if not IsObject(VB) then begin R[(I shr 8) and $FFFF] := VFalse; Exit(True); end;
+        J := FastProtoChainHas(ObjOf(VB), V);
+        if J <> 2 then begin R[(I shr 8) and $FFFF] := MkBool(J = 1); Exit(True); end;
+      end;
+    end;
+  end;
+  if not InstanceOf(VB, R[I shr 40], Bool) then Exit(False);
+  VStack[Fr^.Base + Integer((I shr 8) and $FFFF)] := MkBool(Bool);
+  Result := True;
+end;
+
 function JH_Misc(Fr: PFrame; I: QWord): Boolean;
 var R: PValue; A, B, C, J: Integer; V, VB: TValue; O: PObj; Bool: Boolean; Idx: Int64; Key: PStr; U: PUpval;
 begin
@@ -1627,7 +1712,7 @@ end;
 procedure JitInstr(T: PFuncTemplate; PC: Integer; I: QWord); forward;
 
 procedure JitInstr0(T: PFuncTemplate; PC: Integer; I: QWord);
-var Saved: Pointer; A, B, C: Integer; CU: Cardinal; Op: TOp; L1, L2, L3, L4, LS, LA: Integer; IC: PPropIC; CC: Integer;
+var Saved: Pointer; A, B, C: Integer; CU: Cardinal; Op: TOp; L1, L2, L3, L4, L5, L6, LS, LA: Integer; IC: PPropIC; CC: Integer;
 begin
   Op := TOp(I and $FF);
   A := (I shr 8) and $FFFF;
@@ -1842,7 +1927,13 @@ begin
         L2 := JccFwd(ccNE);
         TagOf(jDX, jCX);
         AluRI(7, jDX, TAG_PTR_HI, False);
-        JccExit(ccE, PC);
+        LS := JccFwd(ccNE);
+        EmitPtrPairEq(PC);
+        AluRR($85, jDX, jDX, False);
+        { JSEq: equal jumps, not equal goes on; JNSEq: not equal jumps, equal goes on }
+        if Op = opJSEq then JccPC(ccNE, PC + 1 + C) else JccPC(ccE, PC + 1 + C);
+        L6 := JmpFwd;
+        PatchHere(LS);
         PatchHere(L2);
         MovRI(jR8, DOUBLE_LIMIT);
         AluRR($39, jAX, jR8, True);
@@ -1856,6 +1947,7 @@ begin
           JmpPC(PC + 1 + C);
           PatchHere(L4);
         end;
+        PatchHere(L6);
       end;
     opGetElem:
       begin
@@ -2166,6 +2258,8 @@ begin
         if (Op = opSEq) or (Op = opEq) then MovRI(jAX, VTrue) else MovRI(jAX, VFalse);
         L4 := JmpFwd;
         PatchHere(L1);
+        L5 := -1;
+        L6 := -1;
         if (Op = opSEq) or (Op = opSNe) then
         begin
           TagOf(jDX, jAX);
@@ -2173,7 +2267,13 @@ begin
           L2 := JccFwd(ccNE);
           TagOf(jDX, jCX);
           AluRI(7, jDX, TAG_PTR_HI, False);
-          JccExit(ccE, PC);
+          LS := JccFwd(ccNE);
+          EmitPtrPairEq(PC);
+          AluRR($85, jDX, jDX, False);
+          L5 := JccFwd(ccE);
+          if Op = opSEq then MovRI(jAX, VTrue) else MovRI(jAX, VFalse);
+          L6 := JmpFwd;
+          PatchHere(LS);
           PatchHere(L2);
           MovRI(jR8, DOUBLE_LIMIT);
           AluRR($39, jAX, jR8, True);
@@ -2230,8 +2330,10 @@ begin
         end;
         { not equal }
         PatchHere(L3);
+        if L5 >= 0 then PatchHere(L5);
         if Op = opSEq then MovRI(jAX, VFalse) else MovRI(jAX, VTrue);
         PatchHere(L4);
+        if L6 >= 0 then PatchHere(L6);
         MovMR(jBX, A * 8, jAX);
       end;
     opLt, opLe, opGt, opGe:
@@ -2274,7 +2376,8 @@ begin
       end;
     opShr, opUShr, opNeg, opBitNot, opToNum, opToNumeric, opUShrI, opPow:
       EmitHelper(@JH_Arith, PC, I);
-    opGetIter, opForIn, opInstanceof, opIn, opNewArr, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn,
+    opInstanceof: EmitHelper(@JH_InstanceOf, PC, I);
+    opGetIter, opForIn, opIn, opNewArr, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn,
     opSetUpv:
       EmitHelper(@JH_Misc, PC, I);
     opBitAnd, opBitOr, opBitXor, opShl:
