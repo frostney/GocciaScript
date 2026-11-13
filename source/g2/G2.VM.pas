@@ -340,6 +340,9 @@ function GetPrototypeFromConstructor(C, Default: TValue; var P: TValue): Boolean
 
 implementation
 
+uses
+  Goccia.StackLimit;
+
 { N registers from P set to undefined: a frame's registers past its arguments. A call clears about ten, which
   FillQWord's set-up costs more than (about 29 instructions in Richards); this loop stores four per step }
 procedure FillUndef(P: PValue; N: Integer); noinline;

@@ -45,7 +45,8 @@ var
 
 const
   JIT_HOT = 20;                    { a template's entries before it is compiled (G2_JIT_HOT overrides) }
-  JIT_MAX_DEPTH = 256;             { code activations nested on the native stack (XJitRun, XJitCall) }
+  JIT_MAX_DEPTH = 256;             { code activations nested on the native stack where its bounds are unknown }
+  JIT_STACK_MARGIN = 256 * 1024;   { native stack kept free below compiled code, above NativeStackLimit }
 
 var
   CC_Skip: Integer;
@@ -278,7 +279,7 @@ begin JB($F2); JRex(False, X, 0, R); JB($0F); JB($2A); JModRR(X, R); end;
 
 var
   JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsArrayIterNext: PtrInt;   { threadvar offsets from fs }
-  JitFsFrames, JitFsFrameTop, JitFsStackTop, JitFsJitDepth: PtrInt;
+  JitFsFrames, JitFsFrameTop, JitFsStackTop, JitFsJitDepth, JitFsJitDepthMax, JitFsStackFloor: PtrInt;
 
 function JitFsBase: PtrUInt; assembler; nostackframe;
 asm
@@ -648,8 +649,60 @@ var
 
 threadvar
   JitDepth: Integer;               { native calls of compiled code in progress (XJitCall) }
+  { the thread's bounds on them (JitThreadInit): JitDepth below JitDepthMax (0 until set: no code runs), rsp above
+    JitStackFloor (0 where the stack's bounds are unknown, and JitDepthMax is JIT_MAX_DEPTH) }
+  JitDepthMax: Integer;
+  JitStackFloor: PtrUInt;
+
+procedure JitThreadInit; noinline;
+var L: PtrUInt;
+begin
+  L := NativeStackLimit;
+  if L <> 0 then
+  begin
+    JitStackFloor := L + JIT_STACK_MARGIN;
+    JitDepthMax := MaxInt;
+  end
+  else
+  begin
+    JitStackFloor := 0;
+    JitDepthMax := JIT_MAX_DEPTH;
+  end;
+end;
+
+{ no further native activation of compiled code: the thread's depth bound or its native stack floor reached }
+function JitTooDeep: Boolean; inline;
+var Marker: Byte;
+begin
+  Result := (JitDepth >= JitDepthMax) or (PtrUInt(@Marker) < JitStackFloor);
+end;
 
 procedure JitCompile(T: PFuncTemplate); forward;
+procedure XJitRet(Fr: PFrame; V: TValue); forward;
+
+{ a derived class constructor's compiled return of V in frame Fr (10.2.2 [[Construct]] steps 10-12 for XJitNew's
+  Kind 1 frame, as Execute's opRet): an object result, else undefined gives this, which super() must have bound.
+  The code runs in one realm only, so the errors are this realm's. False: a throw pending (the frame still
+  pushed, as Execute's) }
+function XJitRetCtor(Fr: PFrame; V: TValue): Boolean;
+begin
+  if (Fr^.Kind = 1) and not IsObject(V) then
+  begin
+    if V <> VUndefined then
+    begin
+      ThrowTypeError('Derived constructors may only return object or undefined');
+      Exit(False);
+    end;
+    V := VStack[Fr^.Base];
+    if V = VHole then
+    begin
+      ThrowError('ReferenceError', 'Must call super constructor in derived class before accessing ''this'' or returning from derived constructor');
+      Exit(False);
+    end;
+  end;
+  XJitRet(Fr, V);
+  Result := True;
+end;
 
 { a compiled frame Fr returns V (the code of a frame XJitCall pushed): as FastLoop's opRet for a call }
 procedure XJitRet(Fr: PFrame; V: TValue);
@@ -678,7 +731,7 @@ end;
 function XJitCall(Fr: PFrame; A, Argc, ThisFlag: Integer): Integer;
 var VA, VB, V, This: TValue; O, O2: PObj; T: PFuncTemplate; Base, J, Res: Integer; NF: PFrame; R: PValue;
 begin
-  if MultiRealmAny or (JitDepth >= JIT_MAX_DEPTH) then Exit(1);
+  if MultiRealmAny or JitTooDeep then Exit(1);
   R := @VStack[Fr^.Base];
   VA := R[A];
   if not IsObject(VA) then Exit(1);
@@ -812,7 +865,9 @@ end;
 function JitRunPushed(var Res: TValue; var Ok: Boolean): Boolean;
 var NF: PFrame; T: PFuncTemplate; R: Integer; RetIdx: Integer;
 begin
-  if (JitEnabled <> 1) or MultiRealmAny or (JitDepth >= JIT_MAX_DEPTH) then Exit(False);
+  if (JitEnabled <> 1) or MultiRealmAny then Exit(False);
+  if JitDepthMax = 0 then JitThreadInit;
+  if JitTooDeep then Exit(False);
   NF := @Frames[FrameTop - 1];
   T := NF^.Tpl;
   if T^.IsGenerator then Exit(False);
@@ -865,7 +920,7 @@ end;
 function XJitNew(Fr: PFrame; A, Argc: Integer): Integer;
 var VA, V: TValue; O: PObj; T: PFuncTemplate; Base, J, Res: Integer; NF: PFrame; R: PValue;
 begin
-  if MultiRealmAny or (JitDepth >= JIT_MAX_DEPTH) then Exit(1);
+  if MultiRealmAny or JitTooDeep then Exit(1);
   R := @VStack[Fr^.Base];
   VA := R[A];
   if not IsObject(VA) then Exit(1);
@@ -882,8 +937,24 @@ begin
   end;
   if O^.OKind <> okFunction then Exit(1);
   T := PFuncTemplate(O^.Native);
-  if T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsAsync or T^.IsDerived or
-     not T^.FastCall then Exit(1);
+  if T^.IsDerived and T^.IsClassCtor and (T^.CodeLen = 3) and (T^.RestReg >= 0) and
+     (TOp(T^.Code[1] and $FF) = opSuperCallV) and (TOp(T^.Code[2] and $FF) = opRetUndef) then
+  begin
+    { a derived class's implicit constructor, super(...args) (10.2.1.4 step 4: the parent constructed with these
+      arguments, not iterated, and this new.target), then the fields }
+    V := O^.Shape^.Proto;
+    if not IsConstructorV(V) then Exit(1);
+    if not Construct(V, @R[A + 2], Argc, VA, V) or not RunFieldInit(VA, V) then
+    begin
+      StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+      Exit(-1);
+    end;
+    VStack[Base - 1] := V;
+    StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+    Exit(0);
+  end;
+  if T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsAsync or not T^.FastCall or
+     (T^.IsDerived and not T^.IsClassCtor) then Exit(1);
   if T^.JitState <> 1 then
   begin
     if T^.JitState = 0 then
@@ -893,18 +964,28 @@ begin
     end;
     if T^.JitState <> 1 then Exit(1);
   end;
-  if (PPtrUInt(T^.JitTable)[0] = 0) or (Pointer(O^.Shape) <> T^.CtorFnShape) or (T^.CtorRootShape = nil) or
-     (PShape(T^.CtorRootShape)^.Proto <> GetSlot(O, T^.CtorProtoSlot)) then Exit(1);
-  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
-  R[A + 1] := MkPtr(NewObject(PShape(T^.CtorRootShape), Max(4, T^.ExpectedProps), okPlain));
-  if Assigned(T^.FieldInit) then
+  if PPtrUInt(T^.JitTable)[0] = 0 then Exit(1);
+  if T^.IsDerived then
   begin
-    { 10.2.2 step 6.b: the instance fields before the body }
-    R := @VStack[Fr^.Base];
-    if not RunFieldInit(R[A], R[A + 1]) then
+    { a derived class constructor: this unbound until its super() (which runs the fields) }
+    if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+    R[A + 1] := VHole;
+  end
+  else
+  begin
+    if (Pointer(O^.Shape) <> T^.CtorFnShape) or (T^.CtorRootShape = nil) or
+       (PShape(T^.CtorRootShape)^.Proto <> GetSlot(O, T^.CtorProtoSlot)) then Exit(1);
+    if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+    R[A + 1] := MkPtr(NewObject(PShape(T^.CtorRootShape), Max(4, T^.ExpectedProps), okPlain));
+    if Assigned(T^.FieldInit) then
     begin
-      StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
-      Exit(-1);
+      { 10.2.2 step 6.b: the instance fields before the body }
+      R := @VStack[Fr^.Base];
+      if not RunFieldInit(R[A], R[A + 1]) then
+      begin
+        StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+        Exit(-1);
+      end;
     end;
   end;
   R := @VStack[Fr^.Base];
@@ -1385,6 +1466,44 @@ begin
   Result := True;
 end;
 
+{ opCheckThis's throw: a derived constructor's this before super() }
+function JH_CheckThis(Fr: PFrame; I: QWord): Boolean;
+begin
+  Result := ThrowError('ReferenceError', 'Must call super constructor in derived class before accessing ''this'' or returning from derived constructor');
+end;
+
+{ opSuperCall / opSuperCallV (Execute's case, without its frame push): 13.3.7.1 SuperCall, the parent constructed
+  with this frame's new.target, this bound, then the fields }
+function JH_SuperCall(Fr: PFrame; I: QWord): Boolean;
+var R: PValue; A, Argc, J: Integer; O: PObj; V, VA: TValue;
+begin
+  R := @VStack[Fr^.Base];
+  A := (I shr 8) and $FFFF;
+  if TOp(I and $FF) = opSuperCallV then
+  begin
+    O := ObjOf(R[A + 2]);
+    Argc := ArrayLen(O);
+    if Fr^.Base + A + 2 + Argc + 4 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+    for J := 0 to Argc - 1 do
+    begin
+      V := O^.Elements^.Data[J];
+      if V = VHole then V := VUndefined;
+      R[A + 2 + J] := V;
+    end;
+  end
+  else Argc := (I shr 24) and $FFFF;
+  if (I shr 40) = 1 then VA := R[A + 1] else VA := ObjOf(Fr^.Closure)^.Shape^.Proto;
+  if not IsConstructorV(VA) then Exit(ThrowTypeError('Super constructor is not a constructor'));
+  StackTop := Max(StackTop, Fr^.Base + A + 2 + Argc);
+  if not Construct(VA, @R[A + 2], Argc, Fr^.NewTarget, V) then Exit(False);
+  StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+  R := @VStack[Fr^.Base];
+  if R[0] <> VHole then Exit(ThrowError('ReferenceError', 'Super constructor may only be called once'));
+  R[0] := V;
+  R[A] := V;
+  Result := RunFieldInit(Fr^.Closure, V);
+end;
+
 { opDefField / opDefFieldC (Execute's case): a class field's CreateDataPropertyOrThrow; opDefField caches the add
   transition }
 function JH_DefField(Fr: PFrame; I: QWord): Boolean;
@@ -1613,7 +1732,7 @@ begin
     end;
     if T^.JitState <> 1 then Exit(2);
   end;
-  if (PPtrUInt(T^.JitTable)[G^.Pad] = 0) or (JitDepth >= JIT_MAX_DEPTH) or
+  if (PPtrUInt(T^.JitTable)[G^.Pad] = 0) or JitTooDeep or
      (StackTop + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(2);
   SavedTop := StackTop;
   if not XGenInline(Gen, Fr^.Base + A) then Exit(-1);
@@ -2199,6 +2318,22 @@ begin
         Barrier(jAX, jCX);
       end;
     opDefFieldC: EmitHelper(@JH_DefField, PC, I);
+    opSuperCall, opSuperCallV: EmitHelper(@JH_SuperCall, PC, I);
+    opLoadCallee:
+      begin
+        MovRM(jAX, jR12, PtrInt(@PFrame(nil)^.Closure));
+        MovMR(jBX, A * 8, jAX);
+      end;
+    opCheckThis:
+      begin
+        { R[A] the hole: the ReferenceError (cold) }
+        MovRM(jAX, jBX, A * 8);
+        MovRI(jCX, VHole);
+        AluRR($39, jAX, jCX, True);
+        L1 := JccFwd(ccNE);
+        EmitHelper(@JH_CheckThis, PC, I);
+        PatchHere(L1);
+      end;
     opCall:
       begin
         { JitCallStub with ecx A, edx Argc and the this flag (bit 16): 0 goes on, 1 is the interpreter's (PC
@@ -2513,7 +2648,14 @@ begin
         JB($85); JB($ED);                       { test ebp, ebp }
         JccExit(ccE, PC);
         if Op = opRet then MovRM(jSI, jBX, A * 8) else MovRI(jSI, VUndefined);
-        if T^.NoCaptures and T^.NoHandlers then
+        if T^.IsDerived and T^.IsClassCtor then
+        begin
+          MovRR(jDI, jR12);
+          CallAbs(@XJitRetCtor);
+          JB($84); JB($C0);                     { test al, al }
+          JccThrow(ccE);
+        end
+        else if T^.NoCaptures and T^.NoHandlers then
         begin
           { nothing to close, no handler of its own: the return inline (the caller restores StackTop) }
           CmpBMI(jR12, PtrInt(@PFrame(nil)^.Kind), 1);
@@ -2681,7 +2823,10 @@ begin
   Mov32RFs(jR9, JitFsFrameTop);
   AluRI(7, jR9, FRAME_MAX - 2, False); AddS(JccFwd(ccAE));
   Mov32RFs(jR10, JitFsJitDepth);
-  AluRI(7, jR10, JIT_MAX_DEPTH, False); AddS(JccFwd(ccAE));
+  Mov32RFs(jR11, JitFsJitDepthMax);
+  AluRR($39, jR10, jR11, False); AddS(JccFwd(ccAE));
+  MovRFs(jR11, JitFsStackFloor);
+  AluRR($39, jSP, jR11, True); AddS(JccFwd(ccB));                 { cmp rsp, the floor }
   { the registers from min(Argc, NumParams) + 1 to MaxRegs - 1: undefined }
   MovRR(jR11, jR14);
   AluRI(4, jR11, $FFFF, False);
@@ -2906,7 +3051,8 @@ begin
   end;
   { the native stack: code entered inside code's call (XJitCall's nested Execute) counts; past the bound the
     interpreter runs the frames, which keeps a deep recursion's native depth bounded }
-  if JitDepth >= JIT_MAX_DEPTH then Exit(PC);
+  if JitDepthMax = 0 then JitThreadInit;
+  if JitTooDeep then Exit(PC);
   Inc(JitDepth);
   Result := TJitFn(T^.Jit)(@VStack[Fr^.Base], Pointer(PPtrUInt(T^.JitTable)[PC]), Fr, 0);
   Dec(JitDepth);
@@ -2930,10 +3076,13 @@ begin
   JitFsFrameTop := PtrInt(PtrUInt(@FrameTop) - JitFsBase);
   JitFsStackTop := PtrInt(PtrUInt(@StackTop) - JitFsBase);
   JitFsJitDepth := PtrInt(PtrUInt(@JitDepth) - JitFsBase);
+  JitFsJitDepthMax := PtrInt(PtrUInt(@JitDepthMax) - JitFsBase);
+  JitFsStackFloor := PtrInt(PtrUInt(@JitStackFloor) - JitFsBase);
   { the code's fs-relative loads take a signed 32-bit displacement }
   if (Abs(JitFsVStack) > $7FFFFFF0) or (Abs(JitFsNurseryStart) > $7FFFFFF0) or (Abs(JitFsNurseryLimit) > $7FFFFFF0) or
      (Abs(JitFsArrayIterNext) > $7FFFFFF0) or (Abs(JitFsFrames) > $7FFFFFF0) or (Abs(JitFsFrameTop) > $7FFFFFF0) or
-     (Abs(JitFsStackTop) > $7FFFFFF0) or (Abs(JitFsJitDepth) > $7FFFFFF0) then
+     (Abs(JitFsStackTop) > $7FFFFFF0) or (Abs(JitFsJitDepth) > $7FFFFFF0) or
+     (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) then
     JitEnabled := 0;
   if JitEnabled < 0 then
     if GetEnvironmentVariable('G2_JIT') = '1' then JitEnabled := 1 else JitEnabled := 0;
