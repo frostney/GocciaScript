@@ -413,6 +413,113 @@ begin
   Result := JccFwd(ccNE);
 end;
 
+{ Op [Base + Index * 2^Scale + Disp32] with Reg (Prefix 0: none; a mandatory prefix goes before REX) }
+procedure SibOp(Prefix: Byte; W: Boolean; const Ops: array of Byte; Reg, Base, Index, Scale, Disp: Integer);
+var K: Integer;
+begin
+  if Prefix <> 0 then JB(Prefix);
+  JRex(W, Reg, Index, Base);
+  for K := 0 to High(Ops) do JB(Ops[K]);
+  JB($84 or ((Reg and 7) shl 3));
+  JB((Scale shl 6) or ((Index and 7) shl 3) or (Base and 7));
+  JD(Cardinal(Disp));
+end;
+
+{ a typed array's element (FastLoop's case: an ordinary buffer, the view's length, a kind done without a call),
+  rax the object, rcx the index (an int value); a load into R[A], a store of R[V]. Anything else is PC's slow
+  path. The forward jumps in JitTAEnds (JitTAEndCount of them) end the instruction: the caller patches them }
+var
+  JitTAEnds: array[0..15] of Integer;
+  JitTAEndCount: Integer;
+
+procedure EmitTAElem(Store: Boolean; A, V, PC: Integer);
+var K, LNext, DataOff: Integer;
+  procedure Kind(Ta: Integer);
+  begin
+    AluRI(7, jR10, Ta, False);
+    LNext := JccFwd(ccNE);
+  end;
+  procedure Done;
+  begin
+    JitTAEnds[JitTAEndCount] := JmpFwd;
+    Inc(JitTAEndCount);
+    PatchHere(LNext);
+  end;
+begin
+  JitTAEndCount := 0;
+  DataOff := PtrInt(@PBytes(nil)^.Data);
+  MovzxBRM(jDX, jAX, PtrInt(@PObj(nil)^.OKind));
+  AluRI(7, jDX, okTypedArray, False);
+  JccExit(ccNE, PC);
+  { the index: 0 <= index < the view's length (a length past the int32 range is the slow path's) }
+  Mov32RM(jDX, jAX, PtrInt(@PObj(nil)^.Aux2));
+  AluRR($85, jDX, jDX, False);
+  JccExit(ccS, PC);
+  AluRR($39, jCX, jDX, False);
+  JccExit(ccAE, PC);
+  JRex(False, jCX, 0, jCX); JB($8B); JModRR(jCX, jCX);   { mov ecx, ecx }
+  { the buffer: ordinary, its bytes at the view's offset in r11 }
+  MovRM(jR11, jAX, PtrInt(@PObj(nil)^.Aux1));
+  MovRI(jR9, PTR_MASK);
+  AluRR($21, jR11, jR9, True);
+  if Store then TestBMI(jR11, PtrInt(@PObj(nil)^.OFlags), bfShared or bfResizable or bfDetached or bfImmutable)
+  else TestBMI(jR11, PtrInt(@PObj(nil)^.OFlags), bfShared or bfResizable or bfDetached);
+  JccExit(ccNE, PC);
+  MovRM(jR11, jR11, PtrInt(@PObj(nil)^.Aux1));
+  AluRR($21, jR11, jR9, True);
+  Mov32RM(jR9, jAX, PtrInt(@PObj(nil)^.Pad));
+  AluRR($01, jR11, jR9, True);
+  MovzxBRM(jR10, jAX, PtrInt(@PObj(nil)^.OFlags));
+  ShiftRI(5, jR10, 4, False);
+  if not Store then
+  begin
+    Kind(taUint8); SibOp(0, False, [$0F, $B6], jAX, jR11, jCX, 0, DataOff); StoreInt(A); Done;
+    Kind(taUint8C); SibOp(0, False, [$0F, $B6], jAX, jR11, jCX, 0, DataOff); StoreInt(A); Done;
+    Kind(taInt8); SibOp(0, False, [$0F, $BE], jAX, jR11, jCX, 0, DataOff); StoreInt(A); Done;
+    Kind(taInt16); SibOp(0, False, [$0F, $BF], jAX, jR11, jCX, 1, DataOff); StoreInt(A); Done;
+    Kind(taUint16); SibOp(0, False, [$0F, $B7], jAX, jR11, jCX, 1, DataOff); StoreInt(A); Done;
+    Kind(taInt32); SibOp(0, False, [$8B], jAX, jR11, jCX, 2, DataOff); StoreInt(A); Done;
+    Kind(taFloat64); SibOp($F2, False, [$0F, $10], 0, jR11, jCX, 3, DataOff); StoreNumber(A); Done;
+    Kind(taFloat32);
+    SibOp($F3, False, [$0F, $10], 0, jR11, jCX, 2, DataOff);
+    JB($F3); JB($0F); JB($5A); JB($C0);              { cvtss2sd xmm0, xmm0 }
+    StoreNumber(A);
+    Done;
+  end
+  else
+  begin
+    MovRM(jSI, jBX, V * 8);
+    { an int into an integer kind }
+    TagOf(jDX, jSI);
+    AluRI(7, jDX, TAG_INT_HI, False);
+    LNext := JccFwd(ccNE);
+    K := LNext;
+    Kind(taUint8); SibOp(0, False, [$88], jSI, jR11, jCX, 0, DataOff); Done;
+    Kind(taInt8); SibOp(0, False, [$88], jSI, jR11, jCX, 0, DataOff); Done;
+    Kind(taInt16); SibOp($66, False, [$89], jSI, jR11, jCX, 1, DataOff); Done;
+    Kind(taUint16); SibOp($66, False, [$89], jSI, jR11, jCX, 1, DataOff); Done;
+    Kind(taInt32); SibOp(0, False, [$89], jSI, jR11, jCX, 2, DataOff); Done;
+    Kind(taUint32); SibOp(0, False, [$89], jSI, jR11, jCX, 2, DataOff); Done;
+    PatchHere(K);
+    { a Number (an int or a double) into a float kind }
+    ToXmm(0, jSI, PC);
+    Kind(taFloat64); SibOp($F2, False, [$0F, $11], 0, jR11, jCX, 3, DataOff); Done;
+    Kind(taFloat32);
+    JB($F2); JB($0F); JB($5A); JB($C0);              { cvtsd2ss xmm0, xmm0 }
+    SibOp($F3, False, [$0F, $11], 0, jR11, jCX, 2, DataOff);
+    Done;
+  end;
+  { another kind: the slow path }
+  if JitSlow <> nil then AddSlow(JmpFwd) else JmpExit(PC);
+end;
+
+procedure PatchTAEnds;
+var K: Integer;
+begin
+  for K := 0 to JitTAEndCount - 1 do PatchHere(JitTAEnds[K]);
+  JitTAEndCount := 0;
+end;
+
 { a pointer in V to its cell in V (the tag test first: not a pointer is PC's exit) }
 procedure UntagPtr(V, PC: Integer);
 begin
@@ -1340,6 +1447,110 @@ begin
   Result := Ord(not Bool);
 end;
 
+{ opIterNext over a suspended generator with the intrinsic next (FastLoop's Kind 4 case), its body compiled:
+  resumed inline (XGenInline) and its code run here; a yield is suspended here (as FastLoop's opYield), a return
+  completes it (XGenInlineReturn). Any other stop finishes the step as GeneratorResume does: the frame becomes
+  Kind 3 and a nested Execute runs it to its next yield, its return or its throw. 1 done (the jump), 0 the value
+  in the consumer's R[A], -1 a throw pending, 2 not taken (nothing changed: IteratorStepRec's) }
+function JitGenStep(Fr: PFrame; A, B: Integer; Gen: TValue): Integer;
+var G: PObj; T: PFuncTemplate; GF: PFrame; Res, SavedTop, J: Integer; Ins: QWord; V, Gv: TValue; Ok, Done: Boolean;
+begin
+  G := ObjOf(Gen);
+  T := PFuncTemplate(ObjOf(G^.Aux1)^.Native);
+  if T^.JitState <> 1 then
+  begin
+    if T^.JitState = 0 then
+    begin
+      Inc(T^.JitCount);
+      if (T^.JitCount >= JIT_HOT) and (GetCurrentThreadId = JitMainThread) then JitCompile(T);
+    end;
+    if T^.JitState <> 1 then Exit(2);
+  end;
+  if (PPtrUInt(T^.JitTable)[G^.Pad] = 0) or (JitDepth >= JIT_MAX_DEPTH) or
+     (StackTop + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(2);
+  SavedTop := StackTop;
+  if not XGenInline(Gen, Fr^.Base + A) then Exit(-1);
+  GF := @Frames[FrameTop - 1];
+  Inc(JitDepth);
+  Res := TJitFn(T^.Jit)(@VStack[GF^.Base], Pointer(PPtrUInt(T^.JitTable)[GF^.PC]), GF, 0);
+  Dec(JitDepth);
+  if Res >= 0 then
+  begin
+    Ins := T^.Code[Res];
+    if TOp(Ins and $FF) = opYield then
+    begin
+      { suspended, its value in the consumer's register }
+      PushRoot(VStack[GF^.Base + Integer((Ins shr 24) and $FFFF)]);
+      J := GF^.RetIdx;
+      SaveSuspension(GF, T, @VStack[GF^.Base], Integer((Ins shr 8) and $FFFF), Res + 1, Integer(Ins shr 40));
+      GenYielded := False;
+      VStack[J] := RootAt(TempTop - 1);
+      PopRoots(1);
+      StackTop := SavedTop;
+      Exit(0);
+    end;
+    if (TOp(Ins and $FF) = opRet) or (TOp(Ins and $FF) = opRetUndef) then
+    begin
+      { completed: done, the consumer's loop ends (XGenInlineReturn leaves its iterator done) }
+      GF^.PC := Res + 1;
+      XGenInlineReturn(GF);
+      StackTop := SavedTop;
+      Exit(1);
+    end;
+    GF^.PC := Res;
+  end
+  else InjectThrow := True;
+  { the rest of the step as GeneratorResume's: a Kind 3 frame in a nested Execute }
+  GF^.Kind := 3;
+  GF^.RetIdx := GF^.Base;
+  GenYielded := False;
+  GenYieldRaw := False;
+  PushRoot(Gen);
+  Ok := Execute(FrameTop - 1, V);
+  Gv := RootAt(TempTop - 1);
+  PopRoots(1);
+  StackTop := SavedTop;
+  G := ObjOf(Gv);
+  if not Ok then
+  begin
+    G^.OFlags := 3;
+    VStack[Fr^.Base + B] := VUndefined;   { an abrupt next() leaves the iterator done (7.4.8): it is not closed }
+    if IsRetComp(Pending) then
+    begin
+      Pending := VUndefined;
+      GenYieldRaw := False;
+      Exit(1);
+    end;
+    Exit(-1);
+  end;
+  if not GenYielded then
+  begin
+    G^.OFlags := 3;
+    VStack[Fr^.Base + B] := VUndefined;
+    Exit(1);
+  end;
+  GenYielded := False;
+  if GenYieldRaw then
+  begin
+    { yield*'s inner result as it is (IteratorStepRec's): its done, then its value }
+    GenYieldRaw := False;
+    if not IsObject(V) then
+    begin
+      VStack[Fr^.Base + B] := VUndefined;
+      Exit(Ord(ThrowTypeError('iterator result is not an object')) - 1);
+    end;
+    PushRoot(V);
+    if not GetV(V, AtomDone, Gv) then begin PopRoots(1); VStack[Fr^.Base + B] := VUndefined; Exit(-1); end;
+    Done := ToBool(Gv);
+    if Done then begin PopRoots(1); VStack[Fr^.Base + B] := VUndefined; Exit(1); end;
+    if not GetV(RootAt(TempTop - 1), AtomValue, Gv) then begin PopRoots(1); VStack[Fr^.Base + B] := VUndefined; Exit(-1); end;
+    PopRoots(1);
+    V := Gv;
+  end;
+  VStack[Fr^.Base + A] := V;
+  Result := 0;
+end;
+
 { opIterNext's slow path (Execute's, a suspended generator resumed through GeneratorResume): 1 done (the jump),
   0 the value in R[A], -1 a throw pending }
 function JH_IterNext(Fr: PFrame; I: QWord): Integer;
@@ -1367,6 +1578,12 @@ begin
       VStack[Fr^.Base + B] := VUndefined;
       Exit(1);
     end;
+  end;
+  if (O^.OKind = okGenerator) and (O^.OFlags <= 1) and (VStack[Fr^.Base + B + 1] = GenNextFn) and
+     not MultiRealmAny then
+  begin
+    Result := JitGenStep(Fr, A, B, VB);
+    if Result <> 2 then Exit;
   end;
   if not IteratorStepRec(VB, VStack[Fr^.Base + B + 1], V, Done) then
   begin
@@ -1653,7 +1870,7 @@ begin
         JccExit(ccNE, PC);
         MovRM(jDX, jAX, PtrInt(@PObj(nil)^.Elements));
         AluRR($85, jDX, jDX, True);
-        JccExit(ccE, PC);
+        L1 := JccFwd(ccE);
         Cmp32RM(jCX, jDX, PtrInt(@PValueArray(nil)^.Len));
         JccExit(ccAE, PC);
         JRex(False, jCX, 0, jCX); JB($8B); JModRR(jCX, jCX);   { mov ecx, ecx: zero-extended index }
@@ -1662,6 +1879,12 @@ begin
         AluRR($39, jAX, jCX, True);
         JccExit(ccE, PC);
         MovMR(jBX, A * 8, jAX);
+        L2 := JmpFwd;
+        { no elements: a typed array's }
+        PatchHere(L1);
+        EmitTAElem(False, A, 0, PC);
+        PatchHere(L2);
+        PatchTAEnds;
       end;
     opSetElem:
       begin
@@ -1674,12 +1897,13 @@ begin
         MovzxBRM(jDX, jAX, 4);
         AluRI(7, jDX, ckObject, False);
         JccExit(ccNE, PC);
+        { no elements: a typed array's (its OFlags hold the element kind, not the frozen bit) }
+        MovRM(jSI, jAX, PtrInt(@PObj(nil)^.Elements));
+        AluRR($85, jSI, jSI, True);
+        LA := JccFwd(ccE);
         MovzxBRM(jDX, jAX, PtrInt(@PObj(nil)^.OFlags));
         AluRI(4, jDX, 64, False);
         JccExit(ccNE, PC);
-        MovRM(jSI, jAX, PtrInt(@PObj(nil)^.Elements));
-        AluRR($85, jSI, jSI, True);
-        JccExit(ccE, PC);
         Cmp32RM(jCX, jSI, PtrInt(@PValueArray(nil)^.Len));
         JccExit(ccAE, PC);
         JRex(False, jCX, 0, jCX); JB($8B); JModRR(jCX, jCX);
@@ -1690,6 +1914,11 @@ begin
         MovRM(jAX, jBX, CU * 8);
         MovMRIdx(jSI, jCX, PtrInt(@PValueArray(nil)^.Data), jAX);
         Barrier(jSI, jAX);
+        L2 := JmpFwd;
+        PatchHere(LA);
+        EmitTAElem(True, 0, CU, PC);
+        PatchHere(L2);
+        PatchTAEnds;
       end;
     opGetProp, opGetLength:
       begin
@@ -2131,13 +2360,6 @@ begin
         AluRI(7, jDX, ckObject, False);
         JccExit(ccNE, PC);
         MovzxBRM(jDX, jAX, PtrInt(@PObj(nil)^.OKind));
-        { a generator: the interpreter's (it resumes the body inline in its own frames, cheaper than
-          JH_IterNext's GeneratorResume) }
-        AluRI(7, jDX, okGenerator, False);
-        Saved := JitSlow;
-        JitSlow := nil;
-        JccExit(ccE, PC);
-        JitSlow := Saved;
         AluRI(7, jDX, okIterator, False);
         JccExit(ccNE, PC);
         MovzxBRM(jDX, jAX, PtrInt(@PObj(nil)^.OFlags));
