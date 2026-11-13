@@ -53,9 +53,11 @@ var
   JitSlow: Pointer = nil;              { the helper the instruction's failed guards call (nil: they exit) }
   JitSlowList: array of Integer;
   JitSlowCount: Integer;
-  { the slow blocks JitCompile emits past the code: instruction PC (I), its helper, its jump target (or -1), its
-    guards' forward jumps JitDeferJumps[First .. First + Count - 1] }
-  JitDefer: array of record PC: Integer; I: QWord; H: Pointer; Jump, First, Count: Integer; end;
+  { the cold blocks JitCompile emits past the code: instruction PC (I), its helper, its jump target (or -1), the
+    forward jumps to the block JitDeferJumps[First .. First + Count - 1]. Kind 0: the helper (the failed guards'
+    slow block); 1: ICGetHit for R[A] (rax the object, rsi the IC), else the helper; 2 / 3: a typed array's
+    element load into R[A] / store of R[V] (EmitTAElem: rax the object, rcx the index), else the helper }
+  JitDefer: array of record PC: Integer; I: QWord; H: Pointer; Jump, First, Count, Kind, A, V: Integer; end;
   JitDeferCount: Integer;
   JitDeferJumps: array of Integer;
   JitDeferJumpCount: Integer;
@@ -455,9 +457,8 @@ end;
 procedure EmitPtrPairEq(PC: Integer);
 var LA, LN1, LN2, LN3, LN4, LH1, LH2, LH3, LE: Integer;
 begin
-  MovRI(jDX, PTR_MASK);
-  MovRR(jR8, jAX); AluRR($21, jR8, jDX, True);
-  MovRR(jR9, jCX); AluRR($21, jR9, jDX, True);
+  MovRR(jR8, jAX); AluRR($31, jR8, jR13, True);
+  MovRR(jR9, jCX); AluRR($31, jR9, jR13, True);
   MovzxBRM(jR10, jR8, 4);
   MovzxBRM(jR11, jR9, 4);
   AluRR($31, jDX, jDX, False);
@@ -602,11 +603,11 @@ end;
 { a pointer in V to its cell in V (the tag test first: not a pointer is PC's exit) }
 procedure UntagPtr(V, PC: Integer);
 begin
-  TagOf(jDX, V);
-  AluRI(7, jDX, TAG_PTR_HI, False);
+  { xor with r13 (the pointer tag) clears a pointer's tag; anything else keeps high bits }
+  AluRR($31, V, jR13, True);
+  MovRR(jDX, V);
+  ShiftRI(5, jDX, 48, True);
   JccExit(ccNE, PC);
-  MovRI(jDX, PTR_MASK);
-  AluRR($21, V, jDX, True);
 end;
 
 { the write barrier after a store of V (in Val) into the container cell in Cell (rdi-safe registers): an old cell
@@ -621,8 +622,8 @@ begin
   TagOf(jDX, Val);
   AluRI(7, jDX, TAG_PTR_HI, False);
   L2 := JccFwd(ccNE);
-  MovRI(jDX, PTR_MASK);
-  AluRR($21, jDX, Val, True);   { and rdx, Val: the cell address }
+  MovRR(jDX, Val);
+  AluRR($31, jDX, jR13, True);   { the cell address }
   MovRFs(jR8, JitFsNurseryStart);
   AluRR($39, jDX, jR8, True);
   L3 := JccFwd(ccB);
@@ -1384,6 +1385,43 @@ begin
   Result := True;
 end;
 
+{ opDefField / opDefFieldC (Execute's case): a class field's CreateDataPropertyOrThrow; opDefField caches the add
+  transition }
+function JH_DefField(Fr: PFrame; I: QWord): Boolean;
+var R: PValue; A: Integer; IC: PPropIC; Key: PStr; O: PObj; V, VB: TValue;
+begin
+  R := @VStack[Fr^.Base];
+  A := (I shr 8) and $FFFF;
+  if TOp(I and $FF) = opDefField then
+  begin
+    IC := @Fr^.Tpl^.ICs[I shr 40];
+    Key := IC^.Key;
+    O := ObjOf(R[A]);
+    if (O^.Shape = IC^.Shape) and (IC^.NewShape <> nil) and (IC^.Slot < O^.InlineCap) and ((O^.OFlags and 8) = 0) then
+    begin
+      V := R[(I shr 24) and $FFFF];
+      O^.Shape := IC^.NewShape;
+      O^.Slots[IC^.Slot] := V;
+      WriteBarrier(@O^.Hdr, V);
+      Exit(True);
+    end;
+    VB := MkPtr(O^.Shape);
+    if not CreateDataPropOrThrow(R[A], Key, R[(I shr 24) and $FFFF]) then Exit(False);
+    O := ObjOf(VStack[Fr^.Base + A]);
+    if (O^.OKind = okPlain) and not O^.Shape^.IsDict and (O^.Shape^.Parent = PShape(PtrOf(VB))) and
+       (O^.Shape^.Count > 0) and (O^.Shape^.Keys[O^.Shape^.Count - 1] = Key) then
+    begin
+      IC^.Shape := PShape(PtrOf(VB));
+      IC^.NewShape := O^.Shape;
+      IC^.Slot := O^.Shape^.Count - 1;
+    end;
+    Exit(True);
+  end;
+  if not ToPropKey(R[I shr 40], Key) then Exit(False);
+  R := @VStack[Fr^.Base];
+  Result := CreateDataPropOrThrow(R[A], Key, R[(I shr 24) and $FFFF]);
+end;
+
 { instanceof (JH_Misc's case on its own, so the hot path keeps its locals in registers): FastLoop's guarded
   prototype-chain walk for a bytecode constructor, else InstanceOf }
 function JH_InstanceOf(Fr: PFrame; I: QWord): Boolean;
@@ -1727,6 +1765,36 @@ begin
   Result := ICGetHit(O, IC, Dst);
 end;
 
+{ a cold block of Kind (JitDefer) for instruction PC (I), entered by the forward jump At; its helper is JitSlow }
+procedure DeferCold(Kind, PC: Integer; I: QWord; A, V: Integer; const At: array of Integer);
+var K: Integer;
+begin
+  if JitDeferCount >= Length(JitDefer) then SetLength(JitDefer, JitDeferCount * 2 + 64);
+  JitDefer[JitDeferCount].PC := PC;
+  JitDefer[JitDeferCount].I := I;
+  JitDefer[JitDeferCount].H := JitSlow;
+  JitDefer[JitDeferCount].Jump := -1;
+  JitDefer[JitDeferCount].First := JitDeferJumpCount;
+  JitDefer[JitDeferCount].Count := Length(At);
+  JitDefer[JitDeferCount].Kind := Kind;
+  JitDefer[JitDeferCount].A := A;
+  JitDefer[JitDeferCount].V := V;
+  Inc(JitDeferCount);
+  if JitDeferJumpCount + Length(At) > Length(JitDeferJumps) then
+    SetLength(JitDeferJumps, (JitDeferJumpCount + Length(At)) * 2 + 256);
+  for K := 0 to High(At) do JitDeferJumps[JitDeferJumpCount + K] := At[K];
+  Inc(JitDeferJumpCount, Length(At));
+end;
+
+{ the forward jump At (its rel32 already emitted) to PC's code }
+procedure JmpFixTo(At, PC: Integer);
+begin
+  if JitFixCount >= Length(JitFixes) then SetLength(JitFixes, JitFixCount * 2 + 256);
+  JitFixes[JitFixCount].At := At;
+  JitFixes[JitFixCount].Target := PC;
+  Inc(JitFixCount);
+end;
+
 { the code of instruction PC (I), or its exit when the JIT does not take it }
 procedure JitInstr(T: PFuncTemplate; PC: Integer; I: QWord); forward;
 
@@ -1990,12 +2058,8 @@ begin
         AluRR($39, jAX, jCX, True);
         JccExit(ccE, PC);
         MovMR(jBX, A * 8, jAX);
-        L2 := JmpFwd;
-        { no elements: a typed array's }
-        PatchHere(L1);
-        EmitTAElem(False, A, 0, PC);
-        PatchHere(L2);
-        PatchTAEnds;
+        { no elements: a typed array's, cold }
+        DeferCold(2, PC, I, A, 0, [L1]);
       end;
     opSetElem:
       begin
@@ -2025,11 +2089,7 @@ begin
         MovRM(jAX, jBX, CU * 8);
         MovMRIdx(jSI, jCX, PtrInt(@PValueArray(nil)^.Data), jAX);
         Barrier(jSI, jAX);
-        L2 := JmpFwd;
-        PatchHere(LA);
-        EmitTAElem(True, 0, CU, PC);
-        PatchHere(L2);
-        PatchTAEnds;
+        DeferCold(3, PC, I, 0, CU, [LA]);
       end;
     opGetProp, opGetLength:
       begin
@@ -2063,12 +2123,12 @@ begin
         end
         else
         begin
-          AluRI(7, jDX, ckObject, False);
+          CmpBMI(jAX, 4, ckObject);
           JccExit(ccNE, PC);
         end;
         { IC^.Poly0: the receiver's shape, its kind (Kind, Depth, VerMask and Acc as one 32-bit word: an own
           data property), an inline slot }
-        MovRI(jSI, QWord(PtrUInt(IC)));
+        LeaRM(jSI, jR14, PtrInt(PtrUInt(IC) - PtrUInt(@T^.ICs[0])));
         MovRM(jDX, jSI, PtrInt(@PPropIC(nil)^.Poly0.Shape));
         CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Shape));
         L3 := JccFwd(ccNE);
@@ -2081,16 +2141,8 @@ begin
         CC := JccFwd(ccAE);
         MovRMIdx(jAX, jAX, jDX, PtrInt(@PObj(nil)^.Slots));
         MovMR(jBX, A * 8, jAX);
-        L2 := JmpFwd;
-        { the rest of the cache (ICGetHit): its answer in R[A], or the interpreter's }
-        PatchHere(L3); PatchHere(L4); PatchHere(CC);
-        MovRR(jDI, jAX);
-        { rsi is IC already }
-        JRex(True, jDX, 0, jBX); JB($8D); JMem(jDX, jBX, A * 8);   { lea rdx, R[A] }
-        CallAbs(@JitICGetHit);
-        JB($84); JB($C0);   { test al, al: the Boolean }
-        JccExit(ccE, PC);
-        PatchHere(L2);
+        { the rest of the cache (ICGetHit): cold }
+        DeferCold(1, PC, I, A, 0, [L3, L4, CC]);
         if LS >= 0 then PatchHere(LS);
         if LA >= 0 then PatchHere(LA);
       end;
@@ -2103,7 +2155,7 @@ begin
         MovzxBRM(jDX, jAX, 4);
         AluRI(7, jDX, ckObject, False);
         JccExit(ccNE, PC);
-        MovRI(jSI, QWord(PtrUInt(IC)));
+        LeaRM(jSI, jR14, PtrInt(PtrUInt(IC) - PtrUInt(@T^.ICs[0])));
         MovRM(jDX, jSI, PtrInt(@PPropIC(nil)^.Shape));
         CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Shape));
         JccExit(ccNE, PC);
@@ -2120,6 +2172,33 @@ begin
         MovMRIdx(jAX, jDX, PtrInt(@PObj(nil)^.Slots), jCX);
         Barrier(jAX, jCX);
       end;
+    opDefField:
+      begin
+        { a class field's cached add transition: an extensible object with the cached shape and an inline slot }
+        IC := @T^.ICs[CU];
+        MovRM(jAX, jBX, A * 8);
+        UntagPtr(jAX, PC);
+        CmpBMI(jAX, 4, ckObject);
+        JccExit(ccNE, PC);
+        LeaRM(jSI, jR14, PtrInt(PtrUInt(IC) - PtrUInt(@T^.ICs[0])));
+        MovRM(jDX, jSI, PtrInt(@PPropIC(nil)^.Shape));
+        CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Shape));
+        JccExit(ccNE, PC);
+        MovRM(jCX, jSI, PtrInt(@PPropIC(nil)^.NewShape));
+        AluRR($85, jCX, jCX, True);
+        JccExit(ccE, PC);
+        TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 8);
+        JccExit(ccNE, PC);
+        Mov32RM(jDX, jSI, PtrInt(@PPropIC(nil)^.Slot));
+        MovzxWRM(jR8, jAX, PtrInt(@PObj(nil)^.InlineCap));
+        AluRR($39, jDX, jR8, False);
+        JccExit(ccAE, PC);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jCX);
+        MovRM(jCX, jBX, B * 8);
+        MovMRIdx(jAX, jDX, PtrInt(@PObj(nil)^.Slots), jCX);
+        Barrier(jAX, jCX);
+      end;
+    opDefFieldC: EmitHelper(@JH_DefField, PC, I);
     opCall:
       begin
         { JitCallStub with ecx A, edx Argc and the this flag (bit 16): 0 goes on, 1 is the interpreter's (PC
@@ -2443,8 +2522,7 @@ begin
           AluRI(7, jDX, TAG_PTR_HI, False);
           L2 := JccFwd(ccNE);
           MovRR(jCX, jSI);
-          MovRI(jDX, PTR_MASK);
-          AluRR($21, jCX, jDX, True);
+          AluRR($31, jCX, jR13, True);
           CmpBMI(jCX, 4, ckObject);
           L3 := JccFwd(ccE);
           PatchHere(L2);
@@ -2481,6 +2559,7 @@ begin
   case TOp(I and $FF) of
     opGetProp, opGetLength: JitSlow := @JH_GetProp;
     opSetProp: JitSlow := @JH_SetProp;
+    opDefField: JitSlow := @JH_DefField;
     opGetElem: JitSlow := @JH_GetElem;
     opSetElem: JitSlow := @JH_SetElem;
     opAdd, opSub, opMul, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opBitAnd, opBitOr,
@@ -2512,6 +2591,7 @@ begin
     JitDefer[JitDeferCount].Jump := JitSlowJump;
     JitDefer[JitDeferCount].First := JitDeferJumpCount;
     JitDefer[JitDeferCount].Count := JitSlowCount;
+    JitDefer[JitDeferCount].Kind := 0;
     Inc(JitDeferCount);
     if JitDeferJumpCount + JitSlowCount > Length(JitDeferJumps) then
       SetLength(JitDeferJumps, (JitDeferJumpCount + JitSlowCount) * 2 + 256);
@@ -2709,8 +2789,11 @@ begin
   for PC := 0 to T^.CodeLen - 1 do JitExitOf[PC] := -1;
   Table := GetMem(T^.CodeLen * SizeOf(PtrUInt));
   { prologue: the three callee-saved registers the code keeps, then the instruction's code (rsi) }
-  JB($53); JB($41); JB($54); JB($55);           { push rbx; push r12; push rbp: rsp 16-byte aligned for calls }
+  { push rbx; push r12; push rbp; push r13; push r14: rsp 16-byte aligned for calls }
+  JB($53); JB($41); JB($54); JB($55); JB($41); JB($55); JB($41); JB($56);
   MovRR(jBX, jDI); MovRR(jR12, jDX);
+  MovRI(jR13, QWord(TAG_PTR_HI) shl 48);         { r13: the pointer tag }
+  if Length(T^.ICs) > 0 then MovRI(jR14, QWord(PtrUInt(@T^.ICs[0])));   { r14: the template's ICs }
   JB($89); JB($CD);                              { mov ebp, ecx }
   JB($FF); JB($E6);                              { jmp rsi }
   SetLength(JitTakenAt, T^.CodeLen);
@@ -2730,14 +2813,36 @@ begin
   begin
     for K := JitDefer[N].First to JitDefer[N].First + JitDefer[N].Count - 1 do PatchHere(JitDeferJumps[K]);
     JitSlow := JitDefer[N].H;
-    if JitDefer[N].Jump >= 0 then EmitJumpHelper(JitDefer[N].PC, JitDefer[N].I, JitDefer[N].Jump)
-    else EmitHelper(JitDefer[N].H, JitDefer[N].PC, JitDefer[N].I);
-    if JitDefer[N].PC + 1 < T^.CodeLen then JmpPC(JitDefer[N].PC + 1) else JmpExit(JitDefer[N].PC);
+    PC := JitDefer[N].PC;
+    case JitDefer[N].Kind of
+      1:
+        begin
+          { ICGetHit: its answer in R[A] goes on, else the helper }
+          MovRR(jDI, jAX);
+          LeaRM(jDX, jBX, JitDefer[N].A * 8);
+          CallAbs(@JitICGetHit);
+          JB($84); JB($C0);   { test al, al: the Boolean }
+          JccPC(ccNE, PC + 1);
+        end;
+      2, 3:
+        begin
+          { the typed array's element; its other kinds and failed guards the helper }
+          JitSlowCount := 0;
+          EmitTAElem(JitDefer[N].Kind = 3, JitDefer[N].A, JitDefer[N].V, PC);
+          for K := 0 to JitTAEndCount - 1 do JmpFixTo(JitTAEnds[K], PC + 1);
+          JitTAEndCount := 0;
+          for K := 0 to JitSlowCount - 1 do PatchHere(JitSlowList[K]);
+          JitSlowCount := 0;
+        end;
+    end;
+    if JitDefer[N].Jump >= 0 then EmitJumpHelper(PC, JitDefer[N].I, JitDefer[N].Jump)
+    else EmitHelper(JitDefer[N].H, PC, JitDefer[N].I);
+    if PC + 1 < T^.CodeLen then JmpPC(PC + 1) else JmpExit(PC);
   end;
   JitSlow := Saved;
   { the exits: eax the PC the interpreter runs; the epilogue }
   Exit0 := JitLen;
-  JB($5D); JB($41); JB($5C); JB($5B); JB($C3);  { pop rbp; pop r12; pop rbx; ret }
+  JB($41); JB($5E); JB($41); JB($5D); JB($5D); JB($41); JB($5C); JB($5B); JB($C3);  { pop r14; pop r13; pop rbp; pop r12; pop rbx; ret }
   { the throw exit: -1 }
   Throw0 := JitLen;
   MovRI(jAX, $FFFFFFFF);
