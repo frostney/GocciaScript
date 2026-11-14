@@ -543,10 +543,11 @@ begin
       else Result := vkNone;
     opGetElem:
       begin
-        { a speculated receiver and a numeric index (a tagged one unboxed as an int) }
+        { a speculated receiver and an int index (a tagged one unboxed as an int): a double or a boolean is a
+          property key, not an index }
         KC := K[OCU(I)];
         if KC = vkTag then KC := OSpec(PC);
-        if not OIsNum(KC) or (K[OB_(I)] <> vkTag) then Exit(vkNone);
+        if (KC <> vkInt) or (K[OB_(I)] <> vkTag) then Exit(vkNone);
         case OElemSpec[PC] of
           taInt8, taUint8, taUint8C, taInt16, taUint16, taInt32: Result := vkInt;
           taUint32: if Ovf then Result := vkNone else Result := vkInt;
@@ -561,14 +562,14 @@ begin
   end;
 end;
 
-{ whether the region takes SetElem I with operand kinds K: a speculated receiver, a numeric index, and for a typed
+{ whether the region takes SetElem I with operand kinds K: a speculated receiver, an int index, and for a typed
   array a number to store }
 function OSetElemOk(PC: Integer; I: QWord; const K: array of Byte): Boolean;
 var KB, KC: Integer;
 begin
   KB := K[OB_(I)];
   if KB = vkTag then KB := OSpec(PC);
-  if not OIsNum(KB) or (K[OA(I)] <> vkTag) then Exit(False);
+  if (KB <> vkInt) or (K[OA(I)] <> vkTag) then Exit(False);
   KC := K[OCU(I)];
   case OElemSpec[PC] of
     taInt8, taUint8, taInt16, taUint16, taInt32, taUint32, taFloat32, taFloat64:
