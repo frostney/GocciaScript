@@ -3433,6 +3433,8 @@ begin
   N(MathObj, 'asin', M_Asin, 1); N(MathObj, 'acos', M_Acos, 1);
   N(MathObj, 'exp', M_Exp, 1); N(MathObj, 'log', M_Log, 1); N(MathObj, 'log2', M_Log2, 1);
   N(MathObj, 'log10', M_Log10, 1); N(MathObj, 'cbrt', M_Cbrt, 1);
+  OptMathFns[0] := @M_Sqrt; OptMathFns[1] := @M_Floor; OptMathFns[2] := @M_Ceil; OptMathFns[3] := @M_Abs;
+  OptMathFns[4] := @M_Trunc;
   N(MathObj, 'trunc', M_Trunc, 1); N(MathObj, 'sign', M_Sign, 1); N(MathObj, 'max', M_Max, 2);
   N(MathObj, 'min', M_Min, 2); N(MathObj, 'pow', M_Pow, 2); N(MathObj, 'atan2', M_Atan2, 2);
   N(MathObj, 'hypot', M_Hypot, 2); N(MathObj, 'random', M_Random, 0);

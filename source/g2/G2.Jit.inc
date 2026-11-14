@@ -278,7 +278,7 @@ procedure Cvt32ToX(X, R: Integer);                  { cvtsi2sd xmmX, R32 }
 begin JB($F2); JRex(False, X, 0, R); JB($0F); JB($2A); JModRR(X, R); end;
 
 var
-  JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsArrayIterNext: PtrInt;   { threadvar offsets from fs }
+  JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsArrayIterNext, JitFsGlobalObj: PtrInt;   { threadvar offsets from fs }
   JitFsFrames, JitFsFrameTop, JitFsStackTop, JitFsJitDepth, JitFsJitDepthMax, JitFsStackFloor: PtrInt;
 
 function JitFsBase: PtrUInt; assembler; nostackframe;
@@ -647,6 +647,8 @@ type
   TOptInfo = record
     Count: Integer;                { counts down at the baseline code's PC 0 and back edges }
     Deopts, Recompiles: Integer;
+    FbDrop: Integer;               { 1: a deopt recorded new feedback, so the regions go now (not a recompile) }
+    FbDrops: Integer;
     Fails: Integer;                { regions not optimized: each one makes the counter's next run longer }
     BaseTable: PPtrUInt;           { the baseline code's entry per instruction }
     Table: PPtrUInt;               { BaseTable with the optimized regions' entries, nil when none }
@@ -3353,6 +3355,7 @@ function JitOn: Boolean;
 begin
   JitMainThread := GetCurrentThreadId;
   JitFsVStack := PtrInt(PtrUInt(@VStack) - JitFsBase);
+  JitFsGlobalObj := PtrInt(PtrUInt(@GlobalObj) - JitFsBase);
   JitFsNurseryStart := PtrInt(PtrUInt(@NurseryStart) - JitFsBase);
   JitFsNurseryLimit := PtrInt(PtrUInt(@NurseryLimit) - JitFsBase);
   JitFsArrayIterNext := PtrInt(PtrUInt(@ArrayIterNextFn) - JitFsBase);
@@ -3366,7 +3369,7 @@ begin
   if (Abs(JitFsVStack) > $7FFFFFF0) or (Abs(JitFsNurseryStart) > $7FFFFFF0) or (Abs(JitFsNurseryLimit) > $7FFFFFF0) or
      (Abs(JitFsArrayIterNext) > $7FFFFFF0) or (Abs(JitFsFrames) > $7FFFFFF0) or (Abs(JitFsFrameTop) > $7FFFFFF0) or
      (Abs(JitFsStackTop) > $7FFFFFF0) or (Abs(JitFsJitDepth) > $7FFFFFF0) or
-     (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) then
+     (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) or (Abs(JitFsGlobalObj) > $7FFFFFF0) then
     JitEnabled := 0;
   if JitEnabled < 0 then
     if GetEnvironmentVariable('G2_JIT') = '0' then JitEnabled := 0 else JitEnabled := 1;   { on unless G2_JIT=0 }
