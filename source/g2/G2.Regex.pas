@@ -81,6 +81,12 @@ type
     FStepLimit: Int64;
     FMatchIndex, FMatchEnd: Integer;
     FErr: Integer;                   { 0, or why the last Exec stopped (step limit, backtrack cap, stack, bytecode) }
+    { ^(?:lit|lit|...)$ (no capture, no m flag, literal code units only): a match is the whole subject equal to
+      one of FLits, which are sorted by length (FLitFrom[L] .. FLitFrom[L + 1] - 1 those of length L) }
+    FLitOn: Boolean;
+    FLits: array of UnicodeString;
+    FLitFrom: array of Integer;
+    procedure AnalyzeLiterals;
     function Ctx(Depth: Integer): PDepthCtx;
     function Run(Depth: Integer; Slots: PInteger; StartPos, StartPC: Integer; EndPos: PInteger;
       Backward, Scan: Boolean): Boolean;
@@ -414,6 +420,7 @@ begin
     end;
   end;
   FAnchor := AnalyzeAnchor;
+  AnalyzeLiterals;
   SetLength(FSimpleLoop, FCodeLen + 1);
   SetLength(FSimpleTail, FCodeLen + 1);
   for I := 0 to FCodeLen - 3 do
@@ -778,6 +785,72 @@ end;
 
 { 1 when every path from the start asserts ^ (input start) before anything else, 2 when every path asserts
   ^ and some of them under the m flag (a line start), else 0 }
+procedure TRegexMatcher.AnalyzeLiterals;
+var PC, E, I, J, MaxL: Integer; Ok: Boolean; Tmp: UnicodeString; Ls: array of UnicodeString; N: Integer;
+  function Op(At: Integer): TRegExpOpCode; begin Result := TRegExpOpCode(FCode[At] and $FF); end;
+  function Bx(At: Integer): Integer; begin Result := Integer(FCode[At] shr 8); end;
+  { the literal from PC: its characters, ending in a jump to (or a fall into) the common end E }
+  function Lit(PC: Integer): Boolean;
+  var S: UnicodeString;
+  begin
+    Result := False;
+    S := '';
+    while (PC < FCodeLen) and (Op(PC) = RX_CHAR) do
+    begin
+      if (Bx(PC) > $FFFF) or ((Bx(PC) >= $D800) and (Bx(PC) <= $DFFF)) then Exit;
+      S := S + WideChar(Bx(PC));
+      Inc(PC);
+    end;
+    if PC >= FCodeLen then Exit;
+    if Op(PC) = RX_JUMP then PC := Bx(PC);
+    if E < 0 then E := PC else if PC <> E then Exit;
+    if N >= Length(Ls) then SetLength(Ls, N * 2 + 8);
+    Ls[N] := S;
+    Inc(N);
+    Result := True;
+  end;
+begin
+  FLitOn := False;
+  if FEmpty or (FCodeLen < 4) or (FProg.CaptureCount <> 0) then Exit;
+  PC := 0;
+  if (Op(PC) <> RX_SAVE) or (Bx(PC) <> 0) then Exit;
+  Inc(PC);
+  if (Op(PC) <> RX_ASSERT_START) or (Bx(PC) <> 0) then Exit;
+  Inc(PC);
+  E := -1; N := 0;
+  { the alternatives: a chain of splits, each one's first branch a literal, the last one a literal }
+  while (PC < FCodeLen) and (Op(PC) = RX_SPLIT) do
+  begin
+    if not Lit(PC + 1) then Exit;
+    PC := Bx(PC);
+  end;
+  if not Lit(PC) then Exit;
+  { the end: $ (without m), the match's end saved, the match }
+  if (E < 0) or (E + 2 >= FCodeLen) then Exit;
+  Ok := (Op(E) = RX_ASSERT_END) and (Bx(E) = 0) and (Op(E + 1) = RX_SAVE) and (Bx(E + 1) = 1) and
+    (Op(E + 2) = RX_MATCH);
+  if not Ok then Exit;
+  { sorted by length }
+  for I := 1 to N - 1 do
+  begin
+    Tmp := Ls[I];
+    J := I - 1;
+    while (J >= 0) and (Length(Ls[J]) > Length(Tmp)) do begin Ls[J + 1] := Ls[J]; Dec(J); end;
+    Ls[J + 1] := Tmp;
+  end;
+  MaxL := Length(Ls[N - 1]);
+  SetLength(FLits, N);
+  for I := 0 to N - 1 do FLits[I] := Ls[I];
+  SetLength(FLitFrom, MaxL + 2);
+  J := 0;
+  for I := 0 to MaxL + 1 do
+  begin
+    while (J < N) and (Length(FLits[J]) < I) do Inc(J);
+    FLitFrom[I] := J;
+  end;
+  FLitOn := True;
+end;
+
 function TRegexMatcher.AnalyzeAnchor: Integer;
 var Seen: array of Boolean;
   function Combine(A, B: Integer): Integer;
@@ -1553,6 +1626,22 @@ begin
     FMatchIndex := Start;
     FMatchEnd := Start;
     Exit(True);
+  end;
+  if FLitOn then
+  begin
+    { ^(?:lit|...)$: the whole subject one of the literals (^ holds only at the start) }
+    Result := False;
+    if (Start <> 0) or (Len >= High(FLitFrom)) then Exit;
+    for I := FLitFrom[Len] to FLitFrom[Len + 1] - 1 do
+      if (Len = 0) or CompareMem(Chars, PWideChar(FLits[I]), Len * SizeOf(WideChar)) then
+      begin
+        FSlots[0] := 0;
+        FSlots[1] := Len;
+        FMatchIndex := 0;
+        FMatchEnd := Len;
+        Exit(True);
+      end;
+    Exit;
   end;
   FStride := Len + 1;
   FUseBits := Int64(FCodeLen + 1) * FStride <= 1 shl 24;   { at most 2 MB of bits per depth }
