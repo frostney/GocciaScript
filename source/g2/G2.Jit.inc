@@ -2187,6 +2187,7 @@ procedure JitInstr(T: PFuncTemplate; PC: Integer; I: QWord); forward;
 
 procedure JitInstr0(T: PFuncTemplate; PC: Integer; I: QWord);
 var Saved: Pointer; A, B, C: Integer; CU: Cardinal; Op: TOp; L1, L2, L3, L4, L5, L6, LS, LA: Integer; IC: PPropIC; CC: Integer;
+  JmpFixFalse, JmpFixFalse2, JmpFixTrue, JmpFixTrue2: Integer;
 begin
   Op := TOp(I and $FF);
   A := (I shr 8) and $FFFF;
@@ -2922,7 +2923,53 @@ begin
         end;
       end;
     opGetGlobal, opTypeofGlobal: EmitHelper(@JH_GetGlobal, PC, I);
-    opClosure, opNewObj, opDefProp, opNot, opTypeof: EmitHelper(@JH_Alloc, PC, I);
+    opClosure, opNewObj, opDefProp, opTypeof: EmitHelper(@JH_Alloc, PC, I);
+    opNot:
+      begin
+        { true, false, undefined, null, ints, objects (not [[IsHTMLDDA]]) and strings decided here; anything else
+          ToBool's (it calls nothing) }
+        MovRM(jAX, jBX, B * 8);
+        MovRI(jCX, VFalse); AluRR($39, jAX, jCX, True); L1 := JccFwd(ccE);
+        MovRI(jCX, VTrue); AluRR($39, jAX, jCX, True); L2 := JccFwd(ccE);
+        MovRI(jCX, VUndefined); AluRR($39, jAX, jCX, True); L3 := JccFwd(ccE);
+        MovRI(jCX, VNull); AluRR($39, jAX, jCX, True); L4 := JccFwd(ccE);
+        TagOf(jDX, jAX);
+        AluRI(7, jDX, TAG_INT_HI, False);
+        L5 := JccFwd(ccNE);
+        AluRR($85, jAX, jAX, False);
+        L6 := JccFwd(ccE);                                   { 0: !0 is true }
+        LS := JmpFwd;                                        { else false }
+        PatchHere(L5);
+        AluRI(7, jDX, TAG_PTR_HI, False);
+        L5 := JccFwd(ccNE);
+        MovRR(jCX, jAX);
+        AluRR($31, jCX, jR13, True);
+        CmpBMI(jCX, 4, ckObject);
+        LA := JccFwd(ccNE);
+        TestBMI(jCX, 5, cfEmulatesUndefined);
+        CC := JccFwd(ccNE);
+        JmpFixFalse := JmpFwd;                               { an object: false }
+        PatchHere(LA);
+        CmpBMI(jCX, 4, ckString);
+        LA := JccFwd(ccNE);
+        Mov32RM(jDX, jCX, PtrInt(@PStr(nil)^.Len));
+        AluRR($85, jDX, jDX, False);
+        JmpFixTrue := JccFwd(ccE);                           { the empty string: true }
+        JmpFixFalse2 := JmpFwd;
+        PatchHere(L5); PatchHere(LA); PatchHere(CC);
+        MovRR(jDI, jAX);
+        CallAbs(@JH_ToBool);
+        JB($84); JB($C0);                                    { test al, al }
+        JmpFixTrue2 := JccFwd(ccE);
+        { false }
+        PatchHere(L2); PatchHere(LS); PatchHere(JmpFixFalse); PatchHere(JmpFixFalse2);
+        MovRI(jAX, VFalse);
+        L5 := JmpFwd;
+        PatchHere(L1); PatchHere(L3); PatchHere(L4); PatchHere(L6); PatchHere(JmpFixTrue); PatchHere(JmpFixTrue2);
+        MovRI(jAX, VTrue);
+        PatchHere(L5);
+        MovMR(jBX, A * 8, jAX);
+      end;
     opIterNext:
       begin
         { an array iterator's step (as FastLoop's): the element in R[A], the index on; a generator, the end of the
