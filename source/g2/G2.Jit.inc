@@ -3286,7 +3286,7 @@ end;
   interpreter runs the call, -1 a throw. Keeps rbx, r12, rbp (and r13 - r15, its own) }
 procedure JitBuildCallStub;
 var Slow: array[0..47] of Integer; NSlow, K, L1, L2, L3, LRet0, LRet1, LRet2, LRet3, LRet4, LNat, LNatDone: Integer;
-  P: PByte;
+  LG1, LG2, LG3, LThisDone, LThisDone2: Integer; P: PByte;
   procedure AddS(L: Integer); begin Slow[NSlow] := L; Inc(NSlow); end;
 begin
   JitLen := 0;
@@ -3309,23 +3309,35 @@ begin
   CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.FastCall), 0); AddS(JccFwd(ccE));
   CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsGenerator), 0); AddS(JccFwd(ccNE));
   CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.JitState), 1); AddS(JccFwd(ccNE));
-  { this: a strict or arrow callee takes it as it is (undefined for the flag); a sloppy one an object }
+  { this: a strict or arrow callee takes it as it is (undefined for the flag); a sloppy one an object, the
+    global object for none, undefined or null (as XJitCall), a primitive XJitCall's (it is boxed) }
   CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsStrict), 0); L1 := JccFwd(ccNE);
   CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsArrow), 0); L2 := JccFwd(ccNE);
   JB($41); JB($F7); JB($C6); JD($10000);                           { test r14d, $10000 }
-  AddS(JccFwd(ccNE));
+  LG1 := JccFwd(ccNE);
   MovRM(jCX, jR13, 8);
+  MovRI(jDX, VUndefined); AluRR($39, jCX, jDX, True); LG2 := JccFwd(ccE);
+  MovRI(jDX, VNull); AluRR($39, jCX, jDX, True); LG3 := JccFwd(ccE);
   TagOf(jDX, jCX);
   AluRI(7, jDX, TAG_PTR_HI, False);
   AddS(JccFwd(ccNE));
   MovRI(jDX, PTR_MASK);
   AluRR($21, jCX, jDX, True);
   CmpBMI(jCX, 4, ckObject); AddS(JccFwd(ccNE));
+  LThisDone := JmpFwd;
+  PatchHere(LG1); PatchHere(LG2); PatchHere(LG3);
+  { (with realms, the callee's own global object: XJitCall's) }
+  MovRI(jDX, QWord(PtrUInt(@MultiRealmAny)));
+  CmpBMI(jDX, 0, 0); AddS(JccFwd(ccNE));
+  MovRFs(jCX, JitFsGlobalObj);
+  MovMR(jR13, 8, jCX);
+  LThisDone2 := JmpFwd;
   PatchHere(L1); PatchHere(L2);
   JB($41); JB($F7); JB($C6); JD($10000);                           { test r14d, $10000 }
   L1 := JccFwd(ccE);
   MovRI(jCX, VUndefined); MovMR(jR13, 8, jCX);
   PatchHere(L1);
+  PatchHere(LThisDone); PatchHere(LThisDone2);
   MovRM(jDI, jSI, PtrInt(@PFuncTemplate(nil)^.JitTable));
   MovRM(jDI, jDI, 0);
   AluRR($85, jDI, jDI, True); AddS(JccFwd(ccE));
