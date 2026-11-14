@@ -1770,8 +1770,81 @@ end;
   completes it (XGenInlineReturn). Any other stop finishes the step as GeneratorResume does: the frame becomes
   Kind 3 and a nested Execute runs it to its next yield, its return or its throw. 1 done (the jump), 0 the value
   in the consumer's R[A], -1 a throw pending, 2 not taken (nothing changed: IteratorStepRec's) }
+{ N values from Src to Dst, and N undefineds from Dst (a generator's registers: FPC's loops reload and spill per
+  value, about seven instructions each) }
+procedure CopyValues(Dst, Src: PValue; N: NativeInt); assembler; nostackframe;
+asm
+  testq %rdx, %rdx
+  jle .Ldone
+  testq $1, %rdx
+  je .Lpairs
+  movq (%rsi), %rax
+  movq %rax, (%rdi)
+  addq $8, %rsi
+  addq $8, %rdi
+  decq %rdx
+  je .Ldone
+.Lpairs:
+  movq (%rsi), %rax
+  movq 8(%rsi), %rcx
+  movq %rax, (%rdi)
+  movq %rcx, 8(%rdi)
+  addq $16, %rsi
+  addq $16, %rdi
+  subq $2, %rdx
+  jne .Lpairs
+.Ldone:
+end;
+
+procedure FillValues(Dst: PValue; N: NativeInt; V: TValue); assembler; nostackframe;
+asm
+  testq %rsi, %rsi
+  jle .Ldone
+.Lloop:
+  movq %rdx, (%rdi)
+  addq $8, %rdi
+  decq %rsi
+  jne .Lloop
+.Ldone:
+end;
+
+{ SaveSuspension's case without handlers or open upvalues on frame GF (the newest) and a state array big enough
+  (nothing allocates): the live registers into it, the yielded value into the consumer's register, the frame
+  popped. False: SaveSuspension's (nothing changed) }
+function JitGenSuspendFast(GF: PFrame; T: PFuncTemplate; Ins: QWord; Res: Integer): Boolean;
+var O: PObj; E: PValueArray; Live, ResumeCode, N, J: Integer; R: PValue; V: TValue;
+begin
+  Result := False;
+  if (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame = FrameTop - 1) then Exit;
+  if (OpenCount > 0) and (PUpval(PtrOf(OpenUpvals[OpenCount - 1]))^.StackIndex >= GF^.Base) then Exit;
+  O := ObjOf(GF^.NewTarget);
+  E := PValueArray(PtrOf(O^.Aux2));
+  N := T^.MaxRegs + 4;
+  if Integer(E^.Cap) < N then Exit;
+  Live := Integer(Ins shr 40);
+  ResumeCode := Integer((Ins shr 8) and $FFFF);
+  if (Live <= 0) or (Live > T^.MaxRegs) then Live := T^.MaxRegs;
+  if ResumeCode >= Live then Live := ResumeCode + 1;
+  if Live > T^.MaxRegs then Live := T^.MaxRegs;
+  R := @VStack[GF^.Base];
+  V := R[(Ins shr 24) and $FFFF];
+  E^.Len := N;
+  CopyValues(@E^.Data[0], R, Live);
+  E^.Data[T^.MaxRegs] := MkInt(ResumeCode);
+  E^.Data[T^.MaxRegs + 1] := MkInt(Live);
+  E^.Data[T^.MaxRegs + 2] := MkInt(0);
+  E^.Data[T^.MaxRegs + 3] := MkInt(0);
+  if (E^.Hdr.Flags and (cfOld or cfRemembered)) = cfOld then Remember(@E^.Hdr);
+  O^.Pad := Res + 1;
+  O^.OFlags := 1;
+  Dec(FrameTop);
+  VStack[GF^.RetIdx] := V;
+  Result := True;
+end;
+
 function JitGenStep(Fr: PFrame; A, B: Integer; Gen: TValue): Integer;
-var G: PObj; T: PFuncTemplate; GF: PFrame; Res, SavedTop, J: Integer; Ins: QWord; V, Gv: TValue; Ok, Done: Boolean;
+var G: PObj; T: PFuncTemplate; GF: PFrame; Res, SavedTop, J, Base, NLive: Integer; Ins: QWord; V, Gv: TValue;
+  Ok, Done: Boolean; State: PValueArray; R: PValue;
 begin
   G := ObjOf(Gen);
   T := PFuncTemplate(ObjOf(G^.Aux1)^.Native);
@@ -1787,14 +1860,48 @@ begin
   if (PPtrUInt(T^.JitTable)[G^.Pad] = 0) or JitTooDeep or
      (StackTop + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(2);
   SavedTop := StackTop;
-  if not XGenInline(Gen, Fr^.Base + A) then Exit(-1);
-  GF := @Frames[FrameTop - 1];
+  State := PValueArray(PtrOf(G^.Aux2));
+  if (IntOf(State^.Data[T^.MaxRegs + 2]) = 0) and (IntOf(State^.Data[T^.MaxRegs + 3]) = 0) and
+     (IntOf(State^.Data[T^.MaxRegs]) >= -1) then
+  begin
+    { XGenInline's resume without handlers or upvalues to restore, its copies as loops }
+    Base := StackTop;
+    NLive := IntOf(State^.Data[T^.MaxRegs + 1]);
+    R := @VStack[Base];
+    CopyValues(R, @State^.Data[0], NLive);
+    FillValues(@R[NLive], T^.MaxRegs - NLive, VUndefined);
+    GF := @Frames[FrameTop];
+    GF^.Closure := G^.Aux1;
+    GF^.NewTarget := Gen;
+    GF^.Tpl := T;
+    GF^.Base := Base;
+    GF^.PC := G^.Pad;
+    GF^.RetIdx := Fr^.Base + A;
+    GF^.Argc := 0;
+    GF^.Kind := 4;
+    Inc(FrameTop);
+    J := IntOf(State^.Data[T^.MaxRegs]);
+    if J >= 0 then R[J] := VUndefined;
+    StackTop := Base + T^.MaxRegs;
+    G^.OFlags := 2;
+    GenYielded := False;
+  end
+  else
+  begin
+    if not XGenInline(Gen, Fr^.Base + A) then Exit(-1);
+    GF := @Frames[FrameTop - 1];
+  end;
   Inc(JitDepth);
   Res := TJitFn(T^.Jit)(@VStack[GF^.Base], Pointer(PPtrUInt(T^.JitTable)[GF^.PC]), GF, 0);
   Dec(JitDepth);
   if Res >= 0 then
   begin
     Ins := T^.Code[Res];
+    if (TOp(Ins and $FF) = opYield) and JitGenSuspendFast(GF, T, Ins, Res) then
+    begin
+      StackTop := SavedTop;
+      Exit(0);
+    end;
     if TOp(Ins and $FF) = opYield then
     begin
       { suspended, its value in the consumer's register }
