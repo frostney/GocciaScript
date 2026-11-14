@@ -26,9 +26,16 @@ const
   onUnbox = 70;    { a tagged register (Imm) as a number of the node's kind, checked }
   onEmbed = 71;    { the baseline's code of instruction Imm on VStack: X / Y its flushed reads in OFS }
   onFlush = 72;    { node X boxed into VStack register Imm (an edge into a block that holds it tagged) }
+  { element access on the speculated receiver in VStack register Reg (checked): X the index (an int node) }
+  onTAGet = 73;    { a typed array's element of kind Imm, as the node's kind (int or double) }
+  onTASet = 74;    { Y (a node of the element kind's number kind) into a typed array of kind Imm }
+  onArrGet = 75;   { an elements store's value (not a hole) into VStack register Y }
+  onArrSet = 76;   { Y (a node >= 0, else VStack register -1 - Y) over an elements store's value (not a hole) }
+
+  ELEM_ARRAY = 100;   { OElemSpec: an object with an elements store (an array, a plain object's indices) }
 
   { feedback bits (TOptInfo.Feedback per instruction) }
-  ofbOverflow = 1; ofbEntry = 2; ofbGiveUp = 4; ofbUnboxDbl = 8; ofbUnboxNo = 16; ofbTagCmp = 32;
+  ofbOverflow = 1; ofbEntry = 2; ofbGiveUp = 4; ofbUnboxDbl = 8; ofbUnboxNo = 16; ofbTagCmp = 32; ofbElem = 64;
 
   { conditions (onCmpI / onCmpD's Imm, a branch's TermCC) }
   ocLt = 0; ocLe = 1; ocGt = 2; ocGe = 3; ocEq = 4; ocNe = 5;
@@ -91,6 +98,8 @@ var
   OEmbed: array of Boolean;          { instructions the region runs the baseline's code of }
   OEmbedNode: array of Integer;      { per instruction: its onEmbed node (-1 none) }
   OCurPC: Integer;                   { the instruction being built (an unbox's resume point) }
+  OElemSpec: array of Integer;       { per element instruction: the receiver speculated (a typed array kind,
+                                       ELEM_ARRAY, -1 none), from the frame's values at compile time }
   OFS: array of TOFSPair;
   OFSCount: Integer;
   OPhiArg: array of Integer;
@@ -107,6 +116,7 @@ var
   OFail: Boolean;
   OSpills: Integer;
   OFrame: Integer;                   { bytes below the saved r15 }
+  OScratch: Integer;                 { the scratch slot's offset from rsp }
   OEntry: Integer;
   OGuards: array of Integer;         { nodes and blocks needing a cold stub: >= 0 node, < 0 -1 - block (exit) }
   OGuardJumps: array of Integer;     { per guard: the first of its jumps in OGJ }
@@ -176,7 +186,7 @@ begin
     opNeg, opBitNot, opNot, opToNum, opToNumeric,
     opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe,
     opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef,
-    opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq: Result := True;
+    opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq, opGetElem, opSetElem: Result := True;
   else Result := False;
   end;
 end;
@@ -236,7 +246,7 @@ begin
     opMov, opNeg, opBitNot, opNot, opToNum, opToNumeric,
     opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI: R1 := OB_(I);
     opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr,
-    opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe: begin R1 := OB_(I); R2 := OCU(I); end;
+    opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe, opGetElem: begin R1 := OB_(I); R2 := OCU(I); end;
     opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef: R1 := OA(I);
     opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq: begin R1 := OA(I); R2 := OB_(I); end;
   end;
@@ -249,7 +259,7 @@ begin
     opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr,
     opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI,
     opNeg, opBitNot, opNot, opToNum, opToNumeric,
-    opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe: Result := OA(I);
+    opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe, opGetElem: Result := OA(I);
   else Result := -1;
   end;
 end;
@@ -418,6 +428,7 @@ begin
             ClrBit(Wr);
             OReads(I, R1, R2);
             SetBit(R1); SetBit(R2);
+            if OOpOf(I) = opSetElem then begin SetBit(OA(I)); SetBit(OB_(I)); SetBit(OCU(I)); end;
           end;
         for W := 0 to OLiveW - 1 do
           if OLive[PC * OLiveW + W] <> Cur[W] then
@@ -510,7 +521,41 @@ begin
     opSEq, opSNe, opEq, opNe:
       if (OIsNum(KB) and OIsNum(KC)) or ((KB = vkBool) and (KC = vkBool)) then Result := vkBool
       else Result := vkNone;
+    opGetElem:
+      begin
+        { a speculated receiver and a numeric index (a tagged one unboxed as an int) }
+        KC := K[OCU(I)];
+        if KC = vkTag then KC := OSpec(PC);
+        if not OIsNum(KC) or (K[OB_(I)] <> vkTag) then Exit(vkNone);
+        case OElemSpec[PC] of
+          taInt8, taUint8, taUint8C, taInt16, taUint16, taInt32: Result := vkInt;
+          taUint32: if Ovf then Result := vkNone else Result := vkInt;
+          taFloat32, taFloat64: Result := vkDbl;
+          ELEM_ARRAY: Result := vkTag;
+        else Result := vkNone;
+        end;
+      end;
   else Result := vkNone;
+  end;
+end;
+
+{ whether the region takes SetElem I with operand kinds K: a speculated receiver, a numeric index, and for a typed
+  array a number to store }
+function OSetElemOk(PC: Integer; I: QWord; const K: array of Byte): Boolean;
+var KB, KC: Integer;
+begin
+  KB := K[OB_(I)];
+  if KB = vkTag then KB := OSpec(PC);
+  if not OIsNum(KB) or (K[OA(I)] <> vkTag) then Exit(False);
+  KC := K[OCU(I)];
+  case OElemSpec[PC] of
+    taInt8, taUint8, taInt16, taUint16, taInt32, taUint32, taFloat32, taFloat64:
+      begin
+        if KC = vkTag then KC := OSpec(PC);
+        Result := OIsNum(KC);
+      end;
+    ELEM_ARRAY: Result := KC <> vkNone;
+  else Result := False;
   end;
 end;
 
@@ -587,6 +632,21 @@ begin
           if WF >= 0 then for R := WF to WT do Cur[R] := vkTag;
           Continue;
         end;
+        if Op = opSetElem then
+        begin
+          if not OSetElemOk(PC, I, Cur) then
+          begin
+            if OEmbeddable(PC) then OEmbed[PC] := True else OExit[PC] := True;
+            Result := False;
+            Break;
+          end;
+          { the tagged index (and a typed array's tagged value) unboxed }
+          if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpec(PC);
+          if (OElemSpec[PC] <> ELEM_ARRAY) and (Cur[OCU(I)] = vkTag) then Cur[OCU(I)] := OSpec(PC);
+          Continue;
+        end;
+        if (Op = opGetElem) and (Cur[OCU(I)] = vkTag) and (OResultKind(PC, I, Cur) <> vkNone) then
+          Cur[OCU(I)] := OSpec(PC);
         RK := OResultKind(PC, I, Cur);
         if RK = vkNone then
         begin
@@ -791,6 +851,43 @@ begin
   end;
   case Op of
     opNop: Exit;
+    opGetElem:
+      begin
+        X := OGetAs(B, OCU(I), vkInt);
+        if OFail then Exit;
+        if OElemSpec[PC] = ELEM_ARRAY then
+        begin
+          N := OEmitNode(B, onArrGet, vkNone, X, A, 0);
+          ON[N].Reg := OB_(I);
+          OGuard(N, PC);
+          OMap[A] := -1;
+          Exit;
+        end;
+        if OElemSpec[PC] in [taFloat32, taFloat64] then Y := vkDbl else Y := vkInt;
+        N := OEmitNode(B, onTAGet, Y, X, -1, OElemSpec[PC]);
+        ON[N].Reg := OB_(I);
+        OGuard(N, PC);
+      end;
+    opSetElem:
+      begin
+        X := OGetAs(B, OB_(I), vkInt);
+        if OFail then Exit;
+        if OElemSpec[PC] = ELEM_ARRAY then
+        begin
+          if OMap[OCU(I)] >= 0 then Y := OMap[OCU(I)] else Y := -1 - OCU(I);
+          N := OEmitNode(B, onArrSet, vkNone, X, Y, 0);
+        end
+        else
+        begin
+          if OElemSpec[PC] in [taFloat32, taFloat64] then Y := OGetAs(B, OCU(I), vkDbl)
+          else Y := OGetAs(B, OCU(I), vkInt);
+          if OFail then Exit;
+          N := OEmitNode(B, onTASet, vkNone, X, Y, OElemSpec[PC]);
+        end;
+        ON[N].Reg := OA(I);
+        OGuard(N, PC);
+        Exit;
+      end;
     opMov:
       if OMap[OB_(I)] >= 0 then N := OMap[OB_(I)]
       else
@@ -1024,7 +1121,7 @@ begin
     if not OHasNodeX(ON[N].Op) then Continue;
     ON[N].X := ORep(ON[N].X);
     if ON[N].Op in [onAddI, onSubI, onMulI, onModI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onAddD, onSubD,
-      onMulD, onDivD, onCmpI, onCmpD] then ON[N].Y := ORep(ON[N].Y);
+      onMulD, onDivD, onCmpI, onCmpD, onTASet, onArrSet] then ON[N].Y := ORep(ON[N].Y);
   end;
   for K := 0 to OFSCount - 1 do OFS[K].Node := ORep(OFS[K].Node);
   for K := 0 to OPhiArgCount - 1 do OPhiArg[K] := ORep(OPhiArg[K]);
@@ -1247,7 +1344,7 @@ var Pos, K, B, J, N, S, P, W, NW, Ph, F, NClob: Integer; Changed, Cross: Boolean
       if not OHasNodeX(ON[M].Op) then Continue;
       Mark(ON[M].X);
       if ON[M].Op in [onAddI, onSubI, onMulI, onModI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onAddD, onSubD,
-        onMulD, onDivD, onCmpI, onCmpD] then Mark(ON[M].Y);
+        onMulD, onDivD, onCmpI, onCmpD, onTASet, onArrSet] then Mark(ON[M].Y);
       if ON[M].FS >= 0 then
         for Q := ON[M].FS to ON[M].FS + ON[M].FSN - 1 do Mark(OFS[Q].Node);
       if ON[M].Op = onEmbed then
@@ -1301,7 +1398,7 @@ begin
       ON[N].First := Pos;
       if OHasNodeX(ON[N].Op) then Use(ON[N].X, Pos);
       if ON[N].Op in [onAddI, onSubI, onMulI, onModI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onAddD, onSubD,
-        onMulD, onDivD, onCmpI, onCmpD] then Use(ON[N].Y, Pos);
+        onMulD, onDivD, onCmpI, onCmpD, onTASet, onArrSet] then Use(ON[N].Y, Pos);
       if ON[N].FS >= 0 then
         for F := ON[N].FS to ON[N].FS + ON[N].FSN - 1 do Use(OFS[F].Node, Pos);
       if ON[N].Op = onEmbed then
@@ -1411,7 +1508,9 @@ begin
     end;
   end;
   { the frame below the saved r15: the spill slots, rsp kept 16-byte aligned }
-  OFrame := OSpills * 8;
+  { the spill slots, then one scratch slot (an elements store's boxed value) }
+  OScratch := OSpills * 8;
+  OFrame := OSpills * 8 + 8;
   if (OFrame mod 16) = 0 then Inc(OFrame, 8);
 end;
 
@@ -1574,6 +1673,82 @@ begin
 end;
 
 procedure OBox(V: Integer); forward;
+
+{ cmp R, fs:[Disp] (64-bit) }
+procedure OCmpRFs(R, Disp: Integer);
+begin JB($64); JRex(True, R, 0, 0); JB($3B); JB($04 or ((R and 7) shl 3)); JB($25); JD(Cardinal(Disp)); end;
+
+{ the receiver of element node N (VStack register Reg) as an object in rax, else N's deopt }
+procedure OElemReceiver(N: Integer);
+begin
+  MovRM(jAX, jBX, ON[N].Reg * 8);
+  AluRR($31, jAX, jR13, True);
+  MovRR(jDX, jAX);
+  ShiftRI(5, jDX, 48, True);
+  OJccGuardFb(ccNE, N, ofbElem);
+  CmpBMI(jAX, 4, ckObject);
+  OJccGuardFb(ccNE, N, ofbElem);
+end;
+
+{ typed array element node N: rax the view (checked: its kind, the index in rcx below its length, an ordinary
+  buffer), then rdx the bytes' address (the element at rdx + rcx << size + DataOff) }
+procedure OTAAddress(N: Integer; Store: Boolean);
+begin
+  OElemReceiver(N);
+  CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okTypedArray);
+  OJccGuardFb(ccNE, N, ofbElem);
+  MovzxBRM(jDX, jAX, PtrInt(@PObj(nil)^.OFlags));
+  ShiftRI(5, jDX, 4, False);
+  AluRI(7, jDX, Integer(ON[N].Imm), False);
+  OJccGuardFb(ccNE, N, ofbElem);
+  OLoadG(jCX, ON[N].X);
+  Mov32RM(jDX, jAX, PtrInt(@PObj(nil)^.Aux2));
+  AluRR($85, jDX, jDX, False);
+  OJccGuardFb(ccS, N, ofbElem);
+  AluRR($39, jCX, jDX, False);
+  OJccGuardFb(ccAE, N, ofbElem);
+  JRex(False, jCX, 0, jCX); JB($8B); JModRR(jCX, jCX);   { mov ecx, ecx }
+  MovRM(jDX, jAX, PtrInt(@PObj(nil)^.Aux1));
+  AluRR($31, jDX, jR13, True);
+  if Store then TestBMI(jDX, PtrInt(@PObj(nil)^.OFlags), bfShared or bfResizable or bfDetached or bfImmutable)
+  else TestBMI(jDX, PtrInt(@PObj(nil)^.OFlags), bfShared or bfResizable or bfDetached);
+  OJccGuardFb(ccNE, N, ofbElem);
+  MovRM(jDX, jDX, PtrInt(@PObj(nil)^.Aux1));
+  AluRR($31, jDX, jR13, True);
+  Mov32RM(jAX, jAX, PtrInt(@PObj(nil)^.Pad));
+  AluRR($01, jDX, jAX, True);
+end;
+
+{ the write barrier after rax went into the cell in rdx (rcx scratch): an old cell not yet remembered that now
+  points into the nursery is remembered, every allocatable register kept around the call }
+procedure OBarrier;
+var L1, L2, L3, L4, K: Integer;
+begin
+  MovzxBRM(jCX, jDX, 5);
+  AluRI(4, jCX, cfOld or cfRemembered, False);
+  AluRI(7, jCX, cfOld, False);
+  L1 := JccFwd(ccNE);
+  MovRR(jCX, jAX);
+  ShiftRI(5, jCX, 48, True);
+  AluRI(7, jCX, TAG_PTR_HI, False);
+  L2 := JccFwd(ccNE);
+  MovRR(jCX, jAX);
+  AluRR($31, jCX, jR13, True);
+  OCmpRFs(jCX, JitFsNurseryStart);
+  L3 := JccFwd(ccB);
+  OCmpRFs(jCX, JitFsNurseryLimit);
+  L4 := JccFwd(ccAE);
+  { push rsi, rdi, r8 - r11 (rsp stays aligned), xmm2 - xmm15 below them }
+  JB($56); JB($57); JB($41); JB($50); JB($41); JB($51); JB($41); JB($52); JB($41); JB($53);
+  AluRI(5, jSP, 112, True);
+  for K := 0 to 13 do OSseM($F2, $11, 2 + K, jSP, K * 8);
+  MovRR(jDI, jDX);
+  CallAbs(@Remember);
+  for K := 0 to 13 do OSseM($F2, $10, 2 + K, jSP, K * 8);
+  AluRI(0, jSP, 112, True);
+  JB($41); JB($5B); JB($41); JB($5A); JB($41); JB($59); JB($41); JB($58); JB($5F); JB($5E);
+  PatchHere(L1); PatchHere(L2); PatchHere(L3); PatchHere(L4);
+end;
 
 { node N's code }
 procedure OCode(N: Integer);
@@ -1784,6 +1959,101 @@ begin
       begin
         OBox(ON[N].X);
         MovMR(jBX, Integer(ON[N].Imm) * 8, jAX);
+      end;
+    onTAGet:
+      begin
+        OTAAddress(N, False);
+        D := PtrInt(@PBytes(nil)^.Data);
+        case ON[N].Imm of
+          taUint8, taUint8C: SibOp(0, False, [$0F, $B6], jAX, jDX, jCX, 0, D);
+          taInt8: SibOp(0, False, [$0F, $BE], jAX, jDX, jCX, 0, D);
+          taInt16: SibOp(0, False, [$0F, $BF], jAX, jDX, jCX, 1, D);
+          taUint16: SibOp(0, False, [$0F, $B7], jAX, jDX, jCX, 1, D);
+          taInt32, taUint32: SibOp(0, False, [$8B], jAX, jDX, jCX, 2, D);
+          taFloat64: SibOp($F2, False, [$0F, $10], 0, jDX, jCX, 3, D);
+        else
+          begin
+            SibOp($F3, False, [$0F, $10], 0, jDX, jCX, 2, D);
+            JB($F3); JB($0F); JB($5A); JB($C0);           { cvtss2sd xmm0, xmm0 }
+          end;
+        end;
+        if ON[N].Imm = taUint32 then
+        begin
+          AluRR($85, jAX, jAX, False);
+          OJccGuardFb(ccS, N, ofbOverflow);                { 2^31 and up: not an int }
+        end;
+        if ON[N].Kind = vkDbl then OStoreX(N, 0) else OStoreG(N, jAX);
+      end;
+    onTASet:
+      begin
+        OTAAddress(N, True);
+        D := PtrInt(@PBytes(nil)^.Data);
+        case ON[N].Imm of
+          taFloat64:
+            begin
+              OLoadX(0, ON[N].Y);
+              SibOp($F2, False, [$0F, $11], 0, jDX, jCX, 3, D);
+            end;
+          taFloat32:
+            begin
+              OLoadX(0, ON[N].Y);
+              JB($F2); JB($0F); JB($5A); JB($C0);         { cvtsd2ss xmm0, xmm0 }
+              SibOp($F3, False, [$0F, $11], 0, jDX, jCX, 2, D);
+            end;
+        else
+          begin
+            OLoadG(jAX, ON[N].Y);
+            case ON[N].Imm of
+              taUint8, taInt8: SibOp(0, False, [$88], jAX, jDX, jCX, 0, D);
+              taInt16, taUint16: SibOp($66, False, [$89], jAX, jDX, jCX, 1, D);
+            else SibOp(0, False, [$89], jAX, jDX, jCX, 2, D);
+            end;
+          end;
+        end;
+      end;
+    onArrGet:
+      begin
+        OElemReceiver(N);
+        MovRM(jDX, jAX, PtrInt(@PObj(nil)^.Elements));
+        AluRR($85, jDX, jDX, True);
+        OJccGuardFb(ccE, N, ofbElem);
+        OLoadG(jCX, ON[N].X);
+        Cmp32RM(jCX, jDX, PtrInt(@PValueArray(nil)^.Len));
+        OJccGuardFb(ccAE, N, ofbElem);
+        JRex(False, jCX, 0, jCX); JB($8B); JModRR(jCX, jCX);
+        MovRMIdx(jAX, jDX, jCX, PtrInt(@PValueArray(nil)^.Data));
+        MovRI(jCX, VHole);
+        AluRR($39, jAX, jCX, True);
+        OJccGuardFb(ccE, N, ofbElem);
+        MovMR(jBX, ON[N].Y * 8, jAX);
+      end;
+    onArrSet:
+      begin
+        { the value boxed first (OBox uses rcx), parked in the scratch slot }
+        if ON[N].Y >= 0 then
+        begin
+          OBox(ON[N].Y);
+          MovMR(jSP, OScratch, jAX);
+        end;
+        OElemReceiver(N);
+        MovRM(jDX, jAX, PtrInt(@PObj(nil)^.Elements));
+        AluRR($85, jDX, jDX, True);
+        OJccGuardFb(ccE, N, ofbElem);
+        TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 64);
+        OJccGuardFb(ccNE, N, ofbElem);
+        OLoadG(jCX, ON[N].X);
+        Cmp32RM(jCX, jDX, PtrInt(@PValueArray(nil)^.Len));
+        OJccGuardFb(ccAE, N, ofbElem);
+        JRex(False, jCX, 0, jCX); JB($8B); JModRR(jCX, jCX);
+        { rcx the cell's address: a hole there is the slow path's (it may change the array's shape) }
+        SibOp(0, True, [$8D], jCX, jDX, jCX, 3, PtrInt(@PValueArray(nil)^.Data));   { lea rcx, [rdx + rcx * 8 + Data] }
+        MovRI(jAX, VHole);
+        CmpRM(jAX, jCX, 0);
+        OJccGuardFb(ccE, N, ofbElem);
+        if ON[N].Y >= 0 then MovRM(jAX, jSP, OScratch) else MovRM(jAX, jBX, (-1 - ON[N].Y) * 8);
+        MovMR(jCX, 0, jAX);
+        { a register's value may point into the nursery (a node's boxed number cannot) }
+        if ON[N].Y < 0 then OBarrier;
       end;
     onUnbox:
       begin
@@ -2425,7 +2695,7 @@ begin
       N := OB[B].Nodes[K];
       case ON[N].Op of
         onAddI, onSubI, onMulI, onModI, onNegI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onNotI,
-        onAddD, onSubD, onMulD, onDivD, onNegD, onCmpI, onCmpD, onNotB: Inc(Gain);
+        onAddD, onSubD, onMulD, onDivD, onNegD, onCmpI, onCmpD, onNotB, onTAGet, onTASet, onArrGet, onArrSet: Inc(Gain);
         onEmbed, onUnbox, onFlush: Inc(Cost);
       end;
     end;
@@ -2470,6 +2740,29 @@ begin
   end;
   if (OInfo^.Feedback[PC] and 4) <> 0 then Exit;
   if not OQuickProfitable(PC) then Exit;
+  { each element instruction's receiver speculated from the frame's value now: a typed array of a kind done
+    natively, an object with an elements store, else none (an element guard that failed: none) }
+  SetLength(OElemSpec, OT^.CodeLen + 1);
+  for K := 0 to OT^.CodeLen do
+  begin
+    OElemSpec[K] := -1;
+    if K = OT^.CodeLen then Continue;
+    case OOpOf(OIns(K)) of
+      opGetElem: R := OB_(OIns(K));
+      opSetElem: R := OA(OIns(K));
+    else Continue;
+    end;
+    if (OInfo^.Feedback[K] and ofbElem) <> 0 then Continue;
+    V := VStack[Fr^.Base + R];
+    if not IsObject(V) then Continue;
+    if PObj(PtrOf(V))^.OKind = okTypedArray then
+    begin
+      if TAKind(PObj(PtrOf(V))) > taFloat64 then Continue;
+      if (OOpOf(OIns(K)) = opSetElem) and (TAKind(PObj(PtrOf(V))) = taUint8C) then Continue;
+      OElemSpec[K] := TAKind(PObj(PtrOf(V)));
+    end
+    else if PObj(PtrOf(V))^.Elements <> nil then OElemSpec[K] := ELEM_ARRAY;
+  end;
   { PC 0 or a loop's header (a backward jump's target) }
   if PC <> 0 then
   begin
