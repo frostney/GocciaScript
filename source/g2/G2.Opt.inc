@@ -46,8 +46,12 @@ const
                         template, room for its registers and a frame }
 
   OPT_INLINE_MAX = 60;   { an inlined callee's instructions at most }
+  OPT_INLINE_DEPTH = 3;  { inlined calls nested this deep at most (a callee's call inlined in turn) }
+  OPT_INLINE_TOTAL = 160;   { the instructions of one call's callees, nested ones included, at most }
+  OPT_INLINE_FB = 256;   { a call site's feedback bytes for its callees (OPT_INLINE_TOTAL + one per callee) }
 
   PROP_KNOWN = Int64(1) shl 40;
+  PROP_POLY = Int64(1) shl 41;   { a polymorphic IC's entries tried in turn (else entry Imm shr 44 and 7: its slot) }
   LEN_ARRAY = 1; LEN_STR = 3;   { (a typed array's length is a prototype getter a script can replace) }
 
   ELEM_ARRAY = 100;   { OElemSpec: an object with an elements store (an array, a plain object's indices) }
@@ -146,9 +150,15 @@ var
     2 an inlined callee's (OVSite its call site) }
   OVRole: array of Byte;
   OVSite: array of Integer;
-  { the inlined call sites: the call at K (callee register A, Argc arguments, Flag 1 no this) runs callee Tc,
-    its guard at virtual PC Guard }
-  OSites: array of record K, A, Argc, Flag, Guard: Integer; Tc: PFuncTemplate; end;
+  { per virtual PC: the inlined call site whose callee frame a deopt there resumes in (-1 the template's own) }
+  OVFrame: array of Integer;
+  { the inlined call sites: the call at virtual PC VCall (callee register A of the region's frame, Argc
+    arguments, Flag 1 no this; at PC Q of its caller's template) runs callee Tc, its guard at virtual PC Guard,
+    its returns jumping to virtual PC Ret. Parent the site whose callee makes the call (-1 the template's own
+    code), K the outermost such call's PC in the template, Depth the number of inlined callers, D the deopt
+    descriptor (OInlDesc) }
+  OSites: array of record K, VCall, A, Argc, Flag, Guard, Ret, Parent, Q, Depth: Integer; Tc: PFuncTemplate;
+    D: Pointer; end;
   OSiteCount: Integer;
   OInlBan: array of Boolean;          { per caller PC: not inlined in this compilation }
   OInlBanned: Boolean;                { OInferKinds banned a site: the stream is built again }
@@ -231,6 +241,50 @@ function OC(I: QWord): Integer; inline; begin Result := Integer(SarInt64(Int64(I
 function OCU(I: QWord): Integer; inline; begin Result := Integer(I shr 40); end;
 
 { the instructions the tier can take at all (whether it takes one also depends on its operands' kinds) }
+{ IC's entry E (0 Poly0, 1-3 More) }
+function OICEntry(IC: PPropIC; E: Integer): PICEntry; inline;
+begin
+  if E = 0 then Result := @IC^.Poly0 else Result := @IC^.More^[E];
+end;
+
+{ whether get-IC entry E can be checked inline: a data property of a non-dictionary receiver shape, found through
+  prototypes whose shapes alone tell (none a dictionary's) }
+function OEntryOk(E: PICEntry): Boolean;
+var D: Integer;
+begin
+  Result := False;
+  if (E^.Shape = nil) or E^.Shape^.IsDict or (E^.Depth > IC_MAX_DEPTH) or (E^.Acc <> 0) or (E^.VerMask <> 0) or
+     (E^.Slot < 0) then Exit;
+  for D := 0 to E^.Depth - 1 do
+    if (E^.Holder[D] = nil) or E^.Holder[D]^.IsDict then Exit;
+  Result := True;
+end;
+
+{ whether every entry of get-IC IC (one to four) can be checked inline }
+function OICOk(IC: PPropIC): Boolean;
+var E: Integer;
+begin
+  Result := False;
+  if (IC^.PolyCount < 1) or (IC^.PolyCount > 4) or ((IC^.PolyCount > 1) and (IC^.More = nil)) then Exit;
+  for E := 0 to IC^.PolyCount - 1 do
+    if not OEntryOk(OICEntry(IC, E)) then Exit;
+  Result := True;
+end;
+
+{ IC's entry for a receiver of shape Sh (-1 none, or one not checked inline) }
+function OEntryFor(IC: PPropIC; Sh: PShape): Integer;
+var E: Integer;
+begin
+  Result := -1;
+  if (IC^.PolyCount < 1) or (IC^.PolyCount > 4) or ((IC^.PolyCount > 1) and (IC^.More = nil)) then Exit;
+  for E := 0 to IC^.PolyCount - 1 do
+    if OICEntry(IC, E)^.Shape = Sh then
+    begin
+      if OEntryOk(OICEntry(IC, E)) then Result := E;
+      Exit;
+    end;
+end;
+
 function OStaticOk(Op: TOp): Boolean;
 begin
   case Op of
@@ -285,8 +339,11 @@ end;
 function OEmbeddable(PC: Integer): Boolean;
 var Rd: array[0..63] of Integer; NR, WF, WT: Integer;
 begin
-  Result := (OVTpl[PC] = OT) and (PPtrUInt(OInfo^.BaseTable)[PC] <> 0) and OEmbedSets(OIns(PC), Rd, NR, WF, WT) and
-    not OptNoEmbed[OIns(PC) and $FF];
+  { the template's own (the baseline's code there), or an inlined callee's call (OBuildStream let it be: no
+    inline caches, its exits through XOptInlDeopt) }
+  if OVRole[PC] = 2 then Result := OOpOf(OIns(PC)) = opCall
+  else Result := (OVTpl[PC] = OT) and (PPtrUInt(OInfo^.BaseTable)[PC] <> 0);
+  Result := Result and OEmbedSets(OIns(PC), Rd, NR, WF, WT) and not OptNoEmbed[OIns(PC) and $FF];
 end;
 
 function OIsCondJump(Op: TOp): Boolean;
@@ -709,6 +766,7 @@ begin
           { an inlined call's guard: a function in the callee register }
           if Cur[OA(I)] <> vkTag then
           begin
+            if OptLog then WriteLn(ErrOutput, 'ban guard ', PC, ' kind ', Cur[OA(I)]);
             OInlBan[OSites[OVSite[PC]].K] := True;
             OInlBanned := True;
             Result := False;
@@ -909,6 +967,18 @@ begin
       Inc(ON[N].Y);
     end;
   end;
+  { a call in an inlined callee: the inlined frames' registers below its frame valid in VStack (a collection
+    during the call scans them) }
+  if OVRole[PC] = 2 then
+    for R := OT^.MaxRegs to Min(OA(I) + 1 + OB_(I), ORegs - 1) do
+      if not Flushed[R] and (OMap[R] >= 0) then
+      begin
+        Flushed[R] := True;
+        if OFSCount >= Length(OFS) then SetLength(OFS, OFSCount * 2 + 256);
+        OFS[OFSCount].Reg := R; OFS[OFSCount].Node := OMap[R];
+        Inc(OFSCount);
+        Inc(ON[N].Y);
+      end;
   ON[N].PC := PC;
   ON[N].FS := OFSCount; ON[N].FSN := 0;
   for R := 0 to ORegs - 1 do
@@ -921,6 +991,40 @@ begin
     end;
   OEmbedNode[PC] := N;
   if WF >= 0 then for R := WF to WT do if R < ORegs then OMap[R] := -1;
+end;
+
+{ property get PC's node Imm for receiver register X: one shape's slot (PROP_KNOWN: the receiver's shape already
+  known to be it), a polymorphic IC's entry the receiver's known shape picks, else PROP_POLY }
+function OPropImm(PC, X: Integer): Int64;
+var E: Integer; IC: PPropIC;
+begin
+  IC := OPropIC[PC];
+  if OPropShape[PC] <> nil then
+  begin
+    Result := OPropSlot[PC];
+    if (OFactShape[X] = OPropShape[PC]) and (OFactKind[X] = OPropKind[PC]) then Result := Result or PROP_KNOWN;
+    Exit;
+  end;
+  E := -1;
+  if OFactShape[X] <> nil then E := OEntryFor(IC, OFactShape[X]);
+  if (E >= 0) and (OFactKind[X] = OICEntry(IC, E)^.Kind) then
+    Result := OICEntry(IC, E)^.Slot or PROP_KNOWN or (Int64(E) shl 44)
+  else Result := PROP_POLY;
+end;
+
+{ what the receiver register X of property get PC (node Imm) is known to be after it }
+procedure OPropFact(PC, X: Integer; Imm: Int64);
+begin
+  if OPropShape[PC] <> nil then
+  begin
+    OFactShape[X] := OPropShape[PC];
+    OFactKind[X] := OPropKind[PC];
+  end
+  else if (Imm and PROP_POLY) <> 0 then
+  begin
+    OFactShape[X] := nil;
+    OFactKind[X] := 255;
+  end;
 end;
 
 { instruction PC (I) of block B into nodes }
@@ -1011,14 +1115,11 @@ begin
       begin
         X := OB_(I);
         if OPropVK[PC] = vkTag then Y := vkNone else Y := OPropVK[PC];
-        if (OFactShape[X] = OPropShape[PC]) and (OFactKind[X] = OPropKind[PC]) then
-          N := OEmitNode(B, onPropGet, Y, -1, A, OPropSlot[PC] or PROP_KNOWN)
-        else N := OEmitNode(B, onPropGet, Y, -1, A, OPropSlot[PC]);
+        N := OEmitNode(B, onPropGet, Y, -1, A, OPropImm(PC, X));
         if OFail then Exit;
         ON[N].Reg := X;
         OGuard(N, PC);
-        OFactShape[X] := OPropShape[PC];
-        OFactKind[X] := OPropKind[PC];
+        OPropFact(PC, X, ON[N].Imm);
         { a number unboxed into the node; anything else into VStack }
         if Y = vkNone then OMap[A] := -1 else OMap[A] := N;
         Exit;
@@ -1036,14 +1137,11 @@ begin
           OFactKind[A + 1] := OFactKind[X];
         end;
         X := A + 1;
-        if (OFactShape[X] = OPropShape[PC]) and (OFactKind[X] = OPropKind[PC]) then
-          N := OEmitNode(B, onPropGet, vkNone, -1, A, OPropSlot[PC] or PROP_KNOWN)
-        else N := OEmitNode(B, onPropGet, vkNone, -1, A, OPropSlot[PC]);
+        N := OEmitNode(B, onPropGet, vkNone, -1, A, OPropImm(PC, X));
         if OFail then Exit;
         ON[N].Reg := X;
         OGuard(N, PC);
-        OFactShape[X] := OPropShape[PC];
-        OFactKind[X] := OPropKind[PC];
+        OPropFact(PC, X, ON[N].Imm);
         OMap[A] := -1;
         Exit;
       end;
@@ -2053,6 +2151,57 @@ begin
   OJccGuardFb(ccBE, N, ofbProp);
 end;
 
+{ get-IC entry E's holder for the receiver in rax (of E's shape) into rax: from E's shape (a constant) along its
+  prototypes, each checked to have E's holder shape }
+procedure OPropHolder(N: Integer; E: PICEntry);
+var D: Integer;
+begin
+  if E^.Depth = 0 then Exit;
+  MovRI(jCX, QWord(PtrUInt(E^.Shape)));
+  for D := 0 to E^.Depth - 1 do
+  begin
+    MovRM(jAX, jCX, PtrInt(@PShape(nil)^.Proto));
+    AluRR($31, jAX, jR13, True);
+    MovRI(jCX, QWord(PtrUInt(E^.Holder[D])));
+    CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
+    OJccGuardFb(ccNE, N, ofbProp);
+  end;
+end;
+
+{ a polymorphic property get's value into rax: the receiver's shape against each IC entry's in turn (none: the
+  deopt), then that entry's holder and inline slot }
+procedure OPropPolyGet(N: Integer; IC: PPropIC);
+var E, L, ND: Integer; En: PICEntry; Done: array[0..3] of Integer;
+begin
+  MovRM(jAX, jBX, ON[N].Reg * 8);
+  AluRR($31, jAX, jR13, True);
+  MovRR(jDX, jAX);
+  ShiftRI(5, jDX, 48, True);
+  OJccGuardFb(ccNE, N, ofbProp);
+  CmpBMI(jAX, 4, ckObject);
+  OJccGuardFb(ccNE, N, ofbProp);
+  ND := 0;
+  for E := 0 to IC^.PolyCount - 1 do
+  begin
+    En := OICEntry(IC, E);
+    MovRI(jCX, QWord(PtrUInt(En^.Shape)));
+    CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
+    L := JccFwd(ccNE);
+    CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), En^.Kind);
+    OJccGuardFb(ccNE, N, ofbProp);
+    OPropHolder(N, En);
+    MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+    AluRI(7, jCX, En^.Slot, False);
+    OJccGuardFb(ccBE, N, ofbProp);
+    MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Slots) + En^.Slot * 8);
+    Done[ND] := JmpFwd;
+    Inc(ND);
+    PatchHere(L);
+  end;
+  OJccGuardFb(-1, N, ofbProp);
+  for E := 0 to ND - 1 do PatchHere(Done[E]);
+end;
+
 { node N's code }
 procedure OCode(N: Integer);
 var L, CC: Integer; D: Int64; IC: PPropIC;
@@ -2316,24 +2465,15 @@ begin
       end;
     onPropGet:
       begin
-        OPropReceiver(N, True);
         IC := OPropIC[ON[N].PC];
-        if (IC <> nil) and (IC^.Poly0.Depth > 0) then
+        if (ON[N].Imm and PROP_POLY) <> 0 then OPropPolyGet(N, IC)
+        else
         begin
-          { a prototype's property: from the receiver's shape (a constant) along its prototypes, each checked
-            to have the IC's holder shape }
-          MovRI(jCX, QWord(PtrUInt(OPropShape[ON[N].PC])));
-          for D := 0 to IC^.Poly0.Depth - 1 do
-          begin
-            MovRM(jAX, jCX, PtrInt(@PShape(nil)^.Proto));
-            AluRR($31, jAX, jR13, True);
-            MovRI(jCX, QWord(PtrUInt(IC^.Poly0.Holder[D])));
-            CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
-            OJccGuardFb(ccNE, N, ofbProp);
-          end;
+          OPropReceiver(N, True);
+          OPropHolder(N, OICEntry(IC, (ON[N].Imm shr 44) and 7));
+          OPropInline(N);
+          MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8);
         end;
-        OPropInline(N);
-        MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8);
         if ON[N].Kind = vkNone then MovMR(jBX, ON[N].Y * 8, jAX)
         else
         begin
@@ -2461,7 +2601,7 @@ begin
         AluRI(7, jAX, STACK_MAX - (ON[N].Reg + 2 + OSites[ON[N].Imm].Tc^.MaxRegs), False);
         OJccGuardFb(ccGE, N, ofbProp);
         Mov32RFs(jAX, JitFsFrameTop);
-        AluRI(7, jAX, FRAME_MAX - 4, False);
+        AluRI(7, jAX, FRAME_MAX - 4 - OPT_INLINE_DEPTH, False);
         OJccGuardFb(ccGE, N, ofbProp);
       end;
     onMath:
@@ -2776,7 +2916,17 @@ end;
 
 { the frame state written back, the stack restored, then the baseline code at PC (the interpreter when it has none);
   Feedback the bits recorded for PC (0 none: a planned exit) }
-function XOptInlDeopt(Fr: PFrame; A: Integer; T: PFuncTemplate; Q, Argc, NextPC: Integer): Integer; forward;
+type
+  { an inlined callee's deopt: its frames, outermost first, each callee register A (of the region's frame), Argc,
+    template T, the PC it resumes at once the frame it calls returns; NextPC the region's frame's }
+  POInlDesc = ^TOInlDesc;
+  TOInlDesc = record
+    N, NextPC: Integer;
+    Lv: array[0..OPT_INLINE_DEPTH - 1] of record A, Argc, PC: Integer; T: PFuncTemplate; end;
+  end;
+
+function OInlDesc(S: Integer): POInlDesc; forward;
+function XOptInlDeopt(Fr: PFrame; D: POInlDesc; Q: Integer): Integer; forward;
 
 procedure OLeave(FS, FSN, PC, Feedback, EpiAt: Integer);
 var K, L1, L2, S, RPC: Integer; Base: PtrUInt;
@@ -2808,16 +2958,13 @@ begin
   end;
   AluRI(0, jSP, OFrame, True);
   JB($41); JB($5F);                                       { pop r15 }
-  if OVRole[PC] = 2 then
+  if OVFrame[PC] >= 0 then
   begin
-    { in an inlined callee: its frame run by the interpreter (XOptInlDeopt), then the caller after the call }
-    S := OVSite[PC];
+    { in an inlined callee: its frames run by the interpreter (XOptInlDeopt), then the caller after the call }
+    S := OVFrame[PC];
     MovRR(jDI, jR12);
-    MovRI(jSI, Cardinal(OSites[S].A));
-    MovRI(jDX, QWord(PtrUInt(OSites[S].Tc)));
-    MovRI(jCX, Cardinal(OVPC[PC]));
-    MovRI(jR8, Cardinal(OSites[S].Argc));
-    MovRI(jR9, Cardinal(OSites[S].K + 1));
+    MovRI(jSI, QWord(PtrUInt(OInlDesc(S))));
+    MovRI(jDX, Cardinal(OVPC[PC]));
     CallAbs(@XOptInlDeopt);
     AluRR($85, jAX, jAX, False);
     L1 := JccFwd(ccE);
@@ -2971,8 +3118,8 @@ begin
   JitSlowCount := 0;
   JitTAEndCount := 0;
   JitInfo := nil;
-  SetLength(JitNative, OT^.CodeLen + 1);
-  for K := 0 to OT^.CodeLen do JitNative[K] := -1;
+  SetLength(JitNative, OVLen + 2);
+  for K := 0 to OVLen + 1 do JitNative[K] := -1;
   { the entry: r15 saved, the spill frame }
   JB($41); JB($57);                                       { push r15 }
   AluRI(5, jSP, OFrame, True);
@@ -3125,8 +3272,8 @@ begin
   end;
   { the embedded code's jumps: its exits (the frame state at the instruction written back), its epilogue and
     throw exits, its slow blocks' way back }
-  SetLength(ExitAt, OT^.CodeLen + 1);
-  for K := 0 to OT^.CodeLen do ExitAt[K] := -1;
+  SetLength(ExitAt, OVLen + 1);
+  for K := 0 to OVLen do ExitAt[K] := -1;
   for K := 0 to JitFixCount - 1 do
   begin
     T := JitFixes[K].Target;
@@ -3135,7 +3282,7 @@ begin
     else if T < 0 then
     begin
       F := -1 - T;
-      if (F > OT^.CodeLen) or (OEmbedNode[F] < 0) then Exit;
+      if (F > OVLen) or (OEmbedNode[F] < 0) then Exit;
       if ExitAt[F] < 0 then
       begin
         ExitAt[F] := JitLen;
@@ -3146,7 +3293,7 @@ begin
     end
     else
     begin
-      if (T > OT^.CodeLen) or (JitNative[T] < 0) then Exit;
+      if (T > OVLen + 1) or (JitNative[T] < 0) then Exit;
       J := JitNative[T];
     end;
     D := Cardinal(J - (JitFixes[K].At + 4));
@@ -3164,10 +3311,100 @@ begin
   if OptLog and (GetEnvironmentVariable('G2_OPTDUMP') <> '') then OptDump(Code);
 end;
 
+function OInlEligible(T: PFuncTemplate): Boolean; forward;
+
+{ what register R holds at PC K of template T as its inline caches tell, with no frame (VUndefined unknown): a
+  move's source, a cached global, a cached property of such a value, a prototype's cached property }
+function OStaticValue(T: PFuncTemplate; K, R, Depth: Integer): TValue;
+var P, E, D: Integer; I: QWord; Op: TOp; IC: PPropIC; En: PICEntry; O: PObj; V, Recv: TValue;
+begin
+  Result := VUndefined;
+  if Depth > 4 then Exit;
+  P := K - 1;
+  while P >= 0 do
+  begin
+    I := T^.Code[P];
+    Op := OOpOf(I);
+    if (Op = opJmp) or OIsCondJump(Op) or (K - P > 16) then Exit;
+    if ((Op = opGetMethod) and ((OA(I) = R) or (OA(I) + 1 = R))) or (OWrites(I) = R) then Break;
+    Dec(P);
+  end;
+  if P < 0 then Exit;
+  case Op of
+    opMov: Result := OStaticValue(T, P, OB_(I), Depth + 1);
+    opGetGlobal:
+      begin
+        IC := @T^.ICs[OCU(I)];
+        O := ObjOf(GlobalObj);
+        if (IC^.Shape <> nil) and (IC^.Shape = O^.Shape) and (IC^.Slot >= 0) then Result := GetSlot(O, IC^.Slot);
+      end;
+    opGetProp, opGetMethod:
+      begin
+        if (Op = opGetMethod) and (R = OA(I) + 1) then Exit;
+        IC := @T^.ICs[OCU(I)];
+        if not OICOk(IC) then Exit;
+        { every entry's value the same one }
+        Recv := VUndefined;
+        for E := 0 to IC^.PolyCount - 1 do
+        begin
+          En := OICEntry(IC, E);
+          if En^.Depth = 0 then
+          begin
+            if Recv = VUndefined then Recv := OStaticValue(T, P, OB_(I), Depth + 1);
+            if not IsObject(Recv) or (ObjOf(Recv)^.Shape <> En^.Shape) then Exit(VUndefined);
+            V := GetSlot(ObjOf(Recv), En^.Slot);
+          end
+          else
+          begin
+            V := En^.Shape^.Proto;
+            for D := 0 to En^.Depth - 1 do
+            begin
+              if not IsObject(V) or (ObjOf(V)^.Shape <> En^.Holder[D]) then Exit(VUndefined);
+              if D < En^.Depth - 1 then V := ObjOf(V)^.Shape^.Proto;
+            end;
+            V := GetSlot(ObjOf(V), En^.Slot);
+          end;
+          if (E > 0) and (V <> Result) then Exit(VUndefined);
+          Result := V;
+        end;
+      end;
+  end;
+end;
+
+{ whether the call at PC K of template T leaves no call behind when the tier takes it: a Math native computed
+  inline, or a callee that can be inlined whose own calls do the same (Depth inlined callers) }
+function OCallGoes(T: PFuncTemplate; K, Depth: Integer): Boolean;
+var V: TValue; O: PObj; R: Integer; C: PFuncTemplate;
+begin
+  Result := False;
+  V := OStaticValue(T, K, OA(T^.Code[K]), 0);
+  if not IsObject(V) then Exit;
+  O := ObjOf(V);
+  if O^.OKind = okNative then
+  begin
+    for R := 0 to High(OptMathFns) do
+      if (OptMathFns[R] <> nil) and (O^.Native = OptMathFns[R]) and (OB_(T^.Code[K]) = 1) then Exit(True);
+    Exit;
+  end;
+  if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) or (Depth >= OPT_INLINE_DEPTH) then Exit;
+  C := PFuncTemplate(O^.Native);
+  if (C = OT) or (C = T) or not OInlEligible(C) then Exit;
+  for R := 0 to C^.CodeLen - 1 do
+    if (OOpOf(C^.Code[R]) = opCall) and not OCallGoes(C, R, Depth + 1) then Exit;
+  Result := True;
+end;
+
+{ how the call at PC K of the template counts for OQuickProfitable: 2 one OCallGoes takes (its call gone), else -2
+  (an embedded call clobbers every register the region holds values in) }
+function OQuickCall(K: Integer): Integer;
+begin
+  if OCallGoes(OT, K, 0) then Result := 2 else Result := -2;
+end;
+
 { a first estimate before any analysis (most regions fail it): the instructions reachable from PC, the numeric
   ones (arithmetic, comparisons, numeric branches) at least as many as the others that do work }
 function OQuickProfitable(PC: Integer): Boolean;
-var Seen: array of Boolean; Work: array of Integer; NW, P, T, Num, Other, Props: Integer; I: QWord; Op: TOp;
+var Seen: array of Boolean; Work: array of Integer; NW, P, T, Num, Other, Props, R: Integer; I: QWord; Op: TOp;
   Loop: Boolean;
 begin
   SetLength(Seen, OT^.CodeLen + 1);
@@ -3191,8 +3428,9 @@ begin
         opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNSEq, opJSEq, opSEq, opSNe, opNot, opRet,
         opRetUndef, opToNum, opToNumeric, opGetUpv, opCheckHole: ;
         opGetProp, opSetProp, opGetLength, opGetMethod: Inc(Props);
-        { an embedded call clobbers every register the region holds values in }
-        opCall, opNew: Inc(Other, 2);
+        { an embedded call clobbers every register the region holds values in; an inlined one gains its call }
+        opCall: begin R := OQuickCall(P); if R > 0 then Inc(Num, R) else Inc(Other, -R); end;
+        opNew: Inc(Other, 2);
       else Inc(Other);
       end;
       if Op in [opRet, opRetUndef, opThrow, opThrowConst] then Break;
@@ -3259,6 +3497,8 @@ begin
         onAddI, onSubI, onMulI, onModI, onNegI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onNotI,
         onAddD, onSubD, onMulD, onDivD, onNegD, onCmpI, onCmpD, onNotB, onTAGet, onTASet, onArrGet, onArrSet, onLength, onMath: Inc(Gain);
         onUnbox, onFlush: Inc(Cost);
+        { an inlined call: its call and return gone }
+        onInlGuard: Inc(Gain, 2);
         { an embedded call clobbers every register the region holds values in (they move to r15 or slots) }
         onEmbed: if OOpOf(OIns(ON[N].PC)) in [opCall, opNew, opGetMethod] then Inc(Cost, 2) else Inc(Cost);
       end;
@@ -3268,46 +3508,65 @@ begin
   Result := (Gain > 0) and (Gain >= Cost);
 end;
 
-{ whether IC's prototype holders can be checked by shape alone (none a dictionary's) }
-function OHoldersOk(IC: PPropIC): Boolean;
-var D: Integer;
-begin
-  for D := 0 to IC^.Poly0.Depth - 1 do
-    if (IC^.Poly0.Holder[D] = nil) or IC^.Poly0.Holder[D]^.IsDict then Exit(False);
-  Result := True;
-end;
-
-{ the slot IC names of receiver V (of IC's shape), along its prototypes as far as their shapes are IC's holders
-  (VUndefined when one is not) }
-function OHolderSlot(V: TValue; IC: PPropIC): TValue;
+{ the slot get-IC entry E names of receiver V (of E's shape), along its prototypes as far as their shapes are E's
+  holders (VUndefined when one is not) }
+function OHolderSlot(V: TValue; E: PICEntry): TValue;
 var O: PObj; D: Integer;
 begin
   Result := VUndefined;
   O := ObjOf(V);
-  for D := 0 to IC^.Poly0.Depth - 1 do
+  for D := 0 to E^.Depth - 1 do
   begin
     if not IsObject(O^.Shape^.Proto) then Exit;
     O := ObjOf(O^.Shape^.Proto);
-    if O^.Shape <> IC^.Poly0.Holder[D] then Exit;
+    if O^.Shape <> E^.Holder[D] then Exit;
   end;
-  Result := GetSlot(O, IC^.Poly0.Slot);
+  Result := GetSlot(O, E^.Slot);
 end;
 
-{ the instruction before K in straight-line code that last wrote register R (-1 none found) }
+{ whether template T's code from PC W + 1 to PC K is entered only by falling through from W: no jump outside it
+  (nor a handler) targets it }
+function OSingleEntry(T: PFuncTemplate; W, K: Integer): Boolean;
+var J, Tg: Integer; Op: TOp;
+begin
+  Result := False;
+  if not T^.NoHandlers then Exit;
+  for J := 0 to T^.CodeLen - 1 do
+  begin
+    Op := InsOp(T^.Code[J]);
+    if (Op = opJmp) or OIsCondJump(Op) or (Op in [opIterNext, opIterUnpack, opAsyncIterReturn]) then
+    begin
+      Tg := J + 1 + Integer(SarInt64(Int64(T^.Code[J]), 40));
+      if (Tg > W) and (Tg <= K) and not ((J > W) and (J < K)) then Exit;
+    end;
+  end;
+  Result := True;
+end;
+
+{ the instruction before K that last wrote register R on every path to K (-1 none found): straight-line code, or
+  past branches when the code from the writer to K is entered only through the writer }
 function OWriterOf(K, R: Integer): Integer;
-var P, N: Integer; I: QWord; Op: TOp; Rd: array[0..63] of Integer; NR, WF, WT: Integer;
+var P, N: Integer; I: QWord; Op: TOp; Rd: array[0..63] of Integer; NR, WF, WT: Integer; Crossed: Boolean;
+  function Found(W: Integer): Integer;
+  begin
+    if Crossed and ((OVTpl[W] <> OVTpl[K]) or (OVFrame[W] <> OVFrame[K]) or
+       not OSingleEntry(OVTpl[K], OVPC[W], OVPC[K])) then Result := -1
+    else Result := W;
+  end;
 begin
   Result := -1;
   P := K - 1;
   N := 0;
-  while (P >= 0) and (N < 24) do
+  Crossed := False;
+  while (P >= 0) and (N < 32) do
   begin
     I := OIns(P);
     Op := OOpOf(I);
     if OVRole[P] = 1 then
     begin
       { an inlined call's guard: the registers as the caller set them up before its call }
-      P := OSites[OVSite[P]].K - 1;
+      if Crossed then Exit;
+      P := OSites[OVSite[P]].VCall - 1;
       Inc(N);
       Continue;
     end;
@@ -3319,9 +3578,15 @@ begin
       Inc(N);
       Continue;
     end;
-    if (Op = opJmp) or OIsCondJump(Op) then Exit;
-    if (Op = opGetMethod) and ((OA(I) = R) or (OA(I) + 1 = R)) then Exit(P);
-    if OWrites(I) = R then Exit(P);
+    if (Op = opJmp) or OIsCondJump(Op) then
+    begin
+      Crossed := True;
+      Dec(P);
+      Inc(N);
+      Continue;
+    end;
+    if (Op = opGetMethod) and ((OA(I) = R) or (OA(I) + 1 = R)) then Exit(Found(P));
+    if OWrites(I) = R then Exit(Found(P));
     if OEmbedSets(I, Rd, NR, WF, WT) and (WF >= 0) and (R >= WF) and (R <= WT) then Exit;
     Dec(P);
     Inc(N);
@@ -3344,11 +3609,11 @@ begin
     opGetProp:
       begin
         IC := @OVTpl[P]^.ICs[OCU(I)];
-        if (IC^.PolyCount <> 1) or (IC^.Poly0.Acc <> 0) or (IC^.Poly0.VerMask <> 0) or
-           (IC^.Poly0.Depth > IC_MAX_DEPTH) then Exit;
         V := OSpecValue(Fr, P, OB_(I), Depth + 1);
-        if not IsObject(V) or (ObjOf(V)^.Shape <> IC^.Poly0.Shape) then Exit;
-        Result := OHolderSlot(V, IC);
+        if not IsObject(V) then Exit;
+        D := OEntryFor(IC, ObjOf(V)^.Shape);
+        if D < 0 then Exit;
+        Result := OHolderSlot(V, OICEntry(IC, D));
       end;
     opGetGlobal:
       begin
@@ -3372,10 +3637,10 @@ begin
         V := OSpecValue(Fr, P, OB_(I), Depth + 1);
         if R = OA(I) + 1 then begin Result := V; Exit; end;
         IC := @OVTpl[P]^.ICs[OCU(I)];
-        if (IC^.PolyCount <> 1) or (IC^.Poly0.Acc <> 0) or (IC^.Poly0.VerMask <> 0) or
-           (IC^.Poly0.Depth > IC_MAX_DEPTH) then Exit;
-        if not IsObject(V) or (ObjOf(V)^.Shape <> IC^.Poly0.Shape) then Exit;
-        Result := OHolderSlot(V, IC);
+        if not IsObject(V) then Exit;
+        D := OEntryFor(IC, ObjOf(V)^.Shape);
+        if D < 0 then Exit;
+        Result := OHolderSlot(V, OICEntry(IC, D));
       end;
   end;
 end;
@@ -3395,7 +3660,8 @@ begin
   Result := QWord(Ord(Op)) or (QWord(A and $FFFF) shl 8) or (QWord(B and $FFFF) shl 24) or ((QWord(C) and $FFFFFF) shl 40);
 end;
 
-{ the instructions an inlined callee may have (each one the tier takes natively, or the call is not inlined) }
+{ the instructions an inlined callee may have (each one the tier takes natively, or the call is not inlined; a
+  call only inlined in turn or a Math native's) }
 function OInlOk(Op: TOp): Boolean;
 begin
   case Op of
@@ -3405,7 +3671,7 @@ begin
     opNeg, opBitNot, opNot, opToNum, opToNumeric, opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe,
     opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe, opJNGt, opJNGe,
     opJNSEq, opJSEq, opGetProp, opSetProp, opGetElem, opSetElem, opGetLength, opGetGlobal, opGetMethod, opRet,
-    opRetUndef: Result := True;
+    opRetUndef, opCall: Result := True;
   else Result := False;
   end;
 end;
@@ -3421,155 +3687,13 @@ begin
     opShlI, opShrI, opUShrI, opGetProp, opGetLength, opSetProp, opGetMethod: Result := OMk(Op, A + Off, B + Off, CU);
     opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr, opEq, opNe, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opGetElem, opSetElem: Result := OMk(Op, A + Off, B + Off, CU + Off);
-    opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opLoadHole, opGetGlobal:
+    opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opLoadHole, opGetGlobal, opCall:
       Result := OMk(Op, A + Off, B, CU);
     opJmp: Result := OMk(Op, A, B, 2 * C + 1);
     opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef: Result := OMk(Op, A + Off, B, 2 * C + 1);
     opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq: Result := OMk(Op, A + Off, B + Off, 2 * C + 1);
   else Result := I;
   end;
-end;
-
-{ the template call instruction K of the region calls when its callee can be inlined there (nil none): the target
-  OSpecValue names, a plain function small enough whose every instruction the tier takes natively }
-function OInlTarget(Fr: PFrame; K: Integer): PFuncTemplate;
-var I: QWord; A, Q: Integer; V: TValue; O: PObj; T: PFuncTemplate;
-begin
-  Result := nil;
-  I := OT^.Code[K];
-  A := OA(I);
-  if (OInfo^.Feedback[K] and ofbProp) <> 0 then Exit;
-  V := OSpecValue(Fr, K, A, 0);
-  if not IsObject(V) then Exit;
-  O := ObjOf(V);
-  if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then Exit;
-  T := PFuncTemplate(O^.Native);
-  if (T = OT) or (T^.CodeLen = 0) or (T^.CodeLen > OPT_INLINE_MAX) or not T^.FastCall or T^.IsGenerator or
-     T^.IsAsync or T^.IsArrow or T^.IsClassCtor or T^.IsDerived or not T^.NoCaptures or not T^.NoHandlers or
-     (T^.ArgsReg >= 0) or (T^.RestReg >= 0) or T^.TopLevel or (T^.FieldInit <> nil) then Exit;
-  { a sloppy callee given no this would get the global object }
-  if not T^.IsStrict and ((OCU(I) and 1) <> 0) then Exit;
-  if A + 1 + T^.MaxRegs > 30000 then Exit;
-  for Q := 0 to T^.CodeLen - 1 do
-    if not OInlOk(InsOp(T^.Code[Q])) then Exit;
-  Result := T;
-end;
-
-{ the region's virtual instructions: the template's own, then each inlined call's (the call a jump to them): its
-  guard, its callee's registers past its arguments undefined (as JitCallStub sets them), the callee's code (two
-  virtual instructions each: a return a move into the call's register and a jump back after the call) }
-procedure OBuildStream(Fr: PFrame);
-var K, Q, R, S, Off, Argc, Flag, Bb, V: Integer; I: QWord; T: PFuncTemplate; Fb: PByte;
-  procedure Add(Code: QWord; Tpl: PFuncTemplate; Pc: Integer; F: PByte; Role: Byte; Site: Integer);
-  begin
-    if OVLen >= Length(OVCode) then
-    begin
-      SetLength(OVCode, OVLen * 2 + 64); SetLength(OVTpl, OVLen * 2 + 64); SetLength(OVPC, OVLen * 2 + 64);
-      SetLength(OVFb, OVLen * 2 + 64); SetLength(OVRole, OVLen * 2 + 64); SetLength(OVSite, OVLen * 2 + 64);
-    end;
-    OVCode[OVLen] := Code; OVTpl[OVLen] := Tpl; OVPC[OVLen] := Pc; OVFb[OVLen] := F;
-    OVRole[OVLen] := Role; OVSite[OVLen] := Site;
-    Inc(OVLen);
-  end;
-begin
-  if OptInline < 0 then
-    if GetEnvironmentVariable('G2_OPTINLINE') = '0' then OptInline := 0 else OptInline := 1;
-  OVLen := 0;
-  OSiteCount := 0;
-  for K := 0 to OT^.CodeLen do
-    if K < OT^.CodeLen then Add(OT^.Code[K], OT, K, @OInfo^.Feedback[K], 0, -1)
-    else Add(0, OT, K, @OInfo^.Feedback[K], 0, -1);
-  if OptInline = 1 then
-    for K := 0 to OT^.CodeLen - 1 do
-    begin
-      if (OOpOf(OT^.Code[K]) <> opCall) or OInlBan[K] then Continue;
-      T := OInlTarget(Fr, K);
-      if T = nil then Continue;
-      I := OT^.Code[K];
-      Argc := OB_(I);
-      Flag := OCU(I) and 1;
-      Off := OA(I) + 1;
-      { the callee's feedback here: its own bytes per call site, kept across compilations }
-      if Length(OInfo^.InlFb) < OT^.CodeLen + 1 then
-      begin
-        SetLength(OInfo^.InlFb, OT^.CodeLen + 1);
-        SetLength(OInfo^.InlTpl, OT^.CodeLen + 1);
-      end;
-      if OInfo^.InlTpl[K] <> Pointer(T) then
-      begin
-        OInfo^.InlFb[K] := AllocMem(T^.CodeLen + 1);
-        OInfo^.InlTpl[K] := T;
-      end;
-      Fb := OInfo^.InlFb[K];
-      if OSiteCount >= Length(OSites) then SetLength(OSites, OSiteCount * 2 + 8);
-      S := OSiteCount;
-      Inc(OSiteCount);
-      OSites[S].K := K; OSites[S].A := OA(I); OSites[S].Argc := Argc; OSites[S].Flag := Flag; OSites[S].Tc := T;
-      OSites[S].Guard := OVLen;
-      Add(I, OT, K, @OInfo^.Feedback[K], 1, S);
-      if Flag = 1 then Add(OMk(opLoadUndef, Off, 0, 0), T, 0, Fb, 2, S);
-      for R := 1 + Min(Argc, T^.NumParams) to T^.MaxRegs - 1 do Add(OMk(opLoadUndef, Off + R, 0, 0), T, 0, Fb, 2, S);
-      Bb := OVLen;
-      for Q := 0 to T^.CodeLen - 1 do
-      begin
-        I := T^.Code[Q];
-        V := Bb + 2 * Q;
-        case OOpOf(I) of
-          opRet:
-            begin
-              Add(OMk(opMov, Off - 1, OA(I) + Off, 0), T, Q, Fb + Q, 2, S);
-              Add(OMk(opJmp, 0, 0, (K + 1) - (V + 2)), T, Q, Fb + Q, 2, S);
-            end;
-          opRetUndef:
-            begin
-              Add(OMk(opLoadUndef, Off - 1, 0, 0), T, Q, Fb + Q, 2, S);
-              Add(OMk(opJmp, 0, 0, (K + 1) - (V + 2)), T, Q, Fb + Q, 2, S);
-            end;
-        else
-          begin
-            Add(ORemap(I, Off), T, Q, Fb + Q, 2, S);
-            Add(OMk(opNop, 0, 0, 0), T, Q, Fb + Q, 2, S);
-          end;
-        end;
-      end;
-      { the call: a jump to the guard }
-      OVCode[K] := OMk(opJmp, 0, 0, OSites[S].Guard - (K + 1));
-      OVRole[K] := 3;
-      OVSite[K] := S;
-      if Off + T^.MaxRegs > ORegs then ORegs := Off + T^.MaxRegs;
-    end;
-  { the end }
-  Add(0, OT, OT^.CodeLen, @OInfo^.Feedback[OT^.CodeLen], 0, -1);
-  Dec(OVLen);
-end;
-
-{ an inlined callee's guard failed or exit taken at its instruction Q (the frame state already in VStack): its frame
-  made as JitCallStub makes it and run by the interpreter to its return (as XJitCallPost), the result in the
-  call's register; 0 goes on (in the caller after the call), -1 a throw }
-function XOptInlDeopt(Fr: PFrame; A: Integer; T: PFuncTemplate; Q, Argc, NextPC: Integer): Integer;
-var NF: PFrame; Base: Integer; V: TValue;
-begin
-  Base := Fr^.Base + A + 1;
-  Fr^.PC := NextPC;
-  NF := @Frames[FrameTop];
-  NF^.Closure := VStack[Fr^.Base + A];
-  NF^.NewTarget := VUndefined;
-  NF^.Tpl := T;
-  NF^.Base := Base;
-  NF^.PC := Q;
-  NF^.RetIdx := Base - 1;
-  NF^.Argc := Argc;
-  NF^.Kind := 0;
-  Inc(FrameTop);
-  StackTop := Base + T^.MaxRegs;
-  if not Execute(FrameTop - 1, V) then
-  begin
-    StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
-    Exit(-1);
-  end;
-  VStack[Fr^.Base + A] := V;
-  StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
-  Result := 0;
 end;
 
 { cpuid leaf 1's ecx (bit 19: SSE4.1, roundsd) }
@@ -3580,6 +3704,259 @@ asm
   cpuid
   movl %ecx, %eax
   popq %rbx
+end;
+
+{ the OptMathFns entry the call at virtual PC K calls, as its inline caches name it (-1 none) }
+function OMathIndex(Fr: PFrame; K: Integer): Integer;
+var Code: Pointer; R: Integer;
+begin
+  Result := -1;
+  if (OOpOf(OIns(K)) <> opCall) or (OB_(OIns(K)) <> 1) or ((OFb(K) and ofbProp) <> 0) then Exit;
+  Code := OCallNative(Fr, K);
+  if Code = nil then Exit;
+  for R := 0 to High(OptMathFns) do
+    if (OptMathFns[R] <> nil) and (Code = OptMathFns[R]) and ((OSse41 = 1) or (R in [0, 3])) then Exit(R);
+end;
+
+{ whether template T can be inlined at all: a plain function small enough whose every instruction the tier
+  takes natively }
+function OInlEligible(T: PFuncTemplate): Boolean;
+var Q: Integer;
+begin
+  Result := False;
+  if (T^.CodeLen = 0) or (T^.CodeLen > OPT_INLINE_MAX) or not T^.FastCall or T^.IsGenerator or
+     T^.IsAsync or T^.IsArrow or T^.IsClassCtor or T^.IsDerived or not T^.NoCaptures or not T^.NoHandlers or
+     (T^.ArgsReg >= 0) or (T^.RestReg >= 0) or T^.TopLevel or (T^.FieldInit <> nil) then Exit;
+  for Q := 0 to T^.CodeLen - 1 do
+    if not OInlOk(InsOp(T^.Code[Q])) then Exit;
+  Result := True;
+end;
+
+{ the template the call at virtual PC K (made by inlined site Par's callee, -1 the template's own code) calls when
+  it can be inlined there (nil none): the target OSpecValue names, a plain function small enough whose every
+  instruction the tier takes natively, not one of the calls it is inlined in }
+function OInlTarget(Fr: PFrame; K, Par: Integer): PFuncTemplate;
+var I: QWord; A, Q, P: Integer; V: TValue; O: PObj; T: PFuncTemplate;
+begin
+  Result := nil;
+  I := OIns(K);
+  A := OA(I);
+  if (OFb(K) and ofbProp) <> 0 then Exit;
+  V := OSpecValue(Fr, K, A, 0);
+  if not IsObject(V) then Exit;
+  O := ObjOf(V);
+  if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then Exit;
+  T := PFuncTemplate(O^.Native);
+  if (T = OT) or not OInlEligible(T) then Exit;
+  P := Par;
+  while P >= 0 do
+  begin
+    if OSites[P].Tc = T then Exit;
+    P := OSites[P].Parent;
+  end;
+  { a sloppy callee given no this would get the global object }
+  if not T^.IsStrict and ((OCU(I) and 1) <> 0) then Exit;
+  if A + 1 + T^.MaxRegs > 30000 then Exit;
+  Result := T;
+end;
+
+{ whether site S's callee and every inlined callee that called it are strict }
+function OChainStrict(S: Integer): Boolean;
+begin
+  while S >= 0 do
+  begin
+    if not OSites[S].Tc^.IsStrict then Exit(False);
+    S := OSites[S].Parent;
+  end;
+  Result := True;
+end;
+
+{ the region's virtual instructions: the template's own, then each inlined call's (the call a jump to them): its
+  guard, its callee's registers past its arguments undefined (as JitCallStub sets them), the callee's code (two
+  virtual instructions each: a return a move into the call's register and a jump back after the call), then the
+  calls that callee makes, inlined the same way (each one inlined, or a Math native's, or the outer call is
+  not inlined) }
+procedure OBuildStream(Fr: PFrame);
+var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
+  procedure Add(Code: QWord; Tpl: PFuncTemplate; Pc: Integer; F: PByte; Role: Byte; Site, Frame: Integer);
+  begin
+    if OVLen >= Length(OVCode) then
+    begin
+      SetLength(OVCode, OVLen * 2 + 64); SetLength(OVTpl, OVLen * 2 + 64); SetLength(OVPC, OVLen * 2 + 64);
+      SetLength(OVFb, OVLen * 2 + 64); SetLength(OVRole, OVLen * 2 + 64); SetLength(OVSite, OVLen * 2 + 64);
+      SetLength(OVFrame, OVLen * 2 + 64);
+    end;
+    OVCode[OVLen] := Code; OVTpl[OVLen] := Tpl; OVPC[OVLen] := Pc; OVFb[OVLen] := F;
+    OVRole[OVLen] := Role; OVSite[OVLen] := Site; OVFrame[OVLen] := Frame;
+    Inc(OVLen);
+  end;
+  { the call at virtual PC VC (made by site Par's callee) inlined: True, or False with nothing added }
+  function InlineAt(VC, Par: Integer): Boolean;
+  var Q, R, S, Off, Argc, Flag, Bb, V, Len0, Sites0, Total0, FbBase, Ret: Integer; I: QWord; T: PFuncTemplate;
+    Sig0: PtrUInt;
+  begin
+    Result := False;
+    if (Par >= 0) and (OSites[Par].Depth + 1 >= OPT_INLINE_DEPTH) then Exit;
+    T := OInlTarget(Fr, VC, Par);
+    if T = nil then Exit;
+    if Total + T^.CodeLen + 1 > OPT_INLINE_TOTAL then Exit;
+    Len0 := OVLen; Sites0 := OSiteCount; Total0 := Total; Sig0 := Sig;
+    FbBase := Total;
+    Inc(Total, T^.CodeLen + 1);
+    Sig := Sig * 31 + PtrUInt(T) + PtrUInt(FbBase);
+    I := OIns(VC);
+    Argc := OB_(I);
+    Flag := OCU(I) and 1;
+    Off := OA(I) + 1;
+    if Par < 0 then Ret := VC + 1 else Ret := VC + 2;
+    if OSiteCount >= Length(OSites) then SetLength(OSites, OSiteCount * 2 + 8);
+    S := OSiteCount;
+    Inc(OSiteCount);
+    OSites[S].VCall := VC; OSites[S].A := OA(I); OSites[S].Argc := Argc; OSites[S].Flag := Flag;
+    OSites[S].Tc := T; OSites[S].Parent := Par; OSites[S].Q := OVPC[VC]; OSites[S].Ret := Ret;
+    OSites[S].D := nil;
+    if Par < 0 then begin OSites[S].K := VC; OSites[S].Depth := 0; end
+    else begin OSites[S].K := OSites[Par].K; OSites[S].Depth := OSites[Par].Depth + 1; end;
+    OSites[S].Guard := OVLen;
+    { the guard: the call as its caller makes it (a failed guard resumes there) }
+    Add(I, OVTpl[VC], OVPC[VC], OVFb[VC], 1, S, OVFrame[VC]);
+    if Flag = 1 then Add(OMk(opLoadUndef, Off, 0, 0), T, 0, Buf + FbBase, 2, S, S);
+    for R := 1 + Min(Argc, T^.NumParams) to T^.MaxRegs - 1 do
+      Add(OMk(opLoadUndef, Off + R, 0, 0), T, 0, Buf + FbBase, 2, S, S);
+    Bb := OVLen;
+    for Q := 0 to T^.CodeLen - 1 do
+    begin
+      I := T^.Code[Q];
+      V := Bb + 2 * Q;
+      case OOpOf(I) of
+        opRet:
+          begin
+            Add(OMk(opMov, Off - 1, OA(I) + Off, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+            Add(OMk(opJmp, 0, 0, Ret - (V + 2)), T, Q, Buf + FbBase + Q, 2, S, S);
+          end;
+        opRetUndef:
+          begin
+            Add(OMk(opLoadUndef, Off - 1, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+            Add(OMk(opJmp, 0, 0, Ret - (V + 2)), T, Q, Buf + FbBase + Q, 2, S, S);
+          end;
+      else
+        begin
+          Add(ORemap(I, Off), T, Q, Buf + FbBase + Q, 2, S, S);
+          Add(OMk(opNop, 0, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+        end;
+      end;
+    end;
+    if Off + T^.MaxRegs > ORegs then ORegs := Off + T^.MaxRegs;
+    { the callee's calls: each inlined in turn, or a Math native's, or (every inlined frame strict: no caller or
+      arguments of theirs to see) the baseline's call embedded }
+    for Q := 0 to T^.CodeLen - 1 do
+      if (OOpOf(T^.Code[Q]) = opCall) and (OMathIndex(Fr, Bb + 2 * Q) < 0) and not InlineAt(Bb + 2 * Q, S) and
+         not OChainStrict(S) then
+      begin
+        OVLen := Len0; OSiteCount := Sites0; Total := Total0; Sig := Sig0;
+        Exit;
+      end;
+    { the call: a jump to the guard }
+    OVCode[VC] := OMk(opJmp, 0, 0, OSites[S].Guard - (VC + 1));
+    OVRole[VC] := 3;
+    OVSite[VC] := S;
+    Result := True;
+  end;
+begin
+  if OptInline < 0 then
+    if GetEnvironmentVariable('G2_OPTINLINE') = '0' then OptInline := 0 else OptInline := 1;
+  OVLen := 0;
+  OSiteCount := 0;
+  for K := 0 to OT^.CodeLen do
+    if K < OT^.CodeLen then Add(OT^.Code[K], OT, K, @OInfo^.Feedback[K], 0, -1, -1)
+    else Add(0, OT, K, @OInfo^.Feedback[K], 0, -1, -1);
+  if OptInline = 1 then
+    for K := 0 to OT^.CodeLen - 1 do
+    begin
+      if (OOpOf(OT^.Code[K]) <> opCall) or OInlBan[K] then Continue;
+      { the callees' feedback here: bytes per callee PC, kept across compilations while the same callees are
+        inlined (Sig) }
+      if Length(OInfo^.InlFb) < OT^.CodeLen + 1 then
+      begin
+        SetLength(OInfo^.InlFb, OT^.CodeLen + 1);
+        SetLength(OInfo^.InlTpl, OT^.CodeLen + 1);
+      end;
+      if OInfo^.InlFb[K] = nil then OInfo^.InlFb[K] := AllocMem(OPT_INLINE_FB);
+      Buf := OInfo^.InlFb[K];
+      Total := 0;
+      Sig := 0;
+      if not InlineAt(K, -1) then Continue;
+      if OInfo^.InlTpl[K] <> Pointer(Sig) then
+      begin
+        if OInfo^.InlTpl[K] <> nil then FillChar(Buf^, OPT_INLINE_FB, 0);
+        OInfo^.InlTpl[K] := Pointer(Sig);
+      end;
+    end;
+  { the end }
+  Add(0, OT, OT^.CodeLen, @OInfo^.Feedback[OT^.CodeLen], 0, -1, -1);
+  Dec(OVLen);
+end;
+
+{ site S's deopt descriptor (made once per compilation, kept with the code) }
+function OInlDesc(S: Integer): POInlDesc;
+var Ch: array[0..OPT_INLINE_DEPTH - 1] of Integer; N, P, J: Integer;
+begin
+  if OSites[S].D <> nil then Exit(POInlDesc(OSites[S].D));
+  N := 0;
+  P := S;
+  while P >= 0 do
+  begin
+    Ch[N] := P;
+    Inc(N);
+    P := OSites[P].Parent;
+  end;
+  Result := AllocMem(SizeOf(TOInlDesc));
+  Result^.N := N;
+  Result^.NextPC := OSites[S].K + 1;
+  for J := 0 to N - 1 do
+  begin
+    P := Ch[N - 1 - J];
+    Result^.Lv[J].A := OSites[P].A;
+    Result^.Lv[J].Argc := OSites[P].Argc;
+    Result^.Lv[J].T := OSites[P].Tc;
+    if J < N - 1 then Result^.Lv[J].PC := OSites[Ch[N - 2 - J]].Q + 1 else Result^.Lv[J].PC := 0;
+  end;
+  OSites[S].D := Result;
+end;
+
+{ an inlined callee's guard failed or exit taken at its instruction Q (the frame state already in VStack): its
+  frames, and those of the inlined callees that called it, made as JitCallStub makes them (each one's result
+  written to its caller's register on return) and run by the interpreter to the outermost one's return (as
+  XJitCallPost), the result in the call's register; 0 goes on (in the caller after the call), -1 a throw }
+function XOptInlDeopt(Fr: PFrame; D: POInlDesc; Q: Integer): Integer;
+var NF: PFrame; Base, J, Stop: Integer; V: TValue;
+begin
+  Fr^.PC := D^.NextPC;
+  Stop := FrameTop;
+  Base := 0;
+  for J := 0 to D^.N - 1 do
+  begin
+    Base := Fr^.Base + D^.Lv[J].A + 1;
+    NF := @Frames[FrameTop];
+    NF^.Closure := VStack[Base - 1];
+    NF^.NewTarget := VUndefined;
+    NF^.Tpl := D^.Lv[J].T;
+    NF^.Base := Base;
+    if J = D^.N - 1 then NF^.PC := Q else NF^.PC := D^.Lv[J].PC;
+    NF^.RetIdx := Base - 1;
+    NF^.Argc := D^.Lv[J].Argc;
+    NF^.Kind := 0;
+    Inc(FrameTop);
+  end;
+  StackTop := Base + D^.Lv[D^.N - 1].T^.MaxRegs;
+  if not Execute(Stop, V) then
+  begin
+    StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+    Exit(-1);
+  end;
+  VStack[Fr^.Base + D^.Lv[0].A] := V;
+  StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+  Result := 0;
 end;
 
 { the log's list of the region's embedded opcodes (G2_OPTLOG) }
@@ -3616,25 +3993,19 @@ begin
   OFail := False;
   OInlBanned := False;
   ONCount := 0; OFSCount := 0; OPhiArgCount := 0;
+  if OSse41 < 0 then
+    if (OCpuidEcx1 and (1 shl 19)) <> 0 then OSse41 := 1 else OSse41 := 0;
   OBuildStream(Fr);
   SetLength(OExit, OVLen + 1);
   SetLength(OEmbed, OVLen + 1);
   SetLength(OEmbedNode, OVLen + 1);
   for K := 0 to OVLen do begin OExit[K] := False; OEmbed[K] := False; OEmbedNode[K] := -1; end;
   { each call whose inline caches name a Math native (OCallNative), with one argument: computed inline }
-  if OSse41 < 0 then
-    if (OCpuidEcx1 and (1 shl 19)) <> 0 then OSse41 := 1 else OSse41 := 0;
   SetLength(OMathSpec, OVLen + 1);
   for K := 0 to OVLen do
   begin
     OMathSpec[K] := -1;
-    if (K = OVLen) or (OVRole[K] <> 0) or (OOpOf(OIns(K)) <> opCall) or (OB_(OIns(K)) <> 1) then Continue;
-    if (OFb(K) and ofbProp) <> 0 then Continue;
-    Code := OCallNative(Fr, K);
-    if Code = nil then Continue;
-    for R := 0 to High(OptMathFns) do
-      if (OptMathFns[R] <> nil) and (Code = OptMathFns[R]) and ((OSse41 = 1) or (R in [0, 3])) then
-        OMathSpec[K] := R;
+    if (K < OVLen) and (OVRole[K] in [0, 2]) then OMathSpec[K] := OMathIndex(Fr, K);
   end;
   for K := 0 to OVLen - 1 do
     if (OVRole[K] <> 1) and not OStaticOk(OOpOf(OIns(K))) and (OMathSpec[K] < 0) then
@@ -3711,21 +4082,28 @@ begin
       opGetProp, opGetMethod:
         begin
           IC := @OVTpl[K]^.ICs[OCU(OIns(K))];
-          if (IC^.PolyCount = 1) and (IC^.Poly0.Shape <> nil) and not IC^.Poly0.Shape^.IsDict and
-             (IC^.Poly0.Depth <= IC_MAX_DEPTH) and (IC^.Poly0.Acc = 0) and (IC^.Poly0.VerMask = 0) and
-             (IC^.Poly0.Slot >= 0) and OHoldersOk(IC) then
+          { one shape (its slot and shape constants in the code), or two to four (tried in turn) }
+          if OICOk(IC) then
           begin
             OPropIC[K] := IC;
-            OPropSlot[K] := IC^.Poly0.Slot;
-            OPropShape[K] := IC^.Poly0.Shape;
-            OPropKind[K] := IC^.Poly0.Kind;
+            if IC^.PolyCount = 1 then
+            begin
+              OPropSlot[K] := IC^.Poly0.Slot;
+              OPropShape[K] := IC^.Poly0.Shape;
+              OPropKind[K] := IC^.Poly0.Kind;
+            end
+            else OPropSlot[K] := 0;
             { a number now (the receiver as OSpecValue tells it): unboxed, as OSpec allows }
             V := OSpecValue(Fr, K, OB_(OIns(K)), 0);
-            if IsObject(V) and (ObjOf(V)^.Shape = IC^.Poly0.Shape) then
+            if IsObject(V) then
             begin
-              V := OHolderSlot(V, IC);
-              if IsInt(V) and (OSpec(K) <> vkNone) then OPropVK[K] := OSpec(K)
-              else if (V < DOUBLE_LIMIT) and (OSpec(K) <> vkNone) then OPropVK[K] := vkDbl;
+              R := OEntryFor(IC, ObjOf(V)^.Shape);
+              if R >= 0 then
+              begin
+                V := OHolderSlot(V, OICEntry(IC, R));
+                if IsInt(V) and (OSpec(K) <> vkNone) then OPropVK[K] := OSpec(K)
+                else if (V < DOUBLE_LIMIT) and (OSpec(K) <> vkNone) then OPropVK[K] := vkDbl;
+              end;
             end;
           end;
         end;
@@ -3781,8 +4159,10 @@ begin
   if Again then Continue;
   { an inlined callee instruction the tier did not take: that call is not inlined }
   for K := OT^.CodeLen + 1 to OVLen - 1 do
-    if (OVRole[K] = 2) and (OExit[K] or OEmbed[K]) and not OInlBan[OSites[OVSite[K]].K] then
+    if (OVRole[K] = 2) and (OExit[K] or (OEmbed[K] and (OOpOf(OIns(K)) <> opCall))) and
+       not OInlBan[OSites[OVSite[K]].K] then
     begin
+      if OptLog then WriteLn(ErrOutput, 'ban at ', K, ' op ', OOpOf(OIns(K)), ' exit ', OExit[K]);
       OInlBan[OSites[OVSite[K]].K] := True;
       Again := True;
     end;
