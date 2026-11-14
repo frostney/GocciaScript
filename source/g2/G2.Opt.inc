@@ -31,11 +31,19 @@ const
   onTASet = 74;    { Y (a node of the element kind's number kind) into a typed array of kind Imm }
   onArrGet = 75;   { an elements store's value (not a hole) into VStack register Y }
   onArrSet = 76;   { Y (a node >= 0, else VStack register -1 - Y) over an elements store's value (not a hole) }
+  { property access on the receiver in VStack register Reg, the shape its instruction's IC saw (OPropShape) a
+    constant: Imm the slot (an inline one), bit 40 of Imm when the shape is already known to hold }
+  onPropGet = 77;  { an own data property into VStack register Y }
+  onPropSet = 78;  { Y (a node >= 0, else VStack register -1 - Y) over an own writable data property }
+  onLength = 79;   { an array's, typed array's or string's length (Imm a LEN_ kind) as an int }
+
+  PROP_KNOWN = Int64(1) shl 40;
+  LEN_ARRAY = 1; LEN_STR = 3;   { (a typed array's length is a prototype getter a script can replace) }
 
   ELEM_ARRAY = 100;   { OElemSpec: an object with an elements store (an array, a plain object's indices) }
 
   { feedback bits (TOptInfo.Feedback per instruction) }
-  ofbOverflow = 1; ofbEntry = 2; ofbGiveUp = 4; ofbUnboxDbl = 8; ofbUnboxNo = 16; ofbTagCmp = 32; ofbElem = 64;
+  ofbOverflow = 1; ofbEntry = 2; ofbGiveUp = 4; ofbUnboxDbl = 8; ofbUnboxNo = 16; ofbTagCmp = 32; ofbElem = 64; ofbProp = 128;
 
   { conditions (onCmpI / onCmpD's Imm, a branch's TermCC) }
   ocLt = 0; ocLe = 1; ocGt = 2; ocGe = 3; ocEq = 4; ocNe = 5;
@@ -100,6 +108,15 @@ var
   OCurPC: Integer;                   { the instruction being built (an unbox's resume point) }
   OElemSpec: array of Integer;       { per element instruction: the receiver speculated (a typed array kind,
                                        ELEM_ARRAY, -1 none), from the frame's values at compile time }
+  OPropSlot: array of Integer;       { per GetProp / SetProp: the IC's slot (-1 none); per GetLength a LEN_ kind }
+  OPropShape: array of PShape;       { per GetProp / SetProp: the IC's receiver shape }
+  OPropKind: array of Byte;          { per GetProp: the IC's receiver object kind }
+  { shapes known to hold while the SSA is built: per register, the shape its object was checked to have (nil
+    none) and that object's kind (255 not checked); per block, the facts at its end }
+  OFactShape: array of PShape;
+  OFactKind: array of Byte;
+  OEndShape: array of array of PShape;
+  OEndKind: array of array of Byte;
   OFS: array of TOFSPair;
   OFSCount: Integer;
   OPhiArg: array of Integer;
@@ -186,7 +203,8 @@ begin
     opNeg, opBitNot, opNot, opToNum, opToNumeric,
     opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe,
     opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef,
-    opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq, opGetElem, opSetElem: Result := True;
+    opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq, opGetElem, opSetElem, opGetProp, opSetProp,
+    opGetLength: Result := True;
   else Result := False;
   end;
 end;
@@ -248,6 +266,7 @@ begin
     opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr,
     opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe, opGetElem: begin R1 := OB_(I); R2 := OCU(I); end;
     opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef: R1 := OA(I);
+    opGetProp, opGetLength: R1 := OB_(I);
     opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq: begin R1 := OA(I); R2 := OB_(I); end;
   end;
 end;
@@ -259,7 +278,7 @@ begin
     opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr,
     opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI,
     opNeg, opBitNot, opNot, opToNum, opToNumeric,
-    opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe, opGetElem: Result := OA(I);
+    opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe, opGetElem, opGetProp, opGetLength: Result := OA(I);
   else Result := -1;
   end;
 end;
@@ -429,6 +448,7 @@ begin
             OReads(I, R1, R2);
             SetBit(R1); SetBit(R2);
             if OOpOf(I) = opSetElem then begin SetBit(OA(I)); SetBit(OB_(I)); SetBit(OCU(I)); end;
+            if OOpOf(I) = opSetProp then begin SetBit(OA(I)); SetBit(OB_(I)); end;
           end;
         for W := 0 to OLiveW - 1 do
           if OLive[PC * OLiveW + W] <> Cur[W] then
@@ -535,6 +555,8 @@ begin
         else Result := vkNone;
         end;
       end;
+    opGetProp: if (K[OB_(I)] = vkTag) and (OPropSlot[PC] >= 0) then Result := vkTag else Result := vkNone;
+    opGetLength: if (K[OB_(I)] = vkTag) and (OPropSlot[PC] > 0) then Result := vkInt else Result := vkNone;
   else Result := vkNone;
   end;
 end;
@@ -643,6 +665,17 @@ begin
           { the tagged index (and a typed array's tagged value) unboxed }
           if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpec(PC);
           if (OElemSpec[PC] <> ELEM_ARRAY) and (Cur[OCU(I)] = vkTag) then Cur[OCU(I)] := OSpec(PC);
+          Continue;
+        end;
+        if Op = opSetProp then
+        begin
+          { a speculated receiver; any value }
+          if (Cur[OA(I)] <> vkTag) or (OPropSlot[PC] < 0) or (Cur[OB_(I)] = vkNone) then
+          begin
+            if OEmbeddable(PC) then OEmbed[PC] := True else OExit[PC] := True;
+            Result := False;
+            Break;
+          end;
           Continue;
         end;
         if (Op = opGetElem) and (Cur[OCU(I)] = vkTag) and (OResultKind(PC, I, Cur) <> vkNone) then
@@ -865,6 +898,44 @@ begin
         end;
         if OElemSpec[PC] in [taFloat32, taFloat64] then Y := vkDbl else Y := vkInt;
         N := OEmitNode(B, onTAGet, Y, X, -1, OElemSpec[PC]);
+        ON[N].Reg := OB_(I);
+        OGuard(N, PC);
+      end;
+    opGetProp:
+      begin
+        X := OB_(I);
+        if (OFactShape[X] = OPropShape[PC]) and (OFactKind[X] = OPropKind[PC]) then
+          N := OEmitNode(B, onPropGet, vkNone, -1, A, OPropSlot[PC] or PROP_KNOWN)
+        else N := OEmitNode(B, onPropGet, vkNone, -1, A, OPropSlot[PC]);
+        if OFail then Exit;
+        ON[N].Reg := X;
+        OGuard(N, PC);
+        OFactShape[X] := OPropShape[PC];
+        OFactKind[X] := OPropKind[PC];
+        OMap[A] := -1;
+        Exit;
+      end;
+    opSetProp:
+      begin
+        X := A;
+        if OMap[OB_(I)] >= 0 then Y := OMap[OB_(I)] else Y := -1 - OB_(I);
+        if OFactShape[X] = OPropShape[PC] then
+          N := OEmitNode(B, onPropSet, vkNone, -1, Y, OPropSlot[PC] or PROP_KNOWN)
+        else
+        begin
+          N := OEmitNode(B, onPropSet, vkNone, -1, Y, OPropSlot[PC]);
+          OFactKind[X] := 255;
+        end;
+        if OFail then Exit;
+        ON[N].Reg := X;
+        OGuard(N, PC);
+        OFactShape[X] := OPropShape[PC];
+        Exit;
+      end;
+    opGetLength:
+      begin
+        N := OEmitNode(B, onLength, vkInt, -1, -1, OPropSlot[PC]);
+        if OFail then Exit;
         ON[N].Reg := OB_(I);
         OGuard(N, PC);
       end;
@@ -1121,7 +1192,7 @@ begin
     if not OHasNodeX(ON[N].Op) then Continue;
     ON[N].X := ORep(ON[N].X);
     if ON[N].Op in [onAddI, onSubI, onMulI, onModI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onAddD, onSubD,
-      onMulD, onDivD, onCmpI, onCmpD, onTASet, onArrSet] then ON[N].Y := ORep(ON[N].Y);
+      onMulD, onDivD, onCmpI, onCmpD, onTASet, onArrSet, onPropSet] then ON[N].Y := ORep(ON[N].Y);
   end;
   for K := 0 to OFSCount - 1 do OFS[K].Node := ORep(OFS[K].Node);
   for K := 0 to OPhiArgCount - 1 do OPhiArg[K] := ORep(OPhiArg[K]);
@@ -1150,8 +1221,10 @@ function OBuildSSA: Boolean;
 var Stack: array of Integer; Idx: array of Integer; NS, B, S, K, R, P, PC, N, V, Ph, L: Integer;
   Flushed: array of Integer;
   Phis: array of record B, R, N: Integer; end; NPhis: Integer; Visited: array of Boolean;
+  FactS: PShape; FactK: Byte;
 begin
   Result := False;
+  FactS := nil; FactK := 255;
   { reverse postorder }
   SetLength(Visited, OBCount);
   SetLength(Stack, OBCount + 1);
@@ -1186,6 +1259,10 @@ begin
   for K := 0 to OOrderCount - 1 do OB[OOrder[K]].RPO := K;
   { the blocks in that order }
   SetLength(OMap, ORegs);
+  SetLength(OFactShape, ORegs);
+  SetLength(OFactKind, ORegs);
+  SetLength(OEndShape, OBCount);
+  SetLength(OEndKind, OBCount);
   NPhis := 0;
   for K := 0 to OOrderCount - 1 do
   begin
@@ -1230,15 +1307,44 @@ begin
         end;
       end;
     end;
+    { the shapes known: a single predecessor's at its end, else none }
+    if (B > 0) and (Length(OB[B].Preds) = 1) and (OB[OB[B].Preds[0]].RPO < OB[B].RPO) and
+       (OEndShape[OB[B].Preds[0]] <> nil) then
+    begin
+      Move(OEndShape[OB[B].Preds[0]][0], OFactShape[0], ORegs * SizeOf(PShape));
+      Move(OEndKind[OB[B].Preds[0]][0], OFactKind[0], ORegs);
+    end
+    else
+    begin
+      FillChar(OFactShape[0], ORegs * SizeOf(PShape), 0);
+      FillChar(OFactKind[0], ORegs, 255);
+    end;
     if B > 0 then
       for PC := OB[B].StartPC to OB[B].EndPC do
       begin
         if (PC = OB[B].EndPC) and ((OB[B].Term = otExit) or (OB[B].Term = otBr) or
            (OOpOf(OIns(PC)) = opJmp)) then Break;
         OCurPC := PC;
+        if OOpOf(OIns(PC)) = opMov then begin FactS := OFactShape[OB_(OIns(PC))]; FactK := OFactKind[OB_(OIns(PC))]; end;
         OInstr(B, PC, OIns(PC));
         if OFail then Exit;
+        { an embedded instruction can change any object's shape; a write forgets its register's }
+        if OEmbed[PC] then
+        begin
+          FillChar(OFactShape[0], ORegs * SizeOf(PShape), 0);
+          FillChar(OFactKind[0], ORegs, 255);
+        end
+        else
+        begin
+          R := OWrites(OIns(PC));
+          if R >= 0 then begin OFactShape[R] := nil; OFactKind[R] := 255; end;
+          if OOpOf(OIns(PC)) = opMov then begin OFactShape[OA(OIns(PC))] := FactS; OFactKind[OA(OIns(PC))] := FactK; end;
+        end;
       end;
+    SetLength(OEndShape[B], ORegs);
+    SetLength(OEndKind[B], ORegs);
+    Move(OFactShape[0], OEndShape[B][0], ORegs * SizeOf(PShape));
+    Move(OFactKind[0], OEndKind[B][0], ORegs);
     OCurPC := OB[B].EndPC;
     OTerminator(B);
     if OFail then Exit;
@@ -1344,7 +1450,7 @@ var Pos, K, B, J, N, S, P, W, NW, Ph, F, NClob: Integer; Changed, Cross: Boolean
       if not OHasNodeX(ON[M].Op) then Continue;
       Mark(ON[M].X);
       if ON[M].Op in [onAddI, onSubI, onMulI, onModI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onAddD, onSubD,
-        onMulD, onDivD, onCmpI, onCmpD, onTASet, onArrSet] then Mark(ON[M].Y);
+        onMulD, onDivD, onCmpI, onCmpD, onTASet, onArrSet, onPropSet] then Mark(ON[M].Y);
       if ON[M].FS >= 0 then
         for Q := ON[M].FS to ON[M].FS + ON[M].FSN - 1 do Mark(OFS[Q].Node);
       if ON[M].Op = onEmbed then
@@ -1398,7 +1504,7 @@ begin
       ON[N].First := Pos;
       if OHasNodeX(ON[N].Op) then Use(ON[N].X, Pos);
       if ON[N].Op in [onAddI, onSubI, onMulI, onModI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onAddD, onSubD,
-        onMulD, onDivD, onCmpI, onCmpD, onTASet, onArrSet] then Use(ON[N].Y, Pos);
+        onMulD, onDivD, onCmpI, onCmpD, onTASet, onArrSet, onPropSet] then Use(ON[N].Y, Pos);
       if ON[N].FS >= 0 then
         for F := ON[N].FS to ON[N].FS + ON[N].FSN - 1 do Use(OFS[F].Node, Pos);
       if ON[N].Op = onEmbed then
@@ -1750,6 +1856,36 @@ begin
   PatchHere(L1); PatchHere(L2); PatchHere(L3); PatchHere(L4);
 end;
 
+{ property node N's receiver (VStack register Reg) in rax as an object: unless its shape is known to hold, checked
+  to be an object of the IC's shape (and for a get, its object kind) }
+procedure OPropReceiver(N: Integer; Get: Boolean);
+begin
+  MovRM(jAX, jBX, ON[N].Reg * 8);
+  AluRR($31, jAX, jR13, True);
+  if (ON[N].Imm and PROP_KNOWN) <> 0 then Exit;
+  MovRR(jDX, jAX);
+  ShiftRI(5, jDX, 48, True);
+  OJccGuardFb(ccNE, N, ofbProp);
+  CmpBMI(jAX, 4, ckObject);
+  OJccGuardFb(ccNE, N, ofbProp);
+  MovRI(jCX, QWord(PtrUInt(OPropShape[ON[N].PC])));
+  CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
+  OJccGuardFb(ccNE, N, ofbProp);
+  if Get then
+  begin
+    CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), OPropKind[ON[N].PC]);
+    OJccGuardFb(ccNE, N, ofbProp);
+  end;
+end;
+
+{ the slot of property node N in rax's object inline (an overflow slot is the baseline's) }
+procedure OPropInline(N: Integer);
+begin
+  MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+  AluRI(7, jCX, Integer(ON[N].Imm and $FFFFFFFF), False);
+  OJccGuardFb(ccBE, N, ofbProp);
+end;
+
 { node N's code }
 procedure OCode(N: Integer);
 var L, CC: Integer; D: Int64;
@@ -2010,6 +2146,57 @@ begin
             end;
           end;
         end;
+      end;
+    onPropGet:
+      begin
+        OPropReceiver(N, True);
+        OPropInline(N);
+        MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8);
+        MovMR(jBX, ON[N].Y * 8, jAX);
+      end;
+    onPropSet:
+      begin
+        if ON[N].Y >= 0 then
+        begin
+          OBox(ON[N].Y);
+          MovMR(jSP, OScratch, jAX);
+        end;
+        OPropReceiver(N, False);
+        OPropInline(N);
+        if ON[N].Y >= 0 then MovRM(jCX, jSP, OScratch) else MovRM(jCX, jBX, (-1 - ON[N].Y) * 8);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8, jCX);
+        if ON[N].Y < 0 then
+        begin
+          MovRR(jDX, jAX);
+          MovRR(jAX, jCX);
+          OBarrier;
+        end;
+      end;
+    onLength:
+      begin
+        MovRM(jAX, jBX, ON[N].Reg * 8);
+        AluRR($31, jAX, jR13, True);
+        MovRR(jDX, jAX);
+        ShiftRI(5, jDX, 48, True);
+        OJccGuardFb(ccNE, N, ofbProp);
+        if ON[N].Imm = LEN_STR then
+        begin
+          CmpBMI(jAX, 4, ckString);
+          OJccGuardFb(ccNE, N, ofbProp);
+          Mov32RM(jAX, jAX, PtrInt(@PStr(nil)^.Len));
+        end
+        else
+        begin
+          CmpBMI(jAX, 4, ckObject);
+          OJccGuardFb(ccNE, N, ofbProp);
+          CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okArray);
+          OJccGuardFb(ccNE, N, ofbProp);
+          TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), ofBigLen);
+          OJccGuardFb(ccNE, N, ofbProp);
+          MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Elements));
+          Mov32RM(jAX, jAX, PtrInt(@PValueArray(nil)^.Len));
+        end;
+        OStoreG(N, jAX);
       end;
     onArrGet:
       begin
@@ -2695,7 +2882,7 @@ begin
       N := OB[B].Nodes[K];
       case ON[N].Op of
         onAddI, onSubI, onMulI, onModI, onNegI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onNotI,
-        onAddD, onSubD, onMulD, onDivD, onNegD, onCmpI, onCmpD, onNotB, onTAGet, onTASet, onArrGet, onArrSet: Inc(Gain);
+        onAddD, onSubD, onMulD, onDivD, onNegD, onCmpI, onCmpD, onNotB, onTAGet, onTASet, onArrGet, onArrSet, onLength: Inc(Gain);
         onEmbed, onUnbox, onFlush: Inc(Cost);
       end;
     end;
@@ -2706,7 +2893,7 @@ end;
 
 { the region entered at PC of frame Fr's template, compiled and installed in its JitTable; False when it cannot be }
 function OptCompile(Fr: PFrame; PC: Integer): Boolean;
-var Kinds: array of Byte; R, Iter: Integer; V: TValue; Code: Pointer; Tbl: PPtrUInt; K: Integer;
+var Kinds: array of Byte; R, Iter: Integer; V: TValue; Code: Pointer; Tbl: PPtrUInt; K: Integer; IC: PPropIC;
 begin
   Result := False;
   OT := Fr^.Tpl;
@@ -2762,6 +2949,50 @@ begin
       OElemSpec[K] := TAKind(PObj(PtrOf(V)));
     end
     else if PObj(PtrOf(V))^.Elements <> nil then OElemSpec[K] := ELEM_ARRAY;
+  end;
+  { each property instruction's receiver speculated from its IC: one own data property of one shape (not a
+    dictionary's), its slot and shape constants in the code; a length from the receiver's value now }
+  SetLength(OPropSlot, OT^.CodeLen + 1);
+  SetLength(OPropShape, OT^.CodeLen + 1);
+  SetLength(OPropKind, OT^.CodeLen + 1);
+  for K := 0 to OT^.CodeLen do
+  begin
+    OPropSlot[K] := -1; OPropShape[K] := nil; OPropKind[K] := 0;
+    if K = OT^.CodeLen then Continue;
+    if (OInfo^.Feedback[K] and ofbProp) <> 0 then Continue;
+    case OOpOf(OIns(K)) of
+      opGetProp:
+        begin
+          IC := @OT^.ICs[OCU(OIns(K))];
+          if (IC^.PolyCount = 1) and (IC^.Poly0.Shape <> nil) and not IC^.Poly0.Shape^.IsDict and
+             (IC^.Poly0.Depth = 0) and (IC^.Poly0.Acc = 0) and (IC^.Poly0.VerMask = 0) and (IC^.Poly0.Slot >= 0) then
+          begin
+            OPropSlot[K] := IC^.Poly0.Slot;
+            OPropShape[K] := IC^.Poly0.Shape;
+            OPropKind[K] := IC^.Poly0.Kind;
+          end;
+        end;
+      opSetProp:
+        begin
+          { an own store only: an add transition's cache can be forgotten when a prototype changes }
+          IC := @OT^.ICs[OCU(OIns(K))];
+          if (IC^.Shape <> nil) and (IC^.NewShape = nil) and not IC^.Shape^.IsDict and (IC^.Slot >= 0) then
+          begin
+            OPropSlot[K] := IC^.Slot;
+            OPropShape[K] := IC^.Shape;
+          end;
+        end;
+      opGetLength:
+        begin
+          V := VStack[Fr^.Base + OB_(OIns(K))];
+          if IsString(V) then OPropSlot[K] := LEN_STR
+          else if IsObject(V) then
+          begin
+            if (PObj(PtrOf(V))^.OKind = okArray) and ((PObj(PtrOf(V))^.OFlags and ofBigLen) = 0) and
+               (PObj(PtrOf(V))^.Elements <> nil) then OPropSlot[K] := LEN_ARRAY
+          end;
+        end;
+    end;
   end;
   { PC 0 or a loop's header (a backward jump's target) }
   if PC <> 0 then
