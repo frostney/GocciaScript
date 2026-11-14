@@ -1392,6 +1392,53 @@ begin
   Result := True;
 end;
 
+type
+  { a compiled opDefProp's cache: a receiver of Shape gets the property in Slot, its shape NewShape (nil: Shape's
+    own property, written over) }
+  PDefCache = ^TDefCache;
+  TDefCache = record
+    Shape, NewShape: PShape;
+    Slot: Integer;
+  end;
+
+var
+  JitDefCaches: array of PDefCache;   { the compiling template's (DeferCold's V an index here) }
+  JitDefCacheCount: Integer;
+
+{ compiled code's opDefProp past its cache (XFastDefProp), then its cache: a plain data property added by one
+  transition, or written over }
+function JH_DefPropC(Fr: PFrame; I: QWord; C: PDefCache): Boolean;
+var R: PValue; A, CI: Integer; Key: PStr; Old, NS: PShape; O: PObj;
+begin
+  R := @VStack[Fr^.Base];
+  A := (I shr 8) and $FFFF;
+  Key := PStr(PtrOf(Fr^.Tpl^.Consts[I shr 40]));
+  Old := nil; CI := -1;
+  if IsObject(R[A]) then
+  begin
+    Old := ObjOf(R[A])^.Shape;
+    CI := ShapeLookup(Old, Key);
+  end;
+  XFastDefProp(R[A], Key, R[(I shr 24) and $FFFF]);
+  Result := True;
+  if (Old = nil) or Old^.IsDict or not IsObject(R[A]) then Exit;
+  O := ObjOf(R[A]);
+  NS := O^.Shape;
+  if NS^.IsDict then Exit;
+  if CI >= 0 then
+  begin
+    if (NS = Old) and (Old^.PFlags[CI] = pfDefault) then
+    begin
+      C^.Shape := Old; C^.NewShape := nil; C^.Slot := CI;
+    end;
+  end
+  else if (NS^.Parent = Old) and (NS^.Count = Old^.Count + 1) and (NS^.Keys[NS^.Count - 1] = Key) and
+     (NS^.PFlags[NS^.Count - 1] = pfDefault) then
+  begin
+    C^.Shape := Old; C^.NewShape := NS; C^.Slot := NS^.Count - 1;
+  end;
+end;
+
 function JH_Alloc(Fr: PFrame; I: QWord): Boolean;
 var R: PValue; A: Integer;
 begin
@@ -2923,7 +2970,75 @@ begin
         end;
       end;
     opGetGlobal, opTypeofGlobal: EmitHelper(@JH_GetGlobal, PC, I);
-    opClosure, opNewObj, opDefProp, opTypeof: EmitHelper(@JH_Alloc, PC, I);
+    opClosure, opTypeof: EmitHelper(@JH_Alloc, PC, I);
+    opNewObj:
+      if GCStress or MultiRealmAny or (Max(4, Integer(CU)) > 16) or (RootShapeFor(ObjectProto) = nil) then
+        EmitHelper(@JH_Alloc, PC, I)
+      else
+      begin
+        { a plain object of Max(4, N) inline slots and the object prototype's root shape, bumped from the
+          nursery (full, or more than one realm: JH_Alloc's, cold) }
+        C := Max(4, Integer(CU));
+        MovRI(jDX, QWord(PtrUInt(@MultiRealmAny)));
+        CmpBMI(jDX, 0, 0);
+        L1 := JccFwd(ccNE);
+        MovRFs(jAX, JitFsNurseryTop);
+        LeaRM(jCX, jAX, 64 + C * 8);
+        MovRFs(jDX, JitFsNurseryLimit);
+        AluRR($39, jCX, jDX, True);
+        L2 := JccFwd(ccA);
+        MovFsR(JitFsNurseryTop, jCX);
+        MovRI(jDX, QWord(Cardinal(64 + C * 8)) or (QWord(ckObject) shl 32));
+        MovMR(jAX, 0, jDX);
+        MovRI(jDX, QWord(PtrUInt(RootShapeFor(ObjectProto))));
+        MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jDX);
+        AluRR($31, jDX, jDX, False);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Elements), jDX);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Overflow), jDX);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Native), jDX);
+        MovRI(jDX, QWord(Cardinal(C)) or (QWord(okPlain) shl 16));
+        MovMR(jAX, PtrInt(@PObj(nil)^.InlineCap), jDX);
+        MovRI(jDX, VUndefined);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Aux1), jDX);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Aux2), jDX);
+        for L3 := 0 to C - 1 do MovMR(jAX, PtrInt(@PObj(nil)^.Slots) + L3 * 8, jDX);
+        AluRR($31, jAX, jR13, True);
+        MovMR(jBX, A * 8, jAX);
+        Saved := JitSlow;
+        JitSlow := @JH_Alloc;
+        DeferCold(7, PC, I, A, 0, [L1, L2]);
+        JitSlow := Saved;
+      end;
+    opDefProp:
+      begin
+        { the site's cache (TDefCache): the receiver's shape, an inline slot, the new shape; else JH_DefPropC
+          (cold), which fills it }
+        if JitDefCacheCount >= Length(JitDefCaches) then SetLength(JitDefCaches, JitDefCacheCount * 2 + 16);
+        JitDefCaches[JitDefCacheCount] := AllocMem(SizeOf(TDefCache));
+        MovRM(jAX, jBX, A * 8);
+        AluRR($31, jAX, jR13, True);
+        MovRR(jDX, jAX);
+        ShiftRI(5, jDX, 48, True);
+        L1 := JccFwd(ccNE);
+        MovRI(jSI, QWord(PtrUInt(JitDefCaches[JitDefCacheCount])));
+        MovRM(jDX, jSI, PtrInt(@PDefCache(nil)^.Shape));
+        CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Shape));
+        L2 := JccFwd(ccNE);
+        Mov32RM(jDX, jSI, PtrInt(@PDefCache(nil)^.Slot));
+        MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+        AluRR($39, jDX, jCX, False);
+        L3 := JccFwd(ccAE);
+        MovRM(jCX, jSI, PtrInt(@PDefCache(nil)^.NewShape));
+        AluRR($85, jCX, jCX, True);
+        L4 := JccFwd(ccE);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jCX);
+        PatchHere(L4);
+        MovRM(jCX, jBX, B * 8);
+        MovMRIdx(jAX, jDX, PtrInt(@PObj(nil)^.Slots), jCX);
+        Barrier(jAX, jCX);
+        DeferCold(8, PC, I, A, JitDefCacheCount, [L1, L2, L3]);
+        Inc(JitDefCacheCount);
+      end;
     opNot:
       begin
         { true, false, undefined, null, ints, objects (not [[IsHTMLDDA]]) and strings decided here; anything else
@@ -3596,6 +3711,19 @@ begin
           JB($84); JB($C0);   { test al, al: the Boolean }
           JccPC(ccNE, PC + 1);
         end;
+      8:
+        begin
+          { JH_DefPropC with the site's cache }
+          JRex(False, 0, 0, jR12); JB($C7); JMem(0, jR12, PtrInt(@PFrame(nil)^.PC)); JD(Cardinal(PC + 1));
+          MovRR(jDI, jR12);
+          MovRI(jSI, JitDefer[N].I);
+          MovRI(jDX, QWord(PtrUInt(JitDefCaches[JitDefer[N].V])));
+          CallAbs(@JH_DefPropC);
+          JB($84); JB($C0);                                         { test al, al }
+          JccThrow(ccE);
+          if PC + 1 < T^.CodeLen then JmpPC(PC + 1) else JmpExit(PC);
+          Continue;
+        end;
       4:
         begin
           { the cached own property in an overflow slot (rax the object, rdx its slot, rcx its inline capacity) }
@@ -3639,6 +3767,7 @@ begin
   JitSlow := Saved;
   JitDeferCount := 0;
   JitDeferJumpCount := 0;
+  JitDefCacheCount := 0;
 end;
 
 procedure JitCompile(T: PFuncTemplate);
