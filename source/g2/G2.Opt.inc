@@ -208,6 +208,10 @@ var
   OGuards: array of Integer;         { nodes and blocks needing a cold stub: >= 0 node, < 0 -1 - block (exit) }
   OGuardJumps: array of Integer;     { per guard: the first of its jumps in OGJ }
   OGJ: array of record G, At, Fb: Integer; end;
+  { the code's cold fragments, emitted after its blocks: Kind 1 an overflow slot's load (Slot), 2 its store; At the
+    hot code's jump to it, Back where it returns }
+  OCold: array of record Kind, At, Back, Slot: Integer; end;
+  OColdCount: Integer;
   OGJCount: Integer;
   OBranchFix: array of record At, Blk: Integer; end;
   OBranchFixCount: Integer;
@@ -2247,6 +2251,58 @@ begin
   OJccGuardFb(ccBE, N, ofbProp);
 end;
 
+{ a cold fragment of Kind for slot Slot: At the hot code's forward jump to it (its rel32 emitted), returning to the
+  current position }
+procedure OAddCold(Kind, At, Slot: Integer);
+begin
+  if OColdCount >= Length(OCold) then SetLength(OCold, OColdCount * 2 + 16);
+  OCold[OColdCount].Kind := Kind; OCold[OColdCount].At := At; OCold[OColdCount].Slot := Slot;
+  OCold[OColdCount].Back := JitLen;
+  Inc(OColdCount);
+end;
+
+{ slot Slot of the object in rax (of a shape holding it) into rax: an inline slot, or past the object's inline
+  capacity its overflow store's (a cold fragment) }
+procedure OSlotLoad(Slot: Integer);
+var L: Integer;
+begin
+  MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+  AluRI(7, jCX, Slot, False);
+  L := JccFwd(ccBE);
+  MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Slots) + Slot * 8);
+  OAddCold(1, L, Slot);
+end;
+
+{ the cold fragments }
+procedure OEmitCold;
+var K: Integer;
+begin
+  for K := 0 to OColdCount - 1 do
+  begin
+    PatchHere(OCold[K].At);
+    case OCold[K].Kind of
+      1:
+        begin
+          { rax the object, rcx its inline capacity }
+          MovRI(jDX, Cardinal(OCold[K].Slot));
+          AluRR($29, jDX, jCX, False);                          { sub edx, ecx }
+          MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Overflow));
+          MovRMIdx(jAX, jAX, jDX, PtrInt(@PValueArray(nil)^.Data));
+        end;
+      2:
+        begin
+          { rax the object, rdx its inline capacity, rcx the value: rax becomes the overflow store (the barrier's
+            cell) }
+          JB($F7); JB($DA);                                     { neg edx }
+          AluRI(0, jDX, OCold[K].Slot, False);
+          MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Overflow));
+          MovMRIdx(jAX, jDX, PtrInt(@PValueArray(nil)^.Data), jCX);
+        end;
+    end;
+    JB($E9); JD(Cardinal(OCold[K].Back - (JitLen + 4)));
+  end;
+end;
+
 { get-IC entry E's holder for the receiver in rax (of E's shape) into rax: from E's shape (a constant) along its
   prototypes, each checked to have E's holder shape }
 procedure OPropHolder(N: Integer; E: PICEntry);
@@ -2286,10 +2342,7 @@ begin
     CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), En^.Kind);
     OJccGuardFb(ccNE, N, ofbProp);
     OPropHolder(N, En);
-    MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
-    AluRI(7, jCX, En^.Slot, False);
-    OJccGuardFb(ccBE, N, ofbProp);
-    MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Slots) + En^.Slot * 8);
+    OSlotLoad(En^.Slot);
     Done[ND] := JmpFwd;
     Inc(ND);
     PatchHere(L);
@@ -2567,8 +2620,7 @@ begin
         begin
           OPropReceiver(N, True);
           OPropHolder(N, OICEntry(IC, (ON[N].Imm shr 44) and 7));
-          OPropInline(N);
-          MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8);
+          OSlotLoad(Integer(ON[N].Imm and $FFFFFFFF));
         end;
         if ON[N].Kind = vkNone then MovMR(jBX, ON[N].Y * 8, jAX)
         else
@@ -2623,14 +2675,23 @@ begin
           AluRR($39, jCX, jDX, True);
           OJccGuardFb(ccNE, N, ofbProp);
         end;
-        if (ON[N].Imm and PROP_YOUNG) = 0 then OPropInline(N);
+        if ((ON[N].Imm and PROP_YOUNG) = 0) and ((ON[N].Imm and PROP_ADD) <> 0) then OPropInline(N);
         if (ON[N].Imm and PROP_ADD) <> 0 then
         begin
           MovRI(jCX, QWord(PtrUInt(OPropNew[ON[N].PC])));
           MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jCX);
         end;
         if ON[N].Y >= 0 then MovRM(jCX, jSP, OScratch) else MovRM(jCX, jBX, (-1 - ON[N].Y) * 8);
-        MovMR(jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8, jCX);
+        if ((ON[N].Imm and PROP_YOUNG) = 0) and ((ON[N].Imm and PROP_ADD) = 0) then
+        begin
+          { an own store: an inline slot, or past the inline capacity the overflow store's (a cold fragment) }
+          MovzxWRM(jDX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+          AluRI(7, jDX, Integer(ON[N].Imm and $FFFFFFFF), False);
+          L := JccFwd(ccBE);
+          MovMR(jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8, jCX);
+          OAddCold(2, L, Integer(ON[N].Imm and $FFFFFFFF));
+        end
+        else MovMR(jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8, jCX);
         if (ON[N].Y < 0) and ((ON[N].Imm and PROP_YOUNG) = 0) then
         begin
           MovRR(jDX, jAX);
@@ -3294,6 +3355,7 @@ begin
   JitLen := 0;
   OGJCount := 0;
   OBranchFixCount := 0;
+  OColdCount := 0;
   SetLength(Labels, OBCount);
   { the baseline emitter's state, for the embedded instructions }
   JitFixCount := 0;
@@ -3432,6 +3494,7 @@ begin
         end;
     end;
   end;
+  OEmitCold;
   { the embedded instructions' slow blocks }
   JitEmitDeferred(OT);
   { the epilogue (an exit to the interpreter: eax its PC) }
