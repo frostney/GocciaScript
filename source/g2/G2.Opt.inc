@@ -33,7 +33,7 @@ const
   onArrSet = 76;   { Y (a node >= 0, else VStack register -1 - Y) over an elements store's value (not a hole) }
   { property access on the receiver in VStack register Reg, the shape its instruction's IC saw (OPropShape) a
     constant: Imm the slot (an inline one), bit 40 of Imm when the shape is already known to hold }
-  onPropGet = 77;  { an own data property into VStack register Y }
+  onPropGet = 77;  { an own data property: of kind vkNone into VStack register Y, of a number kind unboxed }
   onPropSet = 78;  { Y (a node >= 0, else VStack register -1 - Y) over an own writable data property }
   onLength = 79;   { an array's, typed array's or string's length (Imm a LEN_ kind) as an int }
 
@@ -115,6 +115,7 @@ var
   OPropSlot: array of Integer;       { per GetProp / SetProp: the IC's slot (-1 none); per GetLength a LEN_ kind }
   OPropShape: array of PShape;       { per GetProp / SetProp: the IC's receiver shape }
   OPropKind: array of Byte;          { per GetProp: the IC's receiver object kind }
+  OPropVK: array of Byte;            { per GetProp: the value's kind speculated (vkTag: kept tagged in VStack) }
   OMathSpec: array of Integer;       { per call: the OptMathFns entry its inline caches name (-1 none) }
   OSse41: Integer = -1;              { whether the CPU has roundsd (-1 not asked yet) }
   { shapes known to hold while the SSA is built: per register, the shape its object was checked to have (nil
@@ -566,7 +567,7 @@ begin
         else Result := vkNone;
         end;
       end;
-    opGetProp: if (K[OB_(I)] = vkTag) and (OPropSlot[PC] >= 0) then Result := vkTag else Result := vkNone;
+    opGetProp: if (K[OB_(I)] = vkTag) and (OPropSlot[PC] >= 0) then Result := OPropVK[PC] else Result := vkNone;
     opGetLength: if (K[OB_(I)] = vkTag) and (OPropSlot[PC] > 0) then Result := vkInt else Result := vkNone;
     opGetGlobal: if OPropSlot[PC] >= 0 then Result := vkTag else Result := vkNone;
   else Result := vkNone;
@@ -932,15 +933,17 @@ begin
     opGetProp:
       begin
         X := OB_(I);
+        if OPropVK[PC] = vkTag then Y := vkNone else Y := OPropVK[PC];
         if (OFactShape[X] = OPropShape[PC]) and (OFactKind[X] = OPropKind[PC]) then
-          N := OEmitNode(B, onPropGet, vkNone, -1, A, OPropSlot[PC] or PROP_KNOWN)
-        else N := OEmitNode(B, onPropGet, vkNone, -1, A, OPropSlot[PC]);
+          N := OEmitNode(B, onPropGet, Y, -1, A, OPropSlot[PC] or PROP_KNOWN)
+        else N := OEmitNode(B, onPropGet, Y, -1, A, OPropSlot[PC]);
         if OFail then Exit;
         ON[N].Reg := X;
         OGuard(N, PC);
         OFactShape[X] := OPropShape[PC];
         OFactKind[X] := OPropKind[PC];
-        OMap[A] := -1;
+        { a number unboxed into the node; anything else into VStack }
+        if Y = vkNone then OMap[A] := -1 else OMap[A] := N;
         Exit;
       end;
     opSetProp:
@@ -2198,7 +2201,36 @@ begin
         OPropReceiver(N, True);
         OPropInline(N);
         MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8);
-        MovMR(jBX, ON[N].Y * 8, jAX);
+        if ON[N].Kind = vkNone then MovMR(jBX, ON[N].Y * 8, jAX)
+        else
+        begin
+          { the value unboxed as the speculated kind (onUnbox's checks and feedback) }
+          TagOf(jDX, jAX);
+          AluRI(7, jDX, TAG_INT_HI, False);
+          if ON[N].Kind = vkInt then
+          begin
+            L := JccFwd(ccE);
+            MovRI(jCX, DOUBLE_LIMIT);
+            AluRR($39, jAX, jCX, True);
+            OJccGuardFb(ccB, N, ofbUnboxDbl);
+            OJccGuardFb(-1, N, ofbUnboxNo);
+            PatchHere(L);
+            OStoreG(N, jAX);
+          end
+          else
+          begin
+            L := JccFwd(ccNE);
+            Cvt32ToX(0, jAX);
+            CC := JmpFwd;
+            PatchHere(L);
+            MovRI(jCX, DOUBLE_LIMIT);
+            AluRR($39, jAX, jCX, True);
+            OJccGuardFb(ccAE, N, ofbUnboxNo);
+            MovqXR(0, jAX);
+            PatchHere(CC);
+            OStoreX(N, 0);
+          end;
+        end;
       end;
     onPropSet:
       begin
@@ -3158,9 +3190,10 @@ begin
   SetLength(OPropSlot, OT^.CodeLen + 1);
   SetLength(OPropShape, OT^.CodeLen + 1);
   SetLength(OPropKind, OT^.CodeLen + 1);
+  SetLength(OPropVK, OT^.CodeLen + 1);
   for K := 0 to OT^.CodeLen do
   begin
-    OPropSlot[K] := -1; OPropShape[K] := nil; OPropKind[K] := 0;
+    OPropSlot[K] := -1; OPropShape[K] := nil; OPropKind[K] := 0; OPropVK[K] := vkTag;
     if K = OT^.CodeLen then Continue;
     if (OInfo^.Feedback[K] and ofbProp) <> 0 then Continue;
     case OOpOf(OIns(K)) of
@@ -3173,6 +3206,14 @@ begin
             OPropSlot[K] := IC^.Poly0.Slot;
             OPropShape[K] := IC^.Poly0.Shape;
             OPropKind[K] := IC^.Poly0.Kind;
+            { a number now (the receiver as OSpecValue tells it): unboxed, as OSpec allows }
+            V := OSpecValue(Fr, K, OB_(OIns(K)), 0);
+            if IsObject(V) and (ObjOf(V)^.Shape = IC^.Poly0.Shape) then
+            begin
+              V := GetSlot(ObjOf(V), IC^.Poly0.Slot);
+              if IsInt(V) and (OSpec(K) <> vkNone) then OPropVK[K] := OSpec(K)
+              else if (V < DOUBLE_LIMIT) and (OSpec(K) <> vkNone) then OPropVK[K] := vkDbl;
+            end;
           end;
         end;
       opSetProp:

@@ -38,6 +38,7 @@ var
   JitNative: array of Integer;     { each PC's code offset }
   JitExitOf: array of Integer;     { each PC's exit stub offset (-1 none yet) }
   JitTakenAt: array of Boolean;    { each PC: compiled (an entry), or only its exit }
+  JitLoopHead: array of Boolean;   { each PC: a back edge's target in a template the optimizing tier may compile }
   JitChunk: PByte = nil;           { executable memory, bump-allocated }
   JitChunkUsed: PtrUInt = 0;
   JitMainThread: TThreadID;        { the thread the VM unit started on: the only one that compiles }
@@ -3211,7 +3212,7 @@ begin
 end;
 
 procedure JitCompile(T: PFuncTemplate);
-var PC, I, Exit0, Throw0, Target: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal;
+var PC, I, Exit0, Throw0, Target, L1, L2: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal;
   Info: POptInfo;
 begin
   { the intrinsics' set-up (the JS preludes at start-up, a new realm's) runs once: not compiled, and the template
@@ -3250,8 +3251,30 @@ begin
   JB($89); JB($CD);                              { mov ebp, ecx }
   JB($FF); JB($E6);                              { jmp rsi }
   SetLength(JitTakenAt, T^.CodeLen);
+  { the loop headers (back edges' targets): entered from before the loop, the code goes into an optimized region
+    there through the template's optimized table, so a loop's region runs on each call, not only once a count
+    down ends (a back edge goes to the header's own code) }
+  SetLength(JitLoopHead, T^.CodeLen + 1);
+  for PC := 0 to T^.CodeLen do JitLoopHead[PC] := False;
+  if Info <> nil then
+    for PC := 0 to T^.CodeLen - 1 do
+      if (InsOp(T^.Code[PC]) = opJmp) and (Integer(SarInt64(Int64(T^.Code[PC]), 40)) < 0) and
+         (PC + 1 + Integer(SarInt64(Int64(T^.Code[PC]), 40)) > 0) then
+        JitLoopHead[PC + 1 + Integer(SarInt64(Int64(T^.Code[PC]), 40))] := True;
   for PC := 0 to T^.CodeLen - 1 do
   begin
+    if JitLoopHead[PC] then
+    begin
+      MovRI(jAX, QWord(PtrUInt(@Info^.Table)));
+      MovRM(jAX, jAX, 0);
+      AluRR($85, jAX, jAX, True);
+      L1 := JccFwd(ccE);
+      MovRM(jAX, jAX, PC * 8);
+      AluRR($85, jAX, jAX, True);
+      L2 := JccFwd(ccE);
+      JB($FF); JB($E0);                          { jmp rax (the baseline's own entry: the code right below) }
+      PatchHere(L1); PatchHere(L2);
+    end;
     JitNative[PC] := JitLen;
     JitTaken := True;
     if (PC = 0) and (Info <> nil) then JitCountDown(0);
