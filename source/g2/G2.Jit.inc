@@ -3048,6 +3048,9 @@ procedure JitCompile(T: PFuncTemplate);
 var PC, I, Exit0, Throw0, Target: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal;
   Info: POptInfo;
 begin
+  { the intrinsics' set-up (the JS preludes at start-up, a new realm's) runs once: not compiled, and the template
+    stays untried for later code }
+  if IntrinsicsInit then Exit;
   T^.JitState := 2;
   { a generator's body runs compiled between its suspensions (its yields and returns are the interpreter's) }
   if (T^.Lazy <> nil) or (T^.CodeLen = 0) or T^.IsAsync then Exit;
