@@ -112,6 +112,9 @@ var
   OCurPC: Integer;                   { the instruction being built (an unbox's resume point) }
   OElemSpec: array of Integer;       { per element instruction: the receiver speculated (a typed array kind,
                                        ELEM_ARRAY, -1 none), from the frame's values at compile time }
+  OCaptured: array of Boolean;       { per register: a nested function's upvalue can be open on it, so its value
+                                       lives in VStack only (never an SSA value) and only embedded code writes it }
+  OCapList: array of Integer;
   OPropSlot: array of Integer;       { per GetProp / SetProp: the IC's slot (-1 none); per GetLength a LEN_ kind }
   OPropShape: array of PShape;       { per GetProp / SetProp: the IC's receiver shape }
   OPropKind: array of Byte;          { per GetProp: the IC's receiver object kind }
@@ -232,6 +235,10 @@ begin
     opGetMethod: begin R(B); WFrom := A; WTo := A + 1; end;
     opSetProp, opDefProp, opDefField, opArrPush: begin R(A); R(B); end;
     opArrHole, opSetGlobal, opSetUpv: R(A);
+    opMov: begin R(B); WFrom := A; WTo := A; end;
+    opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opClosure: begin WFrom := A; WTo := A; end;
+    { (the registers it closes are captured ones, always current in VStack) }
+    opClose: ;
     opGetElem, opInstanceof, opIn, opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr,
     opUShr, opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe:
       begin R(B); R(C); WFrom := A; WTo := A; end;
@@ -657,6 +664,7 @@ begin
             { the tagged operands unboxed }
             if Cur[OA(I)] = vkTag then Cur[OA(I)] := OSpec(PC);
             if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpec(PC);
+            for K := 0 to High(OCapList) do Cur[OCapList[K]] := vkTag;
           end;
           Break;
         end;
@@ -678,6 +686,7 @@ begin
           { the tagged index (and a typed array's tagged value) unboxed }
           if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpec(PC);
           if (OElemSpec[PC] <> ELEM_ARRAY) and (Cur[OCU(I)] = vkTag) then Cur[OCU(I)] := OSpec(PC);
+          for K := 0 to High(OCapList) do Cur[OCapList[K]] := vkTag;
           Continue;
         end;
         if Op = opCall then
@@ -685,7 +694,7 @@ begin
           { an intrinsic Math call (not embedded): a function in the callee register, a number argument }
           RK := Cur[OA(I) + 2];
           if RK = vkTag then RK := OSpec(PC);
-          if not OIsNum(RK) or (Cur[OA(I)] <> vkTag) then
+          if not OIsNum(RK) or (Cur[OA(I)] <> vkTag) or OCaptured[OA(I)] then
           begin
             OMathSpec[PC] := -1;
             if OEmbeddable(PC) then OEmbed[PC] := True else OExit[PC] := True;
@@ -694,6 +703,7 @@ begin
           end;
           if Cur[OA(I) + 2] = vkTag then Cur[OA(I) + 2] := OSpec(PC);
           Cur[OA(I)] := vkDbl;
+          for K := 0 to High(OCapList) do Cur[OCapList[K]] := vkTag;
           Continue;
         end;
         if Op = opSetProp then
@@ -716,6 +726,13 @@ begin
           Result := False;
           Break;
         end;
+        if (OWrites(I) >= 0) and OCaptured[OWrites(I)] then
+        begin
+          { a captured register is written by the baseline's code only }
+          if OEmbeddable(PC) then OEmbed[PC] := True else OExit[PC] := True;
+          Result := False;
+          Break;
+        end;
         if ONumConsumer(Op) then
         begin
           { the tagged operands unboxed (as OGetAs does) }
@@ -728,6 +745,8 @@ begin
           end;
         end;
         Cur[OA(I)] := RK;
+        { a captured register stays tagged (each read unboxes it again) }
+        for K := 0 to High(OCapList) do Cur[OCapList[K]] := vkTag;
       end;
     if not Result then Exit;
     if OB[B].Term = otExit then Continue;
@@ -1377,6 +1396,8 @@ begin
         if OOpOf(OIns(PC)) = opMov then begin FactS := OFactShape[OB_(OIns(PC))]; FactK := OFactKind[OB_(OIns(PC))]; end;
         OInstr(B, PC, OIns(PC));
         if OFail then Exit;
+        { a captured register's unboxed value is the instruction's only: VStack holds it }
+        for R := 0 to High(OCapList) do OMap[OCapList[R]] := -1;
         { an embedded instruction can change any object's shape; a write forgets its register's }
         if OEmbed[PC] then
         begin
@@ -1397,6 +1418,7 @@ begin
     OCurPC := OB[B].EndPC;
     OTerminator(B);
     if OFail then Exit;
+    for R := 0 to High(OCapList) do OMap[OCapList[R]] := -1;
     SetLength(OB[B].EndMap, ORegs);
     Move(OMap[0], OB[B].EndMap[0], ORegs * SizeOf(Integer));
   end;
@@ -2948,12 +2970,13 @@ end;
 { a first estimate before any analysis (most regions fail it): the instructions reachable from PC, the numeric
   ones (arithmetic, comparisons, numeric branches) at least as many as the others that do work }
 function OQuickProfitable(PC: Integer): Boolean;
-var Seen: array of Boolean; Work: array of Integer; NW, P, T, Num, Other: Integer; I: QWord; Op: TOp;
+var Seen: array of Boolean; Work: array of Integer; NW, P, T, Num, Other, Props: Integer; I: QWord; Op: TOp;
+  Loop: Boolean;
 begin
   SetLength(Seen, OT^.CodeLen + 1);
   SetLength(Work, OT^.CodeLen + 1);
   NW := 0; Work[NW] := PC; Inc(NW);
-  Num := 0; Other := 0;
+  Num := 0; Other := 0; Props := 0; Loop := False;
   while NW > 0 do
   begin
     Dec(NW);
@@ -2970,19 +2993,37 @@ begin
         opNop, opMov, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opLoadHole, opJmp, opJT,
         opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNSEq, opJSEq, opSEq, opSNe, opNot, opRet,
         opRetUndef, opToNum, opToNumeric: ;
+        opGetProp, opSetProp, opGetLength: Inc(Props);
+        { an embedded call clobbers every register the region holds values in }
+        opCall, opNew: Inc(Other, 2);
       else Inc(Other);
       end;
       if Op in [opRet, opRetUndef, opThrow, opThrowConst] then Break;
       if (Op = opJmp) or OIsCondJump(Op) then
       begin
         T := P + 1 + OC(I);
+        if T <= P then Loop := True;
         if (T >= 0) and (T < OT^.CodeLen) and not Seen[T] then begin Work[NW] := T; Inc(NW); end;
         if Op = opJmp then Break;
       end;
       Inc(P);
     end;
   end;
+  { native property access pays off over a loop's iterations; a short straight-line region's entry costs more
+    than it saves (an inlining candidate instead) }
+  if not Loop then Inc(Other, Props);
   Result := (Num > 0) and (Num >= Other);
+end;
+
+{ whether T's registers are only ever captured by its nested functions' upvalues (no arguments object, field
+  initializer, direct eval or top-level lexical cells): the tier keeps those registers in VStack }
+function OptCapturesOk(T: PFuncTemplate): Boolean;
+var I: Integer;
+begin
+  Result := (T^.FieldInit = nil) and (T^.ArgsReg < 0) and not T^.TopLevel;
+  if Result then
+    for I := 0 to T^.CodeLen - 1 do
+      if InsOp(T^.Code[I]) in [opEvalHint, opMakeGLex, opMakeModCell] then Exit(False);
 end;
 
 { whether any region of T could pass OQuickProfitable (from PC 0 or a loop's header): a template where none can gets
@@ -3147,6 +3188,19 @@ begin
       if OEmbeddable(K) then OEmbed[K] := True else OExit[K] := True;
     end;
   OExit[OT^.CodeLen] := True;
+  { the registers nested functions capture }
+  SetLength(OCaptured, ORegs);
+  for R := 0 to ORegs - 1 do OCaptured[R] := False;
+  OCapList := nil;
+  for K := 0 to High(OT^.Children) do
+    for R := 0 to High(OT^.Children[K]^.Upvals) do
+      if OT^.Children[K]^.Upvals[R].FromParentLocal and (OT^.Children[K]^.Upvals[R].Index < ORegs) and
+         not OCaptured[OT^.Children[K]^.Upvals[R].Index] then
+      begin
+        OCaptured[OT^.Children[K]^.Upvals[R].Index] := True;
+        SetLength(OCapList, Length(OCapList) + 1);
+        OCapList[High(OCapList)] := OT^.Children[K]^.Upvals[R].Index;
+      end;
   { the entry's speculation: the frame's values now (a failed entry guard: ints as doubles) }
   SetLength(Kinds, ORegs);
   for R := 0 to ORegs - 1 do
@@ -3159,6 +3213,7 @@ begin
     else if V < DOUBLE_LIMIT then Kinds[R] := vkDbl
     else if (V = VTrue) or (V = VFalse) then Kinds[R] := vkBool
     else Kinds[R] := vkTag;
+    if OCaptured[R] then Kinds[R] := vkTag;
   end;
   if (OInfo^.Feedback[PC] and 4) <> 0 then Exit;
   if not OQuickProfitable(PC) then Exit;
