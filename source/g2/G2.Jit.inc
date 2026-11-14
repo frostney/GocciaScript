@@ -700,6 +700,7 @@ end;
 
 procedure JitCompile(T: PFuncTemplate); forward;
 procedure XJitRet(Fr: PFrame; V: TValue); forward;
+function OptPromising(T: PFuncTemplate): Boolean; forward;
 
 { a derived class constructor's compiled return of V in frame Fr (10.2.2 [[Construct]] steps 10-12 for XJitNew's
   Kind 1 frame, as Execute's opRet): an object result, else undefined gives this, which super() must have bound.
@@ -3066,7 +3067,7 @@ begin
   Table := GetMem(T^.CodeLen * SizeOf(PtrUInt));
   Info := nil;
   if (OptEnabled = 1) and T^.NoHandlers and T^.NoCaptures and not T^.IsGenerator and not T^.IsAsync and
-     (T^.ArgsReg < 0) and (T^.RestReg < 0) and not T^.TopLevel then
+     (T^.ArgsReg < 0) and (T^.RestReg < 0) and not T^.TopLevel and OptPromising(T) then
   begin
     New(Info);
     FillChar(Info^, SizeOf(TOptInfo), 0);

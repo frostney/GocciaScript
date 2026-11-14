@@ -2391,6 +2391,26 @@ begin
   Result := (Num > 0) and (Num >= Other);
 end;
 
+{ whether any region of T could pass OQuickProfitable (from PC 0 or a loop's header): a template where none can gets
+  no counters, so its calls and loops pay nothing for the tier }
+function OptPromising(T: PFuncTemplate): Boolean;
+var K, Tg: Integer; I: QWord;
+begin
+  OT := T;
+  if T^.CodeLen = 0 then Exit(False);
+  if OQuickProfitable(0) then Exit(True);
+  for K := 0 to T^.CodeLen - 1 do
+  begin
+    I := T^.Code[K];
+    if OOpOf(I) = opJmp then
+    begin
+      Tg := K + 1 + OC(I);
+      if (Tg >= 0) and (Tg <= K) and OQuickProfitable(Tg) then Exit(True);
+    end;
+  end;
+  Result := False;
+end;
+
 { whether the region gains over the baseline code: its native number work (arithmetic, comparisons, numeric
   branches) at least its embedded instructions and unboxes, which cost about what the baseline's do plus their
   flushes; a region that is mostly the baseline's instructions is left to the baseline }
