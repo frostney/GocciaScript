@@ -3344,13 +3344,12 @@ begin
   CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction); LNat := JccFwd(ccNE);
   TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 1); AddS(JccFwd(ccNE));
   MovRM(jSI, jAX, PtrInt(@PObj(nil)^.Native));
-  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.FastCall), 0); AddS(JccFwd(ccE));
-  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsGenerator), 0); AddS(JccFwd(ccNE));
-  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.JitState), 1); AddS(JccFwd(ccNE));
+  { compiled and callable inline (JitCallKind: FastCall, not a generator, JitState 1) }
+  TestBMI(jSI, PtrInt(@PFuncTemplate(nil)^.JitCallKind), 1); AddS(JccFwd(ccE));
   { this: a strict or arrow callee takes it as it is (undefined for the flag); a sloppy one an object, the
     global object for none, undefined or null (as XJitCall), a primitive XJitCall's (it is boxed) }
-  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsStrict), 0); L1 := JccFwd(ccNE);
-  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsArrow), 0); L2 := JccFwd(ccNE);
+  TestBMI(jSI, PtrInt(@PFuncTemplate(nil)^.JitCallKind), 2); L1 := JccFwd(ccNE);
+  L2 := -1;
   JB($41); JB($F7); JB($C6); JD($10000);                           { test r14d, $10000 }
   LG1 := JccFwd(ccNE);
   MovRM(jCX, jR13, 8);
@@ -3370,7 +3369,7 @@ begin
   MovRFs(jCX, JitFsGlobalObj);
   MovMR(jR13, 8, jCX);
   LThisDone2 := JmpFwd;
-  PatchHere(L1); PatchHere(L2);
+  PatchHere(L1);
   JB($41); JB($F7); JB($C6); JD($10000);                           { test r14d, $10000 }
   L1 := JccFwd(ccE);
   MovRI(jCX, VUndefined); MovMR(jR13, 8, jCX);
@@ -3982,6 +3981,7 @@ begin
     end;
   T^.JitTable := Table;
   T^.Jit := Code;
+  T^.JitCallKind := Ord(T^.FastCall and not T^.IsGenerator) or (Ord(T^.IsStrict or T^.IsArrow) shl 1);
   T^.JitState := 1;
   if Info <> nil then
   begin

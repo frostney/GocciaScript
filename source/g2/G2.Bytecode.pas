@@ -197,6 +197,8 @@ type
     Jit: Pointer;
     JitTable: Pointer;
     JitState: Byte;
+    JitCallKind: Byte;   { set with JitState 1: bit 0 the shared call stub calls it inline (FastCall, not a
+                           generator), bit 1 strict or an arrow (its this as given) }
     JitCount: Integer;   { entries before it is compiled (the JIT compiles hot templates only) }
     Opt: Pointer;        { the optimizing tier's state (G2.Opt.inc's POptInfo), nil when the template is not eligible }
     JitComplete: Boolean;   { the code takes every instruction but returns (XJitCall's callees) }
