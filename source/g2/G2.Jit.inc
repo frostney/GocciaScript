@@ -2553,7 +2553,8 @@ begin
         MovRMIdx(jAX, jAX, jDX, PtrInt(@PObj(nil)^.Slots));
         MovMR(jBX, A * 8, jAX);
         { the rest of the cache (ICGetHit): cold; an overflow slot of the cached shape: a cold block of its own }
-        DeferCold(1, PC, I, A, 0, [L3, L4]);
+        DeferCold(1, PC, I, A, 0, [L3]);
+        DeferCold(6, PC, I, A, 0, [L4]);
         DeferCold(4, PC, I, A, 0, [CC]);
         if LS >= 0 then PatchHere(LS);
         if LA >= 0 then PatchHere(LA);
@@ -3497,7 +3498,7 @@ end;
 
 { the slow blocks JitInstr deferred (JitDefer), each back to the instruction after its own }
 procedure JitEmitDeferred(T: PFuncTemplate);
-var N, K, PC, L1: Integer; Saved: Pointer;
+var N, K, PC, L1, L2, L3, L4: Integer; Saved: Pointer;
 begin
   Saved := JitSlow;
   for N := 0 to JitDeferCount - 1 do
@@ -3506,8 +3507,41 @@ begin
     JitSlow := JitDefer[N].H;
     PC := JitDefer[N].PC;
     case JitDefer[N].Kind of
-      1:
+      1, 6:
         begin
+          if JitDefer[N].Kind = 6 then
+          begin
+            { the cached shape, not an own property (rax the object, rsi the IC, rdx its kind): a property of its
+              prototype whose shape is the IC's holder (Kind, Depth 1, VerMask and Acc 0 as one 32-bit word), in
+              an inline or an overflow slot }
+            MovRR(jCX, jDX);
+            AluRI(1, jCX, $100, False);                             { or ecx, $100: Depth 1 }
+            Cmp32RM(jCX, jSI, PtrInt(@PPropIC(nil)^.Poly0.Kind));
+            L1 := JccFwd(ccNE);
+            MovRM(jDX, jAX, PtrInt(@PObj(nil)^.Shape));
+            MovRM(jDX, jDX, PtrInt(@PShape(nil)^.Proto));
+            TagOf(jCX, jDX);
+            AluRI(7, jCX, TAG_PTR_HI, False);
+            L2 := JccFwd(ccNE);
+            AluRR($31, jDX, jR13, True);                            { the prototype }
+            MovRM(jCX, jSI, PtrInt(@PPropIC(nil)^.Poly0.Holder[0]));
+            CmpRM(jCX, jDX, PtrInt(@PObj(nil)^.Shape));
+            L3 := JccFwd(ccNE);
+            Mov32RM(jCX, jSI, PtrInt(@PPropIC(nil)^.Poly0.Slot));
+            MovzxWRM(jR8, jDX, PtrInt(@PObj(nil)^.InlineCap));
+            AluRR($39, jCX, jR8, False);
+            L4 := JccFwd(ccAE);
+            MovRMIdx(jAX, jDX, jCX, PtrInt(@PObj(nil)^.Slots));
+            MovMR(jBX, JitDefer[N].A * 8, jAX);
+            if PC + 1 < T^.CodeLen then JmpPC(PC + 1) else JmpExit(PC);
+            PatchHere(L4);
+            AluRR($29, jCX, jR8, False);                            { sub ecx, r8d }
+            MovRM(jDX, jDX, PtrInt(@PObj(nil)^.Overflow));
+            MovRMIdx(jAX, jDX, jCX, PtrInt(@PValueArray(nil)^.Data));
+            MovMR(jBX, JitDefer[N].A * 8, jAX);
+            if PC + 1 < T^.CodeLen then JmpPC(PC + 1) else JmpExit(PC);
+            PatchHere(L1); PatchHere(L2); PatchHere(L3);
+          end;
           { ICGetHit: its answer in R[A] goes on, else the helper }
           MovRR(jDI, jAX);
           LeaRM(jDX, jBX, JitDefer[N].A * 8);
