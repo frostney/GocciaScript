@@ -51,7 +51,7 @@ implementation
 
 uses
   SysUtils, Math, G2.Core, G2.Bytecode, G2.VM, G2.Snapshot, IntlTypes, BCP47, IntlLocaleResolver,
-  IntlICU, Goccia.Intl.CLDRData, Goccia.Temporal.TimeZone, G2.Temporal, G2.Builtins;
+  IntlICU, Goccia.Intl.CLDRData, Goccia.Temporal.TimeZone, G2.Temporal, G2.Builtins, TextSemantics;
 
 {$I G2.Intl.inc}
 
@@ -528,8 +528,8 @@ begin
       { the case mapping of String.prototype.toLocaleLowerCase / toLocaleUpperCase }
       begin
         if IntlCaseMap(StrToUnicode(StrOf(Args[3])), SArg(Args, Argc, 2), Args[4] = VTrue, U) then Res := StrFromUnicode(U)
-        else if Args[4] = VTrue then Res := StrFromUnicode(UnicodeUpperCase(StrToUnicode(StrOf(Args[3]))))
-        else Res := StrFromUnicode(UnicodeLowerCase(StrToUnicode(StrOf(Args[3]))));
+        else if Args[4] = VTrue then Res := StrFromUnicode(ECMAScriptDefaultUpperCase(StrToUnicode(StrOf(Args[3]))))
+        else Res := StrFromUnicode(ECMAScriptDefaultLowerCase(StrToUnicode(StrOf(Args[3]))));
       end;
     41:
       if TryGetRelativeTimePattern(SArg(Args, Argc, 2), RelUnit(SArg(Args, Argc, 3)), RP) then
