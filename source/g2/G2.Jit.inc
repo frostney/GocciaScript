@@ -2552,8 +2552,9 @@ begin
         CC := JccFwd(ccAE);
         MovRMIdx(jAX, jAX, jDX, PtrInt(@PObj(nil)^.Slots));
         MovMR(jBX, A * 8, jAX);
-        { the rest of the cache (ICGetHit): cold }
-        DeferCold(1, PC, I, A, 0, [L3, L4, CC]);
+        { the rest of the cache (ICGetHit): cold; an overflow slot of the cached shape: a cold block of its own }
+        DeferCold(1, PC, I, A, 0, [L3, L4]);
+        DeferCold(4, PC, I, A, 0, [CC]);
         if LS >= 0 then PatchHere(LS);
         if LA >= 0 then PatchHere(LA);
       end;
@@ -2573,7 +2574,7 @@ begin
         Mov32RM(jDX, jSI, PtrInt(@PPropIC(nil)^.Slot));
         MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
         AluRR($39, jDX, jCX, False);
-        JccExit(ccAE, PC);
+        L2 := JccFwd(ccAE);
         MovRM(jCX, jSI, PtrInt(@PPropIC(nil)^.NewShape));
         AluRR($85, jCX, jCX, True);
         L1 := JccFwd(ccE);
@@ -2582,6 +2583,8 @@ begin
         MovRM(jCX, jBX, B * 8);
         MovMRIdx(jAX, jDX, PtrInt(@PObj(nil)^.Slots), jCX);
         Barrier(jAX, jCX);
+        { an overflow slot of the cached shape (an own store; an add transition the helper's): cold }
+        DeferCold(5, PC, I, A, B, [L2]);
       end;
     opDefField:
       begin
@@ -3494,7 +3497,7 @@ end;
 
 { the slow blocks JitInstr deferred (JitDefer), each back to the instruction after its own }
 procedure JitEmitDeferred(T: PFuncTemplate);
-var N, K, PC: Integer; Saved: Pointer;
+var N, K, PC, L1: Integer; Saved: Pointer;
 begin
   Saved := JitSlow;
   for N := 0 to JitDeferCount - 1 do
@@ -3511,6 +3514,31 @@ begin
           CallAbs(@JitICGetHit);
           JB($84); JB($C0);   { test al, al: the Boolean }
           JccPC(ccNE, PC + 1);
+        end;
+      4:
+        begin
+          { the cached own property in an overflow slot (rax the object, rdx its slot, rcx its inline capacity) }
+          AluRR($29, jDX, jCX, False);                              { sub edx, ecx }
+          MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Overflow));
+          MovRMIdx(jAX, jAX, jDX, PtrInt(@PValueArray(nil)^.Data));
+          MovMR(jBX, JitDefer[N].A * 8, jAX);
+          if PC + 1 < T^.CodeLen then JmpPC(PC + 1) else JmpExit(PC);
+          Continue;
+        end;
+      5:
+        begin
+          { the store into the cached shape's overflow slot (rax the object, rdx its slot, rcx its inline
+            capacity, rsi the IC): an own store here, an add transition the helper's }
+          MovRM(jR8, jSI, PtrInt(@PPropIC(nil)^.NewShape));
+          AluRR($85, jR8, jR8, True);
+          L1 := JccFwd(ccNE);
+          AluRR($29, jDX, jCX, False);                              { sub edx, ecx }
+          MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Overflow));
+          MovRM(jCX, jBX, JitDefer[N].V * 8);
+          MovMRIdx(jAX, jDX, PtrInt(@PValueArray(nil)^.Data), jCX);
+          Barrier(jAX, jCX);                                        { (the overflow store's barrier: it is the cell) }
+          if PC + 1 < T^.CodeLen then JmpPC(PC + 1) else JmpExit(PC);
+          PatchHere(L1);
         end;
       2, 3:
         begin
