@@ -973,12 +973,20 @@ begin
       arguments, not iterated, and this new.target), then the fields }
     V := O^.Shape^.Proto;
     if not IsConstructorV(V) then Exit(1);
-    if not Construct(V, @R[A + 2], Argc, VA, V) or not RunFieldInit(VA, V) then
+    if not Construct(V, @R[A + 2], Argc, VA, V) then
     begin
       StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
       Exit(-1);
     end;
-    VStack[Base - 1] := V;
+    { the object in this's register while the fields are defined (adding one can collect and move it), then
+      the result }
+    VStack[Base] := V;
+    if not RunFieldInit(VStack[Base - 1], V) then
+    begin
+      StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+      Exit(-1);
+    end;
+    VStack[Base - 1] := VStack[Base];
     StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
     Exit(0);
   end;
