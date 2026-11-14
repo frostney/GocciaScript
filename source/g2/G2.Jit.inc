@@ -650,6 +650,9 @@ type
     Deopts, Recompiles: Integer;
     FbDrop: Integer;               { 1: a deopt recorded new feedback, so the regions go now (not a recompile) }
     FbDrops: Integer;
+    InlFb: array of PByte;         { per call instruction: the feedback bytes of the callee inlined there (per callee
+                                     PC), InlTpl that callee }
+    InlTpl: array of Pointer;
     Fails: Integer;                { regions not optimized: each one makes the counter's next run longer }
     BaseTable: PPtrUInt;           { the baseline code's entry per instruction }
     Table: PPtrUInt;               { BaseTable with the optimized regions' entries, nil when none }
@@ -2059,6 +2062,29 @@ begin
   JB($0F); JB($84); AddFix(-1 - PC);               { jz: the exit at PC }
 end;
 
+{ a back edge's count-down to loop header H: run out, an optimized region at H (the template's optimized table's
+  entry differs from H's own code) goes on there with the count started again, else the exit at H }
+procedure JitCountDownLoop(H: Integer);
+var L1, L2, L3: Integer;
+begin
+  MovRI(jAX, QWord(PtrUInt(@JitInfo^.Count)));
+  JB($FF); JB($08);                                { dec dword [rax] }
+  L1 := JccFwd(ccNE);
+  MovRI(jCX, QWord(PtrUInt(@JitInfo^.Table)));
+  MovRM(jCX, jCX, 0);
+  AluRR($85, jCX, jCX, True);
+  L2 := JccFwd(ccE);
+  MovRM(jCX, jCX, H * 8);
+  JB($48); JB($8D); JB($15); AddFix(H);            { lea rdx, [rip + H's code] }
+  AluRR($39, jCX, jDX, True);
+  L3 := JccFwd(ccE);
+  Mov32MI(jAX, 0, OPT_HOT);
+  JB($FF); JB($E1);                                { jmp rcx }
+  PatchHere(L2); PatchHere(L3);
+  JB($E9); AddFix(-1 - H);                         { the exit at H }
+  PatchHere(L1);
+end;
+
 { a cold block of Kind (JitDefer) for instruction PC (I), entered by the forward jump At; its helper is JitSlow }
 procedure DeferCold(Kind, PC: Integer; I: QWord; A, V: Integer; const At: array of Integer);
 var K: Integer;
@@ -2149,7 +2175,7 @@ begin
       end;
     opJmp:
       begin
-        if (C < 0) and (JitInfo <> nil) then JitCountDown(PC + 1 + C);
+        if (C < 0) and (JitInfo <> nil) then JitCountDownLoop(PC + 1 + C);
         JmpPC(PC + 1 + C);
       end;
     opJT, opJF:
