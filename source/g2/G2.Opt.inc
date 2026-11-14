@@ -40,8 +40,10 @@ const
   onGlobalGet = 80;   { the global object's own property (shape OPropShape, slot Imm and 32 bits up the object's
                         inline capacity) into VStack register Y }
   onMath = 81;        { Math function Imm (OptMathFns) of X (a double), the callee in VStack register Reg checked }
-  onUpvGet = 83;
-  onCheckHole = 84;   { VStack register Imm checked not to be the hole (the baseline's code throws the ReferenceError) }      { upvalue Imm of the frame's closure (open: its register's value) into VStack register Y }
+  onUpvGet = 83;      { upvalue Imm of the frame's closure (open: its register's value) into VStack register Y }
+  onCheckHole = 84;   { VStack register Imm checked not to be the hole (the baseline's code throws the ReferenceError) }
+  onNewObj = 85;      { a plain object of inline capacity Imm and shape OPropShape allocated in the nursery into VStack
+                        register Reg (the nursery full: an exit) }
   onInlGuard = 82;    { inlined call site Imm (OSites): its callee in VStack register Reg checked to be the inlined
                         template, room for its registers and a frame }
 
@@ -52,11 +54,19 @@ const
 
   PROP_KNOWN = Int64(1) shl 40;
   PROP_POLY = Int64(1) shl 41;   { a polymorphic IC's entries tried in turn (else entry Imm shr 44 and 7: its slot) }
+  PROP_ADD = Int64(1) shl 42;    { a store that adds the property: the shape becomes OPropNew }
+  PROP_ICCHK = Int64(1) shl 43;  { that add transition still in the store's IC (a prototype change forgets it) }
+  PROP_EXT = Int64(1) shl 48;    { the receiver checked extensible (a class field's definition) }
+  PROP_YOUNG = Int64(1) shl 47;  { the receiver allocated by the region since its last embed: no write barrier }
   LEN_ARRAY = 1; LEN_STR = 3;   { (a typed array's length is a prototype getter a script can replace) }
 
   ELEM_ARRAY = 100;   { OElemSpec: an object with an elements store (an array, a plain object's indices) }
 
   { feedback bits (TOptInfo.Feedback per instruction) }
+  { a polymorphic call's dispatch (OBuildStream's, role 4): an opJNotUndef whose jump is taken unless VStack register
+    A holds a function of template OVTpl (an opcode the tier takes as a jump: no case falls outside the enum) }
+  otbTpl = 9;       { (a branch's test) that register's function not of that template }
+  OFB_EXIT = 256;   { (OJccGuardFb) a plain exit: no feedback, no deopt counted }
   ofbOverflow = 1; ofbEntry = 2; ofbGiveUp = 4; ofbUnboxDbl = 8; ofbUnboxNo = 16; ofbTagCmp = 32; ofbElem = 64; ofbProp = 128;
 
   { conditions (onCmpI / onCmpD's Imm, a branch's TermCC) }
@@ -129,6 +139,19 @@ var
   OPropShape: array of PShape;       { per GetProp / SetProp: the IC's receiver shape }
   OPropKind: array of Byte;          { per GetProp: the IC's receiver object kind }
   OPropVK: array of Byte;            { per GetProp: the value's kind speculated (vkTag: kept tagged in VStack) }
+  OPropNew: array of PShape;         { per add store (SetProp's transition, DefProp's): the shape after it }
+  { per NewObj: its inline capacity (-1 not allocated inline); per DefProp of an object literal: the slot it
+    stores (-1 not native), the receiver's shape expected before it and the one after (nil: an existing slot) }
+  OAllocCap, ODefSlot: array of Integer;
+  ODefShape, ODefNew: array of PShape;
+  OFactCap: array of Word;           { per register: the inline capacity of an object the region allocated since its
+                                       last embed (0 none known) }
+  OEndCap: array of array of Word;
+  OQClo: PObj;                       { the region's closure for OQuickProfitable (nil at baseline compile time) }
+  OPendR: Integer;                   { a fact OInstr leaves for its written register (-1 none) }
+  OPendShape: PShape;
+  OPendKind: Byte;
+  OPendCap: Word;
   OPropIC: array of PPropIC;         { per GetProp: its IC (a prototype's property: Poly0.Depth and Holder) }
   OMathSpec: array of Integer;       { per call: the OptMathFns entry its inline caches name (-1 none) }
   OSse41: Integer = -1;              { whether the CPU has roundsd (-1 not asked yet) }
@@ -158,11 +181,12 @@ var
     code), K the outermost such call's PC in the template, Depth the number of inlined callers, D the deopt
     descriptor (OInlDesc) }
   OSites: array of record K, VCall, A, Argc, Flag, Guard, Ret, Parent, Q, Depth: Integer; Tc: PFuncTemplate;
-    D: Pointer; end;
+    D: Pointer; IsNew, IsFI: Boolean; Room, FiSite, FnCap: Integer; end;
   OSiteCount: Integer;
   OInlBan: array of Boolean;          { per caller PC: not inlined in this compilation }
   OInlBanned: Boolean;                { OInferKinds banned a site: the stream is built again }
   OptInline: Integer = -1;            { G2_OPTINLINE=0 turns inlining off (-1 not read yet) }
+  OptAlloc: Integer = -1;             { G2_OPTALLOC=0 turns inline allocation and inlined constructors off }
   OFS: array of TOFSPair;
   OFSCount: Integer;
   OPhiArg: array of Integer;
@@ -214,7 +238,7 @@ end;
 { whether node op Op's X is a node (the constants, entries, phis and tagged stores have none) }
 function OHasNodeX(Op: Integer): Boolean; inline;
 begin
-  Result := not (Op in [onConst, onEntry, onPhi, onStoreTag, onLoadKTag, onCopyTag, onUnbox, onEmbed]);
+  Result := not (Op in [onConst, onEntry, onPhi, onStoreTag, onLoadKTag, onCopyTag, onUnbox, onEmbed, onUpvGet]);
 end;
 
 function OKindJoin(A, B: Integer): Integer;
@@ -295,7 +319,7 @@ begin
     opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe,
     opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef,
     opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq, opGetElem, opSetElem, opGetProp, opSetProp,
-    opGetLength, opGetGlobal, opGetMethod, opGetUpv, opCheckHole: Result := True;
+    opGetLength, opGetGlobal, opGetMethod, opGetUpv, opCheckHole, opDefField: Result := True;
   else Result := False;
   end;
 end;
@@ -341,7 +365,7 @@ var Rd: array[0..63] of Integer; NR, WF, WT: Integer;
 begin
   { the template's own (the baseline's code there), or an inlined callee's call (OBuildStream let it be: no
     inline caches, its exits through XOptInlDeopt) }
-  if OVRole[PC] = 2 then Result := OOpOf(OIns(PC)) = opCall
+  if OVRole[PC] in [2, 5] then Result := OOpOf(OIns(PC)) in [opCall, opNew]
   else Result := (OVTpl[PC] = OT) and (PPtrUInt(OInfo^.BaseTable)[PC] <> 0);
   Result := Result and OEmbedSets(OIns(PC), Rd, NR, WF, WT) and not OptNoEmbed[OIns(PC) and $FF];
 end;
@@ -378,7 +402,7 @@ begin
     opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI,
     opNeg, opBitNot, opNot, opToNum, opToNumeric,
     opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe, opGetElem, opGetProp, opGetLength, opGetGlobal,
-    opCall, opGetMethod, opGetUpv: Result := OA(I);   { (GetMethod: A + 1 too, its this) }
+    opCall, opGetMethod, opGetUpv, opNewObj: Result := OA(I);   { (GetMethod: A + 1 too, its this) }
   else Result := -1;
   end;
 end;
@@ -553,7 +577,7 @@ begin
             OReads(I, R1, R2);
             SetBit(R1); SetBit(R2);
             if OOpOf(I) = opSetElem then begin SetBit(OA(I)); SetBit(OB_(I)); SetBit(OCU(I)); end;
-            if OOpOf(I) = opSetProp then begin SetBit(OA(I)); SetBit(OB_(I)); end;
+            if OOpOf(I) in [opSetProp, opDefProp, opDefField] then begin SetBit(OA(I)); SetBit(OB_(I)); end;
             if OOpOf(I) = opGetMethod then begin ClrBit(OA(I) + 1); SetBit(OB_(I)); end;
             { an intrinsic call's this: the baseline's call (a failed guard) reads it }
             if OOpOf(I) = opCall then SetBit(OA(I) + 1);
@@ -669,6 +693,7 @@ begin
     opGetLength: if (K[OB_(I)] = vkTag) and (OPropSlot[PC] > 0) then Result := vkInt else Result := vkNone;
     opGetGlobal: if OPropSlot[PC] >= 0 then Result := vkTag else Result := vkNone;
     opGetUpv: Result := vkTag;
+    opNewObj: if OAllocCap[PC] > 0 then Result := vkTag else Result := vkNone;
   else Result := vkNone;
   end;
 end;
@@ -761,6 +786,7 @@ begin
           Break;
         end;
         if Op = opNop then Continue;
+        if (OVRole[PC] = 1) and OSites[OVSite[PC]].IsFI then Continue;
         if OVRole[PC] = 1 then
         begin
           { an inlined call's guard: a function in the callee register }
@@ -772,6 +798,9 @@ begin
             Result := False;
             Break;
           end;
+          { a constructor's: its new object (this) }
+          if OSites[OVSite[PC]].IsNew then Cur[OA(I) + 1] := vkTag;
+          if OSites[OVSite[PC]].FiSite >= 0 then Cur[OSites[OSites[OVSite[PC]].FiSite].A] := vkTag;
           Continue;
         end;
         if OEmbed[PC] then
@@ -813,7 +842,18 @@ begin
         end;
         { a TDZ check writes nothing (a number or a boolean is no hole) }
         if Op = opCheckHole then Continue;
-        if Op = opSetProp then
+        if Op = opDefProp then
+        begin
+          { an object literal's receiver; any value }
+          if (Cur[OA(I)] <> vkTag) or (OPropSlot[PC] < 0) or (Cur[OB_(I)] = vkNone) then
+          begin
+            if OEmbeddable(PC) then OEmbed[PC] := True else OExit[PC] := True;
+            Result := False;
+            Break;
+          end;
+          Continue;
+        end;
+        if Op in [opSetProp, opDefField] then
         begin
           { a speculated receiver; any value }
           if (Cur[OA(I)] <> vkTag) or (OPropSlot[PC] < 0) or (Cur[OB_(I)] = vkNone) then
@@ -969,7 +1009,7 @@ begin
   end;
   { a call in an inlined callee: the inlined frames' registers below its frame valid in VStack (a collection
     during the call scans them) }
-  if OVRole[PC] = 2 then
+  if OVFrame[PC] >= 0 then
     for R := OT^.MaxRegs to Min(OA(I) + 1 + OB_(I), ORegs - 1) do
       if not Flushed[R] and (OMap[R] >= 0) then
       begin
@@ -1029,7 +1069,7 @@ end;
 
 { instruction PC (I) of block B into nodes }
 procedure OInstr(B, PC: Integer; I: QWord);
-var Op: TOp; A, X, Y, N: Integer; V: TValue; Ovf: Boolean; D: Double;
+var Op: TOp; A, X, Y, N: Integer; V: TValue; Ovf: Boolean; D: Double; Imm: Int64;
   function Arith(OpI, OpD: Integer): Integer;
   begin
     if OMap[OB_(I)] < 0 then OGetAs(B, OB_(I), OSpec(PC));
@@ -1086,10 +1126,24 @@ begin
   end;
   if OVRole[PC] = 1 then
   begin
+    { a field initializer's: its constructor's guard checked it }
+    if OSites[OVSite[PC]].IsFI then Exit;
     N := OEmitNode(B, onInlGuard, vkNone, -1, -1, OVSite[PC]);
     if OFail then Exit;
     ON[N].Reg := A;
     OGuard(N, PC);
+    if OSites[OVSite[PC]].IsNew then
+    begin
+      { a constructor's this: allocated as XFastNew allocates it (the nursery full: the new instruction again) }
+      N := OEmitNode(B, onNewObj, vkNone, -1, -1, OAllocCap[PC]);
+      if OFail then Exit;
+      ON[N].Reg := A + 1;
+      OGuard(N, PC);
+      OMap[A + 1] := -1;
+      OFactShape[A + 1] := OPropShape[PC]; OFactKind[A + 1] := okPlain; OFactCap[A + 1] := OAllocCap[PC];
+      { the field initializer's closure (the guard put it in VStack) }
+      if OSites[OVSite[PC]].FiSite >= 0 then OMap[OSites[OSites[OVSite[PC]].FiSite].A] := -1;
+    end;
     Exit;
   end;
   case Op of
@@ -1145,21 +1199,34 @@ begin
         OMap[A] := -1;
         Exit;
       end;
-    opSetProp:
+    opSetProp, opDefProp, opDefField:
       begin
         X := A;
         if OMap[OB_(I)] >= 0 then Y := OMap[OB_(I)] else Y := -1 - OB_(I);
-        if OFactShape[X] = OPropShape[PC] then
-          N := OEmitNode(B, onPropSet, vkNone, -1, Y, OPropSlot[PC] or PROP_KNOWN)
-        else
+        Imm := OPropSlot[PC];
+        if OPropNew[PC] <> nil then
         begin
-          N := OEmitNode(B, onPropSet, vkNone, -1, Y, OPropSlot[PC]);
-          OFactKind[X] := 255;
+          Imm := Imm or PROP_ADD;
+          if Op <> opDefProp then Imm := Imm or PROP_ICCHK;
         end;
+        if OFactCap[X] > OPropSlot[PC] then Imm := Imm or PROP_YOUNG
+        else if Op = opDefField then Imm := Imm or PROP_EXT;
+        if OFactShape[X] = OPropShape[PC] then Imm := Imm or PROP_KNOWN else OFactKind[X] := 255;
+        N := OEmitNode(B, onPropSet, vkNone, -1, Y, Imm);
         if OFail then Exit;
         ON[N].Reg := X;
         OGuard(N, PC);
-        OFactShape[X] := OPropShape[PC];
+        if OPropNew[PC] <> nil then OFactShape[X] := OPropNew[PC] else OFactShape[X] := OPropShape[PC];
+        Exit;
+      end;
+    opNewObj:
+      begin
+        N := OEmitNode(B, onNewObj, vkNone, -1, -1, OAllocCap[PC]);
+        if OFail then Exit;
+        ON[N].Reg := A;
+        OGuard(N, PC);
+        OMap[A] := -1;
+        OPendR := A; OPendShape := OPropShape[PC]; OPendKind := okPlain; OPendCap := OAllocCap[PC];
         Exit;
       end;
     opCheckHole:
@@ -1172,7 +1239,9 @@ begin
       end;
     opGetUpv:
       begin
-        OEmitNode(B, onUpvGet, vkNone, -1, A, OB_(I));
+        { an inlined callee's: its own closure's (in its call's register, the guard checked) }
+        if OVFrame[PC] >= 0 then X := OSites[OVFrame[PC]].A else X := -1;
+        OEmitNode(B, onUpvGet, vkNone, X, A, OB_(I));
         OMap[A] := -1;
         Exit;
       end;
@@ -1360,6 +1429,14 @@ begin
   R1 := OA(I);
   R2 := OB_(I);
   { Succ[0] the jump target: taken when the test holds (TermImm 1: when it does not) }
+  if OVRole[PC] = 4 then
+  begin
+    if OMap[R1] >= 0 then begin OFail := True; Exit; end;
+    OB[B].TermTest := otbTpl;
+    OB[B].TermX := R1;
+    OB[B].TermImm := 0;
+    Exit;
+  end;
   case Op of
     opJT, opJF:
       begin
@@ -1483,7 +1560,7 @@ function OBuildSSA: Boolean;
 var Stack: array of Integer; Idx: array of Integer; NS, B, S, K, R, P, PC, N, V, Ph, L: Integer;
   Flushed: array of Integer;
   Phis: array of record B, R, N: Integer; end; NPhis: Integer; Visited: array of Boolean;
-  FactS: PShape; FactK: Byte;
+  FactS: PShape; FactK: Byte; FactC: Word;
 begin
   Result := False;
   FactS := nil; FactK := 255;
@@ -1523,6 +1600,8 @@ begin
   SetLength(OMap, ORegs);
   SetLength(OFactShape, ORegs);
   SetLength(OFactKind, ORegs);
+  SetLength(OFactCap, ORegs);
+  SetLength(OEndCap, OBCount);
   SetLength(OEndShape, OBCount);
   SetLength(OEndKind, OBCount);
   NPhis := 0;
@@ -1575,11 +1654,13 @@ begin
     begin
       Move(OEndShape[OB[B].Preds[0]][0], OFactShape[0], ORegs * SizeOf(PShape));
       Move(OEndKind[OB[B].Preds[0]][0], OFactKind[0], ORegs);
+      Move(OEndCap[OB[B].Preds[0]][0], OFactCap[0], ORegs * SizeOf(Word));
     end
     else
     begin
       FillChar(OFactShape[0], ORegs * SizeOf(PShape), 0);
       FillChar(OFactKind[0], ORegs, 255);
+      FillChar(OFactCap[0], ORegs * SizeOf(Word), 0);
     end;
     if B > 0 then
       for PC := OB[B].StartPC to OB[B].EndPC do
@@ -1587,7 +1668,11 @@ begin
         if (PC = OB[B].EndPC) and ((OB[B].Term = otExit) or (OB[B].Term = otBr) or
            (OOpOf(OIns(PC)) = opJmp)) then Break;
         OCurPC := PC;
-        if OOpOf(OIns(PC)) = opMov then begin FactS := OFactShape[OB_(OIns(PC))]; FactK := OFactKind[OB_(OIns(PC))]; end;
+        if OOpOf(OIns(PC)) = opMov then
+        begin
+          FactS := OFactShape[OB_(OIns(PC))]; FactK := OFactKind[OB_(OIns(PC))]; FactC := OFactCap[OB_(OIns(PC))];
+        end;
+        OPendR := -1;
         OInstr(B, PC, OIns(PC));
         if OFail then Exit;
         { a captured register's unboxed value is the instruction's only: VStack holds it }
@@ -1597,18 +1682,29 @@ begin
         begin
           FillChar(OFactShape[0], ORegs * SizeOf(PShape), 0);
           FillChar(OFactKind[0], ORegs, 255);
+          FillChar(OFactCap[0], ORegs * SizeOf(Word), 0);
         end
         else
         begin
           R := OWrites(OIns(PC));
-          if R >= 0 then begin OFactShape[R] := nil; OFactKind[R] := 255; end;
-          if OOpOf(OIns(PC)) = opMov then begin OFactShape[OA(OIns(PC))] := FactS; OFactKind[OA(OIns(PC))] := FactK; end;
+          if R >= 0 then begin OFactShape[R] := nil; OFactKind[R] := 255; OFactCap[R] := 0; end;
+          if OOpOf(OIns(PC)) = opGetMethod then OFactCap[OA(OIns(PC)) + 1] := 0;
+          if OOpOf(OIns(PC)) = opMov then
+          begin
+            OFactShape[OA(OIns(PC))] := FactS; OFactKind[OA(OIns(PC))] := FactK; OFactCap[OA(OIns(PC))] := FactC;
+          end;
+          if OPendR >= 0 then
+          begin
+            OFactShape[OPendR] := OPendShape; OFactKind[OPendR] := OPendKind; OFactCap[OPendR] := OPendCap;
+          end;
         end;
       end;
     SetLength(OEndShape[B], ORegs);
     SetLength(OEndKind[B], ORegs);
     Move(OFactShape[0], OEndShape[B][0], ORegs * SizeOf(PShape));
     Move(OFactKind[0], OEndKind[B][0], ORegs);
+    SetLength(OEndCap[B], ORegs);
+    Move(OFactCap[0], OEndCap[B][0], ORegs * SizeOf(Word));
     OCurPC := OB[B].EndPC;
     OTerminator(B);
     if OFail then Exit;
@@ -2513,15 +2609,62 @@ begin
           MovMR(jSP, OScratch, jAX);
         end;
         OPropReceiver(N, False);
-        OPropInline(N);
+        if (ON[N].Imm and PROP_EXT) <> 0 then
+        begin
+          TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 8);
+          OJccGuardFb(ccNE, N, ofbProp);
+        end;
+        if (ON[N].Imm and PROP_ICCHK) <> 0 then
+        begin
+          { the store's IC still adds the property this way (G2.Core's ProtoChanged forgets add transitions) }
+          MovRI(jCX, QWord(PtrUInt(@OPropIC[ON[N].PC]^.NewShape)));
+          MovRM(jCX, jCX, 0);
+          MovRI(jDX, QWord(PtrUInt(OPropNew[ON[N].PC])));
+          AluRR($39, jCX, jDX, True);
+          OJccGuardFb(ccNE, N, ofbProp);
+        end;
+        if (ON[N].Imm and PROP_YOUNG) = 0 then OPropInline(N);
+        if (ON[N].Imm and PROP_ADD) <> 0 then
+        begin
+          MovRI(jCX, QWord(PtrUInt(OPropNew[ON[N].PC])));
+          MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jCX);
+        end;
         if ON[N].Y >= 0 then MovRM(jCX, jSP, OScratch) else MovRM(jCX, jBX, (-1 - ON[N].Y) * 8);
         MovMR(jAX, PtrInt(@PObj(nil)^.Slots) + Integer(ON[N].Imm and $FFFFFFFF) * 8, jCX);
-        if ON[N].Y < 0 then
+        if (ON[N].Y < 0) and ((ON[N].Imm and PROP_YOUNG) = 0) then
         begin
           MovRR(jDX, jAX);
           MovRR(jAX, jCX);
           OBarrier;
         end;
+      end;
+    onNewObj:
+      begin
+        { a bump of the nursery's top (full: the exit, whose baseline code collects), then the object's
+          header and fields as G2.Core's NewObject writes them }
+        L := 64 + Integer(ON[N].Imm) * 8;
+        MovRFs(jAX, JitFsNurseryTop);
+        LeaRM(jCX, jAX, L);
+        MovRFs(jDX, JitFsNurseryLimit);
+        AluRR($39, jCX, jDX, True);
+        OJccGuardFb(ccA, N, OFB_EXIT);
+        MovFsR(JitFsNurseryTop, jCX);
+        MovRI(jDX, QWord(Cardinal(L)) or (QWord(ckObject) shl 32));
+        MovMR(jAX, 0, jDX);
+        MovRI(jDX, QWord(PtrUInt(OPropShape[ON[N].PC])));
+        MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jDX);
+        AluRR($31, jDX, jDX, False);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Elements), jDX);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Overflow), jDX);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Native), jDX);
+        MovRI(jDX, QWord(Cardinal(ON[N].Imm)) or (QWord(okPlain) shl 16));
+        MovMR(jAX, PtrInt(@PObj(nil)^.InlineCap), jDX);
+        MovRI(jDX, VUndefined);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Aux1), jDX);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Aux2), jDX);
+        for L := 0 to Integer(ON[N].Imm) - 1 do MovMR(jAX, PtrInt(@PObj(nil)^.Slots) + L * 8, jDX);
+        AluRR($31, jAX, jR13, True);
+        MovMR(jBX, ON[N].Reg * 8, jAX);
       end;
     onCheckHole:
       begin
@@ -2534,7 +2677,7 @@ begin
       begin
         { the closure's upvalue array (Aux2), its cell, then the register it is open on or its value (as the
           baseline's opGetUpv) }
-        MovRM(jAX, jR12, PtrInt(@PFrame(nil)^.Closure));
+        if ON[N].X >= 0 then MovRM(jAX, jBX, ON[N].X * 8) else MovRM(jAX, jR12, PtrInt(@PFrame(nil)^.Closure));
         MovRI(jDX, PTR_MASK);
         AluRR($21, jAX, jDX, True);
         MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Aux2));
@@ -2585,8 +2728,51 @@ begin
         MovRI(jCX, QWord(PtrUInt(OSites[ON[N].Imm].Tc)));
         CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Native));
         OJccGuardFb(ccNE, N, ofbProp);
+        if OSites[ON[N].Imm].IsNew then
+        begin
+          { a constructor: XFastNew's caches hold (its shape, its prototype the new object's shape's) }
+          MovRI(jCX, QWord(PtrUInt(OSites[ON[N].Imm].Tc^.CtorFnShape)));
+          CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
+          OJccGuardFb(ccNE, N, ofbProp);
+          MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+          AluRI(7, jCX, OSites[ON[N].Imm].Tc^.CtorProtoSlot, False);
+          OJccGuardFb(ccBE, N, ofbProp);
+          MovRM(jCX, jAX, PtrInt(@PObj(nil)^.Slots) + OSites[ON[N].Imm].Tc^.CtorProtoSlot * 8);
+          MovRI(jDX, QWord(PtrUInt(OSites[ON[N].Imm].Tc^.CtorRootShape)));
+          CmpRM(jCX, jDX, PtrInt(@PShape(nil)^.Proto));
+          OJccGuardFb(ccNE, N, ofbProp);
+          if OSites[ON[N].Imm].FiSite >= 0 then
+          begin
+            { its field initializer's closure (an inline slot of the constructor's shape) into its register }
+            MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+            AluRI(7, jCX, OSites[ON[N].Imm].FnCap, False);
+            OJccGuardFb(ccNE, N, ofbProp);
+            if OSites[ON[N].Imm].Tc^.FISlot < OSites[ON[N].Imm].FnCap then
+              MovRM(jCX, jAX, PtrInt(@PObj(nil)^.Slots) + OSites[ON[N].Imm].Tc^.FISlot * 8)
+            else
+            begin
+              { an overflow slot (the shape says the overflow store holds it) }
+              MovRM(jCX, jAX, PtrInt(@PObj(nil)^.Overflow));
+              MovRM(jCX, jCX, PtrInt(@PValueArray(nil)^.Data) +
+                (OSites[ON[N].Imm].Tc^.FISlot - OSites[ON[N].Imm].FnCap) * 8);
+            end;
+            MovRR(jAX, jCX);
+            AluRR($31, jAX, jR13, True);
+            MovRR(jDX, jAX);
+            ShiftRI(5, jDX, 48, True);
+            OJccGuardFb(ccNE, N, ofbProp);
+            CmpBMI(jAX, 4, ckObject);
+            OJccGuardFb(ccNE, N, ofbProp);
+            CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction);
+            OJccGuardFb(ccNE, N, ofbProp);
+            MovRI(jDX, QWord(PtrUInt(OSites[ON[N].Imm].Tc^.FieldInit)));
+            CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Native));
+            OJccGuardFb(ccNE, N, ofbProp);
+            MovMR(jBX, OSites[OSites[ON[N].Imm].FiSite].A * 8, jCX);
+          end;
+        end
         { a sloppy callee's this: an object }
-        if not OSites[ON[N].Imm].Tc^.IsStrict then
+        else if not OSites[ON[N].Imm].Tc^.IsStrict then
         begin
           MovRM(jAX, jBX, (ON[N].Reg + 1) * 8);
           AluRR($31, jAX, jR13, True);
@@ -2598,7 +2784,7 @@ begin
         end;
         { room for the callee's registers, and for its frame should it deopt }
         Mov32RM(jAX, jR12, PtrInt(@PFrame(nil)^.Base));
-        AluRI(7, jAX, STACK_MAX - (ON[N].Reg + 2 + OSites[ON[N].Imm].Tc^.MaxRegs), False);
+        AluRI(7, jAX, STACK_MAX - (ON[N].Reg + 1 + OSites[ON[N].Imm].Room), False);
         OJccGuardFb(ccGE, N, ofbProp);
         Mov32RFs(jAX, JitFsFrameTop);
         AluRI(7, jAX, FRAME_MAX - 4 - OPT_INLINE_DEPTH, False);
@@ -2922,7 +3108,7 @@ type
   POInlDesc = ^TOInlDesc;
   TOInlDesc = record
     N, NextPC: Integer;
-    Lv: array[0..OPT_INLINE_DEPTH - 1] of record A, Argc, PC: Integer; T: PFuncTemplate; end;
+    Lv: array[0..OPT_INLINE_DEPTH - 1] of record A, Argc, PC: Integer; T: PFuncTemplate; Kind: Byte; end;
   end;
 
 function OInlDesc(S: Integer): POInlDesc; forward;
@@ -3101,7 +3287,7 @@ end;
 { the region's code; nil when it cannot be made }
 function OEmit: Pointer;
 var K, J, B, Epi, RestEpi, ThrowL, G, F: Integer; Labels: array of Integer; GuardAt, ExitAt: array of Integer;
-  Code: PByte;
+  Code: PByte; L1, L2, L3, L4: Integer;
   D: Cardinal; Neg: Boolean; CC, T: Integer;
 begin
   Result := nil;
@@ -3181,6 +3367,27 @@ begin
                 OTagCmp(B);
                 CC := ccNE;
               end;
+            otbTpl:
+              begin
+                { ecx 1 unless the register holds a function of the template }
+                MovRM(jAX, jBX, OB[B].TermX * 8);
+                AluRR($31, jAX, jR13, True);
+                MovRI(jCX, 1);
+                MovRR(jDX, jAX);
+                ShiftRI(5, jDX, 48, True);
+                L1 := JccFwd(ccNE);
+                CmpBMI(jAX, 4, ckObject);
+                L2 := JccFwd(ccNE);
+                CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction);
+                L3 := JccFwd(ccNE);
+                MovRI(jDX, QWord(PtrUInt(OVTpl[OB[B].EndPC])));
+                CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Native));
+                L4 := JccFwd(ccNE);
+                AluRR($31, jCX, jCX, False);
+                PatchHere(L1); PatchHere(L2); PatchHere(L3); PatchHere(L4);
+                AluRR($85, jCX, jCX, False);
+                CC := ccNE;
+              end;
           else
             begin
               { a tagged register's undefined / null test }
@@ -3247,10 +3454,11 @@ begin
     if G >= 0 then J := G else J := ONCount + (-1 - G);
     if OGJ[K].Fb <> 0 then
     begin
-      { a stub of its own: this jump's feedback }
+      { a stub of its own: this jump's feedback (a plain exit: none) }
       D := Cardinal(JitLen - (OGJ[K].At + 4));
       PCardinal(@JitBuf[OGJ[K].At])^ := D;
-      OLeave(ON[G].FS, ON[G].FSN, ON[G].PC, OGJ[K].Fb, Epi);
+      if OGJ[K].Fb = OFB_EXIT then OLeave(ON[G].FS, ON[G].FSN, ON[G].PC, 0, Epi)
+      else OLeave(ON[G].FS, ON[G].FSN, ON[G].PC, OGJ[K].Fb, Epi);
       Continue;
     end;
     if GuardAt[J] < 0 then
@@ -3311,11 +3519,13 @@ begin
   if OptLog and (GetEnvironmentVariable('G2_OPTDUMP') <> '') then OptDump(Code);
 end;
 
-function OInlEligible(T: PFuncTemplate): Boolean; forward;
+function OInlEligible(T: PFuncTemplate; ForNew: Boolean): Boolean; forward;
+function OInlOk(Op: TOp): Boolean; forward;
+function OptName(T: PFuncTemplate): string; forward;
 
 { what register R holds at PC K of template T as its inline caches tell, with no frame (VUndefined unknown): a
   move's source, a cached global, a cached property of such a value, a prototype's cached property }
-function OStaticValue(T: PFuncTemplate; K, R, Depth: Integer): TValue;
+function OStaticValue(T: PFuncTemplate; Clo: PObj; K, R, Depth: Integer): TValue;
 var P, E, D: Integer; I: QWord; Op: TOp; IC: PPropIC; En: PICEntry; O: PObj; V, Recv: TValue;
 begin
   Result := VUndefined;
@@ -3331,7 +3541,16 @@ begin
   end;
   if P < 0 then Exit;
   case Op of
-    opMov: Result := OStaticValue(T, P, OB_(I), Depth + 1);
+    opMov: Result := OStaticValue(T, Clo, P, OB_(I), Depth + 1);
+    opGetUpv:
+      begin
+        { the closure's upvalue (when the closure is known): open, its register's value }
+        if (Clo = nil) or not IsPtr(Clo^.Aux2) then Exit;
+        V := PValueArray(PtrOf(Clo^.Aux2))^.Data[OB_(I)];
+        if not IsPtr(V) then Exit;
+        if PUpval(PtrOf(V))^.StackIndex >= 0 then Result := VStack[PUpval(PtrOf(V))^.StackIndex]
+        else Result := PUpval(PtrOf(V))^.Value;
+      end;
     opGetGlobal:
       begin
         IC := @T^.ICs[OCU(I)];
@@ -3350,7 +3569,7 @@ begin
           En := OICEntry(IC, E);
           if En^.Depth = 0 then
           begin
-            if Recv = VUndefined then Recv := OStaticValue(T, P, OB_(I), Depth + 1);
+            if Recv = VUndefined then Recv := OStaticValue(T, Clo, P, OB_(I), Depth + 1);
             if not IsObject(Recv) or (ObjOf(Recv)^.Shape <> En^.Shape) then Exit(VUndefined);
             V := GetSlot(ObjOf(Recv), En^.Slot);
           end
@@ -3373,24 +3592,27 @@ end;
 
 { whether the call at PC K of template T leaves no call behind when the tier takes it: a Math native computed
   inline, or a callee that can be inlined whose own calls do the same (Depth inlined callers) }
-function OCallGoes(T: PFuncTemplate; K, Depth: Integer): Boolean;
+function OCallGoes(T: PFuncTemplate; Clo: PObj; K, Depth: Integer): Boolean;
 var V: TValue; O: PObj; R: Integer; C: PFuncTemplate;
 begin
   Result := False;
-  V := OStaticValue(T, K, OA(T^.Code[K]), 0);
+  V := OStaticValue(T, Clo, K, OA(T^.Code[K]), 0);
   if not IsObject(V) then Exit;
   O := ObjOf(V);
   if O^.OKind = okNative then
   begin
     for R := 0 to High(OptMathFns) do
-      if (OptMathFns[R] <> nil) and (O^.Native = OptMathFns[R]) and (OB_(T^.Code[K]) = 1) then Exit(True);
+      if (OptMathFns[R] <> nil) and (O^.Native = OptMathFns[R]) and (OB_(T^.Code[K]) = 1) and
+         (OOpOf(T^.Code[K]) = opCall) then Exit(True);
     Exit;
   end;
-  if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) or (Depth >= OPT_INLINE_DEPTH) then Exit;
+  if (O^.OKind <> okFunction) or (((O^.OFlags and 1) <> 0) and (OOpOf(T^.Code[K]) <> opNew)) or
+     (Depth >= OPT_INLINE_DEPTH) then Exit;
   C := PFuncTemplate(O^.Native);
-  if (C = OT) or (C = T) or not OInlEligible(C) then Exit;
+  if (C = OT) or (C = T) or not OInlEligible(C, OOpOf(T^.Code[K]) = opNew) then Exit;
+  if (OOpOf(T^.Code[K]) = opNew) and (Pointer(O^.Shape) <> C^.CtorFnShape) then Exit;
   for R := 0 to C^.CodeLen - 1 do
-    if (OOpOf(C^.Code[R]) = opCall) and not OCallGoes(C, R, Depth + 1) then Exit;
+    if (OOpOf(C^.Code[R]) in [opCall, opNew]) and not OCallGoes(C, O, R, Depth + 1) then Exit;
   Result := True;
 end;
 
@@ -3398,7 +3620,7 @@ end;
   (an embedded call clobbers every register the region holds values in) }
 function OQuickCall(K: Integer): Integer;
 begin
-  if OCallGoes(OT, K, 0) then Result := 2 else Result := -2;
+  if OCallGoes(OT, OQClo, K, 0) then Result := 2 else Result := -2;
 end;
 
 { a first estimate before any analysis (most regions fail it): the instructions reachable from PC, the numeric
@@ -3430,7 +3652,9 @@ begin
         opGetProp, opSetProp, opGetLength, opGetMethod: Inc(Props);
         { an embedded call clobbers every register the region holds values in; an inlined one gains its call }
         opCall: begin R := OQuickCall(P); if R > 0 then Inc(Num, R) else Inc(Other, -R); end;
-        opNew: Inc(Other, 2);
+        opNew: begin R := OQuickCall(P); if R > 0 then Inc(Num, R) else Inc(Other, -R); end;
+        opNewObj: Inc(Num);
+        opDefProp: ;
       else Inc(Other);
       end;
       if Op in [opRet, opRetUndef, opThrow, opThrowConst] then Break;
@@ -3467,6 +3691,7 @@ function OptPromising(T: PFuncTemplate): Boolean;
 var K, Tg: Integer; I: QWord;
 begin
   OT := T;
+  OQClo := nil;
   if T^.CodeLen = 0 then Exit(False);
   if OQuickProfitable(0) then Exit(True);
   for K := 0 to T^.CodeLen - 1 do
@@ -3485,9 +3710,9 @@ end;
   branches) at least its embedded instructions and unboxes, which cost about what the baseline's do plus their
   flushes; a region that is mostly the baseline's instructions is left to the baseline }
 function OProfitable: Boolean;
-var B, K, N, Gain, Cost: Integer;
+var B, K, N, Gain, Cost, Calls: Integer; Loop: Boolean;
 begin
-  Gain := 0; Cost := 0;
+  Gain := 0; Cost := 0; Loop := False; Calls := 0;
   for B := 0 to OBCount - 1 do
   begin
     for K := 0 to High(OB[B].Nodes) do
@@ -3497,14 +3722,27 @@ begin
         onAddI, onSubI, onMulI, onModI, onNegI, onAndI, onOrI, onXorI, onShlI, onShrI, onUShrI, onNotI,
         onAddD, onSubD, onMulD, onDivD, onNegD, onCmpI, onCmpD, onNotB, onTAGet, onTASet, onArrGet, onArrSet, onLength, onMath: Inc(Gain);
         onUnbox, onFlush: Inc(Cost);
-        { an inlined call: its call and return gone }
-        onInlGuard: Inc(Gain, 2);
+        { an inlined call: its call and return gone; an allocation or add without the baseline's helper }
+        onInlGuard, onNewObj: Inc(Gain, 2);
+        onPropSet: if (ON[N].Imm and PROP_ADD) <> 0 then Inc(Gain);
         { an embedded call clobbers every register the region holds values in (they move to r15 or slots) }
-        onEmbed: if OOpOf(OIns(ON[N].PC)) in [opCall, opNew, opGetMethod] then Inc(Cost, 2) else Inc(Cost);
+        onEmbed:
+          if OOpOf(OIns(ON[N].PC)) in [opCall, opNew, opGetMethod] then
+          begin
+            Inc(Cost, 2);
+            if OOpOf(OIns(ON[N].PC)) <> opGetMethod then Inc(Calls);
+          end
+          else Inc(Cost);
       end;
     end;
     if (OB[B].Term = otBr) and (OB[B].TermTest in [otbCmpI, otbCmpD, otbTruthyI, otbTruthyD, otbTruthyB]) then Inc(Gain);
+    if OB[B].Term <> otExit then
+      for K := 0 to OB[B].NSucc - 1 do
+        if OB[OB[B].Succ[K]].RPO <= OB[B].RPO then Loop := True;
   end;
+  { a region without a loop that makes calls: its entry and the moves around each call are paid every time, so
+    it must gain twice what it costs }
+  if not Loop and (Calls > 0) then Cost := Cost * 2;
   Result := (Gain > 0) and (Gain >= Cost);
 end;
 
@@ -3624,9 +3862,16 @@ begin
       end;
     opGetUpv:
       begin
-        { the frame's closure's upvalue now (open: its register's value) }
-        if not IsObject(Fr^.Closure) or not IsPtr(ObjOf(Fr^.Closure)^.Aux2) then Exit;
-        V := PValueArray(PtrOf(ObjOf(Fr^.Closure)^.Aux2))^.Data[OB_(I)];
+        { the frame's closure's upvalue now (open: its register's value); an inlined callee's closure as its call
+          site speculates it }
+        if OVFrame[P] >= 0 then
+        begin
+          if OSites[OVFrame[P]].VCall < 0 then Exit;
+          V := OSpecValue(Fr, OSites[OVFrame[P]].VCall, OSites[OVFrame[P]].A, Depth + 1);
+        end
+        else V := Fr^.Closure;
+        if not IsObject(V) or not IsPtr(ObjOf(V)^.Aux2) then Exit;
+        V := PValueArray(PtrOf(ObjOf(V)^.Aux2))^.Data[OB_(I)];
         if not IsPtr(V) then Exit;
         if PUpval(PtrOf(V))^.StackIndex >= 0 then Result := VStack[PUpval(PtrOf(V))^.StackIndex]
         else Result := PUpval(PtrOf(V))^.Value;
@@ -3671,7 +3916,7 @@ begin
     opNeg, opBitNot, opNot, opToNum, opToNumeric, opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe,
     opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe, opJNGt, opJNGe,
     opJNSEq, opJSEq, opGetProp, opSetProp, opGetElem, opSetElem, opGetLength, opGetGlobal, opGetMethod, opRet,
-    opRetUndef, opCall: Result := True;
+    opRetUndef, opCall, opNew, opNewObj, opDefProp, opDefField, opGetUpv, opCheckHole: Result := True;
   else Result := False;
   end;
 end;
@@ -3687,10 +3932,13 @@ begin
     opShlI, opShrI, opUShrI, opGetProp, opGetLength, opSetProp, opGetMethod: Result := OMk(Op, A + Off, B + Off, CU);
     opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr, opEq, opNe, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opGetElem, opSetElem: Result := OMk(Op, A + Off, B + Off, CU + Off);
-    opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opLoadHole, opGetGlobal, opCall:
+    opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opLoadHole, opGetGlobal, opCall, opNew, opNewObj,
+    opGetUpv:
       Result := OMk(Op, A + Off, B, CU);
+    opDefProp, opDefField: Result := OMk(Op, A + Off, B + Off, CU);
     opJmp: Result := OMk(Op, A, B, 2 * C + 1);
     opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef: Result := OMk(Op, A + Off, B, 2 * C + 1);
+    opCheckHole: Result := OMk(Op, A + Off, B, CU);
     opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq: Result := OMk(Op, A + Off, B + Off, 2 * C + 1);
   else Result := I;
   end;
@@ -3720,13 +3968,31 @@ end;
 
 { whether template T can be inlined at all: a plain function small enough whose every instruction the tier
   takes natively }
-function OInlEligible(T: PFuncTemplate): Boolean;
+function OInlEligible(T: PFuncTemplate; ForNew: Boolean): Boolean;
 var Q: Integer;
 begin
   Result := False;
   if (T^.CodeLen = 0) or (T^.CodeLen > OPT_INLINE_MAX) or not T^.FastCall or T^.IsGenerator or
-     T^.IsAsync or T^.IsArrow or T^.IsClassCtor or T^.IsDerived or not T^.NoCaptures or not T^.NoHandlers or
-     (T^.ArgsReg >= 0) or (T^.RestReg >= 0) or T^.TopLevel or (T^.FieldInit <> nil) then Exit;
+     T^.IsAsync or T^.IsArrow or T^.IsDerived or not T^.NoCaptures or not T^.NoHandlers or
+     (T^.ArgsReg >= 0) or (T^.RestReg >= 0) or T^.TopLevel then Exit;
+  if (T^.FieldInit <> nil) and not ForNew then Exit;
+  if ForNew and (T^.FieldInit <> nil) then
+  begin
+    { a field initializer inlined too: XPushFieldInit's cache of where the constructor holds it, no calls }
+    if (T^.FIShape <> T^.CtorFnShape) or (T^.FISlot < 0) or (T^.FieldInit = T) or
+       not OInlEligible(T^.FieldInit, False) then Exit;
+    for Q := 0 to T^.FieldInit^.CodeLen - 1 do
+      if InsOp(T^.FieldInit^.Code[Q]) in [opCall, opNew] then Exit;
+  end;
+  if ForNew then
+  begin
+    { a base constructor whose new object XFastNew's caches describe, returning that object }
+    if (T^.IsMethod and not T^.IsClassCtor) or (T^.CtorRootShape = nil) or (T^.CtorFnShape = nil) or
+       PShape(T^.CtorRootShape)^.IsDict or (Max(4, T^.ExpectedProps) > 16) then Exit;
+    for Q := 0 to T^.CodeLen - 1 do
+      if (InsOp(T^.Code[Q]) = opRet) and (InsA(T^.Code[Q]) <> 0) then Exit;
+  end
+  else if T^.IsClassCtor then Exit;
   for Q := 0 to T^.CodeLen - 1 do
     if not OInlOk(InsOp(T^.Code[Q])) then Exit;
   Result := True;
@@ -3735,19 +4001,34 @@ end;
 { the template the call at virtual PC K (made by inlined site Par's callee, -1 the template's own code) calls when
   it can be inlined there (nil none): the target OSpecValue names, a plain function small enough whose every
   instruction the tier takes natively, not one of the calls it is inlined in }
-function OInlTarget(Fr: PFrame; K, Par: Integer): PFuncTemplate;
-var I: QWord; A, Q, P: Integer; V: TValue; O: PObj; T: PFuncTemplate;
+{ the template the call at virtual PC K (made by inlined site Par's callee, -1 the template's own code) runs when
+  its callee is V and it can be inlined there (nil none) }
+function OInlTargetOf(K, Par: Integer; V: TValue): PFuncTemplate;
+var I: QWord; A, P: Integer; O: PObj; T: PFuncTemplate;
 begin
   Result := nil;
   I := OIns(K);
   A := OA(I);
-  if (OFb(K) and ofbProp) <> 0 then Exit;
-  V := OSpecValue(Fr, K, A, 0);
   if not IsObject(V) then Exit;
   O := ObjOf(V);
-  if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then Exit;
+  { (a class constructor only through new) }
+  if (O^.OKind <> okFunction) or (((O^.OFlags and 1) <> 0) and (OOpOf(I) <> opNew)) then Exit;
   T := PFuncTemplate(O^.Native);
-  if (T = OT) or not OInlEligible(T) then Exit;
+  if (T = OT) or not OInlEligible(T, OOpOf(I) = opNew) or ((OOpOf(I) = opNew) and (OptAlloc = 0)) then Exit;
+  if OOpOf(I) = opNew then
+  begin
+    { the constructor's prototype as its caches have it, in an inline slot }
+    if (Pointer(O^.Shape) <> T^.CtorFnShape) or (T^.CtorProtoSlot < 0) or (T^.CtorProtoSlot >= O^.InlineCap) or
+       (PShape(T^.CtorRootShape)^.Proto <> GetSlot(O, T^.CtorProtoSlot)) then Exit;
+    { its field initializer's closure where XPushFieldInit's cache says, in an inline slot }
+    if T^.FieldInit <> nil then
+    begin
+      if (T^.FISlot >= O^.InlineCap) and
+         ((O^.Overflow = nil) or (T^.FISlot - O^.InlineCap >= Integer(O^.Overflow^.Len))) then Exit;
+      V := GetSlot(O, T^.FISlot);
+      if not IsObject(V) or (ObjOf(V)^.OKind <> okFunction) or (ObjOf(V)^.Native <> Pointer(T^.FieldInit)) then Exit;
+    end;
+  end;
   P := Par;
   while P >= 0 do
   begin
@@ -3755,9 +4036,51 @@ begin
     P := OSites[P].Parent;
   end;
   { a sloppy callee given no this would get the global object }
-  if not T^.IsStrict and ((OCU(I) and 1) <> 0) then Exit;
+  if (OOpOf(I) = opCall) and not T^.IsStrict and ((OCU(I) and 1) <> 0) then Exit;
   if A + 1 + T^.MaxRegs > 30000 then Exit;
   Result := T;
+end;
+
+function OInlTarget(Fr: PFrame; K, Par: Integer): PFuncTemplate;
+begin
+  Result := nil;
+  if (OFb(K) and ofbProp) <> 0 then Exit;
+  Result := OInlTargetOf(K, Par, OSpecValue(Fr, K, OA(OIns(K)), 0));
+end;
+
+{ the templates a method call at virtual PC K runs as its method's polymorphic inline cache tells, each from a
+  prototype and inlinable (up to three, N 0 when the cache is not polymorphic or names none) }
+procedure OInlTargets(K, Par: Integer; var Ts: array of PFuncTemplate; out N: Integer);
+var W, E, D, J: Integer; I: QWord; IC: PPropIC; En: PICEntry; V: TValue; T: PFuncTemplate; Dup: Boolean;
+begin
+  N := 0;
+  { (a failed guard here leaves its target in the cache: the dispatch takes it) }
+  if OOpOf(OIns(K)) <> opCall then Exit;
+  W := OWriterOf(K, OA(OIns(K)));
+  if W < 0 then Exit;
+  I := OIns(W);
+  if not (OOpOf(I) in [opGetMethod, opGetProp]) or ((OOpOf(I) = opGetMethod) and (OA(I) <> OA(OIns(K)))) then Exit;
+  IC := @OVTpl[W]^.ICs[OCU(I)];
+  if (IC^.PolyCount < 2) or (IC^.PolyCount > 4) or (IC^.More = nil) then Exit;
+  for E := 0 to IC^.PolyCount - 1 do
+  begin
+    En := OICEntry(IC, E);
+    if (En^.Depth = 0) or not OEntryOk(En) then Continue;
+    V := En^.Shape^.Proto;
+    Dup := False;
+    for D := 0 to En^.Depth - 1 do
+    begin
+      if not IsObject(V) or (ObjOf(V)^.Shape <> En^.Holder[D]) then begin Dup := True; Break; end;
+      if D < En^.Depth - 1 then V := ObjOf(V)^.Shape^.Proto;
+    end;
+    if Dup then Continue;
+    T := OInlTargetOf(K, Par, GetSlot(ObjOf(V), En^.Slot));
+    if T = nil then Continue;
+    for J := 0 to N - 1 do if Ts[J] = T then Dup := True;
+    if Dup or (N > High(Ts)) then Continue;
+    Ts[N] := T;
+    Inc(N);
+  end;
 end;
 
 { whether site S's callee and every inlined callee that called it are strict }
@@ -3791,14 +4114,77 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
     Inc(OVLen);
   end;
   { the call at virtual PC VC (made by site Par's callee) inlined: True, or False with nothing added }
-  function InlineAt(VC, Par: Integer): Boolean;
-  var Q, R, S, Off, Argc, Flag, Bb, V, Len0, Sites0, Total0, FbBase, Ret: Integer; I: QWord; T: PFuncTemplate;
-    Sig0: PtrUInt;
+  function InlineAt(VC, Par: Integer): Boolean; forward;
+  { the call at virtual PC VC (made by site Par's callee) inlined as a call of T: its site S, or False with nothing
+    added }
+  function InlineOne(VC, Par: Integer; T: PFuncTemplate; out S: Integer): Boolean;
+  var R, S2, Off, Argc, Flag, Len0, Sites0, Total0, FbBase, FiFb, AFi, Ret, NFix, J: Integer; I: QWord;
+    FI: PFuncTemplate; Sig0: PtrUInt; Fix: array of Integer;
+    { site S's callee T's code at Off (two virtual instructions each): a return a move into register Off - 1 (a
+      constructor's: its this) and a jump to Ret (-1: to a place patched later, listed in Fix), then the calls
+      it makes inlined in turn (False: one that must be cannot) }
+    function Body(S: Integer; T: PFuncTemplate; Off, Ret, FbBase: Integer): Boolean;
+    var Q, Bb, V: Integer; I: QWord;
+      procedure Back(Q, V: Integer);
+      begin
+        if Ret >= 0 then Add(OMk(opJmp, 0, 0, Ret - (V + 2)), T, Q, Buf + FbBase + Q, 2, S, S)
+        else
+        begin
+          if NFix >= Length(Fix) then SetLength(Fix, NFix * 2 + 8);
+          Fix[NFix] := OVLen;
+          Inc(NFix);
+          Add(OMk(opJmp, 0, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+        end;
+      end;
+    begin
+      Result := False;
+      Bb := OVLen;
+      for Q := 0 to T^.CodeLen - 1 do
+      begin
+        I := T^.Code[Q];
+        V := Bb + 2 * Q;
+        case OOpOf(I) of
+          opRet:
+            begin
+              Add(OMk(opMov, Off - 1, OA(I) + Off, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+              Back(Q, V);
+            end;
+          opRetUndef:
+            begin
+              if OSites[S].IsNew then Add(OMk(opMov, Off - 1, Off, 0), T, Q, Buf + FbBase + Q, 2, S, S)
+              else Add(OMk(opLoadUndef, Off - 1, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+              Back(Q, V);
+            end;
+        else
+          begin
+            Add(ORemap(I, Off), T, Q, Buf + FbBase + Q, 2, S, S);
+            Add(OMk(opNop, 0, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+          end;
+        end;
+      end;
+      if Off + T^.MaxRegs > ORegs then ORegs := Off + T^.MaxRegs;
+      { the callee's calls: each inlined in turn, or a Math native's, or (every inlined frame strict: no caller or
+        arguments of theirs to see) the baseline's call embedded }
+      for Q := 0 to T^.CodeLen - 1 do
+        if (OOpOf(T^.Code[Q]) in [opCall, opNew]) and (OMathIndex(Fr, Bb + 2 * Q) < 0) and
+           not InlineAt(Bb + 2 * Q, S) and not OChainStrict(S) then Exit;
+      Result := True;
+    end;
+    procedure NewSite(out S: Integer);
+    begin
+      if OSiteCount >= Length(OSites) then SetLength(OSites, OSiteCount * 2 + 8);
+      S := OSiteCount;
+      Inc(OSiteCount);
+      OSites[S].D := nil; OSites[S].IsNew := False; OSites[S].IsFI := False; OSites[S].FiSite := -1;
+    end;
+    procedure Undo;
+    begin
+      OVLen := Len0; OSiteCount := Sites0; Total := Total0; Sig := Sig0;
+    end;
   begin
     Result := False;
-    if (Par >= 0) and (OSites[Par].Depth + 1 >= OPT_INLINE_DEPTH) then Exit;
-    T := OInlTarget(Fr, VC, Par);
-    if T = nil then Exit;
+    NFix := 0;
+    S := -1;
     if Total + T^.CodeLen + 1 > OPT_INLINE_TOTAL then Exit;
     Len0 := OVLen; Sites0 := OSiteCount; Total0 := Total; Sig0 := Sig;
     FbBase := Total;
@@ -3806,15 +4192,14 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
     Sig := Sig * 31 + PtrUInt(T) + PtrUInt(FbBase);
     I := OIns(VC);
     Argc := OB_(I);
-    Flag := OCU(I) and 1;
+    if OOpOf(I) = opNew then Flag := 0 else Flag := OCU(I) and 1;
     Off := OA(I) + 1;
     if Par < 0 then Ret := VC + 1 else Ret := VC + 2;
-    if OSiteCount >= Length(OSites) then SetLength(OSites, OSiteCount * 2 + 8);
-    S := OSiteCount;
-    Inc(OSiteCount);
+    NewSite(S);
     OSites[S].VCall := VC; OSites[S].A := OA(I); OSites[S].Argc := Argc; OSites[S].Flag := Flag;
     OSites[S].Tc := T; OSites[S].Parent := Par; OSites[S].Q := OVPC[VC]; OSites[S].Ret := Ret;
-    OSites[S].D := nil;
+    OSites[S].IsNew := OOpOf(I) = opNew;
+    OSites[S].Room := 1 + T^.MaxRegs;
     if Par < 0 then begin OSites[S].K := VC; OSites[S].Depth := 0; end
     else begin OSites[S].K := OSites[Par].K; OSites[S].Depth := OSites[Par].Depth + 1; end;
     OSites[S].Guard := OVLen;
@@ -3823,41 +4208,83 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
     if Flag = 1 then Add(OMk(opLoadUndef, Off, 0, 0), T, 0, Buf + FbBase, 2, S, S);
     for R := 1 + Min(Argc, T^.NumParams) to T^.MaxRegs - 1 do
       Add(OMk(opLoadUndef, Off + R, 0, 0), T, 0, Buf + FbBase, 2, S, S);
-    Bb := OVLen;
-    for Q := 0 to T^.CodeLen - 1 do
+    if OSites[S].IsNew and (T^.FieldInit <> nil) then
     begin
-      I := T^.Code[Q];
-      V := Bb + 2 * Q;
-      case OOpOf(I) of
-        opRet:
-          begin
-            Add(OMk(opMov, Off - 1, OA(I) + Off, 0), T, Q, Buf + FbBase + Q, 2, S, S);
-            Add(OMk(opJmp, 0, 0, Ret - (V + 2)), T, Q, Buf + FbBase + Q, 2, S, S);
-          end;
-        opRetUndef:
-          begin
-            Add(OMk(opLoadUndef, Off - 1, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
-            Add(OMk(opJmp, 0, 0, Ret - (V + 2)), T, Q, Buf + FbBase + Q, 2, S, S);
-          end;
-      else
-        begin
-          Add(ORemap(I, Off), T, Q, Buf + FbBase + Q, 2, S, S);
-          Add(OMk(opNop, 0, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
-        end;
-      end;
-    end;
-    if Off + T^.MaxRegs > ORegs then ORegs := Off + T^.MaxRegs;
-    { the callee's calls: each inlined in turn, or a Math native's, or (every inlined frame strict: no caller or
-      arguments of theirs to see) the baseline's call embedded }
-    for Q := 0 to T^.CodeLen - 1 do
-      if (OOpOf(T^.Code[Q]) = opCall) and (OMathIndex(Fr, Bb + 2 * Q) < 0) and not InlineAt(Bb + 2 * Q, S) and
-         not OChainStrict(S) then
+      { (the constructor object's inline capacity: where its field initializer's slot is) }
+      OSites[S].FnCap := ObjOf(OSpecValue(Fr, VC, OA(OIns(VC)), 0))^.InlineCap;
+      { the class's field initializer first, on this (as XPushFieldInit runs it: a frame of its own above the
+        constructor's registers and arguments, the constructor at PC 0 after it); its closure put in register
+        AFi by the constructor's guard }
+      FI := T^.FieldInit;
+      if (OSites[S].Depth + 1 >= OPT_INLINE_DEPTH) or (Total + FI^.CodeLen + 1 > OPT_INLINE_TOTAL) then
       begin
-        OVLen := Len0; OSiteCount := Sites0; Total := Total0; Sig := Sig0;
+        Undo;
         Exit;
       end;
-    { the call: a jump to the guard }
-    OVCode[VC] := OMk(opJmp, 0, 0, OSites[S].Guard - (VC + 1));
+      FiFb := Total;
+      Inc(Total, FI^.CodeLen + 1);
+      Sig := Sig * 31 + PtrUInt(FI) + PtrUInt(FiFb);
+      AFi := Off + Max(T^.MaxRegs, Argc + 1);
+      OSites[S].Room := (AFi - OSites[S].A) + 1 + FI^.MaxRegs;
+      NewSite(S2);
+      OSites[S2].VCall := -1; OSites[S2].A := AFi; OSites[S2].Argc := 0; OSites[S2].Flag := 0;
+      OSites[S2].Tc := FI; OSites[S2].Parent := S; OSites[S2].Q := -1; OSites[S2].Ret := -1;
+      OSites[S2].IsFI := True; OSites[S2].Room := 1 + FI^.MaxRegs;
+      OSites[S2].K := OSites[S].K; OSites[S2].Depth := OSites[S].Depth + 1;
+      OSites[S2].Guard := OVLen;
+      OSites[S].FiSite := S2;
+      Add(OMk(opNop, 0, 0, 0), T, 0, Buf + FbBase, 1, S2, S);
+      Add(OMk(opMov, AFi + 1, Off, 0), FI, 0, Buf + FiFb, 2, S2, S2);
+      for R := 1 to FI^.MaxRegs - 1 do Add(OMk(opLoadUndef, AFi + 1 + R, 0, 0), FI, 0, Buf + FiFb, 2, S2, S2);
+      if not Body(S2, FI, AFi + 1, -1, FiFb) then begin Undo; Exit; end;
+      { its returns: to the constructor's code }
+      for J := 0 to NFix - 1 do OVCode[Fix[J]] := OMk(opJmp, 0, 0, OVLen - (Fix[J] + 1));
+    end;
+    if not Body(S, T, Off, Ret, FbBase) then begin Undo; Exit; end;
+    Result := True;
+  end;
+  { the call at virtual PC VC (made by site Par's callee) inlined: True, or False with nothing added. A polymorphic
+    method call: each of its targets' code after a dispatch on the callee's template (the last one's guard the
+    deopt) }
+  function InlineAt(VC, Par: Integer): Boolean;
+  var Ts: array[0..2] of PFuncTemplate; N, J, S, First, D, Len0, Sites0, Total0: Integer; T: PFuncTemplate;
+    Sig0: PtrUInt;
+  begin
+    Result := False;
+    if (Par >= 0) and (OSites[Par].Depth + 1 >= OPT_INLINE_DEPTH) then Exit;
+    OInlTargets(VC, Par, Ts, N);
+    { (the fallback call embedded in an inlined callee: only when no caller or arguments of theirs can be seen) }
+    if (Par >= 0) and not OChainStrict(Par) then N := 0;
+    First := OVLen;
+    if N = 0 then
+    begin
+      T := OInlTarget(Fr, VC, Par);
+      if (T = nil) or not InlineOne(VC, Par, T, S) then Exit;
+    end
+    else
+    begin
+      { each target's code after a test of the callee's template, then any other callee: the baseline's call
+        (a copy of the call, role 5, embedded) }
+      Len0 := OVLen; Sites0 := OSiteCount; Total0 := Total; Sig0 := Sig;
+      S := -1;
+      for J := 0 to N - 1 do
+      begin
+        D := OVLen;
+        Add(OMk(opJNotUndef, OA(OIns(VC)), 0, 0), Ts[J], OVPC[VC], OVFb[VC], 4, -1, OVFrame[VC]);
+        if not InlineOne(VC, Par, Ts[J], S) then
+        begin
+          OVLen := Len0; OSiteCount := Sites0; Total := Total0; Sig := Sig0;
+          Exit;
+        end;
+        { not this target: the next one }
+        OVCode[D] := OMk(opJNotUndef, OA(OIns(VC)), 0, OVLen - (D + 1));
+      end;
+      Add(OIns(VC), OVTpl[VC], OVPC[VC], OVFb[VC], 5, -1, OVFrame[VC]);
+      if Par < 0 then Add(OMk(opJmp, 0, 0, (VC + 1) - (OVLen + 1)), OVTpl[VC], OVPC[VC], OVFb[VC], 5, -1, OVFrame[VC])
+      else Add(OMk(opJmp, 0, 0, (VC + 2) - (OVLen + 1)), OVTpl[VC], OVPC[VC], OVFb[VC], 5, -1, OVFrame[VC]);
+    end;
+    { the call: a jump to the guard (or the dispatch) }
+    OVCode[VC] := OMk(opJmp, 0, 0, First - (VC + 1));
     OVRole[VC] := 3;
     OVSite[VC] := S;
     Result := True;
@@ -3865,6 +4292,8 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
 begin
   if OptInline < 0 then
     if GetEnvironmentVariable('G2_OPTINLINE') = '0' then OptInline := 0 else OptInline := 1;
+  if OptAlloc < 0 then
+    if GetEnvironmentVariable('G2_OPTALLOC') = '0' then OptAlloc := 0 else OptAlloc := 1;
   OVLen := 0;
   OSiteCount := 0;
   for K := 0 to OT^.CodeLen do
@@ -3873,7 +4302,7 @@ begin
   if OptInline = 1 then
     for K := 0 to OT^.CodeLen - 1 do
     begin
-      if (OOpOf(OT^.Code[K]) <> opCall) or OInlBan[K] then Continue;
+      if not (OOpOf(OT^.Code[K]) in [opCall, opNew]) or OInlBan[K] then Continue;
       { the callees' feedback here: bytes per callee PC, kept across compilations while the same callees are
         inlined (Sig) }
       if Length(OInfo^.InlFb) < OT^.CodeLen + 1 then
@@ -3919,6 +4348,7 @@ begin
     Result^.Lv[J].A := OSites[P].A;
     Result^.Lv[J].Argc := OSites[P].Argc;
     Result^.Lv[J].T := OSites[P].Tc;
+    Result^.Lv[J].Kind := Ord(OSites[P].IsNew);
     if J < N - 1 then Result^.Lv[J].PC := OSites[Ch[N - 2 - J]].Q + 1 else Result^.Lv[J].PC := 0;
   end;
   OSites[S].D := Result;
@@ -3939,13 +4369,14 @@ begin
     Base := Fr^.Base + D^.Lv[J].A + 1;
     NF := @Frames[FrameTop];
     NF^.Closure := VStack[Base - 1];
-    NF^.NewTarget := VUndefined;
+    { a constructor's frame (Kind 1): its new.target the constructor }
+    if D^.Lv[J].Kind = 1 then NF^.NewTarget := NF^.Closure else NF^.NewTarget := VUndefined;
     NF^.Tpl := D^.Lv[J].T;
     NF^.Base := Base;
     if J = D^.N - 1 then NF^.PC := Q else NF^.PC := D^.Lv[J].PC;
     NF^.RetIdx := Base - 1;
     NF^.Argc := D^.Lv[J].Argc;
-    NF^.Kind := 0;
+    NF^.Kind := D^.Lv[J].Kind;
     Inc(FrameTop);
   end;
   StackTop := Base + D^.Lv[D^.N - 1].T^.MaxRegs;
@@ -3971,6 +4402,49 @@ begin
       WriteStr(S, OOpOf(OIns(K)));
       Result := Result + ' ' + S + '@' + IntToStr(K);
     end;
+end;
+
+{ NewObj at virtual PC K allocated inline (OAllocCap), the DefProps of its literal after it (straight-line code of
+  its frame, on its register) native (ODefSlot, ODefShape, ODefNew) }
+procedure OAllocSpec(K: Integer);
+var Cap, A, P, CI: Integer; I: QWord; Sh, NS: PShape; Key: PStr;
+begin
+  Cap := Max(4, OCU(OIns(K)));
+  if (Cap > 16) or (64 + Cap * 8 > (NurseryLimit - NurseryStart) div 16) then Exit;
+  Sh := RootShapeFor(ObjectProto);
+  if (Sh = nil) or Sh^.IsDict then Exit;
+  OAllocCap[K] := Cap;
+  ODefShape[K] := Sh;
+  A := OA(OIns(K));
+  P := K + 1;
+  while (P < OVLen) and (P - K < 96) do
+  begin
+    I := OIns(P);
+    if (OVFrame[P] <> OVFrame[K]) or (OVRole[P] in [1, 3]) then Exit;
+    if (OOpOf(I) = opJmp) or OIsCondJump(OOpOf(I)) then Exit;
+    if (OOpOf(I) = opDefProp) and (OA(I) = A) then
+    begin
+      if not IsString(OVTpl[P]^.Consts[OCU(I)]) then Exit;
+      Key := PStr(PtrOf(OVTpl[P]^.Consts[OCU(I)]));
+      CI := ShapeLookup(Sh, Key);
+      ODefShape[P] := Sh;
+      if CI >= 0 then
+      begin
+        if (Sh^.PFlags[CI] <> pfDefault) or (CI >= Cap) then Exit;
+        ODefSlot[P] := CI;
+      end
+      else
+      begin
+        NS := ShapeAdd(Sh, Key, pfDefault);
+        if (NS = nil) or NS^.IsDict or (NS^.Count - 1 >= Cap) or (NS^.Count - 1 <> Sh^.Count) then Exit;
+        ODefSlot[P] := NS^.Count - 1;
+        ODefNew[P] := NS;
+        Sh := NS;
+      end;
+    end
+    else if (OWrites(I) = A) or ((OOpOf(I) = opGetMethod) and (OA(I) + 1 = A)) then Exit;
+    Inc(P);
+  end;
 end;
 
 { the region entered at PC of frame Fr's template, compiled and installed in its JitTable; False when it cannot be }
@@ -4007,8 +4481,18 @@ begin
     OMathSpec[K] := -1;
     if (K < OVLen) and (OVRole[K] in [0, 2]) then OMathSpec[K] := OMathIndex(Fr, K);
   end;
+  { each NewObj's object allocated inline (a plain object of a small inline capacity), and the properties of its
+    literal that follow it defined natively: their shapes as G2.Core's AddProperty makes them }
+  SetLength(OAllocCap, OVLen + 1); SetLength(ODefSlot, OVLen + 1);
+  SetLength(ODefShape, OVLen + 1); SetLength(ODefNew, OVLen + 1);
+  for K := 0 to OVLen do begin OAllocCap[K] := -1; ODefSlot[K] := -1; ODefShape[K] := nil; ODefNew[K] := nil; end;
+  if not GCStress and not MultiRealmAny and (OptAlloc <> 0) then
+    for K := 0 to OVLen - 1 do
+      if (OOpOf(OIns(K)) = opNewObj) and (OVRole[K] in [0, 2]) then OAllocSpec(K);
   for K := 0 to OVLen - 1 do
-    if (OVRole[K] <> 1) and not OStaticOk(OOpOf(OIns(K))) and (OMathSpec[K] < 0) then
+    if not (OVRole[K] in [1, 4]) and not OStaticOk(OOpOf(OIns(K))) and (OMathSpec[K] < 0) and
+       not ((OOpOf(OIns(K)) = opNewObj) and (OAllocCap[K] > 0)) and
+       not ((OOpOf(OIns(K)) = opDefProp) and (ODefSlot[K] >= 0)) then
     begin
       if OEmbeddable(K) then OEmbed[K] := True else OExit[K] := True;
     end;
@@ -4042,7 +4526,9 @@ begin
     if OCaptured[R] then Kinds[R] := vkTag;
   end;
   if (OFb(PC) and 4) <> 0 then Exit;
-  if not OQuickProfitable(PC) then Exit;
+  if IsObject(Fr^.Closure) then OQClo := ObjOf(Fr^.Closure) else OQClo := nil;
+  if not OQuickProfitable(PC) then begin OQClo := nil; Exit; end;
+  OQClo := nil;
   { each element instruction's receiver speculated from the frame's value now: a typed array of a kind done
     natively, an object with an elements store, else none (an element guard that failed: none) }
   SetLength(OElemSpec, OVLen + 1);
@@ -4073,11 +4559,15 @@ begin
   SetLength(OPropKind, OVLen + 1);
   SetLength(OPropVK, OVLen + 1);
   SetLength(OPropIC, OVLen + 1);
+  SetLength(OPropNew, OVLen + 1);
   for K := 0 to OVLen do
   begin
     OPropSlot[K] := -1; OPropShape[K] := nil; OPropKind[K] := 0; OPropVK[K] := vkTag; OPropIC[K] := nil;
+    OPropNew[K] := nil;
     if K = OVLen then Continue;
-    if (OFb(K) and ofbProp) <> 0 then Continue;
+    { a guard that failed: not again, unless the cache has seen more shapes since (tried in turn) }
+    if ((OFb(K) and ofbProp) <> 0) and
+       (not (OOpOf(OIns(K)) in [opGetProp, opGetMethod]) or (OVTpl[K]^.ICs[OCU(OIns(K))].PolyCount < 2)) then Continue;
     case OOpOf(OIns(K)) of
       opGetProp, opGetMethod:
         begin
@@ -4107,14 +4597,44 @@ begin
             end;
           end;
         end;
-      opSetProp:
+      opNewObj: OPropShape[K] := ODefShape[K];
+      opNew:
+        if (OVRole[K] = 1) and OSites[OVSite[K]].IsNew then
         begin
-          { an own store only: an add transition's cache can be forgotten when a prototype changes }
+          OPropShape[K] := PShape(OSites[OVSite[K]].Tc^.CtorRootShape);
+          OAllocCap[K] := Max(4, OSites[OVSite[K]].Tc^.ExpectedProps);
+        end;
+      opDefProp:
+        if ODefSlot[K] >= 0 then
+        begin
+          OPropSlot[K] := ODefSlot[K];
+          OPropShape[K] := ODefShape[K];
+          OPropNew[K] := ODefNew[K];
+        end;
+      opDefField:
+        begin
+          { a class field's cached add transition (as the baseline's) }
           IC := @OVTpl[K]^.ICs[OCU(OIns(K))];
-          if (IC^.Shape <> nil) and (IC^.NewShape = nil) and not IC^.Shape^.IsDict and (IC^.Slot >= 0) then
+          if (IC^.Shape <> nil) and not IC^.Shape^.IsDict and (IC^.NewShape <> nil) and not IC^.NewShape^.IsDict and
+             (IC^.Slot >= 0) and (IC^.NewShape^.Count - 1 = IC^.Slot) then
           begin
             OPropSlot[K] := IC^.Slot;
             OPropShape[K] := IC^.Shape;
+            OPropNew[K] := IC^.NewShape;
+            OPropIC[K] := IC;
+          end;
+        end;
+      opSetProp:
+        begin
+          { an own store, or an add transition (checked still cached: a prototype change forgets it) }
+          IC := @OVTpl[K]^.ICs[OCU(OIns(K))];
+          if (IC^.Shape <> nil) and not IC^.Shape^.IsDict and (IC^.Slot >= 0) and
+             ((IC^.NewShape = nil) or (not IC^.NewShape^.IsDict and (IC^.NewShape^.Count - 1 = IC^.Slot))) then
+          begin
+            OPropSlot[K] := IC^.Slot;
+            OPropShape[K] := IC^.Shape;
+            OPropNew[K] := IC^.NewShape;
+            OPropIC[K] := IC;
           end;
         end;
       opGetGlobal:
@@ -4159,7 +4679,7 @@ begin
   if Again then Continue;
   { an inlined callee instruction the tier did not take: that call is not inlined }
   for K := OT^.CodeLen + 1 to OVLen - 1 do
-    if (OVRole[K] = 2) and (OExit[K] or (OEmbed[K] and (OOpOf(OIns(K)) <> opCall))) and
+    if (OVRole[K] = 2) and (OExit[K] or (OEmbed[K] and not (OOpOf(OIns(K)) in [opCall, opNew]))) and
        not OInlBan[OSites[OVSite[K]].K] then
     begin
       if OptLog then WriteLn(ErrOutput, 'ban at ', K, ' op ', OOpOf(OIns(K)), ' exit ', OExit[K]);

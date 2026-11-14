@@ -279,7 +279,7 @@ procedure Cvt32ToX(X, R: Integer);                  { cvtsi2sd xmmX, R32 }
 begin JB($F2); JRex(False, X, 0, R); JB($0F); JB($2A); JModRR(X, R); end;
 
 var
-  JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsArrayIterNext, JitFsGlobalObj: PtrInt;   { threadvar offsets from fs }
+  JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsNurseryTop, JitFsArrayIterNext, JitFsGlobalObj: PtrInt;   { threadvar offsets from fs }
   JitFsFrames, JitFsFrameTop, JitFsStackTop, JitFsJitDepth, JitFsJitDepthMax, JitFsStackFloor: PtrInt;
 
 function JitFsBase: PtrUInt; assembler; nostackframe;
@@ -297,6 +297,12 @@ end;
 procedure Mov32RFs(Dst, Disp: Integer);
 begin
   JB($64); JRex(False, Dst, 0, 0); JB($8B); JB($04 or ((Dst and 7) shl 3)); JB($25); JD(Cardinal(Disp));
+end;
+
+{ mov fs:[Disp], Src }
+procedure MovFsR(Disp, Src: Integer);
+begin
+  JB($64); JRex(True, Src, 0, 0); JB($89); JB($04 or ((Src and 7) shl 3)); JB($25); JD(Cardinal(Disp));
 end;
 
 { mov fs:[Disp], Src32 }
@@ -666,6 +672,7 @@ var
 var
   JitHot: Integer = JIT_HOT;
   JitCallStub: Pointer = nil;   { JitBuildCallStub's code: opCall's call, shared by every call site }
+  JitNewStub: Pointer = nil;    { JitBuildNewStub's code: opNew's, shared by every new site }
 
 {$IFDEF G2_JITSTATS}
 var
@@ -946,6 +953,55 @@ end;
   constructor whose prototype caches hold (as XFastNew) with this allocated, its field initializer run first (as
   Construct does) and its frame (Kind 1) run natively. 0 done (the object in R[A]), 1 the interpreter's (nothing
   changed), -1 a throw pending. Fr^.PC is past the instruction. }
+{ XJitNew's field initializer for constructor T (its closure in R[A], this in R[A + 1]): the initializer's compiled
+  code called in a frame of its own above the constructor's registers (XPushFieldInit's place). 1 done, -1 a
+  throw pending, 0 not taken (nothing changed: RunFieldInit's) }
+function XJitFieldInit(Fr: PFrame; A: Integer; T: PFuncTemplate): Integer;
+var C, V: TValue; O: PObj; FT: PFuncTemplate; CI, Base, Res: Integer; NF: PFrame;
+begin
+  Result := 0;
+  C := VStack[Fr^.Base + A];
+  O := ObjOf(C);
+  if Pointer(O^.Shape) <> T^.FIShape then
+  begin
+    { XPushFieldInit's cache of where the constructor holds its initializer, filled here too }
+    if O^.Shape^.IsDict then Exit;
+    T^.FIShape := O^.Shape;
+    T^.FISlot := ShapeLookup(O^.Shape, AtomFieldInit);
+  end;
+  CI := T^.FISlot;
+  if CI < 0 then Exit;
+  V := GetSlot(O, CI);
+  if not IsObject(V) or (ObjOf(V)^.OKind <> okFunction) then Exit;
+  FT := PFuncTemplate(ObjOf(V)^.Native);
+  if (FT^.JitState <> 1) or not FT^.FastCall or FT^.IsGenerator or (PPtrUInt(FT^.JitTable)[0] = 0) then Exit;
+  { (past the constructor's registers and arguments, as XPushFieldInit places it) }
+  Base := Max(Fr^.Base + A + 1 + T^.MaxRegs, StackTop) + 1;
+  if (Base + FT^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 3) or JitTooDeep then Exit;
+  VStack[Base] := VStack[Fr^.Base + A + 1];
+  if FT^.MaxRegs > 1 then FillUndef(@VStack[Base + 1], FT^.MaxRegs - 1);
+  NF := @Frames[FrameTop];
+  NF^.Closure := V;
+  NF^.NewTarget := VUndefined;
+  NF^.Tpl := FT;
+  NF^.Base := Base;
+  NF^.PC := 0;
+  NF^.RetIdx := Base - 1;
+  NF^.Argc := 0;
+  NF^.Kind := 0;
+  Inc(FrameTop);
+  StackTop := Base + FT^.MaxRegs;
+  Inc(JitDepth);
+  Res := TJitFn(FT^.Jit)(@VStack[Base], Pointer(PPtrUInt(FT^.JitTable)[0]), NF, 1);
+  Dec(JitDepth);
+  if Res <> -2 then
+  begin
+    if Res = -1 then InjectThrow := True else NF^.PC := Res;
+    if not Execute(FrameTop - 1, V) then Exit(-1);
+  end;
+  Result := 1;
+end;
+
 function XJitNew(Fr: PFrame; A, Argc: Integer): Integer;
 var VA, V: TValue; O: PObj; T: PFuncTemplate; Base, J, Res: Integer; NF: PFrame; R: PValue;
 begin
@@ -1016,9 +1072,12 @@ begin
     R[A + 1] := MkPtr(NewObject(PShape(T^.CtorRootShape), Max(4, T^.ExpectedProps), okPlain));
     if Assigned(T^.FieldInit) then
     begin
-      { 10.2.2 step 6.b: the instance fields before the body }
+      { 10.2.2 step 6.b: the instance fields before the body (a compiled initializer called here) }
       R := @VStack[Fr^.Base];
-      if not RunFieldInit(R[A], R[A + 1]) then
+      Res := XJitFieldInit(Fr, A, T);
+      if Res = 0 then
+        if not RunFieldInit(R[A], R[A + 1]) then Res := -1 else Res := 1;
+      if Res < 0 then
       begin
         StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
         Exit(-1);
@@ -2911,12 +2970,11 @@ begin
       end;
     opNew:
       begin
-        { Fr^.PC past it, then XJitNew: 0 done, 1 the interpreter's, -1 a throw }
+        { Fr^.PC past it, then JitNewStub (XJitNew past its fast case): 0 done, 1 the interpreter's, -1 a throw }
         JRex(False, 0, 0, jR12); JB($C7); JMem(0, jR12, PtrInt(@PFrame(nil)^.PC)); JD(Cardinal(PC + 1));
-        MovRR(jDI, jR12);
-        MovRI(jSI, Cardinal(A));
+        MovRI(jCX, Cardinal(A));
         MovRI(jDX, Cardinal(B));
-        CallAbs(@XJitNew);
+        CallAbs(JitNewStub);
         AluRR($85, jAX, jAX, False);
         L1 := JccFwd(ccE);
         AluRI(7, jAX, 1, False);
@@ -3206,6 +3264,234 @@ begin
   JitCallStub := P;
 end;
 
+{ opNew's code, shared: rbx R, r12 the frame (its PC already past the instruction), ecx A, edx Argc. A compiled
+  base constructor without fields whose XFastNew caches hold (its function's shape, its prototype the root shape's)
+  is run inline: this allocated in the nursery as NewObject allocates it (Max(4, ExpectedProps) inline slots, at
+  most 16), the registers past the arguments undefined, the frame record (Kind 1, new.target the constructor),
+  then its code (its return gives the object). Anything else is XJitNew's. eax: 0 go on, 1 the interpreter runs
+  it, -1 a throw. Keeps rbx, r12, rbp (and r13 - r15, its own) }
+procedure JitBuildNewStub;
+var Slow: array[0..47] of Integer; NSlow, K, L1, L2, L3, LRet0, LRet1, LRet2, LRet3, LRet4, E1, E2, E3,
+  LFiThrow: Integer; P: PByte;
+  procedure AddS(L: Integer); begin Slow[NSlow] := L; Inc(NSlow); end;
+begin
+  JitLen := 0;
+  NSlow := 0;
+  { not a bytecode function (a built-in constructor, a proxy, not callable): straight to XJitNew }
+  MovRMIdx(jAX, jBX, jCX, 0);
+  TagOf(jR8, jAX);
+  AluRI(7, jR8, TAG_PTR_HI, False);
+  E1 := JccFwd(ccNE);
+  MovRI(jR8, PTR_MASK);
+  AluRR($21, jAX, jR8, True);
+  CmpBMI(jAX, 4, ckObject); E2 := JccFwd(ccNE);
+  CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction); E3 := JccFwd(ccNE);
+  JB($41); JB($55); JB($41); JB($56); JB($41); JB($57);          { push r13; push r14; push r15: rsp aligned }
+  JB($4C); JB($8D); JB($2C); JB($CB);                              { lea r13, [rbx + rcx * 8]: &R[A] }
+  MovRR(jR15, jCX);                                                { r15: A }
+  MovRR(jR14, jDX);                                                { r14: Argc }
+  MovRI(jDX, QWord(PtrUInt(@MultiRealmAny)));
+  CmpBMI(jDX, 0, 0); AddS(JccFwd(ccNE));
+  MovRI(jDX, QWord(PtrUInt(@GCStress)));
+  CmpBMI(jDX, 0, 0); AddS(JccFwd(ccNE));
+  MovRM(jAX, jR13, 0);
+  TagOf(jDX, jAX);
+  AluRI(7, jDX, TAG_PTR_HI, False);
+  AddS(JccFwd(ccNE));
+  MovRI(jDX, PTR_MASK);
+  AluRR($21, jAX, jDX, True);
+  CmpBMI(jAX, 4, ckObject); AddS(JccFwd(ccNE));
+  CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction); AddS(JccFwd(ccNE));
+  TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 2); AddS(JccFwd(ccNE));
+  MovRM(jSI, jAX, PtrInt(@PObj(nil)^.Native));
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.FastCall), 0); AddS(JccFwd(ccE));
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsGenerator), 0); AddS(JccFwd(ccNE));
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsAsync), 0); AddS(JccFwd(ccNE));
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsArrow), 0); AddS(JccFwd(ccNE));
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsDerived), 0); AddS(JccFwd(ccNE));
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsMethod), 0); L1 := JccFwd(ccE);
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.IsClassCtor), 0); AddS(JccFwd(ccE));
+  PatchHere(L1);
+  CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.JitState), 1); AddS(JccFwd(ccNE));
+  MovRM(jDI, jSI, PtrInt(@PFuncTemplate(nil)^.JitTable));
+  MovRM(jDI, jDI, 0);
+  AluRR($85, jDI, jDI, True); AddS(JccFwd(ccE));
+  { XFastNew's caches: the function's shape, its prototype (an inline slot) the root shape's }
+  MovRM(jDX, jSI, PtrInt(@PFuncTemplate(nil)^.CtorFnShape));
+  CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Shape)); AddS(JccFwd(ccNE));
+  MovRM(jR8, jSI, PtrInt(@PFuncTemplate(nil)^.CtorRootShape));
+  AluRR($85, jR8, jR8, True); AddS(JccFwd(ccE));
+  MovsxdRM(jCX, jSI, PtrInt(@PFuncTemplate(nil)^.CtorProtoSlot));
+  MovzxWRM(jDX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+  AluRR($39, jCX, jDX, False); AddS(JccFwd(ccAE));
+  MovRMIdx(jDX, jAX, jCX, PtrInt(@PObj(nil)^.Slots));
+  CmpRM(jDX, jR8, PtrInt(@PShape(nil)^.Proto)); AddS(JccFwd(ccNE));
+  { this: Max(4, ExpectedProps) inline slots (at most 16), bumped from the nursery (full: XJitNew's) }
+  Mov32RM(jR10, jSI, PtrInt(@PFuncTemplate(nil)^.ExpectedProps));
+  AluRI(7, jR10, 4, False); L1 := JccFwd(ccGE);
+  MovRI(jR10, 4);
+  PatchHere(L1);
+  AluRI(7, jR10, 16, False); AddS(JccFwd(ccG));
+  MovRR(jR11, jR10);
+  ShiftRI(4, jR11, 3, True);
+  AluRI(0, jR11, 64, True);                                        { r11: the size }
+  MovRFs(jCX, JitFsNurseryTop);
+  JRex(True, jDX, jR11, jCX); JB($8D); JB($04 or ((jDX and 7) shl 3)); JB(((jR11 and 7) shl 3) or (jCX and 7));  { lea rdx, [rcx + r11] }
+  MovRFs(jR9, JitFsNurseryLimit);
+  AluRR($39, jDX, jR9, True); AddS(JccFwd(ccA));
+  MovFsR(JitFsNurseryTop, jDX);
+  MovRI(jDX, QWord(ckObject) shl 32);
+  AluRR($09, jDX, jR11, True);
+  MovMR(jCX, 0, jDX);
+  MovMR(jCX, PtrInt(@PObj(nil)^.Shape), jR8);
+  AluRR($31, jDX, jDX, False);
+  MovMR(jCX, PtrInt(@PObj(nil)^.Elements), jDX);
+  MovMR(jCX, PtrInt(@PObj(nil)^.Overflow), jDX);
+  MovMR(jCX, PtrInt(@PObj(nil)^.Native), jDX);
+  MovRI(jDX, QWord(okPlain) shl 16);
+  AluRR($09, jDX, jR10, True);
+  MovMR(jCX, PtrInt(@PObj(nil)^.InlineCap), jDX);
+  MovRI(jDX, VUndefined);
+  MovMR(jCX, PtrInt(@PObj(nil)^.Aux1), jDX);
+  MovMR(jCX, PtrInt(@PObj(nil)^.Aux2), jDX);
+  AluRR($31, jR11, jR11, False);
+  L2 := JitLen;
+  MovMRIdx(jCX, jR11, PtrInt(@PObj(nil)^.Slots), jDX);
+  AluRI(0, jR11, 1, True);
+  AluRR($39, jR11, jR10, True);
+  JB($0F); JB($8C); JD(Cardinal(L2 - (JitLen + 4)));              { jl the loop }
+  MovRI(jDX, QWord(TAG_PTR_HI) shl 48);
+  AluRR($09, jCX, jDX, True);
+  MovMR(jR13, 8, jCX);                                             { R[A + 1]: this }
+  { the class's fields first: its compiled initializer (XJitFieldInit: 1 done, 0 XJitNew's, -1 a throw); it can
+    collect, so the template and the entry are read again after it }
+  MovRM(jDX, jSI, PtrInt(@PFuncTemplate(nil)^.FieldInit));
+  AluRR($85, jDX, jDX, True);
+  L1 := JccFwd(ccE);
+  MovRR(jDI, jR12);
+  MovRR(jSI, jR15);
+  MovRM(jDX, jR13, 0);
+  MovRI(jAX, PTR_MASK);
+  AluRR($21, jDX, jAX, True);
+  MovRM(jDX, jDX, PtrInt(@PObj(nil)^.Native));
+  CallAbs(@XJitFieldInit);
+  AluRI(7, jAX, 1, False);
+  L2 := JccFwd(ccE);
+  AluRR($85, jAX, jAX, False);
+  AddS(JccFwd(ccE));
+  MovRI(jAX, $FFFFFFFF);
+  LFiThrow := JmpFwd;
+  PatchHere(L2);
+  MovRM(jAX, jR13, 0);
+  MovRI(jDX, PTR_MASK);
+  AluRR($21, jAX, jDX, True);
+  MovRM(jSI, jAX, PtrInt(@PObj(nil)^.Native));
+  MovRM(jDI, jSI, PtrInt(@PFuncTemplate(nil)^.JitTable));
+  MovRM(jDI, jDI, 0);
+  PatchHere(L1);
+  { room for the frame and its registers, the native stack }
+  MovsxdRM(jCX, jR12, PtrInt(@PFrame(nil)^.Base));
+  AluRR($01, jCX, jR15, True);
+  AluRI(0, jCX, 1, True);                                          { rcx: the callee's Base }
+  MovsxdRM(jDX, jSI, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
+  JRex(True, jR8, jDX, jCX); JB($8D); JB($04 or ((jR8 and 7) shl 3)); JB(((jDX and 7) shl 3) or (jCX and 7));  { lea r8, [rcx + rdx] }
+  AluRI(7, jR8, STACK_MAX, True); AddS(JccFwd(ccAE));
+  Mov32RFs(jR9, JitFsFrameTop);
+  AluRI(7, jR9, FRAME_MAX - 2, False); AddS(JccFwd(ccAE));
+  Mov32RFs(jR10, JitFsJitDepth);
+  Mov32RFs(jR11, JitFsJitDepthMax);
+  AluRR($39, jR10, jR11, False); AddS(JccFwd(ccAE));
+  MovRFs(jR11, JitFsStackFloor);
+  AluRR($39, jSP, jR11, True); AddS(JccFwd(ccB));                 { cmp rsp, the floor }
+  { the registers from min(Argc, NumParams) + 1 to MaxRegs - 1: undefined }
+  MovRR(jR11, jR14);
+  JRex(False, jR11, 0, jSI); JB($3B); JMem(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));  { cmp r11d, NumParams }
+  L1 := JccFwd(ccLE);
+  Mov32RM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));
+  PatchHere(L1);
+  AluRI(0, jR11, 1, False);
+  MovRI(jR10, VUndefined);
+  L2 := JitLen;
+  AluRR($39, jR11, jDX, True);
+  L3 := JccFwd(ccGE);
+  MovMRIdx(jR13, jR11, 8, jR10);
+  AluRI(0, jR11, 1, True);
+  JB($E9); JD(Cardinal(L2 - (JitLen + 4)));
+  PatchHere(L3);
+  { the frame record Frames[FrameTop]: Kind 1, new.target the constructor }
+  MovRFs(jAX, JitFsFrames);
+  ImulRRI(jR10, jR9, SizeOf(TFrame));
+  AluRR($01, jAX, jR10, True);
+  MovRM(jR10, jR13, 0);
+  MovMR(jAX, PtrInt(@PFrame(nil)^.Closure), jR10);
+  MovMR(jAX, PtrInt(@PFrame(nil)^.NewTarget), jR10);
+  MovMR(jAX, PtrInt(@PFrame(nil)^.Tpl), jSI);
+  Mov32MR(jAX, PtrInt(@PFrame(nil)^.Base), jCX);
+  Mov32MI(jAX, PtrInt(@PFrame(nil)^.PC), 0);
+  LeaRM(jR10, jCX, -1);
+  Mov32MR(jAX, PtrInt(@PFrame(nil)^.RetIdx), jR10);
+  Mov32MR(jAX, PtrInt(@PFrame(nil)^.Argc), jR14);
+  Mov8MI(jAX, PtrInt(@PFrame(nil)^.Kind), 1);
+  AluRI(0, jR9, 1, False);
+  Mov32FsR(JitFsFrameTop, jR9);
+  Mov32FsR(JitFsStackTop, jR8);
+  Mov32RFs(jR10, JitFsJitDepth);
+  AluRI(0, jR10, 1, False);
+  Mov32FsR(JitFsJitDepth, jR10);
+  { the constructor's code: R', its entry, the frame, nested (1) }
+  MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.Jit));
+  MovRR(jSI, jDI);
+  LeaRM(jDI, jR13, 8);
+  MovRR(jDX, jAX);
+  MovRI(jCX, 1);
+  JRex(False, 0, 0, jR11); JB($FF); JB($D0 or (jR11 and 7));   { call r11 }
+  Mov32RFs(jR10, JitFsJitDepth);
+  AluRI(5, jR10, 1, False);
+  Mov32FsR(JitFsJitDepth, jR10);
+  AluRI(7, jAX, -2, False);
+  L1 := JccFwd(ccNE);
+  { returned (the object in R[A]): this frame's StackTop }
+  MovRM(jR10, jR12, PtrInt(@PFrame(nil)^.Tpl));
+  Mov32RM(jCX, jR10, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
+  JRex(False, jCX, 0, jR12); JB($03); JMem(jCX, jR12, PtrInt(@PFrame(nil)^.Base));   { add ecx, Base }
+  Mov32FsR(JitFsStackTop, jCX);
+  AluRR($31, jAX, jAX, False);
+  LRet0 := JmpFwd;
+  PatchHere(L1);
+  { stopped part way or threw: XJitCallPost (0 goes on, else a throw) }
+  MovRR(jDI, jR12);
+  MovRR(jSI, jR15);
+  JRex(False, jDX, 0, jAX); JB($8B); JModRR(jDX, jAX);         { mov edx, eax }
+  CallAbs(@XJitCallPost);
+  AluRR($85, jAX, jAX, False);
+  LRet1 := JccFwd(ccE);
+  MovRI(jAX, $FFFFFFFF);
+  LRet2 := JmpFwd;
+  { anything else: XJitNew (0 done, 1 the interpreter's, -1 a throw) }
+  for K := 0 to NSlow - 1 do PatchHere(Slow[K]);
+  MovRR(jDI, jR12);
+  MovRR(jSI, jR15);
+  MovRR(jDX, jR14);
+  CallAbs(@XJitNew);
+  AluRR($85, jAX, jAX, False);
+  LRet3 := JccFwd(ccE);
+  AluRI(7, jAX, 1, False);
+  LRet4 := JccFwd(ccE);
+  MovRI(jAX, $FFFFFFFF);
+  PatchHere(LRet0); PatchHere(LRet1); PatchHere(LRet2); PatchHere(LRet3); PatchHere(LRet4); PatchHere(LFiThrow);
+  JB($41); JB($5F); JB($41); JB($5E); JB($41); JB($5D); JB($C3);  { pop r15; pop r14; pop r13; ret }
+  { the early way out: XJitNew(Fr, A, Argc) as a tail call (its 0 / 1 / -1 is the stub's) }
+  PatchHere(E1); PatchHere(E2); PatchHere(E3);
+  MovRR(jDI, jR12);
+  JRex(False, jSI, 0, jCX); JB($8B); JModRR(jSI, jCX);         { mov esi, ecx }
+  MovRI(jAX, QWord(PtrUInt(@XJitNew)));
+  JB($FF); JB($E0);                                             { jmp rax }
+  P := JitAlloc(JitLen);
+  if P = nil then Exit;
+  Move(JitBuf[0], P^, JitLen);
+  JitNewStub := P;
+end;
+
 { the slow blocks JitInstr deferred (JitDefer), each back to the instruction after its own }
 procedure JitEmitDeferred(T: PFuncTemplate);
 var N, K, PC: Integer; Saved: Pointer;
@@ -3257,6 +3543,7 @@ begin
   { a generator's body runs compiled between its suspensions (its yields and returns are the interpreter's) }
   if (T^.Lazy <> nil) or (T^.CodeLen = 0) or T^.IsAsync then Exit;
   if JitCallStub = nil then JitBuildCallStub;
+  if JitNewStub = nil then JitBuildNewStub;
   if JitCallStub = nil then Exit;
   JitLen := 0;
   JitFixCount := 0;
@@ -3416,6 +3703,7 @@ begin
   JitFsGlobalObj := PtrInt(PtrUInt(@GlobalObj) - JitFsBase);
   JitFsNurseryStart := PtrInt(PtrUInt(@NurseryStart) - JitFsBase);
   JitFsNurseryLimit := PtrInt(PtrUInt(@NurseryLimit) - JitFsBase);
+  JitFsNurseryTop := PtrInt(PtrUInt(@NurseryTop) - JitFsBase);
   JitFsArrayIterNext := PtrInt(PtrUInt(@ArrayIterNextFn) - JitFsBase);
   JitFsFrames := PtrInt(PtrUInt(@Frames) - JitFsBase);
   JitFsFrameTop := PtrInt(PtrUInt(@FrameTop) - JitFsBase);
@@ -3425,7 +3713,7 @@ begin
   JitFsStackFloor := PtrInt(PtrUInt(@JitStackFloor) - JitFsBase);
   { the code's fs-relative loads take a signed 32-bit displacement }
   if (Abs(JitFsVStack) > $7FFFFFF0) or (Abs(JitFsNurseryStart) > $7FFFFFF0) or (Abs(JitFsNurseryLimit) > $7FFFFFF0) or
-     (Abs(JitFsArrayIterNext) > $7FFFFFF0) or (Abs(JitFsFrames) > $7FFFFFF0) or (Abs(JitFsFrameTop) > $7FFFFFF0) or
+     (Abs(JitFsNurseryTop) > $7FFFFFF0) or (Abs(JitFsArrayIterNext) > $7FFFFFF0) or (Abs(JitFsFrames) > $7FFFFFF0) or (Abs(JitFsFrameTop) > $7FFFFFF0) or
      (Abs(JitFsStackTop) > $7FFFFFF0) or (Abs(JitFsJitDepth) > $7FFFFFF0) or
      (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) or (Abs(JitFsGlobalObj) > $7FFFFFF0) then
     JitEnabled := 0;
