@@ -43,6 +43,8 @@ var
   HostRootScanner: procedure = nil;   { visits host-held roots (the embedding layer's handles) }
   { G2.Builtins' Math natives the optimizing tier computes inline: sqrt, floor, ceil, abs, trunc }
   OptMathFns: array[0..4] of Pointer;
+  { G2.Builtins' String.prototype.charCodeAt: the baseline JIT's call stub reads a code unit inline for it }
+  JitCharCodeAtFn: Pointer = nil;
   RootCheck: Boolean = False;
   { 10.5.9 Proxy [[Set]] (G2.ObjModel): Ok is the [[Set]] result }
   ProxySetHook: function(PV: TValue; Key: PStr; V, Receiver: TValue; var Ok: Boolean): Boolean = nil;

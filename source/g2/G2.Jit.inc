@@ -3285,11 +3285,13 @@ end;
   the arguments undefined, the frame record, then its code. Anything else is XJitCall's. eax: 0 go on, 1 the
   interpreter runs the call, -1 a throw. Keeps rbx, r12, rbp (and r13 - r15, its own) }
 procedure JitBuildCallStub;
-var Slow: array[0..31] of Integer; NSlow, K, L1, L2, L3, LRet0, LRet1, LRet2, LRet3, LRet4: Integer; P: PByte;
+var Slow: array[0..47] of Integer; NSlow, K, L1, L2, L3, LRet0, LRet1, LRet2, LRet3, LRet4, LNat, LNatDone: Integer;
+  P: PByte;
   procedure AddS(L: Integer); begin Slow[NSlow] := L; Inc(NSlow); end;
 begin
   JitLen := 0;
   NSlow := 0;
+  LNatDone := -1;
   JB($41); JB($55); JB($41); JB($56); JB($41); JB($57);          { push r13; push r14; push r15: rsp aligned }
   JB($4C); JB($8D); JB($2C); JB($CB);                              { lea r13, [rbx + rcx * 8]: &R[A] }
   MovRR(jR15, jCX);                                                { r15: A }
@@ -3301,7 +3303,7 @@ begin
   MovRI(jDX, PTR_MASK);
   AluRR($21, jAX, jDX, True);
   CmpBMI(jAX, 4, ckObject); AddS(JccFwd(ccNE));
-  CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction); AddS(JccFwd(ccNE));
+  CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction); LNat := JccFwd(ccNE);
   TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 1); AddS(JccFwd(ccNE));
   MovRM(jSI, jAX, PtrInt(@PObj(nil)^.Native));
   CmpBMI(jSI, PtrInt(@PFuncTemplate(nil)^.FastCall), 0); AddS(JccFwd(ccE));
@@ -3408,6 +3410,47 @@ begin
   LRet1 := JccFwd(ccE);
   MovRI(jAX, $FFFFFFFF);
   LRet2 := JmpFwd;
+  { a native callee: String.prototype.charCodeAt of a flat or sliced string's code unit at an int index inside it
+    here (rax the callee); anything else XJitCall's }
+  PatchHere(LNat);
+  if JitCharCodeAtFn <> nil then
+  begin
+    CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okNative); AddS(JccFwd(ccNE));
+    MovRI(jDX, QWord(PtrUInt(JitCharCodeAtFn)));
+    CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Native)); AddS(JccFwd(ccNE));
+    JB($41); JB($81); JB($FE); JD(1);                              { cmp r14d, 1: one argument, this given }
+    AddS(JccFwd(ccNE));
+    MovRI(jDX, QWord(PtrUInt(@MultiRealmAny)));
+    CmpBMI(jDX, 0, 0); AddS(JccFwd(ccNE));
+    { this: a string }
+    MovRM(jCX, jR13, 8);
+    TagOf(jDX, jCX);
+    AluRI(7, jDX, TAG_PTR_HI, False); AddS(JccFwd(ccNE));
+    MovRI(jDX, PTR_MASK);
+    AluRR($21, jCX, jDX, True);
+    CmpBMI(jCX, 4, ckString); AddS(JccFwd(ccNE));
+    { the index: an int in 0 .. Len - 1 }
+    MovRM(jDX, jR13, 16);
+    TagOf(jR8, jDX);
+    AluRI(7, jR8, TAG_INT_HI, False); AddS(JccFwd(ccNE));
+    Cmp32RM(jDX, jCX, PtrInt(@PStr(nil)^.Len)); AddS(JccFwd(ccAE));   { (unsigned: a negative index fails too) }
+    JB($89); JB($D2);                                              { mov edx, edx: the index without its tag }
+    { flat: the characters after the header; a slice: its parent's, from its offset; a buffer's: XJitCall's }
+    MovzxBRM(jR8, jCX, 5);
+    AluRI(4, jR8, cfBuffered or cfSlice, False);
+    L1 := JccFwd(ccE);
+    AluRI(7, jR8, cfBuffered or cfSlice, False); AddS(JccFwd(ccNE));
+    Mov32RM(jR8, jCX, PtrInt(@PStr(nil)^.Chars) + 8);           { the slice's offset }
+    AluRR($01, jDX, jR8, False);                                   { add edx, r8d }
+    MovRM(jCX, jCX, PtrInt(@PStr(nil)^.Chars));                    { the parent }
+    PatchHere(L1);
+    JB($0F); JB($B7); JB($44); JB($51); JB(Byte(PtrInt(@PStr(nil)^.Chars)));   { movzx eax, word [rcx + rdx*2 + Chars] }
+    MovRI(jDX, TAG_INT);
+    AluRR($09, jAX, jDX, True);
+    MovMR(jR13, 0, jAX);
+    AluRR($31, jAX, jAX, False);
+    LNatDone := JmpFwd;
+  end;
   { the general call: XJitCall (0 goes on, 1 the interpreter's, else a throw) }
   for K := 0 to NSlow - 1 do PatchHere(Slow[K]);
   MovRR(jDI, jR12);
@@ -3423,6 +3466,7 @@ begin
   LRet4 := JccFwd(ccE);
   MovRI(jAX, $FFFFFFFF);
   PatchHere(LRet0); PatchHere(LRet1); PatchHere(LRet2); PatchHere(LRet3); PatchHere(LRet4);
+  if LNatDone >= 0 then PatchHere(LNatDone);
   JB($41); JB($5F); JB($41); JB($5E); JB($41); JB($5D); JB($C3);  { pop r15; pop r14; pop r13; ret }
   P := JitAlloc(JitLen);
   if P = nil then Exit;
