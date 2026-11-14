@@ -2687,7 +2687,63 @@ begin
         PatchHere(L2);
         MovMR(jBX, A * 8, jAX);
       end;
-    opShr, opUShr, opNeg, opBitNot, opToNum, opToNumeric, opUShrI, opPow:
+    opToNum, opToNumeric:
+      begin
+        { a number as it is; anything else JH_Arith's }
+        MovRM(jAX, jBX, B * 8);
+        TagOf(jDX, jAX);
+        AluRI(7, jDX, TAG_INT_HI, False);
+        L1 := JccFwd(ccE);
+        MovRI(jCX, DOUBLE_LIMIT);
+        AluRR($39, jAX, jCX, True);
+        JccExit(ccAE, PC);
+        PatchHere(L1);
+        MovMR(jBX, A * 8, jAX);
+      end;
+    opNeg, opBitNot:
+      begin
+        { an int (Neg: not 0, which gives -0, nor the int32 minimum); anything else JH_Arith's }
+        MovRM(jAX, jBX, B * 8);
+        TagOf(jDX, jAX);
+        AluRI(7, jDX, TAG_INT_HI, False);
+        JccExit(ccNE, PC);
+        if Op = opNeg then
+        begin
+          AluRR($85, jAX, jAX, False);
+          JccExit(ccE, PC);
+          JB($F7); JB($D8);                     { neg eax }
+          JccExit(ccO, PC);
+        end
+        else begin JB($F7); JB($D0); end;       { not eax }
+        JRex(False, jAX, 0, jAX); JB($8B); JModRR(jAX, jAX);   { mov eax, eax: the upper half clear }
+        StoreInt(A);
+      end;
+    opShr, opUShr, opUShrI:
+      begin
+        { two ints (>>> one whose result is an int32); anything else JH_Arith's }
+        MovRM(jAX, jBX, B * 8);
+        TagOf(jDX, jAX);
+        AluRI(7, jDX, TAG_INT_HI, False);
+        JccExit(ccNE, PC);
+        if Op <> opUShrI then
+        begin
+          MovRM(jCX, jBX, CU * 8);
+          TagOf(jDX, jCX);
+          AluRI(7, jDX, TAG_INT_HI, False);
+          JccExit(ccNE, PC);
+          JB($D3);
+          if Op = opShr then JB($F8) else JB($E8);    { sar / shr eax, cl }
+        end
+        else ShiftRI(5, jAX, C and 31, False);
+        if Op <> opShr then
+        begin
+          AluRR($85, jAX, jAX, False);
+          JccExit(ccS, PC);
+        end;
+        JRex(False, jAX, 0, jAX); JB($8B); JModRR(jAX, jAX);
+        StoreInt(A);
+      end;
+    opPow:
       EmitHelper(@JH_Arith, PC, I);
     opInstanceof: EmitHelper(@JH_InstanceOf, PC, I);
     opGetIter, opForIn, opIn, opNewArr, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn,
@@ -2900,7 +2956,7 @@ begin
     opGetElem: JitSlow := @JH_GetElem;
     opSetElem: JitSlow := @JH_SetElem;
     opAdd, opSub, opMul, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opBitAnd, opBitOr,
-    opBitXor, opShl, opDiv, opMod:
+    opBitXor, opShl, opDiv, opMod, opToNum, opToNumeric, opNeg, opBitNot, opShr, opUShr, opUShrI:
       JitSlow := @JH_Arith;
     opSEq, opSNe, opEq, opNe, opLt, opLe, opGt, opGe: JitSlow := @JH_Compare;
     opIterNext:
