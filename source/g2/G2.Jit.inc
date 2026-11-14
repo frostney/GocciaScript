@@ -2235,6 +2235,7 @@ procedure JitInstr(T: PFuncTemplate; PC: Integer; I: QWord); forward;
 procedure JitInstr0(T: PFuncTemplate; PC: Integer; I: QWord);
 var Saved: Pointer; A, B, C: Integer; CU: Cardinal; Op: TOp; L1, L2, L3, L4, L5, L6, LS, LA: Integer; IC: PPropIC; CC: Integer;
   JmpFixFalse, JmpFixFalse2, JmpFixTrue, JmpFixTrue2: Integer;
+  JNum1, JNum2, JUnd1, JUnd2, JObj1, JObj2, JBool1, JBool2, JStr, JFn: Integer;
 begin
   Op := TOp(I and $FF);
   A := (I shr 8) and $FFFF;
@@ -2970,7 +2971,44 @@ begin
         end;
       end;
     opGetGlobal, opTypeofGlobal: EmitHelper(@JH_GetGlobal, PC, I);
-    opClosure, opTypeof: EmitHelper(@JH_Alloc, PC, I);
+    opClosure: EmitHelper(@JH_Alloc, PC, I);
+    opTypeof:
+      begin
+        { the result's atom (atoms never move): numbers, undefined (and the hole), null, booleans, strings,
+          objects by kind here; a proxy, an [[IsHTMLDDA]] object, a symbol or a BigInt JH_Alloc's (cold) }
+        MovRM(jAX, jBX, B * 8);
+        MovRI(jCX, DOUBLE_LIMIT); AluRR($39, jAX, jCX, True); JNum1 := JccFwd(ccB);
+        TagOf(jDX, jAX);
+        AluRI(7, jDX, TAG_INT_HI, False); JNum2 := JccFwd(ccE);
+        MovRI(jCX, VUndefined); AluRR($39, jAX, jCX, True); JUnd1 := JccFwd(ccE);
+        MovRI(jCX, VHole); AluRR($39, jAX, jCX, True); JUnd2 := JccFwd(ccE);
+        MovRI(jCX, VNull); AluRR($39, jAX, jCX, True); JObj1 := JccFwd(ccE);
+        MovRI(jCX, VTrue); AluRR($39, jAX, jCX, True); JBool1 := JccFwd(ccE);
+        MovRI(jCX, VFalse); AluRR($39, jAX, jCX, True); JBool2 := JccFwd(ccE);
+        AluRI(7, jDX, TAG_PTR_HI, False); L1 := JccFwd(ccNE);
+        AluRR($31, jAX, jR13, True);
+        CmpBMI(jAX, 4, ckString); JStr := JccFwd(ccE);
+        CmpBMI(jAX, 4, ckObject); L2 := JccFwd(ccNE);
+        TestBMI(jAX, 5, cfEmulatesUndefined); L3 := JccFwd(ccNE);
+        MovzxBRM(jDX, jAX, PtrInt(@PObj(nil)^.OKind));
+        AluRI(7, jDX, okProxy, False); L4 := JccFwd(ccE);
+        AluRI(5, jDX, okFunction, False);                         { sub edx, okFunction }
+        AluRI(7, jDX, okBound - okFunction, False); JFn := JccFwd(ccBE);
+        JObj2 := JmpFwd;
+        { the rest: JH_Alloc }
+        Saved := JitSlow;
+        JitSlow := @JH_Alloc;
+        DeferCold(7, PC, I, A, 0, [L1, L2, L3, L4]);
+        JitSlow := Saved;
+        PatchHere(JNum1); PatchHere(JNum2); MovRI(jAX, TypeofValue(MkInt(0))); LS := JmpFwd;
+        PatchHere(JUnd1); PatchHere(JUnd2); MovRI(jAX, TypeofValue(VUndefined)); LA := JmpFwd;
+        PatchHere(JObj1); PatchHere(JObj2); MovRI(jAX, TypeofValue(VNull)); CC := JmpFwd;
+        PatchHere(JBool1); PatchHere(JBool2); MovRI(jAX, TypeofValue(VTrue)); L5 := JmpFwd;
+        PatchHere(JStr); MovRI(jAX, TypeofValue(MkPtr(AtomOf('a')))); L6 := JmpFwd;
+        PatchHere(JFn); MovRI(jAX, TypeofValue(FunctionProto));
+        PatchHere(LS); PatchHere(LA); PatchHere(CC); PatchHere(L5); PatchHere(L6);
+        MovMR(jBX, A * 8, jAX);
+      end;
     opNewObj:
       if GCStress or MultiRealmAny or (Max(4, Integer(CU)) > 16) or (RootShapeFor(ObjectProto) = nil) then
         EmitHelper(@JH_Alloc, PC, I)
