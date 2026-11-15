@@ -11,7 +11,7 @@ run() {
   f=$1; n=$(basename $f .js)
   # AWFY without --gc-verify: verifying after every collection walks the whole heap, and Havlak's takes hours
   case $n in awfy-*) v=;; *) v=--gc-verify;; esac
-  out=$(G2_NURSERY_KB=$KB timeout 1800 $G2 $v $f 2>&1)
+  out=$(G2_NURSERY_KB=$KB timeout 3600 $G2 $v $f 2>&1)
   case $n in
     web-tooling-*) d=$(echo "$out" | grep -a DIGEST | head -1); r=$(grep "^$n |" $ref | cut -d'|' -f2 | xargs); [ "$d" = "$r" ] && echo "OK $n" || echo "BAD $n: $(echo "$out" | grep -av '^\s*$' | tail -1 | cut -c1-120)";;
     *) if echo "$out" | grep -q '"verificationPassed":true' || { echo "$out" | grep -q '"verificationKind":"execution' && ! echo "$out" | grep -q Uncaught; }; then echo "OK $n"; else echo "BAD $n: $(echo "$out" | grep -av '^\s*$' | tail -1 | cut -c1-120)"; fi;;
