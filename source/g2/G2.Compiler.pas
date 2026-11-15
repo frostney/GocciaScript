@@ -272,6 +272,8 @@ type
     { past 8 bindings, Find uses a hash index: slot -> binding index + 1 (bundles have scopes of thousands) }
     Index: array of Integer;
     function Find(const N: UnicodeString): Integer;
+    { Find with N's NameHash given (a walk over many scopes hashes the name once) }
+    function FindH(const N: UnicodeString; H: Cardinal): Integer;
     procedure Add(const N: UnicodeString; Reg: Integer; IsConst: Boolean);
   end;
 
@@ -616,20 +618,29 @@ begin
 end;
 
 function TScope.Find(const N: UnicodeString): Integer;
-var I, Mask, H: Integer;
+begin
+  if Length(Index) = 0 then Result := FindH(N, 0) else Result := FindH(N, NameHash(N));
+end;
+
+function TScope.FindH(const N: UnicodeString; H: Cardinal): Integer;
+var I, Mask, L: Integer;
 begin
   if Length(Index) = 0 then
   begin
+    { names of other lengths are told apart without the string compare's call }
+    L := Length(N);
     for I := Count - 1 downto 0 do
-      if Bindings[I].Name = N then Exit(I);
+      if (Pointer(Bindings[I].Name) = Pointer(N)) or ((Length(Bindings[I].Name) = L) and (Bindings[I].Name = N)) then
+        Exit(I);
     Exit(-1);
   end;
   Mask := High(Index);
-  H := Integer(NameHash(N) and Cardinal(Mask));
-  while Index[H] <> 0 do
+  I := Integer(H and Cardinal(Mask));
+  while Index[I] <> 0 do
   begin
-    if Bindings[Index[H] - 1].Name = N then Exit(Index[H] - 1);
-    H := (H + 1) and Mask;
+    if (Pointer(Bindings[Index[I] - 1].Name) = Pointer(N)) or (Bindings[Index[I] - 1].Name = N) then
+      Exit(Index[I] - 1);
+    I := (I + 1) and Mask;
   end;
   Result := -1;
 end;
@@ -968,11 +979,12 @@ begin
 end;
 
 function TCompiler.ResolveLocal(F: TFuncState; const N: UnicodeString; out Reg: Integer): Boolean;
-var I, J: Integer;
+var I, J: Integer; H: Cardinal;
 begin
+  H := NameHash(N);
   for I := F.ScopeCount - 1 downto 0 do
   begin
-    J := F.Scopes[I].Find(N);
+    J := F.Scopes[I].FindH(N, H);
     if J >= 0 then
     begin
       Reg := F.Scopes[I].Bindings[J].Reg;
@@ -1032,14 +1044,15 @@ end;
 { ---------------- identifiers ---------------- }
 
 function TCompiler.FindBinding(const N: UnicodeString; out F: TFuncState; out S: TScope; out J: Integer): Boolean;
-var I: Integer;
+var I: Integer; H: Cardinal;
 begin
+  H := NameHash(N);
   F := FS;
   while F <> nil do
   begin
     for I := F.ScopeCount - 1 downto 0 do
     begin
-      J := F.Scopes[I].Find(N);
+      J := F.Scopes[I].FindH(N, H);
       if J >= 0 then begin S := F.Scopes[I]; Exit(True); end;
     end;
     F := F.Parent;

@@ -83,9 +83,39 @@ end;
 { UTF-8 to UTF-16 in one pass. Any malformed sequence (overlong, surrogate,
   above U+10FFFF, truncated) sends the whole input to UTF8Decode, so its
   replacement behaviour is unchanged. }
+{ the leading ASCII bytes of Src (sixteen at a time, at most N) widened into Dst: how many (a multiple of 16) }
+{$IF defined(CPUX86_64) and defined(UNIX)}
+function WidenAscii(Src: PByte; Dst: PWideChar; N: PtrInt): PtrInt; assembler; nostackframe;
+asm
+  xorl %eax, %eax
+  pxor %xmm2, %xmm2
+.Lwide:
+  leaq 16(%rax), %rcx
+  cmpq %rdx, %rcx
+  ja .Lwdone
+  movdqu (%rdi,%rax), %xmm0
+  pmovmskb %xmm0, %ecx
+  testl %ecx, %ecx
+  jnz .Lwdone
+  movdqa %xmm0, %xmm1
+  punpcklbw %xmm2, %xmm0
+  punpckhbw %xmm2, %xmm1
+  movdqu %xmm0, (%rsi,%rax,2)
+  movdqu %xmm1, 16(%rsi,%rax,2)
+  addq $16, %rax
+  jmp .Lwide
+.Lwdone:
+end;
+{$ELSE}
+function WidenAscii(Src: PByte; Dst: PWideChar; N: PtrInt): PtrInt;
+begin
+  Result := 0;
+end;
+{$ENDIF}
+
 {$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
 function DecodeSource(const Raw: RawByteString): UnicodeString;
-var I, N, J: Integer; P: PByte; D: PWideChar; B, C: Cardinal; Q: QWord;
+var I, N, J, K: Integer; P: PByte; D: PWideChar; B, C: Cardinal; Q: QWord;
 begin
   N := Length(Raw);
   SetLength(Result, N);
@@ -94,6 +124,8 @@ begin
   I := 0; J := 0;
   while I < N do
   begin
+    K := WidenAscii(@P[I], @D[J], N - I);
+    Inc(I, K); Inc(J, K);
     { eight ASCII bytes at a time }
     while (I + 8 <= N) and (PQWord(@P[I])^ and QWord($8080808080808080) = 0) do
     begin
