@@ -4760,6 +4760,28 @@ begin
     end;
 end;
 
+{ (G2_OPTLOG) the inlined call sites: each callee's name and its depth }
+function OSiteList: string;
+var S: Integer;
+begin
+  Result := '';
+  for S := 0 to OSiteCount - 1 do
+    Result := Result + ' ' + OptName(OSites[S].Tc) + '/' + IntToStr(OSites[S].Depth);
+end;
+
+{ (G2_OPTLOG) the region's exits: each exit block's instruction and virtual PC }
+function OExitList: string;
+var B: Integer; S: string;
+begin
+  Result := '';
+  for B := 0 to OBCount - 1 do
+    if (OB[B].Term = otExit) and (OB[B].TermPC >= 0) and (OB[B].TermPC < OVLen) then
+    begin
+      WriteStr(S, OOpOf(OIns(OB[B].TermPC)));
+      Result := Result + ' ' + S + '@' + IntToStr(OB[B].TermPC);
+    end;
+end;
+
 { NewObj at virtual PC K allocated inline (OAllocCap), the DefProps of its literal after it (straight-line code of
   its frame, on its register) native (ODefSlot, ODefShape, ODefNew) }
 procedure OAllocSpec(K: Integer);
@@ -4955,9 +4977,11 @@ begin
     OPropSlot[K] := -1; OPropShape[K] := nil; OPropKind[K] := 0; OPropVK[K] := vkTag; OPropIC[K] := nil;
     OPropNew[K] := nil;
     if K = OVLen then Continue;
-    { a guard that failed: not again, unless the cache has seen more shapes since (tried in turn) }
+    { a guard that failed: not again, unless the cache has seen more shapes since (tried in turn). A full cache
+      (four shapes) is a site with more shapes than it holds: its guards would fail again on each recompile }
     if ((OFb(K) and ofbProp) <> 0) and
-       (not (OOpOf(OIns(K)) in [opGetProp, opGetMethod]) or (OVTpl[K]^.ICs[OCU(OIns(K))].PolyCount < 2)) then Continue;
+       (not (OOpOf(OIns(K)) in [opGetProp, opGetMethod]) or (OVTpl[K]^.ICs[OCU(OIns(K))].PolyCount < 2) or
+        (OVTpl[K]^.ICs[OCU(OIns(K))].PolyCount >= 4)) then Continue;
     case OOpOf(OIns(K)) of
       opGetProp, opGetMethod:
         begin
@@ -5060,7 +5084,11 @@ begin
   Iter := 0;
   repeat
     Inc(Iter);
-    if Iter > 12 then Exit;
+    if Iter > 12 then
+    begin
+      if OptLog then WriteLn(ErrOutput, 'opt ', OptName(OT), ' pc ', PC, ' given up (kinds do not settle)');
+      Exit;
+    end;
     OB := nil;
     if not OBuildBlocks then Exit;
     if OInferKinds(Kinds) then Break;
@@ -5241,7 +5269,7 @@ begin
   if OptLog then
     WriteLn(ErrOutput, 'opt ', OptName(T), ' pc ', PC, ' len ', T^.CodeLen, ' ok ', Info^.Tried[PC] = 1,
       ' nodes ', ONCount, ' blocks ', OBCount, ' spills ', OSpills, ' recompiles ', Info^.Recompiles, ' bytes ', JitLen,
-      ' inlined ', OSiteCount, ' embeds', OEmbedList);
+      ' inlined ', OSiteCount, OSiteList, ' embeds', OEmbedList, ' exits', OExitList);
   if OptLog then Flush(ErrOutput);
 end;
 

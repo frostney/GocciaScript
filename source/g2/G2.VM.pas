@@ -3494,6 +3494,51 @@ begin
   Result := True;
 end;
 
+{ the megamorphic get cache: a site whose four entries are full (more receiver shapes than it holds) looks its
+  receiver's shape and key up here before the miss walk, and the walk's cacheable results go in. An entry is
+  the one the walk would add to the site, checked the same way (ICGetEntry), so it is right wherever the
+  site's own entry would be: shapes and atoms live until HeapDone, and a dictionary that changes in place
+  either bumps its version (checked) or takes a new shape }
+const
+  MEGA_BITS = 12;
+type
+  TMegaEntry = record
+    Key: PStr;
+    E: TICEntry;
+  end;
+  PMegaEntry = ^TMegaEntry;
+
+function MegaSlot(Sh: PShape; Key: PStr): PMegaEntry; inline;
+begin
+  Result := @PMegaEntry(MegaICTab)[((PtrUInt(Sh) shr 4) xor (PtrUInt(Key) shr 3) xor (PtrUInt(Key) shr 15)) and
+    ((1 shl MEGA_BITS) - 1)];
+end;
+
+{ ICGetEntry for a megamorphic entry: Slot -1 is a key absent from the whole chain (the last shape's prototype
+  is null), its value undefined }
+function MegaGet(E: PICEntry; O: PObj; var Res: TValue): Boolean;
+var P: PObj; D: Integer;
+begin
+  P := O;
+  for D := 0 to E^.Depth - 1 do
+  begin
+    if ((E^.VerMask shr D) and 1 <> 0) and (P^.Shape^.Version <> E^.Vers[D]) then Exit(False);
+    P := ObjOf(P^.Shape^.Proto);
+    if P^.Shape <> E^.Holder[D] then Exit(False);
+  end;
+  if E^.Slot < 0 then Res := VUndefined else Res := GetSlot(P, E^.Slot);
+  Result := True;
+end;
+
+procedure MegaPut(Key: PStr; const E: TICEntry);
+var M: PMegaEntry;
+begin
+  if MegaICTab = nil then MegaICTab := AllocMem(SizeOf(TMegaEntry) shl MEGA_BITS);
+  M := MegaSlot(E.Shape, Key);
+  M^.Key := Key;
+  M^.E := E;
+end;
+
 { the IC's other entries (out of line: the dispatch loop stays small) }
 function ICGetOther(IC: PPropIC; O: PObj; var Res: TValue): Boolean;
 var I: Integer;
@@ -3633,11 +3678,22 @@ end;
 { an IC miss: GetFromObject's walk (same order: own shape, virtual property, elements, function prototype,
   then the prototype), and an entry for the IC when the value is a data property the shapes alone decide }
 function ICGetMiss(IC: PPropIC; O: PObj; Receiver: TValue; var Res: TValue): Boolean;
-var P: PObj; S, D, N: Integer; Flags: Byte; Acc: PAccessor; Pv, V: TValue; Idx: Int64; E: TICEntry; Cacheable: Boolean;
+var M: PMegaEntry; P: PObj; S, D, N: Integer; Flags: Byte; Acc: PAccessor; Pv, V: TValue; Idx: Int64; E: TICEntry; Cacheable: Boolean;
 begin
   { an index-like key can hit virtual properties that depend on more than the shape (a String object's
     characters): never cached }
   {$IFDEF G2_ICSTATS}Inc(ICMissN);{$ENDIF}
+  if MegaICTab <> nil then
+  begin
+    M := MegaSlot(O^.Shape, IC^.Key);
+    if (M^.Key = IC^.Key) and (M^.E.Shape = O^.Shape) and (M^.E.Kind = O^.OKind) and (M^.E.Acc = 0) and
+       MegaGet(@M^.E, O, Res) then
+    begin
+      { what the walk would add to the site (an absent key: nothing): runs of one shape hit it inline }
+      if M^.E.Slot >= 0 then ICAddEntry(IC, M^.E);
+      Exit(True);
+    end;
+  end;
   Cacheable := not IndexFromString(IC^.Key, Idx);
   {$IFDEF G2_ICSTATS}if not Cacheable then Inc(ICWhy[1]);{$ENDIF}
   E.Shape := O^.Shape;
@@ -3680,6 +3736,7 @@ begin
         E.Depth := D;
         E.Slot := S;
         ICAddEntry(IC, E);
+        MegaPut(IC^.Key, E);
       end;
       Exit(True);
     end;
@@ -3700,7 +3757,21 @@ begin
       Exit(True);
     end;
     Pv := P^.Shape^.Proto;
-    if not IsObject(Pv) then begin {$IFDEF G2_ICSTATS}Inc(ICWhy[2]);{$ENDIF} Res := VUndefined; Exit(True); end;
+    if not IsObject(Pv) then
+    begin
+      {$IFDEF G2_ICSTATS}Inc(ICWhy[2]);{$ENDIF}
+      Res := VUndefined;
+      { absent from the chain: each object past the receiver is the one its predecessor's shape names, so the
+        shapes (and the dictionaries' versions) decide it again; the last object's version is not kept, so not
+        past a dictionary }
+      if Cacheable and not P^.Shape^.IsDict then
+      begin
+        E.Depth := D;
+        E.Slot := -1;
+        MegaPut(IC^.Key, E);
+      end;
+      Exit(True);
+    end;
     if D >= IC_MAX_DEPTH then
     begin
       {$IFDEF G2_ICSTATS}if Cacheable then Inc(ICWhy[5]);{$ENDIF}

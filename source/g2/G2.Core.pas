@@ -313,6 +313,8 @@ var
   { G2.VM's: forgets the cached add transitions of this agent's code (a bump is rare: the walk is cheap enough) }
   ProtoChangeHook: procedure = nil;
 threadvar
+  { G2.VM's megamorphic get cache: (shape, key) entries for sites whose inline cache is full (nil until one is) }
+  MegaICTab: Pointer;
   { no add transition is cached once a proxy is some object's prototype (its [[Set]] is the handler's) or the
     prototypes outnumber the root shape indices (ProtoChanged would miss changes to the rest) }
   AddICUnsafe: Boolean;
@@ -2162,6 +2164,8 @@ begin
   KeyAtoms := nil; KeyAtomCount := 0;
   for I := 0 to ShapeCount - 1 do Dispose(AllShapes[I]);
   AllShapes := nil; ShapeCount := 0;
+  if MegaICTab <> nil then FreeMem(MegaICTab);
+  MegaICTab := nil;
   RootShapes := nil; RootShapeCount := 0;
   GrayStack := nil; GrayTop := 0; RememberedList := nil; RememberedTop := 0; TempRoots := nil; TempTop := 0;
   GCOldBytes := 0; GCOldBytesAtMajor := 0; GCPromotedBytes := 0; GCMinorCount := 0; GCMajorCount := 0;

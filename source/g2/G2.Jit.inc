@@ -1126,8 +1126,41 @@ end;
   an instruction without inline code. Fr is the running frame, its PC already past the instruction; I the
   instruction. False: a throw pending ---- }
 
+{ JH_GetProp's object receiver O (VB) past its IC's data entries }
+function JH_GetPropObj(Fr: PFrame; I: QWord; R: PValue; A: Integer; VB: TValue; IC: PPropIC; O: PObj): Boolean;
+var J: Integer; V: TValue;
+begin
+  if (TOp(I and $FF) = opGetLength) and (O^.OKind = okArray) and ((O^.OFlags and ofBigLen) = 0) then
+  begin
+    R[A] := MkInt(O^.Elements^.Len);
+    Exit(True);
+  end;
+  if (TOp(I and $FF) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) then
+  begin
+    R[A] := MkInt(TALength(O));
+    Exit(True);
+  end;
+  J := ICAccGet(IC, O, VB, V);
+  if J = 0 then Exit(False);
+  if J = 1 then begin VStack[Fr^.Base + A] := V; Exit(True); end;
+  if not ICGetMiss(IC, O, VB, V) then Exit(False);
+  VStack[Fr^.Base + A] := V;
+  Result := True;
+end;
+
+{ the baseline's cold get once ICGetHit found no entry (an object receiver): JH_GetPropObj, without JH_GetProp's
+  second search of the entries }
+function JH_GetPropMiss(Fr: PFrame; I: QWord): Boolean;
+var R: PValue; A: Integer; VB: TValue;
+begin
+  R := @VStack[Fr^.Base];
+  A := (I shr 8) and $FFFF;
+  VB := R[(I shr 24) and $FFFF];
+  Result := JH_GetPropObj(Fr, I, R, A, VB, @Fr^.Tpl^.ICs[I shr 40], PObj(PtrUInt(VB and PTR_MASK)));
+end;
+
 function JH_GetProp(Fr: PFrame; I: QWord): Boolean;
-var R: PValue; A, J: Integer; VB, V: TValue; IC: PPropIC; O: PObj;
+var R: PValue; A: Integer; VB, V: TValue; IC: PPropIC; O: PObj;
 begin
   R := @VStack[Fr^.Base];
   A := (I shr 8) and $FFFF;
@@ -1139,22 +1172,7 @@ begin
     if O^.Hdr.Kind = ckObject then
     begin
       if ICGet(IC, O, R[A]) then Exit(True);
-      if (TOp(I and $FF) = opGetLength) and (O^.OKind = okArray) and ((O^.OFlags and ofBigLen) = 0) then
-      begin
-        R[A] := MkInt(O^.Elements^.Len);
-        Exit(True);
-      end;
-      if (TOp(I and $FF) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) then
-      begin
-        R[A] := MkInt(TALength(O));
-        Exit(True);
-      end;
-      J := ICAccGet(IC, O, VB, V);
-      if J = 0 then Exit(False);
-      if J = 1 then begin R[A] := V; Exit(True); end;
-      if not ICGetMiss(IC, O, VB, V) then Exit(False);
-      VStack[Fr^.Base + A] := V;
-      Exit(True);
+      Exit(JH_GetPropObj(Fr, I, R, A, VB, IC, O));
     end
     else if O^.Hdr.Kind = ckString then
     begin
@@ -3804,12 +3822,14 @@ begin
             if PC + 1 < T^.CodeLen then JmpPC(PC + 1) else JmpExit(PC);
             PatchHere(L1); PatchHere(L2); PatchHere(L3);
           end;
-          { ICGetHit: its answer in R[A] goes on, else the helper }
+          { ICGetHit: its answer in R[A] goes on, else the helper (opGetProp's past the entries ICGetHit searched:
+            JH_GetPropMiss) }
           MovRR(jDI, jAX);
           LeaRM(jDX, jBX, JitDefer[N].A * 8);
           CallAbs(@JitICGetHit);
           JB($84); JB($C0);   { test al, al: the Boolean }
           JccPC(ccNE, PC + 1);
+          if TOp(JitDefer[N].I and $FF) = opGetProp then JitDefer[N].H := @JH_GetPropMiss;
         end;
       8:
         begin
@@ -4013,6 +4033,10 @@ begin
   end;
   Code := JitAlloc(JitLen);
   if (Code <> nil) and ((JitDebugFlags and 1) <> 0) then JitMapEntry(Code, JitLen, T, 'base');
+  if (Code <> nil) and ((JitDebugFlags and 2) <> 0) and (T^.Name <> nil) and
+     (Pos(GetEnvironmentVariable('G2_JITDUMP'), UTF8Encode(StrToUnicode(T^.Name))) > 0) then
+    for PC := 0 to T^.CodeLen - 1 do
+      WriteLn(ErrOutput, 'jitpc ', HexStr(PtrUInt(Code) + PtrUInt(JitNative[PC]), 16), ' ', PC);
   if Code = nil then begin FreeMem(Table); Exit; end;
   {$IFDEF G2_JITSTATS}Inc(JitCompiles); Inc(JitCodeBytes, JitLen);{$ENDIF}
   Move(JitBuf[0], Code^, JitLen);
