@@ -48,6 +48,12 @@ const
                         template, room for its registers and a frame }
 
   OPT_INLINE_MAX = 60;   { an inlined callee's instructions at most }
+  { the instructions an inlined callee's code may embed: the baseline's code of these uses neither its template's
+    constants nor its inline caches nor its strictness (a call's frame, an operator's helper, typeof's atoms, an
+    element read; not an element store, whose helper reads the frame's strictness) }
+  OINL_EMBED = [opCall, opNew, opTypeof, opNot, opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl,
+    opShr, opUShr, opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe, opToNum, opToNumeric, opNeg, opBitNot, opAddI,
+    opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opGetElem];
   OPT_INLINE_DEPTH = 3;  { inlined calls nested this deep at most (a callee's call inlined in turn) }
   OPT_INLINE_TOTAL = 160;   { the instructions of one call's callees, nested ones included, at most }
   OPT_INLINE_FB = 256;   { a call site's feedback bytes for its callees (OPT_INLINE_TOTAL + one per callee) }
@@ -369,7 +375,7 @@ var Rd: array[0..63] of Integer; NR, WF, WT: Integer;
 begin
   { the template's own (the baseline's code there), or an inlined callee's call (OBuildStream let it be: no
     inline caches, its exits through XOptInlDeopt) }
-  if OVRole[PC] in [2, 5] then Result := OOpOf(OIns(PC)) in [opCall, opNew]
+  if OVRole[PC] in [2, 5] then Result := OOpOf(OIns(PC)) in OINL_EMBED
   else Result := (OVTpl[PC] = OT) and (PPtrUInt(OInfo^.BaseTable)[PC] <> 0);
   Result := Result and OEmbedSets(OIns(PC), Rd, NR, WF, WT) and not OptNoEmbed[OIns(PC) and $FF];
 end;
@@ -3388,7 +3394,7 @@ end;
 
 { the region's code; nil when it cannot be made }
 function OEmit: Pointer;
-var K, J, B, Epi, RestEpi, ThrowL, G, F: Integer; Labels: array of Integer; GuardAt, ExitAt: array of Integer;
+var K, J, B, Epi, RestEpi, ThrowL, G, F: Integer; Labels: array of Integer; GuardAt, ExitAt, FbAt: array of Integer;
   Code: PByte; L1, L2, L3, L4: Integer;
   D: Cardinal; Neg: Boolean; CC, T: Integer;
 begin
@@ -3553,17 +3559,29 @@ begin
   { the cold stubs: one per guard node and per exit block }
   SetLength(GuardAt, ONCount + OBCount);
   for K := 0 to High(GuardAt) do GuardAt[K] := -1;
+  SetLength(FbAt, OGJCount);
   for K := 0 to OGJCount - 1 do
   begin
     G := OGJ[K].G;
     if G >= 0 then J := G else J := ONCount + (-1 - G);
     if OGJ[K].Fb <> 0 then
     begin
-      { a stub of its own: this jump's feedback (a plain exit: none) }
-      D := Cardinal(JitLen - (OGJ[K].At + 4));
+      { a stub per guard and feedback (a plain exit: none): the node's other jumps with that feedback share it }
+      FbAt[K] := -1;
+      F := K - 1;
+      while (F >= 0) and (F >= K - 64) do
+      begin
+        if (OGJ[F].G = G) and (OGJ[F].Fb = OGJ[K].Fb) then begin FbAt[K] := FbAt[F]; Break; end;
+        Dec(F);
+      end;
+      if FbAt[K] < 0 then
+      begin
+        FbAt[K] := JitLen;
+        if OGJ[K].Fb = OFB_EXIT then OLeave(ON[G].FS, ON[G].FSN, ON[G].PC, 0, Epi)
+        else OLeave(ON[G].FS, ON[G].FSN, ON[G].PC, OGJ[K].Fb, Epi);
+      end;
+      D := Cardinal(FbAt[K] - (OGJ[K].At + 4));
       PCardinal(@JitBuf[OGJ[K].At])^ := D;
-      if OGJ[K].Fb = OFB_EXIT then OLeave(ON[G].FS, ON[G].FSN, ON[G].PC, 0, Epi)
-      else OLeave(ON[G].FS, ON[G].FSN, ON[G].PC, OGJ[K].Fb, Epi);
       Continue;
     end;
     if GuardAt[J] < 0 then
@@ -3621,6 +3639,7 @@ begin
   if Code = nil then Exit;
   Move(JitBuf[0], Code^, JitLen);
   Result := Code;
+  if (JitDebugFlags and 1) <> 0 then JitMapEntry(Code, JitLen, OT, 'opt');
   if OptLog and (GetEnvironmentVariable('G2_OPTDUMP') <> '') then OptDump(Code);
 end;
 
@@ -3730,19 +3749,56 @@ end;
 
 { a first estimate before any analysis (most regions fail it): the instructions reachable from PC, the numeric
   ones (arithmetic, comparisons, numeric branches) at least as many as the others that do work }
+{ a loop header PC's loop: its last back edge's PC (-1: PC is no loop header) }
+function OLoopEnd(T: PFuncTemplate; PC: Integer): Integer;
+var K: Integer;
+begin
+  Result := -1;
+  if PC <= 0 then Exit;
+  for K := PC to T^.CodeLen - 1 do
+    if (InsOp(T^.Code[K]) = opJmp) and (K + 1 + Integer(SarInt64(Int64(T^.Code[K]), 40)) = PC) then Result := K;
+end;
+
+{ the code a loop header PC's region spans: the outermost loop around it, Lo its header .. Hi its last back edge
+  (False: PC is no loop header) }
+function OLoopSpan(T: PFuncTemplate; PC: Integer; out Lo, Hi: Integer): Boolean;
+var K, H, E: Integer; Grew: Boolean;
+begin
+  Hi := OLoopEnd(T, PC);
+  Lo := PC;
+  Result := Hi >= 0;
+  if not Result then Exit;
+  repeat
+    Grew := False;
+    { a back edge past Hi to a header before Lo encloses the span }
+    for K := Hi + 1 to T^.CodeLen - 1 do
+      if InsOp(T^.Code[K]) = opJmp then
+      begin
+        H := K + 1 + Integer(SarInt64(Int64(T^.Code[K]), 40));
+        if (H <= Lo) and (H > 0) then
+        begin
+          E := OLoopEnd(T, H);
+          if E > Hi then begin Lo := H; Hi := E; Grew := True; Break; end;
+        end;
+      end;
+  until not Grew;
+end;
+
 function OQuickProfitable(PC: Integer): Boolean;
-var Seen: array of Boolean; Work: array of Integer; NW, P, T, Num, Other, Props, R: Integer; I: QWord; Op: TOp;
-  Loop: Boolean;
+var Seen: array of Boolean; Work: array of Integer; NW, P, T, Num, Other, Props, R, LBeg, LEnd: Integer; I: QWord;
+  Op: TOp; Loop: Boolean;
 begin
   SetLength(Seen, OT^.CodeLen + 1);
   SetLength(Work, OT^.CodeLen + 1);
   NW := 0; Work[NW] := PC; Inc(NW);
   Num := 0; Other := 0; Props := 0; Loop := False;
+  { a loop's region spans the outermost loop around it (its exits leave to the baseline code) }
+  if not OLoopSpan(OT, PC, LBeg, LEnd) then begin LBeg := 0; LEnd := OT^.CodeLen - 1; end;
   while NW > 0 do
   begin
     Dec(NW);
     P := Work[NW];
-    while (P < OT^.CodeLen) and not Seen[P] do
+    while (P < OT^.CodeLen) and (P >= LBeg) and (P <= LEnd) and not Seen[P] do
     begin
       Seen[P] := True;
       I := OT^.Code[P];
@@ -3815,11 +3871,17 @@ end;
   branches) at least its embedded instructions and unboxes, which cost about what the baseline's do plus their
   flushes; a region that is mostly the baseline's instructions is left to the baseline }
 function OProfitable: Boolean;
-var B, K, N, Gain, Cost, Calls: Integer; Loop: Boolean;
+var B, K, N, Gain, Cost, Calls, Lo, Hi, P: Integer; Loop: Boolean;
 begin
   Gain := 0; Cost := 0; Loop := False; Calls := 0;
+  { a loop's region: the work in the outermost loop around its header counts (what runs once after it does not) }
+  if not OLoopSpan(OT, OEntry, Lo, Hi) then begin Lo := 0; Hi := MaxInt; end;
   for B := 0 to OBCount - 1 do
   begin
+    P := OB[B].StartPC;
+    if (P >= 0) and (P < OVLen) and (OVRole[P] <> 0) and (OVSite[P] >= 0) then P := OSites[OVSite[P]].K
+    else if (P >= 0) and (P < OVLen) and (OVFrame[P] >= 0) then P := OSites[OVFrame[P]].K;
+    if (P >= 0) and (P <= OT^.CodeLen) and ((P < Lo) or (P > Hi)) then Continue;
     for K := 0 to High(OB[B].Nodes) do
     begin
       N := OB[B].Nodes[K];
@@ -3849,6 +3911,7 @@ begin
     it must gain twice what it costs }
   if not Loop and (Calls > 0) then Cost := Cost * 2;
   Result := (Gain > 0) and (Gain >= Cost);
+  if OptLog then WriteLn(ErrOutput, 'profit ', OptName(OT), ' pc ', OEntry, ' gain ', Gain, ' cost ', Cost, ' loop ', Loop);
 end;
 
 { the slot get-IC entry E names of receiver V (of E's shape), along its prototypes as far as their shapes are E's
@@ -4021,7 +4084,8 @@ begin
     opNeg, opBitNot, opNot, opToNum, opToNumeric, opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe,
     opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe, opJNGt, opJNGe,
     opJNSEq, opJSEq, opGetProp, opSetProp, opGetElem, opSetElem, opGetLength, opGetGlobal, opGetMethod, opRet,
-    opRetUndef, opCall, opNew, opNewObj, opDefProp, opDefField, opGetUpv, opCheckHole: Result := True;
+    opRetUndef, opCall, opNew, opNewObj, opDefProp, opDefField, opGetUpv, opCheckHole, opTypeof, opThrow,
+    opThrowConst: Result := True;
   else Result := False;
   end;
 end;
@@ -4034,7 +4098,8 @@ begin
   Op := OOpOf(I); A := OA(I); B := OB_(I); CU := OCU(I); C := OC(I);
   case Op of
     opMov, opNeg, opBitNot, opNot, opToNum, opToNumeric, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI,
-    opShlI, opShrI, opUShrI, opGetProp, opGetLength, opSetProp, opGetMethod: Result := OMk(Op, A + Off, B + Off, CU);
+    opShlI, opShrI, opUShrI, opGetProp, opGetLength, opSetProp, opGetMethod, opTypeof: Result := OMk(Op, A + Off, B + Off, CU);
+    opThrow: Result := OMk(Op, A + Off, B, CU);
     opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr, opEq, opNe, opSEq, opSNe,
     opLt, opLe, opGt, opGe, opGetElem, opSetElem: Result := OMk(Op, A + Off, B + Off, CU + Off);
     opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opLoadHole, opGetGlobal, opCall, opNew, opNewObj,
@@ -4185,6 +4250,21 @@ begin
     if Dup or (N > High(Ts)) then Continue;
     Ts[N] := T;
     Inc(N);
+  end;
+end;
+
+{ whether instruction K uses an inline cache that has never been filled: it has not run (a cold path, an exit
+  there a deopt only if it ever does) }
+function OColdIC(K: Integer): Boolean;
+var IC: PPropIC;
+begin
+  Result := False;
+  case OOpOf(OIns(K)) of
+    opGetProp, opGetMethod, opGetLength, opSetProp, opGetGlobal, opDefField:
+      begin
+        IC := @OVTpl[K]^.ICs[OCU(OIns(K))];
+        Result := (IC^.Shape = nil) and (IC^.PolyCount = 0) and (IC^.Poly0.Shape = nil) and (IC^.NewShape = nil);
+      end;
   end;
 end;
 
@@ -4553,7 +4633,11 @@ begin
   repeat
   Again := False;
   Inc(Attempt);
-  if Attempt > 6 then Exit;
+  if Attempt > 6 then
+  begin
+    if OptLog then WriteLn(ErrOutput, 'opt ', OptName(OT), ' pc ', PC, ' given up (inlining bans)');
+    Exit;
+  end;
   ORegs := OT^.MaxRegs;
   OFail := False;
   OInlBanned := False;
@@ -4616,9 +4700,18 @@ begin
     else Kinds[R] := vkTag;
     if OCaptured[R] then Kinds[R] := vkTag;
   end;
-  if (OFb(PC) and 4) <> 0 then Exit;
+  if (OFb(PC) and 4) <> 0 then
+  begin
+    if OptLog then WriteLn(ErrOutput, 'opt ', OptName(OT), ' pc ', PC, ' given up (feedback)');
+    Exit;
+  end;
   if IsObject(Fr^.Closure) then OQClo := ObjOf(Fr^.Closure) else OQClo := nil;
-  if not OQuickProfitable(PC) then begin OQClo := nil; Exit; end;
+  if not OQuickProfitable(PC) then
+  begin
+    OQClo := nil;
+    if OptLog then WriteLn(ErrOutput, 'opt ', OptName(OT), ' pc ', PC, ' not profitable (quick)');
+    Exit;
+  end;
   OQClo := nil;
   { each element instruction's receiver speculated from the frame's value now: a typed array of a kind done
     natively, an object with an elements store, else none (an element guard that failed: none) }
@@ -4770,7 +4863,8 @@ begin
   if Again then Continue;
   { an inlined callee instruction the tier did not take: that call is not inlined }
   for K := OT^.CodeLen + 1 to OVLen - 1 do
-    if (OVRole[K] = 2) and (OExit[K] or (OEmbed[K] and not (OOpOf(OIns(K)) in [opCall, opNew]))) and
+    if (OVRole[K] = 2) and ((OExit[K] and not (OOpOf(OIns(K)) in [opThrow, opThrowConst]) and not OColdIC(K)) or
+       (OEmbed[K] and not (OOpOf(OIns(K)) in OINL_EMBED))) and
        not OInlBan[OSites[OVSite[K]].K] then
     begin
       if OptLog then WriteLn(ErrOutput, 'ban at ', K, ' op ', OOpOf(OIns(K)), ' exit ', OExit[K]);
@@ -4844,6 +4938,36 @@ begin
     end;
 end;
 
+{ whether the loop at header PC still has calls that have not run: a method whose inline cache is empty, or a
+  callee not compiled yet (lazily compiled bodies: no code to inline) }
+function OLoopCold(Fr: PFrame; T: PFuncTemplate; PC: Integer): Boolean;
+var Lo, Hi, K, P: Integer; I, W: QWord; IC: PPropIC; V: TValue; Clo: PObj;
+begin
+  Result := False;
+  if not OLoopSpan(T, PC, Lo, Hi) then Exit;
+  if IsObject(Fr^.Closure) then Clo := ObjOf(Fr^.Closure) else Clo := nil;
+  for K := Lo to Hi do
+  begin
+    I := T^.Code[K];
+    if not (OOpOf(I) in [opCall, opNew]) then Continue;
+    { the callee register's writer just before (a method or property read) }
+    for P := K - 1 downto Max(Lo, K - 8) do
+    begin
+      W := T^.Code[P];
+      if (OOpOf(W) in [opGetMethod, opGetProp]) and (OA(W) = OA(I)) then
+      begin
+        IC := @T^.ICs[OCU(W)];
+        if (IC^.PolyCount = 0) and (IC^.Poly0.Shape = nil) then Exit(True);
+        Break;
+      end;
+      if OWrites(W) = OA(I) then Break;
+    end;
+    V := OStaticValue(T, Clo, K, OA(I), 0);
+    if IsObject(V) and (ObjOf(V)^.OKind = okFunction) and (PFuncTemplate(ObjOf(V)^.Native)^.CodeLen = 0) then
+      Exit(True);
+  end;
+end;
+
 procedure OptMaybe(Fr: PFrame; PC: Integer); noinline;
 var Info: POptInfo; T: PFuncTemplate; Again: Boolean;
 begin
@@ -4873,7 +4997,7 @@ begin
     { the innermost loop around PC (a call in its body brings the interpreter back in after the call): its region
       compiled from the frame now, entered at the next back edge's count-down }
     PC := OLoopAround(T, PC);
-    if (PC < 0) or (Info^.Tried[PC] <> 0) then
+    if (PC < 0) or (Info^.Tried[PC] in [1, 2]) then
     begin
       Info^.Count := OPT_HOT shl Min(Info^.Fails, 20);
       Exit;
@@ -4882,9 +5006,17 @@ begin
   end;
   { the next run: longer after each region that was not optimized (a template without one stops asking) }
   Info^.Count := OPT_HOT shl Min(Info^.Fails, 20);
-  if (Info^.Tried[PC] <> 0) or (GetCurrentThreadId <> JitMainThread) then
+  if (Info^.Tried[PC] in [1, 2]) or (GetCurrentThreadId <> JitMainThread) then
   begin
     Inc(Info^.Fails);
+    Exit;
+  end;
+  { a loop whose calls have not all run yet: asked again soon (Tried 10 .. 12 the times postponed) }
+  if (Info^.Tried[PC] < 13) and OLoopCold(Fr, T, PC) then
+  begin
+    if Info^.Tried[PC] < 10 then Info^.Tried[PC] := 10 else Inc(Info^.Tried[PC]);
+    Info^.Count := OPT_HOT div 4;
+    if OptLog then WriteLn(ErrOutput, 'opt ', OptName(T), ' pc ', PC, ' postponed (calls not run yet)');
     Exit;
   end;
   if (OptMax >= 0) and (OptCompiles >= OptMax) then Exit;

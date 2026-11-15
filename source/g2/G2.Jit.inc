@@ -3866,10 +3866,48 @@ begin
   JitDefCacheCount := 0;
 end;
 
+var
+  JitDebugEnv: Integer = -1;   { bit 0 G2_JITMAP set, bit 1 G2_JITDUMP set (-1 not read yet) }
+
+{ the debug environment's flags, read once }
+function JitDebugFlags: Integer; inline;
+begin
+  if JitDebugEnv < 0 then
+    JitDebugEnv := Ord(GetEnvironmentVariable('G2_JITMAP') <> '') or (Ord(GetEnvironmentVariable('G2_JITDUMP') <> '') shl 1);
+  Result := JitDebugEnv;
+end;
+
+{ G2_JITMAP=1: each compiled block's address, size and template on stderr (to name a profile's JIT addresses) }
+procedure JitMapEntry(Code: Pointer; Len: Integer; T: PFuncTemplate; const Kind: string);
+var Nm: string; L: Integer;
+begin
+  Nm := '';
+  if T^.Name <> nil then Nm := UTF8Encode(StrToUnicode(T^.Name));
+  if Length(T^.Lines) > 0 then L := T^.Lines[0] else L := -1;
+  WriteLn(ErrOutput, 'jitmap ', HexStr(PtrUInt(Code), 16), ' ', Len, ' ', Kind, ' ', Nm, ' len ', T^.CodeLen, ' line ', L);
+end;
+
+{ G2_JITDUMP=<name part>: each template whose name contains it, its bytecode on stderr as it compiles }
+procedure JitDumpTemplate(T: PFuncTemplate);
+var I: Integer; Q: QWord; S, Nm: string;
+begin
+  Nm := '';
+  if T^.Name <> nil then Nm := UTF8Encode(StrToUnicode(T^.Name));
+  if Pos(GetEnvironmentVariable('G2_JITDUMP'), Nm) = 0 then Exit;
+  WriteLn(ErrOutput, '== ', Nm, ' (params ', T^.NumParams, ', regs ', T^.MaxRegs, ', strict ', T^.IsStrict, ')');
+  for I := 0 to T^.CodeLen - 1 do
+  begin
+    Q := T^.Code[I];
+    WriteStr(S, TOp(Q and $FF));
+    WriteLn(ErrOutput, I:4, '  ', S, ' A=', (Q shr 8) and $FFFF, ' B=', (Q shr 24) and $FFFF, ' C=', SarInt64(Int64(Q), 40));
+  end;
+end;
+
 procedure JitCompile(T: PFuncTemplate);
 var PC, I, Exit0, Throw0, Target, L1, L2: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal;
   Info: POptInfo;
 begin
+  if ((JitDebugFlags and 2) <> 0) and not IntrinsicsInit then JitDumpTemplate(T);
   { the intrinsics' set-up (the JS preludes at start-up, a new realm's) runs once: not compiled, and the template
     stays untried for later code }
   if IntrinsicsInit then Exit;
@@ -3970,6 +4008,7 @@ begin
     JitBuf[JitFixes[I].At + 2] := (D shr 16) and $FF; JitBuf[JitFixes[I].At + 3] := D shr 24;
   end;
   Code := JitAlloc(JitLen);
+  if (Code <> nil) and ((JitDebugFlags and 1) <> 0) then JitMapEntry(Code, JitLen, T, 'base');
   if Code = nil then begin FreeMem(Table); Exit; end;
   {$IFDEF G2_JITSTATS}Inc(JitCompiles); Inc(JitCodeBytes, JitLen);{$ENDIF}
   Move(JitBuf[0], Code^, JitLen);
