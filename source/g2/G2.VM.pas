@@ -30,6 +30,9 @@ type
     RetIdx: Integer;
     Argc: Integer;
     Kind: Byte;          { 0 call, 1 construct (object result or this), 2 discard result }
+    { the optimizing tier's inlined frames in this frame's code while an embedded instruction of theirs runs: their
+      descriptor (nil otherwise; InlinedFrameCount) }
+    Inl: Pointer;
   end;
 
   THandler = record
@@ -341,6 +344,11 @@ function MapIntrinsic(V: TValue; FromR, ToR: Integer): TValue;
 { 10.1.14 GetPrototypeFromConstructor: C's prototype property, else Default (an intrinsic of the running realm)
   as the intrinsic of C's realm }
 function GetPrototypeFromConstructor(C, Default: TValue; var P: TValue): Boolean;
+{ the optimizing tier's inlined frames in frame I while an embedded instruction of theirs runs (a call out of them, a
+  getter): their number, and inlined frame J's (0 the outermost) closure, template, value-stack base and argument
+  count; the instruction flushed their registers and its non-strict frames' changed parameters to the value stack }
+function InlinedFrameCount(I: Integer): Integer;
+procedure InlinedFrame(I, J: Integer; out Closure: TValue; out Tpl: PFuncTemplate; out Base, Argc: Integer);
 
 implementation
 
@@ -5321,11 +5329,13 @@ begin
   Result := True;
 end;
 
-{ FastLoop's call of a native getter O on This (an accessor property's [[Get]], as ICAccGet's CallValue): its
-  result in Dst^; False with its throw pending. The caller checked the stack has room for the receiver }
-function XFastNativeGetter(O: PObj; This: TValue; Dst: PValue): Boolean; noinline;
+{ FastLoop's call of a native getter O on This (an accessor property's [[Get]] of Key, as ICAccGet's CallValue):
+  its result in Dst^; False with its throw pending. The caller checked the stack has room for the receiver }
+function XFastNativeGetter(O: PObj; This: TValue; Dst: PValue; Key: PStr): Boolean; noinline;
 var SavedTop, NP: Integer; V: TValue;
 begin
+  { (a getter shared by keys, %ThrowTypeError% for caller and arguments, tells them apart by it) }
+  AccessorGetKey := Key;
   SavedTop := StackTop;
   VStack[SavedTop] := This;
   StackTop := SavedTop + 1;
@@ -5476,7 +5486,7 @@ LGetProp:
               begin
                 { a built-in getter (byteLength, size): called here, its throw Execute's with the PC past this }
                 Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
-                if not XFastNativeGetter(O2, VB, @R[A]) then
+                if not XFastNativeGetter(O2, VB, @R[A], IC^.Key) then
                 begin
                   InjectThrow := True;
                   Exit(-1);

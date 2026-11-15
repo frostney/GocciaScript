@@ -992,7 +992,26 @@ end;
 { an embedded instruction: its reads that hold numbers flushed to VStack, the baseline's code, its writes tagged.
   Its exits' frame state: the live registers it does not read (their values are in r15 or spill slots there) }
 procedure OEmbedInstr(B, PC: Integer; I: QWord);
-var Rd: array[0..63] of Integer; NR, WF, WT, K, R, N: Integer; Flushed: array of Boolean;
+var Rd: array[0..63] of Integer; NR, WF, WT, K, R, N, S: Integer; Flushed: array of Boolean;
+  { the parameters of a non-strict ordinary function's frame at register Bs (its this) that changed since the
+    region's entry flushed too: a legacy caller or arguments read while the instruction runs sees them
+    (G2.ObjModel's LegacyCallerRead) }
+  procedure FlushParams(T: PFuncTemplate; Bs: Integer);
+  var R: Integer;
+  begin
+    if T^.IsStrict or T^.IsArrow or T^.IsMethod or T^.IsClassCtor or T^.IsGenerator or T^.IsAsync or T^.TopLevel then
+      Exit;
+    for R := Bs + 1 to Min(Bs + T^.NumParams, ORegs - 1) do
+      if not Flushed[R] and (OMap[R] >= 0) and
+         not ((ON[OMap[R]].Op = onEntry) and (Integer(ON[OMap[R]].Imm) = R)) then
+      begin
+        Flushed[R] := True;
+        if OFSCount >= Length(OFS) then SetLength(OFS, OFSCount * 2 + 256);
+        OFS[OFSCount].Reg := R; OFS[OFSCount].Node := OMap[R];
+        Inc(OFSCount);
+        Inc(ON[N].Y);
+      end;
+  end;
 begin
   if not OEmbedSets(I, Rd, NR, WF, WT) then begin OFail := True; Exit; end;
   N := OEmitNode(B, onEmbed, vkNone, OFSCount, 0, PC);
@@ -1023,6 +1042,13 @@ begin
         Inc(OFSCount);
         Inc(ON[N].Y);
       end;
+  FlushParams(OT, 0);
+  S := OVFrame[PC];
+  while S >= 0 do
+  begin
+    FlushParams(OSites[S].Tc, OSites[S].A + 1);
+    S := OSites[S].Parent;
+  end;
   ON[N].PC := PC;
   ON[N].FS := OFSCount; ON[N].FSN := 0;
   for R := 0 to ORegs - 1 do
@@ -2351,6 +2377,17 @@ begin
   for E := 0 to ND - 1 do PatchHere(Done[E]);
 end;
 
+type
+  { an inlined callee's deopt: its frames, outermost first, each callee register A (of the region's frame), Argc,
+    template T, the PC it resumes at once the frame it calls returns; NextPC the region's frame's }
+  POInlDesc = ^TOInlDesc;
+  TOInlDesc = record
+    N, NextPC: Integer;
+    Lv: array[0..OPT_INLINE_DEPTH - 1] of record A, Argc, PC: Integer; T: PFuncTemplate; Kind: Byte; end;
+  end;
+
+function OInlDesc(S: Integer): POInlDesc; forward;
+
 { node N's code }
 procedure OCode(N: Integer);
 var L, CC: Integer; D: Int64; IC: PPropIC;
@@ -2988,9 +3025,17 @@ begin
           OBox(OFS[L].Node);
           MovMR(jBX, OFS[L].Reg * 8, jAX);
         end;
+        { in an inlined callee: the frame's inline descriptor its frames' (what it calls sees them, InlinedFrame) }
+        if OVFrame[ON[N].PC] >= 0 then
+        begin
+          MovRI(jAX, QWord(PtrUInt(OInlDesc(OVFrame[ON[N].PC]))));
+          MovMR(jR12, PtrInt(@PFrame(nil)^.Inl), jAX);
+        end;
         JitInstr(OT, ON[N].PC, OIns(ON[N].PC));
-        { the continuation: where its slow blocks come back to (JmpPC to the next instruction) }
+        { the continuation: where its slow blocks come back to (JmpPC to the next instruction), the descriptor
+          cleared }
         JitNative[ON[N].PC + 1] := JitLen;
+        if OVFrame[ON[N].PC] >= 0 then Mov64MI(jR12, PtrInt(@PFrame(nil)^.Inl), 0);
       end;
     onLoadKTag:
       begin
@@ -3161,23 +3206,15 @@ begin
   end;
 end;
 
-{ the frame state written back, the stack restored, then the baseline code at PC (the interpreter when it has none);
-  Feedback the bits recorded for PC (0 none: a planned exit) }
-type
-  { an inlined callee's deopt: its frames, outermost first, each callee register A (of the region's frame), Argc,
-    template T, the PC it resumes at once the frame it calls returns; NextPC the region's frame's }
-  POInlDesc = ^TOInlDesc;
-  TOInlDesc = record
-    N, NextPC: Integer;
-    Lv: array[0..OPT_INLINE_DEPTH - 1] of record A, Argc, PC: Integer; T: PFuncTemplate; Kind: Byte; end;
-  end;
-
-function OInlDesc(S: Integer): POInlDesc; forward;
 function XOptInlDeopt(Fr: PFrame; D: POInlDesc; Q: Integer): Integer; forward;
 
+{ the frame state written back, the stack restored, then the baseline code at PC (the interpreter when it has none);
+  Feedback the bits recorded for PC (0 none: a planned exit) }
 procedure OLeave(FS, FSN, PC, Feedback, EpiAt: Integer);
 var K, L1, L2, S, RPC: Integer; Base: PtrUInt;
 begin
+  { (an exit from an inlined callee's embedded instruction: its descriptor cleared) }
+  if (PC >= 0) and (PC <= High(OVFrame)) and (OVFrame[PC] >= 0) then Mov64MI(jR12, PtrInt(@PFrame(nil)^.Inl), 0);
   for K := FS to FS + FSN - 1 do
   begin
     OBox(OFS[K].Node);
@@ -3502,6 +3539,7 @@ begin
   JB($41); JB($5E); JB($41); JB($5D); JB($5D); JB($41); JB($5C); JB($5B); JB($C3);
   { the embedded code's epilogue (eax its result) and throw exit: the frame and r15 first }
   RestEpi := JitLen;
+  if OSiteCount > 0 then Mov64MI(jR12, PtrInt(@PFrame(nil)^.Inl), 0);
   AluRI(0, jSP, OFrame, True);
   JB($41); JB($5F);
   JB($E9); JD(Cardinal(Epi - (JitLen + 4)));
@@ -4146,17 +4184,6 @@ begin
   end;
 end;
 
-{ whether site S's callee and every inlined callee that called it are strict }
-function OChainStrict(S: Integer): Boolean;
-begin
-  while S >= 0 do
-  begin
-    if not OSites[S].Tc^.IsStrict then Exit(False);
-    S := OSites[S].Parent;
-  end;
-  Result := True;
-end;
-
 { the region's virtual instructions: the template's own, then each inlined call's (the call a jump to them): its
   guard, its callee's registers past its arguments undefined (as JitCallStub sets them), the callee's code (two
   virtual instructions each: a return a move into the call's register and a jump back after the call), then the
@@ -4226,11 +4253,10 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
         end;
       end;
       if Off + T^.MaxRegs > ORegs then ORegs := Off + T^.MaxRegs;
-      { the callee's calls: each inlined in turn, or a Math native's, or (every inlined frame strict: no caller or
-        arguments of theirs to see) the baseline's call embedded }
+      { the callee's calls: each inlined in turn, or a Math native's, or the baseline's call embedded (whose callee
+        sees the inlined frames through the frame's inline descriptor, InlinedFrameCount) }
       for Q := 0 to T^.CodeLen - 1 do
-        if (OOpOf(T^.Code[Q]) in [opCall, opNew]) and (OMathIndex(Fr, Bb + 2 * Q) < 0) and
-           not InlineAt(Bb + 2 * Q, S) and not OChainStrict(S) then Exit;
+        if (OOpOf(T^.Code[Q]) in [opCall, opNew]) and (OMathIndex(Fr, Bb + 2 * Q) < 0) then InlineAt(Bb + 2 * Q, S);
       Result := True;
     end;
     procedure NewSite(out S: Integer);
@@ -4316,8 +4342,6 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
     Result := False;
     if (Par >= 0) and (OSites[Par].Depth + 1 >= OPT_INLINE_DEPTH) then Exit;
     OInlTargets(VC, Par, Ts, N);
-    { (the fallback call embedded in an inlined callee: only when no caller or arguments of theirs can be seen) }
-    if (Par >= 0) and not OChainStrict(Par) then N := 0;
     First := OVLen;
     if N = 0 then
     begin
@@ -4877,4 +4901,19 @@ begin
       ' nodes ', ONCount, ' blocks ', OBCount, ' spills ', OSpills, ' recompiles ', Info^.Recompiles, ' bytes ', JitLen,
       ' inlined ', OSiteCount, ' embeds', OEmbedList);
   if OptLog then Flush(ErrOutput);
+end;
+
+function InlinedFrameCount(I: Integer): Integer;
+begin
+  if Frames[I].Inl = nil then Result := 0 else Result := POInlDesc(Frames[I].Inl)^.N;
+end;
+
+procedure InlinedFrame(I, J: Integer; out Closure: TValue; out Tpl: PFuncTemplate; out Base, Argc: Integer);
+var D: POInlDesc;
+begin
+  D := POInlDesc(Frames[I].Inl);
+  Base := Frames[I].Base + D^.Lv[J].A + 1;
+  Closure := VStack[Base - 1];
+  Tpl := D^.Lv[J].T;
+  Argc := D^.Lv[J].Argc;
 end;

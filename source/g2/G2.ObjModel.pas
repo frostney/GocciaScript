@@ -1530,26 +1530,45 @@ end;
   F is not running or that caller is not a non-strict ordinary function; arguments is that call's arguments
   object, null when F is not running. Key: the property being read (AccessorGetKey) }
 function LegacyCallerRead(F: TValue; Key: PStr; var Res: TValue): Boolean;
-var I, J: Integer; T: PFuncTemplate;
+var I, J, N, K, Base, Argc: Integer; T: PFuncTemplate; C: TValue;
+  Acts: array of record Closure: TValue; Tpl: PFuncTemplate; Base, Argc: Integer; end;
 begin
   Result := False;
   if not IsSloppyOrdinary(F) then Exit;
   Result := True;
   Res := VNull;
-  for I := FrameTop - 1 downto 0 do
-    if Frames[I].Closure = F then
+  { the active calls, oldest first: each frame, then the frames the optimizing tier inlined into its code that an
+    embedded instruction of theirs is running in (the frame above called from the innermost) }
+  SetLength(Acts, FrameTop + 8);
+  N := 0;
+  for I := 0 to FrameTop - 1 do
+  begin
+    K := InlinedFrameCount(I);
+    if N + 1 + K > Length(Acts) then SetLength(Acts, N + 1 + K + 8);
+    Acts[N].Closure := Frames[I].Closure; Acts[N].Tpl := Frames[I].Tpl;
+    Acts[N].Base := Frames[I].Base; Acts[N].Argc := Frames[I].Argc;
+    Inc(N);
+    for J := 0 to K - 1 do
+    begin
+      InlinedFrame(I, J, C, T, Base, Argc);
+      Acts[N].Closure := C; Acts[N].Tpl := T; Acts[N].Base := Base; Acts[N].Argc := Argc;
+      Inc(N);
+    end;
+  end;
+  for I := N - 1 downto 0 do
+    if Acts[I].Closure = F then
     begin
       if Key = AtomOf('arguments') then
       begin
-        T := Frames[I].Tpl;
-        if (T^.ArgsReg >= 0) and IsObject(VStack[Frames[I].Base + T^.ArgsReg]) then
-          Res := VStack[Frames[I].Base + T^.ArgsReg]
-        else Res := NewArgumentsObject(@VStack[Frames[I].Base + 1], Min(Frames[I].Argc, T^.NumParams), False);
+        T := Acts[I].Tpl;
+        if (T^.ArgsReg >= 0) and IsObject(VStack[Acts[I].Base + T^.ArgsReg]) then
+          Res := VStack[Acts[I].Base + T^.ArgsReg]
+        else Res := NewArgumentsObject(@VStack[Acts[I].Base + 1], Min(Acts[I].Argc, T^.NumParams), False);
         Exit;
       end;
       J := I - 1;
-      while (J >= 0) and (Frames[J].Tpl^.SourceName = '<eval>') do Dec(J);
-      if (J >= 0) and IsSloppyOrdinary(Frames[J].Closure) then Res := Frames[J].Closure;
+      while (J >= 0) and (Acts[J].Tpl^.SourceName = '<eval>') do Dec(J);
+      if (J >= 0) and IsSloppyOrdinary(Acts[J].Closure) then Res := Acts[J].Closure;
       Exit;
     end;
 end;

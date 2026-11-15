@@ -326,6 +326,9 @@ begin JRex(False, Src, 0, Base); JB($89); JMem(Src, Base, Disp); end;
 procedure Mov32MI(Base, Disp: Integer; Imm: Cardinal);  { mov dword [Base + Disp], Imm }
 begin JRex(False, 0, 0, Base); JB($C7); JMem(0, Base, Disp); JD(Imm); end;
 
+procedure Mov64MI(Base, Disp: Integer; Imm: Integer);   { mov qword [Base + Disp], Imm (sign-extended) }
+begin JRex(True, 0, 0, Base); JB($C7); JMem(0, Base, Disp); JD(Cardinal(Imm)); end;
+
 procedure Mov8MI(Base, Disp: Integer; Imm: Byte);       { mov byte [Base + Disp], Imm }
 begin JRex(False, 0, 0, Base); JB($C6); JMem(0, Base, Disp); JB(Imm); end;
 
