@@ -2182,7 +2182,7 @@ end;
 { a back edge's count-down to loop header H: run out, an optimized region at H (the template's optimized table's
   entry differs from H's own code) goes on there with the count started again, else the exit at H }
 procedure JitCountDownLoop(H: Integer);
-var L1, L2, L3: Integer;
+var L1, L2, L3, L4: Integer;
 begin
   MovRI(jAX, QWord(PtrUInt(@JitInfo^.Count)));
   JB($FF); JB($08);                                { dec dword [rax] }
@@ -2191,13 +2191,17 @@ begin
   MovRM(jCX, jCX, 0);
   AluRR($85, jCX, jCX, True);
   L2 := JccFwd(ccE);
+  { (a region that deopted past the bound: the exit, where OptMaybe drops it) }
+  MovRI(jDX, QWord(PtrUInt(@JitInfo^.Deopts)));
+  JB($81); JB($3A); JD(OPT_MAX_DEOPTS);            { cmp dword [rdx], OPT_MAX_DEOPTS }
+  L3 := JccFwd(ccG);
   MovRM(jCX, jCX, H * 8);
   JB($48); JB($8D); JB($15); AddFix(H);            { lea rdx, [rip + H's code] }
   AluRR($39, jCX, jDX, True);
-  L3 := JccFwd(ccE);
+  L4 := JccFwd(ccE);
   Mov32MI(jAX, 0, OPT_HOT);
   JB($FF); JB($E1);                                { jmp rcx }
-  PatchHere(L2); PatchHere(L3);
+  PatchHere(L2); PatchHere(L3); PatchHere(L4);
   JB($E9); AddFix(-1 - H);                         { the exit at H }
   PatchHere(L1);
 end;
@@ -3926,7 +3930,7 @@ begin
   for PC := 0 to T^.CodeLen - 1 do JitExitOf[PC] := -1;
   Table := GetMem(T^.CodeLen * SizeOf(PtrUInt));
   Info := nil;
-  if (OptEnabled = 1) and T^.NoHandlers and OptCapturesOk(T) and not T^.IsGenerator and not T^.IsAsync and
+  if (OptEnabled = 1) and T^.NoHandlers and OptCapturesOk(T) and not T^.IsAsync and
      (T^.ArgsReg < 0) and (T^.RestReg < 0) and not T^.TopLevel and OptPromising(T) then
   begin
     New(Info);

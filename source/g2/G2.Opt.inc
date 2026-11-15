@@ -54,6 +54,11 @@ const
   OINL_EMBED = [opCall, opNew, opTypeof, opNot, opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl,
     opShr, opUShr, opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe, opToNum, opToNumeric, opNeg, opBitNot, opAddI,
     opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI, opGetElem];
+  OPT_FB_NODES = 200;     { (OFbWeight) }
+  OPT_FB_MIN = 20;
+  { what an inlined call or allocation counts for in the profit estimates: its call (about 150 instructions of the
+    shared call stub, and the callee's entry and return) or its helper gone }
+  OPT_INL_GAIN = 6;
   OPT_INLINE_DEPTH = 3;  { inlined calls nested this deep at most (a callee's call inlined in turn) }
   OPT_INLINE_TOTAL = 160;   { the instructions of one call's callees, nested ones included, at most }
   OPT_INLINE_FB = 256;   { a call site's feedback bytes for its callees (OPT_INLINE_TOTAL + one per callee) }
@@ -154,6 +159,9 @@ var
                                        last embed (0 none known) }
   OEndCap: array of array of Word;
   OQClo: PObj;                       { the region's closure for OQuickProfitable (nil at baseline compile time) }
+  OQStatic: Boolean;                 { OQuickProfitable for OptPromising: a callee not known yet may inline }
+  OSpecFr: PFrame;                   { the frame the region compiles from (OSpecR's values; nil none) }
+  OSpecMemo: array of record R: Integer; K: Byte; end;   { OSpecR's answers, two per virtual PC (R -1 none) }
   OPendR: Integer;                   { a fact OInstr leaves for its written register (-1 none) }
   OPendShape: PShape;
   OPendKind: Byte;
@@ -205,6 +213,7 @@ var
   ORegs: Integer;                    { the template's MaxRegs }
   OLive: array of QWord;             { live registers before each instruction: OLiveW words per PC }
   OLiveW: Integer;
+  OTplLive: array of QWord;          { the same in the template's own code (the baseline's), per its PC }
   OMap: array of Integer;            { the building block's register map }
   OFail: Boolean;
   OSpills: Integer;
@@ -263,8 +272,12 @@ end;
 function OIsNum(K: Integer): Boolean; inline;
 begin Result := (K = vkInt) or (K = vkDbl); end;
 
+{ (at the template's own instructions, also what its baseline code reads from there: a failed guard runs it) }
 function OLiveAt(PC, R: Integer): Boolean; inline;
-begin Result := (OLive[PC * OLiveW + (R shr 6)] and (QWord(1) shl (R and 63))) <> 0; end;
+begin
+  Result := ((OLive[PC * OLiveW + (R shr 6)] and (QWord(1) shl (R and 63))) <> 0) or
+    ((PC < OT^.CodeLen) and (R < OT^.MaxRegs) and ((OTplLive[PC * OLiveW + (R shr 6)] and (QWord(1) shl (R and 63))) <> 0));
+end;
 
 function OIns(PC: Integer): QWord; inline; begin Result := OVCode[PC]; end;
 function OFb(PC: Integer): Byte; inline; begin Result := OVFb[PC]^; end;
@@ -362,8 +375,9 @@ begin
     opNewArr: begin for K := C to C + B - 1 do R(K); WFrom := A; WTo := A; end;
     opCall, opNew:
       begin
-        { the callee, this (or new.target) and the arguments; the callee's frame then overlaps A and up }
-        for K := A to A + 1 + B do R(K);
+        { the callee, this and the arguments (new.target: the instruction's own); the callee's frame then
+          overlaps A and up }
+        for K := A to A + 1 + B do if (K <> A + 1) or (OOpOf(I) = opCall) then R(K);
         WFrom := A; WTo := ORegs - 1;
       end;
   else Result := False;
@@ -532,7 +546,80 @@ begin
   Result := not OFail;
 end;
 
-{ ---- liveness of the bytecode registers (an exit reads every register) ---- }
+{ ---- liveness of the bytecode registers ---- }
+
+{ the template's own liveness (what its baseline code reads from each PC on): an instruction not known here reads
+  every register; the parameters and the registers closures capture are live throughout }
+procedure OComputeTplLive;
+var N, PC, W, R1, R2, NR, WF, WT, K: Integer; I: QWord; Op: TOp; Changed: Boolean; Cur, Always: array of QWord;
+  ERd: array[0..63] of Integer;
+  procedure SetBit(R: Integer); begin if (R >= 0) and (R < ORegs) then Cur[R shr 6] := Cur[R shr 6] or (QWord(1) shl (R and 63)); end;
+  procedure ClrBit(R: Integer); begin if (R >= 0) and (R < ORegs) then Cur[R shr 6] := Cur[R shr 6] and not (QWord(1) shl (R and 63)); end;
+  procedure OrFrom(P: Integer);
+  var J: Integer;
+  begin
+    if (P < 0) or (P > N) then begin for J := 0 to OLiveW - 1 do Cur[J] := not QWord(0); Exit; end;
+    for J := 0 to OLiveW - 1 do Cur[J] := Cur[J] or OTplLive[P * OLiveW + J];
+  end;
+begin
+  N := OT^.CodeLen;
+  SetLength(OTplLive, (N + 1) * OLiveW);
+  FillChar(OTplLive[0], Length(OTplLive) * 8, 0);
+  for W := 0 to OLiveW - 1 do OTplLive[N * OLiveW + W] := not QWord(0);
+  SetLength(Cur, OLiveW);
+  SetLength(Always, OLiveW);
+  for W := 0 to OLiveW - 1 do Cur[W] := 0;
+  for K := 0 to Min(OT^.NumParams, ORegs - 1) do SetBit(K);
+  for K := 0 to ORegs - 1 do if OCaptured[K] then SetBit(K);
+  for W := 0 to OLiveW - 1 do Always[W] := Cur[W];
+  repeat
+    Changed := False;
+    for PC := N - 1 downto 0 do
+    begin
+      I := OT^.Code[PC];
+      Op := OOpOf(I);
+      for W := 0 to OLiveW - 1 do Cur[W] := 0;
+      { live out }
+      case Op of
+        opRet, opRetUndef, opThrow, opThrowConst: ;
+        opJmp: OrFrom(PC + 1 + OC(I));
+      else
+        begin
+          OrFrom(PC + 1);
+          if OIsCondJump(Op) then OrFrom(PC + 1 + OC(I));
+        end;
+      end;
+      { live in }
+      case Op of
+        opRet, opThrow: SetBit(OA(I));
+        opRetUndef, opThrowConst, opJmp: ;
+        { (A the resumption's value, written when it resumes) }
+        opYield: begin ClrBit(OA(I)); SetBit(OB_(I)); end;
+      else
+        if OIsCondJump(Op) then
+        begin
+          OReads(I, R1, R2);
+          SetBit(R1); SetBit(R2);
+        end
+        else if OEmbedSets(I, ERd, NR, WF, WT) then
+        begin
+          if WF >= 0 then for K := WF to WT do ClrBit(K);
+          for K := 0 to NR - 1 do SetBit(ERd[K]);
+        end
+        else for W := 0 to OLiveW - 1 do Cur[W] := not QWord(0);
+      end;
+      for W := 0 to OLiveW - 1 do
+      begin
+        Cur[W] := Cur[W] or Always[W];
+        if OTplLive[PC * OLiveW + W] <> Cur[W] then
+        begin
+          OTplLive[PC * OLiveW + W] := Cur[W];
+          Changed := True;
+        end;
+      end;
+    end;
+  until not Changed;
+end;
 
 procedure OComputeLiveness;
 var Changed: Boolean; B, PC, K, W, R1, R2, Wr, S, NR, WF, WT: Integer; Cur: array of QWord; I: QWord;
@@ -544,6 +631,7 @@ begin
   if OLiveW = 0 then OLiveW := 1;
   SetLength(OLive, (OVLen + 1) * OLiveW);
   FillChar(OLive[0], Length(OLive) * 8, 0);
+  OComputeTplLive;
   SetLength(Cur, OLiveW);
   repeat
     Changed := False;
@@ -553,10 +641,13 @@ begin
       for W := 0 to OLiveW - 1 do Cur[W] := 0;
       if OB[B].Term = otExit then
       begin
-        { the baseline goes on from the exit: a return reads its value only, anything else every register }
+        { the baseline goes on from the exit: a return reads its value only, the template's own code what it
+          reads from there, an inlined callee's (its frames the interpreter's, then its caller's) every register }
         I := OIns(OB[B].TermPC);
         if OOpOf(I) = opRetUndef then
         else if OOpOf(I) = opRet then SetBit(OA(I))
+        else if (OB[B].TermPC < OT^.CodeLen) and (OVFrame[OB[B].TermPC] < 0) then
+          for W := 0 to OLiveW - 1 do Cur[W] := OTplLive[OB[B].TermPC * OLiveW + W]
         else for W := 0 to OLiveW - 1 do Cur[W] := not QWord(0);
       end
       else
@@ -578,7 +669,7 @@ begin
           else if OVRole[PC] = 1 then
           begin
             { an inlined call's guard: the call's operands (the baseline's call, a failed guard, reads them) }
-            for K := OA(I) to OA(I) + 1 + OB_(I) do SetBit(K);
+            for K := OA(I) to OA(I) + 1 + OB_(I) do if (K <> OA(I) + 1) or (OOpOf(I) <> opNew) then SetBit(K);
           end
           else
           begin
@@ -613,12 +704,41 @@ begin
   else Result := vkTag;
 end;
 
-{ the kind a tagged register read as a number at PC is speculated to have (vkNone: no speculation) }
+function OSpecValue(Fr: PFrame; K, R, Depth: Integer): TValue; forward;
+
+{ the kind a tagged value read as a number at PC is speculated to have from its guards' feedback alone }
 function OSpec(PC: Integer): Integer;
 begin
   if (OFb(PC) and ofbUnboxNo) <> 0 then Result := vkNone
   else if (OFb(PC) and ofbUnboxDbl) <> 0 then Result := vkDbl
   else Result := vkInt;
+end;
+
+{ the kind tagged register R read as a number at PC is speculated to have (vkNone: no speculation): what its
+  guards there recorded, else a double when it holds one now, else an int }
+function OSpecR(PC, R: Integer): Integer;
+var V: TValue;
+begin
+  if (OFb(PC) and ofbUnboxNo) <> 0 then Result := vkNone
+  else if (OFb(PC) and ofbUnboxDbl) <> 0 then Result := vkDbl
+  else
+  begin
+    Result := vkInt;
+    if (OSpecFr <> nil) and (R >= 0) and (R < ORegs) then
+    begin
+      { (asked again on each pass over the region: kept per instruction, for its first two registers) }
+      if PC * 2 + 1 < Length(OSpecMemo) then
+      begin
+        if OSpecMemo[PC * 2].R = R then Exit(OSpecMemo[PC * 2].K);
+        if OSpecMemo[PC * 2 + 1].R = R then Exit(OSpecMemo[PC * 2 + 1].K);
+      end;
+      V := OSpecValue(OSpecFr, PC, R, 0);
+      if not IsInt(V) and (V < DOUBLE_LIMIT) then Result := vkDbl;
+      if PC * 2 + 1 < Length(OSpecMemo) then
+        if OSpecMemo[PC * 2].R < 0 then begin OSpecMemo[PC * 2].R := R; OSpecMemo[PC * 2].K := Result; end
+        else if OSpecMemo[PC * 2 + 1].R < 0 then begin OSpecMemo[PC * 2 + 1].R := R; OSpecMemo[PC * 2 + 1].K := Result; end;
+    end;
+  end;
 end;
 
 { the instructions that read their operands as numbers (a tagged operand speculated, then unboxed) }
@@ -644,8 +764,8 @@ begin
   end;
   if ONumConsumer(Op) then
   begin
-    if KB = vkTag then KB := OSpec(PC);
-    if KC = vkTag then KC := OSpec(PC);
+    if KB = vkTag then KB := OSpecR(PC, OB_(I));
+    if KC = vkTag then KC := OSpecR(PC, OCU(I));
     if (KB = vkNone) and not (Op in [opMov]) and (Op <> opNop) and (Op in [opAdd, opSub, opMul, opDiv, opMod,
       opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI,
       opShlI, opShrI, opUShrI, opNeg, opBitNot, opToNum, opToNumeric, opLt, opLe, opGt, opGe]) then Exit(vkNone);
@@ -688,7 +808,7 @@ begin
         { a speculated receiver and an int index (a tagged one unboxed as an int): a double or a boolean is a
           property key, not an index }
         KC := K[OCU(I)];
-        if KC = vkTag then KC := OSpec(PC);
+        if KC = vkTag then KC := OSpecR(PC, OCU(I));
         if (KC <> vkInt) or (K[OB_(I)] <> vkTag) then Exit(vkNone);
         case OElemSpec[PC] of
           taInt8, taUint8, taUint8C, taInt16, taUint16, taInt32: Result := vkInt;
@@ -714,13 +834,13 @@ function OSetElemOk(PC: Integer; I: QWord; const K: array of Byte): Boolean;
 var KB, KC: Integer;
 begin
   KB := K[OB_(I)];
-  if KB = vkTag then KB := OSpec(PC);
+  if KB = vkTag then KB := OSpecR(PC, OB_(I));
   if (KB <> vkInt) or (K[OA(I)] <> vkTag) then Exit(False);
   KC := K[OCU(I)];
   case OElemSpec[PC] of
     taInt8, taUint8, taInt16, taUint16, taInt32, taUint32, taFloat32, taFloat64:
       begin
-        if KC = vkTag then KC := OSpec(PC);
+        if KC = vkTag then KC := OSpecR(PC, OCU(I));
         Result := OIsNum(KC);
       end;
     ELEM_ARRAY: Result := KC <> vkNone;
@@ -740,8 +860,8 @@ begin
     opJNLt, opJNLe, opJNGt, opJNGe:
       begin
         KB := K[OB_(I)];
-        if KA = vkTag then KA := OSpec(PC);
-        if KB = vkTag then KB := OSpec(PC);
+        if KA = vkTag then KA := OSpecR(PC, OA(I));
+        if KB = vkTag then KB := OSpecR(PC, OB_(I));
         Result := OIsNum(KA) and OIsNum(KB);
       end;
     opJNSEq, opJSEq:
@@ -789,8 +909,8 @@ begin
           else if Op in [opJNLt, opJNLe, opJNGt, opJNGe] then
           begin
             { the tagged operands unboxed }
-            if Cur[OA(I)] = vkTag then Cur[OA(I)] := OSpec(PC);
-            if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpec(PC);
+            if Cur[OA(I)] = vkTag then Cur[OA(I)] := OSpecR(PC, OA(I));
+            if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpecR(PC, OB_(I));
             for K := 0 to High(OCapList) do Cur[OCapList[K]] := vkTag;
           end;
           Break;
@@ -828,8 +948,8 @@ begin
             Break;
           end;
           { the tagged index (and a typed array's tagged value) unboxed }
-          if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpec(PC);
-          if (OElemSpec[PC] <> ELEM_ARRAY) and (Cur[OCU(I)] = vkTag) then Cur[OCU(I)] := OSpec(PC);
+          if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpecR(PC, OB_(I));
+          if (OElemSpec[PC] <> ELEM_ARRAY) and (Cur[OCU(I)] = vkTag) then Cur[OCU(I)] := OSpecR(PC, OCU(I));
           for K := 0 to High(OCapList) do Cur[OCapList[K]] := vkTag;
           Continue;
         end;
@@ -837,7 +957,7 @@ begin
         begin
           { an intrinsic Math call (not embedded): a function in the callee register, a number argument }
           RK := Cur[OA(I) + 2];
-          if RK = vkTag then RK := OSpec(PC);
+          if RK = vkTag then RK := OSpecR(PC, OA(I) + 2);
           if not OIsNum(RK) or (Cur[OA(I)] <> vkTag) or OCaptured[OA(I)] then
           begin
             OMathSpec[PC] := -1;
@@ -845,7 +965,7 @@ begin
             Result := False;
             Break;
           end;
-          if Cur[OA(I) + 2] = vkTag then Cur[OA(I) + 2] := OSpec(PC);
+          if Cur[OA(I) + 2] = vkTag then Cur[OA(I) + 2] := OSpecR(PC, OA(I) + 2);
           Cur[OA(I)] := vkDbl;
           for K := 0 to High(OCapList) do Cur[OCapList[K]] := vkTag;
           Continue;
@@ -875,7 +995,7 @@ begin
           Continue;
         end;
         if (Op = opGetElem) and (Cur[OCU(I)] = vkTag) and (OResultKind(PC, I, Cur) <> vkNone) then
-          Cur[OCU(I)] := OSpec(PC);
+          Cur[OCU(I)] := OSpecR(PC, OCU(I));
         RK := OResultKind(PC, I, Cur);
         if RK = vkNone then
         begin
@@ -895,10 +1015,10 @@ begin
           { the tagged operands unboxed (as OGetAs does) }
           if not (Op in [opMov]) then
           begin
-            if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpec(PC);
+            if Cur[OB_(I)] = vkTag then Cur[OB_(I)] := OSpecR(PC, OB_(I));
             if not (Op in [opNeg, opBitNot, opToNum, opToNumeric, opAddI, opSubI, opIncI, opBitAndI, opBitOrI,
               opBitXorI, opShlI, opShrI, opUShrI]) then
-              if Cur[OCU(I)] = vkTag then Cur[OCU(I)] := OSpec(PC);
+              if Cur[OCU(I)] = vkTag then Cur[OCU(I)] := OSpecR(PC, OCU(I));
           end;
         end;
         Cur[OA(I)] := RK;
@@ -972,7 +1092,7 @@ begin
   if V < 0 then
   begin
     { a tagged register read as a number: unboxed (checked against the speculation), then held as that }
-    SK := OSpec(OCurPC);
+    SK := OSpecR(OCurPC, R);
     if SK = vkNone then begin OFail := True; Exit(0); end;
     V := OEmitNode(B, onUnbox, SK, -1, -1, R);
     OGuard(V, OCurPC);
@@ -1108,8 +1228,8 @@ procedure OInstr(B, PC: Integer; I: QWord);
 var Op: TOp; A, X, Y, N: Integer; V: TValue; Ovf: Boolean; D: Double; Imm: Int64;
   function Arith(OpI, OpD: Integer): Integer;
   begin
-    if OMap[OB_(I)] < 0 then OGetAs(B, OB_(I), OSpec(PC));
-    if OMap[OCU(I)] < 0 then OGetAs(B, OCU(I), OSpec(PC));
+    if OMap[OB_(I)] < 0 then OGetAs(B, OB_(I), OSpecR(PC, OB_(I)));
+    if OMap[OCU(I)] < 0 then OGetAs(B, OCU(I), OSpecR(PC, OCU(I)));
     if (OMap[OB_(I)] < 0) or (OMap[OCU(I)] < 0) then begin OFail := True; Exit(0); end;
     if (ON[OMap[OB_(I)]].Kind = vkInt) and (ON[OMap[OCU(I)]].Kind = vkInt) and not Ovf and (OpI > 0) then
     begin
@@ -1123,7 +1243,7 @@ var Op: TOp; A, X, Y, N: Integer; V: TValue; Ovf: Boolean; D: Double; Imm: Int64
   var C: Integer;
   begin
     C := OC(I);
-    if OMap[OB_(I)] < 0 then OGetAs(B, OB_(I), OSpec(PC));
+    if OMap[OB_(I)] < 0 then OGetAs(B, OB_(I), OSpecR(PC, OB_(I)));
     if OMap[OB_(I)] < 0 then begin OFail := True; Exit(0); end;
     if (ON[OMap[OB_(I)]].Kind = vkInt) and not Ovf then
     begin
@@ -1142,8 +1262,8 @@ var Op: TOp; A, X, Y, N: Integer; V: TValue; Ovf: Boolean; D: Double; Imm: Int64
   function Cmp(CC: Integer; R1, R2: Integer): Integer;
   var K1, K2: Integer;
   begin
-    if OMap[R1] < 0 then OGetAs(B, R1, OSpec(PC));
-    if OMap[R2] < 0 then OGetAs(B, R2, OSpec(PC));
+    if OMap[R1] < 0 then OGetAs(B, R1, OSpecR(PC, R1));
+    if OMap[R2] < 0 then OGetAs(B, R2, OSpecR(PC, R2));
     if (OMap[R1] < 0) or (OMap[R2] < 0) then begin OFail := True; Exit(0); end;
     K1 := ON[OMap[R1]].Kind; K2 := ON[OMap[R2]].Kind;
     if ((K1 = vkInt) or (K1 = vkBool)) and (K1 = K2) then
@@ -1380,7 +1500,7 @@ begin
     opBitNot: N := OEmitNode(B, onNotI, vkInt, OGetAs(B, OB_(I), vkInt), -1, 0);
     opNeg:
       begin
-        if OMap[OB_(I)] < 0 then OGetAs(B, OB_(I), OSpec(PC));
+        if OMap[OB_(I)] < 0 then OGetAs(B, OB_(I), OSpecR(PC, OB_(I)));
         X := OMap[OB_(I)];
         if X < 0 then begin OFail := True; Exit; end;
         if (ON[X].Kind = vkInt) and not Ovf then
@@ -1402,7 +1522,7 @@ begin
       end;
     opToNum, opToNumeric:
       begin
-        if OMap[OB_(I)] < 0 then OGetAs(B, OB_(I), OSpec(PC));
+        if OMap[OB_(I)] < 0 then OGetAs(B, OB_(I), OSpecR(PC, OB_(I)));
         N := OMap[OB_(I)];
       end;
     opLt: N := Cmp(ocLt, OB_(I), OCU(I));
@@ -1437,8 +1557,8 @@ procedure OTerminator(B: Integer);
 var PC, R1, R2, K1, K2: Integer; I: QWord; Op: TOp;
   procedure CmpTest(CC: Integer; Negate: Boolean);
   begin
-    if OMap[R1] < 0 then OGetAs(B, R1, OSpec(PC));
-    if OMap[R2] < 0 then OGetAs(B, R2, OSpec(PC));
+    if OMap[R1] < 0 then OGetAs(B, R1, OSpecR(PC, R1));
+    if OMap[R2] < 0 then OGetAs(B, R2, OSpecR(PC, R2));
     if (OMap[R1] < 0) or (OMap[R2] < 0) then begin OFail := True; Exit; end;
     K1 := ON[OMap[R1]].Kind; K2 := ON[OMap[R2]].Kind;
     if ((K1 = vkInt) or (K1 = vkBool)) and (K1 = K2) then
@@ -3218,10 +3338,26 @@ end;
 
 function XOptInlDeopt(Fr: PFrame; D: POInlDesc; Q: Integer): Integer; forward;
 
+{ G2_OPTLOG: each exit that records feedback, as it is taken (the template, the virtual and template PCs, the
+  feedback bits) }
+procedure XOptLogDeopt(T: PFuncTemplate; VPC, PC, Fb: Integer);
+begin
+  if T^.Name <> nil then Write(ErrOutput, 'deopt ', UTF8Encode(StrToUnicode(T^.Name))) else Write(ErrOutput, 'deopt ?');
+  WriteLn(ErrOutput, ' vpc ', VPC, ' pc ', PC, ' fb ', Fb);
+end;
+
 { the frame state written back, the stack restored, then the baseline code at PC (the interpreter when it has none);
   Feedback the bits recorded for PC (0 none: a planned exit) }
+{ what new feedback weighs in deopts (past OPT_MAX_DEOPTS the regions go): all of them for a region of up to
+  OPT_FB_NODES nodes, proportionally less for a bigger one, OPT_FB_MIN at least }
+function OFbWeight: Integer;
+begin
+  if ONCount <= OPT_FB_NODES then Result := OPT_MAX_DEOPTS + 1
+  else Result := Max(OPT_FB_MIN, ((OPT_MAX_DEOPTS + 1) * OPT_FB_NODES) div ONCount);
+end;
+
 procedure OLeave(FS, FSN, PC, Feedback, EpiAt: Integer);
-var K, L1, L2, S, RPC: Integer; Base: PtrUInt;
+var K, L1, L2, L3, S, RPC: Integer; Base: PtrUInt;
 begin
   { (an exit from an inlined callee's embedded instruction: its descriptor cleared) }
   if (PC >= 0) and (PC <= High(OVFrame)) and (OVFrame[PC] >= 0) then Mov64MI(jR12, PtrInt(@PFrame(nil)^.Inl), 0);
@@ -3230,10 +3366,19 @@ begin
     OBox(OFS[K].Node);
     MovMR(jBX, OFS[K].Reg * 8, jAX);
   end;
+  if OptLog and (Feedback <> 0) and (PC >= 0) and (PC < OVLen) then
+  begin
+    MovRI(jDI, QWord(PtrUInt(OVTpl[PC])));
+    MovRI(jSI, Cardinal(PC));
+    MovRI(jDX, Cardinal(OVPC[PC]));
+    MovRI(jCX, Cardinal(Feedback));
+    CallAbs(@XOptLogDeopt);
+  end;
   if Feedback <> 0 then
   begin
-    { feedback already recorded: one more deopt; new feedback: recorded, and the regions are dropped at the
-      template's next count-down so that they compile again with it }
+    { feedback already recorded: one more deopt; new feedback: recorded, and it weighs OFbWeight deopts (a small
+      region compiles again at once; a big one, whose compilation costs far more than its deopts, learns several
+      things first) }
     MovRI(jAX, QWord(PtrUInt(OVFb[PC])));
     JB($F6); JB($00); JB(Byte(Feedback));                 { test byte [rax], Feedback }
     L1 := JccFwd(ccNE);
@@ -3241,14 +3386,21 @@ begin
     MovRI(jAX, QWord(PtrUInt(@OInfo^.FbDrop)));
     Mov32MI(jAX, 0, 1);
     MovRI(jAX, QWord(PtrUInt(@OInfo^.Deopts)));
-    Mov32MI(jAX, 0, OPT_MAX_DEOPTS + 1);
-    MovRI(jAX, QWord(PtrUInt(@OInfo^.Count)));
-    Mov32MI(jAX, 0, 0);
-    L2 := JmpFwd;
+    JB($81); JB($00); JD(OFbWeight - 1);                  { add dword [rax], OFbWeight - 1 }
     PatchHere(L1);
     MovRI(jAX, QWord(PtrUInt(@OInfo^.Deopts)));
     JB($FF); JB($00);                                     { inc dword [rax] }
-    PatchHere(L2);
+    { past the bound: the regions go }
+    JB($81); JB($38); JD(OPT_MAX_DEOPTS);                 { cmp dword [rax], OPT_MAX_DEOPTS }
+    L3 := JccFwd(ccLE);
+    { the baseline's table back (a function entry's region is entered from it, with no count-down of its own) and
+      its count at 1: the next count-down, a dec to zero, has OptMaybe drop the regions }
+    MovRI(jAX, QWord(PtrUInt(@OInfo^.Count)));
+    Mov32MI(jAX, 0, 1);
+    MovRI(jAX, QWord(PtrUInt(@OT^.JitTable)));
+    MovRI(jCX, QWord(PtrUInt(OInfo^.BaseTable)));
+    MovMR(jAX, 0, jCX);
+    PatchHere(L3);
   end;
   AluRI(0, jSP, OFrame, True);
   JB($41); JB($5F);                                       { pop r15 }
@@ -3335,31 +3487,30 @@ begin
   AluRR($85, jAX, jAX, False);
 end;
 
-{ block B's strict equality with a tagged operand into ecx 1 / 0 (then tested): the same bits are equal (but
-  doubles: the deopt), two objects of different bits are not, a pointer against a non-pointer is not; two other
-  pointers (strings, BigInts) and a double the deopt }
+{ block B's strict equality with a tagged operand into ecx 1 / 0 (then tested): the same bits are equal, two
+  objects of different bits are not, a pointer against a non-pointer is not; a double, or two other pointers
+  (strings, BigInts), StrictEquals's (every allocatable register kept around the call) }
 procedure OTagCmp(B: Integer);
-var G, LNe, LDone, L1, L2: Integer;
+var LNe, LDone, LDone2, L1, L2, LSlow1, LSlow2, LSlow3, LSlow4, K: Integer;
   procedure Load(V: Integer);
   begin
     if V >= 0 then OBox(V) else MovRM(jAX, jBX, (-1 - V) * 8);
   end;
 begin
-  G := OB[B].TermGuard;
   Load(OB[B].TermX);
   MovRR(jDX, jAX);
   Load(OB[B].TermY);
   MovRI(jCX, DOUBLE_LIMIT);
   AluRR($39, jDX, jCX, True);
-  OJccGuardFb(ccB, G, ofbTagCmp);
+  LSlow1 := JccFwd(ccB);
   AluRR($39, jAX, jCX, True);
-  OJccGuardFb(ccB, G, ofbTagCmp);
+  LSlow2 := JccFwd(ccB);
   AluRR($39, jDX, jAX, True);
   LNe := JccFwd(ccNE);
   MovRI(jCX, 1);
   LDone := JmpFwd;
   PatchHere(LNe);
-  { different bits: two pointers are equal only as the same string or BigInt (the deopt), objects not }
+  { different bits: two pointers are equal only as the same string or BigInt, objects not }
   MovRR(jCX, jDX);
   ShiftRI(5, jCX, 48, True);
   AluRI(7, jCX, TAG_PTR_HI, False);
@@ -3368,15 +3519,30 @@ begin
   ShiftRI(5, jCX, 48, True);
   AluRI(7, jCX, TAG_PTR_HI, False);
   L2 := JccFwd(ccNE);
-  AluRR($31, jDX, jR13, True);
-  AluRR($31, jAX, jR13, True);
-  CmpBMI(jDX, 4, ckObject);
-  OJccGuardFb(ccNE, G, ofbTagCmp);
-  CmpBMI(jAX, 4, ckObject);
-  OJccGuardFb(ccNE, G, ofbTagCmp);
+  MovRR(jCX, jDX);
+  AluRR($31, jCX, jR13, True);
+  CmpBMI(jCX, 4, ckObject);
+  LSlow3 := JccFwd(ccNE);
+  MovRR(jCX, jAX);
+  AluRR($31, jCX, jR13, True);
+  CmpBMI(jCX, 4, ckObject);
+  LSlow4 := JccFwd(ccNE);
   PatchHere(L1); PatchHere(L2);
   AluRR($31, jCX, jCX, False);
-  PatchHere(LDone);
+  LDone2 := JmpFwd;
+  PatchHere(LSlow1); PatchHere(LSlow2); PatchHere(LSlow3); PatchHere(LSlow4);
+  { push rsi, rdi, r8 - r11 (rsp stays aligned), xmm2 - xmm15 below them }
+  JB($56); JB($57); JB($41); JB($50); JB($41); JB($51); JB($41); JB($52); JB($41); JB($53);
+  AluRI(5, jSP, 112, True);
+  for K := 0 to 13 do OSseM($F2, $11, 2 + K, jSP, K * 8);
+  MovRR(jDI, jDX);
+  MovRR(jSI, jAX);
+  CallAbs(@StrictEquals);
+  JB($0F); JB($B6); JB($C8);                       { movzx ecx, al }
+  for K := 0 to 13 do OSseM($F2, $10, 2 + K, jSP, K * 8);
+  AluRI(0, jSP, 112, True);
+  JB($41); JB($5B); JB($41); JB($5A); JB($41); JB($59); JB($41); JB($58); JB($5F); JB($5E);
+  PatchHere(LDone); PatchHere(LDone2);
   AluRR($85, jCX, jCX, False);
 end;
 
@@ -3744,7 +3910,9 @@ end;
   (an embedded call clobbers every register the region holds values in) }
 function OQuickCall(K: Integer): Integer;
 begin
-  if OCallGoes(OT, OQClo, K, 0) then Result := 2 else Result := -2;
+  if OCallGoes(OT, OQClo, K, 0) then Result := OPT_INL_GAIN
+  else if OQStatic and not IsObject(OStaticValue(OT, OQClo, K, OA(OT^.Code[K]), 0)) then Result := OPT_INL_GAIN
+  else Result := -2;
 end;
 
 { a first estimate before any analysis (most regions fail it): the instructions reachable from PC, the numeric
@@ -3759,8 +3927,18 @@ begin
     if (InsOp(T^.Code[K]) = opJmp) and (K + 1 + Integer(SarInt64(Int64(T^.Code[K]), 40)) = PC) then Result := K;
 end;
 
-{ the code a loop header PC's region spans: the outermost loop around it, Lo its header .. Hi its last back edge
-  (False: PC is no loop header) }
+{ whether template T's code from PC Lo to PC Hi suspends (a generator's yield, an await): the region exits there }
+function OSuspendsIn(T: PFuncTemplate; Lo, Hi: Integer): Boolean;
+var K: Integer;
+begin
+  Result := False;
+  if not (T^.IsGenerator or T^.IsAsync) then Exit;
+  for K := Lo to Hi do
+    if InsOp(T^.Code[K]) in [opYield, opYieldStar, opYieldStarAsync, opAwait] then Exit(True);
+end;
+
+{ the code a loop header PC's region spans: the outermost loop around it that does not suspend, Lo its header ..
+  Hi its last back edge (False: PC is no loop header) }
 function OLoopSpan(T: PFuncTemplate; PC: Integer; out Lo, Hi: Integer): Boolean;
 var K, H, E: Integer; Grew: Boolean;
 begin
@@ -3778,7 +3956,7 @@ begin
         if (H <= Lo) and (H > 0) then
         begin
           E := OLoopEnd(T, H);
-          if E > Hi then begin Lo := H; Hi := E; Grew := True; Break; end;
+          if (E > Hi) and not OSuspendsIn(T, H, E) then begin Lo := H; Hi := E; Grew := True; Break; end;
         end;
       end;
   until not Grew;
@@ -3831,7 +4009,7 @@ begin
   end;
   { native property access pays off over a loop's iterations; a short straight-line region's entry costs more
     than it saves (an inlining candidate instead) }
-  if not Loop then Inc(Other, Props);
+  if not Loop and not OQStatic then Inc(Other, Props);
   Result := (Num > 0) and (Num >= Other);
 end;
 
@@ -3854,17 +4032,24 @@ begin
   OT := T;
   OQClo := nil;
   if T^.CodeLen = 0 then Exit(False);
-  if OQuickProfitable(0) then Exit(True);
-  for K := 0 to T^.CodeLen - 1 do
-  begin
-    I := T^.Code[K];
-    if OOpOf(I) = opJmp then
+  { its callees are not known yet (its ICs are empty): each counts as one that inlines, OptCompile's own
+    estimate decides with them known }
+  OQStatic := True;
+  try
+    if OQuickProfitable(0) then Exit(True);
+    for K := 0 to T^.CodeLen - 1 do
     begin
-      Tg := K + 1 + OC(I);
-      if (Tg >= 0) and (Tg <= K) and OQuickProfitable(Tg) then Exit(True);
+      I := T^.Code[K];
+      if OOpOf(I) = opJmp then
+      begin
+        Tg := K + 1 + OC(I);
+        if (Tg >= 0) and (Tg <= K) and OQuickProfitable(Tg) then Exit(True);
+      end;
     end;
+    Result := False;
+  finally
+    OQStatic := False;
   end;
-  Result := False;
 end;
 
 { whether the region gains over the baseline code: its native number work (arithmetic, comparisons, numeric
@@ -3890,7 +4075,7 @@ begin
         onAddD, onSubD, onMulD, onDivD, onNegD, onCmpI, onCmpD, onNotB, onTAGet, onTASet, onArrGet, onArrSet, onLength, onMath: Inc(Gain);
         onUnbox, onFlush: Inc(Cost);
         { an inlined call: its call and return gone; an allocation or add without the baseline's helper }
-        onInlGuard, onNewObj: Inc(Gain, 2);
+        onInlGuard, onNewObj: Inc(Gain, OPT_INL_GAIN);
         onPropSet: if (ON[N].Imm and PROP_ADD) <> 0 then Inc(Gain);
         { an embedded call clobbers every register the region holds values in (they move to r15 or slots) }
         onEmbed:
@@ -4627,6 +4812,16 @@ begin
   OT := Fr^.Tpl;
   OInfo := POptInfo(OT^.Opt);
   OEntry := PC;
+  OSpecFr := Fr;
+  { the first estimate, before anything is built (most regions fail it) }
+  if IsObject(Fr^.Closure) then OQClo := ObjOf(Fr^.Closure) else OQClo := nil;
+  if not OQuickProfitable(PC) then
+  begin
+    OQClo := nil;
+    if OptLog then WriteLn(ErrOutput, 'opt ', OptName(OT), ' pc ', PC, ' not profitable (quick)');
+    Exit;
+  end;
+  OQClo := nil;
   SetLength(OInlBan, OT^.CodeLen + 1);
   for K := 0 to OT^.CodeLen do OInlBan[K] := False;
   Attempt := 0;
@@ -4645,6 +4840,8 @@ begin
   if OSse41 < 0 then
     if (OCpuidEcx1 and (1 shl 19)) <> 0 then OSse41 := 1 else OSse41 := 0;
   OBuildStream(Fr);
+  SetLength(OSpecMemo, (OVLen + 1) * 2);
+  for K := 0 to High(OSpecMemo) do OSpecMemo[K].R := -1;
   SetLength(OExit, OVLen + 1);
   SetLength(OEmbed, OVLen + 1);
   SetLength(OEmbedNode, OVLen + 1);
@@ -4673,6 +4870,15 @@ begin
     end;
   OExit[OT^.CodeLen] := True;
   OExit[OVLen] := True;
+  { a generator's own suspensions and completion are the baseline's (the interpreter's) }
+  if OT^.IsGenerator then
+    for K := 0 to OVLen - 1 do
+      if (OVRole[K] = 0) and (OVTpl[K] = OT) and
+         (OOpOf(OIns(K)) in [opYield, opYieldStar, opAwait, opRet, opRetUndef]) then
+      begin
+        OExit[K] := True;
+        OEmbed[K] := False;
+      end;
   { the registers nested functions capture }
   SetLength(OCaptured, ORegs);
   for R := 0 to ORegs - 1 do OCaptured[R] := False;
@@ -4700,19 +4906,19 @@ begin
     else Kinds[R] := vkTag;
     if OCaptured[R] then Kinds[R] := vkTag;
   end;
+  { only what the template reads from the entry on is speculated: the rest (an inlined callee's registers past the
+    frame, a temporary written before it is read) holds whatever it held }
+  OLiveW := (ORegs + 63) shr 6;
+  if OLiveW = 0 then OLiveW := 1;
+  OComputeTplLive;
+  for R := 0 to ORegs - 1 do
+    if (R >= OT^.MaxRegs) or ((OTplLive[PC * OLiveW + (R shr 6)] and (QWord(1) shl (R and 63))) = 0) then
+      Kinds[R] := vkTag;
   if (OFb(PC) and 4) <> 0 then
   begin
     if OptLog then WriteLn(ErrOutput, 'opt ', OptName(OT), ' pc ', PC, ' given up (feedback)');
     Exit;
   end;
-  if IsObject(Fr^.Closure) then OQClo := ObjOf(Fr^.Closure) else OQClo := nil;
-  if not OQuickProfitable(PC) then
-  begin
-    OQClo := nil;
-    if OptLog then WriteLn(ErrOutput, 'opt ', OptName(OT), ' pc ', PC, ' not profitable (quick)');
-    Exit;
-  end;
-  OQClo := nil;
   { each element instruction's receiver speculated from the frame's value now: a typed array of a kind done
     natively, an object with an elements store, else none (an element guard that failed: none) }
   SetLength(OElemSpec, OVLen + 1);
