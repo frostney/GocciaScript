@@ -2821,8 +2821,12 @@ begin
         OJccGuardFb(ccNE, N, ofbProp);
         CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okFunction);
         OJccGuardFb(ccNE, N, ofbProp);
-        TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 1);
-        OJccGuardFb(ccNE, N, ofbProp);
+        { a class constructor (OFlags bit 0) only through new }
+        if not OSites[ON[N].Imm].IsNew then
+        begin
+          TestBMI(jAX, PtrInt(@PObj(nil)^.OFlags), 1);
+          OJccGuardFb(ccNE, N, ofbProp);
+        end;
         MovRI(jCX, QWord(PtrUInt(OSites[ON[N].Imm].Tc)));
         CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Native));
         OJccGuardFb(ccNE, N, ofbProp);
