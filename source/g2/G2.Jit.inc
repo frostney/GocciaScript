@@ -1253,7 +1253,7 @@ begin
 end;
 
 function JH_GetElem(Fr: PFrame; I: QWord): Boolean;
-var R: PValue; A, CI: Integer; VA, VB, V: TValue; O: PObj; E: PValueArray;
+var R: PValue; A, CI: Integer; VA, VB, V: TValue; O: PObj; E: PValueArray; Done: Boolean;
 begin
   R := @VStack[Fr^.Base];
   A := (I shr 8) and $FFFF;
@@ -1273,6 +1273,16 @@ begin
     begin
       R[A] := V;
       Exit(True);
+    end;
+  end
+  else if IsString(VB) and IsObject(VA) then
+  begin
+    { a name as the key (babel's t.ALIAS_KEYS[type]): the megamorphic get cache }
+    Result := KeyedMegaGet(ObjOf(VA), VA, Atomize(StrOf(VB)), V, Done);
+    if Done then
+    begin
+      if Result then VStack[Fr^.Base + A] := V;
+      Exit;
     end;
   end;
   if not GetElemV(VA, VB, V) then Exit(False);

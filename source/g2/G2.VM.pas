@@ -3805,6 +3805,51 @@ begin
   end;
 end;
 
+{ a keyed get O[Key] (Obj, a string key) through the megamorphic get cache: Done False leaves it to GetElemV
+  (an index-like key, a typed array, a proxy, a module namespace, mapped arguments, a String object, whose
+  string keys GetFromObject treats apart). Otherwise ICGetMiss's walk with a cache of its own, which is
+  GetFromObject's for these, and fills the megamorphic cache }
+function KeyedMegaGet(O: PObj; Obj: TValue; Key: PStr; var Res: TValue; var Done: Boolean): Boolean;
+var M: PMegaEntry; IC: TPropIC; Idx: Int64; C: WideChar; P: PObj; Pv: TValue;
+begin
+  Done := False;
+  Result := True;
+  if O^.OKind in [okTypedArray, okProxy, okModuleNS, okArgumentsOrd, okStringObj] then Exit;
+  { a key that may be a canonical numeric string ("-0", "NaN", "1.5") reads undefined at a typed array on the
+    chain (10.4.5.4), which the walk does not know: such a chain is GetElemV's }
+  if Key^.Len > 0 then
+  begin
+    C := StrChars(Key)[0];
+    if (C = '-') or ((C >= '0') and (C <= '9')) or (C = 'I') or (C = 'N') then
+    begin
+      P := O;
+      while True do
+      begin
+        if P^.OKind = okTypedArray then Exit;
+        Pv := P^.Shape^.Proto;
+        if not IsObject(Pv) then Break;
+        P := ObjOf(Pv);
+      end;
+    end;
+  end;
+  if MegaICTab <> nil then
+  begin
+    M := MegaSlot(O^.Shape, Key);
+    if (M^.Key = Key) and (M^.E.Shape = O^.Shape) and (M^.E.Kind = O^.OKind) and (M^.E.Acc = 0) and
+       MegaGet(@M^.E, O, Res) then
+    begin
+      Done := True;
+      Exit;
+    end;
+  end;
+  if IndexFromString(Key, Idx) then Exit;
+  FillChar(IC, SizeOf(IC), 0);
+  IC.Key := Key;
+  Done := True;
+  Result := ICGetMiss(@IC, O, Obj, Res);
+  if IC.More <> nil then FreeMem(IC.More);
+end;
+
 { A property read on a string primitive: a cache of String.prototype's own data property, in the IC's receiver
   shape and slot (a get IC's own entries are Poly0 and More). Deleting or redefining one of the prototype's
   properties gives it a new shape; adding one keeps every key's slot. A string's own properties are its indices
