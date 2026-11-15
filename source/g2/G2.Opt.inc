@@ -214,6 +214,7 @@ var
   OLive: array of QWord;             { live registers before each instruction: OLiveW words per PC }
   OLiveW: Integer;
   OTplLive: array of QWord;          { the same in the template's own code (the baseline's), per its PC }
+  ONumUse: array of Boolean;         { OptCompile: the template's registers its code from the entry on reads as numbers }
   OMap: array of Integer;            { the building block's register map }
   OFail: Boolean;
   OSpills: Integer;
@@ -4827,7 +4828,7 @@ end;
 
 { the region entered at PC of frame Fr's template, compiled and installed in its JitTable; False when it cannot be }
 function OptCompile(Fr: PFrame; PC: Integer): Boolean;
-var Kinds: array of Byte; R, Iter, Attempt: Integer; V: TValue; Code: Pointer; Tbl: PPtrUInt; K: Integer; IC: PPropIC;
+var Kinds: array of Byte; R, R1, R2, Iter, Attempt: Integer; Grew: Boolean; V: TValue; Code: Pointer; Tbl: PPtrUInt; K: Integer; IC: PPropIC;
   Again: Boolean;
 begin
   Result := False;
@@ -4936,6 +4937,38 @@ begin
   for R := 0 to ORegs - 1 do
     if (R >= OT^.MaxRegs) or ((OTplLive[PC * OLiveW + (R shr 6)] and (QWord(1) shl (R and 63))) = 0) then
       Kinds[R] := vkTag;
+  { a register the template's code from PC on never reads as a number (only passes on, stores, or reads properties
+    of) is not speculated: its guard would buy nothing, and a value whose kind differs between calls (babel's
+    NodePath.get key, an index or a name) failed it on every other entry }
+  SetLength(ONumUse, OT^.MaxRegs);
+  for R := 0 to OT^.MaxRegs - 1 do ONumUse[R] := False;
+  for K := PC to OT^.CodeLen - 1 do
+  begin
+    case OOpOf(OT^.Code[K]) of
+      opGetProp, opGetLength, opGetMethod, opMov: Continue;
+      opSetElem: begin R := OB_(OT^.Code[K]); if R < OT^.MaxRegs then ONumUse[R] := True; Continue; end;
+    end;
+    OReads(OT^.Code[K], R1, R2);
+    if OOpOf(OT^.Code[K]) = opCall then R1 := -1;
+    if (R1 >= 0) and (R1 < OT^.MaxRegs) then ONumUse[R1] := True;
+    if (R2 >= 0) and (R2 < OT^.MaxRegs) then ONumUse[R2] := True;
+  end;
+  { a move's source is read as a number where its destination is }
+  repeat
+    Grew := False;
+    for K := PC to OT^.CodeLen - 1 do
+      if OOpOf(OT^.Code[K]) = opMov then
+      begin
+        R1 := OA(OT^.Code[K]); R2 := OB_(OT^.Code[K]);
+        if (R1 < OT^.MaxRegs) and (R2 < OT^.MaxRegs) and ONumUse[R1] and not ONumUse[R2] then
+        begin
+          ONumUse[R2] := True;
+          Grew := True;
+        end;
+      end;
+  until not Grew;
+  for R := 0 to OT^.MaxRegs - 1 do
+    if (R < ORegs) and not ONumUse[R] then Kinds[R] := vkTag;
   if (OFb(PC) and 4) <> 0 then
   begin
     if OptLog then WriteLn(ErrOutput, 'opt ', OptName(OT), ' pc ', PC, ' given up (feedback)');
