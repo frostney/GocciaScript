@@ -660,6 +660,22 @@ var I, J, Lo, Hi, Mid: Integer; U: PUpval; V: TValue;
 begin
   { OpenUpvals is sorted by stack index ascending: find the last one at or below Idx (a function that makes many
     closures keeps many open, so a linear scan per capture was quadratic) }
+  { the common case: a capture in the frame on top, above every open upvalue (or the newest one again) }
+  if OpenCount > 0 then
+  begin
+    U := PUpval(PtrOf(OpenUpvals[OpenCount - 1]));
+    if U^.StackIndex = Idx then Exit(OpenUpvals[OpenCount - 1]);
+    if U^.StackIndex < Idx then
+    begin
+      U := NewUpval;
+      U^.StackIndex := Idx;
+      V := MkPtr(U);
+      if OpenCount >= Length(OpenUpvals) then SetLength(OpenUpvals, OpenCount * 2 + 64);
+      OpenUpvals[OpenCount] := V;
+      Inc(OpenCount);
+      Exit(V);
+    end;
+  end;
   Lo := 0; Hi := OpenCount - 1; I := -1;
   while Lo <= Hi do
   begin

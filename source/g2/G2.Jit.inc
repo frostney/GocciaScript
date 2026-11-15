@@ -1299,6 +1299,15 @@ begin
       WriteBarrier(@E^.Hdr, V);
       Exit(True);
     end;
+    { a hole below the length (new Array(n), a longer length): SetElemVS's dense store, with the append's check
+      of the prototypes }
+    if (E <> nil) and (CI >= 0) and (CI < Integer(E^.Len)) and (CI < ArrayDenseMax) and ((O^.OFlags and 64) = 0) and
+       (O^.OKind = okArray) and AppendProtosPlain(O) then
+    begin
+      E^.Data[CI] := V;
+      WriteBarrier(@E^.Hdr, V);
+      Exit(True);
+    end;
     if (E <> nil) and (CI = Integer(E^.Len)) and (CI < Integer(E^.Cap)) and ((O^.OFlags and 64) = 0) and
        (O^.OKind = okArray) and AppendProtosPlain(O) then
     begin
@@ -3408,7 +3417,7 @@ begin
   AluRI(0, jCX, 1, True);                                          { rcx: the callee's Base }
   MovsxdRM(jDX, jSI, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
   JRex(True, jR8, jDX, jCX); JB($8D); JB($04 or ((jR8 and 7) shl 3)); JB(((jDX and 7) shl 3) or (jCX and 7));  { lea r8, [rcx + rdx] }
-  AluRI(7, jR8, STACK_MAX, True); AddS(JccFwd(ccAE));
+  AluRI(7, jR8, STACK_MAX - 4, True); AddS(JccFwd(ccAE));      { (the fill below may write 3 slots past it) }
   Mov32RFs(jR9, JitFsFrameTop);
   AluRI(7, jR9, FRAME_MAX - 2, False); AddS(JccFwd(ccAE));
   Mov32RFs(jR10, JitFsJitDepth);
@@ -3424,12 +3433,16 @@ begin
   Mov32RM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));
   PatchHere(L1);
   AluRI(0, jR11, 1, False);
+  { four registers a round, two to a 16-byte store (up to 3 past MaxRegs: free stack above the frame) }
   MovRI(jR10, VUndefined);
+  MovqXR(0, jR10);
+  SseRR($66, $6C, 0, 0);                                           { punpcklqdq xmm0, xmm0 }
   L2 := JitLen;
   AluRR($39, jR11, jDX, True);
   L3 := JccFwd(ccGE);
-  MovMRIdx(jR13, jR11, 8, jR10);
-  AluRI(0, jR11, 1, True);
+  SibOp($F3, False, [$0F, $7F], 0, jR13, jR11, 3, 8);             { movdqu [r13 + r11*8 + 8], xmm0 }
+  SibOp($F3, False, [$0F, $7F], 0, jR13, jR11, 3, 24);            { movdqu [r13 + r11*8 + 24], xmm0 }
+  AluRI(0, jR11, 4, True);
   JB($E9); JD(Cardinal(L2 - (JitLen + 4)));
   PatchHere(L3);
   { the frame record Frames[FrameTop] }
@@ -3679,7 +3692,7 @@ begin
   AluRI(0, jCX, 1, True);                                          { rcx: the callee's Base }
   MovsxdRM(jDX, jSI, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
   JRex(True, jR8, jDX, jCX); JB($8D); JB($04 or ((jR8 and 7) shl 3)); JB(((jDX and 7) shl 3) or (jCX and 7));  { lea r8, [rcx + rdx] }
-  AluRI(7, jR8, STACK_MAX, True); AddS(JccFwd(ccAE));
+  AluRI(7, jR8, STACK_MAX - 4, True); AddS(JccFwd(ccAE));      { (the fill below may write 3 slots past it) }
   Mov32RFs(jR9, JitFsFrameTop);
   AluRI(7, jR9, FRAME_MAX - 2, False); AddS(JccFwd(ccAE));
   Mov32RFs(jR10, JitFsJitDepth);
@@ -3694,12 +3707,16 @@ begin
   Mov32RM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));
   PatchHere(L1);
   AluRI(0, jR11, 1, False);
+  { four registers a round, two to a 16-byte store (up to 3 past MaxRegs: free stack above the frame) }
   MovRI(jR10, VUndefined);
+  MovqXR(0, jR10);
+  SseRR($66, $6C, 0, 0);                                           { punpcklqdq xmm0, xmm0 }
   L2 := JitLen;
   AluRR($39, jR11, jDX, True);
   L3 := JccFwd(ccGE);
-  MovMRIdx(jR13, jR11, 8, jR10);
-  AluRI(0, jR11, 1, True);
+  SibOp($F3, False, [$0F, $7F], 0, jR13, jR11, 3, 8);             { movdqu [r13 + r11*8 + 8], xmm0 }
+  SibOp($F3, False, [$0F, $7F], 0, jR13, jR11, 3, 24);            { movdqu [r13 + r11*8 + 24], xmm0 }
+  AluRI(0, jR11, 4, True);
   JB($E9); JD(Cardinal(L2 - (JitLen + 4)));
   PatchHere(L3);
   { the frame record Frames[FrameTop]: Kind 1, new.target the constructor }
