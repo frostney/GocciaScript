@@ -935,6 +935,61 @@ begin
   Result := True;
 end;
 
+{ CallValue of a compiled bytecode function (a callback or a getter called from a native): the frame as
+  PushBytecodeFrame's fast path pushes it, then the code as JitRunPushed runs it, in one step without the checks
+  that cannot fail here. False: not taken, nothing changed (CallValue's general path follows) }
+function JitCallFast(O: PObj; This: TValue; Args: PValue; Argc: Integer; var Res: TValue; var Ok: Boolean): Boolean;
+var T: PFuncTemplate; Base, I, SavedTop, R: Integer; Entry: PtrUInt; NF: PFrame;
+begin
+  Result := False;
+  T := PFuncTemplate(O^.Native);
+  if (JitEnabled <> 1) or MultiRealmAny or (T^.JitState <> 1) or not T^.FastCall or T^.IsGenerator or T^.IsAsync or
+     (T^.Lazy <> nil) or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then Exit;
+  { a non-strict function's undefined or null this is the global object; another primitive is boxed (the general
+    path's) }
+  if not T^.IsStrict and not T^.IsArrow then
+    if (This = VUndefined) or (This = VNull) then This := GlobalObj
+    else if not IsObject(This) then Exit;
+  if JitDepthMax = 0 then JitThreadInit;
+  if JitTooDeep then Exit;
+  Entry := PPtrUInt(T^.JitTable)[T^.EntryPC];
+  if Entry = 0 then Exit;
+  SavedTop := StackTop;
+  Base := StackTop;
+  if (Base + Argc + 2 >= STACK_MAX) or (Base + T^.MaxRegs + 2 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit;
+  { (the arguments may be in the value stack: Move copies overlapping ranges) }
+  VStack[Base] := This;
+  if Args <> nil then Move(Args^, VStack[Base + 1], Argc * SizeOf(TValue));
+  I := Min(Argc, T^.NumParams) + 1;
+  if I < T^.MaxRegs then FillUndef(@VStack[Base + I], T^.MaxRegs - I);
+  if Base + T^.MaxRegs > Base + Argc + 1 then StackTop := Base + T^.MaxRegs else StackTop := Base + Argc + 1;
+  NF := @Frames[FrameTop];
+  NF^.Closure := MkPtr(O);
+  NF^.NewTarget := VUndefined;
+  NF^.Tpl := T;
+  NF^.Base := Base;
+  NF^.PC := T^.EntryPC;
+  NF^.RetIdx := Base;
+  NF^.Argc := Argc;
+  NF^.Kind := 0;
+  Inc(FrameTop);
+  Inc(JitDepth);
+  R := TJitFn(T^.Jit)(@VStack[Base], Pointer(Entry), NF, 1);
+  Dec(JitDepth);
+  if R = -2 then
+  begin
+    Res := VStack[Base];
+    Ok := True;
+  end
+  else
+  begin
+    if R = -1 then InjectThrow := True else NF^.PC := R;
+    Ok := Execute(FrameTop - 1, Res);
+  end;
+  StackTop := SavedTop;
+  Result := True;
+end;
+
 { the inline call's callee (the newest frame) stopped part way (Res its PC) or threw (-1): finished by a nested
   Execute, its result in R[A]. 0, or -1 a throw pending }
 function XJitCallPost(Fr: PFrame; A, Res: Integer): Integer;
@@ -3930,12 +3985,21 @@ end;
 
 { G2_JITMAP=1: each compiled block's address, size and template on stderr (to name a profile's JIT addresses) }
 procedure JitMapEntry(Code: Pointer; Len: Integer; T: PFuncTemplate; const Kind: string);
-var Nm: string; L: Integer;
+var Nm: string; L: Integer; F: File;
 begin
   Nm := '';
   if T^.Name <> nil then Nm := UTF8Encode(StrToUnicode(T^.Name));
   if Length(T^.Lines) > 0 then L := T^.Lines[0] else L := -1;
   WriteLn(ErrOutput, 'jitmap ', HexStr(PtrUInt(Code), 16), ' ', Len, ' ', Kind, ' ', Nm, ' len ', T^.CodeLen, ' line ', L);
+  { G2_JITBYTES=<name part>: the code of each matching template written to KIND-NAME-ADDR.bin in the current
+    directory (objdump -D -b binary -m i386:x86-64 --adjust-vma=ADDR) }
+  if (GetEnvironmentVariable('G2_JITBYTES') <> '') and (Pos(GetEnvironmentVariable('G2_JITBYTES'), Nm) > 0) then
+  begin
+    AssignFile(F, Kind + '-' + Nm + '-' + HexStr(PtrUInt(Code), 16) + '.bin');
+    Rewrite(F, 1);
+    BlockWrite(F, Code^, Len);
+    CloseFile(F);
+  end;
 end;
 
 { G2_JITDUMP=<name part>: each template whose name contains it, its bytecode on stderr as it compiles }

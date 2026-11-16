@@ -3112,6 +3112,7 @@ end;
 
 {$IFDEF CPUX86_64}
 function JitRunPushed(var Res: TValue; var Ok: Boolean): Boolean; forward;
+function JitCallFast(O: PObj; This: TValue; Args: PValue; Argc: Integer; var Res: TValue; var Ok: Boolean): Boolean; forward;
 {$ENDIF}
 
 function CallValue(F, This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
@@ -3170,6 +3171,10 @@ begin
     begin
       if (O^.OFlags and 1) <> 0 then
         Exit(ThrowClassCall(O));
+      {$IFDEF CPUX86_64}
+      { a compiled callee whose frame the fast path pushes: its code run directly }
+      if JitCallFast(O, This, Args, Argc, Res, Result) then Exit;
+      {$ENDIF}
       SavedTop := StackTop;
       ArgBase := StackTop;
       if ArgBase + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
