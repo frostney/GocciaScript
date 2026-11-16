@@ -3098,8 +3098,62 @@ begin
     opPow:
       EmitHelper(@JH_Arith, PC, I);
     opInstanceof: EmitHelper(@JH_InstanceOf, PC, I);
-    opGetIter, opForIn, opIn, opNewArr, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn:
+    opGetIter, opForIn, opIn, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn:
       EmitHelper(@JH_Misc, PC, I);
+    opNewArr:
+      if GCStress or (B > 12) or (EmptyShapeForArray = nil) then EmitHelper(@JH_Misc, PC, I)
+      else
+      begin
+        { an array literal of B elements (R[C] up), as NewArray makes it: the array object (no inline slots) and
+          its elements (capacity Max(B, 4), length B, the rest undefined) bumped from the nursery together (full,
+          or more than one realm: JH_Misc's, cold) }
+        CC := Max(B, 4);
+        MovRI(jDX, QWord(PtrUInt(@MultiRealmAny)));
+        CmpBMI(jDX, 0, 0);
+        L1 := JccFwd(ccNE);
+        MovRFs(jAX, JitFsNurseryTop);
+        LeaRM(jCX, jAX, 64 + 16 + CC * 8);
+        MovRFs(jDX, JitFsNurseryLimit);
+        AluRR($39, jCX, jDX, True);
+        L2 := JccFwd(ccA);
+        MovFsR(JitFsNurseryTop, jCX);
+        { the object }
+        MovRI(jDX, QWord(Cardinal(64)) or (QWord(ckObject) shl 32));
+        MovMR(jAX, 0, jDX);
+        MovRI(jDX, QWord(PtrUInt(EmptyShapeForArray)));
+        MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jDX);
+        LeaRM(jDX, jAX, 64);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Elements), jDX);
+        AluRR($31, jDX, jDX, False);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Overflow), jDX);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Native), jDX);
+        MovRI(jDX, QWord(okArray) shl 16);
+        MovMR(jAX, PtrInt(@PObj(nil)^.InlineCap), jDX);
+        MovRI(jDX, VUndefined);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Aux1), jDX);
+        MovMR(jAX, PtrInt(@PObj(nil)^.Aux2), jDX);
+        { its elements }
+        MovRI(jDX, QWord(Cardinal(16 + CC * 8)) or (QWord(ckValueArray) shl 32));
+        MovMR(jAX, 64, jDX);
+        MovRI(jDX, QWord(Cardinal(CC)) or (QWord(Cardinal(B)) shl 32));
+        MovMR(jAX, 64 + PtrInt(@PValueArray(nil)^.Cap), jDX);
+        for L3 := 0 to B - 1 do
+        begin
+          MovRM(jDX, jBX, (C + L3) * 8);
+          MovMR(jAX, 64 + PtrInt(@PValueArray(nil)^.Data) + L3 * 8, jDX);
+        end;
+        if B < CC then
+        begin
+          MovRI(jDX, VUndefined);
+          for L3 := B to CC - 1 do MovMR(jAX, 64 + PtrInt(@PValueArray(nil)^.Data) + L3 * 8, jDX);
+        end;
+        AluRR($31, jAX, jR13, True);
+        MovMR(jBX, A * 8, jAX);
+        Saved := JitSlow;
+        JitSlow := @JH_Misc;
+        DeferCold(7, PC, I, A, 0, [L1, L2]);
+        JitSlow := Saved;
+      end;
     opBitAnd, opBitOr, opBitXor, opShl:
       begin
         MovRM(jAX, jBX, B * 8);
