@@ -3,7 +3,7 @@
   "awfy": {
     "repository": "https://github.com/smarr/are-we-fast-yet",
     "ref": "master",
-    "commit": "74306fec151070fd07157cefeacf19e7e0bcdc89",
+    "commit": "f35aed0a61171594804a44efe9d75f1f35360700",
     "javascriptPath": "benchmarks/JavaScript",
     "benchmarks": {
       "Bounce": "bounce",
