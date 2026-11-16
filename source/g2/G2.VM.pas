@@ -3688,10 +3688,12 @@ end;
 
 { an IC accessor entry for O's shape whose holder still checks out: 1 its getter called (Res its result), 0 the
   getter threw, 2 no such entry }
-function ICAccGet(IC: PPropIC; O: PObj; Receiver: TValue; var Res: TValue): Integer;
-var E: PICEntry; P: PObj; D, I: Integer; G: TValue;
+{ ICAccGet's lookup: G the getter (undefined for none) of the accessor IC holds for O; False when it holds none
+  that the shapes and versions still decide }
+function ICAccGetter(IC: PPropIC; O: PObj; var G: TValue): Boolean;
+var E: PICEntry; P: PObj; D, I: Integer;
 begin
-  Result := 2;
+  Result := False;
   E := nil;
   if (IC^.Poly0.Shape = O^.Shape) and (IC^.Poly0.Kind = O^.OKind) then E := @IC^.Poly0
   else
@@ -3706,6 +3708,14 @@ begin
     if P^.Shape <> E^.Holder[D] then Exit;
   end;
   G := PAccessor(PtrOf(GetSlot(P, E^.Slot)))^.Getter;
+  Result := True;
+end;
+
+function ICAccGet(IC: PPropIC; O: PObj; Receiver: TValue; var Res: TValue): Integer;
+var G: TValue;
+begin
+  Result := 2;
+  if not ICAccGetter(IC, O, G) then Exit;
   if G = VUndefined then begin Res := VUndefined; Exit(1); end;
   AccessorGetKey := IC^.Key;
   if CallValue(G, Receiver, nil, 0, Res) then Result := 1 else Result := 0;

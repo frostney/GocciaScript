@@ -678,6 +678,7 @@ var
   JitHot: Integer = JIT_HOT;
   JitCallStub: Pointer = nil;   { JitBuildCallStub's code: opCall's call, shared by every call site }
   JitNewStub: Pointer = nil;    { JitBuildNewStub's code: opNew's, shared by every new site }
+  JitGetterStub: Pointer = nil; { JitBuildGetterStub's code: opGetProp's cold get, shared by every get site }
 
 {$IFDEF G2_JITSTATS}
 var
@@ -1208,15 +1209,46 @@ begin
   Result := True;
 end;
 
-{ the baseline's cold get once ICGetHit found no entry (an object receiver): JH_GetPropObj, without JH_GetProp's
-  second search of the entries }
-function JH_GetPropMiss(Fr: PFrame; I: QWord): Boolean;
-var R: PValue; A: Integer; VB: TValue;
+{ opGetProp's cold get once ICGetHit found no entry (an object receiver): JH_GetPropObj, without JH_GetProp's
+  second search of the entries. A getter in the cache that the call stub calls inline (a compiled bytecode
+  function it takes without the runtime) is left to the code instead: the getter in R[MaxRegs] and the receiver
+  in R[MaxRegs + 1] (free slots above the frame's registers), 2 returned. 1 done, 0 a throw pending }
+function JH_GetPropAcc(Fr: PFrame; I: QWord): Integer;
+var R: PValue; A, M: Integer; VB, G, V: TValue; IC: PPropIC; O: PObj; T: PFuncTemplate;
 begin
   R := @VStack[Fr^.Base];
   A := (I shr 8) and $FFFF;
   VB := R[(I shr 24) and $FFFF];
-  Result := JH_GetPropObj(Fr, I, R, A, VB, @Fr^.Tpl^.ICs[I shr 40], PObj(PtrUInt(VB and PTR_MASK)));
+  IC := @Fr^.Tpl^.ICs[I shr 40];
+  O := PObj(PtrUInt(VB and PTR_MASK));
+  { (JH_GetPropObj's steps for opGetProp, the cache's entries searched once) }
+  if not ICAccGetter(IC, O, G) then
+  begin
+    if not ICGetMiss(IC, O, VB, V) then Exit(0);
+    VStack[Fr^.Base + A] := V;
+    Exit(1);
+  end;
+  if G = VUndefined then
+  begin
+    R[A] := VUndefined;
+    Exit(1);
+  end;
+  M := Fr^.Tpl^.MaxRegs;
+  if IsObject(G) and (ObjOf(G)^.OKind = okFunction) and ((ObjOf(G)^.OFlags and 1) = 0) and not MultiRealmAny and
+     (Fr^.Base + M + 2 < STACK_MAX) then
+  begin
+    T := PFuncTemplate(ObjOf(G)^.Native);
+    if (T^.JitState = 1) and ((T^.JitCallKind and 1) <> 0) and (PPtrUInt(T^.JitTable)[T^.EntryPC] <> 0) then
+    begin
+      R[M] := G;
+      R[M + 1] := VB;
+      Exit(2);
+    end;
+  end;
+  AccessorGetKey := IC^.Key;
+  if not CallValue(G, VB, nil, 0, V) then Exit(0);
+  VStack[Fr^.Base + A] := V;
+  Result := 1;
 end;
 
 function JH_GetProp(Fr: PFrame; I: QWord): Boolean;
@@ -3747,6 +3779,54 @@ begin
   JitCallStub := P;
 end;
 
+{ opGetProp's cold get once ICGetHit found no entry, shared: rdi the frame (r12), rsi the instruction, rbx R (the
+  frame's PC already past it). JH_GetPropAcc, then for a getter it leaves to the code the call stub's call of it
+  (A = MaxRegs, no arguments, this given) and its result moved to R[A]. eax: 1 done, 0 a throw pending, 2 the
+  interpreter's (the get again: nothing called) }
+procedure JitBuildGetterStub;
+var L1, L2, L3: Integer; P: PByte;
+begin
+  JitLen := 0;
+  JB($56);                                                         { push rsi: the instruction (rsp aligned) }
+  CallAbs(@JH_GetPropAcc);
+  AluRI(7, jAX, 2, False);
+  L1 := JccFwd(ccNE);
+  MovRM(jAX, jR12, PtrInt(@PFrame(nil)^.Tpl));
+  Mov32RM(jCX, jAX, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
+  AluRR($31, jDX, jDX, False);
+  CallAbs(JitCallStub);
+  AluRR($85, jAX, jAX, False);
+  L2 := JccFwd(ccNE);
+  JB($5E);                                                         { pop rsi }
+  MovRR(jAX, jSI);
+  ShiftRI(5, jAX, 8, True);
+  AluRI(4, jAX, $FFFF, False);                                     { eax: A }
+  MovRM(jCX, jR12, PtrInt(@PFrame(nil)^.Tpl));
+  MovsxdRM(jCX, jCX, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
+  MovRMIdx(jDX, jBX, jCX, 0);
+  MovMRIdx(jBX, jAX, 0, jDX);
+  MovRI(jAX, 1);
+  JB($C3);
+  { the call stub's 1 (the interpreter's): 2; its -1 (a throw): 0 }
+  PatchHere(L2);
+  JB($5E);
+  AluRI(7, jAX, 1, False);
+  L3 := JccFwd(ccNE);
+  MovRI(jAX, 2);
+  JB($C3);
+  PatchHere(L3);
+  AluRR($31, jAX, jAX, False);
+  JB($C3);
+  { JH_GetPropAcc's 1 or 0 }
+  PatchHere(L1);
+  JB($5E);
+  JB($C3);
+  P := JitAlloc(JitLen);
+  if P = nil then Exit;
+  Move(JitBuf[0], P^, JitLen);
+  JitGetterStub := P;
+end;
+
 { opNew's code, shared: rbx R, r12 the frame (its PC already past the instruction), ecx A, edx Argc. A compiled
   base constructor without fields whose XFastNew caches hold (its function's shape, its prototype the root shape's)
   is run inline: this allocated in the nursery as NewObject allocates it (Max(4, ExpectedProps) inline slots, at
@@ -3998,13 +4078,26 @@ begin
             PatchHere(L1); PatchHere(L2); PatchHere(L3);
           end;
           { ICGetHit: its answer in R[A] goes on, else the helper (opGetProp's past the entries ICGetHit searched:
-            JH_GetPropMiss) }
+            JitGetterStub, below) }
           MovRR(jDI, jAX);
           LeaRM(jDX, jBX, JitDefer[N].A * 8);
           CallAbs(@JitICGetHit);
           JB($84); JB($C0);   { test al, al: the Boolean }
           JccPC(ccNE, PC + 1);
-          if TOp(JitDefer[N].I and $FF) = opGetProp then JitDefer[N].H := @JH_GetPropMiss;
+          if TOp(JitDefer[N].I and $FF) = opGetProp then
+          begin
+            { JitGetterStub: done (1) goes on, a throw (0) to the throw exit, the interpreter's (2) the exit }
+            JRex(False, 0, 0, jR12); JB($C7); JMem(0, jR12, PtrInt(@PFrame(nil)^.PC)); JD(Cardinal(PC + 1));
+            MovRR(jDI, jR12);
+            MovRI(jSI, JitDefer[N].I);
+            CallAbs(JitGetterStub);
+            AluRI(7, jAX, 1, False);
+            JccPC(ccE, PC + 1);
+            AluRR($85, jAX, jAX, False);
+            JccThrow(ccE);
+            JmpExit(PC);
+            Continue;
+          end;
         end;
       8:
         begin
@@ -4124,7 +4217,8 @@ begin
   if (T^.Lazy <> nil) or (T^.CodeLen = 0) or T^.IsAsync then Exit;
   if JitCallStub = nil then JitBuildCallStub;
   if JitNewStub = nil then JitBuildNewStub;
-  if JitCallStub = nil then Exit;
+  if (JitGetterStub = nil) and (JitCallStub <> nil) then JitBuildGetterStub;
+  if (JitCallStub = nil) or (JitGetterStub = nil) then Exit;
   JitLen := 0;
   JitFixCount := 0;
   JitDeferCount := 0;
