@@ -279,7 +279,7 @@ procedure Cvt32ToX(X, R: Integer);                  { cvtsi2sd xmmX, R32 }
 begin JB($F2); JRex(False, X, 0, R); JB($0F); JB($2A); JModRR(X, R); end;
 
 var
-  JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsNurseryTop, JitFsArrayIterNext, JitFsGlobalObj: PtrInt;   { threadvar offsets from fs }
+  JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsNurseryTop, JitFsArrayIterNext, JitFsGlobalObj, JitFsGLexCells: PtrInt;   { threadvar offsets from fs }
   JitFsFrames, JitFsFrameTop, JitFsStackTop, JitFsJitDepth, JitFsJitDepthMax, JitFsStackFloor: PtrInt;
 
 function JitFsBase: PtrUInt; assembler; nostackframe;
@@ -1437,6 +1437,50 @@ begin
   Result := True;
 end;
 
+{ opSetGlobal (the interpreter's): a global lexical binding that is not const has its index cached in the IC
+  (Shape nil, Depth -2 - the index), which the code reads }
+function JH_SetGlobal(Fr: PFrame; I: QWord): Boolean;
+var A, CI: Integer; IC: PPropIC; O: PObj; Bool: Boolean; V: TValue;
+begin
+  A := (I shr 8) and $FFFF;
+  V := VStack[Fr^.Base + A];
+  IC := @Fr^.Tpl^.ICs[I shr 40];
+  O := ObjOf(GlobalObj);
+  if O^.Shape = IC^.Shape then
+  begin
+    SetSlot(O, IC^.Slot, V);
+    Exit(True);
+  end;
+  CI := GLexFind(IC^.Key);
+  if CI >= 0 then
+  begin
+    if not GLexConst[CI] then
+    begin
+      IC^.Shape := nil;
+      IC^.Depth := -2 - CI;
+    end;
+    Exit(GLexSet(CI, V));
+  end;
+  CI := ShapeLookup(O^.Shape, IC^.Key);
+  if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) then
+  begin
+    IC^.Shape := O^.Shape; IC^.Slot := CI;
+    SetSlot(O, CI, V);
+    Exit(True);
+  end;
+  { 6.2.5.6 PutValue: an unresolvable reference in strict code throws }
+  if (CI < 0) and Fr^.Tpl^.IsStrict then
+  begin
+    if not InheritedHasV(O, IC^.Key, Bool) then Exit(False);
+    if not Bool then
+    begin
+      XThrowNotDefined(IC^.Key);
+      Exit(False);
+    end;
+  end;
+  Result := SetVS(GlobalObj, IC^.Key, V, Fr^.Tpl^.IsStrict);
+end;
+
 function JH_Compare(Fr: PFrame; I: QWord): Boolean;
 var R: PValue; A, Cmp: Integer; VA, VB: TValue; Bool: Boolean;
 begin
@@ -2388,6 +2432,28 @@ begin
         PatchHere(L2);
         MovMR(jBX, A * 8, jAX);
       end;
+    opSetUpv:
+      begin
+        { Fr^.Closure's cell B: R[A] into the register it is open on, or into its value (the write barrier) }
+        MovRM(jAX, jR12, PtrInt(@PFrame(nil)^.Closure));
+        MovRI(jDX, PTR_MASK);
+        AluRR($21, jAX, jDX, True);
+        MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Aux2));
+        AluRR($21, jAX, jDX, True);
+        MovRM(jAX, jAX, PtrInt(@PValueArray(nil)^.Data) + B * 8);
+        AluRR($21, jAX, jDX, True);
+        MovRM(jCX, jBX, A * 8);
+        MovRM(jDX, jAX, PtrInt(@PUpval(nil)^.StackIndex));
+        AluRR($85, jDX, jDX, True);
+        L1 := JccFwd(ccS);
+        MovRFs(jR8, JitFsVStack);
+        MovMRIdx(jR8, jDX, 0, jCX);
+        L2 := JmpFwd;
+        PatchHere(L1);
+        MovMR(jAX, PtrInt(@PUpval(nil)^.Value), jCX);
+        Barrier(jAX, jCX);
+        PatchHere(L2);
+      end;
     opJmp:
       begin
         if (C < 0) and (JitInfo <> nil) then JitCountDownLoop(PC + 1 + C);
@@ -2995,8 +3061,7 @@ begin
     opPow:
       EmitHelper(@JH_Arith, PC, I);
     opInstanceof: EmitHelper(@JH_InstanceOf, PC, I);
-    opGetIter, opForIn, opIn, opNewArr, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn,
-    opSetUpv:
+    opGetIter, opForIn, opIn, opNewArr, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn:
       EmitHelper(@JH_Misc, PC, I);
     opBitAnd, opBitOr, opBitXor, opShl:
       begin
@@ -3069,7 +3134,85 @@ begin
           end;
         end;
       end;
-    opGetGlobal, opTypeofGlobal: EmitHelper(@JH_GetGlobal, PC, I);
+    opGetGlobal, opSetGlobal:
+      begin
+        { a data property of the global object in the IC's shape (an inline or an overflow slot), or a global
+          lexical binding whose index the IC holds (Shape nil, Depth -2 - the index; a store's only when not
+          const) outside its TDZ (its cell made, the value not the hole); anything else the helper's }
+        IC := @T^.ICs[CU];
+        LeaRM(jSI, jR14, PtrInt(PtrUInt(IC) - PtrUInt(@T^.ICs[0])));
+        MovRFs(jAX, JitFsGlobalObj);
+        AluRR($31, jAX, jR13, True);
+        MovRM(jDX, jSI, PtrInt(@PPropIC(nil)^.Shape));
+        CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Shape));
+        L1 := JccFwd(ccNE);
+        Mov32RM(jDX, jSI, PtrInt(@PPropIC(nil)^.Slot));
+        MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+        AluRR($39, jDX, jCX, False);
+        L2 := JccFwd(ccAE);
+        if Op = opGetGlobal then MovRMIdx(jAX, jAX, jDX, PtrInt(@PObj(nil)^.Slots))
+        else
+        begin
+          MovRM(jCX, jBX, A * 8);
+          MovMRIdx(jAX, jDX, PtrInt(@PObj(nil)^.Slots), jCX);
+          Barrier(jAX, jCX);
+        end;
+        L3 := JmpFwd;
+        PatchHere(L2);
+        AluRR($29, jDX, jCX, False);                               { sub edx, ecx: the overflow index }
+        MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Overflow));
+        if Op = opGetGlobal then MovRMIdx(jAX, jAX, jDX, PtrInt(@PValueArray(nil)^.Data))
+        else
+        begin
+          MovRM(jCX, jBX, A * 8);
+          MovMRIdx(jAX, jDX, PtrInt(@PValueArray(nil)^.Data), jCX);
+          Barrier(jAX, jCX);
+        end;
+        L4 := JmpFwd;
+        PatchHere(L1);
+        Mov32RM(jDX, jSI, PtrInt(@PPropIC(nil)^.Depth));
+        AluRI(7, jDX, -2, False);
+        JccExit(ccG, PC);
+        MovRI(jCX, QWord(PtrUInt(@MultiRealmAny)));
+        CmpBMI(jCX, 0, 0);
+        JccExit(ccNE, PC);
+        JRex(False, 0, 0, jDX); JB($F7); JModRR(3, jDX);           { neg edx: the index + 2 }
+        MovRFs(jCX, JitFsGLexCells);
+        MovRMIdx(jAX, jCX, jDX, -16);
+        MovRI(jCX, VUndefined);
+        AluRR($39, jAX, jCX, True);
+        JccExit(ccE, PC);
+        AluRR($31, jAX, jR13, True);                               { the cell }
+        MovRI(jR11, VHole);
+        MovRM(jDX, jAX, PtrInt(@PUpval(nil)^.StackIndex));
+        AluRR($85, jDX, jDX, True);
+        L5 := JccFwd(ccS);
+        MovRFs(jR8, JitFsVStack);
+        MovRMIdx(jR10, jR8, jDX, 0);
+        AluRR($39, jR10, jR11, True);
+        JccExit(ccE, PC);
+        if Op = opGetGlobal then MovRR(jAX, jR10)
+        else
+        begin
+          MovRM(jCX, jBX, A * 8);
+          MovMRIdx(jR8, jDX, 0, jCX);
+        end;
+        L6 := JmpFwd;
+        PatchHere(L5);
+        MovRM(jR10, jAX, PtrInt(@PUpval(nil)^.Value));
+        AluRR($39, jR10, jR11, True);
+        JccExit(ccE, PC);
+        if Op = opGetGlobal then MovRR(jAX, jR10)
+        else
+        begin
+          MovRM(jCX, jBX, A * 8);
+          MovMR(jAX, PtrInt(@PUpval(nil)^.Value), jCX);
+          Barrier(jAX, jCX);
+        end;
+        PatchHere(L3); PatchHere(L4); PatchHere(L6);
+        if Op = opGetGlobal then MovMR(jBX, A * 8, jAX);
+      end;
+    opTypeofGlobal: EmitHelper(@JH_GetGlobal, PC, I);
     opClosure: EmitHelper(@JH_Alloc, PC, I);
     opTypeof:
       begin
@@ -3350,6 +3493,8 @@ begin
   Saved := JitSlow;
   case TOp(I and $FF) of
     opGetProp, opGetLength: JitSlow := @JH_GetProp;
+    opGetGlobal: JitSlow := @JH_GetGlobal;
+    opSetGlobal: JitSlow := @JH_SetGlobal;
     opSetProp: JitSlow := @JH_SetProp;
     opDefField: JitSlow := @JH_DefField;
     opGetElem: JitSlow := @JH_GetElem;
@@ -4123,14 +4268,14 @@ begin
     JitBuf[JitFixes[I].At + 2] := (D shr 16) and $FF; JitBuf[JitFixes[I].At + 3] := D shr 24;
   end;
   Code := JitAlloc(JitLen);
-  if (Code <> nil) and ((JitDebugFlags and 1) <> 0) then JitMapEntry(Code, JitLen, T, 'base');
-  if (Code <> nil) and ((JitDebugFlags and 2) <> 0) and (T^.Name <> nil) and
-     (Pos(GetEnvironmentVariable('G2_JITDUMP'), UTF8Encode(StrToUnicode(T^.Name))) > 0) then
-    for PC := 0 to T^.CodeLen - 1 do
-      WriteLn(ErrOutput, 'jitpc ', HexStr(PtrUInt(Code) + PtrUInt(JitNative[PC]), 16), ' ', PC);
   if Code = nil then begin FreeMem(Table); Exit; end;
   {$IFDEF G2_JITSTATS}Inc(JitCompiles); Inc(JitCodeBytes, JitLen);{$ENDIF}
   Move(JitBuf[0], Code^, JitLen);
+  if (JitDebugFlags and 1) <> 0 then JitMapEntry(Code, JitLen, T, 'base');
+  if ((JitDebugFlags and 2) <> 0) and (T^.Name <> nil) and
+     (Pos(GetEnvironmentVariable('G2_JITDUMP'), UTF8Encode(StrToUnicode(T^.Name))) > 0) then
+    for PC := 0 to T^.CodeLen - 1 do
+      WriteLn(ErrOutput, 'jitpc ', HexStr(PtrUInt(Code) + PtrUInt(JitNative[PC]), 16), ' ', PC);
   { an instruction the code only exits at has no entry: FastLoop does not go in to come straight back out }
   T^.JitComplete := True;
   for PC := 0 to T^.CodeLen - 1 do
@@ -4194,6 +4339,7 @@ begin
   JitMainThread := GetCurrentThreadId;
   JitFsVStack := PtrInt(PtrUInt(@VStack) - JitFsBase);
   JitFsGlobalObj := PtrInt(PtrUInt(@GlobalObj) - JitFsBase);
+  JitFsGLexCells := PtrInt(PtrUInt(@GLexCells) - JitFsBase);
   JitFsNurseryStart := PtrInt(PtrUInt(@NurseryStart) - JitFsBase);
   JitFsNurseryLimit := PtrInt(PtrUInt(@NurseryLimit) - JitFsBase);
   JitFsNurseryTop := PtrInt(PtrUInt(@NurseryTop) - JitFsBase);
@@ -4208,7 +4354,8 @@ begin
   if (Abs(JitFsVStack) > $7FFFFFF0) or (Abs(JitFsNurseryStart) > $7FFFFFF0) or (Abs(JitFsNurseryLimit) > $7FFFFFF0) or
      (Abs(JitFsNurseryTop) > $7FFFFFF0) or (Abs(JitFsArrayIterNext) > $7FFFFFF0) or (Abs(JitFsFrames) > $7FFFFFF0) or (Abs(JitFsFrameTop) > $7FFFFFF0) or
      (Abs(JitFsStackTop) > $7FFFFFF0) or (Abs(JitFsJitDepth) > $7FFFFFF0) or
-     (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) or (Abs(JitFsGlobalObj) > $7FFFFFF0) then
+     (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) or (Abs(JitFsGlobalObj) > $7FFFFFF0) or
+     (Abs(JitFsGLexCells) > $7FFFFFF0) then
     JitEnabled := 0;
   if JitEnabled < 0 then
     if GetEnvironmentVariable('G2_JIT') = '0' then JitEnabled := 0 else JitEnabled := 1;   { on unless G2_JIT=0 }
