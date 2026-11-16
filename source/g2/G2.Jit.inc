@@ -48,6 +48,8 @@ const
   JIT_HOT = 20;                    { a template's entries before it is compiled (G2_JIT_HOT overrides) }
   JIT_MAX_DEPTH = 256;             { code activations nested on the native stack where its bounds are unknown }
   JIT_STACK_MARGIN = 256 * 1024;   { native stack kept free below compiled code, above NativeStackLimit }
+  JIT_UNKNOWN_STACK = 192 * 1024;  { where the stack's bounds are unknown: the native stack compiled code may take
+                                     below the frame that first set the thread's bounds up }
 
 var
   CC_Skip: Integer;
@@ -687,7 +689,8 @@ var
 threadvar
   JitDepth: Integer;               { native calls of compiled code in progress (XJitCall) }
   { the thread's bounds on them (JitThreadInit): JitDepth below JitDepthMax (0 until set: no code runs), rsp above
-    JitStackFloor (0 where the stack's bounds are unknown, and JitDepthMax is JIT_MAX_DEPTH) }
+    JitStackFloor (where the stack's bounds are unknown, JIT_UNKNOWN_STACK below the frame that set it, and
+    JitDepthMax is JIT_MAX_DEPTH). The call and new stubs' activations count only against the floor }
   JitDepthMax: Integer;
   JitStackFloor: PtrUInt;
 
@@ -702,7 +705,9 @@ begin
   end
   else
   begin
-    JitStackFloor := 0;
+    { the call and new stubs bound their nesting by the floor alone: one well below this frame }
+    if PtrUInt(@L) > JIT_UNKNOWN_STACK then JitStackFloor := PtrUInt(@L) - JIT_UNKNOWN_STACK
+    else JitStackFloor := 0;
     JitDepthMax := JIT_MAX_DEPTH;
   end;
 end;
@@ -3630,9 +3635,6 @@ begin
   AluRI(7, jR8, STACK_MAX - 4, True); AddS(JccFwd(ccAE));      { (the fill below may write 3 slots past it) }
   Mov32RFs(jR9, JitFsFrameTop);
   AluRI(7, jR9, FRAME_MAX - 2, False); AddS(JccFwd(ccAE));
-  Mov32RFs(jR10, JitFsJitDepth);
-  Mov32RFs(jR11, JitFsJitDepthMax);
-  AluRR($39, jR10, jR11, False); AddS(JccFwd(ccAE));
   MovRFs(jR11, JitFsStackFloor);
   AluRR($39, jSP, jR11, True); AddS(JccFwd(ccB));                 { cmp rsp, the floor }
   { the registers from min(Argc, NumParams) + 1 to MaxRegs - 1: undefined }
@@ -3675,9 +3677,6 @@ begin
   AluRI(0, jR9, 1, False);
   Mov32FsR(JitFsFrameTop, jR9);
   Mov32FsR(JitFsStackTop, jR8);
-  Mov32RFs(jR10, JitFsJitDepth);
-  AluRI(0, jR10, 1, False);
-  Mov32FsR(JitFsJitDepth, jR10);
   { the callee's code: R', its entry, the frame, nested (1) }
   MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.Jit));
   MovRR(jSI, jDI);
@@ -3685,9 +3684,6 @@ begin
   MovRR(jDX, jAX);
   MovRI(jCX, 1);
   JRex(False, 0, 0, jR11); JB($FF); JB($D0 or (jR11 and 7));   { call r11 }
-  Mov32RFs(jR10, JitFsJitDepth);
-  AluRI(5, jR10, 1, False);
-  Mov32FsR(JitFsJitDepth, jR10);
   AluRI(7, jAX, -2, False);
   L1 := JccFwd(ccNE);
   { returned: this frame's StackTop (its Base + its template's MaxRegs) }
@@ -3905,9 +3901,6 @@ begin
   AluRI(7, jR8, STACK_MAX - 4, True); AddS(JccFwd(ccAE));      { (the fill below may write 3 slots past it) }
   Mov32RFs(jR9, JitFsFrameTop);
   AluRI(7, jR9, FRAME_MAX - 2, False); AddS(JccFwd(ccAE));
-  Mov32RFs(jR10, JitFsJitDepth);
-  Mov32RFs(jR11, JitFsJitDepthMax);
-  AluRR($39, jR10, jR11, False); AddS(JccFwd(ccAE));
   MovRFs(jR11, JitFsStackFloor);
   AluRR($39, jSP, jR11, True); AddS(JccFwd(ccB));                 { cmp rsp, the floor }
   { the registers from min(Argc, NumParams) + 1 to MaxRegs - 1: undefined }
@@ -3946,9 +3939,6 @@ begin
   AluRI(0, jR9, 1, False);
   Mov32FsR(JitFsFrameTop, jR9);
   Mov32FsR(JitFsStackTop, jR8);
-  Mov32RFs(jR10, JitFsJitDepth);
-  AluRI(0, jR10, 1, False);
-  Mov32FsR(JitFsJitDepth, jR10);
   { the constructor's code: R', its entry, the frame, nested (1) }
   MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.Jit));
   MovRR(jSI, jDI);
@@ -3956,9 +3946,6 @@ begin
   MovRR(jDX, jAX);
   MovRI(jCX, 1);
   JRex(False, 0, 0, jR11); JB($FF); JB($D0 or (jR11 and 7));   { call r11 }
-  Mov32RFs(jR10, JitFsJitDepth);
-  AluRI(5, jR10, 1, False);
-  Mov32FsR(JitFsJitDepth, jR10);
   AluRI(7, jAX, -2, False);
   L1 := JccFwd(ccNE);
   { returned (the object in R[A]): this frame's StackTop }
