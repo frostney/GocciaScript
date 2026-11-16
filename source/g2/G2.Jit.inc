@@ -1577,6 +1577,15 @@ type
     Slot: Integer;
   end;
 
+  { a private member site's cache (opGetPriv, opSetPriv): the receiver's shape, the private name (a key atom:
+    permanent), its slot (a data property; for a store, a writable one) }
+  PPrivCache = ^TPrivCache;
+  TPrivCache = record
+    Shape: PShape;
+    Key: TValue;
+    Slot: Integer;
+  end;
+
 var
   JitDefCaches: array of PDefCache;   { the compiling template's (DeferCold's V an index here) }
   JitDefCacheCount: Integer;
@@ -1644,6 +1653,46 @@ begin
   CallAbs(H);
   JB($84); JB($C0);                                { test al, al }
   JccThrow(ccE);
+end;
+
+{ opGetPriv / opSetPriv past the site's cache C: a data property found by the shape (for a store, a writable one)
+  fills it; anything else PrivateGet's or PrivateSet's }
+function JH_PrivC(Fr: PFrame; I: QWord; C: PPrivCache): Boolean;
+var R: PValue; A, B, K, CI: Integer; O: PObj; V: TValue;
+begin
+  R := @VStack[Fr^.Base];
+  A := (I shr 8) and $FFFF;
+  B := (I shr 24) and $FFFF;
+  K := I shr 40;
+  if TOp(I and $FF) = opGetPriv then
+  begin
+    if IsObject(R[B]) and IsPtr(R[K]) then
+    begin
+      O := ObjOf(R[B]);
+      CI := ShapeLookup(O^.Shape, PStr(PtrOf(R[K])));
+      if (CI >= 0) and ((O^.Shape^.PFlags[CI] and pfAccessor) = 0) then
+      begin
+        C^.Shape := O^.Shape; C^.Key := R[K]; C^.Slot := CI;
+        R[A] := GetSlot(O, CI);
+        Exit(True);
+      end;
+    end;
+    if not PrivateGet(R[B], PStr(PtrOf(R[K])), V) then Exit(False);
+    VStack[Fr^.Base + A] := V;
+    Exit(True);
+  end;
+  if IsObject(R[A]) and IsPtr(R[K]) then
+  begin
+    O := ObjOf(R[A]);
+    CI := ShapeLookup(O^.Shape, PStr(PtrOf(R[K])));
+    if (CI >= 0) and ((O^.Shape^.PFlags[CI] and (pfAccessor or pfWritable)) = pfWritable) then
+    begin
+      C^.Shape := O^.Shape; C^.Key := R[K]; C^.Slot := CI;
+      SetSlot(O, CI, R[B]);
+      Exit(True);
+    end;
+  end;
+  Result := PrivateSet(R[A], PStr(PtrOf(R[K])), R[B]);
 end;
 
 function JH_Arith(Fr: PFrame; I: QWord): Boolean;
@@ -3098,8 +3147,68 @@ begin
     opPow:
       EmitHelper(@JH_Arith, PC, I);
     opInstanceof: EmitHelper(@JH_InstanceOf, PC, I);
-    opGetIter, opForIn, opIn, opArrPush, opArrHole, opClose, opToStr, opRegExp, opGetPriv, opSetPriv, opPrivIn:
+    opGetIter, opForIn, opIn, opArrPush, opArrHole, opClose, opToStr, opRegExp, opPrivIn:
       EmitHelper(@JH_Misc, PC, I);
+    opGetPriv, opSetPriv:
+      begin
+        { the site's cache (TPrivCache): the receiver's shape and the private name, an inline or an overflow slot;
+          else JH_PrivC, which fills it }
+        LA := Ord(Op = opGetPriv);
+        MovRI(jSI, QWord(PtrUInt(AllocMem(SizeOf(TPrivCache)))));
+        MovRM(jAX, jBX, IfThen(LA = 1, B, A) * 8);
+        AluRR($31, jAX, jR13, True);
+        MovRR(jDX, jAX);
+        ShiftRI(5, jDX, 48, True);
+        L1 := JccFwd(ccNE);
+        CmpBMI(jAX, 4, ckObject);
+        L2 := JccFwd(ccNE);
+        MovRM(jDX, jSI, PtrInt(@PPrivCache(nil)^.Shape));
+        CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Shape));
+        L3 := JccFwd(ccNE);
+        MovRM(jDX, jBX, CU * 8);
+        CmpRM(jDX, jSI, PtrInt(@PPrivCache(nil)^.Key));
+        L4 := JccFwd(ccNE);
+        Mov32RM(jDX, jSI, PtrInt(@PPrivCache(nil)^.Slot));
+        MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
+        AluRR($39, jDX, jCX, False);
+        L5 := JccFwd(ccAE);
+        if LA = 1 then
+        begin
+          MovRMIdx(jAX, jAX, jDX, PtrInt(@PObj(nil)^.Slots));
+          MovMR(jBX, A * 8, jAX);
+        end
+        else
+        begin
+          MovRM(jCX, jBX, B * 8);
+          MovMRIdx(jAX, jDX, PtrInt(@PObj(nil)^.Slots), jCX);
+          Barrier(jAX, jCX);
+        end;
+        L6 := JmpFwd;
+        PatchHere(L5);
+        AluRR($29, jDX, jCX, False);                               { sub edx, ecx: the overflow index }
+        MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Overflow));
+        if LA = 1 then
+        begin
+          MovRMIdx(jAX, jAX, jDX, PtrInt(@PValueArray(nil)^.Data));
+          MovMR(jBX, A * 8, jAX);
+        end
+        else
+        begin
+          MovRM(jCX, jBX, B * 8);
+          MovMRIdx(jAX, jDX, PtrInt(@PValueArray(nil)^.Data), jCX);
+          Barrier(jAX, jCX);
+        end;
+        LS := JmpFwd;
+        PatchHere(L1); PatchHere(L2); PatchHere(L3); PatchHere(L4);
+        JRex(False, 0, 0, jR12); JB($C7); JMem(0, jR12, PtrInt(@PFrame(nil)^.PC)); JD(Cardinal(PC + 1));
+        MovRR(jDI, jR12);
+        MovRR(jDX, jSI);
+        MovRI(jSI, I);
+        CallAbs(@JH_PrivC);
+        JB($84); JB($C0);                                          { test al, al }
+        JccThrow(ccE);
+        PatchHere(L6); PatchHere(LS);
+      end;
     opNewArr:
       if GCStress or (B > 12) or (EmptyShapeForArray = nil) then EmitHelper(@JH_Misc, PC, I)
       else
