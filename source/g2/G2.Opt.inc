@@ -41,6 +41,8 @@ const
                         inline capacity) into VStack register Y }
   onMath = 81;        { Math function Imm (OptMathFns) of X (a double), the callee in VStack register Reg checked }
   onUpvGet = 83;      { upvalue Imm of the frame's closure (open: its register's value) into VStack register Y }
+  onElemRecv = 86;    { VStack register Imm, an element receiver no instruction of the region writes, checked once at
+                        the entry to be an object (its element accesses then skip the check) }
   onCheckHole = 84;   { VStack register Imm checked not to be the hole (the baseline's code throws the ReferenceError) }
   onNewObj = 85;      { a plain object of inline capacity Imm and shape OPropShape allocated in the nursery into VStack
                         register Reg (the nursery full: an exit) }
@@ -171,6 +173,7 @@ var
   OSse41: Integer = -1;              { whether the CPU has roundsd (-1 not asked yet) }
   { shapes known to hold while the SSA is built: per register, the shape its object was checked to have (nil
     none) and that object's kind (255 not checked); per block, the facts at its end }
+  OElemChecked: array of Boolean;    { per register: an onElemRecv at the entry checked it (OElemReceiver skips it) }
   OFactShape: array of PShape;
   OFactKind: array of Byte;
   OEndShape: array of array of PShape;
@@ -1804,6 +1807,47 @@ begin
   end;
 end;
 
+{ OElemChecked: the registers an element instruction of the region takes as its receiver (speculated: an
+  elements store or a typed array) that are live at the entry, not captured, and that no instruction of the
+  region writes (its own writes, an embedded instruction's, a call's from its register up; any other
+  instruction counts as writing its A) }
+procedure OElemCheckSet;
+var Recv, Written: array of Boolean; B, PC, R, NR, WF, WT: Integer; I: QWord; Op: TOp; ERd: array[0..63] of Integer;
+begin
+  SetLength(OElemChecked, ORegs);
+  SetLength(Recv, ORegs);
+  SetLength(Written, ORegs);
+  for R := 0 to ORegs - 1 do begin OElemChecked[R] := False; Recv[R] := False; Written[R] := False; end;
+  for B := 1 to OBCount - 1 do
+    for PC := OB[B].StartPC to OB[B].EndPC do
+    begin
+      I := OIns(PC);
+      Op := OOpOf(I);
+      if OExit[PC] then Break;
+      if not OEmbed[PC] and (OElemSpec[PC] >= 0) then
+        if Op = opGetElem then Recv[OB_(I)] := True
+        else if Op = opSetElem then Recv[OA(I)] := True;
+      if OEmbed[PC] then
+      begin
+        OEmbedSets(I, ERd, NR, WF, WT);
+        if WF >= 0 then for R := WF to Min(WT, ORegs - 1) do Written[R] := True;
+      end;
+      R := OWrites(I);
+      if (R >= 0) and (R < ORegs) then Written[R] := True;
+      case Op of
+        opCall, opNew: for R := OA(I) to ORegs - 1 do Written[R] := True;
+        opGetMethod: if OA(I) + 1 < ORegs then Written[OA(I) + 1] := True;
+        opNop, opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe, opJNGt, opJNGe,
+        opJNSEq, opJSEq, opSetProp, opSetElem, opDefProp, opDefField, opCheckHole, opRet, opRetUndef, opThrow,
+        opThrowConst: ;
+      else
+        if (OWrites(I) < 0) and (OA(I) < ORegs) then Written[OA(I)] := True;
+      end;
+    end;
+  for R := 0 to ORegs - 1 do
+    OElemChecked[R] := Recv[R] and not Written[R] and not OCaptured[R] and OLiveAt(OEntry, R);
+end;
+
 function OBuildSSA: Boolean;
 var Stack: array of Integer; Idx: array of Integer; NS, B, S, K, R, P, PC, N, V, Ph, L: Integer;
   Flushed: array of Integer;
@@ -1870,6 +1914,15 @@ begin
           OMap[R] := N;
         end;
       end;
+      { the element receivers the region never writes: checked here once }
+      OElemCheckSet;
+      for R := 0 to ORegs - 1 do
+        if OElemChecked[R] then
+        begin
+          N := OEmitNode(0, onElemRecv, vkNone, -1, -1, R);
+          ON[N].PC := OEntry;
+          ON[N].FS := OFSCount; ON[N].FSN := 0;
+        end;
     end
     else if (Length(OB[B].Preds) = 1) and (OB[OB[B].Preds[0]].RPO < OB[B].RPO) then
       Move(OB[OB[B].Preds[0]].EndMap[0], OMap[0], ORegs * SizeOf(Integer))
@@ -2398,6 +2451,7 @@ procedure OElemReceiver(N: Integer);
 begin
   MovRM(jAX, jBX, ON[N].Reg * 8);
   AluRR($31, jAX, jR13, True);
+  if (ON[N].Reg < Length(OElemChecked)) and OElemChecked[ON[N].Reg] then Exit;
   MovRR(jDX, jAX);
   ShiftRI(5, jDX, 48, True);
   OJccGuardFb(ccNE, N, ofbElem);
@@ -3003,6 +3057,16 @@ begin
         for L := 0 to Integer(ON[N].Imm) - 1 do MovMR(jAX, PtrInt(@PObj(nil)^.Slots) + L * 8, jDX);
         AluRR($31, jAX, jR13, True);
         MovMR(jBX, ON[N].Reg * 8, jAX);
+      end;
+    onElemRecv:
+      begin
+        MovRM(jAX, jBX, Integer(ON[N].Imm) * 8);
+        AluRR($31, jAX, jR13, True);
+        MovRR(jDX, jAX);
+        ShiftRI(5, jDX, 48, True);
+        OJccGuard(ccNE, N);
+        CmpBMI(jAX, 4, ckObject);
+        OJccGuard(ccNE, N);
       end;
     onCheckHole:
       begin
