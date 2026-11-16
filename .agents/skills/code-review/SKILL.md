@@ -272,7 +272,7 @@ skill's step. Started directly, continue under the
 [delivery settings](../deliver/SKILL.md#delivery-settings); with
 `entry-points: deliver`, the reviewed change and its validated findings go on
 to `/deliver`, which fixes the findings, verifies and publishes the change up to
-the configured endpoint (`ready-to-merge` when there is no `ORCHESTRATION.md`).
+the configured endpoint (its default when `ORCHESTRATION.md` sets none).
 With `stop`, end with this report.
 
 Include:

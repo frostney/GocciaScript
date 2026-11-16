@@ -81,5 +81,5 @@ behavior remains failed or unverified. Started directly, continue under the
 [delivery settings](../deliver/SKILL.md#delivery-settings); with
 `entry-points: deliver`, the tested change, including any fix, goes on to
 `/deliver`, which reviews, gates and publishes it up to the configured endpoint
-(`ready-to-merge` when there is no `ORCHESTRATION.md`). With `stop`, end with
+(its default when `ORCHESTRATION.md` sets none). With `stop`, end with
 this summary.

@@ -91,6 +91,6 @@ not block the update.
    continue under the [delivery settings](../deliver/SKILL.md#delivery-settings);
    with `entry-points: deliver`, the pushed head goes on to `/deliver`, which
    awaits its CI and review and takes the PR to the configured endpoint
-   (`ready-to-merge` when there is no `ORCHESTRATION.md`). With `stop`, end
+   (its default when `ORCHESTRATION.md` sets none). With `stop`, end
    with this report.
    Report missing walkthrough requirements with remedies.

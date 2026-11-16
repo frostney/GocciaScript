@@ -3,8 +3,9 @@ name: git-workflow
 description: >-
   Applies the user's git defaults: branch from the remote default, merge rather
   than rebase for ordinary branches, use native GitHub stacks when selected,
-  never amend, and squash-merge pull requests. Use when branching, syncing,
-  committing, pushing, or merging in the user's repos.
+  never amend, squash-merge pull requests, and remove merged worktrees. Use
+  when branching, syncing, committing, pushing, merging, or cleaning up
+  worktrees in the user's repos.
 license: Unlicense OR MIT
 compatibility: >-
   Requires git; pull-request operations also require the GitHub CLI (gh) and
@@ -47,7 +48,8 @@ new repository or operation needs its own scope.
   before editing; merge it in only under the
   [up-to-date rule](#update-commit-and-push) below.
 - Before new work starts, apply the
-  [default-branch health](#default-branch-health) gate.
+  [default-branch health](#default-branch-health) gate and
+  [remove merged worktrees](#remove-merged-worktrees).
 
 ## Update, commit, and push
 
@@ -255,7 +257,19 @@ result decides, and everything that became ready meanwhile merges.
   most frequent commit under it. Where a project generates its changelog or
   version bump from commit history, a non-conforming title merges cleanly and is
   then silently absent from it.
-- After a squash merge, sync the local base and remove the merged local branch.
+- After a squash merge, sync the local base, then
+  [remove the merged worktree](#remove-merged-worktrees) and its local branch.
+
+## Remove merged worktrees
+
+A merged worktree holds no work, but its checkout, dependencies and build
+output stay on disk, and parallel and delegated runs leave them behind until
+the disk fills. At each point that links here, remove every merged worktree
+that is safe to remove, whichever run created it, prune entries whose
+directory is gone, and report each worktree kept with its reason. Never stash,
+commit, discard or force-remove anything to make a worktree removable. Read
+[references/merged-worktrees.md](references/merged-worktrees.md) before
+removing or pruning any worktree.
 
 ## Native GitHub stacks
 
