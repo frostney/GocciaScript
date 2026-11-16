@@ -875,12 +875,45 @@ begin
   end;
 end;
 
-{ the kinds at each block's start; False when it found an instruction to make an exit (the blocks then change) }
+function OMk(Op: TOp; A, B: Integer; C: Int64): QWord; forward;
+
+{ the atom typeof gives a value of kind K (VHole: not known) }
+function OTypeofOfKind(K: Byte): TValue;
+begin
+  case K of
+    vkInt, vkDbl: Result := TypeofValue(MkInt(0));
+    vkBool: Result := TypeofValue(VTrue);
+  else Result := VHole;
+  end;
+end;
+
+{ the index of a string constant of T equal to V, -1 none }
+function OStrConstIndex(T: PFuncTemplate; V: TValue): Integer;
+var J: Integer;
+begin
+  for J := 0 to High(T^.Consts) do
+    if IsString(T^.Consts[J]) and SEqFast(T^.Consts[J], V) then Exit(J);
+  Result := -1;
+end;
+
+{ the kinds at each block's start; False when it found an instruction to make an exit (the blocks then change).
+  Next to the kinds it follows string constants (opLoadK's, typeof's of a number or a boolean, moved) and folds
+  what they decide: typeof of a known kind becomes opLoadK of its atom (when the template has that string), a
+  comparison of two known strings opLoadTrue or opLoadFalse, and a strict-equality jump on them opJmp or opNop
+  (False then: the blocks change). switch (typeof x) on a number keeps only its case }
 function OInferKinds(const EntryKinds: array of Byte): Boolean;
 var Work: array of Integer; InWork: array of Boolean; NW, B, PC, S, K, R, RK, NR, WF, WT: Integer; Cur: array of Byte;
   I: QWord; Op: TOp; Changed: Boolean; ERd: array[0..63] of Integer;
+  InConst: array of array of TValue; CVis: array of Boolean; CurC: array of TValue; Folded, Eq: Boolean; TV: TValue;
 begin
   Result := True;
+  Folded := False;
+  SetLength(InConst, OBCount);
+  SetLength(CVis, OBCount);
+  SetLength(CurC, ORegs);
+  SetLength(InConst[0], ORegs);
+  for R := 0 to ORegs - 1 do InConst[0][R] := VHole;
+  CVis[0] := True;
   for B := 0 to OBCount - 1 do
   begin
     SetLength(OB[B].InKinds, ORegs);
@@ -898,12 +931,58 @@ begin
     B := Work[NW];
     InWork[B] := False;
     Move(OB[B].InKinds[0], Cur[0], ORegs);
+    for R := 0 to ORegs - 1 do CurC[R] := InConst[B][R];
     if B > 0 then
       for PC := OB[B].StartPC to OB[B].EndPC do
       begin
         I := OIns(PC);
         Op := OOpOf(I);
         if OExit[PC] then Break;
+        { the string constants: folds, then what the instruction writes }
+        if Op = opTypeof then
+        begin
+          TV := OTypeofOfKind(Cur[OB_(I)]);
+          if TV <> VHole then
+          begin
+            K := OStrConstIndex(OVTpl[PC], TV);
+            if K >= 0 then
+            begin
+              OVCode[PC] := OMk(opLoadK, OA(I), 0, K);
+              OEmbed[PC] := False;
+              I := OIns(PC); Op := opLoadK;
+            end;
+          end;
+        end;
+        if (Op in [opSEq, opSNe, opEq, opNe]) and IsString(CurC[OB_(I)]) and IsString(CurC[OCU(I)]) then
+        begin
+          Eq := SEqFast(CurC[OB_(I)], CurC[OCU(I)]);
+          if Eq = (Op in [opSEq, opEq]) then OVCode[PC] := OMk(opLoadTrue, OA(I), 0, 0)
+          else OVCode[PC] := OMk(opLoadFalse, OA(I), 0, 0);
+          OEmbed[PC] := False;
+          I := OIns(PC); Op := OOpOf(I);
+        end;
+        if (Op in [opJSEq, opJNSEq]) and IsString(CurC[OA(I)]) and IsString(CurC[OB_(I)]) then
+        begin
+          Eq := SEqFast(CurC[OA(I)], CurC[OB_(I)]);
+          if Eq = (Op = opJSEq) then OVCode[PC] := OMk(opJmp, 0, 0, OC(I)) else OVCode[PC] := OMk(opNop, 0, 0, 0);
+          Folded := True;
+          Break;
+        end;
+        if OEmbed[PC] then
+        begin
+          OEmbedSets(I, ERd, NR, WF, WT);
+          if WF >= 0 then for R := WF to WT do CurC[R] := VHole;
+        end;
+        R := OWrites(I);
+        if R >= 0 then CurC[R] := VHole;
+        if Op = opGetMethod then CurC[OA(I) + 1] := VHole;
+        if Op in [opCall, opNew] then for R := OA(I) to ORegs - 1 do CurC[R] := VHole;
+        case Op of
+          opLoadK: if IsString(OVTpl[PC]^.Consts[OCU(I)]) then CurC[OA(I)] := OVTpl[PC]^.Consts[OCU(I)];
+          opMov: CurC[OA(I)] := CurC[OB_(I)];
+          opTypeof: CurC[OA(I)] := OTypeofOfKind(Cur[OB_(I)]);
+        end;
+        for K := 0 to High(OCapList) do CurC[OCapList[K]] := VHole;
         if (Op = opJmp) or OIsCondJump(Op) then
         begin
           if not OJumpOk(PC, I, Cur) then begin OExit[PC] := True; Result := False; end
@@ -1038,6 +1117,17 @@ begin
         RK := OKindJoin(OB[S].InKinds[R], Cur[R]);
         if RK <> OB[S].InKinds[R] then begin OB[S].InKinds[R] := RK; Changed := True; end;
       end;
+      { the constants: one where every way in agrees }
+      if not CVis[S] then
+      begin
+        CVis[S] := True;
+        SetLength(InConst[S], ORegs);
+        for R := 0 to ORegs - 1 do InConst[S][R] := CurC[R];
+        Changed := True;
+      end
+      else
+        for R := 0 to ORegs - 1 do
+          if (InConst[S][R] <> VHole) and (InConst[S][R] <> CurC[R]) then begin InConst[S][R] := VHole; Changed := True; end;
       if Changed and not InWork[S] then
       begin
         if NW >= Length(Work) then SetLength(Work, NW * 2);
@@ -1045,6 +1135,7 @@ begin
       end;
     end;
   end;
+  if Folded then Result := False;
 end;
 
 { ---- SSA ---- }
@@ -3022,8 +3113,8 @@ begin
             MovMR(jBX, OSites[OSites[ON[N].Imm].FiSite].A * 8, jCX);
           end;
         end
-        { a sloppy callee's this: an object }
-        else if not OSites[ON[N].Imm].Tc^.IsStrict then
+        { a sloppy callee's this: an object (given none, the callee does not read it: OInlTargetOf) }
+        else if not OSites[ON[N].Imm].Tc^.IsStrict and (OSites[ON[N].Imm].Flag = 0) then
         begin
           MovRM(jAX, jBX, (ON[N].Reg + 1) * 8);
           AluRR($31, jAX, jR13, True);
@@ -4418,6 +4509,38 @@ end;
   instruction the tier takes natively, not one of the calls it is inlined in }
 { the template the call at virtual PC K (made by inlined site Par's callee, -1 the template's own code) runs when
   its callee is V and it can be inlined there (nil none) }
+{ whether template T's code may read its this (register 0): the instructions an inlined callee has (OInlOk), each
+  operand that is a register read checked; any other instruction counts as one that does }
+function OReadsThis(T: PFuncTemplate): Boolean;
+var K, J: Integer; I: QWord;
+begin
+  Result := True;
+  for K := 0 to T^.CodeLen - 1 do
+  begin
+    I := T^.Code[K];
+    case OOpOf(I) of
+      opNop, opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opLoadHole, opJmp, opGetGlobal,
+      opGetUpv, opRetUndef, opThrowConst, opNewObj: ;
+      opMov, opNeg, opBitNot, opNot, opToNum, opToNumeric, opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI,
+      opShlI, opShrI, opUShrI, opGetProp, opGetLength, opGetMethod, opTypeof:
+        if OB_(I) = 0 then Exit;
+      opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr, opUShr, opEq, opNe, opSEq, opSNe,
+      opLt, opLe, opGt, opGe, opGetElem:
+        if (OB_(I) = 0) or (OCU(I) = 0) then Exit;
+      opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opCheckHole, opRet, opThrow:
+        if OA(I) = 0 then Exit;
+      opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq, opSetProp, opDefProp, opDefField:
+        if (OA(I) = 0) or (OB_(I) = 0) then Exit;
+      opSetElem:
+        if (OA(I) = 0) or (OB_(I) = 0) or (OCU(I) = 0) then Exit;
+      opCall, opNew:
+        for J := OA(I) to OA(I) + 1 + OB_(I) do if J = 0 then Exit;
+    else Exit;
+    end;
+  end;
+  Result := False;
+end;
+
 function OInlTargetOf(K, Par: Integer; V: TValue): PFuncTemplate;
 var I: QWord; A, P: Integer; O: PObj; T: PFuncTemplate;
 begin
@@ -4450,8 +4573,8 @@ begin
     if OSites[P].Tc = T then Exit;
     P := OSites[P].Parent;
   end;
-  { a sloppy callee given no this would get the global object }
-  if (OOpOf(I) = opCall) and not T^.IsStrict and ((OCU(I) and 1) <> 0) then Exit;
+  { a sloppy callee given no this would get the global object: only one that never reads its this }
+  if (OOpOf(I) = opCall) and not T^.IsStrict and ((OCU(I) and 1) <> 0) and OReadsThis(T) then Exit;
   if A + 1 + T^.MaxRegs > 30000 then Exit;
   Result := T;
 end;
