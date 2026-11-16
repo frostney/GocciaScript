@@ -97,8 +97,10 @@ threadvar
   FrameTop: Integer;          { number of live frames }
   Handlers: array of THandler;
   HandlerTop: Integer;
-  OpenUpvals: array of TValue;
-  OpenCount: Integer;
+  { the open upvalues, sorted by stack index ascending: a plain buffer (OpenCap values), not a dynamic array, whose
+    every access from a threadvar would copy its reference in a try/finally }
+  OpenUpvals: PValue;
+  OpenCount, OpenCap: Integer;
   GlobalObj: TValue;
   Pending: TValue;
   CurNewTarget: TValue;       { set while a native function runs as a constructor }
@@ -655,6 +657,13 @@ end;
 
 { ---------------- upvalues ---------------- }
 
+{ room for one more open upvalue }
+procedure GrowOpenUpvals; noinline;
+begin
+  OpenCap := OpenCap * 2 + 64;
+  ReallocMem(OpenUpvals, OpenCap * SizeOf(TValue));
+end;
+
 function FindOrOpenUpval(Idx: Integer): TValue;
 var I, J, Lo, Hi, Mid: Integer; U: PUpval; V: TValue;
 begin
@@ -670,7 +679,7 @@ begin
       U := NewUpval;
       U^.StackIndex := Idx;
       V := MkPtr(U);
-      if OpenCount >= Length(OpenUpvals) then SetLength(OpenUpvals, OpenCount * 2 + 64);
+      if OpenCount >= OpenCap then GrowOpenUpvals;
       OpenUpvals[OpenCount] := V;
       Inc(OpenCount);
       Exit(V);
@@ -687,7 +696,7 @@ begin
   U := NewUpval;
   U^.StackIndex := Idx;
   V := MkPtr(U);
-  if OpenCount >= Length(OpenUpvals) then SetLength(OpenUpvals, OpenCount * 2 + 64);
+  if OpenCount >= OpenCap then GrowOpenUpvals;
   for J := OpenCount - 1 downto I + 1 do OpenUpvals[J + 1] := OpenUpvals[J];
   OpenUpvals[I + 1] := V;
   Inc(OpenCount);
@@ -4402,7 +4411,7 @@ begin
     begin
       VStack[Base + J] := U^.Value;
       U^.StackIndex := Base + J;
-      if OpenCount >= Length(OpenUpvals) then SetLength(OpenUpvals, OpenCount * 2 + 64);
+      if OpenCount >= OpenCap then GrowOpenUpvals;
       OpenUpvals[OpenCount] := MkPtr(U);
       Inc(OpenCount);
     end;
@@ -4574,7 +4583,7 @@ begin
     begin
       VStack[Base + J] := U^.Value;
       U^.StackIndex := Base + J;
-      if OpenCount >= Length(OpenUpvals) then SetLength(OpenUpvals, OpenCount * 2 + 64);
+      if OpenCount >= OpenCap then GrowOpenUpvals;
       OpenUpvals[OpenCount] := MkPtr(U);
       Inc(OpenCount);
     end;
@@ -8560,7 +8569,9 @@ begin
   if VStack <> nil then FreeMem(VStack);
   {$ENDIF}
   VStack := nil; StackTop := 0;
-  Frames := nil; FrameTop := 0; Handlers := nil; HandlerTop := 0; OpenUpvals := nil; OpenCount := 0;
+  Frames := nil; FrameTop := 0; Handlers := nil; HandlerTop := 0;
+  if OpenUpvals <> nil then FreeMem(OpenUpvals);
+  OpenUpvals := nil; OpenCount := 0; OpenCap := 0;
   ExtraRoots := nil; ExtraRootCount := 0;
   GlobalObj := VUndefined; Pending := VUndefined; CurNewTarget := VUndefined; ConstructNT := VUndefined;
 end;
@@ -8582,7 +8593,8 @@ begin
   FrameTop := 0;
   SetLength(Handlers, 256);
   HandlerTop := 0;
-  SetLength(OpenUpvals, 256);
+  OpenUpvals := GetMem(256 * SizeOf(TValue));
+  OpenCap := 256;
   OpenCount := 0;
   Pending := VUndefined;
   CurNewTarget := VUndefined;
