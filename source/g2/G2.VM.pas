@@ -3459,10 +3459,25 @@ end;
 
 { a bytecode function's frame: the arguments at Args (Args[-1] its this slot), Kind 0 call, 1 construct, 2
   script; the common case here, the rest in PushBytecodeFrameFull }
+threadvar
+  { the lowest native stack address a frame may be pushed at (a native's call into a function nests Execute on
+    the native stack): NativeStackLimit's, 0 where the bounds are unknown; ReentryFloorSet once it is found }
+  ReentryFloor: PtrUInt;
+  ReentryFloorSet: Boolean;
+
 function PushBytecodeFrame(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
   NewTarget: TValue): Boolean;
-var T: PFuncTemplate; Base, I: Integer; Fr: PFrame; R: PValue;
+var T: PFuncTemplate; Base, I: Integer; Fr: PFrame; R: PValue; Marker: Byte;
 begin
+  { a native that calls back into code that calls the native again recurses on the native stack, which ends
+    before the frames do: a RangeError before it overflows }
+  if not ReentryFloorSet then
+  begin
+    ReentryFloor := NativeStackLimit;
+    ReentryFloorSet := True;
+  end;
+  if PtrUInt(@Marker) < ReentryFloor then
+    Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
   T := PFuncTemplate(FObj^.Native);
   if (T^.Lazy <> nil) and not LazyCompileHook(T) then Exit(False);
   { a non-strict function's undefined or null this is the global object (OrdinaryCallBindThis) }
