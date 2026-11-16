@@ -85,9 +85,12 @@ retrospective is not this final selection.
   Prefer tightening or coupling with existing text. Direct edits are limited to
   documentation.
 - **Follow-up ticket:** source, executable configuration, or other implementation
-  is needed. Offer more detail, further grilling, `create-issue` (with a draft
-  first if the user wants one), or skip; the delegated workflow retains its own
-  gates.
+  is needed for an improvement. Offer more detail, further grilling,
+  `create-issue` (with a draft first if the user wants one), or skip; the
+  delegated workflow retains its own gates. Never offer a
+  [defect](../software-engineering-excellence/SKILL.md#defects-the-work-did-not-cause)
+  as a ticket alone: offer its issue together with its fix through the next
+  route.
 - **Implement before next cycle:** recommend this route when a selected
   improvement should be delivered before another cycle begins. Recommendation
   alone authorizes nothing. After explicit user selection, reuse or create its

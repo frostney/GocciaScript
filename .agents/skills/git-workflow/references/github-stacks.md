@@ -155,8 +155,10 @@ update, merge the freshly fetched remote base and push normally.
   layer, move the layers above it onto the updated base with the guarded
   `gh stack sync`, and merge the next layer as soon as its new head is ready;
   repeat up the prefix. Report the reason for the fallback.
-- After merge, use the official stack cleanup/sync path, remove only clean local
-  branches owned by the run, and verify the integrated remote default.
+- After merge, use the official stack cleanup/sync path, remove the clean local
+  branches the run owns that no worktree holds,
+  [remove merged worktrees](../SKILL.md#remove-merged-worktrees) with their
+  branches, and verify the integrated remote default.
 
 ## Protected publication helper
 

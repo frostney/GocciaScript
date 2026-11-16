@@ -5,7 +5,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "address-feedback/SKILL.md",
-      "computedHash": "9fed4f8d8e68985ec2dceda9461802f6c75453d14b4380876b834982638f37ce"
+      "computedHash": "bf386a0fae1631a536da34c024a4b0c7fd23047cbb544fafb01d54a01fba33cd"
     },
     "agent-writing": {
       "source": "frostney/known-good-route",
@@ -17,7 +17,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "code-review/SKILL.md",
-      "computedHash": "d1193e185bda665ebb34e5aa34be5d3a55e429a61327872d88e0d99de2920f8f"
+      "computedHash": "b863d91130b5be133c090d5fd34f4b9fbb5b764723d92f03918fd5bd3079c443"
     },
     "codebase-design": {
       "source": "mattpocock/skills",
@@ -47,13 +47,13 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "deliver/SKILL.md",
-      "computedHash": "c902c379a0a4185232197d73f73532cc2017626bd2548793f958548da815ffd2"
+      "computedHash": "1b1944a5d160a043e8ddbad9e5d0e0a40024cd42bdd36ebec07e8c5b7c4a66c1"
     },
     "delivery-wait": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "delivery-wait/SKILL.md",
-      "computedHash": "d254fc6214b324b5891436e8a2bc919badae68e39b4c283b986360e00eed748e"
+      "computedHash": "4e63da85db20cb06fa998ef063ee5fbbd768ef0c9cd932e0d2b9d46eae81e510"
     },
     "documentation-writer": {
       "source": "github/awesome-copilot",
@@ -77,7 +77,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "git-workflow/SKILL.md",
-      "computedHash": "1573afa3ee759b14c515c493578e7e3b3e2b2790c26835cba3478ed6705ae6c7"
+      "computedHash": "a6e64fcf4babd41c6a386761a9a863c2c84d338a1b6c53a904996cb6f369f4a1"
     },
     "grill-with-docs": {
       "source": "mattpocock/skills",
@@ -101,7 +101,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "implement/SKILL.md",
-      "computedHash": "bcd6c4bf3e6ae3c0c1c0f32ea46fe5276099dd74201889c6eab5ccdddc3c020e"
+      "computedHash": "8987416c3f293d3fbb5b8cd5599c606a45ece0819d7cfb226be6e51e8fb11321"
     },
     "improve-codebase-architecture": {
       "source": "mattpocock/skills",
@@ -113,7 +113,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "milestone-rush/SKILL.md",
-      "computedHash": "1567a6088b6fb34157a0853e6832ca645b00860b656de4616166a817ea229b1d"
+      "computedHash": "ebbd109cf911ef2876393805a97f637780dcde387970efa8e8898d09f03e9281"
     },
     "native-nostalgia-stack": {
       "source": "frostney/known-good-route",
@@ -143,25 +143,25 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "run-retro/SKILL.md",
-      "computedHash": "a8921f514f78213dbc7f6e016792fea5f82c36b6f0ec034026f75b31110b10ad"
+      "computedHash": "4e6e5cdf7013af20a0e1606cb3e0db9c4d69d479b4619280ee93491879f54e51"
     },
     "software-engineering-excellence": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "software-engineering-excellence/SKILL.md",
-      "computedHash": "e6acbc5075d17a9c6c5bf023ccf29ee7a43cf5ee77072b763986e146276e93c8"
+      "computedHash": "b04f7d7014f5f583e89f54092b6b829c88df80c792871f75550b0eb5496a14e7"
     },
     "test-against-spec": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "test-against-spec/SKILL.md",
-      "computedHash": "fafd85837646f64ebd7f6c827cd3935cdcdc26685e984884bfbe938a456c3971"
+      "computedHash": "a85cb91c2c8bb15d0456627f11dee81cffcd6f43e53fa8d6d7ab2d4765e3a21a"
     },
     "update-pr": {
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "update-pr/SKILL.md",
-      "computedHash": "79dd741b81f3454ac2a0cc09621341a6d83040433c35dbec16afbd884be54427"
+      "computedHash": "1b707bb15241e838d6ad0fed7a09d2a8a3bce2a9f2a21f3ce5aeaf7a4856ee28"
     }
   }
 }

@@ -50,12 +50,23 @@ Run `node scripts/delivery-settings.mjs <project root>`; the path is relative to
 this skill directory. It reads the frontmatter of `ORCHESTRATION.md` beside
 `AGENTS.md` and prints:
 
-- `endpoint`: `ready-to-merge`, `merged` or `deployed`, default `ready-to-merge`;
-- `entry-points`: `deliver` or `stop`, default `deliver`.
+- `endpoint`: `ready-to-merge`, `merged` or `deployed`, built-in default
+  `ready-to-merge`;
+- `entry-points`: `deliver` or `stop`, built-in default `deliver`;
+- `defaulted`: the keys the project did not set.
 
-`ORCHESTRATION.md` only sets the default. A request in the prompt decides that
-one run in either direction, for example a later or earlier endpoint, read-only
-or one step. A missing file or key takes its default, so without such a request
+Settings apply in this order, highest first:
+
+1. A request in the prompt decides that one run in either direction, for example
+   a later or earlier endpoint, read-only or one step.
+2. The project's `ORCHESTRATION.md`.
+3. A default the person states in their standing global agent instructions for
+   repositories that set none. Apply it to each `defaulted` key, and only to
+   those.
+4. The built-in default printed above.
+
+So a missing file or key takes the person's standing default when they state
+one, and the built-in default otherwise. Without a request or such a default,
 nothing is merged unless the project sets `merged` or `deployed`. A failed read
 is a blocker: report its error.
 
@@ -150,6 +161,8 @@ deployment, park the work item: arm one wait for each awaited transition under
 [`delivery-wait`'s running rules](../delivery-wait/SKILL.md#running-a-wait),
 record resumable state, and end the turn. Resume from each returned result,
 and arm the next wait before ending another turn while the host supports it.
+A closing report that names a pending transition is a park: end the turn only
+when each has a live wake or is explicitly handed to the person.
 If it cannot notify or keep a wait armed, use the shared bounded-check fallback
 and report the exact time or event to resume at.
 
@@ -178,4 +191,6 @@ local check passing from its actual result on the tested content. Treat a
 failure as flaky or transient only after its failing log shows it is
 intermittent. Blaming something other than the change, or leaving the failure
 out of the required repair, needs its own evidence; a flaky failure the change
-introduced is in scope.
+introduced is in scope. A failure the change neither caused nor addresses is
+[filed and fixed](../software-engineering-excellence/SKILL.md#defects-the-work-did-not-cause)
+as its own work item.

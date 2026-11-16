@@ -64,7 +64,22 @@ the returned exit status and result before resuming dependent work. Do not use
 foreground `gh pr checks --watch`, sleep loops, repeated `gh pr view`, or
 repeated output/status reads to keep a lane alive. A worker with pending work
 returns its handle and next transition to its coordinator, not a completion
-claim; do not create another worker just to poll it.
+claim; do not create another worker just to poll it. A coordinator that
+receives a report saying work is still running treats it as pending, not as the
+lane's result: it takes over the wait and keeps its own wake for the final
+result. If the host does not guarantee a later notification, it continues the
+work in a new task round or uses the fallback below.
+
+A closing message that names a pending transition is a park, not a finish. Before
+ending the turn, check each one against a wake this agent armed that is still
+live: a tracked background command, a host PR watch where the host's rules allow
+one, or a delegated task that will report back. Otherwise hand it to the person
+explicitly as theirs to do. Do not promise to follow work that cannot wake this
+session, such as another top-level thread, another machine or another person's
+session, unless a tracked wait covers it; hand it over, or use the fallback
+below with a stated check time. Prefer a tracked `delivery-wait` command for
+CI, check and review transitions over timer-based wakeups; a host PR watch may
+complement it.
 
 If the host cannot notify or resume the owner, make one bounded status check,
 record the missing capability and an explicit next check time or event, and

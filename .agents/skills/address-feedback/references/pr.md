@@ -98,7 +98,11 @@ it is no gate and its adapter posts no trigger.
    finding only when both axes pass and, where such a policy exists, it
    selects the finding; otherwise classify it as invalid, obsolete, duplicate,
    out of scope, not selected by policy, or a material decision, with
-   evidence. Reply inline to every automation
+   evidence. A valid finding about a different defect, one this PR neither
+   caused nor addresses, is out of scope here and is still
+   [filed and fixed](../../software-engineering-excellence/SKILL.md#defects-the-work-did-not-cause)
+   as its own work item; its reply names that issue, or the decision or
+   missing authority that keeps it unfiled. Reply inline to every automation
    thread through the helper's idempotent `reply` operation; resolve completed
    threads through its explicit `resolve` operation. Handle a finding without
    a thread as that finding policy directs; without one, include its
@@ -147,14 +151,17 @@ it is no gate and its adapter posts no trigger.
    [delivery settings](../../deliver/SKILL.md#delivery-settings); with
    `entry-points: deliver`, the PR goes on to `/deliver` from its current head,
    which awaits that head's checks and review and takes the PR to the
-   configured endpoint (`ready-to-merge` when there is no `ORCHESTRATION.md`).
+   configured endpoint (its default when `ORCHESTRATION.md` sets none).
    With `stop`, end with the result contract.
    Never guess a timer, quota, provider policy, or retry count. If the host
    cannot passively await a command, return `pending` with that unsupported
    capability instead of using model heartbeats.
 10. Stop without merging for a material product decision, unrelated failure,
    unsafe or divergent PR, unavailable terminal external dependency, or
-   unresolved required finding. Report the exact blocker.
+   unresolved required finding. Report the exact blocker. An unrelated
+   failure is also
+   [filed and fixed](../../software-engineering-excellence/SKILL.md#defects-the-work-did-not-cause)
+   as its own work item.
 11. In `automatic-merge` mode, squash-merge through `git-workflow` only when the
     ordinary PR is `ready` under the exact final-head contract and
     `git-workflow`'s
@@ -164,8 +171,8 @@ it is no gate and its adapter posts no trigger.
     with `delivery-wait`'s `workflow-terminal` wait, then recheck. If the
     gate still holds or the host cannot wait, return `ready` and unmerged
     with the default branch's state as the blocker. After the merge, sync the local
-    default branch, remove only
-    clean worktrees owned by this run, and report the merged PR, final head,
-    validation, reviews, and cleanup. For a native
+    default branch,
+    [remove merged worktrees](../../git-workflow/SKILL.md#remove-merged-worktrees),
+    and report the merged PR, final head, validation, reviews, and cleanup. For a native
     stack member, return `ready` without merging so the stack owner can recheck
     it.
