@@ -4795,7 +4795,7 @@ begin
     NF^.Kind := D^.Lv[J].Kind;
     Inc(FrameTop);
   end;
-  StackTop := Base + D^.Lv[D^.N - 1].T^.MaxRegs;
+  if StackTop < Base + D^.Lv[D^.N - 1].T^.MaxRegs then StackTop := Base + D^.Lv[D^.N - 1].T^.MaxRegs;   { (never below the caller's registers) }
   if not Execute(Stop, V) then
   begin
     StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;

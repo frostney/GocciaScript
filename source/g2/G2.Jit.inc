@@ -860,7 +860,7 @@ begin
     NF^.Argc := Argc;
     NF^.Kind := 0;
     Inc(FrameTop);
-    StackTop := Base + T^.MaxRegs;
+    if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
   end
   else
   begin
@@ -1054,7 +1054,7 @@ begin
   NF^.Argc := 0;
   NF^.Kind := 0;
   Inc(FrameTop);
-  StackTop := Base + FT^.MaxRegs;
+  if StackTop < Base + FT^.MaxRegs then StackTop := Base + FT^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
   Inc(JitDepth);
   Res := TJitFn(FT^.Jit)(@VStack[Base], Pointer(PPtrUInt(FT^.JitTable)[0]), NF, 1);
   Dec(JitDepth);
@@ -1162,7 +1162,7 @@ begin
   NF^.Argc := Argc;
   NF^.Kind := 1;
   Inc(FrameTop);
-  StackTop := Base + T^.MaxRegs;
+  if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
   Inc(JitDepth);
   Res := TJitFn(T^.Jit)(@VStack[Base], Pointer(PPtrUInt(T^.JitTable)[0]), NF, 1);
   Dec(JitDepth);
@@ -2228,7 +2228,7 @@ begin
     Inc(FrameTop);
     J := IntOf(State^.Data[T^.MaxRegs]);
     if J >= 0 then R[J] := VUndefined;
-    StackTop := Base + T^.MaxRegs;
+    if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
     G^.OFlags := 2;
     GenYielded := False;
   end
@@ -3851,6 +3851,10 @@ begin
   Mov8MI(jAX, PtrInt(@PFrame(nil)^.Kind), 0);
   AluRI(0, jR9, 1, False);
   Mov32FsR(JitFsFrameTop, jR9);
+  { StackTop: the callee's registers' end, never below the caller's (a collection scans those) }
+  Mov32RFs(jR10, JitFsStackTop);
+  AluRR($39, jR8, jR10, False);                                    { cmp r8d, r10d }
+  JRex(False, jR8, 0, jR10); JB($0F); JB($4C); JModRR(jR8, jR10);  { cmovl r8d, r10d }
   Mov32FsR(JitFsStackTop, jR8);
   { the callee's code: R', its entry, the frame, nested (1) }
   MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.JitCall));
@@ -4142,6 +4146,10 @@ begin
   Mov8MI(jAX, PtrInt(@PFrame(nil)^.Kind), 1);
   AluRI(0, jR9, 1, False);
   Mov32FsR(JitFsFrameTop, jR9);
+  { StackTop: the callee's registers' end, never below the caller's (a collection scans those) }
+  Mov32RFs(jR10, JitFsStackTop);
+  AluRR($39, jR8, jR10, False);                                    { cmp r8d, r10d }
+  JRex(False, jR8, 0, jR10); JB($0F); JB($4C); JModRR(jR8, jR10);  { cmovl r8d, r10d }
   Mov32FsR(JitFsStackTop, jR8);
   { the constructor's code: R', its entry, the frame, nested (1) }
   MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.JitCall));

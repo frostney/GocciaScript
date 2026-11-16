@@ -858,7 +858,14 @@ begin
   if Assigned(GCWeakHook) then GCWeakHook;
   if Assigned(GCFinalizeHook) then GCFinalizeHook;
   InMinor := False;
-  if GCVerify then begin VerifyShapesAfterMinor; VerifyHeap('minor'); end;
+  if GCVerify then
+  begin
+    VerifyShapesAfterMinor;
+    VerifyHeap('minor');
+    { every live cell left the nursery: poisoned, so a pointer that still leads into it (a root the collection
+      did not scan) meets a header no cell has at the next one }
+    FillChar(NurseryStart^, NurseryLimit - NurseryStart, $DB);
+  end;
   NurseryTop := NurseryStart;
 end;
 

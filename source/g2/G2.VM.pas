@@ -4416,7 +4416,7 @@ begin
     Mode := 0;
   end
   else if (ResumeReg >= 0) and (Mode = 0) then VStack[Base + ResumeReg] := Arg;
-  StackTop := Base + T^.MaxRegs;
+  if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
   G^.OFlags := 2;
   if Mode = 1 then
   begin
@@ -4586,7 +4586,7 @@ begin
     VStack[Base - ResumeReg - 1] := MkInt(0);
   end
   else if ResumeReg >= 0 then VStack[Base + ResumeReg] := VUndefined;
-  StackTop := Base + T^.MaxRegs;
+  if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
   G^.OFlags := 2;
   GenYielded := False;
   Result := True;
@@ -5396,7 +5396,7 @@ begin
   Fr^.Argc := Argc;
   Fr^.Kind := 1;
   Inc(FrameTop);
-  StackTop := Base + T^.MaxRegs;
+  if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
   if Assigned(T^.FieldInit) and not XPushFieldInit(VA) then Exit(-1);
   Result := 2;
 end;
@@ -5675,7 +5675,7 @@ LGetProp:
               Fr^.Argc := 0;
               Fr^.Kind := 0;
               Inc(FrameTop);
-              StackTop := Base + T^.MaxRegs;
+              if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
               R := @VS[Base];
               Code := @T^.Code[0];
               IP := @Code[T^.EntryPC];
@@ -6301,7 +6301,7 @@ LSetPropSlow:
           Fr^.Argc := Argc;
           Fr^.Kind := 0;
           Inc(FrameTop);
-          StackTop := Base + T^.MaxRegs;
+          if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
           Code := @T^.Code[0];
           IP := Code;
           K := T^.KBase;
