@@ -2345,6 +2345,28 @@ end;
 
 { the write barrier after rax went into the cell in rdx (rcx scratch): an old cell not yet remembered that now
   points into the nursery is remembered, every allocatable register kept around the call }
+{ onArrSet's store of V into a hole at index Idx of array O's elements (below their length; no element guard on
+  O): JH_SetElem's dense store when the prototypes leave it to one. False: not done (the region's exit) }
+function OptHoleStore(O: PObj; Idx: Integer; V: TValue): Boolean;
+var E: PValueArray;
+begin
+  Result := (O^.OKind = okArray) and ((O^.OFlags and 64) = 0) and (Idx < ArrayDenseMax) and   { 64: ofElemGuard }
+            AppendProtosPlain(O);
+  if not Result then Exit;
+  E := O^.Elements;
+  E^.Data[Idx] := V;
+  WriteBarrier(@E^.Hdr, V);
+end;
+
+{ onArrGet's read of a hole at index Idx of O's elements (GetElemV's miss): undefined when O is a plain object or
+  an array and no index-keyed property of it or its prototypes can answer it, else the hole (the region's exit) }
+function OptHoleRead(O: PObj; Idx: Integer): TValue;
+begin
+  if ((O^.OKind = okPlain) or (O^.OKind = okArray)) and not O^.Shape^.HasIndexKeys and ElemMissUndefined(O, Idx) then
+    Result := VUndefined
+  else Result := VHole;
+end;
+
 procedure OBarrier;
 var L1, L2, L3, L4, K: Integer;
 begin
@@ -2517,7 +2539,7 @@ function OInlDesc(S: Integer): POInlDesc; forward;
 
 { node N's code }
 procedure OCode(N: Integer);
-var L, CC: Integer; D: Int64; IC: PPropIC;
+var L, CC, LH, KH: Integer; D: Int64; IC: PPropIC;
 begin
   case ON[N].Op of
     onConst: ;   { materialized where it is used }
@@ -3086,9 +3108,25 @@ begin
         OJccGuardFb(ccAE, N, ofbElem);
         JRex(False, jCX, 0, jCX); JB($8B); JModRR(jCX, jCX);
         MovRMIdx(jAX, jDX, jCX, PtrInt(@PValueArray(nil)^.Data));
-        MovRI(jCX, VHole);
-        AluRR($39, jAX, jCX, True);
+        MovRI(jDX, VHole);
+        AluRR($39, jAX, jDX, True);
+        LH := JccFwd(ccNE);
+        { a hole: OptHoleRead's undefined when no index-keyed property on the way can answer it, else the exit
+          (rsi, rdi, r8 - r11 and xmm2 - xmm15 kept as OBarrier keeps them; rcx still the index) }
+        JB($56); JB($57); JB($41); JB($50); JB($41); JB($51); JB($41); JB($52); JB($41); JB($53);
+        AluRI(5, jSP, 112, True);
+        for KH := 0 to 13 do OSseM($F2, $11, 2 + KH, jSP, KH * 8);
+        MovRM(jDI, jBX, ON[N].Reg * 8);
+        AluRR($31, jDI, jR13, True);
+        JRex(False, jSI, 0, jCX); JB($8B); JModRR(jSI, jCX);   { mov esi, ecx }
+        CallAbs(@OptHoleRead);
+        for KH := 0 to 13 do OSseM($F2, $10, 2 + KH, jSP, KH * 8);
+        AluRI(0, jSP, 112, True);
+        JB($41); JB($5B); JB($41); JB($5A); JB($41); JB($59); JB($41); JB($58); JB($5F); JB($5E);
+        MovRI(jDX, VHole);
+        AluRR($39, jAX, jDX, True);
         OJccGuardFb(ccE, N, ofbElem);
+        PatchHere(LH);
         MovMR(jBX, ON[N].Y * 8, jAX);
       end;
     onArrSet:
@@ -3109,15 +3147,36 @@ begin
         Cmp32RM(jCX, jDX, PtrInt(@PValueArray(nil)^.Len));
         OJccGuardFb(ccAE, N, ofbElem);
         JRex(False, jCX, 0, jCX); JB($8B); JModRR(jCX, jCX);
-        { rcx the cell's address: a hole there is the slow path's (it may change the array's shape) }
+        { rcx the cell's address }
         SibOp(0, True, [$8D], jCX, jDX, jCX, 3, PtrInt(@PValueArray(nil)^.Data));   { lea rcx, [rdx + rcx * 8 + Data] }
         MovRI(jAX, VHole);
         CmpRM(jAX, jCX, 0);
+        LH := JccFwd(ccNE);
+        { a hole: OptHoleStore's store when the array's prototypes leave it to a dense store, else the exit (rsi,
+          rdi, r8 - r11 and xmm2 - xmm15 kept as OBarrier keeps them) }
+        AluRR($29, jCX, jDX, True);                                { sub rcx, rdx }
+        AluRI(5, jCX, PtrInt(@PValueArray(nil)^.Data), True);
+        ShiftRI(5, jCX, 3, True);                                  { rcx: the index }
+        if ON[N].Y >= 0 then MovRM(jDX, jSP, OScratch) else MovRM(jDX, jBX, (-1 - ON[N].Y) * 8);
+        JB($56); JB($57); JB($41); JB($50); JB($41); JB($51); JB($41); JB($52); JB($41); JB($53);
+        AluRI(5, jSP, 112, True);
+        for KH := 0 to 13 do OSseM($F2, $11, 2 + KH, jSP, KH * 8);
+        MovRM(jDI, jBX, ON[N].Reg * 8);
+        AluRR($31, jDI, jR13, True);
+        JRex(False, jSI, 0, jCX); JB($8B); JModRR(jSI, jCX);   { mov esi, ecx }
+        CallAbs(@OptHoleStore);
+        for KH := 0 to 13 do OSseM($F2, $10, 2 + KH, jSP, KH * 8);
+        AluRI(0, jSP, 112, True);
+        JB($41); JB($5B); JB($41); JB($5A); JB($41); JB($59); JB($41); JB($58); JB($5F); JB($5E);
+        JB($84); JB($C0);                                          { test al, al }
         OJccGuardFb(ccE, N, ofbElem);
+        L := JmpFwd;
+        PatchHere(LH);
         if ON[N].Y >= 0 then MovRM(jAX, jSP, OScratch) else MovRM(jAX, jBX, (-1 - ON[N].Y) * 8);
         MovMR(jCX, 0, jAX);
         { a register's value may point into the nursery (a node's boxed number cannot) }
         if ON[N].Y < 0 then OBarrier;
+        PatchHere(L);
       end;
     onUnbox:
       begin
