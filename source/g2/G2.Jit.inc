@@ -3632,31 +3632,11 @@ begin
   AluRI(0, jCX, 1, True);                                          { rcx: the callee's Base }
   MovsxdRM(jDX, jSI, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
   JRex(True, jR8, jDX, jCX); JB($8D); JB($04 or ((jR8 and 7) shl 3)); JB(((jDX and 7) shl 3) or (jCX and 7));  { lea r8, [rcx + rdx] }
-  AluRI(7, jR8, STACK_MAX - 4, True); AddS(JccFwd(ccAE));      { (the fill below may write 3 slots past it) }
+  AluRI(7, jR8, STACK_MAX - 4, True); AddS(JccFwd(ccAE));      { (the callee's fill may write 3 slots past it) }
   Mov32RFs(jR9, JitFsFrameTop);
   AluRI(7, jR9, FRAME_MAX - 2, False); AddS(JccFwd(ccAE));
   MovRFs(jR11, JitFsStackFloor);
   AluRR($39, jSP, jR11, True); AddS(JccFwd(ccB));                 { cmp rsp, the floor }
-  { the registers from min(Argc, NumParams) + 1 to MaxRegs - 1: undefined }
-  MovRR(jR11, jR14);
-  AluRI(4, jR11, $FFFF, False);
-  JRex(False, jR11, 0, jSI); JB($3B); JMem(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));  { cmp r11d, NumParams }
-  L1 := JccFwd(ccLE);
-  Mov32RM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));
-  PatchHere(L1);
-  AluRI(0, jR11, 1, False);
-  { four registers a round, two to a 16-byte store (up to 3 past MaxRegs: free stack above the frame) }
-  MovRI(jR10, VUndefined);
-  MovqXR(0, jR10);
-  SseRR($66, $6C, 0, 0);                                           { punpcklqdq xmm0, xmm0 }
-  L2 := JitLen;
-  AluRR($39, jR11, jDX, True);
-  L3 := JccFwd(ccGE);
-  SibOp($F3, False, [$0F, $7F], 0, jR13, jR11, 3, 8);             { movdqu [r13 + r11*8 + 8], xmm0 }
-  SibOp($F3, False, [$0F, $7F], 0, jR13, jR11, 3, 24);            { movdqu [r13 + r11*8 + 24], xmm0 }
-  AluRI(0, jR11, 4, True);
-  JB($E9); JD(Cardinal(L2 - (JitLen + 4)));
-  PatchHere(L3);
   { the frame record Frames[FrameTop] }
   MovRFs(jAX, JitFsFrames);
   ImulRRI(jR10, jR9, SizeOf(TFrame));
@@ -3678,7 +3658,7 @@ begin
   Mov32FsR(JitFsFrameTop, jR9);
   Mov32FsR(JitFsStackTop, jR8);
   { the callee's code: R', its entry, the frame, nested (1) }
-  MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.Jit));
+  MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.JitCall));
   MovRR(jSI, jDI);
   LeaRM(jDI, jR13, 8);
   MovRR(jDX, jAX);
@@ -3898,30 +3878,11 @@ begin
   AluRI(0, jCX, 1, True);                                          { rcx: the callee's Base }
   MovsxdRM(jDX, jSI, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
   JRex(True, jR8, jDX, jCX); JB($8D); JB($04 or ((jR8 and 7) shl 3)); JB(((jDX and 7) shl 3) or (jCX and 7));  { lea r8, [rcx + rdx] }
-  AluRI(7, jR8, STACK_MAX - 4, True); AddS(JccFwd(ccAE));      { (the fill below may write 3 slots past it) }
+  AluRI(7, jR8, STACK_MAX - 4, True); AddS(JccFwd(ccAE));      { (the callee's fill may write 3 slots past it) }
   Mov32RFs(jR9, JitFsFrameTop);
   AluRI(7, jR9, FRAME_MAX - 2, False); AddS(JccFwd(ccAE));
   MovRFs(jR11, JitFsStackFloor);
   AluRR($39, jSP, jR11, True); AddS(JccFwd(ccB));                 { cmp rsp, the floor }
-  { the registers from min(Argc, NumParams) + 1 to MaxRegs - 1: undefined }
-  MovRR(jR11, jR14);
-  JRex(False, jR11, 0, jSI); JB($3B); JMem(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));  { cmp r11d, NumParams }
-  L1 := JccFwd(ccLE);
-  Mov32RM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.NumParams));
-  PatchHere(L1);
-  AluRI(0, jR11, 1, False);
-  { four registers a round, two to a 16-byte store (up to 3 past MaxRegs: free stack above the frame) }
-  MovRI(jR10, VUndefined);
-  MovqXR(0, jR10);
-  SseRR($66, $6C, 0, 0);                                           { punpcklqdq xmm0, xmm0 }
-  L2 := JitLen;
-  AluRR($39, jR11, jDX, True);
-  L3 := JccFwd(ccGE);
-  SibOp($F3, False, [$0F, $7F], 0, jR13, jR11, 3, 8);             { movdqu [r13 + r11*8 + 8], xmm0 }
-  SibOp($F3, False, [$0F, $7F], 0, jR13, jR11, 3, 24);            { movdqu [r13 + r11*8 + 24], xmm0 }
-  AluRI(0, jR11, 4, True);
-  JB($E9); JD(Cardinal(L2 - (JitLen + 4)));
-  PatchHere(L3);
   { the frame record Frames[FrameTop]: Kind 1, new.target the constructor }
   MovRFs(jAX, JitFsFrames);
   ImulRRI(jR10, jR9, SizeOf(TFrame));
@@ -3940,7 +3901,7 @@ begin
   Mov32FsR(JitFsFrameTop, jR9);
   Mov32FsR(JitFsStackTop, jR8);
   { the constructor's code: R', its entry, the frame, nested (1) }
-  MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.Jit));
+  MovRM(jR11, jSI, PtrInt(@PFuncTemplate(nil)^.JitCall));
   MovRR(jSI, jDI);
   LeaRM(jDI, jR13, 8);
   MovRR(jDX, jAX);
@@ -4151,7 +4112,7 @@ begin
 end;
 
 procedure JitCompile(T: PFuncTemplate);
-var PC, I, Exit0, Throw0, Target, L1, L2: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal;
+var PC, I, Exit0, Throw0, Target, L1, L2, L3, ProlOff, F, K: Integer; Code: PByte; Table: PPtrUInt; D: Cardinal;
   Info: POptInfo;
 begin
   if ((JitDebugFlags and 2) <> 0) and not IntrinsicsInit then JitDumpTemplate(T);
@@ -4183,6 +4144,43 @@ begin
     SetLength(Info^.Feedback, T^.CodeLen + 1);
   end;
   JitInfo := Info;
+  { the call and new stubs' entry (JitCall), for a template they call inline: the registers past the arguments
+    (rdi R', r14w Argc) undefined, then the prologue. With Argc >= NumParams they are NumParams + 1 to MaxRegs - 1,
+    stored two at a time; with fewer arguments, from Argc + 1 four at a time (up to 3 slots past MaxRegs: the stubs'
+    stack check leaves room for them) }
+  if T^.FastCall and not T^.IsGenerator then
+  begin
+    F := T^.NumParams + 1;
+    if F < T^.MaxRegs then
+    begin
+      MovRI(jR10, VUndefined);
+      MovqXR(0, jR10);
+      SseRR($66, $6C, 0, 0);                       { punpcklqdq xmm0, xmm0 }
+      JB($45); JB($0F); JB($B7); JB($DE);          { movzx r11d, r14w: Argc }
+      AluRI(7, jR11, T^.NumParams, False);
+      L1 := JccFwd(ccB);
+      K := F;
+      while K < T^.MaxRegs do
+      begin
+        JB($F3); JB($0F); JB($7F); JMem(0, jDI, K * 8);   { movdqu [rdi + K * 8], xmm0 }
+        Inc(K, 2);
+      end;
+      L2 := JmpFwd;
+      { fewer arguments than parameters: from Argc + 1 }
+      PatchHere(L1);
+      AluRI(0, jR11, 1, False);
+      L3 := JitLen;
+      AluRI(7, jR11, T^.MaxRegs, False);
+      L1 := JccFwd(ccGE);
+      SibOp($F3, False, [$0F, $7F], 0, jDI, jR11, 3, 0);          { movdqu [rdi + r11*8], xmm0 }
+      SibOp($F3, False, [$0F, $7F], 0, jDI, jR11, 3, 16);         { movdqu [rdi + r11*8 + 16], xmm0 }
+      AluRI(0, jR11, 4, False);
+      JB($E9); JD(Cardinal(L3 - (JitLen + 4)));
+      PatchHere(L1);
+      PatchHere(L2);
+    end;
+  end;
+  ProlOff := JitLen;
   { prologue: the three callee-saved registers the code keeps, then the instruction's code (rsi) }
   { push rbx; push r12; push rbp; push r13; push r14: rsp 16-byte aligned for calls }
   JB($53); JB($41); JB($54); JB($55); JB($41); JB($55); JB($41); JB($56);
@@ -4273,7 +4271,8 @@ begin
       T^.JitComplete := False;
     end;
   T^.JitTable := Table;
-  T^.Jit := Code;
+  T^.Jit := Code + ProlOff;
+  if T^.FastCall and not T^.IsGenerator then T^.JitCall := Code;
   T^.JitCallKind := Ord(T^.FastCall and not T^.IsGenerator) or (Ord(T^.IsStrict or T^.IsArrow) shl 1);
   T^.JitState := 1;
   if Info <> nil then

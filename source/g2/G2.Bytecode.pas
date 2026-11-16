@@ -202,6 +202,8 @@ type
     JitCount: Integer;   { entries before it is compiled (the JIT compiles hot templates only) }
     Opt: Pointer;        { the optimizing tier's state (G2.Opt.inc's POptInfo), nil when the template is not eligible }
     JitComplete: Boolean;   { the code takes every instruction but returns (XJitCall's callees) }
+    JitCall: Pointer;    { set with JitState 1 and JitCallKind bit 0: the call and new stubs' entry into the code
+                           (it sets the registers past the arguments undefined first) }
   end;
 
 function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;
