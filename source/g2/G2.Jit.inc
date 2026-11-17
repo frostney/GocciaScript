@@ -4114,6 +4114,45 @@ var LFound, LFound2, LLoop, K, KeyedAt, LNot1, LNot2: Integer;
       JB($C3);
     end;
   end;
+  procedure EmitGetter;
+  { the accessor in the entry's (r9) slot of r11: its getter, a compiled function the call stub calls inline (as
+    JH_GetPropAcc's 2), eax 2 and rcx the getter; anything else 0 (JH_GetPropAcc's) }
+  var LO, LV: Integer;
+  begin
+    Mov32RM(jCX, jR9, PtrInt(@PICEntry(nil)^.Slot));
+    MovzxWRM(jR8, jR11, PtrInt(@PObj(nil)^.InlineCap));
+    AluRR($39, jCX, jR8, False);
+    LO := JccFwd(ccAE);
+    MovRMIdx(jAX, jR11, jCX, PtrInt(@PObj(nil)^.Slots));
+    LV := JmpFwd;
+    PatchHere(LO);
+    AluRR($29, jCX, jR8, False);
+    MovRM(jAX, jR11, PtrInt(@PObj(nil)^.Overflow));
+    MovRMIdx(jAX, jAX, jCX, PtrInt(@PValueArray(nil)^.Data));
+    PatchHere(LV);
+    MovRI(jR10, PTR_MASK);
+    AluRR($21, jAX, jR10, True);                                   { the accessor cell }
+    MovRM(jCX, jAX, PtrInt(@PAccessor(nil)^.Getter));
+    MovRR(jR8, jCX);
+    ShiftRI(5, jR8, 48, True);
+    AluRI(7, jR8, TAG_PTR_HI, False); AddF(JccFwd(ccNE));
+    MovRR(jR8, jCX);
+    AluRR($21, jR8, jR10, True);                                   { the getter's object }
+    CmpBMI(jR8, 4, ckObject); AddF(JccFwd(ccNE));
+    CmpBMI(jR8, PtrInt(@PObj(nil)^.OKind), okFunction); AddF(JccFwd(ccNE));
+    TestBMI(jR8, PtrInt(@PObj(nil)^.OFlags), 1); AddF(JccFwd(ccNE));
+    MovRI(jAX, QWord(PtrUInt(@MultiRealmAny)));
+    CmpBMI(jAX, 0, 0); AddF(JccFwd(ccNE));
+    MovRM(jR8, jR8, PtrInt(@PObj(nil)^.Native));                   { its template }
+    CmpBMI(jR8, PtrInt(@PFuncTemplate(nil)^.JitState), 1); AddF(JccFwd(ccNE));
+    TestBMI(jR8, PtrInt(@PFuncTemplate(nil)^.JitCallKind), 1); AddF(JccFwd(ccE));
+    MovsxdRM(jAX, jR8, PtrInt(@PFuncTemplate(nil)^.EntryPC));
+    MovRM(jR8, jR8, PtrInt(@PFuncTemplate(nil)^.JitTable));
+    MovRMIdx(jAX, jR8, jAX, 0);
+    AluRR($85, jAX, jAX, True); AddF(JccFwd(ccE));
+    MovRI(jAX, 2);
+    JB($C3);
+  end;
   procedure EmitFound(Absent: Boolean);
   { the entry r9 for receiver rdi: an own data property, or a prototype's (its walk) }
   var LProto, LWalk, LRead, LNoVer: Integer;
@@ -4127,8 +4166,12 @@ var LFound, LFound2, LLoop, K, KeyedAt, LNot1, LNot2: Integer;
     PatchHere(LProto);
     JRex(False, jCX, 0, jR9); JB($3A); JMem(jCX, jR9, PtrInt(@PICEntry(nil)^.Kind));   { cmp cl, [r9 + Kind] }
     AddF(JccFwd(ccNE));
-    CmpBMI(jR9, PtrInt(@PICEntry(nil)^.Acc), 0);
-    AddF(JccFwd(ccNE));
+    { (an accessor's entry: the same walk, then its getter: the IC's gets only) }
+    if Absent then
+    begin
+      CmpBMI(jR9, PtrInt(@PICEntry(nil)^.Acc), 0);
+      AddF(JccFwd(ccNE));
+    end;
     MovzxBRM(jR8, jR9, PtrInt(@PICEntry(nil)^.Depth));
     MovzxBRM(jR11, jR9, PtrInt(@PICEntry(nil)^.VerMask));
     MovRR(jAX, jDI);
@@ -4154,7 +4197,15 @@ var LFound, LFound2, LLoop, K, KeyedAt, LNot1, LNot2: Integer;
     JB($E9); JD(Cardinal(LWalk - (JitLen + 4)));
     PatchHere(LRead);
     MovRR(jR11, jAX);
-    ReadSlot(jR11, Absent);
+    if not Absent then
+    begin
+      CmpBMI(jR9, PtrInt(@PICEntry(nil)^.Acc), 0);
+      LRead := JccFwd(ccNE);
+      ReadSlot(jR11, False);
+      PatchHere(LRead);
+      EmitGetter;
+    end
+    else ReadSlot(jR11, Absent);
   end;
   procedure EmitMegaLookup;
   { the megamorphic cache's entry r9 for receiver rdi (its shape r10) and key rsi (an atom), as KeyedMegaGet looks:
@@ -4262,13 +4313,18 @@ begin
 end;
 
 procedure JitBuildGetterStub;
-var L1, L2, L3: Integer; P: PByte;
+var L1, L2, L3, LAcc, LCall, LSlow, LGet: Integer; P: PByte;
 begin
   JitLen := 0;
   JB($56);                                                         { push rsi: the instruction (rsp aligned) }
+  { al 2: the machine-code ICGetHit found a compiled getter (rcx) }
+  JB($3C); JB($02);                                                { cmp al, 2 }
+  LGet := JccFwd(ccE);
+  LAcc := JitLen;
   CallAbs(@JH_GetPropAcc);
   AluRI(7, jAX, 2, False);
   L1 := JccFwd(ccNE);
+  LCall := JitLen;
   MovRM(jAX, jR12, PtrInt(@PFrame(nil)^.Tpl));
   Mov32RM(jCX, jAX, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
   AluRR($31, jDX, jDX, False);
@@ -4299,6 +4355,24 @@ begin
   PatchHere(L1);
   JB($5E);
   JB($C3);
+  { the getter found (rcx, the machine-code ICGetHit's 2): the getter and the receiver at R[MaxRegs] as
+    JH_GetPropAcc's 2 leaves them (with room for them, else JH_GetPropAcc), then the call }
+  PatchHere(LGet);
+  MovRM(jDX, jR12, PtrInt(@PFrame(nil)^.Tpl));
+  MovsxdRM(jR8, jDX, PtrInt(@PFuncTemplate(nil)^.MaxRegs));
+  MovsxdRM(jAX, jR12, PtrInt(@PFrame(nil)^.Base));
+  AluRR($01, jAX, jR8, True);
+  AluRI(7, jAX, STACK_MAX - 2, True);
+  LSlow := JccFwd(ccAE);
+  MovMRIdx(jBX, jR8, 0, jCX);                                      { R[M]: the getter }
+  MovRR(jAX, jSI);
+  ShiftRI(5, jAX, 24, True);
+  AluRI(4, jAX, $FFFF, False);                                     { B }
+  MovRMIdx(jAX, jBX, jAX, 0);
+  MovMRIdx(jBX, jR8, 8, jAX);                                      { R[M + 1]: the receiver }
+  JB($E9); JD(Cardinal(LCall - (JitLen + 4)));
+  PatchHere(LSlow);
+  JB($E9); JD(Cardinal(LAcc - (JitLen + 4)));
   P := JitAlloc(JitLen);
   if P = nil then Exit;
   Move(JitBuf[0], P^, JitLen);
@@ -4631,15 +4705,17 @@ begin
           MovRR(jDI, jAX);
           LeaRM(jDX, jBX, JitDefer[N].A * 8);
           if JitICGetHitCode <> nil then CallAbs(JitICGetHitCode) else CallAbs(@JitICGetHit);
-          JB($84); JB($C0);   { test al, al: the Boolean }
-          JccPC(ccNE, PC + 1);
+          JB($3C); JB($01);   { cmp al, 1: found (2: a compiled getter in rcx, opGetProp's) }
+          JccPC(ccE, PC + 1);
           if TOp(JitDefer[N].I and $FF) = opGetProp then
           begin
             { JitGetterStub: done (1) goes on, a throw (0) to the throw exit, the interpreter's (2) the exit }
             JRex(False, 0, 0, jR12); JB($C7); JMem(0, jR12, PtrInt(@PFrame(nil)^.PC)); JD(Cardinal(PC + 1));
             MovRR(jDI, jR12);
             MovRI(jSI, JitDefer[N].I);
-            CallAbs(JitGetterStub);
+            { (al kept for the stub: ICGetHit's 2 hands it a compiled getter in rcx) }
+            MovRI(jR11, QWord(PtrUInt(JitGetterStub)));
+            JRex(False, 0, 0, jR11); JB($FF); JB($D0 or (jR11 and 7));   { call r11 }
             AluRI(7, jAX, 1, False);
             JccPC(ccE, PC + 1);
             AluRR($85, jAX, jAX, False);
