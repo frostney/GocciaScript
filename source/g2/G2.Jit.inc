@@ -653,6 +653,14 @@ const
                                      region is optimized (G2.Opt.inc) }
   OPT_MAX_DEOPTS = 200;
 
+{ template T's feedback bytes (TFuncTemplate.OptFb), made zeroed on first use: one set per template, shared by its
+  own regions and every region that inlines it, so what one learns the others speculate with }
+function OTplFb(T: PFuncTemplate): PByte;
+begin
+  if T^.OptFb = nil then T^.OptFb := AllocMem(T^.CodeLen + 1);
+  Result := T^.OptFb;
+end;
+
 type
   { a template's optimizing tier state (G2.Opt.inc) }
   POptInfo = ^TOptInfo;
@@ -661,14 +669,11 @@ type
     Deopts, Recompiles: Integer;
     FbDrop: Integer;               { 1: a deopt recorded new feedback, so the regions go now (not a recompile) }
     FbDrops: Integer;
-    InlFb: array of PByte;         { per call instruction: the feedback bytes of the callee inlined there (per callee
-                                     PC), InlTpl that callee }
-    InlTpl: array of Pointer;
     Fails: Integer;                { regions not optimized: each one makes the counter's next run longer }
     BaseTable: PPtrUInt;           { the baseline code's entry per instruction }
     Table: PPtrUInt;               { BaseTable with the optimized regions' entries, nil when none }
     Tried: array of Byte;          { per region entry: 1 optimized, 2 not }
-    Feedback: array of Byte;       { per instruction: the guards that failed there (1 int overflow, 2 an entry kind) }
+    Feedback: PByte;               { per instruction: the guards that failed there (the template's OptFb) }
   end;
 
 var
@@ -4406,7 +4411,7 @@ begin
     FillChar(Info^, SizeOf(TOptInfo), 0);
     Info^.Count := OPT_HOT;
     SetLength(Info^.Tried, T^.CodeLen + 1);
-    SetLength(Info^.Feedback, T^.CodeLen + 1);
+    Info^.Feedback := OTplFb(T);
   end;
   JitInfo := Info;
   { the call and new stubs' entry (JitCall), for a template they call inline: the registers past the arguments

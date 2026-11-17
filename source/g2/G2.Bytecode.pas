@@ -204,6 +204,8 @@ type
     JitComplete: Boolean;   { the code takes every instruction but returns (XJitCall's callees) }
     JitCall: Pointer;    { set with JitState 1 and JitCallKind bit 0: the call and new stubs' entry into the code
                            (it sets the registers past the arguments undefined first) }
+    OptFb: PByte;        { the optimizing tier's feedback, a byte per instruction (CodeLen + 1, nil until needed):
+                           the guards that failed there, in the template's own regions or wherever it is inlined }
   end;
 
 function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;
@@ -291,6 +293,7 @@ begin
   begin
     T := AllTemplates[I];
     for J := 0 to High(T^.ICs) do if T^.ICs[J].More <> nil then FreeMem(T^.ICs[J].More);
+    if T^.OptFb <> nil then FreeMem(T^.OptFb);
     Dispose(T);
   end;
   AllTemplates := nil;

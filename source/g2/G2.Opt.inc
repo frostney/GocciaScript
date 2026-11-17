@@ -63,7 +63,6 @@ const
   OPT_INL_GAIN = 6;
   OPT_INLINE_DEPTH = 3;  { inlined calls nested this deep at most (a callee's call inlined in turn) }
   OPT_INLINE_TOTAL = 160;   { the instructions of one call's callees, nested ones included, at most }
-  OPT_INLINE_FB = 256;   { a call site's feedback bytes for its callees (OPT_INLINE_TOTAL + one per callee) }
 
   PROP_KNOWN = Int64(1) shl 40;
   PROP_POLY = Int64(1) shl 41;   { a polymorphic IC's entries tried in turn (else entry Imm shr 44 and 7: its slot) }
@@ -709,6 +708,7 @@ begin
 end;
 
 function OSpecValue(Fr: PFrame; K, R, Depth: Integer): TValue; forward;
+function ODblRead(K, R: Integer): Boolean; forward;
 
 { the kind a tagged value read as a number at PC is speculated to have from its guards' feedback alone }
 function OSpec(PC: Integer): Integer;
@@ -737,7 +737,8 @@ begin
         if OSpecMemo[PC * 2 + 1].R = R then Exit(OSpecMemo[PC * 2 + 1].K);
       end;
       V := OSpecValue(OSpecFr, PC, R, 0);
-      if not IsInt(V) and (V < DOUBLE_LIMIT) then Result := vkDbl;
+      { a double now, or a property read off shapes whose number properties have held doubles }
+      if (not IsInt(V) and (V < DOUBLE_LIMIT)) or ODblRead(PC, R) then Result := vkDbl;
       if PC * 2 + 1 < Length(OSpecMemo) then
         if OSpecMemo[PC * 2].R < 0 then begin OSpecMemo[PC * 2].R := R; OSpecMemo[PC * 2].K := Result; end
         else if OSpecMemo[PC * 2 + 1].R < 0 then begin OSpecMemo[PC * 2 + 1].R := R; OSpecMemo[PC * 2 + 1].K := Result; end;
@@ -3555,10 +3556,10 @@ function XOptInlDeopt(Fr: PFrame; D: POInlDesc; Q: Integer): Integer; forward;
 
 { G2_OPTLOG: each exit that records feedback, as it is taken (the template, the virtual and template PCs, the
   feedback bits) }
-procedure XOptLogDeopt(T: PFuncTemplate; VPC, PC, Fb: Integer);
+procedure XOptLogDeopt(T: PFuncTemplate; VPC, PC, Fb: Integer; Had: PByte);
 begin
   if T^.Name <> nil then Write(ErrOutput, 'deopt ', UTF8Encode(StrToUnicode(T^.Name))) else Write(ErrOutput, 'deopt ?');
-  WriteLn(ErrOutput, ' vpc ', VPC, ' pc ', PC, ' fb ', Fb);
+  WriteLn(ErrOutput, ' vpc ', VPC, ' pc ', PC, ' fb ', Fb, ' had ', Had^);
 end;
 
 { the frame state written back, the stack restored, then the baseline code at PC (the interpreter when it has none);
@@ -3587,22 +3588,30 @@ begin
     MovRI(jSI, Cardinal(PC));
     MovRI(jDX, Cardinal(OVPC[PC]));
     MovRI(jCX, Cardinal(Feedback));
+    MovRI(jR8, QWord(PtrUInt(OVFb[PC])));
     CallAbs(@XOptLogDeopt);
   end;
   if Feedback <> 0 then
   begin
-    { feedback already recorded: one more deopt; new feedback: recorded, and it weighs OFbWeight deopts (a small
-      region compiles again at once; a big one, whose compilation costs far more than its deopts, learns several
-      things first) }
+    { new feedback: recorded, and it weighs OFbWeight deopts (a small region compiles again at once; a big one,
+      whose compilation costs far more than its deopts, learns several things first). Feedback already recorded
+      weighs as much: the region was compiled before it was learned (its speculation reads the same bits), so it
+      takes the same exit each time until it goes: when it was learned after this region was compiled (from
+      another region, or an earlier exit of this one), the region goes at once }
     MovRI(jAX, QWord(PtrUInt(OVFb[PC])));
-    JB($F6); JB($00); JB(Byte(Feedback));                 { test byte [rax], Feedback }
-    L1 := JccFwd(ccNE);
+    if (OFb(PC) and Feedback) = 0 then
+    begin
+      JB($F6); JB($00); JB(Byte(Feedback));               { test byte [rax], Feedback }
+      L1 := JccFwd(ccE);
+      MovRI(jCX, QWord(PtrUInt(@OInfo^.Deopts)));
+      JB($81); JB($01); JD(OPT_MAX_DEOPTS);               { add dword [rcx], OPT_MAX_DEOPTS }
+      PatchHere(L1);
+    end;
     JB($80); JB($08); JB(Byte(Feedback));                 { or byte [rax], Feedback }
     MovRI(jAX, QWord(PtrUInt(@OInfo^.FbDrop)));
     Mov32MI(jAX, 0, 1);
     MovRI(jAX, QWord(PtrUInt(@OInfo^.Deopts)));
     JB($81); JB($00); JD(OFbWeight - 1);                  { add dword [rax], OFbWeight - 1 }
-    PatchHere(L1);
     MovRI(jAX, QWord(PtrUInt(@OInfo^.Deopts)));
     JB($FF); JB($00);                                     { inc dword [rax] }
     { past the bound: the regions go }
@@ -4706,7 +4715,7 @@ end;
   calls that callee makes, inlined the same way (each one inlined, or a Math native's, or the outer call is
   not inlined) }
 procedure OBuildStream(Fr: PFrame);
-var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
+var K, Total: Integer; Sig: PtrUInt;
   procedure Add(Code: QWord; Tpl: PFuncTemplate; Pc: Integer; F: PByte; Role: Byte; Site, Frame: Integer);
   begin
     if OVLen >= Length(OVCode) then
@@ -4733,13 +4742,13 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
     var Q, Bb, V: Integer; I: QWord;
       procedure Back(Q, V: Integer);
       begin
-        if Ret >= 0 then Add(OMk(opJmp, 0, 0, Ret - (V + 2)), T, Q, Buf + FbBase + Q, 2, S, S)
+        if Ret >= 0 then Add(OMk(opJmp, 0, 0, Ret - (V + 2)), T, Q, OTplFb(T) + Q, 2, S, S)
         else
         begin
           if NFix >= Length(Fix) then SetLength(Fix, NFix * 2 + 8);
           Fix[NFix] := OVLen;
           Inc(NFix);
-          Add(OMk(opJmp, 0, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+          Add(OMk(opJmp, 0, 0, 0), T, Q, OTplFb(T) + Q, 2, S, S);
         end;
       end;
     begin
@@ -4752,19 +4761,19 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
         case OOpOf(I) of
           opRet:
             begin
-              Add(OMk(opMov, Off - 1, OA(I) + Off, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+              Add(OMk(opMov, Off - 1, OA(I) + Off, 0), T, Q, OTplFb(T) + Q, 2, S, S);
               Back(Q, V);
             end;
           opRetUndef:
             begin
-              if OSites[S].IsNew then Add(OMk(opMov, Off - 1, Off, 0), T, Q, Buf + FbBase + Q, 2, S, S)
-              else Add(OMk(opLoadUndef, Off - 1, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+              if OSites[S].IsNew then Add(OMk(opMov, Off - 1, Off, 0), T, Q, OTplFb(T) + Q, 2, S, S)
+              else Add(OMk(opLoadUndef, Off - 1, 0, 0), T, Q, OTplFb(T) + Q, 2, S, S);
               Back(Q, V);
             end;
         else
           begin
-            Add(ORemap(I, Off), T, Q, Buf + FbBase + Q, 2, S, S);
-            Add(OMk(opNop, 0, 0, 0), T, Q, Buf + FbBase + Q, 2, S, S);
+            Add(ORemap(I, Off), T, Q, OTplFb(T) + Q, 2, S, S);
+            Add(OMk(opNop, 0, 0, 0), T, Q, OTplFb(T) + Q, 2, S, S);
           end;
         end;
       end;
@@ -4810,9 +4819,9 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
     OSites[S].Guard := OVLen;
     { the guard: the call as its caller makes it (a failed guard resumes there) }
     Add(I, OVTpl[VC], OVPC[VC], OVFb[VC], 1, S, OVFrame[VC]);
-    if Flag = 1 then Add(OMk(opLoadUndef, Off, 0, 0), T, 0, Buf + FbBase, 2, S, S);
+    if Flag = 1 then Add(OMk(opLoadUndef, Off, 0, 0), T, 0, OTplFb(T), 2, S, S);
     for R := 1 + Min(Argc, T^.NumParams) to T^.MaxRegs - 1 do
-      Add(OMk(opLoadUndef, Off + R, 0, 0), T, 0, Buf + FbBase, 2, S, S);
+      Add(OMk(opLoadUndef, Off + R, 0, 0), T, 0, OTplFb(T), 2, S, S);
     if OSites[S].IsNew and (T^.FieldInit <> nil) then
     begin
       { (the constructor object's inline capacity: where its field initializer's slot is) }
@@ -4838,9 +4847,9 @@ var K, Total: Integer; Sig: PtrUInt; Buf: PByte;
       OSites[S2].K := OSites[S].K; OSites[S2].Depth := OSites[S].Depth + 1;
       OSites[S2].Guard := OVLen;
       OSites[S].FiSite := S2;
-      Add(OMk(opNop, 0, 0, 0), T, 0, Buf + FbBase, 1, S2, S);
-      Add(OMk(opMov, AFi + 1, Off, 0), FI, 0, Buf + FiFb, 2, S2, S2);
-      for R := 1 to FI^.MaxRegs - 1 do Add(OMk(opLoadUndef, AFi + 1 + R, 0, 0), FI, 0, Buf + FiFb, 2, S2, S2);
+      Add(OMk(opNop, 0, 0, 0), T, 0, OTplFb(T), 1, S2, S);
+      Add(OMk(opMov, AFi + 1, Off, 0), FI, 0, OTplFb(FI), 2, S2, S2);
+      for R := 1 to FI^.MaxRegs - 1 do Add(OMk(opLoadUndef, AFi + 1 + R, 0, 0), FI, 0, OTplFb(FI), 2, S2, S2);
       if not Body(S2, FI, AFi + 1, -1, FiFb) then begin Undo; Exit; end;
       { its returns: to the constructor's code }
       for J := 0 to NFix - 1 do OVCode[Fix[J]] := OMk(opJmp, 0, 0, OVLen - (Fix[J] + 1));
@@ -4906,23 +4915,10 @@ begin
     for K := 0 to OT^.CodeLen - 1 do
     begin
       if not (OOpOf(OT^.Code[K]) in [opCall, opNew]) or OInlBan[K] then Continue;
-      { the callees' feedback here: bytes per callee PC, kept across compilations while the same callees are
-        inlined (Sig) }
-      if Length(OInfo^.InlFb) < OT^.CodeLen + 1 then
-      begin
-        SetLength(OInfo^.InlFb, OT^.CodeLen + 1);
-        SetLength(OInfo^.InlTpl, OT^.CodeLen + 1);
-      end;
-      if OInfo^.InlFb[K] = nil then OInfo^.InlFb[K] := AllocMem(OPT_INLINE_FB);
-      Buf := OInfo^.InlFb[K];
+      { (the callees' feedback is each callee template's own, OTplFb) }
       Total := 0;
       Sig := 0;
       if not InlineAt(K, -1) then Continue;
-      if OInfo^.InlTpl[K] <> Pointer(Sig) then
-      begin
-        if OInfo^.InlTpl[K] <> nil then FillChar(Buf^, OPT_INLINE_FB, 0);
-        OInfo^.InlTpl[K] := Pointer(Sig);
-      end;
     end;
   { the end }
   Add(0, OT, OT^.CodeLen, @OInfo^.Feedback[OT^.CodeLen], 0, -1, -1);
@@ -5073,8 +5069,75 @@ begin
 end;
 
 { the region entered at PC of frame Fr's template, compiled and installed in its JitTable; False when it cannot be }
+var
+  ODblShapes: array of PShape;   { open addressing on the shape pointer (shapes live as long as the heap) }
+  ODblShapeCount: Integer;
+
+function ODblShapeSlot(Sh: PShape; Mask: Integer): Integer; inline;
+begin
+  Result := Integer((PtrUInt(Sh) shr 4) * 2654435761) and Mask;
+end;
+
+function ODblShapeHas(Sh: PShape): Boolean;
+var J: Integer;
+begin
+  Result := False;
+  if (Sh = nil) or (ODblShapes = nil) then Exit;
+  J := ODblShapeSlot(Sh, High(ODblShapes));
+  while ODblShapes[J] <> nil do
+  begin
+    if ODblShapes[J] = Sh then Exit(True);
+    J := (J + 1) and High(ODblShapes);
+  end;
+end;
+
+procedure ODblShapeAdd(Sh: PShape);
+var Old: array of PShape; J, K: Integer;
+begin
+  if (Sh = nil) or ODblShapeHas(Sh) then Exit;
+  if (ODblShapeCount + 1) * 2 > Length(ODblShapes) then
+  begin
+    Old := ODblShapes;
+    ODblShapes := nil;
+    SetLength(ODblShapes, Max(64, Length(Old) * 2));
+    for K := 0 to High(Old) do
+      if Old[K] <> nil then
+      begin
+        J := ODblShapeSlot(Old[K], High(ODblShapes));
+        while ODblShapes[J] <> nil do J := (J + 1) and High(ODblShapes);
+        ODblShapes[J] := Old[K];
+      end;
+  end;
+  J := ODblShapeSlot(Sh, High(ODblShapes));
+  while ODblShapes[J] <> nil do J := (J + 1) and High(ODblShapes);
+  ODblShapes[J] := Sh;
+  Inc(ODblShapeCount);
+end;
+
+{ whether register R at K was just read from a property of a shape whose number properties have held doubles }
+function ODblRead(K, R: Integer): Boolean;
+var P, E: Integer; IC: PPropIC;
+begin
+  Result := False;
+  if ODblShapeCount = 0 then Exit;
+  P := OWriterOf(K, R);
+  if (P < 0) or not (OOpOf(OIns(P)) in [opGetProp, opGetMethod]) then Exit;
+  IC := @OVTpl[P]^.ICs[OCU(OIns(P))];
+  for E := 0 to IC^.PolyCount - 1 do
+    if ODblShapeHas(OICEntry(IC, E)^.Shape) then Exit(True);
+end;
+
+{ marks the shapes of property read P's cache (nothing when P is not one) }
+procedure ODblShapesOf(P: Integer);
+var IC: PPropIC; R: Integer;
+begin
+  if (P < 0) or not (OOpOf(OIns(P)) in [opGetProp, opGetMethod]) then Exit;
+  IC := @OVTpl[P]^.ICs[OCU(OIns(P))];
+  for R := 0 to IC^.PolyCount - 1 do ODblShapeAdd(OICEntry(IC, R)^.Shape);
+end;
+
 function OptCompile(Fr: PFrame; PC: Integer): Boolean;
-var Kinds: array of Byte; R, R1, R2, Iter, Attempt: Integer; Grew: Boolean; V: TValue; Code: Pointer; Tbl: PPtrUInt; K: Integer; IC: PPropIC;
+var Kinds: array of Byte; R, R1, R2, Iter, Attempt: Integer; Grew: Boolean; V: TValue; Code: Pointer; Tbl: PPtrUInt; K: Integer; IC: PPropIC; Sh: PShape;
   Again: Boolean;
 begin
   Result := False;
@@ -5251,6 +5314,28 @@ begin
   SetLength(OPropVK, OVLen + 1);
   SetLength(OPropIC, OVLen + 1);
   SetLength(OPropNew, OVLen + 1);
+  { the receiver shapes whose number properties have held doubles: a property read whose unbox as an int failed
+    marks the shapes of its cache (ODblShapes), and every number property of those shapes is read as a double }
+  for K := 0 to OVLen - 1 do
+    if (OFb(K) and ofbUnboxDbl) <> 0 then
+    begin
+      if OOpOf(OIns(K)) in [opGetProp, opGetMethod] then ODblShapesOf(K)
+      else if ONumConsumer(OOpOf(OIns(K))) then
+      begin
+        { an arithmetic unbox that failed on a property just read: that read's shapes }
+        if OOpOf(OIns(K)) in [opJNLt, opJNLe, opJNGt, opJNGe] then
+        begin
+          ODblShapesOf(OWriterOf(K, OA(OIns(K))));
+          ODblShapesOf(OWriterOf(K, OB_(OIns(K))));
+        end
+        else
+        begin
+          ODblShapesOf(OWriterOf(K, OB_(OIns(K))));
+          if not (OOpOf(OIns(K)) in [opAddI, opSubI, opIncI, opBitAndI, opBitOrI, opBitXorI, opShlI, opShrI, opUShrI,
+          opNeg, opBitNot, opToNum, opToNumeric]) then ODblShapesOf(OWriterOf(K, OCU(OIns(K))));
+        end;
+      end;
+    end;
   for K := 0 to OVLen do
   begin
     OPropSlot[K] := -1; OPropShape[K] := nil; OPropKind[K] := 0; OPropVK[K] := vkTag; OPropIC[K] := nil;
@@ -5283,8 +5368,12 @@ begin
               R := OEntryFor(IC, ObjOf(V)^.Shape);
               if R >= 0 then
               begin
+                Sh := OICEntry(IC, R)^.Shape;
                 V := OHolderSlot(V, OICEntry(IC, R));
-                if IsInt(V) and (OSpec(K) <> vkNone) then OPropVK[K] := OSpec(K)
+                if IsInt(V) and (OSpec(K) <> vkNone) then
+                begin
+                  if ODblShapeHas(Sh) then OPropVK[K] := vkDbl else OPropVK[K] := OSpec(K);
+                end
                 else if (V < DOUBLE_LIMIT) and (OSpec(K) <> vkNone) then OPropVK[K] := vkDbl;
               end;
             end;
