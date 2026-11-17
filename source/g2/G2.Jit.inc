@@ -283,6 +283,7 @@ begin JB($F2); JRex(False, X, 0, R); JB($0F); JB($2A); JModRR(X, R); end;
 var
   JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsNurseryTop, JitFsArrayIterNext, JitFsGlobalObj, JitFsGLexCells: PtrInt;   { threadvar offsets from fs }
   JitFsFrames, JitFsFrameTop, JitFsStackTop, JitFsJitDepth, JitFsJitDepthMax, JitFsStackFloor: PtrInt;
+  JitFsCurNewTarget, JitFsNativeData, JitFsNativeSelf: PtrInt;
 
 function JitFsBase: PtrUInt; assembler; nostackframe;
 asm
@@ -3773,6 +3774,7 @@ end;
   interpreter runs the call, -1 a throw. Keeps rbx, r12, rbp (and r13 - r15, its own) }
 procedure JitBuildCallStub;
 var Slow: array[0..47] of Integer; NSlow, K, L1, L2, L3, LRet0, LRet1, LRet2, LRet3, LRet4, LNat, LNatDone: Integer;
+  LGen, LNatOk, LNatThrow: Integer;
   LG1, LG2, LG3, LThisDone, LThisDone2: Integer; P: PByte;
   procedure AddS(L: Integer); begin Slow[NSlow] := L; Inc(NSlow); end;
 begin
@@ -3890,11 +3892,12 @@ begin
   { a native callee: String.prototype.charCodeAt of a flat or sliced string's code unit at an int index inside it
     here (rax the callee); anything else XJitCall's }
   PatchHere(LNat);
+  CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okNative); AddS(JccFwd(ccNE));
+  LGen := -1;
   if JitCharCodeAtFn <> nil then
   begin
-    CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), okNative); AddS(JccFwd(ccNE));
     MovRI(jDX, QWord(PtrUInt(JitCharCodeAtFn)));
-    CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Native)); AddS(JccFwd(ccNE));
+    CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Native)); LGen := JccFwd(ccNE);
     JB($41); JB($81); JB($FE); JD(1);                              { cmp r14d, 1: one argument, this given }
     AddS(JccFwd(ccNE));
     MovRI(jDX, QWord(PtrUInt(@MultiRealmAny)));
@@ -3928,6 +3931,65 @@ begin
     AluRR($31, jAX, jAX, False);
     LNatDone := JmpFwd;
   end;
+  { any other native (rax the callee), as XFastNative calls it, when nothing calls for XJitCall's: not
+    Function.prototype.call (XJitCall's shift), one realm, no root check, no new.target pending (nothing to keep
+    rooted across the call: restored as undefined), the depth and the stack within bounds. StackTop the
+    arguments' end while it runs (restored after), NativeData and NativeSelf set; the result in R[A] }
+  if LGen >= 0 then PatchHere(LGen);
+  MovRI(jDX, QWord(PtrUInt(@FuncCallNative)));
+  MovRM(jDX, jDX, 0);
+  CmpRM(jDX, jAX, PtrInt(@PObj(nil)^.Native)); AddS(JccFwd(ccE));
+  MovRI(jDX, QWord(PtrUInt(@MultiRealmAny)));
+  CmpBMI(jDX, 0, 0); AddS(JccFwd(ccNE));
+  MovRI(jDX, QWord(PtrUInt(@RootCheck)));
+  CmpBMI(jDX, 0, 0); AddS(JccFwd(ccNE));
+  MovRFs(jCX, JitFsCurNewTarget);
+  MovRI(jDX, VUndefined);
+  AluRR($39, jCX, jDX, True); AddS(JccFwd(ccNE));
+  Mov32RFs(jCX, JitFsJitDepth);
+  Mov32RFs(jDX, JitFsJitDepthMax);
+  AluRR($39, jCX, jDX, False); AddS(JccFwd(ccGE));              { cmp ecx, edx: JitDepth >= JitDepthMax }
+  MovRFs(jR11, JitFsStackFloor);
+  AluRR($39, jSP, jR11, True); AddS(JccFwd(ccB));                 { cmp rsp, the floor }
+  { this: undefined for the flag }
+  JB($41); JB($F7); JB($C6); JD($10000);                           { test r14d, $10000 }
+  L1 := JccFwd(ccE);
+  MovRI(jCX, VUndefined); MovMR(jR13, 8, jCX);
+  PatchHere(L1);
+  { [rsp + 8] the StackTop to restore, [rsp] the result (undefined): rsp stays 16-byte aligned }
+  Mov32RFs(jCX, JitFsStackTop);
+  JB($51);                                                         { push rcx }
+  MovRI(jDX, VUndefined);
+  JB($52);                                                         { push rdx }
+  MovsxdRM(jCX, jR12, PtrInt(@PFrame(nil)^.Base));
+  AluRR($01, jCX, jR15, True);
+  JB($41); JB($0F); JB($B7); JB($D6);                              { movzx edx, r14w: Argc }
+  AluRR($01, jCX, jDX, True);
+  AluRI(0, jCX, 2, True);
+  Mov32FsR(JitFsStackTop, jCX);                                    { Base + A + 2 + Argc }
+  Mov32RM(jCX, jAX, PtrInt(@PObj(nil)^.Pad));
+  AluRI(4, jCX, $FFFFFF, False);
+  Mov32FsR(JitFsNativeData, jCX);
+  MovRM(jCX, jR13, 0);
+  MovFsR(JitFsNativeSelf, jCX);
+  MovRM(jR11, jAX, PtrInt(@PObj(nil)^.Native));
+  LeaRM(jDI, jR13, 8);                                             { the this and arguments: @R[A + 1] }
+  JB($41); JB($0F); JB($B7); JB($F6);                              { movzx esi, r14w: Argc }
+  MovRR(jDX, jSP);                                                 { the result }
+  JRex(False, 0, 0, jR11); JB($FF); JB($D0 or (jR11 and 7));   { call r11 }
+  JB($59);                                                         { pop rcx: the result }
+  JB($5A);                                                         { pop rdx: the StackTop }
+  Mov32FsR(JitFsStackTop, jDX);
+  MovRI(jDX, VUndefined);
+  MovFsR(JitFsCurNewTarget, jDX);
+  JB($84); JB($C0);                                                { test al, al }
+  LNatThrow := JccFwd(ccE);
+  MovMR(jR13, 0, jCX);
+  AluRR($31, jAX, jAX, False);
+  LNatOk := JmpFwd;
+  PatchHere(LNatThrow);
+  MovRI(jAX, $FFFFFFFF);
+  LNatThrow := JmpFwd;
   { the general call: XJitCall (0 goes on, 1 the interpreter's, else a throw) }
   for K := 0 to NSlow - 1 do PatchHere(Slow[K]);
   MovRR(jDI, jR12);
@@ -3944,6 +4006,7 @@ begin
   MovRI(jAX, $FFFFFFFF);
   PatchHere(LRet0); PatchHere(LRet1); PatchHere(LRet2); PatchHere(LRet3); PatchHere(LRet4);
   if LNatDone >= 0 then PatchHere(LNatDone);
+  PatchHere(LNatOk); PatchHere(LNatThrow);
   JB($41); JB($5F); JB($41); JB($5E); JB($41); JB($5D); JB($C3);  { pop r15; pop r14; pop r13; ret }
   P := JitAlloc(JitLen);
   if P = nil then Exit;
@@ -4606,12 +4669,16 @@ begin
   JitFsJitDepth := PtrInt(PtrUInt(@JitDepth) - JitFsBase);
   JitFsJitDepthMax := PtrInt(PtrUInt(@JitDepthMax) - JitFsBase);
   JitFsStackFloor := PtrInt(PtrUInt(@JitStackFloor) - JitFsBase);
+  JitFsCurNewTarget := PtrInt(PtrUInt(@CurNewTarget) - JitFsBase);
+  JitFsNativeData := PtrInt(PtrUInt(@NativeData) - JitFsBase);
+  JitFsNativeSelf := PtrInt(PtrUInt(@NativeSelf) - JitFsBase);
   { the code's fs-relative loads take a signed 32-bit displacement }
   if (Abs(JitFsVStack) > $7FFFFFF0) or (Abs(JitFsNurseryStart) > $7FFFFFF0) or (Abs(JitFsNurseryLimit) > $7FFFFFF0) or
      (Abs(JitFsNurseryTop) > $7FFFFFF0) or (Abs(JitFsArrayIterNext) > $7FFFFFF0) or (Abs(JitFsFrames) > $7FFFFFF0) or (Abs(JitFsFrameTop) > $7FFFFFF0) or
      (Abs(JitFsStackTop) > $7FFFFFF0) or (Abs(JitFsJitDepth) > $7FFFFFF0) or
      (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) or (Abs(JitFsGlobalObj) > $7FFFFFF0) or
-     (Abs(JitFsGLexCells) > $7FFFFFF0) then
+     (Abs(JitFsGLexCells) > $7FFFFFF0) or (Abs(JitFsCurNewTarget) > $7FFFFFF0) or
+     (Abs(JitFsNativeData) > $7FFFFFF0) or (Abs(JitFsNativeSelf) > $7FFFFFF0) then
     JitEnabled := 0;
   if JitEnabled < 0 then
     if GetEnvironmentVariable('G2_JIT') = '0' then JitEnabled := 0 else JitEnabled := 1;   { on unless G2_JIT=0 }
