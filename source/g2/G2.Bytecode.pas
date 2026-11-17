@@ -204,6 +204,9 @@ type
     JitComplete: Boolean;   { the code takes every instruction but returns (XJitCall's callees) }
     JitCall: Pointer;    { set with JitState 1 and JitCallKind bit 0: the call and new stubs' entry into the code
                            (it sets the registers past the arguments undefined first) }
+    JitEnter: Pointer;   { set with JitCall: compiled code's call sites' entry (rdi &R[A] of the caller, ecx A, esi
+                           Argc | the this flag shl 16, r12 the caller's frame): the frame pushed with the template's
+                           constants, then JitCall's work; eax -3 when it cannot (nothing changed: the call stub's) }
     OptFb: PByte;        { the optimizing tier's feedback, a byte per instruction (CodeLen + 1, nil until needed):
                            the guards that failed there, in the template's own regions or wherever it is inlined }
   end;
