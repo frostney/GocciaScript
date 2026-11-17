@@ -4077,7 +4077,7 @@ end;
   key's atom, rdx Dst; the receiver not of a kind KeyedMegaGet leaves (nor the key one that may name a typed
   array's element), the megamorphic cache's entry for (shape, key), MegaGet's walk (slot -1: absent, undefined) }
 procedure JitBuildICGetHit;
-var LFound, LFound2, LLoop, K, KeyedAt: Integer;
+var LFound, LFound2, LLoop, K, KeyedAt, LNot1, LNot2: Integer;
   Fails: array[0..47] of Integer; NF: Integer; P: PByte;
   procedure AddF(L: Integer); begin Fails[NF] := L; Inc(NF); end;
   procedure ReadSlot(Obj: Integer; Absent: Boolean);
@@ -4156,6 +4156,45 @@ var LFound, LFound2, LLoop, K, KeyedAt: Integer;
     MovRR(jR11, jAX);
     ReadSlot(jR11, Absent);
   end;
+  procedure EmitMegaLookup;
+  { the megamorphic cache's entry r9 for receiver rdi (its shape r10) and key rsi (an atom), as KeyedMegaGet looks:
+    not for the receiver kinds it leaves, nor a key that may name a typed array's element }
+  var LZero: Integer;
+  begin
+    MovzxBRM(jCX, jDI, PtrInt(@PObj(nil)^.OKind));
+    AluRI(7, jCX, okTypedArray, False); AddF(JccFwd(ccE));
+    AluRI(7, jCX, okProxy, False); AddF(JccFwd(ccE));
+    AluRI(7, jCX, okModuleNS, False); AddF(JccFwd(ccE));
+    AluRI(7, jCX, okArgumentsOrd, False); AddF(JccFwd(ccE));
+    AluRI(7, jCX, okStringObj, False); AddF(JccFwd(ccE));
+    { a key that may be a canonical numeric string (its first character '-', a digit, 'I' or 'N'): KeyedMegaGet's }
+    Mov32RM(jR8, jSI, PtrInt(@PStr(nil)^.Len));
+    AluRR($85, jR8, jR8, False);
+    LZero := JccFwd(ccE);
+    TestBMI(jSI, PtrInt(@PStr(nil)^.Hdr.Flags), cfBuffered); AddF(JccFwd(ccNE));
+    MovzxWRM(jR8, jSI, PtrInt(@PStr(nil)^.Chars));
+    AluRI(7, jR8, Ord('-'), False); AddF(JccFwd(ccE));
+    AluRI(7, jR8, Ord('I'), False); AddF(JccFwd(ccE));
+    AluRI(7, jR8, Ord('N'), False); AddF(JccFwd(ccE));
+    AluRI(5, jR8, Ord('0'), False);
+    AluRI(7, jR8, 9, False); AddF(JccFwd(ccBE));
+    PatchHere(LZero);
+    { the cache's entry for (shape, key) }
+    MovRFs(jR9, JitFsMegaICTab);
+    AluRR($85, jR9, jR9, True); AddF(JccFwd(ccE));
+    MovRM(jR10, jDI, PtrInt(@PObj(nil)^.Shape));
+    MovRR(jAX, jR10); ShiftRI(5, jAX, 4, True);
+    MovRR(jR8, jSI); ShiftRI(5, jR8, 3, True);
+    AluRR($31, jAX, jR8, True);
+    MovRR(jR8, jSI); ShiftRI(5, jR8, 15, True);
+    AluRR($31, jAX, jR8, True);
+    AluRI(4, jAX, (1 shl MEGA_BITS) - 1, False);
+    ImulRRI(jAX, jAX, SizeOf(TMegaEntry));
+    AluRR($01, jR9, jAX, True);
+    CmpRM(jSI, jR9, PtrInt(@PMegaEntry(nil)^.Key)); AddF(JccFwd(ccNE));
+    LeaRM(jR9, jR9, PtrInt(@PMegaEntry(nil)^.E));
+    CmpRM(jR10, jR9, PtrInt(@PICEntry(nil)^.Shape)); AddF(JccFwd(ccNE));
+  end;
 begin
   JitLen := 0;
   NF := 0;
@@ -4165,7 +4204,7 @@ begin
   LFound := JccFwd(ccE);
   MovzxBRM(jR8, jSI, PtrInt(@PPropIC(nil)^.PolyCount));
   AluRI(5, jR8, 1, False);
-  AddF(JccFwd(ccLE));
+  LNot1 := JccFwd(ccLE);
   MovRM(jR9, jSI, PtrInt(@PPropIC(nil)^.More));
   LLoop := JitLen;
   CmpRM(jR10, jR9, PtrInt(@PICEntry(nil)^.Shape));
@@ -4173,44 +4212,44 @@ begin
   AluRI(0, jR9, SizeOf(TICEntry), True);
   AluRI(5, jR8, 1, False);
   JB($0F); JB($85); JD(Cardinal(LLoop - (JitLen + 4)));          { jnz the loop }
-  AddF(JmpFwd);
+  LNot2 := JmpFwd;
   PatchHere(LFound); PatchHere(LFound2);
   EmitFound(False);
+  { the receiver's shape not among a full IC's entries: the megamorphic cache's entry for (shape, the IC's key), as
+    ICGetMiss looks first; found (not an absent key's), copied into the IC's next More entry as ICGetMiss's
+    ICAddEntry does (runs of that shape then find it in the IC), and read through the copy. (An IC with room
+    takes the entry ICGetMiss adds, for its later gets inline) }
+  PatchHere(LNot1); PatchHere(LNot2);
+  CmpBMI(jSI, PtrInt(@PPropIC(nil)^.PolyCount), 4);
+  AddF(JccFwd(ccB));
+  MovRR(jR11, jSI);                                                { r11 the IC }
+  MovRM(jSI, jSI, PtrInt(@PPropIC(nil)^.Key));
+  EmitMegaLookup;
+  Mov32RM(jCX, jR9, PtrInt(@PICEntry(nil)^.Slot));
+  AluRR($85, jCX, jCX, False);
+  LNot1 := JccFwd(ccS);                                            { an absent key's: read, not copied }
+  MovzxBRM(jAX, jR11, PtrInt(@PPropIC(nil)^.PolyNext));
+  MovRM(jR8, jR11, PtrInt(@PPropIC(nil)^.More));
+  ImulRRI(jCX, jAX, SizeOf(TICEntry));
+  AluRR($01, jR8, jCX, True);
+  AluRI(5, jR8, SizeOf(TICEntry), True);                           { &More^[PolyNext] }
+  for K := 0 to SizeOf(TICEntry) div 8 - 1 do
+  begin
+    MovRM(jCX, jR9, K * 8);
+    MovMR(jR8, K * 8, jCX);
+  end;
+  AluRI(7, jAX, 3, False);
+  LNot2 := JccFwd(ccNE);
+  MovRI(jAX, 0);
+  PatchHere(LNot2);
+  AluRI(0, jAX, 1, False);
+  JRex(False, jAX, 0, jR11); JB($88); JMem(jAX, jR11, PtrInt(@PPropIC(nil)^.PolyNext));   { mov [r11 + PolyNext], al }
+  MovRR(jR9, jR8);
+  PatchHere(LNot1);
+  EmitFound(True);
   { the keyed get's entry }
   KeyedAt := JitLen;
-  MovzxBRM(jCX, jDI, PtrInt(@PObj(nil)^.OKind));
-  AluRI(7, jCX, okTypedArray, False); AddF(JccFwd(ccE));
-  AluRI(7, jCX, okProxy, False); AddF(JccFwd(ccE));
-  AluRI(7, jCX, okModuleNS, False); AddF(JccFwd(ccE));
-  AluRI(7, jCX, okArgumentsOrd, False); AddF(JccFwd(ccE));
-  AluRI(7, jCX, okStringObj, False); AddF(JccFwd(ccE));
-  { a key that may be a canonical numeric string (its first character '-', a digit, 'I' or 'N'): KeyedMegaGet's }
-  Mov32RM(jR8, jSI, PtrInt(@PStr(nil)^.Len));
-  AluRR($85, jR8, jR8, False);
-  LFound := JccFwd(ccE);
-  TestBMI(jSI, PtrInt(@PStr(nil)^.Hdr.Flags), cfBuffered); AddF(JccFwd(ccNE));
-  MovzxWRM(jR8, jSI, PtrInt(@PStr(nil)^.Chars));
-  AluRI(7, jR8, Ord('-'), False); AddF(JccFwd(ccE));
-  AluRI(7, jR8, Ord('I'), False); AddF(JccFwd(ccE));
-  AluRI(7, jR8, Ord('N'), False); AddF(JccFwd(ccE));
-  AluRI(5, jR8, Ord('0'), False);
-  AluRI(7, jR8, 9, False); AddF(JccFwd(ccBE));
-  PatchHere(LFound);
-  { the cache's entry for (shape, key) }
-  MovRFs(jR9, JitFsMegaICTab);
-  AluRR($85, jR9, jR9, True); AddF(JccFwd(ccE));
-  MovRM(jR10, jDI, PtrInt(@PObj(nil)^.Shape));
-  MovRR(jAX, jR10); ShiftRI(5, jAX, 4, True);
-  MovRR(jR8, jSI); ShiftRI(5, jR8, 3, True);
-  AluRR($31, jAX, jR8, True);
-  MovRR(jR8, jSI); ShiftRI(5, jR8, 15, True);
-  AluRR($31, jAX, jR8, True);
-  AluRI(4, jAX, (1 shl MEGA_BITS) - 1, False);
-  ImulRRI(jAX, jAX, SizeOf(TMegaEntry));
-  AluRR($01, jR9, jAX, True);
-  CmpRM(jSI, jR9, PtrInt(@PMegaEntry(nil)^.Key)); AddF(JccFwd(ccNE));
-  LeaRM(jR9, jR9, PtrInt(@PMegaEntry(nil)^.E));
-  CmpRM(jR10, jR9, PtrInt(@PICEntry(nil)^.Shape)); AddF(JccFwd(ccNE));
+  EmitMegaLookup;
   EmitFound(True);
   for K := 0 to NF - 1 do PatchHere(Fails[K]);
   AluRR($31, jAX, jAX, False);
