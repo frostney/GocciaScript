@@ -838,7 +838,38 @@ begin
   end;
   if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then Exit(1);
   T := PFuncTemplate(O^.Native);
-  if T^.IsAsync or T^.IsGenerator then Exit(1);
+  if T^.IsAsync or T^.IsGenerator then
+  begin
+    { a generator function's call runs its prologue to opGenStart, which makes the generator and suspends it (a
+      nested Execute, its result the generator); an async function's starts it as Execute's opCall does
+      (SuspendNewGenerator, AsyncStartHook): either way the result in R[A], and the caller's code goes on }
+    Base := Fr^.Base + A + 1;
+    if (Base + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+    if ThisFlag <> 0 then R[A + 1] := VUndefined;
+    if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
+    if not PushBytecodeFrame(O, R[A + 1], @R[A + 2], Argc, Base - 1, 0, VUndefined) then
+    begin
+      StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+      Exit(-1);
+    end;
+    if T^.IsGenerator then
+    begin
+      if not Execute(FrameTop - 1, V) then
+      begin
+        StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+        Exit(-1);
+      end;
+    end
+    else
+    begin
+      V := SuspendNewGenerator;
+      StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+      V := AsyncStartHook(V);
+    end;
+    VStack[Base - 1] := V;
+    StackTop := Fr^.Base + Fr^.Tpl^.MaxRegs;
+    Exit(0);
+  end;
   if T^.JitState <> 1 then
   begin
     if T^.JitState = 0 then
