@@ -283,7 +283,7 @@ begin JB($F2); JRex(False, X, 0, R); JB($0F); JB($2A); JModRR(X, R); end;
 var
   JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsNurseryTop, JitFsArrayIterNext, JitFsGlobalObj, JitFsGLexCells: PtrInt;   { threadvar offsets from fs }
   JitFsFrames, JitFsFrameTop, JitFsStackTop, JitFsJitDepth, JitFsJitDepthMax, JitFsStackFloor: PtrInt;
-  JitFsCurNewTarget, JitFsNativeData, JitFsNativeSelf: PtrInt;
+  JitFsCurNewTarget, JitFsNativeData, JitFsNativeSelf, JitFsMegaICTab: PtrInt;
 
 function JitFsBase: PtrUInt; assembler; nostackframe;
 asm
@@ -685,6 +685,7 @@ var
   JitCallStub: Pointer = nil;   { JitBuildCallStub's code: opCall's call, shared by every call site }
   JitCallStubObj: Pointer = nil;   { its second entry: rax the callee, an object that is not a plain function (untagged) }
   JitICGetHitCode: Pointer = nil;  { JitBuildICGetHit's code: ICGetHit (rdi O, rsi the IC, rdx Dst; al the result) }
+  JitKeyedGetCode: Pointer = nil;  { its second entry: KeyedMegaGet's cache hit (rdi O, rsi the key's atom, rdx Dst) }
   JitCallPost: Pointer = nil;      { its third entry, a call site's after JitEnter's call (eax not -2; ecx A, edx Argc and
                                      the this flag): -3 the stub's, else XJitCallPost (0 goes on, -1 a throw) }
 var
@@ -2765,7 +2766,8 @@ begin
         MovRM(jCX, jBX, CU * 8);
         TagOf(jDX, jCX);
         AluRI(7, jDX, TAG_INT_HI, False);
-        JccExit(ccNE, PC);
+        { a key not an int: a name's, cold (JitKeyedGetCode, then the helper) }
+        if JitKeyedGetCode <> nil then L2 := JccFwd(ccNE) else begin L2 := -1; JccExit(ccNE, PC); end;
         MovRM(jAX, jBX, B * 8);
         UntagPtr(jAX, PC);
         MovzxBRM(jDX, jAX, 4);
@@ -2784,6 +2786,7 @@ begin
         MovMR(jBX, A * 8, jAX);
         { no elements: a typed array's, cold }
         DeferCold(2, PC, I, A, 0, [L1]);
+        if L2 >= 0 then DeferCold(23, PC, I, A, 0, [L2]);
       end;
     opSetElem:
       begin
@@ -4069,16 +4072,25 @@ end;
 { ICGetHit in machine code (JitICGetHitCode), for compiled code's cold property gets: the receiver's shape among
   the IC's entries (Poly0, then More's PolyCount - 1), an own data property (Kind, Depth, VerMask and Acc as one
   32-bit word: the receiver's kind, 0, 0, 0) from its inline or overflow slot, or a data property Depth prototypes
-  up whose shapes are the entry's holders (and versions, for dictionaries) as ICGetHit checks them; else 0 }
+  up whose shapes are the entry's holders (and versions, for dictionaries) as ICGetHit checks them; else 0.
+  Its second entry (JitKeyedGetCode) is KeyedMegaGet's cache hit for a get with a name as the key: rdi O, rsi the
+  key's atom, rdx Dst; the receiver not of a kind KeyedMegaGet leaves (nor the key one that may name a typed
+  array's element), the megamorphic cache's entry for (shape, key), MegaGet's walk (slot -1: absent, undefined) }
 procedure JitBuildICGetHit;
-var LFound, LFound2, LFail1, LFail2, LLoop, LProto, LOvf, LWalk, LRead, LNoVer, LDone, K: Integer;
-  Fails: array[0..15] of Integer; NF: Integer; P: PByte;
+var LFound, LFound2, LLoop, K, KeyedAt: Integer;
+  Fails: array[0..47] of Integer; NF: Integer; P: PByte;
   procedure AddF(L: Integer); begin Fails[NF] := L; Inc(NF); end;
-  procedure ReadSlot(Obj: Integer);
-  { the entry's (r9) slot of Obj into [rdx], eax 1 }
-  var LO: Integer;
+  procedure ReadSlot(Obj: Integer; Absent: Boolean);
+  { the entry's (r9) slot of Obj into [rdx], eax 1 (a negative slot undefined, when Absent) }
+  var LO, LA: Integer;
   begin
     Mov32RM(jCX, jR9, PtrInt(@PICEntry(nil)^.Slot));
+    LA := -1;
+    if Absent then
+    begin
+      AluRR($85, jCX, jCX, False);
+      LA := JccFwd(ccS);
+    end;
     MovzxWRM(jR8, Obj, PtrInt(@PObj(nil)^.InlineCap));
     AluRR($39, jCX, jR8, False);
     LO := JccFwd(ccAE);
@@ -4093,6 +4105,56 @@ var LFound, LFound2, LFail1, LFail2, LLoop, LProto, LOvf, LWalk, LRead, LNoVer, 
     MovMR(jDX, 0, jAX);
     MovRI(jAX, 1);
     JB($C3);
+    if Absent then
+    begin
+      PatchHere(LA);
+      MovRI(jAX, VUndefined);
+      MovMR(jDX, 0, jAX);
+      MovRI(jAX, 1);
+      JB($C3);
+    end;
+  end;
+  procedure EmitFound(Absent: Boolean);
+  { the entry r9 for receiver rdi: an own data property, or a prototype's (its walk) }
+  var LProto, LWalk, LRead, LNoVer: Integer;
+  begin
+    MovzxBRM(jCX, jDI, PtrInt(@PObj(nil)^.OKind));
+    Cmp32RM(jCX, jR9, PtrInt(@PICEntry(nil)^.Kind));
+    LProto := JccFwd(ccNE);
+    ReadSlot(jDI, Absent);
+    { a prototype's: the kind the receiver's, no accessor, Depth hops (each object before the holder of the
+      entry's version when it is a dictionary, each prototype the entry's holder) }
+    PatchHere(LProto);
+    JRex(False, jCX, 0, jR9); JB($3A); JMem(jCX, jR9, PtrInt(@PICEntry(nil)^.Kind));   { cmp cl, [r9 + Kind] }
+    AddF(JccFwd(ccNE));
+    CmpBMI(jR9, PtrInt(@PICEntry(nil)^.Acc), 0);
+    AddF(JccFwd(ccNE));
+    MovzxBRM(jR8, jR9, PtrInt(@PICEntry(nil)^.Depth));
+    MovzxBRM(jR11, jR9, PtrInt(@PICEntry(nil)^.VerMask));
+    MovRR(jAX, jDI);
+    AluRR($31, jCX, jCX, False);
+    LWalk := JitLen;
+    AluRR($39, jCX, jR8, False);                                   { cmp ecx, r8d }
+    LRead := JccFwd(ccGE);
+    JB($41); JB($0F); JB($A3); JB($CB);                            { bt r11d, ecx }
+    LNoVer := JccFwd(ccAE);
+    MovRM(jR10, jAX, PtrInt(@PObj(nil)^.Shape));
+    Mov32RM(jR10, jR10, PtrInt(@PShape(nil)^.Version));
+    SibOp(0, False, [$3B], jR10, jR9, jCX, 2, PtrInt(@PICEntry(nil)^.Vers));   { cmp r10d, [r9 + rcx*4 + Vers] }
+    AddF(JccFwd(ccNE));
+    PatchHere(LNoVer);
+    MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Shape));
+    MovRM(jAX, jAX, PtrInt(@PShape(nil)^.Proto));
+    MovRI(jR10, PTR_MASK);
+    AluRR($21, jAX, jR10, True);
+    MovRM(jR10, jAX, PtrInt(@PObj(nil)^.Shape));
+    SibOp(0, True, [$3B], jR10, jR9, jCX, 3, PtrInt(@PICEntry(nil)^.Holder));  { cmp r10, [r9 + rcx*8 + Holder] }
+    AddF(JccFwd(ccNE));
+    AluRI(0, jCX, 1, False);
+    JB($E9); JD(Cardinal(LWalk - (JitLen + 4)));
+    PatchHere(LRead);
+    MovRR(jR11, jAX);
+    ReadSlot(jR11, Absent);
   end;
 begin
   JitLen := 0;
@@ -4113,44 +4175,43 @@ begin
   JB($0F); JB($85); JD(Cardinal(LLoop - (JitLen + 4)));          { jnz the loop }
   AddF(JmpFwd);
   PatchHere(LFound); PatchHere(LFound2);
-  { an own data property }
+  EmitFound(False);
+  { the keyed get's entry }
+  KeyedAt := JitLen;
   MovzxBRM(jCX, jDI, PtrInt(@PObj(nil)^.OKind));
-  Cmp32RM(jCX, jR9, PtrInt(@PICEntry(nil)^.Kind));
-  LProto := JccFwd(ccNE);
-  ReadSlot(jDI);
-  { a prototype's: the kind the receiver's, no accessor, Depth hops (each object before the holder of the entry's
-    version when it is a dictionary, each prototype the entry's holder) }
-  PatchHere(LProto);
-  JRex(False, jCX, 0, jR9); JB($3A); JMem(jCX, jR9, PtrInt(@PICEntry(nil)^.Kind));   { cmp cl, [r9 + Kind] }
-  AddF(JccFwd(ccNE));
-  CmpBMI(jR9, PtrInt(@PICEntry(nil)^.Acc), 0);
-  AddF(JccFwd(ccNE));
-  MovzxBRM(jR8, jR9, PtrInt(@PICEntry(nil)^.Depth));
-  MovzxBRM(jR11, jR9, PtrInt(@PICEntry(nil)^.VerMask));
-  MovRR(jAX, jDI);
-  AluRR($31, jCX, jCX, False);
-  LWalk := JitLen;
-  AluRR($39, jCX, jR8, False);                                     { cmp ecx, r8d }
-  LRead := JccFwd(ccGE);
-  JB($41); JB($0F); JB($A3); JB($CB);                              { bt r11d, ecx }
-  LNoVer := JccFwd(ccAE);
-  MovRM(jR10, jAX, PtrInt(@PObj(nil)^.Shape));
-  Mov32RM(jR10, jR10, PtrInt(@PShape(nil)^.Version));
-  SibOp(0, False, [$3B], jR10, jR9, jCX, 2, PtrInt(@PICEntry(nil)^.Vers));   { cmp r10d, [r9 + rcx*4 + Vers] }
-  AddF(JccFwd(ccNE));
-  PatchHere(LNoVer);
-  MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Shape));
-  MovRM(jAX, jAX, PtrInt(@PShape(nil)^.Proto));
-  MovRI(jR10, PTR_MASK);
-  AluRR($21, jAX, jR10, True);
-  MovRM(jR10, jAX, PtrInt(@PObj(nil)^.Shape));
-  SibOp(0, True, [$3B], jR10, jR9, jCX, 3, PtrInt(@PICEntry(nil)^.Holder));  { cmp r10, [r9 + rcx*8 + Holder] }
-  AddF(JccFwd(ccNE));
-  AluRI(0, jCX, 1, False);
-  JB($E9); JD(Cardinal(LWalk - (JitLen + 4)));
-  PatchHere(LRead);
-  MovRR(jR11, jAX);
-  ReadSlot(jR11);
+  AluRI(7, jCX, okTypedArray, False); AddF(JccFwd(ccE));
+  AluRI(7, jCX, okProxy, False); AddF(JccFwd(ccE));
+  AluRI(7, jCX, okModuleNS, False); AddF(JccFwd(ccE));
+  AluRI(7, jCX, okArgumentsOrd, False); AddF(JccFwd(ccE));
+  AluRI(7, jCX, okStringObj, False); AddF(JccFwd(ccE));
+  { a key that may be a canonical numeric string (its first character '-', a digit, 'I' or 'N'): KeyedMegaGet's }
+  Mov32RM(jR8, jSI, PtrInt(@PStr(nil)^.Len));
+  AluRR($85, jR8, jR8, False);
+  LFound := JccFwd(ccE);
+  TestBMI(jSI, PtrInt(@PStr(nil)^.Hdr.Flags), cfBuffered); AddF(JccFwd(ccNE));
+  MovzxWRM(jR8, jSI, PtrInt(@PStr(nil)^.Chars));
+  AluRI(7, jR8, Ord('-'), False); AddF(JccFwd(ccE));
+  AluRI(7, jR8, Ord('I'), False); AddF(JccFwd(ccE));
+  AluRI(7, jR8, Ord('N'), False); AddF(JccFwd(ccE));
+  AluRI(5, jR8, Ord('0'), False);
+  AluRI(7, jR8, 9, False); AddF(JccFwd(ccBE));
+  PatchHere(LFound);
+  { the cache's entry for (shape, key) }
+  MovRFs(jR9, JitFsMegaICTab);
+  AluRR($85, jR9, jR9, True); AddF(JccFwd(ccE));
+  MovRM(jR10, jDI, PtrInt(@PObj(nil)^.Shape));
+  MovRR(jAX, jR10); ShiftRI(5, jAX, 4, True);
+  MovRR(jR8, jSI); ShiftRI(5, jR8, 3, True);
+  AluRR($31, jAX, jR8, True);
+  MovRR(jR8, jSI); ShiftRI(5, jR8, 15, True);
+  AluRR($31, jAX, jR8, True);
+  AluRI(4, jAX, (1 shl MEGA_BITS) - 1, False);
+  ImulRRI(jAX, jAX, SizeOf(TMegaEntry));
+  AluRR($01, jR9, jAX, True);
+  CmpRM(jSI, jR9, PtrInt(@PMegaEntry(nil)^.Key)); AddF(JccFwd(ccNE));
+  LeaRM(jR9, jR9, PtrInt(@PMegaEntry(nil)^.E));
+  CmpRM(jR10, jR9, PtrInt(@PICEntry(nil)^.Shape)); AddF(JccFwd(ccNE));
+  EmitFound(True);
   for K := 0 to NF - 1 do PatchHere(Fails[K]);
   AluRR($31, jAX, jAX, False);
   JB($C3);
@@ -4158,6 +4219,7 @@ begin
   if P = nil then Exit;
   Move(JitBuf[0], P^, JitLen);
   JitICGetHitCode := P;
+  JitKeyedGetCode := P + KeyedAt;
 end;
 
 procedure JitBuildGetterStub;
@@ -4461,6 +4523,33 @@ begin
           end;
       end;
       Continue;
+    end;
+    if JitDefer[N].Kind = 23 then
+    begin
+      { opGetElem with a key not an int (rcx): a string whose atom is known, of an object, JitKeyedGetCode's hit
+        goes on; anything else the helper (below) }
+      I := JitDefer[N].I;
+      TagOf(jDX, jCX);
+      AluRI(7, jDX, TAG_PTR_HI, False);
+      L1 := JccFwd(ccNE);
+      AluRR($31, jCX, jR13, True);
+      CmpBMI(jCX, 4, ckString);
+      L2 := JccFwd(ccNE);
+      MovRM(jSI, jCX, PtrInt(@PStr(nil)^.Atom));
+      AluRR($85, jSI, jSI, True);
+      L3 := JccFwd(ccE);
+      MovRM(jDI, jBX, Integer((I shr 24) and $FFFF) * 8);
+      TagOf(jDX, jDI);
+      AluRI(7, jDX, TAG_PTR_HI, False);
+      L4 := JccFwd(ccNE);
+      AluRR($31, jDI, jR13, True);
+      CmpBMI(jDI, 4, ckObject);
+      K := JccFwd(ccNE);
+      LeaRM(jDX, jBX, JitDefer[N].A * 8);
+      CallAbs(JitKeyedGetCode);
+      JB($84); JB($C0);                                             { test al, al }
+      JccPC(ccNE, PC + 1);
+      PatchHere(L1); PatchHere(L2); PatchHere(L3); PatchHere(L4); PatchHere(K);
     end;
     case JitDefer[N].Kind of
       1, 6:
@@ -4963,13 +5052,14 @@ begin
   JitFsCurNewTarget := PtrInt(PtrUInt(@CurNewTarget) - JitFsBase);
   JitFsNativeData := PtrInt(PtrUInt(@NativeData) - JitFsBase);
   JitFsNativeSelf := PtrInt(PtrUInt(@NativeSelf) - JitFsBase);
+  JitFsMegaICTab := PtrInt(PtrUInt(@MegaICTab) - JitFsBase);
   { the code's fs-relative loads take a signed 32-bit displacement }
   if (Abs(JitFsVStack) > $7FFFFFF0) or (Abs(JitFsNurseryStart) > $7FFFFFF0) or (Abs(JitFsNurseryLimit) > $7FFFFFF0) or
      (Abs(JitFsNurseryTop) > $7FFFFFF0) or (Abs(JitFsArrayIterNext) > $7FFFFFF0) or (Abs(JitFsFrames) > $7FFFFFF0) or (Abs(JitFsFrameTop) > $7FFFFFF0) or
      (Abs(JitFsStackTop) > $7FFFFFF0) or (Abs(JitFsJitDepth) > $7FFFFFF0) or
      (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) or (Abs(JitFsGlobalObj) > $7FFFFFF0) or
      (Abs(JitFsGLexCells) > $7FFFFFF0) or (Abs(JitFsCurNewTarget) > $7FFFFFF0) or
-     (Abs(JitFsNativeData) > $7FFFFFF0) or (Abs(JitFsNativeSelf) > $7FFFFFF0) then
+     (Abs(JitFsNativeData) > $7FFFFFF0) or (Abs(JitFsNativeSelf) > $7FFFFFF0) or (Abs(JitFsMegaICTab) > $7FFFFFF0) then
     JitEnabled := 0;
   if JitEnabled < 0 then
     if GetEnvironmentVariable('G2_JIT') = '0' then JitEnabled := 0 else JitEnabled := 1;   { on unless G2_JIT=0 }
