@@ -684,6 +684,7 @@ var
   JitHot: Integer = JIT_HOT;
   JitCallStub: Pointer = nil;   { JitBuildCallStub's code: opCall's call, shared by every call site }
   JitCallStubObj: Pointer = nil;   { its second entry: rax the callee, an object that is not a plain function (untagged) }
+  JitICGetHitCode: Pointer = nil;  { JitBuildICGetHit's code: ICGetHit (rdi O, rsi the IC, rdx Dst; al the result) }
   JitCallPost: Pointer = nil;      { its third entry, a call site's after JitEnter's call (eax not -2; ecx A, edx Argc and
                                      the this flag): -3 the stub's, else XJitCallPost (0 goes on, -1 a throw) }
 var
@@ -4065,6 +4066,100 @@ end;
   frame's PC already past it). JH_GetPropAcc, then for a getter it leaves to the code the call stub's call of it
   (A = MaxRegs, no arguments, this given) and its result moved to R[A]. eax: 1 done, 0 a throw pending, 2 the
   interpreter's (the get again: nothing called) }
+{ ICGetHit in machine code (JitICGetHitCode), for compiled code's cold property gets: the receiver's shape among
+  the IC's entries (Poly0, then More's PolyCount - 1), an own data property (Kind, Depth, VerMask and Acc as one
+  32-bit word: the receiver's kind, 0, 0, 0) from its inline or overflow slot, or a data property Depth prototypes
+  up whose shapes are the entry's holders (and versions, for dictionaries) as ICGetHit checks them; else 0 }
+procedure JitBuildICGetHit;
+var LFound, LFound2, LFail1, LFail2, LLoop, LProto, LOvf, LWalk, LRead, LNoVer, LDone, K: Integer;
+  Fails: array[0..15] of Integer; NF: Integer; P: PByte;
+  procedure AddF(L: Integer); begin Fails[NF] := L; Inc(NF); end;
+  procedure ReadSlot(Obj: Integer);
+  { the entry's (r9) slot of Obj into [rdx], eax 1 }
+  var LO: Integer;
+  begin
+    Mov32RM(jCX, jR9, PtrInt(@PICEntry(nil)^.Slot));
+    MovzxWRM(jR8, Obj, PtrInt(@PObj(nil)^.InlineCap));
+    AluRR($39, jCX, jR8, False);
+    LO := JccFwd(ccAE);
+    MovRMIdx(jAX, Obj, jCX, PtrInt(@PObj(nil)^.Slots));
+    MovMR(jDX, 0, jAX);
+    MovRI(jAX, 1);
+    JB($C3);
+    PatchHere(LO);
+    AluRR($29, jCX, jR8, False);                                   { sub ecx, r8d }
+    MovRM(jAX, Obj, PtrInt(@PObj(nil)^.Overflow));
+    MovRMIdx(jAX, jAX, jCX, PtrInt(@PValueArray(nil)^.Data));
+    MovMR(jDX, 0, jAX);
+    MovRI(jAX, 1);
+    JB($C3);
+  end;
+begin
+  JitLen := 0;
+  NF := 0;
+  MovRM(jR10, jDI, PtrInt(@PObj(nil)^.Shape));
+  LeaRM(jR9, jSI, PtrInt(@PPropIC(nil)^.Poly0));
+  CmpRM(jR10, jR9, PtrInt(@PICEntry(nil)^.Shape));
+  LFound := JccFwd(ccE);
+  MovzxBRM(jR8, jSI, PtrInt(@PPropIC(nil)^.PolyCount));
+  AluRI(5, jR8, 1, False);
+  AddF(JccFwd(ccLE));
+  MovRM(jR9, jSI, PtrInt(@PPropIC(nil)^.More));
+  LLoop := JitLen;
+  CmpRM(jR10, jR9, PtrInt(@PICEntry(nil)^.Shape));
+  LFound2 := JccFwd(ccE);
+  AluRI(0, jR9, SizeOf(TICEntry), True);
+  AluRI(5, jR8, 1, False);
+  JB($0F); JB($85); JD(Cardinal(LLoop - (JitLen + 4)));          { jnz the loop }
+  AddF(JmpFwd);
+  PatchHere(LFound); PatchHere(LFound2);
+  { an own data property }
+  MovzxBRM(jCX, jDI, PtrInt(@PObj(nil)^.OKind));
+  Cmp32RM(jCX, jR9, PtrInt(@PICEntry(nil)^.Kind));
+  LProto := JccFwd(ccNE);
+  ReadSlot(jDI);
+  { a prototype's: the kind the receiver's, no accessor, Depth hops (each object before the holder of the entry's
+    version when it is a dictionary, each prototype the entry's holder) }
+  PatchHere(LProto);
+  JRex(False, jCX, 0, jR9); JB($3A); JMem(jCX, jR9, PtrInt(@PICEntry(nil)^.Kind));   { cmp cl, [r9 + Kind] }
+  AddF(JccFwd(ccNE));
+  CmpBMI(jR9, PtrInt(@PICEntry(nil)^.Acc), 0);
+  AddF(JccFwd(ccNE));
+  MovzxBRM(jR8, jR9, PtrInt(@PICEntry(nil)^.Depth));
+  MovzxBRM(jR11, jR9, PtrInt(@PICEntry(nil)^.VerMask));
+  MovRR(jAX, jDI);
+  AluRR($31, jCX, jCX, False);
+  LWalk := JitLen;
+  AluRR($39, jCX, jR8, False);                                     { cmp ecx, r8d }
+  LRead := JccFwd(ccGE);
+  JB($41); JB($0F); JB($A3); JB($CB);                              { bt r11d, ecx }
+  LNoVer := JccFwd(ccAE);
+  MovRM(jR10, jAX, PtrInt(@PObj(nil)^.Shape));
+  Mov32RM(jR10, jR10, PtrInt(@PShape(nil)^.Version));
+  SibOp(0, False, [$3B], jR10, jR9, jCX, 2, PtrInt(@PICEntry(nil)^.Vers));   { cmp r10d, [r9 + rcx*4 + Vers] }
+  AddF(JccFwd(ccNE));
+  PatchHere(LNoVer);
+  MovRM(jAX, jAX, PtrInt(@PObj(nil)^.Shape));
+  MovRM(jAX, jAX, PtrInt(@PShape(nil)^.Proto));
+  MovRI(jR10, PTR_MASK);
+  AluRR($21, jAX, jR10, True);
+  MovRM(jR10, jAX, PtrInt(@PObj(nil)^.Shape));
+  SibOp(0, True, [$3B], jR10, jR9, jCX, 3, PtrInt(@PICEntry(nil)^.Holder));  { cmp r10, [r9 + rcx*8 + Holder] }
+  AddF(JccFwd(ccNE));
+  AluRI(0, jCX, 1, False);
+  JB($E9); JD(Cardinal(LWalk - (JitLen + 4)));
+  PatchHere(LRead);
+  MovRR(jR11, jAX);
+  ReadSlot(jR11);
+  for K := 0 to NF - 1 do PatchHere(Fails[K]);
+  AluRR($31, jAX, jAX, False);
+  JB($C3);
+  P := JitAlloc(JitLen);
+  if P = nil then Exit;
+  Move(JitBuf[0], P^, JitLen);
+  JitICGetHitCode := P;
+end;
+
 procedure JitBuildGetterStub;
 var L1, L2, L3: Integer; P: PByte;
 begin
@@ -4407,7 +4502,7 @@ begin
             JitGetterStub, below) }
           MovRR(jDI, jAX);
           LeaRM(jDX, jBX, JitDefer[N].A * 8);
-          CallAbs(@JitICGetHit);
+          if JitICGetHitCode <> nil then CallAbs(JitICGetHitCode) else CallAbs(@JitICGetHit);
           JB($84); JB($C0);   { test al, al: the Boolean }
           JccPC(ccNE, PC + 1);
           if TOp(JitDefer[N].I and $FF) = opGetProp then
@@ -4665,6 +4760,7 @@ begin
   { a generator's body runs compiled between its suspensions (its yields and returns are the interpreter's) }
   if (T^.Lazy <> nil) or (T^.CodeLen = 0) or T^.IsAsync then Exit;
   if JitCallStub = nil then JitBuildCallStub;
+  if JitICGetHitCode = nil then JitBuildICGetHit;
   if JitNewStub = nil then JitBuildNewStub;
   if (JitGetterStub = nil) and (JitCallStub <> nil) then JitBuildGetterStub;
   if (JitCallStub = nil) or (JitGetterStub = nil) then Exit;
