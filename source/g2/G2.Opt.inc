@@ -3734,27 +3734,28 @@ begin
   MovRI(jCX, 1);
   LDone := JmpFwd;
   PatchHere(LNe);
-  { different bits: two pointers are equal only as the same string or BigInt, objects not }
+  { different bits (no doubles): unequal unless both are pointers to strings or BigInts with equal contents, so
+    a side that is not a pointer, or is an object, decides it (the left checked first, then the right) }
   MovRR(jCX, jDX);
   ShiftRI(5, jCX, 48, True);
   AluRI(7, jCX, TAG_PTR_HI, False);
   L1 := JccFwd(ccNE);
+  MovRR(jCX, jDX);
+  AluRR($31, jCX, jR13, True);
+  CmpBMI(jCX, 4, ckObject);
+  LSlow3 := JccFwd(ccE);
   MovRR(jCX, jAX);
   ShiftRI(5, jCX, 48, True);
   AluRI(7, jCX, TAG_PTR_HI, False);
   L2 := JccFwd(ccNE);
-  MovRR(jCX, jDX);
-  AluRR($31, jCX, jR13, True);
-  CmpBMI(jCX, 4, ckObject);
-  LSlow3 := JccFwd(ccNE);
   MovRR(jCX, jAX);
   AluRR($31, jCX, jR13, True);
   CmpBMI(jCX, 4, ckObject);
   LSlow4 := JccFwd(ccNE);
-  PatchHere(L1); PatchHere(L2);
+  PatchHere(L1); PatchHere(L2); PatchHere(LSlow3);
   AluRR($31, jCX, jCX, False);
   LDone2 := JmpFwd;
-  PatchHere(LSlow1); PatchHere(LSlow2); PatchHere(LSlow3); PatchHere(LSlow4);
+  PatchHere(LSlow1); PatchHere(LSlow2); PatchHere(LSlow4);
   { push rsi, rdi, r8 - r11 (rsp stays aligned), xmm2 - xmm15 below them }
   JB($56); JB($57); JB($41); JB($50); JB($41); JB($51); JB($41); JB($52); JB($41); JB($53);
   AluRI(5, jSP, 112, True);
