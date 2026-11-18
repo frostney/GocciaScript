@@ -4692,8 +4692,10 @@ begin
     JEnd := EmitJ(opJmp, 0, 0);
     PatchHere(Inner);
     { a throw leaves the try block's scopes without their opClose: the closures made in them keep their
-      variables, whose registers the catch block may reuse }
-    Emit(Ins(opClose, ExcReg + 1, 0, 0));
+      variables, whose registers the catch block may reuse. Every register above ExcReg is dead here (what the
+      block's last statements left, such as a method call's receiver): they are cleared too, so a frame that
+      suspends later (an await, a yield) does not keep what they held alive }
+    Emit(Ins(opClose, ExcReg + 1, FS.Tpl^.MaxRegs, 0));
     { 14.15.3: the statement's value is the catch block's, UpdateEmpty(C, undefined) }
     if FS.CplP1 <> 0 then Emit(Ins(opLoadUndef, FS.CplP1 - 1, 0, 0));
     PushScope;

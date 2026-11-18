@@ -368,8 +368,8 @@ begin
     opArrHole, opSetGlobal, opSetUpv: R(A);
     opMov: begin R(B); WFrom := A; WTo := A; end;
     opLoadK, opLoadI, opLoadUndef, opLoadNull, opLoadTrue, opLoadFalse, opClosure: begin WFrom := A; WTo := A; end;
-    { (the registers it closes are captured ones, always current in VStack) }
-    opClose: ;
+    { (the registers it closes are captured ones, always current in VStack); B > A: it clears A .. B - 1 }
+    opClose: if B > A then begin WFrom := A; WTo := B - 1; end;
     opGetElem, opInstanceof, opIn, opAdd, opSub, opMul, opDiv, opMod, opBitAnd, opBitOr, opBitXor, opShl, opShr,
     opUShr, opEq, opNe, opSEq, opSNe, opLt, opLe, opGt, opGe:
       begin R(B); R(C); WFrom := A; WTo := A; end;

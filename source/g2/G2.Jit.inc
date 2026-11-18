@@ -2105,7 +2105,11 @@ begin
       end;
     opArrPush: ArrayPush(ObjOf(R[A]), R[B]);
     opArrHole: ArrayPush(ObjOf(R[A]), VHole);
-    opClose: CloseUpvals(Fr^.Base + A);
+    opClose:
+      begin
+        CloseUpvals(Fr^.Base + A);
+        for J := A to B - 1 do VStack[Fr^.Base + J] := VUndefined;
+      end;
     opToStr:
       if not IsString(R[B]) then
       begin

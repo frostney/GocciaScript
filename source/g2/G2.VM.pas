@@ -4736,6 +4736,9 @@ begin
   NLive := IntOf(State^.Data[T^.MaxRegs + 1]);
   Move(State^.Data[0], VStack[Base], NLive * SizeOf(TValue));
   if NLive < T^.MaxRegs then FillQWord(VStack[Base + NLive], T^.MaxRegs - NLive, VUndefined);
+  { the saved copy is stale while the frame runs (the next suspension writes it again): cleared, so what the
+    running frame drops (a container a catch clause abandons, a binding set to null) is not kept alive by it }
+  if NLive > 0 then FillQWord(State^.Data[0], NLive, VUndefined);
   ResumeReg := IntOf(State^.Data[T^.MaxRegs]);
   Fr := @Frames[FrameTop];
   Fr^.Closure := G^.Aux1;
@@ -4910,6 +4913,9 @@ begin
   NLive := IntOf(State^.Data[T^.MaxRegs + 1]);
   Move(State^.Data[0], VStack[Base], NLive * SizeOf(TValue));
   if NLive < T^.MaxRegs then FillQWord(VStack[Base + NLive], T^.MaxRegs - NLive, VUndefined);
+  { the saved copy is stale while the frame runs (the next suspension writes it again): cleared, so what the
+    running frame drops (a container a catch clause abandons, a binding set to null) is not kept alive by it }
+  if NLive > 0 then FillQWord(State^.Data[0], NLive, VUndefined);
   ResumeReg := IntOf(State^.Data[T^.MaxRegs]);
   Fr := @Frames[FrameTop];
   Fr^.Closure := G^.Aux1;
@@ -7143,7 +7149,14 @@ LReload:
             WriteBarrier(@U^.Hdr, R[A]);
           end;
         end;
-      opClose: CloseUpvals(Fr^.Base + A);
+      opClose:
+        begin
+          CloseUpvals(Fr^.Base + A);
+          { B > A: registers A..B-1 are dead (a catch clause's entry): cleared, so a suspended frame's saved
+            registers keep nothing alive }
+          B := (I shr 24) and $FFFF;
+          for J := A to B - 1 do VStack[Fr^.Base + J] := VUndefined;
+        end;
 
       opGetGlobal, opTypeofGlobal:
         begin
@@ -8514,6 +8527,8 @@ LReload:
                    goto LThrow;
                  end;
                  if not IsCallable(VB) then begin ThrowTypeError('Iterator throw is not callable'); goto LThrow; end;
+                 { the received value from its register: the throw getter may have collected }
+                 V := R[B + 2];
                  if not CallValue(VB, R[B], @V, 1, VA) then goto LThrow;
                end;
           else
@@ -8521,6 +8536,7 @@ LReload:
               if not GetV(R[B], AtomReturn, VB) then goto LThrow;
               if IsNullish(VB) then begin Pending := NewRetComp(R[B + 2]); goto LThrow; end;
               if not IsCallable(VB) then begin ThrowTypeError('Iterator return is not callable'); goto LThrow; end;
+              V := R[B + 2];
               if not CallValue(VB, R[B], @V, 1, VA) then goto LThrow;
             end;
           end;
@@ -8693,6 +8709,8 @@ LReload:
                        else
                        begin
                          if not IsCallable(VB) then begin ThrowTypeError('Iterator throw is not callable'); goto LThrow; end;
+                         { the received value from its register: a getter on the way may have collected }
+                         V := R[B + 2];
                          if not CallValue(VB, R[B], @V, 1, VA) then goto LThrow;
                          R[B + 4] := MkInt(1);
                        end;
@@ -8700,6 +8718,8 @@ LReload:
                 else
                   begin
                     if not GetV(R[B], AtomReturn, VB) then goto LThrow;
+                    { the received value from its register: the return getter may have collected }
+                    V := R[B + 2];
                     if IsNullish(VB) then
                     begin
                       VA := V;
