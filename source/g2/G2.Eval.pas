@@ -144,6 +144,35 @@ begin
   end;
 end;
 
+{ the export declarations of a Script's top level replaced by the declarations they export, and export lists
+  dropped. The program's list owns its statements: the export nodes taken out are not freed, since each owns the
+  declaration that now stands in its place (one entry's few nodes, once a run) }
+procedure ScriptExportsAsDeclarations(Prog: TGocciaProgram);
+var I: Integer; N: TGocciaStatement; D: TGocciaStatement;
+begin
+  Prog.Body.OwnsObjects := False;
+  try
+    for I := Prog.Body.Count - 1 downto 0 do
+    begin
+      N := Prog.Body[I];
+      D := nil;
+      if N is TGocciaExportVariableDeclaration then D := TGocciaExportVariableDeclaration(N).Declaration
+      else if N is TGocciaExportDestructuringDeclaration then D := TGocciaExportDestructuringDeclaration(N).Declaration
+      else if N is TGocciaExportFunctionDeclaration then D := TGocciaExportFunctionDeclaration(N).Declaration
+      else if N is TGocciaExportClassDeclaration then D := TGocciaExportClassDeclaration(N).Declaration
+      else if N is TGocciaExportEnumDeclaration then D := TGocciaExportEnumDeclaration(N).Declaration
+      else if N is TGocciaExportDeclaration then
+      begin
+        Prog.Body.Delete(I);
+        Continue;
+      end;
+      if D <> nil then Prog.Body[I] := D;
+    end;
+  finally
+    Prog.Body.OwnsObjects := True;
+  end;
+end;
+
 function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
   out IsModule: Boolean; var Err: UnicodeString): Boolean;
 var Prog: TGocciaProgram; Goal: TGocciaSourceType;
@@ -165,6 +194,9 @@ begin
         IsModule := True;
         Exit(True);
       end;
+      { an explicit Script keeps GocciaScript's acceptance of export declarations (docs/language.md, Entry source
+        type): each declares its binding as it would without export, and an export list declares nothing }
+      if SourceType = 1 then ScriptExportsAsDeclarations(Prog);
       T := CompileProgram(Prog, FileName, False, 1);
       Result := True;
     except
