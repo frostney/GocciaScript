@@ -383,6 +383,15 @@ function ProfileNonStrict: Boolean; noinline;
 function ProfileArgumentsObject: Boolean; noinline;
 function ProfileFunctionCtor: Boolean; noinline;
 
+{ ---- the host clock ---- }
+{ a host's mocked clocks (fake timers): the epoch time in milliseconds Date, Temporal.Now and the like read, and
+  the monotonic time performance.now reads; NaN puts the real clock back }
+procedure SetClockOverride(EpochMs, MonoMs: Double); noinline;
+{ True with Ms the mocked epoch time }
+function EpochOverride(out Ms: Double): Boolean; noinline;
+{ True with Ms the mocked monotonic time }
+function MonoOverride(out Ms: Double): Boolean; noinline;
+
 implementation
 
 uses
@@ -390,6 +399,29 @@ uses
 
 threadvar
   CurProfile: TLangProfile;
+  { the mocked clocks, each held as its value + 1 so the zero a new thread starts with means none }
+  EpochOverrideP1, MonoOverrideP1: Double;
+  EpochOverridden, MonoOverridden: Boolean;
+
+procedure SetClockOverride(EpochMs, MonoMs: Double);
+begin
+  EpochOverridden := not IsNan(EpochMs);
+  if EpochOverridden then EpochOverrideP1 := EpochMs + 1;
+  MonoOverridden := not IsNan(MonoMs);
+  if MonoOverridden then MonoOverrideP1 := MonoMs + 1;
+end;
+
+function EpochOverride(out Ms: Double): Boolean;
+begin
+  Result := EpochOverridden;
+  if Result then Ms := EpochOverrideP1 - 1 else Ms := 0;
+end;
+
+function MonoOverride(out Ms: Double): Boolean;
+begin
+  Result := MonoOverridden;
+  if Result then Ms := MonoOverrideP1 - 1 else Ms := 0;
+end;
 
 function ActiveProfile: TLangProfile;
 begin

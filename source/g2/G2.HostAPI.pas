@@ -16,8 +16,14 @@ uses
 { the host's globals on this thread's realm (after EngineInit): the const Goccia, and the conformance host's
   extras removed; TestMode lists the test runner's globals in Goccia.runtimeGlobals }
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; var Err: UnicodeString): Boolean;
+{ the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
+  queued, until none is left (False: an uncaught exception, in Pending) }
+function RunEventLoop: Boolean;
 { the test framework API (describe, test, expect, ...) as globals of this thread's realm }
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
+{ the test file's vi.mock directives (Goccia.Vitest.MockHoist): each mock's module, served at the address its
+  specifier resolves to ahead of the file there }
+procedure HoistTestMocks(const FileName: string; const Source: UnicodeString);
 { runs the suites the test file registered (after InstallTestingAPI) and the jobs they queue; Json their result
   (totalTests, passed, failed, skipped, assertions, failedTests), or False and Err the error that stopped
   them }
@@ -26,15 +32,38 @@ function RunTestSuites(var Json, Err: UnicodeString): Boolean;
 implementation
 
 uses
-  SysUtils, Classes, G2.Bytecode, G2.VM, G2.Typed, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval,
-  Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser;
+  SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval,
+  Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
+  TextSemantics;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
 {$I G2.UrlPrelude.inc}
 {$I G2.WebPrelude.inc}
+{$I G2.ModulesPrelude.inc}
+{$I G2.FetchPrelude.inc}
+{$I G2.AsyncHooksPrelude.inc}
+{$I G2.EventsPrelude.inc}
+{$I G2.TimersPrelude.inc}
+
+type
+  { G2.Modules's resolution as the hoister's resolver }
+  TMockResolver = class
+    function Resolve(const ASpecifier, AReferrer: string; out AAddress: string): Boolean;
+  end;
+
+function TMockResolver.Resolve(const ASpecifier, AReferrer: string; out AAddress: string): Boolean;
+begin
+  AAddress := string(ResolveModuleSpecifier(UnicodeString(ASpecifier), UnicodeString(AReferrer)));
+  Result := AAddress <> '';
+end;
 
 threadvar
+  { the vi.mock modules: address, then source }
+  MockModules: TStringList;
+  SharedV, LoadHostModuleV: TValue;
+  FireNextV: TValue;
+  EventLoopRooted: Boolean;
   TestApiV: TValue;
   TestApiRooted: Boolean;
   ReportJson, ReportErr: UnicodeString;
@@ -305,6 +334,83 @@ begin
   Result := True;
 end;
 
+{ hrNow(): a monotonic time in milliseconds (an event's timeStamp) }
+function Host_HrNow(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkNumber(GetTickCount64);
+  Result := True;
+end;
+
+{ G2.Modules's host hook: shared.loadHostModule(Key) }
+function HostModule(const Key: UnicodeString; var Exp: TValue): Integer;
+var A: array[0..0] of TValue; S: TValue; I: Integer;
+begin
+  if Assigned(MockModules) then
+  begin
+    I := MockModules.IndexOfName(string(Key));
+    if I >= 0 then
+    begin
+      Exp := StrFromUnicode(UnicodeString(MockModules.ValueFromIndex[I]));
+      Exit(2);
+    end;
+  end;
+  if not IsObject(LoadHostModuleV) then Exit(0);
+  A[0] := StrFromUnicode(Key);
+  if not CallValue(LoadHostModuleV, SharedV, @A[0], 1, Exp) then Exit(-1);
+  if Exp = VUndefined then Result := 0
+  else if IsString(Exp) then Result := 2
+  else Result := 1;
+  S := VUndefined;
+end;
+
+{ setClock(epochMs, monoMs): the mocked clocks (NaN: the real one) }
+function Host_SetClock(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var E, M: Double;
+begin
+  if Argc >= 1 then E := PrimitiveToNumber(Args[1]) else E := NaN;
+  if Argc >= 2 then M := PrimitiveToNumber(Args[2]) else M := NaN;
+  SetClockOverride(E, M);
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ realNow(): the real epoch time in milliseconds, whatever is mocked }
+function Host_RealNow(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var TS: TTimeSpec;
+begin
+  clock_gettime(CLOCK_REALTIME, @TS);
+  Res := MkNumber(TS.tv_sec * 1000.0 + TS.tv_nsec div 1000000);
+  Result := True;
+end;
+
+{ asyncGet() and asyncSet(v): the async context (G2.Promise) }
+function Host_AsyncGet(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := GetAsyncContext;
+  Result := True;
+end;
+
+function Host_AsyncSet(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if Argc >= 1 then SetAsyncContext(Args[1]) else SetAsyncContext(VUndefined);
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ vitestSource(): the vitest compatibility shim's module source (Goccia.VitestShim.inc) }
+function VitestShimSource: UnicodeString;
+const
+  LB = #10;
+begin
+  {$I Goccia.VitestShim.inc}
+end;
+
+function Host_VitestSource(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := StrFromUnicode(VitestShimSource);
+  Result := True;
+end;
+
 { ---- installing the preludes ---- }
 
 { calls the prelude's function value (Source's completion) with the Argc temp roots from Base; Res its result }
@@ -345,6 +451,12 @@ begin
   DefineNative(RootAt(TempTop - 1), 'plainCloneable', Host_PlainCloneable, 1);
   DefineNative(RootAt(TempTop - 1), 'viewInfo', Host_ViewInfo, 1);
   DefineNative(RootAt(TempTop - 1), 'isBytecode', Host_IsBytecode, 1);
+  DefineNative(RootAt(TempTop - 1), 'hrNow', Host_HrNow, 0);
+  DefineNative(RootAt(TempTop - 1), 'setClock', Host_SetClock, 2);
+  DefineNative(RootAt(TempTop - 1), 'realNow', Host_RealNow, 0);
+  DefineNative(RootAt(TempTop - 1), 'asyncGet', Host_AsyncGet, 0);
+  DefineNative(RootAt(TempTop - 1), 'asyncSet', Host_AsyncSet, 1);
+  DefineNative(RootAt(TempTop - 1), 'vitestSource', Host_VitestSource, 0);
   Result := RootAt(TempTop - 1);
   PopRoots(1);
 end;
@@ -352,16 +464,45 @@ end;
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; var Err: UnicodeString): Boolean;
 var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
+  if not EventLoopRooted then
+  begin
+    AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV);
+    EventLoopRooted := True;
+  end;
+  FireNextV := VUndefined;
+  SharedV := VUndefined;
+  LoadHostModuleV := VUndefined;
   Base := TempTop;
   PushRoot(GlobalObj);
   PushRoot(HostNatives);
+  { the preludes' shared internals, runtimeGlobals the names they install }
+  PushRoot(MkPtr(NewPlainObject(ObjectProto, 8)));
+  PushRoot(MkPtr(NewArray(0, 16)));
+  DefineOwn(RootAt(Base + 2), AtomOf('runtimeGlobals'), RootAt(TempTop - 1), pfHidden);
+  PopRoots(1);
   PushRoot(StrFromUnicode(InfoJson));
   PushRoot(MkBool(TestMode));
   PushRoot(MkBool(ShadowRealm));
-  { (G, n) }
-  Result := CallPrelude('<goccia:url>', UrlSrc, Base, 2, R, Err) and CallPrelude('<goccia:web>', WebSrc, Base, 2, R, Err);
-  { (G, n, infoJson, testMode, shadowRealm) }
-  if Result then Result := CallPrelude('<goccia:host>', HostSrc, Base, 5, Goccia, Err);
+  { (G, n, shared), then host.js's (G, n, shared, infoJson, testMode, shadowRealm), in the order the CLIs'
+    runtime extensions install (Goccia.runtimeGlobals lists their names in it) }
+  Result := CallPrelude('<goccia:modules>', ModulesSrc, Base, 3, R, Err) and
+    CallPrelude('<goccia:url>', UrlSrc, Base, 3, R, Err) and CallPrelude('<goccia:web>', WebSrc, Base, 3, R, Err) and
+    CallPrelude('<goccia:events>', EventsSrc, Base, 3, R, Err) and
+    CallPrelude('<goccia:fetch>', FetchSrc, Base, 3, R, Err) and
+    CallPrelude('<goccia:host>', HostSrc, Base, 6, Goccia, Err);
+  if Result then
+  begin
+    PushRoot(Goccia);
+    Result := CallPrelude('<goccia:timers>', TimersSrc, Base, 3, R, Err) and
+      CallPrelude('<node:async_hooks>', AsyncHooksSrc, Base, 3, R, Err);
+    Goccia := RootAt(TempTop - 1);
+    { shared.timers.fireNext, for the event loop }
+    if Result and GetV(RootAt(Base + 2), AtomOf('timers'), R) and IsObject(R) then
+      Result := GetV(R, AtomOf('fireNext'), FireNextV);
+    SharedV := RootAt(Base + 2);
+    if Result then Result := GetV(SharedV, AtomOf('loadHostModule'), LoadHostModuleV);
+    if Result then SetHostModuleHook(@HostModule);
+  end;
   PopRoots(TempTop - Base);
   if not Result then Exit;
   { Goccia: a const binding of the global scope, mirrored on the global object as the CLIs mirror theirs }
@@ -376,8 +517,9 @@ begin
   if not TestApiRooted then begin AddRoot(@TestApiV); TestApiRooted := True; end;
   Base := TempTop;
   PushRoot(GlobalObj);
-  Result := CallPrelude('<goccia:test>', TestingSrc, Base, 1, TestApiV, Err);
-  PopRoots(1);
+  PushRoot(SharedV);
+  Result := CallPrelude('<goccia:test>', TestingSrc, Base, 2, TestApiV, Err);
+  PopRoots(2);
 end;
 
 { report's done(json, error) }
@@ -392,6 +534,45 @@ begin
   Result := True;
 end;
 
+procedure HoistTestMocks(const FileName: string; const Source: UnicodeString);
+var Lines: TStringList; R: TMockResolver; Mocks: TGocciaMockModules; I: Integer;
+begin
+  if (Pos('vi.mock', Source) = 0) and (Pos('vi.unmock', Source) = 0) and (Pos('vitest.mock', Source) = 0) and
+     (Pos('vitest.unmock', Source) = 0) then Exit;
+  Lines := CreateFileTextLines(NormalizeNewlinesToLF(UTF8Encode(Source)));
+  R := TMockResolver.Create;
+  try
+    Mocks := CollectModuleMocks(Lines, ExpandFileName(FileName), [ppJSX], R.Resolve);
+  finally
+    R.Free;
+    Lines.Free;
+  end;
+  if Length(Mocks) = 0 then Exit;
+  if not Assigned(MockModules) then
+  begin
+    MockModules := TStringList.Create;
+    MockModules.NameValueSeparator := #1;
+  end;
+  for I := 0 to High(Mocks) do MockModules.Add(Mocks[I].Address + #1 + Mocks[I].Source);
+end;
+
+function RunEventLoopIn(Intervals: Boolean): Boolean;
+var R: TValue; A: array[0..0] of TValue;
+begin
+  repeat
+    if not (RunMicrotasks and RunHostLoop) then Exit(False);
+    if not IsObject(FireNextV) or ReportDone then Exit(True);
+    A[0] := MkBool(Intervals);
+    if not CallValue(FireNextV, VUndefined, @A[0], 1, R) then Exit(False);
+  until R <> VTrue;
+  Result := True;
+end;
+
+function RunEventLoop: Boolean;
+begin
+  Result := RunEventLoopIn(False);
+end;
+
 function RunTestSuites(var Json, Err: UnicodeString): Boolean;
 var A: array[0..0] of TValue; Report, R, S: TValue;
 begin
@@ -399,7 +580,7 @@ begin
   if not GetV(TestApiV, AtomOf('report'), Report) then Exit(False);
   PushRoot(NewNativeFunction(Test_Done, 'done', 2));
   A[0] := RootAt(TempTop - 1);
-  Result := CallValue(Report, TestApiV, @A[0], 1, R) and RunMicrotasks and RunHostLoop;
+  Result := CallValue(Report, TestApiV, @A[0], 1, R) and RunEventLoopIn(True);
   PopRoots(1);
   if not Result then
   begin

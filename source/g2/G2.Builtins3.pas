@@ -34,6 +34,7 @@ end;
 function NowMs: Double;
 var TS: TTimeSpec;
 begin
+  if EpochOverride(Result) then Exit;
   clock_gettime(CLOCK_REALTIME, @TS);
   Result := TS.tv_sec * 1000.0 + TS.tv_nsec div 1000000;
 end;

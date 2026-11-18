@@ -288,6 +288,7 @@ end;
 function NowMs: Double;
 var TV: TTimeVal;
 begin
+  if EpochOverride(Result) then Exit;
   TV.tv_sec := 0; TV.tv_usec := 0;
   fpgettimeofday(@TV, nil);
   Result := Int64(TV.tv_sec) * 1000.0 + Int64(TV.tv_usec) div 1000;

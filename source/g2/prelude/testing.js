@@ -2,7 +2,7 @@
 // GocciaTestRunner injects them. Written in JavaScript so it runs on any engine; Vitest decides the semantics.
 // G2.HostAPI calls this function with the global object and keeps the API it returns, whose report(done) runs the
 // registered suites and passes done their result as JSON, or undefined and the error that stopped them.
-(function (global) {
+(function (global, shared) {
   'use strict';
   const hasOwn = Object.prototype.hasOwnProperty;
   const objToString = Object.prototype.toString;
@@ -541,6 +541,9 @@
         try {
           await runHooks(chainHooks(suite, 'beforeEach'));
           await item.fn();
+          // the timers the test scheduled run before it ends; one a callback threw fails it
+          const timerError = shared && shared.timers ? await shared.timers.drainTest() : null;
+          if (timerError !== null) throw new Error('Uncaught exception in a timer callback: ' + thrownMessage(timerError.error));
           if (expectedAssertions !== null && assertionCount !== expectedAssertions)
             throw new AssertionError(`Expected ${expectedAssertions} assertions, got ${assertionCount}`);
           if (needAssertions && assertionCount === 0) throw new AssertionError('Expected at least one assertion');
@@ -564,6 +567,7 @@
 
   const api = { describe, test, it: test, expect, beforeAll, afterAll, beforeEach, afterEach, onTestFinished, mock, spyOn, runTests };
   for (const k of Object.keys(api)) Object.defineProperty(global, k, { value: api[k], writable: true, configurable: true });
+  if (shared && shared.hostModules) shared.hostModules['goccia:test'] = () => api;
   return {
     report(done) {
       return runTests().then(

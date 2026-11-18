@@ -22,6 +22,18 @@ function AbstractModuleSourceIntrinsic: TValue;
   0 when it is a parse or link (resolution) error, 1 an evaluation error }
 function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
 
+type
+  { a host's modules: for a request key (a specifier with a scheme, as goccia:csv, kept as written; otherwise a
+    resolved file path), 1 with Exp an array of the module's export names and values, interleaved (a
+    synthetic module, evaluated at once), 2 with Exp the module's JavaScript source text, 0 when the host
+    has no such module (a file is then read as JavaScript), -1 with an error pending }
+  THostModuleHook = function(const Key: UnicodeString; var Exp: TValue): Integer;
+
+{ this thread's host module hook (nil: none) }
+procedure SetHostModuleHook(Hook: THostModuleHook);
+{ Spec as an import in Referrer resolves it: a host module's key, or an absolute path }
+function ResolveModuleSpecifier(const Spec, Referrer: UnicodeString): UnicodeString;
+
 implementation
 
 uses
@@ -92,13 +104,42 @@ end;
 
 { ---- loading ---- }
 
+threadvar
+  HostModules: THostModuleHook;
+
+procedure SetHostModuleHook(Hook: THostModuleHook);
+begin
+  HostModules := Hook;
+end;
+
+{ a host module's key, not a path: a specifier with a URL-like scheme of two or more letters (goccia:, node:) or a
+  bare one (vitest), which is neither absolute nor relative }
+function IsSchemeSpecifier(const Spec: UnicodeString): Boolean;
+var I, C: Integer;
+begin
+  if (Spec = '') or (Spec[1] = '/') or (Copy(Spec, 1, 2) = './') or (Copy(Spec, 1, 3) = '../') or (Spec = '.') or
+     (Spec = '..') then Exit(False);
+  C := Pos(':', Spec);
+  if C = 0 then Exit(Pos('/', Spec) = 0);
+  if C < 3 then Exit(False);
+  for I := 1 to C - 1 do
+    if not CharInSet(Spec[I], ['a'..'z', 'A'..'Z', '0'..'9', '+', '-', '.']) then Exit(False);
+  Result := True;
+end;
+
 function ResolvePath(const Spec, Referrer: UnicodeString): UnicodeString;
 var Base: UnicodeString;
 begin
+  if Assigned(HostModules) and IsSchemeSpecifier(Spec) then Exit(Spec);
   if (Spec <> '') and (Spec[1] = '/') then Exit(UnicodeString(ExpandFileName(string(Spec))));
   if (Referrer = '') or (Referrer[1] = '<') then Base := UnicodeString(GetCurrentDir) + '/'
   else Base := UnicodeString(ExtractFilePath(ExpandFileName(string(Referrer))));
   Result := UnicodeString(ExpandFileName(string(Base + Spec)));
+end;
+
+function ResolveModuleSpecifier(const Spec, Referrer: UnicodeString): UnicodeString;
+begin
+  Result := ResolvePath(Spec, Referrer);
 end;
 
 function ReadSource(const Path: UnicodeString; var Src: UnicodeString): Boolean;
@@ -198,9 +239,41 @@ begin
   Result := True;
 end;
 
+{ a synthetic module (16.2.1.8) of the host's: Exp its names and values, interleaved }
+function MakeHostModule(const Key: UnicodeString; Exp: TValue; var M: TModRec): Boolean;
+var I, N: Integer; V, Tbl: TValue; E: PValueArray;
+begin
+  if not IsObject(Exp) or (ObjOf(Exp)^.OKind <> okArray) then
+    Exit(ThrowTypeError('host module ''' + Key + ''': exports are not a list'));
+  PushRoot(Exp);
+  N := ObjOf(Exp)^.Elements^.Len div 2;
+  M := TModRec.Create;
+  M.Path := Key;
+  M.Id := Mods.Count;
+  Mods.Add(M);
+  SetRoot(M, rError, VUndefined);
+  M.Info := TModuleInfo.Create;
+  SetLength(M.Info.LocalExports, N);
+  M.Info.SlotCount := N;
+  Tbl := MkPtr(NewArray(0, N));
+  SetRoot(M, rTable, Tbl);
+  for I := 0 to N - 1 do
+  begin
+    E := ObjOf(RootAt(TempTop - 1))^.Elements;
+    if not IsString(E^.Data[2 * I]) then begin PopRoots(1); Exit(ThrowTypeError('host module ''' + Key + ''': an export name is not a string')); end;
+    M.Info.LocalExports[I].ExportName := StrToUnicode(StrOf(E^.Data[2 * I]));
+    M.Info.LocalExports[I].Slot := I;
+    V := ClosedCell(E^.Data[2 * I + 1]);
+    ArrayPush(ObjOf(GetRoot(M, rTable)), V);
+  end;
+  PopRoots(1);
+  M.Status := msEvaluated;
+  Result := True;
+end;
+
 { 16.2.1.5.1 LoadRequestedModules (synchronously, from files): the module at Path and everything it requests }
 function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
-var Src, Err, ErrName: UnicodeString; I: Integer; D: TModRec;
+var Src, Err, ErrName: UnicodeString; I: Integer; D: TModRec; V: TValue;
 begin
   M := FindModule(Path);
   if Assigned(M) then
@@ -223,7 +296,15 @@ begin
     M.Status := msEvaluated;
     Exit(True);
   end;
-  if not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
+  Src := '';
+  I := 0;
+  if Assigned(HostModules) then I := HostModules(Path, V);
+  case I of
+    1: Exit(MakeHostModule(Path, V, M));
+    2: Src := StrToUnicode(StrOf(V));
+    -1: Exit(False);
+  end;
+  if (I <> 2) and not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
   M := TModRec.Create;
   M.Path := Path;
   M.Id := Mods.Count;

@@ -54,8 +54,13 @@ end;
 
 { nowNs(): the current time, nanoseconds since the epoch, as a BigInt }
 function Temporal_NowNs(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var TS: TTimeSpec; B: TBigInteger;
+var TS: TTimeSpec; B: TBigInteger; Ms: Double;
 begin
+  if EpochOverride(Ms) then
+  begin
+    Res := BigToValue(TBigInteger.FromInt64(Trunc(Ms)).Multiply(TBigInteger.FromInt64(1000000)));
+    Exit(True);
+  end;
   clock_gettime(CLOCK_REALTIME, @TS);
   B := TBigInteger.FromInt64(Int64(TS.tv_sec)).Multiply(TBigInteger.FromInt64(1000000000)).Add(
     TBigInteger.FromInt64(Int64(TS.tv_nsec)));

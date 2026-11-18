@@ -3,7 +3,8 @@
 // returns the URL record as an array, null for a failure, or -1 for an invalid base; urlOrigin, urlEncode(kind,
 // input, special) with kind 0 userinfo, 1 query, 2 fragment; formParse (names and values interleaved) and
 // formSerialize. Called once per realm with the global object; installs URL and URLSearchParams.
-(function (G, n) {
+(function (G, n, shared) {
+  void shared;
   'use strict';
   const defineProperty = Object.defineProperty;
   const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;

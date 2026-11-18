@@ -155,6 +155,7 @@ begin
     Halt(4);
   end;
   SetActiveProfile(Prof);
+  HoistTestMocks(FileName, SrcText);
   if SourceType = 'module' then Kind := 2
   else if SourceType = 'script' then Kind := 1
   else if LowerCase(ExtractFileExt(FileName)) = '.mjs' then Kind := 2
@@ -164,9 +165,9 @@ begin
   if IsModule then
   begin
     Phase := 0;
-    Ok := RunModuleFile(UnicodeString(ExpandFileName(FileName)), Phase) and RunMicrotasks and RunHostLoop;
+    Ok := RunModuleFile(UnicodeString(ExpandFileName(FileName)), Phase) and RunEventLoop;
   end
-  else Ok := RunScript(T) and RunMicrotasks and RunHostLoop;
+  else Ok := RunScript(T) and RunEventLoop;
   if not Ok then
   begin
     if ToStringV(Pending, S) and IsString(S) then Err := StrToUnicode(StrOf(S));

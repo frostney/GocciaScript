@@ -33,6 +33,10 @@ procedure EnqueueCallback(F: TValue);
 { 27.2.5.4.1 PerformPromiseThen(P, OnF, OnR, Cap) for a promise P of this engine; Cap a pending promise
   (G2.ShadowRealm's importValue) }
 procedure PromiseThenNative(P, OnF, OnR, Cap: TValue);
+{ the async context (the AsyncContext proposal's snapshot, a host's value: node:async_hooks' store map): a
+  promise reaction made by then or await keeps the one current when it was made and runs in it }
+function GetAsyncContext: TValue;
+procedure SetAsyncContext(V: TValue);
 
 implementation
 
@@ -50,6 +54,8 @@ type
 
 threadvar
   PromiseProto, PromiseCtor, ThenFn, Jobs, Scratch: TValue;
+  AsyncCtx: TValue;
+  AsyncCtxRooted: Boolean;
   JobHead, JobCount: Integer;
   AtomThen, AtomResolve: PStr;
 
@@ -90,6 +96,28 @@ begin
   Q^.Data[2] := RootAt(TempTop - 2); Q^.Data[3] := RootAt(TempTop - 1);
   PopRoots(4);
   Result := MkPtr(Q);
+end;
+
+function NewQuint(A, B, C, D, E: TValue): TValue;
+var Q: PValueArray;
+begin
+  PushRoot(A); PushRoot(B); PushRoot(C); PushRoot(D); PushRoot(E);
+  Q := NewValueArray(5);
+  Q^.Len := 5;
+  Q^.Data[0] := RootAt(TempTop - 5); Q^.Data[1] := RootAt(TempTop - 4); Q^.Data[2] := RootAt(TempTop - 3);
+  Q^.Data[3] := RootAt(TempTop - 2); Q^.Data[4] := RootAt(TempTop - 1);
+  PopRoots(5);
+  Result := MkPtr(Q);
+end;
+
+function GetAsyncContext: TValue;
+begin
+  Result := AsyncCtx;
+end;
+
+procedure SetAsyncContext(V: TValue);
+begin
+  AsyncCtx := V;
 end;
 
 { ---------------- jobs ---------------- }
@@ -323,7 +351,7 @@ begin
   if not IsCallable(OnF) and (Kind = rkThen) then OnF := VUndefined;
   if not IsCallable(OnR) and (Kind = rkThen) then OnR := VUndefined;
   PushRoot(P);
-  Rec := NewQuad(MkInt(Kind), OnF, OnR, Cap);
+  Rec := NewQuint(MkInt(Kind), OnF, OnR, Cap, AsyncCtx);
   PushRoot(Rec);
   O := ObjOf(RootAt(TempTop - 2));
   if O^.Pad = psPending then
@@ -813,7 +841,19 @@ end;
 { ---------------- running jobs ---------------- }
 
 { 27.2.2.1 NewPromiseReactionJob }
+procedure RunReactionJobIn(Rec, V: TValue; State: Integer); forward;
+
+{ a reaction job, in the async context its reaction was made in }
 procedure RunReactionJob(Rec, V: TValue; State: Integer);
+begin
+  PushRoot(AsyncCtx);
+  AsyncCtx := VA(Rec)^.Data[4];
+  RunReactionJobIn(Rec, V, State);
+  AsyncCtx := RootAt(TempTop - 1);
+  PopRoots(1);
+end;
+
+procedure RunReactionJobIn(Rec, V: TValue; State: Integer);
 var H, R, Cap: TValue; Ok: Boolean;
 begin
   case IntOf(VA(Rec)^.Data[0]) of
@@ -892,7 +932,15 @@ begin
       jkReaction: RunReactionJob(A, B, IntOf(C));
       jkThenable: RunThenableJob(A, B, C);
       jkCallback:
-        if not CallValue(A, VUndefined, nil, 0, R) then Exit(False);   { reported like an uncaught exception }
+        begin
+          { in the async context it was queued in }
+          PushRoot(AsyncCtx);
+          AsyncCtx := B;
+          Result := CallValue(A, VUndefined, nil, 0, R);
+          AsyncCtx := RootAt(TempTop - 1);
+          PopRoots(1);
+          if not Result then Exit(False);   { reported like an uncaught exception }
+        end;
     end;
   end;
   JobHead := 0;
@@ -1309,7 +1357,7 @@ end;
 function QueueMicrotask(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
 begin
   if not IsCallable(Arg(Args, Argc, 1)) then Exit(ThrowTypeError('queueMicrotask argument must be a function'));
-  EnqueueJob(jkCallback, Args[1], VUndefined, VUndefined);
+  EnqueueJob(jkCallback, Args[1], AsyncCtx, VUndefined);
   Res := VUndefined;
   Result := True;
 end;
@@ -1318,6 +1366,12 @@ procedure InitPromise;
 var Q: PValueArray; I: Integer;
 begin
   AddRoot(@PromiseProto); AddRoot(@PromiseCtor); AddRoot(@ThenFn); AddRoot(@Jobs); AddRoot(@Scratch);
+  if not AsyncCtxRooted then
+  begin
+    AddRoot(@AsyncCtx);
+    AsyncCtx := VUndefined;
+    AsyncCtxRooted := True;
+  end;
   AtomThen := AtomOf('then');
   AtomResolve := AtomOf('resolve');
   RealmVals([@PromiseProto, @PromiseCtor, @ThenFn]);
@@ -1380,7 +1434,7 @@ end;
 
 procedure EnqueueCallback(F: TValue);
 begin
-  EnqueueJob(jkCallback, F, VUndefined, VUndefined);
+  EnqueueJob(jkCallback, F, AsyncCtx, VUndefined);
 end;
 
 procedure ResolvePendingPromise(P, V: TValue);

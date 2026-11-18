@@ -1,8 +1,8 @@
 // The CLI host's globals for G2 (docs/built-ins.md): the Goccia object, and the global object as the CLIs leave it.
-// G2.HostAPI calls this function once per realm with the global object, the host's natives (n), the build facts as
-// JSON, and whether the host runs tests and allows ShadowRealm; it returns the Goccia object, which the host binds as
+// G2.HostAPI calls this function once per realm with the global object, the host's natives (n), the preludes'
+// shared internals, the build facts as JSON, and whether the host runs tests and allows ShadowRealm; it returns the Goccia object, which the host binds as
 // the const Goccia.
-(function (G, n, infoJson, testMode, shadowRealm) {
+(function (G, n, shared, infoJson, testMode, shadowRealm) {
   'use strict';
   const gc = n.gc, gcBytes = n.gcBytes, gcMaxBytes = n.gcMaxBytes;
   const defineProperty = Object.defineProperty;
@@ -39,8 +39,17 @@
   getter(gc, 'suggestedMaxBytes', gcMaxBytes);
   getter(gc, 'bytesAllocated', gcBytes);
 
-  const runtimeGlobals = [];
+  // the names the host's runtime extensions install, in their order; the preludes after this one add theirs
+  const runtimeGlobals = shared.runtimeGlobals;
   if (testMode) runtimeGlobals.push('TestAssertions');
+  // the test runner's vitest compatibility shim, over goccia:test and goccia:timers
+  if (testMode) shared.hostModules.vitest = () => n.vitestSource();
+
+  // performance.timeOrigin: the epoch time the realm started at
+  if (typeof G.performance === 'object' && G.performance !== null && !('timeOrigin' in G.performance)) {
+    const origin = n.realNow() - G.performance.now();
+    Object.defineProperty(G.performance, 'timeOrigin', { get: Object.getOwnPropertyDescriptor({ get timeOrigin() { return origin; } }, 'timeOrigin').get, enumerable: true, configurable: true });
+  }
 
   const Goccia = {
     version: info.version,

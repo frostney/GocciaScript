@@ -226,8 +226,9 @@ begin
 end;
 
 function Perf_Now(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var TS: TTimeSpec;
+var TS: TTimeSpec; Ms: Double;
 begin
+  if MonoOverride(Ms) then begin Res := MkDouble(Ms); Exit(True); end;
   clock_gettime(CLOCK_MONOTONIC, @TS);
   Res := MkDouble(TS.tv_sec * 1000.0 + TS.tv_nsec / 1e6);
   Result := True;
