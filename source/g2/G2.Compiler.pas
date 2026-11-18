@@ -1157,6 +1157,8 @@ begin
   CheckIdent(N);
   I := S.Find(N);
   if I >= 0 then Exit(S.Bindings[I].Reg);
+  { each binding takes a register: GocciaScript's limit, worded as its CLIs word it }
+  if FS.FreeReg + 1 >= NO_REG then raise ECompileError.Create('Too many local bindings in one function: more than 65535');
   Result := AllocReg;
   S.Add(N, Result, IsConst);
   if DeclaringLexical then
@@ -5850,6 +5852,8 @@ end;
 function TCompiler.CompileArgs(Args: TObjectList<TGocciaExpression>; Base: Integer; out Spread: Boolean): Integer;
 var I, R: Integer;
 begin
+  { GocciaScript's limit on one call's arguments, worded as its CLIs word it }
+  if Args.Count > 65535 then raise EEarlySyntaxError.Create('Too many arguments in one call: more than 65535');
   Spread := False;
   for I := 0 to Args.Count - 1 do
     if Args[I] is TGocciaSpreadExpression then Spread := True;
@@ -6578,6 +6582,9 @@ end;
 procedure TCompiler.CompileTagged(E: TGocciaTaggedTemplateExpression; Dest: Integer);
 var Base, I, Strs, Raw, V: Integer; M: TGocciaMemberExpression; K, Site, JMade: Integer;
 begin
+  { the tag's call passes the strings and one argument per substitution }
+  if E.Expressions.Count > 65534 then
+    raise EEarlySyntaxError.Create('Too many substitutions in one tagged template: more than 65534');
   Base := FS.FreeReg;
   AllocRegs(2);
   if E.Tag is TGocciaMemberExpression then
