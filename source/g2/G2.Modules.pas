@@ -248,7 +248,7 @@ begin
   Path := Copy(Key, 1, P - 1);
   AType := Copy(Key, P + 1, MaxInt);
   if (AType <> 'json') and (AType <> 'text') and (AType <> 'bytes') then
-    Exit(ThrowError('SyntaxError', 'Unsupported module type ''' + AType + ''''));
+    Exit(ThrowTypeError('Unsupported module type ''' + AType + ''''));
   if AType = 'bytes' then
   begin
     if not ReadBytes(Path, B) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
@@ -1211,9 +1211,16 @@ begin
     PopRoots(1);
     Exit(True);
   end;
+  { an import attribute type the host has no module for: a TypeError, whatever the phase }
+  if (AType <> '') and (AType <> 'json') and (AType <> 'text') and (AType <> 'bytes') then
+  begin
+    ThrowTypeError('Unsupported module type ''' + AType + '''');
+    PopRoots(1);
+    Exit(Reject);
+  end;
   if Ph = 1 then
   begin
-    ThrowError('SyntaxError', 'A source text module has no source phase representation');
+    ThrowError('SyntaxError', 'Module source is not available for "' + StrToUnicode(StrOf(RootAt(TempTop - 1))) + '"');
     PopRoots(1);
     Exit(Reject);
   end;
