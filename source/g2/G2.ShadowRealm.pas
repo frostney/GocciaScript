@@ -160,7 +160,8 @@ end;
 
 { 3.4.1 ShadowRealm.prototype.evaluate ( sourceText ): PerformShadowRealmEval }
 function SR_Evaluate(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var EvalRealm, CallerRealm: Integer; Src, Clo, V: TValue; T: PFuncTemplate; Err: UnicodeString; Ok: Boolean;
+var EvalRealm, CallerRealm: Integer; Src, Clo, V: TValue; T: PFuncTemplate; Err: UnicodeString; Ok, Compiled: Boolean;
+  SavedProf, Prof: TLangProfile;
 begin
   if not ThisRealm(Args[0], EvalRealm) then Exit(False);
   Src := Arg(Args, Argc, 1);
@@ -169,7 +170,18 @@ begin
   { compiled in the evaluation realm as an indirect eval's code (PerformShadowRealmEval): its vars are the realm's
     globals, its lexical declarations a new environment of each evaluation }
   SwitchRealm(EvalRealm);
-  if not ParseAndCompile(StrToUnicode(StrOf(Src)), '<ShadowRealm>', True, T, Err, 2) then
+  { non-strict unless the source says "use strict", whatever the profile makes other code: its vars and functions
+    stay the realm's }
+  SavedProf := ActiveProfile;
+  Prof := SavedProf;
+  Prof.NonStrict := True;
+  SetActiveProfile(Prof);
+  try
+    Compiled := ParseAndCompile(StrToUnicode(StrOf(Src)), '<ShadowRealm>', True, T, Err, 2);
+  finally
+    SetActiveProfile(SavedProf);
+  end;
+  if not Compiled then
   begin
     SwitchRealm(CallerRealm);
     Exit(ThrowError('SyntaxError', Err));

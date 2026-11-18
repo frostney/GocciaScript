@@ -3130,7 +3130,7 @@ procedure TCompiler.CompileUsingList(L: TList<TGocciaASTNode>; Stmts: TObjectLis
 var Cap, ExcReg, Outer, J, I, SavedCap: Integer; Async: Boolean;
 begin
   { 16.1.1 / 19.2.1.1: using is a SyntaxError at the top level of a Script or of eval code (modules allow it) }
-  if Body and ((FS.Parent = nil) or FS.Parent.IsEvalOuter) and ((Goal in [1, 2]) or IsEvalCode) then raise EEarlySyntaxError.Create('using declarations are not allowed at the top level of a script');
+  if Body and ((FS.Parent = nil) or FS.Parent.IsEvalOuter) and ((Goal in [1, 2]) or IsEvalCode) then raise EEarlySyntaxError.Create('Using declarations are not allowed at the top level of a script');
   Async := False;
   if Assigned(L) then
   begin

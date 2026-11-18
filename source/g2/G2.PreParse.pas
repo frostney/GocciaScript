@@ -2665,7 +2665,7 @@ end;
 procedure TPreParser.ParseUsing(IsAwait: Boolean);
 begin
   case Scopes[ScopeTop - 1].Kind of
-    skScript: ErrHere('using declarations are not allowed at the top level of a script');
+    skScript: ErrHere('Using declarations are not allowed at the top level of a script');
     skSwitch: ErrHere('using declarations are not allowed directly in a switch case clause');
   end;
   while True do
