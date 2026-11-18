@@ -2410,7 +2410,12 @@ begin
     else if (N is TGocciaDestructuringDeclaration) and not TGocciaDestructuringDeclaration(N).IsVar then
       PatternNames(TGocciaDestructuringDeclaration(N).Pattern, Out_)
     else if N is TGocciaClassDeclaration then Out_.Add(TGocciaClassDeclaration(N).ClassDefinition.Name)
-    else if N is TGocciaEnumDeclaration then Out_.Add(TGocciaEnumDeclaration(N).Name);
+    else if N is TGocciaEnumDeclaration then Out_.Add(TGocciaEnumDeclaration(N).Name)
+    { a default export that declares a named class: the name is a lexical binding of the module (16.2.3.7),
+      which its hoisted functions capture }
+    else if (N is TGocciaExportDefaultDeclaration) and TGocciaExportDefaultDeclaration(N).IsDirectDeclaration and
+            (TGocciaExportDefaultDeclaration(N).Expression is TGocciaClassExpression) then
+      Out_.Add(TGocciaExportDefaultDeclaration(N).LocalName);
   end;
 end;
 
@@ -2981,6 +2986,14 @@ begin
       { an enum declaration: a lexical binding, uninitialized until the declaration runs }
       DeclaringLexical := True;
       DeclareLocal(TGocciaEnumDeclaration(N).Name, False);
+    end
+    else if (N is TGocciaExportDefaultDeclaration) and TGocciaExportDefaultDeclaration(N).IsDirectDeclaration and
+            (TGocciaExportDefaultDeclaration(N).Expression is TGocciaClassExpression) then
+    begin
+      { a default export that declares a named class: a lexical binding of the module (16.2.3.7) from the start,
+        so the module's hoisted functions capture it }
+      DeclaringLexical := True;
+      DeclareLocal(TGocciaExportDefaultDeclaration(N).LocalName, False);
     end
     else if ((HoistMask and Cardinal(16)) <> 0) then
     begin
