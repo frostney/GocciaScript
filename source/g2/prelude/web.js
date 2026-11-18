@@ -26,8 +26,13 @@
   class DOMException {
     #name;
     constructor(message = '', name = 'Error') {
-      defineProperty(this, 'message', { value: String(message), writable: true, enumerable: false, configurable: true });
       this.#name = String(name);
+      // GocciaScript keeps name, message and code as the instance's own enumerable fields (so deep equality tells
+      // DOMExceptions apart), besides the prototype's getters
+      const code = CODES[this.#name];
+      defineProperty(this, 'name', { value: this.#name, writable: true, enumerable: true, configurable: true });
+      defineProperty(this, 'message', { value: String(message), writable: true, enumerable: true, configurable: true });
+      defineProperty(this, 'code', { value: code === undefined ? 0 : code, writable: true, enumerable: true, configurable: true });
       const stack = new ErrorCtor(String(message)).stack;
       if (typeof stack === 'string')
         defineProperty(this, 'stack', { value: stack, writable: true, enumerable: false, configurable: true });

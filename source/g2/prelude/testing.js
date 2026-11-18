@@ -7,6 +7,10 @@
 // registered suites and passes done their result as JSON, or undefined and the error that stopped them.
 (function (global, shared) {
   'use strict';
+  // the intrinsics as the realm made them: a script's top-level declarations can replace these globals later
+  // (function Object() {} in compat-function code) while the library keeps working
+  const { Object, Array, Error, TypeError, RangeError, SyntaxError, String, Number, Boolean, Symbol, BigInt, RegExp,
+    Promise, Math, Set, Map, JSON, Reflect, Function, Proxy, Uint8Array } = global;
   const hasOwn = Object.prototype.hasOwnProperty;
   const propertyIsEnumerable = Object.prototype.propertyIsEnumerable;
   const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
