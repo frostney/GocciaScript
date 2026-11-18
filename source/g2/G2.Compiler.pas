@@ -96,6 +96,19 @@ type
   end;
 
 type
+  { finds a write of the identifier Name by the expression itself (an update, assignment or destructuring
+    assignment; not one in a nested function, which runs only when called) }
+  TWriteScan = class(TGocciaASTChildVisitor)
+  public
+    Name: string;
+    Found: Boolean;
+    procedure VisitChild(const ANode: TGocciaASTNode); override;
+    procedure EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+      const AFlags: TGocciaASTPartFlags); override;
+    procedure LeavePart; override;
+  end;
+
+type
   { finds a yield or await expression (one inside a nested function too: conservative) }
   TSuspendScan = class(TGocciaASTChildVisitor)
   public
@@ -124,6 +137,47 @@ end;
 
 procedure TSuspendScan.LeavePart;
 begin
+end;
+
+procedure TWriteScan.VisitChild(const ANode: TGocciaASTNode);
+begin
+  if (ANode = nil) or Found then Exit;
+  if (ANode is TGocciaFunctionExpression) or (ANode is TGocciaArrowFunctionExpression) or
+     (ANode is TGocciaObjectMethodDefinition) or (ANode is TGocciaClassExpression) or
+     (ANode is TGocciaGetterExpression) or (ANode is TGocciaSetterExpression) then Exit;
+  if ((ANode is TGocciaIncrementExpression) and (TGocciaIncrementExpression(ANode).Operand is TGocciaIdentifierExpression)
+      and (TGocciaIdentifierExpression(TGocciaIncrementExpression(ANode).Operand).Name = Name)) or
+     ((ANode is TGocciaAssignmentExpression) and (TGocciaAssignmentExpression(ANode).Name = Name)) or
+     ((ANode is TGocciaCompoundAssignmentExpression) and (TGocciaCompoundAssignmentExpression(ANode).Name = Name)) or
+     (ANode is TGocciaDestructuringAssignmentExpression) then
+  begin
+    Found := True;
+    Exit;
+  end;
+  ANode.ForEachChild(Self);
+end;
+
+procedure TWriteScan.EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+  const AFlags: TGocciaASTPartFlags);
+begin
+end;
+
+procedure TWriteScan.LeavePart;
+begin
+end;
+
+{ whether E itself writes the identifier N (TWriteScan) }
+function WritesName(E: TGocciaASTNode; const N: string): Boolean;
+var Sc: TWriteScan;
+begin
+  Sc := TWriteScan.Create;
+  try
+    Sc.Name := N;
+    Sc.VisitChild(E);
+    Result := Sc.Found;
+  finally
+    Sc.Free;
+  end;
 end;
 
 procedure TClosureScan.VisitChild(const ANode: TGocciaASTNode);
@@ -3782,19 +3836,25 @@ end;
   (Depth scopes), so the scopes the exit leaves are hidden while it compiles; their registers stay allocated, so the
   value on its way out and their locals are kept }
 procedure TCompiler.FinallyAtDepth(B: TGocciaASTNode; Depth: Integer);
-var Hidden: array of TScope; J, N, SavedCount: Integer;
+var Hidden: array of TScope; J, N, SavedCount, SavedWith: Integer;
 begin
   SavedCount := FS.ScopeCount;
   N := SavedCount - Depth;
   if N <= 0 then begin FinallyStmt(B); Exit; end;
   SetLength(Hidden, N);
   for J := 0 to N - 1 do Hidden[J] := FS.Scopes[Depth + J];
+  { the with statements inside the try statement are left too: their object environments are hidden with their
+    scopes }
+  SavedWith := WithCount;
+  while (WithCount > 0) and (WithFuncs[WithCount - 1] = FS) and (WithKinds[WithCount - 1] = 0) and
+        (WithScopes[WithCount - 1] > Depth) do Dec(WithCount);
   FS.ScopeCount := Depth;
   try
     FinallyStmt(B);
   finally
     for J := 0 to N - 1 do FS.Scopes[Depth + J] := Hidden[J];
     FS.ScopeCount := SavedCount;
+    WithCount := SavedWith;
   end;
 end;
 
@@ -4058,6 +4118,14 @@ begin
       else if V.Initializer is TGocciaClassExpression then
       begin
         CompileClass(TGocciaClassExpression(V.Initializer).ClassDefinition, R, V.Name);
+      end
+      else if D.IsVar and WritesName(V.Initializer, V.Name) then
+      begin
+        { a var's initializer can update the var itself (var x = x++): its value goes to the binding after it ran }
+        T := FS.FreeReg; AllocReg;
+        ExprTo(V.Initializer, T);
+        Emit(Ins(opMov, R, T, 0));
+        FreeTo(T);
       end
       else
         ExprTo(V.Initializer, R);
@@ -6409,6 +6477,9 @@ begin
     else
       Emit(Ins(opGetProp, Base, Base + 1, NewIC(M.PropertyName)));
   end
+  else if (E.Tag is TGocciaIdentifierExpression) and (WithCount > 0) then
+    { a name a with object holds: that object is this (as for a call, 13.3.6.1 EvaluateCall's reference) }
+    LoadIdentThis(TGocciaIdentifierExpression(E.Tag).Name, Base, Base + 1, True)
   else
   begin
     ExprTo(E.Tag, Base);
