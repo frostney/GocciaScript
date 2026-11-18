@@ -2232,8 +2232,10 @@ function SetVS(Obj: TValue; Key: PStr; V: TValue; Strict: Boolean): Boolean;
 var W: TValue; Ok: Boolean;
 begin
   if IsObject(Obj) then Exit(SetOnObjectS(Obj, Key, V, Strict));
+  if Obj = VNull then
+    Exit(ThrowTypeError('Cannot set properties of null (setting ''' + StrToUnicode(Key) + ''')'));
   if IsNullish(Obj) then
-    Exit(ThrowTypeError('Cannot set properties of ' + TypeOfStr(Obj) + ' (setting ''' + StrToUnicode(Key) + ''')'));
+    Exit(ThrowTypeError('Cannot set properties of undefined (setting ''' + StrToUnicode(Key) + ''')'));
   { 6.2.5.6 PutValue step 5.b: ToObject(base).[[Set]](name, value, base) (a setter or a proxy on the prototype
     chain sees the primitive as its receiver; nothing can be created on it) }
   PushRoot(V); PushRoot(Obj);
@@ -2243,7 +2245,7 @@ begin
   Obj := RootAt(TempTop - 1);
   PopRoots(2);
   if Result and not Ok and Strict then
-    Result := ThrowTypeError('Cannot create property ''' + StrToUnicode(Key) + ''' on ' + TypeOfStr(Obj));
+    Result := ThrowTypeError('Cannot set property on non-object');
 end;
 
 function SetVT(Obj: TValue; Key: PStr; V: TValue): Boolean;
@@ -2254,6 +2256,8 @@ end;
 function SetV(Obj: TValue; Key: PStr; V: TValue): Boolean;
 begin
   if IsObject(Obj) then Exit(SetOnObject(Obj, Key, V));
+  if Obj = VNull then
+    Exit(ThrowTypeError('Cannot set properties of null (setting ''' + StrToUnicode(Key) + ''')'));
   if IsNullish(Obj) then
     Exit(ThrowTypeError('Cannot set properties of undefined (setting ''' + StrToUnicode(Key) + ''')'));
   Result := True;
@@ -2284,9 +2288,11 @@ end;
 function ThrowNullishBase(Obj, Key: TValue; Setting: Boolean): Boolean; noinline;
 var N, T: UnicodeString; V: TValue;
 begin
-  N := '';
-  if IsString(Key) then N := StrToUnicode(StrOf(Key))
-  else if IsNumber(Key) and ToStringV(Key, V) then N := StrToUnicode(StrOf(V));
+  { only a key that is already a primitive is named: ToPropertyKey has not run (and an object's would run user
+    code) }
+  if IsObject(Key) then N := '<computed>'
+  else if IsString(Key) then N := StrToUnicode(StrOf(Key))
+  else N := ValueDisplayText(Key);
   if Obj = VNull then T := 'null' else T := 'undefined';
   if Setting then
     Result := ThrowTypeError('Cannot set properties of ' + T + ' (setting ''' + N + ''')')
@@ -3403,11 +3409,23 @@ end;
 
 { 10.2.1 [[Call]] step 2 of a class constructor: the TypeError of its realm }
 function ThrowClassCall(F: PObj): Boolean;
-var R0: Integer;
+var R0, Slot: Integer; Nm: UnicodeString; T: PFuncTemplate;
 begin
+  { the name the class was created with: its template's, or the one SetFunctionName gave it (a computed key)
+    while its name property is still a data property holding a string }
+  Nm := '';
+  T := PFuncTemplate(F^.Native);
+  if (T <> nil) and (T^.Name <> nil) and (T^.Name^.Len > 0) then Nm := StrToUnicode(T^.Name)
+  else
+  begin
+    Slot := ShapeLookup(F^.Shape, AtomName);
+    if (Slot >= 0) and ((F^.Shape^.PFlags[Slot] and pfAccessor) = 0) and IsString(GetSlot(F, Slot)) then
+      Nm := StrToUnicode(StrOf(GetSlot(F, Slot)));
+  end;
   R0 := CurRealm;
   if MultiRealm then SwitchRealm(FnRealm(F));
-  Result := ThrowTypeError('Class constructor cannot be invoked without ''new''');
+  if Nm <> '' then Nm := Nm + ' ';
+  Result := ThrowTypeError('Class constructor ' + Nm + 'cannot be invoked without ''new''');
   SwitchRealm(R0);
 end;
 

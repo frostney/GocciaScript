@@ -161,7 +161,7 @@
   // 24.1.1.2 AddEntriesFromIterable / the WeakSet constructor's loop
   function addEntries(target, iterable, adder, pairs) {
     var m = getMethod(iterable, SymIterator);
-    if (m === undefined) throw new TypeErr("object is not iterable");
+    if (m === undefined) throw new TypeErr((pairs ? "WeakMap" : "WeakSet") + " constructor requires an iterable");
     var it = apply(m, iterable, []);
     if (!isObject(it)) throw new TypeErr("the iterator is not an object");
     var next = it.next;
