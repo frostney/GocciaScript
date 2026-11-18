@@ -31,51 +31,61 @@
 
   // ---------------- Blob ----------------
   let blobBytes;   // a Blob's bytes, for the other interfaces
+  // Web IDL: the arguments of new Blob(blobParts, options) convert, the parts first, before the new object is made
+  // (NewTarget's prototype read) and before the constructor steps copy any buffer's bytes
+  const BLOB_INIT = {};
+  function convertBlobArgs(blobParts, options) {
+    // the parts convert first, then the options (Web IDL argument order); buffer bytes are copied by the
+    // constructor, after every part has converted
+    const pieces = [];
+    if (blobParts !== undefined) {
+      if (!isObject(blobParts) || typeof blobParts[Symbol.iterator] !== 'function')
+        throw new TypeError("Failed to construct 'Blob': The provided value cannot be converted to a sequence.");
+      for (const part of blobParts) {
+        const partBytes = blobBytes(part);
+        if (partBytes !== undefined) pieces.push({ blob: partBytes });
+        else if (isObject(part) && isAB(part)) {
+          if (apply(abResizable, part, [])) throw new TypeError("Failed to construct 'Blob': The provided ArrayBuffer value must not be resizable.");
+          pieces.push({ buffer: part });
+        } else if (isObject(part) && ArrayBuffer.isView(part)) {
+          if (isSAB(part.buffer)) throw new TypeError("Failed to construct 'Blob': The provided ArrayBufferView value must not be shared.");
+          if (isAB(part.buffer) && apply(abResizable, part.buffer, [])) throw new TypeError("Failed to construct 'Blob': The provided ArrayBufferView value must not be resizable.");
+          pieces.push({ view: part });
+        } else {
+          if (typeof part === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
+          pieces.push({ string: toWellFormed(String(part)) });
+        }
+      }
+    }
+    let type = '', native = false;
+    if (options !== undefined && options !== null) {
+      if (!isObject(options)) throw new TypeError("Failed to construct 'Blob': The provided value is not of type 'BlobPropertyBag'.");
+      const endings = options.endings;
+      if (endings !== undefined) {
+        const e = String(endings);
+        if (e !== 'transparent' && e !== 'native')
+          throw new TypeError(`Failed to construct 'Blob': The provided value '${e}' is not a valid enum value of type EndingType.`);
+        native = e === 'native';
+      }
+      const t = options.type;
+      if (t !== undefined) type = String(t);
+    }
+    if (/[^ -~]/.test(type)) type = '';
+    else type = type.toLowerCase();
+    return { pieces, type, native };
+  }
   class Blob {
     #bytes;
     #type;
-    constructor(blobParts = undefined, options = undefined) {
-      // the parts convert first, then the options (Web IDL argument order); buffer bytes are copied at the end,
-      // after every part has converted
-      const pieces = [];
-      if (blobParts !== undefined) {
-        if (!isObject(blobParts) || typeof blobParts[Symbol.iterator] !== 'function')
-          throw new TypeError("Failed to construct 'Blob': The provided value cannot be converted to a sequence.");
-        for (const part of blobParts) {
-          if (isObject(part) && #bytes in part) pieces.push({ blob: part });
-          else if (isObject(part) && isAB(part)) {
-            if (apply(abResizable, part, [])) throw new TypeError("Failed to construct 'Blob': The provided ArrayBuffer value must not be resizable.");
-            pieces.push({ buffer: part });
-          } else if (isObject(part) && ArrayBuffer.isView(part)) {
-            if (isSAB(part.buffer)) throw new TypeError("Failed to construct 'Blob': The provided ArrayBufferView value must not be shared.");
-            if (isAB(part.buffer) && apply(abResizable, part.buffer, [])) throw new TypeError("Failed to construct 'Blob': The provided ArrayBufferView value must not be resizable.");
-            pieces.push({ view: part });
-          } else {
-            if (typeof part === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
-            pieces.push({ string: toWellFormed(String(part)) });
-          }
-        }
-      }
-      let type = '', native = false;
-      if (options !== undefined && options !== null) {
-        if (!isObject(options)) throw new TypeError("Failed to construct 'Blob': The provided value is not of type 'BlobPropertyBag'.");
-        const endings = options.endings;
-        if (endings !== undefined) {
-          const e = String(endings);
-          if (e !== 'transparent' && e !== 'native')
-            throw new TypeError(`Failed to construct 'Blob': The provided value '${e}' is not a valid enum value of type EndingType.`);
-          native = e === 'native';
-        }
-        const t = options.type;
-        if (t !== undefined) type = String(t);
-      }
-      if (/[^ -~]/.test(type)) type = '';
-      else type = type.toLowerCase();
+    constructor(token = undefined, pieces = undefined, type = undefined, native = undefined) {
+      // public construction comes through BlobCtor with the arguments converted; the prelude's own calls convert
+      // here
+      if (token !== BLOB_INIT) ({ pieces, type, native } = convertBlobArgs(token, pieces));
       const chunks = [];
       let size = 0;
       for (const p of pieces) {
         let c;
-        if (p.blob !== undefined) c = p.blob.#bytes;
+        if (p.blob !== undefined) c = p.blob;
         else if (p.buffer !== undefined) c = apply(abDetached, p.buffer, []) ? new Uint8Array(0) : new Uint8Array(p.buffer.slice(0));
         else if (p.view !== undefined) {
           const v = p.view;
@@ -332,7 +342,16 @@
   webIDL(Response, ['status', 'statusText', 'ok', 'headers', 'type', 'url', 'redirected', 'bodyUsed', 'body', 'text',
     'json', 'arrayBuffer', 'bytes', 'blob', 'clone']);
 
-  hidden(G, 'Blob', Blob);
+  // the global Blob: its [[Construct]] converts the arguments, then Blob's own makes the object and copies the bytes
+  const reflectConstruct = Reflect.construct;
+  const BlobCtor = new Proxy(Blob, {
+    construct(target, args, newTarget) {
+      const c = convertBlobArgs(args.length > 0 ? args[0] : undefined, args.length > 1 ? args[1] : undefined);
+      return reflectConstruct(target, [BLOB_INIT, c.pieces, c.type, c.native], newTarget);
+    },
+  });
+  hidden(Blob.prototype, 'constructor', BlobCtor);
+  hidden(G, 'Blob', BlobCtor);
   hidden(G, 'Headers', Headers);
   hidden(G, 'Response', Response);
   shared.Blob = Blob;

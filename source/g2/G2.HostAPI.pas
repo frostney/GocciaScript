@@ -325,9 +325,10 @@ begin
   Result := True;
 end;
 
-{ viewInfo(view): [length-tracking, out of bounds] of a typed array (a DataView: [length-tracking, false]) }
+{ viewInfo(view): [length-tracking, out of bounds] of a typed array or a DataView (25.3.1.3 IsViewOutOfBounds:
+  the DataView getters answer +0 for one out of bounds, so its clone asks here) }
 function Host_ViewInfo(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var O: PObj; Tracking, OOB: Boolean;
+var O, B: PObj; Tracking, OOB: Boolean; BL: Int64;
 begin
   Tracking := False; OOB := False;
   if (Argc >= 1) and IsObject(Args[1]) then
@@ -338,7 +339,17 @@ begin
       Tracking := O^.Aux2 = MkInt(-1);
       OOB := TAOutOfBounds(O);
     end
-    else if O^.OKind = okDataView then Tracking := O^.Aux2 = MkInt(-1);
+    else if O^.OKind = okDataView then
+    begin
+      Tracking := O^.Aux2 = MkInt(-1);
+      B := ObjOf(O^.Aux1);
+      if BufferDetached(B) then OOB := True
+      else
+      begin
+        BL := BufferLen(B);
+        if Tracking then OOB := O^.Pad > BL else OOB := O^.Pad + IntOf(O^.Aux2) > BL;
+      end;
+    end;
   end;
   PushRoot(MkPtr(NewArray(0, 2)));
   PushAt(TempTop - 1, MkBool(Tracking));

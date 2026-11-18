@@ -160,6 +160,8 @@
       }
     };
     scan(G);
+    // the global Blob is a Proxy over fetch.js's class (its [[Construct]] converts the arguments first)
+    if (typeof shared.Blob === 'function') add(shared.Blob.prototype);
     for (const ns of ['Temporal', 'Intl']) if (G[ns] !== null && typeof G[ns] === 'object') scan(G[ns]);
     add(getPrototypeOf([][Symbol.iterator]()));
     add(getPrototypeOf(new Map().entries()));
@@ -228,10 +230,10 @@
         return out;
       }
       if (isDV(v)) {
-        let len;
-        try { len = apply(dvLength, v, []); }
-        catch { throw new DOMException('DataView is out of bounds of its ArrayBuffer and could not be cloned.', 'DataCloneError'); }
-        const tracking = n.viewInfo(v)[0];
+        const dvInfo = n.viewInfo(v);
+        if (dvInfo[1]) throw new DOMException('DataView is out of bounds of its ArrayBuffer and could not be cloned.', 'DataCloneError');
+        const len = apply(dvLength, v, []);
+        const tracking = dvInfo[0];
         const b = clone(apply(dvBuffer, v, []));
         out = tracking ? new DataView(b, apply(dvOffset, v, [])) : new DataView(b, apply(dvOffset, v, []), len);
         memory.set(v, out);
@@ -381,6 +383,8 @@
       if (buffer !== undefined && resizableBuffer(buffer))
         throw new TypeError("Failed to execute 'decode' on 'TextDecoder': The provided ArrayBufferView value must not be resizable.");
       if (input === undefined) bytes = new Uint8Array(0);
+      // a detached buffer, like a view of one, decodes as nothing
+      else if (isAB(input) && apply(abDetached, input, [])) bytes = new Uint8Array(0);
       else if (isAB(input) || isSAB(input)) bytes = new Uint8Array(input);
       else if (ArrayBuffer.isView(input)) {
         // a view of a detached buffer decodes as nothing

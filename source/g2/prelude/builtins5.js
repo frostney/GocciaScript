@@ -462,8 +462,11 @@
   function validateU8(ta) {
     if (apply(taTag, ta, []) !== "Uint8Array") throw new TypeErr("not a Uint8Array");
   }
+  // ValidateTypedArrayBounds then TypedArrayLength: a view that is detached or past the end of its shrunk buffer
+  // is a TypeError (%TypedArray%.prototype.at validates it so, and reads nothing else)
+  var taAt = TAP.at;
   function boundedLength(ta) {
-    if (apply(abDetached, apply(taBuffer, ta, []), [])) throw new TypeErr("the Uint8Array's buffer is detached");
+    apply(taAt, ta, [0]);
     return apply(taLength, ta, []);
   }
   // 14.? GetOptionsObject

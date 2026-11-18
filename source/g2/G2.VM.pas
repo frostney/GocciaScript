@@ -1944,10 +1944,25 @@ begin
 end;
 
 { 7.1.14 StringToBigInt (decimal, or 0x / 0o / 0b without a sign); False: not a StringIntegerLiteral }
-function StringToBigIntV(const S0: UnicodeString; var B: TValue): Boolean;
-var S: UnicodeString; I, Radix, D: Integer; Neg: Boolean; R: TBigInteger;
+{ 7.1.4.1.1 StrWhiteSpaceChar: WhiteSpace or LineTerminator (Pascal's Trim takes every control character and
+  none above U+0020) }
+function IsStrWhiteSpace(C: WideChar): Boolean; inline;
 begin
-  S := Trim(S0);
+  case Ord(C) of
+    9..13, 32, $A0, $1680, $2000..$200A, $2028, $2029, $202F, $205F, $3000, $FEFF: Result := True;
+  else
+    Result := False;
+  end;
+end;
+
+function StringToBigIntV(const S0: UnicodeString; var B: TValue): Boolean;
+var S: UnicodeString; I, Radix, D, L, H: Integer; Neg: Boolean; R: TBigInteger;
+begin
+  L := 1;
+  H := Length(S0);
+  while (L <= H) and IsStrWhiteSpace(S0[L]) do Inc(L);
+  while (H >= L) and IsStrWhiteSpace(S0[H]) do Dec(H);
+  S := Copy(S0, L, H - L + 1);
   Result := False;
   Neg := False;
   Radix := 10;

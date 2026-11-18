@@ -745,7 +745,14 @@ begin
   begin
     Sc := C^.M;
     Ok := Sc.Exec(StrChars(S), S^.Len, St, C^.Sticky);
-    if Sc.Failed then begin PopRoots(1); Exit(ThrowError('SyntaxError', Sc.ErrorMessage)); end;
+    if Sc.Failed then
+    begin
+      PopRoots(1);
+      { the spec's loop has set lastIndex to where this attempt starts (the last match's end, advanced past an
+        empty match); the attempt that throws leaves it there }
+      if not SetLastIndex(Args[1], St) then Exit(False);
+      Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
+    end;
     if not Ok then Break;
     RecordLegacy(Args[1], Sc, StrOf(Args[0]));
     Sc.TryGetGroup(0, St, En);
@@ -913,7 +920,13 @@ begin
     S := StrOf(Args[0]);
     Sc := C^.M;
     Ok := Sc.Exec(StrChars(S), S^.Len, St, C^.Sticky);
-    if Sc.Failed then Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
+    if Sc.Failed then
+    begin
+      { a global search: the spec's loop has set lastIndex to where this attempt starts, and the attempt that
+        throws leaves it there }
+      if Global and not SetLastIndex(Args[1], St) then Exit(False);
+      Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
+    end;
     if not Ok then Break;
     RecordLegacy(Args[1], Sc, StrOf(Args[0]));
     if CapsLen < (NM + 1) * (N + 1) * 2 then
