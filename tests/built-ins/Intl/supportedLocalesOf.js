@@ -13,7 +13,7 @@ describe.runIf(isIntl)("Intl constructor supportedLocalesOf", () => {
     Intl.DisplayNames,
     Intl.DurationFormat,
     Intl.ListFormat,
-    Intl.Locale,
+    // Intl.Locale has no supportedLocalesOf (ECMA-402 15.2 lists only its prototype)
     Intl.NumberFormat,
     Intl.PluralRules,
     Intl.RelativeTimeFormat,

@@ -21,22 +21,29 @@ describe("TypedArray over an immutable ArrayBuffer", () => {
     expect(u8.length).toBe(4);
   });
 
-  test("indexed writes are silently ignored", () => {
+  // Immutable ArrayBuffer proposal, 10.4.5.5 [[Set]]: a canonical numeric key
+  // of a typed array over an immutable buffer returns false at once, so strict
+  // code (all GocciaScript code) throws a TypeError from PutValue.
+  test("indexed writes throw a TypeError and leave the element", () => {
     const u8 = immutableU8();
-    u8[0] = 99;
+    expect(() => {
+      u8[0] = 99;
+    }).toThrow(TypeError);
     expect(u8[0]).toBe(10);
   });
 
-  test("coerces the value before skipping the immutable write", () => {
+  test("refuses the write before coercing the value", () => {
     const u8 = immutableU8();
     let coerced = false;
-    u8[0] = {
-      valueOf() {
-        coerced = true;
-        return 99;
-      },
-    };
-    expect(coerced).toBe(true);
+    expect(() => {
+      u8[0] = {
+        valueOf() {
+          coerced = true;
+          return 99;
+        },
+      };
+    }).toThrow(TypeError);
+    expect(coerced).toBe(false);
     expect(u8[0]).toBe(10);
   });
 

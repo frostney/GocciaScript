@@ -240,10 +240,14 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.round", () => {
     expect(() => d.round({ smallestUnit: "months", relativeTo: {} })).toThrow();
   });
 
-  test("round with relativeTo property bag with invalid date throws", () => {
+  // Temporal 13.19 GetTemporalRelativeToOption: a property bag is read with
+  // InterpretTemporalDateTimeFields(calendar, fields, constrain), so an
+  // out-of-range month or day is clamped, not rejected.
+  test("round with relativeTo property bag with out-of-range fields constrains them", () => {
     const d = Temporal.Duration.from({ years: 1, months: 6 });
-    expect(() => d.round({ smallestUnit: "months", relativeTo: { year: 2024, month: 13, day: 1 } })).toThrow();
-    expect(() => d.round({ smallestUnit: "months", relativeTo: { year: 2024, month: 2, day: 30 } })).toThrow();
+    const round = (relativeTo) => d.round({ smallestUnit: "months", relativeTo }).toString();
+    expect(round({ year: 2024, month: 13, day: 1 })).toBe(round({ year: 2024, month: 12, day: 1 }));
+    expect(round({ year: 2024, month: 2, day: 30 })).toBe(round({ year: 2024, month: 2, day: 29 }));
   });
 });
 

@@ -194,9 +194,13 @@ describe.runIf(isTemporal)("Temporal.Duration.prototype.total", () => {
     expect(() => d.total({ unit: "days", relativeTo: {} })).toThrow();
   });
 
-  test("total() with relativeTo property bag with invalid date throws", () => {
+  // Temporal 13.19 GetTemporalRelativeToOption: a property bag is read with
+  // InterpretTemporalDateTimeFields(calendar, fields, constrain), so an
+  // out-of-range month or day is clamped, not rejected.
+  test("total() with relativeTo property bag with out-of-range fields constrains them", () => {
     const d = Temporal.Duration.from({ months: 1 });
-    expect(() => d.total({ unit: "days", relativeTo: { year: 2024, month: 13, day: 1 } })).toThrow();
-    expect(() => d.total({ unit: "days", relativeTo: { year: 2024, month: 2, day: 30 } })).toThrow();
+    const total = (relativeTo) => d.total({ unit: "days", relativeTo });
+    expect(total({ year: 2024, month: 13, day: 1 })).toBe(total({ year: 2024, month: 12, day: 1 }));
+    expect(total({ year: 2024, month: 2, day: 30 })).toBe(total({ year: 2024, month: 2, day: 29 }));
   });
 });

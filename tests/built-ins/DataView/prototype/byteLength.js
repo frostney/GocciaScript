@@ -39,18 +39,21 @@ describe("get DataView.prototype.byteLength", () => {
     expect(view.byteLength).toBe(99);
   });
 
-  test("throws TypeError for detached buffer", () => {
+  // ECMA-262 main 25.3.4.2 step 5: a view out of bounds, a detached buffer's
+  // included, has byte length +0 (ES2026 threw a TypeError; test262 follows
+  // main).
+  test("returns 0 for a detached buffer", () => {
     const buffer = new ArrayBuffer(8);
     const view = new DataView(buffer);
     buffer.transfer();
-    expect(() => view.byteLength).toThrow(TypeError);
+    expect(view.byteLength).toBe(0);
   });
 
-  test("throws TypeError for out-of-bounds fixed view after resize", () => {
+  test("returns 0 for an out-of-bounds fixed view after resize", () => {
     const buffer = new ArrayBuffer(8, { maxByteLength: 16 });
     const view = new DataView(buffer, 4, 4);
     buffer.resize(6);
-    expect(() => view.byteLength).toThrow(TypeError);
+    expect(view.byteLength).toBe(0);
   });
 
   test("throws TypeError when inherited from a DataView", () => {

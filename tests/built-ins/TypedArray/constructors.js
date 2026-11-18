@@ -223,7 +223,10 @@ describe("TypedArray constructors", () => {
   });
 
   describe("new TypedArray(iterable)", () => {
-    test("Reflect.construct reads iterable source before resolving newTarget prototype", () => {
+    // ECMA-262 23.2.5.1 TypedArray step 6.a: AllocateTypedArray, which reads
+    // NewTarget's "prototype" (10.1.14 GetPrototypeFromConstructor), comes
+    // before InitializeTypedArrayFromElements gets the iterator.
+    test("Reflect.construct resolves newTarget prototype before reading the iterable source", () => {
       const events = [];
       class NewTargetBase {}
       const NewTarget = new Proxy(NewTargetBase, {
@@ -243,7 +246,7 @@ describe("TypedArray constructors", () => {
       };
 
       expect(() => Reflect.construct(Int8Array, [iterable], NewTarget)).toThrow(Error);
-      expect(events).toEqual(["iterator", "prototype"]);
+      expect(events).toEqual(["prototype"]);
     });
 
     test("Reflect.construct falls back to typed array prototype for non-object newTarget prototype", () => {

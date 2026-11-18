@@ -265,7 +265,10 @@ describe("Array.fromAsync", () => {
     expect(asyncClosed).toBe(1);
   });
 
-  test("rejects when async iterator return() resolves to a non-object", async () => {
+  // The mapper's throw closes the iterator with a throw completion: 7.4.13
+  // AsyncIteratorClose awaits return()'s result but returns the original throw
+  // completion (step 5) before checking that result is an object (step 7).
+  test("rejects with the mapper's error even when return() resolves to a non-object", async () => {
     const asyncIterable = {
       [Symbol.asyncIterator]() {
         let i = 0;
@@ -289,7 +292,7 @@ describe("Array.fromAsync", () => {
         throw new Error("boom");
       }
       return value;
-    })).rejects.toThrow(TypeError);
+    })).rejects.toThrow("boom");
   });
 
   // Sync-iterable fallback path: when no [Symbol.asyncIterator], the
