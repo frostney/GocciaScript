@@ -61,7 +61,7 @@ const
   { what an inlined call or allocation counts for in the profit estimates: its call (about 150 instructions of the
     shared call stub, and the callee's entry and return) or its helper gone }
   OPT_INL_GAIN = 6;
-  OPT_INLINE_DEPTH = 3;  { inlined calls nested this deep at most (a callee's call inlined in turn) }
+  OPT_INLINE_DEPTH = 4;  { inlined calls nested this deep at most (a callee's call inlined in turn) }
   OPT_INLINE_TOTAL = 160;   { the instructions of one call's callees, nested ones included, at most }
 
   PROP_KNOWN = Int64(1) shl 40;
