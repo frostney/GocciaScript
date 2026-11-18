@@ -480,6 +480,7 @@ type
     function DeclareLocal(const N: UnicodeString; IsConst: Boolean): Integer;
     function IsVarReg(Dest: Integer): Boolean;
     function MaySideEffect(E: TGocciaExpression): Boolean;
+    function OperandMayChange(Reg: Integer; E: TGocciaExpression): Boolean;
     function DeclareInScope(S: TScope; const N: UnicodeString; IsConst: Boolean): Integer;
     function ResolveLocal(F: TFuncState; const N: UnicodeString; out Reg: Integer): Boolean;
     function ResolveUpval(F: TFuncState; const N: UnicodeString): Integer;
@@ -4978,6 +4979,21 @@ begin
   Result := R;
 end;
 
+{ whether evaluating E may change the variable in register Reg (read in place before E): an assignment or a call
+  in E (MaySideEffect), or code E runs without one (a getter, a proxy trap, a valueOf) when a closure captures the
+  variable (its scope is captured) }
+function TCompiler.OperandMayChange(Reg: Integer; E: TGocciaExpression): Boolean;
+var I: Integer;
+begin
+  if MaySideEffect(E) then Exit(True);
+  if (E = nil) or (E is TGocciaIdentifierExpression) or (E is TGocciaLiteralExpression) or
+     (E is TGocciaThisExpression) or (E is TGocciaFunctionExpression) or (E is TGocciaArrowFunctionExpression) then
+    Exit(False);
+  for I := FS.ScopeCount - 1 downto 0 do
+    if Reg >= FS.Scopes[I].BaseReg then Exit(FS.Scopes[I].Captured);
+  Result := True;
+end;
+
 { conservative: False only when evaluating E cannot run code or assign }
 function TCompiler.MaySideEffect(E: TGocciaExpression): Boolean;
 begin
@@ -5700,8 +5716,9 @@ begin
   end;
   L := ExprAny(E.Left);
   { a variable's register is read in place: copy it first when the right operand may change it
-    (x + (x = 1), node !== (node = node.unwrap()), x + f() with f assigning x) }
-  if (L < Save) and MaySideEffect(E.Right) then
+    (x + (x = 1), node !== (node = node.unwrap()), x + f() with f assigning x, x + o.g with a getter assigning
+    a captured x) }
+  if (L < Save) and OperandMayChange(L, E.Right) then
   begin
     R := AllocReg;
     Emit(Ins(opMov, R, L, 0));
@@ -6313,6 +6330,13 @@ begin
   if E.Optional then ChainAdd(EmitJ(opJNullish, O, 0));
   if E.Computed then
   begin
+    { 13.3.2.1: the object is read before the key evaluates; a variable's register the key may change is copied }
+    if (O < Save) and OperandMayChange(O, E.PropertyExpression) then
+    begin
+      K := AllocReg;
+      Emit(Ins(opMov, K, O, 0));
+      O := K;
+    end;
     K := ExprAny(E.PropertyExpression);
     NoteMemberPosition(E);
     Emit(Ins(opGetElem, Dest, O, K));
@@ -7232,7 +7256,7 @@ begin
       gttLess, gttLessEqual, gttGreater, gttGreaterEqual, gttEqual, gttNotEqual:
         begin
           A := ExprAny(BE.Left);
-          if (A < Save) and MaySideEffect(BE.Right) then
+          if (A < Save) and OperandMayChange(A, BE.Right) then
           begin
             B := AllocReg;
             Emit(Ins(opMov, B, A, 0));
