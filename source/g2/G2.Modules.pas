@@ -29,8 +29,14 @@ type
     has no such module (a file is then read as JavaScript), -1 with an error pending }
   THostModuleHook = function(const Key: UnicodeString; var Exp: TValue): Integer;
 
+  { a host's resolution of a specifier imported by Referrer: 1 with Resolved the request key (a host module's key or
+    an absolute path), 0 to resolve it as G2 does, -1 with Resolved the message of the error it fails with }
+  THostResolveHook = function(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
+
 { this thread's host module hook (nil: none) }
 procedure SetHostModuleHook(Hook: THostModuleHook);
+{ this thread's host resolution hook (nil: none) }
+procedure SetHostResolveHook(Hook: THostResolveHook);
 { Spec as an import in Referrer resolves it: a host module's key, or an absolute path }
 function ResolveModuleSpecifier(const Spec, Referrer: UnicodeString): UnicodeString;
 
@@ -106,10 +112,16 @@ end;
 
 threadvar
   HostModules: THostModuleHook;
+  HostResolve: THostResolveHook;
 
 procedure SetHostModuleHook(Hook: THostModuleHook);
 begin
   HostModules := Hook;
+end;
+
+procedure SetHostResolveHook(Hook: THostResolveHook);
+begin
+  HostResolve := Hook;
 end;
 
 { a host module's key, not a path: a specifier with a URL-like scheme of two or more letters (goccia:, node:) or a
@@ -127,9 +139,15 @@ begin
   Result := True;
 end;
 
+{ a resolution failure travels as its key: #0 and the message (LoadModule throws it) }
 function ResolvePath(const Spec, Referrer: UnicodeString): UnicodeString;
 var Base: UnicodeString;
 begin
+  if Assigned(HostResolve) then
+    case HostResolve(Spec, Referrer, Result) of
+      1: Exit;
+      -1: Exit(#0 + Result);
+    end;
   if Assigned(HostModules) and IsSchemeSpecifier(Spec) then Exit(Spec);
   if (Spec <> '') and (Spec[1] = '/') then Exit(UnicodeString(ExpandFileName(string(Spec))));
   if (Referrer = '') or (Referrer[1] = '<') then Base := UnicodeString(GetCurrentDir) + '/'
@@ -275,6 +293,12 @@ end;
 function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
 var Src, Err, ErrName: UnicodeString; I: Integer; D: TModRec; V: TValue;
 begin
+  if (Path <> '') and (Path[1] = #0) then
+  begin
+    { a failed resolution (ResolvePath); a typed request carries its type after #1 }
+    if Pos(#1, Path) > 0 then Exit(ThrowError('Error', Copy(Path, 2, Pos(#1, Path) - 2)));
+    Exit(ThrowError('Error', Copy(Path, 2, MaxInt)));
+  end;
   M := FindModule(Path);
   if Assigned(M) then
   begin

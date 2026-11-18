@@ -35,7 +35,7 @@ implementation
 uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
-  Goccia.AST.Report, TextSemantics;
+  Goccia.AST.Report, Goccia.FileExtensions, TextSemantics;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
@@ -43,6 +43,9 @@ uses
 {$I G2.WebPrelude.inc}
 {$I G2.ModulesPrelude.inc}
 {$I G2.FetchPrelude.inc}
+{$I G2.Json5Prelude.inc}
+{$I G2.DelimitedPrelude.inc}
+{$I G2.JsonlPrelude.inc}
 {$I G2.AsyncHooksPrelude.inc}
 {$I G2.EventsPrelude.inc}
 {$I G2.TimersPrelude.inc}
@@ -62,7 +65,8 @@ end;
 threadvar
   { the vi.mock modules: address, then source }
   MockModules: TStringList;
-  SharedV, LoadHostModuleV: TValue;
+  SharedV, LoadHostModuleV, HasHostModuleV: TValue;
+
   FireNextV: TValue;
   EventLoopRooted: Boolean;
   TestApiV: TValue;
@@ -364,6 +368,103 @@ begin
   S := VUndefined;
 end;
 
+{ G2.Modules's resolution hook: the host's own modules by their keys, a mock by its address, anything else as the
+  CLIs resolve it }
+const
+  MODULE_NOT_FOUND_MESSAGE = 'Module not found: "%s"';
+  BARE_SPECIFIER_MESSAGE = 'Cannot resolve bare module specifier "%s". Imports must start with "./" or "../"';
+
+{ the file a path names as the CLIs' resolver finds it: the path itself, then with each module extension, then its
+  index file with each (Goccia.FileExtensions' ModuleImportExtensions, in order) }
+function ProbeModuleFile(const Base: string; out Found: string): Boolean;
+var I: Integer;
+begin
+  Result := True;
+  Found := Base;
+  if FileExists(Found) and not DirectoryExists(Found) then Exit;
+  for I := Low(ModuleImportExtensions) to High(ModuleImportExtensions) do
+  begin
+    Found := Base + ModuleImportExtensions[I];
+    if FileExists(Found) and not DirectoryExists(Found) then Exit;
+  end;
+  if DirectoryExists(Base) then
+    for I := Low(ModuleImportExtensions) to High(ModuleImportExtensions) do
+    begin
+      Found := IncludeTrailingPathDelimiter(Base) + 'index' + ModuleImportExtensions[I];
+      if FileExists(Found) then Exit;
+    end;
+  Result := False;
+end;
+
+function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
+var A: array[0..0] of TValue; R: TValue; Ref, Base, Found: string;
+begin
+  if IsObject(HasHostModuleV) then
+  begin
+    A[0] := StrFromUnicode(Spec);
+    if CallValue(HasHostModuleV, SharedV, @A[0], 1, R) and (R = VTrue) then
+    begin
+      Resolved := Spec;
+      Exit(1);
+    end;
+    Pending := VUndefined;
+  end;
+  if (Spec = '') or not ((Spec[1] = '/') or (Copy(Spec, 1, 2) = './') or (Copy(Spec, 1, 3) = '../') or
+     (Spec = '.') or (Spec = '..')) then
+  begin
+    Resolved := UnicodeString(Format(BARE_SPECIFIER_MESSAGE, [UTF8Encode(Spec)]));
+    Exit(-1);
+  end;
+  if (Referrer = '') or (Referrer[1] = '<') then Ref := IncludeTrailingPathDelimiter(GetCurrentDir)
+  else Ref := ExtractFilePath(ExpandFileName(UTF8Encode(Referrer)));
+  if Spec[1] = '/' then Base := ExpandFileName(UTF8Encode(Spec)) else Base := ExpandFileName(Ref + UTF8Encode(Spec));
+  if ProbeModuleFile(Base, Found) then
+  begin
+    Resolved := UTF8Decode(Found);
+    Exit(1);
+  end;
+  Resolved := UnicodeString(Format(MODULE_NOT_FOUND_MESSAGE, [UTF8Encode(Spec)]));
+  Result := -1;
+end;
+
+{ readText(path): a file's text, decoded as UTF-8 without a BOM; undefined when it cannot be read }
+function Host_ReadText(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var F: TFileStream; B: RawByteString; Path: string;
+begin
+  Res := VUndefined;
+  Result := True;
+  Path := UTF8Encode(ArgStr(Args, Argc, 1));
+  if (Path = '') or not FileExists(Path) then Exit;
+  try
+    F := TFileStream.Create(Path, fmOpenRead or fmShareDenyNone);
+    try
+      SetLength(B, F.Size);
+      if F.Size > 0 then F.ReadBuffer(B[1], F.Size);
+    finally
+      F.Free;
+    end;
+  except
+    Exit;
+  end;
+  if (Length(B) >= 3) and (B[1] = #$EF) and (B[2] = #$BB) and (B[3] = #$BF) then Delete(B, 1, 3);
+  SetCodePage(B, CP_UTF8, False);
+  Res := StrFromUnicode(UTF8Decode(B));
+end;
+
+{ fileSize(path): a file's size in bytes, -1 when it cannot be read }
+function Host_FileSize(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var SR: TSearchRec; Path: string;
+begin
+  Res := MkInt(-1);
+  Result := True;
+  Path := UTF8Encode(ArgStr(Args, Argc, 1));
+  if FindFirst(Path, faAnyFile, SR) = 0 then
+  begin
+    Res := MkNumber(SR.Size);
+    FindClose(SR);
+  end;
+end;
+
 { setClock(epochMs, monoMs): the mocked clocks (NaN: the real one) }
 function Host_SetClock(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var E, M: Double;
@@ -478,6 +579,8 @@ begin
   DefineNative(RootAt(TempTop - 1), 'asyncSet', Host_AsyncSet, 1);
   DefineNative(RootAt(TempTop - 1), 'vitestSource', Host_VitestSource, 0);
   DefineNative(RootAt(TempTop - 1), 'astParse', Host_ASTParse, 6);
+  DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
+  DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
   Result := RootAt(TempTop - 1);
   PopRoots(1);
 end;
@@ -488,12 +591,13 @@ var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
   if not EventLoopRooted then
   begin
-    AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV);
+    AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@HasHostModuleV);
     EventLoopRooted := True;
   end;
   FireNextV := VUndefined;
   SharedV := VUndefined;
   LoadHostModuleV := VUndefined;
+  HasHostModuleV := VUndefined;
   Base := TempTop;
   PushRoot(GlobalObj);
   PushRoot(HostNatives);
@@ -512,6 +616,9 @@ begin
     CallPrelude('<goccia:url>', UrlSrc, Base, 3, R, Err) and CallPrelude('<goccia:web>', WebSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:events>', EventsSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:fetch>', FetchSrc, Base, 3, R, Err) and
+    CallPrelude('<goccia:json5>', Json5Src, Base, 3, R, Err) and
+    CallPrelude('<goccia:csv>', DelimitedSrc, Base, 3, R, Err) and
+    CallPrelude('<goccia:jsonl>', JsonlSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:host>', HostSrc, Base, 7, Goccia, Err);
   if Result then
   begin
@@ -523,8 +630,13 @@ begin
     if Result and GetV(RootAt(Base + 2), AtomOf('timers'), R) and IsObject(R) then
       Result := GetV(R, AtomOf('fireNext'), FireNextV);
     SharedV := RootAt(Base + 2);
-    if Result then Result := GetV(SharedV, AtomOf('loadHostModule'), LoadHostModuleV);
-    if Result then SetHostModuleHook(@HostModule);
+    if Result then Result := GetV(SharedV, AtomOf('loadHostModule'), LoadHostModuleV) and
+      GetV(SharedV, AtomOf('hasHostModule'), HasHostModuleV);
+    if Result then
+    begin
+      SetHostModuleHook(@HostModule);
+      SetHostResolveHook(@HostResolveSpec);
+    end;
   end;
   PopRoots(TempTop - Base);
   if not Result then Exit;
