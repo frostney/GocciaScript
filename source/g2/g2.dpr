@@ -110,8 +110,9 @@ end;
 
 { --test: the language profile and source type of the nearest goccia.json (CLI.ConfigFile, as the CLIs find
   it); without one, the recommended profile }
-procedure LoadTestConfig(const FileName: string; out Prof: TLangProfile; out SourceType: string);
-var Path: string; Entries: TConfigEntryArray;
+procedure LoadTestConfig(const FileName: string; out Prof: TLangProfile; out SourceType: string;
+  out ConfigJson: UnicodeString);
+var Path: string; Entries: TConfigEntryArray; I, J: Integer; Done: TStringList; Vals: UnicodeString;
   function Flag(const Key: string): Boolean;
   var V: string;
   begin
@@ -138,18 +139,44 @@ begin
   Prof.FunctionCtor := Flag('unsafe-function-constructor');
   Prof.ShadowRealm := Flag('unsafe-shadowrealm');
   if not FindConfigEntry(Entries, 'source-type', SourceType) then SourceType := '';
+  { every key as a JSON string (an array's elements as a list), the first entry for a key winning }
+  ConfigJson := '{';
+  Done := TStringList.Create;
+  try
+    for I := 0 to High(Entries) do
+    begin
+      if (Entries[I].Kind in [cvkUnsupported, cvkObject]) or (Done.IndexOf(Entries[I].Key) >= 0) then Continue;
+      Done.Add(Entries[I].Key);
+      if Length(ConfigJson) > 1 then ConfigJson := ConfigJson + ',';
+      if Entries[I].InArray or (Entries[I].Kind = cvkEmptyArray) then
+      begin
+        Vals := '';
+        for J := I to High(Entries) do
+          if (Entries[J].Key = Entries[I].Key) and Entries[J].InArray then
+          begin
+            if Vals <> '' then Vals := Vals + ',';
+            Vals := Vals + JsonQuote(UTF8Decode(Entries[J].Value));
+          end;
+        ConfigJson := ConfigJson + JsonQuote(UTF8Decode(Entries[I].Key)) + ':[' + Vals + ']';
+      end
+      else ConfigJson := ConfigJson + JsonQuote(UTF8Decode(Entries[I].Key)) + ':' + JsonQuote(UTF8Decode(Entries[I].Value));
+    end;
+  finally
+    Done.Free;
+  end;
+  ConfigJson := ConfigJson + '}';
 end;
 
 { --test FILE: GocciaTestRunner's run of one test file. The engine with the test framework API (prelude/testing.js)
   and the host's globals, the file under its goccia.json profile as a script or a module (source-type, .mjs, or a
   top-level import or export declaration), then its suites }
 procedure RunTestFile(const FileName: string; const SrcText: UnicodeString);
-var Prof: TLangProfile; SourceType: string; Err: UnicodeString; Phase, Kind: Integer; IsModule, Ok: Boolean; S: TValue;
+var Prof: TLangProfile; SourceType: string; Err, ConfigJson: UnicodeString; Phase, Kind: Integer; IsModule, Ok: Boolean; S: TValue;
   T: PFuncTemplate;
 begin
-  LoadTestConfig(FileName, Prof, SourceType);
+  LoadTestConfig(FileName, Prof, SourceType, ConfigJson);
   EngineInit;
-  if not (InstallHostGlobals(Prof.ShadowRealm, True, Err) and InstallTestingAPI(Err)) then
+  if not (InstallHostGlobals(Prof.ShadowRealm, True, ConfigJson, Err) and InstallTestingAPI(Err)) then
   begin
     WriteLn('__G2TEST__ setup error: ', UTF8Encode(Err));
     Halt(4);

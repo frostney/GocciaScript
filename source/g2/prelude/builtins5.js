@@ -964,4 +964,28 @@
   };
   def(Math, "sumPrecise", mathStatics.sumPrecise);
 
+  // ---------------- enum declarations (TC39 proposal-enum, as GocciaScript has them) ----------------
+  // opFinalizeEnum: the enum made from the scratch object the declaration's members were set on, in order: a
+  // non-extensible object with a null prototype, each member enumerable but neither writable nor configurable and
+  // a Number, String or Symbol, Symbol.iterator yielding [name, value] entries and Symbol.toStringTag the name
+  var ownKeys = Reflect.ownKeys, preventExtensions = Object.preventExtensions, ArrayValues = Array.prototype.values;
+  var SymToStringTag = Symbol.toStringTag;
+  function enumFinalize(scratch, name) {
+    var e = create(null), entries = [], keys = ownKeys(scratch);
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i];
+      if (typeof k !== "string") continue;
+      var v = scratch[k], t = typeof v;
+      if (t !== "number" && t !== "string" && t !== "symbol")
+        throw new TypeErr("Enum member '" + k + "' must be a number, string, or symbol");
+      defineProperty(e, k, { value: v, writable: false, enumerable: true, configurable: false });
+      entries.push([k, v]);
+    }
+    var iterate = { "[Symbol.iterator]"() { return apply(ArrayValues, entries, []); } }["[Symbol.iterator]"];
+    defineProperty(e, SymIterator, { value: iterate, writable: false, enumerable: false, configurable: false });
+    defineProperty(e, SymToStringTag, { value: name, writable: false, enumerable: false, configurable: false });
+    preventExtensions(e);
+    return e;
+  }
+  return { enumFinalize: enumFinalize };
 })

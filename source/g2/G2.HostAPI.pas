@@ -15,7 +15,8 @@ uses
 
 { the host's globals on this thread's realm (after EngineInit): the const Goccia, and the conformance host's
   extras removed; TestMode lists the test runner's globals in Goccia.runtimeGlobals }
-function InstallHostGlobals(ShadowRealm, TestMode: Boolean; var Err: UnicodeString): Boolean;
+function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
+  var Err: UnicodeString): Boolean;
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
@@ -34,7 +35,7 @@ implementation
 uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
-  TextSemantics;
+  Goccia.AST.Report, TextSemantics;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
@@ -397,6 +398,25 @@ begin
   Result := True;
 end;
 
+{ astParse(source, jsx, module, tokens, expressions, fileName): goccia:ast's parse as JSON text (Goccia.AST.Report);
+  a source that does not parse throws its SyntaxError }
+function Host_ASTParse(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Json: string;
+  function Flag(I: Integer): Boolean;
+  begin
+    Result := (Argc >= I) and (Args[I] = VTrue);
+  end;
+begin
+  try
+    Json := ASTReportJSON(U8(ArgStr(Args, Argc, 1)), ActivePipelineOptions(False), Flag(2), Flag(3), Flag(4), Flag(5),
+      U8(ArgStr(Args, Argc, 6)));
+  except
+    on E: EGocciaASTSyntaxError do Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
+  end;
+  Res := FromU8(Json);
+  Result := True;
+end;
+
 { vitestSource(): the vitest compatibility shim's module source (Goccia.VitestShim.inc) }
 function VitestShimSource: UnicodeString;
 const
@@ -457,11 +477,13 @@ begin
   DefineNative(RootAt(TempTop - 1), 'asyncGet', Host_AsyncGet, 0);
   DefineNative(RootAt(TempTop - 1), 'asyncSet', Host_AsyncSet, 1);
   DefineNative(RootAt(TempTop - 1), 'vitestSource', Host_VitestSource, 0);
+  DefineNative(RootAt(TempTop - 1), 'astParse', Host_ASTParse, 6);
   Result := RootAt(TempTop - 1);
   PopRoots(1);
 end;
 
-function InstallHostGlobals(ShadowRealm, TestMode: Boolean; var Err: UnicodeString): Boolean;
+function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
+  var Err: UnicodeString): Boolean;
 var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
   if not EventLoopRooted then
@@ -483,13 +505,14 @@ begin
   PushRoot(StrFromUnicode(InfoJson));
   PushRoot(MkBool(TestMode));
   PushRoot(MkBool(ShadowRealm));
-  { (G, n, shared), then host.js's (G, n, shared, infoJson, testMode, shadowRealm), in the order the CLIs'
-    runtime extensions install (Goccia.runtimeGlobals lists their names in it) }
+  PushRoot(StrFromUnicode(ConfigJson));
+  { (G, n, shared), then host.js's (G, n, shared, infoJson, testMode, shadowRealm, configJson), in the order the
+    CLIs' runtime extensions install (Goccia.runtimeGlobals lists their names in it) }
   Result := CallPrelude('<goccia:modules>', ModulesSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:url>', UrlSrc, Base, 3, R, Err) and CallPrelude('<goccia:web>', WebSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:events>', EventsSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:fetch>', FetchSrc, Base, 3, R, Err) and
-    CallPrelude('<goccia:host>', HostSrc, Base, 6, Goccia, Err);
+    CallPrelude('<goccia:host>', HostSrc, Base, 7, Goccia, Err);
   if Result then
   begin
     PushRoot(Goccia);

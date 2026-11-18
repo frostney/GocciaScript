@@ -2,11 +2,14 @@
 // G2.HostAPI calls this function once per realm with the global object, the host's natives (n), the preludes'
 // shared internals, the build facts as JSON, and whether the host runs tests and allows ShadowRealm; it returns the Goccia object, which the host binds as
 // the const Goccia.
-(function (G, n, shared, infoJson, testMode, shadowRealm) {
+(function (G, n, shared, infoJson, testMode, shadowRealm, configJson) {
   'use strict';
   const gc = n.gc, gcBytes = n.gcBytes, gcMaxBytes = n.gcMaxBytes;
   const defineProperty = Object.defineProperty;
   const info = JSON.parse(infoJson);
+  // the host's configuration: the goccia.json keys and their values (strings, or arrays of strings)
+  shared.config = JSON.parse(configJson);
+  const configFlag = (k) => shared.config[k] === 'true';
 
   // the conformance host's extras the CLIs do not have: print, eval, and the Annex B escape and unescape, which
   // GocciaScript leaves out (docs/language.md, Annex B)
@@ -42,6 +45,35 @@
   // the names the host's runtime extensions install, in their order; the preludes after this one add theirs
   const runtimeGlobals = shared.runtimeGlobals;
   if (testMode) runtimeGlobals.push('TestAssertions');
+  // goccia:ast (experimental-ast): the parse tree as Goccia.AST.Report reports it, its objects with null
+  // prototypes and its tokens ordinary objects, as the Pascal engines materialize them
+  if (configFlag('experimental-ast')) {
+    const rebuild = (v, plain) => {
+      if (Array.isArray(v)) return v.map((x) => rebuild(x, plain));
+      if (v === null || typeof v !== 'object') return v;
+      const o = plain ? {} : Object.create(null);
+      for (const k of Object.keys(v)) o[k] = rebuild(v[k], plain);
+      return o;
+    };
+    const parse = {
+      parse(source, options = undefined) {
+        if (typeof source !== 'string') throw new TypeError('parse expects the source text as a string');
+        const o = options !== null && typeof options === 'object' ? options : {};
+        const flag = (k, d) => (o[k] === undefined ? d : !!o[k]);
+        const fileName = typeof o.fileName === 'string' ? o.fileName : '<source>';
+        const raw = JSON.parse(n.astParse(source, flag('jsx', false), flag('module', true), flag('tokens', false),
+          flag('expressions', false), fileName));
+        const result = Object.create(null);
+        result.source = raw.source;
+        result.comments = rebuild(raw.comments, false);
+        result.root = rebuild(raw.root, false);
+        if (raw.tokens !== undefined) result.tokens = rebuild(raw.tokens, true);
+        return result;
+      }
+    }.parse;
+    shared.hostModules['goccia:ast'] = () => ({ parse });
+  }
+
   // the test runner's vitest compatibility shim, over goccia:test and goccia:timers
   if (testMode) shared.hostModules.vitest = () => n.vitestSource();
 

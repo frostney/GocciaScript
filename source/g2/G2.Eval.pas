@@ -7,7 +7,7 @@ unit G2.Eval;
 interface
 
 uses
-  SysUtils, G2.Core, G2.Bytecode, G2.VM, G2.Compiler;
+  SysUtils, Goccia.SourcePipeline, G2.Core, G2.Bytecode, G2.VM, G2.Compiler;
 
 { Goal: see CompileProgram (0 isolated, 1 a Script, 2 global eval code) }
 { 16.2.1.7.1 ParseModule + compile (goal 3): the template, and the module info (the caller owns it); Err /
@@ -19,6 +19,8 @@ function ParseAndCompile(const Source, FileName: UnicodeString; AsExpression: Bo
 procedure InitEval;
 { sets a TGocciaParser's options from the active language profile (G2.Core) }
 procedure ApplyProfileOptions(P: TObject; Module: Boolean);
+{ the CLIs' front-end options (Goccia.SourcePipeline) for the active profile and the goal }
+function ActivePipelineOptions(Module: Boolean): TGocciaSourcePipelineOptions;
 { an entry file under a restricted profile, parsed as the CLIs parse it (SourceType 0 detect, 1 Script, 2
   Module): a Script compiled (goal 1) into T; a Module only reported (IsModule), for G2.Modules to load }
 function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
@@ -33,7 +35,7 @@ threadvar
 implementation
 
 uses
-  Classes, Linux, UnixType, TextSemantics, Goccia.SourcePipeline, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
+  Classes, Linux, UnixType, TextSemantics, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
   G2.PreParse, G2.Lazy, G2.Snapshot;
 
 threadvar
@@ -116,6 +118,11 @@ begin
   if Pr.ForIn then Include(Result.Compatibility, cfForIn);
   Result.WarningUnsupportedFeatures := Pr.WarningUnsupported;
   Result.SourceType := SourceType;
+end;
+
+function ActivePipelineOptions(Module: Boolean): TGocciaSourcePipelineOptions;
+begin
+  if Module then Result := HostPipelineOptions(stModule) else Result := HostPipelineOptions(stScript);
 end;
 
 { Source parsed by the CLIs' front end; Settled the goal it was parsed with }

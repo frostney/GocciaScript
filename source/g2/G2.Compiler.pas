@@ -442,6 +442,7 @@ type
     procedure EmitUsingDispose(Cap: Integer; Async: Boolean; ExcReg: Integer);
     procedure CompileUsingList(L: TList<TGocciaASTNode>; Stmts: TObjectList<TGocciaStatement>; Body: Boolean = False);
     procedure CompileUsingDecl(D: TGocciaUsingDeclaration);
+    procedure CompileEnum(D: TGocciaEnumDeclaration);
     procedure CompileForOfUsingBody(S: TGocciaForOfStatement; V: Integer);
     procedure AddUsingResource(R: Integer; Async: Boolean);
     procedure BeginUsingRegion(Async: Boolean; out Cap, ExcReg, OuterTry, SavedCap: Integer);
@@ -2084,7 +2085,8 @@ begin
     end
     else if (N is TGocciaDestructuringDeclaration) and not TGocciaDestructuringDeclaration(N).IsVar then
       PatternNames(TGocciaDestructuringDeclaration(N).Pattern, Out_)
-    else if N is TGocciaClassDeclaration then Out_.Add(TGocciaClassDeclaration(N).ClassDefinition.Name);
+    else if N is TGocciaClassDeclaration then Out_.Add(TGocciaClassDeclaration(N).ClassDefinition.Name)
+    else if N is TGocciaEnumDeclaration then Out_.Add(TGocciaEnumDeclaration(N).Name);
   end;
 end;
 
@@ -2650,6 +2652,12 @@ begin
       DeclarePatternNames(TGocciaDestructuringDeclaration(N).Pattern, TGocciaDestructuringDeclaration(N).IsConst)
     else if ((HoistMask and Cardinal(4)) <> 0) then
       DeclareLocal(TGocciaClassDeclaration(N).ClassDefinition.Name, False)
+    else if N is TGocciaEnumDeclaration then
+    begin
+      { an enum declaration: a lexical binding, uninitialized until the declaration runs }
+      DeclaringLexical := True;
+      DeclareLocal(TGocciaEnumDeclaration(N).Name, False);
+    end
     else if ((HoistMask and Cardinal(16)) <> 0) then
     begin
       { using and await using bindings: const, uninitialized until their declaration runs }
@@ -2759,7 +2767,9 @@ begin
         else if (N is TGocciaDestructuringDeclaration) and not TGocciaDestructuringDeclaration(N).IsVar then
           AddPatternLex(TGocciaDestructuringDeclaration(N).Pattern, TGocciaDestructuringDeclaration(N).IsConst)
         else if N is TGocciaClassDeclaration then
-          AddLex(TGocciaClassDeclaration(N).ClassDefinition.Name, False);
+          AddLex(TGocciaClassDeclaration(N).ClassDefinition.Name, False)
+        else if N is TGocciaEnumDeclaration then
+          AddLex(TGocciaEnumDeclaration(N).Name, False);
       end;
     end;
     for I := 0 to VarNames.Count - 1 do
@@ -2898,6 +2908,33 @@ end;
 
 { 14.3.1 using / await using: each binding is const; its value joins the block's capability
   (AddDisposableResource) }
+{ an enum declaration (TC39 proposal-enum, as GocciaScript has it): the members, in order, are set on a scratch
+  object while the enum's name and each earlier member are const bindings of the body, so an initializer can use
+  them; then opFinalizeEnum makes the enum from the scratch object, and it initializes the declaration's binding }
+procedure TCompiler.CompileEnum(D: TGocciaEnumDeclaration);
+var Save, Obj, Reg, I: Integer;
+begin
+  Save := FS.FreeReg;
+  Obj := AllocReg;
+  Emit(Ins(opNewObj, Obj, 0, Min(Length(D.Members), 60)));
+  PushScope(False);
+  Reg := DeclareLocal(D.Name, True);
+  Emit(Ins(opMov, Reg, Obj, 0));
+  MarkInitialized(D.Name);
+  for I := 0 to High(D.Members) do
+  begin
+    Reg := DeclareLocal(D.Members[I].Name, True);
+    ExprTo(D.Members[I].Initializer, Reg);
+    MarkInitialized(D.Members[I].Name);
+    Emit(Ins(opSetProp, Obj, Reg, NewIC(D.Members[I].Name)));
+  end;
+  PopScope;
+  Emit(Ins(opFinalizeEnum, Obj, 0, AtomConst(D.Name)));
+  StoreIdentStatic(D.Name, Obj, True);
+  MarkInitialized(D.Name);
+  FreeTo(Save);
+end;
+
 procedure TCompiler.CompileUsingDecl(D: TGocciaUsingDeclaration);
 var I, R: Integer; V: TGocciaVariableInfo;
 begin
@@ -3187,7 +3224,8 @@ begin
     17: CompileBreakContinue(False, TGocciaContinueStatement(S).TargetLabel);
     18: ;
   else
-    if S is TGocciaUsingDeclaration then CompileUsingDecl(TGocciaUsingDeclaration(S))
+    if S is TGocciaEnumDeclaration then CompileEnum(TGocciaEnumDeclaration(S))
+    else if S is TGocciaUsingDeclaration then CompileUsingDecl(TGocciaUsingDeclaration(S))
     else if S is TGocciaWithStatement then CompileWith(TGocciaWithStatement(S))
     else if S is TGocciaExportDefaultDeclaration then
     begin
@@ -6731,6 +6769,11 @@ begin
       begin
         Names.Add(TGocciaExportClassDeclaration(N).Declaration.ClassDefinition.Name);
         Nodes.Add(TGocciaExportClassDeclaration(N).Declaration);
+      end
+      else if N is TGocciaExportEnumDeclaration then
+      begin
+        Names.Add(TGocciaExportEnumDeclaration(N).Declaration.Name);
+        Nodes.Add(TGocciaExportEnumDeclaration(N).Declaration);
       end
       else if N is TGocciaExportDefaultDeclaration then
       begin

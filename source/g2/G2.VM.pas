@@ -157,6 +157,7 @@ threadvar
   ArrayIterNextFn, GenNextFn: TValue;
   IterSelfFn: TValue;   { %IteratorPrototype%[@@iterator] (G2.Builtins sets it): a generator iterates as itself }
   GenReturnFn: TValue;  { %GeneratorPrototype%.return (G2.Builtins2 sets it): a generator's close resumes it directly }
+  EnumFinalizeFn: TValue;   { opFinalizeEnum's intrinsic (G2.Builtins5 sets it from its prelude) }
   MapIterNextFn, SetIterNextFn: TValue;   { %MapIteratorPrototype%.next, %SetIteratorPrototype%.next }
   { the function and iterator intrinsics of generators and async code (G2.Promise makes them) }
   GenFunctionProto, AsyncFunctionProto, AsyncGenFunctionProto, AsyncGeneratorProto, AsyncIteratorProto,
@@ -6680,6 +6681,15 @@ begin
   SwitchRealm(R0);
 end;
 
+{ opFinalizeEnum: EnumFinalizeFn(Scratch, Name) }
+function XFinalizeEnum(Scratch, Name: TValue; var Res: TValue): Boolean; noinline;
+var A: array[0..1] of TValue;
+begin
+  A[0] := Scratch;
+  A[1] := Name;
+  Result := CallValue(EnumFinalizeFn, VUndefined, @A[0], 2, Res);
+end;
+
 function Execute(StopFrame: Integer; var Res: TValue): Boolean;
 label LThrow, LReload, LNext, LDone;
 var
@@ -8426,6 +8436,12 @@ LReload:
           end;
           goto LThrow;
         end;
+      opFinalizeEnum:
+        begin
+          Fr^.PC := PC;
+          if not XFinalizeEnum(R[A], K[I shr 40], V) then goto LThrow;
+          R[A] := V;
+        end;
       opSuperBase:
         begin
           VB := R[(I shr 24) and $FFFF];
@@ -8718,7 +8734,7 @@ begin
     @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @IterSelfFn, @GenReturnFn, @MapIterNextFn, @SetIterNextFn,
     @GenFunctionProto, @AsyncFunctionProto, @AsyncGenFunctionProto, @AsyncGeneratorProto, @AsyncIteratorProto,
     @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @StringIterProto, @StringIterNextFn, @FuncHasInstanceFn, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
-    @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto]);
+    @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto, @EnumFinalizeFn]);
   AddRoot(@IntrinsicList);
   IntrinsicList := VUndefined;
   RealmVals([@IntrinsicList]);

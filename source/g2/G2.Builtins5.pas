@@ -37,6 +37,9 @@ begin
     raise Exception.Create('builtins5 prelude call');
   end;
   PopRoots(1);
+  { the prelude's internals: opFinalizeEnum's intrinsic }
+  AddRoot(@EnumFinalizeFn);
+  if not GetV(R, AtomOf('enumFinalize'), EnumFinalizeFn) then raise Exception.Create('builtins5 prelude internals');
   InitRegExpPrelude;
 end;
 
