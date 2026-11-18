@@ -16,6 +16,8 @@ type
   PValue = ^TValue;
 
 const
+  { the temp root stack's capacity (TempRoots): 32 MB of address space, committed as used }
+  TEMP_ROOTS_MAX = 4 * 1024 * 1024;
   TAG_INT     = QWord($FFF9000000000000);
   TAG_SPECIAL = QWord($FFFA000000000000);
   TAG_PTR     = QWord($FFFB000000000000);
@@ -255,7 +257,10 @@ procedure Remember(Container: PCell);
 
 { temp roots for native code: push values that must survive allocation }
 threadvar
-  TempRoots: array of TValue;
+  { the values natives keep rooted while they allocate, as a stack: a mapping of TEMP_ROOTS_MAX values whose pages
+    are committed as they are touched, so a native recursion that roots values at every level (a Proxy chain) has
+    room long after the native stack guard (NativeStackLow) has stopped it }
+  TempRoots: PValue;
   TempTop: Integer;
 procedure PushRoot(V: TValue); inline;
 function RootAt(I: Integer): TValue; inline;
@@ -383,6 +388,14 @@ function ProfileNonStrict: Boolean; noinline;
 function ProfileArgumentsObject: Boolean; noinline;
 function ProfileFunctionCtor: Boolean; noinline;
 
+{ ---- the native stack ---- }
+{ records how far this thread's native stack may grow (its bounds from pthread_getattr_np, a margin kept for the
+  error path); call it on the thread, before deep recursion is possible }
+procedure StackGuardInit;
+{ True once less than the margin of the native stack is left: a native recursion (a Proxy without traps around a
+  prototype cycle, a chain of bound functions) then throws a RangeError instead of overflowing the stack }
+function NativeStackLow: Boolean; noinline;
+
 { ---- the host clock ---- }
 { a host's mocked clocks (fake timers): the epoch time in milliseconds Date, Temporal.Now and the like read, and
   the monotonic time performance.now reads; NaN puts the real clock back }
@@ -395,13 +408,39 @@ function MonoOverride(out Ms: Double): Boolean; noinline;
 implementation
 
 uses
-  NumericText;
+  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText;
+
+function pthread_self: PtrUInt; cdecl; external 'c';
+function pthread_getattr_np(Th: PtrUInt; Attr: Pointer): Integer; cdecl; external 'c';
+function pthread_attr_getstack(Attr: Pointer; StackAddr: PPointer; StackSize: PPtrUInt): Integer; cdecl; external 'c';
+function pthread_attr_destroy(Attr: Pointer): Integer; cdecl; external 'c';
+
+const
+  { what the native stack keeps for the error path and the runtime once the guard trips }
+  NATIVE_STACK_MARGIN = 512 * 1024;
 
 threadvar
+  NativeStackLimit: PtrUInt;   { 0: unguarded }
   CurProfile: TLangProfile;
   { the mocked clocks, each held as its value + 1 so the zero a new thread starts with means none }
   EpochOverrideP1, MonoOverrideP1: Double;
   EpochOverridden, MonoOverridden: Boolean;
+
+procedure StackGuardInit;
+var Attr: array[0..127] of Byte; Addr: Pointer; Size: PtrUInt;
+begin
+  NativeStackLimit := 0;
+  if pthread_getattr_np(pthread_self, @Attr[0]) <> 0 then Exit;
+  if pthread_attr_getstack(@Attr[0], @Addr, @Size) = 0 then
+    if Size > 2 * NATIVE_STACK_MARGIN then NativeStackLimit := PtrUInt(Addr) + NATIVE_STACK_MARGIN;
+  pthread_attr_destroy(@Attr[0]);
+end;
+
+function NativeStackLow: Boolean;
+var Here: Byte;
+begin
+  Result := PtrUInt(@Here) < NativeStackLimit;
+end;
 
 procedure SetClockOverride(EpochMs, MonoMs: Double);
 begin
@@ -640,7 +679,8 @@ begin
   end;
   SetLength(GrayStack, 65536);
   SetLength(RememberedList, 65536);
-  SetLength(TempRoots, 65536);
+  TempRoots := fpmmap(nil, TEMP_ROOTS_MAX * SizeOf(TValue), PROT_READ or PROT_WRITE, MAP_PRIVATE or MAP_ANONYMOUS,
+    -1, 0);
   TempTop := 0;
 end;
 
@@ -2256,7 +2296,8 @@ begin
   if MegaICTab <> nil then FreeMem(MegaICTab);
   MegaICTab := nil;
   RootShapes := nil; RootShapeCount := 0;
-  GrayStack := nil; GrayTop := 0; RememberedList := nil; RememberedTop := 0; TempRoots := nil; TempTop := 0;
+  GrayStack := nil; GrayTop := 0; RememberedList := nil; RememberedTop := 0; if TempRoots <> nil then fpmunmap(TempRoots, TEMP_ROOTS_MAX * SizeOf(TValue));
+  TempRoots := nil; TempTop := 0;
   GCOldBytes := 0; GCOldBytesAtMajor := 0; GCPromotedBytes := 0; GCMinorCount := 0; GCMajorCount := 0;
 end;
 

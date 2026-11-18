@@ -483,19 +483,22 @@ end;
 
 { 10.5.6 [[DefineOwnProperty]] of a proxy, through its trap }
 function ProxyDefineOwnProperty(PV: TValue; Key: PStr; const D: TPropDesc; var Ok: Boolean): Boolean;
-var Trap, R, DO_: TValue; TD, DD: TPropDesc; TF, Ext, SettingConfigFalse: Boolean;
+var Trap, R, DO_: TValue; TD, DD, DR: TPropDesc; TF, Ext, SettingConfigFalse: Boolean;
 begin
+  { the descriptor's values stay rooted across the trap's lookup, which can run guest code (a handler accessor)
+    that collects }
+  DR := D;
+  PushRoot(PV); PushRoot(D.Value); PushRoot(D.Get); PushRoot(D.Set_);
+  if not ProxyGetTrap(PV, 'defineProperty', Trap) then begin PopRoots(4); Exit(False); end;
+  PV := RootAt(TempTop - 4);
+  DR.Value := RootAt(TempTop - 3); DR.Get := RootAt(TempTop - 2); DR.Set_ := RootAt(TempTop - 1);
+  PopRoots(4);
+  if IsNullish(Trap) then Exit(DefineOwnPropertyV(ObjOf(PV)^.Aux1, Key, DR, Ok));
+  { nothing allocates between the pop above and these pushes }
   PushRoot(PV);
-  if not ProxyGetTrap(PV, 'defineProperty', Trap) then begin PopRoots(1); Exit(False); end;
-  PV := RootAt(TempTop - 1);
-  if IsNullish(Trap) then
-  begin
-    PopRoots(1);
-    Exit(DefineOwnPropertyV(ObjOf(PV)^.Aux1, Key, D, Ok));
-  end;
   PushRoot(Trap);
-  PushRoot(D.Value); PushRoot(D.Get); PushRoot(D.Set_);
-  DO_ := FromPropertyDescriptor(D, True);
+  PushRoot(DR.Value); PushRoot(DR.Get); PushRoot(DR.Set_);
+  DO_ := FromPropertyDescriptor(DR, True);
   if not ProxyCallTrap(RootAt(TempTop - 5), RootAt(TempTop - 4), 2, KeyToValue(Key), DO_, VUndefined, R) then
   begin PopRoots(5); Exit(False); end;
   Ok := ToBool(R);
@@ -505,7 +508,7 @@ begin
   PushRoot(TD.Value); PushRoot(TD.Get); PushRoot(TD.Set_);
   if not IsExtensibleOM(ObjOf(RootAt(TempTop - 8))^.Aux1, Ext) then begin PopRoots(8); Exit(False); end;
   TD.Value := RootAt(TempTop - 3); TD.Get := RootAt(TempTop - 2); TD.Set_ := RootAt(TempTop - 1);
-  DD := D;
+  DD := DR;
   DD.Value := RootAt(TempTop - 6); DD.Get := RootAt(TempTop - 5); DD.Set_ := RootAt(TempTop - 4);
   PopRoots(8);
   SettingConfigFalse := DD.HasConfigurable and not DD.Configurable;

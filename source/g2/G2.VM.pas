@@ -1325,7 +1325,7 @@ end;
   exception frame) }
 procedure XBadClosure(T: PFuncTemplate; C: PObj); noinline;
 begin
-  WriteLn(ErrOutput, 'closure ', DescribeTemplate(T), ' created with a bad upvalue array ', IntToHex(C^.Aux2, 16), ' minor ', GCMinorCount, ' temptop ', TempTop, ' cap ', Length(TempRoots));
+  WriteLn(ErrOutput, 'closure ', DescribeTemplate(T), ' created with a bad upvalue array ', IntToHex(C^.Aux2, 16), ' minor ', GCMinorCount, ' temptop ', TempTop, ' cap ', TEMP_ROOTS_MAX);
   Halt(9);
 end;
 
@@ -2636,14 +2636,21 @@ end;
 
 { 20.1.3.3 / 7.3.21 steps 4-6: whether Proto is on V's prototype chain, through [[GetPrototypeOf]] (a proxy's trap) }
 function ProtoChainHas(V, Proto: TValue; var Res: Boolean): Boolean;
-var P: TValue;
+const
+  { an ordinary chain cannot loop (10.1.2.1 OrdinarySetPrototypeOf), but one closed through a Proxy can, and the
+    walk would never end: past this many Proxy steps it ends in a RangeError, as a native recursion would }
+  MAX_PROXY_STEPS = 100000;
+var P: TValue; Steps: Integer;
 begin
   Res := False;
   P := V;
+  Steps := 0;
   while True do
   begin
     if ObjOf(P)^.OKind = okProxy then
     begin
+      Inc(Steps);
+      if Steps > MAX_PROXY_STEPS then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
       PushRoot(Proto);
       if not GetProtoHook(P, P) then begin PopRoots(1); Exit(False); end;
       Proto := RootAt(TempTop - 1);
@@ -3030,6 +3037,9 @@ end;
 function ProxyGetTrap(PV: TValue; const Name: UnicodeString; var Trap: TValue): Boolean;
 var H: TValue;
 begin
+  { every Proxy internal method starts here: a native recursion through proxies (a prototype cycle closed by one)
+    ends in a RangeError before the native stack does }
+  if NativeStackLow then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
   H := ObjOf(PV)^.Aux2;
   if not IsObject(H) then Exit(ThrowTypeError('Cannot perform ''' + Name + ''' on a proxy that has been revoked'));
   Result := GetV(H, AtomOf(Name), Trap);
@@ -3257,6 +3267,7 @@ begin
       end;
     okBound:
       begin
+        if NativeStackLow then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
         BArgs := PValueArray(PtrOf(O^.Aux2));
         N := BArgs^.Len - 1;
         SavedTop := StackTop;
@@ -8685,6 +8696,7 @@ end;
 
 procedure VMInit;
 begin
+  StackGuardInit;
   GCDescribeNative := @DescribeTemplate;
   { Zeroed pages on first touch: an eager GetMem + FillChar of the 32 MB stack
     was 8,192 page faults and 32 MB of RSS in every run, empty script included. }

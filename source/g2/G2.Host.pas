@@ -362,7 +362,7 @@ function CallRaw(F, This: TRawValue; const Args: array of TG2Value): TG2Value;
 var Base, I: Integer; R: TRawValue; Ok: Boolean;
 begin
   Base := TempTop;
-  if Base + System.Length(Args) + 2 > System.Length(TempRoots) then
+  if Base + System.Length(Args) + 2 > TEMP_ROOTS_MAX then
     raise EG2RangeError.Create('too many arguments for a call from host code');
   PushRoot(F);
   PushRoot(This);

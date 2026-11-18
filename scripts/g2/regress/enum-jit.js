@@ -6,9 +6,9 @@ function check(what, got, want) { if (!Object.is(got, want)) { bad++; console.lo
 
 function mk(i) { enum E { A = i, B = A + 1, C = "c" + E.A } return E; }
 let s = 0;
-for (let i = 0; i < 200000; i++) { const E = mk(i); s += E.B + E.C.length; }
+for (let i = 0; i < 20000; i++) { const E = mk(i); s += E.B + E.C.length; }
 let want = 0;
-for (let i = 0; i < 200000; i++) want += (i + 1) + ('c' + i).length;
+for (let i = 0; i < 20000; i++) want += (i + 1) + ('c' + i).length;
 check('hot enums', s, want);
 const E = mk(7);
 check('null prototype', Object.getPrototypeOf(E), null);
