@@ -364,6 +364,22 @@ function M_Asinh(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Re
 function M_Atanh(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 7); end;
 function M_Fround(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; begin Result := MathFn(Args, Argc, Res, 8); end;
 
+{ Math.clamp ( value, lower, upper ) (the Math.clamp proposal, which GocciaScript ships): each converted by
+  ToNumber in order; NaN in any gives NaN; lower above upper is a RangeError }
+function M_Clamp(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var V, Lo, Hi: Double;
+begin
+  if Argc < 3 then
+    Exit(ThrowTypeError('Math.clamp expects at least 3 arguments but got ' + IntToStr(Argc)));
+  if not NumArg(Args, Argc, 1, V) or not NumArg(Args, Argc, 2, Lo) or not NumArg(Args, Argc, 3, Hi) then Exit(False);
+  if IsNaN(V) or IsNaN(Lo) or IsNaN(Hi) then begin Res := MkNumber(NaN); Exit(True); end;
+  if Lo > Hi then Exit(ThrowError('RangeError', 'Invalid range in Math.clamp'));
+  if V < Lo then Res := MkNumber(Lo)
+  else if V > Hi then Res := MkNumber(Hi)
+  else Res := MkNumber(V);
+  Result := True;
+end;
+
 function ToUint32D(D: Double): UInt32;
 begin
   Result := DoubleToUint32Mod(D);
@@ -828,6 +844,7 @@ begin
   DefineNative(Scratch, 'fround', M_Fround, 1);
   DefineNative(Scratch, 'imul', M_Imul, 2);
   DefineNative(Scratch, 'clz32', M_Clz32, 1);
+  DefineNative(Scratch, 'clamp', M_Clamp, 3);
   DefineNative(GlobalObj, 'encodeURIComponent', G_EncodeURIComponent, 1);
   DefineNative(GlobalObj, 'encodeURI', G_EncodeURI, 1);
   DefineNative(GlobalObj, 'decodeURIComponent', G_DecodeURIComponent, 1);
