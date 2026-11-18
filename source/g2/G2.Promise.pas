@@ -1156,7 +1156,10 @@ begin
     E := AggregateErrorProto;
     O := NewObject(RootShapeFor(E), 4, okError);
     PushRoot(MkPtr(O));
+    E := StrFromUnicode('All promises were rejected');
+    DefineOwn(RootAt(TempTop - 1), AtomMessage, E, pfHidden);
     DefineOwn(RootAt(TempTop - 1), AtomOf('errors'), VA(RootAt(TempTop - 2))^.Data[0], pfHidden);
+    AttachStack(RootAt(TempTop - 1));
     Result := CapSettle(VA(RootAt(TempTop - 2))^.Data[2], 1, RootAt(TempTop - 1));
     PopRoots(2);
     Exit;
@@ -1220,11 +1223,11 @@ end;
 
 { 27.2.4.1-27.2.4.5: the loop over the iterable (Kind 3: race). The state shared by the element functions is
   [values or errors array, remaining count, capability, kind]. }
-function Combinator(C, Iterable: TValue; Kind: Integer; var Res: TValue): Boolean;
+function CombinatorIn(CB, Kind: Integer; var Res: TValue): Boolean;
 var Cap, Resolve, It, V, NextP, OnF, OnR, D, F, R, ResFn, RejFn, St: TValue; Index: Integer; Done, IterDone: Boolean;
   A: array[0..1] of TValue;
 begin
-  if not NewPromiseCapability(C, Cap) then Exit(False);
+  if not NewPromiseCapability(RootAt(CB), Cap) then Exit(False);
   if IsObject(Cap) then
   begin
     { a %Promise% capability gets its resolving functions now: every element shares their state }
@@ -1235,8 +1238,8 @@ begin
     PopRoots(3);
   end;
   PushRoot(Cap);
-  { GetPromiseResolve(C) }
-  if not GetV(C, AtomResolve, Resolve) then
+  { GetPromiseResolve(RootAt(CB)) }
+  if not GetV(RootAt(CB), AtomResolve, Resolve) then
   begin
     Result := RejectWithPending(RootAt(TempTop - 1), Res);
     PopRoots(1);
@@ -1250,7 +1253,7 @@ begin
     Exit;
   end;
   PushRoot(Resolve);
-  if not GetIterator(Iterable, It) then
+  if not GetIterator(RootAt(CB + 1), It) then
   begin
     Result := RejectWithPending(RootAt(TempTop - 2), Res);
     PopRoots(2);
@@ -1283,7 +1286,7 @@ begin
     PushRoot(V);
     if Kind <> 3 then ArrayPush(ObjOf(VA(RootAt(TempTop - 2))^.Data[0]), VUndefined);
     A[0] := RootAt(TempTop - 1);
-    if not CallValue(RootAt(TempTop - 4), C, @A[0], 1, NextP) then begin PopRoots(1); Break; end;
+    if not CallValue(RootAt(TempTop - 4), RootAt(CB), @A[0], 1, NextP) then begin PopRoots(1); Break; end;
     PushRoot(NextP);
     { roots: Cap -6, Resolve -5, It -4, St -3, V -2, NextP -1 }
     Cap := RootAt(TempTop - 6);
@@ -1332,6 +1335,18 @@ begin
   if not IterDone then IteratorCloseV(RootAt(TempTop - 2), True);
   Result := RejectWithPending(RootAt(TempTop - 4), Res);
   PopRoots(4);
+end;
+
+{ C and Iterable are rooted for the whole loop: the capability's constructor and every step run script, which can
+  collect (and move them) }
+function Combinator(C, Iterable: TValue; Kind: Integer; var Res: TValue): Boolean;
+var CB: Integer;
+begin
+  CB := TempTop;
+  PushRoot(C);
+  PushRoot(Iterable);
+  Result := CombinatorIn(CB, Kind, Res);
+  PopRoots(2);
 end;
 
 function Promise_All(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;

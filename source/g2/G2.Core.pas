@@ -234,6 +234,7 @@ threadvar
   NurseryStart, NurseryTop, NurseryLimit: PByte;
   GCRootScanner: procedure;   { VM visits its roots with GCVisit }
   GCMinorCount, GCMajorCount: Integer;
+  GCEpoch: Integer;   { collections of either kind (GCEpochNow) }
   GCPromotedBytes, GCOldBytes, GCOldBytesAtMajor: Int64;
 
 procedure HeapInit(NurseryBytes: SizeInt);
@@ -391,6 +392,9 @@ function ProfileFunctionCtor: Boolean; noinline;
 function ProfileStrictTypes: Boolean; noinline;
 { errors carry a stack trace (GocciaScript's hosts; not the conformance host) }
 function ProfileStackTraces: Boolean; noinline;
+{ the collections so far (minor and major): unchanged across a call, nothing moved or was freed meanwhile. Not
+  inline: fpc-toolchain 3.3.1+4 can fold a second threadvar read of an expression into an absolute address }
+function GCEpochNow: Integer; noinline;
 
 { ---- the native stack ---- }
 { records how far this thread's native stack may grow (its bounds from pthread_getattr_np, a margin kept for the
@@ -494,6 +498,11 @@ end;
 function ProfileStrictTypes: Boolean;
 begin
   Result := CurProfile.Restricted and CurProfile.StrictTypes;
+end;
+
+function GCEpochNow: Integer;
+begin
+  Result := GCEpoch;
 end;
 
 function ProfileStackTraces: Boolean;
@@ -975,6 +984,7 @@ procedure CollectMinor;
 var I: Integer; C: PCell;
 begin
   Inc(GCMinorCount);
+  Inc(GCEpoch);
   if GCVerify then VerifyHeap('barrier');   { every old cell pointing into the nursery is remembered }
   InMinor := True;
   GrayTop := 0;
@@ -1063,6 +1073,7 @@ var I: Integer;
 begin
   { called right after a minor collection: the nursery is empty }
   Inc(GCMajorCount);
+  Inc(GCEpoch);
   InMinor := False;
   GrayTop := 0;
   if Assigned(GCRootScanner) then GCRootScanner;

@@ -103,6 +103,22 @@
     defineProperty(G, 'performance', { value: perf, writable: d.writable, enumerable: d.enumerable, configurable: d.configurable });
     defineProperty(G, 'Performance', { value: Performance, writable: true, enumerable: false, configurable: true });
   }
+  // GocciaScript's Temporal.PlainMonthDay.compare (not in Temporal): by month, then day, each operand converted as
+  // PlainMonthDay.from converts it
+  const Temporal = G.Temporal;
+  if (Temporal && Temporal.PlainMonthDay && !Object.prototype.hasOwnProperty.call(Temporal.PlainMonthDay, 'compare')) {
+    const PMD = Temporal.PlainMonthDay;
+    const monthOf = (md) => Number(md.monthCode.slice(1, 3));
+    const compare = {
+      compare(one, two) {
+        const a = PMD.from(one), b = PMD.from(two);
+        const ma = monthOf(a), mb = monthOf(b);
+        if (ma !== mb) return ma < mb ? -1 : 1;
+        return a.day === b.day ? 0 : a.day < b.day ? -1 : 1;
+      }
+    }.compare;
+    defineProperty(PMD, 'compare', { value: compare, writable: true, enumerable: false, configurable: true });
+  }
   // GocciaScript's globalThis cannot be reassigned
   defineProperty(G, 'globalThis', { writable: false });
 

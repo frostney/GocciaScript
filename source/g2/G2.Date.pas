@@ -391,6 +391,8 @@ begin
 end;
 
 { 21.4.1.32 Date Time String Format, with expanded years; NaN when S is not an instance of it }
+type TStringArray16 = array of UnicodeString;
+
 function ParseISO(const S: UnicodeString): Double;
 var R: TDP; Y, Mo, D, H, Mi, Sec, Ms, OH, OM, Frac, I: Integer; Sign: Integer; HasTime, HasOffset: Boolean;
   OffMs, T: Double;
@@ -648,17 +650,218 @@ begin
     if not Digits(R, 2, OM) then Exit;
     T := T - Sign * (OH * msPerHour + OM * msPerMinute);
   end;
-  { anything after: the zone's name in parentheses }
+  { after the offset only the zone's name, in parentheses }
+  if Peek(R) <> #0 then
+  begin
+    if not Sp or (Peek(R) <> '(') or (R.S[Length(R.S)] <> ')') then Exit;
+  end;
   Result := TimeClip(T);
 end;
 
+{ ---------------- GocciaScript's legacy and display date forms ----------------
+  21.4.3.2 Date.parse leaves formats other than the date time string format to the implementation; GocciaScript
+  (its Date shim) reads these, as V8 does: "5/1/49", "49/5/1", "may 1 49" and the like as local midnight, and
+  display dates ("Sat Jun 15 2024 11:30:45 GMT+0200", "Sat, 15 Jun 2024 11:30:45 -0700") with a numeric offset or
+  an RFC 2822 zone name, local time without one. }
+
+function SplitOn(const S: UnicodeString; Sep: WideChar): TStringArray16;
+var I, Start, N: Integer;
+begin
+  SetLength(Result, 0);
+  Start := 1;
+  N := 0;
+  for I := 1 to Length(S) + 1 do
+    if (I > Length(S)) or (S[I] = Sep) then
+    begin
+      SetLength(Result, N + 1);
+      Result[N] := Copy(S, Start, I - Start);
+      Inc(N);
+      Start := I + 1;
+    end;
+end;
+
+{ Number(token) for a legacy date's number: an integer, False otherwise }
+function LegacyInt(const S: UnicodeString; out V: Double): Boolean;
+var T: UnicodeString; I, Start: Integer;
+begin
+  T := Trim(S);
+  Result := False;
+  if T = '' then Exit;
+  Start := 1;
+  if (T[1] = '+') or (T[1] = '-') then Start := 2;
+  if Start > Length(T) then Exit;
+  V := 0;
+  for I := Start to Length(T) do
+  begin
+    if (T[I] < '0') or (T[I] > '9') then Exit;
+    V := V * 10 + (Ord(T[I]) - Ord('0'));
+  end;
+  if T[1] = '-' then V := -V;
+  Result := True;
+end;
+
+{ a month's name or three-letter abbreviation (any case; "sept" too): 1..12, 0 for none }
+function MonthOfWord(const W: UnicodeString): Integer;
+const Long: array[1..12] of UnicodeString = ('january', 'february', 'march', 'april', 'may', 'june', 'july',
+  'august', 'september', 'october', 'november', 'december');
+var L: UnicodeString; I: Integer;
+begin
+  L := LowerCase(W);
+  for I := 1 to 12 do
+    if (L = Long[I]) or (L = Copy(Long[I], 1, 3)) then Exit(I);
+  if L = 'sept' then Exit(9);
+  Result := 0;
+end;
+
+{ local midnight of a legacy date (a two-digit year in 1950..2049) }
+function LegacyLocal(Y, M, D: Double): Double;
+begin
+  if (M < 1) or (M > 12) or (D < 1) or (D > 31) then Exit(NaN);
+  if (Y >= 0) and (Y <= 99) then
+  begin
+    if Y >= 50 then Y := 1900 + Y else Y := 2000 + Y;
+  end;
+  Result := TimeClip(UTCOf(MakeDate(MakeDay(Y, M - 1, D), 0)));
+end;
+
+{ "m/d/y" or "y/m/d" (y past 31), or three words one of which is a month; Handled False for any other shape }
+function ParseLegacyDate(const T: UnicodeString; out Handled: Boolean): Double;
+var P: TStringArray16; A, B, C: Double; I, M: Integer;
+begin
+  Result := NaN;
+  Handled := False;
+  if Pos('/', T) > 0 then
+  begin
+    P := SplitOn(T, '/');
+    if Length(P) <> 3 then Exit;
+    Handled := True;
+    if not (LegacyInt(P[0], A) and LegacyInt(P[1], B) and LegacyInt(P[2], C)) then Exit;
+    if (A >= 1) and (A <= 12) then Exit(LegacyLocal(C, A, B));
+    if A > 31 then Exit(LegacyLocal(A, B, C));
+    Exit;
+  end;
+  P := SplitOn(T, ' ');
+  if Length(P) <> 3 then Exit;
+  for I := 0 to 2 do
+  begin
+    M := MonthOfWord(P[I]);
+    if M = 0 then Continue;
+    Handled := True;
+    case I of
+      0: begin if not (LegacyInt(P[1], A) and LegacyInt(P[2], B)) then Exit; end;
+      1: begin if not (LegacyInt(P[0], A) and LegacyInt(P[2], B)) then Exit; end;
+    else begin if not (LegacyInt(P[0], A) and LegacyInt(P[1], B)) then Exit; end;
+    end;
+    { the number past 31 is the year }
+    if A > 31 then Exit(LegacyLocal(A, M, B));
+    Exit(LegacyLocal(B, M, A));
+  end;
+end;
+
+{ a zone after a display date's time: GMT, UTC, UT, Z or a US zone name, or an offset alone or after GMT, UTC or
+  UT (+h, +hh, +hhmm, +h:m, +hh:mm); in milliseconds, False when it is none of these }
+function LegacyOffset(const Token: UnicodeString; out Off: Double): Boolean;
+const Names: array[0..11] of UnicodeString = ('UT', 'UTC', 'GMT', 'Z', 'EST', 'EDT', 'CST', 'CDT', 'MST', 'MDT',
+  'PST', 'PDT');
+  Hours: array[0..11] of Integer = (0, 0, 0, 0, -5, -4, -6, -5, -7, -6, -8, -7);
+var U, Body, HT, MT: UnicodeString; I, Start, Colon: Integer; H, Mi: Double; Neg: Boolean;
+  function AllDigits(const X: UnicodeString): Boolean;
+  var K: Integer;
+  begin
+    Result := X <> '';
+    for K := 1 to Length(X) do if (X[K] < '0') or (X[K] > '9') then Exit(False);
+  end;
+begin
+  Result := False;
+  U := UpperCase(Token);
+  for I := 0 to 11 do
+    if U = Names[I] then begin Off := Hours[I] * msPerHour; Exit(True); end;
+  Start := 1;
+  if (Copy(U, 1, 3) = 'GMT') or (Copy(U, 1, 3) = 'UTC') then Start := 4
+  else if Copy(U, 1, 2) = 'UT' then Start := 3;
+  if (Start > Length(U)) or ((U[Start] <> '+') and (U[Start] <> '-')) then Exit;
+  Neg := U[Start] = '-';
+  Body := Copy(U, Start + 1, MaxInt);
+  Colon := Pos(':', Body);
+  if Colon > 0 then
+  begin
+    HT := Copy(Body, 1, Colon - 1);
+    MT := Copy(Body, Colon + 1, MaxInt);
+    if Pos(':', MT) > 0 then Exit;
+  end
+  else if Length(Body) > 2 then
+  begin
+    HT := Copy(Body, 1, Length(Body) - 2);
+    MT := Copy(Body, Length(Body) - 1, 2);
+  end
+  else
+  begin
+    HT := Body;
+    MT := '00';
+  end;
+  if (Length(HT) < 1) or (Length(HT) > 2) or (Length(MT) < 1) or (Length(MT) > 2) then Exit;
+  if not AllDigits(HT) or not AllDigits(MT) then Exit;
+  LegacyInt(HT, H);
+  LegacyInt(MT, Mi);
+  Off := (H * 60 + Mi) * msPerMinute;
+  if Neg then Off := -Off;
+  Result := True;
+end;
+
+{ "Wdy Mon dd yyyy hh:mm[:ss[.mmm]] [zone] ..." or "Wdy, dd Mon yyyy hh:mm[:ss[.mmm]] [zone] ..." }
+function ParseDisplayDate(const T: UnicodeString): Double;
+var P, TP, SP: TStringArray16; M: Integer; D, Y, H, Mi, Sec, Ms, Off: Double; Frac: UnicodeString; V: Double;
+begin
+  Result := NaN;
+  P := SplitOn(T, ' ');
+  if Length(P) < 5 then Exit;
+  if Pos(',', P[0]) > 0 then
+  begin
+    if not LegacyInt(P[1], D) then Exit;
+    M := MonthOfWord(P[2]);
+  end
+  else
+  begin
+    M := MonthOfWord(P[1]);
+    if not LegacyInt(P[2], D) then Exit;
+  end;
+  if (M = 0) or not LegacyInt(P[3], Y) then Exit;
+  TP := SplitOn(P[4], ':');
+  if (Length(TP) <> 2) and (Length(TP) <> 3) then Exit;
+  if not (LegacyInt(TP[0], H) and LegacyInt(TP[1], Mi)) then Exit;
+  Sec := 0;
+  Ms := 0;
+  if Length(TP) = 3 then
+  begin
+    SP := SplitOn(TP[2], '.');
+    if not LegacyInt(SP[0], Sec) then Exit;
+    if Length(SP) > 1 then
+    begin
+      Frac := Copy(SP[1] + '000', 1, 3);
+      if not LegacyInt(Frac, Ms) then Exit;
+    end;
+  end;
+  V := MakeDate(MakeDay(Y, M - 1, D), MakeTime(H, Mi, Sec, Ms));
+  if Length(P) > 5 then
+  begin
+    if not LegacyOffset(P[5], Off) then Exit;
+    Result := TimeClip(V - Off);
+  end
+  else Result := TimeClip(UTCOf(V));
+end;
+
 function ParseDate(const S: UnicodeString): Double;
-var T: UnicodeString;
+var T: UnicodeString; Handled: Boolean;
 begin
   T := Trim(S);
   Result := ParseISO(T);
   if IsNaN(Result) then Result := ParseSpaceForm(T);
   if IsNaN(Result) then Result := ParseToStringForm(T);
+  if IsNaN(Result) then
+  begin
+    Result := ParseLegacyDate(T, Handled);
+    if not Handled then Result := ParseDisplayDate(T);
+  end;
 end;
 
 { ---------------- constructor and statics ---------------- }

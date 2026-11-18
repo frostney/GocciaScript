@@ -5538,15 +5538,25 @@ begin
   Result := True;
 end;
 
+{ A native call runs with StackTop lowered to its last argument (Lo), so the frames it makes reuse the caller's
+  registers above that, which are dead at the call. A collection meanwhile neither scans nor updates them: once
+  StackTop is back at Top they would hold stale pointers (moved or freed objects) the next collection follows.
+  Epoch: the collections counted before the call; nothing moved when it is unchanged. }
+procedure ClearDeadAfterNative(Lo, Top, Epoch: Integer); inline;
+begin
+  if (Epoch <> GCEpochNow) and (Top > Lo) then FillQWord(VStack[Lo], Top - Lo, VUndefined);
+end;
+
 { FastLoop's call of a native function O (as Execute's opCall): its result in R[A]; False with its throw pending.
   Apart from FastLoop, whose register allocation the call's work would spoil }
 function XFastNative(O: PObj; R: PValue; A: NativeInt; I: QWord; Fr: PFrame): Boolean; noinline;
-var Argc, SavedTop, NP: Integer; V: TValue;
+var Argc, SavedTop, NP, Epoch: Integer; V: TValue;
 begin
   Argc := (I shr 24) and $FFFF;
   if (I shr 40) and 1 <> 0 then R[A + 1] := VUndefined;
   SavedTop := StackTop;
   StackTop := Fr^.Base + A + 2 + Argc;
+  Epoch := GCEpochNow;
   V := VUndefined;
   PushRoot(CurNewTarget);   { a plain call: the native must not see an outer new.target }
   CurNewTarget := VUndefined;
@@ -5561,6 +5571,7 @@ begin
   end;
   CurNewTarget := RootAt(TempTop - 1);
   PopRoots(1);
+  ClearDeadAfterNative(Fr^.Base + A + 2 + Argc, SavedTop, Epoch);
   StackTop := SavedTop;
   if Result then R[A] := V;
 end;
@@ -6886,6 +6897,7 @@ end;
 function Execute(StopFrame: Integer; var Res: TValue): Boolean;
 label LThrow, LReload, LNext, LDone;
 var
+  NativeEpoch: Integer;
   Fr: PFrame;
   Tpl: PFuncTemplate;
   Code: PQWord;
@@ -7885,6 +7897,7 @@ LReload:
           begin
             SavedTop := StackTop;
             StackTop := Fr^.Base + A + 2 + Argc;
+            NativeEpoch := GCEpochNow;
             V := VUndefined;
             PushRoot(CurNewTarget);   { a plain call: the native must not see an outer new.target }
             CurNewTarget := VUndefined;
@@ -7899,6 +7912,7 @@ LReload:
             end;
             CurNewTarget := RootAt(TempTop - 1);
             PopRoots(1);
+            ClearDeadAfterNative(Fr^.Base + A + 2 + Argc, SavedTop, NativeEpoch);
             StackTop := SavedTop;
             if not Ok then goto LThrow;
             R[A] := V;

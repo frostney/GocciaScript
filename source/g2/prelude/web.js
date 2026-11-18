@@ -20,11 +20,17 @@
     SecurityError: 18, NetworkError: 19, AbortError: 20, URLMismatchError: 21, QuotaExceededError: 22,
     TimeoutError: 23, InvalidNodeTypeError: 24, DataCloneError: 25
   };
-  class DOMException extends Error {
+  // an Error by its prototype chain but not by Error.isError (Web IDL: no [[ErrorData]]), with a message and a
+  // stack of its own
+  const ErrorCtor = Error;
+  class DOMException {
     #name;
     constructor(message = '', name = 'Error') {
-      super(String(message));
+      defineProperty(this, 'message', { value: String(message), writable: true, enumerable: false, configurable: true });
       this.#name = String(name);
+      const stack = new ErrorCtor(String(message)).stack;
+      if (typeof stack === 'string')
+        defineProperty(this, 'stack', { value: stack, writable: true, enumerable: false, configurable: true });
     }
     get name() {
       if (this === null || typeof this !== 'object' || !(#name in this)) throw new TypeError('DOMException.prototype.name: not a DOMException');
@@ -37,6 +43,8 @@
     }
     static isDOMException(v) { return v !== null && typeof v === 'object' && #name in v; }
   }
+  Object.setPrototypeOf(DOMException.prototype, ErrorCtor.prototype);
+  Object.setPrototypeOf(DOMException, ErrorCtor);
   const isDOMException = DOMException.isDOMException;
   delete DOMException.isDOMException;
   for (const k of ['name', 'code']) {
