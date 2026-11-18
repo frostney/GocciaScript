@@ -1689,6 +1689,26 @@ begin
   Result := ToBool(V);
 end;
 
+{ opTry as Execute's: a handler of the frame (Fr^.PC already past the instruction), its target the try's offset from
+  there. A throw from the compiled code leaves it with -1 and its frame in place: the interpreter's unwinding finds
+  this handler and goes on at its target }
+function JH_Try(Fr: PFrame; I: QWord): Boolean;
+begin
+  if HandlerTop >= Length(Handlers) then SetLength(Handlers, HandlerTop * 2 + 64);
+  Handlers[HandlerTop].Frame := FrameTop - 1;
+  Handlers[HandlerTop].PC := Fr^.PC + SarInt64(Int64(I), 40);
+  Handlers[HandlerTop].ExcIdx := Fr^.Base + Integer((I shr 8) and $FFFF);
+  Handlers[HandlerTop].Kind := (I shr 24) and $FFFF;
+  Inc(HandlerTop);
+  Result := True;
+end;
+
+function JH_EndTry(Fr: PFrame; I: QWord): Boolean;
+begin
+  Dec(HandlerTop);
+  Result := True;
+end;
+
 { the call of helper H (Fr, I) for instruction PC; a False result returns -1 (the throw pending) }
 procedure EmitHelper(H: Pointer; PC: Integer; I: QWord);
 begin
@@ -2967,6 +2987,8 @@ begin
         MovRM(jAX, jR12, PtrInt(@PFrame(nil)^.Closure));
         MovMR(jBX, A * 8, jAX);
       end;
+    opTry: EmitHelper(@JH_Try, PC, I);
+    opEndTry: EmitHelper(@JH_EndTry, PC, I);
     opCheckThis:
       begin
         { R[A] the hole: the ReferenceError (cold) }
