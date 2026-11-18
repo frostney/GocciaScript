@@ -1874,9 +1874,9 @@ begin
   begin
     S := StrOf(Obj);
     if Key = AtomLength then begin Res := MkInt(S^.Len); Exit(True); end;
-    if IndexFromString(Key, Idx) then
+    if IndexFromString(Key, Idx) and (Idx < S^.Len) then
     begin
-      if Idx < S^.Len then Res := SubString(S, Idx, 1) else Res := VUndefined;
+      Res := SubString(S, Idx, 1);
       Exit(True);
     end;
   end;
@@ -2149,12 +2149,6 @@ begin
       ArraySetLengthAny(O, Trunc(D2));
       Exit(True);
     end;
-    { a new index past a read-only length fails (10.4.2.1) }
-    if IndexFromString(Key, Idx) and ((O^.OFlags and 128) <> 0) and (Idx >= ArrayLength(O)) then
-    begin
-      Ok := False;
-      Exit(True);
-    end;
   end;
   { setters and read-only properties on the prototype chain }
   if O^.Shape^.Proto <> VNull then
@@ -2198,6 +2192,14 @@ begin
   end;
   O := ObjOf(Obj);
   if (O^.OFlags and 8) <> 0 then begin Ok := False; Exit(True); end;   { not extensible }
+  { a new index past a read-only length fails (10.4.2.1 [[DefineOwnProperty]], reached once no setter on the
+    prototype chain took the assignment) }
+  if (O^.OKind = okArray) and ((O^.OFlags and 128) <> 0) and IndexFromString(Key, Idx) and
+     (Idx >= ArrayLength(O)) then
+  begin
+    Ok := False;
+    Exit(True);
+  end;
   { a new index of an object with elements: an element where the array stays dense }
   if (O^.Elements <> nil) and IndexFromString(Key, Idx) and (O^.OKind in [okArray, okArguments]) and
      ((Idx < O^.Elements^.Len) or (((O^.OFlags and ofBigLen) = 0) and ArrayDenseOK(O^.Elements, Idx))) then
@@ -2317,6 +2319,23 @@ end;
 
 function ElemMissUndefined(O: PObj; Idx: Integer): Boolean; forward;
 
+{ some prototype of the primitive Obj has an index key or an element (String.prototype[20] = ...) }
+function PrimitiveProtosIndexed(Obj: TValue): Boolean;
+var P: TValue; Q: PObj;
+begin
+  P := ProtoForPrimitive(Obj);
+  while IsObject(P) do
+  begin
+    Q := ObjOf(P);
+    if Q^.Shape^.HasIndexKeys or ((Q^.Elements <> nil) and (Q^.Elements^.Len > 0)) then Exit(True);
+    { (String.prototype is a String object of "": no indices of its own) }
+    if not (Q^.OKind in [okPlain, okArray, okFunction, okNative, okBoolean, okNumber, okSymbolObj]) and
+       not ((Q^.OKind = okStringObj) and IsString(Q^.Aux1) and (StrOf(Q^.Aux1)^.Len = 0)) then Exit(True);
+    P := Q^.Shape^.Proto;
+  end;
+  Result := False;
+end;
+
 function GetElemV(Obj, Key: TValue; var Res: TValue): Boolean;
 var Idx: Int64; O: PObj; K: PStr; S: PStr; J: Integer;
 begin
@@ -2361,8 +2380,10 @@ begin
   else if IsString(Obj) and IndexFromValue(Key, Idx) and not IsString(Key) then
   begin
     S := StrOf(Obj);
-    if Idx < S^.Len then Res := SubString(S, Idx, 1) else Res := VUndefined;
-    Exit(True);
+    if Idx < S^.Len then begin Res := SubString(S, Idx, 1); Exit(True); end;
+    { 10.4.3.5 StringGetOwnProperty has no index past the end: the prototypes are asked (below) unless none
+      has an index key }
+    if not PrimitiveProtosIndexed(Obj) then begin Res := VUndefined; Exit(True); end;
   end;
   { 13.3.2.1 / 6.2.5.5 GetValue: ToObject(base) comes before ToPropertyKey(name) }
   if IsNullish(Obj) then Exit(ThrowNullishBase(Obj, Key, False));
@@ -4530,16 +4551,17 @@ begin
     PopRoots(2);
     Exit(True);
   end;
+  { 13.2.4.1 ArrayAccumulation: GetIterator's record keeps the next method read once (7.4.2) }
   PushRoot(Arr);
-  if not GetIterator(Src, It) then begin PopRoots(1); Exit(False); end;
-  PushRoot(It);
+  if not GetIteratorRec(Src, It, V) then begin PopRoots(1); Exit(False); end;
+  PushRoot(It); PushRoot(V);
   while True do
   begin
-    if not IteratorStep(RootAt(TempTop - 1), V, Done) then begin PopRoots(2); Exit(False); end;
+    if not IteratorStepRec(RootAt(TempTop - 2), RootAt(TempTop - 1), V, Done) then begin PopRoots(3); Exit(False); end;
     if Done then Break;
-    ArrayPush(ObjOf(RootAt(TempTop - 2)), V);
+    ArrayPush(ObjOf(RootAt(TempTop - 3)), V);
   end;
-  PopRoots(2);
+  PopRoots(3);
   Result := True;
 end;
 
