@@ -558,7 +558,21 @@ begin
         else if IsValidTimeZone(S) then Res := UStr(S)
         else Res := VNull;
       end;
-    27: Res := UStr(GetSystemTimeZoneId);
+    27:
+      begin
+        { the host's zone as Temporal.Now.timeZoneId reads it (G2.Temporal systemTZ): TZ first, then the system's }
+        S := GetEnvironmentVariable('TZ');
+        if (S <> '') and (S[1] = ':') then Delete(S, 1, 1);
+        if SameText(S, 'UTC') then Res := UStr('UTC')
+        else
+        begin
+          if not ((S <> '') and TryCanonicalizeTimeZoneIdentifierCase(S, T) and IsValidTimeZone(T)) then
+            T := GetSystemTimeZoneId;
+          { a link's primary identifier (Etc/UTC is UTC), as Temporal's SystemTimeZoneIdentifier gives it }
+          if TryKnownPrimaryTimeZoneIdentifier(T, S) then T := S;
+          Res := UStr(T);
+        end;
+      end;
     30:
       if (Argc >= 5) and ToBool(Args[5]) then
       begin
