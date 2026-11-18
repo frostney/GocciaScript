@@ -544,6 +544,8 @@ begin
     on E: EGocciaTOMLParseError do Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
     on E: EGocciaDataDepthError do Exit(ThrowError('RangeError', UTF8Decode(E.Message)));
     on E: EGocciaDataTypeError do Exit(ThrowError('TypeError', UTF8Decode(E.Message)));
+    { any other parser failure is still the text's: never let a Pascal exception into the VM }
+    on E: Exception do Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
   end;
   Res := StrFromUnicode(Json);
   Result := True;
