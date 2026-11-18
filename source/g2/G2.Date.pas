@@ -319,7 +319,8 @@ begin
   Result := Pad(HourFromTime(TV), 2) + ':' + Pad(MinFromTime(TV), 2) + ':' + Pad(SecFromTime(TV), 2) + ' GMT';
 end;
 
-{ 21.4.4.41.3 TimeZoneString: "+0100 (CET)" of an instant }
+{ 21.4.4.41.3 TimeZoneString: "+0100" of an instant. tzName is implementation-defined, the empty String or a name
+  in parentheses; GocciaScript writes the empty String }
 function TZStr(TV: Double): UnicodeString;
 var O: Double; Abbr: UnicodeString; Mins: Int64;
 begin
@@ -327,7 +328,6 @@ begin
   Mins := Round(O / msPerMinute);
   if Mins >= 0 then Result := '+' else Result := '-';
   Result := Result + Pad(Abs(Mins) div 60, 2) + Pad(Abs(Mins) mod 60, 2);
-  if Abbr <> '' then Result := Result + ' (' + Abbr + ')';
 end;
 
 { 21.4.4.41.4 ToDateString }
