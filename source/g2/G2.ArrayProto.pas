@@ -464,7 +464,7 @@ function AP_ReduceRight(Args: TArgs; Argc: Integer; var Res: TValue): Boolean; b
 
 { 23.1.3.17 indexOf }
 function AP_IndexOf(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, K: Int64; D: Double; Has: Boolean; V, X: TValue; E: PValueArray;
+var Len, K, N: Int64; D: Double; Has: Boolean; V, X: TValue; E: PValueArray; P, PEnd: PValue;
 begin
   if not ToObj(Args) then Exit(False);
   if not LengthOfArrayLike(Args[0], Len) then Exit(False);
@@ -484,10 +484,18 @@ begin
       { an object, symbol, boolean, null or undefined is strictly equal only to itself: compare the bits }
       if not (IsNumber(X) or IsString(X) or IsBigInt(X)) then
       begin
-        while (K < Len) and (K < E^.Len) do
+        { (one bound and a pointer: the scan is the whole cost of a long search) }
+        N := E^.Len;
+        if Len < N then N := Len;
+        if K < N then
         begin
-          if E^.Data[K] = X then begin Res := IdxVal(K); Exit(True); end;
-          Inc(K);
+          P := @E^.Data[K];
+          PEnd := @E^.Data[N];
+          while P < PEnd do
+          begin
+            if P^ = X then begin Res := IdxVal(K + (P - PValue(@E^.Data[K]))); Exit(True); end;
+            Inc(P);
+          end;
         end;
         Exit(True);
       end;

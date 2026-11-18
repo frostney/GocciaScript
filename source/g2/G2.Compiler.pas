@@ -5283,12 +5283,18 @@ begin
 end;
 
 procedure TCompiler.CompileArray(E: TGocciaArrayExpression; Dest: Integer);
-var Arr, V, I, Save: Integer; Simple: Boolean;
+var Arr, V, I, Save: Integer; Simple: Boolean; C: TClass;
 begin
   Save := FS.FreeReg;
+  { (the element kinds by exact class: neither class has subclasses, and a literal's elements are many - an is
+    check walks the class chain each time) }
   Simple := E.Elements.Count <= 64;
-  for I := 0 to E.Elements.Count - 1 do
-    if (E.Elements[I] is TGocciaSpreadExpression) or (E.Elements[I] is TGocciaHoleExpression) then Simple := False;
+  if Simple then
+    for I := 0 to E.Elements.Count - 1 do
+    begin
+      C := E.Elements[I].ClassType;
+      if (C = TGocciaSpreadExpression) or (C = TGocciaHoleExpression) then Simple := False;
+    end;
   if Simple and (E.Elements.Count > 0) then
   begin
     Arr := AllocReg;
@@ -5307,12 +5313,13 @@ begin
   V := AllocReg;
   for I := 0 to E.Elements.Count - 1 do
   begin
-    if E.Elements[I] is TGocciaSpreadExpression then
+    C := E.Elements[I].ClassType;
+    if C = TGocciaSpreadExpression then
     begin
       ExprTo(TGocciaSpreadExpression(E.Elements[I]).Argument, V);
       Emit(Ins(opArrSpread, Arr, V, 0));
     end
-    else if E.Elements[I] is TGocciaHoleExpression then
+    else if C = TGocciaHoleExpression then
       Emit(Ins(opArrHole, Arr, 0, 0))
     else
     begin
