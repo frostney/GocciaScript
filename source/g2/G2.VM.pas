@@ -2706,6 +2706,53 @@ begin
   Result := True;
 end;
 
+const
+  { the proxies an internal method may pass through to its target, or through to a handler's trap lookup, as
+    GocciaScript bounds them (MAX_PROPERTY_DELEGATION_DEPTH): deeper, a RangeError however much native stack is
+    left }
+  MAX_PROXY_DELEGATION = 2000;
+
+{ more than MAX_PROXY_DELEGATION proxies follow PV as targets (Aux1) or as handlers (Aux2) }
+function ProxyChainTooDeep(PV: TValue): Boolean;
+var T: TValue; D: Integer;
+begin
+  T := ObjOf(PV)^.Aux1;
+  D := 0;
+  while IsObject(T) and (ObjOf(T)^.OKind = okProxy) do
+  begin
+    Inc(D);
+    if D > MAX_PROXY_DELEGATION then Exit(True);
+    T := ObjOf(T)^.Aux1;
+  end;
+  T := ObjOf(PV)^.Aux2;
+  D := 0;
+  while IsObject(T) and (ObjOf(T)^.OKind = okProxy) do
+  begin
+    Inc(D);
+    if D > MAX_PROXY_DELEGATION then Exit(True);
+    T := ObjOf(T)^.Aux2;
+  end;
+  Result := False;
+end;
+
+threadvar
+  { forwards nested now: a Proxy's call or construction passed to its target, an instanceof through a bound
+    function }
+  DelegationDepth: Integer;
+
+{ one more nested forward, or a RangeError past MAX_PROXY_DELEGATION of them; LeaveDelegation undoes it }
+function EnterDelegation: Boolean;
+begin
+  if DelegationDepth >= MAX_PROXY_DELEGATION then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  Inc(DelegationDepth);
+  Result := True;
+end;
+
+procedure LeaveDelegation;
+begin
+  Dec(DelegationDepth);
+end;
+
 function InstanceOf(V, C: TValue; var Res: Boolean): Boolean;
 var P, Proto, H, R: TValue;
 begin
@@ -2736,7 +2783,15 @@ var Proto: TValue;
 begin
   Res := False;
   if not IsCallable(C) then Exit(True);
-  if ObjOf(C)^.OKind = okBound then Exit(InstanceOf(V, ObjOf(C)^.Aux1, Res));
+  if ObjOf(C)^.OKind = okBound then
+  begin
+    { 7.3.21 step 2: InstanceofOperator on the target reads its @@hasInstance, so a chain is not collapsed; each
+      step counts as a forward }
+    if not EnterDelegation then Exit(False);
+    Result := InstanceOf(V, ObjOf(C)^.Aux1, Res);
+    LeaveDelegation;
+    Exit;
+  end;
   if not IsObject(V) then Exit(True);
   { a bytecode function's prototype property through new's cache (F's shape, the slot) }
   if (ObjOf(C)^.OKind = okFunction) and (Pointer(ObjOf(C)^.Shape) = PFuncTemplate(ObjOf(C)^.Native)^.CtorFnShape) then
@@ -3158,7 +3213,7 @@ var H: TValue;
 begin
   { every Proxy internal method starts here: a native recursion through proxies (a prototype cycle closed by one)
     ends in a RangeError before the native stack does }
-  if NativeStackLow then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  if NativeStackLow or ProxyChainTooDeep(PV) then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
   H := ObjOf(PV)^.Aux2;
   if not IsObject(H) then Exit(ThrowTypeError('Cannot perform ''' + Name + ''' on a proxy that has been revoked'));
   Result := GetV(H, AtomOf(Name), Trap);
@@ -3291,7 +3346,14 @@ begin
   StackTop := Base + Argc + 2;
   if not ProxyGetTrap(PV, 'apply', Trap) then begin StackTop := SavedTop; Exit(False); end;
   if IsNullish(Trap) then
-    Result := CallValue(ObjOf(VStack[Base])^.Aux1, VStack[Base + 1], @VStack[Base + 2], Argc, Res)
+  begin
+    Result := EnterDelegation;
+    if Result then
+    begin
+      Result := CallValue(ObjOf(VStack[Base])^.Aux1, VStack[Base + 1], @VStack[Base + 2], Argc, Res);
+      LeaveDelegation;
+    end;
+  end
   else
   begin
     PushRoot(Trap);
@@ -3307,6 +3369,8 @@ end;
 function ProxyConstruct(PV: TValue; Args: PValue; Argc: Integer; NewTarget: TValue; var Res: TValue): Boolean;
 var Trap: TValue; A: PObj; Base, SavedTop, I: Integer;
 begin
+  { 10.5.15 ProxyCreate: a proxy has [[Construct]] only when its target has }
+  if not IsConstructorV(PV) then Exit(ThrowTypeError('value is not a constructor'));
   SavedTop := StackTop;
   Base := StackTop;
   if Base + Argc + 4 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
@@ -3315,7 +3379,14 @@ begin
   StackTop := Base + Argc + 2;
   if not ProxyGetTrap(PV, 'construct', Trap) then begin StackTop := SavedTop; Exit(False); end;
   if IsNullish(Trap) then
-    Result := Construct(ObjOf(VStack[Base])^.Aux1, @VStack[Base + 2], Argc, VStack[Base + 1], Res)
+  begin
+    Result := EnterDelegation;
+    if Result then
+    begin
+      Result := Construct(ObjOf(VStack[Base])^.Aux1, @VStack[Base + 2], Argc, VStack[Base + 1], Res);
+      LeaveDelegation;
+    end;
+  end
   else
   begin
     PushRoot(Trap);
@@ -3344,6 +3415,43 @@ end;
 function JitRunPushed(var Res: TValue; var Ok: Boolean): Boolean; forward;
 function JitCallFast(O: PObj; This: TValue; Args: PValue; Argc: Integer; var Res: TValue; var Ok: Boolean): Boolean; forward;
 {$ENDIF}
+
+{ the arguments a chain of bound functions starting at O passes to the first target that is not one: written at
+  StackTop (not raised), their count returned, -1 after a RangeError. Target is that function, This the innermost
+  bound this; a new.target (NT) equal to a bound function on the way becomes that function's target }
+function BoundChainArgs(O: PObj; Args: PValue; Argc: Integer; var Target, This: TValue; NT: PValue): Integer;
+var L: PObj; T: TValue; BArgs: PValueArray; Total, P, N, I: Integer;
+begin
+  Total := Argc;
+  L := O;
+  while L^.OKind = okBound do
+  begin
+    Inc(Total, PValueArray(PtrOf(L^.Aux2))^.Len - 1);
+    L := ObjOf(L^.Aux1);
+  end;
+  if StackTop + Total + 2 >= STACK_MAX then
+  begin
+    ThrowError('RangeError', 'Maximum call stack size exceeded');
+    Exit(-1);
+  end;
+  P := StackTop + Total - Argc;
+  if (Args <> nil) and (Argc > 0) then Move(Args^, VStack[P], Argc * SizeOf(TValue));
+  T := MkPtr(O);
+  L := O;
+  while L^.OKind = okBound do
+  begin
+    BArgs := PValueArray(PtrOf(L^.Aux2));
+    N := BArgs^.Len - 1;
+    Dec(P, N);
+    for I := 0 to N - 1 do VStack[P + I] := BArgs^.Data[I + 1];
+    This := BArgs^.Data[0];
+    if (NT <> nil) and (NT^ = T) then NT^ := L^.Aux1;
+    T := L^.Aux1;
+    L := ObjOf(T);
+  end;
+  Target := T;
+  Result := Total;
+end;
 
 function CallValue(F, This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; Base, I, ArgBase: Integer; BArgs: PValueArray; N: Integer; Tmp: array[0..15] of TValue;
@@ -3387,15 +3495,13 @@ begin
     okBound:
       begin
         if NativeStackLow then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-        BArgs := PValueArray(PtrOf(O^.Aux2));
-        N := BArgs^.Len - 1;
+        { 10.4.1.1: a chain of bound functions followed in a loop, each level's bound arguments in front of those
+          of the level outside it, the innermost bound this }
+        N := BoundChainArgs(O, Args, Argc, F, This, nil);
+        if N < 0 then Exit(False);
         SavedTop := StackTop;
-        Base := StackTop;
-        if Base + N + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-        for I := 0 to N - 1 do VStack[Base + I] := BArgs^.Data[I + 1];
-        if Args <> nil then Move(Args^, VStack[Base + N], Argc * SizeOf(TValue));
-        StackTop := Base + N + Argc;
-        Result := CallValue(O^.Aux1, BArgs^.Data[0], @VStack[Base], N + Argc, Res);
+        StackTop := StackTop + N;
+        Result := CallValue(F, This, @VStack[SavedTop], N, Res);
         StackTop := SavedTop;
       end;
   else
@@ -3436,7 +3542,7 @@ begin
 end;
 
 function Construct(F: TValue; Args: PValue; Argc: Integer; NewTarget: TValue; var Res: TValue): Boolean;
-var O, ThisO: PObj; Proto, SavedNT: TValue; ArgBase, SavedTop: Integer; T: PFuncTemplate; BArgs: PValueArray;
+var O, ThisO: PObj; Proto, SavedNT, ProtoDummy: TValue; ArgBase, SavedTop: Integer; T: PFuncTemplate; BArgs: PValueArray;
   N, Base, I: Integer;
 begin
   if not IsCallable(F) then Exit(ThrowTypeError('value is not a constructor'));
@@ -3484,17 +3590,13 @@ begin
   end;
   if O^.OKind = okBound then
   begin
-    { 10.4.1.2: the bound arguments first; a new.target that is the bound function becomes its target }
-    BArgs := PValueArray(PtrOf(O^.Aux2));
-    N := BArgs^.Len - 1;
+    { 10.4.1.2: the bound arguments first; a new.target that is the bound function becomes its target. A chain
+      is followed in a loop }
+    N := BoundChainArgs(O, Args, Argc, F, ProtoDummy, @NewTarget);
+    if N < 0 then Exit(False);
     SavedTop := StackTop;
-    Base := StackTop;
-    if Base + N + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
-    for I := 0 to N - 1 do VStack[Base + I] := BArgs^.Data[I + 1];
-    if Args <> nil then Move(Args^, VStack[Base + N], Argc * SizeOf(TValue));
-    StackTop := Base + N + Argc;
-    if NewTarget = F then NewTarget := O^.Aux1;
-    Result := Construct(O^.Aux1, @VStack[Base], N + Argc, NewTarget, Res);
+    StackTop := StackTop + N;
+    Result := Construct(F, @VStack[SavedTop], N, NewTarget, Res);
     StackTop := SavedTop;
     Exit;
   end;
@@ -4980,19 +5082,23 @@ end;
 function IsConstructorV(V: TValue): Boolean;
 var O: PObj; T: PFuncTemplate;
 begin
-  if not IsCallable(V) then Exit(False);
-  O := ObjOf(V);
-  case O^.OKind of
-    okFunction:
-      begin
-        T := PFuncTemplate(O^.Native);
-        Result := not (T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsAsync);
-      end;
-    okBound: Result := IsConstructorV(O^.Aux1);
-    okProxy: Result := IsConstructorV(O^.Aux1);
-    okNative: Result := (O^.OFlags and 32) <> 0;
-  else
-    Result := False;
+  { a bound function or a proxy has [[Construct]] when its target has: followed in a loop, a chain thousands deep
+    takes no native stack }
+  while True do
+  begin
+    if not IsCallable(V) then Exit(False);
+    O := ObjOf(V);
+    case O^.OKind of
+      okFunction:
+        begin
+          T := PFuncTemplate(O^.Native);
+          Exit(not (T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) or T^.IsGenerator or T^.IsAsync));
+        end;
+      okBound, okProxy: V := O^.Aux1;
+      okNative: Exit((O^.OFlags and 32) <> 0);
+    else
+      Exit(False);
+    end;
   end;
 end;
 
