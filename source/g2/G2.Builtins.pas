@@ -595,8 +595,15 @@ begin
   Result := True;
 end;
 
+{ the RangeError for a list of arguments made from an array-like longer than MAX_ARGUMENTS_LIST_LENGTH }
+function ArgumentsTooLong(const Method: UnicodeString; Len: Double): Boolean;
+begin
+  Result := ThrowError('RangeError', Method + ': arguments list length ' + UnicodeString(FloatToStr(Len)) +
+    ' exceeds maximum of ' + UnicodeString(IntToStr(MAX_ARGUMENTS_LIST_LENGTH)));
+end;
+
 function FuncProto_Apply(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var L: TValue; A: PObj; N, I: Integer; Buf: array of TValue;
+var L, LenV, V: TValue; A: PObj; N, I: Integer; Buf: array of TValue; Hole: Boolean; D: Double;
 begin
   L := Arg(Args, Argc, 2);
   if IsNullish(L) then Exit(CallValue(Args[0], Arg(Args, Argc, 1), nil, 0, Res));
@@ -608,11 +615,34 @@ begin
   end;
   A := ObjOf(L);
   N := ArrayLen(A);
+  if N > MAX_ARGUMENTS_LIST_LENGTH then Exit(ArgumentsTooLong('Function.prototype.apply', N));
   SetLength(Buf, N + 1);
+  Hole := A^.Elements = nil;
   for I := 0 to N - 1 do
   begin
+    if Hole then Break;
     Buf[I] := A^.Elements^.Data[I];
-    if Buf[I] = VHole then Buf[I] := VUndefined;
+    Hole := Buf[I] = VHole;
+  end;
+  { 7.3.20 CreateListFromArrayLike reads each index with [[Get]]: a hole (or an array without plain elements)
+    reads through the prototype chain, and a getter can change the array as the list is made }
+  if Hole then
+  begin
+    if not GetV(L, AtomLength, LenV) or not ToNumberV(LenV, D) then Exit(False);
+    if IsNaN(D) or (D <= 0) then N := 0
+    else if D > MAX_ARGUMENTS_LIST_LENGTH then Exit(ArgumentsTooLong('Function.prototype.apply', D))
+    else N := Trunc(D);
+    if N > Length(Buf) - 1 then SetLength(Buf, N + 1);
+    PushRoot(L);
+    PushRoot(MkPtr(NewArray(0, Max(4, N))));
+    for I := 0 to N - 1 do
+    begin
+      if not GetElemV(RootAt(TempTop - 2), MkInt(I), V) then begin PopRoots(2); Exit(False); end;
+      ArrayPush(ObjOf(RootAt(TempTop - 1)), V);
+    end;
+    A := ObjOf(RootAt(TempTop - 1));
+    for I := 0 to N - 1 do Buf[I] := A^.Elements^.Data[I];
+    PopRoots(2);
   end;
   { Buf is not a GC root: copy to the stack through CallValue, which copies before allocating }
   Result := CallValue(Args[0], Arg(Args, Argc, 1), @Buf[0], N, Res);
@@ -641,13 +671,12 @@ begin
   Result := True;
 end;
 
-{ [[GetPrototypeOf]], proxies through their trap }
+{ [[GetPrototypeOf]], proxies through their trap (G2.ObjModel's, through the VM's hook) }
 function GetPrototypeOfV(O: TValue; var P: TValue): Boolean;
-var Buf: array[0..1] of TValue;
 begin
-  Buf[0] := VUndefined;
-  Buf[1] := O;
-  Result := Object_GetPrototypeOf(@Buf[0], 1, P);
+  if (ObjOf(O)^.OKind = okProxy) and Assigned(GetProtoHook) then Exit(GetProtoHook(O, P));
+  P := ObjOf(O)^.Shape^.Proto;
+  Result := True;
 end;
 
 { 20.2.3.2 Function.prototype.bind }
@@ -2526,6 +2555,7 @@ begin
       DefineOwn(RootAt(TempTop - 1), AtomCause, M, pfHidden);
     end;
   end;
+  AttachStack(RootAt(TempTop - 1));
   Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;

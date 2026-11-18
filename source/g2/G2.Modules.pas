@@ -35,6 +35,12 @@ type
 
 { this thread's host module hook (nil: none) }
 procedure SetHostModuleHook(Hook: THostModuleHook);
+{ 16.2.1.10 HostGetImportMetaProperties / HostFinalizeImportMeta: the host fills a module's import.meta (made
+  with a null prototype) once, given the module's path; nil leaves it empty }
+var ImportMetaInitHook: function(Meta: TValue; const Path: UnicodeString): Boolean = nil;
+{ the host's exports of a JSON module (type: 'json') from its value, names and values interleaved (GocciaScript
+  exports the top-level object's properties besides default); nil: default only, as ECMA-262 has it }
+var JSONExportsHook: function(V: TValue; var Exp: TValue): Boolean = nil;
 { this thread's host resolution hook (nil: none) }
 procedure SetHostResolveHook(Hook: THostResolveHook);
 { Spec as an import in Referrer resolves it: a host module's key, or an absolute path }
@@ -89,6 +95,21 @@ destructor TModRec.Destroy;
 begin
   Info.Free;
   inherited;
+end;
+
+
+{ a module request as its import wrote it: the specifier without the type an import attribute added (#1 type) }
+function RequestSpecifier(const Request: UnicodeString): UnicodeString;
+var P: Integer;
+begin
+  P := Pos(#1, Request);
+  if P > 0 then Result := Copy(Request, 1, P - 1) else Result := Request;
+end;
+
+{ GocciaScript's SyntaxError for an import of a name its module does not export }
+function MissingExportMessage(const Request, Name: UnicodeString): UnicodeString;
+begin
+  Result := 'Module "' + RequestSpecifier(Request) + '" has no export named "' + Name + '"';
 end;
 
 function GetRoot(M: TModRec; K: Integer): TValue; inline;
@@ -215,6 +236,7 @@ end;
 function ClosedCell(V: TValue): TValue; forward;
 function HasModuleSource(M: TModRec): Boolean; forward;
 function ModuleSourceOf(M: TModRec): TValue; forward;
+function MakeHostModule(const Key: UnicodeString; Exp: TValue; var M: TModRec): Boolean; forward;
 
 { a module of a non-JavaScript type, a Synthetic Module Record with the one export default, evaluated at once:
   'json' (ParseJSONModule), 'text' (the import text proposal: the source decoded as UTF-8) and 'bytes' (the
@@ -237,6 +259,11 @@ begin
     if not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
     if AType = 'text' then V := StrFromUnicode(Src)
     else if not JSONTextHook(Src, V) then Exit(False);
+  end;
+  if (AType = 'json') and Assigned(JSONExportsHook) then
+  begin
+    if not JSONExportsHook(V, Tbl) then Exit(False);
+    if IsObject(Tbl) then Exit(MakeHostModule(Key, Tbl, M));
   end;
   PushRoot(V);
   M := TModRec.Create;
@@ -619,8 +646,8 @@ begin
         R := Resolve(DepOf(M, M.Info.IndirectExports[I].Request), M.Info.IndirectExports[I].ImportName);
         if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then
         begin
-          ThrowError('SyntaxError', 'The requested module ''' + M.Info.IndirectExports[I].Request +
-            ''' does not provide an export named ''' + M.Info.IndirectExports[I].ImportName + '''');
+          ThrowError('SyntaxError', MissingExportMessage(M.Info.IndirectExports[I].Request,
+            M.Info.IndirectExports[I].ImportName));
           Exit(LinkFail(L));
         end;
       end;
@@ -642,11 +669,10 @@ begin
           if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then
           begin
             if R.Kind = rkAmbiguous then
-              ThrowError('SyntaxError', 'The requested module ''' + M.Info.Imports[I].Request +
+              ThrowError('SyntaxError', 'The requested module ''' + RequestSpecifier(M.Info.Imports[I].Request) +
                 ''' contains conflicting star exports for name ''' + M.Info.Imports[I].ImportName + '''')
             else
-              ThrowError('SyntaxError', 'The requested module ''' + M.Info.Imports[I].Request +
-                ''' does not provide an export named ''' + M.Info.Imports[I].ImportName + '''');
+              ThrowError('SyntaxError', MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName));
             Exit(LinkFail(L));
           end;
         end;
@@ -1223,6 +1249,11 @@ begin
   begin
     Res := MkPtr(NewPlainObject(VNull, 4));
     SetRoot(M, rMeta, Res);
+    if Assigned(ImportMetaInitHook) then
+    begin
+      if not ImportMetaInitHook(Res, M.Path) then Exit(False);
+      Res := GetRoot(M, rMeta);
+    end;
   end;
   Result := True;
 end;

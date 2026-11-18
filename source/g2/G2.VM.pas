@@ -15,6 +15,8 @@ uses
 
 const
   FRAME_MAX = 200000;
+  { the longest list of arguments an array-like makes (apply, Reflect.apply / construct), as GocciaScript's }
+  MAX_ARGUMENTS_LIST_LENGTH = 1048576;
   okAsyncGen = 26;  { an async generator: Aux1 closure, Aux2 state, as okGenerator }
   STACK_MAX = 4 * 1024 * 1024;
   INTRINSIC_CLASS = $80000000;   { TObj.Pad of a function: a built-in class (MarkIntrinsicClass) }
@@ -266,9 +268,13 @@ threadvar
 function ThrowError(const Kind, Msg: UnicodeString): Boolean;
 function ThrowTypeError(const Msg: UnicodeString): Boolean;
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
+{ gives the error E (just made) its stack property when the profile wants stack traces }
+procedure AttachStack(E: TValue);
 { a private element's read and write (o.#x, o.#x = v; Key the private name) }
 { throws the TypeError for an iterator result V that is not an object (False) }
 function ThrowIterResultNotObject(V: TValue): Boolean;
+{ a value as an error message names it (a primitive as its string, an object as [object Object]) }
+function ValueDisplayText(V: TValue): UnicodeString;
 function PrivateGet(Obj: TValue; Key: PStr; var V: TValue): Boolean;
 function PrivateSet(Obj: TValue; Key: PStr; V: TValue): Boolean;
 function NewNativeFunction(Fn: TNativeFn; const Name: UnicodeString; Length: Integer): TValue;
@@ -1290,7 +1296,7 @@ end;
 function GLexSet(I: Integer; V: TValue): Boolean;
 var U: PUpval;
 begin
-  if GLexConst[I] then Exit(ThrowTypeError('Assignment to constant variable.'));
+  if GLexConst[I] then Exit(ThrowTypeError('Assignment to constant variable ''' + StrToUnicode(GLexNames[I]) + ''''));
   if GLexCells[I] = VUndefined then Exit(ThrowGLexTDZ(I));
   U := PUpval(PtrOf(GLexCells[I]));
   if U^.StackIndex >= 0 then VStack[U^.StackIndex] := V
@@ -1304,6 +1310,78 @@ end;
 
 { ---------------- errors ---------------- }
 
+const
+  STACK_TRACE_FRAME_LIMIT = 100;   { frames a stack trace renders; the rest are counted in a last line }
+
+{ a data property of O or its prototypes (False for an accessor or none: reading it never runs code) }
+function DataPropertyOf(O: PObj; Key: PStr; var V: TValue): Boolean;
+var CI, Depth: Integer;
+begin
+  Result := False;
+  for Depth := 0 to 63 do
+  begin
+    CI := ShapeLookup(O^.Shape, Key);
+    if CI >= 0 then
+    begin
+      if (O^.Shape^.PFlags[CI] and pfAccessor) <> 0 then Exit;
+      V := GetSlot(O, CI);
+      Exit(True);
+    end;
+    if not IsObject(O^.Shape^.Proto) then Exit;
+    O := ObjOf(O^.Shape^.Proto);
+  end;
+end;
+
+{ the frames below the error being made, innermost first, one line each ("    at name (source:line:column)");
+  frames of the preludes and of field initializers are left out, and past STACK_TRACE_FRAME_LIMIT a last line
+  counts the rest }
+function StackFramesText: UnicodeString;
+var I, N, Skipped, PC, L, C: Integer; T: PFuncTemplate; Nm, Src: UnicodeString;
+begin
+  Result := '';
+  N := 0;
+  Skipped := 0;
+  for I := FrameTop - 1 downto 0 do
+  begin
+    T := Frames[I].Tpl;
+    if T = nil then Continue;
+    Src := T^.SourceName;
+    if (Src = '') or (Src[1] = '<') then Continue;
+    if T^.Name <> nil then Nm := StrToUnicode(T^.Name) else Nm := '';
+    if Nm = '<script>' then Nm := '<module>'
+    else if Nm = '' then Nm := '<anonymous>'
+    else if (Nm[1] = '<') and (Nm <> '<module>') and (Nm <> '<eval>') then Continue;
+    if N >= STACK_TRACE_FRAME_LIMIT then begin Inc(Skipped); Continue; end;
+    PC := Frames[I].PC - 1;
+    L := 0;
+    C := 0;
+    if (PC >= 0) and (PC <= High(T^.Lines)) then L := T^.Lines[PC];
+    if (PC >= 0) and (PC <= High(T^.Cols)) then C := T^.Cols[PC];
+    Result := Result + #10'    at ' + Nm + ' (' + Src + ':' + UnicodeString(IntToStr(L)) + ':' +
+      UnicodeString(IntToStr(C)) + ')';
+    Inc(N);
+  end;
+  if Skipped = 1 then Result := Result + #10'    ... 1 more frame'
+  else if Skipped > 1 then Result := Result + #10'    ... ' + UnicodeString(IntToStr(Skipped)) + ' more frames';
+end;
+
+procedure AttachStack(E: TValue);
+var V: TValue; Name, Msg, Text: UnicodeString;
+begin
+  if not ProfileStackTraces or not IsObject(E) then Exit;
+  { the first line as Error.prototype.toString would make it, from data properties only }
+  Name := 'Error';
+  if DataPropertyOf(ObjOf(E), AtomName, V) and IsString(V) then Name := StrToUnicode(StrOf(V));
+  Msg := '';
+  if DataPropertyOf(ObjOf(E), AtomMessage, V) and IsString(V) then Msg := StrToUnicode(StrOf(V));
+  if Msg = '' then Text := Name else if Name = '' then Text := Msg else Text := Name + ': ' + Msg;
+  Text := Text + StackFramesText;
+  PushRoot(E);
+  V := StrFromUnicode(Text);
+  DefineOwn(RootAt(TempTop - 1), AtomStack, V, pfHidden);
+  PopRoots(1);
+end;
+
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
 var O: PObj; M: TValue;
 begin
@@ -1315,6 +1393,13 @@ begin
   PopRoots(2);
   AddProperty(O, AtomMessage, M, pfHidden);
   Result := MkPtr(O);
+  if ProfileStackTraces then
+  begin
+    PushRoot(Result);
+    AttachStack(Result);
+    Result := RootAt(TempTop - 1);
+    PopRoots(1);
+  end;
 end;
 
 function ThrowError(const Kind, Msg: UnicodeString): Boolean;
@@ -4772,8 +4857,9 @@ begin
   Result := CallValue(GetSlot(ObjOf(Ctor), CI), This, nil, 0, V);
 end;
 
-{ the TypeError for an iterator result that is not an object, naming the value }
-function ThrowIterResultNotObject(V: TValue): Boolean;
+{ a value as an error message names it: a primitive as its string (a symbol as Symbol(description)), an object as
+  [object Object] }
+function ValueDisplayText(V: TValue): UnicodeString;
 var S, D: TValue; T: UnicodeString;
 begin
   if TypeOfStr(V) = 'symbol' then
@@ -4785,7 +4871,13 @@ begin
   else if IsObject(V) then T := '[object Object]'
   else if ToStringV(V, S) and IsString(S) then T := StrToUnicode(StrOf(S))
   else T := TypeOfStr(V);
-  Result := ThrowTypeError('Iterator result ' + T + ' is not an object');
+  Result := T;
+end;
+
+{ the TypeError for an iterator result that is not an object, naming the value }
+function ThrowIterResultNotObject(V: TValue): Boolean;
+begin
+  Result := ThrowTypeError('Iterator result ' + ValueDisplayText(V) + ' is not an object');
 end;
 
 function DescribeValue(V: TValue): UnicodeString;
@@ -4828,30 +4920,30 @@ end;
 function PrivateGet(Obj: TValue; Key: PStr; var V: TValue): Boolean;
 var O: PObj; CI: Integer; A: PAccessor;
 begin
-  if not IsObject(Obj) then Exit(ThrowTypeError('Cannot read private member ' + StrToUnicode(Key) + ' from a primitive'));
+  if not IsObject(Obj) then Exit(ThrowTypeError('Private field ' + StrToUnicode(Key) + ' is not accessible'));
   O := ObjOf(Obj);
   CI := ShapeLookup(O^.Shape, Key);
   if CI < 0 then
-    Exit(ThrowTypeError('Cannot read private member ' + StrToUnicode(Key) + ' from an object whose class did not declare it'));
+    Exit(ThrowTypeError('Private field ' + StrToUnicode(Key) + ' is not accessible'));
   if (O^.Shape^.PFlags[CI] and pfAccessor) = 0 then begin V := GetSlot(O, CI); Exit(True); end;
   A := PAccessor(PtrOf(GetSlot(O, CI)));
-  if not IsCallable(A^.Getter) then Exit(ThrowTypeError('''' + StrToUnicode(Key) + ''' was defined without a getter'));
+  if not IsCallable(A^.Getter) then Exit(ThrowTypeError('Private accessor ' + StrToUnicode(Key) + ' was defined without a getter'));
   Result := CallValue(A^.Getter, Obj, nil, 0, V);
 end;
 
 function PrivateSet(Obj: TValue; Key: PStr; V: TValue): Boolean;
 var O: PObj; CI: Integer; F: Byte; A: PAccessor; R: TValue;
 begin
-  if not IsObject(Obj) then Exit(ThrowTypeError('Cannot write private member ' + StrToUnicode(Key) + ' to a primitive'));
+  if not IsObject(Obj) then Exit(ThrowTypeError('Private field ' + StrToUnicode(Key) + ' is not accessible'));
   O := ObjOf(Obj);
   CI := ShapeLookup(O^.Shape, Key);
   if CI < 0 then
-    Exit(ThrowTypeError('Cannot write private member ' + StrToUnicode(Key) + ' to an object whose class did not declare it'));
+    Exit(ThrowTypeError('Private field ' + StrToUnicode(Key) + ' is not accessible'));
   F := O^.Shape^.PFlags[CI];
   if (F and pfAccessor) <> 0 then
   begin
     A := PAccessor(PtrOf(GetSlot(O, CI)));
-    if not IsCallable(A^.Setter) then Exit(ThrowTypeError('''' + StrToUnicode(Key) + ''' was defined without a setter'));
+    if not IsCallable(A^.Setter) then Exit(ThrowTypeError('Private accessor ' + StrToUnicode(Key) + ' was defined without a setter'));
     Exit(CallValue(A^.Setter, Obj, @V, 1, R));
   end;
   if (F and pfWritable) = 0 then Exit(ThrowTypeError('Private method ' + StrToUnicode(Key) + ' is not writable'));
@@ -7035,7 +7127,8 @@ LReload:
           if not IsObject(VB) then
           begin
             Fr^.PC := PC;
-            ThrowTypeError('Cannot use ''in'' operator to search for a private field in a non-object');
+            ThrowTypeError('Cannot use ''in'' operator to search for ''' + StrToUnicode(PStr(PtrOf(R[I shr 40]))) +
+              ''' in ' + ValueDisplayText(VB));
             goto LThrow;
           end;
           if ShapeLookup(ObjOf(VB)^.Shape, PStr(PtrOf(R[I shr 40]))) >= 0 then R[A] := VTrue else R[A] := VFalse;
@@ -8538,7 +8631,7 @@ LReload:
             1: ThrowError('ReferenceError', 'Unsupported reference to ''super''');
             2: XThrowNotDefined(PStr(PtrOf(K[I shr 40])));
             3: ThrowError('ReferenceError', StrToUnicode(PStr(PtrOf(K[I shr 40]))));
-          else ThrowTypeError('Assignment to constant variable.');
+          else ThrowTypeError('Assignment to constant variable ''' + StrToUnicode(PStr(PtrOf(K[I shr 40]))) + '''');
           end;
           goto LThrow;
         end;

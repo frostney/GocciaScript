@@ -40,7 +40,8 @@ var O: TValue;
 begin
   O := ArgAt(Args, Argc, 1);
   if not IsObject(O) then
-    Exit(ThrowTypeError('Cannot use ''in'' operator to search for a private field in a non-object'));
+    Exit(ThrowTypeError('Cannot use ''in'' operator to search for ''' +
+      StrToUnicode(PStr(PtrOf(ArgAt(Args, Argc, 2)))) + ''' in ' + ValueDisplayText(O)));
   Res := MkBool(ShapeLookup(ObjOf(O)^.Shape, PStr(PtrOf(ArgAt(Args, Argc, 2)))) >= 0);
   Result := True;
 end;

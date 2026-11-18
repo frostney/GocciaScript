@@ -587,13 +587,16 @@ begin
 end;
 
 { CreateDynamicFunction's source, the function expression it wraps the parameters and body in, compiled; the
-  wrapper's function keyword is the engine's, so a restricted profile parses it with compat-function on }
+  wrapper's function keyword is the engine's, so a restricted profile parses it with compat-function on. As in
+  GocciaScript, the function is non-strict unless its body says "use strict" (this is then the global object
+  for a call without a receiver), whatever the profile makes other code. }
 function CompileDynamic(const Src: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString): Boolean;
 var Saved, Pr: TLangProfile;
 begin
   Saved := ActiveProfile;
   Pr := Saved;
   Pr.FuncDecl := True;
+  Pr.NonStrict := True;
   SetActiveProfile(Pr);
   DynFuncAnonymous := True;
   try

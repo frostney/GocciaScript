@@ -13,12 +13,19 @@
   // tagged with shared.EXPORT_LIST.
   const formats = Object.create(null);
   shared.dataFormats = formats;
+  // import.meta of a module at path: url (a file: URL) and resolve(specifier), as GocciaScript has them
+  shared.initImportMeta = (meta, path) => {
+    meta.url = n.fileURL(path);
+    meta.resolve = { resolve(...args) { return n.metaResolve(path, args.length, args[0]); } }.resolve;
+  };
   const EXPORT_LIST = Symbol('export list');
   shared.EXPORT_LIST = EXPORT_LIST;
   const extensionOf = (path) => {
     const slash = path.lastIndexOf('/'), dot = path.lastIndexOf('.');
     return dot > slash ? path.slice(dot).toLowerCase() : '';
   };
+  const FORMAT_NAMES = { '.json': 'JSON', '.json5': 'JSON5', '.jsonc': 'JSON5', '.jsonl': 'JSONL', '.csv': 'CSV',
+    '.tsv': 'TSV', '.yaml': 'YAML', '.yml': 'YAML', '.toml': 'TOML' };
   shared.hasHostModule = (key) => registry[key] !== undefined;
   shared.loadHostModule = (key) => {
     const make = registry[key];
@@ -29,7 +36,17 @@
       if (format === undefined) return undefined;
       const text = n.readText(key);
       if (text === undefined) return undefined;
-      const value = format(text, key);
+      // a parse failure names the specifier the module was imported by, not the host path
+      const specifier = n.specifierOf(key);
+      let value;
+      try {
+        value = format(text, key, specifier);
+      } catch (e) {
+        const kind = FORMAT_NAMES[extensionOf(key)];
+        if (kind !== undefined && e instanceof SyntaxError)
+          throw new SyntaxError(`Failed to parse ${kind} module "${specifier}": ${e.message}`);
+        throw e;
+      }
       if (Array.isArray(value) && value[EXPORT_LIST] === true) return value;
       if (value !== null && typeof value === 'object' && !Array.isArray(value)) exports = value;
       else return ['default', value];
@@ -44,7 +61,17 @@
 
   // JSON (without a type attribute: its top-level object's properties) and text assets (content, default and
   // frozen metadata)
-  formats['.json'] = (text) => JSON.parse(text);
+  // a JSON module, with or without type: 'json': its top-level object's properties, and default the value (unless
+  // the object has a default property of its own, which is then the default export)
+  shared.jsonExports = (value) => {
+    const out = [];
+    let ownDefault = false;
+    if (value !== null && typeof value === 'object' && !Array.isArray(value))
+      for (const k of Object.keys(value)) { out.push(k, value[k]); if (k === 'default') ownDefault = true; }
+    if (!ownDefault) out.push('default', value);
+    return exportList(out);
+  };
+  formats['.json'] = (text) => shared.jsonExports(JSON.parse(text));
   const textAsset = (text, path) => {
     const slash = path.lastIndexOf('/');
     const fileName = path.slice(slash + 1);

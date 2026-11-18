@@ -77,11 +77,34 @@
   // the test runner's vitest compatibility shim, over goccia:test and goccia:timers
   if (testMode) shared.hostModules.vitest = () => n.vitestSource();
 
-  // performance.timeOrigin: the epoch time the realm started at
-  if (typeof G.performance === 'object' && G.performance !== null && !('timeOrigin' in G.performance)) {
-    const origin = n.realNow() - G.performance.now();
-    Object.defineProperty(G.performance, 'timeOrigin', { get: Object.getOwnPropertyDescriptor({ get timeOrigin() { return origin; } }, 'timeOrigin').get, enumerable: true, configurable: true });
+  // Performance (High Resolution Time, as GocciaScript has it): an interface script cannot construct, whose
+  // prototype holds now(), timeOrigin (the epoch time the realm started at), toJSON() and the toStringTag, its
+  // members enumerable as WebIDL makes them; the global performance is its one instance
+  if (typeof G.performance === 'object' && G.performance !== null) {
+    const host = G.performance, nowFn = host.now;
+    const origin = n.realNow() - Reflect.apply(nowFn, host, []);
+    const brand = new WeakSet();
+    const check = (o) => { if (!brand.has(o)) throw new TypeError('Illegal invocation'); };
+    const Performance = { Performance() { throw new TypeError('Illegal constructor'); } }.Performance;
+    const proto = {};
+    const members = {
+      now() { check(this); return Reflect.apply(nowFn, host, []); },
+      get timeOrigin() { check(this); return origin; },
+      toJSON() { check(this); return { timeOrigin: origin }; }
+    };
+    defineProperty(proto, 'constructor', { value: Performance, writable: true, enumerable: false, configurable: true });
+    for (const k of ['now', 'toJSON']) defineProperty(proto, k, { value: members[k], writable: true, enumerable: true, configurable: true });
+    defineProperty(proto, 'timeOrigin', { get: Object.getOwnPropertyDescriptor(members, 'timeOrigin').get, set: undefined, enumerable: true, configurable: true });
+    defineProperty(proto, Symbol.toStringTag, { value: 'Performance', writable: false, enumerable: false, configurable: true });
+    defineProperty(Performance, 'prototype', { value: proto, writable: false, enumerable: false, configurable: false });
+    const perf = Object.create(proto);
+    brand.add(perf);
+    const d = Object.getOwnPropertyDescriptor(G, 'performance');
+    defineProperty(G, 'performance', { value: perf, writable: d.writable, enumerable: d.enumerable, configurable: d.configurable });
+    defineProperty(G, 'Performance', { value: Performance, writable: true, enumerable: false, configurable: true });
   }
+  // GocciaScript's globalThis cannot be reassigned
+  defineProperty(G, 'globalThis', { writable: false });
 
   const Goccia = {
     version: info.version,

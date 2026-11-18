@@ -476,7 +476,8 @@
     f.mockRejectedValueOnce = (v) => f.mockImplementationOnce(() => Promise.reject(v));
     f.mockReturnThis = () => f.mockImplementation(function () { return this; });
     f.mockClear = () => { state.calls.length = 0; state.results.length = 0; state.instances.length = 0; state.contexts.length = 0; state.lastCall = undefined; return f; };
-    f.mockReset = () => { f.mockClear(); implementation = undefined; once.length = 0; return f; };
+    // mockReset reinstates the implementation the mock was made with (a spy's the method it replaced)
+    f.mockReset = () => { f.mockClear(); implementation = impl; once.length = 0; return f; };
     f.mockRestore = () => { f.mockReset(); if (f.__restore) f.__restore(); return f; };
     f.getMockImplementation = () => implementation;
     f.mockName = (n) => { name = n; return f; };

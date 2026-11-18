@@ -397,4 +397,6 @@
   shared.hostModules['goccia:json5'] = () => ({ parse, stringify });
   // a .json5 file imports as its top-level object's properties
   shared.dataFormats['.json5'] = (text) => parse(text);
+  // GocciaScript reads .jsonc (JSON with comments) with the JSON5 parser, as it does .json5
+  shared.dataFormats['.jsonc'] = (text) => parse(text);
 })

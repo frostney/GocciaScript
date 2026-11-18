@@ -389,6 +389,8 @@ function ProfileArgumentsObject: Boolean; noinline;
 function ProfileFunctionCtor: Boolean; noinline;
 { types-as-comments annotations checked at run time (strict-types; off for an unrestricted profile) }
 function ProfileStrictTypes: Boolean; noinline;
+{ errors carry a stack trace (GocciaScript's hosts; not the conformance host) }
+function ProfileStackTraces: Boolean; noinline;
 
 { ---- the native stack ---- }
 { records how far this thread's native stack may grow (its bounds from pthread_getattr_np, a margin kept for the
@@ -492,6 +494,11 @@ end;
 function ProfileStrictTypes: Boolean;
 begin
   Result := CurProfile.Restricted and CurProfile.StrictTypes;
+end;
+
+function ProfileStackTraces: Boolean;
+begin
+  Result := CurProfile.Restricted;
 end;
 
 

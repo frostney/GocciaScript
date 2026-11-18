@@ -642,7 +642,13 @@ begin
   if not IsObject(Obj) then Exit(ThrowTypeError('CreateListFromArrayLike called on non-object'));
   PushRoot(Obj);
   if not GetV(Obj, AtomLength, LenV) or not ToNumberV(LenV, D) then begin PopRoots(1); Exit(False); end;
-  if IsNaN(D) or (D <= 0) then N := 0 else if D > 1E7 then begin PopRoots(1); Exit(ThrowError('RangeError', 'Too many arguments')); end
+  if IsNaN(D) or (D <= 0) then N := 0
+  else if D > MAX_ARGUMENTS_LIST_LENGTH then
+  begin
+    PopRoots(1);
+    Exit(ThrowError('RangeError', 'CreateListFromArrayLike: arguments list length ' + UnicodeString(FloatToStr(D)) +
+      ' exceeds maximum of ' + UnicodeString(IntToStr(MAX_ARGUMENTS_LIST_LENGTH))));
+  end
   else N := Trunc(D);
   A := NewArray(0, Max(4, N));
   PushRoot(MkPtr(A));

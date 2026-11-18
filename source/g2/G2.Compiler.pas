@@ -82,7 +82,7 @@ threadvar
 implementation
 
 uses
-  TypInfo, Goccia.Scope.BindingMap, Goccia.Types.Enforcement, Goccia.Bytecode.Chunk, G2.VM, G2.Lazy, G2.PreParse;
+  TypInfo, Goccia.SourceSpan, Goccia.Scope.BindingMap, Goccia.Types.Enforcement, Goccia.Bytecode.Chunk, G2.VM, G2.Lazy, G2.PreParse;
 
 type
   { an expression that makes a closure (a function, arrow, method, accessor or class) }
@@ -148,6 +148,8 @@ procedure TClosureScan.LeavePart;
 begin
 end;
 
+{ 12.7.2 ReservedWord (defined with CheckIdent) }
+function IsReservedWord(const N: UnicodeString): Boolean; forward;
 { strict-types: opCheckType's code for a declaration (defined with the strict-types section) }
 function StrictTypeCode(const Annotation: string; Init: TGocciaExpression): Integer; forward;
 
@@ -340,6 +342,7 @@ type
     ArgsReg: Integer;
     PendingLabels: TStringList;
     CurLine: Integer;
+    CurCol: Integer;
     VarRegs: array of Integer;   { per register: bindings of the open scopes that use it }
     IsEvalOuter: Boolean;   { goal 4: the stand-in for a direct eval's caller, its bindings the caller's }
     CplP1: Integer;         { 1 + the register of the script's completion value (eval code, ReturnLast), 0 none }
@@ -368,6 +371,7 @@ type
     { the next CompileFunction's upvalues, in order (a lazy compile: the stub's) }
     PresetUpvals: array of UnicodeString;
     IsEvalCode: Boolean;
+    EvalContext: Boolean;   { eval code or a ShadowRealm's evaluate: its early errors say so }
     ModImportNames: TStringList;    { goal 3: local names of imports (slot = index) }
     ModPublish: TStringList;        { goal 3: exported local bindings (slot = imports + index) }
     ModDefault: TGocciaExportDefaultDeclaration;
@@ -455,6 +459,11 @@ type
     procedure CompileUsingList(L: TList<TGocciaASTNode>; Stmts: TObjectList<TGocciaStatement>; Body: Boolean = False);
     procedure CompileUsingDecl(D: TGocciaUsingDeclaration);
     procedure CompileEnum(D: TGocciaEnumDeclaration);
+    procedure RaiseEvalAware(const Msg, What: UnicodeString; F: TFuncState = nil);
+    procedure NotePosition(N: TGocciaASTNode; Always: Boolean);
+    procedure NoteOffset(const Sp: TGocciaSourceSpan; Off: Integer);
+    procedure NoteMemberPosition(M: TGocciaMemberExpression);
+    procedure NoteCallPosition(Callee: TGocciaExpression; OptionalCall: Boolean);
     function BindingType(const N: UnicodeString): Integer;
     procedure SetBindingType(const N: UnicodeString; Code: Integer);
     procedure RecordCallSite(Callee: TGocciaExpression);
@@ -746,9 +755,11 @@ begin
   begin
     SetLength(T^.Code, T^.CodeLen * 2 + 64);
     SetLength(T^.Lines, Length(T^.Code));
+    SetLength(T^.Cols, Length(T^.Code));
   end;
   T^.Code[T^.CodeLen] := I;
   T^.Lines[T^.CodeLen] := FS.CurLine;
+  T^.Cols[T^.CodeLen] := FS.CurCol;
   Result := T^.CodeLen;
   Inc(T^.CodeLen);
 end;
@@ -800,9 +811,89 @@ begin
     end;
     T^.Code[NewIdx[I]] := Ins_;
     T^.Lines[NewIdx[I]] := T^.Lines[I];
+    if I <= High(T^.Cols) then T^.Cols[NewIdx[I]] := T^.Cols[I];
   end;
   for I := 0 to High(T^.CallSites) do T^.CallSites[I].PC := NewIdx[T^.CallSites[I].PC];
   T^.CodeLen := N;
+end;
+
+{ the line and column instructions emitted next are at: N's start (one position lookup for both; a node without a
+  position keeps the current one, unless Always, for a statement, which then has line 0 as before) }
+procedure TCompiler.NotePosition(N: TGocciaASTNode; Always: Boolean);
+var Sp: TGocciaSourceSpan; L, C: Integer;
+begin
+  Sp := N.Span;
+  if Sp.Coordinates = nil then
+  begin
+    if Always then begin FS.CurLine := 0; FS.CurCol := 0; end;
+    Exit;
+  end;
+  Sp.Coordinates.PositionAtOffset(Sp.StartOffset, L, C);
+  if (L > 0) or Always then
+  begin
+    FS.CurLine := L;
+    FS.CurCol := C;
+  end;
+end;
+
+{ where V8 locates a failure (a stack trace's frame): the instructions emitted next are at offset Off of Sp's source }
+procedure TCompiler.NoteOffset(const Sp: TGocciaSourceSpan; Off: Integer);
+var L, C: Integer;
+begin
+  if (Sp.Coordinates = nil) or (Off < 0) then Exit;
+  Sp.Coordinates.PositionAtOffset(Off, L, C);
+  if L > 0 then
+  begin
+    FS.CurLine := L;
+    FS.CurCol := C;
+  end;
+end;
+
+{ a member read is located at its property name, a computed one at its [ }
+procedure TCompiler.NoteMemberPosition(M: TGocciaMemberExpression);
+var Sp: TGocciaSourceSpan; Src: string; Off: Integer;
+begin
+  Sp := M.Span;
+  if Sp.Coordinates = nil then Exit;
+  Src := Sp.Source;
+  if M.Computed then
+  begin
+    if M.PropertyExpression = nil then Exit;
+    Off := M.PropertyExpression.Span.StartOffset - 1;
+    while (Off >= 0) and (Off < Length(Src)) and (Src[Off + 1] <> '[') do Dec(Off);
+  end
+  else
+  begin
+    Off := Sp.EndOffset - Length(M.PropertyName);
+    if (Off < 0) or (Copy(Src, Off + 1, Length(M.PropertyName)) <> M.PropertyName) then Exit;
+  end;
+  NoteOffset(Sp, Off);
+end;
+
+{ a call is located at its callee when that is a name, at the property name of a member callee, and otherwise
+  (a computed or parenthesized callee, an optional call, a reserved word as the property) at its ( }
+procedure TCompiler.NoteCallPosition(Callee: TGocciaExpression; OptionalCall: Boolean);
+var Sp: TGocciaSourceSpan; Src: string; Off: Integer; M: TGocciaMemberExpression;
+begin
+  if not OptionalCall and not Callee.Parenthesized then
+  begin
+    if Callee is TGocciaIdentifierExpression then begin NotePosition(Callee, False); Exit; end;
+    if Callee is TGocciaMemberExpression then
+    begin
+      M := TGocciaMemberExpression(Callee);
+      if not M.Computed and not IsReservedWord(UnicodeString(M.PropertyName)) then
+      begin
+        NoteMemberPosition(M);
+        Exit;
+      end;
+    end;
+  end;
+  Sp := Callee.Span;
+  if Sp.Coordinates = nil then Exit;
+  Src := Sp.Source;
+  Off := Sp.EndOffset;
+  while (Off < Length(Src)) and (Src[Off + 1] <> '(') do Inc(Off);
+  if Off < Length(Src) then NoteOffset(Sp, Off);
 end;
 
 { the call or construct instruction emitted next calls Callee: its source text names it in a TypeError }
@@ -1497,6 +1588,19 @@ begin
   Emit(Ins(opSetGlobal, Src, 0, NewIC(N)));
 end;
 
+{ an early error; at the top level of eval code (or a ShadowRealm's evaluate) it says "What is not allowed in
+  this eval context", as GocciaScript does. F: the function the construct is in (nil: the top level was reached) }
+procedure TCompiler.RaiseEvalAware(const Msg, What: UnicodeString; F: TFuncState);
+begin
+  if F <> nil then
+  begin
+    while (F <> nil) and F.IsArrow do F := F.Parent;
+    if (F <> nil) and (F.Parent <> nil) and not F.IsEvalOuter then raise EEarlySyntaxError.Create(Msg);
+  end;
+  if EvalContext then raise EEarlySyntaxError.Create(What + ' is not allowed in this eval context');
+  raise EEarlySyntaxError.Create(Msg);
+end;
+
 function TCompiler.HomeRegister: Integer;
 var F: TFuncState;
 begin
@@ -1507,10 +1611,10 @@ begin
   { goal 4: eval code in a method reaches its caller's home object }
   if (F <> nil) and F.IsEvalOuter then
   begin
-    if F.Scopes[0].Find('%home') < 0 then raise EEarlySyntaxError.Create('''super'' keyword unexpected here');
+    if F.Scopes[0].Find('%home') < 0 then RaiseEvalAware('''super'' keyword unexpected here', 'super property access');
     Exit(-1);
   end;
-  if (F = nil) or (F.Parent = nil) then raise EEarlySyntaxError.Create('''super'' keyword unexpected here');
+  if (F = nil) or (F.Parent = nil) then RaiseEvalAware('''super'' keyword unexpected here', 'super property access');
   if not FS.IsArrow then
   begin
     FS.HomeUsed := True;
@@ -1725,7 +1829,7 @@ begin
   F.NoArguments := NoArgs;
   F.UsingCapReg := -1;
   F.IsStaticBlock := StaticBlk;
-  if Outer <> nil then F.CurLine := Outer.CurLine;
+  if Outer <> nil then begin F.CurLine := Outer.CurLine; F.CurCol := Outer.CurCol; end;
   FS := F;
   if Length(PresetUpvals) > 0 then
   begin
@@ -3767,7 +3871,7 @@ end;
 procedure TCompiler.Stmt(S: TGocciaASTNode);
 begin
   if S = nil then Exit;
-  FS.CurLine := S.Line;
+  NotePosition(S, True);
   if (S is TGocciaStatement) and (TGocciaStatement(S).LabelCount > 0) then
     StmtLabeled(TGocciaStatement(S))
   else
@@ -5653,6 +5757,7 @@ begin
       if not ParenChain then ChainObject(M.ObjectExpr);
       K := ExprAny(M.ObjectExpr);
       ChainLink := False;
+      NoteMemberPosition(M);
       Emit(Ins(opGetMethod, Base, K, NewIC(M.PropertyName)));
     end
     else
@@ -5665,11 +5770,15 @@ begin
       begin
         K := AllocReg;
         ExprTo(M.PropertyExpression, K);
+        NoteMemberPosition(M);
         Emit(Ins(opGetElem, Base, Base + 1, K));
         FreeTo(Base + 2);
       end
       else
+      begin
+        NoteMemberPosition(M);
         Emit(Ins(opGetProp, Base, Base + 1, NewIC(M.PropertyName)));
+      end;
     end;
   end
   else if Callee is TGocciaPrivateMemberExpression then
@@ -5690,7 +5799,7 @@ begin
     F := FS;
     while (F.Parent <> nil) and F.IsArrow do F := F.Parent;
     if (F.CtorReg < 0) and not (F.IsEvalOuter and (F.Scopes[0].Find('%ctor') >= 0)) then
-      raise EEarlySyntaxError.Create('''super'' keyword unexpected here');
+      RaiseEvalAware('''super'' keyword unexpected here', 'super()', F);
     F.CtorUsed := True;
     F.NewTargetUsed := True;
     LoadIdent('%ctor', Base);
@@ -5707,7 +5816,7 @@ begin
   begin
     { super(...): 15.7.1 a SyntaxError outside a derived class constructor (global eval code checks at run time) }
     if not (FS.Tpl^.IsClassCtor and FS.Tpl^.IsDerived) then
-      raise EEarlySyntaxError.Create('''super'' keyword unexpected here');
+      RaiseEvalAware('''super'' keyword unexpected here', 'super()', FS);
     { 13.3.7.1 step 3: GetSuperConstructor before the arguments; IsConstructor after them (C 1: it is in
       R[A + 1]) }
     Emit(Ins(opLoadCallee, Base + 1, 0, 0));
@@ -5767,6 +5876,7 @@ begin
     Emit(Ins(opEvalHint, EvalHint - 1, 0, EvalDescConst));
     EvalHint := 0;
   end;
+  NoteCallPosition(E.Callee, E.Optional);
   RecordCallSite(E.Callee);
   if Spread then Emit(Ins(opCallV, Base, 0, 0) or (QWord(Ord(UndefThis)) shl 40))
   else Emit(Ins(opCall, Base, Argc, 0) or (QWord(Ord(UndefThis)) shl 40));
@@ -5792,6 +5902,7 @@ begin
   AllocRegs(2);
   ExprTo(E.Callee, Base);
   Argc := CompileArgs(E.Arguments, Base + 2, Spread);
+  NotePosition(E, False);   { a construction is located at its new }
   RecordCallSite(E.Callee);
   if Spread then Emit(Ins(opNewV, Base, 0, 0)) else Emit(Ins(opNew, Base, Argc, 0));
   if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
@@ -6055,12 +6166,17 @@ begin
   if E.Computed then
   begin
     K := ExprAny(E.PropertyExpression);
+    NoteMemberPosition(E);
     Emit(Ins(opGetElem, Dest, O, K));
   end
-  else if E.PropertyName = 'length' then
+  else
+  begin
+  NoteMemberPosition(E);
+  if E.PropertyName = 'length' then
     Emit(Ins(opGetLength, Dest, O, NewIC('length')))
   else
     Emit(Ins(opGetProp, Dest, O, NewIC(E.PropertyName)));
+  end;
   ChainEnd(IsLink, SavedJ, Dest);
   FreeTo(Save);
 end;
@@ -6329,6 +6445,7 @@ begin
     V := AllocReg;
     ExprTo(E.Expressions[I], V);
   end;
+  NotePosition(E.Tag, False);
   RecordCallSite(E.Tag);
   Emit(Ins(opCall, Base, 1 + E.Expressions.Count, 0));
   if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
@@ -6771,8 +6888,8 @@ var Save, R, J, J2, L: Integer; SE: TGocciaSequenceExpression;
   I: Integer; F: TFuncState; Msg: UnicodeString;
 begin
   if E = nil then begin Emit(Ins(opLoadUndef, Dest, 0, 0)); Exit; end;
-  L := E.Line;
-  if L > 0 then FS.CurLine := L;
+  NotePosition(E, False);
+  L := FS.CurLine;
   case KindOf(ExprKinds, ExprClasses, E) of
     0: CompileLiteral(TGocciaLiteralExpression(E).Value, Dest);
     1: LoadIdent(TGocciaIdentifierExpression(E).Name, Dest);
@@ -6811,7 +6928,7 @@ begin
   end
   else if E is TGocciaNewTargetExpression then
   begin
-    if NewTargetOutside then raise EEarlySyntaxError.Create('new.target expression is not allowed here');
+    if NewTargetOutside then RaiseEvalAware('new.target expression is not allowed here', 'new.target');
     if FS.IsArrow then
     begin
       { an arrow's new.target is its enclosing function's }
@@ -6833,7 +6950,7 @@ begin
     end
     else
     begin
-      if NewTargetOutside then raise EEarlySyntaxError.Create('new.target expression is not allowed here');
+      if NewTargetOutside then RaiseEvalAware('new.target expression is not allowed here', 'new.target');
       R := NewTargetRegister;
       if R >= 0 then Emit(Ins(opMov, Dest, R, 0))
       else if NewTargetFromArrow then LoadIdent('%newtarget', Dest)
@@ -7802,6 +7919,7 @@ begin
   end;
   C.Goal := Goal;
   C.IsEvalCode := SourceName = '<eval>';
+  C.EvalContext := (SourceName = '<eval>') or (SourceName = '<ShadowRealm>');
   Nodes := TList<TGocciaASTNode>.Create;
   SetLength(Params, 0);
   MI := nil;
@@ -7810,7 +7928,8 @@ begin
     if Goal <> 3 then
       for I := 0 to Prog.Body.Count - 1 do
         if (Prog.Body[I] is TGocciaImportDeclaration) or (Copy(Prog.Body[I].ClassName, 1, 13) = 'TGocciaExport') then
-          raise EEarlySyntaxError.Create('Cannot use import or export outside a module');
+          if C.EvalContext then raise EEarlySyntaxError.Create('Module declarations are not allowed in eval code')
+          else raise EEarlySyntaxError.Create('Cannot use import or export outside a module');
     if Goal = 3 then
     begin
       { 16.2.1.7.1 ParseModule: strict, the imports and exports collected, a generator whose start is the module's

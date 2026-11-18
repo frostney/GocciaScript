@@ -81,9 +81,10 @@
 
   // a YAML file of several documents imports each under its index ("0", "1", ...); of one document, a mapping's
   // keys or a sequence's own properties (its indices and length), anything else as the default export
-  const yamlModule = (text) => {
+  const yamlModule = (text, key, specifier) => {
     const documents = rebuild(n.dataParse(KIND_YAML_DOCUMENTS, text));
-    if (documents.length === 0) throw new ErrorCtor('YAML module must contain at least one top-level document.');
+    if (documents.length === 0)
+      throw new ErrorCtor(`YAML module "${specifier}" must contain at least one top-level document.`);
     const out = [];
     if (documents.length > 1) {
       for (let i = 0; i < documents.length; i++) out.push(String(i), documents[i]);

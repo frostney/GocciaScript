@@ -169,6 +169,7 @@ type
     Upvals: array of TUpvalDesc;
     ICs: array of TPropIC;
     Lines: array of Integer;
+    Cols: array of Integer;   { each instruction's source column (1-based, 0 unknown), beside Lines }
     { the callee of each call and construct site as its source wrote it (Goccia's CalleeDescriptorFor), by the
       instruction's index in ascending order: a callee that is not callable is named so in the TypeError }
     CallSites: array of TCallSite;

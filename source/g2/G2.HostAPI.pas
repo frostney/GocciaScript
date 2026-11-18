@@ -36,7 +36,7 @@ uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, Goccia.ModuleResolver, TextSemantics, G2.HostSemver, Goccia.DataTree,
-  Goccia.YAML, Goccia.TOML;
+  Goccia.YAML, Goccia.TOML, Goccia.URI;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
@@ -384,6 +384,7 @@ end;
   CLIs' resolver (Goccia.ModuleResolver) }
 var
   HostResolver: TModuleResolver;
+  ImportSpecifiers: TStringList;   { module key = the first specifier that resolved to it }
 
 function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
 var A: array[0..0] of TValue; R: TValue; Ref: string;
@@ -406,6 +407,10 @@ begin
   if (Referrer = '') or (Referrer[1] = '<') then Ref := '' else Ref := ExpandFileName(UTF8Encode(Referrer));
   try
     Resolved := UTF8Decode(HostResolver.Resolve(UTF8Encode(Spec), Ref));
+    { the first specifier a module is imported by names it in its load errors (specifierOf) }
+    if ImportSpecifiers = nil then ImportSpecifiers := TStringList.Create;
+    if ImportSpecifiers.IndexOfName(UTF8Encode(Resolved)) < 0 then
+      ImportSpecifiers.Add(UTF8Encode(Resolved) + '=' + UTF8Encode(Spec));
     Result := 1;
   except
     on E: Exception do
@@ -551,6 +556,88 @@ begin
   Result := True;
 end;
 
+{ RFC 8089: a host path as a file: URL (absolute, percent-encoded), as GocciaScript's import.meta.url has it }
+function FileURLOf(const Path: string): string;
+var Abs: string;
+begin
+  Abs := ExpandFileName(Path);
+  {$IFDEF MSWINDOWS}
+  Abs := StringReplace(Abs, '\', '/', [rfReplaceAll]);
+  if (Length(Abs) >= 2) and (Abs[1] = '/') and (Abs[2] = '/') then Exit(FILE_URL_SCHEME + PercentEncodePath(Abs));
+  Result := FILE_URL_SCHEME + '///' + PercentEncodePath(Abs);
+  {$ELSE}
+  Result := FILE_URL_SCHEME + '//' + PercentEncodePath(Abs);
+  {$ENDIF}
+end;
+
+{ fileURL(path): the file: URL of a host path }
+function Host_FileURL(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := StrFromUnicode(UTF8Decode(FileURLOf(UTF8Encode(ArgStr(Args, Argc, 1)))));
+  Result := True;
+end;
+
+{ metaResolve(modulePath, argc, specifier): import.meta.resolve(specifier) of the module at modulePath, as
+  GocciaScript resolves it: an absolute specifier as it is, any other against the module's directory, as a file:
+  URL (the file need not exist) }
+function Host_MetaResolve(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Spec, Path: string; S: TValue;
+begin
+  if (Argc < 2) or (PrimitiveToNumber(Args[2]) < 1) then
+    Exit(ThrowTypeError('import.meta.resolve requires a specifier argument'));
+  if (Argc < 3) or not ToStringV(Args[3], S) then Exit(False);
+  Spec := UTF8Encode(StrToUnicode(StrOf(S)));
+  if (Spec <> '') and ((Spec[1] = '/') or (Spec[1] = '\') or ((Length(Spec) >= 2) and (Spec[2] = ':'))) then
+    Path := ExpandFileName(Spec)
+  else
+    Path := ExpandFileName(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(
+      UTF8Encode(ArgStr(Args, Argc, 1))))) + Spec);
+  Res := StrFromUnicode(UTF8Decode(FileURLOf(Path)));
+  Result := True;
+end;
+
+{ G2.Modules's import.meta hook: shared.initImportMeta(meta, path) (modules.js) }
+function HostInitImportMeta(Meta: TValue; const Path: UnicodeString): Boolean;
+var A: array[0..1] of TValue; F, R: TValue;
+begin
+  Result := True;
+  if not IsObject(SharedV) then Exit;
+  PushRoot(Meta);
+  A[1] := StrFromUnicode(Path);
+  PushRoot(A[1]);
+  if not GetV(SharedV, AtomOf('initImportMeta'), F) or not IsCallable(F) then begin PopRoots(2); Exit; end;
+  A[0] := RootAt(TempTop - 2);
+  A[1] := RootAt(TempTop - 1);
+  Result := CallValue(F, SharedV, @A[0], 2, R);
+  PopRoots(2);
+end;
+
+{ specifierOf(key): the specifier the module at key was first imported by (key itself when none was recorded) }
+function Host_SpecifierOf(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Key: string; I: Integer;
+begin
+  Key := UTF8Encode(ArgStr(Args, Argc, 1));
+  I := -1;
+  if ImportSpecifiers <> nil then I := ImportSpecifiers.IndexOfName(Key);
+  if I >= 0 then Res := StrFromUnicode(UTF8Decode(ImportSpecifiers.ValueFromIndex[I]))
+  else Res := StrFromUnicode(UTF8Decode(Key));
+  Result := True;
+end;
+
+{ G2.Modules's JSON module exports hook: shared.jsonExports(value) (modules.js) }
+function HostJSONExports(V: TValue; var Exp: TValue): Boolean;
+var F: TValue; A: array[0..0] of TValue;
+begin
+  Exp := VUndefined;
+  Result := True;
+  if not IsObject(SharedV) then Exit;
+  PushRoot(V);
+  if not GetV(SharedV, AtomOf('jsonExports'), F) or not IsCallable(F) then begin PopRoots(1); Exit; end;
+  A[0] := RootAt(TempTop - 1);
+  Result := CallValue(F, SharedV, @A[0], 1, Exp);
+  PopRoots(1);
+end;
+
 { vitestSource(): the vitest compatibility shim's module source (Goccia.VitestShim.inc) }
 function VitestShimSource: UnicodeString;
 const
@@ -615,6 +702,9 @@ begin
   DefineNative(RootAt(TempTop - 1), 'vitestSource', Host_VitestSource, 0);
   DefineNative(RootAt(TempTop - 1), 'astParse', Host_ASTParse, 6);
   DefineNative(RootAt(TempTop - 1), 'dataParse', Host_DataParse, 2);
+  DefineNative(RootAt(TempTop - 1), 'fileURL', Host_FileURL, 1);
+  DefineNative(RootAt(TempTop - 1), 'specifierOf', Host_SpecifierOf, 1);
+  DefineNative(RootAt(TempTop - 1), 'metaResolve', Host_MetaResolve, 3);
   DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
   Result := RootAt(TempTop - 1);
@@ -674,6 +764,8 @@ begin
     if Result then
     begin
       SetHostModuleHook(@HostModule);
+      ImportMetaInitHook := @HostInitImportMeta;
+      JSONExportsHook := @HostJSONExports;
       SetHostResolveHook(@HostResolveSpec);
     end;
   end;
@@ -770,4 +862,5 @@ end;
 
 finalization
   FreeAndNil(HostResolver);
+  FreeAndNil(ImportSpecifiers);
 end.
