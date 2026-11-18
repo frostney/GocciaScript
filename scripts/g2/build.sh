@@ -29,6 +29,7 @@ python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/fetch.js "$GEN/G2.FetchP
 python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/json5.js "$GEN/G2.Json5Prelude.inc" Json5Src || exit 1
 python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/delimited.js "$GEN/G2.DelimitedPrelude.inc" DelimitedSrc || exit 1
 python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/jsonl.js "$GEN/G2.JsonlPrelude.inc" JsonlSrc || exit 1
+python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/datatree.js "$GEN/G2.DataTreePrelude.inc" DataTreeSrc || exit 1
 python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/semver.js "$GEN/G2.SemverPrelude.inc" SemverSrc || exit 1
 python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/asynchooks.js "$GEN/G2.AsyncHooksPrelude.inc" AsyncHooksSrc || exit 1
 python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/events.js "$GEN/G2.EventsPrelude.inc" EventsSrc || exit 1

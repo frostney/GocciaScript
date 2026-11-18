@@ -35,7 +35,8 @@ implementation
 uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
-  Goccia.AST.Report, Goccia.FileExtensions, Goccia.ModuleResolver, TextSemantics, G2.HostSemver;
+  Goccia.AST.Report, Goccia.FileExtensions, Goccia.ModuleResolver, TextSemantics, G2.HostSemver, Goccia.DataTree,
+  Goccia.YAML, Goccia.TOML;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
@@ -51,6 +52,7 @@ uses
 {$I G2.AsyncHooksPrelude.inc}
 {$I G2.EventsPrelude.inc}
 {$I G2.TimersPrelude.inc}
+{$I G2.DataTreePrelude.inc}
 
 type
   { G2.Modules's resolution as the hoister's resolver }
@@ -505,6 +507,48 @@ begin
   Result := True;
 end;
 
+{ dataParse(kind, text): a parse as Goccia.DataTree's JSON (DataTreeToJSON), which datatree.js rebuilds: kind 0 YAML
+  (YAML.parse), 1 the YAML documents (YAML.parseDocuments), 2 TOML. Text that does not parse throws a SyntaxError,
+  nesting past the parsers' depth limit a RangeError, as the CLIs' modules do. }
+function Host_DataParse(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Tree: TGocciaDataTree; YAML: TGocciaYAMLParser; TOML: TGocciaTOMLParser; Text, Json: UnicodeString;
+begin
+  Text := ArgStr(Args, Argc, 2);
+  Tree := nil;
+  try
+    try
+      case Round(PrimitiveToNumber(Args[1])) of
+        0, 1:
+          begin
+            YAML := TGocciaYAMLParser.Create;
+            try
+              if Round(PrimitiveToNumber(Args[1])) = 0 then Tree := YAML.Parse(Text) else Tree := YAML.ParseDocuments(Text);
+            finally
+              YAML.Free;
+            end;
+          end;
+      else
+        TOML := TGocciaTOMLParser.Create;
+        try
+          Tree := TOML.Parse(Text);
+        finally
+          TOML.Free;
+        end;
+      end;
+      Json := DataTreeToJSON(Tree.Root);
+    finally
+      Tree.Free;
+    end;
+  except
+    on E: EGocciaYAMLParseError do Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
+    on E: EGocciaTOMLParseError do Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
+    on E: EGocciaDataDepthError do Exit(ThrowError('RangeError', UTF8Decode(E.Message)));
+    on E: EGocciaDataTypeError do Exit(ThrowError('TypeError', UTF8Decode(E.Message)));
+  end;
+  Res := StrFromUnicode(Json);
+  Result := True;
+end;
+
 { vitestSource(): the vitest compatibility shim's module source (Goccia.VitestShim.inc) }
 function VitestShimSource: UnicodeString;
 const
@@ -568,6 +612,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'asyncSet', Host_AsyncSet, 1);
   DefineNative(RootAt(TempTop - 1), 'vitestSource', Host_VitestSource, 0);
   DefineNative(RootAt(TempTop - 1), 'astParse', Host_ASTParse, 6);
+  DefineNative(RootAt(TempTop - 1), 'dataParse', Host_DataParse, 2);
   DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
   Result := RootAt(TempTop - 1);
@@ -609,6 +654,7 @@ begin
     CallPrelude('<goccia:json5>', Json5Src, Base, 3, R, Err) and
     CallPrelude('<goccia:csv>', DelimitedSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:jsonl>', JsonlSrc, Base, 3, R, Err) and
+    CallPrelude('<goccia:yaml>', DataTreeSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:semver>', SemverSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:host>', HostSrc, Base, 7, Goccia, Err);
   if Result then

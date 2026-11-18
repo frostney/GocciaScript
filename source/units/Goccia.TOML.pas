@@ -1,5 +1,10 @@
 unit Goccia.TOML;
 
+{ TOML 1.1 (toml.io/en/v1.1.0) into a Goccia.DataTree tree, through the
+  TGocciaTOMLNode tree that keeps what the format's rules need (how a table was
+  defined, whether an inline table is sealed, each scalar's TOML type and
+  canonical text). }
+
 {$I Goccia.inc}
 
 interface
@@ -10,10 +15,8 @@ uses
 
   OrderedStringMap,
 
-  Goccia.Temporal.Utils,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.DataTree,
+  Goccia.Temporal.Utils;
 
 type
   EGocciaTOMLParseError = class(Exception);
@@ -27,32 +30,32 @@ type
 
   TGocciaTOMLNode = class
   private
-    FArrayValue: TGocciaArrayValue;
     FCanonicalValue: string;
     FChildren: TGocciaTOMLNodeMap;
+    FData: TGocciaDataNode;
     FDottedDefined: Boolean;
     FHeaderAllowed: Boolean;
     FHeaderDefined: Boolean;
     FItems: TGocciaTOMLNodeList;
     FKind: TGocciaTOMLNodeKind;
     FScalarKind: TGocciaTOMLScalarKind;
-    FScalarValue: TGocciaValue;
     FSealed: Boolean;
-    FTableValue: TGocciaObjectValue;
-    function GetValue: TGocciaValue;
+    FTree: TGocciaDataTree;
   public
-    constructor CreateScalar(const AValue: TGocciaValue;
+    { AData is the node's value in the parse's data tree, which owns it }
+    constructor CreateScalar(const AData: TGocciaDataNode;
       const AScalarKind: TGocciaTOMLScalarKind; const ACanonicalValue: string);
-    constructor CreateArray(const AValue: TGocciaArrayValue);
-    constructor CreateTable(const AValue: TGocciaObjectValue;
+    constructor CreateArray(const AData: TGocciaDataNode);
+    constructor CreateTable(const AData: TGocciaDataNode;
       const AHeaderDefined, AHeaderAllowed, ASealed, ADottedDefined: Boolean);
-    constructor CreateArrayOfTables(const AValue: TGocciaArrayValue;
+    constructor CreateArrayOfTables(const AData: TGocciaDataNode;
       const ASealed: Boolean);
     destructor Destroy; override;
 
     function LastItem: TGocciaTOMLNode;
+    { the data tree a document's root table owns, handed to the caller }
+    function ExtractTree: TGocciaDataTree;
 
-    property ArrayValue: TGocciaArrayValue read FArrayValue;
     property CanonicalValue: string read FCanonicalValue;
     property Children: TGocciaTOMLNodeMap read FChildren;
     property DottedDefined: Boolean read FDottedDefined write FDottedDefined;
@@ -61,10 +64,9 @@ type
     property Items: TGocciaTOMLNodeList read FItems;
     property Kind: TGocciaTOMLNodeKind read FKind;
     property ScalarKind: TGocciaTOMLScalarKind read FScalarKind;
-    property ScalarValue: TGocciaValue read FScalarValue;
     property Sealed: Boolean read FSealed write FSealed;
-    property TableValue: TGocciaObjectValue read FTableValue;
-    property Value: TGocciaValue read GetValue;
+    { the node's value in the data tree }
+    property Value: TGocciaDataNode read FData;
   end;
 
   TGocciaTOMLParser = class
@@ -73,13 +75,14 @@ type
     FIndex: Integer;
     FRoot: TGocciaTOMLNode;
     FText: string;
+    FTree: TGocciaDataTree;
 
     procedure Advance(const ACount: Integer = 1);
     procedure AppendCodePoint(var ATarget: string;
       const ACodePoint: Cardinal);
     procedure AssignValue(const ATargetTable: TGocciaTOMLNode;
-      const APath: TArray<string>; const AValue: TGocciaValue;
-      const AInlineTableNode: TGocciaTOMLNode; const AAllowSealed: Boolean);
+      const APath: TArray<string>; const AInlineTableNode: TGocciaTOMLNode;
+      const AAllowSealed: Boolean);
     procedure AttachChild(const ATable: TGocciaTOMLNode; const AKey: string;
       const ANode: TGocciaTOMLNode);
     function ConsumeComment: Boolean;
@@ -143,8 +146,10 @@ type
     function ValidateDigitsWithSeparators(const AText, AAllowedDigits: string;
       const AAllowEmpty: Boolean): Boolean;
   public
+    { the document's root table; it owns the data tree its nodes' values are in }
     function ParseDocument(const AText: string): TGocciaTOMLNode;
-    function Parse(const AText: string): TGocciaObjectValue;
+    { the document as a data tree, its root an object }
+    function Parse(const AText: string): TGocciaDataTree;
   end;
 
 implementation
@@ -152,10 +157,7 @@ implementation
 uses
   Math,
 
-  NumericText,
-
-  Goccia.GarbageCollector,
-  Goccia.NativeLimits;
+  NumericText;
 
 function IsSpaceOrTab(const AChar: Char): Boolean;
 begin
@@ -349,31 +351,31 @@ end;
 
 { TGocciaTOMLNode }
 
-constructor TGocciaTOMLNode.CreateScalar(const AValue: TGocciaValue;
+constructor TGocciaTOMLNode.CreateScalar(const AData: TGocciaDataNode;
   const AScalarKind: TGocciaTOMLScalarKind; const ACanonicalValue: string);
 begin
   inherited Create;
   FKind := tnkScalar;
   FCanonicalValue := ACanonicalValue;
   FScalarKind := AScalarKind;
-  FScalarValue := AValue;
+  FData := AData;
 end;
 
-constructor TGocciaTOMLNode.CreateArray(const AValue: TGocciaArrayValue);
+constructor TGocciaTOMLNode.CreateArray(const AData: TGocciaDataNode);
 begin
   inherited Create;
   FKind := tnkArray;
-  FArrayValue := AValue;
+  FData := AData;
   FItems := TGocciaTOMLNodeList.Create(True);
 end;
 
 constructor TGocciaTOMLNode.CreateTable(
-  const AValue: TGocciaObjectValue; const AHeaderDefined, AHeaderAllowed,
+  const AData: TGocciaDataNode; const AHeaderDefined, AHeaderAllowed,
   ASealed, ADottedDefined: Boolean);
 begin
   inherited Create;
   FKind := tnkTable;
-  FTableValue := AValue;
+  FData := AData;
   FDottedDefined := ADottedDefined;
   FHeaderDefined := AHeaderDefined;
   FHeaderAllowed := AHeaderAllowed;
@@ -382,11 +384,11 @@ begin
 end;
 
 constructor TGocciaTOMLNode.CreateArrayOfTables(
-  const AValue: TGocciaArrayValue; const ASealed: Boolean);
+  const AData: TGocciaDataNode; const ASealed: Boolean);
 begin
   inherited Create;
   FKind := tnkArrayOfTables;
-  FArrayValue := AValue;
+  FData := AData;
   FSealed := ASealed;
   FItems := TGocciaTOMLNodeList.Create(True);
 end;
@@ -402,23 +404,14 @@ begin
     FChildren.Free;
   end;
   FItems.Free;
+  FTree.Free;
   inherited;
 end;
 
-function TGocciaTOMLNode.GetValue: TGocciaValue;
+function TGocciaTOMLNode.ExtractTree: TGocciaDataTree;
 begin
-  case FKind of
-    tnkScalar:
-      Result := FScalarValue;
-    tnkArray:
-      Result := FArrayValue;
-    tnkTable:
-      Result := FTableValue;
-    tnkArrayOfTables:
-      Result := FArrayValue;
-  else
-    Result := nil;
-  end;
+  Result := FTree;
+  FTree := nil;
 end;
 
 function TGocciaTOMLNode.LastItem: TGocciaTOMLNode;
@@ -436,8 +429,16 @@ begin
   FText := AText;
   FIndex := 1;
   FRoot.Free;
-  FRoot := TGocciaTOMLNode.CreateTable(TGocciaObjectValue.Create, False, False,
-    False, False);
+  FTree := TGocciaDataTree.Create;
+  try
+    FRoot := TGocciaTOMLNode.CreateTable(FTree.NewObject, False, False,
+      False, False);
+  except
+    FTree.Free;
+    raise;
+  end;
+  // the root table owns the tree from here, so a failed parse frees both
+  FRoot.FTree := FTree;
   FCurrentTable := FRoot;
 end;
 
@@ -459,56 +460,42 @@ begin
   end;
 end;
 
-function TGocciaTOMLParser.Parse(const AText: string): TGocciaObjectValue;
+function TGocciaTOMLParser.Parse(const AText: string): TGocciaDataTree;
 var
   RootNode: TGocciaTOMLNode;
 begin
   RootNode := ParseDocument(AText);
   try
-    Result := RootNode.TableValue;
+    Result := RootNode.ExtractTree;
+    Result.Root := RootNode.Value;
   finally
     RootNode.Free;
   end;
 end;
 
 function TGocciaTOMLParser.ParseDocument(const AText: string): TGocciaTOMLNode;
-var
-  RootValueRoot: TGocciaTempRoot;
 begin
-  // The whole document hangs off the root table's property graph, and the only
-  // thing holding that table is the TGocciaTOMLNode tree — plain Pascal objects
-  // the collector cannot see. Every string value the document contains charges
-  // the memory ceiling, and crossing it collects with only the new string
-  // protected, so one root over the root table covers the entire parse: each
-  // table and array below it is attached to a parent before any further string is
-  // built (see ParseArray and ParseInlineTable for the two that are not).
-  InitializeTempRoot(RootValueRoot);
+  Reset(AText);
   try
-    Reset(AText);
-    // Reset builds a fresh root table, so the root has to be taken after it.
-    AddTempRootIfNeeded(RootValueRoot, FRoot.TableValue);
-    try
-      PrepareInput;
+    PrepareInput;
+    SkipBlankLinesAndComments;
+    while not IsAtEnd do
+    begin
+      if PeekChar = '[' then
+        ParseTableHeader
+      else
+        ParseKeyValuePair;
       SkipBlankLinesAndComments;
-      while not IsAtEnd do
-      begin
-        if PeekChar = '[' then
-          ParseTableHeader
-        else
-          ParseKeyValuePair;
-        SkipBlankLinesAndComments;
-      end;
-      Result := FRoot;
-      FRoot := nil;
-    finally
-      FText := '';
-      FIndex := 1;
-      FCurrentTable := nil;
-      FRoot.Free;
-      FRoot := nil;
     end;
+    Result := FRoot;
+    FRoot := nil;
   finally
-    RemoveTempRootIfNeeded(RootValueRoot);
+    FText := '';
+    FIndex := 1;
+    FCurrentTable := nil;
+    FTree := nil;
+    FRoot.Free;
+    FRoot := nil;
   end;
 end;
 
@@ -921,7 +908,7 @@ procedure TGocciaTOMLParser.AttachChild(const ATable: TGocciaTOMLNode;
 begin
   { Takes ANode over, freeing it when it cannot be attached. }
   try
-    ATable.TableValue.AssignProperty(AKey, ANode.Value);
+    ATable.Value.SetProperty(AKey, ANode.Value);
   except
     ANode.Free;
     raise;
@@ -950,7 +937,7 @@ begin
   Existing := GetChild(AContext, AKey);
   if not Assigned(Existing) then
   begin
-    Result := TGocciaTOMLNode.CreateTable(TGocciaObjectValue.Create, False, False,
+    Result := TGocciaTOMLNode.CreateTable(FTree.NewObject, False, False,
       AAllowSealed or AContext.Sealed, True);
     AttachChild(AContext, AKey, Result);
     Exit;
@@ -982,8 +969,8 @@ begin
 end;
 
 procedure TGocciaTOMLParser.AssignValue(const ATargetTable: TGocciaTOMLNode;
-  const APath: TArray<string>; const AValue: TGocciaValue;
-  const AInlineTableNode: TGocciaTOMLNode; const AAllowSealed: Boolean);
+  const APath: TArray<string>; const AInlineTableNode: TGocciaTOMLNode;
+  const AAllowSealed: Boolean);
 var
   Context, Existing, NewNode: TGocciaTOMLNode;
   I: Integer;
@@ -1041,7 +1028,7 @@ begin
     Existing := GetChild(Context, APath[I]);
     if not Assigned(Existing) then
     begin
-      Existing := TGocciaTOMLNode.CreateTable(TGocciaObjectValue.Create,
+      Existing := TGocciaTOMLNode.CreateTable(FTree.NewObject,
         I = Length(APath) - 1, I <> Length(APath) - 1, False, False);
       AttachChild(Context, APath[I], Existing);
     end
@@ -1100,7 +1087,7 @@ begin
     Existing := GetChild(Context, APath[I]);
     if not Assigned(Existing) then
     begin
-      Existing := TGocciaTOMLNode.CreateTable(TGocciaObjectValue.Create, False, True,
+      Existing := TGocciaTOMLNode.CreateTable(FTree.NewObject, False, True,
         False, False);
       AttachChild(Context, APath[I], Existing);
     end
@@ -1127,7 +1114,7 @@ begin
   Existing := GetChild(Context, APath[Length(APath) - 1]);
   if not Assigned(Existing) then
   begin
-    ArrayNode := TGocciaTOMLNode.CreateArrayOfTables(TGocciaArrayValue.Create, False);
+    ArrayNode := TGocciaTOMLNode.CreateArrayOfTables(FTree.NewArray, False);
     AttachChild(Context, APath[Length(APath) - 1], ArrayNode);
   end
   else
@@ -1143,10 +1130,10 @@ begin
     ArrayNode := Existing;
   end;
 
-  NewItem := TGocciaTOMLNode.CreateTable(TGocciaObjectValue.Create, True, False,
+  NewItem := TGocciaTOMLNode.CreateTable(FTree.NewObject, True, False,
     False, False);
   ArrayNode.Items.Add(NewItem);
-  ArrayNode.ArrayValue.Elements.Add(NewItem.TableValue);
+  ArrayNode.Value.Add(NewItem.Value);
   Result := NewItem;
 end;
 
@@ -1201,7 +1188,7 @@ begin
   SkipWhitespace(False);
 
   ValueNode := ParseValue('');
-  AssignValue(FCurrentTable, KeyPath, ValueNode.Value, ValueNode, False);
+  AssignValue(FCurrentTable, KeyPath, ValueNode, False);
 
   while IsSpaceOrTab(CurrentChar) do
     Advance;
@@ -1215,17 +1202,11 @@ end;
 function TGocciaTOMLParser.ParseArray: TGocciaTOMLNode;
 var
   ElementNode: TGocciaTOMLNode;
-  ArrayRoot: TGocciaTempRoot;
 begin
-  // Unlike the table nodes, this array is not attached to anything until the
-  // caller takes it, and it is filled first — across ParseValue calls that build
-  // strings, each of which charges the memory ceiling and can collect.
-  InitializeTempRoot(ArrayRoot);
-  EnterNativeDataDepth('TOML parsing');
+  EnterDataDepth('TOML parsing');
   try
-    CheckNativeWork;
-    Result := TGocciaTOMLNode.CreateArray(TGocciaArrayValue.Create);
-    AddTempRootIfNeeded(ArrayRoot, Result.ArrayValue);
+    CheckDataWork;
+    Result := TGocciaTOMLNode.CreateArray(FTree.NewArray);
     try
       Advance;
       SkipWhitespace(True);
@@ -1237,10 +1218,10 @@ begin
 
       while True do
       begin
-        CheckNativeWork;
+        CheckDataWork;
         ElementNode := ParseValue(',]');
         Result.Items.Add(ElementNode);
-        Result.ArrayValue.Elements.Add(ElementNode.Value);
+        Result.Value.Add(ElementNode.Value);
         SkipWhitespace(True);
         if CurrentChar = ',' then
         begin
@@ -1266,8 +1247,7 @@ begin
       raise;
     end;
   finally
-    RemoveTempRootIfNeeded(ArrayRoot);
-    LeaveNativeDataDepth;
+    LeaveDataDepth;
   end;
 end;
 
@@ -1275,17 +1255,12 @@ function TGocciaTOMLParser.ParseInlineTable: TGocciaTOMLNode;
 var
   InlineNode, ValueNode: TGocciaTOMLNode;
   KeyPath: TArray<string>;
-  TableRoot: TGocciaTempRoot;
 begin
-  // Same as ParseArray: detached from the document until the caller attaches it,
-  // and every entry parsed into it can collect.
-  InitializeTempRoot(TableRoot);
-  EnterNativeDataDepth('TOML parsing');
+  EnterDataDepth('TOML parsing');
   try
-    CheckNativeWork;
-    InlineNode := TGocciaTOMLNode.CreateTable(TGocciaObjectValue.Create, False, False,
+    CheckDataWork;
+    InlineNode := TGocciaTOMLNode.CreateTable(FTree.NewObject, False, False,
       True, False);
-    AddTempRootIfNeeded(TableRoot, InlineNode.TableValue);
     try
       Advance;
       SkipWhitespace(True);
@@ -1297,7 +1272,7 @@ begin
 
       while True do
       begin
-        CheckNativeWork;
+        CheckDataWork;
         KeyPath := ParseKeyPath;
         SkipWhitespace(True);
         if CurrentChar <> '=' then
@@ -1305,7 +1280,7 @@ begin
         Advance;
         SkipWhitespace(True);
         ValueNode := ParseValue(',}');
-        AssignValue(InlineNode, KeyPath, ValueNode.Value, ValueNode, True);
+        AssignValue(InlineNode, KeyPath, ValueNode, True);
 
         SkipWhitespace(True);
         if CurrentChar = ',' then
@@ -1331,8 +1306,7 @@ begin
       raise;
     end;
   finally
-    RemoveTempRootIfNeeded(TableRoot);
-    LeaveNativeDataDepth;
+    LeaveDataDepth;
   end;
 end;
 
@@ -1344,13 +1318,13 @@ begin
   begin
     StringValue := ParseBasicString(True, False);
     Exit(TGocciaTOMLNode.CreateScalar(
-      TGocciaStringLiteralValue.Create(StringValue), tskString, StringValue));
+      FTree.NewString(StringValue), tskString, StringValue));
   end;
   if MatchText('''''''') then
   begin
     StringValue := ParseLiteralString(True, False);
     Exit(TGocciaTOMLNode.CreateScalar(
-      TGocciaStringLiteralValue.Create(StringValue), tskString, StringValue));
+      FTree.NewString(StringValue), tskString, StringValue));
   end;
 
   case CurrentChar of
@@ -1358,13 +1332,13 @@ begin
       begin
         StringValue := ParseBasicString(False, False);
         Result := TGocciaTOMLNode.CreateScalar(
-          TGocciaStringLiteralValue.Create(StringValue), tskString, StringValue);
+          FTree.NewString(StringValue), tskString, StringValue);
       end;
     '''':
       begin
         StringValue := ParseLiteralString(False, False);
         Result := TGocciaTOMLNode.CreateScalar(
-          TGocciaStringLiteralValue.Create(StringValue), tskString, StringValue);
+          FTree.NewString(StringValue), tskString, StringValue);
       end;
     '[':
       Result := ParseArray;
@@ -1402,13 +1376,13 @@ function TGocciaTOMLParser.TryParseBoolean(const AToken: string;
 begin
   if AToken = 'true' then
   begin
-    ANode := TGocciaTOMLNode.CreateScalar(TGocciaBooleanLiteralValue.TrueValue,
+    ANode := TGocciaTOMLNode.CreateScalar(FTree.NewBoolean(True),
       tskBool, 'true');
     Exit(True);
   end;
   if AToken = 'false' then
   begin
-    ANode := TGocciaTOMLNode.CreateScalar(TGocciaBooleanLiteralValue.FalseValue,
+    ANode := TGocciaTOMLNode.CreateScalar(FTree.NewBoolean(False),
       tskBool, 'false');
     Exit(True);
   end;
@@ -1656,11 +1630,11 @@ begin
     if IsFloatToken(AToken) then
     begin
       CanonicalText := CanonicalizeFloatToken(AToken);
-      ANode := TGocciaTOMLNode.CreateScalar(TGocciaNumberLiteralValue.Create(Number),
+      ANode := TGocciaTOMLNode.CreateScalar(FTree.NewNumber(Number),
         tskFloat, CanonicalText);
     end
     else
-      ANode := TGocciaTOMLNode.CreateScalar(TGocciaNumberLiteralValue.Create(Number),
+      ANode := TGocciaTOMLNode.CreateScalar(FTree.NewNumber(Number),
         tskInteger, CanonicalizeIntegerToken(AToken));
   end
   else
@@ -1879,19 +1853,19 @@ begin
   if TryParseDateTime(AToken, ScalarKind, CanonicalText) then
   begin
     Result := TGocciaTOMLNode.CreateScalar(
-      TGocciaStringLiteralValue.Create(AToken), ScalarKind, CanonicalText);
+      FTree.NewString(AToken), ScalarKind, CanonicalText);
     Exit;
   end;
   if TryParseTimeOnly(AToken, CanonicalText) then
   begin
     Result := TGocciaTOMLNode.CreateScalar(
-      TGocciaStringLiteralValue.Create(AToken), tskTimeLocal, CanonicalText);
+      FTree.NewString(AToken), tskTimeLocal, CanonicalText);
     Exit;
   end;
   if TryParseDate(AToken, DateRec) then
   begin
     Result := TGocciaTOMLNode.CreateScalar(
-      TGocciaStringLiteralValue.Create(AToken), tskDateLocal, AToken);
+      FTree.NewString(AToken), tskDateLocal, AToken);
     Exit;
   end;
 

@@ -33,6 +33,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.DataTree.Values,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
@@ -79,7 +80,8 @@ begin
     ThrowTypeError(SErrorTOMLParseArgMustBeString, SSuggestStringArgRequired);
 
   try
-    Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
+    Result := DataTreeToValue(
+      FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value));
   except
     on E: EGocciaTOMLParseError do
       ThrowSyntaxError(E.Message, SSuggestTOMLSyntax);
