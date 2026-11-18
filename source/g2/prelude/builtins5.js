@@ -1,4 +1,5 @@
-(function (G, markIntrinsic, privGet, privSet, privHas, weakBox, weakGet, weakKeep, weakSetCleanup) {
+(function (G, markIntrinsic, privGet, privSet, privHas, weakBox, weakGet, weakKeep, weakSetCleanup, tableNew, tableGet,
+  tableHas, tableSet, tableDelete) {
   "use strict";
   // Array.fromAsync, Object.groupBy / Map.groupBy, Map / WeakMap getOrInsert and getOrInsertComputed, by the spec's
   // steps; the intrinsics used are captured here, so later changes to the globals are not observed.
@@ -155,7 +156,7 @@
   };
   def(MP, "getOrInsert", mapMethods.getOrInsert);
   def(MP, "getOrInsertComputed", mapMethods.getOrInsertComputed);
-  // 24.3 WeakMap and 24.4 WeakSet (entries held strongly: G2 has no ephemerons yet), over captured Map / Set
+  // 24.3 WeakMap and 24.4 WeakSet over G2.Weak's ephemeron tables
   var SetCtor = Set, SP = Set.prototype, setHas = SP.has, setAdd = SP.add, setDelete = SP.delete, mapDelete = MP.delete;
   function canHoldWeakly(v) { return isObject(v) || (typeof v === "symbol" && Symbol.keyFor(v) === undefined); }
   // 24.1.1.2 AddEntriesFromIterable / the WeakSet constructor's loop
@@ -182,7 +183,7 @@
     }
   }
   class WeakMap {
-    #m = new MapCtor();
+    #t = tableNew();   // an ephemeron table (G2.Weak): a value lives only as long as its key
     constructor() {
       var iterable = arguments.length > 0 ? arguments[0] : undefined;
       if (iterable === undefined || iterable === null) return;
@@ -190,35 +191,35 @@
       if (!isCallable(adder)) throw new TypeErr("WeakMap.prototype.set is not a function");
       addEntries(this, iterable, adder, true);
     }
-    static #check(o, name) { if (!isObject(o) || !(#m in o)) throw new TypeErr("WeakMap.prototype." + name + " called on an incompatible receiver"); }
-    delete(key) { WeakMap.#check(this, "delete"); if (!canHoldWeakly(key)) return false; return apply(mapDelete, this.#m, [key]); }
-    get(key) { WeakMap.#check(this, "get"); if (!canHoldWeakly(key)) return undefined; return apply(mapGet, this.#m, [key]); }
-    has(key) { WeakMap.#check(this, "has"); if (!canHoldWeakly(key)) return false; return apply(mapHas, this.#m, [key]); }
+    static #check(o, name) { if (!isObject(o) || !(#t in o)) throw new TypeErr("WeakMap.prototype." + name + " called on an incompatible receiver"); }
+    delete(key) { WeakMap.#check(this, "delete"); if (!canHoldWeakly(key)) return false; return tableDelete(this.#t, key); }
+    get(key) { WeakMap.#check(this, "get"); if (!canHoldWeakly(key)) return undefined; return tableGet(this.#t, key); }
+    has(key) { WeakMap.#check(this, "has"); if (!canHoldWeakly(key)) return false; return tableHas(this.#t, key); }
     set(key, value) {
       WeakMap.#check(this, "set");
       if (!canHoldWeakly(key)) throw new TypeErr("Invalid value used as weak map key");
-      apply(mapSet, this.#m, [key, value]);
+      tableSet(this.#t, key, value);
       return this;
     }
     getOrInsert(key, value) {
       WeakMap.#check(this, "getOrInsert");
       if (!canHoldWeakly(key)) throw new TypeErr("Invalid value used as weak map key");
-      if (apply(mapHas, this.#m, [key])) return apply(mapGet, this.#m, [key]);
-      apply(mapSet, this.#m, [key, value]);
+      if (tableHas(this.#t, key)) return tableGet(this.#t, key);
+      tableSet(this.#t, key, value);
       return value;
     }
     getOrInsertComputed(key, callbackfn) {
       WeakMap.#check(this, "getOrInsertComputed");
       if (!canHoldWeakly(key)) throw new TypeErr("Invalid value used as weak map key");
       if (!isCallable(callbackfn)) throw new TypeErr("getOrInsertComputed: the callback is not a function");
-      if (apply(mapHas, this.#m, [key])) return apply(mapGet, this.#m, [key]);
+      if (tableHas(this.#t, key)) return tableGet(this.#t, key);
       var value = callbackfn(key);
-      apply(mapSet, this.#m, [key, value]);
+      tableSet(this.#t, key, value);
       return value;
     }
   }
   class WeakSet {
-    #s = new SetCtor();
+    #t = tableNew();
     constructor() {
       var iterable = arguments.length > 0 ? arguments[0] : undefined;
       if (iterable === undefined || iterable === null) return;
@@ -226,15 +227,15 @@
       if (!isCallable(adder)) throw new TypeErr("WeakSet.prototype.add is not a function");
       addEntries(this, iterable, adder, false);
     }
-    static #check(o, name) { if (!isObject(o) || !(#s in o)) throw new TypeErr("WeakSet.prototype." + name + " called on an incompatible receiver"); }
+    static #check(o, name) { if (!isObject(o) || !(#t in o)) throw new TypeErr("WeakSet.prototype." + name + " called on an incompatible receiver"); }
     add(value) {
       WeakSet.#check(this, "add");
       if (!canHoldWeakly(value)) throw new TypeErr("Invalid value used in weak set");
-      apply(setAdd, this.#s, [value]);
+      tableSet(this.#t, value, true);
       return this;
     }
-    delete(value) { WeakSet.#check(this, "delete"); if (!canHoldWeakly(value)) return false; return apply(setDelete, this.#s, [value]); }
-    has(value) { WeakSet.#check(this, "has"); if (!canHoldWeakly(value)) return false; return apply(setHas, this.#s, [value]); }
+    delete(value) { WeakSet.#check(this, "delete"); if (!canHoldWeakly(value)) return false; return tableDelete(this.#t, value); }
+    has(value) { WeakSet.#check(this, "has"); if (!canHoldWeakly(value)) return false; return tableHas(this.#t, value); }
   }
   // 24.2.4 Set.prototype union / intersection / difference / symmetricDifference / isSubsetOf / isSupersetOf /
   // isDisjointFrom, with GetSetRecord (24.2.1.2)

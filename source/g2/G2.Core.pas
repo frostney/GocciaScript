@@ -75,6 +75,8 @@ const
   cfPermanent = 8;
   cfBuffered = 16;   { a ckString whose characters live in a ckStrBuf: the pointer sits where Chars starts }
   cfEmulatesUndefined = 32;   { B.3.6 [[IsHTMLDDA]]: typeof "undefined", ToBoolean false, == undefined and null }
+  cfEphKey = 128;    { a cell some ephemeron (WeakMap entry, table owner) waits on during a collection: marking or
+                       evacuating it notes it (GCEphKeyCount) }
   cfSlice = 64;      { with cfBuffered: a ckString whose characters are a flat string's, at an Int32 offset after the
                        pointer (a long substring shares its parent's characters instead of copying them) }
   ckStrBuf = 11;
@@ -265,6 +267,18 @@ function HeapReserve(Bytes: Int64): Boolean;
 var GCWeakHook: procedure = nil;
 { like GCWeakHook, run right after it: G2.Weak's boxes (WeakRef, FinalizationRegistry) }
 var GCWeakRefHook: procedure = nil;
+{ ephemerons (G2.Weak's WeakMap tables): after marking drains, called again and again while it returns True (it
+  visited more values, which were drained in between); then GCWeakRefHook. It may flag cells cfEphKey: the cells of
+  those that marking reaches afterwards are listed (GCEphKeyCount / GCEphKeyAt, the original address of an evacuated
+  cell) until GCEphKeysClear }
+var GCEphemeronHook: function: Boolean = nil;
+function GCEphKeyCount: Integer;
+function GCEphKeyAt(I: Integer): Pointer;
+procedure GCEphKeysClear;
+{ P lies in the nursery (outside G2.Core: each threadvar read in a statement of its own) }
+function GCIsYoung(P: Pointer): Boolean;
+{ GCVisit for other units (not inlined: its threadvar reads stay in this unit) }
+procedure GCVisitValue(var V: TValue);
 { like GCWeakHook, for releasing what dead cells held outside the heap (G2.Shared's buffer references) }
 var GCFinalizeHook: procedure = nil;
 function GCSurvives(var P: Pointer): Boolean;
@@ -706,6 +720,8 @@ threadvar
   NurserySize: SizeInt;
   GrayStack: array of Pointer;
   GrayTop: Integer;
+  EphKeys: array of Pointer;   { cells flagged cfEphKey that marking reached in this collection }
+  EphKeyTop: Integer;
   RememberedList: array of PCell;
   RememberedTop: Integer;
   InMinor: Boolean;
@@ -824,6 +840,19 @@ begin
   Result := (PByte(P) >= NurseryStart) and (PByte(P) < NurseryLimit);
 end;
 
+function GCIsYoung(P: Pointer): Boolean; noinline;
+var Lo, Hi: PByte;
+begin
+  Lo := NurseryStart;
+  Hi := NurseryLimit;
+  Result := (PByte(P) >= Lo) and (PByte(P) < Hi);
+end;
+
+procedure GCVisitValue(var V: TValue); noinline;
+begin
+  GCVisit(V);
+end;
+
 procedure Remember(Container: PCell);
 begin
   Container^.Flags := Container^.Flags or cfRemembered;
@@ -837,6 +866,30 @@ begin
   if ((Container^.Flags and (cfOld or cfRemembered)) = cfOld) and ((V shr 48) = TAG_PTR_HI) and
      IsYoung(Pointer(PtrUInt(V and PTR_MASK))) then
     Remember(Container);
+end;
+
+procedure NoteEphKey(P: Pointer); noinline;
+var N: Integer;
+begin
+  N := EphKeyTop;
+  if N >= Length(EphKeys) then SetLength(EphKeys, N * 2 + 256);
+  EphKeys[N] := P;
+  EphKeyTop := N + 1;
+end;
+
+function GCEphKeyCount: Integer;
+begin
+  Result := EphKeyTop;
+end;
+
+function GCEphKeyAt(I: Integer): Pointer;
+begin
+  Result := EphKeys[I];
+end;
+
+procedure GCEphKeysClear;
+begin
+  EphKeyTop := 0;
 end;
 
 procedure PushGray(P: Pointer); inline;
@@ -862,6 +915,7 @@ begin
     Move((PByte(C) + 4)^, (PByte(Result) + 4)^, Size - 4);   { keep Result^.Size from AllocOld's class }
     Result^.Kind := C^.Kind;
     Result^.Flags := cfOld or (C^.Flags and (cfBuffered or cfEmulatesUndefined or cfSlice));
+    if (C^.Flags and cfEphKey) <> 0 then NoteEphKey(C);
     C^.Kind := ckForward;
     PPointer(PByte(C) + 8)^ := Result;
     PushGray(Result);
@@ -873,6 +927,11 @@ procedure MarkCell(C: PCell); inline;
 begin
   if (C^.Flags and (cfMark or cfPermanent)) = 0 then
   begin
+    if (C^.Flags and cfEphKey) <> 0 then
+    begin
+      C^.Flags := C^.Flags and not cfEphKey;
+      NoteEphKey(C);
+    end;
     C^.Flags := C^.Flags or cfMark;
     PushGray(C);
   end;
@@ -1030,6 +1089,8 @@ begin
   end;
   RememberedTop := 0;
   DrainGray;
+  if Assigned(GCEphemeronHook) then
+    while GCEphemeronHook() do DrainGray;
   FixOpenUpvalLinks;
   if Assigned(GCWeakHook) then GCWeakHook;
   if Assigned(GCWeakRefHook) then GCWeakRefHook;
@@ -1130,6 +1191,8 @@ begin
   for I := 0 to TempTop - 1 do GCVisit(TempRoots[I]);
   ScanShapesForGC;
   DrainGray;
+  if Assigned(GCEphemeronHook) then
+    while GCEphemeronHook() do DrainGray;
   if Assigned(GCWeakHook) then GCWeakHook;
   if Assigned(GCWeakRefHook) then GCWeakRefHook;
   if Assigned(GCFinalizeHook) then GCFinalizeHook;

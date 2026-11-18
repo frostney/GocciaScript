@@ -47,7 +47,7 @@ begin
 end;
 
 procedure InitBuiltins5;
-var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..8] of TValue; Ok: Boolean; I: Integer;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..13] of TValue; Ok: Boolean; I: Integer;
 begin
   if not CompilePrelude('<builtins5>', Builtins5Src, T, Err) then
     raise Exception.Create('builtins5 prelude: ' + string(Err));
@@ -63,10 +63,16 @@ begin
   PushRoot(NewNativeFunction(WeakGetNative, 'weakGet', 1));
   PushRoot(NewNativeFunction(WeakKeepNative, 'weakKeep', 1));
   PushRoot(NewNativeFunction(WeakSetCleanupNative, 'weakSetCleanup', 1));
+  { G2.Weak's ephemeron tables: WeakMap and WeakSet }
+  PushRoot(NewNativeFunction(TableNewNative, 'tableNew', 0));
+  PushRoot(NewNativeFunction(TableGetNative, 'tableGet', 2));
+  PushRoot(NewNativeFunction(TableHasNative, 'tableHas', 2));
+  PushRoot(NewNativeFunction(TableSetNative, 'tableSet', 3));
+  PushRoot(NewNativeFunction(TableDeleteNative, 'tableDelete', 2));
   CA[0] := GlobalObj;
-  for I := 1 to 8 do CA[I] := RootAt(TempTop - 9 + I);
-  Ok := CallValue(RootAt(TempTop - 9), VUndefined, @CA[0], 9, R);
-  PopRoots(8);
+  for I := 1 to 13 do CA[I] := RootAt(TempTop - 14 + I);
+  Ok := CallValue(RootAt(TempTop - 14), VUndefined, @CA[0], 14, R);
+  PopRoots(13);
   if not Ok then
   begin
     PopRoots(1);
