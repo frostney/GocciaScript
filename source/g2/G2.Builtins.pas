@@ -3299,6 +3299,8 @@ begin
   DefineOwn(StringIterProto, SymKey(SymToStringTagW), MkPtr(AtomOf('String Iterator')), pfConfigurable);
   G := NewNativeFunction(Iter_Self, '[Symbol.iterator]', 0);
   DefineOwn(IteratorProto, PStr(PPointer(PByte(PtrOf(SymIterator)) + 16)^), G, pfHidden);
+  AddRoot(@IterSelfFn);
+  IterSelfFn := G;
 
   { String }
   C := MakeCtor(String_Ctor, 'String', 1, StringProto);

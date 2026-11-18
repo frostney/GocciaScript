@@ -155,6 +155,7 @@ threadvar
   { the intrinsic %ArrayIteratorPrototype%.next and %GeneratorPrototype%.next (G2.Builtins sets them): an
     iterator record whose next method is one of them steps without a call }
   ArrayIterNextFn, GenNextFn: TValue;
+  IterSelfFn: TValue;   { %IteratorPrototype%[@@iterator] (G2.Builtins sets it): a generator iterates as itself }
   MapIterNextFn, SetIterNextFn: TValue;   { %MapIteratorPrototype%.next, %SetIteratorPrototype%.next }
   { the function and iterator intrinsics of generators and async code (G2.Promise makes them) }
   GenFunctionProto, AsyncFunctionProto, AsyncGenFunctionProto, AsyncGeneratorProto, AsyncIteratorProto,
@@ -1077,9 +1078,55 @@ begin
     (GetSlot(B, AISlotB) = ArrayIterNextFn);
 end;
 
+threadvar
+  GIShapeGP, GIShapeIP: PShape;   { GenIterationIntact's cached lookups (the shapes they were made for), per agent }
+  GISlotGP, GISlotIP: Integer;
+  GIOkGP, GIOkIP: Boolean;
+
+{ a generator object iterates as itself with the intrinsic next: neither it nor its prototype (its function's
+  prototype property) has own properties, that prototype's is %GeneratorPrototype% with its own next the intrinsic
+  and no own @@iterator, and %IteratorPrototype%'s @@iterator is the intrinsic (returns this); no dictionary
+  shape among them (a dictionary changes in place, its shape the same) }
+function GenIterationIntact(G: PObj): Boolean;
+var P, GP, IP: PObj; S: Integer;
+begin
+  Result := False;
+  if MultiRealmAny or (G^.Shape^.Count <> 0) or G^.Shape^.IsDict or not IsObject(G^.Shape^.Proto) then Exit;
+  P := ObjOf(G^.Shape^.Proto);
+  if (P^.Shape^.Count <> 0) or P^.Shape^.IsDict or (P^.Shape^.Proto <> GeneratorProto) then Exit;
+  GP := ObjOf(GeneratorProto);
+  if GP^.Shape^.IsDict then Exit;
+  if GP^.Shape <> GIShapeGP then
+  begin
+    GIShapeGP := GP^.Shape;
+    S := ShapeLookup(GP^.Shape, AtomNext);
+    GISlotGP := S;
+    GIOkGP := (S >= 0) and ((GP^.Shape^.PFlags[S] and pfAccessor) = 0) and
+      (ShapeLookup(GP^.Shape, SymKey(SymIterator)) < 0) and (GP^.Shape^.Proto = IteratorProto);
+  end;
+  if not GIOkGP or (GetSlot(GP, GISlotGP) <> GenNextFn) then Exit;
+  IP := ObjOf(IteratorProto);
+  if IP^.Shape^.IsDict then Exit;
+  if IP^.Shape <> GIShapeIP then
+  begin
+    GIShapeIP := IP^.Shape;
+    S := ShapeLookup(IP^.Shape, SymKey(SymIterator));
+    GISlotIP := S;
+    GIOkIP := (S >= 0) and ((IP^.Shape^.PFlags[S] and pfAccessor) = 0);
+  end;
+  Result := GIOkIP and (GetSlot(IP, GISlotIP) = IterSelfFn);
+end;
+
 function GetIteratorRec(V: TValue; var It, NextM: TValue): Boolean;
 var F: TValue;
 begin
+  { a generator with the intrinsics in place: itself, its next the intrinsic (stepped without a call) }
+  if IsObject(V) and (ObjOf(V)^.OKind = okGenerator) and GenIterationIntact(ObjOf(V)) then
+  begin
+    It := V;
+    NextM := GenNextFn;
+    Exit(True);
+  end;
   { strings, arguments objects and typed arrays iterate like arrays while the intrinsics are in place }
   if (IsString(V) or (IsObject(V) and (ObjOf(V)^.OKind in [okArguments, okTypedArray]))) and ArrayIterationIntact then
   begin
@@ -8623,7 +8670,7 @@ begin
   { a realm's intrinsics (the builtins' Init procedures make them) }
   RealmVals([@ObjectProto, @FunctionProto, @ArrayProto, @StringProto, @NumberProto, @BooleanProto, @ErrorProto,
     @IteratorProto, @ArrayIteratorProto, @GeneratorProto, @MapProto, @SetProtoObj, @SymbolProto, @GlobalObj,
-    @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @MapIterNextFn, @SetIterNextFn,
+    @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @IterSelfFn, @MapIterNextFn, @SetIterNextFn,
     @GenFunctionProto, @AsyncFunctionProto, @AsyncGenFunctionProto, @AsyncGeneratorProto, @AsyncIteratorProto,
     @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @StringIterProto, @StringIterNextFn, @FuncHasInstanceFn, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
     @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto]);
