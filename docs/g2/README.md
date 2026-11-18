@@ -36,8 +36,9 @@ Largest performance gaps: generators (lazy-collections 0.67), float arithmetic o
 
 ## Build
 
-G2 builds with FPC 3.3.1 (the toolchain with native TLS threadvars), selected by `fpc-toolchain env 3.3.1` or
-any command given in `G2_FPC_ENV`:
+G2 builds with FPC 3.3.1 from fpc-toolchain (native TLS threadvars), build 3.3.1+4 (release `3.3.1-b4`) or
+later, selected by `fpc-toolchain env 3.3.1+4` or any command given in `G2_FPC_ENV`. Earlier builds hang in the DFA
+pass on some units and drop the `@tpoff` relocation of a threadvar field at -O1:
 
 ```sh
 sh scripts/g2/build.sh        # build/g2/g2
@@ -46,8 +47,8 @@ build/g2/g2 --module file.mjs # run a module
 ```
 
 The build runs in two stages: the first binary compiles the JS preludes and writes their bytecode, the second
-embeds it. It fails when `scripts/g2/tlsscan.py` finds an FPC 3.3.1 native-TLS miscompile (a threadvar
-address with an absolute relocation); read a threadvar through a `noinline` accessor or a heap record then.
+embeds it. It fails when `scripts/g2/tlsscan.py` finds a native-TLS miscompile (a threadvar address with an
+absolute relocation), the bug 3.3.1+4 fixes; it stays as a guard against a toolchain that regresses.
 
 ## Gate
 
@@ -83,8 +84,6 @@ its Pascal unit tests:
   - error messages and suggestions are constants rather than `resourcestring`, which FPC converts and
     allocates at every call;
   - `Goccia.ClassMask` replaces chains of `is` tests with one cached bit mask per class.
-- `Goccia.Values.FunctionBase`: `{$OPTIMIZATION NODFA}` under FPC 3.3.1 and later, whose DFA pass hangs on
-  `ConstructValue` at -O3 and above.
 - `Goccia.Lexer`: `#` must be followed directly by an identifier name (`# x` is a SyntaxError).
 
 Goccia's RegExp compiler rejects a repetition count too large to copy; G2 treats that as a limit of the

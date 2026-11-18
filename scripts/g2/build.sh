@@ -1,6 +1,7 @@
 #!/bin/sh
 # scripts/g2/build.sh: builds the G2 engine (source/g2) against Goccia's front end (source/units) into
-# build/g2/g2. Needs FPC 3.3.1 (fpc-toolchain env 3.3.1; G2_FPC_ENV overrides the env command).
+# build/g2/g2. Needs fpc-toolchain's FPC 3.3.1+4 (3.3.1-b4) or later: earlier builds hang in the DFA pass and drop
+# the @tpoff relocation of a threadvar field (patches 0119 and 0121). G2_FPC_ENV overrides the env command.
 # Stage 1 compiles with the JS preludes compiled at start-up, stage 2 runs that binary to snapshot the compiled
 # preludes and rebuilds with them embedded (G2.Snapshot). Fails on an FPC native-TLS miscompile (tlsscan.py).
 set -u
@@ -10,7 +11,7 @@ OUT=build/g2
 GEN=$OUT/gen
 U=$OUT/units
 mkdir -p "$GEN" "$U"
-if [ -n "${G2_FPC_ENV:-}" ]; then eval "$G2_FPC_ENV"; else eval "$("$HOME/.local/share/fpc-toolchains/bin/fpc-toolchain" env 3.3.1)"; fi
+if [ -n "${G2_FPC_ENV:-}" ]; then eval "$G2_FPC_ENV"; else eval "$("$HOME/.local/share/fpc-toolchains/bin/fpc-toolchain" env 3.3.1+4)"; fi
 # the JS preludes as Pascal string constants
 python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/builtins5.js "$GEN/G2.Builtins5.inc" Builtins5Src || exit 1
 python3 scripts/g2/gen_prelude_inc.py source/g2/prelude/disposal.js "$GEN/G2.Disposal.inc" DisposalSrc || exit 1
@@ -57,7 +58,8 @@ build() {
 build; rc=$?
 grep -a -E '(Error|Fatal):' "$OUT/build.log" | head -40
 [ $rc -ne 0 ] && exit $rc
-# FPC 3.3.1 native TLS: a threadvar address with a constant offset can get an absolute relocation
+# guard against FPC native-TLS miscompiles: a threadvar address with a constant offset given an absolute
+# relocation (fpc-toolchain 3.3.1+3 and earlier; patch 0121 fixes the known case)
 python3 scripts/g2/tlsscan.py "$U"/*.o > "$OUT/tlsscan.txt"
 grep -q '^total 0$' "$OUT/tlsscan.txt" || { echo 'broken threadvar relocations:'; cat "$OUT/tlsscan.txt"; exit 1; }
 if [ -z "${G2_NO_SNAPSHOT_BUILD:-}" ]; then

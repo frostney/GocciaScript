@@ -9,8 +9,6 @@ unit G2.JSON;
 {$mode delphiunicode}{$H+}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
-{ FPC 3.3.1's data flow analysis does not terminate on this unit at -O3 }
-{$OPTIMIZATION NODFA}
 
 interface
 
