@@ -295,6 +295,8 @@ function OwnKeys(O: PObj; OnlyEnumerable: Boolean): TValue;   { array of string 
 function DefineOwn(O: TValue; Key: PStr; V: TValue; Flags: Byte): Boolean;
 function GetIterator(V: TValue; var It: TValue): Boolean;
 function IteratorStep(It: TValue; var Value: TValue; var Done: Boolean): Boolean;
+{ an intrinsic iterator's own step (its next native): never through a replaced next }
+function IntrinsicIteratorStep(It: TValue; var Value: TValue; var Done: Boolean): Boolean;
 function FunctionPrototypeOf(F: TValue): TValue;
 { for preludes: marks a class as a built-in (its own prototype is its default prototype) }
 function MarkIntrinsicClass(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
@@ -344,6 +346,7 @@ threadvar
   ArrayValuesFnPublic: TValue;
   StringIterProto: TValue;   { %StringIteratorPrototype% }
   StringIterNextFn: TValue;  { %StringIteratorPrototype%.next }
+  StringIterFnPublic: TValue;   { %String.prototype%[@@iterator] }
   FuncHasInstanceFn: TValue; { %Function.prototype%[@@hasInstance]: instanceof skips calling it }
   BigIntProto: TValue;
   ErrorProtoType, TypeErrorProto, RangeErrorProto, SyntaxErrorProto, ReferenceErrorProto: TValue;
@@ -1151,6 +1154,22 @@ begin
   Result := ArrayIterNextFn;
 end;
 
+threadvar
+  SIShapeA, SIShapeB: PShape; SISlotA, SISlotB: Integer;   { StringIterationIntact's cached lookups }
+
+{ String.prototype[@@iterator] and %StringIteratorPrototype%.next are the intrinsics (data properties): a string
+  iterates without a call }
+function StringIterationIntact: Boolean;
+var A, B: PObj;
+begin
+  A := ObjOf(StringProto); B := ObjOf(StringIterProto);
+  if A^.Shape <> SIShapeA then begin SIShapeA := A^.Shape; SISlotA := ShapeLookup(A^.Shape, SymKey(SymIterator)); end;
+  if B^.Shape <> SIShapeB then begin SIShapeB := B^.Shape; SISlotB := ShapeLookup(B^.Shape, AtomNext); end;
+  Result := (SISlotA >= 0) and (SISlotB >= 0) and ((A^.Shape^.PFlags[SISlotA] and pfAccessor) = 0) and
+    ((B^.Shape^.PFlags[SISlotB] and pfAccessor) = 0) and (GetSlot(A, SISlotA) = StringIterFnPublic) and
+    (GetSlot(B, SISlotB) = StringIterNextFn);
+end;
+
 function ArrayIterationIntact: Boolean;
 var A, B: PObj;
 begin
@@ -1215,7 +1234,7 @@ begin
   if (IsString(V) or (IsObject(V) and (ObjOf(V)^.OKind in [okArguments, okTypedArray]))) and ArrayIterationIntact then
   begin
     if not GetIterator(V, It) then Exit(False);
-    if IsObject(It) and (ObjOf(It)^.OKind = okIterator) then
+    if IsObject(It) and (ObjOf(It)^.OKind = okIterator) and ((ObjOf(It)^.OFlags <> 1) or StringIterationIntact) then
     begin
       if ObjOf(It)^.OFlags = 1 then NextM := StringIterNextFn else NextM := ArrayIterNextFn;
     end
@@ -1252,12 +1271,13 @@ end;
 function IteratorStepRec(It, NextM: TValue; var Value: TValue; var Done: Boolean): Boolean;
 var R: TValue;
 begin
+  { the record's next is the intrinsic one (read once, at GetIterator): the iterator steps itself }
   if ((NextM = ArrayIterNextFn) or (NextM = MapIterNextFn) or (NextM = SetIterNextFn)) and IsObject(It) and
      (ObjOf(It)^.OKind = okIterator) and ((ObjOf(It)^.OFlags >= 5) = (NextM <> ArrayIterNextFn)) and
-     ((ObjOf(It)^.OFlags >= 8) = (NextM = SetIterNextFn)) then
-    Exit(IteratorStep(It, Value, Done));
+     ((ObjOf(It)^.OFlags >= 8) = (NextM = SetIterNextFn)) and (ObjOf(It)^.OFlags <> 1) then
+    Exit(IntrinsicIteratorStep(It, Value, Done));
   if (NextM = StringIterNextFn) and IsObject(It) and (ObjOf(It)^.OKind = okIterator) and (ObjOf(It)^.OFlags = 1) then
-    Exit(IteratorStep(It, Value, Done));
+    Exit(IntrinsicIteratorStep(It, Value, Done));
   if (NextM = GenNextFn) and IsObject(It) and (ObjOf(It)^.OKind = okGenerator) then
   begin
     GenYieldRaw := False;
@@ -3029,20 +3049,21 @@ begin
     It := NewArrayIterator(V, 0);
     Exit(True);
   end;
-  if IsString(V) then
+  if IsString(V) and StringIterationIntact then
   begin
     It := NewArrayIterator(V, 1);
-    Exit(True);
-  end;
-  if IsObject(V) and (ObjOf(V)^.OKind = okTypedArray) and (ObjOf(V)^.Shape^.Proto <> VNull) then
-  begin
-    It := NewArrayIterator(V, 4);
     Exit(True);
   end;
   PushRoot(V);
   if not GetV(V, PStr(PPointer(PByte(PtrOf(SymIterator)) + 16)^), F) then begin PopRoots(1); Exit(False); end;
   V := RootAt(TempTop - 1);
   PopRoots(1);
+  { a typed array whose @@iterator is %TypedArray%.prototype.values (no own or subclass method shadows it) }
+  if (F = TypedArrayValuesFn) and IsObject(V) and (ObjOf(V)^.OKind = okTypedArray) and ArrayIterationIntact then
+  begin
+    It := NewArrayIterator(V, 4);
+    Exit(True);
+  end;
   if not IsCallable(F) then
   begin
     if GetEnvironmentVariable('G2_ITERDBG') <> '' then
@@ -3063,12 +3084,27 @@ begin
   if Result and not IsObject(It) then Result := ThrowTypeError('iterator is not an object');
 end;
 
+function IteratorStepImpl(It: TValue; var Value: TValue; var Done: Boolean; Raw: Boolean): Boolean; forward;
+
 function IteratorStep(It: TValue; var Value: TValue; var Done: Boolean): Boolean;
+begin
+  Result := IteratorStepImpl(It, Value, Done, False);
+end;
+
+{ the step of an intrinsic iterator itself (its prototype's next, called): never through a replaced next }
+function IntrinsicIteratorStep(It: TValue; var Value: TValue; var Done: Boolean): Boolean;
+begin
+  Result := IteratorStepImpl(It, Value, Done, True);
+end;
+
+function IteratorStepImpl(It: TValue; var Value: TValue; var Done: Boolean; Raw: Boolean): Boolean;
 var O: PObj; I: Integer; Src: TValue; S: PStr; NextF, R: TValue; C: Integer; Len: Int64; E: PValueArray;
 begin
   Value := VUndefined;   { a done step's value }
   O := ObjOf(It);
-  if O^.OKind = okIterator then
+  { an intrinsic iterator steps without a call while its prototype's next is the intrinsic one }
+  if (O^.OKind = okIterator) and (Raw or ((O^.OFlags = 1) and StringIterationIntact) or
+     ((O^.OFlags in [0, 2, 3, 4]) and ArrayIterationIntact) or (O^.OFlags >= 5)) then
   begin
     I := IntOf(O^.Aux2);
     Src := O^.Aux1;
@@ -4547,6 +4583,24 @@ begin
       if (V = VHole) and not GetElemV(RootAt(TempTop - 1), MkInt(I), V) then begin PopRoots(2); Exit(False); end;
       ArrayPush(ObjOf(RootAt(TempTop - 2)), V);
       Inc(I);
+    end;
+    PopRoots(2);
+    Exit(True);
+  end;
+  { a string iterated by the intact intrinsics: its code points pushed directly }
+  if IsString(Src) and StringIterationIntact then
+  begin
+    PushRoot(Arr); PushRoot(Src);
+    I := 0;
+    while I < StrOf(RootAt(TempTop - 1))^.Len do
+    begin
+      N := 1;
+      if (Ord(StrChars(StrOf(RootAt(TempTop - 1)))[I]) >= $D800) and (Ord(StrChars(StrOf(RootAt(TempTop - 1)))[I]) <= $DBFF) and
+         (I + 1 < StrOf(RootAt(TempTop - 1))^.Len) and (Ord(StrChars(StrOf(RootAt(TempTop - 1)))[I + 1]) >= $DC00) and
+         (Ord(StrChars(StrOf(RootAt(TempTop - 1)))[I + 1]) <= $DFFF) then N := 2;
+      V := SubString(StrOf(RootAt(TempTop - 1)), I, N);
+      ArrayPush(ObjOf(RootAt(TempTop - 2)), V);
+      Inc(I, N);
     end;
     PopRoots(2);
     Exit(True);
@@ -9155,7 +9209,7 @@ begin
     @IteratorProto, @ArrayIteratorProto, @GeneratorProto, @MapProto, @SetProtoObj, @SymbolProto, @GlobalObj,
     @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @IterSelfFn, @GenReturnFn, @MapIterNextFn, @SetIterNextFn,
     @GenFunctionProto, @AsyncFunctionProto, @AsyncGenFunctionProto, @AsyncGeneratorProto, @AsyncIteratorProto,
-    @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @StringIterProto, @StringIterNextFn, @FuncHasInstanceFn, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
+    @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @StringIterProto, @StringIterNextFn, @StringIterFnPublic, @FuncHasInstanceFn, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
     @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto]);
   RealmValRange(@Intrinsics[0], INTRINSIC_COUNT);
   AddRoot(@IntrinsicList);

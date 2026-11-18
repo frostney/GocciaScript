@@ -1382,7 +1382,7 @@ begin
   if not IsObject(Args[0]) or (ObjOf(Args[0])^.OKind <> okIterator) or (ObjOf(Args[0])^.OFlags > 4) or
      ((ObjOf(Args[0])^.OFlags = 1) <> (NativeData = 1)) then
     Exit(ThrowTypeError('next called on an object that is not an iterator of this kind'));
-  if not IteratorStep(Args[0], V, Done) then Exit(False);
+  if not IntrinsicIteratorStep(Args[0], V, Done) then Exit(False);
   PushRoot(V);
   O := NewPlainObject(ObjectProto, 2);
   V := RootAt(TempTop - 1);
@@ -3099,7 +3099,7 @@ begin
   if not IsObject(Args[0]) or (ObjOf(Args[0])^.OKind <> okIterator) or (ObjOf(Args[0])^.OFlags < Lo) or
      (ObjOf(Args[0])^.OFlags > Hi) then
     Exit(ThrowTypeError('next called on an object that is not an iterator of this kind'));
-  if not IteratorStep(Args[0], V, Done) then Exit(False);
+  if not IntrinsicIteratorStep(Args[0], V, Done) then Exit(False);
   PushRoot(V);
   O := NewPlainObject(ObjectProto, 2);
   V := RootAt(TempTop - 1);
@@ -3373,6 +3373,8 @@ begin
   N(StringProto, 'localeCompare', StrProto_LocaleCompare, 1);
   G := NewNativeFunction(StrProto_Iterator, '[Symbol.iterator]', 0);
   DefineOwn(StringProto, PStr(PPointer(PByte(PtrOf(SymIterator)) + 16)^), G, pfHidden);
+  AddRoot(@StringIterFnPublic);
+  StringIterFnPublic := G;
 
   { Number, Boolean, Symbol }
   C := MakeCtor(Number_Ctor, 'Number', 1, NumberProto);
