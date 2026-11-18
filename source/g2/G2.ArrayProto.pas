@@ -681,10 +681,14 @@ begin
 end;
 
 { moves Count properties From.. to To.. one at a time (Dir 1 ascending, -1 descending), the shared loop of shift,
-  unshift, splice and copyWithin: HasProperty, then Set or DeletePropertyOrThrow }
-function MoveRange(O: TValue; From, To_, Count: Int64; Dir: Integer): Boolean;
+  unshift, splice and copyWithin: HasProperty, then Set or DeletePropertyOrThrow. O is the caller's rooted slot
+  (Args[0]): a getter or setter may collect, and a minor collection moves a young object }
+function SparseMoveRange(var O: TValue; From, To_, Count: Int64; Dir: Integer; var Ok: Boolean): Boolean; forward;
+
+function MoveRange(var O: TValue; From, To_, Count: Int64; Dir: Integer): Boolean;
 var Has: Boolean; V: TValue;
 begin
+  if (Count > 4096) and SparseMoveRange(O, From, To_, Count, Dir, Result) then Exit;
   while Count > 0 do
   begin
     if not HasIdx(O, From, Has) then Exit(False);
@@ -698,6 +702,162 @@ begin
     Dec(Count);
   end;
   Result := True;
+end;
+
+type
+  TInt64Array = array of Int64;
+
+{ S is the canonical string of an integer from 0 to 2^53 - 1, a key an array-like's moves may reach (an array
+  index stops at 2^32 - 2, and HasIndexKeys covers only those) }
+function IntKeyFromString(S: PStr; out Idx: Int64): Boolean;
+var I, C: Integer;
+begin
+  Result := False;
+  if (S = nil) or (S^.Len = 0) or (S^.Len > 16) or (S^.Hdr.Extra <> 0) then Exit;
+  if (StrChars(S)[0] = '0') and (S^.Len > 1) then Exit;
+  Idx := 0;
+  for I := 0 to S^.Len - 1 do
+  begin
+    C := Ord(StrChars(S)[I]) - 48;
+    if (C < 0) or (C > 9) then Exit;
+    Idx := Idx * 10 + C;
+  end;
+  Result := Idx <= 9007199254740991;
+end;
+
+{ some key of S is such an integer now (HasIndexKeys stays set once one is deleted, and misses those past 2^32 - 2) }
+function ShapeHasIndexKey(S: PShape): Boolean;
+var I: Integer; Idx: Int64;
+begin
+  for I := 0 to S^.Count - 1 do
+    if IntKeyFromString(S^.Keys[I], Idx) then Exit(True);
+  Result := False;
+end;
+
+{ an object MoveRange may visit sparsely: a plain object or array whose prototypes are plain kinds without index
+  keys or elements, so a step whose source and destination are both absent on it does nothing }
+function SparseQualifies(P: PObj): Boolean;
+var Q: TValue; QO: PObj; K: Int64;
+begin
+  Result := False;
+  if not (P^.OKind in [okPlain, okArray]) then Exit;
+  Q := P^.Shape^.Proto;
+  while IsObject(Q) do
+  begin
+    QO := ObjOf(Q);
+    if not (QO^.OKind in [okPlain, okArray, okFunction, okNative]) or ShapeHasIndexKey(QO^.Shape) then Exit;
+    if QO^.Elements <> nil then
+      for K := 0 to Int64(QO^.Elements^.Len) - 1 do
+        if QO^.Elements^.Data[K] <> VHole then Exit;
+    Q := QO^.Shape^.Proto;
+  end;
+  Result := True;
+end;
+
+{ the steps from MinStep on whose source or destination is an own index of P now, ascending (repeats adjacent) }
+procedure CollectMoveSteps(P: PObj; From, To_, Count, MinStep: Int64; Dir: Integer; var Steps: TInt64Array;
+  var N: Integer);
+var E: PValueArray; S: PShape; I, J, Gap: Integer; K, Idx, T: Int64;
+
+  procedure AddStep(Pos: Int64);
+  var St: Int64;
+  begin
+    St := (Pos - From) * Dir;
+    if (St >= MinStep) and (St < Count) then
+    begin
+      if N >= Length(Steps) then SetLength(Steps, N * 2 + 16);
+      Steps[N] := St;
+      Inc(N);
+    end;
+    St := (Pos - To_) * Dir;
+    if (St >= MinStep) and (St < Count) then
+    begin
+      if N >= Length(Steps) then SetLength(Steps, N * 2 + 16);
+      Steps[N] := St;
+      Inc(N);
+    end;
+  end;
+
+begin
+  N := 0;
+  E := P^.Elements;
+  if E <> nil then
+    for K := 0 to Int64(E^.Len) - 1 do
+      if E^.Data[K] <> VHole then AddStep(K);
+  S := P^.Shape;
+  for I := 0 to S^.Count - 1 do
+    if IntKeyFromString(S^.Keys[I], Idx) then AddStep(Idx);
+  { ascending (a shell sort) }
+  Gap := N div 2;
+  while Gap > 0 do
+  begin
+    for I := Gap to N - 1 do
+    begin
+      T := Steps[I];
+      J := I;
+      while (J >= Gap) and (Steps[J - Gap] > T) do
+      begin
+        Steps[J] := Steps[J - Gap];
+        Dec(J, Gap);
+      end;
+      Steps[J] := T;
+    end;
+    Gap := Gap div 2;
+  end;
+end;
+
+{ index K of P is an own accessor property (its [[Get]] or [[Set]] runs user code) }
+function OwnIndexIsAccessor(P: PObj; K: Int64): Boolean;
+var Slot: Integer;
+begin
+  if not P^.Shape^.HasAccessors then Exit(False);
+  if (P^.Elements <> nil) and (K < P^.Elements^.Len) and (P^.Elements^.Data[K] <> VHole) then Exit(False);
+  Slot := ShapeLookup(P^.Shape, IdxKey(K));
+  Result := (Slot >= 0) and ((P^.Shape^.PFlags[Slot] and pfAccessor) <> 0);
+end;
+
+{ MoveRange on an object that qualifies (SparseQualifies): only the steps whose source or destination is present
+  run, in the same order. Before a step, its source or destination is present exactly when it was before the
+  earlier steps: they write and delete only their own destinations, never a later step's source or destination.
+  A step through an own accessor may run user code that changes the object or its prototypes, so after one the
+  steps are collected again, or the rest run one at a time when the object no longer qualifies. False when O
+  does not qualify; Ok then MoveRange's result }
+function SparseMoveRange(var O: TValue; From, To_, Count: Int64; Dir: Integer; var Ok: Boolean): Boolean;
+var Steps: TInt64Array; N, I: Integer; St, K: Int64; V: TValue; Has, Acc: Boolean;
+begin
+  Result := False;
+  if not IsObject(O) or not SparseQualifies(ObjOf(O)) then Exit;
+  Result := True;
+  Ok := False;
+  CollectMoveSteps(ObjOf(O), From, To_, Count, 0, Dir, Steps, N);
+  I := 0;
+  while I < N do
+  begin
+    if (I > 0) and (Steps[I] = Steps[I - 1]) then begin Inc(I); Continue; end;
+    St := Steps[I];
+    K := St * Dir;
+    Acc := OwnIndexIsAccessor(ObjOf(O), From + K) or OwnIndexIsAccessor(ObjOf(O), To_ + K);
+    if not HasIdx(O, From + K, Has) then Exit;
+    if Has then
+    begin
+      if not GetIdx(O, From + K, V) then Exit;
+      if not SetIdx(O, To_ + K, V) then Exit;
+    end
+    else if not DelIdx(O, To_ + K) then Exit;
+    if Acc then
+    begin
+      if not SparseQualifies(ObjOf(O)) then
+      begin
+        Ok := MoveRange(O, From + K + Dir, To_ + K + Dir, Count - St - 1, Dir);
+        Exit;
+      end;
+      CollectMoveSteps(ObjOf(O), From, To_, Count, St + 1, Dir, Steps, N);
+      I := 0;
+      Continue;
+    end;
+    Inc(I);
+  end;
+  Ok := True;
 end;
 
 { 23.1.3.27 shift }
