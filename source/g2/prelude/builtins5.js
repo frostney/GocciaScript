@@ -1,4 +1,4 @@
-(function (G, markIntrinsic, privGet, privSet, privHas) {
+(function (G, markIntrinsic, privGet, privSet, privHas, weakBox, weakGet, weakKeep, weakSetCleanup) {
   "use strict";
   // Array.fromAsync, Object.groupBy / Map.groupBy, Map / WeakMap getOrInsert and getOrInsertComputed, by the spec's
   // steps; the intrinsics used are captured here, so later changes to the globals are not observed.
@@ -710,8 +710,9 @@
   def(BigCtor, "asIntN", bigStatics.asIntN);
   def(BigCtor, "asUintN", bigStatics.asUintN);
 
-  // WeakRef and FinalizationRegistry (26.1, 26.2). Liveness is the implementation's: G2 keeps targets alive and
-  // never calls cleanup callbacks, which the spec allows (an implementation may never collect).
+  // WeakRef and FinalizationRegistry (26.1, 26.2) over G2.Weak's boxes: a box holds its target weakly, and the
+  // collector clears it once the target is unreachable. A registry's cells keep their held values strongly; when a
+  // cell's target dies the event loop runs the cleanup, one cell per job (9.13), until none is left.
   var symKeyFor = Symbol.keyFor, SymToStringTag = Symbol.toStringTag;
   function canBeHeldWeakly(v) {
     if (isObject(v)) return true;
@@ -719,21 +720,41 @@
   }
   function sameValue(a, b) { return a === b ? (a !== 0 || 1 / a === 1 / b) : (a !== a && b !== b); }
   class WeakRef {
-    #target;
+    #box;
     constructor(target) {
       if (!canBeHeldWeakly(target)) throw new TypeErr("WeakRef: target must be an object or a non-registered symbol");
-      this.#target = target;
+      this.#box = weakBox(target, false);
+      // 26.1.1.1 step 3: AddToKeptObjects(target)
+      weakKeep(target);
     }
-    deref() { return this.#target; }
+    deref() {
+      // 26.1.4.1.1 WeakRefDeref: a live target is kept for the rest of the job
+      var target = weakGet(this.#box);
+      if (target !== undefined) weakKeep(target);
+      return target;
+    }
   }
   defineProperty(WeakRef.prototype, SymToStringTag, { value: "WeakRef", writable: false, enumerable: false, configurable: true });
   markIntrinsic(WeakRef);
   def(G, "WeakRef", WeakRef);
+  // every registry, held weakly (a registry nothing reaches never calls back); dropped as they die
+  var registries = [], registriesAtSweep = 16;
+  // cells whose target died, waiting for their cleanup job: { registry, cell }
+  var cleanupQueue = [];
   class FinalizationRegistry {
-    #cells;
+    #callback;
+    #cells;   // { box (the target, weakly), held, token (a box, or undefined), done }
     constructor(cleanupCallback) {
       if (!isCallable(cleanupCallback)) throw new TypeErr("FinalizationRegistry: cleanup must be callable");
+      this.#callback = cleanupCallback;
       this.#cells = [];
+      if (registries.length >= registriesAtSweep) {
+        var live = [];
+        for (var i = 0; i < registries.length; i++) if (weakGet(registries[i]) !== undefined) live.push(registries[i]);
+        registries = live;
+        registriesAtSweep = live.length * 2 + 16;
+      }
+      registries.push(weakBox(this, false));
     }
     register(target, heldValue, unregisterToken = undefined) {
       var cells = this.#cells;
@@ -743,7 +764,13 @@
         if (unregisterToken !== undefined) throw new TypeErr("register: invalid unregister token");
         unregisterToken = undefined;
       }
-      cells.push({ target: target, held: heldValue, token: unregisterToken });
+      cells.push({
+        box: weakBox(target, true),
+        held: heldValue,
+        token: unregisterToken === undefined ? undefined : weakBox(unregisterToken, false),
+        done: false,
+        queued: false
+      });
       return undefined;
     }
     unregister(unregisterToken) {
@@ -751,9 +778,51 @@
       if (!canBeHeldWeakly(unregisterToken)) throw new TypeErr("unregister: invalid unregister token");
       var removed = false;
       for (var i = cells.length - 1; i >= 0; i--) {
-        if (cells[i].token !== undefined && sameValue(cells[i].token, unregisterToken)) { cells.splice(i, 1); removed = true; }
+        var c = cells[i];
+        if (c.done || c.token === undefined) continue;
+        var t = weakGet(c.token);
+        if (t !== undefined && sameValue(t, unregisterToken)) {
+          // a cell whose target died stays registered until its job runs: removing it here cancels that job
+          c.done = true;
+          cells.splice(i, 1);
+          removed = true;
+        }
       }
       return removed;
+    }
+    static {
+      // the dead cells of every live registry, the most recently registered first; finished cells dropped
+      function collectDead() {
+        var live = [];
+        for (var i = 0; i < registries.length; i++) {
+          var reg = weakGet(registries[i]);
+          if (reg === undefined) continue;
+          live.push(registries[i]);
+          var cells = reg.#cells, keep = [];
+          for (var j = 0; j < cells.length; j++) if (!cells[j].done) keep.push(cells[j]);
+          reg.#cells = keep;
+          for (var k = keep.length - 1; k >= 0; k--) {
+            var c = keep[k];
+            if (!c.queued && weakGet(c.box) === undefined) {
+              c.queued = true;
+              cleanupQueue.push({ registry: reg, cell: c });
+            }
+          }
+        }
+        registries = live;
+      }
+      // one cleanup job (9.12 CleanupFinalizationRegistry for one cell); true while more wait
+      weakSetCleanup(function () {
+        if (cleanupQueue.length === 0) collectDead();
+        while (cleanupQueue.length > 0) {
+          var e = cleanupQueue.shift();
+          if (e.cell.done) continue;
+          e.cell.done = true;
+          apply(e.registry.#callback, undefined, [e.cell.held]);
+          return cleanupQueue.length > 0;
+        }
+        return false;
+      });
     }
   }
   defineProperty(FinalizationRegistry.prototype, SymToStringTag, { value: "FinalizationRegistry", writable: false, enumerable: false, configurable: true });

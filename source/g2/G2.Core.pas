@@ -263,6 +263,8 @@ function HeapReserve(Bytes: Int64): Boolean;
 { weak references: GCWeakHook runs after marking/evacuation in every collection, before old space is swept.
   In it, GCSurvives says whether a cell lives on and updates P when the cell moved. The hook must not allocate. }
 var GCWeakHook: procedure = nil;
+{ like GCWeakHook, run right after it: G2.Weak's boxes (WeakRef, FinalizationRegistry) }
+var GCWeakRefHook: procedure = nil;
 { like GCWeakHook, for releasing what dead cells held outside the heap (G2.Shared's buffer references) }
 var GCFinalizeHook: procedure = nil;
 function GCSurvives(var P: Pointer): Boolean;
@@ -1030,6 +1032,7 @@ begin
   DrainGray;
   FixOpenUpvalLinks;
   if Assigned(GCWeakHook) then GCWeakHook;
+  if Assigned(GCWeakRefHook) then GCWeakRefHook;
   if Assigned(GCFinalizeHook) then GCFinalizeHook;
   InMinor := False;
   if GCVerify then
@@ -1128,6 +1131,7 @@ begin
   ScanShapesForGC;
   DrainGray;
   if Assigned(GCWeakHook) then GCWeakHook;
+  if Assigned(GCWeakRefHook) then GCWeakRefHook;
   if Assigned(GCFinalizeHook) then GCFinalizeHook;
   SweepPages;
   RememberedTop := 0;

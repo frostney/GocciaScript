@@ -12,7 +12,7 @@ procedure InitBuiltins5;
 implementation
 
 uses
-  SysUtils, G2.Core, G2.Bytecode, G2.VM, G2.Snapshot, G2.RegExpV;
+  SysUtils, G2.Core, G2.Bytecode, G2.VM, G2.Snapshot, G2.RegExpV, G2.Weak;
 
 {$I G2.Builtins5.inc}
 
@@ -47,7 +47,7 @@ begin
 end;
 
 procedure InitBuiltins5;
-var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..4] of TValue; Ok: Boolean; I: Integer;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..8] of TValue; Ok: Boolean; I: Integer;
 begin
   if not CompilePrelude('<builtins5>', Builtins5Src, T, Err) then
     raise Exception.Create('builtins5 prelude: ' + string(Err));
@@ -58,13 +58,15 @@ begin
   PushRoot(NewNativeFunction(Priv_Get, 'privGet', 2));
   PushRoot(NewNativeFunction(Priv_Set, 'privSet', 3));
   PushRoot(NewNativeFunction(Priv_Has, 'privHas', 2));
+  { G2.Weak: WeakRef and FinalizationRegistry }
+  PushRoot(NewNativeFunction(WeakBoxNative, 'weakBox', 2));
+  PushRoot(NewNativeFunction(WeakGetNative, 'weakGet', 1));
+  PushRoot(NewNativeFunction(WeakKeepNative, 'weakKeep', 1));
+  PushRoot(NewNativeFunction(WeakSetCleanupNative, 'weakSetCleanup', 1));
   CA[0] := GlobalObj;
-  CA[1] := RootAt(TempTop - 4);
-  CA[2] := RootAt(TempTop - 3);
-  CA[3] := RootAt(TempTop - 2);
-  CA[4] := RootAt(TempTop - 1);
-  Ok := CallValue(RootAt(TempTop - 5), VUndefined, @CA[0], 5, R);
-  PopRoots(4);
+  for I := 1 to 8 do CA[I] := RootAt(TempTop - 9 + I);
+  Ok := CallValue(RootAt(TempTop - 9), VUndefined, @CA[0], 9, R);
+  PopRoots(8);
   if not Ok then
   begin
     PopRoots(1);

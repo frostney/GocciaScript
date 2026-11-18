@@ -33,7 +33,7 @@ function RunTestSuites(var Json, Err: UnicodeString): Boolean;
 implementation
 
 uses
-  SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval,
+  SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, Goccia.ModuleResolver, TextSemantics, G2.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI;
@@ -850,13 +850,23 @@ end;
 function RunEventLoopIn(Intervals: Boolean): Boolean;
 var R: TValue; A: array[0..0] of TValue;
 begin
-  repeat
+  while True do
+  begin
     if not (RunMicrotasks and RunHostLoop) then Exit(False);
+    { a FinalizationRegistry's cleanup: one job (one dead cell) at a time, the microtasks it queues before the
+      next (9.13 HostEnqueueFinalizationRegistryCleanupJob) }
+    if WeakCleanupPending then
+    begin
+      ClearKeptObjects;
+      if not RunWeakCleanup then Exit(False);
+      Continue;
+    end;
     if not IsObject(FireNextV) or ReportDone then Exit(True);
+    ClearKeptObjects;
     A[0] := MkBool(Intervals);
     if not CallValue(FireNextV, VUndefined, @A[0], 1, R) then Exit(False);
-  until R <> VTrue;
-  Result := True;
+    if R <> VTrue then Exit(True);
+  end;
 end;
 
 function RunEventLoop: Boolean;

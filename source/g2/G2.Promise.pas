@@ -41,7 +41,7 @@ procedure SetAsyncContext(V: TValue);
 implementation
 
 uses
-  SysUtils, Math, G2.Bytecode, G2.VM;
+  SysUtils, Math, G2.Bytecode, G2.VM, G2.Weak;
 
 const
   okPromise = 20;
@@ -924,6 +924,8 @@ begin
     Q := VA(Jobs);
     J := JobHead * 4;
     Kind := IntOf(Q^.Data[J]);
+    { 9.10 ClearKeptObjects: the previous job's synchronous run is over }
+    ClearKeptObjects;
     A := Q^.Data[J + 1]; B := Q^.Data[J + 2]; C := Q^.Data[J + 3];
     Q^.Data[J + 1] := VUndefined; Q^.Data[J + 2] := VUndefined; Q^.Data[J + 3] := VUndefined;
     JobHead := (JobHead + 1) mod (Integer(Q^.Len) div 4);
