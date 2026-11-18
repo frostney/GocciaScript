@@ -607,6 +607,26 @@ begin
   end;
 end;
 
+{ S with each lone surrogate as U+FFFD, as the source text a parse keeps (UTF-8) holds it }
+function LoneSurrogatesReplaced(const S: UnicodeString): UnicodeString;
+var I: Integer; C: Word;
+begin
+  Result := S;
+  I := 1;
+  while I <= Length(Result) do
+  begin
+    C := Ord(Result[I]);
+    if (C >= $D800) and (C <= $DBFF) and (I < Length(Result)) and (Ord(Result[I + 1]) >= $DC00) and
+       (Ord(Result[I + 1]) <= $DFFF) then
+      Inc(I, 2)
+    else
+    begin
+      if (C >= $D800) and (C <= $DFFF) then Result[I] := WideChar($FFFD);
+      Inc(I);
+    end;
+  end;
+end;
+
 { 20.2.1.1.1 CreateDynamicFunction: Function, GeneratorFunction, AsyncFunction and AsyncGeneratorFunction
   (NativeData 0-3) }
 function Function_Ctor(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
@@ -641,9 +661,11 @@ begin
   if not CompileDynamic(Src, T, Err) then Exit(ThrowError('SyntaxError', Err));
   if not MakeScriptClosure(T, Clo) then Exit(False);
   Result := CallValue(Clo, VUndefined, nil, 0, Res);
-  { and the body as a FunctionBody: the function the source makes ends at the brace added after it }
+  { and the body as a FunctionBody: the function the source makes ends at the brace added after it (the source
+  range is kept as UTF-8, where a lone surrogate became U+FFFD) }
   if Result and IsObject(Res) and (ObjOf(Res)^.OKind = okFunction) and
-     (UTF8Decode(PFuncTemplate(ObjOf(Res)^.Native)^.SourceRange.Get) <> Copy(Src, 2, Length(Src) - 2)) then
+     (UTF8Decode(PFuncTemplate(ObjOf(Res)^.Native)^.SourceRange.Get) <>
+      LoneSurrogatesReplaced(Copy(Src, 2, Length(Src) - 2))) then
     Result := ThrowError('SyntaxError', 'Function body is not a FunctionBody');
 end;
 
