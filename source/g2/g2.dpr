@@ -4,7 +4,7 @@ program g2;
 uses
   cthreads, Classes, SysUtils, Math,
   Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.Token,
-  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.HostAPI, CLI.ConfigFile, StrUtils;
+  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.HostAPI, CLI.ConfigFile, CLI.Units, StrUtils;
 
 type
   TSampler = class(TThread)
@@ -112,7 +112,8 @@ end;
   it); without one, the recommended profile }
 procedure LoadTestConfig(const FileName: string; out Prof: TLangProfile; out SourceType: string;
   out ConfigJson: UnicodeString);
-var Path: string; Entries: TConfigEntryArray; I, J: Integer; Done: TStringList; Vals: UnicodeString;
+var Path, V, SizeErr: string; Entries: TConfigEntryArray; I, J: Integer; Done: TStringList; Vals: UnicodeString;
+  Bytes: Int64;
   function Flag(const Key: string): Boolean;
   var V: string;
   begin
@@ -140,6 +141,10 @@ begin
   Prof.ShadowRealm := Flag('unsafe-shadowrealm');
   Prof.StrictTypes := Flag('strict-types');
   if not FindConfigEntry(Entries, 'source-type', SourceType) then SourceType := '';
+  { --max-memory wins over the file }
+  if (HeapCeiling <= 0) and FindConfigEntry(Entries, 'max-memory', V) and TryParseByteSize(V, Bytes, SizeErr) and
+     (Bytes > 0) then
+    HeapCeiling := Bytes;
   { every key as a JSON string (an array's elements as a list), the first entry for a key winning }
   ConfigJson := '{';
   Done := TStringList.Create;
@@ -653,7 +658,7 @@ end;
 
 var
   FS: TFileStream; Raw: RawByteString; SrcText: UnicodeString; PP: TPreParser; LazySrc: TLazySource; L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; T: PFuncTemplate;
-  Opts: TGocciaParserOptions; Ok, TestMode: Boolean; S: TValue; FileName: string; I, NTokens: Integer; T0, T1, T2, T3, T4, H0, H1: QWord;
+  Opts: TGocciaParserOptions; Ok, TestMode: Boolean; MaxMem: Int64; SizeErr: string; S: TValue; FileName: string; I, NTokens: Integer; T0, T1, T2, T3, T4, H0, H1: QWord;
 begin
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   if ParamStr(1) = '--test262' then begin RunTest262Host; Halt(0); end;
@@ -664,6 +669,15 @@ begin
     else if ParamStr(I) = '--gc-stress' then GCStress := True
     else if ParamStr(I) = '--gc-verify' then GCVerify := True
     else if ParamStr(I) = '--trace-throw' then ThrowTrace := True
+    else if StartsStr('--max-memory=', ParamStr(I)) then
+    begin
+      if not TryParseByteSize(Copy(ParamStr(I), Length('--max-memory=') + 1, MaxInt), MaxMem, SizeErr) or (MaxMem <= 0) then
+      begin
+        WriteLn(ErrOutput, 'Invalid value for --max-memory: ', ParamStr(I), ' (', SizeErr, ')');
+        Halt(2);
+      end;
+      HeapCeiling := MaxMem;
+    end
     else FileName := ParamStr(I);
   T0 := GetTickCount64;
   { the file's bytes, decoded once (a string list would decode, split and join the lines again) }

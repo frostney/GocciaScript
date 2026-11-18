@@ -150,6 +150,16 @@ begin
   if (MaxLen >= 0) and (Len > MaxLen) then Exit(ThrowError('RangeError', 'byteLength exceeds maxByteLength'));
   if not ProtoFromCtor(C, ArrayBufferProtoV, P) then Exit(False);
   if (Len > MAX_ALLOC) or (MaxLen > MAX_ALLOC) then Exit(ThrowError('RangeError', 'Array buffer allocation failed'));
+  { the bytes count against Goccia.gc.maxBytes (a resizable buffer's up to its maximum, which it holds) }
+  PushRoot(P);
+  if not HeapReserve(Max(Len, MaxLen)) then
+  begin
+    PopRoots(1);
+    Exit(ThrowError('RangeError', 'Array buffer allocation of ' + IntToStr(Max(Len, MaxLen)) +
+      ' bytes exceeds the memory limit of ' + IntToStr(HeapCeiling) + ' bytes'));
+  end;
+  P := RootAt(TempTop - 1);
+  PopRoots(1);
   if MaxLen >= 0 then B := MkPtr(NewResizableBuffer(Len, MaxLen, P))
   else B := MkPtr(NewArrayBuffer(Len, P));
   Result := True;

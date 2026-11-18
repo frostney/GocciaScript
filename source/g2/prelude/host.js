@@ -4,7 +4,7 @@
 // the const Goccia.
 (function (G, n, shared, infoJson, testMode, shadowRealm, configJson) {
   'use strict';
-  const gc = n.gc, gcBytes = n.gcBytes, gcMaxBytes = n.gcMaxBytes;
+  const gc = n.gc, gcBytes = n.gcBytes, gcMaxBytes = n.gcMaxBytes, gcSuggestedMaxBytes = n.gcSuggestedMaxBytes;
   const defineProperty = Object.defineProperty;
   const info = JSON.parse(infoJson);
   // the host's configuration: the goccia.json keys and their values (strings, or arrays of strings)
@@ -39,7 +39,7 @@
   fixed(build, 'gcStress', info.gcStress);
 
   getter(gc, 'maxBytes', gcMaxBytes);
-  getter(gc, 'suggestedMaxBytes', gcMaxBytes);
+  getter(gc, 'suggestedMaxBytes', gcSuggestedMaxBytes);
   getter(gc, 'bytesAllocated', gcBytes);
 
   // the names the host's runtime extensions install, in their order; the preludes after this one add theirs

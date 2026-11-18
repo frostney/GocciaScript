@@ -168,14 +168,26 @@ begin
   end;
 end;
 
-{ Goccia.gc.maxBytes and suggestedMaxBytes: half of physical memory, at most 8 GB (docs/built-ins.md) }
-function Host_GCMaxBytes(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-const Cap = Int64(8) * 1024 * 1024 * 1024;
-var M: Int64;
+{ Goccia.gc.suggestedMaxBytes, and the ceiling without --max-memory or goccia.json max-memory: half of physical
+  memory, at most 8 GB (700 MB on a 32-bit build) (docs/built-ins.md) }
+function DefaultHeapCeiling: Int64;
+const Cap = {$IFDEF CPU64}Int64(8) * 1024 * 1024 * 1024{$ELSE}Int64(700) * 1024 * 1024{$ENDIF};
 begin
-  M := PhysicalMemory div 2;
-  if (M <= 0) or (M > Cap) then M := Cap;
-  Res := MkNumber(M);
+  Result := PhysicalMemory div 2;
+  if (Result <= 0) or (Result > Cap) then Result := Cap;
+end;
+
+function Host_GCSuggestedMaxBytes(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkNumber(DefaultHeapCeiling);
+  Result := True;
+end;
+
+{ Goccia.gc.maxBytes: the ceiling in force (HeapCeiling) }
+function Host_GCMaxBytes(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if HeapCeiling <= 0 then HeapCeiling := DefaultHeapCeiling;
+  Res := MkNumber(HeapCeiling);
   Result := True;
 end;
 
@@ -682,6 +694,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'gc', Host_GC, 0);
   DefineNative(RootAt(TempTop - 1), 'gcBytes', Host_GCBytes, 0);
   DefineNative(RootAt(TempTop - 1), 'gcMaxBytes', Host_GCMaxBytes, 0);
+  DefineNative(RootAt(TempTop - 1), 'gcSuggestedMaxBytes', Host_GCSuggestedMaxBytes, 0);
   DefineNative(RootAt(TempTop - 1), 'urlParse', Host_URLParse, 2);
   DefineNative(RootAt(TempTop - 1), 'urlOrigin', Host_URLOrigin, 4);
   DefineNative(RootAt(TempTop - 1), 'urlEncode', Host_URLEncode, 3);
@@ -715,6 +728,7 @@ function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: Un
   var Err: UnicodeString): Boolean;
 var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
+  if HeapCeiling <= 0 then HeapCeiling := DefaultHeapCeiling;
   if not EventLoopRooted then
   begin
     AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@HasHostModuleV);

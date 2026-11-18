@@ -251,6 +251,15 @@ procedure GCVisit(var V: TValue); inline;
 procedure GCVisitPtr(var P: Pointer);
 procedure CollectMinor;
 procedure CollectMajor;
+var
+  { Goccia.gc.maxBytes (--max-memory, goccia.json max-memory): an allocation charged against it (HeapReserve) that
+    would take the heap past it collects, tests again and is refused; 0 none. One setting for every thread }
+  HeapCeiling: Int64 = 0;
+{ the old generation and the nursery's used part (Goccia.gc.bytesAllocated) }
+function HeapUsedBytes: Int64;
+{ whether Bytes more fit under HeapCeiling, after a full collection when they do not yet: the charge of an
+  allocation a RangeError refuses (an ArrayBuffer's bytes). Collects: the caller's values stay rooted }
+function HeapReserve(Bytes: Int64): Boolean;
 { weak references: GCWeakHook runs after marking/evacuation in every collection, before old space is swept.
   In it, GCSurvives says whether a cell lives on and updates P when the cell moved. The hook must not allocate. }
 var GCWeakHook: procedure = nil;
@@ -1085,6 +1094,25 @@ begin
     end;
     L := Nx;
   end;
+end;
+
+{ each threadvar read in a statement of its own: FPC 3.3.1 can drop the %fs prefix of a second one in an
+  expression }
+function HeapUsedBytes: Int64; noinline;
+var Old: Int64; Top, Start: PByte;
+begin
+  Old := GCOldBytes;
+  Top := NurseryTop;
+  Start := NurseryStart;
+  Result := Old + (Top - Start);
+end;
+
+function HeapReserve(Bytes: Int64): Boolean;
+begin
+  if (HeapCeiling <= 0) or (Bytes <= HeapCeiling - HeapUsedBytes) then Exit(True);
+  CollectMinor;
+  CollectMajor;
+  Result := Bytes <= HeapCeiling - HeapUsedBytes;
 end;
 
 procedure CollectMajor;
