@@ -4814,6 +4814,26 @@ begin
           Barrier(jAX, jCX);                                        { (the overflow store's barrier: it is the cell) }
           if PC + 1 < Length(JitNative) then JmpPC(PC + 1) else JmpExit(PC);
           PatchHere(L1);
+          { an add transition (r8 the new shape) into an overflow array with room for the slot (AddPropertyTo's case
+            without an allocation): its length raised to take it, the shape, the store; anything else the helper's }
+          AluRR($29, jDX, jCX, False);                              { sub edx, ecx: the overflow index }
+          MovRM(jR9, jAX, PtrInt(@PObj(nil)^.Overflow));
+          AluRR($85, jR9, jR9, True);
+          L2 := JccFwd(ccE);
+          Cmp32RM(jDX, jR9, PtrInt(@PValueArray(nil)^.Cap));
+          L3 := JccFwd(ccAE);
+          Cmp32RM(jDX, jR9, PtrInt(@PValueArray(nil)^.Len));
+          L4 := JccFwd(ccB);
+          LeaRM(jR10, jDX, 1);
+          Mov32MR(jR9, PtrInt(@PValueArray(nil)^.Len), jR10);
+          PatchHere(L4);
+          MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jR8);
+          MovRR(jAX, jR9);
+          MovRM(jCX, jBX, JitDefer[N].V * 8);
+          MovMRIdx(jAX, jDX, PtrInt(@PValueArray(nil)^.Data), jCX);
+          Barrier(jAX, jCX);
+          if PC + 1 < Length(JitNative) then JmpPC(PC + 1) else JmpExit(PC);
+          PatchHere(L2); PatchHere(L3);
         end;
       2, 3:
         begin
