@@ -4662,7 +4662,7 @@ begin
 end;
 
 procedure TCompiler.CompileTry(S: TGocciaTryStatement);
-var Outer, Inner, ExcReg, JEnd, JEnd2, R, J: Integer; HasFinally: Boolean; MissL: TJumpList;
+var Outer, Inner, ExcReg, JEnd, JEnd2, R, J, K: Integer; HasFinally: Boolean; MissL: TJumpList; PN: TStringList;
 begin
   HasFinally := Assigned(S.FinallyBlock);
   ExcReg := AllocReg;   { kept for the whole statement }
@@ -4703,7 +4703,25 @@ begin
       Emit(Ins(opMov, R, ExcReg, 0));
     end
     else if Assigned(S.CatchBindingPattern) then
-      BindPattern(S.CatchBindingPattern, ExcReg, True, False);
+    begin
+      { 14.15.2 CatchClauseEvaluation: the pattern's names are bindings of the catch environment from its start,
+        uninitialized until the pattern binds each, so a default that reads one later in the pattern (or its
+        own) is a ReferenceError }
+      PN := NewNameList;
+      try
+        PatternNames(S.CatchBindingPattern, PN);
+        DeclaringLexical := True;
+        try
+          for K := 0 to PN.Count - 1 do DeclareLocal(PN[K], False);
+        finally
+          DeclaringLexical := False;
+        end;
+        BindPattern(S.CatchBindingPattern, ExcReg, True, False);
+        for K := 0 to PN.Count - 1 do MarkInitialized(PN[K]);
+      finally
+        PN.Free;
+      end;
+    end;
     { catch (e is pattern): an exception that does not match is thrown on (after the finally block) }
     SetLength(MissL, 0);
     if Assigned(S.CatchPattern) then
