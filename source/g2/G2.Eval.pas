@@ -144,6 +144,55 @@ begin
   end;
 end;
 
+type
+  { a for await statement outside every function (a function, method, accessor or class body is not entered) }
+  TTopForAwaitScan = class(TGocciaASTChildVisitor)
+  public
+    Found: Boolean;
+    procedure VisitChild(const ANode: TGocciaASTNode); override;
+    procedure EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+      const AFlags: TGocciaASTPartFlags); override;
+    procedure LeavePart; override;
+  end;
+
+procedure TTopForAwaitScan.VisitChild(const ANode: TGocciaASTNode);
+begin
+  if (ANode = nil) or Found then Exit;
+  if (ANode is TGocciaFunctionExpression) or (ANode is TGocciaArrowFunctionExpression) or
+     (ANode is TGocciaObjectMethodDefinition) or (ANode is TGocciaClassExpression) or
+     (ANode is TGocciaClassDeclaration) or (ANode is TGocciaFunctionDeclaration) or
+     (ANode is TGocciaGetterExpression) or (ANode is TGocciaSetterExpression) then Exit;
+  if ANode is TGocciaForAwaitOfStatement then
+  begin
+    Found := True;
+    Exit;
+  end;
+  ANode.ForEachChild(Self);
+end;
+
+procedure TTopForAwaitScan.EnterPart(const AKind: TGocciaASTPartKind; const AStartOffset, AEndOffset: Integer;
+  const AFlags: TGocciaASTPartFlags);
+begin
+end;
+
+procedure TTopForAwaitScan.LeavePart;
+begin
+end;
+
+{ a top-level for await statement in Prog: top-level await, which selects Module for a detected entry
+  (docs/language.md, Entry source type) }
+function HasTopLevelForAwait(Prog: TGocciaProgram): Boolean;
+var Sc: TTopForAwaitScan; I: Integer;
+begin
+  Sc := TTopForAwaitScan.Create;
+  try
+    for I := 0 to Prog.Body.Count - 1 do Sc.VisitChild(Prog.Body[I]);
+    Result := Sc.Found;
+  finally
+    Sc.Free;
+  end;
+end;
+
 { the export declarations of a Script's top level replaced by the declarations they export, and export lists
   dropped. The program's list owns its statements: the export nodes taken out are not freed, since each owns the
   declaration that now stands in its place (one entry's few nodes, once a run) }
@@ -197,6 +246,12 @@ begin
       { an explicit Script keeps GocciaScript's acceptance of export declarations (docs/language.md, Entry source
         type): each declares its binding as it would without export, and an export list declares nothing }
       if SourceType = 1 then ScriptExportsAsDeclarations(Prog);
+      { detection reads a top-level for await as Script; it is top-level await, so the entry is a Module }
+      if (SourceType = 0) and HasTopLevelForAwait(Prog) then
+      begin
+        IsModule := True;
+        Exit(True);
+      end;
       T := CompileProgram(Prog, FileName, False, 1);
       Result := True;
     except
