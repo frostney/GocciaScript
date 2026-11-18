@@ -336,6 +336,7 @@ uses
 
   Goccia.CLI.Help,
   Goccia.Coverage,
+  Goccia.DataTree.Values,
   Goccia.Error.Suggestions,
   Goccia.FileExtensions,
   Goccia.FloatingPoint,
@@ -358,7 +359,6 @@ uses
   Goccia.StackLimit,
   Goccia.TextFiles,
   Goccia.Timeout,
-  Goccia.TOML,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
   Goccia.Values.ErrorHelper,
@@ -367,8 +367,7 @@ uses
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
   Goccia.Values.SymbolValue,
-  Goccia.VM,
-  Goccia.YAML;
+  Goccia.VM;
 
 const
   TRUST_GROUP = 'Config trust';
@@ -547,24 +546,18 @@ end;
 
 function ParseTOMLConfig(const AContent: string): TConfigEntryArray;
 var
-  Parser: TGocciaTOMLParser;
   Parsed: TGocciaObjectValue;
 begin
   SetLength(Result, 0);
-  Parser := TGocciaTOMLParser.Create;
+  Parsed := TOMLTextToValue(AContent);
+  if (TGarbageCollector.Instance <> nil) and Assigned(Parsed) then
+    TGarbageCollector.Instance.AddTempRoot(Parsed);
   try
-    Parsed := Parser.Parse(AContent);
-    if (TGarbageCollector.Instance <> nil) and Assigned(Parsed) then
-      TGarbageCollector.Instance.AddTempRoot(Parsed);
-    try
-      if Assigned(Parsed) then
-        Result := ExtractObjectEntries(Parsed);
-    finally
-      if (TGarbageCollector.Instance <> nil) and Assigned(Parsed) then
-        TGarbageCollector.Instance.RemoveTempRoot(Parsed);
-    end;
+    if Assigned(Parsed) then
+      Result := ExtractObjectEntries(Parsed);
   finally
-    Parser.Free;
+    if (TGarbageCollector.Instance <> nil) and Assigned(Parsed) then
+      TGarbageCollector.Instance.RemoveTempRoot(Parsed);
   end;
 end;
 
@@ -1624,8 +1617,6 @@ var
   JSON5Parser: TGocciaJSON5Parser;
   ParsedValue: TGocciaValue;
   Stringifier: TGocciaJSONStringifier;
-  TOMLParser: TGocciaTOMLParser;
-  YAMLParser: TGocciaYAMLParser;
 begin
   Extension := LowerCase(ExtractFileExt(APath));
   if (Extension = '.js') or (Extension = '.mjs') or
@@ -1666,23 +1657,9 @@ begin
     end;
   end
   else if Extension = EXT_TOML then
-  begin
-    TOMLParser := TGocciaTOMLParser.Create;
-    try
-      ParsedValue := TOMLParser.Parse(Content);
-    finally
-      TOMLParser.Free;
-    end;
-  end
+    ParsedValue := TOMLTextToValue(Content)
   else if (Extension = '.yaml') or (Extension = '.yml') then
-  begin
-    YAMLParser := TGocciaYAMLParser.Create;
-    try
-      ParsedValue := YAMLParser.Parse(string(Content));
-    finally
-      YAMLParser.Free;
-    end;
-  end
+    ParsedValue := YAMLTextToValue(string(Content))
   else
     raise Exception.CreateFmt(
       'Unsupported virtual modules manifest format: %s', [APath]);
@@ -2023,7 +2000,6 @@ var
   ObjectValue: TGocciaObjectValue;
   JSONParser: TGocciaJSONParser;
   JSON5Parser: TGocciaJSON5Parser;
-  TOMLParser: TGocciaTOMLParser;
   Stringifier: TGocciaJSONStringifier;
 begin
   if (APath = '') or not FileExists(APath) then
@@ -2054,14 +2030,7 @@ begin
     end;
   end
   else if Extension = EXT_TOML then
-  begin
-    TOMLParser := TGocciaTOMLParser.Create;
-    try
-      ParsedValue := TOMLParser.Parse(Content);
-    finally
-      TOMLParser.Free;
-    end;
-  end;
+    ParsedValue := TOMLTextToValue(Content);
 
   if not (ParsedValue is TGocciaObjectValue) then
     Exit;

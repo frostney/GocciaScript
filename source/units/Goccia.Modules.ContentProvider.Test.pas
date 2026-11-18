@@ -18,6 +18,7 @@ uses
   Goccia.Bytecode.Module,
   Goccia.Constants.ErrorNames,
   Goccia.Constants.PropertyNames,
+  Goccia.DataTree.Values,
   Goccia.Engine,
   Goccia.Error,
   Goccia.JSONL,
@@ -37,14 +38,12 @@ uses
   Goccia.RuntimeExtensions.YAML,
   Goccia.TestSetup,
   Goccia.Token,
-  Goccia.TOML,
   Goccia.Values.ArrayValue,
   Goccia.Values.Error,
   Goccia.Values.FunctionBase,
   Goccia.Values.ObjectValue,
   Goccia.Values.Primitives,
-  Goccia.VM.Exception,
-  Goccia.YAML;
+  Goccia.VM.Exception;
 
 type
   TInMemoryModuleResolver = class(TGocciaModuleResolver)
@@ -1168,7 +1167,6 @@ var
   NameValue: string;
   Obj: TGocciaObjectValue;
   ParsedValue: TGocciaValue;
-  Parser: TGocciaTOMLParser;
   QuotedKey: string;
   TempDirectory: string;
   TomlPath: string;
@@ -1190,12 +1188,7 @@ begin
   try
     Content := ContentProvider.LoadContent(TomlPath);
     try
-      Parser := TGocciaTOMLParser.Create;
-      try
-        ParsedValue := Parser.Parse(Content.Text);
-      finally
-        Parser.Free;
-      end;
+      ParsedValue := TOMLTextToValue(Content.Text);
 
       Obj := TGocciaObjectValue(ParsedValue);
       Expect<string>(Obj.GetProperty('name').ToStringLiteral.Value)
@@ -1221,7 +1214,6 @@ var
   Documents: TGocciaArrayValue;
   NameValue: string;
   Obj: TGocciaObjectValue;
-  Parser: TGocciaYAMLParser;
   QuotedKey: string;
   TempDirectory: string;
   YAMLPath: string;
@@ -1243,12 +1235,7 @@ begin
   try
     Content := ContentProvider.LoadContent(YAMLPath);
     try
-      Parser := TGocciaYAMLParser.Create;
-      try
-        Documents := Parser.ParseDocuments(Content.Text);
-      finally
-        Parser.Free;
-      end;
+      Documents := YAMLDocumentsToValue(Content.Text);
 
       try
         Expect<Integer>(Documents.Elements.Count).ToBe(1);

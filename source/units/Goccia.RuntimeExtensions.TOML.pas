@@ -39,6 +39,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.DataTree.Values,
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
@@ -98,7 +99,6 @@ var
   LoadSucceeded: Boolean;
   Obj: TGocciaObjectValue;
   ParsedValue: TGocciaValue;
-  TOMLParser: TGocciaTOMLParser;
 begin
   AModule := nil;
   Result := IsTOMLExtension(ExtractFileExt(AResolvedPath));
@@ -108,19 +108,14 @@ begin
   Content := AReadContent(AResolvedPath);
   ParsedValue := nil;
   try
-    TOMLParser := TGocciaTOMLParser.Create;
     try
-      try
-        ParsedValue := TOMLParser.Parse(Content.Text);
-      except
-        on E: EGocciaTOMLParseError do
-          raise TGocciaRuntimeError.Create(
-            Format('Failed to parse TOML module "%s": %s',
-              [ASpecifier, E.Message]),
-            0, 0, AResolvedPath, nil);
-      end;
-    finally
-      TOMLParser.Free;
+      ParsedValue := TOMLTextToValue(Content.Text);
+    except
+      on E: EGocciaTOMLParseError do
+        raise TGocciaRuntimeError.Create(
+          Format('Failed to parse TOML module "%s": %s',
+            [ASpecifier, E.Message]),
+          0, 0, AResolvedPath, nil);
     end;
 
     AModule := TGocciaModule.Create(AResolvedPath);
@@ -152,18 +147,12 @@ function TGocciaTOMLRuntimeExtension.TryInjectGlobals(
   const AFormat: string; const AContent: string): Boolean;
 var
   ParsedValue: TGocciaValue;
-  TOMLParser: TGocciaTOMLParser;
 begin
   Result := SameText(AFormat, 'toml');
   if not Result then
     Exit;
 
-  TOMLParser := TGocciaTOMLParser.Create;
-  try
-    ParsedValue := TOMLParser.Parse(AContent);
-  finally
-    TOMLParser.Free;
-  end;
+  ParsedValue := TOMLTextToValue(AContent);
 
   if not (ParsedValue is TGocciaObjectValue) then
     Runtime.Engine.ThrowError('Globals TOML must be a top-level object.', 0, 0);
@@ -181,18 +170,12 @@ function TGocciaTOMLRuntimeExtension.TryInjectModules(
   const ABaseAddress: string): Boolean;
 var
   ParsedValue: TGocciaValue;
-  Parser: TGocciaTOMLParser;
   Stringifier: TGocciaJSONStringifier;
 begin
   Result := SameText(AFormat, 'toml');
   if not Result then
     Exit;
-  Parser := TGocciaTOMLParser.Create;
-  try
-    ParsedValue := Parser.Parse(AContent);
-  finally
-    Parser.Free;
-  end;
+  ParsedValue := TOMLTextToValue(AContent);
   TGarbageCollector.Instance.AddTempRoot(ParsedValue);
   try
     Stringifier := TGocciaJSONStringifier.Create;

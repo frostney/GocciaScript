@@ -35,6 +35,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.DataTree.Values,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.Values.ErrorHelper,
@@ -82,7 +83,8 @@ begin
     ThrowTypeError(SErrorYAMLParseArgMustBeString, SSuggestStringArgRequired);
 
   try
-    Result := FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value);
+    Result := DataTreeToValue(
+      FParser.Parse(AArgs.GetElement(0).ToStringLiteral.Value));
   except
     // Only the parser's own error means "this text is not YAML", and every
     // diagnostic it raises is one of these. A blanket Exception arm also
@@ -104,7 +106,8 @@ begin
     ThrowTypeError(SErrorYAMLParseDocumentsArgMustBeString, SSuggestStringArgRequired);
 
   try
-    Result := FParser.ParseDocuments(AArgs.GetElement(0).ToStringLiteral.Value);
+    Result := DataTreeToValue(
+      FParser.ParseDocuments(AArgs.GetElement(0).ToStringLiteral.Value));
   except
     on E: EGocciaYAMLParseError do
       ThrowSyntaxError(E.Message, SSuggestYAMLSyntax);

@@ -39,6 +39,7 @@ implementation
 uses
   SysUtils,
 
+  Goccia.DataTree.Values,
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.GarbageCollector,
@@ -102,7 +103,6 @@ var
   LoadSucceeded: Boolean;
   Obj: TGocciaObjectValue;
   ParsedDocument: TGocciaValue;
-  YAMLParser: TGocciaYAMLParser;
 begin
   AModule := nil;
   Result := IsYAMLExtension(ExtractFileExt(AResolvedPath));
@@ -113,19 +113,14 @@ begin
   Documents := nil;
   ParsedDocument := nil;
   try
-    YAMLParser := TGocciaYAMLParser.Create;
     try
-      try
-        Documents := YAMLParser.ParseDocuments(Content.Text);
-      except
-        on E: EGocciaYAMLParseError do
-          raise TGocciaRuntimeError.Create(
-            Format('Failed to parse YAML module "%s": %s',
-              [ASpecifier, E.Message]),
-            0, 0, AResolvedPath, nil);
-      end;
-    finally
-      YAMLParser.Free;
+      Documents := YAMLDocumentsToValue(Content.Text);
+    except
+      on E: EGocciaYAMLParseError do
+        raise TGocciaRuntimeError.Create(
+          Format('Failed to parse YAML module "%s": %s',
+            [ASpecifier, E.Message]),
+          0, 0, AResolvedPath, nil);
     end;
     // Root the parsed tree for the module-building window below:
     // nothing else references it yet, and TGocciaModule.Create (and
@@ -183,18 +178,12 @@ function TGocciaYAMLRuntimeExtension.TryInjectGlobals(
 var
   Documents: TGocciaArrayValue;
   ParsedDocument: TGocciaValue;
-  YAMLParser: TGocciaYAMLParser;
 begin
   Result := SameText(AFormat, 'yaml');
   if not Result then
     Exit;
 
-  YAMLParser := TGocciaYAMLParser.Create;
-  try
-    Documents := YAMLParser.ParseDocuments(AContent);
-  finally
-    YAMLParser.Free;
-  end;
+  Documents := YAMLDocumentsToValue(AContent);
   // Same rooting rule as TryLoadModule: the tree is unreferenced
   // until registration completes.
   if (TGarbageCollector.Instance <> nil) then
@@ -228,18 +217,12 @@ function TGocciaYAMLRuntimeExtension.TryInjectModules(
   const ABaseAddress: string): Boolean;
 var
   ParsedValue: TGocciaValue;
-  Parser: TGocciaYAMLParser;
   Stringifier: TGocciaJSONStringifier;
 begin
   Result := SameText(AFormat, 'yaml');
   if not Result then
     Exit;
-  Parser := TGocciaYAMLParser.Create;
-  try
-    ParsedValue := Parser.Parse(AContent);
-  finally
-    Parser.Free;
-  end;
+  ParsedValue := YAMLTextToValue(AContent);
   TGarbageCollector.Instance.AddTempRoot(ParsedValue);
   try
     Stringifier := TGocciaJSONStringifier.Create;

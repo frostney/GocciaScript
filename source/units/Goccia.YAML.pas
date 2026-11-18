@@ -1,5 +1,11 @@
 unit Goccia.YAML;
 
+{ YAML 1.2 (yaml.org/spec/1.2.2) into a Goccia.DataTree tree. An anchor names
+  the node it is on, and an alias is that node again, so the tree shares it
+  wherever an alias stands, its own content included. A tag outside the core
+  schema, and the !!timestamp and !!binary tags, keep their tag on the node as
+  a tagged node. }
+
 {$I Goccia.inc}
 
 interface
@@ -9,10 +15,7 @@ uses
 
   OrderedStringMap,
 
-  Goccia.GarbageCollector,
-  Goccia.Values.ArrayValue,
-  Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives;
+  Goccia.DataTree;
 
 type
   EGocciaYAMLParseError = class(Exception);
@@ -25,35 +28,15 @@ type
     Text: string;
   end;
 
-  TGocciaYAMLParser = class;
-
-  // FAnchors names values the document refers to by alias, and the collector
-  // never sees it: a plain map in a plain field, reachable only from the native
-  // stack. An anchored node is registered before its parent takes it, so for that
-  // whole window the map is the only structure that knows about it — and any
-  // scalar the parser builds meanwhile charges the memory ceiling, which collects
-  // when crossed. Without this, such a node is swept and ResolveAliasValue hands
-  // back freed memory.
-  //
-  // Reset clears the map at the start of every document, so every entry marked
-  // here belongs to the document currently being parsed.
-  TGocciaYAMLAnchorRoots = class(TGCRootSource)
-  private
-    FParser: TGocciaYAMLParser;
-  public
-    constructor Create(const AParser: TGocciaYAMLParser);
-    procedure MarkRootReferences; override;
-  end;
-
   TGocciaYAMLParser = class
   private
-    FAnchorRoots: TGocciaYAMLAnchorRoots;
-    FAnchors: TGocciaValueMap;
+    FAnchors: TGocciaDataNodeMap;
     FExplicitTagHandles: TStringStringMap;
     FTagHandles: TStringStringMap;
     FLines: array of TGocciaYAMLLine;
     FLineCount: Integer;
     FIndex: Integer;
+    FTree: TGocciaDataTree;
     FYAMLVersion: string;
 
     procedure InitializeTagHandles;
@@ -64,14 +47,14 @@ type
       out ARemainingText: string; const ALineNumber: Integer = 0): Boolean;
     procedure ParseNodeProperties(const AText: string; out ATagName,
       AAnchorName, ARemainingText: string; const ALineNumber: Integer = 0);
-    function ApplyTag(const ATagName: string; const AValue: TGocciaValue;
-      const ALineNumber: Integer = 0): TGocciaValue;
-    procedure RegisterAnchor(const AAnchorName: string; const AValue: TGocciaValue;
+    function ApplyTag(const ATagName: string; const AValue: TGocciaDataNode;
+      const ALineNumber: Integer = 0): TGocciaDataNode;
+    procedure RegisterAnchor(const AAnchorName: string; const AValue: TGocciaDataNode;
       const ALineNumber: Integer = 0);
     function ResolveAliasValue(const AAliasName: string;
-      const ALineNumber: Integer = 0): TGocciaValue;
-    procedure MergeMappingValue(const ATarget: TGocciaObjectValue;
-      const AValue: TGocciaValue; const ALineNumber: Integer);
+      const ALineNumber: Integer = 0): TGocciaDataNode;
+    procedure MergeMappingValue(const ATarget: TGocciaDataNode;
+      const AValue: TGocciaDataNode; const ALineNumber: Integer);
     procedure SkipIgnorableLines;
     procedure Reset;
     procedure AddLine(const ALineNumber, AIndent: Integer; const ARawText,
@@ -82,57 +65,62 @@ type
     procedure RaiseParseError(const AMessage: string; const ALineNumber: Integer = 0);
     function IsBlockScalarHeader(const AText: string): Boolean;
     function ParseBlockScalar(const AParentIndent: Integer;
-      const AHeaderText: string; const ALineNumber: Integer): TGocciaValue;
-    function ParseNode(const AIndent: Integer): TGocciaValue;
-    function ParseNestedNode(const AParentIndent: Integer): TGocciaValue;
-    function ParseExplicitNestedNode(const AParentIndent: Integer): TGocciaValue;
+      const AHeaderText: string; const ALineNumber: Integer): TGocciaDataNode;
+    function ParseNode(const AIndent: Integer): TGocciaDataNode;
+    function ParseNestedNode(const AParentIndent: Integer): TGocciaDataNode;
+    function ParseExplicitNestedNode(const AParentIndent: Integer): TGocciaDataNode;
     procedure ParseMappingInto(const AIndent: Integer;
-      const AObject: TGocciaObjectValue);
+      const AObject: TGocciaDataNode);
     procedure ParseSequenceInto(const AIndent: Integer;
-      const AArray: TGocciaArrayValue);
+      const AArray: TGocciaDataNode);
     function ParseMappingValueText(const AValueText: string; const ALineIndent,
-      ALineNumber: Integer): TGocciaValue;
-    procedure ParseMappingEntry(const AContainer: TGocciaObjectValue;
+      ALineNumber: Integer): TGocciaDataNode;
+    procedure ParseMappingEntry(const AContainer: TGocciaDataNode;
       const ALineText: string; const ALineIndent, ALineNumber: Integer);
-    procedure ParseExplicitMappingEntry(const AContainer: TGocciaObjectValue;
+    procedure ParseExplicitMappingEntry(const AContainer: TGocciaDataNode;
       const ALineText: string; const ALineIndent, ALineNumber: Integer);
     procedure ParseSequenceEntryMappingInto(const ASequenceIndent: Integer;
       const AEntryText: string; const ALineNumber: Integer;
-      const AObject: TGocciaObjectValue);
+      const AObject: TGocciaDataNode);
     function ParseNodeValue(const AValueText: string; const ALineIndent,
       ALineNumber: Integer; const ATagName, AAnchorName: string;
       const AAdvanceBeforeNested, ASequenceEntryInlineMapping,
       AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
       ARequireIndentedQuotedContinuation,
-      AAllowSameIndentScalarContinuation: Boolean): TGocciaValue;
-    function ParseInlineValue(const AText: string): TGocciaValue;
+      AAllowSameIndentScalarContinuation: Boolean): TGocciaDataNode;
+    function ParseInlineValue(const AText: string): TGocciaDataNode;
     function ParseInlineValueWithContinuations(const AText: string;
       const AParentIndent, ALineNumber: Integer;
       const AStopAtIndentedSequenceEntry: Boolean = False;
       const ARequireIndentedQuotedContinuations: Boolean = False;
-      const AAllowSameIndentScalarContinuations: Boolean = False): TGocciaValue;
+      const AAllowSameIndentScalarContinuations: Boolean = False): TGocciaDataNode;
     procedure ParseFlowSequenceInto(const AText: string;
-      const AArray: TGocciaArrayValue);
-    procedure ParseFlowMappingEntry(const AObject: TGocciaObjectValue;
+      const AArray: TGocciaDataNode);
+    procedure ParseFlowMappingEntry(const AObject: TGocciaDataNode;
       const AItemText: string; const ALineNumber: Integer = 0);
     procedure ParseFlowMappingInto(const AText: string;
-      const AObject: TGocciaObjectValue);
+      const AObject: TGocciaDataNode);
     procedure ParseInlineSequenceInto(const AFirstEntryText: string;
       const ASequenceIndent, ALineNumber: Integer;
-      const AArray: TGocciaArrayValue);
+      const AArray: TGocciaDataNode);
     function CollectFlowCollectionText(const AInitialText: string;
       const ALineNumber: Integer): string;
-    function CanonicalizeKeyValue(const AValue: TGocciaValue;
+    function CanonicalizeKeyValue(const AValue: TGocciaDataNode;
       const AInComposite: Boolean = False): string;
     function ParseKeyName(const AText: string;
       const ALineNumber: Integer = 0): string;
-    function ParseSingleDocument(const AText: string): TGocciaValue;
+    function ParseSingleDocument(const AText: string): TGocciaDataNode;
+    procedure ParseDocumentsInto(const AText: string;
+      const ADocuments: TGocciaDataNode);
   public
     constructor Create;
     destructor Destroy; override;
 
-    function Parse(const AText: string): TGocciaValue; overload;
-    function ParseDocuments(const AText: string): TGocciaArrayValue; overload;
+    { the stream's value: null for no document, the document for one without a
+      "---" marker, otherwise an array of the documents }
+    function Parse(const AText: string): TGocciaDataTree;
+    { an array of the stream's documents }
+    function ParseDocuments(const AText: string): TGocciaDataTree;
   end;
 
 implementation
@@ -146,31 +134,7 @@ uses
   TextSemantics,
 
   Goccia.Base64,
-  Goccia.Constants.PropertyNames,
-  Goccia.NativeLimits,
   Goccia.Temporal.Utils;
-
-type
-  TGocciaYAMLTaggedValue = class(TGocciaValue)
-  private
-    FTagName: string;
-    FValue: TGocciaValue;
-  public
-    constructor Create(const ATagName: string; const AValue: TGocciaValue);
-    procedure TraceReferences; override;
-    function RuntimeCopy: TGocciaValue; override;
-    function IsPrimitive: Boolean; override;
-    function IsCallable: Boolean; override;
-    function TypeName: string; override;
-    function TypeOf: string; override;
-    function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
-    function ToNumberLiteral: TGocciaNumberLiteralValue; override;
-    function ToStringLiteral: TGocciaStringLiteralValue; override;
-    function GetProperty(const AName: string): TGocciaValue; override;
-    procedure SetProperty(const AName: string; const AValue: TGocciaValue); override;
-    property TagName: string read FTagName;
-    property Value: TGocciaValue read FValue;
-  end;
 
 const
   DOCUMENT_START_MARKER = '---';
@@ -189,76 +153,6 @@ const
   TAG_STANDARD_MAP = TAG_PREFIX_STANDARD + 'map';
   TAG_STANDARD_TIMESTAMP = TAG_PREFIX_STANDARD + 'timestamp';
   TAG_STANDARD_BINARY = TAG_PREFIX_STANDARD + 'binary';
-
-constructor TGocciaYAMLTaggedValue.Create(const ATagName: string;
-  const AValue: TGocciaValue);
-begin
-  inherited Create;
-  FTagName := ATagName;
-  FValue := AValue;
-end;
-
-procedure TGocciaYAMLTaggedValue.TraceReferences;
-begin
-  inherited;
-  if Assigned(FValue) then
-    FValue.MarkReferences;
-end;
-
-function TGocciaYAMLTaggedValue.RuntimeCopy: TGocciaValue;
-begin
-  Result := TGocciaYAMLTaggedValue.Create(FTagName, FValue.RuntimeCopy);
-end;
-
-function TGocciaYAMLTaggedValue.IsPrimitive: Boolean;
-begin
-  Result := FValue.IsPrimitive;
-end;
-
-function TGocciaYAMLTaggedValue.IsCallable: Boolean;
-begin
-  Result := FValue.IsCallable;
-end;
-
-function TGocciaYAMLTaggedValue.TypeName: string;
-begin
-  Result := FValue.TypeName;
-end;
-
-function TGocciaYAMLTaggedValue.TypeOf: string;
-begin
-  Result := FValue.TypeOf;
-end;
-
-function TGocciaYAMLTaggedValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
-begin
-  Result := FValue.ToBooleanLiteral;
-end;
-
-function TGocciaYAMLTaggedValue.ToNumberLiteral: TGocciaNumberLiteralValue;
-begin
-  Result := FValue.ToNumberLiteral;
-end;
-
-function TGocciaYAMLTaggedValue.ToStringLiteral: TGocciaStringLiteralValue;
-begin
-  Result := FValue.ToStringLiteral;
-end;
-
-function TGocciaYAMLTaggedValue.GetProperty(const AName: string): TGocciaValue;
-begin
-  if AName = PROP_TAG_NAME then
-    Exit(TGocciaStringLiteralValue.Create(FTagName));
-  if AName = PROP_VALUE then
-    Exit(FValue);
-  Result := FValue.GetProperty(AName);
-end;
-
-procedure TGocciaYAMLTaggedValue.SetProperty(const AName: string;
-  const AValue: TGocciaValue);
-begin
-  FValue.SetProperty(AName, AValue);
-end;
 
 function IsWhitespace(const AChar: Char): Boolean;
 begin
@@ -1642,43 +1536,19 @@ begin
   end;
 end;
 
-{ TGocciaYAMLAnchorRoots }
-
-constructor TGocciaYAMLAnchorRoots.Create(const AParser: TGocciaYAMLParser);
-begin
-  inherited Create;
-  FParser := AParser;
-end;
-
-procedure TGocciaYAMLAnchorRoots.MarkRootReferences;
-var
-  Pair: TGocciaValueMap.TKeyValuePair;
-begin
-  if not Assigned(FParser) or not Assigned(FParser.FAnchors) then
-    Exit;
-  for Pair in FParser.FAnchors do
-    if Assigned(Pair.Value) then
-      Pair.Value.MarkReferences;
-end;
-
 { TGocciaYAMLParser }
 
 constructor TGocciaYAMLParser.Create;
 begin
   inherited Create;
-  FAnchors := TGocciaValueMap.Create;
+  FAnchors := TGocciaDataNodeMap.Create;
   FExplicitTagHandles := TStringStringMap.Create;
   FTagHandles := TStringStringMap.Create;
   InitializeTagHandles;
-  // After FAnchors, so the collector never sees a root source over a nil map.
-  FAnchorRoots := TGocciaYAMLAnchorRoots.Create(Self);
 end;
 
 destructor TGocciaYAMLParser.Destroy;
 begin
-  // Before FAnchors, so no collection can walk the map after it is freed.
-  FAnchorRoots.Free;
-  FAnchorRoots := nil;
   FTagHandles.Free;
   FExplicitTagHandles.Free;
   FAnchors.Free;
@@ -1885,8 +1755,8 @@ begin
   end;
 end;
 
-function TGocciaYAMLParser.ApplyTag(const ATagName: string; const AValue: TGocciaValue;
-  const ALineNumber: Integer): TGocciaValue;
+function TGocciaYAMLParser.ApplyTag(const ATagName: string; const AValue: TGocciaDataNode;
+  const ALineNumber: Integer): TGocciaDataNode;
 var
   DecodedBytes: TBytes;
   I: Integer;
@@ -1905,48 +1775,45 @@ begin
      not SameText(ATagName, TAG_STANDARD_FLOAT) and
      not SameText(ATagName, TAG_STANDARD_TIMESTAMP) and
      not SameText(ATagName, TAG_STANDARD_BINARY) then
-    Exit(TGocciaYAMLTaggedValue.Create(ATagName, AValue));
+    Exit(FTree.NewTagged(ATagName, AValue));
 
   if SameText(ATagName, TAG_STANDARD_SEQ) then
   begin
-    if not (AValue is TGocciaArrayValue) then
+    if AValue.Kind <> dnkArray then
       RaiseParseError('The !!seq tag requires a sequence value.', ALineNumber);
     Exit(AValue);
   end;
 
   if SameText(ATagName, TAG_STANDARD_MAP) then
   begin
-    if not (AValue is TGocciaObjectValue) then
+    if AValue.Kind <> dnkObject then
       RaiseParseError('The !!map tag requires a mapping value.', ALineNumber);
     Exit(AValue);
   end;
 
-  if (AValue is TGocciaArrayValue) or (AValue is TGocciaObjectValue) then
+  if AValue.IsContainer then
     RaiseParseError('Scalar tags cannot be applied to mappings or sequences.',
       ALineNumber);
 
-  if AValue is TGocciaStringLiteralValue then
-    ScalarText := TGocciaStringLiteralValue(AValue).Value
-  else
-    ScalarText := AValue.ToStringLiteral.Value;
+  ScalarText := AValue.ToText;
 
   if SameText(ATagName, TAG_STANDARD_STR) then
-    Exit(TGocciaStringLiteralValue.Create(ScalarText));
+    Exit(FTree.NewString(ScalarText));
 
   if SameText(ATagName, TAG_STANDARD_NULL) then
   begin
     if (ScalarText <> '') and not SameText(ScalarText, 'null') and (ScalarText <> '~') then
       RaiseParseError('The !!null tag requires an empty scalar, "null", or "~".',
         ALineNumber);
-    Exit(TGocciaNullLiteralValue.NullValue);
+    Exit(FTree.NewNull);
   end;
 
   if SameText(ATagName, TAG_STANDARD_BOOL) then
   begin
     if SameText(ScalarText, 'true') then
-      Exit(TGocciaBooleanLiteralValue.TrueValue);
+      Exit(FTree.NewBoolean(True));
     if SameText(ScalarText, 'false') then
-      Exit(TGocciaBooleanLiteralValue.FalseValue);
+      Exit(FTree.NewBoolean(False));
     RaiseParseError('The !!bool tag requires "true" or "false".', ALineNumber);
   end;
 
@@ -1954,7 +1821,7 @@ begin
   begin
     if not TryParseYAMLInteger(ScalarText, NumericValue) then
       RaiseParseError('The !!int tag requires a valid integer scalar.', ALineNumber);
-    Exit(TGocciaNumberLiteralValue.Create(NumericValue));
+    Exit(FTree.NewNumber(NumericValue));
   end;
 
   if SameText(ATagName, TAG_STANDARD_FLOAT) then
@@ -1963,7 +1830,7 @@ begin
             TryParseYAMLFloat(ScalarText, NumericValue)) then
       RaiseParseError('The !!float tag requires a valid numeric scalar.',
         ALineNumber);
-    Exit(TGocciaNumberLiteralValue.Create(NumericValue));
+    Exit(FTree.NewNumber(NumericValue));
   end;
 
   if SameText(ATagName, TAG_STANDARD_TIMESTAMP) then
@@ -1971,8 +1838,8 @@ begin
     if not IsValidYAMLTimestamp(ScalarText) then
       RaiseParseError('The !!timestamp tag requires a valid ISO date or date-time scalar.',
         ALineNumber);
-    Exit(TGocciaYAMLTaggedValue.Create(ATagName,
-      TGocciaStringLiteralValue.Create(ScalarText)));
+    Exit(FTree.NewTagged(ATagName,
+      FTree.NewString(ScalarText)));
   end;
 
   if SameText(ATagName, TAG_STANDARD_BINARY) then
@@ -1985,15 +1852,15 @@ begin
     SetLength(ScalarText, Length(DecodedBytes));
     for I := 0 to High(DecodedBytes) do
       ScalarText[I + 1] := Char(DecodedBytes[I]);
-    Exit(TGocciaYAMLTaggedValue.Create(ATagName,
-      TGocciaStringLiteralValue.Create(ScalarText)));
+    Exit(FTree.NewTagged(ATagName,
+      FTree.NewString(ScalarText)));
   end;
 
   Result := AValue;
 end;
 
 procedure TGocciaYAMLParser.RegisterAnchor(const AAnchorName: string;
-  const AValue: TGocciaValue; const ALineNumber: Integer);
+  const AValue: TGocciaDataNode; const ALineNumber: Integer);
 begin
   if AAnchorName = '' then
     Exit;
@@ -2003,40 +1870,32 @@ begin
 end;
 
 function TGocciaYAMLParser.ResolveAliasValue(const AAliasName: string;
-  const ALineNumber: Integer): TGocciaValue;
+  const ALineNumber: Integer): TGocciaDataNode;
 begin
   if not FAnchors.TryGetValue(AAliasName, Result) then
     RaiseParseError('Unknown alias *' + AAliasName + '.', ALineNumber);
 end;
 
-procedure TGocciaYAMLParser.MergeMappingValue(const ATarget: TGocciaObjectValue;
-  const AValue: TGocciaValue; const ALineNumber: Integer);
+procedure TGocciaYAMLParser.MergeMappingValue(const ATarget: TGocciaDataNode;
+  const AValue: TGocciaDataNode; const ALineNumber: Integer);
 var
   I: Integer;
   Key: string;
-  SourceArray: TGocciaArrayValue;
-  SourceObject: TGocciaObjectValue;
-  SourceValue: TGocciaValue;
 begin
-  if AValue is TGocciaArrayValue then
+  if AValue.Kind = dnkArray then
   begin
-    SourceArray := TGocciaArrayValue(AValue);
-    for I := 0 to SourceArray.Elements.Count - 1 do
-      MergeMappingValue(ATarget, SourceArray.Elements[I], ALineNumber);
+    for I := 0 to AValue.Count - 1 do
+      MergeMappingValue(ATarget, AValue.Items[I], ALineNumber);
     Exit;
   end;
 
-  if not (AValue is TGocciaObjectValue) then
+  if AValue.Kind <> dnkObject then
     RaiseParseError('Merge keys must reference a mapping or a sequence of mappings.',
       ALineNumber);
 
-  SourceObject := TGocciaObjectValue(AValue);
-  for Key in SourceObject.GetOwnPropertyKeys do
-    if not ATarget.HasOwnProperty(Key) then
-    begin
-      SourceValue := SourceObject.GetProperty(Key);
-      ATarget.AssignProperty(Key, SourceValue);
-    end;
+  for Key in AValue.OwnKeys do
+    if not ATarget.HasProperty(Key) then
+      ATarget.SetProperty(Key, AValue.GetProperty(Key));
 end;
 
 procedure TGocciaYAMLParser.Reset;
@@ -2134,16 +1993,16 @@ begin
   raise EGocciaYAMLParseError.Create(AMessage);
 end;
 
-function TGocciaYAMLParser.ParseSingleDocument(const AText: string): TGocciaValue;
+function TGocciaYAMLParser.ParseSingleDocument(const AText: string): TGocciaDataNode;
 var
   RootIndent: Integer;
 begin
   LoadLines(AText);
   SkipIgnorableLines;
   if FLineCount = 0 then
-    Exit(TGocciaNullLiteralValue.NullValue);
+    Exit(FTree.NewNull);
   if not HasCurrentLine then
-    Exit(TGocciaNullLiteralValue.NullValue);
+    Exit(FTree.NewNull);
 
   RootIndent := CurrentLine.Indent;
   Result := ParseNode(RootIndent);
@@ -2152,83 +2011,67 @@ begin
     RaiseParseError('Unexpected trailing content.', CurrentLine.Number);
 end;
 
-function TGocciaYAMLParser.Parse(const AText: string): TGocciaValue;
+function TGocciaYAMLParser.Parse(const AText: string): TGocciaDataTree;
 var
-  Documents: TGocciaArrayValue;
-  DocumentsRoot: TGocciaTempRoot;
-  HasExplicitDocumentStart: Boolean;
-  SingleDocument: TGocciaValue;
+  Documents: TGocciaDataNode;
 begin
-  HasExplicitDocumentStart := HasExplicitDocumentStartMarker(AText);
-  Documents := nil;
-  // The finally block below compares Result against Documents, and a parse that
-  // raises never assigns Result — so without this the ownership decision would
-  // read an uninitialised function result.
-  Result := nil;
-  InitializeTempRoot(DocumentsRoot);
+  Result := ParseDocuments(AText);
+  Documents := Result.Root;
+  if Documents.Count = 0 then
+    Result.Root := Result.NewNull
+  else if not HasExplicitDocumentStartMarker(AText) then
+    Result.Root := Documents.Items[0];
+end;
+
+function TGocciaYAMLParser.ParseDocuments(const AText: string): TGocciaDataTree;
+begin
+  Result := TGocciaDataTree.Create;
   try
-    Documents := ParseDocuments(AText);
-    // A single-document source discards the wrapper array and frees it
-    // explicitly below. That Free is only correct while the array is still
-    // alive, so it has to stay rooted until then — a sweep here would make it a
-    // second free.
-    AddTempRootIfNeeded(DocumentsRoot, Documents);
-    if Documents.Elements.Count = 0 then
-      Exit(TGocciaNullLiteralValue.NullValue);
-    if HasExplicitDocumentStart then
-      Exit(Documents);
-    SingleDocument := Documents.Elements[0];
-    Documents.Elements.Extract(SingleDocument);
-    Result := SingleDocument;
-  finally
-    // Free first, drop the root second: the invariant above is that the array is
-    // rooted for as long as it is alive, and unrooting a live array here would
-    // expose it to exactly the sweep the root exists to prevent.
-    if Assigned(Documents) and (Result <> Documents) then
-      Documents.Free;
-    RemoveTempRootIfNeeded(DocumentsRoot);
+    Result.Root := Result.NewArray;
+    FTree := Result;
+    try
+      ParseDocumentsInto(AText, Result.Root);
+    finally
+      FTree := nil;
+    end;
+  except
+    Result.Free;
+    raise;
   end;
 end;
 
-function TGocciaYAMLParser.ParseDocuments(const AText: string): TGocciaArrayValue;
+procedure TGocciaYAMLParser.ParseDocumentsInto(const AText: string;
+  const ADocuments: TGocciaDataNode);
 var
   DocumentIndex: Integer;
   DocumentText: TStringList;
-  ResultRoot: TGocciaTempRoot;
 begin
-  // Each document is parsed in full before it is appended, and every scalar in it
-  // charges the memory ceiling — so the array spends nearly the whole parse
-  // holding earlier documents while reachable from nothing but this frame.
-  InitializeTempRoot(ResultRoot);
   try
-    Result := TGocciaArrayValue.Create;
-    AddTempRootIfNeeded(ResultRoot, Result);
     DocumentText := SplitYAMLDocuments(AText);
     try
       for DocumentIndex := 0 to DocumentText.Count - 1 do
-        Result.Elements.Add(ParseSingleDocument(DocumentText[DocumentIndex]));
+        ADocuments.Add(ParseSingleDocument(DocumentText[DocumentIndex]));
     finally
       DocumentText.Free;
     end;
   finally
-    // Anchors are per-document (Reset clears them in LoadLines), so the last
-    // document's entries would otherwise stay rooted until the next parse.
+    // Anchors are per-document (Reset clears them in LoadLines); the last
+    // document's would otherwise name nodes of a freed tree.
     FAnchors.Clear;
-    RemoveTempRootIfNeeded(ResultRoot);
   end;
 end;
 
-function TGocciaYAMLParser.ParseNode(const AIndent: Integer): TGocciaValue;
+function TGocciaYAMLParser.ParseNode(const AIndent: Integer): TGocciaDataNode;
 var
   AnchorName, RemainingText, TagName: string;
   LineNumber: Integer;
 begin
-  EnterNativeDataDepth('YAML parsing');
+  EnterDataDepth('YAML parsing');
   try
-    CheckNativeWork;
+    CheckDataWork;
     SkipIgnorableLines;
     if not HasCurrentLine then
-      Exit(TGocciaNullLiteralValue.NullValue);
+      Exit(FTree.NewNull);
 
     if CurrentLine.Indent <> AIndent then
       RaiseParseError('Invalid indentation.', CurrentLine.Number);
@@ -2239,29 +2082,29 @@ begin
       AnchorName, True, False, False, (RemainingText = '') and
       ((TagName <> '') or (AnchorName <> '')), False, True);
   finally
-    LeaveNativeDataDepth;
+    LeaveDataDepth;
   end;
 end;
 
-function TGocciaYAMLParser.ParseNestedNode(const AParentIndent: Integer): TGocciaValue;
+function TGocciaYAMLParser.ParseNestedNode(const AParentIndent: Integer): TGocciaDataNode;
 begin
   SkipIgnorableLines;
   if not HasCurrentLine or (CurrentLine.Indent <= AParentIndent) then
-    Exit(TGocciaNullLiteralValue.NullValue);
+    Exit(FTree.NewNull);
   Result := ParseNode(CurrentLine.Indent);
 end;
 
-function TGocciaYAMLParser.ParseExplicitNestedNode(const AParentIndent: Integer): TGocciaValue;
+function TGocciaYAMLParser.ParseExplicitNestedNode(const AParentIndent: Integer): TGocciaDataNode;
 begin
   SkipIgnorableLines;
   if not HasCurrentLine or (CurrentLine.Indent < AParentIndent) then
-    Exit(TGocciaNullLiteralValue.NullValue);
+    Exit(FTree.NewNull);
   if (CurrentLine.Indent = AParentIndent) and
      not StartsSequenceEntry(CurrentLine.Text) and
      not StartsBlockMappingEntry(CurrentLine.Text) and
      ((CurrentLine.Text = '') or
       ((CurrentLine.Text[1] <> '[') and (CurrentLine.Text[1] <> '{'))) then
-    Exit(TGocciaNullLiteralValue.NullValue);
+    Exit(FTree.NewNull);
   Result := ParseNode(CurrentLine.Indent);
 end;
 
@@ -2271,7 +2114,7 @@ begin
 end;
 
 function TGocciaYAMLParser.ParseBlockScalar(const AParentIndent: Integer;
-  const AHeaderText: string; const ALineNumber: Integer): TGocciaValue;
+  const AHeaderText: string; const ALineNumber: Integer): TGocciaDataNode;
 var
   BuiltText: string;
   ChompMode, Style: Char;
@@ -2388,56 +2231,49 @@ begin
           BuiltText := BuiltText + #10;
       end;
     end;
-    Result := TGocciaStringLiteralValue.Create(BuiltText);
+    Result := FTree.NewString(BuiltText);
   finally
     Lines.Free;
   end
 end;
 
-function TGocciaYAMLParser.CanonicalizeKeyValue(const AValue: TGocciaValue;
+function TGocciaYAMLParser.CanonicalizeKeyValue(const AValue: TGocciaDataNode;
   const AInComposite: Boolean): string;
 var
   I: Integer;
   KeyNames: TArray<string>;
-  Obj: TGocciaObjectValue;
-  TaggedValue: TGocciaYAMLTaggedValue;
 begin
-  if AValue is TGocciaYAMLTaggedValue then
-  begin
-    TaggedValue := TGocciaYAMLTaggedValue(AValue);
-    Exit(CanonicalizeKeyValue(TaggedValue.Value, AInComposite));
-  end;
+  if AValue.Kind = dnkTagged then
+    Exit(CanonicalizeKeyValue(AValue.TaggedValue, AInComposite));
 
-  if AValue is TGocciaArrayValue then
+  if AValue.Kind = dnkArray then
   begin
     Result := '[';
-    for I := 0 to TGocciaArrayValue(AValue).Elements.Count - 1 do
+    for I := 0 to AValue.Count - 1 do
     begin
       if I > 0 then
         Result := Result + ', ';
-      Result := Result + CanonicalizeKeyValue(
-        TGocciaArrayValue(AValue).Elements[I], True);
+      Result := Result + CanonicalizeKeyValue(AValue.Items[I], True);
     end;
     Exit(Result + ']');
   end;
 
-  if AValue is TGocciaObjectValue then
+  if AValue.Kind = dnkObject then
   begin
-    Obj := TGocciaObjectValue(AValue);
     Result := '{';
-    KeyNames := Obj.GetOwnPropertyKeys;
+    KeyNames := AValue.OwnKeys;
     for I := 0 to Length(KeyNames) - 1 do
     begin
       if I > 0 then
         Result := Result + ', ';
       Result := Result + EscapeCompositeKeyString(KeyNames[I]) + ': ' +
-        CanonicalizeKeyValue(Obj.GetProperty(KeyNames[I]), True);
+        CanonicalizeKeyValue(AValue.GetProperty(KeyNames[I]), True);
     end;
     Exit(Result + '}');
   end;
 
-  Result := AValue.ToStringLiteral.Value;
-  if AInComposite and (AValue is TGocciaStringLiteralValue) then
+  Result := AValue.ToText;
+  if AInComposite and (AValue.Kind = dnkString) then
     Result := EscapeCompositeKeyString(Result);
 end;
 
@@ -2445,36 +2281,22 @@ function TGocciaYAMLParser.ParseKeyName(const AText: string;
   const ALineNumber: Integer): string;
 var
   AnchorName, KeyText, RemainingText, TagName: string;
-  KeyValue: TGocciaValue;
-  KeyRoot: TGocciaTempRoot;
+  KeyValue: TGocciaDataNode;
 begin
-  // The key's value exists only in this frame until CanonicalizeKeyValue has read
-  // it out as text, and both steps in between allocate: ApplyTag builds a fresh
-  // tagged wrapper and its own scalars, and CanonicalizeKeyValue calls
-  // ToStringLiteral for composite and non-string keys. Either can cross the
-  // memory ceiling and collect with only the new string protected. Re-point the
-  // root after ApplyTag so the wrapper it may return is covered too.
-  InitializeTempRoot(KeyRoot);
-  try
-    KeyText := Trim(AText);
-    ParseNodeProperties(KeyText, TagName, AnchorName, RemainingText);
-    if RemainingText = '' then
-      KeyValue := TGocciaStringLiteralValue.Create('')
-    else
-      KeyValue := ParseInlineValue(RemainingText);
-    AddTempRootIfNeeded(KeyRoot, KeyValue);
+  KeyText := Trim(AText);
+  ParseNodeProperties(KeyText, TagName, AnchorName, RemainingText);
+  if RemainingText = '' then
+    KeyValue := FTree.NewString('')
+  else
+    KeyValue := ParseInlineValue(RemainingText);
 
-    KeyValue := ApplyTag(TagName, KeyValue);
-    AddTempRootIfNeeded(KeyRoot, KeyValue);
-    RegisterAnchor(AnchorName, KeyValue, ALineNumber);
-    Result := CanonicalizeKeyValue(KeyValue);
-  finally
-    RemoveTempRootIfNeeded(KeyRoot);
-  end;
+  KeyValue := ApplyTag(TagName, KeyValue);
+  RegisterAnchor(AnchorName, KeyValue, ALineNumber);
+  Result := CanonicalizeKeyValue(KeyValue);
 end;
 
 function TGocciaYAMLParser.ParseMappingValueText(const AValueText: string;
-  const ALineIndent, ALineNumber: Integer): TGocciaValue;
+  const ALineIndent, ALineNumber: Integer): TGocciaDataNode;
 var
   AnchorName, RemainingText, TagName, ValueText: string;
 begin
@@ -2484,118 +2306,87 @@ begin
     AnchorName, True, False, False, False, True, False);
 end;
 
-procedure TGocciaYAMLParser.ParseMappingEntry(const AContainer: TGocciaObjectValue;
+procedure TGocciaYAMLParser.ParseMappingEntry(const AContainer: TGocciaDataNode;
   const ALineText: string; const ALineIndent, ALineNumber: Integer);
 var
   KeyText, ValueText: string;
   SeparatorIndex: Integer;
-  Value: TGocciaValue;
-  ValueRoot: TGocciaTempRoot;
+  Value: TGocciaDataNode;
 begin
-  // The ordinary `key: value` path parses the value before the key, so the parsed
-  // value sits in this frame alone — detached from AContainer until the store
-  // below — across ParseKeyName, which builds the key's own scalar and
-  // canonicalizes it. Both allocate charged strings, either of which can collect.
-  InitializeTempRoot(ValueRoot);
-  try
-    SeparatorIndex := FindTopLevelMappingSeparator(ALineText);
-    if SeparatorIndex = 0 then
-      RaiseParseError('Expected a mapping entry.', ALineNumber);
+  SeparatorIndex := FindTopLevelMappingSeparator(ALineText);
+  if SeparatorIndex = 0 then
+    RaiseParseError('Expected a mapping entry.', ALineNumber);
 
-    KeyText := Trim(Copy(ALineText, 1, SeparatorIndex - 1));
-    ValueText := Trim(Copy(ALineText, SeparatorIndex + 1, MaxInt));
-    Value := ParseMappingValueText(ValueText, ALineIndent, ALineNumber);
-    AddTempRootIfNeeded(ValueRoot, Value);
-    KeyText := ParseKeyName(KeyText, ALineNumber);
-    if KeyText = '<<' then
-      MergeMappingValue(AContainer, Value, ALineNumber)
-    else
-      AContainer.AssignProperty(KeyText, Value);
-  finally
-    RemoveTempRootIfNeeded(ValueRoot);
-  end;
+  KeyText := Trim(Copy(ALineText, 1, SeparatorIndex - 1));
+  ValueText := Trim(Copy(ALineText, SeparatorIndex + 1, MaxInt));
+  Value := ParseMappingValueText(ValueText, ALineIndent, ALineNumber);
+  KeyText := ParseKeyName(KeyText, ALineNumber);
+  if KeyText = '<<' then
+    MergeMappingValue(AContainer, Value, ALineNumber)
+  else
+    AContainer.SetProperty(KeyText, Value);
 end;
 
 procedure TGocciaYAMLParser.ParseExplicitMappingEntry(
-  const AContainer: TGocciaObjectValue; const ALineText: string;
+  const AContainer: TGocciaDataNode; const ALineText: string;
   const ALineIndent, ALineNumber: Integer);
 var
   KeyAnchorName, KeyRemainingText, KeyTagName: string;
   KeyLineText, ValueLineText: string;
-  KeyValue, Value: TGocciaValue;
-  KeyRoot, ValueRoot: TGocciaTempRoot;
+  KeyValue, Value: TGocciaDataNode;
 begin
-  // An explicit `? key` / `: value` entry holds both halves in this frame at
-  // once, and each is exposed across the other's work: the key survives a full
-  // nested node parse before CanonicalizeKeyValue dereferences it, and the value
-  // survives CanonicalizeKeyValue, which allocates via ToStringLiteral for
-  // composite and non-string keys. Anchored keys are reachable from FAnchors, but
-  // unanchored ones are not, so neither half can rely on the other's roots.
-  InitializeTempRoot(KeyRoot);
-  InitializeTempRoot(ValueRoot);
-  try
-    KeyLineText := Trim(Copy(ALineText, 2, MaxInt));
-    if KeyLineText = '' then
+  KeyLineText := Trim(Copy(ALineText, 2, MaxInt));
+  if KeyLineText = '' then
+  begin
+    Inc(FIndex);
+    KeyValue := ParseExplicitNestedNode(ALineIndent);
+  end
+  else
+  begin
+    ParseNodeProperties(KeyLineText, KeyTagName, KeyAnchorName, KeyRemainingText,
+      ALineNumber);
+    if KeyRemainingText = '' then
     begin
+      KeyValue := FTree.NewString('');
       Inc(FIndex);
-      KeyValue := ParseExplicitNestedNode(ALineIndent);
-      AddTempRootIfNeeded(KeyRoot, KeyValue);
     end
     else
-    begin
-      ParseNodeProperties(KeyLineText, KeyTagName, KeyAnchorName, KeyRemainingText,
-        ALineNumber);
-      if KeyRemainingText = '' then
-      begin
-        KeyValue := TGocciaStringLiteralValue.Create('');
-        Inc(FIndex);
-      end
-      else
-        KeyValue := ParseInlineValueWithContinuations(KeyRemainingText,
-          ALineIndent, ALineNumber, False, True);
-      AddTempRootIfNeeded(KeyRoot, KeyValue);
-      // ApplyTag can return a fresh wrapper built from charged strings; re-point
-      // the root at whatever it hands back.
-      KeyValue := ApplyTag(KeyTagName, KeyValue, ALineNumber);
-      AddTempRootIfNeeded(KeyRoot, KeyValue);
-      RegisterAnchor(KeyAnchorName, KeyValue, ALineNumber);
-    end;
+      KeyValue := ParseInlineValueWithContinuations(KeyRemainingText,
+        ALineIndent, ALineNumber, False, True);
+    KeyValue := ApplyTag(KeyTagName, KeyValue, ALineNumber);
+    RegisterAnchor(KeyAnchorName, KeyValue, ALineNumber);
+  end;
 
-    SkipIgnorableLines;
-    if not HasCurrentLine or (CurrentLine.Indent <> ALineIndent) or
-       not StartsExplicitValueEntry(CurrentLine.Text) then
-    begin
-      Value := TGocciaNullLiteralValue.NullValue;
-      KeyLineText := CanonicalizeKeyValue(KeyValue);
-      if KeyLineText = '<<' then
-        MergeMappingValue(AContainer, Value, ALineNumber)
-      else
-        AContainer.AssignProperty(KeyLineText, Value);
-      Exit;
-    end;
-
-    ValueLineText := Trim(Copy(CurrentLine.Text, 2, MaxInt));
-    if ValueLineText = '' then
-    begin
-      Inc(FIndex);
-      Value := ParseExplicitNestedNode(ALineIndent);
-    end
-    else
-      Value := ParseMappingValueText(ValueLineText, ALineIndent, CurrentLine.Number);
-    AddTempRootIfNeeded(ValueRoot, Value);
+  SkipIgnorableLines;
+  if not HasCurrentLine or (CurrentLine.Indent <> ALineIndent) or
+     not StartsExplicitValueEntry(CurrentLine.Text) then
+  begin
+    Value := FTree.NewNull;
     KeyLineText := CanonicalizeKeyValue(KeyValue);
     if KeyLineText = '<<' then
-      MergeMappingValue(AContainer, Value, CurrentLine.Number)
+      MergeMappingValue(AContainer, Value, ALineNumber)
     else
-      AContainer.AssignProperty(KeyLineText, Value);
-  finally
-    RemoveTempRootIfNeeded(ValueRoot);
-    RemoveTempRootIfNeeded(KeyRoot);
+      AContainer.SetProperty(KeyLineText, Value);
+    Exit;
   end;
+
+  ValueLineText := Trim(Copy(CurrentLine.Text, 2, MaxInt));
+  if ValueLineText = '' then
+  begin
+    Inc(FIndex);
+    Value := ParseExplicitNestedNode(ALineIndent);
+  end
+  else
+    Value := ParseMappingValueText(ValueLineText, ALineIndent, CurrentLine.Number);
+  KeyLineText := CanonicalizeKeyValue(KeyValue);
+  if KeyLineText = '<<' then
+    MergeMappingValue(AContainer, Value, CurrentLine.Number)
+  else
+    AContainer.SetProperty(KeyLineText, Value);
 end;
 
 procedure TGocciaYAMLParser.ParseMappingInto(const AIndent: Integer;
-  const AObject: TGocciaObjectValue);
+  const AObject: TGocciaDataNode);
 begin
   while True do
   begin
@@ -2614,7 +2405,7 @@ end;
 
 procedure TGocciaYAMLParser.ParseSequenceEntryMappingInto(
   const ASequenceIndent: Integer; const AEntryText: string;
-  const ALineNumber: Integer; const AObject: TGocciaObjectValue);
+  const ALineNumber: Integer; const AObject: TGocciaDataNode);
 var
   MappingIndent: Integer;
 begin
@@ -2646,135 +2437,112 @@ function TGocciaYAMLParser.ParseNodeValue(const AValueText: string;
   const AAdvanceBeforeNested, ASequenceEntryInlineMapping,
   AStopAtIndentedSequenceEntry, AAllowSameIndentNestedNode,
   ARequireIndentedQuotedContinuation,
-  AAllowSameIndentScalarContinuation: Boolean): TGocciaValue;
+  AAllowSameIndentScalarContinuation: Boolean): TGocciaDataNode;
 var
   FlowText: string;
-  Obj: TGocciaObjectValue;
-  Arr: TGocciaArrayValue;
-  NodeRoot: TGocciaTempRoot;
+  Arr, Obj: TGocciaDataNode;
 begin
-  // Every container arm below creates its node, then fills it from the source —
-  // and stays detached from its parent for the whole fill. Each scalar built in
-  // there charges the memory ceiling, and crossing it collects with only the new
-  // scalar protected, so the node needs a root of its own meanwhile. One root
-  // serves all the arms: exactly one runs per call, and the nest-safe form lets a
-  // recursive call root its own node without disturbing this one.
-  InitializeTempRoot(NodeRoot);
-  try
-    if AValueText = '' then
+  // An anchor names its collection before the collection is filled, so an
+  // alias inside it is the collection itself.
+  if AValueText = '' then
+  begin
+    if AAdvanceBeforeNested then
+      Inc(FIndex);
+    SkipIgnorableLines;
+    if not HasCurrentLine or (CurrentLine.Indent < ALineIndent) or
+       ((CurrentLine.Indent = ALineIndent) and
+        (((not AAllowSameIndentNestedNode) and
+          not StartsSequenceEntry(CurrentLine.Text) and
+          not StartsBlockMappingEntry(CurrentLine.Text) and
+          ((CurrentLine.Text = '') or
+           ((CurrentLine.Text[1] <> '[') and (CurrentLine.Text[1] <> '{')))) or
+         (ASequenceEntryInlineMapping and StartsSequenceEntry(CurrentLine.Text)))) then
+      Result := FTree.NewNull
+    else if StartsSequenceEntry(CurrentLine.Text) then
     begin
-      if AAdvanceBeforeNested then
-        Inc(FIndex);
-      SkipIgnorableLines;
-      if not HasCurrentLine or (CurrentLine.Indent < ALineIndent) or
-         ((CurrentLine.Indent = ALineIndent) and
-          (((not AAllowSameIndentNestedNode) and
-            not StartsSequenceEntry(CurrentLine.Text) and
-            not StartsBlockMappingEntry(CurrentLine.Text) and
-            ((CurrentLine.Text = '') or
-             ((CurrentLine.Text[1] <> '[') and (CurrentLine.Text[1] <> '{')))) or
-           (ASequenceEntryInlineMapping and StartsSequenceEntry(CurrentLine.Text)))) then
-        Result := TGocciaNullLiteralValue.NullValue
-      else if StartsSequenceEntry(CurrentLine.Text) then
-      begin
-        Arr := TGocciaArrayValue.Create;
-        AddTempRootIfNeeded(NodeRoot, Arr);
-        RegisterAnchor(AAnchorName, Arr, ALineNumber);
-        ParseSequenceInto(CurrentLine.Indent, Arr);
-        Result := Arr;
-      end
-      else if StartsBlockMappingEntry(CurrentLine.Text) then
-      begin
-        Obj := TGocciaObjectValue.Create;
-        AddTempRootIfNeeded(NodeRoot, Obj);
-        RegisterAnchor(AAnchorName, Obj, ALineNumber);
-        ParseMappingInto(CurrentLine.Indent, Obj);
-        Result := Obj;
-      end
-      else if (CurrentLine.Text <> '') and (CurrentLine.Text[1] = '[') then
-      begin
-        Arr := TGocciaArrayValue.Create;
-        AddTempRootIfNeeded(NodeRoot, Arr);
-        RegisterAnchor(AAnchorName, Arr, ALineNumber);
-        FlowText := CollectFlowCollectionText(CurrentLine.Text, CurrentLine.Number);
-        ParseFlowSequenceInto(FlowText, Arr);
-        Result := Arr;
-      end
-      else if (CurrentLine.Text <> '') and (CurrentLine.Text[1] = '{') then
-      begin
-        Obj := TGocciaObjectValue.Create;
-        AddTempRootIfNeeded(NodeRoot, Obj);
-        RegisterAnchor(AAnchorName, Obj, ALineNumber);
-        FlowText := CollectFlowCollectionText(CurrentLine.Text, CurrentLine.Number);
-        ParseFlowMappingInto(FlowText, Obj);
-        Result := Obj;
-      end
-      else
-        Result := ParseNode(CurrentLine.Indent);
-    end
-    else if StartsSequenceEntry(AValueText) then
-    begin
-      Arr := TGocciaArrayValue.Create;
-      AddTempRootIfNeeded(NodeRoot, Arr);
+      Arr := FTree.NewArray;
       RegisterAnchor(AAnchorName, Arr, ALineNumber);
-      ParseInlineSequenceInto(AValueText, ALineIndent, ALineNumber, Arr);
+      ParseSequenceInto(CurrentLine.Indent, Arr);
       Result := Arr;
     end
-    else if StartsBlockMappingEntry(AValueText) then
+    else if StartsBlockMappingEntry(CurrentLine.Text) then
     begin
-      Obj := TGocciaObjectValue.Create;
-      AddTempRootIfNeeded(NodeRoot, Obj);
+      Obj := FTree.NewObject;
       RegisterAnchor(AAnchorName, Obj, ALineNumber);
-      if ASequenceEntryInlineMapping then
-        ParseSequenceEntryMappingInto(ALineIndent, AValueText, ALineNumber, Obj)
-      else
-        ParseMappingInto(ALineIndent, Obj);
+      ParseMappingInto(CurrentLine.Indent, Obj);
       Result := Obj;
     end
-    else if IsBlockScalarHeader(AValueText) then
-      Result := ParseBlockScalar(ALineIndent, AValueText, ALineNumber)
-    else if AValueText[1] = '[' then
+    else if (CurrentLine.Text <> '') and (CurrentLine.Text[1] = '[') then
     begin
-      Arr := TGocciaArrayValue.Create;
-      AddTempRootIfNeeded(NodeRoot, Arr);
+      Arr := FTree.NewArray;
       RegisterAnchor(AAnchorName, Arr, ALineNumber);
-      FlowText := CollectFlowCollectionText(AValueText, ALineNumber);
+      FlowText := CollectFlowCollectionText(CurrentLine.Text, CurrentLine.Number);
       ParseFlowSequenceInto(FlowText, Arr);
       Result := Arr;
     end
-    else if AValueText[1] = '{' then
+    else if (CurrentLine.Text <> '') and (CurrentLine.Text[1] = '{') then
     begin
-      Obj := TGocciaObjectValue.Create;
-      AddTempRootIfNeeded(NodeRoot, Obj);
+      Obj := FTree.NewObject;
       RegisterAnchor(AAnchorName, Obj, ALineNumber);
-      FlowText := CollectFlowCollectionText(AValueText, ALineNumber);
+      FlowText := CollectFlowCollectionText(CurrentLine.Text, CurrentLine.Number);
       ParseFlowMappingInto(FlowText, Obj);
       Result := Obj;
     end
     else
-      Result := ParseInlineValueWithContinuations(AValueText, ALineIndent,
-        ALineNumber, AStopAtIndentedSequenceEntry,
-        ARequireIndentedQuotedContinuation,
-        AAllowSameIndentScalarContinuation);
+      Result := ParseNode(CurrentLine.Indent);
+  end
+  else if StartsSequenceEntry(AValueText) then
+  begin
+    Arr := FTree.NewArray;
+    RegisterAnchor(AAnchorName, Arr, ALineNumber);
+    ParseInlineSequenceInto(AValueText, ALineIndent, ALineNumber, Arr);
+    Result := Arr;
+  end
+  else if StartsBlockMappingEntry(AValueText) then
+  begin
+    Obj := FTree.NewObject;
+    RegisterAnchor(AAnchorName, Obj, ALineNumber);
+    if ASequenceEntryInlineMapping then
+      ParseSequenceEntryMappingInto(ALineIndent, AValueText, ALineNumber, Obj)
+    else
+      ParseMappingInto(ALineIndent, Obj);
+    Result := Obj;
+  end
+  else if IsBlockScalarHeader(AValueText) then
+    Result := ParseBlockScalar(ALineIndent, AValueText, ALineNumber)
+  else if AValueText[1] = '[' then
+  begin
+    Arr := FTree.NewArray;
+    RegisterAnchor(AAnchorName, Arr, ALineNumber);
+    FlowText := CollectFlowCollectionText(AValueText, ALineNumber);
+    ParseFlowSequenceInto(FlowText, Arr);
+    Result := Arr;
+  end
+  else if AValueText[1] = '{' then
+  begin
+    Obj := FTree.NewObject;
+    RegisterAnchor(AAnchorName, Obj, ALineNumber);
+    FlowText := CollectFlowCollectionText(AValueText, ALineNumber);
+    ParseFlowMappingInto(FlowText, Obj);
+    Result := Obj;
+  end
+  else
+    Result := ParseInlineValueWithContinuations(AValueText, ALineIndent,
+      ALineNumber, AStopAtIndentedSequenceEntry,
+      ARequireIndentedQuotedContinuation,
+      AAllowSameIndentScalarContinuation);
 
-    // ApplyTag can wrap the node in a fresh tagged value, built from strings that
-    // are themselves charged; re-point the root at whatever is being returned so
-    // the wrapper survives until the anchor registration below records it.
-    Result := ApplyTag(ATagName, Result, ALineNumber);
-    AddTempRootIfNeeded(NodeRoot, Result);
-    RegisterAnchor(AAnchorName, Result, ALineNumber);
-  finally
-    RemoveTempRootIfNeeded(NodeRoot);
-  end;
+  Result := ApplyTag(ATagName, Result, ALineNumber);
+  RegisterAnchor(AAnchorName, Result, ALineNumber);
 end;
 
 procedure TGocciaYAMLParser.ParseSequenceInto(const AIndent: Integer;
-  const AArray: TGocciaArrayValue);
+  const AArray: TGocciaDataNode);
 var
   AnchorName, RemainingText, TagName: string;
   EntryText: string;
   LineNumber: Integer;
-  Value: TGocciaValue;
+  Value: TGocciaDataNode;
 begin
   while True do
   begin
@@ -2787,21 +2555,21 @@ begin
     ParseNodeProperties(EntryText, TagName, AnchorName, RemainingText, LineNumber);
     Value := ParseNodeValue(RemainingText, AIndent, LineNumber, TagName,
       AnchorName, True, True, True, False, True, False);
-    AArray.Elements.Add(Value);
+    AArray.Add(Value);
   end;
 end;
 
 procedure TGocciaYAMLParser.ParseInlineSequenceInto(const AFirstEntryText: string;
-  const ASequenceIndent, ALineNumber: Integer; const AArray: TGocciaArrayValue);
+  const ASequenceIndent, ALineNumber: Integer; const AArray: TGocciaDataNode);
 var
   AnchorName, EntryText, RemainingText, TagName: string;
-  Value: TGocciaValue;
+  Value: TGocciaDataNode;
 begin
   EntryText := Trim(Copy(AFirstEntryText, 2, MaxInt));
   ParseNodeProperties(EntryText, TagName, AnchorName, RemainingText, ALineNumber);
   Value := ParseNodeValue(RemainingText, ASequenceIndent, ALineNumber, TagName,
     AnchorName, True, True, True, False, True, False);
-  AArray.Elements.Add(Value);
+  AArray.Add(Value);
 
   SkipIgnorableLines;
   if HasCurrentLine and (CurrentLine.Indent >= ASequenceIndent) and
@@ -2839,13 +2607,12 @@ begin
 end;
 
 procedure TGocciaYAMLParser.ParseFlowSequenceInto(const AText: string;
-  const AArray: TGocciaArrayValue);
+  const AArray: TGocciaDataNode);
 var
   InnerText: string;
   ItemIndex: Integer;
   Items: TStringList;
-  Obj: TGocciaObjectValue;
-  EntryRoot: TGocciaTempRoot;
+  Obj: TGocciaDataNode;
 begin
   if (Length(AText) < 2) or (AText[1] <> '[') or
      (AText[Length(AText)] <> ']') then
@@ -2855,35 +2622,29 @@ begin
   if InnerText = '' then
     Exit;
 
-  // A flow-mapping entry is filled by ParseFlowMappingEntry before it joins the
-  // sequence, and the scalars built in there charge the memory ceiling, so this
-  // frame is its only reference across a collection.
-  InitializeTempRoot(EntryRoot);
   Items := SplitTopLevelItems(InnerText);
   try
     for ItemIndex := 0 to Items.Count - 1 do
       if FindTopLevelFlowMappingSeparator(Items[ItemIndex]) > 0 then
       begin
-        Obj := TGocciaObjectValue.Create;
-        AddTempRootIfNeeded(EntryRoot, Obj);
+        Obj := FTree.NewObject;
         ParseFlowMappingEntry(Obj, Items[ItemIndex]);
-        AArray.Elements.Add(Obj);
+        AArray.Add(Obj);
       end
       else
-        AArray.Elements.Add(ParseInlineValue(Items[ItemIndex]));
+        AArray.Add(ParseInlineValue(Items[ItemIndex]));
   finally
-    RemoveTempRootIfNeeded(EntryRoot);
     Items.Free;
   end;
 end;
 
 procedure TGocciaYAMLParser.ParseFlowMappingEntry(
-  const AObject: TGocciaObjectValue; const AItemText: string;
+  const AObject: TGocciaDataNode; const AItemText: string;
   const ALineNumber: Integer);
 var
   KeyText, ValueText: string;
   SeparatorIndex: Integer;
-  Value: TGocciaValue;
+  Value: TGocciaDataNode;
 begin
   SeparatorIndex := FindTopLevelFlowMappingSeparator(AItemText);
   if SeparatorIndex = 0 then
@@ -2892,7 +2653,7 @@ begin
     if KeyText = '<<' then
       RaiseParseError('Merge keys must include a value in flow mappings.',
         ALineNumber);
-    AObject.AssignProperty(KeyText, TGocciaNullLiteralValue.NullValue);
+    AObject.SetProperty(KeyText, FTree.NewNull);
     Exit;
   end;
 
@@ -2903,11 +2664,11 @@ begin
   if KeyText = '<<' then
     MergeMappingValue(AObject, Value, ALineNumber)
   else
-    AObject.AssignProperty(KeyText, Value);
+    AObject.SetProperty(KeyText, Value);
 end;
 
 procedure TGocciaYAMLParser.ParseFlowMappingInto(const AText: string;
-  const AObject: TGocciaObjectValue);
+  const AObject: TGocciaDataNode);
 var
   InnerText: string;
   ItemIndex: Integer;
@@ -2929,27 +2690,22 @@ begin
   end;
 end;
 
-function TGocciaYAMLParser.ParseInlineValue(const AText: string): TGocciaValue;
+function TGocciaYAMLParser.ParseInlineValue(const AText: string): TGocciaDataNode;
 var
   AliasName: string;
   AnchorName, TagName: string;
-  Arr: TGocciaArrayValue;
+  Arr: TGocciaDataNode;
   NumericValue: Double;
-  Obj: TGocciaObjectValue;
+  Obj: TGocciaDataNode;
   RemainingText: string;
   TrimmedText: string;
-  NodeRoot: TGocciaTempRoot;
 begin
-  // Both flow-collection arms below fill their node before returning it, across
-  // scalar allocations that are charged against the memory ceiling and so can
-  // collect. One root serves both: only one arm runs per call.
-  InitializeTempRoot(NodeRoot);
-  EnterNativeDataDepth('YAML parsing');
+  EnterDataDepth('YAML parsing');
   try
-    CheckNativeWork;
+    CheckDataWork;
     TrimmedText := Trim(AText);
     if TrimmedText = '' then
-      Exit(TGocciaNullLiteralValue.NullValue);
+      Exit(FTree.NewNull);
 
   ParseNodeProperties(TrimmedText, TagName, AnchorName, RemainingText);
   if (AnchorName <> '') or (TagName <> '') then
@@ -2968,46 +2724,42 @@ begin
   end
   else if TrimmedText[1] = '[' then
   begin
-    Arr := TGocciaArrayValue.Create;
-    AddTempRootIfNeeded(NodeRoot, Arr);
+    Arr := FTree.NewArray;
     RegisterAnchor(AnchorName, Arr);
     ParseFlowSequenceInto(TrimmedText, Arr);
     Result := Arr;
   end
   else if TrimmedText[1] = '{' then
   begin
-    Obj := TGocciaObjectValue.Create;
-    AddTempRootIfNeeded(NodeRoot, Obj);
+    Obj := FTree.NewObject;
     RegisterAnchor(AnchorName, Obj);
     ParseFlowMappingInto(TrimmedText, Obj);
     Result := Obj;
   end
   else if (Length(TrimmedText) >= 2) and (TrimmedText[1] = DOUBLE_QUOTE) and
           (TrimmedText[Length(TrimmedText)] = DOUBLE_QUOTE) then
-    Result := TGocciaStringLiteralValue.Create(
+    Result := FTree.NewString(
       UnescapeDoubleQuotedString(Copy(TrimmedText, 2, Length(TrimmedText) - 2)))
   else if (Length(TrimmedText) >= 2) and (TrimmedText[1] = SINGLE_QUOTE) and
           (TrimmedText[Length(TrimmedText)] = SINGLE_QUOTE) then
-    Result := TGocciaStringLiteralValue.Create(
+    Result := FTree.NewString(
       UnescapeSingleQuotedString(Copy(TrimmedText, 2, Length(TrimmedText) - 2)))
   else if SameText(TrimmedText, 'null') or (TrimmedText = '~') then
-    Result := TGocciaNullLiteralValue.NullValue
+    Result := FTree.NewNull
   else if SameText(TrimmedText, 'true') then
-    Result := TGocciaBooleanLiteralValue.TrueValue
+    Result := FTree.NewBoolean(True)
   else if SameText(TrimmedText, 'false') then
-    Result := TGocciaBooleanLiteralValue.FalseValue
+    Result := FTree.NewBoolean(False)
   else if TryParseYAMLInteger(TrimmedText, NumericValue) or
           TryParseYAMLFloat(TrimmedText, NumericValue) then
-    Result := TGocciaNumberLiteralValue.Create(NumericValue)
+    Result := FTree.NewNumber(NumericValue)
   else
-    Result := TGocciaStringLiteralValue.Create(TrimmedText);
+    Result := FTree.NewString(TrimmedText);
 
   Result := ApplyTag(TagName, Result);
-    AddTempRootIfNeeded(NodeRoot, Result);
     RegisterAnchor(AnchorName, Result);
   finally
-    RemoveTempRootIfNeeded(NodeRoot);
-    LeaveNativeDataDepth;
+    LeaveDataDepth;
   end;
 end;
 
@@ -3015,7 +2767,7 @@ function TGocciaYAMLParser.ParseInlineValueWithContinuations(const AText: string
   const AParentIndent, ALineNumber: Integer;
   const AStopAtIndentedSequenceEntry,
   ARequireIndentedQuotedContinuations,
-  AAllowSameIndentScalarContinuations: Boolean): TGocciaValue;
+  AAllowSameIndentScalarContinuations: Boolean): TGocciaDataNode;
 var
   ClosingQuoteIndex: Integer;
   FoldedText, FragmentText, InitialText: string;
@@ -3072,10 +2824,10 @@ begin
       else
         FoldedText := FoldMultilineScalarFragments(Fragments);
       if QuoteChar = DOUBLE_QUOTE then
-        Result := TGocciaStringLiteralValue.Create(
+        Result := FTree.NewString(
           UnescapeDoubleQuotedString(FoldedText))
       else
-        Result := TGocciaStringLiteralValue.Create(
+        Result := FTree.NewString(
           UnescapeSingleQuotedString(FoldedText));
       Exit;
     end;
@@ -3112,7 +2864,7 @@ begin
     else
     begin
       FoldedText := FoldMultilineScalarFragments(Fragments);
-      Result := TGocciaStringLiteralValue.Create(FoldedText);
+      Result := FTree.NewString(FoldedText);
     end;
   finally
     Fragments.Free;
