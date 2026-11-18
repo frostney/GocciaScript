@@ -362,10 +362,60 @@ function TypeOfStr(V: TValue): UnicodeString;
 function IndexFromValue(V: TValue; out Idx: Int64): Boolean; inline;
 function IndexFromString(S: PStr; out Idx: Int64): Boolean;
 
+{ ---- the language profile ---- }
+type
+  { GocciaScript's recommended profile with the compatibility flags and unsafe options a host turned on. The
+    zero value (Restricted False) is the whole language, as the conformance host and the preludes run it; a
+    restricted profile turns on only the forms its flags name (docs/language.md, Compatibility Flags). Code
+    compiles under the profile active when its source was parsed: a lazy source keeps its own. }
+  TLangProfile = record
+    Restricted: Boolean;
+    Asi, VarDecl, FuncDecl, ForLoop, WhileLoop, LooseEq, NonStrict, ArgumentsObject, Labels, ForIn,
+      WarningUnsupported, FunctionCtor, ShadowRealm: Boolean;
+  end;
+
+{ the profile new code compiles under, through noinline routines (an inline threadvar access in another unit
+  can get FPC 3.3.1's absolute relocation, tlsscan.py) }
+function ActiveProfile: TLangProfile; noinline;
+procedure SetActiveProfile(const P: TLangProfile); noinline;
+{ the profile's switches, all on for an unrestricted one }
+function ProfileNonStrict: Boolean; noinline;
+function ProfileArgumentsObject: Boolean; noinline;
+function ProfileFunctionCtor: Boolean; noinline;
+
 implementation
 
 uses
   NumericText;
+
+threadvar
+  CurProfile: TLangProfile;
+
+function ActiveProfile: TLangProfile;
+begin
+  Result := CurProfile;
+end;
+
+procedure SetActiveProfile(const P: TLangProfile);
+begin
+  CurProfile := P;
+end;
+
+function ProfileNonStrict: Boolean;
+begin
+  Result := not CurProfile.Restricted or CurProfile.NonStrict;
+end;
+
+function ProfileArgumentsObject: Boolean;
+begin
+  Result := not CurProfile.Restricted or CurProfile.ArgumentsObject;
+end;
+
+function ProfileFunctionCtor: Boolean;
+begin
+  Result := not CurProfile.Restricted or CurProfile.FunctionCtor;
+end;
+
 
 { ---------------- values ---------------- }
 

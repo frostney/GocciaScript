@@ -17,6 +17,12 @@ function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Intege
 function ParseAndCompile(const Source, FileName: UnicodeString; AsExpression: Boolean; var T: PFuncTemplate;
   var Err: UnicodeString; Goal: Integer = 0): Boolean;
 procedure InitEval;
+{ sets a TGocciaParser's options from the active language profile (G2.Core) }
+procedure ApplyProfileOptions(P: TObject; Module: Boolean);
+{ an entry file under a restricted profile, parsed as the CLIs parse it (SourceType 0 detect, 1 Script, 2
+  Module): a Script compiled (goal 1) into T; a Module only reported (IsModule), for G2.Modules to load }
+function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
+  out IsModule: Boolean; var Err: UnicodeString): Boolean;
 
 threadvar
   { why the last ParseAndCompile failed: 1 the parser rejected the source (an early error; ParseErrorName is
@@ -27,7 +33,7 @@ threadvar
 implementation
 
 uses
-  Classes, Linux, UnixType, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
+  Classes, Linux, UnixType, TextSemantics, Goccia.SourcePipeline, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
   G2.PreParse, G2.Lazy, G2.Snapshot;
 
 threadvar
@@ -37,23 +43,43 @@ function LazyOn: Boolean;
 begin
   if LazyMode = 0 then
     if GetEnvironmentVariable('G2_LAZY') = '0' then LazyMode := 1 else LazyMode := 2;
-  Result := LazyMode = 2;
+  { the pre-parser does not apply a restricted profile's early errors to the bodies it skips }
+  Result := (LazyMode = 2) and not ActiveProfile.Restricted;
+end;
+
+{ the active profile's parser options (G2.Core TLangProfile): an unrestricted profile turns every form on }
+procedure ProfileOptions(var Opts: TGocciaParserOptions; Module: Boolean);
+var Pr: TLangProfile;
+begin
+  Pr := ActiveProfile;
+  Opts.AutomaticSemicolonInsertion := not Pr.Restricted or Pr.Asi;
+  Opts.VarDeclarationsEnabled := not Pr.Restricted or Pr.VarDecl;
+  Opts.FunctionDeclarationsEnabled := not Pr.Restricted or Pr.FuncDecl;
+  Opts.TraditionalForLoopsEnabled := not Pr.Restricted or Pr.ForLoop;
+  Opts.WhileLoopsEnabled := not Pr.Restricted or Pr.WhileLoop;
+  Opts.LooseEqualityEnabled := not Pr.Restricted or Pr.LooseEq;
+  Opts.NonStrictModeEnabled := not Module and (not Pr.Restricted or Pr.NonStrict);
+  Opts.LabelStatementsEnabled := not Pr.Restricted or Pr.Labels;
+  Opts.ForInLoopsEnabled := not Pr.Restricted or Pr.ForIn;
+  Opts.WarningUnsupportedFeatures := Pr.Restricted and Pr.WarningUnsupported;
+  if Module then
+  begin
+    Opts.ModuleSource := True;
+    Opts.ImportMetaAllowed := True;
+  end;
+end;
+
+procedure ApplyProfileOptions(P: TObject; Module: Boolean);
+var Opts: TGocciaParserOptions;
+begin
+  Opts := TGocciaParser(P).Options;
+  ProfileOptions(Opts, Module);
+  TGocciaParser(P).ApplyOptions(Opts);
 end;
 
 procedure ScriptOptions(P: TGocciaParser);
-var Opts: TGocciaParserOptions;
 begin
-  Opts := P.Options;
-  Opts.AutomaticSemicolonInsertion := True;
-  Opts.VarDeclarationsEnabled := True;
-  Opts.FunctionDeclarationsEnabled := True;
-  Opts.TraditionalForLoopsEnabled := True;
-  Opts.WhileLoopsEnabled := True;
-  Opts.LooseEqualityEnabled := True;
-  Opts.NonStrictModeEnabled := True;
-  Opts.LabelStatementsEnabled := True;
-  Opts.ForInLoopsEnabled := True;
-  P.ApplyOptions(Opts);
+  ApplyProfileOptions(P, False);
 end;
 
 { LastModuleInfo, taken: through a noinline routine (an inline threadvar load here got FPC 3.3.1's absolute
@@ -65,20 +91,85 @@ begin
 end;
 
 procedure ModuleOptions(P: TGocciaParser);
-var Opts: TGocciaParserOptions;
 begin
-  Opts := P.Options;
-  Opts.AutomaticSemicolonInsertion := True;
-  Opts.VarDeclarationsEnabled := True;
-  Opts.FunctionDeclarationsEnabled := True;
-  Opts.TraditionalForLoopsEnabled := True;
-  Opts.WhileLoopsEnabled := True;
-  Opts.LooseEqualityEnabled := True;
-  Opts.LabelStatementsEnabled := True;
-  Opts.ForInLoopsEnabled := True;
-  Opts.ModuleSource := True;
-  Opts.ImportMetaAllowed := True;
-  P.ApplyOptions(Opts);
+  ApplyProfileOptions(P, True);
+end;
+
+{ a restricted profile's front end is the CLIs' (Goccia.SourcePipeline): its compatibility flags, the JSX
+  preprocessor, and the goal, which stDetect leaves to the source (ADR 0140) }
+function HostPipelineOptions(SourceType: TGocciaSourceType): TGocciaSourcePipelineOptions;
+var Pr: TLangProfile;
+begin
+  Pr := ActiveProfile;
+  Result := TGocciaSourcePipeline.DefaultOptions;
+  Result.Preprocessors := [ppJSX];
+  Result.Compatibility := [];
+  if Pr.Asi then Include(Result.Compatibility, cfASI);
+  if Pr.VarDecl then Include(Result.Compatibility, cfVar);
+  if Pr.FuncDecl then Include(Result.Compatibility, cfFunction);
+  if Pr.ForLoop then Include(Result.Compatibility, cfTraditionalFor);
+  if Pr.WhileLoop then Include(Result.Compatibility, cfWhileLoops);
+  if Pr.LooseEq then Include(Result.Compatibility, cfLooseEquality);
+  if Pr.NonStrict then Include(Result.Compatibility, cfNonStrictMode);
+  if Pr.ArgumentsObject then Include(Result.Compatibility, cfArgumentsObject);
+  if Pr.Labels then Include(Result.Compatibility, cfLabel);
+  if Pr.ForIn then Include(Result.Compatibility, cfForIn);
+  Result.WarningUnsupportedFeatures := Pr.WarningUnsupported;
+  Result.SourceType := SourceType;
+end;
+
+{ Source parsed by the CLIs' front end; Settled the goal it was parsed with }
+function HostParse(const Source, FileName: UnicodeString; SourceType: TGocciaSourceType;
+  out Settled: TGocciaSourceType): TGocciaProgram;
+var Lines: TStringList; R: TGocciaSourcePipelineResult;
+begin
+  Lines := CreateFileTextLines(NormalizeNewlinesToLF(UTF8Encode(Source)));
+  try
+    R := TGocciaSourcePipeline.Parse(Lines, UTF8Encode(FileName), HostPipelineOptions(SourceType));
+    try
+      Settled := R.SourceType;
+      Result := R.TakeProgramNode;
+    finally
+      R.Free;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
+  out IsModule: Boolean; var Err: UnicodeString): Boolean;
+var Prog: TGocciaProgram; Goal: TGocciaSourceType;
+begin
+  Result := False;
+  IsModule := False;
+  Prog := nil;
+  try
+    try
+      case SourceType of
+        1: Goal := stScript;
+        2: Goal := stModule;
+      else
+        Goal := stDetect;
+      end;
+      Prog := HostParse(Source, FileName, Goal, Goal);
+      if Goal = stModule then
+      begin
+        IsModule := True;
+        Exit(True);
+      end;
+      T := CompileProgram(Prog, FileName, False, 1);
+      Result := True;
+    except
+      on E: Exception do
+      begin
+        Err := UnicodeString(E.Message);
+        if E is TGocciaReferenceError then ParseErrorName := 'ReferenceError' else ParseErrorName := 'SyntaxError';
+      end;
+    end;
+  finally
+    Prog.Free;
+  end;
 end;
 
 { a module with lazy functions: as LazyParseAndCompile, goal 3 }
@@ -256,7 +347,23 @@ var
   { G2_LAZY_DEBUG set: 1, not: 0, not read yet: -1 }
   LazyDebug: Integer = -1;
 
+function LazyCompileIn(T: PFuncTemplate): Boolean; forward;
+
+{ lazy sources exist only under the unrestricted profile (LazyOn): their functions compile under it, whatever
+  profile is active when they are first called }
 function LazyCompile(T: PFuncTemplate): Boolean;
+var Saved: TLangProfile;
+begin
+  Saved := ActiveProfile;
+  SetActiveProfile(Default(TLangProfile));
+  try
+    Result := LazyCompileIn(T);
+  finally
+    SetActiveProfile(Saved);
+  end;
+end;
+
+function LazyCompileIn(T: PFuncTemplate): Boolean;
 var St: PLazyStub; LS, PrevSrc: TLazySource; R: ^TLazyRec; L: TGocciaLexer; P: TGocciaParser; E: TGocciaExpression;
   NT: PFuncTemplate; SaveUp: array of TUpvalDesc; SaveName: PStr; SaveRange: TGocciaLazySourceText;
   Finder: TBodyFinder; IsMethod: Boolean; PrevModule: Integer;
@@ -376,7 +483,7 @@ end;
 
 function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Integer; var T: PFuncTemplate;
   var Info: TModuleInfo; var Err, ErrName: UnicodeString): Boolean;
-var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Opts: TGocciaParserOptions;
+var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType;
 begin
   Info := nil;
   if LazyOn and LazyParseAndCompileModule(Source, FileName, Id, T, Info, Err, ErrName, Result) then Exit;
@@ -384,23 +491,16 @@ begin
   L := nil; P := nil; Prog := nil;
   try
     try
-      L := TGocciaLexer.Create(Source, FileName);
-      L.StandardIdentifiers := True;
-      P := TGocciaParser.CreateFromLexer(L, FileName, nil);
-      Opts := P.Options;
-      Opts.AutomaticSemicolonInsertion := True;
-      Opts.VarDeclarationsEnabled := True;
-      Opts.FunctionDeclarationsEnabled := True;
-      Opts.TraditionalForLoopsEnabled := True;
-      Opts.WhileLoopsEnabled := True;
-      Opts.LooseEqualityEnabled := True;
-      Opts.LabelStatementsEnabled := True;
-      Opts.ForInLoopsEnabled := True;
-      Opts.ModuleSource := True;
-      Opts.ImportMetaAllowed := True;
-      P.ApplyOptions(Opts);
-      Prog := P.Parse;
-      L.Tokens.Clear;
+      if ActiveProfile.Restricted then Prog := HostParse(Source, FileName, stModule, Settled)
+      else
+      begin
+        L := TGocciaLexer.Create(Source, FileName);
+        L.StandardIdentifiers := True;
+        P := TGocciaParser.CreateFromLexer(L, FileName, nil);
+        ModuleOptions(P);
+        Prog := P.Parse;
+        L.Tokens.Clear;
+      end;
       CompilingModuleId := Id;
       T := CompileProgram(Prog, FileName, False, 3);
       Info := LastModuleInfo;
@@ -423,7 +523,7 @@ end;
 
 function ParseAndCompile(const Source, FileName: UnicodeString; AsExpression: Boolean; var T: PFuncTemplate;
   var Err: UnicodeString; Goal: Integer): Boolean;
-var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Opts: TGocciaParserOptions;
+var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType;
 begin
   if (Goal = 1) and not AsExpression and LazyOn and LazyParseAndCompile(Source, FileName, T, Err, Result) then Exit;
   Result := False;
@@ -431,26 +531,21 @@ begin
   L := nil; P := nil; Prog := nil;
   try
     try
-      L := TGocciaLexer.Create(Source, FileName);
-      L.HTMLComments := True;   { B.1.1: Script, eval and Function code }
-      L.StandardIdentifiers := True;
-      P := TGocciaParser.CreateFromLexer(L, FileName, nil);   { source lines: built only if an error needs them }
-      Opts := P.Options;
-      Opts.AutomaticSemicolonInsertion := True;
-      Opts.VarDeclarationsEnabled := True;
-      Opts.FunctionDeclarationsEnabled := True;
-      Opts.TraditionalForLoopsEnabled := True;
-      Opts.WhileLoopsEnabled := True;
-      Opts.LooseEqualityEnabled := True;
-      Opts.NonStrictModeEnabled := True;
-      Opts.LabelStatementsEnabled := True;
-      Opts.ForInLoopsEnabled := True;
-      P.ApplyOptions(Opts);
-      CompileFailKind := 1;
-      { goal 4 (a direct eval in function code): the private names of its caller's classes are visible; the
-        compiler checks each against the caller's bindings (AllPrivateIdentifiersValid) }
-      if Goal = 4 then Prog := P.ParseUnchecked else Prog := P.Parse;
-      L.Tokens.Clear;
+      if (Goal = 1) and not AsExpression and ActiveProfile.Restricted then
+        Prog := HostParse(Source, FileName, stScript, Settled)
+      else
+      begin
+        L := TGocciaLexer.Create(Source, FileName);
+        L.HTMLComments := True;   { B.1.1: Script, eval and Function code }
+        L.StandardIdentifiers := True;
+        P := TGocciaParser.CreateFromLexer(L, FileName, nil);   { source lines: built only if an error needs them }
+        ScriptOptions(P);
+        CompileFailKind := 1;
+        { goal 4 (a direct eval in function code): the private names of its caller's classes are visible; the
+          compiler checks each against the caller's bindings (AllPrivateIdentifiersValid) }
+        if Goal = 4 then Prog := P.ParseUnchecked else Prog := P.Parse;
+        L.Tokens.Clear;
+      end;
       CompileFailKind := 2;
       T := CompileProgram(Prog, FileName, AsExpression, Goal);
       CompileFailKind := 0;
@@ -484,6 +579,24 @@ begin
   Result := False;
 end;
 
+{ CreateDynamicFunction's source, the function expression it wraps the parameters and body in, compiled; the
+  wrapper's function keyword is the engine's, so a restricted profile parses it with compat-function on }
+function CompileDynamic(const Src: UnicodeString; var T: PFuncTemplate; var Err: UnicodeString): Boolean;
+var Saved, Pr: TLangProfile;
+begin
+  Saved := ActiveProfile;
+  Pr := Saved;
+  Pr.FuncDecl := True;
+  SetActiveProfile(Pr);
+  DynFuncAnonymous := True;
+  try
+    Result := ParseAndCompile(Src, '<Function>', True, T, Err);
+  finally
+    DynFuncAnonymous := False;
+    SetActiveProfile(Saved);
+  end;
+end;
+
 { 20.2.1.1.1 CreateDynamicFunction: Function, GeneratorFunction, AsyncFunction and AsyncGeneratorFunction
   (NativeData 0-3) }
 function Function_Ctor(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
@@ -491,8 +604,10 @@ const
   Heads: array[0..3] of UnicodeString = ('(function anonymous(', '(function* anonymous(', '(async function anonymous(',
     '(async function* anonymous(');
 var I: Integer; Params, Body, Src, Err: UnicodeString; S: TValue; T: PFuncTemplate; Clo: TValue; Kind: Integer;
-  Ok: Boolean;
 begin
+  { a restricted profile creates functions from strings only with unsafe-function-constructor }
+  if not ProfileFunctionCtor then
+    Exit(ThrowError('TypeError', 'Dynamic code generation is disabled. Pass --unsafe-function-constructor to enable the Function constructor'));
   Kind := NativeData;
   Params := '';
   Body := '';
@@ -510,22 +625,10 @@ begin
     function they open does not end in the body) }
   if ParamsMayEscape(Params) then
   begin
-    DynFuncAnonymous := True;
-    try
-      Ok := ParseAndCompile(Heads[Kind] + Params + #10') {'#10'})', '<Function>', True, T, Err);
-    finally
-      DynFuncAnonymous := False;
-    end;
-    if not Ok then Exit(ThrowError('SyntaxError', Err));
+    if not CompileDynamic(Heads[Kind] + Params + #10') {'#10'})', T, Err) then Exit(ThrowError('SyntaxError', Err));
   end;
   Src := Heads[Kind] + Params + #10') {'#10 + Body + #10'})';
-  DynFuncAnonymous := True;
-  try
-    Ok := ParseAndCompile(Src, '<Function>', True, T, Err);
-  finally
-    DynFuncAnonymous := False;
-  end;
-  if not Ok then Exit(ThrowError('SyntaxError', Err));
+  if not CompileDynamic(Src, T, Err) then Exit(ThrowError('SyntaxError', Err));
   if not MakeScriptClosure(T, Clo) then Exit(False);
   Result := CallValue(Clo, VUndefined, nil, 0, Res);
   { and the body as a FunctionBody: the function the source makes ends at the brace added after it }

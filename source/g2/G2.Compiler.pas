@@ -1259,7 +1259,7 @@ begin
     end;
   end;
   if (Goal = 3) and (ModImportSlot(N) >= 0) then begin EmitModGet(ModImportSlot(N), Dest); Exit; end;
-  if N = 'arguments' then
+  if (N = 'arguments') and ProfileArgumentsObject then
   begin
     F := FS;
     while (F <> nil) and F.IsArrow do F := F.Parent;
@@ -1399,7 +1399,7 @@ begin
     Emit(Ins(opThrowConst, 0, 0, AtomConst(N)));
     Exit;
   end;
-  if N = 'arguments' then
+  if (N = 'arguments') and ProfileArgumentsObject then
   begin
     { a non-strict function's arguments binding is mutable (10.2.11 step 22.f: CreateMutableBinding), as
       LoadIdentStatic resolves it }
@@ -1854,7 +1854,8 @@ begin
           Names.Clear;
         end;
         for I := 0 to Names.Count - 1 do
-          if (Names[I] = 'arguments') and (F.ArgsReg >= 0) and (FS.Scopes[0].Find('arguments') < 0) then
+          if (Names[I] = 'arguments') and (F.ArgsReg >= 0) and (FS.Scopes[0].Find('arguments') < 0) and
+            ProfileArgumentsObject then
           begin
             { 10.2.11 step 27: a var named arguments is the arguments object's binding, initialized to it; with
               parameter expressions (step 28) a binding of the separate variable environment, so closures in
@@ -4958,6 +4959,7 @@ function TCompiler.ImplicitArgumentsFirst: Boolean;
 var F, G, BF: TFuncState; S: TScope; J: Integer;
 begin
   Result := False;
+  if not ProfileArgumentsObject then Exit;
   F := FS;
   while (F <> nil) and F.IsArrow do F := F.Parent;
   if (F = nil) or F.IsEvalOuter or ((F.Parent = nil) and (Goal <> 0)) then Exit;
@@ -4988,6 +4990,8 @@ end;
 function TCompiler.ArgumentsBound: Boolean;
 var F: TFuncState;
 begin
+  { a restricted profile without compat-arguments-object binds no implicit arguments object }
+  if not ProfileArgumentsObject then Exit(False);
   F := FS;
   while (F <> nil) and F.IsArrow do F := F.Parent;
   if (F <> nil) and F.IsEvalOuter then Exit(ResolveUpval(FS, '%arguments') >= 0);
@@ -6859,9 +6863,11 @@ begin
   C.FS := nil;
   C.PendingStrict := -1;
   C.ReturnLast := ReturnLast;
+  { a restricted profile without compat-non-strict-mode: all code is strict }
+  if not ProfileNonStrict then C.PendingStrict := 1;
   if Goal > 0 then
   begin
-    Strict := HasUseStrictDirective(Prog);
+    Strict := HasUseStrictDirective(Prog) or not ProfileNonStrict;
     C.PendingStrict := Ord(Strict);
     if Strict and (Goal = 2) then Goal := 0;   { strict eval code: its declarations stay its own }
     if Goal = 4 then C.PendingStrict := Ord(Strict);

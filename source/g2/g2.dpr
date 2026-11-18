@@ -4,7 +4,7 @@ program g2;
 uses
   cthreads, Classes, SysUtils, Math,
   Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.Token,
-  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl;
+  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.HostAPI, CLI.ConfigFile, StrUtils;
 
 type
   TSampler = class(TThread)
@@ -36,6 +36,144 @@ begin
     end;
     Inc(SampleCount[I]);
   end;
+end;
+
+{ S as a JSON string literal }
+function JsonQuote(const S: UnicodeString): UnicodeString;
+var I: Integer; C: WideChar;
+begin
+  Result := '"';
+  for I := 1 to Length(S) do
+  begin
+    C := S[I];
+    case C of
+      '"': Result := Result + '\"';
+      '\': Result := Result + '\\';
+      #10: Result := Result + '\n';
+      #13: Result := Result + '\r';
+      #9: Result := Result + '\t';
+    else
+      if Ord(C) < 32 then Result := Result + '\u' + UnicodeString(IntToHex(Ord(C), 4)) else Result := Result + C;
+    end;
+  end;
+  Result := Result + '"';
+end;
+
+{ a line that opens with an import declaration (not import( or import.) or an export declaration }
+function HasModuleSyntax(const Src: UnicodeString): Boolean;
+var I, N, J: Integer; AtLineStart: Boolean;
+  function Word(const W: UnicodeString): Boolean;
+  begin
+    Result := (Copy(Src, J, Length(W)) = W) and ((J + Length(W) > N) or not (Src[J + Length(W)] in ['A'..'Z', 'a'..'z', '0'..'9', '_', '$']));
+  end;
+begin
+  Result := False;
+  N := Length(Src);
+  AtLineStart := True;
+  I := 1;
+  while I <= N do
+  begin
+    if AtLineStart then
+    begin
+      J := I;
+      while (J <= N) and ((Src[J] = ' ') or (Src[J] = #9)) do Inc(J);
+      if J <= N then
+      begin
+        if Word('export') then Exit(True);
+        if Word('import') then
+        begin
+          J := J + 6;
+          while (J <= N) and ((Src[J] = ' ') or (Src[J] = #9)) do Inc(J);
+          if (J <= N) and (Src[J] <> '(') and (Src[J] <> '.') then Exit(True);
+        end;
+      end;
+    end;
+    AtLineStart := (Src[I] = #10);
+    Inc(I);
+  end;
+end;
+
+{ --test: the file's suites registered (Err: the uncaught error while registering them, '' for none), run them;
+  their result as one JSON line on stdout, a throw while registering or running a suite error }
+procedure ReportTests(const Err: UnicodeString);
+var Json, E: UnicodeString;
+begin
+  if Err <> '' then E := Err
+  else if RunTestSuites(Json, E) then
+  begin
+    WriteLn('__G2TEST__ ', UTF8Encode(Json));
+    Halt(0);
+  end;
+  WriteLn('__G2TEST__ ', UTF8Encode('{"suiteError":' + JsonQuote(E) + '}'));
+  Halt(0);
+end;
+
+{ --test: the language profile and source type of the nearest goccia.json (CLI.ConfigFile, as the CLIs find
+  it); without one, the recommended profile }
+procedure LoadTestConfig(const FileName: string; out Prof: TLangProfile; out SourceType: string);
+var Path: string; Entries: TConfigEntryArray;
+  function Flag(const Key: string): Boolean;
+  var V: string;
+  begin
+    Result := FindConfigEntry(Entries, Key, V) and (V = 'true');
+  end;
+begin
+  Prof := Default(TLangProfile);
+  Prof.Restricted := True;
+  SourceType := '';
+  SetLength(Entries, 0);
+  Path := DiscoverConfigFile(ExtractFilePath(ExpandFileName(FileName)), ['goccia'], ['.json']);
+  if Path <> '' then Entries := ParseConfigFile(Path);
+  Prof.Asi := Flag('compat-asi');
+  Prof.VarDecl := Flag('compat-var');
+  Prof.FuncDecl := Flag('compat-function');
+  Prof.ForLoop := Flag('compat-traditional-for-loop');
+  Prof.WhileLoop := Flag('compat-while-loops');
+  Prof.LooseEq := Flag('compat-loose-equality');
+  Prof.NonStrict := Flag('compat-non-strict-mode');
+  Prof.ArgumentsObject := Flag('compat-arguments-object');
+  Prof.Labels := Flag('compat-label');
+  Prof.ForIn := Flag('compat-for-in-loop');
+  Prof.WarningUnsupported := Flag('warning-unsupported-features');
+  Prof.FunctionCtor := Flag('unsafe-function-constructor');
+  Prof.ShadowRealm := Flag('unsafe-shadowrealm');
+  if not FindConfigEntry(Entries, 'source-type', SourceType) then SourceType := '';
+end;
+
+{ --test FILE: GocciaTestRunner's run of one test file. The engine with the test framework API (prelude/testing.js)
+  and the host's globals, the file under its goccia.json profile as a script or a module (source-type, .mjs, or a
+  top-level import or export declaration), then its suites }
+procedure RunTestFile(const FileName: string; const SrcText: UnicodeString);
+var Prof: TLangProfile; SourceType: string; Err: UnicodeString; Phase, Kind: Integer; IsModule, Ok: Boolean; S: TValue;
+  T: PFuncTemplate;
+begin
+  LoadTestConfig(FileName, Prof, SourceType);
+  EngineInit;
+  if not (InstallHostGlobals(Prof.ShadowRealm, True, Err) and InstallTestingAPI(Err)) then
+  begin
+    WriteLn('__G2TEST__ setup error: ', UTF8Encode(Err));
+    Halt(4);
+  end;
+  SetActiveProfile(Prof);
+  if SourceType = 'module' then Kind := 2
+  else if SourceType = 'script' then Kind := 1
+  else if LowerCase(ExtractFileExt(FileName)) = '.mjs' then Kind := 2
+  else Kind := 0;
+  Err := '';
+  if not HostCompileEntry(SrcText, UnicodeString(FileName), Kind, T, IsModule, Err) then ReportTests(Err);
+  if IsModule then
+  begin
+    Phase := 0;
+    Ok := RunModuleFile(UnicodeString(ExpandFileName(FileName)), Phase) and RunMicrotasks and RunHostLoop;
+  end
+  else Ok := RunScript(T) and RunMicrotasks and RunHostLoop;
+  if not Ok then
+  begin
+    if ToStringV(Pending, S) and IsString(S) then Err := StrToUnicode(StrOf(S));
+    if Err = '' then Err := 'uncaught exception';
+    Pending := VUndefined;
+  end;
+  ReportTests(Err);
 end;
 
 procedure ReportSamples;
@@ -486,13 +624,15 @@ end;
 
 var
   FS: TFileStream; Raw: RawByteString; SrcText: UnicodeString; PP: TPreParser; LazySrc: TLazySource; L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; T: PFuncTemplate;
-  Opts: TGocciaParserOptions; Ok: Boolean; S: TValue; FileName: string; I, NTokens: Integer; T0, T1, T2, T3, T4, H0, H1: QWord;
+  Opts: TGocciaParserOptions; Ok, TestMode: Boolean; S: TValue; FileName: string; I, NTokens: Integer; T0, T1, T2, T3, T4, H0, H1: QWord;
 begin
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   if ParamStr(1) = '--test262' then begin RunTest262Host; Halt(0); end;
   FileName := '';
+  TestMode := False;
   for I := 1 to ParamCount do
-    if ParamStr(I) = '--gc-stress' then GCStress := True
+    if ParamStr(I) = '--test' then TestMode := True
+    else if ParamStr(I) = '--gc-stress' then GCStress := True
     else if ParamStr(I) = '--gc-verify' then GCVerify := True
     else if ParamStr(I) = '--trace-throw' then ThrowTrace := True
     else FileName := ParamStr(I);
@@ -509,6 +649,7 @@ begin
   SrcText := DecodeSource(Raw);
   Raw := '';
   T1 := GetTickCount64;
+  if TestMode then RunTestFile(FileName, SrcText);
   { the functions the pre-parse finds eligible are compiled on their first call (G2.Lazy); G2_LAZY=0 compiles
     everything now }
   LazySrc := nil;
