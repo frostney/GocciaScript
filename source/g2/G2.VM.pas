@@ -277,6 +277,11 @@ function ThrowIterResultNotObject(V: TValue): Boolean;
 function ValueDisplayText(V: TValue): UnicodeString;
 function PrivateGet(Obj: TValue; Key: PStr; var V: TValue): Boolean;
 function PrivateSet(Obj: TValue; Key: PStr; V: TValue): Boolean;
+{ records the realm's %TypedArray%.prototype and the prototype of each kind of typed array (G2.Core's TAWatched) }
+procedure RecordTypedArrayIntrinsics(Root: TValue; const KindProtos: array of TValue);
+{ the typed array O (without own properties) has its kind's intrinsic prototype, and neither that prototype nor
+  %TypedArray%.prototype had its length property or prototype changed: length is its element count }
+function TAProtoPristine(O: PObj): Boolean; inline;
 function NewNativeFunction(Fn: TNativeFn; const Name: UnicodeString; Length: Integer): TValue;
 function NewNativeFunctionData(Fn: TNativeFn; const Name: UnicodeString; Length: Integer; Data: UInt32): TValue;
 procedure DefineHidden(O: TValue; const Name: UnicodeString; V: TValue);
@@ -1707,6 +1712,7 @@ function DeleteIfConfigurable0(O: PObj; Key: PStr): Boolean; forward;
 function DeleteIfConfigurable(O: PObj; Key: PStr): Boolean;
 var U: PUpval; Idx: Int64;
 begin
+  if (Key = AtomLength) and (O^.Hdr.Extra <> 0) then TAWatchedChanged(O);
   U := ArgsMapCell(O, Key, Idx);
   if U = nil then Exit(DeleteIfConfigurable0(O, Key));
   PushRoot(MkPtr(O));
@@ -5538,6 +5544,19 @@ begin
   Result := True;
 end;
 
+{$IF TA_WATCHED_KINDS <> TAKindCount}{$ERROR G2.Core's TA_WATCHED_KINDS must equal G2.Typed's TAKindCount}{$ENDIF}
+procedure RecordTypedArrayIntrinsics(Root: TValue; const KindProtos: array of TValue);
+var I: Integer;
+begin
+  TAWatched[0] := Root;
+  for I := 0 to Min(High(KindProtos), TA_WATCHED_KINDS - 1) do TAWatched[1 + I] := KindProtos[I];
+end;
+
+function TAProtoPristine(O: PObj): Boolean; inline;
+begin
+  Result := O^.Shape^.Proto = TAWatched[1 + TAKind(O)];
+end;
+
 { A native call runs with StackTop lowered to its last argument (Lo), so the frames it makes reuse the caller's
   registers above that, which are dead at the call. A collection meanwhile neither scans nor updates them: once
   StackTop is back at Top they would hold stale pointers (moved or freed objects) the next collection follows.
@@ -5974,7 +5993,7 @@ LGetProp:
             end;
             { the intrinsic length getter of a typed array without own properties over an ordinary buffer }
             if (TOp(PByte(IP)[-8]) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) and
-               ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached)) = 0) then
+               ((ObjOf(O^.Aux1)^.OFlags and (bfShared or bfResizable or bfDetached)) = 0) and TAProtoPristine(O) then
             begin
               R[A] := MkInt(Int32(UInt32(O^.Aux2)));
               Continue;
@@ -7224,8 +7243,9 @@ LReload:
                 Continue;
               end;
               { the intrinsic %TypedArray%.prototype.length getter's value, for a typed array without own
-                properties (a redefined getter on the prototype is not seen here) }
-              if (TOp(I and $FF) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) then
+                properties whose prototype chain is the intrinsic one, unchanged }
+              if (TOp(I and $FF) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) and
+                 TAProtoPristine(O) then
               begin
                 R[A] := MkInt(TALength(O));
                 Continue;
@@ -8961,6 +8981,7 @@ begin
   IntrinsicList := VUndefined;
   RealmVals([@IntrinsicList]);
   IntrinsicListIdx := High(RealmValSlots);
+  RealmValRange(@TAWatched[0], 1 + TA_WATCHED_KINDS);
   RealmPtrs([@EmptyShapeForArray, @FunctionShape, @GenFunctionShape, @AsyncFunctionShape, @AsyncGenFunctionShape,
     @ArgsShapeMapped, @ArgsShapeUnmapped]);
 end;

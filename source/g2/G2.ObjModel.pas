@@ -578,6 +578,7 @@ begin
   Ok := False;
   if not IsObject(O) then Exit(ThrowTypeError('Object.defineProperty called on non-object'));
   P := ObjOf(O);
+  if (Key = AtomLength) and (P^.Hdr.Extra <> 0) then TAWatchedChanged(P);
   if P^.OKind = okProxy then Exit(ProxyDefineOwnProperty(O, Key, D, Ok));
   { 10.4.6.6 a namespace's string key: no change but to what it already is }
   if (P^.OKind = okModuleNS) and ((Key^.Hdr.Extra and kfSymbol) = 0) then

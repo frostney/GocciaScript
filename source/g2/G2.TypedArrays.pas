@@ -19,6 +19,10 @@ procedure InitTypedArrays;
 { $262.detachArrayBuffer: False with a TypeError pending for a non-ArrayBuffer or a SharedArrayBuffer }
 function DetachArrayBufferV(B: TValue): Boolean;
 
+{ records the realm's typed array prototypes for G2.VM's length fast path (G2.Core's TAWatched); run once the
+  realm's intrinsics are all made }
+procedure RecordTypedArrayGuard;
+
 implementation
 
 uses
@@ -569,5 +573,10 @@ begin
 end;
 
 {$I G2.TypedArrays2.inc}
+
+procedure RecordTypedArrayGuard;
+begin
+  RecordTypedArrayIntrinsics(TypedArrayProtoV, TAProtosV);
+end;
 
 end.

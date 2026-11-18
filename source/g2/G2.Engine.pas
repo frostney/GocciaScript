@@ -63,6 +63,7 @@ begin
   InitDate;
   InitIntl;
   InitShadowRealm;
+  RecordTypedArrayGuard;
   IntrinsicsInit := False;
   RealmInitProc := @InitIntrinsics;
 end;

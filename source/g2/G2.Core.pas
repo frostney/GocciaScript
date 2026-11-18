@@ -16,6 +16,8 @@ type
   PValue = ^TValue;
 
 const
+  { the kinds of typed array (G2.Typed's TAKindCount; G2.VM checks they agree) }
+  TA_WATCHED_KINDS = 12;
   { the temp root stack's capacity (TempRoots): 32 MB of address space, committed as used }
   TEMP_ROOTS_MAX = 4 * 1024 * 1024;
   TAG_INT     = QWord($FFF9000000000000);
@@ -235,6 +237,9 @@ threadvar
   GCRootScanner: procedure;   { VM visits its roots with GCVisit }
   GCMinorCount, GCMajorCount: Integer;
   GCEpoch: Integer;   { collections of either kind (GCEpochNow) }
+  { G2.VM's typed array length fast path: [0] %TypedArray%.prototype, [1 + kind] each kind's prototype (per realm);
+    the kinds' entries are cleared (undefined) once the length property or the prototype of any of them changes }
+  TAWatched: array[0..TA_WATCHED_KINDS] of TValue;
   GCPromotedBytes, GCOldBytes, GCOldBytesAtMajor: Int64;
 
 procedure HeapInit(NurseryBytes: SizeInt);
@@ -395,6 +400,9 @@ function ProfileStackTraces: Boolean; noinline;
 { the collections so far (minor and major): unchanged across a call, nothing moved or was freed meanwhile. Not
   inline: fpc-toolchain 3.3.1+4 can fold a second threadvar read of an expression into an absolute address }
 function GCEpochNow: Integer; noinline;
+{ O, an object other objects have as prototype, had its length property or prototype changed: when it is one of
+  TAWatched, the typed array length fast path is off in this realm }
+procedure TAWatchedChanged(O: PObj);
 
 { ---- the native stack ---- }
 { records how far this thread's native stack may grow (its bounds from pthread_getattr_np, a margin kept for the
@@ -503,6 +511,17 @@ end;
 function GCEpochNow: Integer;
 begin
   Result := GCEpoch;
+end;
+
+procedure TAWatchedChanged(O: PObj);
+var I, J: Integer;
+begin
+  for I := 0 to TA_WATCHED_KINDS do
+    if IsObject(TAWatched[I]) and (ObjOf(TAWatched[I]) = O) then
+    begin
+      for J := 1 to TA_WATCHED_KINDS do TAWatched[J] := VUndefined;
+      Exit;
+    end;
 end;
 
 function ProfileStackTraces: Boolean;
@@ -2073,7 +2092,11 @@ var Old, N: PShape; I: Integer;
 begin
   Old := O^.Shape;
   if Old^.Proto = P then Exit;
-  if O^.Hdr.Extra <> 0 then ProtoChanged;
+  if O^.Hdr.Extra <> 0 then
+  begin
+    ProtoChanged;
+    TAWatchedChanged(O);
+  end;
   N := RootShapeFor(P);
   for I := 0 to Old^.Count - 1 do N := ShapeAdd(N, Old^.Keys[I], Old^.PFlags[I]);
   O^.Shape := N;

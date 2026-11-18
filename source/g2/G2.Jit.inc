@@ -1241,7 +1241,7 @@ begin
     R[A] := MkInt(O^.Elements^.Len);
     Exit(True);
   end;
-  if (TOp(I and $FF) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) then
+  if (TOp(I and $FF) = opGetLength) and (O^.OKind = okTypedArray) and (O^.Shape^.Count = 0) and TAProtoPristine(O) then
   begin
     R[A] := MkInt(TALength(O));
     Exit(True);
