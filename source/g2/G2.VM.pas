@@ -117,7 +117,7 @@ threadvar
   LazyCompileHook: function(T: PFuncTemplate): Boolean;
   InjectThrow: Boolean;
   TypedArrayValuesFn: TValue;
-  AtomLength, AtomPrototype, AtomConstructor, AtomName, AtomMessage, AtomNext, AtomDone, AtomValue,
+  AtomLength, AtomPrototype, AtomConstructor, AtomName, AtomMessage, AtomNext, AtomReturn, AtomDone, AtomValue,
     AtomToString, AtomValueOf, AtomFieldInit, AtomIterator, AtomStack, AtomCallee,
     AtomByteLength, AtomByteOffset, AtomBuffer: PStr;
   SymIterator: TValue;
@@ -156,6 +156,7 @@ threadvar
     iterator record whose next method is one of them steps without a call }
   ArrayIterNextFn, GenNextFn: TValue;
   IterSelfFn: TValue;   { %IteratorPrototype%[@@iterator] (G2.Builtins sets it): a generator iterates as itself }
+  GenReturnFn: TValue;  { %GeneratorPrototype%.return (G2.Builtins2 sets it): a generator's close resumes it directly }
   MapIterNextFn, SetIterNextFn: TValue;   { %MapIteratorPrototype%.next, %SetIteratorPrototype%.next }
   { the function and iterator intrinsics of generators and async code (G2.Promise makes them) }
   GenFunctionProto, AsyncFunctionProto, AsyncGenFunctionProto, AsyncGeneratorProto, AsyncIteratorProto,
@@ -1034,21 +1035,64 @@ begin
   PopRoots(2);
 end;
 
-function IteratorCloseV(It: TValue; Throwing: Boolean): Boolean;
-var Ret, R, Saved: TValue;
+function GenIterationIntact(G: PObj): Boolean; forward;
+
+threadvar
+  GCShapeGP: PShape;   { GenCloseIntact's cached lookup of %GeneratorPrototype%.return (the shape it was made for) }
+  GCSlotGP: Integer;
+
+{ GenIterationIntact, and %GeneratorPrototype%'s own return is the intrinsic (a generator's close resumes it with
+  a return completion, as the intrinsic does; its iterator result, always an object, not made) }
+function GenCloseIntact(G: PObj): Boolean;
+var GP: PObj; S: Integer;
 begin
+  Result := False;
+  if not GenIterationIntact(G) then Exit;
+  GP := ObjOf(GeneratorProto);
+  if GP^.Shape <> GCShapeGP then
+  begin
+    GCShapeGP := GP^.Shape;
+    S := ShapeLookup(GP^.Shape, AtomReturn);
+    if (S >= 0) and ((GP^.Shape^.PFlags[S] and pfAccessor) <> 0) then S := -1;
+    GCSlotGP := S;
+  end;
+  Result := (GCSlotGP >= 0) and (GetSlot(GP, GCSlotGP) = GenReturnFn);
+end;
+
+function IteratorCloseV(It: TValue; Throwing: Boolean): Boolean;
+var Ret, R, Saved, V: TValue; Done: Boolean;
+begin
+  if IsObject(It) and (ObjOf(It)^.OKind = okGenerator) and GenCloseIntact(ObjOf(It)) then
+  begin
+    if Throwing then
+    begin
+      Saved := Pending;
+      Pending := VUndefined;
+      PushRoot(Saved);
+      GenYieldRaw := False;
+      GeneratorResume(It, VUndefined, 2, V, Done);
+      GenYieldRaw := False;
+      Pending := RootAt(TempTop - 1);
+      PopRoots(1);
+      Exit(False);
+    end;
+    GenYieldRaw := False;
+    Result := GeneratorResume(It, VUndefined, 2, V, Done);
+    GenYieldRaw := False;
+    Exit;
+  end;
   if Throwing then
   begin
     Saved := Pending;
     Pending := VUndefined;
     PushRoot(Saved); PushRoot(It);
-    if GetV(It, AtomOf('return'), Ret) and IsCallable(Ret) then CallValue(Ret, RootAt(TempTop - 1), nil, 0, R);
+    if GetV(It, AtomReturn, Ret) and IsCallable(Ret) then CallValue(Ret, RootAt(TempTop - 1), nil, 0, R);
     Pending := RootAt(TempTop - 2);
     PopRoots(2);
     Exit(False);
   end;
   PushRoot(It);
-  if not GetV(It, AtomOf('return'), Ret) then begin PopRoots(1); Exit(False); end;
+  if not GetV(It, AtomReturn, Ret) then begin PopRoots(1); Exit(False); end;
   if IsNullish(Ret) then begin PopRoots(1); Exit(True); end;
   if not CallValue(Ret, RootAt(TempTop - 1), nil, 0, R) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
@@ -8096,7 +8140,7 @@ LReload:
                end;
           else
             begin
-              if not GetV(R[B], AtomOf('return'), VB) then goto LThrow;
+              if not GetV(R[B], AtomReturn, VB) then goto LThrow;
               if IsNullish(VB) then begin Pending := NewRetComp(R[B + 2]); goto LThrow; end;
               if not CallValue(VB, R[B], @V, 1, VA) then goto LThrow;
             end;
@@ -8218,7 +8262,7 @@ LReload:
           Fr^.PC := PC;
           VB := R[(I shr 24) and $FFFF];
           if not IsObject(VB) then begin Inc(PC, SarInt64(Int64(I), 40)); Continue; end;
-          if not GetV(VB, AtomOf('return'), V) then goto LThrow;
+          if not GetV(VB, AtomReturn, V) then goto LThrow;
           if IsNullish(V) then begin Inc(PC, SarInt64(Int64(I), 40)); Continue; end;
           if not CallValue(V, R[(I shr 24) and $FFFF], nil, 0, V) then goto LThrow;
           R[A] := V;
@@ -8261,7 +8305,7 @@ LReload:
                        if not GetV(R[B], AtomOf('throw'), VB) then goto LThrow;
                        if IsNullish(VB) then
                        begin
-                         if not GetV(R[B], AtomOf('return'), VB) then goto LThrow;
+                         if not GetV(R[B], AtomReturn, VB) then goto LThrow;
                          if IsNullish(VB) then begin ThrowTypeError('The iterator does not provide a ''throw'' method'); goto LThrow; end;
                          if not CallValue(VB, R[B], nil, 0, VA) then goto LThrow;
                          R[B + 4] := MkInt(2);
@@ -8274,7 +8318,7 @@ LReload:
                      end;
                 else
                   begin
-                    if not GetV(R[B], AtomOf('return'), VB) then goto LThrow;
+                    if not GetV(R[B], AtomReturn, VB) then goto LThrow;
                     if IsNullish(VB) then
                     begin
                       VA := V;
@@ -8656,6 +8700,7 @@ begin
   AtomName := AtomOf('name');
   AtomMessage := AtomOf('message');
   AtomNext := AtomOf('next');
+  AtomReturn := AtomOf('return');
   AtomDone := AtomOf('done');
   AtomValue := AtomOf('value');
   AtomToString := AtomOf('toString');
@@ -8670,7 +8715,7 @@ begin
   { a realm's intrinsics (the builtins' Init procedures make them) }
   RealmVals([@ObjectProto, @FunctionProto, @ArrayProto, @StringProto, @NumberProto, @BooleanProto, @ErrorProto,
     @IteratorProto, @ArrayIteratorProto, @GeneratorProto, @MapProto, @SetProtoObj, @SymbolProto, @GlobalObj,
-    @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @IterSelfFn, @MapIterNextFn, @SetIterNextFn,
+    @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @IterSelfFn, @GenReturnFn, @MapIterNextFn, @SetIterNextFn,
     @GenFunctionProto, @AsyncFunctionProto, @AsyncGenFunctionProto, @AsyncGeneratorProto, @AsyncIteratorProto,
     @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @StringIterProto, @StringIterNextFn, @FuncHasInstanceFn, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
     @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto]);

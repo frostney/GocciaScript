@@ -543,7 +543,9 @@ begin
   AddRoot(@GenNextFn);
   GenNextFn := G;
   DefineNative(GeneratorProto, 'throw', Gen_Throw, 1);
-  DefineNative(GeneratorProto, 'return', Gen_Return, 1);
+  AddRoot(@GenReturnFn);
+  GenReturnFn := NewNativeFunction(Gen_Return, 'return', 1);
+  DefineOwn(GeneratorProto, AtomReturn, GenReturnFn, pfHidden);
 
   { __proto__ }
   G := NewNativeFunction(Proto_Get, 'get __proto__', 0);

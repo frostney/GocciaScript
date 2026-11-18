@@ -70,4 +70,30 @@ h.prototype.next = function () { return { done: true }; };
 check('dictionary prototype next', [...h(3)].join(''), '');
 check('dictionary prototype next, compiled', forOfJoin(h(3)), '');
 
+// closing: a break (the generator's finally runs), a throw (the throw wins over its return's), return
+// overridden on a generator function's prototype and on %GeneratorPrototype%, destructuring that stops early
+let fin = 0;
+function* f(n) { try { for (let i = 0; i < n; i++) yield i; } finally { fin++; } }
+function breakEarly(it) { for (const v of it) if (v === 1) break; }
+function throwInside(it) { try { for (const v of it) if (v === 1) throw new RangeError('in'); } catch (e) { return e.message; } return 'none'; }
+function firstOnly(it) { const [a] = it; return a; }
+for (let w = 0; w < 3000; w++) { breakEarly(f(3)); throwInside(f(3)); firstOnly(f(3)); }
+fin = 0;
+for (let i = 0; i < 100; i++) { breakEarly(f(3)); firstOnly(f(3)); }
+check('finally on close', fin, 200);
+fin = 0; check('throw wins', throwInside(f(3)), 'in'); check('finally on throw', fin, 1);
+function* thrower() { try { yield 1; yield 2; } finally { throw new TypeError('from finally'); } }
+check('finally throw on break', (() => { try { breakEarly(thrower()); return 'none'; } catch (e) { return e.message; } })(), 'from finally');
+check('finally throw loses to body throw', throwInside(thrower()), 'in');
+let ownRet = 0;
+f.prototype.return = function () { ownRet++; return { done: true }; };
+fin = 0; breakEarly(f(3)); check('own return on prototype', ownRet + ':' + fin, '1:0');
+delete f.prototype.return;
+const realReturn = GenProto.return;
+let wrapped = 0;
+GenProto.return = function (v) { wrapped++; return realReturn.call(this, v); };
+fin = 0; breakEarly(f(3)); firstOnly(f(3)); check('wrapped return', wrapped + ':' + fin, '2:2');
+GenProto.return = realReturn;
+fin = 0; breakEarly(f(3)); check('return restored', fin, 1);
+
 console.log(bad === 0 ? 'ok' : 'FAILED ' + bad);
