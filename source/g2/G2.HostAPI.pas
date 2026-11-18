@@ -35,17 +35,19 @@ implementation
 uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
-  Goccia.AST.Report, Goccia.FileExtensions, TextSemantics;
+  Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
 {$I G2.UrlPrelude.inc}
 {$I G2.WebPrelude.inc}
 {$I G2.ModulesPrelude.inc}
+{$I G2.ConsolePrelude.inc}
 {$I G2.FetchPrelude.inc}
 {$I G2.Json5Prelude.inc}
 {$I G2.DelimitedPrelude.inc}
 {$I G2.JsonlPrelude.inc}
+{$I G2.SemverPrelude.inc}
 {$I G2.AsyncHooksPrelude.inc}
 {$I G2.EventsPrelude.inc}
 {$I G2.TimersPrelude.inc}
@@ -339,6 +341,14 @@ begin
   Result := True;
 end;
 
+{ writeLine(text): text and a line break on standard output }
+function Host_WriteLine(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  WriteLn(UTF8Encode(ArgStr(Args, Argc, 1)));
+  Res := VUndefined;
+  Result := True;
+end;
+
 { hrNow(): a monotonic time in milliseconds (an event's timeStamp) }
 function Host_HrNow(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
@@ -573,6 +583,8 @@ begin
   DefineNative(RootAt(TempTop - 1), 'viewInfo', Host_ViewInfo, 1);
   DefineNative(RootAt(TempTop - 1), 'isBytecode', Host_IsBytecode, 1);
   DefineNative(RootAt(TempTop - 1), 'hrNow', Host_HrNow, 0);
+  DefineNative(RootAt(TempTop - 1), 'writeLine', Host_WriteLine, 1);
+  DefineNative(RootAt(TempTop - 1), 'semver', Host_Semver, 6);
   DefineNative(RootAt(TempTop - 1), 'setClock', Host_SetClock, 2);
   DefineNative(RootAt(TempTop - 1), 'realNow', Host_RealNow, 0);
   DefineNative(RootAt(TempTop - 1), 'asyncGet', Host_AsyncGet, 0);
@@ -613,12 +625,14 @@ begin
   { (G, n, shared), then host.js's (G, n, shared, infoJson, testMode, shadowRealm, configJson), in the order the
     CLIs' runtime extensions install (Goccia.runtimeGlobals lists their names in it) }
   Result := CallPrelude('<goccia:modules>', ModulesSrc, Base, 3, R, Err) and
+    CallPrelude('<goccia:console>', ConsoleSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:url>', UrlSrc, Base, 3, R, Err) and CallPrelude('<goccia:web>', WebSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:events>', EventsSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:fetch>', FetchSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:json5>', Json5Src, Base, 3, R, Err) and
     CallPrelude('<goccia:csv>', DelimitedSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:jsonl>', JsonlSrc, Base, 3, R, Err) and
+    CallPrelude('<goccia:semver>', SemverSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:host>', HostSrc, Base, 7, Goccia, Err);
   if Result then
   begin
