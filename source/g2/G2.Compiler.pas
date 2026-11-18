@@ -82,7 +82,7 @@ threadvar
 implementation
 
 uses
-  TypInfo, G2.VM, G2.Lazy, G2.PreParse;
+  TypInfo, Goccia.Scope.BindingMap, G2.VM, G2.Lazy, G2.PreParse;
 
 type
   { an expression that makes a closure (a function, arrow, method, accessor or class) }
@@ -346,6 +346,9 @@ type
     FS: TFuncState;
     SourceName: UnicodeString;
     DefaultSuperForward: Boolean;   { next CompileFunction is a default derived constructor }
+    { the register (+ 1; 0 none) of the computed key the next anonymous class is named by: named on creation,
+      before its static elements run (NamedEvaluation of a class with a key known only at run time) }
+    PendingClassNameP1: Integer;
     PendingStrict: Integer;         { -1 inherit, 0 sloppy, 1 strict, for the next CompileFunction }
     ObjLiteralMethod: Boolean;   { the next CompileFunction is an object literal's method or accessor (not strict by itself) }
     NoIdentCheck: Boolean;
@@ -443,6 +446,23 @@ type
     procedure CompileUsingList(L: TList<TGocciaASTNode>; Stmts: TObjectList<TGocciaStatement>; Body: Boolean = False);
     procedure CompileUsingDecl(D: TGocciaUsingDeclaration);
     procedure CompileEnum(D: TGocciaEnumDeclaration);
+    procedure EmitIntrinsic(Idx, Base, Argc: Integer);
+    procedure CompileKeyedValue(Init: TGocciaExpression; V, K: Integer);
+    procedure EmitDecoratedFieldValue(D, V: Integer);
+    procedure EmitDecoratedFieldExtra(D: Integer);
+    procedure EvalDecorators(const Decs: TGocciaDecoratorList; const Prefix: UnicodeString; Strict: Boolean);
+    procedure ApplyElementDecorators(Def: TGocciaClassDefinition; I: Integer);
+    procedure CollectMatchNames(P: TGocciaMatchPattern; Names: TStringList);
+    procedure DeclareMatchBindings(P: TGocciaMatchPattern);
+    procedure StoreMatchBinding(const N: UnicodeString; Src: Integer);
+    procedure MatchTest(Subj: Integer; P: TGocciaMatchPattern; var FailL: TJumpList);
+    procedure MatchItems(Items: Integer; Elements: TGocciaMatchPatternList; Rest: TGocciaMatchPattern;
+      AnyRest: Boolean; var FailL: TJumpList);
+    procedure PopMatchScope(var FailL: TJumpList; out J: Integer);
+    procedure CompileIs(E: TGocciaIsExpression; Dest: Integer);
+    procedure CompileMatch(E: TGocciaMatchExpression; Dest: Integer);
+    function HasMatchCondition(E: TGocciaExpression): Boolean;
+    procedure MatchCondition(E: TGocciaExpression; var FailL: TJumpList);
     procedure CompileForOfUsingBody(S: TGocciaForOfStatement; V: Integer);
     procedure AddUsingResource(R: Integer; Async: Boolean);
     procedure BeginUsingRegion(Async: Boolean; out Cap, ExcReg, OuterTry, SavedCap: Integer);
@@ -2910,7 +2930,8 @@ end;
   (AddDisposableResource) }
 { an enum declaration (TC39 proposal-enum, as GocciaScript has it): the members, in order, are set on a scratch
   object while the enum's name and each earlier member are const bindings of the body, so an initializer can use
-  them; then opFinalizeEnum makes the enum from the scratch object, and it initializes the declaration's binding }
+  them; then INTRINSIC_ENUM_FINALIZE makes the enum from the scratch object, and it initializes the declaration's
+  binding }
 procedure TCompiler.CompileEnum(D: TGocciaEnumDeclaration);
 var Save, Obj, Reg, I: Integer;
 begin
@@ -2929,10 +2950,495 @@ begin
     Emit(Ins(opSetProp, Obj, Reg, NewIC(D.Members[I].Name)));
   end;
   PopScope;
-  Emit(Ins(opFinalizeEnum, Obj, 0, AtomConst(D.Name)));
+  Reg := AllocReg;   { Obj + 1: PopScope freed the scope's registers }
+  LoadString(D.Name, Reg);
+  EmitIntrinsic(INTRINSIC_ENUM_FINALIZE, Obj, 2);
   StoreIdentStatic(D.Name, Obj, True);
   MarkInitialized(D.Name);
   FreeTo(Save);
+end;
+
+{ a private name's class-scope binding (its key) }
+function PrivKeyName(const N: string): UnicodeString; inline;
+begin
+  Result := '#' + UnicodeString(N);
+end;
+
+{ ---------------- decorators ---------------- }
+{ TC39 proposal-decorators, as GocciaScript has them: the decorators are evaluated where their element is (a class's
+  own before its heritage) into class-scope locals; once the elements are defined they are applied, each element's
+  last decorator first, through the builtins5 prelude's session (the class-scope local %dec); a field's value then
+  goes through the initializers its decorators returned when it is initialized }
+
+{ in a field initializer (this is register 0): V := the value after element D's initializers (D -1: none) }
+procedure TCompiler.EmitDecoratedFieldValue(D, V: Integer);
+var R: Integer;
+begin
+  if D < 0 then Exit;
+  R := AllocRegs(4);
+  LoadIdent('%dec', R);
+  LoadNumber(D, R + 1);
+  Emit(Ins(opMov, R + 2, 0, 0));
+  Emit(Ins(opMov, R + 3, V, 0));
+  EmitIntrinsic(INTRINSIC_DEC_FIELD, R, 4);
+  Emit(Ins(opMov, V, R, 0));
+  FreeTo(R);
+end;
+
+{ after the field is defined: the initializers element D's decorators added }
+procedure TCompiler.EmitDecoratedFieldExtra(D: Integer);
+var R: Integer;
+begin
+  if D < 0 then Exit;
+  R := AllocRegs(3);
+  LoadIdent('%dec', R);
+  LoadNumber(D, R + 1);
+  Emit(Ins(opMov, R + 2, 0, 0));
+  EmitIntrinsic(INTRINSIC_DEC_FIELD_EXTRA, R, 3);
+  FreeTo(R);
+end;
+
+{ each decorator's value into the class-scope local Prefix + its index; an element's decorators are strict code
+  like the rest of the class body, the class's own are not (the decorators proposal exempts the DecoratorList at
+  the top level of a class) }
+procedure TCompiler.EvalDecorators(const Decs: TGocciaDecoratorList; const Prefix: UnicodeString; Strict: Boolean);
+var J, R: Integer;
+begin
+  for J := 0 to High(Decs) do
+  begin
+    R := DeclareLocal(Prefix + UnicodeString(IntToStr(J)), True);
+    if Strict then ClassHeadExprTo(Decs[J], R) else ExprTo(Decs[J], R);
+  end;
+end;
+
+{ element I's decorators, its last first: a private method or accessor half's replacement goes to its local %m<I> }
+procedure TCompiler.ApplyElementDecorators(Def: TGocciaClassDefinition; I: Integer);
+var E: TGocciaClassElement; J, R, M: Integer; Kind: UnicodeString;
+begin
+  E := Def.FElements[I];
+  case E.Kind of
+    cekMethod: Kind := 'method';
+    cekGetter: Kind := 'getter';
+    cekSetter: Kind := 'setter';
+    cekField: Kind := 'field';
+  else Kind := 'accessor';
+  end;
+  M := -1;
+  if E.IsPrivate and (E.Kind in [cekMethod, cekGetter, cekSetter]) then
+    if not ResolveLocal(FS, '%m' + UnicodeString(IntToStr(I)), M) then M := -1;
+  for J := High(E.Decorators) downto 0 do
+  begin
+    R := AllocRegs(8);
+    LoadIdent('%dec', R);
+    LoadIdent('%d' + UnicodeString(IntToStr(I)) + '_' + UnicodeString(IntToStr(J)), R + 1);
+    LoadNumber(I, R + 2);
+    LoadString(Kind, R + 3);
+    if E.IsPrivate then LoadString('#' + UnicodeString(E.Name), R + 4)
+    else if E.IsComputed then LoadIdent('%k' + UnicodeString(IntToStr(I)), R + 4)
+    else LoadString(UnicodeString(E.Name), R + 4);
+    LoadNumber(Ord(E.IsStatic) or (Ord(E.IsPrivate) shl 1), R + 5);
+    if M >= 0 then Emit(Ins(opMov, R + 6, M, 0)) else Emit(Ins(opLoadUndef, R + 6, 0, 0));
+    if E.IsPrivate then
+    begin
+      if E.Kind = cekAccessor then LoadIdent(PrivKeyName(E.AccessorStorageName), R + 7)
+      else LoadIdent(PrivKeyName(E.Name), R + 7);
+    end
+    else Emit(Ins(opLoadUndef, R + 7, 0, 0));
+    EmitIntrinsic(INTRINSIC_DEC_ELEMENT, R, 8);
+    if M >= 0 then Emit(Ins(opMov, M, R, 0));
+    FreeTo(R);
+  end;
+end;
+
+{ ---------------- pattern matching ---------------- }
+{ TC39 proposal-pattern-matching, as GocciaScript has it (Goccia.Compiler.PatternMatching): a pattern compiles to a
+  test that falls through when the subject matches and jumps to FailL when it does not, moving each binding (which
+  DeclareMatchBindings declared in the clause's scope beforehand) into place as its part of the pattern matches.
+  Value, extractor, key, list and rest tests call the builtins5 prelude's helpers through opIntrinsic. }
+
+{ R[Base] := Intrinsics[Idx](R[Base], ..., R[Base + Argc - 1]) }
+procedure TCompiler.EmitIntrinsic(Idx, Base, Argc: Integer);
+begin
+  Emit(Ins(opIntrinsic, Base, Argc, Idx));
+end;
+
+procedure TCompiler.CollectMatchNames(P: TGocciaMatchPattern; Names: TStringList);
+var I: Integer;
+  procedure Add(const N: string);
+  begin
+    if Names.IndexOf(N) < 0 then Names.Add(N);
+  end;
+begin
+  if P = nil then Exit;
+  if P is TGocciaBindingMatchPattern then Add(TGocciaBindingMatchPattern(P).Name)
+  else if P is TGocciaAsMatchPattern then
+  begin
+    CollectMatchNames(TGocciaAsMatchPattern(P).Pattern, Names);
+    Add(TGocciaAsMatchPattern(P).Name);
+  end
+  else if P is TGocciaArrayMatchPattern then
+  begin
+    for I := 0 to TGocciaArrayMatchPattern(P).Elements.Count - 1 do
+      CollectMatchNames(TGocciaArrayMatchPattern(P).Elements[I], Names);
+    CollectMatchNames(TGocciaArrayMatchPattern(P).RestPattern, Names);
+  end
+  else if P is TGocciaObjectMatchPattern then
+  begin
+    for I := 0 to TGocciaObjectMatchPattern(P).Properties.Count - 1 do
+      CollectMatchNames(TGocciaObjectMatchPattern(P).Properties[I].Pattern, Names);
+    CollectMatchNames(TGocciaObjectMatchPattern(P).RestPattern, Names);
+  end
+  else if P is TGocciaExtractorMatchPattern then
+  begin
+    for I := 0 to TGocciaExtractorMatchPattern(P).Arguments.Count - 1 do
+      CollectMatchNames(TGocciaExtractorMatchPattern(P).Arguments[I], Names);
+    CollectMatchNames(TGocciaExtractorMatchPattern(P).RestPattern, Names);
+  end
+  else if P is TGocciaAndMatchPattern then
+  begin
+    for I := 0 to TGocciaAndMatchPattern(P).Patterns.Count - 1 do
+      CollectMatchNames(TGocciaAndMatchPattern(P).Patterns[I], Names);
+  end
+  else if P is TGocciaOrMatchPattern then
+  begin
+    for I := 0 to TGocciaOrMatchPattern(P).Patterns.Count - 1 do
+      CollectMatchNames(TGocciaOrMatchPattern(P).Patterns[I], Names);
+  end;
+  { a not pattern's bindings are never visible: it matches only when its pattern does not }
+end;
+
+{ the pattern's bindings, undefined until matched, in the innermost scope (a let or const binding as written) }
+procedure TCompiler.DeclareMatchBindings(P: TGocciaMatchPattern);
+var Names, Consts: TStringList; I, R: Integer;
+  procedure Walk(Q: TGocciaMatchPattern);
+  var J: Integer;
+  begin
+    if Q = nil then Exit;
+    if (Q is TGocciaBindingMatchPattern) and (TGocciaBindingMatchPattern(Q).DeclarationType = dtConst) then
+      Consts.Add(TGocciaBindingMatchPattern(Q).Name)
+    else if Q is TGocciaAsMatchPattern then
+    begin
+      if TGocciaAsMatchPattern(Q).DeclarationType = dtConst then Consts.Add(TGocciaAsMatchPattern(Q).Name);
+      Walk(TGocciaAsMatchPattern(Q).Pattern);
+    end
+    else if Q is TGocciaArrayMatchPattern then
+    begin
+      for J := 0 to TGocciaArrayMatchPattern(Q).Elements.Count - 1 do Walk(TGocciaArrayMatchPattern(Q).Elements[J]);
+      Walk(TGocciaArrayMatchPattern(Q).RestPattern);
+    end
+    else if Q is TGocciaObjectMatchPattern then
+    begin
+      for J := 0 to TGocciaObjectMatchPattern(Q).Properties.Count - 1 do
+        Walk(TGocciaObjectMatchPattern(Q).Properties[J].Pattern);
+      Walk(TGocciaObjectMatchPattern(Q).RestPattern);
+    end
+    else if Q is TGocciaExtractorMatchPattern then
+    begin
+      for J := 0 to TGocciaExtractorMatchPattern(Q).Arguments.Count - 1 do
+        Walk(TGocciaExtractorMatchPattern(Q).Arguments[J]);
+      Walk(TGocciaExtractorMatchPattern(Q).RestPattern);
+    end
+    else if Q is TGocciaAndMatchPattern then
+      for J := 0 to TGocciaAndMatchPattern(Q).Patterns.Count - 1 do Walk(TGocciaAndMatchPattern(Q).Patterns[J])
+    else if Q is TGocciaOrMatchPattern then
+      for J := 0 to TGocciaOrMatchPattern(Q).Patterns.Count - 1 do Walk(TGocciaOrMatchPattern(Q).Patterns[J]);
+  end;
+begin
+  Names := TStringList.Create;
+  Names.CaseSensitive := True;
+  Consts := TStringList.Create;
+  Consts.CaseSensitive := True;
+  try
+    CollectMatchNames(P, Names);
+    Walk(P);
+    for I := 0 to Names.Count - 1 do
+    begin
+      if FS.Scopes[FS.ScopeCount - 1].Find(UnicodeString(Names[I])) >= 0 then Continue;
+      R := DeclareLocal(UnicodeString(Names[I]), Consts.IndexOf(Names[I]) >= 0);
+      Emit(Ins(opLoadUndef, R, 0, 0));
+    end;
+  finally
+    Consts.Free;
+    Names.Free;
+  end;
+end;
+
+procedure TCompiler.StoreMatchBinding(const N: UnicodeString; Src: Integer);
+var R: Integer;
+begin
+  if ResolveLocal(FS, N, R) then Emit(Ins(opMov, R, Src, 0))
+  else raise ECompileError.Create('pattern binding ' + string(N) + ' not declared');
+end;
+
+procedure TCompiler.MatchTest(Subj: Integer; P: TGocciaMatchPattern; var FailL: TJumpList);
+var Save, R, K, V, Ex, I, J: Integer; Op: TOp; F, OkL: TJumpList; Names: TStringList; Snap, Regs: array of Integer;
+  Prop: TGocciaObjectMatchProperty; HasRest: Boolean;
+begin
+  Save := FS.FreeReg;
+  if P is TGocciaWildcardMatchPattern then Exit;
+  if P is TGocciaBindingMatchPattern then
+    StoreMatchBinding(UnicodeString(TGocciaBindingMatchPattern(P).Name), Subj)
+  else if P is TGocciaValueMatchPattern then
+  begin
+    R := AllocRegs(2);
+    Emit(Ins(opMov, R, Subj, 0));
+    ExprTo(TGocciaValueMatchPattern(P).Expression, R + 1);
+    EmitIntrinsic(INTRINSIC_MATCH_VALUE, R, 2);
+    AddJump(FailL, EmitJ(opJF, R, 0));
+  end
+  else if P is TGocciaRelationalMatchPattern then
+  begin
+    R := AllocReg;
+    ExprTo(TGocciaRelationalMatchPattern(P).Expression, R);
+    case TGocciaRelationalMatchPattern(P).Operator of
+      gttLess: Op := opJNLt;
+      gttLessEqual: Op := opJNLe;
+      gttGreater: Op := opJNGt;
+      gttGreaterEqual: Op := opJNGe;
+    else Op := opJNSEq;
+    end;
+    AddJump(FailL, EmitJ(Op, Subj, R));
+  end
+  else if P is TGocciaGuardMatchPattern then
+    BranchFalse(TGocciaGuardMatchPattern(P).Condition, FailL)
+  else if P is TGocciaAsMatchPattern then
+  begin
+    MatchTest(Subj, TGocciaAsMatchPattern(P).Pattern, FailL);
+    StoreMatchBinding(UnicodeString(TGocciaAsMatchPattern(P).Name), Subj);
+  end
+  else if P is TGocciaAndMatchPattern then
+  begin
+    for I := 0 to TGocciaAndMatchPattern(P).Patterns.Count - 1 do
+      MatchTest(Subj, TGocciaAndMatchPattern(P).Patterns[I], FailL);
+  end
+  else if P is TGocciaNotMatchPattern then
+  begin
+    SetLength(F, 0);
+    MatchTest(Subj, TGocciaNotMatchPattern(P).Pattern, F);
+    AddJump(FailL, EmitJ(opJmp, 0, 0));
+    PatchListHere(F);
+  end
+  else if P is TGocciaOrMatchPattern then
+  begin
+    { an alternative that fails part-way leaves the bindings as they were before it }
+    Names := TStringList.Create;
+    Names.CaseSensitive := True;
+    try
+      CollectMatchNames(P, Names);
+      SetLength(Snap, 0);
+      SetLength(Regs, 0);
+      for I := 0 to Names.Count - 1 do
+        if ResolveLocal(FS, UnicodeString(Names[I]), K) then
+        begin
+          SetLength(Regs, Length(Regs) + 1);
+          Regs[High(Regs)] := K;
+          SetLength(Snap, Length(Snap) + 1);
+          Snap[High(Snap)] := AllocReg;
+          Emit(Ins(opMov, Snap[High(Snap)], K, 0));
+        end;
+    finally
+      Names.Free;
+    end;
+    SetLength(OkL, 0);
+    with TGocciaOrMatchPattern(P) do
+      for I := 0 to Patterns.Count - 1 do
+        if I < Patterns.Count - 1 then
+        begin
+          SetLength(F, 0);
+          MatchTest(Subj, Patterns[I], F);
+          AddJump(OkL, EmitJ(opJmp, 0, 0));
+          PatchListHere(F);
+          for J := 0 to High(Regs) do Emit(Ins(opMov, Regs[J], Snap[J], 0));
+        end
+        else
+          MatchTest(Subj, Patterns[I], FailL);
+    if TGocciaOrMatchPattern(P).Patterns.Count = 0 then AddJump(FailL, EmitJ(opJmp, 0, 0));
+    PatchListHere(OkL);
+  end
+  else if P is TGocciaObjectMatchPattern then
+  begin
+    HasRest := Assigned(TGocciaObjectMatchPattern(P).RestPattern);
+    Ex := -1;
+    if HasRest then
+    begin
+      Ex := AllocReg;
+      Emit(Ins(opNewArr, Ex, 0, 0));
+    end;
+    for I := 0 to TGocciaObjectMatchPattern(P).Properties.Count - 1 do
+    begin
+      Prop := TGocciaObjectMatchPattern(P).Properties[I];
+      K := AllocReg;
+      V := AllocReg;
+      if Prop.Computed then
+      begin
+        ExprTo(Prop.KeyExpression, K);
+        Emit(Ins(opToPropKey, K, K, 0));
+      end
+      else LoadString(UnicodeString(Prop.Key), K);
+      R := AllocRegs(2);
+      Emit(Ins(opMov, R, Subj, 0));
+      Emit(Ins(opMov, R + 1, K, 0));
+      EmitIntrinsic(INTRINSIC_MATCH_HAS, R, 2);
+      AddJump(FailL, EmitJ(opJF, R, 0));
+      FreeTo(R);
+      Emit(Ins(opGetElem, V, Subj, K));
+      MatchTest(V, Prop.Pattern, FailL);
+      if HasRest then Emit(Ins(opArrPush, Ex, K, 0));
+      FreeTo(K);
+    end;
+    if HasRest then
+    begin
+      R := AllocRegs(2);
+      Emit(Ins(opMov, R, Subj, 0));
+      Emit(Ins(opMov, R + 1, Ex, 0));
+      EmitIntrinsic(INTRINSIC_MATCH_REST, R, 2);
+      MatchTest(R, TGocciaObjectMatchPattern(P).RestPattern, FailL);
+    end;
+  end
+  else if P is TGocciaArrayMatchPattern then
+  begin
+    R := AllocReg;
+    Emit(Ins(opMov, R, Subj, 0));
+    EmitIntrinsic(INTRINSIC_MATCH_LIST, R, 1);
+    AddJump(FailL, EmitJ(opJUndef, R, 0));
+    with TGocciaArrayMatchPattern(P) do MatchItems(R, Elements, RestPattern, HasRestWildcard, FailL);
+  end
+  else if P is TGocciaExtractorMatchPattern then
+  begin
+    R := AllocRegs(2);
+    Emit(Ins(opMov, R, Subj, 0));
+    ExprTo(TGocciaExtractorMatchPattern(P).MatcherExpression, R + 1);
+    EmitIntrinsic(INTRINSIC_MATCH_EXTRACT, R, 2);
+    AddJump(FailL, EmitJ(opJF, R, 0));
+    with TGocciaExtractorMatchPattern(P) do MatchItems(R, Arguments, RestPattern, HasRestWildcard, FailL);
+  end
+  else
+    AddJump(FailL, EmitJ(opJmp, 0, 0));
+  FreeTo(Save);
+end;
+
+{ a list pattern's items against the array Items: its length (exact, or at least the count with a rest), each
+  item, then the rest }
+procedure TCompiler.MatchItems(Items: Integer; Elements: TGocciaMatchPatternList; Rest: TGocciaMatchPattern;
+  AnyRest: Boolean; var FailL: TJumpList);
+var Save, L, N, V, R, I: Integer;
+begin
+  Save := FS.FreeReg;
+  L := AllocReg;
+  N := AllocReg;
+  V := AllocReg;
+  Emit(Ins(opGetLength, L, Items, NewIC('length')));
+  LoadNumber(Elements.Count, N);
+  if Assigned(Rest) or AnyRest then AddJump(FailL, EmitJ(opJNGe, L, N))
+  else AddJump(FailL, EmitJ(opJNSEq, L, N));
+  for I := 0 to Elements.Count - 1 do
+  begin
+    if Elements[I] = nil then Continue;
+    LoadNumber(I, N);
+    Emit(Ins(opGetElem, V, Items, N));
+    MatchTest(V, Elements[I], FailL);
+  end;
+  if Assigned(Rest) then
+  begin
+    R := AllocRegs(2);
+    Emit(Ins(opMov, R, Items, 0));
+    LoadNumber(Elements.Count, R + 1);
+    EmitIntrinsic(INTRINSIC_MATCH_SLICE, R, 2);
+    MatchTest(R, Rest, FailL);
+  end;
+  FreeTo(Save);
+end;
+
+{ leaves a clause's scope: on the matched path as PopScope does, and when FailL is not empty J is the jump past
+  the failure path, which starts here (closing the scope's captured bindings too); J is -1 otherwise }
+procedure TCompiler.PopMatchScope(var FailL: TJumpList; out J: Integer);
+var Base: Integer; Cap: Boolean;
+begin
+  Base := FS.Scopes[FS.ScopeCount - 1].BaseReg;
+  Cap := FS.Scopes[FS.ScopeCount - 1].Captured;
+  PopScope;
+  J := -1;
+  if Length(FailL) = 0 then Exit;
+  J := EmitJ(opJmp, 0, 0);
+  PatchListHere(FailL);
+  SetLength(FailL, 0);
+  if Cap then Emit(Ins(opClose, Base, 0, 0));
+end;
+
+{ subject is pattern: whether it matches; its bindings are scoped to the expression }
+procedure TCompiler.CompileIs(E: TGocciaIsExpression; Dest: Integer);
+var Save, Subj, J: Integer; FailL: TJumpList;
+begin
+  Save := FS.FreeReg;
+  Subj := AllocReg;
+  ExprTo(E.Subject, Subj);
+  PushScope(False);
+  DeclareMatchBindings(E.Pattern);
+  SetLength(FailL, 0);
+  MatchTest(Subj, E.Pattern, FailL);
+  Emit(Ins(opLoadTrue, Dest, 0, 0));
+  PopMatchScope(FailL, J);
+  if J >= 0 then
+  begin
+    Emit(Ins(opLoadFalse, Dest, 0, 0));
+    PatchHere(J);
+  end;
+  FreeTo(Save);
+end;
+
+{ a match expression (when clauses, then an optional default): the first clause whose pattern matches gives the
+  value, with that clause's bindings in scope; a TypeError when none does and there is no default }
+procedure TCompiler.CompileMatch(E: TGocciaMatchExpression; Dest: Integer);
+var Save, Subj, I, J: Integer; FailL, Ends: TJumpList;
+begin
+  Save := FS.FreeReg;
+  Subj := AllocReg;
+  ExprTo(E.Subject, Subj);
+  SetLength(Ends, 0);
+  for I := 0 to E.Clauses.Count - 1 do
+  begin
+    PushScope(False);
+    DeclareMatchBindings(E.Clauses[I].Pattern);
+    SetLength(FailL, 0);
+    MatchTest(Subj, E.Clauses[I].Pattern, FailL);
+    ExprTo(E.Clauses[I].Expression, Dest);
+    PopMatchScope(FailL, J);
+    if J < 0 then J := EmitJ(opJmp, 0, 0);
+    AddJump(Ends, J);
+  end;
+  if Assigned(E.DefaultExpression) then ExprTo(E.DefaultExpression, Dest)
+  else EmitIntrinsic(INTRINSIC_MATCH_FAIL, Subj, 0);
+  PatchListHere(Ends);
+  FreeTo(Save);
+end;
+
+{ an if condition whose && operands include subject is pattern: its bindings are in scope for the consequent }
+function TCompiler.HasMatchCondition(E: TGocciaExpression): Boolean;
+begin
+  if E is TGocciaIsExpression then Exit(True);
+  if (E is TGocciaBinaryExpression) and (TGocciaBinaryExpression(E).Operator = gttAnd) then
+    Exit(HasMatchCondition(TGocciaBinaryExpression(E).Left) or HasMatchCondition(TGocciaBinaryExpression(E).Right));
+  Result := False;
+end;
+
+{ such a condition, in the scope its bindings join: falls through when it holds, jumps to FailL when not }
+procedure TCompiler.MatchCondition(E: TGocciaExpression; var FailL: TJumpList);
+var Subj: Integer;
+begin
+  if (E is TGocciaBinaryExpression) and (TGocciaBinaryExpression(E).Operator = gttAnd) then
+  begin
+    MatchCondition(TGocciaBinaryExpression(E).Left, FailL);
+    MatchCondition(TGocciaBinaryExpression(E).Right, FailL);
+  end
+  else if E is TGocciaIsExpression then
+  begin
+    Subj := AllocReg;
+    ExprTo(TGocciaIsExpression(E).Subject, Subj);
+    DeclareMatchBindings(TGocciaIsExpression(E).Pattern);
+    MatchTest(Subj, TGocciaIsExpression(E).Pattern, FailL);
+  end
+  else
+    BranchFalse(E, FailL);
 end;
 
 procedure TCompiler.CompileUsingDecl(D: TGocciaUsingDeclaration);
@@ -3330,6 +3836,21 @@ begin
   SetLength(FalseL, 0);
   CheckStatementBody(S.Consequent, True, FS.Tpl^.IsStrict);
   CheckStatementBody(S.Alternate, True, FS.Tpl^.IsStrict);
+  if HasMatchCondition(S.Condition) then
+  begin
+    { the condition's pattern bindings are in scope for the consequent only }
+    PushScope(False);
+    MatchCondition(S.Condition, FalseL);
+    ClauseStmt(S.Consequent);
+    PopMatchScope(FalseL, J);
+    if Assigned(S.Alternate) then
+    begin
+      if J < 0 then J := EmitJ(opJmp, 0, 0);
+      ClauseStmt(S.Alternate);
+    end;
+    if J >= 0 then PatchHere(J);
+    Exit;
+  end;
   BranchFalse(S.Condition, FalseL);
   ClauseStmt(S.Consequent);
   if Assigned(S.Alternate) then
@@ -3482,7 +4003,7 @@ begin
 end;
 
 procedure TCompiler.CompileForOf(S: TGocciaForOfStatement);
-var It, V, Top, Exit_, R, Exc, H, JDone, JBreak: Integer;
+var It, V, Top, Exit_, R, Exc, H, JDone, JBreak: Integer; MissL: TJumpList;
 begin
   CheckStatementBody(S.Body, False, FS.Tpl^.IsStrict);
   if S is TGocciaForAwaitOfStatement then begin CompileForAwaitOf(S); Exit; end;
@@ -3519,8 +4040,16 @@ begin
       BindPattern(S.BindingPattern, V, not S.IsVar, S.IsConst)
     else if Assigned(S.AssignmentTarget) then
       BindPattern(S.AssignmentTarget, V, False, False);
+    { for (const x is pattern of ...): an iteration whose value does not match runs no body }
+    SetLength(MissL, 0);
+    if Assigned(S.MatchPattern) then
+    begin
+      DeclareMatchBindings(S.MatchPattern);
+      MatchTest(V, S.MatchPattern, MissL);
+    end;
     BeginLoop(True);
     Stmt(S.Body);
+    PatchListHere(MissL);
   end;
   PopScope;
   PatchTo(EmitJ(opJmp, 0, 0), Top);
@@ -3560,7 +4089,7 @@ end;
   next() or a rejected await leaves nothing to close. A break closes the iterator (return() awaited); an
   exception from the body closes it quietly and is rethrown. }
 procedure TCompiler.CompileForAwaitOf(S: TGocciaForOfStatement);
-var It, Sv, V, Top, Exit_, R, Exc, Exc2, H, H2, JDone, JBreak, JQ: Integer;
+var It, Sv, V, Top, Exit_, R, Exc, Exc2, H, H2, JDone, JBreak, JQ: Integer; MissL: TJumpList;
 begin
   PushScope;
   It := AllocReg;
@@ -3602,8 +4131,16 @@ begin
       BindPattern(S.BindingPattern, V, not S.IsVar, S.IsConst)
     else if Assigned(S.AssignmentTarget) then
       BindPattern(S.AssignmentTarget, V, False, False);
+    { for (const x is pattern of ...): an iteration whose value does not match runs no body }
+    SetLength(MissL, 0);
+    if Assigned(S.MatchPattern) then
+    begin
+      DeclareMatchBindings(S.MatchPattern);
+      MatchTest(V, S.MatchPattern, MissL);
+    end;
     BeginLoop(True);
     Stmt(S.Body);
+    PatchListHere(MissL);
   end;
   PopScope;
   PatchTo(EmitJ(opJmp, 0, 0), Top);
@@ -3729,7 +4266,7 @@ begin
 end;
 
 procedure TCompiler.CompileTry(S: TGocciaTryStatement);
-var Outer, Inner, ExcReg, JEnd, JEnd2, R: Integer; HasFinally: Boolean;
+var Outer, Inner, ExcReg, JEnd, JEnd2, R, J: Integer; HasFinally: Boolean; MissL: TJumpList;
 begin
   HasFinally := Assigned(S.FinallyBlock);
   ExcReg := AllocReg;   { kept for the whole statement }
@@ -3771,8 +4308,22 @@ begin
     end
     else if Assigned(S.CatchBindingPattern) then
       BindPattern(S.CatchBindingPattern, ExcReg, True, False);
+    { catch (e is pattern): an exception that does not match is thrown on (after the finally block) }
+    SetLength(MissL, 0);
+    if Assigned(S.CatchPattern) then
+    begin
+      DeclareMatchBindings(S.CatchPattern);
+      MatchTest(ExcReg, S.CatchPattern, MissL);
+    end;
     HoistBlock(TList<TGocciaASTNode>(S.CatchBlock.Nodes));
     StmtList(S.CatchBlock.Nodes);
+    if Length(MissL) > 0 then
+    begin
+      J := EmitJ(opJmp, 0, 0);
+      PatchListHere(MissL);
+      Emit(Ins(opThrow, ExcReg, 0, 0));
+      PatchHere(J);
+    end;
     PopScope;
     PatchHere(JEnd);
   end
@@ -3851,9 +4402,52 @@ begin
   Result := False;
 end;
 
-function PrivKeyName(const N: string): UnicodeString; inline;
+{ the name an auto-accessor's initializer gives an anonymous function or class: the accessor's own ('' for a
+  computed key, whose function opSetFnName names afterwards) }
+function AccessorValueName(const E: TGocciaClassElement): UnicodeString;
 begin
-  Result := '#' + UnicodeString(N);
+  if E.IsComputed then Result := ''
+  else if E.IsPrivate then Result := PrivKeyName(E.Name)
+  else Result := UnicodeString(E.Name);
+end;
+
+{ a class definition with a decorator on it or on one of its elements (TC39 proposal-decorators) }
+function ClassIsDecorated(Def: TGocciaClassDefinition): Boolean;
+var I: Integer;
+begin
+  Result := Length(Def.FDecorators) > 0;
+  if not Result then
+    for I := 0 to High(Def.FElements) do
+      if Length(Def.FElements[I].Decorators) > 0 then Exit(True);
+end;
+
+{ the element whose decorators a static field's (or auto-accessor's) initial value goes through, -1 for none }
+function DecoratedElement(Def: TGocciaClassDefinition; ElementIndex: Integer): Integer;
+begin
+  if (ElementIndex >= 0) and (ElementIndex <= High(Def.FElements)) and
+     (Length(Def.FElements[ElementIndex].Decorators) > 0) then Result := ElementIndex
+  else Result := -1;
+end;
+
+{ the same for instance field-order entry I: an entry without its element's index is the instance field of its name
+  (and privacy) that comes as many times before in the elements as the name comes before in the field order }
+function DecoratedFieldEntry(Def: TGocciaClassDefinition; I: Integer): Integer;
+var J, N: Integer; F: TGocciaFieldOrderEntry;
+begin
+  F := Def.FFieldOrder[I];
+  if F.ElementIndex >= 0 then Exit(DecoratedElement(Def, F.ElementIndex));
+  N := 0;
+  for J := 0 to I - 1 do
+    if (Def.FFieldOrder[J].ElementIndex < 0) and (Def.FFieldOrder[J].Name = F.Name) and
+       (Def.FFieldOrder[J].IsPrivate = F.IsPrivate) then Inc(N);
+  for J := 0 to High(Def.FElements) do
+    if (Def.FElements[J].Kind = cekField) and not Def.FElements[J].IsStatic and not Def.FElements[J].IsComputed and
+       (Def.FElements[J].IsPrivate = F.IsPrivate) and (Def.FElements[J].Name = F.Name) then
+    begin
+      if N = 0 then Exit(DecoratedElement(Def, J));
+      Dec(N);
+    end;
+  Result := -1;
 end;
 
 function ClassHasInstanceInit(Def: TGocciaClassDefinition): Boolean;
@@ -3862,8 +4456,10 @@ begin
   Result := Length(Def.FFieldOrder) > 0;
   if not Result then
     for I := 0 to High(Def.FElements) do
-      if Def.FElements[I].IsPrivate and not Def.FElements[I].IsStatic and
-         (Def.FElements[I].Kind in [cekMethod, cekGetter, cekSetter]) then Exit(True);
+      if (Def.FElements[I].IsPrivate and not Def.FElements[I].IsStatic and
+          (Def.FElements[I].Kind in [cekMethod, cekGetter, cekSetter])) or
+         { a decorated instance method's added initializers run on each instance }
+         (not Def.FElements[I].IsStatic and (Length(Def.FElements[I].Decorators) > 0)) then Exit(True);
 end;
 
 function ClassHasStaticInit(Def: TGocciaClassDefinition): Boolean;
@@ -4026,6 +4622,19 @@ begin
   if InDerivedCtor then Emit(Ins(opCheckThis, Dest, 0, 0));
 end;
 
+{ a value whose anonymous function or class definition is named by the computed key in register K }
+procedure TCompiler.CompileKeyedValue(Init: TGocciaExpression; V, K: Integer);
+begin
+  if (Init is TGocciaClassExpression) and (TGocciaClassExpression(Init).ClassDefinition.Name = '') then
+  begin
+    PendingClassNameP1 := K + 1;
+    ExprTo(Init, V);
+    Exit;
+  end;
+  CompileFieldValue(Init, V, '');
+  if IsAnonymousFunctionDefinition(Init) then Emit(Ins(opSetFnName, V, K, 0));
+end;
+
 procedure TCompiler.CompileFieldValue(V: TGocciaExpression; Dest: Integer; const Name: UnicodeString);
 begin
   if V = nil then Emit(Ins(opLoadUndef, Dest, 0, 0))
@@ -4078,36 +4687,61 @@ end;
 
 { the body of the instance (Static False) or static initializer; this (register 0) is the target }
 procedure TCompiler.EmitClassInit(Def: TGocciaClassDefinition; Static: Boolean);
-var I, V, K, C: Integer; F: TGocciaFieldOrderEntry; E: TGocciaClassElement; T: PFuncTemplate;
+var I, V, K, C, D: Integer; F: TGocciaFieldOrderEntry; E: TGocciaClassElement; T: PFuncTemplate;
   NoParams: TGocciaParameterArray;
 begin
   SetLength(NoParams, 0);
   if not Static then
   begin
     EmitPrivateMethods(Def, 0, False);
+    if ClassIsDecorated(Def) then
+    begin
+      C := AllocRegs(2);
+      LoadIdent('%dec', C);
+      Emit(Ins(opMov, C + 1, 0, 0));
+      EmitIntrinsic(INTRINSIC_DEC_INSTANCE, C, 2);
+      FreeTo(C);
+    end;
     for I := 0 to High(Def.FFieldOrder) do
     begin
       F := Def.FFieldOrder[I];
+      D := DecoratedFieldEntry(Def, I);
       V := AllocReg;
       K := AllocReg;
-      if F.IsPrivate then
+      if F.IsAutoAccessorStorage and (F.ElementIndex >= 0) then
+      begin
+        { an auto-accessor's storage: its value is named after the accessor }
+        if Def.FElements[F.ElementIndex].IsComputed then
+        begin
+          LoadIdent('%k' + UnicodeString(IntToStr(F.ElementIndex)), K);
+          CompileKeyedValue(F.FieldInitializer, V, K);
+        end
+        else CompileFieldValue(F.FieldInitializer, V, AccessorValueName(Def.FElements[F.ElementIndex]));
+        EmitDecoratedFieldValue(D, V);
+        LoadIdent(PrivKeyName(F.Name), K);
+        Emit(Ins(opDefPrivField, 0, V, K));
+      end
+      else if F.IsPrivate then
       begin
         CompileFieldValue(F.FieldInitializer, V, PrivKeyName(F.Name));
+        EmitDecoratedFieldValue(D, V);
         LoadIdent(PrivKeyName(F.Name), K);
         Emit(Ins(opDefPrivField, 0, V, K));
       end
       else if F.IsComputed then
       begin
-        CompileFieldValue(F.FieldInitializer, V, '');
         LoadIdent('%k' + IntToStr(F.ElementIndex), K);
-        if IsAnonymousFunctionDefinition(F.FieldInitializer) then Emit(Ins(opSetFnName, V, K, 0));
+        CompileKeyedValue(F.FieldInitializer, V, K);
+        EmitDecoratedFieldValue(D, V);
         Emit(Ins(opDefFieldC, 0, V, K));
       end
       else
       begin
         CompileFieldValue(F.FieldInitializer, V, UnicodeString(F.Name));
+        EmitDecoratedFieldValue(D, V);
         Emit(Ins(opDefField, 0, V, NewIC(F.Name)));
       end;
+      EmitDecoratedFieldExtra(D);
       FreeTo(V);
     end;
     Exit;
@@ -4119,36 +4753,48 @@ begin
     case E.Kind of
       cekField:
         begin
+          D := DecoratedElement(Def, I);
           V := AllocReg;
           K := AllocReg;
           if E.IsPrivate then
           begin
             CompileFieldValue(E.FieldInitializer, V, PrivKeyName(E.Name));
+            EmitDecoratedFieldValue(D, V);
             LoadIdent(PrivKeyName(E.Name), K);
             Emit(Ins(opDefPrivField, 0, V, K));
           end
           else if E.IsComputed then
           begin
-            CompileFieldValue(E.FieldInitializer, V, '');
             LoadIdent('%k' + IntToStr(I), K);
-            if IsAnonymousFunctionDefinition(E.FieldInitializer) then Emit(Ins(opSetFnName, V, K, 0));
+            CompileKeyedValue(E.FieldInitializer, V, K);
+            EmitDecoratedFieldValue(D, V);
             Emit(Ins(opDefFieldC, 0, V, K));
           end
           else
           begin
             CompileFieldValue(E.FieldInitializer, V, UnicodeString(E.Name));
+            EmitDecoratedFieldValue(D, V);
             Emit(Ins(opDefField, 0, V, NewIC(E.Name)));
           end;
+          EmitDecoratedFieldExtra(D);
           FreeTo(V);
         end;
       cekAccessor:
         begin
           { a static auto-accessor's storage }
+          D := DecoratedElement(Def, I);
           V := AllocReg;
           K := AllocReg;
-          CompileFieldValue(E.FieldInitializer, V, '');
+          if E.IsComputed then
+          begin
+            LoadIdent('%k' + UnicodeString(IntToStr(I)), K);
+            CompileKeyedValue(E.FieldInitializer, V, K);
+          end
+          else CompileFieldValue(E.FieldInitializer, V, AccessorValueName(E));
+          EmitDecoratedFieldValue(D, V);
           LoadIdent(PrivKeyName(E.AccessorStorageName), K);
           Emit(Ins(opDefPrivField, 0, V, K));
+          EmitDecoratedFieldExtra(D);
           FreeTo(V);
         end;
       cekStaticBlock:
@@ -4242,7 +4888,8 @@ end;
 procedure TCompiler.CompileClass(Def: TGocciaClassDefinition; Dest: Integer; const NameHint: UnicodeString);
 var Base, Ctor, Proto, Parent, Tmp, I, R, KeyReg, Target: Integer; CtorMethod: TGocciaClassMethod; T: PFuncTemplate;
   Derived: Boolean; NoParams: TGocciaParameterArray; Self_: Integer; E: TGocciaClassElement;
-  PrivNames: TStringList; Name, CName: UnicodeString; CtorT: PFuncTemplate;
+  PrivNames: TStringList; Name, CName: UnicodeString; CtorT: PFuncTemplate; Decorated: Boolean; DecReg, IterBase: Integer;
+  NameRegP1: Integer;
   procedure AddPriv(const N: string);
   begin
     if (N <> '') and (PrivNames.IndexOf(N) < 0) then PrivNames.Add(N);
@@ -4253,6 +4900,8 @@ begin
      (Def.Name = 'interface') or (Def.Name = 'package') or (Def.Name = 'private') or (Def.Name = 'protected') or
      (Def.Name = 'public') then
     raise EEarlySyntaxError.Create('Unexpected strict mode reserved word ''' + Def.Name + '''');
+  NameRegP1 := PendingClassNameP1;
+  PendingClassNameP1 := 0;
   Base := FS.FreeReg;
   PushScope;
   { 15.7.14 step 4: the class scope's binding of its name is uninitialized until the elements are defined (its
@@ -4270,6 +4919,9 @@ begin
   Ctor := AllocReg;
   Proto := AllocReg;
   Parent := AllocReg;
+  { the class's decorators are evaluated before its heritage }
+  Decorated := ClassIsDecorated(Def);
+  if Length(Def.FDecorators) > 0 then EvalDecorators(Def.FDecorators, '%cd', False);
   { the heritage sees the enclosing private names, not this class's }
   Derived := Assigned(Def.SuperClassExpression) or (Def.SuperClass <> '');
   if Derived then
@@ -4302,6 +4954,12 @@ begin
   finally
     PrivNames.Free;
   end;
+  if Decorated then
+  begin
+    DecReg := DeclareLocal('%dec', False);
+    Emit(Ins(opLoadUndef, DecReg, 0, 0));
+  end
+  else DecReg := -1;
   { the constructor }
   CtorMethod := nil;
   if Def.Methods.TryGetValue('constructor', CtorMethod) then ;
@@ -4329,12 +4987,16 @@ begin
   EmitClosure(Ctor, T);
   if Derived then Emit(Ins(opClassSetup, Ctor, Parent, 1))
   else Emit(Ins(opClassSetup, Ctor, Parent, 0));
+  if NameRegP1 > 0 then Emit(Ins(opSetFnName, Ctor, NameRegP1 - 1, 0));
   Emit(Ins(opGetProp, Proto, Ctor, NewIC('prototype')));
   { the elements, in source order: methods and accessors are defined, computed keys evaluated }
   for I := 0 to High(Def.FElements) do
   begin
     E := Def.FElements[I];
     if E.IsStatic then Target := Ctor else Target := Proto;
+    { an element's decorators are evaluated before its key }
+    if Length(E.Decorators) > 0 then EvalDecorators(E.Decorators, '%d' + UnicodeString(IntToStr(I)) + '_', True);
+    IterBase := FS.FreeReg;
     case E.Kind of
       cekMethod, cekGetter, cekSetter, cekAccessor:
         begin
@@ -4370,11 +5032,15 @@ begin
           Name := UnicodeString(E.Name);
           if E.IsComputed then
           begin
-            KeyReg := AllocReg;
+            { a decorated element's key is kept for its decorators' context }
+            if (Length(E.Decorators) > 0) or (E.Kind = cekAccessor) then
+              KeyReg := DeclareLocal('%k' + UnicodeString(IntToStr(I)), True)
+            else KeyReg := AllocReg;
             ClassHeadExprTo(E.ComputedKeyExpression, KeyReg);
             Emit(Ins(opToPropKey, KeyReg, KeyReg, 0));
             Name := '';
           end;
+          IterBase := FS.FreeReg;
           Tmp := AllocReg;
           if E.Kind = cekMethod then
           begin
@@ -4394,8 +5060,10 @@ begin
             T^.SourceRange := E.GetterNode.SourceRange;
             EmitClosure(Tmp, T);
             if KeyReg >= 0 then Emit(Ins(opSetFnName, Tmp, KeyReg, 1));
-            if KeyReg >= 0 then Emit(Ins(opDefGetterC, Target, Tmp, KeyReg))
-            else Emit(Ins(opDefGetter, Target, Tmp, AtomConst(Name)));
+            { GocciaScript's auto-accessor is an enumerable property }
+            if E.Kind = cekAccessor then R := Tmp or $8000 else R := Tmp;
+            if KeyReg >= 0 then Emit(Ins(opDefGetterC, Target, R, KeyReg))
+            else Emit(Ins(opDefGetter, Target, R, AtomConst(Name)));
           end;
           if E.Kind in [cekSetter, cekAccessor] then
           begin
@@ -4409,7 +5077,8 @@ begin
             if KeyReg >= 0 then Emit(Ins(opDefSetterC, Target, Tmp, KeyReg))
             else Emit(Ins(opDefSetter, Target, Tmp, AtomConst(Name)));
           end;
-          if KeyReg >= 0 then FreeTo(KeyReg) else FreeTo(Tmp);
+          if (KeyReg >= 0) and (Length(E.Decorators) = 0) and (E.Kind <> cekAccessor) then FreeTo(KeyReg)
+          else FreeTo(IterBase);
         end;
       cekField:
         if E.IsComputed then
@@ -4420,6 +5089,23 @@ begin
           Emit(Ins(opToPropKey, R, R, 0));
         end;
     end;
+  end;
+  { the elements' decorators, once the elements are defined; then the initializers static method decorators added }
+  if Decorated then
+  begin
+    R := AllocRegs(3);
+    Emit(Ins(opMov, R, Ctor, 0));
+    if Derived then Emit(Ins(opMov, R + 1, Parent, 0)) else Emit(Ins(opLoadUndef, R + 1, 0, 0));
+    if NameRegP1 > 0 then Emit(Ins(opMov, R + 2, NameRegP1 - 1, 0)) else LoadString(CName, R + 2);
+    EmitIntrinsic(INTRINSIC_DEC_BEGIN, R, 3);
+    Emit(Ins(opMov, DecReg, R, 0));
+    FreeTo(R);
+    for I := 0 to High(Def.FElements) do
+      if Length(Def.FElements[I].Decorators) > 0 then ApplyElementDecorators(Def, I);
+    R := AllocReg;
+    Emit(Ins(opMov, R, DecReg, 0));
+    EmitIntrinsic(INTRINSIC_DEC_STATIC, R, 1);
+    FreeTo(R);
   end;
   { the class binding is initialized once the elements are defined }
   if Self_ >= 0 then Emit(Ins(opMov, Self_, Ctor, 0));
@@ -4450,6 +5136,27 @@ begin
     Emit(Ins(opMov, Tmp + 1, Ctor, 0));
     Emit(Ins(opCall, Tmp, 0, 0));
     FreeTo(Tmp);
+  end;
+  { then the class's decorators, its last first: the class they leave is the class binding's value too, and the
+    initializers they added run }
+  if Decorated then
+  begin
+    for I := High(Def.FDecorators) downto 0 do
+    begin
+      R := AllocRegs(2);
+      Emit(Ins(opMov, R, DecReg, 0));
+      LoadIdent('%cd' + UnicodeString(IntToStr(I)), R + 1);
+      EmitIntrinsic(INTRINSIC_DEC_CLASS, R, 2);
+      FreeTo(R);
+    end;
+    R := AllocReg;
+    Emit(Ins(opMov, R, DecReg, 0));
+    EmitIntrinsic(INTRINSIC_DEC_FINISH, R, 1);
+    Emit(Ins(opMov, Ctor, R, 0));
+    if Self_ >= 0 then Emit(Ins(opMov, Self_, Ctor, 0));
+    Emit(Ins(opMov, R, DecReg, 0));
+    EmitIntrinsic(INTRINSIC_DEC_CLASS_INITS, R, 1);
+    FreeTo(R);
   end;
   if Dest <> Ctor then Emit(Ins(opMov, Dest, Ctor, 0));
   { leave the class scope; Dest (below Base, or Ctor's own register when Dest = Ctor is impossible) keeps the class }
@@ -5256,11 +5963,14 @@ begin
           begin
             ExprTo(Pair.Key, K);
             Emit(Ins(opToPropKey, K, K, 0));
-            ExprTo(Pair.Value, V);
-            if (Pair.Value is TGocciaObjectMethodDefinition) and LastChildUsesHome then Emit(Ins(opSetHome, V, Obj, 0));
             { 13.2.5.5: an anonymous function definition takes the key as its name }
-            if IsAnonymousFunctionDefinition(Pair.Value) or (Pair.Value is TGocciaObjectMethodDefinition) then
+            if Pair.Value is TGocciaObjectMethodDefinition then
+            begin
+              ExprTo(Pair.Value, V);
+              if LastChildUsesHome then Emit(Ins(opSetHome, V, Obj, 0));
               Emit(Ins(opSetFnName, V, K, 0));
+            end
+            else CompileKeyedValue(Pair.Value, V, K);
             Emit(Ins(opDefPropC, Obj, K, V));
           end;
         end;
@@ -6049,6 +6759,8 @@ begin
     { super outside a property access or call (super.#x included): 15.7.1 / 13.3.7 early errors }
     else if E is TGocciaSuperExpression then
       raise EEarlySyntaxError.Create('''super'' keyword unexpected here')
+    else if E is TGocciaIsExpression then CompileIs(TGocciaIsExpression(E), Dest)
+    else if E is TGocciaMatchExpression then CompileMatch(TGocciaMatchExpression(E), Dest)
     else
     RaiseUnsupported('expression', E);
   end;

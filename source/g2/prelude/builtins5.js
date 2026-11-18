@@ -1,4 +1,4 @@
-(function (G, markIntrinsic) {
+(function (G, markIntrinsic, privGet, privSet, privHas) {
   "use strict";
   // Array.fromAsync, Object.groupBy / Map.groupBy, Map / WeakMap getOrInsert and getOrInsertComputed, by the spec's
   // steps; the intrinsics used are captured here, so later changes to the globals are not observed.
@@ -965,7 +965,7 @@
   def(Math, "sumPrecise", mathStatics.sumPrecise);
 
   // ---------------- enum declarations (TC39 proposal-enum, as GocciaScript has them) ----------------
-  // opFinalizeEnum: the enum made from the scratch object the declaration's members were set on, in order: a
+  // opIntrinsic INTRINSIC_ENUM_FINALIZE: the enum made from the scratch object the declaration's members were set on, in order: a
   // non-extensible object with a null prototype, each member enumerable but neither writable nor configurable and
   // a Number, String or Symbol, Symbol.iterator yielding [name, value] entries and Symbol.toStringTag the name
   var ownKeys = Reflect.ownKeys, preventExtensions = Object.preventExtensions, ArrayValues = Array.prototype.values;
@@ -987,5 +987,217 @@
     preventExtensions(e);
     return e;
   }
-  return { enumFinalize: enumFinalize };
+
+  // ---------------- pattern matching (TC39 proposal-pattern-matching, as GocciaScript has it) ----------------
+  // the compiler lowers is / match patterns to control flow and these helpers (opIntrinsic, INTRINSIC_MATCH_*)
+  var SymCustomMatcher = Symbol("Symbol.customMatcher");
+  defineProperty(Symbol, "customMatcher", { value: SymCustomMatcher, writable: false, enumerable: false, configurable: false });
+  var fnToString = Function.prototype.toString, ArraySlice = Array.prototype.slice;
+  var getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor, ObjectCtor = Object;
+  // a matcher's Symbol.customMatcher method, undefined when it has none
+  function customMatcherOf(m) {
+    if (!isObject(m)) return undefined;
+    var f = m[SymCustomMatcher];
+    if (f === undefined || f === null) return undefined;
+    if (!isCallable(f)) throw new TypeErr("Symbol.customMatcher must be callable");
+    return f;
+  }
+  // a class (or a built-in constructor) matches its instances; a plain function only itself
+  function isClassLike(f) {
+    if (!isCallable(f) || !isConstructor(f)) return false;
+    var src;
+    try { src = apply(fnToString, f, []); } catch (e) { return false; }
+    return src.slice(0, 5) === "class" || src.slice(-15) === "[native code] }";
+  }
+  // the built-in constructors whose patterns test a value's type: 0 when m is none of them
+  function typeMatch(m, v) {
+    if (m === ObjectCtor) return isObject(v) ? 1 : 2;
+    if (m === Array) return isArray(v) ? 1 : 2;
+    if (m === String) return typeof v === "string" ? 1 : 2;
+    if (m === Number) return typeof v === "number" ? 1 : 2;
+    if (m === Boolean) return typeof v === "boolean" ? 1 : 2;
+    if (m === Function) return isCallable(v) ? 1 : 2;
+    if (m === BigInt) return typeof v === "bigint" ? 1 : 2;
+    if (m === Symbol) return typeof v === "symbol" ? 1 : 2;
+    return 0;
+  }
+  function matchValue(subject, m) {
+    var f = customMatcherOf(m);
+    if (f !== undefined) return !!apply(f, m, [subject, { matchType: "boolean" }]);
+    var t = typeMatch(m, subject);
+    if (t !== 0) return t === 1;
+    if (isClassLike(m)) return subject instanceof m;
+    return subject === m ? (subject !== 0 || 1 / subject === 1 / m) : (subject !== subject && m !== m);
+  }
+  function matchHas(subject, key) {
+    if (subject === undefined || subject === null) return false;
+    return key in ObjectCtor(subject);
+  }
+  // an iterable's values as an array; undefined when the value is not iterable
+  function matchList(v) {
+    if (v === undefined || v === null) return undefined;
+    var m = ObjectCtor(v)[SymIterator];
+    if (m === undefined || m === null) return undefined;
+    if (!isCallable(m)) throw new TypeErr("Object [Symbol.iterator] must be callable");
+    var it = apply(m, v, []);
+    if (!isObject(it)) throw new TypeErr("Result of the Symbol.iterator method is not an object");
+    var next = it.next, out = [];
+    if (!isCallable(next)) throw new TypeErr("Iterator does not have a next method");
+    for (;;) {
+      var r = apply(next, it, []);
+      if (!isObject(r)) throw new TypeErr("Iterator result is not an object");
+      if (r.done) return out;
+      out.push(r.value);
+    }
+  }
+  function matchExtract(subject, m) {
+    var f = customMatcherOf(m);
+    if (f === undefined) {
+      if (isClassLike(m)) return subject instanceof m ? [] : false;
+      throw new TypeErr("Extractor pattern requires a custom matcher");
+    }
+    var r = apply(f, m, [subject, { matchType: "extractor" }]);
+    if (r === true) return [];
+    if (r === false) return false;
+    var list = matchList(r);
+    if (list === undefined) throw new TypeErr("Extractor pattern result must be true, false, or iterable");
+    return list;
+  }
+  // an object pattern's rest: the subject's own enumerable properties but the keys matched
+  function matchRest(subject, keys) {
+    var out = {}, src = ObjectCtor(subject), own = ownKeys(src);
+    for (var i = 0; i < own.length; i++) {
+      var k = own[i], skip = false;
+      for (var j = 0; j < keys.length; j++) {
+        var x = keys[j];
+        if (typeof x !== "symbol") x = "" + x;
+        if (x === k) { skip = true; break; }
+      }
+      if (skip) continue;
+      var d = getOwnPropertyDescriptor(src, k);
+      if (d !== undefined && d.enumerable)
+        defineProperty(out, k, { value: src[k], writable: true, enumerable: true, configurable: true });
+    }
+    return out;
+  }
+  function matchSlice(a, start) { return apply(ArraySlice, a, [start]); }
+  function matchFail() { throw new TypeErr("No pattern matched"); }
+
+
+  // ---------------- decorators (TC39 proposal-decorators, as GocciaScript has them) ----------------
+  // the compiler calls these through opIntrinsic (INTRINSIC_DEC_*): a decorated class definition's session holds its
+  // class (a class decorator can replace it), its metadata object and the initializers its decorators added
+  var SymMetadata = Symbol("Symbol.metadata");
+  defineProperty(Symbol, "metadata", { value: SymMetadata, writable: false, enumerable: false, configurable: false });
+  function decBegin(cls, parent, name) {
+    var pm = null;
+    if (isObject(parent)) { var m = parent[SymMetadata]; if (isObject(m)) pm = m; }
+    // a name from a computed key (a symbol's description in brackets)
+    if (typeof name === "symbol") { var desc = name.description; name = desc === undefined ? "" : "[" + desc + "]"; }
+    return { cls: cls, orig: cls, proto: cls.prototype, name: name, meta: create(pm), fieldInits: [], fieldExtra: [],
+      instInits: [], staticInits: [], classInits: [] };
+  }
+  // a context's addInitializer: adds to list until its decorator has returned
+  function makeAddInitializer(state, list) {
+    return {
+      addInitializer(fn) {
+        if (state.done) throw new TypeErr("Cannot add initializers after decoration has completed");
+        if (!isCallable(fn)) throw new TypeErr("Initializer must be a function");
+        list.push(fn);
+      }
+    }.addInitializer;
+  }
+  function listAt(lists, i) { var l = lists[i]; if (l === undefined) { l = []; lists[i] = l; } return l; }
+  function runAll(list, self) { for (var i = 0; i < list.length; i++) apply(list[i], self, []); }
+  var RETURN_MESSAGES = { method: "Method decorator must return a function or undefined",
+    getter: "Getter decorator must return a function or undefined",
+    setter: "Setter decorator must return a function or undefined",
+    field: "Field decorator must return a function or undefined" };
+  // one decorator of element idx (kind method, getter, setter, field or accessor; flags 1 static, 2 private): the
+  // element's value after it (a private element's method or accessor half; a public one is redefined here)
+  function decElement(sess, dec, idx, kind, key, flags, value, pn) {
+    if (!isCallable(dec)) throw new TypeErr("Decorator must be a function");
+    var isStatic = (flags & 1) !== 0, isPrivate = (flags & 2) !== 0;
+    var target = isStatic ? sess.orig : sess.proto, fieldLike = kind === "field" || kind === "accessor";
+    var acc = {
+      get(o) { return isPrivate ? privGet(o, pn) : o[key]; },
+      set(o, v) { if (isPrivate) privSet(o, pn, v); else o[key] = v; },
+      has(o) { return isPrivate ? privHas(o, pn) : key in o; }
+    };
+    var access = {};
+    if (kind !== "setter") access.get = acc.get;
+    if (kind === "setter" || fieldLike) access.set = acc.set;
+    access.has = acc.has;
+    var state = { done: false };
+    var list = fieldLike ? listAt(sess.fieldExtra, idx) : isStatic ? sess.staticInits : sess.instInits;
+    var ctx = { kind: kind, name: key, static: isStatic, private: isPrivate, access: access, metadata: sess.meta,
+      addInitializer: makeAddInitializer(state, list) };
+    if (kind === "accessor") {
+      if (isPrivate) value = { get() { return privGet(this, pn); }, set(v) { privSet(this, pn, v); } };
+      else { var d = getOwnPropertyDescriptor(target, key); value = { get: d.get, set: d.set }; }
+    } else if (!isPrivate && kind !== "field") {
+      var cd = getOwnPropertyDescriptor(target, key);
+      if (cd !== undefined) value = kind === "method" ? cd.value : kind === "getter" ? cd.get : cd.set;
+    }
+    var r;
+    r = apply(dec, undefined, [value, ctx]);
+    state.done = true;   // a decorator that threw never finished its decoration
+    if (kind === "accessor") {
+      if (r === undefined) return value;
+      if (!isObject(r)) throw new TypeErr("Accessor decorator must return an object or undefined");
+      var g = r.get, st = r.set, init = r.init;
+      if (g !== undefined && !isCallable(g)) throw new TypeErr("Accessor decorator get must be a function");
+      if (st !== undefined && !isCallable(st)) throw new TypeErr("Accessor decorator set must be a function");
+      if (init !== undefined) {
+        if (!isCallable(init)) throw new TypeErr("Accessor decorator init must be a function");
+        listAt(sess.fieldInits, idx).push(init);
+      }
+      var nv = { get: g !== undefined ? g : value.get, set: st !== undefined ? st : value.set };
+      if (!isPrivate) defineProperty(target, key, { get: nv.get, set: nv.set, enumerable: true, configurable: true });
+      return nv;
+    }
+    if (r === undefined) return value;
+    if (!isCallable(r)) throw new TypeErr(RETURN_MESSAGES[kind]);
+    if (kind === "field") { listAt(sess.fieldInits, idx).push(r); return undefined; }
+    if (!isPrivate) {
+      if (kind === "method") defineProperty(target, key, { value: r, writable: true, enumerable: false, configurable: true });
+      else {
+        var od = getOwnPropertyDescriptor(target, key);
+        if (kind === "getter") defineProperty(target, key, { get: r, set: od !== undefined ? od.set : undefined, enumerable: false, configurable: true });
+        else defineProperty(target, key, { get: od !== undefined ? od.get : undefined, set: r, enumerable: false, configurable: true });
+      }
+    }
+    return r;
+  }
+  function decClass(sess, dec) {
+    if (!isCallable(dec)) throw new TypeErr("Decorator must be a function");
+    var state = { done: false };
+    var ctx = { kind: "class", name: sess.name, addInitializer: makeAddInitializer(state, sess.classInits), metadata: sess.meta };
+    var r;
+    r = apply(dec, undefined, [sess.cls, ctx]);
+    state.done = true;
+    if (r !== undefined) {
+      if (!isConstructor(r)) throw new TypeErr("Class decorator must return a class or undefined");
+      sess.cls = r;
+    }
+  }
+  // a field's (or auto-accessor's) initial value through the initializers its decorators returned
+  function decField(sess, idx, self, v) {
+    var l = sess.fieldInits[idx];
+    if (l !== undefined) for (var i = 0; i < l.length; i++) v = apply(l[i], self, [v]);
+    return v;
+  }
+  function decFieldExtra(sess, idx, self) { var l = sess.fieldExtra[idx]; if (l !== undefined) runAll(l, self); }
+  function decInstance(sess, self) { runAll(sess.instInits, self); }
+  function decStatic(sess) { runAll(sess.staticInits, sess.orig); }
+  // the decorated class, its Symbol.metadata defined
+  function decFinish(sess) {
+    defineProperty(sess.cls, SymMetadata, { value: sess.meta, writable: false, enumerable: false, configurable: true });
+    return sess.cls;
+  }
+  function decClassInits(sess) { runAll(sess.classInits, sess.cls); }
+
+  // opIntrinsic's helpers, in INTRINSIC_* order (G2.VM)
+  return [enumFinalize, matchValue, matchHas, matchExtract, matchList, matchRest, matchSlice, matchFail,
+    decBegin, decElement, decClass, decField, decFieldExtra, decInstance, decStatic, decFinish, decClassInits];
 })

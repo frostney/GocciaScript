@@ -16,8 +16,37 @@ uses
 
 {$I G2.Builtins5.inc}
 
+{ argument I (1-based; Args[0] is this) }
+function ArgAt(Args: PValue; Argc, I: Integer): TValue; inline;
+begin
+  if I <= Argc then Result := PValue(PByte(Args) + I * SizeOf(TValue))^ else Result := VUndefined;
+end;
+
+{ privGet(o, privateName), privSet(o, privateName, v), privHas(o, privateName): a private element's read, write and
+  presence test (as o.#x, o.#x = v and #x in o), for the decorator runtime's context.access }
+function Priv_Get(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Result := PrivateGet(ArgAt(Args, Argc, 1), PStr(PtrOf(ArgAt(Args, Argc, 2))), Res);
+end;
+
+function Priv_Set(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := VUndefined;
+  Result := PrivateSet(ArgAt(Args, Argc, 1), PStr(PtrOf(ArgAt(Args, Argc, 2))), ArgAt(Args, Argc, 3));
+end;
+
+function Priv_Has(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var O: TValue;
+begin
+  O := ArgAt(Args, Argc, 1);
+  if not IsObject(O) then
+    Exit(ThrowTypeError('Cannot use ''in'' operator to search for a private field in a non-object'));
+  Res := MkBool(ShapeLookup(ObjOf(O)^.Shape, PStr(PtrOf(ArgAt(Args, Argc, 2)))) >= 0);
+  Result := True;
+end;
+
 procedure InitBuiltins5;
-var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..1] of TValue; Ok: Boolean;
+var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..4] of TValue; Ok: Boolean; I: Integer;
 begin
   if not CompilePrelude('<builtins5>', Builtins5Src, T, Err) then
     raise Exception.Create('builtins5 prelude: ' + string(Err));
@@ -25,10 +54,16 @@ begin
   if not CallValue(Clo, VUndefined, nil, 0, Fn) then raise Exception.Create('builtins5 prelude run');
   PushRoot(Fn);
   PushRoot(NewNativeFunction(MarkIntrinsicClass, 'markIntrinsic', 1));
+  PushRoot(NewNativeFunction(Priv_Get, 'privGet', 2));
+  PushRoot(NewNativeFunction(Priv_Set, 'privSet', 3));
+  PushRoot(NewNativeFunction(Priv_Has, 'privHas', 2));
   CA[0] := GlobalObj;
-  CA[1] := RootAt(TempTop - 1);
-  Ok := CallValue(RootAt(TempTop - 2), VUndefined, @CA[0], 2, R);
-  PopRoots(1);
+  CA[1] := RootAt(TempTop - 4);
+  CA[2] := RootAt(TempTop - 3);
+  CA[3] := RootAt(TempTop - 2);
+  CA[4] := RootAt(TempTop - 1);
+  Ok := CallValue(RootAt(TempTop - 5), VUndefined, @CA[0], 5, R);
+  PopRoots(4);
   if not Ok then
   begin
     PopRoots(1);
@@ -37,9 +72,15 @@ begin
     raise Exception.Create('builtins5 prelude call');
   end;
   PopRoots(1);
-  { the prelude's internals: opFinalizeEnum's intrinsic }
-  AddRoot(@EnumFinalizeFn);
-  if not GetV(R, AtomOf('enumFinalize'), EnumFinalizeFn) then raise Exception.Create('builtins5 prelude internals');
+  { the prelude's internals: opIntrinsic's helpers, an array in INTRINSIC_* order }
+  PushRoot(R);
+  for I := 0 to INTRINSIC_COUNT - 1 do
+  begin
+    AddRoot(@Intrinsics[I]);
+    if not GetV(RootAt(TempTop - 1), AtomOf(UnicodeString(IntToStr(I))), Intrinsics[I]) or not IsCallable(Intrinsics[I]) then
+      raise Exception.Create('builtins5 prelude internals');
+  end;
+  PopRoots(1);
   InitRegExpPrelude;
 end;
 

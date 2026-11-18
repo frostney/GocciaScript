@@ -157,7 +157,30 @@ threadvar
   ArrayIterNextFn, GenNextFn: TValue;
   IterSelfFn: TValue;   { %IteratorPrototype%[@@iterator] (G2.Builtins sets it): a generator iterates as itself }
   GenReturnFn: TValue;  { %GeneratorPrototype%.return (G2.Builtins2 sets it): a generator's close resumes it directly }
-  EnumFinalizeFn: TValue;   { opFinalizeEnum's intrinsic (G2.Builtins5 sets it from its prelude) }
+const
+  { opIntrinsic's helpers (the builtins5 prelude's internals, by these indices) }
+  INTRINSIC_ENUM_FINALIZE = 0;    { (scratch, name): the enum (TC39 proposal-enum) its declaration's members make }
+  INTRINSIC_MATCH_VALUE = 1;      { (subject, matcher): whether a value pattern matches (pattern matching) }
+  INTRINSIC_MATCH_HAS = 2;        { (subject, key): whether an object pattern's key is present }
+  INTRINSIC_MATCH_EXTRACT = 3;    { (subject, matcher): an extractor pattern's values, or false }
+  INTRINSIC_MATCH_LIST = 4;       { (subject): a list pattern's subject as an array, or undefined when not iterable }
+  INTRINSIC_MATCH_REST = 5;       { (subject, keys): an object pattern's rest, without the keys matched }
+  INTRINSIC_MATCH_SLICE = 6;      { (array, start): a list pattern's rest }
+  INTRINSIC_MATCH_FAIL = 7;       { (): throws the TypeError of a match expression no clause matched }
+  { decorators (TC39 proposal-decorators): a decorated class definition's session }
+  INTRINSIC_DEC_BEGIN = 8;        { (class, parent, name): the session }
+  INTRINSIC_DEC_ELEMENT = 9;      { (session, decorator, index, kind, key, flags, value, private name): the element's
+                                    value after the decorator (flags: 1 static, 2 private) }
+  INTRINSIC_DEC_CLASS = 10;       { (session, decorator): applies a class decorator }
+  INTRINSIC_DEC_FIELD = 11;       { (session, index, receiver, value): a field's initial value after its initializers }
+  INTRINSIC_DEC_FIELD_EXTRA = 12; { (session, index, receiver): the initializers a field's decorators added }
+  INTRINSIC_DEC_INSTANCE = 13;    { (session, instance): the instance method decorators' added initializers }
+  INTRINSIC_DEC_STATIC = 14;      { (session): the static method decorators' added initializers }
+  INTRINSIC_DEC_FINISH = 15;      { (session): the decorated class, its Symbol.metadata defined }
+  INTRINSIC_DEC_CLASS_INITS = 16; { (session): the class decorators' added initializers }
+  INTRINSIC_COUNT = 17;
+threadvar
+  Intrinsics: array[0..INTRINSIC_COUNT - 1] of TValue;
   MapIterNextFn, SetIterNextFn: TValue;   { %MapIteratorPrototype%.next, %SetIteratorPrototype%.next }
   { the function and iterator intrinsics of generators and async code (G2.Promise makes them) }
   GenFunctionProto, AsyncFunctionProto, AsyncGenFunctionProto, AsyncGeneratorProto, AsyncIteratorProto,
@@ -243,6 +266,9 @@ threadvar
 function ThrowError(const Kind, Msg: UnicodeString): Boolean;
 function ThrowTypeError(const Msg: UnicodeString): Boolean;
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
+{ a private element's read and write (o.#x, o.#x = v; Key the private name) }
+function PrivateGet(Obj: TValue; Key: PStr; var V: TValue): Boolean;
+function PrivateSet(Obj: TValue; Key: PStr; V: TValue): Boolean;
 function NewNativeFunction(Fn: TNativeFn; const Name: UnicodeString; Length: Integer): TValue;
 function NewNativeFunctionData(Fn: TNativeFn; const Name: UnicodeString; Length: Integer; Data: UInt32): TValue;
 procedure DefineHidden(O: TValue; const Name: UnicodeString; V: TValue);
@@ -6692,13 +6718,10 @@ begin
   SwitchRealm(R0);
 end;
 
-{ opFinalizeEnum: EnumFinalizeFn(Scratch, Name) }
-function XFinalizeEnum(Scratch, Name: TValue; var Res: TValue): Boolean; noinline;
-var A: array[0..1] of TValue;
+{ opIntrinsic: Intrinsics[Idx](Args[0], ..., Args[Argc - 1]) }
+function XIntrinsic(Idx: Integer; Args: PValue; Argc: Integer; var Res: TValue): Boolean; noinline;
 begin
-  A[0] := Scratch;
-  A[1] := Name;
-  Result := CallValue(EnumFinalizeFn, VUndefined, @A[0], 2, Res);
+  Result := CallValue(Intrinsics[Idx], VUndefined, Args, Argc, Res);
 end;
 
 function Execute(StopFrame: Integer; var Res: TValue): Boolean;
@@ -8447,10 +8470,10 @@ LReload:
           end;
           goto LThrow;
         end;
-      opFinalizeEnum:
+      opIntrinsic:
         begin
           Fr^.PC := PC;
-          if not XFinalizeEnum(R[A], K[I shr 40], V) then goto LThrow;
+          if not XIntrinsic(I shr 40, @R[A], (I shr 24) and $FFFF, V) then goto LThrow;
           R[A] := V;
         end;
       opSuperBase:
@@ -8746,7 +8769,8 @@ begin
     @TypedArrayValuesFn, @ThrowerAcc, @ArrayIterNextFn, @GenNextFn, @IterSelfFn, @GenReturnFn, @MapIterNextFn, @SetIterNextFn,
     @GenFunctionProto, @AsyncFunctionProto, @AsyncGenFunctionProto, @AsyncGeneratorProto, @AsyncIteratorProto,
     @AsyncFromSyncIterProto, @ArrayValuesFnPublic, @StringIterProto, @StringIterNextFn, @FuncHasInstanceFn, @BigIntProto, @ErrorProtoType, @TypeErrorProto,
-    @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto, @EnumFinalizeFn]);
+    @RangeErrorProto, @SyntaxErrorProto, @ReferenceErrorProto, @EvalErrorProto, @URIErrorProto]);
+  RealmValRange(@Intrinsics[0], INTRINSIC_COUNT);
   AddRoot(@IntrinsicList);
   IntrinsicList := VUndefined;
   RealmVals([@IntrinsicList]);

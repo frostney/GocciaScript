@@ -94,8 +94,8 @@ type
                                HasBinding: a strict assignment's reference, resolved before its value) }
     ,opGetMethod             { a method call's callee and this: R[A + 1] := R[B], then R[A] := R[A + 1].ICs[C] (as
                                opGetProp) }
-    ,opFinalizeEnum          { R[A] := the enum (TC39 proposal-enum) named Consts[C] made from the members its
-                               declaration set on the scratch object R[A] (EnumFinalizeFn) }
+    ,opIntrinsic             { R[A] := Intrinsics[C](R[A], ..., R[A + B - 1]): a helper of the builtins5 prelude for
+                               a construct the compiler lowers to a call (INTRINSIC_* in G2.VM) }
   );
 
   PFuncTemplate = ^TFuncTemplate;
