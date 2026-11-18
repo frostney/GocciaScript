@@ -181,6 +181,8 @@ const
   INTRINSIC_DEC_FINISH = 15;      { (session): the decorated class, its Symbol.metadata defined }
   INTRINSIC_DEC_CLASS_INITS = 16; { (session): the class decorators' added initializers }
   INTRINSIC_COUNT = 17;
+  { (key, object): a for-in loop's check at a key's turn, native (XIntrinsic): no prelude entry }
+  INTRINSIC_FORIN_VISIT = 64;
 threadvar
   Intrinsics: array[0..INTRINSIC_COUNT - 1] of TValue;
   MapIterNextFn, SetIterNextFn: TValue;   { %MapIteratorPrototype%.next, %SetIteratorPrototype%.next }
@@ -7129,8 +7131,68 @@ begin
 end;
 
 { opIntrinsic: Intrinsics[Idx](Args[0], ..., Args[Argc - 1]) }
+{ 14.7.5.9 EnumerateObjectProperties, as its informative definition reads it: at its turn a key is visited when
+  the first object on the chain with the key as an own property (V's own keys first) has it enumerable. A key
+  deleted before its turn is left out (the spec requires it), and so is one made non-enumerable; one whose own
+  shadow was deleted is visited from the prototype that has it. A proxy on the chain falls back to HasProperty }
+function ForInVisit(Key, Obj: TValue; var Res: TValue): Boolean;
+var O: PObj; P: TValue; K: PStr; S: Integer; Idx: Int64; V: TValue; Flags: Byte; Found: Boolean;
+begin
+  if not IsString(Key) or not IsObject(Obj) then
+  begin
+    Res := VFalse;
+    Exit(True);
+  end;
+  K := Atomize(StrOf(Key));
+  P := Obj;
+  while IsObject(P) do
+  begin
+    O := ObjOf(P);
+    if O^.OKind in [okProxy, okModuleNS] then
+    begin
+      Result := HasPropertyV(Obj, K, Found);
+      Res := MkBool(Found);
+      Exit;
+    end;
+    if (O^.OKind = okTypedArray) and IndexFromString(K, Idx) then
+    begin
+      Res := MkBool(Idx < TALength(O));
+      Exit(True);
+    end;
+    { 10.4.3.5 StringGetOwnProperty: a String object's character indices are enumerable }
+    if (O^.OKind = okStringObj) and IsString(O^.Aux1) and IndexFromString(K, Idx) and
+       (Idx < StrOf(O^.Aux1)^.Len) then
+    begin
+      Res := VTrue;
+      Exit(True);
+    end;
+    if (O^.Elements <> nil) and IndexFromString(K, Idx) and (Idx < O^.Elements^.Len) and
+       (O^.Elements^.Data[Idx] <> VHole) then
+    begin
+      Res := VTrue;
+      Exit(True);
+    end;
+    S := ShapeLookup(O^.Shape, K);
+    if S >= 0 then
+    begin
+      Res := MkBool((O^.Shape^.PFlags[S] and pfEnumerable) <> 0);
+      Exit(True);
+    end;
+    Flags := 0;
+    if OwnVirtual(O, K, V, Flags) then
+    begin
+      Res := MkBool((Flags and pfEnumerable) <> 0);
+      Exit(True);
+    end;
+    P := O^.Shape^.Proto;
+  end;
+  Res := VFalse;
+  Result := True;
+end;
+
 function XIntrinsic(Idx: Integer; Args: PValue; Argc: Integer; var Res: TValue): Boolean; noinline;
 begin
+  if Idx = INTRINSIC_FORIN_VISIT then Exit(ForInVisit(Args[0], Args[1], Res));
   Result := CallValue(Intrinsics[Idx], VUndefined, Args, Argc, Res);
 end;
 

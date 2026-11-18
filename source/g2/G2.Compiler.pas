@@ -4587,13 +4587,15 @@ begin
   AllocReg;   { opForIn's next method: the key iterator steps without a call }
   V := AllocReg;
   ObjR := AllocReg;
-  Chk := AllocReg;
+  Chk := AllocRegs(2);
   ForHeadExpr(S.ObjectExpression, It, S.IsVar, S.BindingName, S.BindingPattern);
   Emit(Ins(opForIn, It, It, ObjR));
   Top := Here;
   Exit_ := Emit(Ins(opIterNext, V, It, 0));
-  { 14.7.5.9: a property deleted before its turn is not visited }
-  Emit(Ins(opIn, Chk, V, ObjR));
+  { 14.7.5.9: a property deleted (or made non-enumerable) before its turn is not visited (ForInVisit) }
+  Emit(Ins(opMov, Chk, V, 0));
+  Emit(Ins(opMov, Chk + 1, ObjR, 0));
+  Emit(Ins(opIntrinsic, Chk, 2, INTRINSIC_FORIN_VISIT));
   PatchTo(EmitJ(opJF, Chk, 0), Top);
   PushScope;
   if S.BindingName <> '' then

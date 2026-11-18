@@ -159,7 +159,11 @@ test("properties made non-enumerable before visit are skipped", () => {
   expect(keys).toEqual(["a"]);
 });
 
-test("deleted own shadow does not expose inherited property", () => {
+// 14.7.5.9 EnumerateObjectProperties, as its informative definition reads it:
+// the own key deleted before its turn is not visited, and the prototype's key
+// of the same name is then visited from the prototype (no processed key
+// shadows it).
+test("a deleted own shadow exposes the inherited property at its turn", () => {
   const proto = { shadowed: 1 };
   const obj = Object.create(proto);
   obj.a = 2;
@@ -171,7 +175,7 @@ test("deleted own shadow does not expose inherited property", () => {
     delete obj.shadowed;
   }
 
-  expect(keys).toEqual(["a"]);
+  expect(keys).toEqual(["a", "shadowed"]);
 });
 
 test("enumerable own key shadowing a same-named inherited key is yielded once", () => {
