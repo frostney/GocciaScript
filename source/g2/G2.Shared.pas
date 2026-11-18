@@ -26,6 +26,7 @@ type
     ByteLength: Int64;      { atomic: a growable buffer's length only grows }
     MaxByteLength: Int64;   { -1: fixed length }
     Data: PByte;            { MaxByteLength (or ByteLength) bytes, zeroed, 16-byte aligned }
+    Reserved: Int64;        { the bytes it counts against the memory ceiling (HeapExternalBytes) }
   end;
 
 function NewSharedBlock(Len, MaxLen: Int64): PSharedBlock;   { nil when the memory cannot be had }
@@ -93,6 +94,8 @@ begin
   Result^.ByteLength := Len;
   Result^.MaxByteLength := MaxLen;
   Result^.Data := Raw;
+  Result^.Reserved := Cap + 1;
+  HeapExternalAdd(Result^.Reserved);
 end;
 
 procedure RetainBlock(B: PSharedBlock);
@@ -104,6 +107,7 @@ procedure ReleaseBlock(B: PSharedBlock);
 begin
   if InterLockedDecrement(B^.RefCount) = 0 then
   begin
+    HeapExternalAdd(-B^.Reserved);
     FreeMem(B^.Data);
     Dispose(B);
   end;

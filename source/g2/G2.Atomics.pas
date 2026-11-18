@@ -127,6 +127,14 @@ begin
     CreateSharedByteDataBlock }
   if not ProtoFromNewTarget(SharedBufferProto, P) then Exit(False);
   PushRoot(P);
+  { the block counts against Goccia.gc.maxBytes, as an ArrayBuffer's bytes do }
+  if MaxLen >= 0 then M := MkNumber(MaxLen) else M := MkNumber(Len);
+  if not HeapReserve(Trunc(NumOf(M))) then
+  begin
+    PopRoots(1);
+    Exit(ThrowError('RangeError', 'SharedArrayBuffer allocation of ' + IntToStr(Trunc(NumOf(M))) +
+      ' bytes exceeds the memory limit of ' + IntToStr(HeapCeiling) + ' bytes'));
+  end;
   B := NewSharedBlock(Len, MaxLen);
   if B = nil then begin PopRoots(1); Exit(ThrowError('RangeError', 'Array buffer allocation failed')); end;
   Res := WrapSharedBlock(B);

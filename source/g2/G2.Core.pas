@@ -262,6 +262,10 @@ function HeapUsedBytes: Int64;
 { whether Bytes more fit under HeapCeiling, after a full collection when they do not yet: the charge of an
   allocation a RangeError refuses (an ArrayBuffer's bytes). Collects: the caller's values stay rooted }
 function HeapReserve(Bytes: Int64): Boolean;
+var
+  { the bytes held outside the heap that count against HeapCeiling (SharedArrayBuffer blocks), for every thread }
+  HeapExternalBytes: Int64 = 0;
+procedure HeapExternalAdd(Delta: Int64);
 { weak references: GCWeakHook runs after marking/evacuation in every collection, before old space is swept.
   In it, GCSurvives says whether a cell lives on and updates P when the cell moved. The hook must not allocate. }
 var GCWeakHook: procedure = nil;
@@ -1173,10 +1177,16 @@ end;
 
 function HeapReserve(Bytes: Int64): Boolean;
 begin
-  if (HeapCeiling <= 0) or (Bytes <= HeapCeiling - HeapUsedBytes) then Exit(True);
+  if (HeapCeiling <= 0) or (Bytes <= HeapCeiling - HeapUsedBytes - HeapExternalBytes) then Exit(True);
+  { a collection also releases the blocks of SharedArrayBuffers nothing reaches }
   CollectMinor;
   CollectMajor;
-  Result := Bytes <= HeapCeiling - HeapUsedBytes;
+  Result := Bytes <= HeapCeiling - HeapUsedBytes - HeapExternalBytes;
+end;
+
+procedure HeapExternalAdd(Delta: Int64);
+begin
+  InterLockedExchangeAdd64(HeapExternalBytes, Delta);
 end;
 
 procedure CollectMajor;
