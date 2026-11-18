@@ -1841,6 +1841,7 @@ var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop
   Nodes: TList<TGocciaASTNode>; Skip: Integer; Ret: Integer;
   Pair: TGocciaExpressionMap.TKeyValuePair; SavedGlobalTop, InitStatic, SavedParamInit: Boolean; PN: TStringList;
   K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString; ParamNames: TStringList;
+  ParamsClose: Boolean; ArgKeep: array of Integer; B: Integer;
 begin
   SavedGlobalTop := GlobalTop;   { a nested function's declarations are its own }
   SavedParamInit := InParamInit;
@@ -2012,18 +2013,62 @@ begin
       finally
         PN.Free;
       end;
+      { a closure an initializer makes may run before a later parameter's turn (or its own): the plain parameters
+        then hold the hole until their turn, their arguments kept aside, and are dead-zone bindings while the
+        initializers compile, so the closure checks them }
+      ParamsClose := False;
+      for I := 0 to High(Params) do
+        if (Assigned(Params[I].DefaultValue) and MakesClosure(Params[I].DefaultValue)) or
+           (Params[I].IsPattern and MakesClosure(Params[I].Pattern)) then ParamsClose := True;
+      if ParamsClose then
+      begin
+        SetLength(ArgKeep, Length(Params));
+        K := 0;
+        for I := 0 to High(Params) do
+        begin
+          ArgKeep[I] := -1;
+          if not Params[I].IsRest then Inc(K);
+          if Params[I].IsPattern then Continue;
+          if Params[I].IsRest then R := T^.RestReg else R := K;
+          B := FS.Scopes[0].Find(Params[I].Name);
+          if (B < 0) or (FS.Scopes[0].Bindings[B].Reg <> R) then Continue;
+          ArgKeep[I] := DeclareInScope(FS.Scopes[0], '%argkeep' + IntToStr(I), False);
+          Emit(Ins(opMov, ArgKeep[I], R, 0));
+          Emit(Ins(opLoadHole, R, 0, 0));
+          FS.Scopes[0].Bindings[B].IsLexical := True;
+          FS.Scopes[0].Bindings[B].Initialized := False;
+          FS.Scopes[0].Bindings[B].HoleNop := -1;
+        end;
+      end;
     end;
     for I := 0 to High(Params) do
     begin
       if not Params[I].IsRest then Inc(J);
       if Params[I].IsRest then
       begin
-        if Params[I].IsPattern then BindPattern(Params[I].Pattern, T^.RestReg, True, False);
+        if Params[I].IsPattern then BindPattern(Params[I].Pattern, T^.RestReg, True, False)
+        else if (Length(ArgKeep) > I) and (ArgKeep[I] >= 0) then
+        begin
+          Emit(Ins(opMov, T^.RestReg, ArgKeep[I], 0));
+          MarkInitialized(Params[I].Name);
+        end;
         Continue;
       end;
       if Params[I].IsPattern then R := FS.Scopes[0].Bindings[FS.Scopes[0].Find('%param' + IntToStr(J))].Reg
       else R := J;
-      if Assigned(Params[I].DefaultValue) then
+      if (Length(ArgKeep) > I) and (ArgKeep[I] >= 0) then
+      begin
+        { the argument (or the default) goes to the parameter at its turn; until then it holds the hole }
+        if Assigned(Params[I].DefaultValue) then
+        begin
+          Skip := EmitJ(opJNotUndef, ArgKeep[I], 0);
+          ExprToNamed(Params[I].DefaultValue, ArgKeep[I], Params[I].Name);
+          PatchHere(Skip);
+        end;
+        Emit(Ins(opMov, R, ArgKeep[I], 0));
+        MarkInitialized(Params[I].Name);
+      end
+      else if Assigned(Params[I].DefaultValue) then
       begin
         Skip := EmitJ(opJNotUndef, R, 0);
         { 10.2.11 / 8.4.5: an anonymous function default of a plain parameter takes its name }
@@ -2049,6 +2094,13 @@ begin
       end;
     end;
     FreeAndNil(FS.ParamTDZ);
+    { the parameters kept in a dead zone are ordinary bindings again in the body }
+    for I := 0 to High(ArgKeep) do
+      if ArgKeep[I] >= 0 then
+      begin
+        B := FS.Scopes[0].Find(Params[I].Name);
+        if B >= 0 then FS.Scopes[0].Bindings[B].IsLexical := False;
+      end;
     { strict-types: an annotated parameter's argument (or default) is checked, and so is every later store }
     if ProfileStrictTypes then
     begin
@@ -2095,6 +2147,14 @@ begin
           for I := 0 to High(Params) do
             if Params[I].IsPattern then PatternNames(Params[I].Pattern, ParamNames)
             else ParamNames.Add(Params[I].Name);
+          { 10.2.11 step 28: a top-level function declaration's name is one of varNames too, so one named like a
+            parameter gets its own binding in the separate variable environment (closures in the parameters keep
+            the parameter) }
+          for I := 0 to Nodes.Count - 1 do
+            if (Nodes[I] is TGocciaFunctionDeclaration) and
+               (ParamNames.IndexOf(TGocciaFunctionDeclaration(Nodes[I]).Name) >= 0) and
+               (Names.IndexOf(TGocciaFunctionDeclaration(Nodes[I]).Name) < 0) then
+              Names.Add(TGocciaFunctionDeclaration(Nodes[I]).Name);
         end;
         if not T^.IsStrict and (Goal <> 3) then
         begin
