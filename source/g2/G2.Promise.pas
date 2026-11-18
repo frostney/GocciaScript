@@ -817,7 +817,7 @@ begin
   end;
   if not IsObject(R) then
   begin
-    ThrowTypeError('iterator result is not an object');
+    ThrowIterResultNotObject(R);
     Result := RejectWithPending(RootAt(TempTop - 2), Res);
     PopRoots(2);
     Exit;

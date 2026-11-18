@@ -137,6 +137,11 @@ type
     PolyCount, PolyNext: Byte;
   end;
 
+  TCallSite = record
+    PC: Integer;
+    Text: PStr;
+  end;
+
   TFuncTemplate = record
     Name: PStr;
     Code: array of QWord;
@@ -157,6 +162,9 @@ type
     Upvals: array of TUpvalDesc;
     ICs: array of TPropIC;
     Lines: array of Integer;
+    { the callee of each call and construct site as its source wrote it (Goccia's CalleeDescriptorFor), by the
+      instruction's index in ascending order: a callee that is not callable is named so in the TypeError }
+    CallSites: array of TCallSite;
     NumParams: Integer;
     MaxRegs: Integer;
     RestReg: Integer;       { -1 none }

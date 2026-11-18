@@ -286,6 +286,10 @@ type
     IsLoop: Boolean;
     ScopeDepth: Integer;     { scope count when the loop/switch began }
     TryDepth: Integer;
+    { the base register of the loop's per-iteration scope when its body makes a closure, else -1: a break or
+      continue leaves that scope without its opClose, so it closes from there itself (the scope's Captured flag is
+      final only once the whole body is compiled, after a break that comes first) }
+    IterBase: Integer;
   end;
 
   TFinallyInfo = record
@@ -446,6 +450,10 @@ type
     procedure CompileUsingList(L: TList<TGocciaASTNode>; Stmts: TObjectList<TGocciaStatement>; Body: Boolean = False);
     procedure CompileUsingDecl(D: TGocciaUsingDeclaration);
     procedure CompileEnum(D: TGocciaEnumDeclaration);
+    procedure RecordCallSite(Callee: TGocciaExpression);
+    function ParamInTDZ(const N: UnicodeString; Reg: Integer): Boolean;
+    procedure FinallyAtDepth(B: TGocciaASTNode; Depth: Integer);
+    procedure MarkIterationScope(Body: TGocciaASTNode);
     procedure EmitIntrinsic(Idx, Base, Argc: Integer);
     procedure CompileKeyedValue(Init: TGocciaExpression; V, K: Integer);
     procedure EmitDecoratedFieldValue(D, V: Integer);
@@ -785,7 +793,20 @@ begin
     T^.Code[NewIdx[I]] := Ins_;
     T^.Lines[NewIdx[I]] := T^.Lines[I];
   end;
+  for I := 0 to High(T^.CallSites) do T^.CallSites[I].PC := NewIdx[T^.CallSites[I].PC];
   T^.CodeLen := N;
+end;
+
+{ the call or construct instruction emitted next calls Callee: its source text names it in a TypeError }
+procedure TCompiler.RecordCallSite(Callee: TGocciaExpression);
+var Text: string; N: Integer;
+begin
+  Text := CalleeDescriptorFor(Callee).CalleeText;
+  if Text = '' then Exit;
+  N := Length(FS.Tpl^.CallSites);
+  SetLength(FS.Tpl^.CallSites, N + 1);
+  FS.Tpl^.CallSites[N].PC := FS.Tpl^.CodeLen;
+  FS.Tpl^.CallSites[N].Text := AtomOf(UTF8Decode(Text));
 end;
 
 procedure TCompiler.PatchHere(PC: Integer);
@@ -1252,13 +1273,23 @@ begin
   for I := 0 to High(Ends) do PatchHere(Ends[I]);
 end;
 
+{ N, resolved to register Reg, is a parameter whose initialization has not come yet (parameter initializers are
+  compiling: 10.2.11 FunctionDeclarationInstantiation with parameter expressions) }
+function TCompiler.ParamInTDZ(const N: UnicodeString; Reg: Integer): Boolean;
+var J: Integer;
+begin
+  Result := False;
+  if (FS.ParamTDZ = nil) or (FS.ParamTDZ.IndexOf(N) < 0) then Exit;
+  J := FS.Scopes[0].Find(N);
+  Result := (J >= 0) and (FS.Scopes[0].Bindings[J].Reg = Reg);
+end;
+
 procedure TCompiler.LoadIdentStatic(const N: UnicodeString; Dest: Integer);
 var Reg, U: Integer; F: TFuncState;
 begin
   if ResolveLocal(FS, N, Reg) then
   begin
-    if (FS.ParamTDZ <> nil) and (FS.ParamTDZ.IndexOf(N) >= 0) and (FS.Scopes[0].Find(N) >= 0) and
-       (FS.Scopes[0].Bindings[FS.Scopes[0].Find(N)].Reg = Reg) then
+    if ParamInTDZ(N, Reg) then
     begin
       { a parameter read before its own initialization: a ReferenceError }
       Emit(Ins(opLoadHole, Dest, 0, 0));
@@ -1383,6 +1414,15 @@ begin
   NoteWrite(N);
   if ResolveLocal(FS, N, Reg) then
   begin
+    if not IsInit and ParamInTDZ(N, Reg) then
+    begin
+      { an assignment to a parameter before its own initialization: a ReferenceError }
+      T := AllocReg;
+      Emit(Ins(opLoadHole, T, 0, 0));
+      Emit(Ins(opCheckHole, T, 0, AtomConst(N)));
+      FreeTo(T);
+      Exit;
+    end;
     if not IsInit then
     begin
       if InTDZ(N) then Emit(Ins(opCheckHole, Reg, 0, AtomConst(N)));
@@ -1786,6 +1826,22 @@ begin
       for I := 0 to High(Params) do
         if Params[I].IsPattern then PatternNames(Params[I].Pattern, FS.ParamTDZ)
         else FS.ParamTDZ.Add(Params[I].Name);
+      { a pattern parameter's names are bindings from the start, uninitialized until the pattern binds them: a
+        closure in an earlier default reaches them (and finds them in their dead zone until then) }
+      PN := NewNameList;
+      try
+        for I := 0 to High(Params) do
+          if Params[I].IsPattern then PatternNames(Params[I].Pattern, PN);
+        DeclaringLexical := True;
+        try
+          for K := 0 to PN.Count - 1 do
+            if FS.Scopes[FS.ScopeCount - 1].Find(PN[K]) < 0 then DeclareLocal(PN[K], False);
+        finally
+          DeclaringLexical := False;
+        end;
+      finally
+        PN.Free;
+      end;
     end;
     for I := 0 to High(Params) do
     begin
@@ -3462,6 +3518,7 @@ procedure TCompiler.CompileForOfUsingBody(S: TGocciaForOfStatement; V: Integer);
 var Cap, ExcReg, OuterTry, SavedCap, R: Integer;
 begin
   BeginLoop(True);
+  MarkIterationScope(S.Body);
   BeginUsingRegion(S.IsAwaitUsing, Cap, ExcReg, OuterTry, SavedCap);
   R := DeclareLocal(S.BindingName, True);
   Emit(Ins(opMov, R, V, 0));
@@ -3529,8 +3586,15 @@ begin
     TryDepth := FS.TryCount;
   end;
   FS.Loops[FS.LoopCount].IsLoop := IsLoop;
+  FS.Loops[FS.LoopCount].IterBase := -1;
   FS.PendingLabels := nil;
   Inc(FS.LoopCount);
+end;
+
+{ the loop just begun runs its body in the innermost scope, one per iteration }
+procedure TCompiler.MarkIterationScope(Body: TGocciaASTNode);
+begin
+  if MakesClosure(Body) then FS.Loops[FS.LoopCount - 1].IterBase := FS.Scopes[FS.ScopeCount - 1].BaseReg;
 end;
 
 procedure TCompiler.EndLoop(ContTarget, BreakTarget: Integer);
@@ -3542,6 +3606,26 @@ begin
     for I := 0 to High(ContJumps) do PatchTo(ContJumps[I], ContTarget);
     for I := 0 to High(BreakJumps) do PatchTo(BreakJumps[I], BreakTarget);
     FreeAndNil(Labels);
+  end;
+end;
+
+{ a finally block an abrupt exit runs where it leaves: its names resolve in the scope enclosing the try statement
+  (Depth scopes), so the scopes the exit leaves are hidden while it compiles; their registers stay allocated, so the
+  value on its way out and their locals are kept }
+procedure TCompiler.FinallyAtDepth(B: TGocciaASTNode; Depth: Integer);
+var Hidden: array of TScope; J, N, SavedCount: Integer;
+begin
+  SavedCount := FS.ScopeCount;
+  N := SavedCount - Depth;
+  if N <= 0 then begin FinallyStmt(B); Exit; end;
+  SetLength(Hidden, N);
+  for J := 0 to N - 1 do Hidden[J] := FS.Scopes[Depth + J];
+  FS.ScopeCount := Depth;
+  try
+    FinallyStmt(B);
+  finally
+    for J := 0 to N - 1 do FS.Scopes[Depth + J] := Hidden[J];
+    FS.ScopeCount := SavedCount;
   end;
 end;
 
@@ -3563,7 +3647,7 @@ begin
     begin
       Saved := FS.TryCount;
       FS.TryCount := I;   { a jump inside the finally body must not re-run it }
-      FinallyStmt(FS.Tries[I].Block);
+      FinallyAtDepth(FS.Tries[I].Block, FS.Tries[I].ScopeDepth);
       FS.TryCount := Saved;
     end;
     if FS.Tries[I].UsingCap >= 0 then
@@ -3595,7 +3679,8 @@ begin
     error }
   if Found < 0 then raise EEarlySyntaxError.Create('Illegal break or continue statement: no such target');
   EmitFinallyUnwind(FS.Loops[Found].TryDepth);
-  EmitCloseFrom(FS.Loops[Found].ScopeDepth);
+  if FS.Loops[Found].IterBase >= 0 then Emit(Ins(opClose, FS.Loops[Found].IterBase, 0, 0))
+  else EmitCloseFrom(FS.Loops[Found].ScopeDepth);
   J := EmitJ(opJmp, 0, 0);
   if IsBreak then AddJump(FS.Loops[Found].BreakJumps, J) else AddJump(FS.Loops[Found].ContJumps, J);
 end;
@@ -4048,6 +4133,7 @@ begin
       MatchTest(V, S.MatchPattern, MissL);
     end;
     BeginLoop(True);
+    MarkIterationScope(S.Body);
     Stmt(S.Body);
     PatchListHere(MissL);
   end;
@@ -4139,6 +4225,7 @@ begin
       MatchTest(V, S.MatchPattern, MissL);
     end;
     BeginLoop(True);
+    MarkIterationScope(S.Body);
     Stmt(S.Body);
     PatchListHere(MissL);
   end;
@@ -4199,6 +4286,7 @@ begin
   else if Assigned(S.AssignmentTarget) then
     BindPattern(S.AssignmentTarget, V, False, False);
   BeginLoop(True);
+  MarkIterationScope(S.Body);
   Stmt(S.Body);
   PopScope;
   PatchTo(EmitJ(opJmp, 0, 0), Top);
@@ -4511,7 +4599,7 @@ var R: Integer;
 begin
   if E is TGocciaLiteralExpression then Exit(True);
   Result := (E is TGocciaIdentifierExpression) and ResolveLocal(FS, TGocciaIdentifierExpression(E).Name, R) and
-    not InTDZ(TGocciaIdentifierExpression(E).Name) and
+    not InTDZ(TGocciaIdentifierExpression(E).Name) and not ParamInTDZ(TGocciaIdentifierExpression(E).Name, R) and
     ((WithCount = 0) or (WithsFor(TGocciaIdentifierExpression(E).Name, WithIdxScratch) = 0));
 end;
 
@@ -4548,7 +4636,7 @@ begin
     K := KindOf(ExprKinds, ExprClasses, E);   { 1 identifier, 2 this, as in ExprTo }
     { a local's register, unless a with object between the reference and the binding can hold the name }
     if (K = 1) and ResolveLocal(FS, TGocciaIdentifierExpression(E).Name, R) and
-       not InTDZ(TGocciaIdentifierExpression(E).Name) and
+       not InTDZ(TGocciaIdentifierExpression(E).Name) and not ParamInTDZ(TGocciaIdentifierExpression(E).Name, R) and
        ((WithCount = 0) or (WithsFor(TGocciaIdentifierExpression(E).Name, WithIdxScratch) = 0)) then
       Exit(R);
     if (K = 2) and not FS.IsArrow then
@@ -5603,6 +5691,7 @@ begin
     Emit(Ins(opEvalHint, EvalHint - 1, 0, EvalDescConst));
     EvalHint := 0;
   end;
+  RecordCallSite(E.Callee);
   if Spread then Emit(Ins(opCallV, Base, 0, 0) or (QWord(Ord(UndefThis)) shl 40))
   else Emit(Ins(opCall, Base, Argc, 0) or (QWord(Ord(UndefThis)) shl 40));
   ChainEnd(IsLink, SavedJ, Base);
@@ -5627,6 +5716,7 @@ begin
   AllocRegs(2);
   ExprTo(E.Callee, Base);
   Argc := CompileArgs(E.Arguments, Base + 2, Spread);
+  RecordCallSite(E.Callee);
   if Spread then Emit(Ins(opNewV, Base, 0, 0)) else Emit(Ins(opNew, Base, Argc, 0));
   if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
   FreeTo(Base);
@@ -6163,6 +6253,7 @@ begin
     V := AllocReg;
     ExprTo(E.Expressions[I], V);
   end;
+  RecordCallSite(E.Tag);
   Emit(Ins(opCall, Base, 1 + E.Expressions.Count, 0));
   if Dest <> Base then Emit(Ins(opMov, Dest, Base, 0));
   FreeTo(Base);
@@ -6240,7 +6331,7 @@ begin
     AName := A.Name;
     NoteWrite(A.Name);
     if Assigned(A.Target) and A.Target.Parenthesized then AName := '';
-    if ResolveLocal(FS, A.Name, R) and not BindingIsConst(A.Name) and not InTDZ(A.Name) and
+    if ResolveLocal(FS, A.Name, R) and not BindingIsConst(A.Name) and not InTDZ(A.Name) and not ParamInTDZ(A.Name, R) and
        ((WithCount = 0) or (WithsFor(A.Name, WithIdxScratch) = 0)) then
     begin
       if (A.Value is TGocciaFunctionExpression) or (A.Value is TGocciaArrowFunctionExpression) then CompileFuncExpr(A.Value, R, AName)
@@ -6336,7 +6427,7 @@ begin
           PureRead(TGocciaCompoundAssignmentExpression(E).Value) and
           ResolveLocal(FS, TGocciaCompoundAssignmentExpression(E).Name, R) and
           not BindingIsConst(TGocciaCompoundAssignmentExpression(E).Name) and
-          not InTDZ(TGocciaCompoundAssignmentExpression(E).Name) and
+          not InTDZ(TGocciaCompoundAssignmentExpression(E).Name) and not ParamInTDZ(TGocciaCompoundAssignmentExpression(E).Name, R) and
           ((WithCount = 0) or (WithsFor(TGocciaCompoundAssignmentExpression(E).Name, WithIdxScratch) = 0)) then
   begin
     { x op= v on a local, v a literal or a local: in place (nothing between the read of x and the operation can
@@ -6373,7 +6464,7 @@ begin
       StoreIdentRef(CO.Name, K, R);
     end
     else if not (CO.Operator in [gttLogicalAndAssign, gttLogicalOrAssign, gttNullishCoalescingAssign]) and
-       ResolveLocal(FS, CO.Name, K) and not BindingIsConst(CO.Name) and not InTDZ(CO.Name) then
+       ResolveLocal(FS, CO.Name, K) and not BindingIsConst(CO.Name) and not InTDZ(CO.Name) and not ParamInTDZ(CO.Name, K) then
     begin
       { a local: its value read first (the operand may change it), the result written to its register directly }
       LoadIdent(CO.Name, R);
@@ -6496,7 +6587,7 @@ begin
   begin
     Name := TGocciaIdentifierExpression(E.Operand).Name;
     NoteWrite(Name);
-    if ResolveLocal(FS, Name, R) and not BindingIsConst(Name) and not InTDZ(Name) and
+    if ResolveLocal(FS, Name, R) and not BindingIsConst(Name) and not InTDZ(Name) and not ParamInTDZ(Name, R) and
        ((WithCount = 0) or (WithsFor(Name, WithIdxScratch) = 0)) then
     begin
       { an unused x++ is ++x: no copy of the old value }
@@ -6982,6 +7073,12 @@ var Save, V, It, I, J, K, Tmp, Exc, H, RS: Integer; OP: TGocciaObjectDestructuri
       begin
         Rg := DeclareLocal(Name, IsConst);
         Emit(Ins(opMov, Rg, ValReg, 0));
+        { a pattern parameter's binding is initialized now: a later default of the same pattern reads it }
+        if ParamInTDZ(Name, Rg) then
+        begin
+          FS.ParamTDZ.Delete(FS.ParamTDZ.IndexOf(Name));
+          MarkInitialized(Name);
+        end;
       end
       else StoreIdent(Name, ValReg);
     end

@@ -267,6 +267,8 @@ function ThrowError(const Kind, Msg: UnicodeString): Boolean;
 function ThrowTypeError(const Msg: UnicodeString): Boolean;
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
 { a private element's read and write (o.#x, o.#x = v; Key the private name) }
+{ throws the TypeError for an iterator result V that is not an object (False) }
+function ThrowIterResultNotObject(V: TValue): Boolean;
 function PrivateGet(Obj: TValue; Key: PStr; var V: TValue): Boolean;
 function PrivateSet(Obj: TValue; Key: PStr; V: TValue): Boolean;
 function NewNativeFunction(Fn: TNativeFn; const Name: UnicodeString; Length: Integer): TValue;
@@ -1123,7 +1125,7 @@ begin
   if IsNullish(Ret) then begin PopRoots(1); Exit(True); end;
   if not CallValue(Ret, RootAt(TempTop - 1), nil, 0, R) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
-  if not IsObject(R) then Exit(ThrowTypeError('iterator result is not an object'));
+  if not IsObject(R) then Exit(ThrowIterResultNotObject(R));
   Result := True;
 end;
 
@@ -1258,7 +1260,7 @@ begin
     if not IsCallable(NextM) then Exit(ThrowTypeError('iterator.next is not a function'));
     if not CallValue(NextM, It, nil, 0, R) then Exit(False);
   end;
-  if not IsObject(R) then Exit(ThrowTypeError('iterator result is not an object'));
+  if not IsObject(R) then Exit(ThrowIterResultNotObject(R));
   PushRoot(R);
   if not GetV(R, AtomDone, Value) then begin PopRoots(1); Exit(False); end;
   Done := ToBool(Value);
@@ -3019,7 +3021,7 @@ begin
   if not GetV(It, AtomNext, NextF) then begin PopRoots(1); Exit(False); end;
   if not CallValue(NextF, RootAt(TempTop - 1), nil, 0, R) then begin PopRoots(1); Exit(False); end;
   PopRoots(1);
-  if not IsObject(R) then Exit(ThrowTypeError('iterator result is not an object'));
+  if not IsObject(R) then Exit(ThrowIterResultNotObject(R));
   PushRoot(R);
   if not GetV(R, AtomDone, Value) then begin PopRoots(1); Exit(False); end;
   Done := ToBool(Value);
@@ -4770,6 +4772,22 @@ begin
   Result := CallValue(GetSlot(ObjOf(Ctor), CI), This, nil, 0, V);
 end;
 
+{ the TypeError for an iterator result that is not an object, naming the value }
+function ThrowIterResultNotObject(V: TValue): Boolean;
+var S, D: TValue; T: UnicodeString;
+begin
+  if TypeOfStr(V) = 'symbol' then
+  begin
+    { the symbol's description (as G2.ObjModel's SymbolDescription reads it) }
+    if PCell(PtrOf(V))^.Extra = 1 then D := VUndefined else D := PValue(PByte(PtrOf(V)) + 8)^;
+    if IsString(D) then T := 'Symbol(' + StrToUnicode(StrOf(D)) + ')' else T := 'Symbol()';
+  end
+  else if IsObject(V) then T := '[object Object]'
+  else if ToStringV(V, S) and IsString(S) then T := StrToUnicode(StrOf(S))
+  else T := TypeOfStr(V);
+  Result := ThrowTypeError('Iterator result ' + T + ' is not an object');
+end;
+
 function DescribeValue(V: TValue): UnicodeString;
 var M: TValue; S: Integer;
 begin
@@ -5060,14 +5078,38 @@ begin
   Result := ThrowTypeError('Cannot delete property ''' + StrToUnicode(Key) + ''' of object');
 end;
 
-function XThrowNotFunction(Tpl: PFuncTemplate; PC, A: Integer): Boolean; noinline;
+{ the source text of the callee of the call or construct at PC, '' when none was recorded }
+function CallSiteText(Tpl: PFuncTemplate; PC: Integer): UnicodeString;
+var Lo, Hi, M: Integer;
 begin
-  Result := ThrowTypeError(CalleeDescription(Tpl, PC, A) + ' is not a function');
+  Lo := 0;
+  Hi := High(Tpl^.CallSites);
+  while Lo <= Hi do
+  begin
+    M := (Lo + Hi) shr 1;
+    if Tpl^.CallSites[M].PC = PC then Exit(StrToUnicode(Tpl^.CallSites[M].Text));
+    if Tpl^.CallSites[M].PC < PC then Lo := M + 1 else Hi := M - 1;
+  end;
+  Result := '';
 end;
 
-function XThrowNotCtor(T: PFuncTemplate): Boolean; noinline;
+{ the callee at PC (in register A) is not callable: a construct says it is not a constructor }
+function XThrowNotFunction(Tpl: PFuncTemplate; PC, A: Integer; IsNew: Boolean): Boolean; noinline;
+var Text: UnicodeString;
 begin
-  Result := ThrowTypeError(StrToUnicode(T^.Name) + ' is not a constructor');
+  Text := CallSiteText(Tpl, PC);
+  if Text = '' then Text := CalleeDescription(Tpl, PC, A);
+  if IsNew then Result := ThrowTypeError(Text + ' is not a constructor')
+  else Result := ThrowTypeError(Text + ' is not a function');
+end;
+
+{ the function T constructed at PC has no [[Construct]] }
+function XThrowNotCtor(Tpl: PFuncTemplate; PC: Integer; T: PFuncTemplate): Boolean; noinline;
+var Text: UnicodeString;
+begin
+  Text := CallSiteText(Tpl, PC);
+  if Text = '' then Text := StrToUnicode(T^.Name);
+  Result := ThrowTypeError(Text + ' is not a constructor');
 end;
 
 function XThrowTDZ(Key: PStr): Boolean; noinline;
@@ -7633,7 +7675,7 @@ LReload:
           Fr^.PC := PC;
           if not IsCallable(VA) then
           begin
-            XThrowNotFunction(Tpl, PC - 1, A);
+            XThrowNotFunction(Tpl, PC - 1, A, (TOp(I and $FF) = opNew) or (TOp(I and $FF) = opNewV));
             goto LThrow;
           end;
           O := ObjOf(VA);
@@ -7644,12 +7686,12 @@ LReload:
               T := PFuncTemplate(O^.Native);
               if T^.IsArrow or (T^.IsMethod and not T^.IsClassCtor) then
               begin
-                XThrowNotCtor(T);
+                XThrowNotCtor(Tpl, PC - 1, T);
                 goto LThrow;
               end;
               if T^.IsGenerator or T^.IsAsync then
               begin
-                XThrowNotCtor(T);
+                XThrowNotCtor(Tpl, PC - 1, T);
                 goto LThrow;
               end;
               SavedTop := StackTop;
@@ -8180,16 +8222,18 @@ LReload:
                    ThrowTypeError('The iterator does not provide a ''throw'' method');
                    goto LThrow;
                  end;
+                 if not IsCallable(VB) then begin ThrowTypeError('Iterator throw is not callable'); goto LThrow; end;
                  if not CallValue(VB, R[B], @V, 1, VA) then goto LThrow;
                end;
           else
             begin
               if not GetV(R[B], AtomReturn, VB) then goto LThrow;
               if IsNullish(VB) then begin Pending := NewRetComp(R[B + 2]); goto LThrow; end;
+              if not IsCallable(VB) then begin ThrowTypeError('Iterator return is not callable'); goto LThrow; end;
               if not CallValue(VB, R[B], @V, 1, VA) then goto LThrow;
             end;
           end;
-          if not IsObject(VA) then begin ThrowTypeError('iterator result is not an object'); goto LThrow; end;
+          if not IsObject(VA) then begin ThrowIterResultNotObject(VA); goto LThrow; end;
           R[B + 2] := VA;   { rooted while done and value are read }
           if not GetV(VA, AtomDone, V) then goto LThrow;
           if ToBool(V) then
@@ -8290,7 +8334,7 @@ LReload:
       opIterUnpack:
         begin
           Fr^.PC := PC;
-          if not IsObject(R[A]) then begin ThrowTypeError('iterator result is not an object'); goto LThrow; end;
+          if not IsObject(R[A]) then begin ThrowIterResultNotObject(R[A]); goto LThrow; end;
           if not GetV(R[A], AtomDone, V) then goto LThrow;
           if ToBool(V) then
           begin
@@ -8315,7 +8359,7 @@ LReload:
         if not IsObject(R[A]) then
         begin
           Fr^.PC := PC;
-          ThrowTypeError('iterator result is not an object');
+          ThrowIterResultNotObject(R[A]);
           goto LThrow;
         end;
       opYieldStarAsync:
@@ -8351,11 +8395,13 @@ LReload:
                        begin
                          if not GetV(R[B], AtomReturn, VB) then goto LThrow;
                          if IsNullish(VB) then begin ThrowTypeError('The iterator does not provide a ''throw'' method'); goto LThrow; end;
+                         if not IsCallable(VB) then begin ThrowTypeError('Iterator return is not callable'); goto LThrow; end;
                          if not CallValue(VB, R[B], nil, 0, VA) then goto LThrow;
                          R[B + 4] := MkInt(2);
                        end
                        else
                        begin
+                         if not IsCallable(VB) then begin ThrowTypeError('Iterator throw is not callable'); goto LThrow; end;
                          if not CallValue(VB, R[B], @V, 1, VA) then goto LThrow;
                          R[B + 4] := MkInt(1);
                        end;
@@ -8370,6 +8416,7 @@ LReload:
                     end
                     else
                     begin
+                      if not IsCallable(VB) then begin ThrowTypeError('Iterator return is not callable'); goto LThrow; end;
                       if not CallValue(VB, R[B], @V, 1, VA) then goto LThrow;
                       R[B + 4] := MkInt(3);
                     end;
@@ -8385,7 +8432,7 @@ LReload:
             1, 3:
               begin
                 VA := R[B + 2];
-                if not IsObject(VA) then begin R[B + 4] := MkInt(0); ThrowTypeError('iterator result is not an object'); goto LThrow; end;
+                if not IsObject(VA) then begin R[B + 4] := MkInt(0); ThrowIterResultNotObject(VA); goto LThrow; end;
                 if not GetV(VA, AtomDone, V) then begin R[B + 4] := MkInt(0); goto LThrow; end;
                 if ToBool(V) then
                 begin
@@ -8414,7 +8461,7 @@ LReload:
             2:
               begin
                 R[B + 4] := MkInt(0);
-                if not IsObject(R[B + 2]) then ThrowTypeError('iterator result is not an object')
+                if not IsObject(R[B + 2]) then ThrowIterResultNotObject(R[B + 2])
                 else ThrowTypeError('The iterator does not provide a ''throw'' method');
                 goto LThrow;
               end;
