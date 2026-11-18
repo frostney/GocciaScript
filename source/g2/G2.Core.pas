@@ -376,7 +376,7 @@ type
   TLangProfile = record
     Restricted: Boolean;
     Asi, VarDecl, FuncDecl, ForLoop, WhileLoop, LooseEq, NonStrict, ArgumentsObject, Labels, ForIn,
-      WarningUnsupported, FunctionCtor, ShadowRealm: Boolean;
+      WarningUnsupported, FunctionCtor, ShadowRealm, StrictTypes: Boolean;
   end;
 
 { the profile new code compiles under, through noinline routines (an inline threadvar access in another unit
@@ -387,6 +387,8 @@ procedure SetActiveProfile(const P: TLangProfile); noinline;
 function ProfileNonStrict: Boolean; noinline;
 function ProfileArgumentsObject: Boolean; noinline;
 function ProfileFunctionCtor: Boolean; noinline;
+{ types-as-comments annotations checked at run time (strict-types; off for an unrestricted profile) }
+function ProfileStrictTypes: Boolean; noinline;
 
 { ---- the native stack ---- }
 { records how far this thread's native stack may grow (its bounds from pthread_getattr_np, a margin kept for the
@@ -485,6 +487,11 @@ end;
 function ProfileFunctionCtor: Boolean;
 begin
   Result := not CurProfile.Restricted or CurProfile.FunctionCtor;
+end;
+
+function ProfileStrictTypes: Boolean;
+begin
+  Result := CurProfile.Restricted and CurProfile.StrictTypes;
 end;
 
 

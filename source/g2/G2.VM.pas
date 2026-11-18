@@ -6760,6 +6760,31 @@ begin
   SwitchRealm(R0);
 end;
 
+{ opCheckType: V has the strict type Code (types-as-comments; GocciaScript's Goccia.Types.Enforcement) }
+function XTypeOK(V: TValue; Code: QWord): Boolean; inline;
+begin
+  case Code of
+    TYPE_NUMBER: Result := IsNumber(V);
+    TYPE_BOOLEAN: Result := (V = VTrue) or (V = VFalse);
+    TYPE_STRING: Result := IsString(V);
+    TYPE_OBJECT: Result := IsObject(V);
+  else Result := True;
+  end;
+end;
+
+function XThrowTypeMismatch(V: TValue; Code: QWord): Boolean; noinline;
+var Got, Want: UnicodeString;
+begin
+  if V = VNull then Got := 'null' else Got := TypeOfStr(V);
+  case Code of
+    TYPE_NUMBER: Want := 'number';
+    TYPE_BOOLEAN: Want := 'boolean';
+    TYPE_STRING: Want := 'string';
+  else Want := 'object';
+  end;
+  Result := ThrowTypeError('Type ''' + Got + ''' is not assignable to type ''' + Want + '''');
+end;
+
 { opIntrinsic: Intrinsics[Idx](Args[0], ..., Args[Argc - 1]) }
 function XIntrinsic(Idx: Integer; Args: PValue; Argc: Integer; var Res: TValue): Boolean; noinline;
 begin
@@ -8515,6 +8540,13 @@ LReload:
             3: ThrowError('ReferenceError', StrToUnicode(PStr(PtrOf(K[I shr 40]))));
           else ThrowTypeError('Assignment to constant variable.');
           end;
+          goto LThrow;
+        end;
+      opCheckType:
+        if not XTypeOK(R[A], I shr 40) then
+        begin
+          Fr^.PC := PC;
+          XThrowTypeMismatch(R[A], I shr 40);
           goto LThrow;
         end;
       opIntrinsic:

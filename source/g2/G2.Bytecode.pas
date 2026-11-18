@@ -10,6 +10,11 @@ uses
   G2.Core, Goccia.SourceSpan;
 
 const
+  { opCheckType's types }
+  TYPE_NUMBER = 1;
+  TYPE_BOOLEAN = 2;
+  TYPE_STRING = 3;
+  TYPE_OBJECT = 4;
   { prototype hops a get IC's entry follows to the property's holder (VerMask has a bit for each) }
   IC_MAX_DEPTH = 8;
 
@@ -96,6 +101,8 @@ type
                                opGetProp) }
     ,opIntrinsic             { R[A] := Intrinsics[C](R[A], ..., R[A + B - 1]): a helper of the builtins5 prelude for
                                a construct the compiler lowers to a call (INTRINSIC_* in G2.VM) }
+    ,opCheckType             { a TypeError unless R[A] has type C (strict-types: TYPE_NUMBER, TYPE_BOOLEAN,
+                               TYPE_STRING, TYPE_OBJECT) }
   );
 
   PFuncTemplate = ^TFuncTemplate;

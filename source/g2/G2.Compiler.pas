@@ -82,7 +82,7 @@ threadvar
 implementation
 
 uses
-  TypInfo, Goccia.Scope.BindingMap, G2.VM, G2.Lazy, G2.PreParse;
+  TypInfo, Goccia.Scope.BindingMap, Goccia.Types.Enforcement, Goccia.Bytecode.Chunk, G2.VM, G2.Lazy, G2.PreParse;
 
 type
   { an expression that makes a closure (a function, arrow, method, accessor or class) }
@@ -147,6 +147,9 @@ end;
 procedure TClosureScan.LeavePart;
 begin
 end;
+
+{ strict-types: opCheckType's code for a declaration (defined with the strict-types section) }
+function StrictTypeCode(const Annotation: string; Init: TGocciaExpression): Integer; forward;
 
 function MakesClosure(N: TGocciaASTNode): Boolean;
 var Sc: TClosureScan;
@@ -260,6 +263,8 @@ type
     IsLexical, Initialized: Boolean;
     HoleNop: Integer;
     IsFnName: Boolean;   { a named function expression's own name: immutable, but assigning it is a TypeError only in strict code }
+    { strict-types: the type every value stored in the binding must have (TYPE_*), 0 for none }
+    LType: Byte;
   end;
 
   TScope = class
@@ -450,6 +455,8 @@ type
     procedure CompileUsingList(L: TList<TGocciaASTNode>; Stmts: TObjectList<TGocciaStatement>; Body: Boolean = False);
     procedure CompileUsingDecl(D: TGocciaUsingDeclaration);
     procedure CompileEnum(D: TGocciaEnumDeclaration);
+    function BindingType(const N: UnicodeString): Integer;
+    procedure SetBindingType(const N: UnicodeString; Code: Integer);
     procedure RecordCallSite(Callee: TGocciaExpression);
     function ParamInTDZ(const N: UnicodeString; Reg: Integer): Boolean;
     procedure FinallyAtDepth(B: TGocciaASTNode; Depth: Integer);
@@ -684,6 +691,7 @@ begin
   Bindings[Count].IsLexical := False;
   Bindings[Count].Initialized := True;
   Bindings[Count].HoleNop := -1;
+  Bindings[Count].LType := 0;
   Inc(Count);
   if Count <= 8 then Exit;
   if Count * 2 > Length(Index) then
@@ -1428,6 +1436,8 @@ begin
       if InTDZ(N) then Emit(Ins(opCheckHole, Reg, 0, AtomConst(N)));
       if EmitConstStore(N) then Exit;
     end;
+    T := BindingType(N);
+    if T <> 0 then Emit(Ins(opCheckType, Src, 0, T));
     if Reg <> Src then Emit(Ins(opMov, Reg, Src, 0));
     Exit;
   end;
@@ -1447,6 +1457,8 @@ begin
       end;
       if EmitConstStore(N) then Exit;
     end;
+    T := BindingType(N);
+    if T <> 0 then Emit(Ins(opCheckType, Src, 0, T));
     Emit(Ins(opSetUpv, Src, U, 0));
     Exit;
   end;
@@ -1879,6 +1891,23 @@ begin
       end;
     end;
     FreeAndNil(FS.ParamTDZ);
+    { strict-types: an annotated parameter's argument (or default) is checked, and so is every later store }
+    if ProfileStrictTypes then
+    begin
+      { an optional parameter or one with a default is not checked; a rest parameter's type applies to later
+        stores only }
+      J := 0;
+      for I := 0 to High(Params) do
+      begin
+        if not Params[I].IsRest then Inc(J);
+        if Params[I].IsPattern or (Params[I].TypeAnnotation = '') or Params[I].IsOptional or
+           Assigned(Params[I].DefaultValue) then Continue;
+        K := StrictTypeCode(Params[I].TypeAnnotation, nil);
+        if K = 0 then Continue;
+        if not Params[I].IsRest then Emit(Ins(opCheckType, J, 0, K));
+        SetBindingType(UnicodeString(Params[I].Name), K);
+      end;
+    end;
     InParamInit := False;
     F.ParamAwait := False;
     if DefaultSuperForward then
@@ -3014,6 +3043,42 @@ begin
   FreeTo(Save);
 end;
 
+{ ---------------- strict-types ---------------- }
+{ types-as-comments under strict-types (Goccia.Types.Enforcement): a binding declared with a type annotation, or
+  without one but with an initializer whose type is evident (a literal, a template, an object or array literal,
+  a function or a construction), keeps that type; every value stored into it is checked first (opCheckType), so
+  a store that fails leaves the old value }
+
+{ opCheckType's code for an annotation ('' none) or, without one, the initializer's evident type; 0 for none }
+function StrictTypeCode(const Annotation: string; Init: TGocciaExpression): Integer;
+var T: TGocciaLocalType;
+begin
+  Result := 0;
+  if not ProfileStrictTypes then Exit;
+  if Annotation <> '' then T := TypeAnnotationToLocalType(Annotation)
+  else if Init <> nil then T := InferLocalType(Init)
+  else Exit;
+  case T of
+    sltInteger, sltFloat: Result := TYPE_NUMBER;
+    sltBoolean: Result := TYPE_BOOLEAN;
+    sltString: Result := TYPE_STRING;
+    sltReference: Result := TYPE_OBJECT;
+  end;
+end;
+
+function TCompiler.BindingType(const N: UnicodeString): Integer;
+var F: TFuncState; S: TScope; J: Integer;
+begin
+  Result := 0;
+  if FindBinding(N, F, S, J) then Result := S.Bindings[J].LType;
+end;
+
+procedure TCompiler.SetBindingType(const N: UnicodeString; Code: Integer);
+var F: TFuncState; S: TScope; J: Integer;
+begin
+  if FindBinding(N, F, S, J) then S.Bindings[J].LType := Code;
+end;
+
 { a private name's class-scope binding (its key) }
 function PrivKeyName(const N: string): UnicodeString; inline;
 begin
@@ -3895,6 +3960,17 @@ begin
     end
     else if not D.IsVar then
       Emit(Ins(opLoadUndef, R, 0, 0));
+    { strict-types: the declaration's type, checked on its initial value (an annotated binding without one starts
+      undefined) and on every later store }
+    if V.HasInitializer then T := StrictTypeCode(V.TypeAnnotation, V.Initializer)
+    else T := StrictTypeCode(V.TypeAnnotation, nil);
+    { a var redeclared keeps the type its first declaration gave it }
+    if D.IsVar and (BindingType(V.Name) <> 0) then T := BindingType(V.Name);
+    if T <> 0 then
+    begin
+      if V.HasInitializer then Emit(Ins(opCheckType, R, 0, T));
+      SetBindingType(V.Name, T);
+    end;
     if not D.IsVar then MarkInitialized(V.Name);
   end;
 end;
@@ -6331,7 +6407,7 @@ begin
     AName := A.Name;
     NoteWrite(A.Name);
     if Assigned(A.Target) and A.Target.Parenthesized then AName := '';
-    if ResolveLocal(FS, A.Name, R) and not BindingIsConst(A.Name) and not InTDZ(A.Name) and not ParamInTDZ(A.Name, R) and
+    if ResolveLocal(FS, A.Name, R) and not BindingIsConst(A.Name) and not InTDZ(A.Name) and (BindingType(A.Name) = 0) and not ParamInTDZ(A.Name, R) and
        ((WithCount = 0) or (WithsFor(A.Name, WithIdxScratch) = 0)) then
     begin
       if (A.Value is TGocciaFunctionExpression) or (A.Value is TGocciaArrowFunctionExpression) then CompileFuncExpr(A.Value, R, AName)
@@ -6427,7 +6503,7 @@ begin
           PureRead(TGocciaCompoundAssignmentExpression(E).Value) and
           ResolveLocal(FS, TGocciaCompoundAssignmentExpression(E).Name, R) and
           not BindingIsConst(TGocciaCompoundAssignmentExpression(E).Name) and
-          not InTDZ(TGocciaCompoundAssignmentExpression(E).Name) and not ParamInTDZ(TGocciaCompoundAssignmentExpression(E).Name, R) and
+          not InTDZ(TGocciaCompoundAssignmentExpression(E).Name) and (BindingType(TGocciaCompoundAssignmentExpression(E).Name) = 0) and not ParamInTDZ(TGocciaCompoundAssignmentExpression(E).Name, R) and
           ((WithCount = 0) or (WithsFor(TGocciaCompoundAssignmentExpression(E).Name, WithIdxScratch) = 0)) then
   begin
     { x op= v on a local, v a literal or a local: in place (nothing between the read of x and the operation can
@@ -6464,7 +6540,7 @@ begin
       StoreIdentRef(CO.Name, K, R);
     end
     else if not (CO.Operator in [gttLogicalAndAssign, gttLogicalOrAssign, gttNullishCoalescingAssign]) and
-       ResolveLocal(FS, CO.Name, K) and not BindingIsConst(CO.Name) and not InTDZ(CO.Name) and not ParamInTDZ(CO.Name, K) then
+       ResolveLocal(FS, CO.Name, K) and not BindingIsConst(CO.Name) and not InTDZ(CO.Name) and (BindingType(CO.Name) = 0) and not ParamInTDZ(CO.Name, K) then
     begin
       { a local: its value read first (the operand may change it), the result written to its register directly }
       LoadIdent(CO.Name, R);
@@ -6587,7 +6663,7 @@ begin
   begin
     Name := TGocciaIdentifierExpression(E.Operand).Name;
     NoteWrite(Name);
-    if ResolveLocal(FS, Name, R) and not BindingIsConst(Name) and not InTDZ(Name) and not ParamInTDZ(Name, R) and
+    if ResolveLocal(FS, Name, R) and not BindingIsConst(Name) and not InTDZ(Name) and (BindingType(Name) = 0) and not ParamInTDZ(Name, R) and
        ((WithCount = 0) or (WithsFor(Name, WithIdxScratch) = 0)) then
     begin
       { an unused x++ is ++x: no copy of the old value }

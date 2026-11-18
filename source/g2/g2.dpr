@@ -138,6 +138,7 @@ begin
   Prof.WarningUnsupported := Flag('warning-unsupported-features');
   Prof.FunctionCtor := Flag('unsafe-function-constructor');
   Prof.ShadowRealm := Flag('unsafe-shadowrealm');
+  Prof.StrictTypes := Flag('strict-types');
   if not FindConfigEntry(Entries, 'source-type', SourceType) then SourceType := '';
   { every key as a JSON string (an array's elements as a list), the first entry for a key winning }
   ConfigJson := '{';
