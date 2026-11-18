@@ -1082,7 +1082,8 @@
     var s = loc(this, "getTimeZones"), b = parseBaseName(s.locale);
     if (b.region === undefined) return undefined;
     var a = intlOp(23, b.region);
-    if (a === undefined) return undefined;
+    // TimeZonesOfLocale: a region without commonly used time zones (BV) has an empty list
+    if (a === undefined) return [];
     listSort(a);
     return a;
   } }.getTimeZones);

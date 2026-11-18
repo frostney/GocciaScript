@@ -122,6 +122,22 @@
   // GocciaScript's globalThis cannot be reassigned
   defineProperty(G, 'globalThis', { writable: false });
 
+  // PermissionDenied (docs/permissions.md): the error a permission check throws, an Error subclass callable without
+  // new, like the native error constructors (its instances have [[ErrorData]], so Error.isError holds)
+  const reflectConstruct = Reflect.construct, ErrorCtor = Error;
+  const PermissionDenied = function PermissionDenied(message) {
+    const args = arguments.length > 1 ? [message, arguments[1]] : [message];
+    return reflectConstruct(ErrorCtor, args, new.target === undefined ? PermissionDenied : new.target);
+  };
+  Object.setPrototypeOf(PermissionDenied, ErrorCtor);
+  const permissionDeniedProto = Object.create(ErrorCtor.prototype);
+  defineProperty(permissionDeniedProto, 'constructor', { value: PermissionDenied, writable: true, enumerable: false, configurable: true });
+  defineProperty(permissionDeniedProto, 'name', { value: 'PermissionDenied', writable: true, enumerable: false, configurable: true });
+  defineProperty(permissionDeniedProto, 'message', { value: '', writable: true, enumerable: false, configurable: true });
+  defineProperty(PermissionDenied, 'prototype', { value: permissionDeniedProto, writable: false, enumerable: false, configurable: false });
+  defineProperty(G, 'PermissionDenied', { value: PermissionDenied, writable: true, enumerable: false, configurable: true });
+  shared.PermissionDenied = PermissionDenied;
+
   const Goccia = {
     version: info.version,
     commit: info.commit,

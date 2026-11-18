@@ -283,7 +283,8 @@
     var n = ToNumberV(v);
     if (!NumberIsFinite(n)) throw rangeError("roundingIncrement must be finite");
     var i = MathTrunc(n);
-    if (i < 1 || i > 1e9) throw rangeError("roundingIncrement out of range");
+    if (i < 1) throw rangeError("roundingIncrement must be >= 1");
+    if (i > 1e9) throw rangeError("roundingIncrement must be <= 1000000000");
     return i;
   }
   function ValidateTemporalRoundingIncrement(inc, dividend, inclusive) {
