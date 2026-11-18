@@ -84,10 +84,15 @@ describe("expression nesting limit", () => {
   });
 
   test("a regular expression literal nested too deep is a SyntaxError", () => {
-    // The literal's pattern compiles when it is evaluated.
+    // A literal's pattern is checked when the script is parsed (13.2.7.2
+    // IsValidRegularExpressionLiteral is an early error), so a pattern past the
+    // engine's nesting bound of 1,024 groups fails the whole evaluation; the
+    // try around it never runs.
     const source = `(() => { try { return String(/${"(".repeat(DEEP)}a${")".repeat(DEEP)}/.test("a")); } ` +
       `catch (error) { return error.constructor.name; } })()`;
-    expect(realm.evaluate(source)).toBe("SyntaxError");
+    const error = errorOf(source);
+    expect(error instanceof SyntaxError).toBe(true);
+    expect(error.message.includes("nesting exceeds the supported limit")).toBe(true);
   });
 
   test("the engine keeps working after the error", () => {

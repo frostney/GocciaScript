@@ -82,8 +82,17 @@ test("JSON.stringify nested objects", () => {
   expect(JSON.stringify(obj)).toBe('{"a":{"b":{"c":1}}}');
 });
 
-test("JSON.stringify rejects excessive acyclic nesting", () => {
-  const value = Array(257).fill(0).reduce((child) => [child], 0);
+// SerializeJSONProperty has no nesting limit. The engine serializes values
+// thousands deep, and past its native-recursion bound (10,000) it throws a
+// RangeError instead of exhausting the native stack.
+test("JSON.stringify writes deeply nested acyclic values", () => {
+  const depth = 5000;
+  const value = Array(depth).fill(0).reduce((child) => [child], 0);
+  expect(JSON.stringify(value)).toBe("[".repeat(depth) + "0" + "]".repeat(depth));
+});
+
+test("JSON.stringify past the engine's nesting bound throws a RangeError", () => {
+  const value = Array(100000).fill(0).reduce((child) => [child], 0);
   expect(() => JSON.stringify(value)).toThrow(RangeError);
 });
 

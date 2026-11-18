@@ -59,10 +59,18 @@ test("JSON.parse nested objects", () => {
   expect(obj.a.b).toBe(1);
 });
 
-test("JSON.parse rejects excessive container nesting", () => {
-  const open = Array(257).fill("[").join("");
-  const close = Array(257).fill("]").join("");
-  expect(() => JSON.parse(open + "0" + close)).toThrow(SyntaxError);
+// The grammar has no nesting limit. The engine parses containers thousands
+// deep, and past its native-recursion bound (10,000) it throws a RangeError
+// instead of exhausting the native stack.
+test("JSON.parse reads deeply nested containers", () => {
+  const depth = 5000;
+  const value = JSON.parse("[".repeat(depth) + "0" + "]".repeat(depth));
+  expect(JSON.stringify(value)).toBe("[".repeat(depth) + "0" + "]".repeat(depth));
+  expect(value.flat(Infinity)).toEqual([0]);
+});
+
+test("JSON.parse past the engine's nesting bound throws a RangeError", () => {
+  expect(() => JSON.parse("[".repeat(100000) + "]".repeat(100000))).toThrow(RangeError);
 });
 
 test("JSON.parse empty structures", () => {

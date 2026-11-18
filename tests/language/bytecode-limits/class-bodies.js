@@ -1,5 +1,5 @@
 /*---
-description: A class body past a function's constant or function limit is a catchable SyntaxError
+description: A class body may hold more than 65,535 constants and more than 65,536 functions
 features: [ShadowRealm]
 ---*/
 
@@ -7,29 +7,15 @@ const realm = new ShadowRealm();
 const list = (count, item, separator = ", ") =>
   Array.from({ length: count }, (_, i) => item(i)).join(separator);
 
-const compileError = (source) => {
-  try {
-    realm.evaluate(source);
-  } catch (error) {
-    return error;
-  }
-  return undefined;
-};
-
-const expectLimit = (source, message) => {
-  const error = compileError(source);
-  expect(error instanceof SyntaxError).toBe(true);
-  expect(error.message.includes(message)).toBe(true);
-};
-
 describe("class body limits", () => {
-  test("65,600 distinct field names are a SyntaxError", () => {
-    expectLimit(`typeof (class { ${list(65600, (i) => `f${i};`, " ")} })`,
-      "Too many constants in one function: more than 65535");
+  // Neither a function's constants nor the functions defined directly in it
+  // are limited to 16-bit counts: these class bodies compile and run.
+  test("65,600 distinct field names evaluate", () => {
+    expect(realm.evaluate(`const C = class { ${list(65600, (i) => `f${i} = ${i};`, " ")} }; const c = new C(); Object.keys(c).length + ":" + c.f65599`))
+      .toBe("65600:65599");
   });
 
-  test("65,537 methods of one name are a SyntaxError", () => {
-    expectLimit(`typeof (class { ${list(65537, () => "m() {}", " ")} })`,
-      "Too many functions defined directly in one function: more than 65536");
+  test("65,537 methods of one name evaluate, the last definition winning", () => {
+    expect(realm.evaluate(`const C = class { ${list(65537, (i) => `m() { return ${i}; }`, " ")} }; new C().m()`)).toBe(65536);
   });
 });
