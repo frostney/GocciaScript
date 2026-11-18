@@ -817,8 +817,8 @@ end;
 { GetViewValue / SetViewValue's common case: an int32 index, a Number value (set), a fixed-length view of a fixed,
   unshared, mutable buffer, a non-BigInt kind (False: not this case, DVAccess2's general path takes it) }
 function DVAccessFast(Args: TArgs; Argc: Integer; var Res: TValue; Kind: Integer; IsSet: Boolean): Boolean;
-var O, B: PObj; Idx, ES, I, VL: Integer; LE, V: TValue; Little: Boolean; P: PByte; Bytes: array[0..7] of Byte;
-  D: Double;
+var O, B: PObj; Idx, ES, VL: Integer; LE, V: TValue; Little: Boolean; P: PByte; Bytes: array[0..7] of Byte;
+  D: Double; Q: QWord;
 begin
   Result := False;
   if (Kind >= taBigInt64) or (Kind = taFloat16) or (Argc < 1) or not IsDV(Args[0]) or ((Args[1] shr 48) <> TAG_INT_HI) then Exit;
@@ -845,6 +845,7 @@ begin
   P := BufferData(B) + O^.Pad + Idx;
   if IsSet then
   begin
+    PQWord(@Bytes[0])^ := 0;
     D := NumOf(V);
     case Kind of
       taFloat32: PSingle(@Bytes[0])^ := D;
@@ -853,14 +854,28 @@ begin
       if (V shr 48) = TAG_INT_HI then PLongWord(@Bytes[0])^ := LongWord(Int32(UInt32(V)))
       else Exit;
     end;
-    for I := 0 to ES - 1 do
-      if Little then P[I] := Bytes[I] else P[I] := Bytes[ES - 1 - I];
+    { the element's bytes as one (unaligned) store, swapped for big-endian }
+    Q := PQWord(@Bytes[0])^;
+    case ES of
+      1: P^ := Byte(Q);
+      2: if Little then PWord(P)^ := Word(Q) else PWord(P)^ := SwapEndian(Word(Q));
+      4: if Little then PLongWord(P)^ := LongWord(Q) else PLongWord(P)^ := SwapEndian(LongWord(Q));
+    else
+      if Little then PQWord(P)^ := Q else PQWord(P)^ := SwapEndian(Q);
+    end;
     Res := VUndefined;
   end
   else
   begin
-    for I := 0 to ES - 1 do
-      if Little then Bytes[I] := P[I] else Bytes[I] := P[ES - 1 - I];
+    { the element's bytes as one (unaligned) load, swapped for big-endian, read below as the host's little-endian }
+    case ES of
+      1: Q := P^;
+      2: if Little then Q := PWord(P)^ else Q := SwapEndian(PWord(P)^);
+      4: if Little then Q := PLongWord(P)^ else Q := SwapEndian(PLongWord(P)^);
+    else
+      if Little then Q := PQWord(P)^ else Q := SwapEndian(PQWord(P)^);
+    end;
+    PQWord(@Bytes[0])^ := Q;
     case Kind of
       taInt8: Res := MkInt(PShortInt(@Bytes[0])^);
       taUint8: Res := MkInt(Bytes[0]);
