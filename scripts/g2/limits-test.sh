@@ -36,6 +36,11 @@ check promise-catch --timeout=200 "$T" \
 check async-loop --timeout=200 "$T" 'async function f() { for (;;) await null; } f().catch(() => console.log("rejected"));'
 check generator --timeout=200 "$T" 'function* g() { for (;;) yield 1; } try { for (const x of g()) {} } finally { console.log("finally"); }'
 check getter --timeout=200 "$T" 'try { JSON.stringify({ get x() { for (;;) {} } }); } catch { console.log("caught"); }'
+# the timer's interrupt against a call in flight, many times at once: a run that sees the frame bound drop before
+# Interrupt is set throws a catchable RangeError, the promise job swallows it and the run exits 0
+printf '%s\n' 'const f = () => Promise.resolve().then(f); f();' > "$D/race.js"
+race=$(seq 1 200 | xargs -P 16 -I{} sh -c "timeout 20 \"$G2\" --timeout=50 \"$D/race.js\" > /dev/null 2>&1; echo \$?" | grep -cv '^1$')
+[ "$race" -eq 0 ] || { echo "FAIL timeout-race: $race of 200 runs did not abort"; fails=$((fails + 1)); }
 check under-timeout --timeout=5000 '499999500000' 'let s = 0; for (let i = 0; i < 1e6; i++) s += i; console.log(s);'
 
 I='Fatal error: Execution exceeded instruction limit of 1000'

@@ -446,8 +446,10 @@ begin
     Now := GetTickCount64;
     if Now >= Deadline then
     begin
-      PFrameLimit^ := 0;
+      { Interrupt first (a full barrier): a call that sees the frame bound at 0 must see Interrupt set, or it
+        throws an ordinary RangeError that the script can catch }
       InterLockedExchange(PInterrupt^, 1);
+      PFrameLimit^ := 0;
       Exit;
     end;
     RTLEventWaitFor(Wake, Deadline - Now);
@@ -468,8 +470,8 @@ procedure XAbort(Kind: Integer); noinline;
 begin
   if AbortKind = 0 then AbortKind := Kind;
   Aborting := True;
-  FrameLimit := 0;
   Interrupt := 1;
+  FrameLimit := 0;
   if AbortKind = 2 then ThrowError('Error', 'Execution exceeded instruction limit of ' + IntToStr(InstrMax))
   else ThrowError('Error', 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms');
 end;
@@ -477,6 +479,8 @@ end;
 { a call that found the frames full: the abort of a spent limit, else PushBytecodeFrame's RangeError }
 function XFrameOverflow: Boolean; noinline;
 begin
+  { the timer's stores in their order: the frame bound read before, Interrupt after }
+  ReadBarrier;
   if Interrupt <> 0 then
   begin
     XAbort(1);
