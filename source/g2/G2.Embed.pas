@@ -10,7 +10,7 @@ unit G2.Embed;
 interface
 
 uses
-  SysUtils, G2.Core, G2.HostAPI;
+  SysUtils, Goccia.ModuleResolver, G2.Core, G2.HostAPI;
 
 type
   { a console line and the method that wrote it (G2.HostAPI TConsoleSink) }
@@ -61,6 +61,7 @@ type
     FExposeTimers: Boolean;
     FResultForm: TG2ResultForm;
     FOnConsole: TG2ConsoleEvent;
+    FResolver: TModuleResolver;
     FFailOnUnhandledRejection: Boolean;
     function InstallHost(var Err: UnicodeString): Boolean;
   public
@@ -85,6 +86,9 @@ type
     property ResultForm: TG2ResultForm read FResultForm write FResultForm;
     { console lines go here instead of to stdout (nil: stdout) }
     property OnConsole: TG2ConsoleEvent read FOnConsole write FOnConsole;
+    { the run's import resolution (an import map, aliases, node_modules), not owned; nil for relative and absolute
+      paths only }
+    property Resolver: TModuleResolver read FResolver write FResolver;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
@@ -268,6 +272,7 @@ begin
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   SetActiveProfile(FProfile);
   SetConsoleSink(FOnConsole);
+  SetHostResolver(FResolver);
   case FSourceKind of
     g2skScript: Kind := 1;
     g2skModule: Kind := 2;
@@ -349,6 +354,7 @@ begin
     end;
   finally
     SetProvidedSource('', '');
+    SetHostResolver(nil);
     PopRoots(1);
     LimitsDisarm;
   end;

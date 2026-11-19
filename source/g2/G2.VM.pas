@@ -1513,7 +1513,8 @@ begin
     T := Frames[I].Tpl;
     if T = nil then Continue;
     Src := T^.SourceName;
-    if (Src = '') or (Src[1] = '<') then Continue;
+    { the preludes' sources are named <...>; a host's <stdin> is the user's code }
+    if (Src = '') or ((Src[1] = '<') and (Src <> '<stdin>')) then Continue;
     if T^.Name <> nil then Nm := StrToUnicode(T^.Name) else Nm := '';
     if Nm = '<script>' then Nm := '<module>'
     else if Nm = '' then Nm := '<anonymous>'

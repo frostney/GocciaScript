@@ -12,7 +12,7 @@ unit G2.HostAPI;
 interface
 
 uses
-  G2.Core;
+  G2.Core, Goccia.ModuleResolver;
 
 { the host's globals on this thread's realm (after EngineInit): the const Goccia, and the conformance host's
   extras removed; TestMode lists the test runner's globals in Goccia.runtimeGlobals }
@@ -26,6 +26,9 @@ type
   TConsoleSink = procedure(const Method, Line: UnicodeString) of object;
 { this thread's console sink (nil: lines go to stdout) }
 procedure SetConsoleSink(Sink: TConsoleSink);
+{ the resolver of this thread's imports: a host's, configured with its import map, aliases and node_modules grant
+  (Goccia.Modules.Resolver, not owned); nil for the plain one, which resolves relative and absolute paths only }
+procedure SetHostResolver(R: TModuleResolver);
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
@@ -44,7 +47,7 @@ implementation
 uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
-  Goccia.AST.Report, Goccia.FileExtensions, Goccia.ModuleResolver, TextSemantics, G2.HostSemver, Goccia.DataTree,
+  Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI;
 
 {$I G2.Testing.inc}
@@ -428,10 +431,17 @@ end;
   CLIs' resolver (Goccia.ModuleResolver) }
 var
   HostResolver: TModuleResolver;
+  { a host's resolver, in place of HostResolver }
+  ProvidedResolver: TModuleResolver;
   ImportSpecifiers: TStringList;   { module key = the first specifier that resolved to it }
 
+procedure SetHostResolver(R: TModuleResolver);
+begin
+  ProvidedResolver := R;
+end;
+
 function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
-var A: array[0..0] of TValue; R: TValue; Ref: string;
+var A: array[0..0] of TValue; R: TValue; Ref: string; Resolver: TModuleResolver;
 begin
   if IsObject(HasHostModuleV) then
   begin
@@ -443,14 +453,19 @@ begin
     end;
     Pending := VUndefined;
   end;
-  if HostResolver = nil then
+  Resolver := ProvidedResolver;
+  if Resolver = nil then
   begin
-    HostResolver := TModuleResolver.Create;
-    HostResolver.SetExtensions(ModuleImportExtensions);
+    if HostResolver = nil then
+    begin
+      HostResolver := TModuleResolver.Create;
+      HostResolver.SetExtensions(ModuleImportExtensions);
+    end;
+    Resolver := HostResolver;
   end;
   if (Referrer = '') or (Referrer[1] = '<') then Ref := '' else Ref := ExpandFileName(UTF8Encode(Referrer));
   try
-    Resolved := UTF8Decode(HostResolver.Resolve(UTF8Encode(Spec), Ref));
+    Resolved := UTF8Decode(Resolver.Resolve(UTF8Encode(Spec), Ref));
     { the first specifier a module is imported by names it in its load errors (specifierOf) }
     if ImportSpecifiers = nil then ImportSpecifiers := TStringList.Create;
     if ImportSpecifiers.IndexOfName(UTF8Encode(Resolved)) < 0 then
