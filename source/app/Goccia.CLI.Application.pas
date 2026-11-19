@@ -16,6 +16,7 @@ uses
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
+  Goccia.CLI.FileSettings,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
   Goccia.CLI.Stdin,
@@ -302,9 +303,10 @@ function ResolveSourceTypeOption(
   const AOption: TEnumOption<Goccia.CLI.Options.TGocciaSourceType>;
   const AFileConfig: TConfigEntryArray;
   const AFileName: string): Goccia.Engine.TGocciaSourceType;
-procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
-  const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray);
+{ A file's resolved settings (Goccia.CLI.FileSettings) applied to the old
+  engine. }
+procedure ApplyFileSettingsToEngine(const AEngine: TGocciaEngine;
+  const ASettings: TGocciaFileSettings);
 { The single place engine-affecting options reach an engine.  CreateEngine
   calls it for every binary that builds its engine through the base class;
   engines that must be constructed elsewhere — GocciaRunner's sandbox mode
@@ -980,173 +982,64 @@ begin
     [CONFIG_FILE_BASE_NAME], CONFIG_FILE_EXTENSIONS);
 end;
 
-{ Resolve --source-type / config "source-type" into the engine's
-  TGocciaSourceType enum.  Priority: CLI option > per-file config > root
-  config > file-extension default (.mjs and .mts are module) > default
-  (detected from the source: ADR 0140).
-
-  CLI option and root config values are validated by TEnumOption.Apply
-  before they reach this function (invalid values raise TParseError
-  at parse/apply time).  Per-file config values come in as raw strings via
-  FindConfigEntry, so we validate here: 'module' and 'script' are accepted
-  case-insensitively, anything else emits a stderr warning and falls back
-  to the file-extension default. }
-function DefaultSourceTypeForFileName(
-  const AFileName: string): Goccia.Engine.TGocciaSourceType;
-begin
-  if IsModuleSourceFileName(AFileName) then
-    Exit(Goccia.Engine.stModule);
-  Result := Goccia.Engine.stDetect;
-end;
-
+{ --source-type / config "source-type" as the old engine's enum
+  (Goccia.CLI.FileSettings.ResolveFileSourceType has the rules) }
 function ResolveSourceTypeOption(
   const AOption: TEnumOption<Goccia.CLI.Options.TGocciaSourceType>;
   const AFileConfig: TConfigEntryArray;
   const AFileName: string): Goccia.Engine.TGocciaSourceType;
+begin
+  case ResolveFileSourceType(AOption, AFileConfig, AFileName) of
+    fstScript: Result := Goccia.Engine.stScript;
+    fstModule: Result := Goccia.Engine.stModule;
+  else
+    Result := Goccia.Engine.stDetect;
+  end;
+end;
+
+procedure ApplyFileSettingsToEngine(const AEngine: TGocciaEngine;
+  const ASettings: TGocciaFileSettings);
 var
-  ValueStr, NormalizedValue: string;
+  GC: TGarbageCollector;
 begin
-  if AOption.FromCommandLine then
-  begin
-    if AOption.Matches(Goccia.CLI.Options.stModule) then
-      Exit(Goccia.Engine.stModule);
-    Exit(Goccia.Engine.stScript);
+  case ASettings.SourceType of
+    fstScript: AEngine.SourceType := Goccia.Engine.stScript;
+    fstModule: AEngine.SourceType := Goccia.Engine.stModule;
+  else
+    AEngine.SourceType := Goccia.Engine.stDetect;
   end;
-
-  if FindConfigEntry(AFileConfig, 'source-type', ValueStr) then
+  AEngine.Compatibility := ASettings.Compatibility;
+  AEngine.LabelStatementsEnabled := ASettings.LabelStatements;
+  AEngine.ForInLoopsEnabled := ASettings.ForInLoops;
+  AEngine.ExperimentalJSModuleSourceEnabled :=
+    ASettings.ExperimentalJSModuleSource;
+  AEngine.WarningUnsupportedFeatures := ASettings.WarningUnsupportedFeatures;
+  AEngine.StrictTypes := ASettings.StrictTypes;
+  AEngine.FunctionConstructor.Enabled := ASettings.FunctionConstructor;
+  if ASettings.ShadowRealm then
+    EnableShadowRealm(AEngine);
+  { Always set explicitly so a previous file's per-file override does not
+    leak into subsequent files (GC.MaxBytes is process-global). }
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) then
   begin
-    NormalizedValue := LowerCase(Trim(ValueStr));
-    if NormalizedValue = 'module' then
-      Exit(Goccia.Engine.stModule);
-    if NormalizedValue = 'script' then
-      Exit(Goccia.Engine.stScript);
-    WriteLn(ErrOutput, Format(
-      'Warning: invalid per-file config value for "source-type": %s '
-      + '(valid: script, module). Falling back to file extension default.',
-      [ValueStr]));
-    Exit(DefaultSourceTypeForFileName(AFileName));
+    if ASettings.MaxMemorySet then
+      GC.MaxBytes := ASettings.MaxMemory
+    else
+      GC.MaxBytes := GC.SuggestedMaxBytes;
   end;
-
-  if AOption.Present then
-  begin
-    if AOption.Matches(Goccia.CLI.Options.stModule) then
-      Exit(Goccia.Engine.stModule);
-    Exit(Goccia.Engine.stScript);
-  end;
-
-  Result := DefaultSourceTypeForFileName(AFileName);
+  AEngine.FetchMaxResponseBytes := ASettings.FetchMaxResponseBytes;
 end;
 
-procedure ApplyCompatibilityAndWarningFlags(const AEngine: TGocciaEngine;
-  const AEngineOptions: TGocciaEngineOptions;
-  const AFileConfig: TConfigEntryArray);
-var
-  Compatibility: TGocciaCompatibilityFlags;
-begin
-  ResolveCompatibilityFlags(AEngineOptions, AFileConfig, Compatibility);
-  AEngine.Compatibility := Compatibility;
-  AEngine.LabelStatementsEnabled := ResolveFlagOption(
-    AEngineOptions.CompatibilityFlagOption(cfLabel), AFileConfig);
-  AEngine.ForInLoopsEnabled := ResolveFlagOption(
-    AEngineOptions.CompatibilityFlagOption(cfForIn), AFileConfig);
-  AEngine.ExperimentalJSModuleSourceEnabled := ResolveFlagOption(
-    AEngineOptions.CompatibilityFlagOption(cfExperimentalJSModuleSource),
-    AFileConfig);
-  AEngine.WarningUnsupportedFeatures := ResolveFlagOption(
-    AEngineOptions.WarningUnsupportedFeatures, AFileConfig);
-end;
-
-{ A per-file config value of a limit. Per-file values are read from the
-  entries rather than applied to the options, so they are parsed here by the
-  option itself, with its units and bounds. }
-function ParseConfigValue(const AOption: TInt64Option;
-  const AEntry: TConfigEntry): Int64;
-begin
-  try
-    Result := AOption.Parse(AEntry.Value);
-  except
-    on E: EOptionValueError do
-      raise TParseError.CreateFmt('Invalid value for "%s" in %s: %s (%s)',
-        [AEntry.Key, AEntry.SourcePath, ConfigEntryText(AEntry), E.Reason]);
-    on E: TParseError do
-      raise TParseError.CreateFmt('%s: %s', [AEntry.SourcePath, E.Message]);
-  end;
-end;
-
-{ Apply per-file config entries to the engine.
-  Priority: CLI option > per-file config > root config > default.
-  FromCommandLine distinguishes CLI-set options from root config values
-  so that a per-file config can override a root-level config value. }
 procedure ApplyFileConfigToEngine(const AEngine: TGocciaEngine;
   const AEngineOptions: TGocciaEngineOptions;
   const AFileConfig: TConfigEntryArray; const AFileName: string;
   const AAcceptedUnsafe: TGocciaUnsafeRequests);
-var
-  Entry: TConfigEntry;
-  MemoryLimit, ResponseLimit: Int64;
-  GC: TGarbageCollector;
 begin
   if not Assigned(AEngineOptions) then
     Exit;
-
-  { source-type: CLI option > per-file config > root config > .mjs/.mts >
-    detected }
-  AEngine.SourceType := ResolveSourceTypeOption(
-    AEngineOptions.SourceType, AFileConfig, AFileName);
-
-  { compatibility flags: CLI flag > per-file config > root config > default (empty) }
-  ApplyCompatibilityAndWarningFlags(AEngine, AEngineOptions, AFileConfig);
-
-  { strict-types: CLI flag > per-file config > root config > default (false) }
-  AEngine.StrictTypes := ResolveFlagOption(
-    AEngineOptions.StrictTypes, AFileConfig);
-
-  { unsafe-*: the command-line flag, else the governing config's request once
-    it is trusted or accepted (ADR 0122). The options are RequiresTrust, so
-    a root config never sets them. }
-  AEngine.FunctionConstructor.Enabled :=
-    AEngineOptions.UnsafeFunctionConstructor.Present or
-    (gurFunctionConstructor in AAcceptedUnsafe);
-  if AEngineOptions.UnsafeShadowRealm.Present or
-     (gurShadowRealm in AAcceptedUnsafe) then
-    EnableShadowRealm(AEngine);
-
-  { max-memory: CLI option > per-file config > root config > system default.
-    Always set explicitly so a previous file's per-file override does
-    not leak into subsequent files (GC.MaxBytes is process-global). }
-  GC := TGarbageCollector.Instance;
-  if Assigned(GC) then
-  begin
-    if AEngineOptions.MaxMemory.FromCommandLine then
-      GC.MaxBytes := AEngineOptions.MaxMemory.Value
-    else if (not AEngineOptions.MaxMemory.ConfigIgnored) and
-      TryFindConfigEntry(AFileConfig, AEngineOptions.MaxMemory.LongName,
-      Entry) then
-    begin
-      MemoryLimit := ParseConfigValue(AEngineOptions.MaxMemory, Entry);
-      GC.MaxBytes := MemoryLimit;
-    end
-    else if AEngineOptions.MaxMemory.Present then
-      GC.MaxBytes := AEngineOptions.MaxMemory.Value
-    else
-      GC.MaxBytes := GC.SuggestedMaxBytes;
-  end;
-
-  { max-fetch-bytes: CLI option > per-file config > root config > default.
-    An engine setting, not a capability; each request carries its engine's
-    value. }
-  ResponseLimit := 0;
-  if AEngineOptions.MaxFetchBytes.FromCommandLine then
-    ResponseLimit := AEngineOptions.MaxFetchBytes.Value
-  else if (not AEngineOptions.MaxFetchBytes.ConfigIgnored) and
-    TryFindConfigEntry(AFileConfig, AEngineOptions.MaxFetchBytes.LongName,
-    Entry) then
-    ResponseLimit := ParseConfigValue(AEngineOptions.MaxFetchBytes, Entry)
-  else if AEngineOptions.MaxFetchBytes.Present then
-    ResponseLimit := AEngineOptions.MaxFetchBytes.Value;
-
-  { The option's Maximum keeps the value within Integer. }
-  AEngine.FetchMaxResponseBytes := Integer(ResponseLimit);
+  ApplyFileSettingsToEngine(AEngine, ResolveFileSettings(AEngineOptions,
+    AFileConfig, AFileName, AAcceptedUnsafe));
 end;
 
 procedure TGocciaCLIApplication.ConfigureCreatedEngine(
