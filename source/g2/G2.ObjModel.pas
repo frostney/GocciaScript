@@ -1271,8 +1271,12 @@ var Ok: Boolean;
 begin
   Res := Arg(Args, Argc, 1);
   if not IsObject(Res) then Exit(True);
-  if NativeData = 2 then Result := PreventExtensionsV(Res, Ok)
-  else Result := SetIntegrityLevel(Res, NativeData = 1, Ok);
+  { the object is returned: rooted, since redefining its properties allocates and a collection may move it }
+  PushRoot(Res);
+  if NativeData = 2 then Result := PreventExtensionsV(RootAt(TempTop - 1), Ok)
+  else Result := SetIntegrityLevel(RootAt(TempTop - 1), NativeData = 1, Ok);
+  Res := RootAt(TempTop - 1);
+  PopRoots(1);
   if Result and not Ok then Result := ThrowTypeError('Cannot change the extensibility of the object');
 end;
 
