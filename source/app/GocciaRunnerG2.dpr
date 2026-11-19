@@ -56,6 +56,11 @@ type
     FStderrLines: TStringList;
   public
     FileName: string;
+    { the console's lines go to the capture (a JSON report), are dropped (--silent), or go to stdout; and to the
+      --log file through LogLine when it is open }
+    Capturing, Silent: Boolean;
+    LogLine: procedure(const AMethod, ALine: string) of object;
+    procedure Emit(const AMethod, ALine: UnicodeString);
     constructor Create;
     destructor Destroy; override;
     procedure CaptureOutput(const AMethod, ALine: UnicodeString);
@@ -355,6 +360,16 @@ end;
 { --silent }
 procedure TG2ConsoleCapture.Discard(const AMethod, ALine: UnicodeString);
 begin
+end;
+
+procedure TG2ConsoleCapture.Emit(const AMethod, ALine: UnicodeString);
+begin
+  if Assigned(LogLine) then
+    LogLine(UTF8Encode(AMethod), UTF8Encode(ALine));
+  if Capturing then
+    CaptureOutput(AMethod, ALine)
+  else if not Silent then
+    WriteLn(UTF8Encode(ALine));
 end;
 
 procedure TG2ConsoleCapture.PrintWarning(const AMessage, ASuggestion: UnicodeString;
@@ -717,18 +732,16 @@ begin
       Engine.Resolver := Resolver;
       { GocciaRunner has no timer globals (the test runner does) }
       Engine.ExposeTimers := False;
+      Capture.Capturing := IsJsonOutput;
+      Capture.Silent := FSilent.Present;
+      if LogFileOpen then
+        Capture.LogLine := HandleConsoleLog;
       if IsJsonOutput then
-      begin
-        Engine.ResultForm := g2rfJSON;
-        Engine.OnConsole := Capture.CaptureOutput;
-      end
-      else
-      begin
-        if FPrint.Present then
-          Engine.ResultForm := g2rfString;
-        if FSilent.Present then
-          Engine.OnConsole := Capture.Discard;
-      end;
+        Engine.ResultForm := g2rfJSON
+      else if FPrint.Present then
+        Engine.ResultForm := g2rfString;
+      if Capture.Capturing or Capture.Silent or LogFileOpen then
+        Engine.OnConsole := Capture.Emit;
       Engine.FailOnUnhandledRejection := True;
       if not IsJsonOutput then
         Engine.OnWarning := Capture.PrintWarning;
