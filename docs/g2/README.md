@@ -36,9 +36,10 @@ Largest performance gaps: generators (lazy-collections 0.67), float arithmetic o
 
 ## Build
 
-G2 builds with FPC 3.3.1 from fpc-toolchain (native TLS threadvars), build 3.3.1+4 (release `3.3.1-b4`) or
-later, selected by `fpc-toolchain env 3.3.1+4` or any command given in `G2_FPC_ENV`. Earlier builds hang in the DFA
-pass on some units and drop the `@tpoff` relocation of a threadvar field at -O1:
+G2 builds with FPC 3.3.1 from fpc-toolchain (native TLS threadvars), build 3.3.1+5 (release `3.3.1-b5`) or
+later, selected by `fpc-toolchain env 3.3.1+5` or any command given in `G2_FPC_ENV`. Builds before 3.3.1+4 hang in
+the DFA pass on some units and drop the `@tpoff` relocation of a threadvar field at -O1; 3.3.1+4 drops the `%fs`
+prefix of a threadvar the peephole optimizer folds into an instruction at -O1 (patch 0123 in 3.3.1+5):
 
 ```sh
 ./build.pas --prod g2         # build/g2/g2, with the 3.3.1 toolchain selected
@@ -50,7 +51,7 @@ The `g2` target turns each JS prelude into a Pascal include under `build/g2/gen`
 the first binary compiles the preludes and writes their bytecode, the second embeds it. It always compiles
 optimized (`-O4`); `--prod` strips the binary and a dev build keeps line information, in its own unit cache.
 On Linux x86-64 it fails when `scripts/g2/tlsscan.py` finds a native-TLS miscompile (a threadvar address with
-an absolute relocation), the bug 3.3.1+4 fixes; it stays as a guard against a toolchain that regresses, and is
+an absolute relocation), the bugs 3.3.1+4 and 3.3.1+5 fix; it stays as a guard against a toolchain that regresses, and is
 skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) leaves `g2` out
 until CI's toolchain is FPC 3.3.1.
 

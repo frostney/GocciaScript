@@ -850,8 +850,8 @@ begin
   { native-TLS threadvars and the code generator fixes G2 needs are in fpc-toolchain's 3.3.1 builds }
   if not RunCommand('fpc', ['-iV'], Version) or (CompareStr(Trim(Version), '3.3.1') < 0) then
   begin
-    WriteLn('G2 needs FPC 3.3.1 from fpc-toolchain (build 3.3.1+4 or later); found ', Trim(Version));
-    WriteLn('Select it with: eval "$(fpc-toolchain env 3.3.1+4)"');
+    WriteLn('G2 needs FPC 3.3.1 from fpc-toolchain (build 3.3.1+5 or later); found ', Trim(Version));
+    WriteLn('Select it with: eval "$(fpc-toolchain env 3.3.1+5)"');
     Halt(1);
   end;
   ForceDirectories('build' + DirectorySeparator + 'g2');
