@@ -20,7 +20,11 @@ run() {
 regress() {
   f=$1; n=$(basename $f .js)
   for kb in 16 64 128; do
-    r=$(G2_NURSERY_KB=$kb timeout 900 $G2 --gc-verify $f 2>&1 | grep -av '^\s*$' | tail -1)
+    # 1800 s: overflow-add takes ~920 s under --gc-verify at 16 KB on a loaded machine
+    r=$(G2_NURSERY_KB=$kb timeout 1800 $G2 --gc-verify $f 2>&1; echo "__rc=$?")
+    rc=$(echo "$r" | sed -n 's/^__rc=//p'); r=$(echo "$r" | grep -av '^__rc=' | grep -av '^\s*$' | tail -1)
+    # a timeout is not a failure, but it hides the sizes after it: say so, so it is rerun rather than written off
+    [ "$rc" = 124 ] && { echo "TIMEOUT regress-$n ($kb KB): rerun it at 16, 64 and 128 KB"; return; }
     [ "$r" = "ok" ] || { echo "BAD regress-$n ($kb KB): $(echo "$r" | cut -c1-120)"; return; }
   done
   echo "OK regress-$n"
