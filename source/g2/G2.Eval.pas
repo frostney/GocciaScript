@@ -32,6 +32,10 @@ threadvar
     the ECMAScript error it stands for), 2 G2's compiler does not support a construct }
   CompileFailKind: Integer;
   ParseErrorName: UnicodeString;
+  { where HostCompileEntry's source was rejected (0 when the error has no position) and the fix the parser
+    suggests ('' for none) }
+  ParseErrorLine, ParseErrorColumn: Integer;
+  ParseErrorSuggestion: UnicodeString;
 
 implementation
 
@@ -260,6 +264,15 @@ begin
       begin
         Err := UnicodeString(E.Message);
         if E is TGocciaReferenceError then ParseErrorName := 'ReferenceError' else ParseErrorName := 'SyntaxError';
+        ParseErrorLine := 0;
+        ParseErrorColumn := 0;
+        ParseErrorSuggestion := '';
+        if E is TGocciaError then
+        begin
+          ParseErrorLine := TGocciaError(E).Line;
+          ParseErrorColumn := TGocciaError(E).Column;
+          ParseErrorSuggestion := UnicodeString(TGocciaError(E).Suggestion);
+        end;
       end;
     end;
   finally

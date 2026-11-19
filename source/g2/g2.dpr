@@ -185,6 +185,8 @@ begin
   Engine.Profile := Prof;
   Engine.ConfigJson := ConfigJson;
   Engine.TestMode := True;
+  { --max-memory, else the file's config (LoadTestConfig) }
+  if HeapCeiling > 0 then Engine.MaxMemory := HeapCeiling;
   if SourceType = 'module' then Engine.SourceKind := g2skModule
   else if SourceType = 'script' then Engine.SourceKind := g2skScript;
   Err := '';

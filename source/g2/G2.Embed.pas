@@ -27,6 +27,15 @@ type
     IsModule: Boolean;
     { the uncaught error (ToString), or the limit's message when Aborted }
     ErrorMessage: UnicodeString;
+    { the error in parts, for a host's diagnostic: its name and message (ErrorIsError: the thrown value was an
+      object with a string name or message, or a syntax error; otherwise ErrorMessage is the thrown value as a
+      string), where it was made (the first frame of its stack, or where the source was rejected; ErrorLine 0
+      when unknown) and the parser's suggestion }
+    ErrorIsError: Boolean;
+    ErrorName, ErrorText, ErrorFile, ErrorSuggestion: UnicodeString;
+    ErrorLine, ErrorColumn: Integer;
+    { nanoseconds spent parsing and compiling the entry (lexing included), and running it with its event loop }
+    CompileNanoseconds, ExecuteNanoseconds: Int64;
   end;
 
   TG2Engine = class
@@ -35,7 +44,7 @@ type
     FSourceKind: TG2SourceKind;
     FConfigJson: UnicodeString;
     FTestMode: Boolean;
-    FTimeoutMs, FMaxInstructions: Int64;
+    FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
     FMaxFrames: Integer;
     FHostReady: Boolean;
     function InstallHost(var Err: UnicodeString): Boolean;
@@ -58,6 +67,9 @@ type
     property TimeoutMs: Int64 read FTimeoutMs write FTimeoutMs;
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
     property MaxFrames: Integer read FMaxFrames write FMaxFrames;
+    { the heap limit in bytes (HeapCeiling, for every engine of the process); 0 for the default
+      (G2.HostAPI DefaultHeapCeiling) }
+    property MaxMemory: Int64 read FMaxMemory write FMaxMemory;
   end;
 
 { the recommended language profile: restricted, every compatibility switch off }
@@ -66,7 +78,56 @@ function RecommendedProfile: TLangProfile;
 implementation
 
 uses
-  G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules, G2.HostAPI;
+  TimingUtils, G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules, G2.HostAPI;
+
+{ "    at name (source:line:column)": the first frame line of a stack text }
+procedure FirstFrameOf(const Stack: UnicodeString; var R: TG2RunResult);
+var P, Open, Close, C1, C2: Integer; Loc: UnicodeString;
+begin
+  P := Pos(#10'    at ', Stack);
+  if P = 0 then Exit;
+  Close := P + 1;
+  while (Close <= Length(Stack)) and (Stack[Close] <> #10) do Inc(Close);
+  Dec(Close);
+  if (Close <= P) or (Stack[Close] <> ')') then Exit;
+  Open := Close;
+  while (Open > P) and (Stack[Open] <> '(') do Dec(Open);
+  if Open <= P then Exit;
+  Loc := Copy(Stack, Open + 1, Close - Open - 1);
+  C2 := Length(Loc);
+  while (C2 > 0) and (Loc[C2] <> ':') do Dec(C2);
+  C1 := C2 - 1;
+  while (C1 > 0) and (Loc[C1] <> ':') do Dec(C1);
+  if C1 <= 0 then Exit;
+  R.ErrorFile := Copy(Loc, 1, C1 - 1);
+  R.ErrorLine := StrToIntDef(string(Copy(Loc, C1 + 1, C2 - C1 - 1)), 0);
+  R.ErrorColumn := StrToIntDef(string(Copy(Loc, C2 + 1, MaxInt)), 0);
+end;
+
+{ the uncaught value in parts (R.ErrorMessage already holds its string form) }
+procedure DescribeThrown(V: TValue; var R: TG2RunResult);
+var N, M, St: TValue;
+begin
+  if not IsObject(V) then Exit;
+  PushRoot(V);
+  try
+    if GetV(RootAt(TempTop - 1), AtomOf('name'), N) and IsString(N) then
+    begin
+      R.ErrorIsError := True;
+      R.ErrorName := StrToUnicode(StrOf(N));
+    end;
+    if GetV(RootAt(TempTop - 1), AtomOf('message'), M) and IsString(M) then
+    begin
+      R.ErrorIsError := True;
+      R.ErrorText := StrToUnicode(StrOf(M));
+    end;
+    if GetV(RootAt(TempTop - 1), AtomOf('stack'), St) and IsString(St) then
+      FirstFrameOf(StrToUnicode(StrOf(St)), R);
+  finally
+    PopRoots(1);
+  end;
+  Pending := VUndefined;
+end;
 
 function RecommendedProfile: TLangProfile;
 begin
@@ -103,7 +164,7 @@ begin
 end;
 
 function TG2Engine.Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
-var Kind, Phase: Integer; T: PFuncTemplate; Err: UnicodeString; S: TValue;
+var Kind, Phase: Integer; T: PFuncTemplate; Err: UnicodeString; S, Thrown: TValue; Start: Int64; Compiled: Boolean;
 begin
   Result := Default(TG2RunResult);
   Err := '';
@@ -112,6 +173,7 @@ begin
     Result.ErrorMessage := Err;
     Exit;
   end;
+  if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   SetActiveProfile(FProfile);
   case FSourceKind of
     g2skScript: Kind := 1;
@@ -120,14 +182,25 @@ begin
     if LowerCase(ExtractFileExt(FileName)) = '.mjs' then Kind := 2 else Kind := 0;
   end;
   T := nil;
-  if not HostCompileEntry(Source, UnicodeString(FileName), Kind, T, Result.IsModule, Err) then
+  Start := GetNanoseconds;
+  Compiled := HostCompileEntry(Source, UnicodeString(FileName), Kind, T, Result.IsModule, Err);
+  Result.CompileNanoseconds := GetNanoseconds - Start;
+  if not Compiled then
   begin
     Result.ErrorMessage := Err;
+    Result.ErrorIsError := True;
+    Result.ErrorName := ParseErrorName;
+    Result.ErrorText := Err;
+    Result.ErrorFile := UnicodeString(FileName);
+    Result.ErrorLine := ParseErrorLine;
+    Result.ErrorColumn := ParseErrorColumn;
+    Result.ErrorSuggestion := ParseErrorSuggestion;
     Exit;
   end;
   Result.Compiled := True;
   SetMaxFrames(FMaxFrames);
   LimitsArm(FTimeoutMs, FMaxInstructions);
+  Start := GetNanoseconds;
   try
     if Result.IsModule then
     begin
@@ -135,6 +208,7 @@ begin
       Result.Ok := RunModuleFile(UnicodeString(ExpandFileName(FileName)), Phase) and RunEventLoop;
     end
     else Result.Ok := RunScript(T) and RunEventLoop;
+    Result.ExecuteNanoseconds := GetNanoseconds - Start;
     case AbortKind of
       1: Result.Aborted := g2aTimeout;
       2: Result.Aborted := g2aInstructionLimit;
@@ -142,8 +216,14 @@ begin
     if not Result.Ok or (Result.Aborted <> g2aNone) then
     begin
       Result.Ok := False;
-      if ToStringV(Pending, S) and IsString(S) then Result.ErrorMessage := StrToUnicode(StrOf(S));
+      Thrown := Pending;
+      PushRoot(Thrown);
+      if ToStringV(RootAt(TempTop - 1), S) and IsString(S) then Result.ErrorMessage := StrToUnicode(StrOf(S));
       if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
+      Pending := VUndefined;
+      { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }
+      if Result.Aborted = g2aNone then DescribeThrown(RootAt(TempTop - 1), Result);
+      PopRoots(1);
       Pending := VUndefined;
     end;
   finally
