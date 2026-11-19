@@ -84,6 +84,8 @@ type
     function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
     function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
+    function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+    function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
     property Profile: TLangProfile read FProfile write FProfile;
     property SourceKind: TG2SourceKind read FSourceKind write FSourceKind;
     property ConfigJson: UnicodeString read FConfigJson write FConfigJson;
@@ -292,6 +294,16 @@ end;
 function TG2Engine.DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
 begin
   Result := PrepareHost(Err) and G2.HostAPI.DefineInlineVirtualModule(Definition, Base, Err);
+end;
+
+function TG2Engine.InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+begin
+  Result := PrepareHost(Err) and G2.HostAPI.InjectModuleGlobals(Path, Err);
+end;
+
+function TG2Engine.DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+begin
+  Result := PrepareHost(Err) and G2.HostAPI.DefineModuleManifestVirtualModules(Path, Err);
 end;
 
 function TG2Engine.Run(const FileName: string; const Source: UnicodeString): TG2RunResult;

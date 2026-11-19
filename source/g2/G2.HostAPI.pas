@@ -43,6 +43,10 @@ function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: Unico
 function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
 function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
 function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
+{ a JavaScript or TypeScript module's exports: each named export a global (a globals module), or its default
+  export the module map (a module manifest); the module is evaluated in this engine }
+function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
@@ -629,6 +633,53 @@ begin
   finally
     PopRoots(1);
   end;
+end;
+
+function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+var NS, Keys, V: TValue; I, N: Integer; Name: UnicodeString;
+begin
+  Result := False;
+  if not EvaluateModuleNamespace(UnicodeString(ExpandFileName(UTF8Encode(Path))), NS) then
+  begin
+    Err := TakePendingText;
+    Exit;
+  end;
+  PushRoot(NS);
+  try
+    Keys := OwnKeys(ObjOf(RootAt(TempTop - 1)), True);
+    PushRoot(Keys);
+    try
+      N := ArrayLen(ObjOf(Keys));
+      for I := 0 to N - 1 do
+      begin
+        Name := StrToUnicode(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
+        if Name = 'default' then Continue;
+        if not GetV(RootAt(TempTop - 2), AtomOf(Name), V) or not InjectGlobalBinding(Name, V) then
+        begin
+          Err := TakePendingText;
+          Exit;
+        end;
+      end;
+      Result := True;
+    finally
+      PopRoots(1);
+    end;
+  finally
+    PopRoots(1);
+  end;
+end;
+
+function DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+var NS, Map: TValue; Abs: UnicodeString;
+begin
+  Result := False;
+  Abs := UnicodeString(ExpandFileName(UTF8Encode(Path)));
+  if not EvaluateModuleNamespace(Abs, NS) or not GetV(NS, AtomOf('default'), Map) then
+  begin
+    Err := TakePendingText;
+    Exit;
+  end;
+  Result := DefineVirtualModuleMap(Map, UnicodeString(ExtractFileDir(UTF8Encode(Abs))), Err);
 end;
 
 function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;

@@ -22,6 +22,9 @@ function AbstractModuleSourceIntrinsic: TValue;
 { loads, links and evaluates the module at Path (the host's entry point); False with the error pending, Phase
   0 when it is a parse or link (resolution) error, 1 an evaluation error }
 function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
+{ a module a host evaluates before its entry (a globals module, a module manifest): loaded, linked and evaluated
+  (its top-level await settled through the microtasks), its namespace in NS; the jobs it leaves are the entry's }
+function EvaluateModuleNamespace(const Path: UnicodeString; var NS: TValue): Boolean;
 
 type
   { a host's modules: for a request key (a specifier with a scheme, as goccia:csv, kept as written; otherwise a
@@ -1105,6 +1108,25 @@ begin
   P := RootAt(TempTop - 1);
   PopRoots(1);
   if PromiseStatus(P, R) = 2 then begin Pending := R; Exit(False); end;
+  Result := True;
+end;
+
+function EvaluateModuleNamespace(const Path: UnicodeString; var NS: TValue): Boolean;
+var M: TModRec; P, R: TValue;
+begin
+  if not LoadAndLink(ResolvePath(Path, ''), M) then Exit(False);
+  PushRoot(EvaluateModule(M));
+  if PromiseStatus(RootAt(TempTop - 1), R) = 0 then
+    if not RunMicrotasks then begin PopRoots(1); Exit(False); end;
+  P := RootAt(TempTop - 1);
+  PopRoots(1);
+  case PromiseStatus(P, R) of
+    1: ;
+    2: begin Pending := R; Exit(False); end;
+  else
+    Exit(ThrowTypeError('The module ' + Path + ' did not finish evaluating'));
+  end;
+  NS := GetNamespace(M);
   Result := True;
 end;
 
