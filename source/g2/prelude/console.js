@@ -149,8 +149,10 @@
   let groupDepth = 0;
   const counters = new Map(), timers = new Map();
   const prefix = () => '  '.repeat(groupDepth);
-  function emit(line) {
-    n.writeLine(groupDepth > 0 ? line.split('\n').join('\n' + prefix()) : line);
+  // each line with the console method that wrote it: a host that captures output (GocciaRunner's JSON report)
+  // splits the streams by method
+  function emit(method, line) {
+    n.writeLine(groupDepth > 0 ? line.split('\n').join('\n' + prefix()) : line, method);
   }
   const format = (args) => args.map(inspect).join(' ');
   const labelOf = (args) => (args.length >= 1 && args[0] !== undefined ? String(args[0]) : 'default');
@@ -159,40 +161,40 @@
     return (Math.round(ms * 1000) / 1000).toString();
   };
   const console = {
-    log(...args) { emit(prefix() + format(args)); },
-    warn(...args) { emit(prefix() + 'Warning: ' + format(args)); },
-    error(...args) { emit(prefix() + 'Error: ' + format(args)); },
-    info(...args) { emit(prefix() + 'Info: ' + format(args)); },
-    debug(...args) { emit(prefix() + 'Debug: ' + format(args)); },
-    dir(...args) { if (args.length >= 1) emit(prefix() + inspect(args[0])); },
+    log(...args) { emit('log', prefix() + format(args)); },
+    warn(...args) { emit('warn', prefix() + 'Warning: ' + format(args)); },
+    error(...args) { emit('error', prefix() + 'Error: ' + format(args)); },
+    info(...args) { emit('info', prefix() + 'Info: ' + format(args)); },
+    debug(...args) { emit('debug', prefix() + 'Debug: ' + format(args)); },
+    dir(...args) { if (args.length >= 1) emit('dir', prefix() + inspect(args[0])); },
     assert(...args) {
-      if (args.length === 0) { emit(prefix() + 'Assertion failed'); return; }
-      if (!args[0]) emit(prefix() + 'Assertion failed:' + args.slice(1).map((a) => ' ' + inspect(a)).join(''));
+      if (args.length === 0) { emit('assert', prefix() + 'Assertion failed'); return; }
+      if (!args[0]) emit('assert', prefix() + 'Assertion failed:' + args.slice(1).map((a) => ' ' + inspect(a)).join(''));
     },
     count(...args) {
       const label = labelOf(args);
       const c = (counters.get(label) || 0) + 1;
       counters.set(label, c);
-      emit(prefix() + label + ': ' + c);
+      emit('count', prefix() + label + ': ' + c);
     },
     countReset(...args) { counters.set(labelOf(args), 0); },
     time(...args) { timers.set(labelOf(args), n.hrNow()); },
     timeEnd(...args) {
       const label = labelOf(args);
-      if (timers.has(label)) { emit(prefix() + label + ': ' + elapsed(timers.get(label)) + 'ms'); timers.delete(label); }
-      else emit(prefix() + "Timer '" + label + "' does not exist");
+      if (timers.has(label)) { emit('timeEnd', prefix() + label + ': ' + elapsed(timers.get(label)) + 'ms'); timers.delete(label); }
+      else emit('timeEnd', prefix() + "Timer '" + label + "' does not exist");
     },
     timeLog(...args) {
       const label = labelOf(args);
-      if (timers.has(label)) emit(prefix() + label + ': ' + elapsed(timers.get(label)) + 'ms');
-      else emit(prefix() + "Timer '" + label + "' does not exist");
+      if (timers.has(label)) emit('timeLog', prefix() + label + ': ' + elapsed(timers.get(label)) + 'ms');
+      else emit('timeLog', prefix() + "Timer '" + label + "' does not exist");
     },
     clear() {},
-    group(...args) { if (args.length > 0) emit(prefix() + format(args)); groupDepth++; },
-    groupCollapsed(...args) { if (args.length > 0) emit(prefix() + format(args)); groupDepth++; },
+    group(...args) { if (args.length > 0) emit('group', prefix() + format(args)); groupDepth++; },
+    groupCollapsed(...args) { if (args.length > 0) emit('groupCollapsed', prefix() + format(args)); groupDepth++; },
     groupEnd() { if (groupDepth > 0) groupDepth--; },
-    trace(...args) { emit(prefix() + 'Trace' + (args.length > 0 ? ': ' + format(args) : '')); },
-    table(...args) { if (args.length >= 1) emit(prefix() + inspect(args[0])); }
+    trace(...args) { emit('trace', prefix() + 'Trace' + (args.length > 0 ? ': ' + format(args) : '')); },
+    table(...args) { if (args.length >= 1) emit('table', prefix() + inspect(args[0])); }
   };
   hidden(G, 'console', console);
 })

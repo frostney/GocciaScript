@@ -20,6 +20,12 @@ function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: Un
   var Err: UnicodeString; ExposeTimers: Boolean = True): Boolean;
 { the heap limit when none is given: half the physical memory, at most 8 GB (700 MB on a 32-bit build) }
 function DefaultHeapCeiling: Int64;
+
+type
+  { a console line with the method that wrote it (log, warn, error, ...), in place of writing it to stdout }
+  TConsoleSink = procedure(const Method, Line: UnicodeString) of object;
+{ this thread's console sink (nil: lines go to stdout) }
+procedure SetConsoleSink(Sink: TConsoleSink);
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
@@ -370,9 +376,21 @@ begin
 end;
 
 { writeLine(text): text and a line break on standard output }
-function Host_WriteLine(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+threadvar
+  ConsoleSink: TConsoleSink;
+
+procedure SetConsoleSink(Sink: TConsoleSink);
 begin
-  WriteLn(UTF8Encode(ArgStr(Args, Argc, 1)));
+  ConsoleSink := Sink;
+end;
+
+{ writeLine(line, method) }
+function Host_WriteLine(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Sink: TConsoleSink;
+begin
+  Sink := ConsoleSink;
+  if Assigned(Sink) then Sink(ArgStr(Args, Argc, 2), ArgStr(Args, Argc, 1))
+  else WriteLn(UTF8Encode(ArgStr(Args, Argc, 1)));
   Res := VUndefined;
   Result := True;
 end;
