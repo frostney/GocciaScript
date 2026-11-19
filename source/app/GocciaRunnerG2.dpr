@@ -37,6 +37,7 @@ uses
   Goccia.FileExtensions,
   Goccia.Modules.Configuration,
   Goccia.Modules.Resolver,
+  Goccia.ScriptLoader.Globals,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
@@ -107,6 +108,7 @@ type
     procedure RunSource(const AFileName: string; const ASource: TStringList);
     procedure RunOnWorker(const AFileName: string; const ASource: TStringList);
     procedure RunFile(const AFileName: string);
+    function InjectGlobals(const AEngine: TG2Engine; out AError: string): Boolean;
     procedure ReportFailure(const AFileName: string;
       const AResult: TG2RunResult; const ASource: TStringList);
     function IsJsonOutput: Boolean;
@@ -481,6 +483,82 @@ begin
     IsCompactJsonOutput));
 end;
 
+function IsAbsoluteFilePath(const APath: string): Boolean;
+begin
+  Result := (APath <> '') and ((APath[1] = PathDelim) or
+    ((Length(APath) >= 2) and (APath[2] = ':')));
+end;
+
+{ a path a config names, against the config's directory (Goccia.CLI.Application's ConfigInputPath) }
+function ConfigInputPath(const AWritten, AConfigPath: string): string;
+begin
+  if IsAbsoluteFilePath(AWritten) then
+    Result := ExpandFileName(AWritten)
+  else
+    Result := ExpandFileName(IncludeTrailingPathDelimiter(
+      ExtractFileDir(AConfigPath)) + AWritten);
+end;
+
+function ReadFileUnicode(const APath: string): UnicodeString;
+var
+  Lines: TStringList;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(APath);
+    Result := UTF8Decode(Lines.Text);
+  finally
+    Lines.Free;
+  end;
+end;
+
+{ GocciaRunner's globals (ApplyDataGlobalsToEngine): the root config's globals files, then the command line's, then
+  each --global name=value. Globals modules (a .js file's exports) are not on G2 yet. }
+function TG2RunnerApp.InjectGlobals(const AEngine: TG2Engine; out AError: string): Boolean;
+var
+  Entries: TConfigEntryArray;
+  I: Integer;
+  Path: string;
+  Pair: TScriptLoaderGlobalPair;
+  Err: UnicodeString;
+begin
+  Result := False;
+  AError := '';
+  Err := '';
+  Entries := ConfigNamedEntries(FGlobalFiles);
+  for I := 0 to High(Entries) do
+  begin
+    Path := ConfigInputPath(Entries[I].Value, Entries[I].SourcePath);
+    if IsStructuredGlobalsFile(Path) and not AEngine.InjectDataGlobals(ReadFileUnicode(Path),
+       UnicodeString(ExtractFileExt(Path)), UnicodeString(Path), Err) then
+    begin
+      AError := UTF8Encode(Err);
+      Exit;
+    end;
+  end;
+  if FGlobalFiles.FromCommandLine then
+    for I := 0 to FGlobalFiles.Values.Count - 1 do
+    begin
+      Path := FGlobalFiles.Values[I];
+      if IsStructuredGlobalsFile(Path) and not AEngine.InjectDataGlobals(ReadFileUnicode(Path),
+         UnicodeString(ExtractFileExt(Path)), UnicodeString(Path), Err) then
+      begin
+        AError := UTF8Encode(Err);
+        Exit;
+      end;
+    end;
+  for I := 0 to FInlineGlobals.Values.Count - 1 do
+  begin
+    Pair := ParseGlobalPair(FInlineGlobals.Values[I]);
+    if not AEngine.InjectInlineGlobal(UTF8Decode(Pair.Key), UTF8Decode(Pair.ValueText), Err) then
+    begin
+      AError := UTF8Encode(Err);
+      Exit;
+    end;
+  end;
+  Result := True;
+end;
+
 procedure TG2RunnerApp.ReportFailure(const AFileName: string;
   const AResult: TG2RunResult; const ASource: TStringList);
 var
@@ -532,6 +610,7 @@ var
   Resolver: TGocciaModuleResolver;
   Grant: TG2NodeModulesGrant;
   AliasBaseDirectory: string;
+  GlobalsError: string;
 begin
   Start := GetNanoseconds;
   Capture := nil;
@@ -584,6 +663,14 @@ begin
         out (G2.VM SetMaxFrames) }
       if EngineOptions.MaxStack.Present then
         Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
+      { a refused or unreadable global fails the file before it runs, as the old engine's RuntimeError }
+      if not InjectGlobals(Engine, GlobalsError) then
+      begin
+        WriteLn(FormatErrorWithSourceContext('RuntimeError', GlobalsError, AFileName, 0, 0,
+          ASource, IsColorTerminal, ''));
+        ExitCode := 1;
+        Exit;
+      end;
       RunResult := Engine.Run(AFileName, UTF8Decode(ASource.Text));
       if IsJsonOutput then
       begin
