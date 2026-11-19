@@ -54,7 +54,7 @@ The build script supports two modes via `--dev` (default) and `--prod` flags. `-
 ./build.pas --prod    # Production build of all components
 ```
 
-Builds all components in order: tests, runner, loaderbare, fuzzharness, testrunner, test262runner, tomlcompliancerunner, wasmtestrunner, benchmarkrunner, bundler, and repl. The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
+Builds all components in order: tests, runner, loaderbare, fuzzharness, testrunner, test262runner, tomlcompliancerunner, wasmtestrunner, benchmarkrunner, bundler, and repl. The `g2` target, which builds the G2 engine into `build/g2/g2`, needs FPC 3.3.1 and is built only by name (see [G2](g2/README.md#build)). The default full build does not clean first; pass `--clean` explicitly when you need to remove stale build artifacts.
 
 ### Build Specific Components
 

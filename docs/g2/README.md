@@ -41,14 +41,18 @@ later, selected by `fpc-toolchain env 3.3.1+4` or any command given in `G2_FPC_E
 pass on some units and drop the `@tpoff` relocation of a threadvar field at -O1:
 
 ```sh
-sh scripts/g2/build.sh        # build/g2/g2
-build/g2/g2 file.js           # run a script
-build/g2/g2 --module file.mjs # run a module
+./build.pas --prod g2         # build/g2/g2, with the 3.3.1 toolchain selected
+sh scripts/g2/build.sh        # the same, selecting the toolchain itself
+build/g2/g2 file.js           # run a script (always a Script; modules run through --test and the test262 host)
 ```
 
-The build runs in two stages: the first binary compiles the JS preludes and writes their bytecode, the second
-embeds it. It fails when `scripts/g2/tlsscan.py` finds a native-TLS miscompile (a threadvar address with an
-absolute relocation), the bug 3.3.1+4 fixes; it stays as a guard against a toolchain that regresses.
+The `g2` target turns each JS prelude into a Pascal include under `build/g2/gen`, then builds in two stages:
+the first binary compiles the preludes and writes their bytecode, the second embeds it. It always compiles
+optimized (`-O4`); `--prod` strips the binary and a dev build keeps line information, in its own unit cache.
+On Linux x86-64 it fails when `scripts/g2/tlsscan.py` finds a native-TLS miscompile (a threadvar address with
+an absolute relocation), the bug 3.3.1+4 fixes; it stays as a guard against a toolchain that regresses, and is
+skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) leaves `g2` out
+until CI's toolchain is FPC 3.3.1.
 
 ## Gate
 

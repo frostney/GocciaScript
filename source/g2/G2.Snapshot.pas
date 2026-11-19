@@ -2,7 +2,7 @@ unit G2.Snapshot;
 { Compiled JS preludes embedded in the binary.
 
   Parsing and compiling the builtins written in JS (G2.Builtins4, G2.Promise)
-  was half of starting an empty script. build.sh compiles them once with the
+  was half of starting an empty script. The build compiles them once with the
   freshly built engine (G2_SNAPSHOT_OUT), writes the templates to
   G2.PreludeSnapshot.inc and rebuilds; at startup CompilePrelude loads a
   template from there instead of parsing.
@@ -139,7 +139,7 @@ end;
 
 var SnapshotStarted: Boolean = False;
 
-{ G2_SNAPSHOT_OUT names the file the entries are appended to (build.sh turns it into the include) }
+{ G2_SNAPSHOT_OUT names the file the entries are appended to (build.pas turns it into the include) }
 procedure AppendEntry(const Name, Source: UnicodeString; T: PFuncTemplate);
 var Path: string; F: TFileStream; M: TMemoryStream;
 begin
