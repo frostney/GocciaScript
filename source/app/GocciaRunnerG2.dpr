@@ -21,6 +21,7 @@ uses
 
   CLI.ConfigFile,
   CLI.Options,
+  FileUtils,
   TimingUtils,
 
   Goccia.Application,
@@ -31,7 +32,11 @@ uses
   Goccia.CLI.Permissions,
   Goccia.CLI.Stdin,
   Goccia.CLI.Trust,
+  Goccia.Capabilities,
   Goccia.Error,
+  Goccia.FileExtensions,
+  Goccia.Modules.Configuration,
+  Goccia.Modules.Resolver,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
@@ -56,6 +61,16 @@ type
     function OutputText: string;
     function StdoutText: string;
     function StderrText: string;
+  end;
+
+  { node_modules resolution as the file's capabilities allow it (TGocciaEngine.GrantNodeModules): the walk's
+    ceiling when import grants it, a refusal when it is denied, sealed otherwise }
+  TG2NodeModulesGrant = class
+  private
+    FCapabilities: TGocciaCapabilities;
+  public
+    constructor Create(const ACapabilities: TGocciaCapabilities);
+    function Grant(const ASpecifier, AImportingDirectory: string; out ACeiling: string): Boolean;
   end;
 
   { one file's part of a JSON report }
@@ -91,6 +106,7 @@ type
     FAcceptMovedTags: TFlagOption;
     procedure RunSource(const AFileName: string; const ASource: TStringList);
     procedure RunOnWorker(const AFileName: string; const ASource: TStringList);
+    procedure RunFile(const AFileName: string);
     procedure ReportFailure(const AFileName: string;
       const AResult: TG2RunResult; const ASource: TStringList);
     function IsJsonOutput: Boolean;
@@ -246,6 +262,24 @@ begin
     AEngine.MaxMemory := ASettings.MaxMemory
   else
     AEngine.MaxMemory := 0;
+end;
+
+constructor TG2NodeModulesGrant.Create(const ACapabilities: TGocciaCapabilities);
+begin
+  inherited Create;
+  FCapabilities := ACapabilities;
+end;
+
+function TG2NodeModulesGrant.Grant(const ASpecifier, AImportingDirectory: string;
+  out ACeiling: string): Boolean;
+begin
+  Result := FCapabilities.NodeModulesCeiling(AImportingDirectory, ACeiling);
+  if Result then
+    Exit;
+  { an outright deny refuses; a capability never granted keeps the sealed resolution's message }
+  if FCapabilities.DeniesNodeModules(AImportingDirectory) then
+    raise Exception.Create('PermissionDenied: import is not allowed for ' + ASpecifier +
+      ' (node_modules resolution is denied for ' + AImportingDirectory + ')');
 end;
 
 constructor TG2ConsoleCapture.Create;
@@ -495,6 +529,9 @@ var
   Start: Int64;
   Capture: TG2ConsoleCapture;
   Report: TG2FileReport;
+  Resolver: TGocciaModuleResolver;
+  Grant: TG2NodeModulesGrant;
+  AliasBaseDirectory: string;
 begin
   Start := GetNanoseconds;
   Capture := nil;
@@ -507,8 +544,21 @@ begin
     else
       SetLength(FileConfig, 0);
     Verdict := FileConfigVerdict(FileConfigPath, AFileName);
+    { the file's import resolution, as GocciaRunner's CreateEngine configures it }
+    Grant := TG2NodeModulesGrant.Create(ResolveEngineCapabilities(FileConfigPath, AFileName));
+    Resolver := TGocciaModuleResolver.Create(ExtractFilePath(ExpandFileName(AFileName)));
+    Resolver.SetExtensions(ModuleImportExtensions);
+    Resolver.NodeModulesGrant := Grant.Grant;
+    Resolver.ProviderCachedOnly := ResolveFlagOption(EngineOptions.CachedOnly, FileConfig);
+    if EngineOptions.Aliases.FromCommandLine or (RootConfigPath = '') then
+      AliasBaseDirectory := GetCurrentDir
+    else
+      AliasBaseDirectory := ExtractFilePath(RootConfigPath);
+    ConfigureModuleResolver(Resolver, AFileName, EngineOptions.ImportMap.ValueOr(''),
+      EngineOptions.Aliases.Values, AliasBaseDirectory);
     Engine := TG2Engine.Create;
     try
+      Engine.Resolver := Resolver;
       { GocciaRunner has no timer globals (the test runner does) }
       Engine.ExposeTimers := False;
       if IsJsonOutput then
@@ -577,6 +627,8 @@ begin
         WriteLn(UTF8Encode(RunResult.ResultText));
     finally
       Engine.Free;
+      Resolver.Free;
+      Grant.Free;
     end;
   finally
     Capture.Free;
@@ -607,10 +659,22 @@ begin
     raise ErrorClass.Create(ErrorMessage);
 end;
 
+procedure TG2RunnerApp.RunFile(const AFileName: string);
+var
+  Source: TStringList;
+begin
+  Source := SourceRegistry.Load(AFileName);
+  try
+    RunOnWorker(AFileName, Source);
+  finally
+    Source.Free;
+  end;
+end;
+
 procedure TG2RunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  I: Integer;
-  Source: TStringList;
+  I, J: Integer;
+  Source, Files, Found: TStringList;
 begin
   { no path, or "-": the source from stdin (the base class applied the no-argument rule) }
   if (APaths.Count = 0) or ((APaths.Count = 1) and IsStdinPath(APaths[0])) then
@@ -625,15 +689,47 @@ begin
       PrintJsonReport;
     Exit;
   end;
+  { "-" with paths: stdin cannot be interleaved with files }
   for I := 0 to APaths.Count - 1 do
-  begin
-    Source := SourceRegistry.Load(APaths[I]);
-    try
-      RunOnWorker(APaths[I], Source);
-    finally
-      Source.Free;
-    end;
+    if IsStdinPath(APaths[I]) then
+      raise TParseError.Create('stdin is supported only as the sole input.');
+  { a directory is its script files; every config governing the inputs is checked before any of them runs }
+  Files := TStringList.Create;
+  try
+    for I := 0 to APaths.Count - 1 do
+      if DirectoryExists(APaths[I]) then
+      begin
+        Found := FindAllFiles(APaths[I], ScriptExtensions);
+        try
+          Files.AddStrings(Found);
+        finally
+          Found.Free;
+        end;
+      end
+      else if FileExists(APaths[I]) then
+        Files.Add(APaths[I])
+      else if IsJsonOutput then
+        raise Exception.Create('Path not found: ' + APaths[I]);
+    ValidateFileConfigs(Files);
+  finally
+    Files.Free;
   end;
+  { in order; a missing path stops the run where it stands, as GocciaRunner's RunScripts }
+  for I := 0 to APaths.Count - 1 do
+    if DirectoryExists(APaths[I]) then
+    begin
+      Found := FindAllFiles(APaths[I], ScriptExtensions);
+      try
+        for J := 0 to Found.Count - 1 do
+          RunFile(Found[J]);
+      finally
+        Found.Free;
+      end;
+    end
+    else if FileExists(APaths[I]) then
+      RunFile(APaths[I])
+    else
+      raise Exception.Create('Path not found: ' + APaths[I]);
   if IsJsonOutput then
     PrintJsonReport;
 end;
