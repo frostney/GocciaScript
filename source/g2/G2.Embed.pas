@@ -36,6 +36,10 @@ type
     ErrorLine, ErrorColumn: Integer;
     { nanoseconds spent parsing and compiling the entry (lexing included), and running it with its event loop }
     CompileNanoseconds, ExecuteNanoseconds: Int64;
+    { CaptureResult: the entry's completion value as String(value) (undefined for a module), converted after
+      the event loop under the run's limits; a conversion that throws fails the run }
+    HasResult: Boolean;
+    ResultText: UnicodeString;
   end;
 
   TG2Engine = class
@@ -48,6 +52,8 @@ type
     FMaxFrames: Integer;
     FHostReady: Boolean;
     FExposeTimers: Boolean;
+    FCaptureResult: Boolean;
+    FFailOnUnhandledRejection: Boolean;
     function InstallHost(var Err: UnicodeString): Boolean;
   public
     { builds this thread's engine; one at a time per thread }
@@ -67,6 +73,11 @@ type
     { setTimeout and the other timer globals, and goccia:timers (True by default); without them the timer queue
       still serves the host's own users (AbortSignal.timeout) }
     property ExposeTimers: Boolean read FExposeTimers write FExposeTimers;
+    { report the entry's completion value (TG2RunResult.ResultText) }
+    property CaptureResult: Boolean read FCaptureResult write FCaptureResult;
+    { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
+      uncaught error (GocciaRunner) }
+    property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
     { 0 for none }
     property TimeoutMs: Int64 read FTimeoutMs write FTimeoutMs;
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
@@ -82,7 +93,7 @@ function RecommendedProfile: TLangProfile;
 implementation
 
 uses
-  TimingUtils, G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules, G2.HostAPI;
+  TimingUtils, G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules, G2.HostAPI, G2.Promise;
 
 { "    at name (source:line:column)": the first frame line of a stack text }
 procedure FirstFrameOf(const Stack: UnicodeString; var R: TG2RunResult);
@@ -169,7 +180,8 @@ begin
 end;
 
 function TG2Engine.Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
-var Kind, Phase: Integer; T: PFuncTemplate; Err: UnicodeString; S, Thrown: TValue; Start: Int64; Compiled: Boolean;
+var Kind, Phase: Integer; T: PFuncTemplate; Err: UnicodeString; S, Thrown, Completion: TValue; Start: Int64;
+  Compiled: Boolean;
 begin
   Result := Default(TG2RunResult);
   Err := '';
@@ -188,7 +200,7 @@ begin
   end;
   T := nil;
   Start := GetNanoseconds;
-  Compiled := HostCompileEntry(Source, UnicodeString(FileName), Kind, T, Result.IsModule, Err);
+  Compiled := HostCompileEntry(Source, UnicodeString(FileName), Kind, T, Result.IsModule, Err, FCaptureResult);
   Result.CompileNanoseconds := GetNanoseconds - Start;
   if not Compiled then
   begin
@@ -206,13 +218,37 @@ begin
   SetMaxFrames(FMaxFrames);
   LimitsArm(FTimeoutMs, FMaxInstructions);
   Start := GetNanoseconds;
+  { the completion value, rooted through the event loop }
+  PushRoot(VUndefined);
   try
     if Result.IsModule then
     begin
       Phase := 0;
       Result.Ok := RunModuleFile(UnicodeString(ExpandFileName(FileName)), Phase) and RunEventLoop;
     end
-    else Result.Ok := RunScript(T) and RunEventLoop;
+    else
+    begin
+      Completion := VUndefined;
+      Result.Ok := RunScriptRes(T, Completion);
+      { nothing allocates between the run's return and the push }
+      PopRoots(1);
+      PushRoot(Completion);
+      Result.Ok := Result.Ok and RunEventLoop;
+    end;
+    if Result.Ok and FFailOnUnhandledRejection and TakeUnhandledRejection(Thrown) then
+    begin
+      Pending := Thrown;
+      Result.Ok := False;
+    end;
+    if Result.Ok and FCaptureResult then
+    begin
+      Result.Ok := ToStringV(RootAt(TempTop - 1), S) and IsString(S);
+      if Result.Ok then
+      begin
+        Result.HasResult := True;
+        Result.ResultText := StrToUnicode(StrOf(S));
+      end;
+    end;
     Result.ExecuteNanoseconds := GetNanoseconds - Start;
     case AbortKind of
       1: Result.Aborted := g2aTimeout;
@@ -232,6 +268,7 @@ begin
       Pending := VUndefined;
     end;
   finally
+    PopRoots(1);
     LimitsDisarm;
   end;
 end;

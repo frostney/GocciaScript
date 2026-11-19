@@ -25,7 +25,7 @@ function ActivePipelineOptions(Module: Boolean): TGocciaSourcePipelineOptions;
 { an entry file under a restricted profile, parsed as the CLIs parse it (SourceType 0 detect, 1 Script, 2
   Module): a Script compiled (goal 1) into T; a Module only reported (IsModule), for G2.Modules to load }
 function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
-  out IsModule: Boolean; var Err: UnicodeString): Boolean;
+  out IsModule: Boolean; var Err: UnicodeString; ReturnLast: Boolean = False): Boolean;
 
 threadvar
   { why the last ParseAndCompile failed: 1 the parser rejected the source (an early error; ParseErrorName is
@@ -228,7 +228,7 @@ begin
 end;
 
 function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
-  out IsModule: Boolean; var Err: UnicodeString): Boolean;
+  out IsModule: Boolean; var Err: UnicodeString; ReturnLast: Boolean): Boolean;
 var Prog: TGocciaProgram; Goal: TGocciaSourceType;
 begin
   Result := False;
@@ -257,7 +257,7 @@ begin
         IsModule := True;
         Exit(True);
       end;
-      T := CompileProgram(Prog, FileName, False, 1);
+      T := CompileProgram(Prog, FileName, ReturnLast, 1);
       Result := True;
     except
       on E: Exception do

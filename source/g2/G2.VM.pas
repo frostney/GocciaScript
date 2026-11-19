@@ -536,7 +536,9 @@ end;
 
 procedure SetMaxFrames(N: Integer);
 begin
-  if (N <= 0) or (N > FRAME_MAX - 2) then FrameLimitBase := FRAME_MAX else FrameLimitBase := N + 2;
+  { N nested calls below the entry's frame: the frame check refuses a push once FrameTop >= FrameLimit - 2, and
+    the Nth call is pushed at FrameTop N (the entry's frame and N - 1 calls) }
+  if (N <= 0) or (N > FRAME_MAX - 3) then FrameLimitBase := FRAME_MAX else FrameLimitBase := N + 3;
   if Interrupt = 0 then FrameLimit := FrameLimitBase;
   if FrameLimitBase <> FRAME_MAX then JitBlocked := True
   else if (LimitTimer = nil) and not InstrCounted then JitBlocked := False;

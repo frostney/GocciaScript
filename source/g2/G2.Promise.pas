@@ -22,6 +22,9 @@ uses
 
 procedure InitPromise;
 function RunMicrotasks: Boolean;
+{ 27.2.1.9 HostPromiseRejectionTracker, as a host that reports at the end of a run: the reason of the first promise
+  rejected with no handler that still has none (False when every rejection was handled) }
+function TakeUnhandledRejection(var Reason: TValue): Boolean;
 { a pending promise of this engine, and settling one from native code (G2.Atomics' waitAsync) }
 function NewPendingPromise: TValue;
 procedure ResolvePendingPromise(P, V: TValue);
@@ -173,6 +176,46 @@ begin
 end;
 
 { 27.2.1.4 FulfillPromise / 27.2.1.7 RejectPromise, then 27.2.1.8 TriggerPromiseReactions }
+threadvar
+  { the promises rejected while they had no handler, in order (an array; undefined until the first) }
+  Rejected: TValue;
+  RejectedRootedGen: Integer;
+
+procedure TrackRejection(P: TValue); noinline;
+var A: PObj;
+begin
+  if FirstInEngine(RejectedRootedGen) then
+  begin
+    AddRoot(@Rejected);
+    Rejected := VUndefined;
+  end;
+  PushRoot(P);
+  if not IsObject(Rejected) then
+  begin
+    A := NewArray(0, 4);
+    Rejected := MkPtr(A);
+  end;
+  ArrayPush(ObjOf(Rejected), RootAt(TempTop - 1));
+  PopRoots(1);
+end;
+
+function TakeUnhandledRejection(var Reason: TValue): Boolean;
+var I, N: Integer; P: TValue;
+begin
+  Result := False;
+  if not SameEngine(RejectedRootedGen) or not IsObject(Rejected) then Exit;
+  N := ArrayLen(ObjOf(Rejected));
+  for I := 0 to N - 1 do
+  begin
+    P := ObjOf(Rejected)^.Elements^.Data[I];
+    if (ObjOf(P)^.OFlags and 1) = 0 then
+    begin
+      Reason := ObjOf(P)^.Aux1;
+      Exit(True);
+    end;
+  end;
+end;
+
 procedure Settle(P: TValue; State: Integer; V: TValue);
 var O: PObj; R: TValue; I, N: Integer;
 begin
@@ -181,6 +224,16 @@ begin
   O^.Pad := State;
   O^.Aux1 := V;
   WriteBarrier(@O^.Hdr, V);
+  { rejected with no handler yet: the host checks again at the end of the run }
+  if (State = psRejected) and ((O^.OFlags and 1) = 0) then
+  begin
+    PushRoot(P);
+    TrackRejection(P);
+    P := RootAt(TempTop - 1);
+    PopRoots(1);
+    O := ObjOf(P);
+    V := O^.Aux1;   { the tracking allocated: the reason as the promise holds it now }
+  end;
   R := O^.Aux2;
   O^.Aux2 := VUndefined;
   if R = VUndefined then Exit;

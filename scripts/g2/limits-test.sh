@@ -60,6 +60,6 @@ for k in 1 2 3; do
   "$G2" --max-instructions=$((hi - 1)) "$D/sum.js" > /dev/null 2>&1 && { echo "FAIL instr-exact: $((hi - 1)) failed once, then passed"; fails=$((fails + 1)); break; }
 done
 
-check max-stack --max-stack=100 '99 true' 'let d = 0; function r() { d++; r(); } try { r(); } catch (e) { console.log(d, e instanceof RangeError); }'
+check max-stack --max-stack=100 '100 true' 'let d = 0; function r() { d++; r(); } try { r(); } catch (e) { console.log(d, e instanceof RangeError); }'
 
 [ $fails -eq 0 ] && echo "limits: all passed" || { echo "limits: $fails failed"; exit 1; }
