@@ -5,7 +5,7 @@ program g2;
 uses
   cthreads, Classes, SysUtils, Math,
   Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.Token,
-  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.HostAPI, G2.Weak, CLI.ConfigFile, CLI.Units, StrUtils;
+  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.HostAPI, G2.Weak, G2.Embed, CLI.ConfigFile, CLI.Units, StrUtils;
 
 type
   TSampler = class(TThread)
@@ -178,36 +178,25 @@ end;
   and the host's globals, the file under its goccia.json profile as a script or a module (source-type, .mjs, or a
   top-level import or export declaration), then its suites }
 procedure RunTestFile(const FileName: string; const SrcText: UnicodeString);
-var Prof: TLangProfile; SourceType: string; Err, ConfigJson: UnicodeString; Phase, Kind: Integer; IsModule, Ok: Boolean; S: TValue;
-  T: PFuncTemplate;
+var Prof: TLangProfile; SourceType: string; Err, ConfigJson: UnicodeString; Engine: TG2Engine; R: TG2RunResult;
 begin
   LoadTestConfig(FileName, Prof, SourceType, ConfigJson);
-  EngineInit;
-  if not (InstallHostGlobals(Prof.ShadowRealm, True, ConfigJson, Err) and InstallTestingAPI(Err)) then
+  Engine := TG2Engine.Create;   { lives until ReportTests ends the process }
+  Engine.Profile := Prof;
+  Engine.ConfigJson := ConfigJson;
+  Engine.TestMode := True;
+  if SourceType = 'module' then Engine.SourceKind := g2skModule
+  else if SourceType = 'script' then Engine.SourceKind := g2skScript;
+  Err := '';
+  if not (Engine.PrepareHost(Err) and InstallTestingAPI(Err)) then
   begin
     WriteLn('__G2TEST__ setup error: ', UTF8Encode(Err));
     Halt(4);
   end;
   SetActiveProfile(Prof);
   HoistTestMocks(FileName, SrcText);
-  if SourceType = 'module' then Kind := 2
-  else if SourceType = 'script' then Kind := 1
-  else if LowerCase(ExtractFileExt(FileName)) = '.mjs' then Kind := 2
-  else Kind := 0;
-  Err := '';
-  if not HostCompileEntry(SrcText, UnicodeString(FileName), Kind, T, IsModule, Err) then ReportTests(Err);
-  if IsModule then
-  begin
-    Phase := 0;
-    Ok := RunModuleFile(UnicodeString(ExpandFileName(FileName)), Phase) and RunEventLoop;
-  end
-  else Ok := RunScript(T) and RunEventLoop;
-  if not Ok then
-  begin
-    if ToStringV(Pending, S) and IsString(S) then Err := StrToUnicode(StrOf(S));
-    if Err = '' then Err := 'uncaught exception';
-    Pending := VUndefined;
-  end;
+  R := Engine.Run(FileName, SrcText);
+  if R.Ok then Err := '' else Err := R.ErrorMessage;
   ReportTests(Err);
 end;
 
