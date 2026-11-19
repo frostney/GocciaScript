@@ -238,7 +238,7 @@ procedure SetGenNextNative(P: Pointer);
 { the global lexical bindings (let, const and class at the top level of Scripts): index of Key, -1 if none }
 function GLexFind(Key: PStr): Integer;
 { a host's global (globals injection): a const global lexical binding Name with value V, which code compiled after
-  it sees. A name a built-in or a script already binds is refused (False, a TypeError pending: 'Cannot override
+  it sees, and a property of the global object. A name a built-in or a script already binds is refused (False, a TypeError pending: 'Cannot override
   built-in global'); one injected before takes the new value. }
 function InjectGlobalBinding(const Name: UnicodeString; V: TValue): Boolean;
 function GLexIsConst(I: Integer): Boolean;
@@ -1490,6 +1490,8 @@ begin
   U^.Value := RootAt(TempTop - 1);
   WriteBarrier(@U^.Hdr, U^.Value);
   GLexCells[I] := MkPtr(U);
+  { and on the global object, as GocciaScript's injected globals are (writable, configurable, not enumerable) }
+  if IsObject(GlobalObj) then DefineOwn(GlobalObj, Key, RootAt(TempTop - 1), pfHidden);
   PopRoots(1);
   Result := True;
 end;
