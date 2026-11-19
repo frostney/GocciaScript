@@ -112,6 +112,8 @@ type
     procedure RunOnWorker(const AFileName: string; const ASource: TStringList);
     procedure RunFile(const AFileName: string);
     function InjectGlobals(const AEngine: TG2Engine; out AError: string): Boolean;
+    function DefineVirtualModules(const AEngine: TG2Engine; const AFileConfigPath: string;
+      out AError: string): Boolean;
     procedure ReportFailure(const AFileName: string;
       const AResult: TG2RunResult; const ASource: TStringList);
     function IsJsonOutput: Boolean;
@@ -571,6 +573,57 @@ begin
   Result := True;
 end;
 
+{ GocciaRunner's virtual modules (ApplyConfiguredVirtualModules): the root config's, the file's own config's when
+  it has another, then the command line's --modules manifests and --module definitions. JavaScript and TypeScript
+  manifests are not on G2 yet. }
+function TG2RunnerApp.DefineVirtualModules(const AEngine: TG2Engine; const AFileConfigPath: string;
+  out AError: string): Boolean;
+var
+  I: Integer;
+  Path, Ext: string;
+  Err: UnicodeString;
+begin
+  Result := False;
+  AError := '';
+  Err := '';
+  if (RootConfigPath <> '') and not AEngine.DefineConfigVirtualModules(UTF8Decode(RootConfigPath), Err) then
+  begin
+    AError := UTF8Encode(Err);
+    Exit;
+  end;
+  if (AFileConfigPath <> '') and (ExpandFileName(AFileConfigPath) <> ExpandFileName(RootConfigPath)) and
+     not AEngine.DefineConfigVirtualModules(UTF8Decode(AFileConfigPath), Err) then
+  begin
+    AError := UTF8Encode(Err);
+    Exit;
+  end;
+  if EngineOptions.ModuleManifests.FromCommandLine then
+    for I := 0 to EngineOptions.ModuleManifests.Values.Count - 1 do
+    begin
+      Path := ExpandFileName(EngineOptions.ModuleManifests.Values[I]);
+      Ext := LowerCase(ExtractFileExt(Path));
+      if (Ext = '.js') or (Ext = '.mjs') or (Ext = '.ts') or (Ext = '.mts') then
+      begin
+        AError := 'JavaScript and TypeScript module manifests are not supported on G2 yet: ' + Path;
+        Exit;
+      end;
+      if not AEngine.DefineManifestVirtualModules(UTF8Decode(Path), Err) then
+      begin
+        AError := UTF8Encode(Err);
+        Exit;
+      end;
+    end;
+  if EngineOptions.ModuleDefinitions.FromCommandLine then
+    for I := 0 to EngineOptions.ModuleDefinitions.Values.Count - 1 do
+      if not AEngine.DefineInlineVirtualModule(UTF8Decode(EngineOptions.ModuleDefinitions.Values[I]),
+         UTF8Decode(GetCurrentDir), Err) then
+      begin
+        AError := UTF8Encode(Err);
+        Exit;
+      end;
+  Result := True;
+end;
+
 procedure TG2RunnerApp.ReportFailure(const AFileName: string;
   const AResult: TG2RunResult; const ASource: TStringList);
 var
@@ -678,6 +731,13 @@ begin
       if EngineOptions.MaxStack.Present then
         Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
       { a refused or unreadable global fails the file before it runs, as the old engine's RuntimeError }
+      { a module definition that cannot apply is a configuration error, as GocciaRunner's }
+      if not DefineVirtualModules(Engine, FileConfigPath, GlobalsError) then
+      begin
+        WriteLn('Fatal error: ', GlobalsError);
+        ExitCode := 1;
+        Exit;
+      end;
       if not InjectGlobals(Engine, GlobalsError) then
       begin
         WriteLn(FormatErrorWithSourceContext('RuntimeError', GlobalsError, AFileName, 0, 0,
