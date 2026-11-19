@@ -212,6 +212,9 @@ var ICHit0, ICHitOther, ICMissN, ICMissFill, ICMissDepthFail: Int64;
   PrevOp: Integer;
   ICWhy: array[0..7] of Int64;   { 0 dict receiver, 1 index key, 2 absent, 3 accessor, 4 virtual, 5 dict/deep proto, 6 proxy, 7 fn prototype }
 procedure VMInit;
+{ the JIT compiles on one thread only (its emitter's buffers are shared): the thread that loaded G2.VM, until a
+  host that runs its engine on another thread hands compiling to that one. Only while no other thread compiles. }
+procedure JitTakeThread;
 { Execution limits for the next run: a timeout in milliseconds and an instruction budget, each 0 for none. A spent
   limit aborts the run: a pending Error ('Execution timed out after Nms', 'Execution exceeded instruction limit
   of N') that no handler catches, with Aborting set. LimitsDisarm ends them (and clears an abort). }
@@ -6180,6 +6183,11 @@ begin
 end;
 
 {$I G2.Jit.inc}
+
+procedure JitTakeThread;
+begin
+  {$IFDEF CPUX86_64}JitMainThread := GetCurrentThreadId;{$ENDIF}
+end;
 
 function FastLoop(Code: PQWord; PC: Integer; R, K: PValue; ICs: PPropIC; Fr: PFrame; StopFrame: Integer): Integer;
 label LBail, LGetProp, LSetPropSlow;

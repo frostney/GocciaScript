@@ -211,17 +211,17 @@ end;
 
 threadvar
   TemporalInternalsV: TValue;
-  TemporalRooted: Boolean;
+  TemporalRootedGen: Integer;
 
 function TemporalInternals: TValue;
 begin
-  if TemporalRooted then Result := TemporalInternalsV else Result := VUndefined;
+  if SameEngine(TemporalRootedGen) then Result := TemporalInternalsV else Result := VUndefined;
 end;
 
 procedure InitTemporal;
 var T: PFuncTemplate; Err: UnicodeString; Clo, Fn, R: TValue; CA: array[0..6] of TValue; I: Integer; Ok: Boolean;
 begin
-  if not TemporalRooted then begin AddRoot(@TemporalInternalsV); TemporalRooted := True; end;
+  if FirstInEngine(TemporalRootedGen) then AddRoot(@TemporalInternalsV);
   RealmVals([@TemporalInternalsV]);
   TemporalInternalsV := VUndefined;
   if not CompilePrelude('<temporal>', TemporalSrc, T, Err) then raise Exception.Create('temporal prelude: ' + string(Err));

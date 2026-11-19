@@ -18,6 +18,8 @@ uses
   extras removed; TestMode lists the test runner's globals in Goccia.runtimeGlobals }
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
   var Err: UnicodeString): Boolean;
+{ the heap limit when none is given: half the physical memory, at most 8 GB (700 MB on a 32-bit build) }
+function DefaultHeapCeiling: Int64;
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
@@ -73,9 +75,9 @@ threadvar
   SharedV, LoadHostModuleV, HasHostModuleV: TValue;
 
   FireNextV: TValue;
-  EventLoopRooted: Boolean;
+  EventLoopRootedGen: Integer;
   TestApiV: TValue;
-  TestApiRooted: Boolean;
+  TestApiRootedGen: Integer;
   ReportJson, ReportErr: UnicodeString;
   ReportDone: Boolean;
 
@@ -741,10 +743,9 @@ function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: Un
 var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
   if HeapCeiling <= 0 then HeapCeiling := DefaultHeapCeiling;
-  if not EventLoopRooted then
+  if FirstInEngine(EventLoopRootedGen) then
   begin
     AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@HasHostModuleV);
-    EventLoopRooted := True;
   end;
   FireNextV := VUndefined;
   SharedV := VUndefined;
@@ -806,7 +807,7 @@ end;
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
 var Base: Integer;
 begin
-  if not TestApiRooted then begin AddRoot(@TestApiV); TestApiRooted := True; end;
+  if FirstInEngine(TestApiRootedGen) then AddRoot(@TestApiV);
   Base := TempTop;
   PushRoot(GlobalObj);
   PushRoot(SharedV);

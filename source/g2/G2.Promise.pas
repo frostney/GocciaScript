@@ -56,7 +56,7 @@ type
 threadvar
   PromiseProto, PromiseCtor, ThenFn, Jobs, Scratch: TValue;
   AsyncCtx: TValue;
-  AsyncCtxRooted: Boolean;
+  AsyncCtxRootedGen: Integer;
   JobHead, JobCount: Integer;
   AtomThen, AtomResolve: PStr;
 
@@ -1387,11 +1387,10 @@ procedure InitPromise;
 var Q: PValueArray; I: Integer;
 begin
   AddRoot(@PromiseProto); AddRoot(@PromiseCtor); AddRoot(@ThenFn); AddRoot(@Jobs); AddRoot(@Scratch);
-  if not AsyncCtxRooted then
+  if FirstInEngine(AsyncCtxRootedGen) then
   begin
     AddRoot(@AsyncCtx);
     AsyncCtx := VUndefined;
-    AsyncCtxRooted := True;
   end;
   AtomThen := AtomOf('then');
   AtomResolve := AtomOf('resolve');

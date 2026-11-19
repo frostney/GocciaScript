@@ -252,6 +252,11 @@ threadvar
   GCPromotedBytes, GCOldBytes, GCOldBytesAtMajor: Int64;
 
 procedure HeapInit(NurseryBytes: SizeInt);
+{ The engines a thread has had: once-per-engine set-up (registering a root) keeps the generation it ran for, so a
+  thread's next engine (after EngineDone) runs it again. FirstInEngine: whether Gen is not this engine's yet (and
+  makes it so); SameEngine: whether it is. Not inline (a threadvar read across units, tlsscan.py). }
+function FirstInEngine(var Gen: Integer): Boolean; noinline;
+function SameEngine(Gen: Integer): Boolean; noinline;
 { frees this thread's heap: every cell, atom and shape; nothing of the heap may be used after it }
 procedure HeapDone;
 function AllocCell(Size: SizeInt; Kind: Byte): PCell;
@@ -740,9 +745,28 @@ threadvar
 { a major collection runs when old space has grown by the larger of this and its size after the last one }
 var GCMajorFloor: Int64 = 64 * 1024 * 1024; GCMajorGrowthPct: Int64 = 100;
 
+threadvar
+  EngineGen: Integer;
+
+function FirstInEngine(var Gen: Integer): Boolean;
+var G: Integer;
+begin
+  G := EngineGen;
+  Result := Gen <> G;
+  Gen := G;
+end;
+
+function SameEngine(Gen: Integer): Boolean;
+var G: Integer;
+begin
+  G := EngineGen;
+  Result := Gen = G;
+end;
+
 procedure HeapInit(NurseryBytes: SizeInt);
 var I, C: Integer;
 begin
+  Inc(EngineGen);
   if GetEnvironmentVariable('G2_MAJOR_FLOOR_MB') <> '' then
     GCMajorFloor := Int64(StrToInt(GetEnvironmentVariable('G2_MAJOR_FLOOR_MB'))) * 1024 * 1024;
   if GetEnvironmentVariable('G2_MAJOR_GROWTH_PCT') <> '' then
