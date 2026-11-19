@@ -179,6 +179,8 @@ begin
     Verdict := FileConfigVerdict(FileConfigPath, AFileName);
     Engine := TG2Engine.Create;
     try
+      { GocciaRunner has no timer globals (the test runner does) }
+      Engine.ExposeTimers := False;
       ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig,
         AFileName, Verdict.AcceptedUnsafe));
       if EngineOptions.Timeout.Present then

@@ -17,7 +17,7 @@ uses
 { the host's globals on this thread's realm (after EngineInit): the const Goccia, and the conformance host's
   extras removed; TestMode lists the test runner's globals in Goccia.runtimeGlobals }
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
-  var Err: UnicodeString): Boolean;
+  var Err: UnicodeString; ExposeTimers: Boolean = True): Boolean;
 { the heap limit when none is given: half the physical memory, at most 8 GB (700 MB on a 32-bit build) }
 function DefaultHeapCeiling: Int64;
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
@@ -739,7 +739,7 @@ begin
 end;
 
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
-  var Err: UnicodeString): Boolean;
+  var Err: UnicodeString; ExposeTimers: Boolean): Boolean;
 var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
   if HeapCeiling <= 0 then HeapCeiling := DefaultHeapCeiling;
@@ -779,6 +779,8 @@ begin
   if Result then
   begin
     PushRoot(Goccia);
+    { the timer globals and goccia:timers, or only the queue (ExposeTimers False) }
+    if not ExposeTimers then DefineOwn(RootAt(Base + 2), AtomOf('exposeTimers'), VFalse, pfDefault);
     Result := CallPrelude('<goccia:timers>', TimersSrc, Base, 3, R, Err) and
       CallPrelude('<node:async_hooks>', AsyncHooksSrc, Base, 3, R, Err);
     Goccia := RootAt(TempTop - 1);

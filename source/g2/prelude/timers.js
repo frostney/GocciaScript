@@ -264,10 +264,15 @@
   function setInterval(handler, timeout = 0, ...args) { return add(handler, timeout, args, true); }
   function clearTimeout(id = undefined) { clear(id); }
   function clearInterval(id = undefined) { clear(id); }
-  hidden(G, 'setTimeout', setTimeout);
-  hidden(G, 'setInterval', setInterval);
-  hidden(G, 'clearTimeout', clearTimeout);
-  hidden(G, 'clearInterval', clearInterval);
+  // a host without timers (GocciaRunner) keeps the queue for its own users (AbortSignal.timeout) but exposes
+  // neither the globals nor goccia:timers
+  const exposed = shared.exposeTimers !== false;
+  if (exposed) {
+    hidden(G, 'setTimeout', setTimeout);
+    hidden(G, 'setInterval', setInterval);
+    hidden(G, 'clearTimeout', clearTimeout);
+    hidden(G, 'clearInterval', clearInterval);
+  }
 
   const timersModule = {
     useFakeTimers(now = undefined) { useFakeTimers(now); },
@@ -291,7 +296,7 @@
     },
     getTimerCount() { requireFake(); return queue.size; }
   };
-  shared.hostModules['goccia:timers'] = () => timersModule;
+  if (exposed) shared.hostModules['goccia:timers'] = () => timersModule;
   shared.timers = { fireNext, drainTest, add, clear, count: () => queue.size };
-  shared.runtimeGlobals.push('setTimeout', 'setInterval', 'clearTimeout', 'clearInterval');
+  if (exposed) shared.runtimeGlobals.push('setTimeout', 'setInterval', 'clearTimeout', 'clearInterval');
 })

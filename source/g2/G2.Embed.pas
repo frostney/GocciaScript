@@ -47,6 +47,7 @@ type
     FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
     FMaxFrames: Integer;
     FHostReady: Boolean;
+    FExposeTimers: Boolean;
     function InstallHost(var Err: UnicodeString): Boolean;
   public
     { builds this thread's engine; one at a time per thread }
@@ -63,6 +64,9 @@ type
     property ConfigJson: UnicodeString read FConfigJson write FConfigJson;
     { the test framework's host: no process exit on an uncaught error, the testing API's globals }
     property TestMode: Boolean read FTestMode write FTestMode;
+    { setTimeout and the other timer globals, and goccia:timers (True by default); without them the timer queue
+      still serves the host's own users (AbortSignal.timeout) }
+    property ExposeTimers: Boolean read FExposeTimers write FExposeTimers;
     { 0 for none }
     property TimeoutMs: Int64 read FTimeoutMs write FTimeoutMs;
     property MaxInstructions: Int64 read FMaxInstructions write FMaxInstructions;
@@ -140,6 +144,7 @@ begin
   inherited Create;
   FProfile := RecommendedProfile;
   FConfigJson := '{}';
+  FExposeTimers := True;
   EngineInit;
 end;
 
@@ -153,7 +158,7 @@ end;
 
 function TG2Engine.InstallHost(var Err: UnicodeString): Boolean;
 begin
-  Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err);
+  Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err, FExposeTimers);
   FHostReady := Result;
 end;
 
