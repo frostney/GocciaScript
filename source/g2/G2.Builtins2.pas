@@ -1,6 +1,7 @@
 unit G2.Builtins2;
 { Generators, __proto__, BigInt, ArrayBuffer, typed arrays and DataView. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$Q-}{$R-}

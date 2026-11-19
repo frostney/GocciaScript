@@ -10,6 +10,7 @@ unit G2.ArrayProto;
   Rooting. A native's Args live on the value stack: Args[0] is replaced by ToObject(this) and read again after
   any call; results and accumulators are temp roots at fixed offsets from Base. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

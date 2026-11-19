@@ -2,6 +2,7 @@ unit G2.VM;
 { Interpreter: one dispatch loop without Pascal exception handling, frames on one value stack,
   Lua-style open upvalues, monomorphic inline caches. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$GOTO ON}

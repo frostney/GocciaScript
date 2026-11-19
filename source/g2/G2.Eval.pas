@@ -1,6 +1,7 @@
 unit G2.Eval;
 { Parsing and compiling at run time: the script entry and the Function constructor. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

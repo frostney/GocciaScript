@@ -40,6 +40,7 @@ unit G2.Intl;
   roundingIncrement, roundingPriority, numberingSystem.
   Parts are Arrays of [type, value], or [type, value, source] for a range, [type, value, source, unit] with a unit. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

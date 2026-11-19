@@ -2,6 +2,7 @@ program g2threads;
 { Runs one script on N threads at once, each in an engine of its own, for R rounds, and checks that every
   thread printed what the first one did. Usage: g2threads THREADS ROUNDS FILE }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 
 uses
   cthreads, Classes, SysUtils, G2.Engine, G2.Builtins;

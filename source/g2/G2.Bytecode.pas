@@ -1,6 +1,7 @@
 unit G2.Bytecode;
 { Instruction format: 64 bits = op (8) | A (16) | B (16) | C (24, signed where an offset). }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

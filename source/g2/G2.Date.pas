@@ -8,6 +8,7 @@ unit G2.Date;
   Date.parse reads the Date Time String Format (21.4.1.32, with expanded years) and the formats toString and
   toUTCString produce. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

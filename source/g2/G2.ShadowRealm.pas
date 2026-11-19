@@ -5,6 +5,7 @@ unit G2.ShadowRealm;
   and arguments wrapped for that realm, and wraps the result for the caller's. The errors of either side never
   cross: an abrupt completion on the other side is a TypeError of the caller's realm. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 
 interface

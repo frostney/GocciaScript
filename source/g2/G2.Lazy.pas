@@ -7,6 +7,7 @@ unit G2.Lazy;
   A TLazySource is one pre-parsed source: its text, the line index Goccia's lexer built for it, and per function
   record the offsets and what the compiler needs. Offsets are UTF-16 indices, Goccia's as G2.Scan's. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 
 interface
 

@@ -2,6 +2,7 @@ unit G2.Builtins4;
 { The remaining standard library the tooling bundles reach: number formatting, Math, URI coding,
   Date setters, eval, and a JS prelude for the parts that compose existing built-ins. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$Q-}{$R-}

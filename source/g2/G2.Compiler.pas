@@ -2,6 +2,7 @@ unit G2.Compiler;
 { Goccia AST -> G2 register bytecode. Lua-style: locals in registers, captured locals reached by closures
   through upvalues that are closed when their scope ends. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

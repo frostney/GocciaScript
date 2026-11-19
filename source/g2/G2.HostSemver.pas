@@ -4,6 +4,7 @@ unit G2.HostSemver;
   range the core refuses throws its TypeError or Error. Options travel as a bit set: 1 loose, 2 includePrerelease,
   4 rtl. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 
 interface
 

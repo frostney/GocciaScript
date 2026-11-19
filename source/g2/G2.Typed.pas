@@ -8,6 +8,7 @@ unit G2.Typed;
   offset, OFlags = kind shl 4. TALength is the spec's TypedArrayLength of a fresh buffer witness record: 0 when the
   view is out of bounds or the buffer detached; on a fixed-length, attached, unshared buffer it is Aux2 directly. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$INLINE ON}

@@ -1,5 +1,6 @@
 program g2;
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 uses
   cthreads, Classes, SysUtils, Math,

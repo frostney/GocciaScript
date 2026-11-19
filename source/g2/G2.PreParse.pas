@@ -13,6 +13,7 @@ unit G2.PreParse;
   dropped first. }
 
 {$mode objfpc}{$H+}{$modeswitch advancedrecords}
+{$I G2.Checks.inc}
 
 interface
 

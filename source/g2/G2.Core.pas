@@ -1,6 +1,7 @@
 unit G2.Core;
 { Values, heap cells, generational GC, strings, atoms, shapes and objects of the spike engine. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$INLINE ON}

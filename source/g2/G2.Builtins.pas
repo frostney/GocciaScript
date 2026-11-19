@@ -1,6 +1,7 @@
 unit G2.Builtins;
 { The built-in objects the benchmark corpora use. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$Q-}{$R-}

@@ -1,6 +1,7 @@
 unit G2.Weak;
 
 {$mode objfpc}{$H+}
+{$I G2.Checks.inc}
 
 { Weak references for WeakRef and FinalizationRegistry (ECMA-262 9.9-9.13, 26.1, 26.2).
 

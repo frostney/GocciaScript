@@ -8,6 +8,7 @@ unit G2.Scan;
   until the next token. Nothing per token is allocated on the heap. }
 
 {$mode objfpc}{$H+}{$modeswitch advancedrecords}
+{$I G2.Checks.inc}
 
 interface
 

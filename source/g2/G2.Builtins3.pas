@@ -1,6 +1,7 @@
 unit G2.Builtins3;
 { Date, Symbol.for, WeakMap/WeakSet, property descriptors and Reflect: the rest of what the tooling bundles use. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$Q-}{$R-}

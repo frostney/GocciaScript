@@ -10,6 +10,7 @@ unit G2.Agent;
   with a SharedArrayBuffer of its own engine over the broadcast's block, drains its jobs and ends. broadcast
   returns once every running agent has taken the message. Reports go to one process-wide queue. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 
 interface

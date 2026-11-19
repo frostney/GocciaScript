@@ -7,6 +7,7 @@ unit G2.JSON;
   a rooted array since the collector moves them. stringify appends to one growable buffer; a property whose
   value serializes to undefined is cut back off it. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

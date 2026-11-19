@@ -2,6 +2,7 @@ unit G2.RegExpV;
 { RegExp objects: patterns compile with Goccia's RegExp compiler (Goccia.RegExp.Compiler) and run on G2's matcher
   (G2.Regex), which reads G2 strings in place. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$Q-}{$R-}

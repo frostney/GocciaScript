@@ -6,6 +6,7 @@ unit G2.HostAPI;
   The conformance host (g2 --test262) installs none of this: its realm keeps print, eval and the Annex B
   globals the CLIs leave out. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 
 interface

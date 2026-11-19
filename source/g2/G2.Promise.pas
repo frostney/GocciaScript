@@ -10,6 +10,7 @@ unit G2.Promise;
   holds the suspended async function instead of handlers and resumes it.
   Jobs are quads [kind, a, b, c] in one ring buffer, so queueing a job allocates nothing. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$Q-}{$R-}

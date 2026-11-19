@@ -9,6 +9,7 @@ unit G2.ObjModel;
   with a hole in the elements, and the object gets the element guard (OFlags 64) so element writes take the
   checked path. An array's length is not writable when OFlags 128 is set. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

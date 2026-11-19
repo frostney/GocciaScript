@@ -3,6 +3,7 @@ unit G2.Builtins5;
   (src/prelude/builtins5.js, turned into G2.Builtins5.inc by t/lang/gen_prelude_inc.py) and compiled once into
   the prelude snapshot. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 
 interface

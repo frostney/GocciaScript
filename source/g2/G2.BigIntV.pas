@@ -1,6 +1,7 @@
 unit G2.BigIntV;
 { BigInt values: GC cells holding sign and 32-bit limbs; arithmetic through Goccia's TBigInteger. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$Q-}{$R-}

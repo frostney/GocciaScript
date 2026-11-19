@@ -7,6 +7,7 @@ unit G2.Atomics;
 
   BigInt64Array and BigUint64Array do not exist in G2 yet, so the BigInt forms of Atomics are absent. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

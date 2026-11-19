@@ -21,6 +21,7 @@ unit G2.Snapshot;
   MaterializeSnapshotTemplate): most of the preludes' functions (Temporal,
   Intl) are never called. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 

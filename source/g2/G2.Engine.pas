@@ -8,6 +8,7 @@ unit G2.Engine;
   about what a global does: single-thread runs execute 0-0.7% more
   instructions than with globals. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 
 interface

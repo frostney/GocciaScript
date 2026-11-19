@@ -6,6 +6,7 @@ unit G2.TypedArrays;
   Rooting. A native's Args live on the value stack: Args[0] holds the receiver and is read again after any call;
   new objects are temp roots at fixed offsets from Base. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 {$Q-}{$R-}

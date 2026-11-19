@@ -11,6 +11,7 @@ unit G2.Shared;
   (WaiterList): one critical section guards all of them, which is the spec's critical section per list,
   coarsened. }
 {$mode delphiunicode}{$H+}
+{$I G2.Checks.inc}
 {$MINFPCONSTPREC 64}
 {$POINTERMATH ON}
 
