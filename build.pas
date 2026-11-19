@@ -17,13 +17,13 @@ type
   TBuildMode = (bmDev, bmProd);
   TBuildTarget = (btTests, btRunner, btLoaderBare, btFuzzHarness,
     btTestRunner, btTest262Runner, btTOMLComplianceRunner, btWasmTestRunner,
-    btBenchmarkRunner, btBundler, btREPL, btG2);
+    btBenchmarkRunner, btBundler, btREPL, btG2, btG2Runner);
 
 const
   BUILD_TARGET_NAMES: array[TBuildTarget] of string = (
     'tests', 'runner', 'loaderbare', 'fuzzharness', 'testrunner',
     'test262runner', 'tomlcompliancerunner', 'wasmtestrunner',
-    'benchmarkrunner', 'bundler', 'repl', 'g2');
+    'benchmarkrunner', 'bundler', 'repl', 'g2', 'g2runner');
 
   { G2: the JS preludes compiled into the engine, as (source in source/g2/prelude, include, constant) }
   G2_PRELUDES: array[0..20, 0..2] of string = (
@@ -623,8 +623,21 @@ begin
       Src.Free;
     end;
   end;
-  if not FileExists(G2GeneratedDirectory + DirectorySeparator + 'G2.PreludeSnapshot.inc') then
-    WriteIfChanged(G2GeneratedDirectory + DirectorySeparator + 'G2.PreludeSnapshot.inc',
+end;
+
+{ Each G2 program's own prelude snapshot: a program that installs the host's preludes (the apps) compiles more of
+  them than the bare engine (g2), so they cannot share one }
+function G2SnapshotDirectory(const ATarget: string): string;
+begin
+  Result := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snapshot-' + ATarget;
+end;
+
+{ an empty snapshot until the program has made one }
+procedure EnsureG2Snapshot(const ATarget: string);
+begin
+  ForceDirectories(G2SnapshotDirectory(ATarget));
+  if not FileExists(G2SnapshotDirectory(ATarget) + DirectorySeparator + 'G2.PreludeSnapshot.inc') then
+    WriteIfChanged(G2SnapshotDirectory(ATarget) + DirectorySeparator + 'G2.PreludeSnapshot.inc',
       'const' + LineEnding + '  G2PreludeSnapshotSize = 0;' + LineEnding +
       '  G2PreludeSnapshot: array[0..0] of Byte = (0);' + LineEnding);
 end;
@@ -632,7 +645,7 @@ end;
 { The compiler arguments of a G2 program. G2 always compiles optimized: its code
   is not written for the dev build's range, overflow and assertion checks. A
   dev build keeps line information instead of stripping it. }
-function G2Args(const ASource, AUnitDirectory, AOutput: string): TStringArray;
+function G2Args(const ASource, AUnitDirectory, AOutput, ATarget: string): TStringArray;
 var
   Args: TStringList;
   J: Integer;
@@ -654,11 +667,14 @@ begin
     Args.Add('-Fusource/units');
     Args.Add('-Fusource/shared');
     Args.Add('-Fusource/generated');
+    Args.Add('-Fusource/app');
+    Args.Add('-Fi' + G2SnapshotDirectory(ATarget));
     Args.Add('-Fi' + G2GeneratedDirectory);
     Args.Add('-Fisource/g2');
     Args.Add('-Fisource/units');
     Args.Add('-Fisource/shared');
     Args.Add('-Fisource/generated');
+    Args.Add('-Fisource/app');
     Args.Add('-Fisource');
     Args.Add('-FU' + AUnitDirectory);
     Args.Add('-o' + AOutput);
@@ -708,18 +724,18 @@ function CompileG2Program(const ASource, AUnitDirectory, AOutput, ALabel: string
   out AOutputText: string): Boolean;
 begin
   CopyG2Resources(AUnitDirectory);
-  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput), AOutputText);
+  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel), AOutputText);
   if Result or not HasStaleArtifactSignature(AOutputText) then
     Exit;
   WriteLn('FPC reported a stale-state error for ', ALabel, '; retrying once from a clean unit directory');
   RemoveCompiledArtifacts(AUnitDirectory);
   CopyG2Resources(AUnitDirectory);
-  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput), AOutputText);
+  Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel), AOutputText);
 end;
 
 { Runs the stage-1 engine to snapshot its compiled preludes (G2.Snapshot) into G2.PreludeSnapshot.inc; True when
   the snapshot changed, so the engine is compiled again with it }
-function SnapshotG2Preludes(const AExecutable: string): Boolean;
+function SnapshotG2Preludes(const AExecutable, ATarget: string): Boolean;
 var
   Proc: TProcess;
   Snap, Empty: string;
@@ -730,7 +746,7 @@ var
 begin
   Snap := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap.bin';
   Empty := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap-empty.js';
-  WriteIfChanged(Empty, 'var x;' + LineEnding);
+  WriteIfChanged(Empty, 'const x = 0;' + LineEnding);
   Proc := TProcess.Create(nil);
   try
     Proc.Executable := AExecutable;
@@ -774,7 +790,8 @@ begin
       Text.Append(IntToStr(Bytes[K]));
     end;
     Text.Append(');' + LineEnding);
-    Result := WriteIfChanged(G2GeneratedDirectory + DirectorySeparator + 'G2.PreludeSnapshot.inc', Text.ToString);
+    Result := WriteIfChanged(G2SnapshotDirectory(ATarget) + DirectorySeparator + 'G2.PreludeSnapshot.inc',
+      Text.ToString);
   finally
     Text.Free;
   end;
@@ -824,6 +841,7 @@ begin
   WriteLn('');
   WriteLn('Building ', AOutput, ' (G2)...');
   GenerateG2Preludes;
+  EnsureG2Snapshot(ATarget);
   { its own unit cache per mode: G2 builds incrementally (no -B), and FPC does not recompile a unit for new options }
   UnitDir := TargetUnitOutputDirectory(ATarget);
   if BuildMode <> bmProd then
@@ -831,7 +849,7 @@ begin
   if not CompileG2Program(ASource, UnitDir, AOutput, ATarget, Output) then
     PrintBuildFailureAndExit(Output, AOutput + ' build failed');
   CheckG2ThreadVarRelocations(UnitDir);
-  if SnapshotG2Preludes(AOutput) then
+  if SnapshotG2Preludes(AOutput, ATarget) then
   begin
     WriteLn('Prelude snapshot changed: compiling again with it');
     DeleteFile(UnitDir + DirectorySeparator + 'G2.Snapshot.ppu');
@@ -843,19 +861,33 @@ begin
   WriteLn(AOutput, ' built successfully');
 end;
 
-procedure BuildG2;
+{ native-TLS threadvars and the code generator fixes G2 needs are in fpc-toolchain's 3.3.1 builds }
+procedure CheckG2Compiler;
 var
   Version: string;
 begin
-  { native-TLS threadvars and the code generator fixes G2 needs are in fpc-toolchain's 3.3.1 builds }
   if not RunCommand('fpc', ['-iV'], Version) or (CompareStr(Trim(Version), '3.3.1') < 0) then
   begin
     WriteLn('G2 needs FPC 3.3.1 from fpc-toolchain (build 3.3.1+5 or later); found ', Trim(Version));
     WriteLn('Select it with: eval "$(fpc-toolchain env 3.3.1+5)"');
     Halt(1);
   end;
+end;
+
+procedure BuildG2;
+begin
+  CheckG2Compiler;
   ForceDirectories('build' + DirectorySeparator + 'g2');
   BuildG2Program('source/g2/g2.dpr', 'g2', 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'g2');
+end;
+
+{ GocciaRunner on G2 while the apps move to it (source/app/GocciaRunnerG2.dpr) }
+procedure BuildG2Runner;
+begin
+  CheckG2Compiler;
+  ForceDirectories('build' + DirectorySeparator + 'g2');
+  BuildG2Program('source/app/GocciaRunnerG2.dpr', 'g2runner',
+    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaRunner');
 end;
 
 procedure BuildREPL;
@@ -1214,6 +1246,7 @@ begin
     btBundler: BuildGocciaBundler;
     btREPL: BuildREPL;
     btG2: BuildG2;
+    btG2Runner: BuildG2Runner;
   end;
 end;
 
@@ -1320,7 +1353,7 @@ begin
   if BuildTriggers.Count = 0 then
     for I := Ord(Low(TBuildTarget)) to Ord(High(TBuildTarget)) do
       { G2 needs FPC 3.3.1, which the full build's toolchain is not yet: it is built by name }
-      if TBuildTarget(I) <> btG2 then
+      if not (TBuildTarget(I) in [btG2, btG2Runner]) then
         BuildTriggers.Add(BUILD_TARGET_NAMES[TBuildTarget(I)]);
 
   { Resolve and validate the complete selection before removing any cache. }
