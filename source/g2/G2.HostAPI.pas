@@ -36,6 +36,13 @@ procedure SetHostResolver(R: TModuleResolver);
 function InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
 { one global from ValueText read as JSON, or as that string when it is not JSON (--global name=value) }
 function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: UnicodeString): Boolean;
+{ virtual modules (docs/virtual-modules.md), after InstallHostGlobals: a config file's "modules" (a module map, a
+  manifest path or an array of them) and "module" (one definition string or an array of them); a manifest file (a
+  module map in JSON, JSON5, TOML or YAML); one definition, "address=source", or address= followed by a JSON descriptor. Relative
+  addresses and paths resolve from the declaring file's directory (Base for a definition). False with Err. }
+function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
+function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
+function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
@@ -527,6 +534,170 @@ begin
     finally
       PopRoots(1);
     end;
+  finally
+    PopRoots(1);
+  end;
+end;
+
+function ReadFileUnicode(const Path: UnicodeString; var Text: UnicodeString): Boolean;
+var F: TFileStream; B: RawByteString;
+begin
+  Result := False;
+  if not FileExists(UTF8Encode(Path)) then Exit;
+  F := TFileStream.Create(UTF8Encode(Path), fmOpenRead or fmShareDenyNone);
+  try
+    SetLength(B, F.Size);
+    if F.Size > 0 then F.ReadBuffer(B[1], F.Size);
+  finally
+    F.Free;
+  end;
+  SetCodePage(B, CP_UTF8, False);
+  Text := UnicodeString(UTF8Decode(B));
+  if (Text <> '') and (Text[1] = #$FEFF) then Delete(Text, 1, 1);
+  Result := True;
+end;
+
+{ shared.defineVirtualModules(map, base) }
+function DefineVirtualModuleMap(Map: TValue; const Base: UnicodeString; var Err: UnicodeString): Boolean;
+var F, R: TValue; A: array[0..1] of TValue;
+begin
+  Result := False;
+  PushRoot(Map);
+  try
+    if not IsObject(SharedV) or not GetV(SharedV, AtomOf('defineVirtualModules'), F) or not IsCallable(F) then
+    begin
+      Err := 'virtual modules are not available';
+      Exit;
+    end;
+    PushRoot(F);
+    A[1] := StrFromUnicode(Base);
+    A[0] := RootAt(TempTop - 2);
+    Result := CallValue(RootAt(TempTop - 1), VUndefined, @A[0], 2, R);
+    PopRoots(1);
+    if not Result then Err := TakePendingText;
+  finally
+    PopRoots(1);
+  end;
+end;
+
+function DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
+var Text: UnicodeString; V: TValue;
+begin
+  Result := False;
+  if not ReadFileUnicode(ManifestPath, Text) then
+  begin
+    Err := 'Cannot read the module manifest ' + ManifestPath;
+    Exit;
+  end;
+  if not DataValue(Text, UnicodeString(ExtractFileExt(UTF8Encode(ManifestPath))), V) then
+  begin
+    Err := TakePendingText;
+    Exit;
+  end;
+  Result := DefineVirtualModuleMap(V, UnicodeString(ExtractFileDir(ExpandFileName(UTF8Encode(ManifestPath)))), Err);
+end;
+
+function DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
+var Sep: Integer; Address, Content: UnicodeString; Map, D, Parsed: TValue;
+begin
+  Result := False;
+  Sep := Pos('=', Definition);
+  if Sep <= 1 then
+  begin
+    Err := 'Invalid --module value "' + Definition + '"; expected name=source or name={descriptor}.';
+    Exit;
+  end;
+  Address := Copy(Definition, 1, Sep - 1);
+  Content := Copy(Definition, Sep + 1, MaxInt);
+  PushRoot(MkPtr(NewPlainObject(ObjectProto, 1)));
+  try
+    if (Content <> '') and (Content[1] = '{') then
+    begin
+      if not DataValue(Content, '.json', Parsed) then begin Err := TakePendingText; Exit; end;
+      D := Parsed;
+    end
+    else
+    begin
+      PushRoot(MkPtr(NewPlainObject(ObjectProto, 1)));
+      DefineOwn(RootAt(TempTop - 1), AtomOf('content'), StrFromUnicode(Content), pfDefault);
+      D := RootAt(TempTop - 1);
+      PopRoots(1);
+    end;
+    Map := RootAt(TempTop - 1);
+    DefineOwn(Map, AtomOf(Address), D, pfDefault);
+    Result := DefineVirtualModuleMap(RootAt(TempTop - 1), Base, Err);
+  finally
+    PopRoots(1);
+  end;
+end;
+
+function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
+var Text, Dir, P: UnicodeString; Cfg, M, E, S: TValue; I, N: Integer;
+begin
+  Result := False;
+  if not ReadFileUnicode(ConfigPath, Text) then begin Err := 'Cannot read ' + ConfigPath; Exit; end;
+  if not DataValue(Text, UnicodeString(ExtractFileExt(UTF8Encode(ConfigPath))), Cfg) then
+  begin
+    Err := TakePendingText;
+    Exit;
+  end;
+  if not IsObject(Cfg) then Exit(True);
+  Dir := UnicodeString(ExtractFileDir(ExpandFileName(UTF8Encode(ConfigPath))));
+  PushRoot(Cfg);
+  try
+    { "modules": a module map, a manifest path, or an array of manifest paths }
+    if GetV(RootAt(TempTop - 1), AtomOf('modules'), M) and (M <> VUndefined) then
+    begin
+      if IsString(M) then
+      begin
+        P := StrToUnicode(StrOf(M));
+        if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
+        if not DefineManifestVirtualModules(P, Err) then Exit;
+      end
+      else if IsObject(M) and (ObjOf(M)^.OKind = okArray) then
+      begin
+        PushRoot(M);
+        N := ArrayLen(ObjOf(M));
+        for I := 0 to N - 1 do
+        begin
+          E := ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I];
+          if not IsString(E) then begin Err := 'Config module manifests must be paths.'; PopRoots(1); Exit; end;
+          P := StrToUnicode(StrOf(E));
+          if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
+          if not DefineManifestVirtualModules(P, Err) then begin PopRoots(1); Exit; end;
+        end;
+        PopRoots(1);
+      end
+      else if not DefineVirtualModuleMap(M, Dir, Err) then Exit;
+    end
+    else Pending := VUndefined;
+    { "module": one definition string, or an array of them }
+    if GetV(RootAt(TempTop - 1), AtomOf('module'), M) and (M <> VUndefined) then
+    begin
+      if IsString(M) then
+      begin
+        if not DefineInlineVirtualModule(StrToUnicode(StrOf(M)), Dir, Err) then Exit;
+      end
+      else if IsObject(M) and (ObjOf(M)^.OKind = okArray) then
+      begin
+        PushRoot(M);
+        N := ArrayLen(ObjOf(M));
+        for I := 0 to N - 1 do
+        begin
+          S := ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I];
+          if not IsString(S) then begin Err := 'Config module definitions must be strings.'; PopRoots(1); Exit; end;
+          if not DefineInlineVirtualModule(StrToUnicode(StrOf(S)), Dir, Err) then begin PopRoots(1); Exit; end;
+        end;
+        PopRoots(1);
+      end
+      else
+      begin
+        Err := 'Config module must be a definition string or string array.';
+        Exit;
+      end;
+    end
+    else Pending := VUndefined;
+    Result := True;
   finally
     PopRoots(1);
   end;

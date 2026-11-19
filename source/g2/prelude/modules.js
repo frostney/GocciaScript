@@ -30,8 +30,10 @@
   shared.loadHostModule = (key) => {
     const make = registry[key];
     let exports;
-    if (make !== undefined) exports = make();
-    else {
+    if (make !== undefined) {
+      exports = make();
+      if (Array.isArray(exports) && exports[EXPORT_LIST] === true) return exports;
+    } else {
       const format = key[0] === '/' ? formats[extensionOf(key)] : undefined;
       if (format === undefined) return undefined;
       const text = n.readText(key);
@@ -81,4 +83,69 @@
   };
   formats['.txt'] = textAsset;
   formats['.md'] = textAsset;
+
+  // ---------------- virtual modules (docs/virtual-modules.md) ----------------
+  // a host's module map: { address: { type?, content } }, type javascript (default) or typescript (source), json
+  // (any value, exported as a JSON module is), text (the default export) or bytes (base64, an immutable
+  // Uint8Array as the default export). A relative address names a file next to base (the directory of the config
+  // or manifest that declares it); a definition may replace an earlier virtual one, but not a host module.
+  const virtualKeys = Object.create(null);
+  const isRelative = (a) => a.startsWith('./') || a.startsWith('../');
+  const joinPath = (dir, rel) => {
+    const parts = dir.split('/');
+    for (const seg of rel.split('/')) {
+      if (seg === '..') parts.pop();
+      else if (seg !== '.' && seg !== '') parts.push(seg);
+    }
+    return parts.join('/') || '/';
+  };
+  const decodeBase64 = (text) => {
+    const binary = G.atob(text);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Uint8Array(bytes.buffer.transferToImmutable());
+  };
+  shared.defineVirtualModules = (map, base) => {
+    if (map === null || typeof map !== 'object' || Array.isArray(map))
+      throw new TypeError('A virtual module map must be an object of module definitions');
+    for (const address of Object.keys(map)) {
+      const descriptor = map[address];
+      if (descriptor === null || typeof descriptor !== 'object' || Array.isArray(descriptor) ||
+          !Object.hasOwn(descriptor, 'content'))
+        throw new TypeError(`Virtual module "${address}" must be an object with content`);
+      const type = descriptor.type === undefined ? 'javascript' : descriptor.type;
+      const content = descriptor.content;
+      const key = isRelative(address) && base ? joinPath(base, address) : address;
+      if (registry[key] !== undefined && virtualKeys[key] === undefined)
+        throw new TypeError(`Virtual module "${address}" conflicts with a registered runtime module.`);
+      let make;
+      switch (type) {
+        case 'javascript':
+        case 'typescript':
+          if (typeof content !== 'string')
+            throw new TypeError(`Virtual module "${address}" of type ${type} must have string content`);
+          make = () => content;
+          break;
+        case 'json':
+          make = () => shared.jsonExports(content);
+          break;
+        case 'text':
+          if (typeof content !== 'string')
+            throw new TypeError(`Virtual module "${address}" of type text must have string content`);
+          make = () => exportList(['default', content]);
+          break;
+        case 'bytes': {
+          if (typeof content !== 'string')
+            throw new TypeError(`Virtual module "${address}" of type bytes must have base64 string content`);
+          const bytes = decodeBase64(content);
+          make = () => exportList(['default', bytes]);
+          break;
+        }
+        default:
+          throw new TypeError(`Virtual module "${address}" has an unknown type "${type}"`);
+      }
+      registry[key] = make;
+      virtualKeys[key] = true;
+    }
+  };
 })
