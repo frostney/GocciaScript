@@ -301,7 +301,14 @@ begin
     if Result.IsModule then
     begin
       Phase := 0;
+      { the entry's source as given (stdin has no file to read), compiled to keep its last value when reported }
+      SetProvidedSource(UnicodeString(ExpandFileName(FileName)), Source);
+      SetEntryCompletionWanted(FResultForm <> g2rfNone);
       Result.Ok := RunModuleFile(UnicodeString(ExpandFileName(FileName)), Phase) and RunEventLoop;
+      Completion := EntryCompletion;
+      PopRoots(1);
+      PushRoot(Completion);
+      SetEntryCompletionWanted(False);
     end
     else
     begin
@@ -341,6 +348,7 @@ begin
       Pending := VUndefined;
     end;
   finally
+    SetProvidedSource('', '');
     PopRoots(1);
     LimitsDisarm;
   end;

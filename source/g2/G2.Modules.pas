@@ -46,6 +46,13 @@ var JSONExportsHook: function(V: TValue; var Exp: TValue): Boolean = nil;
 procedure SetHostResolveHook(Hook: THostResolveHook);
 { Spec as an import in Referrer resolves it: a host module's key, or an absolute path }
 function ResolveModuleSpecifier(const Spec, Referrer: UnicodeString): UnicodeString;
+{ the source of the module at Path, as the host has it (a module entry read from stdin, or a section of a file):
+  loading Path takes it instead of reading the file. An empty Path clears it. }
+procedure SetProvidedSource(const Path, Source: UnicodeString);
+{ the provided entry's completion value (a host's --print): Wanted compiles it to keep the value, which
+  EntryCompletion returns once it ran (undefined before) }
+procedure SetEntryCompletionWanted(Wanted: Boolean);
+function EntryCompletion: TValue;
 
 implementation
 
@@ -182,9 +189,48 @@ begin
   Result := ResolvePath(Spec, Referrer);
 end;
 
-function ReadSource(const Path: UnicodeString; var Src: UnicodeString): Boolean;
-var F: TFileStream; B: RawByteString;
+threadvar
+  ProvidedPath, ProvidedSrc: UnicodeString;
+  CompletionWanted: Boolean;
+  Completion: TValue;
+  CompletionRootedGen: Integer;
+
+procedure SetEntryCompletionWanted(Wanted: Boolean);
 begin
+  if FirstInEngine(CompletionRootedGen) then AddRoot(@Completion);
+  Completion := VUndefined;
+  CompletionWanted := Wanted;
+end;
+
+function EntryCompletion: TValue;
+begin
+  if SameEngine(CompletionRootedGen) then Result := Completion else Result := VUndefined;
+end;
+
+{ M is the provided entry, compiled to keep its completion value }
+function IsCompletionEntry(M: TModRec): Boolean;
+var P: UnicodeString;
+begin
+  P := ProvidedPath;
+  Result := CompletionWanted and (P <> '') and (M.Path = P);
+end;
+
+procedure SetProvidedSource(const Path, Source: UnicodeString);
+begin
+  ProvidedPath := Path;
+  ProvidedSrc := Source;
+end;
+
+function ReadSource(const Path: UnicodeString; var Src: UnicodeString): Boolean;
+var F: TFileStream; B: RawByteString; P: UnicodeString;
+begin
+  P := ProvidedPath;
+  if (P <> '') and (P = Path) then
+  begin
+    Src := ProvidedSrc;
+    if (Src <> '') and (Src[1] = #$FEFF) then Delete(Src, 1, 1);
+    Exit(True);
+  end;
   Result := False;
   if not FileExists(string(Path)) then Exit;
   F := TFileStream.Create(string(Path), fmOpenRead or fmShareDenyNone);
@@ -319,7 +365,7 @@ end;
 
 { 16.2.1.5.1 LoadRequestedModules (synchronously, from files): the module at Path and everything it requests }
 function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
-var Src, Err, ErrName: UnicodeString; I: Integer; D: TModRec; V: TValue;
+var Src, Err, ErrName: UnicodeString; I: Integer; D: TModRec; V: TValue; Compiled: Boolean;
 begin
   if (Path <> '') and (Path[1] = #0) then
   begin
@@ -362,7 +408,13 @@ begin
   M.Id := Mods.Count;
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
-  if not ParseAndCompileModule(Src, Path, M.Id + 1, M.Tpl, M.Info, Err, ErrName) then
+  ModuleReturnLast := IsCompletionEntry(M);
+  try
+    Compiled := ParseAndCompileModule(Src, Path, M.Id + 1, M.Tpl, M.Info, Err, ErrName);
+  finally
+    ModuleReturnLast := False;
+  end;
+  if not Compiled then
   begin
     M.Errored := True;
     ThrowError(ErrName, Err);
@@ -766,6 +818,7 @@ function ExecuteSync(M: TModRec): Boolean;
 var V: TValue; Done: Boolean;
 begin
   Result := GeneratorResume(GetRoot(M, rGen), VUndefined, 0, V, Done);
+  if Result and Done and IsCompletionEntry(M) then Completion := V;
 end;
 
 procedure ExecuteAsyncModule(M: TModRec); forward;
@@ -850,7 +903,13 @@ begin
 end;
 
 function AsyncFulfilledFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var V: TValue;
 begin
+  { the module function's last step, an iterator result: its value is the completion value of an entry compiled
+    to keep it }
+  if IsCompletionEntry(Mods[NativeData]) and (Argc >= 1) and IsObject(Args[1]) and GetV(Args[1], AtomValue, V) then
+    Completion := V;
+  Pending := VUndefined;
   AsyncFulfilled(Mods[NativeData]);
   Res := VUndefined;
   Result := True;
@@ -1032,10 +1091,13 @@ end;
 
 { the host's entry point: the module loaded, linked and evaluated, its evaluation's jobs run until it settles }
 function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
-var M: TModRec; P, R: TValue;
+var M: TModRec; P, R: TValue; Entry: UnicodeString;
 begin
   Phase := 0;
-  if not LoadAndLink(ResolvePath(Path, ''), M) then Exit(False);
+  { a provided entry has no file for a resolver to find: its path is its key }
+  Entry := ProvidedPath;
+  if (Entry = '') or (Entry <> Path) then Entry := ResolvePath(Path, '');
+  if not LoadAndLink(Entry, M) then Exit(False);
   Phase := 1;
   PushRoot(EvaluateModule(M));
   if PromiseStatus(RootAt(TempTop - 1), R) = 0 then

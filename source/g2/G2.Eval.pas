@@ -36,6 +36,9 @@ threadvar
     suggests ('' for none) }
   ParseErrorLine, ParseErrorColumn: Integer;
   ParseErrorSuggestion: UnicodeString;
+  { the next module compiled keeps its completion value as its function's result (a host that reports an entry
+    module's last value); cleared by the compile }
+  ModuleReturnLast: Boolean;
 
 implementation
 
@@ -319,7 +322,7 @@ begin
       CompilingModuleId := Id;
       CurLazySource := LS;
       try
-        T := CompileProgram(Prog, FileName, False, 3);
+        T := CompileProgram(Prog, FileName, ModuleReturnLast, 3);
       finally
         CurLazySource := nil;
       end;
@@ -610,7 +613,7 @@ begin
         L.Tokens.Clear;
       end;
       CompilingModuleId := Id;
-      T := CompileProgram(Prog, FileName, False, 3);
+      T := CompileProgram(Prog, FileName, ModuleReturnLast, 3);
       Info := LastModuleInfo;
       LastModuleInfo := nil;
       Result := True;
