@@ -554,8 +554,17 @@ begin
     for I := 0 to FGlobalFiles.Values.Count - 1 do
     begin
       Path := FGlobalFiles.Values[I];
-      if IsStructuredGlobalsFile(Path) and not AEngine.InjectDataGlobals(ReadFileUnicode(Path),
-         UnicodeString(ExtractFileExt(Path)), UnicodeString(Path), Err) then
+      if IsStructuredGlobalsFile(Path) then
+      begin
+        if not AEngine.InjectDataGlobals(ReadFileUnicode(Path), UnicodeString(ExtractFileExt(Path)),
+           UnicodeString(Path), Err) then
+        begin
+          AError := UTF8Encode(Err);
+          Exit;
+        end;
+      end
+      { a globals module: its named exports, evaluated in the script's engine }
+      else if not AEngine.InjectModuleGlobals(UTF8Decode(Path), Err) then
       begin
         AError := UTF8Encode(Err);
         Exit;
@@ -604,10 +613,13 @@ begin
       Ext := LowerCase(ExtractFileExt(Path));
       if (Ext = '.js') or (Ext = '.mjs') or (Ext = '.ts') or (Ext = '.mts') then
       begin
-        AError := 'JavaScript and TypeScript module manifests are not supported on G2 yet: ' + Path;
-        Exit;
-      end;
-      if not AEngine.DefineManifestVirtualModules(UTF8Decode(Path), Err) then
+        if not AEngine.DefineModuleManifestVirtualModules(UTF8Decode(Path), Err) then
+        begin
+          AError := UTF8Encode(Err);
+          Exit;
+        end;
+      end
+      else if not AEngine.DefineManifestVirtualModules(UTF8Decode(Path), Err) then
       begin
         AError := UTF8Encode(Err);
         Exit;
