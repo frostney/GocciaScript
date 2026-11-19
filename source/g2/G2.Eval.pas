@@ -39,6 +39,11 @@ threadvar
   { the next module compiled keeps its completion value as its function's result (a host that reports an entry
     module's last value); cleared by the compile }
   ModuleReturnLast: Boolean;
+  { the warnings of the last HostCompileEntry's parse (warning-unsupported-features: what the parser recovered
+    from), in source order }
+  EntryWarningCount: Integer;
+  EntryWarningMessages, EntryWarningSuggestions: array of UnicodeString;
+  EntryWarningLines, EntryWarningColumns: array of Integer;
 
 implementation
 
@@ -136,12 +141,25 @@ end;
 { Source parsed by the CLIs' front end; Settled the goal it was parsed with }
 function HostParse(const Source, FileName: UnicodeString; SourceType: TGocciaSourceType;
   out Settled: TGocciaSourceType): TGocciaProgram;
-var Lines: TStringList; R: TGocciaSourcePipelineResult;
+var Lines: TStringList; R: TGocciaSourcePipelineResult; I: Integer;
 begin
+  EntryWarningCount := 0;
   Lines := CreateFileTextLines(NormalizeNewlinesToLF(UTF8Encode(Source)));
   try
     R := TGocciaSourcePipeline.Parse(Lines, UTF8Encode(FileName), HostPipelineOptions(SourceType));
     try
+      EntryWarningCount := R.WarningCount;
+      SetLength(EntryWarningMessages, R.WarningCount);
+      SetLength(EntryWarningSuggestions, R.WarningCount);
+      SetLength(EntryWarningLines, R.WarningCount);
+      SetLength(EntryWarningColumns, R.WarningCount);
+      for I := 0 to R.WarningCount - 1 do
+      begin
+        EntryWarningMessages[I] := UTF8Decode(R.Warnings[I].Message);
+        EntryWarningSuggestions[I] := UTF8Decode(R.Warnings[I].Suggestion);
+        EntryWarningLines[I] := R.Warnings[I].Line;
+        EntryWarningColumns[I] := R.Warnings[I].Column;
+      end;
       Settled := R.SourceType;
       Result := R.TakeProgramNode;
     finally

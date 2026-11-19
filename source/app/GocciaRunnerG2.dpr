@@ -55,10 +55,13 @@ type
     FStdoutLines: TStringList;
     FStderrLines: TStringList;
   public
+    FileName: string;
     constructor Create;
     destructor Destroy; override;
     procedure CaptureOutput(const AMethod, ALine: UnicodeString);
     procedure Discard(const AMethod, ALine: UnicodeString);
+    { a parse warning as GocciaRunner prints it (PrintPipelineWarnings); FileName set by the runner }
+    procedure PrintWarning(const AMessage, ASuggestion: UnicodeString; ALine, AColumn: Integer);
     function OutputText: string;
     function StdoutText: string;
     function StderrText: string;
@@ -352,6 +355,15 @@ procedure TG2ConsoleCapture.Discard(const AMethod, ALine: UnicodeString);
 begin
 end;
 
+procedure TG2ConsoleCapture.PrintWarning(const AMessage, ASuggestion: UnicodeString;
+  ALine, AColumn: Integer);
+begin
+  WriteLn('Warning: ', UTF8Encode(AMessage));
+  if ASuggestion <> '' then
+    WriteLn('  Suggestion: ', UTF8Encode(ASuggestion));
+  WriteLn(Format('  --> %s:%d:%d', [FileName, ALine, AColumn]));
+end;
+
 function TG2ConsoleCapture.OutputText: string;
 begin
   Result := FOutputLines.Text;
@@ -613,9 +625,9 @@ var
   GlobalsError: string;
 begin
   Start := GetNanoseconds;
-  Capture := nil;
-  if IsJsonOutput or FSilent.Present then
-    Capture := TG2ConsoleCapture.Create;
+  { the console capture, which also prints the parse warnings (not in a JSON report, as GocciaRunner) }
+  Capture := TG2ConsoleCapture.Create;
+  Capture.FileName := AFileName;
   try
     FileConfigPath := DiscoverFileConfigPath(AFileName);
     if FileConfigPath <> '' then
@@ -653,6 +665,8 @@ begin
           Engine.OnConsole := Capture.Discard;
       end;
       Engine.FailOnUnhandledRejection := True;
+      if not IsJsonOutput then
+        Engine.OnWarning := Capture.PrintWarning;
       ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig,
         AFileName, Verdict.AcceptedUnsafe));
       if EngineOptions.Timeout.Present then

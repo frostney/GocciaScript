@@ -19,6 +19,8 @@ type
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
     String form) }
   TG2ResultForm = (g2rfNone, g2rfString, g2rfJSON);
+  { a warning of the entry's parse (warning-unsupported-features), given to the host before the entry runs }
+  TG2WarningEvent = procedure(const Message, Suggestion: UnicodeString; Line, Column: Integer) of object;
 
   { how the entry is compiled: a script, a module, or as the source shows (a top-level import or export
     declaration makes a module); a .mjs file is a module unless the kind says otherwise }
@@ -62,6 +64,7 @@ type
     FResultForm: TG2ResultForm;
     FOnConsole: TG2ConsoleEvent;
     FResolver: TModuleResolver;
+    FOnWarning: TG2WarningEvent;
     FFailOnUnhandledRejection: Boolean;
     function InstallHost(var Err: UnicodeString): Boolean;
   public
@@ -92,6 +95,7 @@ type
     { the run's import resolution (an import map, aliases, node_modules), not owned; nil for relative and absolute
       paths only }
     property Resolver: TModuleResolver read FResolver write FResolver;
+    property OnWarning: TG2WarningEvent read FOnWarning write FOnWarning;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
@@ -272,7 +276,7 @@ begin
 end;
 
 function TG2Engine.Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
-var Kind, Phase: Integer; T: PFuncTemplate; Err: UnicodeString; S, Thrown, Completion: TValue; Start: Int64;
+var Kind, Phase, I: Integer; T: PFuncTemplate; Err: UnicodeString; S, Thrown, Completion: TValue; Start: Int64;
   Compiled: Boolean;
 begin
   Result := Default(TG2RunResult);
@@ -310,6 +314,9 @@ begin
     Exit;
   end;
   Result.Compiled := True;
+  if Assigned(FOnWarning) then
+    for I := 0 to EntryWarningCount - 1 do
+      FOnWarning(EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I], EntryWarningColumns[I]);
   SetMaxFrames(FMaxFrames);
   LimitsArm(FTimeoutMs, FMaxInstructions);
   Start := GetNanoseconds;
