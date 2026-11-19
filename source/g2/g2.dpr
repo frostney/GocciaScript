@@ -658,12 +658,13 @@ end;
 
 var
   FS: TFileStream; Raw: RawByteString; SrcText: UnicodeString; PP: TPreParser; LazySrc: TLazySource; L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; T: PFuncTemplate;
-  Opts: TGocciaParserOptions; Ok, TestMode: Boolean; MaxMem: Int64; SizeErr: string; S: TValue; FileName: string; I, NTokens: Integer; T0, T1, T2, T3, T4, H0, H1: QWord;
+  Opts: TGocciaParserOptions; Ok, TestMode: Boolean; MaxMem, TimeoutMs, MaxInstr, MaxStack: Int64; SizeErr: string; S: TValue; FileName: string; I, NTokens: Integer; T0, T1, T2, T3, T4, H0, H1: QWord;
 begin
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
   if ParamStr(1) = '--test262' then begin RunTest262Host; Halt(0); end;
   FileName := '';
   TestMode := False;
+  TimeoutMs := 0; MaxInstr := 0; MaxStack := 0;
   for I := 1 to ParamCount do
     if ParamStr(I) = '--test' then TestMode := True
     else if ParamStr(I) = '--gc-stress' then GCStress := True
@@ -677,6 +678,32 @@ begin
         Halt(2);
       end;
       HeapCeiling := MaxMem;
+    end
+    else if StartsStr('--timeout=', ParamStr(I)) then
+    begin
+      if not TryParseDurationMilliseconds(Copy(ParamStr(I), Length('--timeout=') + 1, MaxInt), TimeoutMs, SizeErr) or
+        (TimeoutMs < 0) then
+      begin
+        WriteLn(ErrOutput, 'Invalid value for --timeout: ', ParamStr(I), ' (', SizeErr, ')');
+        Halt(2);
+      end;
+    end
+    else if StartsStr('--max-instructions=', ParamStr(I)) then
+    begin
+      if not TryStrToInt64(Copy(ParamStr(I), Length('--max-instructions=') + 1, MaxInt), MaxInstr) or (MaxInstr < 0) then
+      begin
+        WriteLn(ErrOutput, 'Invalid value for --max-instructions: ', ParamStr(I));
+        Halt(2);
+      end;
+    end
+    else if StartsStr('--max-stack=', ParamStr(I)) then
+    begin
+      if not TryStrToInt64(Copy(ParamStr(I), Length('--max-stack=') + 1, MaxInt), MaxStack) or (MaxStack < 0) or
+        (MaxStack > High(Integer)) then
+      begin
+        WriteLn(ErrOutput, 'Invalid value for --max-stack: ', ParamStr(I));
+        Halt(2);
+      end;
     end
     else FileName := ParamStr(I);
   T0 := GetTickCount64;
@@ -806,6 +833,8 @@ begin
     WriteLn(ErrOutput, 'templates ', StatTpl, '; code ', StatCode * 8 div 1024, ' KB (capacity); consts ', StatConsts * 8 div 1024,
       ' KB; lines ', StatLines * 4 div 1024, ' KB; ICs ', StatICs, ' x ', SizeOf(TPropIC), ' B = ', StatICs * SizeOf(TPropIC) div 1024, ' KB');
   end;
+  SetMaxFrames(MaxStack);
+  LimitsArm(TimeoutMs, MaxInstr);
   Ok := RunScript(T);
   if Ok then Ok := RunMicrotasks;
   if Ok then Ok := RunHostLoop;   { Atomics.waitAsync }
@@ -831,6 +860,18 @@ begin
       LazySetupNs div 1000000, ' parse ', LazyParseNs div 1000000, ', ', LazyTokens, ' tokens, ', LazyChars,
       ' chars)');
   if GetEnvironmentVariable('G2_SAMPLE') <> '' then ReportSamples;
+  { a spent limit, as GocciaRunner reports it }
+  if AbortKind = 1 then
+  begin
+    WriteLn('Fatal error: file timed out after ', TimeoutMs, 'ms');
+    Halt(1);
+  end;
+  if AbortKind = 2 then
+  begin
+    WriteLn('Fatal error: Execution exceeded instruction limit of ', MaxInstr);
+    Halt(1);
+  end;
+  LimitsDisarm;
   if not Ok then
   begin
     if ToStringV(Pending, S) and IsString(S) then WriteLn('Uncaught ', UTF8Encode(StrToUnicode(StrOf(S))))

@@ -91,6 +91,16 @@ var
   { 13.2.8.4 GetTemplateObject: SetIntegrityLevel(frozen) of the raw strings array and of the template (G2.ObjModel) }
   TemplateFreezeHook: function(T: TValue): Boolean = nil;
 threadvar
+  { the frame bound every call checks (FramesFull): FrameLimitBase (FRAME_MAX, or SetMaxFrames'), 0 once a limit
+    is spent so that the next call aborts }
+  FrameLimit, FrameLimitBase: Integer;
+  { an instruction limit is armed: Execute counts every instruction (InstrLeft) and runs no FastLoop }
+  InstrCounted: Boolean;
+  InstrLeft: Int64;
+  InstrMax: Int64;
+  { no compiled code runs while a limit or a frame bound is set: it has no back-edge poll, and compiled calls
+    check FRAME_MAX }
+  JitBlocked: Boolean;
   { set when OwnKeys met a throwing proxy trap: the caller takes it with TakeOwnKeysFailure }
   OwnKeysFailed: Boolean;
   VStack: PValue;
@@ -201,6 +211,13 @@ var ICHit0, ICHitOther, ICMissN, ICMissFill, ICMissDepthFail: Int64;
   PrevOp: Integer;
   ICWhy: array[0..7] of Int64;   { 0 dict receiver, 1 index key, 2 absent, 3 accessor, 4 virtual, 5 dict/deep proto, 6 proxy, 7 fn prototype }
 procedure VMInit;
+{ Execution limits for the next run: a timeout in milliseconds and an instruction budget, each 0 for none. A spent
+  limit aborts the run: a pending Error ('Execution timed out after Nms', 'Execution exceeded instruction limit
+  of N') that no handler catches, with Aborting set. LimitsDisarm ends them (and clears an abort). }
+procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
+procedure LimitsDisarm;
+{ the most frames a run may have (0: FRAME_MAX); past it a call throws a RangeError }
+procedure SetMaxFrames(N: Integer);
 { releases this thread's VM state (stacks, roots); HeapDone frees the heap after it }
 procedure VMDone;
 procedure AddRoot(P: PValue);
@@ -402,7 +419,120 @@ procedure InlinedFrame(I, J: Integer; out Closure: TValue; out Tpl: PFuncTemplat
 implementation
 
 uses
-  Goccia.StackLimit;
+  Classes, Goccia.StackLimit;
+
+{ ---------------- execution limits ---------------- }
+
+type
+  { waits until the deadline, then interrupts the engine thread through its Interrupt and FrameLimit }
+  TLimitTimer = class(TThread)
+    Deadline: QWord;
+    PInterrupt: PLongInt;
+    PFrameLimit: PInteger;
+    Wake: PRTLEvent;
+    procedure Execute; override;
+  end;
+
+threadvar
+  LimitTimer: TLimitTimer;
+  LimitTimeoutMs: Int64;
+
+procedure TLimitTimer.Execute;
+var Now: QWord;
+begin
+  while not Terminated do
+  begin
+    Now := GetTickCount64;
+    if Now >= Deadline then
+    begin
+      PFrameLimit^ := 0;
+      InterLockedExchange(PInterrupt^, 1);
+      Exit;
+    end;
+    RTLEventWaitFor(Wake, Deadline - Now);
+  end;
+end;
+
+function FramesFull: Boolean; inline;
+var L, T: Integer;
+begin
+  L := FrameLimit;
+  T := FrameTop;
+  Result := T >= L - 2;
+end;
+
+{ a spent limit: the abort, sticky until LimitsDisarm (every later back edge and call aborts again, so that a
+  native that catches it, such as a promise job, cannot run on) }
+procedure XAbort(Kind: Integer); noinline;
+begin
+  if AbortKind = 0 then AbortKind := Kind;
+  Aborting := True;
+  FrameLimit := 0;
+  Interrupt := 1;
+  if AbortKind = 2 then ThrowError('Error', 'Execution exceeded instruction limit of ' + IntToStr(InstrMax))
+  else ThrowError('Error', 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms');
+end;
+
+{ a call that found the frames full: the abort of a spent limit, else PushBytecodeFrame's RangeError }
+function XFrameOverflow: Boolean; noinline;
+begin
+  if Interrupt <> 0 then
+  begin
+    XAbort(1);
+    Exit(False);
+  end;
+  Result := ThrowError('RangeError', 'Maximum call stack size exceeded');
+end;
+
+procedure LimitsDisarm;
+begin
+  if LimitTimer <> nil then
+  begin
+    LimitTimer.Terminate;
+    RTLEventSetEvent(LimitTimer.Wake);
+    LimitTimer.WaitFor;
+    RTLEventDestroy(LimitTimer.Wake);
+    LimitTimer.Free;
+    LimitTimer := nil;
+  end;
+  Interrupt := 0;
+  Aborting := False;
+  AbortKind := 0;
+  FrameLimit := FrameLimitBase;
+  InstrCounted := False;
+  InstrLeft := 0;
+  JitBlocked := FrameLimitBase <> FRAME_MAX;
+end;
+
+procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
+begin
+  LimitsDisarm;
+  LimitTimeoutMs := TimeoutMs;
+  InstrMax := MaxInstructions;
+  if MaxInstructions > 0 then
+  begin
+    InstrCounted := True;
+    InstrLeft := MaxInstructions;
+  end;
+  if (TimeoutMs > 0) or (MaxInstructions > 0) then JitBlocked := True;
+  if TimeoutMs > 0 then
+  begin
+    LimitTimer := TLimitTimer.Create(True);
+    LimitTimer.Deadline := GetTickCount64 + QWord(TimeoutMs);
+    LimitTimer.PInterrupt := @Interrupt;
+    LimitTimer.PFrameLimit := @FrameLimit;
+    LimitTimer.Wake := RTLEventCreate;
+    LimitTimer.Start;
+  end;
+end;
+
+procedure SetMaxFrames(N: Integer);
+begin
+  if (N <= 0) or (N > FRAME_MAX - 2) then FrameLimitBase := FRAME_MAX else FrameLimitBase := N + 2;
+  if Interrupt = 0 then FrameLimit := FrameLimitBase;
+  if FrameLimitBase <> FRAME_MAX then JitBlocked := True
+  else if (LimitTimer = nil) and not InstrCounted then JitBlocked := False;
+end;
 
 { N registers from P set to undefined: a frame's registers past its arguments. A call clears about ten, which
   FillQWord's set-up costs more than (about 29 instructions in Richards); this loop stores four per step }
@@ -3804,8 +3934,8 @@ begin
   T := PFuncTemplate(FObj^.Native);
   if (T^.Lazy <> nil) and not LazyCompileHook(T) then Exit(False);
   Base := (Args - VStack) - 1;
-  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
-    Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  if (Base + T^.MaxRegs >= STACK_MAX) or FramesFull then
+    Exit(XFrameOverflow);
   FV := MkPtr(FObj);
   R := @VStack[Base];
   if not T^.IsStrict and not T^.IsArrow then
@@ -3917,8 +4047,8 @@ begin
      (not T^.IsStrict and not T^.IsArrow and not IsObject(This)) then
     Exit(PushBytecodeFrameFull(FObj, This, Args, Argc, RetIdx, Kind, NewTarget));
   Base := (Args - VStack) - 1;
-  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
-    Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  if (Base + T^.MaxRegs >= STACK_MAX) or FramesFull then
+    Exit(XFrameOverflow);
   R := @VStack[Base];
   R[0] := This;
   I := Min(Argc, T^.NumParams) + 1;
@@ -4807,8 +4937,8 @@ begin
   State := PValueArray(PtrOf(G^.Aux2));
   SavedTop := StackTop;
   Base := StackTop;
-  if (Base + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
-    Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  if (Base + T^.MaxRegs + 4 >= STACK_MAX) or FramesFull then
+    Exit(XFrameOverflow);
   { the registers live at the suspension; the others read as a fresh frame's (and the collector, which scans
     the stack, sees no stale value in them) }
   NLive := IntOf(State^.Data[T^.MaxRegs + 1]);
@@ -4986,8 +5116,8 @@ begin
   T := PFuncTemplate(ObjOf(G^.Aux1)^.Native);
   State := PValueArray(PtrOf(G^.Aux2));
   Base := StackTop;
-  if (Base + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
-    Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  if (Base + T^.MaxRegs + 4 >= STACK_MAX) or FramesFull then
+    Exit(XFrameOverflow);
   NLive := IntOf(State^.Data[T^.MaxRegs + 1]);
   Move(State^.Data[0], VStack[Base], NLive * SizeOf(TValue));
   if NLive < T^.MaxRegs then FillQWord(VStack[Base + NLive], T^.MaxRegs - NLive, VUndefined);
@@ -5903,7 +6033,7 @@ begin
     if Assigned(T^.FieldInit) and not XPushFieldInit(Frames[FrameTop - 1].Closure) then Exit(-1);
     Exit(2);
   end;
-  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then
+  if (Base + T^.MaxRegs >= STACK_MAX) or FramesFull then
   begin
     { PushBytecodeFrame's RangeError }
     if not PushBytecodeFrame(ObjOf(VA), R[A + 1], @R[A + 2], Argc, Base - 1, 1, VA) then Exit(-1);
@@ -5984,7 +6114,7 @@ begin
   if (O^.OKind <> okFunction) or ((O^.OFlags and 1) <> 0) then Exit;
   T := PFuncTemplate(O^.Native);
   if not T^.FastCall then Exit;
-  if (Frames[FrameTop - 1].Base + A + 1 + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit;
+  if (Frames[FrameTop - 1].Base + A + 1 + T^.MaxRegs >= STACK_MAX) or FramesFull then Exit;
   if Argc = 0 then This := VUndefined else This := R[A + 2];
   if not T^.IsStrict and not T^.IsArrow and not IsObject(This) and (This <> VUndefined) and (This <> VNull) then Exit;
   Result := 1;
@@ -6070,7 +6200,7 @@ var
 begin
   {$IFDEF CPUX86_64}
   { a compiled template's code first (it stops at an instruction it does not take) }
-  if (JitEnabled = 1) and (Fr^.Tpl^.JitState <> 2) then
+  if (JitEnabled = 1) and not JitBlocked and (Fr^.Tpl^.JitState <> 2) then
   begin
     PC := XJitRun(Fr, PC);
     if PC < 0 then begin InjectThrow := True; Exit(-1); end;   { a throw out of a call the code made }
@@ -6185,7 +6315,7 @@ LGetProp:
               if T^.IsAsync or T^.IsGenerator or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) or (T^.Lazy <> nil) then
                 goto LBail;
               Base := StackTop;
-              if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
+              if (Base + T^.MaxRegs >= STACK_MAX) or FramesFull then goto LBail;
               Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
               VS[Base] := VB;
               if T^.MaxRegs > 1 then FillUndef(@VS[Base + 1], T^.MaxRegs - 1);
@@ -6673,10 +6803,11 @@ LSetPropSlow:
       opJmp:
         begin
           CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8);
+          if CI < 0 then if Interrupt <> 0 then goto LBail;
           Inc(IP, CI);
           {$IFDEF CPUX86_64}
           { a loop's back edge: into the compiled loop }
-          if (JitEnabled = 1) and (CI < 0) and (Fr^.Tpl^.JitState <> 2) then
+          if (JitEnabled = 1) and not JitBlocked and (CI < 0) and (Fr^.Tpl^.JitState <> 2) then
           begin
             CI := XJitRun(Fr, Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3));
             if CI < 0 then begin InjectThrow := True; Exit(-1); end;
@@ -6688,17 +6819,17 @@ LSetPropSlow:
       opJT:
         begin
           V := R[A];
-          if (V = VTrue) or ((V <> VFalse) and ToBool(V)) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
+          if (V = VTrue) or ((V <> VFalse) and ToBool(V)) then begin CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8); if CI < 0 then if Interrupt <> 0 then goto LBail; Inc(IP, CI); end;
         end;
       opJF:
         begin
           V := R[A];
-          if (V = VFalse) or ((V <> VTrue) and not ToBool(V)) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
+          if (V = VFalse) or ((V <> VTrue) and not ToBool(V)) then begin CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8); if CI < 0 then if Interrupt <> 0 then goto LBail; Inc(IP, CI); end;
         end;
-      opJNullish: if (R[A] = VUndefined) or (R[A] = VNull) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
-      opJNotNullish: if (R[A] <> VUndefined) and (R[A] <> VNull) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
-      opJUndef: if R[A] = VUndefined then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
-      opJNotUndef: if R[A] <> VUndefined then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
+      opJNullish: if (R[A] = VUndefined) or (R[A] = VNull) then begin CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8); if CI < 0 then if Interrupt <> 0 then goto LBail; Inc(IP, CI); end;
+      opJNotNullish: if (R[A] <> VUndefined) and (R[A] <> VNull) then begin CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8); if CI < 0 then if Interrupt <> 0 then goto LBail; Inc(IP, CI); end;
+      opJUndef: if R[A] = VUndefined then begin CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8); if CI < 0 then if Interrupt <> 0 then goto LBail; Inc(IP, CI); end;
+      opJNotUndef: if R[A] <> VUndefined then begin CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8); if CI < 0 then if Interrupt <> 0 then goto LBail; Inc(IP, CI); end;
       opJNLt, opJNLe, opJNGt, opJNGe:
         begin
           VA := R[A];
@@ -6722,7 +6853,7 @@ LSetPropSlow:
             end;
           end
           else goto LBail;
-          if not Bool then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
+          if not Bool then begin CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8); if CI < 0 then if Interrupt <> 0 then goto LBail; Inc(IP, CI); end;
         end;
       opJNSEq, opJSEq:
         begin
@@ -6740,7 +6871,7 @@ LSetPropSlow:
             the specials, a pointer and a non-pointer) differs }
           else if (VA < DOUBLE_LIMIT) or (VB < DOUBLE_LIMIT) then Bool := IsNumber(VA) and IsNumber(VB) and (NumOf(VA) = NumOf(VB))
           else Bool := False;
-          if Bool = (TOp(PByte(IP)[-8]) = opJSEq) then Inc(IP, SarLongint(PLongInt(PByte(IP) - 4)^, 8));
+          if Bool = (TOp(PByte(IP)[-8]) = opJSEq) then begin CI := SarLongint(PLongInt(PByte(IP) - 4)^, 8); if CI < 0 then if Interrupt <> 0 then goto LBail; Inc(IP, CI); end;
         end;
       opCall:
         begin
@@ -6795,7 +6926,7 @@ LSetPropSlow:
           T := PFuncTemplate(O^.Native);
           if not T^.FastCall then goto LBail;
           Base := Fr^.Base + A + 1;
-          if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
+          if (Base + T^.MaxRegs >= STACK_MAX) or FramesFull then goto LBail;
           Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
           R := @VS[Base];
           if not T^.IsStrict and not T^.IsArrow then
@@ -6833,7 +6964,7 @@ LSetPropSlow:
           ICs := T^.ICBase;
           Changed := True;
           {$IFDEF CPUX86_64}
-          if (JitEnabled = 1) and (T^.JitState <> 2) then
+          if (JitEnabled = 1) and not JitBlocked and (T^.JitState <> 2) then
           begin
             CI := XJitRun(Fr, 0);
             if CI < 0 then begin InjectThrow := True; Exit(-1); end;
@@ -6911,7 +7042,7 @@ LSetPropSlow:
           if (O^.OKind = okGenerator) and (O^.OFlags <= 1) and (R[CI + 1] = GenNextFn) and not MultiRealmAny then
           begin
             T := PFuncTemplate(ObjOf(O^.Aux1)^.Native);
-            if (StackTop + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then goto LBail;
+            if (StackTop + T^.MaxRegs + 4 >= STACK_MAX) or FramesFull then goto LBail;
             Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
             if not XGenInline(VB, Fr^.Base + A) then goto LBail;
             Fr := @Frames[FrameTop - 1];
@@ -6924,7 +7055,7 @@ LSetPropSlow:
             Changed := True;
             { the generator's compiled code from its resumption }
             {$IFDEF CPUX86_64}
-            if (JitEnabled = 1) and (T^.JitState <> 2) then
+            if (JitEnabled = 1) and not JitBlocked and (T^.JitState <> 2) then
             begin
               CI := XJitRun(Fr, Fr^.PC);
               if CI < 0 then begin InjectThrow := True; Exit(-1); end;
@@ -6956,7 +7087,7 @@ LSetPropSlow:
           Changed := True;
           { the consumer's compiled code past its opIterNext }
           {$IFDEF CPUX86_64}
-          if (JitEnabled = 1) and (T^.JitState = 1) then
+          if (JitEnabled = 1) and not JitBlocked and (T^.JitState = 1) then
           begin
             CI := XJitRun(Fr, Fr^.PC);
             if CI < 0 then begin InjectThrow := True; Exit(-1); end;
@@ -6986,7 +7117,7 @@ LSetPropSlow:
               ICs := T^.ICBase;
               Changed := True;
               {$IFDEF CPUX86_64}
-              if (JitEnabled = 1) and (T^.JitState = 1) then
+              if (JitEnabled = 1) and not JitBlocked and (T^.JitState = 1) then
               begin
                 CI := XJitRun(Fr, Fr^.PC);
                 if CI < 0 then begin InjectThrow := True; Exit(-1); end;
@@ -7055,7 +7186,7 @@ LSetPropSlow:
           ICs := T^.ICBase;
           Changed := True;
           {$IFDEF CPUX86_64}
-          if (JitEnabled = 1) and (T^.JitState = 1) then
+          if (JitEnabled = 1) and not JitBlocked and (T^.JitState = 1) then
           begin
             CI := XJitRun(Fr, Fr^.PC);
             if CI < 0 then begin InjectThrow := True; Exit(-1); end;
@@ -7197,7 +7328,7 @@ begin
 end;
 
 function Execute(StopFrame: Integer; var Res: TValue): Boolean;
-label LThrow, LReload, LNext, LDone;
+label LThrow, LReload, LNext, LDone, LBackEdge;
 var
   NativeEpoch: Integer;
   Fr: PFrame;
@@ -7219,6 +7350,7 @@ var
   Ups: PValueArray;
   T: PFuncTemplate;
   CI, NP, Argc, Base, J, Cmp: Integer;
+  Counted: Boolean;
   Key: PStr;
   Bool: Boolean;
   H: ^THandler;
@@ -7230,6 +7362,7 @@ var
   R0: Integer;
 begin
   R0 := CurRealm;   { the caller's realm, restored when this returns }
+  Counted := InstrCounted;
 LReload:
   Fr := @Frames[FrameTop - 1];
   { the running function's realm (a call or a return crossed into another) }
@@ -7249,7 +7382,18 @@ LReload:
   while True do
   begin
     {$IFNDEF G2_OPSTATS}
-    if FastOp[Code[PC] and $FF] then
+    if Counted then
+    begin
+      { an instruction limit: every instruction here, none in FastLoop }
+      Dec(InstrLeft);
+      if InstrLeft < 0 then
+      begin
+        Fr^.PC := PC + 1;
+        XAbort(2);
+        goto LThrow;
+      end;
+    end
+    else if FastOp[Code[PC] and $FF] then
     begin
       PC := FastLoop(Code, PC, R, K, ICB, Fr, StopFrame);
       if PC < 0 then goto LReload;
@@ -8043,13 +8187,13 @@ LReload:
           R[A] := MkBool(Bool);
         end;
 
-      opJmp: Inc(PC, SarInt64(Int64(I), 40));
-      opJT: if ToBool(R[A]) then Inc(PC, SarInt64(Int64(I), 40));
-      opJF: if not ToBool(R[A]) then Inc(PC, SarInt64(Int64(I), 40));
-      opJNullish: if (R[A] = VUndefined) or (R[A] = VNull) then Inc(PC, SarInt64(Int64(I), 40));
-      opJNotNullish: if (R[A] <> VUndefined) and (R[A] <> VNull) then Inc(PC, SarInt64(Int64(I), 40));
-      opJUndef: if R[A] = VUndefined then Inc(PC, SarInt64(Int64(I), 40));
-      opJNotUndef: if R[A] <> VUndefined then Inc(PC, SarInt64(Int64(I), 40));
+      opJmp: begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
+      opJT: if ToBool(R[A]) then begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
+      opJF: if not ToBool(R[A]) then begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
+      opJNullish: if (R[A] = VUndefined) or (R[A] = VNull) then begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
+      opJNotNullish: if (R[A] <> VUndefined) and (R[A] <> VNull) then begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
+      opJUndef: if R[A] = VUndefined then begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
+      opJNotUndef: if R[A] <> VUndefined then begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
       opJNLt, opJNLe, opJNGt, opJNGe:
         begin
           VA := R[A];
@@ -8083,10 +8227,10 @@ LReload:
             else Bool := (Cmp = 1) or (Cmp = 0);
             end;
           end;
-          if not Bool then Inc(PC, SarInt64(Int64(I), 40));
+          if not Bool then begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
         end;
-      opJNSEq: if not SEqFast(R[A], R[(I shr 24) and $FFFF]) then Inc(PC, SarInt64(Int64(I), 40));
-      opJSEq: if SEqFast(R[A], R[(I shr 24) and $FFFF]) then Inc(PC, SarInt64(Int64(I), 40));
+      opJNSEq: if not SEqFast(R[A], R[(I shr 24) and $FFFF]) then begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
+      opJSEq: if SEqFast(R[A], R[(I shr 24) and $FFFF]) then begin CI := SarInt64(Int64(I), 40); Inc(PC, CI); if CI < 0 then goto LBackEdge; end;
 
       opCall, opCallV, opNew, opNewV:
         begin
@@ -9168,8 +9312,21 @@ LReload:
       end;
     end;
     Continue;
+LBackEdge:
+    { a taken backward jump: the poll of a spent limit }
+    if Interrupt <> 0 then
+    begin
+      Fr^.PC := PC;
+      XAbort(1);
+      goto LThrow;
+    end;
+    Continue;
 LThrow:
     if ThrowTrace then XTraceThrow;
+    { an abort: no handler of this activation runs }
+    if Aborting then
+      while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= StopFrame) do
+        Dec(HandlerTop);
     { find a handler in a frame this activation owns; a generator's return completion passes catch handlers }
     if IsRetComp(Pending) then
       while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= StopFrame) and (Handlers[HandlerTop - 1].Kind = 0) do
@@ -9236,6 +9393,8 @@ begin
   StackTop := 0;
   SetLength(Frames, FRAME_MAX);
   FrameTop := 0;
+  FrameLimitBase := FRAME_MAX;
+  FrameLimit := FRAME_MAX;
   SetLength(Handlers, 256);
   HandlerTop := 0;
   OpenUpvals := GetMem(256 * SizeOf(TValue));

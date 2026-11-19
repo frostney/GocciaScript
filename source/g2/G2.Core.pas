@@ -235,6 +235,12 @@ var
   GCDescribeNative: function(P: Pointer): string = nil;   { names a function template in GC diagnostics }
   GCVerify: Boolean = False;
 threadvar
+  { execution limits (G2.VM LimitsArm): Interrupt is set, by the timeout thread or the instruction count, once a
+    limit is spent; from then on every back edge and call aborts, Aborting is set and no handler runs (catch or
+    finally) until the run is over. AbortKind: 0 none, 1 timeout, 2 instruction limit. }
+  Interrupt: LongInt;
+  Aborting: Boolean;
+  AbortKind: Integer;
   NurseryStart, NurseryTop, NurseryLimit: PByte;
   GCRootScanner: procedure;   { VM visits its roots with GCVisit }
   GCMinorCount, GCMajorCount: Integer;

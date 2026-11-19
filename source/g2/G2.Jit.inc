@@ -812,7 +812,7 @@ begin
       if (O2^.OKind <> okFunction) or ((O2^.OFlags and 1) <> 0) then Exit(1);
       T := PFuncTemplate(O2^.Native);
       if T^.IsAsync or T^.IsGenerator or (T^.JitState <> 1) or (PPtrUInt(T^.JitTable)[0] = 0) then Exit(1);
-      if (Fr^.Base + A + 1 + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+      if (Fr^.Base + A + 1 + T^.MaxRegs >= STACK_MAX) or FramesFull then Exit(1);
       if T^.FastCall and not T^.IsStrict and not T^.IsArrow then
       begin
         if Argc = 0 then This := VUndefined else This := R[A + 2];
@@ -844,7 +844,7 @@ begin
       nested Execute, its result the generator); an async function's starts it as Execute's opCall does
       (SuspendNewGenerator, AsyncStartHook): either way the result in R[A], and the caller's code goes on }
     Base := Fr^.Base + A + 1;
-    if (Base + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+    if (Base + T^.MaxRegs + 4 >= STACK_MAX) or FramesFull then Exit(1);
     if ThisFlag <> 0 then R[A + 1] := VUndefined;
     if StackTop < Base + 1 + Argc then StackTop := Base + 1 + Argc;
     if not PushBytecodeFrame(O, R[A + 1], @R[A + 2], Argc, Base - 1, 0, VUndefined) then
@@ -881,7 +881,7 @@ begin
   end;
   if PPtrUInt(T^.JitTable)[0] = 0 then Exit(1);
   Base := Fr^.Base + A + 1;
-  if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+  if (Base + T^.MaxRegs >= STACK_MAX) or FramesFull then Exit(1);
   if ThisFlag <> 0 then R[A + 1] := VUndefined;
   if T^.FastCall then
   begin
@@ -955,7 +955,7 @@ end;
 function JitRunPushed(var Res: TValue; var Ok: Boolean): Boolean;
 var NF: PFrame; T: PFuncTemplate; R: Integer; RetIdx: Integer;
 begin
-  if (JitEnabled <> 1) or MultiRealmAny then Exit(False);
+  if (JitEnabled <> 1) or JitBlocked or MultiRealmAny then Exit(False);
   if JitDepthMax = 0 then JitThreadInit;
   if JitTooDeep then Exit(False);
   NF := @Frames[FrameTop - 1];
@@ -994,7 +994,7 @@ var T: PFuncTemplate; Base, I, SavedTop, R: Integer; Entry: PtrUInt; NF: PFrame;
 begin
   Result := False;
   T := PFuncTemplate(O^.Native);
-  if (JitEnabled <> 1) or MultiRealmAny or (T^.JitState <> 1) or not T^.FastCall or T^.IsGenerator or T^.IsAsync or
+  if (JitEnabled <> 1) or JitBlocked or MultiRealmAny or (T^.JitState <> 1) or not T^.FastCall or T^.IsGenerator or T^.IsAsync or
      (T^.Lazy <> nil) or (T^.RestReg >= 0) or (T^.ArgsReg >= 0) then Exit;
   { a non-strict function's undefined or null this is the global object; another primitive is boxed (the general
     path's) }
@@ -1007,7 +1007,7 @@ begin
   if Entry = 0 then Exit;
   SavedTop := StackTop;
   Base := StackTop;
-  if (Base + Argc + 2 >= STACK_MAX) or (Base + T^.MaxRegs + 2 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit;
+  if (Base + Argc + 2 >= STACK_MAX) or (Base + T^.MaxRegs + 2 >= STACK_MAX) or FramesFull then Exit;
   { (the arguments may be in the value stack: Move copies overlapping ranges) }
   VStack[Base] := This;
   if Args <> nil then Move(Args^, VStack[Base + 1], Argc * SizeOf(TValue));
@@ -1170,14 +1170,14 @@ begin
   if T^.IsDerived then
   begin
     { a derived class constructor: this unbound until its super() (which runs the fields) }
-    if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+    if (Base + T^.MaxRegs >= STACK_MAX) or FramesFull then Exit(1);
     R[A + 1] := VHole;
   end
   else
   begin
     if (Pointer(O^.Shape) <> T^.CtorFnShape) or (T^.CtorRootShape = nil) or
        (PShape(T^.CtorRootShape)^.Proto <> GetSlot(O, T^.CtorProtoSlot)) then Exit(1);
-    if (Base + T^.MaxRegs >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(1);
+    if (Base + T^.MaxRegs >= STACK_MAX) or FramesFull then Exit(1);
     R[A + 1] := MkPtr(NewObject(PShape(T^.CtorRootShape), Max(4, T^.ExpectedProps), okPlain));
     if Assigned(T^.FieldInit) then
     begin
@@ -2273,7 +2273,7 @@ begin
     if T^.JitState <> 1 then Exit(2);
   end;
   if (PPtrUInt(T^.JitTable)[G^.Pad] = 0) or JitTooDeep or
-     (StackTop + T^.MaxRegs + 4 >= STACK_MAX) or (FrameTop >= FRAME_MAX - 2) then Exit(2);
+     (StackTop + T^.MaxRegs + 4 >= STACK_MAX) or FramesFull then Exit(2);
   SavedTop := StackTop;
   State := PValueArray(PtrOf(G^.Aux2));
   if (IntOf(State^.Data[T^.MaxRegs + 2]) = 0) and (IntOf(State^.Data[T^.MaxRegs + 3]) = 0) and
@@ -5037,6 +5037,8 @@ begin
   { the intrinsics' set-up (the JS preludes at start-up, a new realm's) runs once: not compiled, and the template
     stays untried for later code }
   if IntrinsicsInit then Exit;
+  { an armed limit: nothing compiled (the template stays untried for a later run) }
+  if JitBlocked then Exit;
   T^.JitState := 2;
   { a generator's body runs compiled between its suspensions (its yields and returns are the interpreter's) }
   if (T^.Lazy <> nil) or (T^.CodeLen = 0) or T^.IsAsync then Exit;

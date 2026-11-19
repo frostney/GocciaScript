@@ -54,6 +54,18 @@ an absolute relocation), the bug 3.3.1+4 fixes; it stays as a guard against a to
 skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) leaves `g2` out
 until CI's toolchain is FPC 3.3.1.
 
+### Execution limits
+
+The host takes GocciaRunner's limits: `--timeout=` (500ms, 5s, 2m or milliseconds), `--max-instructions=N`,
+`--max-stack=N` (frames; 0 or none is the VM's bound of 200,000) and `--max-memory=`. A spent timeout or
+instruction budget aborts the run: every taken backward jump and every call checks it, no `catch` or `finally`
+runs and no further job runs, and the host prints `Fatal error: file timed out after Nms` or `Fatal error:
+Execution exceeded instruction limit of N` and exits 1. A timer thread interrupts the engine thread by setting
+its `Interrupt` and dropping its frame bound to 0, which the existing frame check of each call sees, so calls pay
+nothing extra. Under an instruction budget `Execute` counts every instruction itself and skips `FastLoop`; the
+count is exact and the same on every run. The JIT stays off while a limit or a frame bound is set: compiled loops
+have no poll and compiled calls check the fixed bound. `scripts/g2/limits-test.sh` checks all of this.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,

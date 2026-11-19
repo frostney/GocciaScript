@@ -930,6 +930,8 @@ begin
     Q^.Data[J + 1] := VUndefined; Q^.Data[J + 2] := VUndefined; Q^.Data[J + 3] := VUndefined;
     JobHead := (JobHead + 1) mod (Integer(Q^.Len) div 4);
     Dec(JobCount);
+    { a spent execution limit ends the run: the job that met it may have caught the abort (a reaction rejects) }
+    if Aborting then Exit(False);
     case Kind of
       jkReaction: RunReactionJob(A, B, IntOf(C));
       jkThenable: RunThenableJob(A, B, C);
@@ -944,6 +946,7 @@ begin
           if not Result then Exit(False);   { reported like an uncaught exception }
         end;
     end;
+    if Aborting then Exit(False);
   end;
   JobHead := 0;
 end;
