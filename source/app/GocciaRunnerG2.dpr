@@ -6,9 +6,10 @@ program GocciaRunnerG2;
   runner` builds it as build/GocciaRunner, so the CLI tests run against it
   unchanged; once it covers GocciaRunner it replaces GocciaRunner.dpr.
 
-  Not yet on G2: JSON output, --print, --silent, sandbox and install modes,
-  source maps, coverage, the profiler, bytecode files, injected globals and
-  modules, directories, stdin, parallel jobs, and the capability checks the
+  Not yet on G2: sandbox and install modes, source maps, coverage, the
+  profiler, bytecode files (--prefer-bytecode), injected globals and modules
+  (--globals, --global, --modules), --host-environment, directories, parallel
+  jobs, memory statistics in the JSON report, and the capability checks the
   engine makes. }
 
 {$I Goccia.inc}
@@ -24,6 +25,7 @@ uses
 
   Goccia.Application,
   Goccia.CLI.Application,
+  Goccia.CLI.JSON.Reporter,
   Goccia.CLI.FileSettings,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
@@ -39,8 +41,36 @@ uses
   G2.VM;
 
 type
+  { The console of a JSON run, as GocciaRunner's TScriptLoaderConsoleCapture: every line in output, and each
+    method's line, without the prefix the console gave it, on its own stream }
+  TG2ConsoleCapture = class
+  private
+    FOutputLines: TStringList;
+    FStdoutLines: TStringList;
+    FStderrLines: TStringList;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure CaptureOutput(const AMethod, ALine: UnicodeString);
+    procedure Discard(const AMethod, ALine: UnicodeString);
+    function OutputText: string;
+    function StdoutText: string;
+    function StderrText: string;
+  end;
+
+  { one file's part of a JSON report }
+  TG2FileReport = record
+    FileName: string;
+    Ok: Boolean;
+    OutputText, StdoutText, StderrText: string;
+    ResultJSON: string;
+    ErrorInfo: TCLIJSONErrorInfo;
+    Timing: TCLIJSONTiming;
+  end;
+
   TG2RunnerApp = class(TGocciaCLIApplication)
   private
+    FReports: array of TG2FileReport;
     { GocciaRunner's options, all registered so that its command lines and configs parse the same; the ones G2
       does not act on yet are listed in the header }
     FOutputPath: TStringOption;
@@ -63,6 +93,9 @@ type
     procedure RunOnWorker(const AFileName: string; const ASource: TStringList);
     procedure ReportFailure(const AFileName: string;
       const AResult: TG2RunResult; const ASource: TStringList);
+    function IsJsonOutput: Boolean;
+    function IsCompactJsonOutput: Boolean;
+    procedure PrintJsonReport;
   protected
     procedure Configure; override;
     function UsageLine: string; override;
@@ -215,6 +248,205 @@ begin
     AEngine.MaxMemory := 0;
 end;
 
+constructor TG2ConsoleCapture.Create;
+begin
+  inherited Create;
+  FOutputLines := TStringList.Create;
+  FStdoutLines := TStringList.Create;
+  FStderrLines := TStringList.Create;
+end;
+
+destructor TG2ConsoleCapture.Destroy;
+begin
+  FStderrLines.Free;
+  FStdoutLines.Free;
+  FOutputLines.Free;
+  inherited Destroy;
+end;
+
+function MethodWritesToStderr(const AMethod: string): Boolean;
+begin
+  Result := (AMethod = 'warn') or (AMethod = 'error') or
+    (AMethod = 'assert') or (AMethod = 'trace');
+end;
+
+function UnformatLine(const AMethod, ALine: string): string;
+var
+  Prefix: string;
+  PrefixStart: Integer;
+begin
+  Prefix := '';
+  if AMethod = 'warn' then
+    Prefix := 'Warning: '
+  else if AMethod = 'error' then
+    Prefix := 'Error: '
+  else if AMethod = 'info' then
+    Prefix := 'Info: '
+  else if AMethod = 'debug' then
+    Prefix := 'Debug: '
+  else if AMethod = 'trace' then
+    Prefix := 'Trace: ';
+  if Prefix = '' then
+    Exit(ALine);
+  PrefixStart := 1;
+  while (PrefixStart <= Length(ALine)) and (ALine[PrefixStart] = ' ') do
+    Inc(PrefixStart);
+  if Copy(ALine, PrefixStart, Length(Prefix)) = Prefix then
+    Result := Copy(ALine, 1, PrefixStart - 1) +
+      Copy(ALine, PrefixStart + Length(Prefix), MaxInt)
+  else
+    Result := ALine;
+end;
+
+procedure TG2ConsoleCapture.CaptureOutput(const AMethod, ALine: UnicodeString);
+var
+  Method, Line: string;
+begin
+  Method := UTF8Encode(AMethod);
+  Line := UTF8Encode(ALine);
+  FOutputLines.Add(Line);
+  if MethodWritesToStderr(Method) then
+    FStderrLines.Add(UnformatLine(Method, Line))
+  else
+    FStdoutLines.Add(UnformatLine(Method, Line));
+end;
+
+{ --silent }
+procedure TG2ConsoleCapture.Discard(const AMethod, ALine: UnicodeString);
+begin
+end;
+
+function TG2ConsoleCapture.OutputText: string;
+begin
+  Result := FOutputLines.Text;
+end;
+
+function TG2ConsoleCapture.StdoutText: string;
+begin
+  Result := FStdoutLines.Text;
+end;
+
+function TG2ConsoleCapture.StderrText: string;
+begin
+  Result := FStderrLines.Text;
+end;
+
+function TG2RunnerApp.IsJsonOutput: Boolean;
+begin
+  Result := FOutputPath.Present and
+    ((FOutputPath.Value = 'json') or (FOutputPath.Value = 'compact-json'));
+end;
+
+function TG2RunnerApp.IsCompactJsonOutput: Boolean;
+begin
+  Result := FOutputPath.Present and (FOutputPath.Value = 'compact-json');
+end;
+
+{ The run's error as the JSON report's error object, as GocciaRunner's ExceptionToCLIJSONErrorInfo makes it }
+function ErrorInfoOf(const AFileName: string;
+  const AResult: TG2RunResult; const AEngineOptions: TGocciaEngineOptions): TCLIJSONErrorInfo;
+begin
+  Result := DefaultCLIJSONErrorInfo;
+  Result.FileName := AFileName;
+  case AResult.Aborted of
+    g2aTimeout:
+      begin
+        Result.ErrorType := 'TimeoutError';
+        Result.Message := Format('file timed out after %dms', [AEngineOptions.Timeout.Value]);
+        Exit;
+      end;
+    g2aInstructionLimit:
+      begin
+        Result.ErrorType := 'InstructionLimitError';
+        Result.Message := Format('Execution exceeded instruction limit of %d',
+          [AEngineOptions.MaxInstructions.Value]);
+        Exit;
+      end;
+  end;
+  if not AResult.ErrorIsError then
+  begin
+    { the old VM's text for a thrown value that is not an error (EGocciaBytecodeThrow) }
+    Result.ErrorType := 'Error';
+    Result.Message := 'Goccia VM throw';
+    Exit;
+  end;
+  Result.ErrorType := UTF8Encode(AResult.ErrorName);
+  if Result.ErrorType = '' then
+    Result.ErrorType := 'Error';
+  Result.Message := UTF8Encode(AResult.ErrorText);
+  if AResult.ErrorFile <> '' then
+    Result.FileName := UTF8Encode(AResult.ErrorFile);
+  Result.Line := AResult.ErrorLine;
+  Result.Column := AResult.ErrorColumn;
+end;
+
+procedure AddTiming(var ATotal: TCLIJSONTiming; const ATiming: TCLIJSONTiming);
+begin
+  Inc(ATotal.LexTimeNanoseconds, ATiming.LexTimeNanoseconds);
+  Inc(ATotal.ParseTimeNanoseconds, ATiming.ParseTimeNanoseconds);
+  Inc(ATotal.CompileTimeNanoseconds, ATiming.CompileTimeNanoseconds);
+  Inc(ATotal.ExecuteTimeNanoseconds, ATiming.ExecuteTimeNanoseconds);
+  Inc(ATotal.TotalTimeNanoseconds, ATiming.TotalTimeNanoseconds);
+end;
+
+{ the files' report: one file's own form, or the aggregate of GocciaRunner's BuildAggregateScriptLoaderJSON }
+procedure TG2RunnerApp.PrintJsonReport;
+var
+  I: Integer;
+  Ok: Boolean;
+  StdoutText, StderrText, OutputText, FilesJSON, ErrorJSON, FileJSON: string;
+  Timing: TCLIJSONTiming;
+begin
+  if Length(FReports) = 1 then
+  begin
+    with FReports[0] do
+      if Ok then
+        WriteLn(BuildCLIScriptSuccessJSON(FileName, ResultJSON, OutputText,
+          StdoutText, StderrText, Timing, DefaultCLIJSONMemoryStats, 1, 1,
+          IsCompactJsonOutput))
+      else
+        WriteLn(BuildCLIScriptErrorJSON(FileName, OutputText, StdoutText,
+          StderrText, ErrorInfo, Timing, DefaultCLIJSONMemoryStats, 1, 1,
+          IsCompactJsonOutput));
+    Exit;
+  end;
+  FillChar(Timing, SizeOf(Timing), 0);
+  Ok := True;
+  StdoutText := '';
+  StderrText := '';
+  OutputText := '';
+  ErrorJSON := 'null';
+  FilesJSON := '';
+  for I := 0 to High(FReports) do
+  begin
+    Ok := Ok and FReports[I].Ok;
+    if FReports[I].Ok then
+      FileJSON := BuildCLIScriptFileSuccessJSON(FReports[I].FileName,
+        FReports[I].ResultJSON, FReports[I].OutputText,
+        FReports[I].StdoutText, FReports[I].StderrText, FReports[I].Timing,
+        DefaultCLIJSONMemoryStats, IsCompactJsonOutput)
+    else
+    begin
+      FileJSON := BuildCLIScriptFileErrorJSON(FReports[I].FileName,
+        FReports[I].OutputText, FReports[I].StdoutText,
+        FReports[I].StderrText, FReports[I].ErrorInfo, FReports[I].Timing,
+        DefaultCLIJSONMemoryStats, IsCompactJsonOutput);
+      if ErrorJSON = 'null' then
+        ErrorJSON := BuildCLIErrorObjectJSON(FReports[I].ErrorInfo);
+    end;
+    StdoutText := StdoutText + FReports[I].StdoutText;
+    StderrText := StderrText + FReports[I].StderrText;
+    OutputText := OutputText + FReports[I].OutputText;
+    AddTiming(Timing, FReports[I].Timing);
+    if FilesJSON <> '' then
+      FilesJSON := FilesJSON + ',';
+    FilesJSON := FilesJSON + FileJSON;
+  end;
+  WriteLn(BuildCLIReportJSON(Ok, OutputText, StdoutText, StderrText,
+    ErrorJSON, Timing, DefaultCLIJSONMemoryStats, 1, 1, FilesJSON, '',
+    IsCompactJsonOutput));
+end;
+
 procedure TG2RunnerApp.ReportFailure(const AFileName: string;
   const AResult: TG2RunResult; const ASource: TStringList);
 var
@@ -261,9 +493,14 @@ var
   Engine: TG2Engine;
   RunResult: TG2RunResult;
   Start: Int64;
+  Capture: TG2ConsoleCapture;
+  Report: TG2FileReport;
 begin
   Start := GetNanoseconds;
-  begin
+  Capture := nil;
+  if IsJsonOutput or FSilent.Present then
+    Capture := TG2ConsoleCapture.Create;
+  try
     FileConfigPath := DiscoverFileConfigPath(AFileName);
     if FileConfigPath <> '' then
       FileConfig := LoadFileConfig(FileConfigPath)
@@ -274,7 +511,18 @@ begin
     try
       { GocciaRunner has no timer globals (the test runner does) }
       Engine.ExposeTimers := False;
-      Engine.CaptureResult := FPrint.Present;
+      if IsJsonOutput then
+      begin
+        Engine.ResultForm := g2rfJSON;
+        Engine.OnConsole := Capture.CaptureOutput;
+      end
+      else
+      begin
+        if FPrint.Present then
+          Engine.ResultForm := g2rfString;
+        if FSilent.Present then
+          Engine.OnConsole := Capture.Discard;
+      end;
       Engine.FailOnUnhandledRejection := True;
       ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig,
         AFileName, Verdict.AcceptedUnsafe));
@@ -287,6 +535,32 @@ begin
       if EngineOptions.MaxStack.Present then
         Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
       RunResult := Engine.Run(AFileName, UTF8Decode(ASource.Text));
+      if IsJsonOutput then
+      begin
+        Report := Default(TG2FileReport);
+        Report.FileName := AFileName;
+        Report.Ok := RunResult.Ok;
+        Report.OutputText := Capture.OutputText;
+        Report.StdoutText := Capture.StdoutText;
+        Report.StderrText := Capture.StderrText;
+        Report.Timing.TotalTimeNanoseconds := GetNanoseconds - Start;
+        if RunResult.Ok then
+        begin
+          Report.ResultJSON := UTF8Encode(RunResult.ResultText);
+          Report.Timing.CompileTimeNanoseconds := RunResult.CompileNanoseconds;
+          Report.Timing.ExecuteTimeNanoseconds := RunResult.ExecuteNanoseconds;
+        end
+        else
+        begin
+          { as GocciaRunner's: a failed run's time is all execution }
+          Report.Timing.ExecuteTimeNanoseconds := Report.Timing.TotalTimeNanoseconds;
+          Report.ErrorInfo := ErrorInfoOf(AFileName, RunResult, EngineOptions);
+          ExitCode := 1;
+        end;
+        SetLength(FReports, Length(FReports) + 1);
+        FReports[High(FReports)] := Report;
+        Exit;
+      end;
       if not RunResult.Ok then
       begin
         ReportFailure(AFileName, RunResult, ASource);
@@ -304,6 +578,8 @@ begin
     finally
       Engine.Free;
     end;
+  finally
+    Capture.Free;
   end;
 end;
 
@@ -345,6 +621,8 @@ begin
     finally
       Source.Free;
     end;
+    if IsJsonOutput then
+      PrintJsonReport;
     Exit;
   end;
   for I := 0 to APaths.Count - 1 do
@@ -356,6 +634,8 @@ begin
       Source.Free;
     end;
   end;
+  if IsJsonOutput then
+    PrintJsonReport;
 end;
 
 var
