@@ -29,6 +29,13 @@ procedure SetConsoleSink(Sink: TConsoleSink);
 { the resolver of this thread's imports: a host's, configured with its import map, aliases and node_modules grant
   (Goccia.Modules.Resolver, not owned); nil for the plain one, which resolves relative and absolute paths only }
 procedure SetHostResolver(R: TModuleResolver);
+{ globals injection, after InstallHostGlobals: Text, a data file's (Ext its extension: .json; .json5 and .jsonc;
+  .toml; .yaml and .yml), is parsed by that format's parser into an object whose own enumerable properties become
+  const global bindings (G2.VM InjectGlobalBinding); False with Err the message when the text does not parse, is
+  not an object, or a name is refused }
+function InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
+{ one global from ValueText read as JSON, or as that string when it is not JSON (--global name=value) }
+function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: UnicodeString): Boolean;
 { the jobs the script queued, then the timers in due order on the virtual clock, each followed by the jobs it
   queued, until none is left (False: an uncaught exception, in Pending) }
 function RunEventLoop: Boolean;
@@ -438,6 +445,103 @@ var
 procedure SetHostResolver(R: TModuleResolver);
 begin
   ProvidedResolver := R;
+end;
+
+{ the pending exception's message (an error's message property, else its string form), taken }
+function TakePendingText: UnicodeString;
+var S: TValue;
+begin
+  PushRoot(Pending);
+  Pending := VUndefined;
+  if IsObject(RootAt(TempTop - 1)) and GetV(RootAt(TempTop - 1), AtomMessage, S) and IsString(S) then
+    Result := StrToUnicode(StrOf(S))
+  else if ToStringV(RootAt(TempTop - 1), S) and IsString(S) then Result := StrToUnicode(StrOf(S))
+  else Result := 'uncaught exception';
+  Pending := VUndefined;
+  PopRoots(1);
+end;
+
+{ the parse function of a data format: JSON.parse, or the parse of goccia:json5, goccia:toml or goccia:yaml }
+function DataParser(const Ext: UnicodeString; var F: TValue): Boolean;
+var Key: UnicodeString; Mods, Factory, M: TValue;
+begin
+  Result := False;
+  Key := LowerCase(Ext);
+  if Key = '.json' then
+  begin
+    if not GetV(GlobalObj, AtomOf('JSON'), M) or not IsObject(M) then Exit;
+    Result := GetV(M, AtomOf('parse'), F) and IsCallable(F);
+    Exit;
+  end;
+  if (Key = '.json5') or (Key = '.jsonc') then Key := 'goccia:json5'
+  else if Key = '.toml' then Key := 'goccia:toml'
+  else if (Key = '.yaml') or (Key = '.yml') then Key := 'goccia:yaml'
+  else Exit;
+  if not IsObject(SharedV) or not GetV(SharedV, AtomOf('hostModules'), Mods) or not IsObject(Mods) or
+     not GetV(Mods, AtomOf(Key), Factory) or not IsCallable(Factory) then Exit;
+  if not CallValue(Factory, VUndefined, nil, 0, M) or not IsObject(M) then Exit;
+  Result := GetV(M, AtomOf('parse'), F) and IsCallable(F);
+end;
+
+{ Text parsed as a data file with extension Ext }
+function DataValue(const Text, Ext: UnicodeString; var V: TValue): Boolean;
+var F, A: TValue;
+begin
+  if not DataParser(Ext, F) then
+  begin
+    Pending := VUndefined;
+    Exit(ThrowTypeError('Cannot read globals from a ' + Ext + ' file'));
+  end;
+  PushRoot(F);
+  A := StrFromUnicode(Text);
+  Result := CallValue(RootAt(TempTop - 1), VUndefined, @A, 1, V);
+  PopRoots(1);
+end;
+
+function InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
+var Obj, Keys, V: TValue; I, N: Integer; Name: UnicodeString;
+begin
+  Result := False;
+  if not DataValue(Text, Ext, Obj) then begin Err := TakePendingText; Exit; end;
+  if not IsObject(Obj) or (ObjOf(Obj)^.OKind = okArray) then
+  begin
+    Err := 'Globals file ' + Path + ' must contain an object';
+    Exit;
+  end;
+  PushRoot(Obj);
+  try
+    Keys := OwnKeys(ObjOf(RootAt(TempTop - 1)), True);
+    PushRoot(Keys);
+    try
+      N := ArrayLen(ObjOf(Keys));
+      for I := 0 to N - 1 do
+      begin
+        Name := StrToUnicode(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
+        if not GetV(RootAt(TempTop - 2), AtomOf(Name), V) or not InjectGlobalBinding(Name, V) then
+        begin
+          Err := TakePendingText;
+          Exit;
+        end;
+      end;
+      Result := True;
+    finally
+      PopRoots(1);
+    end;
+  finally
+    PopRoots(1);
+  end;
+end;
+
+function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: UnicodeString): Boolean;
+var V: TValue;
+begin
+  if not DataValue(ValueText, '.json', V) then
+  begin
+    Pending := VUndefined;
+    V := StrFromUnicode(ValueText);
+  end;
+  Result := InjectGlobalBinding(Name, V);
+  if not Result then Err := TakePendingText;
 end;
 
 function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;

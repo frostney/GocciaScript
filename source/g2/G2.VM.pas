@@ -237,6 +237,10 @@ procedure SetFnNameFromKey(F: TValue; Key: PStr; const Prefix: UnicodeString);
 procedure SetGenNextNative(P: Pointer);
 { the global lexical bindings (let, const and class at the top level of Scripts): index of Key, -1 if none }
 function GLexFind(Key: PStr): Integer;
+{ a host's global (globals injection): a const global lexical binding Name with value V, which code compiled after
+  it sees. A name a built-in or a script already binds is refused (False, a TypeError pending: 'Cannot override
+  built-in global'); one injected before takes the new value. }
+function InjectGlobalBinding(const Name: UnicodeString; V: TValue): Boolean;
 function GLexIsConst(I: Integer): Boolean;
 { 7.2.4 IsConstructor }
 function IsConstructorV(V: TValue): Boolean;
@@ -1457,6 +1461,36 @@ begin
   U := PUpval(PtrOf(GLexCells[I]));
   if U^.StackIndex >= 0 then V := VStack[U^.StackIndex] else V := U^.Value;
   if V = VHole then Exit(ThrowGLexTDZ(I));
+  Result := True;
+end;
+
+threadvar
+  { the global lexical bindings the host injected }
+  InjectedGLex: array of PStr;
+
+function InjectGlobalBinding(const Name: UnicodeString; V: TValue): Boolean;
+var I, J: Integer; Key: PStr; U: PUpval; Injected: Boolean;
+begin
+  Key := AtomOf(Name);
+  I := GLexFind(Key);
+  Injected := False;
+  for J := 0 to High(InjectedGLex) do
+    if InjectedGLex[J] = Key then Injected := True;
+  if ((I >= 0) and not Injected) or ((I < 0) and IsObject(GlobalObj) and
+     (ShapeLookup(ObjOf(GlobalObj)^.Shape, Key) >= 0)) then
+    Exit(ThrowTypeError('Cannot override built-in global "' + Name + '" via globals injection.'));
+  PushRoot(V);
+  if I < 0 then
+  begin
+    I := GLexAdd(Key, True);
+    SetLength(InjectedGLex, Length(InjectedGLex) + 1);
+    InjectedGLex[High(InjectedGLex)] := Key;
+  end;
+  U := NewUpval;
+  U^.Value := RootAt(TempTop - 1);
+  WriteBarrier(@U^.Hdr, U^.Value);
+  GLexCells[I] := MkPtr(U);
+  PopRoots(1);
   Result := True;
 end;
 

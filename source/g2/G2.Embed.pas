@@ -74,6 +74,9 @@ type
       read then. Run installs them when the host has not. }
     function PrepareHost(var Err: UnicodeString): Boolean;
     function Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
+    { globals injection before Run (G2.HostAPI): a data file's globals, and one --global name=value }
+    function InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
+    function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: UnicodeString): Boolean;
     property Profile: TLangProfile read FProfile write FProfile;
     property SourceKind: TG2SourceKind read FSourceKind write FSourceKind;
     property ConfigJson: UnicodeString read FConfigJson write FConfigJson;
@@ -256,6 +259,16 @@ function TG2Engine.PrepareHost(var Err: UnicodeString): Boolean;
 begin
   if FHostReady then Exit(True);
   Result := InstallHost(Err);
+end;
+
+function TG2Engine.InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
+begin
+  Result := PrepareHost(Err) and G2.HostAPI.InjectDataGlobals(Text, Ext, Path, Err);
+end;
+
+function TG2Engine.InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: UnicodeString): Boolean;
+begin
+  Result := PrepareHost(Err) and G2.HostAPI.InjectInlineGlobal(Name, ValueText, Err);
 end;
 
 function TG2Engine.Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
