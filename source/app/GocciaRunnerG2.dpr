@@ -95,6 +95,8 @@ type
   TG2RunnerApp = class(TGocciaCLIApplication)
   private
     FReports: array of TG2FileReport;
+    { the JSON report's workers: the files run at once (1 when one after another) }
+    FWorkers: Integer;
     { GocciaRunner's options, all registered so that its command lines and configs parse the same; the ones G2
       does not act on yet are listed in the header }
     FOutputPath: TStringOption;
@@ -113,7 +115,12 @@ type
     FFrozen: TFlagOption;
     FCheckRefs: TFlagOption;
     FAcceptMovedTags: TFlagOption;
-    procedure RunSource(const AFileName: string; const ASource: TStringList);
+    procedure RunSource(const AFileName: string; const ASource: TStringList; AReportIndex: Integer = -1);
+    procedure RunJsonFilesParallel(const AFiles: TStringList);
+    { a parallel file whose source does not load: its report, the class and message of the failure (as
+      GocciaRunner's worker reports it) }
+    procedure ReportLoadFailure(AReportIndex: Integer; const AFileName: string; const E: Exception;
+      AStart: Int64);
     procedure RunOnWorker(const AFileName: string; const ASource: TStringList);
     procedure RunFile(const AFileName: string);
     function InjectGlobals(const AEngine: TG2Engine; out AError: string): Boolean;
@@ -140,6 +147,10 @@ type
     FApp: TG2RunnerApp;
     FFileName: string;
     FSource: TStringList;
+    FOwnsSource: Boolean;
+    { the source is the thread's to load (a parallel JSON file): a failure is that file's report }
+    FLoadSource: Boolean;
+    FReportIndex: Integer;
     FErrorClass: ExceptClass;
     FErrorMessage: string;
   protected
@@ -150,11 +161,41 @@ const
   { reserved, not committed: room for native recursion as deep as the main thread's }
   FILE_THREAD_STACK = 64 * 1024 * 1024;
 
+var
+  { 1 while a running file thread compiles with the JIT: one compiles at a time (its emitter is shared) }
+  JitOwned: LongInt = 0;
+
 procedure TG2FileThread.Execute;
+var
+  OwnsJit: Boolean;
+  Start: Int64;
 begin
+  if FLoadSource then
+  begin
+    Start := GetNanoseconds;
+    try
+      FSource := FApp.SourceRegistry.Load(FFileName);
+      FOwnsSource := True;
+    except
+      on E: Exception do
+      begin
+        FApp.ReportLoadFailure(FReportIndex, FFileName, E, Start);
+        Exit;
+      end;
+    end;
+  end;
+  OwnsJit := InterlockedCompareExchange(JitOwned, 1, 0) = 0;
   try
-    JitTakeThread;
-    FApp.RunSource(FFileName, FSource);
+    if OwnsJit then
+      JitTakeThread;
+    try
+      FApp.RunSource(FFileName, FSource, FReportIndex);
+    finally
+      if FOwnsSource then
+        FSource.Free;
+      if OwnsJit then
+        InterLockedExchange(JitOwned, 0);
+    end;
   except
     on E: Exception do
     begin
@@ -467,11 +508,11 @@ begin
     with FReports[0] do
       if Ok then
         WriteLn(BuildCLIScriptSuccessJSON(FileName, ResultJSON, OutputText,
-          StdoutText, StderrText, Timing, DefaultCLIJSONMemoryStats, 1, 1,
+          StdoutText, StderrText, Timing, DefaultCLIJSONMemoryStats, FWorkers, FWorkers,
           IsCompactJsonOutput))
       else
         WriteLn(BuildCLIScriptErrorJSON(FileName, OutputText, StdoutText,
-          StderrText, ErrorInfo, Timing, DefaultCLIJSONMemoryStats, 1, 1,
+          StderrText, ErrorInfo, Timing, DefaultCLIJSONMemoryStats, FWorkers, FWorkers,
           IsCompactJsonOutput));
     Exit;
   end;
@@ -508,7 +549,7 @@ begin
     FilesJSON := FilesJSON + FileJSON;
   end;
   WriteLn(BuildCLIReportJSON(Ok, OutputText, StdoutText, StderrText,
-    ErrorJSON, Timing, DefaultCLIJSONMemoryStats, 1, 1, FilesJSON, '',
+    ErrorJSON, Timing, DefaultCLIJSONMemoryStats, FWorkers, FWorkers, FilesJSON, '',
     IsCompactJsonOutput));
 end;
 
@@ -750,7 +791,7 @@ begin
 end;
 
 procedure TG2RunnerApp.RunSource(const AFileName: string;
-  const ASource: TStringList);
+  const ASource: TStringList; AReportIndex: Integer);
 var
   FileConfigPath: string;
   FileConfig: TConfigEntryArray;
@@ -855,8 +896,14 @@ begin
           Report.ErrorInfo := ErrorInfoOf(AFileName, RunResult, EngineOptions);
           ExitCode := 1;
         end;
-        SetLength(FReports, Length(FReports) + 1);
-        FReports[High(FReports)] := Report;
+        { a parallel run's slot was made for it; one after another, the reports are appended }
+        if AReportIndex >= 0 then
+          FReports[AReportIndex] := Report
+        else
+        begin
+          SetLength(FReports, Length(FReports) + 1);
+          FReports[High(FReports)] := Report;
+        end;
         Exit;
       end;
       if not RunResult.Ok then
@@ -895,6 +942,7 @@ begin
     Worker.FApp := Self;
     Worker.FFileName := AFileName;
     Worker.FSource := ASource;
+    Worker.FReportIndex := -1;
     Worker.Start;
     Worker.WaitFor;
     ErrorClass := Worker.FErrorClass;
@@ -919,11 +967,84 @@ begin
   end;
 end;
 
+{ a JSON report's files run at once, as GocciaRunner's RunJSONFiles does (GetJobCount: --jobs, else the processors,
+  at most one per file): each on a thread of its own, at most that many running, their reports in file order }
+procedure TG2RunnerApp.RunJsonFilesParallel(const AFiles: TStringList);
+var
+  I, Next, Oldest, Started: Integer;
+  Workers: array of TG2FileThread;
+  Running: Integer;
+  ErrorClass: ExceptClass;
+  ErrorMessage: string;
+begin
+  FWorkers := GetJobCount(AFiles.Count);
+  SetLength(FReports, AFiles.Count);
+  SetLength(Workers, AFiles.Count);
+  ErrorClass := nil;
+  ErrorMessage := '';
+  Running := 0;
+  Oldest := 0;
+  Started := 0;
+  try
+    for Next := 0 to AFiles.Count - 1 do
+    begin
+      if Running = FWorkers then
+      begin
+        Workers[Oldest].WaitFor;
+        Dec(Running);
+        Inc(Oldest);
+      end;
+      Workers[Next] := TG2FileThread.Create(True, FILE_THREAD_STACK);
+      Workers[Next].FApp := Self;
+      Workers[Next].FFileName := AFiles[Next];
+      Workers[Next].FReportIndex := Next;
+      Workers[Next].FLoadSource := True;
+      Workers[Next].Start;
+      Inc(Started);
+      Inc(Running);
+    end;
+  finally
+    { every started thread is joined once: the window joined the first Oldest already (a second join is undefined) }
+    for I := 0 to Started - 1 do
+    begin
+      if I >= Oldest then
+        Workers[I].WaitFor;
+      if (ErrorClass = nil) and (Workers[I].FErrorClass <> nil) then
+      begin
+        ErrorClass := Workers[I].FErrorClass;
+        ErrorMessage := Workers[I].FErrorMessage;
+      end;
+      Workers[I].Free;
+    end;
+  end;
+  if ErrorClass <> nil then
+    raise ErrorClass.Create(ErrorMessage);
+end;
+
+procedure TG2RunnerApp.ReportLoadFailure(AReportIndex: Integer; const AFileName: string;
+  const E: Exception; AStart: Int64);
+var
+  Report: TG2FileReport;
+begin
+  Report := Default(TG2FileReport);
+  Report.FileName := AFileName;
+  Report.Ok := False;
+  Report.ErrorInfo := DefaultCLIJSONErrorInfo;
+  Report.ErrorInfo.ErrorType := E.ClassName;
+  Report.ErrorInfo.Message := E.Message;
+  Report.ErrorInfo.FileName := AFileName;
+  Report.Timing.TotalTimeNanoseconds := GetNanoseconds - AStart;
+  Report.Timing.ExecuteTimeNanoseconds := Report.Timing.TotalTimeNanoseconds;
+  FReports[AReportIndex] := Report;
+  ExitCode := 1;
+end;
+
 procedure TG2RunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   I, J: Integer;
   Source, Files, Found: TStringList;
 begin
+  FWorkers := 1;
   { no path, or "-": the source from stdin (the base class applied the no-argument rule) }
   if (APaths.Count = 0) or ((APaths.Count = 1) and IsStdinPath(APaths[0])) then
   begin
@@ -959,6 +1080,12 @@ begin
       else if IsJsonOutput then
         raise Exception.Create('Path not found: ' + APaths[I]);
     ValidateFileConfigs(Files);
+    if IsJsonOutput and (Files.Count > 1) then
+    begin
+      RunJsonFilesParallel(Files);
+      PrintJsonReport;
+      Exit;
+    end;
   finally
     Files.Free;
   end;
