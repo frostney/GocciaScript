@@ -86,6 +86,26 @@ GocciaScript reads it on each use. A named zone gives `Date` its local time from
 the time origin, taken as the monotonic time, the epoch time, then the monotonic time again. An error thrown in
 the module is located there, without its source.
 
+### Reports, workers and the audit log
+
+An uncaught value is reported from its string data properties only (`name`, `message`, `Symbol.toStringTag`): a
+getter or Proxy trap does not run, and an object without them reads as `[object Tag]`, as GocciaRunner reports it.
+
+A JSON report's `memory.gc` comes from G2's heap: `liveBytes` is the old space and the nursery's used part,
+garbage included until a collection frees it; `peakLiveBytes` is the most the heap held at a collection or a
+direct old-space allocation; `allocatedDuringRunBytes` counts every byte allocated after the engine was made.
+G2 does not count objects, so `startObjectCount`, `endObjectCount` and `collectedObjects` stay 0. One file reports
+its memory at the top level. Files run at once report each file's memory and their sum, and files run one after
+another report only the sum.
+
+A directory's files run at once when more than one worker is allowed (`--jobs`, else the processors). Each file
+prints its console output and its failure, but no banner and no `--print` value, as GocciaRunner's workers do;
+GocciaRunner also leaves the failure out.
+
+`--audit-log` opens each engine's events with `capabilities.effective`. Then come the decisions of the Function
+constructor, a ShadowRealm, `eval` and a `node_modules` grant, each at the script's call site. An event that cannot
+be written ends the run past every handler with `Fatal error: capability audit delivery failed: ...`.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
