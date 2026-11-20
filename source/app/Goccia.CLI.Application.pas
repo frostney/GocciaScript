@@ -84,9 +84,10 @@ type
     procedure OpenAuditLog;
     procedure CloseAuditLog;
     procedure ValidateOutputPaths;
+  protected
+    { writes one event to --audit-log (an engine's CapabilityAuditSink); raises when the write fails }
     procedure HandleCapabilityAudit(
       const AEvent: TGocciaCapabilityAuditEvent);
-  protected
     procedure Configure; virtual; abstract;
     function UsageLine: string; virtual; abstract;
     { How this command relates to standard input.  suNone (the default)
@@ -273,6 +274,8 @@ type
     property ProfilerOptions: TGocciaProfilerOptions read FProfilerOptions;
     property SandboxOptions: TGocciaSandboxOptions read FSandboxOptions;
     property LogFileOpen: Boolean read FLogFileOpen;
+    { whether --audit-log is open: a host that makes its own engines installs HandleCapabilityAudit then }
+    property AuditLogOpen: Boolean read FAuditLogOpen;
     property MultifileOption: TFlagOption read FMultifile;
   public
     constructor Create(const AName: string); override;

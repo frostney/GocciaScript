@@ -224,6 +224,25 @@ procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
 procedure LimitsDisarm;
 { the spent memory limit's message: the live bytes the collection left and the limit }
 function MemoryLimitMessage: UnicodeString;
+{ a host ends the run as a spent limit does (AbortKind 4), past every handler, with an Error of message Msg;
+  False, with that error pending, for the native that asked to return }
+function HostAbort(const Msg: UnicodeString): Boolean;
+{ the host abort's message (AbortKind 4) }
+function HostAbortMessage: UnicodeString;
+
+type
+  { the capability decisions an engine reports to its host (G2.Embed OnAudit): a Function constructor's, a
+    ShadowRealm's, an eval's }
+  TAuditKind = (akFunctionConstructor, akShadowRealm, akEval);
+  { False when the host could not record it: the run then ends (HostAbort, with its error pending) }
+  TAuditHook = function(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean of object;
+threadvar
+  AuditHook: TAuditHook;
+{ a decision to AuditHook when one is set: False when the run ends because the host could not record it }
+function AuditDecision(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;
+{ where the running script is: the innermost frame of user code (a file, <stdin>, or eval, Function or ShadowRealm
+  code), its source and the line and column of the instruction running; False outside any }
+function CallSiteNow(out Source: UnicodeString; out Line, Column: Integer): Boolean;
 { the most frames a run may have (0: FRAME_MAX); past it a call throws a RangeError }
 procedure SetMaxFrames(N: Integer);
 { releases this thread's VM state (stacks, roots); HeapDone frees the heap after it }
@@ -459,6 +478,8 @@ threadvar
   LimitTimeoutMs: Int64;
   { the heap and external bytes a full collection left over HeapCeiling (the memory limit's message) }
   LimitHeapBytes: Int64;
+  { the host abort's message (AbortKind 4) }
+  HostAbortText: UnicodeString;
 
 procedure TLimitTimer.Execute;
 var Now: QWord;
@@ -497,6 +518,7 @@ begin
   case AbortKind of
     2: ThrowError('Error', 'Execution exceeded instruction limit of ' + IntToStr(InstrMax));
     3: ThrowError('RangeError', MemoryLimitMessage);
+    4: ThrowError('Error', HostAbortText);
   else ThrowError('Error', 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms');
   end;
 end;
@@ -523,6 +545,26 @@ begin
   JitBlocked := True;
   InterLockedExchange(Interrupt, 1);
   FrameLimit := 0;
+end;
+
+function HostAbort(const Msg: UnicodeString): Boolean;
+begin
+  if AbortKind = 0 then HostAbortText := Msg;
+  JitBlocked := True;
+  XAbort(4);
+  Result := False;
+end;
+
+function HostAbortMessage: UnicodeString;
+begin
+  Result := HostAbortText;
+end;
+
+function AuditDecision(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;
+var Hook: TAuditHook;
+begin
+  Hook := AuditHook;
+  Result := not Assigned(Hook) or Hook(Kind, Allow, Subject, Reason);
 end;
 
 { a call that found the frames full: the abort of a spent limit, else PushBytecodeFrame's RangeError }
@@ -1614,6 +1656,29 @@ end;
 function StackFramesNow: UnicodeString;
 begin
   if ProfileStackTraces then Result := StackFramesText else Result := '';
+end;
+
+function CallSiteNow(out Source: UnicodeString; out Line, Column: Integer): Boolean;
+var I, PC: Integer; T: PFuncTemplate; Src: UnicodeString;
+begin
+  Source := '';
+  Line := 0;
+  Column := 0;
+  for I := FrameTop - 1 downto 0 do
+  begin
+    T := Frames[I].Tpl;
+    if T = nil then Continue;
+    Src := T^.SourceName;
+    { the preludes' sources are named <...>: a host's <stdin> and the code a script makes from strings are not }
+    if (Src = '') or ((Src[1] = '<') and (Src <> '<stdin>') and (Src <> '<eval>') and (Src <> '<Function>') and
+       (Src <> '<shadow-realm-eval>')) then Continue;
+    PC := Frames[I].PC - 1;
+    Source := Src;
+    if (PC >= 0) and (PC <= High(T^.Lines)) then Line := T^.Lines[PC];
+    if (PC >= 0) and (PC <= High(T^.Cols)) then Column := T^.Cols[PC];
+    Exit(True);
+  end;
+  Result := False;
 end;
 
 procedure AttachStack(E: TValue);
@@ -5620,7 +5685,7 @@ function XPrivateKeyAt(Tpl: PFuncTemplate; PC: Integer; Name: PStr): PStr; noinl
 var SN, At: UnicodeString; I: Integer;
 begin
   SN := Tpl^.SourceName;
-  if (SN = '') or (SN[1] <> '<') or (SN = '<eval>') or (SN = '<Function>') or (SN = '<ShadowRealm>') then
+  if (SN = '') or (SN[1] <> '<') or (SN = '<eval>') or (SN = '<Function>') or (SN = '<shadow-realm-eval>') then
     Exit(XPrivateKey(Name));
   { a realm runs its own copy of the prelude's templates: the instruction is named by the prelude, the function
     and its index }

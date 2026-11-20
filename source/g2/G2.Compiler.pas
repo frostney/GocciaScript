@@ -8124,7 +8124,7 @@ begin
   end;
   C.Goal := Goal;
   C.IsEvalCode := SourceName = '<eval>';
-  C.EvalContext := (SourceName = '<eval>') or (SourceName = '<ShadowRealm>');
+  C.EvalContext := (SourceName = '<eval>') or (SourceName = '<shadow-realm-eval>');
   Nodes := TList<TGocciaASTNode>.Create;
   SetLength(Params, 0);
   MI := nil;

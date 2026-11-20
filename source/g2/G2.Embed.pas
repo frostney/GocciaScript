@@ -10,7 +10,7 @@ unit G2.Embed;
 interface
 
 uses
-  SysUtils, Goccia.HostEnvironment, Goccia.ModuleResolver, G2.Core, G2.HostAPI;
+  SysUtils, Goccia.CapabilityAudit, Goccia.HostEnvironment, Goccia.ModuleResolver, G2.Core, G2.HostAPI, G2.VM;
 
 type
   { a console line and the method that wrote it (G2.HostAPI TConsoleSink) }
@@ -28,7 +28,9 @@ type
   { a run ended by a spent limit (G2.VM LimitsArm) rather than by the script }
   TG2Abort = (g2aNone, g2aTimeout, g2aInstructionLimit,
     { a full collection left more live than the memory limit (MaxMemory); ErrorText says how much }
-    g2aMemoryLimit);
+    g2aMemoryLimit,
+    { the host ended the run, past every handler: AuditSink could not record a decision (ErrorText says why) }
+    g2aHostAbort);
 
   { the engine's heap now (Memory): what a CLI's JSON report shows under memory.gc }
   TG2MemoryStats = record
@@ -97,7 +99,12 @@ type
     FEnvClockCalling, FEnvRandomCalling: Boolean;
     { the module records before the run's entry: those are the host's (globals, manifests, the provider) }
     FModuleMark: Integer;
+    FAuditSink: TGocciaCapabilityAuditSink;
+    { the entry's file name (Run): an audited decision made outside every script frame is the entry's }
+    FRunFile: UnicodeString;
     function NextRandom(Realm: Integer; out D: Double): Boolean;
+    { G2.VM's AuditHook: the script's decisions, located at its call site }
+    function AuditFromScript(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;
     function ProviderRandom(Realm: Integer; out D: Double): Boolean;
     function ProviderClock(Kind: Integer; out Ns: Int64): Boolean;
     function LoadHostEnvironment: Boolean;
@@ -117,6 +124,9 @@ type
     function ModuleLoaded(const Path: UnicodeString): Boolean;
     { the engine's heap now; call it on the engine's thread }
     function Memory: TG2MemoryStats;
+    { a decision of the host's own (a node_modules grant) to AuditSink, at the script's call site, during a run on
+      the engine's thread: False when the sink raised, the run then ending (g2aHostAbort) }
+    function Audit(Kind: TGocciaCapabilityKind; Allow: Boolean; const Subject, Reason: string): Boolean;
     { globals injection before Run (G2.HostAPI): a data file's globals, and one --global name=value }
     function InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
     function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: UnicodeString): Boolean;
@@ -149,6 +159,10 @@ type
       the first run's entry, exports the clocks, time zone and random streams the script reads (docs/
       host-environment.md); its time zone is read once, then. Not with Deterministic }
     property HostEnvironment: UnicodeString read FHostEnvironment write FHostEnvironment;
+    { the capability decisions of the run (GocciaScript's capability audit, docs/capability-audit.md): the Function
+      constructor's, a ShadowRealm's, an eval's, and what the host reports through Audit, each at the script's call
+      site. A sink that raises ends the run past every handler (g2aHostAbort). Set before Run }
+    property AuditSink: TGocciaCapabilityAuditSink read FAuditSink write FAuditSink;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
@@ -167,7 +181,7 @@ function RecommendedProfile: TLangProfile;
 implementation
 
 uses
-  Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules,
+  Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval, G2.Modules,
   G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel;
 
 threadvar
@@ -535,8 +549,46 @@ begin
   Result.Collections := GCMinorCount + GCMajorCount;
 end;
 
+function TG2Engine.Audit(Kind: TGocciaCapabilityKind; Allow: Boolean; const Subject, Reason: string): Boolean;
+var Event: TGocciaCapabilityAuditEvent; Src: UnicodeString; Line, Col: Integer; Found: Boolean;
+begin
+  if not Assigned(FAuditSink) then Exit(True);
+  Event := Default(TGocciaCapabilityAuditEvent);
+  Event.Kind := Kind;
+  if Allow then Event.Decision := gcdAllow else Event.Decision := gcdDeny;
+  Event.Subject := Subject;
+  Event.Reason := Reason;
+  { a static import's declaration while its module links, else the running script's call site; the entry's file
+    reads as the host named it }
+  Found := ImportSiteNow(Src, Line, Col) or CallSiteNow(Src, Line, Col);
+  if Found and (Src = ExpandFileName(FRunFile)) then Src := FRunFile;
+  if Found then
+  begin
+    Event.Source.FilePath := Src;
+    Event.Source.Line := Line;
+    Event.Source.Column := Col;
+  end
+  else
+    Event.Source.FilePath := FRunFile;
+  try
+    FAuditSink(Event);
+  except
+    on E: Exception do
+      Exit(HostAbort('capability audit delivery failed: ' + E.Message));
+  end;
+  Result := True;
+end;
+
+function TG2Engine.AuditFromScript(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;
+const
+  Kinds: array[TAuditKind] of TGocciaCapabilityKind = (gckFunctionConstructor, gckShadowRealm, gckEval);
+begin
+  Result := Audit(Kinds[Kind], Allow, Subject, Reason);
+end;
+
 destructor TG2Engine.Destroy;
 begin
+  AuditHook := nil;
   HostRandom := nil;
   HostClock := nil;
   TimeZoneOverride := '';
@@ -632,6 +684,8 @@ begin
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   SetActiveProfile(FProfile);
   SetConsoleSink(FOnConsole);
+  FRunFile := FileName;
+  if Assigned(FAuditSink) then AuditHook := AuditFromScript else AuditHook := nil;
   SetHostResolver(FResolver);
   ClearLoadFailure;
   TakeResolveCandidate;
@@ -724,6 +778,12 @@ begin
           Result.Aborted := g2aMemoryLimit;
           Result.ErrorName := 'RangeError';
           Result.ErrorText := MemoryLimitMessage;
+        end;
+      4:
+        begin
+          Result.Aborted := g2aHostAbort;
+          Result.ErrorName := 'Error';
+          Result.ErrorText := HostAbortMessage;
         end;
     end;
     if not Result.Ok or (Result.Aborted <> g2aNone) then

@@ -68,6 +68,9 @@ procedure SetEntryCompletionWanted(Wanted: Boolean);
   False when no import failed since ClearLoadFailure }
 procedure ClearLoadFailure;
 function LoadFailure(out Path: UnicodeString; out Line, Column: Integer): Boolean;
+{ the static import whose specifier the host is resolving now (while a module links): the importing module's path
+  and the declaration's line and column; False otherwise }
+function ImportSiteNow(out Path: UnicodeString; out Line, Column: Integer): Boolean;
 function EntryCompletion: TValue;
 
 implementation
@@ -216,6 +219,9 @@ threadvar
   ProvidedPath, ProvidedSrc: UnicodeString;
   LoadFailPath: UnicodeString;
   LoadFailLine, LoadFailColumn: Integer;
+  { ImportSiteNow }
+  SitePath: UnicodeString;
+  SiteLine, SiteColumn: Integer;
 
   CompletionWanted: Boolean;
   Completion: TValue;
@@ -233,6 +239,14 @@ begin
   Path := LoadFailPath;
   Line := LoadFailLine;
   Column := LoadFailColumn;
+  Result := Path <> '';
+end;
+
+function ImportSiteNow(out Path: UnicodeString; out Line, Column: Integer): Boolean;
+begin
+  Path := SitePath;
+  Line := SiteLine;
+  Column := SiteColumn;
   Result := Path <> '';
 end;
 
@@ -409,7 +423,7 @@ end;
 
 { 16.2.1.5.1 LoadRequestedModules (synchronously, from files): the module at Path and everything it requests }
 function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
-var Src, Err, ErrName: UnicodeString; I: Integer; D: TModRec; V: TValue; Compiled: Boolean;
+var Src, Err, ErrName, Resolved: UnicodeString; I: Integer; D: TModRec; V: TValue; Compiled: Boolean;
 begin
   if (Path <> '') and (Path[1] = #0) then
   begin
@@ -470,7 +484,21 @@ begin
   SetLength(M.Deps, Length(M.Info.Requests));
   for I := 0 to High(M.Info.Requests) do
   begin
-    if not LoadModule(ResolveRequest(M.Info.Requests[I], Path), D) then
+    { the declaration is where a host's resolution decision is made (ImportSiteNow) }
+    SitePath := Path;
+    SiteLine := 0;
+    SiteColumn := 0;
+    if I <= High(M.Info.RequestLines) then
+    begin
+      SiteLine := M.Info.RequestLines[I];
+      SiteColumn := M.Info.RequestColumns[I];
+    end;
+    try
+      Resolved := ResolveRequest(M.Info.Requests[I], Path);
+    finally
+      SitePath := '';
+    end;
+    if not LoadModule(Resolved, D) then
     begin
       if (LoadFailPath = '') and (I <= High(M.Info.RequestLines)) and (M.Info.RequestLines[I] > 0) then
       begin

@@ -145,6 +145,7 @@ function SR_Ctor(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var P: TValue; R: Integer; O: PObj;
 begin
   if CurNewTarget = VUndefined then Exit(ThrowTypeError('Constructor ShadowRealm requires ''new'''));
+  if not AuditDecision(akShadowRealm, True, 'ShadowRealm', 'ShadowRealm capability is enabled') then Exit(False);
   if not ProtoFromNewTarget(ShadowRealmProto, P) then Exit(False);
   PushRoot(P);
   if not CreateRealm(R) then
@@ -178,7 +179,7 @@ begin
   Prof.NonStrict := True;
   SetActiveProfile(Prof);
   try
-    Compiled := ParseAndCompile(StrToUnicode(StrOf(Src)), '<ShadowRealm>', True, T, Err, 2);
+    Compiled := ParseAndCompile(StrToUnicode(StrOf(Src)), '<shadow-realm-eval>', True, T, Err, 2);
   finally
     SetActiveProfile(SavedProf);
   end;

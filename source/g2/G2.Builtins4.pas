@@ -591,7 +591,13 @@ begin
   { indirect eval, and direct eval at a non-strict Script's top level, declare globals (goal 2); other direct
     evals keep their declarations to themselves until G2 gives them their caller's scope }
   Goal := TakeEvalHint;
-  if Goal < 0 then Goal := 2;
+  { the host audits the call, direct (a hint from its call site) or indirect }
+  if Goal < 0 then
+  begin
+    if not AuditDecision(akEval, True, 'eval', 'indirect eval is enabled') then Exit(False);
+    Goal := 2;
+  end
+  else if not AuditDecision(akEval, True, 'eval', 'direct eval is enabled') then Exit(False);
   if not IsString(Arg(Args, Argc, 1)) then begin Res := Arg(Args, Argc, 1); Exit(True); end;
   { a description of the caller's bindings: compiled in the caller's scope (goal 4); at a non-strict Script's top
     level (goal 2) the description makes the global object its variable environment }

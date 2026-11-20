@@ -755,12 +755,21 @@ function Function_Ctor(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 const
   Heads: array[0..3] of UnicodeString = ('(function anonymous(', '(function* anonymous(', '(async function anonymous(',
     '(async function* anonymous(');
+  CtorNames: array[0..3] of UnicodeString = ('Function', 'GeneratorFunction', 'AsyncFunction',
+    'AsyncGeneratorFunction');
 var I: Integer; Params, Body, Src, Err: UnicodeString; S: TValue; T: PFuncTemplate; Clo: TValue; Kind: Integer;
 begin
-  { a restricted profile creates functions from strings only with unsafe-function-constructor }
-  if not ProfileFunctionCtor then
-    Exit(ThrowError('TypeError', 'Dynamic code generation is disabled. Pass --unsafe-function-constructor to enable the Function constructor'));
   Kind := NativeData;
+  { a restricted profile creates functions from strings only with unsafe-function-constructor; the host audits
+    the decision either way }
+  if not ProfileFunctionCtor then
+  begin
+    if not AuditDecision(akFunctionConstructor, False, CtorNames[Kind], 'dynamic code generation is disabled') then
+      Exit(False);
+    Exit(ThrowError('TypeError', 'Dynamic code generation is disabled. Pass --unsafe-function-constructor to enable the Function constructor'));
+  end;
+  if not AuditDecision(akFunctionConstructor, True, CtorNames[Kind], 'dynamic code generation is enabled') then
+    Exit(False);
   Params := '';
   Body := '';
   for I := 1 to Argc do

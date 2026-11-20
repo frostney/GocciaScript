@@ -7,10 +7,8 @@ program GocciaRunnerG2;
   unchanged; once it covers GocciaRunner it replaces GocciaRunner.dpr.
 
   Not yet on G2: sandbox and install modes, source maps, coverage, the
-  profiler, bytecode files (--prefer-bytecode), injected globals and modules
-  (--globals, --global, --modules), --host-environment, directories, parallel
-  jobs, memory statistics in the JSON report, and the capability checks the
-  engine makes. }
+  profiler, bytecode files (--prefer-bytecode), FFI, fetch, and the read
+  capability's audit events. }
 
 {$I Goccia.inc}
 
@@ -33,6 +31,7 @@ uses
   Goccia.CLI.Stdin,
   Goccia.CLI.Trust,
   Goccia.Capabilities,
+  Goccia.CapabilityAudit,
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.Modules.Configuration,
@@ -78,6 +77,8 @@ type
   private
     FCapabilities: TGocciaCapabilities;
   public
+    { the file's engine, which audits each decision (nil: none audited) }
+    Engine: TG2Engine;
     constructor Create(const ACapabilities: TGocciaCapabilities);
     function Grant(const ASpecifier, AImportingDirectory: string; out ACeiling: string): Boolean;
   end;
@@ -340,10 +341,24 @@ end;
 
 function TG2NodeModulesGrant.Grant(const ASpecifier, AImportingDirectory: string;
   out ACeiling: string): Boolean;
+var
+  Reason: string;
 begin
   Result := FCapabilities.NodeModulesCeiling(AImportingDirectory, ACeiling);
+  { every decision is audited, as GocciaRunner's GrantNodeModules does; a log that cannot be written ends the run }
   if Result then
+  begin
+    if ACeiling = '' then
+      Reason := 'node_modules walk is unbounded'
+    else
+      Reason := 'node_modules walk is bounded by ' + ACeiling;
+    if Assigned(Engine) and not Engine.Audit(gckImportNodeModules, True, ASpecifier, Reason) then
+      raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed');
     Exit;
+  end;
+  if Assigned(Engine) and not Engine.Audit(gckImportNodeModules, False, ASpecifier,
+     'the import capability does not grant node_modules here') then
+    raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed');
   { an outright deny refuses; a capability never granted keeps the sealed resolution's message }
   if FCapabilities.DeniesNodeModules(AImportingDirectory) then
     raise Exception.Create('PermissionDenied: import is not allowed for ' + ASpecifier +
@@ -487,6 +502,13 @@ begin
       begin
         { GocciaRunner's name for the refusal no script can catch (TGocciaMemoryLimitError) }
         Result.ErrorType := 'MemoryLimitError';
+        Result.Message := UTF8Encode(AResult.ErrorText);
+        Exit;
+      end;
+    g2aHostAbort:
+      begin
+        { the only host abort: the audit log could not be written (GocciaRunner's delivery error) }
+        Result.ErrorType := 'EGocciaCapabilityAuditDeliveryError';
         Result.Message := UTF8Encode(AResult.ErrorText);
         Exit;
       end;
@@ -863,7 +885,7 @@ begin
           [EngineOptions.MaxInstructions.Value]));
         Exit;
       end;
-    g2aMemoryLimit:
+    g2aMemoryLimit, g2aHostAbort:
       begin
         WriteLn('Fatal error: ' + UTF8Encode(AResult.ErrorText));
         Exit;
@@ -986,6 +1008,8 @@ var
   GlobalsError: string;
   HeapStart: THeapStatus;
   MemoryStart: TG2MemoryStats;
+  Capabilities: TGocciaCapabilities;
+  Effective: TGocciaCapabilityAuditEvent;
 begin
   Start := GetNanoseconds;
   { the console capture, which also prints the parse warnings (not in a JSON report, as GocciaRunner) }
@@ -999,7 +1023,8 @@ begin
       SetLength(FileConfig, 0);
     Verdict := FileConfigVerdict(FileConfigPath, AFileName);
     { the file's import resolution, as GocciaRunner's CreateEngine configures it }
-    Grant := TG2NodeModulesGrant.Create(ResolveEngineCapabilities(FileConfigPath, AFileName));
+    Capabilities := ResolveEngineCapabilities(FileConfigPath, AFileName);
+    Grant := TG2NodeModulesGrant.Create(Capabilities);
     Resolver := TGocciaModuleResolver.Create(ExtractFilePath(ExpandFileName(AFileName)));
     Resolver.SetExtensions(ModuleImportExtensions);
     Resolver.NodeModulesGrant := Grant.Grant;
@@ -1031,6 +1056,24 @@ begin
       Engine.Deterministic := ResolveFlagOption(EngineOptions.Deterministic, FileConfig);
       { a file's set-up the options refuse fails that file, as GocciaRunner's per-file handler reports it }
       try
+        { the audit log opens with the engine's capability set, before anything of the file runs }
+        if AuditLogOpen then
+        begin
+          Engine.AuditSink := HandleCapabilityAudit;
+          Grant.Engine := Engine;
+          Effective := Default(TGocciaCapabilityAuditEvent);
+          Effective.Kind := gckCapabilitiesEffective;
+          Effective.Decision := gcdAllow;
+          Effective.Subject := Capabilities.ToJSON;
+          Effective.Reason := CapabilityProvenance(Verdict);
+          Effective.Source.FilePath := AFileName;
+          try
+            HandleCapabilityAudit(Effective);
+          except
+            on E: Exception do
+              raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed: ' + E.Message);
+          end;
+        end;
         Engine.HostEnvironment := UnicodeString(HostEnvironmentPath(FileConfig, Engine.Deterministic));
       except
         on E: TCLIUsageError do
