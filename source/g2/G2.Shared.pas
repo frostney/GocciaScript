@@ -28,6 +28,7 @@ type
     MaxByteLength: Int64;   { -1: fixed length }
     Data: PByte;            { MaxByteLength (or ByteLength) bytes, zeroed, 16-byte aligned }
     Reserved: Int64;        { the bytes it counts against the memory ceiling (HeapExternalBytes) }
+    GrowLock: LongInt;      { atomic: held while a grow zeroes the new bytes and publishes the length }
   end;
 
 function NewSharedBlock(Len, MaxLen: Int64): PSharedBlock;   { nil when the memory cannot be had }
@@ -92,6 +93,7 @@ begin
   if Raw = nil then Exit;
   New(Result);
   Result^.RefCount := 1;
+  Result^.GrowLock := 0;
   Result^.ByteLength := Len;
   Result^.MaxByteLength := MaxLen;
   Result^.Data := Raw;
@@ -119,15 +121,25 @@ begin
   Result := InterlockedCompareExchange64(B^.ByteLength, 0, 0);
 end;
 
+{ the new bytes are zero (25.2.2.3 HostGrowSharedArrayBuffer): zeroed before the length that exposes them is
+  published, since native code (FFI) can write past the length into the reserved bytes; the grows of one block are
+  serialized so that no grow zeroes bytes another has already exposed }
 function GrowBlock(B: PSharedBlock; NewLen: Int64): Boolean;
 var Cur: Int64;
 begin
-  repeat
+  while InterlockedCompareExchange(B^.GrowLock, 1, 0) <> 0 do ThreadSwitch;
+  try
     Cur := BlockLength(B);
     if NewLen < Cur then Exit(False);
-    if NewLen = Cur then Exit(True);
-  until InterlockedCompareExchange64(B^.ByteLength, NewLen, Cur) = Cur;
-  Result := True;
+    if NewLen > Cur then
+    begin
+      FillChar((B^.Data + Cur)^, NewLen - Cur, 0);
+      InterlockedExchange64(B^.ByteLength, NewLen);
+    end;
+    Result := True;
+  finally
+    InterlockedExchange(B^.GrowLock, 0);
+  end;
 end;
 
 { ---------------- this engine's SharedArrayBuffer objects ---------------- }
