@@ -211,15 +211,21 @@ test("spread of an Array subclass instance yields its elements", () => {
   expect([...numbers]).toEqual([1, 2, 3]);
 });
 
+// A length past the dense-extension gap leaves the tail sparse instead of
+// dense holes, and shrinking the length from there keeps it sparse, so a short
+// copy still reads past the stored elements. An element stored far past the
+// others is sparse only at that distance, so "spread reads an element stored
+// far past the others" copies 2,000,000 elements.
 test("spread copies every index up to a length set far past the elements", () => {
-  const farLength = 2000000;
+  const shortLength = 2000;
   const source = [1, 2];
-  source.length = farLength;
+  source.length = 2000000;
+  source.length = shortLength;
   const copy = [...source];
-  expect(copy.length).toBe(farLength);
+  expect(copy.length).toBe(shortLength);
   expect(copy[1]).toBe(2);
-  expect(Object.hasOwn(copy, farLength - 1)).toBe(true);
-  expect(copy[farLength - 1]).toBe(undefined);
+  expect(Object.hasOwn(copy, shortLength - 1)).toBe(true);
+  expect(copy[shortLength - 1]).toBe(undefined);
 });
 
 test("spread reads an element stored far past the others", () => {
@@ -232,17 +238,18 @@ test("spread reads an element stored far past the others", () => {
 });
 
 test("spread reads an inherited value past the stored elements", () => {
-  const farLength = 2000000;
+  const shortLength = 2000;
   const source = [1];
-  source.length = farLength;
-  Array.prototype[farLength - 1] = "inherited";
+  source.length = 2000000;
+  source.length = shortLength;
+  Array.prototype[shortLength - 1] = "inherited";
   let copy;
   try {
     copy = [...source];
   } finally {
-    delete Array.prototype[farLength - 1];
+    delete Array.prototype[shortLength - 1];
   }
-  expect(copy.length).toBe(farLength);
-  expect(Object.hasOwn(copy, farLength - 1)).toBe(true);
-  expect(copy[farLength - 1]).toBe("inherited");
+  expect(copy.length).toBe(shortLength);
+  expect(Object.hasOwn(copy, shortLength - 1)).toBe(true);
+  expect(copy[shortLength - 1]).toBe("inherited");
 });

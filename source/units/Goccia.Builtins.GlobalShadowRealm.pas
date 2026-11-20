@@ -37,6 +37,7 @@ uses
   OrderedStringMap,
 
   Goccia.Arguments.Collection,
+  Goccia.Builtins.GlobalEval,
   Goccia.CapabilityAudit,
   Goccia.Constants.ConstructorNames,
   Goccia.Constants.ErrorNames,
@@ -62,24 +63,11 @@ uses
   Goccia.VM.Exception;
 
 type
-  { A direct-eval host bound to one realm, installed on a ShadowRealm child
-    realm's global when the creating realm exposes `eval`. It always evaluates
-    source in its own realm, so child code can never reach across the boundary. }
-  TGocciaShadowRealmEvalHost = class
-  private
-    FEngine: TGocciaEngine;
-  public
-    constructor Create(const AEngine: TGocciaEngine);
-    function Invoke(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
-  end;
-
   { Owns one child engine (a fresh realm) created by `new ShadowRealm()`. }
   TGocciaShadowRealmChildRealm = class
   private
     FEngine: TGocciaEngine;
     FSource: TStringList;
-    FEvalHost: TGocciaShadowRealmEvalHost;
   public
     constructor Create(const AParentEngine: TGocciaEngine);
     destructor Destroy; override;
@@ -175,8 +163,6 @@ constructor TGocciaShadowRealmChildRealm.Create(
   const AParentEngine: TGocciaEngine);
 var
   AliasPair: TStringStringMap.TKeyValuePair;
-  EvalFn: TGocciaNativeFunctionValue;
-  InstallScope: TGocciaExecutionContextScope;
 begin
   inherited Create;
   FSource := TStringList.Create;
@@ -222,26 +208,13 @@ begin
   // capability set, so bare specifiers resolve in the child exactly as they
   // do in its creator, and never more widely.
   // SetDefaultGlobalBindings installs `eval` on the realm global. GocciaScript
-  // keeps eval out of normal realms, so mirror the creating realm: when it
-  // exposes `eval`, give the child its own realm-bound eval (which evaluates in
-  // this realm, so isolation holds) so the child global surface matches.
-  if (AParentEngine.Realm.GlobalObject is TGocciaObjectValue) and
-     TGocciaObjectValue(AParentEngine.Realm.GlobalObject).HasOwnProperty(
-       'eval') then
-  begin
-    FEvalHost := TGocciaShadowRealmEvalHost.Create(FEngine);
-    InstallScope := FEngine.ActivateRealmExecutionContext;
-    try
-      EvalFn := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-        FEvalHost.Invoke, 'eval', 1);
-      InstallRealmEvalFunction(FEngine.Realm, EvalFn);
-      (FEngine.Realm.GlobalObject as TGocciaObjectValue).DefineProperty('eval',
-        TGocciaPropertyDescriptorData.Create(EvalFn,
-          [pfWritable, pfConfigurable]));
-    finally
-      InstallScope.Free;
-    end;
-  end;
+  // keeps eval out of a realm unless its host opted in, so a child realm
+  // inherits that choice from its creator's engine option, not from whatever
+  // the creator's script left in its global `eval`. The child's own %eval%
+  // evaluates in the child realm, so isolation holds, and it reports to the
+  // audit sink the child inherited.
+  if IsEvalEnabled(AParentEngine) then
+    EnableEval(FEngine);
   FEngine.SuspendRealmExecutionContext;
 end;
 
@@ -261,37 +234,7 @@ begin
     end;
   end;
   FSource.Free;
-  FEvalHost.Free;
   inherited;
-end;
-
-{ TGocciaShadowRealmEvalHost }
-
-constructor TGocciaShadowRealmEvalHost.Create(const AEngine: TGocciaEngine);
-begin
-  inherited Create;
-  FEngine := AEngine;
-end;
-
-// ES2026 §19.2.1.1.1 eval ( x ), called indirectly in this host's (child)
-// realm: PerformEval(x, false, false). Errors are this realm's own, since the
-// eval was called from here; nothing crosses the realm boundary.
-function TGocciaShadowRealmEvalHost.Invoke(
-  const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
-var
-  SourceValue: TGocciaValue;
-  Stage: TGocciaGlobalEvalStage;
-begin
-  // Step 2: if x is not a String, return x unchanged.
-  if AArgs.Length = 0 then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  SourceValue := AArgs.GetElement(0);
-  if not (SourceValue is TGocciaStringLiteralValue) then
-    Exit(SourceValue);
-  Result := FEngine.EvaluateGlobalEval(
-    TGocciaStringLiteralValue(SourceValue).Value, '<shadow-realm-eval>',
-    Stage);
 end;
 
 { TGocciaShadowRealmHost }

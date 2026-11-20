@@ -400,6 +400,7 @@ describe("Object.prototype.toString", () => {
       ["Response", () => new Response("x")],
       ["TextEncoder", () => new TextEncoder()],
       ["TextDecoder", () => new TextDecoder()],
+      ["Blob", () => new Blob()],
     ];
 
     for (const [name, make] of instances) {

@@ -2,26 +2,35 @@
 
 ![GocciaScript logo](./logo.png)
 
-A drop of JavaScript, sandboxed by default.
+A drop of JavaScript, built for embedding.
 
-GocciaScript is a JavaScript engine for running code that AI agents and people
-write, under the capabilities and limits the host sets. A script sees no
-filesystem, network or process unless the host grants it
+GocciaScript is an ECMAScript engine for embedding, with sensible defaults that
+are easy to customize. An application embeds it to add scripting: the host
+chooses the runtime surface, grants the capabilities a script may use, and
+bounds a run by time, instructions and a memory budget. The budget gates
+allocations and does not cap resident memory, so a hard ceiling also needs an
+operating-system limit
+([Garbage Collector](docs/garbage-collector.md#gated-growth-points)). Beyond the files of its own
+project's static module graph, a script reaches no filesystem, network or
+process unless the host grants it
 ([permissions](docs/permissions.md), [capability audit events](docs/capability-audit.md)),
-and a run can be bounded by time, instructions and memory and made
-deterministic, with a fixed clock and seeded randomness.
+and a run can be made deterministic, with a fixed clock and seeded randomness.
+Today the host is a FreePascal or Delphi application; see
+[Embedding the Engine](docs/embedding.md).
 
-[![test262 pass rate on main, live from the compatibility dashboard](https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.gocciascript.dev%2Fapi%2Ftest262%2Fbadge)](https://www.gocciascript.dev/compatibility)
+[![test262 pass rate on main, runs in both modes combined, live from the compatibility dashboard](https://img.shields.io/endpoint?url=https%3A%2F%2Fwww.gocciascript.dev%2Fapi%2Ftest262%2Fbadge)](https://www.gocciascript.dev/compatibility)
 [![CI](https://github.com/frostney/GocciaScript/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/frostney/GocciaScript/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/frostney/GocciaScript?label=release)](https://github.com/frostney/GocciaScript/releases)
 
 - **Conformance you can check.** test262, the official ECMAScript conformance
-  suite, runs on every pull request and on main, and a pull request that turns
-  a passing test into a failure fails CI. The
+  suite, runs on every pull request and on main. When the run produces results
+  and a cached main baseline graded under the same contract is available, a
+  pull request that turns a passing test into a failure other than a timeout,
+  compared in the same mode, fails CI. The
   [compatibility dashboard](https://www.gocciascript.dev/compatibility) shows
   the current result by area, rendered from the published reports.
-- **Tested beyond the spec.** 15,000+ JavaScript tests in 1,800+ files run on
-  every pull request, and on six targets on main, with differential suites
+- **Tested beyond the spec.** 17,000+ JavaScript tests run on every pull
+  request, and on six targets on main, with differential suites
   checked against Bun and Vitest.
 - **Fuzzed and memory-checked.** Every night the engine and its heap snapshot
   reader are [fuzzed](https://github.com/frostney/GocciaScript/actions/workflows/fuzz.yml),
@@ -38,10 +47,12 @@ deterministic, with a fixed clock and seeded randomness.
   V8 or other runtime to install beside the binary (HTTPS on Linux uses the
   system's OpenSSL). Prebuilt for
   macOS and Linux (x64 and arm64) and Windows (x64 and x86), and embeddable
-  in FreePascal applications.
+  in FreePascal and Delphi applications.
 - **Modern JavaScript and TypeScript.** ES modules, classes with private
   fields, async/await, Temporal, Intl, TC39 type annotations run directly, and
-  a Vitest-compatible test runner.
+  a Vitest-compatible test runner. GocciaScript also tracks TC39 proposals,
+  including stage 1 and 2, and `goccia:ast` gives formatters and codemods the
+  tree GocciaScript's own parser produces.
 - **Status: pre-1.0.** The language follows ECMAScript; the host API and
   command-line flags may change between releases, so pin a version and read
   the [changelog](CHANGELOG.md) before you upgrade.
@@ -55,13 +66,72 @@ also `brew install frostney/tap/gocciascript`. Or try it in the
 [Playground](https://www.gocciascript.dev/playground). Building from source
 needs the FreePascal compiler; see [Getting Started](#getting-started).
 
-It is not trying to become Node.js or a browser host: the primary goal is
-running agent code under an explicit host-defined capability model, and native
-embedding is the second.
+GocciaScript provides a Node.js or Web API capability when it fits the vision
+and cannot be shimmed in userland, and leaves what userland or npm can shim to
+userland; see [Node compatibility](#node-compatibility-to-a-degree). What it
+provides is a set of runtime extensions a host installs, not a default host
+environment.
 
-## Start with an agent sandbox
+## Embed it
 
-`GocciaRunner`'s sandbox mode copies explicit host paths into an in-memory
+Native hosts can embed GocciaScript to run portable JavaScript with
+application-specific globals, modules, capabilities, and limits. A host can
+answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
+mark sandbox paths read-only, and stop a run from another thread through an
+[abort handle](docs/embedding.md#aborting-a-run-from-another-thread). A stop
+takes effect at the engine's next check, so a native call blocked outside the
+engine is not interrupted until it returns; give such calls their own deadlines
+or isolate the process. A host can also snapshot the object graphs the snapshot
+codecs cover and restore them in a fresh engine. A graph it cannot write is
+refused, and the host resumes by replay instead; a run paused at a checkpoint
+still holds pending promises with no codec, so its snapshot is refused today
+([Heap Snapshots](docs/heap-snapshots.md)). See
+[Embedding the Engine](docs/embedding.md).
+
+An engine starts with the recommended language profile and without dynamic code
+generation. A host changes that with a few knobs, one by one; there are no
+presets:
+
+- `Engine.Compatibility` turns on the ECMAScript forms the recommended profile
+  leaves out (`--compat-*` on the command-line hosts);
+- `Engine.FunctionConstructor.Enabled` turns on the `Function()` constructor
+  (`--unsafe-function-constructor`);
+- `EnableShadowRealm` installs the `ShadowRealm` global
+  (`--unsafe-shadowrealm`);
+- `EnableEval` installs `eval()`; only an embedder can call it, since no
+  command-line flag or config key turns it on
+  ([ADR 0179](docs/adr/0179-eval-is-an-engine-only-opt-in-installer.md)).
+
+[Embedding — Changing the Defaults](docs/embedding.md#changing-the-defaults)
+documents each knob.
+
+The host also chooses its runtime extensions: `fetch`, `URL`,
+`TextEncoder`/`TextDecoder`, `Blob`, `AbortController` and `EventTarget` today,
+a virtual filesystem, and Node.js compatibility to a degree. The Web APIs React
+server rendering relies on, such as `MessageChannel`, `ReadableStream` and
+`crypto`, are planned ([#1562](https://github.com/frostney/GocciaScript/issues/1562));
+none of them ships yet.
+
+## Where it is going
+
+The goals, in the order [VISION.md](VISION.md) sets them. The stable C ABI and
+`.gcbundle` are planned; neither ships yet.
+
+- **Conformance.** All of test262 in every mode it requires, strict and
+  non-strict, Annex B and staging included. Progress is on the
+  [compatibility dashboard](https://www.gocciascript.dev/compatibility).
+- **Performance.** An interpreter faster than QuickJS first, then `.gcbundle`
+  bytecode artifacts, an opt-in baseline JIT and a compiled executable; see
+  [Benchmarks](docs/benchmarks.md).
+- **1.0.** A stable C ABI and public API, all of test262, an interpreter faster
+  than QuickJS, and `.gcbundle`.
+
+## Reference host: a sandbox for AI agents
+
+`GocciaRunner`'s sandbox mode is a reference host and an example of what an
+embedder can build on the capability model, the virtual filesystem and the
+runtime extensions: a runtime for code that AI agents generate. It copies
+explicit host paths into an in-memory
 virtual filesystem, runs an entry script with host-owned limits, and reports
 sandbox changes as a diff. Copies are snapshots, not live mounts, and scripts
 receive no ambient host filesystem access.
@@ -107,9 +177,9 @@ main-branch data on the live
 [ECMAScript compatibility dashboard](https://www.gocciascript.dev/compatibility);
 canonical prose does not freeze a historical percentage.
 
-The recommended language profile is modern by default, so code an agent writes
-stays explicit, and each core form it disables has a flag. It is product policy, not
-the implementation ceiling. Standard core forms disabled by default all have
+The recommended language profile is modern by default, so new code stays
+explicit, and each core form it disables has a flag a host can turn on. It is
+product policy, not the implementation ceiling. Standard core forms disabled by default all have
 explicit compatibility paths:
 
 | Form | Default | Enablement / exposure |
@@ -124,14 +194,17 @@ explicit compatibility paths:
 | `while` / `do...while` | Disabled | `--compat-while-loops` |
 | `arguments` | Disabled | `--compat-arguments-object` |
 | non-strict Script semantics and `with` | Strict / disabled | `--compat-non-strict-mode` |
-| `eval` | Not installed by normal hosts | private `GocciaTest262Runner` conformance host |
+| `eval` | Not installed | engine option `EnableEval` only (no CLI flag) |
 | `Function()` | Disabled | `--unsafe-function-constructor` |
 | `ShadowRealm` | Not installed | `--unsafe-shadowrealm` |
 
-Annex B's browser-only legacy surface is not a general pre-1.0 target; see
-[ADR 0085](docs/adr/0085-defer-annex-b-before-1-0.md). See
-[Language](docs/language.md) and [Language Tables](docs/language-tables.md) for
-the detailed semantics and feature matrix.
+Annex B's legacy browser features are part of the test262 conformance target.
+The ones that already ship stay as they are, and new ones will go behind a
+compatibility flag, added by the 0.18.0 Annex B work, that the test262 runner
+turns on; see
+[ADR 0177](docs/adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
+See [Language](docs/language.md) and [Language Tables](docs/language-tables.md)
+for the detailed semantics and feature matrix.
 
 ## TC39 Type Annotations and `--strict-types`
 
@@ -147,14 +220,17 @@ structural type checker such as `tsc`. See
 [Type Annotations](docs/type-annotations.md) for the supported syntax and its
 parsing rules.
 
-## Node host compatibility and sandbox `fs`
+## Node compatibility, to a degree
 
-GocciaScript is not a complete Node.js host: it does not provide CommonJS,
-`process`, `Buffer`, or the general `node:` module set. Bare-specifier lookup
-through `node_modules` (ESM only, a subset of Node's resolver) is opt-in with
-`--allow-import=node_modules`; see [Module Resolution](docs/module-resolution.md).
-`GocciaRunner`'s sandbox mode does provide a Node-compatible `fs` API over its
-virtual filesystem:
+GocciaScript provides a Node.js capability when it fits the vision and cannot
+be shimmed in userland, and leaves what userland can shim to userland. The
+same rule covers CommonJS, the general `node:` modules and Web APIs; see
+[Module Resolution](docs/module-resolution.md) for how to bring a package in.
+What GocciaScript provides are runtime extensions a host installs: `node:async_hooks`; bare-specifier lookup through
+`node_modules` (ESM only, a subset of Node's resolver), which is opt-in with
+`--allow-import=node_modules`;
+and a Node-compatible `fs` API over a virtual filesystem, which
+`GocciaRunner`'s sandbox mode provides:
 
 - synchronous forms such as `readFileSync`, `writeFileSync`, `mkdirSync`,
   `readdirSync`, `statSync`, `rmSync`, `renameSync`, and `copyFileSync`;
@@ -186,19 +262,19 @@ Core built-ins include `Math`, `JSON`, `Object`, `Function`, `Array`, `Boolean`,
 `ArrayBuffer`, `SharedArrayBuffer`, `DataView`, `Atomics`, and TypedArrays
 (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`,
 `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`,
-`BigInt64Array`, `BigUint64Array`), alongside the global functions
-`queueMicrotask`, `structuredClone`, `atob`, and `btoa`. The loader runtime
-profile (applied by `GocciaRunner`, `GocciaREPL`, `GocciaTestRunner`, and
-`GocciaBenchmarkRunner`) adds
+`BigInt64Array`, `BigUint64Array`), alongside the global functions `atob` and
+`btoa`. The loader runtime profile (applied by `GocciaRunner`, `GocciaREPL`,
+`GocciaTestRunner`, and `GocciaBenchmarkRunner`) adds the global functions
+`queueMicrotask` and `structuredClone`, and
 `console`, `performance`, `fetch`, `Headers`, `Response` ([WHATWG Fetch](https://fetch.spec.whatwg.org/) — GET/HEAD only),
 `AbortController`, `AbortSignal`, `EventTarget`, `Event`, `URL`,
-`URLSearchParams`, `TextEncoder`, and `TextDecoder`. Error constructors include `Error`, `EvalError`, `TypeError`,
+`URLSearchParams`, `TextEncoder`, `TextDecoder`, and `Blob` ([File API](https://w3c.github.io/FileAPI/#blob-section)). Error constructors include `Error`, `EvalError`, `TypeError`,
 `ReferenceError`, `RangeError`, `SyntaxError`, `URIError`, `AggregateError`,
 `SuppressedError`, and `DOMException`.
 
 Non-standard data-format APIs and SemVer are import-only Goccia runtime modules, not auto-installed globals: `goccia:csv`, `goccia:json5`, `goccia:jsonl`, `goccia:toml`, `goccia:tsv`, `goccia:yaml`, and `goccia:semver`. They expose named exports only; use `import * as CSV from "goccia:csv"` when you want the namespace-object shape. There is no default export.
 
-`goccia:ast` is an experimental runtime module behind `--experimental-ast`. It exposes one `parse` function that returns a source file's statement structure — kinds, offsets, line/column, nesting — plus its comments and, on request, every token (`tokens: true`) and its expressions, object properties, parameters and class members (`expressions: true`), so a lint rule, a formatter, a codemod or a check that needs to know what is code can be a GocciaScript program. Every offset and position is into the text that was passed, including for a `.tsx` file the engine rewrote before parsing. See [AST Built-ins](docs/built-ins-ast.md), [ADR 0117](docs/adr/0117-javascript-visible-ast-module.md), [ADR 0118](docs/adr/0118-original-file-source-ranges.md), [ADR 0162](docs/adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md), and [ADR 0163](docs/adr/0163-goccia-ast-reports-the-committed-token-stream.md).
+`goccia:ast` is an experimental runtime module behind `--experimental-ast`. It exposes one `parse` function that returns a source file's statement structure — kinds, offsets, line/column, nesting — plus its comments and, on request, every token (`tokens: true`) and its expressions, object properties, parameters, class members, module specifiers and import attributes, and the erased type syntax — annotations, generics, overload signatures, `this` parameters and `declare module` names (`expressions: true`), so a lint rule, a formatter, a codemod or a check that needs to know what is code can be a GocciaScript program. Every offset and position is into the text that was passed, including for a `.tsx` file the engine rewrote before parsing. See [AST Built-ins](docs/built-ins-ast.md), [ADR 0117](docs/adr/0117-javascript-visible-ast-module.md), [ADR 0118](docs/adr/0118-original-file-source-ranges.md), [ADR 0161](docs/adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md), [ADR 0162](docs/adr/0162-the-parse-tree-reaches-expressions-on-request-through-one-child-enumeration.md), [ADR 0163](docs/adr/0163-goccia-ast-reports-the-committed-token-stream.md), [ADR 0168](docs/adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md), and [ADR 0172](docs/adr/0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md).
 
 `node:async_hooks` is an import-only module too, at Node's own address. It exports `AsyncLocalStorage` and `AsyncResource`, named and on the default export; the `async_hooks` observer API (`createHook`, `executionAsyncId`, and the rest) is out of scope. The engine propagates the async context, so a store bound with `run` survives `await` and every promise-reaction continuation. See the [Async Context reference](docs/built-ins-async-context.md) and [ADR 0112](docs/adr/0112-native-async-local-storage.md).
 
@@ -247,7 +323,7 @@ Linux (x64 and arm64) and Windows (x64 and x86):
 curl -fsSL https://www.gocciascript.dev/install | sh
 
 # a pinned version
-curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.15.0 sh
+curl -fsSL https://www.gocciascript.dev/install | GOCCIA_VERSION=0.17.0 sh
 
 # macOS with Homebrew
 brew install frostney/tap/gocciascript
@@ -342,7 +418,7 @@ Use one fixed JavaScript-visible clock, UTC time zone, and portable random strea
 
 Timeouts and profiling still use the real monotonic clock. The equivalent config key is `"deterministic": true`; embedders can inject their own clock and RNG providers through the engine host environment.
 
-For repeatable profile counts across a file or directory, use `--profile-deterministic --profile-output=counts.json`; timing fields are zero. See [Profiling](docs/profiling.md#directories-and-deterministic-captures).
+For repeatable profile counts across a file or directory, use `--profile-deterministic --profile-output=counts.json`; timing fields are zero. See [Profiling](docs/profiling.md#directories-and-deterministic-captures). `--profile=compile` reports lex, parse and compile time and the compiler's work per source function, before execution ([Profiling — Compile Profile](docs/profiling.md#compile-profile---profilecompile)).
 
 For custom providers, pass a JavaScript module to `--host-environment` or implement the Pascal host interfaces. See [Host Environment](docs/host-environment.md) for both examples and the provider contract.
 
@@ -354,7 +430,7 @@ For custom providers, pass a JavaScript module to `--host-environment` or implem
 
 ### Run Tests
 
-GocciaScript has 15,000+ JavaScript end-to-end tests across 1,800+ test files, covering language features, built-in objects, and edge cases.
+GocciaScript has 17,000+ JavaScript end-to-end tests, covering language features, built-in objects, and edge cases.
 
 Some test directories request permissions in their configs, so accept them for
 the run with `-P` (or trust the suite once per checkout with
@@ -382,7 +458,7 @@ See [Testing](docs/testing.md) for test organization and [Build System](docs/bui
 ./build/GocciaBenchmarkRunner benchmarks/fibonacci.js
 ```
 
-The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/execute). Output formats: `console` (default), `text`, `csv`, `json`, `compact-json` (the same envelope as `json` without `build`, `memory`, `stdout`, or `stderr`). Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters). Retained AWFY and JetStream reference measurements are published through the [Performance Barometer](https://gocciascript.dev/performance).
+The benchmark runner auto-calibrates iterations per benchmark, reports ops/sec with variance (CV%) and engine-level timing breakdown (lex/parse/compile/execute). Output formats: `console` (default), `text`, `csv`, `json`, `compact-json` (the same envelope as `json` without `build`, `memory`, `stdout`, or `stderr`). Calibration and measurement parameters are configurable via [environment variables](docs/benchmarks.md#configuring-benchmark-parameters). Retained AWFY and JetStream reference measurements are published through the [Performance Barometer](https://gocciascript.dev/performance).
 
 ## Recommended-profile quick tour
 
@@ -464,11 +540,7 @@ as the FreePascal build. Delphi 12 Community Edition contributors validate that
 contract through the IDE; see [Delphi Validation](docs/contributing/delphi.md)
 and [Build System](docs/build-system.md#prerequisites).
 
-Native hosts can embed GocciaScript to run portable JavaScript with
-application-specific globals, modules, capabilities, and limits. A host can
-answer `fetch` through its own [transport](docs/embedding.md#fetch-transport),
-mark sandbox paths read-only, and snapshot a paused run's heap to restore it in
-a fresh engine ([Heap Snapshots](docs/heap-snapshots.md)). See
+Embedding is covered under [Embed it](#embed-it) and in
 [Embedding the Engine](docs/embedding.md).
 
 ## Architecture
@@ -499,14 +571,14 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 
 | Document | Description |
 |----------|-------------|
-| [Vision](VISION.md) | Why GocciaScript exists: sandboxed AI agent runtime and embeddable desktop platform |
+| [Vision](VISION.md) | Why GocciaScript exists: an ECMAScript engine for embedding, its conformance and performance goals, and the AI-agent sandbox as a reference host |
 | [Tutorial](docs/tutorial.md) | Your first GocciaScript program — a guided walkthrough for newcomers |
 | [Language](docs/language.md) | ECMAScript support, recommended defaults, compatibility flags, and rationale |
 | [Language Tables](docs/language-tables.md) | Quick-reference: ECMAScript feature matrix and TC39 proposal status |
 | [Type Annotations](docs/type-annotations.md) | TypeScript-compatible type syntax, `--strict-types`, and the `<` disambiguation rules |
 | [Built-in Objects](docs/built-ins.md) | Available built-ins and API reference |
 | [FFI Built-ins](docs/built-ins-ffi.md) | Native libraries, aggregate types, callbacks, lifetimes, and safety limits |
-| [AST Built-ins](docs/built-ins-ast.md) | The experimental `goccia:ast` module: statement and expression views, ranges, and comments |
+| [AST Built-ins](docs/built-ins-ast.md) | The experimental `goccia:ast` module: statement and expression views, type syntax, ranges, tokens, and comments |
 | [Temporal Built-ins](docs/built-ins-temporal.md) | Temporal API: dates, times, durations, time zones |
 | [Binary Data Built-ins](docs/built-ins-binary-data.md) | ArrayBuffer, SharedArrayBuffer, TypedArray API |
 | [Sandbox Search Built-ins](docs/built-ins-sandbox-search.md) | `fs.globSync`, and `grep` and `fuzzyFind` from `goccia:search`, with their shared test vectors |
@@ -532,7 +604,7 @@ See [Core patterns](docs/core-patterns.md) and [Architecture](docs/architecture.
 | [Test Framework API](docs/testing-api.md) | Assertions, mocks, lifecycle hooks, async patterns |
 | [Benchmarks](docs/benchmarks.md) | Benchmark runner, output formats, writing benchmarks |
 | [Build System](docs/build-system.md) | Build commands, compiler configuration, CI/CD |
-| [Profiling](docs/profiling.md) | Bytecode VM profiling: opcodes, functions, output formats |
+| [Profiling](docs/profiling.md) | Bytecode VM profiling: opcodes, functions, the compile profile, output formats |
 | [Architecture Decision Records](docs/adr/) | Durable architectural decisions and trade-offs |
 | [Contributing](CONTRIBUTING.md) | Single contribution standard: workflow, mandatory rules, testing, FreePascal style |
 | [AGENTS.md](AGENTS.md) | Agent operating manual for coding assistants; [CONTRIBUTING.md](CONTRIBUTING.md) is the contributing guide for everyone |

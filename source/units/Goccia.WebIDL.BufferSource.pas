@@ -28,6 +28,15 @@ function IsFixedLengthArrayBuffer(const ABuffer: TGocciaValue): Boolean;
 procedure ConvertToAllowSharedBufferSource(const AValue: TGocciaValue;
   const AContext, ASuggestion: string);
 
+{ Converts AValue to the IDL BufferSource union (ArrayBuffer or
+  ArrayBufferView), without [AllowShared]: throws a TypeError, naming
+  AContext, when AValue is none of these, is or views a SharedArrayBuffer,
+  or is backed by a buffer that is not fixed-length. (In a union with a
+  string member, as BlobPart is, a SharedArrayBuffer itself matches no
+  member and converts as the string instead; only its views reach here.) }
+procedure ConvertToBufferSource(const AValue: TGocciaValue;
+  const AContext, ASuggestion: string);
+
 { Converts AValue to the IDL type [AllowShared] Uint8Array. Throws a
   TypeError, naming AContext, when AValue is not a Uint8Array or its buffer
   is not fixed-length. }
@@ -37,6 +46,16 @@ function ConvertToAllowSharedUint8Array(const AValue: TGocciaValue;
 { Web IDL §3.2.26 "get a copy of the bytes held by the buffer source", for a
   value ConvertToAllowSharedBufferSource accepted. }
 function GetCopyOfBytesHeldByBufferSource(const ASource: TGocciaValue): TBytes;
+
+{ How many bytes GetCopyOfBytesHeldByBufferSource would return for ASource,
+  without copying them. }
+function ByteLengthHeldByBufferSource(const ASource: TGocciaValue): Integer;
+
+{ Copies the bytes GetCopyOfBytesHeldByBufferSource would return into ADest
+  at AOffset, which has room for ByteLengthHeldByBufferSource(ASource), and
+  returns how many it copied. }
+function CopyBytesHeldByBufferSource(const ASource: TGocciaValue;
+  const ADest: TBytes; const AOffset: SizeInt): Integer;
 
 implementation
 
@@ -105,6 +124,32 @@ begin
     ThrowTypeError(Format(SErrorBufferSourceType, [AContext]), ASuggestion);
 end;
 
+// Web IDL §3.2.25 Union types, for BufferSource; each member's conversion is
+// §3.2.26's, whose step 2 throws for a shared buffer without [AllowShared].
+procedure ConvertToBufferSource(const AValue: TGocciaValue;
+  const AContext, ASuggestion: string);
+var
+  Buffer: TGocciaValue;
+begin
+  if (AValue is TGocciaArrayBufferValue) or
+     (AValue is TGocciaSharedArrayBufferValue) then
+    Buffer := AValue
+  else if (AValue is TGocciaTypedArrayValue) or
+          (AValue is TGocciaDataViewValue) then
+    Buffer := ViewedArrayBuffer(AValue)
+  else
+  begin
+    ThrowTypeError(Format(SErrorBufferSourceNonSharedType, [AContext]),
+      ASuggestion);
+    Exit;
+  end;
+  if Buffer is TGocciaSharedArrayBufferValue then
+    ThrowTypeError(Format(SErrorBufferSourceShared, [AContext]),
+      SSuggestBufferSourceShared);
+  if not IsFixedLengthArrayBuffer(Buffer) then
+    ThrowNotFixedLength(AContext);
+end;
+
 // Web IDL §3.2.26 converting a JavaScript value to an IDL Uint8Array, with
 // [AllowShared]
 function ConvertToAllowSharedUint8Array(const AValue: TGocciaValue;
@@ -151,56 +196,94 @@ begin
     TGocciaArrayBufferValue(ABuffer).Detached;
 end;
 
-// Web IDL §3.2.26 get a copy of the bytes held by the buffer source
-function GetCopyOfBytesHeldByBufferSource(const ASource: TGocciaValue): TBytes;
+{ Web IDL §3.2.26 get a copy of the bytes held by the buffer source, steps
+  2-9 without the copy: the data block and the range of it ASource holds, or
+  False when it holds no bytes (a detached buffer, an empty range). }
+function ResolveHeldBytes(const ASource: TGocciaValue; out AData: TBytes;
+  out AOffset, AByteLength: Integer): Boolean;
 var
   ArrayBuffer: TGocciaValue;
-  Data: TBytes;
-  Offset, ByteLength: Integer;
   View: TGocciaTypedArrayValue;
   DataView: TGocciaDataViewValue;
 begin
-  Result := nil;
+  Result := False;
+  AData := nil;
   // Steps 2-6: the viewed buffer, offset and [[ByteLength]] of a view, or
   // the whole buffer.
   if ASource is TGocciaTypedArrayValue then
   begin
     View := TGocciaTypedArrayValue(ASource);
     ArrayBuffer := View.BufferValue;
-    Offset := View.ByteOffset;
-    ByteLength := View.Length *
+    AOffset := View.ByteOffset;
+    AByteLength := View.Length *
       TGocciaTypedArrayValue.BytesPerElement(View.Kind);
   end
   else if ASource is TGocciaDataViewValue then
   begin
     DataView := TGocciaDataViewValue(ASource);
     ArrayBuffer := DataView.BufferValue;
-    Offset := DataView.ByteOffset;
+    AOffset := DataView.ByteOffset;
     // Only a view of a resizable buffer tracks its length, and the
     // conversion refused those.
-    ByteLength := DataView.ByteLengthSlot;
+    AByteLength := DataView.ByteLengthSlot;
   end
   else
   begin
     ArrayBuffer := ASource;
-    Offset := 0;
-    ByteLength := ArrayBufferByteLength(ASource);
+    AOffset := 0;
+    AByteLength := ArrayBufferByteLength(ASource);
   end;
 
   // Step 7: a detached buffer holds no bytes.
   if IsDetachedBuffer(ArrayBuffer) then
     Exit;
 
-  // Steps 8-9: copy [offset, offset + length). A fixed-length buffer never
-  // changes length while attached, so the range is in bounds; check anyway
-  // rather than read past the block.
-  Data := BufferData(ArrayBuffer);
-  if (ByteLength <= 0) or (Offset < 0) or
-     (Int64(Offset) + ByteLength > ArrayBufferByteLength(ArrayBuffer)) or
-     (Int64(Offset) + ByteLength > System.Length(Data)) then
+  // Steps 8-9: the range [offset, offset + length). A fixed-length buffer
+  // never changes length while attached, so the range is in bounds; check
+  // anyway rather than read past the block.
+  AData := BufferData(ArrayBuffer);
+  if (AByteLength <= 0) or (AOffset < 0) or
+     (Int64(AOffset) + AByteLength > ArrayBufferByteLength(ArrayBuffer)) or
+     (Int64(AOffset) + AByteLength > System.Length(AData)) then
+    Exit;
+  Result := True;
+end;
+
+// Web IDL §3.2.26 get a copy of the bytes held by the buffer source
+function GetCopyOfBytesHeldByBufferSource(const ASource: TGocciaValue): TBytes;
+var
+  Data: TBytes;
+  Offset, ByteLength: Integer;
+begin
+  Result := nil;
+  if not ResolveHeldBytes(ASource, Data, Offset, ByteLength) then
     Exit;
   SetLength(Result, ByteLength);
   Move(Data[Offset], Result[0], ByteLength);
+end;
+
+function ByteLengthHeldByBufferSource(const ASource: TGocciaValue): Integer;
+var
+  Data: TBytes;
+  Offset, ByteLength: Integer;
+begin
+  if ResolveHeldBytes(ASource, Data, Offset, ByteLength) then
+    Result := ByteLength
+  else
+    Result := 0;
+end;
+
+function CopyBytesHeldByBufferSource(const ASource: TGocciaValue;
+  const ADest: TBytes; const AOffset: SizeInt): Integer;
+var
+  Data: TBytes;
+  Offset, ByteLength: Integer;
+begin
+  Result := 0;
+  if not ResolveHeldBytes(ASource, Data, Offset, ByteLength) then
+    Exit;
+  Move(Data[Offset], ADest[AOffset], ByteLength);
+  Result := ByteLength;
 end;
 
 end.

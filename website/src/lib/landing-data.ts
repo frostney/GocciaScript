@@ -209,7 +209,7 @@ export const PROFILE_DISABLED_FEATURES: ProfileDisabledFeature[] = [
     name: "eval",
     implemented: true,
     defaultProfile: "Not installed",
-    enablement: "private GocciaTest262Runner conformance host",
+    enablement: "engine option EnableEval only (no CLI flag)",
     standardsSource: "ECMA-262 core",
     why: "normal hosts do not expose dynamic source evaluation",
   },
@@ -241,13 +241,13 @@ export const FEATURES: { icon: FeatureIcon; title: string; body: string }[] = [
   },
   {
     icon: "shield",
-    title: "Sandbox-first",
-    body: "AI-agent execution with copied-in VFS snapshots, explicit modules and capabilities, structured results, and host-owned limits.",
+    title: "Made for embedding",
+    body: "A host chooses the runtime surface, grants capabilities explicitly, and sets execution limits. GocciaRunner's sandbox mode, with copied-in VFS snapshots and structured results, is a reference host for AI-agent code.",
   },
   {
     icon: "leaf",
     title: "Explicit over clever",
-    body: "Strict equality and explicit imports by default; compatibility flags are reserved for conformance and legacy semantics.",
+    body: "Strict equality and explicit imports by default; compatibility flags are supported customization that turns on implemented forms the recommended profile leaves out.",
   },
   {
     icon: "clock",

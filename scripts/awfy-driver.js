@@ -6,12 +6,27 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const crossEngine = require('./cross-engine-report.js');
 
-const DRIVER_VERSION = 1;
+// Version 2 times AWFY warm (ADR 0178): each process runs warm-up iterations
+// and then measured iterations of the benchmark, and engines alternate their
+// order from one repetition to the next. Version 1 timed one cold iteration per
+// process with Goccia first in every repetition.
+const DRIVER_VERSION = 2;
 const RESULT_MARKER = 'GOCCIA_AWFY_RESULT ';
 const DEFAULT_MANIFEST = path.join('perf', 'awfy', 'manifest.json');
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_REPETITIONS = 3;
 const DEFAULT_INNER_ITERATIONS = 1;
+// Without a manifest protocol or an option, a target runs one cold iteration.
+const DEFAULT_WARMUP_ITERATIONS = 0;
+const DEFAULT_MEASURED_ITERATIONS = 1;
+// A bundle's portable output line: console.log where the shell has it, the
+// JavaScriptCore shell's print otherwise.
+const PORTABLE_OUTPUT_SHIM = 'const __awfyLog = typeof console !== "undefined" && console && typeof console.log === "function" ? (text) => console.log(text) : (text) => print(text);';
+// Microseconds. The JavaScriptCore shell coarsens performance.now() to 20
+// microseconds, so its own preciseTime() (seconds) is read where it exists.
+// preciseTime() is wall-clock time, not monotonic: a clock step during a
+// window spoils that one sample, which the median over repetitions absorbs.
+const PORTABLE_CLOCK = '(typeof preciseTime === "function" ? preciseTime() * 1000000 : typeof performance !== "undefined" && performance.now ? performance.now() * 1000 : Date.now() * 1000)';
 
 function usage() {
   return [
@@ -25,18 +40,25 @@ function usage() {
     'Inputs and engines:',
     '  --awfy-dir <path>             Path to are-we-fast-yet/benchmarks/JavaScript',
     '  --manifest <path>             Manifest path (default: perf/awfy/manifest.json)',
-    '  --engines <csv>               Engine order (default: goccia,qjs,node)',
+    '  --engines <csv>               Engines and their order (default: goccia,qjs,node,node-jitless);',
+    '                                kinds: goccia, qjs, node, node-jitless, jsc',
     '  --goccia <path>               GocciaRunner path (default: build/GocciaRunner)',
     '  --goccia-baseline <path>      Optional baseline Goccia binary, interleaved as goccia-baseline',
     '  --goccia-candidate <path>     Optional candidate Goccia binary, interleaved as goccia-candidate',
     '  --qjs <path>                  QuickJS shell path (default: qjs)',
-    '  --node <path>                 Node.js path (default: current node)',
+    '  --node <path>                 Node.js path for node and node-jitless (default: current node)',
+    '  --jsc <path>                  JavaScriptCore shell path for jsc, run with --useJIT=false (default: jsc)',
     '  --goccia-flag <flag>          Extra Goccia flag; repeatable',
     '',
     'Measurement:',
-    '  --repetitions <n>             Raw samples per engine/target (default: 3)',
-    '  --warmup <n>                  Unrecorded repetitions before them (default: 0)',
-    '  --inner-iterations <n>        Override target inner iterations',
+    '  --repetitions <n>             Raw samples (processes) per engine/target (default: 3)',
+    '  --warmup <n>                  Unrecorded whole-process repetitions before them (default: 0)',
+    '  --inner-iterations <n>        Override the inner iterations of one timed iteration',
+    '  --warmup-iterations <n>       Override the untimed iterations each process runs first',
+    '  --measured-iterations <n>     Override the timed iterations each process averages',
+    '                                (defaults for all three: the manifest\'s warm protocol, else 1/0/1)',
+    '  --engine-order <mode>         alternate (default): reverse the engine order on every other',
+    '                                repetition; fixed: the --engines order in every repetition',
     '  --timeout-ms <n>              Per-sample process timeout (default: 120000)',
     '  --profile <mode>              Add Goccia --profile=opcodes|functions|all for diagnostic runs',
     '  --profile-dir <path>          Directory for Goccia profile outputs',
@@ -49,7 +71,7 @@ function usage() {
     '  --cpu <n>                     Pin every sample to CPU n with taskset (Linux)',
     '  --fresh-copies                Run each repetition from a fresh copy of each Goccia binary,',
     '                                so that its pages land somewhere new in memory',
-    '  --alternate-order             Reverse the engine order on every other repetition',
+    '  --alternate-order             Same as --engine-order alternate',
   ].join('\n');
 }
 
@@ -65,9 +87,12 @@ function parseArgs(argv) {
     gocciaCandidate: '',
     qjs: 'qjs',
     node: process.execPath,
+    jsc: 'jsc',
     gocciaFlags: [],
     repetitions: DEFAULT_REPETITIONS,
     innerIterations: null,
+    warmupIterations: null,
+    measuredIterations: null,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     output: '',
     profile: '',
@@ -77,7 +102,7 @@ function parseArgs(argv) {
     counters: false,
     cpu: null,
     freshCopies: false,
-    alternateOrder: false,
+    engineOrder: crossEngine.DEFAULT_ENGINE_ORDER,
     warmup: 0,
   };
 
@@ -101,7 +126,15 @@ function parseArgs(argv) {
     } else if (arg === '--fresh-copies') {
       options.freshCopies = true;
     } else if (arg === '--alternate-order') {
-      options.alternateOrder = true;
+      options.engineOrder = 'alternate';
+    } else if (arg === '--engine-order' || arg.startsWith('--engine-order=')) {
+      options.engineOrder = crossEngine.parseEngineOrder(nextValue());
+    } else if (arg === '--warmup-iterations' || arg.startsWith('--warmup-iterations=')) {
+      options.warmupIterations = parseNonNegativeInteger(nextValue(), '--warmup-iterations');
+    } else if (arg === '--measured-iterations' || arg.startsWith('--measured-iterations=')) {
+      options.measuredIterations = parsePositiveInteger(nextValue(), '--measured-iterations');
+    } else if (arg === '--jsc' || arg.startsWith('--jsc=')) {
+      options.jsc = nextValue();
     } else if (arg === '--cpu' || arg.startsWith('--cpu=')) {
       options.cpu = parseNonNegativeInteger(nextValue(), '--cpu');
     } else if (arg === '--warmup' || arg.startsWith('--warmup=')) {
@@ -208,14 +241,67 @@ function collectAwfyModules(awfyDir, entryId) {
   return modules;
 }
 
-function buildAwfyBundle({ awfyDir, benchmarkName, moduleName, innerIterations }) {
+// The warm timing loop of a bundle (ADR 0178). One instance runs
+// `warmupIterations` iterations, each timed on its own, and then
+// `measuredIterations` iterations timed as one window. The headline
+// durationMicros is the window divided by its iteration count: the window has
+// two clock reads however many iterations it holds, so a short iteration adds
+// no timer cost and still adds up to a window well above the timer's
+// resolution. The first warm-up iteration is the cold figure. Verification
+// runs on every iteration, inside the timing as in upstream AWFY's harness, and
+// the first failure stops the loop.
+// `runStatement` is timed. `verifyStatement`, when given, checks a result
+// outside the timed spans: after each warm-up iteration and after the measured
+// window, on the window's last result.
+function warmLoopSource({ configName, nowName, runStatement, verifyStatement = '' }) {
+  return [
+    'const __warmupMicros = [];',
+    'let __passed = true;',
+    'let __checksum = null;',
+    `for (let __iteration = 0; __passed && __iteration < ${configName}.warmupIterations; __iteration += 1) {`,
+    `  const __iterationStarted = ${nowName}();`,
+    `  ${runStatement}`,
+    `  __warmupMicros.push(${nowName}() - __iterationStarted);`,
+    `  ${verifyStatement}`,
+    '}',
+    'let __measuredTotalMicros = null;',
+    'if (__passed) {',
+    `  const __windowStarted = ${nowName}();`,
+    `  for (let __iteration = 0; __passed && __iteration < ${configName}.measuredIterations; __iteration += 1) {`,
+    `    ${runStatement}`,
+    '  }',
+    `  __measuredTotalMicros = ${nowName}() - __windowStarted;`,
+    `  ${verifyStatement}`,
+    '}',
+    'const __verificationPassed = __passed;',
+    `const __durationMicros = __passed ? __measuredTotalMicros / ${configName}.measuredIterations : null;`,
+    `const __firstIterationMicros = __warmupMicros.length > 0 ? __warmupMicros[0] : (__passed && ${configName}.measuredIterations === 1 ? __measuredTotalMicros : null);`,
+  ].join('\n');
+}
+
+function warmResultFields(configName) {
+  return 'durationMicros: __durationMicros, firstIterationMicros: __firstIterationMicros, ' +
+    'measuredTotalMicros: __measuredTotalMicros, warmupMicros: __warmupMicros, ' +
+    `innerIterations: ${configName}.innerIterations, warmupIterations: ${configName}.warmupIterations, ` +
+    `measuredIterations: ${configName}.measuredIterations`;
+}
+
+function buildAwfyBundle({
+  awfyDir,
+  benchmarkName,
+  moduleName,
+  innerIterations,
+  warmupIterations = DEFAULT_WARMUP_ITERATIONS,
+  measuredIterations = DEFAULT_MEASURED_ITERATIONS,
+}) {
   const entryId = normalizeModuleId(moduleName);
   const modules = collectAwfyModules(awfyDir, entryId);
   const chunks = [
     '"use strict";',
-    `const __awfyConfig = ${JSON.stringify({ benchmarkName, innerIterations })};`,
-    'const __awfyNowMicros = () => (typeof performance !== "undefined" && performance.now ? performance.now() * 1000 : Date.now() * 1000);',
-    'const process = { stdout: { write: (value) => { const text = String(value); if (text.length > 0) { const lines = text.split("\\n"); for (let i = 0; i < lines.length; i += 1) { if (lines[i].length > 0) console.log(lines[i]); } } } } };',
+    `const __awfyConfig = ${JSON.stringify({ benchmarkName, innerIterations, warmupIterations, measuredIterations })};`,
+    `const __awfyNowMicros = () => ${PORTABLE_CLOCK};`,
+    PORTABLE_OUTPUT_SHIM,
+    'const process = { stdout: { write: (value) => { const text = String(value); if (text.length > 0) { const lines = text.split("\\n"); for (let i = 0; i < lines.length; i += 1) { if (lines[i].length > 0) __awfyLog(lines[i]); } } } } };',
     'const __modules = Object.create(null);',
     'const __cache = Object.create(null);',
     'const __define = (id, factory) => { __modules[id] = factory; };',
@@ -229,33 +315,43 @@ function buildAwfyBundle({ awfyDir, benchmarkName, moduleName, innerIterations }
   chunks.push([
     `const __suite = __awfyRequire(${JSON.stringify(entryId)});`,
     'const __bench = __suite.newInstance();',
-    'const __started = __awfyNowMicros();',
-    'const __verificationPassed = __bench.innerBenchmarkLoop(__awfyConfig.innerIterations) === true;',
-    'const __durationMicros = __awfyNowMicros() - __started;',
-    'const __result = { kind: "awfy", name: __awfyConfig.benchmarkName, durationMicros: __durationMicros, checksum: __verificationPassed ? "verified" : "failed", verificationPassed: __verificationPassed, innerIterations: __awfyConfig.innerIterations };',
-    `console.log(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(__result));`,
+    warmLoopSource({
+      configName: '__awfyConfig',
+      nowName: '__awfyNowMicros',
+      runStatement: '__passed = __bench.innerBenchmarkLoop(__awfyConfig.innerIterations) === true;',
+    }),
+    `const __result = { kind: "awfy", name: __awfyConfig.benchmarkName, ${warmResultFields('__awfyConfig')}, checksum: __verificationPassed ? "verified" : "failed", verificationPassed: __verificationPassed };`,
+    `__awfyLog(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(__result));`,
     'if (!__verificationPassed) throw new Error("AWFY verification failed for " + __awfyConfig.benchmarkName);',
   ].join('\n'));
 
   return `${chunks.join('\n\n')}\n`;
 }
 
-function buildProbeBundle({ probe, innerIterations }) {
+function buildProbeBundle({
+  probe,
+  innerIterations,
+  warmupIterations = DEFAULT_WARMUP_ITERATIONS,
+  measuredIterations = DEFAULT_MEASURED_ITERATIONS,
+}) {
   const source = fs.readFileSync(probe.file, 'utf8');
   return [
     '"use strict";',
-    `const __probeConfig = ${JSON.stringify({ name: probe.name, innerIterations })};`,
-    'const __probeNowMicros = () => (typeof performance !== "undefined" && performance.now ? performance.now() * 1000 : Date.now() * 1000);',
+    `const __probeConfig = ${JSON.stringify({ name: probe.name, innerIterations, warmupIterations, measuredIterations })};`,
+    `const __probeNowMicros = () => ${PORTABLE_CLOCK};`,
+    PORTABLE_OUTPUT_SHIM,
     'let __probe = null;',
     'const __gocciaRegisterProbe = (probe) => { __probe = probe; };',
     source,
     'if (__probe === null) throw new Error("Probe did not register itself: " + __probeConfig.name);',
-    'const __started = __probeNowMicros();',
-    'const __checksum = __probe.run(__probeConfig.innerIterations);',
-    'const __durationMicros = __probeNowMicros() - __started;',
-    'const __verificationPassed = __probe.verify ? (__probe.verify(__checksum, __probeConfig.innerIterations) === true) : true;',
-    'const __result = { kind: "probe", name: __probeConfig.name, durationMicros: __durationMicros, checksum: String(__checksum), verificationPassed: __verificationPassed, innerIterations: __probeConfig.innerIterations };',
-    `console.log(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(__result));`,
+    warmLoopSource({
+      configName: '__probeConfig',
+      nowName: '__probeNowMicros',
+      runStatement: '__checksum = __probe.run(__probeConfig.innerIterations);',
+      verifyStatement: '__passed = __probe.verify ? (__probe.verify(__checksum, __probeConfig.innerIterations) === true) : true;',
+    }),
+    `const __result = { kind: "probe", name: __probeConfig.name, ${warmResultFields('__probeConfig')}, checksum: String(__checksum), verificationPassed: __verificationPassed };`,
+    `__awfyLog(${JSON.stringify(RESULT_MARKER)} + JSON.stringify(__result));`,
     'if (!__verificationPassed) throw new Error("Probe verification failed for " + __probeConfig.name);',
     '',
   ].join('\n');
@@ -267,9 +363,35 @@ function writeBundle(tempDir, target, source) {
   return fileName;
 }
 
+// A target's iteration counts. An option overrides a `Name:inner` suffix,
+// which overrides the manifest's warm protocol for the benchmark (or a probe's
+// default inner count), which overrides one cold iteration.
+function iterationCounts(options, parsed, protocol) {
+  const pick = (optionValue, ...fallbacks) => {
+    if (optionValue !== null && optionValue !== undefined) return optionValue;
+    return fallbacks.find((value) => value !== null && value !== undefined);
+  };
+  return {
+    innerIterations: pick(options.innerIterations, parsed.innerIterations, protocol.innerIterations, DEFAULT_INNER_ITERATIONS),
+    warmupIterations: pick(options.warmupIterations, protocol.warmupIterations, DEFAULT_WARMUP_ITERATIONS),
+    measuredIterations: pick(options.measuredIterations, protocol.measuredIterations, DEFAULT_MEASURED_ITERATIONS),
+  };
+}
+
+function validateProtocolEntry(name, entry) {
+  for (const [field, minimum] of [['innerIterations', 1], ['warmupIterations', 0], ['measuredIterations', 1]]) {
+    if (entry[field] === undefined) continue;
+    if (!Number.isSafeInteger(entry[field]) || entry[field] < minimum) {
+      throw new Error(`Manifest warmProtocol ${name}.${field} must be an integer >= ${minimum}, got ${JSON.stringify(entry[field])}`);
+    }
+  }
+  return entry;
+}
+
 function resolveTargets(options, manifest) {
   const targets = [];
   const benchmarkMap = manifest.awfy?.benchmarks || {};
+  const warmProtocol = manifest.warmProtocol || {};
   const probes = new Map((manifest.diagnosticProbes || []).map((probe) => [probe.name, probe]));
 
   for (const benchmarkSpec of options.benchmarks) {
@@ -278,11 +400,12 @@ function resolveTargets(options, manifest) {
     const moduleName = benchmarkMap[benchmarkName];
     if (!moduleName) throw new Error(`Unknown AWFY benchmark: ${benchmarkName}`);
     if (!options.awfyDir) throw new Error('--awfy-dir is required when --benchmark is used');
+    const protocol = validateProtocolEntry(benchmarkName, warmProtocol[benchmarkName] || {});
     targets.push({
       kind: 'awfy',
       name: benchmarkName,
       moduleName,
-      innerIterations: options.innerIterations || parsed.innerIterations || DEFAULT_INNER_ITERATIONS,
+      ...iterationCounts(options, parsed, protocol),
       focusAreas: ['awfy'],
       tags: ['awfy'],
       source: `${options.awfyDir}/${moduleName}.js`,
@@ -298,7 +421,7 @@ function resolveTargets(options, manifest) {
       kind: 'probe',
       name: probe.name,
       probe,
-      innerIterations: options.innerIterations || parsed.innerIterations || probe.defaultInnerIterations || DEFAULT_INNER_ITERATIONS,
+      ...iterationCounts(options, parsed, { innerIterations: probe.defaultInnerIterations }),
       focusAreas: probe.focusAreas || [],
       tags: probe.tags || [],
       source: probe.file,
@@ -322,21 +445,37 @@ function engineAllowedForTarget(engine, target) {
   return crossEngine.engineAllowedForTarget(engine, target);
 }
 
-function runEngineSample({ engine, target, fileName, repetition, options }) {
+function runEngineSample({ engine, target, fileName, repetition, position = null, options }) {
   return crossEngine.runEngineSample({
     engine,
     target,
     fileName,
     repetition,
+    position,
     options,
     marker: RESULT_MARKER,
-    normalizeResult: (parsed) => ({
-      durationMicros: parsed?.durationMicros ?? null,
-      checksum: parsed?.checksum ?? null,
-      verificationPassed: parsed?.verificationPassed ?? false,
-      innerIterations: target.innerIterations,
-    }),
+    normalizeResult: (parsed) => normalizeAwfyResult(parsed, target),
   });
+}
+
+function roundMicros(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) / 1000 : null;
+}
+
+// A sample's timing fields: the steady-state headline, the measured window it
+// comes from, the cold first iteration and each warm-up iteration's time.
+function normalizeAwfyResult(parsed, target) {
+  return {
+    durationMicros: parsed?.durationMicros ?? null,
+    firstIterationMicros: parsed?.firstIterationMicros ?? null,
+    measuredTotalMicros: parsed?.measuredTotalMicros ?? null,
+    warmupMicros: Array.isArray(parsed?.warmupMicros) ? parsed.warmupMicros.map(roundMicros) : null,
+    checksum: parsed?.checksum ?? null,
+    verificationPassed: parsed?.verificationPassed ?? false,
+    innerIterations: target.innerIterations,
+    warmupIterations: target.warmupIterations,
+    measuredIterations: target.measuredIterations,
+  };
 }
 
 function parseResult(stdout) {
@@ -367,12 +506,21 @@ function checksumAgreement(samples) {
   return crossEngine.checksumAgreement(samples);
 }
 
+// The headline summary is of the steady-state time. Each engine's stats also
+// carry the median cold first iteration, which no ratio uses.
 function buildTargetSummary(samples) {
-  return crossEngine.buildMetricTargetSummary(samples, {
+  const summary = crossEngine.buildMetricTargetSummary(samples, {
     field: 'durationMicros',
     outputPrefix: 'Micros',
     ratioDirection: 'lower-is-better',
   });
+  for (const [engine, stats] of Object.entries(summary.engineStats)) {
+    const firstIterations = samples
+      .filter((sample) => sample.engine === engine && sample.outcome === 'ok' && typeof sample.firstIterationMicros === 'number')
+      .map((sample) => sample.firstIterationMicros);
+    stats.medianFirstIterationMicros = median(firstIterations);
+  }
+  return summary;
 }
 
 function buildGeomeanRatios(targetReports) {
@@ -419,6 +567,11 @@ function collectMetadata(options, manifest, engines) {
       buildMode: 'external-binary',
       fpcVersion: commandText('fpc', ['-iV']),
     },
+    protocol: {
+      timing: 'warm',
+      headline: 'mean of the measured iterations per process; median over processes',
+      engineOrder: options.engineOrder,
+    },
     platform: {
       os: os.platform(),
       release: os.release(),
@@ -446,7 +599,8 @@ function collectMetadata(options, manifest, engines) {
       warmup: options.warmup,
       cpu: options.cpu,
       freshCopies: options.freshCopies,
-      alternateOrder: options.alternateOrder,
+      engineOrder: options.engineOrder,
+      engineOrderBase: engines.map((engine) => engine.name),
       timeoutMs: options.timeoutMs,
       profile: options.profile || null,
       profileDir: options.profileDir || null,
@@ -461,15 +615,7 @@ function commandText(command, args) {
 }
 
 function engineVersion(engine) {
-  if (engine.kind === 'node') return commandText(engine.command, ['--version']);
-  if (engine.kind === 'qjs') {
-    const proc = spawnSync(engine.command, ['-h'], { encoding: 'utf8' });
-    const output = `${proc.stdout || ''}${proc.stderr || ''}`.split(/\r?\n/)[0];
-    return output.trim();
-  }
-  const proc = spawnSync(engine.command, ['--version'], { encoding: 'utf8' });
-  if (proc.status === 0) return (proc.stdout || proc.stderr || '').trim();
-  return '';
+  return crossEngine.engineVersion(engine);
 }
 
 function listTargets(manifest) {
@@ -518,27 +664,40 @@ function main(argv = process.argv.slice(2)) {
           benchmarkName: target.name,
           moduleName: target.moduleName,
           innerIterations: target.innerIterations,
+          warmupIterations: target.warmupIterations,
+          measuredIterations: target.measuredIterations,
         })
         : buildProbeBundle({
           probe: target.probe,
           innerIterations: target.innerIterations,
+          warmupIterations: target.warmupIterations,
+          measuredIterations: target.measuredIterations,
         });
       const bundleFile = writeBundle(tempDir, target, bundle);
       const samples = [];
+      const executionOrder = [];
 
       const total = options.warmup + options.repetitions;
       for (let round = 0; round < total; round += 1) {
         const warmup = round < options.warmup;
         const repetition = round - options.warmup;
         if (options.freshCopies) refreshBinaryCopies(engines, tempDir, round);
-        const order = options.alternateOrder && round % 2 === 1 ? [...engines].reverse() : engines;
-        for (const engine of order) {
-          if (!engineAllowedForTarget(engine, target)) continue;
+        // The order alternates over every round, warm-up rounds included, so
+        // that each round runs the reverse of the one before it. Each target's
+        // executionOrder records the recorded rounds' orders.
+        const order = crossEngine.engineOrderForRepetition(
+          engines.filter((engine) => engineAllowedForTarget(engine, target)),
+          round,
+          options.engineOrder,
+        );
+        if (!warmup) executionOrder.push(order.map((engine) => engine.name));
+        for (const [position, engine] of order.entries()) {
           const sample = runEngineSample({
             engine,
             target,
             fileName: bundleFile,
             repetition,
+            position,
             // A warm-up sample is not recorded, so it writes no profile.
             options: warmup ? { ...options, profile: '' } : options,
           });
@@ -557,6 +716,9 @@ function main(argv = process.argv.slice(2)) {
         focusAreas: target.focusAreas,
         tags: target.tags,
         innerIterations: target.innerIterations,
+        warmupIterations: target.warmupIterations,
+        measuredIterations: target.measuredIterations,
+        executionOrder,
         samples,
         summary: buildTargetSummary(samples),
       });
@@ -595,6 +757,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DRIVER_VERSION,
   RESULT_MARKER,
   buildAwfyBundle,
   buildGeomeanRatios,
@@ -606,9 +769,12 @@ module.exports = {
   expandGocciaEngines,
   iqrFiltered,
   median,
+  normalizeAwfyResult,
   parseArgs,
   parseResult,
+  resolveTargets,
   refreshBinaryCopies,
   releaseBinaryCopies,
   summarizeSamples,
+  buildTargetSummary,
 };

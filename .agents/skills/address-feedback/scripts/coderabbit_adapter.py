@@ -16,7 +16,9 @@ head commit, merged across the open pull requests whose head it is:
 - the requested pull request's trigger commands, and when the head last
   arrived on it (its first push, or no earlier than a later force push
   leaving or reaching it), it was opened, and it was last marked ready,
-  after which CodeRabbit starts its own review.
+  after which CodeRabbit starts its own review; and
+- CodeRabbit's replies declining a trigger on any of those pull requests
+  because it already reviewed the last commit.
 
 The latest review cycle wins: evidence, triggers and pending statuses from
 before the latest trigger or the requested pull request's latest push, open
@@ -26,7 +28,10 @@ after the head last reached the requested pull request's branch, after its
 latest trigger and after any newer review of the head still unfinished keeps
 it complete for every pull request on it, whatever pull request was opened
 or marked ready since and whatever status CodeRabbit posts on the commit
-later. A newer review is unfinished from its pending status until CodeRabbit
+later. A trigger CodeRabbit declines because it already reviewed the last
+commit starts no review: it supersedes nothing, and where no review of the
+head shows, the head is blocked rather than triggered again or given a full
+review. A newer review is unfinished from its pending status until CodeRabbit
 completes, pauses or skips it, in the order of time and status id; on a head
 other open pull requests share, a skip may answer one of them, so the
 pending status stays current. Every
@@ -129,7 +134,11 @@ REVIEW_FINDINGS = re.compile(
 # since then "<!-- coderabbit-ai-generated:v1 -->" and a blank line come first.
 # Its replies to commands open "<!-- This is an auto-generated reply by CodeRabbit -->".
 SUMMARY_MARKER = "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->"
+REPLY_MARKER = "<!-- This is an auto-generated reply by CodeRabbit -->"
 LEADING_COMMENT = re.compile(r"\s*(<!--.*?-->)", re.DOTALL)
+# CodeRabbit's reply to "@coderabbitai review" on a commit it has reviewed, which starts no review:
+# "Already reviewed the last commit. Use `@coderabbitai full review` to rerun a review of the entire changeset."
+ALREADY_REVIEWED = re.compile(r"^\s*Already reviewed the last commit\b", re.MULTILINE)
 
 # The summary comment marks the commit its latest review covered:
 # <!-- final_review_risk_coverage:{"sourceCommitId":..,"coveredCommitId":..,"kind":"reviewed"} -->
@@ -230,6 +239,7 @@ HEAD_STATES = frozenset(
         "skipped",
         "paused",
         "blocked-unanswered",
+        "blocked-already-reviewed",
         "blocked-stalled",
         "blocked-unknown-wait",
         "blocked-no-capacity",
@@ -256,6 +266,7 @@ BLOCKED_STATES = frozenset(
         "skipped",
         "paused",
         "blocked-unanswered",
+        "blocked-already-reviewed",
         "blocked-stalled",
         "blocked-unknown-wait",
         "blocked-no-capacity",
@@ -802,6 +813,30 @@ def head_triggers(comments: list[dict[str, Any]], arrival: float) -> list[dict[s
     return found
 
 
+def already_reviewed(item: dict[str, Any]) -> bool:
+    """Whether a comment is CodeRabbit's reply declining a trigger because it reviewed the last commit."""
+    body = str(item.get("body") or "")
+    return is_bot(item) and REPLY_MARKER in leading_comments(body) and bool(ALREADY_REVIEWED.search(body))
+
+
+def declined(comments: list[dict[str, Any]], triggers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`triggers`, oldest first, each with the reply that declined it, or None.
+
+    A reply answers the newest trigger before it that no earlier reply answered.
+    """
+    replies = sorted(
+        (parse_timestamp(item.get("created_at"), "reply created_at"), int(item.get("id") or 0), item["created_at"])
+        for item in comments
+        if already_reviewed(item)
+    )
+    found = [trigger | {"alreadyReviewed": None} for trigger in triggers]
+    for replied, identifier, created in replies:
+        unanswered = [trigger for trigger in found if trigger["at"] < replied and trigger["alreadyReviewed"] is None]
+        if unanswered:
+            unanswered[-1]["alreadyReviewed"] = {"commentId": identifier, "createdAt": created, "at": replied}
+    return found
+
+
 # --- Presence -------------------------------------------------------------------
 
 
@@ -915,12 +950,12 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
     numbers = [pr, *sharing_pulls(gh, repo, pr, head)]
     own = rest_items(gh, f"repos/{repo}/issues/{pr}/comments?per_page=100")
     comments: list[dict[str, Any]] = []
-    others: list[dict[str, Any]] = []
+    others: list[list[dict[str, Any]]] = []
     reviews: list[dict[str, Any]] = []
     for number in numbers:
         listed = own if number == pr else rest_items(gh, f"repos/{repo}/issues/{number}/comments?per_page=100")
         comments += listed
-        others += [] if number == pr else listed
+        others += [] if number == pr else [listed]
         reviews += rest_items(gh, f"repos/{repo}/pulls/{number}/reviews?per_page=100")
     arrival = head_arrival(gh, repo, pull, head, statuses, pr)
     automatic, automatic_source = automatic_review_start(
@@ -953,12 +988,16 @@ def pull_evidence(gh: Gh, repo: str, pr: int) -> dict[str, Any]:
         "status": status_summary(newest, author),
         "findingsReview": findings_review(reviews, head),
         "cleanReview": clean_review(bot_comments, covered),
-        "triggers": sorted(
+        "triggers": declined(own, sorted(
             head_triggers(own, arrival[0]), key=lambda trigger: (trigger["at"], int(trigger["id"] or 0))
-        ),
-        # Triggers on the other open pull requests of the head: CodeRabbit answers them on the commit.
+        )),
+        # Triggers on the other open pull requests of the head: CodeRabbit answers them on the commit,
+        # or declines them on their own pull request.
         "sharedTriggers": sorted(
-            head_triggers(others, arrival[0]), key=lambda trigger: (trigger["at"], int(trigger["id"] or 0))
+            (trigger for listed in others for trigger in declined(listed, sorted(
+                head_triggers(listed, arrival[0]), key=lambda trigger: (trigger["at"], int(trigger["id"] or 0))
+            ))),
+            key=lambda trigger: (trigger["at"], int(trigger["id"] or 0)),
         ),
         "statusHistory": [
             {"createdAt": status["created_at"], "kind": status_kind(status, author), "description": status.get("description")}
@@ -1015,7 +1054,10 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
             return held
         # A trigger on another open pull request of the head is answered on the commit: wait for it.
         answered_since = status_at if status_at is not None else start
-        shared = [trigger for trigger in evidence.get("sharedTriggers", []) if trigger["at"] >= answered_since]
+        shared = [
+            trigger for trigger in evidence.get("sharedTriggers", [])
+            if trigger["at"] >= answered_since and not trigger.get("alreadyReviewed")
+        ]
         if shared and now < shared[-1]["at"] + TRIGGER_ANSWER_SECONDS:
             bound = shared[-1]["at"] + TRIGGER_ANSWER_SECONDS
             return result(
@@ -1111,7 +1153,15 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
     # A newer push, open or ready event starts a new cycle: older triggers no longer
     # await an answer, and a pending status's bound counts from the new cycle.
     triggers = [trigger for trigger in evidence["triggers"] if trigger["at"] >= start]
-    latest = triggers[-1] if triggers else None
+    # A trigger CodeRabbit declined because it already reviewed the last commit started no review:
+    # it awaits no answer and supersedes no evidence. Declining one on any open pull request of the
+    # head, it speaks for the commit.
+    latest = next((trigger for trigger in reversed(triggers) if not trigger.get("alreadyReviewed")), None)
+    asks = sorted(
+        triggers + [trigger for trigger in evidence.get("sharedTriggers", []) if trigger["at"] >= start],
+        key=lambda trigger: trigger["at"],
+    )
+    declining = asks[-1] if asks and asks[-1].get("alreadyReviewed") else None
     # A trigger or an automatic start begins a new review; evidence from before it is superseded.
     begun = max(start, latest["at"]) if latest else start
     # No answer comes within a second of its trigger, so a status in that second predates it.
@@ -1122,7 +1172,7 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
     # completes, pauses or skips it; a lock loss or rate limit ends it unfinished, and on a shared
     # head a skip may answer another pull request.
     arrived = parse_timestamp(evidence["headArrival"]["at"], "head arrival")
-    asked = [trigger["at"] for trigger in evidence["triggers"]]
+    asked = [trigger["at"] for trigger in evidence["triggers"] if not trigger.get("alreadyReviewed")]
     # The history is in CodeRabbit's order, by time and then status id: what follows the pending
     # status in it came after it, whatever second each shows.
     ending = {"completed", "paused", "draft-skip", "bot-skip"} | (set() if evidence["sharedWith"] else {"skipped"})
@@ -1169,6 +1219,30 @@ def decide(evidence: dict[str, Any], expected_head: str, now: float) -> dict[str
     unreviewed = kind in {"none", "draft-skip"}
     if unreviewed and evidence["draft"]:
         return result("draft", "CodeRabbit does not review a draft pull request")
+    # CodeRabbit's reply is its newest answer unless a status followed it. Another trigger would be
+    # declined the same way, and a full review spends the allowance on a commit it reviewed.
+    reply = declining["alreadyReviewed"] if declining else None
+    if reply and (status_at is None or status_at < reply["at"]):
+        why = (
+            f"CodeRabbit declined the {declining['mode']} trigger posted at {declining['createdAt']} at "
+            f"{reply['createdAt']} because it already reviewed the last commit"
+        )
+        # The summary can mark the head covered a little after the completed status.
+        if kind == "completed" and now < status_at + AUTOMATIC_REVIEW_SECONDS:
+            bound = status_at + AUTOMATIC_REVIEW_SECONDS
+            return result(
+                "awaiting-automatic",
+                f"{why}; its summary may still mark the head covered after its completed status at "
+                f"{status['createdAt']}; blocked-already-reviewed at {format_timestamp(bound)}",
+                since=format_timestamp(status_at),
+                boundAt=format_timestamp(bound),
+            )
+        return result(
+            "blocked-already-reviewed",
+            f"{why}, but no findings review or clean coverage marker of the head counts since the head's "
+            "latest push or an undeclined trigger",
+            since=reply["createdAt"],
+        )
     if trigger_newer:
         return bounded(
             "triggered",
@@ -1239,6 +1313,9 @@ def public(evidence: dict[str, Any]) -> dict[str, Any]:
         value[key] = [
             {field: item[field] for field in ("id", "mode", "createdAt")} for item in evidence.get(key, [])
         ]
+        for shown, item in zip(value[key], evidence.get(key, [])):
+            if item.get("alreadyReviewed"):
+                shown["alreadyReviewed"] = {field: item["alreadyReviewed"][field] for field in ("commentId", "createdAt")}
     if evidence["rateLimit"] and evidence["rateLimit"]["wait"]:
         wait = evidence["rateLimit"]["wait"]
         value["rateLimit"] = evidence["rateLimit"] | {

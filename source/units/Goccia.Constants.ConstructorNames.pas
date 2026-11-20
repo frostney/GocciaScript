@@ -59,6 +59,7 @@ const
 
   CONSTRUCTOR_HEADERS  = 'Headers';
   CONSTRUCTOR_RESPONSE = 'Response';
+  CONSTRUCTOR_BLOB = 'Blob';
   CONSTRUCTOR_ABORT_CONTROLLER = 'AbortController';
   CONSTRUCTOR_ABORT_SIGNAL     = 'AbortSignal';
   CONSTRUCTOR_EVENT_TARGET     = 'EventTarget';

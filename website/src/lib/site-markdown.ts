@@ -39,8 +39,18 @@ import { SITE_DESCRIPTION } from "@/lib/site-url";
 import {
   latestTest262Summary,
   loadTest262DashboardData,
+  type Test262CategorySummary,
   type Test262DashboardData,
+  type Test262SuiteSummary,
+  test262RunIncludesAnnexB,
 } from "@/lib/test262-dashboard";
+import {
+  TEST262_MODE_LABELS,
+  TEST262_MODES,
+  type Test262ModeBreakdown,
+  test262ModeRate,
+  test262ModeRates,
+} from "@/lib/test262-modes";
 import { compatibilityPercent } from "@/lib/test262-percent";
 import { TOOL_CALL_FLOWS, TOOL_CALL_TASK } from "@/lib/tool-call-comparison";
 
@@ -167,7 +177,7 @@ export function renderHomeMarkdown(
 ): string {
   const summary = latestTest262Summary(compatibility);
   const conformanceFigure = summary
-    ? `The latest published run, Annex B excluded, has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} tests passing (${compatibilityPercent(summary.passed, summary.totalRun)}); see results `
+    ? `The latest published report${test262RunIncludesAnnexB(summary) ? "" : ", Annex B excluded,"} has ${compatibilityNumber(summary.passed)} of ${compatibilityNumber(summary.totalRun)} runs passing (${compatibilityPercent(summary.passed, summary.totalRun)}${modeClause(summary.byMode)}); see results `
     : "See results ";
   const heroExample = pickExample("coffee-typed");
 
@@ -186,7 +196,7 @@ export function renderHomeMarkdown(
     "",
     list([
       `**Conformance.** test262, the official ECMAScript conformance suite, runs on every pull request and on main, and a regression against main fails the pull request. ${conformanceFigure}[by area on the compatibility dashboard](/compatibility).`,
-      "**Tested on every change.** 15,000+ JavaScript tests in 1,800+ files run on every pull request on Linux x64 and on six targets on main, plus differential suites checked against Bun and Vitest.",
+      "**Tested on every change.** 17,000+ JavaScript tests run on every pull request on Linux x64 and on six targets on main, plus differential suites checked against Bun and Vitest.",
       `**Fuzzing and memory checks.** Every night, AFL++ fuzzes the engine and heap snapshot reader, and the full test suite runs under FreePascal's heap checker (heaptrc) and Valgrind memcheck; see the [nightly workflow](${GITHUB_REPO_URL}/actions/workflows/fuzz.yml). The [weekly GC-stress run](${GITHUB_REPO_URL}/actions/workflows/gc-stress.yml) collects garbage every 8 instructions across the whole test suite and the GC-sensitive part of test262.`,
       "**In production.** GocciaScript is the engine behind [Shotcup's hosted sandboxes](https://shotcup.dev), where every run gets a fresh engine with hard limits.",
       "**Prebuilt for six targets.** Every release and nightly provides binaries for macOS and Linux (x64 and arm64) and Windows (x64 and x86). [Install with the one-line installer or Homebrew on macOS](/installation).",
@@ -224,7 +234,7 @@ export function renderHomeMarkdown(
     "",
     "## Recommended language profile",
     "",
-    "The recommended profile is policy, not the implementation ceiling. Every standard core form it disables has an explicit compatibility path. Dynamic source exposure remains a separate host decision: normal hosts do not install `eval`, while `Function()` requires an explicit unsafe opt-in.",
+    "The recommended profile is policy, not the implementation ceiling. Every standard core form it disables has an explicit compatibility path. Dynamic source exposure remains a separate host decision: `eval` is installed only when an embedder opts in through the engine's `EnableEval` option, with no CLI flag or config key, while `Function()` requires an explicit unsafe opt-in.",
     "",
     "| Form | Implemented | Default profile | Enablement / exposure | Standards source |",
     "|------|-------------|-----------------|-----------------------|------------------|",
@@ -272,7 +282,7 @@ async function installationMarkdown(): Promise<string> {
     "",
     "# Installation",
     "",
-    "Pick the install method that fits your platform. The runtime is a single self-contained binary with no Node.js requirement.",
+    "Pick the install method that fits your platform. Each release ships native binaries with GocciaScript's own compiler, VM and garbage collector, and no Node.js or other runtime underneath.",
     "",
     releaseSummary(release),
     "",
@@ -304,7 +314,7 @@ async function installationMarkdown(): Promise<string> {
     "",
     "FreePascal is required.",
     "",
-    "Delphi 12 Community Edition is also supported for the complete shipped Win32 and Win64 application matrix. Open `source/app/GocciaScript.Delphi.groupproj` and follow the [build and validation guide](/docs/build-system).",
+    "Delphi 12 Community Edition is also supported for the Win32 and Win64 application matrix: the REPL, Runner, Bare Script Loader, Test Runner, Benchmark Runner and Bundler. Open `source/app/GocciaScript.Delphi.groupproj` and follow the [build and validation guide](/docs/build-system).",
     "",
     fence(
       [
@@ -330,6 +340,50 @@ function compatibilityNumber(value: number): string {
   return value.toLocaleString("en-US");
 }
 
+function modeClause(byMode: Test262ModeBreakdown | undefined): string {
+  const rates = test262ModeRates(byMode);
+  return rates ? `; ${rates}` : "";
+}
+
+/** Per-mode section. A report from before the runner recorded modes gets an
+ *  explicit "not available" line instead of a guessed split. */
+function modeBreakdownLines(summary: Test262SuiteSummary): string[] {
+  if (!summary.byMode) {
+    return [
+      "### Strict and non-strict",
+      "",
+      "Per-mode figures are not available for this report: it predates the runner recording the mode of each run.",
+    ];
+  }
+  const byMode = summary.byMode;
+  return [
+    "### Strict and non-strict",
+    "",
+    "Each test that allows both modes runs once non-strict and once strict. Flagged tests run once and count under the mode they run in: `noStrict` and `raw` non-strict, `onlyStrict` strict, and module code counts as strict.",
+    "",
+    "| Mode | Pass rate | Passing runs | Failed | Timeouts |",
+    "|------|-----------|--------------|--------|----------|",
+    ...TEST262_MODES.map((mode) => {
+      const counts = byMode[mode];
+      return `| ${TEST262_MODE_LABELS[mode]} | ${test262ModeRate(
+        byMode,
+        mode,
+      )} | ${compatibilityNumber(counts.passed)} / ${compatibilityNumber(
+        counts.run,
+      )} | ${compatibilityNumber(counts.failed)} | ${compatibilityNumber(
+        counts.timeouts,
+      )} |`;
+    }),
+  ];
+}
+
+function categoryModeCells(category: Test262CategorySummary): string {
+  if (!category.byMode) return "n/a | n/a";
+  return TEST262_MODES.map((mode) =>
+    test262ModeRate(category.byMode, mode),
+  ).join(" | ");
+}
+
 function compatibilityDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -351,7 +405,14 @@ export function renderCompatibilityMarkdown(
             summary.totalRun,
           )}** (${compatibilityNumber(
             summary.passed,
-          )} passed / ${compatibilityNumber(summary.totalRun)} run)`,
+          )} passed / ${compatibilityNumber(summary.totalRun)} runs)`,
+          ...(summary.totalDiscovered > 0
+            ? [
+                `- Test files discovered: ${compatibilityNumber(
+                  summary.totalDiscovered,
+                )}`,
+              ]
+            : []),
           `- Failed: ${compatibilityNumber(summary.failed)}`,
           `- Timeouts: ${compatibilityNumber(summary.timeouts)}`,
           `- Wrapper infrastructure failures: ${compatibilityNumber(
@@ -361,10 +422,12 @@ export function renderCompatibilityMarkdown(
           `- CI run: [#${latest.runNumber}](${latest.runUrl})`,
           `- Run date: ${compatibilityDate(latest.createdAt)}`,
           "",
+          ...modeBreakdownLines(summary),
+          "",
           "### Top-level test262 groups",
           "",
-          "| Group | Pass rate | Passing |",
-          "|-------|-----------|---------|",
+          "| Group | Pass rate | Passing runs | Non-strict | Strict |",
+          "|-------|-----------|--------------|------------|--------|",
           ...summary.byCategory.map(
             (category) =>
               `| ${category.category} | ${compatibilityPercent(
@@ -372,7 +435,9 @@ export function renderCompatibilityMarkdown(
                 category.run,
               )} | ${compatibilityNumber(
                 category.passed,
-              )} / ${compatibilityNumber(category.run)} |`,
+              )} / ${compatibilityNumber(category.run)} | ${categoryModeCells(
+                category,
+              )} |`,
           ),
         ]
       : [
@@ -395,7 +460,9 @@ export function renderCompatibilityMarkdown(
     "",
     "This is the concise Markdown representation of the authoritative GocciaScript compatibility page. It is generated from the same published main-branch test262 data as the HTML dashboard; it is not a second scorecard.",
     "",
-    "The overall corpus pass rate describes this pinned test262 run. Read the top-level groups separately when evaluating core language, built-ins, ECMA-402, or staging coverage.",
+    "The overall corpus pass rate describes this pinned test262 run. Read the top-level groups separately when evaluating core language, built-ins, Annex B, ECMA-402, or staging coverage.",
+    "",
+    "Every pass and fail count is a count of runs, not of test files: a test that allows both modes runs once non-strict and once strict. Reports published before the runner recorded the mode ran each file once and carry no strict or non-strict split.",
     "",
     ...currentResult,
     "",
@@ -433,6 +500,8 @@ function performanceSuiteMarkdown(
     heading,
     "",
     `- QuickJS reference ratio: **${performanceRatio(point.quickjsRatio)}**`,
+    `- Node.js --jitless reference ratio (interpreter-class context): **${performanceRatio(point.nodeJitlessRatio)}**`,
+    `- JSC (no JIT) reference ratio (interpreter-class context): **${performanceRatio(point.jscRatio)}**`,
     `- Node.js reference ratio: **${performanceRatio(point.nodeRatio)}**`,
     `- Workloads: ${compatibilityNumber(point.workloadCount)} (${compatibilityNumber(point.failedWorkloadCount)} failed)`,
     `- Commit: \`${point.shortSha}\``,
@@ -475,14 +544,14 @@ export function renderPerformanceMarkdown(
   return [
     frontmatter(
       "Performance Barometer - GocciaScript",
-      "Directional GocciaScript performance trends against QuickJS and Node.js, generated from the same data as the Performance Barometer page.",
+      "GocciaScript's interpreter against QuickJS, the bar for its first performance target, generated from the same data as the Performance Barometer page.",
     ),
     "",
     "# Performance Barometer",
     "",
     "This is the concise Markdown representation of the GocciaScript Performance Barometer page. It is generated from the same retained main-branch AWFY and JetStream 3 reports as the HTML dashboard.",
     "",
-    "A ratio compares GocciaScript with a reference engine on the same pinned workloads: 1.00x means aligned, and above 1.00x means GocciaScript was proportionally slower. Different runtimes have different goals; this is a directional view, not a product ranking.",
+    "A ratio compares GocciaScript with a reference engine on the same pinned workloads: 1.00x means aligned, and above 1.00x means GocciaScript was proportionally slower. The first performance target is an interpreter faster than QuickJS: both QuickJS ratios below 1.00x on every shipped platform. These reports measure Linux x64. Node.js with --jitless and JavaScriptCore (JSC) with its JIT off are interpreter-class context comparators that the target does not count; Node.js, with its JIT, is shown for scale.",
     "",
     ...body,
     "",
@@ -563,9 +632,9 @@ console.log(audit.diff);`;
     "",
     "# Sandbox",
     "",
-    "GocciaScript runs AI-agent scripts under an explicit host-defined capability model. Scripts receive only the data, modules, and capabilities the host provides, run with explicit limits, and return structured results that the host can inspect.",
+    "GocciaRunner's sandbox mode, a reference host built on the engine's capability model, runs AI-agent scripts under explicit host-defined capabilities. Scripts receive only the data, modules, and capabilities the host provides, run with explicit limits, and return structured results that the host can inspect.",
     "",
-    "Filesystem workflows use GocciaRunner's sandbox mode. Host paths are copied into a virtual filesystem, sandbox writes stay in that filesystem, and changes are surfaced as explicit diffs.",
+    "In filesystem workflows, host paths are copied into a virtual filesystem, sandbox writes stay in that filesystem, and changes are surfaced as explicit diffs.",
     "",
     "## Agent flow",
     "",

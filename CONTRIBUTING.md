@@ -28,7 +28,7 @@ When your change affects behavior visible to users or contributors, update the r
 
 - **Executive summary** — Every `docs/` file except ADR files must include a `## Executive Summary` heading with 3–6 bulleted key points, placed after the title and subtitle. Root-level files (README, CONTRIBUTING, AGENTS) are navigation entry points and are exempt. An italic subtitle alone does not satisfy this requirement.
 - **No duplication** — Each topic has one authoritative document with the full detail. Other documents that reference it use a one-liner and link back. Do not maintain the same content in two places.
-- **No hand-typed conformance numbers** — Never type a test262 pass rate, pass count, or percentage into documentation or website copy. Link the [compatibility dashboard](https://www.gocciascript.dev/compatibility) or render the figure from the generated reports; a frozen number is stale by the next main-branch run. `scripts/check-conformance-claims.ts` enforces this in the pre-commit hook and in CI. A deliberate version-stamped figure needs an explicit `conformance-claim-ok: <reason>` comment, placed on the claim line or on the nearest non-blank line above it.
+- **No hand-typed conformance numbers** — Never type a test262 pass rate, pass count, or percentage into documentation or website copy. Link the [compatibility dashboard](https://www.gocciascript.dev/compatibility) or render the figure from the generated reports; a frozen number is stale by the next main-branch run. `scripts/check-conformance-claims.ts` enforces this in the pre-commit hook and in CI (pull requests and pushes to `main`). The script's header lists what it scans: markdown anywhere, the website, `scripts/` and the workflows. A deliberate version-stamped figure needs an explicit `conformance-claim-ok: <reason>` comment, placed on the claim line or on the nearest non-blank line above it.
 - **Spikes are snapshots** — Files under `docs/spikes/` are point-in-time investigation records. Do not update them after the initial creation; if findings change, add a new ADR and link to it.
 - **Decision records are immutable** — Each ADR under `docs/adr/` records what was decided at that point in time. Do not retroactively update ADRs to match the current implementation. If the implementation changes, add a new ADR with the new decision. Links from ADRs to other docs may be updated if targets are renamed.
 
@@ -36,8 +36,10 @@ When your change affects behavior visible to users or contributors, update the r
 
 These rules apply to the README's first screen, the website and `llms.txt`:
 
-- **Lead with what it is for, then the evidence.** First what it does (runs code that agents and people write, under host-set capabilities and limits), then what a reader can check: the live test262 result, the tests and differential suites, the nightly fuzzing and memory checks, the weekly GC stress, the prebuilt binaries, and that it runs in production behind [Shotcup](https://shotcup.dev). Stars and the implementation language are never the only signals on a page.
-- **State each trade-off as a choice and what it buys.** FreePascal gives native binaries with GocciaScript's own compiler, VM and collector and nothing underneath; the recommended profile keeps agent code explicit, and each core form it disables has a flag.
+- **Lead with what it is for, then the evidence.** First what it is (an ECMAScript engine for embedding, with sensible defaults that are easy to customize, where the host sets the capabilities and limits; [VISION.md](VISION.md) owns the wording), then what a reader can check: the live test262 result, the tests and differential suites, the nightly fuzzing and memory checks, the weekly GC stress, the prebuilt binaries, and that it runs in production behind [Shotcup](https://shotcup.dev). Stars and the implementation language are never the only signals on a page.
+- **State each trade-off as a choice and what it buys.** FreePascal gives native binaries with GocciaScript's own compiler, VM and collector and nothing underneath; the recommended profile keeps new code explicit, and each core form it disables has a flag a host can turn on.
+- **The agent sandbox is a reference host, not the headline.** `GocciaRunner`'s sandbox mode is described as a reference host and an example of what an embedder can build on the capability model; it is never the lead, and no page outside the sandbox host's own pages presents agents as the primary audience.
+- **State the capability boundary as a rule.** For Node.js compatibility, CommonJS, `node:` modules and Web APIs, say that GocciaScript provides a capability when it fits the vision and cannot be shimmed in userland, and leaves what userland can shim to userland, and state only that rule: how-to detail such as bringing a package in belongs in [Module Resolution](docs/module-resolution.md), not in positioning copy. Never word it as Node compatibility being a non-goal or GocciaScript not being a Node.js host.
 - **Say only what CI enforces.** Check the workflow before you write a claim, and word it to match: test262 runs on every pull request and fails it only on a regression against main, not on the failures main already has; fuzzing and the memory checks run nightly, not per change.
 - **Status is one neutral line with what it means.** Pre-1.0: the host API and command-line flags may change between releases, so pin a version.
 - **Figures stay live.** A conformance figure comes from the published reports (the dashboard, a rendered value or the badge), as the rule above requires.
@@ -105,9 +107,11 @@ See [docs/testing.md](docs/testing.md) for the full testing guide including dire
 ### 4. Language Profile and Restrictions
 
 GocciaScript's recommended profile deliberately keeps selected implemented
-ECMAScript forms behind compatibility or unsafe opt-ins, while other surfaces
-such as broad Annex B support remain deferred. Do **not** remove those gates or
-add deferred features without an explicit project decision. See
+ECMAScript forms behind compatibility or unsafe opt-ins, and new Annex B
+surfaces go behind a compatibility flag
+([ADR 0177](docs/adr/0177-annex-b-is-part-of-the-test262-conformance-target.md)).
+Do **not** remove those gates or add deferred features without an explicit
+project decision. See
 [docs/language.md](docs/language.md) for the implementation, profile, and
 compatibility-path detail.
 

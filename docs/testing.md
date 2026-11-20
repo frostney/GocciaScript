@@ -732,19 +732,19 @@ Each test starts with a `BeforeEach` override that calls `FAssertions.ResetCurre
 GitHub Actions CI (`.github/workflows/ci.yml`) runs on push to `main` and tags, with a post-build job fan-out plus release packaging. Its first job, `supersede`, cancels any in-flight `main` run whose commit is an ancestor of the pushed commit, or its own run when a newer `main` commit is already being tested; tag and dispatched runs are never cancelled. See [Build System](build-system.md#ciyml--push-to-main--tags) for the rules.
 
 ```text
-supersede → toolchain → build → test             → artifacts (main), release (tags)
-                              → toml-compliance  →
-                              → json5-compliance →
-                              → awfy             →
-                              → jetstream        →
-                              → web-tooling      →
-                              → benchmark        →
-                              → cli              →
-                              → test262 → test262-merge
-test-structure
+supersede → build → test             → artifacts (main), release (tags)
+                   → toml-compliance  →
+                   → json5-compliance →
+                   → awfy             →
+                   → jetstream        →
+                   → web-tooling      →
+                   → benchmark        →
+                   → cli              →
+                   → test262 → test262-merge
+docs, test-structure (no build)
 ```
 
-**`toolchain`** / **`build`** — `toolchain` restores (or builds) the cached FPC cross-compilation toolchains: one on macOS for the Darwin targets, and one on Linux for the Linux and Windows targets, which keeps those four builds off the scarcer macOS runners. `build` cross-compiles all binaries for every target on its toolchain's host and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
+**`build`** — Installs FPC 3.2.4 through `frostney/fpc-toolchain`, which ships every target for its runner's host: only the Darwin targets need a macOS runner, and the Linux and Windows targets cross-compile on Linux. It builds all binaries for its target and uploads them as intermediate artifacts. **`test-structure`** runs `scripts/check-test-structure.ts` and the report-publishing helper tests without a build.
 
 **`test`** (needs build, all platforms) — Downloads pre-built binaries, runs all JavaScript tests and Pascal unit tests. Outputs JSON files via `--output=<file>` for CI timing comparison.
 
@@ -754,7 +754,7 @@ test-structure
 
 **`test262`** (needs build, ubuntu-latest x64 only, **non-blocking**) — Runs the official conformance suite in four shards, from the shared pin in `scripts/test262-suite-sha.txt`; `test262-merge` merges the shards, uploads the JSON report, and saves a `main` baseline cache for PR deltas. The run step is `continue-on-error: true` so known steady-state conformance failures do not block unrelated work; the downstream PR comment still gates regressions against the cached main baseline. **See [test262.md](test262.md) for the harness contract** and [Build System](build-system.md#ciyml--push-to-main--tags) for the workflow wiring.
 
-**`awfy`** (needs build, ubuntu-latest x64 only) — Runs the pinned AWFY JavaScript report set from `perf/awfy/manifest.json` under Goccia bytecode, QuickJS, and the latest Node Current release resolved at workflow time with five interleaved samples per engine. Uploads the normalized `awfy-report` artifact; on `main`, publishes the compressed report plus daily pointer to the `awfy/` Vercel Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
+**`awfy`** (needs build, ubuntu-latest x64 only) — Runs the pinned AWFY JavaScript report set from `perf/awfy/manifest.json` under Goccia bytecode, QuickJS, `node --jitless`, JavaScriptCore with its JIT off (`jsc --useJIT=false`, from Ubuntu's `libjavascriptcoregtk-bin`), and the latest Node Current release resolved at workflow time with six interleaved warm samples per engine. Uploads the normalized `awfy-report` artifact; on `main`, publishes the compressed report plus daily pointer to the `awfy/` Vercel Blob namespace when `BLOB_READ_WRITE_TOKEN` is configured.
 
 **`jetstream`** / **`web-tooling`** (ubuntu-latest x64 only) — A `*-plan` job reads the workload matrix from the lane's manifest, `*-workload` runs each workload against the built binaries, and the final job merges the reports. See [JetStream 3](benchmarks.md#jetstream-3-reference-lane) and [Web Tooling](benchmarks.md#web-tooling-goccia-lane).
 
@@ -770,7 +770,7 @@ test-structure
 
 **`release`** (same gates, tags only) — Packages and publishes release archives.
 
-The `test`, `awfy`, `jetstream`, `web-tooling`, `benchmark`, `cli`, `toml-compliance`, `json5-compliance`, and `test262` lanes run in parallel after `build`. Every lane reuses the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (AWFY, JetStream, Web Tooling, and test262 run on Linux only since those outcomes are platform-independent for this engine).
+The `test`, `awfy`, `jetstream`, `web-tooling`, `benchmark`, `cli`, `toml-compliance`, `json5-compliance`, and `test262` lanes run in parallel after `build`. Every lane reuses the already-built binaries from the matrix build artifacts instead of installing FPC again, so platform-specific issues are caught on the same Linux, macOS, and Windows targets as the main test lanes (test262 runs on Linux only because its outcomes are platform-independent for this engine; AWFY, JetStream and Web Tooling run on Linux x64 only for now, and measuring them on the other shipped platforms, which [ADR 0176](adr/0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md)'s first target is judged on, is tracked in [#2102](https://github.com/frostney/GocciaScript/issues/2102)).
 
 ### PR Workflow (`.github/workflows/pr.yml`)
 
@@ -790,15 +790,15 @@ docs, test-structure (no build)       * also needs build-main, a build of the PR
 
 The PR workflow also runs the pinned es-toolkit compatibility probes in the Linux `cli` job and retains the classified JSON report. It posts a **Suite Timing** comment with expandable test-runner and benchmark summaries. Each summary shows timing, top-level GocciaScript GC metrics, and selected FreePascal heap allocation metrics. GC memory rows aggregate the main thread plus all worker thread-local GCs. The benchmark runner collects after every file. The test runner collects after every file of a run with more than one file, on the worker that ran it. The collection count includes those collections. Reclaiming a worker's heap at shutdown is not counted as a collection. The comment hides negative FreePascal heap free-space deltas because they are valid allocator diagnostics but are noisy in a PR summary. See [benchmarks.md](benchmarks.md#pr-benchmark-comparison) for details on the benchmark comparison format.
 
-The **AWFY Results** comment posts median timings and geomean ratios for the pinned AWFY report set under Goccia bytecode, QuickJS, and the latest Node Current release. The underlying `awfy-report` artifact keeps the five raw interleaved samples per engine, min/max/CV, environment metadata, and first-class failure outcomes.
+The **AWFY Results** comment posts median timings and geomean ratios for the pinned AWFY report set under Goccia bytecode, QuickJS, `node --jitless`, JavaScriptCore with its JIT off, and the latest Node Current release. The underlying `awfy-report` artifact keeps the six raw interleaved samples per engine, each with its warm-up times, measured window and place in the engine order, min/max/CV, environment metadata, and first-class failure outcomes.
 
 The **test262 conformance comment** posts a non-blocking summary using the [`actions/github-script@v7`](https://github.com/actions/github-script) pattern, marker `<!-- test262-results -->`. The markdown is generated by `bun scripts/run_test262_suite.ts --comment <results.json> <baseline.json|->`. It contains:
 
-- A **per-category breakdown table** (run / passed / Δ pass / failed / timeouts / Δ timeout / wrapper-infra / pass-rate / Δ rate) for each of `built-ins`, `harness`, `intl402`, `language`, `staging`, plus a totals row.
+- A **per-category breakdown table** (run / passed / Δ pass / failed / timeouts / Δ timeout / wrapper-infra / pass-rate / Δ rate) for each top-level category the run covered ([test262.md](test262.md#test-corpus)), plus a totals row and one row per mode (`non-strict runs`, `strict runs`). Every count is a count of runs: an unflagged test file runs once in each mode ([test262.md](test262.md#strict-mode)).
 - A **wrapper-infra-failure top-line warning** when non-zero (gates the run as untrustworthy).
-- An **Areas closest to 100%** table listing the three test262 directories (keyed by the first two path components, e.g. `built-ins/Math`, `language/expressions`) with the highest pass rate, filtered to areas with **at least 25 attempted tests** and **below 100%**.
+- An **Areas closest to 100%** table listing the three test262 directories (keyed by the first two path components, e.g. `built-ins/Math`, `language/expressions`) with the highest pass rate, filtered to areas with **at least 25 attempted runs** and **below 100%**.
 - When a `main` baseline is cached, **Δ vs main** columns show absolute count delta and percentage-point delta. Deltas below ±0.05pp render as `±0pp` to keep the table readable.
-- A collapsible **Per-test deltas** section listing newly-passing, newly-failing, newly-timed-out, and no-longer-timed-out test IDs.
+- A collapsible **Per-test deltas** section listing newly-passing, newly-failing, newly-timed-out, and no-longer-timed-out runs, each named `<test id> (<mode>)`. Runs compare by test ID and mode, so a strict-only PASS → FAIL fails the gate like any other.
 - A **grading-contract note** when the cached baseline's `run.gradingContract` differs from the run's. PASS → FAIL transitions are then listed but do not fail the gate, because the runner's grading moved them, not the engine; see [test262.md](test262.md#updating-the-contract).
 
 The website compatibility dashboard at `/compatibility` reads main-branch test262 reports from Vercel Blob at request time with CDN caching. Main CI publishes future dashboard points directly, and `cd website && bun run backfill-test262` can seed historical days from retained artifacts or fresh historical reruns. Website builds do not download artifact ZIPs or bake test262 data into the deployment. This keeps the public pass-rate timeline and group coverage tables tied to generated CI data rather than hand-maintained percentages.

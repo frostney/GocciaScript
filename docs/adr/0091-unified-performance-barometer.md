@@ -44,3 +44,10 @@ Consequences:
 - Measurement-version changes and failures are visible parts of the historical
   record instead of being smoothed over.
 - Web Tooling stays a separate Goccia-only viability lane.
+
+**Superseded in part by [ADR 0176](0176-the-interpreter-beats-quickjs-before-gcbundle-a-jit-and-a-compiled-executable.md):** QuickJS is the bar
+for the interpreter's first performance target, not only a reference engine,
+and the barometer may say whether that bar is met. The lanes, ratio
+convention and measurement-contract segmentation stay.
+
+**Superseded in part by [ADR 0178](0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md):** the barometer adds `node-jitless` and `jsc` (JavaScriptCore with its JIT off) ratios beside the QuickJS and Node.js ones, both lanes run six repetitions, and engines alternate their order in both lanes.

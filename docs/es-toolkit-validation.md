@@ -7,7 +7,7 @@
 - **Pinned input** — The manifest records es-toolkit 1.49.0's release commit and npm tarball SHA-512 integrity
 - **Exact evidence** — Named public-package probes run under `GocciaRunner`; the lane does not claim whole-suite coverage or publish a pass-rate percentage
 - **Separate classifications** — Semantic failures, disabled capabilities, host globals, and harness failures remain distinct in the JSON report
-- **Sandbox-aligned** — The lane does not enable unsafe dynamic code generation or add Node/browser host stubs
+- **Default-aligned** — The lane does not enable unsafe dynamic code generation or add Node/browser host stubs
 
 ## Scope and pin
 
@@ -66,6 +66,7 @@ cache key derived from the pinned integrity value.
 The runner enables only the compatibility syntax and semantics required by the
 published library. It does not enable the unsafe Function constructor and does
 not install `Buffer`, `process`, or `Blob` stubs. This keeps the evidence aligned
-with [Vision](../VISION.md): Node host compatibility is not a goal, broader web
-host APIs remain a product boundary, and dynamic code generation stays disabled
-by default.
+with [Vision](../VISION.md): Node compatibility is a set of runtime extensions a
+host installs rather than the default surface; Web APIs are added where they
+serve an embedding use case; and dynamic code generation stays disabled by
+default.
