@@ -82,7 +82,8 @@
   // members enumerable as WebIDL makes them; the global performance is its one instance
   if (typeof G.performance === 'object' && G.performance !== null) {
     const host = G.performance, nowFn = host.now;
-    const origin = n.realNow() - Reflect.apply(nowFn, host, []);
+    // the host's epoch clock when the realm starts (no fake timers yet): a deterministic run's is 0
+    const origin = G.Date.now() - Reflect.apply(nowFn, host, []);
     const brand = new WeakSet();
     const check = (o) => { if (!brand.has(o)) throw new TypeError('Illegal invocation'); };
     const Performance = { Performance() { throw new TypeError('Illegal constructor'); } }.Performance;

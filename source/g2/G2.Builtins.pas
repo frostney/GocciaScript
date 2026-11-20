@@ -12,6 +12,9 @@ uses
   SysUtils, Math, DateUtils, G2.Core, G2.Bytecode, G2.VM;
 
 procedure InitBuiltins;
+{ Math.random's own stream from Seed (the engine's is fixed until a host seeds it: the conformance and benchmark
+  host keeps runs repeatable) }
+procedure SeedMathRandom(Seed: QWord);
 var
   { G2.Intl's full Unicode case mapping (Locale '' the root's) and normalization (Form NFC, NFD, NFKC or NFKD) }
   CaseMapHook: function(const S: UnicodeString; const Locale: string; Upper: Boolean; var R: UnicodeString): Boolean = nil;
@@ -2308,8 +2311,21 @@ const
 var
   RngState: QWord = 88172645463325252;
 
-function M_Random(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+procedure SeedMathRandom(Seed: QWord);
 begin
+  if Seed = 0 then Seed := 88172645463325252;   { xorshift has no zero state }
+  RngState := Seed;
+end;
+
+function M_Random(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var F: THostRandomFn;
+begin
+  F := HostRandom;
+  if Assigned(F) then
+  begin
+    Res := MkDouble(F(CurRealm));
+    Exit(True);
+  end;
   RngState := RngState xor (RngState shl 13);
   RngState := RngState xor (RngState shr 7);
   RngState := RngState xor (RngState shl 17);

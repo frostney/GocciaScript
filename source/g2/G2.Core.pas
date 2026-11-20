@@ -453,6 +453,16 @@ procedure StackGuardInit;
   prototype cycle, a chain of bound functions) then throws a RangeError instead of overflowing the stack }
 function NativeStackLow: Boolean; noinline;
 
+{ ---- a host's environment: time zone and randomness ---- }
+type
+  { Math.random's next value in realm Realm (a host's seeded stream: a deterministic run) }
+  THostRandomFn = function(Realm: Integer): Double of object;
+threadvar
+  { the zone Date, Intl and Temporal.Now take in place of TZ and the system's ('' for none) }
+  TimeZoneOverride: UnicodeString;
+  { a host's Math.random (nil: the engine's own) }
+  HostRandom: THostRandomFn;
+
 { ---- the host clock ---- }
 { a host's mocked clocks (fake timers): the epoch time in milliseconds Date, Temporal.Now and the like read, and
   the monotonic time performance.now reads; NaN puts the real clock back }

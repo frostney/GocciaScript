@@ -562,7 +562,8 @@ begin
     27:
       begin
         { the host's zone as Temporal.Now.timeZoneId reads it (G2.Temporal systemTZ): TZ first, then the system's }
-        S := GetEnvironmentVariable('TZ');
+        S := UTF8Encode(TimeZoneOverride);
+        if S = '' then S := GetEnvironmentVariable('TZ');
         if (S <> '') and (S[1] = ':') then Delete(S, 1, 1);
         if SameText(S, 'UTC') then Res := UStr('UTC')
         else

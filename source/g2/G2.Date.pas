@@ -229,9 +229,16 @@ end;
 
 { the system zone's offset from UTC at instant T (ms), and its abbreviation }
 function OffsetAt(T: Double; out Abbr: UnicodeString): Double;
-var S: Int64; TM: Ttm;
+var S: Int64; TM: Ttm; Z: UnicodeString;
 begin
   Abbr := '';
+  { a host's UTC (a deterministic run); another zone a host gives reaches localtime_r through TZ }
+  Z := TimeZoneOverride;
+  if Z = 'UTC' then
+  begin
+    Abbr := 'UTC';
+    Exit(0);
+  end;
   S := Trunc(FloorD(T / 1000));
   FillChar(TM, SizeOf(TM), 0);
   if localtime_r(@S, @TM) = nil then Exit(0);

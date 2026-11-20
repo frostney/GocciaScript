@@ -100,7 +100,8 @@ var S: string; P: Integer;
 begin
   Res := VUndefined;
   Result := True;
-  S := GetEnvironmentVariable('TZ');
+  S := UTF8Encode(TimeZoneOverride);
+  if S = '' then S := GetEnvironmentVariable('TZ');
   if (S <> '') and (S[1] = ':') then Delete(S, 1, 1);
   if S = '' then
   begin

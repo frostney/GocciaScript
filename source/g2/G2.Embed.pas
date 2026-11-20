@@ -10,7 +10,7 @@ unit G2.Embed;
 interface
 
 uses
-  SysUtils, Goccia.ModuleResolver, G2.Core, G2.HostAPI;
+  SysUtils, Goccia.HostEnvironment, Goccia.ModuleResolver, G2.Core, G2.HostAPI;
 
 type
   { a console line and the method that wrote it (G2.HostAPI TConsoleSink) }
@@ -65,7 +65,13 @@ type
     FOnConsole: TG2ConsoleEvent;
     FResolver: TModuleResolver;
     FOnWarning: TG2WarningEvent;
+    FDeterministic: Boolean;
+    { a deterministic run's Math.random streams: realm 0 seeded as GocciaScript's deterministic profile is, each
+      other realm a fork of it in the order the realms first draw }
+    FRandoms: array of IGocciaHostRandom;
+    FRandomForks: UInt64;
     FFailOnUnhandledRejection: Boolean;
+    function NextRandom(Realm: Integer): Double;
     function InstallHost(var Err: UnicodeString): Boolean;
   public
     { builds this thread's engine; one at a time per thread }
@@ -102,6 +108,9 @@ type
       paths only }
     property Resolver: TModuleResolver read FResolver write FResolver;
     property OnWarning: TG2WarningEvent read FOnWarning write FOnWarning;
+    { GocciaScript's deterministic profile (--deterministic): the epoch and monotonic clocks at 0, the time zone
+      UTC, Math.random a seeded stream; set before the first run or PrepareHost }
+    property Deterministic: Boolean read FDeterministic write FDeterministic;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
@@ -120,7 +129,7 @@ function RecommendedProfile: TLangProfile;
 implementation
 
 uses
-  TimingUtils, G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules, G2.Promise;
+  Math, TimingUtils, G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules, G2.Promise, G2.Builtins;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -244,8 +253,22 @@ begin
   EngineInit;
 end;
 
+function TG2Engine.NextRandom(Realm: Integer): Double;
+begin
+  if Realm >= Length(FRandoms) then SetLength(FRandoms, Realm + 1);
+  if FRandoms[Realm] = nil then
+  begin
+    Inc(FRandomForks);
+    FRandoms[Realm] := FRandoms[0].Fork(FRandomForks);
+  end;
+  Result := FRandoms[Realm].NextDouble;
+end;
+
 destructor TG2Engine.Destroy;
 begin
+  HostRandom := nil;
+  TimeZoneOverride := '';
+  if FDeterministic then SetClockOverride(NaN, NaN);
   LimitsDisarm;
   SetMaxFrames(0);
   EngineDone;
@@ -255,6 +278,19 @@ end;
 function TG2Engine.InstallHost(var Err: UnicodeString): Boolean;
 var J: TValue;
 begin
+  { before the host's globals: performance.timeOrigin is the clock when they install }
+  if FDeterministic then
+  begin
+    SetClockOverride(TGocciaHostEnvironment.DeterministicEpochNanoseconds / 1000000,
+      TGocciaHostEnvironment.DeterministicMonotonicNanoseconds / 1000000);
+    TimeZoneOverride := TGocciaHostEnvironment.DeterministicTimeZone;
+    SetLength(FRandoms, 1);
+    FRandoms[0] := TGocciaSeededHostRandom.Create(TGocciaHostEnvironment.DeterministicSeed);
+    FRandomForks := 0;
+    HostRandom := NextRandom;
+  end
+  else
+    SeedMathRandom(QWord(GetTickCount64) xor (QWord(GetProcessID) shl 32) xor QWord(PtrUInt(Self)));
   Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err, FExposeTimers);
   FHostReady := Result;
   if not Result then Exit;
