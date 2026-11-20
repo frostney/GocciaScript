@@ -90,11 +90,15 @@ type
     ResultJSON: string;
     ErrorInfo: TCLIJSONErrorInfo;
     Timing: TCLIJSONTiming;
+    { the file's engine heap and its thread's memory manager, from the engine's creation to the end of its run }
+    Memory: TCLIJSONMemoryStats;
   end;
 
   TG2RunnerApp = class(TGocciaCLIApplication)
   private
     FReports: array of TG2FileReport;
+    { the main thread's memory manager when the run began (a multi-file report's memory.heap) }
+    FHeapStart: THeapStatus;
     { the JSON report's workers: the files run at once (1 when one after another) }
     FWorkers: Integer;
     { GocciaRunner's options, all registered so that its command lines and configs parse the same; the ones G2
@@ -503,25 +507,99 @@ begin
   Inc(ATotal.TotalTimeNanoseconds, ATiming.TotalTimeNanoseconds);
 end;
 
-{ the files' report: one file's own form, or the aggregate of GocciaRunner's BuildAggregateScriptLoaderJSON }
+{ one engine's memory.gc, from its heap when made (AStart) and after its run (AEnd), with its thread's memory
+  manager over the same span (memory.heap); G2 does not count objects, so their counts stay 0 }
+function FileMemoryStats(const AStart, AEnd: TG2MemoryStats;
+  const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
+begin
+  Result := DefaultCLIJSONMemoryStats;
+  Result.Enabled := True;
+  Result.GCStartBytes := AStart.LiveBytes;
+  Result.GCEndBytes := AEnd.LiveBytes;
+  Result.GCLiveBytes := AEnd.LiveBytes;
+  Result.GCPeakBytes := AEnd.PeakLiveBytes;
+  Result.GCDeltaBytes := AEnd.LiveBytes - AStart.LiveBytes;
+  Result.GCAllocatedDuringRunBytes := AEnd.AllocatedBytes - AStart.AllocatedBytes;
+  Result.GCMaxBytes := AEnd.LimitBytes;
+  Result.GCCollections := AEnd.Collections - AStart.Collections;
+  Result.HeapStartAllocatedBytes := Int64(AHeapStart.TotalAllocated);
+  Result.HeapEndAllocatedBytes := Int64(AHeapEnd.TotalAllocated);
+  Result.HeapDeltaAllocatedBytes := Result.HeapEndAllocatedBytes - Result.HeapStartAllocatedBytes;
+  Result.HeapStartFreeBytes := Int64(AHeapStart.TotalFree);
+  Result.HeapEndFreeBytes := Int64(AHeapEnd.TotalFree);
+  Result.HeapDeltaFreeBytes := Result.HeapEndFreeBytes - Result.HeapStartFreeBytes;
+end;
+
+{ a multi-file report's top-level memory: the files' collections and allocations summed. At once (AParallel) the
+  engines' heaps coexist, so their live and peak bytes add up, as GocciaRunner combines its workers'; one after
+  another each heap is freed before the next, so the peak is the largest and the live bytes are the last file's.
+  memory.heap is the main thread's memory manager over the run. }
+function AggregateMemoryStats(const AReports: array of TG2FileReport; AParallel: Boolean;
+  const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
+var
+  I: Integer;
+  First: Boolean;
+begin
+  Result := DefaultCLIJSONMemoryStats;
+  First := True;
+  for I := 0 to High(AReports) do
+  begin
+    if not AReports[I].Memory.Enabled then
+      Continue;
+    if First or AParallel then
+    begin
+      if First then
+        Result := AReports[I].Memory
+      else
+        Result := CombineCLIJSONMemoryStats(Result, AReports[I].Memory, True);
+    end
+    else
+    begin
+      Inc(Result.GCAllocatedDuringRunBytes, AReports[I].Memory.GCAllocatedDuringRunBytes);
+      Inc(Result.GCCollections, AReports[I].Memory.GCCollections);
+      if AReports[I].Memory.GCPeakBytes > Result.GCPeakBytes then
+        Result.GCPeakBytes := AReports[I].Memory.GCPeakBytes;
+      if AReports[I].Memory.GCMaxBytes > Result.GCMaxBytes then
+        Result.GCMaxBytes := AReports[I].Memory.GCMaxBytes;
+      Result.GCEndBytes := AReports[I].Memory.GCEndBytes;
+      Result.GCLiveBytes := AReports[I].Memory.GCLiveBytes;
+      Result.GCDeltaBytes := Result.GCEndBytes - Result.GCStartBytes;
+    end;
+    First := False;
+  end;
+  Result.Enabled := True;
+  Result.HeapStartAllocatedBytes := Int64(AHeapStart.TotalAllocated);
+  Result.HeapEndAllocatedBytes := Int64(AHeapEnd.TotalAllocated);
+  Result.HeapDeltaAllocatedBytes := Result.HeapEndAllocatedBytes - Result.HeapStartAllocatedBytes;
+  Result.HeapStartFreeBytes := Int64(AHeapStart.TotalFree);
+  Result.HeapEndFreeBytes := Int64(AHeapEnd.TotalFree);
+  Result.HeapDeltaFreeBytes := Result.HeapEndFreeBytes - Result.HeapStartFreeBytes;
+end;
+
+{ the files' report: one file's own form, or the aggregate of GocciaRunner's BuildAggregateScriptLoaderJSON. As
+  GocciaRunner's: one file reports its memory at the top level; files at once report each file's and their sum,
+  files one after another (one worker) only the sum }
 procedure TG2RunnerApp.PrintJsonReport;
 var
   I: Integer;
   Ok: Boolean;
   StdoutText, StderrText, OutputText, FilesJSON, ErrorJSON, FileJSON: string;
   Timing: TCLIJSONTiming;
+  FileMemory: TCLIJSONMemoryStats;
 begin
   if Length(FReports) = 1 then
   begin
+    { the file's memory at the top level only }
     with FReports[0] do
       if Ok then
-        WriteLn(BuildCLIScriptSuccessJSON(FileName, ResultJSON, OutputText,
-          StdoutText, StderrText, Timing, DefaultCLIJSONMemoryStats, FWorkers, FWorkers,
-          IsCompactJsonOutput))
+        WriteLn(BuildCLIReportJSON(True, OutputText, StdoutText, StderrText, 'null', Timing, Memory,
+          FWorkers, FWorkers, BuildCLIScriptFileSuccessJSON(FileName, ResultJSON, OutputText, StdoutText,
+          StderrText, Timing, DefaultCLIJSONMemoryStats, IsCompactJsonOutput), '', IsCompactJsonOutput))
       else
-        WriteLn(BuildCLIScriptErrorJSON(FileName, OutputText, StdoutText,
-          StderrText, ErrorInfo, Timing, DefaultCLIJSONMemoryStats, FWorkers, FWorkers,
-          IsCompactJsonOutput));
+        WriteLn(BuildCLIReportJSON(False, OutputText, StdoutText, StderrText,
+          BuildCLIErrorObjectJSON(ErrorInfo), Timing, Memory, FWorkers, FWorkers,
+          BuildCLIScriptFileErrorJSON(FileName, OutputText, StdoutText, StderrText, ErrorInfo, Timing,
+          DefaultCLIJSONMemoryStats, IsCompactJsonOutput), '', IsCompactJsonOutput));
     Exit;
   end;
   FillChar(Timing, SizeOf(Timing), 0);
@@ -534,17 +612,21 @@ begin
   for I := 0 to High(FReports) do
   begin
     Ok := Ok and FReports[I].Ok;
+    if FWorkers > 1 then
+      FileMemory := FReports[I].Memory
+    else
+      FileMemory := DefaultCLIJSONMemoryStats;
     if FReports[I].Ok then
       FileJSON := BuildCLIScriptFileSuccessJSON(FReports[I].FileName,
         FReports[I].ResultJSON, FReports[I].OutputText,
         FReports[I].StdoutText, FReports[I].StderrText, FReports[I].Timing,
-        DefaultCLIJSONMemoryStats, IsCompactJsonOutput)
+        FileMemory, IsCompactJsonOutput)
     else
     begin
       FileJSON := BuildCLIScriptFileErrorJSON(FReports[I].FileName,
         FReports[I].OutputText, FReports[I].StdoutText,
         FReports[I].StderrText, FReports[I].ErrorInfo, FReports[I].Timing,
-        DefaultCLIJSONMemoryStats, IsCompactJsonOutput);
+        FileMemory, IsCompactJsonOutput);
       if ErrorJSON = 'null' then
         ErrorJSON := BuildCLIErrorObjectJSON(FReports[I].ErrorInfo);
     end;
@@ -557,7 +639,8 @@ begin
     FilesJSON := FilesJSON + FileJSON;
   end;
   WriteLn(BuildCLIReportJSON(Ok, OutputText, StdoutText, StderrText,
-    ErrorJSON, Timing, DefaultCLIJSONMemoryStats, FWorkers, FWorkers, FilesJSON, '',
+    ErrorJSON, Timing, AggregateMemoryStats(FReports, FWorkers > 1, FHeapStart, GetHeapStatus),
+    FWorkers, FWorkers, FilesJSON, '',
     IsCompactJsonOutput));
 end;
 
@@ -891,6 +974,8 @@ var
   Grant: TG2NodeModulesGrant;
   AliasBaseDirectory: string;
   GlobalsError: string;
+  HeapStart: THeapStatus;
+  MemoryStart: TG2MemoryStats;
 begin
   Start := GetNanoseconds;
   { the console capture, which also prints the parse warnings (not in a JSON report, as GocciaRunner) }
@@ -915,8 +1000,10 @@ begin
       AliasBaseDirectory := ExtractFilePath(RootConfigPath);
     ConfigureModuleResolver(Resolver, AFileName, EngineOptions.ImportMap.ValueOr(''),
       EngineOptions.Aliases.Values, AliasBaseDirectory);
+    HeapStart := GetHeapStatus;
     Engine := TG2Engine.Create;
     try
+      MemoryStart := Engine.Memory;
       Engine.Resolver := Resolver;
       { GocciaRunner has no timer globals (the test runner does) }
       Engine.ExposeTimers := False;
@@ -987,6 +1074,7 @@ begin
         Report.StdoutText := Capture.StdoutText;
         Report.StderrText := Capture.StderrText;
         Report.Timing.TotalTimeNanoseconds := GetNanoseconds - Start;
+        Report.Memory := FileMemoryStats(MemoryStart, Engine.Memory, HeapStart, GetHeapStatus);
         if RunResult.Ok then
         begin
           Report.ResultJSON := UTF8Encode(RunResult.ResultText);
@@ -1156,6 +1244,7 @@ var
   Source, Files, Found: TStringList;
 begin
   FWorkers := 1;
+  FHeapStart := GetHeapStatus;
   { no path, or "-": the source from stdin (the base class applied the no-argument rule) }
   if (APaths.Count = 0) or ((APaths.Count = 1) and IsStdinPath(APaths[0])) then
   begin

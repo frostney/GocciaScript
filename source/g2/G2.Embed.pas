@@ -30,6 +30,17 @@ type
     { a full collection left more live than the memory limit (MaxMemory); ErrorText says how much }
     g2aMemoryLimit);
 
+  { the engine's heap now (Memory): what a CLI's JSON report shows under memory.gc }
+  TG2MemoryStats = record
+    { the heap's bytes, garbage included until a collection frees it; the most it has held }
+    LiveBytes, PeakLiveBytes: Int64;
+    { every byte the heap has allocated since the engine was made }
+    AllocatedBytes: Int64;
+    { the heap limit (MaxMemory, else the default ceiling) }
+    LimitBytes: Int64;
+    Collections: Integer;
+  end;
+
   TG2RunResult = record
     Ok: Boolean;
     Aborted: TG2Abort;
@@ -104,6 +115,8 @@ type
     { whether the run's entry loaded a module from Path (an absolute path), not the host before it: a host shows a
       code frame of such a file only }
     function ModuleLoaded(const Path: UnicodeString): Boolean;
+    { the engine's heap now; call it on the engine's thread }
+    function Memory: TG2MemoryStats;
     { globals injection before Run (G2.HostAPI): a data file's globals, and one --global name=value }
     function InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
     function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: UnicodeString): Boolean;
@@ -511,6 +524,15 @@ end;
 function TG2Engine.ModuleLoaded(const Path: UnicodeString): Boolean;
 begin
   Result := ModuleLoadedSince(Path, FModuleMark);
+end;
+
+function TG2Engine.Memory: TG2MemoryStats;
+begin
+  Result.LiveBytes := HeapUsedBytes;
+  Result.PeakLiveBytes := HeapPeakBytes;
+  Result.AllocatedBytes := HeapAllocatedBytes;
+  if FMaxMemory > 0 then Result.LimitBytes := FMaxMemory else Result.LimitBytes := DefaultHeapCeiling;
+  Result.Collections := GCMinorCount + GCMajorCount;
 end;
 
 destructor TG2Engine.Destroy;

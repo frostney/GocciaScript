@@ -251,6 +251,9 @@ threadvar
     the kinds' entries are cleared (undefined) once the length property or the prototype of any of them changes }
   TAWatched: array[0..TA_WATCHED_KINDS] of TValue;
   GCPromotedBytes, GCOldBytes, GCOldBytesAtMajor: Int64;
+  { the bytes allocated before the nursery's used part (HeapAllocatedBytes), and the most the heap held at a
+    collection or a direct old-space allocation (HeapPeakBytes) }
+  GCAllocatedBytes, GCPeakBytes: Int64;
 
 procedure HeapInit(NurseryBytes: SizeInt);
 { The engines a thread has had: once-per-engine set-up (registering a root) keeps the generation it ran for, so a
@@ -272,6 +275,10 @@ var
   HeapCeiling: Int64 = 0;
 { the old generation and the nursery's used part (Goccia.gc.bytesAllocated) }
 function HeapUsedBytes: Int64;
+{ every byte the heap has allocated since HeapInit, garbage included (a CLI report's allocatedDuringRunBytes) }
+function HeapAllocatedBytes: Int64;
+{ the most the heap has held since HeapInit, garbage included until a collection frees it (peakLiveBytes) }
+function HeapPeakBytes: Int64;
 { whether Bytes more fit under HeapCeiling, after a full collection when they do not yet: the charge of an
   allocation a RangeError refuses (an ArrayBuffer's bytes). Collects: the caller's values stay rooted }
 function HeapReserve(Bytes: Int64): Boolean;
@@ -920,7 +927,10 @@ begin
       CollectMinor;
       CollectMajor;
     end;
-    Exit(AllocOld(Size, Kind));
+    Result := AllocOld(Size, Kind);
+    Inc(GCAllocatedBytes, Result^.Size);
+    if HeapUsedBytes > GCPeakBytes then GCPeakBytes := HeapUsedBytes;
+    Exit;
   end;
   if (NurseryTop + Size > NurseryLimit) or GCStress then
   begin
@@ -1172,8 +1182,11 @@ begin
 end;
 
 procedure CollectMinor;
-var I: Integer; C: PCell;
+var I: Integer; C: PCell; Used: Int64;
 begin
+  Used := NurseryTop - NurseryStart;
+  Inc(GCAllocatedBytes, Used);
+  if GCOldBytes + Used > GCPeakBytes then GCPeakBytes := GCOldBytes + Used;
   Inc(GCMinorCount);
   Inc(GCEpoch);
   if GCVerify then VerifyHeap('barrier');   { every old cell pointing into the nursery is remembered }
@@ -1271,6 +1284,19 @@ begin
   Top := NurseryTop;
   Start := NurseryStart;
   Result := Old + (Top - Start);
+end;
+
+function HeapAllocatedBytes: Int64; noinline;
+var Top, Start: PByte;
+begin
+  Top := NurseryTop;
+  Start := NurseryStart;
+  Result := GCAllocatedBytes + (Top - Start);
+end;
+
+function HeapPeakBytes: Int64; noinline;
+begin
+  Result := Max(GCPeakBytes, HeapUsedBytes);
 end;
 
 function HeapReserve(Bytes: Int64): Boolean;
@@ -2565,6 +2591,7 @@ begin
   GrayStack := nil; GrayTop := 0; RememberedList := nil; RememberedTop := 0; if TempRoots <> nil then fpmunmap(TempRoots, TEMP_ROOTS_MAX * SizeOf(TValue));
   TempRoots := nil; TempTop := 0;
   GCOldBytes := 0; GCOldBytesAtMajor := 0; GCPromotedBytes := 0; GCMinorCount := 0; GCMajorCount := 0;
+  GCAllocatedBytes := 0; GCPeakBytes := 0;
 end;
 
 end.
