@@ -142,6 +142,42 @@ it (and registers each closure it creates, so one never called reports 0), and t
 jump: branch 0 when it jumps, 1 when it falls through. A function is located where its source starts. Each file's
 thread keeps its own tracker, merged into the run's when the file ends.
 
+### Profiling
+
+`--profile` reports through GocciaScript's profilers and writers (`Goccia.Profiler`, `Goccia.Profiler.Compile`,
+`Goccia.Profiler.Report`). Profiled files run one at a time; each file's thread records into the main thread's
+profilers (`Adopt`). Under the runtime profile (`G2.Profile`) every instruction runs through the interpreter's
+counted loop, as under coverage: it counts each opcode (G2's own names), each pair of consecutive ones, and for a
+binary arithmetic or comparison instruction whether both operands are Numbers (the scalar fast path). A function
+is timed from its frame's push to the push that reuses its slot or the next instruction in a frame below it, so an
+unwinding throw needs no hook. A resumed generator or async function counts as a call; a call that only creates a
+generator does not, and a module resumed after an await continues its one evaluation. Allocations are the objects
+made, charged to the innermost profiled function. The host's code (the preludes) is not profiled: its time and
+allocations are its caller's. An opcode or compile profile compiles the entry as if its completion value were
+reported, so `--output` and `--print` do not change the code profiled.
+
+The compile profile's parse side is the shared parser's. `G2.Compiler` reports each function's compile at the
+position the parser recorded it at, and counts its own work under the old compiler's counter names:
+
+| Counter | What G2 counts |
+|---------|----------------|
+| `nodesCompiled` (and nodes by kind) | each statement and expression compiled |
+| `constantEmitAttempts` | each expression's literal check |
+| `constantEvaluationVisits` | each binary operator's right operand checked for an immediate |
+| `expressionTypeVisits` | each expression's kind classification |
+| `numberProofVisits` | each number immediate checked for a small integer |
+| `localLookups`, `localLookupProbes` | scope lookups, and the bindings (or hash buckets) each examined |
+| `upvalueResolutions`, `upvalueListProbes` | each function an upvalue lookup climbs, and the names it scans (one bucket once hashed) |
+| `localListScans` | the bindings each closed scope walks |
+| `parameterNameProbes` | each parameter name's duplicate test and its record |
+| `directEvalRecordProbes` | each entry of a direct eval's scope description |
+| `parameterInitializerVisits` | each parameter the closure check visits |
+| `parameterInitializerSourceChecks` | each initializer or pattern checked for a closure |
+
+The binding-name and type-argument counters are the shared parser's. A `Function` constructor's source is a unit
+of its own, and its parameters and body are parsed on their own as units too, as GocciaScript validates them;
+under the compile profile G2 parses them for that, ignoring the results.
+
 ### Sandbox mode
 
 GocciaRunner's sandbox mode ([ADR 0068](../adr/0068-goccia-sandbox-runner.md),

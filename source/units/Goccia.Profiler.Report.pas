@@ -34,6 +34,16 @@ uses
   Goccia.JSON.Utils,
   Goccia.Profiler.Compile;
 
+{ The opcode's name, as the engine that ran it names it. }
+function ReportOpcodeName(const AOp: Byte): string;
+begin
+  if Assigned(ProfilerOpcodeName) then
+    Result := ProfilerOpcodeName(AOp)
+  else
+    Result := OpCodeName(AOp);
+end;
+
+
 const
   MAX_OPCODE_PAIRS_DISPLAYED = 20;
 
@@ -140,7 +150,7 @@ begin
     else
       Pct := 0.0;
     WriteLn(Format('  %-40s %15d %7.1f%%', [
-      OpCodeName(Entries[I].Op),
+      ReportOpcodeName(Entries[I].Op),
       Entries[I].Count,
       Pct]));
   end;
@@ -201,8 +211,8 @@ begin
     else
       Pct := 0.0;
     WriteLn(Format('  %-40s  -> %-40s %15d %7.1f%%', [
-      OpCodeName(Entries[I].Prev),
-      OpCodeName(Entries[I].Cur),
+      ReportOpcodeName(Entries[I].Prev),
+      ReportOpcodeName(Entries[I].Cur),
       Entries[I].Count,
       Pct]));
   end;
@@ -364,7 +374,7 @@ begin
       else
         Pct := 0.0;
       Buf.Append(Format(#10'    {"opcode": "%s", "count": %d, "percentage": %.1f}', [
-        EscapeJSONString(OpCodeName(I)), Count, Pct], InvariantFormat));
+        EscapeJSONString(ReportOpcodeName(I)), Count, Pct], InvariantFormat));
     end;
   end;
   Buf.Append(#10'  ],');
@@ -382,8 +392,8 @@ begin
           Buf.AppendChar(',');
         FirstEntry := False;
         Buf.Append(Format(#10'    {"prev": "%s", "cur": "%s", "count": %d}', [
-          EscapeJSONString(OpCodeName(Prev)),
-          EscapeJSONString(OpCodeName(Cur)),
+          EscapeJSONString(ReportOpcodeName(Prev)),
+          EscapeJSONString(ReportOpcodeName(Cur)),
           Count]));
       end;
     end;

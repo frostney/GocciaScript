@@ -101,6 +101,9 @@ threadvar
     records lines, branches and functions in the thread's Goccia.Coverage tracker), no FastLoop and no compiled
     code; set before the run, kept by LimitsArm and LimitsDisarm }
   CoverageOn: Boolean;
+  { the profiler is on (G2.Profile): like coverage, every instruction through its hook (ProfStepHook) and every
+    frame push to ProfPushHook }
+  ProfileOn: Boolean;
   InstrLeft: Int64;
   InstrMax: Int64;
   { no compiled code runs while a limit or a frame bound is set: it has no back-edge poll, and compiled calls
@@ -254,6 +257,11 @@ function AuditSiteOverride(out Source: UnicodeString; out Line, Column: Integer)
 function NewPermissionDenied(const Capability, Scope, Suggestion: UnicodeString; var E: TValue): Boolean;
 { the milliseconds left before the run's timeout (LimitsArm), at least 1; 0 when the run has none }
 function LimitRemainingMs: Int64;
+{ the run's deadline paused while the host runs something of its own on another thread (a sandbox's nested run,
+  which the remaining time bounds): LimitsSuspend returns the milliseconds left (0: no deadline), LimitsResume
+  starts that much again }
+function LimitsSuspend: Int64;
+procedure LimitsResume(Ms: Int64);
 { where the running script is: the innermost frame of user code (a file, <stdin>, or eval, Function or ShadowRealm
   code), its source and the line and column of the instruction running; False outside any }
 function CallSiteNow(out Source: UnicodeString; out Line, Column: Integer): Boolean;
@@ -450,6 +458,12 @@ threadvar
 var
   { the Init procedures of the intrinsics, which CreateRealm runs for a new realm (nil: no realms) }
   RealmInitProc: procedure = nil;
+  { some thread profiles (G2.Profile): the frame pushes call ProfPushHook while its ProfileOn is set }
+  ProfilingAny: Boolean = False;
+  { G2.Profile's hooks: a frame pushed at Frames[Index] (Resume: a generator or async function resumed), and an
+    instruction about to run }
+  ProfPushHook: procedure(Index: Integer; Resume: Boolean) = nil;
+  ProfStepHook: procedure(Fr: Pointer; PC: Integer) = nil;
 threadvar
   { the host's part of a new realm (a ShadowRealm's), run in it after the intrinsics (nil: none): a CLI host leaves
     out the conformance host's extras there as in its own realm }
@@ -653,6 +667,23 @@ begin
   Result := LimitTimer.Deadline - Now_;
 end;
 
+function LimitsSuspend: Int64;
+begin
+  Result := 0;
+  if LimitTimer = nil then Exit;
+  Result := LimitRemainingMs;
+  { a day out: the timer wakes then and waits again }
+  LimitTimer.Deadline := GetTickCount64 + 86400000;
+  RTLEventSetEvent(LimitTimer.Wake);
+end;
+
+procedure LimitsResume(Ms: Int64);
+begin
+  if (LimitTimer = nil) or (Ms <= 0) then Exit;
+  LimitTimer.Deadline := GetTickCount64 + QWord(Ms);
+  RTLEventSetEvent(LimitTimer.Wake);
+end;
+
 { a call that found the frames full: the abort of a spent limit, else PushBytecodeFrame's RangeError }
 function XFrameOverflow: Boolean; noinline;
 begin
@@ -683,7 +714,7 @@ begin
   FrameLimit := FrameLimitBase;
   InstrCounted := False;
   InstrLeft := 0;
-  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn;
+  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn;
 end;
 
 procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
@@ -696,7 +727,7 @@ begin
     InstrCounted := True;
     InstrLeft := MaxInstructions;
   end;
-  if (TimeoutMs > 0) or (MaxInstructions > 0) or CoverageOn then JitBlocked := True;
+  if (TimeoutMs > 0) or (MaxInstructions > 0) or CoverageOn or ProfileOn then JitBlocked := True;
   if TimeoutMs > 0 then
   begin
     LimitTimer := TLimitTimer.Create(True);
@@ -714,7 +745,7 @@ begin
     the Nth call is pushed at FrameTop N (the entry's frame and N - 1 calls) }
   if (N <= 0) or (N > FRAME_MAX - 3) then FrameLimitBase := FRAME_MAX else FrameLimitBase := N + 3;
   if Interrupt = 0 then FrameLimit := FrameLimitBase;
-  if (FrameLimitBase <> FRAME_MAX) or CoverageOn then JitBlocked := True
+  if (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn then JitBlocked := True
   else if (LimitTimer = nil) and not InstrCounted then JitBlocked := False;
 end;
 
@@ -4229,6 +4260,12 @@ begin
   SwitchRealm(R0);
 end;
 
+{ the frame just pushed, to the profiler while this thread profiles }
+procedure ProfPush(Resume: Boolean); noinline;
+begin
+  if ProfileOn then ProfPushHook(FrameTop - 1, Resume);
+end;
+
 { PushBytecodeFrame's full case: another realm, a rest parameter or an arguments object, or a this to bind }
 function PushBytecodeFrameFull(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
   NewTarget: TValue): Boolean; noinline;
@@ -4319,6 +4356,7 @@ begin
   Fr^.Argc := Argc;
   Fr^.Kind := Kind;
   Inc(FrameTop);
+  if ProfilingAny then ProfPush(False);
   Result := True;
 end;
 
@@ -4369,6 +4407,7 @@ begin
   Fr^.Argc := Argc;
   Fr^.Kind := Kind;
   Inc(FrameTop);
+  if ProfilingAny then ProfPush(False);
   Result := True;
 end;
 
@@ -5212,6 +5251,14 @@ begin
   Result := MkPtr(G);
 end;
 
+{ a generator done: a sync one gives up the frame it kept, which nothing resumes again (an async generator's keeps
+  its queue of requests) }
+procedure GenDone(G: PObj); inline;
+begin
+  G^.OFlags := 3;
+  if G^.OKind = okGenerator then G^.Aux2 := VUndefined;
+end;
+
 { Mode: 0 next, 1 throw, 2 return }
 function GeneratorResume(Gen: TValue; Arg: TValue; Mode: Integer; var Value: TValue; var Done: Boolean): Boolean;
 var G: PObj; State: PValueArray; T: PFuncTemplate; Base, I, NH, NU, J, ResumeReg, SavedTop, NLive: Integer; Fr: PFrame;
@@ -5232,7 +5279,7 @@ begin
   end;
   if (G^.OFlags = 0) and (Mode <> 0) then
   begin
-    G^.OFlags := 3;
+    GenDone(G);
     Done := True;
     if Mode = 1 then begin Pending := Arg; Exit(False); end;
     Value := Arg;
@@ -5263,6 +5310,7 @@ begin
   Fr^.Argc := 0;
   Fr^.Kind := 3;
   Inc(FrameTop);
+  if ProfilingAny then ProfPush(True);
   NH := IntOf(State^.Data[T^.MaxRegs + 2]);
   for I := 0 to NH - 1 do
   begin
@@ -5324,7 +5372,7 @@ begin
   G := ObjOf(Gen);
   if not Ok then
   begin
-    G^.OFlags := 3;
+    GenDone(G);
     if IsRetComp(Pending) then
     begin
       Value := ObjOf(Pending)^.Aux1;
@@ -5343,7 +5391,7 @@ begin
   end
   else
   begin
-    G^.OFlags := 3;
+    GenDone(G);
     Done := True;
   end;
   Result := True;
@@ -5440,6 +5488,7 @@ begin
   Fr^.Argc := 0;
   Fr^.Kind := 4;
   Inc(FrameTop);
+  if ProfilingAny then ProfPush(True);
   NH := IntOf(State^.Data[T^.MaxRegs + 2]);
   for I := 0 to NH - 1 do
   begin
@@ -5491,7 +5540,7 @@ end;
 { a Kind 4 frame returned (the generator completed): it is done, the consumer's loop ends }
 procedure XGenInlineReturn(Fr: PFrame); noinline;
 begin
-  ObjOf(Fr^.NewTarget)^.OFlags := 3;
+  GenDone(ObjOf(Fr^.NewTarget));
   CloseUpvals(Fr^.Base);
   while (HandlerTop > 0) and (Handlers[HandlerTop - 1].Frame >= FrameTop - 1) do Dec(HandlerTop);
   Dec(FrameTop);
@@ -5502,7 +5551,7 @@ end;
   generator done and its consumer's iterator done }
 procedure XGenUnwind; noinline;
 begin
-  ObjOf(Frames[FrameTop - 1].NewTarget)^.OFlags := 3;
+  GenDone(ObjOf(Frames[FrameTop - 1].NewTarget));
   Dec(FrameTop);
   XGenConsumerDone(False);
   Inc(FrameTop);
@@ -6356,6 +6405,7 @@ begin
   Fr^.Argc := Argc;
   Fr^.Kind := 1;
   Inc(FrameTop);
+  if ProfilingAny then ProfPush(False);
   if StackTop < Base + T^.MaxRegs then StackTop := Base + T^.MaxRegs;   { (never below the caller's registers: a collection scans them) }
   if Assigned(T^.FieldInit) and not XPushFieldInit(VA) then Exit(-1);
   Result := 2;
@@ -7776,7 +7826,7 @@ var
   R0: Integer;
 begin
   R0 := CurRealm;   { the caller's realm, restored when this returns }
-  Counted := InstrCounted or CoverageOn;
+  Counted := InstrCounted or CoverageOn or ProfileOn;
 LReload:
   Fr := @Frames[FrameTop - 1];
   { the running function's realm (a call or a return crossed into another) }
@@ -7799,6 +7849,7 @@ LReload:
     if Counted then
     begin
       if CoverageOn then CovStep(Fr, PC);
+      if ProfileOn then ProfStepHook(Fr, PC);
       { an instruction limit: every instruction here, none in FastLoop }
       if InstrCounted then
       begin
@@ -9768,7 +9819,7 @@ LThrow:
     begin
       CloseUpvals(Frames[FrameTop - 1].Base);
       if (Frames[FrameTop - 1].Kind = 4) and (FrameTop - 1 > StopFrame) then XGenUnwind
-      else if Frames[FrameTop - 1].Kind = 4 then ObjOf(Frames[FrameTop - 1].NewTarget)^.OFlags := 3;
+      else if Frames[FrameTop - 1].Kind = 4 then GenDone(ObjOf(Frames[FrameTop - 1].NewTarget));
       Dec(FrameTop);
     end;
     Res := VUndefined;

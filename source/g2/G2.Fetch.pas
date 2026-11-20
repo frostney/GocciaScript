@@ -24,8 +24,9 @@ procedure DefineFetchNatives(N: TValue);
 { whether a request of this engine is in flight }
 function FetchPending: Boolean;
 { settles the requests that finished; with Block, first waits for one to finish, for a request's signal deadline
-  (whose signals are then observed) or for the run's interrupt. False when script failed or the run ended }
-function FetchPump(Block: Boolean): Boolean;
+  (whose signals are then observed), for the run's interrupt, or until the tick Until_ (0: none). False when script
+  failed or the run ended }
+function FetchPump(Block: Boolean; Until_: QWord = 0): Boolean;
 { the engine is torn down: its requests in flight are detached, their answers dropped }
 procedure FetchDone;
 
@@ -485,7 +486,7 @@ begin
   end;
 end;
 
-function FetchPump(Block: Boolean): Boolean;
+function FetchPump(Block: Boolean; Until_: QWord): Boolean;
 var Taken: TList; I, K, Waits: Integer; W: TFetchWorker; P: TPendingFetch; Now_, Earliest: QWord; Slice: Cardinal;
 begin
   Result := True;
@@ -512,8 +513,11 @@ begin
           if (Pendings[I].Deadline <> 0) and (Pendings[I].Deadline <= Now_) then Pendings[I].Deadline := 0;
         Exit(Settle([MkInt(-1), MkInt(2)]));
       end;
+      { the caller's own deadline (an async wait's timeout): it waits no longer }
+      if (Until_ <> 0) and (Until_ <= Now_) then Exit(True);
       Slice := WAIT_SLICE_MS;
       if (Earliest <> 0) and (Earliest - Now_ < Slice) then Slice := Earliest - Now_;
+      if (Until_ <> 0) and (Until_ - Now_ < Slice) then Slice := Until_ - Now_;
       RTLEventWaitFor(Owner.Wake, Slice);
       RTLEventResetEvent(Owner.Wake);
     end;

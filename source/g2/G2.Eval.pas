@@ -49,7 +49,17 @@ implementation
 
 uses
   Classes, Linux, UnixType, TextSemantics, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
-  G2.PreParse, G2.Lazy, G2.Snapshot;
+  G2.PreParse, G2.Lazy, G2.Snapshot, Goccia.Profiler.Compile;
+
+{ the compile profile leaves the host's own code out (a prelude's, named like <goccia:console>) }
+procedure ExcludeHostSource(const FileName: UnicodeString);
+var P: TGocciaCompileProfiler;
+begin
+  P := TGocciaCompileProfiler.Instance;
+  if (P <> nil) and (Length(FileName) > 2) and (FileName[1] = '<') and (FileName[Length(FileName)] = '>') and
+     (Pos(':', FileName) > 0) then
+    P.ExcludeFile(FileName);
+end;
 
 threadvar
   LazyMode: Integer;   { G2_LAZY: 0 not read yet, 1 off (G2_LAZY=0), 2 on (the default) }
@@ -615,6 +625,7 @@ function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Intege
 var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType;
 begin
   Info := nil;
+  ExcludeHostSource(FileName);
   if LazyOn and LazyParseAndCompileModule(Source, FileName, Id, T, Info, Err, ErrName, Result) then Exit;
   Result := False;
   L := nil; P := nil; Prog := nil;
@@ -654,6 +665,7 @@ function ParseAndCompile(const Source, FileName: UnicodeString; AsExpression: Bo
   var Err: UnicodeString; Goal: Integer): Boolean;
 var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType;
 begin
+  ExcludeHostSource(FileName);
   if (Goal = 1) and not AsExpression and LazyOn and LazyParseAndCompile(Source, FileName, T, Err, Result) then Exit;
   Result := False;
   CompileFailKind := 1;
@@ -758,6 +770,7 @@ const
   CtorNames: array[0..3] of UnicodeString = ('Function', 'GeneratorFunction', 'AsyncFunction',
     'AsyncGeneratorFunction');
 var I: Integer; Params, Body, Src, Err: UnicodeString; S: TValue; T: PFuncTemplate; Clo: TValue; Kind: Integer;
+  Prof: TGocciaCompileProfiler; Ident, Err2: UnicodeString; Depth, Depth2: Integer; T2: PFuncTemplate;
 begin
   Kind := NativeData;
   { a restricted profile creates functions from strings only with unsafe-function-constructor; the host audits
@@ -782,14 +795,37 @@ begin
       Params := Params + StrToUnicode(StrOf(S));
     end;
   end;
-  { 20.2.1.1.1 steps 15-18: the parameters parse as FormalParameters on their own (a comment, template or
-    function they open does not end in the body) }
-  if ParamsMayEscape(Params) then
+  { the compile profile: the source is a unit of its own (its kind, its parameters length-prefixed, its body: no
+    split of the same text between them makes another), and so are its parameters and its body parsed on their
+    own, as GocciaScript validates them (their results are not used: the whole source decides) }
+  Prof := TGocciaCompileProfiler.Instance;
+  Depth := -1;
+  if Prof <> nil then
   begin
-    if not CompileDynamic(Heads[Kind] + Params + #10') {'#10'})', T, Err) then Exit(ThrowError('SyntaxError', Err));
+    Ident := IntToStr(Kind) + ':' + IntToStr(Length(Params)) + ':' + Params + Body;
+    Depth := Prof.UnitDepth;
+    Prof.BeginUnit('<Function>', Ident);
+    Depth2 := Prof.UnitDepth;
+    Prof.BeginUnit('<Function:params>', Ident);
+    CompileDynamic(Heads[Kind] + Params + #10') {'#10'})', T2, Err2);
+    Prof.EndUnitTo(Depth2);
+    Prof.BeginUnit('<Function:body>', Ident);
+    CompileDynamic(Heads[Kind] + #10') {'#10 + Body + #10'})', T2, Err2);
+    Prof.EndUnitTo(Depth2);
+    Pending := VUndefined;
   end;
-  Src := Heads[Kind] + Params + #10') {'#10 + Body + #10'})';
-  if not CompileDynamic(Src, T, Err) then Exit(ThrowError('SyntaxError', Err));
+  try
+    { 20.2.1.1.1 steps 15-18: the parameters parse as FormalParameters on their own (a comment, template or
+      function they open does not end in the body) }
+    if ParamsMayEscape(Params) then
+    begin
+      if not CompileDynamic(Heads[Kind] + Params + #10') {'#10'})', T, Err) then Exit(ThrowError('SyntaxError', Err));
+    end;
+    Src := Heads[Kind] + Params + #10') {'#10 + Body + #10'})';
+    if not CompileDynamic(Src, T, Err) then Exit(ThrowError('SyntaxError', Err));
+  finally
+    if Prof <> nil then Prof.EndUnitTo(Depth);
+  end;
   if not MakeScriptClosure(T, Clo) then Exit(False);
   Result := CallValue(Clo, VUndefined, nil, 0, Res);
   { and the body as a FunctionBody: the function the source makes ends at the brace added after it (the source

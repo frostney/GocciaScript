@@ -232,6 +232,10 @@ type
                            constants, then JitCall's work; eax -3 when it cannot (nothing changed: the call stub's) }
     OptFb: PByte;        { the optimizing tier's feedback, a byte per instruction (CodeLen + 1, nil until needed):
                            the guards that failed there, in the template's own regions or wherever it is inlined }
+    ProfIdx: Integer;    { the profiler's (G2.Profile): 0 not seen yet, -1 not profiled (the host's code), else its
+                           function profile's index + 1 }
+    ProfSuspends: Byte;  { G2.Profile's: 0 not seen yet, 1 the code has an opGenStart (a call only creates the
+                           generator or async state, its resumptions run the body), 2 not }
   end;
 
 function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;

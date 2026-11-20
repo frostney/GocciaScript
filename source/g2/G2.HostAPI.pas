@@ -71,7 +71,7 @@ uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
-  Goccia.YAML, Goccia.TOML, Goccia.URI, G2.Fetch, G2.Sandbox;
+  Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.Modules.Virtual, G2.Fetch, G2.Sandbox;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
@@ -870,30 +870,59 @@ begin
   if not Result then Err := TakePendingText;
 end;
 
-function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
-var A: array[0..0] of TValue; R: TValue; Ref: string; Resolver: TModuleResolver;
+{ whether Key names a host module (shared.hasHostModule) }
+function IsHostModuleKey(const Key: UnicodeString): Boolean;
+var A: array[0..0] of TValue; R: TValue;
 begin
-  if IsObject(HasHostModuleV) then
-  begin
-    A[0] := StrFromUnicode(Spec);
-    if CallValue(HasHostModuleV, SharedV, @A[0], 1, R) and (R = VTrue) then
-    begin
-      Resolved := Spec;
-      Exit(1);
-    end;
-    Pending := VUndefined;
-  end;
-  Resolver := ProvidedResolver;
-  if Resolver = nil then
+  Result := False;
+  if not IsObject(HasHostModuleV) then Exit;
+  A[0] := StrFromUnicode(Key);
+  if CallValue(HasHostModuleV, SharedV, @A[0], 1, R) then Result := R = VTrue;
+  Pending := VUndefined;
+end;
+
+{ the run's resolver (an import map, aliases, node_modules), else the plain one }
+function CurrentResolver: TModuleResolver;
+begin
+  Result := ProvidedResolver;
+  if Result = nil then
   begin
     if HostResolver = nil then
     begin
       HostResolver := TModuleResolver.Create;
       HostResolver.SetExtensions(ModuleImportExtensions);
     end;
-    Resolver := HostResolver;
+    Result := HostResolver;
   end;
-  if (Referrer = '') or (Referrer[1] = '<') then Ref := '' else Ref := ExpandFileName(UTF8Encode(Referrer));
+end;
+
+{ a module's key that is a virtual module's address (a URI such as host:pkg/main or https://...), not a path }
+function IsVirtualKey(const Key: UnicodeString): Boolean;
+begin
+  Result := IsVirtualModuleURI(Key) or ((Key <> '') and (Key[1] <> '/') and (Key[1] <> '<') and IsHostModuleKey(Key));
+end;
+
+function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
+var Ref: string; Resolver: TModuleResolver; Candidate: UnicodeString;
+begin
+  if IsHostModuleKey(Spec) then
+  begin
+    Resolved := Spec;
+    Exit(1);
+  end;
+  { a relative specifier in a virtual module resolves against its address, hierarchically }
+  if IsRelativeSpecifier(Spec) and (Referrer <> '') and IsVirtualKey(Referrer) then
+  begin
+    Candidate := ResolveRelativeVirtualAddress(Spec, Referrer);
+    if IsHostModuleKey(Candidate) then
+    begin
+      Resolved := Candidate;
+      Exit(1);
+    end;
+  end;
+  Resolver := CurrentResolver;
+  if (Referrer = '') or (Referrer[1] = '<') or IsVirtualKey(Referrer) then Ref := ''
+  else Ref := ExpandFileName(UTF8Encode(Referrer));
   try
     Resolved := UTF8Decode(Resolver.Resolve(UTF8Encode(Spec), Ref));
     { the first specifier a module is imported by names it in its load errors (specifierOf) }
@@ -1067,7 +1096,9 @@ end;
 { fileURL(path): the file: URL of a host path }
 function Host_FileURL(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Res := StrFromUnicode(UTF8Decode(FileURLOf(UTF8Encode(ArgStr(Args, Argc, 1)))));
+  { a virtual module's address is its URL already }
+  if IsVirtualModuleURI(ArgStr(Args, Argc, 1)) then Res := StrFromUnicode(ArgStr(Args, Argc, 1))
+  else Res := StrFromUnicode(UTF8Decode(FileURLOf(UTF8Encode(ArgStr(Args, Argc, 1)))));
   Result := True;
 end;
 
@@ -1075,19 +1106,46 @@ end;
   GocciaScript resolves it: an absolute specifier as it is, any other against the module's directory, as a file:
   URL (the file need not exist) }
 function Host_MetaResolve(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var Spec, Path: string; S: TValue;
+var Spec, Path, RefPath: string; S: TValue; Ref: UnicodeString;
 begin
   if (Argc < 2) or (PrimitiveToNumber(Args[2]) < 1) then
     Exit(ThrowTypeError('import.meta.resolve requires a specifier argument'));
   if (Argc < 3) or not ToStringV(Args[3], S) then Exit(False);
   Spec := UTF8Encode(StrToUnicode(StrOf(S)));
+  Ref := ArgStr(Args, Argc, 1);
+  Result := True;
+  { a host module (a virtual one too) by its key; a relative specifier in a virtual module against its address }
+  if IsHostModuleKey(UnicodeString(Spec)) then
+  begin
+    Res := StrFromUnicode(UnicodeString(Spec));
+    Exit;
+  end;
+  if IsVirtualKey(Ref) and IsRelativeSpecifier(Spec) then
+  begin
+    Res := StrFromUnicode(ResolveRelativeVirtualAddress(UnicodeString(Spec), Ref));
+    Exit;
+  end;
+  { a bare specifier through the run's resolver (its aliases and import map); the file need not exist }
+  if not IsRelativeSpecifier(Spec) and (Spec <> '') and (Spec[1] <> '/') and (Spec[1] <> '\') and
+     not ((Length(Spec) >= 2) and (Spec[2] = ':')) then
+  begin
+    if IsVirtualKey(Ref) or (Ref = '') or (Ref[1] = '<') then RefPath := '' else RefPath := ExpandFileName(UTF8Encode(Ref));
+    try
+      Path := CurrentResolver.Resolve(Spec, RefPath);
+      if IsVirtualModuleURI(UnicodeString(Path)) then Res := StrFromUnicode(UnicodeString(Path))
+      else Res := StrFromUnicode(UTF8Decode(FileURLOf(ExpandFileName(Path))));
+      Exit;
+    except
+      on E: Exception do ;
+    end;
+  end;
   if (Spec <> '') and ((Spec[1] = '/') or (Spec[1] = '\') or ((Length(Spec) >= 2) and (Spec[2] = ':'))) then
     Path := ExpandFileName(Spec)
+  else if IsVirtualKey(Ref) then
+    Path := ExpandFileName(Spec)
   else
-    Path := ExpandFileName(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(
-      UTF8Encode(ArgStr(Args, Argc, 1))))) + Spec);
+    Path := ExpandFileName(IncludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(UTF8Encode(Ref)))) + Spec);
   Res := StrFromUnicode(UTF8Decode(FileURLOf(Path)));
-  Result := True;
 end;
 
 { G2.Modules's import.meta hook: shared.initImportMeta(meta, path) (modules.js) }
@@ -1338,11 +1396,24 @@ begin
 end;
 
 function RunEventLoopIn(Intervals: Boolean): Boolean;
-var R: TValue; A: array[0..0] of TValue;
+var R: TValue; A: array[0..0] of TValue; Due, Cap: QWord;
 begin
   while True do
   begin
-    if not (RunMicrotasks and RunHostLoop) then Exit(False);
+    if not RunMicrotasks then Exit(False);
+    { async waits and fetches both pending: the waits that fell due settle, then the fetches are waited for until
+      the next wait's timeout, so neither holds the other up }
+    if FetchPending and AsyncWaitsPending then
+    begin
+      PumpAsyncWaits;
+      if not RunMicrotasks then Exit(False);
+      Due := NextAsyncDeadline;
+      Cap := GetTickCount64 + 50;
+      if Due > Cap then Due := Cap;
+      if not FetchPump(True, Due) then Exit(False);
+      Continue;
+    end;
+    if not RunHostLoop then Exit(False);
     { a FinalizationRegistry's cleanup: one job (one dead cell) at a time, the microtasks it queues before the
       next (9.13 HostEnqueueFinalizationRegistryCleanupJob) }
     if WeakCleanupPending then

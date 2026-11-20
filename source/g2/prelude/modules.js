@@ -99,8 +99,13 @@
     }
     return parts.join('/') || '/';
   };
-  const decodeBase64 = (text) => {
-    const binary = G.atob(text);
+  const decodeBase64 = (text, address) => {
+    let binary;
+    try {
+      binary = G.atob(text);
+    } catch {
+      throw new TypeError(`Virtual module "${address}" has invalid base64 content`);
+    }
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return new Uint8Array(bytes.buffer.transferToImmutable());
@@ -117,7 +122,7 @@
       const content = descriptor.content;
       const key = isRelative(address) && base ? joinPath(base, address) : address;
       if (registry[key] !== undefined && virtualKeys[key] === undefined)
-        throw new TypeError(`Virtual module "${address}" conflicts with a registered runtime module.`);
+        throw new TypeError(`Virtual module "${address}" conflicts with a registered ${key.startsWith('goccia:') ? 'runtime' : 'host'} module.`);
       let make;
       switch (type) {
         case 'javascript':
@@ -137,7 +142,7 @@
         case 'bytes': {
           if (typeof content !== 'string')
             throw new TypeError(`Virtual module "${address}" of type bytes must have base64 string content`);
-          const bytes = decodeBase64(content);
+          const bytes = decodeBase64(content, address);
           make = () => exportList(['default', bytes]);
           break;
         }

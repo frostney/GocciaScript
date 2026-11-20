@@ -9,7 +9,7 @@ program GocciaRunnerG2;
   Sandbox mode runs each program on a G2 engine over the virtual filesystem
   (Goccia.CLI.G2SandboxHost).
 
-  Not yet on G2: install mode, the profiler, bytecode files
+  Not yet on G2: install mode, bytecode files
   (--prefer-bytecode), and the read capability's audit events. }
 
 {$I Goccia.inc}
@@ -52,6 +52,9 @@ uses
   Goccia.Modules.Resolver,
   Goccia.ScriptLoader.Globals,
   Goccia.Packages.Address,
+  Goccia.Profiler,
+  Goccia.Profiler.Compile,
+  Goccia.Profiler.Report,
   Goccia.Sandbox.Context,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
@@ -59,6 +62,7 @@ uses
 
   G2.Core,
   G2.Embed,
+  G2.Sandbox,
   G2.VM;
 
 type
@@ -149,6 +153,11 @@ type
     FSandboxActive: Boolean;
     FSandboxRequestedByArguments: Boolean;
     FSandboxHost: TG2SandboxHost;
+    { --profile: the main thread's profilers, which each file's thread records into (profiled files run one at a
+      time, as GocciaRunner runs them on its one reporting thread) }
+    FProfiler: TGocciaProfiler;
+    FCompileProfiler: TGocciaCompileProfiler;
+    function JobCount(const AFileCount: Integer): Integer;
     function SandboxDeterministic: Boolean;
     procedure ConfigureSandboxEngine(const ARun: TG2SandboxRun);
     function FormatSandboxFailure(const ARun: TG2SandboxRun; const AResult: TG2RunResult): string;
@@ -472,6 +481,28 @@ begin
     end;
   end;
   inherited Validate;
+  { the profiler's implications are host mode's: those options are refused on the command line, and ignored from
+    config, in sandbox mode }
+  if FSandboxActive then
+    Exit;
+  { --profile-format implies --profile=functions, --profile-deterministic --profile=all }
+  if ProfilerOptions.Format.Present and not ProfilerOptions.Mode.Present then
+    ProfilerOptions.Mode.Apply('functions');
+  if FProfileDeterministic.Present and not ProfilerOptions.Mode.Present then
+    ProfilerOptions.Mode.Apply('all');
+  if ProfilerOptions.OutputPath.Present and not ProfilerOptions.Mode.Present then
+    raise TParseError.Create('--profile-output requires --profile=opcodes|functions|all|compile.');
+  if ProfilerOptions.Format.Matches(pfFlamegraph) and not ProfilerOptions.OutputPath.Present then
+    raise TParseError.Create('--profile-format=flamegraph requires --profile-output=<path>.');
+end;
+
+{ one reporting thread accumulates every profiled file, as in GocciaRunner }
+function TG2RunnerApp.JobCount(const AFileCount: Integer): Integer;
+begin
+  if ProfilerOptions.Mode.Present then
+    Result := 1
+  else
+    Result := GetJobCount(AFileCount);
 end;
 
 { In sandbox mode stdout carries only the guest's output and the diff; the guest's own failures are reported by
@@ -536,6 +567,7 @@ begin
     AEngine.SourceKind := g2skDetect;
   end;
   AEngine.FetchMaxResponseBytes := ASettings.FetchMaxResponseBytes;
+  AEngine.JSModuleSources := ASettings.ExperimentalJSModuleSource;
   if ASettings.MaxMemorySet then
     AEngine.MaxMemory := ASettings.MaxMemory
   else
@@ -1307,6 +1339,15 @@ begin
       Engine.Capabilities := Capabilities;
       Engine.ConfigJson := HostConfigJson(EngineOptions, FileConfig);
       Engine.Coverage := Assigned(FCoverageMain);
+      { --profile: this thread records into the main thread's profilers }
+      if Assigned(FProfiler) then
+      begin
+        TGocciaProfiler.Adopt(FProfiler);
+        TGocciaCompileProfiler.Adopt(FCompileProfiler);
+        FProfiler.BeginEntry;
+        Engine.ProfileOpcodes := Goccia.Profiler.pmOpcodes in FProfiler.Mode;
+        Engine.ProfileFunctions := Goccia.Profiler.pmFunctions in FProfiler.Mode;
+      end;
       Engine.Resolver := Resolver;
       { GocciaRunner has no timer globals (the test runner does) }
       Engine.ExposeTimers := False;
@@ -1321,7 +1362,8 @@ begin
       if Capture.Capturing or Capture.Silent or LogFileOpen then
         Engine.OnConsole := Capture.Emit;
       Engine.FailOnUnhandledRejection := True;
-      Engine.Deterministic := ResolveFlagOption(EngineOptions.Deterministic, FileConfig);
+      Engine.Deterministic := ResolveFlagOption(EngineOptions.Deterministic, FileConfig) or
+        FProfileDeterministic.Present;
       { a file's set-up the options refuse fails that file, as GocciaRunner's per-file handler reports it }
       try
         { the audit log opens with the engine's capability set, before anything of the file runs }
@@ -1442,6 +1484,12 @@ begin
       Engine.Free;
       Resolver.Free;
       Grant.Free;
+      { a file's thread gives the main thread's profilers back (they are not its to free) }
+      if Assigned(FProfiler) and (GetCurrentThreadId <> MainThreadID) then
+      begin
+        TGocciaProfiler.Adopt(nil);
+        TGocciaCompileProfiler.Adopt(nil);
+      end;
       { the file's coverage into the run's }
       if Assigned(FCoverageMain) and (TGocciaCoverageTracker.Instance <> FCoverageMain) then
       begin
@@ -1506,7 +1554,7 @@ var
   ErrorClass: ExceptClass;
   ErrorMessage: string;
 begin
-  FWorkers := GetJobCount(AFiles.Count);
+  FWorkers := JobCount(AFiles.Count);
   if IsJsonOutput then
     SetLength(FReports, AFiles.Count);
   SetLength(Workers, AFiles.Count);
@@ -1583,9 +1631,9 @@ procedure TG2RunnerApp.RunFileList(const AFiles: TStringList);
 var
   J: Integer;
 begin
-  if GetJobCount(AFiles.Count) > 1 then
+  if JobCount(AFiles.Count) > 1 then
   begin
-    WriteLn(Format('Running %d files with %d workers', [AFiles.Count, GetJobCount(AFiles.Count)]));
+    WriteLn(Format('Running %d files with %d workers', [AFiles.Count, JobCount(AFiles.Count)]));
     { before the workers', whose output goes through their own threads' buffers }
     Flush(Output);
     FQuietWorkers := True;
@@ -1640,6 +1688,15 @@ begin
   end;
   FSandboxActive := False;
 
+  FProfiler := TGocciaProfiler.Instance;
+  FCompileProfiler := TGocciaCompileProfiler.Instance;
+  if FProfileDeterministic.Present then
+  begin
+    if Assigned(FProfiler) then
+      FProfiler.Deterministic := True;
+    if Assigned(FCompileProfiler) then
+      FCompileProfiler.Deterministic := True;
+  end;
   FWorkers := 1;
   FHeapStart := GetHeapStatus;
   FCoverageMain := TGocciaCoverageTracker.Instance;
@@ -1830,8 +1887,14 @@ begin
       end;
     end;
   end;
-  if not DefineCommandLineVirtualModules(ARun.Engine, Error) then
-    raise Exception.Create(Error);
+  { the command line's virtual modules are the user's own: a --modules manifest is read from the host }
+  SandboxHostReads(True);
+  try
+    if not DefineCommandLineVirtualModules(ARun.Engine, Error) then
+      raise Exception.Create(Error);
+  finally
+    SandboxHostReads(False);
+  end;
 end;
 
 { a sandbox run's script error: the root's with the code frame its own modules give, read from the virtual
@@ -2137,7 +2200,39 @@ begin
 end;
 
 procedure TG2RunnerApp.AfterExecute;
+var
+  Mode: Goccia.CLI.Options.TGocciaProfileMode;
+  Opcodes, Functions, Compile: Boolean;
 begin
+  { the profile reports, as GocciaRunner prints and writes them (host mode only) }
+  if (not FSandboxActive) and ProfilerOptions.Mode.Present and Assigned(FProfiler) then
+  begin
+    Mode := ProfilerOptions.Mode.Value;
+    Opcodes := (Mode = Goccia.CLI.Options.pmOpcodes) or (Mode = Goccia.CLI.Options.pmAll);
+    Functions := (Mode = Goccia.CLI.Options.pmFunctions) or (Mode = Goccia.CLI.Options.pmAll);
+    Compile := Mode = Goccia.CLI.Options.pmCompile;
+    if not IsJsonOutput then
+    begin
+      if Opcodes then
+      begin
+        PrintOpcodeProfile(FProfiler);
+        PrintOpcodePairProfile(FProfiler);
+        PrintScalarHitRate(FProfiler);
+        PrintShapeSaturation(FProfiler);
+      end;
+      if Functions then
+        PrintFunctionProfile(FProfiler);
+      if Compile and Assigned(FCompileProfiler) then
+        PrintCompileProfile(FCompileProfiler);
+    end;
+    if ProfilerOptions.OutputPath.Present then
+    begin
+      if ProfilerOptions.Format.Matches(pfFlamegraph) then
+        WriteCollapsedStacks(FProfiler, ProfilerOptions.OutputPath.Value)
+      else
+        WriteProfileJSON(FProfiler, ProfilerOptions.OutputPath.Value);
+    end;
+  end;
   { coverage is a host-mode report; sandbox mode keeps stdout to the guest's output and the diff }
   if Assigned(FCoverageMain) and not FSandboxActive then
   begin

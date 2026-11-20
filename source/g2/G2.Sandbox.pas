@@ -23,6 +23,9 @@ uses
 procedure SetSandbox(Ctx: TGocciaSandboxContext);
 function CurrentSandbox: TGocciaSandboxContext;
 function SandboxActive: Boolean;
+{ while OnHost, the thread reads the host's files instead of the sandbox's (the command line's own --modules
+  manifests, which the host reads before the run) }
+procedure SandboxHostReads(OnHost: Boolean);
 { the sb* natives on the host's natives object N }
 procedure DefineSandboxNatives(N: TValue);
 { a run's completion value as text another engine decodes; False with an exception pending when reading it threw
@@ -98,6 +101,12 @@ begin
     SetFileReadHook(nil);
     NativeBytesHook := nil;
   end;
+end;
+
+procedure SandboxHostReads(OnHost: Boolean);
+begin
+  if Box = nil then Exit;
+  if OnHost then SetFileReadHook(nil) else SetFileReadHook(ReadVirtualFile);
 end;
 
 function CurrentSandbox: TGocciaSandboxContext;

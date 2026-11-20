@@ -27,6 +27,9 @@ function RunHostLoop: Boolean;
 { one turn of that loop without blocking (a host timer tick): settles the async waits other threads notified
   and those whose timeouts passed; their reactions run as jobs }
 procedure PumpAsyncWaits;
+{ whether an async wait is pending, and the tick the earliest of their timeouts falls due (High(QWord): none) }
+function AsyncWaitsPending: Boolean;
+function NextAsyncDeadline: QWord;
 { a SharedArrayBuffer object of this engine for B; takes a reference to B }
 function WrapSharedBlock(B: PSharedBlock): TValue;
 function IsSharedBuffer(V: TValue): Boolean;
@@ -553,6 +556,19 @@ begin
       if AsyncLive[I] and (AsyncDeadlines[I] <= Now_) and SharedAsyncCancel(I) then SettleAsync(I, 'timed-out');
     if not RunMicrotasks then Exit(False);
   end;
+end;
+
+function AsyncWaitsPending: Boolean;
+begin
+  Result := AsyncPending > 0;
+end;
+
+function NextAsyncDeadline: QWord;
+var I: Integer;
+begin
+  Result := High(QWord);
+  for I := 0 to AsyncCount - 1 do
+    if AsyncLive[I] and (AsyncDeadlines[I] < Result) then Result := AsyncDeadlines[I];
 end;
 
 procedure PumpAsyncWaits;

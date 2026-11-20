@@ -550,6 +550,7 @@ var
   Remaining: Int64;
   Text, AuditFailure: string;
   AuditFailed: Boolean;
+  Paused: Int64;
 begin
   Result := Default(TGocciaSandboxRunResult);
   Result.Ok := False;
@@ -598,8 +599,14 @@ begin
         caller's thread }
       if (AParent <> nil) and Assigned(AParent.Engine) and FDeterministic then
         Thread.RandomRoot := AParent.Engine.ForkRandom;
-      Thread.Start;
-      Thread.WaitFor;
+      { the caller's deadline waits while the child, which has what is left of it, runs }
+      Paused := LimitsSuspend;
+      try
+        Thread.Start;
+        Thread.WaitFor;
+      finally
+        LimitsResume(Paused);
+      end;
       Result := Thread.Result;
       AuditFailed := Thread.AuditFailed;
       AuditFailure := Thread.AuditFailure;

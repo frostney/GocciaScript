@@ -25,6 +25,8 @@ function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
 { a module a host evaluates before its entry (a globals module, a module manifest): loaded, linked and evaluated
   (its top-level await settled through the microtasks), its namespace in NS; the jobs it leaves are the entry's }
 function EvaluateModuleNamespace(const Path: UnicodeString; var NS: TValue): Boolean;
+{ whether the entry RunModuleFile ran is still evaluating: its top-level await waits on what nothing settled }
+function EntryEvaluationPending: Boolean;
 
 type
   { a host's modules: for a request key (a specifier with a scheme, as goccia:csv, kept as written; otherwise a
@@ -52,6 +54,9 @@ function ResolveModuleSpecifier(const Spec, Referrer: UnicodeString): UnicodeStr
 { the source of the module at Path, as the host has it (a module entry read from stdin, or a section of a file):
   loading Path takes it instead of reading the file. An empty Path clears it. }
 procedure SetProvidedSource(const Path, Source: UnicodeString);
+{ GocciaScript's experimental JavaScript module source objects (--experimental-js-module-source): a source text
+  module's source phase import gives one }
+procedure SetJSModuleSources(On: Boolean);
 { this thread's module records so far: a mark ModuleLoadedSince counts from }
 function ModuleCount: Integer;
 { whether this thread's engine loaded a module from Path after Mark records (a host shows a code frame only of a
@@ -132,6 +137,15 @@ threadvar
   ImportStacks: array of UnicodeString;
   AMSCtor: TValue;        { the realm's %AbstractModuleSource% (made when first asked for) }
   HostModSource: TValue;  { the realm's source object of the host's source module }
+  { GocciaScript's experimental JavaScript module source objects (--experimental-js-module-source): each source
+    text module's, by its Id, and the prototype they share (ModuleSource.prototype, inheriting from
+    %AbstractModuleSource%.prototype); JSModSourceKey marks them }
+  JSModSources: TValue;
+  JSModSourceProto: TValue;
+  JSModSourceKey: PStr;
+  JSModuleSourcesOn: Boolean;
+  { the evaluation promise of the entry RunModuleFile ran last }
+  EntryEvalPromise: TValue;
 
 destructor TModRec.Destroy;
 begin
@@ -365,21 +379,34 @@ function MakeHostModule(const Key: UnicodeString; Exp: TValue; var M: TModRec): 
   'json' (ParseJSONModule), 'text' (the import text proposal: the source decoded as UTF-8) and 'bytes' (the
   import bytes proposal: a Uint8Array over an immutable ArrayBuffer) }
 function LoadTypedModule(const Key: UnicodeString; var M: TModRec): Boolean;
-var P: Integer; Path, AType, Src: UnicodeString; B: RawByteString; V, Tbl: TValue;
+var P, K: Integer; Path, AType, Src: UnicodeString; B: RawByteString; V, Tbl: TValue; Virtual: Boolean;
 begin
   P := Pos(#1, Key);
   Path := Copy(Key, 1, P - 1);
   AType := Copy(Key, P + 1, MaxInt);
   if (AType <> 'json') and (AType <> 'text') and (AType <> 'bytes') then
     Exit(ThrowTypeError('Unsupported module type ''' + AType + ''''));
+  { a host's virtual module (an address, not a path) reinterprets the source it stores }
+  Virtual := False;
+  if Assigned(HostModules) and (Path <> '') and (Path[1] <> '/') then
+  begin
+    K := HostModules(Path, V);
+    if K = -1 then Exit(False);
+    if K = 2 then
+    begin
+      Virtual := True;
+      Src := StrToUnicode(StrOf(V));
+      B := UTF8Encode(Src);
+    end;
+  end;
   if AType = 'bytes' then
   begin
-    if not ReadBytes(Path, B) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
+    if not Virtual and not ReadBytes(Path, B) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
     if not BytesHook(B, V) then Exit(False);
   end
   else
   begin
-    if not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
+    if not Virtual and not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
     if AType = 'text' then V := StrFromUnicode(Src)
     else if not JSONTextHook(Src, V) then Exit(False);
   end;
@@ -1200,15 +1227,23 @@ begin
   { a provided entry has no file for a resolver to find: its path is its key }
   Entry := ProvidedPath;
   if (Entry = '') or (Entry <> Path) then Entry := ResolvePath(Path, '');
+  EntryEvalPromise := VUndefined;
   if not LoadAndLink(Entry, M) then Exit(False);
   Phase := 1;
   PushRoot(EvaluateModule(M));
+  EntryEvalPromise := RootAt(TempTop - 1);
   if PromiseStatus(RootAt(TempTop - 1), R) = 0 then
     if not RunMicrotasks then begin PopRoots(1); Exit(False); end;
   P := RootAt(TempTop - 1);
   PopRoots(1);
   if PromiseStatus(P, R) = 2 then begin Pending := R; Exit(False); end;
   Result := True;
+end;
+
+function EntryEvaluationPending: Boolean;
+var R: TValue;
+begin
+  Result := IsObject(EntryEvalPromise) and (PromiseStatus(EntryEvalPromise, R) = 0);
 end;
 
 function EvaluateModuleNamespace(const Path: UnicodeString; var NS: TValue): Boolean;
@@ -1483,8 +1518,13 @@ end;
 { 28.1.3.1 get %AbstractModuleSource%.prototype [ @@toStringTag ]: the [[ModuleSourceClassName]] of a module
   source, else undefined (G2 has no module source objects) }
 function AMS_ToStringTag(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Mark: TValue;
 begin
-  if IsObject(HostModSource) and (Args[0] = HostModSource) then Res := StrFromUnicode('ModuleSource')
+  Mark := VUndefined;
+  if IsObject(Args[0]) and (JSModSourceKey <> nil) and (ObjOf(Args[0])^.OKind <> okProxy) then
+    if not GetV(Args[0], JSModSourceKey, Mark) then Exit(False);
+  if (IsObject(HostModSource) and (Args[0] = HostModSource)) or (Mark = VTrue) then
+    Res := StrFromUnicode('ModuleSource')
   else Res := VUndefined;
   Result := True;
 end;
@@ -1508,8 +1548,30 @@ end;
 { the realm's source object of the host's source module: an object whose prototype inherits from
   %AbstractModuleSource%.prototype (a WebAssembly.Module, say, in a host that has those) }
 function ModuleSourceOf(M: TModRec): TValue;
-var C, P: TValue;
+var C, P: TValue; E: PValueArray;
 begin
+  if (M <> nil) and (M.Path <> HostSourceSpecifier) then
+  begin
+    { a source text module's own source object, made once }
+    E := ObjOf(JSModSources)^.Elements;
+    if (E <> nil) and (E^.Len > M.Id) and IsObject(E^.Data[M.Id]) then Exit(E^.Data[M.Id]);
+    if not IsObject(JSModSourceProto) then
+    begin
+      C := AbstractModuleSourceIntrinsic;
+      PushRoot(C);
+      GetV(RootAt(TempTop - 1), AtomPrototype, P);
+      JSModSourceProto := MkPtr(NewPlainObject(P, 4));
+      PopRoots(1);
+    end;
+    PushRoot(MkPtr(NewPlainObject(JSModSourceProto, 2)));
+    DefineOwn(RootAt(TempTop - 1), JSModSourceKey, VTrue, pfHidden);
+    while (ObjOf(JSModSources)^.Elements = nil) or (ObjOf(JSModSources)^.Elements^.Len <= M.Id) do
+      ArrayPush(ObjOf(JSModSources), VUndefined);
+    ValueArrayStore(ObjOf(JSModSources)^.Elements, M.Id, RootAt(TempTop - 1));
+    Result := RootAt(TempTop - 1);
+    PopRoots(1);
+    Exit;
+  end;
   if IsObject(HostModSource) then Exit(HostModSource);
   C := AbstractModuleSourceIntrinsic;
   PushRoot(C);
@@ -1551,18 +1613,29 @@ end;
 
 function HasModuleSource(M: TModRec): Boolean;
 begin
-  Result := Assigned(M) and (M.Path = HostSourceSpecifier);
+  { the host's source module, and with experimental JavaScript module sources every source text module }
+  Result := Assigned(M) and ((M.Path = HostSourceSpecifier) or (JSModuleSourcesOn and (M.Tpl <> nil)));
+end;
+
+procedure SetJSModuleSources(On: Boolean);
+begin
+  JSModuleSourcesOn := On;
 end;
 
 procedure InitModules;
 begin
   NSDeferHook := @DeferEval;
-  AddRoot(@AMSCtor); AddRoot(@HostModSource);
-  RealmVals([@AMSCtor, @HostModSource]);
+  AddRoot(@AMSCtor); AddRoot(@HostModSource); AddRoot(@JSModSourceProto);
+  RealmVals([@AMSCtor, @HostModSource, @JSModSourceProto]);
+  JSModSourceKey := NewKeyAtom('%moduleSource', kfInternal);
   { the module map and the pending dynamic imports belong to the agent's first realm }
   if RealmInit then Exit;
   Mods := TList<TModRec>.Create;
   AddRoot(@ModRoots);
+  AddRoot(@EntryEvalPromise);
+  EntryEvalPromise := VUndefined;
+  AddRoot(@JSModSources);
+  JSModSources := MkPtr(NewArray(0, 0));
   AddRoot(@PendingImports);
   ModRoots := MkPtr(NewArray(0, 64));
   PendingImports := MkPtr(NewArray(0, 16));

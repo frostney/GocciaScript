@@ -106,6 +106,8 @@ type
     FFetchMaxResponseBytes: Integer;
     FCoverage: Boolean;
     FRandomRoot: IGocciaHostRandom;
+    FProfileOpcodes, FProfileFunctions: Boolean;
+    FJSModuleSources: Boolean;
     { the entry's file name (Run): an audited decision made outside every script frame is the entry's }
     FRunFile: UnicodeString;
     function NextRandom(Realm: Integer; out D: Double): Boolean;
@@ -184,6 +186,14 @@ type
     { coverage of the run's code (Goccia.Coverage): its lines, branches and functions recorded in the calling
       thread's TGocciaCoverageTracker, which the host creates and enables; the run takes the interpreter only }
     property Coverage: Boolean read FCoverage write FCoverage;
+    { the runtime profile of the run (--profile): opcode counts and the scalar fast path, and function calls, times
+      and allocations, recorded in the calling thread's TGocciaProfiler (G2.Profile), which the host creates or
+      adopts; the run takes the interpreter only }
+    property ProfileOpcodes: Boolean read FProfileOpcodes write FProfileOpcodes;
+    { GocciaScript's experimental JavaScript module source objects (--experimental-js-module-source): a source
+      phase import of a source text module gives one }
+    property JSModuleSources: Boolean read FJSModuleSources write FJSModuleSources;
+    property ProfileFunctions: Boolean read FProfileFunctions write FProfileFunctions;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
@@ -203,7 +213,7 @@ implementation
 
 uses
   Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval, G2.Modules,
-  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch, G2.Compiler, G2.Sandbox;
+  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch, G2.Compiler, G2.Sandbox, G2.Profile, Goccia.Profiler.Compile;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -732,6 +742,7 @@ begin
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   SetActiveProfile(FProfile);
   SetConsoleSink(FOnConsole);
+  SetJSModuleSources(FJSModuleSources);
   { coverage: the run's code compiled with a line for every source line, and run through the coverage hook }
   CompileCoverage := FCoverage;
   CoverageOn := FCoverage;
@@ -764,8 +775,10 @@ begin
   end;
   T := nil;
   Start := GetNanoseconds;
+  { an opcode or compile profile compiles the entry as it would be compiled to keep its value, whatever the report's
+    form, so the code it counts does not depend on --output or --print }
   Compiled := HostCompileEntry(Source, UnicodeString(FileName), Kind, T, Result.IsModule, Err,
-    FResultForm <> g2rfNone);
+    (FResultForm <> g2rfNone) or FProfileOpcodes or (TGocciaCompileProfiler.Instance <> nil));
   Result.CompileNanoseconds := GetNanoseconds - Start;
   if not Compiled then
   begin
@@ -784,6 +797,7 @@ begin
     for I := 0 to EntryWarningCount - 1 do
       FOnWarning(EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I], EntryWarningColumns[I]);
   SetMaxFrames(FMaxFrames);
+  if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
   LimitsArm(FTimeoutMs, FMaxInstructions);
   Start := GetNanoseconds;
   { the completion value, rooted through the event loop }
@@ -794,7 +808,7 @@ begin
       Phase := 0;
       { the entry's source as given (stdin has no file to read), compiled to keep its last value when reported }
       SetProvidedSource(UnicodeString(ExpandFileName(FileName)), Source);
-      SetEntryCompletionWanted(FResultForm <> g2rfNone);
+      SetEntryCompletionWanted((FResultForm <> g2rfNone) or FProfileOpcodes or (TGocciaCompileProfiler.Instance <> nil));
       Result.Ok := RunModuleFile(UnicodeString(ExpandFileName(FileName)), Phase) and RunEventLoop;
       Completion := EntryCompletion;
       PopRoots(1);
@@ -813,6 +827,13 @@ begin
     if Result.Ok and FFailOnUnhandledRejection and TakeUnhandledRejection(Thrown) then
     begin
       Pending := Thrown;
+      Result.Ok := False;
+    end;
+    { an entry module still waiting once nothing is left to settle it failed (GocciaScript's await of a promise
+      that never settles); a rejection nothing handled comes first }
+    if Result.Ok and Result.IsModule and EntryEvaluationPending then
+    begin
+      Pending := MakeError(TypeErrorProto, 'await: Promise did not settle');
       Result.Ok := False;
     end;
     if Result.Ok and (FResultForm <> g2rfNone) then
@@ -861,6 +882,7 @@ begin
       end;
     end;
   finally
+    ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);
     PopRoots(1);

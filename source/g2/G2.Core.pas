@@ -254,6 +254,8 @@ threadvar
   { the bytes allocated before the nursery's used part (HeapAllocatedBytes), and the most the heap held at a
     collection or a direct old-space allocation (HeapPeakBytes) }
   GCAllocatedBytes, GCPeakBytes: Int64;
+  { the objects NewObject made on this thread while CountObjects is set (the profiler's allocations) }
+  ObjectsMade: Int64;
 
 procedure HeapInit(NurseryBytes: SizeInt);
 { The engines a thread has had: once-per-engine set-up (registering a root) keeps the generation it ran for, so a
@@ -285,6 +287,8 @@ function HeapReserve(Bytes: Int64): Boolean;
 var
   { the bytes held outside the heap that count against HeapCeiling (SharedArrayBuffer blocks), for every thread }
   HeapExternalBytes: Int64 = 0;
+  { some thread profiles its allocations: NewObject counts ObjectsMade }
+  CountObjects: Boolean = False;
 procedure HeapExternalAdd(Delta: Int64);
 var
   { a full collection that leaves the heap and HeapExternalBytes over HeapCeiling calls it (G2.VM: the run ends at
@@ -930,6 +934,11 @@ begin
     Result := AllocOld(Size, Kind);
     Inc(GCAllocatedBytes, Result^.Size);
     if HeapUsedBytes > GCPeakBytes then GCPeakBytes := HeapUsedBytes;
+    { a cell the full collection could not make room for: the limit is spent (the run ends at its next back edge
+      or call), as when a collection leaves the heap over it }
+    if (HeapCeiling > 0) and Assigned(GCLimitHook) and (AbortKind <> 3) and
+       (GCOldBytes + HeapExternalBytes > HeapCeiling) then
+      GCLimitHook;
     Exit;
   end;
   if (NurseryTop + Size > NurseryLimit) or GCStress then
@@ -2144,6 +2153,7 @@ end;
 function NewObject(Shape: PShape; InlineCap: Integer; OKind: Byte): PObj;
 var I: Integer;
 begin
+  if CountObjects then Inc(ObjectsMade);
   Result := PObj(AllocCell(SizeOf(TObj) - SizeOf(TValue) + InlineCap * SizeOf(TValue), ckObject));
   Result^.Shape := Shape;
   Result^.Elements := nil;

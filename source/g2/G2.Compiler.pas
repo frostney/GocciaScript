@@ -88,7 +88,8 @@ threadvar
 implementation
 
 uses
-  TypInfo, Goccia.SourceSpan, Goccia.Scope.BindingMap, Goccia.Types.Enforcement, Goccia.Bytecode.Chunk, G2.VM, G2.Lazy, G2.PreParse;
+  TypInfo, Goccia.SourceSpan, Goccia.Scope.BindingMap, Goccia.Types.Enforcement,
+  Goccia.Bytecode.Chunk, Goccia.Profiler.Compile, G2.VM, G2.Lazy, G2.PreParse;
 
 type
   { an expression that makes a closure (a function, arrow, method, accessor or class) }
@@ -332,6 +333,8 @@ type
   TScope = class
     Bindings: array of TBinding;
     Count: Integer;
+    { the compile profile (--profile=compile; nil without one): lookups and the bindings each examined }
+    Prof: TGocciaCompileProfiler;
     BaseReg: Integer;
     Captured: Boolean;
     IsFunctionTop: Boolean;
@@ -370,6 +373,7 @@ type
   TFuncState = class
     Parent: TFuncState;
     Tpl: PFuncTemplate;
+    Prof: TGocciaCompileProfiler;   { the compile profile's (nil without one): the upvalue names each lookup scans }
     { Relative[PC]: the instruction's C is a jump offset (PatchTo wrote it), for CompactNops }
     Relative: array of Boolean;
     Scopes: array of TScope;
@@ -417,6 +421,16 @@ type
   TCompiler = class
     FS: TFuncState;
     SourceName: UnicodeString;
+    { the compile profile (--profile=compile, Goccia.Profiler.Compile; nil without one): the work each function's
+      compile does, and its time, at the line and column the parser recorded it at (ProfLine, ProfCol: the next
+      CompileFunction's node, -1 none) }
+    Prof: TGocciaCompileProfiler;
+    ProfLine, ProfCol: Integer;
+    ProfPositions: TDictionary<PFuncTemplate, Int64>;
+    function ProfAt(N: TGocciaASTNode): TCompiler;
+    procedure ProfNameAll(T: PFuncTemplate);
+    procedure ProfExpr(E: TGocciaExpression);
+  public
     DefaultSuperForward: Boolean;   { next CompileFunction is a default derived constructor }
     { the register (+ 1; 0 none) of the computed key the next anonymous class is named by: named on creation,
       before its static elements run (NamedEvaluation of a class with a key known only at run time) }
@@ -683,11 +697,16 @@ begin
   if Length(UpvalIndex) = 0 then
   begin
     for I := 0 to High(UpvalNames) do
+    begin
+      if Prof <> nil then Prof.Count(ccUpvalueListProbes);
       if UpvalNames[I] = N then Exit(I);
+    end;
     Exit(-1);
   end;
   Mask := High(UpvalIndex);
   H := Integer(NameHash(N) and Cardinal(Mask));
+  { the hashed index: its bucket, one probe }
+  if Prof <> nil then Prof.Count(ccUpvalueListProbes);
   while UpvalIndex[H] <> 0 do
   begin
     if UpvalNames[UpvalIndex[H] - 1] = N then Exit(UpvalIndex[H] - 1);
@@ -732,19 +751,24 @@ end;
 function TScope.FindH(const N: UnicodeString; H: Cardinal): Integer;
 var I, Mask, L: Integer;
 begin
+  if Prof <> nil then Prof.Count(ccLocalLookups);
   if Length(Index) = 0 then
   begin
     { names of other lengths are told apart without the string compare's call }
     L := Length(N);
     for I := Count - 1 downto 0 do
+    begin
+      if Prof <> nil then Prof.Count(ccLocalLookupProbes);
       if (Pointer(Bindings[I].Name) = Pointer(N)) or ((Length(Bindings[I].Name) = L) and (Bindings[I].Name = N)) then
         Exit(I);
+    end;
     Exit(-1);
   end;
   Mask := High(Index);
   I := Integer(H and Cardinal(Mask));
   while Index[I] <> 0 do
   begin
+    if Prof <> nil then Prof.Count(ccLocalLookupProbes);
     if (Pointer(Bindings[Index[I] - 1].Name) = Pointer(N)) or (Bindings[Index[I] - 1].Name = N) then
       Exit(Index[I] - 1);
     I := (I + 1) and Mask;
@@ -1098,10 +1122,44 @@ begin
   FS.FreeReg := R;
 end;
 
+function ProfTplName(T: PFuncTemplate): UnicodeString;
+begin
+  if T^.Name <> nil then Result := StrToUnicode(T^.Name) else Result := '';
+end;
+
+{ the next CompileFunction's function is N (the parser's position of it); Self, for the call }
+function TCompiler.ProfAt(N: TGocciaASTNode): TCompiler;
+begin
+  Result := Self;
+  if (Prof = nil) or (N = nil) then Exit;
+  ProfLine := N.Line;
+  ProfCol := N.Column;
+end;
+
+{ each function's final name and instruction count, from T down }
+procedure TCompiler.ProfNameAll(T: PFuncTemplate);
+var I: Integer; Pos: Int64; Name: UnicodeString;
+begin
+  if (T = nil) or not ProfPositions.TryGetValue(T, Pos) then Exit;
+  if T^.TopLevel then Name := '<module>' else Name := ProfTplName(T);
+  Prof.NameFunction(SourceName, Integer(Pos shr 32), Integer(Pos and $FFFFFFFF), Name, T^.CodeLen);
+  for I := 0 to High(T^.Children) do ProfNameAll(T^.Children[I]);
+end;
+
+{ an expression compiled: its node (by kind), the constant-emit attempt every expression makes (a literal is
+  loaded as one), and the visit that classifies its kind }
+procedure TCompiler.ProfExpr(E: TGocciaExpression);
+begin
+  Prof.CountNode(E.ClassType);
+  Prof.Count(ccConstantEmitAttempts);
+  Prof.Count(ccExpressionTypeVisits);
+end;
+
 procedure TCompiler.PushScope(IsTop: Boolean);
 var S: TScope;
 begin
   S := TScope.Create;
+  S.Prof := Prof;
   S.BaseReg := FS.FreeReg;
   S.IsFunctionTop := IsTop;
   if FS.ScopeCount >= Length(FS.Scopes) then SetLength(FS.Scopes, FS.ScopeCount * 2 + 8);
@@ -1114,6 +1172,7 @@ var S: TScope; I: Integer;
 begin
   Dec(FS.ScopeCount);
   S := FS.Scopes[FS.ScopeCount];
+  if Prof <> nil then Prof.Count(ccLocalListScans, S.Count);
   for I := 0 to S.Count - 1 do
     if S.Bindings[I].Reg < Length(FS.VarRegs) then Dec(FS.VarRegs[S.Bindings[I].Reg]);
   if S.Captured then Emit(Ins(opClose, S.BaseReg, 0, 0));
@@ -1226,6 +1285,7 @@ end;
 function TCompiler.ResolveUpval(F: TFuncState; const N: UnicodeString): Integer;
 var I, Reg, PIdx: Integer; T: PFuncTemplate;
 begin
+  if Prof <> nil then Prof.Count(ccUpvalueResolutions);
   I := F.FindUpvalName(N);
   if I >= 0 then Exit(I);
   if F.Parent = nil then Exit(-1);
@@ -1862,7 +1922,7 @@ var Outer, F: TFuncState; T: PFuncTemplate; I, R, J, NP, HomeNop, NTNop, CtorNop
   Nodes: TList<TGocciaASTNode>; Skip: Integer; Ret: Integer;
   Pair: TGocciaExpressionMap.TKeyValuePair; SavedGlobalTop, InitStatic, SavedParamInit: Boolean; PN: TStringList;
   K, SavedWith, Tmp: Integer; SloppyEval: Boolean; EnvName: UnicodeString; ParamNames: TStringList;
-  ParamsClose: Boolean; ArgKeep: array of Integer; B: Integer;
+  ParamsClose: Boolean; ArgKeep: array of Integer; B: Integer; PLine, PCol: Integer; PPos: Int64;
 begin
   SavedGlobalTop := GlobalTop;   { a nested function's declarations are its own }
   SavedParamInit := InParamInit;
@@ -1919,6 +1979,18 @@ begin
   F.IsStaticBlock := StaticBlk;
   if Outer <> nil then begin F.CurLine := Outer.CurLine; F.CurCol := Outer.CurCol; end;
   FS := F;
+  F.Prof := Prof;
+  if Prof <> nil then
+  begin
+    { the function as the parser recorded it: the top level at 0:0, a function at its node }
+    if Outer = nil then begin PLine := 0; PCol := 0; end
+    else if ProfLine >= 0 then begin PLine := ProfLine; PCol := ProfCol; end
+    else begin PLine := T^.DeclLine; PCol := T^.DeclCol; end;
+    ProfPositions.AddOrSetValue(T, (Int64(PLine) shl 32) or Int64(Cardinal(PCol)));
+    if Outer <> nil then Prof.EnterTemplate(ProfTplName(Outer.Tpl), Outer.Tpl^.CodeLen, Name, SourceName, PLine, PCol)
+    else Prof.EnterTemplate('', -1, '<module>', SourceName, 0, 0);
+  end;
+  ProfLine := -1;
   if Length(PresetUpvals) > 0 then
   begin
     SetLength(T^.Upvals, Length(PresetUpvals));
@@ -1970,6 +2042,8 @@ begin
         { 15.2.1 / 15.3.1: eval and arguments are not parameter names in strict code }
         if T^.IsStrict and not Params[I].IsPattern and ((Params[I].Name = 'eval') or (Params[I].Name = 'arguments')) then
           raise EEarlySyntaxError.Create('Unexpected eval or arguments in strict mode');
+        { a parameter name tested against the names before it, then recorded }
+        if Prof <> nil then Prof.Count(ccParameterNameProbes, 2);
         if Params[I].IsPattern then DeclareLocal('%param' + IntToStr(J), False)
         else if FS.Scopes[FS.ScopeCount - 1].Find(Params[I].Name) >= 0 then
         begin
@@ -2051,8 +2125,17 @@ begin
         initializers compile, so the closure checks them }
       ParamsClose := False;
       for I := 0 to High(Params) do
+      begin
+        { each parameter visited, and each initializer's source checked for a closure }
+        if Prof <> nil then
+        begin
+          Prof.Count(ccParameterInitializerVisits);
+          if Assigned(Params[I].DefaultValue) or Params[I].IsPattern then
+            Prof.Count(ccParameterInitializerSourceChecks);
+        end;
         if (Assigned(Params[I].DefaultValue) and MakesClosure(Params[I].DefaultValue)) or
            (Params[I].IsPattern and MakesClosure(Params[I].Pattern)) then ParamsClose := True;
+      end;
       if ParamsClose then
       begin
         SetLength(ArgKeep, Length(Params));
@@ -2337,6 +2420,10 @@ begin
     FinishTemplate(T);
     Result := T;
   finally
+    { back to the function around it }
+    if (Prof <> nil) and (Outer <> nil) and ProfPositions.TryGetValue(Outer.Tpl, PPos) then
+      Prof.EnterTemplate(ProfTplName(T), T^.CodeLen, '', SourceName, Integer(PPos shr 32),
+        Integer(PPos and $FFFFFFFF));
     FS := Outer;
     F.Free;
     GlobalTop := SavedGlobalTop;
@@ -2363,7 +2450,7 @@ begin
     NextSloppyEval := deuSloppyDirectEval in AE.DirectEvalUsage;
     { an arrow's own "use strict" directive makes its code strict (11.2.2) }
     if HasUseStrictDirective(AE.Body) then PendingStrict := 1;
-    T := CompileFunction(NameHint, AE.Parameters, AE.Body, True, False, False, False, False, AE.IsAsync);
+    T := ProfAt(AE).CompileFunction(NameHint, AE.Parameters, AE.Body, True, False, False, False, False, AE.IsAsync);
     T^.SourceRange := AE.SourceRange;
     EmitClosure(Dest, T);
   end
@@ -2391,9 +2478,9 @@ begin
     PendingStrict := Ord(FE.ParsedInStrictMode);
     NextSloppyEval := deuSloppyDirectEval in FE.DirectEvalUsage;
     if FE.Name <> '' then
-      T := CompileFunction(FE.Name, FE.Parameters, FE.Body, False, False, False, False, FE.IsGenerator, FE.IsAsync)
+      T := ProfAt(FE).CompileFunction(FE.Name, FE.Parameters, FE.Body, False, False, False, False, FE.IsGenerator, FE.IsAsync)
     else
-      T := CompileFunction(NameHint, FE.Parameters, FE.Body, False, False, False, False, FE.IsGenerator, FE.IsAsync);
+      T := ProfAt(FE).CompileFunction(NameHint, FE.Parameters, FE.Body, False, False, False, False, FE.IsGenerator, FE.IsAsync);
     T^.SourceRange := FE.SourceRange;
     if NameScope then
     begin
@@ -2694,6 +2781,7 @@ function TCompiler.BuildEvalDesc: UnicodeString;
 var Seen: TStringList; I, J, U, Fl, D: Integer; F: TFuncState; Sc: TScope;
   procedure Add(const N: UnicodeString; Kind, Idx, Flags: Integer; Depth: Integer = 0);
   begin
+    if Prof <> nil then Prof.Count(ccDirectEvalRecordProbes);
     Result := Result + N + #2 + IntToStr(Kind) + #2 + IntToStr(Idx) + #2 + IntToStr(Flags) + #2 + IntToStr(Depth) + #1;
   end;
 begin
@@ -3047,7 +3135,7 @@ begin
       FD := TGocciaFunctionDeclaration(N);
       PendingStrict := Ord(FD.FunctionExpression.ParsedInStrictMode);
       NextSloppyEval := deuSloppyDirectEval in FD.FunctionExpression.DirectEvalUsage;
-      T := CompileFunction(FD.Name, FD.FunctionExpression.Parameters, FD.FunctionExpression.Body, False, False, False,
+      T := ProfAt(FD.FunctionExpression).CompileFunction(FD.Name, FD.FunctionExpression.Parameters, FD.FunctionExpression.Body, False, False, False,
         False, FD.FunctionExpression.IsGenerator, FD.FunctionExpression.IsAsync);
       T^.SourceRange := FD.FunctionExpression.SourceRange;
       if GlobalTop then
@@ -4037,6 +4125,7 @@ end;
 procedure TCompiler.Stmt(S: TGocciaASTNode);
 begin
   if S = nil then Exit;
+  if Prof <> nil then Prof.CountNode(S.ClassType);
   NotePosition(S, True);
   CovMark;
   if (S is TGocciaStatement) and (TGocciaStatement(S).LabelCount > 0) then
@@ -5016,6 +5105,7 @@ begin
        not InTDZ(TGocciaIdentifierExpression(E).Name) and not ParamInTDZ(TGocciaIdentifierExpression(E).Name, R) and
        ((WithCount = 0) or (WithsFor(TGocciaIdentifierExpression(E).Name, WithIdxScratch) = 0)) then
     begin
+      if Prof <> nil then ProfExpr(E);
       { the register is the operand: under coverage its line still gets an instruction }
       if CompileCoverage then
       begin
@@ -5026,6 +5116,7 @@ begin
     end;
     if (K = 2) and not FS.IsArrow then
     begin
+      if Prof <> nil then ProfExpr(E);
       if InDerivedCtor then Emit(Ins(opCheckThis, 0, 0, 0));
       Exit(0);
     end;
@@ -5497,7 +5588,7 @@ begin
             case E.Kind of
               cekMethod:
                 begin
-                  T := CompileFunction(PrivKeyName(E.Name), E.MethodNode.Parameters, E.MethodNode.Body, False,
+                  T := ProfAt(E.MethodNode).CompileFunction(PrivKeyName(E.Name), E.MethodNode.Parameters, E.MethodNode.Body, False,
                     True, False, False, E.MethodNode.IsGenerator, E.MethodNode.IsAsync);
                   T^.SourceRange := E.MethodNode.SourceRange;
                 end;
@@ -5532,7 +5623,7 @@ begin
           Tmp := AllocReg;
           if E.Kind = cekMethod then
           begin
-            T := CompileFunction(Name, E.MethodNode.Parameters, E.MethodNode.Body, False, True, False, False,
+            T := ProfAt(E.MethodNode).CompileFunction(Name, E.MethodNode.Parameters, E.MethodNode.Body, False, True, False, False,
               E.MethodNode.IsGenerator, E.MethodNode.IsAsync);
             T^.SourceRange := E.MethodNode.SourceRange;
             EmitClosure(Tmp, T);
@@ -5736,11 +5827,15 @@ begin
   end;
   Save := FS.FreeReg;
   Op := BinOpFor(E.Operator);
+  { the right operand looked at for a constant immediate }
+  if Prof <> nil then Prof.Count(ccConstantEvaluationVisits);
   { x + small int }
   if (Op in [opAdd, opSub]) and (E.Right is TGocciaLiteralExpression) and
      (TGocciaLiteralExpression(E.Right).Value is TGocciaNumberLiteralValue) then
   begin
     V := MkNumber(TGocciaNumberLiteralValue(TGocciaLiteralExpression(E.Right).Value).Value);
+    { the constant proved an exact small integer, or not }
+    if Prof <> nil then Prof.Count(ccNumberProofVisits);
     { x - 0 stays a subtraction: as an add of the negated immediate, -0 - 0 would give +0 }
     if IsInt(V) and (Abs(IntOf(V)) < 4000000) and ((Op = opAdd) or (IntOf(V) <> 0)) then
     begin
@@ -7124,6 +7219,7 @@ var Save, R, J, J2, L: Integer; SE: TGocciaSequenceExpression;
   I: Integer; F: TFuncState; Msg: UnicodeString;
 begin
   if E = nil then begin Emit(Ins(opLoadUndef, Dest, 0, 0)); Exit; end;
+  if Prof <> nil then ProfExpr(E);
   NotePosition(E, False);
   L := FS.CurLine;
   case KindOf(ExprKinds, ExprClasses, E) of
@@ -8146,11 +8242,22 @@ function CompileProgram(Prog: TGocciaProgram; const SourceName: UnicodeString; R
   Goal: Integer): PFuncTemplate;
 var C: TCompiler; Params: TGocciaParameterArray; I: Integer; Nodes: TList<TGocciaASTNode>; Strict: Boolean;
   MI: TModuleInfo; Outer: TFuncState; OT: PFuncTemplate; Desc, Entry: UnicodeString; Fields: TUnicodeStringArray;
-  K, P1, D, Ser: Integer;
+  K, P1, D, Ser: Integer; Done: Boolean;
 begin
   C := TCompiler.Create;
   C.SourceName := SourceName;
   C.FS := nil;
+  C.ProfLine := -1;
+  { the compile profile (--profile=compile), unless the source is the host's }
+  C.Prof := TGocciaCompileProfiler.Instance;
+  if (C.Prof <> nil) and C.Prof.IsExcluded(SourceName) then C.Prof := nil;
+  if C.Prof <> nil then
+  begin
+    C.ProfPositions := TDictionary<PFuncTemplate, Int64>.Create;
+    C.Prof.BeginCompile;
+  end;
+  Done := False;
+  Result := nil;
   C.PendingStrict := -1;
   C.ReturnLast := ReturnLast;
   { a restricted profile without compat-non-strict-mode: all code is strict }
@@ -8265,7 +8372,20 @@ begin
       Result := C.CompileFunction('<script>', Params, nil, False, False, False, False, False, False, nil, Nodes);
       if GetEnvironmentVariable('G2_DUMP') <> '' then DumpTemplates(Result, UnicodeString(GetEnvironmentVariable('G2_DUMP')));
     end;
+    Done := True;
   finally
+    if C.Prof <> nil then
+    begin
+      { the functions' final names (a binding names a function after its body compiled) }
+      if Done then
+      begin
+        C.Prof.EndCompile('<module>', Result^.CodeLen);
+        C.ProfNameAll(Result);
+      end
+      else
+        C.Prof.EndCompile('', -1);
+      C.ProfPositions.Free;
+    end;
     MI.Free;
     C.ModImportNames.Free;
     C.ModPublish.Free;
