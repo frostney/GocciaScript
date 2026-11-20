@@ -49,35 +49,16 @@ describe("JSX type arguments in .tsx", () => {
     expect(el.props).toEqual({ v: 1 });
   });
 
-  test("an element with type arguments starts a statement after a line break", () => {
+  test("an element with type arguments on the line after a statement header", () => {
     const made = [];
     const record = (value) => made.push(value);
-    // prettier-ignore
+    // A `<` on the line after an expression's end continues it, as in
+    // TypeScript, so a typed element there is parenthesized or follows `;`.
     if (made.length === 0)
-      <Select<string> v={record(1)} />;
-    // prettier-ignore
-    if (made.length === 1) record(2);
-    else
-      <Select<string> v={record(3)} />;
+      (<Select<string> v={record(1)} />);
+    if (made.length === 1) {};
+    <Select<string> v={record(2)} />;
     expect(made).toEqual([1, 2]);
-    let el;
-    // prettier-ignore
-    if (made.length === 0) el = 0;
-    else
-      el = <Select<string> v={4} />;
-    expect(el.props).toEqual({ v: 4 });
-  });
-
-  test("an element with type arguments starts a statement after a block", () => {
-    const made = [];
-    const record = (value) => made.push(value);
-    // prettier-ignore
-    const run = () => {
-      if (made.length > 0) {}
-      <Select<string> v={record(1)} />;
-    };
-    run();
-    expect(made).toEqual([1]);
   });
 
   test("a list that opens with a generic function type", () => {
