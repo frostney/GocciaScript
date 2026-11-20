@@ -10406,7 +10406,7 @@ begin
         Polls := @GThreadPolls;
         repeat
           if Polls^.Any <> 0 then
-            RunArmedPolls(Polls);
+            SpendSpreadBudget(Polls);
           CallArgs := AcquireArguments;
           try
             NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);
@@ -10617,7 +10617,7 @@ begin
       Polls := @GThreadPolls;
       repeat
         if Polls^.Any <> 0 then
-          RunArmedPolls(Polls);
+          SpendSpreadBudget(Polls);
         CallArgs := AcquireArguments;
         try
           NextResult := InvokeCallable(NextMethod, CallArgs, IteratorValue);

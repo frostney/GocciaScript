@@ -1609,6 +1609,18 @@ console.log("--max-instructions (drop skip through next())...");
   if (exitCode !== 1 || json.error?.type !== "InstructionLimitError") throw new Error(`drop skip through next() should end with InstructionLimitError, got exit ${exitCode}`);
 }
 
+console.log("--max-instructions (an iterator object over a bound native next)...");
+{
+  // The consumer's step is charged however the next method is reached.
+  const setup = "const src = Array.prototype.values.call({ length: 1000 });\nconst it = { next: src.next.bind(src), [Symbol.iterator]() { return this; } };\n";
+  const alone = runLoaderJson(setup, ["--max-instructions=500"], { timeout: 10_000 });
+  if (alone.exitCode !== 0) throw new Error(`bound-next setup alone should succeed, got exit ${alone.exitCode}`);
+  for (const [label, body] of [["spread", "const b = [...it];\n0;\n"], ["a destructuring pattern", "const [...r] = it;\n0;\n"]]) {
+    const { exitCode, json } = runLoaderJson(setup + body, ["--max-instructions=500"], { timeout: 10_000 });
+    if (exitCode !== 1 || json.error?.type !== "InstructionLimitError") throw new Error(`${label} over a bound native next should end with InstructionLimitError, got exit ${exitCode}: ${JSON.stringify(json.error)}`);
+  }
+}
+
 console.log("--timeout (native regex scan)...");
 {
   const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50"], { timeout: 10_000 });
