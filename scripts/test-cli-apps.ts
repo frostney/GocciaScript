@@ -16391,6 +16391,9 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
 
     if (!run(RUNNER, [entry, "--modules", manifest]).includes(warning))
       throw new Error("A plain run should print the manifest's imported warning");
+    // --deny-read loads the manifest through a loader of its own.
+    if (!run(RUNNER, [entry, "--modules", manifest, "--deny-read"]).includes(warning))
+      throw new Error("A plain --deny-read run should print the manifest's imported warning");
     if (!run(RUNNER, [entry, "--globals", globals]).includes(warning))
       throw new Error("A plain run should print the globals module's imported warning");
 
@@ -16413,6 +16416,7 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
 
     const cases: [string, string, string[]][] = [
       ["GocciaRunner --modules manifest --output=json", RUNNER, [entry, "--modules", manifest, "--output=json"]],
+      ["GocciaRunner --modules manifest --deny-read --output=json", RUNNER, [entry, "--modules", manifest, "--deny-read", "--output=json"]],
       ["GocciaRunner --globals module --output=json", RUNNER, [entry, "--globals", globals, "--output=json"]],
       ["GocciaTestRunner --globals module --output=json", TESTRUNNER, ["-P", plainTest, "--globals", globals, "--output=json"]],
       ["GocciaRunner --output=json", RUNNER, [main, "--output=json"]],
