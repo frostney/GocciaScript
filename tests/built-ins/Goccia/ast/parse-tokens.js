@@ -441,6 +441,52 @@ describe("ast.parse tokens", () => {
     expect(uncovered(result)).toEqual([]);
   });
 
+  test("with jsx on, an element's type arguments are tokens in the file, comments included", () => {
+    const source = [
+      "const el = <List /* a */ <",
+      "  // b",
+      "  Map<string, () => void>, 'x'",
+      "> /* c */ items={v} />;",
+      "",
+    ].join("\n");
+    for (const fileName of ["a.tsx", "a.jsx", "a.js", "a.mjs"]) {
+      const result = parse(source, { jsx: true, fileName, tokens: true });
+
+      expect(lexed(source, { jsx: true, fileName })).toEqual([
+        ["Keyword", "const"],
+        ["Identifier", "el"],
+        ["Punctuator", "="],
+        ["Punctuator", "<"],
+        ["JSXIdentifier", "List"],
+        ["BlockComment", "/* a */"],
+        ["Punctuator", "<"],
+        ["LineComment", "// b"],
+        ["Identifier", "Map"],
+        ["Punctuator", "<"],
+        ["Identifier", "string"],
+        ["Punctuator", ","],
+        ["Punctuator", "("],
+        ["Punctuator", ")"],
+        ["Punctuator", "=>"],
+        ["Keyword", "void"],
+        ["Punctuator", ">"],
+        ["Punctuator", ","],
+        ["StringLiteral", "'x'"],
+        ["Punctuator", ">"],
+        ["BlockComment", "/* c */"],
+        ["JSXIdentifier", "items"],
+        ["Punctuator", "="],
+        ["Punctuator", "{"],
+        ["Identifier", "v"],
+        ["Punctuator", "}"],
+        ["Punctuator", "/"],
+        ["Punctuator", ">"],
+        ["Punctuator", ";"],
+      ]);
+      expect(uncovered(result)).toEqual([]);
+    }
+  });
+
   test("with jsx on, an element inside an attribute expression is measured in the file", () => {
     const source = "const el = <Box icon={<Icon name=\"x\" />} />;\n";
 

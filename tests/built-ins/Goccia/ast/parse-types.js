@@ -591,6 +591,55 @@ describe("ast.parse with expressions: type syntax", () => {
     ]);
   });
 
+  test("with jsx on, an element's type arguments are its first child", () => {
+    const source =
+      "const view = <Select<Map<string, () => void>, 'a' | \"b\"> value={v}><Item<-1> /></Select>;\n";
+    for (const fileName of ["view.tsx", "view.jsx", "view.js", "view.mjs"]) {
+      const result = parseTypes(source, { jsx: true, fileName });
+      const [outer, inner] = findAll(result.root, "JSXElement");
+
+      expect(text(result, outer)).toBe(source.slice(source.indexOf("<Select"), source.lastIndexOf(";")));
+      expect(shapeOf(result, outer)).toEqual([
+        "TSTypeParameterInstantiation(<Map<string, () => void>, 'a' | \"b\">)",
+        "Identifier(v)",
+        "JSXElement(<Item<-1> />)",
+      ]);
+      expect(treeOf(result, outer.children[0])).toEqual([
+        "TSTypeParameterInstantiation(<Map<string, () => void>, 'a' | \"b\">)",
+        "TSTypeReference(Map<string, () => void>)",
+        "TSTypeParameterInstantiation(<string, () => void>)",
+        "TSStringKeyword(string)",
+        "TSFunctionType(() => void)",
+        "TSTypeAnnotation(=> void)",
+        "TSVoidKeyword(void)",
+        "TSUnionType('a' | \"b\")",
+        "TSLiteralType('a')",
+        "StringLiteral('a')",
+        "TSLiteralType(\"b\")",
+        "StringLiteral(\"b\")",
+      ]);
+      expect(treeOf(result, inner)).toEqual([
+        "JSXElement(<Item<-1> />)",
+        "TSTypeParameterInstantiation(<-1>)",
+        "TSLiteralType(-1)",
+        "NumericLiteral(1)",
+      ]);
+      expect(all(result.root).filter((node) => node.kind === "Identifier").map((node) => text(result, node)))
+        .toEqual(["v"]);
+    }
+  });
+
+  test("with jsx on, an empty, unclosed or closing-tag type argument list is a SyntaxError", () => {
+    for (const source of [
+      "const e = <F<> />;\n",
+      "const e = <F<string\n",
+      "const e = (<F<string a={1} />);\n",
+      "const e = <F<string>></F<string>>;\n",
+    ]) {
+      expect(() => parseTypes(source, { jsx: true, fileName: "view.tsx" })).toThrow(SyntaxError);
+    }
+  });
+
   test("children nest inside their parent and siblings do not overlap", () => {
     const source = [
       "type Deep = { a: Map<string, [x: number, y?: Array<{ z: 'q' }>]>; b(c: () => void): Promise<void> };",

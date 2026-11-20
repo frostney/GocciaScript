@@ -163,6 +163,13 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
 
   Use a `.ts` or `.mts` source when an annotation needs the bare `<T>` form.
 
+  An element's tag can carry type arguments, as in TypeScript's `.tsx`. They are erased, in every extension above, so the element is the same call it is without them. A tag name followed by `<` always opens type arguments, because no type parameter list is written that way. A closing tag takes none.
+
+  ```javascript
+  const choice = <Select<Option> items={options} />;
+  const list = <List<number>>{items}</List>;
+  ```
+
 ## Arrow Return Types in Conditionals
 
 Inside a conditional's consequent, `(x) : y => z` reads two ways: an arrow with return type `y`, or the parenthesized expression `(x)`, the conditional's `:`, and an alternate arrow `y => z`. GocciaScript follows TypeScript's rule: there, the return-typed arrow is kept only when the `:` that closes the conditional follows its body. One `:` is needed for each consequent the arrow is nested in. Otherwise the group is a parenthesized expression, so plain JavaScript such as minified `c ? (l) => ({ a: 1 }) : (l) => 2` parses as written.
