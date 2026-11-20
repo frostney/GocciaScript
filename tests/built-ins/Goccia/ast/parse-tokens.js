@@ -487,6 +487,16 @@ describe("ast.parse tokens", () => {
     }
   });
 
+  test("with jsx on, a `>`, brace or backtick in a type argument's string or template does not end the list", () => {
+    const source = "const el = <Outer><F<{ a: '>' }, `t${`}`}`> v={1} /></Outer>;\n";
+    const result = parse(source, { jsx: true, fileName: "a.tsx", tokens: true });
+
+    expect(textsOf(source, "JSXIdentifier", { jsx: true, fileName: "a.tsx" })).toEqual([
+      "Outer", "F", "v", "Outer",
+    ]);
+    expect(uncovered(result)).toEqual([]);
+  });
+
   test("with jsx on, an element inside an attribute expression is measured in the file", () => {
     const source = "const el = <Box icon={<Icon name=\"x\" />} />;\n";
 

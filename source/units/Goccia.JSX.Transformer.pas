@@ -143,6 +143,7 @@ type
     procedure TransformJSXElement;
     function ReadJSXTagName: string;
     function SkipTriviaAt(const AIndex: Integer): Integer;
+    function SkipQuotedAt(const AIndex, ADepth: Integer): Integer;
     function JSXTypeArgumentsStart(const AIndex: Integer): Integer;
     function JSXTypeArgumentsEnd(const AStart: Integer;
       out AStoppedAt: Integer): Integer;
@@ -1036,6 +1037,64 @@ begin
   end;
 end;
 
+// The index after the string or template that opens at AIndex, or 0 when it
+// does not close: a quote's string ends at a line break. A template's
+// substitutions are skipped whole, with the strings, templates and comments
+// inside them, so a closing brace or a backtick in one does not end the
+// template. ADepth bounds how deep substitutions nest.
+function TGocciaJSXTransformer.SkipQuotedAt(const AIndex,
+  ADepth: Integer): Integer;
+var
+  Quote, C: Char;
+  BraceDepth: Integer;
+begin
+  if ADepth > MAX_JSX_DEPTH then
+    Exit(0);
+  Quote := FSource[AIndex];
+  Result := AIndex + 1;
+  while Result <= Length(FSource) do
+  begin
+    C := FSource[Result];
+    if C = '\' then
+      Inc(Result, 2)
+    else if C = Quote then
+      Exit(Result + 1)
+    else if (Quote <> '`') and (C = #10) then
+      Exit(0)
+    else if (Quote = '`') and (C = '$') and (Result < Length(FSource)) and
+            (FSource[Result + 1] = '{') then
+    begin
+      Inc(Result, 2);
+      BraceDepth := 1;
+      while (Result <= Length(FSource)) and (BraceDepth > 0) do
+      begin
+        C := FSource[Result];
+        if CharInSet(C, ['''', '"', '`']) then
+        begin
+          Result := SkipQuotedAt(Result, ADepth + 1);
+          if Result = 0 then
+            Exit;
+          Continue;
+        end;
+        if (C = '/') and (Result < Length(FSource)) and
+           CharInSet(FSource[Result + 1], ['/', '*']) then
+        begin
+          Result := SkipTriviaAt(Result);
+          Continue;
+        end;
+        if C = '{' then
+          Inc(BraceDepth)
+        else if C = '}' then
+          Dec(BraceDepth);
+        Inc(Result);
+      end;
+    end
+    else
+      Inc(Result);
+  end;
+  Result := 0;
+end;
+
 // Where the type arguments after a tag name at AIndex open, as in
 // `<Foo<string> />`, past whitespace and comments: the index of their `<`,
 // or 0 when there are none.
@@ -1056,8 +1115,8 @@ end;
 function TGocciaJSXTransformer.JSXTypeArgumentsEnd(const AStart: Integer;
   out AStoppedAt: Integer): Integer;
 var
-  Index, Depth, BracketDepth, TemplateDepth: Integer;
-  C, Quote: Char;
+  Index, Depth, BracketDepth, QuotedEnd: Integer;
+  C: Char;
 begin
   Result := 0;
   Index := AStart;
@@ -1076,27 +1135,11 @@ begin
       case C of
         '''', '"', '`':
           begin
-            Quote := C;
-            TemplateDepth := 0;
-            Inc(Index);
-            while (Index <= Length(FSource)) and
-                  ((FSource[Index] <> Quote) or (TemplateDepth > 0)) do
-            begin
-              if FSource[Index] = '\' then
-                Inc(Index)
-              else if (Quote = '`') and (FSource[Index] = '$') and
-                      (Index < Length(FSource)) and
-                      (FSource[Index + 1] = '{') then
-              begin
-                Inc(TemplateDepth);
-                Inc(Index);
-              end
-              else if (TemplateDepth > 0) and (FSource[Index] = '}') then
-                Dec(TemplateDepth)
-              else if (Quote <> '`') and (FSource[Index] = #10) then
-                Exit;
-              Inc(Index);
-            end;
+            QuotedEnd := SkipQuotedAt(Index, 0);
+            if QuotedEnd = 0 then
+              Exit;
+            Index := QuotedEnd;
+            Continue;
           end;
         '=':
           if (Index < Length(FSource)) and (FSource[Index + 1] = '>') then
