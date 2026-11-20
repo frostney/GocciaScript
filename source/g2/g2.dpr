@@ -863,6 +863,11 @@ begin
     WriteLn('Fatal error: Execution exceeded instruction limit of ', MaxInstr);
     Halt(1);
   end;
+  if AbortKind = 3 then
+  begin
+    WriteLn('Fatal error: ', UTF8Encode(MemoryLimitMessage));
+    Halt(1);
+  end;
   LimitsDisarm;
   if not Ok then
   begin

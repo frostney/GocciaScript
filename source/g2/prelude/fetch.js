@@ -27,7 +27,6 @@
   const encoder = new G.TextEncoder();
   const decoder = new G.TextDecoder();
   const utf8 = (s) => encoder.encode(s);
-  const toWellFormed = (s) => String.prototype.toWellFormed.call(s);
 
   // ---------------- Blob ----------------
   let blobBytes;   // a Blob's bytes, for the other interfaces
@@ -53,7 +52,8 @@
           pieces.push({ view: part });
         } else {
           if (typeof part === 'symbol') throw new TypeError('Cannot convert a Symbol value to a string');
-          pieces.push({ string: toWellFormed(String(part)) });
+          // USVString: the encoding turns a lone surrogate into U+FFFD, as converting first would
+          pieces.push({ string: String(part) });
         }
       }
     }
@@ -81,23 +81,36 @@
       // public construction comes through BlobCtor with the arguments converted; the prelude's own calls convert
       // here
       if (token !== BLOB_INIT) ({ pieces, type, native } = convertBlobArgs(token, pieces));
-      const chunks = [];
+      // each part's bytes counted, the Blob's reserved at once (over the memory limit: the RangeError, before any
+      // part is copied), then each part written into them
+      const sizes = [];
       let size = 0;
       for (const p of pieces) {
-        let c;
-        if (p.blob !== undefined) c = p.blob;
-        else if (p.buffer !== undefined) c = apply(abDetached, p.buffer, []) ? new Uint8Array(0) : new Uint8Array(p.buffer.slice(0));
+        let len;
+        if (p.blob !== undefined) len = p.blob.length;
+        else if (p.buffer !== undefined) len = apply(abDetached, p.buffer, []) ? 0 : apply(abByteLength, p.buffer, []);
         else if (p.view !== undefined) {
           const v = p.view;
-          c = isAB(v.buffer) && apply(abDetached, v.buffer, []) ? new Uint8Array(0)
-            : new Uint8Array(v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength));
-        } else c = utf8(native ? p.string.replace(/\r\n|\r|\n/g, '\n') : p.string);
-        chunks.push(c);
-        size += c.length;
+          len = isAB(v.buffer) && apply(abDetached, v.buffer, []) ? 0 : v.byteLength;
+        } else {
+          if (native) p.string = p.string.replace(/\r\n|\r|\n/g, '\n');
+          len = n.utf8Length(p.string);
+        }
+        sizes.push(len);
+        size += len;
       }
       const bytes = new Uint8Array(size);
       let at = 0;
-      for (const c of chunks) { bytes.set(c, at); at += c.length; }
+      for (let i = 0; i < pieces.length; i++) {
+        const p = pieces[i];
+        if (sizes[i] > 0) {
+          if (p.blob !== undefined) bytes.set(p.blob, at);
+          else if (p.buffer !== undefined) bytes.set(new Uint8Array(p.buffer), at);
+          else if (p.view !== undefined) bytes.set(new Uint8Array(p.view.buffer, p.view.byteOffset, p.view.byteLength), at);
+          else n.utf8Write(p.string, bytes, at);
+        }
+        at += sizes[i];
+      }
       this.#bytes = bytes;
       this.#type = type;
     }
@@ -235,7 +248,7 @@
     if (isAB(body)) return { bytes: new Uint8Array(body.slice(0)), type: null };
     if (ArrayBuffer.isView(body)) return { bytes: new Uint8Array(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength)), type: null };
     if (body instanceof G.URLSearchParams) return { bytes: utf8(String(body)), type: 'application/x-www-form-urlencoded;charset=UTF-8' };
-    return { bytes: utf8(toWellFormed(String(body))), type: 'text/plain;charset=UTF-8' };
+    return { bytes: utf8(String(body)), type: 'text/plain;charset=UTF-8' };
   }
   let makeResponse;
   class Response {

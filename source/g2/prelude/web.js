@@ -303,22 +303,6 @@
     return false;
   }
   const UTF8_LABELS = ['unicode-1-1-utf-8', 'unicode11utf8', 'unicode20utf8', 'utf-8', 'utf8', 'x-unicode20utf8'];
-  function utf8Encode(s) {
-    const out = [];
-    for (let i = 0; i < s.length; i++) {
-      let c = s.charCodeAt(i);
-      if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
-        const d = s.charCodeAt(i + 1);
-        if (d >= 0xDC00 && d <= 0xDFFF) { c = 0x10000 + ((c - 0xD800) << 10) + (d - 0xDC00); i++; }
-        else c = 0xFFFD;
-      } else if (c >= 0xD800 && c <= 0xDFFF) c = 0xFFFD;
-      if (c < 0x80) out.push(c);
-      else if (c < 0x800) out.push(0xC0 | (c >> 6), 0x80 | (c & 63));
-      else if (c < 0x10000) out.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
-      else out.push(0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
-    }
-    return out;
-  }
   class TextEncoder {
     #brand = true;
     constructor() {}
@@ -326,32 +310,21 @@
       if (e === null || typeof e !== 'object' || !(#brand in e)) throw new TypeError(`TextEncoder.prototype.${what}: Illegal invocation`);
     }
     get encoding() { TextEncoder.#check(this, 'encoding'); return 'utf-8'; }
+    // the host encodes (a lone surrogate becomes U+FFFD): the bytes are counted, reserved at once, then written
     encode(input = '') {
       TextEncoder.#check(this, 'encode');
-      return new Uint8Array(utf8Encode(String(input)));
+      const s = String(input);
+      const out = new Uint8Array(n.utf8Length(s));
+      n.utf8Write(s, out, 0);
+      return out;
     }
     encodeInto(source, destination) {
       TextEncoder.#check(this, 'encodeInto');
       if (!(destination instanceof Uint8Array)) throw new TypeError("Failed to execute 'encodeInto' on 'TextEncoder': parameter 2 is not of type 'Uint8Array'.");
       const s = String(source);   // converted first, as Web IDL converts the arguments in order
       if (resizableBuffer(destination.buffer)) throw new TypeError("Failed to execute 'encodeInto' on 'TextEncoder': The provided Uint8Array value must not be resizable.");
-      let read = 0, written = 0;
-      for (let i = 0; i < s.length; i++) {
-        let c = s.charCodeAt(i), units = 1;
-        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) {
-          const d = s.charCodeAt(i + 1);
-          if (d >= 0xDC00 && d <= 0xDFFF) { c = 0x10000 + ((c - 0xD800) << 10) + (d - 0xDC00); units = 2; }
-          else c = 0xFFFD;
-        } else if (c >= 0xD800 && c <= 0xDFFF) c = 0xFFFD;
-        const bytes = c < 0x80 ? [c] : c < 0x800 ? [0xC0 | (c >> 6), 0x80 | (c & 63)]
-          : c < 0x10000 ? [0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63)]
-          : [0xF0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63)];
-        if (written + bytes.length > destination.length) break;
-        for (const b of bytes) destination[written++] = b;
-        read += units;
-        if (units === 2) i++;
-      }
-      return { read, written };
+      const r = n.utf8Write(s, destination, 0);
+      return { read: r[0], written: r[1] };
     }
   }
   defineProperty(TextEncoder.prototype, Symbol.toStringTag, { value: 'TextEncoder', configurable: true });

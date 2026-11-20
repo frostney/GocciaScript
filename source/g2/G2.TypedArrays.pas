@@ -367,6 +367,13 @@ var B: TValue;
 begin
   if Len * TAElemSize[Kind] > MAX_ALLOC then Exit(ThrowError('RangeError', 'Invalid typed array length: ' + IntToStr(Len)));
   PushRoot(Proto);
+  { AllocateTypedArrayBuffer's AllocateArrayBuffer: the bytes count against the memory limit as AllocBuffer's do }
+  if not HeapReserve(Len * TAElemSize[Kind]) then
+  begin
+    PopRoots(1);
+    Exit(ThrowError('RangeError', 'Array buffer allocation of ' + IntToStr(Len * TAElemSize[Kind]) +
+      ' bytes exceeds the memory limit of ' + IntToStr(HeapCeiling) + ' bytes'));
+  end;
   B := MkPtr(NewArrayBuffer(Len * TAElemSize[Kind], ArrayBufferProtoV));
   T := MkPtr(NewTypedArray(Kind, B, 0, Len, RootAt(TempTop - 1)));
   PopRoots(1);

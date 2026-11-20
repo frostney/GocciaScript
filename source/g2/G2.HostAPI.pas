@@ -394,6 +394,96 @@ begin
   Result := True;
 end;
 
+{ the UTF-8 bytes of N code units at P, as TextEncoder encodes them (a lone surrogate: U+FFFD's three) }
+function Utf8Count(P: PWideChar; N: Integer): Int64;
+var I: Integer; C: Word;
+begin
+  Result := 0;
+  I := 0;
+  while I < N do
+  begin
+    C := Word(P[I]);
+    if C < $80 then Inc(Result)
+    else if C < $800 then Inc(Result, 2)
+    else if (C >= $D800) and (C <= $DBFF) and (I + 1 < N) and (Word(P[I + 1]) >= $DC00) and
+      (Word(P[I + 1]) <= $DFFF) then
+    begin
+      Inc(Result, 4);
+      Inc(I);
+    end
+    else Inc(Result, 3);
+    Inc(I);
+  end;
+end;
+
+{ utf8Length(s): s's bytes in UTF-8 }
+function Host_Utf8Length(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var S: PStr;
+begin
+  if (Argc < 1) or not IsString(Args[1]) then Exit(ThrowTypeError('utf8Length: the argument is not a string'));
+  S := StrOf(Args[1]);
+  Res := MkNumber(Utf8Count(StrChars(S), S^.Len));
+  Result := True;
+end;
+
+{ utf8Write(s, bytes, at): s in UTF-8 into the Uint8Array bytes from index at, whole characters while they fit
+  (WHATWG Encoding's encodeInto); [the code units read, the bytes written] }
+function Host_Utf8Write(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var S: PStr; O: PObj; P: PWideChar; D: PByte; N, I, Units, K: Integer; Room, W, At: Int64; C: Cardinal;
+begin
+  if (Argc < 3) or not IsString(Args[1]) or not IsObject(Args[2]) or (ObjOf(Args[2])^.OKind <> okTypedArray) or
+     (TAElemSize[TAKind(ObjOf(Args[2]))] <> 1) or not IsNumber(Args[3]) then
+    Exit(ThrowTypeError('utf8Write: the arguments are not a string, a byte array and an index'));
+  S := StrOf(Args[1]);
+  O := ObjOf(Args[2]);
+  { Web IDL's Uint8Array conversion refuses a view of an immutable ArrayBuffer }
+  if ViewImmutable(O) then Exit(ThrowTypeError('Cannot write to a view of an immutable ArrayBuffer'));
+  At := Trunc(NumOf(Args[3]));
+  if TAOutOfBounds(O) or (At < 0) or (At > TALength(O)) then Room := 0 else Room := TALength(O) - At;
+  P := StrChars(S);
+  N := S^.Len;
+  W := 0;
+  I := 0;
+  if Room > 0 then
+  begin
+    D := TAData(O) + At;
+    while I < N do
+    begin
+      C := Word(P[I]);
+      Units := 1;
+      if (C >= $D800) and (C <= $DBFF) and (I + 1 < N) and (Word(P[I + 1]) >= $DC00) and (Word(P[I + 1]) <= $DFFF) then
+      begin
+        C := $10000 + ((C - $D800) shl 10) + (Word(P[I + 1]) - $DC00);
+        Units := 2;
+      end
+      else if (C >= $D800) and (C <= $DFFF) then C := $FFFD;
+      if C < $80 then K := 1 else if C < $800 then K := 2 else if C < $10000 then K := 3 else K := 4;
+      if W + K > Room then Break;
+      case K of
+        1: D[W] := C;
+        2: begin D[W] := $C0 or (C shr 6); D[W + 1] := $80 or (C and 63); end;
+        3:
+          begin
+            D[W] := $E0 or (C shr 12); D[W + 1] := $80 or ((C shr 6) and 63); D[W + 2] := $80 or (C and 63);
+          end;
+      else
+        begin
+          D[W] := $F0 or (C shr 18); D[W + 1] := $80 or ((C shr 12) and 63); D[W + 2] := $80 or ((C shr 6) and 63);
+          D[W + 3] := $80 or (C and 63);
+        end;
+      end;
+      Inc(W, K);
+      Inc(I, Units);
+    end;
+  end;
+  PushRoot(MkPtr(NewArray(0, 2)));
+  PushAt(TempTop - 1, MkNumber(I));
+  PushAt(TempTop - 1, MkNumber(W));
+  Res := RootAt(TempTop - 1);
+  PopRoots(1);
+  Result := True;
+end;
+
 { isBytecode(f): f is a compiled JS function (a prelude's or a script's), not a native one }
 function Host_IsBytecode(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
@@ -1098,6 +1188,8 @@ begin
   DefineNative(RootAt(TempTop - 1), 'formSerialize', Host_FormSerialize, 2);
   DefineNative(RootAt(TempTop - 1), 'plainCloneable', Host_PlainCloneable, 1);
   DefineNative(RootAt(TempTop - 1), 'viewInfo', Host_ViewInfo, 1);
+  DefineNative(RootAt(TempTop - 1), 'utf8Length', Host_Utf8Length, 1);
+  DefineNative(RootAt(TempTop - 1), 'utf8Write', Host_Utf8Write, 3);
   DefineNative(RootAt(TempTop - 1), 'isBytecode', Host_IsBytecode, 1);
   DefineNative(RootAt(TempTop - 1), 'hrNow', Host_HrNow, 0);
   DefineNative(RootAt(TempTop - 1), 'writeLine', Host_WriteLine, 1);

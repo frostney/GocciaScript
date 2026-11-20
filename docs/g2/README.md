@@ -64,8 +64,16 @@ runs and no further job runs, and the host prints `Fatal error: file timed out a
 Execution exceeded instruction limit of N` and exits 1. A timer thread interrupts the engine thread by setting
 its `Interrupt` and dropping its frame bound to 0, which the existing frame check of each call sees, so calls pay
 nothing extra. Under an instruction budget `Execute` counts every instruction itself and skips `FastLoop`; the
-count is exact and the same on every run. The JIT stays off while a limit or a frame bound is set: compiled loops
-have no poll and compiled calls check the fixed bound. `scripts/g2/limits-test.sh` checks all of this.
+count is exact and the same on every run. The JIT stays off while a timeout, an instruction budget or a frame bound
+is set: compiled calls check the fixed bound and do not count instructions.
+
+The memory limit is always in force: `--max-memory`, else half of physical memory up to 8 GB (700 MB on a 32-bit
+build). A full collection runs once the old space would pass it, and one that leaves more live than the limit
+aborts the run the same way, with `Fatal error: Live heap of N bytes exceeds the memory limit of M bytes` (exit 1;
+GocciaRunner's JSON report names it `MemoryLimitError`). An explicit reservation that does not fit, such as an
+`ArrayBuffer`'s bytes, is still a catchable `RangeError`. Compiled loops poll for the abort at every back edge (one
+compare of the thread's `Interrupt`): the baseline code exits to the interpreter there, and an optimized region
+leaves at the jump with its frame state written back. `scripts/g2/limits-test.sh` checks all of this.
 
 ## Gate
 

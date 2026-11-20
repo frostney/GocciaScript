@@ -238,7 +238,8 @@ var
 threadvar
   { execution limits (G2.VM LimitsArm): Interrupt is set, by the timeout thread or the instruction count, once a
     limit is spent; from then on every back edge and call aborts, Aborting is set and no handler runs (catch or
-    finally) until the run is over. AbortKind: 0 none, 1 timeout, 2 instruction limit. }
+    finally) until the run is over. AbortKind: 0 none, 1 timeout, 2 instruction limit,
+    3 memory limit (GCLimitHook). }
   Interrupt: LongInt;
   Aborting: Boolean;
   AbortKind: Integer;
@@ -278,6 +279,10 @@ var
   { the bytes held outside the heap that count against HeapCeiling (SharedArrayBuffer blocks), for every thread }
   HeapExternalBytes: Int64 = 0;
 procedure HeapExternalAdd(Delta: Int64);
+var
+  { a full collection that leaves the heap and HeapExternalBytes over HeapCeiling calls it (G2.VM: the run ends at
+    its next back edge or call, past every handler); it must not allocate }
+  GCLimitHook: procedure = nil;
 { weak references: GCWeakHook runs after marking/evacuation in every collection, before old space is swept.
   In it, GCSurvives says whether a cell lives on and updates P when the cell moved. The hook must not allocate. }
 var GCWeakHook: procedure = nil;
@@ -850,6 +855,8 @@ begin
   Inc(GCOldBytes, Result^.Size);
 end;
 
+function OverCeiling(Size: SizeInt): Boolean; forward;
+
 function AllocCell(Size: SizeInt; Kind: Byte): PCell;
 begin
   Size := (Size + 7) and not 7;
@@ -859,7 +866,8 @@ begin
   if Size > (NurseryLimit - NurseryStart) div 16 then
   begin
     { direct old-space allocation still counts toward the major trigger }
-    if GCOldBytes + Size - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100) then
+    if (GCOldBytes + Size - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100)) or
+       OverCeiling(Size) then
     begin
       CollectMinor;
       CollectMajor;
@@ -869,7 +877,8 @@ begin
   if (NurseryTop + Size > NurseryLimit) or GCStress then
   begin
     CollectMinor;
-    if (GCOldBytes - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100)) or (GCStress and (GCMinorCount mod 8 = 0)) then
+    if (GCOldBytes - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100)) or
+       (GCStress and (GCMinorCount mod 8 = 0)) or OverCeiling(0) then
       CollectMajor;
   end;
   Result := PCell(NurseryTop);
@@ -1230,6 +1239,18 @@ begin
   InterLockedExchangeAdd64(HeapExternalBytes, Delta);
 end;
 
+{ whether Size more bytes of old space take the heap past HeapCeiling: then a full collection runs first, and the
+  ceiling is enforced after it; not once the limit is spent (AbortKind 3), when the run is already ending }
+function OverCeiling(Size: SizeInt): Boolean;
+var Old: Int64; Kind: Integer;
+begin
+  if HeapCeiling <= 0 then Exit(False);
+  Kind := AbortKind;
+  if Kind = 3 then Exit(False);
+  Old := GCOldBytes;
+  Result := Old + Size + HeapExternalBytes > HeapCeiling;
+end;
+
 procedure CollectMajor;
 var I: Integer;
 begin
@@ -1251,6 +1272,9 @@ begin
   RememberedTop := 0;
   GCOldBytesAtMajor := GCOldBytes;
   if GCVerify then VerifyHeap('major');
+  { what survived does not fit: the run ends (the nursery is empty, so the old space is the heap) }
+  if (HeapCeiling > 0) and Assigned(GCLimitHook) and (GCOldBytesAtMajor + HeapExternalBytes > HeapCeiling) then
+    GCLimitHook;
 end;
 
 procedure PushRoot(V: TValue); inline;

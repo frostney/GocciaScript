@@ -468,6 +468,13 @@ begin
           [AEngineOptions.MaxInstructions.Value]);
         Exit;
       end;
+    g2aMemoryLimit:
+      begin
+        { GocciaRunner's name for the refusal no script can catch (TGocciaMemoryLimitError) }
+        Result.ErrorType := 'MemoryLimitError';
+        Result.Message := UTF8Encode(AResult.ErrorText);
+        Exit;
+      end;
   end;
   if not AResult.ErrorIsError then
   begin
@@ -757,6 +764,11 @@ begin
       begin
         WriteLn(Format('Fatal error: Execution exceeded instruction limit of %d',
           [EngineOptions.MaxInstructions.Value]));
+        Exit;
+      end;
+    g2aMemoryLimit:
+      begin
+        WriteLn('Fatal error: ' + UTF8Encode(AResult.ErrorText));
         Exit;
       end;
   end;

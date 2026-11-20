@@ -26,7 +26,9 @@ type
     declaration makes a module); a .mjs file is a module unless the kind says otherwise }
   TG2SourceKind = (g2skDetect, g2skScript, g2skModule);
   { a run ended by a spent limit (G2.VM LimitsArm) rather than by the script }
-  TG2Abort = (g2aNone, g2aTimeout, g2aInstructionLimit);
+  TG2Abort = (g2aNone, g2aTimeout, g2aInstructionLimit,
+    { a full collection left more live than the memory limit (MaxMemory); ErrorText says how much }
+    g2aMemoryLimit);
 
   TG2RunResult = record
     Ok: Boolean;
@@ -431,6 +433,12 @@ begin
     case AbortKind of
       1: Result.Aborted := g2aTimeout;
       2: Result.Aborted := g2aInstructionLimit;
+      3:
+        begin
+          Result.Aborted := g2aMemoryLimit;
+          Result.ErrorName := 'RangeError';
+          Result.ErrorText := MemoryLimitMessage;
+        end;
     end;
     if not Result.Ok or (Result.Aborted <> g2aNone) then
     begin

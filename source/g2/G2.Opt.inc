@@ -119,6 +119,9 @@ type
     TermImm: Int64;
     TermPC, TermFS, TermFSN: Integer;   { otExit (and otbTagCmp's deopt): the instruction and the frame state }
     TermGuard: Integer;                 { otbTagCmp / otbTruthyTag: the node its deopt stub belongs to }
+    { a loop's back edge (a backward jump of the region's own code or an inlined callee's): it polls Interrupt,
+      set leaving at TermPC with frame state TermFS (the baseline's poll there then ends the run) }
+    TermPoll: Boolean;
     InKinds: array of Byte;
     EndMap: array of Integer;
     RPO, PosStart, PosEnd: Integer;
@@ -483,13 +486,14 @@ begin
   for PC := 0 to OVLen do OBlockOf[PC] := -1;
   OBCount := 1;
   SetLength(OB, 64);
-  OB[0].StartPC := -1; OB[0].EndPC := -1;
+  OB[0].StartPC := -1; OB[0].EndPC := -1; OB[0].TermPoll := False;
   for PC := 0 to OVLen - 1 do
     if Seen[PC] and (Leader[PC] or (PC = OEntry)) then
     begin
       if OBCount >= OPT_MAX_BLOCKS then Exit;
       if OBCount >= Length(OB) then SetLength(OB, OBCount * 2);
       OB[OBCount].StartPC := PC;
+      OB[OBCount].TermPoll := False;
       OBlockOf[PC] := OBCount;
       Inc(OBCount);
     end;
@@ -1674,8 +1678,18 @@ begin
     OSnapshot(OB[B].TermPC, OB[B].TermFS, OB[B].TermFSN);
     Exit;
   end;
-  if OB[B].Term <> otBr then Exit;
   PC := OB[B].EndPC;
+  { (the synthetic entry has no instruction) }
+  if PC < 0 then Exit;
+  { a back edge: its frame state for the poll's exit (a jump inlining made, roles 2, 4 and 5, is none) }
+  I := OIns(PC);
+  OB[B].TermPoll := ((OOpOf(I) = opJmp) or OIsCondJump(OOpOf(I))) and (OC(I) < 0) and (OVRole[PC] in [0, 1]);
+  if OB[B].TermPoll then
+  begin
+    OB[B].TermPC := PC;
+    OSnapshot(PC, OB[B].TermFS, OB[B].TermFSN);
+  end;
+  if OB[B].Term <> otBr then Exit;
   I := OIns(PC);
   Op := OOpOf(I);
   R1 := OA(I);
@@ -2078,7 +2092,8 @@ end;
 { whether block B's terminator has a frame state (an exit, or a branch that can deopt) }
 function OTermHasFS(B: Integer): Boolean;
 begin
-  Result := (OB[B].Term = otExit) or ((OB[B].Term = otBr) and (OB[B].TermTest in [otbTagCmp, otbTruthyTag]));
+  Result := (OB[B].Term = otExit) or OB[B].TermPoll or
+    ((OB[B].Term = otBr) and (OB[B].TermTest in [otbTagCmp, otbTruthyTag]));
 end;
 
 procedure OAllocate;
@@ -3814,6 +3829,12 @@ begin
     B := OOrder[K];
     Labels[B] := JitLen;
     for J := 0 to High(OB[B].Nodes) do OCode(OB[B].Nodes[J]);
+    if OB[B].TermPoll then
+    begin
+      { cmp dword fs:[Interrupt], 0; jne: the block's exit at its back edge }
+      JB($64); JB($83); JB($3C); JB($25); JD(Cardinal(JitFsInterrupt)); JB(0);
+      OJccGuard(ccNE, -1 - B);
+    end;
     case OB[B].Term of
       otJmp:
         begin

@@ -217,9 +217,13 @@ procedure VMInit;
 procedure JitTakeThread;
 { Execution limits for the next run: a timeout in milliseconds and an instruction budget, each 0 for none. A spent
   limit aborts the run: a pending Error ('Execution timed out after Nms', 'Execution exceeded instruction limit
-  of N') that no handler catches, with Aborting set. LimitsDisarm ends them (and clears an abort). }
+  of N') that no handler catches, with Aborting set. LimitsDisarm ends them (and clears an abort). The memory limit
+  (HeapCeiling) is always in force: a full collection that leaves more live aborts the run the same way, with a
+  RangeError (MemoryLimitMessage) and AbortKind 3. }
 procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
 procedure LimitsDisarm;
+{ the spent memory limit's message: the live bytes the collection left and the limit }
+function MemoryLimitMessage: UnicodeString;
 { the most frames a run may have (0: FRAME_MAX); past it a call throws a RangeError }
 procedure SetMaxFrames(N: Integer);
 { releases this thread's VM state (stacks, roots); HeapDone frees the heap after it }
@@ -447,6 +451,8 @@ type
 threadvar
   LimitTimer: TLimitTimer;
   LimitTimeoutMs: Int64;
+  { the heap and external bytes a full collection left over HeapCeiling (the memory limit's message) }
+  LimitHeapBytes: Int64;
 
 procedure TLimitTimer.Execute;
 var Now: QWord;
@@ -482,8 +488,35 @@ begin
   Aborting := True;
   Interrupt := 1;
   FrameLimit := 0;
-  if AbortKind = 2 then ThrowError('Error', 'Execution exceeded instruction limit of ' + IntToStr(InstrMax))
+  case AbortKind of
+    2: ThrowError('Error', 'Execution exceeded instruction limit of ' + IntToStr(InstrMax));
+    3: ThrowError('RangeError', MemoryLimitMessage);
   else ThrowError('Error', 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms');
+  end;
+end;
+
+function MemoryLimitMessage: UnicodeString;
+var Bytes: Int64;
+begin
+  Bytes := LimitHeapBytes;
+  Result := 'Live heap of ' + IntToStr(Bytes) + ' bytes exceeds the memory limit of ' + IntToStr(HeapCeiling) +
+    ' bytes';
+end;
+
+{ G2.Core's GCLimitHook: a full collection left more than HeapCeiling live. The run ends like a spent timeout,
+  at the next back edge or call, past every handler; no allocation here (the collector is finishing) }
+procedure MemoryLimitHit;
+var Old: Int64;
+begin
+  if AbortKind = 0 then
+  begin
+    Old := GCOldBytes;
+    LimitHeapBytes := Old + HeapExternalBytes;
+    AbortKind := 3;
+  end;
+  JitBlocked := True;
+  InterLockedExchange(Interrupt, 1);
+  FrameLimit := 0;
 end;
 
 { a call that found the frames full: the abort of a spent limit, else PushBytecodeFrame's RangeError }
@@ -9467,6 +9500,7 @@ begin
   ConstructProto := VUndefined;
   NativeSelf := VUndefined;
   GCRootScanner := @ScanRoots;
+  GCLimitHook := @MemoryLimitHit;
   AtomLength := AtomOf('length');
   AtomPrototype := AtomOf('prototype');
   AtomConstructor := AtomOf('constructor');

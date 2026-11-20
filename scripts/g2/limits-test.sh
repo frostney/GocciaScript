@@ -1,5 +1,6 @@
 #!/bin/bash
-# scripts/g2/limits-test.sh [G2]: the execution limits of the G2 host (--timeout, --max-instructions, --max-stack).
+# scripts/g2/limits-test.sh [G2]: the execution limits of the G2 host (--timeout, --max-instructions, --max-stack,
+# --max-memory).
 # A spent limit aborts the run whatever the script catches: no catch or finally runs, a promise's rejection
 # handler does not run, and the host reports it as GocciaRunner does. Prints one line per failing case and exits 1
 # when any fails.
@@ -59,6 +60,29 @@ for k in 1 2 3; do
   "$G2" --max-instructions=$hi "$D/sum.js" > /dev/null 2>&1 || { echo "FAIL instr-exact: $hi passed once, then failed"; fails=$((fails + 1)); break; }
   "$G2" --max-instructions=$((hi - 1)) "$D/sum.js" > /dev/null 2>&1 && { echo "FAIL instr-exact: $((hi - 1)) failed once, then passed"; fails=$((fails + 1)); break; }
 done
+
+# --max-memory: a full collection that leaves more live than the limit aborts the run like a spent timeout (the
+# message names the live bytes, which vary); compiled loops poll for it at their back edges
+M='Fatal error: Live heap of [0-9]* bytes exceeds the memory limit of 33554432 bytes'
+checkm() {
+  local name=$1 src=$2 got rc
+  printf '%s\n' "$src" > "$D/$name.js"
+  got=$(timeout 20 "$G2" --max-memory=32MiB "$D/$name.js" 2>&1); rc=$?
+  if [ "$(printf '%s\n' "$got" | wc -l)" -ne 1 ] || ! printf '%s\n' "$got" | grep -qx "$M" || [ $rc -ne 1 ]; then
+    echo "FAIL $name (--max-memory=32MiB): exit $rc, output: $got (want exit 1: $M)"
+    fails=$((fails + 1))
+  fi
+}
+GROW='const a = []; while (true) a.push({ x: a.length });'
+checkm mem-grow "$GROW"
+checkm mem-catch "try { $GROW } catch (e) { console.log('caught'); } finally { console.log('finally'); }"
+checkm mem-promise "Promise.resolve().then(() => { $GROW }).catch(() => console.log('caught'));"
+checkm mem-native 'const a = []; let i = 0; while (true) { a.push(i); i++; }'
+checkm mem-strings 'const a = []; for (let i = 0; ; i++) a.push("s" + i);'
+check mem-garbage --max-memory=32MiB '1999999000000' \
+  'let n = 0; for (let i = 0; i < 2e6; i++) { const o = { x: i }; n += o.x; } console.log(n);'
+check mem-reserve --max-memory=32MiB 'RangeError' \
+  'try { new ArrayBuffer(64 * 1024 * 1024); } catch (e) { console.log(e.name); }'
 
 check max-stack --max-stack=100 '100 true' 'let d = 0; function r() { d++; r(); } try { r(); } catch (e) { console.log(d, e instanceof RangeError); }'
 

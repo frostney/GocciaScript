@@ -283,7 +283,7 @@ begin JB($F2); JRex(False, X, 0, R); JB($0F); JB($2A); JModRR(X, R); end;
 var
   JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsNurseryTop, JitFsArrayIterNext, JitFsGlobalObj, JitFsGLexCells: PtrInt;   { threadvar offsets from fs }
   JitFsFrames, JitFsFrameTop, JitFsStackTop, JitFsJitDepth, JitFsJitDepthMax, JitFsStackFloor: PtrInt;
-  JitFsCurNewTarget, JitFsNativeData, JitFsNativeSelf, JitFsMegaICTab: PtrInt;
+  JitFsCurNewTarget, JitFsNativeData, JitFsNativeSelf, JitFsMegaICTab, JitFsInterrupt: PtrInt;
 
 function JitFsBase: PtrUInt; assembler; nostackframe;
 asm
@@ -312,6 +312,21 @@ end;
 procedure Mov32FsR(Disp, Src: Integer);
 begin
   JB($64); JRex(False, Src, 0, 0); JB($89); JB($04 or ((Src and 7) shl 3)); JB($25); JD(Cardinal(Disp));
+end;
+
+{ a back edge's poll of a spent limit (Interrupt: a timeout, the memory limit): set, the exit to PC, where the
+  interpreter's back edge aborts the run }
+procedure JitPollExit(PC: Integer);
+begin
+  JB($64); JB($83); JB($3C); JB($25); JD(Cardinal(JitFsInterrupt)); JB(0);   { cmp dword fs:[Interrupt], 0 }
+  JB($0F); JB($85); AddFix(-1 - PC);                                         { jne: the exit at PC }
+end;
+
+{ whether instruction I jumps backward (a loop's back edge, which the interpreter polls) }
+function JitBackJump(I: QWord): Boolean;
+begin
+  Result := (TOp(I and $FF) in [opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe,
+    opJNGt, opJNGe, opJSEq, opJNSEq]) and (SarInt64(Int64(I), 40) < 0);
 end;
 
 procedure CmpBMI(Base, Disp: Integer; Imm: Byte);      { cmp byte [Base + Disp], Imm }
@@ -5120,6 +5135,7 @@ begin
     JitNative[PC] := JitLen;
     JitTaken := True;
     if (PC = 0) and (Info <> nil) then JitCountDown(0);
+    if JitBackJump(T^.Code[PC]) then JitPollExit(PC);
     JitInstr(T, PC, T^.Code[PC]);
     {$IFDEF G2_JITSTATS}Inc(JitOpBytes[T^.Code[PC] and $FF], JitLen - JitNative[PC]); Inc(JitOpCount[T^.Code[PC] and $FF]);{$ENDIF}
     JitTakenAt[PC] := JitTaken;
@@ -5247,13 +5263,15 @@ begin
   JitFsNativeData := PtrInt(PtrUInt(@NativeData) - JitFsBase);
   JitFsNativeSelf := PtrInt(PtrUInt(@NativeSelf) - JitFsBase);
   JitFsMegaICTab := PtrInt(PtrUInt(@MegaICTab) - JitFsBase);
+  JitFsInterrupt := PtrInt(PtrUInt(@Interrupt) - JitFsBase);
   { the code's fs-relative loads take a signed 32-bit displacement }
   if (Abs(JitFsVStack) > $7FFFFFF0) or (Abs(JitFsNurseryStart) > $7FFFFFF0) or (Abs(JitFsNurseryLimit) > $7FFFFFF0) or
      (Abs(JitFsNurseryTop) > $7FFFFFF0) or (Abs(JitFsArrayIterNext) > $7FFFFFF0) or (Abs(JitFsFrames) > $7FFFFFF0) or (Abs(JitFsFrameTop) > $7FFFFFF0) or
      (Abs(JitFsStackTop) > $7FFFFFF0) or (Abs(JitFsJitDepth) > $7FFFFFF0) or
      (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) or (Abs(JitFsGlobalObj) > $7FFFFFF0) or
      (Abs(JitFsGLexCells) > $7FFFFFF0) or (Abs(JitFsCurNewTarget) > $7FFFFFF0) or
-     (Abs(JitFsNativeData) > $7FFFFFF0) or (Abs(JitFsNativeSelf) > $7FFFFFF0) or (Abs(JitFsMegaICTab) > $7FFFFFF0) then
+     (Abs(JitFsNativeData) > $7FFFFFF0) or (Abs(JitFsNativeSelf) > $7FFFFFF0) or (Abs(JitFsMegaICTab) > $7FFFFFF0) or
+     (Abs(JitFsInterrupt) > $7FFFFFF0) then
     JitEnabled := 0;
   if JitEnabled < 0 then
     if GetEnvironmentVariable('G2_JIT') = '0' then JitEnabled := 0 else JitEnabled := 1;   { on unless G2_JIT=0 }
