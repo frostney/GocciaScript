@@ -84,6 +84,8 @@ type
     FEnvStreams: array of UInt64;
     FEnvStreamSet: array of Boolean;
     FEnvClockCalling, FEnvRandomCalling: Boolean;
+    { the module records before the run's entry: those are the host's (globals, manifests, the provider) }
+    FModuleMark: Integer;
     function NextRandom(Realm: Integer; out D: Double): Boolean;
     function ProviderRandom(Realm: Integer; out D: Double): Boolean;
     function ProviderClock(Kind: Integer; out Ns: Int64): Boolean;
@@ -99,6 +101,9 @@ type
       read then. Run installs them when the host has not. }
     function PrepareHost(var Err: UnicodeString): Boolean;
     function Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
+    { whether the run's entry loaded a module from Path (an absolute path), not the host before it: a host shows a
+      code frame of such a file only }
+    function ModuleLoaded(const Path: UnicodeString): Boolean;
     { globals injection before Run (G2.HostAPI): a data file's globals, and one --global name=value }
     function InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
     function InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: UnicodeString): Boolean;
@@ -236,7 +241,7 @@ end;
 
 { the uncaught value in parts (R.ErrorMessage already holds its string form) }
 procedure DescribeThrown(V: TValue; var R: TG2RunResult);
-var N, M, St: TValue;
+var N, M: TValue; Stack: UnicodeString;
 begin
   if not IsObject(V) then Exit;
   PushRoot(V);
@@ -251,8 +256,9 @@ begin
       R.ErrorIsError := True;
       R.ErrorText := StrToUnicode(StrOf(M));
     end;
-    if GetV(RootAt(TempTop - 1), AtomOf('stack'), St) and IsString(St) then
-      FirstFrameOf(StrToUnicode(StrOf(St)), R);
+    { located only from the provenance the engine recorded when it made the error, never from a thrown value's
+      own stack string, which can name any file }
+    if ErrorStackProvenance(RootAt(TempTop - 1), Stack) then FirstFrameOf(Stack, R);
   finally
     PopRoots(1);
   end;
@@ -428,6 +434,11 @@ begin
   Result := True;
 end;
 
+function TG2Engine.ModuleLoaded(const Path: UnicodeString): Boolean;
+begin
+  Result := ModuleLoadedSince(Path, FModuleMark);
+end;
+
 destructor TG2Engine.Destroy;
 begin
   HostRandom := nil;
@@ -542,6 +553,8 @@ begin
     SetHostResolver(nil);
     Exit;
   end;
+  FModuleMark := ModuleCount;
+  SetEntryModuleMark(FModuleMark);
   case FSourceKind of
     g2skScript: Kind := 1;
     g2skModule: Kind := 2;

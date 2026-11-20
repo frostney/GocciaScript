@@ -52,6 +52,15 @@ function ResolveModuleSpecifier(const Spec, Referrer: UnicodeString): UnicodeStr
 { the source of the module at Path, as the host has it (a module entry read from stdin, or a section of a file):
   loading Path takes it instead of reading the file. An empty Path clears it. }
 procedure SetProvidedSource(const Path, Source: UnicodeString);
+{ this thread's module records so far: a mark ModuleLoadedSince counts from }
+function ModuleCount: Integer;
+{ whether this thread's engine loaded a module from Path after Mark records (a host shows a code frame only of a
+  module the script's run loaded, never of one the host evaluated before it, nor of a path a thrown value's stack
+  names) }
+function ModuleLoadedSince(const Path: UnicodeString; Mark: Integer): Boolean;
+{ the entry's first module record (ModuleCount when the run starts): the records before it are the host's, and a
+  module they import later is too (TModRec.HostOwned) }
+procedure SetEntryModuleMark(Mark: Integer);
 { the provided entry's completion value (a host's --print): Wanted compiles it to keep the value, which
   EntryCompletion returns once it ran (undefined before) }
 procedure SetEntryCompletionWanted(Wanted: Boolean);
@@ -85,6 +94,8 @@ type
     CycleRoot: TModRec;
     AsyncOrder: Int64;   { [[AsyncEvaluationOrder]]: 0 unset, -1 done }
     AsyncParents: array of TModRec;
+    { loaded for the host: before the entry's run (EntryModuleMark), or imported by such a module, transitively }
+    HostOwned: Boolean;
     destructor Destroy; override;
   end;
   TResKind = (rkNull, rkAmbiguous, rkBinding, rkNamespace, rkDeferNS, rkSource);
@@ -100,6 +111,9 @@ const
 
 threadvar
   Mods: TList<TModRec>;
+  { (SetEntryModuleMark) and, while a host-owned module's import loads, True: the records it makes are the host's }
+  EntryModuleMark: Integer;
+  HostLoading: Boolean;
   AsyncEvalCount: Int64;   { IncrementModuleAsyncEvaluationCount }
   ModRoots: TValue;     { a rooted array: RS slots per module }
   PendingImports: TValue;   { a rooted array of [promise, referrer, specifier] per import() in flight }
@@ -309,6 +323,7 @@ end;
 
 function ClosedCell(V: TValue): TValue; forward;
 function HasModuleSource(M: TModRec): Boolean; forward;
+function HostOwnedReferrer(const Path: UnicodeString): Boolean; forward;
 function ModuleSourceOf(M: TModRec): TValue; forward;
 function MakeHostModule(const Key: UnicodeString; Exp: TValue; var M: TModRec): Boolean; forward;
 
@@ -343,6 +358,7 @@ begin
   M := TModRec.Create;
   M.Path := Key;
   M.Id := Mods.Count;
+  M.HostOwned := HostLoading;
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
   M.Info := TModuleInfo.Create;
@@ -369,6 +385,7 @@ begin
   M := TModRec.Create;
   M.Path := Key;
   M.Id := Mods.Count;
+  M.HostOwned := HostLoading;
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
   M.Info := TModuleInfo.Create;
@@ -413,6 +430,7 @@ begin
     M := TModRec.Create;
     M.Path := Path;
     M.Id := Mods.Count;
+    M.HostOwned := HostLoading;
     Mods.Add(M);
     SetRoot(M, rError, VUndefined);
     M.Info := TModuleInfo.Create;
@@ -433,6 +451,7 @@ begin
   M := TModRec.Create;
   M.Path := Path;
   M.Id := Mods.Count;
+  M.HostOwned := HostLoading;
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
   ModuleReturnLast := IsCompletionEntry(M);
@@ -1228,6 +1247,7 @@ end;
   index in PendingImports, bit 23 set for import.defer() }
 function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var I, J, Data: Integer; M: TModRec; Ref, Spec, Text: UnicodeString; G: TList<TModRec>; R, St: TValue;
+  Loaded: Boolean;
 begin
   Res := VUndefined;
   Result := True;
@@ -1236,7 +1256,14 @@ begin
   I := Data and $7FFFFF;
   Ref := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1]));
   Spec := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 2]));
-  if not LoadAndLink(ResolveRequest(Spec, Ref), M) then
+  { a host module's import loads modules for the host }
+  HostLoading := HostOwnedReferrer(Ref);
+  try
+    Loaded := LoadAndLink(ResolveRequest(Spec, Ref), M);
+  finally
+    HostLoading := False;
+  end;
+  if not Loaded then
   begin
     R := Pending;
     Pending := VUndefined;
@@ -1249,7 +1276,7 @@ begin
       begin
         Pending := VUndefined;
         if IsString(St) then Text := StrToUnicode(StrOf(St)) else Text := 'Error';
-        DefineOwn(RootAt(TempTop - 1), AtomStack, StrFromUnicode(Text + ImportStacks[I]), pfHidden);
+        SetEngineErrorStack(RootAt(TempTop - 1), Text + ImportStacks[I]);
       end;
       R := RootAt(TempTop - 1);
       PopRoots(1);
@@ -1443,6 +1470,35 @@ begin
   HostModSource := MkPtr(NewPlainObject(RootAt(TempTop - 1), 4));
   PopRoots(2);
   Result := HostModSource;
+end;
+
+function ModuleCount: Integer;
+begin
+  if Mods = nil then Result := 0 else Result := Mods.Count;
+end;
+
+function ModuleLoadedSince(const Path: UnicodeString; Mark: Integer): Boolean;
+var M: TModRec;
+begin
+  Result := False;
+  if Mods = nil then Exit;
+  M := FindModule(Path);
+  Result := (M <> nil) and (M.Id >= Mark) and not M.HostOwned;
+end;
+
+procedure SetEntryModuleMark(Mark: Integer);
+begin
+  EntryModuleMark := Mark;
+end;
+
+{ whether the module at Path (an import's referrer) was loaded for the host }
+function HostOwnedReferrer(const Path: UnicodeString): Boolean;
+var M: TModRec;
+begin
+  Result := False;
+  if Mods = nil then Exit;
+  M := FindModule(Path);
+  Result := (M <> nil) and ((M.Id < EntryModuleMark) or M.HostOwned);
 end;
 
 function HasModuleSource(M: TModRec): Boolean;

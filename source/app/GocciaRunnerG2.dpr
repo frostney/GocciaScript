@@ -127,7 +127,7 @@ type
     function DefineVirtualModules(const AEngine: TG2Engine; const AFileConfigPath: string;
       out AError: string): Boolean;
     procedure ReportFailure(const AFileName: string;
-      const AResult: TG2RunResult; const ASource: TStringList; const AWithheld: string);
+      const AResult: TG2RunResult; const ASource: TStringList; AEngine: TG2Engine; const AWithheld: string);
     function HostEnvironmentPath(const AFileConfig: TConfigEntryArray; ADeterministic: Boolean): string;
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
@@ -749,9 +749,10 @@ begin
   Result := '';
 end;
 
-{ AWithheld: a file whose source no report shows (the host environment's provider) }
+{ AEngine: the run's engine, which says which files it loaded; AWithheld: a file whose source no report shows
+  (the host environment's provider) }
 procedure TG2RunnerApp.ReportFailure(const AFileName: string;
-  const AResult: TG2RunResult; const ASource: TStringList; const AWithheld: string);
+  const AResult: TG2RunResult; const ASource: TStringList; AEngine: TG2Engine; const AWithheld: string);
 var
   Name, Suggestion, ErrorPath: string;
   Source, Loaded: TStringList;
@@ -797,7 +798,9 @@ begin
     Suggestion := RuntimeSuggestion(UTF8Encode(AResult.ErrorText));
   if AResult.ErrorLine > 0 then
   begin
-    { the code frame from the file the error is in: an imported module's own source, none of a withheld one }
+    { the code frame from the file the error is in: an imported module's own source, never a file the entry's run
+      did not load as a module (a thrown value's stack can name any path; a module the host evaluated first, such
+      as a globals module or the host environment's provider, keeps its source) }
     Source := ASource;
     Loaded := nil;
     ErrorPath := UTF8Encode(AResult.ErrorFile);
@@ -805,7 +808,8 @@ begin
        (ExpandFileName(ErrorPath) <> ExpandFileName(AFileName)) then
     begin
       Source := nil;
-      if (AWithheld = '') or (ExpandFileName(ErrorPath) <> AWithheld) then
+      if ((AWithheld = '') or (ExpandFileName(ErrorPath) <> AWithheld)) and
+         AEngine.ModuleLoaded(UnicodeString(ExpandFileName(ErrorPath))) then
       begin
         Loaded := TStringList.Create;
         try
@@ -1008,7 +1012,7 @@ begin
       end;
       if not RunResult.Ok then
       begin
-        ReportFailure(AFileName, RunResult, ASource, UTF8Encode(Engine.HostEnvironment));
+        ReportFailure(AFileName, RunResult, ASource, Engine, UTF8Encode(Engine.HostEnvironment));
         ExitCode := 1;
         Exit;
       end;

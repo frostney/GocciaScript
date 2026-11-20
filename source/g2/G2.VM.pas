@@ -301,6 +301,12 @@ function ThrowTypeError(const Msg: UnicodeString): Boolean;
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
 { gives the error E (just made) its stack property when the profile wants stack traces }
 procedure AttachStack(E: TValue);
+{ the stack an error object was made with (its .stack as the engine wrote it, whatever the script has done to the
+  property since): False for anything else, such as a plain object with a stack of its own }
+function ErrorStackProvenance(E: TValue; out Stack: UnicodeString): Boolean;
+{ an engine-made error's stack replaced by the engine (an import() failure takes its call's frames): the
+  property and the provenance both; E rooted by the caller }
+procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString);
 { the frames running now as an error's stack lists them (the lines after its first), for an error made later on
   their behalf (a dynamic import's failure, made in a job) }
 function StackFramesNow: UnicodeString;
@@ -1622,9 +1628,36 @@ begin
   if Msg = '' then Text := Name else if Name = '' then Text := Msg else Text := Name + ': ' + Msg;
   Text := Text + StackFramesText;
   PushRoot(E);
-  V := StrFromUnicode(Text);
-  DefineOwn(RootAt(TempTop - 1), AtomStack, V, pfHidden);
-  PopRoots(1);
+  PushRoot(StrFromUnicode(Text));
+  DefineOwn(RootAt(TempTop - 2), AtomStack, RootAt(TempTop - 1), pfHidden);
+  { the provenance a host reads (ErrorStackProvenance): the stack as made, which the script cannot rewrite }
+  ObjOf(RootAt(TempTop - 2))^.Aux2 := RootAt(TempTop - 1);
+  WriteBarrier(PCell(ObjOf(RootAt(TempTop - 2))), RootAt(TempTop - 1));
+  PopRoots(2);
+end;
+
+procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString);
+begin
+  PushRoot(E);
+  PushRoot(StrFromUnicode(Text));
+  DefineOwn(RootAt(TempTop - 2), AtomStack, RootAt(TempTop - 1), pfHidden);
+  if ObjOf(RootAt(TempTop - 2))^.OKind = okError then
+  begin
+    ObjOf(RootAt(TempTop - 2))^.Aux2 := RootAt(TempTop - 1);
+    WriteBarrier(PCell(ObjOf(RootAt(TempTop - 2))), RootAt(TempTop - 1));
+  end;
+  PopRoots(2);
+end;
+
+function ErrorStackProvenance(E: TValue; out Stack: UnicodeString): Boolean;
+var V: TValue;
+begin
+  Stack := '';
+  Result := IsObject(E) and (ObjOf(E)^.OKind = okError);
+  if not Result then Exit;
+  V := ObjOf(E)^.Aux2;
+  Result := IsString(V);
+  if Result then Stack := StrToUnicode(StrOf(V));
 end;
 
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
