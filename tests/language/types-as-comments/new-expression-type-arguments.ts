@@ -20,6 +20,14 @@ describe("new expression type arguments in TypeScript", () => {
     expect(box.value).toBe(42);
   });
 
+  test("erases template literal type arguments with substitutions", () => {
+    const entries = new Map<`k${string}`, number>([["kx", 1]]);
+    const string = "a comparison reading would use this";
+
+    expect(entries.get("kx")).toBe(1);
+    expect(new Set<`t${string}`>().size).toBe(0);
+  });
+
   test("closes nested type arguments with a shift token", () => {
     const nested = new Map<string, Array<number>>();
     const values = new Set<Array<number>>;

@@ -144,6 +144,7 @@ type
     function ReadJSXTagName: string;
     function SkipTriviaAt(const AIndex: Integer): Integer;
     function SkipQuotedAt(const AIndex, ADepth: Integer): Integer;
+    function OpeningTagRestAt(const AIndex: Integer): Boolean;
     function JSXTypeArgumentsStart(const AIndex: Integer): Integer;
     function JSXTypeArgumentsEnd(const AStart: Integer;
       out AStoppedAt: Integer): Integer;
@@ -883,13 +884,13 @@ begin
 
   // `<Foo<string> ...`: the tag's type arguments. Only a list that closes,
   // followed by what may follow a tag, is taken for one. After a line break
-  // that follows an expression, `a` and `<b<c>d` on the next line is a
-  // comparison chain, so none is.
+  // that follows an expression the line may also go on with a comparison,
+  // `a` and `<b<c>d` on the next, so there the rest of the opening tag has to
+  // be one as well, as after `if (ok)` it is.
   TypeArgumentsStart := JSXTypeArgumentsStart(Index);
   if TypeArgumentsStart > 0 then
   begin
-    if (FLastTokenKind = ltkLineBreak) or
-       (TypeArgumentsStart < FTypeArgumentsScannedTo) then
+    if TypeArgumentsStart < FTypeArgumentsScannedTo then
       Exit(False);
     Index := JSXTypeArgumentsEnd(TypeArgumentsStart, StoppedAt);
     if Index = 0 then
@@ -897,6 +898,8 @@ begin
       FTypeArgumentsScannedTo := StoppedAt;
       Exit(False);
     end;
+    if FLastTokenKind = ltkLineBreak then
+      Exit(OpeningTagRestAt(Index));
     Index := SkipTriviaAt(Index);
     if Index > Length(FSource) then
       Exit(False);
@@ -1093,6 +1096,43 @@ begin
       Inc(Result);
   end;
   Result := 0;
+end;
+
+// Whether the text at AIndex reads as the rest of an opening tag: attributes,
+// each a name with an optional string or braced value, or a spread, up to the
+// tag's `/>` or `>`. A braced value or spread is not scanned, and is taken
+// for an attribute.
+function TGocciaJSXTransformer.OpeningTagRestAt(const AIndex: Integer): Boolean;
+var
+  Index: Integer;
+begin
+  Index := SkipTriviaAt(AIndex);
+  while Index <= Length(FSource) do
+  begin
+    if CharInSet(FSource[Index], ['/', '>', '{']) then
+      Exit(True);
+    if not IsIdentifierStart(FSource[Index]) then
+      Exit(False);
+    while (Index <= Length(FSource)) and
+          (IsIdentifierPart(FSource[Index]) or (FSource[Index] = '-')) do
+      Inc(Index);
+    Index := SkipTriviaAt(Index);
+    if (Index <= Length(FSource)) and (FSource[Index] = '=') then
+    begin
+      Index := SkipTriviaAt(Index + 1);
+      if Index > Length(FSource) then
+        Exit(False);
+      if FSource[Index] = '{' then
+        Exit(True);
+      if not CharInSet(FSource[Index], ['''', '"']) then
+        Exit(False);
+      Index := SkipQuotedAt(Index, 0);
+      if Index = 0 then
+        Exit(False);
+      Index := SkipTriviaAt(Index);
+    end;
+  end;
+  Result := False;
 end;
 
 // Where the type arguments after a tag name at AIndex open, as in

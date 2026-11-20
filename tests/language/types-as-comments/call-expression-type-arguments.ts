@@ -47,6 +47,16 @@ test("union and intersection type arguments", () => {
   expect(identity<{ a: 1 } & { b: 2 }>("v")).toBe("v");
 });
 
+test("template literal type arguments with substitutions are erased", () => {
+  const identity = (value) => value;
+  const string = "a comparison reading would use this";
+
+  expect(identity<`t${string}`>(1)).toBe(1);
+  expect(identity<`t${string}`, `n${number}`>(2)).toBe(2);
+  expect(identity<() => void, `a${`b${"}"}`}`>(3)).toBe(3);
+  expect(identity<`t${string}`>`x`[0]).toBe("x");
+});
+
 test("type arguments before a tagged template", () => {
   const tag = (parts) => "tagged:" + parts[0];
 

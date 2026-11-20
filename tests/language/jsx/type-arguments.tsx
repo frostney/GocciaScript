@@ -42,6 +42,26 @@ describe("JSX type arguments in .tsx", () => {
     expect(el.props).toEqual({ v: 1 });
   });
 
+  test("template literal types are erased whole", () => {
+    const string = "a comparison reading would use this";
+    const el = <Select<`t${string}`, `a${`b${"}"}`}`> v={1} />;
+    expect(el.tag).toBe(Select);
+    expect(el.props).toEqual({ v: 1 });
+  });
+
+  test("an element with type arguments starts a statement after a line break", () => {
+    const made = [];
+    const record = (value) => made.push(value);
+    // prettier-ignore
+    if (made.length === 0)
+      <Select<string> v={record(1)} />;
+    // prettier-ignore
+    if (made.length === 1) record(2);
+    else
+      <Select<string> v={record(3)} />;
+    expect(made).toEqual([1, 2]);
+  });
+
   test("comments and line breaks around the type arguments", () => {
     const el = (
       <Select /* before */ <

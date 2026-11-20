@@ -10877,6 +10877,14 @@ begin
           gttRightShift: Dec(Depth, 2);
           gttUnsignedRightShift: Dec(Depth, 3);
           gttComma:;
+          gttTemplateHead:
+            begin
+              // A template literal type, `t${string}`, whose substitution's
+              // closing brace only the template-tail goal lexes as such.
+              SkipTemplateLiteral;
+              HasTypeArgument := True;
+              Continue;
+            end;
         else
           HasTypeArgument := True;
         end;
@@ -11017,6 +11025,14 @@ begin
               Dec(BracketDepth);
               if BracketDepth < 0 then
                 Exit;
+            end;
+          gttTemplateHead:
+            begin
+              // A template literal type, `t${string}`, whose substitution's
+              // closing brace only the template-tail goal lexes as such.
+              SkipTemplateLiteral;
+              HasTypeArgument := True;
+              Continue;
             end;
         else
           HasTypeArgument := True;
