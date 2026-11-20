@@ -269,7 +269,7 @@ procedure PollExecutionTimeout(
 begin
   if AState^.DeadlineNs <> 0 then
   begin
-    Inc(AState^.CheckCounter);
+    AState^.CheckCounter := (AState^.CheckCounter + 1) and $3FFFFFFF;
     if (AState^.CheckCounter and AState^.CheckMask) = 0 then
       CheckExecutionTimeoutDeadline(AState);
   end;
@@ -282,7 +282,7 @@ begin
   Poll := @GTimeoutPoll;
   if Poll^.DeadlineNs <> 0 then
   begin
-    Inc(Poll^.CheckCounter);
+    Poll^.CheckCounter := (Poll^.CheckCounter + 1) and $3FFFFFFF;
     if (Poll^.CheckCounter and Poll^.CheckMask) = 0 then
       CheckExecutionTimeoutDeadline(Poll);
   end;
@@ -301,7 +301,7 @@ begin
   Poll := @GTimeoutPoll;
   if Poll^.DeadlineNs <> 0 then
   begin
-    Inc(Poll^.CheckCounter);
+    Poll^.CheckCounter := (Poll^.CheckCounter + 1) and $3FFFFFFF;
     if (Poll^.CheckCounter and Poll^.CheckMask) = 0 then
       CheckExecutionTimeoutDeadline(Poll);
     { The polls of a native loop are the elements it has walked: one unit of

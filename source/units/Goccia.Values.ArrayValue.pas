@@ -4487,7 +4487,13 @@ begin
     // descriptor gives them back.
     OldCount := FElements.Count;
     if CanStoreDenseElementIndex(Index, FElements.Count) then
+    try
       ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+    except
+      // The caller handed the descriptor over and does not free it on a raise.
+      ADescriptor.Free;
+      raise;
+    end;
     try
       Result := inherited TryDefineProperty(AName, ADescriptor);
     except
