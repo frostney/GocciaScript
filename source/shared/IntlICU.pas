@@ -3358,6 +3358,14 @@ begin
   Result := ApplyUnicodeLocaleKeyword(Result, 'ca', AOptions.Calendar);
   Result := ApplyUnicodeLocaleKeyword(Result, 'nu', AOptions.NumberingSystem);
   Result := ApplyUnicodeLocaleKeyword(Result, 'hc', AOptions.HourCycle);
+  // ICU's own iso8601 calendar is its Gregorian calendar under another name
+  // for these fields, yet ICU 78 formats it without the month or the era
+  // (`" 2020  1"` for era, year, month and day). Ask for the Gregorian
+  // calendar by its own name: the result is the one ICU 74 and 79 give for
+  // iso8601, on every ICU version. The option's value (`resolvedOptions`)
+  // stays iso8601; only the locale handed to ICU changes.
+  Result := StringReplace(Result, '-ca-iso8601', '-ca-gregory',
+    [rfReplaceAll, rfIgnoreCase]);
 end;
 
 function TryICUGetBestDateTimePattern(const ALocale, ASkeleton: string;
