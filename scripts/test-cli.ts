@@ -1517,10 +1517,10 @@ if (!canCapMemory) {
     ["an array-like", "Array.prototype.fill.call({ length: 2 ** 40 }, 1);\n"],
   ];
   for (const [label, source] of cases) {
-    const timed = runLoaderJson(source, ["--timeout=100", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 6144 });
+    const timed = runLoaderJson(source, ["--timeout=100", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 1024 });
     if (timed.exitCode !== 1) throw new Error(`fill over ${label}: --timeout exit code should be 1, got ${timed.exitCode}`);
     if (timed.json.error?.type !== "TimeoutError") throw new Error(`fill over ${label}: expected TimeoutError, got ${timed.json.error?.type}`);
-    const counted = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 6144 });
+    const counted = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 1024 });
     if (counted.exitCode !== 1) throw new Error(`fill over ${label}: --max-instructions exit code should be 1, got ${counted.exitCode}`);
     if (counted.json.error?.type !== "InstructionLimitError") throw new Error(`fill over ${label}: expected InstructionLimitError, got ${counted.json.error?.type}`);
   }
@@ -1546,7 +1546,7 @@ if (!canCapMemory) {
     ["spread", `${huge}const b = [...a];\n`],
   ];
   for (const [label, source] of cases) {
-    const { exitCode, json } = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 6144 });
+    const { exitCode, json } = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 1024 });
     if (exitCode !== 1) throw new Error(`${label}: --max-instructions exit code should be 1, got ${exitCode}`);
     if (json.error?.type !== "InstructionLimitError") throw new Error(`${label}: expected InstructionLimitError, got ${json.error?.type}`);
   }

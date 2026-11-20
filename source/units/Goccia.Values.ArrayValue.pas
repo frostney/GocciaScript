@@ -4314,6 +4314,7 @@ procedure TGocciaArrayValue.DefineProperty(const AName: string; const ADescripto
 var
   Index: Int64;
   OldCount: Integer;
+  DescriptorRoots: TGocciaActiveRootFrame;
 begin
   if AName = PROP_LENGTH then
   begin
@@ -4387,7 +4388,17 @@ begin
     // No pending value: the gate's owner push covers what the array holds.
     OldCount := FElements.Count;
     if CanStoreDenseElementIndex(Index, FElements.Count) then
-      ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+    begin
+      // The descriptor is a plain class the collector does not trace: root
+      // what it holds while the gate of the extension may collect.
+      DescriptorRoots.Initialize;
+      try
+        ADescriptor.PushRoots(DescriptorRoots);
+        ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+      finally
+        DescriptorRoots.Clear;
+      end;
+    end;
     try
       inherited DefineProperty(AName, ADescriptor);
     except
@@ -4410,6 +4421,7 @@ function TGocciaArrayValue.TryDefineProperty(const AName: string; const ADescrip
 var
   Index: Int64;
   OldCount: Integer;
+  DescriptorRoots: TGocciaActiveRootFrame;
 begin
   if AName = PROP_LENGTH then
   begin
@@ -4487,12 +4499,22 @@ begin
     // descriptor gives them back.
     OldCount := FElements.Count;
     if CanStoreDenseElementIndex(Index, FElements.Count) then
-    try
-      ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
-    except
-      // The caller handed the descriptor over and does not free it on a raise.
-      ADescriptor.Free;
-      raise;
+    begin
+      DescriptorRoots.Initialize;
+      try
+        try
+          ADescriptor.PushRoots(DescriptorRoots);
+          ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+        except
+          // The caller handed the descriptor over and does not free it on a
+          // raise.
+          DescriptorRoots.Clear;
+          ADescriptor.Free;
+          raise;
+        end;
+      finally
+        DescriptorRoots.Clear;
+      end;
     end;
     try
       Result := inherited TryDefineProperty(AName, ADescriptor);
