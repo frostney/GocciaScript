@@ -131,4 +131,21 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatToParts", () => {
     expect(value("year")).toBe("2020");
     expect(value("day")).toBe("1");
   });
+
+  test("keeps the weekday of a numeric iso8601 date", () => {
+    const formatter = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      timeZone: "UTC",
+      weekday: "long",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+    });
+    const parts = formatter.formatToParts(Date.UTC(2020, 0, 2));
+    const value = (type) => parts.find((part) => part.type === type)?.value;
+
+    expect(value("weekday")).toBe("Thursday");
+    expect(value("year")).toBe("2020");
+    expect(value("day")).toMatch(/^0?2$/);
+  });
 });

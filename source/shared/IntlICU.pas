@@ -3386,16 +3386,15 @@ const
   ICU_MAJOR_WITHOUT_ISO8601_FIELDS = 78;
 
 { Whether the options ask for a field that ICU 78 leaves out of its iso8601
-  calendar: the era, the name of a month or the weekday. Its numeric fields
-  are formatted correctly, so a numeric date keeps the iso8601 patterns. }
+  calendar: the era or the name of a month. Its numeric fields and the weekday
+  are formatted correctly, so such a date keeps the iso8601 patterns. }
 function RequestsTextualDateFields(
   const AOptions: TIntlDateTimeFormatOptions): Boolean;
 var
   Skeleton: string;
 begin
   Skeleton := BuildDateTimeSkeleton(AOptions);
-  Result := (Pos('G', Skeleton) > 0) or (Pos('MMM', Skeleton) > 0) or
-    (Pos('E', Skeleton) > 0);
+  Result := (Pos('G', Skeleton) > 0) or (Pos('MMM', Skeleton) > 0);
 end;
 
 function ApplyDateTimeLocaleOptions(const ALocale: string;
