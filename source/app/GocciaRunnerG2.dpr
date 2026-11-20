@@ -651,10 +651,59 @@ begin
   Result := True;
 end;
 
+{$I GocciaRunnerG2.Suggestions.inc}
+
+{ Msg is Template with each %s, %d or %x standing for any text }
+function TemplateMatches(const ATemplate, AMsg: string): Boolean;
+var
+  T, M, StarT, StarM: Integer;
+begin
+  T := 1;
+  M := 1;
+  StarT := 0;
+  StarM := 0;
+  while M <= Length(AMsg) do
+  begin
+    if (T < Length(ATemplate)) and (ATemplate[T] = '%') and (ATemplate[T + 1] in ['s', 'd', 'x']) then
+    begin
+      Inc(T, 2);
+      StarT := T;
+      StarM := M;
+    end
+    else if (T <= Length(ATemplate)) and (ATemplate[T] = AMsg[M]) then
+    begin
+      Inc(T);
+      Inc(M);
+    end
+    else if StarT > 0 then
+    begin
+      Inc(StarM);
+      M := StarM;
+      T := StarT;
+    end
+    else
+      Exit(False);
+  end;
+  while (T < Length(ATemplate)) and (ATemplate[T] = '%') and (ATemplate[T + 1] in ['s', 'd', 'x']) do
+    Inc(T, 2);
+  Result := T > Length(ATemplate);
+end;
+
+{ GocciaScript's suggestion for a runtime error's message, '' for none }
+function RuntimeSuggestion(const AMessage: string): string;
+var
+  I: Integer;
+begin
+  for I := 0 to RUNTIME_SUGGESTION_COUNT - 1 do
+    if TemplateMatches(RUNTIME_SUGGESTIONS[I, 0], AMessage) then
+      Exit(RUNTIME_SUGGESTIONS[I, 1]);
+  Result := '';
+end;
+
 procedure TG2RunnerApp.ReportFailure(const AFileName: string;
   const AResult: TG2RunResult; const ASource: TStringList);
 var
-  Name: string;
+  Name, Suggestion: string;
 begin
   case AResult.Aborted of
     g2aTimeout:
@@ -687,10 +736,13 @@ begin
     WriteLn;
     Exit;
   end;
+  Suggestion := UTF8Encode(AResult.ErrorSuggestion);
+  if Suggestion = '' then
+    Suggestion := RuntimeSuggestion(UTF8Encode(AResult.ErrorText));
   if AResult.ErrorLine > 0 then
     WriteLn(FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText),
       UTF8Encode(AResult.ErrorFile), AResult.ErrorLine, AResult.ErrorColumn,
-      ASource, IsColorTerminal, UTF8Encode(AResult.ErrorSuggestion)))
+      ASource, IsColorTerminal, Suggestion))
   else if AResult.ErrorText <> '' then
     WriteLn(Name, ': ', UTF8Encode(AResult.ErrorText))
   else
