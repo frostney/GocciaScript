@@ -152,25 +152,12 @@ begin
   PopRoots(1);
 end;
 
-{ the PermissionDenied a capability check throws: "ffi: <scope>", made by the realm's PermissionDenied, with the
-  host's suggestion of the grant to ask for }
+{ the PermissionDenied a capability check throws: "ffi: <scope>", with the host's suggestion of the grant to ask
+  for }
 function ThrowPermissionDenied(const Scope, Suggestion: UnicodeString): Boolean;
-var C, M, E: TValue;
+var E: TValue;
 begin
-  if not GetV(GlobalObj, AtomOf('PermissionDenied'), C) or not IsCallable(C) then
-    Exit(ThrowError('Error', 'ffi: ' + Scope));
-  PushRoot(C);
-  M := StrFromUnicode('ffi: ' + Scope);
-  PushRoot(M);
-  C := RootAt(TempTop - 2);
-  if Construct(C, @M, 1, C, E) then
-  begin
-    PushRoot(E);
-    SetErrorHostSuggestion(RootAt(TempTop - 1), Suggestion);
-    Pending := RootAt(TempTop - 1);
-    PopRoots(1);
-  end;
-  PopRoots(2);
+  if NewPermissionDenied('ffi', Scope, Suggestion, E) then Pending := E;
   Result := False;
 end;
 
@@ -834,7 +821,7 @@ end;
   the zero value }
 procedure RunCallback(Id: Integer; var State: TGocciaFFICallbackMachineState);
 var Sig: TGocciaFFICompiledSignature; RP: PGocciaFFIReturnPlan; AP: PGocciaFFIArgumentPlan; Hidden, IP: Pointer;
-  Data, Ret: TBytes; Base, I, J, N: Integer; Fn, R: TValue; Argv: array of TValue;
+  Data, Ret: TBytes; Base, I, J, N: Integer; Fn, R: TValue;
 begin
   Sig := Cbs[Id].Sig;
   RP := Sig.ReturnPlanPointer;
@@ -877,9 +864,8 @@ begin
     end;
     GetElemV(CbFns, MkInt(Id), Fn);
     PushRoot(Fn);
-    SetLength(Argv, Max(N, 1));
-    for I := 0 to N - 1 do Argv[I] := RootAt(Base + I);
-    if not CallValue(RootAt(TempTop - 1), VUndefined, @Argv[0], N, R) then
+    { the arguments from their root slots, which a collection inside the call updates }
+    if not CallValue(RootAt(TempTop - 1), VUndefined, @TempRoots[Base], N, R) then
     begin
       CallbackFailed;
       Exit;
