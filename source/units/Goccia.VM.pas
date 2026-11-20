@@ -10593,8 +10593,9 @@ begin
       try
         Polls := @GThreadPolls;
         repeat
+          // Native iterator steps spend the budget, as in IterableToArray.
           if Polls^.Any <> 0 then
-            RunArmedPolls(Polls);
+            SpendSpreadBudget(Polls);
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             AArray.Elements.Add(NextResult);

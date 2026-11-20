@@ -311,8 +311,9 @@ begin
       misses the sample. }
     if Poll^.BudgetArmed then
     begin
-      Inc(Poll^.NativeCounter);
-      if (Poll^.NativeCounter and (TIMEOUT_CHECK_INTERVAL - 1)) = 0 then
+      Poll^.NativeCounter := (Poll^.NativeCounter + 1) and
+        (TIMEOUT_CHECK_INTERVAL - 1);
+      if Poll^.NativeCounter = 0 then
         SpendInstructions(TIMEOUT_CHECK_INTERVAL);
     end;
   end;
@@ -362,9 +363,6 @@ end;
 
 procedure SetTimeoutBudgetArmed(const AArmed: Boolean);
 begin
-  // A budget that starts or ends begins a fresh sample; a scope that only
-  // nests settles its pending work first (TakePendingNativeWork).
-  GTimeoutPoll.NativeCounter := 0;
   if GTimeoutPoll.BudgetArmed = AArmed then
     Exit;
   GTimeoutPoll.BudgetArmed := AArmed;

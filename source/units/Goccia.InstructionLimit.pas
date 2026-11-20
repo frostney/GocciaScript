@@ -177,6 +177,8 @@ end;
 
 procedure StartInstructionLimit(const AMaxInstructions: Int64);
 begin
+  // A budget that starts or ends begins a fresh sample.
+  TakePendingNativeWork;
   GInstructionLimitState.ScopeDepth := 0;
   SetLength(GInstructionLimitState.ScopeStarts, 0);
   SetLength(GInstructionLimitState.ScopeLimits, 0);
@@ -187,6 +189,8 @@ end;
 
 procedure ClearInstructionLimit;
 begin
+  // A budget that starts or ends begins a fresh sample.
+  TakePendingNativeWork;
   GInstructionLimitState.ScopeDepth := 0;
   SetLength(GInstructionLimitState.ScopeStarts, 0);
   SetLength(GInstructionLimitState.ScopeLimits, 0);
