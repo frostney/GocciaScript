@@ -743,6 +743,7 @@ begin
       if Capture.Capturing or Capture.Silent or LogFileOpen then
         Engine.OnConsole := Capture.Emit;
       Engine.FailOnUnhandledRejection := True;
+      Engine.Deterministic := ResolveFlagOption(EngineOptions.Deterministic, FileConfig);
       if not IsJsonOutput then
         Engine.OnWarning := Capture.PrintWarning;
       ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig,
