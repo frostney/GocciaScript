@@ -142,7 +142,7 @@ begin
   { Rounds of 600 polls, each inside a nested scope: no round reaches a sample
     of 1,024 alone, but the outer budget of 3,000 is spent after five rounds
     because every scope's pending polls are added to it when the scope ends,
-    and the next check sees them. }
+    and the next native poll checks it, with no dispatched instruction. }
   StartInstructionLimit(3000);
   Raised := False;
   try
@@ -155,8 +155,6 @@ begin
       finally
         PopInstructionLimitScope;
       end;
-      { A dispatched instruction would make this check. }
-      CheckInstructionLimit;
     end;
   except
     on TGocciaInstructionLimitError do

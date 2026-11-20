@@ -53,6 +53,10 @@ type
     BudgetArmed: Boolean;
     // Polls of native loops since the budget was last spent.
     NativeCounter: Integer;
+    { Work settled into the scopes at a push or pop: the next native poll
+      checks the budget so that it raises for a spent one without waiting for a
+      dispatched instruction. }
+    CheckBudgetPending: Boolean;
   end;
   PGocciaTimeoutPollState = ^TGocciaTimeoutPollState;
 
@@ -292,6 +296,9 @@ function TakePendingNativeWork: Integer;
 begin
   Result := GTimeoutPoll.NativeCounter and (TIMEOUT_CHECK_INTERVAL - 1);
   GTimeoutPoll.NativeCounter := 0;
+  // The settled work may have spent the budget a scope change leaves.
+  if Result > 0 then
+    GTimeoutPoll.CheckBudgetPending := True;
 end;
 
 procedure CheckExecutionTimeout;
@@ -311,6 +318,11 @@ begin
       misses the sample. }
     if Poll^.BudgetArmed then
     begin
+      if Poll^.CheckBudgetPending then
+      begin
+        Poll^.CheckBudgetPending := False;
+        SpendInstructions(0);
+      end;
       Poll^.NativeCounter := (Poll^.NativeCounter + 1) and
         (TIMEOUT_CHECK_INTERVAL - 1);
       if Poll^.NativeCounter = 0 then
