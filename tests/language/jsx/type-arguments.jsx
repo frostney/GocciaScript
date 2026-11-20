@@ -43,8 +43,24 @@ describe("comparisons next to JSX in .jsx", () => {
     // prettier-ignore
     const closed = a
       <b<c>d;
+    const e = 1;
+    const call = (callback) => callback();
+    // prettier-ignore
+    const divided = a
+      <b<c>d / e;
+    // prettier-ignore
+    const nested = a
+      <b<call(() => <Select<string> value={3} />);
     expect(unclosed).toBe(true);
     expect(closed).toBe(true);
+    expect(divided).toBe(true);
+    expect(nested).toBe(false);
+  });
+
+  test("a property named like a control-flow keyword still divides", () => {
+    const options = { if: (value) => value, else: 8 };
+    expect(options.if(8) / 2).toBe(4);
+    expect(options.else / 2).toBe(4);
   });
 
   test("an element compared with `<` is not given type arguments", () => {

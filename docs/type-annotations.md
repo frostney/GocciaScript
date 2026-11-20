@@ -163,7 +163,7 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
 
   Use a `.ts` or `.mts` source when an annotation needs the bare `<T>` form.
 
-  An element's tag can carry type arguments, as in TypeScript's `.tsx`. They are erased, in every extension above, so the element is the same call it is without them. A tag name followed by `<` always opens type arguments, because no type parameter list is written that way. A closing tag takes none.
+  An element's tag can carry type arguments, as in TypeScript's `.tsx`. They are erased, in every extension above, so the element is the same call it is without them. A tag name followed by `<` always opens type arguments, because no type parameter list is written that way. As in TypeScript, a `<` on the line after an expression continues that expression, so `a` followed by `<b<c>d` on the next line is a comparison; after a control-flow header such as `if (ok)`, or after `else` or `do`, a statement starts there and the element takes its type arguments. A closing tag takes none.
 
   ```javascript
   const choice = <Select<Option> items={options} />;

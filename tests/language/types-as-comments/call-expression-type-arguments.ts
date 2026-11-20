@@ -57,6 +57,16 @@ test("template literal type arguments with substitutions are erased", () => {
   expect(identity<`t${string}`>`x`[0]).toBe("x");
 });
 
+test("a template with an expression substitution is not a type argument", () => {
+  const a = 1;
+  const b = 2;
+  const c = 0;
+  const identity = (value) => value;
+
+  expect(a < `x${1 + 2}` > (c)).toBe(false);
+  expect(a < `${identity<`t${string}`>(1)}${0}${0}${0}${0}${0}${0}${0}${0}${0}${0}` > b).toBe(false);
+});
+
 test("type arguments before a tagged template", () => {
   const tag = (parts) => "tagged:" + parts[0];
 

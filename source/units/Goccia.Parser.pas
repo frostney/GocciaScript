@@ -445,6 +445,8 @@ type
     function TryCollectCallExpressionTypeArguments(
       out ATypeArguments: TGocciaTypeRangeArray): Boolean;
     function FollowsPreprocessorText: Boolean;
+    function SkipTemplateLiteralType(
+      const AAllowExpressionTokens: Boolean): Boolean;
     procedure RememberNotTypeArguments(const AFirst: Integer;
       const AEndsInLexError: Boolean; const AConstructor: Boolean = False);
     function TryParseGenericArrowFunction(
@@ -10881,7 +10883,8 @@ begin
             begin
               // A template literal type, `t${string}`, whose substitution's
               // closing brace only the template-tail goal lexes as such.
-              SkipTemplateLiteral;
+              if not SkipTemplateLiteralType(False) then
+                Exit;
               HasTypeArgument := True;
               Continue;
             end;
@@ -11030,7 +11033,8 @@ begin
             begin
               // A template literal type, `t${string}`, whose substitution's
               // closing brace only the template-tail goal lexes as such.
-              SkipTemplateLiteral;
+              if not SkipTemplateLiteralType(ElementTypeArguments) then
+                Exit;
               HasTypeArgument := True;
               Continue;
             end;
@@ -11069,6 +11073,24 @@ begin
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
   end;
+end;
+
+// Steps over the template literal at the cursor inside a type-argument probe,
+// as SkipTemplateLiteral does, and says whether it can be a template literal
+// type: its substitutions hold no token that only an expression has, unless
+// AAllowExpressionTokens. `` a < `x${1 + 2}` > (c) `` stays a comparison.
+function TGocciaParser.SkipTemplateLiteralType(
+  const AAllowExpressionTokens: Boolean): Boolean;
+var
+  First, I: Integer;
+begin
+  First := FCurrent;
+  SkipTemplateLiteral;
+  Result := True;
+  if not AAllowExpressionTokens then
+    for I := First to FCurrent - 1 do
+      if FTokens[I].TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS then
+        Exit(False);
 end;
 
 // Whether the token before the current one ends in text a preprocessor
@@ -11164,6 +11186,12 @@ begin
   Count := FTokens.Count - AFirst;
   if Count < MIN_REMEMBERED_TOKENS then
     Exit;
+  // A probe steps over a template literal whole (SkipTemplateLiteral), which
+  // this token-by-token account does not. Templates in a long comparison
+  // chain are rare enough to leave its probes unremembered.
+  for I := 0 to Count - 1 do
+    if TypeAt(I) = gttTemplateHead then
+      Exit;
 
   // After each token, the depth and bracket depth a probe from AFirst has
   // reached, and how many tokens so far count as a type argument. A probe

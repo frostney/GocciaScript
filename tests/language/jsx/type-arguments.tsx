@@ -60,6 +60,12 @@ describe("JSX type arguments in .tsx", () => {
     else
       <Select<string> v={record(3)} />;
     expect(made).toEqual([1, 2]);
+    let el;
+    // prettier-ignore
+    if (made.length === 0) el = 0;
+    else
+      el = <Select<string> v={4} />;
+    expect(el.props).toEqual({ v: 4 });
   });
 
   test("comments and line breaks around the type arguments", () => {
