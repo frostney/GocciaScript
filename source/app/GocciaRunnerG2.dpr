@@ -97,6 +97,9 @@ type
   TG2RunnerApp = class(TGocciaCLIApplication)
   private
     FReports: array of TG2FileReport;
+    { a directory's files run at once without a JSON report (GocciaRunner's RunScriptsParallel): each prints its
+      console output and its failure, not its banner or value }
+    FQuietWorkers: Boolean;
     { the main thread's memory manager when the run began (a multi-file report's memory.heap) }
     FHeapStart: THeapStatus;
     { the JSON report's workers: the files run at once (1 when one after another) }
@@ -120,7 +123,7 @@ type
     FCheckRefs: TFlagOption;
     FAcceptMovedTags: TFlagOption;
     procedure RunSource(const AFileName: string; const ASource: TStringList; AReportIndex: Integer = -1);
-    procedure RunJsonFilesParallel(const AFiles: TStringList);
+    procedure RunFilesParallel(const AFiles: TStringList);
     { a parallel file whose source does not load: its report, the class and message of the failure (as
       GocciaRunner's worker reports it) }
     procedure ReportLoadFailure(AReportIndex: Integer; const AFileName: string; const E: Exception;
@@ -184,7 +187,14 @@ begin
     except
       on E: Exception do
       begin
-        FApp.ReportLoadFailure(FReportIndex, FFileName, E, Start);
+        if FApp.IsJsonOutput then
+          FApp.ReportLoadFailure(FReportIndex, FFileName, E, Start)
+        else
+        begin
+          { GocciaRunner's RunScriptsParallel line for a file its worker could not run }
+          WriteLn('Error in ', FFileName, ': ', E.Message);
+          ExitCode := 1;
+        end;
         Exit;
       end;
     end;
@@ -1013,7 +1023,7 @@ begin
         Capture.LogLine := HandleConsoleLog;
       if IsJsonOutput then
         Engine.ResultForm := g2rfJSON
-      else if FPrint.Present then
+      else if FPrint.Present and not FQuietWorkers then
         Engine.ResultForm := g2rfString;
       if Capture.Capturing or Capture.Silent or LogFileOpen then
         Engine.OnConsole := Capture.Emit;
@@ -1104,6 +1114,9 @@ begin
         ExitCode := 1;
         Exit;
       end;
+      { a parallel worker prints no banner and no value, so it does not convert one either }
+      if FQuietWorkers then
+        Exit;
       WriteLn('Running script (bytecode): ', AFileName);
       WriteLn('  Lex: (in Compile) | Parse: (in Compile) | Compile: ',
         FormatDuration(RunResult.CompileNanoseconds), ' | Execute: ',
@@ -1161,7 +1174,7 @@ end;
 
 { a JSON report's files run at once, as GocciaRunner's RunJSONFiles does (GetJobCount: --jobs, else the processors,
   at most one per file): each on a thread of its own, at most that many running, their reports in file order }
-procedure TG2RunnerApp.RunJsonFilesParallel(const AFiles: TStringList);
+procedure TG2RunnerApp.RunFilesParallel(const AFiles: TStringList);
 var
   I, Next, Oldest, Started: Integer;
   Workers: array of TG2FileThread;
@@ -1170,7 +1183,8 @@ var
   ErrorMessage: string;
 begin
   FWorkers := GetJobCount(AFiles.Count);
-  SetLength(FReports, AFiles.Count);
+  if IsJsonOutput then
+    SetLength(FReports, AFiles.Count);
   SetLength(Workers, AFiles.Count);
   ErrorClass := nil;
   ErrorMessage := '';
@@ -1282,21 +1296,41 @@ begin
     ValidateFileConfigs(Files);
     if IsJsonOutput and (Files.Count > 1) then
     begin
-      RunJsonFilesParallel(Files);
+      RunFilesParallel(Files);
       PrintJsonReport;
       Exit;
     end;
   finally
     Files.Free;
   end;
-  { in order; a missing path stops the run where it stands, as GocciaRunner's RunScripts }
+  { in order; a missing path stops the run where it stands, as GocciaRunner's RunScripts. A directory's files run
+  at once when more than one worker is allowed (RunScriptsParallel), else one after another with a blank line
+  between them (RunScriptsSequentially) }
   for I := 0 to APaths.Count - 1 do
     if DirectoryExists(APaths[I]) then
     begin
       Found := FindAllFiles(APaths[I], ScriptExtensions);
       try
-        for J := 0 to Found.Count - 1 do
-          RunFile(Found[J]);
+        if GetJobCount(Found.Count) > 1 then
+        begin
+          WriteLn(Format('Running %d files with %d workers', [Found.Count, GetJobCount(Found.Count)]));
+          { before the workers', whose output goes through their own threads' buffers }
+          Flush(Output);
+          FQuietWorkers := True;
+          try
+            RunFilesParallel(Found);
+          finally
+            FQuietWorkers := False;
+            FWorkers := 1;
+          end;
+        end
+        else
+          for J := 0 to Found.Count - 1 do
+          begin
+            if J > 0 then
+              WriteLn;
+            RunFile(Found[J]);
+          end;
       finally
         Found.Free;
       end;
