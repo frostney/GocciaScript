@@ -6,9 +6,8 @@ program GocciaRunnerG2;
   runner` builds it as build/GocciaRunner, so the CLI tests run against it
   unchanged; once it covers GocciaRunner it replaces GocciaRunner.dpr.
 
-  Not yet on G2: sandbox and install modes, source maps, the profiler,
-  bytecode files (--prefer-bytecode), and the read capability's audit
-  events. }
+  Not yet on G2: sandbox and install modes, the profiler, bytecode files
+  (--prefer-bytecode), and the read capability's audit events. }
 
 {$I Goccia.inc}
 
@@ -20,6 +19,7 @@ uses
   CLI.ConfigFile,
   CLI.Options,
   FileUtils,
+  TextSemantics,
   TimingUtils,
 
   Goccia.Application,
@@ -29,6 +29,7 @@ uses
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
   Goccia.CLI.Stdin,
+  Goccia.CLI.SourceMaps,
   Goccia.CLI.Trust,
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
@@ -36,6 +37,7 @@ uses
   Goccia.Coverage.Report,
   Goccia.Error,
   Goccia.FileExtensions,
+  Goccia.JSX.Transformer,
   Goccia.Modules.Configuration,
   Goccia.Modules.Resolver,
   Goccia.ScriptLoader.Globals,
@@ -154,6 +156,8 @@ type
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     procedure AfterExecute; override;
+    procedure WriteRunSourceMap(const AFileName: string; const ASource: TStringList);
+    procedure RunFileList(const AFiles: TStringList);
   end;
 
 type
@@ -961,6 +965,31 @@ end;
 
 { --host-environment's module, else a config's "host-environment" (against that config's directory): the path,
   or '' for none. The command line's names a file from the working directory. }
+{ --source-map: the JSX transform's map of the file (GocciaRunner's WriteSourceMapIfEnabled), beside it as
+  <file>.map or at the path given; nothing for a file the transform leaves alone }
+procedure TG2RunnerApp.WriteRunSourceMap(const AFileName: string; const ASource: TStringList);
+var
+  Transformed: TGocciaJSXTransformResult;
+  MapPath, Text: string;
+begin
+  if IsJSXExcludedExtension(ExtractFileExt(AFileName)) then
+    Exit;
+  { the text as the source pipeline joins it, and the original as the map's source content, as GocciaScript's }
+  Text := StringListToSourceText(ASource);
+  Transformed := TGocciaJSXTransformer.Transform(Text, AFileName);
+  try
+    if Assigned(Transformed.SourceMap) then
+      Transformed.SourceMap.SetSourceContent(0, Text);
+    MapPath := FSourceMap.ValueOr('');
+    if MapPath = '' then
+      MapPath := AFileName + EXT_MAP;
+    WriteSourceMapIfAvailable(Transformed.SourceMap, MapPath, AFileName, AFileName, not IsJsonOutput);
+  finally
+    Transformed.SourceMap.Free;
+    Transformed.OriginMap.Free;
+  end;
+end;
+
 function TG2RunnerApp.HostEnvironmentPath(const AFileConfig: TConfigEntryArray;
   ADeterministic: Boolean): string;
 var
@@ -1140,6 +1169,8 @@ begin
         ExitCode := 1;
         Exit;
       end;
+      if FSourceMap.Present then
+        WriteRunSourceMap(AFileName, ASource);
       RunResult := Engine.Run(AFileName, UTF8Decode(ASource.Text));
       if IsJsonOutput then
       begin
@@ -1329,10 +1360,39 @@ begin
   ExitCode := 1;
 end;
 
+{ a list of files or --multifile sections in text output, as GocciaRunner's RunScripts runs a directory: at once
+  when more than one worker is allowed (RunScriptsParallel), else one after another with a blank line between
+  them (RunScriptsSequentially) }
+procedure TG2RunnerApp.RunFileList(const AFiles: TStringList);
+var
+  J: Integer;
+begin
+  if GetJobCount(AFiles.Count) > 1 then
+  begin
+    WriteLn(Format('Running %d files with %d workers', [AFiles.Count, GetJobCount(AFiles.Count)]));
+    { before the workers', whose output goes through their own threads' buffers }
+    Flush(Output);
+    FQuietWorkers := True;
+    try
+      RunFilesParallel(AFiles);
+    finally
+      FQuietWorkers := False;
+      FWorkers := 1;
+    end;
+  end
+  else
+    for J := 0 to AFiles.Count - 1 do
+    begin
+      if J > 0 then
+        WriteLn;
+      RunFile(AFiles[J]);
+    end;
+end;
+
 procedure TG2RunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
-  I, J: Integer;
-  Source, Files, Found: TStringList;
+  I: Integer;
+  Source, Files, Found, Names, Single: TStringList;
 begin
   FWorkers := 1;
   FHeapStart := GetHeapStatus;
@@ -1344,15 +1404,48 @@ begin
     FCoveragePaths := TStringList.Create;
     FCoveragePaths.Assign(APaths);
   end;
-  { no path, or "-": the source from stdin (the base class applied the no-argument rule) }
+  { GocciaRunner's --source-map rules: stdin has no file to put the map beside, one map file names one input, and a
+    --multifile input may be several }
+  if FSourceMap.Present and (FSourceMap.ValueOr('') = '') and
+     ((APaths.Count = 0) or ((APaths.Count = 1) and IsStdinPath(APaths[0]))) then
+    raise TParseError.Create('--source-map=<file> is required when reading source from stdin.');
+  if (FSourceMap.ValueOr('') <> '') and
+     ((APaths.Count > 1) or ((APaths.Count = 1) and DirectoryExists(APaths[0]))) then
+    raise TParseError.Create('--source-map=<file> supports a single input file or stdin.');
+  if FSourceMap.Present and MultifileEnabled then
+    raise TParseError.Create('--source-map cannot be combined with --multifile (an input '
+      + 'may expand to multiple sections).');
+  { no path, or "-": the source from stdin (the base class applied the no-argument rule); with --multifile its
+    sections, one after another }
   if (APaths.Count = 0) or ((APaths.Count = 1) and IsStdinPath(APaths[0])) then
   begin
     Source := ReadSourceFromText(Input);
-    try
-      RunOnWorker(STDIN_FILE_NAME, Source);
-    finally
-      Source.Free;
-    end;
+    if MultifileEnabled then
+    begin
+      { the source goes to SplitStdinMultifile, which registers each section }
+      Names := SplitStdinMultifile(Source);
+      try
+        for I := 0 to Names.Count - 1 do
+        begin
+          if (I > 0) and not IsJsonOutput then
+            WriteLn;
+          Source := SourceRegistry.Load(Names[I]);
+          try
+            RunOnWorker(Names[I], Source);
+          finally
+            Source.Free;
+          end;
+        end;
+      finally
+        Names.Free;
+      end;
+    end
+    else
+      try
+        RunOnWorker(STDIN_FILE_NAME, Source);
+      finally
+        Source.Free;
+      end;
     if IsJsonOutput then
       PrintJsonReport;
     Exit;
@@ -1378,54 +1471,63 @@ begin
         Files.Add(APaths[I])
       else if IsJsonOutput then
         raise Exception.Create('Path not found: ' + APaths[I]);
-    ValidateFileConfigs(Files);
-    if IsJsonOutput and (Files.Count > 1) then
+    if IsJsonOutput then
     begin
-      RunFilesParallel(Files);
+      { the files, or with --multifile their sections, as one report }
+      Found := ExpandMultifileFiles(Files);
+      try
+        if Found.Count > 1 then
+          RunFilesParallel(Found)
+        else if Found.Count = 1 then
+          RunFile(Found[0]);
+      finally
+        Found.Free;
+      end;
       PrintJsonReport;
       Exit;
     end;
+    ValidateFileConfigs(Files);
   finally
     Files.Free;
   end;
-  { in order; a missing path stops the run where it stands, as GocciaRunner's RunScripts. A directory's files run
-  at once when more than one worker is allowed (RunScriptsParallel), else one after another with a blank line
-  between them (RunScriptsSequentially) }
+  { in order; a missing path stops the run where it stands, as GocciaRunner's RunScripts }
   for I := 0 to APaths.Count - 1 do
     if DirectoryExists(APaths[I]) then
     begin
       Found := FindAllFiles(APaths[I], ScriptExtensions);
       try
-        if GetJobCount(Found.Count) > 1 then
-        begin
-          WriteLn(Format('Running %d files with %d workers', [Found.Count, GetJobCount(Found.Count)]));
-          { before the workers', whose output goes through their own threads' buffers }
-          Flush(Output);
-          FQuietWorkers := True;
-          try
-            RunFilesParallel(Found);
-          finally
-            FQuietWorkers := False;
-            FWorkers := 1;
-          end;
-        end
-        else
-          for J := 0 to Found.Count - 1 do
-          begin
-            if J > 0 then
-              WriteLn;
-            RunFile(Found[J]);
-          end;
+        Files := ExpandMultifileFiles(Found);
+        try
+          RunFileList(Files);
+        finally
+          Files.Free;
+        end;
       finally
         Found.Free;
       end;
     end
     else if FileExists(APaths[I]) then
-      RunFile(APaths[I])
+    begin
+      if MultifileEnabled then
+      begin
+        Single := TStringList.Create;
+        try
+          Single.Add(APaths[I]);
+          Files := ExpandMultifileFiles(Single);
+          try
+            RunFileList(Files);
+          finally
+            Files.Free;
+          end;
+        finally
+          Single.Free;
+        end;
+      end
+      else
+        RunFile(APaths[I]);
+    end
     else
       raise Exception.Create('Path not found: ' + APaths[I]);
-  if IsJsonOutput then
-    PrintJsonReport;
 end;
 
 { --coverage's reports, as GocciaRunner writes them: the summary (and one file's detail), then the LCOV or JSON
