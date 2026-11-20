@@ -4313,6 +4313,7 @@ end;
 procedure TGocciaArrayValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
   Index: Int64;
+  OldCount: Integer;
 begin
   if AName = PROP_LENGTH then
   begin
@@ -4380,13 +4381,19 @@ begin
 
     // Non-dense descriptors must be stored in the ordinary property map so
     // missing/defaulted attributes keep their spec values.
-    inherited DefineProperty(AName, ADescriptor);
-    // No pending value: the descriptor has been handed to the property map,
-    // which owns it now (and may already have freed it), so its value is
-    // reachable through this array's own map and the gate's owner push covers
-    // it. Touching ADescriptor here would be the use-after-free instead.
+    // The holes come first: extending polls the deadline, the instruction
+    // budget and a host's abort, and a raise there must find nothing
+    // published (the descriptor still belongs to the caller, which frees it).
+    // No pending value: the gate's owner push covers what the array holds.
+    OldCount := FElements.Count;
     if CanStoreDenseElementIndex(Index, FElements.Count) then
       ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+    try
+      inherited DefineProperty(AName, ADescriptor);
+    except
+      FElements.Count := OldCount;
+      raise;
+    end;
     if Index + 1 > FLength then
       FLength := Index + 1;
     if CanStoreDenseElementIndex(Index, FElements.Count) and
@@ -4402,6 +4409,7 @@ end;
 function TGocciaArrayValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   Index: Int64;
+  OldCount: Integer;
 begin
   if AName = PROP_LENGTH then
   begin
@@ -4474,13 +4482,22 @@ begin
     // Store non-dense descriptors on the ordinary property map. This preserves
     // omitted fields as false/undefined for new array-index properties and
     // keeps non-default attributes visible to subsequent [[GetOwnProperty]].
-    Result := inherited TryDefineProperty(AName, ADescriptor);
-    if Result then
+    // The holes come first, as in the DefineProperty arm: a poll of the
+    // extension that raises finds nothing published, and a refused
+    // descriptor gives them back.
+    OldCount := FElements.Count;
+    if CanStoreDenseElementIndex(Index, FElements.Count) then
+      ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+    try
+      Result := inherited TryDefineProperty(AName, ADescriptor);
+    except
+      FElements.Count := OldCount;
+      raise;
+    end;
+    if not Result then
+      FElements.Count := OldCount
+    else
     begin
-      // nil for the same reason as the DefineProperty arm: the map owns the
-      // descriptor now, and the owner push covers what it holds.
-      if CanStoreDenseElementIndex(Index, FElements.Count) then
-        ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
       if Index + 1 > FLength then
         FLength := Index + 1;
       if CanStoreDenseElementIndex(Index, FElements.Count) and
@@ -5014,7 +5031,7 @@ begin
           the per-element path; each poll spends the 256 writes it covers. }
         if ((I64 - Start64) and 255) = 255 then
         begin
-          CheckExecutionTimeoutUnmetered;
+          CheckExecutionTimeoutNow;
           SpendInstructions(256);
         end;
         View.Obj.AssignProperty(IntegerToString(I64), FillValue);
@@ -5052,7 +5069,7 @@ begin
     begin
       if ((I - StartIdx) and 255) = 255 then
       begin
-        CheckExecutionTimeoutUnmetered;
+        CheckExecutionTimeoutNow;
         SpendInstructions(256);
       end;
       View.Put(I, FillValue);

@@ -1587,6 +1587,18 @@ console.log("--max-instructions (native work counted once, and by what it covers
   }
 }
 
+console.log("--max-instructions (a far accessor index on an array)...");
+{
+  // The holes are extended before the descriptor is published, so the raise
+  // of a poll there finds nothing the array owns (it used to free a
+  // descriptor the array still held and fault).
+  const define = "const a = [];\nObject.defineProperty(a, 100000, { get: () => 1, configurable: true });\na.length;\n";
+  for (const [flag, type] of [["--max-instructions=1000", "InstructionLimitError"]]) {
+    const { exitCode, json } = runLoaderJson(define, [flag], { timeout: 10_000 });
+    if (exitCode !== 1 || json.error?.type !== type) throw new Error(`defineProperty at a far index under ${flag} should end with ${type}, got exit ${exitCode}: ${JSON.stringify(json.error)}`);
+  }
+}
+
 console.log("--timeout (native regex scan)...");
 {
   const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50"], { timeout: 10_000 });
