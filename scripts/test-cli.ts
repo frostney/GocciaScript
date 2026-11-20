@@ -1621,6 +1621,15 @@ console.log("--max-instructions (an iterator object over a bound native next)...
   }
 }
 
+console.log("--max-instructions (Iterator.prototype.toArray over a native iterator)...");
+{
+  const setup = "const it = Array.prototype.values.call({ length: 5000 });\n";
+  const alone = runLoaderJson(setup, ["--max-instructions=1000"], { timeout: 10_000 });
+  if (alone.exitCode !== 0) throw new Error(`toArray setup alone should succeed, got exit ${alone.exitCode}`);
+  const { exitCode, json } = runLoaderJson(setup + "it.toArray();\n0;\n", ["--max-instructions=1000"], { timeout: 10_000 });
+  if (exitCode !== 1 || json.error?.type !== "InstructionLimitError") throw new Error(`toArray over a native iterator should end with InstructionLimitError, got exit ${exitCode}`);
+}
+
 console.log("--timeout (native regex scan)...");
 {
   const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50"], { timeout: 10_000 });
