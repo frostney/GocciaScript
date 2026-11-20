@@ -108,6 +108,21 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRange", () => {
     expect(result).not.toContain("BC");
     expect(result).not.toContain("AD");
   });
+
+  test("leaves no blank era in an iso8601 range across eras with narrow months", () => {
+    const dtf = new Intl.DateTimeFormat("es", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "narrow",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const result = dtf.formatRange(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    // A blank era leaves its spaces behind: " 101 E 4 –  2000 E 1".
+    expect(result).toBe(result.trim());
+    expect(/\s\s/.test(result)).toBe(false);
+  });
 });
 
 describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRange Temporal inputs", () => {
