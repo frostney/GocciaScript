@@ -5012,7 +5012,7 @@ begin
           the instruction budget and a host's abort must reach this loop (the
           chokepoint rule in Goccia.Timeout). A mask of 255 keeps the poll off
           the per-element path; each poll spends the 256 writes it covers. }
-        if (I64 and 255) = 255 then
+        if ((I64 - Start64) and 255) = 255 then
         begin
           CheckExecutionTimeoutUnmetered;
           SpendInstructions(256);
@@ -5020,6 +5020,9 @@ begin
         View.Obj.AssignProperty(IntegerToString(I64), FillValue);
         Inc(I64);
       end;
+      // The writes after the last full batch.
+      if ((End64 - Start64) > 0) and (((End64 - Start64) and 255) <> 0) then
+        SpendInstructions((End64 - Start64) and 255);
 
       Result := View.Obj;
       Exit;
@@ -5047,13 +5050,16 @@ begin
     // Step 8: Repeat, while k < final — Set(O, ToString(k), value)
     for I := StartIdx to EndIdx - 1 do
     begin
-      if (I and 255) = 255 then
+      if ((I - StartIdx) and 255) = 255 then
       begin
         CheckExecutionTimeoutUnmetered;
         SpendInstructions(256);
       end;
       View.Put(I, FillValue);
     end;
+    // The writes after the last full batch.
+    if (EndIdx > StartIdx) and (((EndIdx - StartIdx) and 255) <> 0) then
+      SpendInstructions((EndIdx - StartIdx) and 255);
 
     // Step 9: Return O
     Result := View.Obj;

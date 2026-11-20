@@ -224,6 +224,9 @@ begin
         SpendInstructions(1024);
       end;
     end;
+    // The holes after the last full batch.
+    if ((AElements.Count - StartCount) and 1023) <> 0 then
+      SpendInstructions((AElements.Count - StartCount) and 1023);
   except
     AElements.Count := StartCount;
     raise;

@@ -28,6 +28,9 @@ export const containsLine = (s: string, value: string): boolean => {
   return lines.some((line) => line.replace(/\r$/, "") === value);
 };
 
+/** Whether `runLoaderJson` can apply `memoryCapMiB` here (Linux only). */
+export const canCapMemory = process.platform === "linux";
+
 export function runLoaderJson(
   source: string,
   extraArgs?: string[],
@@ -61,7 +64,7 @@ export function runLoaderJson(
   ];
   const capped =
     opts?.memoryCapMiB != null && process.platform === "linux"
-      ? ["sh", "-c", `ulimit -v ${opts.memoryCapMiB * 1024}; exec "$@"`, "sh", ...command]
+      ? ["sh", "-c", `ulimit -v ${opts.memoryCapMiB * 1024} && exec "$@"`, "sh", ...command]
       : command;
   const proc = Bun.spawnSync(capped, spawnOpts);
   const stdout = proc.stdout.toString();

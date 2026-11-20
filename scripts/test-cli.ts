@@ -30,7 +30,7 @@ import {
   BUNDLER,
   BENCHRUNNER,
 } from "./test-cli/binaries";
-import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
+import { canCapMemory, containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
 
 verifyOutputEncoding();
@@ -1505,7 +1505,9 @@ console.log("--timeout (native sparse-array fill)...");
 }
 
 console.log("--timeout and --max-instructions (Array.prototype.fill over a length above 2**31 - 1)...");
-{
+if (!canCapMemory) {
+  console.log("  skipped: no process memory cap on this platform");
+} else {
   // A length above 2**31 - 1 takes fill's sparse path, which assigns every
   // index as a property. That loop is bound only by the JS-controlled length,
   // so the deadline and the instruction budget have to reach it
@@ -1525,7 +1527,9 @@ console.log("--timeout and --max-instructions (Array.prototype.fill over a lengt
 }
 
 console.log("--max-instructions (native loops over a huge array)...");
-{
+if (!canCapMemory) {
+  console.log("  skipped: no process memory cap on this platform");
+} else {
   // These loops used to poll only the deadline (through the per-element reads
   // or the allocations they make), so an instruction budget could not end
   // them: the chokepoint rule in Goccia.Timeout covers every limit.
@@ -1554,19 +1558,32 @@ console.log("--max-instructions (native work counted once, and by what it covers
   const json = 'JSON.parse("[" + "1,".repeat(1999) + "1]");\n';
   const parsed = runLoaderJson(json, ["--max-instructions=6500"], { timeout: 10_000 });
   if (parsed.exitCode !== 0) throw new Error(`JSON.parse under --max-instructions=6500 should succeed, got exit ${parsed.exitCode}: ${JSON.stringify(parsed.json.error)}`);
-  // A fill is charged for the elements it writes, not for its polls.
-  const fills = [
-    "Array.prototype.fill.call({ length: 20000 }, 1);\n",
-    "const a = new Array(20000);\na.fill(1);\n",
+  // A fill and a spread through the iterator protocol are charged for the
+  // elements they walk. The setup alone stays within the budget (a short
+  // hole extension is not charged), so the operation is what trips it.
+  const budget = ["--max-instructions=500"];
+  const operations: [string, string, string][] = [
+    ["fill of an array-like", "const o = { length: 1000 };\n", "Array.prototype.fill.call(o, 1);\n"],
+    ["fill of an array", "const a = new Array(1000);\n", "a.fill(1);\n"],
+    ["fill of one index at a batch boundary", "const o = { length: 1000 };\n", "Array.prototype.fill.call(o, 1, 255, 256);\n"],
+    [
+      "spread through an own Symbol.iterator",
+      "const a = new Array(1000);\na[Symbol.iterator] = Array.prototype[Symbol.iterator];\n",
+      "const b = [...a];\n",
+    ],
   ];
-  for (const source of fills) {
-    const { exitCode, json: out } = runLoaderJson(source, ["--max-instructions=1000"], { timeout: 10_000 });
-    if (exitCode !== 1 || out.error?.type !== "InstructionLimitError") throw new Error(`fill of 20000 elements under --max-instructions=1000 should end with InstructionLimitError, got exit ${exitCode}`);
+  for (const [label, setup, operation] of operations) {
+    const alone = runLoaderJson(setup, budget, { timeout: 10_000 });
+    if (alone.exitCode !== 0) throw new Error(`${label}: its setup alone should stay within --max-instructions=500, got exit ${alone.exitCode}`);
+    const run = runLoaderJson(setup + operation, budget, { timeout: 10_000 });
+    const trips = run.exitCode === 1 && run.json.error?.type === "InstructionLimitError";
+    // One index is one write: it must not be charged a whole batch.
+    if (label === "fill of one index at a batch boundary") {
+      if (run.exitCode !== 0) throw new Error(`${label}: one write should stay within --max-instructions=500, got exit ${run.exitCode}`);
+    } else if (!trips) {
+      throw new Error(`${label}: should end with InstructionLimitError, got exit ${run.exitCode}`);
+    }
   }
-  // A spread through the iterator protocol is bounded like the fast path.
-  const iter = "const a = new Array(20000);\na[Symbol.iterator] = Array.prototype[Symbol.iterator];\nconst b = [...a];\n";
-  const spread = runLoaderJson(iter, ["--max-instructions=1000"], { timeout: 10_000 });
-  if (spread.exitCode !== 1 || spread.json.error?.type !== "InstructionLimitError") throw new Error(`spread through an own Symbol.iterator should end with InstructionLimitError, got exit ${spread.exitCode}`);
 }
 
 console.log("--timeout (native regex scan)...");
