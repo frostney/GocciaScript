@@ -897,7 +897,7 @@ end;
 
 Raises `TGocciaInstructionLimitError` when the limit is reached. A value of zero (the default) leaves the instruction budget inactive, so bytecode production dispatch omits the per-instruction poll. A positive limit selects the dispatch loop's instrumented fetch path, which increments and checks the counter on every dispatched instruction.
 
-A native loop that follows the chokepoint rule (it polls `CheckExecutionTimeout` between elements) spends one unit of the budget per element it walks, so a budget ends a loop over a huge array that no dispatched instruction counts, as a deadline does. A thread with a budget and no deadline carries a placeholder deadline for that, which `GThreadPolls.TimeoutArmed` reports.
+A native loop that follows the chokepoint rule (it polls `CheckExecutionTimeout` between elements) spends one unit of the budget per element it walks, in samples of 1,024 (so a native loop can run up to 1,023 elements past the budget before it ends, and a short one can finish within it), so a budget ends a loop over a huge array that no dispatched instruction counts, as a deadline does. A thread with a budget and no deadline carries a placeholder deadline for that, which `GThreadPolls.TimeoutArmed` reports.
 
 ### Aborting a Run from Another Thread
 

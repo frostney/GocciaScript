@@ -1561,25 +1561,26 @@ console.log("--max-instructions (native work counted once, and by what it covers
   // A fill and a spread through the iterator protocol are charged for the
   // elements they walk. The setup alone stays within the budget (a short
   // hole extension is not charged), so the operation is what trips it.
-  const budget = ["--max-instructions=500"];
-  const operations: [string, string, string][] = [
-    ["fill of an array-like", "const o = { length: 1000 };\n", "Array.prototype.fill.call(o, 1);\n"],
-    ["fill of an array", "const a = new Array(1000);\n", "a.fill(1);\n"],
-    ["fill of one index at a batch boundary", "const o = { length: 1000 };\n", "Array.prototype.fill.call(o, 1, 255, 256);\n"],
+  const operations: [string, string, string, number][] = [
+    ["fill of an array-like", "const o = { length: 1000 };\n", "Array.prototype.fill.call(o, 1);\n0;\n", 500],
+    ["fill of an array", "const a = new Array(1000);\n", "a.fill(1);\n0;\n", 500],
+    ["fill of one index at a batch boundary", "const o = { length: 1000 };\n", "Array.prototype.fill.call(o, 1, 255, 256);\n0;\n", 100],
     [
       "spread through an own Symbol.iterator",
       "const a = new Array(1000);\na[Symbol.iterator] = Array.prototype[Symbol.iterator];\n",
-      "const b = [...a];\n",
+      "const b = [...a];\n0;\n",
+      500,
     ],
   ];
-  for (const [label, setup, operation] of operations) {
+  for (const [label, setup, operation, limit] of operations) {
+    const budget = [`--max-instructions=${limit}`];
     const alone = runLoaderJson(setup, budget, { timeout: 10_000 });
-    if (alone.exitCode !== 0) throw new Error(`${label}: its setup alone should stay within --max-instructions=500, got exit ${alone.exitCode}`);
+    if (alone.exitCode !== 0) throw new Error(`${label}: its setup alone should stay within --max-instructions=${limit}, got exit ${alone.exitCode}`);
     const run = runLoaderJson(setup + operation, budget, { timeout: 10_000 });
     const trips = run.exitCode === 1 && run.json.error?.type === "InstructionLimitError";
     // One index is one write: it must not be charged a whole batch.
     if (label === "fill of one index at a batch boundary") {
-      if (run.exitCode !== 0) throw new Error(`${label}: one write should stay within --max-instructions=500, got exit ${run.exitCode}`);
+      if (run.exitCode !== 0) throw new Error(`${label}: one write should stay within --max-instructions=${limit}, got exit ${run.exitCode}`);
     } else if (!trips) {
       throw new Error(`${label}: should end with InstructionLimitError, got exit ${run.exitCode}`);
     }
