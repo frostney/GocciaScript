@@ -71,7 +71,7 @@ uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
-  Goccia.YAML, Goccia.TOML, Goccia.URI;
+  Goccia.YAML, Goccia.TOML, Goccia.URI, G2.Fetch;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
@@ -1216,6 +1216,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'metaResolve', Host_MetaResolve, 3);
   DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
+  DefineFetchNatives(RootAt(TempTop - 1));
   Result := RootAt(TempTop - 1);
   PopRoots(1);
 end;
@@ -1345,6 +1346,13 @@ begin
     begin
       ClearKeptObjects;
       if not RunWeakCleanup then Exit(False);
+      Continue;
+    end;
+    { the fetches that finished settle first; while any is in flight the loop waits for it before the timers, which
+      do not keep real time }
+    if FetchPending then
+    begin
+      if not FetchPump(True) then Exit(False);
       Continue;
     end;
     if not IsObject(FireNextV) or ReportDone then Exit(True);

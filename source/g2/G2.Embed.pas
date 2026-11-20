@@ -103,6 +103,7 @@ type
     { the capability set FFI.open judges libraries by (Capabilities); FFI is installed when it grants ffi }
     FCapabilities: TGocciaCapabilities;
     FHasCapabilities: Boolean;
+    FFetchMaxResponseBytes: Integer;
     { the entry's file name (Run): an audited decision made outside every script frame is the entry's }
     FRunFile: UnicodeString;
     function NextRandom(Realm: Integer; out D: Double): Boolean;
@@ -170,6 +171,8 @@ type
     { the run's capability set (ADR 0122): with the ffi capability the FFI global is installed, and FFI.open judges
       each library by its scopes. Set before the host is prepared; without it there is no FFI }
     property Capabilities: TGocciaCapabilities read FCapabilities write SetCapabilities;
+    { fetch()'s response-body ceiling in bytes (--max-fetch-bytes); 0 for the default (8 MiB) }
+    property FetchMaxResponseBytes: Integer read FFetchMaxResponseBytes write FFetchMaxResponseBytes;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
@@ -189,7 +192,7 @@ implementation
 
 uses
   Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval, G2.Modules,
-  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI;
+  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -575,7 +578,7 @@ begin
   Event.Reason := Reason;
   { a static import's declaration while its module links, else the running script's call site; the entry's file
     reads as the host named it }
-  Found := ImportSiteNow(Src, Line, Col) or CallSiteNow(Src, Line, Col);
+  Found := AuditSiteOverride(Src, Line, Col) or ImportSiteNow(Src, Line, Col) or CallSiteNow(Src, Line, Col);
   if Found and (Src = ExpandFileName(FRunFile)) then Src := FRunFile;
   if Found then
   begin
@@ -596,7 +599,8 @@ end;
 
 function TG2Engine.AuditFromScript(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;
 const
-  Kinds: array[TAuditKind] of TGocciaCapabilityKind = (gckFunctionConstructor, gckShadowRealm, gckEval, gckFFIOpen);
+  Kinds: array[TAuditKind] of TGocciaCapabilityKind = (gckFunctionConstructor, gckShadowRealm, gckEval, gckFFIOpen,
+    gckNetFetch, gckNetDispatch);
 begin
   Result := Audit(Kinds[Kind], Allow, Subject, Reason);
 end;
@@ -611,6 +615,7 @@ begin
   LimitsDisarm;
   SetMaxFrames(0);
   HostModulesDone;
+  FetchDone;
   FFIDone;
   EngineDone;
   inherited Destroy;
@@ -634,6 +639,9 @@ begin
   end
   else
     SeedMathRandom(QWord(GetTickCount64) xor (QWord(GetProcessID) shl 32) xor QWord(PtrUInt(Self)));
+  { fetch() judges destinations by the capability set (none without one) }
+  if FHasCapabilities then SetFetchPolicy(FCapabilities, FFetchMaxResponseBytes)
+  else SetFetchPolicy(TGocciaCapabilities.None, FFetchMaxResponseBytes);
   Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err, FExposeTimers);
   if Result and FHasCapabilities and FCapabilities.Grants(gcFFI) then Result := InstallFFI(FCapabilities, Err);
   FHostReady := Result;

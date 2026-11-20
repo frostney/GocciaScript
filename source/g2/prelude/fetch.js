@@ -371,6 +371,77 @@
   shared.Headers = Headers;
   shared.Response = Response;
   shared.makeResponse = makeResponse;
+
+  // ---------------- fetch ----------------
+  // docs/built-ins-fetch.md: GET and HEAD, the net capability judging every destination (G2.Fetch), a signal
+  // rejecting with its reason inside abort(), before the abort event. The requests run on host workers; the event
+  // loop settles them through settle below.
+  const pendingFetches = new Map();   // id -> { resolve, reject, signal }
+  const REDIRECT_MODES = { follow: 0, error: 1, manual: 2 };
+  function fetch(input, init = undefined) {
+    if (arguments.length === 0) throw new TypeError('fetch requires a URL argument');
+    const url = String(input);
+    n.fetchCheck(url);
+    let method = 'GET';
+    let redirect = 0;
+    let signal = null;
+    const headers = [];
+    if (isObject(init)) {
+      const m = init.method;
+      if (m !== undefined) method = String(m).toUpperCase();
+      const h = init.headers;
+      if (h !== undefined && h !== null) {
+        if (isObject(h) && brandHeaders(h)) for (const [k, v] of headersList(h)) headers.push([k, v]);
+        else if (isObject(h)) for (const k of Reflect.ownKeys(h)) {
+          if (typeof k !== 'string') continue;
+          headers.push([k.toLowerCase(), String(h[k])]);
+        }
+      }
+      const r = init.redirect;
+      if (r !== undefined) {
+        const t = String(r);
+        if (!Object.prototype.hasOwnProperty.call(REDIRECT_MODES, t))
+          throw new TypeError(`fetch redirect option '${t}' is not a valid redirect mode`);
+        redirect = REDIRECT_MODES[t];
+      }
+      const s = init.signal;
+      if (s !== undefined && s !== null) {
+        if (!shared.isAbortSignal(s)) throw new TypeError('fetch signal must be an AbortSignal');
+        signal = s;
+      }
+    }
+    if (method !== 'GET' && method !== 'HEAD')
+      throw new TypeError(`fetch does not support method '${method}'; only GET and HEAD are allowed`);
+    return new Promise((resolve, reject) => {
+      if (signal !== null && signal.aborted) { reject(signal.reason); return; }
+      const remaining = signal !== null ? shared.signalRemaining(signal) : -1;
+      const id = n.fetchStart(url, method, headers, redirect, remaining);
+      if (id < 0) { reject(new TypeError('fetch worker limit exceeded')); return; }
+      pendingFetches.set(id, { resolve, reject, signal });
+      // an abort algorithm: the rejection comes inside abort(), before the abort event
+      if (signal !== null) shared.onAbort(signal, () => {
+        if (!pendingFetches.delete(id)) return;
+        n.fetchCancel(id);
+        reject(signal.reason);
+      });
+    });
+  }
+  function brandHeaders(h) { try { headersList(h); return true; } catch { return false; } }
+  // kind 0: a response; 1: a rejection; 2: a signal deadline passed (its signal is observed, which aborts it);
+  // 3: nothing (the run's interrupt ends the run at this call)
+  n.fetchRegister((id, kind, a, b, c, d, e, f) => {
+    if (kind === 3) return;
+    if (kind === 2) {
+      for (const p of [...pendingFetches.values()]) if (p.signal !== null) void p.signal.aborted;
+      return;
+    }
+    const p = pendingFetches.get(id);
+    if (p === undefined) return;
+    pendingFetches.delete(id);
+    if (kind === 1) { p.reject(a); return; }
+    p.resolve(makeResponse(a, b, c, d === null ? null : new Uint8Array(d), e, f));
+  });
+  hidden(G, 'fetch', fetch);
   shared.headersList = headersList;
   shared.runtimeGlobals.unshift('Blob');
 })

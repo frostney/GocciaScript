@@ -232,14 +232,24 @@ function HostAbortMessage: UnicodeString;
 
 type
   { the capability decisions an engine reports to its host (G2.Embed OnAudit): a Function constructor's, a
-    ShadowRealm's, an eval's, an FFI.open's }
-  TAuditKind = (akFunctionConstructor, akShadowRealm, akEval, akFFIOpen);
+    ShadowRealm's, an eval's, an FFI.open's, a fetch's (its destinations and its dispatch) }
+  TAuditKind = (akFunctionConstructor, akShadowRealm, akEval, akFFIOpen, akNetFetch, akNetDispatch);
   { False when the host could not record it: the run then ends (HostAbort, with its error pending) }
   TAuditHook = function(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean of object;
 threadvar
   AuditHook: TAuditHook;
 { a decision to AuditHook when one is set: False when the run ends because the host could not record it }
 function AuditDecision(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;
+{ the call site AuditDecisions are attributed to until ClearAuditSite, instead of the running code's (a fetch's
+  hop decisions, delivered when it settles, belong to its fetch() call) }
+procedure SetAuditSite(const Source: UnicodeString; Line, Column: Integer);
+procedure ClearAuditSite;
+function AuditSiteOverride(out Source: UnicodeString; out Line, Column: Integer): Boolean;
+{ a PermissionDenied of the realm ("<capability>: <scope>", with capability and scope properties) carrying the
+  host's suggestion; False with the error that stopped it pending }
+function NewPermissionDenied(const Capability, Scope, Suggestion: UnicodeString; var E: TValue): Boolean;
+{ the milliseconds left before the run's timeout (LimitsArm), at least 1; 0 when the run has none }
+function LimitRemainingMs: Int64;
 { where the running script is: the innermost frame of user code (a file, <stdin>, or eval, Function or ShadowRealm
   code), its source and the line and column of the instruction running; False outside any }
 function CallSiteNow(out Source: UnicodeString; out Line, Column: Integer): Boolean;
@@ -569,6 +579,69 @@ var Hook: TAuditHook;
 begin
   Hook := AuditHook;
   Result := not Assigned(Hook) or Hook(Kind, Allow, Subject, Reason);
+end;
+
+threadvar
+  AuditSiteSet: Boolean;
+  AuditSiteSource: UnicodeString;
+  AuditSiteLine, AuditSiteColumn: Integer;
+
+procedure SetAuditSite(const Source: UnicodeString; Line, Column: Integer);
+begin
+  AuditSiteSet := True;
+  AuditSiteSource := Source;
+  AuditSiteLine := Line;
+  AuditSiteColumn := Column;
+end;
+
+procedure ClearAuditSite;
+begin
+  AuditSiteSet := False;
+  AuditSiteSource := '';
+end;
+
+function AuditSiteOverride(out Source: UnicodeString; out Line, Column: Integer): Boolean;
+begin
+  Result := AuditSiteSet;
+  Source := AuditSiteSource;
+  Line := AuditSiteLine;
+  Column := AuditSiteColumn;
+end;
+
+function NewPermissionDenied(const Capability, Scope, Suggestion: UnicodeString; var E: TValue): Boolean;
+var C, M: TValue;
+begin
+  if not GetV(GlobalObj, AtomOf('PermissionDenied'), C) or not IsCallable(C) then
+  begin
+    E := MakeError(ErrorProto, Capability + ': ' + Scope);
+    Exit(True);
+  end;
+  PushRoot(C);
+  M := StrFromUnicode(Capability + ': ' + Scope);
+  PushRoot(M);
+  C := RootAt(TempTop - 2);
+  { the argument from its root slot, which a collection inside the call updates }
+  Result := Construct(C, @TempRoots[TempTop - 1], 1, C, E);
+  if Result then
+  begin
+    { its capability and scope, as GocciaScript's PermissionDenied carries them }
+    PushRoot(E);
+    DefineOwn(RootAt(TempTop - 1), AtomOf('capability'), StrFromUnicode(Capability), pfDefault);
+    DefineOwn(RootAt(TempTop - 1), AtomOf('scope'), StrFromUnicode(Scope), pfDefault);
+    SetErrorHostSuggestion(RootAt(TempTop - 1), Suggestion);
+    E := RootAt(TempTop - 1);
+    PopRoots(1);
+  end;
+  PopRoots(2);
+end;
+
+function LimitRemainingMs: Int64;
+var Now_: QWord;
+begin
+  if LimitTimer = nil then Exit(0);
+  Now_ := GetTickCount64;
+  if LimitTimer.Deadline <= Now_ then Exit(1);
+  Result := LimitTimer.Deadline - Now_;
 end;
 
 { a call that found the frames full: the abort of a spent limit, else PushBytecodeFrame's RangeError }

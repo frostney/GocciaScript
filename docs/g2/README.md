@@ -120,6 +120,17 @@ A call that can enter script through a callback runs a minor collection first, w
 into the old space, where nothing moves. `g2 --test` grants the permissions of the test file's `goccia.json`, as
 `GocciaTestRunner -P` accepts them.
 
+### fetch
+
+`fetch` is `prelude/fetch.js`'s, over `G2.Fetch`: the URL's host is judged by the net capability before the call
+returns, as [Fetch Runtime APIs](../built-ins-fetch.md) describes, and each request runs on a worker thread through
+the shared HTTP client, which checks the capability again on every hop and against every resolved address. Those
+hop decisions are audited when the request settles, at its `fetch()` call. The event loop settles finished requests
+before anything else, and while a request is in flight it waits for it before firing timers: G2's timers do not
+keep real time, so an `AbortSignal.timeout` timer would otherwise abort the request as soon as the loop went idle.
+The wait wakes at a signal's deadline and at the run's timeout. A timer that is due while a request is in flight
+fires after the request settles.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,

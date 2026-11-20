@@ -224,6 +224,8 @@
       signalAbort = (s, reason) => s.#signalAbort(reason);
       shared.isAbortSignal = (v) => isObject(v) && #aborted in v;
       shared.onAbort = (s, fn) => { if (!s.#aborted) s.#algorithms.push(fn); };
+      // the milliseconds left on an AbortSignal.timeout signal (-1 for any other), for fetch's worker
+      shared.signalRemaining = (s) => s.#deadline < 0 ? -1 : Math.max(0, s.#deadline - n.hrNow());
     }
   }
   Object.defineProperty(AbortSignal.prototype, Symbol.toStringTag, { value: 'AbortSignal', configurable: true });

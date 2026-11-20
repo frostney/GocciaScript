@@ -7,8 +7,8 @@ program GocciaRunnerG2;
   unchanged; once it covers GocciaRunner it replaces GocciaRunner.dpr.
 
   Not yet on G2: sandbox and install modes, source maps, coverage, the
-  profiler, bytecode files (--prefer-bytecode), fetch, and the read
-  capability's audit events. }
+  profiler, bytecode files (--prefer-bytecode), and the read capability's
+  audit events. }
 
 {$I Goccia.inc}
 
@@ -327,6 +327,7 @@ begin
   else
     AEngine.SourceKind := g2skDetect;
   end;
+  AEngine.FetchMaxResponseBytes := ASettings.FetchMaxResponseBytes;
   if ASettings.MaxMemorySet then
     AEngine.MaxMemory := ASettings.MaxMemory
   else
