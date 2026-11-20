@@ -87,14 +87,8 @@ type
 // the cost stays on the extension path instead of on every dense write. Pass
 // nil only where nothing reads a store value after the call; the callers
 // document which case each of them is.
-//
-// APolled False skips the deadline, budget and abort polls of a gap that
-// is bounded already: a caller that has published a descriptor before it
-// extends (DefineProperty's ordinary-map arm) cannot unwind through a poll
-// without freeing a descriptor the property map owns.
 procedure ExtendElementsWithHoles(const AElements: TGocciaElementList;
-  const ACount: Int64; const APendingValue: TGocciaValue;
-  const APolled: Boolean = True);
+  const ACount: Int64; const APendingValue: TGocciaValue);
 
 // Raised by TGocciaElementList's indexer, as the generic list's would. In the
 // interface so the indexer inlines into other units.
@@ -192,8 +186,7 @@ begin
 end;
 
 procedure ExtendElementsWithHoles(const AElements: TGocciaElementList;
-  const ACount: Int64; const APendingValue: TGocciaValue;
-  const APolled: Boolean);
+  const ACount: Int64; const APendingValue: TGocciaValue);
 var
   StartCount: Integer;
 begin
@@ -213,7 +206,7 @@ begin
   // Sequential element writes extend by one slot at a time, and an FPC
   // try/except frame per append is a measurable tax on every array-building
   // loop; a bounded extension cannot stall, so neither is needed.
-  if (ACount - StartCount <= 1024) or not APolled then
+  if ACount - StartCount <= 1024 then
   begin
     while AElements.Count < ACount do
       AElements.Add(TGocciaHoleValue.HoleValue);

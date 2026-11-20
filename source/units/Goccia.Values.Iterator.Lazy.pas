@@ -92,6 +92,7 @@ uses
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
+  Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
@@ -443,6 +444,9 @@ function TGocciaLazyDropIteratorValue.DoDirectNext(out ADone: Boolean): TGocciaV
 begin
   while FIndex < FLimit do
   begin
+    // The limit is a JS-controlled count: the deadline, the budget and a
+    // host's abort must reach this skip (the chokepoint rule).
+    CheckExecutionTimeout;
     Result := FSourceIterator.DirectNext(ADone);
     if ADone then
     begin
