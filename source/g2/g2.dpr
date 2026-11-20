@@ -6,7 +6,7 @@ uses
   cthreads, Classes, SysUtils, Math,
   Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.Token,
   G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.HostAPI, G2.Weak, G2.Embed, CLI.ConfigFile, CLI.Units, StrUtils,
-  Goccia.Capabilities, Goccia.CLI.Permissions;
+  Goccia.Capabilities, Goccia.CLI.Permissions, Goccia.Coverage;
 
 type
   TSampler = class(TThread)
@@ -198,6 +198,13 @@ begin
   LoadTestConfig(FileName, Prof, SourceType, ConfigJson, Caps);
   Engine := TG2Engine.Create;   { lives until ReportTests ends the process }
   Engine.Capabilities := Caps;
+  { G2_COVERAGE=1: the file runs under coverage (its results must not change) }
+  if GetEnvironmentVariable('G2_COVERAGE') = '1' then
+  begin
+    TGocciaCoverageTracker.Initialize;
+    TGocciaCoverageTracker.Instance.Enabled := True;
+    Engine.Coverage := True;
+  end;
   Engine.Profile := Prof;
   Engine.ConfigJson := ConfigJson;
   Engine.TestMode := True;

@@ -28,6 +28,9 @@ function CompileProgram(Prog: TGocciaProgram; const SourceName: UnicodeString; R
 threadvar
   { the eval code starts with a "use strict" directive the caller inserted to make it strict: not its value }
   EvalStrictPrefix: Boolean;
+  { coverage (G2.Embed Coverage): every source line the code runs gets an instruction (opCovLine where it would
+    have none), so the VM's coverage hook counts it }
+  CompileCoverage: Boolean;
 
 { a lazy stub's function (G2.Lazy), from Goccia's parse of its own source range: compiled in a stand-in for its
   enclosing code whose bindings are the stub's upvalues, in the stub's order }
@@ -519,6 +522,7 @@ type
     procedure CompileEnum(D: TGocciaEnumDeclaration);
     procedure RaiseEvalAware(const Msg, What: UnicodeString; F: TFuncState = nil);
     procedure NotePosition(N: TGocciaASTNode; Always: Boolean);
+    procedure CovMark;
     procedure NoteOffset(const Sp: TGocciaSourceSpan; Off: Integer);
     procedure NoteMemberPosition(M: TGocciaMemberExpression);
     procedure NoteCallPosition(Callee: TGocciaExpression; OptionalCall: Boolean);
@@ -892,6 +896,17 @@ begin
     FS.CurLine := L;
     FS.CurCol := C;
   end;
+end;
+
+{ under coverage: an instruction at the current line when the last one emitted is on another, so a line whose code
+  emits nothing (an operand a register holds, a declaration whose initializer starts below it) still counts }
+procedure TCompiler.CovMark;
+var T: PFuncTemplate;
+begin
+  if not CompileCoverage or (FS.CurLine <= 0) then Exit;
+  T := FS.Tpl;
+  if (T^.CodeLen > 0) and (T^.Lines[T^.CodeLen - 1] = FS.CurLine) then Exit;
+  Emit(Ins(opCovLine, 0, 0, 0));
 end;
 
 { where V8 locates a failure (a stack trace's frame): the instructions emitted next are at offset Off of Sp's source }
@@ -1862,6 +1877,18 @@ begin
   RegisterTemplate(T);
   FillChar(T^, SizeOf(TFuncTemplate), 0);
   T^.Name := AtomOf(Name);
+  { where coverage locates the function: its body's start (a hoisted declaration or a method is compiled away from
+    where it stands), else where the compiler stands }
+  if (Body <> nil) and (Body.Span.Coordinates <> nil) then
+    Body.Span.Coordinates.PositionAtOffset(Body.Span.StartOffset, T^.DeclLine, T^.DeclCol)
+  { a class's implicit constructor is not in the source (-1: no function of the source) }
+  else if IsClassCtor and (Body = nil) then
+    T^.DeclLine := -1
+  else if FS <> nil then
+  begin
+    T^.DeclLine := FS.CurLine;
+    T^.DeclCol := FS.CurCol;
+  end;
   ObjMeth := ObjLiteralMethod;
   ObjLiteralMethod := False;
   NoArgs := PendingNoArguments;
@@ -4011,6 +4038,7 @@ procedure TCompiler.Stmt(S: TGocciaASTNode);
 begin
   if S = nil then Exit;
   NotePosition(S, True);
+  CovMark;
   if (S is TGocciaStatement) and (TGocciaStatement(S).LabelCount > 0) then
     StmtLabeled(TGocciaStatement(S))
   else
@@ -4987,7 +5015,15 @@ begin
     if (K = 1) and ResolveLocal(FS, TGocciaIdentifierExpression(E).Name, R) and
        not InTDZ(TGocciaIdentifierExpression(E).Name) and not ParamInTDZ(TGocciaIdentifierExpression(E).Name, R) and
        ((WithCount = 0) or (WithsFor(TGocciaIdentifierExpression(E).Name, WithIdxScratch) = 0)) then
+    begin
+      { the register is the operand: under coverage its line still gets an instruction }
+      if CompileCoverage then
+      begin
+        NotePosition(E, False);
+        CovMark;
+      end;
       Exit(R);
+    end;
     if (K = 2) and not FS.IsArrow then
     begin
       if InDerivedCtor then Emit(Ins(opCheckThis, 0, 0, 0));
@@ -7261,7 +7297,10 @@ begin
     BranchTrue(TGocciaUnaryExpression(E).Operand, L);
     Exit;
   end;
-  if E is TGocciaBinaryExpression then
+  { under coverage a logical operator's value is computed as an expression, its own branch, and the test is one
+    more: the records GocciaScript's coverage reports for it }
+  if (E is TGocciaBinaryExpression) and not (CompileCoverage and
+     (TGocciaBinaryExpression(E).Operator in [gttAnd, gttOr])) then
   begin
     BE := TGocciaBinaryExpression(E);
     case BE.Operator of
@@ -7317,7 +7356,8 @@ begin
     BranchFalse(TGocciaUnaryExpression(E).Operand, L);
     Exit;
   end;
-  if E is TGocciaBinaryExpression then
+  if (E is TGocciaBinaryExpression) and not (CompileCoverage and
+     (TGocciaBinaryExpression(E).Operator in [gttAnd, gttOr])) then
   begin
     BE := TGocciaBinaryExpression(E);
     case BE.Operator of

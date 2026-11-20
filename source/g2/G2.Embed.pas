@@ -104,6 +104,7 @@ type
     FCapabilities: TGocciaCapabilities;
     FHasCapabilities: Boolean;
     FFetchMaxResponseBytes: Integer;
+    FCoverage: Boolean;
     { the entry's file name (Run): an audited decision made outside every script frame is the entry's }
     FRunFile: UnicodeString;
     function NextRandom(Realm: Integer; out D: Double): Boolean;
@@ -173,6 +174,9 @@ type
     property Capabilities: TGocciaCapabilities read FCapabilities write SetCapabilities;
     { fetch()'s response-body ceiling in bytes (--max-fetch-bytes); 0 for the default (8 MiB) }
     property FetchMaxResponseBytes: Integer read FFetchMaxResponseBytes write FFetchMaxResponseBytes;
+    { coverage of the run's code (Goccia.Coverage): its lines, branches and functions recorded in the calling
+      thread's TGocciaCoverageTracker, which the host creates and enables; the run takes the interpreter only }
+    property Coverage: Boolean read FCoverage write FCoverage;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
@@ -192,7 +196,7 @@ implementation
 
 uses
   Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval, G2.Modules,
-  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch;
+  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch, G2.Compiler;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -607,6 +611,8 @@ end;
 
 destructor TG2Engine.Destroy;
 begin
+  CompileCoverage := False;
+  CoverageOn := False;
   AuditHook := nil;
   HostRandom := nil;
   HostClock := nil;
@@ -709,6 +715,9 @@ begin
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
   SetActiveProfile(FProfile);
   SetConsoleSink(FOnConsole);
+  { coverage: the run's code compiled with a line for every source line, and run through the coverage hook }
+  CompileCoverage := FCoverage;
+  CoverageOn := FCoverage;
   FRunFile := FileName;
   if Assigned(FAuditSink) then AuditHook := AuditFromScript else AuditHook := nil;
   SetHostResolver(FResolver);

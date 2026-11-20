@@ -6,9 +6,9 @@ program GocciaRunnerG2;
   runner` builds it as build/GocciaRunner, so the CLI tests run against it
   unchanged; once it covers GocciaRunner it replaces GocciaRunner.dpr.
 
-  Not yet on G2: sandbox and install modes, source maps, coverage, the
-  profiler, bytecode files (--prefer-bytecode), and the read capability's
-  audit events. }
+  Not yet on G2: sandbox and install modes, source maps, the profiler,
+  bytecode files (--prefer-bytecode), and the read capability's audit
+  events. }
 
 {$I Goccia.inc}
 
@@ -32,6 +32,8 @@ uses
   Goccia.CLI.Trust,
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
+  Goccia.Coverage,
+  Goccia.Coverage.Report,
   Goccia.Error,
   Goccia.FileExtensions,
   Goccia.Modules.Configuration,
@@ -105,6 +107,11 @@ type
     FHeapStart: THeapStatus;
     { the JSON report's workers: the files run at once (1 when one after another) }
     FWorkers: Integer;
+    { --coverage: the main thread's tracker (the base class makes it), which each file's thread merges its own into
+      under FCoverageLock; FCoveragePaths the run's paths (one file shows its detail) }
+    FCoverageMain: TGocciaCoverageTracker;
+    FCoverageLock: TRTLCriticalSection;
+    FCoveragePaths: TStringList;
     { GocciaRunner's options, all registered so that its command lines and configs parse the same; the ones G2
       does not act on yet are listed in the header }
     FOutputPath: TStringOption;
@@ -146,6 +153,7 @@ type
     function StdinUsage: TGocciaStdinUsage; override;
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
+    procedure AfterExecute; override;
   end;
 
 type
@@ -1037,10 +1045,23 @@ begin
     ConfigureModuleResolver(Resolver, AFileName, EngineOptions.ImportMap.ValueOr(''),
       EngineOptions.Aliases.Values, AliasBaseDirectory);
     HeapStart := GetHeapStatus;
+    { --coverage: this thread's tracker, the file registered with its executable lines in the run's }
+    if Assigned(FCoverageMain) then
+    begin
+      TGocciaCoverageTracker.Initialize;
+      TGocciaCoverageTracker.Instance.Enabled := True;
+      EnterCriticalSection(FCoverageLock);
+      try
+        FCoverageMain.RegisterSourceFile(AFileName, CountExecutableLines(ASource));
+      finally
+        LeaveCriticalSection(FCoverageLock);
+      end;
+    end;
     Engine := TG2Engine.Create;
     try
       MemoryStart := Engine.Memory;
       Engine.Capabilities := Capabilities;
+      Engine.Coverage := Assigned(FCoverageMain);
       Engine.Resolver := Resolver;
       { GocciaRunner has no timer globals (the test runner does) }
       Engine.ExposeTimers := False;
@@ -1174,6 +1195,17 @@ begin
       Engine.Free;
       Resolver.Free;
       Grant.Free;
+      { the file's coverage into the run's }
+      if Assigned(FCoverageMain) and (TGocciaCoverageTracker.Instance <> FCoverageMain) then
+      begin
+        EnterCriticalSection(FCoverageLock);
+        try
+          FCoverageMain.MergeFrom(TGocciaCoverageTracker.Instance);
+        finally
+          LeaveCriticalSection(FCoverageLock);
+        end;
+        TGocciaCoverageTracker.Shutdown;
+      end;
     end;
   finally
     Capture.Free;
@@ -1304,6 +1336,14 @@ var
 begin
   FWorkers := 1;
   FHeapStart := GetHeapStatus;
+  FCoverageMain := TGocciaCoverageTracker.Instance;
+  if Assigned(FCoverageMain) and not FCoverageMain.Enabled then FCoverageMain := nil;
+  if Assigned(FCoverageMain) then
+  begin
+    InitCriticalSection(FCoverageLock);
+    FCoveragePaths := TStringList.Create;
+    FCoveragePaths.Assign(APaths);
+  end;
   { no path, or "-": the source from stdin (the base class applied the no-argument rule) }
   if (APaths.Count = 0) or ((APaths.Count = 1) and IsStdinPath(APaths[0])) then
   begin
@@ -1386,6 +1426,29 @@ begin
       raise Exception.Create('Path not found: ' + APaths[I]);
   if IsJsonOutput then
     PrintJsonReport;
+end;
+
+{ --coverage's reports, as GocciaRunner writes them: the summary (and one file's detail), then the LCOV or JSON
+  file }
+procedure TG2RunnerApp.AfterExecute;
+begin
+  if Assigned(FCoverageMain) then
+  begin
+    if not IsJsonOutput then
+    begin
+      PrintCoverageSummary(FCoverageMain);
+      if (FCoveragePaths.Count = 1) and FileExists(FCoveragePaths[0]) then
+        PrintCoverageDetail(FCoverageMain, FCoveragePaths[0]);
+    end;
+    if CoverageOptions.Format.Matches(cfLcov) and (CoverageOptions.OutputPath.ValueOr('') <> '') then
+      WriteCoverageLcov(FCoverageMain, CoverageOptions.OutputPath.Value);
+    if CoverageOptions.Format.Matches(cfJson) and (CoverageOptions.OutputPath.ValueOr('') <> '') then
+      WriteCoverageJSON(FCoverageMain, CoverageOptions.OutputPath.Value);
+    FreeAndNil(FCoveragePaths);
+    DoneCriticalSection(FCoverageLock);
+    FCoverageMain := nil;
+  end;
+  inherited AfterExecute;
 end;
 
 var

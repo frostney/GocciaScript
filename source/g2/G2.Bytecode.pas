@@ -104,6 +104,8 @@ type
                                a construct the compiler lowers to a call (INTRINSIC_* in G2.VM) }
     ,opCheckType             { a TypeError unless R[A] has type C (strict-types: TYPE_NUMBER, TYPE_BOOLEAN,
                                TYPE_STRING, TYPE_OBJECT) }
+    ,opCovLine               { nothing: under coverage, the instruction of a source line that would have none (an
+                               operand a register already holds), so the line counts as executed }
   );
 
   PFuncTemplate = ^TFuncTemplate;
@@ -208,6 +210,8 @@ type
     GdiLexBase: Integer;          { first global lexical binding index, set when the declarations run }
     AsyncReg: Integer;            { an async function's register holding its promise, -1 otherwise }
     ModuleId: Integer;            { the Source Text Module Record (G2.Modules) whose code this is, 0 none }
+    DeclLine, DeclCol: Integer;   { where the function's source starts (coverage locates the function there), 0 unknown,
+                                    DeclLine -1 for one the source does not have (a class's implicit constructor) }
     { a lazily compiled function not compiled yet (G2.Lazy's PLazyStub): no code, FastCall False; its first call
       compiles it (LazyCompileHook) }
     Lazy: Pointer;

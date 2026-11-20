@@ -4267,7 +4267,7 @@ begin
   Result := (T^.FieldInit = nil) and (T^.ArgsReg < 0) and not T^.TopLevel;
   if Result then
     for I := 0 to T^.CodeLen - 1 do
-      if InsOp(T^.Code[I]) in [opEvalHint, opMakeGLex, opMakeModCell] then Exit(False);
+      if InsOp(T^.Code[I]) in [opEvalHint, opMakeGLex, opMakeModCell, opCovLine] then Exit(False);
 end;
 
 { whether any region of T could pass OQuickProfitable (from PC 0 or a loop's header): a template where none can gets

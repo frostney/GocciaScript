@@ -97,6 +97,10 @@ threadvar
   FrameLimit, FrameLimitBase: Integer;
   { an instruction limit is armed: Execute counts every instruction (InstrLeft) and runs no FastLoop }
   InstrCounted: Boolean;
+  { coverage is on (G2.Embed Coverage): Execute runs every instruction through the coverage hook (CovStep, which
+    records lines, branches and functions in the thread's Goccia.Coverage tracker), no FastLoop and no compiled
+    code; set before the run, kept by LimitsArm and LimitsDisarm }
+  CoverageOn: Boolean;
   InstrLeft: Int64;
   InstrMax: Int64;
   { no compiled code runs while a limit or a frame bound is set: it has no back-edge poll, and compiled calls
@@ -473,7 +477,7 @@ procedure InlinedFrame(I, J: Integer; out Closure: TValue; out Tpl: PFuncTemplat
 implementation
 
 uses
-  Classes, Goccia.StackLimit;
+  Classes, Goccia.StackLimit, Goccia.Coverage;
 
 { ---------------- execution limits ---------------- }
 
@@ -674,7 +678,7 @@ begin
   FrameLimit := FrameLimitBase;
   InstrCounted := False;
   InstrLeft := 0;
-  JitBlocked := FrameLimitBase <> FRAME_MAX;
+  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn;
 end;
 
 procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);
@@ -687,7 +691,7 @@ begin
     InstrCounted := True;
     InstrLeft := MaxInstructions;
   end;
-  if (TimeoutMs > 0) or (MaxInstructions > 0) then JitBlocked := True;
+  if (TimeoutMs > 0) or (MaxInstructions > 0) or CoverageOn then JitBlocked := True;
   if TimeoutMs > 0 then
   begin
     LimitTimer := TLimitTimer.Create(True);
@@ -705,7 +709,7 @@ begin
     the Nth call is pushed at FrameTop N (the entry's frame and N - 1 calls) }
   if (N <= 0) or (N > FRAME_MAX - 3) then FrameLimitBase := FRAME_MAX else FrameLimitBase := N + 3;
   if Interrupt = 0 then FrameLimit := FrameLimitBase;
-  if FrameLimitBase <> FRAME_MAX then JitBlocked := True
+  if (FrameLimitBase <> FRAME_MAX) or CoverageOn then JitBlocked := True
   else if (LimitTimer = nil) and not InstrCounted then JitBlocked := False;
 end;
 
@@ -7627,6 +7631,110 @@ begin
   Result := CallValue(Intrinsics[Idx], VUndefined, Args, Argc, Res);
 end;
 
+{ ---------------- coverage ---------------- }
+
+threadvar
+  { the conditional jump whose outcome the next instruction of its frame shows (CovPendTpl nil: none) }
+  CovPendTpl: PFuncTemplate;
+  CovPendFrame, CovPendPC: Integer;
+  { each frame's last line recorded (by frame index; a call starts at 0): a line counts once each time its frame
+    enters it, not again when a call it makes returns }
+  CovFrameLine: array of Integer;
+
+{ whether code of SourceName is the user's: a file, <stdin>, or eval code; not the preludes (<goccia:...>) }
+function CoveredSource(const SourceName: UnicodeString): Boolean; inline;
+begin
+  Result := (SourceName <> '') and ((SourceName[1] <> '<') or (SourceName = '<stdin>'));
+end;
+
+{ a function's name for coverage: '' for an anonymous one }
+function CovFunctionName(T: PFuncTemplate): UnicodeString;
+begin
+  if T^.Name = nil then Exit('');
+  Result := StrToUnicode(T^.Name);
+end;
+
+{ a function's position for coverage: where its source starts, else its first located instruction }
+procedure CovFunctionPos(T: PFuncTemplate; out L, C: Integer);
+var I: Integer;
+begin
+  L := T^.DeclLine;
+  C := T^.DeclCol;
+  if L > 0 then Exit;
+  C := 0;
+  for I := 0 to T^.CodeLen - 1 do
+    if T^.Lines[I] > 0 then
+    begin
+      L := T^.Lines[I];
+      if I <= High(T^.Cols) then C := T^.Cols[I];
+      Exit;
+    end;
+end;
+
+{ a function the report lists: not a script's or module's top level, nor the engine's own pieces of a class (its
+  field and static initializers, named <...>, and an implicit constructor) }
+function CovIsFunction(T: PFuncTemplate): Boolean;
+var N: UnicodeString;
+begin
+  if T^.TopLevel or (T^.DeclLine < 0) then Exit(False);
+  N := CovFunctionName(T);
+  Result := (N = '') or (N[1] <> '<');
+end;
+
+{ the coverage of instruction PC of frame Fr, before it runs: the outcome of the conditional jump this frame ran
+  last (branch 0 the jump, 1 the fall-through), a call's function hit, the line, and the closures it creates
+  registered as functions (so one never called reports 0) }
+procedure CovStep(Fr: PFrame; PC: Integer); noinline;
+var T, Child: PFuncTemplate; Tr: TGocciaCoverageTracker; L, C: Integer; Src: UnicodeString;
+begin
+  Tr := TGocciaCoverageTracker.Instance;
+  if (Tr = nil) or not Tr.Enabled then Exit;
+  T := Fr^.Tpl;
+  if (CovPendTpl <> nil) and (CovPendFrame = FrameTop - 1) then
+  begin
+    if CovPendTpl = T then
+    begin
+      if PC = CovPendPC + 1 then L := 1 else L := 0;
+      C := 0;
+      if CovPendPC <= High(T^.Cols) then C := T^.Cols[CovPendPC];
+      Tr.RecordBranchHit(T^.SourceName, T^.Lines[CovPendPC], C, L);
+    end;
+    CovPendTpl := nil;
+  end;
+  if not CoveredSource(T^.SourceName) then Exit;
+  Src := T^.SourceName;
+  if (PC = 0) and CovIsFunction(T) then
+  begin
+    CovFunctionPos(T, L, C);
+    Tr.RecordFunctionHit(Src, CovFunctionName(T), L, C);
+  end;
+  if FrameTop > Length(CovFrameLine) then SetLength(CovFrameLine, FrameTop + 64);
+  if PC = 0 then CovFrameLine[FrameTop - 1] := 0;
+  L := T^.Lines[PC];
+  if (L > 0) and (L <> CovFrameLine[FrameTop - 1]) then
+  begin
+    Tr.RecordLineHit(Src, L);
+    CovFrameLine[FrameTop - 1] := L;
+  end;
+  case InsOp(T^.Code[PC]) of
+    opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe, opJNGt, opJNGe, opJNSEq, opJSEq:
+      begin
+        CovPendTpl := T;
+        CovPendFrame := FrameTop - 1;
+        CovPendPC := PC;
+      end;
+    opClosure:
+      begin
+        Child := T^.Children[T^.Code[PC] shr 40];
+        if CovIsFunction(Child) then
+        begin
+          CovFunctionPos(Child, L, C);
+          Tr.RegisterFunction(Src, CovFunctionName(Child), L, C);
+        end;
+      end;
+  end;
+end;
+
 function Execute(StopFrame: Integer; var Res: TValue): Boolean;
 label LThrow, LReload, LNext, LDone, LBackEdge;
 var
@@ -7662,7 +7770,7 @@ var
   R0: Integer;
 begin
   R0 := CurRealm;   { the caller's realm, restored when this returns }
-  Counted := InstrCounted;
+  Counted := InstrCounted or CoverageOn;
 LReload:
   Fr := @Frames[FrameTop - 1];
   { the running function's realm (a call or a return crossed into another) }
@@ -7684,13 +7792,17 @@ LReload:
     {$IFNDEF G2_OPSTATS}
     if Counted then
     begin
+      if CoverageOn then CovStep(Fr, PC);
       { an instruction limit: every instruction here, none in FastLoop }
-      Dec(InstrLeft);
-      if InstrLeft < 0 then
+      if InstrCounted then
       begin
-        Fr^.PC := PC + 1;
-        XAbort(2);
-        goto LThrow;
+        Dec(InstrLeft);
+        if InstrLeft < 0 then
+        begin
+          Fr^.PC := PC + 1;
+          XAbort(2);
+          goto LThrow;
+        end;
       end;
     end
     else if FastOp[Code[PC] and $FF] then
@@ -7704,7 +7816,7 @@ LReload:
     Inc(PC);
     {$IFDEF G2_OPSTATS}Inc(OpCounts[I and $FF]); Inc(PairCounts[PrevOp * 256 + (I and $FF)]); PrevOp := I and $FF;{$ENDIF}
     case TOp(I and $FF) of
-      opNop: ;
+      opNop, opCovLine: ;
       opMov: R[A] := R[(I shr 24) and $FFFF];
       opLoadK: R[A] := K[I shr 40];
       opLoadI: R[A] := MkInt(SarInt64(Int64(I), 40));

@@ -131,6 +131,17 @@ keep real time, so an `AbortSignal.timeout` timer would otherwise abort the requ
 The wait wakes at a signal's deadline and at the run's timeout. A timer that is due while a request is in flight
 fires after the request settles.
 
+### Coverage
+
+`--coverage` (and `--coverage-format`, `--coverage-output`) report through GocciaScript's tracker and writers
+(`Goccia.Coverage`, `Goccia.Coverage.Report`). Under coverage the compiler gives every source line the code runs an
+instruction, an `opCovLine` where it would have none (an operand a register already holds, a declaration whose
+initializer starts on a later line), and the VM runs every instruction through a hook, in the interpreter only (no
+fast loop, no compiled code). The hook counts a line each time its frame enters it, a function when a call starts
+it (and registers each closure it creates, so one never called reports 0), and the outcome of each conditional
+jump: branch 0 when it jumps, 1 when it falls through. A function is located where its source starts. Each file's
+thread keeps its own tracker, merged into the run's when the file ends.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
