@@ -2320,7 +2320,7 @@ end;
 function TGocciaCompiler.CompileProgram(
   const AProgram: TGocciaProgram): TGocciaBytecodeModule;
 var
-  I: Integer;
+  I, AwaitMark, StatementOuterPeak, StatementPeak: Integer;
   RetReg: UInt16;
   Ctx: TGocciaCompilationContext;
   HasFunctionDecl, BodyAbrupt, StatementAbrupt, HasUsing: Boolean;
@@ -2547,9 +2547,19 @@ begin
         if AProgram.Body[I] is TGocciaExpressionStatement then
         begin
           EmitLineMapping(Ctx, AProgram.Body[I].Line, AProgram.Body[I].Column);
+          AwaitMark := FCurrentScope.AwaitCount;
+          StatementOuterPeak := FCurrentScope.BeginRegisterRegion;
           DoCompileExpression(
             TGocciaExpressionStatement(AProgram.Body[I]).Expression, RetReg);
           StatementAbrupt := False;
+          StatementPeak := FCurrentScope.EndRegisterRegion(StatementOuterPeak);
+          // The same release DoCompileStatement gives an expression statement
+          // that awaited: a top-level await suspends the module, which keeps
+          // the awaited value in the registers above the live ones.
+          if (FCurrentScope.AwaitCount <> AwaitMark) and
+             (StatementPeak > FCurrentScope.NextSlot) then
+            Goccia.Compiler.Statements.EmitClearDeadRegisters(Ctx,
+              StatementPeak);
         end
         else
           StatementAbrupt := DoCompileStatement(AProgram.Body[I]);

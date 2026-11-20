@@ -39,6 +39,28 @@ describe("a value a suspended generator has yielded", () => {
     expect(iterator.next().done).toBe(true);
   });
 
+  test("is reclaimed when the yield's result is bound to a local", () => {
+    const source = {
+      *produce() {
+        const sent = yield new ArrayBuffer(SIZE);
+        yield sent;
+      },
+    };
+    const iterator = source.produce();
+    const run = () => {
+      const baseline = collect();
+      let result = iterator.next();
+      const length = result.value.byteLength;
+      result = null;
+      Goccia.gc();
+      return [length, Goccia.gc.bytesAllocated - baseline];
+    };
+    const [length, grown] = run();
+    expect(length).toBe(SIZE);
+    expect(grown).toBeLessThan(SIZE / 2);
+    expect(iterator.next(5)).toEqual({ value: 5, done: false });
+  });
+
   test("is intact while the consumer holds it across collections", () => {
     const source = {
       *produce() {
