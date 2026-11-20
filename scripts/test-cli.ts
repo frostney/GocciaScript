@@ -1513,8 +1513,8 @@ if (!canCapMemory) {
   // so the deadline and the instruction budget have to reach it
   // (the chokepoint rule in Goccia.Timeout).
   const cases: [string, string][] = [
-    ["an Array", "const a = new Array(2 ** 31 + 10);\na.fill(1);\n"],
-    ["an array-like", "Array.prototype.fill.call({ length: 2 ** 40 }, 1);\n"],
+    ["an Array", "const a = new Array(2 ** 31 + 10);\na.fill(1);\n0;\n"],
+    ["an array-like", "Array.prototype.fill.call({ length: 2 ** 40 }, 1);\n0;\n"],
   ];
   for (const [label, source] of cases) {
     const timed = runLoaderJson(source, ["--timeout=100", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 1024 });
@@ -1535,15 +1535,15 @@ if (!canCapMemory) {
   // them: the chokepoint rule in Goccia.Timeout covers every limit.
   const huge = "const a = new Array(2 ** 31 + 10);\n";
   const cases: [string, string][] = [
-    ["the dense Array constructor", "const a = new Array(2 ** 28);\n"],
-    ["join", `${huge}a.join();\n`],
-    ["reverse", `${huge}a.reverse();\n`],
-    ["sort", `${huge}a.sort();\n`],
-    ["map", `${huge}a.map(() => 1);\n`],
-    ["shift", `${huge}a.shift();\n`],
-    ["copyWithin", `${huge}a.copyWithin(0, 1);\n`],
-    ["Array.from", `${huge}Array.from(a);\n`],
-    ["spread", `${huge}const b = [...a];\n`],
+    ["the dense Array constructor", "const a = new Array(2 ** 28);\n0;\n"],
+    ["join", `${huge}a.join();\n0;\n`],
+    ["reverse", `${huge}a.reverse();\n0;\n`],
+    ["sort", `${huge}a.sort();\n0;\n`],
+    ["map", `${huge}a.map(() => 1);\n0;\n`],
+    ["shift", `${huge}a.shift();\n0;\n`],
+    ["copyWithin", `${huge}a.copyWithin(0, 1);\n0;\n`],
+    ["Array.from", `${huge}Array.from(a);\n0;\n`],
+    ["spread", `${huge}const b = [...a];\n0;\n`],
   ];
   for (const [label, source] of cases) {
     const { exitCode, json } = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 1024 });
@@ -1597,6 +1597,16 @@ console.log("--max-instructions (a far accessor index on an array)...");
     const { exitCode, json } = runLoaderJson(define, [flag], { timeout: 10_000 });
     if (exitCode !== 1 || json.error?.type !== type) throw new Error(`defineProperty at a far index under ${flag} should end with ${type}, got exit ${exitCode}: ${JSON.stringify(json.error)}`);
   }
+}
+
+console.log("--max-instructions (drop skip through next())...");
+{
+  const setup = "const it = Array.prototype.values.call({ length: 5000 }).drop(4999);\n";
+  const drop = setup + "it.next();\n0;\n";
+  const alone = runLoaderJson(setup, ["--max-instructions=1000"], { timeout: 10_000 });
+  if (alone.exitCode !== 0) throw new Error(`drop setup alone should succeed, got exit ${alone.exitCode}`);
+  const { exitCode, json } = runLoaderJson(drop, ["--max-instructions=1000"], { timeout: 10_000 });
+  if (exitCode !== 1 || json.error?.type !== "InstructionLimitError") throw new Error(`drop skip through next() should end with InstructionLimitError, got exit ${exitCode}`);
 }
 
 console.log("--timeout (native regex scan)...");

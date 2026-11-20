@@ -414,6 +414,7 @@ var
 begin
   while FIndex < FLimit do
   begin
+    CheckExecutionTimeout;
     IterResult := FSourceIterator.AdvanceNext;
     if IteratorResultDone(IterResult) then
     begin
