@@ -3440,28 +3440,84 @@ begin
   end;
 end;
 
-// The calendar ICU formats with. Where the requested fields need iso8601
-// names the loaded ICU lacks, use the Gregorian data, which is what ICU
-// formatted iso8601 with before CLDR 48. ICU's iso8601 calendar is its
+// Whether ICU puts AStartMillis and AEndMillis in different eras. An interval
+// between them shows era names whether or not the options ask for one.
+function ICUDatesSpanEras(const ATimeZone: string;
+  AStartMillis, AEndMillis: Double): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter: Pointer;
+  LocaleBytes: TBytes;
+  TzUnicode, PatternUnicode: string;
+  TzPtr: PUChar;
+  TzLen: LongInt;
+  StartBuffer, EndBuffer: array[0..63] of WideChar;
+  StartLen, EndLen: LongInt;
+begin
+  Result := False;
+  if not TryEncodeASCIIBytes('en-u-ca-gregory', LocaleBytes) then
+    Exit;
+  if ATimeZone <> '' then
+  begin
+    TzUnicode := string(ATimeZone);
+    TzPtr := PWideChar(TzUnicode);
+    TzLen := Length(TzUnicode);
+  end
+  else
+  begin
+    TzPtr := nil;
+    TzLen := -1;
+  end;
+  PatternUnicode := 'G';
+  Status := ICU_SUCCESS;
+  Formatter := IntlFunctions.UdatOpen(UDAT_PATTERN, UDAT_PATTERN,
+    BytePointer(LocaleBytes), TzPtr, TzLen, PWideChar(PatternUnicode),
+    Length(PatternUnicode), Status);
+  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+    Exit;
+  try
+    Status := ICU_SUCCESS;
+    StartLen := IntlFunctions.UdatFormat(Formatter, AStartMillis,
+      @StartBuffer[0], Length(StartBuffer), nil, Status);
+    if not ICUSucceeded(Status) then
+      Exit;
+    EndLen := IntlFunctions.UdatFormat(Formatter, AEndMillis,
+      @EndBuffer[0], Length(EndBuffer), nil, Status);
+    if not ICUSucceeded(Status) or (StartLen > Length(StartBuffer)) or
+       (EndLen > Length(EndBuffer)) then
+      Exit;
+    Result := UnicodeToString(StartBuffer, StartLen) <>
+      UnicodeToString(EndBuffer, EndLen);
+  finally
+    IntlFunctions.UdatClose(Formatter);
+  end;
+end;
+
+// The calendar ICU formats with. Where the fields a format uses need
+// iso8601 names the loaded ICU lacks, use the Gregorian data, which is what
+// ICU formatted iso8601 with before CLDR 48. ICU's iso8601 calendar is its
 // Gregorian calendar with ISO week rules, so both give the same years,
 // months and days, and Intl formats no week fields. Fields that need no
-// missing name, such as a numeric date, keep the iso8601 patterns.
-function ICUFormattingCalendar(
-  const AOptions: TIntlDateTimeFormatOptions): string;
+// missing name, such as a numeric date, keep the iso8601 patterns. The
+// fields are the options' skeleton and AExtraNameFields, which a range adds
+// for the era names ICU shows when it spans eras.
+function ICUFormattingCalendar(const AOptions: TIntlDateTimeFormatOptions;
+  const AExtraNameFields: Cardinal): string;
 begin
   Result := AOptions.Calendar;
   if (Result = 'iso8601') and
-     ((ICUNameFieldsInPattern(BuildDateTimeSkeleton(AOptions)) and
-       ICUISO8601MissingNames) <> 0) then
+     (((ICUNameFieldsInPattern(BuildDateTimeSkeleton(AOptions)) or
+        AExtraNameFields) and ICUISO8601MissingNames) <> 0) then
     Result := 'gregory';
 end;
 
 function ApplyDateTimeLocaleOptions(const ALocale: string;
-  const AOptions: TIntlDateTimeFormatOptions): string;
+  const AOptions: TIntlDateTimeFormatOptions;
+  const AExtraNameFields: Cardinal = 0): string;
 begin
   Result := ALocale;
   Result := ApplyUnicodeLocaleKeyword(Result, 'ca',
-    ICUFormattingCalendar(AOptions));
+    ICUFormattingCalendar(AOptions, AExtraNameFields));
   Result := ApplyUnicodeLocaleKeyword(Result, 'nu', AOptions.NumberingSystem);
   Result := ApplyUnicodeLocaleKeyword(Result, 'hc', AOptions.HourCycle);
 end;
@@ -3698,10 +3754,12 @@ begin
 end;
 
 function OpenDateIntervalFormatter(const ALocale: string;
-  const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
+  const AOptions: TIntlDateTimeFormatOptions;
+  AStartMillis, AEndMillis: Double; out AFormatter: Pointer): Boolean;
 var
   Status: TICUErrorCode;
   EffectiveLocale: string;
+  ExtraNameFields: Cardinal;
   LocaleBytes: TBytes;
   SkeletonUnicode, TzUnicode: string;
   TzPtr: PUChar;
@@ -3726,7 +3784,13 @@ begin
     TzLen := -1;
   end;
 
-  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
+  ExtraNameFields := 0;
+  if (AOptions.Calendar = 'iso8601') and
+     ((ICUISO8601MissingNames and ICU_NAME_ERA_ABBREVIATED) <> 0) and
+     ICUDatesSpanEras(AOptions.TimeZone, AStartMillis, AEndMillis) then
+    ExtraNameFields := ICU_NAME_ERA_ABBREVIATED;
+  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions,
+    ExtraNameFields);
   if not TryEncodeASCIIBytes(EffectiveLocale, LocaleBytes) then
     Exit;
   SkeletonUnicode := string(BuildDateTimeSkeleton(AOptions));
@@ -3750,7 +3814,8 @@ begin
   if not EnsureLoaded or not Assigned(IntlFunctions.UdtitvfmtFormat) then
     Exit;
 
-  if not OpenDateIntervalFormatter(ALocale, AOptions, Formatter) then
+  if not OpenDateIntervalFormatter(ALocale, AOptions, AStartMillis,
+    AEndMillis, Formatter) then
     Exit;
   try
     FillChar(Buffer, SizeOf(Buffer), 0);
@@ -3784,7 +3849,8 @@ begin
      not Assigned(IntlFunctions.UdtitvfmtCloseResult) then
     Exit;
 
-  if not OpenDateIntervalFormatter(ALocale, AOptions, Formatter) then
+  if not OpenDateIntervalFormatter(ALocale, AOptions, AStartMillis,
+    AEndMillis, Formatter) then
     Exit;
   try
     Status := ICU_SUCCESS;

@@ -59,6 +59,26 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRangeToParts", () =>
     expect(parts.find((part) => part.type === "relatedYear" && part.source === "startRange").value).toBe("1999");
     expect(parts.find((part) => part.type === "relatedYear" && part.source === "endRange").value).toBe("1899");
   });
+
+  test("emits era parts for a numeric iso8601 range across eras", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const parts = dtf.formatRangeToParts(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    if (!hasFullICU) {
+      expect(Array.isArray(parts)).toBe(true);
+      return;
+    }
+
+    // ICU names the eras of a range that crosses them, though none was asked for.
+    expect(parts.find((part) => part.type === "era" && part.source === "startRange").value).toBe("BC");
+    expect(parts.find((part) => part.type === "era" && part.source === "endRange").value).toBe("AD");
+  });
 });
 
 describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRangeToParts Temporal inputs", () => {

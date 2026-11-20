@@ -56,6 +56,26 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRange", () => {
     expect(() => dtf.formatRange(NaN, 0)).toThrow(RangeError);
     expect(() => dtf.formatRange(0, NaN)).toThrow(RangeError);
   });
+
+  test("names the eras of a numeric iso8601 range across eras", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const result = dtf.formatRange(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    if (!hasFullICU) {
+      expect(typeof result).toBe("string");
+      return;
+    }
+
+    // ICU names the eras of a range that crosses them, though none was asked for.
+    expect(result).toContain("BC");
+    expect(result).toContain("AD");
+  });
 });
 
 describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRange Temporal inputs", () => {
