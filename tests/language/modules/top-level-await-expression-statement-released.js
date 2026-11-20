@@ -7,11 +7,22 @@ description: >
 features: [top-level-await, Goccia.gc]
 ---*/
 
-import { exportedGrown, exportedLength, grown, size } from "./helpers/tla-awaited-argument-released.js";
+import defaultLength, {
+  defaultGrown,
+  exportedGrown,
+  exportedLength,
+  grown,
+  size,
+} from "./helpers/tla-awaited-argument-released.js";
 
 describe("an awaited value at the top level of a module", () => {
   test("is reclaimed once its statement has finished", () => {
     expect(grown).toBeLessThan(size / 2);
+  });
+
+  test("is reclaimed once its default export has finished", () => {
+    expect(defaultLength).toBe(size);
+    expect(defaultGrown).toBeLessThan(size / 2);
   });
 
   test("is reclaimed once its exported declaration has finished", () => {

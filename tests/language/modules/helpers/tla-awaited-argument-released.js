@@ -26,5 +26,15 @@ await null;
 Goccia.gc();
 
 export const exportedGrown = Goccia.gc.bytesAllocated - exportedBaseline;
+Goccia.gc();
+const defaultBaseline = Goccia.gc.bytesAllocated;
+
+// The default export of an initializer that awaited.
+export default measure(1, 2, (await Promise.all([make()]))[0]);
+await null;
+await null;
+Goccia.gc();
+
+export const defaultGrown = Goccia.gc.bytesAllocated - defaultBaseline;
 export { grown };
 export const size = SIZE;

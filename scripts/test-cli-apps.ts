@@ -5972,6 +5972,27 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
     }
 
+    console.log("Loader: line coverage of a top-level await that a short circuit skips...");
+    // The registers an awaiting top-level statement clears belong to the
+    // statement's line, not to the skipped operand's line.
+    const skippedAwaitSourcePath = join(tmp, "skipped-await-coverage.js");
+    writeFileSync(
+      skippedAwaitSourcePath,
+      [
+        "const no = () => false;",
+        "no() &&",
+        "  (await Promise.resolve(1));",
+        "await null;",
+        "",
+      ].join("\n"),
+    );
+    const skippedAwaitLcovPath = join(tmp, "skipped-await-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${skippedAwaitLcovPath} ${skippedAwaitSourcePath}`.quiet();
+    const skippedAwaitLcov = readFileSync(skippedAwaitLcovPath, "utf-8");
+    if (!skippedAwaitLcov.includes("DA:3,0")) {
+      throw new Error(`LCOV should report the skipped await line 3 as unexecuted, got:\n${skippedAwaitLcov}`);
+    }
+
     console.log("Loader: line coverage of declarations whose initializer starts on a later line...");
     // A lexical binding's TDZ hole is set when its block is entered, so the
     // declaration itself needs none; under coverage it still sets it, because

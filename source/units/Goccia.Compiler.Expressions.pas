@@ -725,6 +725,7 @@ procedure CompileYield(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaYieldExpression; const ADest: UInt16);
 var
   TempReg: UInt16;
+  OuterRegionPeak, RegionPeak, Slot: Integer;
 begin
   if AExpr.IsDelegate then
   begin
@@ -748,10 +749,18 @@ begin
   else
     TempReg := ADest;
   try
+    OuterRegionPeak := ACtx.Scope.BeginRegisterRegion;
     if Assigned(AExpr.Operand) then
       ACtx.CompileExpression(AExpr.Operand, TempReg)
     else
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, TempReg, 0, 0));
+    RegionPeak := ACtx.Scope.EndRegisterRegion(OuterRegionPeak);
+    // What the operand's evaluation left above the live registers (the
+    // arguments of a call, a receiver) is dead here, and the suspended frame
+    // would keep it reachable after the consumer drops the yielded value.
+    for Slot := ACtx.Scope.NextSlot to RegionPeak - 1 do
+      if Slot <> TempReg then
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
     EmitInstruction(ACtx, EncodeABC(OP_YIELD, TempReg, TempReg,
       YIELD_FLAG_TEMP_OPERAND));
     if TempReg <> ADest then
