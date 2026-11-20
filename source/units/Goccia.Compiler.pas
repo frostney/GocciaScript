@@ -825,7 +825,9 @@ begin
   if (not Result) and (Ctx.Scope.AwaitCount <> AwaitMark) and
      ((AStmt is TGocciaExpressionStatement) or
       (AStmt is TGocciaVariableDeclaration) or
-      (AStmt is TGocciaDestructuringDeclaration)) and
+      (AStmt is TGocciaDestructuringDeclaration) or
+      (AStmt is TGocciaExportVariableDeclaration) or
+      (AStmt is TGocciaExportDestructuringDeclaration)) and
      (StatementPeak > Ctx.Scope.NextSlot) then
   begin
     EmitLineMapping(Ctx, AStmt.Line, AStmt.Column);

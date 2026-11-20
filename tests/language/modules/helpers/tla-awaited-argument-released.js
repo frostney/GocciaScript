@@ -14,5 +14,17 @@ await null;
 await null;
 Goccia.gc();
 
-export const grown = Goccia.gc.bytesAllocated - baseline;
+const grown = Goccia.gc.bytesAllocated - baseline;
+
+Goccia.gc();
+const exportedBaseline = Goccia.gc.bytesAllocated;
+
+// The same statement, exported: the export wrapper clears it too.
+export const exportedLength = measure(1, 2, (await Promise.all([make()]))[0]);
+await null;
+await null;
+Goccia.gc();
+
+export const exportedGrown = Goccia.gc.bytesAllocated - exportedBaseline;
+export { grown };
 export const size = SIZE;
