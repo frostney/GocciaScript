@@ -16368,6 +16368,14 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
     writeFileSync(source, 'import source m from "./comp.js";\nconsole.log(typeof m);\n');
     const test = join(tmp, "imports.test.js");
     writeFileSync(test, 'import { a } from "./comp.js";\ntest("imports", () => { expect(a).toBe(1); });\n');
+    // Setup loads: a JavaScript modules manifest and a globals module that
+    // import the warning module before any script runs.
+    const manifest = join(tmp, "manifest.js");
+    writeFileSync(manifest, 'import { a } from "./comp.js";\nexport default { "virtual:x": { content: "export const y = 1;" } };\n');
+    const globals = join(tmp, "globals.js");
+    writeFileSync(globals, 'import { a } from "./comp.js";\nexport const g = a;\n');
+    const plainTest = join(tmp, "plain.test.js");
+    writeFileSync(plainTest, 'test("plain", () => { expect(1).toBe(1); });\n');
     const run = (binary: string, args: string[]) => {
       const proc = Bun.spawnSync([binary, ...args], { stdout: "pipe", stderr: "pipe" });
       return proc.stdout.toString();
@@ -16381,7 +16389,15 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
     if (!run(RUNNER, [source, "--experimental-js-module-source"]).includes(warning))
       throw new Error("A plain source-phase import should print the imported module's warning");
 
+    if (!run(RUNNER, [entry, "--modules", manifest]).includes(warning))
+      throw new Error("A plain run should print the manifest's imported warning");
+    if (!run(RUNNER, [entry, "--globals", globals]).includes(warning))
+      throw new Error("A plain run should print the globals module's imported warning");
+
     const cases: [string, string, string[]][] = [
+      ["GocciaRunner --modules manifest --output=json", RUNNER, [entry, "--modules", manifest, "--output=json"]],
+      ["GocciaRunner --globals module --output=json", RUNNER, [entry, "--globals", globals, "--output=json"]],
+      ["GocciaTestRunner --globals module --output=json", TESTRUNNER, ["-P", plainTest, "--globals", globals, "--output=json"]],
       ["GocciaRunner --output=json", RUNNER, [main, "--output=json"]],
       ["GocciaRunner --output=compact-json", RUNNER, [main, "--output=compact-json"]],
       ["GocciaRunner --output=json --jobs=2", RUNNER, [main, entry, "--output=json", "--jobs=2"]],
