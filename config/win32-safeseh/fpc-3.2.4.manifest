@@ -206,7 +206,7 @@ source-nonseh ../../source/units/Goccia.Values.EventTargetValue.pas 72f8ac923c9c
 source-nonseh ../../source/units/Goccia.VM.pas b8c0fec9d90bcaad0165a7507995132c52f6dcedd77f6ce1d677355837025818 .text.n_goccia.vm$_$tgocciabytecodegeneratorobjectvalue_$__$$_prepareawaithandlers$crcc0181dbf
 source-nonseh ../../source/units/Goccia.VM.pas 31e56cc1f8f3c03fcf0001831b875a500d29f0dad6a985529ef4558756a4ace4 .text.n_goccia.vm$_$tgocciavm_$__$$_growhandlerstack$longint
 source-nonseh ../../source/units/Goccia.VM.pas fd70f78698e1b13d2b1be1f793b4758337f46f054d41bf31a5bc522ff462e88d .text.n_goccia.vm$_$tgocciavm_$__$$_tryunwindtohandler$crce3b93773
-source-nonseh ../../source/units/Goccia.VM.pas 9bc54f040f8461ad570052a51b25d519f79a0150108a72efc33cea40060c65db .text.n_goccia.vm$_$tgocciavmasyncawaitcontinuationvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
+source-nonseh ../../source/units/Goccia.VM.pas 9a2fc6fa62e2b2517241ff1c4ed4c68587503e49479e1f534addfa0f1c4eb9ca .text.n_goccia.vm$_$tgocciavmasyncawaitcontinuationvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 source-nonseh ../../source/units/Goccia.VM.pas d663249918661b2d20a5ebb9381931462a5c1c7a196d8f2b2893978c4555ff23 .text.n_goccia.vm$_$tgocciavmasyncfromsyncfulfillvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 source-nonseh ../../source/units/Goccia.VM.pas cad009adcd12916f019cd4beab91faf396c2bd8ac039f537baa651e98eb459d3 .text.n_goccia.vm$_$tgocciavmasyncfromsyncrejectvalue_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 source-nonseh ../../source/units/Goccia.VM.pas 9a7b06c7265311de1ab31b2d29480e3626b62e0198be84efd74bf3a33e152072 .text.n_goccia.vm$_$tsnapshotframeinfo_$__$$_hashandler$longint$word$tgocciabytecodehandlerkind$$boolean
