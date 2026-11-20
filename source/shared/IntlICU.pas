@@ -3387,6 +3387,8 @@ const
     format both. }
   ICU_MAJOR_WITHOUT_ISO8601_FIELDS = 78;
 
+function ISO8601LocaleHasNames(const ALocale: string): Boolean; forward;
+
 { Whether the options ask for a field that ICU 78 leaves out of its iso8601
   calendar: the era or the name of a month (a long or short one; a narrow one
   is formatted correctly). Its numeric fields and the weekday are formatted
@@ -3408,11 +3410,13 @@ begin
   Result := ApplyUnicodeLocaleKeyword(Result, 'ca', AOptions.Calendar);
   Result := ApplyUnicodeLocaleKeyword(Result, 'nu', AOptions.NumberingSystem);
   Result := ApplyUnicodeLocaleKeyword(Result, 'hc', AOptions.HourCycle);
-  // On that ICU the locale names the Gregorian calendar, which formats the
-  // same fields correctly. `resolvedOptions` keeps reporting iso8601: only the
+  // On that ICU a locale whose iso8601 calendar has no era or month names
+  // gets the Gregorian calendar, which formats the same fields correctly. `resolvedOptions` keeps reporting iso8601: only the
   // locale handed to ICU changes.
   if (ICUMajorVersion = ICU_MAJOR_WITHOUT_ISO8601_FIELDS) and
-     RequestsTextualDateFields(AOptions) then
+     (Pos('-ca-iso8601', LowerCase(Result)) > 0) and
+     RequestsTextualDateFields(AOptions) and
+     not ISO8601LocaleHasNames(Result) then
     Result := StringReplace(Result, '-ca-iso8601', '-ca-gregory',
       [rfReplaceAll, rfIgnoreCase]);
 end;
@@ -3459,7 +3463,9 @@ begin
   end;
 end;
 
-function OpenDateFormatter(const ALocale: string;
+{ Opens a date-time formatter for a locale that already carries the keywords
+  of the options. }
+function OpenDateFormatterForLocale(const AEffectiveLocale: string;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
 var
   Status: TICUErrorCode;
@@ -3474,7 +3480,7 @@ begin
   Result := False;
   AFormatter := nil;
 
-  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
+  EffectiveLocale := AEffectiveLocale;
   if not TryEncodeASCIIBytes(EffectiveLocale, LocaleBytes) then
     Exit;
 
@@ -3518,6 +3524,13 @@ begin
     BytePointer(LocaleBytes), TzPtr, TzLen, PWideChar(Pattern),
     Length(Pattern), Status);
   Result := ICUSucceeded(Status) and Assigned(AFormatter);
+end;
+
+function OpenDateFormatter(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
+begin
+  Result := OpenDateFormatterForLocale(
+    ApplyDateTimeLocaleOptions(ALocale, AOptions), AOptions, AFormatter);
 end;
 
 function TryICUOpenDateTimeFormatter(const ALocale: string;
@@ -3609,6 +3622,85 @@ begin
       PadTwoDigitHourParts(AParts, AOptions);
   finally
     IntlFunctions.UfieldpositerClose(Iterator);
+  end;
+end;
+
+var
+  ISOProbeLocales: array of string;
+  ISOProbeHasNames: array of Boolean;
+
+{ Whether the iso8601 calendar of a locale (ICU 78) writes the era and the
+  name of a month, checked once per locale on a fixed date. A locale with
+  iso8601 data of its own keeps it; one without it formats those fields as
+  empty text. }
+function ISO8601LocaleHasNames(const ALocale: string): Boolean;
+var
+  Key: string;
+  I, J: Integer;
+  Cached, Found: Boolean;
+  Options: TIntlDateTimeFormatOptions;
+  Formatter: Pointer;
+  Parts: TIntlFormatPartArray;
+  HasEra, HasMonth: Boolean;
+begin
+  Key := LowerCase(ALocale);
+  Cached := False;
+  Result := False;
+  CriticalSectionEnter(IntlInitLock);
+  try
+    for I := 0 to High(ISOProbeLocales) do
+      if ISOProbeLocales[I] = Key then
+      begin
+        Result := ISOProbeHasNames[I];
+        Cached := True;
+        Break;
+      end;
+  finally
+    CriticalSectionLeave(IntlInitLock);
+  end;
+  if Cached then
+    Exit;
+
+  FillChar(Options, SizeOf(Options), 0);
+  Options.Calendar := 'iso8601';
+  Options.TimeZone := 'UTC';
+  Options.Era := 'short';
+  Options.Year := 'numeric';
+  Options.Month := 'long';
+  Options.Day := 'numeric';
+  HasEra := False;
+  HasMonth := False;
+  if OpenDateFormatterForLocale(ALocale, Options, Formatter) then
+  try
+    if TryICUFormatDateTimeToPartsWithFormatter(Formatter, 1577836800000.0,
+         Options, Parts) then
+      for J := 0 to High(Parts) do
+      begin
+        if (Parts[J].PartType = 'era') and (Parts[J].Value <> '') then
+          HasEra := True;
+        if (Parts[J].PartType = 'month') and (Parts[J].Value <> '') then
+          HasMonth := True;
+      end;
+  finally
+    ICUCloseDateTimeFormatter(Formatter);
+  end;
+  Result := HasEra and HasMonth;
+
+  CriticalSectionEnter(IntlInitLock);
+  try
+    Found := False;
+    for I := 0 to High(ISOProbeLocales) do
+      if ISOProbeLocales[I] = Key then
+        Found := True;
+    if not Found then
+    begin
+      SetLength(ISOProbeLocales, Length(ISOProbeLocales) + 1);
+      SetLength(ISOProbeHasNames, Length(ISOProbeHasNames) + 1);
+      ISOProbeLocales[High(ISOProbeLocales)] := Key;
+      ISOProbeHasNames[High(ISOProbeHasNames)] := Result;
+    end;
+  finally
+    CriticalSectionLeave(IntlInitLock);
   end;
 end;
 
