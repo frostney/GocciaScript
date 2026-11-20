@@ -10,6 +10,7 @@
  */
 
 import { $ } from "bun";
+import { verifyOutputEncoding, verifyReporterEncoding } from "./test-cli-output-encoding";
 import {
   writeFileSync,
   readFileSync,
@@ -31,6 +32,9 @@ import {
 } from "./test-cli/binaries";
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
+
+verifyOutputEncoding();
+verifyReporterEncoding();
 
 // -- Stdin smoke (Loader) ------------------------------------------------------
 
@@ -1299,7 +1303,7 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
 // -- Entry source-type detection (#1626, ADR 0140) ---------------------------
 
 // With no explicit source type, an entry that has a top-level import or
-// export declaration runs as a Module and any other entry as a Script. Node.js
+// export declaration or valid top-level await runs as a Module. Node.js
 // prints "y" for cyc.js and "yh" for fcyc.js.
 console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, Bundler, LoaderBare, sandbox)...");
 {
@@ -1312,6 +1316,8 @@ console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, B
       "fd.js": 'import { h2 } from "./fcyc.js";\nexport const y2 = "y" + h2();\n',
       "script.js": 'var scriptVar = 1;\nconsole.log(typeof globalThis.scriptVar, this === globalThis);\n',
       "dynamic.js":
+        'var dynamicVar = 1;\nimport("./lib.js").then((m) => console.log(m.v, typeof globalThis.dynamicVar, this === globalThis));\n',
+      "await-dynamic.js":
         'var dynamicVar = 1;\nconst m = await import("./lib.js");\nconsole.log(m.v, typeof globalThis.dynamicVar, this === globalThis);\n',
       "lib.js": 'export const v = "lib";\n',
       // A detected Module's top-level lexical declarations stay in the module
@@ -1356,6 +1362,8 @@ console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, B
       run(RUNNER, ["script.js", "--compat-var"]), "number true");
     expectLine("entry with only dynamic import() stays a Script",
       run(RUNNER, ["dynamic.js", "--compat-var"]), "lib number true");
+    expectLine("top-level await import() selects a Module",
+      run(RUNNER, ["await-dynamic.js", "--compat-var"]), "lib undefined false");
     expectFailure("import.meta alone stays a Script error",
       run(RUNNER, ["meta.js"]), "import.meta is only allowed in module code");
     // An explicit Script keeps today's behaviour: d.js's import of the entry
@@ -1656,6 +1664,51 @@ console.log("--max-memory (OOM triggers RangeError)...");
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode}`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError: ${out}`);
   if (out.includes("memory budget")) throw new Error(`OOM should be refused by a charged allocation, not the growth gate: ${out}`);
+}
+
+console.log("--max-memory (Blob bytes are charged and given back)...");
+{
+  // A Blob holds its bytes natively, reserved against the limit for its life
+  // (Goccia.Values.BlobValue). Over the limit, new Blob is the catchable
+  // RangeError, measured before the bytes are allocated, so a part repeated
+  // many times cannot build a native buffer past the limit first, and a
+  // repeated string is charged by the bytes it adds, not once more per
+  // element. The list of parts is charged as it grows, so an iterator that
+  // never ends is refused by the limit too. Blobs that become garbage give
+  // their reservation back, so many of them in turn fit under one limit.
+  const source = [
+    "const chunk = new Uint8Array(1 << 20);",
+    "const one = new Blob([chunk]);",
+    "const out = [];",
+    "const tryIt = (fn) => { try { fn(); out.push('ok'); } catch (e) { out.push(e.constructor.name); } };",
+    "tryIt(() => new Blob(Array(200).fill(chunk)));",
+    "tryIt(() => new Blob(Array(1000).fill(one)));",
+    "const s = 'x'.repeat(1 << 20);",
+    "tryIt(() => new Blob(Array(500).fill(s)));",
+    "tryIt(() => new Blob(Array(25).fill(s)));",
+    "let total = 0;",
+    "for (const _ of Array(300).keys()) { total += new Blob([chunk]).slice(1).size; }",
+    "out.push(total);",
+    "console.log(out.join(','));",
+    "",
+  ].join("\n");
+  const res = await $`echo ${source} | ${RUNNER} --max-memory=67108864 --timeout=60000 2>&1`.quiet().nothrow();
+  const out = res.text();
+  if (res.exitCode !== 0) throw new Error(`Blob memory probe should exit 0, got ${res.exitCode}: ${out}`);
+  if (!out.includes(`RangeError,RangeError,RangeError,ok,${300 * ((1 << 20) - 1)}`)) {
+    throw new Error(`Blob memory probe: over the limit should be RangeError and garbage Blobs should fit in turn: ${out}`);
+  }
+  // The endless iterator runs under a smaller limit, which it reaches sooner.
+  const endless = [
+    "const empty = new Blob();",
+    "try { new Blob({ [Symbol.iterator]: () => ({ next: () => ({ done: false, value: empty }) }) }); console.log('ok'); }",
+    "catch (e) { console.log(e.constructor.name); }",
+    "",
+  ].join("\n");
+  const endlessRes = await $`echo ${endless} | ${RUNNER} --max-memory=16777216 --timeout=60000 2>&1`.quiet().nothrow();
+  if (endlessRes.exitCode !== 0 || !endlessRes.text().includes("RangeError")) {
+    throw new Error(`Blob memory probe: an endless iterator of parts should be refused by the limit: ${endlessRes.text()}`);
+  }
 }
 
 console.log("--max-memory (peak resident memory stays near the ceiling)...");
@@ -5288,7 +5341,9 @@ console.log("--max-memory stack refusal is located at the call...");
         join(tmp, name),
         [
           "const keep = [];",
-          "for (let i = 0; i < 25000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
+          // Leave headroom for per-object size changes: the preload must fit
+          // inside 8 MiB so stack growth, not array construction, is refused.
+          "for (let i = 0; i < 20000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
           ...body,
           "console.log(r(1000000));",
           "",

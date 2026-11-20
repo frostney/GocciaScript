@@ -45,7 +45,9 @@ uses
   Goccia.VM.Exception;
 
 const
-  DEFAULT_CATEGORIES = 'built-ins,harness,intl402,language,staging';
+  { Every top-level test262 category. annexB is part of the conformance
+    target (ADR 0177), so it runs and counts like the others. }
+  DEFAULT_CATEGORIES = 'annexB,built-ins,harness,intl402,language,staging';
   DEFAULT_JOBS = 4;
   DEFAULT_TIMEOUT_MS = 20000;
   DEFAULT_MAX_MEMORY_BYTES = Int64(2) * 1024 * 1024 * 1024;
@@ -54,8 +56,6 @@ const
   FNV_PRIME = UInt32($01000193);
   ASYNC_PASS_MARKER = 'Test262:AsyncTestComplete';
   ASYNC_FAIL_MARKER = 'Test262:AsyncTestFailure:';
-  NEGATIVE_NO_ERROR_MARKER = 'Test262:NegativeTestNoError';
-  NEGATIVE_ERROR_MARKER = 'Test262:NegativeTestError:';
   { The value stock harness/sta.js $DONOTEVALUATE() throws. raw negative
     tests throw the same string literal themselves. Seeing it thrown means
     the test body was evaluated. }
@@ -65,14 +65,35 @@ const
     run.gradingContract. Bump it whenever a grading change can move a test
     between PASS and FAIL without an engine change, so the PR comparison
     does not block on a baseline graded under the old contract. }
-  GRADING_CONTRACT_VERSION = 2;
+  GRADING_CONTRACT_VERSION = 4;
+  { The compatibility flags every test262 engine runs with, test cases and
+    --eval-host probes alike: test262 uses these forms across its harness
+    and its tests. A test's own source type and strictness still decide
+    strict-mode semantics. An Annex B surface added behind its own flag
+    (ADR 0177) joins this set, so the runner tests it while the default
+    engine profile stays without it. }
+  TEST262_COMPATIBILITY: TGocciaCompatibilityFlags = [cfASI, cfVar,
+    cfFunction, cfTraditionalFor, cfWhileLoops, cfLooseEquality,
+    cfArgumentsObject, cfLabel, cfForIn, cfNonStrictMode];
 
 type
   TTest262Outcome = (toPass, toFail, toWrapperInfra, toTimeout);
-  TIntegerArray = array of Integer;
-  TTest262WrapperKind = (twPositiveSync, twPositiveAsync,
-    twNegativeRuntime, twNegativeRuntimeUnwrapped, twNegativeParse);
+  TTest262TestKind = (tkPositiveSync, tkPositiveAsync, tkNegativeRuntime,
+    tkNegativeParse);
   TTest262ProfileMode = (tpmOpcodes, tpmFunctions, tpmAll);
+  { The strictness one run of a test file is evaluated in. Module code is
+    strict, so a module test's one run is a strict run. }
+  TTest262RunMode = (trmNonStrict, trmStrict);
+  TTest262RunModes = set of TTest262RunMode;
+
+  TTest262Counts = record
+    Run: Integer;
+    Passed: Integer;
+    Failed: Integer;
+    WrapperInfra: Integer;
+    Timeouts: Integer;
+  end;
+  TTest262ModeCounts = array[TTest262RunMode] of TTest262Counts;
 
   TTest262Metadata = class
   public
@@ -88,14 +109,18 @@ type
     function IsNegative: Boolean;
   end;
 
+  { One run: a test file evaluated in one mode. A file test262 requires in
+    both modes is two cases with the same Id. }
   TTest262Case = class
   public
     Id: string;
     Path: string;
+    Mode: TTest262RunMode;
   end;
 
   TTest262Result = record
     Id: string;
+    Mode: TTest262RunMode;
     Status: TTest262Outcome;
     DurationMs: Integer;
     Message: string;
@@ -151,25 +176,25 @@ type
     FResults: array of TTest262Result;
     FResultSlots: array of TTest262ResultSlot;
     FTotalDiscovered: Integer;
+    FExpectedRuns: array[TTest262RunMode] of Integer;
     FDurationNanoseconds: Int64;
     procedure ParseArguments;
     procedure PrintUsage;
     procedure Discover;
+    procedure ExpandRunModes;
     function NormalizeId(const APath: string): string;
     function MatchesFilter(const AId: string): Boolean;
     function ShardForTest(const AId: string): Integer;
-    function ParseTest(const ASource: string; out ABody: string;
+    function ParseTest(const ASource: string;
       out AMetadata: TTest262Metadata): Boolean;
-    function BuildHarness(const AMetadata: TTest262Metadata;
-      const AIsAsync, ARaw: Boolean): string;
-    function BuildSource(const AHarness, ABody: string;
-      const AKind: TTest262WrapperKind;
-      const AStrictMode: Boolean): string;
-    function DetermineKind(const ACase: TTest262Case;
-      const AMetadata: TTest262Metadata): TTest262WrapperKind;
+    function HarnessFilePath(const AName: string): string;
+    function HarnessIncludes(const AMetadata: TTest262Metadata): TStringList;
+    function DetermineKind(
+      const AMetadata: TTest262Metadata): TTest262TestKind;
     procedure ConfigureProfiler;
     procedure WarmUpRuntime(const AEngine: TGocciaEngine);
-    function ProfilePathForTest(const AId: string): string;
+    function ProfilePathForTest(const AId: string;
+      const AMode: TTest262RunMode): string;
     procedure ExecuteOne(const ACase: TTest262Case;
       out AResult: TTest262Result);
     procedure WorkerProc(const AFileName: string; const AIndex: Integer;
@@ -184,6 +209,14 @@ type
     destructor Destroy; override;
     function Run: Integer;
   end;
+
+function RunModeName(const AMode: TTest262RunMode): string;
+begin
+  case AMode of
+    trmNonStrict: Result := 'non-strict';
+    trmStrict: Result := 'strict';
+  end;
+end;
 
 function OutcomeName(const AOutcome: TTest262Outcome): string;
 begin
@@ -386,6 +419,25 @@ end;
 function TTest262Metadata.HasFeature(const AName: string): Boolean;
 begin
   Result := Features.IndexOf(AName) >= 0;
+end;
+
+{ INTERPRETING.md, "Strict Mode" and "flags": a test runs twice, once
+  non-strict and once strict, unless a flag says otherwise. A module test
+  runs once, as module code, which is strict. A raw test runs once,
+  non-strict, exactly as written. onlyStrict and noStrict run once, in the
+  mode they name. }
+function RunModesFor(const AMetadata: TTest262Metadata): TTest262RunModes;
+begin
+  if AMetadata.HasFlag('module') then
+    Result := [trmStrict]
+  else if AMetadata.HasFlag('raw') then
+    Result := [trmNonStrict]
+  else if AMetadata.HasFlag('onlyStrict') then
+    Result := [trmStrict]
+  else if AMetadata.HasFlag('noStrict') then
+    Result := [trmNonStrict]
+  else
+    Result := [trmNonStrict, trmStrict];
 end;
 
 function TTest262Metadata.IsNegative: Boolean;
@@ -802,6 +854,7 @@ begin
       if (FOptions.ShardCount > 0) and
          (ShardForTest(FCases[I].Id) <> FOptions.ShardIndex) then
         FCases.Delete(I);
+    ExpandRunModes;
     for I := 0 to FCases.Count - 1 do
       FSelectedPaths.Add(FCases[I].Path);
   finally
@@ -810,7 +863,60 @@ begin
   end;
 end;
 
-function TTest262App.ParseTest(const ASource: string; out ABody: string;
+{ Turns each selected file into its runs, one per mode RunModesFor gives,
+  non-strict first. Sharding stays by file, so both runs of a file land in
+  the same shard. A file whose source cannot be read gets one non-strict
+  run, and ExecuteOne reports why it could not run. }
+procedure TTest262App.ExpandRunModes;
+var
+  FileCase: TTest262Case;
+  I: Integer;
+  Metadata: TTest262Metadata;
+  Mode: TTest262RunMode;
+  Modes: TTest262RunModes;
+  RunCase: TTest262Case;
+  Runs: TObjectList<TTest262Case>;
+begin
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+    FExpectedRuns[Mode] := 0;
+  Runs := TObjectList<TTest262Case>.Create(True);
+  try
+    for I := 0 to FCases.Count - 1 do
+    begin
+      FileCase := FCases[I];
+      Modes := [trmNonStrict];
+      Metadata := nil;
+      try
+        try
+          if ParseTest(ReadUTF8FileText(FileCase.Path), Metadata) then
+            Modes := RunModesFor(Metadata);
+        except
+          on Exception do
+            Modes := [trmNonStrict];
+        end;
+      finally
+        Metadata.Free;
+      end;
+      for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+        if Mode in Modes then
+        begin
+          RunCase := TTest262Case.Create;
+          RunCase.Id := FileCase.Id;
+          RunCase.Path := FileCase.Path;
+          RunCase.Mode := Mode;
+          Runs.Add(RunCase);
+          Inc(FExpectedRuns[Mode]);
+        end;
+    end;
+  except
+    Runs.Free;
+    raise;
+  end;
+  FCases.Free;
+  FCases := Runs;
+end;
+
+function TTest262App.ParseTest(const ASource: string;
   out AMetadata: TTest262Metadata): Boolean;
 var
   Block: string;
@@ -833,10 +939,7 @@ begin
     ClosePosition := PosEx('---*/', ASource,
       OpenPosition + Length('/*---'));
   if (OpenPosition = 0) or (ClosePosition = 0) then
-  begin
-    ABody := ASource;
     Exit(True);
-  end;
 
   BlockStart := OpenPosition + Length('/*---');
   if Copy(ASource, BlockStart, 2) = #13#10 then
@@ -844,10 +947,6 @@ begin
   else if CharInSet(ASource[BlockStart], [#10, #13]) then
     Inc(BlockStart);
   Block := Copy(ASource, BlockStart, ClosePosition - BlockStart);
-  ABody := TrimRight(Copy(ASource, 1, OpenPosition - 1)) + sLineBreak +
-    Copy(ASource, ClosePosition + Length('---*/'), MaxInt);
-  while (ABody <> '') and CharInSet(ABody[1], [#10, #13]) do
-    Delete(ABody, 1, 1);
 
   HeaderLines := TStringList.Create;
   try
@@ -910,62 +1009,47 @@ begin
   finally
     HeaderLines.Free;
   end;
-  { INTERPRETING.md: a raw test's source "must not be modified in any
-    way", so it keeps its frontmatter comment and original layout. }
-  if AMetadata.HasFlag('raw') then
-    ABody := ASource;
   Result := True;
 end;
 
-function TTest262App.BuildHarness(const AMetadata: TTest262Metadata;
-  const AIsAsync, ARaw: Boolean): string;
-var
-  HarnessNames: TStringList;
-  I: Integer;
-  Name: string;
-  Path: string;
+function TTest262App.HarnessFilePath(const AName: string): string;
 begin
-  Result := '';
-  if ARaw then
-    Exit;
-  HarnessNames := TStringList.Create;
-  try
-    HarnessNames.Add('$262.js');
-    HarnessNames.Add('sta.js');
-    HarnessNames.Add('assert.js');
-    for I := 0 to AMetadata.Includes.Count - 1 do
-      if HarnessNames.IndexOf(AMetadata.Includes[I]) < 0 then
-        HarnessNames.Add(AMetadata.Includes[I]);
-    if AIsAsync and (HarnessNames.IndexOf('doneprintHandle.js') < 0) then
-      HarnessNames.Add('doneprintHandle.js');
-    HarnessNames.Add('goccia-global-shim.js');
-
-    for I := 0 to HarnessNames.Count - 1 do
-    begin
-      Name := HarnessNames[I];
-      if (Name = '$262.js') or (Name = 'goccia-global-shim.js') then
-        Path := ExpandFileName('scripts' + PathDelim +
-          'test262_harness' + PathDelim + Name)
-      else
-        Path := IncludeTrailingPathDelimiter(FOptions.SuiteDir) +
-          'harness' + PathDelim + Name;
-      if not FileExists(Path) then
-        raise Exception.Create('Missing harness include "' + Name +
-          '": ' + Path);
-      if Result <> '' then
-        Result := Result + sLineBreak;
-      Result := Result + ReadUTF8FileText(Path);
-    end;
-  finally
-    HarnessNames.Free;
-  end;
+  if AName = '$262.js' then
+    Result := ExpandFileName('scripts' + PathDelim + 'test262_harness' +
+      PathDelim + AName)
+  else
+    Result := IncludeTrailingPathDelimiter(FOptions.SuiteDir) + 'harness' +
+      PathDelim + AName;
 end;
 
-{ Unwrapped negative-runtime tests are graded against negative.type, which
-  names the thrown value's constructor (test262's Test262Error has no own or
-  inherited "name" data property). Mirror the wrapped path's
-  e.constructor.name, reading data properties only so grading never calls
-  an accessor's getter. }
+{ The harness files a test evaluates before its own source, each as a
+  separate global Script, in the order INTERPRETING.md gives: the
+  Test262-defined bindings ($262, assert.js, sta.js), doneprintHandle.js for
+  an async test, then the test's includes in source order. Their top-level
+  declarations are global bindings, so the test sees them from Script and
+  Module code alike. A raw test evaluates none. }
+function TTest262App.HarnessIncludes(
+  const AMetadata: TTest262Metadata): TStringList;
+var
+  I: Integer;
+begin
+  Result := TStringList.Create;
+  if AMetadata.HasFlag('raw') then
+    Exit;
+  Result.Add('$262.js');
+  Result.Add('assert.js');
+  Result.Add('sta.js');
+  if AMetadata.HasFlag('async') then
+    Result.Add('doneprintHandle.js');
+  for I := 0 to AMetadata.Includes.Count - 1 do
+    if Result.IndexOf(AMetadata.Includes[I]) < 0 then
+      Result.Add(AMetadata.Includes[I]);
+end;
+
+{ Negative-runtime tests are graded against negative.type, which names the
+  thrown value's constructor (test262's Test262Error has no own or inherited
+  "name" data property). Read e.constructor.name through data properties
+  only, so grading never calls an accessor's getter. }
 function DataPropertyValue(const AObject: TGocciaObjectValue;
   const AName: string): TGocciaValue;
 var
@@ -988,13 +1072,13 @@ begin
   end;
 end;
 
-function NegativeErrorName(const AKind: TTest262WrapperKind;
+function NegativeErrorName(const AKind: TTest262TestKind;
   const AThrown: TGocciaValue): string;
 var
   Constructor_, Name: TGocciaValue;
 begin
   Result := ThrownErrorName(AThrown);
-  if (AKind <> twNegativeRuntimeUnwrapped) or
+  if (AKind <> tkNegativeRuntime) or
      not (AThrown is TGocciaObjectValue) then
     Exit;
   Constructor_ := DataPropertyValue(TGocciaObjectValue(AThrown),
@@ -1015,66 +1099,34 @@ begin
     (TGocciaStringLiteralValue(AThrown).Value = DONOTEVALUATE_THROWN);
 end;
 
-function TTest262App.BuildSource(const AHarness, ABody: string;
-  const AKind: TTest262WrapperKind;
+{ INTERPRETING.md, "Strict Mode": a strict run inserts a "use strict"
+  directive, a semicolon and a newline as the initial character sequence of
+  the test file. Only the test's own Script gets it; the harness Scripts
+  evaluated before it keep their own, non-strict, source. }
+function TestSourceText(const ASource: string;
   const AStrictMode: Boolean): string;
-var
-  Prefix: string;
 begin
   if AStrictMode then
-    Prefix := '"use strict";' + sLineBreak
+    Result := '"use strict";' + #10 + ASource
   else
-    Prefix := '';
-
-  if AKind = twNegativeRuntimeUnwrapped then
-    Exit(Prefix + AHarness + sLineBreak + ABody);
-  if AKind = twNegativeRuntime then
-    Exit(Prefix + AHarness + sLineBreak +
-      'try {' + sLineBreak +
-      ABody + sLineBreak +
-      '  print("Test262:NegativeTestNoError");' + sLineBreak +
-      '} catch (__gocciaT262_e) {' + sLineBreak +
-      '  var __gocciaT262_n = "unknown";' + sLineBreak +
-      '  if (__gocciaT262_e && typeof __gocciaT262_e === "object") {' +
-      sLineBreak +
-      '    if (__gocciaT262_e.constructor && ' +
-      '__gocciaT262_e.constructor.name) {' + sLineBreak +
-      '      __gocciaT262_n = __gocciaT262_e.constructor.name;' +
-      sLineBreak +
-      '    }' + sLineBreak +
-      '  }' + sLineBreak +
-      '  print("Test262:NegativeTestError:" + __gocciaT262_n);' +
-      sLineBreak +
-      '}' + sLineBreak);
-  Result := Prefix + AHarness;
-  if (Result <> '') and not EndsStr(sLineBreak, Result) then
-    Result := Result + sLineBreak;
-  Result := Result + ABody;
+    Result := ASource;
 end;
 
-function TTest262App.DetermineKind(const ACase: TTest262Case;
-  const AMetadata: TTest262Metadata): TTest262WrapperKind;
+function TTest262App.DetermineKind(
+  const AMetadata: TTest262Metadata): TTest262TestKind;
 begin
   if AMetadata.IsNegative then
   begin
     if (AMetadata.NegativePhase = 'parse') or
        (AMetadata.NegativePhase = 'early') or
        (AMetadata.NegativePhase = 'resolution') then
-      Exit(twNegativeParse);
-    { A module body cannot be wrapped in try/catch (import/export must stay
-      top-level), so runtime-phase module negatives are graded unwrapped. }
-    if AMetadata.HasFlag('module') then
-      Exit(twNegativeRuntimeUnwrapped);
-    if (AMetadata.NegativePhase = 'runtime') and
-       (AMetadata.NegativeType = 'SyntaxError') and
-       StartsStr('language/global-code/', ACase.Id) then
-      Exit(twNegativeRuntimeUnwrapped);
-    Exit(twNegativeRuntime);
+      Exit(tkNegativeParse);
+    Exit(tkNegativeRuntime);
   end;
   if AMetadata.HasFlag('async') then
-    Result := twPositiveAsync
+    Result := tkPositiveAsync
   else
-    Result := twPositiveSync;
+    Result := tkPositiveSync;
 end;
 
 procedure TTest262App.ConfigureProfiler;
@@ -1094,15 +1146,20 @@ begin
   end;
 end;
 
-function TTest262App.ProfilePathForTest(const AId: string): string;
+{ A strict run's profile carries a .strict suffix, so the two runs of a
+  file keep separate profiles. scripts/run_test262_suite.ts mirrors this. }
+function TTest262App.ProfilePathForTest(const AId: string;
+  const AMode: TTest262RunMode): string;
 begin
   Result := IncludeTrailingPathDelimiter(FOptions.ProfileDir) +
     'per-test' + PathDelim +
-    StringReplace(AId, '/', PathDelim, [rfReplaceAll]) +
-    '.profile.json';
+    StringReplace(AId, '/', PathDelim, [rfReplaceAll]);
+  if AMode = trmStrict then
+    Result := Result + '.strict';
+  Result := Result + '.profile.json';
 end;
 
-procedure ClassifyResult(const AKind: TTest262WrapperKind;
+procedure ClassifyResult(const AKind: TTest262TestKind;
   const AExpectedErrorType, AOutput, AErrorName, ADiagnostic: string;
   const AExecutionFailed, ATimedOut, AHostError,
     ADoNotEvaluateReached: Boolean;
@@ -1118,7 +1175,7 @@ begin
     AMessage := 'engine timeout';
     Exit;
   end;
-  if AKind = twNegativeParse then
+  if AKind = tkNegativeParse then
   begin
     { A parse/early/resolution negative passes only when the source is
       rejected before evaluation with the expected error constructor.
@@ -1150,36 +1207,7 @@ begin
     Exit;
   end;
 
-  if AKind = twNegativeRuntime then
-  begin
-    if Pos(NEGATIVE_NO_ERROR_MARKER, AOutput) > 0 then
-    begin
-      AOutcome := toFail;
-      if AExpectedErrorType <> '' then
-        AMessage := 'expected ' + AExpectedErrorType + ', none thrown'
-      else
-        AMessage := 'expected error, none thrown';
-      Exit;
-    end;
-    if ExtractMarkerValue(AOutput, NEGATIVE_ERROR_MARKER, Actual) then
-    begin
-      if (AExpectedErrorType <> '') and
-         (Actual <> AExpectedErrorType) then
-      begin
-        AOutcome := toFail;
-        AMessage := 'expected ' + AExpectedErrorType + ', got ' + Actual;
-      end
-      else
-        AOutcome := toPass;
-      Exit;
-    end;
-    AOutcome := toWrapperInfra;
-    AMessage := 'negative-runtime wrapper produced no marker';
-    AResultDiagnostic := Copy(ADiagnostic, 1, 800);
-    Exit;
-  end;
-
-  if AKind = twNegativeRuntimeUnwrapped then
+  if AKind = tkNegativeRuntime then
   begin
     if not AExecutionFailed then
     begin
@@ -1201,7 +1229,7 @@ begin
     Exit;
   end;
 
-  if AKind = twPositiveAsync then
+  if AKind = tkPositiveAsync then
   begin
     if Pos(ASYNC_PASS_MARKER, AOutput) > 0 then
       AOutcome := toPass
@@ -1235,61 +1263,136 @@ end;
 procedure TTest262App.ExecuteOne(const ACase: TTest262Case;
   out AResult: TTest262Result);
 var
-  Body: string;
   Diagnostic: string;
+  DoNotEvaluateReached: Boolean;
   Engine: TGocciaEngine;
   EngineOptions: TGocciaTest262EngineOptions;
   ErrorName: string;
-  DoNotEvaluateReached: Boolean;
   ExecutionFailed: Boolean;
-  Harness: string;
+  FailedInclude: string;
+  HarnessNames: TStringList;
+  HarnessPaths: TStringList;
+  HarnessSources: TObjectList<TStringList>;
   Host: TGocciaTest262Host;
   HostError: Boolean;
-  Kind: TTest262WrapperKind;
+  I: Integer;
+  Kind: TTest262TestKind;
   Metadata: TTest262Metadata;
   PrintHost: TTest262PrintHost;
   ProfilePath: string;
   Source: TStringList;
   SourceText: string;
   StartNanoseconds: Int64;
+  StrictMode: Boolean;
   TimedOut: Boolean;
+
+  { Records how the Script or Module at APath ended when it raised E. }
+  procedure RecordFailure(const E: Exception; const APath: string;
+    const ALines: TStringList);
+  begin
+    ExecutionFailed := True;
+    if E is TGocciaTimeoutError then
+    begin
+      TimedOut := True;
+      ErrorName := 'Timeout';
+      Diagnostic := E.Message;
+    end
+    else if E is EGocciaBytecodeThrow then
+    begin
+      ErrorName := NegativeErrorName(Kind,
+        EGocciaBytecodeThrow(E).ThrownValue);
+      DoNotEvaluateReached := IsDoNotEvaluateThrow(
+        EGocciaBytecodeThrow(E).ThrownValue);
+      Diagnostic := FormatThrowDetail(EGocciaBytecodeThrow(E).ThrownValue,
+        APath, ALines, False, Engine.ModuleLoader.DiagnosticScope.Principal,
+        EGocciaBytecodeThrow(E).Suggestion);
+    end
+    else if E is TGocciaThrowValue then
+    begin
+      ErrorName := NegativeErrorName(Kind, TGocciaThrowValue(E).Value);
+      DoNotEvaluateReached := IsDoNotEvaluateThrow(
+        TGocciaThrowValue(E).Value);
+      Diagnostic := FormatThrowDetail(TGocciaThrowValue(E).Value, APath,
+        ALines, False, Engine.ModuleLoader.DiagnosticScope.Principal,
+        TGocciaThrowValue(E).Suggestion);
+    end
+    else if E is TGocciaError then
+    begin
+      { Parse, early-error and module-linking failures arrive here, as
+        host-level errors. JS-level throws arrive as TGocciaThrowValue or
+        EGocciaBytecodeThrow above instead. }
+      HostError := True;
+      ErrorName := ErrorDisplayName(TGocciaError(E));
+      Diagnostic := TGocciaError(E).GetDetailedMessage(False);
+    end
+    else
+    begin
+      HostError := True;
+      ErrorName := E.ClassName;
+      Diagnostic := E.ClassName + ': ' + E.Message;
+    end;
+  end;
+
 begin
   AResult := Default(TTest262Result);
   AResult.Id := ACase.Id;
+  AResult.Mode := ACase.Mode;
   StartNanoseconds := GetNanoseconds;
   Metadata := nil;
   Source := nil;
   Engine := nil;
   Host := nil;
   PrintHost := nil;
+  HarnessNames := nil;
+  HarnessPaths := nil;
+  HarnessSources := nil;
   ExecutionFailed := False;
   DoNotEvaluateReached := False;
   HostError := False;
   TimedOut := False;
   ErrorName := '';
   Diagnostic := '';
+  FailedInclude := '';
   ProfilePath := '';
   try
     try
-      if not ParseTest(ReadUTF8FileText(ACase.Path), Body, Metadata) then
+      SourceText := ReadUTF8FileText(ACase.Path);
+      if not ParseTest(SourceText, Metadata) then
         raise Exception.Create('frontmatter parse failed');
-      Kind := DetermineKind(ACase, Metadata);
-      { Negative parse and resolution tests get the harness like every
-        other non-raw test (INTERPRETING.md, "Test262-Defined Bindings"),
-        so a body that is evaluated reaches sta.js $DONOTEVALUATE(). raw
-        tests run unmodified, once, in non-strict mode. }
-      Harness := BuildHarness(Metadata, Metadata.HasFlag('async'),
-        Metadata.HasFlag('raw'));
-      SourceText := BuildSource(Harness, Body, Kind,
-        Metadata.HasFlag('onlyStrict') and not Metadata.HasFlag('raw'));
-      Source := CreateECMAScriptSourceLines(SourceText);
+      Kind := DetermineKind(Metadata);
+      { INTERPRETING.md: every test but a raw one evaluates the harness in
+        its realm first, each file as its own non-strict global Script, so
+        a negative parse or resolution body that is evaluated reaches sta.js
+        $DONOTEVALUATE(). A raw test's source "must not be modified in any
+        way": it runs alone, exactly as written, in non-strict mode. }
+      HarnessNames := HarnessIncludes(Metadata);
+      HarnessPaths := TStringList.Create;
+      HarnessSources := TObjectList<TStringList>.Create(True);
+      for I := 0 to HarnessNames.Count - 1 do
+      begin
+        HarnessPaths.Add(HarnessFilePath(HarnessNames[I]));
+        if not FileExists(HarnessPaths[I]) then
+          raise Exception.Create('Missing harness include "' +
+            HarnessNames[I] + '": ' + HarnessPaths[I]);
+        HarnessSources.Add(CreateECMAScriptSourceLines(
+          ReadUTF8FileText(HarnessPaths[I])));
+      end;
+      { The case's mode is the one place strictness is decided. A strict
+        Script run gets the "use strict" prefix; a module test's run is
+        strict as module code and keeps its source as written
+        (INTERPRETING.md, the module flag). }
+      StrictMode := (ACase.Mode = trmStrict) and
+        not Metadata.HasFlag('module');
+      Source := CreateECMAScriptSourceLines(
+        TestSourceText(SourceText, StrictMode));
 
+      { Non-strict compatibility is a property of Script code: module code
+        stays strict whatever the flag says, while the harness Scripts a
+        module test evaluates first, and any Script it reaches through
+        $262.evalScript, indirect eval or Function, are non-strict unless
+        their own source opts in. }
       EngineOptions := Default(TGocciaTest262EngineOptions);
-      EngineOptions.Compatibility := [cfASI, cfVar, cfFunction,
-        cfTraditionalFor, cfWhileLoops, cfLooseEquality, cfArgumentsObject,
-        cfLabel, cfForIn];
-      if not Metadata.HasFlag('module') then
-        Include(EngineOptions.Compatibility, cfNonStrictMode);
+      EngineOptions.Compatibility := TEST262_COMPATIBILITY;
       EngineOptions.ExperimentalJSModuleSourceEnabled :=
         Metadata.HasFeature('source-phase-imports-module-source');
       if EngineOptions.ExperimentalJSModuleSourceEnabled then
@@ -1320,7 +1423,7 @@ begin
       ConfigureProfiler;
       if FOptions.ProfileDir <> '' then
       begin
-        ProfilePath := ProfilePathForTest(ACase.Id);
+        ProfilePath := ProfilePathForTest(ACase.Id, ACase.Mode);
         ForceHostDirectories(ExtractFileDir(ProfilePath));
       end;
 
@@ -1334,57 +1437,42 @@ begin
         TGocciaNativeFunctionValue.CreateWithoutPrototype(
           PrintHost.PrintValue, 'print', -1));
       Host.Install(Engine);
-      try
-        Engine.Execute;
-      except
-        on E: TGocciaTimeoutError do
-        begin
-          TimedOut := True;
-          ExecutionFailed := True;
-          ErrorName := 'Timeout';
-          Diagnostic := E.Message;
+      for I := 0 to HarnessPaths.Count - 1 do
+      begin
+        try
+          EvaluateTest262Script(Engine, HarnessSources[I], HarnessPaths[I]);
+        except
+          on E: Exception do
+          begin
+            RecordFailure(E, HarnessPaths[I], HarnessSources[I]);
+            FailedInclude := HarnessNames[I];
+            Break;
+          end;
         end;
-        on E: EGocciaBytecodeThrow do
-        begin
-          ExecutionFailed := True;
-          ErrorName := NegativeErrorName(Kind, E.ThrownValue);
-          DoNotEvaluateReached := IsDoNotEvaluateThrow(E.ThrownValue);
-          Diagnostic := FormatThrowDetail(E.ThrownValue, ACase.Path,
-            Source, False, Engine.ModuleLoader.DiagnosticScope.Principal,
-            E.Suggestion);
-        end;
-        on E: TGocciaThrowValue do
-        begin
-          ExecutionFailed := True;
-          ErrorName := NegativeErrorName(Kind, E.Value);
-          DoNotEvaluateReached := IsDoNotEvaluateThrow(E.Value);
-          Diagnostic := FormatThrowDetail(E.Value, ACase.Path, Source,
-            False, Engine.ModuleLoader.DiagnosticScope.Principal,
-            E.Suggestion);
-        end;
-        on E: TGocciaError do
-        begin
-          ExecutionFailed := True;
-          { Parse, early-error and module-linking failures arrive here, as
-            host-level errors. JS-level throws arrive as TGocciaThrowValue or
-            EGocciaBytecodeThrow above instead. }
-          HostError := True;
-          ErrorName := ErrorDisplayName(E);
-          Diagnostic := E.GetDetailedMessage(False);
-        end;
-        on E: Exception do
-        begin
-          ExecutionFailed := True;
-          HostError := True;
-          ErrorName := E.ClassName;
-          Diagnostic := E.ClassName + ': ' + E.Message;
+      end;
+      if not ExecutionFailed then
+      begin
+        try
+          Engine.Execute;
+        except
+          on E: Exception do
+            RecordFailure(E, ACase.Path, Source);
         end;
       end;
 
-      ClassifyResult(Kind, Metadata.NegativeType, PrintHost.Text,
-        ErrorName, Diagnostic, ExecutionFailed, TimedOut, HostError,
-        DoNotEvaluateReached, AResult.Status,
-        AResult.Message, AResult.Diagnostic);
+      if (FailedInclude <> '') and not TimedOut then
+      begin
+        { The test never ran, so this is no conformance result. }
+        AResult.Status := toWrapperInfra;
+        AResult.Message := 'harness include ' + FailedInclude + ' failed: ' +
+          FirstLine(Diagnostic);
+        AResult.Diagnostic := Copy(Diagnostic, 1, 800);
+      end
+      else
+        ClassifyResult(Kind, Metadata.NegativeType, PrintHost.Text,
+          ErrorName, Diagnostic, ExecutionFailed, TimedOut, HostError,
+          DoNotEvaluateReached, AResult.Status,
+          AResult.Message, AResult.Diagnostic);
     except
       on E: Exception do
       begin
@@ -1416,6 +1504,9 @@ begin
     PrintHost.Free;
     Host.Free;
     Engine.Free;
+    HarnessSources.Free;
+    HarnessPaths.Free;
+    HarnessNames.Free;
     Source.Free;
     Metadata.Free;
     AResult.DurationMs := Round(
@@ -1512,6 +1603,7 @@ begin
       if ChildPid < 0 then
       begin
         FResults[ResultIndex].Id := FCases[ResultIndex].Id;
+        FResults[ResultIndex].Mode := FCases[ResultIndex].Mode;
         FResults[ResultIndex].Status := toWrapperInfra;
         FResults[ResultIndex].Message := 'Unable to fork Test262 worker';
         FResults[ResultIndex].Diagnostic := FResults[ResultIndex].Message;
@@ -1592,6 +1684,8 @@ begin
       FResults[ResultIndex].Message := WorkerMessage;
       FResults[ResultIndex].Diagnostic := WorkerMessage;
     end;
+    { The worker result file does not carry the mode; the case owns it. }
+    FResults[ResultIndex].Mode := FCases[ResultIndex].Mode;
     DeleteFile(ResultPaths[Slot]);
     SlotPids[Slot] := 0;
     Dec(ActiveWorkers);
@@ -1628,6 +1722,7 @@ begin
         // still be writing this slot, so leave it allocated and never read it.
         FResults[I] := Default(TTest262Result);
         FResults[I].Id := FCases[I].Id;
+        FResults[I].Mode := FCases[I].Mode;
         if I <= High(Pool.Results) then
           FResults[I].Message := Pool.Results[I].ErrorMessage;
         if StartsStr('TIMEOUT', FResults[I].Message) then
@@ -1656,17 +1751,6 @@ begin
     Result := AId;
 end;
 
-function CountOutcome(const AResults: array of TTest262Result;
-  const AOutcome: TTest262Outcome): Integer;
-var
-  I: Integer;
-begin
-  Result := 0;
-  for I := 0 to High(AResults) do
-    if AResults[I].Status = AOutcome then
-      Inc(Result);
-end;
-
 function PercentageText(const ANumerator, ADenominator: Integer): string;
 begin
   if ADenominator = 0 then
@@ -1675,33 +1759,71 @@ begin
     ANumerator * 100.0 / ADenominator) + '%';
 end;
 
+procedure AddOutcome(var ACounts: TTest262Counts;
+  const AOutcome: TTest262Outcome);
+begin
+  Inc(ACounts.Run);
+  case AOutcome of
+    toPass: Inc(ACounts.Passed);
+    toFail: Inc(ACounts.Failed);
+    toWrapperInfra: Inc(ACounts.WrapperInfra);
+    toTimeout: Inc(ACounts.Timeouts);
+  end;
+end;
+
+function ModeCountsFor(
+  const AResults: array of TTest262Result): TTest262ModeCounts;
+var
+  I: Integer;
+begin
+  Result := Default(TTest262ModeCounts);
+  for I := 0 to High(AResults) do
+    AddOutcome(Result[AResults[I].Mode], AResults[I].Status);
+end;
+
+function CountsTotal(const ACounts: TTest262ModeCounts): TTest262Counts;
+var
+  Mode: TTest262RunMode;
+begin
+  Result := Default(TTest262Counts);
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+  begin
+    Inc(Result.Run, ACounts[Mode].Run);
+    Inc(Result.Passed, ACounts[Mode].Passed);
+    Inc(Result.Failed, ACounts[Mode].Failed);
+    Inc(Result.WrapperInfra, ACounts[Mode].WrapperInfra);
+    Inc(Result.Timeouts, ACounts[Mode].Timeouts);
+  end;
+end;
+
 procedure TTest262App.PrintSummary;
 var
-  Failed: Integer;
   I: Integer;
-  Infrastructure: Integer;
-  Passed: Integer;
-  TimedOut: Integer;
+  Mode: TTest262RunMode;
+  ModeCounts: TTest262ModeCounts;
+  Totals: TTest262Counts;
 begin
-  Passed := CountOutcome(FResults, toPass);
-  Failed := CountOutcome(FResults, toFail);
-  Infrastructure := CountOutcome(FResults, toWrapperInfra);
-  TimedOut := CountOutcome(FResults, toTimeout);
+  ModeCounts := ModeCountsFor(FResults);
+  Totals := CountsTotal(ModeCounts);
   WriteLn('');
   WriteLn('test262 conformance');
   WriteLn('  Discovered:       ', FTotalDiscovered);
   WriteLn('  Run:              ', Length(FResults));
-  WriteLn('  Passed:           ', Passed, ' (',
-    PercentageText(Passed, Length(FResults)), ')');
-  WriteLn('  Failed:           ', Failed);
-  WriteLn('  Wrapper infra:    ', Infrastructure);
-  WriteLn('  Timeouts:         ', TimedOut);
+  WriteLn('  Passed:           ', Totals.Passed, ' (',
+    PercentageText(Totals.Passed, Totals.Run), ')');
+  WriteLn('  Failed:           ', Totals.Failed);
+  WriteLn('  Wrapper infra:    ', Totals.WrapperInfra);
+  WriteLn('  Timeouts:         ', Totals.Timeouts);
   WriteLn('  Duration:         ',
     FormatFloat('0.0', FDurationNanoseconds / 1000000000), 's');
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+    WriteLn('  ', PadRight(RunModeName(Mode) + ' runs:', 18),
+      ModeCounts[Mode].Run, ', passed ', ModeCounts[Mode].Passed, ' (',
+      PercentageText(ModeCounts[Mode].Passed, ModeCounts[Mode].Run), ')');
   for I := 0 to High(FResults) do
     if FOptions.Verbose or (FResults[I].Status <> toPass) then
       WriteLn('  ', OutcomeName(FResults[I].Status), ' ',
-        FResults[I].Id,
+        FResults[I].Id, ' [', RunModeName(FResults[I].Mode), ']',
         IfThen(FResults[I].Message <> '', ': ' + FResults[I].Message, ''));
 end;
 
@@ -1710,49 +1832,77 @@ begin
   Result := QuoteJSONString(AValue);
 end;
 
-procedure BuildCategoryCounts(const AResults: array of TTest262Result;
-  const ACategories: TStrings; out ARun, APassed, AFailed,
-  AInfrastructure, ATimeouts: TIntegerArray);
+{ byMode always lists both modes, so a consumer never has to treat a missing
+  mode as zero. }
+function ModeCountsJSON(const ACounts: TTest262ModeCounts): string;
 var
-  Category: string;
+  Mode: TTest262RunMode;
+begin
+  Result := '{';
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+  begin
+    if Mode <> Low(TTest262RunMode) then
+      Result := Result + ', ';
+    Result := Result + JSONString(RunModeName(Mode)) + ': {' +
+      '"run": ' + IntToStr(ACounts[Mode].Run) +
+      ', "passed": ' + IntToStr(ACounts[Mode].Passed) +
+      ', "failed": ' + IntToStr(ACounts[Mode].Failed) +
+      ', "wrapperInfra": ' + IntToStr(ACounts[Mode].WrapperInfra) +
+      ', "timeouts": ' + IntToStr(ACounts[Mode].Timeouts) + '}';
+  end;
+  Result := Result + '}';
+end;
+
+{ The runs ExpandRunModes planned for this report, by mode. The shard merge
+  checks the results against them, so a run that is absent from the results
+  is an error rather than a smaller report, without the merge applying the
+  flag rules itself. }
+function ExpectedRunsJSON(
+  const ACounts: array of Integer): string;
+var
+  Mode: TTest262RunMode;
+begin
+  Result := '{';
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+  begin
+    if Mode <> Low(TTest262RunMode) then
+      Result := Result + ', ';
+    Result := Result + JSONString(RunModeName(Mode)) + ': ' +
+      IntToStr(ACounts[Ord(Mode)]);
+  end;
+  Result := Result + '}';
+end;
+
+procedure BuildCategoryCounts(const AResults: array of TTest262Result;
+  const ACategories: TStrings; var ACounts: array of TTest262ModeCounts);
+var
   CategoryIndex: Integer;
   I: Integer;
 begin
-  SetLength(ARun, ACategories.Count);
-  SetLength(APassed, ACategories.Count);
-  SetLength(AFailed, ACategories.Count);
-  SetLength(AInfrastructure, ACategories.Count);
-  SetLength(ATimeouts, ACategories.Count);
+  for I := 0 to High(ACounts) do
+    ACounts[I] := Default(TTest262ModeCounts);
   for I := 0 to High(AResults) do
   begin
-    Category := CategoryForId(AResults[I].Id);
-    CategoryIndex := ACategories.IndexOf(Category);
+    CategoryIndex := ACategories.IndexOf(CategoryForId(AResults[I].Id));
     if CategoryIndex < 0 then
       Continue;
-    Inc(ARun[CategoryIndex]);
-    case AResults[I].Status of
-      toPass: Inc(APassed[CategoryIndex]);
-      toFail: Inc(AFailed[CategoryIndex]);
-      toWrapperInfra: Inc(AInfrastructure[CategoryIndex]);
-      toTimeout: Inc(ATimeouts[CategoryIndex]);
-    end;
+    AddOutcome(ACounts[CategoryIndex][AResults[I].Mode], AResults[I].Status);
   end;
 end;
 
 procedure TTest262App.WriteReport;
 var
   Categories: TStringList;
-  CategoryFailed: TIntegerArray;
-  CategoryInfrastructure: TIntegerArray;
-  CategoryPassed: TIntegerArray;
-  CategoryRun: TIntegerArray;
-  CategoryTimeouts: TIntegerArray;
+  CategoryCounts: array of TTest262ModeCounts;
+  CategoryTotal: TTest262Counts;
   DurationSeconds: Double;
   I: Integer;
   Index: Integer;
   Lines: TStringList;
+  ModeCounts: TTest262ModeCounts;
   ReportedCategories: TStringList;
   Test262SHA: string;
+  Totals: TTest262Counts;
 begin
   if FOptions.OutputPath = '' then
     Exit;
@@ -1766,15 +1916,17 @@ begin
     Categories.DelimitedText := FOptions.Categories;
     for I := 0 to Categories.Count - 1 do
       Categories[I] := Trim(Categories[I]);
-    BuildCategoryCounts(FResults, Categories, CategoryRun, CategoryPassed,
-      CategoryFailed, CategoryInfrastructure, CategoryTimeouts);
+    ModeCounts := ModeCountsFor(FResults);
+    Totals := CountsTotal(ModeCounts);
+    SetLength(CategoryCounts, Categories.Count);
+    BuildCategoryCounts(FResults, Categories, CategoryCounts);
     DurationSeconds := FDurationNanoseconds / 1000000000;
     // Match the merged report: list only categories that ran, by name.
     ReportedCategories.CaseSensitive := True;
     ReportedCategories.Sorted := True;
     ReportedCategories.Duplicates := dupIgnore;
     for I := 0 to Categories.Count - 1 do
-      if CategoryRun[I] > 0 then
+      if CountsTotal(CategoryCounts[I]).Run > 0 then
         ReportedCategories.AddObject(Categories[I], TObject(PtrInt(I)));
 
     Lines.Add('{');
@@ -1782,29 +1934,34 @@ begin
     Lines.Add('    "totalDiscovered": ' + IntToStr(FTotalDiscovered) + ',');
     Lines.Add('    "totalRun": ' + IntToStr(Length(FResults)) + ',');
     Lines.Add('    "passed": ' +
-      IntToStr(CountOutcome(FResults, toPass)) + ',');
+      IntToStr(Totals.Passed) + ',');
     Lines.Add('    "failed": ' +
-      IntToStr(CountOutcome(FResults, toFail)) + ',');
+      IntToStr(Totals.Failed) + ',');
     Lines.Add('    "wrapperInfraFailures": ' +
-      IntToStr(CountOutcome(FResults, toWrapperInfra)) + ',');
+      IntToStr(Totals.WrapperInfra) + ',');
     Lines.Add('    "timeouts": ' +
-      IntToStr(CountOutcome(FResults, toTimeout)) + ',');
+      IntToStr(Totals.Timeouts) + ',');
     Lines.Add('    "durationSeconds": ' +
       Format('%.3f', [DurationSeconds], InvariantFormatSettings) + ',');
+    Lines.Add('    "byMode": ' + ModeCountsJSON(ModeCounts) + ',');
+    Lines.Add('    "expectedRuns": ' + ExpectedRunsJSON(FExpectedRuns) + ',');
     Lines.Add('    "byCategory": [');
     for I := 0 to ReportedCategories.Count - 1 do
     begin
       Index := Integer(PtrInt(ReportedCategories.Objects[I]));
+      CategoryTotal := CountsTotal(CategoryCounts[Index]);
       Lines.Add('      {');
       Lines.Add('        "category": ' +
         JSONString(ReportedCategories[I]) + ',');
-      Lines.Add('        "run": ' + IntToStr(CategoryRun[Index]) + ',');
-      Lines.Add('        "passed": ' + IntToStr(CategoryPassed[Index]) + ',');
-      Lines.Add('        "failed": ' + IntToStr(CategoryFailed[Index]) + ',');
+      Lines.Add('        "run": ' + IntToStr(CategoryTotal.Run) + ',');
+      Lines.Add('        "passed": ' + IntToStr(CategoryTotal.Passed) + ',');
+      Lines.Add('        "failed": ' + IntToStr(CategoryTotal.Failed) + ',');
       Lines.Add('        "wrapperInfra": ' +
-        IntToStr(CategoryInfrastructure[Index]) + ',');
+        IntToStr(CategoryTotal.WrapperInfra) + ',');
       Lines.Add('        "timeouts": ' +
-        IntToStr(CategoryTimeouts[Index]));
+        IntToStr(CategoryTotal.Timeouts) + ',');
+      Lines.Add('        "byMode": ' +
+        ModeCountsJSON(CategoryCounts[Index]));
       if I < ReportedCategories.Count - 1 then
         Lines.Add('      },')
       else
@@ -1817,6 +1974,8 @@ begin
     begin
       Lines.Add('    {');
       Lines.Add('      "id": ' + JSONString(FResults[I].Id) + ',');
+      Lines.Add('      "mode": ' + JSONString(RunModeName(FResults[I].Mode)) +
+        ',');
       Lines.Add('      "status": ' +
         JSONString(OutcomeName(FResults[I].Status)) + ',');
       Lines.Add('      "durationMs": ' +
@@ -1882,10 +2041,11 @@ begin
 end;
 
 function TTest262App.FailureCount: Integer;
+var
+  Totals: TTest262Counts;
 begin
-  Result := CountOutcome(FResults, toFail) +
-    CountOutcome(FResults, toWrapperInfra) +
-    CountOutcome(FResults, toTimeout);
+  Totals := CountsTotal(ModeCountsFor(FResults));
+  Result := Totals.Run - Totals.Passed;
 end;
 
 function TTest262App.RunHostEval: Integer;
@@ -1903,9 +2063,7 @@ begin
   PrintHost := nil;
   try
     EngineOptions := Default(TGocciaTest262EngineOptions);
-    EngineOptions.Compatibility := [cfASI, cfVar, cfFunction,
-      cfTraditionalFor, cfWhileLoops, cfLooseEquality, cfNonStrictMode,
-      cfArgumentsObject, cfLabel, cfForIn];
+    EngineOptions.Compatibility := TEST262_COMPATIBILITY;
     EngineOptions.UnsafeShadowRealm := True;
     EngineOptions.AgentCanSuspend := True;
     EngineOptions.SourceType := FOptions.HostEvalSourceType;
@@ -1984,7 +2142,9 @@ begin
   Discover;
   WriteLn('Discovered ', FTotalDiscovered, ' test files.');
   if FOptions.ShardCount > 0 then
-    WriteLn('Selected ', FCases.Count, ' tests for this shard.');
+    WriteLn('Selected ', FCases.Count, ' runs for this shard.')
+  else
+    WriteLn('Selected ', FCases.Count, ' runs.');
   ExecuteAll;
   WriteReport;
   PrintSummary;

@@ -53,6 +53,10 @@ const
   KEYWORD_ASSERTS      = 'asserts';
   KEYWORD_UNIQUE       = 'unique';
   KEYWORD_OUT          = 'out';
+  KEYWORD_DECLARE      = 'declare';
+  KEYWORD_MODULE       = 'module';
+  KEYWORD_GLOBAL       = 'global';
+  KEYWORD_NAMESPACE    = 'namespace';
   // Predefined types with no runtime type name (Goccia.Constants.TypeNames)
   KEYWORD_ANY          = 'any';
   KEYWORD_UNKNOWN      = 'unknown';

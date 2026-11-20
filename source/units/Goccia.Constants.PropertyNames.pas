@@ -209,6 +209,8 @@ const
   PROP_TEXT                = 'text';
   PROP_JSON                = 'json';
   PROP_ARRAY_BUFFER_METHOD = 'arrayBuffer';
+  PROP_BYTES               = 'bytes';
+  PROP_ENDINGS             = 'endings';
   PROP_METHOD              = 'method';
   PROP_SIGNAL              = 'signal';
   PROP_ABORT               = 'abort';

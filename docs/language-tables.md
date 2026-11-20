@@ -6,7 +6,7 @@
 
 - **Profile table** — Implemented semantics, recommended defaults, exposure paths, and standards sources are separate fields
 - **Generated evidence** — Core ECMAScript coverage is tracked by generated test262 reports rather than a hand-maintained feature inventory
-- **Annex B policy** — Browser-only legacy Annex B semantics are not a pre-1.0 target; selected existing shims remain documented individually
+- **Annex B policy** — Annex B is part of the test262 conformance target; new Annex B surfaces go behind a compatibility flag, and the ones that already ship stay as they are
 - **Parser policy** — Disabled parser syntax is a `SyntaxError` by default; `--warning-unsupported-features` restores warning/no-op recovery without enabling compatibility semantics
 - **Beyond core ECMAScript** — Separate tables cover Web Platform APIs and active TC39 proposals
 - **Canonical source** — Detailed semantics, examples, and rationale live in [language.md](language.md)
@@ -29,7 +29,7 @@ profile exposes them, not whether the engine contains their semantics.
 | `arguments` | Yes | Disabled | `--compat-arguments-object`; mapped semantics also require non-strict Script source | ECMA-262 core |
 | non-strict Script semantics | Yes | Strict by default | `--compat-non-strict-mode`; modules remain strict | ECMA-262 core |
 | `with` | Yes | Disabled | `--compat-non-strict-mode` in Script source | ECMA-262 core |
-| `eval` | Yes | Not installed | Private `GocciaTest262Runner` conformance host only | ECMA-262 core |
+| `eval` | Yes | Not installed | Engine option `EnableEval(Engine)` only; no CLI flag or config key ([Embedding](embedding.md#changing-the-defaults)) | ECMA-262 core |
 | `Function()` | Yes | Disabled | `--unsafe-function-constructor` | ECMA-262 core |
 | `ShadowRealm` | Yes | Not installed | `--unsafe-shadowrealm` | TC39 Stage 2.7 |
 
@@ -41,9 +41,11 @@ hand-maintained list of implemented features. See the
 current results and [language.md](language.md) for detailed semantics and
 profile policy.
 
-Browser-only legacy Annex B semantics are not a pre-1.0 target. Existing
-selected shims remain documented individually; see
-[ADR 0085](adr/0085-defer-annex-b-before-1-0.md).
+Annex B's legacy browser features are part of the test262 conformance target.
+New Annex B surfaces will go behind a compatibility flag, added by the 0.18.0
+Annex B work, that the test262 runner turns on, and the ones that already ship
+stay as they are; see
+[ADR 0177](adr/0177-annex-b-is-part-of-the-test262-conformance-target.md).
 
 ## Web Platform APIs
 
@@ -60,6 +62,7 @@ APIs from WHATWG and W3C specifications — not part of ECMA-262, but widely exp
 | `URLSearchParams` | [WHATWG URL §6](https://url.spec.whatwg.org/#urlsearchparams) | Supported |
 | `TextEncoder` | [WHATWG Encoding §7.4](https://encoding.spec.whatwg.org/#interface-textencoder) | Supported |
 | `TextDecoder` | [WHATWG Encoding §7.2](https://encoding.spec.whatwg.org/#interface-textdecoder) | Supported |
+| `Blob` | [File API §3](https://w3c.github.io/FileAPI/#blob-section) | Supported (no `stream`/`textStream`: no `ReadableStream`) |
 | `performance.now`, `timeOrigin` | [High Resolution Time](https://w3c.github.io/hr-time/#dom-performance-now) | Supported |
 | `EventTarget`, `Event` | [WHATWG DOM §2](https://dom.spec.whatwg.org/#events) | Supported subset (single-target dispatch; no propagation) |
 | `AbortController`, `AbortSignal` | [WHATWG DOM §3](https://dom.spec.whatwg.org/#aborting-ongoing-activities) | Supported subset (fetch-scoped; `abort` event and `onabort`; no `any`) |

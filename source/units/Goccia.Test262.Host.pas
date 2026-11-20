@@ -5,10 +5,13 @@ unit Goccia.Test262.Host;
 interface
 
 uses
+  Classes,
+
   Goccia.Capabilities,
   Goccia.Engine,
   Goccia.HostEnvironment,
-  Goccia.SourcePipeline;
+  Goccia.SourcePipeline,
+  Goccia.Values.Primitives;
 
 type
   TGocciaTest262EngineOptions = record
@@ -42,11 +45,19 @@ procedure ConfigureTest262Engine(const AEngine: TGocciaEngine;
   const AOptions: TGocciaTest262EngineOptions;
   const AParentEnvironment: TGocciaHostEnvironment = nil);
 function Test262SourceCanSuspendAgent(const APath: string): Boolean;
+{ Parses ASourceLines as a Script under AEngine's language profile and
+  evaluates it in AEngine's realm, as its own global Script: its directive
+  prologue alone decides its strictness, and its global declarations share
+  the realm's global environment with every other Script evaluated there.
+  ASourcePath names the Script in diagnostics. Raises what parsing, global
+  declaration instantiation or evaluation raises. $262.evalScript and the
+  runner's harness includes both evaluate through it. }
+function EvaluateTest262Script(const AEngine: TGocciaEngine;
+  const ASourceLines: TStringList; const ASourcePath: string): TGocciaValue;
 
 implementation
 
 uses
-  Classes,
   Generics.Collections,
   StrUtils,
   SysUtils,
@@ -57,6 +68,7 @@ uses
 
   Goccia.Arguments.Collection,
   Goccia.Builtins.Atomics,
+  Goccia.Builtins.GlobalEval,
   Goccia.Builtins.GlobalShadowRealm,
   Goccia.Error,
   Goccia.ExecutionContext,
@@ -65,7 +77,6 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.Modules,
   Goccia.Modules.ContentProvider,
-  Goccia.Scope.Redeclaration,
   Goccia.StackLimit,
   Goccia.TextFiles,
   Goccia.Threading,
@@ -74,9 +85,7 @@ uses
   Goccia.Values.ErrorHelper,
   Goccia.Values.FunctionBase,
   Goccia.Values.NativeFunction,
-  Goccia.Values.ObjectPropertyDescriptor,
   Goccia.Values.ObjectValue,
-  Goccia.Values.Primitives,
   Goccia.VM.Exception;
 
 type
@@ -85,8 +94,17 @@ type
   TTest262AgentThread = class;
   TTest262HostImplementation = class;
 
-  TGocciaTest262IsHTMLDDAValue = class(TGocciaObjectValue)
+  { $262.IsHTMLDDA as test262's INTERPRETING.md defines it: an object with
+    an [[IsHTMLDDA]] internal slot (ES2026 §B.3.6) that returns null when
+    called with no arguments or with "". The String.prototype method tests
+    pass it as a custom matcher and read it through GetMethod, which throws
+    unless it is callable. }
+  TGocciaTest262IsHTMLDDAValue = class(TGocciaNativeFunctionValue)
+  private
+    function ReturnNull(const AArgs: TGocciaArgumentsCollection;
+      const AThisValue: TGocciaValue): TGocciaValue;
   public
+    constructor CreateHost;
     function HasHTMLDDAInternalSlot: Boolean; override;
     function TypeOf: string; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
@@ -97,8 +115,6 @@ type
     FEngine: TGocciaEngine;
   public
     constructor Create(const AEngine: TGocciaEngine);
-    function Eval(const AArgs: TGocciaArgumentsCollection;
-      const AThisValue: TGocciaValue): TGocciaValue;
     function EvalScript(const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue): TGocciaValue;
   end;
@@ -183,17 +199,6 @@ type
       const ASourceText: string);
   end;
 
-  TTest262ModuleContentProvider =
-    class(TGocciaFileSystemModuleContentProvider)
-  private
-    function BuildHarnessPrelude(const APath, ASource: string): string;
-    function FindSuiteRoot(const APath: string): string;
-    function HarnessFilePath(const ASuiteRoot, AName: string): string;
-    function ShouldPrependHarness(const APath: string): Boolean;
-  public
-    function LoadContent(const APath: string): TGocciaModuleContent; override;
-  end;
-
 procedure ConfigureTest262Engine(const AEngine: TGocciaEngine;
   const AOptions: TGocciaTest262EngineOptions;
   const AParentEnvironment: TGocciaHostEnvironment);
@@ -210,28 +215,16 @@ begin
   AEngine.ExperimentalJSModuleSourceEnabled :=
     AOptions.ExperimentalJSModuleSourceEnabled;
   AEngine.SourceType := AOptions.SourceType;
+  { test262 runs eval through the engine's supported option, the one an
+    embedder uses, rather than a conformance-only copy. }
   AEngine.FunctionConstructor.Enabled := True;
+  EnableEval(AEngine);
   if AOptions.UnsafeShadowRealm then
     EnableShadowRealm(AEngine);
   SetAtomicsAgentCanSuspend(AOptions.AgentCanSuspend);
   AEngine.ModuleLoader.SetContentProvider(
-    TTest262ModuleContentProvider.Create, True);
+    TGocciaFileSystemModuleContentProvider.Create, True);
   AEngine.GlobalBackedTopLevel := AOptions.SourceType = stScript;
-end;
-
-procedure InstallTest262EvalGlobal(const AEngine: TGocciaEngine;
-  const AEvalHost: TTest262EvalHost);
-var
-  EvalFunction: TGocciaNativeFunctionValue;
-  GlobalObject: TGocciaObjectValue;
-begin
-  EvalFunction := TGocciaNativeFunctionValue.CreateWithoutPrototype(
-    AEvalHost.Eval, 'eval', 1);
-  InstallRealmEvalFunction(AEngine.Realm, EvalFunction);
-  GlobalObject := TGocciaObjectValue(AEngine.Realm.GlobalObject);
-  GlobalObject.DefineProperty('eval',
-    TGocciaPropertyDescriptorData.Create(EvalFunction,
-      [pfWritable, pfConfigurable]));
 end;
 
 procedure InstallTest262HostGlobals(const AEngine: TGocciaEngine;
@@ -252,11 +245,22 @@ begin
   Test262Object.AssignProperty('abstractModuleSourcePrototype',
     TGocciaModuleSourceValue.SharedPrototype);
   Test262Object.AssignProperty('isHTMLDDA',
-    TGocciaTest262IsHTMLDDAValue.Create);
+    TGocciaTest262IsHTMLDDAValue.CreateHost);
   Test262Object.AssignProperty('agent', AHost.CreateAgentObject);
   AEngine.GocciaGlobal.AssignProperty('test262', Test262Object);
   AEngine.RefreshGlobalThis;
-  InstallTest262EvalGlobal(AEngine, AEvalHost);
+end;
+
+constructor TGocciaTest262IsHTMLDDAValue.CreateHost;
+begin
+  inherited CreateWithoutPrototype(ReturnNull, '', 0);
+end;
+
+function TGocciaTest262IsHTMLDDAValue.ReturnNull(
+  const AArgs: TGocciaArgumentsCollection;
+  const AThisValue: TGocciaValue): TGocciaValue;
+begin
+  Result := TGocciaNullLiteralValue.NullValue;
 end;
 
 function TGocciaTest262IsHTMLDDAValue.HasHTMLDDAInternalSlot: Boolean;
@@ -281,36 +285,50 @@ begin
   FEngine := AEngine;
 end;
 
-// ES2026 §19.2.1.1.1 eval ( x ), called indirectly: PerformEval(x, false,
-// false) in this host's realm. A direct eval never reaches this function; the
-// VM evaluates it at the call site.
-function TTest262EvalHost.Eval(const AArgs: TGocciaArgumentsCollection;
-  const AThisValue: TGocciaValue): TGocciaValue;
+function EvaluateTest262Script(const AEngine: TGocciaEngine;
+  const ASourceLines: TStringList; const ASourcePath: string): TGocciaValue;
 var
-  SourceValue: TGocciaValue;
-  Stage: TGocciaGlobalEvalStage;
+  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
+  ScriptOptions: TGocciaSourcePipelineOptions;
+  PipelineResult: TGocciaSourcePipelineResult;
+  RealmScope: TGocciaExecutionContextScope;
 begin
-  if AArgs.Length = 0 then
-    Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
-  SourceValue := AArgs.GetElement(0);
-  if not (SourceValue is TGocciaStringLiteralValue) then
-    Exit(SourceValue);
-  Result := FEngine.EvaluateGlobalEval(
-    TGocciaStringLiteralValue(SourceValue).Value, '<test262-realm-eval>',
-    Stage);
+  ScriptOptions := TGocciaSourcePipeline.DefaultOptions;
+  ScriptOptions.Preprocessors := AEngine.Preprocessors;
+  ScriptOptions.Compatibility := AEngine.Compatibility;
+  ScriptOptions.LabelStatementsEnabled := AEngine.LabelStatementsEnabled;
+  ScriptOptions.ForInLoopsEnabled := AEngine.ForInLoopsEnabled;
+  ScriptOptions.ExperimentalJSModuleSourceEnabled :=
+    AEngine.ExperimentalJSModuleSourceEnabled;
+  ScriptOptions.WarningUnsupportedFeatures :=
+    AEngine.WarningUnsupportedFeatures;
+  ScriptOptions.SourceType := stScript;
+  ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(ScriptOptions);
+  try
+    RealmScope := AEngine.ActivateRealmExecutionContext;
+    try
+      PipelineResult := TGocciaSourcePipeline.Parse(ASourceLines,
+        ASourcePath, ScriptOptions);
+      try
+        Result := AEngine.ExecuteScriptProgram(PipelineResult.ProgramNode,
+          ASourcePath);
+      finally
+        PipelineResult.Free;
+      end;
+    finally
+      RealmScope.Free;
+    end;
+  finally
+    ActiveOptionsScope.Free;
+  end;
 end;
 
 function TTest262EvalHost.EvalScript(
   const AArgs: TGocciaArgumentsCollection;
   const AThisValue: TGocciaValue): TGocciaValue;
 var
-  ActiveOptionsScope: TGocciaSourcePipelineOptionsScope;
-  ScriptOptions: TGocciaSourcePipelineOptions;
   ScriptSource: TStringList;
-  PipelineResult: TGocciaSourcePipelineResult;
-  RealmScope: TGocciaExecutionContextScope;
   SourceValue: TGocciaValue;
-  SourceText: string;
 begin
   if AArgs.Length = 0 then
     Exit(TGocciaUndefinedLiteralValue.UndefinedValue);
@@ -318,38 +336,11 @@ begin
   if not (SourceValue is TGocciaStringLiteralValue) then
     Exit(SourceValue);
 
-  SourceText := TGocciaStringLiteralValue(SourceValue).Value;
-  ScriptSource := CreateECMAScriptSourceLines(SourceText);
+  ScriptSource := CreateECMAScriptSourceLines(
+    TGocciaStringLiteralValue(SourceValue).Value);
   try
-    ScriptOptions := TGocciaSourcePipeline.DefaultOptions;
-    ScriptOptions.Preprocessors := FEngine.Preprocessors;
-    ScriptOptions.Compatibility := FEngine.Compatibility;
-    ScriptOptions.LabelStatementsEnabled := FEngine.LabelStatementsEnabled;
-    ScriptOptions.ForInLoopsEnabled := FEngine.ForInLoopsEnabled;
-    ScriptOptions.ExperimentalJSModuleSourceEnabled :=
-      FEngine.ExperimentalJSModuleSourceEnabled;
-    ScriptOptions.WarningUnsupportedFeatures :=
-      FEngine.WarningUnsupportedFeatures;
-    ScriptOptions.SourceType := stScript;
-    ActiveOptionsScope := TGocciaSourcePipeline.ActivateOptions(ScriptOptions);
-    try
-      RealmScope := FEngine.ActivateRealmExecutionContext;
-      try
-        PipelineResult := TGocciaSourcePipeline.Parse(ScriptSource,
-          '<test262-eval-script>', ScriptOptions);
-        try
-          CheckTopLevelRedeclarations(PipelineResult.ProgramNode,
-            FEngine.GlobalScope, '<test262-eval-script>');
-          Result := FEngine.ExecuteProgram(PipelineResult.ProgramNode);
-        finally
-          PipelineResult.Free;
-        end;
-      finally
-        RealmScope.Free;
-      end;
-    finally
-      ActiveOptionsScope.Free;
-    end;
+    Result := EvaluateTest262Script(FEngine, ScriptSource,
+      '<test262-eval-script>');
   finally
     ScriptSource.Free;
   end;
@@ -797,234 +788,6 @@ begin
        (Result[Length(Result)] = '''')) or
       ((Result[1] = '"') and (Result[Length(Result)] = '"'))) then
     Result := Copy(Result, 2, Length(Result) - 2);
-end;
-
-procedure AddTest262ListItem(const AItems: TStrings; const AValue: string);
-var
-  Item: string;
-begin
-  Item := NormalizeTest262ListItem(AValue);
-  if (Item <> '') and (AItems.IndexOf(Item) < 0) then
-    AItems.Add(Item);
-end;
-
-procedure AddTest262InlineList(const AItems: TStrings; const AValue: string);
-var
-  DelimiterPos: Integer;
-  Item: string;
-  ListText: string;
-begin
-  ListText := Trim(AValue);
-  if ListText = '' then
-    Exit;
-  if ListText[1] = '[' then
-  begin
-    Delete(ListText, 1, 1);
-    DelimiterPos := Pos(']', ListText);
-    if DelimiterPos > 0 then
-      ListText := Copy(ListText, 1, DelimiterPos - 1);
-  end;
-  repeat
-    DelimiterPos := Pos(',', ListText);
-    if DelimiterPos > 0 then
-    begin
-      Item := Copy(ListText, 1, DelimiterPos - 1);
-      Delete(ListText, 1, DelimiterPos);
-    end
-    else
-    begin
-      Item := ListText;
-      ListText := '';
-    end;
-    AddTest262ListItem(AItems, Item);
-  until DelimiterPos = 0;
-end;
-
-procedure ReadTest262Frontmatter(const ASource: string;
-  const AIncludes: TStrings; out ARaw: Boolean);
-var
-  Block: string;
-  ClosePos: NativeInt;
-  ColonPos: NativeInt;
-  Key: string;
-  Line: string;
-  Lines: TStringList;
-  OpenPos: NativeInt;
-  Trimmed: string;
-  Value: string;
-  InFlags: Boolean;
-  InIncludes: Boolean;
-begin
-  ARaw := False;
-  OpenPos := Pos('/*---', ASource);
-  if OpenPos <= 0 then
-    Exit;
-  ClosePos := PosEx('---*/', ASource, OpenPos + Length('/*---'));
-  if ClosePos <= OpenPos then
-    Exit;
-  Block := Copy(ASource, OpenPos + Length('/*---'),
-    ClosePos - OpenPos - Length('/*---'));
-  Lines := TStringList.Create;
-  try
-    Lines.Text := Block;
-    InFlags := False;
-    InIncludes := False;
-    for Line in Lines do
-    begin
-      Trimmed := Trim(Line);
-      if Trimmed = '' then
-        Continue;
-      if (Line[1] <> ' ') and (Line[1] <> #9) then
-      begin
-        ColonPos := Pos(':', Line);
-        if ColonPos <= 0 then
-        begin
-          InFlags := False;
-          InIncludes := False;
-          Continue;
-        end;
-        Key := Trim(Copy(Line, 1, ColonPos - 1));
-        Value := Trim(Copy(Line, ColonPos + 1, MaxInt));
-        InFlags := Key = 'flags';
-        InIncludes := Key = 'includes';
-        if InFlags then
-          ARaw := Pos('raw', Value) > 0
-        else if InIncludes then
-          AddTest262InlineList(AIncludes, Value);
-        Continue;
-      end;
-      if (InIncludes or InFlags) and StartsStr('-', Trimmed) then
-      begin
-        Value := Trim(Copy(Trimmed, 2, MaxInt));
-        if InFlags then
-          ARaw := ARaw or (NormalizeTest262ListItem(Value) = 'raw')
-        else
-          AddTest262ListItem(AIncludes, Value);
-      end;
-    end;
-  finally
-    Lines.Free;
-  end;
-end;
-
-function TTest262ModuleContentProvider.FindSuiteRoot(
-  const APath: string): string;
-var
-  Candidate: string;
-  DirectoryPath: string;
-  ParentDirectory: string;
-begin
-  Result := '';
-  DirectoryPath := ExcludeTrailingPathDelimiter(
-    ExtractFilePath(ExpandFileName(APath)));
-  while DirectoryPath <> '' do
-  begin
-    Candidate := IncludeTrailingPathDelimiter(DirectoryPath) +
-      'harness' + PathDelim + 'assert.js';
-    if FileExists(Candidate) and
-       DirectoryExists(IncludeTrailingPathDelimiter(DirectoryPath) +
-         'test') then
-      Exit(DirectoryPath);
-    ParentDirectory := ExtractFileDir(DirectoryPath);
-    if (ParentDirectory = '') or (ParentDirectory = DirectoryPath) then
-      Break;
-    DirectoryPath := ParentDirectory;
-  end;
-end;
-
-function TTest262ModuleContentProvider.HarnessFilePath(
-  const ASuiteRoot, AName: string): string;
-var
-  BundledPath: string;
-begin
-  if (AName = '$262.js') or (AName = 'goccia-global-shim.js') then
-  begin
-    BundledPath := ExpandFileName('scripts' + PathDelim +
-      'test262_harness' + PathDelim + AName);
-    if FileExists(BundledPath) then
-      Exit(BundledPath);
-  end;
-  Result := IncludeTrailingPathDelimiter(ASuiteRoot) + 'harness' +
-    PathDelim + AName;
-end;
-
-function TTest262ModuleContentProvider.ShouldPrependHarness(
-  const APath: string): Boolean;
-var
-  AbsolutePath: string;
-  SuiteRoot: string;
-  TestRoot: string;
-begin
-  if LowerCase(ExtractFileExt(APath)) <> '.js' then
-    Exit(False);
-  if EndsStr('_FIXTURE.js', ExtractFileName(APath)) then
-    Exit(False);
-  SuiteRoot := FindSuiteRoot(APath);
-  if SuiteRoot = '' then
-    Exit(False);
-  AbsolutePath := ExpandFileName(APath);
-  TestRoot := IncludeTrailingPathDelimiter(SuiteRoot) + 'test' + PathDelim;
-  Result := StartsStr(TestRoot, AbsolutePath);
-end;
-
-function TTest262ModuleContentProvider.BuildHarnessPrelude(
-  const APath, ASource: string): string;
-var
-  I: Integer;
-  IncludeName: string;
-  Includes: TStringList;
-  Raw: Boolean;
-  SuiteRoot: string;
-begin
-  Result := '';
-  SuiteRoot := FindSuiteRoot(APath);
-  if SuiteRoot = '' then
-    Exit;
-  Includes := TStringList.Create;
-  try
-    Includes.Add('$262.js');
-    Includes.Add('sta.js');
-    Includes.Add('assert.js');
-    ReadTest262Frontmatter(ASource, Includes, Raw);
-    if Raw then
-      Exit;
-    for I := 0 to Includes.Count - 1 do
-    begin
-      IncludeName := Includes[I];
-      if Result <> '' then
-        Result := Result + sLineBreak;
-      Result := Result + ReadUTF8FileText(
-        HarnessFilePath(SuiteRoot, IncludeName));
-    end;
-    if Result <> '' then
-      Result := Result + sLineBreak + ReadUTF8FileText(
-        HarnessFilePath(SuiteRoot, 'goccia-global-shim.js'));
-  finally
-    Includes.Free;
-  end;
-end;
-
-function TTest262ModuleContentProvider.LoadContent(
-  const APath: string): TGocciaModuleContent;
-var
-  HarnessPrelude: string;
-  OriginalContent: TGocciaModuleContent;
-begin
-  OriginalContent := inherited LoadContent(APath);
-  if not ShouldPrependHarness(APath) then
-    Exit(OriginalContent);
-  try
-    HarnessPrelude := BuildHarnessPrelude(APath, OriginalContent.Text);
-    if HarnessPrelude = '' then
-      Exit(OriginalContent);
-    Result := TGocciaModuleContent.Create(HarnessPrelude + sLineBreak +
-      OriginalContent.Text, OriginalContent.LastModified,
-      OriginalContent.CanonicalIdentity, OriginalContent.IdentityRequired);
-  except
-    OriginalContent.Free;
-    raise;
-  end;
-  OriginalContent.Free;
 end;
 
 function Test262SourceCanSuspendAgent(const APath: string): Boolean;

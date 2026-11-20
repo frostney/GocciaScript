@@ -302,7 +302,7 @@ type TimedProfile = { name: string; calls: number; selfTimeNs: number; totalTime
  * once per recursive frame exceeds `<module>`'s total several times over. */
 /** `calls` names each recursive function with its expected call count, or
  * `undefined` where the count is not pinned. */
-const RECURSIVE_SCRIPTS: Record<string, { source: string[]; calls: Record<string, number | undefined> }> = {
+const RECURSIVE_SCRIPTS: Record<string, { source: string[]; calls: Record<string, number | undefined>; suspendsModule?: boolean }> = {
   direct: {
     source: [
       "const fib = (n) => n < 2 ? n : fib(n - 1) + fib(n - 2);",
@@ -346,16 +346,17 @@ const RECURSIVE_SCRIPTS: Record<string, { source: string[]; calls: Record<string
     ],
     // 410 calls, plus 400 resumptions after an await, which count as calls.
     calls: { work: 810 },
+    suspendsModule: true,
   },
 };
 
 /** Total time counts each function once per outermost activation (#1941):
- * no function's total exceeds `<module>`'s, which contains every call, and
- * the self times, which partition the profiled time, add up to it. */
+ * no function's total exceeds the profiled time. When the module does not
+ * suspend, its total also equals the sum of the self times. */
 export function verifyRecursiveTotals(): void {
   const tmp = mkdtemp("goccia-profiling-totals-");
   try {
-    for (const [label, { source, calls }] of Object.entries(RECURSIVE_SCRIPTS)) {
+    for (const [label, { source, calls, suspendsModule }] of Object.entries(RECURSIVE_SCRIPTS)) {
       const script = join(tmp, `${label}.js`);
       const output = join(tmp, `${label}.json`);
       writeFileSync(script, source.join("\n") + "\n");
@@ -370,14 +371,16 @@ export function verifyRecursiveTotals(): void {
         throw new Error(`${label}: expected one <module> call: ${JSON.stringify(modules)}`);
       const moduleTotal = modules[0].totalTimeNs;
       const selfSum = functions.reduce((sum, entry) => sum + entry.selfTimeNs, 0);
-      // Every frame here runs inside <module>'s, so its self times partition
-      // <module>'s total exactly; the slack only absorbs timer granularity.
+      // Synchronous frames partition <module>'s total. In the async Module,
+      // Await suspends that context: jobs can run without its frame below
+      // them (ECMA-262 Await), so their self time is outside its total.
       const slack = 1_000;
-      if (Math.abs(selfSum - moduleTotal) > slack)
+      if (!suspendsModule && Math.abs(selfSum - moduleTotal) > slack)
         throw new Error(`${label}: self times sum to ${selfSum} ns, <module> totals ${moduleTotal} ns`);
       for (const entry of functions) {
-        if (entry.totalTimeNs > moduleTotal + slack)
-          throw new Error(`${label}: ${entry.name} totals ${entry.totalTimeNs} ns, more than <module>'s ${moduleTotal} ns`);
+        const profiledTotal = suspendsModule ? selfSum : moduleTotal;
+        if (entry.totalTimeNs > profiledTotal + slack)
+          throw new Error(`${label}: ${entry.name} totals ${entry.totalTimeNs} ns, more than profiled time ${profiledTotal} ns`);
         if (entry.totalTimeNs < entry.selfTimeNs)
           throw new Error(`${label}: ${entry.name} totals ${entry.totalTimeNs} ns, less than its self time ${entry.selfTimeNs} ns`);
       }
@@ -389,6 +392,66 @@ export function verifyRecursiveTotals(): void {
           throw new Error(`${label}: ${name} must recurse and record time: ${JSON.stringify(entry)}`);
       }
     }
+  } finally {
+    clean(tmp);
+  }
+}
+
+/** Module evaluation counts once across awaits; parser retries never execute. */
+export function verifyModuleProfiles(): void {
+  const tmp = mkdtemp("goccia-module-profile-");
+  try {
+    const run = (source: string, name: string, flags: string[] = []) => {
+      const script = join(tmp, `${name}.js`);
+      const output = join(tmp, `${name}.json`);
+      writeFileSync(script, source + "\n");
+      const proc = Bun.spawnSync([resolve(RUNNER), script, "--profile=all",
+        "--profile-deterministic", `--profile-output=${output}`, ...flags],
+        { stdout: "pipe", stderr: "pipe", timeout: 30_000 });
+      if (proc.exitCode !== 0)
+        throw new Error(`${name}: profiling exited ${proc.exitCode}: ${proc.stdout}\n${proc.stderr}`);
+      return JSON.parse(readFileSync(output, "utf8"));
+    };
+    const failures: string[] = [];
+    const cases = [
+      ["once", "await 0;"],
+      ["many", "await 0; await 0; await 0;"],
+      ["caught", "try { await Promise.reject(1); } catch {} await 0;"],
+      ["nested", "await 0; const work = async () => { await 0; }; await work(); await work();"],
+      ["generator", "await 0; const obj = { *values() { yield 1; yield 2; } }; for (const x of obj.values()) {} await 0;"],
+    ];
+    for (const [name, source] of cases) {
+      for (const flags of [[], ["--source-type=module"]]) {
+        const profile = run(source, name, flags);
+        const modules = profile.functions.filter((entry: TimedProfile) => entry.name === "<module>");
+        if (modules.length !== 1 || modules[0].calls !== 1)
+          failures.push(`${name} ${flags.join(" ") || "detect"}: expected one module evaluation: ${JSON.stringify(modules)}`);
+        const functionCalls = name === "nested" ? ["work", 4] : name === "generator" ? ["values", 3] : undefined;
+        if (functionCalls && profile.functions.find((entry: TimedProfile) => entry.name === functionCalls[0])?.calls !== functionCalls[1])
+          failures.push(`${name}: nested function resumptions lost their call counts`);
+      }
+    }
+    // Importing the same async dependency twice must still evaluate it once.
+    writeFileSync(join(tmp, "dependency.js"), "await 0; await 0; export const value = 1;\n");
+    const imported = run('await import("./dependency.js"); await import("./dependency.js");', "imports");
+    const modules = imported.functions.filter((entry: TimedProfile) => entry.name === "<module>");
+    if (modules.length !== 2 || modules.some((entry: TimedProfile) => entry.calls !== 1))
+      failures.push(`imports: expected one evaluation per module: ${JSON.stringify(modules)}`);
+
+    // The two- and three-pass detection paths produce exactly the explicit
+    // Script's runtime counters. Compile counters intentionally measure the
+    // actual parser work, including retries, and are not execution traces.
+    for (const [name, source, flags] of [
+      ["fallback", "const await = {0: 1}; await[0];", []],
+      ["nonstrict", "globalThis.await = {0: 1}; await[0]; delete missing;", ["--compat-non-strict-mode"]],
+    ] as const) {
+      const detected = run(source, name, [...flags]);
+      const explicit = run(source, name, [...flags, "--source-type=script"]);
+      for (const section of ["functions", "opcodes", "opcodePairs", "scalarFastPath"])
+        if (JSON.stringify(detected[section]) !== JSON.stringify(explicit[section]))
+          failures.push(`${name}: parser retry changed runtime ${section}`);
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
   } finally {
     clean(tmp);
   }

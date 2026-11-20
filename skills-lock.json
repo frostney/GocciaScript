@@ -5,7 +5,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "address-feedback/SKILL.md",
-      "computedHash": "259b63911744c12832874c16c2117517fbe956ac3b3da166dc75e656315b511c"
+      "computedHash": "9fed4f8d8e68985ec2dceda9461802f6c75453d14b4380876b834982638f37ce"
     },
     "agent-writing": {
       "source": "frostney/known-good-route",
@@ -119,7 +119,7 @@
       "source": "frostney/known-good-route",
       "sourceType": "github",
       "skillPath": "native-nostalgia-stack/SKILL.md",
-      "computedHash": "11b9f0228c49653652f7254a8f6ff5aaf4f57971ed9a9cb499a48127eedc93ee"
+      "computedHash": "79fcedebfc2b3a3b25357372b0d9bddd585d304c50c21bf5b682380fcef43a96"
     },
     "project-structure": {
       "source": "frostney/known-good-route",

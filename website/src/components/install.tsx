@@ -227,9 +227,10 @@ export function Install({
                 Get Goccia<em>Script</em> on your machine.
               </h1>
               <p>
-                Pick the install method that fits your platform. The runtime is
-                a single self-contained binary — no Node.js, no toolchain, no
-                global state.
+                Pick the install method that fits your platform. Each release
+                ships native binaries with GocciaScript&apos;s own compiler, VM
+                and garbage collector, and no Node.js or other runtime
+                underneath.
               </p>
             </div>
           </div>
@@ -418,8 +419,9 @@ export function Install({
               <code>$PATH</code> at <code>./build</code>.
             </p>
             <p>
-              Delphi 12 Community Edition is also supported for the complete
-              shipped Win32 and Win64 application matrix. Open the repository
+              Delphi 12 Community Edition is also supported for the Win32 and
+              Win64 application matrix: the REPL, Runner, Bare Script Loader,
+              Test Runner, Benchmark Runner and Bundler. Open the repository
               project group and follow the{" "}
               <Link href="/docs/build-system">build and validation guide</Link>.
             </p>
