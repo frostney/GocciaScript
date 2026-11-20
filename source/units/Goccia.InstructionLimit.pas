@@ -61,6 +61,10 @@ procedure CheckInstructionLimit;
   requested abort. Goccia.Timeout's CheckExecutionTimeout calls it from the
   slow path of a native loop's poll, one unit per element. }
 procedure SpendInstructions(const ACount: Int64);
+{ IncrementInstructionCounter through a captured handle: no thread-variable
+  lookup. The caller has checked InstructionLimitActive. }
+procedure IncrementInstructionCounterState(
+  const AState: PGocciaInstructionLimitState); {$IFDEF FPC}inline;{$ENDIF}
 { CheckInstructionLimit through a captured handle: no thread-variable lookup.
   Goccia.ThreadPolls keeps the handle beside the InstructionLimitActive
   flag. }
@@ -195,6 +199,9 @@ procedure PushInstructionLimitScope(const AMaxInstructions: Int64);
 var
   Index: Integer;
 begin
+  // Native polls not yet spent belong to the scopes active until now.
+  if GInstructionLimitState.Active then
+    Inc(GInstructionLimitState.InstructionCount, TakePendingNativeWork);
   if (GInstructionLimitState.ScopeDepth = 0) and
      (GInstructionLimitState.MaxInstructions <= 0) then
     GInstructionLimitState.InstructionCount := 0;
@@ -212,6 +219,8 @@ procedure PopInstructionLimitScope;
 begin
   if GInstructionLimitState.ScopeDepth = 0 then
     Exit;
+  if GInstructionLimitState.Active then
+    Inc(GInstructionLimitState.InstructionCount, TakePendingNativeWork);
   Dec(GInstructionLimitState.ScopeDepth);
   SetLength(GInstructionLimitState.ScopeStarts,
     GInstructionLimitState.ScopeDepth);
@@ -268,6 +277,12 @@ procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if GInstructionLimitState.Active then
     Inc(GInstructionLimitState.InstructionCount);
+end;
+
+procedure IncrementInstructionCounterState(
+  const AState: PGocciaInstructionLimitState);
+begin
+  Inc(AState^.InstructionCount);
 end;
 
 procedure CheckInstructionLimitState(

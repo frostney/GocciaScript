@@ -28,6 +28,8 @@ type
     procedure TestFreshThreadChecksNothing;
     procedure TestNativeLoopPollsSpendTheBudget;
     procedure TestNativeLoopPollsCostNothingWithoutABudget;
+    procedure TestCheckNativeWorkIsCountedOnce;
+    procedure TestPendingPollsSettleAcrossScopes;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -106,6 +108,62 @@ begin
     TestNativeLoopPollsSpendTheBudget);
   Test('The polls of a native loop cost nothing without a budget',
     TestNativeLoopPollsCostNothingWithoutABudget);
+  Test('CheckNativeWork charges one unit per call, not two',
+    TestCheckNativeWorkIsCountedOnce);
+  Test('Pending native polls are settled when a scope starts or ends',
+    TestPendingPollsSettleAcrossScopes);
+end;
+
+procedure TInstructionLimitTests.TestCheckNativeWorkIsCountedOnce;
+var
+  I: Integer;
+  Raised: Boolean;
+begin
+  { 1,500 calls under a budget of 2,000: each call is one unit, so the budget
+    holds; charged twice (once by the poll's sample) it would be spent. }
+  StartInstructionLimit(2000);
+  Raised := False;
+  try
+    for I := 1 to 1500 do
+      CheckNativeWork;
+  except
+    on TGocciaInstructionLimitError do
+      Raised := True;
+  end;
+  ClearInstructionLimit;
+  Expect<Boolean>(Raised).ToBe(False);
+end;
+
+procedure TInstructionLimitTests.TestPendingPollsSettleAcrossScopes;
+var
+  I, Round: Integer;
+  Raised: Boolean;
+begin
+  { Rounds of 600 polls, each inside a nested scope: no round reaches a sample
+    of 1,024 alone, but the outer budget of 3,000 is spent after five rounds
+    because every scope's pending polls are added to it when the scope ends,
+    and the next check sees them. }
+  StartInstructionLimit(3000);
+  Raised := False;
+  try
+    for Round := 1 to 20 do
+    begin
+      PushInstructionLimitScope(1000000);
+      try
+        for I := 1 to 600 do
+          CheckExecutionTimeout;
+      finally
+        PopInstructionLimitScope;
+      end;
+      { A dispatched instruction would make this check. }
+      CheckInstructionLimit;
+    end;
+  except
+    on TGocciaInstructionLimitError do
+      Raised := True;
+  end;
+  ClearInstructionLimit;
+  Expect<Boolean>(Raised).ToBe(True);
 end;
 
 procedure TInstructionLimitTests.TestNativeLoopPollsSpendTheBudget;

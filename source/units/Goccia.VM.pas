@@ -1060,7 +1060,9 @@ end;
   counted. }
 procedure SpendSpreadBudget(const APolls: PGocciaThreadPolls);
 begin
-  IncrementInstructionCounter;
+  if APolls^.InstructionLimitActive then
+    IncrementInstructionCounterState(
+      PGocciaInstructionLimitState(APolls^.InstructionLimitState));
   RunArmedPolls(APolls);
 end;
 
@@ -10351,8 +10353,10 @@ begin
       try
         Polls := @GThreadPolls;
         repeat
+          // A native iterator's steps are work no instruction counts: spend the
+          // budget as the spread of a native array does.
           if Polls^.Any <> 0 then
-            RunArmedPolls(Polls);
+            SpendSpreadBudget(Polls);
           NextResult := TGocciaIteratorValue(IteratorValue).DirectNext(DoneFlag);
           if not DoneFlag then
             Result.Elements.Add(NextResult);

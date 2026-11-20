@@ -216,11 +216,11 @@ begin
     while AElements.Count < ACount do
     begin
       AElements.Add(TGocciaHoleValue.HoleValue);
-      if (AElements.Count and 1023) = 0 then
+      if ((AElements.Count - StartCount) and 1023) = 0 then
       begin
-        // A thousand holes are a thousand units of work: the deadline, the
-        // instruction budget and a host's abort all reach this loop.
-        CheckExecutionTimeout;
+        // A thousand holes added are a thousand units of work: the deadline,
+        // the instruction budget and a host's abort all reach this loop.
+        CheckExecutionTimeoutUnmetered;
         SpendInstructions(1024);
       end;
     end;

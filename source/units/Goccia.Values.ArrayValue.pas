@@ -167,6 +167,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
+  Goccia.InstructionLimit,
   Goccia.NativeLimits,
   Goccia.StackLimit,
   Goccia.Timeout,
@@ -5010,9 +5011,12 @@ begin
         { The length is a JS-controlled value up to 2^53 - 1, so the deadline,
           the instruction budget and a host's abort must reach this loop (the
           chokepoint rule in Goccia.Timeout). A mask of 255 keeps the poll off
-          the per-element path. }
+          the per-element path; each poll spends the 256 writes it covers. }
         if (I64 and 255) = 255 then
-          CheckNativeWork;
+        begin
+          CheckExecutionTimeoutUnmetered;
+          SpendInstructions(256);
+        end;
         View.Obj.AssignProperty(IntegerToString(I64), FillValue);
         Inc(I64);
       end;
@@ -5044,7 +5048,10 @@ begin
     for I := StartIdx to EndIdx - 1 do
     begin
       if (I and 255) = 255 then
-        CheckNativeWork;
+      begin
+        CheckExecutionTimeoutUnmetered;
+        SpendInstructions(256);
+      end;
       View.Put(I, FillValue);
     end;
 

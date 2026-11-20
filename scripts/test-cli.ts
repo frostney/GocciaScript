@@ -1515,10 +1515,10 @@ console.log("--timeout and --max-instructions (Array.prototype.fill over a lengt
     ["an array-like", "Array.prototype.fill.call({ length: 2 ** 40 }, 1);\n"],
   ];
   for (const [label, source] of cases) {
-    const timed = runLoaderJson(source, ["--timeout=100", "--max-memory=0"], { timeout: 10_000 });
+    const timed = runLoaderJson(source, ["--timeout=100", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 6144 });
     if (timed.exitCode !== 1) throw new Error(`fill over ${label}: --timeout exit code should be 1, got ${timed.exitCode}`);
     if (timed.json.error?.type !== "TimeoutError") throw new Error(`fill over ${label}: expected TimeoutError, got ${timed.json.error?.type}`);
-    const counted = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000 });
+    const counted = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 6144 });
     if (counted.exitCode !== 1) throw new Error(`fill over ${label}: --max-instructions exit code should be 1, got ${counted.exitCode}`);
     if (counted.json.error?.type !== "InstructionLimitError") throw new Error(`fill over ${label}: expected InstructionLimitError, got ${counted.json.error?.type}`);
   }
@@ -1542,10 +1542,31 @@ console.log("--max-instructions (native loops over a huge array)...");
     ["spread", `${huge}const b = [...a];\n`],
   ];
   for (const [label, source] of cases) {
-    const { exitCode, json } = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000 });
+    const { exitCode, json } = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 6144 });
     if (exitCode !== 1) throw new Error(`${label}: --max-instructions exit code should be 1, got ${exitCode}`);
     if (json.error?.type !== "InstructionLimitError") throw new Error(`${label}: expected InstructionLimitError, got ${json.error?.type}`);
   }
+}
+
+console.log("--max-instructions (native work counted once, and by what it covers)...");
+{
+  // Work that already counts itself is not charged a second time by the poll.
+  const json = 'JSON.parse("[" + "1,".repeat(1999) + "1]");\n';
+  const parsed = runLoaderJson(json, ["--max-instructions=6500"], { timeout: 10_000 });
+  if (parsed.exitCode !== 0) throw new Error(`JSON.parse under --max-instructions=6500 should succeed, got exit ${parsed.exitCode}: ${JSON.stringify(parsed.json.error)}`);
+  // A fill is charged for the elements it writes, not for its polls.
+  const fills = [
+    "Array.prototype.fill.call({ length: 20000 }, 1);\n",
+    "const a = new Array(20000);\na.fill(1);\n",
+  ];
+  for (const source of fills) {
+    const { exitCode, json: out } = runLoaderJson(source, ["--max-instructions=1000"], { timeout: 10_000 });
+    if (exitCode !== 1 || out.error?.type !== "InstructionLimitError") throw new Error(`fill of 20000 elements under --max-instructions=1000 should end with InstructionLimitError, got exit ${exitCode}`);
+  }
+  // A spread through the iterator protocol is bounded like the fast path.
+  const iter = "const a = new Array(20000);\na[Symbol.iterator] = Array.prototype[Symbol.iterator];\nconst b = [...a];\n";
+  const spread = runLoaderJson(iter, ["--max-instructions=1000"], { timeout: 10_000 });
+  if (spread.exitCode !== 1 || spread.json.error?.type !== "InstructionLimitError") throw new Error(`spread through an own Symbol.iterator should end with InstructionLimitError, got exit ${spread.exitCode}`);
 }
 
 console.log("--timeout (native regex scan)...");

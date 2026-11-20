@@ -56,7 +56,9 @@ end;
 
 procedure CheckNativeWork;
 begin
-  CheckExecutionTimeout;
+  // Counts its own unit below: the unmetered poll keeps the budget from
+  // charging this work twice.
+  CheckExecutionTimeoutUnmetered;
   IncrementInstructionCounter;
   CheckInstructionLimit;
 end;

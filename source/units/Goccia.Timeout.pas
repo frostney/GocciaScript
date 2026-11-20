@@ -89,6 +89,11 @@ procedure PopTimeoutScope;
   raise propagates (see ExtendElementsWithHoles in Goccia.Values.HoleValue
   for the rollback pattern). }
 procedure CheckExecutionTimeout;
+{ CheckExecutionTimeout without spending the instruction budget: the deadline
+  and a host's abort only. For a caller that counts its own work (CheckNativeWork,
+  a loop that spends a batch with SpendInstructions), which the budget would
+  otherwise charge twice. }
+procedure CheckExecutionTimeoutUnmetered;
 { CheckExecutionTimeout through the calling thread's poll state, for a caller
   that already holds it (Goccia.ThreadPolls keeps it beside the TimeoutArmed
   flag): the same throttle and the same error, without a thread-variable
@@ -117,6 +122,10 @@ procedure DisarmTimeoutAbort;
   per poll of a native loop, so a budget (like a deadline) ends a loop that no
   dispatched instruction counts. }
 procedure SetTimeoutBudgetArmed(const AArmed: Boolean);
+{ For Goccia.InstructionLimit alone: the native polls counted since the budget
+  was last spent, which it adds to the scopes active when they ran before it
+  changes them. Starts the next sample. }
+function TakePendingNativeWork: Integer;
 
 implementation
 
@@ -266,6 +275,25 @@ begin
   end;
 end;
 
+procedure CheckExecutionTimeoutUnmetered;
+var
+  Poll: PGocciaTimeoutPollState;
+begin
+  Poll := @GTimeoutPoll;
+  if Poll^.DeadlineNs <> 0 then
+  begin
+    Inc(Poll^.CheckCounter);
+    if (Poll^.CheckCounter and Poll^.CheckMask) = 0 then
+      CheckExecutionTimeoutDeadline(Poll);
+  end;
+end;
+
+function TakePendingNativeWork: Integer;
+begin
+  Result := GTimeoutPoll.NativeCounter and (TIMEOUT_CHECK_INTERVAL - 1);
+  GTimeoutPoll.NativeCounter := 0;
+end;
+
 procedure CheckExecutionTimeout;
 var
   Poll: PGocciaTimeoutPollState;
@@ -334,7 +362,8 @@ end;
 
 procedure SetTimeoutBudgetArmed(const AArmed: Boolean);
 begin
-  // Every start or clear of a budget begins a fresh sample.
+  // A budget that starts or ends begins a fresh sample; a scope that only
+  // nests settles its pending work first (TakePendingNativeWork).
   GTimeoutPoll.NativeCounter := 0;
   if GTimeoutPoll.BudgetArmed = AArmed then
     Exit;

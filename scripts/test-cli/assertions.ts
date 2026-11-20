@@ -31,7 +31,14 @@ export const containsLine = (s: string, value: string): boolean => {
 export function runLoaderJson(
   source: string,
   extraArgs?: string[],
-  opts?: { bin?: string; timeout?: number; env?: Record<string, string | undefined> },
+  opts?: {
+    bin?: string;
+    timeout?: number;
+    env?: Record<string, string | undefined>;
+    /** Address-space cap in MiB for the child on Linux (`ulimit -v`), so a
+     * regression that lets a huge-array case allocate cannot exhaust the host. */
+    memoryCapMiB?: number;
+  },
 ): { exitCode: number; json: any; stderr: string } {
   const hasOutputFlag = extraArgs?.some((a) => a.startsWith("--output="));
   const spawnOpts: {
@@ -47,14 +54,16 @@ export function runLoaderJson(
   };
   if (opts?.timeout != null) spawnOpts.timeout = opts.timeout;
   if (opts?.env != null) spawnOpts.env = opts.env;
-  const proc = Bun.spawnSync(
-    [
-      opts?.bin ?? RUNNER,
-      ...(hasOutputFlag ? [] : ["--output=json"]),
-      ...(extraArgs ?? []),
-    ],
-    spawnOpts,
-  );
+  const command = [
+    opts?.bin ?? RUNNER,
+    ...(hasOutputFlag ? [] : ["--output=json"]),
+    ...(extraArgs ?? []),
+  ];
+  const capped =
+    opts?.memoryCapMiB != null && process.platform === "linux"
+      ? ["sh", "-c", `ulimit -v ${opts.memoryCapMiB * 1024}; exec "$@"`, "sh", ...command]
+      : command;
+  const proc = Bun.spawnSync(capped, spawnOpts);
   const stdout = proc.stdout.toString();
   const stderr = proc.stderr.toString();
   // A killed process has no exit code. With `timeout` set this is the signal
