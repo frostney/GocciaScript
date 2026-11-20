@@ -68,6 +68,24 @@ describe("JSX type arguments in .tsx", () => {
     expect(el.props).toEqual({ v: 4 });
   });
 
+  test("an element with type arguments starts a statement after a block", () => {
+    const made = [];
+    const record = (value) => made.push(value);
+    // prettier-ignore
+    const run = () => {
+      if (made.length > 0) {}
+      <Select<string> v={record(1)} />;
+    };
+    run();
+    expect(made).toEqual([1]);
+  });
+
+  test("a list that opens with a generic function type", () => {
+    const el = <Select<<T>(x: T) => T, '<<'> v={1} />;
+    expect(el.tag).toBe(Select);
+    expect(el.props).toEqual({ v: 1 });
+  });
+
   test("comments and line breaks around the type arguments", () => {
     const el = (
       <Select /* before */ <

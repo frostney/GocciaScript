@@ -59,8 +59,22 @@ describe("comparisons next to JSX in .jsx", () => {
 
   test("a property named like a control-flow keyword still divides", () => {
     const options = { if: (value) => value, else: 8 };
+    const quotient = { if: (8) / <Select />.v };
     expect(options.if(8) / 2).toBe(4);
+    expect(options./* note */if(8) / 2).toBe(4);
     expect(options.else / 2).toBe(4);
+    expect(quotient.if).toBeNaN();
+  });
+
+  test("a comparison chain on the line after an object literal is not a tag", () => {
+    const b = 2;
+    const c = 3;
+    const d = 0;
+    const e = 1;
+    // prettier-ignore
+    const result = {}
+      <b<c>d / e;
+    expect(result).toBe(true);
   });
 
   test("an element compared with `<` is not given type arguments", () => {

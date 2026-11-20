@@ -629,6 +629,25 @@ describe("ast.parse with expressions: type syntax", () => {
     }
   });
 
+  test("with jsx on, a list that opens with a generic function type is measured in the file", () => {
+    const source = "const view = <Select<<T>(x: T) => T, '<<'> v={1} />;\n";
+    const result = parseTypes(source, { jsx: true, fileName: "view.tsx" });
+
+    expect(treeOf(result, find(result.root, "TSTypeParameterInstantiation"))).toEqual([
+      "TSTypeParameterInstantiation(<<T>(x: T) => T, '<<'>)",
+      "TSFunctionType(<T>(x: T) => T)",
+      "TSTypeParameterDeclaration(<T>)",
+      "TSTypeParameter(T)",
+      "Parameter(x: T)",
+      "TSTypeAnnotation(: T)",
+      "TSTypeReference(T)",
+      "TSTypeAnnotation(=> T)",
+      "TSTypeReference(T)",
+      "TSLiteralType('<<')",
+      "StringLiteral('<<')",
+    ]);
+  });
+
   test("with jsx on, an empty, unclosed or closing-tag type argument list is a SyntaxError", () => {
     for (const source of [
       "const e = <F<> />;\n",

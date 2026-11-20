@@ -445,8 +445,6 @@ type
     function TryCollectCallExpressionTypeArguments(
       out ATypeArguments: TGocciaTypeRangeArray): Boolean;
     function FollowsPreprocessorText: Boolean;
-    function SkipTemplateLiteralType(
-      const AAllowExpressionTokens: Boolean): Boolean;
     procedure RememberNotTypeArguments(const AFirst: Integer;
       const AEndsInLexError: Boolean; const AConstructor: Boolean = False);
     function TryParseGenericArrowFunction(
@@ -10879,15 +10877,6 @@ begin
           gttRightShift: Dec(Depth, 2);
           gttUnsignedRightShift: Dec(Depth, 3);
           gttComma:;
-          gttTemplateHead:
-            begin
-              // A template literal type, `t${string}`, whose substitution's
-              // closing brace only the template-tail goal lexes as such.
-              if not SkipTemplateLiteralType(False) then
-                Exit;
-              HasTypeArgument := True;
-              Continue;
-            end;
         else
           HasTypeArgument := True;
         end;
@@ -10966,7 +10955,9 @@ end;
 // after that callee, so in any file the '<' opens type arguments, and the
 // transformer has already matched its '>'. Neither the extension check nor
 // the expression-token denylist applies there: `<Foo<-1> />` is as valid as
-// `<Foo<string> />`, and a comparison reading of either would be wrong.
+// `<Foo<string> />`, and a comparison reading of either would be wrong. For
+// the same reason the probe steps over a template literal type there whole,
+// and its memo of failed probes, which counts tokens, is not consulted.
 function TGocciaParser.TryCollectCallExpressionTypeArguments(
   out ATypeArguments: TGocciaTypeRangeArray): Boolean;
 var
@@ -11031,12 +11022,15 @@ begin
             end;
           gttTemplateHead:
             begin
-              // A template literal type, `t${string}`, whose substitution's
-              // closing brace only the template-tail goal lexes as such.
-              if not SkipTemplateLiteralType(ElementTypeArguments) then
-                Exit;
               HasTypeArgument := True;
-              Continue;
+              // An element's template literal type, `t${string}`, whose
+              // substitution's closing brace only the template-tail goal
+              // lexes as such. A written comparison keeps its template.
+              if ElementTypeArguments then
+              begin
+                SkipTemplateLiteral;
+                Continue;
+              end;
             end;
         else
           HasTypeArgument := True;
@@ -11073,24 +11067,6 @@ begin
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
   end;
-end;
-
-// Steps over the template literal at the cursor inside a type-argument probe,
-// as SkipTemplateLiteral does, and says whether it can be a template literal
-// type: its substitutions hold no token that only an expression has, unless
-// AAllowExpressionTokens. `` a < `x${1 + 2}` > (c) `` stays a comparison.
-function TGocciaParser.SkipTemplateLiteralType(
-  const AAllowExpressionTokens: Boolean): Boolean;
-var
-  First, I: Integer;
-begin
-  First := FCurrent;
-  SkipTemplateLiteral;
-  Result := True;
-  if not AAllowExpressionTokens then
-    for I := First to FCurrent - 1 do
-      if FTokens[I].TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS then
-        Exit(False);
 end;
 
 // Whether the token before the current one ends in text a preprocessor
@@ -11186,12 +11162,6 @@ begin
   Count := FTokens.Count - AFirst;
   if Count < MIN_REMEMBERED_TOKENS then
     Exit;
-  // A probe steps over a template literal whole (SkipTemplateLiteral), which
-  // this token-by-token account does not. Templates in a long comparison
-  // chain are rare enough to leave its probes unremembered.
-  for I := 0 to Count - 1 do
-    if TypeAt(I) = gttTemplateHead then
-      Exit;
 
   // After each token, the depth and bracket depth a probe from AFirst has
   // reached, and how many tokens so far count as a type argument. A probe

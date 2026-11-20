@@ -55,10 +55,13 @@ type
   TGocciaJSXTransformer = class
   private
     type
-      { ltkLineBreak is a line break after an expression's end: it reads as
-        an operator, since a statement may start on the next line, but the
-        expression may also go on there. }
-      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator, ltkLineBreak);
+      // ltkLineBreak is a line break after an expression's end: it reads as
+      // an operator, since a statement may start on the next line, but the
+      // expression may also go on there. ltkBraceEnd is an expression end
+      // that is a closing brace, which may also end a block, and
+      // ltkBraceLineBreak a line break after one.
+      TLastTokenKind = (ltkNone, ltkExpressionEnd, ltkOperator, ltkLineBreak,
+        ltkBraceEnd, ltkBraceLineBreak);
       TScanContext = (scSource, scAttributes, scChildren, scExpression);
       TForHeader = record
         Depth: Integer;
@@ -85,7 +88,6 @@ type
     // The paren depths of the open `if`, `while`, `for` and `with` headers,
     // innermost last: a statement, not an operator, follows their `)`.
     FControlHeaderDepths: array of Integer;
-    FControlHeaderPending: Boolean;
     FHasJSX: Boolean;
     FFileName: string;
     FJSXDepth: Integer;
@@ -134,9 +136,11 @@ type
       const AStart: Integer): TLastTokenKind;
     procedure CopyNumber;
     procedure CopyOperator;
-    procedure OpenParen;
+    procedure OpenParen(const AParenIndex: Integer);
     function CloseParen: TLastTokenKind;
     function IsForOfKeyword(const AStart: Integer): Boolean;
+    function SignificantBefore(const AIndex: Integer): Integer;
+    function WordBefore(const AIndex: Integer; out AWordStart: Integer): string;
     function FollowsMemberDot(const AStart: Integer): Boolean;
     function InForHeader: Boolean;
 
@@ -150,8 +154,9 @@ type
     function SkipTriviaAt(const AIndex: Integer): Integer;
     function SkipQuotedAt(const AIndex, ADepth: Integer): Integer;
     function JSXTypeArgumentsStart(const AIndex: Integer): Integer;
-    function JSXTypeArgumentsEnd(const AStart: Integer;
+    function JSXTypeArgumentsEnd(const AStart, ALast: Integer;
       out AStoppedAt: Integer): Integer;
+    function OpeningTagRestAt(const AIndex: Integer): Boolean;
     procedure CopyJSXTypeArguments(const ATagName: string);
     procedure EmitJSXAttributes(const ALeadingNewlines: Integer;
       out AHadAttributes: Boolean);
@@ -194,6 +199,10 @@ const
   // worker thread's stack until FPC_STACKCHECK traps and the testrunner
   // watchdog has to orphan the worker.
   MAX_JSX_DEPTH = 256;
+
+  // How far a type argument list is looked for where a `<` may also start a
+  // comparison (IsJSXStart): such a list is never this long.
+  MAX_AMBIGUOUS_TYPE_ARGUMENTS_LENGTH = 4096;
 
   // Scan contexts reported by RequireScanProgress, so a stalled loop names the
   // construct it was scanning rather than a bare position.
@@ -675,12 +684,6 @@ begin
     FForPending := True
   else if AWord <> KEYWORD_AWAIT then
     FForPending := False;
-  if (AWord = KEYWORD_IF) or (AWord = KEYWORD_WHILE) or
-     (AWord = KEYWORD_FOR) or (AWord = KEYWORD_WITH) then
-    FControlHeaderPending := not FollowsMemberDot(AStart)
-  else if AWord <> KEYWORD_AWAIT then
-    FControlHeaderPending := False;
-
   if ((AWord = KEYWORD_ELSE) or (AWord = KEYWORD_DO)) and
      not FollowsMemberDot(AStart) then
     Result := ltkOperator
@@ -703,40 +706,17 @@ end;
 // is the binding.
 function TGocciaJSXTransformer.IsForOfKeyword(const AStart: Integer): Boolean;
 var
-  Header, Index, WordEnd: Integer;
+  Header, WordStart: Integer;
   Word: string;
 begin
   Result := False;
   Header := High(FForHeaders);
   if (Header < 0) or (FForHeaders[Header].Depth <> FParenDepth) or
-     FForHeaders[Header].SawOf or (FLastTokenKind <> ltkExpressionEnd) then
+     FForHeaders[Header].SawOf or
+     not (FLastTokenKind in [ltkExpressionEnd, ltkBraceEnd]) then
     Exit;
 
-  // Back over whitespace and block comments to the word before, if any.
-  Index := AStart - 1;
-  while Index >= 1 do
-    if CharInSet(FSource[Index], [' ', #9, #10, #13]) then
-      Dec(Index)
-    else if (Index >= 2) and (FSource[Index] = '/') and
-            (FSource[Index - 1] = '*') then
-    begin
-      Dec(Index, 2);
-      while (Index >= 2) and
-            not ((FSource[Index - 1] = '/') and (FSource[Index] = '*')) do
-        Dec(Index);
-      Dec(Index, 2);
-    end
-    else
-      Break;
-  Word := '';
-  if (Index >= 1) and IsIdentifierPart(FSource[Index]) then
-  begin
-    WordEnd := Index;
-    while (Index >= 1) and IsIdentifierPart(FSource[Index]) do
-      Dec(Index);
-    Word := Copy(FSource, Index + 1, WordEnd - Index);
-  end;
-
+  Word := WordBefore(AStart, WordStart);
   Result := (Word <> KEYWORD_CONST) and (Word <> KEYWORD_LET) and
     (Word <> KEYWORD_VAR) and (Word <> KEYWORD_USING);
   if Result then
@@ -749,26 +729,78 @@ begin
     (FForHeaders[High(FForHeaders)].Depth = FParenDepth);
 end;
 
+// The index of the last character before AIndex that is not whitespace or
+// part of a block comment, or 0.
+function TGocciaJSXTransformer.SignificantBefore(const AIndex: Integer): Integer;
+begin
+  Result := AIndex - 1;
+  while Result >= 1 do
+    if CharInSet(FSource[Result], [' ', #9, #10, #13]) then
+      Dec(Result)
+    else if (Result >= 2) and (FSource[Result] = '/') and
+            (FSource[Result - 1] = '*') then
+    begin
+      Dec(Result, 2);
+      while (Result >= 2) and
+            not ((FSource[Result - 1] = '/') and (FSource[Result] = '*')) do
+        Dec(Result);
+      Dec(Result, 2);
+    end
+    else
+      Exit;
+  if Result < 0 then
+    Result := 0;
+end;
+
+// The word that ends just before AIndex, past whitespace and block comments,
+// with AWordStart its index; '' when something else is there.
+function TGocciaJSXTransformer.WordBefore(const AIndex: Integer;
+  out AWordStart: Integer): string;
+var
+  WordEnd: Integer;
+begin
+  Result := '';
+  WordEnd := SignificantBefore(AIndex);
+  AWordStart := WordEnd + 1;
+  while (AWordStart > 1) and IsIdentifierPart(FSource[AWordStart - 1]) do
+    Dec(AWordStart);
+  if AWordStart <= WordEnd then
+    Result := Copy(FSource, AWordStart, WordEnd - AWordStart + 1);
+end;
+
 // Whether the word at AStart is a property name after `.`, as `if` is in
 // `options.if`, rather than a keyword.
 function TGocciaJSXTransformer.FollowsMemberDot(const AStart: Integer): Boolean;
 var
   Index: Integer;
 begin
-  Index := AStart - 1;
-  while (Index >= 1) and CharInSet(FSource[Index], [' ', #9, #10, #13]) do
-    Dec(Index);
+  Index := SignificantBefore(AStart);
   Result := (Index >= 1) and (FSource[Index] = '.');
 end;
 
-procedure TGocciaJSXTransformer.OpenParen;
+// Opens the paren at AParenIndex. It opens a control-flow header when the
+// keyword `if`, `while`, `for` or `with` is the word before it, or
+// `for await`.
+procedure TGocciaJSXTransformer.OpenParen(const AParenIndex: Integer);
+var
+  Word: string;
+  WordStart, AwaitStart: Integer;
 begin
   Inc(FParenDepth);
-  if FControlHeaderPending then
+  Word := WordBefore(AParenIndex, WordStart);
+  if Word = KEYWORD_AWAIT then
+  begin
+    AwaitStart := WordStart;
+    Word := WordBefore(AwaitStart, WordStart);
+    if Word <> KEYWORD_FOR then
+      Word := '';
+  end;
+  if ((Word = KEYWORD_IF) or (Word = KEYWORD_WHILE) or
+      (Word = KEYWORD_FOR) or (Word = KEYWORD_WITH)) and
+     not FollowsMemberDot(WordStart) then
   begin
     SetLength(FControlHeaderDepths, Length(FControlHeaderDepths) + 1);
     FControlHeaderDepths[High(FControlHeaderDepths)] := FParenDepth;
-    FControlHeaderPending := False;
   end;
   if FForPending then
   begin
@@ -878,18 +910,21 @@ begin
   CopyChar;
 
   if C = '(' then
-    OpenParen;
+    OpenParen(FPos - 1);
   if C = ')' then
     FLastTokenKind := CloseParen
-  else if CharInSet(C, [']', '}']) then
+  else if C = ']' then
     FLastTokenKind := ltkExpressionEnd
+  else if C = '}' then
+    FLastTokenKind := ltkBraceEnd
   else
     FLastTokenKind := ltkOperator;
 end;
 
 function TGocciaJSXTransformer.IsJSXContext: Boolean;
 begin
-  Result := FLastTokenKind in [ltkNone, ltkOperator, ltkLineBreak];
+  Result := FLastTokenKind in [ltkNone, ltkOperator, ltkLineBreak,
+    ltkBraceLineBreak];
 end;
 
 function TGocciaJSXTransformer.IsJSXStart: Boolean;
@@ -926,16 +961,27 @@ begin
   // that follows an expression, `<` goes on with that expression, as
   // TypeScript reads it: `a` and `<b<c>d` on the next line is a comparison.
   // A statement starts after a control-flow header's `)` and after `else`
-  // or `do`, which are not expression ends. No `<` here starts a comparison,
-  // so a list that does not close is a syntax error whatever follows, and
-  // the starts its scan passed over need not be scanned again.
+  // or `do`, which are not expression ends. A `}` ends a block or an object
+  // literal, so on the line after one the rest of the opening tag has to be
+  // one too, and the list is looked for only within a bound, since such a
+  // `<` may start a comparison. Elsewhere none does, so a list that does not
+  // close is a syntax error whatever follows, and the starts its scan passed
+  // over need not be scanned again.
   TypeArgumentsStart := JSXTypeArgumentsStart(Index);
   if TypeArgumentsStart > 0 then
   begin
-    if (FLastTokenKind = ltkLineBreak) or
-       (TypeArgumentsStart < FTypeArgumentsScannedTo) then
+    if FLastTokenKind = ltkLineBreak then
       Exit(False);
-    Index := JSXTypeArgumentsEnd(TypeArgumentsStart, StoppedAt);
+    if FLastTokenKind = ltkBraceLineBreak then
+    begin
+      Index := JSXTypeArgumentsEnd(TypeArgumentsStart,
+        TypeArgumentsStart + MAX_AMBIGUOUS_TYPE_ARGUMENTS_LENGTH, StoppedAt);
+      Exit((Index > 0) and OpeningTagRestAt(Index));
+    end;
+    if TypeArgumentsStart < FTypeArgumentsScannedTo then
+      Exit(False);
+    Index := JSXTypeArgumentsEnd(TypeArgumentsStart, Length(FSource),
+      StoppedAt);
     if Index = 0 then
     begin
       FTypeArgumentsScannedTo := StoppedAt;
@@ -1139,6 +1185,45 @@ begin
   Result := 0;
 end;
 
+// Whether the text at AIndex reads as the rest of an opening tag: attributes,
+// each a name with an optional string or braced value, or a spread, up to the
+// tag's `/>` or `>`. A braced value or spread is not scanned, and is taken
+// for an attribute.
+function TGocciaJSXTransformer.OpeningTagRestAt(const AIndex: Integer): Boolean;
+var
+  Index: Integer;
+begin
+  Index := SkipTriviaAt(AIndex);
+  while Index <= Length(FSource) do
+  begin
+    if (FSource[Index] = '>') or (FSource[Index] = '{') or
+       ((FSource[Index] = '/') and (Index < Length(FSource)) and
+        (FSource[Index + 1] = '>')) then
+      Exit(True);
+    if not IsIdentifierStart(FSource[Index]) then
+      Exit(False);
+    while (Index <= Length(FSource)) and
+          (IsIdentifierPart(FSource[Index]) or (FSource[Index] = '-')) do
+      Inc(Index);
+    Index := SkipTriviaAt(Index);
+    if (Index <= Length(FSource)) and (FSource[Index] = '=') then
+    begin
+      Index := SkipTriviaAt(Index + 1);
+      if Index > Length(FSource) then
+        Exit(False);
+      if FSource[Index] = '{' then
+        Exit(True);
+      if not CharInSet(FSource[Index], ['''', '"']) then
+        Exit(False);
+      Index := SkipQuotedAt(Index, 0);
+      if Index = 0 then
+        Exit(False);
+      Index := SkipTriviaAt(Index);
+    end;
+  end;
+  Result := False;
+end;
+
 // Where the type arguments after a tag name at AIndex open, as in
 // `<Foo<string> />`, past whitespace and comments: the index of their `<`,
 // or 0 when there are none.
@@ -1151,13 +1236,13 @@ begin
 end;
 
 { Where the type argument list that opens at AStart, a `<`, ends: the index
-  after its matching `>`, or 0 when it does not close, with AStoppedAt where
-  the search stopped. A `>` in a function type's `=>`, a string, a template
+  after its matching `>`, or 0 when it does not close by ALast, with
+  AStoppedAt where the search stopped. A `>` in a function type's `=>`, a string, a template
   or a comment does not count. A `;` or a closing bracket outside every
   bracket the list opened ends the search, so a `<` that opens no list costs
   a scan of its own statement, not of the rest of the file. }
-function TGocciaJSXTransformer.JSXTypeArgumentsEnd(const AStart: Integer;
-  out AStoppedAt: Integer): Integer;
+function TGocciaJSXTransformer.JSXTypeArgumentsEnd(const AStart,
+  ALast: Integer; out AStoppedAt: Integer): Integer;
 var
   Index, Depth, BracketDepth, QuotedEnd: Integer;
   C: Char;
@@ -1167,7 +1252,7 @@ begin
   Depth := 0;
   BracketDepth := 0;
   try
-    while Index <= Length(FSource) do
+    while (Index <= Length(FSource)) and (Index <= ALast) do
     begin
       C := FSource[Index];
       if (C = '/') and (Index < Length(FSource)) and
@@ -1224,10 +1309,11 @@ end;
   comment in them keeps its place in the file. }
 procedure TGocciaJSXTransformer.CopyJSXTypeArguments(const ATagName: string);
 var
-  ListEnd, StoppedAt: Integer;
+  ListEnd, StoppedAt, QuotedEnd: Integer;
   C: Char;
 begin
-  ListEnd := JSXTypeArgumentsEnd(JSXTypeArgumentsStart(FPos), StoppedAt);
+  ListEnd := JSXTypeArgumentsEnd(JSXTypeArgumentsStart(FPos),
+    Length(FSource), StoppedAt);
   if ListEnd = 0 then
     RaiseJSXError(Format('JSX: Unterminated type arguments in <%s>',
       [ATagName]));
@@ -1236,9 +1322,31 @@ begin
   while FPos < ListEnd do
   begin
     C := CurrentChar;
+    if CharInSet(C, ['''', '"', '`']) then
+      QuotedEnd := SkipQuotedAt(FPos, 0)
+    else if (C = '/') and CharInSet(PeekAt(1), ['/', '*']) then
+      QuotedEnd := SkipTriviaAt(FPos)
+    else
+      QuotedEnd := 0;
+    if QuotedEnd > 0 then
+    begin
+      // Strings, templates and comments are copied as they are.
+      while (FPos < QuotedEnd) and (FPos < ListEnd) do
+      begin
+        C := CurrentChar;
+        CopyChar;
+        if C = #10 then
+          AddIdentityMapping;
+      end;
+      Continue;
+    end;
     CopyChar;
     if C = #10 then
-      AddIdentityMapping;
+      AddIdentityMapping
+    else if (C = '<') and (CurrentChar = '<') then
+      // `<<T>(x: T) => T>` opens a list with a generic function type, and
+      // the lexer would read the two angles as a shift.
+      Emit(' ');
   end;
 end;
 
@@ -2101,7 +2209,7 @@ begin
       '(', '[', ',', ':', '?', ';', '~', '!':
       begin
         if CurrentChar = '(' then
-          OpenParen;
+          OpenParen(FPos);
         EmitSourceChar;
         AdvanceInput;
         FLastTokenKind := ltkOperator;
@@ -2351,6 +2459,8 @@ begin
       begin
         if FLastTokenKind in [ltkExpressionEnd, ltkLineBreak] then
           FLastTokenKind := ltkLineBreak
+        else if FLastTokenKind in [ltkBraceEnd, ltkBraceLineBreak] then
+          FLastTokenKind := ltkBraceLineBreak
         else
           FLastTokenKind := ltkOperator;
       end;
@@ -2367,6 +2477,8 @@ begin
       begin
         if FLastTokenKind in [ltkExpressionEnd, ltkLineBreak] then
           FLastTokenKind := ltkLineBreak
+        else if FLastTokenKind in [ltkBraceEnd, ltkBraceLineBreak] then
+          FLastTokenKind := ltkBraceLineBreak
         else
           FLastTokenKind := ltkOperator;
       end;
