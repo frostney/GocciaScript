@@ -16359,7 +16359,7 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
     // with a non-JSX extension"). The loader prints it for an imported module
     // on standard output, so a JSON envelope has to be protected from it the
     // way the entry file's own warnings already are.
-    writeFileSync(join(tmp, "comp.js"), "export const a = <div/>;\n");
+    writeFileSync(join(tmp, "comp.js"), "const createElement = () => 1;\nexport const a = <div/>;\n");
     const main = join(tmp, "main.mjs");
     writeFileSync(main, 'import { a } from "./comp.js";\nconsole.log(typeof a);\n');
     const entry = join(tmp, "entry.mjs");
@@ -16367,7 +16367,7 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
     const source = join(tmp, "source.mjs");
     writeFileSync(source, 'import source m from "./comp.js";\nconsole.log(typeof m);\n');
     const test = join(tmp, "imports.test.js");
-    writeFileSync(test, 'import { a } from "./comp.js";\ntest("imports", () => { expect(typeof a).toBe("undefined"); });\n');
+    writeFileSync(test, 'import { a } from "./comp.js";\ntest("imports", () => { expect(a).toBe(1); });\n');
     const run = (binary: string, args: string[]) => {
       const proc = Bun.spawnSync([binary, ...args], { stdout: "pipe", stderr: "pipe" });
       return proc.stdout.toString();
@@ -16390,11 +16390,15 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
     ];
     for (const [label, binary, args] of cases) {
       const stdout = run(binary, args);
+      let envelope: { ok?: boolean };
       try {
-        JSON.parse(stdout);
+        envelope = JSON.parse(stdout);
       } catch {
         throw new Error(`${label}: stdout should be the JSON envelope alone, got:\n${stdout.slice(0, 400)}`);
       }
+      // The fixtures run: an error envelope would also parse.
+      if (envelope.ok !== true)
+        throw new Error(`${label}: the run should succeed, got:\n${stdout.slice(0, 400)}`);
     }
   } finally {
     clean(tmp);
