@@ -232,8 +232,8 @@ function HostAbortMessage: UnicodeString;
 
 type
   { the capability decisions an engine reports to its host (G2.Embed OnAudit): a Function constructor's, a
-    ShadowRealm's, an eval's }
-  TAuditKind = (akFunctionConstructor, akShadowRealm, akEval);
+    ShadowRealm's, an eval's, an FFI.open's }
+  TAuditKind = (akFunctionConstructor, akShadowRealm, akEval, akFFIOpen);
   { False when the host could not record it: the run then ends (HostAbort, with its error pending) }
   TAuditHook = function(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean of object;
 threadvar
@@ -329,6 +329,10 @@ procedure SetEngineErrorStack(E: TValue; const Text: UnicodeString);
 { the frames running now as an error's stack lists them (the lines after its first), for an error made later on
   their behalf (a dynamic import's failure, made in a job) }
 function StackFramesNow: UnicodeString;
+{ a host's suggestion for an error it throws (a PermissionDenied's grant to ask for), kept in an internal slot the
+  script cannot see or change; E rooted by the caller }
+procedure SetErrorHostSuggestion(E: TValue; const Text: UnicodeString);
+function ErrorHostSuggestion(E: TValue; out Text: UnicodeString): Boolean;
 { a private element's read and write (o.#x, o.#x = v; Key the private name) }
 { throws the TypeError for an iterator result V that is not an object (False) }
 function ThrowIterResultNotObject(V: TValue): Boolean;
@@ -1656,6 +1660,38 @@ end;
 function StackFramesNow: UnicodeString;
 begin
   if ProfileStackTraces then Result := StackFramesText else Result := '';
+end;
+
+threadvar
+  SuggestionKey: PStr;
+  SuggestionKeyGen: Integer;
+
+function SuggestionKeyNow: PStr;
+begin
+  if FirstInEngine(SuggestionKeyGen) then SuggestionKey := NewKeyAtom('%hostSuggestion', kfInternal);
+  Result := SuggestionKey;
+end;
+
+procedure SetErrorHostSuggestion(E: TValue; const Text: UnicodeString);
+var K: PStr;
+begin
+  if not IsObject(E) or (Text = '') then Exit;
+  K := SuggestionKeyNow;
+  PushRoot(E);
+  DefineOwn(RootAt(TempTop - 1), K, StrFromUnicode(Text), pfHidden);
+  PopRoots(1);
+end;
+
+function ErrorHostSuggestion(E: TValue; out Text: UnicodeString): Boolean;
+var I: Integer;
+begin
+  Result := False;
+  Text := '';
+  if not IsObject(E) then Exit;
+  I := GetOwnSlot(ObjOf(E), SuggestionKeyNow);
+  if (I < 0) or not IsString(GetSlot(ObjOf(E), I)) then Exit;
+  Text := StrToUnicode(StrOf(GetSlot(ObjOf(E), I)));
+  Result := True;
 end;
 
 function CallSiteNow(out Source: UnicodeString; out Line, Column: Integer): Boolean;

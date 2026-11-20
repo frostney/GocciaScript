@@ -5,7 +5,8 @@ program g2;
 uses
   cthreads, Classes, SysUtils, Math,
   Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.Token,
-  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.HostAPI, G2.Weak, G2.Embed, CLI.ConfigFile, CLI.Units, StrUtils;
+  G2.Core, G2.Bytecode, G2.Compiler, G2.VM, G2.Scan, G2.PreParse, G2.Lazy, G2.Builtins, G2.Builtins2, G2.RegExpV, G2.Eval, G2.Builtins3, G2.Promise, G2.Builtins4, G2.Atomics, G2.Agent, G2.Engine, G2.ObjModel, G2.ArrayProto, G2.IterHelpers, G2.TypedArrays, G2.Disposal, G2.Modules, G2.Builtins5, G2.Temporal, G2.JSON, G2.Date, G2.Intl, G2.HostAPI, G2.Weak, G2.Embed, CLI.ConfigFile, CLI.Units, StrUtils,
+  Goccia.Capabilities, Goccia.CLI.Permissions;
 
 type
   TSampler = class(TThread)
@@ -112,9 +113,9 @@ end;
 { --test: the language profile and source type of the nearest goccia.json (CLI.ConfigFile, as the CLIs find
   it); without one, the recommended profile }
 procedure LoadTestConfig(const FileName: string; out Prof: TLangProfile; out SourceType: string;
-  out ConfigJson: UnicodeString);
-var Path, V, SizeErr: string; Entries: TConfigEntryArray; I, J: Integer; Done: TStringList; Vals: UnicodeString;
-  Bytes: Int64;
+  out ConfigJson: UnicodeString; out Caps: TGocciaCapabilities);
+var Path, V, SizeErr, Scope: string; Entries: TConfigEntryArray; I, J: Integer; Done: TStringList;
+  Vals: UnicodeString; Bytes: Int64; Req: TGocciaConfigPermissionRequest; Cap: TGocciaCapability;
   function Flag(const Key: string): Boolean;
   var V: string;
   begin
@@ -127,6 +128,19 @@ begin
   SetLength(Entries, 0);
   Path := DiscoverConfigFile(ExtractFilePath(ExpandFileName(FileName)), ['goccia'], ['.json']);
   if Path <> '' then Entries := ParseConfigFile(Path);
+  { the config's permissions, as GocciaTestRunner -P accepts them for the run }
+  Caps := TGocciaCapabilities.None;
+  if Path <> '' then
+  begin
+    Req := ReadConfigPermissionRequest(Entries, Path);
+    for Cap := Low(TGocciaCapability) to High(TGocciaCapability) do
+    begin
+      if Req.Allow[Cap].Unscoped then Caps := Caps.Allow(Cap);
+      for Scope in Req.Allow[Cap].Scopes do Caps := Caps.Allow(Cap, Scope);
+      if Req.Deny[Cap].Unscoped then Caps := Caps.Deny(Cap);
+      for Scope in Req.Deny[Cap].Scopes do Caps := Caps.Deny(Cap, Scope);
+    end;
+  end;
   Prof.Asi := Flag('compat-asi');
   Prof.VarDecl := Flag('compat-var');
   Prof.FuncDecl := Flag('compat-function');
@@ -179,9 +193,11 @@ end;
   top-level import or export declaration), then its suites }
 procedure RunTestFile(const FileName: string; const SrcText: UnicodeString);
 var Prof: TLangProfile; SourceType: string; Err, ConfigJson: UnicodeString; Engine: TG2Engine; R: TG2RunResult;
+  Caps: TGocciaCapabilities;
 begin
-  LoadTestConfig(FileName, Prof, SourceType, ConfigJson);
+  LoadTestConfig(FileName, Prof, SourceType, ConfigJson, Caps);
   Engine := TG2Engine.Create;   { lives until ReportTests ends the process }
+  Engine.Capabilities := Caps;
   Engine.Profile := Prof;
   Engine.ConfigJson := ConfigJson;
   Engine.TestMode := True;

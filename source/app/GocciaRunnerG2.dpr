@@ -7,7 +7,7 @@ program GocciaRunnerG2;
   unchanged; once it covers GocciaRunner it replaces GocciaRunner.dpr.
 
   Not yet on G2: sandbox and install modes, source maps, coverage, the
-  profiler, bytecode files (--prefer-bytecode), FFI, fetch, and the read
+  profiler, bytecode files (--prefer-bytecode), fetch, and the read
   capability's audit events. }
 
 {$I Goccia.inc}
@@ -1039,6 +1039,7 @@ begin
     Engine := TG2Engine.Create;
     try
       MemoryStart := Engine.Memory;
+      Engine.Capabilities := Capabilities;
       Engine.Resolver := Resolver;
       { GocciaRunner has no timer globals (the test runner does) }
       Engine.ExposeTimers := False;

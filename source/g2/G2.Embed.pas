@@ -10,7 +10,7 @@ unit G2.Embed;
 interface
 
 uses
-  SysUtils, Goccia.CapabilityAudit, Goccia.HostEnvironment, Goccia.ModuleResolver, G2.Core, G2.HostAPI, G2.VM;
+  SysUtils, Goccia.Capabilities, Goccia.CapabilityAudit, Goccia.HostEnvironment, Goccia.ModuleResolver, G2.Core, G2.HostAPI, G2.VM;
 
 type
   { a console line and the method that wrote it (G2.HostAPI TConsoleSink) }
@@ -100,11 +100,15 @@ type
     { the module records before the run's entry: those are the host's (globals, manifests, the provider) }
     FModuleMark: Integer;
     FAuditSink: TGocciaCapabilityAuditSink;
+    { the capability set FFI.open judges libraries by (Capabilities); FFI is installed when it grants ffi }
+    FCapabilities: TGocciaCapabilities;
+    FHasCapabilities: Boolean;
     { the entry's file name (Run): an audited decision made outside every script frame is the entry's }
     FRunFile: UnicodeString;
     function NextRandom(Realm: Integer; out D: Double): Boolean;
     { G2.VM's AuditHook: the script's decisions, located at its call site }
     function AuditFromScript(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;
+    procedure SetCapabilities(const Value: TGocciaCapabilities);
     function ProviderRandom(Realm: Integer; out D: Double): Boolean;
     function ProviderClock(Kind: Integer; out Ns: Int64): Boolean;
     function LoadHostEnvironment: Boolean;
@@ -163,6 +167,9 @@ type
       constructor's, a ShadowRealm's, an eval's, and what the host reports through Audit, each at the script's call
       site. A sink that raises ends the run past every handler (g2aHostAbort). Set before Run }
     property AuditSink: TGocciaCapabilityAuditSink read FAuditSink write FAuditSink;
+    { the run's capability set (ADR 0122): with the ffi capability the FFI global is installed, and FFI.open judges
+      each library by its scopes. Set before the host is prepared; without it there is no FFI }
+    property Capabilities: TGocciaCapabilities read FCapabilities write SetCapabilities;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
@@ -182,7 +189,7 @@ implementation
 
 uses
   Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval, G2.Modules,
-  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel;
+  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -360,6 +367,8 @@ begin
     { located only from the provenance the engine recorded when it made the error, never from a thrown value's
       own stack string, which can name any file }
     if ErrorStackProvenance(RootAt(TempTop - 1), Stack) then FirstFrameOf(Stack, R);
+    { the host's suggestion for the error it threw (a PermissionDenied's grant) }
+    if ErrorHostSuggestion(RootAt(TempTop - 1), Text) then R.ErrorSuggestion := Text;
   finally
     PopRoots(1);
   end;
@@ -535,6 +544,12 @@ begin
   Result := True;
 end;
 
+procedure TG2Engine.SetCapabilities(const Value: TGocciaCapabilities);
+begin
+  FCapabilities := Value;
+  FHasCapabilities := True;
+end;
+
 function TG2Engine.ModuleLoaded(const Path: UnicodeString): Boolean;
 begin
   Result := ModuleLoadedSince(Path, FModuleMark);
@@ -581,7 +596,7 @@ end;
 
 function TG2Engine.AuditFromScript(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;
 const
-  Kinds: array[TAuditKind] of TGocciaCapabilityKind = (gckFunctionConstructor, gckShadowRealm, gckEval);
+  Kinds: array[TAuditKind] of TGocciaCapabilityKind = (gckFunctionConstructor, gckShadowRealm, gckEval, gckFFIOpen);
 begin
   Result := Audit(Kinds[Kind], Allow, Subject, Reason);
 end;
@@ -596,6 +611,7 @@ begin
   LimitsDisarm;
   SetMaxFrames(0);
   HostModulesDone;
+  FFIDone;
   EngineDone;
   inherited Destroy;
 end;
@@ -619,6 +635,7 @@ begin
   else
     SeedMathRandom(QWord(GetTickCount64) xor (QWord(GetProcessID) shl 32) xor QWord(PtrUInt(Self)));
   Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err, FExposeTimers);
+  if Result and FHasCapabilities and FCapabilities.Grants(gcFFI) then Result := InstallFFI(FCapabilities, Err);
   FHostReady := Result;
   if not Result then Exit;
   if FirstInEngine(StringifyRootedGen) then AddRoot(@StringifyFn);

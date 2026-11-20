@@ -106,6 +106,20 @@ GocciaRunner also leaves the failure out.
 constructor, a ShadowRealm, `eval` and a `node_modules` grant, each at the script's call site. An event that cannot
 be written ends the run past every handler with `Fatal error: capability audit delivery failed: ...`.
 
+### FFI
+
+With the `ffi` capability (`--allow-ffi`, or a trusted config's `allow-ffi`), G2 installs the `FFI` global that
+[FFI Built-ins](../built-ins-ffi.md) describes, through `G2.FFI`. The call plans, layouts, callback trampolines and
+library guard are GocciaScript's own units; `G2.FFI` is their JS face. FFI objects are ordinary objects with
+internal slots, so nothing is finalized by the collector: libraries, signatures and callback slots are released
+when the engine is torn down, and a closed library is unloaded no earlier than that. An aggregate's fields are its
+own accessor properties.
+
+G2's collector moves young objects, so a buffer's address is taken only after every argument conversion has run.
+A call that can enter script through a callback runs a minor collection first, which moves the buffers it passes
+into the old space, where nothing moves. `g2 --test` grants the permissions of the test file's `goccia.json`, as
+`GocciaTestRunner -P` accepts them.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
