@@ -1169,6 +1169,31 @@ begin
   Result := True;
 end;
 
+type
+  TICUUVersionInfo = array[0..3] of Byte;
+  TUGetVersion = procedure(var AVersion: TICUUVersionInfo); cdecl;
+
+var
+  { The major version of the loaded ICU, or 0 when it cannot be read. Set
+    while the load holds IntlInitLock, before IntlLoadSucceeded is, so a
+    caller that EnsureLoaded let through reads it complete. }
+  ICUMajorVersion: LongInt = 0;
+
+procedure ReadICUMajorVersion;
+var
+  S: Pointer;
+  Version: TICUUVersionInfo;
+begin
+  ICUMajorVersion := 0;
+  S := ICUGetProcAddress('u_getVersion');
+  if Assigned(S) then
+  begin
+    FillChar(Version, SizeOf(Version), 0);
+    TUGetVersion(S)(Version);
+    ICUMajorVersion := Version[0];
+  end;
+end;
+
 function EnsureLoaded: Boolean;
 var
   Handle: TLibHandle;
@@ -1184,7 +1209,10 @@ begin
     begin
       IntlLoadAttempted := True;
       if TryGetICULibraryHandle(Handle) then
+      begin
+        ReadICUMajorVersion;
         IntlLoadSucceeded := TryLoadIntlFunctions(Handle);
+      end;
     end;
     Result := IntlLoadSucceeded;
   finally
@@ -3351,37 +3379,24 @@ begin
     Result := Result + '-u-' + AKey + '-' + AValue;
 end;
 
-type
-  TICUUVersionInfo = array[0..3] of Byte;
-  TUGetVersion = procedure(var AVersion: TICUUVersionInfo); cdecl;
-
-var
-  ICUMajorVersionCache: LongInt = -1;
-
-{ The major version of the loaded ICU, or 0 when it cannot be read. Read once. }
-function ICUMajorVersion: LongInt;
-var
-  S: Pointer;
-  Version: TICUUVersionInfo;
-begin
-  if ICUMajorVersionCache >= 0 then
-    Exit(ICUMajorVersionCache);
-  ICUMajorVersionCache := 0;
-  S := ICUGetProcAddress('u_getVersion');
-  if Assigned(S) then
-  begin
-    FillChar(Version, SizeOf(Version), 0);
-    TUGetVersion(S)(Version);
-    ICUMajorVersionCache := Version[0];
-  end;
-  Result := ICUMajorVersionCache;
-end;
-
 const
   { ICU 78 formats its iso8601 calendar without the month or the era: `era:
     "short", year, month: "long", day` gives `" 2020  1"`, where ICU 74 and 79
     format both. }
   ICU_MAJOR_WITHOUT_ISO8601_FIELDS = 78;
+
+{ Whether the options ask for a field that ICU 78 leaves out of its iso8601
+  calendar: the era, the name of a month or the weekday. Its numeric fields
+  are formatted correctly, so a numeric date keeps the iso8601 patterns. }
+function RequestsTextualDateFields(
+  const AOptions: TIntlDateTimeFormatOptions): Boolean;
+var
+  Skeleton: string;
+begin
+  Skeleton := BuildDateTimeSkeleton(AOptions);
+  Result := (Pos('G', Skeleton) > 0) or (Pos('MMM', Skeleton) > 0) or
+    (Pos('E', Skeleton) > 0);
+end;
 
 function ApplyDateTimeLocaleOptions(const ALocale: string;
   const AOptions: TIntlDateTimeFormatOptions): string;
@@ -3393,7 +3408,8 @@ begin
   // On that ICU the locale names the Gregorian calendar, which formats the
   // same fields correctly. `resolvedOptions` keeps reporting iso8601: only the
   // locale handed to ICU changes.
-  if ICUMajorVersion = ICU_MAJOR_WITHOUT_ISO8601_FIELDS then
+  if (ICUMajorVersion = ICU_MAJOR_WITHOUT_ISO8601_FIELDS) and
+     RequestsTextualDateFields(AOptions) then
     Result := StringReplace(Result, '-ca-iso8601', '-ca-gregory',
       [rfReplaceAll, rfIgnoreCase]);
 end;
