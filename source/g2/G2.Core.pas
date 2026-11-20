@@ -460,13 +460,23 @@ function NativeStackLow: Boolean; noinline;
 
 { ---- a host's environment: time zone and randomness ---- }
 type
-  { Math.random's next value in realm Realm (a host's seeded stream: a deterministic run) }
-  THostRandomFn = function(Realm: Integer): Double of object;
+  { Math.random's next value in realm Realm (a host's seeded stream or provider); False with the provider's
+    exception pending }
+  THostRandomFn = function(Realm: Integer; out D: Double): Boolean of object;
+  { a host's clocks (a provider module): Kind 0 the epoch time, 1 the monotonic time, in nanoseconds; False with
+    the provider's exception pending }
+  THostClockFn = function(Kind: Integer; out Ns: Int64): Boolean of object;
 threadvar
   { the zone Date, Intl and Temporal.Now take in place of TZ and the system's ('' for none) }
   TimeZoneOverride: UnicodeString;
   { a host's Math.random (nil: the engine's own) }
   HostRandom: THostRandomFn;
+  { a host's clocks (nil: the system's) }
+  HostClock: THostClockFn;
+  { performance.timeOrigin (epoch milliseconds) and the monotonic time performance.now() counts from
+    (TimeOriginInit) }
+  TimeOriginMs: Double;
+  TimeOriginMonoNs: Int64;
 
 { ---- the host clock ---- }
 { a host's mocked clocks (fake timers): the epoch time in milliseconds Date, Temporal.Now and the like read, and
@@ -476,11 +486,19 @@ procedure SetClockOverride(EpochMs, MonoMs: Double); noinline;
 function EpochOverride(out Ms: Double): Boolean; noinline;
 { True with Ms the mocked monotonic time }
 function MonoOverride(out Ms: Double): Boolean; noinline;
+{ the epoch and monotonic times in nanoseconds a script reads under the mock: a host's clock, else the system's;
+  False with the host clock's exception pending }
+function HostEpochNs(out Ns: Int64): Boolean; noinline;
+function HostMonoNs(out Ns: Int64): Boolean; noinline;
+{ performance's time origin, taken as GocciaScript takes it: the monotonic time, the epoch time (the origin), the
+  monotonic time again (performance.now() counts from the middle of the two); each read through the mock when
+  there is one; False with the host clock's exception pending }
+function TimeOriginInit: Boolean;
 
 implementation
 
 uses
-  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText;
+  {$IFDEF UNIX}BaseUnix,{$ENDIF} NumericText, TimingUtils;
 
 function pthread_self: PtrUInt; cdecl; external 'c';
 function pthread_getattr_np(Th: PtrUInt; Attr: Pointer): Integer; cdecl; external 'c';
@@ -532,6 +550,36 @@ function MonoOverride(out Ms: Double): Boolean;
 begin
   Result := MonoOverridden;
   if Result then Ms := MonoOverrideP1 - 1 else Ms := 0;
+end;
+
+function HostEpochNs(out Ns: Int64): Boolean;
+var F: THostClockFn;
+begin
+  F := HostClock;
+  if Assigned(F) then Exit(F(0, Ns));
+  Ns := GetEpochNanoseconds;
+  Result := True;
+end;
+
+function HostMonoNs(out Ns: Int64): Boolean;
+var F: THostClockFn;
+begin
+  F := HostClock;
+  if Assigned(F) then Exit(F(1, Ns));
+  Ns := GetNanoseconds;
+  Result := True;
+end;
+
+function TimeOriginInit: Boolean;
+var M0, E, M1: Int64; Ms: Double;
+begin
+  Result := False;
+  if MonoOverride(Ms) then M0 := Trunc(Ms * 1000000) else if not HostMonoNs(M0) then Exit;
+  if EpochOverride(Ms) then E := Trunc(Ms * 1000000) else if not HostEpochNs(E) then Exit;
+  if MonoOverride(Ms) then M1 := Trunc(Ms * 1000000) else if not HostMonoNs(M1) then Exit;
+  TimeOriginMs := E / 1000000;
+  TimeOriginMonoNs := M0 + (M1 - M0) div 2;
+  Result := True;
 end;
 
 function ActiveProfile: TLangProfile;

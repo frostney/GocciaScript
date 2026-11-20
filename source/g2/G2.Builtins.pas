@@ -229,12 +229,14 @@ begin
   Result := True;
 end;
 
+{ the milliseconds since the time origin (TimeOriginInit); the mock's monotonic time (fake timers) as it is }
 function Perf_Now(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var TS: TTimeSpec; Ms: Double;
+var Ms: Double; Ns, Origin: Int64;
 begin
   if MonoOverride(Ms) then begin Res := MkDouble(Ms); Exit(True); end;
-  clock_gettime(CLOCK_MONOTONIC, @TS);
-  Res := MkDouble(TS.tv_sec * 1000.0 + TS.tv_nsec / 1e6);
+  if not HostMonoNs(Ns) then Exit(False);
+  Origin := TimeOriginMonoNs;
+  Res := MkDouble((Ns - Origin) / 1e6);
   Result := True;
 end;
 
@@ -2322,12 +2324,13 @@ begin
 end;
 
 function M_Random(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var F: THostRandomFn;
+var F: THostRandomFn; D: Double;
 begin
   F := HostRandom;
   if Assigned(F) then
   begin
-    Res := MkDouble(F(CurRealm));
+    if not F(CurRealm, D) then Exit(False);
+    Res := MkDouble(D);
     Exit(True);
   end;
   if RngState = 0 then RngState := RNG_DEFAULT_STATE;

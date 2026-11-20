@@ -82,16 +82,16 @@
   // members enumerable as WebIDL makes them; the global performance is its one instance
   if (typeof G.performance === 'object' && G.performance !== null) {
     const host = G.performance, nowFn = host.now;
-    // the host's epoch clock when the realm starts (no fake timers yet): a deterministic run's is 0
-    const origin = G.Date.now() - Reflect.apply(nowFn, host, []);
+    // the engine's time origin (the epoch time it started at, taken again once a host's clock is in place: a
+    // deterministic run's is 0); every realm of the engine shares it
     const brand = new WeakSet();
     const check = (o) => { if (!brand.has(o)) throw new TypeError('Illegal invocation'); };
     const Performance = { Performance() { throw new TypeError('Illegal constructor'); } }.Performance;
     const proto = {};
     const members = {
       now() { check(this); return Reflect.apply(nowFn, host, []); },
-      get timeOrigin() { check(this); return origin; },
-      toJSON() { check(this); return { timeOrigin: origin }; }
+      get timeOrigin() { check(this); return n.timeOrigin(); },
+      toJSON() { check(this); return { timeOrigin: n.timeOrigin() }; }
     };
     defineProperty(proto, 'constructor', { value: Performance, writable: true, enumerable: false, configurable: true });
     for (const k of ['now', 'toJSON']) defineProperty(proto, k, { value: members[k], writable: true, enumerable: true, configurable: true });

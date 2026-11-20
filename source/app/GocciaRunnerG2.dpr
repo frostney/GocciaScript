@@ -127,7 +127,8 @@ type
     function DefineVirtualModules(const AEngine: TG2Engine; const AFileConfigPath: string;
       out AError: string): Boolean;
     procedure ReportFailure(const AFileName: string;
-      const AResult: TG2RunResult; const ASource: TStringList);
+      const AResult: TG2RunResult; const ASource: TStringList; const AWithheld: string);
+    function HostEnvironmentPath(const AFileConfig: TConfigEntryArray; ADeterministic: Boolean): string;
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     procedure PrintJsonReport;
@@ -748,10 +749,12 @@ begin
   Result := '';
 end;
 
+{ AWithheld: a file whose source no report shows (the host environment's provider) }
 procedure TG2RunnerApp.ReportFailure(const AFileName: string;
-  const AResult: TG2RunResult; const ASource: TStringList);
+  const AResult: TG2RunResult; const ASource: TStringList; const AWithheld: string);
 var
-  Name, Suggestion: string;
+  Name, Suggestion, ErrorPath: string;
+  Source, Loaded: TStringList;
 begin
   case AResult.Aborted of
     g2aTimeout:
@@ -793,13 +796,80 @@ begin
   if Suggestion = '' then
     Suggestion := RuntimeSuggestion(UTF8Encode(AResult.ErrorText));
   if AResult.ErrorLine > 0 then
-    WriteLn(FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText),
-      UTF8Encode(AResult.ErrorFile), AResult.ErrorLine, AResult.ErrorColumn,
-      ASource, IsColorTerminal, Suggestion))
+  begin
+    { the code frame from the file the error is in: an imported module's own source, none of a withheld one }
+    Source := ASource;
+    Loaded := nil;
+    ErrorPath := UTF8Encode(AResult.ErrorFile);
+    if (ErrorPath <> '') and (ErrorPath <> AFileName) and
+       (ExpandFileName(ErrorPath) <> ExpandFileName(AFileName)) then
+    begin
+      Source := nil;
+      if (AWithheld = '') or (ExpandFileName(ErrorPath) <> AWithheld) then
+      begin
+        Loaded := TStringList.Create;
+        try
+          Loaded.LoadFromFile(ErrorPath);
+          Source := Loaded;
+        except
+          on EStreamError do
+            Source := nil;
+        end;
+      end;
+    end;
+    try
+      WriteLn(FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText),
+        ErrorPath, AResult.ErrorLine, AResult.ErrorColumn,
+        Source, IsColorTerminal, Suggestion));
+    finally
+      Loaded.Free;
+    end;
+  end
   else if AResult.ErrorText <> '' then
     WriteLn(Name, ': ', UTF8Encode(AResult.ErrorText))
   else
     WriteLn(Name);
+end;
+
+{ --host-environment's module, else a config's "host-environment" (against that config's directory): the path,
+  or '' for none. The command line's names a file from the working directory. }
+function TG2RunnerApp.HostEnvironmentPath(const AFileConfig: TConfigEntryArray;
+  ADeterministic: Boolean): string;
+var
+  Entry: TConfigEntry;
+  Entries: TConfigEntryArray;
+  Written: string;
+begin
+  Result := '';
+  Written := '';
+  Entry := Default(TConfigEntry);
+  if FHostEnvironmentModule.FromCommandLine then
+  begin
+    Written := FHostEnvironmentModule.Value;
+    Result := ExpandFileName(Written);
+  end
+  else
+  begin
+    if not TryFindConfigEntry(AFileConfig, 'host-environment', Entry) then
+    begin
+      Entries := ConfigNamedEntries(FHostEnvironmentModule);
+      if Length(Entries) > 0 then
+        Entry := Entries[0];
+    end;
+    if Entry.Value <> '' then
+    begin
+      Written := Entry.Value;
+      Result := ConfigInputPath(Entry.Value, Entry.SourcePath);
+    end;
+  end;
+  if Result = '' then
+    Exit;
+  if FProfileDeterministic.Present then
+    raise TParseError.Create('--host-environment cannot be combined with --profile-deterministic.');
+  if ADeterministic then
+    raise TParseError.Create('--host-environment cannot be combined with --deterministic.');
+  if not FileExists(Result) then
+    raise EFOpenError.Create('Module not found: "' + Written + '"');
 end;
 
 procedure TG2RunnerApp.RunSource(const AFileName: string;
@@ -858,6 +928,24 @@ begin
         Engine.OnConsole := Capture.Emit;
       Engine.FailOnUnhandledRejection := True;
       Engine.Deterministic := ResolveFlagOption(EngineOptions.Deterministic, FileConfig);
+      { a file's set-up the options refuse fails that file, as GocciaRunner's per-file handler reports it }
+      try
+        Engine.HostEnvironment := UnicodeString(HostEnvironmentPath(FileConfig, Engine.Deterministic));
+      except
+        on E: TCLIUsageError do
+          raise;
+        on E: Exception do
+        begin
+          if IsJsonOutput then
+            ReportLoadFailure(AReportIndex, AFileName, E, Start)
+          else
+          begin
+            WriteLn('Fatal error: ', E.Message);
+            ExitCode := 1;
+          end;
+          Exit;
+        end;
+      end;
       if not IsJsonOutput then
         Engine.OnWarning := Capture.PrintWarning;
       ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig,
@@ -920,7 +1008,7 @@ begin
       end;
       if not RunResult.Ok then
       begin
-        ReportFailure(AFileName, RunResult, ASource);
+        ReportFailure(AFileName, RunResult, ASource, UTF8Encode(Engine.HostEnvironment));
         ExitCode := 1;
         Exit;
       end;
@@ -1047,7 +1135,14 @@ begin
   Report.ErrorInfo.FileName := AFileName;
   Report.Timing.TotalTimeNanoseconds := GetNanoseconds - AStart;
   Report.Timing.ExecuteTimeNanoseconds := Report.Timing.TotalTimeNanoseconds;
-  FReports[AReportIndex] := Report;
+  { one after another, the reports are appended }
+  if AReportIndex >= 0 then
+    FReports[AReportIndex] := Report
+  else
+  begin
+    SetLength(FReports, Length(FReports) + 1);
+    FReports[High(FReports)] := Report;
+  end;
   ExitCode := 1;
 end;
 

@@ -24,11 +24,14 @@ uses
 
 {$I G2.Temporal.inc}
 
-function ZoneDir: string;
+const
+  SYSTEM_ZONE_DIR = '/usr/share/zoneinfo/';
+
+{ GOCCIA_TZDIR ('' when unset), read before the system's zone directory for each file, as GocciaScript reads it }
+function EnvZoneDir: string;
 begin
   Result := GetEnvironmentVariable('GOCCIA_TZDIR');
-  if Result = '' then Result := '/usr/share/zoneinfo';
-  Result := IncludeTrailingPathDelimiter(Result);
+  if Result <> '' then Result := IncludeTrailingPathDelimiter(Result);
 end;
 
 { the file's bytes as a string of code units 0..255, or undefined when it cannot be read }
@@ -55,17 +58,16 @@ end;
 
 { nowNs(): the current time, nanoseconds since the epoch, as a BigInt }
 function Temporal_NowNs(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var TS: TTimeSpec; B: TBigInteger; Ms: Double;
+var Ns: Int64; Ms: Double;
 begin
   if EpochOverride(Ms) then
   begin
     Res := BigToValue(TBigInteger.FromInt64(Trunc(Ms)).Multiply(TBigInteger.FromInt64(1000000)));
     Exit(True);
   end;
-  clock_gettime(CLOCK_REALTIME, @TS);
-  B := TBigInteger.FromInt64(Int64(TS.tv_sec)).Multiply(TBigInteger.FromInt64(1000000000)).Add(
-    TBigInteger.FromInt64(Int64(TS.tv_nsec)));
-  Res := BigToValue(B);
+  { the host's epoch clock (a provider module's, which may throw), else the system's }
+  if not HostEpochNs(Ns) then Exit(False);
+  Res := BigToValue(TBigInteger.FromInt64(Ns));
   Result := True;
 end;
 
@@ -84,13 +86,16 @@ begin
     C := Name[I];
     if not (CharInSet(C, ['A'..'Z', 'a'..'z', '0'..'9', '/', '_', '-', '+', '.'])) then Exit;
   end;
-  Res := FileBytes(ZoneDir + string(Name));
+  if EnvZoneDir <> '' then Res := FileBytes(EnvZoneDir + string(Name));
+  if Res = VUndefined then Res := FileBytes(SYSTEM_ZONE_DIR + string(Name));
 end;
 
 { tzIndex(): the zone directory's tzdata.zi (its Z and L lines name every zone and link) }
 function Temporal_TzIndex(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
-  Res := FileBytes(ZoneDir + 'tzdata.zi');
+  Res := VUndefined;
+  if EnvZoneDir <> '' then Res := FileBytes(EnvZoneDir + 'tzdata.zi');
+  if Res = VUndefined then Res := FileBytes(SYSTEM_ZONE_DIR + 'tzdata.zi');
   Result := True;
 end;
 

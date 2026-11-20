@@ -75,6 +75,17 @@ GocciaRunner's JSON report names it `MemoryLimitError`). An explicit reservation
 compare of the thread's `Interrupt`): the baseline code exits to the interpreter there, and an optimized region
 leaves at the jump with its frame state written back. `scripts/g2/limits-test.sh` checks all of this.
 
+### Host environment
+
+GocciaRunner on G2 takes `--host-environment=<module>` and the config key `host-environment`, as
+[Host Environment](../host-environment.md) describes. The module is evaluated before the entry. Its clocks reach
+`Date`, `Temporal.Now` and `performance`, and its `random(streamId)` reaches `Math.random` (stream `0n` for the
+first realm, a derived stream for each other realm). The time zone is read once, when the module loads, where
+GocciaScript reads it on each use. A named zone gives `Date` its local time from the zone's TZif data
+(`Goccia.Temporal.TimeZone`), as Temporal reads it, rather than from libc's `TZ`. `performance.now()` counts from
+the time origin, taken as the monotonic time, the epoch time, then the monotonic time again. An error thrown in
+the module is located there, without its source.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,

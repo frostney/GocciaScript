@@ -966,6 +966,15 @@ begin
   Result := True;
 end;
 
+{ timeOrigin(): performance.timeOrigin (G2.Core TimeOriginInit) }
+function Host_TimeOrigin(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Ms: Double;
+begin
+  Ms := TimeOriginMs;
+  Res := MkNumber(Ms);
+  Result := True;
+end;
+
 { realNow(): the real epoch time in milliseconds, whatever is mocked }
 function Host_RealNow(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var TS: TTimeSpec;
@@ -1196,6 +1205,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'semver', Host_Semver, 6);
   DefineNative(RootAt(TempTop - 1), 'setClock', Host_SetClock, 2);
   DefineNative(RootAt(TempTop - 1), 'realNow', Host_RealNow, 0);
+  DefineNative(RootAt(TempTop - 1), 'timeOrigin', Host_TimeOrigin, 0);
   DefineNative(RootAt(TempTop - 1), 'asyncGet', Host_AsyncGet, 0);
   DefineNative(RootAt(TempTop - 1), 'asyncSet', Host_AsyncSet, 1);
   DefineNative(RootAt(TempTop - 1), 'vitestSource', Host_VitestSource, 0);

@@ -19,7 +19,7 @@ procedure InitDate;
 implementation
 
 uses
-  BaseUnix, Unix, Linux, UnixType, SysUtils, Math, G2.Core, G2.VM;
+  BaseUnix, Unix, Linux, UnixType, SysUtils, Math, Goccia.Temporal.TimeZone, G2.Core, G2.VM;
 
 {$linklib c}
 
@@ -232,7 +232,8 @@ function OffsetAt(T: Double; out Abbr: UnicodeString): Double;
 var S: Int64; TM: Ttm; Z: UnicodeString;
 begin
   Abbr := '';
-  { a host's UTC (a deterministic run); another zone a host gives reaches localtime_r through TZ }
+  { a host's zone (a deterministic run's UTC, a host environment's): its TZif data, as Temporal reads it; else the
+    system's through localtime_r (TZ) }
   Z := TimeZoneOverride;
   if Z = 'UTC' then
   begin
@@ -240,6 +241,7 @@ begin
     Exit(0);
   end;
   S := Trunc(FloorD(T / 1000));
+  if Z <> '' then Exit(GetUtcOffsetSeconds(Z, S) * 1000.0);
   FillChar(TM, SizeOf(TM), 0);
   if localtime_r(@S, @TM) = nil then Exit(0);
   if TM.tm_zone <> nil then Abbr := UnicodeString(AnsiString(TM.tm_zone));
@@ -293,13 +295,16 @@ begin
   ObjOf(Args[0])^.Aux1 := MkNumber(T);
 end;
 
-function NowMs: Double;
-var TV: TTimeVal;
+{ the time value now: the mock (fake timers), else the host's epoch clock (a provider module's, which may throw:
+  False with its exception pending), else the system's }
+function NowMs(out Ms: Double): Boolean;
+var Ns: Int64;
 begin
-  if EpochOverride(Result) then Exit;
-  TV.tv_sec := 0; TV.tv_usec := 0;
-  fpgettimeofday(@TV, nil);
-  Result := Int64(TV.tv_sec) * 1000.0 + Int64(TV.tv_usec) div 1000;
+  Result := True;
+  if EpochOverride(Ms) then Exit;
+  if not HostEpochNs(Ns) then Exit(False);
+  { the milliseconds before the instant (floor, for an instant before the epoch) }
+  if Ns >= 0 then Ms := Ns div 1000000 else Ms := -((-(Ns + 1)) div 1000000) - 1;
 end;
 
 function Pad(N: Int64; W: Integer): UnicodeString;
@@ -333,9 +338,10 @@ function TZStr(TV: Double): UnicodeString;
 var O: Double; Abbr: UnicodeString; Mins: Int64;
 begin
   O := OffsetAt(TV, Abbr);
-  Mins := Round(O / msPerMinute);
-  if Mins >= 0 then Result := '+' else Result := '-';
-  Result := Result + Pad(Abs(Mins) div 60, 2) + Pad(Abs(Mins) mod 60, 2);
+  { steps 3-5: the sign, then HourFromTime and MinFromTime of abs(offset): a local mean time's seconds dropped }
+  Mins := Trunc(Abs(O) / msPerMinute);
+  if O >= 0 then Result := '+' else Result := '-';
+  Result := Result + Pad(Mins div 60, 2) + Pad(Mins mod 60, 2);
 end;
 
 { 21.4.4.41.4 ToDateString }
@@ -906,11 +912,15 @@ var TV, D: Double; V, P: TValue; O: PObj;
 begin
   if CurNewTarget = VUndefined then
   begin
-    Res := StrFromUnicode(ToDateString(NowMs));
+    if not NowMs(TV) then Exit(False);
+    Res := StrFromUnicode(ToDateString(TV));
     Exit(True);
   end;
   PushRoot(CurNewTarget);
-  if Argc = 0 then TV := NowMs
+  if Argc = 0 then
+  begin
+    if not NowMs(TV) then begin PopRoots(1); Exit(False); end;
+  end
   else if Argc = 1 then
   begin
     if IsObject(Args[1]) and (ObjOf(Args[1])^.OKind = okDate) then TV := NumOf(ObjOf(Args[1])^.Aux1)
@@ -942,8 +952,10 @@ begin
 end;
 
 function Date_Now(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
+var Ms: Double;
 begin
-  Res := MkNumber(NowMs);
+  if not NowMs(Ms) then Exit(False);
+  Res := MkNumber(Ms);
   Result := True;
 end;
 

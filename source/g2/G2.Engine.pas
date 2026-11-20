@@ -39,6 +39,9 @@ begin
   HeapInit(NurseryBytes);
   VMInit;
   InitIntrinsics;
+  { performance's time origin: the system's clocks (a host that mocks or provides them takes it again) }
+  HostClock := nil;
+  TimeOriginInit;
 end;
 
 procedure InitIntrinsics;

@@ -75,7 +75,19 @@ type
     FRandoms: array of IGocciaHostRandom;
     FRandomForks: UInt64;
     FFailOnUnhandledRejection: Boolean;
-    function NextRandom(Realm: Integer): Double;
+    { --host-environment: the provider module ('' none), its four exports once loaded (epochNanoseconds,
+      monotonicNanoseconds, timeZoneIdentifier, random; rooted), each realm's random stream id (set: first drawn),
+      and whether a clock or random export is running (a provider that reads its own source is refused) }
+    FHostEnvironment: UnicodeString;
+    FEnvLoaded: Boolean;
+    FEnvFns: array[0..3] of TValue;
+    FEnvStreams: array of UInt64;
+    FEnvStreamSet: array of Boolean;
+    FEnvClockCalling, FEnvRandomCalling: Boolean;
+    function NextRandom(Realm: Integer; out D: Double): Boolean;
+    function ProviderRandom(Realm: Integer; out D: Double): Boolean;
+    function ProviderClock(Kind: Integer; out Ns: Int64): Boolean;
+    function LoadHostEnvironment: Boolean;
     function InstallHost(var Err: UnicodeString): Boolean;
   public
     { builds this thread's engine; one at a time per thread }
@@ -115,6 +127,10 @@ type
     { GocciaScript's deterministic profile (--deterministic): the epoch and monotonic clocks at 0, the time zone
       UTC, Math.random a seeded stream; set before the first run or PrepareHost }
     property Deterministic: Boolean read FDeterministic write FDeterministic;
+    { GocciaScript's JavaScript host environment (--host-environment): the module at this path, evaluated before
+      the first run's entry, exports the clocks, time zone and random streams the script reads (docs/
+      host-environment.md); its time zone is read once, then. Not with Deterministic }
+    property HostEnvironment: UnicodeString read FHostEnvironment write FHostEnvironment;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
     property FailOnUnhandledRejection: Boolean read FFailOnUnhandledRejection write FFailOnUnhandledRejection;
@@ -133,7 +149,8 @@ function RecommendedProfile: TLangProfile;
 implementation
 
 uses
-  Math, TimingUtils, G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules, G2.Promise, G2.Builtins;
+  Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules,
+  G2.Promise, G2.Builtins, G2.BigIntV;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -257,7 +274,7 @@ begin
   EngineInit;
 end;
 
-function TG2Engine.NextRandom(Realm: Integer): Double;
+function TG2Engine.NextRandom(Realm: Integer; out D: Double): Boolean;
 begin
   if Realm >= Length(FRandoms) then SetLength(FRandoms, Realm + 1);
   if FRandoms[Realm] = nil then
@@ -265,12 +282,156 @@ begin
     Inc(FRandomForks);
     FRandoms[Realm] := FRandoms[0].Fork(FRandomForks);
   end;
-  Result := FRandoms[Realm].NextDouble;
+  D := FRandoms[Realm].NextDouble;
+  Result := True;
+end;
+
+const
+  STREAM_HASH_INCREMENT = UInt64($9E3779B97F4A7C15);
+  STREAM_HASH_MULTIPLIER = UInt64($BF58476D1CE4E5B9);
+
+{$PUSH}{$Q-}{$R-}
+{ a child stream's id from its parent's and the child's number (Goccia.HostEnvironment.JavaScript's
+  DeriveStreamId: a realm's stream is the provider's own fork of the engine's) }
+function DeriveStreamId(Parent, Child: UInt64): UInt64;
+begin
+  Result := (Parent xor STREAM_HASH_INCREMENT) + Child;
+  Result := (Result xor (Result shr 30)) * STREAM_HASH_MULTIPLIER;
+  Result := Result xor (Result shr 27);
+end;
+{$POP}
+
+function BigFromQWord(Q: UInt64): TBigInteger;
+begin
+  if Q shr 32 = 0 then Exit(TBigInteger.FromInt64(Int64(Q)));
+  Result := TBigInteger.FromInt64(Int64(Q shr 32)).Multiply(TBigInteger.FromInt64($100000000)).Add(
+    TBigInteger.FromInt64(Int64(Q and $FFFFFFFF)));
+end;
+
+{ Math.random through the provider's random(streamId): realm 0 stream 0n, each other realm a fork in the order
+  the realms first draw }
+function TG2Engine.ProviderRandom(Realm: Integer; out D: Double): Boolean;
+var A: array[0..0] of TValue; R: TValue;
+begin
+  D := 0;
+  if FEnvRandomCalling then
+    Exit(ThrowTypeError('Host environment export "random" cannot call Math.random recursively'));
+  if Realm >= Length(FEnvStreams) then
+  begin
+    SetLength(FEnvStreams, Realm + 1);
+    SetLength(FEnvStreamSet, Realm + 1);
+  end;
+  if not FEnvStreamSet[Realm] then
+  begin
+    if Realm > 0 then
+    begin
+      Inc(FRandomForks);
+      FEnvStreams[Realm] := DeriveStreamId(0, FRandomForks);
+    end;
+    FEnvStreamSet[Realm] := True;
+  end;
+  A[0] := BigToValue(BigFromQWord(FEnvStreams[Realm]));
+  FEnvRandomCalling := True;
+  try
+    Result := CallValue(FEnvFns[3], VUndefined, @A[0], 1, R);
+  finally
+    FEnvRandomCalling := False;
+  end;
+  if not Result then Exit;
+  if not IsNumber(R) then Exit(ThrowTypeError('Host environment export "random" must return a Number'));
+  D := NumOf(R);
+  if IsNan(D) or IsInfinite(D) or (D < 0) or (D >= 1) then
+    Exit(ThrowError('RangeError', 'Host environment export "random" must return a finite Number greater ' +
+      'than or equal to 0 and less than 1'));
+end;
+
+{ the provider's epochNanoseconds() (Kind 0) or monotonicNanoseconds() (1): an Int64-range BigInt or a safe
+  integer Number }
+function TG2Engine.ProviderClock(Kind: Integer; out Ns: Int64): Boolean;
+var Name: UnicodeString; R: TValue; B: TBigInteger; D: Double;
+begin
+  Ns := 0;
+  if Kind = 0 then Name := 'epochNanoseconds' else Name := 'monotonicNanoseconds';
+  if FEnvClockCalling then
+    Exit(ThrowTypeError('Host environment export "' + Name + '" cannot call a host time source recursively'));
+  FEnvClockCalling := True;
+  try
+    Result := CallValue(FEnvFns[Kind], VUndefined, nil, 0, R);
+  finally
+    FEnvClockCalling := False;
+  end;
+  if not Result then Exit;
+  if IsBigInt(R) then
+  begin
+    B := ValueToBig(R);
+    if (B.Compare(TBigInteger.FromInt64(Low(Int64))) < 0) or (B.Compare(TBigInteger.FromInt64(High(Int64))) > 0) then
+      Exit(ThrowError('RangeError', 'Host environment export "' + Name + '" must return an Int64-range BigInt'));
+    Ns := B.ToInt64;
+    Exit(True);
+  end;
+  if IsNumber(R) then
+  begin
+    D := NumOf(R);
+    if IsNan(D) or IsInfinite(D) or (Frac(D) <> 0) or (Abs(D) > 9007199254740991.0) then
+      Exit(ThrowError('RangeError', 'Host environment export "' + Name +
+        '" must return a safe integer Number or Int64-range BigInt'));
+    Ns := Trunc(D);
+    Exit(True);
+  end;
+  Result := ThrowTypeError('Host environment export "' + Name + '" must return a Number or BigInt');
+end;
+
+{ the provider module evaluated, its exports checked and taken, the clocks and Math.random routed through them,
+  performance's time origin taken from them, then the time zone read; False with the error pending }
+function TG2Engine.LoadHostEnvironment: Boolean;
+const NAMES: array[0..3] of UnicodeString = ('epochNanoseconds', 'monotonicNanoseconds', 'timeZoneIdentifier',
+  'random');
+var NS, V, R: TValue; I: Integer; Z, C: string;
+begin
+  Result := False;
+  if not EvaluateModuleNamespace(UnicodeString(ExpandFileName(UTF8Encode(FHostEnvironment))), NS) then Exit;
+  PushRoot(NS);
+  try
+    for I := 0 to 3 do
+    begin
+      if not GetV(RootAt(TempTop - 1), AtomOf(NAMES[I]), V) then Exit;
+      if not IsCallable(V) then
+        Exit(ThrowTypeError('Host environment module must export callable "' + NAMES[I] + '"'));
+      FEnvFns[I] := V;
+    end;
+  finally
+    PopRoots(1);
+  end;
+  AddRootRange(@FEnvFns[0], 4);
+  FEnvLoaded := True;
+  FRandomForks := 0;
+  SetLength(FEnvStreams, 0);
+  SetLength(FEnvStreamSet, 0);
+  HostClock := ProviderClock;
+  HostRandom := ProviderRandom;
+  if not TimeOriginInit then Exit;
+  { the default time zone, read once (Date's local time, Temporal.Now, Intl), as GocciaScript canonicalizes it }
+  FEnvClockCalling := True;
+  try
+    if not CallValue(FEnvFns[2], VUndefined, nil, 0, R) then Exit;
+  finally
+    FEnvClockCalling := False;
+  end;
+  if not IsString(R) then Exit(ThrowTypeError('Host environment export "timeZoneIdentifier" must return a string'));
+  Z := StrToUnicode(StrOf(R));
+  if TimeZoneIdentifiersEqual(Z, 'UTC') then Z := 'UTC'
+  else if TryCanonicalizeTimeZoneIdentifierCase(Z, C) and IsValidTimeZone(C) then Z := C
+  else if not IsValidTimeZone(Z) then
+    Exit(ThrowError('RangeError', 'Host environment export "timeZoneIdentifier" returned an unsupported time ' +
+      'zone: ' + Z));
+  TimeZoneOverride := Z;
+  Result := True;
 end;
 
 destructor TG2Engine.Destroy;
 begin
   HostRandom := nil;
+  HostClock := nil;
   TimeZoneOverride := '';
   if FDeterministic then SetClockOverride(NaN, NaN);
   LimitsDisarm;
@@ -293,6 +454,8 @@ begin
     FRandoms[0] := TGocciaSeededHostRandom.Create(TGocciaHostEnvironment.DeterministicSeed);
     FRandomForks := 0;
     HostRandom := NextRandom;
+    { the time origin under the profile's clocks (0) }
+    TimeOriginInit;
   end
   else
     SeedMathRandom(QWord(GetTickCount64) xor (QWord(GetProcessID) shl 32) xor QWord(PtrUInt(Self)));
@@ -365,6 +528,20 @@ begin
   SetHostResolver(FResolver);
   ClearLoadFailure;
   TakeResolveCandidate;
+  { the JavaScript host environment, before the entry: a provider that does not load fails the run with its error }
+  if (FHostEnvironment <> '') and not FEnvLoaded and not LoadHostEnvironment then
+  begin
+    PushRoot(Pending);
+    Pending := VUndefined;
+    if ToStringV(RootAt(TempTop - 1), S) and IsString(S) then Result.ErrorMessage := StrToUnicode(StrOf(S));
+    if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
+    Pending := VUndefined;
+    DescribeThrown(RootAt(TempTop - 1), Result);
+    PopRoots(1);
+    Pending := VUndefined;
+    SetHostResolver(nil);
+    Exit;
+  end;
   case FSourceKind of
     g2skScript: Kind := 1;
     g2skModule: Kind := 2;
