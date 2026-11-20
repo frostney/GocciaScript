@@ -447,7 +447,7 @@ type
     function FollowsPreprocessorText: Boolean;
     procedure RememberNotTypeArguments(const AFirst: Integer;
       const AEndsInLexError: Boolean; const AConstructor: Boolean = False;
-      const AEndsInCall: Boolean = False);
+      const AEndsAtRejection: Boolean = False);
     function TryParseGenericArrowFunction(
       out AExpression: TGocciaExpression;
       const AAsyncToken: TGocciaToken = nil): Boolean;
@@ -659,6 +659,16 @@ const
     gttIncrement, gttDecrement, gttInstanceof, gttIn, gttDelete,
     gttOptionalChaining, gttSemicolon, gttRegex, gttAt, gttHash, gttSpread,
     gttEOF];
+
+  // Tokens that can follow a template literal type in a type argument list:
+  // a closer, a separator, a union or intersection, an indexed access, or a
+  // conditional type's parts. Anything else, such as the '+' of
+  // `a < `${b}` + 1 > (c)`, makes the template an expression.
+  TEMPLATE_TYPE_FOLLOWER_TOKENS: TGocciaTokenTypeSet = [
+    gttComma, gttGreater, gttRightShift, gttUnsignedRightShift,
+    gttBitwiseOr, gttBitwiseAnd, gttLeftBracket, gttRightBracket,
+    gttRightParen, gttRightBrace, gttSemicolon, gttExtends, gttQuestion,
+    gttColon];
 
 { TGocciaPrivateClassContext }
 
@@ -10853,7 +10863,8 @@ end;
 // qualified names with type arguments, literals, `keyof`, `typeof` and
 // `infer`, indexed access, parentheses, object types of property
 // signatures, unions, intersections, conditional types and nested
-// templates. This steps over a template made of those and
+// templates, and the function, array and tuple types their type arguments
+// can take. This steps over a template made of those and
 // returns False at anything else, which keeps the comparison reading: a
 // call, an operator, a comma, an object. A type it does not read here, such
 // as a function type, is one TypeScript rejects in a substitution.
@@ -10935,6 +10946,72 @@ var
 
   function SkipType(const ADepth: Integer;
     const AAllowConditional: Boolean): Boolean;
+  var
+    IsFunctionType: Boolean;
+
+    // A function type, `(name: T, ...rest: U[]) => R`, from its '('. When
+    // the parentheses do not hold a parameter list followed by '=>',
+    // AIsFunctionType is False and the cursor is back at the '(', which then
+    // opens a parenthesized type.
+    function SkipFunctionType(const AFunctionDepth: Integer;
+      out AIsFunctionType: Boolean): Boolean;
+    var
+      SavedCurrent: Integer;
+      SavedLexer: TGocciaLexerCheckpoint;
+      IsParameterList: Boolean;
+    begin
+      Result := False;
+      AIsFunctionType := False;
+      SavedCurrent := FCurrent;
+      if Assigned(FLexer) then
+        SavedLexer := FLexer.CreateCheckpoint;
+      AdvanceType;
+      IsParameterList := True;
+      while IsParameterList and (PeekType <> gttRightParen) do
+      begin
+        if PeekType = gttSpread then
+          AdvanceType;
+        if not (PeekType in [gttIdentifier, gttThis]) then
+        begin
+          IsParameterList := False;
+          Break;
+        end;
+        AdvanceType;
+        if PeekType = gttQuestion then
+          AdvanceType;
+        if PeekType = gttColon then
+        begin
+          AdvanceType;
+          if not SkipType(AFunctionDepth + 1, True) then
+          begin
+            IsParameterList := False;
+            Break;
+          end;
+        end;
+        if PeekType = gttComma then
+          AdvanceType
+        else if PeekType <> gttRightParen then
+          IsParameterList := False;
+      end;
+      if IsParameterList then
+      begin
+        AdvanceType;
+        IsParameterList := PeekType = gttArrow;
+      end;
+      if not IsParameterList then
+      begin
+        FCurrent := SavedCurrent;
+        if Assigned(FLexer) then
+          FLexer.RestoreCheckpoint(SavedLexer);
+        // A '(' is only peeked with nothing owed, so nothing was owed here.
+        OwedGreater := 0;
+        Exit;
+      end;
+      AIsFunctionType := True;
+      AdvanceType;
+      Result := SkipType(AFunctionDepth + 1, True);
+    end;
+
   begin
     Result := False;
     if ADepth > MAX_TEMPLATE_TYPE_NESTING then
@@ -10983,11 +11060,33 @@ var
           if not SkipTemplateLiteralType(ANesting + ADepth + 1) then
             Exit;
         gttLeftParen:
+          if not SkipFunctionType(ADepth, IsFunctionType) then
           begin
+            if IsFunctionType then
+              Exit;
             AdvanceType;
             if not SkipType(ADepth + 1, True) or
                (PeekType <> gttRightParen) then
               Exit;
+            AdvanceType;
+          end;
+        // A tuple type, `[A, B]`.
+        gttLeftBracket:
+          begin
+            AdvanceType;
+            while PeekType <> gttRightBracket do
+            begin
+              if PeekType = gttSpread then
+                AdvanceType;
+              if not SkipType(ADepth + 1, True) then
+                Exit;
+              if PeekType = gttQuestion then
+                AdvanceType;
+              if PeekType = gttComma then
+                AdvanceType
+              else if PeekType <> gttRightBracket then
+                Exit;
+            end;
             AdvanceType;
           end;
         // An object type of property signatures, `{ k: "v" }`, as in
@@ -11017,13 +11116,15 @@ var
       else
         Exit;
       end;
-      // Indexed access, `T[K]`. An array type, `T[]`, holds no string.
+      // An array type, `T[]`, or an indexed access, `T[K]`. An array holds
+      // no string, but can be an argument to a type that does.
       while PeekType = gttLeftBracket do
       begin
         AdvanceType;
-        if not SkipType(ADepth + 1, True) or
-           (PeekType <> gttRightBracket) then
-          Exit;
+        if PeekType <> gttRightBracket then
+          if not SkipType(ADepth + 1, True) or
+             (PeekType <> gttRightBracket) then
+            Exit;
         AdvanceType;
       end;
       if not (PeekType in [gttBitwiseOr, gttBitwiseAnd]) then
@@ -11077,7 +11178,7 @@ function TGocciaParser.TryCollectNewExpressionTypeArguments(
   out ATypeArguments: TGocciaTypeRangeArray): Boolean;
 var
   Depth: Integer;
-  HasTypeArgument, LexError: Boolean;
+  HasTypeArgument, LexError, EndsAtRejection: Boolean;
   SavedCurrent: Integer;
   SavedLexer: TGocciaLexerCheckpoint;
 begin
@@ -11090,6 +11191,7 @@ begin
     Exit;
 
   LexError := False;
+  EndsAtRejection := False;
   SavedCurrent := FCurrent;
   if Assigned(FLexer) then
     SavedLexer := FLexer.CreateCheckpoint;
@@ -11112,10 +11214,18 @@ begin
           gttComma:;
           gttTemplateHead:
             begin
-              // A template literal type; see SkipTemplateLiteralType.
+              // A template literal type; see SkipTemplateLiteralType. In a
+              // JavaScript file `new C < `${b}` > (c)` is a comparison.
               HasTypeArgument := True;
-              if not SkipTemplateLiteralType(0) then
+              if not FAllowsTypeScriptOnlySyntax or
+                 not SkipTemplateLiteralType(0) then
                 Exit;
+              if not (PeekWithLexicalGoal(glgInputElementDiv).TokenType in
+                TEMPLATE_TYPE_FOLLOWER_TOKENS) then
+              begin
+                EndsAtRejection := True;
+                Exit;
+              end;
               Continue;
             end;
         else
@@ -11146,7 +11256,8 @@ begin
       FCurrent := SavedCurrent;
       if not Assigned(FLexer) or
          (SavedLexer.TokenCount = SavedCurrent + 1) then
-        RememberNotTypeArguments(SavedCurrent, LexError, True);
+        RememberNotTypeArguments(SavedCurrent, LexError, True,
+          EndsAtRejection);
       if Assigned(FLexer) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
@@ -11204,7 +11315,7 @@ function TGocciaParser.TryCollectCallExpressionTypeArguments(
 var
   BracketDepth, Depth: Integer;
   HasTypeArgument, LexError, ElementTypeArguments, PreviousEndsOperand,
-    EndsInCall: Boolean;
+    EndsAtRejection: Boolean;
   // The brackets open in the list, innermost last.
   OpenBrackets: string;
   SavedCurrent: Integer;
@@ -11232,7 +11343,7 @@ begin
   if Assigned(FLexer) then
     SavedLexer := FLexer.CreateCheckpoint;
   LexError := False;
-  EndsInCall := False;
+  EndsAtRejection := False;
 
   try
     try
@@ -11261,7 +11372,7 @@ begin
             ((OpenBrackets = '') or
              (OpenBrackets[Length(OpenBrackets)] <> '{')) then
           begin
-            EndsInCall := True;
+            EndsAtRejection := True;
             Exit;
           end;
         end;
@@ -11304,7 +11415,13 @@ begin
               if ElementTypeArguments then
                 SkipTemplateLiteral
               else if not SkipTemplateLiteralType(0) then
+                Exit
+              else if not (PeekWithLexicalGoal(glgInputElementDiv).TokenType in
+                TEMPLATE_TYPE_FOLLOWER_TOKENS) then
+              begin
+                EndsAtRejection := True;
                 Exit;
+              end;
               Continue;
             end;
         else
@@ -11337,7 +11454,7 @@ begin
       // among them would see, a lexer error at the end included.
       if not Assigned(FLexer) or
          (SavedLexer.TokenCount = SavedCurrent + 1) then
-        RememberNotTypeArguments(SavedCurrent, LexError, False, EndsInCall);
+        RememberNotTypeArguments(SavedCurrent, LexError, False, EndsAtRejection);
       if Assigned(FLexer) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
@@ -11382,12 +11499,13 @@ end;
 // and a '<' inside one is left to its own probe. A template the list ends
 // inside is where the scan stopped: one whose substitution is not a type,
 // or that does not close. Every probe that reaches it fails there, and so
-// does every probe that reaches the call or tagged template the list ends
-// at with AEndsInCall: the operand before it is the same for each probe,
-// and so is the innermost bracket open around it, or a probe sees none.
+// does every probe that reaches the token the list ends at with
+// AEndsAtRejection: a call or tagged template, whose operand before it is
+// the same for each probe, as is the innermost bracket open around it, or a
+// probe sees none; or a token no template literal type is followed by.
 procedure TGocciaParser.RememberNotTypeArguments(const AFirst: Integer;
   const AEndsInLexError: Boolean; const AConstructor: Boolean;
-  const AEndsInCall: Boolean);
+  const AEndsAtRejection: Boolean);
 const
   // A shorter scan costs about what remembering it would.
   MIN_REMEMBERED_TOKENS = 32;
@@ -11518,7 +11636,7 @@ begin
 
   // Where every probe that gets that far fails; see the comment above.
   Rejection := OpenTemplate;
-  if (Rejection < 0) and AEndsInCall then
+  if (Rejection < 0) and AEndsAtRejection then
     Rejection := Count - 1;
 
   SetLength(Stack, Count);

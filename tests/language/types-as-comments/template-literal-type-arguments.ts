@@ -43,6 +43,12 @@ describe("template literal type arguments", () => {
     expect(identity<`${string extends string ? "a" : "b"}`>(6)).toBe(6);
     expect(identity<`${-1}`>(7)).toBe(7);
   });
+
+  test("with function, array and tuple types as the arguments of a type in a substitution", () => {
+    expect(identity<`${ReturnType<() => "a">}`>(1)).toBe(1);
+    expect(identity<`${ReturnType<(x: string, ...rest: number[]) => "a">}`>(2)).toBe(2);
+    expect(identity<`${[string, number][0]}`>(3)).toBe(3);
+  });
 });
 
 describe("comparisons with templates and calls", () => {
@@ -73,6 +79,14 @@ describe("comparisons with templates and calls", () => {
 
     // prettier-ignore
     expect(a < `${tag`x`}` > (c)).toBe(false);
+  });
+
+  test("an operator after a template keeps the comparison reading", () => {
+    // TypeScript cannot read `+` after a type, so the span is not type arguments.
+    // prettier-ignore
+    expect(a < [`${b}` + 1] > (c)).toBe(true);
+    // prettier-ignore
+    expect(typeof (new Box < `${b}` + 1 > (c))).toBe("boolean");
   });
 
   test("a call between the angle brackets keeps the comparison reading", () => {
