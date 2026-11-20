@@ -29,6 +29,9 @@ procedure SetConsoleSink(Sink: TConsoleSink);
 { the resolver of this thread's imports: a host's, configured with its import map, aliases and node_modules grant
   (Goccia.Modules.Resolver, not owned); nil for the plain one, which resolves relative and absolute paths only }
 procedure SetHostResolver(R: TModuleResolver);
+{ frees this thread's module resolution state (the plain resolver, the specifiers each module was first imported
+  by): an engine's teardown, so the next engine on the thread starts without them }
+procedure HostModulesDone;
 { the path the last failed resolution tried (EModuleNotFound's ResolvedCandidatePath; '' for none), taken }
 function TakeResolveCandidate: UnicodeString;
 { globals injection, after InstallHostGlobals: Text, a data file's (Ext its extension: .json; .json5 and .jsonc;
@@ -448,8 +451,8 @@ begin
 end;
 
 { G2.Modules's resolution hook: the host's own modules by their keys, a mock by its address, anything else by the
-  CLIs' resolver (Goccia.ModuleResolver) }
-var
+  CLIs' resolver (Goccia.ModuleResolver); each engine thread's own }
+threadvar
   HostResolver: TModuleResolver;
   { a host's resolver, in place of HostResolver }
   ProvidedResolver: TModuleResolver;
@@ -459,6 +462,14 @@ var
 procedure SetHostResolver(R: TModuleResolver);
 begin
   ProvidedResolver := R;
+end;
+
+procedure HostModulesDone;
+begin
+  FreeAndNil(HostResolver);
+  FreeAndNil(ImportSpecifiers);
+  ProvidedResolver := nil;
+  ResolveCandidate := '';
 end;
 
 function TakeResolveCandidate: UnicodeString;
@@ -1269,6 +1280,5 @@ begin
 end;
 
 finalization
-  FreeAndNil(HostResolver);
-  FreeAndNil(ImportSpecifiers);
+  HostModulesDone;
 end.

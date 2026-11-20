@@ -178,10 +178,8 @@ const
     (S: 'with'; K: tkWith));
 
 var
-  { a reserved word's kind by its atom: the atoms of KEYWORDS, filled on first use }
-  KwAtoms: array[0..35] of PStr;
-  KwReady: Boolean = False;
-  { the reserved words by first letter, as UTF-16 text, for KeywordOfChars }
+  { the reserved words by first letter, as UTF-16 text, for KeywordOfChars: text, not atoms (an atom is one
+    thread's: each engine thread has its own table), filled once at unit initialization, before any thread runs }
   KwText: array[0..35] of UnicodeString;
   KwByFirst: array[0..25] of array of Integer;
   { per first letter: bit L set when a reserved word of length L starts with it }
@@ -194,13 +192,11 @@ begin
   begin
     W := UnicodeString(KEYWORDS[I].S);
     KwText[I] := W;
-    KwAtoms[I] := AtomOfChars(PWideChar(W), Length(W));
     F := Ord(W[1]) - Ord('a');
     KwLenMask[F] := KwLenMask[F] or (Cardinal(1) shl Length(W));
     SetLength(KwByFirst[F], Length(KwByFirst[F]) + 1);
     KwByFirst[F][High(KwByFirst[F])] := I;
   end;
-  KwReady := True;
 end;
 
 { the reserved word spelled by the L characters at P (ASCII, no escapes), or tkIdent }
@@ -219,16 +215,9 @@ begin
 end;
 
 function KeywordKind(A: PStr; out K: TTok): Boolean;
-var I: Integer;
 begin
-  if (A^.Len < 2) or (A^.Len > 10) then Exit(False);
-  for I := 0 to High(KwAtoms) do
-    if KwAtoms[I] = A then
-    begin
-      K := KEYWORDS[I].K;
-      Exit(True);
-    end;
-  Result := False;
+  K := KeywordOfChars(StrChars(A), A^.Len);
+  Result := K <> tkIdent;
 end;
 
 function TokName(K: TTok): string;
@@ -245,11 +234,6 @@ end;
 constructor TScanner.Create(ASrc: PWideChar; ALen: Integer);
 begin
   inherited Create;
-  if not KwReady then
-  begin
-    InitKeywords;
-    InitCClass;
-  end;
   FSrc := ASrc;
   FLen := ALen;
   FPos := 0;
@@ -1221,4 +1205,7 @@ begin
   NextOther(Goal);
 end;
 
+initialization
+  InitKeywords;
+  InitCClass;
 end.

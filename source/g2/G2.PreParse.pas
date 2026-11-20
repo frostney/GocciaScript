@@ -346,8 +346,8 @@ const
 
   LexicalKinds = [dkLet, dkConst, dkClass, dkUsing, dkLexFunction, dkImport, dkClassName];
 
-var
-  AtomsReady: Boolean = False;
+{ atoms are one thread's (each engine thread has its own atom table): every thread pre-parses with its own }
+threadvar
   AYield, AAwait, ALet, AStatic, AImplements, AInterface, APackage, APrivate, AProtected, APublic, AEval,
   AArguments, AAsync, AOf, AGet, ASet, AUsing, AAccessor, ATarget, AMeta, AFrom, AAs, AConstructor, APrototype,
   ASource, ADefer, AProto, ADefault: PStr;
@@ -412,7 +412,6 @@ begin
   AddSpec(APublic, spStrictReserved);
   AddSpec(AEval, spEval);
   AddSpec(AArguments, spArguments);
-  AtomsReady := True;
 end;
 
 { TAtomMap }

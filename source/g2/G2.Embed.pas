@@ -273,6 +273,7 @@ begin
   if FDeterministic then SetClockOverride(NaN, NaN);
   LimitsDisarm;
   SetMaxFrames(0);
+  HostModulesDone;
   EngineDone;
   inherited Destroy;
 end;

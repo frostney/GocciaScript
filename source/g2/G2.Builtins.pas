@@ -2308,12 +2308,16 @@ const
   MathLN10: Double = 2.302585092994046;
   MathSQRT2: Double = 1.4142135623730951;
 
-var
-  RngState: QWord = 88172645463325252;
+const
+  RNG_DEFAULT_STATE = 88172645463325252;
+
+{ each engine thread's own stream (SeedMathRandom seeds it; a threadvar starts 0, which xorshift cannot leave) }
+threadvar
+  RngState: QWord;
 
 procedure SeedMathRandom(Seed: QWord);
 begin
-  if Seed = 0 then Seed := 88172645463325252;   { xorshift has no zero state }
+  if Seed = 0 then Seed := RNG_DEFAULT_STATE;   { xorshift has no zero state }
   RngState := Seed;
 end;
 
@@ -2326,6 +2330,7 @@ begin
     Res := MkDouble(F(CurRealm));
     Exit(True);
   end;
+  if RngState = 0 then RngState := RNG_DEFAULT_STATE;
   RngState := RngState xor (RngState shl 13);
   RngState := RngState xor (RngState shr 7);
   RngState := RngState xor (RngState shl 17);
