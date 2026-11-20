@@ -16394,6 +16394,23 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
     if (!run(RUNNER, [entry, "--globals", globals]).includes(warning))
       throw new Error("A plain run should print the globals module's imported warning");
 
+    // A worker thread never prints the warning, in text mode too: the loader's
+    // own guard, apart from the JSON-mode mute. One thread runs the same
+    // directory with the warnings printed, so the silence is the workers'.
+    const dir = join(tmp, "dir");
+    mkdirSync(dir);
+    for (const name of ["comp.js", "a.mjs", "b.mjs", "c.mjs"])
+      writeFileSync(join(dir, name), name === "comp.js" ? readFileSync(join(tmp, "comp.js")) : 'import { a } from "./comp.js";\n');
+    const serial = Bun.spawnSync([RUNNER, dir, "--jobs=1"], { stdout: "pipe", stderr: "pipe" });
+    if (!serial.stdout.toString().includes(warning))
+      throw new Error("A one-thread directory run should print the imported module's warning");
+    const parallel = Bun.spawnSync([RUNNER, dir, "--jobs=2"], { stdout: "pipe", stderr: "pipe" });
+    const parallelOut = parallel.stdout.toString();
+    if (!/with 2 workers/.test(parallelOut) || parallel.exitCode !== 0)
+      throw new Error(`A two-job directory run should use workers and succeed, got exit ${parallel.exitCode}:\n${parallelOut.slice(0, 400)}`);
+    if (parallelOut.includes(warning))
+      throw new Error("A worker thread should not print the imported module's warning");
+
     const cases: [string, string, string[]][] = [
       ["GocciaRunner --modules manifest --output=json", RUNNER, [entry, "--modules", manifest, "--output=json"]],
       ["GocciaRunner --globals module --output=json", RUNNER, [entry, "--globals", globals, "--output=json"]],
