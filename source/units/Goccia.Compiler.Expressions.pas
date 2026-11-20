@@ -764,7 +764,12 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_YIELD, TempReg, TempReg,
       YIELD_FLAG_TEMP_OPERAND));
     if TempReg <> ADest then
+    begin
       EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, TempReg, 0));
+      // The resumed value now lives in the local; the temporary would keep a
+      // second copy of it for as long as the frame stays alive.
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, TempReg, 0, 0));
+    end;
   finally
     if TempReg <> ADest then
       ACtx.Scope.FreeRegister;
