@@ -26,7 +26,7 @@ const
     'benchmarkrunner', 'bundler', 'repl', 'g2', 'g2runner');
 
   { G2: the JS preludes compiled into the engine, as (source in source/g2/prelude, include, constant) }
-  G2_PRELUDES: array[0..20, 0..2] of string = (
+  G2_PRELUDES: array[0..21, 0..2] of string = (
     ('builtins5.js', 'G2.Builtins5.inc', 'Builtins5Src'),
     ('disposal.js', 'G2.Disposal.inc', 'DisposalSrc'),
     ('iterhelpers.js', 'G2.IterHelpers.inc', 'IterHelpersSrc'),
@@ -47,7 +47,8 @@ const
     ('semver.js', 'G2.SemverPrelude.inc', 'SemverSrc'),
     ('asynchooks.js', 'G2.AsyncHooksPrelude.inc', 'AsyncHooksSrc'),
     ('events.js', 'G2.EventsPrelude.inc', 'EventsSrc'),
-    ('timers.js', 'G2.TimersPrelude.inc', 'TimersSrc'));
+    ('timers.js', 'G2.TimersPrelude.inc', 'TimersSrc'),
+    ('sandbox.js', 'G2.SandboxPrelude.inc', 'SandboxSrc'));
 
 var
   I: Integer;

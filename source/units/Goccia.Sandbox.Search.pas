@@ -56,9 +56,14 @@ type
     ReservedBytes: Int64;
   end;
 
+  { A pattern the RegExp constructor refuses; the engine throws it as the
+    script's SyntaxError. }
+  ESandboxGrepPatternError = class(Exception);
+
 { Compiles the pattern as the RegExp constructor would; an invalid pattern
-  throws the script's SyntaxError. Then searches AFiles, which
-  SandboxSearchFiles selected and sorted. }
+  raises ESandboxGrepPatternError, and a match that exhausts the RegExp VM
+  ERegExpRuntimeError, for the engine to throw as its RegExp does. Then
+  searches AFiles, which SandboxSearchFiles selected and sorted. }
 function SandboxGrep(const AFileSystem: TSandboxVirtualFileSystem;
   const AFiles: TSandboxSearchFileArray;
   const AOptions: TGocciaSandboxGrepOptions): TGocciaSandboxGrepResult;
@@ -73,8 +78,7 @@ uses
   Goccia.RegExp.&Program,
   Goccia.RegExp.Engine,
   Goccia.RegExp.Runtime,
-  Goccia.RegExp.VM,
-  Goccia.Values.ErrorHelper;
+  Goccia.RegExp.VM;
 
 const
   REGEXP_SYNTAX_CHARACTERS = '\^$.*+?()[]{}|/';
@@ -259,7 +263,7 @@ begin
     begin
       if IsEngineIntegrityFault(E) then
         raise;
-      ThrowSyntaxError(E.Message);
+      raise ESandboxGrepPatternError.Create(E.Message);
     end;
   end;
 
@@ -326,16 +330,11 @@ begin
               (REGEXP_INPUT_BYTES_PER_CODE_UNIT + BYTES_PER_CODE_UNIT);
             ReserveNativeBytes(LineBytes);
             try
-              try
-                if ExecuteCompiledRegExp(CompiledProgram, Source, Flags, Line,
-                  0, False, MatchResult) then
-                  Column := MatchResult.MatchIndex + 1
-                else
-                  Column := 0;
-              except
-                on E: ERegExpRuntimeError do
-                  ThrowRegExpRuntimeError(E);
-              end;
+              if ExecuteCompiledRegExp(CompiledProgram, Source, Flags, Line,
+                0, False, MatchResult) then
+                Column := MatchResult.MatchIndex + 1
+              else
+                Column := 0;
             finally
               ReleaseNativeBytes(LineBytes);
             end;

@@ -6,7 +6,10 @@ program GocciaRunnerG2;
   runner` builds it as build/GocciaRunner, so the CLI tests run against it
   unchanged; once it covers GocciaRunner it replaces GocciaRunner.dpr.
 
-  Not yet on G2: sandbox and install modes, the profiler, bytecode files
+  Sandbox mode runs each program on a G2 engine over the virtual filesystem
+  (Goccia.CLI.G2SandboxHost).
+
+  Not yet on G2: install mode, the profiler, bytecode files
   (--prefer-bytecode), and the read capability's audit events. }
 
 {$I Goccia.inc}
@@ -18,7 +21,11 @@ uses
 
   CLI.ConfigFile,
   CLI.Options,
+  CLI.Parser,
   FileUtils,
+  SandboxHostInputs,
+  SandboxVirtualFileSystem,
+  TextEncoding,
   TextSemantics,
   TimingUtils,
 
@@ -26,8 +33,10 @@ uses
   Goccia.CLI.Application,
   Goccia.CLI.JSON.Reporter,
   Goccia.CLI.FileSettings,
+  Goccia.CLI.G2SandboxHost,
   Goccia.CLI.Options,
   Goccia.CLI.Permissions,
+  Goccia.CLI.SandboxMode,
   Goccia.CLI.Stdin,
   Goccia.CLI.SourceMaps,
   Goccia.CLI.Trust,
@@ -37,10 +46,13 @@ uses
   Goccia.Coverage.Report,
   Goccia.Error,
   Goccia.FileExtensions,
+  Goccia.HostEnvironment,
   Goccia.JSX.Transformer,
   Goccia.Modules.Configuration,
   Goccia.Modules.Resolver,
   Goccia.ScriptLoader.Globals,
+  Goccia.Packages.Address,
+  Goccia.Sandbox.Context,
   Goccia.ScriptLoader.Input,
   Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
@@ -132,6 +144,28 @@ type
     FFrozen: TFlagOption;
     FCheckRefs: TFlagOption;
     FAcceptMovedTags: TFlagOption;
+    { sandbox mode is on: set from the command line in ValidateCommandLine, or from a trusted root-config sandbox
+      section; FSandboxRequestedByArguments: the raw arguments switch it on, known before any option is parsed }
+    FSandboxActive: Boolean;
+    FSandboxRequestedByArguments: Boolean;
+    FSandboxHost: TG2SandboxHost;
+    function SandboxDeterministic: Boolean;
+    procedure ConfigureSandboxEngine(const ARun: TG2SandboxRun);
+    function FormatSandboxFailure(const ARun: TG2SandboxRun; const AResult: TG2RunResult): string;
+    function ResolveSandboxEntry(const AHost: TG2SandboxHost; const ARequest: TGocciaSandboxModeRequest): string;
+    procedure WriteSandboxDiff(const AHost: TG2SandboxHost; const ARequest: TGocciaSandboxModeRequest);
+    procedure VerifyRootConfig;
+    function ConfigRequestsSandbox: Boolean;
+    procedure ApplyConfigSandboxLimits;
+    function ConfigSandboxReason(const AVerdict: TGocciaConfigTrustVerdict): string;
+    procedure WarnIgnoredConfigHostKeys;
+    procedure RunSandbox(const ARequest: TGocciaSandboxModeRequest);
+    function HostCapabilityAllowFlags: TGocciaCapabilityScopes;
+    function HostOnlyCommandLineOptions(const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
+    function DefineCommandLineVirtualModules(const AEngine: TG2Engine; out AError: string): Boolean;
+    function FailureText(const AFileName: string; const AResult: TG2RunResult; const ASource: TStringList;
+      AEngine: TG2Engine; const AWithheld: string; const AFrameSource: TSandboxVirtualFileSystem;
+      AFrames, ASuggestions, AColor: Boolean): string;
     procedure RunSource(const AFileName: string; const ASource: TStringList; AReportIndex: Integer = -1);
     procedure RunFilesParallel(const AFiles: TStringList);
     { a parallel file whose source does not load: its report, the class and message of the failure (as
@@ -154,6 +188,13 @@ type
     function UsageLine: string; override;
     function StdinUsage: TGocciaStdinUsage; override;
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
+    function HonorsSandboxSection: Boolean; override;
+    function CapabilityPolicyName: string; override;
+    function HasNonPathInput: Boolean; override;
+    function ExtraHelpText: string; override;
+    procedure ValidateCommandLine(const APaths: TStringList); override;
+    procedure Validate; override;
+    procedure HandleError(const AException: Exception); override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     procedure AfterExecute; override;
     procedure WriteRunSourceMap(const AFileName: string; const ASource: TStringList);
@@ -237,8 +278,28 @@ const
   PACKAGES_GROUP = 'Packages';
 
 { GocciaRunner's option set (GocciaRunner.dpr TRunnerApp.Configure) }
+function ArgumentsRequestSandbox: Boolean;
+var
+  Arguments: TCommandLineArguments;
+  I: Integer;
+begin
+  Arguments := GetCommandLineArguments;
+  for I := 0 to High(Arguments) do
+  begin
+    if Arguments[I] = '--' then
+      Break;
+    if (Arguments[I] = '--sandbox') or (Arguments[I] = '--copy') or
+       (Arguments[I] = '--copy-rw') or
+       (Copy(Arguments[I], 1, Length('--copy=')) = '--copy=') or
+       (Copy(Arguments[I], 1, Length('--copy-rw=')) = '--copy-rw=') then
+      Exit(True);
+  end;
+  Result := False;
+end;
+
 procedure TG2RunnerApp.Configure;
 begin
+  FSandboxRequestedByArguments := ArgumentsRequestSandbox;
   AddEngineOptions;
   AddCoverageOptions;
   AddProfilerOptions;
@@ -294,10 +355,136 @@ begin
   FAcceptMovedTags.CommandLineOnly := True;
 end;
 
-{ host mode's: every capability (sandbox mode, which honours net alone, is not on G2 yet) }
+{ Host mode grants everything the command line and trusted config ask for. Sandbox mode loads no host files and has
+  no node_modules lookup, so net is the only capability it grants (ADR 0122). }
 function TG2RunnerApp.HonoredCapabilities: TGocciaHonoredCapabilities;
 begin
-  Result := ALL_CAPABILITIES;
+  if FSandboxActive then
+    Result := [gcNet]
+  else
+    Result := ALL_CAPABILITIES;
+end;
+
+function TG2RunnerApp.HonorsSandboxSection: Boolean;
+begin
+  Result := True;
+end;
+
+function TG2RunnerApp.CapabilityPolicyName: string;
+begin
+  if FSandboxActive then
+    Result := Name + ' sandbox mode'
+  else
+    Result := Name;
+end;
+
+{ --entry names the program, and the sandbox options switch to a mode that never reads stdin, so neither leaves the
+  run without input. Checked before config is applied, so Present means the command line. }
+function TG2RunnerApp.HasNonPathInput: Boolean;
+begin
+  Result := (SandboxOptions.CommandLineActivation <> '') or SandboxOptions.Entry.Present;
+end;
+
+function TG2RunnerApp.ExtraHelpText: string;
+begin
+  Result := SandboxModeHelpNote;
+end;
+
+{ The --allow-* flags of capabilities sandbox mode cannot grant. They are command-line-only, so Present means the
+  command line. }
+function TG2RunnerApp.HostCapabilityAllowFlags: TGocciaCapabilityScopes;
+var
+  Capability: TGocciaCapability;
+begin
+  Result := nil;
+  for Capability := Low(TGocciaCapability) to High(TGocciaCapability) do
+    if (Capability <> gcNet) and EngineOptions.Capabilities.AllowOption(Capability).Present then
+    begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := '--' + EngineOptions.Capabilities.AllowOption(Capability).LongName;
+    end;
+end;
+
+{ The host-mode options given on the command line. The same keys from a config are ignored in sandbox mode, so one
+  project config serves both modes. ABeforeConfig: no config has been applied yet, so Present means the command
+  line. }
+function TG2RunnerApp.HostOnlyCommandLineOptions(const ABeforeConfig: Boolean): TGocciaCapabilityScopes;
+
+  procedure Check(const AOption: TOptionBase);
+  begin
+    if Assigned(AOption) and (AOption.FromCommandLine or (ABeforeConfig and AOption.Present)) then
+    begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := '--' + AOption.LongName;
+    end;
+  end;
+
+begin
+  Result := nil;
+  Check(MultifileOption);
+  Check(FOutputPath);
+  Check(CoverageOptions.Enabled);
+  Check(CoverageOptions.Format);
+  Check(CoverageOptions.OutputPath);
+  Check(ProfilerOptions.Mode);
+  Check(ProfilerOptions.OutputPath);
+  Check(ProfilerOptions.Format);
+  Check(FProfileDeterministic);
+  Check(FSourceMap);
+  Check(FHostEnvironmentModule);
+  Check(FGlobalFiles);
+  Check(FInlineGlobals);
+end;
+
+{ Sandbox mode switched on from the command line is known before any config is read, so the trust gate and the
+  capability checks see the right set, and a host-filesystem grant gets an error that says why. }
+procedure TG2RunnerApp.ValidateCommandLine(const APaths: TStringList);
+begin
+  inherited ValidateCommandLine(APaths);
+  if SandboxOptions.CommandLineActivation = '' then
+    Exit;
+  RejectHostCapabilityFlags(HostCapabilityAllowFlags, SandboxOptions.CommandLineActivation);
+  { before Validate, whose host-mode checks would otherwise report the wrong problem }
+  RejectHostModeOptions(HostOnlyCommandLineOptions(True), SandboxOptions.CommandLineActivation);
+  FSandboxActive := True;
+end;
+
+function TG2RunnerApp.ConfigSandboxReason(const AVerdict: TGocciaConfigTrustVerdict): string;
+begin
+  Result := Format('the "%s" section of %s', [SANDBOX_CONFIG_KEY, AVerdict.Request.Sandbox.SourcePath]);
+end;
+
+{ A root-config sandbox section switches sandbox mode on too; decided here so a host-mode option gets the
+  sandbox-mode error rather than a host-mode check's. Its trust is checked in ExecuteWithPaths, once the audit log
+  is open. --ignore-config-permissions ignores the section. }
+procedure TG2RunnerApp.Validate;
+var
+  Verdict: TGocciaConfigTrustVerdict;
+begin
+  if not FSandboxActive then
+  begin
+    Verdict := RootConfigVerdict;
+    if Verdict.Request.Sandbox.Declared and (Verdict.State <> ctsIgnored) then
+    begin
+      FSandboxActive := True;
+      RejectHostCapabilityFlags(HostCapabilityAllowFlags, ConfigSandboxReason(Verdict));
+      RejectHostModeOptions(HostOnlyCommandLineOptions(False), ConfigSandboxReason(Verdict));
+    end;
+  end;
+  inherited Validate;
+end;
+
+{ In sandbox mode stdout carries only the guest's output and the diff; the guest's own failures are reported by
+  RunSandbox, so what reaches here is the host's (a copy that failed, an invalid value) and goes to stderr. }
+procedure TG2RunnerApp.HandleError(const AException: Exception);
+begin
+  if FSandboxActive or FSandboxRequestedByArguments or ConfigRequestsSandbox then
+    WriteLn(ErrOutput, 'Error: ', AException.Message)
+  else if IsJsonOutput then
+    WriteLn(BuildCLIScriptErrorJSON('', '', '', '', ExceptionToCLIJSONErrorInfo(AException),
+      Default(TCLIJSONTiming), DefaultCLIJSONMemoryStats, 1, 1, IsCompactJsonOutput))
+  else
+    inherited HandleError(AException);
 end;
 
 function TG2RunnerApp.StdinUsage: TGocciaStdinUsage;
@@ -312,6 +499,15 @@ begin
 end;
 
 { The file's settings as G2's language profile and run settings. }
+{ the host config the preludes read (G2.Embed ConfigJson): experimental-ast installs goccia:ast }
+function HostConfigJson(const AEngineOptions: TGocciaEngineOptions; const AFileConfig: TConfigEntryArray): UnicodeString;
+begin
+  if ResolveFlagOption(AEngineOptions.ExperimentalAST, AFileConfig) then
+    Result := '{"experimental-ast":"true"}'
+  else
+    Result := '{}';
+end;
+
 procedure ApplySettings(const AEngine: TG2Engine;
   const ASettings: TGocciaFileSettings);
 var
@@ -480,15 +676,16 @@ begin
   Result := FStderrLines.Text;
 end;
 
+{ A config's `output` is ignored in sandbox mode, whose stdout carries the guest's output and the diff. }
 function TG2RunnerApp.IsJsonOutput: Boolean;
 begin
-  Result := FOutputPath.Present and
+  Result := (not FSandboxActive) and FOutputPath.Present and
     ((FOutputPath.Value = 'json') or (FOutputPath.Value = 'compact-json'));
 end;
 
 function TG2RunnerApp.IsCompactJsonOutput: Boolean;
 begin
-  Result := FOutputPath.Present and (FOutputPath.Value = 'compact-json');
+  Result := (not FSandboxActive) and FOutputPath.Present and (FOutputPath.Value = 'compact-json');
 end;
 
 { The run's error as the JSON report's error object, as GocciaRunner's ExceptionToCLIJSONErrorInfo makes it }
@@ -780,8 +977,6 @@ end;
 function TG2RunnerApp.DefineVirtualModules(const AEngine: TG2Engine; const AFileConfigPath: string;
   out AError: string): Boolean;
 var
-  I: Integer;
-  Path, Ext: string;
   Err: UnicodeString;
 begin
   Result := False;
@@ -798,6 +993,20 @@ begin
     AError := UTF8Encode(Err);
     Exit;
   end;
+  Result := DefineCommandLineVirtualModules(AEngine, AError);
+end;
+
+{ the command line's --modules manifests and --module definitions, the user's own (sandbox mode applies these and
+  not a config's) }
+function TG2RunnerApp.DefineCommandLineVirtualModules(const AEngine: TG2Engine; out AError: string): Boolean;
+var
+  I: Integer;
+  Path, Ext: string;
+  Err: UnicodeString;
+begin
+  Result := False;
+  AError := '';
+  Err := '';
   if EngineOptions.ModuleManifests.FromCommandLine then
     for I := 0 to EngineOptions.ModuleManifests.Values.Count - 1 do
     begin
@@ -877,90 +1086,96 @@ begin
   Result := '';
 end;
 
-{ AEngine: the run's engine, which says which files it loaded; AWithheld: a file whose source no report shows
-  (the host environment's provider) }
-procedure TG2RunnerApp.ReportFailure(const AFileName: string;
-  const AResult: TG2RunResult; const ASource: TStringList; AEngine: TG2Engine; const AWithheld: string);
+{ The failed run's report as text (WriteLn prints it as GocciaRunner does). AEngine: the run's engine, which says
+  which files it loaded; AWithheld: a file whose source no report shows (the host environment's provider);
+  AFrameSource: the virtual filesystem a sandbox run's modules are read from (nil: the host's files); AFrames: a
+  code frame from the source (a sandbox child's error shows only the location); ASuggestions: the host's
+  suggestions (meant for the host, not for a sandbox child's caller). }
+function TG2RunnerApp.FailureText(const AFileName: string; const AResult: TG2RunResult; const ASource: TStringList;
+  AEngine: TG2Engine; const AWithheld: string; const AFrameSource: TSandboxVirtualFileSystem;
+  AFrames, ASuggestions, AColor: Boolean): string;
 var
   Name, Suggestion, ErrorPath: string;
   Source, Loaded: TStringList;
 begin
   case AResult.Aborted of
     g2aTimeout:
-      begin
-        WriteLn(Format('Fatal error: file timed out after %dms',
-          [EngineOptions.Timeout.Value]));
-        Exit;
-      end;
+      Exit(Format('Fatal error: file timed out after %dms', [EngineOptions.Timeout.Value]));
     g2aInstructionLimit:
-      begin
-        WriteLn(Format('Fatal error: Execution exceeded instruction limit of %d',
-          [EngineOptions.MaxInstructions.Value]));
-        Exit;
-      end;
+      Exit(Format('Fatal error: Execution exceeded instruction limit of %d', [EngineOptions.MaxInstructions.Value]));
     g2aMemoryLimit, g2aHostAbort:
-      begin
-        WriteLn('Fatal error: ' + UTF8Encode(AResult.ErrorText));
-        Exit;
-      end;
+      Exit('Fatal error: ' + UTF8Encode(AResult.ErrorText));
   end;
   if not AResult.ErrorIsError then
-  begin
-    WriteLn(UTF8Encode(AResult.ErrorMessage));
-    Exit;
-  end;
+    Exit(UTF8Encode(AResult.ErrorMessage));
   Name := UTF8Encode(AResult.ErrorName);
   if Name = '' then
     Name := 'Error';
   { a static import that did not load, located at its declaration (FormatHostErrorDiagnostic: no code frame) }
   if AResult.ErrorResolvedPath <> '' then
+    Exit(FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText), UTF8Encode(AResult.ErrorFile),
+      AResult.ErrorLine, AResult.ErrorColumn, nil, AColor, '') +
+      '  Resolved to: ' + UTF8Encode(AResult.ErrorResolvedPath) + sLineBreak);
+  Suggestion := '';
+  if ASuggestions then
   begin
-    Write(FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText), UTF8Encode(AResult.ErrorFile),
-      AResult.ErrorLine, AResult.ErrorColumn, nil, IsColorTerminal, ''));
-    WriteLn('  Resolved to: ', UTF8Encode(AResult.ErrorResolvedPath));
-    WriteLn;
-    Exit;
+    Suggestion := UTF8Encode(AResult.ErrorSuggestion);
+    if Suggestion = '' then
+      Suggestion := RuntimeSuggestion(UTF8Encode(AResult.ErrorText));
   end;
-  Suggestion := UTF8Encode(AResult.ErrorSuggestion);
-  if Suggestion = '' then
-    Suggestion := RuntimeSuggestion(UTF8Encode(AResult.ErrorText));
   if AResult.ErrorLine > 0 then
   begin
     { the code frame from the file the error is in: an imported module's own source, never a file the entry's run
       did not load as a module (a thrown value's stack can name any path; a module the host evaluated first, such
       as a globals module or the host environment's provider, keeps its source) }
-    Source := ASource;
+    Source := nil;
+    if AFrames then
+      Source := ASource;
     Loaded := nil;
     ErrorPath := UTF8Encode(AResult.ErrorFile);
     if (ErrorPath <> '') and (ErrorPath <> AFileName) and
        (ExpandFileName(ErrorPath) <> ExpandFileName(AFileName)) then
     begin
       Source := nil;
-      if ((AWithheld = '') or (ExpandFileName(ErrorPath) <> AWithheld)) and
+      if AFrames and ((AWithheld = '') or (ExpandFileName(ErrorPath) <> AWithheld)) and
          AEngine.ModuleLoaded(UnicodeString(ExpandFileName(ErrorPath))) then
       begin
-        Loaded := TStringList.Create;
         try
-          Loaded.LoadFromFile(ErrorPath);
+          if Assigned(AFrameSource) then
+            Loaded := CreateFileTextLines(AFrameSource.SnapshotReadAllText(ErrorPath))
+          else
+          begin
+            Loaded := TStringList.Create;
+            Loaded.LoadFromFile(ErrorPath);
+          end;
           Source := Loaded;
         except
-          on EStreamError do
+          on E: Exception do
+          begin
+            FreeAndNil(Loaded);
             Source := nil;
+          end;
         end;
       end;
     end;
     try
-      WriteLn(FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText),
+      Result := FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText),
         ErrorPath, AResult.ErrorLine, AResult.ErrorColumn,
-        Source, IsColorTerminal, Suggestion));
+        Source, AColor, Suggestion);
     finally
       Loaded.Free;
     end;
   end
   else if AResult.ErrorText <> '' then
-    WriteLn(Name, ': ', UTF8Encode(AResult.ErrorText))
+    Result := Name + ': ' + UTF8Encode(AResult.ErrorText)
   else
-    WriteLn(Name);
+    Result := Name;
+end;
+
+procedure TG2RunnerApp.ReportFailure(const AFileName: string;
+  const AResult: TG2RunResult; const ASource: TStringList; AEngine: TG2Engine; const AWithheld: string);
+begin
+  WriteLn(FailureText(AFileName, AResult, ASource, AEngine, AWithheld, nil, True, True, IsColorTerminal));
 end;
 
 { --host-environment's module, else a config's "host-environment" (against that config's directory): the path,
@@ -1090,6 +1305,7 @@ begin
     try
       MemoryStart := Engine.Memory;
       Engine.Capabilities := Capabilities;
+      Engine.ConfigJson := HostConfigJson(EngineOptions, FileConfig);
       Engine.Coverage := Assigned(FCoverageMain);
       Engine.Resolver := Resolver;
       { GocciaRunner has no timer globals (the test runner does) }
@@ -1393,7 +1609,37 @@ procedure TG2RunnerApp.ExecuteWithPaths(const APaths: TStringList);
 var
   I: Integer;
   Source, Files, Found, Names, Single: TStringList;
+  Verdict: TGocciaConfigTrustVerdict;
+  SandboxCommandLine: TGocciaSandboxCommandLine;
+  SandboxRequest: TGocciaSandboxModeRequest;
 begin
+  { A trusted sandbox section in the root config switches sandbox mode on too; an untrusted one stops the run here,
+    before anything is read from it. The mode is set before the config's requests are checked, so the ones sandbox
+    mode cannot grant are warned about rather than needing trust. --ignore-config-permissions ignores the
+    section. }
+  Verdict := RootConfigVerdict;
+  if Verdict.Request.Sandbox.Declared and (Verdict.State <> ctsIgnored) then
+  begin
+    FSandboxActive := True;
+    VerifyRootConfig;
+    Verdict := RootConfigVerdict;
+  end;
+  if FSandboxActive then
+    ApplyConfigSandboxLimits;
+  SandboxCommandLine.Paths := APaths;
+  SandboxCommandLine.DeniedAllowFlags := HostCapabilityAllowFlags;
+  SandboxCommandLine.HostOnlyOptions := HostOnlyCommandLineOptions(False);
+  SandboxCommandLine.WorkingDirectory := GetCurrentDir;
+  SandboxRequest := ResolveSandboxMode(SandboxOptions, Verdict.Request.Sandbox, Verdict.GrantsAccepted,
+    SandboxCommandLine);
+  if SandboxRequest.Active then
+  begin
+    FSandboxActive := True;
+    RunSandbox(SandboxRequest);
+    Exit;
+  end;
+  FSandboxActive := False;
+
   FWorkers := 1;
   FHeapStart := GetHeapStatus;
   FCoverageMain := TGocciaCoverageTracker.Instance;
@@ -1532,9 +1778,368 @@ end;
 
 { --coverage's reports, as GocciaRunner writes them: the summary (and one file's detail), then the LCOV or JSON
   file }
+{ ---- sandbox mode ---- }
+
+{ --deterministic in sandbox mode: only the root config, already merged into the options, governs a sandbox run }
+function TG2RunnerApp.SandboxDeterministic: Boolean;
+var
+  EmptyConfig: TConfigEntryArray;
+begin
+  EmptyConfig := nil;
+  Result := ResolveFlagOption(EngineOptions.Deterministic, EmptyConfig);
+end;
+
+{ the engine of a sandbox run (the root or a nested child), as GocciaRunner's ConfigureSandboxEngine: the root
+  config's settings (a per-file config walk from a sandbox path would climb the host filesystem), the audit log
+  (the root's effective capabilities, a child's decisions to the same sink), the command line's virtual modules
+  (a config's read host files and are not applied), and the console }
+procedure TG2RunnerApp.ConfigureSandboxEngine(const ARun: TG2SandboxRun);
+var
+  EmptyConfig: TConfigEntryArray;
+  Verdict: TGocciaConfigTrustVerdict;
+  Effective: TGocciaCapabilityAuditEvent;
+  Error: string;
+begin
+  EmptyConfig := nil;
+  Verdict := FileConfigVerdict('');
+  ApplySettings(ARun.Engine, ResolveFileSettings(EngineOptions, EmptyConfig, ARun.EntryPath,
+    Verdict.AcceptedUnsafe));
+  ARun.Engine.ConfigJson := HostConfigJson(EngineOptions, EmptyConfig);
+  if EngineOptions.MaxStack.Present then
+    ARun.Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
+  if FSilent.Present then
+    ARun.Silent := True;
+  if LogFileOpen then
+    ARun.LogLine := HandleConsoleLog;
+  if AuditLogOpen then
+  begin
+    ARun.Engine.AuditSink := HandleCapabilityAudit;
+    if ARun.Parent = nil then
+    begin
+      Effective := Default(TGocciaCapabilityAuditEvent);
+      Effective.Kind := gckCapabilitiesEffective;
+      Effective.Decision := gcdAllow;
+      Effective.Subject := ARun.Capabilities.ToJSON;
+      Effective.Reason := CapabilityProvenance(Verdict);
+      Effective.Source.FilePath := ARun.EntryPath;
+      try
+        HandleCapabilityAudit(Effective);
+      except
+        on E: Exception do
+          raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed: ' + E.Message);
+      end;
+    end;
+  end;
+  if not DefineCommandLineVirtualModules(ARun.Engine, Error) then
+    raise Exception.Create(Error);
+end;
+
+{ a sandbox run's script error: the root's with the code frame its own modules give, read from the virtual
+  filesystem; a child's (which its caller reads) with the location only and none of the host's suggestions }
+function TG2RunnerApp.FormatSandboxFailure(const ARun: TG2SandboxRun; const AResult: TG2RunResult): string;
+begin
+  Result := FailureText(ARun.EntryPath, AResult, ARun.Source, ARun.Engine, '', ARun.Context.Fs,
+    ARun.Parent = nil, ARun.Parent = nil, False);
+end;
+
+{ The sandbox path to run. A host entry inside a copied input runs from there; any other host entry is copied,
+  without write-back, to /<basename>. }
+function TG2RunnerApp.ResolveSandboxEntry(const AHost: TG2SandboxHost;
+  const ARequest: TGocciaSandboxModeRequest): string;
+var
+  Target: string;
+begin
+  if ARequest.EntrySandbox <> '' then
+    Exit(AHost.Context.Fs.Normalize(ARequest.EntrySandbox));
+  if AHost.Inputs.SandboxPathOfHostFile(ARequest.EntryHost, Result) then
+    Exit;
+  Target := DefaultSandboxPathFor(ARequest.EntryHost, ARequest.EntryHost, 'the entry');
+  if AHost.Context.Fs.Exists(Target) then
+    raise TCLIUsageError.CreateFmt(
+      'the entry %s would be copied to %s, which a copied input already ' +
+      'fills; name the entry with --entry=%s, or give that input an ' +
+      'explicit =<sandbox> path', [ExtractFileName(ARequest.EntryHost),
+      Target, Target]);
+  Result := AHost.CopyIn(ARequest.EntryHost, Target, False);
+end;
+
+procedure TG2RunnerApp.WriteSandboxDiff(const AHost: TG2SandboxHost;
+  const ARequest: TGocciaSandboxModeRequest);
+var
+  DiffText, Problem: string;
+  Bytes: TBytes;
+  ErrorOffset: Integer;
+begin
+  if not ARequest.DiffRequested then
+    Exit;
+  DiffText := AHost.DiffText(ARequest.DiffFormat = sdfUnified);
+  if ARequest.DiffFile = '' then
+  begin
+    Write(DiffText);
+    Exit;
+  end;
+  if not TryEncodeUTF8(DiffText, Bytes, ErrorOffset) then
+    raise EConvertError.Create('the diff cannot be encoded as UTF-8');
+  { a config's diff file goes through the route pinned when the config was checked; the command line's is the
+    user's own choice, written as named }
+  if ARequest.DiffFilePin.IsSet then
+  begin
+    if not TSandboxHostOutputFile.Create(ARequest.DiffFile, ARequest.DiffFilePin).Write(Bytes, Problem) then
+      raise Exception.CreateFmt('diff file %s: %s', [ARequest.DiffFile, Problem]);
+  end
+  else
+    WriteCommandLineOutputFile(ARequest.DiffFile, Bytes);
+end;
+
+procedure TG2RunnerApp.VerifyRootConfig;
+var
+  ConfigPaths: TStringList;
+begin
+  ConfigPaths := TStringList.Create;
+  try
+    ConfigPaths.Add(RootConfigPath);
+    VerifyGoverningConfigs(ConfigPaths);
+  finally
+    ConfigPaths.Free;
+  end;
+end;
+
+{ Whether the config a run would use has a sandbox section, for an error raised before sandbox mode is decided (an
+  invalid value on the command line, or in that config), so it reports on stderr. The config may not be applied
+  yet, so it is found here as Execute would find it: --config, else from the first existing path argument, else the
+  working directory. }
+function TG2RunnerApp.ConfigRequestsSandbox: Boolean;
+var
+  Arguments: TCommandLineArguments;
+  ConfigPath, StartDirectory, Candidate: string;
+  Entries: TConfigEntryArray;
+  I, J: Integer;
+begin
+  Result := False;
+  try
+    ConfigPath := RootConfigPath;
+    if ConfigPath = '' then
+    begin
+      Arguments := GetCommandLineArguments;
+      StartDirectory := '';
+      for I := 0 to High(Arguments) do
+      begin
+        Candidate := '';
+        if Copy(Arguments[I], 1, Length('--config=')) = '--config=' then
+          Candidate := Copy(Arguments[I], Length('--config=') + 1, MaxInt)
+        else if (Arguments[I] = '--config') and (I < High(Arguments)) then
+          Candidate := Arguments[I + 1];
+        if Candidate <> '' then
+        begin
+          Candidate := ExpandFileName(Candidate);
+          if DirectoryExists(Candidate) then
+          begin
+            for J := 0 to High(CONFIG_FILE_EXTENSIONS) do
+              if FileExists(IncludeTrailingPathDelimiter(Candidate) +
+                 CONFIG_FILE_BASE_NAME + CONFIG_FILE_EXTENSIONS[J]) then
+              begin
+                ConfigPath := IncludeTrailingPathDelimiter(Candidate) +
+                  CONFIG_FILE_BASE_NAME + CONFIG_FILE_EXTENSIONS[J];
+                Break;
+              end;
+          end
+          else
+            ConfigPath := Candidate;
+          Break;
+        end;
+        if (StartDirectory = '') and (Arguments[I] <> '') and (Arguments[I][1] <> '-') then
+          if DirectoryExists(Arguments[I]) then
+            StartDirectory := ExpandFileName(Arguments[I])
+          else if FileExists(Arguments[I]) then
+            StartDirectory := ExtractFilePath(ExpandFileName(Arguments[I]));
+      end;
+      if ConfigPath = '' then
+      begin
+        if StartDirectory = '' then
+          StartDirectory := GetCurrentDir;
+        EnsureConfigParsersRegistered;
+        ConfigPath := DiscoverConfigFile(StartDirectory, [CONFIG_FILE_BASE_NAME], CONFIG_FILE_EXTENSIONS);
+      end;
+    end;
+    if (ConfigPath = '') or not FileExists(ConfigPath) then
+      Exit;
+    EnsureConfigParsersRegistered;
+    Entries := ParseConfigFile(ConfigPath);
+    for I := 0 to High(Entries) do
+      if (Entries[I].Key = SANDBOX_CONFIG_KEY) or
+         (Copy(Entries[I].Key, 1, Length(SANDBOX_CONFIG_KEY) + 1) = SANDBOX_CONFIG_KEY + '.') then
+        Exit(True);
+  except
+    { a config that does not parse cannot say; the error reports as usual }
+    on E: Exception do
+      Result := False;
+  end;
+end;
+
+{ --max-fs-bytes and --max-fs-nodes are ConfigIgnored, so host mode never reads (or validates) them from a config;
+  sandbox mode takes them from the root config here, unless the command line set them. }
+procedure TG2RunnerApp.ApplyConfigSandboxLimits;
+var
+  Entries: TConfigEntryArray;
+  Entry: TConfigEntry;
+  Limits: array[0..1] of TInt64Option;
+  I: Integer;
+begin
+  if RootConfigPath = '' then
+    Exit;
+  Entries := LoadFileConfig(RootConfigPath);
+  Limits[0] := SandboxOptions.MaxFsBytes;
+  Limits[1] := SandboxOptions.MaxFsNodes;
+  for I := 0 to High(Limits) do
+  begin
+    if Limits[I].FromCommandLine or not TryFindConfigEntry(Entries, Limits[I].LongName, Entry) then
+      Continue;
+    if Entry.InArray or (Entry.Kind in [cvkObject, cvkUnsupported, cvkEmptyArray]) then
+      raise TParseError.CreateFmt('%s: "%s" must be a single value', [Entry.SourcePath, Entry.Key]);
+    try
+      Limits[I].Apply(Entry.Value);
+    except
+      on E: EOptionValueError do
+        raise TParseError.CreateFmt('Invalid value for "%s" in %s: %s (%s)',
+          [Entry.Key, Entry.SourcePath, E.Value, E.Reason]);
+    end;
+  end;
+end;
+
+{ The root config's keys that read host files, which sandbox mode does not apply: one warning each, in the style
+  of an unsupported capability. }
+procedure TG2RunnerApp.WarnIgnoredConfigHostKeys;
+const
+  HOST_FILE_KEYS: array[0..4] of string = ('modules', 'module', 'globals', 'global', 'host-environment');
+  IMPORTS_CONFIG_PREFIX = 'imports.';
+var
+  Entries: TConfigEntryArray;
+  I, J: Integer;
+  Key: string;
+begin
+  if RootConfigPath = '' then
+    Exit;
+  Entries := LoadFileConfig(RootConfigPath);
+  for I := 0 to High(HOST_FILE_KEYS) do
+    for J := 0 to High(Entries) do
+    begin
+      Key := Entries[J].Key;
+      if (Key = HOST_FILE_KEYS[I]) or
+         (Copy(Key, 1, Length(HOST_FILE_KEYS[I]) + 1) = HOST_FILE_KEYS[I] + '.') then
+      begin
+        WarnOnce(RootConfigPath + #0 + HOST_FILE_KEYS[I], Format(
+          'Warning: %s sets "%s", which %s does not apply; ignoring it',
+          [RootConfigPath, HOST_FILE_KEYS[I], CapabilityPolicyName]));
+        Break;
+      end;
+    end;
+  { sandbox mode resolves only the command line's import map, so the root config's provider entries do nothing
+    there }
+  for J := 0 to High(Entries) do
+    if (Copy(Entries[J].Key, 1, Length(IMPORTS_CONFIG_PREFIX)) = IMPORTS_CONFIG_PREFIX) and
+       IsProviderAddress(Entries[J].Value) then
+    begin
+      WarnOnce(RootConfigPath + #0 + IMPORTS_CONFIG_PREFIX, Format(
+        'Warning: %s sets provider imports, which %s does not apply; ignoring them',
+        [RootConfigPath, CapabilityPolicyName]));
+      Break;
+    end;
+end;
+
+procedure TG2RunnerApp.RunSandbox(const ARequest: TGocciaSandboxModeRequest);
+var
+  Host: TG2SandboxHost;
+  FsClock: TSandboxFsClock;
+  RunResult: TGocciaSandboxRunResult;
+  Report: TStringList;
+  EntryPath: string;
+  I: Integer;
+begin
+  { the root config is the only one that governs a sandbox run; its requests are checked before anything is copied
+    in }
+  VerifyRootConfig;
+  WarnIgnoredConfigHostKeys;
+  { the entry's own config, when it is not the root config, has no say in a sandbox run }
+  if ARequest.EntryHost <> '' then
+    WarnIfSandboxSectionUnread(DiscoverFileConfigPath(ARequest.EntryHost));
+  for I := 0 to High(ARequest.Notes) do
+    WriteLn(ErrOutput, ARequest.Notes[I]);
+
+  { under --deterministic the filesystem's timestamps read the clock the engines' deterministic profile reads, set
+    before the inputs are copied in, so they carry it too }
+  if SandboxDeterministic then
+    FsClock := TGocciaSandboxFsHostClock.Create(TGocciaHostEnvironment.DeterministicClock)
+  else
+    FsClock := nil;
+  Host := nil;
+  try
+    Host := TG2SandboxHost.Create(ARequest.MaxFsBytes, ARequest.MaxFsNodes, FsClock);
+    FSandboxHost := Host;
+    Host.TimeoutMilliseconds := EngineOptions.Timeout.Milliseconds(0);
+    Host.MaxInstructions := EngineOptions.MaxInstructions.ValueOr(0);
+    Host.ImportMapPath := EngineOptions.ImportMap.ValueOr('');
+    Host.Aliases.Assign(EngineOptions.Aliases.Values);
+    { filtered to net by HonoredCapabilities }
+    Host.RootCapabilities := ResolveEngineCapabilities('');
+    Host.Deterministic := SandboxDeterministic;
+    Host.OnConfigureEngine := ConfigureSandboxEngine;
+    Host.OnFormatFailure := FormatSandboxFailure;
+    { only --print reads the root run's value }
+    Host.PrintRootResult := FPrint.Present;
+
+    { a config-named read-write input carries the pin taken when the config was checked, so write-back reaches it
+      only along that route }
+    for I := 0 to High(ARequest.Inputs) do
+      Host.CopyIn(ARequest.Inputs[I].HostPath, ARequest.Inputs[I].SandboxPath,
+        ARequest.Inputs[I].ReadWrite, ARequest.Inputs[I].Pin);
+    EntryPath := ResolveSandboxEntry(Host, ARequest);
+    Host.CaptureBaseline;
+
+    RunResult := Host.Run(EntryPath);
+    if RunResult.Output <> '' then
+      Write(RunResult.Output);
+    if RunResult.ErrorOutput <> '' then
+      Write(ErrOutput, RunResult.ErrorOutput)
+    else if (not RunResult.Ok) and (RunResult.ErrorMessage <> '') then
+      WriteLn(ErrOutput, RunResult.ErrorMessage);
+    { as host mode: the bare value, undefined included }
+    if RunResult.HasResultText then
+      WriteLn(RunResult.ResultText);
+    if not RunResult.Ok then
+      ExitCode := RunResult.ExitCode;
+
+    { ADR 0119: the host, not the guest, writes back, and only after a run that succeeded. The report is
+      diagnostics, so stdout keeps only the guest's output and the diff. }
+    if Host.Inputs.HasReadWriteInput then
+    begin
+      Report := TStringList.Create;
+      try
+        if RunResult.Ok then
+        begin
+          if not Host.Inputs.ApplyWriteBack(Host.Inputs.PlanWriteBack(Host.Context.Baseline), Report) then
+            ExitCode := 1;
+        end
+        else
+          Report.Add(WRITE_BACK_REPORT_PREFIX + 'skipped, the run did not succeed.');
+        for I := 0 to Report.Count - 1 do
+          WriteLn(ErrOutput, Report[I]);
+      finally
+        Report.Free;
+      end;
+    end;
+
+    WriteSandboxDiff(Host, ARequest);
+  finally
+    FSandboxHost := nil;
+    Host.Free;
+    FsClock.Free;
+  end;
+end;
+
 procedure TG2RunnerApp.AfterExecute;
 begin
-  if Assigned(FCoverageMain) then
+  { coverage is a host-mode report; sandbox mode keeps stdout to the guest's output and the diff }
+  if Assigned(FCoverageMain) and not FSandboxActive then
   begin
     if not IsJsonOutput then
     begin

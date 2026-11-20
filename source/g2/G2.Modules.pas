@@ -72,6 +72,14 @@ function LoadFailure(out Path: UnicodeString; out Line, Column: Integer): Boolea
   and the declaration's line and column; False otherwise }
 function ImportSiteNow(out Path: UnicodeString; out Line, Column: Integer): Boolean;
 function EntryCompletion: TValue;
+type
+  { a host's file system for this thread's engine: the bytes of the file at Path, False when there is none (a
+    sandbox's virtual file system) }
+  TFileReadHook = function(const Path: UnicodeString; var B: RawByteString): Boolean;
+{ this thread's file reader (nil: the host's files) }
+procedure SetFileReadHook(Hook: TFileReadHook);
+{ the bytes of the file at Path through this thread's file reader; False when there is none }
+function ReadFileBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
 
 implementation
 
@@ -168,6 +176,37 @@ end;
 threadvar
   HostModules: THostModuleHook;
   HostResolve: THostResolveHook;
+  FileRead: TFileReadHook;
+
+procedure SetFileReadHook(Hook: TFileReadHook);
+begin
+  FileRead := Hook;
+end;
+
+function ReadFileBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
+var F: TFileStream;
+begin
+  B := '';
+  if Assigned(FileRead) then Exit(FileRead(Path, B));
+  Result := False;
+  if (Path = '') or not FileExists(string(Path)) then Exit;
+  try
+    F := TFileStream.Create(string(Path), fmOpenRead or fmShareDenyNone);
+    try
+      SetLength(B, F.Size);
+      if F.Size > 0 then F.ReadBuffer(B[1], F.Size);
+    finally
+      F.Free;
+    end;
+  except
+    on EStreamError do
+    begin
+      B := '';
+      Exit;
+    end;
+  end;
+  Result := True;
+end;
 
 procedure SetHostModuleHook(Hook: THostModuleHook);
 begin
@@ -277,7 +316,7 @@ begin
 end;
 
 function ReadSource(const Path: UnicodeString; var Src: UnicodeString): Boolean;
-var F: TFileStream; B: RawByteString; P: UnicodeString;
+var B: RawByteString; P: UnicodeString;
 begin
   P := ProvidedPath;
   if (P <> '') and (P = Path) then
@@ -286,19 +325,11 @@ begin
     if (Src <> '') and (Src[1] = #$FEFF) then Delete(Src, 1, 1);
     Exit(True);
   end;
-  Result := False;
-  if not FileExists(string(Path)) then Exit;
-  F := TFileStream.Create(string(Path), fmOpenRead or fmShareDenyNone);
-  try
-    SetLength(B, F.Size);
-    if F.Size > 0 then F.ReadBuffer(B[1], F.Size);
-  finally
-    F.Free;
-  end;
+  Result := ReadFileBytes(Path, B);
+  if not Result then Exit;
   SetCodePage(B, CP_UTF8, False);
   Src := UnicodeString(UTF8Decode(B));
   if (Src <> '') and (Src[1] = #$FEFF) then Delete(Src, 1, 1);
-  Result := True;
 end;
 
 { a request key (ModuleRequestKey) resolved against its referrer: the resolved path, then its type suffix }
@@ -312,19 +343,8 @@ begin
 end;
 
 function ReadBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
-var F: TFileStream;
 begin
-  Result := False;
-  B := '';
-  if not FileExists(string(Path)) then Exit;
-  F := TFileStream.Create(string(Path), fmOpenRead or fmShareDenyNone);
-  try
-    SetLength(B, F.Size);
-    if F.Size > 0 then F.ReadBuffer(B[1], F.Size);
-  finally
-    F.Free;
-  end;
-  Result := True;
+  Result := ReadFileBytes(Path, B);
 end;
 
 function FindModule(const Path: UnicodeString): TModRec;

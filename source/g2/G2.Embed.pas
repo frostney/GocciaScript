@@ -18,7 +18,7 @@ type
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
     String form) }
-  TG2ResultForm = (g2rfNone, g2rfString, g2rfJSON);
+  TG2ResultForm = (g2rfNone, g2rfString, g2rfJSON, g2rfSandbox);
   { a warning of the entry's parse (warning-unsupported-features), given to the host before the entry runs }
   TG2WarningEvent = procedure(const Message, Suggestion: UnicodeString; Line, Column: Integer) of object;
 
@@ -105,6 +105,7 @@ type
     FHasCapabilities: Boolean;
     FFetchMaxResponseBytes: Integer;
     FCoverage: Boolean;
+    FRandomRoot: IGocciaHostRandom;
     { the entry's file name (Run): an audited decision made outside every script frame is the entry's }
     FRunFile: UnicodeString;
     function NextRandom(Realm: Integer; out D: Double): Boolean;
@@ -130,6 +131,9 @@ type
     function ModuleLoaded(const Path: UnicodeString): Boolean;
     { the engine's heap now; call it on the engine's thread }
     function Memory: TG2MemoryStats;
+    { a deterministic run's stream for a child engine (a sandbox's nested run), forked from realm 0's as a realm's
+      is; nil when the run is not deterministic. Call it on the engine's thread. }
+    function ForkRandom: IGocciaHostRandom;
     { a decision of the host's own (a node_modules grant) to AuditSink, at the script's call site, during a run on
       the engine's thread: False when the sink raised, the run then ending (g2aHostAbort) }
     function Audit(Kind: TGocciaCapabilityKind; Allow: Boolean; const Subject, Reason: string): Boolean;
@@ -161,6 +165,9 @@ type
     { GocciaScript's deterministic profile (--deterministic): the epoch and monotonic clocks at 0, the time zone
       UTC, Math.random a seeded stream; set before the first run or PrepareHost }
     property Deterministic: Boolean read FDeterministic write FDeterministic;
+    { a deterministic engine's Math.random stream for realm 0 (a parent's ForkRandom), instead of the profile's
+      seed }
+    property RandomRoot: IGocciaHostRandom read FRandomRoot write FRandomRoot;
     { GocciaScript's JavaScript host environment (--host-environment): the module at this path, evaluated before
       the first run's entry, exports the clocks, time zone and random streams the script reads (docs/
       host-environment.md); its time zone is read once, then. Not with Deterministic }
@@ -196,7 +203,7 @@ implementation
 
 uses
   Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval, G2.Modules,
-  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch, G2.Compiler;
+  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch, G2.Compiler, G2.Sandbox;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -238,6 +245,8 @@ begin
     if Result then Text := StrToUnicode(StrOf(S));
     Exit;
   end;
+  { a sandbox child's value, for the calling engine to decode }
+  if Form = g2rfSandbox then Exit(EncodeSandboxValue(V, Text));
   { JSON }
   if V = VUndefined then begin Text := 'null'; Exit(True); end;
   if not IsCallable(V) and IsObject(StringifyFn) then
@@ -627,6 +636,13 @@ begin
   inherited Destroy;
 end;
 
+function TG2Engine.ForkRandom: IGocciaHostRandom;
+begin
+  if Length(FRandoms) = 0 then Exit(nil);
+  Inc(FRandomForks);
+  Result := FRandoms[0].Fork(FRandomForks);
+end;
+
 function TG2Engine.InstallHost(var Err: UnicodeString): Boolean;
 var J: TValue;
 begin
@@ -637,7 +653,8 @@ begin
       TGocciaHostEnvironment.DeterministicMonotonicNanoseconds / 1000000);
     TimeZoneOverride := TGocciaHostEnvironment.DeterministicTimeZone;
     SetLength(FRandoms, 1);
-    FRandoms[0] := TGocciaSeededHostRandom.Create(TGocciaHostEnvironment.DeterministicSeed);
+    if FRandomRoot <> nil then FRandoms[0] := FRandomRoot
+    else FRandoms[0] := TGocciaSeededHostRandom.Create(TGocciaHostEnvironment.DeterministicSeed);
     FRandomForks := 0;
     HostRandom := NextRandom;
     { the time origin under the profile's clocks (0) }

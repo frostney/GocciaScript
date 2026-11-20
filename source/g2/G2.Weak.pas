@@ -45,6 +45,8 @@ function TableDeleteNative(Args: PValue; Argc: Integer; var Res: TValue): Boolea
 procedure ClearKeptObjects;
 { a FinalizationRegistry target died since the last cleanup job }
 function WeakCleanupPending: Boolean;
+{ whether a FinalizationRegistry cell still waits on its target (a collection could find it dead) }
+function WeakCellsWaiting: Boolean;
 { one cleanup job (the registries' callback for one dead cell); False when it threw (Pending holds the error) }
 function RunWeakCleanup: Boolean;
 
@@ -490,6 +492,19 @@ var S: PWeakState;
 begin
   S := WeakStateNow;
   if (S <> nil) and IsObject(S^.Kept) and (ArrayLength(ObjOf(S^.Kept)) > 0) then ArraySetLength(ObjOf(S^.Kept), 0);
+end;
+
+function WeakCellsWaiting: Boolean;
+var S: PWeakState; I: Integer; B: Pointer;
+begin
+  Result := False;
+  S := WeakStateNow;
+  if S = nil then Exit;
+  for I := 0 to S^.Count - 1 do
+  begin
+    B := S^.Boxes[I];
+    if ((PObj(B)^.Pad and $FF) = BOX_CELL) and (PObj(B)^.Native <> nil) then Exit(True);
+  end;
 end;
 
 function WeakCleanupPending: Boolean;

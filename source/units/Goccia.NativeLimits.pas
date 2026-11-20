@@ -4,6 +4,9 @@ unit Goccia.NativeLimits;
 
 interface
 
+uses
+  SysUtils;
+
 const
   MAX_NATIVE_DATA_DEPTH = 256;
   // The most one native allocation may ask for on this target. FPC works out
@@ -20,11 +23,20 @@ function CheckedNativeByteSize(const AElementCount,
 procedure ReserveNativeBytes(const ABytes: Int64);
 procedure ReleaseNativeBytes(const ABytes: Int64);
 
+type
+  { Another engine's ledger for native bytes (G2): AReserve charges ABytes,
+    False refusing them; otherwise it releases them. While a thread has
+    one, a refusal raises ENativeMemoryLimit for that engine to throw. }
+  TNativeBytesHook = function(const ABytes: Int64;
+    const AReserve: Boolean): Boolean;
+  ENativeMemoryLimit = class(Exception);
+
+threadvar
+  NativeBytesHook: TNativeBytesHook;
+
 implementation
 
 uses
-  SysUtils,
-
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
@@ -67,7 +79,11 @@ begin
   if (AElementCount < 0) or (AElementSize < 0) or
      ((AElementSize > 0) and
       (AElementCount > MAX_NATIVE_ALLOCATION_BYTES div AElementSize)) then
+  begin
+    if Assigned(NativeBytesHook) then
+      raise ENativeMemoryLimit.Create(SErrorMemoryLimitExceeded);
     ThrowRangeError(SErrorMemoryLimitExceeded);
+  end;
   Result := AElementCount * AElementSize;
 end;
 
@@ -77,6 +93,12 @@ var
 begin
   if ABytes <= 0 then
     Exit;
+  if Assigned(NativeBytesHook) then
+  begin
+    if not NativeBytesHook(ABytes, True) then
+      raise ENativeMemoryLimit.Create(SErrorMemoryLimitExceeded);
+    Exit;
+  end;
   GC := TGarbageCollector.Instance;
   if not Assigned(GC) then
     Exit;
@@ -88,6 +110,12 @@ procedure ReleaseNativeBytes(const ABytes: Int64);
 var
   GC: TGarbageCollector;
 begin
+  if Assigned(NativeBytesHook) then
+  begin
+    if ABytes > 0 then
+      NativeBytesHook(ABytes, False);
+    Exit;
+  end;
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and (ABytes > 0) then
     GC.ReleaseExternalBytes(ABytes);

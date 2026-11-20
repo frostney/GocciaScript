@@ -142,6 +142,26 @@ it (and registers each closure it creates, so one never called reports 0), and t
 jump: branch 0 when it jumps, 1 when it falls through. A function is located where its source starts. Each file's
 thread keeps its own tracker, merged into the run's when the file ends.
 
+### Sandbox mode
+
+GocciaRunner's sandbox mode ([ADR 0068](../adr/0068-goccia-sandbox-runner.md),
+[ADR 0122](../adr/0122-unified-capability-model.md)) runs on G2 through `Goccia.CLI.G2SandboxHost`, with the same
+options, config section, copied inputs, diff and write-back as the old engine's (the shared `Goccia.Sandbox.*` and
+`Sandbox*` units). A program runs on a thread of its own with a fresh
+engine whose thread is given the sandbox context (`G2.Sandbox`): its modules and data files are read from the
+virtual filesystem (`G2.Modules` `SetFileReadHook`), and `prelude/sandbox.js` installs the `fs`, `goccia` and
+`goccia:search` modules over `G2.Sandbox`'s natives.
+
+A nested run (`runScript`, or the shell's `goccia`) runs on a new thread while its caller's thread waits in the
+native: a G2 engine's state is its thread's. The child inherits its caller's capabilities, at most the time its
+caller has left, and under `--deterministic` a random stream forked from its caller's. Its completion value comes
+back encoded as text (primitives, arrays and own data properties, cycles cut) and is decoded in the caller's realm.
+A child's error reaches its caller with the location only: no code frame and none of the host's suggestions.
+
+The child has its own heap, so a collection in it frees nothing of its caller's. When its event loop runs out of
+work while a `FinalizationRegistry` cell still waits on its target, G2 collects once, so a caller's cleanup that
+came due during a nested run still runs.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,

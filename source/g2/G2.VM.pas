@@ -450,6 +450,11 @@ threadvar
 var
   { the Init procedures of the intrinsics, which CreateRealm runs for a new realm (nil: no realms) }
   RealmInitProc: procedure = nil;
+threadvar
+  { the host's part of a new realm (a ShadowRealm's), run in it after the intrinsics (nil: none): a CLI host leaves
+    out the conformance host's extras there as in its own realm }
+  RealmHostInit: procedure;
+var
   { some thread has a second realm: FastLoop leaves calls and returns to Execute (a global: cheaper there than
     MultiRealm) }
   MultiRealmAny: Boolean = False;
@@ -903,6 +908,7 @@ begin
   finally
     RealmInit := False;
   end;
+  if Assigned(RealmHostInit) then RealmHostInit;
   SaveRealm(NewR);
   LoadRealm(Old);
   CurRealm := Old;

@@ -71,7 +71,7 @@ uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
-  Goccia.YAML, Goccia.TOML, Goccia.URI, G2.Fetch;
+  Goccia.YAML, Goccia.TOML, Goccia.URI, G2.Fetch, G2.Sandbox;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
@@ -88,6 +88,7 @@ uses
 {$I G2.EventsPrelude.inc}
 {$I G2.TimersPrelude.inc}
 {$I G2.DataTreePrelude.inc}
+{$I G2.SandboxPrelude.inc}
 
 type
   { G2.Modules's resolution as the hoister's resolver }
@@ -556,6 +557,7 @@ end;
 
 procedure HostModulesDone;
 begin
+  RealmHostInit := nil;
   FreeAndNil(HostResolver);
   FreeAndNil(ImportSpecifiers);
   ProvidedResolver := nil;
@@ -654,21 +656,13 @@ begin
 end;
 
 function ReadFileUnicode(const Path: UnicodeString; var Text: UnicodeString): Boolean;
-var F: TFileStream; B: RawByteString;
+var B: RawByteString;
 begin
-  Result := False;
-  if not FileExists(UTF8Encode(Path)) then Exit;
-  F := TFileStream.Create(UTF8Encode(Path), fmOpenRead or fmShareDenyNone);
-  try
-    SetLength(B, F.Size);
-    if F.Size > 0 then F.ReadBuffer(B[1], F.Size);
-  finally
-    F.Free;
-  end;
+  Result := ReadFileBytes(Path, B);
+  if not Result then Exit;
   SetCodePage(B, CP_UTF8, False);
   Text := UnicodeString(UTF8Decode(B));
   if (Text <> '') and (Text[1] = #$FEFF) then Delete(Text, 1, 1);
-  Result := True;
 end;
 
 { shared.defineVirtualModules(map, base) }
@@ -919,23 +913,12 @@ end;
 
 { readText(path): a file's text, decoded as UTF-8 without a BOM; undefined when it cannot be read }
 function Host_ReadText(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var F: TFileStream; B: RawByteString; Path: string;
+var B: RawByteString; Path: UnicodeString;
 begin
   Res := VUndefined;
   Result := True;
-  Path := UTF8Encode(ArgStr(Args, Argc, 1));
-  if (Path = '') or not FileExists(Path) then Exit;
-  try
-    F := TFileStream.Create(Path, fmOpenRead or fmShareDenyNone);
-    try
-      SetLength(B, F.Size);
-      if F.Size > 0 then F.ReadBuffer(B[1], F.Size);
-    finally
-      F.Free;
-    end;
-  except
-    Exit;
-  end;
+  Path := ArgStr(Args, Argc, 1);
+  if (Path = '') or not ReadFileBytes(Path, B) then Exit;
   if (Length(B) >= 3) and (B[1] = #$EF) and (B[2] = #$BB) and (B[3] = #$BF) then Delete(B, 1, 3);
   SetCodePage(B, CP_UTF8, False);
   Res := StrFromUnicode(UTF8Decode(B));
@@ -943,10 +926,16 @@ end;
 
 { fileSize(path): a file's size in bytes, -1 when it cannot be read }
 function Host_FileSize(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var SR: TSearchRec; Path: string;
+var SR: TSearchRec; Path: string; B: RawByteString;
 begin
   Res := MkInt(-1);
   Result := True;
+  { a sandbox's file: through the thread's file reader }
+  if SandboxActive then
+  begin
+    if ReadFileBytes(ArgStr(Args, Argc, 1), B) then Res := MkNumber(Length(B));
+    Exit;
+  end;
   Path := UTF8Encode(ArgStr(Args, Argc, 1));
   if FindFirst(Path, faAnyFile, SR) = 0 then
   begin
@@ -1217,8 +1206,19 @@ begin
   DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
   DefineFetchNatives(RootAt(TempTop - 1));
+  if SandboxActive then DefineSandboxNatives(RootAt(TempTop - 1));
   Result := RootAt(TempTop - 1);
   PopRoots(1);
+end;
+
+{ a new realm of a CLI host: the conformance host's extras left out, as host.js leaves them out of the first realm
+  (eval stays an engine option: GocciaScript's EnableEval, which no flag or config key sets) }
+procedure CLIRealmInit;
+begin
+  DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('print'));
+  DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('eval'));
+  DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('escape'));
+  DeleteIfConfigurable(ObjOf(GlobalObj), AtomOf('unescape'));
 end;
 
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
@@ -1226,6 +1226,7 @@ function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: Un
 var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
   if HeapCeiling <= 0 then HeapCeiling := DefaultHeapCeiling;
+  RealmHostInit := @CLIRealmInit;
   if FirstInEngine(EventLoopRootedGen) then
   begin
     AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@HasHostModuleV);
@@ -1265,7 +1266,9 @@ begin
     { the timer globals and goccia:timers, or only the queue (ExposeTimers False) }
     if not ExposeTimers then DefineOwn(RootAt(Base + 2), AtomOf('exposeTimers'), VFalse, pfDefault);
     Result := CallPrelude('<goccia:timers>', TimersSrc, Base, 3, R, Err) and
-      CallPrelude('<node:async_hooks>', AsyncHooksSrc, Base, 3, R, Err);
+      CallPrelude('<node:async_hooks>', AsyncHooksSrc, Base, 3, R, Err) and
+      { sandbox mode's fs, goccia and goccia:search over the thread's virtual file system }
+      (not SandboxActive or CallPrelude('<goccia:sandbox>', SandboxSrc, Base, 3, R, Err));
     Goccia := RootAt(TempTop - 1);
     { shared.timers.fireNext, for the event loop }
     if Result and GetV(RootAt(Base + 2), AtomOf('timers'), R) and IsObject(R) then
@@ -1359,7 +1362,14 @@ begin
     ClearKeptObjects;
     A[0] := MkBool(Intervals);
     if not CallValue(FireNextV, VUndefined, @A[0], 1, R) then Exit(False);
-    if R <> VTrue then Exit(True);
+    if R = VTrue then Continue;
+    { nothing left to run: while a FinalizationRegistry cell still waits on its target, the host collects once
+      (it may at any time, 9.13), so a target that died while nothing allocated still has its cleanup run (a
+      sandbox caller's, whose nested run, an engine of its own, collects nothing of the caller's) }
+    if not WeakCellsWaiting then Exit(True);
+    CollectMinor;
+    CollectMajor;
+    if not WeakCleanupPending then Exit(True);
   end;
 end;
 

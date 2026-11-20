@@ -122,6 +122,11 @@ type
     { A nested run's completion value, copied into the calling program's
       realm; nil for the root run. }
     ResultValue: TGocciaValue;
+    { The same copy for an engine whose values cannot outlive their thread
+      (G2): encoded by the child (G2.Sandbox EncodeSandboxValue), decoded in
+      the calling program's realm. }
+    ResultEncoded: string;
+    HasResultEncoded: Boolean;
     { The root run's completion value as --print shows it, when the host was
       asked for it (TGocciaSandboxHost.PrintRootResult). }
     ResultText: string;

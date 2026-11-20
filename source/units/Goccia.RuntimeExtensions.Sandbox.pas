@@ -178,6 +178,8 @@ uses
   Goccia.MicrotaskQueue,
   Goccia.NativeLimits,
   Goccia.Realm,
+  Goccia.RegExp.Runtime,
+  Goccia.RegExp.VM,
   Goccia.Sandbox.FileSystemErrors,
   Goccia.Sandbox.Search,
   Goccia.Shims,
@@ -2100,7 +2102,14 @@ begin
   GrepOptions.Context := Integer(Min(SearchIntegerOption(Options, 'context',
     'grep', 0, 0), MAX_SANDBOX_GREP_CONTEXT));
   Files := SearchFilesOrThrow(FContext, Selection, SearchProgress, 'grep');
-  Found := SandboxGrep(FContext.Fs, Files, GrepOptions);
+  try
+    Found := SandboxGrep(FContext.Fs, Files, GrepOptions);
+  except
+    on E: ESandboxGrepPatternError do
+      ThrowSyntaxError(E.Message);
+    on E: ERegExpRuntimeError do
+      ThrowRegExpRuntimeError(E);
+  end;
   InitializeTempRoot(ObjRoot);
   try
     Obj := TGocciaObjectValue.Create(TGocciaObjectValue.SharedObjectPrototype,

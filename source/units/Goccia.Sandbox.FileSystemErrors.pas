@@ -9,6 +9,26 @@ uses
 
   Goccia.Values.ObjectValue;
 
+type
+  { A sandbox filesystem error as Node names it: the code (ENOENT), its
+    negative errno, and the description its message carries. }
+  TSandboxFileSystemErrorDefinition = record
+    Code: string;
+    Errno: Integer;
+    Description: string;
+  end;
+
+{ The engine-independent parts, for an engine that builds the error object
+  itself. }
+function SandboxFileSystemErrorDefinition(const AException: ESandboxFsError):
+  TSandboxFileSystemErrorDefinition;
+{ "CODE: description, operation 'path'", and " -> 'destination'" when
+  AHasDestination. }
+function SandboxFileSystemErrorMessage(
+  const ADefinition: TSandboxFileSystemErrorDefinition;
+  const AOperation, APath, ADestination: string;
+  const AHasDestination: Boolean): string;
+
 function CreateSandboxFileSystemError(const AException: ESandboxFsError;
   const AOperation, APath: string): TGocciaObjectValue; overload;
 function CreateSandboxFileSystemError(const AException: ESandboxFsError;
@@ -52,14 +72,7 @@ const
   ERRNO_EROFS = -ESysEROFS;
 {$ENDIF}
 
-type
-  TSandboxFileSystemErrorDefinition = record
-    Code: string;
-    Errno: Integer;
-    Description: string;
-  end;
-
-function ErrorDefinition(const AException: ESandboxFsError):
+function SandboxFileSystemErrorDefinition(const AException: ESandboxFsError):
   TSandboxFileSystemErrorDefinition;
 begin
   if AException is ESandboxFsInvalidPath then
@@ -124,7 +137,8 @@ begin
   end;
 end;
 
-function ErrorMessage(const ADefinition: TSandboxFileSystemErrorDefinition;
+function SandboxFileSystemErrorMessage(
+  const ADefinition: TSandboxFileSystemErrorDefinition;
   const AOperation, APath, ADestination: string;
   const AHasDestination: Boolean): string;
 begin
@@ -140,9 +154,9 @@ function CreateSandboxFileSystemErrorInternal(
 var
   Definition: TSandboxFileSystemErrorDefinition;
 begin
-  Definition := ErrorDefinition(AException);
+  Definition := SandboxFileSystemErrorDefinition(AException);
   Result := CreateErrorObject(ERROR_NAME,
-    ErrorMessage(Definition, AOperation, APath, ADestination,
+    SandboxFileSystemErrorMessage(Definition, AOperation, APath, ADestination,
       AHasDestination));
   Result.AssignProperty(PROP_CODE,
     TGocciaStringLiteralValue.Create(Definition.Code));
