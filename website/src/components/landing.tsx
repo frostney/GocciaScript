@@ -57,9 +57,15 @@ import {
   PRODUCTION_READY_QUESTION,
   TYPE_ANNOTATIONS_ANSWER,
   TYPE_ANNOTATIONS_QUESTION,
+  TYPESCRIPT_JSX_ANSWER,
+  TYPESCRIPT_JSX_QUESTION,
   VITEST_COMPATIBILITY_ANSWER,
   VITEST_COMPATIBILITY_QUESTION,
 } from "@/lib/positioning";
+import {
+  type Test262ModeBreakdown,
+  test262ModeRates,
+} from "@/lib/test262-modes";
 import { compatibilityPercent } from "@/lib/test262-percent";
 
 const FEATURE_ICONS: Record<
@@ -479,15 +485,36 @@ console.log("total:", total);`;
     { op: "OP_RETURN", arg: "", note: "" },
   ];
 
+  // The shape of `GocciaRunner example.js --output=compact-json` (see
+  // docs/json-output.md); the timings are from one such run.
   const RESULT = `{
-  "result": null,
-  "stdout": "total: 7.5\\n",
-  "fileName": "example.js",
-  "lexTimeNanoseconds": 14800,
-  "parseTimeNanoseconds": 41600,
-  "compileTimeNanoseconds": 23200,
-  "executeTimeNanoseconds": 5300,
-  "totalTimeNanoseconds": 84900
+  "ok": true,
+  "output": ["total: 7.5"],
+  "error": null,
+  "timing": {
+    "lex_ns": 45155,
+    "parse_ns": 50930,
+    "compile_ns": 81236,
+    "exec_ns": 56509,
+    "total_ns": 1467240
+  },
+  "workers": { "used": 1, "available": 1, "parallel": false },
+  "files": [
+    {
+      "fileName": "example.js",
+      "ok": true,
+      "output": ["total: 7.5"],
+      "error": null,
+      "timing": {
+        "lex_ns": 45155,
+        "parse_ns": 50930,
+        "compile_ns": 81236,
+        "exec_ns": 56509,
+        "total_ns": 1467240
+      },
+      "result": null
+    }
+  ]
 }`;
 
   const CONSOLE_OUTPUT = `total: 7.5`;
@@ -522,8 +549,7 @@ console.log("total:", total);`;
           constructs (<code className={inlineCodeClass}>var</code>,{" "}
           <code className={inlineCodeClass}>==</code>,{" "}
           <code className={inlineCodeClass}>with</code>) unless their explicit
-          compatibility flags are enabled. Normal runtimes do not install{" "}
-          <code className={inlineCodeClass}>eval</code>.
+          compatibility flags are enabled.
         </>
       ),
       docId: "language",
@@ -713,7 +739,7 @@ console.log("total:", total);`;
                         })),
                         {
                           kind: "meta" as const,
-                          text: "— exit 0 · 0.08ms",
+                          text: "— exit 0 · 1.47ms",
                         },
                       ]}
                     />
@@ -813,7 +839,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "What is GocciaScript for?",
     answer:
-      "Its primary goal is JavaScript execution for AI agents under an explicit, host-defined capability model. The same runtime and toolchain also serve sandboxed automation, portable native applications, plugins, and desktop scripting; native embedding is an important secondary goal.",
+      "It is an ECMAScript engine for embedding: an application adds scripting by embedding it, installs the runtime surface it needs, and grants capabilities explicitly. Different hosts get runtime extensions for their use case: a virtual filesystem, Node.js compatibility to a degree, and web-standard APIs (fetch, URL, TextEncoder/TextDecoder, Blob, AbortController and EventTarget today, with the ones React server rendering relies on, such as MessageChannel, ReadableStream and crypto, planned). GocciaRunner's sandbox mode, a runtime for code that AI agents generate, is a reference host built on the same capability model.",
   },
   {
     question: ECMASCRIPT_SCOPE_QUESTION,
@@ -834,7 +860,7 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
   {
     question: "Is GocciaScript a browser runtime?",
     answer:
-      "No. It implements selected web-standard APIs where they fit the sandboxed runtime and embeddable-platform goals, but it does not provide a DOM, Web Workers, storage APIs, or a full browser event loop.",
+      "No. It provides a web-standard API when it fits the vision and cannot be shimmed in userland, and the APIs React server rendering needs are planned, but it does not currently provide a DOM, Web Workers, storage APIs, or a full browser event loop.",
   },
   {
     question: COMPILER_SUPPORT_QUESTION,
@@ -845,9 +871,9 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
     answer: PRODUCTION_READY_ANSWER,
   },
   {
-    question: "How does the sandbox model work?",
+    question: "How does GocciaRunner's sandbox mode work?",
     answer:
-      "Scripts have no ambient host filesystem, process, native FFI, or network authority by default. GocciaRunner's sandbox mode copies explicit inputs into a virtual filesystem, exposes fs, goccia and goccia:search as import-only modules, and reports sandbox writes as diffs; only inputs copied with --copy-rw are written back, and only after a successful run.",
+      "Scripts have no ambient host filesystem, process, native FFI, or network authority by default. Sandbox mode, the reference host for code that AI agents generate, copies explicit inputs into a virtual filesystem, exposes fs, goccia and goccia:search as import-only modules, and reports sandbox writes as diffs; only inputs copied with --copy-rw are written back, and only after a successful run.",
   },
   {
     question: "How compatible is it with ECMAScript?",
@@ -863,8 +889,8 @@ const FAQ_ITEMS: { question: string; answer: ReactNode }[] = [
     ),
   },
   {
-    question: "Can GocciaScript run TypeScript or JSX source?",
-    answer: TYPE_ANNOTATIONS_ANSWER,
+    question: TYPESCRIPT_JSX_QUESTION,
+    answer: TYPESCRIPT_JSX_ANSWER,
   },
   {
     question: "How do I try GocciaScript?",
@@ -892,6 +918,9 @@ export function Landing({
   compatibility?: {
     passed: number;
     totalRun: number;
+    annexBIncluded: boolean;
+    /** Per-mode figures; absent for a report that predates them. */
+    byMode?: Test262ModeBreakdown;
   } | null;
   release?: ReleaseInfo | null;
   /** BCP-47 locale tag from `Accept-Language` so the release-date in
@@ -899,6 +928,7 @@ export function Landing({
    *  the browser. */
   locale: string;
 }) {
+  const modeRates = test262ModeRates(compatibility?.byMode);
   return (
     <>
       <section className="hero">
@@ -909,8 +939,7 @@ export function Landing({
                 A Java<span className="script">Script</span> engine.
               </h1>
               <p className="hero-lede">
-                A JavaScript engine for running code that AI agents and people
-                write: a sandbox-first{" "}
+                An{" "}
                 <a
                   href="https://tc39.es/ecma262/"
                   target="_blank"
@@ -929,7 +958,8 @@ export function Landing({
                     conformance with generated test262 reports.
                   </span>
                 </a>{" "}
-                runtime. The host defines the available capabilities, runtime
+                engine for embedding, with sensible defaults that are easy to
+                customize. The host defines the available capabilities, runtime
                 surface, and execution limits.
               </p>
               <div className="hero-cta-row">
@@ -1007,16 +1037,21 @@ export function Landing({
                   fails the pull request.{" "}
                   {compatibility ? (
                     <>
-                      The latest published run, Annex B excluded, has{" "}
+                      The latest published report
+                      {compatibility.annexBIncluded
+                        ? ""
+                        : ", Annex B excluded,"}{" "}
+                      has{" "}
                       <strong>
                         {compatibility.passed.toLocaleString(locale)} of{" "}
                         {compatibility.totalRun.toLocaleString(locale)}
                       </strong>{" "}
-                      cases passing (
+                      runs passing (
                       {compatibilityPercent(
                         compatibility.passed,
                         compatibility.totalRun,
                       )}
+                      {modeRates ? `; ${modeRates}` : ""}
                       ); see results{" "}
                     </>
                   ) : (
@@ -1033,9 +1068,9 @@ export function Landing({
               <VStack gap={2}>
                 <Heading level={4}>Tested on every change</Heading>
                 <Text as="p" type="supporting" display="block">
-                  15,000+ JavaScript tests in 1,800+ files run on every pull
-                  request on Linux x64 and on six targets on main. Differential
-                  suites are checked against Bun and Vitest.
+                  17,000+ JavaScript tests run on every pull request on Linux
+                  x64 and on six targets on main. Differential suites are
+                  checked against Bun and Vitest.
                 </Text>
               </VStack>
             </Card>
@@ -1105,7 +1140,8 @@ export function Landing({
               are enabled by default; every standard core form disabled by the
               recommended profile has an explicit compatibility path. Normal
               hosts do not install <code className={inlineCodeClass}>eval</code>
-              , which is exposed only by the private test262 conformance host.
+              ; an embedder opts in through the engine&apos;s{" "}
+              <code className={inlineCodeClass}>EnableEval</code> option.
             </p>
             <p className="compat-note">
               <Link href="/compatibility" className="link-button">
@@ -1192,11 +1228,14 @@ export function Landing({
                 </table>
               </section>
               <p className="compat-note">
-                Compatibility flags primarily serve ECMAScript conformance and
-                existing code. Dynamic source exposure is separate: normal hosts
-                do not install <code className={inlineCodeClass}>eval</code>,
-                and <code className={inlineCodeClass}>Function()</code> requires
-                the explicit{" "}
+                Compatibility flags are supported customization: each turns on
+                an implemented form the recommended profile leaves out. Dynamic
+                source exposure is separate:{" "}
+                <code className={inlineCodeClass}>eval</code> is installed only
+                when an embedder opts in through the engine&apos;s{" "}
+                <code className={inlineCodeClass}>EnableEval</code> option, and{" "}
+                <code className={inlineCodeClass}>Function()</code> requires the
+                explicit{" "}
                 <code className={inlineCodeClass}>
                   --unsafe-function-constructor
                 </code>{" "}
@@ -1239,11 +1278,12 @@ export function Landing({
                 The sandbox <code className={inlineCodeClass}>fs</code> module
                 provides Node-compatible synchronous, callback, and promise
                 methods over that virtual filesystem, including Stats objects
-                and Node-shaped errors. GocciaScript is not a complete Node.js
-                host: it does not provide CommonJS,{" "}
-                <code className={inlineCodeClass}>process</code>,{" "}
-                <code className={inlineCodeClass}>Buffer</code>, or the general{" "}
-                <code className={inlineCodeClass}>node:</code> module set.
+                and Node-shaped errors. Node compatibility is to a degree, as
+                runtime extensions a host installs: GocciaScript provides a
+                Node.js capability when it fits the vision and cannot be shimmed
+                in userland, and leaves what userland can shim to userland. The
+                same rule covers CommonJS and the general{" "}
+                <code className={inlineCodeClass}>node:</code> modules.
                 Bare-specifier lookup through{" "}
                 <code className={inlineCodeClass}>node_modules</code> (ESM only)
                 is opt-in with{" "}
@@ -1286,8 +1326,8 @@ export function Landing({
           <div className="section-head">
             <div className="section-kicker">Native platform</div>
             <AnchorH2 id="native-platform">
-              Portable by design,{" "}
-              <span className="wave-under">embeddable by choice.</span>
+              Made for embedding,{" "}
+              <span className="wave-under">portable by design.</span>
             </AnchorH2>
             <p>{NATIVE_PLATFORM_DESCRIPTION}</p>
           </div>
@@ -1305,9 +1345,10 @@ export function Landing({
               <VStack gap={2}>
                 <Heading level={4}>Delphi 12</Heading>
                 <Text as="p" type="supporting" display="block">
-                  Repository projects cover every shipped application on Win32
-                  and Win64; the support contract includes all applicable Pascal
-                  and JavaScript tests.
+                  Repository projects cover the REPL, Runner, Bare Script
+                  Loader, Test Runner, Benchmark Runner and Bundler on Win32 and
+                  Win64; the support contract includes all applicable Pascal and
+                  JavaScript tests.
                 </Text>
               </VStack>
             </Card>

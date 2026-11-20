@@ -1447,9 +1447,13 @@ p {
 .perf-page {
   --perf-quickjs: var(--amber);
   --perf-node: #4d7fb8;
+  --perf-node-jitless: #3f8a6e;
+  --perf-jsc: #8a5aa8;
 }
 [data-theme="espresso"] .perf-page {
   --perf-node: #86b5e5;
+  --perf-node-jitless: #7fcfae;
+  --perf-jsc: #c39be0;
 }
 .perf-hero h1 {
   max-width: 9ch;

@@ -33,6 +33,7 @@ type
     procedure TestBookkeepingIsExcluded;
     procedure TestCollapsedAliasesAndRefresh;
     procedure TestIndependentEntriesHaveNoOpcodePair;
+    procedure TestResumedSegmentsKeepTimingWithoutAnotherCall;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -70,6 +71,8 @@ begin
     TestBookkeepingIsExcluded);
   Test('Collapsed aliases merge and a later return refreshes the export',
     TestCollapsedAliasesAndRefresh);
+  Test('Resumed segments keep timing without another call',
+    TestResumedSegmentsKeepTimingWithoutAnotherCall);
   Test('Independent entries do not invent an opcode pair',
     TestIndependentEntriesHaveNoOpcodePair);
 end;
@@ -157,6 +160,35 @@ begin
   Expect<Int64>(TotalOf(F)).ToBe(25);
   Expect<Int64>(SelfOf(F)).ToBe(25);
   Expect<Int64>(Profiler.GetFunctionProfile(F).CallCount).ToBe(2);
+end;
+
+// Two active segments, with a separate job while the module is suspended.
+procedure TProfilerTests.TestResumedSegmentsKeepTimingWithoutAnotherCall;
+var
+  Module, Child, Job: Integer;
+begin
+  Module := Profiler.RegisterTemplate('<module>', 'async.js', 1);
+  Child := Profiler.RegisterTemplate('child', 'async.js', 2);
+  Job := Profiler.RegisterTemplate('job', 'async.js', 3);
+  Profiler.PushFunction(Module, 0);
+  Profiler.PushFunction(Child, 10);
+  Profiler.PopFunction(Child, 20);
+  Profiler.PopFunction(Module, 30);
+  Profiler.PushFunction(Job, 40);
+  Profiler.PopFunction(Job, 60);
+  Profiler.PushFunction(Module, 100, False);
+  Profiler.PushFunction(Child, 110);
+  Profiler.PopFunction(Child, 130);
+  Profiler.PopFunction(Module, 150);
+  Expect<Int64>(Profiler.GetFunctionProfile(Module).CallCount).ToBe(1);
+  Expect<Int64>(Profiler.GetFunctionProfile(Child).CallCount).ToBe(2);
+  Expect<Integer>(Profiler.GetFunctionProfile(Module).ActiveFrames).ToBe(0);
+  Expect<Int64>(TotalOf(Module)).ToBe(80);
+  Expect<Int64>(SelfOf(Module)).ToBe(50);
+  Expect<Int64>(TotalOf(Child)).ToBe(30);
+  Expect<Int64>(TotalOf(Job)).ToBe(20);
+  Expect<Int64>(StackWeight('<module>;child')).ToBe(30);
+  Expect<Int64>(StackWeight('job')).ToBe(20);
 end;
 
 // f 0..100 -> callback 10..90 -> f 20..80 -> callback 30..70 -> f 40..60, as

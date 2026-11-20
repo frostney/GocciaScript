@@ -9,7 +9,21 @@ uses
 
 function TryDecodeUTF8(const ABytes: TBytes; out AText: string;
   out AErrorOffset: Integer): Boolean;
-function DecodeUTF8WithReplacement(const ABytes: TBytes): string;
+function DecodeUTF8WithReplacement(const ABytes: TBytes): string; overload;
+{ Decodes ABytes[AStart..] as DecodeUTF8WithReplacement decodes all of them,
+  without copying the tail first. }
+function DecodeUTF8WithReplacement(const ABytes: TBytes;
+  const AStart: Integer): string; overload;
+{ The number of UTF-8 bytes AText[AFirst..AStop - 1] encodes to, an unpaired
+  surrogate counting as U+FFFD (3 bytes); a pair is only one when both its
+  halves are inside the range. }
+function UTF8LengthWithReplacement(const AText: string;
+  const AFirst, AStop: Integer): SizeInt;
+{ Writes AText[AFirst..AStop - 1] as UTF-8 at ABytes[AOffset], an unpaired
+  surrogate as U+FFFD, and advances AOffset; ABytes has room for the length
+  UTF8LengthWithReplacement counts for the same range. }
+procedure WriteUTF8WithReplacement(const AText: string;
+  const AFirst, AStop: Integer; const ABytes: TBytes; var AOffset: SizeInt);
 function TryEncodeUTF8(const AText: string; out ABytes: TBytes;
   out AErrorOffset: Integer): Boolean;
 function TryEncodeUTF8NullTerminated(const AText: string; out ABytes: TBytes;
@@ -180,13 +194,21 @@ begin
 end;
 
 function DecodeUTF8WithReplacement(const ABytes: TBytes): string;
+begin
+  Result := DecodeUTF8WithReplacement(ABytes, 0);
+end;
+
+function DecodeUTF8WithReplacement(const ABytes: TBytes;
+  const AStart: Integer): string;
 var
   Buffer: TStringBuffer;
   CodePoint: Cardinal;
   Index, SequenceLength: Integer;
 begin
-  Buffer := TStringBuffer.Create(Length(ABytes));
-  Index := 0;
+  if AStart >= Length(ABytes) then
+    Exit('');
+  Buffer := TStringBuffer.Create(Length(ABytes) - AStart);
+  Index := AStart;
   while Index < Length(ABytes) do
   begin
     if TryReadUTF8CodePoint(ABytes, Index, CodePoint, SequenceLength) then
@@ -213,32 +235,34 @@ begin
   Result := (Ord(AChar) >= $DC00) and (Ord(AChar) <= $DFFF);
 end;
 
-function IsPairAt(const AText: string; const AIndex: Integer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
+{ Whether AText[AIndex] and AText[AIndex + 1] are a surrogate pair inside the
+  range that ends before AStop. }
+function IsPairBefore(const AText: string; const AIndex, AStop: Integer): Boolean; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  Result := IsHighSurrogate(AText[AIndex]) and (AIndex < Length(AText)) and
+  Result := IsHighSurrogate(AText[AIndex]) and (AIndex + 1 < AStop) and
     IsLowSurrogate(AText[AIndex + 1]);
 end;
 
-{ The number of UTF-8 bytes AText encodes to, and in AStop the index where
-  encoding stops: Length(AText) + 1, or the first unpaired surrogate when
+{ The number of UTF-8 bytes AText[AFirst..ALast] encodes to, and in AStop the
+  index where encoding stops: ALast + 1, or the first unpaired surrogate when
   AReplaceInvalid is False. A surrogate pair takes 4 bytes; an unpaired
   surrogate is replaced by U+FFFD, 3 bytes. }
-function UTF8EncodedLength(const AText: string; const AReplaceInvalid: Boolean;
-  out AStop: Integer): SizeInt;
+function UTF8RangeLength(const AText: string; const AFirst, ALast: Integer;
+  const AReplaceInvalid: Boolean; out AStop: Integer): SizeInt;
 var
   CodeUnit: Cardinal;
   Index: Integer;
 begin
   Result := 0;
-  Index := 1;
-  while Index <= Length(AText) do
+  Index := AFirst;
+  while Index <= ALast do
   begin
     CodeUnit := Ord(AText[Index]);
     if CodeUnit <= $7F then
       Inc(Result)
     else if CodeUnit <= $7FF then
       Inc(Result, 2)
-    else if IsPairAt(AText, Index) then
+    else if IsPairBefore(AText, Index, ALast + 1) then
     begin
       Inc(Result, 4);
       Inc(Index);
@@ -253,17 +277,29 @@ begin
   AStop := Index;
 end;
 
-{ Writes AText[1..AStop - 1] as UTF-8 into ABytes, which holds exactly the
-  length UTF8EncodedLength counted for that range. }
-procedure WriteUTF8(const AText: string; const AStop: Integer;
-  const ABytes: TBytes);
+function UTF8EncodedLength(const AText: string; const AReplaceInvalid: Boolean;
+  out AStop: Integer): SizeInt;
+begin
+  Result := UTF8RangeLength(AText, 1, Length(AText), AReplaceInvalid, AStop);
+end;
+
+function UTF8LengthWithReplacement(const AText: string;
+  const AFirst, AStop: Integer): SizeInt;
+var
+  Stop: Integer;
+begin
+  Result := UTF8RangeLength(AText, AFirst, AStop - 1, True, Stop);
+end;
+
+procedure WriteUTF8WithReplacement(const AText: string;
+  const AFirst, AStop: Integer; const ABytes: TBytes; var AOffset: SizeInt);
 var
   CodePoint: Cardinal;
   Index: Integer;
   Output: SizeInt;
 begin
-  Output := 0;
-  Index := 1;
+  Output := AOffset;
+  Index := AFirst;
   while Index < AStop do
   begin
     CodePoint := Ord(AText[Index]);
@@ -274,7 +310,7 @@ begin
       Inc(Index);
       Continue;
     end;
-    if IsPairAt(AText, Index) then
+    if IsPairBefore(AText, Index, AStop) then
     begin
       CodePoint := $10000 + ((CodePoint - $D800) shl 10) +
         Cardinal(Ord(AText[Index + 1]) - $DC00);
@@ -305,6 +341,18 @@ begin
       Inc(Output, 4);
     end;
   end;
+  AOffset := Output;
+end;
+
+{ Writes AText[1..AStop - 1] as UTF-8 into ABytes, which holds exactly the
+  length UTF8EncodedLength counted for that range. }
+procedure WriteUTF8(const AText: string; const AStop: Integer;
+  const ABytes: TBytes);
+var
+  Offset: SizeInt;
+begin
+  Offset := 0;
+  WriteUTF8WithReplacement(AText, 1, AStop, ABytes, Offset);
 end;
 
 { Counts the output first and allocates it once. Growing the array per code

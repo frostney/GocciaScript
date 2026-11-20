@@ -336,3 +336,17 @@ describe("ast.parse", () => {
     expect(Object.hasOwn(result.comments, 0)).toBe(true);
   });
 });
+
+// ES2027 §16.1.1 ScriptBody and §8.6.6 ContainsUsing.
+describe("ast.parse using declaration source goals", () => {
+  test("rejects using declarations at a script's top level", () => {
+    expect(() => parse("using r = null;", { module: false })).toThrow(SyntaxError);
+    expect(() => parse("await using r = null;", { module: false })).toThrow(SyntaxError);
+  });
+
+  test("accepts module top-level and script block declarations", () => {
+    expect(parse("using r = null;", { module: true }).root.children.length).toBe(1);
+    expect(parse("await using r = null;", { module: true }).root.children.length).toBe(1);
+    expect(parse("{ using r = null; }", { module: false }).root.children.length).toBe(1);
+  });
+});

@@ -212,6 +212,9 @@ type
     procedure TestOtherFunctionKindsReturnWithoutAwait;
     procedure TestForAwaitCloseAwaitsReturnResult;
     procedure TestAwaitUsingAwaitsDisposeResultOnce;
+    procedure TestUsingDisposalDistinguishesReturnFromThrow;
+    procedure TestForAwaitUsingHeadIteratesAsynchronously;
+    procedure TestTopLevelUsingIsDisposed;
     procedure TestInitializedConstOperandsSkipGetLocal;
     procedure TestConstOperandsBeforeDeclarationKeepGetLocal;
     procedure TestSwitchClauseForgetsInitializedConsts;
@@ -482,6 +485,12 @@ begin
     TestForAwaitCloseAwaitsReturnResult);
   Test('await using awaits a dispose result once',
     TestAwaitUsingAwaitsDisposeResultOnce);
+  Test('a using handler tells a generator return from a throw',
+    TestUsingDisposalDistinguishesReturnFromThrow);
+  Test('for await with a using head iterates asynchronously',
+    TestForAwaitUsingHeadIteratesAsynchronously);
+  Test('a top-level using declaration is disposed',
+    TestTopLevelUsingIsDisposed);
   Test('Static import loads scale with declarations',
     TestStaticImportLoadsScaleWithDeclarations);
   Test('Binary round-trip', TestBinaryRoundTrip);
@@ -1002,6 +1011,99 @@ begin
       Expect<Integer>(DisposeCount).ToBe(2);
       Expect<Integer>(ErrorCount).ToBe(2);
     end;
+  finally
+    Module.Free;
+  end;
+end;
+
+// ES2027 §27.8.3.4 GeneratorResumeAbrupt resumes a generator's return() with
+// a return completion, which leaving a block disposes (§7.5.4 DisposeResources).
+// A using block protects its body with a finally handler, which that
+// completion reaches, and the handler tests for it before it disposes: once,
+// for the normal exit and the handler each.
+procedure TTestCompiler.TestUsingDisposalDistinguishesReturnFromThrow;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  I, ReturnTestCount: Integer;
+  Instruction: UInt32;
+begin
+  Module := CompileSource(
+    'const holder = {' +
+    '  *run(resource) {' +
+    '    { using r = resource; yield 1; }' +
+    '  }' +
+    '};');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_USING_DISPOSE);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_PUSH_HANDLER)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_PUSH_FINALLY_HANDLER)).ToBe(1);
+      Expect<Integer>(CountOp(Func, OP_USING_DISPOSE)).ToBe(2);
+      ReturnTestCount := 0;
+      for I := 0 to Func.CodeCount - 1 do
+      begin
+        Instruction := Func.GetInstruction(I);
+        if (TGocciaOpCode(DecodeOp(Instruction)) = OP_ITER_CLOSE) and
+           (DecodeC(Instruction) = ITER_CLOSE_IS_GENERATOR_RETURN) then
+        begin
+          Inc(ReturnTestCount);
+          Expect<Integer>(DecodeOp(Func.GetInstruction(I + 1)))
+            .ToBe(Ord(OP_JUMP_IF_TRUE));
+        end;
+      end;
+      Expect<Integer>(ReturnTestCount).ToBe(1);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+// ES2027 §14.7.5: `for await (await using x of source)` and
+// `for await (using x of source)` are for-await-of loops (iteration kind
+// async-iterate) whose values are resources of their iteration.
+procedure TTestCompiler.TestForAwaitUsingHeadIteratesAsynchronously;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+begin
+  Module := CompileSource(
+    'const holder = {' +
+    '  async run(source) {' +
+    '    for await (await using x of source) {}' +
+    '    for await (using y of source) {}' +
+    '  }' +
+    '};');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_USING_INIT);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if Assigned(Func) then
+    begin
+      Expect<Integer>(CountOp(Func, OP_ASYNC_ITER_NEXT)).ToBe(2);
+      Expect<Integer>(CountOp(Func, OP_ITER_NEXT)).ToBe(0);
+      Expect<Integer>(CountOp(Func, OP_USING_INIT)).ToBe(2);
+      // Each iteration's normal exit and its handler dispose once.
+      Expect<Integer>(CountOp(Func, OP_USING_DISPOSE)).ToBe(4);
+    end;
+  finally
+    Module.Free;
+  end;
+end;
+
+// ES2027 §16.2.1.7.3.2 ExecuteModule: a module disposes the resources of its
+// top-level using declarations once its body completes, from the normal exit
+// and from the handler that a throw reaches.
+procedure TTestCompiler.TestTopLevelUsingIsDisposed;
+var
+  Module: TGocciaBytecodeModule;
+begin
+  Module := CompileSource('using r = globalThis.resource;');
+  try
+    Expect<Integer>(CountOp(Module.TopLevel, OP_USING_INIT)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_PUSH_FINALLY_HANDLER)).ToBe(1);
+    Expect<Integer>(CountOp(Module.TopLevel, OP_USING_DISPOSE)).ToBe(2);
   finally
     Module.Free;
   end;
@@ -2250,50 +2352,54 @@ end;
   before each clause which of their bindings the clauses before it
   initialized or gave a constant. Doing that by visiting every local of the
   function made a switch with a `let` or `const` in each clause compile in
-  time quadratic in its clauses (about 0.45 s here for 4,000, 31 ms for
-  1,000). Each shape compiles 4,000 clauses in at most 8 times the time of
-  1,000, about 2.8 times per doubling where linear growth gives 2 and
-  quadratic 4, and within a few times the same clauses with their bodies in
-  braces, whose bindings live in a block of each clause. Both sizes stay
-  below about 5,400 clauses, past which the switch's first jumps need the
-  long form (TestLongBranchesCompileOnce). }
+  time quadratic in its clauses (#1921). ForgetCaseClauseFacts counts the
+  locals it visits in ccLocalListScans, so a clause that again visits every
+  local of the function makes that count grow 4 times when the clauses
+  double. Each shape counts the work of compiling 1,000 and 2,000 clauses,
+  and every counter may grow at most 2.5 times. A count does not depend on
+  the machine's speed or load, as a compile time does. Both sizes stay below
+  about 5,400 clauses, past which the switch's first jumps need the long
+  form (TestLongBranchesCompileOnce). }
 procedure TTestCompiler.TestSwitchCaseDeclarationsCompileInLinearTime;
 const
-  SMALL_CLAUSES = 1000;
-  LARGE_CLAUSES = 4000;
-  GROWTH_RATIO = 8;
+  SHORT_CLAUSES = 1000;
+  LONG_CLAUSES = 2000;
   FLAT_CLAUSE = 'case %0:d: const s%0:d = %0:d; break;';
-  BRACED_CLAUSE = 'case %0:d: { const s%0:d = %0:d; break; }';
 
-  procedure ExpectSwitchCompilesLinear(const APrefix, ASuffix: string;
+  function SwitchSource(const APrefix, ASuffix: string;
+    const AClauses: Integer): string;
+  var
+    Source: TStringBuffer;
+    I: Integer;
+  begin
+    Source := TStringBuffer.Create;
+    Source.Append(APrefix + LineEnding);
+    for I := 0 to AClauses - 1 do
+      Source.Append(Format(FLAT_CLAUSE, [I]) + LineEnding);
+    Source.Append(ASuffix + LineEnding);
+    Result := Source.ToString;
+  end;
+
+  procedure ExpectSwitchWorkLinear(const APrefix, ASuffix: string;
     const AGlobalBackedTopLevel: Boolean);
   var
-    Small, Large, Braced: Int64;
+    Short, Long: TGocciaCompileCounters;
+    Counter: TGocciaCompileCounter;
   begin
-    Small := CompileNanoseconds(FLAT_CLAUSE, AGlobalBackedTopLevel,
-      SMALL_CLAUSES, APrefix, ASuffix);
-    Large := CompileNanoseconds(FLAT_CLAUSE, AGlobalBackedTopLevel,
-      LARGE_CLAUSES, APrefix, ASuffix);
-    Braced := CompileNanoseconds(BRACED_CLAUSE, AGlobalBackedTopLevel,
-      LARGE_CLAUSES, APrefix, ASuffix);
-    if Large > GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS then
-      Fail(Format('%d clauses "%s" in "%s" took %d ms to compile against ' +
-        '%d ms for %d', [LARGE_CLAUSES, FLAT_CLAUSE, APrefix,
-        Large div 1000000, Small div 1000000, SMALL_CLAUSES]));
-    Expect<Boolean>(Large <=
-      GROWTH_RATIO * Small + LINEAR_SLACK_NANOSECONDS).ToBe(True);
-    if Large > LINEAR_COMPILE_RATIO * Braced + LINEAR_SLACK_NANOSECONDS then
-      Fail(Format('%d clauses "%s" in "%s" took %d ms to compile against ' +
-        '%d ms with braces', [LARGE_CLAUSES, FLAT_CLAUSE, APrefix,
-        Large div 1000000, Braced div 1000000]));
-    Expect<Boolean>(Large <=
-      LINEAR_COMPILE_RATIO * Braced + LINEAR_SLACK_NANOSECONDS).ToBe(True);
+    Short := SourceCompileCounters(SwitchSource(APrefix, ASuffix,
+      SHORT_CLAUSES), False, '<test>', False, AGlobalBackedTopLevel);
+    Long := SourceCompileCounters(SwitchSource(APrefix, ASuffix,
+      LONG_CLAUSES), False, '<test>', False, AGlobalBackedTopLevel);
+    // Each clause settles its own binding, which the next clause forgets.
+    Expect<Boolean>(Short[ccLocalListScans] >= SHORT_CLAUSES).ToBe(True);
+    for Counter := Low(Counter) to High(Counter) do
+      ExpectWorkLinear(Short, Long, Counter);
   end;
 
 begin
-  ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', False);
-  ExpectSwitchCompilesLinear('const d = 1; switch (d) {', '}', True);
-  ExpectSwitchCompilesLinear(
+  ExpectSwitchWorkLinear('const d = 1; switch (d) {', '}', False);
+  ExpectSwitchWorkLinear('const d = 1; switch (d) {', '}', True);
+  ExpectSwitchWorkLinear(
     'const d = 1; const g = () => { switch (d) {', '} };', False);
 end;
 

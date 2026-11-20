@@ -180,7 +180,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
                       <Link
                         className="nav-conformance"
                         href="/compatibility"
-                        aria-label={`test262 ${conformancePercent}: live pass rate on main. Open the compatibility dashboard`}
+                        aria-label={`test262 ${conformancePercent}: live pass rate on main, runs in both modes combined. Open the compatibility dashboard`}
                       >
                         test262 {conformancePercent}
                       </Link>
@@ -213,7 +213,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
                 </span>
               </div>
               <small className="text-ink-3 text-[0.82rem]">
-                — A drop of JavaScript, sandboxed by default.
+                — A drop of JavaScript, built for embedding.
               </small>
             </div>
           </div>

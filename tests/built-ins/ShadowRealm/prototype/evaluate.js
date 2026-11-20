@@ -78,7 +78,7 @@ describe("ShadowRealm.prototype.evaluate", () => {
     ["super.x", "super property access is not allowed in this eval context"],
     ['import x from "./y.js";', "Module declarations are not allowed in eval code"],
     ["export default 1;", "Module declarations are not allowed in eval code"],
-    ["using x = null;", "Using declarations are not allowed at the top level of eval"],
+    ["using x = null;", "Using declarations are not allowed at the top level of a script"],
     ["let x; let x;", "Identifier 'x' has already been declared"],
   ])("an early error in %s keeps its message", (source, message) => {
     const realm = new ShadowRealm();
@@ -273,5 +273,28 @@ describe("ShadowRealm evaluate conformance", () => {
   test("does not expose eval in the child realm when the host has none", () => {
     const realm = new ShadowRealm();
     expect(realm.evaluate("typeof eval")).toBe("undefined");
+  });
+});
+
+// ES2027 §16.1.1: eval parses a Script and rejects ContainsUsing.
+describe("using declarations in evaluated scripts", () => {
+  test("rejects top-level using before any statement runs", () => {
+    const realm = new ShadowRealm();
+    realm.evaluate("globalThis.ran = false;");
+    expect(() => realm.evaluate("globalThis.ran = true; using r = null;")).toThrow(SyntaxError);
+    expect(realm.evaluate("globalThis.ran")).toBe(false);
+  });
+
+  test("rejects top-level await using before any statement runs", () => {
+    const realm = new ShadowRealm();
+    realm.evaluate("globalThis.ran = false;");
+    expect(() => realm.evaluate("globalThis.ran = true; await using r = null;")).toThrow(SyntaxError);
+    expect(realm.evaluate("globalThis.ran")).toBe(false);
+  });
+
+  test("allows using in a block and a function body", () => {
+    const realm = new ShadowRealm();
+    expect(realm.evaluate("{ using r = null; } 42;")).toBe(42);
+    expect(realm.evaluate("(() => { using r = null; return 43; })()")).toBe(43);
   });
 });

@@ -75,6 +75,7 @@ type
     procedure TestASTParse;
     procedure TestCustomMatchers;
     procedure TestResponseBodies;
+    procedure TestBlob;
     procedure TestSemverNamespace;
     procedure TestArrayMethods;
     procedure TestArrayFromAsync;
@@ -166,6 +167,7 @@ begin
   AddCase('goccia:ast parse nodes', TestASTParse);
   AddCase('custom matcher hints and extractor results', TestCustomMatchers);
   AddCase('Response body promises', TestResponseBodies);
+  AddCase('Blob construction, slice and reads', TestBlob);
   AddCase('the goccia:semver namespace', TestSemverNamespace);
   AddCase('sandbox search results: fs.globSync, grep and fuzzyFind',
     TestSandboxSearch);
@@ -528,6 +530,29 @@ begin
     'let sum = 0;' + LineEnding +
     'if ({ kind: "pair", left: 2, right: 3 } is Pair(const left, const right)) sum = left + right;' + LineEnding +
     '[4 is Even, 5 is Even, sum];');
+end;
+
+procedure TGCStressTests.TestBlob;
+begin
+  RunStressed('blob.js',
+    'const fresh = (s) => (s + "!").slice(0, -1);' + LineEnding +
+    'const out = [];' + LineEnding +
+    'const part = { toString() { fresh("aaaa"); return fresh("str-part"); } };' + LineEnding +
+    'const u = new Uint8Array([1, 2, 3, 4]);' + LineEnding +
+    'const inner = new Blob([fresh("inner"), u]);' + LineEnding +
+    'const it = { *[Symbol.iterator]() { yield fresh("g1"); yield part; yield u; yield inner; yield new DataView(u.buffer, 1, 2); yield fresh("g\uD800"); } };' + LineEnding +
+    'const opts = { get endings() { fresh("e"); return fresh("native"); }, get type() { fresh("t"); return fresh("Text/Plain"); } };' + LineEnding +
+    'const b = new Blob(it, opts);' + LineEnding +
+    'out.push(b, b.size, b.type);' + LineEnding +
+    'const pos = (n) => ({ valueOf() { fresh("v"); return n; } });' + LineEnding +
+    'const ct = { toString() { fresh("c"); return fresh("A/B"); } };' + LineEnding +
+    'const s = b.slice(pos(1), pos(-1), ct);' + LineEnding +
+    'out.push(s, s.size, s.type);' + LineEnding +
+    'out.push(b.text(), b.arrayBuffer(), b.bytes(), s.text());' + LineEnding +
+    'out.push(Blob.prototype.text.call({}), Blob.prototype.arrayBuffer.call(fresh("x")), Blob.prototype.bytes.call(1.5));' + LineEnding +
+    'out.push(new Blob([b, s, fresh("tail")]).size);' + LineEnding +
+    'Promise.all(out.filter((x) => x instanceof Promise).map((p) => p.then((v) => v, (e) => e))).then((r) => out.push(r));' + LineEnding +
+    'out.length;');
 end;
 
 procedure TGCStressTests.TestResponseBodies;

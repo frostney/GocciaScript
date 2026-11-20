@@ -333,7 +333,7 @@ const RESERVED_BINDING_WORDS = new Set([
  *  source (visible in tool-call logs) explains what GocciaScript is. */
 const GOCCIA_SYSTEM_PROMPT = `\
 // ─── system ───
-// GocciaScript is sandbox-first with modern recommended ECMAScript defaults.
+// This sandbox host runs GocciaScript with modern recommended ECMAScript defaults.
 // No eval, no dynamic import, no ambient fs/env, no ambient globals.
 // No var, no function declarations, no loose equality (== / !=).
 // Only the injected globals below are available to the script.`;
@@ -691,9 +691,10 @@ export function Sandbox({
             <span className="wave-under">under host control</span>.
           </AnchorH2>
           <p>
-            Provide AI-agent scripts with explicit data, modules, capabilities,
-            and limits. Filesystem workflows use GocciaRunner&apos;s sandbox
-            mode: host paths are copied into a virtual filesystem, sandbox
+            GocciaRunner&apos;s sandbox mode is a reference host built on the
+            engine&apos;s capability model. Provide AI-agent scripts with
+            explicit data, modules, capabilities, and limits. In filesystem
+            workflows, host paths are copied into a virtual filesystem, sandbox
             writes stay in that filesystem, and the host receives structured
             output plus explicit diffs.
           </p>

@@ -10,15 +10,24 @@
 
   On Windows this unit makes UTF-8 the code page of those conversions and of
   the names the RTL returns from the file system, and the code page of
-  standard output and standard error when they are redirected to a file or a
-  pipe, so Windows reads, lists and writes the same strings and the same bytes
-  as the other platforms. A console keeps the console's output code page, which
-  the RTL selects, so it displays what it displayed before; a character outside
-  that code page still prints as '?'. A unit that converts strings through the
-  RTL lists this unit in its uses, so that it is initialized first.
+  standard output and standard error, so Windows reads, lists and writes the
+  same strings and the same bytes as the other platforms when output is
+  redirected to a file or a pipe; a GUI application's standard files keep the
+  RTL's settings. When a standard handle is a console, ConsoleOutput writes
+  its text to the console as UTF-16 with WriteConsoleW, so the console shows
+  every character its font has, without a change to the console's code
+  page. A unit that converts strings through the RTL lists this
+  unit in its uses, so that it is initialized first.
+
+  Standard output and standard error are thread variables in FPC, which the
+  RTL opens again for each new thread with its defaults, so this applies to the
+  main thread. The thread pool's workers capture their output for the main
+  thread to write.
 
   On Linux and macOS this unit installs cwstring, which makes those
-  conversions through iconv, with a direct path for ASCII text in front of it. }
+  conversions through iconv, with a direct path for ASCII text in front of it.
+  UTF-8 output uses TextEncoding on every FPC platform so an unpaired UTF-16
+  surrogate becomes U+FFFD, independently of the platform converter. }
 
 unit ProcessEncoding;
 
@@ -28,40 +37,96 @@ interface
 
 implementation
 
-{$IF DEFINED(MSWINDOWS)}
 uses
-  Windows;
+{$IF DEFINED(FPC) AND DEFINED(UNIX)}
+  cwstring,
+{$ENDIF}
+  SysUtils,
+{$IF DEFINED(MSWINDOWS)}
+  Windows,
+{$ENDIF}
 
-function IsConsole(const AStdHandle: DWORD): Boolean;
+{$IF DEFINED(MSWINDOWS)}
+  ConsoleOutput,
+{$ENDIF}
+  TextEncoding;
+
+{$IF DEFINED(MSWINDOWS)}
+
+const
+  { At most as many UTF-16 code units as UTF-8 bytes: a one-byte to
+    three-byte character is one code unit, a four-byte one two. }
+  CONSOLE_CHUNK_BYTES = 1024;
+
+function IsConsoleHandle(const AHandle: THandle): Boolean;
 var
   Mode: DWORD;
 begin
-  Result := GetConsoleMode(GetStdHandle(AStdHandle), Mode);
+  Result := GetConsoleMode(AHandle, Mode);
 end;
 
-initialization
-  SetMultiByteConversionCodePage(CP_UTF8);
-  SetMultiByteRTLFileSystemCodePage(CP_UTF8);
-  if not IsConsole(STD_OUTPUT_HANDLE) then
-    SetTextCodePage(Output, CP_UTF8);
-  if not IsConsole(STD_ERROR_HANDLE) then
+function WriteConsoleCharacters(const AHandle: THandle;
+  const ACharacters: PWideChar; const ACount: SizeInt): Boolean;
+var
+  Next: PWideChar;
+  Left: SizeInt;
+  Written: DWORD;
+begin
+  Next := ACharacters;
+  Left := ACount;
+  while Left > 0 do
   begin
-    SetTextCodePage(ErrOutput, CP_UTF8);
-    SetTextCodePage(StdErr, CP_UTF8);
+    Written := 0;
+    if not WriteConsoleW(AHandle, Next, Left, Written, nil) or
+      (Written = 0) then
+      Exit(False);
+    Inc(Next, Written);
+    Dec(Left, Written);
   end;
-{$ELSEIF DEFINED(FPC) AND DEFINED(UNIX)}
-uses
-  cwstring;
+  Result := True;
+end;
 
+{ Converts UTF-8 to UTF-16 in a buffer on the stack, so that writing to the
+  console allocates no memory, like the RTL's own write function: the runtime
+  error message at exit can follow a failed allocation. A malformed byte
+  becomes U+FFFD. }
+function WriteConsoleUTF8(const AHandle: THandle; const AText: PAnsiChar;
+  const ALength: SizeInt): Boolean;
+var
+  Characters: array[0..CONSOLE_CHUNK_BYTES - 1] of WideChar;
+  Next: PAnsiChar;
+  Left, Chunk, Count: SizeInt;
+begin
+  Next := AText;
+  Left := ALength;
+  while Left > 0 do
+  begin
+    Chunk := Left;
+    if Chunk > CONSOLE_CHUNK_BYTES then
+      Chunk := CompleteUTF8Length(Next, CONSOLE_CHUNK_BYTES);
+    Count := MultiByteToWideChar(CP_UTF8, 0, Next, Chunk, @Characters[0],
+      CONSOLE_CHUNK_BYTES);
+    if (Count = 0) or
+      not WriteConsoleCharacters(AHandle, @Characters[0], Count) then
+      Exit(False);
+    Inc(Next, Chunk);
+    Dec(Left, Chunk);
+  end;
+  Result := True;
+end;
+
+{$ENDIF}
+
+{$IFDEF FPC}
 { cwstring converts between UTF-16 and the system code page through iconv,
   which costs a converter lookup and a call per string. Most strings that
   cross the boundary are ASCII — resource strings, identifiers, file names —
-  and ASCII is the same bytes in UTF-8 and in ASCII, so those are converted
-  here and everything else is handed to cwstring as before. }
+  and ASCII is the same bytes in UTF-8 and in ASCII. Non-ASCII UTF-8 uses
+  the shared replacement encoder; other code pages retain the RTL policy. }
 var
-  GIconvUnicode2AnsiMove: procedure(ASource: PUnicodeChar;
+  GPlatformUnicode2AnsiMove: procedure(ASource: PUnicodeChar;
     var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
-  GIconvAnsi2UnicodeMove: procedure(ASource: PAnsiChar;
+  GPlatformAnsi2UnicodeMove: procedure(ASource: PAnsiChar;
     ACodePage: TSystemCodePage; var ADest: UnicodeString; ALength: SizeInt);
 
 function IsASCIICompatibleCodePage(const ACodePage: TSystemCodePage): Boolean;
@@ -69,11 +134,13 @@ begin
   Result := (ACodePage = CP_UTF8) or (ACodePage = CP_ASCII);
 end;
 
-procedure ASCIIUnicode2AnsiMove(ASource: PUnicodeChar;
+procedure OutputUnicode2AnsiMove(ASource: PUnicodeChar;
   var ADest: RawByteString; ACodePage: TSystemCodePage; ALength: SizeInt);
 var
   Target: PAnsiChar;
   I: SizeInt;
+  Text: UnicodeString;
+  Bytes: TBytes;
 begin
   if IsASCIICompatibleCodePage(ACodePage) then
   begin
@@ -90,7 +157,19 @@ begin
       Exit;
     end;
   end;
-  GIconvUnicode2AnsiMove(ASource, ADest, ACodePage, ALength);
+  if ACodePage = CP_UTF8 then
+  begin
+    // Preserve the explicit length, including NUL, without invoking another
+    // RTL conversion from inside its own string-manager callback.
+    SetString(Text, ASource, ALength);
+    Bytes := EncodeUTF8WithReplacement(Text);
+    SetLength(ADest, Length(Bytes));
+    if Length(Bytes) > 0 then
+      Move(Bytes[0], ADest[1], Length(Bytes));
+    SetCodePage(ADest, CP_UTF8, False);
+    Exit;
+  end;
+  GPlatformUnicode2AnsiMove(ASource, ADest, ACodePage, ALength);
 end;
 
 procedure ASCIIAnsi2UnicodeMove(ASource: PAnsiChar; ACodePage: TSystemCodePage;
@@ -113,19 +192,35 @@ begin
       Exit;
     end;
   end;
-  GIconvAnsi2UnicodeMove(ASource, ACodePage, ADest, ALength);
+  GPlatformAnsi2UnicodeMove(ASource, ACodePage, ADest, ALength);
 end;
 
-procedure InstallASCIIConversions;
+procedure InstallConversions;
 begin
-  GIconvUnicode2AnsiMove := WideStringManager.Unicode2AnsiMoveProc;
-  GIconvAnsi2UnicodeMove := WideStringManager.Ansi2UnicodeMoveProc;
-  WideStringManager.Unicode2AnsiMoveProc := ASCIIUnicode2AnsiMove;
+  GPlatformUnicode2AnsiMove := WideStringManager.Unicode2AnsiMoveProc;
+  GPlatformAnsi2UnicodeMove := WideStringManager.Ansi2UnicodeMoveProc;
+  WideStringManager.Unicode2AnsiMoveProc := OutputUnicode2AnsiMove;
   WideStringManager.Ansi2UnicodeMoveProc := ASCIIAnsi2UnicodeMove;
 end;
 
+{$ENDIF}
+
 initialization
-  InstallASCIIConversions;
+{$IF DEFINED(MSWINDOWS)}
+  SetMultiByteConversionCodePage(CP_UTF8);
+  SetMultiByteRTLFileSystemCodePage(CP_UTF8);
+  // A GUI application's StdOut and StdErr show a message box, and its other
+  // standard files are not open, so they keep the RTL's settings.
+  if IsConsole then
+  begin
+    UseUnicodeOutput(Output, IsConsoleHandle, WriteConsoleUTF8);
+    UseUnicodeOutput(StdOut, IsConsoleHandle, WriteConsoleUTF8);
+    UseUnicodeOutput(ErrOutput, IsConsoleHandle, WriteConsoleUTF8);
+    UseUnicodeOutput(StdErr, IsConsoleHandle, WriteConsoleUTF8);
+  end;
+{$ENDIF}
+{$IFDEF FPC}
+  InstallConversions;
 {$ENDIF}
 
 end.

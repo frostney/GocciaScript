@@ -875,6 +875,19 @@ begin
   end;
 end;
 
+// Pre-declares the const bindings of a top-level using declaration, which
+// PredeclareLexicalLocals leaves to a function body's block
+// (CompileBlockStatement).
+procedure PredeclareUsingLocals(const AUsingDecl: TGocciaUsingDeclaration;
+  const AScope: TGocciaCompilerScope);
+var
+  I: Integer;
+begin
+  for I := 0 to High(AUsingDecl.Variables) do
+    if AScope.ResolveLocal(AUsingDecl.Variables[I].Name) < 0 then
+      AScope.DeclareLocal(AUsingDecl.Variables[I].Name, True);
+end;
+
 // Pre-declare lexical locals from any statement node that introduces bindings,
 // so that hoisted function declarations can resolve upvalue captures.
 procedure PredeclareLexicalLocals(const ANode: TGocciaASTNode;
@@ -2290,11 +2303,13 @@ var
   I: Integer;
   RetReg: UInt16;
   Ctx: TGocciaCompilationContext;
-  HasFunctionDecl, BodyAbrupt, StatementAbrupt: Boolean;
+  HasFunctionDecl, BodyAbrupt, StatementAbrupt, HasUsing: Boolean;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
   SavedFinally: TObject;
   CallerScope: TGocciaCompilerScope;
+  UsingRegion: Goccia.Compiler.Statements.TUsingDisposalRegion;
+  UsingDisposeSlots: Goccia.Compiler.Statements.TUsingDisposeSlots;
 begin
   // A compile that raised left the levels it had entered open; this one
   // starts at the top of the tree.
@@ -2402,6 +2417,13 @@ begin
     PredeclaredLexicalStart := FCurrentScope.LocalCount;
     for I := 0 to AProgram.Body.Count - 1 do
       PredeclareLexicalLocals(AProgram.Body[I], FCurrentScope);
+    // A top-level using declaration binds as a const does: in the global or
+    // module environment when the top level is global-backed, which the link
+    // plan declares as well, and visible to the hoisted functions.
+    for I := 0 to AProgram.Body.Count - 1 do
+      if AProgram.Body[I] is TGocciaUsingDeclaration then
+        PredeclareUsingLocals(TGocciaUsingDeclaration(AProgram.Body[I]),
+          FCurrentScope);
     MarkModuleExportLocals(AProgram.Body, FCurrentScope);
     if FGlobalBackedTopLevel and not FGlobalEvalVarEnvironment then
       MarkTopLevelGlobalBackedLocals(FCurrentScope);
@@ -2471,34 +2493,61 @@ begin
         DoCompileStatement(AProgram.Body[I]);
       end;
 
+    // ES2027 §16.2.1.7.3.2 ExecuteModule step 3.f: once a module's body
+    // completes, normally or with a throw, DisposeResources disposes the
+    // resources its top-level using and await using declarations added. Each
+    // gets its dispose register on entry (PreallocateUsingDisposeSlots).
+    HasUsing := False;
     for I := 0 to AProgram.Body.Count - 1 do
+      if AProgram.Body[I] is TGocciaUsingDeclaration then
+        HasUsing := True;
+    if HasUsing then
     begin
-      // Skip function declarations — already compiled during hoisting.
-      if IsHoistedFunctionDeclaration(AProgram.Body[I]) or
-         ((not FPreinitializedTopLevelFunctions) and
-          IsAnonymousDefaultFunctionDeclaration(AProgram.Body[I])) or
-         (AProgram.Body[I] is TGocciaImportDeclaration) or
-         (AProgram.Body[I] is TGocciaReExportDeclaration) then
-        Continue;
-
-      if AProgram.Body[I] is TGocciaExpressionStatement then
-      begin
-        EmitLineMapping(Ctx, AProgram.Body[I].Line, AProgram.Body[I].Column);
-        DoCompileExpression(
-          TGocciaExpressionStatement(AProgram.Body[I]).Expression, RetReg);
-        StatementAbrupt := False;
-      end
-      else
-        StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
-
-      if FOptimizationOptions.EnableDeadBranchElimination and
-         not FOptimizationOptions.PreserveCoverageShape and
-         StatementAbrupt then
-      begin
-        BodyAbrupt := True;
-        Break;
-      end;
+      Goccia.Compiler.Statements.BeginUsingDisposalRegion(Ctx, UsingRegion);
+      Goccia.Compiler.Statements.BeginUsingDisposeSlots(UsingDisposeSlots);
     end;
+    try
+      if HasUsing then
+        for I := 0 to AProgram.Body.Count - 1 do
+          if AProgram.Body[I] is TGocciaUsingDeclaration then
+            Goccia.Compiler.Statements.PreallocateUsingDisposeSlots(Ctx,
+              TGocciaUsingDeclaration(AProgram.Body[I]),
+              UsingDisposeSlots.Slots);
+
+      for I := 0 to AProgram.Body.Count - 1 do
+      begin
+        // Skip function declarations — already compiled during hoisting.
+        if IsHoistedFunctionDeclaration(AProgram.Body[I]) or
+           ((not FPreinitializedTopLevelFunctions) and
+            IsAnonymousDefaultFunctionDeclaration(AProgram.Body[I])) or
+           (AProgram.Body[I] is TGocciaImportDeclaration) or
+           (AProgram.Body[I] is TGocciaReExportDeclaration) then
+          Continue;
+
+        if AProgram.Body[I] is TGocciaExpressionStatement then
+        begin
+          EmitLineMapping(Ctx, AProgram.Body[I].Line, AProgram.Body[I].Column);
+          DoCompileExpression(
+            TGocciaExpressionStatement(AProgram.Body[I]).Expression, RetReg);
+          StatementAbrupt := False;
+        end
+        else
+          StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
+
+        if FOptimizationOptions.EnableDeadBranchElimination and
+           not FOptimizationOptions.PreserveCoverageShape and
+           StatementAbrupt then
+        begin
+          BodyAbrupt := True;
+          Break;
+        end;
+      end;
+    finally
+      if HasUsing then
+        Goccia.Compiler.Statements.EndUsingDisposeSlots(UsingDisposeSlots);
+    end;
+    if HasUsing then
+      Goccia.Compiler.Statements.EndUsingDisposalRegion(Ctx, UsingRegion);
 
     EmitInstruction(Ctx, EncodeABC(OP_RETURN, RetReg, 0, 0));
     FCurrentScope.FreeRegister;
