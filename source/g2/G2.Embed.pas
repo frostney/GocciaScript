@@ -155,7 +155,7 @@ implementation
 
 uses
   Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.VM, G2.Engine, G2.Eval, G2.Modules,
-  G2.Promise, G2.Builtins, G2.BigIntV;
+  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -239,22 +239,96 @@ begin
   R.ErrorColumn := StrToIntDef(string(Copy(Loc, C2 + 1, MaxInt)), 0);
 end;
 
-{ the uncaught value in parts (R.ErrorMessage already holds its string form) }
+{ an own or inherited string data property, read without running script: the report is made after the run, so an
+  accessor, a Proxy (its traps) or a module namespace (a deferred one evaluates its module) ends the walk unread,
+  as GocciaRunner's TryGetStringDataProperty does }
+function StringDataProperty(V: TValue; Key: PStr; out Text: UnicodeString): Boolean;
+var D: TPropDesc; Found: Boolean;
+begin
+  Result := False;
+  Text := '';
+  while IsObject(V) do
+  begin
+    if ObjOf(V)^.OKind in [okProxy, okModuleNS] then Exit;
+    if not GetOwnPropertyV(V, Key, D, Found) then
+    begin
+      Pending := VUndefined;
+      Exit;
+    end;
+    if Found then
+    begin
+      if D.HasValue and IsString(D.Value) then
+      begin
+        Text := StrToUnicode(StrOf(D.Value));
+        Result := True;
+      end;
+      Exit;
+    end;
+    V := ProtoOf(ObjOf(V));
+  end;
+end;
+
+{ the uncaught value as text without running script: a primitive's string, a symbol's descriptive string, an
+  object with a string name or message as Error.prototype.toString joins them (20.5.3.4), any other object as
+  "[object Tag]" (GocciaRunner's ThrownValueFallbackText) }
+function ThrownText(V: TValue): UnicodeString;
+const
+  okDate = 18; { G2.Date's }
+var S, D: TValue; Tag, N, M: UnicodeString; HasN, HasM: Boolean;
+begin
+  if IsPtr(V) and (PCell(PtrOf(V))^.Kind = ckSymbol) then
+  begin
+    D := SymbolDescription(V);
+    if D = VUndefined then Exit('Symbol()');
+    Exit('Symbol(' + StrToUnicode(StrOf(D)) + ')');
+  end;
+  if IsObject(V) then
+  begin
+    if ObjOf(V)^.OKind = okProxy then Exit('[object Proxy]');
+    HasN := StringDataProperty(V, AtomOf('name'), N);
+    HasM := StringDataProperty(V, AtomOf('message'), M);
+    if HasN or HasM then
+    begin
+      if not HasN then N := 'Error';
+      if N = '' then Exit(M);
+      if M = '' then Exit(N);
+      Exit(N + ': ' + M);
+    end;
+    if not StringDataProperty(V, SymKey(SymToStringTagW), Tag) then
+      case ObjOf(V)^.OKind of
+        okArray: Tag := 'Array';
+        okArguments, okArgumentsOrd: Tag := 'Arguments';
+        okFunction, okNative, okBound: Tag := 'Function';
+        okError: Tag := 'Error';
+        okBoolean: Tag := 'Boolean';
+        okNumber: Tag := 'Number';
+        okStringObj: Tag := 'String';
+        okDate: Tag := 'Date';
+      else Tag := 'Object';
+      end;
+    Exit('[object ' + Tag + ']');
+  end;
+  Result := '';
+  if ToStringV(V, S) and IsString(S) then Result := StrToUnicode(StrOf(S));
+  Pending := VUndefined;
+end;
+
+{ the uncaught value in parts (R.ErrorMessage already holds its text), from its string data properties only }
 procedure DescribeThrown(V: TValue; var R: TG2RunResult);
-var N, M: TValue; Stack: UnicodeString;
+var Stack, Text: UnicodeString;
 begin
   if not IsObject(V) then Exit;
   PushRoot(V);
   try
-    if GetV(RootAt(TempTop - 1), AtomOf('name'), N) and IsString(N) then
+    if StringDataProperty(RootAt(TempTop - 1), AtomOf('name'), Text) then
     begin
       R.ErrorIsError := True;
-      R.ErrorName := StrToUnicode(StrOf(N));
+      R.ErrorName := Text;
     end;
-    if GetV(RootAt(TempTop - 1), AtomOf('message'), M) and IsString(M) then
+    if StringDataProperty(RootAt(TempTop - 1), AtomOf('message'), Text) then
     begin
       R.ErrorIsError := True;
-      R.ErrorText := StrToUnicode(StrOf(M));
+      R.ErrorText := Text;
     end;
     { located only from the provenance the engine recorded when it made the error, never from a thrown value's
       own stack string, which can name any file }
@@ -544,7 +618,7 @@ begin
   begin
     PushRoot(Pending);
     Pending := VUndefined;
-    if ToStringV(RootAt(TempTop - 1), S) and IsString(S) then Result.ErrorMessage := StrToUnicode(StrOf(S));
+    Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
     if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
     Pending := VUndefined;
     DescribeThrown(RootAt(TempTop - 1), Result);
@@ -635,7 +709,7 @@ begin
       Result.Ok := False;
       Thrown := Pending;
       PushRoot(Thrown);
-      if ToStringV(RootAt(TempTop - 1), S) and IsString(S) then Result.ErrorMessage := StrToUnicode(StrOf(S));
+      Result.ErrorMessage := ThrownText(RootAt(TempTop - 1));
       if Result.ErrorMessage = '' then Result.ErrorMessage := 'uncaught exception';
       Pending := VUndefined;
       { the limits stay armed until the finally: a spent one refuses every call, so its error is not inspected }

@@ -48,6 +48,8 @@ function PreventExtensionsV(O: TValue; var Ok: Boolean): Boolean;
 function OwnPropertyKeysV(O: TValue; var Res: TValue): Boolean;
 { 7.1.18 ToObject }
 function ToObjectV(V: TValue; var O: TValue): Boolean;
+{ a symbol's [[Description]] (undefined when it has none) }
+function SymbolDescription(S: TValue): TValue;
 { a data descriptor with all fields present }
 procedure DataDesc(var D: TPropDesc; V: TValue; W, E, C: Boolean);
 { 7.2.10 SameValue }
