@@ -43,6 +43,8 @@ type
     ErrorIsError: Boolean;
     ErrorName, ErrorText, ErrorFile, ErrorSuggestion: UnicodeString;
     ErrorLine, ErrorColumn: Integer;
+    { a static import that failed to load: the path its resolution tried, for the host's "Resolved to" line }
+    ErrorResolvedPath: UnicodeString;
     { nanoseconds spent parsing and compiling the entry (lexing included), and running it with its event loop }
     CompileNanoseconds, ExecuteNanoseconds: Int64;
     { ResultForm: the entry's completion value as String(value) or JSON (undefined for a module), converted after
@@ -343,7 +345,8 @@ begin
 end;
 
 function TG2Engine.Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
-var Kind, Phase, I: Integer; T: PFuncTemplate; Err: UnicodeString; S, Thrown, Completion: TValue; Start: Int64;
+var Kind, Phase, I, FailLine, FailColumn: Integer; T: PFuncTemplate; Err, FailPath: UnicodeString;
+  S, Thrown, Completion: TValue; Start: Int64;
   Compiled: Boolean;
 begin
   Result := Default(TG2RunResult);
@@ -357,6 +360,8 @@ begin
   SetActiveProfile(FProfile);
   SetConsoleSink(FOnConsole);
   SetHostResolver(FResolver);
+  ClearLoadFailure;
+  TakeResolveCandidate;
   case FSourceKind of
     g2skScript: Kind := 1;
     g2skModule: Kind := 2;
@@ -438,6 +443,16 @@ begin
       if Result.Aborted = g2aNone then DescribeThrown(RootAt(TempTop - 1), Result);
       PopRoots(1);
       Pending := VUndefined;
+      { a static import that did not load: GocciaScript's RuntimeError at the declaration }
+      if LoadFailure(FailPath, FailLine, FailColumn) then
+      begin
+        Result.ErrorIsError := True;
+        Result.ErrorName := 'RuntimeError';
+        Result.ErrorFile := FailPath;
+        Result.ErrorLine := FailLine;
+        Result.ErrorColumn := FailColumn;
+        Result.ErrorResolvedPath := TakeResolveCandidate;
+      end;
     end;
   finally
     SetProvidedSource('', '');

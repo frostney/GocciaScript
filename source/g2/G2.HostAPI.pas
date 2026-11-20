@@ -29,6 +29,8 @@ procedure SetConsoleSink(Sink: TConsoleSink);
 { the resolver of this thread's imports: a host's, configured with its import map, aliases and node_modules grant
   (Goccia.Modules.Resolver, not owned); nil for the plain one, which resolves relative and absolute paths only }
 procedure SetHostResolver(R: TModuleResolver);
+{ the path the last failed resolution tried (EModuleNotFound's ResolvedCandidatePath; '' for none), taken }
+function TakeResolveCandidate: UnicodeString;
 { globals injection, after InstallHostGlobals: Text, a data file's (Ext its extension: .json; .json5 and .jsonc;
   .toml; .yaml and .yml), is parsed by that format's parser into an object whose own enumerable properties become
   const global bindings (G2.VM InjectGlobalBinding); False with Err the message when the text does not parse, is
@@ -451,11 +453,18 @@ var
   HostResolver: TModuleResolver;
   { a host's resolver, in place of HostResolver }
   ProvidedResolver: TModuleResolver;
+  ResolveCandidate: UnicodeString;
   ImportSpecifiers: TStringList;   { module key = the first specifier that resolved to it }
 
 procedure SetHostResolver(R: TModuleResolver);
 begin
   ProvidedResolver := R;
+end;
+
+function TakeResolveCandidate: UnicodeString;
+begin
+  Result := ResolveCandidate;
+  ResolveCandidate := '';
 end;
 
 { the pending exception's message (an error's message property, else its string form), taken }
@@ -801,6 +810,7 @@ begin
     on E: Exception do
     begin
       Resolved := UTF8Decode(E.Message);
+      if E is EModuleNotFound then ResolveCandidate := UTF8Decode(EModuleNotFound(E).ResolvedCandidatePath);
       Result := -1;
     end;
   end;

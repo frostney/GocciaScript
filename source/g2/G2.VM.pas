@@ -297,6 +297,9 @@ function ThrowTypeError(const Msg: UnicodeString): Boolean;
 function MakeError(Proto: TValue; const Msg: UnicodeString): TValue;
 { gives the error E (just made) its stack property when the profile wants stack traces }
 procedure AttachStack(E: TValue);
+{ the frames running now as an error's stack lists them (the lines after its first), for an error made later on
+  their behalf (a dynamic import's failure, made in a job) }
+function StackFramesNow: UnicodeString;
 { a private element's read and write (o.#x, o.#x = v; Key the private name) }
 { throws the TypeError for an iterator result V that is not an object (False) }
 function ThrowIterResultNotObject(V: TValue): Boolean;
@@ -1567,6 +1570,11 @@ begin
   end;
   if Skipped = 1 then Result := Result + #10'    ... 1 more frame'
   else if Skipped > 1 then Result := Result + #10'    ... ' + UnicodeString(IntToStr(Skipped)) + ' more frames';
+end;
+
+function StackFramesNow: UnicodeString;
+begin
+  if ProfileStackTraces then Result := StackFramesText else Result := '';
 end;
 
 procedure AttachStack(E: TValue);

@@ -49,6 +49,8 @@ type
   TModuleInfo = class
   public
     Requests: array of UnicodeString;
+    { where each request's first declaration starts (a host locates a failed import there) }
+    RequestLines, RequestColumns: array of Integer;
     Imports: array of TModEntry;
     LocalExports: array of TModEntry;
     IndirectExports: array of TModEntry;
@@ -58,7 +60,7 @@ type
     EvalOrder: array of record Req: UnicodeString; Eager: Boolean; end;
     HasTLA: Boolean;
     SlotCount: Integer;
-    procedure AddRequest(const R: UnicodeString);
+    procedure AddRequest(const R: UnicodeString; Line: Integer = 0; Column: Integer = 0);
     procedure AddEager(const R: UnicodeString);
     procedure AddDeferred(const R: UnicodeString);
     function IsEager(const R: UnicodeString): Boolean;
@@ -7226,10 +7228,11 @@ begin
       else L := 0;
       end;
       if Assigned(TGocciaImportCallExpression(E).Options) then
-      begin
         ExprTo(TGocciaImportCallExpression(E).Options, R + 1);
-        Emit(Ins(opImport, Dest, R, R + 1) or (QWord(L) shl 56));
-      end
+      { the call, located at import (a failed import is reported there) }
+      NotePosition(E, False);
+      if Assigned(TGocciaImportCallExpression(E).Options) then
+        Emit(Ins(opImport, Dest, R, R + 1) or (QWord(L) shl 56))
       else Emit(Ins(opImport, Dest, R, $FFFF) or (QWord(L) shl 56));
       FreeTo(Save);
     end
@@ -7684,13 +7687,17 @@ begin
   Result := False;
 end;
 
-procedure TModuleInfo.AddRequest(const R: UnicodeString);
+procedure TModuleInfo.AddRequest(const R: UnicodeString; Line, Column: Integer);
 var I: Integer;
 begin
   for I := 0 to High(Requests) do
     if Requests[I] = R then Exit;
   SetLength(Requests, Length(Requests) + 1);
   Requests[High(Requests)] := R;
+  SetLength(RequestLines, Length(Requests));
+  SetLength(RequestColumns, Length(Requests));
+  RequestLines[High(Requests)] := Line;
+  RequestColumns[High(Requests)] := Column;
 end;
 
 function TCompiler.ModImportSlot(const N: UnicodeString): Integer;
@@ -7904,7 +7911,7 @@ begin
         begin
           if DuplicateBinding <> '' then raise EEarlySyntaxError.Create('Identifier ''' + DuplicateBinding + ''' has already been declared');
           ReqKey := ModuleRequestKey(ModulePath, AttributeType);
-          MI.AddRequest(ReqKey);
+          MI.AddRequest(ReqKey, N.Line, N.Column);
           if Phase = icpSource then
           begin
             { the source phase loads the module, never evaluates it }
@@ -7930,7 +7937,7 @@ begin
         with TGocciaReExportDeclaration(N) do
         begin
           ReqKey := ModuleRequestKey(ModulePath, AttributeType);
-          MI.AddRequest(ReqKey);
+          MI.AddRequest(ReqKey, N.Line, N.Column);
           MI.AddEager(ReqKey);
           if IsStarExport and (NamespaceName = '') then
           begin

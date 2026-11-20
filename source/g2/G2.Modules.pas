@@ -55,6 +55,10 @@ procedure SetProvidedSource(const Path, Source: UnicodeString);
 { the provided entry's completion value (a host's --print): Wanted compiles it to keep the value, which
   EntryCompletion returns once it ran (undefined before) }
 procedure SetEntryCompletionWanted(Wanted: Boolean);
+{ the import declaration a static import failed to load at (the innermost importer's), for a host's diagnostic;
+  False when no import failed since ClearLoadFailure }
+procedure ClearLoadFailure;
+function LoadFailure(out Path: UnicodeString; out Line, Column: Integer): Boolean;
 function EntryCompletion: TValue;
 
 implementation
@@ -99,6 +103,8 @@ threadvar
   AsyncEvalCount: Int64;   { IncrementModuleAsyncEvaluationCount }
   ModRoots: TValue;     { a rooted array: RS slots per module }
   PendingImports: TValue;   { a rooted array of [promise, referrer, specifier] per import() in flight }
+  { per import() in flight, the frames of its call (StackFramesNow): its failure, found in a job, is located there }
+  ImportStacks: array of UnicodeString;
   AMSCtor: TValue;        { the realm's %AbstractModuleSource% (made when first asked for) }
   HostModSource: TValue;  { the realm's source object of the host's source module }
 
@@ -194,9 +200,27 @@ end;
 
 threadvar
   ProvidedPath, ProvidedSrc: UnicodeString;
+  LoadFailPath: UnicodeString;
+  LoadFailLine, LoadFailColumn: Integer;
+
   CompletionWanted: Boolean;
   Completion: TValue;
   CompletionRootedGen: Integer;
+
+procedure ClearLoadFailure;
+begin
+  LoadFailPath := '';
+  LoadFailLine := 0;
+  LoadFailColumn := 0;
+end;
+
+function LoadFailure(out Path: UnicodeString; out Line, Column: Integer): Boolean;
+begin
+  Path := LoadFailPath;
+  Line := LoadFailLine;
+  Column := LoadFailColumn;
+  Result := Path <> '';
+end;
 
 procedure SetEntryCompletionWanted(Wanted: Boolean);
 begin
@@ -427,7 +451,16 @@ begin
   SetLength(M.Deps, Length(M.Info.Requests));
   for I := 0 to High(M.Info.Requests) do
   begin
-    if not LoadModule(ResolveRequest(M.Info.Requests[I], Path), D) then Exit(False);
+    if not LoadModule(ResolveRequest(M.Info.Requests[I], Path), D) then
+    begin
+      if (LoadFailPath = '') and (I <= High(M.Info.RequestLines)) and (M.Info.RequestLines[I] > 0) then
+      begin
+        LoadFailPath := Path;
+        LoadFailLine := M.Info.RequestLines[I];
+        LoadFailColumn := M.Info.RequestColumns[I];
+      end;
+      Exit(False);
+    end;
     M.Deps[I] := D;
   end;
   Result := True;
@@ -1194,7 +1227,7 @@ end;
 { the job that loads and links a dynamic import's module, then evaluates it (ContinueDynamicImport); Data = its
   index in PendingImports, bit 23 set for import.defer() }
 function ImportJob(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
-var I, J, Data: Integer; M: TModRec; Ref, Spec: UnicodeString; G: TList<TModRec>; R: TValue;
+var I, J, Data: Integer; M: TModRec; Ref, Spec, Text: UnicodeString; G: TList<TModRec>; R, St: TValue;
 begin
   Res := VUndefined;
   Result := True;
@@ -1207,6 +1240,20 @@ begin
   begin
     R := Pending;
     Pending := VUndefined;
+    { an error made here has no frames of its own: it takes the import() call's }
+    if IsObject(R) and (I <= High(ImportStacks)) and (ImportStacks[I] <> '') then
+    begin
+      PushRoot(R);
+      if not GetV(RootAt(TempTop - 1), AtomStack, St) or not IsString(St) or
+         (Pos(#10'    at ', StrToUnicode(StrOf(St))) = 0) then
+      begin
+        Pending := VUndefined;
+        if IsString(St) then Text := StrToUnicode(StrOf(St)) else Text := 'Error';
+        DefineOwn(RootAt(TempTop - 1), AtomStack, StrFromUnicode(Text + ImportStacks[I]), pfHidden);
+      end;
+      R := RootAt(TempTop - 1);
+      PopRoots(1);
+    end;
     SettleImport(I, False, R);
     Exit;
   end;
@@ -1318,6 +1365,8 @@ begin
   end;
   Ref := Referrer;
   Idx := ArrayLen(ObjOf(PendingImports)) div 3;
+  if Length(ImportStacks) <= Idx then SetLength(ImportStacks, Idx + 16);
+  ImportStacks[Idx] := StackFramesNow;
   if Ph = 2 then Idx := Idx or $800000;
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 2));
   ArrayPush(ObjOf(PendingImports), StrFromUnicode(Ref));
