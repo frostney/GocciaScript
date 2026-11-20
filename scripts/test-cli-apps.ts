@@ -16391,6 +16391,15 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
 
     if (!run(RUNNER, [entry, "--modules", manifest]).includes(warning))
       throw new Error("A plain run should print the manifest's imported warning");
+    // A config file names the modules, which load through an isolated engine.
+    const configGlobals = join(tmp, "globals.config.json");
+    writeFileSync(configGlobals, JSON.stringify({ globals: "./globals.js" }));
+    const configModules = join(tmp, "modules.config.json");
+    writeFileSync(configModules, JSON.stringify({ modules: "./manifest.js" }));
+    for (const config of [configGlobals, configModules]) {
+      if (!run(RUNNER, [entry, `--config=${config}`]).includes(warning))
+        throw new Error(`A plain run with ${config} should print the imported warning`);
+    }
     // --deny-read loads the manifest through a loader of its own.
     if (!run(RUNNER, [entry, "--modules", manifest, "--deny-read"]).includes(warning))
       throw new Error("A plain --deny-read run should print the manifest's imported warning");
@@ -16417,6 +16426,8 @@ await section("Loader: an imported module's parse warnings never precede a JSON 
     const cases: [string, string, string[]][] = [
       ["GocciaRunner --modules manifest --output=json", RUNNER, [entry, "--modules", manifest, "--output=json"]],
       ["GocciaRunner --modules manifest --deny-read --output=json", RUNNER, [entry, "--modules", manifest, "--deny-read", "--output=json"]],
+      ["GocciaRunner config globals --output=json", RUNNER, [entry, `--config=${configGlobals}`, "--output=json"]],
+      ["GocciaRunner config modules --output=json", RUNNER, [entry, `--config=${configModules}`, "--output=json"]],
       ["GocciaRunner --globals module --output=json", RUNNER, [entry, "--globals", globals, "--output=json"]],
       ["GocciaTestRunner --globals module --output=json", TESTRUNNER, ["-P", plainTest, "--globals", globals, "--output=json"]],
       ["GocciaRunner --output=json", RUNNER, [main, "--output=json"]],
