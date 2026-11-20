@@ -848,6 +848,10 @@ var
   IntlLoadAttempted: Boolean;
   IntlLoadSucceeded: Boolean;
   IntlInitLock: TGocciaCriticalSection;
+  // Whether the loaded ICU names the iso8601 calendar's months and eras.
+  // Decided once, under IntlInitLock; see ICUISO8601NamesMissing.
+  IntlISO8601NamesProbed: Boolean;
+  IntlISO8601NamesMissing: Boolean;
 
 function ICUSucceeded(const AStatus: TICUErrorCode): Boolean;
 begin
@@ -3351,58 +3355,74 @@ begin
     Result := Result + '-u-' + AKey + '-' + AValue;
 end;
 
-const
-  ISO8601_NAMES_UNKNOWN = 0;
-  ISO8601_NAMES_PRESENT = 1;
-  ISO8601_NAMES_MISSING = 2;
-
-var
-  // One of the ISO8601_NAMES_* states. It is written once with its final
-  // value; threads that probe at the same time reach the same answer.
-  ISO8601NamesState: LongInt = ISO8601_NAMES_UNKNOWN;
-
-// ICU 78 loads no month or era names for the iso8601 calendar (ICU-23262,
-// fixed in ICU 79): CLDR 48 has no iso8601 era data, and ICU stops loading
-// the calendar's names at the missing eras. Probe the loaded ICU rather than
-// its version, so an ICU 78 with the fix applied keeps its own iso8601 output.
-function ICUISO8601NamesMissing: Boolean;
+// Formats January 1970 in the iso8601 calendar as `MMMM|G` and reports
+// whether the month or the era came out empty. False when ICU could not
+// format at all, which says nothing about its iso8601 data.
+function TryProbeISO8601NamesMissing(out AMissing: Boolean): Boolean;
 var
   Status: TICUErrorCode;
   Formatter: Pointer;
   LocaleBytes: TBytes;
-  TzUnicode, PatternUnicode: string;
+  TzUnicode, PatternUnicode, Formatted: string;
   Buffer: array[0..63] of WideChar;
-  ResultLen: LongInt;
-  State: LongInt;
+  ResultLen, SeparatorPos: LongInt;
 begin
-  if ISO8601NamesState = ISO8601_NAMES_UNKNOWN then
-  begin
-    State := ISO8601_NAMES_PRESENT;
-    if Assigned(IntlFunctions.UdatOpen) and
-       Assigned(IntlFunctions.UdatFormat) and
-       Assigned(IntlFunctions.UdatClose) and
-       TryEncodeASCIIBytes('en-u-ca-iso8601', LocaleBytes) then
-    begin
-      TzUnicode := 'UTC';
-      PatternUnicode := 'MMMM';
-      Status := ICU_SUCCESS;
-      Formatter := IntlFunctions.UdatOpen(UDAT_PATTERN, UDAT_PATTERN,
-        BytePointer(LocaleBytes), PWideChar(TzUnicode), Length(TzUnicode),
-        PWideChar(PatternUnicode), Length(PatternUnicode), Status);
-      if ICUSucceeded(Status) and Assigned(Formatter) then
-      try
-        Status := ICU_SUCCESS;
-        ResultLen := IntlFunctions.UdatFormat(Formatter, 0, @Buffer[0],
-          Length(Buffer), nil, Status);
-        if ICUSucceeded(Status) and (ResultLen <= 0) then
-          State := ISO8601_NAMES_MISSING;
-      finally
-        IntlFunctions.UdatClose(Formatter);
-      end;
-    end;
-    ISO8601NamesState := State;
+  Result := False;
+  AMissing := False;
+  if not Assigned(IntlFunctions.UdatOpen) or
+     not Assigned(IntlFunctions.UdatFormat) or
+     not Assigned(IntlFunctions.UdatClose) or
+     not TryEncodeASCIIBytes('en-u-ca-iso8601', LocaleBytes) then
+    Exit;
+
+  TzUnicode := 'UTC';
+  PatternUnicode := 'MMMM''|''G';
+  Status := ICU_SUCCESS;
+  Formatter := IntlFunctions.UdatOpen(UDAT_PATTERN, UDAT_PATTERN,
+    BytePointer(LocaleBytes), PWideChar(TzUnicode), Length(TzUnicode),
+    PWideChar(PatternUnicode), Length(PatternUnicode), Status);
+  if not ICUSucceeded(Status) or not Assigned(Formatter) then
+    Exit;
+  try
+    Status := ICU_SUCCESS;
+    ResultLen := IntlFunctions.UdatFormat(Formatter, 0, @Buffer[0],
+      Length(Buffer), nil, Status);
+    if not ICUSucceeded(Status) or (ResultLen <= 0) or
+       (ResultLen > Length(Buffer)) then
+      Exit;
+    Formatted := UnicodeToString(Buffer, ResultLen);
+    SeparatorPos := Pos('|', Formatted);
+    if SeparatorPos = 0 then
+      Exit;
+    AMissing := (SeparatorPos = 1) or (SeparatorPos = Length(Formatted));
+    Result := True;
+  finally
+    IntlFunctions.UdatClose(Formatter);
   end;
-  Result := ISO8601NamesState = ISO8601_NAMES_MISSING;
+end;
+
+// ICU 78 loads no month or era names for the iso8601 calendar (ICU-23262,
+// fixed in ICU 79): CLDR 48 has no iso8601 era data, and ICU stops loading
+// the calendar's names at the missing eras. A build can also carry month
+// names with no eras. Probe the loaded ICU rather than its version, so an
+// ICU 78 with the fix applied keeps its own iso8601 output. An inconclusive
+// probe is not remembered, and reports the names as present.
+function ICUISO8601NamesMissing: Boolean;
+var
+  Missing: Boolean;
+begin
+  CriticalSectionEnter(IntlInitLock);
+  try
+    if not IntlISO8601NamesProbed and
+       TryProbeISO8601NamesMissing(Missing) then
+    begin
+      IntlISO8601NamesMissing := Missing;
+      IntlISO8601NamesProbed := True;
+    end;
+    Result := IntlISO8601NamesProbed and IntlISO8601NamesMissing;
+  finally
+    CriticalSectionLeave(IntlInitLock);
+  end;
 end;
 
 // The calendar ICU formats with. Where the loaded ICU has no iso8601 names,

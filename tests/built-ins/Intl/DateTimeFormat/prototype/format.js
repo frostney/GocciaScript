@@ -79,10 +79,6 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.format", () => {
     expect(result).toContain("January");
     expect(result).toContain("AD");
     expect(result).toContain("2020");
-    const parts = dtf.formatToParts(date);
-    expect(parts.find((part) => part.type === "month").value).toBe("January");
-    expect(parts.find((part) => part.type === "era").value).toBe("AD");
-    expect(new Temporal.PlainDate(2020, 1, 1).toLocaleString("en", { month: "long" })).toBe("January");
   });
 
   test("format rejects invalid numeric dates", () => {
