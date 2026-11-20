@@ -3503,7 +3503,9 @@ end;
 // abbreviated ones. Formats that show no names, such as a numeric date,
 // keep the iso8601 patterns. The fields are the options' skeleton and
 // AExtraNameFields, which a range adds for the eras ICU shows when it
-// spans them.
+// spans them. An era the options ask for is shown, as ICU 77 and earlier
+// and ICU 79 show it, even where ICU 78's iso8601 range pattern would have
+// left it out.
 function ICUFormattingCalendar(const AOptions: TIntlDateTimeFormatOptions;
   const AExtraNameFields: Cardinal): string;
 var
