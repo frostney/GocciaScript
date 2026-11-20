@@ -3493,21 +3493,32 @@ begin
   end;
 end;
 
-// The calendar ICU formats with. Where the fields a format uses need
-// iso8601 names the loaded ICU lacks, use the Gregorian data, which is what
-// ICU formatted iso8601 with before CLDR 48. ICU's iso8601 calendar is its
-// Gregorian calendar with ISO week rules, so both give the same years,
-// months and days, and Intl formats no week fields. Fields that need no
-// missing name, such as a numeric date, keep the iso8601 patterns. The
-// fields are the options' skeleton and AExtraNameFields, which a range adds
-// for the era names ICU shows when it spans eras.
+// The calendar ICU formats with. Where a format shows a month name or an
+// era and the loaded ICU lacks any width of it in iso8601, use the
+// Gregorian data, which is what ICU formatted iso8601 with before CLDR 48.
+// ICU's iso8601 calendar is its Gregorian calendar with ISO week rules, so
+// both give the same years, months and days, and Intl formats no week
+// fields. Every width counts because the pattern ICU selects can use another
+// width than the options ask for: a Chinese range with narrow months uses
+// abbreviated ones. Formats that show no names, such as a numeric date,
+// keep the iso8601 patterns. The fields are the options' skeleton and
+// AExtraNameFields, which a range adds for the eras ICU shows when it
+// spans them.
 function ICUFormattingCalendar(const AOptions: TIntlDateTimeFormatOptions;
   const AExtraNameFields: Cardinal): string;
+var
+  Fields: Cardinal;
 begin
   Result := AOptions.Calendar;
-  if (Result = 'iso8601') and
-     (((ICUNameFieldsInPattern(BuildDateTimeSkeleton(AOptions)) or
-        AExtraNameFields) and ICUISO8601MissingNames) <> 0) then
+  if Result <> 'iso8601' then
+    Exit;
+  Fields := ICUNameFieldsInPattern(BuildDateTimeSkeleton(AOptions)) or
+    AExtraNameFields;
+  if (Fields and ICU_NAME_ERAS) <> 0 then
+    Fields := Fields or ICU_NAME_ERAS;
+  if (Fields and ICU_NAME_MONTHS) <> 0 then
+    Fields := Fields or ICU_NAME_MONTHS;
+  if (Fields and ICUISO8601MissingNames) <> 0 then
     Result := 'gregory';
 end;
 
@@ -3786,7 +3797,7 @@ begin
 
   ExtraNameFields := 0;
   if (AOptions.Calendar = 'iso8601') and
-     ((ICUISO8601MissingNames and ICU_NAME_ERA_ABBREVIATED) <> 0) and
+     ((ICUISO8601MissingNames and ICU_NAME_ERAS) <> 0) and
      ICUDatesSpanEras(AOptions.TimeZone, AStartMillis, AEndMillis) then
     ExtraNameFields := ICU_NAME_ERA_ABBREVIATED;
   EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions,

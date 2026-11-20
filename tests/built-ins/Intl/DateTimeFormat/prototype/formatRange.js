@@ -76,6 +76,25 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRange", () => {
     expect(result).toContain("BC");
     expect(result).toContain("AD");
   });
+
+  test("names the months of an iso8601 range whose pattern picks another width", () => {
+    const dtf = new Intl.DateTimeFormat("zh", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "narrow",
+      timeZone: "UTC"
+    });
+    const result = dtf.formatRange(Date.UTC(2020, 0, 1), Date.UTC(2020, 1, 1));
+
+    if (!hasFullICU) {
+      expect(typeof result).toBe("string");
+      return;
+    }
+
+    // ICU formats this range with abbreviated months, not the narrow ones asked for.
+    expect(result).toContain("1月");
+    expect(result).toContain("2月");
+  });
 });
 
 describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRange Temporal inputs", () => {
