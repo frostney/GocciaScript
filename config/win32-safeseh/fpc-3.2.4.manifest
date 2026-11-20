@@ -221,6 +221,7 @@ source-nonseh ../../source/units/Goccia.HeapSnapshot.Test.pas 1050ae68095dd52ef2
 source-nonseh ../../source/shared/PESafeSEH.Test.pas cb3cfa2d8461eaa717413a629706af3b37fbc90644decda2e6de80a866b23052 .text.n_p$pesafeseh.test$_$tpesafesehtests_$__$$_testhandlerrefusals
 source-nonseh ../../source/shared/PESafeSEH.Test.pas 88727df35e64d65145eedfb433cb363fe02b29e5570f57b0b0b845748a1d3dc8 .text.n_p$pesafeseh.test_$$_handlers$$tservaarray
 source-nonseh ../../source/shared/SandboxVirtualFileSystem.Test.pas cbf92d05e38f075923e8831477570a73bc61728acb9f497766242f9926d1e3d6 .text.n_p$sandboxvirtualfilesystemtest$_$ttestsandboxvirtualfilesystem_$__$$_handlerootclamp$crc066a5453
+source-nonseh ../../source/units/Goccia.MicrotaskQueue.Test.pas b09ef745b3136a38328c92bc47eada6327f31f1f5bbfe5e620fc5c1c0188245e .text.n_p$goccia.microtaskqueue.test$_$tcollectinghandler_$__$$_handlereaction$tgocciavalue$$tgocciavalue
 nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandler$formal
 nonseh rtl/system.o .text.n_system$_$tobject_$__$$_defaulthandlerstr$formal
 
