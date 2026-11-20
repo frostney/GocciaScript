@@ -5972,25 +5972,31 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
     }
 
-    console.log("Loader: line coverage of a top-level await that a short circuit skips...");
-    // The registers an awaiting top-level statement clears belong to the
-    // statement's line, not to the skipped operand's line.
-    const skippedAwaitSourcePath = join(tmp, "skipped-await-coverage.js");
+    console.log("Loader: line coverage of top-level awaits that a short circuit takes or skips...");
+    // The registers an awaiting top-level statement clears belong to no
+    // source line: a skipped operand's line stays unexecuted and the
+    // statement's first line is counted once.
+    const awaitCoverageSourcePath = join(tmp, "await-coverage.js");
     writeFileSync(
-      skippedAwaitSourcePath,
+      awaitCoverageSourcePath,
       [
+        "const yes = () => true;",
         "const no = () => false;",
+        "yes() &&",
+        "  (await Promise.resolve(1));",
         "no() &&",
         "  (await Promise.resolve(1));",
         "await null;",
         "",
       ].join("\n"),
     );
-    const skippedAwaitLcovPath = join(tmp, "skipped-await-coverage.lcov");
-    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${skippedAwaitLcovPath} ${skippedAwaitSourcePath}`.quiet();
-    const skippedAwaitLcov = readFileSync(skippedAwaitLcovPath, "utf-8");
-    if (!skippedAwaitLcov.includes("DA:3,0")) {
-      throw new Error(`LCOV should report the skipped await line 3 as unexecuted, got:\n${skippedAwaitLcov}`);
+    const awaitCoverageLcovPath = join(tmp, "await-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${awaitCoverageLcovPath} ${awaitCoverageSourcePath}`.quiet();
+    const awaitCoverageLcov = readFileSync(awaitCoverageLcovPath, "utf-8");
+    for (const expected of ["DA:3,1", "DA:4,1", "DA:5,1", "DA:6,0", "DA:7,1"]) {
+      if (!awaitCoverageLcov.includes(expected)) {
+        throw new Error(`LCOV should contain ${expected} for the awaiting statements, got:\n${awaitCoverageLcov}`);
+      }
     }
 
     console.log("Loader: line coverage of declarations whose initializer starts on a later line...");

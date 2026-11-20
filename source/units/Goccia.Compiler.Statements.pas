@@ -67,6 +67,8 @@ procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaTryStatement);
 procedure EmitClearDeadRegisters(const ACtx: TGocciaCompilationContext;
   const ARegionPeak: Integer);
+procedure EmitUncountedClearDeadRegisters(
+  const ACtx: TGocciaCompilationContext; const ARegionPeak: Integer);
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 procedure CompileForInStatement(const ACtx: TGocciaCompilationContext;
@@ -3229,6 +3231,29 @@ var
 begin
   for Slot := ACtx.Scope.NextSlot to ARegionPeak - 1 do
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
+end;
+
+// The same clear for a statement that awaited, which belongs to no source
+// line: it takes line 0, which line coverage never counts, and the line map
+// goes back to what it was, so the clear neither marks a skipped operand's
+// line as executed nor counts the statement's first line a second time.
+procedure EmitUncountedClearDeadRegisters(
+  const ACtx: TGocciaCompilationContext; const ARegionPeak: Integer);
+var
+  Last: TGocciaLineMapEntry;
+  HadMapping: Boolean;
+  DebugInfo: TGocciaDebugInfo;
+begin
+  DebugInfo := ACtx.Template.DebugInfo;
+  HadMapping := Assigned(DebugInfo) and (DebugInfo.LineMapCount > 0);
+  if HadMapping then
+    Last := DebugInfo.GetLineMapEntry(DebugInfo.LineMapCount - 1);
+  if Assigned(DebugInfo) then
+    DebugInfo.AddLineMapping(UInt32(ACtx.Template.CodeCount), 0, 0);
+  EmitClearDeadRegisters(ACtx, ARegionPeak);
+  if HadMapping then
+    DebugInfo.AddLineMapping(UInt32(ACtx.Template.CodeCount), Last.Line,
+      Last.Column);
 end;
 
 procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;

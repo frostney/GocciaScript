@@ -830,10 +830,8 @@ begin
       (AStmt is TGocciaExportDestructuringDeclaration) or
       (AStmt is TGocciaExportDefaultDeclaration)) and
      (StatementPeak > Ctx.Scope.NextSlot) then
-  begin
-    EmitLineMapping(Ctx, AStmt.Line, AStmt.Column);
-    Goccia.Compiler.Statements.EmitClearDeadRegisters(Ctx, StatementPeak);
-  end;
+    Goccia.Compiler.Statements.EmitUncountedClearDeadRegisters(Ctx,
+      StatementPeak);
 
   if not Result then
     Result := Goccia.Compiler.Statements.StatementAlwaysAbrupt(Ctx, AStmt);
@@ -2561,15 +2559,8 @@ begin
           // the awaited value in the registers above the live ones.
           if (FCurrentScope.AwaitCount <> AwaitMark) and
              (StatementPeak > FCurrentScope.NextSlot) then
-          begin
-            // The clear belongs to the statement, not to the last operand
-            // whose line the expression left mapped (a skipped `await` on a
-            // later line would count as executed in coverage).
-            EmitLineMapping(Ctx, AProgram.Body[I].Line,
-              AProgram.Body[I].Column);
-            Goccia.Compiler.Statements.EmitClearDeadRegisters(Ctx,
+            Goccia.Compiler.Statements.EmitUncountedClearDeadRegisters(Ctx,
               StatementPeak);
-          end;
         end
         else
           StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
