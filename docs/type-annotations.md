@@ -57,9 +57,10 @@ class Registry {
   build(): { name: string } & { size: number } { return { name: "box", size: 2 }; }
 }
 
-// Template literal types
+// Template literal types, also in call and constructor type arguments
 const id: `id-${number}` = "id-42";
 const also = "id-42" as `id-${number}`;
+const user = load<`user-${string}`>(key);
 
 // Definite assignment assertions (require an annotation, forbid an initializer)
 let pending!: number;
@@ -152,6 +153,8 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
   const wrap = <T>(v: T): T[] => [v];
   const idOf = <T extends { id: number }>(v: T): number => v.id;
   ```
+
+  A `<` after a callee opens call or constructor type arguments only where TypeScript reads it that way: the list closes before `(` or a template, and holds nothing that cannot be type syntax. So `a < b > (c)` is a generic call here, while `a < f() > (c)` and ``a < `x${b + 1}` > (c)`` stay comparisons. A template literal type such as `` `user-${string}` `` counts as type syntax when each substitution is a type a template literal type can hold: a name with optional type arguments, a literal, `keyof`, `typeof`, an indexed access, an object type, a union, a conditional type or another template.
 
 - **`.js`, `.jsx`, `.tsx`, `.mjs`** — JSX is recognised, so a bare `<T>` or `<T extends U>` is read as a JSX element. Generic arrows still parse when the type parameter list cannot be mistaken for a tag, which means a trailing comma, a default, or more than one parameter:
 

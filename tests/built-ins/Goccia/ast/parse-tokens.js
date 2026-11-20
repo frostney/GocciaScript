@@ -562,6 +562,18 @@ describe("ast.parse tokens", () => {
     ]);
   });
 
+  test("a template literal type in call and constructor type arguments is tokens in the file", () => {
+    const source = "const id = load<`crate-${number}`>(shelf);\nconst box = new Box<`t${Kind}`, Crate>();\n";
+    const result = parse(source, { fileName: "types.ts", tokens: true });
+
+    expect(uncovered(result)).toEqual([]);
+    expect(textsOf(source, "TemplateHead", { fileName: "types.ts" })).toEqual(["`crate-${", "`t${"]);
+    expect(textsOf(source, "TemplateTail", { fileName: "types.ts" })).toEqual(["}`", "}`"]);
+    expect(textsOf(source, "Identifier", { fileName: "types.ts" })).toEqual([
+      "id", "load", "number", "shelf", "box", "Box", "Kind", "Crate",
+    ]);
+  });
+
   test("a syntax error still throws when tokens are asked for", () => {
     expect(() => parse("const a = ;\n", { tokens: true })).toThrow(SyntaxError);
   });

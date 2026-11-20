@@ -446,7 +446,8 @@ type
       out ATypeArguments: TGocciaTypeRangeArray): Boolean;
     function FollowsPreprocessorText: Boolean;
     procedure RememberNotTypeArguments(const AFirst: Integer;
-      const AEndsInLexError: Boolean; const AConstructor: Boolean = False);
+      const AEndsInLexError: Boolean; const AConstructor: Boolean = False;
+      const AEndsInCall: Boolean = False);
     function TryParseGenericArrowFunction(
       out AExpression: TGocciaExpression;
       const AAsyncToken: TGocciaToken = nil): Boolean;
@@ -458,6 +459,7 @@ type
     procedure SkipBalancedParens;
     procedure SkipStatementOrBlock;
     procedure SkipTemplateLiteral;
+    function SkipTemplateLiteralType(const ANesting: Integer): Boolean;
     procedure SkipUnsupportedFunctionSignature;
     // Centralized 'async function' check: enforces same-line constraint,
     // handles disabled-mode fallback.  Call after consuming the 'async' token.
@@ -10840,6 +10842,237 @@ begin
   Result := Trim(Result);
 end;
 
+// A template literal type in call or `new` type arguments: `id-${number}`.
+//
+// A template is where the '<' ambiguity of those probes hides: in a
+// TypeScript file `f<`t${string}`>(x)` is a generic call, and
+// `a < `x${b + 1}` > (c)` is a comparison chain. TypeScript tells them apart
+// by parsing each substitution as a type. A template literal type may only
+// hold a type whose values are strings, numbers, bigints, booleans, null or
+// undefined, so the substitutions worth reading are short: names and
+// qualified names with type arguments, literals, `keyof`, `typeof` and
+// `infer`, indexed access, parentheses, object types of property
+// signatures, unions, intersections, conditional types and nested
+// templates. This steps over a template made of those and
+// returns False at anything else, which keeps the comparison reading: a
+// call, an operator, a comma, an object. A type it does not read here, such
+// as a function type, is one TypeScript rejects in a substitution.
+//
+// It lexes under the probes' goal and never raises; a nesting deeper than
+// any real template type returns False.
+function TGocciaParser.SkipTemplateLiteralType(
+  const ANesting: Integer): Boolean;
+const
+  MAX_TEMPLATE_TYPE_NESTING = 32;
+var
+  // A '>>' or '>>>' that closed a type argument list owes the lists around
+  // it a '>' each.
+  OwedGreater: Integer;
+  Token: TGocciaToken;
+
+  function PeekType: TGocciaTokenType;
+  begin
+    if OwedGreater > 0 then
+      Result := gttGreater
+    else
+      Result := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
+  end;
+
+  function PeekIsContextualKeyword(const AKeyword: string): Boolean;
+  begin
+    Result := (PeekType = gttIdentifier) and
+      (PeekWithLexicalGoal(glgInputElementDiv).Lexeme = AKeyword);
+  end;
+
+  procedure AdvanceType;
+  begin
+    if OwedGreater > 0 then
+      Dec(OwedGreater)
+    else
+    begin
+      if Assigned(FCompileProfile) then
+        FCompileProfile.Count(ccTypeArgumentProbeTokens);
+      PeekWithLexicalGoal(glgInputElementDiv);
+      Advance;
+    end;
+  end;
+
+  function SkipName: Boolean;
+  begin
+    Result := PeekType = gttIdentifier;
+    if not Result then
+      Exit;
+    AdvanceType;
+    while PeekType = gttDot do
+    begin
+      AdvanceType;
+      if PeekType <> gttIdentifier then
+        Exit(False);
+      AdvanceType;
+    end;
+  end;
+
+  function CloseAngle: Boolean;
+  begin
+    Result := True;
+    case PeekType of
+      gttGreater:
+        AdvanceType;
+      gttRightShift:
+        begin
+          AdvanceType;
+          OwedGreater := 1;
+        end;
+      gttUnsignedRightShift:
+        begin
+          AdvanceType;
+          OwedGreater := 2;
+        end;
+    else
+      Result := False;
+    end;
+  end;
+
+  function SkipType(const ADepth: Integer;
+    const AAllowConditional: Boolean): Boolean;
+  begin
+    Result := False;
+    if ADepth > MAX_TEMPLATE_TYPE_NESTING then
+      Exit;
+    if PeekType in [gttBitwiseOr, gttBitwiseAnd] then
+      AdvanceType;
+    repeat
+      while PeekIsContextualKeyword(KEYWORD_KEYOF) or
+            PeekIsContextualKeyword(KEYWORD_INFER) do
+        AdvanceType;
+      case PeekType of
+        gttTypeof:
+          begin
+            AdvanceType;
+            if not SkipName then
+              Exit;
+          end;
+        gttIdentifier:
+          begin
+            if not SkipName then
+              Exit;
+            if PeekType = gttLess then
+            begin
+              AdvanceType;
+              repeat
+                if not SkipType(ADepth + 1, True) then
+                  Exit;
+                if PeekType <> gttComma then
+                  Break;
+                AdvanceType;
+              until False;
+              if not CloseAngle then
+                Exit;
+            end;
+          end;
+        gttString, gttNumber, gttBigInt, gttTrue, gttFalse, gttNull:
+          AdvanceType;
+        gttMinus:
+          begin
+            AdvanceType;
+            if not (PeekType in [gttNumber, gttBigInt]) then
+              Exit;
+            AdvanceType;
+          end;
+        gttTemplate, gttTemplateHead:
+          if not SkipTemplateLiteralType(ANesting + ADepth + 1) then
+            Exit;
+        gttLeftParen:
+          begin
+            AdvanceType;
+            if not SkipType(ADepth + 1, True) or
+               (PeekType <> gttRightParen) then
+              Exit;
+            AdvanceType;
+          end;
+        // An object type of property signatures, `{ k: "v" }`, as in
+        // `keyof { k: 1 }`. A value such as `{ k: f() }` is not one.
+        gttLeftBrace:
+          begin
+            AdvanceType;
+            while PeekType <> gttRightBrace do
+            begin
+              if not (PeekType in [gttIdentifier, gttString, gttNumber]) then
+                Exit;
+              AdvanceType;
+              if PeekType = gttQuestion then
+                AdvanceType;
+              if PeekType <> gttColon then
+                Exit;
+              AdvanceType;
+              if not SkipType(ADepth + 1, True) then
+                Exit;
+              if PeekType in [gttSemicolon, gttComma] then
+                AdvanceType
+              else if PeekType <> gttRightBrace then
+                Exit;
+            end;
+            AdvanceType;
+          end;
+      else
+        Exit;
+      end;
+      // Indexed access, `T[K]`. An array type, `T[]`, holds no string.
+      while PeekType = gttLeftBracket do
+      begin
+        AdvanceType;
+        if not SkipType(ADepth + 1, True) or
+           (PeekType <> gttRightBracket) then
+          Exit;
+        AdvanceType;
+      end;
+      if not (PeekType in [gttBitwiseOr, gttBitwiseAnd]) then
+        Break;
+      AdvanceType;
+    until False;
+    if AAllowConditional and (PeekType = gttExtends) then
+    begin
+      AdvanceType;
+      if not SkipType(ADepth + 1, False) or (PeekType <> gttQuestion) then
+        Exit;
+      AdvanceType;
+      if not SkipType(ADepth + 1, True) or (PeekType <> gttColon) then
+        Exit;
+      AdvanceType;
+      if not SkipType(ADepth + 1, True) then
+        Exit;
+    end;
+    Result := True;
+  end;
+
+begin
+  Result := False;
+  if ANesting > MAX_TEMPLATE_TYPE_NESTING then
+    Exit;
+  OwedGreater := 0;
+  Token := PeekWithLexicalGoal(glgInputElementDiv);
+  if Token.TokenType = gttTemplate then
+  begin
+    Advance;
+    Exit(True);
+  end;
+  if Token.TokenType <> gttTemplateHead then
+    Exit;
+  Advance;
+  repeat
+    if not SkipType(0, True) or (OwedGreater > 0) or
+       (PeekWithLexicalGoal(glgInputElementDiv).TokenType <> gttRightBrace) then
+      Exit;
+    Advance;
+    // The substitution's '}' ends it; what follows is the template's next
+    // span, which only the template-tail goal lexes as such.
+    Token := AdvanceWithLexicalGoal(glgInputElementTemplateTail);
+    if not (Token.TokenType in [gttTemplateMiddle, gttTemplateTail]) then
+      Exit;
+  until Token.TokenType = gttTemplateTail;
+  Result := True;
+end;
+
 function TGocciaParser.TryCollectNewExpressionTypeArguments(
   out ATypeArguments: TGocciaTypeRangeArray): Boolean;
 var
@@ -10877,6 +11110,14 @@ begin
           gttRightShift: Dec(Depth, 2);
           gttUnsignedRightShift: Dec(Depth, 3);
           gttComma:;
+          gttTemplateHead:
+            begin
+              // A template literal type; see SkipTemplateLiteralType.
+              HasTypeArgument := True;
+              if not SkipTemplateLiteralType(0) then
+                Exit;
+              Continue;
+            end;
         else
           HasTypeArgument := True;
         end;
@@ -10962,9 +11203,13 @@ function TGocciaParser.TryCollectCallExpressionTypeArguments(
   out ATypeArguments: TGocciaTypeRangeArray): Boolean;
 var
   BracketDepth, Depth: Integer;
-  HasTypeArgument, LexError, ElementTypeArguments: Boolean;
+  HasTypeArgument, LexError, ElementTypeArguments, PreviousEndsOperand,
+    EndsInCall: Boolean;
+  // The brackets open in the list, innermost last.
+  OpenBrackets: string;
   SavedCurrent: Integer;
   SavedLexer: TGocciaLexerCheckpoint;
+  Token: TGocciaToken;
   TokenType: TGocciaTokenType;
 begin
   Result := False;
@@ -10987,6 +11232,7 @@ begin
   if Assigned(FLexer) then
     SavedLexer := FLexer.CreateCheckpoint;
   LexError := False;
+  EndsInCall := False;
 
   try
     try
@@ -10996,12 +11242,33 @@ begin
       BracketDepth := 0;
       Depth := 0;
       HasTypeArgument := False;
+      PreviousEndsOperand := False;
+      OpenBrackets := '';
       repeat
-        TokenType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
+        Token := PeekWithLexicalGoal(glgInputElementDiv);
+        TokenType := Token.TokenType;
 
-        if not ElementTypeArguments and (Depth = 1) and (BracketDepth = 0) and
-          (TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS) then
-          Exit;
+        if not ElementTypeArguments then
+        begin
+          if (Depth = 1) and (BracketDepth = 0) and
+            (TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS) then
+            Exit;
+          // A call or a tagged template: no type is an operand followed by
+          // '(' or a template, bar a method signature in an object type's
+          // braces, so `a < f() > (c)` stays a comparison.
+          if PreviousEndsOperand and
+            (TokenType in [gttLeftParen, gttTemplate, gttTemplateHead]) and
+            ((OpenBrackets = '') or
+             (OpenBrackets[Length(OpenBrackets)] <> '{')) then
+          begin
+            EndsInCall := True;
+            Exit;
+          end;
+        end;
+        PreviousEndsOperand := (TokenType in [gttString, gttNumber,
+          gttBigInt, gttTrue, gttFalse, gttNull, gttThis, gttTemplate,
+          gttRightParen, gttRightBracket]) or
+          ((TokenType = gttIdentifier) and not IsTypeConnectorToken(Token));
 
         case TokenType of
           gttLess: Inc(Depth);
@@ -11012,6 +11279,10 @@ begin
           gttLeftParen, gttLeftBracket, gttLeftBrace:
             begin
               Inc(BracketDepth);
+              if TokenType = gttLeftBrace then
+                OpenBrackets := OpenBrackets + '{'
+              else
+                OpenBrackets := OpenBrackets + '(';
               HasTypeArgument := True;
             end;
           gttRightParen, gttRightBracket, gttRightBrace:
@@ -11019,18 +11290,22 @@ begin
               Dec(BracketDepth);
               if BracketDepth < 0 then
                 Exit;
+              SetLength(OpenBrackets, Length(OpenBrackets) - 1);
             end;
           gttTemplateHead:
             begin
               HasTypeArgument := True;
-              // An element's template literal type, `t${string}`, whose
-              // substitution's closing brace only the template-tail goal
-              // lexes as such. A written comparison keeps its template.
+              PreviousEndsOperand := True;
+              // A template literal type, `t${string}`, whose substitution's
+              // closing brace only the template-tail goal lexes as such. An
+              // element's is erased whole; in a written list each
+              // substitution has to read as a type (SkipTemplateLiteralType),
+              // so `a < `x${b + 1}` > (c)` stays a comparison.
               if ElementTypeArguments then
-              begin
-                SkipTemplateLiteral;
-                Continue;
-              end;
+                SkipTemplateLiteral
+              else if not SkipTemplateLiteralType(0) then
+                Exit;
+              Continue;
             end;
         else
           HasTypeArgument := True;
@@ -11062,7 +11337,7 @@ begin
       // among them would see, a lexer error at the end included.
       if not Assigned(FLexer) or
          (SavedLexer.TokenCount = SavedCurrent + 1) then
-        RememberNotTypeArguments(SavedCurrent, LexError);
+        RememberNotTypeArguments(SavedCurrent, LexError, False, EndsInCall);
       if Assigned(FLexer) then
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
@@ -11101,16 +11376,28 @@ end;
 // the same error. A division after a chain is one such error, since the
 // probes lex what follows a '<' as the start of an expression, where '/'
 // opens a regular expression.
+//
+// A probe takes a template literal whole (SkipTemplateLiteralType), so a
+// template here is one type argument that leaves the depths as they were,
+// and a '<' inside one is left to its own probe. A template the list ends
+// inside is where the scan stopped: one whose substitution is not a type,
+// or that does not close. Every probe that reaches it fails there, and so
+// does every probe that reaches the call or tagged template the list ends
+// at with AEndsInCall: the operand before it is the same for each probe,
+// and so is the innermost bracket open around it, or a probe sees none.
 procedure TGocciaParser.RememberNotTypeArguments(const AFirst: Integer;
-  const AEndsInLexError: Boolean; const AConstructor: Boolean);
+  const AEndsInLexError: Boolean; const AConstructor: Boolean;
+  const AEndsInCall: Boolean);
 const
   // A shorter scan costs about what remembering it would.
   MIN_REMEMBERED_TOKENS = 32;
 var
   Count, I, Top, Stop, Fail, Deny, Event: Integer;
-  Depth, Bracket, Arguments: Integer;
+  Depth, Bracket, Arguments, TemplateLevel, OpenTemplate,
+    Rejection: Integer;
   Depths, Brackets, ArgumentCounts, NextLowerDepth, NextLowerBracket,
     Stack: array of Integer;
+  InTemplate: array of Boolean;
   TokenType: TGocciaTokenType;
   DenyAt: THashMap<Int64, Integer>;
   Decided: Boolean;
@@ -11170,14 +11457,41 @@ begin
   SetLength(Depths, Count);
   SetLength(Brackets, Count);
   SetLength(ArgumentCounts, Count);
+  SetLength(InTemplate, Count);
   Depth := 0;
   Bracket := 0;
   Arguments := 0;
+  TemplateLevel := 0;
+  OpenTemplate := -1;
   for I := 0 to Count - 1 do
   begin
     if Assigned(FCompileProfile) then
       FCompileProfile.Count(ccTypeArgumentProbeTokens);
-    case TypeAt(I) of
+    TokenType := TypeAt(I);
+    InTemplate[I] := (TemplateLevel > 0) or (TokenType = gttTemplateHead);
+    if InTemplate[I] then
+    begin
+      if TokenType = gttTemplateHead then
+      begin
+        if TemplateLevel = 0 then
+        begin
+          OpenTemplate := I;
+          Inc(Arguments);
+        end;
+        Inc(TemplateLevel);
+      end
+      else if TokenType = gttTemplateTail then
+      begin
+        Dec(TemplateLevel);
+        if TemplateLevel = 0 then
+          OpenTemplate := -1;
+      end;
+      Depths[I] := Depth;
+      Brackets[I] := Bracket;
+      ArgumentCounts[I] := Arguments;
+      Continue;
+    end;
+    case TokenType of
       gttLess: Inc(Depth);
       gttGreater: Dec(Depth);
       gttRightShift: Dec(Depth, 2);
@@ -11201,6 +11515,11 @@ begin
     Brackets[I] := Bracket;
     ArgumentCounts[I] := Arguments;
   end;
+
+  // Where every probe that gets that far fails; see the comment above.
+  Rejection := OpenTemplate;
+  if (Rejection < 0) and AEndsInCall then
+    Rejection := Count - 1;
 
   SetLength(Stack, Count);
   SetLength(NextLowerDepth, Count);
@@ -11229,7 +11548,7 @@ begin
       if Assigned(FCompileProfile) then
         FCompileProfile.Count(ccTypeArgumentProbeTokens);
       TokenType := TypeAt(I);
-      if TokenType = gttLess then
+      if (TokenType = gttLess) and not InTemplate[I] then
       begin
         // The probe from I ends at the first of: a denylisted token while
         // its depth is 1 and its bracket depth 0, which is the state after
@@ -11269,11 +11588,16 @@ begin
             (Brackets[Event] = Brackets[I]) and
             (TypeAt(Event + 1) in [gttLeftParen, gttTemplate,
               gttTemplateHead]));
+        // The probe reaches the rejection the list ends at, unless it has
+        // ended first.
+        if (Rejection > I) and ((Event < 0) or (Rejection < Event)) then
+          Decided := True;
         if Decided then
           Starts.AddOrSetValue(
             FTokens[AFirst + I].Span.StartOffset, True);
       end;
-      if (I > 0) and (TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS) then
+      if (I > 0) and not InTemplate[I] and
+         (TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS) then
         DenyAt.AddOrSetValue(StateKey(Depths[I - 1], Brackets[I - 1]), I);
     end;
   finally
