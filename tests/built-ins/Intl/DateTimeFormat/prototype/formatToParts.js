@@ -148,4 +148,18 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatToParts", () => {
     expect(value("year")).toBe("2020");
     expect(value("day")).toMatch(/^0?2$/);
   });
+
+  test("types the weekday of a Finnish date with a month name", () => {
+    const formatter = new Intl.DateTimeFormat("fi", {
+      calendar: "iso8601",
+      timeZone: "UTC",
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    });
+    const parts = formatter.formatToParts(Date.UTC(2020, 0, 2));
+
+    expect(parts.some((part) => part.type === "weekday" && part.value !== "")).toBe(true);
+    expect(parts.some((part) => part.type === "month" && part.value !== "")).toBe(true);
+  });
 });

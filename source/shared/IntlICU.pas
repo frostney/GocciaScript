@@ -445,6 +445,7 @@ const
   UDAT_TIMEZONE_FIELD = 17;
   UDAT_TIMEZONE_RFC_FIELD = 23;
   UDAT_TIMEZONE_GENERIC_FIELD = 24;
+  UDAT_STANDALONE_DAY_FIELD = 25;
   UDAT_STANDALONE_MONTH_FIELD = 26;
   UDAT_TIMEZONE_SPECIAL_FIELD = 29;
   UDAT_YEAR_NAME_FIELD = 30;
@@ -1360,7 +1361,8 @@ begin
     UDAT_MINUTE_FIELD: Result := 'minute';
     UDAT_SECOND_FIELD: Result := 'second';
     UDAT_FRACTIONAL_SECOND_FIELD: Result := 'fractionalSecond';
-    UDAT_DAY_OF_WEEK_FIELD: Result := 'weekday';
+    UDAT_DAY_OF_WEEK_FIELD,
+    UDAT_STANDALONE_DAY_FIELD: Result := 'weekday';
     UDAT_AM_PM_FIELD,
     UDAT_AM_PM_MIDNIGHT_NOON_FIELD,
     UDAT_FLEXIBLE_DAY_PERIOD_FIELD: Result := 'dayPeriod';
@@ -3386,15 +3388,17 @@ const
   ICU_MAJOR_WITHOUT_ISO8601_FIELDS = 78;
 
 { Whether the options ask for a field that ICU 78 leaves out of its iso8601
-  calendar: the era or the name of a month. Its numeric fields and the weekday
-  are formatted correctly, so such a date keeps the iso8601 patterns. }
+  calendar: the era or the name of a month (a long or short one; a narrow one
+  is formatted correctly). Its numeric fields and the weekday are formatted
+  correctly, so such a date keeps the iso8601 patterns. }
 function RequestsTextualDateFields(
   const AOptions: TIntlDateTimeFormatOptions): Boolean;
 var
   Skeleton: string;
 begin
   Skeleton := BuildDateTimeSkeleton(AOptions);
-  Result := (Pos('G', Skeleton) > 0) or (Pos('MMM', Skeleton) > 0);
+  Result := (Pos('G', Skeleton) > 0) or
+    ((Pos('MMM', Skeleton) > 0) and (Pos('MMMMM', Skeleton) = 0));
 end;
 
 function ApplyDateTimeLocaleOptions(const ALocale: string;
