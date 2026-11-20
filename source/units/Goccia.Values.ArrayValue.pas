@@ -4482,8 +4482,15 @@ begin
     begin
       // Same post-gate descriptor read as the DefineProperty arm above, and
       // the same reason the value has to reach the gate.
-      ExtendElementsWithHoles(FElements, Int64(Index) + 1,
-        TGocciaPropertyDescriptorData(ADescriptor).Value);
+      try
+        ExtendElementsWithHoles(FElements, Int64(Index) + 1,
+          TGocciaPropertyDescriptorData(ADescriptor).Value);
+      except
+        // The caller handed the descriptor over and does not free it on a
+        // raise (a deadline, a budget or a host's abort ends the extension).
+        ADescriptor.Free;
+        raise;
+      end;
       FElements[Integer(Index)] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       if Index + 1 > FLength then
         FLength := Index + 1;
