@@ -4,6 +4,7 @@ features: [Intl]
 ---*/
 
 const isIntl = typeof Intl !== "undefined";
+const hasFullICU = isIntl && new Intl.NumberFormat("en-US").format(NaN) === "NaN";
 
 const expectCurrentDateResult = (readActual, formatAt) => {
   const before = Date.now();
@@ -54,6 +55,34 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.format", () => {
     const dtf = new Intl.DateTimeFormat("en-US", { timeZone: "UTC" });
     expectCurrentDateResult(() => dtf.format(), (value) => dtf.format(value));
     expectCurrentDateResult(() => dtf.format(undefined), (value) => dtf.format(value));
+  });
+
+  test("format names the month and era in the iso8601 calendar", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      era: "short",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const date = Date.UTC(2020, 0, 1);
+    expect(dtf.resolvedOptions().calendar).toBe("iso8601");
+
+    if (!hasFullICU) {
+      expect(typeof dtf.format(date)).toBe("string");
+      return;
+    }
+
+    // Field order follows the ICU data, which changed for iso8601 in CLDR 48.
+    const result = dtf.format(date);
+    expect(result).toContain("January");
+    expect(result).toContain("AD");
+    expect(result).toContain("2020");
+    const parts = dtf.formatToParts(date);
+    expect(parts.find((part) => part.type === "month").value).toBe("January");
+    expect(parts.find((part) => part.type === "era").value).toBe("AD");
+    expect(new Temporal.PlainDate(2020, 1, 1).toLocaleString("en", { month: "long" })).toBe("January");
   });
 
   test("format rejects invalid numeric dates", () => {

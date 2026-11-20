@@ -3351,11 +3351,79 @@ begin
     Result := Result + '-u-' + AKey + '-' + AValue;
 end;
 
+const
+  ISO8601_NAMES_UNKNOWN = 0;
+  ISO8601_NAMES_PRESENT = 1;
+  ISO8601_NAMES_MISSING = 2;
+
+var
+  // One of the ISO8601_NAMES_* states. It is written once with its final
+  // value; threads that probe at the same time reach the same answer.
+  ISO8601NamesState: LongInt = ISO8601_NAMES_UNKNOWN;
+
+// ICU 78 loads no month or era names for the iso8601 calendar (ICU-23262,
+// fixed in ICU 79): CLDR 48 has no iso8601 era data, and ICU stops loading
+// the calendar's names at the missing eras. Probe the loaded ICU rather than
+// its version, so an ICU 78 with the fix applied keeps its own iso8601 output.
+function ICUISO8601NamesMissing: Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter: Pointer;
+  LocaleBytes: TBytes;
+  TzUnicode, PatternUnicode: string;
+  Buffer: array[0..63] of WideChar;
+  ResultLen: LongInt;
+  State: LongInt;
+begin
+  if ISO8601NamesState = ISO8601_NAMES_UNKNOWN then
+  begin
+    State := ISO8601_NAMES_PRESENT;
+    if Assigned(IntlFunctions.UdatOpen) and
+       Assigned(IntlFunctions.UdatFormat) and
+       Assigned(IntlFunctions.UdatClose) and
+       TryEncodeASCIIBytes('en-u-ca-iso8601', LocaleBytes) then
+    begin
+      TzUnicode := 'UTC';
+      PatternUnicode := 'MMMM';
+      Status := ICU_SUCCESS;
+      Formatter := IntlFunctions.UdatOpen(UDAT_PATTERN, UDAT_PATTERN,
+        BytePointer(LocaleBytes), PWideChar(TzUnicode), Length(TzUnicode),
+        PWideChar(PatternUnicode), Length(PatternUnicode), Status);
+      if ICUSucceeded(Status) and Assigned(Formatter) then
+      try
+        Status := ICU_SUCCESS;
+        ResultLen := IntlFunctions.UdatFormat(Formatter, 0, @Buffer[0],
+          Length(Buffer), nil, Status);
+        if ICUSucceeded(Status) and (ResultLen <= 0) then
+          State := ISO8601_NAMES_MISSING;
+      finally
+        IntlFunctions.UdatClose(Formatter);
+      end;
+    end;
+    ISO8601NamesState := State;
+  end;
+  Result := ISO8601NamesState = ISO8601_NAMES_MISSING;
+end;
+
+// The calendar ICU formats with. Where the loaded ICU has no iso8601 names,
+// use the Gregorian data, which is what ICU formatted iso8601 with before
+// CLDR 48. ICU's iso8601 calendar is its Gregorian calendar with ISO week
+// rules, so both give the same years, months and days, and Intl formats no
+// week fields.
+function ICUFormattingCalendar(const ACalendar: string): string;
+begin
+  if (ACalendar = 'iso8601') and ICUISO8601NamesMissing then
+    Result := 'gregory'
+  else
+    Result := ACalendar;
+end;
+
 function ApplyDateTimeLocaleOptions(const ALocale: string;
   const AOptions: TIntlDateTimeFormatOptions): string;
 begin
   Result := ALocale;
-  Result := ApplyUnicodeLocaleKeyword(Result, 'ca', AOptions.Calendar);
+  Result := ApplyUnicodeLocaleKeyword(Result, 'ca',
+    ICUFormattingCalendar(AOptions.Calendar));
   Result := ApplyUnicodeLocaleKeyword(Result, 'nu', AOptions.NumberingSystem);
   Result := ApplyUnicodeLocaleKeyword(Result, 'hc', AOptions.HourCycle);
 end;

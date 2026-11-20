@@ -137,6 +137,8 @@ Provides locale-sensitive date and time formatting.
 | `formatRangeToParts(startDate, endDate)` | Return an array of format parts for a date range |
 | `resolvedOptions()` | Return an object reflecting the locale and formatting options |
 
+ICU 78 loads no month or era names for the `iso8601` calendar ([ICU-23262](https://unicode-org.atlassian.net/browse/ICU-23262), fixed in ICU 79), so a date that should read `January 1, 2020 AD` comes out with blanks where the month and era go. When the loaded ICU lacks those names, GocciaScript formats `iso8601` dates with ICU's Gregorian calendar data, as ICU did before CLDR 48. `resolvedOptions().calendar` still reports `iso8601`, and the dates are the same in both calendars. GocciaScript checks the loaded library rather than its version, so an ICU 78 build with the fix applied keeps its own `iso8601` formatting.
+
 ## Intl.PluralRules
 
 Provides plural-sensitive formatting and plural category selection.
