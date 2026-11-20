@@ -129,79 +129,7 @@ function DefaultNumberFormatOptions: TIntlNumberFormatOptions;
 function DefaultDateTimeFormatOptions: TIntlDateTimeFormatOptions;
 function ContainsNulCharacter(const AStr: string): Boolean;
 
-const
-  // The calendar names a date pattern field can need, one bit each: eras
-  // (G), month names as formatted (M) and as standalone (L), each
-  // abbreviated, wide and narrow.
-  ICU_NAME_ERA_ABBREVIATED = $001;
-  ICU_NAME_ERA_WIDE = $002;
-  ICU_NAME_ERA_NARROW = $004;
-  ICU_NAME_MONTH_ABBREVIATED = $008;
-  ICU_NAME_MONTH_WIDE = $010;
-  ICU_NAME_MONTH_NARROW = $020;
-  ICU_NAME_STANDALONE_MONTH_ABBREVIATED = $040;
-  ICU_NAME_STANDALONE_MONTH_WIDE = $080;
-  ICU_NAME_STANDALONE_MONTH_NARROW = $100;
-  ICU_NAME_ERAS = ICU_NAME_ERA_ABBREVIATED or ICU_NAME_ERA_WIDE or
-    ICU_NAME_ERA_NARROW;
-  ICU_NAME_MONTHS = ICU_NAME_MONTH_ABBREVIATED or ICU_NAME_MONTH_WIDE or
-    ICU_NAME_MONTH_NARROW or ICU_NAME_STANDALONE_MONTH_ABBREVIATED or
-    ICU_NAME_STANDALONE_MONTH_WIDE or ICU_NAME_STANDALONE_MONTH_NARROW;
-
-{ The ICU_NAME_* fields an ICU date pattern or skeleton uses. Numeric months
-  (M, MM) need no names, and quoted literal text is skipped. }
-function ICUNameFieldsInPattern(const APattern: string): Cardinal;
-
 implementation
-
-function ICUNameFieldsInPattern(const APattern: string): Cardinal;
-var
-  I, RunLength: Integer;
-  Field: Char;
-  InQuote: Boolean;
-begin
-  Result := 0;
-  InQuote := False;
-  I := 1;
-  while I <= Length(APattern) do
-  begin
-    Field := APattern[I];
-    if Field = '''' then
-    begin
-      InQuote := not InQuote;
-      Inc(I);
-      Continue;
-    end;
-    RunLength := 1;
-    while (I + RunLength <= Length(APattern)) and
-          (APattern[I + RunLength] = Field) do
-      Inc(RunLength);
-    Inc(I, RunLength);
-    if InQuote then
-      Continue;
-    case Field of
-      'G':
-        if RunLength <= 3 then
-          Result := Result or ICU_NAME_ERA_ABBREVIATED
-        else if RunLength = 4 then
-          Result := Result or ICU_NAME_ERA_WIDE
-        else
-          Result := Result or ICU_NAME_ERA_NARROW;
-      'M':
-        case RunLength of
-          3: Result := Result or ICU_NAME_MONTH_ABBREVIATED;
-          4: Result := Result or ICU_NAME_MONTH_WIDE;
-          5: Result := Result or ICU_NAME_MONTH_NARROW;
-        end;
-      'L':
-        case RunLength of
-          3: Result := Result or ICU_NAME_STANDALONE_MONTH_ABBREVIATED;
-          4: Result := Result or ICU_NAME_STANDALONE_MONTH_WIDE;
-          5: Result := Result or ICU_NAME_STANDALONE_MONTH_NARROW;
-        end;
-    end;
-  end;
-end;
 
 function ContainsNulCharacter(const AStr: string): Boolean;
 var

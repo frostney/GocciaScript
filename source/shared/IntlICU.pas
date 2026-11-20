@@ -848,10 +848,10 @@ var
   IntlLoadAttempted: Boolean;
   IntlLoadSucceeded: Boolean;
   IntlInitLock: TGocciaCriticalSection;
-  // The ICU_NAME_* fields the loaded ICU leaves empty for the iso8601
-  // calendar. Decided once, under IntlInitLock; see ICUISO8601MissingNames.
+  // Whether the loaded ICU lacks some of the iso8601 calendar's era or month
+  // names. Decided once, under IntlInitLock; see ICUISO8601NamesMissing.
   IntlISO8601NamesProbed: Boolean;
-  IntlISO8601MissingNames: Cardinal;
+  IntlISO8601NamesMissing: Boolean;
 
 function ICUSucceeded(const AStatus: TICUErrorCode): Boolean;
 begin
@@ -3356,25 +3356,26 @@ begin
 end;
 
 const
-  // Every ICU_NAME_* field, in bit order, separated by quoted '|' literals.
+  // Every era and month name width, as formatted and standalone, separated
+  // by quoted '|' literals.
   ISO8601_NAME_PROBE_PATTERN =
     'G''|''GGGG''|''GGGGG''|''MMM''|''MMMM''|''MMMMM''|''LLL''|''LLLL''|''LLLLL';
   ISO8601_NAME_PROBE_FIELDS = 9;
 
-// Formats January 1970 in the iso8601 calendar with every name field and
-// reports, as ICU_NAME_* bits, the fields that came out empty. False when
-// ICU could not format at all, which says nothing about its iso8601 data.
-function TryProbeISO8601MissingNames(out AMissing: Cardinal): Boolean;
+// Formats January 1970 in the iso8601 calendar with every era and month
+// name width and reports whether any came out empty. False when ICU could
+// not format at all, which says nothing about its iso8601 data.
+function TryProbeISO8601NamesMissing(out AMissing: Boolean): Boolean;
 var
   Status: TICUErrorCode;
   Formatter: Pointer;
   LocaleBytes: TBytes;
-  TzUnicode, PatternUnicode, Formatted, Field: string;
+  TzUnicode, PatternUnicode, Formatted: string;
   Buffer: array[0..255] of WideChar;
   ResultLen, FieldIndex, SeparatorPos: LongInt;
 begin
   Result := False;
-  AMissing := 0;
+  AMissing := False;
   if not Assigned(IntlFunctions.UdatOpen) or
      not Assigned(IntlFunctions.UdatFormat) or
      not Assigned(IntlFunctions.UdatClose) or
@@ -3397,15 +3398,14 @@ begin
        (ResultLen > Length(Buffer)) then
       Exit;
     Formatted := UnicodeToString(Buffer, ResultLen) + '|';
-    for FieldIndex := 0 to ISO8601_NAME_PROBE_FIELDS - 1 do
+    for FieldIndex := 1 to ISO8601_NAME_PROBE_FIELDS do
     begin
       SeparatorPos := Pos('|', Formatted);
       if SeparatorPos = 0 then
         Exit;
-      Field := Copy(Formatted, 1, SeparatorPos - 1);
+      if SeparatorPos = 1 then
+        AMissing := True;
       Delete(Formatted, 1, SeparatorPos);
-      if Field = '' then
-        AMissing := AMissing or (Cardinal(1) shl FieldIndex);
     end;
     Result := Formatted = '';
   finally
@@ -3415,122 +3415,69 @@ end;
 
 // ICU 78 loads no abbreviated or wide month names and no era names for the
 // iso8601 calendar (ICU-23262, fixed in ICU 79): CLDR 48 has no iso8601 era
-// data, and ICU stops loading the calendar's names at the missing eras. Other
-// builds can lack the eras alone. Probe the loaded ICU rather than its
-// version, so an ICU 78 with the fix applied keeps its own iso8601 output. An
-// inconclusive probe is not remembered, and reports nothing missing.
-function ICUISO8601MissingNames: Cardinal;
+// data, and ICU stops loading the calendar's names at the missing eras.
+// Probe the loaded ICU rather than its version, so an ICU 78 with the fix
+// applied keeps its own iso8601 output. An inconclusive probe is not
+// remembered, and reports the names as present.
+function ICUISO8601NamesMissing: Boolean;
 var
-  Missing: Cardinal;
+  Missing: Boolean;
 begin
   CriticalSectionEnter(IntlInitLock);
   try
     if not IntlISO8601NamesProbed and
-       TryProbeISO8601MissingNames(Missing) then
+       TryProbeISO8601NamesMissing(Missing) then
     begin
-      IntlISO8601MissingNames := Missing;
+      IntlISO8601NamesMissing := Missing;
       IntlISO8601NamesProbed := True;
     end;
-    if IntlISO8601NamesProbed then
-      Result := IntlISO8601MissingNames
-    else
-      Result := 0;
+    Result := IntlISO8601NamesProbed and IntlISO8601NamesMissing;
   finally
     CriticalSectionLeave(IntlInitLock);
   end;
 end;
 
-// Whether ICU puts AStartMillis and AEndMillis in different eras. An interval
-// between them shows era names whether or not the options ask for one.
-function ICUDatesSpanEras(const ATimeZone: string;
-  AStartMillis, AEndMillis: Double): Boolean;
-var
-  Status: TICUErrorCode;
-  Formatter: Pointer;
-  LocaleBytes: TBytes;
-  TzUnicode, PatternUnicode: string;
-  TzPtr: PUChar;
-  TzLen: LongInt;
-  StartBuffer, EndBuffer: array[0..63] of WideChar;
-  StartLen, EndLen: LongInt;
+// Whether formatting needs the iso8601 check below: the calendar is iso8601
+// and the loaded ICU lacks some of its names.
+function NeedsISO8601NameCheck(
+  const AOptions: TIntlDateTimeFormatOptions): Boolean;
 begin
-  Result := False;
-  if not TryEncodeASCIIBytes('en-u-ca-gregory', LocaleBytes) then
-    Exit;
-  if ATimeZone <> '' then
-  begin
-    TzUnicode := string(ATimeZone);
-    TzPtr := PWideChar(TzUnicode);
-    TzLen := Length(TzUnicode);
-  end
-  else
-  begin
-    TzPtr := nil;
-    TzLen := -1;
-  end;
-  PatternUnicode := 'G';
-  Status := ICU_SUCCESS;
-  Formatter := IntlFunctions.UdatOpen(UDAT_PATTERN, UDAT_PATTERN,
-    BytePointer(LocaleBytes), TzPtr, TzLen, PWideChar(PatternUnicode),
-    Length(PatternUnicode), Status);
-  if not ICUSucceeded(Status) or not Assigned(Formatter) then
-    Exit;
-  try
-    Status := ICU_SUCCESS;
-    StartLen := IntlFunctions.UdatFormat(Formatter, AStartMillis,
-      @StartBuffer[0], Length(StartBuffer), nil, Status);
-    if not ICUSucceeded(Status) then
-      Exit;
-    EndLen := IntlFunctions.UdatFormat(Formatter, AEndMillis,
-      @EndBuffer[0], Length(EndBuffer), nil, Status);
-    if not ICUSucceeded(Status) or (StartLen > Length(StartBuffer)) or
-       (EndLen > Length(EndBuffer)) then
-      Exit;
-    Result := UnicodeToString(StartBuffer, StartLen) <>
-      UnicodeToString(EndBuffer, EndLen);
-  finally
-    IntlFunctions.UdatClose(Formatter);
-  end;
+  Result := (AOptions.Calendar = 'iso8601') and ICUISO8601NamesMissing;
 end;
 
-// The calendar ICU formats with. Where a format shows a month name or an
-// era and the loaded ICU lacks any width of it in iso8601, use the
-// Gregorian data, which is what ICU formatted iso8601 with before CLDR 48.
-// ICU's iso8601 calendar is its Gregorian calendar with ISO week rules, so
-// both give the same years, months and days, and Intl formats no week
-// fields. Every width counts because the pattern ICU selects can use another
-// width than the options ask for: a Chinese range with narrow months uses
-// abbreviated ones. Formats that show no names, such as a numeric date,
-// keep the iso8601 patterns. The fields are the options' skeleton and
-// AExtraNameFields, which a range adds for the eras ICU shows when it
-// spans them. An era the options ask for is shown, as ICU 74 shows it in
-// iso8601, even where ICU 78's iso8601 range pattern would have left it
-// out.
-function ICUFormattingCalendar(const AOptions: TIntlDateTimeFormatOptions;
-  const AExtraNameFields: Cardinal): string;
+function PartsHaveType(const AParts: TIntlFormatPartArray;
+  const APartType: string): Boolean;
 var
-  Fields: Cardinal;
+  I: Integer;
 begin
-  Result := AOptions.Calendar;
-  if Result <> 'iso8601' then
-    Exit;
-  Fields := ICUNameFieldsInPattern(BuildDateTimeSkeleton(AOptions)) or
-    AExtraNameFields;
-  if (Fields and ICU_NAME_ERAS) <> 0 then
-    Fields := Fields or ICU_NAME_ERAS;
-  if (Fields and ICU_NAME_MONTHS) <> 0 then
-    Fields := Fields or ICU_NAME_MONTHS;
-  if (Fields and ICUISO8601MissingNames) <> 0 then
-    Result := 'gregory';
+  for I := 0 to High(AParts) do
+    if AParts[I].PartType = APartType then
+      Exit(True);
+  Result := False;
+end;
+
+// Whether ISO8601Parts lost an era or month name that GregorianParts, the
+// same date or range formatted with ICU's Gregorian data, shows. ICU leaves
+// out a field whose name is empty, so a field ICU's iso8601 pattern never
+// had and one it could not name both leave no part; comparing with the
+// Gregorian output, which has every name, tells them apart. A numeric month
+// is a month part in both, and a range that shows no era shows none in
+// either.
+function ISO8601PartsLostNames(const AISO8601Parts,
+  AGregorianParts: TIntlFormatPartArray): Boolean;
+begin
+  Result :=
+    (PartsHaveType(AGregorianParts, 'era') and
+     not PartsHaveType(AISO8601Parts, 'era')) or
+    (PartsHaveType(AGregorianParts, 'month') and
+     not PartsHaveType(AISO8601Parts, 'month'));
 end;
 
 function ApplyDateTimeLocaleOptions(const ALocale: string;
-  const AOptions: TIntlDateTimeFormatOptions;
-  const AExtraNameFields: Cardinal = 0): string;
+  const AOptions: TIntlDateTimeFormatOptions; const ACalendar: string): string;
 begin
   Result := ALocale;
-  Result := ApplyUnicodeLocaleKeyword(Result, 'ca',
-    ICUFormattingCalendar(AOptions, AExtraNameFields));
+  Result := ApplyUnicodeLocaleKeyword(Result, 'ca', ACalendar);
   Result := ApplyUnicodeLocaleKeyword(Result, 'nu', AOptions.NumberingSystem);
   Result := ApplyUnicodeLocaleKeyword(Result, 'hc', AOptions.HourCycle);
 end;
@@ -3578,7 +3525,8 @@ begin
 end;
 
 function OpenDateFormatter(const ALocale: string;
-  const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
+  const AOptions: TIntlDateTimeFormatOptions; const ACalendar: string;
+  out AFormatter: Pointer): Boolean;
 var
   Status: TICUErrorCode;
   EffectiveLocale: string;
@@ -3592,7 +3540,7 @@ begin
   Result := False;
   AFormatter := nil;
 
-  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
+  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions, ACalendar);
   if not TryEncodeASCIIBytes(EffectiveLocale, LocaleBytes) then
     Exit;
 
@@ -3641,11 +3589,32 @@ end;
 function TryICUOpenDateTimeFormatter(const ALocale: string;
   const AOptions: TIntlDateTimeFormatOptions;
   out AFormatter: TIntlDateTimeFormatter): Boolean;
+var
+  Gregorian: TIntlDateTimeFormatter;
+  ISO8601Parts, GregorianParts: TIntlFormatPartArray;
 begin
   AFormatter := nil;
   if not EnsureLoaded then
     Exit(False);
-  Result := OpenDateFormatter(ALocale, AOptions, AFormatter);
+  Result := OpenDateFormatter(ALocale, AOptions, AOptions.Calendar,
+    AFormatter);
+  if not Result or not NeedsISO8601NameCheck(AOptions) or
+     not OpenDateFormatter(ALocale, AOptions, 'gregory', Gregorian) then
+    Exit;
+  // Which fields a pattern shows does not depend on the date, so one date
+  // tells whether this one loses names (ISO8601PartsLostNames). A pattern
+  // of names alone, such as `month: "long"`, formats to nothing at all.
+  if TryICUFormatDateTimeToPartsWithFormatter(Gregorian, 0, AOptions,
+       GregorianParts) and
+     (not TryICUFormatDateTimeToPartsWithFormatter(AFormatter, 0, AOptions,
+        ISO8601Parts) or
+      ISO8601PartsLostNames(ISO8601Parts, GregorianParts)) then
+  begin
+    ICUCloseDateTimeFormatter(AFormatter);
+    AFormatter := Gregorian;
+  end
+  else
+    ICUCloseDateTimeFormatter(Gregorian);
 end;
 
 procedure ICUCloseDateTimeFormatter(var AFormatter: TIntlDateTimeFormatter);
@@ -3767,12 +3736,11 @@ begin
 end;
 
 function OpenDateIntervalFormatter(const ALocale: string;
-  const AOptions: TIntlDateTimeFormatOptions;
-  AStartMillis, AEndMillis: Double; out AFormatter: Pointer): Boolean;
+  const AOptions: TIntlDateTimeFormatOptions; const ACalendar: string;
+  out AFormatter: Pointer): Boolean;
 var
   Status: TICUErrorCode;
   EffectiveLocale: string;
-  ExtraNameFields: Cardinal;
   LocaleBytes: TBytes;
   SkeletonUnicode, TzUnicode: string;
   TzPtr: PUChar;
@@ -3797,13 +3765,7 @@ begin
     TzLen := -1;
   end;
 
-  ExtraNameFields := 0;
-  if (AOptions.Calendar = 'iso8601') and
-     ((ICUISO8601MissingNames and ICU_NAME_ERAS) <> 0) and
-     ICUDatesSpanEras(AOptions.TimeZone, AStartMillis, AEndMillis) then
-    ExtraNameFields := ICU_NAME_ERA_ABBREVIATED;
-  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions,
-    ExtraNameFields);
+  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions, ACalendar);
   if not TryEncodeASCIIBytes(EffectiveLocale, LocaleBytes) then
     Exit;
   SkeletonUnicode := string(BuildDateTimeSkeleton(AOptions));
@@ -3813,57 +3775,26 @@ begin
   Result := ICUSucceeded(Status) and Assigned(AFormatter);
 end;
 
-function TryICUFormatDateTimeRange(const ALocale: string; AStartMillis, AEndMillis: Double;
-  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
-var
-  Status: TICUErrorCode;
-  Formatter: Pointer;
-  Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
-  ResultLen: LongInt;
-begin
-  Result := False;
-  AFormatted := '';
-
-  if not EnsureLoaded or not Assigned(IntlFunctions.UdtitvfmtFormat) then
-    Exit;
-
-  if not OpenDateIntervalFormatter(ALocale, AOptions, AStartMillis,
-    AEndMillis, Formatter) then
-    Exit;
-  try
-    FillChar(Buffer, SizeOf(Buffer), 0);
-    Status := ICU_SUCCESS;
-    ResultLen := IntlFunctions.UdtitvfmtFormat(Formatter, AStartMillis,
-      AEndMillis, @Buffer[0], FORMAT_BUFFER_CAPACITY, nil, Status);
-    if not ICUSucceeded(Status) or (ResultLen <= 0) then
-      Exit;
-
-    AFormatted := UnicodeToString(Buffer, ResultLen);
-    Result := True;
-  finally
-    IntlFunctions.UdtitvfmtClose(Formatter);
-  end;
-end;
-
-function TryICUFormatDateTimeRangeToParts(const ALocale: string; AStartMillis, AEndMillis: Double;
-  const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+function FormatDateIntervalParts(const ALocale: string;
+  AStartMillis, AEndMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; const ACalendar: string;
+  out AFormatted: string; out AParts: TIntlFormatPartArray): Boolean;
 var
   Status: TICUErrorCode;
   Formatter, RangeResult, FormattedValue: Pointer;
-  Formatted: string;
 begin
   Result := False;
+  AFormatted := '';
   SetLength(AParts, 0);
 
-  if not EnsureLoaded or
-     not Assigned(IntlFunctions.UdtitvfmtOpenResult) or
+  if not Assigned(IntlFunctions.UdtitvfmtOpenResult) or
      not Assigned(IntlFunctions.UdtitvfmtFormatToResult) or
      not Assigned(IntlFunctions.UdtitvfmtResultAsValue) or
      not Assigned(IntlFunctions.UdtitvfmtCloseResult) then
     Exit;
 
-  if not OpenDateIntervalFormatter(ALocale, AOptions, AStartMillis,
-    AEndMillis, Formatter) then
+  if not OpenDateIntervalFormatter(ALocale, AOptions, ACalendar,
+    Formatter) then
     Exit;
   try
     Status := ICU_SUCCESS;
@@ -3884,13 +3815,88 @@ begin
 
       Result := FormattedValueToParts(FormattedValue, UFIELD_CATEGORY_DATE,
         UFIELD_CATEGORY_DATE_INTERVAL_SPAN, DateFieldToPartType,
-        Formatted, AParts);
+        AFormatted, AParts);
     finally
       IntlFunctions.UdtitvfmtCloseResult(RangeResult);
     end;
   finally
     IntlFunctions.UdtitvfmtClose(Formatter);
   end;
+end;
+
+// A range in the options' calendar, or with ICU's Gregorian data where an
+// iso8601 range loses an era or month name (ISO8601PartsLostNames). Unlike
+// a single date's, the fields a range shows depend on its dates: ICU names
+// the eras of a range that crosses them.
+function TryFormatDateTimeRangeParts(const ALocale: string;
+  AStartMillis, AEndMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string;
+  out AParts: TIntlFormatPartArray): Boolean;
+var
+  GregorianFormatted: string;
+  GregorianParts: TIntlFormatPartArray;
+begin
+  Result := FormatDateIntervalParts(ALocale, AStartMillis, AEndMillis,
+    AOptions, AOptions.Calendar, AFormatted, AParts);
+  // A range of names alone can format to nothing at all.
+  if NeedsISO8601NameCheck(AOptions) and
+     FormatDateIntervalParts(ALocale, AStartMillis, AEndMillis, AOptions,
+       'gregory', GregorianFormatted, GregorianParts) and
+     (not Result or ISO8601PartsLostNames(AParts, GregorianParts)) then
+  begin
+    AFormatted := GregorianFormatted;
+    AParts := GregorianParts;
+    Result := True;
+  end;
+end;
+
+function TryICUFormatDateTimeRange(const ALocale: string; AStartMillis, AEndMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatted: string): Boolean;
+var
+  Status: TICUErrorCode;
+  Formatter: Pointer;
+  Parts: TIntlFormatPartArray;
+  Buffer: array[0..FORMAT_BUFFER_CAPACITY - 1] of WideChar;
+  ResultLen: LongInt;
+begin
+  Result := False;
+  AFormatted := '';
+
+  if not EnsureLoaded or not Assigned(IntlFunctions.UdtitvfmtFormat) then
+    Exit;
+
+  if NeedsISO8601NameCheck(AOptions) then
+    Exit(TryFormatDateTimeRangeParts(ALocale, AStartMillis, AEndMillis,
+      AOptions, AFormatted, Parts));
+
+  if not OpenDateIntervalFormatter(ALocale, AOptions, AOptions.Calendar,
+    Formatter) then
+    Exit;
+  try
+    FillChar(Buffer, SizeOf(Buffer), 0);
+    Status := ICU_SUCCESS;
+    ResultLen := IntlFunctions.UdtitvfmtFormat(Formatter, AStartMillis,
+      AEndMillis, @Buffer[0], FORMAT_BUFFER_CAPACITY, nil, Status);
+    if not ICUSucceeded(Status) or (ResultLen <= 0) then
+      Exit;
+
+    AFormatted := UnicodeToString(Buffer, ResultLen);
+    Result := True;
+  finally
+    IntlFunctions.UdtitvfmtClose(Formatter);
+  end;
+end;
+
+function TryICUFormatDateTimeRangeToParts(const ALocale: string; AStartMillis, AEndMillis: Double;
+  const AOptions: TIntlDateTimeFormatOptions; out AParts: TIntlFormatPartArray): Boolean;
+var
+  Formatted: string;
+begin
+  SetLength(AParts, 0);
+  if not EnsureLoaded then
+    Exit(False);
+  Result := TryFormatDateTimeRangeParts(ALocale, AStartMillis, AEndMillis,
+    AOptions, Formatted, AParts);
 end;
 
 function TryICUSelectPlural(const ALocale: string; AValue: Double;

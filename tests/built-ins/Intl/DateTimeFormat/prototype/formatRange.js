@@ -95,6 +95,19 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRange", () => {
     expect(result).toContain("1月");
     expect(result).toContain("2月");
   });
+
+  test("adds no era to an iso8601 range across eras whose fields show none", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      month: "numeric",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const result = dtf.formatRange(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    expect(result).not.toContain("BC");
+    expect(result).not.toContain("AD");
+  });
 });
 
 describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRange Temporal inputs", () => {

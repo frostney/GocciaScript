@@ -85,4 +85,16 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.format", () => {
     const dtf = new Intl.DateTimeFormat("en-US");
     expect(() => dtf.format(NaN)).toThrow(RangeError);
   });
+
+  test("format names an iso8601 month on its own", () => {
+    const dtf = new Intl.DateTimeFormat("en", { calendar: "iso8601", month: "long", timeZone: "UTC" });
+    const result = dtf.format(Date.UTC(2020, 0, 1));
+
+    if (!hasFullICU) {
+      expect(typeof result).toBe("string");
+      return;
+    }
+
+    expect(result).toBe("January");
+  });
 });

@@ -99,6 +99,18 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRangeToParts", () =>
     expect(month("startRange").value).toContain("1");
     expect(month("endRange").value).toContain("2");
   });
+
+  test("emits no era parts for an iso8601 range across eras whose fields show none", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      month: "numeric",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const parts = dtf.formatRangeToParts(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    expect(parts.some((part) => part.type === "era")).toBe(false);
+  });
 });
 
 describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRangeToParts Temporal inputs", () => {
