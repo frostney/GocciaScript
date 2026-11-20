@@ -112,4 +112,23 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatToParts", () => {
     expect(nextMonthDate.monthCode).toBe("M07");
     expect(monthPart(nextMonthDate).value).toBe("7");
   });
+
+  test("keeps the month and the era of the iso8601 calendar", () => {
+    const formatter = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      timeZone: "UTC",
+      era: "short",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const parts = formatter.formatToParts(Date.UTC(2020, 0, 1));
+    const value = (type) => parts.find((part) => part.type === type)?.value;
+
+    expect(formatter.resolvedOptions().calendar).toBe("iso8601");
+    expect(value("era")).toBeTruthy();
+    expect(value("month")).toBeTruthy();
+    expect(value("year")).toBe("2020");
+    expect(value("day")).toBe("1");
+  });
 });

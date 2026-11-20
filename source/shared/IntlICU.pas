@@ -3351,22 +3351,17 @@ begin
     Result := Result + '-u-' + AKey + '-' + AValue;
 end;
 
-function ApplyDateTimeLocaleOptions(const ALocale: string;
+function ApplyDateTimeLocaleKeywords(const ALocale: string;
   const AOptions: TIntlDateTimeFormatOptions): string;
 begin
   Result := ALocale;
   Result := ApplyUnicodeLocaleKeyword(Result, 'ca', AOptions.Calendar);
   Result := ApplyUnicodeLocaleKeyword(Result, 'nu', AOptions.NumberingSystem);
   Result := ApplyUnicodeLocaleKeyword(Result, 'hc', AOptions.HourCycle);
-  // ICU's own iso8601 calendar is its Gregorian calendar under another name
-  // for these fields, yet ICU 78 formats it without the month or the era
-  // (`" 2020  1"` for era, year, month and day). Ask for the Gregorian
-  // calendar by its own name: the result is the one ICU 74 and 79 give for
-  // iso8601, on every ICU version. The option's value (`resolvedOptions`)
-  // stays iso8601; only the locale handed to ICU changes.
-  Result := StringReplace(Result, '-ca-iso8601', '-ca-gregory',
-    [rfReplaceAll, rfIgnoreCase]);
 end;
+
+function ApplyDateTimeLocaleOptions(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions): string; forward;
 
 function TryICUGetBestDateTimePattern(const ALocale, ASkeleton: string;
   out APattern: string): Boolean;
@@ -3410,7 +3405,9 @@ begin
   end;
 end;
 
-function OpenDateFormatter(const ALocale: string;
+{ Opens a date-time formatter for a locale that already carries the keywords
+  of the options. }
+function OpenDateFormatterForLocale(const AEffectiveLocale: string;
   const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
 var
   Status: TICUErrorCode;
@@ -3425,7 +3422,7 @@ begin
   Result := False;
   AFormatter := nil;
 
-  EffectiveLocale := ApplyDateTimeLocaleOptions(ALocale, AOptions);
+  EffectiveLocale := AEffectiveLocale;
   if not TryEncodeASCIIBytes(EffectiveLocale, LocaleBytes) then
     Exit;
 
@@ -3469,6 +3466,13 @@ begin
     BytePointer(LocaleBytes), TzPtr, TzLen, PWideChar(Pattern),
     Length(Pattern), Status);
   Result := ICUSucceeded(Status) and Assigned(AFormatter);
+end;
+
+function OpenDateFormatter(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions; out AFormatter: Pointer): Boolean;
+begin
+  Result := OpenDateFormatterForLocale(
+    ApplyDateTimeLocaleOptions(ALocale, AOptions), AOptions, AFormatter);
 end;
 
 function TryICUOpenDateTimeFormatter(const ALocale: string;
@@ -3561,6 +3565,94 @@ begin
   finally
     IntlFunctions.UfieldpositerClose(Iterator);
   end;
+end;
+
+{ The date fields a skeleton asks for, as the part types that must then appear
+  with a value. }
+function SkeletonRequiredParts(const ASkeleton: string): TStringArray;
+  procedure Need(const ALetters, APartType: string);
+  var
+    J: Integer;
+  begin
+    for J := 1 to Length(ALetters) do
+      if Pos(ALetters[J], ASkeleton) > 0 then
+      begin
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := APartType;
+        Exit;
+      end;
+  end;
+begin
+  SetLength(Result, 0);
+  Need('G', 'era');
+  Need('yYuUr', 'year');
+  Need('ML', 'month');
+  Need('Ec', 'weekday');
+  Need('d', 'day');
+end;
+
+{ Whether a formatter for the locale writes a value for each date field the
+  options ask for, checked on a fixed date. }
+function LocaleFormatsRequestedFields(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions): Boolean;
+const
+  PROBE_MILLIS = 1577836800000.0;
+var
+  Formatter: Pointer;
+  Parts: TIntlFormatPartArray;
+  Required: TStringArray;
+  I, J: Integer;
+  Found: Boolean;
+begin
+  Result := True;
+  Required := SkeletonRequiredParts(BuildDateTimeSkeleton(AOptions));
+  if Length(Required) = 0 then
+    Exit;
+  if not OpenDateFormatterForLocale(ALocale, AOptions, Formatter) then
+    Exit;
+  try
+    if not TryICUFormatDateTimeToPartsWithFormatter(Formatter, PROBE_MILLIS,
+         AOptions, Parts) then
+      Exit;
+  finally
+    ICUCloseDateTimeFormatter(Formatter);
+  end;
+  for I := 0 to High(Required) do
+  begin
+    Found := False;
+    for J := 0 to High(Parts) do
+      if (Parts[J].PartType = Required[I]) and (Parts[J].Value <> '') then
+      begin
+        Found := True;
+        Break;
+      end;
+    if not Found then
+      Exit(False);
+  end;
+end;
+
+{ The locale handed to ICU for a date-time formatter. ICU 78 formats its
+  iso8601 calendar without the month or the era (`era: "short", year, month:
+  "long", day` gives `" 2020  1"`), where ICU 74 and 79 format both. When the
+  iso8601 formatter leaves a requested field out of a fixed probe date, the
+  locale names the gregory calendar instead, which formats the same fields
+  correctly. A version whose iso8601 calendar is complete keeps it, with its
+  localized patterns. `resolvedOptions` keeps reporting iso8601: only this
+  locale changes. }
+function ApplyDateTimeLocaleOptions(const ALocale: string;
+  const AOptions: TIntlDateTimeFormatOptions): string;
+var
+  Fallback: string;
+begin
+  Result := ApplyDateTimeLocaleKeywords(ALocale, AOptions);
+  if Pos('-ca-iso8601', LowerCase(Result)) = 0 then
+    Exit;
+  if LocaleFormatsRequestedFields(Result, AOptions) then
+    Exit;
+  Fallback := StringReplace(Result, '-ca-iso8601', '-ca-gregory',
+    [rfReplaceAll, rfIgnoreCase]);
+  if LocaleFormatsRequestedFields(Fallback, AOptions) then
+    Result := Fallback;
 end;
 
 function TryICUFormatDateTime(const ALocale: string; AMillis: Double;
