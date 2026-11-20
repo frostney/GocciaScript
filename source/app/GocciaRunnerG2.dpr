@@ -678,6 +678,15 @@ begin
   Name := UTF8Encode(AResult.ErrorName);
   if Name = '' then
     Name := 'Error';
+  { a static import that did not load, located at its declaration (FormatHostErrorDiagnostic: no code frame) }
+  if AResult.ErrorResolvedPath <> '' then
+  begin
+    Write(FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText), UTF8Encode(AResult.ErrorFile),
+      AResult.ErrorLine, AResult.ErrorColumn, nil, IsColorTerminal, ''));
+    WriteLn('  Resolved to: ', UTF8Encode(AResult.ErrorResolvedPath));
+    WriteLn;
+    Exit;
+  end;
   if AResult.ErrorLine > 0 then
     WriteLn(FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText),
       UTF8Encode(AResult.ErrorFile), AResult.ErrorLine, AResult.ErrorColumn,
