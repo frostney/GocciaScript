@@ -341,9 +341,9 @@ var
   Part: UnicodeString;
   I: Integer;
 begin
-  // Above the last table growth's 8,192 + 16,384 bytes, below the result's
-  // 17,778 beside the 16,384-byte table.
-  GateRefusesAbove := 30000;
+  // Above the last table growth's ask, the old table and the new, below the
+  // result's 17,778 bytes beside the new table, whatever a pointer's size.
+  GateRefusesAbove := 3 * 1024 * SizeOf(Pointer) + 1;
   Joined.Init(',', nil, RecordGate);
   for I := 0 to 1999 do
     Joined.Add(UnicodeString(IntToStr(I)));

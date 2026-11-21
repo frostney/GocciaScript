@@ -1992,9 +1992,11 @@ end;
 // String() of one, take quadratic time. Its final copy polls the deadline and
 // a host's abort, as AView.Get does here, and a result past the memory budget
 // is refused before it is allocated, with the RangeError its charge would
-// raise. ASeparator outlives the buffer, which does not hold it. A converted
-// string that is not the element itself may be collected, and its bytes
-// uncounted, while the buffer still holds it, so the buffer counts it.
+// raise. ASeparator outlives the buffer, which does not hold it. A string
+// whose value the array does not hold itself (converted from another value,
+// or read through a getter or a proxy) may be collected, and its bytes
+// uncounted, while the buffer still holds the string, so the buffer counts
+// it. A string the array's own storage holds stays counted by its value.
 function JoinManyElements(var AView: TArrayLikeView;
   const ASeparator: string): string;
 var
@@ -2015,7 +2017,9 @@ begin
       else
       begin
         Converted := Element.ToStringLiteral;
-        Joined.Add(Converted.Value, Converted <> Element);
+        Joined.Add(Converted.Value, (Converted <> Element) or
+          not Assigned(AView.Arr) or (I >= AView.Arr.Elements.Count) or
+          (AView.Arr.Elements[I] <> Element));
       end;
     end;
     Result := Joined.Join;
