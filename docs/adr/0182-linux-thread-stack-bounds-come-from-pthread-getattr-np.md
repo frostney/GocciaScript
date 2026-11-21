@@ -37,7 +37,8 @@ glibc 2.34 and later the symbols resolve in libc.
 
 The main thread keeps the `/proc/self/maps` and `RLIMIT_STACK` path, which
 glibc's own `pthread_getattr_np` uses for it too, and so does a thread whose
-bounds the thread library cannot give. Darwin and Windows are unchanged.
+bounds the thread library cannot give, or gives without its running frame in
+them, as for code running on a stack of the host's own such as a fiber. Darwin and Windows are unchanged.
 
 ## Consequences
 

@@ -323,8 +323,8 @@ end;
 // Linux program that uses this unit links it.
 //
 // The main thread's bounds, and another thread's where the thread library
-// cannot give them, are read from the mapping that holds the running frame
-// in /proc/self/maps. The main thread's stack grows down to RLIMIT_STACK
+// cannot give them or gives bounds that do not hold the running frame, are
+// read from the mapping that holds the running frame in /proc/self/maps. The main thread's stack grows down to RLIMIT_STACK
 // below its top, but not into the guard gap above the mapping beneath it.
 // The kernel marks it [stack]; Valgrind gives its program a main stack of its
 // own, which is not marked and starts a few pages long.
@@ -335,12 +335,15 @@ var
   Position, MapStart, MapEnd, PreviousEnd, Size: NativeUInt;
   Limits: TRLimit;
 begin
-  if not IsMainThread and TryGetThreadLibraryStackBounds(ALow, ASize) then
+  Position := NativeStackPosition;
+  // A thread that runs on a stack of the host's own, such as a fiber, is
+  // given bounds that do not hold its frame, and reads the mapping instead.
+  if not IsMainThread and TryGetThreadLibraryStackBounds(ALow, ASize) and
+     (Position > ALow) and (Position - ALow < ASize) then
     Exit(True);
   ALow := 0;
   ASize := 0;
   Result := False;
-  Position := NativeStackPosition;
   AssignFile(Maps, '/proc/self/maps');
   {$I-}
   Reset(Maps);

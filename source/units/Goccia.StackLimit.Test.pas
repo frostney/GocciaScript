@@ -4,7 +4,7 @@ program Goccia.StackLimit.Test;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  {$IFDEF LINUX}BaseUnix,{$ENDIF}
+  {$IFDEF LINUX}BaseUnix, UnixType,{$ENDIF}
   Classes,
   SyncObjs,
   SysUtils,
@@ -31,6 +31,9 @@ type
     procedure TestEachThreadHasItsOwnLimit;
     procedure TestSmallStackKeepsAQuarterFree;
     procedure TestSmallStackBetweenOtherStacksKeepsAQuarterFree;
+    {$IFDEF LINUX}
+    procedure TestStackInsideALargerMappingKeepsAQuarterFree;
+    {$ENDIF}
     procedure TestShallowEntriesAreNotChecked;
     procedure TestRecursionStopsBeforeTheStackEnds;
     procedure Check(const ACondition: Boolean; const AWhat: string;
@@ -86,6 +89,35 @@ function Pthread_get_stackaddr_np(AThread: Pointer): Pointer; cdecl;
   external 'c' name 'pthread_get_stackaddr_np';
 function Pthread_get_stacksize_np(AThread: Pointer): NativeUInt; cdecl;
   external 'c' name 'pthread_get_stacksize_np';
+{$ENDIF}
+
+{$IFDEF LINUX}
+type
+  // What a thread started on a stack of the test's own records.
+  TOwnStackProbe = record
+    Limit: NativeUInt;
+    Position: NativeUInt;
+  end;
+  POwnStackProbe = ^TOwnStackProbe;
+
+function Pthread_attr_init(AAttr: Pointer): cint; cdecl;
+  external 'pthread' name 'pthread_attr_init';
+function Pthread_attr_setstack(AAttr: Pointer; AStackAddr: Pointer;
+  AStackSize: size_t): cint; cdecl;
+  external 'pthread' name 'pthread_attr_setstack';
+function Pthread_attr_destroy(AAttr: Pointer): cint; cdecl;
+  external 'pthread' name 'pthread_attr_destroy';
+function pthread_create(AThread: Pointer; AAttr: Pointer; AStart: Pointer;
+  AArg: Pointer): cint; cdecl; external 'pthread' name 'pthread_create';
+function Pthread_join(AThread: pthread_t; AResult: PPointer): cint; cdecl;
+  external 'pthread' name 'pthread_join';
+
+function ProbeOwnStack(AArg: Pointer): Pointer; cdecl;
+begin
+  POwnStackProbe(AArg)^.Limit := NativeStackLimit;
+  POwnStackProbe(AArg)^.Position := NativeStackPosition;
+  Result := nil;
+end;
 {$ENDIF}
 
 constructor TProbeThread.Create(const AStackSize: SizeUInt;
@@ -184,6 +216,10 @@ begin
     TestSmallStackKeepsAQuarterFree);
   Test('A small stack between two other threads'' stacks keeps a quarter ' +
     'of it free', TestSmallStackBetweenOtherStacksKeepsAQuarterFree);
+  {$IFDEF LINUX}
+  Test('A stack inside a larger mapping keeps a quarter of it free',
+    TestStackInsideALargerMappingKeepsAQuarterFree);
+  {$ENDIF}
   Test('Native re-entries nested no deeper than the unchecked depth pass',
     TestShallowEntriesAreNotChecked);
   Test('Recursion is stopped before it reaches the end of the stack',
@@ -333,6 +369,68 @@ begin
     {$ENDIF}
   end;
 end;
+
+{$IFDEF LINUX}
+// A thread whose stack is part of a larger mapping, as a thread stack is once
+// the kernel merges it with its neighbours: here the middle third of one
+// mapping the test owns, so /proc/self/maps shows three times the stack
+// wherever the test runs.
+procedure TStackLimitTests.TestStackInsideALargerMappingKeepsAQuarterFree;
+const
+  STACK_BYTES = 640 * 1024;
+var
+  Mapping: Pointer;
+  Attr: pthread_attr_t;
+  Thread: pthread_t;
+  Probe: TOwnStackProbe;
+  Starter: TProbeThread;
+  Created: Boolean;
+  Room: NativeUInt;
+  Describe: string;
+begin
+  // The RTL gives each thread its own threadvars once a thread of its own
+  // has started; a thread it did not start then gets them on first use.
+  if not IsMultiThread then
+  begin
+    Starter := TProbeThread.Create(STACK_BYTES, False);
+    Starter.Start;
+    Starter.WaitFor;
+    Starter.Free;
+  end;
+  Mapping := Fpmmap(nil, 3 * STACK_BYTES, PROT_READ or PROT_WRITE,
+    MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
+  Expect<Boolean>(Mapping <> MAP_FAILED).ToBe(True);
+  if Mapping = MAP_FAILED then
+    Exit;
+  try
+    FillChar(Probe, SizeOf(Probe), 0);
+    Expect<Integer>(Pthread_attr_init(@Attr)).ToBe(0);
+    try
+      Expect<Integer>(Pthread_attr_setstack(@Attr,
+        PByte(Mapping) + STACK_BYTES, STACK_BYTES)).ToBe(0);
+      Created := pthread_create(@Thread, @Attr, @ProbeOwnStack, @Probe) = 0;
+    finally
+      Pthread_attr_destroy(@Attr);
+    end;
+    Expect<Boolean>(Created).ToBe(True);
+    if not Created then
+      Exit;
+    Pthread_join(Thread, nil);
+    Room := Probe.Position - Probe.Limit;
+    Describe := Format('stack $%x, limit $%x, position $%x, room %d',
+      [NativeUInt(Mapping) + STACK_BYTES, Probe.Limit, Probe.Position,
+       Int64(Probe.Position) - Int64(Probe.Limit)]);
+    if (Probe.Limit = 0) or (Room <= STACK_BYTES - NATIVE_STACK_RESERVE) or
+       (Room > STACK_BYTES div 4 * 3) then
+      Fail('room of a quarter of a 640 KiB stack (' + Describe + ')');
+    // The limit is in the thread's own stack, a quarter above its bottom.
+    Expect<Boolean>(Probe.Limit = NativeUInt(Mapping) + STACK_BYTES +
+      STACK_BYTES div 4).ToBe(True);
+  finally
+    Fpmunmap(Mapping, 3 * STACK_BYTES);
+  end;
+end;
+{$ENDIF}
 
 procedure TStackLimitTests.TestShallowEntriesAreNotChecked;
 var
