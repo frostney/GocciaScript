@@ -6232,6 +6232,8 @@ begin
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
+  ChildTemplate.ParametersMayBeDropped :=
+    not ParametersSurviveBody(AMethod.Parameters, AMethod.Body);
 
   FormalCount := -1;
   for I := 0 to High(AMethod.Parameters) do
@@ -6714,6 +6716,8 @@ begin
 
   ChildScope.DeclareLocal(KEYWORD_THIS, False);
   ChildTemplate.ParameterCount := Length(AMethod.Parameters);
+  ChildTemplate.ParametersMayBeDropped :=
+    not ParametersSurviveBody(AMethod.Parameters, AMethod.Body);
 
   FormalCount := -1;
   for I := 0 to High(AMethod.Parameters) do

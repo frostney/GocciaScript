@@ -214,6 +214,7 @@ type
     procedure TestForAwaitCloseAwaitsReturnResult;
     procedure TestTailAwaitBranchClearsInsideBranch;
     procedure TestNestedYieldsClearLinearly;
+    procedure TestDeepBodyParametersMayBeDropped;
     procedure TestYieldInitializerClearsItsTemporary;
     procedure TestAwaitUsingAwaitsDisposeResultOnce;
     procedure TestUsingDisposalDistinguishesReturnFromThrow;
@@ -493,6 +494,8 @@ begin
     TestTailAwaitBranchClearsInsideBranch);
   Test('nested yields clear each scratch register once',
     TestNestedYieldsClearLinearly);
+  Test('a body nested past the parameter scan bound may drop its parameter',
+    TestDeepBodyParametersMayBeDropped);
   Test('a yield initializer leaves no copy in its temporary',
     TestYieldInitializerClearsItsTemporary);
   Test('await using awaits a dispose result once',
@@ -1010,6 +1013,34 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+// ParametersSurviveBody walks a function body recursively and gives up past a
+// nesting bound, so a body the parser accepts cannot exhaust a small native
+// stack there; giving up means the callee may drop its parameter, which only
+// costs the caller's copies their release.
+procedure TTestCompiler.TestDeepBodyParametersMayBeDropped;
+
+  function FlagFor(const ADepth: Integer): Boolean;
+  var
+    Module: TGocciaBytecodeModule;
+    Body: string;
+    I: Integer;
+  begin
+    Body := 'a';
+    for I := 1 to ADepth do
+      Body := '[' + Body + ']';
+    Module := CompileSource('const f = (a) => ' + Body + ';');
+    try
+      Result := Module.TopLevel.GetFunction(0).ParametersMayBeDropped;
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Boolean>(FlagFor(10)).ToBe(False);
+  Expect<Boolean>(FlagFor(400)).ToBe(True);
 end;
 
 // ES2026 §14.10.1 step 3: the value is awaited while the try is still

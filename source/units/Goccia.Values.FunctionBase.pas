@@ -88,6 +88,12 @@ type
       const AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallNoArgs(const AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallOneArg(const AArg0, AThisValue: TGocciaValue): TGocciaValue; virtual;
+    // CallOneArg for a caller that roots AArg0 only until the callee has it
+    // (a promise reaction job, whose handler gets the settled value): the
+    // callee may tell the caller's root to let go once its own frame holds
+    // the argument. The default keeps the argument in an arguments collection
+    // for the whole call, so a function that is not bytecode never lets go.
+    function CallOneArgOwned(const AArg0, AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallTwoArgs(const AArg0, AArg1, AThisValue: TGocciaValue): TGocciaValue; virtual;
     function CallThreeArgs(const AArg0, AArg1, AArg2, AThisValue: TGocciaValue): TGocciaValue; virtual;
 
@@ -1073,6 +1079,19 @@ var
   Args: TGocciaArgumentsCollection;
 begin
   Args := TGocciaArgumentsCollection.CreateWithCapacity(0);
+  try
+    Result := Call(Args, AThisValue);
+  finally
+    Args.Free;
+  end;
+end;
+
+function TGocciaFunctionBase.CallOneArgOwned(const AArg0,
+  AThisValue: TGocciaValue): TGocciaValue;
+var
+  Args: TGocciaArgumentsCollection;
+begin
+  Args := TGocciaArgumentsCollection.Create([AArg0]);
   try
     Result := Call(Args, AThisValue);
   finally
