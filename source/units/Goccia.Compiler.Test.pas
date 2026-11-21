@@ -901,6 +901,7 @@ begin
   CheckShape('ready ? 0 : await f(a, b);', OP_JUMP);
   CheckShape('ready?.m(await f(a, b));', OP_JUMP_IF_NULLISH);
   CheckShape('ready?.[await f(a, b)];', OP_JUMP_IF_NULLISH);
+  CheckShape('delete ready?.[await f(a, b)];', OP_JUMP_IF_NULLISH);
   CheckShape('a, ready && await f(a, b);', OP_JUMP_IF_FALSE);
   CheckShape('ready && (a ?? await f(a, b));', OP_JUMP_IF_FALSE);
 

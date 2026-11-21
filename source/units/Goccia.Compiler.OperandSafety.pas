@@ -82,6 +82,13 @@ function ParameterInitializersAvoidOwnBindings(
 function InitializerAvoidsOwnBinding(const AInitializer: TGocciaExpression;
   const AName: string): Boolean;
 
+// InitializerAvoidsOwnBinding, and no yield outside a nested function: a
+// yield suspends the frame with the binding's register still holding what
+// the initializer, or an earlier block, left there, because
+// YIELD_FLAG_TEMP_OPERAND hands the yielded value out through a temporary.
+function InitializerLeavesHoleUnobservable(
+  const AInitializer: TGocciaExpression; const AName: string): Boolean;
+
 // Whether ANames holds AName.
 function NameListContains(const ANames: TArray<string>;
   const AName: string): Boolean;
@@ -678,8 +685,6 @@ begin
   Result := ScanNode(Scan, AInitializer);
 end;
 
-// InitializerAvoidsOwnBinding for the entry-hole proof, which also refuses a
-// yield anywhere in the initializer outside a nested function.
 function InitializerLeavesHoleUnobservable(
   const AInitializer: TGocciaExpression; const AName: string): Boolean;
 var

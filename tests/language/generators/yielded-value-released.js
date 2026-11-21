@@ -154,6 +154,23 @@ describe("a value a suspended generator has yielded", () => {
     expect(iterator.next("resumed")).toEqual({ value: ["resumed", 2], done: true });
   });
 
+  test("does not leave an initializer's operand in the binding a yield initializes", () => {
+    const source = {
+      *produce() {
+        const sent = new ArrayBuffer(SIZE) && (yield 1);
+        return sent;
+      },
+    };
+    const iterator = source.produce();
+    const baseline = collect();
+    const first = iterator.next();
+    Goccia.gc();
+    const grown = Goccia.gc.bytesAllocated - baseline;
+    expect(first.value).toBe(1);
+    expect(grown).toBeLessThan(SIZE / 2);
+    expect(iterator.next("resumed")).toEqual({ value: "resumed", done: true });
+  });
+
   test("is intact while the consumer holds it across collections", () => {
     const source = {
       *produce() {
