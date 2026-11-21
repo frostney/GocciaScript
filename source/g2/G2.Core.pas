@@ -2613,6 +2613,10 @@ begin
   if MegaICTab <> nil then FreeMem(MegaICTab);
   MegaICTab := nil;
   RootShapes := nil; RootShapeCount := 0;
+  { RootShapeFor's cache of the last primitive prototype's shape, freed with the others above: the thread's next
+    engine would take it for its null prototype's }
+  LastPrimProto := 0; LastPrimShape := nil;
+  UsingKey0 := nil; UsingKey1 := nil; UsingKey2 := nil;
   GrayStack := nil; GrayTop := 0; RememberedList := nil; RememberedTop := 0; if TempRoots <> nil then fpmunmap(TempRoots, TEMP_ROOTS_MAX * SizeOf(TValue));
   TempRoots := nil; TempTop := 0;
   GCOldBytes := 0; GCOldBytesAtMajor := 0; GCPromotedBytes := 0; GCMinorCount := 0; GCMajorCount := 0;

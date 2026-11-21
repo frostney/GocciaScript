@@ -101,12 +101,16 @@ type
 
 threadvar
   WeakStateVar: PWeakState;
+  { the engine WeakStateVar belongs to (G2.Core FirstInEngine): a state of the thread's previous engine holds
+    values of a heap that is gone }
+  WeakStateGen: Integer;
 
 { the agent's state (one threadvar read in a statement of its own: FPC 3.3.1+4 can drop the %fs prefix of a second
   one in an expression) }
 function WeakStateNow: PWeakState; noinline;
 begin
   Result := WeakStateVar;
+  if (Result <> nil) and not SameEngine(WeakStateGen) then Result := nil;
 end;
 
 { ---- ephemerons ---- }
@@ -315,6 +319,14 @@ function EnsureState: PWeakState;
 begin
   Result := WeakStateNow;
   if Result <> nil then Exit;
+  { the previous engine's state on this thread: its values and roots went with that engine }
+  if WeakStateVar <> nil then
+  begin
+    WeakStateVar^.WatchHead.Free;
+    Dispose(WeakStateVar);
+    WeakStateVar := nil;
+  end;
+  FirstInEngine(WeakStateGen);
   New(Result);
   Result^.Count := 0;
   SetLength(Result^.Boxes, 64);

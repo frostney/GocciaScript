@@ -10123,6 +10123,10 @@ begin
   CurNewTarget := VUndefined;
   ConstructNT := VUndefined;   { a threadvar starts as 0, which is the number 0, not undefined }
   ArgsShapeMapped := nil; ArgsShapeUnmapped := nil;   { shapes of this engine's Object.prototype }
+  { the preludes' private names (XPrivateKeyAt): key atoms of the thread's previous engine, freed with its heap }
+  PreludePrivCount := 0;
+  PreludePrivAt := nil;
+  PreludePrivKey := nil;
   ConstructProto := VUndefined;
   NativeSelf := VUndefined;
   GCRootScanner := @ScanRoots;
