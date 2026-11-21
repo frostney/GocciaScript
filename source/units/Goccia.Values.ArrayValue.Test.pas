@@ -41,6 +41,10 @@ const
   { Doubling the array may at most multiply the bytes by this. Linear work
     gives 2, the appends gave 4. }
   LINEAR_GROWTH_RATIO = 2.5;
+  { The characters of `s`, and the bytes a conversion of an array holding only
+    `s` may ask for: far less than a copy of it. }
+  LONG_STRING_LENGTH = 1000000;
+  SHARED_STRING_BYTES = 64 * 1024;
 
 type
   TConversionWork = record
@@ -59,6 +63,7 @@ type
 
     procedure TestArrayConversionsTakeLinearWork;
     procedure TestTypedArrayConversionsTakeLinearWork;
+    procedure TestOneLongStringIsNotCopied;
   end;
 
 procedure TTestArrayValue.SetupTests;
@@ -67,11 +72,14 @@ begin
     TestArrayConversionsTakeLinearWork);
   Test('joining a typed array, and converting one to a string, takes work linear in the result',
     TestTypedArrayConversionsTakeLinearWork);
+  Test('joining an array of one long string returns that string without a copy',
+    TestOneLongStringIsNotCopied);
 end;
 
-{ Runs a script that builds `a`, ALength strings of ten digits, and `ta`, a
-  Float64Array of ALength eleven-digit integers, then counts the
-  bytes asked for by one call of `() => AExpression`. }
+{ Runs a script that builds `a`, ALength strings of ten digits, `ta`, a
+  Float64Array of ALength eleven-digit integers, and `s`, a string of
+  LONG_STRING_LENGTH characters, then counts the bytes asked for by one call
+  of `() => AExpression`. }
 function TTestArrayValue.ConversionWork(const AExpression: string;
   const ALength: Integer): TConversionWork;
 var
@@ -88,7 +96,9 @@ begin
     LineEnding +
     'const ta = new Float64Array(%0:d).map((_, i) => 10000000000 + i);' +
     LineEnding +
-    'globalThis.convert = () => %1:s;', [ALength, AExpression]);
+    'const s = "x".repeat(%2:d);' + LineEnding +
+    'globalThis.convert = () => %1:s;',
+    [ALength, AExpression, LONG_STRING_LENGTH]);
   Engine := TGocciaEngine.Create('array-conversion.js', Source);
   try
     Engine.Execute;
@@ -152,6 +162,29 @@ procedure TTestArrayValue.TestTypedArrayConversionsTakeLinearWork;
 begin
   ExpectConversionLinear('ta.join(",")', 11);
   ExpectConversionLinear('`${ta}`', 11);
+end;
+
+{ A join used to hand back the one element's string itself, and still does:
+  copying it into a buffer that grows by doubling, and out again at the end,
+  would need about three times the string. }
+procedure TTestArrayValue.TestOneLongStringIsNotCopied;
+
+  procedure ExpectShared(const AExpression: string);
+  var
+    Work: TConversionWork;
+  begin
+    Work := ConversionWork(AExpression, 1);
+    Expect<Integer>(Work.ResultLength).ToBe(LONG_STRING_LENGTH);
+    if Work.Bytes > SHARED_STRING_BYTES then
+      Fail(Format('%s asked for %d bytes for a string of %d characters',
+        [AExpression, Work.Bytes, LONG_STRING_LENGTH]));
+    Expect<Boolean>(Work.Bytes <= SHARED_STRING_BYTES).ToBe(True);
+  end;
+
+begin
+  ExpectShared('[s].join()');
+  ExpectShared('[undefined, s, null].join("")');
+  ExpectShared('`${[s]}`');
 end;
 
 begin
