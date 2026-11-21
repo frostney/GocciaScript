@@ -14,6 +14,7 @@ uses
   SysUtils,
 
   CLI.ConfigFile,
+  CLI.Options,
   G2.Embed,
 
   Goccia.Capabilities,
@@ -83,6 +84,20 @@ function HostConfigJson(const AEngineOptions: TGocciaEngineOptions; const AFileC
 { a file's resolved settings on its engine: the language profile, the source type and the per-file limits }
 procedure ApplySettings(const AEngine: TG2Engine; const ASettings: TGocciaFileSettings);
 
+{ a path a config names, against the config's directory (Goccia.CLI.Application's ConfigInputPath) }
+function ConfigInputPath(const AWritten, AConfigPath: string): string;
+{ a file's globals (GocciaRunner's ApplyDataGlobalsToEngine): the root config's globals files (AConfigEntries, read
+  as the script's), then the command line's, then each --global name=value }
+function InjectGlobals(const AEngine: TG2Engine; const AConfigEntries: TConfigEntryArray;
+  const AGlobalFiles, AInlineGlobals: TRepeatableOption; out AError: string): Boolean;
+{ a file's virtual modules (GocciaRunner's ApplyConfiguredVirtualModules): the root config's, the file's own
+  config's when it has another, then the command line's }
+function DefineVirtualModules(const AEngine: TG2Engine; const ARootConfigPath, AFileConfigPath: string;
+  const AEngineOptions: TGocciaEngineOptions; out AError: string): Boolean;
+{ the command line's --modules manifests and --module definitions, the user's own }
+function DefineCommandLineVirtualModules(const AEngine: TG2Engine; const AEngineOptions: TGocciaEngineOptions;
+  out AError: string): Boolean;
+
 implementation
 
 uses
@@ -91,6 +106,7 @@ uses
 
   Goccia.Error.Suggestions,
   Goccia.Packages.Store,
+  Goccia.ScriptLoader.Globals,
   Goccia.SourcePipeline;
 
 function HostConfigJson(const AEngineOptions: TGocciaEngineOptions; const AFileConfig: TConfigEntryArray): UnicodeString;
@@ -343,6 +359,182 @@ begin
   if Length(B) > 0 then
     Move(B[1], Bytes[0], Length(B));
   Resolver.VerifyProviderContent(HostPath, Bytes);
+end;
+
+function IsAbsoluteFilePath(const APath: string): Boolean;
+begin
+  Result := (APath <> '') and ((APath[1] = PathDelim) or
+    ((Length(APath) >= 2) and (APath[2] = ':')));
+end;
+
+{ a path a config names, against the config's directory (Goccia.CLI.Application's ConfigInputPath) }
+function ConfigInputPath(const AWritten, AConfigPath: string): string;
+begin
+  if IsAbsoluteFilePath(AWritten) then
+    Result := ExpandFileName(AWritten)
+  else
+    Result := ExpandFileName(IncludeTrailingPathDelimiter(
+      ExtractFileDir(AConfigPath)) + AWritten);
+end;
+
+function ReadFileUnicode(const APath: string): UnicodeString;
+var
+  Lines: TStringList;
+begin
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(APath);
+    Result := UTF8Decode(Lines.Text);
+  finally
+    Lines.Free;
+  end;
+end;
+
+{ GocciaRunner's globals (ApplyDataGlobalsToEngine): the root config's globals files, then the command line's, then
+  each --global name=value. Globals modules (a .js file's exports) are not on G2 yet. }
+function InjectGlobals(const AEngine: TG2Engine; const AConfigEntries: TConfigEntryArray;
+  const AGlobalFiles, AInlineGlobals: TRepeatableOption; out AError: string): Boolean;
+var
+  Entries: TConfigEntryArray;
+  I: Integer;
+  Path: string;
+  Pair: TScriptLoaderGlobalPair;
+  Err: UnicodeString;
+begin
+  Result := False;
+  AError := '';
+  Err := '';
+  Entries := AConfigEntries;
+  { a config's globals are read as the script's: under its read capability, a module evaluated in its engine }
+  AEngine.BeginGuestLoads;
+  try
+    for I := 0 to High(Entries) do
+    begin
+      Path := ConfigInputPath(Entries[I].Value, Entries[I].SourcePath);
+      { judged against the config that names it (an extends base names its own files) }
+      AEngine.GuestScope(ExtractFileDir(ExpandFileName(Entries[I].SourcePath)));
+      if IsStructuredGlobalsFile(Path) then
+      begin
+        if not AEngine.GuestReadAllowed(UnicodeString(Path), Err) or
+           not AEngine.InjectDataGlobals(ReadFileUnicode(Path), UnicodeString(ExtractFileExt(Path)),
+           UnicodeString(Path), Err) then
+        begin
+          AError := UTF8Encode(Err);
+          Exit;
+        end;
+      end
+      else if not AEngine.InjectModuleGlobals(UTF8Decode(Path), Err) then
+      begin
+        AError := UTF8Encode(Err);
+        Exit;
+      end;
+    end;
+  finally
+    AEngine.EndGuestLoads;
+  end;
+  if AGlobalFiles.FromCommandLine then
+    for I := 0 to AGlobalFiles.Values.Count - 1 do
+    begin
+      Path := AGlobalFiles.Values[I];
+      if IsStructuredGlobalsFile(Path) then
+      begin
+        if not AEngine.InjectDataGlobals(ReadFileUnicode(Path), UnicodeString(ExtractFileExt(Path)),
+           UnicodeString(Path), Err) then
+        begin
+          AError := UTF8Encode(Err);
+          Exit;
+        end;
+      end
+      { a globals module: its named exports, evaluated in the script's engine }
+      else if not AEngine.InjectModuleGlobals(UTF8Decode(Path), Err) then
+      begin
+        AError := UTF8Encode(Err);
+        Exit;
+      end;
+    end;
+  for I := 0 to AInlineGlobals.Values.Count - 1 do
+  begin
+    Pair := ParseGlobalPair(AInlineGlobals.Values[I]);
+    if not AEngine.InjectInlineGlobal(UTF8Decode(Pair.Key), UTF8Decode(Pair.ValueText), Err) then
+    begin
+      AError := UTF8Encode(Err);
+      Exit;
+    end;
+  end;
+  Result := True;
+end;
+
+{ GocciaRunner's virtual modules (ApplyConfiguredVirtualModules): the root config's, the file's own config's when
+  it has another, then the command line's --modules manifests and --module definitions. JavaScript and TypeScript
+  manifests are not on G2 yet. }
+function DefineVirtualModules(const AEngine: TG2Engine; const ARootConfigPath, AFileConfigPath: string;
+  const AEngineOptions: TGocciaEngineOptions; out AError: string): Boolean;
+var
+  Err: UnicodeString;
+begin
+  Result := False;
+  AError := '';
+  Err := '';
+  { a config's manifests are read as the script's, under its read capability }
+  AEngine.BeginGuestLoads;
+  try
+    if (ARootConfigPath <> '') and not AEngine.DefineConfigVirtualModules(UTF8Decode(ARootConfigPath), Err) then
+    begin
+      AError := UTF8Encode(Err);
+      Exit;
+    end;
+    if (AFileConfigPath <> '') and (ExpandFileName(AFileConfigPath) <> ExpandFileName(ARootConfigPath)) and
+       not AEngine.DefineConfigVirtualModules(UTF8Decode(AFileConfigPath), Err) then
+    begin
+      AError := UTF8Encode(Err);
+      Exit;
+    end;
+  finally
+    AEngine.EndGuestLoads;
+  end;
+  Result := DefineCommandLineVirtualModules(AEngine, AEngineOptions, AError);
+end;
+
+{ the command line's --modules manifests and --module definitions, the user's own (sandbox mode applies these and
+  not a config's) }
+function DefineCommandLineVirtualModules(const AEngine: TG2Engine; const AEngineOptions: TGocciaEngineOptions;
+  out AError: string): Boolean;
+var
+  I: Integer;
+  Path, Ext: string;
+  Err: UnicodeString;
+begin
+  Result := False;
+  AError := '';
+  Err := '';
+  if AEngineOptions.ModuleManifests.FromCommandLine then
+    for I := 0 to AEngineOptions.ModuleManifests.Values.Count - 1 do
+    begin
+      Path := ExpandFileName(AEngineOptions.ModuleManifests.Values[I]);
+      Ext := LowerCase(ExtractFileExt(Path));
+      if (Ext = '.js') or (Ext = '.mjs') or (Ext = '.ts') or (Ext = '.mts') then
+      begin
+        if not AEngine.DefineModuleManifestVirtualModules(UTF8Decode(Path), Err) then
+        begin
+          AError := UTF8Encode(Err);
+          Exit;
+        end;
+      end
+      else if not AEngine.DefineManifestVirtualModules(UTF8Decode(Path), Err) then
+      begin
+        AError := UTF8Encode(Err);
+        Exit;
+      end;
+    end;
+  if AEngineOptions.ModuleDefinitions.FromCommandLine then
+    for I := 0 to AEngineOptions.ModuleDefinitions.Values.Count - 1 do
+      if not AEngine.DefineInlineVirtualModule(UTF8Decode(AEngineOptions.ModuleDefinitions.Values[I]),
+         UTF8Decode(GetCurrentDir), Err) then
+      begin
+        AError := UTF8Encode(Err);
+        Exit;
+      end;
+  Result := True;
 end;
 
 end.

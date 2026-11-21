@@ -497,7 +497,7 @@ var
   Res: TG2TestFileResult;
   Start, SuitesStart: Int64;
   Aborted: TG2Abort;
-  Late: string;
+  Late, SetupError: string;
 begin
   FileName := FResults[AIndex].FileName;
   Res := FResults[AIndex];
@@ -580,6 +580,10 @@ begin
       SetTestSnapshots(TGocciaTestRunnerSnapshotHost.Create(FileName), SnapshotUpdateMode);
       if not (Engine.PrepareHost(Err) and InstallTestingAPI(Err)) then
         raise Exception.Create('test host setup failed: ' + UTF8Encode(Err));
+      { the file's virtual modules and globals, before its code runs (a failure fails the file) }
+      if not DefineVirtualModules(Engine, RootConfigPath, FileConfigPath, EngineOptions, SetupError) or
+         not InjectGlobals(Engine, ConfigNamedEntries(FGlobalFiles), FGlobalFiles, FInlineGlobals, SetupError) then
+        raise Exception.Create(SetupError);
       SrcText := UTF8Decode(ASource.Text);
       HoistTestMocks(FileName, SrcText);
       RunResult := Engine.Run(FileName, SrcText);
