@@ -224,6 +224,7 @@ uses
   Math,
 
   NumericText,
+  StringBuffer,
 
   Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
@@ -3116,7 +3117,7 @@ var
   TA: TGocciaTypedArrayValue;
   Sep: string;
   I, Len: Integer;
-  S: string;
+  Buffer: TStringBuffer;
   Element: TGocciaValue;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.join');
@@ -3125,16 +3126,18 @@ begin
     Sep := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Sep := ',';
-  S := '';
+  // A buffer that grows by doubling keeps the join linear in its result, as
+  // Array.prototype.join's does: appending to a string copies it each time.
+  Buffer := TStringBuffer.Create;
   for I := 0 to Len - 1 do
   begin
-    if I > 0 then S := S + Sep;
+    if I > 0 then Buffer.Append(Sep);
     Element := TA.GetElementAsValue(I);
     if not ((Element is TGocciaUndefinedLiteralValue) or
             (Element is TGocciaNullLiteralValue)) then
-      S := S + Element.ToStringLiteral.Value;
+      Buffer.Append(Element.ToStringLiteral.Value);
   end;
-  Result := TGocciaStringLiteralValue.Create(S);
+  Result := TGocciaStringLiteralValue.Create(Buffer.ToString);
 end;
 
 // ECMA-402 §17.1.6 %TypedArray%.prototype.toLocaleString([locales [, options]])
@@ -3150,7 +3153,7 @@ function TGocciaTypedArrayValue.TypedArrayToLocaleString(const AArgs: TGocciaArg
 var
   TA: TGocciaTypedArrayValue;
   I, Len: Integer;
-  S: string;
+  Buffer: TStringBuffer;
   Element, Method, Formatted: TGocciaValue;
   ElementObject: TGocciaObjectValue;
   CallArgs: TGocciaArgumentsCollection;
@@ -3158,10 +3161,10 @@ var
 begin
   TA := RequireAttachedTypedArray(AThisValue, '%TypedArray%.prototype.toLocaleString');
   Len := TA.Length;
-  S := '';
+  Buffer := TStringBuffer.Create;
   for I := 0 to Len - 1 do
   begin
-    if I > 0 then S := S + ',';
+    if I > 0 then Buffer.AppendChar(',');
     Element := TA.GetElementAsValue(I);
     if (Element is TGocciaUndefinedLiteralValue) or
        (Element is TGocciaNullLiteralValue) then
@@ -3191,12 +3194,12 @@ begin
         CallArgs.Free;
       end;
       Roots.Add(Formatted);
-      S := S + Formatted.ToStringLiteral.Value;
+      Buffer.Append(Formatted.ToStringLiteral.Value);
     finally
       Roots.Clear;
     end;
   end;
-  Result := TGocciaStringLiteralValue.Create(S);
+  Result := TGocciaStringLiteralValue.Create(Buffer.ToString);
 end;
 
 // ES2026 §23.2.3.33 %TypedArray%.prototype.toString()

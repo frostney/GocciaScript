@@ -1989,7 +1989,7 @@ var
   View: TArrayLikeView;
   Separator: string;
   I: Integer;
-  ResultString: string;
+  ResultBuffer: TStringBuffer;
   Element: TGocciaValue;
   ViewRoots: TGocciaActiveRootFrame;
   StackLimit: NativeUInt;
@@ -2024,12 +2024,16 @@ begin
         Exit(TGocciaStringLiteralValue.Create(''));
       FJoinReceivers.Add(View.Obj);
       try
-        // Steps 5-8: Build result string, treating undefined/null elements as empty string
-        ResultString := '';
+        // Steps 5-8: Build result string, treating undefined/null elements
+        // as empty string. The buffer grows by doubling, so a join costs time
+        // linear in its result: appending to a string reallocates the whole
+        // string for each element and separator, which made joining a large
+        // array, and so `${array}` and String(array), take quadratic time.
+        ResultBuffer := TStringBuffer.Create;
         for I := 0 to View.Len - 1 do
         begin
           if I > 0 then
-            ResultString := ResultString + Separator;
+            ResultBuffer.Append(Separator);
           // Step 7b: If element is undefined or null, let next be ""
           Element := View.Get(I);
           if (Element is TGocciaUndefinedLiteralValue) or
@@ -2037,11 +2041,11 @@ begin
             Continue
           else
             // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
-            ResultString := ResultString + Element.ToStringLiteral.Value;
+            ResultBuffer.Append(Element.ToStringLiteral.Value);
         end;
 
         // Step 9: Return R
-        Result := TGocciaStringLiteralValue.Create(ResultString);
+        Result := TGocciaStringLiteralValue.Create(ResultBuffer.ToString);
       finally
         FJoinReceivers.Delete(FJoinReceivers.Count - 1);
       end;
