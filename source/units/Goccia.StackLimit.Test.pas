@@ -65,6 +65,10 @@ type
     SystemTop: NativeUInt;
     SystemSize: NativeUInt;
     RequestedSize: SizeUInt;
+    // On Linux, for a probe that waits for Go: the size of the mapping in
+    // /proc/self/maps that holds its frame, which is larger than its stack
+    // where the kernel merged it with a neighbour's.
+    MappingSize: NativeUInt;
     constructor Create(const AStackSize: SizeUInt; const ARecurse: Boolean;
       const ARunning: TEvent = nil; const AGo: TEvent = nil);
     procedure Execute; override;
@@ -164,6 +168,41 @@ begin
     Recurse(ADepth + 1);
 end;
 
+{$IFDEF LINUX}
+// The size of the mapping in /proc/self/maps that holds APosition, or 0.
+function MappingSizeAt(const APosition: NativeUInt): NativeUInt;
+var
+  Maps: TStringList;
+  I, Dash, Space: Integer;
+  MapStart, MapEnd: NativeUInt;
+begin
+  Result := 0;
+  Maps := TStringList.Create;
+  try
+    try
+      Maps.LoadFromFile('/proc/self/maps');
+    except
+      on EStreamError do
+        Exit;
+    end;
+    for I := 0 to Maps.Count - 1 do
+    begin
+      Dash := Pos('-', Maps[I]);
+      Space := Pos(' ', Maps[I]);
+      if (Dash = 0) or (Space < Dash) then
+        Continue;
+      MapStart := StrToQWordDef('$' + Copy(Maps[I], 1, Dash - 1), 0);
+      MapEnd := StrToQWordDef('$' + Copy(Maps[I], Dash + 1,
+        Space - Dash - 1), 0);
+      if (APosition >= MapStart) and (APosition < MapEnd) then
+        Exit(MapEnd - MapStart);
+    end;
+  finally
+    Maps.Free;
+  end;
+end;
+{$ENDIF}
+
 procedure TProbeThread.Execute;
 begin
   if Assigned(FRunning) then
@@ -172,6 +211,10 @@ begin
     FGo.WaitFor(INFINITE);
   Limit := NativeStackLimit;
   Position := NativeStackPosition;
+  {$IFDEF LINUX}
+  if Assigned(FGo) then
+    MappingSize := MappingSizeAt(Position);
+  {$ENDIF}
   {$IFDEF DARWIN}
   SystemTop := NativeUInt(Pthread_get_stackaddr_np(pthread_self));
   SystemSize := Pthread_get_stacksize_np(pthread_self);
@@ -216,6 +259,8 @@ begin
     [Int64(RequestedSize), Int64(Limit), Int64(Position),
      Int64(Position) - Int64(Limit), Int64(SystemTop), Int64(SystemSize),
      Used, Depth]);
+  if MappingSize <> 0 then
+    Result := Result + Format(', mapping %d KiB', [Int64(MappingSize) div 1024]);
 end;
 
 procedure TStackLimitTests.Check(const ACondition: Boolean;
@@ -314,9 +359,13 @@ end;
 // inside its stack's mapping, and the kernel merges thread stacks that lie
 // next to each other into one mapping. Each thread maps a few small blocks of
 // its own when it starts, which would otherwise lie between the stacks; the
-// holes left first in the address space take them, so the probe's stack lies
-// directly below one thread's stack and directly above another's. Where the
-// stacks do not merge, the test checks the same bounds.
+// holes left first in the address space take them, so the probe's stack
+// usually lies directly below one thread's stack and directly above
+// another's. This reproduces the merge only where glibc and the kernel merge
+// stacks, and only where the layout works out; a failure reports the size of
+// the probe's mapping. Elsewhere it checks the same bounds on separate
+// stacks. TestStackInsideALargerMappingKeepsAQuarterFree checks a stack inside
+// a larger mapping on every glibc.
 procedure TStackLimitTests.TestSmallStackBetweenOtherStacksKeepsAQuarterFree;
 const
   HOLE_COUNT = 8;

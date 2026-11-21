@@ -46,3 +46,7 @@ them, as for code running on a stack of the host's own such as a fiber. Darwin a
 
 - A thread's reserve no longer depends on where the kernel places its stack.
 - Every Linux program that uses `Goccia.StackLimit` links libpthread.
+- Guard pages that a host installs with `MADV_GUARD_INSTALL` in a stack it
+  supplies show in neither source, as before: the reserve is a quarter of the
+  stack the thread library reports, so such a guard must be smaller than
+  that quarter.
