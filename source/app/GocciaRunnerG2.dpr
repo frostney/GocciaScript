@@ -758,71 +758,16 @@ end;
 
 { one engine's memory.gc, from its heap when made (AStart) and after its run (AEnd), with its thread's memory
   manager over the same span (memory.heap); G2 does not count objects, so their counts stay 0 }
-function FileMemoryStats(const AStart, AEnd: TG2MemoryStats;
-  const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
-begin
-  Result := DefaultCLIJSONMemoryStats;
-  Result.Enabled := True;
-  Result.GCStartBytes := AStart.LiveBytes;
-  Result.GCEndBytes := AEnd.LiveBytes;
-  Result.GCLiveBytes := AEnd.LiveBytes;
-  Result.GCPeakBytes := AEnd.PeakLiveBytes;
-  Result.GCDeltaBytes := AEnd.LiveBytes - AStart.LiveBytes;
-  Result.GCAllocatedDuringRunBytes := AEnd.AllocatedBytes - AStart.AllocatedBytes;
-  Result.GCMaxBytes := AEnd.LimitBytes;
-  Result.GCCollections := AEnd.Collections - AStart.Collections;
-  Result.HeapStartAllocatedBytes := Int64(AHeapStart.TotalAllocated);
-  Result.HeapEndAllocatedBytes := Int64(AHeapEnd.TotalAllocated);
-  Result.HeapDeltaAllocatedBytes := Result.HeapEndAllocatedBytes - Result.HeapStartAllocatedBytes;
-  Result.HeapStartFreeBytes := Int64(AHeapStart.TotalFree);
-  Result.HeapEndFreeBytes := Int64(AHeapEnd.TotalFree);
-  Result.HeapDeltaFreeBytes := Result.HeapEndFreeBytes - Result.HeapStartFreeBytes;
-end;
-
-{ a multi-file report's top-level memory: the files' collections and allocations summed. At once (AParallel) the
-  engines' heaps coexist, so their live and peak bytes add up, as GocciaRunner combines its workers'; one after
-  another each heap is freed before the next, so the peak is the largest and the live bytes are the last file's.
-  memory.heap is the main thread's memory manager over the run. }
 function AggregateMemoryStats(const AReports: array of TG2FileReport; AParallel: Boolean;
   const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
 var
+  Stats: array of TCLIJSONMemoryStats;
   I: Integer;
-  First: Boolean;
 begin
-  Result := DefaultCLIJSONMemoryStats;
-  First := True;
+  SetLength(Stats, Length(AReports));
   for I := 0 to High(AReports) do
-  begin
-    if not AReports[I].Memory.Enabled then
-      Continue;
-    if First or AParallel then
-    begin
-      if First then
-        Result := AReports[I].Memory
-      else
-        Result := CombineCLIJSONMemoryStats(Result, AReports[I].Memory, True);
-    end
-    else
-    begin
-      Inc(Result.GCAllocatedDuringRunBytes, AReports[I].Memory.GCAllocatedDuringRunBytes);
-      Inc(Result.GCCollections, AReports[I].Memory.GCCollections);
-      if AReports[I].Memory.GCPeakBytes > Result.GCPeakBytes then
-        Result.GCPeakBytes := AReports[I].Memory.GCPeakBytes;
-      if AReports[I].Memory.GCMaxBytes > Result.GCMaxBytes then
-        Result.GCMaxBytes := AReports[I].Memory.GCMaxBytes;
-      Result.GCEndBytes := AReports[I].Memory.GCEndBytes;
-      Result.GCLiveBytes := AReports[I].Memory.GCLiveBytes;
-      Result.GCDeltaBytes := Result.GCEndBytes - Result.GCStartBytes;
-    end;
-    First := False;
-  end;
-  Result.Enabled := True;
-  Result.HeapStartAllocatedBytes := Int64(AHeapStart.TotalAllocated);
-  Result.HeapEndAllocatedBytes := Int64(AHeapEnd.TotalAllocated);
-  Result.HeapDeltaAllocatedBytes := Result.HeapEndAllocatedBytes - Result.HeapStartAllocatedBytes;
-  Result.HeapStartFreeBytes := Int64(AHeapStart.TotalFree);
-  Result.HeapEndFreeBytes := Int64(AHeapEnd.TotalFree);
-  Result.HeapDeltaFreeBytes := Result.HeapEndFreeBytes - Result.HeapStartFreeBytes;
+    Stats[I] := AReports[I].Memory;
+  Result := Goccia.CLI.G2FileEngine.AggregateMemoryStats(Stats, AParallel, AHeapStart, AHeapEnd);
 end;
 
 { the files' report: one file's own form, or the aggregate of GocciaRunner's BuildAggregateScriptLoaderJSON. As

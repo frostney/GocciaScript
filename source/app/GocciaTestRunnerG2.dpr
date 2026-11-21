@@ -72,6 +72,8 @@ type
     { a file that did not load or run its suites: why (also printed on stderr) }
     ErrorMessage: string;
     CompileNanoseconds, ExecuteNanoseconds: Int64;
+    { its engine's and the memory manager's counters over the file }
+    Memory: TCLIJSONMemoryStats;
   end;
 
   TG2TestRunnerApp = class(TGocciaCLIApplication)
@@ -518,6 +520,8 @@ var
   Start, SuitesStart: Int64;
   Aborted: TG2Abort;
   Late, SetupError: string;
+  MemoryStart: TG2MemoryStats;
+  HeapStart: THeapStatus;
   HostError: TG2RunResult;
 begin
   FileName := FResults[AIndex].FileName;
@@ -562,8 +566,10 @@ begin
         LeaveCriticalSection(FCoverageLock);
       end;
     end;
+    HeapStart := GetHeapStatus;
     Engine := TG2Engine.Create;
     try
+      MemoryStart := Engine.Memory;
       Engine.Capabilities := Capabilities;
       Engine.ProjectRoot := DiscoverProjectRoot(FileName);
       Engine.Coverage := Assigned(FCoverageMain);
@@ -599,7 +605,7 @@ begin
       TestTimeoutMs := FTestTimeout.ValueOr(0);
       { the file's snapshots: its .snap file and its inline edits, flushed once every file has run }
       SetTestSnapshots(TGocciaTestRunnerSnapshotHost.Create(FileName), SnapshotUpdateMode);
-      if not (Engine.PrepareHost(Err) and InstallTestingAPI(Err)) then
+      if not Engine.PrepareHost(Err) then
         raise Exception.Create('test host setup failed: ' + UTF8Encode(Err));
       { the file's virtual modules and globals, before its code runs (a failure fails the file) }
       if not DefineVirtualModules(Engine, RootConfigPath, FileConfigPath, EngineOptions, SetupError) or
@@ -610,6 +616,9 @@ begin
           SetupError := UTF8Encode(HostError.ErrorName) + ': ' + UTF8Encode(HostError.ErrorText);
         raise Exception.Create(SetupError);
       end;
+      { the testing API after the globals, which load before it (a globals module sees no test global) }
+      if not InstallTestingAPI(Err) then
+        raise Exception.Create('test host setup failed: ' + UTF8Encode(Err));
       SrcText := UTF8Decode(ASource.Text);
       HoistTestMocks(FileName, SrcText);
       RunResult := Engine.Run(FileName, SrcText);
@@ -662,6 +671,7 @@ begin
         end;
       end;
     finally
+      Res.Memory := FileMemoryStats(MemoryStart, Engine.Memory, HeapStart, GetHeapStatus);
       TestSnapshotsDone;
       Engine.Free;
       { the file's coverage into the run's }
@@ -799,6 +809,8 @@ var
   Timing: TCLIJSONTiming;
   Memory: TCLIJSONMemoryMeasurement;
   MemoryStats: TCLIJSONMemoryStats;
+  FileMemory: array of TCLIJSONMemoryStats;
+  HeapStart: THeapStatus;
 begin
   { stdin when there are no paths or the only one is "-"; "-" among others is refused }
   UseStdin := (APaths.Count = 0) or ((APaths.Count = 1) and IsStdinPath(APaths[0]));
@@ -880,6 +892,7 @@ begin
     if Assigned(FCoverageMain) then
       InitCriticalSection(FCoverageLock);
     BeginCLIJSONMemoryMeasurement(Memory);
+    HeapStart := GetHeapStatus;
     Start := GetNanoseconds;
     ResetPendingInlineSnapshots;
     try
@@ -897,6 +910,11 @@ begin
         RecordSnapshotFinalizationFailure('Snapshot finalization failed: ' + E.Message);
     end;
     MemoryStats := FinishCLIJSONMemoryMeasurement(Memory);
+    { the files' engines ran on threads of their own: the report sums their memory }
+    SetLength(FileMemory, Length(FResults));
+    for I := 0 to High(FResults) do
+      FileMemory[I] := FResults[I].Memory;
+    MemoryStats := AggregateMemoryStats(FileMemory, FParallel, HeapStart, GetHeapStatus);
     Timing := Default(TCLIJSONTiming);
     for I := 0 to High(FResults) do
     begin

@@ -20,6 +20,7 @@ uses
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
   Goccia.CLI.FileSettings,
+  Goccia.CLI.JSON.Reporter,
   Goccia.CLI.Options,
   Goccia.Modules.Resolver,
   Goccia.Packages.Address;
@@ -97,6 +98,16 @@ function DefineVirtualModules(const AEngine: TG2Engine; const ARootConfigPath, A
 { the command line's --modules manifests and --module definitions, the user's own }
 function DefineCommandLineVirtualModules(const AEngine: TG2Engine; const AEngineOptions: TGocciaEngineOptions;
   out AError: string): Boolean;
+
+{ one file's memory report from its engine's counters and the memory manager's, before and after the file }
+function FileMemoryStats(const AStart, AEnd: TG2MemoryStats; const AHeapStart, AHeapEnd: THeapStatus):
+  TCLIJSONMemoryStats;
+{ a multi-file report's top-level memory: the files' collections and allocations summed. At once (AParallel) the
+  engines' heaps coexist, so their live and peak bytes add up, as GocciaRunner combines its workers'; one after
+  another each heap is freed before the next, so the peak is the largest and the live bytes are the last file's.
+  memory.heap is the main thread's memory manager over the run. }
+function AggregateMemoryStats(const AStats: array of TCLIJSONMemoryStats; AParallel: Boolean;
+  const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
 
 implementation
 
@@ -535,6 +546,73 @@ begin
         Exit;
       end;
   Result := True;
+end;
+
+function FileMemoryStats(const AStart, AEnd: TG2MemoryStats;
+  const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
+begin
+  Result := DefaultCLIJSONMemoryStats;
+  Result.Enabled := True;
+  Result.GCStartBytes := AStart.LiveBytes;
+  Result.GCEndBytes := AEnd.LiveBytes;
+  Result.GCLiveBytes := AEnd.LiveBytes;
+  Result.GCPeakBytes := AEnd.PeakLiveBytes;
+  Result.GCDeltaBytes := AEnd.LiveBytes - AStart.LiveBytes;
+  Result.GCAllocatedDuringRunBytes := AEnd.AllocatedBytes - AStart.AllocatedBytes;
+  Result.GCMaxBytes := AEnd.LimitBytes;
+  Result.GCCollections := AEnd.Collections - AStart.Collections;
+  Result.HeapStartAllocatedBytes := Int64(AHeapStart.TotalAllocated);
+  Result.HeapEndAllocatedBytes := Int64(AHeapEnd.TotalAllocated);
+  Result.HeapDeltaAllocatedBytes := Result.HeapEndAllocatedBytes - Result.HeapStartAllocatedBytes;
+  Result.HeapStartFreeBytes := Int64(AHeapStart.TotalFree);
+  Result.HeapEndFreeBytes := Int64(AHeapEnd.TotalFree);
+  Result.HeapDeltaFreeBytes := Result.HeapEndFreeBytes - Result.HeapStartFreeBytes;
+end;
+
+{ a multi-file report's top-level memory: the files' collections and allocations summed. At once (AParallel) the
+  engines' heaps coexist, so their live and peak bytes add up, as GocciaRunner combines its workers'; one after
+  another each heap is freed before the next, so the peak is the largest and the live bytes are the last file's.
+  memory.heap is the main thread's memory manager over the run. }
+function AggregateMemoryStats(const AStats: array of TCLIJSONMemoryStats; AParallel: Boolean;
+  const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
+var
+  I: Integer;
+  First: Boolean;
+begin
+  Result := DefaultCLIJSONMemoryStats;
+  First := True;
+  for I := 0 to High(AStats) do
+  begin
+    if not AStats[I].Enabled then
+      Continue;
+    if First or AParallel then
+    begin
+      if First then
+        Result := AStats[I]
+      else
+        Result := CombineCLIJSONMemoryStats(Result, AStats[I], True);
+    end
+    else
+    begin
+      Inc(Result.GCAllocatedDuringRunBytes, AStats[I].GCAllocatedDuringRunBytes);
+      Inc(Result.GCCollections, AStats[I].GCCollections);
+      if AStats[I].GCPeakBytes > Result.GCPeakBytes then
+        Result.GCPeakBytes := AStats[I].GCPeakBytes;
+      if AStats[I].GCMaxBytes > Result.GCMaxBytes then
+        Result.GCMaxBytes := AStats[I].GCMaxBytes;
+      Result.GCEndBytes := AStats[I].GCEndBytes;
+      Result.GCLiveBytes := AStats[I].GCLiveBytes;
+      Result.GCDeltaBytes := Result.GCEndBytes - Result.GCStartBytes;
+    end;
+    First := False;
+  end;
+  Result.Enabled := True;
+  Result.HeapStartAllocatedBytes := Int64(AHeapStart.TotalAllocated);
+  Result.HeapEndAllocatedBytes := Int64(AHeapEnd.TotalAllocated);
+  Result.HeapDeltaAllocatedBytes := Result.HeapEndAllocatedBytes - Result.HeapStartAllocatedBytes;
+  Result.HeapStartFreeBytes := Int64(AHeapStart.TotalFree);
+  Result.HeapEndFreeBytes := Int64(AHeapEnd.TotalFree);
+  Result.HeapDeltaFreeBytes := Result.HeapEndFreeBytes - Result.HeapStartFreeBytes;
 end;
 
 end.
