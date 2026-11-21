@@ -642,6 +642,7 @@ Pascal unit tests are the tertiary testing layer for low-level internals that ar
 |-----------|-------|
 | `Goccia.Values.Primitives.Test.pas` | Primitive value creation, type conversion (`ToStringLiteral`, `ToBooleanLiteral`, `ToNumberLiteral`, `TypeName`, `TypeOf`) |
 | `Goccia.Values.ObjectValue.Test.pas` | Object property operations (`AssignProperty`, `GetProperty`, `DeleteProperty`), prototype chain resolution |
+| `Goccia.Values.ArrayValue.Test.pas` | Joining an array or a typed array, and converting one to a string (template literal, `String`, `+`, `toString`), takes work linear in the result, counted in the bytes allocated at two lengths; one long string is returned without a copy and copied once when joined with more; separators between empty elements take no memory before the result; a result past the memory budget throws a catchable `RangeError` |
 | `Goccia.Builtins.TestingLibrary.Test.pas` | All `TGocciaExpectationValue` matchers (`toBe`, `toEqual`, `toStrictEqual`, `toContainEqual`, `toMatchObject`, `toMatch`, `toBeNull`, `toBeNaN`, `toBeUndefined`, `toBeDefined`, `toBeTruthy`, `toBeFalsy`, `toBeGreaterThan`, `toBeLessThan`, `toContain`, `toHaveLength`, `toHaveProperty`, `toBeCloseTo`, `not`); skip and conditional APIs (`describe.skip`, `describe.skipIf`, `describe.runIf`, `test.skipIf`, `test.runIf`) |
 
 These compile as standalone executables and run directly:

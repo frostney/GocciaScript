@@ -158,6 +158,7 @@ uses
 
   NumericText,
   StringBuffer,
+  StringJoin,
 
   Goccia.Arguments.Callbacks,
   Goccia.Arithmetic,
@@ -1983,6 +1984,51 @@ begin
   end;
 end;
 
+// ES2026 §23.1.3.16 steps 5-8 for more than SMALL_JOIN_LENGTH elements. Each
+// element is converted once, in order; the join buffer keeps the strings and
+// writes the result once at its exact size, in time linear in the result:
+// appending to a string reallocates the whole string for each element and
+// separator, which made joining a large array, and so a template literal or
+// String() of one, take quadratic time. Its final copy polls the deadline and
+// a host's abort, as AView.Get does here, and a result past the memory budget
+// is refused before it is allocated, with the RangeError its charge would
+// raise. ASeparator outlives the buffer, which does not hold it. A string
+// whose value the array does not hold itself (converted from another value,
+// or read through a getter or a proxy) may be collected, and its bytes
+// uncounted, while the buffer still holds the string, so the buffer charges
+// it. A string the array's own storage holds stays counted by its value.
+function JoinManyElements(var AView: TArrayLikeView;
+  const ASeparator: string): string;
+var
+  Joined: TStringJoinBuffer;
+  I: Integer;
+  Element: TGocciaValue;
+  Converted: TGocciaStringLiteralValue;
+begin
+  Joined.Init(ASeparator, CheckExecutionTimeoutNow, CheckStringResultBytes,
+    ChargeJoinBytes);
+  try
+    for I := 0 to AView.Len - 1 do
+    begin
+      // Steps 7b-7c: "" for undefined or null, else ? ToString(element)
+      Element := AView.Get(I);
+      if (Element is TGocciaUndefinedLiteralValue) or
+         (Element is TGocciaNullLiteralValue) then
+        Joined.Add('')
+      else
+      begin
+        Converted := Element.ToStringLiteral;
+        Joined.Add(Converted.Value, (Converted <> Element) or
+          not Assigned(AView.Arr) or (I >= AView.Arr.Elements.Count) or
+          (AView.Arr.Elements[I] <> Element));
+      end;
+    end;
+    Result := Joined.Join;
+  finally
+    Joined.Release;
+  end;
+end;
+
 // ES2026 §23.1.3.16 Array.prototype.join(separator)
 function TGocciaArrayValue.ArrayJoin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -2024,7 +2070,13 @@ begin
         Exit(TGocciaStringLiteralValue.Create(''));
       FJoinReceivers.Add(View.Obj);
       try
-        // Steps 5-8: Build result string, treating undefined/null elements as empty string
+        // Steps 5-8: Build result string, treating undefined/null elements
+        // as empty string. Above SMALL_JOIN_LENGTH elements the join buffer
+        // takes over (JoinManyElements); for so few, appending costs less
+        // than its two passes, and its copies cannot add up to much.
+        if View.Len > SMALL_JOIN_LENGTH then
+          Exit(TGocciaStringLiteralValue.Create(
+            JoinManyElements(View, Separator)));
         ResultString := '';
         for I := 0 to View.Len - 1 do
         begin

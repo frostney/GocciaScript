@@ -51,3 +51,14 @@ describe("TypedArray.prototype.join", () => {
     expect(ta.join(",")).toBe("1,2,3");
   });
 });
+
+describe("TypedArray.prototype.join of many elements", () => {
+  test("joins and converts every element in order", () => {
+    const LENGTH = 40;
+    const typed = Float64Array.from({ length: LENGTH }, (_, i) => i / 2);
+    const expected = Array.from({ length: LENGTH }, (_, i) => String(i / 2));
+    expect(typed.join(";")).toBe(expected.join(";"));
+    expect(typed.join()).toBe(expected.join(","));
+    expect(`${typed}`).toBe(expected.join(","));
+  });
+});

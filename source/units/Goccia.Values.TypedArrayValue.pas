@@ -224,6 +224,7 @@ uses
   Math,
 
   NumericText,
+  StringJoin,
 
   Goccia.Arithmetic,
   Goccia.Constants.ConstructorNames,
@@ -234,6 +235,7 @@ uses
   Goccia.NativeLimits,
   Goccia.Scope,
   Goccia.ThreadCleanupRegistry,
+  Goccia.Timeout,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
@@ -3110,6 +3112,36 @@ begin
   Result := Accumulator;
 end;
 
+// The elements of ATypedArray joined with ASeparator, for more than
+// SMALL_JOIN_LENGTH elements. The join buffer keeps the join linear in its
+// result, as Array.prototype.join's does: appending to a string copies it
+// each time. Each string is converted from a number, so nothing else holds
+// it and the buffer counts its bytes.
+function JoinTypedArrayElements(const ATypedArray: TGocciaTypedArrayValue;
+  const ALength: Integer; const ASeparator: string): string;
+var
+  Joined: TStringJoinBuffer;
+  I: Integer;
+  Element: TGocciaValue;
+begin
+  Joined.Init(ASeparator, CheckExecutionTimeoutNow, CheckStringResultBytes,
+    ChargeJoinBytes);
+  try
+    for I := 0 to ALength - 1 do
+    begin
+      Element := ATypedArray.GetElementAsValue(I);
+      if (Element is TGocciaUndefinedLiteralValue) or
+         (Element is TGocciaNullLiteralValue) then
+        Joined.Add('')
+      else
+        Joined.Add(Element.ToStringLiteral.Value, True);
+    end;
+    Result := Joined.Join;
+  finally
+    Joined.Release;
+  end;
+end;
+
 // ES2026 §23.2.3.17 %TypedArray%.prototype.join(separator)
 function TGocciaTypedArrayValue.TypedArrayJoin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
@@ -3125,6 +3157,10 @@ begin
     Sep := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Sep := ',';
+  // For so few elements, appending costs less than the join buffer's two
+  // passes, and its copies cannot add up to much.
+  if Len > SMALL_JOIN_LENGTH then
+    Exit(TGocciaStringLiteralValue.Create(JoinTypedArrayElements(TA, Len, Sep)));
   S := '';
   for I := 0 to Len - 1 do
   begin
@@ -3150,7 +3186,7 @@ function TGocciaTypedArrayValue.TypedArrayToLocaleString(const AArgs: TGocciaArg
 var
   TA: TGocciaTypedArrayValue;
   I, Len: Integer;
-  S: string;
+  Joined: TStringJoinBuffer;
   Element, Method, Formatted: TGocciaValue;
   ElementObject: TGocciaObjectValue;
   CallArgs: TGocciaArgumentsCollection;
@@ -3158,45 +3194,53 @@ var
 begin
   TA := RequireAttachedTypedArray(AThisValue, '%TypedArray%.prototype.toLocaleString');
   Len := TA.Length;
-  S := '';
-  for I := 0 to Len - 1 do
-  begin
-    if I > 0 then S := S + ',';
-    Element := TA.GetElementAsValue(I);
-    if (Element is TGocciaUndefinedLiteralValue) or
-       (Element is TGocciaNullLiteralValue) then
-      Continue;
-    Roots.Initialize;
-    try
-      Roots.Add(Element);
-      ElementObject := ToObject(Element);
-      Roots.Add(ElementObject);
-      Method := ElementObject.GetPropertyWithContext(PROP_TO_LOCALE_STRING, Element);
-      if (Method = nil) or not Method.IsCallable then
-        ThrowTypeError('TypedArray.prototype.toLocaleString element toLocaleString is not a function');
-      Roots.Add(Method);
-
-      CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
-      try
-        if AArgs.Length > 0 then
-          CallArgs.Add(AArgs.GetElement(0))
-        else
-          CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-        if AArgs.Length > 1 then
-          CallArgs.Add(AArgs.GetElement(1))
-        else
-          CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
-        Formatted := InvokeCallable(Method, CallArgs, Element);
-      finally
-        CallArgs.Free;
+  Joined.Init(',', CheckExecutionTimeoutNow, CheckStringResultBytes,
+    ChargeJoinBytes);
+  try
+    for I := 0 to Len - 1 do
+    begin
+      Element := TA.GetElementAsValue(I);
+      if (Element is TGocciaUndefinedLiteralValue) or
+         (Element is TGocciaNullLiteralValue) then
+      begin
+        Joined.Add('');
+        Continue;
       end;
-      Roots.Add(Formatted);
-      S := S + Formatted.ToStringLiteral.Value;
-    finally
-      Roots.Clear;
+      Roots.Initialize;
+      try
+        Roots.Add(Element);
+        ElementObject := ToObject(Element);
+        Roots.Add(ElementObject);
+        Method := ElementObject.GetPropertyWithContext(PROP_TO_LOCALE_STRING, Element);
+        if (Method = nil) or not Method.IsCallable then
+          ThrowTypeError('TypedArray.prototype.toLocaleString element toLocaleString is not a function');
+        Roots.Add(Method);
+
+        CallArgs := TGocciaArgumentsCollection.CreateWithCapacity(2);
+        try
+          if AArgs.Length > 0 then
+            CallArgs.Add(AArgs.GetElement(0))
+          else
+            CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+          if AArgs.Length > 1 then
+            CallArgs.Add(AArgs.GetElement(1))
+          else
+            CallArgs.Add(TGocciaUndefinedLiteralValue.UndefinedValue);
+          Formatted := InvokeCallable(Method, CallArgs, Element);
+        finally
+          CallArgs.Free;
+        end;
+        Roots.Add(Formatted);
+        // The roots let the formatted value go after this element.
+        Joined.Add(Formatted.ToStringLiteral.Value, True);
+      finally
+        Roots.Clear;
+      end;
     end;
+    Result := TGocciaStringLiteralValue.Create(Joined.Join);
+  finally
+    Joined.Release;
   end;
-  Result := TGocciaStringLiteralValue.Create(S);
 end;
 
 // ES2026 §23.2.3.33 %TypedArray%.prototype.toString()
