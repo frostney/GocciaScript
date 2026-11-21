@@ -1790,14 +1790,14 @@ begin
   end;
 end;
 
-{ Templates in a comparison chain: read as types, rejected as expressions,
-  or left unread inside brackets, a failed probe still decides the probes
-  from the '<' tokens after it. }
+{ A TypeScript comparison chain, with templates or without: each probe's
+  first read as type syntax is bounded, and a failed scan still decides the
+  scans from the '<' tokens after it. }
 procedure TTestCompiler.TestTemplateTypeArgumentWork;
 const
-  LINKS: array[0..3] of string = (
-    'x < `${x}` < ', 'x < `${x + 1}` < ', 'new X < `${x}` < ',
-    'new X < [`${x + 1}`] < ');
+  LINKS: array[0..5] of string = (
+    'x < ', 'x < `${x}` < ', 'x < `${x + 1}` < ', 'new X < ',
+    'new X < `${x}` < ', 'new X < [`${x + 1}`] < ');
 var
   Small, Large: TGocciaCompileCounters;
   Link: string;

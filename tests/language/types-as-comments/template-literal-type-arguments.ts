@@ -55,6 +55,13 @@ describe("template literal type arguments", () => {
     expect(identity<`a${string}` | "b">(5)).toBe(5);
   });
 
+  test("inside function, tuple, readonly and object types in the list", () => {
+    expect(identity<(x: `a${string}`) => void>(1)).toBe(1);
+    expect(identity<[`a${string}`, number]>(2)).toBe(2);
+    expect(identity<`${keyof { readonly a: 1 }}`>(3)).toBe(3);
+    expect(identity<readonly `a${string}`[]>(4)).toBe(4);
+  });
+
   test("as the constraint of a type parameter with a default", () => {
     expect(identity< <T extends `x${string}` = "x">() => T>(5)).toBe(5);
   });
@@ -114,6 +121,22 @@ describe("comparisons with templates and calls", () => {
     expect(zero < `${b}` ? 7 : 1 > (c)).toBe(7);
     // prettier-ignore
     expect(typeof (a < `${b}`[0 + 1] > (c))).toBe("boolean");
+  });
+
+  test("an expression elsewhere in the list keeps the comparison reading", () => {
+    const zero = 0;
+
+    // prettier-ignore
+    expect(zero < b ? 7 : `${b}` > (c)).toBe(7);
+    // prettier-ignore
+    expect(typeof (new Box < 1 + `${b}` > (c))).toBe("boolean");
+  });
+
+  test("a tag that is a member named with a keyword keeps the comparison reading", () => {
+    const obj = { default: () => 5 };
+
+    // prettier-ignore
+    expect(typeof (a < obj.default`${b}` > (c))).toBe("boolean");
   });
 
   test("a tag that is a member named like a type keyword keeps the comparison reading", () => {
