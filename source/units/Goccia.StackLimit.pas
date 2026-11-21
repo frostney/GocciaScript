@@ -260,36 +260,109 @@ begin
 end;
 
 // The main thread's id is the process id. Asked through the system call, so
-// that it needs no libpthread either.
+// that it does not depend on the thread manager.
 function IsMainThread: Boolean;
 begin
   Result := Do_SysCall(syscall_nr_gettid) = TSysResult(FpGetPid);
 end;
 
-// Reads the mapping that holds the running frame from /proc/self/maps, and
-// so needs neither libc nor libpthread: glibc before 2.34 keeps
-// pthread_getattr_np in libpthread, which not every program links. A thread
-// stack is a mapping of its own. The main thread's grows down to RLIMIT_STACK
-// below its top, but not into the guard gap above the mapping beneath it. The
-// kernel marks it [stack]; Valgrind gives its program a main stack of its
-// own, which is not marked and starts a few pages long.
+// glibc 2.34 and later define these in libc; earlier versions, such as the
+// one the aarch64 build links against, only in libpthread. Naming libpthread
+// links it in either case, as the cthreads unit does.
+type
+  PPthreadAttr = ^pthread_attr_t;
+
+function pthread_self: pthread_t; cdecl; external 'pthread'
+  name 'pthread_self';
+function pthread_getattr_np(AThread: pthread_t;
+  AAttr: PPthreadAttr): cint; cdecl; external 'pthread'
+  name 'pthread_getattr_np';
+function pthread_attr_getstack(AAttr: PPthreadAttr; AStackAddr: PPointer;
+  AStackSize: psize_t): cint; cdecl; external 'pthread'
+  name 'pthread_attr_getstack';
+function Pthread_attr_destroy(AAttr: PPthreadAttr): cint; cdecl;
+  external 'pthread' name 'pthread_attr_destroy';
+
+// Asks the thread library for the stack it gave the calling thread. For a
+// thread it created, glibc answers from its own record of the stack and
+// leaves the guard pages out: the lowest address is the first one above the
+// guard, and the size runs from there to the top, where the thread's static
+// TLS and its descriptor take the first bytes.
+function TryGetThreadLibraryStackBounds(out ALow, ASize: NativeUInt): Boolean;
+var
+  Attr: pthread_attr_t;
+  StackAddr: Pointer;
+  StackSize: size_t;
+begin
+  ALow := 0;
+  ASize := 0;
+  Result := False;
+  if pthread_getattr_np(pthread_self, @Attr) <> 0 then
+    Exit;
+  try
+    if (pthread_attr_getstack(@Attr, @StackAddr, @StackSize) = 0) and
+       (StackSize > 0) then
+    begin
+      ALow := NativeUInt(StackAddr);
+      ASize := NativeUInt(StackSize);
+      Result := True;
+    end;
+  finally
+    Pthread_attr_destroy(@Attr);
+  end;
+end;
+
+// Another thread's bounds come from the thread library, which knows the
+// stack it gave the thread, and not from /proc/self/maps alone: glibc 2.42
+// and later install a thread's guard page inside its stack's mapping
+// (MADV_GUARD_INSTALL, Linux 6.13 and later) instead of as a mapping of its
+// own, and the kernel merges two thread stacks that lie next to each other
+// into one mapping. /proc/self/maps then cannot tell a thread's own stack from
+// a neighbour's: a 512 KiB stack mapped just below a 4 MiB one reads as
+// 4.5 MiB. glibc before 2.34 keeps pthread_getattr_np in libpthread, so every
+// Linux program that uses this unit links it. The thread library's bounds are
+// still narrowed to the mapping that holds the running frame: for a stack the
+// host supplied, glibc reports the whole buffer, including any pages the host
+// protected at its bottom.
+//
+// The main thread's bounds, and another thread's where the thread library
+// cannot give them or gives bounds that do not hold the running frame (code
+// running on a stack of the host's own, such as a fiber), are read from the
+// mapping that holds the running frame in /proc/self/maps. The main thread's
+// stack grows down to RLIMIT_STACK below its top, but not into the guard gap
+// above the mapping beneath it. The kernel marks it [stack]; Valgrind gives
+// its program a main stack of its own, which is not marked and starts a few
+// pages long.
 function TryGetSystemStackBounds(out ALow, ASize: NativeUInt): Boolean;
 var
   Maps: TextFile;
   Line: AnsiString;
   Position, MapStart, MapEnd, PreviousEnd, Size: NativeUInt;
+  LibraryLow, LibrarySize, LibraryTop: NativeUInt;
+  HasLibraryBounds: Boolean;
   Limits: TRLimit;
 begin
   ALow := 0;
   ASize := 0;
   Result := False;
   Position := NativeStackPosition;
+  HasLibraryBounds := not IsMainThread and
+    TryGetThreadLibraryStackBounds(LibraryLow, LibrarySize) and
+    (Position > LibraryLow) and (Position - LibraryLow < LibrarySize);
   AssignFile(Maps, '/proc/self/maps');
   {$I-}
   Reset(Maps);
   {$I+}
   if IOResult <> 0 then
+  begin
+    if HasLibraryBounds then
+    begin
+      ALow := LibraryLow;
+      ASize := LibrarySize;
+      Result := True;
+    end;
     Exit;
+  end;
   try
     PreviousEnd := 0;
     while not Eof(Maps) do
@@ -299,7 +372,20 @@ begin
         Continue;
       if (Position >= MapStart) and (Position < MapEnd) then
       begin
-        if (Pos('[stack]', Line) > 0) or IsMainThread then
+        if HasLibraryBounds then
+        begin
+          // Both hold the running frame, so they overlap.
+          LibraryTop := LibraryLow + LibrarySize;
+          if MapStart > LibraryLow then
+            ALow := MapStart
+          else
+            ALow := LibraryLow;
+          if MapEnd < LibraryTop then
+            ASize := MapEnd - ALow
+          else
+            ASize := LibraryTop - ALow;
+        end
+        else if (Pos('[stack]', Line) > 0) or IsMainThread then
         begin
           if (FpGetRLimit(RLIMIT_STACK, @Limits) = 0) and
              (Limits.rlim_cur <> High(rlim_t)) then
@@ -325,6 +411,12 @@ begin
         Exit(ASize > 0);
       end;
       PreviousEnd := MapEnd;
+    end;
+    if HasLibraryBounds then
+    begin
+      ALow := LibraryLow;
+      ASize := LibrarySize;
+      Result := True;
     end;
   finally
     CloseFile(Maps);
