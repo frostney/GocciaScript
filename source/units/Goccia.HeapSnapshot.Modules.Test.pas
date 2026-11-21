@@ -109,6 +109,7 @@ type
     procedure TestTouchedSourceRunsNoModuleBody;
     procedure TestRefusesBytecodeCompiledBefore;
     procedure TestChangedEntryFileReloads;
+    procedure TestEntryRestoresUnderAnotherEntry;
     procedure TestStoppedCacheLeavesNoRecords;
     procedure TestSourceTextIsCharged;
     procedure TestUncheckedChainStopsResolution;
@@ -445,6 +446,8 @@ begin
     TestRefusesBytecodeCompiledBefore);
   Test('An entry file changed after its engine read it is loaded again',
     TestChangedEntryFileReloads);
+  Test('An entry module restores into an engine made with another entry',
+    TestEntryRestoresUnderAnotherEntry);
   Test('A restore stopped while it caches its records leaves none behind',
     TestStoppedCacheLeavesNoRecords);
   Test('The source text a restore keeps until it commits is charged',
@@ -1346,6 +1349,23 @@ begin
   finally
     Run.Free;
   end;
+end;
+
+// The entry keeps its completion value and an imported module does not, so
+// the two compile differently. The snapshot records which module was the
+// entry, and a restore into an engine made with another entry compiles that
+// module, read from its file, as the entry it was.
+procedure THeapSnapshotModulesTests.TestEntryRestoresUnderAnotherEntry;
+var
+  Refusal: string;
+  Bytes: TBytes;
+begin
+  Define('roleentry.js', 'tick(); const k = 7; capture({ k: () => k }); k + 1;');
+  Define('roleother.js', 'tick();');
+  Bytes := SnapshotEntry('roleentry.js', Refusal);
+  Expect<string>(Refusal).ToBe('');
+  Expect<string>(RoundTripEntry('roleother.js', Bytes,
+    'String(restored.k())')).ToBe('7');
 end;
 
 procedure THeapSnapshotModulesTests.TestStoppedCacheLeavesNoRecords;
