@@ -1200,7 +1200,10 @@ begin
      ACtx.Scope.MutableLocalsMayLeaveRegisters or
      ShouldTryWithBinding(ACtx.Scope, AInfo.Name) then
     Exit;
-  Result := InitializerAvoidsOwnBinding(AInfo.Initializer, AInfo.Name);
+  // An initializer that yields goes through a temporary too: the binding's
+  // register would hold what the initializer had computed into it (the left
+  // operand of `big && (yield 1)`) for as long as the generator is suspended.
+  Result := InitializerLeavesHoleUnobservable(AInfo.Initializer, AInfo.Name);
 end;
 
 // The type an initializer is known to produce, for the strict-types check of

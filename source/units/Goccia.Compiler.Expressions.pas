@@ -3162,9 +3162,9 @@ var
   IdentExpr: TGocciaIdentifierExpression;
   ObjReg, KeyReg: UInt16;
   PropIdx: UInt16;
-  EndJump, JumpIndex: Integer;
   NullishJumps: TGocciaCompilerJumpArray;
   NullishJumpCount: Integer;
+  TailBranch: TGocciaAwaitTailBranch;
 
   procedure EmitGlobalDeleteIdentifierResult(const AName: string);
   var
@@ -3268,6 +3268,8 @@ begin
       Exit;
     end;
 
+    TailBranch := BeginAwaitTailBranch(ACtx, ACtx.Scope.IsAwaitTail(AExpr),
+      nil);
     ObjReg := ACtx.Scope.AllocateRegister;
     NullishJumpCount := 0;
     CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
@@ -3297,14 +3299,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ObjReg, 0));
     end;
 
-    if NullishJumpCount > 0 then
-    begin
-      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      for JumpIndex := 0 to NullishJumpCount - 1 do
-        PatchJumpTarget(ACtx, NullishJumps[JumpIndex]);
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
-      PatchJumpTarget(ACtx, EndJump);
-    end;
+    // Deleting through a nullish optional chain is true.
+    EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
+      OP_LOAD_TRUE, TailBranch, ObjReg);
 
     ACtx.Scope.FreeRegister;
   end
