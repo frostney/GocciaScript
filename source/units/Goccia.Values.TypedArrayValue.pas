@@ -3129,7 +3129,8 @@ begin
     Sep := ',';
   // The join buffer keeps the join linear in its result, as
   // Array.prototype.join's does: appending to a string copies it each time.
-  Joined := TStringJoinBuffer.Create(Sep, CheckExecutionTimeoutNow);
+  Joined := TStringJoinBuffer.Create(Sep, CheckExecutionTimeoutNow,
+    CheckStringResultBytes);
   try
     for I := 0 to Len - 1 do
     begin
@@ -3167,7 +3168,8 @@ var
 begin
   TA := RequireAttachedTypedArray(AThisValue, '%TypedArray%.prototype.toLocaleString');
   Len := TA.Length;
-  Joined := TStringJoinBuffer.Create(',', CheckExecutionTimeoutNow);
+  Joined := TStringJoinBuffer.Create(',', CheckExecutionTimeoutNow,
+    CheckStringResultBytes);
   try
     for I := 0 to Len - 1 do
     begin

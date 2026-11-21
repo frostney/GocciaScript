@@ -19,6 +19,10 @@ function CheckedNativeByteSize(const AElementCount,
   AElementSize: Int64): Int64;
 procedure ReserveNativeBytes(const ABytes: Int64);
 procedure ReleaseNativeBytes(const ABytes: Int64);
+{ Raises the catchable RangeError that a string's own charge raises past the
+  memory budget, before a native join allocates a result of ABytes that the
+  budget would refuse once it is charged (StringJoin's gate). }
+procedure CheckStringResultBytes(const ABytes: Int64);
 
 implementation
 
@@ -29,6 +33,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.InstructionLimit,
+  Goccia.MemoryLimit,
   Goccia.Timeout,
   Goccia.Values.ErrorHelper;
 
@@ -93,6 +98,12 @@ begin
   GC := TGarbageCollector.Instance;
   if Assigned(GC) and (ABytes > 0) then
     GC.ReleaseExternalBytes(ABytes);
+end;
+
+procedure CheckStringResultBytes(const ABytes: Int64);
+begin
+  if not CanAllocateNativeBytes(ABytes) then
+    ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
 end;
 
 end.

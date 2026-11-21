@@ -66,6 +66,7 @@ type
     procedure TestOneLongStringIsNotCopied;
     procedure TestALongStringIsCopiedOnce;
     procedure TestShortStringsNeedNoScratchPerElement;
+    procedure TestAJoinPastTheBudgetThrowsARangeError;
   end;
 
 procedure TTestArrayValue.SetupTests;
@@ -80,6 +81,8 @@ begin
     TestALongStringIsCopiedOnce);
   Test('joining many one-character strings asks for a few times the result, not more per element',
     TestShortStringsNeedNoScratchPerElement);
+  Test('a join whose result would pass the memory budget throws a catchable RangeError',
+    TestAJoinPastTheBudgetThrowsARangeError);
 end;
 
 { Runs a script that builds `a`, ALength strings of ten digits, `ta`, a
@@ -234,6 +237,55 @@ begin
       [Work.Bytes, LONG_LENGTH]));
   Expect<Boolean>(Work.Bytes <=
     RESULT_RATIO * LONG_LENGTH * SizeOf(WideChar)).ToBe(True);
+end;
+
+{ The join asks the budget about its result before allocating it, and refuses
+  as the result's own charge would have: with a RangeError the script can
+  catch. }
+procedure TTestArrayValue.TestAJoinPastTheBudgetThrowsARangeError;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Convert: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  Collector: TGarbageCollector;
+  PreviousMaxBytes: Int64;
+
+  function Call: string;
+  begin
+    Result := TGocciaFunctionBase(Convert).Call(Args,
+      TGocciaUndefinedLiteralValue.UndefinedValue).ToStringLiteral.Value;
+  end;
+
+begin
+  Source := TStringList.Create;
+  Source.Text := Format(
+    'const a = Array.from({ length: %d }, (_, i) => String(i).padStart(10, "0"));' +
+    LineEnding +
+    'globalThis.convert = () => { try { return String(a.join(",").length); } ' +
+    'catch (e) { return e.name; } };', [LONG_LENGTH]);
+  Engine := TGocciaEngine.Create('array-join-budget.js', Source);
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    Engine.Execute;
+    Convert := TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('convert');
+    Collector := TGarbageCollector.Instance;
+    PreviousMaxBytes := Collector.MaxBytes;
+    try
+      Collector.Collect;
+      Collector.MaxBytes := Collector.BytesAllocated + 64 * 1024;
+      Expect<string>(Call).ToBe('RangeError');
+      Collector.MaxBytes := PreviousMaxBytes;
+      Expect<string>(Call).ToBe(IntToStr(LONG_LENGTH * 11 - 1));
+    finally
+      Collector.MaxBytes := PreviousMaxBytes;
+    end;
+  finally
+    Args.Free;
+    Engine.Free;
+    Source.Free;
+  end;
 end;
 
 begin

@@ -24,6 +24,8 @@ type
     procedure TestResultIsAllocatedOnce;
     procedure TestChunksAndLongStrings;
     procedure TestFinalCopyPolls;
+    procedure TestGateIsAskedBeforeTheResult;
+    procedure TestARaisingGateOrPollLeavesTheBufferEmpty;
   public
     procedure SetupTests; override;
   end;
@@ -50,6 +52,10 @@ begin
     TestChunksAndLongStrings);
   Test('the final copy polls once per poll interval of characters',
     TestFinalCopyPolls);
+  Test('the gate is asked about the result before it is allocated',
+    TestGateIsAskedBeforeTheResult);
+  Test('a gate or poll that raises leaves the buffer empty and usable',
+    TestARaisingGateOrPollLeavesTheBufferEmpty);
 end;
 
 function JoinOf(const ASeparator: UnicodeString;
@@ -106,11 +112,15 @@ end;
 
 procedure TStringJoinTests.TestOneStringIsReturnedItself;
 var
-  Text: UnicodeString;
+  Text, Short: UnicodeString;
 begin
   Text := StringOfChar('x', 1000);
+  Short := StringOfChar('s', 3);
   Expect<Boolean>(Pointer(JoinOf(',', [Text])) = Pointer(Text)).ToBe(True);
   Expect<Boolean>(Pointer(JoinOf('', ['', Text, ''])) = Pointer(Text))
+    .ToBe(True);
+  Expect<Boolean>(Pointer(JoinOf(',', [Short])) = Pointer(Short)).ToBe(True);
+  Expect<Boolean>(Pointer(JoinOf('', ['', Short])) = Pointer(Short))
     .ToBe(True);
 end;
 
@@ -237,6 +247,97 @@ begin
   Expect<Integer>(Length(Text))
     .ToBe(PART_COUNT * POLL_INTERVAL_LENGTH + PART_COUNT - 1);
   Expect<Integer>(PollCount).ToBe(Length(Text) div POLL_INTERVAL_LENGTH);
+end;
+
+var
+  GateCalls: Integer;
+  LastGateBytes, GateRefusesAbove: Int64;
+
+procedure RecordGate(const AResultBytes: Int64);
+begin
+  Inc(GateCalls);
+  LastGateBytes := AResultBytes;
+  if AResultBytes > GateRefusesAbove then
+    raise Exception.Create('refused');
+end;
+
+procedure RaisingPoll;
+begin
+  raise Exception.Create('aborted');
+end;
+
+procedure TStringJoinTests.TestGateIsAskedBeforeTheResult;
+var
+  Joined: TStringJoinBuffer;
+  Text: UnicodeString;
+  I: Integer;
+begin
+  GateCalls := 0;
+  GateRefusesAbove := High(Int64);
+  Joined := TStringJoinBuffer.Create(',', nil, RecordGate);
+  try
+    for I := 0 to 9999 do
+      Joined.Add(UnicodeString(IntToStr(I)));
+    Expect<Integer>(GateCalls).ToBe(0);
+    Text := Joined.Join;
+    Expect<Integer>(GateCalls).ToBe(1);
+    Expect<Boolean>(LastGateBytes = Length(Text) * SizeOf(WideChar))
+      .ToBe(True);
+    // A lone string is the result itself: nothing is allocated, nothing asked.
+    Joined.Add(Text);
+    Expect<Boolean>(Pointer(Joined.Join) = Pointer(Text)).ToBe(True);
+    Expect<Integer>(GateCalls).ToBe(1);
+  finally
+    Joined.Free;
+  end;
+end;
+
+procedure TStringJoinTests.TestARaisingGateOrPollLeavesTheBufferEmpty;
+var
+  Joined: TStringJoinBuffer;
+  Part: UnicodeString;
+  I: Integer;
+  Raised: Boolean;
+begin
+  GateRefusesAbove := 4 * MAXIMUM_CHUNK_LENGTH;
+  Joined := TStringJoinBuffer.Create(',', nil, RecordGate);
+  try
+    for I := 0 to 49999 do
+      Joined.Add(UnicodeString(IntToStr(I)));
+    Raised := False;
+    try
+      Joined.Join;
+    except
+      Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Integer>(Joined.ElementCount).ToBe(0);
+    Joined.Add('a');
+    Joined.Add('b');
+    Expect<string>(Joined.Join).ToBe('a,b');
+  finally
+    Joined.Free;
+  end;
+
+  Part := StringOfChar('p', POLL_INTERVAL_LENGTH);
+  Joined := TStringJoinBuffer.Create(',', RaisingPoll);
+  try
+    Joined.Add(Part);
+    Joined.Add(Part);
+    Raised := False;
+    try
+      Joined.Join;
+    except
+      Raised := True;
+    end;
+    Expect<Boolean>(Raised).ToBe(True);
+    Expect<Integer>(Joined.ElementCount).ToBe(0);
+    Joined.Add('c');
+    Joined.Add('d');
+    Expect<string>(Joined.Join).ToBe('c,d');
+  finally
+    Joined.Free;
+  end;
 end;
 
 begin

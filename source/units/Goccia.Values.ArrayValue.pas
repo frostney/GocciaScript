@@ -2030,8 +2030,11 @@ begin
         // appending to a string reallocates the whole string for each element
         // and separator, which made joining a large array, and so a template
         // literal or String() of one, take quadratic time. Its final copy
-        // polls the deadline and a host's abort, as View.Get does here.
-        Joined := TStringJoinBuffer.Create(Separator, CheckExecutionTimeoutNow);
+        // polls the deadline and a host's abort, as View.Get does here, and
+        // a result past the memory budget is refused before it is allocated,
+        // with the RangeError its charge would raise.
+        Joined := TStringJoinBuffer.Create(Separator, CheckExecutionTimeoutNow,
+          CheckStringResultBytes);
         try
           for I := 0 to View.Len - 1 do
           begin
