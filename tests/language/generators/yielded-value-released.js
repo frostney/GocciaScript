@@ -191,6 +191,33 @@ describe("a value a suspended generator has yielded", () => {
     expect(after - baseline).toBeLessThan(SIZE / 2);
   });
 
+  test("does not keep what an exited block left where an initializer suspends before writing", () => {
+    const source = {
+      *produce() {
+        {
+          const one = 1;
+          const two = 2;
+          const discarded = new ArrayBuffer(SIZE);
+          discarded.byteLength + one + two;
+        }
+        {
+          const marker = 0;
+          const sent = (yield first()) ? 2 : 3;
+          return [marker, sent];
+        }
+      },
+    };
+    const first = () => 1;
+    const iterator = source.produce();
+    const baseline = collect();
+    const head = iterator.next();
+    Goccia.gc();
+    const grown = Goccia.gc.bytesAllocated - baseline;
+    expect(head.value).toBe(1);
+    expect(grown).toBeLessThan(SIZE / 2);
+    expect(iterator.next(true)).toEqual({ value: [0, 2], done: true });
+  });
+
   test("is intact while the consumer holds it across collections", () => {
     const source = {
       *produce() {

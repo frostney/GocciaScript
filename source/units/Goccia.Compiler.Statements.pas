@@ -1232,7 +1232,7 @@ var
   ConstantType: TGocciaLocalType;
   IsStrict, HasInitializer, HasRealInitializer, IsTopLevelGlobalBacked,
   IsVarRedeclaration, UseWithVarInitializer: Boolean;
-  CanTrackConstant, HoldsOnlyNumbers: Boolean;
+  CanTrackConstant, HoldsOnlyNumbers, InitializerYields: Boolean;
   InitSlot: UInt16;
   NameIdx: UInt16;
   ProbeMissJump, TargetMissJump, TargetEndJump: Integer;
@@ -1518,11 +1518,22 @@ begin
       begin
         InitSlot := ACtx.Scope.AllocateRegister;
         try
+          // An initializer that yields can suspend before it writes InitSlot
+          // (`(yield 1) ? 2 : 3`), and the suspended frame would keep what an
+          // exited block left in that register; after the move, it would keep
+          // a second copy of the binding's value.
+          InitializerYields :=
+            InitializerAvoidsOwnBinding(Info.Initializer, Info.Name) and
+            not InitializerLeavesHoleUnobservable(Info.Initializer, Info.Name);
+          if InitializerYields then
+            EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, InitSlot, 0, 0));
           CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
           // Keep the lexical binding in its hole state until the entire
           // initializer has completed. Initializers that reference or assign
           // the binding must therefore observe the TDZ.
           EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, InitSlot, 0));
+          if InitializerYields then
+            EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, InitSlot, 0, 0));
         finally
           ACtx.Scope.FreeRegister;
         end;
@@ -3293,6 +3304,7 @@ var
   ClosedCount: Integer;
   Entry: TPendingFinallyEntry;
   OuterRegionPeak, TryRegionPeak: Integer;
+  PatternOuterPeak, PatternPeak: Integer;
 begin
   HasCatch := Assigned(AStmt.CatchBlock);
   HasFinally := Assigned(AStmt.FinallyBlock);
@@ -3406,12 +3418,17 @@ begin
     if Assigned(AStmt.CatchPattern) then
     begin
       DeclarePatternBindings(ACtx, AStmt.CatchPattern);
+      PatternOuterPeak := ACtx.Scope.BeginRegisterRegion;
       CompilePatternTest(ACtx, CatchReg, AStmt.CatchPattern, PatternTestReg);
+      PatternPeak := ACtx.Scope.EndRegisterRegion(PatternOuterPeak);
       PatternMismatchJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE,
         PatternTestReg);
       // Only the mismatch path rethrows CatchReg; a clause whose pattern
-      // matched has its bindings and needs the register no more.
+      // matched has its bindings and needs the register no more, nor the
+      // registers the test took the exception apart in (the items of an
+      // array pattern, a nested object).
       EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, CatchReg, 0, 0));
+      EmitClearDeadRegisters(ACtx, PatternPeak);
     end;
 
     if HasFinally then
@@ -4087,6 +4104,7 @@ var
   IterReg, ValueReg, DoneReg, CloseErrorReg, CloseResultReg: UInt16;
   LoopStart, ExitJump, MismatchJump, HandlerJump, CloseHandlerJump,
     ThrowCloseJump, I: Integer;
+  PatternOuterPeak, PatternPeak: Integer;
   Slot: UInt16;
   ClosedLocals: TArray<UInt16>;
   ClosedCount: Integer;
@@ -4179,8 +4197,12 @@ begin
     if Assigned(AStmt.MatchPattern) then
     begin
       DeclarePatternBindings(ACtx, AStmt.MatchPattern);
+      PatternOuterPeak := ACtx.Scope.BeginRegisterRegion;
       CompilePatternTest(ACtx, ValueReg, AStmt.MatchPattern, DoneReg);
+      PatternPeak := ACtx.Scope.EndRegisterRegion(PatternOuterPeak);
       MismatchJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, DoneReg);
+      // The registers the test took the value apart in hold parts of it.
+      EmitClearDeadRegisters(ACtx, PatternPeak);
     end;
     // The binding took its own copy of the value (a pattern's bindings, once
     // it matched), and the body would otherwise run with the value still in

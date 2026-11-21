@@ -34,6 +34,58 @@ describe("a value a matched pattern took and the program dropped", () => {
     expect(grown).toBeLessThan(SIZE / 2);
   });
 
+  test("is reclaimed in a catch clause whose array pattern matched", () => {
+    const run = () => {
+      const baseline = collect();
+      try {
+        throw [new ArrayBuffer(SIZE)];
+      } catch (error is [let first]) {
+        first = null;
+        error = null;
+        Goccia.gc();
+        return Goccia.gc.bytesAllocated - baseline;
+      }
+    };
+    expect(run()).toBeLessThan(SIZE / 2);
+  });
+
+  test("is reclaimed in a catch clause whose nested pattern matched", () => {
+    const run = () => {
+      const baseline = collect();
+      try {
+        throw { items: [new ArrayBuffer(SIZE)] };
+      } catch (error is { items: [let first] }) {
+        first = null;
+        error = null;
+        Goccia.gc();
+        return Goccia.gc.bytesAllocated - baseline;
+      }
+    };
+    expect(run()).toBeLessThan(SIZE / 2);
+  });
+
+  test("is reclaimed in a for await body whose array pattern matched", async () => {
+    const source = {
+      async *[Symbol.asyncIterator]() {
+        yield [new ArrayBuffer(SIZE)];
+      },
+    };
+    const run = async () => {
+      const baseline = collect();
+      const grown = [];
+      for await (let item is [let first] of source) {
+        first = null;
+        item = null;
+        Goccia.gc();
+        grown.push(Goccia.gc.bytesAllocated - baseline);
+      }
+      return grown;
+    };
+    const grown = await run();
+    expect(grown.length).toBe(1);
+    expect(grown[0]).toBeLessThan(SIZE / 2);
+  });
+
   test("still rethrows the exception a catch pattern did not match", () => {
     let caught = null;
     try {
