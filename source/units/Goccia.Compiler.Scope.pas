@@ -307,6 +307,10 @@ type
     // start) and folds that peak into the enclosing region.
     function BeginRegisterRegion: Integer;
     function EndRegisterRegion(const ASavedPeak: Integer): Integer;
+    // After code has cleared every register above the first free one, the
+    // enclosing region's peak goes back to APeak (or the first free register,
+    // if that is higher): what was cleared needs no clear again.
+    procedure ResetRegisterRegionPeak(const APeak: Integer);
 
     // How many OP_AWAIT instructions this scope's code has emitted. A
     // statement that emitted one has suspended the frame, which is where a
@@ -1257,6 +1261,14 @@ begin
   Result := FRegionPeakSlot;
   if ASavedPeak > FRegionPeakSlot then
     FRegionPeakSlot := ASavedPeak;
+end;
+
+procedure TGocciaCompilerScope.ResetRegisterRegionPeak(const APeak: Integer);
+begin
+  if APeak > FNextSlot then
+    FRegionPeakSlot := APeak
+  else
+    FRegionPeakSlot := FNextSlot;
 end;
 
 procedure TGocciaCompilerScope.FreeRegister;

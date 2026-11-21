@@ -874,6 +874,18 @@ begin
     for Slot := ACtx.Scope.NextSlot to RegionPeak - 1 do
       if Slot <> TempReg then
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
+    // Those registers are clear now, so an enclosing yield or statement need
+    // not clear them again: without this, yields nested through literals
+    // (`yield [yield [yield 0]]`) cleared quadratically many registers.
+    if TempReg >= ACtx.Scope.NextSlot then
+    begin
+      if Integer(TempReg) + 1 > OuterRegionPeak then
+        ACtx.Scope.ResetRegisterRegionPeak(Integer(TempReg) + 1)
+      else
+        ACtx.Scope.ResetRegisterRegionPeak(OuterRegionPeak);
+    end
+    else
+      ACtx.Scope.ResetRegisterRegionPeak(OuterRegionPeak);
     EmitInstruction(ACtx, EncodeABC(OP_YIELD, TempReg, TempReg,
       YIELD_FLAG_TEMP_OPERAND));
     if TempReg <> ADest then

@@ -213,6 +213,7 @@ type
     procedure TestOtherFunctionKindsReturnWithoutAwait;
     procedure TestForAwaitCloseAwaitsReturnResult;
     procedure TestTailAwaitBranchClearsInsideBranch;
+    procedure TestNestedYieldsClearLinearly;
     procedure TestAwaitUsingAwaitsDisposeResultOnce;
     procedure TestUsingDisposalDistinguishesReturnFromThrow;
     procedure TestForAwaitUsingHeadIteratesAsynchronously;
@@ -489,6 +490,8 @@ begin
     TestForAwaitCloseAwaitsReturnResult);
   Test('a skippable await in a statement''s tail clears inside its branch',
     TestTailAwaitBranchClearsInsideBranch);
+  Test('nested yields clear each scratch register once',
+    TestNestedYieldsClearLinearly);
   Test('await using awaits a dispose result once',
     TestAwaitUsingAwaitsDisposeResultOnce);
   Test('a using handler tells a generator return from a throw',
@@ -926,6 +929,37 @@ begin
   finally
     Module.Free;
   end;
+end;
+
+// A yield clears the registers its operand left above the live ones before it
+// suspends, and an enclosing yield does not clear them again, so yields nested
+// through array literals emit clears in proportion to their depth.
+procedure TTestCompiler.TestNestedYieldsClearLinearly;
+
+  function ClearsAtDepth(const ADepth: Integer): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Source: string;
+    I: Integer;
+  begin
+    Source := '0';
+    for I := 1 to ADepth do
+      Source := '[yield ' + Source + ']';
+    Module := CompileSource('const holder = { *g() { ' + Source + '; } };');
+    try
+      Result := CountOpRecursive(Module.TopLevel, OP_LOAD_UNDEFINED);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  Shallow, Deep: Integer;
+begin
+  Shallow := ClearsAtDepth(10);
+  Deep := ClearsAtDepth(40);
+  // Linear growth: a few clears per level, not a level's worth per level.
+  Expect<Boolean>(Deep - Shallow <= 3 * 30).ToBe(True);
 end;
 
 // ES2026 §14.10.1 step 3: the value is awaited while the try is still
