@@ -262,6 +262,13 @@ test's `import()` resolves through its file's resolver. Globals and virtual modu
 (`Goccia.CLI.G2FileEngine`). Not yet on G2: `--heap-snapshots`, which needs G2's own heap snapshot codec (the
 embedder feature of [ADR 0148](../adr/0148-heap-snapshots-at-idle-points.md)), and `.gbc` test files.
 
+### GocciaREPL
+
+`./build.pas g2repl` builds `build/g2/GocciaREPL` from `source/app/GocciaREPLG2.dpr`: one G2 engine for the session
+on a thread of its own, each input run on it as a Script (`TG2Engine.Run` again), so declarations and imports stay
+for the next input. Values print by the old REPL's rules (`host.js` `replFormat`, the `g2rfREPL` result form); each
+run's Script imports are a module of their own, and a rejection an input leaves goes with it.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
