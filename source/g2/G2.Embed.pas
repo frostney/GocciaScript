@@ -18,7 +18,7 @@ type
   { how the entry's completion value is reported: not at all, as String(value) (--print), or as JSON (a CLI's JSON
     report: JSON.stringify's text, with undefined as null and a function or what JSON leaves out as its quoted
     String form) }
-  TG2ResultForm = (g2rfNone, g2rfString, g2rfJSON, g2rfSandbox);
+  TG2ResultForm = (g2rfNone, g2rfString, g2rfJSON, g2rfSandbox, g2rfREPL, g2rfREPLColor);
   { a warning of the entry's parse (warning-unsupported-features), given to the host before the entry runs }
   TG2WarningEvent = procedure(const Message, Suggestion: UnicodeString; Line, Column: Integer) of object;
 
@@ -297,6 +297,8 @@ begin
   end;
   { a sandbox child's value, for the calling engine to decode }
   if Form = g2rfSandbox then Exit(EncodeSandboxValue(V, Text));
+  { the REPL's display of an input's value }
+  if Form in [g2rfREPL, g2rfREPLColor] then Exit(ReplFormat(V, Form = g2rfREPLColor, Text));
   { JSON }
   if V = VUndefined then begin Text := 'null'; Exit(True); end;
   if not IsCallable(V) and IsObject(StringifyFn) then
@@ -981,6 +983,9 @@ begin
       Pending := Thrown;
       Result.Ok := False;
     end;
+    { what a run left rejected goes with it, reported or not: a later run on this engine (a REPL's next input) is
+      not blamed for it }
+    if FFailOnUnhandledRejection then TakeRejections(0);
     { an entry module still waiting once nothing is left to settle it failed (GocciaScript's await of a promise
       that never settles); a rejection nothing handled comes first }
     if Result.Ok and Result.IsModule and EntryEvaluationPending then
@@ -1026,9 +1031,8 @@ begin
       if LoadFailure(FailPath, FailLine, FailColumn) then
       begin
         { an explicit Script's import declaration: the entry's own }
-        if (Length(FailPath) > Length(ScriptImportsSuffix)) and
-           (Copy(FailPath, Length(FailPath) - Length(ScriptImportsSuffix) + 1, MaxInt) = ScriptImportsSuffix) then
-          SetLength(FailPath, Length(FailPath) - Length(ScriptImportsSuffix));
+        if Pos(ScriptImportsSuffix, FailPath) > 1 then
+          SetLength(FailPath, Pos(ScriptImportsSuffix, FailPath) - 1);
         Result.ErrorIsError := True;
         if ModuleParseFailure(ParsePath, ParseName, ParseLine, ParseColumn, ParseSuggestion) then
         begin

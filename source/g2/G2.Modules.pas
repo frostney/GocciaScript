@@ -1366,11 +1366,20 @@ begin
     end;
 end;
 
+threadvar
+  { the runs of this engine's Script entries with imports, and the companion module's key of the latest: each run's
+    imports are a module of their own (a REPL runs one input after another under one name) }
+  ScriptImportRuns: Integer;
+  ScriptImportKey: UnicodeString;
+
 function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
 var M: TModRec; R: TValue; Key, SavedPath, SavedSrc: UnicodeString; Ok: Boolean;
 begin
   Evaluation := VUndefined;
+  Inc(ScriptImportRuns);
   Key := EntryPath + ScriptImportsSuffix;
+  if ScriptImportRuns > 1 then Key := Key + UnicodeString(IntToStr(ScriptImportRuns));
+  ScriptImportKey := Key;
   SavedPath := ProvidedPath;
   SavedSrc := ProvidedSrc;
   SetProvidedSource(Key, Source);
@@ -1397,7 +1406,7 @@ begin
   else
     Exit(ThrowTypeError('await: Promise did not settle'));
   end;
-  M := FindModule(EntryPath + ScriptImportsSuffix);
+  M := FindModule(ScriptImportKey);
   if (M = nil) or (M.Info = nil) then Exit(ThrowTypeError('The Script entry''s imports did not load'));
   for I := 0 to High(M.Info.Imports) do
     if M.Info.Imports[I].LocalName <> '' then

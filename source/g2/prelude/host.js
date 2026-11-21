@@ -77,6 +77,83 @@
   // the test runner's vitest compatibility shim, over goccia:test and goccia:timers (--no-vitest-compat: none)
   if (testMode && !configFlag('no-vitest-compat')) shared.hostModules.vitest = () => n.vitestSource();
 
+  // the REPL's value display (Goccia.REPL.Formatter): primitives as literals, functions, promises, errors, regexps,
+  // Maps and Sets by their kind, anything else as JSON with a two-space indent; color: ANSI colors
+  {
+    const MAX_ITEMS = 100;
+    const paint = (text, code, color) => (color ? `\x1b[${code}m${text}\x1b[0m` : text);
+    const escapeText = (s) => {
+      let out = '';
+      for (const c of s) {
+        const k = c.charCodeAt(0);
+        if (c === "'") out += "\\'";
+        else if (c === '\\') out += '\\\\';
+        else if (k === 8) out += '\\b';
+        else if (k === 9) out += '\\t';
+        else if (k === 10) out += '\\n';
+        else if (k === 13) out += '\\r';
+        else if (k < 32) out += '\\x' + k.toString(16).toUpperCase().padStart(2, '0');
+        else out += c;
+      }
+      return out;
+    };
+    const tryCall = (fn, v) => { try { fn.call(v); return true; } catch { return false; } };
+    const mapSize = Object.getOwnPropertyDescriptor(Map.prototype, 'size').get;
+    const setSize = Object.getOwnPropertyDescriptor(Set.prototype, 'size').get;
+    const regexpSource = Object.getOwnPropertyDescriptor(RegExp.prototype, 'source').get;
+    const isError = typeof Error.isError === 'function' ? Error.isError : (v) => v instanceof Error;
+    const stringify = JSON.stringify;
+    const format = (v, color) => {
+      if (v === undefined) return paint('undefined', '90', color);
+      if (v === null) return paint('null', '1', color);
+      switch (typeof v) {
+        case 'string': return paint("'" + escapeText(v) + "'", '32', color);
+        case 'number': case 'boolean': return paint(String(v), '33', color);
+        case 'bigint': return paint(String(v) + 'n', '33', color);
+        case 'symbol': return paint(String(v), '32', color);
+        case 'function': {
+          const name = String(v.name);
+          return paint(name !== '' ? `[Function: ${name}]` : '[Function (anonymous)]', '36', color);
+        }
+      }
+      const state = n.promiseState(v);
+      if (state !== undefined) {
+        if (state[0] === 0) return 'Promise { ' + paint('<pending>', '36', color) + ' }';
+        const inner = state[1] === v ? paint('[Circular]', '36', color) : format(state[1], color);
+        if (state[0] === 1) return 'Promise { ' + inner + ' }';
+        return 'Promise { ' + paint('<rejected>', '31', color) + ' ' + inner + ' }';
+      }
+      if (isError(v)) return paint(String(v.name) + ': ' + String(v.message), '31', color);
+      if (v !== RegExp.prototype && tryCall(regexpSource, v)) return paint(RegExp.prototype.toString.call(v), '31', color);
+      if (tryCall(mapSize, v)) {
+        const size = mapSize.call(v);
+        if (size === 0) return `Map(0) {}`;
+        const parts = [];
+        let i = 0;
+        for (const [k, x] of Map.prototype.entries.call(v)) {
+          if (i >= MAX_ITEMS) { parts.push(`... ${size - MAX_ITEMS} more`); break; }
+          parts.push(format(k, color) + ' => ' + format(x, color));
+          i++;
+        }
+        return `Map(${size}) { ` + parts.join(', ') + ' }';
+      }
+      if (tryCall(setSize, v)) {
+        const size = setSize.call(v);
+        if (size === 0) return `Set(0) {}`;
+        const parts = [];
+        let i = 0;
+        for (const x of Set.prototype.values.call(v)) {
+          if (i >= MAX_ITEMS) { parts.push(`... ${size - MAX_ITEMS} more`); break; }
+          parts.push(format(x, color));
+          i++;
+        }
+        return `Set(${size}) { ` + parts.join(', ') + ' }';
+      }
+      return String(stringify(v, null, '  '));
+    };
+    shared.replFormat = format;
+  }
+
   // Performance (High Resolution Time, as GocciaScript has it): an interface script cannot construct, whose
   // prototype holds now(), timeOrigin (the epoch time the realm started at), toJSON() and the toStringTag, its
   // members enumerable as WebIDL makes them; the global performance is its one instance

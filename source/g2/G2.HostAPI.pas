@@ -50,6 +50,9 @@ procedure SetConsoleSink(Sink: TConsoleSink);
 { the resolver of this thread's imports: a host's, configured with its import map, aliases and node_modules grant
   (Goccia.Modules.Resolver, not owned); nil for the plain one, which resolves relative and absolute paths only }
 procedure SetHostResolver(R: TModuleResolver);
+{ the REPL's display of V (host.js replFormat, Goccia.REPL.Formatter's rules), with ANSI colors when Color; False
+  with an exception pending when a getter it ran threw }
+function ReplFormat(V: TValue; Color: Boolean; var Text: UnicodeString): Boolean;
 type
   { a host's refusal of an import by its capability policy (a provider package or node_modules the import
     capability does not grant), raised from the host resolver's grant: the resolution throws the host realm's
@@ -1410,6 +1413,39 @@ begin
   end;
 end;
 
+{ promiseState(p): [0 pending | 1 fulfilled | 2 rejected, the value or reason], or undefined for anything else }
+function Host_PromiseState(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Status: Integer; V: TValue;
+begin
+  Res := VUndefined;
+  Result := True;
+  if (Argc < 1) or not IsPromiseValue(Args[1]) then Exit;
+  V := VUndefined;
+  Status := PromiseStatus(Args[1], V);
+  PushRoot(V);
+  PushRoot(MkPtr(NewArray(0, 2)));
+  ArrayPush(ObjOf(RootAt(TempTop - 1)), MkNumber(Status));
+  ArrayPush(ObjOf(RootAt(TempTop - 1)), RootAt(TempTop - 2));
+  Res := RootAt(TempTop - 1);
+  PopRoots(2);
+end;
+
+function ReplFormat(V: TValue; Color: Boolean; var Text: UnicodeString): Boolean;
+var F, R: TValue; A: array[0..1] of TValue;
+begin
+  Text := '';
+  if not IsObject(SharedV) or not GetV(SharedV, AtomOf('replFormat'), F) or not IsCallable(F) then
+  begin
+    Result := ToStringV(V, R) and IsString(R);
+    if Result then Text := StrToUnicode(StrOf(R));
+    Exit;
+  end;
+  A[0] := V;
+  A[1] := MkBool(Color);
+  Result := CallValue(F, VUndefined, @A[0], 2, R);
+  if Result and IsString(R) then Text := StrToUnicode(StrOf(R));
+end;
+
 { moduleLoaded(key): whether a module record is keyed key (a virtual module may not replace it) }
 function Host_ModuleLoaded(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 begin
@@ -1742,6 +1778,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
   DefineNative(RootAt(TempTop - 1), 'moduleLoaded', Host_ModuleLoaded, 1);
+  DefineNative(RootAt(TempTop - 1), 'promiseState', Host_PromiseState, 1);
   DefineFetchNatives(RootAt(TempTop - 1));
   if SandboxActive then DefineSandboxNatives(RootAt(TempTop - 1));
   Result := RootAt(TempTop - 1);
