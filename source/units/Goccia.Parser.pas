@@ -131,6 +131,9 @@ type
     FNotTypeArgumentStarts: THashMap<Integer, Boolean>;
     // Constructor probes have different accepted followers and bracket rules.
     FNotNewTypeArgumentStarts: THashMap<Integer, Boolean>;
+    // The token index just past the last `new X` parsed with no argument
+    // list, or -1: a call's type arguments read there could be X's tag's.
+    FBareNewEnd: Integer;
     FSourceLines: TStringList;
     FWarnings: array of TGocciaParserWarning;
     FWarningCount: Integer;
@@ -795,6 +798,7 @@ begin
   FActiveLabels := TUnicodeStringList.Create;
   FActiveIterationLabels := TUnicodeStringList.Create;
   FDirectLabelStart := -1;
+  FBareNewEnd := -1;
   FAllowInExpression := True;
   FConditionalConsequentDepth := 0;
 end;
@@ -819,6 +823,7 @@ begin
   FActiveLabels := TUnicodeStringList.Create;
   FActiveIterationLabels := TUnicodeStringList.Create;
   FDirectLabelStart := -1;
+  FBareNewEnd := -1;
   FAllowInExpression := True;
   FConditionalConsequentDepth := 0;
 end;
@@ -3197,8 +3202,7 @@ begin
           // tag (`new tag<T>`x`` constructs what the tag returns), which
           // this cannot reorder, so only a call's '(' follows there.
           if not TryCollectCallExpressionTypeArguments(PendingTypeArguments,
-            (Result is TGocciaNewExpression) and
-            (Previous.TokenType <> gttRightParen)) then
+            (Result is TGocciaNewExpression) and (FBareNewEnd = FCurrent)) then
             Break;
         end;
     else
@@ -3780,6 +3784,7 @@ begin
         begin
           Args := TObjectList<TGocciaExpression>.Create(True);
           Result := TGocciaNewExpression.Create(Expr, Args, SourceSpanAtPosition(Line, Column));
+          FBareNewEnd := FCurrent;
         end;
         Result.AddTypeRanges(TypeRanges);
       end;
@@ -10893,7 +10898,7 @@ var
     Result := (AName = 'any') or (AName = 'unknown') or (AName = 'never') or
       (AName = 'number') or (AName = 'bigint') or (AName = 'boolean') or
       (AName = 'string') or (AName = 'symbol') or (AName = 'object') or
-      (AName = 'undefined') or (AName = 'intrinsic');
+      (AName = 'undefined');
   end;
 
   function PeekIsContextualKeyword(const AKeyword: string): Boolean;
@@ -11139,7 +11144,7 @@ var
       begin
         if PeekType = gttSpread then
           AdvanceType;
-        if not (PeekType in [gttIdentifier, gttThis]) then
+        if not IsIdentifierBindingToken(PeekType) and (PeekType <> gttThis) then
         begin
           IsParameterList := False;
           Break;
@@ -11225,6 +11230,18 @@ var
             begin
               if not SkipImportType or not SkipTypeArgumentsSuffix('') then
                 Exit;
+            end
+            else if PeekType = gttThis then
+            begin
+              // `typeof this.key`, in a class body.
+              AdvanceType;
+              while PeekType = gttDot do
+              begin
+                AdvanceType;
+                if not IsIdentifierNameToken(PeekType) then
+                  Exit;
+                AdvanceType;
+              end;
             end
             else if not SkipName or not SkipTypeArgumentsSuffix('') then
               Exit;

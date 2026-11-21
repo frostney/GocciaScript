@@ -77,6 +77,19 @@ describe("template literal type arguments", () => {
     expect(identity< <out>() => `${string}`>(3)).toBe(3);
     expect(identity<`${typeof from}`>(4)).toBe(4);
     expect(identity<`${keyof { readonly key: unique symbol }}`>(5)).toBe(5);
+    expect(identity<(from: string) => `id-${string}`>(6)).toBe(6);
+  });
+
+  test("with a type query on this", () => {
+    class Keyed {
+      key = "k";
+
+      read() {
+        return identity<`${typeof this.key}`>(7);
+      }
+    }
+
+    expect(new Keyed().read()).toBe(7);
   });
 
   test("as the constraint of a type parameter with a default", () => {
@@ -189,6 +202,17 @@ describe("comparisons with templates and calls", () => {
     // prettier-ignore
     expect(typeof (a < `${b
 [0]}` > (c))).toBe("boolean");
+  });
+
+  test("type arguments after a new with no argument list are not a tag's", () => {
+    const tag = () => class {};
+
+    // `new tag<T>`x`` would call tag first; that form is not read, so it is
+    // not run in the opposite order either.
+    // prettier-ignore
+    expect(() => new tag<`id-${string}`>`ok`).toThrow(TypeError);
+    // prettier-ignore
+    expect(() => new (tag)<`id-${string}`>`ok`).toThrow(TypeError);
   });
 
   test("a call between the angle brackets keeps the comparison reading", () => {
