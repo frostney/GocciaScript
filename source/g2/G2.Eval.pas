@@ -459,6 +459,16 @@ begin
       begin
         Err := UnicodeString(E.Message);
         if E is TGocciaReferenceError then ErrName := 'ReferenceError' else ErrName := 'SyntaxError';
+        { where in the module, for the host's report of an import whose module did not parse }
+        ParseErrorLine := 0;
+        ParseErrorColumn := 0;
+        ParseErrorSuggestion := '';
+        if E is TGocciaError then
+        begin
+          ParseErrorLine := TGocciaError(E).Line;
+          ParseErrorColumn := TGocciaError(E).Column;
+          ParseErrorSuggestion := UnicodeString(TGocciaError(E).Suggestion);
+        end;
       end;
     end;
   finally
@@ -749,6 +759,16 @@ begin
       begin
         Err := UnicodeString(E.Message);
         if E is TGocciaReferenceError then ErrName := 'ReferenceError' else ErrName := 'SyntaxError';
+        { where in the module, for the host's report of an import whose module did not parse }
+        ParseErrorLine := 0;
+        ParseErrorColumn := 0;
+        ParseErrorSuggestion := '';
+        if E is TGocciaError then
+        begin
+          ParseErrorLine := TGocciaError(E).Line;
+          ParseErrorColumn := TGocciaError(E).Column;
+          ParseErrorSuggestion := UnicodeString(TGocciaError(E).Suggestion);
+        end;
       end;
     end;
   finally

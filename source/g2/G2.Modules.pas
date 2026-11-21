@@ -88,6 +88,10 @@ procedure SetEntryCompletionWanted(Wanted: Boolean);
   False when no import failed since ClearLoadFailure }
 procedure ClearLoadFailure;
 function LoadFailure(out Path: UnicodeString; out Line, Column: Integer): Boolean;
+{ the first imported module of the run that did not parse: its path, the error's name, line, column and suggestion;
+  False when none failed (the host reports it where it is, as GocciaRunner does) }
+function ModuleParseFailure(out Path, Name: UnicodeString; out Line, Column: Integer;
+  out Suggestion: UnicodeString): Boolean;
 { the static import whose specifier the host is resolving now (while a module links): the importing module's path
   and the declaration's line and column; False otherwise }
 function ImportSiteNow(out Path: UnicodeString; out Line, Column: Integer): Boolean;
@@ -335,6 +339,9 @@ end;
 threadvar
   ProvidedPath, ProvidedSrc: UnicodeString;
   LoadFailPath: UnicodeString;
+  { the first imported module that did not parse (ModuleParseFailure) }
+  ParseFailPath, ParseFailName, ParseFailSuggestion: UnicodeString;
+  ParseFailLine, ParseFailColumn: Integer;
   LoadFailLine, LoadFailColumn: Integer;
   { ImportSiteNow }
   SitePath: UnicodeString;
@@ -346,9 +353,21 @@ threadvar
 
 procedure ClearLoadFailure;
 begin
+  ParseFailPath := '';
   LoadFailPath := '';
   LoadFailLine := 0;
   LoadFailColumn := 0;
+end;
+
+function ModuleParseFailure(out Path, Name: UnicodeString; out Line, Column: Integer;
+  out Suggestion: UnicodeString): Boolean;
+begin
+  Path := ParseFailPath;
+  Name := ParseFailName;
+  Line := ParseFailLine;
+  Column := ParseFailColumn;
+  Suggestion := ParseFailSuggestion;
+  Result := Path <> '';
 end;
 
 function LoadFailure(out Path: UnicodeString; out Line, Column: Integer): Boolean;
@@ -594,6 +613,14 @@ begin
   if not Compiled then
   begin
     M.Errored := True;
+    if (ParseFailPath = '') and (ParseErrorLine > 0) then
+    begin
+      ParseFailPath := Path;
+      ParseFailName := ErrName;
+      ParseFailLine := ParseErrorLine;
+      ParseFailColumn := ParseErrorColumn;
+      ParseFailSuggestion := ParseErrorSuggestion;
+    end;
     ThrowError(ErrName, Err);
     SetRoot(M, rError, Pending);
     Exit(False);

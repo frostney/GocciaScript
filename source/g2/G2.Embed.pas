@@ -848,7 +848,8 @@ begin
 end;
 
 function TG2Engine.Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
-var Kind, Phase, I, FailLine, FailColumn: Integer; T: PFuncTemplate; Err, FailPath: UnicodeString;
+var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
+  Err, FailPath, ParsePath, ParseName, ParseSuggestion: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
   Compiled: Boolean;
 begin
@@ -1029,12 +1030,25 @@ begin
            (Copy(FailPath, Length(FailPath) - Length(ScriptImportsSuffix) + 1, MaxInt) = ScriptImportsSuffix) then
           SetLength(FailPath, Length(FailPath) - Length(ScriptImportsSuffix));
         Result.ErrorIsError := True;
-        { a refused read stays the PermissionDenied it is, located at the declaration }
-        if Result.ErrorName <> 'PermissionDenied' then Result.ErrorName := 'RuntimeError';
-        Result.ErrorFile := FailPath;
-        Result.ErrorLine := FailLine;
-        Result.ErrorColumn := FailColumn;
-        Result.ErrorResolvedPath := TakeResolveCandidate;
+        if ModuleParseFailure(ParsePath, ParseName, ParseLine, ParseColumn, ParseSuggestion) then
+        begin
+          { an imported module that did not parse: its SyntaxError where it is, as GocciaRunner reports it }
+          Result.ErrorName := ParseName;
+          Result.ErrorFile := ParsePath;
+          Result.ErrorLine := ParseLine;
+          Result.ErrorColumn := ParseColumn;
+          Result.ErrorSuggestion := ParseSuggestion;
+          TakeResolveCandidate;
+        end
+        else
+        begin
+          { a refused read stays the PermissionDenied it is, located at the declaration }
+          if Result.ErrorName <> 'PermissionDenied' then Result.ErrorName := 'RuntimeError';
+          Result.ErrorFile := FailPath;
+          Result.ErrorLine := FailLine;
+          Result.ErrorColumn := FailColumn;
+          Result.ErrorResolvedPath := TakeResolveCandidate;
+        end;
       end;
     end;
   finally
