@@ -4,7 +4,9 @@ program Goccia.StackLimit.Test;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
+  {$IFDEF LINUX}BaseUnix, UnixType,{$ENDIF}
   Classes,
+  SyncObjs,
   SysUtils,
 
   TestingPascalLibrary,
@@ -28,6 +30,10 @@ type
     procedure TestMainThreadHasItsStackBounds;
     procedure TestEachThreadHasItsOwnLimit;
     procedure TestSmallStackKeepsAQuarterFree;
+    procedure TestSmallStackBetweenOtherStacksKeepsAQuarterFree;
+    {$IFDEF LINUX}
+    procedure TestStackInsideALargerMappingKeepsAQuarterFree;
+    {$ENDIF}
     procedure TestShallowEntriesAreNotChecked;
     procedure TestRecursionStopsBeforeTheStackEnds;
     procedure Check(const ACondition: Boolean; const AWhat: string;
@@ -42,6 +48,10 @@ type
   TProbeThread = class(TThread)
   private
     FRecurse: Boolean;
+    // Set, when assigned, once the thread runs; the thread then waits for
+    // Go before it looks its limit up.
+    FRunning: TEvent;
+    FGo: TEvent;
     CachedLimit: NativeUInt;
     procedure Recurse(const ADepth: Integer);
   public
@@ -55,9 +65,26 @@ type
     SystemTop: NativeUInt;
     SystemSize: NativeUInt;
     RequestedSize: SizeUInt;
-    constructor Create(const AStackSize: SizeUInt; const ARecurse: Boolean);
+    // On Linux, for a probe that waits for Go: the size of the mapping in
+    // /proc/self/maps that holds its frame, which is larger than its stack
+    // where the kernel merged it with a neighbour's.
+    MappingSize: NativeUInt;
+    constructor Create(const AStackSize: SizeUInt; const ARecurse: Boolean;
+      const ARunning: TEvent = nil; const AGo: TEvent = nil);
     procedure Execute; override;
     function Describe: string;
+  end;
+
+  // Holds a stack of a given size until Release is set, allocating nothing,
+  // so that nothing of its own is mapped next to its stack.
+  THeldThread = class(TThread)
+  private
+    FRunning: TEvent;
+    FRelease: TEvent;
+  public
+    constructor Create(const AStackSize: SizeUInt;
+      const ARunning, ARelease: TEvent);
+    procedure Execute; override;
   end;
 
 {$IFDEF DARWIN}
@@ -68,10 +95,63 @@ function Pthread_get_stacksize_np(AThread: Pointer): NativeUInt; cdecl;
   external 'c' name 'pthread_get_stacksize_np';
 {$ENDIF}
 
+{$IFDEF LINUX}
+type
+  // What a thread started on a stack of the test's own records.
+  TOwnStackProbe = record
+    Limit: NativeUInt;
+    Position: NativeUInt;
+  end;
+  POwnStackProbe = ^TOwnStackProbe;
+
+function Pthread_attr_init(AAttr: Pointer): cint; cdecl;
+  external 'pthread' name 'pthread_attr_init';
+function Pthread_attr_setstack(AAttr: Pointer; AStackAddr: Pointer;
+  AStackSize: size_t): cint; cdecl;
+  external 'pthread' name 'pthread_attr_setstack';
+function Pthread_attr_destroy(AAttr: Pointer): cint; cdecl;
+  external 'pthread' name 'pthread_attr_destroy';
+function pthread_create(AThread: Pointer; AAttr: Pointer; AStart: Pointer;
+  AArg: Pointer): cint; cdecl; external 'pthread' name 'pthread_create';
+function Pthread_join(AThread: pthread_t; AResult: PPointer): cint; cdecl;
+  external 'pthread' name 'pthread_join';
+
+function ProbeOwnStack(AArg: Pointer): Pointer; cdecl;
+begin
+  POwnStackProbe(AArg)^.Limit := NativeStackLimit;
+  POwnStackProbe(AArg)^.Position := NativeStackPosition;
+  Result := nil;
+end;
+
+// Runs ProbeOwnStack on a thread whose stack is ASize bytes at AStack.
+function ProbeOnOwnStack(const AStack: Pointer; const ASize: NativeUInt;
+  out AProbe: TOwnStackProbe): Boolean;
+var
+  Attr: pthread_attr_t;
+  Thread: pthread_t;
+begin
+  FillChar(AProbe, SizeOf(AProbe), 0);
+  Result := False;
+  if pthread_attr_init(@Attr) <> 0 then
+    Exit;
+  try
+    Result := (pthread_attr_setstack(@Attr, AStack, ASize) = 0) and
+      (pthread_create(@Thread, @Attr, @ProbeOwnStack, @AProbe) = 0);
+  finally
+    pthread_attr_destroy(@Attr);
+  end;
+  if Result then
+    pthread_join(Thread, nil);
+end;
+{$ENDIF}
+
 constructor TProbeThread.Create(const AStackSize: SizeUInt;
-  const ARecurse: Boolean);
+  const ARecurse: Boolean; const ARunning: TEvent = nil;
+  const AGo: TEvent = nil);
 begin
   FRecurse := ARecurse;
+  FRunning := ARunning;
+  FGo := AGo;
   RequestedSize := AStackSize;
   inherited Create(True, AStackSize);
 end;
@@ -88,10 +168,53 @@ begin
     Recurse(ADepth + 1);
 end;
 
+{$IFDEF LINUX}
+// The size of the mapping in /proc/self/maps that holds APosition, or 0.
+function MappingSizeAt(const APosition: NativeUInt): NativeUInt;
+var
+  Maps: TStringList;
+  I, Dash, Space: Integer;
+  MapStart, MapEnd: NativeUInt;
+begin
+  Result := 0;
+  Maps := TStringList.Create;
+  try
+    try
+      Maps.LoadFromFile('/proc/self/maps');
+    except
+      on EStreamError do
+        Exit;
+    end;
+    for I := 0 to Maps.Count - 1 do
+    begin
+      Dash := Pos('-', Maps[I]);
+      Space := Pos(' ', Maps[I]);
+      if (Dash = 0) or (Space < Dash) then
+        Continue;
+      MapStart := StrToQWordDef('$' + Copy(Maps[I], 1, Dash - 1), 0);
+      MapEnd := StrToQWordDef('$' + Copy(Maps[I], Dash + 1,
+        Space - Dash - 1), 0);
+      if (APosition >= MapStart) and (APosition < MapEnd) then
+        Exit(MapEnd - MapStart);
+    end;
+  finally
+    Maps.Free;
+  end;
+end;
+{$ENDIF}
+
 procedure TProbeThread.Execute;
 begin
+  if Assigned(FRunning) then
+    FRunning.SetEvent;
+  if Assigned(FGo) then
+    FGo.WaitFor(INFINITE);
   Limit := NativeStackLimit;
   Position := NativeStackPosition;
+  {$IFDEF LINUX}
+  if Assigned(FGo) then
+    MappingSize := MappingSizeAt(Position);
+  {$ENDIF}
   {$IFDEF DARWIN}
   SystemTop := NativeUInt(Pthread_get_stackaddr_np(pthread_self));
   SystemSize := Pthread_get_stacksize_np(pthread_self);
@@ -110,6 +233,20 @@ begin
   end;
 end;
 
+constructor THeldThread.Create(const AStackSize: SizeUInt;
+  const ARunning, ARelease: TEvent);
+begin
+  FRunning := ARunning;
+  FRelease := ARelease;
+  inherited Create(True, AStackSize);
+end;
+
+procedure THeldThread.Execute;
+begin
+  FRunning.SetEvent;
+  FRelease.WaitFor(INFINITE);
+end;
+
 function TProbeThread.Describe: string;
 var
   Used: Int64;
@@ -122,6 +259,8 @@ begin
     [Int64(RequestedSize), Int64(Limit), Int64(Position),
      Int64(Position) - Int64(Limit), Int64(SystemTop), Int64(SystemSize),
      Used, Depth]);
+  if MappingSize <> 0 then
+    Result := Result + Format(', mapping %d KiB', [Int64(MappingSize) div 1024]);
 end;
 
 procedure TStackLimitTests.Check(const ACondition: Boolean;
@@ -141,6 +280,12 @@ begin
     TestEachThreadHasItsOwnLimit);
   Test('A stack smaller than four reserves keeps a quarter of it free',
     TestSmallStackKeepsAQuarterFree);
+  Test('A small stack between two other threads'' stacks keeps a quarter ' +
+    'of it free', TestSmallStackBetweenOtherStacksKeepsAQuarterFree);
+  {$IFDEF LINUX}
+  Test('A stack inside a larger mapping keeps a quarter of it free',
+    TestStackInsideALargerMappingKeepsAQuarterFree);
+  {$ENDIF}
   Test('Native re-entries nested no deeper than the unchecked depth pass',
     TestShallowEntriesAreNotChecked);
   Test('Recursion is stopped before it reaches the end of the stack',
@@ -209,6 +354,158 @@ begin
     Probe.Free;
   end;
 end;
+
+// With glibc 2.42 and later on Linux 6.13 and later, a thread's guard page is
+// inside its stack's mapping, and the kernel merges thread stacks that lie
+// next to each other into one mapping. Each thread maps a few small blocks of
+// its own when it starts, which would otherwise lie between the stacks; the
+// holes left first in the address space take them, so the probe's stack
+// usually lies directly below one thread's stack and directly above
+// another's. This reproduces the merge only where glibc and the kernel merge
+// stacks, and only where the layout works out; a failure reports the size of
+// the probe's mapping. Elsewhere it checks the same bounds on separate
+// stacks. TestStackInsideALargerMappingKeepsAQuarterFree checks a stack inside
+// a larger mapping on every glibc.
+procedure TStackLimitTests.TestSmallStackBetweenOtherStacksKeepsAQuarterFree;
+const
+  HOLE_COUNT = 8;
+  HOLE_BYTES = 64 * 1024;
+  // glibc reuses the stack of a thread that has ended for a new thread that
+  // asks for no more than it and at least a quarter of it. No earlier test
+  // asks for these sizes, so each of these threads gets a stack mapped for it.
+  PROBE_STACK_BYTES = 640 * 1024;
+  HELD_STACK_BYTES = 8 * MEBIBYTE;
+var
+  {$IFDEF LINUX}
+  Holes: array[0..HOLE_COUNT - 1] of Pointer;
+  {$ENDIF}
+  I: Integer;
+  Above, Below: THeldThread;
+  Probe: TProbeThread;
+  AboveRunning, BelowRunning, ProbeRunning, Go, Release: TEvent;
+  Room: NativeUInt;
+begin
+  {$IFDEF LINUX}
+  // Every other block is unmapped again, so each leaves a hole of its own.
+  for I := 0 to HOLE_COUNT - 1 do
+    Holes[I] := Fpmmap(nil, HOLE_BYTES, PROT_READ or PROT_WRITE,
+      MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
+  for I := 0 to HOLE_COUNT - 1 do
+    if (I mod 2 = 0) and (Holes[I] <> MAP_FAILED) then
+      Fpmunmap(Holes[I], HOLE_BYTES);
+  {$ENDIF}
+  AboveRunning := TEvent.Create(nil, True, False, '');
+  BelowRunning := TEvent.Create(nil, True, False, '');
+  ProbeRunning := TEvent.Create(nil, True, False, '');
+  Go := TEvent.Create(nil, True, False, '');
+  Release := TEvent.Create(nil, True, False, '');
+  Above := THeldThread.Create(HELD_STACK_BYTES, AboveRunning, Release);
+  Probe := TProbeThread.Create(PROBE_STACK_BYTES, False, ProbeRunning, Go);
+  Below := THeldThread.Create(HELD_STACK_BYTES, BelowRunning, Release);
+  try
+    Above.Start;
+    AboveRunning.WaitFor(INFINITE);
+    Probe.Start;
+    ProbeRunning.WaitFor(INFINITE);
+    Below.Start;
+    BelowRunning.WaitFor(INFINITE);
+    Go.SetEvent;
+    Probe.WaitFor;
+    Check(Probe.Limit <> 0, 'limit found', Probe);
+    Room := Probe.Position - Probe.Limit;
+    // More than a full reserve would leave.
+    Check(Room > PROBE_STACK_BYTES - NATIVE_STACK_RESERVE,
+      'room above 640 KiB less a full reserve', Probe);
+    {$IFNDEF MSWINDOWS}
+    Check(Room <= PROBE_STACK_BYTES div 4 * 3 + STACK_SIZE_SLACK,
+      'room within three quarters of 640 KiB', Probe);
+    {$ENDIF}
+  finally
+    Release.SetEvent;
+    Above.WaitFor;
+    Below.WaitFor;
+    Above.Free;
+    Below.Free;
+    Probe.Free;
+    AboveRunning.Free;
+    BelowRunning.Free;
+    ProbeRunning.Free;
+    Go.Free;
+    Release.Free;
+    {$IFDEF LINUX}
+    for I := 0 to HOLE_COUNT - 1 do
+      if (I mod 2 = 1) and (Holes[I] <> MAP_FAILED) then
+        Fpmunmap(Holes[I], HOLE_BYTES);
+    {$ENDIF}
+  end;
+end;
+
+{$IFDEF LINUX}
+// A thread whose stack is part of a larger mapping, as a thread stack is once
+// the kernel merges it with its neighbours: here the middle third of one
+// mapping the test owns, so /proc/self/maps shows three times the stack
+// wherever the test runs. Then the same stack with its bottom protected, as a
+// host can do to a stack it supplies: the thread library still reports the
+// whole buffer.
+procedure TStackLimitTests.TestStackInsideALargerMappingKeepsAQuarterFree;
+const
+  STACK_BYTES = 640 * 1024;
+  PROTECTED_BYTES = 256 * 1024;
+var
+  Mapping, Stack: PByte;
+  Probe: TOwnStackProbe;
+  Starter: TProbeThread;
+  Room: NativeUInt;
+  Started: Boolean;
+begin
+  // The RTL gives each thread its own threadvars once a thread of its own
+  // has started; a thread it did not start then gets them on first use.
+  if not IsMultiThread then
+  begin
+    Starter := TProbeThread.Create(STACK_BYTES, False);
+    Starter.Start;
+    Starter.WaitFor;
+    Starter.Free;
+  end;
+  Mapping := Fpmmap(nil, 3 * STACK_BYTES, PROT_READ or PROT_WRITE,
+    MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
+  Expect<Boolean>(Pointer(Mapping) <> MAP_FAILED).ToBe(True);
+  if Pointer(Mapping) = MAP_FAILED then
+    Exit;
+  Stack := Mapping + STACK_BYTES;
+  try
+    Started := ProbeOnOwnStack(Stack, STACK_BYTES, Probe);
+    Expect<Boolean>(Started).ToBe(True);
+    if not Started then
+      Exit;
+    Room := Probe.Position - Probe.Limit;
+    if (Room <= STACK_BYTES - NATIVE_STACK_RESERVE) or
+       (Room > STACK_BYTES div 4 * 3) then
+      Fail(Format('room of a quarter of a 640 KiB stack (stack $%x, ' +
+        'limit $%x, position $%x)', [NativeUInt(Stack), Probe.Limit,
+        Probe.Position]));
+    // The limit is in the thread's own stack, a quarter above its bottom.
+    Expect<Boolean>(Probe.Limit = NativeUInt(Stack) + STACK_BYTES div 4).
+      ToBe(True);
+
+    // A quarter of what is left above the protected pages.
+    Expect<Integer>(Fpmprotect(Stack, PROTECTED_BYTES, PROT_NONE)).ToBe(0);
+    Started := ProbeOnOwnStack(Stack, STACK_BYTES, Probe);
+    Expect<Boolean>(Started).ToBe(True);
+    if not Started then
+      Exit;
+    if Probe.Limit <> NativeUInt(Stack) + PROTECTED_BYTES +
+       (STACK_BYTES - PROTECTED_BYTES) div 4 then
+      Fail(Format('limit a quarter above the protected pages (stack $%x, ' +
+        'limit $%x, position $%x)', [NativeUInt(Stack), Probe.Limit,
+        Probe.Position]));
+    Expect<Boolean>(Probe.Limit = NativeUInt(Stack) + PROTECTED_BYTES +
+      (STACK_BYTES - PROTECTED_BYTES) div 4).ToBe(True);
+  finally
+    Fpmunmap(Mapping, 3 * STACK_BYTES);
+  end;
+end;
+{$ENDIF}
 
 procedure TStackLimitTests.TestShallowEntriesAreNotChecked;
 var
