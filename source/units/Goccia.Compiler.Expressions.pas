@@ -301,11 +301,13 @@ begin
   Result := ACtx.Scope.UnclearedAwaitCount <> ABranch.Mark;
 end;
 
+// AOwned, when not -1, is a register the branch's code still holds but
+// reads no more, cleared with the rest.
 procedure EmitAwaitTailClear(const ACtx: TGocciaCompilationContext;
-  const APeak: Integer);
+  const APeak: Integer; const AOwned: Integer = -1);
 begin
   Goccia.Compiler.Statements.EmitUncountedClearDeadRegisters(ACtx, APeak,
-    ACtx.Scope.AwaitTailDiscard);
+    ACtx.Scope.AwaitTailDiscard, AOwned);
 end;
 
 // Ends the branch where control leaves it: clears what its awaits left, and
@@ -329,12 +331,14 @@ end;
 // ANullishOp into ADest. When the chain is a tail branch (ABranch) that
 // awaited, the path that completes it clears, and so does the nullish path
 // of a jump taken after an await; a jump taken before any await reaches the
-// nullish result past that clear. With no jump, the chain is no branch, and
-// its awaits are left to the statement.
+// nullish result past that clear. AReceiver, when not -1, is the register
+// the chain's last object is in, which the caller frees after this end and
+// the clears cover. With no jump, the chain is no branch, and its awaits are
+// left to the statement.
 procedure EmitOptionalChainEnd(const ACtx: TGocciaCompilationContext;
   const AJumps: TGocciaCompilerJumpArray; const AJumpCount: Integer;
   const ADest: UInt16; const ANullishOp: TGocciaOpCode;
-  const ABranch: TGocciaAwaitTailBranch);
+  const ABranch: TGocciaAwaitTailBranch; const AReceiver: Integer = -1);
 var
   Peak, EndJump, FirstAwait, I: Integer;
   Awaited, Late: Boolean;
@@ -348,7 +352,7 @@ begin
   if Awaited then
   begin
     FirstAwait := ACtx.Scope.UnclearedAwaitCode(ABranch.Mark);
-    EmitAwaitTailClear(ACtx, Peak);
+    EmitAwaitTailClear(ACtx, Peak, AReceiver);
   end;
   EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
   if Awaited then
@@ -361,7 +365,7 @@ begin
         Late := True;
       end;
     if Late then
-      EmitAwaitTailClear(ACtx, Peak);
+      EmitAwaitTailClear(ACtx, Peak, AReceiver);
   end;
   for I := 0 to AJumpCount - 1 do
     if not (Awaited and (AJumps[I] > FirstAwait)) then
@@ -6368,8 +6372,12 @@ begin
   else
     EmitLoadMemberProperty(ACtx, AExpr, ADest, ObjReg, 0);
 
-  EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
-    OP_LOAD_UNDEFINED, TailBranch);
+  if ObjectRegisterAllocated then
+    EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
+      OP_LOAD_UNDEFINED, TailBranch, ObjReg)
+  else
+    EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
+      OP_LOAD_UNDEFINED, TailBranch);
 
   if ObjectRegisterAllocated then
     ACtx.Scope.FreeRegister;
@@ -9010,7 +9018,7 @@ begin
   EmitLoadPropertyByName(ACtx, ADest, ObjReg,
     PrivateKey(ACtx.Scope, AExpr.PrivateName), True);
   EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
-    OP_LOAD_UNDEFINED, TailBranch);
+    OP_LOAD_UNDEFINED, TailBranch, ObjReg);
   if NullishJumpCount = 0 then
     SetLength(NullishJumps, 0);
   ACtx.Scope.FreeRegister;

@@ -69,7 +69,7 @@ procedure EmitClearDeadRegisters(const ACtx: TGocciaCompilationContext;
   const ARegionPeak: Integer);
 procedure EmitUncountedClearDeadRegisters(
   const ACtx: TGocciaCompilationContext; const ARegionPeak: Integer;
-  const ADiscard: Integer = -1);
+  const ADiscard: Integer = -1; const AOwned: Integer = -1);
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 procedure CompileForInStatement(const ACtx: TGocciaCompilationContext;
@@ -3245,11 +3245,12 @@ end;
 // no source line: it takes line 0, which line coverage never counts, and the
 // line map goes back to what it was, so the clear neither marks a skipped
 // operand's line as executed nor counts the statement's first line a second
-// time. ADiscard, when not -1, is a register still allocated that holds a
-// value nothing reads again (the one an expression statement discards).
+// time. ADiscard and AOwned, when not -1, are registers still allocated that
+// hold a value nothing reads again: the one an expression statement discards,
+// and an optional chain's receiver, freed only after its end.
 procedure EmitUncountedClearDeadRegisters(
   const ACtx: TGocciaCompilationContext; const ARegionPeak: Integer;
-  const ADiscard: Integer);
+  const ADiscard: Integer; const AOwned: Integer);
 var
   Last: TGocciaLineMapEntry;
   HadMapping: Boolean;
@@ -3264,6 +3265,8 @@ begin
   if ADiscard >= 0 then
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(ADiscard), 0,
       0));
+  if (AOwned >= 0) and (AOwned <> ADiscard) then
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(AOwned), 0, 0));
   EmitClearDeadRegisters(ACtx, ARegionPeak);
   if HadMapping then
     DebugInfo.AddLineMapping(UInt32(ACtx.Template.CodeCount), Last.Line,

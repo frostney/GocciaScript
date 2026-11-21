@@ -140,6 +140,29 @@ describe("a value a statement awaited in a branch it took and then dropped", () 
     });
   }
 
+  test("is reclaimed after an optional member of an awaited value", async () => {
+    const run = async () => {
+      (await make())?.byteLength;
+      return grownAfter();
+    };
+    const baseline = collect();
+    const after = await run();
+    expect(after - baseline).toBeLessThan(SIZE / 2);
+  });
+
+  test("is reclaimed after an optional private member of an awaited value", async () => {
+    class Holder {
+      #buffer = new ArrayBuffer(SIZE);
+      static async read(makeHolder) {
+        (await makeHolder())?.#buffer;
+        return grownAfter();
+      }
+    }
+    const baseline = collect();
+    const after = await Holder.read(async () => new Holder());
+    expect(after - baseline).toBeLessThan(SIZE / 2);
+  });
+
   test("leaves a skipped branch's statement and the next one intact", async () => {
     const run = async (ready) => {
       const seen = [];
