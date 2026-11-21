@@ -109,6 +109,9 @@ procedure TestSnapshotsDone;
 threadvar
   { --test-timeout: each test's own deadline in milliseconds (0: none), before InstallTestingAPI }
   TestTimeoutMs: Int64;
+  { the testing library prints its per-test lines (a failure's, a skipped or todo test's) on stdout, as
+    GocciaTestRunner's reporter does outside a JSON run }
+  TestReporterOn: Boolean;
 
 implementation
 
@@ -2051,6 +2054,14 @@ begin
   Result := True;
 end;
 
+{ deadline.callTest(fn): a test function called with --max-stack counted from its own frame }
+function Test_CallTest(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if (Argc < 1) or not IsCallable(Args[1]) then Exit(ThrowTypeError('callTest needs a function'));
+  Res := VUndefined;
+  Result := CallRebased(Args[1], VUndefined, Res);
+end;
+
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
 var Base: Integer;
 begin
@@ -2069,6 +2080,9 @@ begin
   PushRoot(MkPtr(NewPlainObject(ObjectProto, 4)));
   DefineNative(RootAt(TempTop - 1), 'callWithin', Test_CallWithin, 2);
   DefineOwn(RootAt(TempTop - 1), AtomOf('testTimeoutMs'), MkNumber(TestTimeoutMs), pfDefault);
+  DefineOwn(RootAt(TempTop - 1), AtomOf('reporter'), MkBool(TestReporterOn), pfDefault);
+  DefineNative(RootAt(TempTop - 1), 'print', Host_WriteLine, 1);
+  DefineNative(RootAt(TempTop - 1), 'callTest', Test_CallTest, 1);
   DefineOwn(SharedV, AtomOf('deadline'), RootAt(TempTop - 1), pfDefault);
   PopRoots(1);
   { shared.work: the host work each unit leaves (rejections, job errors), attributed to it }

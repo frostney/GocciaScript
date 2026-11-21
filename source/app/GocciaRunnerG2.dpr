@@ -759,7 +759,7 @@ end;
 { one engine's memory.gc, from its heap when made (AStart) and after its run (AEnd), with its thread's memory
   manager over the same span (memory.heap); G2 does not count objects, so their counts stay 0 }
 function AggregateMemoryStats(const AReports: array of TG2FileReport; AParallel: Boolean;
-  const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
+  const AHeapStart, AHeapEnd: THeapStatus; AWorkers: Integer): TCLIJSONMemoryStats;
 var
   Stats: array of TCLIJSONMemoryStats;
   I: Integer;
@@ -767,7 +767,7 @@ begin
   SetLength(Stats, Length(AReports));
   for I := 0 to High(AReports) do
     Stats[I] := AReports[I].Memory;
-  Result := Goccia.CLI.G2FileEngine.AggregateMemoryStats(Stats, AParallel, AHeapStart, AHeapEnd);
+  Result := Goccia.CLI.G2FileEngine.AggregateMemoryStats(Stats, AParallel, AHeapStart, AHeapEnd, AWorkers);
 end;
 
 { the files' report: one file's own form, or the aggregate of GocciaRunner's BuildAggregateScriptLoaderJSON. As
@@ -833,7 +833,7 @@ begin
     FilesJSON := FilesJSON + FileJSON;
   end;
   WriteLn(BuildCLIReportJSON(Ok, OutputText, StdoutText, StderrText,
-    ErrorJSON, Timing, AggregateMemoryStats(FReports, FWorkers > 1, FHeapStart, GetHeapStatus),
+    ErrorJSON, Timing, AggregateMemoryStats(FReports, FWorkers > 1, FHeapStart, GetHeapStatus, FWorkers),
     FWorkers, FWorkers, FilesJSON, '',
     IsCompactJsonOutput));
 end;

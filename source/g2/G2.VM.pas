@@ -279,6 +279,9 @@ procedure LimitsResume(Ms: Int64);
 procedure LimitsSetDeadline(Ms: Int64);
 procedure LimitsDropTimer;
 procedure ClearTimeoutAbort;
+{ F called as an entry is: the frame bound (SetMaxFrames) counted from the frame F gets, not from the stack's
+  bottom (a test function the test runner calls from its own frames) }
+function CallRebased(F, This: TValue; var R: TValue): Boolean;
 { where the running script is: the innermost frame of user code (a file, <stdin>, or eval, Function or ShadowRealm
   code), its source and the line and column of the instruction running; False outside any }
 function CallSiteNow(out Source: UnicodeString; out Line, Column: Integer): Boolean;
@@ -787,6 +790,21 @@ begin
   Aborting := False;
   AbortKind := 0;
   FrameLimit := FrameLimitBase;
+end;
+
+function CallRebased(F, This: TValue; var R: TValue): Boolean;
+var SavedBase: Integer;
+begin
+  if FrameLimitBase = FRAME_MAX then Exit(CallValue(F, This, nil, 0, R));
+  SavedBase := FrameLimitBase;
+  FrameLimitBase := Min(FrameTop + SavedBase, FRAME_MAX);
+  if Interrupt = 0 then FrameLimit := FrameLimitBase;
+  try
+    Result := CallValue(F, This, nil, 0, R);
+  finally
+    FrameLimitBase := SavedBase;
+    if Interrupt = 0 then FrameLimit := FrameLimitBase;
+  end;
 end;
 
 procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);

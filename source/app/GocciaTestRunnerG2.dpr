@@ -605,6 +605,7 @@ begin
         Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
       Err := '';
       TestTimeoutMs := FTestTimeout.ValueOr(0);
+      TestReporterOn := not IsJsonOutput;
       { the file's snapshots: its .snap file and its inline edits, flushed once every file has run }
       SetTestSnapshots(TGocciaTestRunnerSnapshotHost.Create(FileName), SnapshotUpdateMode);
       if not Engine.PrepareHost(Err) then
@@ -925,7 +926,7 @@ begin
     SetLength(FileMemory, Length(FResults));
     for I := 0 to High(FResults) do
       FileMemory[I] := FResults[I].Memory;
-    MemoryStats := AggregateMemoryStats(FileMemory, FParallel, HeapStart, GetHeapStatus);
+    MemoryStats := AggregateMemoryStats(FileMemory, FParallel, HeapStart, GetHeapStatus, FJobCount);
     Timing := Default(TCLIJSONTiming);
     for I := 0 to High(FResults) do
     begin

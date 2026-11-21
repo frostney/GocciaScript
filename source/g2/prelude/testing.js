@@ -1464,6 +1464,35 @@
     }
   }
   const NONE = {};
+  // the reporter's console lines (GocciaTestRunner's markers), unless the run reports JSON
+  function reportLine(text) {
+    if (shared && shared.deadline && shared.deadline.reporter) shared.deadline.print(text);
+  }
+  // a thrown value as a failure shows it (Goccia's FormatThrowValueDetail): its stack, else its message
+  function throwValueDetail(v) {
+    if (isObject(v)) {
+      let stack, message;
+      try { stack = v.stack; message = v.message; } catch { return show(v); }
+      if (typeof stack === 'string' && stack !== '') return stack;
+      if (typeof message === 'string') return message;
+    }
+    return show(v);
+  }
+  // a rejection's reason (Goccia's DescribeRejectionReason): a subclass of Error that inherits Error's name is
+  // named by its class
+  function describeRejection(v) {
+    const text = describeThrown(v);
+    if (!isObject(v)) return text;
+    let name, message, ctor;
+    try { name = v.name; message = v.message; ctor = v.constructor; } catch { return text; }
+    if (typeof name !== 'string' || typeof message !== 'string' || name !== 'Error') return text;
+    let owner = v;
+    while (owner !== null && !hasOwn.call(owner, 'name')) owner = Object.getPrototypeOf(owner);
+    if (owner !== Error.prototype) return text;
+    if (typeof ctor === 'function' && typeof ctor.name === 'string' && ctor.name !== '' &&
+        Function.prototype.toString.call(ctor).startsWith('class')) return ctor.name + ': ' + message;
+    return text;
+  }
   // a test's beforeEach or afterEach hooks: every one runs, a failing one gives up what was pending (its timers and
   // jobs), and the first failure is the result (NONE when all passed)
   async function runEachHooks(list) {
@@ -1552,60 +1581,94 @@
           result.skipped++;
           // a test that does not run keeps its snapshots
           if (snapshotNatives) snapshotNatives.preserve(snapshotTestName);
+          const where = suiteName !== '' ? ` in ${suiteName}` : '';
+          if (item.mode === 'todo') reportLine(`    \u{1F4DD} ${item.name}${where}: TODO`);
+          else reportLine(`    \u23F8\uFE0F ${item.name}${where}: SKIPPED`);
           continue;
         }
         runnable = true;
         assertionCount = 0; expectedAssertions = null; needAssertions = false;
         finishedHooks = [];
-        let error = null, timedOut = false;
         const testMark = work ? work.mark() : 0;
+        const label = suiteName !== '' ? `Test "${item.name}" in suite "${suiteName}"` : `Test "${item.name}"`;
+        // the test's first failure (its failedTests detail) and a console line for each, as the old reporter
+        // prints them
+        let detail = null;
+        // every failure counts as an assertion, as the old library's AssertionFailed counts it (a failed expect has
+        // counted itself)
+        const fail = (consoleText, detailText, counted) => {
+          if (!counted) assertionCount++;
+          reportLine(`    \u274C ${item.name}${suiteName !== '' ? ' in ' + suiteName : ''}: ${consoleText}`);
+          if (detail === null) detail = detailText === undefined ? `${label}: ${consoleText}` : `${label}: ${detailText}`;
+        };
+        // what a test or hook threw: an assertion keeps its message, anything else its stack
+        const thrownFailure = (e) => {
+          if (e instanceof AssertionError) fail(e.message, undefined, true);
+          else fail(throwValueDetail(e));
+        };
         const body = async () => {
           // a failed beforeEach skips the body; the timers still pending run all the same
           const hookError = await runEachHooks(chainHooks(suite, 'beforeEach'));
-          if (hookError === NONE) await item.fn();
+          if (hookError !== NONE) fail('Callback threw an exception: ' + describeThrown(hookError));
+          else {
+            let ret;
+            let threw = false;
+            // --max-stack counts from the test function's frame, not the runner's
+            const callTest = shared && shared.deadline && shared.deadline.callTest;
+            try { ret = callTest ? callTest(item.fn) : item.fn(); } catch (e) { threw = true; thrownFailure(e); }
+            if (!threw && isPromise(ret)) {
+              try { await ret; } catch (e) {
+                if (e instanceof AssertionError) fail(e.message, undefined, true);
+                else {
+                  const reason = describeRejection(e);
+                  fail('Returned Promise rejected: ' + reason, 'Promise rejected: ' + reason);
+                }
+              }
+            }
+          }
           // the timers the test scheduled run before it ends; one a callback threw fails it
           const timerError = shared && shared.timers ? await shared.timers.drainTest() : null;
-          if (hookError !== NONE) throw hookError;
-          if (timerError !== null)
-            throw new Error('Uncaught exception in a timer callback: ' + thrownMessage(timerError.error));
-          if (expectedAssertions !== null && assertionCount !== expectedAssertions)
-            throw new AssertionError(`Expected ${expectedAssertions} assertions, got ${assertionCount}`);
-          if (needAssertions && assertionCount === 0) throw new AssertionError('Expected at least one assertion');
+          if (timerError !== null) {
+            const reason = describeRejection(timerError.error);
+            fail('Uncaught exception in a timer callback: ' + reason, 'uncaught exception in a timer callback: ' + reason);
+          }
+          if (detail === null && expectedAssertions !== null && assertionCount !== expectedAssertions)
+            fail(`Expected ${expectedAssertions} assertions, got ${assertionCount}`);
+          if (detail === null && needAssertions && assertionCount === 0) fail('Expected at least one assertion');
         };
+        let timedOut = false;
         try {
           // --test-timeout: the body and the work it waits for run under the test's own deadline
           if (testTimeoutMs > 0) {
             const r = shared.deadline.callWithin(body, testTimeoutMs);
             if (r[0] === 'timeout') timedOut = true;
-            else if (r[0] === 'threw') throw r[1];
+            else if (r[0] === 'threw') thrownFailure(r[1]);
             else await r[1];
           } else await body();
-        } catch (e) { error = e; }
+        } catch (e) { thrownFailure(e); }
+        if (timedOut) fail(`Test exceeded per-test timeout of ${testTimeoutMs}ms`, `TIMEOUT after ${testTimeoutMs}ms`);
         const afterError = await runEachHooks(chainHooks(suite, 'afterEach'));
-        if (afterError !== NONE && !error) error = afterError;
+        if (afterError !== NONE) fail('Callback threw an exception: ' + describeThrown(afterError));
         const fins = finishedHooks; finishedHooks = null;
-        for (const fn of fins) { try { await fn(); } catch (e) { if (!error) error = e; } }
+        for (const fn of fins) {
+          try { await fn(); } catch (e) { fail('Callback threw an exception: ' + describeThrown(e)); }
+        }
         // what the test left: a rejection with no handler, or a queued job that threw, fails it
-        let leftover = null;
         if (work) {
           const left = work.unhandled(work.take(testMark));
           const jobErrors = work.jobErrors();
-          if (left[0]) leftover = 'unhandled promise rejection: ' + describeThrown(left[1]);
-          else if (jobErrors.length > 0) leftover = 'Uncaught exception in a queued job: ' + describeThrown(jobErrors[0]);
-          if (leftover !== null && !error && !timedOut) discardPendingWork();
+          const hadFailure = detail !== null;
+          if (left[0]) {
+            const reason = describeRejection(left[1]);
+            fail('Unhandled promise rejection: ' + reason, 'unhandled promise rejection: ' + reason);
+          } else if (jobErrors.length > 0)
+            fail('Uncaught exception in a queued job: ' + describeThrown(jobErrors[0]));
+          if (detail !== null && !hadFailure && !timedOut) discardPendingWork();
         }
         result.assertions += assertionCount;
-        const suiteLabel = fullName(suite);
-        const name = suiteLabel !== '' ? `Test "${item.name}" in suite "${suiteLabel}"` : `Test "${item.name}"`;
-        if (timedOut) {
+        if (detail !== null) {
           result.failed++;
-          result.failedTests.push({ name, error: `TIMEOUT after ${testTimeoutMs}ms` });
-        } else if (error) {
-          result.failed++;
-          result.failedTests.push({ name, error: thrownMessage(error) });
-        } else if (leftover !== null) {
-          result.failed++;
-          result.failedTests.push({ name, error: leftover });
+          result.failedTests.push({ name: detail, error: '' });
         } else result.passed++;
       }
       if (!skipAll) {

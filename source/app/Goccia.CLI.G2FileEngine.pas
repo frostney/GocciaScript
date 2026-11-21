@@ -108,7 +108,7 @@ function FileMemoryStats(const AStart, AEnd: TG2MemoryStats; const AHeapStart, A
   another each heap is freed before the next, so the peak is the largest and the live bytes are the last file's.
   memory.heap is the main thread's memory manager over the run. }
 function AggregateMemoryStats(const AStats: array of TCLIJSONMemoryStats; AParallel: Boolean;
-  const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
+  const AHeapStart, AHeapEnd: THeapStatus; AWorkers: Integer = 0): TCLIJSONMemoryStats;
 
 { GocciaScript's suggestion for a runtime error's message, '' for none }
 function RuntimeSuggestion(const AMessage: string): string;
@@ -124,6 +124,8 @@ function FailureText(const AFileName: string; const AResult: TG2RunResult; const
 implementation
 
 uses
+  Math,
+
   G2.Core,
   G2.HostAPI,
   TextSemantics,
@@ -587,8 +589,39 @@ end;
   engines' heaps coexist, so their live and peak bytes add up, as GocciaRunner combines its workers'; one after
   another each heap is freed before the next, so the peak is the largest and the live bytes are the last file's.
   memory.heap is the main thread's memory manager over the run. }
+{ the sum of the K largest peaks among the enabled stats }
+function LargestSum(const AStats: array of TCLIJSONMemoryStats; K: Integer): Int64;
+var
+  Peaks: array of Int64;
+  I, J, N: Integer;
+  T: Int64;
+begin
+  SetLength(Peaks, Length(AStats));
+  N := 0;
+  for I := 0 to High(AStats) do
+    if AStats[I].Enabled then
+    begin
+      Peaks[N] := AStats[I].GCPeakBytes;
+      Inc(N);
+    end;
+  for I := 1 to N - 1 do
+  begin
+    T := Peaks[I];
+    J := I - 1;
+    while (J >= 0) and (Peaks[J] < T) do
+    begin
+      Peaks[J + 1] := Peaks[J];
+      Dec(J);
+    end;
+    Peaks[J + 1] := T;
+  end;
+  Result := 0;
+  for I := 0 to Min(K, N) - 1 do
+    Inc(Result, Peaks[I]);
+end;
+
 function AggregateMemoryStats(const AStats: array of TCLIJSONMemoryStats; AParallel: Boolean;
-  const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
+  const AHeapStart, AHeapEnd: THeapStatus; AWorkers: Integer = 0): TCLIJSONMemoryStats;
 var
   I: Integer;
   First: Boolean;
@@ -620,6 +653,10 @@ begin
     end;
     First := False;
   end;
+  { at most AWorkers engines live at once: the peak is the largest AWorkers files' peaks together, not every
+    file's }
+  if AParallel and (AWorkers > 0) and (Length(AStats) > AWorkers) then
+    Result.GCPeakBytes := LargestSum(AStats, AWorkers);
   Result.Enabled := True;
   Result.HeapStartAllocatedBytes := Int64(AHeapStart.TotalAllocated);
   Result.HeapEndAllocatedBytes := Int64(AHeapEnd.TotalAllocated);
