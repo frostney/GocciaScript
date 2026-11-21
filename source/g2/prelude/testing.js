@@ -1347,6 +1347,7 @@
 
   function expect(...args) {
     requireExactly(args, 1, 'expect');
+    if (snapshotNatives && snapshotNatives.observe) snapshotNatives.observe(args[0]);
     return new Expectation(args[0], false, false);
   }
   expect.anything = () => anything();

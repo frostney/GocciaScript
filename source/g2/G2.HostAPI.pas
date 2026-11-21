@@ -121,7 +121,7 @@ threadvar
 implementation
 
 uses
-  Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
+  Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak, G2.HeapSnapshot,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
@@ -2113,6 +2113,8 @@ begin
   DefineNative(RootAt(TempTop - 1), 'matchInline', Snap_MatchInline, 7);
   DefineNative(RootAt(TempTop - 1), 'preserve', Snap_Preserve, 1);
   DefineNative(RootAt(TempTop - 1), 'finish', Snap_Finish, 1);
+  { --heap-snapshots: expect() hands what it is given to the round trip (G2.HeapSnapshot) }
+  if HeapObserving then DefineNative(RootAt(TempTop - 1), 'observe', SnapshotObserve, 1);
   DefineOwn(SharedV, AtomOf('snapshot'), RootAt(TempTop - 1), pfDefault);
   PopRoots(1);
   { shared.deadline: the per-test timeout and the runner's settings }

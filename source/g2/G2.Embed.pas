@@ -43,6 +43,16 @@ type
     Collections: Integer;
   end;
 
+  { a heap snapshot round trip's object (TG2Engine.HeapSnapshotObserved): what the source engine wrote of it and
+    how it described it, or why it refused }
+  TG2HeapRoot = record
+    Data: TBytes;
+    Description: UnicodeString;
+    Refusal: UnicodeString;
+  end;
+  { a restored object's outcome (TG2Engine.HeapSnapshotVerify) }
+  TG2HeapVerdict = (g2hvPassed, g2hvRefused, g2hvFailed);
+
   TG2RunResult = record
     Ok: Boolean;
     Aborted: TG2Abort;
@@ -74,6 +84,7 @@ type
     FSourceKind: TG2SourceKind;
     FConfigJson: UnicodeString;
     FTestMode: Boolean;
+    FHeapSnapshots: Boolean;
     FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
     FMaxFrames: Integer;
     FHostReady: Boolean;
@@ -124,6 +135,7 @@ type
     function ProviderClock(Kind: Integer; out Ns: Int64): Boolean;
     function LoadHostEnvironment: Boolean;
     function InstallHost(var Err: UnicodeString): Boolean;
+    procedure SetHeapSnapshots(V: Boolean);
   public
     { builds this thread's engine; one at a time per thread }
     constructor Create;
@@ -143,6 +155,15 @@ type
     function LateRejection: UnicodeString;
     { test mode: the limits Run left armed disarmed, when RunTests does not follow }
     procedure EndTests;
+    { with HeapSnapshots, after the file's tests: each distinct object expect() was given, in the order first
+      given, written as a heap snapshot (G2.HeapSnapshot) and described, or why it cannot be; Observations counts
+      every object given, repeats included }
+    function HeapSnapshotObserved(out Observations: Integer): TArray<TG2HeapRoot>;
+    { a fresh engine, set up as the one that wrote Root was (globals, testing API, settings) and not run: restores
+      Root, writes it again and describes it. Passed when both match the source's; Refused (Detail why) when this
+      engine cannot restore it, a built-in the run changed say; Failed (Detail) when they differ }
+    function HeapSnapshotVerify(const Root: TG2HeapRoot; const FileName: string; const Source: UnicodeString;
+      out Detail: UnicodeString): TG2HeapVerdict;
     { whether the run's entry loaded a module from Path (an absolute path), not the host before it: a host shows a
       code frame of such a file only }
     function ModuleLoaded(const Path: UnicodeString): Boolean;
@@ -168,6 +189,9 @@ type
     property ConfigJson: UnicodeString read FConfigJson write FConfigJson;
     { the test framework's host: no process exit on an uncaught error, the testing API's globals }
     property TestMode: Boolean read FTestMode write FTestMode;
+    { the TestRunner's --heap-snapshots: built-ins named before the entry compiles, and expect() keeping what it
+      is given for HeapSnapshotObserved (set before InstallTestingAPI and Run) }
+    property HeapSnapshots: Boolean read FHeapSnapshots write SetHeapSnapshots;
     { setTimeout and the other timer globals, and goccia:timers (True by default); without them the timer queue
       still serves the host's own users (AbortSignal.timeout) }
     property ExposeTimers: Boolean read FExposeTimers write FExposeTimers;
@@ -253,7 +277,8 @@ implementation
 
 uses
   Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval,
-  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch, G2.Compiler, G2.Sandbox, G2.Profile, Goccia.Profiler.Compile;
+  G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch, G2.Compiler, G2.Sandbox, G2.Profile, Goccia.Profiler.Compile,
+  G2.HeapSnapshot;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -727,6 +752,8 @@ begin
   HostModulesDone;
   FetchDone;
   FFIDone;
+  SnapshotDone;
+  HeapObserving := False;
   EngineDone;
   inherited Destroy;
 end;
@@ -914,6 +941,8 @@ begin
     if LowerCase(ExtractFileExt(FileName)) = '.mjs' then Kind := 2 else Kind := 0;
   end;
   T := nil;
+  { the built-ins a heap snapshot names, as the engine has them before the entry's code }
+  if FHeapSnapshots then SnapshotNameBuiltins;
   Start := GetNanoseconds;
   { an opcode or compile profile compiles the entry as it would be compiled to keep its value, whatever the report's
     form, so the code it counts does not depend on --output or --print }
@@ -933,6 +962,9 @@ begin
     Exit;
   end;
   Result.Compiled := True;
+  if FHeapSnapshots then
+    if Result.IsModule then SnapshotSetEntry(UnicodeString(FileName), Source, Kind)
+    else SnapshotNoteEntry(T, UnicodeString(FileName), Source, Kind);
   if Assigned(FOnWarning) then
     for I := 0 to EntryWarningCount - 1 do
       FOnWarning(EntryWarningMessages[I], EntryWarningSuggestions[I], EntryWarningLines[I], EntryWarningColumns[I]);
@@ -1104,6 +1136,88 @@ end;
 procedure TG2Engine.EndTests;
 begin
   LimitsDisarm;
+end;
+
+procedure TG2Engine.SetHeapSnapshots(V: Boolean);
+begin
+  FHeapSnapshots := V;
+  HeapObserving := V;
+end;
+
+function TG2Engine.HeapSnapshotObserved(out Observations: Integer): TArray<TG2HeapRoot>;
+var I, N: Integer; V: TValue;
+begin
+  Observations := SnapshotObservations;
+  N := SnapshotObservedCount;
+  SetLength(Result, N);
+  for I := 0 to N - 1 do
+  begin
+    V := SnapshotObservedAt(I);
+    if SnapshotWrite(V, Result[I].Data, Result[I].Refusal) then
+      { after writing: describing reads properties, and reading a function's prototype makes it }
+      Result[I].Description := SnapshotDescribe(SnapshotObservedAt(I));
+  end;
+end;
+
+function TG2Engine.HeapSnapshotVerify(const Root: TG2HeapRoot; const FileName: string; const Source: UnicodeString;
+  out Detail: UnicodeString): TG2HeapVerdict;
+var Err, Refusal: UnicodeString; Kind, Base: Integer; V: TValue; Again: TBytes;
+begin
+  Detail := '';
+  Err := '';
+  if not PrepareHost(Err) then
+  begin
+    Detail := 'the destination engine could not be set up: ' + Err;
+    Exit(g2hvFailed);
+  end;
+  if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
+  SetActiveProfile(FProfile);
+  SetJSModuleSources(FJSModuleSources);
+  if (FProjectRoot = '') and FHasCapabilities and not SandboxActive then FProjectRoot := DiscoverProjectRoot(FileName);
+  SetReadPolicy(FHasCapabilities and not SandboxActive, FCapabilities, FProjectRoot, AuditRead);
+  SetHostResolver(FResolver);
+  SetModuleContentCheck(FModuleContentCheck);
+  SetProviderGraphCheck(FProviderGraph);
+  Base := TempTop;
+  try
+    case FSourceKind of
+      g2skScript: Kind := 1;
+      g2skModule: Kind := 2;
+    else
+      if LowerCase(ExtractFileExt(FileName)) = '.mjs' then Kind := 2 else Kind := 0;
+    end;
+    SnapshotNameBuiltins;
+    SnapshotSetEntry(UnicodeString(FileName), Source, Kind);
+    if not SnapshotRestore(Root.Data, V, Refusal) then
+    begin
+      Detail := Refusal;
+      Exit(g2hvRefused);
+    end;
+    PushRoot(V);
+    if not SnapshotWrite(RootAt(TempTop - 1), Again, Refusal) then
+    begin
+      Detail := 'the restored object refused a snapshot: ' + Refusal;
+      Exit(g2hvFailed);
+    end;
+    if (Length(Again) <> Length(Root.Data)) or
+       ((Length(Again) > 0) and not CompareMem(@Again[0], @Root.Data[0], Length(Again))) then
+    begin
+      Detail := 're-snapshot bytes differ';
+      Exit(g2hvFailed);
+    end;
+    if SnapshotDescribe(RootAt(TempTop - 1)) <> Root.Description then
+    begin
+      Detail := 'canonical descriptions differ';
+      Exit(g2hvFailed);
+    end;
+    Result := g2hvPassed;
+  finally
+    PopRoots(TempTop - Base);
+    Pending := VUndefined;
+    SetHostResolver(nil);
+    SetModuleContentCheck(nil);
+    SetProviderGraphCheck(nil);
+  end;
 end;
 
 function TG2Engine.LateRejection: UnicodeString;

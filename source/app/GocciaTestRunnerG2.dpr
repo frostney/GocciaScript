@@ -76,6 +76,22 @@ type
     CompileNanoseconds, ExecuteNanoseconds: Int64;
     { its engine's and the memory manager's counters over the file }
     Memory: TCLIJSONMemoryStats;
+    { --heap-snapshots: the objects expect() was given (repeats included, and distinct), how their round trips
+      went, why each refused one refused and what each failed one differed in }
+    HeapObservations, HeapObjects, HeapPassed, HeapRefused, HeapFailed: Integer;
+    HeapRefusals: array of string;
+    HeapFailures: array of string;
+  end;
+
+  { what a file's engine is set up from (TG2TestRunnerApp.SetUpTestEngine) }
+  TG2FileContext = record
+    FileName, FileConfigPath: string;
+    FileConfig: TConfigEntryArray;
+    Verdict: TGocciaConfigTrustVerdict;
+    Capabilities: TGocciaCapabilities;
+    Grant: TG2ImportGrant;
+    Resolver: TGocciaModuleResolver;
+    Capture: TG2ConsoleCapture;
   end;
 
   TG2TestRunnerApp = class(TGocciaCLIApplication)
@@ -106,11 +122,15 @@ type
     { it names none of the files, so only the run's totals count it }
     FinalizationUnattributed: Boolean;
     procedure ReportCoverage(const AFiles: TStringList);
+    procedure PrintHeapSnapshotReport;
     function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
     procedure RecordSnapshotFinalizationFailure(const AMessage: string);
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     procedure RunTestFile(AIndex: Integer; ASource: TStringList);
+    procedure SetUpTestEngine(AEngine: TG2Engine; const C: TG2FileContext);
+    function VerifyHeapRoot(const C: TG2FileContext; const ARoot: TG2HeapRoot; const ASource: UnicodeString;
+      out ADetail: UnicodeString): TG2HeapVerdict;
     procedure RunFiles(const AFiles: TStringList; const AStdinSource: TStringList);
     procedure PrintResults(const ATiming: TCLIJSONTiming; const AMemory: TCLIJSONMemoryStats);
     procedure WriteResultsJSON(const AFileName: string; ACompact: Boolean; const ATiming: TCLIJSONTiming;
@@ -124,6 +144,19 @@ type
     function ShouldApplyRootConfig(const APaths: TStringList; const AConfigPath: string;
       const AExplicitConfig: Boolean): Boolean; override;
     procedure Validate; override;
+  end;
+
+  { a heap snapshot's restore, on a thread of its own (a fresh engine) }
+  TG2HeapVerifyThread = class(TThread)
+  private
+    FApp: TG2TestRunnerApp;
+    FContext: ^TG2FileContext;
+    FRoot: ^TG2HeapRoot;
+    FSource: UnicodeString;
+    FVerdict: TG2HeapVerdict;
+    FDetail: UnicodeString;
+  protected
+    procedure Execute; override;
   end;
 
   { one test file on a thread of its own: a G2 engine's state is its thread's, so each file gets a fresh engine }
@@ -506,6 +539,105 @@ begin
   Result := Expect('}');
 end;
 
+{ a file's engine before its code runs: its settings, globals and testing API. A heap snapshot's restoring
+  engine is set up the same way }
+procedure TG2TestRunnerApp.SetUpTestEngine(AEngine: TG2Engine; const C: TG2FileContext);
+var
+  Err: UnicodeString;
+  SetupError: string;
+  HostError: TG2RunResult;
+begin
+  AEngine.Capabilities := C.Capabilities;
+  AEngine.ProjectRoot := DiscoverProjectRoot(C.FileName);
+  AEngine.Coverage := Assigned(FCoverageMain);
+  AEngine.ConfigJson := HostConfigJson(EngineOptions, C.FileConfig);
+  { --no-vitest-compat: the bare "vitest" specifier resolves to no shim }
+  if FNoVitestCompat.Present then
+    if AEngine.ConfigJson = '{}' then
+      AEngine.ConfigJson := '{"no-vitest-compat":"true"}'
+    else
+      AEngine.ConfigJson := Copy(AEngine.ConfigJson, 1, Length(AEngine.ConfigJson) - 1) +
+        ',"no-vitest-compat":"true"}';
+  AEngine.Resolver := C.Resolver;
+  AEngine.ModuleContentCheck := C.Grant.CheckContent;
+  AEngine.ProviderGraph := C.Grant.ProviderGraph;
+  AEngine.TestMode := True;
+  { a rejection the file's top level leaves fails the file before its tests run }
+  AEngine.FailOnUnhandledRejection := True;
+  { the console of a parallel run, or under --silent or a JSON report, is not printed }
+  C.Capture.Capturing := IsJsonOutput;
+  C.Capture.Silent := FSilent.Present or FParallel;
+  if LogFileOpen then
+    C.Capture.LogLine := HandleConsoleLog;
+  AEngine.OnConsole := C.Capture.Emit;
+  AEngine.Deterministic := ResolveFlagOption(EngineOptions.Deterministic, C.FileConfig);
+  if AuditLogOpen then
+  begin
+    AEngine.AuditSink := HandleCapabilityAudit;
+    C.Grant.Engine := AEngine;
+  end;
+  ApplySettings(AEngine, ResolveFileSettings(EngineOptions, C.FileConfig, C.FileName, C.Verdict.AcceptedUnsafe));
+  if EngineOptions.Timeout.Present then
+    AEngine.TimeoutMs := EngineOptions.Timeout.Value
+  else
+    AEngine.TimeoutMs := DEFAULT_TIMEOUT_MS;
+  if EngineOptions.MaxInstructions.Present then
+    AEngine.MaxInstructions := EngineOptions.MaxInstructions.Value;
+  if EngineOptions.MaxStack.Present then
+    AEngine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
+  Err := '';
+  TestTimeoutMs := FTestTimeout.ValueOr(0);
+  DescribeTimeoutMs := FDescribeTimeout.ValueOr(0);
+  TestReporterOn := not IsJsonOutput;
+  { the file's snapshots: its .snap file and its inline edits, flushed once every file has run }
+  SetTestSnapshots(TGocciaTestRunnerSnapshotHost.Create(C.FileName), SnapshotUpdateMode);
+  if not AEngine.PrepareHost(Err) then
+    raise Exception.Create('test host setup failed: ' + UTF8Encode(Err));
+  { the file's virtual modules and globals, before its code runs (a failure fails the file) }
+  if not DefineVirtualModules(AEngine, RootConfigPath, C.FileConfigPath, EngineOptions, SetupError) or
+     not InjectGlobals(AEngine, ConfigNamedEntries(FGlobalFiles), FGlobalFiles, FInlineGlobals, SetupError) then
+  begin
+    { an error the host threw keeps its name (a refused read's PermissionDenied) }
+    if AEngine.DescribeHostError(HostError) and HostError.ErrorIsError and (HostError.ErrorName <> '') then
+      SetupError := UTF8Encode(HostError.ErrorName) + ': ' + UTF8Encode(HostError.ErrorText);
+    raise Exception.Create(SetupError);
+  end;
+  { the testing API after the globals, which load before it (a globals module sees no test global) }
+  if not InstallTestingAPI(Err) then
+    raise Exception.Create('test host setup failed: ' + UTF8Encode(Err));
+end;
+
+{ --heap-snapshots: one object the file's engine wrote, restored in a fresh engine set up as the file's was }
+function TG2TestRunnerApp.VerifyHeapRoot(const C: TG2FileContext; const ARoot: TG2HeapRoot;
+  const ASource: UnicodeString; out ADetail: UnicodeString): TG2HeapVerdict;
+var Dest: TG2Engine;
+begin
+  Dest := TG2Engine.Create;
+  try
+    { the same testing API as the file's engine, its observe native included }
+    Dest.HeapSnapshots := True;
+    SetUpTestEngine(Dest, C);
+    Dest.Coverage := False;
+    Result := Dest.HeapSnapshotVerify(ARoot, C.FileName, ASource, ADetail);
+  finally
+    TestSnapshotsDone;
+    Dest.Free;
+  end;
+end;
+
+procedure TG2HeapVerifyThread.Execute;
+begin
+  try
+    FVerdict := FApp.VerifyHeapRoot(FContext^, FRoot^, FSource, FDetail);
+  except
+    on E: Exception do
+    begin
+      FVerdict := g2hvFailed;
+      FDetail := 'the restoring engine raised ' + UnicodeString(E.ClassName) + ': ' + UnicodeString(E.Message);
+    end;
+  end;
+end;
+
 procedure TG2TestRunnerApp.RunTestFile(AIndex: Integer; ASource: TStringList);
 var
   FileName, FileConfigPath, AliasBaseDirectory: string;
@@ -525,6 +657,72 @@ var
   MemoryStart: TG2MemoryStats;
   HeapStart: THeapStatus;
   HostError: TG2RunResult;
+  HeapRoots: TArray<TG2HeapRoot>;
+
+  { the file's engine before its code runs: its settings, globals and testing API. A heap snapshot's restoring
+    engine is set up the same way }
+  function Context: TG2FileContext;
+  begin
+    Result.FileName := FileName;
+    Result.FileConfigPath := FileConfigPath;
+    Result.FileConfig := FileConfig;
+    Result.Verdict := Verdict;
+    Result.Capabilities := Capabilities;
+    Result.Grant := Grant;
+    Result.Resolver := Resolver;
+    Result.Capture := Capture;
+  end;
+
+  procedure SetUpEngine(AEngine: TG2Engine);
+  begin
+    SetUpTestEngine(AEngine, Context);
+  end;
+
+  { --heap-snapshots: each object the source engine wrote, restored in a fresh engine of its own }
+  procedure VerifyHeapRoots;
+  var I: Integer; Worker: TG2HeapVerifyThread; Ctx: TG2FileContext; Verdict_: TG2HeapVerdict;
+    Detail: UnicodeString;
+  begin
+    Ctx := Context;
+    for I := 0 to High(HeapRoots) do
+    begin
+      if HeapRoots[I].Refusal <> '' then
+      begin
+        Inc(Res.HeapRefused);
+        SetLength(Res.HeapRefusals, Length(Res.HeapRefusals) + 1);
+        Res.HeapRefusals[High(Res.HeapRefusals)] := UTF8Encode(HeapRoots[I].Refusal);
+        Continue;
+      end;
+      { a G2 engine's state is its thread's: each restore gets a fresh engine on a thread of its own }
+      Worker := TG2HeapVerifyThread.Create(True, FILE_THREAD_STACK);
+      try
+        Worker.FApp := Self;
+        Worker.FContext := @Ctx;
+        Worker.FRoot := @HeapRoots[I];
+        Worker.FSource := SrcText;
+        Worker.Start;
+        Worker.WaitFor;
+        Verdict_ := Worker.FVerdict;
+        Detail := Worker.FDetail;
+      finally
+        Worker.Free;
+      end;
+      case Verdict_ of
+        g2hvPassed: Inc(Res.HeapPassed);
+        g2hvRefused:
+          begin
+            Inc(Res.HeapRefused);
+            SetLength(Res.HeapRefusals, Length(Res.HeapRefusals) + 1);
+            Res.HeapRefusals[High(Res.HeapRefusals)] := UTF8Encode(Detail);
+          end;
+      else
+        Inc(Res.HeapFailed);
+        SetLength(Res.HeapFailures, Length(Res.HeapFailures) + 1);
+        Res.HeapFailures[High(Res.HeapFailures)] := UTF8Encode(Detail);
+      end;
+    end;
+  end;
+
 begin
   FileName := FResults[AIndex].FileName;
   Res := FResults[AIndex];
@@ -572,64 +770,8 @@ begin
     Engine := TG2Engine.Create;
     try
       MemoryStart := Engine.Memory;
-      Engine.Capabilities := Capabilities;
-      Engine.ProjectRoot := DiscoverProjectRoot(FileName);
-      Engine.Coverage := Assigned(FCoverageMain);
-      Engine.ConfigJson := HostConfigJson(EngineOptions, FileConfig);
-      { --no-vitest-compat: the bare "vitest" specifier resolves to no shim }
-      if FNoVitestCompat.Present then
-        if Engine.ConfigJson = '{}' then
-          Engine.ConfigJson := '{"no-vitest-compat":"true"}'
-        else
-          Engine.ConfigJson := Copy(Engine.ConfigJson, 1, Length(Engine.ConfigJson) - 1) +
-            ',"no-vitest-compat":"true"}';
-      Engine.Resolver := Resolver;
-      Engine.ModuleContentCheck := Grant.CheckContent;
-      Engine.ProviderGraph := Grant.ProviderGraph;
-      Engine.TestMode := True;
-      { a rejection the file's top level leaves fails the file before its tests run }
-      Engine.FailOnUnhandledRejection := True;
-      { the console of a parallel run, or under --silent or a JSON report, is not printed }
-      Capture.Capturing := IsJsonOutput;
-      Capture.Silent := FSilent.Present or FParallel;
-      if LogFileOpen then
-        Capture.LogLine := HandleConsoleLog;
-      Engine.OnConsole := Capture.Emit;
-      Engine.Deterministic := ResolveFlagOption(EngineOptions.Deterministic, FileConfig);
-      if AuditLogOpen then
-      begin
-        Engine.AuditSink := HandleCapabilityAudit;
-        Grant.Engine := Engine;
-      end;
-      ApplySettings(Engine, ResolveFileSettings(EngineOptions, FileConfig, FileName, Verdict.AcceptedUnsafe));
-      if EngineOptions.Timeout.Present then
-        Engine.TimeoutMs := EngineOptions.Timeout.Value
-      else
-        Engine.TimeoutMs := DEFAULT_TIMEOUT_MS;
-      if EngineOptions.MaxInstructions.Present then
-        Engine.MaxInstructions := EngineOptions.MaxInstructions.Value;
-      if EngineOptions.MaxStack.Present then
-        Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
-      Err := '';
-      TestTimeoutMs := FTestTimeout.ValueOr(0);
-      DescribeTimeoutMs := FDescribeTimeout.ValueOr(0);
-      TestReporterOn := not IsJsonOutput;
-      { the file's snapshots: its .snap file and its inline edits, flushed once every file has run }
-      SetTestSnapshots(TGocciaTestRunnerSnapshotHost.Create(FileName), SnapshotUpdateMode);
-      if not Engine.PrepareHost(Err) then
-        raise Exception.Create('test host setup failed: ' + UTF8Encode(Err));
-      { the file's virtual modules and globals, before its code runs (a failure fails the file) }
-      if not DefineVirtualModules(Engine, RootConfigPath, FileConfigPath, EngineOptions, SetupError) or
-         not InjectGlobals(Engine, ConfigNamedEntries(FGlobalFiles), FGlobalFiles, FInlineGlobals, SetupError) then
-      begin
-        { an error the host threw keeps its name (a refused read's PermissionDenied) }
-        if Engine.DescribeHostError(HostError) and HostError.ErrorIsError and (HostError.ErrorName <> '') then
-          SetupError := UTF8Encode(HostError.ErrorName) + ': ' + UTF8Encode(HostError.ErrorText);
-        raise Exception.Create(SetupError);
-      end;
-      { the testing API after the globals, which load before it (a globals module sees no test global) }
-      if not InstallTestingAPI(Err) then
-        raise Exception.Create('test host setup failed: ' + UTF8Encode(Err));
+      Engine.HeapSnapshots := FHeapSnapshots.Present;
+      SetUpEngine(Engine);
       SrcText := UTF8Decode(ASource.Text);
       HoistTestMocks(FileName, SrcText);
       RunResult := Engine.Run(FileName, SrcText);
@@ -662,6 +804,12 @@ begin
       else
         Engine.EndTests;
       Res.DurationNanoseconds := GetNanoseconds - SuitesStart;
+      { the objects expect() was given, written and described while the engine is idle after the tests }
+      if FHeapSnapshots.Present and (Err = '') then
+      begin
+        HeapRoots := Engine.HeapSnapshotObserved(Res.HeapObservations);
+        Res.HeapObjects := Length(HeapRoots);
+      end;
       Res.ExecuteNanoseconds := GetNanoseconds - Start - Res.CompileNanoseconds;
       if Err <> '' then
       begin
@@ -694,6 +842,7 @@ begin
       Res.Memory := FileMemoryStats(MemoryStart, Engine.Memory, HeapStart, GetHeapStatus);
       TestSnapshotsDone;
       Engine.Free;
+      Engine := nil;
       { the file's coverage into the run's }
       if Assigned(FCoverageMain) and (TGocciaCoverageTracker.Instance <> FCoverageMain) then
       begin
@@ -704,6 +853,18 @@ begin
           LeaveCriticalSection(FCoverageLock);
         end;
         TGocciaCoverageTracker.Shutdown;
+      end;
+    end;
+    if Length(HeapRoots) > 0 then
+    begin
+      VerifyHeapRoots;
+      { after the tests: their counts stand, and the file gets one error (GocciaTestRunner's) }
+      if Res.HeapFailed > 0 then
+      begin
+        Inc(Res.SuiteErrors);
+        SetLength(Res.FailedTests, Length(Res.FailedTests) + 1);
+        Res.FailedTests[High(Res.FailedTests)] := FileName + ': Heap snapshot round-trip failed';
+        if Res.ErrorMessage = '' then Res.ErrorMessage := 'Heap snapshot round-trip failed';
       end;
     end;
   except
@@ -945,6 +1106,8 @@ begin
     if Timing.TotalTimeNanoseconds = 0 then
       Timing.TotalTimeNanoseconds := GetNanoseconds - Start;
     PrintResults(Timing, MemoryStats);
+    if FHeapSnapshots.Present then
+      PrintHeapSnapshotReport;
     if Assigned(FCoverageMain) then
     begin
       ReportCoverage(Files);
@@ -958,6 +1121,49 @@ begin
 end;
 
 { ---- reports ---- }
+
+{ --heap-snapshots on stderr, as GocciaTestRunner reports it: each failed round trip, the counts, then each
+  refusal reason with how often it came, in sorted order }
+procedure TG2TestRunnerApp.PrintHeapSnapshotReport;
+var
+  I, J, Observations, Objects, Passed, Refused, Failed: Integer;
+  Reasons: TStringList;
+  Count: Integer;
+begin
+  Observations := 0;
+  Objects := 0;
+  Passed := 0;
+  Refused := 0;
+  Failed := 0;
+  Reasons := TStringList.Create;
+  try
+    Reasons.Sorted := True;
+    Reasons.Duplicates := dupIgnore;
+    Reasons.CaseSensitive := True;
+    for I := 0 to High(FResults) do
+    begin
+      Inc(Observations, FResults[I].HeapObservations);
+      Inc(Objects, FResults[I].HeapObjects);
+      Inc(Passed, FResults[I].HeapPassed);
+      Inc(Refused, FResults[I].HeapRefused);
+      Inc(Failed, FResults[I].HeapFailed);
+      for J := 0 to High(FResults[I].HeapFailures) do
+        WriteLn(ErrOutput, 'Heap snapshot failure: ', FResults[I].FileName, ': ', FResults[I].HeapFailures[J]);
+      for J := 0 to High(FResults[I].HeapRefusals) do
+      begin
+        if not Reasons.Find(FResults[I].HeapRefusals[J], Count) then
+          Count := Reasons.AddObject(FResults[I].HeapRefusals[J], TObject(PtrInt(0)));
+        Reasons.Objects[Count] := TObject(PtrInt(Reasons.Objects[Count]) + 1);
+      end;
+    end;
+    WriteLn(ErrOutput, Format('Heap snapshots: observations=%d objects=%d passed=%d refused=%d failed=%d',
+      [Observations, Objects, Passed, Refused, Failed]));
+    for I := 0 to Reasons.Count - 1 do
+      WriteLn(ErrOutput, 'Heap snapshot refusal: ', PtrInt(Reasons.Objects[I]), ' ', Reasons[I]);
+  finally
+    Reasons.Free;
+  end;
+end;
 
 { GocciaTestRunner.dpr ExecuteWithPaths' coverage: the summary, and one file's detail (a multifile section's or
   stdin's from the source registry), on stdout unless it carries a JSON envelope; the lcov or JSON file }

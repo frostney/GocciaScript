@@ -259,8 +259,33 @@ and jobs it left, and work left after the last test still runs. `--describe-time
 through the same native. The console report's per-test lines (`❌`, `⏸️`, `📝`) and each failure's wording follow
 the old library; a test function's frames count from its own frame for `--max-stack` (`G2.VM` `CallRebased`), and a
 test's `import()` resolves through its file's resolver. Globals and virtual modules apply as in GocciaRunner
-(`Goccia.CLI.G2FileEngine`). Not yet on G2: `--heap-snapshots`, which needs G2's own heap snapshot codec (the
-embedder feature of [ADR 0148](../adr/0148-heap-snapshots-at-idle-points.md)), and `.gbc` test files.
+(`Goccia.CLI.G2FileEngine`). Not yet on G2: `.gbc` test files.
+
+### Heap snapshots
+
+`G2.HeapSnapshot` writes what a value reaches so that a fresh engine of the same build, set up the same way,
+restores it ([Heap Snapshots](../heap-snapshots.md), [ADR 0148](../adr/0148-heap-snapshots-at-idle-points.md)).
+The writer copies cells as they are: strings, BigInts, symbols (a registered one by its key), value arrays, closed
+bindings, accessors, and objects with their kind, flags, prototype, keys, elements and `Aux` values. What an object
+holds outside the heap is named instead: a closure's code by the entry or module record it was compiled from and
+its path of child templates there (the restoring engine compiles that source and the lazy functions on the path),
+a built-in by its path from `globalThis`. Built-ins are named before the entry's code runs; each is written with a
+fingerprint of its state (kind, extensibility, prototype, keys, values, the elements present), and a restore
+refuses one whose fingerprint differs: the run changed it. An object kind whose state lives elsewhere (Map and Set
+tables, buffers, promises, proxies, generators, module namespaces, iterators) and a private name refuse the
+snapshot, named after GocciaScript's classes (`no snapshot codec for TGocciaMapValue`). Module records are not
+written: the closures carry the module bindings they use, so a restored engine that imports a module evaluates it
+again.
+
+`GocciaTestRunner --heap-snapshots` round-trips each distinct object `expect()` was given. After the file's tests,
+`TG2Engine.HeapSnapshotObserved` writes each one and describes it through the object model (own keys,
+descriptors, prototypes, extensibility; built-ins by name). Each written object is then restored on a thread of its
+own, in a fresh engine set up as the file's was (`TG2Engine.HeapSnapshotVerify`), written again and described
+again: different bytes or a different description fail the file. The report on stderr is GocciaTestRunner's
+(`Heap snapshots: observations=N objects=N passed=N refused=N failed=N`, then each refusal reason with its count).
+Over `tests/` no round trip fails. Not yet on G2: module records restored whole
+([ADR 0150](../adr/0150-heap-snapshots-restore-module-records-whole.md)), the codecs that refuse today, the
+embedder's session and restore API and the pause checkpoint.
 
 ### GocciaREPL
 

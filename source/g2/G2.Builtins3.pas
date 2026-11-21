@@ -8,12 +8,17 @@ unit G2.Builtins3;
 
 interface
 
+uses
+  G2.Core;
+
 procedure InitBuiltins3;
+{ Symbol.for's registry: a plain object from each key (an atom) to its symbol (G2.HeapSnapshot) }
+function SymbolRegistryObject: TValue;
 
 implementation
 
 uses
-  SysUtils, Math, DateUtils, Linux, UnixType, G2.Core, G2.VM, G2.Builtins;
+  SysUtils, Math, DateUtils, Linux, UnixType, G2.VM, G2.Builtins;
 
 const
   okDate = 18;
@@ -153,6 +158,11 @@ begin
   Res := RootAt(TempTop - 1);
   PopRoots(1);
   Result := True;
+end;
+
+function SymbolRegistryObject: TValue;
+begin
+  Result := SymbolRegistry;
 end;
 
 function Symbol_KeyFor(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;

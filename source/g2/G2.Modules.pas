@@ -14,7 +14,7 @@ unit G2.Modules;
 interface
 
 uses
-  G2.Core;
+  G2.Core, G2.Bytecode;
 
 procedure InitModules;
 { 28.1.1 %AbstractModuleSource% of the running realm (made when asked: no module source exists yet) }
@@ -73,6 +73,12 @@ procedure SetProvidedSource(const Path, Source: UnicodeString);
   module's source phase import gives one }
 procedure SetJSModuleSources(On: Boolean);
 { this thread's module records so far: a mark ModuleLoadedSince counts from }
+{ heap snapshots (G2.HeapSnapshot): module record I's path and compiled code (nil for a host, JSON or source-phase
+  record); False past the last }
+function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTemplate): Boolean;
+{ loads the module at Path and what it imports, compiled and not evaluated (a record already loaded as it is):
+  its code, nil for a record without; False with the error pending }
+function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate): Boolean;
 function ModuleCount: Integer;
 { whether this thread's engine loaded a module from Path after Mark records (a host shows a code frame only of a
   module the script's run loaded, never of one the host evaluated before it, nor of a path a thrown value's stack
@@ -114,7 +120,7 @@ procedure SetModuleContentCheck(Check: TModuleContentCheck);
 implementation
 
 uses
-  SysUtils, Classes, Generics.Collections, G2.Bytecode, G2.VM, G2.Compiler, G2.Eval, G2.Promise;
+  SysUtils, Classes, Generics.Collections, G2.VM, G2.Compiler, G2.Eval, G2.Promise;
 
 const
   { the test262 host's module with a source phase representation (INTERPRETING.md: "<module source>") }
@@ -1763,6 +1769,24 @@ begin
   HostModSource := MkPtr(NewPlainObject(RootAt(TempTop - 1), 4));
   PopRoots(2);
   Result := HostModSource;
+end;
+
+function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTemplate): Boolean;
+begin
+  Path := '';
+  T := nil;
+  if (Mods = nil) or (I < 0) or (I >= Mods.Count) then Exit(False);
+  Path := Mods[I].Path;
+  T := Mods[I].Tpl;
+  Result := True;
+end;
+
+function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate): Boolean;
+var M: TModRec;
+begin
+  T := nil;
+  Result := LoadModule(Path, M);
+  if Result then T := M.Tpl;
 end;
 
 function ModuleCount: Integer;
