@@ -65,7 +65,7 @@ type
     procedure TestTypedArrayConversionsTakeLinearWork;
     procedure TestOneLongStringIsNotCopied;
     procedure TestALongStringIsCopiedOnce;
-    procedure TestShortStringsNeedNoScratchPerElement;
+    procedure TestRepeatedSeparatorsTakeNoScratch;
     procedure TestAJoinPastTheBudgetThrowsARangeError;
   end;
 
@@ -79,16 +79,17 @@ begin
     TestOneLongStringIsNotCopied);
   Test('joining a long string with something else copies it once',
     TestALongStringIsCopiedOnce);
-  Test('joining many one-character strings asks for a few times the result, not more per element',
-    TestShortStringsNeedNoScratchPerElement);
+  Test('joining empty elements with a long separator asks for little more than the result',
+    TestRepeatedSeparatorsTakeNoScratch);
   Test('a join whose result would pass the memory budget throws a catchable RangeError',
     TestAJoinPastTheBudgetThrowsARangeError);
 end;
 
 { Runs a script that builds `a`, ALength strings of ten digits, `ta`, a
   Float64Array of ALength eleven-digit integers, `s`, a string of
-  LONG_STRING_LENGTH characters, and `x`, ALength strings "x", then counts the
-  bytes asked for by one call of `() => AExpression`. }
+  LONG_STRING_LENGTH characters, `e`, ALength undefined elements, and
+  `separator`, 255 characters, then counts the bytes asked for by one call of
+  `() => AExpression`. }
 function TTestArrayValue.ConversionWork(const AExpression: string;
   const ALength: Integer): TConversionWork;
 var
@@ -106,7 +107,8 @@ begin
     'const ta = new Float64Array(%0:d).map((_, i) => 10000000000 + i);' +
     LineEnding +
     'const s = "x".repeat(%2:d);' + LineEnding +
-    'const x = Array(%0:d).fill("x");' + LineEnding +
+    'const e = Array(%0:d).fill(undefined);' + LineEnding +
+    'const separator = "x".repeat(255);' + LineEnding +
     'globalThis.convert = () => %1:s;',
     [ALength, AExpression, LONG_STRING_LENGTH]);
   Engine := TGocciaEngine.Create('array-conversion.js', Source);
@@ -220,23 +222,24 @@ begin
   ExpectOneCopy('`${[s, "x"].join("")}`');
 end;
 
-{ The appends kept nothing per element. A join that held each element's
-  string and its index until the end would ask for 16 bytes per element, and
-  more as its lists doubled, on top of the result's 2; packing short strings
-  into chunks that grow by doubling asks for three to five times the result. }
-procedure TTestArrayValue.TestShortStringsNeedNoScratchPerElement;
+{ The appends needed the result and nothing more. Separators and empty
+  elements take no memory before the result is allocated, so a join that is
+  almost all separators, Array(60000).join("x".repeat(255)) at its largest,
+  still fits wherever the result does. }
+procedure TTestArrayValue.TestRepeatedSeparatorsTakeNoScratch;
 const
-  RESULT_RATIO = 8;
+  BOOKKEEPING_BYTES = 64 * 1024;
 var
   Work: TConversionWork;
+  ResultBytes: Int64;
 begin
-  Work := ConversionWork('x.join("")', LONG_LENGTH);
-  Expect<Integer>(Work.ResultLength).ToBe(LONG_LENGTH);
-  if Work.Bytes > RESULT_RATIO * LONG_LENGTH * SizeOf(WideChar) then
-    Fail(Format('x.join("") asked for %d bytes for a result of %d characters',
-      [Work.Bytes, LONG_LENGTH]));
-  Expect<Boolean>(Work.Bytes <=
-    RESULT_RATIO * LONG_LENGTH * SizeOf(WideChar)).ToBe(True);
+  Work := ConversionWork('e.join(separator)', LONG_LENGTH);
+  Expect<Integer>(Work.ResultLength).ToBe((LONG_LENGTH - 1) * 255);
+  ResultBytes := Int64(Work.ResultLength) * SizeOf(WideChar);
+  if Work.Bytes > ResultBytes + BOOKKEEPING_BYTES then
+    Fail(Format('e.join(separator) asked for %d bytes for a result of %d ' +
+      'bytes', [Work.Bytes, ResultBytes]));
+  Expect<Boolean>(Work.Bytes <= ResultBytes + BOOKKEEPING_BYTES).ToBe(True);
 end;
 
 { The join asks the budget about its result before allocating it, and refuses

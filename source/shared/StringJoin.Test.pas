@@ -22,10 +22,12 @@ type
     procedure TestOneStringIsReturnedItself;
     procedure TestManyElements;
     procedure TestResultIsAllocatedOnce;
-    procedure TestChunksAndLongStrings;
+    procedure TestSmallJoinAllocatesOnlyItsResult;
+    procedure TestRepeatedSeparatorsTakeNoScratch;
     procedure TestFinalCopyPolls;
     procedure TestGateIsAskedBeforeTheResult;
     procedure TestARaisingGateOrPollLeavesTheBufferEmpty;
+    procedure TestACopyRefusesToAdd;
   public
     procedure SetupTests; override;
   end;
@@ -44,18 +46,22 @@ begin
     TestLongerSeparator);
   Test('a join with nothing between its strings returns the one string itself',
     TestOneStringIsReturnedItself);
-  Test('more elements than the first part capacity join in order',
+  Test('more elements than the record holds, with runs of empty ones, join in order',
     TestManyElements);
   Test('Join allocates the result once, at its exact length',
     TestResultIsAllocatedOnce);
-  Test('short strings across many chunks and long strings between them join in order',
-    TestChunksAndLongStrings);
+  Test('a join of a few strings allocates nothing but its result',
+    TestSmallJoinAllocatesOnlyItsResult);
+  Test('separators between empty elements take no memory before the result',
+    TestRepeatedSeparatorsTakeNoScratch);
   Test('the final copy polls once per poll interval of characters',
     TestFinalCopyPolls);
   Test('the gate is asked about the result before it is allocated',
     TestGateIsAskedBeforeTheResult);
-  Test('a gate or poll that raises leaves the buffer empty and usable',
+  Test('after a gate or poll raises, Release empties the buffer for another Init',
     TestARaisingGateOrPollLeavesTheBufferEmpty);
+  Test('a copy of the buffer refuses to add or join',
+    TestACopyRefusesToAdd);
 end;
 
 function JoinOf(const ASeparator: UnicodeString;
@@ -64,14 +70,14 @@ var
   Joined: TStringJoinBuffer;
   I: Integer;
 begin
-  Joined := TStringJoinBuffer.Create(ASeparator);
+  Joined.Init(ASeparator);
   try
     for I := 0 to High(AElements) do
       Joined.Add(AElements[I]);
     Expect<Integer>(Joined.ElementCount).ToBe(Length(AElements));
     Result := Joined.Join;
   finally
-    Joined.Free;
+    Joined.Release;
   end;
 end;
 
@@ -120,40 +126,37 @@ begin
   Expect<Boolean>(Pointer(JoinOf('', ['', Text, ''])) = Pointer(Text))
     .ToBe(True);
   Expect<Boolean>(Pointer(JoinOf(',', [Short])) = Pointer(Short)).ToBe(True);
-  Expect<Boolean>(Pointer(JoinOf('', ['', Short])) = Pointer(Short))
-    .ToBe(True);
 end;
 
 procedure TStringJoinTests.TestManyElements;
 var
   Joined: TStringJoinBuffer;
-  Expected: UnicodeString;
+  Expected: TStringBuffer;
+  Text: UnicodeString;
   I: Integer;
 begin
-  Joined := TStringJoinBuffer.Create('-');
-  try
-    Expected := '';
-    for I := 0 to 999 do
-    begin
-      if I > 0 then
-        Expected := Expected + '-';
-      if I mod 3 <> 0 then
-      begin
-        Joined.Add(UnicodeString(IntToStr(I)));
-        Expected := Expected + UnicodeString(IntToStr(I));
-      end
-      else
-        Joined.Add('');
-    end;
-    Expect<string>(Joined.Join).ToBe(Expected);
-  finally
-    Joined.Free;
+  Joined.Init(', ');
+  Expected := TStringBuffer.Create;
+  for I := 0 to 49999 do
+  begin
+    if I > 0 then
+      Expected.Append(', ');
+    if I mod 997 = 0 then
+      Text := StringOfChar('L', 300)
+    else if (I mod 13 = 0) or (I mod 101 < 3) then
+      Text := ''
+    else
+      Text := UnicodeString(IntToStr(I));
+    Joined.Add(Text);
+    Expected.Append(Text);
   end;
+  Expect<string>(Joined.Join).ToBe(Expected.ToString);
+  Expect<Integer>(Joined.ElementCount).ToBe(0);
+  Joined.Release;
 end;
 
-{ Join writes the result once, into a string of the exact length: it asks
-  for the result's bytes and a little bookkeeping, never a second copy or
-  spare capacity for the result to keep. }
+{ The strings are kept as they are and written once, into a result of the
+  exact length: the bytes of the result and nothing as large besides. }
 procedure TStringJoinTests.TestResultIsAllocatedOnce;
 const
   RESULT_LENGTH = 3889;
@@ -164,56 +167,70 @@ var
   I: Integer;
   Bytes: Int64;
 begin
-  Joined := TStringJoinBuffer.Create(',');
+  Joined.Init(',');
+  for I := 0 to 999 do
+    Joined.Add(UnicodeString(IntToStr(I)));
+  StartCountingAllocations;
   try
-    for I := 0 to 999 do
-      Joined.Add(UnicodeString(IntToStr(I)));
-    StartCountingAllocations;
-    try
-      Text := Joined.Join;
-    finally
-      StopCountingAllocations;
-      Bytes := CountedAllocationBytes;
-    end;
-    Expect<Integer>(Length(Text)).ToBe(RESULT_LENGTH);
-    Expect<Boolean>(Bytes >= RESULT_LENGTH * SizeOf(WideChar)).ToBe(True);
-    Expect<Boolean>(Bytes <= RESULT_LENGTH * SizeOf(WideChar) +
-      BOOKKEEPING_BYTES).ToBe(True);
+    Text := Joined.Join;
   finally
-    Joined.Free;
+    StopCountingAllocations;
+    Bytes := CountedAllocationBytes;
   end;
+  Joined.Release;
+  Expect<Integer>(Length(Text)).ToBe(RESULT_LENGTH);
+  Expect<Boolean>(Bytes >= RESULT_LENGTH * SizeOf(WideChar)).ToBe(True);
+  Expect<Boolean>(Bytes <= RESULT_LENGTH * SizeOf(WideChar) +
+    BOOKKEEPING_BYTES).ToBe(True);
 end;
 
-procedure TStringJoinTests.TestChunksAndLongStrings;
+procedure TStringJoinTests.TestSmallJoinAllocatesOnlyItsResult;
 var
   Joined: TStringJoinBuffer;
-  Expected: TStringBuffer;
-  Long, Text: UnicodeString;
-  I: Integer;
+  First, Second, Text: UnicodeString;
+  Allocations: Int64;
 begin
-  Long := StringOfChar('L', LONG_TEXT_LENGTH);
-  Joined := TStringJoinBuffer.Create(', ');
-  Expected := TStringBuffer.Create;
+  First := StringOfChar('a', 2);
+  Second := StringOfChar('b', 2);
+  StartCountingAllocations;
   try
-    for I := 0 to 49999 do
-    begin
-      if I > 0 then
-        Expected.Append(', ');
-      if I mod 997 = 0 then
-        Text := Long
-      else if I mod 13 = 0 then
-        Text := ''
-      else
-        Text := UnicodeString(IntToStr(I));
-      Joined.Add(Text);
-      Expected.Append(Text);
-    end;
-    Expect<Boolean>(Expected.Length > 8 * MAXIMUM_CHUNK_LENGTH).ToBe(True);
-    Expect<string>(Joined.Join).ToBe(Expected.ToString);
-    Expect<Integer>(Joined.ElementCount).ToBe(0);
+    Joined.Init(',');
+    Joined.Add(First);
+    Joined.Add(Second);
+    Text := Joined.Join;
+    Joined.Release;
   finally
-    Joined.Free;
+    Allocations := StopCountingAllocations;
   end;
+  Expect<string>(Text).ToBe('aa,bb');
+  Expect<Integer>(Integer(Allocations)).ToBe(1);
+end;
+
+procedure TStringJoinTests.TestRepeatedSeparatorsTakeNoScratch;
+const
+  ELEMENT_COUNT = 60000;
+  SEPARATOR_LENGTH = 255;
+var
+  Joined: TStringJoinBuffer;
+  Text: UnicodeString;
+  I: Integer;
+  Bytes: Int64;
+begin
+  StartCountingAllocations;
+  try
+    Joined.Init(StringOfChar('x', SEPARATOR_LENGTH));
+    for I := 1 to ELEMENT_COUNT do
+      Joined.Add('');
+    Text := Joined.Join;
+    Joined.Release;
+  finally
+    StopCountingAllocations;
+    Bytes := CountedAllocationBytes;
+  end;
+  Expect<Integer>(Length(Text))
+    .ToBe((ELEMENT_COUNT - 1) * SEPARATOR_LENGTH);
+  Expect<Boolean>(Bytes <= (Int64(Length(Text)) + 2 * SEPARATOR_LENGTH) *
+    SizeOf(WideChar) + 1024).ToBe(True);
 end;
 
 var
@@ -229,21 +246,17 @@ const
   PART_COUNT = 5;
 var
   Joined: TStringJoinBuffer;
-  Part: UnicodeString;
+  Part, Text: UnicodeString;
   I: Integer;
-  Text: UnicodeString;
 begin
   Part := StringOfChar('p', POLL_INTERVAL_LENGTH);
   PollCount := 0;
-  Joined := TStringJoinBuffer.Create(',', CountPoll);
-  try
-    for I := 1 to PART_COUNT do
-      Joined.Add(Part);
-    Expect<Integer>(PollCount).ToBe(0);
-    Text := Joined.Join;
-  finally
-    Joined.Free;
-  end;
+  Joined.Init(',', CountPoll);
+  for I := 1 to PART_COUNT do
+    Joined.Add(Part);
+  Expect<Integer>(PollCount).ToBe(0);
+  Text := Joined.Join;
+  Joined.Release;
   Expect<Integer>(Length(Text))
     .ToBe(PART_COUNT * POLL_INTERVAL_LENGTH + PART_COUNT - 1);
   Expect<Integer>(PollCount).ToBe(Length(Text) div POLL_INTERVAL_LENGTH);
@@ -274,21 +287,27 @@ var
 begin
   GateCalls := 0;
   GateRefusesAbove := High(Int64);
-  Joined := TStringJoinBuffer.Create(',', nil, RecordGate);
+  Joined.Init(',', nil, RecordGate);
+  for I := 0 to 9999 do
+    Joined.Add(UnicodeString(IntToStr(I)));
+  Expect<Integer>(GateCalls).ToBe(0);
+  Text := Joined.Join;
+  Expect<Integer>(GateCalls).ToBe(1);
+  Expect<Boolean>(LastGateBytes = Length(Text) * SizeOf(WideChar)).ToBe(True);
+  // A lone string is the result itself: nothing is allocated, nothing asked.
+  Joined.Add(Text);
+  Expect<Boolean>(Pointer(Joined.Join) = Pointer(Text)).ToBe(True);
+  Expect<Integer>(GateCalls).ToBe(1);
+  Joined.Release;
+end;
+
+function JoinRaises(var AJoined: TStringJoinBuffer): Boolean;
+begin
+  Result := False;
   try
-    for I := 0 to 9999 do
-      Joined.Add(UnicodeString(IntToStr(I)));
-    Expect<Integer>(GateCalls).ToBe(0);
-    Text := Joined.Join;
-    Expect<Integer>(GateCalls).ToBe(1);
-    Expect<Boolean>(LastGateBytes = Length(Text) * SizeOf(WideChar))
-      .ToBe(True);
-    // A lone string is the result itself: nothing is allocated, nothing asked.
-    Joined.Add(Text);
-    Expect<Boolean>(Pointer(Joined.Join) = Pointer(Text)).ToBe(True);
-    Expect<Integer>(GateCalls).ToBe(1);
-  finally
-    Joined.Free;
+    AJoined.Join;
+  except
+    Result := True;
   end;
 end;
 
@@ -297,47 +316,53 @@ var
   Joined: TStringJoinBuffer;
   Part: UnicodeString;
   I: Integer;
-  Raised: Boolean;
 begin
-  GateRefusesAbove := 4 * MAXIMUM_CHUNK_LENGTH;
-  Joined := TStringJoinBuffer.Create(',', nil, RecordGate);
-  try
-    for I := 0 to 49999 do
-      Joined.Add(UnicodeString(IntToStr(I)));
-    Raised := False;
-    try
-      Joined.Join;
-    except
-      Raised := True;
-    end;
-    Expect<Boolean>(Raised).ToBe(True);
-    Expect<Integer>(Joined.ElementCount).ToBe(0);
-    Joined.Add('a');
-    Joined.Add('b');
-    Expect<string>(Joined.Join).ToBe('a,b');
-  finally
-    Joined.Free;
-  end;
+  GateRefusesAbove := 1024;
+  Joined.Init(',', nil, RecordGate);
+  for I := 0 to 999 do
+    Joined.Add(UnicodeString(IntToStr(I)));
+  Expect<Boolean>(JoinRaises(Joined)).ToBe(True);
+  Joined.Release;
+  Joined.Init(',', nil, RecordGate);
+  Expect<Integer>(Joined.ElementCount).ToBe(0);
+  Joined.Add('a');
+  Joined.Add('b');
+  Expect<string>(Joined.Join).ToBe('a,b');
+  Joined.Release;
 
   Part := StringOfChar('p', POLL_INTERVAL_LENGTH);
-  Joined := TStringJoinBuffer.Create(',', RaisingPoll);
+  Joined.Init(',', RaisingPoll);
+  Joined.Add(Part);
+  Joined.Add(Part);
+  Expect<Boolean>(JoinRaises(Joined)).ToBe(True);
+  Joined.Release;
+  Joined.Init(',');
+  Expect<Integer>(Joined.ElementCount).ToBe(0);
+  Joined.Add('c');
+  Joined.Add('d');
+  Expect<string>(Joined.Join).ToBe('c,d');
+  Joined.Release;
+end;
+
+procedure TStringJoinTests.TestACopyRefusesToAdd;
+var
+  Joined, Copied: TStringJoinBuffer;
+  Raised: Boolean;
+begin
+  Joined.Init(',');
+  Joined.Add('a');
+  Copied := Joined;
+  Raised := False;
   try
-    Joined.Add(Part);
-    Joined.Add(Part);
-    Raised := False;
-    try
-      Joined.Join;
-    except
+    Copied.Add('b');
+  except
+    on EStringJoinCopied do
       Raised := True;
-    end;
-    Expect<Boolean>(Raised).ToBe(True);
-    Expect<Integer>(Joined.ElementCount).ToBe(0);
-    Joined.Add('c');
-    Joined.Add('d');
-    Expect<string>(Joined.Join).ToBe('c,d');
-  finally
-    Joined.Free;
   end;
+  Expect<Boolean>(Raised).ToBe(True);
+  Joined.Add('c');
+  Expect<string>(Joined.Join).ToBe('a,c');
+  Joined.Release;
 end;
 
 begin

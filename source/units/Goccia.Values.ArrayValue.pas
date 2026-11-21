@@ -1984,16 +1984,43 @@ begin
   end;
 end;
 
+// ES2026 §23.1.3.16 steps 7b-7c: "" for undefined or null, else
+// ? ToString(element).
+function JoinElementString(const AElement: TGocciaValue): string;
+begin
+  if (AElement is TGocciaUndefinedLiteralValue) or
+     (AElement is TGocciaNullLiteralValue) then
+    Result := ''
+  else
+    Result := AElement.ToStringLiteral.Value;
+end;
+
+// ES2026 §23.1.3.16 steps 5-8 for at most SMALL_JOIN_LENGTH elements, by
+// appending: for so few, appending costs less than the join buffer's two
+// passes, and its copies cannot add up to much.
+function JoinFewElements(var AView: TArrayLikeView;
+  const ASeparator: string): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to AView.Len - 1 do
+  begin
+    if I > 0 then
+      Result := Result + ASeparator;
+    Result := Result + JoinElementString(AView.Get(I));
+  end;
+end;
+
 // ES2026 §23.1.3.16 Array.prototype.join(separator)
 function TGocciaArrayValue.ArrayJoin(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;
 var
   View: TArrayLikeView;
   Separator: string;
-  I: Integer;
-  Joined: TStringJoinBuffer;
-  Element: TGocciaValue;
   ViewRoots: TGocciaActiveRootFrame;
   StackLimit: NativeUInt;
+  Joined: TStringJoinBuffer;
+  I: Integer;
 begin
   // Count the whole call: length getters and separator conversion can re-enter
   // before cycle detection is allowed to register the receiver.
@@ -2025,33 +2052,32 @@ begin
         Exit(TGocciaStringLiteralValue.Create(''));
       FJoinReceivers.Add(View.Obj);
       try
-        // Steps 5-8: Build result string, treating undefined/null elements
-        // as empty string. The join buffer costs time linear in the result:
-        // appending to a string reallocates the whole string for each element
-        // and separator, which made joining a large array, and so a template
-        // literal or String() of one, take quadratic time. Its final copy
-        // polls the deadline and a host's abort, as View.Get does here, and
-        // a result past the memory budget is refused before it is allocated,
-        // with the RangeError its charge would raise.
-        Joined := TStringJoinBuffer.Create(Separator, CheckExecutionTimeoutNow,
-          CheckStringResultBytes);
-        try
-          for I := 0 to View.Len - 1 do
-          begin
-            // Step 7b: If element is undefined or null, let next be ""
-            Element := View.Get(I);
-            if (Element is TGocciaUndefinedLiteralValue) or
-               (Element is TGocciaNullLiteralValue) then
-              Joined.Add('')
-            else
-              // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
-              Joined.Add(Element.ToStringLiteral.Value);
+        // Steps 5-9: Build and return the result string, treating
+        // undefined/null elements as empty string
+        if View.Len <= SMALL_JOIN_LENGTH then
+          Result := TGocciaStringLiteralValue.Create(
+            JoinFewElements(View, Separator))
+        else
+        begin
+          // Each element is converted once, in order; the join buffer keeps
+          // the strings and writes the result once at its exact size, in time
+          // linear in the result: appending to a string reallocates the whole
+          // string for each element and separator, which made joining a large
+          // array, and so a template literal or String() of one, take
+          // quadratic time. Its final copy polls the deadline and a host's
+          // abort, as View.Get does here, and a result past the memory budget
+          // is refused before it is allocated, with the RangeError its charge
+          // would raise. Separator outlives the buffer, which does not hold
+          // it.
+          Joined.Init(Separator, CheckExecutionTimeoutNow,
+            CheckStringResultBytes);
+          try
+            for I := 0 to View.Len - 1 do
+              Joined.Add(JoinElementString(View.Get(I)));
+            Result := TGocciaStringLiteralValue.Create(Joined.Join);
+          finally
+            Joined.Release;
           end;
-
-          // Step 9: Return R
-          Result := TGocciaStringLiteralValue.Create(Joined.Join);
-        finally
-          Joined.Free;
         end;
       finally
         FJoinReceivers.Delete(FJoinReceivers.Count - 1);

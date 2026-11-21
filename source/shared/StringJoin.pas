@@ -1,276 +1,361 @@
 unit StringJoin;
 
 {$I Shared.inc}
+{$POINTERMATH ON}
 
 // Joins a list of strings with a separator between each two, as
-// Array.prototype.join does, in time linear in the result, where appending to
-// a string reallocates it on every append.
+// Array.prototype.join does, in two passes: Add keeps a reference to each
+// non-empty string, and Join sums their lengths, allocates the result once at
+// its exact size and copies the strings and separators into it. The work is
+// linear in the result, where appending to a string reallocates it on every
+// append. The memory is the result and the strings it is made of, plus one
+// reference per non-empty element; separators and empty elements take none,
+// and a join whose only content is one string returns that string itself.
 //
-// Short strings and separators are copied into chunks of at most
-// MAXIMUM_CHUNK_LENGTH characters, which grow by doubling from
-// MINIMUM_CHUNK_LENGTH, so a join keeps nothing per element. A long string is
-// kept as it is, not copied. Join then writes the result once, at its exact
-// length, and releases each chunk and string as it copies it. The first
-// string is kept as it is until another follows, so a join whose only content
-// is one string returns that string itself, as the appends did.
+// The buffer holds no managed field, so a local one costs nothing to set up
+// or tear down: it keeps its references by hand and releases them in Join or
+// Release. Call Release in a finally block around the Adds and the Join, so
+// that an exception between them does not leak the references. The separator
+// is not held: the string passed to Init must outlive the buffer. The first
+// INLINE_PART_COUNT references are held in the record, so a small join
+// allocates nothing but its result. Init records where the buffer lives, and
+// a copy refuses to be used, because it would share the original's storage.
 //
-// A gate, when given, is asked about the result's bytes before the result is
-// allocated, so that a memory budget refuses a join before it allocates the
-// result rather than once it charges it, and about the bytes of a result too
-// long for a string, before the join gives up on it.
+// A poll, when given, is called between blocks of the final copy, so that a
+// host's deadline or abort can end a join whose result is long. A gate, when
+// given, is asked about the result's bytes before the result is allocated,
+// and about a result too long for any string before the join gives up.
 
 interface
 
-type
-  // Called between blocks of the final copy, so that a host's deadline or
-  // abort can end a join whose result is long.
-  TStringJoinPoll = procedure;
-  // Raises unless a result of AResultBytes may be allocated. AResultBytes can
-  // exceed MAXIMUM_JOIN_LENGTH characters, which no string can hold.
-  TStringJoinGate = procedure(const AResultBytes: Int64);
-
-  TStringJoinSegment = record
-    Text: UnicodeString;
-    // The characters of Text in use: all of a long string, the filled part of
-    // a chunk.
-    Length: SizeInt;
-  end;
-
-  TStringJoinBuffer = class
-  private
-    FSeparator: UnicodeString;
-    FPoll: TStringJoinPoll;
-    FGate: TStringJoinGate;
-    // The first string, kept uncopied while nothing else has been added.
-    FFirst: UnicodeString;
-    FSegments: array of TStringJoinSegment;
-    FSegmentCount: SizeInt;
-    FChunk: UnicodeString;
-    FChunkLength: SizeInt;
-    FChunkCapacity: SizeInt;
-    FTotalLength: SizeInt;
-    FElementCount: SizeInt;
-    procedure AddSegment(const AText: UnicodeString; const ALength: SizeInt);
-    procedure CloseChunk;
-    procedure WriteToChunk(const AText: UnicodeString; const ALength: SizeInt);
-    procedure Place(const AText: UnicodeString; const ALength: SizeInt);
-    procedure PlaceFirst;
-    procedure WriteText(const AText: UnicodeString);
-    procedure Reset;
-  public
-    constructor Create(const ASeparator: UnicodeString;
-      const APoll: TStringJoinPoll = nil; const AGate: TStringJoinGate = nil);
-    // Adds the next element's string; an empty one still takes its place
-    // between two separators.
-    procedure Add(const AText: UnicodeString);
-    // The joined string. The buffer is empty afterwards, also when a poll or
-    // the gate raises.
-    function Join: UnicodeString;
-    property ElementCount: SizeInt read FElementCount;
-  end;
+uses
+  SysUtils;
 
 const
   // The longest result, in characters, so that its byte size fits a SizeInt
   // with room for the string's header on every target.
   MAXIMUM_JOIN_LENGTH = High(SizeInt) div (2 * SizeOf(WideChar));
-  // A string at least this long is kept rather than copied into a chunk.
-  LONG_TEXT_LENGTH = 256;
-  MINIMUM_CHUNK_LENGTH = 256;
-  MAXIMUM_CHUNK_LENGTH = 32768;
+  INLINE_PART_COUNT = 8;
+  // The most elements a caller joins by appending instead: below about this
+  // many short strings, the two passes cost more than the appends' copies.
+  SMALL_JOIN_LENGTH = 16;
   // Characters the final copy writes between two polls.
   POLL_INTERVAL_LENGTH = 1024 * 1024;
+
+type
+  // Raised by a copy of a TStringJoinBuffer asked to add or join.
+  EStringJoinCopied = class(Exception);
+
+  TStringJoinPoll = procedure;
+  // Raises unless a result of AResultBytes may be allocated. AResultBytes can
+  // exceed MAXIMUM_JOIN_LENGTH characters, which no string can hold.
+  TStringJoinGate = procedure(const AResultBytes: Int64);
+
+  // A run of empty elements, before the part at PartIndex.
+  TStringJoinGap = record
+    PartIndex: SizeInt;
+    EmptyCount: SizeInt;
+  end;
+  PStringJoinGap = ^TStringJoinGap;
+
+  TStringJoinBuffer = record
+  private
+    FSelf: Pointer;
+    FSeparator: PWideChar;
+    FSeparatorLength: SizeInt;
+    // References held by hand: each is a UnicodeString's data pointer, with
+    // its reference count raised by one.
+    FInlineParts: array[0..INLINE_PART_COUNT - 1] of Pointer;
+    FParts: PPointer;
+    FPartCapacity: SizeInt;
+    FPoll: TStringJoinPoll;
+    FGate: TStringJoinGate;
+    FPartCount: SizeInt;
+    FGaps: PStringJoinGap;
+    FGapCapacity: SizeInt;
+    FGapCount: SizeInt;
+    FPendingEmptyCount: SizeInt;
+    FElementCount: SizeInt;
+    FPartLength: SizeInt;
+    procedure CheckInPlace; {$IFDEF FPC}inline;{$ENDIF}
+    function PartSlot(const AIndex: SizeInt): PPointer; {$IFDEF FPC}inline;{$ENDIF}
+    procedure AddGap;
+    procedure GrowParts;
+    procedure RefuseLength(const ALength: Int64);
+    procedure ReleaseParts;
+  public
+    procedure Init(const ASeparator: UnicodeString;
+      const APoll: TStringJoinPoll = nil; const AGate: TStringJoinGate = nil);
+    // Adds the next element's string; an empty one still takes its place
+    // between two separators.
+    procedure Add(const AText: UnicodeString);
+    // The joined string. The buffer is empty afterwards and can join again;
+    // when the poll or the gate raises, Release empties it.
+    function Join: UnicodeString;
+    // Releases every reference the buffer holds and its storage. The buffer
+    // is used again only after another Init.
+    procedure Release;
+    property ElementCount: SizeInt read FElementCount;
+  end;
 
 implementation
 
 const
-  INITIAL_SEGMENT_CAPACITY = 8;
+  // Below this many characters a plain loop copies faster than Move, whose
+  // set-up costs more than the copy.
+  SHORT_COPY_LENGTH = 16;
 
-constructor TStringJoinBuffer.Create(const ASeparator: UnicodeString;
-  const APoll: TStringJoinPoll; const AGate: TStringJoinGate);
+procedure HoldText(var ASlot: Pointer; const AText: UnicodeString); {$IFDEF FPC}inline;{$ENDIF}
 begin
-  inherited Create;
-  FSeparator := ASeparator;
-  FPoll := APoll;
-  FGate := AGate;
+  ASlot := nil;
+  UnicodeString(ASlot) := AText;
 end;
 
-procedure TStringJoinBuffer.AddSegment(const AText: UnicodeString;
-  const ALength: SizeInt);
+procedure ReleaseText(var ASlot: Pointer); {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if FSegmentCount = System.Length(FSegments) then
-  begin
-    if FSegmentCount = 0 then
-      SetLength(FSegments, INITIAL_SEGMENT_CAPACITY)
-    else
-      SetLength(FSegments, FSegmentCount * 2);
-  end;
-  FSegments[FSegmentCount].Text := AText;
-  FSegments[FSegmentCount].Length := ALength;
-  Inc(FSegmentCount);
+  UnicodeString(ASlot) := '';
 end;
 
-procedure TStringJoinBuffer.CloseChunk;
+function HeldLength(const ASlot: Pointer): SizeInt; {$IFDEF FPC}inline;{$ENDIF}
 begin
-  if FChunkLength > 0 then
-    AddSegment(FChunk, FChunkLength);
-  // The segment holds the chunk now; the next chunk is a new block.
-  FChunk := '';
-  FChunkLength := 0;
-  FChunkCapacity := 0;
+  Result := System.Length(UnicodeString(ASlot));
 end;
 
-procedure TStringJoinBuffer.WriteToChunk(const AText: UnicodeString;
-  const ALength: SizeInt);
-var
-  NewCapacity, I: SizeInt;
-  Source, Target: PWideChar;
-begin
-  if FChunkLength + ALength > FChunkCapacity then
-  begin
-    if FChunkCapacity >= MAXIMUM_CHUNK_LENGTH then
-      CloseChunk;
-    if FChunkCapacity = 0 then
-      NewCapacity := MINIMUM_CHUNK_LENGTH
-    else
-      NewCapacity := FChunkCapacity * 2;
-    if NewCapacity > MAXIMUM_CHUNK_LENGTH then
-      NewCapacity := MAXIMUM_CHUNK_LENGTH;
-    if NewCapacity < FChunkLength + ALength then
-      NewCapacity := FChunkLength + ALength;
-    // FChunk is never shared until CloseChunk hands it to a segment, so this
-    // grows it in its own block.
-    SetLength(FChunk, NewCapacity);
-    FChunkCapacity := NewCapacity;
-  end;
-  // A short string, so a plain loop: Move's set-up costs more than the copy.
-  Source := PWideChar(AText);
-  Target := PWideChar(FChunk) + FChunkLength;
-  for I := 0 to ALength - 1 do
-    Target[I] := Source[I];
-  Inc(FChunkLength, ALength);
-end;
-
-procedure TStringJoinBuffer.Place(const AText: UnicodeString;
-  const ALength: SizeInt);
-begin
-  if ALength >= LONG_TEXT_LENGTH then
-  begin
-    CloseChunk;
-    AddSegment(AText, ALength);
-  end
-  else
-    WriteToChunk(AText, ALength);
-end;
-
-procedure TStringJoinBuffer.PlaceFirst;
-var
-  First: UnicodeString;
-begin
-  First := FFirst;
-  FFirst := '';
-  Place(First, System.Length(First));
-end;
-
-procedure TStringJoinBuffer.WriteText(const AText: UnicodeString);
-var
-  TextLength: SizeInt;
-begin
-  TextLength := System.Length(AText);
-  if TextLength = 0 then
-    Exit;
-  if TextLength > MAXIMUM_JOIN_LENGTH - FTotalLength then
-  begin
-    if Assigned(FGate) then
-      FGate((Int64(FTotalLength) + TextLength) * SizeOf(WideChar));
-    System.Error(reOutOfMemory);
-  end;
-  if FTotalLength = 0 then
-    FFirst := AText
-  else
-  begin
-    if FFirst <> '' then
-      PlaceFirst;
-    Place(AText, TextLength);
-  end;
-  Inc(FTotalLength, TextLength);
-end;
-
-procedure TStringJoinBuffer.Add(const AText: UnicodeString);
-begin
-  if FElementCount > 0 then
-    WriteText(FSeparator);
-  WriteText(AText);
-  Inc(FElementCount);
-end;
-
-procedure TStringJoinBuffer.Reset;
+procedure CopyCharacters(const ASource: PWideChar; const ATarget: PWideChar;
+  const ALength: SizeInt); {$IFDEF FPC}inline;{$ENDIF}
 var
   I: SizeInt;
 begin
-  for I := 0 to FSegmentCount - 1 do
-    FSegments[I].Text := '';
-  FFirst := '';
-  FChunk := '';
-  FChunkLength := 0;
-  FChunkCapacity := 0;
-  FSegmentCount := 0;
-  FTotalLength := 0;
+  if ALength < SHORT_COPY_LENGTH then
+    for I := 0 to ALength - 1 do
+      ATarget[I] := ASource[I]
+  else
+    Move(ASource^, ATarget^, ALength * SizeOf(WideChar));
+end;
+
+procedure TStringJoinBuffer.Init(const ASeparator: UnicodeString;
+  const APoll: TStringJoinPoll; const AGate: TStringJoinGate);
+begin
+  FSelf := @Self;
+  FSeparator := PWideChar(ASeparator);
+  FSeparatorLength := System.Length(ASeparator);
+  FPoll := APoll;
+  FGate := AGate;
+  FParts := nil;
+  FPartCapacity := 0;
+  FPartCount := 0;
+  FGaps := nil;
+  FGapCapacity := 0;
+  FGapCount := 0;
+  FPendingEmptyCount := 0;
   FElementCount := 0;
+  FPartLength := 0;
+end;
+
+procedure TStringJoinBuffer.CheckInPlace;
+begin
+  if FSelf <> @Self then
+    raise EStringJoinCopied.Create(
+      'A TStringJoinBuffer is used only where Init set it up');
+end;
+
+function TStringJoinBuffer.PartSlot(const AIndex: SizeInt): PPointer;
+begin
+  if AIndex < INLINE_PART_COUNT then
+    Result := @FInlineParts[AIndex]
+  else
+    Result := FParts + (AIndex - INLINE_PART_COUNT);
+end;
+
+procedure TStringJoinBuffer.AddGap;
+begin
+  if FGapCount = FGapCapacity then
+  begin
+    if FGapCapacity = 0 then
+      FGapCapacity := INLINE_PART_COUNT
+    else
+      FGapCapacity := FGapCapacity * 2;
+    ReAllocMem(FGaps, FGapCapacity * SizeOf(TStringJoinGap));
+  end;
+  FGaps[FGapCount].PartIndex := FPartCount;
+  FGaps[FGapCount].EmptyCount := FPendingEmptyCount;
+  Inc(FGapCount);
+  FPendingEmptyCount := 0;
+end;
+
+procedure TStringJoinBuffer.GrowParts;
+begin
+  if FPartCapacity = 0 then
+    FPartCapacity := INLINE_PART_COUNT * 2
+  else
+    FPartCapacity := FPartCapacity * 2;
+  ReAllocMem(FParts, FPartCapacity * SizeOf(Pointer));
+end;
+
+procedure TStringJoinBuffer.RefuseLength(const ALength: Int64);
+begin
+  if Assigned(FGate) then
+    FGate(ALength * SizeOf(WideChar));
+  System.Error(reOutOfMemory);
+end;
+
+procedure TStringJoinBuffer.Add(const AText: UnicodeString);
+var
+  TextLength: SizeInt;
+begin
+  CheckInPlace;
+  TextLength := System.Length(AText);
+  if TextLength = 0 then
+  begin
+    Inc(FPendingEmptyCount);
+    Inc(FElementCount);
+    Exit;
+  end;
+  if TextLength > MAXIMUM_JOIN_LENGTH - FPartLength then
+    RefuseLength(Int64(FPartLength) + TextLength);
+  if FPendingEmptyCount > 0 then
+    AddGap;
+  if FPartCount >= INLINE_PART_COUNT + FPartCapacity then
+    GrowParts;
+  HoldText(PartSlot(FPartCount)^, AText);
+  Inc(FPartCount);
+  Inc(FPartLength, TextLength);
+  Inc(FElementCount);
+end;
+
+procedure TStringJoinBuffer.ReleaseParts;
+var
+  I: SizeInt;
+begin
+  for I := 0 to FPartCount - 1 do
+    ReleaseText(PartSlot(I)^);
+  FPartCount := 0;
+  FGapCount := 0;
+  FPendingEmptyCount := 0;
+  FElementCount := 0;
+  FPartLength := 0;
+end;
+
+procedure TStringJoinBuffer.Release;
+begin
+  if FSelf <> @Self then
+    Exit;
+  ReleaseParts;
+  if FParts <> nil then
+  begin
+    FreeMem(FParts);
+    FParts := nil;
+    FPartCapacity := 0;
+  end;
+  if FGaps <> nil then
+  begin
+    FreeMem(FGaps);
+    FGaps := nil;
+    FGapCapacity := 0;
+  end;
+  FSelf := nil;
 end;
 
 function TStringJoinBuffer.Join: UnicodeString;
 var
-  I, Copied, BlockLength, SinceLastPoll: SizeInt;
-  Source, Target: PWideChar;
+  SeparatorLength, SeparatorCount, SeparatorsWritten: SizeInt;
+  ElementIndex, GapIndex, PartIndex, Remaining, BlockLength: SizeInt;
+  SinceLastPoll: SizeInt;
+  TotalLength: Int64;
+  Part: PPointer;
+  Separator, Source, Target: PWideChar;
 begin
-  if FFirst <> '' then
+  CheckInPlace;
+  SeparatorLength := FSeparatorLength;
+  if (FElementCount > 1) and (SeparatorLength > 0) then
+    SeparatorCount := FElementCount - 1
+  else
+    SeparatorCount := 0;
+  if SeparatorCount = 0 then
   begin
-    // Nothing followed the first string: it is the result.
-    Result := FFirst;
-    Reset;
-    Exit;
-  end;
-  if FTotalLength = 0 then
-  begin
-    Reset;
-    Exit('');
+    if FPartCount = 0 then
+    begin
+      ReleaseParts;
+      Exit('');
+    end;
+    if FPartCount = 1 then
+    begin
+      Result := UnicodeString(FInlineParts[0]);
+      ReleaseParts;
+      Exit;
+    end;
   end;
 
-  try
-    CloseChunk;
-    if Assigned(FGate) then
-      FGate(Int64(FTotalLength) * SizeOf(WideChar));
-    Result := '';
-    SetLength(Result, FTotalLength);
-    Target := PWideChar(Result);
-    SinceLastPoll := 0;
-    for I := 0 to FSegmentCount - 1 do
+  TotalLength := Int64(SeparatorCount) * SeparatorLength + FPartLength;
+  if TotalLength > MAXIMUM_JOIN_LENGTH then
+    RefuseLength(TotalLength);
+  if Assigned(FGate) then
+    FGate(TotalLength * SizeOf(WideChar));
+  Result := '';
+  SetLength(Result, SizeInt(TotalLength));
+  Target := PWideChar(Result);
+  Separator := FSeparator;
+  SinceLastPoll := 0;
+  SeparatorsWritten := 0;
+  ElementIndex := 0;
+  GapIndex := 0;
+  for PartIndex := 0 to FPartCount - 1 do
+  begin
+    while (GapIndex < FGapCount) and
+          (FGaps[GapIndex].PartIndex = PartIndex) do
     begin
-      Source := PWideChar(FSegments[I].Text);
-      Copied := 0;
-      while Copied < FSegments[I].Length do
+      Inc(ElementIndex, FGaps[GapIndex].EmptyCount);
+      Inc(GapIndex);
+    end;
+    if SeparatorCount > 0 then
+      while SeparatorsWritten < ElementIndex do
       begin
-        BlockLength := FSegments[I].Length - Copied;
-        if BlockLength > POLL_INTERVAL_LENGTH - SinceLastPoll then
-          BlockLength := POLL_INTERVAL_LENGTH - SinceLastPoll;
-        Move(Source^, Target^, BlockLength * SizeOf(WideChar));
-        Inc(Source, BlockLength);
-        Inc(Target, BlockLength);
-        Inc(Copied, BlockLength);
-        Inc(SinceLastPoll, BlockLength);
-        if SinceLastPoll >= POLL_INTERVAL_LENGTH then
+        CopyCharacters(Separator, Target, SeparatorLength);
+        Inc(Target, SeparatorLength);
+        Inc(SinceLastPoll, SeparatorLength);
+        Inc(SeparatorsWritten);
+        if (SinceLastPoll >= POLL_INTERVAL_LENGTH) and Assigned(FPoll) then
         begin
           SinceLastPoll := 0;
-          if Assigned(FPoll) then
-            FPoll;
+          FPoll;
         end;
       end;
-      // Released while it is still in the cache; the result holds a copy.
-      FSegments[I].Text := '';
+    Part := PartSlot(PartIndex);
+    Source := PWideChar(Part^);
+    Remaining := HeldLength(Part^);
+    while Remaining > 0 do
+    begin
+      BlockLength := Remaining;
+      if BlockLength > POLL_INTERVAL_LENGTH then
+        BlockLength := POLL_INTERVAL_LENGTH;
+      CopyCharacters(Source, Target, BlockLength);
+      Inc(Source, BlockLength);
+      Inc(Target, BlockLength);
+      Inc(SinceLastPoll, BlockLength);
+      Dec(Remaining, BlockLength);
+      if (SinceLastPoll >= POLL_INTERVAL_LENGTH) and Assigned(FPoll) then
+      begin
+        SinceLastPoll := 0;
+        FPoll;
+      end;
     end;
-  finally
-    Reset;
+    // Released while it is still in the cache; the result holds a copy.
+    ReleaseText(Part^);
+    Inc(ElementIndex);
   end;
+  while SeparatorsWritten < SeparatorCount do
+  begin
+    CopyCharacters(Separator, Target, SeparatorLength);
+    Inc(Target, SeparatorLength);
+    Inc(SinceLastPoll, SeparatorLength);
+    Inc(SeparatorsWritten);
+    if (SinceLastPoll >= POLL_INTERVAL_LENGTH) and Assigned(FPoll) then
+    begin
+      SinceLastPoll := 0;
+      FPoll;
+    end;
+  end;
+  ReleaseParts;
 end;
 
 end.

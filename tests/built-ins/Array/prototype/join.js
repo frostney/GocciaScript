@@ -103,3 +103,58 @@ describe("Array.prototype.join callback stack protection", () => {
     expect(array.join("-")).toBe("1-2");
   });
 });
+
+describe("Array.prototype.join of many elements", () => {
+  const LENGTH = 40;
+
+  test("converts each element once, in order, after the separator", () => {
+    const events = [];
+    const array = Array.from({ length: LENGTH }, (_, i) => ({
+      toString() { events.push(i); return String(i); }
+    }));
+    const separator = { toString() { events.push("separator"); return "-"; } };
+    const expected = Array.from({ length: LENGTH }, (_, i) => String(i));
+    expect(array.join(separator)).toBe(expected.join("-"));
+    expect(events).toEqual(["separator", ...expected.map(Number)]);
+  });
+
+  test("keeps the separators around empty, null and undefined elements and holes", () => {
+    const array = Array.from({ length: LENGTH }, (_, i) =>
+      i % 5 === 0 ? undefined : i % 7 === 0 ? null : i % 3 === 0 ? "" : String(i));
+    delete array[4];
+    const expected = Array.from(array, (value) => value ?? "");
+    let text = "";
+    for (const [index, value] of expected.entries()) {
+      text += (index > 0 ? ", " : "") + value;
+    }
+    expect(array.join(", ")).toBe(text);
+    expect(Array(LENGTH).join("ab")).toBe("ab".repeat(LENGTH - 1));
+  });
+
+  test("an element that contains the array joins as empty", () => {
+    const array = Array.from({ length: LENGTH }, (_, i) => i);
+    array[LENGTH / 2] = array;
+    const expected = Array.from({ length: LENGTH }, (_, i) =>
+      i === LENGTH / 2 ? "" : String(i));
+    expect(array.join()).toBe(expected.join());
+    expect(`${array}`).toBe(expected.join());
+  });
+
+  test("a conversion that throws stops the join and leaves no cycle marker", () => {
+    const array = Array.from({ length: LENGTH }, (_, i) => i);
+    const calls = [];
+    array[LENGTH - 1] = { toString() { throw new Error("stop"); } };
+    array[1] = { toString() { calls.push(1); return "1"; } };
+    expect(() => array.join()).toThrow("stop");
+    expect(calls).toEqual([1]);
+    array[LENGTH - 1] = LENGTH - 1;
+    expect(array.join()).toBe(Array.from({ length: LENGTH }, (_, i) => i).join());
+  });
+
+  test("a typed array joins and converts its elements in order", () => {
+    const typed = Float64Array.from({ length: LENGTH }, (_, i) => i / 2);
+    const expected = Array.from({ length: LENGTH }, (_, i) => String(i / 2));
+    expect(typed.join(";")).toBe(expected.join(";"));
+    expect(`${typed}`).toBe(expected.join(","));
+  });
+});
