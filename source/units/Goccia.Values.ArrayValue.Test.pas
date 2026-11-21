@@ -244,7 +244,8 @@ end;
 
 { The join asks the budget about its result before allocating it, and refuses
   as the result's own charge would have: with a RangeError the script can
-  catch. }
+  catch, having asked for far less than the result. Joining only separators
+  keeps the join's tables out of it, so the result alone is refused. }
 procedure TTestArrayValue.TestAJoinPastTheBudgetThrowsARangeError;
 var
   Source: TStringList;
@@ -252,7 +253,8 @@ var
   Convert: TGocciaValue;
   Args: TGocciaArgumentsCollection;
   Collector: TGarbageCollector;
-  PreviousMaxBytes: Int64;
+  PreviousMaxBytes, Bytes: Int64;
+  Answer: string;
 
   function Call: string;
   begin
@@ -263,10 +265,10 @@ var
 begin
   Source := TStringList.Create;
   Source.Text := Format(
-    'const a = Array.from({ length: %d }, (_, i) => String(i).padStart(10, "0"));' +
-    LineEnding +
-    'globalThis.convert = () => { try { return String(a.join(",").length); } ' +
-    'catch (e) { return e.name; } };', [LONG_LENGTH]);
+    'const e = Array(%d).fill(undefined);' + LineEnding +
+    'const separator = "x".repeat(255);' + LineEnding +
+    'globalThis.convert = () => { try { return String(e.join(separator).length); } ' +
+    'catch (error) { return error.name; } };', [LONG_LENGTH]);
   Engine := TGocciaEngine.Create('array-join-budget.js', Source);
   Args := TGocciaArgumentsCollection.Create;
   try
@@ -278,9 +280,18 @@ begin
     try
       Collector.Collect;
       Collector.MaxBytes := Collector.BytesAllocated + 64 * 1024;
-      Expect<string>(Call).ToBe('RangeError');
+      StartCountingAllocations;
+      try
+        Answer := Call;
+      finally
+        StopCountingAllocations;
+        Bytes := CountedAllocationBytes;
+      end;
+      Expect<string>(Answer).ToBe('RangeError');
+      // Far less than the result's (LONG_LENGTH - 1) * 255 * 2 bytes.
+      Expect<Boolean>(Bytes < 256 * 1024).ToBe(True);
       Collector.MaxBytes := PreviousMaxBytes;
-      Expect<string>(Call).ToBe(IntToStr(LONG_LENGTH * 11 - 1));
+      Expect<string>(Call).ToBe(IntToStr((LONG_LENGTH - 1) * 255));
     finally
       Collector.MaxBytes := PreviousMaxBytes;
     end;

@@ -24,9 +24,12 @@ unit StringJoin;
 // A poll, when given, is called every POLL_INTERVAL_LENGTH characters of the
 // final copy, strings and separators alike, so that a host's deadline or
 // abort can end a join whose result is long. A gate, when given, is asked
-// about each allocation before it is made, the buffer's tables and the
-// result alike, and about a result too long for any string before the join
-// gives up.
+// before each allocation the buffer makes, its tables and the result alike,
+// about that allocation plus the bytes the buffer already holds that nothing
+// else accounts for: its tables, and the strings added as held only here,
+// whose owners a collection may free while the buffer still holds them. It
+// is also asked about a result too long for any string before the join gives
+// up.
 
 interface
 
@@ -79,6 +82,10 @@ type
     FPendingEmptyCount: SizeInt;
     FElementCount: SizeInt;
     FPartLength: SizeInt;
+    // The bytes of the tables, and of the strings held only here.
+    FTableBytes: Int64;
+    FHeldTextBytes: Int64;
+    procedure Ask(const ABytes: Int64); {$IFDEF FPC}inline;{$ENDIF}
     procedure CheckInPlace; {$IFDEF FPC}inline;{$ENDIF}
     function PartSlot(const AIndex: SizeInt): PPointer; {$IFDEF FPC}inline;{$ENDIF}
     procedure AddGap;
@@ -91,8 +98,12 @@ type
     procedure Init(const ASeparator: UnicodeString;
       const APoll: TStringJoinPoll = nil; const AGate: TStringJoinGate = nil);
     // Adds the next element's string; an empty one still takes its place
-    // between two separators.
-    procedure Add(const AText: UnicodeString);
+    // between two separators. AHeldOnlyHere says that the value that owns the
+    // string, and accounts for its bytes, may be freed while the buffer holds
+    // it, as a string converted from a number is: the buffer counts its bytes
+    // itself.
+    procedure Add(const AText: UnicodeString;
+      const AHeldOnlyHere: Boolean = False);
     // The joined string. The buffer is empty afterwards and can join again;
     // when the poll or the gate raises, Release empties it.
     function Join: UnicodeString;
@@ -154,6 +165,14 @@ begin
   FPendingEmptyCount := 0;
   FElementCount := 0;
   FPartLength := 0;
+  FTableBytes := 0;
+  FHeldTextBytes := 0;
+end;
+
+procedure TStringJoinBuffer.Ask(const ABytes: Int64);
+begin
+  if Assigned(FGate) then
+    FGate(FTableBytes + FHeldTextBytes + ABytes);
 end;
 
 procedure TStringJoinBuffer.CheckInPlace;
@@ -181,9 +200,11 @@ begin
       NewCapacity := INLINE_PART_COUNT
     else
       NewCapacity := FGapCapacity * 2;
-    if Assigned(FGate) then
-      FGate(Int64(NewCapacity) * SizeOf(TStringJoinGap));
+    // The old block may still be held while the new one is filled.
+    Ask(Int64(NewCapacity) * SizeOf(TStringJoinGap));
     ReAllocMem(FGaps, NewCapacity * SizeOf(TStringJoinGap));
+    Inc(FTableBytes, Int64(NewCapacity - FGapCapacity) *
+      SizeOf(TStringJoinGap));
     FGapCapacity := NewCapacity;
   end;
   FGaps[FGapCount].PartIndex := FPartCount;
@@ -200,9 +221,10 @@ begin
     NewCapacity := INLINE_PART_COUNT * 2
   else
     NewCapacity := FPartCapacity * 2;
-  if Assigned(FGate) then
-    FGate(Int64(NewCapacity) * SizeOf(Pointer));
+  // The old block may still be held while the new one is filled.
+  Ask(Int64(NewCapacity) * SizeOf(Pointer));
   ReAllocMem(FParts, NewCapacity * SizeOf(Pointer));
+  Inc(FTableBytes, Int64(NewCapacity - FPartCapacity) * SizeOf(Pointer));
   FPartCapacity := NewCapacity;
 end;
 
@@ -239,7 +261,8 @@ begin
   System.Error(reOutOfMemory);
 end;
 
-procedure TStringJoinBuffer.Add(const AText: UnicodeString);
+procedure TStringJoinBuffer.Add(const AText: UnicodeString;
+  const AHeldOnlyHere: Boolean);
 var
   TextLength: SizeInt;
 begin
@@ -247,7 +270,9 @@ begin
   TextLength := System.Length(AText);
   if TextLength = 0 then
   begin
-    Inc(FPendingEmptyCount);
+    // Without a separator, an empty element leaves no trace in the result.
+    if FSeparatorLength > 0 then
+      Inc(FPendingEmptyCount);
     Inc(FElementCount);
     Exit;
   end;
@@ -261,6 +286,8 @@ begin
   Inc(FPartCount);
   Inc(FPartLength, TextLength);
   Inc(FElementCount);
+  if AHeldOnlyHere then
+    Inc(FHeldTextBytes, Int64(TextLength) * SizeOf(WideChar));
 end;
 
 procedure TStringJoinBuffer.ReleaseParts;
@@ -274,6 +301,7 @@ begin
   FPendingEmptyCount := 0;
   FElementCount := 0;
   FPartLength := 0;
+  FHeldTextBytes := 0;
 end;
 
 procedure TStringJoinBuffer.Release;
@@ -293,6 +321,7 @@ begin
     FGaps := nil;
     FGapCapacity := 0;
   end;
+  FTableBytes := 0;
   FSelf := nil;
 end;
 
@@ -329,8 +358,7 @@ begin
   TotalLength := Int64(SeparatorCount) * SeparatorLength + FPartLength;
   if TotalLength > MAXIMUM_JOIN_LENGTH then
     RefuseLength(TotalLength);
-  if Assigned(FGate) then
-    FGate(TotalLength * SizeOf(WideChar));
+  Ask(TotalLength * SizeOf(WideChar));
   Result := '';
   SetLength(Result, SizeInt(TotalLength));
   Target := PWideChar(Result);

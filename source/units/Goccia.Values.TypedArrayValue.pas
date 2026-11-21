@@ -3112,44 +3112,29 @@ begin
   Result := Accumulator;
 end;
 
-function TypedArrayElementString(const ATypedArray: TGocciaTypedArrayValue;
-  const AIndex: Integer): string;
-var
-  Element: TGocciaValue;
-begin
-  Element := ATypedArray.GetElementAsValue(AIndex);
-  if (Element is TGocciaUndefinedLiteralValue) or
-     (Element is TGocciaNullLiteralValue) then
-    Result := ''
-  else
-    Result := Element.ToStringLiteral.Value;
-end;
-
-// The elements of ATypedArray joined with ASeparator. The join buffer keeps
-// the join linear in its result, as Array.prototype.join's does: appending to
-// a string copies it each time. At most SMALL_JOIN_LENGTH elements are
-// appended, which for so few costs less than the buffer's two passes.
+// The elements of ATypedArray joined with ASeparator, for more than
+// SMALL_JOIN_LENGTH elements. The join buffer keeps the join linear in its
+// result, as Array.prototype.join's does: appending to a string copies it
+// each time. Each string is converted from a number, so nothing else holds
+// it and the buffer counts its bytes.
 function JoinTypedArrayElements(const ATypedArray: TGocciaTypedArrayValue;
   const ALength: Integer; const ASeparator: string): string;
 var
   Joined: TStringJoinBuffer;
   I: Integer;
+  Element: TGocciaValue;
 begin
-  if ALength <= SMALL_JOIN_LENGTH then
-  begin
-    Result := '';
-    for I := 0 to ALength - 1 do
-    begin
-      if I > 0 then
-        Result := Result + ASeparator;
-      Result := Result + TypedArrayElementString(ATypedArray, I);
-    end;
-    Exit;
-  end;
   Joined.Init(ASeparator, CheckExecutionTimeoutNow, CheckStringResultBytes);
   try
     for I := 0 to ALength - 1 do
-      Joined.Add(TypedArrayElementString(ATypedArray, I));
+    begin
+      Element := ATypedArray.GetElementAsValue(I);
+      if (Element is TGocciaUndefinedLiteralValue) or
+         (Element is TGocciaNullLiteralValue) then
+        Joined.Add('')
+      else
+        Joined.Add(Element.ToStringLiteral.Value, True);
+    end;
     Result := Joined.Join;
   finally
     Joined.Release;
@@ -3161,7 +3146,9 @@ function TGocciaTypedArrayValue.TypedArrayJoin(const AArgs: TGocciaArgumentsColl
 var
   TA: TGocciaTypedArrayValue;
   Sep: string;
-  Len: Integer;
+  I, Len: Integer;
+  S: string;
+  Element: TGocciaValue;
 begin
   TA := RequireAttachedTypedArray(AThisValue, 'TypedArray.prototype.join');
   Len := TA.Length;
@@ -3169,8 +3156,20 @@ begin
     Sep := AArgs.GetElement(0).ToStringLiteral.Value
   else
     Sep := ',';
-  Result := TGocciaStringLiteralValue.Create(
-    JoinTypedArrayElements(TA, Len, Sep));
+  // For so few elements, appending costs less than the join buffer's two
+  // passes, and its copies cannot add up to much.
+  if Len > SMALL_JOIN_LENGTH then
+    Exit(TGocciaStringLiteralValue.Create(JoinTypedArrayElements(TA, Len, Sep)));
+  S := '';
+  for I := 0 to Len - 1 do
+  begin
+    if I > 0 then S := S + Sep;
+    Element := TA.GetElementAsValue(I);
+    if not ((Element is TGocciaUndefinedLiteralValue) or
+            (Element is TGocciaNullLiteralValue)) then
+      S := S + Element.ToStringLiteral.Value;
+  end;
+  Result := TGocciaStringLiteralValue.Create(S);
 end;
 
 // ECMA-402 §17.1.6 %TypedArray%.prototype.toLocaleString([locales [, options]])
@@ -3231,7 +3230,8 @@ begin
           CallArgs.Free;
         end;
         Roots.Add(Formatted);
-        Joined.Add(Formatted.ToStringLiteral.Value);
+        // The roots let the formatted value go after this element.
+        Joined.Add(Formatted.ToStringLiteral.Value, True);
       finally
         Roots.Clear;
       end;

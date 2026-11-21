@@ -28,6 +28,8 @@ type
     procedure TestGateIsAskedBeforeTheResult;
     procedure TestARaisingGateOrPollLeavesTheBufferEmpty;
     procedure TestACopyRefusesToAdd;
+    procedure TestGateCountsTablesAndStringsHeldOnlyHere;
+    procedure TestEmptySeparatorKeepsNoGaps;
   public
     procedure SetupTests; override;
   end;
@@ -62,6 +64,10 @@ begin
     TestARaisingGateOrPollLeavesTheBufferEmpty);
   Test('a copy of the buffer refuses to add or join',
     TestACopyRefusesToAdd);
+  Test('the gate is asked about the tables and the strings held only here as well',
+    TestGateCountsTablesAndStringsHeldOnlyHere);
+  Test('with an empty separator, empty elements need no bookkeeping',
+    TestEmptySeparatorKeepsNoGaps);
 end;
 
 function JoinOf(const ASeparator: UnicodeString;
@@ -309,7 +315,9 @@ begin
     .ToBe(True);
   Text := Joined.Join;
   Expect<Integer>(GateCalls).ToBe(2);
-  Expect<Boolean>(LastGateBytes = Length(Text) * SizeOf(WideChar)).ToBe(True);
+  // The result, beside the table it is copied from.
+  Expect<Boolean>(LastGateBytes = Length(Text) * SizeOf(WideChar) +
+    2 * INLINE_PART_COUNT * SizeOf(Pointer)).ToBe(True);
   // A lone string is the result itself: nothing is allocated, nothing asked.
   Joined.Add(Text);
   Expect<Boolean>(Pointer(Joined.Join) = Pointer(Text)).ToBe(True);
@@ -333,8 +341,9 @@ var
   Part: UnicodeString;
   I: Integer;
 begin
-  // Above the part table's 16,384 bytes, below the result's 17,778.
-  GateRefusesAbove := 17000;
+  // Above the last table growth's 8,192 + 16,384 bytes, below the result's
+  // 17,778 beside the 16,384-byte table.
+  GateRefusesAbove := 30000;
   Joined.Init(',', nil, RecordGate);
   for I := 0 to 1999 do
     Joined.Add(UnicodeString(IntToStr(I)));
@@ -379,6 +388,49 @@ begin
   Expect<Boolean>(Raised).ToBe(True);
   Joined.Add('c');
   Expect<string>(Joined.Join).ToBe('a,c');
+  Joined.Release;
+end;
+
+procedure TStringJoinTests.TestGateCountsTablesAndStringsHeldOnlyHere;
+var
+  Joined: TStringJoinBuffer;
+  Text: UnicodeString;
+  I: Integer;
+  TableBytes: Int64;
+begin
+  GateCalls := 0;
+  GateRefusesAbove := High(Int64);
+  Joined.Init(',', nil, RecordGate);
+  for I := 0 to INLINE_PART_COUNT do
+    Joined.Add(StringOfChar('h', 10), True);
+  // The first table, for the part past the record's.
+  TableBytes := 2 * INLINE_PART_COUNT * SizeOf(Pointer);
+  Expect<Boolean>(LastGateBytes = INLINE_PART_COUNT * 10 * SizeOf(WideChar) +
+    TableBytes).ToBe(True);
+  Text := Joined.Join;
+  // The result, beside the table and every string held only here.
+  Expect<Boolean>(LastGateBytes = (INLINE_PART_COUNT + 1) * 10 *
+    SizeOf(WideChar) + TableBytes + Length(Text) * SizeOf(WideChar))
+    .ToBe(True);
+  Joined.Release;
+end;
+
+procedure TStringJoinTests.TestEmptySeparatorKeepsNoGaps;
+var
+  Joined: TStringJoinBuffer;
+  I: Integer;
+begin
+  GateCalls := 0;
+  GateRefusesAbove := High(Int64);
+  Joined.Init('', nil, RecordGate);
+  for I := 0 to INLINE_PART_COUNT - 1 do
+  begin
+    Joined.Add('x');
+    Joined.Add('');
+  end;
+  // The parts fit the record, and the empty elements took nothing.
+  Expect<Integer>(GateCalls).ToBe(0);
+  Expect<string>(Joined.Join).ToBe(StringOfChar('x', INLINE_PART_COUNT));
   Joined.Release;
 end;
 
