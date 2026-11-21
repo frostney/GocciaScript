@@ -838,7 +838,8 @@ procedure CompileYield(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaYieldExpression; const ADest: UInt16);
 var
   TempReg: UInt16;
-  OuterRegionPeak, RegionPeak, Slot: Integer;
+  OuterRegionPeak, RegionPeak, Slot, JumpMark, ClearedHi: Integer;
+  StraightLine: Boolean;
 begin
   if AExpr.IsDelegate then
   begin
@@ -863,6 +864,7 @@ begin
     TempReg := ADest;
   try
     OuterRegionPeak := ACtx.Scope.BeginRegisterRegion;
+    JumpMark := ACtx.Scope.JumpCount;
     if Assigned(AExpr.Operand) then
       ACtx.CompileExpression(AExpr.Operand, TempReg)
     else
@@ -870,22 +872,23 @@ begin
     RegionPeak := ACtx.Scope.EndRegisterRegion(OuterRegionPeak);
     // What the operand's evaluation left above the live registers (the
     // arguments of a call, a receiver) is dead here, and the suspended frame
-    // would keep it reachable after the consumer drops the yielded value.
+    // would keep it reachable after the consumer drops the yielded value. A
+    // yield nested in an operand that ran straight through, with no jump,
+    // has cleared its own part already, and nothing has written it since
+    // (`yield [yield [yield 0]]` would otherwise clear quadratically many).
+    StraightLine := ACtx.Scope.JumpCount = JumpMark;
     for Slot := ACtx.Scope.NextSlot to RegionPeak - 1 do
-      if Slot <> TempReg then
+      if (Slot <> TempReg) and
+         not (StraightLine and ACtx.Scope.YieldClearedHolds(Slot)) then
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
-    // Those registers are clear now, so an enclosing yield or statement need
-    // not clear them again: without this, yields nested through literals
-    // (`yield [yield [yield 0]]`) cleared quadratically many registers.
-    if TempReg >= ACtx.Scope.NextSlot then
-    begin
-      if Integer(TempReg) + 1 > OuterRegionPeak then
-        ACtx.Scope.ResetRegisterRegionPeak(Integer(TempReg) + 1)
-      else
-        ACtx.Scope.ResetRegisterRegionPeak(OuterRegionPeak);
-    end
-    else
-      ACtx.Scope.ResetRegisterRegionPeak(OuterRegionPeak);
+    // What is clear from here on; the operand and the resumed value go into
+    // TempReg and ADest, so neither counts.
+    ClearedHi := RegionPeak;
+    if (TempReg >= ACtx.Scope.NextSlot) and (TempReg < ClearedHi) then
+      ClearedHi := TempReg;
+    if (ADest >= ACtx.Scope.NextSlot) and (ADest < ClearedHi) then
+      ClearedHi := ADest;
+    ACtx.Scope.NoteYieldCleared(ACtx.Scope.NextSlot, ClearedHi);
     EmitInstruction(ACtx, EncodeABC(OP_YIELD, TempReg, TempReg,
       YIELD_FLAG_TEMP_OPERAND));
     if TempReg <> ADest then

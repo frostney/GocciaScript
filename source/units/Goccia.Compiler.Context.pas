@@ -196,6 +196,9 @@ begin
   Result := ACtx.Template.EmitInstruction(AInstruction, AForceWide);
   if ((AInstruction and $FF) = Ord(OP_AWAIT)) and Assigned(ACtx.Scope) then
     ACtx.Scope.NoteAwaitEmitted(Result);
+  if Assigned(ACtx.Scope) and
+     (JumpOperandOf(UInt8(AInstruction and $FF)) <> gjoNone) then
+    ACtx.Scope.NoteJumpEmitted;
   if Assigned(ACtx.Scope) and (ACtx.Scope.PrivateClassReg >= 0) and
      (((AInstruction and $FF) = Ord(OP_CLOSURE)) or
       ((AInstruction and $FF) = Ord(OP_NEW_CLASS))) then
