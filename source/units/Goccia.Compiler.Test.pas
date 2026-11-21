@@ -184,6 +184,7 @@ type
     procedure TestLogicalInitializerWork;
     procedure TestDirectEvalRecordWork;
     procedure TestNewTypeArgumentWork;
+    procedure TestTemplateTypeArgumentWork;
     procedure TestParameterListsParseAndCompileInLinearTime;
     procedure TestDestructuringPatternsCompileInLinearTime;
     procedure TestMatchBindingNameChecksScale;
@@ -367,6 +368,8 @@ begin
   Test('Right-nested logical initializers use linear folding work', TestLogicalInitializerWork);
   Test('Direct eval records use linear name lookup work', TestDirectEvalRecordWork);
   Test('Constructor type argument probes use linear token work', TestNewTypeArgumentWork);
+  Test('Type argument probes over templates use linear token work',
+    TestTemplateTypeArgumentWork);
   Test('Destructuring patterns compile in linear time',
     TestDestructuringPatternsCompileInLinearTime);
   Test('Match-pattern binding-name checks scale with the bindings',
@@ -1783,6 +1786,28 @@ begin
       False, FileName);
     Large := SourceCompileCounters('const f = (X) => ' + DupeString('new X < ', 200) + '0;',
       False, FileName);
+    ExpectWorkLinear(Small, Large, ccTypeArgumentProbeTokens);
+  end;
+end;
+
+{ Templates in a comparison chain: read as types, rejected as expressions,
+  or left unread inside brackets, a failed probe still decides the probes
+  from the '<' tokens after it. }
+procedure TTestCompiler.TestTemplateTypeArgumentWork;
+const
+  LINKS: array[0..3] of string = (
+    'x < `${x}` < ', 'x < `${x + 1}` < ', 'new X < `${x}` < ',
+    'new X < [`${x + 1}`] < ');
+var
+  Small, Large: TGocciaCompileCounters;
+  Link: string;
+begin
+  for Link in LINKS do
+  begin
+    Small := SourceCompileCounters('const f = (X, x) => ' +
+      DupeString(Link, 100) + 'f(x);', False, 'probe.ts');
+    Large := SourceCompileCounters('const f = (X, x) => ' +
+      DupeString(Link, 200) + 'f(x);', False, 'probe.ts');
     ExpectWorkLinear(Small, Large, ccTypeArgumentProbeTokens);
   end;
 end;

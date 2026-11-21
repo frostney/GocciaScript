@@ -51,6 +51,10 @@ describe("template literal type arguments", () => {
     expect(identity<`${[key: "x"][0]}`>(4)).toBe(4);
   });
 
+  test("in a union", () => {
+    expect(identity<`a${string}` | "b">(5)).toBe(5);
+  });
+
   test("as the constraint of a type parameter with a default", () => {
     expect(identity< <T extends `x${string}` = "x">() => T>(5)).toBe(5);
   });
@@ -101,6 +105,24 @@ describe("comparisons with templates and calls", () => {
     expect(a < [0 + `${b}`] > (c)).toBe(true);
     // prettier-ignore
     expect(typeof (new Box < tag`${b}` > (c))).toBe("boolean");
+  });
+
+  test("a conditional or an index after a template keeps the comparison reading", () => {
+    const zero = 0;
+
+    // prettier-ignore
+    expect(zero < `${b}` ? 7 : 1 > (c)).toBe(7);
+    // prettier-ignore
+    expect(typeof (a < `${b}`[0 + 1] > (c))).toBe("boolean");
+  });
+
+  test("a tag that is a member named like a type keyword keeps the comparison reading", () => {
+    const obj = { keyof: () => 5 };
+
+    // prettier-ignore
+    expect(typeof (a < obj.keyof`${b}` > (c))).toBe("boolean");
+    // prettier-ignore
+    expect(typeof (new Box < obj.keyof`${b}` > (c))).toBe("boolean");
   });
 
   test("a line break before an index keeps the comparison reading", () => {
