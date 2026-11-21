@@ -255,8 +255,12 @@ covers its suites (`TG2Engine.RunTests`); `--test-timeout` runs each test body, 
 a native (`callWithin`) under a deadline of its own, so a test that runs out fails with `TIMEOUT after Nms` and the
 next one runs. Host work is attributed as the old library does: a rejection or a throwing job a describe body, hook
 or test left fails that unit (`G2.Promise` rejection marks, recorded job errors), a failed hook gives up the timers
-and jobs it left, and work left after the last test still runs. Not yet on G2: heap snapshots, `--globals` and
-`--global`, virtual-module manifests, `--describe-timeout`, and the per-test failure lines of the console report.
+and jobs it left, and work left after the last test still runs. `--describe-timeout` bounds each describe callback
+through the same native. The console report's per-test lines (`❌`, `⏸️`, `📝`) and each failure's wording follow
+the old library; a test function's frames count from its own frame for `--max-stack` (`G2.VM` `CallRebased`), and a
+test's `import()` resolves through its file's resolver. Globals and virtual modules apply as in GocciaRunner
+(`Goccia.CLI.G2FileEngine`). Not yet on G2: `--heap-snapshots`, which needs G2's own heap snapshot codec (the
+embedder feature of [ADR 0148](../adr/0148-heap-snapshots-at-idle-points.md)), and `.gbc` test files.
 
 ## Gate
 
