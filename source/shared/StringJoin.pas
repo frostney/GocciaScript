@@ -21,10 +21,12 @@ unit StringJoin;
 // allocates nothing but its result. Init records where the buffer lives, and
 // a copy refuses to be used, because it would share the original's storage.
 //
-// A poll, when given, is called between blocks of the final copy, so that a
-// host's deadline or abort can end a join whose result is long. A gate, when
-// given, is asked about the result's bytes before the result is allocated,
-// and about a result too long for any string before the join gives up.
+// A poll, when given, is called every POLL_INTERVAL_LENGTH characters of the
+// final copy, strings and separators alike, so that a host's deadline or
+// abort can end a join whose result is long. A gate, when given, is asked
+// about each allocation before it is made, the buffer's tables and the
+// result alike, and about a result too long for any string before the join
+// gives up.
 
 interface
 
@@ -47,9 +49,9 @@ type
   EStringJoinCopied = class(Exception);
 
   TStringJoinPoll = procedure;
-  // Raises unless a result of AResultBytes may be allocated. AResultBytes can
-  // exceed MAXIMUM_JOIN_LENGTH characters, which no string can hold.
-  TStringJoinGate = procedure(const AResultBytes: Int64);
+  // Raises unless ABytes may be allocated. For a result, ABytes can exceed
+  // MAXIMUM_JOIN_LENGTH characters, which no string can hold.
+  TStringJoinGate = procedure(const ABytes: Int64);
 
   // A run of empty elements, before the part at PartIndex.
   TStringJoinGap = record
@@ -81,6 +83,8 @@ type
     function PartSlot(const AIndex: SizeInt): PPointer; {$IFDEF FPC}inline;{$ENDIF}
     procedure AddGap;
     procedure GrowParts;
+    procedure WritePolled(ASource: PWideChar; ALength: SizeInt;
+      var ATarget: PWideChar; var ASinceLastPoll: SizeInt);
     procedure RefuseLength(const ALength: Int64);
     procedure ReleaseParts;
   public
@@ -168,14 +172,19 @@ begin
 end;
 
 procedure TStringJoinBuffer.AddGap;
+var
+  NewCapacity: SizeInt;
 begin
   if FGapCount = FGapCapacity then
   begin
     if FGapCapacity = 0 then
-      FGapCapacity := INLINE_PART_COUNT
+      NewCapacity := INLINE_PART_COUNT
     else
-      FGapCapacity := FGapCapacity * 2;
-    ReAllocMem(FGaps, FGapCapacity * SizeOf(TStringJoinGap));
+      NewCapacity := FGapCapacity * 2;
+    if Assigned(FGate) then
+      FGate(Int64(NewCapacity) * SizeOf(TStringJoinGap));
+    ReAllocMem(FGaps, NewCapacity * SizeOf(TStringJoinGap));
+    FGapCapacity := NewCapacity;
   end;
   FGaps[FGapCount].PartIndex := FPartCount;
   FGaps[FGapCount].EmptyCount := FPendingEmptyCount;
@@ -184,12 +193,43 @@ begin
 end;
 
 procedure TStringJoinBuffer.GrowParts;
+var
+  NewCapacity: SizeInt;
 begin
   if FPartCapacity = 0 then
-    FPartCapacity := INLINE_PART_COUNT * 2
+    NewCapacity := INLINE_PART_COUNT * 2
   else
-    FPartCapacity := FPartCapacity * 2;
-  ReAllocMem(FParts, FPartCapacity * SizeOf(Pointer));
+    NewCapacity := FPartCapacity * 2;
+  if Assigned(FGate) then
+    FGate(Int64(NewCapacity) * SizeOf(Pointer));
+  ReAllocMem(FParts, NewCapacity * SizeOf(Pointer));
+  FPartCapacity := NewCapacity;
+end;
+
+// Copies ALength characters to ATarget in blocks that end where the poll is
+// due, and polls there.
+procedure TStringJoinBuffer.WritePolled(ASource: PWideChar; ALength: SizeInt;
+  var ATarget: PWideChar; var ASinceLastPoll: SizeInt);
+var
+  BlockLength: SizeInt;
+begin
+  while ALength > 0 do
+  begin
+    BlockLength := POLL_INTERVAL_LENGTH - ASinceLastPoll;
+    if BlockLength > ALength then
+      BlockLength := ALength;
+    CopyCharacters(ASource, ATarget, BlockLength);
+    Inc(ASource, BlockLength);
+    Inc(ATarget, BlockLength);
+    Inc(ASinceLastPoll, BlockLength);
+    Dec(ALength, BlockLength);
+    if ASinceLastPoll >= POLL_INTERVAL_LENGTH then
+    begin
+      ASinceLastPoll := 0;
+      if Assigned(FPoll) then
+        FPoll;
+    end;
+  end;
 end;
 
 procedure TStringJoinBuffer.RefuseLength(const ALength: Int64);
@@ -259,7 +299,7 @@ end;
 function TStringJoinBuffer.Join: UnicodeString;
 var
   SeparatorLength, SeparatorCount, SeparatorsWritten: SizeInt;
-  ElementIndex, GapIndex, PartIndex, Remaining, BlockLength: SizeInt;
+  ElementIndex, GapIndex, PartIndex, Remaining: SizeInt;
   SinceLastPoll: SizeInt;
   TotalLength: Int64;
   Part: PPointer;
@@ -310,50 +350,45 @@ begin
     if SeparatorCount > 0 then
       while SeparatorsWritten < ElementIndex do
       begin
-        CopyCharacters(Separator, Target, SeparatorLength);
-        Inc(Target, SeparatorLength);
-        Inc(SinceLastPoll, SeparatorLength);
-        Inc(SeparatorsWritten);
-        if (SinceLastPoll >= POLL_INTERVAL_LENGTH) and Assigned(FPoll) then
+        if (SeparatorLength < SHORT_COPY_LENGTH) and
+           (SinceLastPoll + SeparatorLength < POLL_INTERVAL_LENGTH) then
         begin
-          SinceLastPoll := 0;
-          FPoll;
-        end;
+          CopyCharacters(Separator, Target, SeparatorLength);
+          Inc(Target, SeparatorLength);
+          Inc(SinceLastPoll, SeparatorLength);
+        end
+        else
+          WritePolled(Separator, SeparatorLength, Target, SinceLastPoll);
+        Inc(SeparatorsWritten);
       end;
     Part := PartSlot(PartIndex);
     Source := PWideChar(Part^);
     Remaining := HeldLength(Part^);
-    while Remaining > 0 do
+    if (Remaining < SHORT_COPY_LENGTH) and
+       (SinceLastPoll + Remaining < POLL_INTERVAL_LENGTH) then
     begin
-      BlockLength := Remaining;
-      if BlockLength > POLL_INTERVAL_LENGTH then
-        BlockLength := POLL_INTERVAL_LENGTH;
-      CopyCharacters(Source, Target, BlockLength);
-      Inc(Source, BlockLength);
-      Inc(Target, BlockLength);
-      Inc(SinceLastPoll, BlockLength);
-      Dec(Remaining, BlockLength);
-      if (SinceLastPoll >= POLL_INTERVAL_LENGTH) and Assigned(FPoll) then
-      begin
-        SinceLastPoll := 0;
-        FPoll;
-      end;
-    end;
+      CopyCharacters(Source, Target, Remaining);
+      Inc(Target, Remaining);
+      Inc(SinceLastPoll, Remaining);
+    end
+    else
+      WritePolled(Source, Remaining, Target, SinceLastPoll);
     // Released while it is still in the cache; the result holds a copy.
     ReleaseText(Part^);
     Inc(ElementIndex);
   end;
   while SeparatorsWritten < SeparatorCount do
   begin
-    CopyCharacters(Separator, Target, SeparatorLength);
-    Inc(Target, SeparatorLength);
-    Inc(SinceLastPoll, SeparatorLength);
-    Inc(SeparatorsWritten);
-    if (SinceLastPoll >= POLL_INTERVAL_LENGTH) and Assigned(FPoll) then
+    if (SeparatorLength < SHORT_COPY_LENGTH) and
+       (SinceLastPoll + SeparatorLength < POLL_INTERVAL_LENGTH) then
     begin
-      SinceLastPoll := 0;
-      FPoll;
-    end;
+      CopyCharacters(Separator, Target, SeparatorLength);
+      Inc(Target, SeparatorLength);
+      Inc(SinceLastPoll, SeparatorLength);
+    end
+    else
+      WritePolled(Separator, SeparatorLength, Target, SinceLastPoll);
+    Inc(SeparatorsWritten);
   end;
   ReleaseParts;
 end;

@@ -56,7 +56,7 @@ begin
     TestRepeatedSeparatorsTakeNoScratch);
   Test('the final copy polls once per poll interval of characters',
     TestFinalCopyPolls);
-  Test('the gate is asked about the result before it is allocated',
+  Test('the gate is asked about the tables and the result before they are allocated',
     TestGateIsAskedBeforeTheResult);
   Test('after a gate or poll raises, Release empties the buffer for another Init',
     TestARaisingGateOrPollLeavesTheBufferEmpty);
@@ -246,9 +246,20 @@ const
   PART_COUNT = 5;
 var
   Joined: TStringJoinBuffer;
-  Part, Text: UnicodeString;
+  Part, Text, Separator: UnicodeString;
   I: Integer;
 begin
+  // A separator longer than the interval is polled within, as a string is.
+  Separator := StringOfChar('s', POLL_INTERVAL_LENGTH * 2 + 7);
+  PollCount := 0;
+  Joined.Init(Separator, CountPoll);
+  for I := 1 to 3 do
+    Joined.Add('x');
+  Text := Joined.Join;
+  Joined.Release;
+  Expect<Integer>(Length(Text)).ToBe(2 * Length(Separator) + 3);
+  Expect<Integer>(PollCount).ToBe(Length(Text) div POLL_INTERVAL_LENGTH);
+
   Part := StringOfChar('p', POLL_INTERVAL_LENGTH);
   PollCount := 0;
   Joined.Init(',', CountPoll);
@@ -288,16 +299,21 @@ begin
   GateCalls := 0;
   GateRefusesAbove := High(Int64);
   Joined.Init(',', nil, RecordGate);
-  for I := 0 to 9999 do
+  for I := 0 to INLINE_PART_COUNT - 1 do
     Joined.Add(UnicodeString(IntToStr(I)));
+  // The record holds these: nothing allocated, nothing asked.
   Expect<Integer>(GateCalls).ToBe(0);
-  Text := Joined.Join;
+  Joined.Add('x');
   Expect<Integer>(GateCalls).ToBe(1);
+  Expect<Boolean>(LastGateBytes = 2 * INLINE_PART_COUNT * SizeOf(Pointer))
+    .ToBe(True);
+  Text := Joined.Join;
+  Expect<Integer>(GateCalls).ToBe(2);
   Expect<Boolean>(LastGateBytes = Length(Text) * SizeOf(WideChar)).ToBe(True);
   // A lone string is the result itself: nothing is allocated, nothing asked.
   Joined.Add(Text);
   Expect<Boolean>(Pointer(Joined.Join) = Pointer(Text)).ToBe(True);
-  Expect<Integer>(GateCalls).ToBe(1);
+  Expect<Integer>(GateCalls).ToBe(2);
   Joined.Release;
 end;
 
@@ -317,9 +333,10 @@ var
   Part: UnicodeString;
   I: Integer;
 begin
-  GateRefusesAbove := 1024;
+  // Above the part table's 16,384 bytes, below the result's 17,778.
+  GateRefusesAbove := 17000;
   Joined.Init(',', nil, RecordGate);
-  for I := 0 to 999 do
+  for I := 0 to 1999 do
     Joined.Add(UnicodeString(IntToStr(I)));
   Expect<Boolean>(JoinRaises(Joined)).ToBe(True);
   Joined.Release;

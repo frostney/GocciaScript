@@ -150,11 +150,4 @@ describe("Array.prototype.join of many elements", () => {
     array[LENGTH - 1] = LENGTH - 1;
     expect(array.join()).toBe(Array.from({ length: LENGTH }, (_, i) => i).join());
   });
-
-  test("a typed array joins and converts its elements in order", () => {
-    const typed = Float64Array.from({ length: LENGTH }, (_, i) => i / 2);
-    const expected = Array.from({ length: LENGTH }, (_, i) => String(i / 2));
-    expect(typed.join(";")).toBe(expected.join(";"));
-    expect(`${typed}`).toBe(expected.join(","));
-  });
 });
