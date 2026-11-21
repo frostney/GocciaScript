@@ -68,7 +68,8 @@ procedure CompileTryStatement(const ACtx: TGocciaCompilationContext;
 procedure EmitClearDeadRegisters(const ACtx: TGocciaCompilationContext;
   const ARegionPeak: Integer);
 procedure EmitUncountedClearDeadRegisters(
-  const ACtx: TGocciaCompilationContext; const ARegionPeak: Integer);
+  const ACtx: TGocciaCompilationContext; const ARegionPeak: Integer;
+  const ADiscard: Integer = -1);
 procedure CompileForOfStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaForOfStatement);
 procedure CompileForInStatement(const ACtx: TGocciaCompilationContext;
@@ -460,7 +461,14 @@ end;
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaExpressionStatement);
 begin
-  CompileDiscardedExpression(ACtx, AStmt.Expression);
+  // The register CompileDiscardedExpression allocates first is the one the
+  // value is discarded in.
+  ACtx.Scope.SetAwaitTail(AStmt.Expression, ACtx.Scope.NextSlot);
+  try
+    CompileDiscardedExpression(ACtx, AStmt.Expression);
+  finally
+    ACtx.Scope.SetAwaitTail(nil, -1);
+  end;
 end;
 
 function IsArrayTypeAnnotation(const AAnnotation: string): Boolean;
@@ -3233,12 +3241,15 @@ begin
     EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
 end;
 
-// The same clear for a statement that awaited, which belongs to no source
-// line: it takes line 0, which line coverage never counts, and the line map
-// goes back to what it was, so the clear neither marks a skipped operand's
-// line as executed nor counts the statement's first line a second time.
+// The same clear for a statement or a branch that awaited, which belongs to
+// no source line: it takes line 0, which line coverage never counts, and the
+// line map goes back to what it was, so the clear neither marks a skipped
+// operand's line as executed nor counts the statement's first line a second
+// time. ADiscard, when not -1, is a register still allocated that holds a
+// value nothing reads again (the one an expression statement discards).
 procedure EmitUncountedClearDeadRegisters(
-  const ACtx: TGocciaCompilationContext; const ARegionPeak: Integer);
+  const ACtx: TGocciaCompilationContext; const ARegionPeak: Integer;
+  const ADiscard: Integer);
 var
   Last: TGocciaLineMapEntry;
   HadMapping: Boolean;
@@ -3250,6 +3261,9 @@ begin
     Last := DebugInfo.GetLineMapEntry(DebugInfo.LineMapCount - 1);
   if Assigned(DebugInfo) then
     DebugInfo.AddLineMapping(UInt32(ACtx.Template.CodeCount), 0, 0);
+  if ADiscard >= 0 then
+    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(ADiscard), 0,
+      0));
   EmitClearDeadRegisters(ACtx, ARegionPeak);
   if HadMapping then
     DebugInfo.AddLineMapping(UInt32(ACtx.Template.CodeCount), Last.Line,
