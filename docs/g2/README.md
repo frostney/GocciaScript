@@ -237,6 +237,15 @@ The child has its own heap, so a collection in it frees nothing of its caller's.
 work while a `FinalizationRegistry` cell still waits on its target, G2 collects once, so a caller's cleanup that
 came due during a nested run still runs.
 
+### Module reload
+
+A module record read from a file remembers when the file was last modified (`G2.Modules`, the host's file
+system, or a sandbox's virtual one through `SetFileTimeHook`). A request that finds the record settled and the file
+newer loads it again ([ADR 0139](../adr/0139-a-reload-links-into-the-cached-module-record.md)): a changed module
+gives a later `import()` its new version, and an import that failed is retried. The old record is superseded rather
+than refilled, so what imported it keeps its bindings. Under `--deterministic` a sandbox stamps every file with the
+epoch, so nothing reloads.
+
 ### GocciaTestRunner
 
 `./build.pas g2testrunner` builds `build/g2/GocciaTestRunner` from `source/app/GocciaTestRunnerG2.dpr`: the old
@@ -275,7 +284,7 @@ refuses one whose fingerprint differs: the run changed it. An object kind whose 
 tables, buffers, promises, proxies, generators, module namespaces, iterators) and a private name refuse the
 snapshot, named after GocciaScript's classes (`no snapshot codec for TGocciaMapValue`). Module records are not
 written: the closures carry the module bindings they use, so a restored engine that imports a module evaluates it
-again.
+again. A module root carries a hash of its source, and a restore refuses a module whose file now holds other code.
 
 `GocciaTestRunner --heap-snapshots` round-trips each distinct object `expect()` was given. After the file's tests,
 `TG2Engine.HeapSnapshotObserved` writes each one and describes it through the object model (own keys,

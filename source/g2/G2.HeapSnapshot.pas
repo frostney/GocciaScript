@@ -330,6 +330,8 @@ type
   TRootDesc = record
     Kind: Integer;
     Path: UnicodeString;
+    { a module record's source hash: a module reloaded with other code is another root }
+    Hash: QWord;
   end;
 
 procedure SnapshotNoteEntry(T: PFuncTemplate; const FileName, Source: UnicodeString; Kind: Integer);
@@ -377,20 +379,22 @@ procedure MapTemplates(Places: TDictionary<Pointer, TTplPlace>; Roots: TList<TRo
     end;
   end;
 
-var D: TRootDesc; I: Integer; Path: UnicodeString; T: PFuncTemplate;
+var D: TRootDesc; I: Integer; Path: UnicodeString; T: PFuncTemplate; Hash: QWord;
 begin
   if EntryKnown and (EntryTpl <> nil) then
   begin
     D.Kind := rkEntry;
     D.Path := EntryFile;
+    D.Hash := 0;
     Roots.Add(D);
     Walk(EntryTpl, Roots.Count - 1, nil);
   end;
   for I := 0 to ModuleCount - 1 do
-    if ModuleTemplateAt(I, Path, T) and (T <> nil) then
+    if ModuleTemplateAt(I, Path, T, Hash) and (T <> nil) then
     begin
       D.Kind := rkModule;
       D.Path := Path;
+      D.Hash := Hash;
       Roots.Add(D);
       Walk(T, Roots.Count - 1, nil);
     end;
@@ -689,6 +693,7 @@ begin
       begin
         W.U8(Head, W.Roots[RootIx[I]].Kind);
         W.Text(Head, W.Roots[RootIx[I]].Path);
+        W.U64(Head, W.Roots[RootIx[I]].Hash);
       end;
       W.I32(Head, W.TplRefs.Count);
       for I := 0 to W.TplRefs.Count - 1 do
@@ -789,8 +794,8 @@ begin
   end;
 end;
 
-function RootTemplate(Kind: Integer; const Path: UnicodeString): PFuncTemplate;
-var IsModule: Boolean; Err: UnicodeString; T: PFuncTemplate;
+function RootTemplate(Kind: Integer; const Path: UnicodeString; Hash: QWord): PFuncTemplate;
+var IsModule: Boolean; Err: UnicodeString; T: PFuncTemplate; Have: QWord;
 begin
   Result := nil;
   if Kind = rkEntry then
@@ -809,11 +814,13 @@ begin
   begin
     { the entry module's source as the run had it (stdin has no file to read) }
     if EntryKnown and (Path = UnicodeString(ExpandFileName(EntryFile))) then SetProvidedSource(Path, EntrySource);
-    if not LoadModuleTemplate(Path, T) then
+    if not LoadModuleTemplate(Path, T, Have) then
     begin
       Pending := VUndefined;
       Exit;
     end;
+    { the file holds other code than the run's version of the module }
+    if Have <> Hash then Exit;
     Result := T;
   end;
 end;
@@ -905,7 +912,7 @@ begin
       begin
         RootKind := R.U8;
         RootPath := R.Text;
-        RootTpls[I] := RootTemplate(RootKind, RootPath);
+        RootTpls[I] := RootTemplate(RootKind, RootPath, R.U64);
         if RootTpls[I] = nil then raise ERefused.Create('the snapshot names code this engine cannot compile: ' +
           RootPath);
       end;

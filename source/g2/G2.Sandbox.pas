@@ -74,6 +74,22 @@ begin
   Result := True;
 end;
 
+{ when a virtual file was last modified (a module reload's clock: under --deterministic every time is the epoch, so
+  nothing reloads) }
+function VirtualFileTime(const Path: UnicodeString; out Modified: TDateTime): Boolean;
+begin
+  Modified := 0;
+  Result := False;
+  if Box = nil then Exit;
+  try
+    if not Box.Fs.IsFile(Path) then Exit;
+    Modified := Box.Fs.Stat(Path).ModifiedAt;
+    Result := True;
+  except
+    on E: ESandboxFsError do Exit;
+  end;
+end;
+
 { the search's native working memory, charged to the heap's ceiling as a SharedArrayBuffer's block is }
 function ChargeNativeBytes(const ABytes: Int64; const AReserve: Boolean): Boolean;
 begin
@@ -94,11 +110,13 @@ begin
   if Ctx <> nil then
   begin
     SetFileReadHook(ReadVirtualFile);
+    SetFileTimeHook(VirtualFileTime);
     NativeBytesHook := ChargeNativeBytes;
   end
   else
   begin
     SetFileReadHook(nil);
+    SetFileTimeHook(nil);
     NativeBytesHook := nil;
   end;
 end;
@@ -106,7 +124,16 @@ end;
 procedure SandboxHostReads(OnHost: Boolean);
 begin
   if Box = nil then Exit;
-  if OnHost then SetFileReadHook(nil) else SetFileReadHook(ReadVirtualFile);
+  if OnHost then
+  begin
+    SetFileReadHook(nil);
+    SetFileTimeHook(nil);
+  end
+  else
+  begin
+    SetFileReadHook(ReadVirtualFile);
+    SetFileTimeHook(VirtualFileTime);
+  end;
 end;
 
 function CurrentSandbox: TGocciaSandboxContext;

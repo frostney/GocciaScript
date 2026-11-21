@@ -75,10 +75,11 @@ procedure SetJSModuleSources(On: Boolean);
 { this thread's module records so far: a mark ModuleLoadedSince counts from }
 { heap snapshots (G2.HeapSnapshot): module record I's path and compiled code (nil for a host, JSON or source-phase
   record); False past the last }
-function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTemplate): Boolean;
+function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTemplate; out Hash: QWord): Boolean;
 { loads the module at Path and what it imports, compiled and not evaluated (a record already loaded as it is):
-  its code, nil for a record without; False with the error pending }
-function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate): Boolean;
+  its code, nil for a record without, and a hash of the source it was compiled from; False with the error
+  pending }
+function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate; out Hash: QWord): Boolean;
 function ModuleCount: Integer;
 { whether this thread's engine loaded a module from Path after Mark records (a host shows a code frame only of a
   module the script's run loaded, never of one the host evaluated before it, nor of a path a thrown value's stack
@@ -108,6 +109,12 @@ type
   TFileReadHook = function(const Path: UnicodeString; var B: RawByteString): Boolean;
 { this thread's file reader (nil: the host's files) }
 procedure SetFileReadHook(Hook: TFileReadHook);
+type
+  { a host's file system for this thread's engine: when the file at Path was last modified, False when it cannot
+    say (a sandbox's virtual file system) }
+  TFileTimeHook = function(const Path: UnicodeString; out Modified: TDateTime): Boolean;
+{ this thread's file clock (nil: the host's files); set with the file reader }
+procedure SetFileTimeHook(Hook: TFileTimeHook);
 { the bytes of the file at Path through this thread's file reader; False when there is none }
 function ReadFileBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
 type
@@ -143,6 +150,13 @@ type
     AsyncParents: array of TModRec;
     { loaded for the host: before the entry's run (EntryModuleMark), or imported by such a module, transitively }
     HostOwned: Boolean;
+    { read from a file whose modification time is Modified: a request that finds the file newer loads it again
+      (ADR 0139), and this record is Superseded, kept for what imported it already }
+    HasModified: Boolean;
+    Modified: TDateTime;
+    Superseded: Boolean;
+    { the source it was compiled from (SourceHash), 0 for none }
+    Hash: QWord;
     destructor Destroy; override;
   end;
   TResKind = (rkNull, rkAmbiguous, rkBinding, rkNamespace, rkDeferNS, rkSource);
@@ -223,6 +237,33 @@ threadvar
   HostModules: THostModuleHook;
   HostResolve: THostResolveHook;
   FileRead: TFileReadHook;
+  FileTime: TFileTimeHook;
+
+procedure SetFileTimeHook(Hook: TFileTimeHook);
+begin
+  FileTime := Hook;
+end;
+
+{ when the file at Path was last modified, through this thread's file clock }
+function FileModified(const Path: UnicodeString; out Modified: TDateTime): Boolean;
+var Age: LongInt;
+begin
+  Modified := 0;
+  if Assigned(FileTime) then Exit(FileTime(Path, Modified));
+  Age := FileAge(string(Path));
+  Result := Age <> -1;
+  if Result then Modified := FileDateToDateTime(Age);
+end;
+
+{ FNV-1a over a module's source: which version of it a record was compiled from }
+function SourceHashOf(const S: UnicodeString): QWord;
+var I: Integer;
+begin
+  {$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
+  Result := 14695981039346656037;
+  for I := 1 to Length(S) do Result := (Result xor Ord(S[I])) * 1099511628211;
+  {$POP}
+end;
 
 procedure SetFileReadHook(Hook: TFileReadHook);
 begin
@@ -454,7 +495,7 @@ function FindModule(const Path: UnicodeString): TModRec;
 var M: TModRec;
 begin
   for M in Mods do
-    if M.Path = Path then Exit(M);
+    if (M.Path = Path) and not M.Superseded then Exit(M);
   Result := nil;
 end;
 
@@ -558,7 +599,8 @@ end;
 
 { 16.2.1.5.1 LoadRequestedModules (synchronously, from files): the module at Path and everything it requests }
 function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
-var Src, Err, ErrName, Resolved: UnicodeString; I: Integer; D: TModRec; V: TValue; Compiled: Boolean;
+var Src, Err, ErrName, Resolved, Prov: UnicodeString; I: Integer; D: TModRec; V: TValue; Compiled, FromFile: Boolean;
+  Modified: TDateTime;
 begin
   if (Length(Path) >= 2) and (Path[1] = #0) and (Path[2] = #1) then
   begin
@@ -574,6 +616,14 @@ begin
     Exit(ThrowError('Error', Copy(Path, 2, MaxInt)));
   end;
   M := FindModule(Path);
+  { a settled record whose file changed since it was read loads again (ADR 0139: a newer version, or a retry of
+    one that failed): what imported it keeps it, this request and later ones get the new one }
+  if Assigned(M) and M.HasModified and (M.Status in [msNew, msEvaluated]) and FileModified(Path, Modified) and
+     (Modified > M.Modified) then
+  begin
+    M.Superseded := True;
+    M := nil;
+  end;
   if Assigned(M) then
   begin
     if M.Errored and (M.Status = msNew) then begin Pending := GetRoot(M, rError); Exit(False); end;
@@ -603,11 +653,18 @@ begin
     2: Src := StrToUnicode(StrOf(V));
     -1: Exit(False);
   end;
+  { a file's modification time, taken before it is read: a change while it loads makes the next request load it
+    again }
+  Prov := ProvidedPath;
+  FromFile := (I <> 2) and not ((Prov <> '') and (Prov = Path)) and FileModified(Path, Modified);
   if (I <> 2) and not ReadSource(Path, Src) then Exit(ModuleReadFailed(Path));
   M := TModRec.Create;
   M.Path := Path;
   M.Id := Mods.Count;
   M.HostOwned := HostLoading;
+  M.HasModified := FromFile;
+  M.Modified := Modified;
+  M.Hash := SourceHashOf(Src);
   Mods.Add(M);
   SetRoot(M, rError, VUndefined);
   ModuleReturnLast := IsCompletionEntry(M);
@@ -1771,22 +1828,29 @@ begin
   Result := HostModSource;
 end;
 
-function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTemplate): Boolean;
+function ModuleTemplateAt(I: Integer; out Path: UnicodeString; out T: PFuncTemplate; out Hash: QWord): Boolean;
 begin
   Path := '';
   T := nil;
+  Hash := 0;
   if (Mods = nil) or (I < 0) or (I >= Mods.Count) then Exit(False);
   Path := Mods[I].Path;
   T := Mods[I].Tpl;
+  Hash := Mods[I].Hash;
   Result := True;
 end;
 
-function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate): Boolean;
+function LoadModuleTemplate(const Path: UnicodeString; out T: PFuncTemplate; out Hash: QWord): Boolean;
 var M: TModRec;
 begin
   T := nil;
+  Hash := 0;
   Result := LoadModule(Path, M);
-  if Result then T := M.Tpl;
+  if Result then
+  begin
+    T := M.Tpl;
+    Hash := M.Hash;
+  end;
 end;
 
 function ModuleCount: Integer;
