@@ -44,11 +44,15 @@ threadvar
   EntryWarningCount: Integer;
   EntryWarningMessages, EntryWarningSuggestions: array of UnicodeString;
   EntryWarningLines, EntryWarningColumns: array of Integer;
+  { the import declarations and re-exports of the last HostCompileEntry's explicit Script (GocciaScript accepts
+    them there, docs/language.md, Entry source type), as the source of a module of only them, each at its own
+    line and column; '' when it has none }
+  ScriptImportSource: UnicodeString;
 
 implementation
 
 uses
-  Classes, Linux, UnixType, TextSemantics, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
+  Classes, Linux, UnixType, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
   G2.PreParse, G2.Lazy, G2.Snapshot, Goccia.Profiler.Compile;
 
 { the compile profile leaves the host's own code out (a prelude's, named like <goccia:console>) }
@@ -258,12 +262,102 @@ begin
   end;
 end;
 
+{ S as a JavaScript string literal }
+function QuoteJS(const S: UnicodeString): UnicodeString;
+var I: Integer;
+begin
+  Result := '"';
+  for I := 1 to Length(S) do
+    case S[I] of
+      '"', '\': Result := Result + '\' + S[I];
+      #10: Result := Result + '\n';
+      #13: Result := Result + '\r';
+      #$2028: Result := Result + ' ';
+      #$2029: Result := Result + ' ';
+    else
+      Result := Result + S[I];
+    end;
+  Result := Result + '"';
+end;
+
+{ the import declarations and re-exports of a Script's top level taken out of it, and written as the source of a
+  module of only them (ScriptImportSource), each where it stood (a link error is located at its declaration); the
+  nodes taken out are freed }
+function ScriptImportsAsModule(Prog: TGocciaProgram): UnicodeString;
+var I, Line, Col, AtLine: Integer; N: TGocciaStatement; Decl, From: UnicodeString; Pair: TStringStringMap.TKeyValuePair;
+  Found: Boolean;
+begin
+  Result := '';
+  AtLine := 1;
+  Found := False;
+  for I := 0 to Prog.Body.Count - 1 do
+  begin
+    N := Prog.Body[I];
+    if N is TGocciaImportDeclaration then
+      with TGocciaImportDeclaration(N) do
+      begin
+        From := QuoteJS(ModulePath);
+        if AttributeType <> '' then From := From + ' with { type: ' + QuoteJS(AttributeType) + ' }';
+        Decl := '';
+        if Phase = icpSource then
+        begin
+          for Pair in Imports do Decl := Decl + 'import source ' + UnicodeString(Pair.Key) + ' from ' + From + ';';
+        end
+        else if Phase = icpDefer then
+          Decl := 'import defer * as ' + NamespaceName + ' from ' + From + ';'
+        else
+        begin
+          if NamespaceName <> '' then Decl := 'import * as ' + NamespaceName + ' from ' + From + ';';
+          if Imports.Count > 0 then
+          begin
+            Decl := Decl + 'import { ';
+            for Pair in Imports do Decl := Decl + QuoteJS(Pair.Value) + ' as ' + UnicodeString(Pair.Key) + ', ';
+            Decl := Decl + '} from ' + From + ';';
+          end;
+          if Decl = '' then Decl := 'import ' + From + ';';
+        end;
+      end
+    else if N is TGocciaReExportDeclaration then
+      with TGocciaReExportDeclaration(N) do
+      begin
+        From := QuoteJS(ModulePath);
+        if AttributeType <> '' then From := From + ' with { type: ' + QuoteJS(AttributeType) + ' }';
+        if IsStarExport and (NamespaceName = '') then Decl := 'export * from ' + From + ';'
+        else if IsStarExport then Decl := 'export * as ' + QuoteJS(NamespaceName) + ' from ' + From + ';'
+        else
+        begin
+          Decl := 'export { ';
+          for Pair in ExportsTable do Decl := Decl + QuoteJS(Pair.Value) + ' as ' + QuoteJS(Pair.Key) + ', ';
+          Decl := Decl + '} from ' + From + ';';
+        end;
+      end
+    else Continue;
+    Line := N.Line;
+    Col := N.Column;
+    if Line < AtLine then Line := AtLine;
+    while AtLine < Line do
+    begin
+      Result := Result + #10;
+      Inc(AtLine);
+    end;
+    if Col > 1 then Result := Result + StringOfChar(' ', Col - 1);
+    Result := Result + Decl + #10;
+    Inc(AtLine);
+    Found := True;
+  end;
+  if not Found then Exit;
+  for I := Prog.Body.Count - 1 downto 0 do
+    if (Prog.Body[I] is TGocciaImportDeclaration) or (Prog.Body[I] is TGocciaReExportDeclaration) then
+      Prog.Body.Delete(I);
+end;
+
 function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
   out IsModule: Boolean; var Err: UnicodeString; ReturnLast: Boolean): Boolean;
 var Prog: TGocciaProgram; Goal: TGocciaSourceType;
 begin
   Result := False;
   IsModule := False;
+  ScriptImportSource := '';
   Prog := nil;
   try
     try
@@ -281,7 +375,11 @@ begin
       end;
       { an explicit Script keeps GocciaScript's acceptance of export declarations (docs/language.md, Entry source
         type): each declares its binding as it would without export, and an export list declares nothing }
-      if SourceType = 1 then ScriptExportsAsDeclarations(Prog);
+      if SourceType = 1 then
+      begin
+        ScriptImportSource := ScriptImportsAsModule(Prog);
+        ScriptExportsAsDeclarations(Prog);
+      end;
       { detection reads a top-level for await as Script; it is top-level await, so the entry is a Module }
       if (SourceType = 0) and HasTopLevelForAwait(Prog) then
       begin

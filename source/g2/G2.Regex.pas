@@ -111,13 +111,19 @@ type
     property Anchor: Integer read FAnchor;
     { the last Exec ran into a limit instead of finishing: it returned False and ErrorMessage says why }
     function Failed: Boolean; inline;
+    { the match stopped because the thread's engine was interrupted (G2.Core Interrupt: a spent deadline) }
+    function Interrupted: Boolean;
     function ErrorMessage: UnicodeString;
   end;
 
 implementation
 
 uses
-  Goccia.NestingLimit, Goccia.RegExp.UnicodeData;
+  Goccia.NestingLimit, Goccia.RegExp.UnicodeData, G2.Core;
+
+const
+  { the steps a match takes between polls of the thread's Interrupt }
+  REGEX_POLL_STEPS = 65536;
 
 const
   MIN_STEP_LIMIT = 10000000;
@@ -1116,7 +1122,7 @@ var
   Instr: UInt32;
   Op, BodyOp: TRegExpOpCode;
   CP, RefCP, InputCP: Cardinal;
-  StepCount, StepLimit: Int64;
+  StepCount, StepLimit, NextPoll: Int64;
   Stk, Rep: PInteger;
 begin
   Result := False;
@@ -1152,6 +1158,7 @@ LAttempt:
   Entries := 0;
   RepeatDepth := 0;
   StepCount := 0;
+  NextPoll := REGEX_POLL_STEPS;
   if UseBits then BitsReset(C) else MemoReset(C);
 
   while True do
@@ -1159,6 +1166,12 @@ LAttempt:
     if PC >= CodeLen then Exit(False);
     Inc(StepCount);
     if StepCount > StepLimit then begin FErr := 1; Exit(False); end;
+    { the run's deadline (or a host abort) interrupts a long match: Interrupted }
+    if StepCount >= NextPoll then
+    begin
+      NextPoll := StepCount + REGEX_POLL_STEPS;
+      if Interrupt <> 0 then begin FErr := 5; Exit(False); end;
+    end;
     Instr := Code[PC];
     Op := TRegExpOpCode(Instr and $FF);
     Bx := Integer(Instr shr 8);
@@ -1599,6 +1612,11 @@ end;
 function TRegexMatcher.Failed: Boolean;
 begin
   Result := FErr <> 0;
+end;
+
+function TRegexMatcher.Interrupted: Boolean;
+begin
+  Result := FErr = 5;
 end;
 
 function TRegexMatcher.ErrorMessage: UnicodeString;

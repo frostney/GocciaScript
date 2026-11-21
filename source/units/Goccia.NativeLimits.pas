@@ -30,9 +30,15 @@ type
   TNativeBytesHook = function(const ABytes: Int64;
     const AReserve: Boolean): Boolean;
   ENativeMemoryLimit = class(Exception);
+  { The nesting guard's refusal while another engine runs on the thread
+    (NativeErrorsPlain), for that engine to throw as a RangeError. }
+  ENativeDepthLimit = class(Exception);
 
 threadvar
   NativeBytesHook: TNativeBytesHook;
+  { Another engine (G2) runs on this thread: EnterNativeDataDepth refuses
+    with ENativeDepthLimit, not with this runtime's RangeError value. }
+  NativeErrorsPlain: Boolean;
 
 implementation
 
@@ -52,7 +58,11 @@ begin
   Inc(GNativeDataDepth);
   try
     if GNativeDataDepth > MAX_NATIVE_DATA_DEPTH then
+    begin
+      if NativeErrorsPlain then
+        raise ENativeDepthLimit.Create(SErrorMaxCallStackExceeded);
       ThrowRangeError(SErrorMaxCallStackExceeded);
+    end;
     CheckNativeWork;
   except
     Dec(GNativeDataDepth);

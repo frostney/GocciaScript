@@ -12,7 +12,28 @@ unit G2.HostAPI;
 interface
 
 uses
-  G2.Core, Goccia.ModuleResolver;
+  G2.Core, Goccia.Capabilities, Goccia.ModuleResolver;
+
+type
+  { an audited read decision of the read policy (the engine's Audit, gckReadFile); False when the audit sink failed }
+  TG2ReadAudit = function(Allow: Boolean; const Subject, Reason: string): Boolean of object;
+
+{ the read capability over this thread's module graph (ADR 0122), as GocciaScript's loader judges it: a request's
+  every host candidate, and the file it resolves to, is readable when no deny covers it and it is a literal import
+  inside ProjectRoot (outside its .goccia cache), inside the package a literal bare import resolved in, or covered
+  by a read grant; a refusal throws PermissionDenied naming the specifier. Off: no judgment (a sandbox's own files,
+  the old behaviour). Modules the host loads before the entry are its own. }
+procedure SetReadPolicy(On: Boolean; const Caps: TGocciaCapabilities; const ProjectRoot: string;
+  Audit: TG2ReadAudit);
+{ while On, what the host loads for a config (its module manifests, globals and host-environment modules) is read
+  as the script's: the read policy judges it, and the modules it imports }
+procedure SetGuestLoads(On: Boolean);
+{ the directory of the config naming what is loaded next ('' none): inside its own tree that needs no grant }
+procedure SetGuestScope(const Dir: string);
+{ a file a config names, read under the read policy while guest loads are on: False with Err the refusal }
+function GuestReadAllowed(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+{ the error the host's last failed load threw (a globals module's, a manifest's), taken: undefined for none }
+function TakeHostError: TValue;
 
 { the host's globals on this thread's realm (after EngineInit): the const Goccia, and the conformance host's
   extras removed; TestMode lists the test runner's globals in Goccia.runtimeGlobals }
@@ -71,7 +92,8 @@ uses
   SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
-  Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.Modules.Virtual, G2.Fetch, G2.Sandbox;
+  Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
+  G2.Fetch, G2.Sandbox;
 
 {$I G2.Testing.inc}
 {$I G2.HostPrelude.inc}
@@ -555,9 +577,14 @@ begin
   ProvidedResolver := R;
 end;
 
+threadvar
+  { the virtual modules whose shadowing of a file was warned about }
+  ShadowWarned: TStringList;
+
 procedure HostModulesDone;
 begin
   RealmHostInit := nil;
+  FreeAndNil(ShadowWarned);
   FreeAndNil(HostResolver);
   FreeAndNil(ImportSpecifiers);
   ProvidedResolver := nil;
@@ -571,9 +598,23 @@ begin
 end;
 
 { the pending exception's message (an error's message property, else its string form), taken }
+threadvar
+  HostErrorV: TValue;
+  HostErrorRootedGen: Integer;
+
+function TakeHostError: TValue;
+begin
+  if not SameEngine(HostErrorRootedGen) then Exit(VUndefined);
+  Result := HostErrorV;
+  HostErrorV := VUndefined;
+end;
+
 function TakePendingText: UnicodeString;
 var S: TValue;
 begin
+  { the error itself stays for the host to describe (TakeHostError) }
+  if FirstInEngine(HostErrorRootedGen) then AddRoot(@HostErrorV);
+  HostErrorV := Pending;
   PushRoot(Pending);
   Pending := VUndefined;
   if IsObject(RootAt(TempTop - 1)) and GetV(RootAt(TempTop - 1), AtomMessage, S) and IsString(S) then
@@ -739,11 +780,93 @@ begin
   end;
 end;
 
+threadvar
+  GuestLoadsOn: Boolean;   { (GuestLoads, which is declared further down) }
+  { the realm the host's globals are in (InstallHostGlobals) }
+  HostRealm: Integer;
+
+{ a module the host evaluates for itself, or for a config (GuestLoadsOn) in a realm of its own: what it leaves on its
+  global object does not reach the script's }
+function EvaluateHostModule(const Path: UnicodeString; var NS: TValue): Boolean;
+var R, Caller: Integer;
+begin
+  if not GuestLoadsOn then Exit(EvaluateModuleNamespace(Path, NS));
+  if not CreateRealm(R) then Exit(False);
+  Caller := CurRealm;
+  SwitchRealm(R);
+  try
+    Result := EvaluateModuleNamespace(Path, NS);
+  finally
+    SwitchRealm(Caller);
+  end;
+end;
+
+{ '' when V is data (what JSON carries as it is, at any depth), else what it is; At names where it sits }
+function NotData(V: TValue; const At: UnicodeString; var Where: UnicodeString; SeenBase: Integer): UnicodeString;
+var T: UnicodeString; O: PObj; P: TValue; Keys, E: TValue; I, N, Self_: Integer; D: Double;
+begin
+  Result := '';
+  Where := At;
+  T := TypeOfStr(V);
+  if T = 'undefined' then Exit('undefined');
+  if T = 'function' then Exit('a function');
+  if T = 'bigint' then Exit('a BigInt');
+  if T = 'symbol' then Exit('a symbol');
+  if T = 'number' then
+  begin
+    D := NumOf(V);
+    if IsNaN(D) or IsInfinite(D) then Exit('a number JSON cannot hold');
+    Exit;
+  end;
+  if not IsObject(V) then Exit;
+  for I := SeenBase to TempTop - 1 do
+    if RootAt(I) = V then Exit('a circular reference');
+  O := ObjOf(V);
+  if O^.OKind = okArray then
+  begin
+    PushRoot(V);
+    Self_ := TempTop - 1;
+    try
+      N := ArrayLen(ObjOf(RootAt(Self_)));
+      for I := 0 to N - 1 do
+      begin
+        if not GetElemV(RootAt(Self_), MkInt(I), E) then begin Pending := VUndefined; Exit('a value that cannot be read'); end;
+        Result := NotData(E, At + '[' + UnicodeString(IntToStr(I)) + ']', Where, SeenBase);
+        if Result <> '' then Exit;
+      end;
+    finally
+      PopRoots(TempTop - Self_);
+    end;
+    Exit;
+  end;
+  P := ProtoOf(O);
+  if (O^.OKind <> okPlain) or (IsObject(P) and IsObject(ProtoOf(ObjOf(P)))) then
+    Exit('an object that is not a plain object or array');
+  PushRoot(V);
+  Self_ := TempTop - 1;
+  try
+    Keys := OwnKeys(ObjOf(RootAt(Self_)), False);
+    PushRoot(Keys);
+    N := ArrayLen(ObjOf(Keys));
+    for I := 0 to N - 1 do
+    begin
+      E := ObjOf(RootAt(Self_ + 1))^.Elements^.Data[I];
+      if not IsString(E) then Continue;
+      T := StrToUnicode(StrOf(E));
+      if not GetV(RootAt(Self_), AtomOf(T), E) then begin Pending := VUndefined; Exit('a value that cannot be read'); end;
+      Result := NotData(E, At + '.' + T, Where, SeenBase);
+      if Result <> '' then Exit;
+    end;
+  finally
+    PopRoots(TempTop - Self_);
+  end;
+end;
+
 function InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
-var NS, Keys, V: TValue; I, N: Integer; Name: UnicodeString;
+var NS, Keys, V: TValue; I, N: Integer; Name, What, Where: UnicodeString;
 begin
   Result := False;
-  if not EvaluateModuleNamespace(UnicodeString(ExpandFileName(UTF8Encode(Path))), NS) then
+  if not EvaluateHostModule(UnicodeString(ExpandFileName(UTF8Encode(Path))), NS) then
   begin
     Err := TakePendingText;
     Exit;
@@ -758,6 +881,18 @@ begin
       begin
         Name := StrToUnicode(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
         if Name = 'default' then Continue;
+        { code does not cross from a config's globals module: it exports data only }
+        if GuestLoadsOn then
+        begin
+          if not GetV(RootAt(TempTop - 2), AtomOf(Name), V) then begin Err := TakePendingText; Exit; end;
+          What := NotData(V, Name, Where, TempTop);
+          if What <> '' then
+          begin
+            HostErrorV := VUndefined;
+            Err := 'export "' + Where + '" is ' + What + '; a config''s globals module may export data only';
+            Exit;
+          end;
+        end;
         if not GetV(RootAt(TempTop - 2), AtomOf(Name), V) or not InjectGlobalBinding(Name, V) then
         begin
           Err := TakePendingText;
@@ -778,7 +913,7 @@ var NS, Map: TValue; Abs: UnicodeString;
 begin
   Result := False;
   Abs := UnicodeString(ExpandFileName(UTF8Encode(Path)));
-  if not EvaluateModuleNamespace(Abs, NS) or not GetV(NS, AtomOf('default'), Map) then
+  if not EvaluateHostModule(Abs, NS) or not GetV(NS, AtomOf('default'), Map) then
   begin
     Err := TakePendingText;
     Exit;
@@ -786,10 +921,82 @@ begin
   Result := DefineVirtualModuleMap(Map, UnicodeString(ExtractFileDir(UTF8Encode(Abs))), Err);
 end;
 
+{ a config's manifest: a JavaScript or TypeScript module's default export, or a data file's map }
+threadvar
+  { a config's manifest as the config wrote it, and the path it names: a refusal names it as written }
+  ManifestWritten, ManifestPath: UnicodeString;
+  { the directory of the config whose loads are being judged: what it names inside its own tree needs no grant }
+  GuestScopeDir: string;
+
+procedure SetGuestScope(const Dir: string);
+begin
+  if Dir = '' then GuestScopeDir := '' else GuestScopeDir := CanonicalCapabilityPath(Dir);
+end;
+
+function DefineManifestPath(const P, Written: UnicodeString; var Err: UnicodeString): Boolean;
+var Ext: string;
+begin
+  Ext := LowerCase(ExtractFileExt(UTF8Encode(P)));
+  ManifestPath := P;
+  ManifestWritten := Written;
+  try
+    if (Ext = '.js') or (Ext = '.mjs') or (Ext = '.ts') or (Ext = '.mts') or (Ext = '.jsx') or (Ext = '.tsx') then
+      Result := DefineModuleManifestVirtualModules(P, Err)
+    else if not GuestReadAllowed(P, Err) then
+    begin
+      Err := 'PermissionDenied: read: ' + Written;
+      Result := False;
+    end
+    else Result := DefineManifestVirtualModules(P, Err);
+  finally
+    ManifestPath := '';
+    ManifestWritten := '';
+  end;
+end;
+
+function DefineConfigVirtualModulesAt(const ConfigPath: UnicodeString; Depth: Integer;
+  var Err: UnicodeString): Boolean; forward;
+
+{ the configs a config extends ("extends": a path or an array of paths, against its directory), first }
+function DefineExtendedConfigs(Cfg: TValue; const Dir: UnicodeString; Depth: Integer; var Err: UnicodeString): Boolean;
+var X, E: TValue; I, N: Integer; P: UnicodeString;
+begin
+  Result := True;
+  if not GetV(Cfg, AtomOf('extends'), X) then begin Pending := VUndefined; Exit; end;
+  if IsString(X) then
+  begin
+    P := StrToUnicode(StrOf(X));
+    if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
+    Exit(DefineConfigVirtualModulesAt(UnicodeString(ExpandFileName(UTF8Encode(P))), Depth + 1, Err));
+  end;
+  if not IsObject(X) or (ObjOf(X)^.OKind <> okArray) then Exit;
+  PushRoot(X);
+  try
+    N := ArrayLen(ObjOf(X));
+    for I := 0 to N - 1 do
+    begin
+      E := ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I];
+      if not IsString(E) then Continue;
+      P := StrToUnicode(StrOf(E));
+      if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
+      if not DefineConfigVirtualModulesAt(UnicodeString(ExpandFileName(UTF8Encode(P))), Depth + 1, Err) then Exit(False);
+    end;
+  finally
+    PopRoots(1);
+  end;
+end;
+
 function DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
-var Text, Dir, P: UnicodeString; Cfg, M, E, S: TValue; I, N: Integer;
+begin
+  Result := DefineConfigVirtualModulesAt(ConfigPath, 0, Err);
+end;
+
+function DefineConfigVirtualModulesAt(const ConfigPath: UnicodeString; Depth: Integer;
+  var Err: UnicodeString): Boolean;
+var Text, Dir, P, W: UnicodeString; Cfg, M, E, S: TValue; I, N: Integer; SavedScope: string;
 begin
   Result := False;
+  if Depth > 32 then begin Err := 'Circular or too-deeply-nested extends in virtual module config: ' + ConfigPath; Exit; end;
   if not ReadFileUnicode(ConfigPath, Text) then begin Err := 'Cannot read ' + ConfigPath; Exit; end;
   if not DataValue(Text, UnicodeString(ExtractFileExt(UTF8Encode(ConfigPath))), Cfg) then
   begin
@@ -799,15 +1006,21 @@ begin
   if not IsObject(Cfg) then Exit(True);
   Dir := UnicodeString(ExtractFileDir(ExpandFileName(UTF8Encode(ConfigPath))));
   PushRoot(Cfg);
+  SavedScope := GuestScopeDir;
   try
+    { what it extends first: its own definitions override them }
+    if not DefineExtendedConfigs(RootAt(TempTop - 1), Dir, Depth, Err) then Exit;
+    { judged against the config that names them }
+    GuestScopeDir := CanonicalCapabilityPath(UTF8Encode(Dir));
     { "modules": a module map, a manifest path, or an array of manifest paths }
     if GetV(RootAt(TempTop - 1), AtomOf('modules'), M) and (M <> VUndefined) then
     begin
       if IsString(M) then
       begin
         P := StrToUnicode(StrOf(M));
+        W := P;
         if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
-        if not DefineManifestVirtualModules(P, Err) then Exit;
+        if not DefineManifestPath(P, W, Err) then Exit;
       end
       else if IsObject(M) and (ObjOf(M)^.OKind = okArray) then
       begin
@@ -818,8 +1031,9 @@ begin
           E := ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I];
           if not IsString(E) then begin Err := 'Config module manifests must be paths.'; PopRoots(1); Exit; end;
           P := StrToUnicode(StrOf(E));
+          W := P;
           if (P <> '') and (P[1] <> '/') then P := Dir + '/' + P;
-          if not DefineManifestVirtualModules(P, Err) then begin PopRoots(1); Exit; end;
+          if not DefineManifestPath(P, W, Err) then begin PopRoots(1); Exit; end;
         end;
         PopRoots(1);
       end
@@ -854,6 +1068,7 @@ begin
     else Pending := VUndefined;
     Result := True;
   finally
+    GuestScopeDir := SavedScope;
     PopRoots(1);
   end;
 end;
@@ -902,9 +1117,150 @@ begin
   Result := IsVirtualModuleURI(Key) or ((Key <> '') and (Key[1] <> '/') and (Key[1] <> '<') and IsHostModuleKey(Key));
 end;
 
-function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
-var Ref: string; Resolver: TModuleResolver; Candidate: UnicodeString;
+{ ---- the read policy ---- }
+
+type
+  TReadDenial = (rdDenied, rdOutsideProject, rdComputedImport);
+
+  { a host candidate the policy refused while the resolver probed it }
+  EReadRefused = class(Exception)
+  public
+    Canonical: string;
+    Denial: TReadDenial;
+  end;
+
+  TReadPolicy = class
+  public
+    Caps: TGocciaCapabilities;
+    Root: string;
+    Audit: TG2ReadAudit;
+    { the request being resolved }
+    Spec: string;
+    Literal: Boolean;
+    PackageDir: string;
+    function IsProjectGraph(const Canonical: string): Boolean;
+    function Verdict(const Canonical: string; Literal_: Boolean; out Denial: TReadDenial): Boolean;
+    procedure Probe(const ACandidatePath: string);
+  end;
+
+threadvar
+  ReadPolicy: TReadPolicy;
+  GuestLoads: Boolean;
+
+procedure SetGuestLoads(On: Boolean);
 begin
+  GuestLoads := On;
+  GuestLoadsOn := On;
+end;
+
+function GuestReadAllowed(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+var Canonical: string; Denial: TReadDenial;
+begin
+  Result := True;
+  if not GuestLoads or (ReadPolicy = nil) then Exit;
+  Canonical := CanonicalCapabilityPath(UTF8Encode(Path));
+  ReadPolicy.PackageDir := '';
+  if ReadPolicy.Verdict(Canonical, True, Denial) then Exit;
+  if Assigned(ReadPolicy.Audit) then
+    ReadPolicy.Audit(False, Canonical, 'the path is outside the project and no read grant covers it');
+  Pending := VUndefined;
+  Err := 'PermissionDenied: read: ' + Path;
+  Result := False;
+end;
+
+procedure SetReadPolicy(On: Boolean; const Caps: TGocciaCapabilities; const ProjectRoot: string;
+  Audit: TG2ReadAudit);
+begin
+  FreeAndNil(ReadPolicy);
+  if not On then Exit;
+  ReadPolicy := TReadPolicy.Create;
+  ReadPolicy.Caps := Caps;
+  ReadPolicy.Root := ProjectRoot;
+  ReadPolicy.Audit := Audit;
+end;
+
+{ inside the project and outside every .goccia directory in it }
+function TReadPolicy.IsProjectGraph(const Canonical: string): Boolean;
+var Rel: string; I, Start: Integer;
+begin
+  if (Root = '') or not IsPathWithinScope(Canonical, Root) then Exit(False);
+  Rel := Copy(Canonical, Length(Root) + 1, MaxInt);
+  Start := 1;
+  for I := 1 to Length(Rel) + 1 do
+    if (I > Length(Rel)) or (Rel[I] = PathDelim) then
+    begin
+      if SameText(Copy(Rel, Start, I - Start), PACKAGE_CACHE_DIRECTORY_NAME) then Exit(False);
+      Start := I + 1;
+    end;
+  Result := True;
+end;
+
+function TReadPolicy.Verdict(const Canonical: string; Literal_: Boolean; out Denial: TReadDenial): Boolean;
+begin
+  Denial := rdDenied;
+  if Caps.DeniesPath(gcRead, Canonical) then Exit(False);
+  if Literal_ and IsProjectGraph(Canonical) then Exit(True);
+  if Literal_ and GuestLoads and (GuestScopeDir <> '') and IsPathWithinScope(Canonical, GuestScopeDir) then Exit(True);
+  if Literal_ and (PackageDir <> '') and IsPathWithinScope(Canonical, PackageDir) then Exit(True);
+  if Caps.AllowsPath(gcRead, Canonical) then Exit(True);
+  if Literal_ then Denial := rdOutsideProject else Denial := rdComputedImport;
+  Result := False;
+end;
+
+{ each candidate the resolver looks at, before it asks the host whether it exists: a refused one stops the
+  resolution, so neither the outcome nor which later candidate loads can depend on files the script may not read }
+procedure TReadPolicy.Probe(const ACandidatePath: string);
+var Canonical: string; Denial: TReadDenial; E: EReadRefused;
+begin
+  Canonical := CanonicalCapabilityPath(ACandidatePath);
+  if Verdict(Canonical, Literal, Denial) then Exit;
+  E := EReadRefused.Create(Spec);
+  E.Canonical := Canonical;
+  E.Denial := Denial;
+  raise E;
+end;
+
+{ the refusal: audited, and a PermissionDenied naming the specifier the script wrote; the host path and the grant
+  that would allow it travel only in the host's suggestion (ADR 0108) }
+function DenyRead(const Spec, Canonical: string; Denial: TReadDenial): Integer;
+const
+  Reasons: array[TReadDenial] of string = ('read is denied for this path',
+    'the path is outside the project and no read grant covers it', 'a computed import specifier needs a read grant');
+var Suggestion: string; E: TValue; Saved: Integer;
+begin
+  if Assigned(ReadPolicy.Audit) and not ReadPolicy.Audit(False, Canonical, Reasons[Denial]) then
+  begin
+    SetResolveError(Pending);
+    Pending := VUndefined;
+    Exit(-2);
+  end;
+  case Denial of
+    rdDenied: Suggestion := Format(SSuggestReadDenied, [Canonical]);
+    rdOutsideProject: Suggestion := Format(SSuggestReadNotGranted, [Canonical, ExtractFileDir(Canonical)]);
+  else
+    Suggestion := Format(SSuggestReadComputed, [Canonical, ExtractFileDir(Canonical)]);
+  end;
+  E := VUndefined;
+  { made in the host's realm, whose PermissionDenied the CLI installed (a config's module runs in a realm of its
+    own) }
+  Saved := CurRealm;
+  if Saved <> HostRealm then SwitchRealm(HostRealm);
+  try
+    NewPermissionDenied('read', UnicodeString(Spec), UnicodeString(Suggestion), E);
+  finally
+    if Saved <> HostRealm then SwitchRealm(Saved);
+  end;
+  SetResolveError(E);
+  Result := -2;
+end;
+
+function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
+var Ref: string; Resolver: TModuleResolver; Candidate: UnicodeString; Guard: Boolean; Policy: TReadPolicy;
+  SavedGuard: TModuleResolverProbeGuard; Canonical: string; Denial: TReadDenial; Literal: Boolean;
+begin
+  { the import() being resolved: its specifier computed or not (the first resolution takes it) }
+  Literal := not ImportComputed;
+  ImportComputed := False;
   if IsHostModuleKey(Spec) then
   begin
     Resolved := Spec;
@@ -923,14 +1279,66 @@ begin
   Resolver := CurrentResolver;
   if (Referrer = '') or (Referrer[1] = '<') or IsVirtualKey(Referrer) then Ref := ''
   else Ref := ExpandFileName(UTF8Encode(Referrer));
+  { the read policy judges every request while it is on: the run's (a function a host module left behind imports as
+    the guest it runs for) and a config's loads; the host's own loads before the run are not judged }
+  Policy := ReadPolicy;
+  Guard := (Policy <> nil) and not IsVirtualKey(Referrer);
+  if Guard then
+  begin
+    Policy.Spec := UTF8Encode(Spec);
+    Policy.Literal := Literal;
+    Policy.PackageDir := '';
+    SavedGuard := Resolver.ProbeGuard;
+    Resolver.ProbeGuard := Policy.Probe;
+  end;
   try
-    Resolved := UTF8Decode(Resolver.Resolve(UTF8Encode(Spec), Ref));
+    try
+      Resolved := UTF8Decode(Resolver.Resolve(UTF8Encode(Spec), Ref));
+    finally
+      if Guard then Resolver.ProbeGuard := SavedGuard;
+    end;
+    if Guard and not IsVirtualModuleURI(Resolved) and not IsHostModuleKey(Resolved) then
+    begin
+      Canonical := CanonicalCapabilityPath(UTF8Encode(Resolved));
+      { a literal bare import's package (the directory it resolved in) is part of the graph }
+      Policy.PackageDir := '';
+      if Literal and (Resolver.ProbePackageDirectory <> '') then
+        Policy.PackageDir := CanonicalCapabilityPath(Resolver.ProbePackageDirectory);
+      if not Policy.Verdict(Canonical, Literal, Denial) then
+      begin
+        if (ManifestPath <> '') and (Spec = ManifestPath) then
+          Exit(DenyRead(UTF8Encode(ManifestWritten), Canonical, Denial));
+        Exit(DenyRead(UTF8Encode(Spec), Canonical, Denial));
+      end;
+      if Assigned(Policy.Audit) and not (Literal and Policy.IsProjectGraph(Canonical)) and
+         not Policy.Audit(True, Canonical, 'a read grant covers the path') then
+      begin
+        SetResolveError(Pending);
+        Pending := VUndefined;
+        Exit(-2);
+      end;
+    end;
+    { a virtual module at a path a file is at shadows it: warned once, as GocciaScript's loader warns }
+    if (Resolved <> '') and (Resolved[1] = '/') and IsHostModuleKey(Resolved) and FileExists(UTF8Encode(Resolved)) then
+    begin
+      if ShadowWarned = nil then ShadowWarned := TStringList.Create;
+      if ShadowWarned.IndexOf(UTF8Encode(Resolved)) < 0 then
+      begin
+        ShadowWarned.Add(UTF8Encode(Resolved));
+        WriteLn(ErrOutput, 'Warning: virtual module "', UTF8Encode(Resolved), '" shadows module "',
+          UTF8Encode(Resolved), '".');
+      end;
+    end;
     { the first specifier a module is imported by names it in its load errors (specifierOf) }
     if ImportSpecifiers = nil then ImportSpecifiers := TStringList.Create;
     if ImportSpecifiers.IndexOfName(UTF8Encode(Resolved)) < 0 then
       ImportSpecifiers.Add(UTF8Encode(Resolved) + '=' + UTF8Encode(Spec));
     Result := 1;
   except
+    on E: EReadRefused do
+      if (ManifestPath <> '') and (Spec = ManifestPath) then
+        Result := DenyRead(UTF8Encode(ManifestWritten), E.Canonical, E.Denial)
+      else Result := DenyRead(E.Message, E.Canonical, E.Denial);
     on E: Exception do
     begin
       Resolved := UTF8Decode(E.Message);
@@ -938,6 +1346,13 @@ begin
       Result := -1;
     end;
   end;
+end;
+
+{ moduleLoaded(key): whether a module record is keyed key (a virtual module may not replace it) }
+function Host_ModuleLoaded(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkBool(ModuleRecordExists(ArgStr(Args, Argc, 1)));
+  Result := True;
 end;
 
 { readText(path): a file's text, decoded as UTF-8 without a BOM; undefined when it cannot be read }
@@ -1071,6 +1486,7 @@ begin
     on E: EGocciaYAMLParseError do Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
     on E: EGocciaTOMLParseError do Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
     on E: EGocciaDataDepthError do Exit(ThrowError('RangeError', UTF8Decode(E.Message)));
+    on E: ENativeDepthLimit do Exit(ThrowError('RangeError', UTF8Decode(E.Message)));
     on E: EGocciaDataTypeError do Exit(ThrowError('TypeError', UTF8Decode(E.Message)));
     { any other parser failure is still the text's: never let a Pascal exception into the VM }
     on E: Exception do Exit(ThrowError('SyntaxError', UTF8Decode(E.Message)));
@@ -1263,6 +1679,7 @@ begin
   DefineNative(RootAt(TempTop - 1), 'metaResolve', Host_MetaResolve, 3);
   DefineNative(RootAt(TempTop - 1), 'readText', Host_ReadText, 1);
   DefineNative(RootAt(TempTop - 1), 'fileSize', Host_FileSize, 1);
+  DefineNative(RootAt(TempTop - 1), 'moduleLoaded', Host_ModuleLoaded, 1);
   DefineFetchNatives(RootAt(TempTop - 1));
   if SandboxActive then DefineSandboxNatives(RootAt(TempTop - 1));
   Result := RootAt(TempTop - 1);
@@ -1285,6 +1702,7 @@ var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
   if HeapCeiling <= 0 then HeapCeiling := DefaultHeapCeiling;
   RealmHostInit := @CLIRealmInit;
+  HostRealm := CurRealm;
   if FirstInEngine(EventLoopRootedGen) then
   begin
     AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@HasHostModuleV);

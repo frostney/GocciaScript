@@ -7359,6 +7359,10 @@ begin
         icpDefer: L := 2;
       else L := 0;
       end;
+      { bit 4: the specifier is a string literal (the host's read policy exempts its module graph) }
+      if (TGocciaImportCallExpression(E).Specifier is TGocciaLiteralExpression) and
+         (TGocciaLiteralExpression(TGocciaImportCallExpression(E).Specifier).Value is TGocciaStringLiteralValue) then
+        L := L or 16;
       if Assigned(TGocciaImportCallExpression(E).Options) then
         ExprTo(TGocciaImportCallExpression(E).Options, R + 1);
       { the call, located at import (a failed import is reported there) }

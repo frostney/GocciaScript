@@ -121,6 +121,8 @@
       const type = descriptor.type === undefined ? 'javascript' : descriptor.type;
       const content = descriptor.content;
       const key = isRelative(address) && base ? joinPath(base, address) : address;
+      if (n.moduleLoaded(key))
+        throw new TypeError(`Virtual module "${key}" cannot be replaced after it has been loaded.`);
       if (registry[key] !== undefined && virtualKeys[key] === undefined)
         throw new TypeError(`Virtual module "${address}" conflicts with a registered ${key.startsWith('goccia:') ? 'runtime' : 'host'} module.`);
       let make;

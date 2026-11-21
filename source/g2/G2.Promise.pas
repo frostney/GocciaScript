@@ -644,7 +644,14 @@ begin
   ObjOf(G)^.OFlags := agYield * Ord(ObjOf(G)^.OFlags <> agStart);   { GeneratorResume's states: 0 start, 1 suspended }
   Ok := GeneratorResume(G, V, Mode, Res, Done);
   G := RootAt(TempTop - 1);
-  if not Ok then
+  if not Ok and ResumeRefused then
+  begin
+    { refused before the body ran (the call limit, the native stack): the request is rejected, and the generator
+      stays as it was for the next one }
+    AGCompleteStep(G, True, TakePending, False);
+    if AGFront(RootAt(TempTop - 1), Req) then AGResumeWith(RootAt(TempTop - 1), Req);
+  end
+  else if not Ok then
   begin
     ObjOf(G)^.OFlags := agDone;
     AGCompleteStep(G, True, TakePending, True);

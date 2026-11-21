@@ -161,6 +161,14 @@ threadvar
   RegExpCtorV: TValue;
   Legacy: PLegacy;
 
+{ a match that failed: the run's abort when a spent deadline interrupted it, else the matcher's limit as a
+  SyntaxError }
+function MatchFailed(Sc: TRegexMatcher): Boolean;
+begin
+  if Sc.Interrupted then Exit(AbortInterrupted);
+  Result := ThrowError('SyntaxError', Sc.ErrorMessage);
+end;
+
 { UpdateLegacyRegExpStaticProperties / InvalidateLegacyRegExpStaticProperties after a successful match }
 procedure RecordLegacy(Re: TValue; Sc: TRegexMatcher; S: PStr);
 var I, St, En, N, M: Integer; L: PLegacy;
@@ -485,7 +493,7 @@ begin
     else LI := 0;
     Sc := C^.M;
     Matched := Sc.Exec(StrChars(S), S^.Len, LI, C^.Sticky);
-    if Sc.Failed then Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
+    if Sc.Failed then Exit(MatchFailed(Sc));
     if not Matched then
     begin
       if GS then ObjOf(Re)^.Slots[0] := MkInt(0);
@@ -510,7 +518,7 @@ begin
   end;
   Sc := C^.M;
   Matched := Sc.Exec(StrChars(S), S^.Len, LI, C^.Sticky);
-  if Sc.Failed then begin PopRoots(2); Exit(ThrowError('SyntaxError', Sc.ErrorMessage)); end;
+  if Sc.Failed then begin PopRoots(2); Exit(MatchFailed(Sc)); end;
   if not Matched then
   begin
     PopRoots(2);
@@ -752,7 +760,7 @@ begin
       { the spec's loop has set lastIndex to where this attempt starts (the last match's end, advanced past an
         empty match); the attempt that throws leaves it there }
       if not SetLastIndex(Args[1], St) then Exit(False);
-      Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
+      Exit(MatchFailed(Sc));
     end;
     if not Ok then Break;
     RecordLegacy(Args[1], Sc, StrOf(Args[0]));
@@ -809,7 +817,7 @@ begin
   S := StrOf(Args[0]);
   Sc := C^.M;
   Ok := Sc.Exec(StrChars(S), S^.Len, 0, C^.Sticky);
-  if Sc.Failed then Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
+  if Sc.Failed then Exit(MatchFailed(Sc));
   if Ok then
   begin
     if IsObject(Arg(Args, Argc, 1)) then RecordLegacy(Args[1], Sc, StrOf(Args[0]))
@@ -926,7 +934,7 @@ begin
       { a global search: the spec's loop has set lastIndex to where this attempt starts, and the attempt that
         throws leaves it there }
       if Global and not SetLastIndex(Args[1], St) then Exit(False);
-      Exit(ThrowError('SyntaxError', Sc.ErrorMessage));
+      Exit(MatchFailed(Sc));
     end;
     if not Ok then Break;
     RecordLegacy(Args[1], Sc, StrOf(Args[0]));
@@ -1071,7 +1079,7 @@ begin
   begin
     Sc := C^.M;
     Ok := Sc.Exec(StrChars(S), S^.Len, 0, True);
-    if Sc.Failed then begin PopRoots(1); Exit(ThrowError('SyntaxError', Sc.ErrorMessage)); end;
+    if Sc.Failed then begin PopRoots(1); Exit(MatchFailed(Sc)); end;
     if Ok then RecordLegacy(RegExpProto, Sc, StrOf(Args[0]));
     if not Ok then ArrayPush(ObjOf(RootAt(TempTop - 1)), Args[0]);
     Res := RootAt(TempTop - 1);
@@ -1084,7 +1092,7 @@ begin
     S := StrOf(Args[0]);
     Sc := C^.M;
     Ok := Sc.Exec(StrChars(S), S^.Len, Q, True);
-    if Sc.Failed then begin PopRoots(1); Exit(ThrowError('SyntaxError', Sc.ErrorMessage)); end;
+    if Sc.Failed then begin PopRoots(1); Exit(MatchFailed(Sc)); end;
     if not Ok then begin Q := NextIndex(S, Q, C^.Unicode); Continue; end;
     RecordLegacy(RegExpProto, Sc, StrOf(Args[0]));
     Sc.TryGetGroup(0, St, En);

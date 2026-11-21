@@ -15,7 +15,9 @@ uses
   {$IFDEF UNIX}BaseUnix, {$ENDIF}SysUtils, Math, BigInteger, G2.Core, G2.Bytecode, G2.BigIntV, G2.Typed;
 
 const
-  FRAME_MAX = 200000;
+  { the frames a thread holds: 200,000 nested calls below the entry's frame (GocciaScript's deepest --max-stack)
+    and the three a run keeps besides them (SetMaxFrames) }
+  FRAME_MAX = 200003;
   { the longest list of arguments an array-like makes (apply, Reflect.apply / construct), as GocciaScript's }
   MAX_ARGUMENTS_LIST_LENGTH = 1048576;
   okAsyncGen = 26;  { an async generator: Aux1 closure, Aux2 state, as okGenerator }
@@ -64,6 +66,9 @@ var
     13.3.12 import.meta of module ModuleId }
   ImportHook: function(const Referrer: UnicodeString; ModuleId: Integer; Spec, Opts: TValue; var Res: TValue): Boolean = nil;
   ImportMetaHook: function(ModuleId: Integer; var Res: TValue): Boolean = nil;
+  { the name of the binding a module's cell table (opModGet's) holds at Slot, for its temporal dead zone's error; ''
+    when the module loader does not know it }
+  ModSlotNameHook: function(Table: TValue; Slot: Integer): UnicodeString = nil;
   { G2.ObjModel's 7.3.25 CopyDataProperties for a source the fast path does not take (an exotic object, a symbol
     key, a primitive) }
   CopyDataPropsHook: function(Target, Src: TValue): Boolean = nil;
@@ -72,6 +77,9 @@ var
 threadvar
   { opImport: the import call's phase while the hook runs (0 evaluation, 1 source, 2 defer) }
   ImportPhase: Integer;
+  { the import() running has a specifier computed at run time, not a string literal: the host's read policy
+    gives it no module-graph exemption (taken by the first resolution) }
+  ImportComputed: Boolean;
 var
   { G2.ObjModel's 7.1.18 ToObject }
   ToObjectHook: function(V: TValue; var O: TValue): Boolean = nil;
@@ -170,6 +178,9 @@ threadvar
     SymReplace, SymSearch, SymSplit, SymUnscopables, SymDispose, SymAsyncDispose: TValue;
   { set by opYield / opAwait: the suspension was an await }
   SuspendedByAwait: Boolean;
+  { GeneratorResume's last failure refused to enter the generator's code (the call limit, the native stack): the
+    generator is as it was, suspended or not started }
+  ResumeRefused: Boolean;
   { the value a generator produced is an inner iterator result of yield*, to be returned as is (27.5.3.7) }
   GenYieldRaw: Boolean;
   { the intrinsic %ArrayIteratorPrototype%.next and %GeneratorPrototype%.next (G2.Builtins sets them): an
@@ -286,6 +297,13 @@ function GLexFind(Key: PStr): Integer;
   it sees, and a property of the global object. A name a built-in or a script already binds is refused (False, a TypeError pending: 'Cannot override
   built-in global'); one injected before takes the new value. }
 function InjectGlobalBinding(const Name: UnicodeString; V: TValue): Boolean;
+{ an explicit Script entry's import (GocciaScript's, docs/language.md): a const global lexical binding Key whose cell
+  is Cell, the binding it imports (a module's), so it reads that binding live and throws in its temporal dead zone.
+  False with a SyntaxError pending when Key is bound already. }
+{ native code that saw Interrupt set (a long scan polling it): the run's abort, as a call or back edge would take it
+  (False, the uncatchable error pending) }
+function AbortInterrupted: Boolean;
+function BindGlobalImport(Key: PStr; Cell: TValue): Boolean;
 function GLexIsConst(I: Integer): Boolean;
 { 7.2.4 IsConstructor }
 function IsConstructorV(V: TValue): Boolean;
@@ -558,6 +576,13 @@ begin
     4: ThrowError('Error', HostAbortText);
   else ThrowError('Error', 'Execution timed out after ' + IntToStr(LimitTimeoutMs) + 'ms');
   end;
+end;
+
+function AbortInterrupted: Boolean;
+begin
+  ReadBarrier;
+  XAbort(1);
+  Result := False;
 end;
 
 function MemoryLimitMessage: UnicodeString;
@@ -1695,6 +1720,20 @@ begin
   { and on the global object, as GocciaScript's injected globals are (writable, configurable, not enumerable) }
   if IsObject(GlobalObj) then DefineOwn(GlobalObj, Key, RootAt(TempTop - 1), pfHidden);
   PopRoots(1);
+  Result := True;
+end;
+
+function BindGlobalImport(Key: PStr; Cell: TValue): Boolean;
+var I: Integer; F: Byte;
+begin
+  if (GLexFind(Key) >= 0) or (IsObject(GlobalObj) and GlobalOwn(Key, F) and ((F and pfConfigurable) = 0)) then
+    Exit(ThrowRedeclared(Key));
+  PushRoot(Cell);
+  I := GLexAdd(Key, True);
+  GLexCells[I] := RootAt(TempTop - 1);
+  PopRoots(1);
+  { a configurable global property it shadows from now on: global inline caches that found it must miss }
+  if IsObject(GlobalObj) and GlobalOwn(Key, F) then ObjOf(GlobalObj)^.Shape := ShapeFork(ObjOf(GlobalObj)^.Shape);
   Result := True;
 end;
 
@@ -4011,6 +4050,8 @@ begin
   Result := Total;
 end;
 
+function ReentryTooDeep: Boolean; forward;
+
 function CallValue(F, This: TValue; Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var O: PObj; Base, I, ArgBase: Integer; BArgs: PValueArray; N: Integer; Tmp: array[0..15] of TValue;
   P: PValue; SavedTop: Integer;
@@ -4066,6 +4107,8 @@ begin
     begin
       if (O^.OFlags and 1) <> 0 then
         Exit(ThrowClassCall(O));
+      { native code entering the interpreter (or compiled code) nests it on the native stack }
+      if ReentryTooDeep then Exit(False);
       {$IFDEF CPUX86_64}
       { a compiled callee whose frame the fast path pushes: its code run directly }
       if JitCallFast(O, This, Args, Argc, Res, Result) then Exit;
@@ -4170,7 +4213,8 @@ begin
     VStack[ArgBase] := VHole;
     if Args <> nil then Move(Args^, VStack[ArgBase + 1], Argc * SizeOf(TValue));
     StackTop := ArgBase + Argc + 1;
-    if not PushBytecodeFrame(ObjOf(F), VHole, @VStack[ArgBase + 1], Argc, ArgBase, 1, NewTarget) then
+    if ReentryTooDeep or
+       not PushBytecodeFrame(ObjOf(F), VHole, @VStack[ArgBase + 1], Argc, ArgBase, 1, NewTarget) then
     begin
       StackTop := SavedTop;
       Exit(False);
@@ -4202,7 +4246,8 @@ begin
   VStack[ArgBase] := MkPtr(ThisO);
   if Args <> nil then Move(Args^, VStack[ArgBase + 1], Argc * SizeOf(TValue));
   StackTop := ArgBase + Argc + 1;
-  if not PushBytecodeFrame(ObjOf(F), VStack[ArgBase], @VStack[ArgBase + 1], Argc, ArgBase, 1, NewTarget) then
+  if ReentryTooDeep or
+     not PushBytecodeFrame(ObjOf(F), VStack[ArgBase], @VStack[ArgBase + 1], Argc, ArgBase, 1, NewTarget) then
   begin
     StackTop := SavedTop;
     Exit(False);
@@ -4363,23 +4408,47 @@ end;
 { a bytecode function's frame: the arguments at Args (Args[-1] its this slot), Kind 0 call, 1 construct, 2
   script; the common case here, the rest in PushBytecodeFrameFull }
 threadvar
-  { the lowest native stack address a frame may be pushed at (a native's call into a function nests Execute on
-    the native stack): NativeStackLimit's, 0 where the bounds are unknown; ReentryFloorSet once it is found }
+  { the lowest native stack address native code may enter the interpreter at (a native's call into a function nests
+    Execute on the native stack): NativeStackLimit's, 0 where the bounds are unknown; ReentryFloorSet once it is
+    found }
   ReentryFloor: PtrUInt;
   ReentryFloorSet: Boolean;
+  { PushBytecodeFrame's floor, REENTRY_BACKSTOP_SLACK below ReentryFloor (0 where the bounds are unknown) }
+  ReentryBackstop: PtrUInt;
+
+const
+  { how far below the re-entry floor a frame push from the interpreter may still go: the native entries (CallValue,
+    Construct, GeneratorResume) refuse at the floor, so a push here only meets this backstop through a native path
+    that skipped them; it stays within G2.Core's NATIVE_STACK_MARGIN }
+  REENTRY_BACKSTOP_SLACK = 256 * 1024;
+
+{ whether the native stack is below the re-entry floor: a native that calls back into code that calls the native
+  again recurses on the native stack, which ends before the frames do, so it is refused with a RangeError (pending)
+  before it overflows }
+procedure SetReentryFloor;
+begin
+  ReentryFloor := NativeStackLimit;
+  if ReentryFloor > REENTRY_BACKSTOP_SLACK then ReentryBackstop := ReentryFloor - REENTRY_BACKSTOP_SLACK
+  else ReentryBackstop := 0;
+  ReentryFloorSet := True;
+end;
+
+function ReentryTooDeep: Boolean; noinline;
+var Marker: Byte;
+begin
+  if not ReentryFloorSet then SetReentryFloor;
+  Result := PtrUInt(@Marker) < ReentryFloor;
+  if Result then ThrowError('RangeError', 'Maximum call stack size exceeded');
+end;
 
 function PushBytecodeFrame(FObj: PObj; This: TValue; Args: PValue; Argc: Integer; RetIdx: Integer; Kind: Byte;
   NewTarget: TValue): Boolean;
 var T: PFuncTemplate; Base, I: Integer; Fr: PFrame; R: PValue; Marker: Byte;
 begin
-  { a native that calls back into code that calls the native again recurses on the native stack, which ends
-    before the frames do: a RangeError before it overflows }
-  if not ReentryFloorSet then
-  begin
-    ReentryFloor := NativeStackLimit;
-    ReentryFloorSet := True;
-  end;
-  if PtrUInt(@Marker) < ReentryFloor then
+  { a call from the interpreter's own code needs no native stack, but one from native code that bypassed the entries
+    that check the re-entry floor still finds a backstop below it }
+  if not ReentryFloorSet then SetReentryFloor;
+  if PtrUInt(@Marker) < ReentryBackstop then
     Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
   T := PFuncTemplate(FObj^.Native);
   if (T^.Lazy <> nil) and not LazyCompileHook(T) then Exit(False);
@@ -5277,6 +5346,7 @@ begin
         Exit(True);
       end;
   end;
+  ResumeRefused := False;
   if (G^.OFlags = 0) and (Mode <> 0) then
   begin
     GenDone(G);
@@ -5285,12 +5355,22 @@ begin
     Value := Arg;
     Exit(True);
   end;
+  { a resumption from native code (next, return, throw) nests the interpreter: refused at the re-entry floor with
+    the generator left as it was }
+  if ReentryTooDeep then
+  begin
+    ResumeRefused := True;
+    Exit(False);
+  end;
   T := PFuncTemplate(ObjOf(G^.Aux1)^.Native);
   State := PValueArray(PtrOf(G^.Aux2));
   SavedTop := StackTop;
   Base := StackTop;
   if (Base + T^.MaxRegs + 4 >= STACK_MAX) or FramesFull then
+  begin
+    ResumeRefused := True;
     Exit(XFrameOverflow);
+  end;
   { the registers live at the suspension; the others read as a fresh frame's (and the collector, which scans
     the stack, sees no stale value in them) }
   NLive := IntOf(State^.Data[T^.MaxRegs + 1]);
@@ -7791,6 +7871,16 @@ begin
   end;
 end;
 
+{ a module binding read in its temporal dead zone (opModGet): its ReferenceError, naming it when the loader can }
+procedure ThrowModTDZ(Table: TValue; Slot: Integer);
+var S: UnicodeString;
+begin
+  S := '';
+  if Assigned(ModSlotNameHook) then S := ModSlotNameHook(Table, Slot);
+  if S <> '' then ThrowError('ReferenceError', 'Cannot access ''' + S + ''' before initialization')
+  else ThrowError('ReferenceError', 'Cannot access an imported binding before its initialization');
+end;
+
 function Execute(StopFrame: Integer; var Res: TValue): Boolean;
 label LThrow, LReload, LNext, LDone, LBackEdge;
 var
@@ -9021,7 +9111,7 @@ LReload:
           if V = VHole then
           begin
             Fr^.PC := PC;
-            ThrowError('ReferenceError', 'Cannot access an imported binding before its initialization');
+            ThrowModTDZ(R[(I shr 24) and $FFFF], Integer(I shr 40));
             goto LThrow;
           end;
           R[A] := V;
@@ -9030,10 +9120,17 @@ LReload:
         begin
           Fr^.PC := PC;
           { C: options register ($FFFF none) in its low 16 bits, the phase (1 source, 2 defer) above }
-          ImportPhase := (I shr 56) and $FF;
+          ImportPhase := (I shr 56) and $0F;
+          ImportComputed := ((I shr 56) and $10) = 0;
           if ((I shr 40) and $FFFF) = $FFFF then VB := VUndefined else VB := R[(I shr 40) and $FFFF];
-          if not XImport(Tpl, R[(I shr 24) and $FFFF], VB, V) then begin ImportPhase := 0; goto LThrow; end;
+          if not XImport(Tpl, R[(I shr 24) and $FFFF], VB, V) then
+          begin
+            ImportPhase := 0;
+            ImportComputed := False;
+            goto LThrow;
+          end;
           ImportPhase := 0;
+          ImportComputed := False;
           R[A] := V;
         end;
       opImportMeta:

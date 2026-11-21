@@ -108,9 +108,13 @@ type
     FRandomRoot: IGocciaHostRandom;
     FProfileOpcodes, FProfileFunctions: Boolean;
     FJSModuleSources: Boolean;
+    FProjectRoot: string;
+    FHostEnvironmentGuest: Boolean;
     { the entry's file name (Run): an audited decision made outside every script frame is the entry's }
     FRunFile: UnicodeString;
     function NextRandom(Realm: Integer; out D: Double): Boolean;
+    function AuditRead(Allow: Boolean; const Subject, Reason: string): Boolean;
+    function HostReady(var Err: UnicodeString): Boolean;
     { G2.VM's AuditHook: the script's decisions, located at its call site }
     function AuditFromScript(Kind: TAuditKind; Allow: Boolean; const Subject, Reason: UnicodeString): Boolean;
     procedure SetCapabilities(const Value: TGocciaCapabilities);
@@ -193,6 +197,23 @@ type
     { GocciaScript's experimental JavaScript module source objects (--experimental-js-module-source): a source
       phase import of a source text module gives one }
     property JSModuleSources: Boolean read FJSModuleSources write FJSModuleSources;
+    { the read capability's module-graph exemption (ADR 0122): a literal import inside this directory (canonical) needs
+      no read grant (by default the nearest goccia config's directory above the entry, else the entry's). With Capabilities set (and no sandbox) the run's module reads are judged by them (G2.HostAPI
+      SetReadPolicy) }
+    property ProjectRoot: string read FProjectRoot write FProjectRoot;
+    { what the host loads for a config between these (its manifests and globals modules) is read under the run's
+      read capability, as the script's own reads are }
+    { the error the host's last failed load threw (a globals module's, a manifest's) described in R as a run's:
+      False when it threw none }
+    function DescribeHostError(var R: TG2RunResult): Boolean;
+    procedure BeginGuestLoads;
+    procedure EndGuestLoads;
+    { the config naming what the next guest load reads: its own tree needs no grant }
+    procedure GuestScope(const Dir: string);
+    { whether a file a config names may be read (under BeginGuestLoads): False with Err the refusal }
+    function GuestReadAllowed(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+    { the host environment's module is a config's (read as the script's), not the command line's }
+    property HostEnvironmentGuest: Boolean read FHostEnvironmentGuest write FHostEnvironmentGuest;
     property ProfileFunctions: Boolean read FProfileFunctions write FProfileFunctions;
     { a promise rejected with no handler that still has none when the run ends fails the run, its reason the
       uncaught error (GocciaRunner) }
@@ -208,6 +229,9 @@ type
 
 { the recommended language profile: restricted, every compatibility switch off }
 function RecommendedProfile: TLangProfile;
+{ the read capability's project for an entry (ADR 0122): the nearest goccia config's directory above it, else its
+  own directory, canonical }
+function DiscoverProjectRoot(const EntryFileName: string): string;
 
 implementation
 
@@ -628,8 +652,51 @@ begin
   Result := Audit(Kinds[Kind], Allow, Subject, Reason);
 end;
 
+function TG2Engine.DescribeHostError(var R: TG2RunResult): Boolean;
+var V: TValue;
+begin
+  R := Default(TG2RunResult);
+  V := TakeHostError;
+  if V = VUndefined then Exit(False);
+  PushRoot(V);
+  R.ErrorMessage := ThrownText(RootAt(TempTop - 1));
+  DescribeThrown(RootAt(TempTop - 1), R);
+  PopRoots(1);
+  Pending := VUndefined;
+  Result := True;
+end;
+
+procedure TG2Engine.BeginGuestLoads;
+begin
+  SetReadPolicy(FHasCapabilities and not SandboxActive, FCapabilities, FProjectRoot, AuditRead);
+  SetGuestLoads(True);
+end;
+
+procedure TG2Engine.GuestScope(const Dir: string);
+begin
+  SetGuestScope(Dir);
+end;
+
+procedure TG2Engine.EndGuestLoads;
+begin
+  SetGuestScope('');
+  SetGuestLoads(False);
+  SetReadPolicy(False, TGocciaCapabilities.None, '', nil);
+end;
+
+function TG2Engine.GuestReadAllowed(const Path: UnicodeString; var Err: UnicodeString): Boolean;
+begin
+  Result := G2.HostAPI.GuestReadAllowed(Path, Err);
+end;
+
+function TG2Engine.AuditRead(Allow: Boolean; const Subject, Reason: string): Boolean;
+begin
+  Result := Audit(gckReadFile, Allow, Subject, Reason);
+end;
+
 destructor TG2Engine.Destroy;
 begin
+  SetReadPolicy(False, TGocciaCapabilities.None, '', nil);
   CompileCoverage := False;
   CoverageOn := False;
   AuditHook := nil;
@@ -644,6 +711,28 @@ begin
   FFIDone;
   EngineDone;
   inherited Destroy;
+end;
+
+{ the read capability's project (ADR 0122), as GocciaScript's engine finds it: the directory of the nearest goccia
+  config above the entry, or the entry's own directory }
+function DiscoverProjectRoot(const EntryFileName: string): string;
+const
+  NAMES: array[0..2] of string = ('goccia.json', 'goccia.json5', 'goccia.toml');
+var EntryDirectory, Directory, Parent: string; I: Integer;
+begin
+  EntryDirectory := ExcludeTrailingPathDelimiter(ExtractFilePath(ExpandFileName(EntryFileName)));
+  if EntryDirectory = '' then EntryDirectory := GetCurrentDir;
+  Directory := EntryDirectory;
+  while Directory <> '' do
+  begin
+    for I := Low(NAMES) to High(NAMES) do
+      if FileExists(IncludeTrailingPathDelimiter(Directory) + NAMES[I]) then
+        Exit(CanonicalCapabilityPath(Directory));
+    Parent := ExtractFileDir(Directory);
+    if (Parent = '') or (Parent = Directory) then Break;
+    Directory := Parent;
+  end;
+  Result := CanonicalCapabilityPath(EntryDirectory);
 end;
 
 function TG2Engine.ForkRandom: IGocciaHostRandom;
@@ -686,6 +775,14 @@ begin
   Pending := VUndefined;
 end;
 
+{ the host prepared for a load of its own before the run, under the script's language profile (a module it evaluates
+  is compiled as the script's code is, its errors with stacks) }
+function TG2Engine.HostReady(var Err: UnicodeString): Boolean;
+begin
+  Result := PrepareHost(Err);
+  if Result then SetActiveProfile(FProfile);
+end;
+
 function TG2Engine.PrepareHost(var Err: UnicodeString): Boolean;
 begin
   if FHostReady then Exit(True);
@@ -694,42 +791,49 @@ end;
 
 function TG2Engine.InjectDataGlobals(const Text, Ext, Path: UnicodeString; var Err: UnicodeString): Boolean;
 begin
-  Result := PrepareHost(Err) and G2.HostAPI.InjectDataGlobals(Text, Ext, Path, Err);
+  TakeHostError;
+  Result := HostReady(Err) and G2.HostAPI.InjectDataGlobals(Text, Ext, Path, Err);
 end;
 
 function TG2Engine.InjectInlineGlobal(const Name, ValueText: UnicodeString; var Err: UnicodeString): Boolean;
 begin
-  Result := PrepareHost(Err) and G2.HostAPI.InjectInlineGlobal(Name, ValueText, Err);
+  TakeHostError;
+  Result := HostReady(Err) and G2.HostAPI.InjectInlineGlobal(Name, ValueText, Err);
 end;
 
 function TG2Engine.DefineConfigVirtualModules(const ConfigPath: UnicodeString; var Err: UnicodeString): Boolean;
 begin
-  Result := PrepareHost(Err) and G2.HostAPI.DefineConfigVirtualModules(ConfigPath, Err);
+  TakeHostError;
+  Result := HostReady(Err) and G2.HostAPI.DefineConfigVirtualModules(ConfigPath, Err);
 end;
 
 function TG2Engine.DefineManifestVirtualModules(const ManifestPath: UnicodeString; var Err: UnicodeString): Boolean;
 begin
-  Result := PrepareHost(Err) and G2.HostAPI.DefineManifestVirtualModules(ManifestPath, Err);
+  TakeHostError;
+  Result := HostReady(Err) and G2.HostAPI.DefineManifestVirtualModules(ManifestPath, Err);
 end;
 
 function TG2Engine.DefineInlineVirtualModule(const Definition, Base: UnicodeString; var Err: UnicodeString): Boolean;
 begin
-  Result := PrepareHost(Err) and G2.HostAPI.DefineInlineVirtualModule(Definition, Base, Err);
+  TakeHostError;
+  Result := HostReady(Err) and G2.HostAPI.DefineInlineVirtualModule(Definition, Base, Err);
 end;
 
 function TG2Engine.InjectModuleGlobals(const Path: UnicodeString; var Err: UnicodeString): Boolean;
 begin
-  Result := PrepareHost(Err) and G2.HostAPI.InjectModuleGlobals(Path, Err);
+  TakeHostError;
+  Result := HostReady(Err) and G2.HostAPI.InjectModuleGlobals(Path, Err);
 end;
 
 function TG2Engine.DefineModuleManifestVirtualModules(const Path: UnicodeString; var Err: UnicodeString): Boolean;
 begin
-  Result := PrepareHost(Err) and G2.HostAPI.DefineModuleManifestVirtualModules(Path, Err);
+  TakeHostError;
+  Result := HostReady(Err) and G2.HostAPI.DefineModuleManifestVirtualModules(Path, Err);
 end;
 
 function TG2Engine.Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
 var Kind, Phase, I, FailLine, FailColumn: Integer; T: PFuncTemplate; Err, FailPath: UnicodeString;
-  S, Thrown, Completion: TValue; Start: Int64;
+  S, Thrown, Completion, Imports: TValue; Start: Int64;
   Compiled: Boolean;
 begin
   Result := Default(TG2RunResult);
@@ -743,6 +847,11 @@ begin
   SetActiveProfile(FProfile);
   SetConsoleSink(FOnConsole);
   SetJSModuleSources(FJSModuleSources);
+  { the project the entry is in, unless the host named one }
+  if (FProjectRoot = '') and FHasCapabilities and not SandboxActive then FProjectRoot := DiscoverProjectRoot(FileName);
+  { the read policy judges a config's host-environment module as the script's reads, not the command line's }
+  SetReadPolicy(FHostEnvironmentGuest and FHasCapabilities and not SandboxActive, FCapabilities, FProjectRoot,
+    AuditRead);
   { coverage: the run's code compiled with a line for every source line, and run through the coverage hook }
   CompileCoverage := FCoverage;
   CoverageOn := FCoverage;
@@ -752,7 +861,15 @@ begin
   ClearLoadFailure;
   TakeResolveCandidate;
   { the JavaScript host environment, before the entry: a provider that does not load fails the run with its error }
-  if (FHostEnvironment <> '') and not FEnvLoaded and not LoadHostEnvironment then
+  if FHostEnvironmentGuest then SetGuestLoads(True);
+  try
+    if (FHostEnvironment <> '') and not FEnvLoaded then Compiled := LoadHostEnvironment
+    else Compiled := True;
+  finally
+    SetGuestLoads(False);
+  end;
+  SetReadPolicy(FHasCapabilities and not SandboxActive, FCapabilities, FProjectRoot, AuditRead);
+  if not Compiled then
   begin
     PushRoot(Pending);
     Pending := VUndefined;
@@ -818,7 +935,21 @@ begin
     else
     begin
       Completion := VUndefined;
-      Result.Ok := RunScriptRes(T, Completion);
+      Result.Ok := True;
+      { an explicit Script's imports: their graph linked and evaluated first, then bound as its globals }
+      if ScriptImportSource <> '' then
+      begin
+        Result.Ok := StartScriptImports(UnicodeString(ExpandFileName(FileName)), ScriptImportSource, Imports);
+        if Result.Ok then
+        begin
+          PushRoot(Imports);
+          if PromiseStatus(Imports, Completion) = 0 then Result.Ok := RunEventLoop;
+          Result.Ok := Result.Ok and FinishScriptImports(UnicodeString(ExpandFileName(FileName)), RootAt(TempTop - 1));
+          PopRoots(1);
+        end;
+        Completion := VUndefined;
+      end;
+      if Result.Ok then Result.Ok := RunScriptRes(T, Completion);
       { nothing allocates between the run's return and the push }
       PopRoots(1);
       PushRoot(Completion);
@@ -873,8 +1004,13 @@ begin
       { a static import that did not load: GocciaScript's RuntimeError at the declaration }
       if LoadFailure(FailPath, FailLine, FailColumn) then
       begin
+        { an explicit Script's import declaration: the entry's own }
+        if (Length(FailPath) > Length(ScriptImportsSuffix)) and
+           (Copy(FailPath, Length(FailPath) - Length(ScriptImportsSuffix) + 1, MaxInt) = ScriptImportsSuffix) then
+          SetLength(FailPath, Length(FailPath) - Length(ScriptImportsSuffix));
         Result.ErrorIsError := True;
-        Result.ErrorName := 'RuntimeError';
+        { a refused read stays the PermissionDenied it is, located at the declaration }
+        if Result.ErrorName <> 'PermissionDenied' then Result.ErrorName := 'RuntimeError';
         Result.ErrorFile := FailPath;
         Result.ErrorLine := FailLine;
         Result.ErrorColumn := FailColumn;

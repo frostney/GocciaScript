@@ -9,8 +9,8 @@ program GocciaRunnerG2;
   Sandbox mode runs each program on a G2 engine over the virtual filesystem
   (Goccia.CLI.G2SandboxHost).
 
-  Not yet on G2: install mode, bytecode files
-  (--prefer-bytecode), and the read capability's audit events. }
+  Not yet on G2: install mode and provider imports, and bytecode files
+  (--prefer-bytecode). }
 
 {$I Goccia.inc}
 
@@ -961,15 +961,32 @@ begin
   AError := '';
   Err := '';
   Entries := ConfigNamedEntries(FGlobalFiles);
-  for I := 0 to High(Entries) do
-  begin
-    Path := ConfigInputPath(Entries[I].Value, Entries[I].SourcePath);
-    if IsStructuredGlobalsFile(Path) and not AEngine.InjectDataGlobals(ReadFileUnicode(Path),
-       UnicodeString(ExtractFileExt(Path)), UnicodeString(Path), Err) then
+  { a config's globals are read as the script's: under its read capability, a module evaluated in its engine }
+  AEngine.BeginGuestLoads;
+  try
+    for I := 0 to High(Entries) do
     begin
-      AError := UTF8Encode(Err);
-      Exit;
+      Path := ConfigInputPath(Entries[I].Value, Entries[I].SourcePath);
+      { judged against the config that names it (an extends base names its own files) }
+      AEngine.GuestScope(ExtractFileDir(ExpandFileName(Entries[I].SourcePath)));
+      if IsStructuredGlobalsFile(Path) then
+      begin
+        if not AEngine.GuestReadAllowed(UnicodeString(Path), Err) or
+           not AEngine.InjectDataGlobals(ReadFileUnicode(Path), UnicodeString(ExtractFileExt(Path)),
+           UnicodeString(Path), Err) then
+        begin
+          AError := UTF8Encode(Err);
+          Exit;
+        end;
+      end
+      else if not AEngine.InjectModuleGlobals(UTF8Decode(Path), Err) then
+      begin
+        AError := UTF8Encode(Err);
+        Exit;
+      end;
     end;
+  finally
+    AEngine.EndGuestLoads;
   end;
   if FGlobalFiles.FromCommandLine then
     for I := 0 to FGlobalFiles.Values.Count - 1 do
@@ -1014,16 +1031,22 @@ begin
   Result := False;
   AError := '';
   Err := '';
-  if (RootConfigPath <> '') and not AEngine.DefineConfigVirtualModules(UTF8Decode(RootConfigPath), Err) then
-  begin
-    AError := UTF8Encode(Err);
-    Exit;
-  end;
-  if (AFileConfigPath <> '') and (ExpandFileName(AFileConfigPath) <> ExpandFileName(RootConfigPath)) and
-     not AEngine.DefineConfigVirtualModules(UTF8Decode(AFileConfigPath), Err) then
-  begin
-    AError := UTF8Encode(Err);
-    Exit;
+  { a config's manifests are read as the script's, under its read capability }
+  AEngine.BeginGuestLoads;
+  try
+    if (RootConfigPath <> '') and not AEngine.DefineConfigVirtualModules(UTF8Decode(RootConfigPath), Err) then
+    begin
+      AError := UTF8Encode(Err);
+      Exit;
+    end;
+    if (AFileConfigPath <> '') and (ExpandFileName(AFileConfigPath) <> ExpandFileName(RootConfigPath)) and
+       not AEngine.DefineConfigVirtualModules(UTF8Decode(AFileConfigPath), Err) then
+    begin
+      AError := UTF8Encode(Err);
+      Exit;
+    end;
+  finally
+    AEngine.EndGuestLoads;
   end;
   Result := DefineCommandLineVirtualModules(AEngine, AError);
 end;
@@ -1295,6 +1318,7 @@ var
   MemoryStart: TG2MemoryStats;
   Capabilities: TGocciaCapabilities;
   Effective: TGocciaCapabilityAuditEvent;
+  HostError: TG2RunResult;
 begin
   Start := GetNanoseconds;
   { the console capture, which also prints the parse warnings (not in a JSON report, as GocciaRunner) }
@@ -1337,6 +1361,7 @@ begin
     try
       MemoryStart := Engine.Memory;
       Engine.Capabilities := Capabilities;
+      Engine.ProjectRoot := DiscoverProjectRoot(AFileName);
       Engine.ConfigJson := HostConfigJson(EngineOptions, FileConfig);
       Engine.Coverage := Assigned(FCoverageMain);
       { --profile: this thread records into the main thread's profilers }
@@ -1385,6 +1410,8 @@ begin
           end;
         end;
         Engine.HostEnvironment := UnicodeString(HostEnvironmentPath(FileConfig, Engine.Deterministic));
+        { a config's host-environment module is read as the script's }
+        Engine.HostEnvironmentGuest := not FHostEnvironmentModule.FromCommandLine;
       except
         on E: TCLIUsageError do
           raise;
@@ -1416,14 +1443,27 @@ begin
       { a module definition that cannot apply is a configuration error, as GocciaRunner's }
       if not DefineVirtualModules(Engine, FileConfigPath, GlobalsError) then
       begin
-        WriteLn('Fatal error: ', GlobalsError);
+        { an error a manifest threw, by its name (a refused read's PermissionDenied) }
+        if Engine.DescribeHostError(HostError) and HostError.ErrorIsError and (HostError.ErrorName <> '') then
+          WriteLn('Fatal error: ', UTF8Encode(HostError.ErrorName), ': ', UTF8Encode(HostError.ErrorText))
+        else
+          WriteLn('Fatal error: ', GlobalsError);
         ExitCode := 1;
         Exit;
       end;
       if not InjectGlobals(Engine, GlobalsError) then
       begin
-        WriteLn(FormatErrorWithSourceContext('RuntimeError', GlobalsError, AFileName, 0, 0,
-          ASource, IsColorTerminal, ''));
+        { a globals module that threw is reported as the run's error would be, located where it threw }
+        if Engine.DescribeHostError(HostError) and HostError.ErrorIsError and (HostError.ErrorLine > 0) then
+          WriteLn(FailureText(UTF8Encode(HostError.ErrorFile), HostError, nil, Engine, '', nil, True, True,
+            IsColorTerminal))
+        { an error without a location of its own (a refused import's PermissionDenied) keeps its name }
+        else if HostError.ErrorIsError and (HostError.ErrorName <> '') then
+          WriteLn(FormatErrorWithSourceContext(UTF8Encode(HostError.ErrorName), UTF8Encode(HostError.ErrorText),
+            AFileName, 0, 0, ASource, IsColorTerminal, ''))
+        else
+          WriteLn(FormatErrorWithSourceContext('RuntimeError', GlobalsError, AFileName, 0, 0,
+            ASource, IsColorTerminal, ''));
         ExitCode := 1;
         Exit;
       end;

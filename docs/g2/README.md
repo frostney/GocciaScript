@@ -58,7 +58,8 @@ until CI's toolchain is FPC 3.3.1.
 ### Execution limits
 
 The host takes GocciaRunner's limits: `--timeout=` (500ms, 5s, 2m or milliseconds), `--max-instructions=N`,
-`--max-stack=N` (frames; 0 or none is the VM's bound of 200,000) and `--max-memory=`. A spent timeout or
+`--max-stack=N` (nested calls below the entry's frame; 0 or none is the VM's bound of 200,000) and
+`--max-memory=`. A spent timeout or
 instruction budget aborts the run: every taken backward jump and every call checks it, no `catch` or `finally`
 runs and no further job runs, and the host prints `Fatal error: file timed out after Nms` or `Fatal error:
 Execution exceeded instruction limit of N` and exits 1. A timer thread interrupts the engine thread by setting
@@ -74,6 +75,21 @@ GocciaRunner's JSON report names it `MemoryLimitError`). An explicit reservation
 `ArrayBuffer`'s bytes, is still a catchable `RangeError`. Compiled loops poll for the abort at every back edge (one
 compare of the thread's `Interrupt`): the baseline code exits to the interpreter there, and an optimized region
 leaves at the jump with its frame state written back. `scripts/g2/limits-test.sh` checks all of this.
+
+Whatever the frame bound, a call that native code makes (a getter, a `toString`, a sort comparator, a generator's
+`next()`) nests the interpreter on the native stack, so it is refused with a `RangeError` once that stack runs low.
+
+### Script entries with imports
+
+An explicit `--source-type=script` entry keeps GocciaScript's acceptance of import and export declarations
+([language.md](../language.md#modules)). G2 takes the entry's import declarations and re-exports out of the
+Script and runs them, each at its own line and column, as a module of their own keyed by the entry's path plus
+`#script-imports`, so its requests resolve as the entry's would. That module's graph links as one, so a missing
+export fails before any module evaluates. It then evaluates, through the event loop when a top-level await
+waits on more. Each imported name then becomes a const global lexical binding that shares the cell of the binding
+it imports: it reads live, throws in that binding's temporal dead zone, and refuses assignment. An export
+declaration declares its binding as it would without `export`. The entry's own file, imported by a module, loads
+as a separate module.
 
 ### Host environment
 
@@ -141,6 +157,18 @@ fast loop, no compiled code). The hook counts a line each time its frame enters 
 it (and registers each closure it creates, so one never called reports 0), and the outcome of each conditional
 jump: branch 0 when it jumps, 1 when it falls through. A function is located where its source starts. Each file's
 thread keeps its own tracker, merged into the run's when the file ends.
+
+### Read capability
+
+The read capability judges the run's module graph as GocciaScript's loader does ([ADR 0122](../adr/0122-unified-capability-model.md)): a deny wins; a literal import inside the project (the nearest goccia config's directory, or the entry's, outside its
+`.goccia` cache) or inside the package a literal bare import resolved in needs no grant; anything else, a computed
+`import()` specifier included, needs a read grant. `G2.HostAPI` sets the resolver's probe guard, so every candidate
+path is judged before the host is asked whether it exists, then judges the file the request resolved to. A refusal
+throws `PermissionDenied` naming the specifier as written, with the host path and the grant in the host's
+suggestion, and both kinds of decision are audited. The host's own loads before the run (the command line's
+manifests, globals and host environment) are not judged. What a config names is read as the script's: judged
+against the directory of the config that names it, its JavaScript manifests and globals modules evaluated in a realm
+of their own, and a globals module may export data only.
 
 ### Profiling
 

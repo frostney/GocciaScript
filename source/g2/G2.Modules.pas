@@ -27,6 +27,21 @@ function RunModuleFile(const Path: UnicodeString; var Phase: Integer): Boolean;
 function EvaluateModuleNamespace(const Path: UnicodeString; var NS: TValue): Boolean;
 { whether the entry RunModuleFile ran is still evaluating: its top-level await waits on what nothing settled }
 function EntryEvaluationPending: Boolean;
+{ the error a host's resolution refused a request with (its hook returning -2): the import throws it }
+procedure SetResolveError(V: TValue);
+{ whether the module at Path (an import's referrer) was loaded for the host }
+function HostOwnedReferrer(const Path: UnicodeString): Boolean;
+{ whether a module record of this thread is keyed Key (it was loaded, by the host or the script) }
+function ModuleRecordExists(const Key: UnicodeString): Boolean;
+{ an explicit Script entry's import declarations and re-exports (GocciaScript accepts them, docs/language.md, Entry
+  source type), Source a module of only them (G2.Eval ScriptImportSource), keyed EntryPath + ScriptImportsSuffix,
+  whose requests resolve as the entry's own would. Start loads and links it as one graph (a link error evaluates no
+  module), then evaluates it, its microtasks run: Evaluation its promise, which the host settles through its event
+  loop when a top-level await waits on more. Finish, once it fulfilled, binds each name it imports as a const global
+  lexical binding on the binding it imports, for the Script to run against; False with the error pending. }
+const ScriptImportsSuffix = '#script-imports';
+function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
+function FinishScriptImports(const EntryPath: UnicodeString; Evaluation: TValue): Boolean;
 
 type
   { a host's modules: for a request key (a specifier with a scheme, as goccia:csv, kept as written; otherwise a
@@ -146,6 +161,7 @@ threadvar
   JSModuleSourcesOn: Boolean;
   { the evaluation promise of the entry RunModuleFile ran last }
   EntryEvalPromise: TValue;
+  ResolveErrorV: TValue;
 
 destructor TModRec.Destroy;
 begin
@@ -255,6 +271,8 @@ begin
     case HostResolve(Spec, Referrer, Result) of
       1: Exit;
       -1: Exit(#0 + Result);
+      { the error the host made (ResolveError), not a message }
+      -2: Exit(#0#1);
     end;
   if Assigned(HostModules) and IsSchemeSpecifier(Spec) then Exit(Spec);
   if (Spec <> '') and (Spec[1] = '/') then Exit(UnicodeString(ExpandFileName(string(Spec))));
@@ -371,7 +389,6 @@ end;
 
 function ClosedCell(V: TValue): TValue; forward;
 function HasModuleSource(M: TModRec): Boolean; forward;
-function HostOwnedReferrer(const Path: UnicodeString): Boolean; forward;
 function ModuleSourceOf(M: TModRec): TValue; forward;
 function MakeHostModule(const Key: UnicodeString; Exp: TValue; var M: TModRec): Boolean; forward;
 
@@ -472,6 +489,13 @@ end;
 function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
 var Src, Err, ErrName, Resolved: UnicodeString; I: Integer; D: TModRec; V: TValue; Compiled: Boolean;
 begin
+  if (Length(Path) >= 2) and (Path[1] = #0) and (Path[2] = #1) then
+  begin
+    { a resolution the host refused with an error of its own }
+    Pending := ResolveErrorV;
+    ResolveErrorV := VUndefined;
+    Exit(False);
+  end;
   if (Path <> '') and (Path[1] = #0) then
   begin
     { a failed resolution (ResolvePath); a typed request carries its type after #1 }
@@ -852,8 +876,8 @@ begin
           if not (R.Kind in [rkBinding, rkNamespace, rkDeferNS, rkSource]) then
           begin
             if R.Kind = rkAmbiguous then
-              ThrowError('SyntaxError', 'The requested module ''' + RequestSpecifier(M.Info.Imports[I].Request) +
-                ''' contains conflicting star exports for name ''' + M.Info.Imports[I].ImportName + '''')
+              ThrowError('SyntaxError', MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName) +
+                ' (its star exports provide conflicting bindings for it)')
             else
               ThrowError('SyntaxError', MissingExportMessage(M.Info.Imports[I].Request, M.Info.Imports[I].ImportName));
             Exit(LinkFail(L));
@@ -1240,6 +1264,74 @@ begin
   Result := True;
 end;
 
+function ModuleRecordExists(const Key: UnicodeString): Boolean;
+begin
+  Result := (Mods <> nil) and (FindModule(Key) <> nil);
+end;
+
+{ G2.VM's ModSlotNameHook: the import or local export of the module whose cell table is Table at Slot }
+function ModSlotName(Table: TValue; Slot: Integer): UnicodeString;
+var M: TModRec; I: Integer;
+begin
+  Result := '';
+  if Mods = nil then Exit;
+  for M in Mods do
+    if (M.Info <> nil) and (GetRoot(M, rTable) = Table) then
+    begin
+      for I := 0 to High(M.Info.Imports) do
+        if (M.Info.Imports[I].Slot = Slot) and (M.Info.Imports[I].LocalName <> '') then
+          Exit(M.Info.Imports[I].LocalName);
+      for I := 0 to High(M.Info.LocalExports) do
+        if M.Info.LocalExports[I].Slot = Slot then Exit(M.Info.LocalExports[I].LocalName);
+      Exit;
+    end;
+end;
+
+function StartScriptImports(const EntryPath, Source: UnicodeString; var Evaluation: TValue): Boolean;
+var M: TModRec; R: TValue; Key, SavedPath, SavedSrc: UnicodeString; Ok: Boolean;
+begin
+  Evaluation := VUndefined;
+  Key := EntryPath + ScriptImportsSuffix;
+  SavedPath := ProvidedPath;
+  SavedSrc := ProvidedSrc;
+  SetProvidedSource(Key, Source);
+  try
+    Ok := LoadAndLink(Key, M);
+  finally
+    SetProvidedSource(SavedPath, SavedSrc);
+  end;
+  if not Ok then Exit(False);
+  PushRoot(EvaluateModule(M));
+  if PromiseStatus(RootAt(TempTop - 1), R) = 0 then
+    if not RunMicrotasks then begin PopRoots(1); Exit(False); end;
+  Evaluation := RootAt(TempTop - 1);
+  PopRoots(1);
+  Result := True;
+end;
+
+function FinishScriptImports(const EntryPath: UnicodeString; Evaluation: TValue): Boolean;
+var M: TModRec; R: TValue; I: Integer;
+begin
+  case PromiseStatus(Evaluation, R) of
+    1: ;
+    2: begin Pending := R; Exit(False); end;
+  else
+    Exit(ThrowTypeError('await: Promise did not settle'));
+  end;
+  M := FindModule(EntryPath + ScriptImportsSuffix);
+  if (M = nil) or (M.Info = nil) then Exit(ThrowTypeError('The Script entry''s imports did not load'));
+  for I := 0 to High(M.Info.Imports) do
+    if M.Info.Imports[I].LocalName <> '' then
+      if not BindGlobalImport(AtomOf(M.Info.Imports[I].LocalName),
+        ObjOf(GetRoot(M, rTable))^.Elements^.Data[M.Info.Imports[I].Slot]) then Exit(False);
+  Result := True;
+end;
+
+procedure SetResolveError(V: TValue);
+begin
+  ResolveErrorV := V;
+end;
+
 function EntryEvaluationPending: Boolean;
 var R: TValue;
 begin
@@ -1281,7 +1373,7 @@ end;
 procedure ImportFulfilled(Data: Integer);
 var I: Integer; M: TModRec; NS: TValue;
 begin
-  I := Data and $7FFFFF;
+  I := Data and $3FFFFF;
   M := Mods[IntOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1])];
   if (Data and $800000) <> 0 then NS := GetDeferredNamespace(M) else NS := GetNamespace(M);
   SettleImport(I, True, NS);
@@ -1298,7 +1390,7 @@ end;
 function ImportDepFulfilledFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
 var I, N: Integer;
 begin
-  I := NativeData and $7FFFFF;
+  I := NativeData and $3FFFFF;
   N := IntOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 2]) - 1;
   ValueArrayStore(ObjOf(PendingImports)^.Elements, I * 3 + 2, MkInt(N));
   if N = 0 then ImportFulfilled(NativeData);
@@ -1310,7 +1402,7 @@ function ImportRejectedFn(Args: PValue; Argc: Integer; var Res: TValue): Boolean
 var E: TValue;
 begin
   if Argc >= 1 then E := Args[1] else E := VUndefined;
-  SettleImport(NativeData and $7FFFFF, False, E);
+  SettleImport(NativeData and $3FFFFF, False, E);
   Res := VUndefined;
   Result := True;
 end;
@@ -1336,12 +1428,13 @@ begin
   Result := True;
   { NativeData read once: the loading and linking below run other natives }
   Data := NativeData;
-  I := Data and $7FFFFF;
+  I := Data and $3FFFFF;
   Ref := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 1]));
   Spec := StrToUnicode(StrOf(ObjOf(PendingImports)^.Elements^.Data[I * 3 + 2]));
   { a host module's import loads modules for the host }
   HostLoading := HostOwnedReferrer(Ref);
   try
+    ImportComputed := (Data and $400000) <> 0;
     Loaded := LoadAndLink(ResolveRequest(Spec, Ref), M);
   finally
     HostLoading := False;
@@ -1478,6 +1571,8 @@ begin
   if Length(ImportStacks) <= Idx then SetLength(ImportStacks, Idx + 16);
   ImportStacks[Idx] := StackFramesNow;
   if Ph = 2 then Idx := Idx or $800000;
+  { a specifier computed at run time, for the host's read policy (G2.VM ImportComputed) }
+  if ImportComputed then Idx := Idx or $400000;
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 2));
   ArrayPush(ObjOf(PendingImports), StrFromUnicode(Ref));
   ArrayPush(ObjOf(PendingImports), RootAt(TempTop - 1));
@@ -1634,6 +1729,8 @@ begin
   AddRoot(@ModRoots);
   AddRoot(@EntryEvalPromise);
   EntryEvalPromise := VUndefined;
+  AddRoot(@ResolveErrorV);
+  ResolveErrorV := VUndefined;
   AddRoot(@JSModSources);
   JSModSources := MkPtr(NewArray(0, 0));
   AddRoot(@PendingImports);
@@ -1641,6 +1738,7 @@ begin
   PendingImports := MkPtr(NewArray(0, 16));
   ImportHook := @DoImport;
   ImportMetaHook := @DoImportMeta;
+  ModSlotNameHook := @ModSlotName;
 end;
 
 end.
