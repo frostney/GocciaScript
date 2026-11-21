@@ -77,10 +77,11 @@ function NameListContains(const ANames: TArray<string>;
 // The let and const bindings declared by the statements that open a function
 // body or a block, up to the first statement of another kind, whose TDZ hole
 // nothing can observe: no initializer evaluated before a binding's own
-// declaration has completed can reach it, by InitializerAvoidsOwnBinding. The
-// caller rules out a body or block with hoisted function declarations, which
-// exist from its entry and could reach the binding from a call in an
-// initializer, and coverage. Such a binding needs no hole on entry, because
+// declaration has completed can reach it, by InitializerAvoidsOwnBinding, and
+// none of them yields, which would suspend the frame with the slot still
+// holding what an earlier block left there. The caller rules out a body or
+// block with hoisted function declarations, which exist from its entry and
+// could reach the binding from a call in an initializer, and coverage. Such a binding needs no hole on entry, because
 // its declaration initializes it before anything can read it. A block is
 // entered afresh on each iteration of a loop around it, and a closure an
 // earlier iteration created reaches that iteration's binding, never the new
@@ -117,6 +118,11 @@ type
     // expression is then accepted when its source text cannot name the
     // binding.
     AvoidName: string;
+    // True for the entry-hole proof: a yield suspends the frame while the
+    // binding's slot still holds what an earlier block left in it, because
+    // YIELD_FLAG_TEMP_OPERAND hands the yielded value out through a temporary
+    // instead of writing it there.
+    RejectYields: Boolean;
     // The parameter-list proof accumulates references once across the prefix.
     // Other proofs leave these nil and keep their single-name predicate.
     SeenNames: TUnicodeStringList;
@@ -408,7 +414,7 @@ begin
     Result := not AScan.RejectLocalWrites and
       ScanNode(AScan, TGocciaAwaitExpression(AExpr).Operand)
   else if Kind = TGocciaYieldExpression then
-    Result := not AScan.RejectLocalWrites and
+    Result := not AScan.RejectLocalWrites and not AScan.RejectYields and
       ScanNode(AScan, TGocciaYieldExpression(AExpr).Operand)
   else if Kind = TGocciaDestructuringAssignmentExpression then
     Result := not AScan.RejectLocalWrites and
@@ -634,6 +640,23 @@ begin
   Result := ScanNode(Scan, AInitializer);
 end;
 
+// InitializerAvoidsOwnBinding for the entry-hole proof, which also refuses a
+// yield anywhere in the initializer outside a nested function.
+function InitializerLeavesHoleUnobservable(
+  const AInitializer: TGocciaExpression; const AName: string): Boolean;
+var
+  Scan: TScan;
+begin
+  Scan := Default(TScan);
+  Scan.RejectLocalWrites := False;
+  Scan.RejectYields := True;
+  Scan.Budget := -1;
+  Scan.AvoidName := AName;
+  if AName = '' then
+    Exit(False);
+  Result := ScanNode(Scan, AInitializer);
+end;
+
 function NameListContains(const ANames: TArray<string>;
   const AName: string): Boolean;
 var
@@ -672,12 +695,12 @@ begin
       SetLength(Initializers, InitCount + 1);
       Initializers[InitCount] := Decl.Variables[J].Initializer;
       Inc(InitCount);
-      // An initializer that is a yield suspends the frame with the slot still
-      // holding what an earlier block left in it (YIELD_FLAG_TEMP_OPERAND no
-      // longer writes the yielded value there), so the entry hole stays.
-      Unobservable := not (Initializers[InitCount - 1] is TGocciaYieldExpression);
+      // A yield in this or an earlier initializer, however deeply nested,
+      // suspends the frame with the binding's slot still holding what an
+      // earlier block left in it, so the entry hole stays.
+      Unobservable := True;
       for K := 0 to InitCount - 1 do
-        if Unobservable and not InitializerAvoidsOwnBinding(Initializers[K],
+        if not InitializerLeavesHoleUnobservable(Initializers[K],
            Decl.Variables[J].Name) then
         begin
           Unobservable := False;

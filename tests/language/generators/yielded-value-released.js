@@ -106,6 +106,54 @@ describe("a value a suspended generator has yielded", () => {
     expect(grown).toBeLessThan(SIZE / 2);
   });
 
+  test("does not leave a value an exited block dropped in the slot of a binding whose initializer nests a yield", () => {
+    const source = {
+      *produce(pick) {
+        {
+          const discarded = new ArrayBuffer(SIZE);
+          discarded.byteLength;
+        }
+        {
+          const sent = pick ? yield 1 : 0;
+          return sent;
+        }
+      },
+    };
+    const iterator = source.produce(true);
+    const baseline = collect();
+    const first = iterator.next();
+    Goccia.gc();
+    const grown = Goccia.gc.bytesAllocated - baseline;
+    expect(first.value).toBe(1);
+    expect(grown).toBeLessThan(SIZE / 2);
+    expect(iterator.next("resumed")).toEqual({ value: "resumed", done: true });
+  });
+
+  test("does not leave a value an exited block dropped in the slot of a binding declared after a yield initializer", () => {
+    const source = {
+      *produce() {
+        {
+          const first = new ArrayBuffer(SIZE);
+          const second = new ArrayBuffer(SIZE);
+          first.byteLength;
+          second.byteLength;
+        }
+        {
+          const sent = yield 1, later = 2;
+          return [sent, later];
+        }
+      },
+    };
+    const iterator = source.produce();
+    const baseline = collect();
+    const first = iterator.next();
+    Goccia.gc();
+    const grown = Goccia.gc.bytesAllocated - baseline;
+    expect(first.value).toBe(1);
+    expect(grown).toBeLessThan(SIZE / 2);
+    expect(iterator.next("resumed")).toEqual({ value: ["resumed", 2], done: true });
+  });
+
   test("is intact while the consumer holds it across collections", () => {
     const source = {
       *produce() {
