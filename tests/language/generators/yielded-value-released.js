@@ -171,6 +171,26 @@ describe("a value a suspended generator has yielded", () => {
     expect(iterator.next("resumed")).toEqual({ value: "resumed", done: true });
   });
 
+  test("does not keep an operand's arguments when the operand throws into a catch", () => {
+    const take = (buffer, value) => value;
+    const fail = () => {
+      throw new Error("operand failed");
+    };
+    const source = {
+      *produce() {
+        try {
+          yield take(new ArrayBuffer(SIZE), fail());
+        } catch (error) {
+          Goccia.gc();
+          yield Goccia.gc.bytesAllocated;
+        }
+      },
+    };
+    const baseline = collect();
+    const after = source.produce().next().value;
+    expect(after - baseline).toBeLessThan(SIZE / 2);
+  });
+
   test("is intact while the consumer holds it across collections", () => {
     const source = {
       *produce() {

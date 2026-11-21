@@ -168,6 +168,9 @@ type
     FUnclearedAwaitCount: Integer;
     FAwaitTailNode: TObject;
     FAwaitTailDiscard: Integer;
+    FJumpCount: Integer;
+    FYieldClearedLo: Integer;
+    FYieldClearedHi: Integer;
     FPrivatePrefix: string;
     // Register of the class whose body this function's code is evaluating,
     // or -1 outside a class body.
@@ -307,10 +310,15 @@ type
     // start) and folds that peak into the enclosing region.
     function BeginRegisterRegion: Integer;
     function EndRegisterRegion(const ASavedPeak: Integer): Integer;
-    // After code has cleared every register above the first free one, the
-    // enclosing region's peak goes back to APeak (or the first free register,
-    // if that is higher): what was cleared needs no clear again.
-    procedure ResetRegisterRegionPeak(const APeak: Integer);
+    // How many jumps (any instruction with a jump operand) this scope's code
+    // has emitted: code between two equal counts runs straight through.
+    procedure NoteJumpEmitted; {$IFDEF FPC}inline;{$ENDIF}
+    property JumpCount: Integer read FJumpCount;
+    // The registers the last yield cleared before it suspended, [Lo, Hi): an
+    // enclosing yield whose operand emitted no jump need not clear them again,
+    // because they still hold nothing unless allocated since, which raises Lo.
+    procedure NoteYieldCleared(const ALo, AHi: Integer);
+    function YieldClearedHolds(const ASlot: Integer): Boolean;
 
     // How many OP_AWAIT instructions this scope's code has emitted. A
     // statement that emitted one has suspended the frame, which is where a
@@ -714,6 +722,9 @@ begin
   FUnclearedAwaitCount := 0;
   FAwaitTailNode := nil;
   FAwaitTailDiscard := -1;
+  FJumpCount := 0;
+  FYieldClearedLo := 0;
+  FYieldClearedHi := 0;
   FPrivateNameCount := 0;
   FPrivateClassReg := -1;
   FDirectEvalSyntheticArgumentsSlot := -1;
@@ -1209,6 +1220,9 @@ begin
     FMaxSlot := UInt16(FNextSlot);
   if FNextSlot > FRegionPeakSlot then
     FRegionPeakSlot := FNextSlot;
+  // A register allocated again may be written: it is no longer known clear.
+  if FNextSlot > FYieldClearedLo then
+    FYieldClearedLo := FNextSlot;
 end;
 
 procedure TGocciaCompilerScope.NoteAwaitEmitted(const ACodeIndex: Integer);
@@ -1263,12 +1277,20 @@ begin
     FRegionPeakSlot := ASavedPeak;
 end;
 
-procedure TGocciaCompilerScope.ResetRegisterRegionPeak(const APeak: Integer);
+procedure TGocciaCompilerScope.NoteJumpEmitted;
 begin
-  if APeak > FNextSlot then
-    FRegionPeakSlot := APeak
-  else
-    FRegionPeakSlot := FNextSlot;
+  Inc(FJumpCount);
+end;
+
+procedure TGocciaCompilerScope.NoteYieldCleared(const ALo, AHi: Integer);
+begin
+  FYieldClearedLo := ALo;
+  FYieldClearedHi := AHi;
+end;
+
+function TGocciaCompilerScope.YieldClearedHolds(const ASlot: Integer): Boolean;
+begin
+  Result := (ASlot >= FYieldClearedLo) and (ASlot < FYieldClearedHi);
 end;
 
 procedure TGocciaCompilerScope.FreeRegister;
