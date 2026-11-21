@@ -1232,7 +1232,7 @@ var
   ConstantType: TGocciaLocalType;
   IsStrict, HasInitializer, HasRealInitializer, IsTopLevelGlobalBacked,
   IsVarRedeclaration, UseWithVarInitializer: Boolean;
-  CanTrackConstant, HoldsOnlyNumbers: Boolean;
+  CanTrackConstant, HoldsOnlyNumbers, InitializerYields: Boolean;
   InitSlot: UInt16;
   NameIdx: UInt16;
   ProbeMissJump, TargetMissJump, TargetEndJump: Integer;
@@ -1520,16 +1520,20 @@ begin
         try
           // An initializer that yields can suspend before it writes InitSlot
           // (`(yield 1) ? 2 : 3`), and the suspended frame would keep what an
-          // exited block left in that register.
-          if InitializerAvoidsOwnBinding(Info.Initializer, Info.Name) and
-             not InitializerLeavesHoleUnobservable(Info.Initializer,
-               Info.Name) then
+          // exited block left in that register; after the move, it would keep
+          // a second copy of the binding's value.
+          InitializerYields :=
+            InitializerAvoidsOwnBinding(Info.Initializer, Info.Name) and
+            not InitializerLeavesHoleUnobservable(Info.Initializer, Info.Name);
+          if InitializerYields then
             EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, InitSlot, 0, 0));
           CompileNamedInitializer(ACtx, Info.Initializer, Info.Name, InitSlot);
           // Keep the lexical binding in its hole state until the entire
           // initializer has completed. Initializers that reference or assign
           // the binding must therefore observe the TDZ.
           EmitInstruction(ACtx, EncodeABC(OP_MOVE, Slot, InitSlot, 0));
+          if InitializerYields then
+            EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, InitSlot, 0, 0));
         finally
           ACtx.Scope.FreeRegister;
         end;

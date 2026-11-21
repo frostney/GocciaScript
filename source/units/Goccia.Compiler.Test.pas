@@ -214,6 +214,7 @@ type
     procedure TestForAwaitCloseAwaitsReturnResult;
     procedure TestTailAwaitBranchClearsInsideBranch;
     procedure TestNestedYieldsClearLinearly;
+    procedure TestYieldInitializerClearsItsTemporary;
     procedure TestAwaitUsingAwaitsDisposeResultOnce;
     procedure TestUsingDisposalDistinguishesReturnFromThrow;
     procedure TestForAwaitUsingHeadIteratesAsynchronously;
@@ -492,6 +493,8 @@ begin
     TestTailAwaitBranchClearsInsideBranch);
   Test('nested yields clear each scratch register once',
     TestNestedYieldsClearLinearly);
+  Test('a yield initializer leaves no copy in its temporary',
+    TestYieldInitializerClearsItsTemporary);
   Test('await using awaits a dispose result once',
     TestAwaitUsingAwaitsDisposeResultOnce);
   Test('a using handler tells a generator return from a throw',
@@ -971,6 +974,42 @@ begin
   Deep := ClearsAtDepth(40);
   // Linear growth: a few clears per level, not a level's worth per level.
   Expect<Boolean>(Deep - Shallow <= 3 * 30).ToBe(True);
+end;
+
+// A lexical binding initialized by a yield is compiled through a temporary,
+// which is cleared before the initializer runs and right after the move into
+// the binding, so the binding holds the only copy.
+procedure TTestCompiler.TestYieldInitializerClearsItsTemporary;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  PC, Source: Integer;
+  Instruction, NextInstruction: UInt32;
+  Found: Boolean;
+begin
+  Module := CompileSource('const holder = { *g() { let sent = yield 0; ' +
+    'sent = null; yield 1; } };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_YIELD);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if not Assigned(Func) then
+      Exit;
+    Found := False;
+    for PC := 0 to Func.CodeCount - 2 do
+    begin
+      Instruction := Func.GetInstruction(PC);
+      if DecodeOp(Instruction) <> Ord(OP_MOVE) then
+        Continue;
+      Source := DecodeB(Instruction);
+      NextInstruction := Func.GetInstruction(PC + 1);
+      if (DecodeOp(NextInstruction) = Ord(OP_LOAD_UNDEFINED)) and
+         (DecodeA(NextInstruction) = Source) then
+        Found := True;
+    end;
+    Expect<Boolean>(Found).ToBe(True);
+  finally
+    Module.Free;
+  end;
 end;
 
 // ES2026 §14.10.1 step 3: the value is awaited while the try is still
