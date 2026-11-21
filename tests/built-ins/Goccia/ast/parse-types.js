@@ -160,6 +160,31 @@ describe("ast.parse with expressions: type syntax", () => {
     expect(find(call, "StringLiteral")).toBeDefined();
   });
 
+  test("a template literal type in call and constructor type arguments is a type, and an expression template is not", () => {
+    const result = parseTypes(
+      "const id = load<`crate-${number}`>(shelf);\nconst box = new Box<`t${Kind}`, Crate>();\nconst cmp = a < `x${1 + 2}` > (c);\n",
+    );
+    const call = find(result.root, "CallExpression");
+    const construct = find(result.root, "NewExpression");
+
+    expect(shapeOf(result, call)).toEqual([
+      "Identifier(load)",
+      "TSTypeParameterInstantiation(<`crate-${number}`>)",
+      "Identifier(shelf)",
+    ]);
+    expect(treeOf(result, find(call, "TSTemplateLiteralType"))).toEqual([
+      "TSTemplateLiteralType(`crate-${number}`)",
+      "TSNumberKeyword(number)",
+    ]);
+    expect(shapeOf(result, find(construct, "TSTypeParameterInstantiation"))).toEqual([
+      "TSTemplateLiteralType(`t${Kind}`)",
+      "TSTypeReference(Crate)",
+    ]);
+    expect(findAll(result.root, "TemplateLiteral").map((node) => text(result, node))).toEqual([
+      "`x${1 + 2}`",
+    ]);
+  });
+
   test("the type arguments of a call inside another call's arguments stay with their own call", () => {
     const result = parseTypes("pack<Box>(wrap<Paper>(item));\n");
     const calls = findAll(result.root, "CallExpression");

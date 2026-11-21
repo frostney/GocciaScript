@@ -94,7 +94,8 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRangeToParts", () =>
       return;
     }
 
-    // ICU formats this range with abbreviated months, not the narrow ones asked for.
+    // Some ICU versions format this range with abbreviated months, not the
+    // narrow ones asked for; which width they pick varies by version.
     const month = (source) => parts.find((part) => part.type === "month" && part.source === source);
     expect(month("startRange").value).toContain("1");
     expect(month("endRange").value).toContain("2");
