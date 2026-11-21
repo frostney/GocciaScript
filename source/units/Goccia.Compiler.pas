@@ -722,7 +722,7 @@ begin
         UInt16(Ctx.CompletionRegister), 0, 0));
   end;
 
-  AwaitMark := Ctx.Scope.AwaitCount;
+  AwaitMark := Ctx.Scope.UnclearedAwaitCount;
   StatementOuterPeak := Ctx.Scope.BeginRegisterRegion;
 
   if AStmt is TGocciaExpressionStatement then
@@ -821,8 +821,10 @@ begin
   // promise, or the container it resolved with, in the registers it used
   // above the live ones. The frame outlives the statement, so clear them. A
   // compound statement's own statements clear theirs; a simple one clears
-  // here, once per execution of an already costly await.
-  if (not Result) and (Ctx.Scope.AwaitCount <> AwaitMark) and
+  // here, once per execution of an already costly await. An await in a
+  // branch an expression statement ends with was cleared in that branch
+  // (TGocciaCompilerScope.SetAwaitTail), so a path that skips it pays nothing.
+  if (not Result) and (Ctx.Scope.UnclearedAwaitCount <> AwaitMark) and
      ((AStmt is TGocciaExpressionStatement) or
       (AStmt is TGocciaVariableDeclaration) or
       (AStmt is TGocciaDestructuringDeclaration) or
@@ -832,6 +834,7 @@ begin
      (StatementPeak > Ctx.Scope.NextSlot) then
     Goccia.Compiler.Statements.EmitUncountedClearDeadRegisters(Ctx,
       StatementPeak);
+  Ctx.Scope.ForgetUnclearedAwaits(AwaitMark);
 
   if not Result then
     Result := Goccia.Compiler.Statements.StatementAlwaysAbrupt(Ctx, AStmt);
@@ -2548,19 +2551,28 @@ begin
         if AProgram.Body[I] is TGocciaExpressionStatement then
         begin
           EmitLineMapping(Ctx, AProgram.Body[I].Line, AProgram.Body[I].Column);
-          AwaitMark := FCurrentScope.AwaitCount;
+          AwaitMark := FCurrentScope.UnclearedAwaitCount;
           StatementOuterPeak := FCurrentScope.BeginRegisterRegion;
-          DoCompileExpression(
-            TGocciaExpressionStatement(AProgram.Body[I]).Expression, RetReg);
+          // RetReg holds the program's completion value: a tail branch
+          // clears what its awaits left but keeps it.
+          FCurrentScope.SetAwaitTail(
+            TGocciaExpressionStatement(AProgram.Body[I]).Expression, -1);
+          try
+            DoCompileExpression(
+              TGocciaExpressionStatement(AProgram.Body[I]).Expression, RetReg);
+          finally
+            FCurrentScope.SetAwaitTail(nil, -1);
+          end;
           StatementAbrupt := False;
           StatementPeak := FCurrentScope.EndRegisterRegion(StatementOuterPeak);
           // The same release DoCompileStatement gives an expression statement
           // that awaited: a top-level await suspends the module, which keeps
           // the awaited value in the registers above the live ones.
-          if (FCurrentScope.AwaitCount <> AwaitMark) and
+          if (FCurrentScope.UnclearedAwaitCount <> AwaitMark) and
              (StatementPeak > FCurrentScope.NextSlot) then
             Goccia.Compiler.Statements.EmitUncountedClearDeadRegisters(Ctx,
               StatementPeak);
+          FCurrentScope.ForgetUnclearedAwaits(AwaitMark);
         end
         else
           StatementAbrupt := DoCompileStatement(AProgram.Body[I]);

@@ -162,6 +162,12 @@ type
     FMaxSlot: UInt16;
     FRegionPeakSlot: Integer;
     FAwaitCount: Integer;
+    // The code index of each OP_AWAIT whose registers no clear has covered
+    // yet, in emission order; only the first FUnclearedAwaitCount count.
+    FUnclearedAwaitCodes: array of Integer;
+    FUnclearedAwaitCount: Integer;
+    FAwaitTailNode: TObject;
+    FAwaitTailDiscard: Integer;
     FPrivatePrefix: string;
     // Register of the class whose body this function's code is evaluating,
     // or -1 outside a class body.
@@ -306,8 +312,25 @@ type
     // statement that emitted one has suspended the frame, which is where a
     // register it left holding an awaited container or promise stays
     // reachable for as long as the frame lives.
-    procedure NoteAwaitEmitted;
+    procedure NoteAwaitEmitted(const ACodeIndex: Integer);
     property AwaitCount: Integer read FAwaitCount;
+    // The awaits whose registers are still to be cleared: a statement or a
+    // branch notes the count at its start, and if it has grown by its end,
+    // clears the dead registers and forgets them again (ForgetUnclearedAwaits).
+    property UnclearedAwaitCount: Integer read FUnclearedAwaitCount;
+    // The code index of uncleared await AIndex, 0-based in emission order.
+    function UnclearedAwaitCode(const AIndex: Integer): Integer;
+    procedure ForgetUnclearedAwaits(const AMark: Integer);
+    // The expression an expression statement ends with on every path, so a
+    // short-circuit or conditional branch of it, or the part of an optional
+    // chain after its first `?.`, is the last thing that path runs: such a
+    // branch clears what its awaits left itself, inside the branch, instead
+    // of the statement clearing on every path. AwaitTailDiscard is the
+    // register the statement discards its value in, cleared with them, or -1.
+    procedure SetAwaitTail(const ANode: TObject; const ADiscard: Integer);
+    procedure SetAwaitTailNode(const ANode: TObject);
+    function IsAwaitTail(const ANode: TObject): Boolean;
+    property AwaitTailDiscard: Integer read FAwaitTailDiscard;
 
     function GetLocal(const AIndex: Integer): TGocciaCompilerLocal;
     // True when one of the locals, suspended or not, holds register ASlot.
@@ -684,6 +707,9 @@ begin
   FMaxSlot := 0;
   FRegionPeakSlot := 0;
   FAwaitCount := 0;
+  FUnclearedAwaitCount := 0;
+  FAwaitTailNode := nil;
+  FAwaitTailDiscard := -1;
   FPrivateNameCount := 0;
   FPrivateClassReg := -1;
   FDirectEvalSyntheticArgumentsSlot := -1;
@@ -1181,9 +1207,42 @@ begin
     FRegionPeakSlot := FNextSlot;
 end;
 
-procedure TGocciaCompilerScope.NoteAwaitEmitted;
+procedure TGocciaCompilerScope.NoteAwaitEmitted(const ACodeIndex: Integer);
 begin
   Inc(FAwaitCount);
+  if FUnclearedAwaitCount >= Length(FUnclearedAwaitCodes) then
+    SetLength(FUnclearedAwaitCodes, FUnclearedAwaitCount * 2 + 4);
+  FUnclearedAwaitCodes[FUnclearedAwaitCount] := ACodeIndex;
+  Inc(FUnclearedAwaitCount);
+end;
+
+function TGocciaCompilerScope.UnclearedAwaitCode(
+  const AIndex: Integer): Integer;
+begin
+  Result := FUnclearedAwaitCodes[AIndex];
+end;
+
+procedure TGocciaCompilerScope.ForgetUnclearedAwaits(const AMark: Integer);
+begin
+  if AMark < FUnclearedAwaitCount then
+    FUnclearedAwaitCount := AMark;
+end;
+
+procedure TGocciaCompilerScope.SetAwaitTail(const ANode: TObject;
+  const ADiscard: Integer);
+begin
+  FAwaitTailNode := ANode;
+  FAwaitTailDiscard := ADiscard;
+end;
+
+procedure TGocciaCompilerScope.SetAwaitTailNode(const ANode: TObject);
+begin
+  FAwaitTailNode := ANode;
+end;
+
+function TGocciaCompilerScope.IsAwaitTail(const ANode: TObject): Boolean;
+begin
+  Result := Assigned(ANode) and (FAwaitTailNode = ANode);
 end;
 
 function TGocciaCompilerScope.BeginRegisterRegion: Integer;

@@ -72,3 +72,81 @@ describe("a value taken out of an awaited container and dropped", () => {
     expect(await run()).toEqual([1, 2, 3, 1024]);
   });
 });
+
+describe("a value a statement awaited in a branch it took and then dropped", () => {
+  const make = async () => new ArrayBuffer(SIZE);
+
+  // Each statement takes the branch with the await, and the value reaches
+  // measure(); nothing holds it after the statement, so the collection in the
+  // same frame, before the function next suspends, reclaims it.
+  const grownAfter = () => {
+    Goccia.gc();
+    return Goccia.gc.bytesAllocated;
+  };
+  const shapes = {
+    "&&": async (measure, ready) => {
+      ready && measure(await make());
+      return grownAfter();
+    },
+    "||": async (measure, ready) => {
+      !ready || measure(await make());
+      return grownAfter();
+    },
+    "??": async (measure, ready) => {
+      (ready ? null : 0) ?? measure(await make());
+      return grownAfter();
+    },
+    "?: consequent": async (measure, ready) => {
+      ready ? measure(await make()) : 0;
+      return grownAfter();
+    },
+    "?: alternate": async (measure, ready) => {
+      !ready ? 0 : measure((await Promise.all([make()]))[0]);
+      return grownAfter();
+    },
+    "an optional call": async (measure, ready) => {
+      (ready ? { measure } : null)?.measure(await make());
+      return grownAfter();
+    },
+    "an optional call on an awaited object": async (measure, ready) => {
+      (await (ready ? { measure } : null))?.measure(await make());
+      return grownAfter();
+    },
+    "a sequence": async (measure, ready) => {
+      0, ready && measure(await make());
+      return grownAfter();
+    },
+    "nested branches": async (measure, ready) => {
+      ready && (ready ? measure(await make()) : 0);
+      return grownAfter();
+    },
+    "a declaration": async (measure, ready) => {
+      const length = (ready ? await Promise.all([make()]) : [])[0].byteLength;
+      measure({ byteLength: length });
+      return grownAfter();
+    },
+  };
+
+  for (const [name, shape] of Object.entries(shapes)) {
+    test(`is reclaimed after ${name}`, async () => {
+      let length = 0;
+      const measure = (buffer) => {
+        length = buffer.byteLength;
+      };
+      const baseline = collect();
+      const after = await shape(measure, true);
+      expect(length).toBe(SIZE);
+      expect(after - baseline).toBeLessThan(SIZE / 2);
+    });
+  }
+
+  test("leaves a skipped branch's statement and the next one intact", async () => {
+    const run = async (ready) => {
+      const seen = [];
+      ready && seen.push(await make());
+      seen.push((ready ? null : 1) ?? (await make()));
+      return seen;
+    };
+    expect(await run(false)).toEqual([1]);
+  });
+});
