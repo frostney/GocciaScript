@@ -67,6 +67,7 @@ type
     procedure TestALongStringIsCopiedOnce;
     procedure TestRepeatedSeparatorsTakeNoScratch;
     procedure TestAJoinPastTheBudgetThrowsARangeError;
+    procedure TestAJoinSurvivesACollectionAtEveryAsk;
   end;
 
 procedure TTestArrayValue.SetupTests;
@@ -83,6 +84,8 @@ begin
     TestRepeatedSeparatorsTakeNoScratch);
   Test('a join whose result would pass the memory budget throws a catchable RangeError',
     TestAJoinPastTheBudgetThrowsARangeError);
+  Test('a join that collects at every table growth and before its result keeps every string',
+    TestAJoinSurvivesACollectionAtEveryAsk);
 end;
 
 { Runs a script that builds `a`, ALength strings of ten digits, `ta`, a
@@ -295,6 +298,70 @@ begin
     finally
       Collector.MaxBytes := PreviousMaxBytes;
     end;
+  finally
+    Args.Free;
+    Engine.Free;
+    Source.Free;
+  end;
+end;
+
+{ The join's gate is a collecting safe point: under the stress switch every
+  table growth and the result's ask collects, while the buffer holds strings
+  whose values nothing roots any more. The strings must survive them, and the
+  quarantine must see no swept value reached again. }
+procedure TTestArrayValue.TestAJoinSurvivesACollectionAtEveryAsk;
+const
+  ELEMENT_COUNT = 200;
+var
+  Source: TStringList;
+  Engine: TGocciaEngine;
+  Convert: TGocciaValue;
+  Args: TGocciaArgumentsCollection;
+  Collector: TGarbageCollector;
+  Expected: string;
+  I: Integer;
+begin
+  Source := TStringList.Create;
+  Source.Text := Format(
+    'const items = Array.from({ length: %0:d }, (_, i) => ' +
+    '({ toString() { return "item" + i; } }));' + LineEnding +
+    'const typed = Float64Array.from({ length: %0:d }, (_, i) => i);' +
+    LineEnding +
+    'globalThis.convert = () => items.join("-") + "|" + typed.join("-");',
+    [ELEMENT_COUNT]);
+  Expected := '';
+  for I := 0 to ELEMENT_COUNT - 1 do
+  begin
+    if I > 0 then
+      Expected := Expected + '-';
+    Expected := Expected + 'item' + IntToStr(I);
+  end;
+  Expected := Expected + '|';
+  for I := 0 to ELEMENT_COUNT - 1 do
+  begin
+    if I > 0 then
+      Expected := Expected + '-';
+    Expected := Expected + IntToStr(I);
+  end;
+  Engine := TGocciaEngine.Create('array-join-stress.js', Source);
+  Args := TGocciaArgumentsCollection.Create;
+  try
+    Engine.Execute;
+    Convert := TGocciaObjectValue(Engine.Realm.GlobalObject)
+      .GetProperty('convert');
+    Collector := TGarbageCollector.Instance;
+    TGarbageCollector.ResetQuarantineViolations;
+    Collector.QuarantineSwept := True;
+    Collector.CollectBeforeEveryReservation := True;
+    try
+      Expect<string>(TGocciaFunctionBase(Convert).Call(Args,
+        TGocciaUndefinedLiteralValue.UndefinedValue).ToStringLiteral.Value)
+        .ToBe(Expected);
+    finally
+      Collector.CollectBeforeEveryReservation := False;
+      Collector.QuarantineSwept := False;
+    end;
+    Expect<Integer>(TGarbageCollector.QuarantineViolations).ToBe(0);
   finally
     Args.Free;
     Engine.Free;

@@ -40,6 +40,8 @@ const
   // The longest result, in characters, so that its byte size fits a SizeInt
   // with room for the string's header on every target.
   MAXIMUM_JOIN_LENGTH = High(SizeInt) div (2 * SizeOf(WideChar));
+  // What a gate is asked about for a result no string can hold.
+  TOO_LONG_RESULT_BYTES = High(Int64);
   INLINE_PART_COUNT = 8;
   // The most elements a caller joins by appending instead: below about this
   // many short strings, the two passes cost more than the appends' copies.
@@ -52,8 +54,10 @@ type
   EStringJoinCopied = class(Exception);
 
   TStringJoinPoll = procedure;
-  // Raises unless ABytes may be allocated. For a result, ABytes can exceed
-  // MAXIMUM_JOIN_LENGTH characters, which no string can hold.
+  // Raises unless ABytes may be allocated. ABytes is TOO_LONG_RESULT_BYTES
+  // for a result longer than MAXIMUM_JOIN_LENGTH characters, which no string
+  // can hold: the gate raises its own error for it, or the join raises
+  // EOutOfMemory.
   TStringJoinGate = procedure(const ABytes: Int64);
 
   // A run of empty elements, before the part at PartIndex.
@@ -257,7 +261,7 @@ end;
 procedure TStringJoinBuffer.RefuseLength(const ALength: Int64);
 begin
   if Assigned(FGate) then
-    FGate(ALength * SizeOf(WideChar));
+    FGate(TOO_LONG_RESULT_BYTES);
   System.Error(reOutOfMemory);
 end;
 

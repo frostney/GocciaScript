@@ -19,10 +19,11 @@ function CheckedNativeByteSize(const AElementCount,
   AElementSize: Int64): Int64;
 procedure ReserveNativeBytes(const ABytes: Int64);
 procedure ReleaseNativeBytes(const ABytes: Int64);
-{ StringJoin's gate: before a native join allocates a result of ABytes,
-  raises the catchable RangeError a string's own charge raises past the memory
-  budget, once a forced collection has not made room, as the charge's own
-  path does; and "Invalid string length" for a result no string can hold. }
+{ StringJoin's gate: before a native join allocates ABytes, for its tables or
+  its result, raises the catchable RangeError a string's own charge raises
+  past the memory budget, once a forced collection has not made room, as the
+  charge's own path does; and "Invalid string length" for a result no string
+  can hold (TOO_LONG_RESULT_BYTES). }
 procedure CheckStringResultBytes(const ABytes: Int64);
 
 implementation
@@ -107,13 +108,17 @@ procedure CheckStringResultBytes(const ABytes: Int64);
 var
   GC: TGarbageCollector;
 begin
-  if ABytes > MAXIMUM_JOIN_LENGTH * SizeOf(WideChar) then
+  if ABytes = TOO_LONG_RESULT_BYTES then
     ThrowRangeError(SErrorInvalidStringLength);
+  // The joins that call this hold no value their receiver and arguments do
+  // not root, so a collection frees only what nothing reaches. The stress
+  // switch makes every ask the collecting safe point it is near the ceiling,
+  // as RequireNativeBytes does.
+  GC := TGarbageCollector.Instance;
+  if (ABytes > 0) and Assigned(GC) and GC.CollectBeforeEveryReservation then
+    GC.CollectForMemoryPressure(nil, True);
   if CanAllocateNativeBytes(ABytes) then
     Exit;
-  // The joins that call this hold no value their receiver and arguments do
-  // not root, so the collection frees only what nothing reaches.
-  GC := TGarbageCollector.Instance;
   if Assigned(GC) and GC.TryCollectForLimitedBytes(ABytes) then
     Exit;
   ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
