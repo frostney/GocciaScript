@@ -110,3 +110,8 @@ reassigns its parameters pays the release; the rest pay the flag test.
   gate exists to avoid.
 - The registers cleared are temporaries nothing reads again: the compiler frees
   them right after the call instruction.
+  That is part of the bytecode contract: after a non-tail call to a callee that
+  releases (every template loaded from `.gbc` does), the caller's
+  object-holding argument registers hold undefined. The verifier checks the
+  argument range, not that nothing reads it after the call, so hand-written
+  bytecode that reads an argument register after such a call reads undefined.

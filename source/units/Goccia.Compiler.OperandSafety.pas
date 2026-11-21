@@ -125,6 +125,9 @@ const
   // right-leaning expression would otherwise be walked a quadratic number of
   // times. A subtree larger than this keeps the copy.
   OPERAND_NODE_BUDGET = 64;
+  // ParametersSurviveBody's nesting bound: a body nested deeper is assumed to
+  // write a parameter, which only costs the caller's copies their release.
+  PARAMETER_SCAN_MAX_DEPTH = 256;
 
 type
   TScan = record
@@ -132,6 +135,11 @@ type
     RejectLocalWrites: Boolean;
     // Nodes left to visit; negative means unlimited.
     Budget: Integer;
+    // How deep the walk may nest, 0 for no bound, and how deep it is now. A
+    // proof over a whole function body sets it: a body the parser accepts can
+    // nest deeper than a small native stack lets a recursive walk go.
+    MaxDepth: Integer;
+    Depth: Integer;
     // Empty for the loop and operand proofs. For the initializer proofs, the
     // binding name no node may reach; an arrow or function
     // expression is then accepted when its source text cannot name the
@@ -572,6 +580,12 @@ begin
     Exit(False);
   if AScan.Budget > 0 then
     Dec(AScan.Budget);
+  if AScan.MaxDepth > 0 then
+  begin
+    if AScan.Depth >= AScan.MaxDepth then
+      Exit(False);
+    Inc(AScan.Depth);
+  end;
 
   if ANode is TGocciaExpression then
     Result := ScanExpression(AScan, TGocciaExpression(ANode))
@@ -579,6 +593,9 @@ begin
     Result := ScanStatement(AScan, TGocciaStatement(ANode))
   else
     Result := False;
+
+  if AScan.MaxDepth > 0 then
+    Dec(AScan.Depth);
 end;
 
 function StatementCreatesNoClosure(const ANode: TGocciaASTNode): Boolean;
@@ -616,6 +633,7 @@ begin
   Scan := Default(TScan);
   Scan.RejectLocalWrites := True;
   Scan.Budget := -1;
+  Scan.MaxDepth := PARAMETER_SCAN_MAX_DEPTH;
   Scan.AvoidName := '';
   Result := ScanNode(Scan, ABody);
 end;
