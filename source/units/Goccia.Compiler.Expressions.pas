@@ -761,6 +761,13 @@ begin
     for Slot := ACtx.Scope.NextSlot to RegionPeak - 1 do
       if Slot <> TempReg then
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
+    // A binding being initialized cannot read what an earlier use of its
+    // slot left (a previous iteration's value), so the suspended frame need
+    // not keep it. An initialized local keeps its value: a throw() caught in
+    // the body reads it.
+    if (TempReg <> ADest) and
+       ACtx.Scope.SlotHoldsOnlyUninitializedLocals(ADest) then
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
     EmitInstruction(ACtx, EncodeABC(OP_YIELD, TempReg, TempReg,
       YIELD_FLAG_TEMP_OPERAND));
     if TempReg <> ADest then
