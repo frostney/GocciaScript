@@ -16,7 +16,8 @@ unit StringJoin;
 //
 // A gate, when given, is asked about the result's bytes before the result is
 // allocated, so that a memory budget refuses a join before it allocates the
-// result rather than once it charges it.
+// result rather than once it charges it, and about the bytes of a result too
+// long for a string, before the join gives up on it.
 
 interface
 
@@ -24,7 +25,8 @@ type
   // Called between blocks of the final copy, so that a host's deadline or
   // abort can end a join whose result is long.
   TStringJoinPoll = procedure;
-  // Raises unless a result of AResultBytes may be allocated.
+  // Raises unless a result of AResultBytes may be allocated. AResultBytes can
+  // exceed MAXIMUM_JOIN_LENGTH characters, which no string can hold.
   TStringJoinGate = procedure(const AResultBytes: Int64);
 
   TStringJoinSegment = record
@@ -68,6 +70,9 @@ type
   end;
 
 const
+  // The longest result, in characters, so that its byte size fits a SizeInt
+  // with room for the string's header on every target.
+  MAXIMUM_JOIN_LENGTH = High(SizeInt) div (2 * SizeOf(WideChar));
   // A string at least this long is kept rather than copied into a chunk.
   LONG_TEXT_LENGTH = 256;
   MINIMUM_CHUNK_LENGTH = 256;
@@ -78,8 +83,6 @@ const
 implementation
 
 const
-  // Characters, so that the byte size of the result fits a SizeInt too.
-  MAXIMUM_LENGTH = High(SizeInt) div (2 * SizeOf(WideChar));
   INITIAL_SEGMENT_CAPACITY = 8;
 
 constructor TStringJoinBuffer.Create(const ASeparator: UnicodeString;
@@ -119,7 +122,8 @@ end;
 procedure TStringJoinBuffer.WriteToChunk(const AText: UnicodeString;
   const ALength: SizeInt);
 var
-  NewCapacity: SizeInt;
+  NewCapacity, I: SizeInt;
+  Source, Target: PWideChar;
 begin
   if FChunkLength + ALength > FChunkCapacity then
   begin
@@ -138,8 +142,11 @@ begin
     SetLength(FChunk, NewCapacity);
     FChunkCapacity := NewCapacity;
   end;
-  Move(PWideChar(AText)^, (PWideChar(FChunk) + FChunkLength)^,
-    ALength * SizeOf(WideChar));
+  // A short string, so a plain loop: Move's set-up costs more than the copy.
+  Source := PWideChar(AText);
+  Target := PWideChar(FChunk) + FChunkLength;
+  for I := 0 to ALength - 1 do
+    Target[I] := Source[I];
   Inc(FChunkLength, ALength);
 end;
 
@@ -171,8 +178,12 @@ begin
   TextLength := System.Length(AText);
   if TextLength = 0 then
     Exit;
-  if TextLength > MAXIMUM_LENGTH - FTotalLength then
+  if TextLength > MAXIMUM_JOIN_LENGTH - FTotalLength then
+  begin
+    if Assigned(FGate) then
+      FGate((Int64(FTotalLength) + TextLength) * SizeOf(WideChar));
     System.Error(reOutOfMemory);
+  end;
   if FTotalLength = 0 then
     FFirst := AText
   else

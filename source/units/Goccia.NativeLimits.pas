@@ -19,15 +19,18 @@ function CheckedNativeByteSize(const AElementCount,
   AElementSize: Int64): Int64;
 procedure ReserveNativeBytes(const ABytes: Int64);
 procedure ReleaseNativeBytes(const ABytes: Int64);
-{ Raises the catchable RangeError that a string's own charge raises past the
-  memory budget, before a native join allocates a result of ABytes that the
-  budget would refuse once it is charged (StringJoin's gate). }
+{ StringJoin's gate: before a native join allocates a result of ABytes,
+  raises the catchable RangeError a string's own charge raises past the memory
+  budget, once a forced collection has not made room, as the charge's own
+  path does; and "Invalid string length" for a result no string can hold. }
 procedure CheckStringResultBytes(const ABytes: Int64);
 
 implementation
 
 uses
   SysUtils,
+
+  StringJoin,
 
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
@@ -101,9 +104,19 @@ begin
 end;
 
 procedure CheckStringResultBytes(const ABytes: Int64);
+var
+  GC: TGarbageCollector;
 begin
-  if not CanAllocateNativeBytes(ABytes) then
-    ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+  if ABytes > MAXIMUM_JOIN_LENGTH * SizeOf(WideChar) then
+    ThrowRangeError(SErrorInvalidStringLength);
+  if CanAllocateNativeBytes(ABytes) then
+    Exit;
+  // The joins that call this hold no value their receiver and arguments do
+  // not root, so the collection frees only what nothing reaches.
+  GC := TGarbageCollector.Instance;
+  if Assigned(GC) and GC.TryCollectForLimitedBytes(ABytes) then
+    Exit;
+  ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
 end;
 
 end.
