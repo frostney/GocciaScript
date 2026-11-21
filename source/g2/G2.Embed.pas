@@ -10,7 +10,7 @@ unit G2.Embed;
 interface
 
 uses
-  SysUtils, Goccia.Capabilities, Goccia.CapabilityAudit, Goccia.HostEnvironment, Goccia.ModuleResolver, G2.Core, G2.HostAPI, G2.VM;
+  SysUtils, Goccia.Capabilities, Goccia.CapabilityAudit, Goccia.HostEnvironment, Goccia.ModuleResolver, G2.Core, G2.HostAPI, G2.Modules, G2.VM;
 
 type
   { a console line and the method that wrote it (G2.HostAPI TConsoleSink) }
@@ -81,6 +81,8 @@ type
     FResultForm: TG2ResultForm;
     FOnConsole: TG2ConsoleEvent;
     FResolver: TModuleResolver;
+    FModuleContentCheck: TModuleContentCheck;
+    FProviderGraph: TProviderGraphCheck;
     FOnWarning: TG2WarningEvent;
     FDeterministic: Boolean;
     { a deterministic run's Math.random streams: realm 0 seeded as GocciaScript's deterministic profile is, each
@@ -167,6 +169,11 @@ type
     { the run's import resolution (an import map, aliases, node_modules), not owned; nil for relative and absolute
       paths only }
     property Resolver: TModuleResolver read FResolver write FResolver;
+    { each module file's bytes before they load (the resolver's provider packages checked against their pins);
+      nil for none }
+    property ModuleContentCheck: TModuleContentCheck read FModuleContentCheck write FModuleContentCheck;
+    { whether a file is a provider package's, reached as that package (the read policy admits it); nil for none }
+    property ProviderGraph: TProviderGraphCheck read FProviderGraph write FProviderGraph;
     property OnWarning: TG2WarningEvent read FOnWarning write FOnWarning;
     { GocciaScript's deterministic profile (--deterministic): the epoch and monotonic clocks at 0, the time zone
       UTC, Math.random a seeded stream; set before the first run or PrepareHost }
@@ -236,7 +243,7 @@ function DiscoverProjectRoot(const EntryFileName: string): string;
 implementation
 
 uses
-  Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval, G2.Modules,
+  Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval,
   G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch, G2.Compiler, G2.Sandbox, G2.Profile, Goccia.Profiler.Compile;
 
 threadvar
@@ -858,6 +865,8 @@ begin
   FRunFile := FileName;
   if Assigned(FAuditSink) then AuditHook := AuditFromScript else AuditHook := nil;
   SetHostResolver(FResolver);
+  SetModuleContentCheck(FModuleContentCheck);
+  SetProviderGraphCheck(FProviderGraph);
   ClearLoadFailure;
   TakeResolveCandidate;
   { the JavaScript host environment, before the entry: a provider that does not load fails the run with its error }
@@ -880,6 +889,8 @@ begin
     PopRoots(1);
     Pending := VUndefined;
     SetHostResolver(nil);
+    SetModuleContentCheck(nil);
+    SetProviderGraphCheck(nil);
     Exit;
   end;
   FModuleMark := ModuleCount;
@@ -1021,6 +1032,8 @@ begin
     ProfileStop;
     SetProvidedSource('', '');
     SetHostResolver(nil);
+    SetModuleContentCheck(nil);
+    SetProviderGraphCheck(nil);
     PopRoots(1);
     LimitsDisarm;
   end;

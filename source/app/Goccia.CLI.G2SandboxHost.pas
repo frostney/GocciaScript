@@ -29,6 +29,7 @@ uses
   SandboxVirtualFileSystem,
 
   Goccia.Capabilities,
+  Goccia.Packages.Address,
   Goccia.Sandbox.Context;
 
 const
@@ -115,6 +116,9 @@ type
     function DiffText(const AUnified: Boolean): string;
     { the resolver's import map and aliases, for a run's module resolver }
     procedure ConfigureResolver(const AResolver: TObject);
+    { sandbox mode never grants a provider package: the refusal is the PermissionDenied a missing import
+      capability is (TGocciaSandboxModuleResolver asks before it refuses) }
+    procedure RefuseProvider(const ASpecifier: string; const AAddress: TGocciaProviderAddress);
 
     property Context: TGocciaSandboxContext read FContext;
     property Inputs: TSandboxHostInputs read FInputs;
@@ -140,6 +144,7 @@ type
 implementation
 
 uses
+  G2.HostAPI,
   G2.Sandbox,
   G2.VM,
   TextSemantics,
@@ -487,6 +492,11 @@ begin
     Result := FContext.DiffJson(True);
 end;
 
+procedure TG2SandboxHost.RefuseProvider(const ASpecifier: string; const AAddress: TGocciaProviderAddress);
+begin
+  raise EG2PermissionDenied.CreateDenied(CapabilityName(gcImport), AAddress.PackageKey, '');
+end;
+
 procedure TG2SandboxHost.ConfigureResolver(const AResolver: TObject);
 var
   Resolver: TGocciaSandboxModuleResolver;
@@ -494,6 +504,7 @@ var
   I, SeparatorIndex: Integer;
 begin
   Resolver := AResolver as TGocciaSandboxModuleResolver;
+  Resolver.ProviderGrant := RefuseProvider;
   if FImportMapPath <> '' then
     Resolver.LoadImportMap(FImportMapPath);
   for I := 0 to FAliases.Count - 1 do

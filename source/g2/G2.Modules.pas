@@ -100,6 +100,12 @@ type
 procedure SetFileReadHook(Hook: TFileReadHook);
 { the bytes of the file at Path through this thread's file reader; False when there is none }
 function ReadFileBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
+type
+  { a host's check of a module file's bytes before they are compiled or exposed (a provider package file against
+    its pin, ADR 0122): raises with the message the import fails with }
+  TModuleContentCheck = procedure(const Path: UnicodeString; const B: RawByteString) of object;
+{ this thread's module content check (nil: none) }
+procedure SetModuleContentCheck(Check: TModuleContentCheck);
 
 implementation
 
@@ -211,6 +217,46 @@ threadvar
 procedure SetFileReadHook(Hook: TFileReadHook);
 begin
   FileRead := Hook;
+end;
+
+threadvar
+  ContentCheck: TModuleContentCheck;
+  { the last module read failed its content check, whose error is pending }
+  ContentRefused: Boolean;
+
+procedure SetModuleContentCheck(Check: TModuleContentCheck);
+begin
+  ContentCheck := Check;
+end;
+
+{ a module file's bytes, through the host's content check }
+function ReadModuleBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
+begin
+  ContentRefused := False;
+  Result := ReadFileBytes(Path, B);
+  if not Result or not Assigned(ContentCheck) then Exit;
+  try
+    ContentCheck(Path, B);
+  except
+    on E: Exception do
+    begin
+      B := '';
+      ThrowError('Error', UnicodeString(UTF8Decode(E.Message)));
+      ContentRefused := True;
+      Result := False;
+    end;
+  end;
+end;
+
+{ a module file that did not load: its content check's error, else not found }
+function ModuleReadFailed(const Path: UnicodeString): Boolean;
+begin
+  if ContentRefused then
+  begin
+    ContentRefused := False;
+    Exit(False);
+  end;
+  Result := ThrowTypeError('Cannot find module ''' + Path + '''');
 end;
 
 function ReadFileBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
@@ -357,7 +403,7 @@ begin
     if (Src <> '') and (Src[1] = #$FEFF) then Delete(Src, 1, 1);
     Exit(True);
   end;
-  Result := ReadFileBytes(Path, B);
+  Result := ReadModuleBytes(Path, B);
   if not Result then Exit;
   SetCodePage(B, CP_UTF8, False);
   Src := UnicodeString(UTF8Decode(B));
@@ -376,7 +422,7 @@ end;
 
 function ReadBytes(const Path: UnicodeString; var B: RawByteString): Boolean;
 begin
-  Result := ReadFileBytes(Path, B);
+  Result := ReadModuleBytes(Path, B);
 end;
 
 function FindModule(const Path: UnicodeString): TModRec;
@@ -418,12 +464,12 @@ begin
   end;
   if AType = 'bytes' then
   begin
-    if not Virtual and not ReadBytes(Path, B) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
+    if not Virtual and not ReadBytes(Path, B) then Exit(ModuleReadFailed(Path));
     if not BytesHook(B, V) then Exit(False);
   end
   else
   begin
-    if not Virtual and not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
+    if not Virtual and not ReadSource(Path, Src) then Exit(ModuleReadFailed(Path));
     if AType = 'text' then V := StrFromUnicode(Src)
     else if not JSONTextHook(Src, V) then Exit(False);
   end;
@@ -532,7 +578,7 @@ begin
     2: Src := StrToUnicode(StrOf(V));
     -1: Exit(False);
   end;
-  if (I <> 2) and not ReadSource(Path, Src) then Exit(ThrowTypeError('Cannot find module ''' + Path + ''''));
+  if (I <> 2) and not ReadSource(Path, Src) then Exit(ModuleReadFailed(Path));
   M := TModRec.Create;
   M.Path := Path;
   M.Id := Mods.Count;

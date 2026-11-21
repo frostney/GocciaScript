@@ -9,8 +9,11 @@ program GocciaRunnerG2;
   Sandbox mode runs each program on a G2 engine over the virtual filesystem
   (Goccia.CLI.G2SandboxHost).
 
-  Not yet on G2: install mode and provider imports, and bytecode files
-  (--prefer-bytecode). }
+  Install mode (--add, --remove, --install, --update) is the old runner's
+  (Goccia.Packages.Install); provider imports resolve through the shared
+  resolver, granted, audited and checked against their pins here.
+
+  Not yet on G2: bytecode files (--prefer-bytecode). }
 
 {$I Goccia.inc}
 
@@ -45,6 +48,7 @@ uses
   Goccia.Coverage,
   Goccia.Coverage.Report,
   Goccia.Error,
+  Goccia.Error.Suggestions,
   Goccia.FileExtensions,
   Goccia.HostEnvironment,
   Goccia.JSX.Transformer,
@@ -52,6 +56,9 @@ uses
   Goccia.Modules.Resolver,
   Goccia.ScriptLoader.Globals,
   Goccia.Packages.Address,
+  Goccia.Packages.Install,
+  Goccia.Packages.Store,
+  Goccia.Packages.Transport,
   Goccia.Profiler,
   Goccia.Profiler.Compile,
   Goccia.Profiler.Report,
@@ -62,10 +69,18 @@ uses
 
   G2.Core,
   G2.Embed,
+  G2.HostAPI,
   G2.Sandbox,
   G2.VM;
 
+const
+  { the import map --add creates when the project has none }
+  PROJECT_IMPORT_MAP_NAME = 'goccia.json';
+
 type
+  { an install mode run that failed (not a usage error): its message on stderr, exit 1 }
+  EGocciaInstallModeFailure = class(Exception);
+
   { The console of a JSON run, as GocciaRunner's TScriptLoaderConsoleCapture: every line in output, and each
     method's line, without the prefix the console gave it, on its own stream }
   TG2ConsoleCapture = class
@@ -91,16 +106,25 @@ type
     function StderrText: string;
   end;
 
-  { node_modules resolution as the file's capabilities allow it (TGocciaEngine.GrantNodeModules): the walk's
-    ceiling when import grants it, a refusal when it is denied, sealed otherwise }
-  TG2NodeModulesGrant = class
+  { the import capability over a file's resolution, as TGocciaEngine grants it: node_modules (GrantNodeModules: the
+    walk's ceiling when import grants it, a refusal when it is denied, sealed otherwise) and provider packages
+    (GrantProviderPackage: an import scope covering the repository, ADR 0122), whose files are checked against
+    their pins as they load }
+  TG2ImportGrant = class
   private
     FCapabilities: TGocciaCapabilities;
+    procedure AuditOrFail(AKind: TGocciaCapabilityKind; AAllowed: Boolean; const ASubject, AReason: string);
   public
     { the file's engine, which audits each decision (nil: none audited) }
     Engine: TG2Engine;
+    { the file's resolver, which materializes the provider packages }
+    Resolver: TGocciaModuleResolver;
     constructor Create(const ACapabilities: TGocciaCapabilities);
     function Grant(const ASpecifier, AImportingDirectory: string; out ACeiling: string): Boolean;
+    procedure GrantProvider(const ASpecifier: string; const AAddress: TGocciaProviderAddress);
+    procedure AuditProvider(const AAllowed: Boolean; const ASubject, AReason: string);
+    procedure CheckContent(const APath: UnicodeString; const B: RawByteString);
+    function ProviderGraph(const APath, AImportingFile, APackageRoot: string): Boolean;
   end;
 
   { one file's part of a JSON report }
@@ -203,6 +227,13 @@ type
     function ExtraHelpText: string; override;
     procedure ValidateCommandLine(const APaths: TStringList); override;
     procedure Validate; override;
+    function InstallModeActive: Boolean;
+    function ExclusiveModeName: string; override;
+    procedure ValidateInstallMode(const APaths: TStringList);
+    procedure RunInstallMode;
+    procedure WriteInstallLine(const ALine: string);
+    procedure AuditProviderFetch(const AAllowed: Boolean; const ASubject, AReason: string);
+    procedure AuditProviderInstall(const AAllowed: Boolean; const ASubject, AReason: string);
     procedure HandleError(const AException: Exception); override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     procedure AfterExecute; override;
@@ -391,7 +422,174 @@ end;
   run without input. Checked before config is applied, so Present means the command line. }
 function TG2RunnerApp.HasNonPathInput: Boolean;
 begin
-  Result := (SandboxOptions.CommandLineActivation <> '') or SandboxOptions.Entry.Present;
+  Result := (SandboxOptions.CommandLineActivation <> '') or SandboxOptions.Entry.Present or InstallModeActive;
+end;
+
+function TG2RunnerApp.InstallModeActive: Boolean;
+begin
+  Result := FAddPackages.Present or FRemovePackages.Present or FInstallPackages.Present or FUpdatePackages.Present;
+end;
+
+function TG2RunnerApp.ExclusiveModeName: string;
+begin
+  if FAddPackages.Present then
+    Result := '--add'
+  else if FRemovePackages.Present then
+    Result := '--remove'
+  else if FInstallPackages.Present then
+    Result := '--install'
+  else if FUpdatePackages.Present then
+    Result := '--update'
+  else
+    Result := '';
+end;
+
+{ Install mode runs on its own, like the trust modes: no input files, no sandbox, and one of --add/--remove,
+  --install, or --update. Its modifiers belong to one mode each. }
+procedure TG2RunnerApp.ValidateInstallMode(const APaths: TStringList);
+var
+  Modes: Integer;
+begin
+  if FFrozen.Present and not FInstallPackages.Present then
+    raise TCLIUsageError.Create('--frozen goes with --install');
+  if FCheckRefs.Present and not FInstallPackages.Present then
+    raise TCLIUsageError.Create('--check-refs goes with --install');
+  if FAcceptMovedTags.Present and not FUpdatePackages.Present then
+    raise TCLIUsageError.Create('--accept-moved-tags goes with --update');
+  if not InstallModeActive then
+    Exit;
+  Modes := Ord(FAddPackages.Present or FRemovePackages.Present) + Ord(FInstallPackages.Present) +
+    Ord(FUpdatePackages.Present);
+  if Modes > 1 then
+    raise TCLIUsageError.Create('--add/--remove, --install, and --update cannot be combined; run each on its own');
+  if APaths.Count > 0 then
+    raise TCLIUsageError.CreateFmt('%s cannot be combined with input files; run it on its own',
+      [ExclusiveModeName]);
+  if SandboxOptions.CommandLineActivation <> '' then
+    raise TCLIUsageError.CreateFmt('%s cannot be combined with sandbox mode (enabled by %s)',
+      [ExclusiveModeName, SandboxOptions.CommandLineActivation]);
+  if EngineOptions.CachedOnly.Present then
+    raise TCLIUsageError.CreateFmt('%s cannot be combined with --cached-only, which is for runs',
+      [ExclusiveModeName]);
+end;
+
+procedure TG2RunnerApp.WriteInstallLine(const ALine: string);
+begin
+  WriteLn(ALine);
+end;
+
+procedure TG2RunnerApp.AuditProviderFetch(const AAllowed: Boolean; const ASubject, AReason: string);
+begin
+  if AAllowed then
+    EmitApplicationAudit(gckImportProvider, gcdAllow, ASubject, AReason)
+  else
+    EmitApplicationAudit(gckImportProvider, gcdDeny, ASubject, AReason);
+end;
+
+procedure TG2RunnerApp.AuditProviderInstall(const AAllowed: Boolean; const ASubject, AReason: string);
+begin
+  if AAllowed then
+    EmitApplicationAudit(gckImportProviderInstall, gcdAllow, ASubject, AReason)
+  else
+    EmitApplicationAudit(gckImportProviderInstall, gcdDeny, ASubject, AReason);
+end;
+
+{ The import map is --import-map when given, which install mode never edits, else the goccia.json found walking up
+  from the working directory (created by --add when there is none). A root config in another format keeps the
+  import map from being edited too. The capability set is the command line's plus the trusted requests of the
+  config governing the import map, as for a run. }
+procedure TG2RunnerApp.RunInstallMode;
+var
+  Capabilities: TGocciaCapabilities;
+  Editable: Boolean;
+  ImportMapPath, Key, Spec, Error: string;
+  Installer: TGocciaPackageInstaller;
+  Request: TGocciaInstallRequest;
+  Transport: TGocciaHTTPProviderTransport;
+  Keys: TStringList;
+  I: Integer;
+begin
+  if EngineOptions.ImportMap.Present then
+  begin
+    ImportMapPath := ExpandFileName(EngineOptions.ImportMap.Value);
+    Editable := False;
+  end
+  else
+  begin
+    ImportMapPath := TGocciaModuleResolver.DiscoverProjectConfig(GetCurrentDir);
+    { runs read imports only from goccia.json or --import-map, so a root config in another format holds no import
+      map install mode could maintain }
+    if (RootConfigPath <> '') and ((ImportMapPath = '') or
+       not SameFileName(ExpandFileName(RootConfigPath), ImportMapPath)) then
+      raise TCLIUsageError.CreateFmt('%s is the root config, but imports are read only from goccia.json or ' +
+        '--import-map; put them in a goccia.json, or pass --import-map', [RootConfigPath]);
+    if ImportMapPath = '' then
+      ImportMapPath := IncludeTrailingPathDelimiter(GetCurrentDir) + PROJECT_IMPORT_MAP_NAME;
+    Editable := True;
+  end;
+
+  Request := Default(TGocciaInstallRequest);
+  for I := 0 to FAddPackages.Values.Count - 1 do
+  begin
+    if not TryParseAddArgument(FAddPackages.Values[I], Key, Spec, Error) then
+      raise TCLIUsageError.Create(Error);
+    SetLength(Request.Adds, Length(Request.Adds) + 1);
+    Request.Adds[High(Request.Adds)].Key := Key;
+    Request.Adds[High(Request.Adds)].Spec := Spec;
+  end;
+  for I := 0 to FRemovePackages.Values.Count - 1 do
+  begin
+    SetLength(Request.Removes, Length(Request.Removes) + 1);
+    Request.Removes[High(Request.Removes)] := FRemovePackages.Values[I];
+  end;
+  Request.Install := FInstallPackages.Present;
+  Request.Update := FUpdatePackages.Present;
+  if FUpdatePackages.ValueOr('') <> '' then
+  begin
+    Keys := TStringList.Create;
+    try
+      Keys.StrictDelimiter := True;
+      Keys.Delimiter := ',';
+      Keys.DelimitedText := FUpdatePackages.Value;
+      for I := 0 to Keys.Count - 1 do
+        if Trim(Keys[I]) <> '' then
+        begin
+          SetLength(Request.UpdateKeys, Length(Request.UpdateKeys) + 1);
+          Request.UpdateKeys[High(Request.UpdateKeys)] := Trim(Keys[I]);
+        end;
+    finally
+      Keys.Free;
+    end;
+  end;
+  Request.Frozen := FFrozen.Present;
+  Request.CheckRefs := FCheckRefs.Present;
+  Request.AcceptMovedTags := FAcceptMovedTags.Present;
+
+  ValidateFileConfig(ImportMapPath);
+  Capabilities := ResolveEngineCapabilities(DiscoverFileConfigPath(ImportMapPath), ImportMapPath);
+
+  Transport := TGocciaHTTPProviderTransport.Create;
+  try
+    Installer := TGocciaPackageInstaller.Create(ImportMapPath, Editable, Capabilities, Transport);
+    try
+      Installer.OnLog := WriteInstallLine;
+      Installer.OnAudit := AuditProviderFetch;
+      Installer.OnInstallAudit := AuditProviderInstall;
+      try
+        Installer.Run(Request);
+      except
+        on E: EGocciaInstallError do
+          if E.ExitCode = INSTALL_EXIT_USAGE then
+            raise TCLIUsageError.Create(E.Message)
+          else
+            raise EGocciaInstallModeFailure.Create(E.Message);
+      end;
+    finally
+      Installer.Free;
+    end;
+  finally
+    Transport.Free;
+  end;
 end;
 
 function TG2RunnerApp.ExtraHelpText: string;
@@ -450,6 +648,7 @@ end;
 procedure TG2RunnerApp.ValidateCommandLine(const APaths: TStringList);
 begin
   inherited ValidateCommandLine(APaths);
+  ValidateInstallMode(APaths);
   if SandboxOptions.CommandLineActivation = '' then
     Exit;
   RejectHostCapabilityFlags(HostCapabilityAllowFlags, SandboxOptions.CommandLineActivation);
@@ -470,7 +669,7 @@ procedure TG2RunnerApp.Validate;
 var
   Verdict: TGocciaConfigTrustVerdict;
 begin
-  if not FSandboxActive then
+  if not FSandboxActive and not InstallModeActive then
   begin
     Verdict := RootConfigVerdict;
     if Verdict.Request.Sandbox.Declared and (Verdict.State <> ctsIgnored) then
@@ -509,6 +708,11 @@ end;
   RunSandbox, so what reaches here is the host's (a copy that failed, an invalid value) and goes to stderr. }
 procedure TG2RunnerApp.HandleError(const AException: Exception);
 begin
+  if AException is EGocciaInstallModeFailure then
+  begin
+    WriteLn(ErrOutput, 'Error: ', AException.Message);
+    Exit;
+  end;
   if FSandboxActive or FSandboxRequestedByArguments or ConfigRequestsSandbox then
     WriteLn(ErrOutput, 'Error: ', AException.Message)
   else if IsJsonOutput then
@@ -574,36 +778,111 @@ begin
     AEngine.MaxMemory := 0;
 end;
 
-constructor TG2NodeModulesGrant.Create(const ACapabilities: TGocciaCapabilities);
+constructor TG2ImportGrant.Create(const ACapabilities: TGocciaCapabilities);
 begin
   inherited Create;
   FCapabilities := ACapabilities;
 end;
 
-function TG2NodeModulesGrant.Grant(const ASpecifier, AImportingDirectory: string;
+{ every decision is audited, as GocciaRunner's grants do; a log that cannot be written ends the run }
+procedure TG2ImportGrant.AuditOrFail(AKind: TGocciaCapabilityKind; AAllowed: Boolean;
+  const ASubject, AReason: string);
+begin
+  if Assigned(Engine) and not Engine.Audit(AKind, AAllowed, ASubject, AReason) then
+    raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed');
+end;
+
+function TG2ImportGrant.Grant(const ASpecifier, AImportingDirectory: string;
   out ACeiling: string): Boolean;
 var
   Reason: string;
 begin
   Result := FCapabilities.NodeModulesCeiling(AImportingDirectory, ACeiling);
-  { every decision is audited, as GocciaRunner's GrantNodeModules does; a log that cannot be written ends the run }
   if Result then
   begin
     if ACeiling = '' then
       Reason := 'node_modules walk is unbounded'
     else
       Reason := 'node_modules walk is bounded by ' + ACeiling;
-    if Assigned(Engine) and not Engine.Audit(gckImportNodeModules, True, ASpecifier, Reason) then
-      raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed');
+    AuditOrFail(gckImportNodeModules, True, ASpecifier, Reason);
     Exit;
   end;
-  if Assigned(Engine) and not Engine.Audit(gckImportNodeModules, False, ASpecifier,
-     'the import capability does not grant node_modules here') then
-    raise EGocciaCapabilityAuditDeliveryError.Create('capability audit delivery failed');
+  AuditOrFail(gckImportNodeModules, False, ASpecifier, 'the import capability does not grant node_modules here');
   { an outright deny refuses; a capability never granted keeps the sealed resolution's message }
   if FCapabilities.DeniesNodeModules(AImportingDirectory) then
-    raise Exception.Create('PermissionDenied: import is not allowed for ' + ASpecifier +
-      ' (node_modules resolution is denied for ' + AImportingDirectory + ')');
+    raise EG2PermissionDenied.CreateDenied(CapabilityName(gcImport), ASpecifier,
+      'node_modules resolution is denied for ' + AImportingDirectory);
+end;
+
+{ a provider import needs an import scope covering its repository: github, github:<owner> or
+  github:<owner>/<repo>; the PermissionDenied names the package, the suggestion the grants that would cover it or
+  the deny that refused it }
+procedure TG2ImportGrant.GrantProvider(const ASpecifier: string; const AAddress: TGocciaProviderAddress);
+var
+  DenyScope, Owner, Suggestion: string;
+begin
+  if FCapabilities.AllowsProviderPackage(IMPORT_PROVIDER_GITHUB, AAddress.Owner, AAddress.Repository) then
+  begin
+    AuditOrFail(gckImportProvider, True, AAddress.PackageKey, 'the import capability covers ' + AAddress.ScopeText);
+    Exit;
+  end;
+  if FCapabilities.ProviderPackageDenyScope(IMPORT_PROVIDER_GITHUB, AAddress.Owner, AAddress.Repository,
+     DenyScope) then
+  begin
+    if DenyScope = '' then
+      Suggestion := 'refused by an unscoped import deny'
+    else
+      Suggestion := 'refused by the import deny ' + DenyScope;
+    AuditOrFail(gckImportProvider, False, AAddress.PackageKey, Suggestion);
+  end
+  else
+  begin
+    Owner := LowerCase(GITHUB_PROVIDER_PREFIX + AAddress.Owner);
+    Suggestion := Format(SSuggestProviderImportNotGranted, [AAddress.ScopeText, AAddress.ScopeText, Owner]);
+    AuditOrFail(gckImportProvider, False, AAddress.PackageKey,
+      'the import capability does not cover ' + AAddress.ScopeText);
+  end;
+  raise EG2PermissionDenied.CreateDenied(CapabilityName(gcImport), AAddress.PackageKey, Suggestion);
+end;
+
+{ the package store's decisions: a pin it verified or refused }
+procedure TG2ImportGrant.AuditProvider(const AAllowed: Boolean; const ASubject, AReason: string);
+begin
+  AuditOrFail(gckImportProvider, AAllowed, ASubject, AReason);
+end;
+
+{ GocciaScript's IsProviderGraphPath: a file of a materialized package, reached through the package's import-map
+  entry or imported by one of its own files }
+function TG2ImportGrant.ProviderGraph(const APath, AImportingFile, APackageRoot: string): Boolean;
+var
+  Package: TGocciaMaterializedPackage;
+  RelativePath: string;
+begin
+  Result := False;
+  if (APath = '') or not Assigned(Resolver) or not Assigned(Resolver.ProviderPackages) then
+    Exit;
+  Package := Resolver.ProviderPackages.FindPackage(APath, RelativePath);
+  if not Assigned(Package) then
+    Exit;
+  Result := ((APackageRoot <> '') and (ExcludeTrailingPathDelimiter(APackageRoot) = Package.Root)) or
+    ((AImportingFile <> '') and (Resolver.ProviderPackages.FindPackage(AImportingFile, RelativePath) = Package));
+end;
+
+{ verify on load: the bytes compiled are the bytes hashed }
+procedure TG2ImportGrant.CheckContent(const APath: UnicodeString; const B: RawByteString);
+var
+  HostPath: string;
+  Bytes: TBytes;
+begin
+  if not Assigned(Resolver) then
+    Exit;
+  HostPath := UTF8Encode(APath);
+  if not Resolver.IsProviderPackagePath(HostPath) then
+    Exit;
+  SetLength(Bytes, Length(B));
+  if Length(B) > 0 then
+    Move(B[1], Bytes[0], Length(B));
+  Resolver.VerifyProviderContent(HostPath, Bytes);
 end;
 
 constructor TG2ConsoleCapture.Create;
@@ -1311,7 +1590,7 @@ var
   Capture: TG2ConsoleCapture;
   Report: TG2FileReport;
   Resolver: TGocciaModuleResolver;
-  Grant: TG2NodeModulesGrant;
+  Grant: TG2ImportGrant;
   AliasBaseDirectory: string;
   GlobalsError: string;
   HeapStart: THeapStatus;
@@ -1333,10 +1612,13 @@ begin
     Verdict := FileConfigVerdict(FileConfigPath, AFileName);
     { the file's import resolution, as GocciaRunner's CreateEngine configures it }
     Capabilities := ResolveEngineCapabilities(FileConfigPath, AFileName);
-    Grant := TG2NodeModulesGrant.Create(Capabilities);
+    Grant := TG2ImportGrant.Create(Capabilities);
     Resolver := TGocciaModuleResolver.Create(ExtractFilePath(ExpandFileName(AFileName)));
+    Grant.Resolver := Resolver;
     Resolver.SetExtensions(ModuleImportExtensions);
     Resolver.NodeModulesGrant := Grant.Grant;
+    Resolver.ProviderGrant := Grant.GrantProvider;
+    Resolver.ProviderAudit := Grant.AuditProvider;
     Resolver.ProviderCachedOnly := ResolveFlagOption(EngineOptions.CachedOnly, FileConfig);
     if EngineOptions.Aliases.FromCommandLine or (RootConfigPath = '') then
       AliasBaseDirectory := GetCurrentDir
@@ -1374,6 +1656,8 @@ begin
         Engine.ProfileFunctions := Goccia.Profiler.pmFunctions in FProfiler.Mode;
       end;
       Engine.Resolver := Resolver;
+      Engine.ModuleContentCheck := Grant.CheckContent;
+      Engine.ProviderGraph := Grant.ProviderGraph;
       { GocciaRunner has no timer globals (the test runner does) }
       Engine.ExposeTimers := False;
       Capture.Capturing := IsJsonOutput;
@@ -1705,6 +1989,11 @@ begin
     before anything is read from it. The mode is set before the config's requests are checked, so the ones sandbox
     mode cannot grant are warned about rather than needing trust. --ignore-config-permissions ignores the
     section. }
+  if InstallModeActive then
+  begin
+    RunInstallMode;
+    Exit;
+  end;
   Verdict := RootConfigVerdict;
   if Verdict.Request.Sandbox.Declared and (Verdict.State <> ctsIgnored) then
   begin

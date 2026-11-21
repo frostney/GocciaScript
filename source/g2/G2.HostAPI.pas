@@ -12,7 +12,7 @@ unit G2.HostAPI;
 interface
 
 uses
-  G2.Core, Goccia.Capabilities, Goccia.ModuleResolver;
+  SysUtils, G2.Core, Goccia.Capabilities, Goccia.ModuleResolver;
 
 type
   { an audited read decision of the read policy (the engine's Audit, gckReadFile); False when the audit sink failed }
@@ -50,6 +50,22 @@ procedure SetConsoleSink(Sink: TConsoleSink);
 { the resolver of this thread's imports: a host's, configured with its import map, aliases and node_modules grant
   (Goccia.Modules.Resolver, not owned); nil for the plain one, which resolves relative and absolute paths only }
 procedure SetHostResolver(R: TModuleResolver);
+type
+  { a host's refusal of an import by its capability policy (a provider package or node_modules the import
+    capability does not grant), raised from the host resolver's grant: the resolution throws the host realm's
+    PermissionDenied "<Capability>: <Scope>" with Suggestion, as GocciaScript's ThrowPermissionDenied does }
+  EG2PermissionDenied = class(Exception)
+  public
+    Capability, Scope, Suggestion: string;
+    constructor CreateDenied(const ACapability, AScope, ASuggestion: string);
+  end;
+type
+  { whether Path is a file of a materialized provider package reached as that package: resolved through its
+    import-map entry (PackageRoot its root) or imported by one of its own files (ImportingFile); such a file is
+    pinned and verified as it loads, so the import grant covers it without a read grant (ADR 0122) }
+  TProviderGraphCheck = function(const Path, ImportingFile, PackageRoot: string): Boolean of object;
+{ this thread's provider package check (nil: none) }
+procedure SetProviderGraphCheck(Check: TProviderGraphCheck);
 { frees this thread's module resolution state (the plain resolver, the specifiers each module was first imported
   by): an engine's teardown, so the next engine on the thread starts without them }
 procedure HostModulesDone;
@@ -89,7 +105,7 @@ function RunTestSuites(var Json, Err: UnicodeString): Boolean;
 implementation
 
 uses
-  SysUtils, Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
+  Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
@@ -1138,6 +1154,9 @@ type
     Spec: string;
     Literal: Boolean;
     PackageDir: string;
+    { the importing file and the resolver of the request (the provider package check's) }
+    Importer: string;
+    Resolver: TModuleResolver;
     function IsProjectGraph(const Canonical: string): Boolean;
     function Verdict(const Canonical: string; Literal_: Boolean; out Denial: TReadDenial): Boolean;
     procedure Probe(const ACandidatePath: string);
@@ -1146,6 +1165,12 @@ type
 threadvar
   ReadPolicy: TReadPolicy;
   GuestLoads: Boolean;
+  ProviderGraph: TProviderGraphCheck;
+
+procedure SetProviderGraphCheck(Check: TProviderGraphCheck);
+begin
+  ProviderGraph := Check;
+end;
 
 procedure SetGuestLoads(On: Boolean);
 begin
@@ -1213,6 +1238,10 @@ procedure TReadPolicy.Probe(const ACandidatePath: string);
 var Canonical: string; Denial: TReadDenial; E: EReadRefused;
 begin
   Canonical := CanonicalCapabilityPath(ACandidatePath);
+  { a provider package's own file: confined and verified, the import grant covers it }
+  if Assigned(ProviderGraph) and Assigned(Resolver) and
+     ProviderGraph(ACandidatePath, Importer, Resolver.ProbePackageDirectory) and
+     not Caps.DeniesPath(gcRead, Canonical) then Exit;
   if Verdict(Canonical, Literal, Denial) then Exit;
   E := EReadRefused.Create(Spec);
   E.Canonical := Canonical;
@@ -1222,11 +1251,36 @@ end;
 
 { the refusal: audited, and a PermissionDenied naming the specifier the script wrote; the host path and the grant
   that would allow it travel only in the host's suggestion (ADR 0108) }
+constructor EG2PermissionDenied.CreateDenied(const ACapability, AScope, ASuggestion: string);
+begin
+  inherited Create(ACapability + ': ' + AScope);
+  Capability := ACapability;
+  Scope := AScope;
+  Suggestion := ASuggestion;
+end;
+
+{ the resolution's PermissionDenied, made in the host's realm, whose PermissionDenied the CLI installed (a config's
+  module runs in a realm of its own) }
+function DenyResolution(const Capability, Scope, Suggestion: string): Integer;
+var E: TValue; Saved: Integer;
+begin
+  E := VUndefined;
+  Saved := CurRealm;
+  if Saved <> HostRealm then SwitchRealm(HostRealm);
+  try
+    NewPermissionDenied(UnicodeString(Capability), UnicodeString(Scope), UnicodeString(Suggestion), E);
+  finally
+    if Saved <> HostRealm then SwitchRealm(Saved);
+  end;
+  SetResolveError(E);
+  Result := -2;
+end;
+
 function DenyRead(const Spec, Canonical: string; Denial: TReadDenial): Integer;
 const
   Reasons: array[TReadDenial] of string = ('read is denied for this path',
     'the path is outside the project and no read grant covers it', 'a computed import specifier needs a read grant');
-var Suggestion: string; E: TValue; Saved: Integer;
+var Suggestion: string;
 begin
   if Assigned(ReadPolicy.Audit) and not ReadPolicy.Audit(False, Canonical, Reasons[Denial]) then
   begin
@@ -1240,18 +1294,7 @@ begin
   else
     Suggestion := Format(SSuggestReadComputed, [Canonical, ExtractFileDir(Canonical)]);
   end;
-  E := VUndefined;
-  { made in the host's realm, whose PermissionDenied the CLI installed (a config's module runs in a realm of its
-    own) }
-  Saved := CurRealm;
-  if Saved <> HostRealm then SwitchRealm(HostRealm);
-  try
-    NewPermissionDenied('read', UnicodeString(Spec), UnicodeString(Suggestion), E);
-  finally
-    if Saved <> HostRealm then SwitchRealm(Saved);
-  end;
-  SetResolveError(E);
-  Result := -2;
+  Result := DenyResolution('read', Spec, Suggestion);
 end;
 
 function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
@@ -1288,6 +1331,8 @@ begin
     Policy.Spec := UTF8Encode(Spec);
     Policy.Literal := Literal;
     Policy.PackageDir := '';
+    Policy.Importer := Ref;
+    Policy.Resolver := Resolver;
     SavedGuard := Resolver.ProbeGuard;
     Resolver.ProbeGuard := Policy.Probe;
   end;
@@ -1297,7 +1342,9 @@ begin
     finally
       if Guard then Resolver.ProbeGuard := SavedGuard;
     end;
-    if Guard and not IsVirtualModuleURI(Resolved) and not IsHostModuleKey(Resolved) then
+    if Guard and not IsVirtualModuleURI(Resolved) and not IsHostModuleKey(Resolved) and
+       not (Assigned(ProviderGraph) and ProviderGraph(UTF8Encode(Resolved), Ref, Resolver.LastPackageDirectory) and
+         not Policy.Caps.DeniesPath(gcRead, CanonicalCapabilityPath(UTF8Encode(Resolved)))) then
     begin
       Canonical := CanonicalCapabilityPath(UTF8Encode(Resolved));
       { a literal bare import's package (the directory it resolved in) is part of the graph }
@@ -1339,6 +1386,8 @@ begin
       if (ManifestPath <> '') and (Spec = ManifestPath) then
         Result := DenyRead(UTF8Encode(ManifestWritten), E.Canonical, E.Denial)
       else Result := DenyRead(E.Message, E.Canonical, E.Denial);
+    on E: EG2PermissionDenied do
+      Result := DenyResolution(E.Capability, E.Scope, E.Suggestion);
     on E: Exception do
     begin
       Resolved := UTF8Decode(E.Message);

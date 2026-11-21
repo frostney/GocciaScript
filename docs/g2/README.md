@@ -170,6 +170,17 @@ manifests, globals and host environment) are not judged. What a config names is 
 against the directory of the config that names it, its JavaScript manifests and globals modules evaluated in a realm
 of their own, and a globals module may export data only.
 
+### Provider imports and install mode
+
+A `github:` import-map entry resolves through the shared resolver's package store, as on the old engine
+([ADR 0122](../adr/0122-unified-capability-model.md)). The runner grants it when an import scope covers the
+repository (`github`, `github:<owner>` or `github:<owner>/<repo>`); a refusal throws `PermissionDenied` naming the
+package, with the grants that would cover it or the deny that refused it. A package file reached through its
+import-map entry, or imported by another file of the same package, is part of the module graph despite living in
+`.goccia`. Each one is checked against its pin as it loads (`G2.Modules` `SetModuleContentCheck`), so the bytes
+compiled are the bytes hashed. Sandbox mode refuses every provider package. Install mode (`--add`, `--remove`,
+`--install`, `--update`) runs the old runner's installer (`Goccia.Packages.Install`) unchanged.
+
 ### Profiling
 
 `--profile` reports through GocciaScript's profilers and writers (`Goccia.Profiler`, `Goccia.Profiler.Compile`,
