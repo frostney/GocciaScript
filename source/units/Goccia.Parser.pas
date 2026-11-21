@@ -10984,7 +10984,8 @@ var
         if PeekType <> gttComma then
           Break;
         AdvanceType;
-      until False;
+        // A trailing comma, `Wrap<T,>`.
+      until PeekType in [gttGreater, gttRightShift, gttUnsignedRightShift];
       Result := CloseAngle;
     end;
 

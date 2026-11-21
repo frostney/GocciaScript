@@ -51,6 +51,10 @@ describe("template literal type arguments", () => {
     expect(identity<`${[key: "x"][0]}`>(4)).toBe(4);
   });
 
+  test("in nested type arguments with a trailing comma", () => {
+    expect(identity<Array<`t${string}`,>>(7)).toBe(7);
+  });
+
   test("in a union", () => {
     expect(identity<`a${string}` | "b">(5)).toBe(5);
   });
