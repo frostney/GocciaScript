@@ -844,9 +844,11 @@ begin
   // dropping a binding's value left that copy in the frame, which runs on
   // to the module's end. The clear runs once per statement, since a module
   // body runs once; a loop's own clear covers a top-level loop, and a
-  // labeled statement clears in CompileProgram, after its break targets.
+  // labeled statement clears in CompileProgram, after its break targets,
+  // and not here, also when it awaited.
   if (not Result) and (StatementPeak > Ctx.Scope.NextSlot) and
      (((Ctx.Scope.UnclearedAwaitCount <> AwaitMark) and
+       not ((AStmt = FModuleTopLevelStatement) and (AStmt.LabelCount > 0)) and
        ((AStmt is TGocciaExpressionStatement) or
         (AStmt is TGocciaVariableDeclaration) or
         (AStmt is TGocciaDestructuringDeclaration) or

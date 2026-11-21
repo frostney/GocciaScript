@@ -62,8 +62,9 @@ stop keeping it.**
   registers it used above the live ones once it ends, whether it awaited or
   not, with the same line-0 clear #2027 uses for an awaited statement
   (`EmitUncountedClearDeadRegisters`), so line coverage does not count it. A
-  statement that also awaited clears once, not twice, and an await in a
-  branch it ends with does not clear in that branch as well. A top-level loop is
+  statement that also awaited clears once, not twice: an await in a branch
+  it ends with does not clear in that branch as well, and a labeled one
+  clears only after its `break label` targets. A top-level loop is
   covered by its own clear after it; a labeled statement that is not a loop
   clears after its `break label` jumps land.
 - `TGocciaCompiler.DiscardsCompletionValue` compiles a top level whose
@@ -74,7 +75,9 @@ stop keeping it.**
   own file loads a separate module, which keeps none. A heap snapshot writes
   that entry as a record of its own kind (`mskEntrySource`), so a restore,
   also into an engine made with another entry, compiles each module as the
-  run did and the bytecode it hashes matches.
+  run did and the bytecode it hashes matches. The module records' schema
+  version goes to 2, so a reader of either version refuses the other's
+  records before decoding them.
 - An entry keeps its completion value: `files[].result`, `Execute` and
   `runScript` report exactly what they did.
 

@@ -217,7 +217,8 @@ type
     procedure TestDeepBodyParametersMayBeDropped;
     procedure TestYieldInitializerClearsItsTemporary;
     function CompileModuleCode(const ASource: string;
-      const ALinked, ADiscardsCompletionValue: Boolean): TGocciaBytecodeModule;
+      const ALinked, ADiscardsCompletionValue: Boolean;
+      const ALabels: Boolean = False): TGocciaBytecodeModule;
     procedure TestModuleTopLevelStatementsClearTheirRegisters;
     procedure TestImportedModuleKeepsNoCompletionValue;
     procedure TestModuleTopLevelAwaitBranchClearsOnce;
@@ -994,7 +995,8 @@ end;
 // loader links (its bindings in the module's environment record), otherwise
 // as a global-backed script top level.
 function TTestCompiler.CompileModuleCode(const ASource: string;
-  const ALinked, ADiscardsCompletionValue: Boolean): TGocciaBytecodeModule;
+  const ALinked, ADiscardsCompletionValue: Boolean;
+  const ALabels: Boolean): TGocciaBytecodeModule;
 var
   Lexer: TGocciaLexer;
   Parser: TGocciaParser;
@@ -1008,6 +1010,7 @@ begin
   Parser := TGocciaParser.CreateFromLexer(Lexer, '<module>', SourceLines);
   ParserOptions := Parser.Options;
   ParserOptions.ModuleSource := True;
+  ParserOptions.LabelStatementsEnabled := ALabels;
   Parser.ApplyOptions(ParserOptions);
   ProgramNode := Parser.Parse;
   Compiler := TGocciaCompiler.Create('<module>');
@@ -1138,12 +1141,14 @@ begin
 end;
 
 // A top-level statement of module code clears at its end on every path, so
-// an await in a branch it ends with does not clear in that branch as well:
-// each register gets one line-0 clear, for an imported module and an entry.
+// an await in a branch it ends with does not clear in that branch as well,
+// and a labeled one clears only after its break targets: each register gets
+// one line-0 clear, for an imported module and an entry.
 procedure TTestCompiler.TestModuleTopLevelAwaitBranchClearsOnce;
 
   // Whether a register gets a second line-0 clear after the prologue.
-  function ClearsARegisterTwice(const ADiscards: Boolean): Boolean;
+  function ClearsARegisterTwice(const ASource: string;
+    const ADiscards: Boolean): Boolean;
   var
     Module: TGocciaBytecodeModule;
     Top: TGocciaFunctionTemplate;
@@ -1153,8 +1158,7 @@ procedure TTestCompiler.TestModuleTopLevelAwaitBranchClearsOnce;
     Instruction: UInt32;
   begin
     Result := False;
-    Module := CompileModuleCode('globalThis.flag ? ' +
-      'await globalThis.f(globalThis.a, globalThis.b) : 0;', True, ADiscards);
+    Module := CompileModuleCode(ASource, True, ADiscards, True);
     try
       Top := Module.TopLevel;
       SetLength(Seen, Top.MaxRegisters + 1);
@@ -1177,9 +1181,15 @@ procedure TTestCompiler.TestModuleTopLevelAwaitBranchClearsOnce;
     end;
   end;
 
+const
+  BRANCH = 'globalThis.flag ? ' +
+    'await globalThis.f(globalThis.a, globalThis.b) : 0;';
+  LABELED = 'label: await globalThis.f(globalThis.a, globalThis.b);';
 begin
-  Expect<Boolean>(ClearsARegisterTwice(True)).ToBe(False);
-  Expect<Boolean>(ClearsARegisterTwice(False)).ToBe(False);
+  Expect<Boolean>(ClearsARegisterTwice(BRANCH, True)).ToBe(False);
+  Expect<Boolean>(ClearsARegisterTwice(BRANCH, False)).ToBe(False);
+  Expect<Boolean>(ClearsARegisterTwice(LABELED, True)).ToBe(False);
+  Expect<Boolean>(ClearsARegisterTwice(LABELED, False)).ToBe(False);
 end;
 
 // A lexical binding initialized by a yield is compiled through a temporary,

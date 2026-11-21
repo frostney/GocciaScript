@@ -124,7 +124,9 @@ end;
 
 function TGocciaModuleSnapshotRecords.SchemaVersion: Word;
 begin
-  Result := 1;
+  // 2: RECORD_ENTRY_SOURCE, the entry Execute evaluated, which version 1
+  // wrote as RECORD_SOURCE and compiled keeping its completion value.
+  Result := 2;
 end;
 
 procedure TGocciaModuleSnapshotRecords.ListRecords(
