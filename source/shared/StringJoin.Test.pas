@@ -28,7 +28,7 @@ type
     procedure TestGateIsAskedBeforeTheResult;
     procedure TestARaisingGateOrPollLeavesTheBufferEmpty;
     procedure TestACopyRefusesToAdd;
-    procedure TestGateCountsTablesAndStringsHeldOnlyHere;
+    procedure TestChargesTablesAndStringsHeldOnlyHere;
     procedure TestEmptySeparatorKeepsNoGaps;
   public
     procedure SetupTests; override;
@@ -58,14 +58,14 @@ begin
     TestRepeatedSeparatorsTakeNoScratch);
   Test('the final copy polls once per poll interval of characters',
     TestFinalCopyPolls);
-  Test('the gate is asked about the tables and the result before they are allocated',
+  Test('the gate is asked about the result before it is allocated',
     TestGateIsAskedBeforeTheResult);
   Test('after a gate or poll raises, Release empties the buffer for another Init',
     TestARaisingGateOrPollLeavesTheBufferEmpty);
   Test('a copy of the buffer refuses to add or join',
     TestACopyRefusesToAdd);
-  Test('the gate is asked about the tables and the strings held only here as well',
-    TestGateCountsTablesAndStringsHeldOnlyHere);
+  Test('the tables and the strings held only here are charged while held',
+    TestChargesTablesAndStringsHeldOnlyHere);
   Test('with an empty separator, empty elements need no bookkeeping',
     TestEmptySeparatorKeepsNoGaps);
 end;
@@ -305,23 +305,17 @@ begin
   GateCalls := 0;
   GateRefusesAbove := High(Int64);
   Joined.Init(',', nil, RecordGate);
-  for I := 0 to INLINE_PART_COUNT - 1 do
+  for I := 0 to 99 do
     Joined.Add(UnicodeString(IntToStr(I)));
-  // The record holds these: nothing allocated, nothing asked.
+  // The tables are charged, not asked about.
   Expect<Integer>(GateCalls).ToBe(0);
-  Joined.Add('x');
-  Expect<Integer>(GateCalls).ToBe(1);
-  Expect<Boolean>(LastGateBytes = 2 * INLINE_PART_COUNT * SizeOf(Pointer))
-    .ToBe(True);
   Text := Joined.Join;
-  Expect<Integer>(GateCalls).ToBe(2);
-  // The result, beside the table it is copied from.
-  Expect<Boolean>(LastGateBytes = Length(Text) * SizeOf(WideChar) +
-    2 * INLINE_PART_COUNT * SizeOf(Pointer)).ToBe(True);
+  Expect<Integer>(GateCalls).ToBe(1);
+  Expect<Boolean>(LastGateBytes = Length(Text) * SizeOf(WideChar)).ToBe(True);
   // A lone string is the result itself: nothing is allocated, nothing asked.
   Joined.Add(Text);
   Expect<Boolean>(Pointer(Joined.Join) = Pointer(Text)).ToBe(True);
-  Expect<Integer>(GateCalls).ToBe(2);
+  Expect<Integer>(GateCalls).ToBe(1);
   Joined.Release;
 end;
 
@@ -341,9 +335,8 @@ var
   Part: UnicodeString;
   I: Integer;
 begin
-  // Above the last table growth's ask, the old table and the new, below the
-  // result's 17,778 bytes beside the new table, whatever a pointer's size.
-  GateRefusesAbove := 3 * 1024 * SizeOf(Pointer) + 1;
+  // Below the result's 17,778 bytes; the tables are charged, not asked.
+  GateRefusesAbove := 17000;
   Joined.Init(',', nil, RecordGate);
   for I := 0 to 1999 do
     Joined.Add(UnicodeString(IntToStr(I)));
@@ -391,28 +384,50 @@ begin
   Joined.Release;
 end;
 
-procedure TStringJoinTests.TestGateCountsTablesAndStringsHeldOnlyHere;
+var
+  ChargedBytes, PeakChargedBytes: Int64;
+
+procedure RecordCharge(const ABytes: Int64);
+begin
+  Inc(ChargedBytes, ABytes);
+  if ChargedBytes > PeakChargedBytes then
+    PeakChargedBytes := ChargedBytes;
+end;
+
+// The engine hands Add a string through a function result, beside the value
+// that owns it: two references.
+function ThroughResult(const AText: UnicodeString): UnicodeString;
+begin
+  Result := AText;
+end;
+
+procedure TStringJoinTests.TestChargesTablesAndStringsHeldOnlyHere;
 var
   Joined: TStringJoinBuffer;
-  Text: UnicodeString;
+  Shared: UnicodeString;
   I: Integer;
-  TableBytes: Int64;
 begin
-  GateCalls := 0;
-  GateRefusesAbove := High(Int64);
-  Joined.Init(',', nil, RecordGate);
+  ChargedBytes := 0;
+  PeakChargedBytes := 0;
+  Joined.Init(',', nil, nil, RecordCharge);
+  // Held only here, and only here: charged.
   for I := 0 to INLINE_PART_COUNT do
     Joined.Add(StringOfChar('h', 10), True);
-  // The first table, for the part past the record's.
-  TableBytes := 2 * INLINE_PART_COUNT * SizeOf(Pointer);
-  Expect<Boolean>(LastGateBytes = INLINE_PART_COUNT * 10 * SizeOf(WideChar) +
-    TableBytes).ToBe(True);
-  Text := Joined.Join;
-  // The result, beside the table and every string held only here.
-  Expect<Boolean>(LastGateBytes = (INLINE_PART_COUNT + 1) * 10 *
-    SizeOf(WideChar) + TableBytes + Length(Text) * SizeOf(WideChar))
+  Expect<Boolean>(ChargedBytes = (INLINE_PART_COUNT + 1) * 10 *
+    SizeOf(WideChar) + 2 * INLINE_PART_COUNT * SizeOf(Pointer)).ToBe(True);
+  // Held elsewhere too: charged once, the first time, at most.
+  Shared := StringOfChar('s', 1000);
+  for I := 1 to 5 do
+    Joined.Add(ThroughResult(Shared), True);
+  Expect<Boolean>(ChargedBytes <= (INLINE_PART_COUNT + 1) * 10 *
+    SizeOf(WideChar) + 1000 * SizeOf(WideChar) +
+    2 * INLINE_PART_COUNT * SizeOf(Pointer)).ToBe(True);
+  Joined.Join;
+  // The strings are released with the join; the table with the buffer.
+  Expect<Boolean>(ChargedBytes = 2 * INLINE_PART_COUNT * SizeOf(Pointer))
     .ToBe(True);
   Joined.Release;
+  Expect<Boolean>(ChargedBytes = 0).ToBe(True);
 end;
 
 procedure TStringJoinTests.TestEmptySeparatorKeepsNoGaps;

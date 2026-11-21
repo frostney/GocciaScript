@@ -23,13 +23,12 @@ unit StringJoin;
 //
 // A poll, when given, is called every POLL_INTERVAL_LENGTH characters of the
 // final copy, strings and separators alike, so that a host's deadline or
-// abort can end a join whose result is long. A gate, when given, is asked
-// before each allocation the buffer makes, its tables and the result alike,
-// about that allocation plus the bytes the buffer already holds that nothing
-// else accounts for: its tables, and the strings added as held only here,
-// whose owners a collection may free while the buffer still holds them. It
-// is also asked about a result too long for any string before the join gives
-// up.
+// abort can end a join whose result is long. A charge, when given, reserves
+// what the buffer holds that nothing else accounts for, its tables and the
+// strings added as held only here, for as long as it holds them, so that
+// every other allocation meanwhile sees them too. A gate, when given, is
+// asked about the result before it is allocated, and about a result too long
+// for any string before the join gives up.
 
 interface
 
@@ -39,7 +38,12 @@ uses
 const
   // The longest result, in characters, so that its byte size fits a SizeInt
   // with room for the string's header on every target.
+  {$IFDEF FPC}
   MAXIMUM_JOIN_LENGTH = High(SizeInt) div (2 * SizeOf(WideChar));
+  {$ELSE}
+  // Delphi's UnicodeString length is an Integer on every target.
+  MAXIMUM_JOIN_LENGTH = High(Integer) div 2;
+  {$ENDIF}
   // What a gate is asked about for a result no string can hold.
   TOO_LONG_RESULT_BYTES = High(Int64);
   INLINE_PART_COUNT = 8;
@@ -59,6 +63,9 @@ type
   // can hold: the gate raises its own error for it, or the join raises
   // EOutOfMemory.
   TStringJoinGate = procedure(const ABytes: Int64);
+  // Reserves ABytes against a budget when positive, raising when they do not
+  // fit, and releases -ABytes when negative, which never raises.
+  TStringJoinCharge = procedure(const ABytes: Int64);
 
   // A run of empty elements, before the part at PartIndex.
   TStringJoinGap = record
@@ -86,10 +93,11 @@ type
     FPendingEmptyCount: SizeInt;
     FElementCount: SizeInt;
     FPartLength: SizeInt;
-    // The bytes of the tables, and of the strings held only here.
+    FCharge: TStringJoinCharge;
+    // The bytes charged for the tables, and for the strings held only here.
     FTableBytes: Int64;
     FHeldTextBytes: Int64;
-    procedure Ask(const ABytes: Int64); {$IFDEF FPC}inline;{$ENDIF}
+    procedure Charge(const ABytes: Int64); {$IFDEF FPC}inline;{$ENDIF}
     procedure CheckInPlace; {$IFDEF FPC}inline;{$ENDIF}
     function PartSlot(const AIndex: SizeInt): PPointer; {$IFDEF FPC}inline;{$ENDIF}
     procedure AddGap;
@@ -100,7 +108,8 @@ type
     procedure ReleaseParts;
   public
     procedure Init(const ASeparator: UnicodeString;
-      const APoll: TStringJoinPoll = nil; const AGate: TStringJoinGate = nil);
+      const APoll: TStringJoinPoll = nil; const AGate: TStringJoinGate = nil;
+      const ACharge: TStringJoinCharge = nil);
     // Adds the next element's string; an empty one still takes its place
     // between two separators. AHeldOnlyHere says that the value that owns the
     // string, and accounts for its bytes, may be freed while the buffer holds
@@ -153,13 +162,15 @@ begin
 end;
 
 procedure TStringJoinBuffer.Init(const ASeparator: UnicodeString;
-  const APoll: TStringJoinPoll; const AGate: TStringJoinGate);
+  const APoll: TStringJoinPoll; const AGate: TStringJoinGate;
+  const ACharge: TStringJoinCharge);
 begin
   FSelf := @Self;
   FSeparator := PWideChar(ASeparator);
   FSeparatorLength := System.Length(ASeparator);
   FPoll := APoll;
   FGate := AGate;
+  FCharge := ACharge;
   FParts := nil;
   FPartCapacity := 0;
   FPartCount := 0;
@@ -173,10 +184,10 @@ begin
   FHeldTextBytes := 0;
 end;
 
-procedure TStringJoinBuffer.Ask(const ABytes: Int64);
+procedure TStringJoinBuffer.Charge(const ABytes: Int64);
 begin
-  if Assigned(FGate) then
-    FGate(FTableBytes + FHeldTextBytes + ABytes);
+  if Assigned(FCharge) and (ABytes <> 0) then
+    FCharge(ABytes);
 end;
 
 procedure TStringJoinBuffer.CheckInPlace;
@@ -204,11 +215,13 @@ begin
       NewCapacity := INLINE_PART_COUNT
     else
       NewCapacity := FGapCapacity * 2;
-    // The old block may still be held while the new one is filled.
-    Ask(Int64(NewCapacity) * SizeOf(TStringJoinGap));
+    // The old block may still be held while the new one is filled: both are
+    // charged until the move is done.
+    Charge(Int64(NewCapacity) * SizeOf(TStringJoinGap));
+    Inc(FTableBytes, Int64(NewCapacity) * SizeOf(TStringJoinGap));
     ReAllocMem(FGaps, NewCapacity * SizeOf(TStringJoinGap));
-    Inc(FTableBytes, Int64(NewCapacity - FGapCapacity) *
-      SizeOf(TStringJoinGap));
+    Charge(-Int64(FGapCapacity) * SizeOf(TStringJoinGap));
+    Dec(FTableBytes, Int64(FGapCapacity) * SizeOf(TStringJoinGap));
     FGapCapacity := NewCapacity;
   end;
   FGaps[FGapCount].PartIndex := FPartCount;
@@ -225,10 +238,13 @@ begin
     NewCapacity := INLINE_PART_COUNT * 2
   else
     NewCapacity := FPartCapacity * 2;
-  // The old block may still be held while the new one is filled.
-  Ask(Int64(NewCapacity) * SizeOf(Pointer));
+  // The old block may still be held while the new one is filled: both are
+  // charged until the move is done.
+  Charge(Int64(NewCapacity) * SizeOf(Pointer));
+  Inc(FTableBytes, Int64(NewCapacity) * SizeOf(Pointer));
   ReAllocMem(FParts, NewCapacity * SizeOf(Pointer));
-  Inc(FTableBytes, Int64(NewCapacity - FPartCapacity) * SizeOf(Pointer));
+  Charge(-Int64(FPartCapacity) * SizeOf(Pointer));
+  Dec(FTableBytes, Int64(FPartCapacity) * SizeOf(Pointer));
   FPartCapacity := NewCapacity;
 end;
 
@@ -286,12 +302,20 @@ begin
     AddGap;
   if FPartCount >= INLINE_PART_COUNT + FPartCapacity then
     GrowParts;
+  // A string held only here is charged while the buffer holds it, unless
+  // something else holds its text too: the caller's own reference and that of
+  // the value it came from account for two, and a third, from a value still
+  // reachable or this buffer's own earlier copy, means the text is counted
+  // already, so a string joined many times is charged once at most.
+  if AHeldOnlyHere and (StringRefCount(AText) <= 2) then
+  begin
+    Charge(Int64(TextLength) * SizeOf(WideChar));
+    Inc(FHeldTextBytes, Int64(TextLength) * SizeOf(WideChar));
+  end;
   HoldText(PartSlot(FPartCount)^, AText);
   Inc(FPartCount);
   Inc(FPartLength, TextLength);
   Inc(FElementCount);
-  if AHeldOnlyHere then
-    Inc(FHeldTextBytes, Int64(TextLength) * SizeOf(WideChar));
 end;
 
 procedure TStringJoinBuffer.ReleaseParts;
@@ -305,6 +329,7 @@ begin
   FPendingEmptyCount := 0;
   FElementCount := 0;
   FPartLength := 0;
+  Charge(-FHeldTextBytes);
   FHeldTextBytes := 0;
 end;
 
@@ -325,6 +350,7 @@ begin
     FGaps := nil;
     FGapCapacity := 0;
   end;
+  Charge(-FTableBytes);
   FTableBytes := 0;
   FSelf := nil;
 end;
@@ -362,7 +388,8 @@ begin
   TotalLength := Int64(SeparatorCount) * SeparatorLength + FPartLength;
   if TotalLength > MAXIMUM_JOIN_LENGTH then
     RefuseLength(TotalLength);
-  Ask(TotalLength * SizeOf(WideChar));
+  if Assigned(FGate) then
+    FGate(TotalLength * SizeOf(WideChar));
   Result := '';
   SetLength(Result, SizeInt(TotalLength));
   Target := PWideChar(Result);

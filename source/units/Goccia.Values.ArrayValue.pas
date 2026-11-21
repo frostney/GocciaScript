@@ -1995,7 +1995,7 @@ end;
 // raise. ASeparator outlives the buffer, which does not hold it. A string
 // whose value the array does not hold itself (converted from another value,
 // or read through a getter or a proxy) may be collected, and its bytes
-// uncounted, while the buffer still holds the string, so the buffer counts
+// uncounted, while the buffer still holds the string, so the buffer charges
 // it. A string the array's own storage holds stays counted by its value.
 function JoinManyElements(var AView: TArrayLikeView;
   const ASeparator: string): string;
@@ -2005,7 +2005,8 @@ var
   Element: TGocciaValue;
   Converted: TGocciaStringLiteralValue;
 begin
-  Joined.Init(ASeparator, CheckExecutionTimeoutNow, CheckStringResultBytes);
+  Joined.Init(ASeparator, CheckExecutionTimeoutNow, CheckStringResultBytes,
+    ChargeJoinBytes);
   try
     for I := 0 to AView.Len - 1 do
     begin

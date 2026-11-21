@@ -3124,7 +3124,8 @@ var
   I: Integer;
   Element: TGocciaValue;
 begin
-  Joined.Init(ASeparator, CheckExecutionTimeoutNow, CheckStringResultBytes);
+  Joined.Init(ASeparator, CheckExecutionTimeoutNow, CheckStringResultBytes,
+    ChargeJoinBytes);
   try
     for I := 0 to ALength - 1 do
     begin
@@ -3193,8 +3194,8 @@ var
 begin
   TA := RequireAttachedTypedArray(AThisValue, '%TypedArray%.prototype.toLocaleString');
   Len := TA.Length;
-  Joined.Init(',', CheckExecutionTimeoutNow,
-    CheckStringResultBytes);
+  Joined.Init(',', CheckExecutionTimeoutNow, CheckStringResultBytes,
+    ChargeJoinBytes);
   try
     for I := 0 to Len - 1 do
     begin

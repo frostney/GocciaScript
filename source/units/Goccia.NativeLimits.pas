@@ -25,6 +25,10 @@ procedure ReleaseNativeBytes(const ABytes: Int64);
   charge's own path does; and "Invalid string length" for a result no string
   can hold (TOO_LONG_RESULT_BYTES). }
 procedure CheckStringResultBytes(const ABytes: Int64);
+{ StringJoin's charge: reserves ABytes when positive, as ReserveNativeBytes
+  does, with its catchable RangeError when they do not fit, and releases
+  -ABytes when negative. }
+procedure ChargeJoinBytes(const ABytes: Int64);
 
 implementation
 
@@ -122,6 +126,14 @@ begin
   if Assigned(GC) and GC.TryCollectForLimitedBytes(ABytes) then
     Exit;
   ThrowRangeError(SErrorMemoryLimitExceeded, SSuggestMemoryLimitExceeded);
+end;
+
+procedure ChargeJoinBytes(const ABytes: Int64);
+begin
+  if ABytes > 0 then
+    ReserveNativeBytes(ABytes)
+  else if ABytes < 0 then
+    ReleaseNativeBytes(-ABytes);
 end;
 
 end.
