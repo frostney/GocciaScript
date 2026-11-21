@@ -313,43 +313,56 @@ begin
 end;
 
 // Another thread's bounds come from the thread library, which knows the
-// stack it gave the thread, and not from /proc/self/maps: glibc 2.42 and
-// later install a thread's guard page inside its stack's mapping
+// stack it gave the thread, and not from /proc/self/maps alone: glibc 2.42
+// and later install a thread's guard page inside its stack's mapping
 // (MADV_GUARD_INSTALL, Linux 6.13 and later) instead of as a mapping of its
 // own, and the kernel merges two thread stacks that lie next to each other
 // into one mapping. /proc/self/maps then cannot tell a thread's own stack from
 // a neighbour's: a 512 KiB stack mapped just below a 4 MiB one reads as
 // 4.5 MiB. glibc before 2.34 keeps pthread_getattr_np in libpthread, so every
-// Linux program that uses this unit links it.
+// Linux program that uses this unit links it. The thread library's bounds are
+// still narrowed to the mapping that holds the running frame: for a stack the
+// host supplied, glibc reports the whole buffer, including any pages the host
+// protected at its bottom.
 //
 // The main thread's bounds, and another thread's where the thread library
-// cannot give them or gives bounds that do not hold the running frame, are
-// read from the mapping that holds the running frame in /proc/self/maps. The main thread's stack grows down to RLIMIT_STACK
-// below its top, but not into the guard gap above the mapping beneath it.
-// The kernel marks it [stack]; Valgrind gives its program a main stack of its
-// own, which is not marked and starts a few pages long.
+// cannot give them or gives bounds that do not hold the running frame (code
+// running on a stack of the host's own, such as a fiber), are read from the
+// mapping that holds the running frame in /proc/self/maps. The main thread's
+// stack grows down to RLIMIT_STACK below its top, but not into the guard gap
+// above the mapping beneath it. The kernel marks it [stack]; Valgrind gives
+// its program a main stack of its own, which is not marked and starts a few
+// pages long.
 function TryGetSystemStackBounds(out ALow, ASize: NativeUInt): Boolean;
 var
   Maps: TextFile;
   Line: AnsiString;
   Position, MapStart, MapEnd, PreviousEnd, Size: NativeUInt;
+  LibraryLow, LibrarySize, LibraryTop: NativeUInt;
+  HasLibraryBounds: Boolean;
   Limits: TRLimit;
 begin
-  Position := NativeStackPosition;
-  // A thread that runs on a stack of the host's own, such as a fiber, is
-  // given bounds that do not hold its frame, and reads the mapping instead.
-  if not IsMainThread and TryGetThreadLibraryStackBounds(ALow, ASize) and
-     (Position > ALow) and (Position - ALow < ASize) then
-    Exit(True);
   ALow := 0;
   ASize := 0;
   Result := False;
+  Position := NativeStackPosition;
+  HasLibraryBounds := not IsMainThread and
+    TryGetThreadLibraryStackBounds(LibraryLow, LibrarySize) and
+    (Position > LibraryLow) and (Position - LibraryLow < LibrarySize);
   AssignFile(Maps, '/proc/self/maps');
   {$I-}
   Reset(Maps);
   {$I+}
   if IOResult <> 0 then
+  begin
+    if HasLibraryBounds then
+    begin
+      ALow := LibraryLow;
+      ASize := LibrarySize;
+      Result := True;
+    end;
     Exit;
+  end;
   try
     PreviousEnd := 0;
     while not Eof(Maps) do
@@ -359,7 +372,20 @@ begin
         Continue;
       if (Position >= MapStart) and (Position < MapEnd) then
       begin
-        if (Pos('[stack]', Line) > 0) or IsMainThread then
+        if HasLibraryBounds then
+        begin
+          // Both hold the running frame, so they overlap.
+          LibraryTop := LibraryLow + LibrarySize;
+          if MapStart > LibraryLow then
+            ALow := MapStart
+          else
+            ALow := LibraryLow;
+          if MapEnd < LibraryTop then
+            ASize := MapEnd - ALow
+          else
+            ASize := LibraryTop - ALow;
+        end
+        else if (Pos('[stack]', Line) > 0) or IsMainThread then
         begin
           if (FpGetRLimit(RLIMIT_STACK, @Limits) = 0) and
              (Limits.rlim_cur <> High(rlim_t)) then
@@ -385,6 +411,12 @@ begin
         Exit(ASize > 0);
       end;
       PreviousEnd := MapEnd;
+    end;
+    if HasLibraryBounds then
+    begin
+      ALow := LibraryLow;
+      ASize := LibrarySize;
+      Result := True;
     end;
   finally
     CloseFile(Maps);

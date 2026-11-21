@@ -118,6 +118,27 @@ begin
   POwnStackProbe(AArg)^.Position := NativeStackPosition;
   Result := nil;
 end;
+
+// Runs ProbeOwnStack on a thread whose stack is ASize bytes at AStack.
+function ProbeOnOwnStack(const AStack: Pointer; const ASize: NativeUInt;
+  out AProbe: TOwnStackProbe): Boolean;
+var
+  Attr: pthread_attr_t;
+  Thread: pthread_t;
+begin
+  FillChar(AProbe, SizeOf(AProbe), 0);
+  Result := False;
+  if pthread_attr_init(@Attr) <> 0 then
+    Exit;
+  try
+    Result := (pthread_attr_setstack(@Attr, AStack, ASize) = 0) and
+      (pthread_create(@Thread, @Attr, @ProbeOwnStack, @AProbe) = 0);
+  finally
+    pthread_attr_destroy(@Attr);
+  end;
+  if Result then
+    pthread_join(Thread, nil);
+end;
 {$ENDIF}
 
 constructor TProbeThread.Create(const AStackSize: SizeUInt;
@@ -374,19 +395,19 @@ end;
 // A thread whose stack is part of a larger mapping, as a thread stack is once
 // the kernel merges it with its neighbours: here the middle third of one
 // mapping the test owns, so /proc/self/maps shows three times the stack
-// wherever the test runs.
+// wherever the test runs. Then the same stack with its bottom protected, as a
+// host can do to a stack it supplies: the thread library still reports the
+// whole buffer.
 procedure TStackLimitTests.TestStackInsideALargerMappingKeepsAQuarterFree;
 const
   STACK_BYTES = 640 * 1024;
+  PROTECTED_BYTES = 256 * 1024;
 var
-  Mapping: Pointer;
-  Attr: pthread_attr_t;
-  Thread: pthread_t;
+  Mapping, Stack: PByte;
   Probe: TOwnStackProbe;
   Starter: TProbeThread;
-  Created: Boolean;
   Room: NativeUInt;
-  Describe: string;
+  Started: Boolean;
 begin
   // The RTL gives each thread its own threadvars once a thread of its own
   // has started; a thread it did not start then gets them on first use.
@@ -399,33 +420,38 @@ begin
   end;
   Mapping := Fpmmap(nil, 3 * STACK_BYTES, PROT_READ or PROT_WRITE,
     MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
-  Expect<Boolean>(Mapping <> MAP_FAILED).ToBe(True);
-  if Mapping = MAP_FAILED then
+  Expect<Boolean>(Pointer(Mapping) <> MAP_FAILED).ToBe(True);
+  if Pointer(Mapping) = MAP_FAILED then
     Exit;
+  Stack := Mapping + STACK_BYTES;
   try
-    FillChar(Probe, SizeOf(Probe), 0);
-    Expect<Integer>(Pthread_attr_init(@Attr)).ToBe(0);
-    try
-      Expect<Integer>(Pthread_attr_setstack(@Attr,
-        PByte(Mapping) + STACK_BYTES, STACK_BYTES)).ToBe(0);
-      Created := pthread_create(@Thread, @Attr, @ProbeOwnStack, @Probe) = 0;
-    finally
-      Pthread_attr_destroy(@Attr);
-    end;
-    Expect<Boolean>(Created).ToBe(True);
-    if not Created then
+    Started := ProbeOnOwnStack(Stack, STACK_BYTES, Probe);
+    Expect<Boolean>(Started).ToBe(True);
+    if not Started then
       Exit;
-    Pthread_join(Thread, nil);
     Room := Probe.Position - Probe.Limit;
-    Describe := Format('stack $%x, limit $%x, position $%x, room %d',
-      [NativeUInt(Mapping) + STACK_BYTES, Probe.Limit, Probe.Position,
-       Int64(Probe.Position) - Int64(Probe.Limit)]);
-    if (Probe.Limit = 0) or (Room <= STACK_BYTES - NATIVE_STACK_RESERVE) or
+    if (Room <= STACK_BYTES - NATIVE_STACK_RESERVE) or
        (Room > STACK_BYTES div 4 * 3) then
-      Fail('room of a quarter of a 640 KiB stack (' + Describe + ')');
+      Fail(Format('room of a quarter of a 640 KiB stack (stack $%x, ' +
+        'limit $%x, position $%x)', [NativeUInt(Stack), Probe.Limit,
+        Probe.Position]));
     // The limit is in the thread's own stack, a quarter above its bottom.
-    Expect<Boolean>(Probe.Limit = NativeUInt(Mapping) + STACK_BYTES +
-      STACK_BYTES div 4).ToBe(True);
+    Expect<Boolean>(Probe.Limit = NativeUInt(Stack) + STACK_BYTES div 4).
+      ToBe(True);
+
+    // A quarter of what is left above the protected pages.
+    Expect<Integer>(Fpmprotect(Stack, PROTECTED_BYTES, PROT_NONE)).ToBe(0);
+    Started := ProbeOnOwnStack(Stack, STACK_BYTES, Probe);
+    Expect<Boolean>(Started).ToBe(True);
+    if not Started then
+      Exit;
+    if Probe.Limit <> NativeUInt(Stack) + PROTECTED_BYTES +
+       (STACK_BYTES - PROTECTED_BYTES) div 4 then
+      Fail(Format('limit a quarter above the protected pages (stack $%x, ' +
+        'limit $%x, position $%x)', [NativeUInt(Stack), Probe.Limit,
+        Probe.Position]));
+    Expect<Boolean>(Probe.Limit = NativeUInt(Stack) + PROTECTED_BYTES +
+      (STACK_BYTES - PROTECTED_BYTES) div 4).ToBe(True);
   finally
     Fpmunmap(Mapping, 3 * STACK_BYTES);
   end;

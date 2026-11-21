@@ -31,7 +31,9 @@ On Linux, a thread other than the main one takes its stack's bounds from the
 thread library: `pthread_getattr_np` and `pthread_attr_getstack`. glibc
 answers from its own record of the stack it gave the thread and leaves the
 guard pages out, so the reserve starts above the guard and no merged mapping
-affects it. The unit names libpthread for these functions, so every Linux
+affects it. The bounds are narrowed to the mapping that holds the running
+frame, because for a stack the host supplied glibc reports the whole buffer,
+including any pages the host protected at its bottom. The unit names libpthread for these functions, so every Linux
 program that uses it links libpthread, as the `cthreads` unit already does; on
 glibc 2.34 and later the symbols resolve in libc.
 
