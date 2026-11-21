@@ -81,16 +81,16 @@ after:
 
 | Workload | Base | After | Change |
 | --- | ---: | ---: | ---: |
-| 3 numeric args, callee never writes a parameter | 3,711.1 M | 3,723.1 M | +0.32% |
-| 3 object args, callee never writes a parameter | 4,810.8 M | 4,822.8 M | +0.25% |
-| method call, 2 args | 4,345.8 M | 4,357.8 M | +0.28% |
-| recursive `fib(25)` | 344.2 M | 347.1 M | +0.85% |
-| 3 object args, callee reassigns all 3 | 4,788.7 M | 4,852.7 M | +1.34% |
-| `Array.prototype.map` callback, 1,000,000 entries from native code | 8,064.9 M | 8,068.9 M | +0.05% |
+| 3 numeric args, callee never writes a parameter | 3,710.4 M | 3,726.4 M | +0.43% |
+| 3 object args, callee never writes a parameter | 4,810.0 M | 4,826.0 M | +0.33% |
+| method call, 2 args | 4,345.0 M | 4,360.0 M | +0.35% |
+| recursive `fib(25)` | 344.5 M | 347.9 M | +0.99% |
+| 3 object args, callee reassigns all 3 | 4,788.0 M | 4,856.0 M | +1.42% |
+| `Array.prototype.map` callback, 1,000,000 entries from native code | 8,057.1 M | 8,065.1 M | +0.10% |
 
-Twelve instructions per call for every non-tail bytecode call (the template flag
-and the saved index), about 17 more per released object argument, and four per
-entry from native code (the pending-argument test). A callee that
+About fifteen instructions per call for every non-tail bytecode call (the
+template flag and the saved index), about 17 more per released object argument,
+and eight per entry from native code (the pending-argument test). A callee that
 reassigns its parameters pays the release; the rest pay the flag test.
 
 - A callee that reassigns a parameter, and `.then(cb)` handlers that drop their
