@@ -5993,8 +5993,9 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
     const awaitCoverageLcovPath = join(tmp, "await-coverage.lcov");
     await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${awaitCoverageLcovPath} ${awaitCoverageSourcePath}`.quiet();
     const awaitCoverageLcov = readFileSync(awaitCoverageLcovPath, "utf-8");
+    const awaitCoverageRecords = awaitCoverageLcov.split(/\r?\n/);
     for (const expected of ["DA:3,1", "DA:4,1", "DA:5,1", "DA:6,0", "DA:7,1"]) {
-      if (!awaitCoverageLcov.includes(expected)) {
+      if (!awaitCoverageRecords.includes(expected)) {
         throw new Error(`LCOV should contain ${expected} for the awaiting statements, got:\n${awaitCoverageLcov}`);
       }
     }
