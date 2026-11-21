@@ -16787,6 +16787,15 @@ begin
     FRegisters[0] := AThisValue;
     for I := 0 to AArgCount - 1 do
       FRegisters[I + 1] := FArguments[I];
+    // A frame that never reads its argument window gets the empty one the
+    // branch above gives it, once an arena had to grow: the window the
+    // arguments were staged in would otherwise keep them reachable after the
+    // callee drops its parameters.
+    if Template.ArgumentWindowUnread and (AArgCount > 0) then
+    begin
+      FillChar(FArguments[0], AArgCount * SizeOf(TGocciaRegister), 0);
+      FArgCount := 0;
+    end;
   end;
   FCurrentClosure := AClosure;
   if Assigned(AClosure.GlobalScope) then
