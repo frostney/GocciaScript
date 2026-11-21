@@ -443,7 +443,8 @@ type
     function TryCollectNewExpressionTypeArguments(
       out ATypeArguments: TGocciaTypeRangeArray): Boolean;
     function TryCollectCallExpressionTypeArguments(
-      out ATypeArguments: TGocciaTypeRangeArray): Boolean;
+      out ATypeArguments: TGocciaTypeRangeArray;
+      const AAfterBareNew: Boolean = False): Boolean;
     function FollowsPreprocessorText: Boolean;
     procedure RememberNotTypeArguments(const AFirst: Integer;
       const AEndsInLexError: Boolean; const AConstructor: Boolean = False;
@@ -461,7 +462,8 @@ type
     procedure SkipTemplateLiteral;
     function SkipTemplateLiteralType(const ANesting: Integer;
       const ATypeArgumentList: Boolean = False): Boolean;
-    function TryReadTypeArgumentList(const AConstructor: Boolean): Boolean;
+    function TryReadTypeArgumentList(const AConstructor: Boolean;
+      const ACallOnly: Boolean = False): Boolean;
     procedure SkipUnsupportedFunctionSignature;
     // Centralized 'async function' check: enforces same-line constraint,
     // handles disabled-mode fallback.  Call after consuming the 'async' token.
@@ -3191,8 +3193,12 @@ begin
           // Call-site type arguments — `fn<T>(x)`, erased like every other type
           // annotation. Anything the probe declines is left for the relational
           // operator, so the loop must end rather than consume the '<'.
-          if not TryCollectCallExpressionTypeArguments(
-            PendingTypeArguments) then
+          // After `new X` with no argument list, a template would be X's
+          // tag (`new tag<T>`x`` constructs what the tag returns), which
+          // this cannot reorder, so only a call's '(' follows there.
+          if not TryCollectCallExpressionTypeArguments(PendingTypeArguments,
+            (Result is TGocciaNewExpression) and
+            (Previous.TokenType <> gttRightParen)) then
             Break;
         end;
     else
@@ -10881,6 +10887,15 @@ var
       Result := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
   end;
 
+  // The predefined types spelled as names, which take no type arguments.
+  function IsPrimitiveTypeName(const AName: string): Boolean;
+  begin
+    Result := (AName = 'any') or (AName = 'unknown') or (AName = 'never') or
+      (AName = 'number') or (AName = 'bigint') or (AName = 'boolean') or
+      (AName = 'string') or (AName = 'symbol') or (AName = 'object') or
+      (AName = 'undefined') or (AName = 'intrinsic');
+  end;
+
   function PeekIsContextualKeyword(const AKeyword: string): Boolean;
   begin
     Result := (PeekType = gttIdentifier) and
@@ -10942,14 +10957,19 @@ var
     const AAllowConditional: Boolean): Boolean;
   var
     IsFunctionType, ReadonlyModifier: Boolean;
+    NameLexeme: string;
     AbstractCurrent: Integer;
     AbstractLexer: TGocciaLexerCheckpoint;
 
-    // Type arguments after a name, `Map<K, V>`, if any.
-    function SkipTypeArgumentsSuffix: Boolean;
+    // Type arguments after a name, `Map<K, V>`, if any. As in TypeScript,
+    // a '<' after a line break or after a primitive type such as `string`
+    // opens none, so `x` then `< y >> (0)` on the next line is a comparison.
+    function SkipTypeArgumentsSuffix(const AName: string): Boolean;
     begin
       Result := True;
-      if PeekType <> gttLess then
+      if (PeekType <> gttLess) or
+         ((OwedGreater = 0) and HasLineTerminatorBeforePeek) or
+         IsPrimitiveTypeName(AName) then
         Exit;
       Result := False;
       AdvanceType;
@@ -11169,7 +11189,8 @@ var
     repeat
       while PeekIsContextualKeyword(KEYWORD_KEYOF) or
             PeekIsContextualKeyword(KEYWORD_INFER) or
-            PeekIsContextualKeyword(KEYWORD_READONLY) do
+            PeekIsContextualKeyword(KEYWORD_READONLY) or
+            PeekIsContextualKeyword('unique') do
       begin
         // `infer` declares a type parameter, so a name follows; `infer`
         // before anything else, as in `infer`2``, is a tag.
@@ -11202,15 +11223,18 @@ var
             AdvanceType;
             if PeekType = gttImport then
             begin
-              if not SkipImportType or not SkipTypeArgumentsSuffix then
+              if not SkipImportType or not SkipTypeArgumentsSuffix('') then
                 Exit;
             end
-            else if not SkipName or not SkipTypeArgumentsSuffix then
+            else if not SkipName or not SkipTypeArgumentsSuffix('') then
               Exit;
           end;
         gttIdentifier, gttAs, gttFrom, gttStatic:
-          if not SkipName or not SkipTypeArgumentsSuffix then
-            Exit;
+          begin
+            NameLexeme := PeekWithLexicalGoal(glgInputElementDiv).Lexeme;
+            if not SkipName or not SkipTypeArgumentsSuffix(NameLexeme) then
+              Exit;
+          end;
         gttString, gttNumber, gttBigInt, gttTrue, gttFalse, gttNull, gttVoid,
         gttThis:
           AdvanceType;
@@ -11228,7 +11252,7 @@ var
           end;
         // An import type, `import("./types").Key`.
         gttImport:
-          if not SkipImportType or not SkipTypeArgumentsSuffix then
+          if not SkipImportType or not SkipTypeArgumentsSuffix('') then
             Exit;
         // A negative number, `-1`, below the list's top level, where the
         // probes' operator check reads '-' as subtraction.
@@ -11396,8 +11420,8 @@ end;
 // list had one and is not type syntax, so it is an expression. This reader
 // accepts no list that scan would turn away, so a list without a template
 // reads as it did before.
-function TGocciaParser.TryReadTypeArgumentList(
-  const AConstructor: Boolean): Boolean;
+function TGocciaParser.TryReadTypeArgumentList(const AConstructor: Boolean;
+  const ACallOnly: Boolean): Boolean;
 const
   CALL_FOLLOWERS: TGocciaTokenTypeSet = [gttLeftParen, gttTemplate,
     gttTemplateHead];
@@ -11410,6 +11434,8 @@ var
 begin
   if AConstructor then
     Followers := CONSTRUCTOR_FOLLOWERS
+  else if ACallOnly then
+    Followers := [gttLeftParen]
   else
     Followers := CALL_FOLLOWERS;
   SavedCurrent := FCurrent;
@@ -11586,7 +11612,8 @@ end;
 // the same reason the probe steps over a template literal type there whole,
 // and its memo of failed probes, which counts tokens, is not consulted.
 function TGocciaParser.TryCollectCallExpressionTypeArguments(
-  out ATypeArguments: TGocciaTypeRangeArray): Boolean;
+  out ATypeArguments: TGocciaTypeRangeArray;
+  const AAfterBareNew: Boolean): Boolean;
 var
   BracketDepth, Depth: Integer;
   HasTypeArgument, LexError, ElementTypeArguments, PreviousEndsOperand,
@@ -11616,7 +11643,8 @@ begin
       if not CheckWithLexicalGoal(gttLess, glgInputElementDiv) then
         Exit;
 
-      if not ElementTypeArguments and TryReadTypeArgumentList(False) then
+      if not ElementTypeArguments and
+         TryReadTypeArgumentList(False, AAfterBareNew) then
       begin
         Result := True;
         ATypeArguments := TypeRangesBetween(tsTypeArguments, SavedCurrent,
@@ -11719,8 +11747,10 @@ begin
       until IsAtEnd or (Depth <= 0);
 
       if HasTypeArgument and (Depth = 0) and (BracketDepth = 0) and
-        (PeekWithLexicalGoal(glgInputElementDiv).TokenType in [
-          gttLeftParen, gttTemplate, gttTemplateHead]) then
+        ((PeekWithLexicalGoal(glgInputElementDiv).TokenType = gttLeftParen) or
+         (not AAfterBareNew and
+          (PeekWithLexicalGoal(glgInputElementDiv).TokenType in [gttTemplate,
+            gttTemplateHead]))) then
       begin
         Result := True;
         ATypeArguments := TypeRangesBetween(tsTypeArguments, SavedCurrent,

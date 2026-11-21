@@ -76,6 +76,7 @@ describe("template literal type arguments", () => {
     expect(identity<abstract new (x: `${string}`) => object>(2)).toBe(2);
     expect(identity< <out>() => `${string}`>(3)).toBe(3);
     expect(identity<`${typeof from}`>(4)).toBe(4);
+    expect(identity<`${keyof { readonly key: unique symbol }}`>(5)).toBe(5);
   });
 
   test("as the constraint of a type parameter with a default", () => {
@@ -169,6 +170,19 @@ describe("comparisons with templates and calls", () => {
     expect(typeof (a < obj.keyof`${b}` > (c))).toBe("boolean");
     // prettier-ignore
     expect(typeof (new Box < obj.keyof`${b}` > (c))).toBe("boolean");
+  });
+
+  test("a line break or a primitive type before '<' keeps the comparison reading", () => {
+    const text = () => "s";
+    const x = 1;
+    const y = 2;
+    const string = 3;
+
+    // prettier-ignore
+    expect((text() < `${b}`, x
+      < y >> (0))).toBe(true);
+    // prettier-ignore
+    expect((text() < `${b}`, string < y >> (0))).toBe(false);
   });
 
   test("a line break before an index keeps the comparison reading", () => {
