@@ -113,6 +113,8 @@ type
     function Failed: Boolean; inline;
     { the match stopped because the thread's engine was interrupted (G2.Core Interrupt: a spent deadline) }
     function Interrupted: Boolean;
+    { the match ran out of native stack (nested groups or lookarounds on a nearly exhausted stack) }
+    function StackExhausted: Boolean;
     function ErrorMessage: UnicodeString;
   end;
 
@@ -1617,6 +1619,11 @@ end;
 function TRegexMatcher.Interrupted: Boolean;
 begin
   Result := FErr = 5;
+end;
+
+function TRegexMatcher.StackExhausted: Boolean;
+begin
+  Result := FErr = 3;
 end;
 
 function TRegexMatcher.ErrorMessage: UnicodeString;

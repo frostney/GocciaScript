@@ -468,6 +468,10 @@ procedure StackGuardInit;
 { True once less than the margin of the native stack is left: a native recursion (a Proxy without traps around a
   prototype cycle, a chain of bound functions) then throws a RangeError instead of overflowing the stack }
 function NativeStackLow: Boolean; noinline;
+{ the guard moved Bytes further down the margin (a realm's set-up, which runs to a fixed depth); the old guard,
+  for NativeGuardRestore }
+function NativeGuardLend(Bytes: PtrUInt): PtrUInt; noinline;
+procedure NativeGuardRestore(Old: PtrUInt); noinline;
 
 { ---- a host's environment: time zone and randomness ---- }
 type
@@ -535,6 +539,17 @@ begin
   if pthread_attr_getstack(@Attr[0], @Addr, @Size) = 0 then
     if Size > 2 * NATIVE_STACK_MARGIN then NativeStackLimit := PtrUInt(Addr) + NATIVE_STACK_MARGIN;
   pthread_attr_destroy(@Attr[0]);
+end;
+
+function NativeGuardLend(Bytes: PtrUInt): PtrUInt;
+begin
+  Result := NativeStackLimit;
+  if NativeStackLimit > Bytes then NativeStackLimit := NativeStackLimit - Bytes;
+end;
+
+procedure NativeGuardRestore(Old: PtrUInt);
+begin
+  NativeStackLimit := Old;
 end;
 
 function NativeStackLow: Boolean;

@@ -995,8 +995,27 @@ asm
   movq %fs:0, %rax
 end;
 
+type
+  { the native stack bounds a realm's set-up borrows from the margin kept for the error path (NativeStackLend) }
+  TNativeStackLoan = record
+    Limit, Floor, Backstop: PtrUInt;
+    FloorSet: Boolean;
+  end;
+
+procedure NativeStackLend(var L: TNativeStackLoan); forward;
+procedure NativeStackReturn(const L: TNativeStackLoan); forward;
+
+{ a realm whose set-up could not finish (its preludes ran out of native stack): dropped, and the caller's realm back }
+procedure AbandonRealm(Old, NewR: Integer);
+begin
+  RealmInit := False;
+  LoadRealm(Old);
+  CurRealm := Old;
+  SetLength(Realms, NewR);
+end;
+
 function CreateRealm(var R: Integer): Boolean;
-var Old, NewR, I, TlsSize: Integer; Before, After: array of Byte; Base: PByte;
+var Old, NewR, I, TlsSize: Integer; Before, After: array of Byte; Base: PByte; Loan: TNativeStackLoan;
 begin
   if not Assigned(RealmInitProc) then Exit(ThrowTypeError('this host cannot create realms'));
   if Length(Realms) = 0 then SetLength(Realms, 1);
@@ -1024,12 +1043,27 @@ begin
   MultiRealm := True;
   MultiRealmAny := True;
   RealmInit := True;
+  { the realm's preludes run to a fixed depth: they may use part of the margin the error path keeps, so a realm can
+    be made from deep in a recursion (the code it then runs meets the guard as usual) }
+  NativeStackLend(Loan);
   try
-    RealmInitProc;
+    try
+      RealmInitProc;
+      RealmInit := False;
+      if Assigned(RealmHostInit) then RealmHostInit;
+    except
+      on E: Exception do
+      begin
+        NativeStackReturn(Loan);
+        AbandonRealm(Old, NewR);
+        Pending := VUndefined;
+        Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+      end;
+    end;
   finally
     RealmInit := False;
+    NativeStackReturn(Loan);
   end;
-  if Assigned(RealmHostInit) then RealmHostInit;
   SaveRealm(NewR);
   LoadRealm(Old);
   CurRealm := Old;
@@ -4496,6 +4530,29 @@ begin
   if ReentryFloor > REENTRY_BACKSTOP_SLACK then ReentryBackstop := ReentryFloor - REENTRY_BACKSTOP_SLACK
   else ReentryBackstop := 0;
   ReentryFloorSet := True;
+end;
+
+const
+  { what a realm's set-up borrows of the native stack's error margin (G2.Core NATIVE_STACK_MARGIN, 512 KB) }
+  REALM_STACK_LOAN = 128 * 1024;
+
+procedure NativeStackLend(var L: TNativeStackLoan);
+begin
+  if not ReentryFloorSet then SetReentryFloor;
+  L.Limit := NativeGuardLend(REALM_STACK_LOAN);
+  L.Floor := ReentryFloor;
+  L.Backstop := ReentryBackstop;
+  L.FloorSet := ReentryFloorSet;
+  if ReentryFloor > REALM_STACK_LOAN then ReentryFloor := ReentryFloor - REALM_STACK_LOAN;
+  if ReentryBackstop > REALM_STACK_LOAN then ReentryBackstop := ReentryBackstop - REALM_STACK_LOAN;
+end;
+
+procedure NativeStackReturn(const L: TNativeStackLoan);
+begin
+  NativeGuardRestore(L.Limit);
+  ReentryFloor := L.Floor;
+  ReentryBackstop := L.Backstop;
+  ReentryFloorSet := L.FloorSet;
 end;
 
 function ReentryTooDeep: Boolean; noinline;

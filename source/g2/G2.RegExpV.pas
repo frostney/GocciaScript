@@ -166,6 +166,8 @@ threadvar
 function MatchFailed(Sc: TRegexMatcher): Boolean;
 begin
   if Sc.Interrupted then Exit(AbortInterrupted);
+  { out of native stack: the RangeError a too-deep recursion is }
+  if Sc.StackExhausted then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
   Result := ThrowError('SyntaxError', Sc.ErrorMessage);
 end;
 
