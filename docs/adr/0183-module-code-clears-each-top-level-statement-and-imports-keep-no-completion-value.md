@@ -101,6 +101,13 @@ clears.
 - The bytecode format stays at v101: no opcode or operand changes meaning, and
   `.gbc` files compiled before this change load and run as before, keeping what
   they kept.
+- A statement nested in a top-level compound statement that awaited still
+  clears at its own end, and the top-level statement clears the same
+  registers again where it ends: `if (flag) await f(a, b);` stores undefined
+  twice per register it used, once, since the body runs once. Skipping the
+  inner clear only where nothing runs between the two would need the
+  compiler to track which nested statements end their top-level statement,
+  through blocks, branches, `try` and `finally`, for a few stores.
 - A script's top level is unchanged. A global-backed script (a sandbox script
   entry) reads its bindings by name too, so the same copy stays there until the
   register is reused.
