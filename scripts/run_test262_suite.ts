@@ -20,8 +20,22 @@ const PROFILE_REPORT_LIMIT = 50;
 
 type Outcome = "PASS" | "FAIL" | "WRAPPER_INFRA" | "TIMEOUT";
 
+/**
+ * The strictness one run of a test file was evaluated in (docs/test262.md,
+ * "Strict mode"). An unflagged Script test has one run of each; a module
+ * test's one run is strict.
+ */
+type RunMode = "non-strict" | "strict";
+const RUN_MODES: readonly RunMode[] = ["non-strict", "strict"];
+
 interface PerTestRecord {
   id: string;
+  /**
+   * Absent in reports graded before contract 4, which ran each file once.
+   * {@link modeOf} reads such a run as non-strict for counting; the PR
+   * comparison pairs it as computeRegression describes.
+   */
+  mode?: RunMode;
   status: Outcome;
   durationMs: number;
   message: string;
@@ -30,17 +44,36 @@ interface PerTestRecord {
   profileMissing?: boolean;
 }
 
-function profilePathForTest(profileDir: string, testId: string): string {
+function modeOf(result: { mode?: RunMode }): RunMode {
+  return result.mode ?? "non-strict";
+}
+
+/** A run is identified by its file and its mode. */
+function runKey(result: { id: string; mode?: RunMode }): string {
+  return `${result.id}\u0000${modeOf(result)}`;
+}
+
+/** How a run is named in comments and summaries. */
+function runLabel(result: { id: string; mode?: RunMode }): string {
+  return `${result.id} (${modeOf(result)})`;
+}
+
+function compareRuns(a: PerTestRecord, b: PerTestRecord): number {
+  return a.id.localeCompare(b.id) ||
+    RUN_MODES.indexOf(modeOf(a)) - RUN_MODES.indexOf(modeOf(b));
+}
+
+/** Mirrors TTest262App.ProfilePathForTest: a strict run's profile has a .strict suffix. */
+function profilePathForTest(profileDir: string, testId: string, mode: RunMode): string {
   return join(profileDir, "per-test", ...testId.replace(/\\/g, "/").split("/")) +
-    ".profile.json";
+    (mode === "strict" ? ".strict" : "") + ".profile.json";
 }
 
 // ---------------------------------------------------------------------------
 // Aggregation
 // ---------------------------------------------------------------------------
 
-interface CategorySummary {
-  category: string;
+interface RunCounts {
   run: number;
   passed: number;
   failed: number;
@@ -48,7 +81,16 @@ interface CategorySummary {
   timeouts: number;
 }
 
+type ModeCounts = Record<RunMode, RunCounts>;
+
+interface CategorySummary extends RunCounts {
+  category: string;
+  /** Absent in reports graded before contract 4. */
+  byMode?: ModeCounts;
+}
+
 interface SuiteSummary {
+  /** Test files discovered, before sharding. Runs are counted by totalRun. */
   totalDiscovered: number;
   totalRun: number;
   passed: number;
@@ -56,7 +98,42 @@ interface SuiteSummary {
   wrapperInfraFailures: number;
   timeouts: number;
   durationSeconds: number;
+  /** Absent in reports graded before contract 4. */
+  byMode?: ModeCounts;
+  /**
+   * Runs the native runner planned for this report, by mode, from the same
+   * flag rules that gave each file its modes. A shard report carries it so
+   * the merge can tell a missing run from a file that never had one.
+   * Absent in merged reports and in reports graded before contract 4.
+   */
+  expectedRuns?: Record<RunMode, number>;
   byCategory: CategorySummary[];
+}
+
+function emptyCounts(): RunCounts {
+  return { run: 0, passed: 0, failed: 0, wrapperInfra: 0, timeouts: 0 };
+}
+
+function emptyModeCounts(): ModeCounts {
+  return { "non-strict": emptyCounts(), strict: emptyCounts() };
+}
+
+function totalOf(byMode: ModeCounts): RunCounts {
+  const total = emptyCounts();
+  for (const mode of RUN_MODES) {
+    for (const key of Object.keys(total) as (keyof RunCounts)[]) total[key] += byMode[mode][key];
+  }
+  return total;
+}
+
+function addOutcome(counts: RunCounts, status: Outcome): void {
+  counts.run++;
+  switch (status) {
+    case "PASS": counts.passed++; break;
+    case "FAIL": counts.failed++; break;
+    case "WRAPPER_INFRA": counts.wrapperInfra++; break;
+    case "TIMEOUT": counts.timeouts++; break;
+  }
 }
 
 interface SuiteRunMetadata {
@@ -95,56 +172,31 @@ function aggregate(
   durationSeconds: number,
   totalDiscovered: number,
 ): SuiteSummary {
-  const byCat = new Map<string, CategorySummary>();
-  let passed = 0;
-  let failed = 0;
-  let wrapperInfra = 0;
-  let timeouts = 0;
+  const byCat = new Map<string, ModeCounts>();
+  const byMode = emptyModeCounts();
   for (const r of results) {
     const cat = r.id.split("/")[0] || "unknown";
     let entry = byCat.get(cat);
     if (!entry) {
-      entry = {
-        category: cat,
-        run: 0,
-        passed: 0,
-        failed: 0,
-        wrapperInfra: 0,
-        timeouts: 0,
-      };
+      entry = emptyModeCounts();
       byCat.set(cat, entry);
     }
-    entry.run++;
-    switch (r.status) {
-      case "PASS":
-        entry.passed++;
-        passed++;
-        break;
-      case "FAIL":
-        entry.failed++;
-        failed++;
-        break;
-      case "WRAPPER_INFRA":
-        entry.wrapperInfra++;
-        wrapperInfra++;
-        break;
-      case "TIMEOUT":
-        entry.timeouts++;
-        timeouts++;
-        break;
-    }
+    addOutcome(entry[modeOf(r)], r.status);
+    addOutcome(byMode[modeOf(r)], r.status);
   }
-  const sorted = Array.from(byCat.values()).sort((a, b) =>
-    a.category.localeCompare(b.category),
-  );
+  const total = totalOf(byMode);
+  const sorted: CategorySummary[] = Array.from(byCat.entries())
+    .map(([category, counts]) => ({ category, ...totalOf(counts), byMode: counts }))
+    .sort((a, b) => a.category.localeCompare(b.category));
   return {
     totalDiscovered,
-    totalRun: results.length,
-    passed,
-    failed,
-    wrapperInfraFailures: wrapperInfra,
-    timeouts,
+    totalRun: total.run,
+    passed: total.passed,
+    failed: total.failed,
+    wrapperInfraFailures: total.wrapperInfra,
+    timeouts: total.timeouts,
     durationSeconds,
+    byMode,
     byCategory: sorted,
   };
 }
@@ -192,6 +244,7 @@ type FunctionEntry = {
 };
 type TestProfileEntry = {
   id: string;
+  mode: RunMode;
   status: Outcome;
   durationMs: number;
   profilePath: string;
@@ -404,7 +457,7 @@ function buildProfileSummary(
   let totalOpcodePairs = 0;
 
   for (const result of results) {
-    const profilePath = profilePathForTest(profileDir, result.id);
+    const profilePath = profilePathForTest(profileDir, result.id, modeOf(result));
     if (!existsSync(profilePath)) {
       missingProfileCount++;
       continue;
@@ -445,6 +498,7 @@ function buildProfileSummary(
     addGroup(paths, parts.slice(0, 2).join("/") || "unknown", profile);
     tests.push({
       id: result.id,
+      mode: modeOf(result),
       status: result.status,
       durationMs: result.durationMs,
       profilePath: profilePathForDisplay(profileDir, profilePath),
@@ -565,7 +619,7 @@ function writeProfileMarkdown(summary: Test262ProfileSummary, outputPath: string
     );
     rows.slice(0, 20).forEach((row, index) => {
       lines.push(
-        `| ${index + 1} | \`${row.id}\` | ${row.status} | ${formatProfileInteger(row.totalOpcodes)} | ` +
+        `| ${index + 1} | \`${row.id}\` (${row.mode}) | ${row.status} | ${formatProfileInteger(row.totalOpcodes)} | ` +
           `${formatProfileInteger(row.allocations)} | ${row.durationMs}ms | \`${row.profilePath}\` |`,
       );
     });
@@ -627,6 +681,14 @@ function printConsoleSummary(s: SuiteSummary, results: PerTestRecord[]): void {
   }
   if (s.timeouts > 0) console.log(`  Timeouts:             ${pad(s.timeouts, 6)}`);
   console.log(`  Duration:             ${s.durationSeconds.toFixed(1)}s`);
+  if (s.byMode) {
+    for (const mode of RUN_MODES) {
+      const m = s.byMode[mode];
+      console.log(
+        `  ${padRight(`${mode} runs:`, 22)}${pad(m.run, 6)}  passed ${m.passed} (${pct(m.passed, m.run)})`,
+      );
+    }
+  }
   console.log();
 
   console.log("Per-category breakdown:");
@@ -649,7 +711,7 @@ function printConsoleSummary(s: SuiteSummary, results: PerTestRecord[]): void {
   if (failing.length > 0) {
     console.log(`Failing tests (showing first 30 of ${results.filter((r) => r.status === "FAIL" || r.status === "TIMEOUT").length}):`);
     for (const r of failing) {
-      console.log(`  [${r.status}] ${r.id}`);
+      console.log(`  [${r.status}] ${runLabel(r)}`);
       if (r.message) console.log(`         ${r.message.slice(0, 200)}`);
     }
     console.log();
@@ -688,6 +750,10 @@ async function emitStepSummary(s: SuiteSummary): Promise<void> {
     md += `| ${c.category} | ${c.run} | ${c.passed} | ${c.failed} | ${pct(c.passed, c.run)} |\n`;
   }
   md += `| **total** | ${s.totalRun} | ${s.passed} | ${s.failed} | ${pct(s.passed, s.totalRun)} |\n`;
+  for (const mode of RUN_MODES) {
+    const m = s.byMode?.[mode];
+    if (m) md += `| _${mode} runs_ | ${m.run} | ${m.passed} | ${m.failed} | ${pct(m.passed, m.run)} |\n`;
+  }
   md += `\nDuration: ${s.durationSeconds.toFixed(1)}s\n`;
   await Bun.write(path, md);
 }
@@ -742,6 +808,48 @@ function parseMergeArgs(argv: string[]): MergeArgs {
   return out;
 }
 
+/**
+ * From contract 4 every result names its mode, and the shard planned a number
+ * of runs per mode (summary.expectedRuns) that its results must match. The
+ * native runner decides each file's modes, so the merge compares counts
+ * instead of parsing frontmatter itself. A shard that lost a strict run of a
+ * file still seen through its non-strict run is caught here, where the
+ * by-file completeness check in mergeShardReports cannot see it.
+ */
+function validateRunCoverage(report: SuiteReport, path: string): void {
+  const counted: Record<RunMode, number> = { "non-strict": 0, strict: 0 };
+  for (const result of report.results) {
+    if (result.mode === undefined) {
+      throw new Error(
+        `Invalid shard report ${path}: result ${result.id} has no mode, ` +
+          `which grading contract ${gradingContractOf(report.run)} requires`,
+      );
+    }
+    if (!RUN_MODES.includes(result.mode)) {
+      throw new Error(
+        `Invalid strictness mode ${JSON.stringify(result.mode)} for ${result.id} in ${path}`,
+      );
+    }
+    counted[result.mode]++;
+  }
+  const expected = report.summary.expectedRuns;
+  for (const mode of RUN_MODES) {
+    const planned = expected?.[mode];
+    if (typeof planned !== "number" || !Number.isInteger(planned) || planned < 0) {
+      throw new Error(
+        `Invalid shard report ${path}: summary.expectedRuns has no ${mode} count, ` +
+          `which grading contract ${gradingContractOf(report.run)} requires`,
+      );
+    }
+    if (counted[mode] !== planned) {
+      throw new Error(
+        `Invalid shard report ${path}: ${planned} ${mode} runs were planned, ` +
+          `but the results hold ${counted[mode]}`,
+      );
+    }
+  }
+}
+
 function readShardReport(path: string): SuiteReport {
   let report: SuiteReport;
   try {
@@ -759,6 +867,7 @@ function readShardReport(path: string): SuiteReport {
         `does not match ${report.results.length} results`,
     );
   }
+  if (gradingContractOf(report.run) >= 4) validateRunCoverage(report, path);
   // The run signature no longer carries a mode, so an older stored report
   // from another execution mode would otherwise merge with bytecode shards.
   if (report.run.mode !== undefined && report.run.mode !== "bytecode") {
@@ -798,7 +907,8 @@ function mergeShardReports(paths: string[]): SuiteReport {
     gradingContract: gradingContractOf(first.run),
   });
   const seenShards = new Set<number>();
-  const seenTests = new Set<string>();
+  const seenRuns = new Set<string>();
+  const seenFiles = new Set<string>();
   const results: PerTestRecord[] = [];
   let durationSeconds = 0;
 
@@ -831,10 +941,17 @@ function mergeShardReports(paths: string[]): SuiteReport {
       if (shardForTest(result.id, shardCount) !== report.shard!.index) {
         throw new Error(`Test ${result.id} is in the wrong shard report: ${path}`);
       }
-      if (seenTests.has(result.id)) {
-        throw new Error(`Duplicate test result ${result.id}`);
+      if (result.mode !== undefined && !RUN_MODES.includes(result.mode)) {
+        throw new Error(
+          `Invalid strictness mode ${JSON.stringify(result.mode)} for ${result.id} in ${path}`,
+        );
       }
-      seenTests.add(result.id);
+      const key = runKey(result);
+      if (seenRuns.has(key)) {
+        throw new Error(`Duplicate test result ${runLabel(result)}`);
+      }
+      seenRuns.add(key);
+      seenFiles.add(result.id);
       results.push(result);
     }
   }
@@ -842,13 +959,16 @@ function mergeShardReports(paths: string[]): SuiteReport {
   if (seenShards.size !== shardCount) {
     throw new Error(`Incomplete shard set: expected ${shardCount}, got ${seenShards.size}`);
   }
-  if (results.length !== first.summary.totalDiscovered) {
+  // Every discovered file has at least one run; a file has two when it runs
+  // in both modes, so the completeness check counts files, not runs.
+  if (seenFiles.size !== first.summary.totalDiscovered) {
     throw new Error(
-      `Incomplete result set: discovered ${first.summary.totalDiscovered}, merged ${results.length}`,
+      `Incomplete result set: discovered ${first.summary.totalDiscovered} files, ` +
+        `merged runs of ${seenFiles.size}`,
     );
   }
 
-  results.sort((a, b) => a.id.localeCompare(b.id));
+  results.sort(compareRuns);
   return {
     summary: aggregate(results, durationSeconds, first.summary.totalDiscovered),
     results,
@@ -924,6 +1044,7 @@ function signedPp(rateNew: number, rateOld: number | null): string {
 }
 
 interface BaselineSummary {
+  byMode?: ModeCounts;
   byCategory?: CategorySummary[];
   totalRun?: number;
   passed?: number;
@@ -936,6 +1057,7 @@ interface RegressionDelta {
   hasBaseline: boolean;
   /** current.passed - baseline.passed; equals current.passed when hasBaseline is false. */
   totalPassedDelta: number;
+  // Each entry is a run label, "<id> (<mode>)": runs compare by (id, mode).
   /** Tests that were not PASS in baseline but are PASS in current. */
   newPasses: string[];
   /** Tests that were PASS in baseline but are now non-timeout failures. */
@@ -970,18 +1092,36 @@ function computeRegression(
   const newTimeouts: string[] = [];
   const resolvedTimeouts: string[] = [];
   if (hasBaseline) {
-    const prevById = new Map<string, Outcome>();
-    for (const r of baseline!.results || []) prevById.set(r.id, r.status);
+    // A run is compared with the baseline's run of the same file in the same
+    // mode, so a strict-only regression shows up like any other. A run with
+    // no baseline counterpart, such as the first strict run of a file, is new
+    // and not a transition.
+    //
+    // A baseline graded before contract 4 ran each file once and records no
+    // mode. That one run was strict for an onlyStrict or module file and
+    // non-strict otherwise, so it pairs with the current file's only run, or
+    // with its non-strict run when the file now runs in both modes.
+    const prevByRun = new Map<string, Outcome>();
+    const prevLegacy = new Map<string, Outcome>();
+    for (const r of baseline!.results || []) {
+      if (r.mode === undefined) prevLegacy.set(r.id, r.status);
+      else prevByRun.set(runKey(r), r.status);
+    }
+    const runsPerFile = new Map<string, number>();
+    for (const r of data.results) runsPerFile.set(r.id, (runsPerFile.get(r.id) ?? 0) + 1);
     for (const r of data.results) {
-      const prev = prevById.get(r.id);
+      const pairsWithLegacy = runsPerFile.get(r.id) === 1 || modeOf(r) === "non-strict";
+      const prev = prevByRun.get(runKey(r)) ??
+        (pairsWithLegacy ? prevLegacy.get(r.id) : undefined);
       if (!prev) continue;
-      if (prev !== "TIMEOUT" && r.status === "TIMEOUT") newTimeouts.push(r.id);
+      const label = runLabel(r);
+      if (prev !== "TIMEOUT" && r.status === "TIMEOUT") newTimeouts.push(label);
       else if (prev === "TIMEOUT" && r.status !== "TIMEOUT") {
-        resolvedTimeouts.push(r.id);
+        resolvedTimeouts.push(label);
       } else if (prev !== "PASS" && r.status === "PASS") {
-        newPasses.push(r.id);
+        newPasses.push(label);
       } else if (prev === "PASS" && r.status !== "PASS") {
-        newFails.push(r.id);
+        newFails.push(label);
       }
     }
   }
@@ -1041,7 +1181,7 @@ function buildCommentMarkdown(
   const regressed = hasBaseline && delta.newFails.length > 0 && !contractChanged;
 
   if (regressed) {
-    body += `> 🚫 **Regression vs cached \`main\` baseline.** ${delta.newFails.length} previously-passing test(s) now fail; pass count Δ ${delta.totalPassedDelta >= 0 ? "+" : ""}${delta.totalPassedDelta}. This run blocks merge — see "Newly failing" below.\n\n`;
+    body += `> 🚫 **Regression vs cached \`main\` baseline.** ${delta.newFails.length} previously-passing run(s) now fail; pass count Δ ${delta.totalPassedDelta >= 0 ? "+" : ""}${delta.totalPassedDelta}. This run blocks merge — see "Newly failing" below.\n\n`;
   } else if (contractChanged && delta.newFails.length > 0) {
     body += `> ℹ️ **Grading contract changed (v${baseContract} → v${currentContract}).** The cached \`main\` baseline was graded under the previous contract, so ${delta.newFails.length} PASS → FAIL transition(s) are reported but do not block. The next \`main\` run republishes the baseline under v${currentContract}.\n\n`;
   }
@@ -1075,7 +1215,18 @@ function buildCommentMarkdown(
   const baseTotalPassed = (baseline?.summary.passed) ?? 0;
   const baseTotalTimeouts = (baseline?.summary.timeouts) ?? 0;
   const baseTotalRate = baseTotalRun > 0 ? baseTotalPassed / baseTotalRun : null;
-  body += `| **total** | ${fmt(s.totalRun)} | ${fmt(s.passed)} | ${hasBaseline ? signed(delta.totalPassedDelta) : "🆕"} | ${fmt(s.failed)} | ${fmt(s.timeouts)} | ${hasBaseline ? signed(s.timeouts - baseTotalTimeouts) : "🆕"} | ${fmt(s.wrapperInfraFailures)} | ${pct(s.passed, s.totalRun)} | ${signedPp(totalRate, baseTotalRate)} |\n\n`;
+  body += `| **total** | ${fmt(s.totalRun)} | ${fmt(s.passed)} | ${hasBaseline ? signed(delta.totalPassedDelta) : "🆕"} | ${fmt(s.failed)} | ${fmt(s.timeouts)} | ${hasBaseline ? signed(s.timeouts - baseTotalTimeouts) : "🆕"} | ${fmt(s.wrapperInfraFailures)} | ${pct(s.passed, s.totalRun)} | ${signedPp(totalRate, baseTotalRate)} |\n`;
+  // Per-mode rows. A baseline graded before contract 4 has no per-mode
+  // counts, so its Δ cells show as new.
+  for (const mode of RUN_MODES) {
+    const m = s.byMode?.[mode];
+    if (!m) continue;
+    const bm = baseline?.summary.byMode?.[mode];
+    const rate = m.run > 0 ? m.passed / m.run : 0;
+    const baseRate = bm && bm.run > 0 ? bm.passed / bm.run : null;
+    body += `| _${mode} runs_ | ${fmt(m.run)} | ${fmt(m.passed)} | ${bm ? signed(m.passed - bm.passed) : "🆕"} | ${fmt(m.failed)} | ${fmt(m.timeouts)} | ${bm ? signed(m.timeouts - bm.timeouts) : "🆕"} | ${fmt(m.wrapperInfra)} | ${pct(m.passed, m.run)} | ${signedPp(rate, baseRate)} |\n`;
+  }
+  body += "\n";
 
   // Areas closest to 100%
   const MIN_SAMPLE = 25;
@@ -1113,7 +1264,7 @@ function buildCommentMarkdown(
     body += "\n";
   } else {
     body +=
-      "_No areas yet meet the highlight criteria (≥ 25 attempted tests, below 100%)._\n\n";
+      "_No areas yet meet the highlight criteria (≥ 25 attempted runs, below 100%)._\n\n";
   }
 
   // Per-test deltas (collapsible)
@@ -1155,7 +1306,7 @@ function buildCommentMarkdown(
   const baselineNote = hasBaseline
     ? " Δ vs main compares against the most recent cached `main` baseline."
     : " No `main` baseline cached yet — Δ columns will appear once a `main` run completes.";
-  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64. Areas grouped by the first two test262 path components; minimum 25 attempted tests, areas already at 100% excluded.${baselineNote}</sub>\n`;
+  body += `<sub>Steady-state failures and timeouts are non-blocking; PASS → non-timeout failure transitions fail the conformance gate. Measured on ubuntu-latest x64. Areas grouped by the first two test262 path components; minimum 25 attempted runs, areas that already pass in full excluded. Each test file runs once per mode test262 requires, and runs compare by file and mode.${baselineNote}</sub>\n`;
 
   return { markdown: marker + "\n" + body, regressed };
 }

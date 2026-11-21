@@ -351,6 +351,10 @@ type
     function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
   end;
 
+  TGocciaBlobClassValue = class(TGocciaClassValue)
+    function CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue; override;
+  end;
+
   TGocciaCompileDynamicFunction = function(const AParamsSources: array of string;
     const ABodySource: string;
     const AKind: TGocciaDynamicFunctionKind): TGocciaFunctionBase of object;
@@ -502,13 +506,13 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
-  Goccia.Timeout,
+  Goccia.NativeLimits,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
   Goccia.Values.BigIntValue,
+  Goccia.Values.BlobValue,
   Goccia.Values.BooleanObjectValue,
   Goccia.Values.ClassHelper,
   Goccia.Values.DataViewValue,
@@ -615,9 +619,7 @@ begin
     { The same bounds the sibling walk in InstantiateClass applies. Following
       one [[Prototype]] chain cannot cycle, so these are defence in depth
       rather than the correctness argument. }
-    CheckExecutionTimeout;
-    IncrementInstructionCounter;
-    CheckInstructionLimit;
+    CheckNativeWork;
 
     Target := ImplicitSuperConstructorTarget(Current);
     if not Assigned(Target) then
@@ -732,7 +734,10 @@ begin
      ShouldDelayTypedArrayPrototypeLookup(ANativeClass, AArguments) or
      (ANativeClass is TGocciaArrayBufferClassValue) or
      (ANativeClass is TGocciaSharedArrayBufferClassValue) or
-     (ANativeClass is TGocciaDataViewClassValue));
+     (ANativeClass is TGocciaDataViewClassValue) or
+     // Web IDL: a Blob's arguments convert before its object is created
+     // from NewTarget's prototype.
+     (ANativeClass is TGocciaBlobClassValue));
 end;
 
 function ShouldDelayNativeSuperPrototypeLookup(
@@ -1548,6 +1553,7 @@ begin
      (Self is TGocciaURLSearchParamsClassValue) or
      (Self is TGocciaHeadersClassValue) or
      (Self is TGocciaResponseClassValue) or
+     (Self is TGocciaBlobClassValue) or
      (Self is TGocciaFunctionConstructorClassValue) then
     Result := Prototype
   else
@@ -1708,9 +1714,7 @@ begin
   WalkClass := Self;
   while Assigned(WalkClass) do
   begin
-    CheckExecutionTimeout;
-    IncrementInstructionCounter;
-    CheckInstructionLimit;
+    CheckNativeWork;
     NativeIntrinsicPrototype := WalkClass.NativeInstanceDefaultPrototype;
     if Assigned(NativeIntrinsicPrototype) then
     begin
@@ -2443,6 +2447,13 @@ end;
 function TGocciaResponseClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
 begin
   Result := TGocciaResponseValue.Create;
+end;
+
+{ TGocciaBlobClassValue }
+
+function TGocciaBlobClassValue.CreateNativeInstance(const AArguments: TGocciaArgumentsCollection): TGocciaObjectValue;
+begin
+  Result := TGocciaBlobValue.Create;
 end;
 
 { TGocciaStringClassValue }

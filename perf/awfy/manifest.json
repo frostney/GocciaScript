@@ -24,13 +24,30 @@
   },
   "driver": {
     "script": "scripts/awfy-driver.js",
-    "version": 1
+    "version": 2
+  },
+  "warmProtocol": {
+    "Bounce":     { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 80 },
+    "CD":         { "innerIterations": 2, "warmupIterations": 5, "measuredIterations": 8 },
+    "DeltaBlue":  { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 300 },
+    "Havlak":     { "innerIterations": 1, "warmupIterations": 1, "measuredIterations": 1 },
+    "Json":       { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 6 },
+    "List":       { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 80 },
+    "Mandelbrot": { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 80000 },
+    "NBody":      { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 6000 },
+    "Permute":    { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 40 },
+    "Queens":     { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 60 },
+    "Richards":   { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 2 },
+    "Sieve":      { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 150 },
+    "Storage":    { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 30 },
+    "Towers":     { "innerIterations": 1, "warmupIterations": 5, "measuredIterations": 25 }
   },
   "ciReport": {
-    "repetitions": 5,
+    "repetitions": 6,
+    "engines": ["goccia", "qjs", "node", "node-jitless", "jsc"],
     "benchmarks": [
       "Bounce",
-      { "name": "CD", "innerIterations": 2 },
+      "CD",
       "DeltaBlue",
       "Havlak",
       "Json",

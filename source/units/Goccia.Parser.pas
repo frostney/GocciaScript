@@ -18,6 +18,7 @@ uses
   Goccia.Lexer,
   Goccia.Modules,
   Goccia.NestingLimit,
+  Goccia.OriginMap,
   Goccia.Parser.TypeRanges,
   Goccia.Profiler.Compile,
   Goccia.Scope.BindingMap,
@@ -56,6 +57,7 @@ type
       statement, are held until Parse returns, which settles the goal and
       raises the one that applies. }
     DetectModuleGoal: Boolean;
+    ScriptAwaitFallback: Boolean;
     LabelStatementsEnabled: Boolean;
     ForInLoopsEnabled: Boolean;
     WarningUnsupportedFeatures: Boolean;
@@ -121,6 +123,9 @@ type
     // comparison chain in JavaScript. Resolved once from the source file's
     // extension; see IsTypeScriptExtension.
     FAllowsTypeScriptOnlySyntax: Boolean;
+    // Which text a preprocessor wrote rather than copied; nil when nothing
+    // rewrote the source. Not owned.
+    FPreprocessorOriginMap: TGocciaOriginMap;
     // The source offsets of '<' tokens that TryCollectCallExpressionTypeArguments
     // knows do not start call-site type arguments (RememberNotTypeArguments).
     FNotTypeArgumentStarts: THashMap<Integer, Boolean>;
@@ -140,6 +145,8 @@ type
     { Where the last module specifier consumed was, for the declaration that
       is built after it (RecordModuleSpecifier). }
     FModuleSpecifierStart: Integer;
+    // The `with` clause attributes of the import or re-export being parsed.
+    FImportAttributes: TGocciaImportAttributeRangeArray;
     FModuleSpecifierEnd: Integer;
     { Where each specifier of the import or export being parsed was, for the
       declaration that is built after them (RecordSpecifierRanges). }
@@ -156,7 +163,15 @@ type
     FModuleSource: Boolean;
     FImportMetaAllowed: Boolean;
     FDetectModuleGoal: Boolean;
+    FScriptAwaitFallback: Boolean;
+    FAmbiguousTopLevelAwait: Boolean;
+    FDeferredAwaitIdentifier: TGocciaToken;
+    FStaticBlockFunctionDepth: Integer;
     FRecordTypeRanges: Boolean;
+    // The last overload signature ParseFunctionBodyExpression read, for the
+    // statement that erases it.
+    FSignatureParameters: TGocciaParameterArray;
+    FSignatureTypeRanges: TGocciaTypeRangeArray;
     FModuleSyntaxDetected: Boolean;
     FDeferredImportMetaLine: Integer;
     FDeferredImportMetaColumn: Integer;
@@ -267,6 +282,7 @@ type
     procedure ConsumeSemicolonOrASI(const AMessage, ASuggestion: string);
     function ConsumeModuleSpecifier(const AMessage: string): string;
     procedure RecordModuleSpecifier(const ADeclaration: TGocciaStatement);
+    procedure RecordImportAttribute(const AKeyToken, AValueToken: TGocciaToken);
     procedure AddSpecifierRange(const AKind: TGocciaASTPartKind;
       const AStartOffset, AEndOffset: Integer; const ATypeOnly: Boolean);
     procedure RecordSpecifierRanges(const ADeclaration: TGocciaStatement);
@@ -309,6 +325,7 @@ type
     function StatementIsDirective(const AStatement: TGocciaStatement;
       out AIsUseStrict, AHasStrictForbiddenEscape: Boolean): Boolean;
     function IsAwaitUsingDeclarationStart: Boolean;
+    procedure ValidateAwaitIdentifier(const AToken: TGocciaToken);
     procedure ValidateIdentifierReference(const AToken: TGocciaToken);
     procedure ValidateIdentifierBinding(const AToken: TGocciaToken);
     function ConsumeIdentifierBinding(const AMessage: string): TGocciaToken; overload;
@@ -343,7 +360,11 @@ type
       const ACalleeEnd, AOpenParen: TGocciaToken): TGocciaToken;
 
     // Parameter list parsing (shared by arrow functions, class methods, object methods)
-    function ParseParameterList: TGocciaParameterArray;
+    function ParseParameterList: TGocciaParameterArray; overload;
+    function ParseParameterList(
+      out AThisParameter: TGocciaTypeRangeArray): TGocciaParameterArray; overload;
+    procedure RecordAmbientModuleName(const AStatement: TGocciaEmptyStatement;
+      const AFirstToken: Integer);
 
     // Getter/setter expression parsing (shared by object literals and class bodies)
     function ParseGetterExpression: TGocciaGetterExpression;
@@ -358,7 +379,7 @@ type
       const ALine, AColumn: Integer): TGocciaSetterExpression;
 
     // Function body parsing: (params) { stmts } -> function expression
-    function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False): TGocciaExpression;
+    function ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean = False; const AIsGenerator: Boolean = False; const AAllowSignature: Boolean = False): TGocciaExpression;
     function ParseFunctionBodyBlock(const AParameters: TGocciaParameterArray = nil): TGocciaBlockStatement;
 
     // Destructuring pattern parsing
@@ -423,10 +444,12 @@ type
       out ATypeArguments: TGocciaTypeRangeArray): Boolean;
     function TryCollectCallExpressionTypeArguments(
       out ATypeArguments: TGocciaTypeRangeArray): Boolean;
+    function FollowsPreprocessorText: Boolean;
     procedure RememberNotTypeArguments(const AFirst: Integer;
       const AEndsInLexError: Boolean; const AConstructor: Boolean = False);
     function TryParseGenericArrowFunction(
-      out AExpression: TGocciaExpression): Boolean;
+      out AExpression: TGocciaExpression;
+      const AAsyncToken: TGocciaToken = nil): Boolean;
     function ParseDefiniteAssignmentAssertion(
       const AIsConst: Boolean): Boolean;
     procedure RejectDefiniteAssignmentWithoutAnnotation;
@@ -442,7 +465,12 @@ type
       const AAsyncLine, AAsyncColumn: Integer): TAsyncFunctionCheck;
     function IsTypeOnlySpecifierModifier: Boolean;
     procedure SkipInterfaceDeclaration;
+    procedure SkipBracedBody;
     function IsTypeDeclaration: Boolean;
+    function IsAmbientDeclarationStart: Boolean;
+    procedure SkipAmbientDeclaration;
+    function ExportedOverloadOr(const AStatement: TGocciaStatement;
+      const ALine, AColumn: Integer): TGocciaStatement;
 
     function BitwiseOr: TGocciaExpression;
     function BitwiseXor: TGocciaExpression;
@@ -544,8 +572,15 @@ type
     procedure ApplyOptions(const AOptions: TGocciaParserOptions);
     function Options: TGocciaParserOptions;
     property WarningCount: Integer read FWarningCount;
+    { The map of the preprocessor that rewrote the source, if one did. The
+      JSX transformer writes an element's type arguments after the call it
+      writes, so a '<' after text it wrote opens type arguments in any file
+      (TryCollectCallExpressionTypeArguments). }
+    property PreprocessorOriginMap: TGocciaOriginMap
+      read FPreprocessorOriginMap write FPreprocessorOriginMap;
     { With DetectModuleGoal: whether the last Parse found a top-level import
       or export declaration, so the source is a Module. }
+    property AmbiguousTopLevelAwait: Boolean read FAmbiguousTopLevelAwait;
     property ModuleSyntaxDetected: Boolean read FModuleSyntaxDetected;
   end;
 
@@ -746,6 +781,7 @@ begin
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
+  FStaticBlockFunctionDepth := -1;
   FInGeneratorFunction := 0;
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
@@ -769,6 +805,7 @@ begin
   FCurrent := 0;
   FWarningCount := 0;
   FInAsyncFunction := 0;
+  FStaticBlockFunctionDepth := -1;
   FInGeneratorFunction := 0;
   FFunctionDepth := 0;
   FHasTopLevelAwait := False;
@@ -827,6 +864,7 @@ begin
   FModuleSource := AOptions.ModuleSource;
   FImportMetaAllowed := AOptions.ImportMetaAllowed;
   FDetectModuleGoal := AOptions.DetectModuleGoal;
+  FScriptAwaitFallback := AOptions.ScriptAwaitFallback;
   FLabelStatementsEnabled := AOptions.LabelStatementsEnabled;
   FForInLoopsEnabled := AOptions.ForInLoopsEnabled;
   FWarningUnsupportedFeatures := AOptions.WarningUnsupportedFeatures;
@@ -846,6 +884,7 @@ begin
   Result.ModuleSource := FModuleSource;
   Result.ImportMetaAllowed := FImportMetaAllowed;
   Result.DetectModuleGoal := FDetectModuleGoal;
+  Result.ScriptAwaitFallback := FScriptAwaitFallback;
   Result.LabelStatementsEnabled := FLabelStatementsEnabled;
   Result.ForInLoopsEnabled := FForInLoopsEnabled;
   Result.WarningUnsupportedFeatures := FWarningUnsupportedFeatures;
@@ -1299,12 +1338,16 @@ end;
 
 function TGocciaParser.ParseClassStaticBlockBody: TGocciaBlockStatement;
 var
+  SavedStaticBlockFunctionDepth: Integer;
   OuterDirectEvalUsage: TGocciaDirectEvalUsage;
 begin
   OuterDirectEvalUsage := EnterDirectEvalScope;
+  SavedStaticBlockFunctionDepth := FStaticBlockFunctionDepth;
+  FStaticBlockFunctionDepth := FFunctionDepth;
   try
     Result := BlockStatement(True);
   finally
+    FStaticBlockFunctionDepth := SavedStaticBlockFunctionDepth;
     LeaveDirectEvalScope(OuterDirectEvalUsage);
   end;
 end;
@@ -1731,12 +1774,42 @@ procedure TGocciaParser.RecordModuleSpecifier(
   const ADeclaration: TGocciaStatement);
 begin
   if ADeclaration is TGocciaImportDeclaration then
+  begin
     TGocciaImportDeclaration(ADeclaration).SetModuleSpecifierRange(
-      FModuleSpecifierStart, FModuleSpecifierEnd)
+      FModuleSpecifierStart, FModuleSpecifierEnd);
+    TGocciaImportDeclaration(ADeclaration).SetAttributeRanges(
+      FImportAttributes);
+  end
   else if ADeclaration is TGocciaReExportDeclaration then
+  begin
     TGocciaReExportDeclaration(ADeclaration).SetModuleSpecifierRange(
       FModuleSpecifierStart, FModuleSpecifierEnd);
+    TGocciaReExportDeclaration(ADeclaration).SetAttributeRanges(
+      FImportAttributes);
+  end;
+  FImportAttributes := nil;
   RecordSpecifierRanges(ADeclaration);
+end;
+
+{ An attribute runs from its key to its value. }
+procedure TGocciaParser.RecordImportAttribute(const AKeyToken,
+  AValueToken: TGocciaToken);
+var
+  Attribute: TGocciaImportAttributeRange;
+begin
+  Attribute.StartOffset := AKeyToken.Span.StartOffset;
+  Attribute.EndOffset := AValueToken.Span.EndOffset;
+  Attribute.Key.Flags := [];
+  Attribute.Key.StartOffset := AKeyToken.Span.StartOffset;
+  Attribute.Key.EndOffset := AKeyToken.Span.EndOffset;
+  if AKeyToken.TokenType = gttString then
+    Attribute.Key.Kind := apkKeyString
+  else
+    Attribute.Key.Kind := apkKeyIdentifier;
+  Attribute.ValueStartOffset := AValueToken.Span.StartOffset;
+  Attribute.ValueEndOffset := AValueToken.Span.EndOffset;
+  SetLength(FImportAttributes, Length(FImportAttributes) + 1);
+  FImportAttributes[High(FImportAttributes)] := Attribute;
 end;
 
 { A specifier's range runs from its first token, `type` included, to its
@@ -2237,8 +2310,22 @@ begin
     not HasLineTerminatorBetween(UsingToken, BindingToken);
 end;
 
+// ES2026 §13.1.1: await is reserved in Module identifiers. During
+// detection defer the diagnostic until the source goal has settled.
+procedure TGocciaParser.ValidateAwaitIdentifier(const AToken: TGocciaToken);
+begin
+  if AToken.Lexeme <> KEYWORD_AWAIT then
+    Exit;
+  if FModuleSource then
+    raise TGocciaSyntaxError.Create('Module code must not use await as an identifier',
+      AToken.Line, AToken.Column, FFileName, FSourceLines);
+  if FDetectModuleGoal and not Assigned(FDeferredAwaitIdentifier) then
+    FDeferredAwaitIdentifier := AToken;
+end;
+
 procedure TGocciaParser.ValidateIdentifierReference(const AToken: TGocciaToken);
 begin
+  ValidateAwaitIdentifier(AToken);
   if AToken.ContainsEscape and IsReservedKeywordName(AToken.Lexeme) then
     raise TGocciaSyntaxError.Create(
       'Keyword must not contain escaped characters',
@@ -2252,6 +2339,7 @@ end;
 
 procedure TGocciaParser.ValidateIdentifierBinding(const AToken: TGocciaToken);
 begin
+  ValidateAwaitIdentifier(AToken);
   if AToken.ContainsEscape and IsReservedKeywordName(AToken.Lexeme) then
     raise TGocciaSyntaxError.Create(
       'Keyword must not contain escaped characters',
@@ -2736,8 +2824,22 @@ var
   PrivateName: string;
   Right: TGocciaExpression;
 begin
-  // ES2026 §16.1 top-level await / §15.8.2 AwaitExpression: await UnaryExpression
-  if ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
+  // ES2026 §15.8.2: AwaitExpression is available only with +Await.
+  // Detection tries the Module reading first; an explicit Script does not.
+  if FDetectModuleGoal and not FScriptAwaitFallback and
+     (FFunctionDepth = 0) and (FStaticBlockFunctionDepth < 0) and
+     CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and IsAwaitOperandStart then
+  begin
+    FAmbiguousTopLevelAwait := True;
+    if Assigned(FDeferredAwaitIdentifier) then
+      raise TGocciaSyntaxError.Create('Module code must not use await as an identifier',
+        FDeferredAwaitIdentifier.Line, FDeferredAwaitIdentifier.Column,
+        FFileName, FSourceLines);
+  end;
+  if ((FInAsyncFunction > 0) or
+      (FStaticBlockFunctionDepth = FFunctionDepth) or
+      ((FFunctionDepth = 0) and (FModuleSource or
+       (FDetectModuleGoal and not FScriptAwaitFallback)))) and
      CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and
      IsAwaitOperandStart then
   begin
@@ -3703,6 +3805,15 @@ begin
             Result := TGocciaIdentifierExpression.Create(Name, Token.Span);
           end;
         end
+        // async generic arrow function: async <T>(params) => body. Only an
+        // arrow can follow the type parameter list, so `async < b` stays a
+        // comparison.
+        else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
+                not HasLineTerminatorBetween(Token,
+                  PeekWithLexicalGoal(glgInputElementDiv)) and
+                CheckWithLexicalGoal(gttLess, glgInputElementDiv) and
+                TryParseGenericArrowFunction(Result, Token) then
+          // TryParseGenericArrowFunction has set Result.
         // async single-param arrow: async x => body
         else if (Name = KEYWORD_ASYNC) and not Token.ContainsEscape and
                 not HasLineTerminatorBetween(Token,
@@ -3929,9 +4040,11 @@ end;
 // `<T,>(v: T): T => v` and friends. The type parameter list is collected
 // speculatively: it must be followed by '(' opening a real arrow parameter
 // list, otherwise the parser cursor and lexer are rewound so the caller can
-// report its own error.
+// report its own error. With AAsyncToken, the `async` already consumed before
+// the '<', the arrow is async and its text starts at that token.
 function TGocciaParser.TryParseGenericArrowFunction(
-  out AExpression: TGocciaExpression): Boolean;
+  out AExpression: TGocciaExpression;
+  const AAsyncToken: TGocciaToken): Boolean;
 var
   GenericParametersEnd: Integer;
   SavedCurrent: Integer;
@@ -3983,11 +4096,19 @@ begin
     can be checked. }
   ValidateTypeSyntaxTokens(SavedCurrent, GenericParametersEnd);
 
-  AExpression := ArrowFunction(False, FTokens[SavedCurrent]);
+  if Assigned(AAsyncToken) then
+  begin
+    Line := AAsyncToken.Line;
+    Column := AAsyncToken.Column;
+    AExpression := ArrowFunction(True, AAsyncToken);
+    TGocciaArrowFunctionExpression(AExpression).IsAsync := True;
+  end
+  else
+    AExpression := ArrowFunction(False, FTokens[SavedCurrent]);
   AExpression.AddTypeRanges(TypeRangesBetween(tsTypeParameters, SavedCurrent,
     GenericParametersEnd));
   // ArrowFunction anchors its source text at the '(' it was entered on; widen
-  // it to include the type parameter list.
+  // it to include the type parameter list and any `async`.
   TGocciaArrowFunctionExpression(AExpression).SourceText :=
     ExtractSourceRange(Line, Column);
   Result := True;
@@ -5094,6 +5215,16 @@ end;
 
 function TGocciaParser.ParseParameterList: TGocciaParameterArray;
 var
+  ThisParameter: TGocciaTypeRangeArray;
+begin
+  Result := ParseParameterList(ThisParameter);
+end;
+
+function TGocciaParser.ParseParameterList(
+  out AThisParameter: TGocciaTypeRangeArray): TGocciaParameterArray;
+var
+  ThisTypeRanges: TGocciaTypeRangeArray;
+  ThisStart: Integer;
   ParamCount: Integer;
   ParamName: string;
   DefaultValue: TGocciaExpression;
@@ -5104,6 +5235,31 @@ begin
   FAllowInExpression := True;
   try
     ParamCount := 0;
+
+    // A TypeScript `this` parameter, first in the list, only types `this`
+    // inside the function; it is not a parameter at run time, so it is read
+    // as type syntax. It is kept only as a type, a Parameter part holding
+    // its annotation, for the expression view.
+    AThisParameter := nil;
+    if Check(gttThis) and CheckNext(gttColon) then
+    begin
+      ThisStart := Peek.Span.StartOffset;
+      Advance;
+      Advance;
+      CollectTypeAnnotation([gttRightParen, gttComma], '', '', False, True,
+        ThisTypeRanges);
+      if Length(ThisTypeRanges) > 0 then
+      begin
+        SetLength(AThisParameter, 1);
+        AThisParameter[0].Kind := apkParameter;
+        AThisParameter[0].StartOffset := ThisStart;
+        AThisParameter[0].EndOffset := Previous.Span.EndOffset;
+        AThisParameter[0].Flags := [];
+        AThisParameter[0].SubtreeEnd := 1 + Length(ThisTypeRanges);
+        AppendTypeRanges(AThisParameter, ThisTypeRanges);
+      end;
+      Match(gttComma);
+    end;
 
     if not Check(gttRightParen) then
     begin
@@ -5377,10 +5533,15 @@ begin
   end;
 end;
 
-function TGocciaParser.ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaExpression;
+{ With AAllowSignature, a header that ends without a body — at a ';' or, under
+  ASI, a line break — is a TypeScript overload signature, and the result is
+  nil. Its parameters and return type are type syntax for the implementation
+  that follows: they are left in FSignatureParameters and
+  FSignatureTypeRanges for the expression view, and nothing runs them. }
+function TGocciaParser.ParseFunctionBodyExpression(const ALine, AColumn: Integer; const AIsAsync: Boolean; const AIsGenerator: Boolean; const AAllowSignature: Boolean): TGocciaExpression;
 var
   Parameters: TGocciaParameterArray;
-  ReturnType: TGocciaTypeRangeArray;
+  ThisParameter, ReturnType: TGocciaTypeRangeArray;
   Body: TGocciaASTNode;
   FunctionIsStrict: Boolean;
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
@@ -5400,7 +5561,7 @@ begin
   FInGeneratorFunction := Ord(AIsGenerator);
   OuterDirectEvalUsage := EnterDirectEvalScope;
   try
-    Parameters := ParseParameterList;
+    Parameters := ParseParameterList(ThisParameter);
     Consume(gttRightParen, 'Expected ")" after parameters',
       SSuggestCloseParenParameterList);
     ValidateParameterEarlyErrors(Parameters, ALine, AColumn, False,
@@ -5410,8 +5571,23 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      CollectTypeAnnotation([gttLeftBrace], '', '', True, True,
-        ReturnType);
+      if AAllowSignature then
+        CollectTypeAnnotation([gttLeftBrace, gttSemicolon], '', '', True,
+          True, ReturnType)
+      else
+        CollectTypeAnnotation([gttLeftBrace], '', '', True, True,
+          ReturnType);
+    end;
+
+    if AAllowSignature and (Check(gttSemicolon) or IsAtEnd or
+       (FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek and
+        not Check(gttLeftBrace))) then
+    begin
+      Match(gttSemicolon);
+      FSignatureParameters := Parameters;
+      FSignatureTypeRanges := ThisParameter;
+      AppendTypeRanges(FSignatureTypeRanges, ReturnType);
+      Exit(nil);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before function body',
@@ -5425,6 +5601,7 @@ begin
       ValidateParameterEarlyErrors(Parameters, ALine, AColumn,
         FunctionIsStrict, AIsAsync, AIsGenerator, FunctionIsStrict);
       Result := TGocciaFunctionExpression.Create(Parameters, Body, SourceSpanAtPosition(ALine, AColumn));
+      Result.AddTypeRanges(ThisParameter);
       Result.AddTypeRanges(ReturnType);
       TGocciaFunctionExpression(Result).IsAsync := AIsAsync;
       TGocciaFunctionExpression(Result).IsGenerator := AIsGenerator;
@@ -5865,6 +6042,7 @@ end;
 
 function TGocciaParser.UnguardedStatement: TGocciaStatement;
 var
+  ErasedFirstToken: Integer;
   Line, Column: Integer;
   TypeStart: Integer;
   DecoratorStart: TGocciaToken;
@@ -5976,6 +6154,16 @@ begin
     TGocciaEmptyStatement(Result).SetTypeRanges(
       TypeRangesBetween(tsInterface, TypeStart, FCurrent));
   end
+  else if IsAmbientDeclarationStart then
+  begin
+    Line := Peek.Line;
+    Column := Peek.Column;
+    ErasedFirstToken := FCurrent;
+    SkipAmbientDeclaration;
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkAmbient);
+    RecordAmbientModuleName(TGocciaEmptyStatement(Result), ErasedFirstToken);
+  end
   else if IsLexicalDeclarationStart then
   begin
     Advance;
@@ -6078,6 +6266,10 @@ begin
         '''await using'' is only valid in async functions or at the top level',
         Peek.Line, Peek.Column, FFileName, FSourceLines,
         'Wrap in an async function or use ''using'' for synchronous disposal');
+    // A top-level await using declaration awaits its disposal when the body
+    // completes, so the module evaluates asynchronously.
+    if FFunctionDepth = 0 then
+      FHasTopLevelAwait := True;
     Result := UsingStatement;
   end
   else if IsInvalidConciseMethodStatementStart then
@@ -6964,8 +7156,10 @@ begin
     AfterLeftParen := FCurrent;
 
     // `for (await using x of iterable)` is a synchronous for-of loop whose
-    // per-iteration binding uses the async-dispose hint. This is distinct from
-    // `for await (...)`, where `await` appears before the opening paren.
+    // per-iteration binding uses the async-dispose hint, and
+    // `for await (await using x of iterable)` an asynchronous one (ES2027
+    // §14.7.5): the `await` before the opening paren picks the iteration,
+    // the one after it the disposal.
     if IsAwaitUsingDeclarationStart then
     begin
       if (FInAsyncFunction = 0) and (FFunctionDepth > 0) then
@@ -7004,8 +7198,14 @@ begin
         BodyStmt := IterationBodyStatement;
         RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         RejectFunctionStatementBody(BodyStmt, Line, Column);
-        Result := TGocciaForOfStatement.Create(True, BindingName, nil,
-          IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil, nil, True, True);
+        if IsAwait then
+          Result := TGocciaForAwaitOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, True)
+        else
+          Result := TGocciaForOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, True);
         Exit;
       end;
 
@@ -7047,8 +7247,14 @@ begin
         BodyStmt := IterationBodyStatement;
         RejectLabelledFunctionStatementBody(BodyStmt, Line, Column);
         RejectFunctionStatementBody(BodyStmt, Line, Column);
-        Result := TGocciaForOfStatement.Create(True, BindingName, nil,
-          IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil, nil, True, False);
+        if IsAwait then
+          Result := TGocciaForAwaitOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, False)
+        else
+          Result := TGocciaForOfStatement.Create(True, BindingName, nil,
+            IterableExpr, BodyStmt, SourceSpanAtPosition(Line, Column), nil,
+            nil, True, False);
         Exit;
       end;
 
@@ -7282,12 +7488,30 @@ var
   ParenCount, BracketCount, BraceCount: Integer;
   CurrentType: TGocciaTokenType;
   NeedsOperand: Boolean;
+  CanBeForOfTarget: Boolean;
 
   function NextGoal: TGocciaLexicalGoal;
   begin
     if NeedsOperand then
       Exit(glgInputElementRegExp);
     Result := glgInputElementDiv;
+  end;
+
+  function AwaitRulesOutTarget: Boolean;
+  begin
+    Result := ((FInAsyncFunction > 0) or (FFunctionDepth = 0)) and
+      CheckUnescapedIdentifierKeyword(KEYWORD_AWAIT) and IsAwaitOperandStart;
+    if not Result then
+      Exit;
+
+    // ES2027 §13.1: in a Script, await can be an IdentifierReference.
+    // These tokens can continue that identifier as a member, call or tag.
+    // Leave the committed parser to distinguish them from unary await.
+    if (FInAsyncFunction = 0) and not FModuleSource and
+       not FModuleSyntaxDetected and
+       (FTokens[FCurrent + 1].TokenType in
+        [gttLeftBracket, gttLeftParen, gttTemplate, gttTemplateHead]) then
+      Result := False;
   end;
 
 begin
@@ -7304,6 +7528,7 @@ begin
     BracketCount := 0;
     BraceCount := 0;
     NeedsOperand := True;
+    CanBeForOfTarget := True;
 
     while True do
     begin
@@ -7318,6 +7543,36 @@ begin
           Exit(True);
         if CurrentType = gttRightParen then
           Exit;
+        // ES2027 §14.7.5: contextual `of` after the assignment target ends
+        // this probe. Let the committed for-of parse select the regexp goal
+        // for its iterable, rather than scanning it as a C-style initializer.
+        // `of` can also be an operand or a member name in a traditional head.
+        // A keyword used as a member name still ends an operand.
+        if CanBeForOfTarget and
+           (not NeedsOperand or
+            ((FCurrent >= 2) and
+             (FTokens[FCurrent - 2].TokenType in [gttDot, gttOptionalChaining]))) and
+           not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
+           CheckContextualKeyword(KEYWORD_OF) and
+           // An initializer makes `of` a binding name, as in `using of =`.
+           // Otherwise the next token begins the iterable, so request regexp.
+           not CheckNextWithLexicalGoal(gttAssign, glgInputElementRegExp) then
+          Exit;
+
+        // Once an operator rules out a LeftHandSideExpression, keep scanning
+        // the traditional initializer. In particular, an operand named `of`
+        // after a prefix update, await or yield is not a separator.
+        // Do not change the lexical-goal heuristic for the expression's body.
+        if CanBeForOfTarget and
+           not (Previous.TokenType in [gttDot, gttOptionalChaining]) and
+           (((CurrentType <> gttNew) and
+             TokenRequiresFollowingOperand(CurrentType)) or
+            (CurrentType in [gttIncrement, gttDecrement]) or
+            (NeedsOperand and
+             (AwaitRulesOutTarget or
+              ((FInGeneratorFunction > 0) and
+               CheckUnescapedIdentifierKeyword(KEYWORD_YIELD))))) then
+          CanBeForOfTarget := False;
       end;
 
       if CurrentType in [gttTemplateHead, gttTemplate] then
@@ -7726,7 +7981,17 @@ begin
 
   CollectGenericParameters(TypeParameters);
 
-  FunctionExpr := TGocciaFunctionExpression(ParseFunctionBodyExpression(Line, Column, AIsAsync, AIsGenerator));
+  FunctionExpr := TGocciaFunctionExpression(ParseFunctionBodyExpression(Line,
+    Column, AIsAsync, AIsGenerator, True));
+  if not Assigned(FunctionExpr) then
+  begin
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkOverload);
+    AppendTypeRanges(TypeParameters, FSignatureTypeRanges);
+    TGocciaEmptyStatement(Result).SetSignature(FSignatureParameters,
+      TypeParameters);
+    Exit;
+  end;
   FunctionExpr.AddTypeRanges(TypeParameters);
   ValidateStrictFunctionBindingName(NameToken.Lexeme, FunctionExpr, Line,
     Column);
@@ -7864,6 +8129,8 @@ begin
   Result := TryStmt;
 end;
 
+{ Nil for an overload signature: a header that ends without a body, at a
+  semicolon, the end of the class body, or under ASI a line break. }
 function TGocciaParser.ClassMethod(const AIsStatic: Boolean; const AIsAsync: Boolean; const AIsGenerator: Boolean): TGocciaClassMethod;
 var
   Parameters: TGocciaParameterArray;
@@ -7871,7 +8138,7 @@ var
   Name: string;
   Line, Column: Integer;
   MethodGenericParams, MethodReturnType: string;
-  MethodTypeRanges, ReturnTypeRanges: TGocciaTypeRangeArray;
+  MethodTypeRanges, ReturnTypeRanges, ThisParameter: TGocciaTypeRangeArray;
   SavedActiveLabels, SavedActiveIterationLabels: TUnicodeStringList;
   SavedDirectLabelStart: Integer;
   SavedInAsyncFunction, SavedInGeneratorFunction: Integer;
@@ -7894,7 +8161,8 @@ begin
   FInGeneratorFunction := Ord(AIsGenerator);
   OuterDirectEvalUsage := EnterDirectEvalScope;
   try
-    Parameters := ParseParameterList;
+    Parameters := ParseParameterList(ThisParameter);
+    AppendTypeRanges(MethodTypeRanges, ThisParameter);
     Consume(gttRightParen, 'Expected ")" after parameters',
       SSuggestCloseParenParameterList);
     ValidateParameterEarlyErrors(Parameters, Line, Column, True,
@@ -7904,9 +8172,20 @@ begin
     if Check(gttColon) then
     begin
       Advance;
-      MethodReturnType := CollectTypeAnnotation([gttLeftBrace], '', '', True,
-        True, ReturnTypeRanges);
+      // A signature's return type can end at the class's closing '}'.
+      MethodReturnType := CollectTypeAnnotation([gttLeftBrace, gttSemicolon,
+        gttRightBrace], '', '', True, True, ReturnTypeRanges);
       AppendTypeRanges(MethodTypeRanges, ReturnTypeRanges);
+    end;
+
+    // A method header with no body is a TypeScript overload signature: type
+    // syntax for the implementation that follows, so nothing of it is kept.
+    if Check(gttSemicolon) or Check(gttRightBrace) or IsAtEnd or
+       (FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek and
+        not Check(gttLeftBrace)) then
+    begin
+      Match(gttSemicolon);
+      Exit(nil);
     end;
 
     Consume(gttLeftBrace, 'Expected "{" before method body',
@@ -8143,6 +8422,7 @@ var
     AttributeKey: string;
     AttributeKeyColumn: Integer;
     AttributeKeyLine: Integer;
+    AttributeKeyToken: TGocciaToken;
     AttributeValueToken: TGocciaToken;
   begin
     Result := '';
@@ -8157,6 +8437,7 @@ var
       AttributeKey := ConsumeLiteralPropertyName(
         'Expected import attribute key',
         'Use an identifier or string key in the import attribute bag');
+      AttributeKeyToken := Previous;
       AttributeKeyLine := Previous.Line;
       AttributeKeyColumn := Previous.Column;
       Consume(gttColon, 'Expected ":" after import attribute key',
@@ -8164,6 +8445,7 @@ var
       AttributeValueToken := Consume(gttString,
         'Expected string import attribute value',
         'Import attribute values must be string literals');
+      RecordImportAttribute(AttributeKeyToken, AttributeValueToken);
       if AttributeKey <> KEYWORD_TYPE then
         raise TGocciaSyntaxError.Create(
           Format('Unsupported import attribute "%s"', [AttributeKey]),
@@ -8205,6 +8487,7 @@ var
 begin
   DuplicateBinding := '';
   FSpecifierRanges := nil;
+  FImportAttributes := nil;
   Line := Previous.Line;
   Column := Previous.Column;
 
@@ -8459,6 +8742,7 @@ end;
 
 function TGocciaParser.ExportDeclaration: TGocciaStatement;
 var
+  ErasedFirstToken: Integer;
   ExportsTable: TStringStringMap;
   LocalName, ExportedName, ModulePath, NamespaceName, AttributeType: string;
   Line, Column: Integer;
@@ -8533,6 +8817,7 @@ var
     AttributeKey: string;
     AttributeKeyColumn: Integer;
     AttributeKeyLine: Integer;
+    AttributeKeyToken: TGocciaToken;
     AttributeValueToken: TGocciaToken;
   begin
     Result := '';
@@ -8545,6 +8830,7 @@ var
     begin
       AttributeKey := ConsumeLiteralPropertyName('Expected import attribute key',
         'Use an identifier or string key in the import attribute bag');
+      AttributeKeyToken := Previous;
       AttributeKeyLine := Previous.Line;
       AttributeKeyColumn := Previous.Column;
       Consume(gttColon, 'Expected ":" after import attribute key',
@@ -8552,6 +8838,7 @@ var
       AttributeValueToken := Consume(gttString,
         'Expected string import attribute value',
         'Import attribute values must be string literals');
+      RecordImportAttribute(AttributeKeyToken, AttributeValueToken);
       if AttributeKey <> KEYWORD_TYPE then
         raise TGocciaSyntaxError.Create(
           Format('Unsupported import attribute "%s"', [AttributeKey]),
@@ -8566,6 +8853,7 @@ var
   end;
 begin
   FSpecifierRanges := nil;
+  FImportAttributes := nil;
   Line := Previous.Line;
   Column := Previous.Column;
 
@@ -8597,6 +8885,16 @@ begin
       etkExportInterface);
     TGocciaEmptyStatement(Result).SetTypeRanges(TypeRangesBetween(tsInterface,
       ErasedListStart, FCurrent));
+    Exit;
+  end;
+
+  if IsAmbientDeclarationStart then
+  begin
+    ErasedFirstToken := FCurrent;
+    SkipAmbientDeclaration;
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(Line, Column),
+      etkExportAmbient);
+    RecordAmbientModuleName(TGocciaEmptyStatement(Result), ErasedFirstToken);
     Exit;
   end;
 
@@ -8726,7 +9024,7 @@ begin
           Result := TGocciaExportFunctionDeclaration.Create(FunctionDecl, SourceSpanAtPosition(Line, Column));
         end
         else
-          Result := InnerDecl;
+          Result := ExportedOverloadOr(InnerDecl, Line, Column);
         Exit;
       end;
     end;
@@ -8752,7 +9050,7 @@ begin
       Result := TGocciaExportFunctionDeclaration.Create(FunctionDecl, SourceSpanAtPosition(Line, Column));
     end
     else
-      Result := InnerDecl;
+      Result := ExportedOverloadOr(InnerDecl, Line, Column);
     Exit;
   end;
 
@@ -9113,7 +9411,7 @@ begin
       IsGenerator := False;
       // ES2026 §15.8 / §15.6: AsyncMethod and AsyncGeneratorMethod are
       // `async [no LineTerminator here] ...`; after a line break `async` is
-      // the element's name, a field that ASI ends before the next element.
+      // the element's name; a following parameter list still continues a method.
       if not IsAccessor and CheckUnescapedIdentifierKeyword(KEYWORD_ASYNC) and not CheckNext(gttColon) and not CheckNext(gttLeftParen) and not CheckNext(gttComma) and not CheckNext(gttRightBrace) and not CheckNext(gttSemicolon) and not CheckNext(gttAssign) and not CheckNext(gttQuestion) and
          (FCurrent + 1 < FTokens.Count) and
          not HasLineTerminatorBetween(Peek, FTokens[FCurrent + 1]) then
@@ -9367,7 +9665,9 @@ begin
             InstancePropertyTypes.Add(MemberName, FieldType);
         end;
       end
-      else if (not IsGetter) and (not IsSetter) and CheckSemicolonOrASI then
+      // ES2026 §12.10.1: ASI cannot interrupt a valid method parameter list.
+      else if (not IsGetter) and (not IsSetter) and not Check(gttLeftParen) and
+        CheckSemicolonOrASI then
       begin
         if IsPrivate and not IsComputed and (MemberName <> '') then
           DeclarePrivateName(MemberName, pndField, IsStatic);
@@ -9518,10 +9818,13 @@ begin
       end
       else if Check(gttLeftParen) or Check(gttLess) then
       begin
+        Method := ClassMethod(IsStatic, IsAsync, IsGenerator);
+        // An overload signature: the implementation is the member to keep,
+        // and the only one to claim a private name.
+        if not Assigned(Method) then
+          Continue;
         if IsPrivate and not IsComputed and (MemberName <> '') then
           DeclarePrivateName(MemberName, pndMethod, IsStatic);
-
-        Method := ClassMethod(IsStatic, IsAsync, IsGenerator);
         Method.Name := MemberName;
         Method.IsAsync := IsAsync;
         Method.IsGenerator := IsGenerator;
@@ -9640,8 +9943,17 @@ end;
   raise the one the settled goal makes an error. }
 procedure TGocciaParser.SettleDetectedModuleGoal;
 begin
+  if FScriptAwaitFallback and FModuleSyntaxDetected then
+    raise TGocciaSyntaxError.Create('Module declarations prevent Script fallback',
+      Peek.Line, Peek.Column, FFileName, FSourceLines);
+  if FAmbiguousTopLevelAwait then
+    FModuleSyntaxDetected := True;
   if FModuleSyntaxDetected then
   begin
+    if Assigned(FDeferredAwaitIdentifier) then
+      raise TGocciaSyntaxError.Create('Module code must not use await as an identifier',
+        FDeferredAwaitIdentifier.Line, FDeferredAwaitIdentifier.Column,
+        FFileName, FSourceLines);
     if FDeferredWithLine > 0 then
       RaiseModuleWithStatementError(FDeferredWithLine, FDeferredWithColumn);
     Exit;
@@ -9741,6 +10053,8 @@ begin
   FStrictModeSourceActive := FInheritedStrictMode;
   FHasTopLevelAwait := False;
   FModuleSyntaxDetected := False;
+  FAmbiguousTopLevelAwait := False;
+  FDeferredAwaitIdentifier := nil;
   FDeferredImportMetaLine := 0;
   FDeferredImportMetaColumn := 0;
   FDeferredWithLine := 0;
@@ -10621,9 +10935,10 @@ end;
 //     `Foo<-1>(x)`, whose negative numeric literal type TypeScript does accept
 //     — the safe direction, since the fallback is the comparison reading.
 //
-// The probe only runs for TypeScript source (FAllowsTypeScriptOnlySyntax).
-// GocciaScript erases type syntax in JavaScript files too, but call-site type
-// arguments are the one construct that collides with a valid JavaScript
+// The probe runs for TypeScript source (FAllowsTypeScriptOnlySyntax), and
+// in any source for a JSX element's type arguments (below). GocciaScript
+// erases type syntax in JavaScript files too, but call-site type arguments
+// are the one construct that collides with a valid JavaScript
 // reading: `a < b > (c)` is a comparison chain in a `.js` file and a generic
 // call in a `.ts` file. tsc, esbuild and bun all draw the line at the file
 // extension, and so does the Type Annotations proposal, which leaves generic
@@ -10633,25 +10948,36 @@ end;
 // would see, and decides those that would fail too
 // (RememberNotTypeArguments), so a chain such as `a < b < c < ...` is scanned
 // once rather than once per operator.
+//
+// A JSX element's type arguments (`<Foo<string> />`) reach the parser as the
+// type arguments of the call the JSX transformer writes for the element:
+// `createElement<string>(Foo, null)`. Nothing the file wrote can put a '<'
+// after that callee, so in any file the '<' opens type arguments, and the
+// transformer has already matched its '>'. Neither the extension check nor
+// the expression-token denylist applies there: `<Foo<-1> />` is as valid as
+// `<Foo<string> />`, and a comparison reading of either would be wrong. For
+// the same reason the probe steps over a template literal type there whole,
+// and its memo of failed probes, which counts tokens, is not consulted.
 function TGocciaParser.TryCollectCallExpressionTypeArguments(
   out ATypeArguments: TGocciaTypeRangeArray): Boolean;
 var
   BracketDepth, Depth: Integer;
-  HasTypeArgument, LexError: Boolean;
+  HasTypeArgument, LexError, ElementTypeArguments: Boolean;
   SavedCurrent: Integer;
   SavedLexer: TGocciaLexerCheckpoint;
   TokenType: TGocciaTokenType;
 begin
   Result := False;
   ATypeArguments := nil;
-  if not FAllowsTypeScriptOnlySyntax then
+  ElementTypeArguments := FollowsPreprocessorText;
+  if not FAllowsTypeScriptOnlySyntax and not ElementTypeArguments then
     Exit;
 
   // A probe that failed further left may have decided this one already
   // (RememberNotTypeArguments). Its answer holds when this probe would lex
   // every token after the '<' itself, as that one did: no token after it has
   // been lexed yet.
-  if Assigned(FNotTypeArgumentStarts) and (FCurrent < FTokens.Count) and
+  if not ElementTypeArguments and Assigned(FNotTypeArgumentStarts) and (FCurrent < FTokens.Count) and
      (not Assigned(FLexer) or (FCurrent = FTokens.Count - 1)) and
      (FTokens[FCurrent].TokenType = gttLess) and
      FNotTypeArgumentStarts.ContainsKey(FTokens[FCurrent].Span.StartOffset) then
@@ -10673,7 +10999,7 @@ begin
       repeat
         TokenType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
 
-        if (Depth = 1) and (BracketDepth = 0) and
+        if not ElementTypeArguments and (Depth = 1) and (BracketDepth = 0) and
           (TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS) then
           Exit;
 
@@ -10693,6 +11019,18 @@ begin
               Dec(BracketDepth);
               if BracketDepth < 0 then
                 Exit;
+            end;
+          gttTemplateHead:
+            begin
+              HasTypeArgument := True;
+              // An element's template literal type, `t${string}`, whose
+              // substitution's closing brace only the template-tail goal
+              // lexes as such. A written comparison keeps its template.
+              if ElementTypeArguments then
+              begin
+                SkipTemplateLiteral;
+                Continue;
+              end;
             end;
         else
           HasTypeArgument := True;
@@ -10729,6 +11067,24 @@ begin
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
   end;
+end;
+
+// Whether the token before the current one ends in text a preprocessor
+// wrote: the JSX transformer's factory callee, before the type arguments it
+// copies, whatever the factory is (`h`, `React.createElement`, `lib.default`).
+// The transformer anchors both edges of every construct it rewrites whole,
+// so the `)` that closes an element ends exactly where the element does, and
+// `<A /> < b > (c)` is still a comparison. The factory callee is the one
+// written text that ends with no anchor and runs into copied text.
+function TGocciaParser.FollowsPreprocessorText: Boolean;
+var
+  OriginalEnd: Integer;
+begin
+  if not Assigned(FPreprocessorOriginMap) or (FCurrent <= 0) or
+     (FCurrent > FTokens.Count) then
+    Exit(False);
+  Result := not FPreprocessorOriginMap.Map(
+    FTokens[FCurrent - 1].Span.EndOffset, obEnd, OriginalEnd);
 end;
 
 // A failed probe has scanned the tokens from AFirst to the end of the token
@@ -11051,22 +11407,180 @@ begin
     Advance;
   end;
 
-  if Check(gttLeftBrace) then
+  SkipBracedBody;
+end;
+
+// Skips a '{ ... }' body from its '{', with every brace inside it; nothing
+// when the current token is not a '{'. Template literals are skipped whole,
+// as above.
+procedure TGocciaParser.SkipBracedBody;
+var
+  Depth: Integer;
+begin
+  if not Check(gttLeftBrace) then
+    Exit;
+  Advance;
+  Depth := 1;
+  while not IsAtEnd and (Depth > 0) do
+  begin
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+    begin
+      SkipTemplateLiteral;
+      Continue;
+    end;
+    if Check(gttLeftBrace) then Inc(Depth);
+    if Check(gttRightBrace) then Dec(Depth);
+    Advance;
+  end;
+end;
+
+// `declare` begins an ambient declaration only when a declaration keyword
+// follows it on the same line. Anywhere else it is an identifier: `declare(x)`,
+// `declare = 1`, and `declare` with `const x = 1` on the next line under ASI,
+// which is two statements.
+{ The name of `declare module "m"`, from its consumed tokens, as the module
+  path an import reports. A module named by an identifier, and every other
+  ambient declaration, records nothing. }
+procedure TGocciaParser.RecordAmbientModuleName(
+  const AStatement: TGocciaEmptyStatement; const AFirstToken: Integer);
+var
+  Parts: TGocciaASTPartRangeArray;
+  Keyword: TGocciaToken;
+begin
+  if AFirstToken + 2 >= FCurrent then
+    Exit;
+  Keyword := FTokens[AFirstToken + 1];
+  if (Keyword.TokenType <> gttIdentifier) or (Keyword.Lexeme <> KEYWORD_MODULE) or
+     Keyword.ContainsEscape or
+     (FTokens[AFirstToken + 2].TokenType <> gttString) then
+    Exit;
+  Parts := nil;
+  AppendPartRange(Parts, apkModuleSpecifier,
+    FTokens[AFirstToken + 2].Span.StartOffset,
+    FTokens[AFirstToken + 2].Span.EndOffset, []);
+  AStatement.SetModuleParts(Parts);
+end;
+
+function TGocciaParser.IsAmbientDeclarationStart: Boolean;
+var
+  Next: TGocciaToken;
+
+  function IsKeyword(const AKeyword: string): Boolean;
+  begin
+    Result := (Next.TokenType = gttIdentifier) and (Next.Lexeme = AKeyword) and
+      not Next.ContainsEscape;
+  end;
+
+begin
+  if not CheckUnescapedIdentifierKeyword(KEYWORD_DECLARE) then
+    Exit(False);
+  // After an identifier a `/` divides, so the token after `declare` is read
+  // under the division goal: `declare / 2` and `declare /= 2` stay
+  // expressions, and the token is the one the expression parser would read.
+  EnsureToken(FCurrent + 1, glgInputElementDiv);
+  if FCurrent + 1 >= FTokens.Count then
+    Exit(False);
+  Next := FTokens[FCurrent + 1];
+  if (Next.TokenType = gttEOF) or HasLineTerminatorBetween(Peek, Next) then
+    Exit(False);
+  Result := (Next.TokenType in [gttConst, gttLet, gttVar, gttFunction,
+    gttClass, gttEnum]) or IsKeyword(KEYWORD_MODULE) or
+    IsKeyword(KEYWORD_GLOBAL) or IsKeyword(KEYWORD_NAMESPACE) or
+    IsKeyword(KEYWORD_ABSTRACT) or IsKeyword(KEYWORD_TYPE) or
+    IsKeyword(KEYWORD_INTERFACE);
+end;
+
+// Skips an ambient declaration from its `declare`. It has no run-time
+// effect, so it is erased whole like `type` and `interface`. A declaration
+// with a body (`class`, `enum`, `const enum`, `module`, `global`,
+// `namespace`) ends at the body's closing '}'; `declare module "m";` has no
+// body and ends at its ';' or, under ASI, its line break. Every other form
+// ends where a `type` alias would.
+procedure TGocciaParser.SkipAmbientDeclaration;
+var
+  AngleDepth, Depth: Integer;
+  HasBody: Boolean;
+begin
+  Advance;
+  if CheckUnescapedIdentifierKeyword(KEYWORD_INTERFACE) then
   begin
     Advance;
-    Depth := 1;
-    while not IsAtEnd and (Depth > 0) do
-    begin
-      if Check(gttTemplateHead) or Check(gttTemplate) then
-      begin
-        SkipTemplateLiteral;
-        Continue;
-      end;
-      if Check(gttLeftBrace) then Inc(Depth);
-      if Check(gttRightBrace) then Dec(Depth);
-      Advance;
-    end;
+    Advance;
+    SkipInterfaceDeclaration;
+    Exit;
   end;
+  HasBody := Check(gttClass) or Check(gttEnum) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_MODULE) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_GLOBAL) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_NAMESPACE) or
+    CheckUnescapedIdentifierKeyword(KEYWORD_ABSTRACT);
+  if Check(gttConst) then
+  begin
+    Advance;
+    HasBody := Check(gttEnum);
+  end;
+  if not HasBody then
+  begin
+    SkipUntilSemicolon;
+    Exit;
+  end;
+
+  // The head: everything up to the body's '{' outside brackets and type
+  // argument lists, as for an interface.
+  AngleDepth := 0;
+  Depth := 0;
+  while not IsAtEnd do
+  begin
+    if (AngleDepth = 0) and (Depth = 0) then
+    begin
+      if Check(gttLeftBrace) then
+        Break;
+      if Check(gttSemicolon) then
+      begin
+        Advance;
+        Exit;
+      end;
+      if FAutomaticSemicolonInsertion and HasLineTerminatorBeforePeek and
+         (Previous.TokenType = gttString) then
+        Exit;
+    end;
+    if Check(gttTemplateHead) or Check(gttTemplate) then
+    begin
+      SkipTemplateLiteral;
+      Continue;
+    end;
+    case Peek.TokenType of
+      gttLess: Inc(AngleDepth);
+      gttGreater: Dec(AngleDepth);
+      gttRightShift: Dec(AngleDepth, 2);
+      gttUnsignedRightShift: Dec(AngleDepth, 3);
+      gttLeftParen, gttLeftBracket, gttLeftBrace: Inc(Depth);
+      gttRightParen, gttRightBracket, gttRightBrace: Dec(Depth);
+    end;
+    if AngleDepth < 0 then
+      AngleDepth := 0;
+    if Depth < 0 then
+      Depth := 0;
+    Advance;
+  end;
+  SkipBracedBody;
+end;
+
+{ An exported overload signature is erased as one, from its `export`. }
+function TGocciaParser.ExportedOverloadOr(const AStatement: TGocciaStatement;
+  const ALine, AColumn: Integer): TGocciaStatement;
+begin
+  if (AStatement is TGocciaEmptyStatement) and
+     (TGocciaEmptyStatement(AStatement).ErasedTypeKind = etkOverload) then
+  begin
+    Result := TGocciaEmptyStatement.Create(SourceSpanAtPosition(ALine, AColumn),
+      etkExportOverload);
+    TGocciaEmptyStatement(Result).SetSignature(
+      TGocciaEmptyStatement(AStatement).SignatureParameters,
+      TGocciaEmptyStatement(AStatement).SignatureTypeRanges);
+  end
+  else
+    Result := AStatement;
 end;
 
 function TGocciaParser.IsTypeDeclaration: Boolean;

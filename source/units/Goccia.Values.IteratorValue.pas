@@ -111,6 +111,7 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
+  Goccia.Timeout,
   Goccia.UncatchableFault,
   Goccia.Utils,
   Goccia.Values.ArrayValue,
@@ -1329,6 +1330,8 @@ begin
           GC.AddTempRoot(RootedValue);
         try
           ResultArray.Elements.Add(RootedValue);
+          // The consumer's walk is native work no instruction counts.
+          CheckExecutionTimeout;
           Value := Iterator.DirectNext(Done);
         finally
           if ValueWasRooted then

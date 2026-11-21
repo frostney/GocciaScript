@@ -503,12 +503,16 @@ type
     FNamespaceName: string;
     FPhase: TGocciaImportCallPhase;
     FSpecifierRanges: TGocciaASTPartRangeArray;
+    FAttributeRanges: TGocciaImportAttributeRangeArray;
   public
     { Where the module path's string literal is, in the parsed text. }
     procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
     { Where each binding is, in source order: the default binding, the
       namespace, and each named import. }
     procedure SetSpecifierRanges(const ARanges: TGocciaASTPartRangeArray);
+    { Where each import attribute is, in source order. }
+    procedure SetAttributeRanges(
+      const AAttributes: TGocciaImportAttributeRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AImports: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
@@ -608,11 +612,15 @@ type
     FModulePath: string;
     FNamespaceName: string;
     FSpecifierRanges: TGocciaASTPartRangeArray;
+    FAttributeRanges: TGocciaImportAttributeRangeArray;
   public
     { Where the module path's string literal is, in the parsed text. }
     procedure SetModuleSpecifierRange(const AStartOffset, AEndOffset: Integer);
     { Where each specifier is, in source order. }
     procedure SetSpecifierRanges(const ARanges: TGocciaASTPartRangeArray);
+    { Where each import attribute is, in source order. }
+    procedure SetAttributeRanges(
+      const AAttributes: TGocciaImportAttributeRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     constructor Create(const AExportsTable: TStringStringMap;
       const AModulePath: string; const ASpan: TGocciaSourceSpan;
@@ -640,7 +648,11 @@ type
     etkExportInterface,  // export interface I {}
     etkImport,           // import type ... from "...";
     etkExport,           // export type { A };
-    etkReExport          // export type { A } from "...";  export type * from "...";
+    etkReExport,         // export type { A } from "...";  export type * from "...";
+    etkAmbient,          // declare const x: T;  declare module "m" {}  declare global {}
+    etkExportAmbient,    // export declare function f(): void;
+    etkOverload,         // function f(a: string): string;
+    etkExportOverload    // export function f(a: string): string;
   );
 
   TGocciaEmptyStatement = class(TGocciaStatement)
@@ -648,6 +660,8 @@ type
     FErasedTypeKind: TGocciaErasedTypeKind;
     FModuleParts: TGocciaASTPartRangeArray;
     FTypeRanges: TGocciaTypeRangeArray;
+    FSignatureParameters: TGocciaParameterArray;
+    FSignatureTypeRanges: TGocciaTypeRangeArray;
   public
     constructor Create(const ASpan: TGocciaSourceSpan;
       const AErasedTypeKind: TGocciaErasedTypeKind = etkNone);
@@ -660,8 +674,18 @@ type
       before skipping it, when the parse records type ranges (ADR 0172): its
       type parameters, heritage and type, or its body. }
     procedure SetTypeRanges(const ARanges: TGocciaTypeRangeArray);
+    { What the parser read of an overload signature: its parameters and its
+      type parameters, `this` parameter and return type, as a function
+      declaration reports them without its body. Neither the evaluator nor
+      the compiler reads them. }
+    procedure SetSignature(const AParameters: TGocciaParameterArray;
+      const ATypeRanges: TGocciaTypeRangeArray);
     procedure ForEachChild(const AVisitor: TGocciaASTChildVisitor); override;
     property ErasedTypeKind: TGocciaErasedTypeKind read FErasedTypeKind;
+    property SignatureParameters: TGocciaParameterArray
+      read FSignatureParameters;
+    property SignatureTypeRanges: TGocciaTypeRangeArray
+      read FSignatureTypeRanges;
   end;
 
   TGocciaCaseClause = class(TGocciaASTNode)
@@ -1651,6 +1675,12 @@ begin
   FSpecifierRanges := ARanges;
 end;
 
+procedure TGocciaImportDeclaration.SetAttributeRanges(
+  const AAttributes: TGocciaImportAttributeRangeArray);
+begin
+  FAttributeRanges := AAttributes;
+end;
+
 procedure TGocciaImportDeclaration.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
@@ -1661,6 +1691,7 @@ begin
       FModuleSpecifierEnd, []);
     AVisitor.LeavePart;
   end;
+  VisitImportAttributes(AVisitor, FAttributeRanges);
 end;
 
 procedure TGocciaReExportDeclaration.SetModuleSpecifierRange(
@@ -1676,6 +1707,12 @@ begin
   FSpecifierRanges := ARanges;
 end;
 
+procedure TGocciaReExportDeclaration.SetAttributeRanges(
+  const AAttributes: TGocciaImportAttributeRangeArray);
+begin
+  FAttributeRanges := AAttributes;
+end;
+
 procedure TGocciaReExportDeclaration.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
@@ -1686,6 +1723,7 @@ begin
       FModuleSpecifierEnd, []);
     AVisitor.LeavePart;
   end;
+  VisitImportAttributes(AVisitor, FAttributeRanges);
 end;
 
 procedure TGocciaExportDeclaration.SetSpecifierRanges(
@@ -1712,11 +1750,22 @@ begin
   FTypeRanges := ARanges;
 end;
 
+procedure TGocciaEmptyStatement.SetSignature(
+  const AParameters: TGocciaParameterArray;
+  const ATypeRanges: TGocciaTypeRangeArray);
+begin
+  FSignatureParameters := AParameters;
+  FSignatureTypeRanges := ATypeRanges;
+end;
+
 procedure TGocciaEmptyStatement.ForEachChild(
   const AVisitor: TGocciaASTChildVisitor);
 begin
   VisitPartRanges(AVisitor, FModuleParts);
   VisitTypeRanges(AVisitor, FTypeRanges);
+  VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfTypeParameters);
+  ForEachParameterChild(AVisitor, FSignatureParameters);
+  VisitTypeRanges(AVisitor, FSignatureTypeRanges, trfAfterTypeParameters);
 end;
 
 end.

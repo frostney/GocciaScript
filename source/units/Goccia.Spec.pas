@@ -200,7 +200,7 @@ const
   // ---------------------------------------------------------------------------
   // WHATWG / W3C Web Platform APIs
   // ---------------------------------------------------------------------------
-  WHATWG_FEATURES: array[0..14] of TGocciaFeatureEntry = (
+  WHATWG_FEATURES: array[0..15] of TGocciaFeatureEntry = (
     (Name: 'console';           Link: 'https://console.spec.whatwg.org/'),
     (Name: 'structuredClone';   Link: 'https://html.spec.whatwg.org/multipage/structured-data.html#dom-structuredclone'),
     (Name: 'DOMException';      Link: 'https://webidl.spec.whatwg.org/#idl-DOMException'),
@@ -215,7 +215,8 @@ const
     (Name: 'AbortSignal';       Link: 'https://dom.spec.whatwg.org/#abortsignal'),
     (Name: 'fetch';             Link: 'https://fetch.spec.whatwg.org/#fetch-method'),
     (Name: 'Headers';           Link: 'https://fetch.spec.whatwg.org/#headers-class'),
-    (Name: 'Response';          Link: 'https://fetch.spec.whatwg.org/#response-class')
+    (Name: 'Response';          Link: 'https://fetch.spec.whatwg.org/#response-class'),
+    (Name: 'Blob';              Link: 'https://w3c.github.io/FileAPI/#blob-section')
   );
 
   // ---------------------------------------------------------------------------

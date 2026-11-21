@@ -10,6 +10,7 @@
  */
 
 import { $ } from "bun";
+import { verifyOutputEncoding, verifyReporterEncoding } from "./test-cli-output-encoding";
 import {
   writeFileSync,
   readFileSync,
@@ -29,8 +30,11 @@ import {
   BUNDLER,
   BENCHRUNNER,
 } from "./test-cli/binaries";
-import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
+import { canCapMemory, containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { mkdtemp, clean } from "./test-cli/tmpdir";
+
+verifyOutputEncoding();
+verifyReporterEncoding();
 
 // -- Stdin smoke (Loader) ------------------------------------------------------
 
@@ -1299,7 +1303,7 @@ console.log("--source-type and .mjs module inference (Loader + TestRunner + Bund
 // -- Entry source-type detection (#1626, ADR 0140) ---------------------------
 
 // With no explicit source type, an entry that has a top-level import or
-// export declaration runs as a Module and any other entry as a Script. Node.js
+// export declaration or valid top-level await runs as a Module. Node.js
 // prints "y" for cyc.js and "yh" for fcyc.js.
 console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, Bundler, LoaderBare, sandbox)...");
 {
@@ -1312,6 +1316,8 @@ console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, B
       "fd.js": 'import { h2 } from "./fcyc.js";\nexport const y2 = "y" + h2();\n',
       "script.js": 'var scriptVar = 1;\nconsole.log(typeof globalThis.scriptVar, this === globalThis);\n',
       "dynamic.js":
+        'var dynamicVar = 1;\nimport("./lib.js").then((m) => console.log(m.v, typeof globalThis.dynamicVar, this === globalThis));\n',
+      "await-dynamic.js":
         'var dynamicVar = 1;\nconst m = await import("./lib.js");\nconsole.log(m.v, typeof globalThis.dynamicVar, this === globalThis);\n',
       "lib.js": 'export const v = "lib";\n',
       // A detected Module's top-level lexical declarations stay in the module
@@ -1356,6 +1362,8 @@ console.log("Entry source-type detection (Runner, TestRunner, BenchmarkRunner, B
       run(RUNNER, ["script.js", "--compat-var"]), "number true");
     expectLine("entry with only dynamic import() stays a Script",
       run(RUNNER, ["dynamic.js", "--compat-var"]), "lib number true");
+    expectLine("top-level await import() selects a Module",
+      run(RUNNER, ["await-dynamic.js", "--compat-var"]), "lib undefined false");
     expectFailure("import.meta alone stays a Script error",
       run(RUNNER, ["meta.js"]), "import.meta is only allowed in module code");
     // An explicit Script keeps today's behaviour: d.js's import of the entry
@@ -1496,6 +1504,132 @@ console.log("--timeout (native sparse-array fill)...");
   if (json.error?.type !== "TimeoutError") throw new Error(`Expected TimeoutError, got ${json.error?.type}`);
 }
 
+console.log("--timeout and --max-instructions (Array.prototype.fill over a length above 2**31 - 1)...");
+if (!canCapMemory) {
+  console.log("  skipped: no process memory cap on this platform");
+} else {
+  // A length above 2**31 - 1 takes fill's sparse path, which assigns every
+  // index as a property. That loop is bound only by the JS-controlled length,
+  // so the deadline and the instruction budget have to reach it
+  // (the chokepoint rule in Goccia.Timeout).
+  const cases: [string, string][] = [
+    ["an Array", "const a = new Array(2 ** 31 + 10);\na.fill(1);\n0;\n"],
+    ["an array-like", "Array.prototype.fill.call({ length: 2 ** 40 }, 1);\n0;\n"],
+  ];
+  for (const [label, source] of cases) {
+    const timed = runLoaderJson(source, ["--timeout=100", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 1024 });
+    if (timed.exitCode !== 1) throw new Error(`fill over ${label}: --timeout exit code should be 1, got ${timed.exitCode}`);
+    if (timed.json.error?.type !== "TimeoutError") throw new Error(`fill over ${label}: expected TimeoutError, got ${timed.json.error?.type}`);
+    const counted = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 1024 });
+    if (counted.exitCode !== 1) throw new Error(`fill over ${label}: --max-instructions exit code should be 1, got ${counted.exitCode}`);
+    if (counted.json.error?.type !== "InstructionLimitError") throw new Error(`fill over ${label}: expected InstructionLimitError, got ${counted.json.error?.type}`);
+  }
+}
+
+console.log("--max-instructions (native loops over a huge array)...");
+if (!canCapMemory) {
+  console.log("  skipped: no process memory cap on this platform");
+} else {
+  // These loops used to poll only the deadline (through the per-element reads
+  // or the allocations they make), so an instruction budget could not end
+  // them: the chokepoint rule in Goccia.Timeout covers every limit.
+  const huge = "const a = new Array(2 ** 31 + 10);\n";
+  const cases: [string, string][] = [
+    ["the dense Array constructor", "const a = new Array(2 ** 28);\n0;\n"],
+    ["join", `${huge}a.join();\n0;\n`],
+    ["reverse", `${huge}a.reverse();\n0;\n`],
+    ["sort", `${huge}a.sort();\n0;\n`],
+    ["map", `${huge}a.map(() => 1);\n0;\n`],
+    ["shift", `${huge}a.shift();\n0;\n`],
+    ["copyWithin", `${huge}a.copyWithin(0, 1);\n0;\n`],
+    ["Array.from", `${huge}Array.from(a);\n0;\n`],
+    ["spread", `${huge}const b = [...a];\n0;\n`],
+  ];
+  for (const [label, source] of cases) {
+    const { exitCode, json } = runLoaderJson(source, ["--max-instructions=1000", "--max-memory=0"], { timeout: 10_000, memoryCapMiB: 1024 });
+    if (exitCode !== 1) throw new Error(`${label}: --max-instructions exit code should be 1, got ${exitCode}`);
+    if (json.error?.type !== "InstructionLimitError") throw new Error(`${label}: expected InstructionLimitError, got ${json.error?.type}`);
+  }
+}
+
+console.log("--max-instructions (native work counted once, and by what it covers)...");
+{
+  // Work that already counts itself is not charged a second time by the poll.
+  const json = 'JSON.parse("[" + "1,".repeat(1999) + "1]");\n';
+  const parsed = runLoaderJson(json, ["--max-instructions=6500"], { timeout: 10_000 });
+  if (parsed.exitCode !== 0) throw new Error(`JSON.parse under --max-instructions=6500 should succeed, got exit ${parsed.exitCode}: ${JSON.stringify(parsed.json.error)}`);
+  // A fill and a spread through the iterator protocol are charged for the
+  // elements they walk. The setup alone stays within the budget (a short
+  // hole extension is not charged), so the operation is what trips it.
+  const operations: [string, string, string, number][] = [
+    ["fill of an array-like", "const o = { length: 1000 };\n", "Array.prototype.fill.call(o, 1);\n0;\n", 500],
+    ["fill of an array", "const a = new Array(1000);\n", "a.fill(1);\n0;\n", 500],
+    ["fill of one index at a batch boundary", "const o = { length: 1000 };\n", "Array.prototype.fill.call(o, 1, 255, 256);\n0;\n", 100],
+    [
+      "spread through an own Symbol.iterator",
+      "const a = new Array(1000);\na[Symbol.iterator] = Array.prototype[Symbol.iterator];\n",
+      "const b = [...a];\n0;\n",
+      500,
+    ],
+  ];
+  for (const [label, setup, operation, limit] of operations) {
+    const budget = [`--max-instructions=${limit}`];
+    const alone = runLoaderJson(setup, budget, { timeout: 10_000 });
+    if (alone.exitCode !== 0) throw new Error(`${label}: its setup alone should stay within --max-instructions=${limit}, got exit ${alone.exitCode}`);
+    const run = runLoaderJson(setup + operation, budget, { timeout: 10_000 });
+    const trips = run.exitCode === 1 && run.json.error?.type === "InstructionLimitError";
+    // One index is one write: it must not be charged a whole batch.
+    if (label === "fill of one index at a batch boundary") {
+      if (run.exitCode !== 0) throw new Error(`${label}: one write should stay within --max-instructions=${limit}, got exit ${run.exitCode}`);
+    } else if (!trips) {
+      throw new Error(`${label}: should end with InstructionLimitError, got exit ${run.exitCode}`);
+    }
+  }
+}
+
+console.log("--max-instructions (a far accessor index on an array)...");
+{
+  // The holes are extended before the descriptor is published, so the raise
+  // of a poll there finds nothing the array owns (it used to free a
+  // descriptor the array still held and fault).
+  const define = "const a = [];\nObject.defineProperty(a, 100000, { get: () => 1, configurable: true });\na.length;\n";
+  for (const [flag, type] of [["--max-instructions=1000", "InstructionLimitError"]]) {
+    const { exitCode, json } = runLoaderJson(define, [flag], { timeout: 10_000 });
+    if (exitCode !== 1 || json.error?.type !== type) throw new Error(`defineProperty at a far index under ${flag} should end with ${type}, got exit ${exitCode}: ${JSON.stringify(json.error)}`);
+  }
+}
+
+console.log("--max-instructions (drop skip through next())...");
+{
+  const setup = "const it = Array.prototype.values.call({ length: 5000 }).drop(4999);\n";
+  const drop = setup + "it.next();\n0;\n";
+  const alone = runLoaderJson(setup, ["--max-instructions=1000"], { timeout: 10_000 });
+  if (alone.exitCode !== 0) throw new Error(`drop setup alone should succeed, got exit ${alone.exitCode}`);
+  const { exitCode, json } = runLoaderJson(drop, ["--max-instructions=1000"], { timeout: 10_000 });
+  if (exitCode !== 1 || json.error?.type !== "InstructionLimitError") throw new Error(`drop skip through next() should end with InstructionLimitError, got exit ${exitCode}`);
+}
+
+console.log("--max-instructions (an iterator object over a bound native next)...");
+{
+  // The consumer's step is charged however the next method is reached.
+  const setup = "const src = Array.prototype.values.call({ length: 1000 });\nconst it = { next: src.next.bind(src), [Symbol.iterator]() { return this; } };\n";
+  const alone = runLoaderJson(setup, ["--max-instructions=500"], { timeout: 10_000 });
+  if (alone.exitCode !== 0) throw new Error(`bound-next setup alone should succeed, got exit ${alone.exitCode}`);
+  for (const [label, body] of [["spread", "const b = [...it];\n0;\n"], ["a destructuring pattern", "const [...r] = it;\n0;\n"]]) {
+    const { exitCode, json } = runLoaderJson(setup + body, ["--max-instructions=500"], { timeout: 10_000 });
+    if (exitCode !== 1 || json.error?.type !== "InstructionLimitError") throw new Error(`${label} over a bound native next should end with InstructionLimitError, got exit ${exitCode}: ${JSON.stringify(json.error)}`);
+  }
+}
+
+console.log("--max-instructions (Iterator.prototype.toArray over a native iterator)...");
+{
+  const setup = "const it = Array.prototype.values.call({ length: 5000 });\n";
+  const alone = runLoaderJson(setup, ["--max-instructions=1000"], { timeout: 10_000 });
+  if (alone.exitCode !== 0) throw new Error(`toArray setup alone should succeed, got exit ${alone.exitCode}`);
+  const { exitCode, json } = runLoaderJson(setup + "it.toArray();\n0;\n", ["--max-instructions=1000"], { timeout: 10_000 });
+  if (exitCode !== 1 || json.error?.type !== "InstructionLimitError") throw new Error(`toArray over a native iterator should end with InstructionLimitError, got exit ${exitCode}`);
+}
+
 console.log("--timeout (native regex scan)...");
 {
   const { exitCode, json } = runLoaderJson(regexTimeoutScan, ["--timeout=50"], { timeout: 10_000 });
@@ -1612,6 +1746,51 @@ console.log("--max-memory (OOM triggers RangeError)...");
   if (res.exitCode !== 1) throw new Error(`OOM exit code should be 1, got ${res.exitCode}`);
   if (!out.includes("RangeError")) throw new Error(`OOM output should contain RangeError: ${out}`);
   if (out.includes("memory budget")) throw new Error(`OOM should be refused by a charged allocation, not the growth gate: ${out}`);
+}
+
+console.log("--max-memory (Blob bytes are charged and given back)...");
+{
+  // A Blob holds its bytes natively, reserved against the limit for its life
+  // (Goccia.Values.BlobValue). Over the limit, new Blob is the catchable
+  // RangeError, measured before the bytes are allocated, so a part repeated
+  // many times cannot build a native buffer past the limit first, and a
+  // repeated string is charged by the bytes it adds, not once more per
+  // element. The list of parts is charged as it grows, so an iterator that
+  // never ends is refused by the limit too. Blobs that become garbage give
+  // their reservation back, so many of them in turn fit under one limit.
+  const source = [
+    "const chunk = new Uint8Array(1 << 20);",
+    "const one = new Blob([chunk]);",
+    "const out = [];",
+    "const tryIt = (fn) => { try { fn(); out.push('ok'); } catch (e) { out.push(e.constructor.name); } };",
+    "tryIt(() => new Blob(Array(200).fill(chunk)));",
+    "tryIt(() => new Blob(Array(1000).fill(one)));",
+    "const s = 'x'.repeat(1 << 20);",
+    "tryIt(() => new Blob(Array(500).fill(s)));",
+    "tryIt(() => new Blob(Array(25).fill(s)));",
+    "let total = 0;",
+    "for (const _ of Array(300).keys()) { total += new Blob([chunk]).slice(1).size; }",
+    "out.push(total);",
+    "console.log(out.join(','));",
+    "",
+  ].join("\n");
+  const res = await $`echo ${source} | ${RUNNER} --max-memory=67108864 --timeout=60000 2>&1`.quiet().nothrow();
+  const out = res.text();
+  if (res.exitCode !== 0) throw new Error(`Blob memory probe should exit 0, got ${res.exitCode}: ${out}`);
+  if (!out.includes(`RangeError,RangeError,RangeError,ok,${300 * ((1 << 20) - 1)}`)) {
+    throw new Error(`Blob memory probe: over the limit should be RangeError and garbage Blobs should fit in turn: ${out}`);
+  }
+  // The endless iterator runs under a smaller limit, which it reaches sooner.
+  const endless = [
+    "const empty = new Blob();",
+    "try { new Blob({ [Symbol.iterator]: () => ({ next: () => ({ done: false, value: empty }) }) }); console.log('ok'); }",
+    "catch (e) { console.log(e.constructor.name); }",
+    "",
+  ].join("\n");
+  const endlessRes = await $`echo ${endless} | ${RUNNER} --max-memory=16777216 --timeout=60000 2>&1`.quiet().nothrow();
+  if (endlessRes.exitCode !== 0 || !endlessRes.text().includes("RangeError")) {
+    throw new Error(`Blob memory probe: an endless iterator of parts should be refused by the limit: ${endlessRes.text()}`);
+  }
 }
 
 console.log("--max-memory (peak resident memory stays near the ceiling)...");
@@ -5244,7 +5423,9 @@ console.log("--max-memory stack refusal is located at the call...");
         join(tmp, name),
         [
           "const keep = [];",
-          "for (let i = 0; i < 25000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
+          // Leave headroom for per-object size changes: the preload must fit
+          // inside 8 MiB so stack growth, not array construction, is refused.
+          "for (let i = 0; i < 20000; i = i + 1) { keep.push({ i, a: [i, i, i, i] }); }",
           ...body,
           "console.log(r(1000000));",
           "",

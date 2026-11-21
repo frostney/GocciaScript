@@ -591,6 +591,74 @@ describe("ast.parse with expressions: type syntax", () => {
     ]);
   });
 
+  test("with jsx on, an element's type arguments are its first child", () => {
+    const source =
+      "const view = <Select<Map<string, () => void>, 'a' | \"b\"> value={v}><Item<-1> /></Select>;\n";
+    for (const fileName of ["view.tsx", "view.jsx", "view.js", "view.mjs"]) {
+      const result = parseTypes(source, { jsx: true, fileName });
+      const [outer, inner] = findAll(result.root, "JSXElement");
+
+      expect(text(result, outer)).toBe(source.slice(source.indexOf("<Select"), source.lastIndexOf(";")));
+      expect(shapeOf(result, outer)).toEqual([
+        "TSTypeParameterInstantiation(<Map<string, () => void>, 'a' | \"b\">)",
+        "Identifier(v)",
+        "JSXElement(<Item<-1> />)",
+      ]);
+      expect(treeOf(result, outer.children[0])).toEqual([
+        "TSTypeParameterInstantiation(<Map<string, () => void>, 'a' | \"b\">)",
+        "TSTypeReference(Map<string, () => void>)",
+        "TSTypeParameterInstantiation(<string, () => void>)",
+        "TSStringKeyword(string)",
+        "TSFunctionType(() => void)",
+        "TSTypeAnnotation(=> void)",
+        "TSVoidKeyword(void)",
+        "TSUnionType('a' | \"b\")",
+        "TSLiteralType('a')",
+        "StringLiteral('a')",
+        "TSLiteralType(\"b\")",
+        "StringLiteral(\"b\")",
+      ]);
+      expect(treeOf(result, inner)).toEqual([
+        "JSXElement(<Item<-1> />)",
+        "TSTypeParameterInstantiation(<-1>)",
+        "TSLiteralType(-1)",
+        "NumericLiteral(1)",
+      ]);
+      expect(all(result.root).filter((node) => node.kind === "Identifier").map((node) => text(result, node)))
+        .toEqual(["v"]);
+    }
+  });
+
+  test("with jsx on, a list that opens with a generic function type is measured in the file", () => {
+    const source = "const view = <Select<<T>(x: T) => T, '<<'> v={1} />;\n";
+    const result = parseTypes(source, { jsx: true, fileName: "view.tsx" });
+
+    expect(treeOf(result, find(result.root, "TSTypeParameterInstantiation"))).toEqual([
+      "TSTypeParameterInstantiation(<<T>(x: T) => T, '<<'>)",
+      "TSFunctionType(<T>(x: T) => T)",
+      "TSTypeParameterDeclaration(<T>)",
+      "TSTypeParameter(T)",
+      "Parameter(x: T)",
+      "TSTypeAnnotation(: T)",
+      "TSTypeReference(T)",
+      "TSTypeAnnotation(=> T)",
+      "TSTypeReference(T)",
+      "TSLiteralType('<<')",
+      "StringLiteral('<<')",
+    ]);
+  });
+
+  test("with jsx on, an empty, unclosed or closing-tag type argument list is a SyntaxError", () => {
+    for (const source of [
+      "const e = <F<> />;\n",
+      "const e = <F<string\n",
+      "const e = (<F<string a={1} />);\n",
+      "const e = <F<string>></F<string>>;\n",
+    ]) {
+      expect(() => parseTypes(source, { jsx: true, fileName: "view.tsx" })).toThrow(SyntaxError);
+    }
+  });
+
   test("children nest inside their parent and siblings do not overlap", () => {
     const source = [
       "type Deep = { a: Map<string, [x: number, y?: Array<{ z: 'q' }>]>; b(c: () => void): Promise<void> };",
@@ -622,6 +690,91 @@ describe("ast.parse with expressions: type syntax", () => {
 
       expect(text(result, find(result.root, "TSTypeAnnotation"))).toBe(`: ${type}`);
     });
+  });
+
+  test("an overload signature reports its type parameters, parameters and return type", () => {
+    const result = parseTypes(
+      [
+        'function pick<T>(this: Window, text: "a", ...rest: T[]): string;',
+        'export function pick(count: { n: "b" }): "c";',
+        "function pick(value: unknown) { return value; }",
+        "",
+      ].join("\n"),
+    );
+    const [overload, exported] = result.root.children;
+
+    expect(overload.kind).toBe("OverloadDeclaration");
+    expect(shapeOf(result, overload)).toEqual([
+      "TSTypeParameterDeclaration(<T>)",
+      "Parameter(this: Window)",
+      'Parameter(text: "a")',
+      "Parameter(...rest: T[])",
+      "TSTypeAnnotation(: string)",
+    ]);
+    expect(exported.kind).toBe("ExportOverloadDeclaration");
+    expect(shapeOf(result, exported)).toEqual([
+      'Parameter(count: { n: "b" })',
+      'TSTypeAnnotation(: "c")',
+    ]);
+    expect(findAll(exported, "StringLiteral").map((node) => text(result, node))).toEqual(['"b"', '"c"']);
+  });
+
+  test("a this parameter is a Parameter holding its annotation, after the type parameters", () => {
+    const result = parseTypes(
+      [
+        "function total<T>(this: Window, extra: T) {}",
+        "class Tally { add(this: Tally, step: number) {} }",
+        "const counter = { bump(this: Window) {} };",
+        "",
+      ].join("\n"),
+    );
+    const [declaration, klass, variable] = result.root.children;
+    const shapes = [declaration, find(klass, "MethodDefinition"), find(variable, "Property")]
+      .map((node) => shapeOf(result, node).filter((shape) => !shape.startsWith("BlockStatement")));
+
+    expect(shapes).toEqual([
+      [
+        "TSTypeParameterDeclaration(<T>)",
+        "Parameter(this: Window)",
+        "Parameter(extra: T)",
+      ],
+      ["Identifier(add)", "Parameter(this: Tally)", "Parameter(step: number)"],
+      ["Identifier(bump)", "Parameter(this: Window)"],
+    ]);
+    expect(treeOf(result, find(declaration, "Parameter"))).toEqual([
+      "Parameter(this: Window)",
+      "TSTypeAnnotation(: Window)",
+      "TSTypeReference(Window)",
+    ]);
+  });
+
+  test("declare module reports its name, and other ambient declarations nothing", () => {
+    const result = parseTypes(
+      [
+        'declare module "*.svg" {',
+        "  const url: string;",
+        "}",
+        'declare module "*.css";',
+        'export declare module "virtual:a" {}',
+        "declare global { interface Window { app: unknown } }",
+        'declare const mode: "light";',
+        "",
+      ].join("\n"),
+    );
+
+    expect(result.root.children.map((node) => shapeOf(result, node))).toEqual([
+      ['StringLiteral("*.svg")'],
+      ['StringLiteral("*.css")'],
+      ['StringLiteral("virtual:a")'],
+      [],
+      [],
+    ]);
+  });
+
+  test("without the option an overload signature and an ambient declaration have no children", () => {
+    const source = 'function pick(text: "a"): string;\ndeclare module "*.css";\n';
+
+    expect(parse(source, { fileName: "types.ts" }).root.children.map((node) => node.children.length)).toEqual([0, 0]);
   });
 
   test("without the option no type syntax is reported and the statements are unchanged", () => {

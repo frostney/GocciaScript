@@ -564,6 +564,7 @@ end;
 
 begin
   TGarbageCollector.Initialize;
+  PinPrimitiveSingletons;
   try
     TestRunnerProgram.AddSuite(
       TMicrotaskQueueTests.Create('MicrotaskQueue'));

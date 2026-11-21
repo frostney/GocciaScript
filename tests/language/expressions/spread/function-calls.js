@@ -67,10 +67,13 @@ test("call spread reads a hole through the prototype chain", () => {
   expect(spread).toEqual([1, "inherited", 3]);
 });
 
+// Shrinking a length set past the dense-extension gap keeps the tail sparse,
+// so a short length still runs past the stored elements.
 test("call spread passes every index up to a length set far past the elements", () => {
-  const farLength = 2000000;
+  const shortLength = 2000;
   const source = [1, 2];
-  source.length = farLength;
+  source.length = 2000000;
+  source.length = shortLength;
   const countArguments = (...args) => args.length;
-  expect(countArguments(...source)).toBe(farLength);
+  expect(countArguments(...source)).toBe(shortLength);
 });

@@ -796,6 +796,36 @@ describe("ast.parse with expressions: import and export specifiers", () => {
     ]);
   });
 
+  test("an import attribute reports its key and value after the module path", () => {
+    const result = parseExpressions(
+      'import d from "./d.json" with {\n  type: "json"\n};\n' +
+        "import c from './c.json' with { 'type': 'json' };\n" +
+        'export { e } from "./e.json" with { type: "json" };\n',
+    );
+    const [imported, quotedKey, reExported] = result.root.children;
+    const attributeOf = (declaration) =>
+      declaration.children.find((child) => child.kind === "ImportAttribute");
+
+    expect(shapeOf(result, imported)).toEqual([
+      "ImportDefaultSpecifier(d)",
+      'StringLiteral("./d.json")',
+      'ImportAttribute(type: "json")',
+    ]);
+    expect(shapeOf(result, attributeOf(imported))).toEqual([
+      "Identifier(type)",
+      'StringLiteral("json")',
+    ]);
+    expect(shapeOf(result, attributeOf(quotedKey))).toEqual([
+      "StringLiteral('type')",
+      "StringLiteral('json')",
+    ]);
+    expect(shapeOf(result, reExported)).toEqual([
+      "ExportSpecifier(e)",
+      'StringLiteral("./e.json")',
+      'ImportAttribute(type: "json")',
+    ]);
+  });
+
   test("a source-phase or deferred import reports its binding as a specifier", () => {
     const result = parseExpressions(
       'import source wasm from "./a.wasm";\nimport defer * as lazy from "./b.js";\n',

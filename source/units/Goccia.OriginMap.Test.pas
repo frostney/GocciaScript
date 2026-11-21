@@ -20,6 +20,7 @@ type
     procedure TestBoundaryStartTakesWhatFollows;
     procedure TestBoundaryEndTakesWhatPrecedes;
     procedure TestGapWidensOutward;
+    procedure TestEndWhereACopyBeginsAfterAGap;
     procedure TestGapAtTheEndReachesTheOriginalLength;
     procedure TestBeforeTheFirstRun;
     procedure TestAnchorGivesAnExactEdge;
@@ -45,6 +46,8 @@ begin
   Test('A shared boundary ends at what precedes',
     TestBoundaryEndTakesWhatPrecedes);
   Test('An offset in a gap widens outward', TestGapWidensOutward);
+  Test('An end where a copy begins after a gap is in the gap',
+    TestEndWhereACopyBeginsAfterAGap);
   Test('A gap at the end reaches the original length',
     TestGapAtTheEndReachesTheOriginalLength);
   Test('An offset before the first run answers the start of the file',
@@ -167,6 +170,26 @@ begin
     Expect<Boolean>(Map.Map(3, obStart, Original)).ToBe(False);
     Expect<Integer>(Original).ToBe(2);
     Expect<Boolean>(Map.Map(3, obEnd, Original)).ToBe(False);
+    Expect<Integer>(Original).ToBe(2);
+  finally
+    Map.Free;
+  end;
+end;
+
+procedure TOriginMapTests.TestEndWhereACopyBeginsAfterAGap;
+var
+  Map: TGocciaOriginMap;
+  Original: Integer;
+begin
+  Map := TwoRunsWithAGap;
+  try
+    // Generated offset 4 ends the synthesized `__` and begins the copy of
+    // `cd`. A range ending there ends the synthesized text, as the factory
+    // callee the JSX transformer writes before an element's copied type
+    // arguments does, so it is not exact. A start there is.
+    Expect<Boolean>(Map.Map(4, obEnd, Original)).ToBe(False);
+    Expect<Integer>(Original).ToBe(2);
+    Expect<Boolean>(Map.Map(4, obStart, Original)).ToBe(True);
     Expect<Integer>(Original).ToBe(2);
   finally
     Map.Free;

@@ -25,6 +25,8 @@ type
     gckImportProviderInstall,
     gckFunctionConstructor,
     gckShadowRealm,
+    { A call of a realm's %eval% (EnableEval), direct or indirect. }
+    gckEval,
     gckSandboxFileSystem,
     gckCapabilitiesEffective,
     { A host's decision on a config's permission requests (ADR 0122): allow
@@ -100,6 +102,8 @@ begin
       Result := 'function.constructor';
     gckShadowRealm:
       Result := 'shadow-realm.construct';
+    gckEval:
+      Result := 'eval.call';
     gckSandboxFileSystem:
       Result := 'sandbox.fs.path';
     gckCapabilitiesEffective:

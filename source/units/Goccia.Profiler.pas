@@ -113,14 +113,16 @@ type
     function RegisterTemplate(const AName, ASourceFile: string;
       const ALine: Integer): Integer;
     procedure PushFunction(const AProfileIndex: Integer;
-      const ATimestamp: Int64); overload;
+      const ATimestamp: Int64; const ACountCall: Boolean = True); overload;
     procedure PopFunction(const AProfileIndex: Integer;
       const ATimestamp: Int64); overload;
 
     // Clock-owning entry points exclude registration and stack bookkeeping
     // from every active frame. Explicit timestamps remain useful to embedders
     // supplying an already adjusted clock and to exact accounting tests.
-    procedure PushFunction(const AProfileIndex: Integer); overload;
+    // A resumed module starts another timed segment of the same evaluation.
+    procedure PushFunction(const AProfileIndex: Integer;
+      const ACountCall: Boolean = True); overload;
     procedure PopFunction(const AProfileIndex: Integer); overload;
 
     function GetOpcodeCount(const AOp: UInt8): Int64; {$IFDEF FPC}inline;{$ENDIF}
@@ -246,12 +248,13 @@ begin
   Result := GetNanoseconds;
 end;
 
-procedure TGocciaProfiler.PushFunction(const AProfileIndex: Integer);
+procedure TGocciaProfiler.PushFunction(const AProfileIndex: Integer;
+  const ACountCall: Boolean);
 var
   Started: Int64;
 begin
   Started := ReadTimestamp;
-  PushFunction(AProfileIndex, Started - FExcludedNanoseconds);
+  PushFunction(AProfileIndex, Started - FExcludedNanoseconds, ACountCall);
   Inc(FExcludedNanoseconds, ReadTimestamp - Started);
 end;
 
@@ -322,7 +325,7 @@ begin
 end;
 
 procedure TGocciaProfiler.PushFunction(const AProfileIndex: Integer;
-  const ATimestamp: Int64);
+  const ATimestamp: Int64; const ACountCall: Boolean);
 begin
   if (AProfileIndex < 0) or (AProfileIndex >= FFunctionProfileCount) then Exit;
   if FTimingStackCount >= Length(FTimingStack) then
@@ -332,7 +335,8 @@ begin
   FTimingStack[FTimingStackCount].EntryTimestamp := ATimestamp;
   FTimingStack[FTimingStackCount].ChildTimeAccumulated := 0;
   Inc(FTimingStackCount);
-  Inc(FFunctionProfiles[AProfileIndex].CallCount);
+  if ACountCall then
+    Inc(FFunctionProfiles[AProfileIndex].CallCount);
   Inc(FFunctionProfiles[AProfileIndex].ActiveFrames);
 end;
 

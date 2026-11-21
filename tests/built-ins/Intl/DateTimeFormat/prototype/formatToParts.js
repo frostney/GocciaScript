@@ -5,6 +5,7 @@ features: [Intl]
 
 const isIntl = typeof Intl !== "undefined";
 const isTemporal = typeof Temporal !== "undefined";
+const hasFullICU = isIntl && new Intl.NumberFormat("en-US").format(NaN) === "NaN";
 
 const partsString = (parts) => {
   return parts.map((part) => part.value).join("");
@@ -111,5 +112,25 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatToParts", () => {
     expect(monthPart(leapMonthDate).value).toBe("6bis");
     expect(nextMonthDate.monthCode).toBe("M07");
     expect(monthPart(nextMonthDate).value).toBe("7");
+  });
+
+  test("formatToParts names the month and era in the iso8601 calendar", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      era: "short",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const parts = dtf.formatToParts(Date.UTC(2020, 0, 1));
+
+    if (!hasFullICU) {
+      expect(Array.isArray(parts)).toBe(true);
+      return;
+    }
+
+    expect(parts.find((part) => part.type === "month").value).toBe("January");
+    expect(parts.find((part) => part.type === "era").value).toBe("AD");
   });
 });

@@ -723,19 +723,57 @@ end;
 
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaYieldExpression; const ADest: UInt16);
+var
+  TempReg: UInt16;
+  OuterRegionPeak, RegionPeak, Slot: Integer;
 begin
-  if Assigned(AExpr.Operand) then
-    ACtx.CompileExpression(AExpr.Operand, ADest)
-  else
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
   if AExpr.IsDelegate then
+  begin
+    if Assigned(AExpr.Operand) then
+      ACtx.CompileExpression(AExpr.Operand, ADest)
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
     EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest,
-      YIELD_FLAG_DELEGATE))
-  else if ACtx.Scope.SlotHoldsLocal(ADest) then
-    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest, 0))
+      YIELD_FLAG_DELEGATE));
+    Exit;
+  end;
+
+  // The yielded value is handed out through a temporary, so the suspended
+  // frame need not keep it (YIELD_FLAG_TEMP_OPERAND). When the result goes
+  // into a local (`const sent = yield big`), the local would otherwise hold
+  // the value for as long as the generator stays suspended, and a throw()
+  // caught inside the body would read it back instead of the binding's
+  // previous value: the resumed value reaches the local by a move.
+  if ACtx.Scope.SlotHoldsLocal(ADest) then
+    TempReg := ACtx.Scope.AllocateRegister
   else
-    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest,
+    TempReg := ADest;
+  try
+    OuterRegionPeak := ACtx.Scope.BeginRegisterRegion;
+    if Assigned(AExpr.Operand) then
+      ACtx.CompileExpression(AExpr.Operand, TempReg)
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, TempReg, 0, 0));
+    RegionPeak := ACtx.Scope.EndRegisterRegion(OuterRegionPeak);
+    // What the operand's evaluation left above the live registers (the
+    // arguments of a call, a receiver) is dead here, and the suspended frame
+    // would keep it reachable after the consumer drops the yielded value.
+    for Slot := ACtx.Scope.NextSlot to RegionPeak - 1 do
+      if Slot <> TempReg then
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_YIELD, TempReg, TempReg,
       YIELD_FLAG_TEMP_OPERAND));
+    if TempReg <> ADest then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, TempReg, 0));
+      // The resumed value now lives in the local; the temporary would keep a
+      // second copy of it for as long as the frame stays alive.
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, TempReg, 0, 0));
+    end;
+  finally
+    if TempReg <> ADest then
+      ACtx.Scope.FreeRegister;
+  end;
 end;
 
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;

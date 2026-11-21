@@ -17,6 +17,10 @@ uses
 type
   TGocciaArrayValue = class(TGocciaInstanceValue)
   private
+    // Active receivers belong to the realm's native method host. Each join
+    // roots its receiver separately and removes this non-owning entry on exit.
+    FJoinReceivers: TGocciaValueList;
+    FJoinDepth: Integer;
     // Helper methods for reducing duplication
     function ValidateArrayMethodCall(const AMethodName: string; const AArgs: TGocciaArgumentsCollection;
       const AThisValue: TGocciaValue; const ARequiresCallback: Boolean = True): TGocciaValue;
@@ -37,7 +41,6 @@ type
 
     function ToStringTag: string; override;
 
-    function ToStringLiteral: TGocciaStringLiteralValue; override;
     function ToBooleanLiteral: TGocciaBooleanLiteralValue; override;
 
     // The length and whether it is writable, read without creating a value
@@ -164,7 +167,9 @@ uses
   Goccia.Error.Suggestions,
   Goccia.GarbageCollector,
   Goccia.HeapSnapshot.Codec,
+  Goccia.InstructionLimit,
   Goccia.NativeLimits,
+  Goccia.StackLimit,
   Goccia.Timeout,
   Goccia.Utils,
   Goccia.Utils.Arrays,
@@ -1312,6 +1317,7 @@ end;
 
 destructor TGocciaArrayValue.Destroy;
 begin
+  FJoinReceivers.Free;
   FElements.Free;
   inherited;
 end;
@@ -1986,43 +1992,64 @@ var
   ResultString: string;
   Element: TGocciaValue;
   ViewRoots: TGocciaActiveRootFrame;
+  StackLimit: NativeUInt;
 begin
-  // Step 1: Let O be ToObject(this value)
-  View.Init(AThisValue);
-  // The receiver object (a fresh wrapper for a primitive this) and the
-  // result are held only by locals while guest code (getters, proxy
-  // traps, callbacks, ToPrimitive) runs.
-  ViewRoots.Initialize;
+  // Count the whole call: length getters and separator conversion can re-enter
+  // before cycle detection is allowed to register the receiver.
+  StackLimit := NATIVE_STACK_LIMIT_UNSET;
+  CheckNativeStackHeadroom(FJoinDepth + 1, StackLimit);
+  Inc(FJoinDepth);
   try
-    ViewRoots.Add(View.Obj);
+    if not Assigned(FJoinReceivers) then
+      FJoinReceivers := TGocciaValueList.Create(False);
+    // Step 1: Let O be ToObject(this value)
+    View.Init(AThisValue);
+    // The receiver object (a fresh wrapper for a primitive this) and the
+    // result are held only by locals while guest code (getters, proxy
+    // traps, callbacks, ToPrimitive) runs.
+    ViewRoots.Initialize;
+    try
+      ViewRoots.Add(View.Obj);
 
-    // Step 3: If separator is undefined, let sep be ","
-    // Step 4: Else let sep be ToString(separator)
-    if (AArgs.Length < 1) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
-      Separator := ','
-    else
-      Separator := AArgs.GetElement(0).ToStringLiteral.Value;
-
-    // Steps 5-8: Build result string, treating undefined/null elements as empty string
-    ResultString := '';
-    for I := 0 to View.Len - 1 do
-    begin
-      if I > 0 then
-        ResultString := ResultString + Separator;
-      // Step 7b: If element is undefined or null, let next be ""
-      Element := View.Get(I);
-      if (Element is TGocciaUndefinedLiteralValue) or
-         (Element is TGocciaNullLiteralValue) then
-        Continue
+      // Step 3: If separator is undefined, let sep be ","
+      // Step 4: Else let sep be ToString(separator)
+      if (AArgs.Length < 1) or (AArgs.GetElement(0) is TGocciaUndefinedLiteralValue) then
+        Separator := ','
       else
-        // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
-        ResultString := ResultString + Element.ToStringLiteral.Value;
-    end;
+        Separator := AArgs.GetElement(0).ToStringLiteral.Value;
 
-    // Step 9: Return R
-    Result := TGocciaStringLiteralValue.Create(ResultString);
+      // Match cyclic join behavior without suppressing the observable length
+      // and separator conversions above. Only active ancestors count as cycles.
+      if FJoinReceivers.Contains(View.Obj) then
+        Exit(TGocciaStringLiteralValue.Create(''));
+      FJoinReceivers.Add(View.Obj);
+      try
+        // Steps 5-8: Build result string, treating undefined/null elements as empty string
+        ResultString := '';
+        for I := 0 to View.Len - 1 do
+        begin
+          if I > 0 then
+            ResultString := ResultString + Separator;
+          // Step 7b: If element is undefined or null, let next be ""
+          Element := View.Get(I);
+          if (Element is TGocciaUndefinedLiteralValue) or
+             (Element is TGocciaNullLiteralValue) then
+            Continue
+          else
+            // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
+            ResultString := ResultString + Element.ToStringLiteral.Value;
+        end;
+
+        // Step 9: Return R
+        Result := TGocciaStringLiteralValue.Create(ResultString);
+      finally
+        FJoinReceivers.Delete(FJoinReceivers.Count - 1);
+      end;
+    finally
+      ViewRoots.Clear;
+    end;
   finally
-    ViewRoots.Clear;
+    Dec(FJoinDepth);
   end;
 end;
 
@@ -3914,28 +3941,6 @@ begin
   end;
 end;
 
-function TGocciaArrayValue.ToStringLiteral: TGocciaStringLiteralValue;
-var
-  I: Integer;
-  SB: TStringBuffer;
-begin
-  if FElements.Count = 0 then
-  begin
-    Result := TGocciaStringLiteralValue.Create('');
-    Exit;
-  end;
-
-  SB := TStringBuffer.Create;
-  for I := 0 to FElements.Count - 1 do
-  begin
-    if I > 0 then
-      SB.AppendChar(',');
-    if not IsArrayHole(FElements[I]) then
-      SB.Append(FElements[I].ToStringLiteral.Value);
-  end;
-  Result := TGocciaStringLiteralValue.Create(SB.ToString);
-end;
-
 function TGocciaArrayValue.ToBooleanLiteral: TGocciaBooleanLiteralValue;
 begin
   Result := TGocciaBooleanLiteralValue.TrueValue;
@@ -4308,6 +4313,8 @@ end;
 procedure TGocciaArrayValue.DefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor);
 var
   Index: Int64;
+  OldCount: Integer;
+  DescriptorRoots: TGocciaActiveRootFrame;
 begin
   if AName = PROP_LENGTH then
   begin
@@ -4375,13 +4382,29 @@ begin
 
     // Non-dense descriptors must be stored in the ordinary property map so
     // missing/defaulted attributes keep their spec values.
-    inherited DefineProperty(AName, ADescriptor);
-    // No pending value: the descriptor has been handed to the property map,
-    // which owns it now (and may already have freed it), so its value is
-    // reachable through this array's own map and the gate's owner push covers
-    // it. Touching ADescriptor here would be the use-after-free instead.
+    // The holes come first: extending polls the deadline, the instruction
+    // budget and a host's abort, and a raise there must find nothing
+    // published (the descriptor still belongs to the caller, which frees it).
+    // No pending value: the gate's owner push covers what the array holds.
+    OldCount := FElements.Count;
     if CanStoreDenseElementIndex(Index, FElements.Count) then
-      ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+    begin
+      // The descriptor is a plain class the collector does not trace: root
+      // what it holds while the gate of the extension may collect.
+      DescriptorRoots.Initialize;
+      try
+        ADescriptor.PushRoots(DescriptorRoots);
+        ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+      finally
+        DescriptorRoots.Clear;
+      end;
+    end;
+    try
+      inherited DefineProperty(AName, ADescriptor);
+    except
+      FElements.Count := OldCount;
+      raise;
+    end;
     if Index + 1 > FLength then
       FLength := Index + 1;
     if CanStoreDenseElementIndex(Index, FElements.Count) and
@@ -4397,6 +4420,8 @@ end;
 function TGocciaArrayValue.TryDefineProperty(const AName: string; const ADescriptor: TGocciaPropertyDescriptor): Boolean;
 var
   Index: Int64;
+  OldCount: Integer;
+  DescriptorRoots: TGocciaActiveRootFrame;
 begin
   if AName = PROP_LENGTH then
   begin
@@ -4457,8 +4482,15 @@ begin
     begin
       // Same post-gate descriptor read as the DefineProperty arm above, and
       // the same reason the value has to reach the gate.
-      ExtendElementsWithHoles(FElements, Int64(Index) + 1,
-        TGocciaPropertyDescriptorData(ADescriptor).Value);
+      try
+        ExtendElementsWithHoles(FElements, Int64(Index) + 1,
+          TGocciaPropertyDescriptorData(ADescriptor).Value);
+      except
+        // The caller handed the descriptor over and does not free it on a
+        // raise (a deadline, a budget or a host's abort ends the extension).
+        ADescriptor.Free;
+        raise;
+      end;
       FElements[Integer(Index)] := TGocciaPropertyDescriptorData(ADescriptor).Value;
       if Index + 1 > FLength then
         FLength := Index + 1;
@@ -4469,13 +4501,38 @@ begin
     // Store non-dense descriptors on the ordinary property map. This preserves
     // omitted fields as false/undefined for new array-index properties and
     // keeps non-default attributes visible to subsequent [[GetOwnProperty]].
-    Result := inherited TryDefineProperty(AName, ADescriptor);
-    if Result then
+    // The holes come first, as in the DefineProperty arm: a poll of the
+    // extension that raises finds nothing published, and a refused
+    // descriptor gives them back.
+    OldCount := FElements.Count;
+    if CanStoreDenseElementIndex(Index, FElements.Count) then
     begin
-      // nil for the same reason as the DefineProperty arm: the map owns the
-      // descriptor now, and the owner push covers what it holds.
-      if CanStoreDenseElementIndex(Index, FElements.Count) then
-        ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+      DescriptorRoots.Initialize;
+      try
+        try
+          ADescriptor.PushRoots(DescriptorRoots);
+          ExtendElementsWithHoles(FElements, Int64(Index) + 1, nil);
+        except
+          // The caller handed the descriptor over and does not free it on a
+          // raise.
+          DescriptorRoots.Clear;
+          ADescriptor.Free;
+          raise;
+        end;
+      finally
+        DescriptorRoots.Clear;
+      end;
+    end;
+    try
+      Result := inherited TryDefineProperty(AName, ADescriptor);
+    except
+      FElements.Count := OldCount;
+      raise;
+    end;
+    if not Result then
+      FElements.Count := OldCount
+    else
+    begin
       if Index + 1 > FLength then
         FLength := Index + 1;
       if CanStoreDenseElementIndex(Index, FElements.Count) and
@@ -5003,9 +5060,21 @@ begin
       I64 := Start64;
       while I64 < End64 do
       begin
+        { The length is a JS-controlled value up to 2^53 - 1, so the deadline,
+          the instruction budget and a host's abort must reach this loop (the
+          chokepoint rule in Goccia.Timeout). A mask of 255 keeps the poll off
+          the per-element path; each poll spends the 256 writes it covers. }
+        if ((I64 - Start64) and 255) = 255 then
+        begin
+          CheckExecutionTimeoutNow;
+          SpendInstructions(256);
+        end;
         View.Obj.AssignProperty(IntegerToString(I64), FillValue);
         Inc(I64);
       end;
+      // The writes after the last full batch.
+      if ((End64 - Start64) > 0) and (((End64 - Start64) and 255) <> 0) then
+        SpendInstructions((End64 - Start64) and 255);
 
       Result := View.Obj;
       Exit;
@@ -5032,7 +5101,17 @@ begin
 
     // Step 8: Repeat, while k < final — Set(O, ToString(k), value)
     for I := StartIdx to EndIdx - 1 do
+    begin
+      if ((I - StartIdx) and 255) = 255 then
+      begin
+        CheckExecutionTimeoutNow;
+        SpendInstructions(256);
+      end;
       View.Put(I, FillValue);
+    end;
+    // The writes after the last full batch.
+    if (EndIdx > StartIdx) and (((EndIdx - StartIdx) and 255) <> 0) then
+      SpendInstructions((EndIdx - StartIdx) and 255);
 
     // Step 9: Return O
     Result := View.Obj;

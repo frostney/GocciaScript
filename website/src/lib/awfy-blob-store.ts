@@ -28,11 +28,14 @@ export type AwfyBlobRunSummary = {
   referenceRatios: {
     quickjs: number | null;
     node: number | null;
+    nodeJitless: number | null;
+    jsc: number | null;
   };
   engineVersions: Record<string, string>;
   corpusCommit: string;
   driverVersion: number | null;
   targetNames: string[];
+  protocolKey: string | null;
 };
 
 export type AwfyBlobRun = {

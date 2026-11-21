@@ -68,6 +68,9 @@ function mergeReports(reports, manifest) {
     if (report.metadata?.options?.repetitions !== first.metadata?.options?.repetitions) {
       throw new Error('JetStream shard repetition counts do not match');
     }
+    if (report.metadata?.options?.engineOrder !== first.metadata?.options?.engineOrder) {
+      throw new Error('JetStream shard engine orders do not match');
+    }
     if (JSON.stringify(comparableEngineMetadata(report)) !== firstEngines) {
       throw new Error('JetStream shard reference-engine versions do not match');
     }

@@ -31,5 +31,5 @@ pre-commit:
       glob: "**/*.md"
       run: npx tsx scripts/check-doc-length.ts
     check-conformance-claims:
-      glob: "**/*.{md,ts,tsx}"
+      glob: "**/*.{md,mdx,ts,tsx,mts,js,jsx,mjs,cjs,json,yml,yaml,sh,ps1,txt}"
       run: npx tsx scripts/check-conformance-claims.ts

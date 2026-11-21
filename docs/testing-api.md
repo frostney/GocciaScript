@@ -68,6 +68,8 @@ An embedder gets the same split: `ApplyLoaderRuntimeProfile` with its default `A
 
 Outside the runner the assertions object is built lazily, on the first import that resolves. A script that never imports `goccia:test` pays nothing for its availability.
 
+The reporter writes its per-test markers (failures, todo, skipped, describe-block errors) and the `=== Test Results ===` block straight to standard output, not through the console builtin. A host that owns standard output mutes it with `TGocciaTestingLibraryRuntimeExtension.SuppressOutput`. The extension stores the value, as it does `OnExpect`, and applies it when the assertions object is built, so setting it before the run works for the module-only install even though that object does not exist yet. `GocciaRunner` sets it in `--silent` and in its `--output=json` and `--output=compact-json` modes, so the reporter never precedes a JSON envelope. The mute covers the reporter only: the parse warnings an imported module can produce are printed by the module loader, which `TGocciaEngine.SuppressWarnings` mutes separately (`GocciaRunner` sets it in its JSON modes). Muting loses no information: the `runTests()` result still carries the counts and failure messages.
+
 #### Running an imported suite outside the runner
 
 `describe` and `test` only *register* — they never execute on their own. Under `GocciaTestRunner` the runner drives execution after the file is evaluated. A `GocciaRunner` script has no such driver, so registrations would simply sit in the root suite and nothing would run. `runTests` is the entry point that closes that gap:
@@ -568,9 +570,9 @@ Three Vitest behaviors follow from that structure rather than from emulation:
 
   | Source type | Mocked module imported | Factory referencing a test-file `const` |
   |---|---|---|
-  | Module (`.mjs`, a test file with a top-level `import` or `export`, `--source-type=module`, or `source-type: module`) | statically or dynamically | `ReferenceError` — matches Vitest |
+  | Module (`.mjs`, a test file [detected as Module](language.md#modules), `--source-type=module`, or `source-type: module`) | statically or dynamically | `ReferenceError` — matches Vitest |
   | Script (`--source-type=script` or `source-type: script`) | statically | `ReferenceError` (TDZ: `Cannot access 'x' before initialization`) |
-  | Script (a `.js` test file without `import` or `export`, or an explicit script source type) | dynamically, via `await import()` | **Resolves the variable** — looser than Vitest |
+  | Script ([automatically selected](language.md#modules) or explicit) | dynamically, via `await import()` inside an async callback | **Resolves the variable** — looser than Vitest |
 
   Under script source type the entry file's top-level `const`/`let` are backed by the global scope, so a factory that runs *after* the test body has initialized them — which only happens when the mocked module is reached by a dynamic `import()` — can see them. Do not rely on this: it is an artifact of script-mode scoping, Vitest rejects the same code, and running the suite under module source type turns it back into an error.
 - **Factories are lazy.** A factory for a module nothing imports never runs.

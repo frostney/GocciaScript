@@ -4,11 +4,17 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const vm = require('vm');
 
 const {
+  DRIVER_VERSION,
   RESULT_MARKER,
   buildAwfyBundle,
+  buildProbeBundle,
   buildGeomeanRatios,
+  buildTargetSummary,
+  normalizeAwfyResult,
+  resolveTargets,
   classifyProcessOutcome,
   checksumAgreement,
   median,
@@ -18,10 +24,17 @@ const {
   releaseBinaryCopies,
   summarizeSamples,
 } = require('./awfy-driver.js');
-const { MARKER, buildAwfyReportComment, counterDeltaCell, formatMicros } = require('./awfy-comment.js');
+const { MARKER, buildAwfyReportComment, commentEngines, counterDeltaCell, formatMicros } = require('./awfy-comment.js');
 const {
+  DEFAULT_ENGINES,
   buildMetricTargetSummary,
+  ciProtocolFailures,
+  ciReportEngines,
+  jscVersion,
   counterCommand,
+  engineOrderForRepetition,
+  parseEngineOrder,
+  resolveEngines,
   parsePerfStat,
   probeCounters,
   uncountedProcess,
@@ -39,6 +52,16 @@ let passed = 0;
 function assert(condition, message) {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
   passed += 1;
+}
+
+function assertThrows(fn, message) {
+  let threw = false;
+  try {
+    fn();
+  } catch {
+    threw = true;
+  }
+  assert(threw, message);
 }
 
 function assertEqual(actual, expected, message) {
@@ -136,6 +159,102 @@ console.log('awfy-driver: portable AWFY bundle...');
     assertEqual(parsed.name, 'Tiny', 'portable bundle names benchmark');
     assertEqual(parsed.verificationPassed, true, 'portable bundle carries verification');
     assert(proc.stdout.includes(RESULT_MARKER), 'portable bundle uses stable marker');
+    assertEqual(parsed.warmupIterations, 0, 'a bundle without a protocol runs no warm-up iteration');
+    assertEqual(parsed.measuredIterations, 1, 'a bundle without a protocol times one iteration');
+    assertEqual(parsed.firstIterationMicros, parsed.durationMicros, 'one cold iteration is both the first and the headline time');
+
+    const runBundle = (source) => {
+      fs.writeFileSync(bundleFile, source);
+      const run = spawnSync(process.execPath, [bundleFile], { encoding: 'utf8' });
+      return { run, result: parseResult(run.stdout) };
+    };
+    const warm = runBundle(buildAwfyBundle({
+      awfyDir: tmp,
+      benchmarkName: 'Tiny',
+      moduleName: 'tiny',
+      innerIterations: 3,
+      warmupIterations: 4,
+      measuredIterations: 25,
+    })).result;
+    assertEqual(warm.warmupMicros.length, 4, 'each warm-up iteration is timed on its own');
+    assertEqual(warm.firstIterationMicros, warm.warmupMicros[0], 'the cold figure is the first warm-up iteration');
+    assertEqual(warm.measuredIterations, 25, 'the result names its measured iteration count');
+    assert(Math.abs(warm.durationMicros - warm.measuredTotalMicros / 25) < 1e-9, 'the headline is the measured window per iteration');
+    assertEqual(warm.innerIterations, 3, 'the result names its inner iteration count');
+
+    fs.writeFileSync(path.join(tmp, 'flaky.js'), [
+      "const { Benchmark } = require('./benchmark');",
+      'let calls = 0;',
+      'class Flaky extends Benchmark {',
+      '  benchmark() { calls += 1; return calls; }',
+      '  verifyResult(result) { return result !== 3; }',
+      '}',
+      'exports.newInstance = () => new Flaky();',
+      '',
+    ].join('\n'));
+    const flaky = runBundle(buildAwfyBundle({
+      awfyDir: tmp,
+      benchmarkName: 'Flaky',
+      moduleName: 'flaky',
+      innerIterations: 1,
+      warmupIterations: 1,
+      measuredIterations: 5,
+    }));
+    assertEqual(flaky.result.verificationPassed, false, 'a failure in the measured window fails the sample, even when later iterations would pass');
+    assertEqual(flaky.result.durationMicros, null, 'a failed sample has no headline time');
+    assertEqual(flaky.result.checksum, 'failed', 'a failed sample says so in its checksum');
+    assert(flaky.run.status !== 0, 'a failed bundle exits with an error');
+
+    // A JavaScriptCore-like shell: print and preciseTime, no console.
+    const printed = [];
+    let clock = 0;
+    vm.runInNewContext(buildAwfyBundle({
+      awfyDir: tmp,
+      benchmarkName: 'Tiny',
+      moduleName: 'tiny',
+      innerIterations: 1,
+      warmupIterations: 1,
+      measuredIterations: 2,
+    }), {
+      // A new V8 context has a console of its own; the shell has none.
+      console: undefined,
+      print: (text) => printed.push(String(text)),
+      preciseTime: () => { clock += 0.001; return clock; },
+    });
+    const shellResult = parseResult(printed.join('\n'));
+    assert(shellResult !== null, 'a shell without console reports through print');
+    assert(Math.abs(shellResult.firstIterationMicros - 1000) < 1e-6, 'a shell with preciseTime is timed by it, in microseconds');
+
+    // A probe's verifier runs outside the timed spans: its run() advances the
+    // clock by 1 ms, its verify() by 100 ms.
+    const probeFile = path.join(tmp, 'probe.js');
+    fs.writeFileSync(probeFile, [
+      '__gocciaRegisterProbe({',
+      '  run(inner) { tick(1000); return inner; },',
+      '  verify(checksum) { verifyCalls += 1; tick(100000); return checksum === 1; },',
+      '});',
+      '',
+    ].join('\n'));
+    const probeOutput = [];
+    let probeClock = 0;
+    const probeContext = {
+      console: undefined,
+      print: (text) => probeOutput.push(String(text)),
+      performance: { now: () => probeClock / 1000 },
+      tick: (micros) => { probeClock += micros; },
+      verifyCalls: 0,
+    };
+    vm.runInNewContext(buildProbeBundle({
+      probe: { name: 'clocked', file: probeFile },
+      innerIterations: 1,
+      warmupIterations: 2,
+      measuredIterations: 3,
+    }), probeContext);
+    const probeResult = parseResult(probeOutput.join('\n'));
+    assert(Math.abs(probeResult.durationMicros - 1000) < 1e-6, 'a probe\'s headline time leaves its verifier out');
+    assert(probeResult.warmupMicros.every((micros) => Math.abs(micros - 1000) < 1e-6), 'a probe\'s warm-up times leave its verifier out');
+    assertEqual(probeContext.verifyCalls, 3, 'a probe verifies each warm-up result and the window\'s last result');
+    assertEqual(probeResult.verificationPassed, true, 'a verified probe passes');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -424,8 +543,16 @@ console.log('awfy-driver: hardware counters...');
   assertEqual(options.counters, true, '--counters enables counters');
   assertEqual(options.cpu, 3, '--cpu takes a CPU number');
   assertEqual(options.freshCopies, true, '--fresh-copies is parsed');
-  assertEqual(options.alternateOrder, true, '--alternate-order is parsed');
+  assertEqual(options.engineOrder, 'alternate', '--alternate-order selects the alternate engine order');
   assertEqual(options.warmup, 1, '--warmup takes a count');
+  assertEqual(parseArgs([]).engineOrder, 'alternate', 'engines alternate their order by default');
+  assertEqual(parseArgs(['--engine-order', 'fixed']).engineOrder, 'fixed', '--engine-order fixed keeps one order');
+  const iterationOptions = parseArgs(['--warmup-iterations=0', '--measured-iterations', '7', '--jsc', '/opt/jsc']);
+  assertEqual(iterationOptions.warmupIterations, 0, '--warmup-iterations takes zero');
+  assertEqual(iterationOptions.measuredIterations, 7, '--measured-iterations takes a count');
+  assertEqual(iterationOptions.jsc, '/opt/jsc', '--jsc takes a shell path');
+  assertThrows(() => parseArgs(['--measured-iterations', '0']), '--measured-iterations rejects zero');
+  assertThrows(() => parseArgs(['--engine-order', 'random']), '--engine-order rejects an unknown mode');
 
   const copyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'goccia-awfy-copies-'));
   try {
@@ -529,6 +656,170 @@ console.log('awfy-driver: counted samples through a stand-in perf...');
   }
 }
 
+console.log('awfy-driver: warm protocol from the manifest...');
+{
+  const manifest = {
+    awfy: { benchmarks: { Bounce: 'bounce', CD: 'cd', Sieve: 'sieve' } },
+    warmProtocol: {
+      Bounce: { innerIterations: 1, warmupIterations: 5, measuredIterations: 80 },
+      CD: { innerIterations: 2, warmupIterations: 5, measuredIterations: 8 },
+    },
+  };
+  const base = { awfyDir: '/awfy', probes: [], innerIterations: null, warmupIterations: null, measuredIterations: null };
+  const [bounce, cd, sieve] = resolveTargets({ ...base, benchmarks: ['Bounce', 'CD:10', 'Sieve'] }, manifest);
+  assertEqual(`${bounce.innerIterations}/${bounce.warmupIterations}/${bounce.measuredIterations}`, '1/5/80', 'a benchmark takes its manifest protocol');
+  assertEqual(`${cd.innerIterations}/${cd.warmupIterations}/${cd.measuredIterations}`, '10/5/8', 'a Name:inner suffix overrides only the inner count');
+  assertEqual(`${sieve.innerIterations}/${sieve.warmupIterations}/${sieve.measuredIterations}`, '1/0/1', 'a benchmark without a protocol runs one cold iteration');
+  const [overridden] = resolveTargets({ ...base, benchmarks: ['Bounce'], warmupIterations: 0, measuredIterations: 3 }, manifest);
+  assertEqual(`${overridden.warmupIterations}/${overridden.measuredIterations}`, '0/3', 'options override the manifest protocol');
+  assertThrows(() => resolveTargets({ ...base, benchmarks: ['Bounce'] }, {
+    ...manifest,
+    warmProtocol: { Bounce: { measuredIterations: 0 } },
+  }), 'a manifest protocol needs at least one measured iteration');
+
+  const real = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'perf', 'awfy', 'manifest.json'), 'utf8'));
+  assertEqual(real.driver.version, DRIVER_VERSION, 'the manifest names the driver version the driver reports');
+  for (const name of reportConfig(real).benchmarks) {
+    const protocol = real.warmProtocol?.[name];
+    assert(protocol && protocol.warmupIterations >= 1 && protocol.measuredIterations >= 1, `${name} has a warm protocol with a warm-up`);
+  }
+
+  const normalized = normalizeAwfyResult({
+    durationMicros: 10.123456,
+    firstIterationMicros: 30,
+    measuredTotalMicros: 101.23456,
+    warmupMicros: [30.1234567, 12],
+    verificationPassed: true,
+    checksum: 'verified',
+  }, { innerIterations: 1, warmupIterations: 2, measuredIterations: 10 });
+  assertEqual(normalized.warmupMicros[0], 30.123, 'warm-up times are kept to the nanosecond');
+  assertEqual(normalized.measuredIterations, 10, 'a sample names its measured iteration count');
+
+  const summary = buildTargetSummary([
+    { engine: 'goccia', outcome: 'ok', durationMicros: 10, firstIterationMicros: 40, checksum: 'verified' },
+    { engine: 'goccia', outcome: 'ok', durationMicros: 12, firstIterationMicros: 60, checksum: 'verified' },
+    { engine: 'qjs', outcome: 'ok', durationMicros: 5, firstIterationMicros: 9, checksum: 'verified' },
+  ]);
+  assertEqual(summary.engineStats.goccia.medianMicros, 11, 'the headline median is of the steady-state times');
+  assertEqual(summary.engineStats.goccia.medianFirstIterationMicros, 50, 'the cold first iteration has a median of its own');
+  assertEqual(summary.ratios.goccia_over_qjs, 11 / 5, 'ratios use the steady-state times');
+}
+
+console.log('cross-engine-report: comparators and engine order...');
+{
+  assertEqual(DEFAULT_ENGINES.join(','), 'goccia,qjs,node,node-jitless', 'node-jitless runs by default');
+  const engines = resolveEngines({ engines: ['goccia', 'qjs', 'node', 'node-jitless', 'jsc'], goccia: 'g', qjs: 'q', node: '/n', jsc: '/j' });
+  const byName = Object.fromEntries(engines.map((engine) => [engine.name, engine]));
+  assertEqual(byName['node-jitless'].command, '/n', 'node-jitless runs the same Node.js binary');
+  assertEqual(byName['node-jitless'].baseArgs.join(' '), '--jitless', 'node-jitless turns V8\'s JIT off');
+  assertEqual(byName['node-jitless'].kind, 'node-jitless', 'node-jitless is a kind of its own');
+  assertEqual(byName.jsc.command, '/j', 'jsc runs the given shell');
+  assertEqual(byName.jsc.baseArgs.join(' '), '--useJIT=false', 'jsc turns JavaScriptCore\'s JIT off');
+  assertEqual(byName.node.baseArgs.length, 0, 'node keeps its JIT');
+  assertThrows(() => resolveEngines({ engines: ['spidermonkey'] }), 'an unknown engine is rejected');
+
+  const names = (order) => order.map((engine) => engine.name ?? engine).join(',');
+  const four = ['goccia', 'qjs', 'node', 'node-jitless'];
+  assertEqual(names(engineOrderForRepetition(four, 0, 'alternate')), 'goccia,qjs,node,node-jitless', 'the first repetition runs the given order');
+  assertEqual(names(engineOrderForRepetition(four, 1, 'alternate')), 'node-jitless,node,qjs,goccia', 'the next repetition runs it reversed');
+  assertEqual(names(engineOrderForRepetition(four, 2, 'alternate')), 'goccia,qjs,node,node-jitless', 'the order then alternates');
+  assertEqual(names(engineOrderForRepetition(four, 1, 'fixed')), 'goccia,qjs,node,node-jitless', 'the fixed order never changes');
+  assertEqual(parseEngineOrder('fixed'), 'fixed', 'fixed is an engine order');
+  assertThrows(() => parseEngineOrder('shuffle'), 'an unknown engine order is rejected');
+}
+
+console.log('awfy-driver: a run records engine order and positions...');
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'awfy-driver-order-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'benchmark.js'), [
+      'class Benchmark {',
+      '  innerBenchmarkLoop(innerIterations) {',
+      '    for (let i = 0; i < innerIterations; i += 1) {',
+      '      if (!this.verifyResult(this.benchmark())) return false;',
+      '    }',
+      '    return true;',
+      '  }',
+      '}',
+      'exports.Benchmark = Benchmark;',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tmp, 'tiny.js'), [
+      "const { Benchmark } = require('./benchmark');",
+      'class Tiny extends Benchmark {',
+      '  benchmark() { return 42; }',
+      '  verifyResult(result) { return result === 42; }',
+      '}',
+      'exports.newInstance = () => new Tiny();',
+      '',
+    ].join('\n'));
+    const manifestFile = path.join(tmp, 'manifest.json');
+    fs.writeFileSync(manifestFile, JSON.stringify({
+      awfy: { benchmarks: { Tiny: 'tiny' } },
+      warmProtocol: { Tiny: { innerIterations: 1, warmupIterations: 2, measuredIterations: 3 } },
+    }));
+    const output = path.join(tmp, 'report.json');
+    const proc = spawnSync(process.execPath, [
+      path.join(__dirname, 'awfy-driver.js'),
+      '--manifest', manifestFile,
+      '--awfy-dir', tmp,
+      '--benchmark', 'Tiny',
+      '--engines', 'node,node-jitless',
+      '--repetitions', '3',
+      '--output', output,
+    ], { encoding: 'utf8' });
+    assertEqual(proc.status, 0, `the driver runs node and node-jitless: ${proc.stderr}`);
+    const report = JSON.parse(fs.readFileSync(output, 'utf8'));
+    const [target] = report.targets;
+    assertEqual(report.metadata.driver.version, DRIVER_VERSION, 'the report names the driver version');
+    assertEqual(report.metadata.protocol.timing, 'warm', 'the report says it timed warm');
+    assertEqual(report.metadata.options.engineOrder, 'alternate', 'the report names its engine order');
+    assertEqual(report.metadata.options.engineOrderBase.join(','), 'node,node-jitless', 'the report names the order it alternates');
+    assertEqual(JSON.stringify(target.executionOrder), JSON.stringify([
+      ['node', 'node-jitless'],
+      ['node-jitless', 'node'],
+      ['node', 'node-jitless'],
+    ]), 'the target records each repetition\'s order');
+    const second = target.samples.filter((sample) => sample.repetition === 1);
+    assertEqual(second.map((sample) => `${sample.engine}@${sample.position}`).join(','), 'node-jitless@0,node@1', 'each sample records its engine and place');
+    assert(second.find((sample) => sample.engine === 'node-jitless').command.includes('--jitless'), 'the jitless sample\'s command shows the flag');
+    assertEqual(`${target.warmupIterations}/${target.measuredIterations}`, '2/3', 'the target records its protocol');
+    assert(target.samples.every((sample) => sample.outcome === 'ok' && sample.warmupMicros.length === 2), 'every sample ran its warm-up');
+    assert(typeof report.geomeanRatios['node_over_node-jitless'] === 'number', 'the report has a ratio for each pair of engines');
+    assert(typeof target.summary.engineStats['node-jitless'].medianFirstIterationMicros === 'number', 'the cold figure is summarized');
+
+    // An unrecorded --warmup round takes the first place in the alternation.
+    const warmedOutput = path.join(tmp, 'warmed.json');
+    const warmed = spawnSync(process.execPath, [
+      path.join(__dirname, 'awfy-driver.js'),
+      '--manifest', manifestFile,
+      '--awfy-dir', tmp,
+      '--benchmark', 'Tiny',
+      '--engines', 'node,node-jitless',
+      '--warmup', '1',
+      '--repetitions', '2',
+      '--output', warmedOutput,
+    ], { encoding: 'utf8' });
+    assertEqual(warmed.status, 0, `the driver runs a warm-up round: ${warmed.stderr}`);
+    assertEqual(JSON.stringify(JSON.parse(fs.readFileSync(warmedOutput, 'utf8')).targets[0].executionOrder), JSON.stringify([
+      ['node-jitless', 'node'],
+      ['node', 'node-jitless'],
+    ]), 'executionOrder records only the recorded rounds, which follow the warm-up round\'s order');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+console.log('awfy-comment: a column per comparator...');
+{
+  const ran = (names) => ({ metadata: { engines: names.map((name) => ({ name })) } });
+  assertEqual(commentEngines(ran(['goccia', 'qjs', 'node', 'node-jitless', 'jsc'])).join(','), 'goccia,qjs,node-jitless,jsc,node',
+    'the comment shows QuickJS, the interpreter-class engines, then JIT Node.js');
+  assertEqual(commentEngines(ran(['goccia-baseline', 'goccia-candidate', 'qjs', 'node', 'node-jitless', 'jsc'])).join(','),
+    'goccia-baseline,goccia-candidate,qjs,node-jitless,jsc,node', 'a PR comparison shows every comparator it ran');
+  assertEqual(commentEngines(ran(['goccia', 'qjs', 'node'])).join(','), 'goccia,qjs,node', 'a report without the new comparators has no empty columns');
+}
+
 console.log('awfy-ci-report: manifest helpers...');
 {
   const manifest = {
@@ -553,9 +844,9 @@ console.log('awfy-ci-report: manifest helpers...');
 
 console.log('awfy-ci-report: validation...');
 {
-  const manifest = { ciReport: { repetitions: 5 }, diagnosticProbes: [] };
+  const manifest = { ciReport: { repetitions: 5 }, driver: { version: 2 }, diagnosticProbes: [] };
   validateReport({
-    metadata: { options: { repetitions: 5 } },
+    metadata: { driver: { version: 2 }, options: { repetitions: 5, engineOrder: 'alternate' } },
     targets: [{
       kind: 'awfy',
       name: 'NBody',
@@ -572,7 +863,7 @@ console.log('awfy-ci-report: validation...');
   assert(true, 'ci report validation accepts five clean samples');
 
   validateReport({
-    metadata: { options: { repetitions: 5 } },
+    metadata: { driver: { version: 2 }, options: { repetitions: 5, engineOrder: 'alternate' } },
     targets: [{
       kind: 'awfy',
       name: 'NBody',
@@ -588,6 +879,107 @@ console.log('awfy-ci-report: validation...');
     }],
   }, manifest, ['goccia-baseline', 'goccia-candidate', 'qjs', 'node']);
   assert(true, 'ci report validation accepts baseline/candidate Goccia samples');
+
+  const clean = (options, driverVersion = 2) => ({
+    metadata: { driver: { version: driverVersion }, options },
+    targets: [{
+      kind: 'awfy',
+      name: 'NBody',
+      summary: {
+        checksumAgreement: { ok: true, checksums: ['verified'] },
+        engineStats: {
+          goccia: { ok: 5, rawCount: 5, medianMicros: 1000 },
+          'node-jitless': { ok: 5, rawCount: 5, medianMicros: 400 },
+        },
+      },
+    }],
+  });
+  validateReport(clean({ repetitions: 5, engineOrder: 'alternate' }), manifest, ['goccia', 'node-jitless']);
+  assert(true, 'ci report validation accepts node-jitless samples');
+  assertThrows(() => validateReport(clean({ repetitions: 5, engineOrder: 'fixed' }), manifest, ['goccia', 'node-jitless']),
+    'ci report validation requires the alternate engine order');
+  assertThrows(() => validateReport(clean({ repetitions: 5, engineOrder: 'alternate' }, 1), manifest, ['goccia', 'node-jitless']),
+    'ci report validation requires the manifest driver version');
+  assertThrows(() => validateReport(clean({ repetitions: 5, engineOrder: 'alternate' }), manifest, ['goccia', 'qjs']),
+    'ci report validation requires every expected engine');
+  assertEqual(parseCiReportArgs([]).engines, '', 'the CI report takes its engines from the manifest unless told otherwise');
+
+  const withJsc = (version) => ({
+    metadata: {
+      driver: { version: 2 },
+      options: { repetitions: 5, engineOrder: 'alternate' },
+      engines: [{ name: 'goccia', version: 'g' }, { name: 'jsc', version }],
+    },
+    targets: [{
+      kind: 'awfy',
+      name: 'NBody',
+      summary: {
+        checksumAgreement: { ok: true, checksums: ['verified'] },
+        engineStats: {
+          goccia: { ok: 5, rawCount: 5, medianMicros: 1000 },
+          jsc: { ok: 5, rawCount: 5, medianMicros: 300 },
+        },
+      },
+    }],
+  });
+  validateReport(withJsc('libjavascriptcoregtk-bin 2.52.6-0ubuntu0.24.04.1'), manifest, ['goccia', 'jsc']);
+  assert(true, 'ci report validation accepts jsc samples with a recorded version');
+  assertThrows(() => validateReport(withJsc(''), manifest, ['goccia', 'jsc']),
+    'ci report validation requires a recorded JavaScriptCore version');
+  assertEqual(ciProtocolFailures(withJsc(''), { repetitions: 5, driverVersion: 2 }, ['goccia']).length, 0, 'the JSC version is required only when JSC was measured');
+}
+
+console.log('ci reports: the CI comparator set and repetitions...');
+for (const lane of ['awfy', 'jetstream']) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'perf', lane, 'manifest.json'), 'utf8'));
+  const engines = ciReportEngines(manifest.ciReport);
+  assertEqual(engines.join(','), 'goccia,qjs,node,node-jitless,jsc', `${lane} CI adds JSC with its JIT off to the default engines`);
+  const repetitions = manifest.ciReport.repetitions;
+  assertEqual(repetitions, 6, `${lane} CI runs six repetitions`);
+  // With the alternate order, each engine runs before each other engine in
+  // exactly half the repetitions only when the repetition count is even.
+  const orders = Array.from({ length: repetitions }, (_, repetition) => (
+    engineOrderForRepetition(engines, repetition, 'alternate')
+  ));
+  for (const first of engines) {
+    for (const second of engines) {
+      if (first === second) continue;
+      const ahead = orders.filter((order) => order.indexOf(first) < order.indexOf(second)).length;
+      assertEqual(ahead * 2, repetitions, `${lane}: ${first} runs before ${second} in half the repetitions`);
+    }
+  }
+}
+assertEqual(ciReportEngines({}).join(','), DEFAULT_ENGINES.join(','), 'a CI config without engines runs the driver defaults');
+
+console.log('cross-engine-report: the JavaScriptCore version from its package...');
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'awfy-jsc-version-'));
+  const savedPath = process.env.PATH;
+  try {
+    const shell = path.join(tmp, 'jsc');
+    fs.writeFileSync(shell, '#!/bin/sh\n', { mode: 0o755 });
+    // A stand-in dpkg-query: -S names the owner the test asks for, and -W
+    // prints a version only for the package name it is given back.
+    const owner = path.join(tmp, 'owner');
+    fs.writeFileSync(path.join(tmp, 'dpkg-query'), [
+      '#!/bin/sh',
+      `if [ "$1" = "-S" ]; then echo "$(cat ${JSON.stringify(owner)}): $2"; exit 0; fi`,
+      'if [ "$1" = "-W" ]; then [ "$3" = "libjavascriptcoregtk-bin" ] || [ "$3" = "libjavascriptcoregtk-bin:amd64" ] || exit 1; printf "2.52.6-0ubuntu0.24.04.1"; exit 0; fi',
+      'exit 1',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    process.env.PATH = `${tmp}${path.delimiter}${savedPath}`;
+    fs.writeFileSync(owner, 'libjavascriptcoregtk-bin');
+    assertEqual(jscVersion(shell, 'linux'), 'libjavascriptcoregtk-bin 2.52.6-0ubuntu0.24.04.1', 'the version is the owning package\'s');
+    assertEqual(jscVersion('jsc', 'linux'), 'libjavascriptcoregtk-bin 2.52.6-0ubuntu0.24.04.1', 'a bare shell name is found on PATH');
+    fs.writeFileSync(owner, 'libjavascriptcoregtk-bin:amd64');
+    assertEqual(jscVersion(shell, 'linux'), 'libjavascriptcoregtk-bin:amd64 2.52.6-0ubuntu0.24.04.1', 'an architecture-qualified owner keeps its qualifier');
+    assertEqual(jscVersion(path.join(tmp, 'missing-jsc'), 'linux'), '', 'a missing shell has no version');
+    assertEqual(jscVersion(shell, 'darwin'), '', 'a macOS shell outside the framework has no version');
+  } finally {
+    process.env.PATH = savedPath;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 console.log(`awfy-driver: ${passed} assertions passed.`);

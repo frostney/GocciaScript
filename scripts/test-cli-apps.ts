@@ -41,10 +41,12 @@ import {
 import { containsLine, normalizeLineEndings, runLoaderJson } from "./test-cli/assertions";
 import { makeTmpFactory, clean } from "./test-cli/tmpdir";
 import { runWithPeakRss, assertPeakRssBelow, assertPeakRssAbove } from "./test-cli/rss";
-import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
+import { verifyAllocationProfiles, verifyCompileCounterGrowth, verifyCompileProfiles, verifyDirectoryProfiles, verifyModuleProfiles, verifyRecursiveTotals } from "./test-cli-profiling";
 import { verifyAotModules } from "./test-cli-aot";
 import { verifyBundlerLayout } from "./test-cli-bundler-layout";
 import { verifyBundlerReproducibility, verifyBundlerPrivateIsolation } from "./test-cli-bundler-reproducibility";
+
+import { verifyTestSummary } from "./test-cli-test-summary";
 
 const makeTmp = makeTmpFactory("goccia-apps-");
 // The runner reports canonical host paths. On Windows the temp directory's
@@ -1087,8 +1089,81 @@ await section("test262 runner: computed imports and importValue may read the sui
       { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
     );
     const report = JSON.parse(readFileSync(out, "utf8"));
-    if (proc.exitCode !== 0 || report.summary.passed !== 2)
-      throw new Error(`computed fixture imports should pass, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    // Two files, each run twice (non-strict, then strict): four passing runs.
+    if (proc.exitCode !== 0 || report.summary.totalDiscovered !== 2 || report.summary.totalRun !== 4 ||
+        report.summary.passed !== 4)
+      throw new Error(`computed fixture imports should pass in both modes, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    const byFile = test262RunsByFile(report);
+    for (const id of ["language/computed-import.js", "language/import-value.js"])
+      expectTest262Runs(byFile, id, ["async"], ["PASS", ""]);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 runner: annexB runs by default and $262 leaves a test's top-level names free...", async () => {
+  // The annexB emulates-undefined tests declare IsHTMLDDA at the top level,
+  // with var or const. A global lexical IsHTMLDDA from the runner's $262.js
+  // would make that a SyntaxError (ES2026 §16.1.7 steps 3.a and 4.a), so
+  // $262 is the only global binding the harness may create (#2069). The host
+  // object is also callable and returns null, as INTERPRETING.md requires.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "annexB");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(tests, "var-isHTMLDDA.js"), [
+      "/*---",
+      "features: [IsHTMLDDA]",
+      "---*/",
+      "var IsHTMLDDA = $262.IsHTMLDDA;",
+      "var AbstractModuleSource = $262.AbstractModuleSource;",
+      "if (typeof IsHTMLDDA !== 'undefined') throw new Error('typeof is ' + typeof IsHTMLDDA);",
+      "if (!(IsHTMLDDA == null)) throw new Error('IsHTMLDDA should be loosely null');",
+      "if (IsHTMLDDA === undefined) throw new Error('IsHTMLDDA should be an object');",
+      "if (IsHTMLDDA() !== null || IsHTMLDDA('') !== null) throw new Error('IsHTMLDDA() should return null');",
+      "if (typeof AbstractModuleSource !== 'function') throw new Error('AbstractModuleSource');",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "const-isHTMLDDA.js"), [
+      "/*---",
+      "features: [IsHTMLDDA]",
+      "---*/",
+      "const IsHTMLDDA = $262.IsHTMLDDA;",
+      "if (!(IsHTMLDDA == undefined)) throw new Error('IsHTMLDDA should be loosely undefined');",
+      "",
+    ].join("\n"));
+    writeFileSync(join(tests, "no-harness-globals.js"), [
+      "/*---",
+      "---*/",
+      "for (const name of ['IsHTMLDDA', 'AbstractModuleSource', 'installRealm262', 'host262']) {",
+      "  let leaked = true;",
+      "  try { $262.evalScript(name); } catch (e) {",
+      "    if (!(e instanceof ReferenceError)) throw e;",
+      "    leaked = false;",
+      "  }",
+      "  if (leaked) throw new Error('$262.js declared a global ' + name);",
+      "}",
+      "",
+    ].join("\n"));
+    const out = join(tmp, "annexb.json");
+    // No --categories: the default set must include annexB.
+    const proc = Bun.spawnSync(
+      [TEST262RUNNER, "--suite-dir", suite, "--jobs=1", "--output", out],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    const failures = report.results.filter((r: { status: string }) => r.status !== "PASS");
+    // Each unflagged file runs once per mode.
+    if (proc.exitCode !== 0 || report.summary.totalRun !== 6 || failures.length !== 0)
+      throw new Error(`annexB fixtures should run by default and pass in both modes, got exit ${proc.exitCode}: ${JSON.stringify(report.results)}`);
+    if (!report.run.categories.includes("annexB") ||
+        !report.summary.byCategory.some((c: { category: string }) => c.category === "annexB"))
+      throw new Error(`the default run should report annexB as a category, got ${JSON.stringify(report.run.categories)}`);
   } finally {
     clean(tmp);
   }
@@ -1123,10 +1198,11 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     if (timeoutProc.exitCode !== 1)
       throw new Error(`test262 timeout fixture should exit 1, got ${timeoutProc.exitCode}: ${timeoutProc.stderr.toString()}`);
     const timeoutJson = JSON.parse(readFileSync(timeoutOut, "utf8"));
-    if (timeoutJson.summary.timeouts !== 1 || timeoutJson.summary.failed !== 0)
-      throw new Error(`engine timeout should be TIMEOUT, got summary ${JSON.stringify(timeoutJson.summary)}`);
-    if (timeoutJson.results?.[0]?.status !== "TIMEOUT")
-      throw new Error(`engine timeout result should be TIMEOUT, got ${timeoutJson.results?.[0]?.status}`);
+    // One file, run in both modes: the summary counts two timed-out runs.
+    if (timeoutJson.summary.totalDiscovered !== 1 || timeoutJson.summary.totalRun !== 2 ||
+        timeoutJson.summary.timeouts !== 2 || timeoutJson.summary.failed !== 0)
+      throw new Error(`engine timeout should be TIMEOUT in both modes, got summary ${JSON.stringify(timeoutJson.summary)}`);
+    expectTest262Runs(test262RunsByFile(timeoutJson), "built-ins/timeout-loop.js", [], ["TIMEOUT", ""]);
 
     const thrownErrorTest = join(tests, "timeout-like-error.js");
     writeFileSync(thrownErrorTest, 'throw new Error("file timed out after 50ms");\n');
@@ -1138,7 +1214,10 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-like-error.js",
         "--jobs=1",
-        "--timeout=50ms",
+        // Far above the fixture's runtime: only the engine-timeout fixture
+        // above should ever time out, however loaded the machine is, and a
+        // file now runs twice.
+        "--timeout=5000ms",
         "--output", thrownErrorOut,
       ],
       { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
@@ -1146,10 +1225,10 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     if (thrownErrorProc.exitCode !== 1)
       throw new Error(`test262 thrown timeout-like error should exit 1, got ${thrownErrorProc.exitCode}: ${thrownErrorProc.stderr.toString()}`);
     const thrownErrorJson = JSON.parse(readFileSync(thrownErrorOut, "utf8"));
-    if (thrownErrorJson.summary.failed !== 1 || thrownErrorJson.summary.timeouts !== 0)
-      throw new Error(`timeout-like user Error should remain FAIL, got summary ${JSON.stringify(thrownErrorJson.summary)}`);
-    if (thrownErrorJson.results?.[0]?.status !== "FAIL")
-      throw new Error(`timeout-like user Error result should be FAIL, got ${thrownErrorJson.results?.[0]?.status}`);
+    if (thrownErrorJson.summary.totalRun !== 2 || thrownErrorJson.summary.failed !== 2 ||
+        thrownErrorJson.summary.timeouts !== 0)
+      throw new Error(`timeout-like user Error should remain FAIL in both modes, got summary ${JSON.stringify(thrownErrorJson.summary)}`);
+    expectTest262Runs(test262RunsByFile(thrownErrorJson), "built-ins/timeout-like-error.js", [], ["FAIL", ""]);
 
     const markerErrorTest = join(tests, "timeout-marker-error.js");
     writeFileSync(markerErrorTest, 'throw new Error("\\nGocciaTest262:Timeout:50");\n');
@@ -1161,7 +1240,10 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
         "--categories", "built-ins",
         "--filter", "built-ins/timeout-marker-error.js",
         "--jobs=1",
-        "--timeout=50ms",
+        // Far above the fixture's runtime: only the engine-timeout fixture
+        // above should ever time out, however loaded the machine is, and a
+        // file now runs twice.
+        "--timeout=5000ms",
         "--output", markerErrorOut,
       ],
       { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
@@ -1169,10 +1251,10 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     if (markerErrorProc.exitCode !== 1)
       throw new Error(`test262 marker-like user Error should exit 1, got ${markerErrorProc.exitCode}: ${markerErrorProc.stderr.toString()}`);
     const markerErrorJson = JSON.parse(readFileSync(markerErrorOut, "utf8"));
-    if (markerErrorJson.summary.failed !== 1 || markerErrorJson.summary.timeouts !== 0)
-      throw new Error(`marker-like user Error should remain FAIL, got summary ${JSON.stringify(markerErrorJson.summary)}`);
-    if (markerErrorJson.results?.[0]?.status !== "FAIL")
-      throw new Error(`marker-like user Error result should be FAIL, got ${markerErrorJson.results?.[0]?.status}`);
+    if (markerErrorJson.summary.totalRun !== 2 || markerErrorJson.summary.failed !== 2 ||
+        markerErrorJson.summary.timeouts !== 0)
+      throw new Error(`marker-like user Error should remain FAIL in both modes, got summary ${JSON.stringify(markerErrorJson.summary)}`);
+    expectTest262Runs(test262RunsByFile(markerErrorJson), "built-ins/timeout-marker-error.js", [], ["FAIL", ""]);
 
     const engineFaultTest = join(tests, "engine-fault.js");
     writeFileSync(engineFaultTest, [
@@ -1203,14 +1285,13 @@ await section("test262 runner: engine timeout is classified as TIMEOUT...", asyn
     if (engineFaultProc.exitCode !== 1)
       throw new Error(`test262 engine-fault fixture should exit 1, got ${engineFaultProc.exitCode}: ${engineFaultProc.stderr.toString()}`);
     const engineFaultJson = JSON.parse(readFileSync(engineFaultOut, "utf8"));
-    if (engineFaultJson.summary.failed !== 1 ||
+    if (engineFaultJson.summary.totalRun !== 2 || engineFaultJson.summary.failed !== 2 ||
         engineFaultJson.summary.wrapperInfraFailures !== 0) {
       throw new Error(
-        `engine execution fault should remain FAIL, got summary ${JSON.stringify(engineFaultJson.summary)}`,
+        `engine execution fault should remain FAIL in both modes, got summary ${JSON.stringify(engineFaultJson.summary)}`,
       );
     }
-    if (engineFaultJson.results?.[0]?.status !== "FAIL")
-      throw new Error(`engine execution fault should be FAIL, got ${engineFaultJson.results?.[0]?.status}`);
+    expectTest262Runs(test262RunsByFile(engineFaultJson), "built-ins/engine-fault.js", [], ["FAIL", ""]);
   } finally {
     clean(tmp);
   }
@@ -1362,17 +1443,70 @@ await section("test262 runner: a growable SharedArrayBuffer keeps one block whil
     );
     const report = JSON.parse(readFileSync(out, "utf8"));
     const results = report.results ?? [];
-    if (proc.exitCode !== 0 || results.length !== 2 ||
+    // Two files, each run twice (non-strict, then strict): four passing runs.
+    if (proc.exitCode !== 0 || results.length !== 4 ||
         results.some((result: { status: string }) => result.status !== "PASS")) {
       throw new Error(
         `growing a SharedArrayBuffer under other agents should keep their writes and grows, got exit ${proc.exitCode}: ` +
         `${JSON.stringify(results)}\n${proc.stderr.toString()}`,
       );
     }
+    const byFile = test262RunsByFile(report);
+    for (const id of ["built-ins/sab-grow-keeps-writes.js", "built-ins/sab-racing-grows.js"])
+      expectTest262Runs(byFile, id, [], ["PASS", ""]);
   } finally {
     clean(tmp);
   }
 });
+
+type Test262Run = { id: string; mode: string; status: string; message?: string; diagnostic?: string };
+
+/** A report's runs, by file id and then by mode ("non-strict" or "strict"). */
+function test262RunsByFile(report: { results: Test262Run[] }): Map<string, Map<string, Test262Run>> {
+  const byFile = new Map<string, Map<string, Test262Run>>();
+  for (const run of report.results) {
+    if (run.mode !== "non-strict" && run.mode !== "strict")
+      throw new Error(`test262 run has an invalid mode: ${JSON.stringify(run)}`);
+    const modes = byFile.get(run.id) ?? new Map<string, Test262Run>();
+    if (modes.has(run.mode)) throw new Error(`test262 run is duplicated: ${JSON.stringify(run)}`);
+    modes.set(run.mode, run);
+    byFile.set(run.id, modes);
+  }
+  return byFile;
+}
+
+/**
+ * Checks every run of each file: an expectation is either one [status,
+ * fragment] for every run, or one per mode, which also fixes the modes the
+ * file runs in. Without per-mode expectations a file runs in both modes
+ * unless its flags (module, raw, onlyStrict, noStrict) name one.
+ */
+type Test262Expectation = [string, string] | Record<string, [string, string]>;
+function expectTest262Runs(
+  byFile: Map<string, Map<string, Test262Run>>,
+  id: string,
+  flags: string[],
+  expected: Test262Expectation,
+): void {
+  const runs = byFile.get(id);
+  let modes: string[];
+  if (!Array.isArray(expected)) modes = Object.keys(expected).sort();
+  // The precedence docs/test262.md ("Strict mode") gives.
+  else if (flags.includes("module")) modes = ["strict"];
+  else if (flags.includes("raw")) modes = ["non-strict"];
+  else if (flags.includes("onlyStrict")) modes = ["strict"];
+  else if (flags.includes("noStrict")) modes = ["non-strict"];
+  else modes = ["non-strict", "strict"];
+  const actualModes = Array.from(runs?.keys() ?? []).sort();
+  if (JSON.stringify(actualModes) !== JSON.stringify(modes))
+    throw new Error(`${id}: expected runs ${JSON.stringify(modes)}, got ${JSON.stringify(actualModes)}`);
+  for (const mode of modes) {
+    const [status, fragment] = Array.isArray(expected) ? expected : expected[mode];
+    const result = runs!.get(mode)!;
+    if (result.status !== status || !(result.message ?? "").includes(fragment))
+      throw new Error(`${id} (${mode}): expected ${status} "${fragment}", got ${JSON.stringify(result)}`);
+  }
+}
 
 await section("test262 runner: negative tests need the expected error in the expected phase...", async () => {
   // #1571: a parse or resolution negative passes only when the source is
@@ -1415,7 +1549,20 @@ await section("test262 runner: negative tests need the expected error in the exp
       ["resolution-rejected.js", [...negative("resolution", "SyntaxError", ["module"]), "$DONOTEVALUATE();", "import { missing } from './resolution_FIXTURE.js';"], "PASS", ""],
       ["runtime-module.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new TypeError("x");'], "PASS", ""],
       ["runtime-module-wrong-type.js", [...negative("runtime", "TypeError", ["module"]), "export {};", 'throw new RangeError("x");'], "FAIL", "got RangeError"],
-      ["runtime-wrapped.js", [...negative("runtime", "ReferenceError"), "unresolvable;"], "PASS", ""],
+      ["runtime-unresolvable.js", [...negative("runtime", "ReferenceError"), "unresolvable;"], "PASS", ""],
+      ["runtime-none.js", [...negative("runtime", "ReferenceError"), "var x = 1;"], "FAIL", "none thrown"],
+      // #2067: a runtime negative is graded on the test Script's own
+      // completion, with no try wrapper to turn its top-level lexical
+      // declarations into block-scoped ones, wherever the test lives.
+      ["runtime-global-lexical.js", [...negative("runtime", "SyntaxError"), "let undefined;"], "PASS", ""],
+      // raw source runs exactly as written: its own directive prologue
+      // still opens the Script, which a wrapper in front of it would end.
+      ["runtime-raw.js", ['"use strict";', ...negative("runtime", "ReferenceError", ["raw"]), "undeclaredInRaw = 1;"], "PASS", ""],
+      // #2069: a runtime negative whose source does not parse is a
+      // conformance failure, not wrapper-infra, raw or not (the annexB
+      // HTML-like comment tests until the parser accepts them).
+      ["runtime-parse-error.js", [...negative("runtime", "Test262Error"), "var = ;"], "FAIL", "expected Test262Error, got SyntaxError"],
+      ["runtime-raw-parse-error.js", [...negative("runtime", "Test262Error", ["raw"]), "var = ;"], "FAIL", "expected Test262Error, got SyntaxError"],
     ];
     writeFileSync(join(tests, "resolution_FIXTURE.js"), "export var present;\n");
     for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
@@ -1432,16 +1579,318 @@ await section("test262 runner: negative tests need the expected error in the exp
       { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
     );
     const report = JSON.parse(readFileSync(out, "utf8"));
-    if (report.run?.gradingContract !== 2)
-      throw new Error(`test262 report should publish gradingContract 2, got ${JSON.stringify(report.run)}`);
-    const byId = new Map<string, { status: string; message?: string }>(
-      report.results.map((r: { id: string; status: string; message?: string }) => [r.id, r]),
-    );
-    for (const [file, , status, fragment] of cases) {
-      const result = byId.get(`language/${file}`);
-      if (!result || result.status !== status || !(result.message ?? "").includes(fragment))
-        throw new Error(`${file}: expected ${status} "${fragment}", got ${JSON.stringify(result)}`);
+    if (report.run?.gradingContract !== 4)
+      throw new Error(`test262 report should publish gradingContract 4, got ${JSON.stringify(report.run)}`);
+    const byFile = test262RunsByFile(report);
+    for (const [file, lines, status, fragment] of cases) {
+      const flagsLine = lines.find((line) => line.startsWith("flags: ")) ?? "";
+      expectTest262Runs(byFile, `language/${file}`, flagsLine.slice("flags: ".length).replace(/[\[\]]/g, "").split(", "), [status, fragment]);
     }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 runner: harness includes run as separate non-strict Scripts before the test...", async () => {
+  // #2067 (test262 INTERPRETING.md, "Strict Mode" and "includes"): each
+  // harness file is a global Script of its own, evaluated before the test,
+  // and a strict run puts "use strict" in front of the test's own source
+  // only. A harness helper that relies on non-strict code keeps working
+  // under onlyStrict and from a module test.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "language");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "function Test262Error(message) { this.message = message; }\n");
+    writeFileSync(join(harness, "assert.js"), "");
+    writeFileSync(join(harness, "doneprintHandle.js"), [
+      "function $DONE(error) {",
+      "  if (error) print('Test262:AsyncTestFailure:' + error.name + ': ' + error.message);",
+      "  else print('Test262:AsyncTestComplete');",
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(join(harness, "sloppyHelper.js"), [
+      "var helperValue = 1;",
+      "function sloppyAssign() {",
+      "  sloppyGlobal = 7;",
+      "  return this === globalThis;",
+      "}",
+      "",
+    ].join("\n"));
+    writeFileSync(join(harness, "brokenHelper.js"), "null.x;\n");
+    writeFileSync(join(harness, "throwingHelper.js"), "function throwFromHelper() {\n  return null.x;\n}\n");
+    writeFileSync(join(harness, "syntaxErrorHelper.js"), "var = ;\n");
+    writeFileSync(join(harness, "lexicalA.js"), "let sharedLexical = 1;\n");
+    writeFileSync(join(harness, "lexicalB.js"), "let sharedLexical = 2;\n");
+    writeFileSync(join(harness, "countingHelper.js"), "globalThis.harnessRuns = (globalThis.harnessRuns || 0) + 1;\n");
+    const test = (flags: string[], includes: string[], body: string[], frontmatter: string[] = []) => [
+      "// Copyright",
+      "/*---",
+      "description: harness evaluation",
+      ...(includes.length > 0 ? [`includes: [${includes.join(", ")}]`] : []),
+      ...(flags.length > 0 ? [`flags: [${flags.join(", ")}]`] : []),
+      ...frontmatter,
+      "---*/",
+      ...body,
+    ];
+    const harnessIsSloppy = [
+      'if (!sloppyAssign()) throw new Error("harness this was not the global object");',
+      'if (globalThis.sloppyGlobal !== 7) throw new Error("harness assignment did not create a global");',
+      'if (globalThis.helperValue !== 1) throw new Error("harness var is not a global property");',
+    ];
+    const cases: [string, string[], string, string][] = [
+      // [file, source lines, expected status, expected message fragment]
+      ["strict-harness-sloppy.js", test(["onlyStrict"], ["sloppyHelper.js"], [
+        ...harnessIsSloppy,
+        "var threw = false;",
+        "try { undeclaredInBody = 1; } catch (e) { threw = e instanceof ReferenceError; }",
+        'if (!threw) throw new Error("the test body is not strict");',
+      ]), "PASS", ""],
+      ["module-harness-sloppy.js", test(["module"], ["sloppyHelper.js"], [...harnessIsSloppy, "export {};"]), "PASS", ""],
+      // #2068: an unflagged test also runs strict, with the prefix on its
+      // own source, where the assignment is a ReferenceError (see below).
+      ["sloppy-body.js", test([], [], ["undeclaredInBody = 1;"]), "PASS", ""],
+      // A harness Script that fails means the test never ran.
+      ["broken-include.js", test([], ["brokenHelper.js"], ["var x = 1;"]), "WRAPPER_INFRA", "harness include brokenHelper.js failed"],
+      // Positions are the test file's own lines, the frontmatter included.
+      ["positions.js", test([], [], ["", "missingBinding;"]), "FAIL", "missingBinding"],
+      // A module test is strict as module code: no prefix shifts its lines.
+      ["positions-module.js", test(["module"], [], ["", "missingModuleBinding;"]), "FAIL", "missingModuleBinding"],
+      ["helper-positions.js", test([], ["throwingHelper.js"], ["throwFromHelper();"]), "FAIL", "TypeError"],
+      // A broken include is never the parse error a negative test expects.
+      ["parse-broken-include.js", test([], ["syntaxErrorHelper.js"], ["var = ;"],
+        ["negative:", "  phase: parse", "  type: SyntaxError"]), "WRAPPER_INFRA", "harness include syntaxErrorHelper.js failed"],
+      // Each Script's global declarations are checked against the ones
+      // earlier Scripts left (GlobalDeclarationInstantiation).
+      ["harness-clash.js", test([], ["lexicalA.js", "lexicalB.js"], ["var x = 1;"]), "WRAPPER_INFRA", "harness include lexicalB.js failed"],
+      ["body-redeclares-harness.js", test([], ["lexicalA.js"], ["let sharedLexical;"],
+        ["negative:", "  phase: runtime", "  type: SyntaxError"]), "PASS", ""],
+      // A module test's $262.evalScript runs a global Script too.
+      ["module-evalscript.js", test(["module"], [], [
+        '$262.evalScript("var fromEvalScript = 3;");',
+        'if (globalThis.fromEvalScript !== 3) throw new Error("evalScript var is not a global property");',
+        "export {};",
+      ]), "PASS", ""],
+      // ...against the realm's global environment, not the module's: the
+      // Script's `this`, its free identifiers and its top-level lexical
+      // declarations are the global ones (GlobalDeclarationInstantiation),
+      // whether the module reaches the host function through the harness's
+      // $262 wrapper (a closure of the realm) or directly.
+      ...[["$262.evalScript", "evalscript-wrapper"], ["Goccia.test262.evalScript", "evalscript-host"]].flatMap(
+        ([call, name]): [string, string[], string, string][] => [
+          [`module-${name}-this.js`, test(["module"], [], [
+            `if (${call}("this") !== globalThis) throw new Error("evalScript this is not the global object");`,
+            "export {};",
+          ]), "PASS", ""],
+          [`module-${name}-scope.js`, test(["module"], [], [
+            'let moduleLexical = "module";',
+            `if (${call}("typeof moduleLexical") !== "undefined") throw new Error("evalScript sees the module scope");`,
+            // Not a redeclaration: the module's binding is not a global one.
+            `${call}("let moduleLexical = \\'script\\'; class ScriptClass {}");`,
+            'if (moduleLexical !== "module") throw new Error("evalScript replaced the module binding");',
+            // The Script's lexical bindings persist in the global environment.
+            `if (${call}("moduleLexical + typeof ScriptClass") !== "scriptfunction") throw new Error("evalScript lexical bindings are not global");`,
+            "var threw = false;",
+            `try { ${call}("let moduleLexical = 1;"); } catch (e) { threw = e instanceof SyntaxError; }`,
+            'if (!threw) throw new Error("evalScript redeclaration was not a SyntaxError");',
+            "export {};",
+          ]), "PASS", ""],
+        ]),
+      // A test file imported as a module is just its own source: the
+      // harness ran once, in the realm, before the test.
+      ["self-import.js", test(["async"], ["countingHelper.js"], [
+        "if (!globalThis.selfImportStarted) {",
+        "  globalThis.selfImportStarted = true;",
+        "  import('./self-import.js').then(() => {",
+        "    if (globalThis.harnessRuns !== 1) throw new Error('harness ran ' + globalThis.harnessRuns + ' times');",
+        "  }).then($DONE, $DONE);",
+        "}",
+      ]), "PASS", ""],
+    ];
+    for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
+
+    const out = join(tmp, "harness.json");
+    Bun.spawnSync(
+      [
+        TEST262RUNNER,
+        "--suite-dir", suite,
+        "--categories", "language",
+        "--jobs=1",
+        "--output", out,
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    const byFile = test262RunsByFile(report);
+    const perMode: Record<string, Test262Expectation> = {
+      "sloppy-body.js": { "non-strict": ["PASS", ""], strict: ["FAIL", "undeclaredInBody"] },
+    };
+    for (const [file, lines, status, fragment] of cases) {
+      const flagsLine = lines.find((line) => line.startsWith("flags: ")) ?? "";
+      expectTest262Runs(byFile, `language/${file}`, flagsLine.slice("flags: ".length).replace(/[\[\]]/g, "").split(", "),
+        perMode[file] ?? [status, fragment]);
+    }
+    // The strict run's prefix is one line, so its positions are one past the file's.
+    const positions = byFile.get("language/positions.js");
+    if (!(positions?.get("non-strict")?.diagnostic ?? "").includes("positions.js:6:1") ||
+        !(positions?.get("strict")?.diagnostic ?? "").includes("positions.js:7:1"))
+      throw new Error(`positions.js should report line 6, and line 7 when strict, got ${JSON.stringify([...positions?.values() ?? []])}`);
+    const modulePositions = byFile.get("language/positions-module.js")?.get("strict");
+    if (!(modulePositions?.diagnostic ?? "").includes("positions-module.js:7:1"))
+      throw new Error(`positions-module.js should report the file's own line 7, got ${JSON.stringify(modulePositions)}`);
+    // An error a harness function raises names the harness file it came from.
+    for (const helperPositions of byFile.get("language/helper-positions.js")?.values() ?? [])
+      if (!(helperPositions.diagnostic ?? "").includes("throwingHelper.js:2:"))
+        throw new Error(`helper-positions.js should report throwingHelper.js:2, got ${JSON.stringify(helperPositions)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 runner: frontmatter flags, inline or a block list, decide the modes a test runs in...", async () => {
+  // #2068 (INTERPRETING.md, "Strict Mode" and "flags"): an unflagged Script
+  // test runs twice, non-strict and then strict; noStrict and raw run once,
+  // non-strict; onlyStrict runs once, strict; module runs once, as module
+  // code. Flags appear inline (`flags: [noStrict]`) or as a YAML block list,
+  // which staging/sm uses, and both forms must decide the same modes. Every
+  // body throws a message naming the strictness it actually ran in.
+  const tmp = makeTmp();
+  try {
+    const suite = join(tmp, "suite");
+    const harness = join(suite, "harness");
+    const tests = join(suite, "test", "staging");
+    mkdirSync(harness, { recursive: true });
+    mkdirSync(tests, { recursive: true });
+    writeFileSync(join(harness, "sta.js"), "");
+    writeFileSync(join(harness, "assert.js"), "");
+    const body = [
+      "var ranStrict = (function () { return this === undefined; })();",
+      'throw new Error(ranStrict ? "ran strict" : "ran non-strict");',
+    ];
+    const inline = (flags: string[]) => ["/*---", "description: flag forms", `flags: [${flags.join(", ")}]`, "---*/", ...body];
+    const block = (flags: string[]) => ["/*---", "description: flag forms", "flags:", ...flags.map((flag) => `  - ${flag}`), "---*/", ...body];
+    const nonStrict: Test262Expectation = { "non-strict": ["FAIL", "ran non-strict"] };
+    const strict: Test262Expectation = { strict: ["FAIL", "ran strict"] };
+    const both: Test262Expectation = { "non-strict": ["FAIL", "ran non-strict"], strict: ["FAIL", "ran strict"] };
+    const cases: [string, string[], Test262Expectation][] = [
+      ["unflagged.js", ["/*---", "description: flag forms", "---*/", ...body], both],
+      ["inline-other-flag.js", inline(["CanBlockIsFalse"]), both],
+      ["block-other-flag.js", block(["CanBlockIsFalse"]), both],
+      ["inline-no-strict.js", inline(["noStrict"]), nonStrict],
+      ["block-no-strict.js", block(["noStrict"]), nonStrict],
+      ["block-no-strict-second.js", block(["CanBlockIsFalse", "noStrict"]), nonStrict],
+      ["inline-only-strict.js", inline(["onlyStrict"]), strict],
+      ["block-only-strict.js", block(["onlyStrict"]), strict],
+      ["inline-module.js", inline(["module"]), strict],
+      ["block-module.js", block(["module"]), strict],
+      ["inline-raw.js", inline(["raw"]), nonStrict],
+      ["block-raw.js", block(["raw"]), nonStrict],
+    ];
+    for (const [file, lines] of cases) writeFileSync(join(tests, file), lines.join("\n") + "\n");
+
+    const out = join(tmp, "flags.json");
+    Bun.spawnSync(
+      [TEST262RUNNER, "--suite-dir", suite, "--categories", "staging", "--jobs=2", "--output", out],
+      { stdout: "pipe", stderr: "pipe", timeout: 30_000 },
+    );
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    const byFile = test262RunsByFile(report);
+    for (const [file, , expected] of cases) expectTest262Runs(byFile, `staging/${file}`, [], expected);
+    // Files are counted once; runs once per mode, also per category.
+    const runs = cases.reduce((total, [, , expected]) => total + Object.keys(expected).length, 0);
+    const strictRuns = cases.filter(([, , expected]) => "strict" in expected).length;
+    const summary = report.summary;
+    const category = summary.byCategory.find((entry: { category: string }) => entry.category === "staging");
+    if (summary.totalDiscovered !== cases.length || summary.totalRun !== runs ||
+        summary.byMode?.strict?.run !== strictRuns || summary.byMode?.["non-strict"]?.run !== runs - strictRuns ||
+        summary.byMode.strict.failed !== strictRuns || category?.run !== runs ||
+        category?.byMode?.strict?.run !== strictRuns)
+      throw new Error(`test262 summary should count ${cases.length} files and ${runs} runs (${strictRuns} strict): ${JSON.stringify(summary)}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("test262 comment: runs compare by file and mode, so a strict-only regression blocks...", async () => {
+  const tmp = makeTmp();
+  try {
+    type Run = { id: string; mode?: string; status: string };
+    const counts = (results: Run[]) => {
+      const passed = results.filter((r) => r.status === "PASS").length;
+      return { run: results.length, passed, failed: results.length - passed, wrapperInfra: 0, timeouts: 0 };
+    };
+    const report = (results: Run[], gradingContract: number) => {
+      const passed = results.filter((r) => r.status === "PASS").length;
+      // Reports graded before contract 4 have no per-mode counts.
+      const byMode = gradingContract < 4 ? undefined : {
+        "non-strict": counts(results.filter((r) => r.mode === "non-strict")),
+        strict: counts(results.filter((r) => r.mode === "strict")),
+      };
+      return {
+        summary: {
+          totalDiscovered: new Set(results.map((r) => r.id)).size, totalRun: results.length, passed,
+          failed: results.length - passed, wrapperInfraFailures: 0, timeouts: 0, durationSeconds: 1,
+          byMode,
+          byCategory: [{ category: "language", ...counts(results), byMode }],
+        },
+        results: results.map((r) => ({ ...r, durationMs: 1 })),
+        run: { gradingContract },
+      };
+    };
+    const write = (name: string, value: unknown) => {
+      const path = join(tmp, name);
+      writeFileSync(path, JSON.stringify(value));
+      return path;
+    };
+    const baseline = write("baseline.json", report([
+      { id: "language/a.js", mode: "non-strict", status: "PASS" },
+      { id: "language/a.js", mode: "strict", status: "PASS" },
+      { id: "language/b.js", mode: "non-strict", status: "PASS" },
+      { id: "language/b.js", mode: "strict", status: "FAIL" },
+    ], 4));
+    const comment = (results: string, base: string) => Bun.spawnSync(
+      ["bun", "scripts/run_test262_suite.ts", "--comment", results, base],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    // a.js regresses in strict mode only; b.js keeps its strict failure.
+    const strictRegression = comment(write("strict.json", report([
+      { id: "language/a.js", mode: "non-strict", status: "PASS" },
+      { id: "language/a.js", mode: "strict", status: "FAIL" },
+      { id: "language/b.js", mode: "non-strict", status: "PASS" },
+      { id: "language/b.js", mode: "strict", status: "FAIL" },
+    ], 4)), baseline);
+    const strictMarkdown = strictRegression.stdout.toString();
+    if (strictRegression.exitCode !== 1 || !strictMarkdown.includes("`language/a.js (strict)`") ||
+        strictMarkdown.includes("`language/a.js (non-strict)`") || strictMarkdown.includes("`language/b.js"))
+      throw new Error(`a strict-only PASS -> FAIL should block and name the strict run: ${strictMarkdown}`);
+    // The per-mode rows carry their own deltas against a baseline that has them.
+    if (!strictMarkdown.includes("| _strict runs_ | 2 | 0 | -1 |") ||
+        !strictMarkdown.includes("| _non-strict runs_ | 2 | 2 | ±0 |"))
+      throw new Error(`the comment should render per-mode rows with deltas: ${strictMarkdown}`);
+    // A contract-3 baseline ran each file once and records no mode: that run
+    // pairs with the file's only run (only.js is onlyStrict, so strict) or
+    // its non-strict run. a.js's new strict run has no counterpart and is
+    // new, not a transition. The contract changed, so nothing blocks.
+    const legacyBaseline = write("legacy.json", report([
+      { id: "language/a.js", status: "PASS" },
+      { id: "language/only.js", status: "PASS" },
+    ], 3));
+    const legacy = comment(write("after-legacy.json", report([
+      { id: "language/a.js", mode: "non-strict", status: "PASS" },
+      { id: "language/a.js", mode: "strict", status: "FAIL" },
+      { id: "language/only.js", mode: "strict", status: "FAIL" },
+    ], 4)), legacyBaseline);
+    const legacyMarkdown = legacy.stdout.toString();
+    if (legacy.exitCode !== 0 || !legacyMarkdown.includes("Grading contract changed (v3 → v4)") ||
+        !legacyMarkdown.includes("`language/only.js (strict)`") || legacyMarkdown.includes("`language/a.js"))
+      throw new Error(`a contract-3 baseline should pair each run with the file's only or non-strict run: ${legacyMarkdown}`);
+    // A baseline without per-mode counts shows the per-mode deltas as new.
+    if (!legacyMarkdown.includes("| _strict runs_ | 2 | 0 | 🆕 |"))
+      throw new Error(`per-mode rows against a baseline without them should show 🆕: ${legacyMarkdown}`);
   } finally {
     clean(tmp);
   }
@@ -1515,6 +1964,7 @@ await section("test262 runner: deterministic shards merge into one complete repo
 
     const shardReports: string[] = [];
     const seenTests = new Set<string>();
+    const seenFiles = new Map<string, number[]>();
     for (let shard = 0; shard < 4; shard++) {
       const reportPath = join(tmp, `shard-${shard}.json`);
       shardReports.push(reportPath);
@@ -1543,15 +1993,26 @@ await section("test262 runner: deterministic shards merge into one complete repo
       if (report.summary.totalDiscovered !== 12) {
         throw new Error(`test262 shard should preserve global discovery count: ${JSON.stringify(report.summary)}`);
       }
+      // The runner records the runs it planned, which the merge checks.
+      for (const mode of ["non-strict", "strict"]) {
+        const held = report.results.filter((result: { mode: string }) => result.mode === mode).length;
+        if (report.summary.expectedRuns?.[mode] !== held)
+          throw new Error(`test262 shard ${shard} should plan the ${held} ${mode} runs it holds: ${JSON.stringify(report.summary.expectedRuns)}`);
+      }
       for (const result of report.results) {
-        if (seenTests.has(result.id)) {
-          throw new Error(`test262 shard duplicated ${result.id}`);
+        const run = `${result.id} (${result.mode})`;
+        if (seenTests.has(run)) {
+          throw new Error(`test262 shard duplicated ${run}`);
         }
-        seenTests.add(result.id);
+        seenTests.add(run);
+        // Sharding is by file, so both runs of a file share a shard.
+        seenFiles.set(result.id, [...(seenFiles.get(result.id) ?? []), shard]);
       }
     }
-    if (seenTests.size !== 12) {
-      throw new Error(`test262 shards should cover all 12 tests, got ${seenTests.size}`);
+    // Each of the 12 unflagged files runs non-strict and strict.
+    if (seenTests.size !== 24 || seenFiles.size !== 12 ||
+        [...seenFiles.values()].some((shards) => shards.length !== 2 || shards[0] !== shards[1])) {
+      throw new Error(`test262 shards should cover both runs of all 12 tests in one shard each, got ${JSON.stringify([...seenFiles])}`);
     }
     if (existsSync(join(profileDir, "aggregate.json"))) {
       throw new Error("individual test262 shards must not write partial profile aggregates");
@@ -1579,12 +2040,24 @@ await section("test262 runner: deterministic shards merge into one complete repo
       );
     }
     const merged = JSON.parse(readFileSync(mergedPath, "utf8"));
-    if (merged.summary.totalRun !== 12 || merged.summary.passed !== 12 ||
-        merged.results?.length !== 12 || merged.run?.jobs !== 4) {
+    if (merged.summary.totalDiscovered !== 12 || merged.summary.totalRun !== 24 ||
+        merged.summary.passed !== 24 || merged.results?.length !== 24 || merged.run?.jobs !== 4 ||
+        merged.summary.byMode?.strict?.passed !== 12 || merged.summary.byMode?.["non-strict"]?.passed !== 12 ||
+        merged.summary.byCategory?.[0]?.byMode?.strict?.run !== 12) {
       throw new Error(`test262 merged report is incomplete: ${JSON.stringify(merged.summary)}`);
     }
+    // Merged runs are ordered by file, then non-strict before strict.
+    if (merged.results[0].id !== merged.results[1].id ||
+        merged.results[0].mode !== "non-strict" || merged.results[1].mode !== "strict") {
+      throw new Error(`test262 merged runs should be ordered by file and mode: ${JSON.stringify(merged.results.slice(0, 2))}`);
+    }
+    // A strict run keeps a profile of its own beside the non-strict one.
+    if (!existsSync(join(profileDir, "per-test", "built-ins", "shard-0.js.profile.json")) ||
+        !existsSync(join(profileDir, "per-test", "built-ins", "shard-0.js.strict.profile.json"))) {
+      throw new Error("test262 should write a profile for each run of a file");
+    }
     const profileSummary = JSON.parse(readFileSync(profileSummaryPath, "utf8"));
-    if (profileSummary.profileCount !== 12 ||
+    if (profileSummary.profileCount !== 24 ||
         profileSummary.missingProfileCount !== 0 ||
         !existsSync(profileMarkdownPath)) {
       throw new Error(
@@ -1610,6 +2083,96 @@ await section("test262 runner: deterministic shards merge into one complete repo
       throw new Error(
         `test262 merge should reject duplicate shards: ${duplicateProc.stderr.toString()}`,
       );
+    }
+
+    // Runs are unique by file and mode: a second strict run of a file is a
+    // duplicate even though the file's non-strict run shares its id.
+    const duplicateShard = shardReports.findIndex((path) =>
+      JSON.parse(readFileSync(path, "utf8")).results.length > 0);
+    const duplicateRun = JSON.parse(readFileSync(shardReports[duplicateShard], "utf8"));
+    const strictRun = duplicateRun.results.find((result: { mode: string }) => result.mode === "strict");
+    duplicateRun.results.push({ ...strictRun });
+    duplicateRun.summary.totalRun = duplicateRun.results.length;
+    // Plan the extra run too, so the shard's own counts agree and only the
+    // duplicate check can reject it.
+    duplicateRun.summary.expectedRuns.strict++;
+    const duplicateRunPath = join(tmp, "duplicate-run.json");
+    writeFileSync(duplicateRunPath, JSON.stringify(duplicateRun));
+    const duplicateRunProc = Bun.spawnSync(
+      [
+        "bun",
+        "scripts/run_test262_suite.ts",
+        "--merge-shards",
+        "--output", join(tmp, "duplicate-run-merged.json"),
+        ...shardReports.map((path, index) => index === duplicateShard ? duplicateRunPath : path),
+      ],
+      { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+    );
+    if (duplicateRunProc.exitCode !== 1 ||
+        !duplicateRunProc.stderr.toString().includes(`Duplicate test result ${strictRun.id} (strict)`)) {
+      throw new Error(
+        `test262 merge should reject a duplicated strict run: ${duplicateRunProc.stderr.toString()}`,
+      );
+    }
+
+    // Coverage counts files: a shard that lost every run of a file leaves the
+    // merged set incomplete. A run's mode must be one of the two modes.
+    const mergeReplacingShard = (name: string, edit: (report: any) => void) => {
+      const report = JSON.parse(readFileSync(shardReports[duplicateShard], "utf8"));
+      edit(report);
+      report.summary.totalRun = report.results.length;
+      const path = join(tmp, `${name}.json`);
+      writeFileSync(path, JSON.stringify(report));
+      return Bun.spawnSync(
+        [
+          "bun", "scripts/run_test262_suite.ts", "--merge-shards", "--output", join(tmp, `${name}-merged.json`),
+          ...shardReports.map((shardPath, index) => index === duplicateShard ? path : shardPath),
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 10_000 },
+      );
+    };
+    const lostFileProc = mergeReplacingShard("lost-file", (report) => {
+      report.results = report.results.filter((result: { id: string }) => result.id !== strictRun.id);
+      // The shard also dropped the file's runs from its plan, so only the
+      // by-file completeness check can see that the file is gone.
+      for (const mode of ["non-strict", "strict"])
+        report.summary.expectedRuns[mode] = report.results.filter((result: { mode: string }) => result.mode === mode).length;
+    });
+    if (lostFileProc.exitCode !== 1 ||
+        !lostFileProc.stderr.toString().includes("Incomplete result set: discovered 12 files, merged runs of 11")) {
+      throw new Error(`test262 merge should reject a lost file: ${lostFileProc.stderr.toString()}`);
+    }
+    // A shard that lost only the strict run of a file still has the file's
+    // non-strict run, so the by-file check passes; the runs the runner planned
+    // for the shard catch it, and so does a result with no mode.
+    const lostStrictProc = mergeReplacingShard("lost-strict", (report) => {
+      report.results = report.results.filter((result: { id: string; mode: string }) =>
+        !(result.id === strictRun.id && result.mode === "strict"));
+    });
+    if (lostStrictProc.exitCode !== 1 ||
+        !lostStrictProc.stderr.toString().includes("strict runs were planned, but the results hold")) {
+      throw new Error(`test262 merge should reject a shard missing a strict run: ${lostStrictProc.stderr.toString()}`);
+    }
+    const noModeProc = mergeReplacingShard("no-mode", (report) => {
+      delete report.results[0].mode;
+    });
+    if (noModeProc.exitCode !== 1 ||
+        !noModeProc.stderr.toString().includes(`result ${duplicateRun.results[0].id} has no mode`)) {
+      throw new Error(`test262 merge should reject a contract-4 result without a mode: ${noModeProc.stderr.toString()}`);
+    }
+    const noPlanProc = mergeReplacingShard("no-plan", (report) => {
+      delete report.summary.expectedRuns;
+    });
+    if (noPlanProc.exitCode !== 1 ||
+        !noPlanProc.stderr.toString().includes("summary.expectedRuns has no non-strict count")) {
+      throw new Error(`test262 merge should reject a shard without its planned runs: ${noPlanProc.stderr.toString()}`);
+    }
+    const badModeProc = mergeReplacingShard("bad-mode", (report) => {
+      report.results[0].mode = "sloppy";
+    });
+    if (badModeProc.exitCode !== 1 ||
+        !badModeProc.stderr.toString().includes('Invalid strictness mode "sloppy"')) {
+      throw new Error(`test262 merge should reject an unknown mode: ${badModeProc.stderr.toString()}`);
     }
 
     const missingProc = Bun.spawnSync(
@@ -5409,6 +5972,33 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
     }
 
+    console.log("Loader: line coverage of top-level awaits that a short circuit takes or skips...");
+    // The registers an awaiting top-level statement clears belong to no
+    // source line: a skipped operand's line stays unexecuted and the
+    // statement's first line is counted once.
+    const awaitCoverageSourcePath = join(tmp, "await-coverage.js");
+    writeFileSync(
+      awaitCoverageSourcePath,
+      [
+        "const yes = () => true;",
+        "const no = () => false;",
+        "yes() &&",
+        "  (await Promise.resolve(1));",
+        "no() &&",
+        "  (await Promise.resolve(1));",
+        "await null;",
+        "",
+      ].join("\n"),
+    );
+    const awaitCoverageLcovPath = join(tmp, "await-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${awaitCoverageLcovPath} ${awaitCoverageSourcePath}`.quiet();
+    const awaitCoverageLcov = readFileSync(awaitCoverageLcovPath, "utf-8");
+    for (const expected of ["DA:3,1", "DA:4,1", "DA:5,1", "DA:6,0", "DA:7,1"]) {
+      if (!awaitCoverageLcov.includes(expected)) {
+        throw new Error(`LCOV should contain ${expected} for the awaiting statements, got:\n${awaitCoverageLcov}`);
+      }
+    }
+
     console.log("Loader: line coverage of declarations whose initializer starts on a later line...");
     // A lexical binding's TDZ hole is set when its block is entered, so the
     // declaration itself needs none; under coverage it still sets it, because
@@ -6189,6 +6779,8 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
 // ============================================================================
 // GocciaTestRunner
 // ============================================================================
+
+await section("TestRunner: human-readable summaries...", () => verifyTestSummary());
 
 await section("TestRunner: Vitest-compatible snapshot lifecycle...", async () => {
   const tmp = makeTmp();
@@ -8389,7 +8981,8 @@ await section("Compile profiling: per-function parse and compile records...", ve
 await section("Compile profiling: every counter grows with its shape...", verifyCompileCounterGrowth);
 
 await section("Directory profiling: all files, modes and deterministic captures...", verifyDirectoryProfiles);
-await section("Function profiling: recursive totals stay within <module>'s...", verifyRecursiveTotals);
+await section("Function profiling: module evaluation across awaits and source-goal retries...", verifyModuleProfiles);
+await section("Function profiling: recursive totals stay within profiled time...", verifyRecursiveTotals);
 
 await section("BenchmarkRunner: results are reported under a polluted Array.prototype...", async () => {
   // The results array is new, so its elements are made with
@@ -9086,6 +9679,44 @@ await section("REPL: repeated tagged template execution...", async () => {
 // ============================================================================
 // GocciaRunner sandbox mode
 // ============================================================================
+
+await section("Runner: eval is absent in host and sandbox mode, even with the other dynamic-code switches...", async () => {
+  // eval is an engine option only (EnableEval, #2065): no flag or config key
+  // installs it, so neither mode exposes it, nor does a ShadowRealm child,
+  // even after the script defines a global named eval itself.
+  const probe = [
+    'console.log("eval:" + typeof eval + ":" + ("eval" in globalThis));',
+    'if (typeof ShadowRealm === "function") {',
+    '  console.log("child:" + new ShadowRealm().evaluate("typeof eval"));',
+    '  globalThis.eval = () => "fake";',
+    '  console.log("child-after-own-eval:" + new ShadowRealm().evaluate("typeof eval"));',
+    "}",
+    "",
+  ].join("\n");
+  const host = Bun.spawnSync(
+    [RUNNER, "--unsafe-function-constructor", "--unsafe-shadowrealm"],
+    { stdin: new TextEncoder().encode(probe), stdout: "pipe", stderr: "pipe" },
+  );
+  const hostOut = host.stdout.toString();
+  if (host.exitCode !== 0 || !containsLine(hostOut, "eval:undefined:false") ||
+      !containsLine(hostOut, "child:undefined") ||
+      !containsLine(hostOut, "child-after-own-eval:undefined"))
+    throw new Error(`Runner host mode exposed eval (exit ${host.exitCode}): ${hostOut}${host.stderr.toString()}`);
+
+  const tmp = makeNativeTmp();
+  try {
+    const tree = writeSandboxTree(tmp, [{ path: "/main.js", text: probe }]);
+    const sandbox = Bun.spawnSync(
+      [RUNNER, "--copy", `${tree}=/`, "--entry=/main.js"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const sandboxOut = sandbox.stdout.toString();
+    if (sandbox.exitCode !== 0 || !containsLine(sandboxOut, "eval:undefined:false"))
+      throw new Error(`Runner sandbox mode exposed eval (exit ${sandbox.exitCode}): ${sandboxOut}${sandbox.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+});
 
 await section("Runner sandbox mode: a thrown stack cannot read a host file into the diagnostic...", async () => {
   // A code frame's source must come from what the engine parsed, not from a
@@ -10696,7 +11327,7 @@ await section("Runner sandbox mode: --copy-rw writes back only read-write inputs
   }
 });
 
-await section("goccia:ast expression-style example: fixes quotes, trailing commas (specifier lists included) and long calls, keeping them only under --copy-rw...", async () => {
+await section("goccia:ast expression-style example: fixes quotes, trailing commas (specifier lists included) and long lines, keeping them only under --copy-rw...", async () => {
   const tmp = makeNativeTmp();
   try {
     const example = join(dirname(fileURLToPath(import.meta.url)), "..", "examples", "_experimental", "expression-style.mjs");
@@ -10764,9 +11395,282 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const crlfOriginal = ['import {', '  gamma', '} from "./letters.js";', ''].join("\r\n");
     const crlfExpected = ['import {', '  gamma,', "} from './letters.js';", ''].join("\r\n");
     writeFileSync(join(tree, "windows.js"), crlfOriginal);
+    // Parameter lists of exported functions, function and constructor types
+    // and method, call and construct signatures, tuple types and type
+    // parameter lists and destructuring patterns take the comma; a type
+    // argument list, a setter signature's parameter, a rest element and an
+    // array pattern's trailing hole do not.
+    const typesOriginal = [
+      'export function exported(',
+      '  first: string,',
+      '  second: number',
+      '): void {}',
+      'type Callback = (',
+      '  value: string,',
+      '  done: boolean',
+      ') => void;',
+      'type Pair = [',
+      '  string,',
+      '  number',
+      '];',
+      'function generic<',
+      '  First,',
+      '  Second',
+      '>(first: First, second: Second): void {}',
+      'const table: Map<',
+      '  string,',
+      '  number',
+      '> = new Map();',
+      'type Factory = new (',
+      '  seed: number',
+      ') => object;',
+      'interface Shape {',
+      '  scale(',
+      '    factor: number',
+      '  ): void;',
+      '  (',
+      '    input: string',
+      '  ): boolean;',
+      '  new (',
+      '    shape: number',
+      '  ): Shape;',
+      '  set size(',
+      '    value: number',
+      '  );',
+      '  set/* a comment */weight(',
+      '    value: number',
+      '  );',
+      '}',
+      'type Box = {',
+      '  set label(',
+      '    value: string',
+      '  );',
+      '};',
+      'const {',
+      '  alpha,',
+      '  gamma: delta',
+      '} = source;',
+      'const [',
+      '  one,',
+      '  ...others',
+      '] = list;',
+      'const [',
+      '  head,',
+      '  ,',
+      '] = list;',
+      'const [',
+      '  first,',
+      '  second',
+      '] = pair;',
+      'function render({',
+      '  title,',
+      '  body',
+      '}: Props) {}',
+      '',
+    ].join("\n");
+    const typesExpected = typesOriginal
+      .replace("  second: number\n", "  second: number,\n")
+      .replace("  done: boolean\n", "  done: boolean,\n")
+      .replace("  number\n];", "  number,\n];")
+      .replace("  Second\n>", "  Second,\n>")
+      .replace("  seed: number\n", "  seed: number,\n")
+      .replace("    factor: number\n", "    factor: number,\n")
+      .replace("    input: string\n", "    input: string,\n")
+      .replace("    shape: number\n", "    shape: number,\n")
+      .replace("  gamma: delta\n", "  gamma: delta,\n")
+      .replace("  second\n]", "  second,\n]")
+      .replace("  body\n}", "  body,\n}");
+    writeFileSync(join(tree, "types.ts"), typesOriginal);
+    // A line over 80 columns is broken the way Biome breaks it; the expected
+    // text is Biome's own output for this sample.
+    const layoutOriginal = [
+      "const parked = backlog.entries.find((entry) => entry.ticket.familyKey !== 'nightly-sweep:queued');",
+      "const kept = parcels.filter((candidate) => candidate.routeKey === 'harbor' && candidate.version === '2.4.0');",
+      "ledger.withIndex('by_garden_and_orchard_and_season', (q) => q.eq('gardenId', gardenId).eq('orchardId', orchardId));",
+      "expect(chooseLanternMode({ lanternCount: 2, windowFacing: false }).decision).toBe('dim');",
+      "const copy = { body: 'This sentence is long enough that it runs well past the eighty column limit.' };",
+      "const urls = { mirrorUrls: ['https://lanterns.example/shelves/other?shelf=Quillmoor&page=2'] };",
+      "const rows = archive.query('voyageLogs').withIndex('by_harbor', (q) => q.eq('harborId', id)).collect();",
+      "const ok = ready && (survey.status === 'complete' || survey.sections.length > 0 || survey.pending);",
+      "const hidden = cards.filter((card) => card.badge.present && !(card.badge.hasGoldTrim || card.badge.hasRibbon));",
+      "const links = archive",
+      "  .query('voyages')",
+      "  .withIndex('by_chart', (q) =>",
+      "    q.eq('chartId', fields.chartId).eq('chartRevision', fields.chartRevision).eq('chartOwner', owner),",
+      "  );",
+      "const borders = optional.flatMap(([border, applies]) => (applies ? [border] : []));",
+      "function normalizeKeyForShelf<",
+      "  ShelfName extends 'lanternLogs' | 'tideCharts' | 'pages' | 'letters' | 'beacons' | 'maps',",
+      ">(id: string) {}",
+      "export async function getHarborClient(): Promise<AuthenticatedHarborClient | null> {}",
+      "console.warn(\"half (\", firstArgumentValueHere, secondArgumentValueHere, thirdArgumentValue);",
+      "let phase: 'idle' | 'loading' | 'succeeded' | 'failed' | 'cancelled' | 'retrying' | 'paused';",
+      "const render = (",
+      "  { alpha: renamedAlpha, beta, gamma: renamedGamma, ...others }: { alpha: string; beta: string; gamma: string },",
+      "  extra: number,",
+      ") => beta;",
+      "",
+    ].join("\n");
+    const layoutExpected = [
+      "const parked = backlog.entries.find(",
+      "  (entry) => entry.ticket.familyKey !== 'nightly-sweep:queued',",
+      ");",
+      "const kept = parcels.filter(",
+      "  (candidate) =>",
+      "    candidate.routeKey === 'harbor' && candidate.version === '2.4.0',",
+      ");",
+      "ledger.withIndex('by_garden_and_orchard_and_season', (q) =>",
+      "  q.eq('gardenId', gardenId).eq('orchardId', orchardId),",
+      ");",
+      "expect(",
+      "  chooseLanternMode({ lanternCount: 2, windowFacing: false }).decision,",
+      ").toBe('dim');",
+      "const copy = {",
+      "  body: 'This sentence is long enough that it runs well past the eighty column limit.',",
+      "};",
+      "const urls = {",
+      "  mirrorUrls: ['https://lanterns.example/shelves/other?shelf=Quillmoor&page=2'],",
+      "};",
+      "const rows = archive",
+      "  .query('voyageLogs')",
+      "  .withIndex('by_harbor', (q) => q.eq('harborId', id))",
+      "  .collect();",
+      "const ok =",
+      "  ready &&",
+      "  (survey.status === 'complete' ||",
+      "    survey.sections.length > 0 ||",
+      "    survey.pending);",
+      "const hidden = cards.filter(",
+      "  (card) =>",
+      "    card.badge.present && !(card.badge.hasGoldTrim || card.badge.hasRibbon),",
+      ");",
+      "const links = archive",
+      "  .query('voyages')",
+      "  .withIndex('by_chart', (q) =>",
+      "    q",
+      "      .eq('chartId', fields.chartId)",
+      "      .eq('chartRevision', fields.chartRevision)",
+      "      .eq('chartOwner', owner),",
+      "  );",
+      "const borders = optional.flatMap(([border, applies]) =>",
+      "  applies ? [border] : [],",
+      ");",
+      "function normalizeKeyForShelf<",
+      "  ShelfName extends",
+      "    | 'lanternLogs'",
+      "    | 'tideCharts'",
+      "    | 'pages'",
+      "    | 'letters'",
+      "    | 'beacons'",
+      "    | 'maps',",
+      ">(id: string) {}",
+      "export async function getHarborClient(): Promise<AuthenticatedHarborClient | null> {}",
+      "console.warn(",
+      "  'half (',",
+      "  firstArgumentValueHere,",
+      "  secondArgumentValueHere,",
+      "  thirdArgumentValue,",
+      ");",
+      "let phase:",
+      "  | 'idle'",
+      "  | 'loading'",
+      "  | 'succeeded'",
+      "  | 'failed'",
+      "  | 'cancelled'",
+      "  | 'retrying'",
+      "  | 'paused';",
+      "const render = (",
+      "  {",
+      "    alpha: renamedAlpha,",
+      "    beta,",
+      "    gamma: renamedGamma,",
+      "    ...others",
+      "  }: { alpha: string; beta: string; gamma: string },",
+      "  extra: number,",
+      ") => beta;",
+      "",
+    ].join("\n");
+    writeFileSync(join(tree, "layout.ts"), layoutOriginal);
+    // Overload signatures, a `this` parameter, `declare module` names and
+    // import and re-export `with` clauses, one with a line break between its
+    // key and value, as Biome formats them.
+    const signaturesOriginal = [
+      "import lanterns from \"./lanterns.json\" with {",
+      "  type:",
+      "    \"json\"",
+      "};",
+      "import tideChartForTheNorthernHarbour from \"../../fixtures/tides/northern-harbour.json\" with {",
+      "  type: \"json\"",
+      "};",
+      "declare module \"*.svg\" {",
+      "  const url: string;",
+      "  export default url;",
+      "}",
+      "declare module \"*.css\";",
+      "export { lanternIndex } from \"./lanterns.json\" with {",
+      "  type: \"json\"",
+      "};",
+      "export { default as tideTable } from \"../../fixtures/tides/northern-harbour-table.json\" with {",
+      "  type: \"json\"",
+      "};",
+      "function shelve(",
+      "  label: string,",
+      "  kind: \"jar\",",
+      "  count: number",
+      "): Record<\"jar\", number>;",
+      "export function shelve(",
+      "  label: string,",
+      "  kind: \"crate\",",
+      "  count: number",
+      "): Record<\"crate\", number>;",
+      "export function shelve(label: string, kind: string, count: number) {",
+      "  return { [kind]: count };",
+      "}",
+      "BellTowerElement.prototype.ringAllTheBells = function ringAllTheBells(",
+      "  this: BellTowerElement",
+      ") {",
+      "  return this.chime;",
+      "};",
+      "",
+    ].join("\n");
+    const signaturesExpected = [
+      "import lanterns from './lanterns.json' with { type: 'json' };",
+      "import tideChartForTheNorthernHarbour from '../../fixtures/tides/northern-harbour.json' with {",
+      "  type: 'json',",
+      "};",
+      "declare module '*.svg' {",
+      "  const url: string;",
+      "  export default url;",
+      "}",
+      "declare module '*.css';",
+      "export { lanternIndex } from './lanterns.json' with { type: 'json' };",
+      "export { default as tideTable } from '../../fixtures/tides/northern-harbour-table.json' with {",
+      "  type: 'json',",
+      "};",
+      "function shelve(",
+      "  label: string,",
+      "  kind: 'jar',",
+      "  count: number,",
+      "): Record<'jar', number>;",
+      "export function shelve(",
+      "  label: string,",
+      "  kind: 'crate',",
+      "  count: number,",
+      "): Record<'crate', number>;",
+      "export function shelve(label: string, kind: string, count: number) {",
+      "  return { [kind]: count };",
+      "}",
+      "BellTowerElement.prototype.ringAllTheBells = function ringAllTheBells(",
+      "  this: BellTowerElement,",
+      ") {",
+      "  return this.chime;",
+      "};",
+      "",
+    ].join("\n");
+    writeFileSync(join(tree, "signatures.ts"), signaturesOriginal);
 
     const readOnly = Bun.spawnSync(
-      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      [RUNNER, example, "--experimental-ast", "--compat-function", "--copy", `${tree}=/src`],
       { stdout: "pipe", stderr: "pipe" },
     );
     const report = normalizeLineEndings(readOnly.stdout.toString());
@@ -10777,14 +11681,62 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       "/src/sample.js:4:3  a string literal should use single quotes",
       "/src/sample.js:5:3  a multi-line list should end with a trailing comma",
       "/src/sample.js:9:3  a multi-line list should end with a trailing comma",
-      "/src/sample.js:15:1  a call on a line over 80 columns should put one argument per line",
+      "/src/sample.js:15:1  a line over 80 columns should be broken the way Biome breaks it",
       "/src/sample.js:15:8  a string literal should use single quotes",
       "/src/sample.js:19:3  a multi-line list should end with a trailing comma",
       "/src/sample.js:20:8  a string literal should use single quotes",
       "/src/sample.js:22:3  a multi-line list should end with a trailing comma",
       "/src/windows.js:2:3  a multi-line list should end with a trailing comma",
       "/src/windows.js:3:8  a string literal should use single quotes",
-      "11 finding(s) in 2 file(s), 2 rewritten",
+      "/src/types.ts:3:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:7:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:11:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:15:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:22:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:26:5  a multi-line list should end with a trailing comma",
+      "/src/types.ts:29:5  a multi-line list should end with a trailing comma",
+      "/src/types.ts:32:5  a multi-line list should end with a trailing comma",
+      "/src/types.ts:48:10  a multi-line list should end with a trailing comma",
+      "/src/types.ts:60:3  a multi-line list should end with a trailing comma",
+      "/src/types.ts:64:3  a multi-line list should end with a trailing comma",
+      "/src/layout.ts:1:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:2:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:3:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:4:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:5:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:6:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:7:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:8:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:9:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:13:5  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:15:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:17:3  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:20:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:20:14  a string literal should use single quotes",
+      "/src/layout.ts:21:1  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/layout.ts:23:3  a line over 80 columns should be broken the way Biome breaks it",
+      "/src/signatures.ts:1:22  a string literal should use single quotes",
+      "/src/signatures.ts:2:3  a `with` clause that fits in 80 columns should be on one line",
+      "/src/signatures.ts:3:5  a string literal should use single quotes",
+      "/src/signatures.ts:5:44  a string literal should use single quotes",
+      "/src/signatures.ts:6:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:6:9  a string literal should use single quotes",
+      "/src/signatures.ts:8:16  a string literal should use single quotes",
+      "/src/signatures.ts:12:16  a string literal should use single quotes",
+      "/src/signatures.ts:13:30  a string literal should use single quotes",
+      "/src/signatures.ts:14:3  a `with` clause that fits in 80 columns should be on one line",
+      "/src/signatures.ts:14:9  a string literal should use single quotes",
+      "/src/signatures.ts:16:38  a string literal should use single quotes",
+      "/src/signatures.ts:17:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:17:9  a string literal should use single quotes",
+      "/src/signatures.ts:21:9  a string literal should use single quotes",
+      "/src/signatures.ts:22:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:23:11  a string literal should use single quotes",
+      "/src/signatures.ts:26:9  a string literal should use single quotes",
+      "/src/signatures.ts:27:3  a multi-line list should end with a trailing comma",
+      "/src/signatures.ts:28:11  a string literal should use single quotes",
+      "/src/signatures.ts:33:3  a multi-line list should end with a trailing comma",
+      "59 finding(s) in 5 file(s), 5 rewritten",
     ]) {
       if (!report.includes(line))
         throw new Error(`expression-style should report "${line}", got:\n${report}`);
@@ -10797,7 +11749,7 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
       throw new Error("expression-style under --copy changed the host CRLF file");
 
     const readWrite = Bun.spawnSync(
-      [RUNNER, example, "--experimental-ast", "--copy-rw", `${tree}=/src`],
+      [RUNNER, example, "--experimental-ast", "--compat-function", "--copy-rw", `${tree}=/src`],
       { stdout: "pipe", stderr: "pipe" },
     );
     if (readWrite.exitCode !== 0)
@@ -10805,18 +11757,27 @@ await section("goccia:ast expression-style example: fixes quotes, trailing comma
     const fixed = normalizeLineEndings(readFileSync(join(tree, "sample.js"), "utf-8"));
     if (fixed !== expected)
       throw new Error(`expression-style under --copy-rw should write the fixed file, got:\n${fixed}`);
+    const typesFixed = normalizeLineEndings(readFileSync(join(tree, "types.ts"), "utf-8"));
+    const layoutFixed = normalizeLineEndings(readFileSync(join(tree, "layout.ts"), "utf-8"));
+    if (layoutFixed !== layoutExpected)
+      throw new Error(`expression-style under --copy-rw should lay out long lines as Biome does, got:\n${layoutFixed}`);
+    const signaturesFixed = normalizeLineEndings(readFileSync(join(tree, "signatures.ts"), "utf-8"));
+    if (signaturesFixed !== signaturesExpected)
+      throw new Error(`expression-style under --copy-rw should format signatures and with clauses as Biome does, got:\n${signaturesFixed}`);
+    if (typesFixed !== typesExpected)
+      throw new Error(`expression-style under --copy-rw should fix the TypeScript lists, got:\n${typesFixed}`);
     const crlfFixed = readFileSync(join(tree, "windows.js"), "utf-8");
     if (crlfFixed !== crlfExpected)
       throw new Error(`expression-style under --copy-rw should fix the CRLF file and keep CRLF, got:\n${JSON.stringify(crlfFixed)}`);
 
     const again = Bun.spawnSync(
-      [RUNNER, example, "--experimental-ast", "--copy", `${tree}=/src`],
+      [RUNNER, example, "--experimental-ast", "--compat-function", "--copy", `${tree}=/src`],
       { stdout: "pipe", stderr: "pipe" },
     );
     const againReport = normalizeLineEndings(again.stdout.toString());
     if (again.exitCode !== 0)
       throw new Error(`expression-style rerun should exit 0, got ${again.exitCode}: ${again.stderr.toString()}`);
-    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 2 file(s), 0 rewritten"))
+    if (againReport.includes("FAILURE") || !againReport.includes("0 finding(s) in 5 file(s), 0 rewritten"))
       throw new Error(`expression-style should find nothing in a file it fixed, got:\n${againReport}`);
   } finally {
     clean(tmp);
@@ -15413,6 +16374,184 @@ await section("Runner sandbox mode: every host-set ceiling reports itself as one
     const expectedQuota = ["quota:resource-limit:false", "filler:filled:ENOSPC"].join("\n");
     if (quota.stdout !== expectedQuota)
       throw new Error(`Sandbox mode filesystem quota should classify as a resource limit, got:\n${quota.combined}`);
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: an imported module's parse warnings never precede a JSON envelope...", async () => {
+  const tmp = makeTmp();
+  try {
+    // JSX in a .js file adds a parse warning ("JSX syntax found in source
+    // with a non-JSX extension"). The loader prints it for an imported module
+    // on standard output, so a JSON envelope has to be protected from it the
+    // way the entry file's own warnings already are.
+    writeFileSync(join(tmp, "comp.js"), "const createElement = () => 1;\nexport const a = <div/>;\n");
+    const main = join(tmp, "main.mjs");
+    writeFileSync(main, 'import { a } from "./comp.js";\nconsole.log(typeof a);\n');
+    const entry = join(tmp, "entry.mjs");
+    writeFileSync(entry, "console.log(1);\n");
+    const source = join(tmp, "source.mjs");
+    writeFileSync(source, 'import source m from "./comp.js";\nconsole.log(typeof m);\n');
+    const test = join(tmp, "imports.test.js");
+    writeFileSync(test, 'import { a } from "./comp.js";\ntest("imports", () => { expect(a).toBe(1); });\n');
+    // Setup loads: a JavaScript modules manifest and a globals module that
+    // import the warning module before any script runs.
+    const manifest = join(tmp, "manifest.js");
+    writeFileSync(manifest, 'import { a } from "./comp.js";\nexport default { "virtual:x": { content: "export const y = 1;" } };\n');
+    const globals = join(tmp, "globals.js");
+    writeFileSync(globals, 'import { a } from "./comp.js";\nexport const g = a;\n');
+    const plainTest = join(tmp, "plain.test.js");
+    writeFileSync(plainTest, 'test("plain", () => { expect(1).toBe(1); });\n');
+    const run = (binary: string, args: string[]) => {
+      const proc = Bun.spawnSync([binary, ...args], { stdout: "pipe", stderr: "pipe" });
+      return proc.stdout.toString();
+    };
+    const warning = "Warning: JSX syntax found in source with a non-JSX extension";
+
+    // Control: a plain run prints the warning, for both import forms, so the
+    // cases below prove the mute and not an absent warning.
+    if (!run(RUNNER, [main]).includes(warning))
+      throw new Error("A plain run should print the imported module's warning");
+    if (!run(RUNNER, [source, "--experimental-js-module-source"]).includes(warning))
+      throw new Error("A plain source-phase import should print the imported module's warning");
+
+    if (!run(RUNNER, [entry, "--modules", manifest]).includes(warning))
+      throw new Error("A plain run should print the manifest's imported warning");
+    // A config file names the modules, which load through an isolated engine.
+    const configGlobals = join(tmp, "globals.config.json");
+    writeFileSync(configGlobals, JSON.stringify({ globals: "./globals.js" }));
+    const configModules = join(tmp, "modules.config.json");
+    writeFileSync(configModules, JSON.stringify({ modules: "./manifest.js" }));
+    for (const config of [configGlobals, configModules]) {
+      if (!run(RUNNER, [entry, `--config=${config}`]).includes(warning))
+        throw new Error(`A plain run with ${config} should print the imported warning`);
+    }
+    // --deny-read loads the manifest through a loader of its own.
+    if (!run(RUNNER, [entry, "--modules", manifest, "--deny-read"]).includes(warning))
+      throw new Error("A plain --deny-read run should print the manifest's imported warning");
+    if (!run(RUNNER, [entry, "--globals", globals]).includes(warning))
+      throw new Error("A plain run should print the globals module's imported warning");
+
+    // A worker thread never prints the warning, in text mode too: the loader's
+    // own guard, apart from the JSON-mode mute. One thread runs the same
+    // directory with the warnings printed, so the silence is the workers'.
+    const dir = join(tmp, "dir");
+    mkdirSync(dir);
+    for (const name of ["comp.js", "a.mjs", "b.mjs", "c.mjs"])
+      writeFileSync(join(dir, name), name === "comp.js" ? readFileSync(join(tmp, "comp.js")) : 'import { a } from "./comp.js";\n');
+    const serial = Bun.spawnSync([RUNNER, dir, "--jobs=1"], { stdout: "pipe", stderr: "pipe" });
+    if (!serial.stdout.toString().includes(warning))
+      throw new Error("A one-thread directory run should print the imported module's warning");
+    const parallel = Bun.spawnSync([RUNNER, dir, "--jobs=2"], { stdout: "pipe", stderr: "pipe" });
+    const parallelOut = parallel.stdout.toString();
+    if (!/with 2 workers/.test(parallelOut) || parallel.exitCode !== 0)
+      throw new Error(`A two-job directory run should use workers and succeed, got exit ${parallel.exitCode}:\n${parallelOut.slice(0, 400)}`);
+    if (parallelOut.includes(warning))
+      throw new Error("A worker thread should not print the imported module's warning");
+
+    const cases: [string, string, string[]][] = [
+      ["GocciaRunner --modules manifest --output=json", RUNNER, [entry, "--modules", manifest, "--output=json"]],
+      ["GocciaRunner --modules manifest --deny-read --output=json", RUNNER, [entry, "--modules", manifest, "--deny-read", "--output=json"]],
+      ["GocciaRunner config globals --output=json", RUNNER, [entry, `--config=${configGlobals}`, "--output=json"]],
+      ["GocciaRunner config modules --output=json", RUNNER, [entry, `--config=${configModules}`, "--output=json"]],
+      ["GocciaRunner --globals module --output=json", RUNNER, [entry, "--globals", globals, "--output=json"]],
+      ["GocciaTestRunner --globals module --output=json", TESTRUNNER, ["-P", plainTest, "--globals", globals, "--output=json"]],
+      ["GocciaRunner --output=json", RUNNER, [main, "--output=json"]],
+      ["GocciaRunner --output=compact-json", RUNNER, [main, "--output=compact-json"]],
+      ["GocciaRunner --output=json --jobs=2", RUNNER, [main, entry, "--output=json", "--jobs=2"]],
+      ["GocciaRunner source-phase import --output=json", RUNNER, [source, "--experimental-js-module-source", "--output=json"]],
+      ["GocciaTestRunner --output=json", TESTRUNNER, ["-P", test, "--output=json"]],
+    ];
+    for (const [label, binary, args] of cases) {
+      const stdout = run(binary, args);
+      let envelope: { ok?: boolean };
+      try {
+        envelope = JSON.parse(stdout);
+      } catch {
+        throw new Error(`${label}: stdout should be the JSON envelope alone, got:\n${stdout.slice(0, 400)}`);
+      }
+      // The fixtures run: an error envelope would also parse.
+      if (envelope.ok !== true)
+        throw new Error(`${label}: the run should succeed, got:\n${stdout.slice(0, 400)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
+await section("Loader: --output=json and --silent mute the goccia:test reporter...", async () => {
+  const tmp = makeTmp();
+  try {
+    // The loader installs goccia:test module-only, so the reporter's
+    // assertions object does not exist until this import resolves. The host's
+    // mute must still reach it. Failing, todo and skipped tests write the
+    // per-test markers; the results block is left on (no showTestResults).
+    const source = [
+      'import { test, expect, runTests } from "goccia:test";',
+      'console.log("from console");',
+      'test("fails", () => { expect(1).toBe(2); });',
+      'test.todo("later");',
+      'test.skip("skipped", () => {});',
+      "const result = await runTests();",
+      "result.failed;",
+      "",
+    ].join("\n");
+    const first = join(tmp, "first.js");
+    const second = join(tmp, "second.js");
+    writeFileSync(first, source);
+    writeFileSync(second, source);
+    const reporterMarkers = ["❌", "📝", "⏸️", "Test Results"];
+    const run = (args: string[]) => {
+      const proc = Bun.spawnSync([RUNNER, ...args], { stdout: "pipe", stderr: "pipe" });
+      return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    };
+
+    // Control: the unmuted reporter does write to stdout, so the cases below
+    // prove the mute rather than an absent reporter.
+    const unmuted = run([first]);
+    for (const marker of reporterMarkers) {
+      if (!unmuted.stdout.includes(marker))
+        throw new Error(`Unmuted goccia:test reporter should print ${marker}, got:\n${unmuted.stdout}`);
+    }
+
+    for (const format of ["json", "compact-json"]) {
+      for (const files of [[first], [first, second]]) {
+        const label = `--output=${format} with ${files.length} file(s)`;
+        const muted = run([...files, `--output=${format}`, "--jobs=2"]);
+        let json: any;
+        try {
+          json = JSON.parse(muted.stdout);
+        } catch {
+          throw new Error(`${label} stdout should be the JSON envelope alone, got:\n${muted.stdout}`);
+        }
+        if (!json.output.includes("from console"))
+          throw new Error(`${label} should still capture console output, got ${json.output}`);
+        if (json.files.length !== files.length || json.files.some((file: { result: number }) => file.result !== 1))
+          throw new Error(`${label} should still report one failed test for each file, got ${JSON.stringify(json.files.map((file: { result: number }) => file.result))}`);
+      }
+    }
+
+    const silent = run([first, "--silent"]);
+    // A failing guest test does not fail the runner, so a run that stops
+    // before runTests() would otherwise pass the checks below untested.
+    if (silent.exitCode !== 0)
+      throw new Error(`--silent should exit 0, got ${silent.exitCode}:\n${silent.stderr}`);
+    for (const marker of reporterMarkers) {
+      if (silent.stdout.includes(marker))
+        throw new Error(`--silent should mute the goccia:test reporter (${marker}), got:\n${silent.stdout}`);
+    }
+    if (silent.stdout.includes("from console"))
+      throw new Error(`--silent should still mute the console, got:\n${silent.stdout}`);
+
+    // Sandbox mode configures its engines separately.
+    const sandboxSilent = run(["--sandbox", first, "--silent"]);
+    if (sandboxSilent.exitCode !== 0)
+      throw new Error(`--sandbox --silent should exit 0, got ${sandboxSilent.exitCode}:\n${sandboxSilent.stderr}`);
+    for (const marker of reporterMarkers) {
+      if (sandboxSilent.stdout.includes(marker))
+        throw new Error(`--sandbox --silent should mute the goccia:test reporter (${marker}), got:\n${sandboxSilent.stdout}`);
+    }
   } finally {
     clean(tmp);
   }

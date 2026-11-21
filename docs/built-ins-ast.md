@@ -52,7 +52,7 @@ Every node is `{ kind, start, end, loc, children }`, plus `typeOnly` on the
 kinds a type-level declaration or a module specifier can have (below), and every comment is
 `{ kind, start, end, loc }` with `kind` either `"Line"` or `"Block"`.
 `start` and `end` are zero-based offsets into `source`, `end` exclusive;
-`loc.start` and `loc.end` are `{ line, column }` with one-based lines.
+`loc.start` and `loc.end` are `{ line, column }` with one-based lines and columns.
 
 A syntax error in the parsed text is a `SyntaxError` naming its position; it
 does not abort the caller's own run unless the caller lets it.
@@ -66,7 +66,7 @@ arrow function assigned to a `const` is a child of that declaration. Three
 kinds own a statement *list*, whose children are siblings of one another:
 `Program`, `BlockStatement`, and `SwitchCase`.
 
-Type-level declarations do nothing at run time ([Type Annotations](type-annotations.md)), but each keeps a kind of its own and its whole text, wherever it appears: `type T = ...` is a `TypeAliasDeclaration`, `interface I {}` an `InterfaceDeclaration`, and their exported forms `ExportTypeAliasDeclaration` and `ExportInterfaceDeclaration`. `import type ... from`, `export type { A }`, and `export type { A } from` or `export type * from` are the `ImportDeclaration`, `ExportDeclaration` and `ReExportDeclaration` they look like, with `typeOnly: true`. `import type from "m"`, `import type, { y } from "m"` and `import type, * as ns from "m"` are value imports that bind `type`, so they report `typeOnly: false`. Those three kinds carry `typeOnly: false` when the statement runs, including `import { type C, D } from "..."`, where `type` marks one specifier rather than the statement. The four type declaration kinds always carry `typeOnly: true`, and `EmptyStatement` is only ever a lone `;`. Only those seven statement kinds and the four specifier kinds (below) carry `typeOnly`. In the statement view a type declaration has no children and no names, and neither has a type-only `import`, `export { }` or re-export. In the expression view a type-only module statement reports its specifiers and module path like a value one ([ADR 0168](adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md)), and a type declaration its [type syntax](#type-syntax). See [ADR 0161](adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
+Type-level declarations do nothing at run time ([Type Annotations](type-annotations.md)), but each keeps a kind of its own and its whole text, wherever it appears: `type T = ...` is a `TypeAliasDeclaration`, `interface I {}` an `InterfaceDeclaration`, an ambient declaration (`declare const x: T;`, `declare module "m" {}`, `declare global {}`) an `AmbientDeclaration`, an overload signature (`function f(a: string): string;`) an `OverloadDeclaration`, and their exported forms `ExportTypeAliasDeclaration`, `ExportInterfaceDeclaration`, `ExportAmbientDeclaration` and `ExportOverloadDeclaration`. `import type ... from`, `export type { A }`, and `export type { A } from` or `export type * from` are the `ImportDeclaration`, `ExportDeclaration` and `ReExportDeclaration` they look like, with `typeOnly: true`. `import type from "m"`, `import type, { y } from "m"` and `import type, * as ns from "m"` are value imports that bind `type`, so they report `typeOnly: false`. Those three kinds carry `typeOnly: false` when the statement runs, including `import { type C, D } from "..."`, where `type` marks one specifier rather than the statement. The eight type declaration kinds always carry `typeOnly: true`, and `EmptyStatement` is only ever a lone `;`. Only those eleven statement kinds and the four specifier kinds (below) carry `typeOnly`. In the statement view a type declaration has no children and no names, and neither has a type-only `import`, `export { }` or re-export. In the expression view a type-only module statement reports its specifiers and module path like a value one ([ADR 0168](adr/0168-goccia-ast-reports-the-children-of-type-only-module-statements.md)), and a type declaration its [type syntax](#type-syntax). In the statement view an ambient declaration or an overload signature has no children. In the expression view an overload signature reports its type parameters, parameters and return type, as a function declaration does without its body; `declare module "m"` reports its name as a `StringLiteral`, and any other ambient declaration has no children. A class method's overload signature is not a member. See [ADR 0161](adr/0161-goccia-ast-reports-type-level-declarations-by-kind.md).
 
 ## The expression view
 
@@ -90,11 +90,16 @@ Kinds follow ESTree, with Babel's literal kinds: `Identifier`,
 `ParenthesizedExpression`, `ArrayPattern`, `ObjectPattern`, `RestElement`,
 `AssignmentPattern`, `Parameter`, `MethodDefinition`, `PropertyDefinition`,
 `AccessorProperty`, `StaticBlock`, `ImportDefaultSpecifier`,
-`ImportNamespaceSpecifier`, `ImportSpecifier`, `ExportSpecifier`, `JSXElement`, `IsExpression`,
+`ImportNamespaceSpecifier`, `ImportSpecifier`, `ExportSpecifier`, `ImportAttribute`, `JSXElement`, `IsExpression`,
 `MatchExpression`, and TypeScript's `TSAsExpression` (`x as T`, `x as const`),
 `TSSatisfiesExpression` and `TSNonNullExpression` (`x!`). An import's or
 re-export's module path is a `StringLiteral` child of its declaration, after
-its specifiers (below). An
+its specifiers (below), and each attribute of its `with` clause an
+`ImportAttribute` after the path, covering `type: "json"` with the key
+(`Identifier` or `StringLiteral`) and the value's `StringLiteral` as its
+children. A type-only import or re-export reports no `ImportAttribute`: it is
+erased without its `with` clause being read, and TypeScript rejects
+attributes there. An
 assertion wraps the expression it asserts and covers its type, so in
 `f(a as T)` the argument ends after `T`; the type is its second child.
 
@@ -170,7 +175,9 @@ Kinds are typescript-estree's:
 
 Each is a child of what it annotates: a parameter's annotation of its
 `Parameter`, a function's type parameters and return type of the function, a
-variable's annotation of its `VariableDeclaration`, a call's type arguments of
+function's `this` parameter (`this: T`, not a parameter at run time) a
+`Parameter` holding its annotation, after the type parameters as in a function
+type, a variable's annotation of its `VariableDeclaration`, a call's type arguments of
 the `CallExpression`, between its callee and arguments. A `type` alias holds its
 type parameters and its type, and an `interface` its type parameters,
 heritage and body. A member's static key is an `Identifier`, `StringLiteral`
@@ -248,7 +255,13 @@ child container holding nothing else — are not in `comments`, because the
 parser never sees them.
 
 In the expression view an element is a `JSXElement` covering the element as
-written, and the expressions in its braces are its children. Nothing the JSX
+written, and the expressions in its braces are its children. Type arguments on
+its tag, as in `<Select<Option> items={options} />`, are reported as type
+syntax is ([ADR 0172](adr/0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md)):
+a `TSTypeParameterInstantiation`, the element's first child, before the
+expressions of its attributes. With `tokens`, their tokens and comments are in
+`tokens` as the parser read them, and a comment before or inside them is in
+`comments` too. Nothing the JSX
 transformer writes is reported — not the call it turns an element into, not
 the string it escapes an attribute value into — so every node's range is text
 in `source`.

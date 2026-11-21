@@ -5,6 +5,7 @@ unit FPCSafeSEH;
 interface
 
 uses
+  Classes,
   SysUtils,
 
   PESafeSEH;
@@ -25,18 +26,28 @@ function ResolveFPCSafeSEH(const AImage: TBytes;
   const AMapFile, AManifestFile, ACompilerVersion: string;
   const AObjectDirectory: string = ''): TSERvaArray;
 
+// Writes every source-nonseh entry of the manifest (the reviewed manifest
+// when AManifestFile is empty) with the current digest of its routine, so a
+// reviewer can compare it and, after re-reviewing a changed routine, copy its
+// refreshed line. Returns False when a routine cannot be located or its
+// digest differs from the manifest.
+function ReportReviewedRoutines(const AManifestFile: string;
+  const AOutput: TStrings): Boolean;
+
 implementation
 
 uses
-  Classes,
   Process,
 
   FileUtils,
+  FPCRoutineSource,
   SHA256;
 
 const
   MANIFEST_NAME = 'config/win32-safeseh/fpc-3.2.4.manifest';
-  MANIFEST_HEADER = 'FPC-SAFESEH 1';
+  MANIFEST_HEADER = 'FPC-SAFESEH 2';
+  // Format 1 bound source-nonseh entries to whole-file digests.
+  LEGACY_MANIFEST_HEADER = 'FPC-SAFESEH 1';
   MAP_HEADER = 'Memory map (ImageBase=';
   READ_OBJECT = 'READOBJECT ';
   REMOVE_SECTION = 'Removing ';
@@ -65,6 +76,7 @@ type
   end;
   TManifestSymbols = array of TManifestSymbol;
   TSourceSymbol = record
+    Path: string;
     Source: string;
     Digest: string;
     Section: string;
@@ -72,6 +84,9 @@ type
   end;
   TSourceSymbols = array of TSourceSymbol;
   TManifest = record
+    Root: string;
+    // Parses each source file once per run; owned by the reader's caller.
+    Locator: TFPCRoutineLocator;
     Version: string;
     Objects: TManifestObjects;
     Symbols: TManifestSymbols;
@@ -202,6 +217,11 @@ begin
   Result := (Pos('handler', Name) > 0) or (Pos('except_safecall', Name) > 0);
 end;
 
+function ProjectRoot(const AManifestFile: string): string;
+begin
+  Result := ExpandFileName(ExtractFilePath(ExpandFileName(AManifestFile)) + '..' + PathDelim + '..');
+end;
+
 procedure ReadManifest(const AFileName: string; out AManifest: TManifest);
 var
   Lines: TStringList;
@@ -214,7 +234,11 @@ begin
   Lines := TStringList.Create;
   try
     Lines.LoadFromFile(UTF8Encode(AFileName));
+    Require((Lines.Count = 0) or (string(Lines[0]) <> LEGACY_MANIFEST_HEADER),
+      'SafeSEH manifest format 1 pins whole source files; migrate its source-nonseh entries ' +
+      'to format 2 per-routine digests (./safeseh.pas --digests)');
     Require((Lines.Count > 0) and (string(Lines[0]) = MANIFEST_HEADER), 'Unsupported SafeSEH manifest');
+    AManifest.Root := ProjectRoot(AFileName);
     for Index := 1 to Lines.Count - 1 do
     begin
       Line := Trim(string(Lines[Index]));
@@ -251,6 +275,7 @@ begin
           Require(CharInSet(Value[Digit], ['0'..'9', 'a'..'f']), 'Invalid source-bound SHA-256');
         SymbolIndex := Length(AManifest.SourceSymbols);
         SetLength(AManifest.SourceSymbols, SymbolIndex + 1);
+        AManifest.SourceSymbols[SymbolIndex].Path := Name;
         AManifest.SourceSymbols[SymbolIndex].Source :=
           ExpandFileName(ExtractFilePath(ExpandFileName(AFileName)) + Name);
         AManifest.SourceSymbols[SymbolIndex].Digest := Value;
@@ -292,10 +317,84 @@ begin
   Result := Cardinal(Value);
 end;
 
+function SourceDisplayPath(const AManifest: TManifest; const ASource: string): string;
+var
+  Root: string;
+begin
+  Root := IncludeTrailingPathDelimiter(AManifest.Root);
+  if Copy(ASource, 1, Length(Root)) = Root then
+    Result := NormalPath(Copy(ASource, Length(Root) + 1, MaxInt))
+  else
+    Result := ASource;
+end;
+
+// FPC searches its working directory for an include before the -Fi
+// directories. build.pas compiles from the repository root, and
+// .github/scripts/compile-programs.py from each program's unit directory,
+// which it passes to --apply as AObjectDirectory. --check has no unit
+// directory; one holds only compiler output, which no include names.
+function CreateRoutineLocator(const ARoot, AObjectDirectory: string): TFPCRoutineLocator;
+var
+  CompilerDirectories: array of string;
+begin
+  SetLength(CompilerDirectories, 1);
+  CompilerDirectories[0] := ARoot;
+  if AObjectDirectory <> '' then
+  begin
+    SetLength(CompilerDirectories, 2);
+    CompilerDirectories[1] := ExpandFileName(AObjectDirectory);
+  end;
+  // The -Fi directories of config.cfg and .github/scripts/compile-programs.py.
+  Result := TFPCRoutineLocator.Create(CompilerDirectories, [
+    ARoot + PathDelim + 'source' + PathDelim + 'units',
+    ARoot + PathDelim + 'source' + PathDelim + 'shared',
+    ARoot + PathDelim + 'souffle']);
+end;
+
+function Sentence(const AText: string): string;
+begin
+  if (AText <> '') and (AText[Length(AText)] = '.') then
+    Result := AText
+  else
+    Result := AText + '.';
+end;
+
+function LocateReviewedRoutine(const AManifest: TManifest;
+  const ASymbol: TSourceSymbol): TFPCRoutineSpan;
+var
+  Where: string;
+begin
+  try
+    Result := AManifest.Locator.Locate(ASymbol.Source, ASymbol.Section);
+  except
+    on E: EFPCRoutineSource do
+    begin
+      Where := SourceDisplayPath(AManifest, E.SourceFile);
+      if E.Line > 0 then
+        Where := Where + ':' + IntToStr(E.Line);
+      // A file refusal says nothing about the reviewed routine, which may be
+      // unchanged; the fix is in the text the locator cannot parse.
+      if E.Scope = frFile then
+        raise ESafeSEH.Create(UTF8Encode('Reviewed non-SEH routine ' +
+          FPCSectionRoutineName(ASymbol.Section) + ' cannot be located: ' + Where +
+          ' cannot be parsed: ' + Sentence(E.Reason) + ' Every source-nonseh entry in ' +
+          SourceDisplayPath(AManifest, ASymbol.Source) + ' fails until that text is restructured ' +
+          'or the routine locator supports it; do not widen the exclusion'));
+      raise ESafeSEH.Create(UTF8Encode('Reviewed non-SEH routine ' +
+        FPCSectionRoutineName(ASymbol.Section) + ' cannot be located in ' + Where + ': ' +
+        Sentence(E.Reason) + ' Review the routine again and update its source-nonseh entry; ' +
+        'do not widen the exclusion'));
+    end;
+  end;
+end;
+
+// The digest covers only the named routine, so edits elsewhere in its file
+// need no manifest change. An edited, renamed or removed routine fails.
 function ReviewedSourceSymbol(var AManifest: TManifest;
   const ASection, AOwner: string): Boolean;
 var
   Index: Integer;
+  Span: TFPCRoutineSpan;
 begin
   for Index := 0 to High(AManifest.SourceSymbols) do
     if (AManifest.SourceSymbols[Index].Section = LowerCase(ASection)) and
@@ -305,18 +404,17 @@ begin
       begin
         Require(FileExists(AManifest.SourceSymbols[Index].Source),
           'Reviewed non-SEH source unavailable: ' + AManifest.SourceSymbols[Index].Source);
-        Require(HashFile(AManifest.SourceSymbols[Index].Source) = AManifest.SourceSymbols[Index].Digest,
-          'Reviewed non-SEH source SHA-256 mismatch: ' + AManifest.SourceSymbols[Index].Source);
+        Span := LocateReviewedRoutine(AManifest, AManifest.SourceSymbols[Index]);
+        if Span.Digest <> AManifest.SourceSymbols[Index].Digest then
+          raise ESafeSEH.Create(UTF8Encode(Format('Reviewed non-SEH routine changed: %s in %s:%d-%d. ' +
+            'Review it again for SEH registration before refreshing its digest with ./safeseh.pas --digests',
+            [Span.Name, SourceDisplayPath(AManifest, AManifest.SourceSymbols[Index].Source),
+            Span.FirstLine, Span.LastLine])));
         AManifest.SourceSymbols[Index].Verified := True;
       end;
       Exit(True);
     end;
   Result := False;
-end;
-
-function ProjectRoot(const AManifestFile: string): string;
-begin
-  Result := ExpandFileName(ExtractFilePath(ExpandFileName(AManifestFile)) + '..' + PathDelim + '..');
 end;
 
 procedure CollectProjectSources(const ARoot: string; const AFiles: TStrings);
@@ -597,6 +695,7 @@ begin
     PE_OPTIONAL_OFFSET + PE_IMAGE_BASE_OFFSET);
   Sources := TStringList.Create;
   Receipt := TStringList.Create;
+  Manifest.Locator := CreateRoutineLocator(Manifest.Root, AObjectDirectory);
   try
     CollectProjectSources(ProjectRoot(AManifestFile), Sources);
     if (AObjectDirectory = '') and FileExists(AMapFile + '.safeseh-inputs') then
@@ -606,6 +705,7 @@ begin
     if Receipt.Count > 0 then
       Require(AProjectLines.Count = Receipt.Count - 6, 'Unused or duplicate project input receipt rows');
   finally
+    Manifest.Locator.Free;
     Receipt.Free;
     Sources.Free;
   end;
@@ -680,6 +780,60 @@ begin
   Result := ExpandFileName(MANIFEST_NAME);
   Require(FileExists(Result), 'Set FPC_SAFESEH_MANIFEST to the reviewed manifest path');
 end;
+
+function ReportReviewedRoutines(const AManifestFile: string;
+  const AOutput: TStrings): Boolean;
+var
+  Manifest: TManifest;
+  Symbol: TSourceSymbol;
+  Span: TFPCRoutineSpan;
+  ManifestFile, Status: string;
+begin
+  Result := True;
+  ManifestFile := AManifestFile;
+  if ManifestFile = '' then
+    ManifestFile := ManifestFileName;
+  ReadManifest(ManifestFile, Manifest);
+  Manifest.Locator := CreateRoutineLocator(Manifest.Root, '');
+  try
+    for Symbol in Manifest.SourceSymbols do
+    begin
+      try
+        Require(FileExists(Symbol.Source), 'Reviewed non-SEH source unavailable: ' + Symbol.Source);
+        Span := LocateReviewedRoutine(Manifest, Symbol);
+      except
+        // The report lists every entry, so a source it cannot read fails
+        // only its own entry. The --apply and --check paths let such an
+        // error stop the build.
+        on E: Exception do
+        begin
+          Result := False;
+          if E is ESafeSEH then
+            AOutput.Add(UTF8Encode('# ERROR ' + UTF8Decode(E.Message)))
+          else
+            AOutput.Add(UTF8Encode('# ERROR Reviewed non-SEH routine ' + FPCSectionRoutineName(Symbol.Section) +
+              ' cannot be read from ' + SourceDisplayPath(Manifest, Symbol.Source) + ': ' + E.ClassName + ': ' +
+              UTF8Decode(E.Message)));
+          AOutput.Add(UTF8Encode('source-nonseh ' + Symbol.Path + ' ' + Symbol.Digest + ' ' + Symbol.Section));
+          Continue;
+        end;
+      end;
+      if Span.Digest = Symbol.Digest then
+        Status := 'unchanged'
+      else
+      begin
+        Status := 'CHANGED: review it again for SEH registration before replacing its line';
+        Result := False;
+      end;
+      AOutput.Add(UTF8Encode(Format('# %s, %s:%d-%d: %s', [Span.Name,
+        SourceDisplayPath(Manifest, Symbol.Source), Span.FirstLine, Span.LastLine, Status])));
+      AOutput.Add(UTF8Encode('source-nonseh ' + Symbol.Path + ' ' + Span.Digest + ' ' + Symbol.Section));
+    end;
+  finally
+    Manifest.Locator.Free;
+  end;
+end;
+
 
 function CompilerVersion: string;
 var

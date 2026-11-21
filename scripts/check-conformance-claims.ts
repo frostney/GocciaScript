@@ -9,11 +9,21 @@
  * come from the generated reports: link `/compatibility`, or render the number
  * from live dashboard data.
  *
- * Scans markdown prose (every root-level `.md` except the excluded historical
- * records, every `.md` under docs/, and the website's root `.md` files) and
- * website copy (every `.ts` and `.tsx` under website/src/) for a percentage or
- * an absolute pass count sitting next to test262 vocabulary. Exits non-zero if
- * any hand-typed claim is found.
+ * Scans every file that can carry published or posted copy:
+ *   - markdown (`.md`, `.mdx`) anywhere in the checkout except the excluded
+ *     historical records, so root documents, `docs/`, subdirectory READMEs,
+ *     `.github/` templates, `.agents/skills/` and `website/` are all covered
+ *     the day they land;
+ *   - TypeScript, JavaScript and JSON under `website/`, `scripts/`, `.github/`
+ *     (`scripts/run_test262_suite.ts` builds the markdown posted to every pull
+ *     request, so a rate hand-typed there would be published repo-wide);
+ *   - YAML and shell under `.github/`, `website/` and `scripts/` (inline
+ *     `github-script` markdown, install scripts, issue forms).
+ * Files come from `git ls-files` (tracked plus untracked-not-ignored), so a
+ * gitignored tree is never entered; without git the checkout is walked.
+ * It looks for a percentage, a fraction, an absolute pass count or an
+ * unquantified strength claim ("near-complete conformance") sitting next to
+ * test262 vocabulary. Exits non-zero if any hand-typed claim is found.
  *
  * What convicts a number:
  *   - test262 vocabulary within +/- 3 lines, AND
@@ -34,13 +44,16 @@
  * Not checked (by design):
  *   - docs/adr/ and docs/spikes/ — immutable, dated measurement records
  *   - CHANGELOG.md — generated release history, not maintained prose
- *   - TypeScript comments — a `//` or block comment is not published copy;
- *     string and template literals (URLs included) are left intact
+ *   - Source comments — a `//` or block comment (and a `#` comment in YAML and
+ *     shell) is not published copy; string and template literals (URLs
+ *     included) are left intact
+ *   - This script and the other self-testing scripts (`*.self-test.ts`,
+ *     `scripts/test-*`) — their fixtures are invented claims on purpose
  *   - Fenced (``` and ~~~) and indented code blocks, inline code spans, and
  *     link targets — sample report output, CLI flags, and pinned SHAs are not
  *     prose claims. Inline code is excluded as a claim only; its text still
  *     counts as vocabulary for the lines around it.
- *   - Website test files — synthetic fixtures, not published copy
+ *   - Website and script test files — synthetic fixtures, not published copy
  *   - Percentages computed or formatted from live data: the extraction drops
  *     `${...}` expressions, so a rendered figure leaves no literal behind
  *   - Letterless literals in a CSS or layout position (`width: "100%"`)
@@ -76,6 +89,7 @@ import {
 } from "fs";
 import { join, relative, dirname, sep } from "path";
 import { tmpdir } from "os";
+import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 
 // -- Config -------------------------------------------------------------------
@@ -89,19 +103,46 @@ const ROOT_REAL = realpathSync(ROOT);
 const VERBOSE = process.argv.includes("--verbose");
 const SELF_TEST = process.argv.includes("--self-test");
 
-// Root-level prose is scanned wholesale so a new entry-point document is
-// covered the day it lands. CHANGELOG.md is generated release history — its
-// entries describe what a release measured at the time and are never rewritten.
-const EXCLUDED_ROOT_MD = new Set(["CHANGELOG.md"]);
-const MD_DIR = "docs";
+// Prose is scanned wholesale so a new document is covered the day it lands.
+// CHANGELOG.md (at any depth) is generated release history — its entries
+// describe what a release measured at the time and are never rewritten.
+const EXCLUDED_MD_NAMES = new Set(["CHANGELOG.md"]);
 // Historical records: an ADR or spike states what was measured on a given date
 // and is never updated afterwards, so a frozen figure there is the point.
-const MD_IGNORE_PATH_PREFIXES = ["docs/adr/", "docs/spikes/"];
-const WEB_ROOT = "website";
-const WEB_SRC_DIR = "website/src";
-const WEB_EXTENSIONS = [".ts", ".tsx"];
-// Fixtures are invented numbers that assert formatting, not claims about the engine.
-const WEB_IGNORE_PATTERNS = [/(?:^|\/)__tests__\//, /\.test\.tsx?$/, /\.spec\.tsx?$/];
+// website/content/docs/ is synced from docs/ at build time and validated at
+// the source location.
+const MD_IGNORE_PATH_PREFIXES = ["docs/adr/", "docs/spikes/", "website/content/docs/"];
+const MARKDOWN_EXTENSIONS = [".md", ".mdx"];
+
+// Code and data that can publish copy: the website, the scripts that build
+// posted reports, and the workflows with their inline markdown. Everything else
+// (tests/, source/, examples/, benchmarks/) holds GocciaScript fixtures and
+// Pascal, not copy; its READMEs are still covered by the markdown rule.
+const SOURCE_ROOTS = ["website/", "scripts/", ".github/"];
+const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs", ".cjs"];
+// JSON is data almost everywhere; only package metadata, the site's static
+// files and the repository's own automation config are copy.
+const JSON_PATH_PATTERNS = [/^(?:website\/)?package\.json$/, /^website\/public\//, /^\.github\//];
+const TEXT_ROOTS = ["website/", "scripts/", ".github/"];
+const TEXT_EXTENSIONS = [".yml", ".yaml", ".sh", ".ps1", ".txt"];
+// Fixtures are invented numbers that assert formatting, not claims about the
+// engine. The sentinel itself and its siblings hold deliberate fake claims;
+// third-party license text under website/src/fonts is not ours.
+const IGNORE_PATTERNS = [
+  // Vendored or fixture dependency trees (the differential and module tests ship
+  // tracked node_modules directories).
+  /(?:^|\/)node_modules\//,
+  /(?:^|\/)__tests__\//,
+  /\.test\.[cm]?[jt]sx?$/,
+  /\.spec\.[cm]?[jt]sx?$/,
+  /\.self-test\.[cm]?[jt]sx?$/,
+  /^scripts\/test-[^/]+$/,
+  /^scripts\/check-conformance-claims\.ts$/,
+  /^website\/src\/fonts\//,
+];
+// Directories the fallback walk never enters (git-tracked discovery needs no
+// such list: it already honours .gitignore).
+const WALK_SKIP_DIRS = new Set(["node_modules", ".git", ".next", ".agent", "build", "dist", "vendor"]);
 
 // Deliberate exemptions. Add an entry only for a figure that is version-stamped
 // and sourced — never to quiet a stale number. Each entry needs a reason.
@@ -116,7 +157,23 @@ interface Allowance {
   reason: string;
 }
 
-const ALLOWLIST: Allowance[] = [];
+const ALLOWLIST: Allowance[] = [
+  {
+    // Repo-native skill, edited only when asked to change that skill. The
+    // percentage is the magnitude of benchmark runner noise, and the test262
+    // vocabulary two lines away belongs to the sentence about profile reports.
+    file: ".agents/skills/profile-report-review/SKILL.md",
+    pattern: /\(order ~10%\)/,
+    reason: "benchmark runner-noise magnitude, not a test262 figure",
+  },
+  {
+    // Repo-native skill. The "80%" is the quoted example of the stale figure
+    // the rule exists to stop, written in the sentence that states the rule.
+    file: ".agents/skills/prepare-release/SKILL.md",
+    pattern: /the kind that read "80%"/,
+    reason: "quoted as the example of what the rule forbids, not a claim",
+  },
+];
 
 const INLINE_MARKER = "conformance-claim-ok";
 
@@ -125,7 +182,19 @@ const INLINE_MARKER = "conformance-claim-ok";
 // The rule is about test262 specifically. Other suites (yaml-test-suite,
 // toml-test, JSON5) are allowed to carry version-stamped snapshots, so a
 // figure only becomes a finding when test262 is what is being described.
-const TEST262_VOCAB = /test\s?-?262|tc39\s+(?:conformance|suite)/i;
+const TEST262_VOCAB = new RegExp(
+  [
+    String.raw`test\s?-?262`,
+    // "TC39 conformance", "TC39 suite", "TC39's test suite"
+    String.raw`\btc39(?:['\u2019]s)?\s+(?:conformance|(?:test\s+)?suite)`,
+    // "ECMAScript conformance suite", "ECMAScript test suite", "ECMA-262 conformance"
+    String.raw`\becmascript\s+(?:conformance|test)\s+suite`,
+    String.raw`\becma-?\s?262\s+conformance`,
+    // "the 262 suite", "the 262 conformance suite"
+    String.raw`\b262\s+(?:conformance\s+)?suite`,
+  ].join("|"),
+  "i",
+);
 
 // The claim side. Only pass- and conformance-strength words convict: "corpus",
 // "coverage", "score", and "compatible" are ambient in this repository, and a
@@ -146,28 +215,44 @@ const CONTEXT_LINES = 3;
 
 const toRepoPath = (full: string): string => relative(ROOT, full).split("\\").join("/");
 
+/** How a file's copy is extracted: see markdownProse, sourceProse, textProse. */
+type ProseKind = "markdown" | "source" | "text";
+
+const hasExtension = (repoPath: string, extensions: string[]): boolean =>
+  extensions.some((ext) => repoPath.endsWith(ext));
+
+const baseName = (repoPath: string): string => repoPath.slice(repoPath.lastIndexOf("/") + 1);
+
 /**
  * Single source of truth for what the check covers, so the self-test can
- * assert the exclusions without touching the filesystem.
+ * assert the exclusions without touching the filesystem. Returns how the file
+ * is read, or null when it is not scanned.
  */
-const shouldScan = (repoPath: string): boolean => {
-  if (repoPath.endsWith(".md")) {
-    const segments = repoPath.split("/");
-    if (segments.length === 1) return !EXCLUDED_ROOT_MD.has(repoPath);
-    if (segments.length === 2 && segments[0] === WEB_ROOT) return !EXCLUDED_ROOT_MD.has(segments[1]);
-    if (repoPath.startsWith(`${MD_DIR}/`)) {
-      return !MD_IGNORE_PATH_PREFIXES.some((prefix) => repoPath.startsWith(prefix));
-    }
-    return false;
+const proseKindOf = (repoPath: string): ProseKind | null => {
+  if (IGNORE_PATTERNS.some((pattern) => pattern.test(repoPath))) return null;
+
+  if (hasExtension(repoPath, MARKDOWN_EXTENSIONS)) {
+    if (EXCLUDED_MD_NAMES.has(baseName(repoPath))) return null;
+    if (MD_IGNORE_PATH_PREFIXES.some((prefix) => repoPath.startsWith(prefix))) return null;
+    return "markdown";
   }
 
-  if (WEB_EXTENSIONS.some((ext) => repoPath.endsWith(ext))) {
-    if (!repoPath.startsWith(`${WEB_SRC_DIR}/`)) return false;
-    return !WEB_IGNORE_PATTERNS.some((pattern) => pattern.test(repoPath));
+  if (SOURCE_ROOTS.some((root) => repoPath.startsWith(root))) {
+    if (hasExtension(repoPath, SOURCE_EXTENSIONS)) return "source";
   }
 
-  return false;
+  if (repoPath.endsWith(".json") && JSON_PATH_PATTERNS.some((pattern) => pattern.test(repoPath))) {
+    return "source";
+  }
+
+  if (TEXT_ROOTS.some((root) => repoPath.startsWith(root)) && hasExtension(repoPath, TEXT_EXTENSIONS)) {
+    return "text";
+  }
+
+  return null;
 };
+
+const shouldScan = (repoPath: string): boolean => proseKindOf(repoPath) !== null;
 
 // -- File discovery -----------------------------------------------------------
 
@@ -211,39 +296,58 @@ interface ScanTarget {
   realPath: string;
 }
 
+/**
+ * The files git tracks plus those it would add, as repo-relative paths, or null
+ * when git is unavailable or ROOT is not a work tree. A gitignored tree (a
+ * test262 checkout, a repository copy under tmp/, build output) is therefore
+ * never entered. Any other git failure throws: walking instead would scan the
+ * ignored trees this listing exists to skip.
+ */
+const listGitFiles = (): string[] | null => {
+  const result = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+    env: { ...process.env, LC_ALL: "C" },
+  });
+  if (result.error) {
+    if ((result.error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw result.error;
+  }
+  if (result.status === 0) return result.stdout.split("\0").filter((path) => path.length > 0);
+  if (/not a git repository/i.test(result.stderr)) return null;
+  throw new Error(`git ls-files failed (exit ${result.status}): ${result.stderr.trim()}`);
+};
+
+const walkFiles = (): string[] => {
+  const paths: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!WALK_SKIP_DIRS.has(entry.name)) walk(full);
+      } else {
+        paths.push(toRepoPath(full));
+      }
+    }
+  };
+  walk(ROOT);
+  return paths;
+};
+
 const collectFiles = (): ScanTarget[] => {
   const files: ScanTarget[] = [];
   const seen = new Set<string>();
 
-  const add = (full: string): void => {
-    const repoPath = toRepoPath(full);
-    if (!shouldScan(repoPath)) return;
-    const realPath = resolveScannable(full);
-    if (realPath === null) return;
+  for (const repoPath of listGitFiles() ?? walkFiles()) {
+    if (!shouldScan(repoPath)) continue;
+    const realPath = resolveScannable(join(ROOT, repoPath));
+    if (realPath === null) continue;
     // Two paths that resolve to the same file (a symlink) are scanned once.
-    if (seen.has(realPath)) return;
+    if (seen.has(realPath)) continue;
     seen.add(realPath);
     files.push({ repoPath, realPath });
-  };
-
-  const walk = (dir: string, recurse: boolean): void => {
-    if (!existsSync(dir)) return;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!recurse) continue;
-        if (entry.name === "node_modules" || entry.name === ".next") continue;
-        walk(full, true);
-      } else {
-        add(full);
-      }
-    }
-  };
-
-  walk(ROOT, false);
-  walk(join(ROOT, WEB_ROOT), false);
-  walk(join(ROOT, MD_DIR), true);
-  walk(join(ROOT, WEB_SRC_DIR), true);
+  }
 
   return files;
 };
@@ -425,17 +529,53 @@ const stripComments = (lines: string[]): string[] => {
   return stripped;
 };
 
+const LITERAL_RE = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
+
+/** A literal's visible text: `${...}` expressions leave nothing behind. */
+const literalText = (match: RegExpMatchArray): string =>
+  (match[1] ?? match[2] ?? match[3] ?? "").replace(/\$\{[^}]*\}/g, " ");
+
+/**
+ * Literals joined by `+` read as one string: `"88" + ".4%"` shows the reader
+ * 88.4%, and no single literal holds it. A chain that continues onto the next
+ * line (`"88" +\n ".4%"`) is followed too, and reported at the line it starts
+ * on. Only chains of two or more literals are returned; a lone literal is
+ * already a span of its own.
+ */
+const concatenatedLiterals = (lines: string[], start: number): string[] => {
+  let joined = lines[start];
+  for (let next = start + 1; next < lines.length && next < start + 8 && /\+\s*$/.test(joined); next++) {
+    joined += " " + lines[next].trim();
+  }
+
+  const chains: string[] = [];
+  let chain: string[] = [];
+  let end = -1;
+  const flush = (): void => {
+    if (chain.length > 1) chains.push(chain.join(""));
+    chain = [];
+  };
+
+  for (const match of joined.matchAll(LITERAL_RE)) {
+    const gap = end === -1 ? "" : joined.slice(end, match.index);
+    if (!/^\s*\+\s*$/.test(gap)) flush();
+    chain.push(literalText(match));
+    end = match.index + match[0].length;
+  }
+  flush();
+
+  return chains;
+};
+
 const sourceProse = (rawLines: string[]): LineProse[] => {
   const prose: LineProse[] = [];
-  const literalRe = /"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
   const lines = stripComments(rawLines);
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
     const spans: string[] = [];
 
-    for (const m of line.matchAll(literalRe)) {
-      const literal = m[1] ?? m[2] ?? m[3] ?? "";
-      const text = literal.replace(/\$\{[^}]*\}/g, " ");
+    for (const m of line.matchAll(LITERAL_RE)) {
+      const text = literalText(m);
       if (text.trim() === "") continue;
       // A letterless literal is only copy when it sits in a data position. In a
       // layout position it is a CSS value, and in a computed expression it is a
@@ -444,11 +584,17 @@ const sourceProse = (rawLines: string[]): LineProse[] => {
       spans.push(text);
     }
 
-    const jsxText = line
-      .replace(literalRe, " ")
-      .replace(/\{[^}]*\}/g, " ")
-      .replace(/<[^>]*>?/g, " ");
-    if (jsxText.trim() !== "") spans.push(jsxText);
+    spans.push(...concatenatedLiterals(lines, index));
+
+    const withoutLiterals = line.replace(LITERAL_RE, " ").replace(/\{[^}]*\}/g, " ");
+    const jsxText = withoutLiterals.replace(/<[^>]*>?/g, " ");
+    if (jsxText.trim() !== "") {
+      spans.push(jsxText);
+      // Adjacent text nodes split by a tag (`<b>88</b>.4%`) read as one
+      // figure on the page, so the tags are also read as nothing at all.
+      const tight = withoutLiterals.replace(/<[^>]*>?/g, "");
+      if (tight !== jsxText && tight.trim() !== "") spans.push(tight);
+    }
 
     // No inline-code notion in TypeScript: what a reader sees is exactly the
     // literal and JSX text already extracted, so both readings coincide.
@@ -457,6 +603,18 @@ const sourceProse = (rawLines: string[]): LineProse[] => {
 
   return prose;
 };
+
+/**
+ * YAML and shell: the whole line, minus whole-line `#` comments. The copy in a
+ * workflow lives in `run:` and `script:` block scalars (markdown assembled for
+ * a pull-request comment), which have no literal syntax worth parsing.
+ */
+const textProse = (lines: string[]): LineProse[] =>
+  lines.map((line) => {
+    if (/^\s*#(?:\s|$)/.test(line) || line.trim() === "") return EMPTY_PROSE;
+    const visible = line.replace(/https?:\/\/\S+/g, " ");
+    return { spans: [visible], context: visible };
+  });
 
 // Expression positions: a letterless literal here is produced or chosen by
 // code, and the visible number comes from the computation next to it.
@@ -469,8 +627,51 @@ const CSS_CONTEXT =
 
 // -- Claim detection ----------------------------------------------------------
 
-const PERCENT_RE = /\d{1,3}(?:\.\d+)?\s*(?:%|percent\b)/gi;
-const COUNT_RE = /\d{1,3}(?:[,\u202F]\d{3})+|\d{4,}/g;
+// The digits must not be glued to a word: "test262 %" is the suite's name, not
+// 262 percent.
+const PERCENT_RE = /(?<![\w.])\d{1,3}(?:\.\d+)?\s*(?:%|percent\b)/gi;
+// Grouped counts: comma, period (41.765), or a (thin, no-break) space between
+// the groups, and bare runs of four or more digits.
+const COUNT_RE = /\d{1,3}(?:(?:[,.\u00A0\u2009\u202F])\d{3})+|\d{4,}/g;
+// A bare three-digit number is too common to convict on its own ("500 ms",
+// "port 443"); it is a pass count only when a pass word sits right beside it:
+// "passes 940 of the language tests", "940 tests pass".
+const BARE_COUNT_RE = /(?<![\w.,-])\d{3}(?![\w%-]|[.,]\d)/g;
+const BARE_COUNT_BEFORE = /\bpass(?:es|ed|ing)?\W+(?:(?:about|around|exactly|just|nearly|only|over|roughly)\W+)?$/i;
+const BARE_COUNT_AFTER =
+  /^\W*(?:of\b|(?:[a-z-]+\W+){0,3}(?:tests?|cases?|checks?|specs?)\W+pass(?:es|ed|ing)?\b)/i;
+
+// A fraction or ratio says the same thing as a percentage in other words:
+// "four fifths of the corpus", "9 in 10", "9/10 of the tests". A numerator
+// is required, so "half the work" in unrelated prose is not a shape.
+const FRACTION_WORDS =
+  "(?:half|halves|thirds?|quarters?|fourths?|fifths?|sixths?|sevenths?|eighths?|ninths?|tenths?)";
+const NUMBER_WORDS = "(?:one|two|three|four|five|six|seven|eight|nine|ten)";
+const NUMBER_WORD_VALUES: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twenty: 20,
+};
+
+/** A ratio term written as digits or as a word ("9", "nine"). */
+const ratioTermValue = (term: string): number =>
+  /^\d+$/.test(term) ? Number(term) : NUMBER_WORD_VALUES[term.toLowerCase()];
+const FRACTION_RE = new RegExp(
+  [
+    // "four fifths", "nine-tenths", "three quarters", "one half"
+    String.raw`\b${NUMBER_WORDS}[-\s]+${FRACTION_WORDS}\b`,
+    // "9 in 10", "nine out of ten", "19 out of 20" — the terms are checked in code
+    String.raw`(?<![\w.,/-])(?:\d{1,2}|${NUMBER_WORDS})\s+(?:in|out\s+of)\s+(?:\d{1,3}|${NUMBER_WORDS}|twenty)\b(?![.,]?\d)`,
+    // "9/10"
+    String.raw`(?<![\w.,/-])\d{1,2}/(?:2|3|4|5|6|8|10|20)\b(?![\w/-])`,
+  ].join("|"),
+  "gi",
+);
+
+// Strength claims with no number in them. A hedged measured state ("nearly all
+// of test262", "near-complete conformance") is a hand-typed result exactly as a
+// percentage is, and goes stale the same way. Unhedged "full conformance" is
+// not listed: it is the project's stated target, not a measurement.
+const STRENGTH_RE =
+  /\bnear(?:ly)?[-\s]+(?:complete|perfect|total|full|universal)\b|\b(?:nearly|almost|virtually|practically|essentially|effectively|basically)\s+(?:all|every(?:thing)?|complete(?:ly)?|entire(?:ly)?|full(?:y)?|perfect(?:ly)?|conformant|compliant)\b|\b(?:vast|overwhelming)\s+majority\b/i;
 
 // A ceiling or floor describes the scale, not a measurement: "Areas closest to
 // 100%", "**below 100%**". Bare "to"/"reached" are deliberately absent — "the
@@ -511,6 +712,19 @@ const findClaimsInSpan = (span: string, countsAllowed: boolean): { claim: string
     });
   }
 
+  for (const m of span.matchAll(FRACTION_RE)) {
+    const ratio = m[0].match(/^(\w+)\s+(?:in|out\s+of)\s+(\w+)$/i);
+    // "5 in 1000" is not a ratio claim and "10 in 5" is not a fraction.
+    if (ratio !== null) {
+      const [numerator, denominator] = [ratioTermValue(ratio[1]), ratioTermValue(ratio[2])];
+      if (!(numerator < denominator && denominator <= 100)) continue;
+    }
+    claims.push({
+      claim: m[0].replace(/\s+/g, " ").trim(),
+      reason: "hand-typed conformance fraction",
+    });
+  }
+
   if (countsAllowed) {
     for (const m of span.matchAll(COUNT_RE)) {
       const digits = m[0];
@@ -518,7 +732,9 @@ const findClaimsInSpan = (span: string, countsAllowed: boolean): { claim: string
       const after = textAfter(m.index + digits.length);
       // Version pins, flag values, SHAs, paths, and decimal tails.
       if (/[=#/\w.-]$/.test(before)) continue;
-      if (/^[\d.-]/.test(after)) continue;
+      if (/^(?:\.\d|[\d-])/.test(after)) continue;
+      // A percentage is reported by the percentage rule.
+      if (/^\s*(?:%|percent\b)/i.test(after)) continue;
       if (DATE_LIKE.test(`${before.slice(-6)}${digits}${after}`)) continue;
       // Unit-suffixed numbers are durations and sizes, not corpus counts.
       if (COUNT_SUFFIX_UNITS.test(after.trimStart())) continue;
@@ -528,9 +744,27 @@ const findClaimsInSpan = (span: string, countsAllowed: boolean): { claim: string
       if (DENOMINATOR_PREFIX.test(before)) continue;
       claims.push({ claim: digits, reason: "hand-typed conformance pass count" });
     }
+
+    for (const m of span.matchAll(BARE_COUNT_RE)) {
+      const digits = m[0];
+      if (DENOMINATOR_PREFIX.test(textBefore(m.index))) continue;
+      if (COUNT_SUFFIX_UNITS.test(textAfter(m.index + digits.length).trimStart())) continue;
+      if (
+        BARE_COUNT_BEFORE.test(textBefore(m.index)) ||
+        BARE_COUNT_AFTER.test(span.slice(m.index + digits.length, m.index + digits.length + 40))
+      ) {
+        claims.push({ claim: digits, reason: "hand-typed conformance pass count" });
+      }
+    }
   }
 
   return claims;
+};
+
+const findStrengthClaims = (span: string): { claim: string; reason: string }[] => {
+  const match = span.match(STRENGTH_RE);
+  if (match === null) return [];
+  return [{ claim: match[0].replace(/\s+/g, " ").trim(), reason: "hand-typed conformance strength claim" }];
 };
 
 // -- Allowlist ----------------------------------------------------------------
@@ -579,7 +813,9 @@ const allowanceFor = (repoPath: string, lines: string[], index: number): Allowed
 
 const analyzeContent = (repoPath: string, content: string): Finding[] => {
   const lines = content.split("\n");
-  const prose = repoPath.endsWith(".md") ? markdownProse(lines) : sourceProse(lines);
+  const kind = proseKindOf(repoPath);
+  const prose =
+    kind === "markdown" ? markdownProse(lines) : kind === "text" ? textProse(lines) : sourceProse(lines);
   const findings: Finding[] = [];
 
   for (const [i, line] of prose.entries()) {
@@ -598,10 +834,15 @@ const analyzeContent = (repoPath: string, content: string): Finding[] => {
       .join("\n");
 
     if (!TEST262_VOCAB.test(context)) continue;
-    if (!CLAIM_VOCAB.test(context)) continue;
 
+    // A strength claim ("nearly all of test262") needs no pass word beside it:
+    // the hedge is the claim. Numbers still need pass- or conformance-strength
+    // vocabulary, so an unrelated figure is not convicted by the suite name.
     const countsAllowed = PASS_WORD.test(context);
-    const claims = line.spans.flatMap((span) => findClaimsInSpan(span, countsAllowed));
+    const numeric = CLAIM_VOCAB.test(context)
+      ? line.spans.flatMap((span) => findClaimsInSpan(span, countsAllowed))
+      : [];
+    const claims = [...numeric, ...line.spans.flatMap(findStrengthClaims)];
     if (claims.length === 0) continue;
 
     const allowed = allowanceFor(repoPath, lines, i);
@@ -892,6 +1133,286 @@ const SELF_TEST_CASES: SelfTestCase[] = [
       "const enabled = true;\n",
     expected: 1,
   },
+  // -- Claim shapes the first battery missed -----------------------------------
+  {
+    name: "a test262 name glued to a percent sign is not 262 percent",
+    path: "docs/demo.md",
+    content: "A hand-typed test262 % is a finding when the pass rate is quoted.\n",
+    expected: 0,
+  },
+  {
+    name: "a count ending the sentence is still a count",
+    path: "docs/demo.md",
+    content: "GocciaScript passes 41,765 test262 tests.\n",
+    expected: 1,
+    claims: ["41,765"],
+  },
+  {
+    name: "period-grouped count is caught",
+    path: "docs/demo.md",
+    content: "The engine passes 41.765 of the test262 tests.\n",
+    expected: 1,
+    claims: ["41.765"],
+  },
+  {
+    name: "thin-space-grouped count is caught",
+    path: "docs/demo.md",
+    content: "The engine passes 41\u2009765 of the test262 tests.\n",
+    expected: 1,
+    claims: ["41\u2009765"],
+  },
+  {
+    name: "three-digit count beside a pass word is caught",
+    path: "docs/demo.md",
+    content: "GocciaScript passes 940 of the language tests in test262.\n",
+    expected: 1,
+    claims: ["940"],
+  },
+  {
+    name: "three-digit count trailing a pass word is caught",
+    path: "docs/demo.md",
+    content: "In test262, 940 language tests pass today.\n",
+    expected: 1,
+    claims: ["940"],
+  },
+  {
+    name: "three-digit duration and port beside test262 stay clean",
+    path: "docs/demo.md",
+    content: "The test262 runner uses port 443 and passes a 500 ms timeout to every test.\n",
+    expected: 0,
+  },
+  {
+    name: "a three-digit count ending the sentence is caught",
+    path: "docs/demo.md",
+    content: "On the pinned test262 run, GocciaScript passes 940.\n",
+    expected: 1,
+    claims: ["940"],
+  },
+  {
+    name: "a three-digit count followed by a comma is caught",
+    path: "docs/demo.md",
+    content: "test262 passed 940, failed 12 on the pinned run.\n",
+    expected: 1,
+    claims: ["940"],
+  },
+  {
+    name: "a three-digit decimal tail beside a pass word stays clean",
+    path: "docs/demo.md",
+    content: "The test262 runner passes 940.5 ms of budget.\n",
+    expected: 0,
+  },
+  {
+    name: "three-digit count with no pass word nearby stays clean",
+    path: "docs/demo.md",
+    content: "The test262 conformance job runs on 120 shards.\n",
+    expected: 0,
+  },
+  {
+    name: "spelled-out fraction is caught",
+    path: "docs/demo.md",
+    content: "GocciaScript passes four fifths of the test262 corpus.\n",
+    expected: 1,
+    claims: ["four fifths"],
+  },
+  {
+    name: "N-in-M ratio with digits is caught",
+    path: "docs/demo.md",
+    content: "9 in 10 test262 tests pass.\n",
+    expected: 1,
+    claims: ["9 in 10"],
+  },
+  {
+    name: "a spelled-out N out of M ratio is caught",
+    path: "docs/demo.md",
+    content: "Nine out of ten test262 tests pass.\n",
+    expected: 1,
+    claims: ["Nine out of ten"],
+  },
+  {
+    name: "a spelled-out numerator over a numeric denominator is caught",
+    path: "docs/demo.md",
+    content: "Nine in 10 test262 tests pass.\n",
+    expected: 1,
+    claims: ["Nine in 10"],
+  },
+  {
+    name: "a spelled-out ratio without test262 vocabulary stays clean",
+    path: "docs/demo.md",
+    content: "One in ten sample files pass the linter.\n",
+    expected: 0,
+  },
+  {
+    name: "a spelled-out ratio that is not below one stays clean",
+    path: "docs/demo.md",
+    content: "The test262 job passes ten in ten shards, then three in two retries.\n",
+    expected: 0,
+  },
+  {
+    name: "slash fraction is caught",
+    path: "docs/demo.md",
+    content: "About 9/10 of the test262 tests pass.\n",
+    expected: 1,
+    claims: ["9/10"],
+  },
+  {
+    name: "fraction wording without test262 stays clean",
+    path: "docs/demo.md",
+    content: "Four fifths of the sample files pass the linter, 9 in 10 within a day.\n",
+    expected: 0,
+  },
+  {
+    name: "a fraction word with no numerator stays clean",
+    path: "docs/demo.md",
+    content: "The test262 conformance work is half done by design: halves of the pass criteria.\n",
+    expected: 0,
+  },
+  {
+    name: "a ratio that is not a fraction of the corpus stays clean",
+    path: "docs/demo.md",
+    content: "The test262 pass job retries 3 in 2000 flaky runs.\n",
+    expected: 0,
+  },
+  {
+    name: "hedged strength claim is caught without a number",
+    path: "docs/demo.md",
+    content: "GocciaScript has near-complete conformance with the language tests in test262.\n",
+    expected: 1,
+    claims: ["near-complete"],
+  },
+  {
+    name: "virtually-all strength claim is caught with no pass word",
+    path: "website/src/components/demo.tsx",
+    content: "<p>\n  Virtually all of test262 runs green.\n</p>\n",
+    expected: 1,
+    claims: ["Virtually all"],
+  },
+  {
+    name: "strength wording without test262 stays clean",
+    path: "docs/demo.md",
+    content: "Nearly all of the sample files pass, a near-complete rewrite of the loader.\n",
+    expected: 0,
+  },
+  {
+    name: "an unhedged target is not a measurement",
+    path: "docs/demo.md",
+    content: "The target is full test262 conformance in every mode.\n",
+    expected: 0,
+  },
+  {
+    name: "TC39's test suite is test262 vocabulary",
+    path: "docs/demo.md",
+    content: "TC39\u2019s test suite passes at 88.4% today.\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "the ECMAScript conformance suite is test262 vocabulary",
+    path: "docs/demo.md",
+    content: "The ECMAScript conformance suite pass rate is 88.4%.\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "ECMA-262 conformance is test262 vocabulary",
+    path: "docs/demo.md",
+    content: "ECMA-262 conformance sits at 88.4%.\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "the 262 suite is test262 vocabulary",
+    path: "docs/demo.md",
+    content: "The 262 suite pass rate is 88.4%.\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "ECMAScript conformance alone is not test262 vocabulary",
+    path: "docs/demo.md",
+    content: "ECMAScript conformance matters: the parser passes 88.4% of its own cases.\n",
+    expected: 0,
+  },
+  {
+    name: "concatenated literals are read as one figure",
+    path: "website/src/lib/demo.ts",
+    content: 'const COPY = "test262 pass rate: " + "88" + ".4%";\n',
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "a figure split across a concatenation line break is caught",
+    path: "website/src/lib/demo.ts",
+    content: 'const COPY = "test262 pass rate: 88" +\n  ".4%";\n',
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "a computed value between literals leaves no figure",
+    path: "website/src/lib/demo.ts",
+    content: 'const COPY = "test262 pass rate: " + rate + "%";\n',
+    expected: 0,
+  },
+  {
+    name: "adjacent JSX text nodes are read as one figure",
+    path: "website/src/components/demo.tsx",
+    content: "<p>test262 pass rate <b>88</b>.4%</p>\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "a script that builds a posted comment is scanned",
+    path: "scripts/run_test262_suite.ts",
+    content: "body += `The test262 pass rate is 88.4% on main.`;\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "a script's generated figure leaves no literal",
+    path: "scripts/run_test262_suite.ts",
+    content: "body += `The test262 pass rate is ${rate.toFixed(1)}% on main.`;\n",
+    expected: 0,
+  },
+  {
+    name: "inline github-script markdown in a workflow is scanned",
+    path: ".github/workflows/ci.yml",
+    content: "        run: |\n          echo '| test262 | pass rate | 88.4% |'\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "a workflow comment is not published copy",
+    path: ".github/workflows/ci.yml",
+    content: "      # The test262 pass rate was 88.4% when this was written.\n      - uses: actions/checkout\n",
+    expected: 0,
+  },
+  {
+    name: "a skill document is scanned",
+    path: ".agents/skills/demo/SKILL.md",
+    content: "The test262 pass rate is 88.4% today.\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "a subdirectory README is scanned",
+    path: "benchmarks/README.md",
+    content: "The test262 pass rate is 88.4% today.\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "package metadata is scanned",
+    path: "website/package.json",
+    content: '{ "description": "GocciaScript passes 88.4% of test262" }\n',
+    expected: 1,
+    claims: ["88.4%"],
+  },
+  {
+    name: "a markdown file under website/src is scanned as markdown",
+    path: "website/src/content/docs/demo.mdx",
+    content: "The test262 pass rate is 88.4% today.\n",
+    expected: 1,
+    claims: ["88.4%"],
+  },
 ];
 
 const SELF_TEST_PATHS: { path: string; scanned: boolean }[] = [
@@ -907,7 +1428,33 @@ const SELF_TEST_PATHS: { path: string; scanned: boolean }[] = [
   { path: "website/src/lib/site-markdown.ts", scanned: true },
   { path: "website/src/__tests__/test262-dashboard.test.ts", scanned: false },
   { path: "website/src/lib/positioning.spec.ts", scanned: false },
-  { path: "scripts/run_test262_suite.ts", scanned: false },
+  { path: "scripts/run_test262_suite.ts", scanned: true },
+  { path: "scripts/aggregate_benchmark_profiles.ts", scanned: true },
+  { path: "scripts/awfy-comment.js", scanned: true },
+  { path: "scripts/check-conformance-claims.ts", scanned: false },
+  { path: "scripts/doc-checks/markdown-files.self-test.ts", scanned: false },
+  { path: "scripts/test-cli.ts", scanned: false },
+  { path: "scripts/test-skill-inventory-validator.js", scanned: false },
+  { path: ".agents/skills/prepare-release/SKILL.md", scanned: true },
+  { path: ".github/pull_request_template.md", scanned: true },
+  { path: ".github/ISSUE_TEMPLATE/bug_report.yml", scanned: true },
+  { path: ".github/workflows/ci.yml", scanned: true },
+  { path: ".github/scripts/publish-website-report.sh", scanned: true },
+  { path: ".github/delivery/review-automations.json", scanned: true },
+  { path: "benchmarks/README.md", scanned: true },
+  { path: "source/units/README.md", scanned: true },
+  { path: "website/package.json", scanned: true },
+  { path: "website/public/install.sh", scanned: true },
+  { path: "scripts/differential/mods/nodemods/node_modules/alpha/index.js", scanned: false },
+  { path: "tests/language/modules/node-modules/node_modules/pkg-main/package.json", scanned: false },
+  { path: "website/src/content/docs/intro.mdx", scanned: true },
+  { path: "website/src/fonts/ibm-plex-sans/OFL.txt", scanned: false },
+  { path: "website/content/docs/intro.md", scanned: false },
+  { path: "website/CHANGELOG.md", scanned: false },
+  { path: "docs/adr/0176-performance.md", scanned: false },
+  { path: "tests/language/example.js", scanned: false },
+  { path: "source/units/Goccia.Engine.pas", scanned: false },
+  { path: "source/generated/data.json", scanned: false },
 ];
 
 /**

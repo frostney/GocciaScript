@@ -46,3 +46,5 @@ recursion bounds, and exception semantics remain in force.
 
 [Win32 exception metadata](../contributing/win32-safeseh.md) owns the build and
 re-audit procedure.
+
+**Refined by [ADR 0180](0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md):** a reviewed `source-nonseh` routine is pinned to the SHA-256 of its own implementation, not its whole source file.

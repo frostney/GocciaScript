@@ -8,7 +8,7 @@
 - **Optional enforcement** — `--strict-types` checks supported annotations at runtime; it is a runtime contract, not a static structural checker such as `tsc`
 - **Extension decides `<`** — A leading `<` is read as JSX or as a type parameter list by file extension, modeled on TypeScript with GocciaScript-specific extension rules (JSX is also recognized in `.js` and `.mjs`, and never in `.ts` or `.mts`)
 - **Restricted `!` productions** — Definite assignment and non-null assertions must sit on the same line as their operand, so ASI code keeps its usual meaning
-- **Bounded surface** — Namespaces, parameter properties, angle-bracket assertions, class-field definite assignment, and generic async arrows are deliberately unsupported
+- **Bounded surface** — Namespaces, parameter properties, angle-bracket assertions, and class-field definite assignment are deliberately unsupported
 
 The annotation surface is part of GocciaScript's language profile; see
 [Language](language.md) for the ECMAScript baseline it sits on and
@@ -70,9 +70,24 @@ const nonNull = { v: "x" };
 nonNull.v!.length;
 const firstY = [{ y: 1 }][0]!.y;
 
-// Generic arrow function expressions
+// Generic arrow function expressions, async ones included
 const identity = <T,>(v: T): T => v;
 const withDefault = <T = string,>(v: T): T => v;
+const load = async <T,>(read: () => Promise<T>): Promise<T> => read();
+
+// A `this` parameter types `this`; it is not a parameter at run time, so
+// `Counter.prototype.total.length` is 1. Overload signatures (erased) are a
+// function or method header with no body, ended by `;` or, under ASI, a line
+// break; the implementation keeps its own parameters, so
+// `Counter.prototype.pick.length` is 1. Both also
+// work on `function` declarations under `--compat-function`.
+class Counter {
+  base = 2;
+  total(this: Counter, extra: number) { return this.base + extra; }
+  pick(text: string): string;
+  pick(count: number): number;
+  pick(value: string | number) { return value; }
+}
 
 // Type and interface declarations (skipped entirely)
 type Point = { x: number, y: number };
@@ -98,6 +113,14 @@ export interface Serializable {
   toJSON(): string;
 }
 
+// Ambient declarations (skipped entirely): `declare` before a variable,
+// function, class, enum, module, `global` or namespace on the same line.
+// They bind nothing at run time; `declare` alone is still an identifier.
+declare const process: { env: Record<string, string | undefined> };
+declare module "virtual:assets" { const url: string; export default url; }
+declare global { interface Window { app: unknown } }
+export declare function helper(name: string): void;
+
 // Runtime-erased as, satisfies, and generic constructor syntax
 const asserted = 42 as number;
 const colors = ["red", "green"] as const satisfies Array<string>;
@@ -122,7 +145,7 @@ A type-level statement erased this way still has a kind of its own in [`goccia:a
 
 A leading `<` is ambiguous: it can open a JSX element or a type parameter list. GocciaScript resolves this by file extension — modeled on TypeScript's `.ts`/`.mts` versus `.tsx` rule, with GocciaScript-specific extensions: JSX is also recognized (with a warning) in `.js` and `.mjs` sources.
 
-- **`.ts`, `.mts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations parse here, as does every *supported* generic arrow form — including the bare `<T>` the JSX extensions cannot take. Generic **async** arrows are unsupported in every extension; see [Not Supported](#not-supported).
+- **`.ts`, `.mts`** — JSX is never recognised, so `<` is always type syntax. Generic function type annotations parse here, as does every generic arrow form — including the bare `<T>` the JSX extensions cannot take. A generic arrow can be `async`: `async <T>(v: T) => v` here, and `async <T,>(v: T) => v` in the JSX extensions below.
 
   ```typescript
   const identity: <T>(x: T) => T = (x) => x;
@@ -139,6 +162,13 @@ A leading `<` is ambiguous: it can open a JSX element or a type parameter list. 
   ```
 
   Use a `.ts` or `.mts` source when an annotation needs the bare `<T>` form.
+
+  An element's tag can carry type arguments, as in TypeScript's `.tsx`. They are erased, in every extension above, so the element is the same call it is without them. A tag name followed by `<` always opens type arguments, because no type parameter list is written that way. As in TypeScript, a `<` on the line after an expression continues that expression, so `a` followed by `<b<c>d` on the next line is a comparison. The JSX transformer does not parse statements, so it reads every line break after a name, literal, `)`, `]` or `}` that way, including after `if (ok)`, `else` or a block: there a typed element that starts a statement is written in parentheses or after a `;`. A closing tag takes none.
+
+  ```javascript
+  const choice = <Select<Option> items={options} />;
+  const list = <List<number>>{items}</List>;
+  ```
 
 ## Arrow Return Types in Conditionals
 
@@ -165,4 +195,3 @@ Both `!` forms are restricted productions: the `!` must appear on the same line 
 - Parameter properties in constructors (`constructor(public x: number)`).
 - Angle-bracket type assertions (`<string>value`) — use `value as string` instead.
 - Definite assignment assertions on class fields (`class C { x!: number }`) — only variable declarations accept `!`.
-- Generic **async** arrow expressions (`async <T,>(v: T) => v`) — the generic form is wired into primary-expression position only, so the `async` prefix is not recognised ahead of it.
