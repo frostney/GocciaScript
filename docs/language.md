@@ -427,7 +427,7 @@ const el = <div className="active">Hello {name}</div>;
 // Transformed to: createElement("div", { className: "active" }, "Hello ", name)
 ```
 
-**Supported syntax:** Elements, self-closing tags (`<br />`), fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX in expressions, dotted component names (`<Foo.Bar />`). Namespaced attribute names (`xlink:href`) and non-ASCII attribute names are **not** supported; both are reported as an unsupported-attribute-syntax `SyntaxError`.
+**Supported syntax:** Elements, self-closing tags (`<br />`), fragments (`<>...</>`), string/expression/boolean attributes, spread attributes (`{...props}`), shorthand props (`<div {value} />` → `value={value}`), expression children (`{expr}`), nested JSX in expressions, dotted component names (`<Foo.Bar />`), and TypeScript type arguments on an opening or self-closing tag (`<Select<string> value="a" />`), which are erased (see [Angle Brackets and JSX](type-annotations.md#angle-brackets-and-jsx)). Namespaced attribute names (`xlink:href`) and non-ASCII attribute names are **not** supported; both are reported as an unsupported-attribute-syntax `SyntaxError`.
 
 Lowercase tags produce string tag names (`"div"`, `"span"`); uppercase tags are passed as identifier references (component functions/classes).
 

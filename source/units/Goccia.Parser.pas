@@ -18,6 +18,7 @@ uses
   Goccia.Lexer,
   Goccia.Modules,
   Goccia.NestingLimit,
+  Goccia.OriginMap,
   Goccia.Parser.TypeRanges,
   Goccia.Profiler.Compile,
   Goccia.Scope.BindingMap,
@@ -122,6 +123,9 @@ type
     // comparison chain in JavaScript. Resolved once from the source file's
     // extension; see IsTypeScriptExtension.
     FAllowsTypeScriptOnlySyntax: Boolean;
+    // Which text a preprocessor wrote rather than copied; nil when nothing
+    // rewrote the source. Not owned.
+    FPreprocessorOriginMap: TGocciaOriginMap;
     // The source offsets of '<' tokens that TryCollectCallExpressionTypeArguments
     // knows do not start call-site type arguments (RememberNotTypeArguments).
     FNotTypeArgumentStarts: THashMap<Integer, Boolean>;
@@ -440,6 +444,7 @@ type
       out ATypeArguments: TGocciaTypeRangeArray): Boolean;
     function TryCollectCallExpressionTypeArguments(
       out ATypeArguments: TGocciaTypeRangeArray): Boolean;
+    function FollowsPreprocessorText: Boolean;
     procedure RememberNotTypeArguments(const AFirst: Integer;
       const AEndsInLexError: Boolean; const AConstructor: Boolean = False);
     function TryParseGenericArrowFunction(
@@ -567,6 +572,12 @@ type
     procedure ApplyOptions(const AOptions: TGocciaParserOptions);
     function Options: TGocciaParserOptions;
     property WarningCount: Integer read FWarningCount;
+    { The map of the preprocessor that rewrote the source, if one did. The
+      JSX transformer writes an element's type arguments after the call it
+      writes, so a '<' after text it wrote opens type arguments in any file
+      (TryCollectCallExpressionTypeArguments). }
+    property PreprocessorOriginMap: TGocciaOriginMap
+      read FPreprocessorOriginMap write FPreprocessorOriginMap;
     { With DetectModuleGoal: whether the last Parse found a top-level import
       or export declaration, so the source is a Module. }
     property AmbiguousTopLevelAwait: Boolean read FAmbiguousTopLevelAwait;
@@ -10924,9 +10935,10 @@ end;
 //     `Foo<-1>(x)`, whose negative numeric literal type TypeScript does accept
 //     — the safe direction, since the fallback is the comparison reading.
 //
-// The probe only runs for TypeScript source (FAllowsTypeScriptOnlySyntax).
-// GocciaScript erases type syntax in JavaScript files too, but call-site type
-// arguments are the one construct that collides with a valid JavaScript
+// The probe runs for TypeScript source (FAllowsTypeScriptOnlySyntax), and
+// in any source for a JSX element's type arguments (below). GocciaScript
+// erases type syntax in JavaScript files too, but call-site type arguments
+// are the one construct that collides with a valid JavaScript
 // reading: `a < b > (c)` is a comparison chain in a `.js` file and a generic
 // call in a `.ts` file. tsc, esbuild and bun all draw the line at the file
 // extension, and so does the Type Annotations proposal, which leaves generic
@@ -10936,25 +10948,36 @@ end;
 // would see, and decides those that would fail too
 // (RememberNotTypeArguments), so a chain such as `a < b < c < ...` is scanned
 // once rather than once per operator.
+//
+// A JSX element's type arguments (`<Foo<string> />`) reach the parser as the
+// type arguments of the call the JSX transformer writes for the element:
+// `createElement<string>(Foo, null)`. Nothing the file wrote can put a '<'
+// after that callee, so in any file the '<' opens type arguments, and the
+// transformer has already matched its '>'. Neither the extension check nor
+// the expression-token denylist applies there: `<Foo<-1> />` is as valid as
+// `<Foo<string> />`, and a comparison reading of either would be wrong. For
+// the same reason the probe steps over a template literal type there whole,
+// and its memo of failed probes, which counts tokens, is not consulted.
 function TGocciaParser.TryCollectCallExpressionTypeArguments(
   out ATypeArguments: TGocciaTypeRangeArray): Boolean;
 var
   BracketDepth, Depth: Integer;
-  HasTypeArgument, LexError: Boolean;
+  HasTypeArgument, LexError, ElementTypeArguments: Boolean;
   SavedCurrent: Integer;
   SavedLexer: TGocciaLexerCheckpoint;
   TokenType: TGocciaTokenType;
 begin
   Result := False;
   ATypeArguments := nil;
-  if not FAllowsTypeScriptOnlySyntax then
+  ElementTypeArguments := FollowsPreprocessorText;
+  if not FAllowsTypeScriptOnlySyntax and not ElementTypeArguments then
     Exit;
 
   // A probe that failed further left may have decided this one already
   // (RememberNotTypeArguments). Its answer holds when this probe would lex
   // every token after the '<' itself, as that one did: no token after it has
   // been lexed yet.
-  if Assigned(FNotTypeArgumentStarts) and (FCurrent < FTokens.Count) and
+  if not ElementTypeArguments and Assigned(FNotTypeArgumentStarts) and (FCurrent < FTokens.Count) and
      (not Assigned(FLexer) or (FCurrent = FTokens.Count - 1)) and
      (FTokens[FCurrent].TokenType = gttLess) and
      FNotTypeArgumentStarts.ContainsKey(FTokens[FCurrent].Span.StartOffset) then
@@ -10976,7 +10999,7 @@ begin
       repeat
         TokenType := PeekWithLexicalGoal(glgInputElementDiv).TokenType;
 
-        if (Depth = 1) and (BracketDepth = 0) and
+        if not ElementTypeArguments and (Depth = 1) and (BracketDepth = 0) and
           (TokenType in EXPRESSION_ONLY_TYPE_ARGUMENT_TOKENS) then
           Exit;
 
@@ -10996,6 +11019,18 @@ begin
               Dec(BracketDepth);
               if BracketDepth < 0 then
                 Exit;
+            end;
+          gttTemplateHead:
+            begin
+              HasTypeArgument := True;
+              // An element's template literal type, `t${string}`, whose
+              // substitution's closing brace only the template-tail goal
+              // lexes as such. A written comparison keeps its template.
+              if ElementTypeArguments then
+              begin
+                SkipTemplateLiteral;
+                Continue;
+              end;
             end;
         else
           HasTypeArgument := True;
@@ -11032,6 +11067,24 @@ begin
         FLexer.RestoreCheckpoint(SavedLexer);
     end;
   end;
+end;
+
+// Whether the token before the current one ends in text a preprocessor
+// wrote: the JSX transformer's factory callee, before the type arguments it
+// copies, whatever the factory is (`h`, `React.createElement`, `lib.default`).
+// The transformer anchors both edges of every construct it rewrites whole,
+// so the `)` that closes an element ends exactly where the element does, and
+// `<A /> < b > (c)` is still a comparison. The factory callee is the one
+// written text that ends with no anchor and runs into copied text.
+function TGocciaParser.FollowsPreprocessorText: Boolean;
+var
+  OriginalEnd: Integer;
+begin
+  if not Assigned(FPreprocessorOriginMap) or (FCurrent <= 0) or
+     (FCurrent > FTokens.Count) then
+    Exit(False);
+  Result := not FPreprocessorOriginMap.Map(
+    FTokens[FCurrent - 1].Span.EndOffset, obEnd, OriginalEnd);
 end;
 
 // A failed probe has scanned the tokens from AFirst to the end of the token
