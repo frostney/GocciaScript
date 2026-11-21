@@ -385,9 +385,12 @@ begin
     end;
   end;
 
+  // Compared before multiplying, so that the product cannot overflow.
+  if (SeparatorCount > 0) and
+     (SeparatorCount > (MAXIMUM_JOIN_LENGTH - FPartLength) div SeparatorLength)
+  then
+    RefuseLength(MAXIMUM_JOIN_LENGTH);
   TotalLength := Int64(SeparatorCount) * SeparatorLength + FPartLength;
-  if TotalLength > MAXIMUM_JOIN_LENGTH then
-    RefuseLength(TotalLength);
   if Assigned(FGate) then
     FGate(TotalLength * SizeOf(WideChar));
   Result := '';
