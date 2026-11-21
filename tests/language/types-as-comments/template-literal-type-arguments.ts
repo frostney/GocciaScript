@@ -71,6 +71,13 @@ describe("template literal type arguments", () => {
     expect(identity< <const T extends `${string}`>() => T>(4)).toBe(4);
   });
 
+  test("with import types, abstract constructors and contextual names", () => {
+    expect(identity<`${typeof import("./types").default}`>(1)).toBe(1);
+    expect(identity<abstract new (x: `${string}`) => object>(2)).toBe(2);
+    expect(identity< <out>() => `${string}`>(3)).toBe(3);
+    expect(identity<`${typeof from}`>(4)).toBe(4);
+  });
+
   test("as the constraint of a type parameter with a default", () => {
     expect(identity< <T extends `x${string}` = "x">() => T>(5)).toBe(5);
   });

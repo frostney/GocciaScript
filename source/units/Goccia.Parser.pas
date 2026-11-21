@@ -10902,7 +10902,8 @@ var
 
   function SkipName: Boolean;
   begin
-    Result := PeekType = gttIdentifier;
+    // `as`, `from` and `static` are names too, though they lex apart.
+    Result := IsIdentifierBindingToken(PeekType);
     if not Result then
       Exit;
     AdvanceType;
@@ -10941,6 +10942,8 @@ var
     const AAllowConditional: Boolean): Boolean;
   var
     IsFunctionType, ReadonlyModifier: Boolean;
+    AbstractCurrent: Integer;
+    AbstractLexer: TGocciaLexerCheckpoint;
 
     // Type arguments after a name, `Map<K, V>`, if any.
     function SkipTypeArgumentsSuffix: Boolean;
@@ -10962,6 +10965,9 @@ var
 
     // A type parameter list, `<T extends U = V, W>`, from its '<'.
     function SkipTypeParameters: Boolean;
+    var
+      SavedCurrent: Integer;
+      SavedLexer: TGocciaLexerCheckpoint;
     begin
       Result := False;
       AdvanceType;
@@ -10969,8 +10975,20 @@ var
         // Modifiers before the name: `const T`, `in T`, `out T`.
         if PeekType in [gttConst, gttIn] then
           AdvanceType;
+        // `out` is a modifier when a name follows, else the name.
         if PeekIsContextualKeyword(KEYWORD_OUT) then
+        begin
+          SavedCurrent := FCurrent;
+          if Assigned(FLexer) then
+            SavedLexer := FLexer.CreateCheckpoint;
           AdvanceType;
+          if PeekType <> gttIdentifier then
+          begin
+            FCurrent := SavedCurrent;
+            if Assigned(FLexer) then
+              FLexer.RestoreCheckpoint(SavedLexer);
+          end;
+        end;
         if PeekType <> gttIdentifier then
           Exit;
         AdvanceType;
@@ -11010,7 +11028,7 @@ var
       while PeekType = gttDot do
       begin
         AdvanceType;
-        if PeekType <> gttIdentifier then
+        if not IsIdentifierNameToken(PeekType) then
           Exit;
         AdvanceType;
       end;
@@ -11164,19 +11182,33 @@ var
         end;
         AdvanceType;
       end;
+      // `abstract new (...) => T`, an abstract constructor type.
+      if PeekIsContextualKeyword('abstract') then
+      begin
+        AbstractCurrent := FCurrent;
+        if Assigned(FLexer) then
+          AbstractLexer := FLexer.CreateCheckpoint;
+        AdvanceType;
+        if PeekType <> gttNew then
+        begin
+          FCurrent := AbstractCurrent;
+          if Assigned(FLexer) then
+            FLexer.RestoreCheckpoint(AbstractLexer);
+        end;
+      end;
       case PeekType of
         gttTypeof:
           begin
             AdvanceType;
             if PeekType = gttImport then
             begin
-              if not SkipImportType then
+              if not SkipImportType or not SkipTypeArgumentsSuffix then
                 Exit;
             end
             else if not SkipName or not SkipTypeArgumentsSuffix then
               Exit;
           end;
-        gttIdentifier:
+        gttIdentifier, gttAs, gttFrom, gttStatic:
           if not SkipName or not SkipTypeArgumentsSuffix then
             Exit;
         gttString, gttNumber, gttBigInt, gttTrue, gttFalse, gttNull, gttVoid,
