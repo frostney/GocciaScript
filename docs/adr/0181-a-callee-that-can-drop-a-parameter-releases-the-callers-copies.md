@@ -98,7 +98,10 @@ reassigns its parameters pays the release; the rest pay the flag test.
   keeps its parameter keeps the value, as it must.
 - Native callees, spread calls, bound-function calls, tail calls, async callees,
   `new C(x)` and the `f.call` / `f.apply` fast paths are unchanged. A caller's
-  argument registers stay populated after them until reused.
+  argument registers stay populated after them until reused. That includes an
+  async `.then(cb)` handler: the job lets go of its root, but an async
+  function's frame reads its argument window (its continuation may need it),
+  so that window keeps the value while the handler runs.
 - A callee that only forwards its parameter in a tail call (`(b) => g(b)`) never
   writes it, so its flag is false and the caller's copy stays while `g` runs. The
   alternative, a true flag for every body that returns a call, makes the common
