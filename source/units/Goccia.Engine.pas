@@ -2828,6 +2828,10 @@ begin
     Compiler.GlobalBackedTopLevel := True;
     Compiler.AsyncTopLevel := AProgram.HasTopLevelAwait;
     Compiler.PreinitializedTopLevelFunctions := True;
+    // Only the entry's completion value is reported (Execute's result,
+    // runScript's); an imported module has none to keep alive. A snapshot
+    // restore compiles each module the same way (CompileModuleForSnapshot).
+    Compiler.DiscardsCompletionValue := AFilePath <> FSourcePath;
     Compiler.StrictTypes := FStrictTypes;
     Compiler.NonStrictMode := ANonStrictMode;
     Compiler.ArgumentsObjectEnabled := AArgumentsObjectEnabled;

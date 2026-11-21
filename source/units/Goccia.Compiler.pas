@@ -49,6 +49,12 @@ type
     FDirectEvalDeclaredVarNames: TUnicodeStringList;
     FCompletionRegister: Integer;
     FAsyncTopLevel: Boolean;
+    // The program's completion value is never read (an imported module's),
+    // so its expression statements compile as a function body's do.
+    FDiscardsCompletionValue: Boolean;
+    // In module code, the top-level statement being compiled (see
+    // CompileProgram), whose end clears the registers it left; nil otherwise.
+    FModuleTopLevelStatement: TGocciaStatement;
     FPreinitializedTopLevelFunctions: Boolean;
     FStrictTypes: Boolean;
     FNonStrictMode: Boolean;
@@ -186,6 +192,12 @@ type
     property GlobalBackedTopLevel: Boolean read FGlobalBackedTopLevel
       write FGlobalBackedTopLevel;
     property AsyncTopLevel: Boolean read FAsyncTopLevel write FAsyncTopLevel;
+    { Nothing reads the program's completion value: an imported module's,
+      which ECMAScript gives none (ES2026 §16.2.1.7.3.2 ExecuteModule). Its
+      expression statements then keep no value in the register the top level
+      returns. An entry program, script or module, keeps it: hosts report it. }
+    property DiscardsCompletionValue: Boolean read FDiscardsCompletionValue
+      write FDiscardsCompletionValue;
     property PreinitializedTopLevelFunctions: Boolean
       read FPreinitializedTopLevelFunctions write FPreinitializedTopLevelFunctions;
     property StrictTypes: Boolean read FStrictTypes write FStrictTypes;
@@ -824,14 +836,24 @@ begin
   // here, once per execution of an already costly await. An await in a
   // branch an expression statement ends with was cleared in that branch
   // (TGocciaCompilerScope.SetAwaitTail), so a path that skips it pays nothing.
-  if (not Result) and (Ctx.Scope.UnclearedAwaitCount <> AwaitMark) and
-     ((AStmt is TGocciaExpressionStatement) or
-      (AStmt is TGocciaVariableDeclaration) or
-      (AStmt is TGocciaDestructuringDeclaration) or
-      (AStmt is TGocciaExportVariableDeclaration) or
-      (AStmt is TGocciaExportDestructuringDeclaration) or
-      (AStmt is TGocciaExportDefaultDeclaration)) and
-     (StatementPeak > Ctx.Scope.NextSlot) then
+  //
+  // A top-level statement of module code clears what it left whether it
+  // awaited or not: the module's bindings are read by name into registers
+  // above the live ones (`buffer.byteLength` copies `buffer` there), so
+  // dropping a binding's value left that copy in the frame, which runs on
+  // to the module's end. The clear runs once per statement, since a module
+  // body runs once; a loop's own clear covers a top-level loop, and a
+  // labeled statement clears in CompileProgram, after its break targets.
+  if (not Result) and (StatementPeak > Ctx.Scope.NextSlot) and
+     (((Ctx.Scope.UnclearedAwaitCount <> AwaitMark) and
+       ((AStmt is TGocciaExpressionStatement) or
+        (AStmt is TGocciaVariableDeclaration) or
+        (AStmt is TGocciaDestructuringDeclaration) or
+        (AStmt is TGocciaExportVariableDeclaration) or
+        (AStmt is TGocciaExportDestructuringDeclaration) or
+        (AStmt is TGocciaExportDefaultDeclaration))) or
+      ((AStmt = FModuleTopLevelStatement) and (AStmt.LabelCount = 0) and
+       not Goccia.Compiler.Statements.StatementIsIteration(AStmt))) then
     Goccia.Compiler.Statements.EmitUncountedClearDeadRegisters(Ctx,
       StatementPeak);
   Ctx.Scope.ForgetUnclearedAwaits(AwaitMark);
@@ -2328,6 +2350,7 @@ var
   RetReg: UInt16;
   Ctx: TGocciaCompilationContext;
   HasFunctionDecl, BodyAbrupt, StatementAbrupt, HasUsing: Boolean;
+  ModuleCode, KeepsCompletionValue: Boolean;
   PredeclaredLexicalStart, PredeclaredLexicalIndex: Integer;
   PredeclaredLocal: PGocciaCompilerLocal;
   SavedFinally: TObject;
@@ -2506,6 +2529,12 @@ begin
     Ctx := BuildContext;
     EmitInstruction(Ctx, EncodeABC(OP_LOAD_UNDEFINED, RetReg, 0, 0));
     BodyAbrupt := False;
+    // Module code (a module the loader links, its bindings in the module's
+    // environment record) clears what each top-level statement left in the
+    // registers above the live ones (CompileStatementNode).
+    ModuleCode := FGlobalBackedTopLevel and FPreinitializedTopLevelFunctions and
+      not FEvalCode;
+    KeepsCompletionValue := FEvalCode or not FDiscardsCompletionValue;
 
     for I := 0 to AProgram.Body.Count - 1 do
       if (AProgram.Body[I] is TGocciaImportDeclaration) or
@@ -2548,7 +2577,8 @@ begin
            (AProgram.Body[I] is TGocciaReExportDeclaration) then
           Continue;
 
-        if AProgram.Body[I] is TGocciaExpressionStatement then
+        if KeepsCompletionValue and
+           (AProgram.Body[I] is TGocciaExpressionStatement) then
         begin
           EmitLineMapping(Ctx, AProgram.Body[I].Line, AProgram.Body[I].Column);
           AwaitMark := FCurrentScope.UnclearedAwaitCount;
@@ -2567,12 +2597,32 @@ begin
           StatementPeak := FCurrentScope.EndRegisterRegion(StatementOuterPeak);
           // The same release DoCompileStatement gives an expression statement
           // that awaited: a top-level await suspends the module, which keeps
-          // the awaited value in the registers above the live ones.
-          if (FCurrentScope.UnclearedAwaitCount <> AwaitMark) and
+          // the awaited value in the registers above the live ones. Module
+          // code clears after every top-level statement.
+          if ((FCurrentScope.UnclearedAwaitCount <> AwaitMark) or ModuleCode) and
              (StatementPeak > FCurrentScope.NextSlot) then
             Goccia.Compiler.Statements.EmitUncountedClearDeadRegisters(Ctx,
               StatementPeak);
           FCurrentScope.ForgetUnclearedAwaits(AwaitMark);
+        end
+        else if ModuleCode then
+        begin
+          StatementOuterPeak := FCurrentScope.BeginRegisterRegion;
+          FModuleTopLevelStatement := AProgram.Body[I];
+          try
+            StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
+          finally
+            FModuleTopLevelStatement := nil;
+          end;
+          StatementPeak := FCurrentScope.EndRegisterRegion(StatementOuterPeak);
+          // A labeled statement other than a loop clears here, where its
+          // `break label` jumps land, rather than at its own end.
+          if not StatementAbrupt and (AProgram.Body[I].LabelCount > 0) and
+             not Goccia.Compiler.Statements.StatementIsIteration(
+               AProgram.Body[I]) and
+             (StatementPeak > FCurrentScope.NextSlot) then
+            Goccia.Compiler.Statements.EmitUncountedClearDeadRegisters(Ctx,
+              StatementPeak);
         end
         else
           StatementAbrupt := DoCompileStatement(AProgram.Body[I]);
@@ -2622,6 +2672,7 @@ begin
   finally
     Goccia.Compiler.Statements.RestorePendingFinally(SavedFinally);
     FCompletionRegister := -1;
+    FModuleTopLevelStatement := nil;
     FreeAndNil(FCurrentScope);
     if Assigned(FModule) then
     begin

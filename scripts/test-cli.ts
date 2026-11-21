@@ -71,6 +71,62 @@ console.log("Module top-level await keeps the last value and fails only on its o
     throw new Error(`A rejected top-level await should fail with its TypeError, got exit ${rejected.exitCode}, ${JSON.stringify(rejected.json.error)}`);
 }
 
+console.log("Module code releases what a top-level statement read; only an entry keeps a completion value...");
+{
+  // A sandbox entry runs through the engine's module evaluation, where the
+  // module's bindings live in its environment record and a read copies a
+  // binding's value into a register of the module's frame. Each top-level
+  // statement clears the registers it used, so a value the module read and
+  // dropped is free for the next allocation under the memory limit.
+  const tmp = mkdtemp("goccia-module-top-level-");
+  try {
+    const size = "6 * 1024 * 1024";
+    const allocateAgain =
+      `try { const again = new ArrayBuffer(${size}); console.log("again ok", again.byteLength); } ` +
+      `catch (error) { console.log("again refused", error.name); }`;
+    const shapes: Record<string, string> = {
+      "awaited.mjs": `const make = async () => new ArrayBuffer(${size});\nlet buffer = await make();\n` +
+        `const length = buffer.byteLength;\nbuffer = null;\n${allocateAgain}\n`,
+      "not-awaited.mjs": `let buffer = new ArrayBuffer(${size});\nconst length = buffer.byteLength;\n` +
+        `buffer = null;\n${allocateAgain}\n`,
+    };
+    for (const [name, source] of Object.entries(shapes)) {
+      writeFileSync(join(tmp, name), source);
+      const proc = Bun.spawnSync([resolve(RUNNER), "--sandbox", "--max-memory=10MiB", name], {
+        cwd: tmp,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = proc.stdout.toString() + proc.stderr.toString();
+      if (proc.exitCode !== 0 || !containsLine(out, "again ok 6291456"))
+        throw new Error(`Sandbox module ${name} should allocate again after dropping its value, got exit ${proc.exitCode}: ${out}`);
+    }
+
+    // An imported module reports no completion value; the entry's last
+    // statement value is still the run's result, from the runner and from a
+    // sandbox entry alike.
+    writeFileSync(join(tmp, "dependency.mjs"), "export const one = 1;\n99;\n");
+    writeFileSync(join(tmp, "entry.mjs"), 'import { one } from "./dependency.mjs";\n41 + one;\n');
+    const runner = Bun.spawnSync([resolve(RUNNER), "--output=compact-json", "entry.mjs"], {
+      cwd: tmp,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const result = JSON.parse(runner.stdout.toString()).files?.[0]?.result;
+    if (runner.exitCode !== 0 || result !== 42)
+      throw new Error(`An entry module's result should stay 42, got exit ${runner.exitCode}, result ${JSON.stringify(result)}: ${runner.stderr.toString()}`);
+    const sandboxed = Bun.spawnSync(
+      [resolve(RUNNER), "--sandbox", "--copy", "dependency.mjs", "--print", "entry.mjs"],
+      { cwd: tmp, stdout: "pipe", stderr: "pipe" },
+    );
+    const printed = sandboxed.stdout.toString();
+    if (sandboxed.exitCode !== 0 || !containsLine(printed, "42") || containsLine(printed, "99"))
+      throw new Error(`A sandbox entry module should print 42, got exit ${sandboxed.exitCode}: ${printed}${sandboxed.stderr.toString()}`);
+  } finally {
+    clean(tmp);
+  }
+}
+
 console.log("REPL stdin decodes UTF-8...");
 {
   const repl = Bun.spawnSync([REPL], {
