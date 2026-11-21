@@ -612,6 +612,7 @@ begin
         Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
       Err := '';
       TestTimeoutMs := FTestTimeout.ValueOr(0);
+      DescribeTimeoutMs := FDescribeTimeout.ValueOr(0);
       TestReporterOn := not IsJsonOutput;
       { the file's snapshots: its .snap file and its inline edits, flushed once every file has run }
       SetTestSnapshots(TGocciaTestRunnerSnapshotHost.Create(FileName), SnapshotUpdateMode);

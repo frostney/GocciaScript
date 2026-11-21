@@ -109,6 +109,8 @@ procedure TestSnapshotsDone;
 threadvar
   { --test-timeout: each test's own deadline in milliseconds (0: none), before InstallTestingAPI }
   TestTimeoutMs: Int64;
+  { --describe-timeout: each describe callback's deadline in milliseconds (0: none) }
+  DescribeTimeoutMs: Int64;
   { the testing library prints its per-test lines (a failure's, a skipped or todo test's) on stdout, as
     GocciaTestRunner's reporter does outside a JSON run }
   TestReporterOn: Boolean;
@@ -2080,6 +2082,7 @@ begin
   PushRoot(MkPtr(NewPlainObject(ObjectProto, 4)));
   DefineNative(RootAt(TempTop - 1), 'callWithin', Test_CallWithin, 2);
   DefineOwn(RootAt(TempTop - 1), AtomOf('testTimeoutMs'), MkNumber(TestTimeoutMs), pfDefault);
+  DefineOwn(RootAt(TempTop - 1), AtomOf('describeTimeoutMs'), MkNumber(DescribeTimeoutMs), pfDefault);
   DefineOwn(RootAt(TempTop - 1), AtomOf('reporter'), MkBool(TestReporterOn), pfDefault);
   DefineNative(RootAt(TempTop - 1), 'print', Host_WriteLine, 1);
   DefineNative(RootAt(TempTop - 1), 'callTest', Test_CallTest, 1);

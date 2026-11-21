@@ -86,7 +86,16 @@
     // a describe callback that throws aborts collection: nothing of the file runs, and the file fails with one
     // suite error (Vitest discards it whole)
     const mark = work ? work.mark() : 0;
-    try { args[1](); } catch (e) {
+    const describeTimeoutMs = shared && shared.deadline ? shared.deadline.describeTimeoutMs : 0;
+    try {
+      // --describe-timeout: the callback (the suite's registration) under a deadline of its own
+      if (describeTimeoutMs > 0) {
+        const r = shared.deadline.callWithin(args[1], describeTimeoutMs);
+        if (r[0] === 'timeout' && collectionError === null)
+          collectionError = `Describe "${fullName(s)}": describe timed out after ${describeTimeoutMs}ms`;
+        if (r[0] === 'threw') throw r[1];
+      } else args[1]();
+    } catch (e) {
       if (collectionError === null) collectionError = `Describe "${fullName(s)}": ${describeThrown(e)}`;
     } finally {
       current = saved;
