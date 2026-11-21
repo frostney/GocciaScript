@@ -117,6 +117,9 @@ type
     function StdinUsage: TGocciaStdinUsage; override;
     function HonoredCapabilities: TGocciaHonoredCapabilities; override;
     procedure ExecuteWithPaths(const APaths: TStringList); override;
+    function ShouldApplyRootConfig(const APaths: TStringList; const AConfigPath: string;
+      const AExplicitConfig: Boolean): Boolean; override;
+    procedure Validate; override;
   end;
 
   { one test file on a thread of its own: a G2 engine's state is its thread's, so each file gets a fresh engine }
@@ -195,6 +198,23 @@ begin
     'Round-trip objects observed by expect() at file idle; runs files serially');
   FNoVitestCompat := AddFlag('no-vitest-compat',
     'Do not resolve the bare "vitest" specifier to the bundled compatibility shim');
+end;
+
+{ several inputs each take their own config: a discovered root config does not apply to all of them }
+function TG2TestRunnerApp.ShouldApplyRootConfig(const APaths: TStringList; const AConfigPath: string;
+  const AExplicitConfig: Boolean): Boolean;
+begin
+  Result := inherited ShouldApplyRootConfig(APaths, AConfigPath, AExplicitConfig);
+  if Result and not AExplicitConfig and (APaths.Count > 1) then
+    Result := False;
+end;
+
+{ a coverage format or output asks for coverage }
+procedure TG2TestRunnerApp.Validate;
+begin
+  inherited Validate;
+  if CoverageOptions.Format.Present or CoverageOptions.OutputPath.Present then
+    CoverageOptions.Enabled.Apply('');
 end;
 
 function TG2TestRunnerApp.IsJsonOutput: Boolean;
@@ -498,6 +518,7 @@ var
   Start, SuitesStart: Int64;
   Aborted: TG2Abort;
   Late, SetupError: string;
+  HostError: TG2RunResult;
 begin
   FileName := FResults[AIndex].FileName;
   Res := FResults[AIndex];
@@ -583,7 +604,12 @@ begin
       { the file's virtual modules and globals, before its code runs (a failure fails the file) }
       if not DefineVirtualModules(Engine, RootConfigPath, FileConfigPath, EngineOptions, SetupError) or
          not InjectGlobals(Engine, ConfigNamedEntries(FGlobalFiles), FGlobalFiles, FInlineGlobals, SetupError) then
+      begin
+        { an error the host threw keeps its name (a refused read's PermissionDenied) }
+        if Engine.DescribeHostError(HostError) and HostError.ErrorIsError and (HostError.ErrorName <> '') then
+          SetupError := UTF8Encode(HostError.ErrorName) + ': ' + UTF8Encode(HostError.ErrorText);
         raise Exception.Create(SetupError);
+      end;
       SrcText := UTF8Decode(ASource.Text);
       HoistTestMocks(FileName, SrcText);
       RunResult := Engine.Run(FileName, SrcText);
