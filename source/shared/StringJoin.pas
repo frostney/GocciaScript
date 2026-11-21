@@ -3,139 +3,219 @@ unit StringJoin;
 {$I Shared.inc}
 
 // Joins a list of strings with a separator between each two, as
-// Array.prototype.join does. It keeps each string, not a copy, and Join
-// writes the result once, at its exact length: the work is linear in the
-// result, where appending to a string reallocates it on every append, and the
-// memory is the result and the strings it is made of, as the appends needed
-// at their last step. A join whose only content is one string returns that
-// string itself, as the appends did.
+// Array.prototype.join does, in time linear in the result, where appending to
+// a string reallocates it on every append.
+//
+// Short strings and separators are copied into chunks of at most
+// MAXIMUM_CHUNK_LENGTH characters, which grow by doubling from
+// MINIMUM_CHUNK_LENGTH, so a join keeps nothing per element. A long string is
+// kept as it is, not copied. Join then writes the result once, at its exact
+// length, and releases each chunk and string as it copies it. A join whose
+// only content is one long string returns that string itself, as the appends
+// did.
 
 interface
 
 type
+  // Called between blocks of the final copy, so that a host's deadline or
+  // abort can end a join whose result is long.
+  TStringJoinPoll = procedure;
+
+  TStringJoinSegment = record
+    Text: UnicodeString;
+    // The characters of Text in use: all of a long string, the filled part of
+    // a chunk.
+    Length: SizeInt;
+  end;
+
   TStringJoinBuffer = class
   private
     FSeparator: UnicodeString;
-    // The non-empty strings, and the element each belongs to: the
-    // separators before a string are its element's index.
-    FTexts: array of UnicodeString;
-    FElementIndexes: array of SizeInt;
-    FTextCount: SizeInt;
+    FPoll: TStringJoinPoll;
+    FSegments: array of TStringJoinSegment;
+    FSegmentCount: SizeInt;
+    FChunk: UnicodeString;
+    FChunkLength: SizeInt;
+    FChunkCapacity: SizeInt;
+    FTotalLength: SizeInt;
     FElementCount: SizeInt;
+    procedure AddSegment(const AText: UnicodeString; const ALength: SizeInt);
+    procedure CloseChunk;
+    procedure WriteToChunk(const AText: UnicodeString; const ALength: SizeInt);
+    procedure WriteText(const AText: UnicodeString);
+    procedure Reset;
   public
-    constructor Create(const ASeparator: UnicodeString);
+    constructor Create(const ASeparator: UnicodeString;
+      const APoll: TStringJoinPoll = nil);
     // Adds the next element's string; an empty one still takes its place
     // between two separators.
     procedure Add(const AText: UnicodeString);
-    // The joined string. It releases each string as it writes it, while that
-    // string is still in the cache, so the buffer is empty afterwards.
+    // The joined string. The buffer is empty afterwards.
     function Join: UnicodeString;
     property ElementCount: SizeInt read FElementCount;
   end;
 
+const
+  // A string at least this long is kept rather than copied into a chunk.
+  LONG_TEXT_LENGTH = 256;
+  MINIMUM_CHUNK_LENGTH = 256;
+  MAXIMUM_CHUNK_LENGTH = 32768;
+  // Characters the final copy writes between two polls.
+  POLL_INTERVAL_LENGTH = 1024 * 1024;
+
 implementation
 
 const
-  INITIAL_TEXT_CAPACITY = 16;
   // Characters, so that the byte size of the result fits a SizeInt too.
   MAXIMUM_LENGTH = High(SizeInt) div (2 * SizeOf(WideChar));
+  INITIAL_SEGMENT_CAPACITY = 8;
 
-constructor TStringJoinBuffer.Create(const ASeparator: UnicodeString);
+constructor TStringJoinBuffer.Create(const ASeparator: UnicodeString;
+  const APoll: TStringJoinPoll);
 begin
   inherited Create;
   FSeparator := ASeparator;
+  FPoll := APoll;
+end;
+
+procedure TStringJoinBuffer.AddSegment(const AText: UnicodeString;
+  const ALength: SizeInt);
+begin
+  if FSegmentCount = System.Length(FSegments) then
+  begin
+    if FSegmentCount = 0 then
+      SetLength(FSegments, INITIAL_SEGMENT_CAPACITY)
+    else
+      SetLength(FSegments, FSegmentCount * 2);
+  end;
+  FSegments[FSegmentCount].Text := AText;
+  FSegments[FSegmentCount].Length := ALength;
+  Inc(FSegmentCount);
+end;
+
+procedure TStringJoinBuffer.CloseChunk;
+begin
+  if FChunkLength > 0 then
+    AddSegment(FChunk, FChunkLength);
+  // The segment holds the chunk now; the next chunk is a new block.
+  FChunk := '';
+  FChunkLength := 0;
+  FChunkCapacity := 0;
+end;
+
+procedure TStringJoinBuffer.WriteToChunk(const AText: UnicodeString;
+  const ALength: SizeInt);
+var
+  NewCapacity: SizeInt;
+begin
+  if FChunkLength + ALength > FChunkCapacity then
+  begin
+    if FChunkCapacity >= MAXIMUM_CHUNK_LENGTH then
+      CloseChunk;
+    if FChunkCapacity = 0 then
+      NewCapacity := MINIMUM_CHUNK_LENGTH
+    else
+      NewCapacity := FChunkCapacity * 2;
+    if NewCapacity > MAXIMUM_CHUNK_LENGTH then
+      NewCapacity := MAXIMUM_CHUNK_LENGTH;
+    if NewCapacity < FChunkLength + ALength then
+      NewCapacity := FChunkLength + ALength;
+    // FChunk is never shared until CloseChunk hands it to a segment, so this
+    // grows it in its own block.
+    SetLength(FChunk, NewCapacity);
+    FChunkCapacity := NewCapacity;
+  end;
+  Move(PWideChar(AText)^, (PWideChar(FChunk) + FChunkLength)^,
+    ALength * SizeOf(WideChar));
+  Inc(FChunkLength, ALength);
+end;
+
+procedure TStringJoinBuffer.WriteText(const AText: UnicodeString);
+var
+  TextLength: SizeInt;
+begin
+  TextLength := System.Length(AText);
+  if TextLength = 0 then
+    Exit;
+  if TextLength > MAXIMUM_LENGTH - FTotalLength then
+    System.Error(reOutOfMemory);
+  if TextLength >= LONG_TEXT_LENGTH then
+  begin
+    CloseChunk;
+    AddSegment(AText, TextLength);
+  end
+  else
+    WriteToChunk(AText, TextLength);
+  Inc(FTotalLength, TextLength);
 end;
 
 procedure TStringJoinBuffer.Add(const AText: UnicodeString);
-var
-  Capacity: SizeInt;
 begin
-  if AText <> '' then
-  begin
-    Capacity := System.Length(FTexts);
-    if FTextCount = Capacity then
-    begin
-      if Capacity = 0 then
-        Capacity := INITIAL_TEXT_CAPACITY
-      else
-        Capacity := Capacity * 2;
-      SetLength(FTexts, Capacity);
-      SetLength(FElementIndexes, Capacity);
-    end;
-    FTexts[FTextCount] := AText;
-    FElementIndexes[FTextCount] := FElementCount;
-    Inc(FTextCount);
-  end;
+  if FElementCount > 0 then
+    WriteText(FSeparator);
+  WriteText(AText);
   Inc(FElementCount);
+end;
+
+procedure TStringJoinBuffer.Reset;
+begin
+  FChunk := '';
+  FChunkLength := 0;
+  FChunkCapacity := 0;
+  FSegmentCount := 0;
+  FTotalLength := 0;
+  FElementCount := 0;
 end;
 
 function TStringJoinBuffer.Join: UnicodeString;
 var
-  SeparatorLength, SeparatorCount, TotalLength, TextLength: SizeInt;
-  SeparatorsWritten, I: SizeInt;
-  Target: PWideChar;
+  I, Copied, BlockLength, SinceLastPoll: SizeInt;
+  Source, Target: PWideChar;
 begin
-  SeparatorLength := System.Length(FSeparator);
-  if (FElementCount > 1) and (SeparatorLength > 0) then
-    SeparatorCount := FElementCount - 1
-  else
-    SeparatorCount := 0;
-  if SeparatorCount = 0 then
+  CloseChunk;
+  if FSegmentCount = 0 then
   begin
-    if FTextCount = 0 then
-    begin
-      FElementCount := 0;
-      Exit('');
-    end;
-    if FTextCount = 1 then
-    begin
-      Result := FTexts[0];
-      FTexts[0] := '';
-      FTextCount := 0;
-      FElementCount := 0;
-      Exit;
-    end;
+    Reset;
+    Exit('');
   end;
-
-  if (SeparatorCount > 0) and
-     (SeparatorCount > MAXIMUM_LENGTH div SeparatorLength) then
-    System.Error(reOutOfMemory);
-  TotalLength := SeparatorCount * SeparatorLength;
-  for I := 0 to FTextCount - 1 do
+  if (FSegmentCount = 1) and
+     (FSegments[0].Length = System.Length(FSegments[0].Text)) then
   begin
-    TextLength := System.Length(FTexts[I]);
-    if TextLength > MAXIMUM_LENGTH - TotalLength then
-      System.Error(reOutOfMemory);
-    Inc(TotalLength, TextLength);
+    Result := FSegments[0].Text;
+    FSegments[0].Text := '';
+    Reset;
+    Exit;
   end;
 
   Result := '';
-  SetLength(Result, TotalLength);
+  SetLength(Result, FTotalLength);
   Target := PWideChar(Result);
-  SeparatorsWritten := 0;
-  for I := 0 to FTextCount - 1 do
+  SinceLastPoll := 0;
+  for I := 0 to FSegmentCount - 1 do
   begin
-    if SeparatorCount > 0 then
-      while SeparatorsWritten < FElementIndexes[I] do
+    Source := PWideChar(FSegments[I].Text);
+    Copied := 0;
+    while Copied < FSegments[I].Length do
+    begin
+      BlockLength := FSegments[I].Length - Copied;
+      if BlockLength > POLL_INTERVAL_LENGTH - SinceLastPoll then
+        BlockLength := POLL_INTERVAL_LENGTH - SinceLastPoll;
+      Move(Source^, Target^, BlockLength * SizeOf(WideChar));
+      Inc(Source, BlockLength);
+      Inc(Target, BlockLength);
+      Inc(Copied, BlockLength);
+      Inc(SinceLastPoll, BlockLength);
+      if SinceLastPoll >= POLL_INTERVAL_LENGTH then
       begin
-        Move(PWideChar(FSeparator)^, Target^,
-          SeparatorLength * SizeOf(WideChar));
-        Inc(Target, SeparatorLength);
-        Inc(SeparatorsWritten);
+        SinceLastPoll := 0;
+        if Assigned(FPoll) then
+          FPoll;
       end;
-    TextLength := System.Length(FTexts[I]);
-    Move(PWideChar(FTexts[I])^, Target^, TextLength * SizeOf(WideChar));
-    Inc(Target, TextLength);
-    FTexts[I] := '';
+    end;
+    // Released while it is still in the cache; the result holds a copy.
+    FSegments[I].Text := '';
   end;
-  while SeparatorsWritten < SeparatorCount do
-  begin
-    Move(PWideChar(FSeparator)^, Target^, SeparatorLength * SizeOf(WideChar));
-    Inc(Target, SeparatorLength);
-    Inc(SeparatorsWritten);
-  end;
-  FTextCount := 0;
-  FElementCount := 0;
+  Reset;
 end;
 
 end.

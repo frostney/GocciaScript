@@ -6,6 +6,7 @@ uses
   SysUtils,
 
   AllocationCounter,
+  StringBuffer,
   StringJoin,
   TestingPascalLibrary;
 
@@ -21,6 +22,8 @@ type
     procedure TestOneStringIsReturnedItself;
     procedure TestManyElements;
     procedure TestResultIsAllocatedOnce;
+    procedure TestChunksAndLongStrings;
+    procedure TestFinalCopyPolls;
   public
     procedure SetupTests; override;
   end;
@@ -41,8 +44,12 @@ begin
     TestOneStringIsReturnedItself);
   Test('more elements than the first part capacity join in order',
     TestManyElements);
-  Test('Join allocates the result once, at its length',
+  Test('Join allocates the result once, at its exact length',
     TestResultIsAllocatedOnce);
+  Test('short strings across many chunks and long strings between them join in order',
+    TestChunksAndLongStrings);
+  Test('the final copy polls once per poll interval of characters',
+    TestFinalCopyPolls);
 end;
 
 function JoinOf(const ASeparator: UnicodeString;
@@ -134,14 +141,18 @@ begin
   end;
 end;
 
-{ The strings are kept as they are and written once, into a result of the
-  exact length: one allocation, and no spare capacity for the result to keep. }
+{ Join writes the result once, into a string of the exact length: it asks
+  for the result's bytes and a little bookkeeping, never a second copy or
+  spare capacity for the result to keep. }
 procedure TStringJoinTests.TestResultIsAllocatedOnce;
+const
+  RESULT_LENGTH = 3889;
+  BOOKKEEPING_BYTES = 512;
 var
   Joined: TStringJoinBuffer;
   Text: UnicodeString;
   I: Integer;
-  Allocations: Int64;
+  Bytes: Int64;
 begin
   Joined := TStringJoinBuffer.Create(',');
   try
@@ -151,13 +162,81 @@ begin
     try
       Text := Joined.Join;
     finally
-      Allocations := StopCountingAllocations;
+      StopCountingAllocations;
+      Bytes := CountedAllocationBytes;
     end;
-    Expect<Integer>(Integer(Allocations)).ToBe(1);
-    Expect<Integer>(Length(Text)).ToBe(3889);
+    Expect<Integer>(Length(Text)).ToBe(RESULT_LENGTH);
+    Expect<Boolean>(Bytes >= RESULT_LENGTH * SizeOf(WideChar)).ToBe(True);
+    Expect<Boolean>(Bytes <= RESULT_LENGTH * SizeOf(WideChar) +
+      BOOKKEEPING_BYTES).ToBe(True);
   finally
     Joined.Free;
   end;
+end;
+
+procedure TStringJoinTests.TestChunksAndLongStrings;
+var
+  Joined: TStringJoinBuffer;
+  Expected: TStringBuffer;
+  Long, Text: UnicodeString;
+  I: Integer;
+begin
+  Long := StringOfChar('L', LONG_TEXT_LENGTH);
+  Joined := TStringJoinBuffer.Create(', ');
+  Expected := TStringBuffer.Create;
+  try
+    for I := 0 to 49999 do
+    begin
+      if I > 0 then
+        Expected.Append(', ');
+      if I mod 997 = 0 then
+        Text := Long
+      else if I mod 13 = 0 then
+        Text := ''
+      else
+        Text := UnicodeString(IntToStr(I));
+      Joined.Add(Text);
+      Expected.Append(Text);
+    end;
+    Expect<Boolean>(Expected.Length > 8 * MAXIMUM_CHUNK_LENGTH).ToBe(True);
+    Expect<string>(Joined.Join).ToBe(Expected.ToString);
+    Expect<Integer>(Joined.ElementCount).ToBe(0);
+  finally
+    Joined.Free;
+  end;
+end;
+
+var
+  PollCount: Integer;
+
+procedure CountPoll;
+begin
+  Inc(PollCount);
+end;
+
+procedure TStringJoinTests.TestFinalCopyPolls;
+const
+  PART_COUNT = 5;
+var
+  Joined: TStringJoinBuffer;
+  Part: UnicodeString;
+  I: Integer;
+  Text: UnicodeString;
+begin
+  Part := StringOfChar('p', POLL_INTERVAL_LENGTH);
+  PollCount := 0;
+  Joined := TStringJoinBuffer.Create(',', CountPoll);
+  try
+    for I := 1 to PART_COUNT do
+      Joined.Add(Part);
+    Expect<Integer>(PollCount).ToBe(0);
+    Text := Joined.Join;
+  finally
+    Joined.Free;
+  end;
+  Expect<Integer>(Length(Text))
+    .ToBe(PART_COUNT * POLL_INTERVAL_LENGTH + PART_COUNT - 1);
+  Expect<Integer>(PollCount).ToBe(Length(Text) div POLL_INTERVAL_LENGTH);
 end;
 
 begin

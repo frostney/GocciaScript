@@ -2026,12 +2026,12 @@ begin
       FJoinReceivers.Add(View.Obj);
       try
         // Steps 5-8: Build result string, treating undefined/null elements
-        // as empty string. The join buffer writes the result once, at its
-        // length, so a join costs time linear in its result: appending to a
-        // string reallocates the whole string for each element and separator,
-        // which made joining a large array, and so a template literal or
-        // String() of one, take quadratic time.
-        Joined := TStringJoinBuffer.Create(Separator);
+        // as empty string. The join buffer costs time linear in the result:
+        // appending to a string reallocates the whole string for each element
+        // and separator, which made joining a large array, and so a template
+        // literal or String() of one, take quadratic time. Its final copy
+        // polls the deadline and a host's abort, as View.Get does here.
+        Joined := TStringJoinBuffer.Create(Separator, CheckExecutionTimeoutNow);
         try
           for I := 0 to View.Len - 1 do
           begin

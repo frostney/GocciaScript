@@ -685,7 +685,6 @@ GocciaScript/
 │   │   ├── OrderedMap.pas    # Ordered hash maps
 │   │   ├── OrderedStringMap.pas  # String-keyed ordered maps
 │   │   ├── StringBuffer.pas  # String buffer
-│   │   ├── StringJoin.pas    # Join buffer for Array.prototype.join
 │   │   ├── FileUtils.pas     # File utilities
 │   │   ├── BaseMap.pas       # Base map type
 │   │   └── JSONParser.pas    # JSON parser

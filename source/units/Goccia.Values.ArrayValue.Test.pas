@@ -65,6 +65,7 @@ type
     procedure TestTypedArrayConversionsTakeLinearWork;
     procedure TestOneLongStringIsNotCopied;
     procedure TestALongStringIsCopiedOnce;
+    procedure TestShortStringsNeedNoScratchPerElement;
   end;
 
 procedure TTestArrayValue.SetupTests;
@@ -77,12 +78,14 @@ begin
     TestOneLongStringIsNotCopied);
   Test('joining a long string with something else copies it once',
     TestALongStringIsCopiedOnce);
+  Test('joining many one-character strings asks for a few times the result, not more per element',
+    TestShortStringsNeedNoScratchPerElement);
 end;
 
 { Runs a script that builds `a`, ALength strings of ten digits, `ta`, a
-  Float64Array of ALength eleven-digit integers, and `s`, a string of
-  LONG_STRING_LENGTH characters, then counts the bytes asked for by one call
-  of `() => AExpression`. }
+  Float64Array of ALength eleven-digit integers, `s`, a string of
+  LONG_STRING_LENGTH characters, and `x`, ALength strings "x", then counts the
+  bytes asked for by one call of `() => AExpression`. }
 function TTestArrayValue.ConversionWork(const AExpression: string;
   const ALength: Integer): TConversionWork;
 var
@@ -100,6 +103,7 @@ begin
     'const ta = new Float64Array(%0:d).map((_, i) => 10000000000 + i);' +
     LineEnding +
     'const s = "x".repeat(%2:d);' + LineEnding +
+    'const x = Array(%0:d).fill("x");' + LineEnding +
     'globalThis.convert = () => %1:s;',
     [ALength, AExpression, LONG_STRING_LENGTH]);
   Engine := TGocciaEngine.Create('array-conversion.js', Source);
@@ -211,6 +215,25 @@ begin
   ExpectOneCopy('[s, ""].join()');
   ExpectOneCopy('["", s].join()');
   ExpectOneCopy('`${[s, "x"].join("")}`');
+end;
+
+{ The appends kept nothing per element. A join that held each element's
+  string and its index until the end would ask for 16 bytes per element, and
+  more as its lists doubled, on top of the result's 2; packing short strings
+  into chunks that grow by doubling asks for three to five times the result. }
+procedure TTestArrayValue.TestShortStringsNeedNoScratchPerElement;
+const
+  RESULT_RATIO = 8;
+var
+  Work: TConversionWork;
+begin
+  Work := ConversionWork('x.join("")', LONG_LENGTH);
+  Expect<Integer>(Work.ResultLength).ToBe(LONG_LENGTH);
+  if Work.Bytes > RESULT_RATIO * LONG_LENGTH * SizeOf(WideChar) then
+    Fail(Format('x.join("") asked for %d bytes for a result of %d characters',
+      [Work.Bytes, LONG_LENGTH]));
+  Expect<Boolean>(Work.Bytes <=
+    RESULT_RATIO * LONG_LENGTH * SizeOf(WideChar)).ToBe(True);
 end;
 
 begin
