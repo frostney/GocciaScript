@@ -87,6 +87,15 @@ function NativeStackLimit: NativeUInt;
 // The address of a local in a frame called from the caller's, which is where
 // the native stack currently ends.
 function NativeStackPosition: NativeUInt;
+// Combines what the system reports for the running thread's stack (ALow and
+// ASize, when ASystemFound) with what the RTL recorded when it started the
+// thread (ARTLLow and ARTLLength, its StackBottom and StackLength), for a
+// thread whose stack currently ends at APosition. Returns whether bounds were
+// found. NativeStackLimit uses it everywhere except on Darwin; it is exported
+// so the combination can be tested with the bounds a system reports.
+function CombineStackBounds(const ASystemFound: Boolean;
+  var ALow, ASize: NativeUInt; const ARTLLow, ARTLLength,
+  APosition: NativeUInt): Boolean;
 // The throw the checks share. It is exported only because FPC does not inline
 // a procedure into another unit when it calls one that is local to the
 // implementation section, and the two checks are small enough to be inlined
@@ -339,36 +348,61 @@ begin
 end;
 {$IFEND}
 
-// The system's bounds where it gives them, else the RTL's. On Darwin the
-// RTL's StackBottom and StackLength are not used at all: on x86_64-darwin they
-// describe the 256 KiB the compiler defaults to instead of the 8 MiB main
-// thread. Elsewhere the RTL's bottom is used when it is the higher one: a
-// development build checks the stack against it ({$S+}) and stops with a fatal
-// "Stack overflow" past it, and glibc can hand a thread a cached stack larger
-// than the one the RTL was told about.
-function TryGetThreadStackBounds(out ALow, ASize: NativeUInt): Boolean;
-{$IF DEFINED(FPC) AND NOT DEFINED(DARWIN) AND NOT DEFINED(LAKON)}
+// The system's bounds where it gives them, else the RTL's. The RTL's bottom
+// is used when it is the higher one: a development build checks the stack
+// against it ({$S+}) and stops with a fatal "Stack overflow" past it, and
+// glibc can hand a thread a cached stack larger than the one the RTL was told
+// about.
+//
+// The RTL also bounds the top of the stack. It records StackBottom as the
+// stack pointer at the thread's start less StackLength, so the stack holds no
+// frame above StackBottom + StackLength. Where the system reports more stack
+// than the thread was created with, its mapping can hold another thread's
+// stack too: on Linux 6.13 and later, glibc 2.42 and later install a thread's
+// guard page inside its stack's mapping (MADV_GUARD_INSTALL) instead of as a
+// mapping of its own, and the kernel merges two thread stacks that lie next
+// to each other into one mapping in /proc/self/maps. A 512 KiB stack mapped
+// just below a 4 MiB one reads as 4.5 MiB, and would keep the full
+// NATIVE_STACK_RESERVE free instead of a quarter of itself. A thread the RTL
+// did not start records a StackLength of about 1 GB, larger than any stack
+// the system reports, so its top is left alone, and the top is never lowered
+// to below the running frame.
+function CombineStackBounds(const ASystemFound: Boolean;
+  var ALow, ASize: NativeUInt; const ARTLLow, ARTLLength,
+  APosition: NativeUInt): Boolean;
 var
-  RTLLow, StackTop: NativeUInt;
-{$IFEND}
+  StackTop, RTLTop: NativeUInt;
 begin
-  Result := TryGetSystemStackBounds(ALow, ASize);
-  {$IF DEFINED(FPC) AND NOT DEFINED(DARWIN) AND NOT DEFINED(LAKON)}
-  RTLLow := NativeUInt(StackBottom);
-  if (RTLLow = 0) or (StackLength = 0) then
+  Result := ASystemFound;
+  if (ARTLLow = 0) or (ARTLLength = 0) then
     Exit;
   if not Result then
   begin
-    ALow := RTLLow;
-    ASize := StackLength;
-    Result := True;
-  end
-  else if (RTLLow > ALow) and (RTLLow < ALow + ASize) then
+    ALow := ARTLLow;
+    ASize := ARTLLength;
+    Exit(True);
+  end;
+  StackTop := ALow + ASize;
+  if (ARTLLow > ALow) and (ARTLLow < StackTop) then
   begin
-    StackTop := ALow + ASize;
-    ALow := RTLLow;
+    ALow := ARTLLow;
     ASize := StackTop - ALow;
   end;
+  RTLTop := ARTLLow + ARTLLength;
+  if (ASize > ARTLLength) and (RTLTop > APosition) and (RTLTop > ALow) and
+     (RTLTop < StackTop) then
+    ASize := RTLTop - ALow;
+end;
+
+// On Darwin the RTL's StackBottom and StackLength are not used at all: on
+// x86_64-darwin they describe the 256 KiB the compiler defaults to instead of
+// the 8 MiB main thread.
+function TryGetThreadStackBounds(out ALow, ASize: NativeUInt): Boolean;
+begin
+  Result := TryGetSystemStackBounds(ALow, ASize);
+  {$IF DEFINED(FPC) AND NOT DEFINED(DARWIN) AND NOT DEFINED(LAKON)}
+  Result := CombineStackBounds(Result, ALow, ASize, NativeUInt(StackBottom),
+    StackLength, NativeStackPosition);
   {$IFEND}
 end;
 

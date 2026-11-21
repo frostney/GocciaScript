@@ -28,6 +28,9 @@ type
     procedure TestMainThreadHasItsStackBounds;
     procedure TestEachThreadHasItsOwnLimit;
     procedure TestSmallStackKeepsAQuarterFree;
+    procedure TestMergedMappingKeepsTheThreadsTop;
+    procedure TestMergedMappingKeepsTheThreadsBottom;
+    procedure TestBoundsTheRTLCannotNarrow;
     procedure TestShallowEntriesAreNotChecked;
     procedure TestRecursionStopsBeforeTheStackEnds;
     procedure Check(const ACondition: Boolean; const AWhat: string;
@@ -141,6 +144,12 @@ begin
     TestEachThreadHasItsOwnLimit);
   Test('A stack smaller than four reserves keeps a quarter of it free',
     TestSmallStackKeepsAQuarterFree);
+  Test('A mapping merged with a stack above keeps the thread''s own top',
+    TestMergedMappingKeepsTheThreadsTop);
+  Test('A mapping merged with a stack below keeps the thread''s own bottom',
+    TestMergedMappingKeepsTheThreadsBottom);
+  Test('Bounds the RTL cannot narrow are kept',
+    TestBoundsTheRTLCannotNarrow);
   Test('Native re-entries nested no deeper than the unchecked depth pass',
     TestShallowEntriesAreNotChecked);
   Test('Recursion is stopped before it reaches the end of the stack',
@@ -208,6 +217,86 @@ begin
   finally
     Probe.Free;
   end;
+end;
+
+// The bounds below are those a 512 KiB thread saw on Linux with glibc 2.43,
+// whose stack mapping holds its guard page, moved to an address a 32-bit
+// target has. The RTL started the thread 4,792 bytes below the top of its
+// 516 KiB mapping, and recorded StackBottom 512 KiB below that.
+const
+  SMALL_MAP_LOW = NativeUInt($7A000000);
+  SMALL_MAP_SIZE = 516 * 1024;
+  SMALL_RTL_TOP = SMALL_MAP_LOW + SMALL_MAP_SIZE - 4792;
+  SMALL_RTL_LOW = SMALL_RTL_TOP - 512 * 1024;
+  SMALL_POSITION = SMALL_RTL_TOP - 680;
+
+procedure TStackLimitTests.TestMergedMappingKeepsTheThreadsTop;
+var
+  Low, Size: NativeUInt;
+begin
+  // The kernel merged the mapping with a 4 MiB thread stack mapped just
+  // above it.
+  Low := SMALL_MAP_LOW;
+  Size := SMALL_MAP_SIZE + 4100 * 1024;
+  Expect<Boolean>(CombineStackBounds(True, Low, Size, SMALL_RTL_LOW,
+    512 * 1024, SMALL_POSITION)).ToBe(True);
+  Expect<Boolean>(Low = SMALL_MAP_LOW).ToBe(True);
+  Expect<Boolean>(Low + Size = SMALL_RTL_TOP).ToBe(True);
+  // Small enough for a quarter of it to be the reserve.
+  Expect<Boolean>(Size < 4 * NATIVE_STACK_RESERVE).ToBe(True);
+end;
+
+procedure TStackLimitTests.TestMergedMappingKeepsTheThreadsBottom;
+var
+  Low, Size: NativeUInt;
+begin
+  // The kernel merged the mapping with a 4 MiB thread stack mapped just
+  // below it.
+  Low := SMALL_MAP_LOW - 4100 * 1024;
+  Size := SMALL_MAP_SIZE + 4100 * 1024;
+  // The RTL's bottom, a little below the mapping's, is in the stack below.
+  Expect<Boolean>(CombineStackBounds(True, Low, Size, SMALL_RTL_LOW,
+    512 * 1024, SMALL_POSITION)).ToBe(True);
+  Expect<Boolean>(Low = SMALL_RTL_LOW).ToBe(True);
+  Expect<Boolean>(Size = 512 * 1024).ToBe(True);
+end;
+
+procedure TStackLimitTests.TestBoundsTheRTLCannotNarrow;
+var
+  Low, Size: NativeUInt;
+begin
+  // A mapping of the thread's own stack only loses what lies above the
+  // RTL's start.
+  Low := SMALL_MAP_LOW;
+  Size := SMALL_MAP_SIZE;
+  CombineStackBounds(True, Low, Size, SMALL_RTL_LOW, 512 * 1024,
+    SMALL_POSITION);
+  Expect<Boolean>(Low = SMALL_MAP_LOW).ToBe(True);
+  Expect<Boolean>(Low + Size = SMALL_RTL_TOP).ToBe(True);
+  // A thread the RTL did not start records a StackLength larger than its
+  // stack: the system's bounds stay.
+  Low := SMALL_MAP_LOW;
+  Size := 8 * MEBIBYTE;
+  CombineStackBounds(True, Low, Size, SMALL_POSITION - 1000000000,
+    1000000000, SMALL_POSITION);
+  Expect<Boolean>(Low = SMALL_MAP_LOW).ToBe(True);
+  Expect<Boolean>(Size = 8 * MEBIBYTE).ToBe(True);
+  // A top below the running frame would leave the frame out of the stack.
+  Low := SMALL_MAP_LOW;
+  Size := SMALL_MAP_SIZE + 4100 * 1024;
+  CombineStackBounds(True, Low, Size, SMALL_RTL_LOW, 512 * 1024,
+    SMALL_RTL_TOP + 16);
+  Expect<Boolean>(Size = SMALL_MAP_SIZE + 4100 * 1024).ToBe(True);
+  // Without the system's bounds the RTL's are used as they are.
+  Low := 0;
+  Size := 0;
+  Expect<Boolean>(CombineStackBounds(False, Low, Size, SMALL_RTL_LOW,
+    512 * 1024, SMALL_POSITION)).ToBe(True);
+  Expect<Boolean>(Low = SMALL_RTL_LOW).ToBe(True);
+  Expect<Boolean>(Size = 512 * 1024).ToBe(True);
+  // Without either, none are found.
+  Expect<Boolean>(CombineStackBounds(False, Low, Size, 0, 0,
+    SMALL_POSITION)).ToBe(False);
 end;
 
 procedure TStackLimitTests.TestShallowEntriesAreNotChecked;
