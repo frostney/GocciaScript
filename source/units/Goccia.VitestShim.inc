@@ -312,7 +312,7 @@
     '    return vi;' + LB +
     '  },' + LB +
     '  advanceTimersByTimeAsync: async (ms) => {' + LB +
-    '    engineAdvanceTimersByTimeAsync(ms);' + LB +
+    '    await engineAdvanceTimersByTimeAsync(ms);' + LB +
     '    return vi;' + LB +
     '  },' + LB +
     '  advanceTimersToNextTimer: () => {' + LB +
@@ -320,17 +320,17 @@
     '    return vi;' + LB +
     '  },' + LB +
     '  advanceTimersToNextTimerAsync: async () => {' + LB +
-    '    engineAdvanceTimersToNextTimerAsync();' + LB +
+    '    await engineAdvanceTimersToNextTimerAsync();' + LB +
     '    return vi;' + LB +
     '  },' + LB +
     '  runAllTimers: () => { engineRunAllTimers(); return vi; },' + LB +
-    '  runAllTimersAsync: async () => { engineRunAllTimersAsync(); return vi; },' + LB +
+    '  runAllTimersAsync: async () => { await engineRunAllTimersAsync(); return vi; },' + LB +
     '  runOnlyPendingTimers: () => {' + LB +
     '    engineRunOnlyPendingTimers();' + LB +
     '    return vi;' + LB +
     '  },' + LB +
     '  runOnlyPendingTimersAsync: async () => {' + LB +
-    '    engineRunOnlyPendingTimersAsync();' + LB +
+    '    await engineRunOnlyPendingTimersAsync();' + LB +
     '    return vi;' + LB +
     '  },' + LB +
     LB +
