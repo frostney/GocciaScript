@@ -10963,7 +10963,7 @@ var
   var
     IsFunctionType, ReadonlyModifier: Boolean;
     NameLexeme: string;
-    AbstractCurrent: Integer;
+    NameStart, AbstractCurrent: Integer;
     AbstractLexer: TGocciaLexerCheckpoint;
 
     // Type arguments after a name, `Map<K, V>`, if any. As in TypeScript,
@@ -11203,7 +11203,7 @@ var
         if PeekIsContextualKeyword(KEYWORD_INFER) then
         begin
           AdvanceType;
-          if PeekType <> gttIdentifier then
+          if not IsIdentifierBindingToken(PeekType) then
             Exit;
           Break;
         end;
@@ -11251,8 +11251,15 @@ var
           end;
         gttIdentifier, gttAs, gttFrom, gttStatic:
           begin
+            // Only an unqualified name can be a primitive: `string.Name<T>`
+            // takes type arguments.
             NameLexeme := PeekWithLexicalGoal(glgInputElementDiv).Lexeme;
-            if not SkipName or not SkipTypeArgumentsSuffix(NameLexeme) then
+            NameStart := FCurrent;
+            if not SkipName then
+              Exit;
+            if FCurrent - NameStart > 1 then
+              NameLexeme := '';
+            if not SkipTypeArgumentsSuffix(NameLexeme) then
               Exit;
           end;
         gttString, gttNumber, gttBigInt, gttTrue, gttFalse, gttNull, gttVoid,
@@ -11531,13 +11538,14 @@ begin
           gttRightShift: Dec(Depth, 2);
           gttUnsignedRightShift: Dec(Depth, 3);
           gttComma:;
-          gttTemplate, gttTemplateHead:
+          gttTemplateHead:
             begin
-              // A list with a template literal type is erased only when it
-              // reads as type arguments whole, which the first try below
-              // the '<' did not (TryReadTypeArgumentList); in a JavaScript
-              // file, where nothing reads it, `new C < `${b}` > (c)` is a
-              // comparison. Either way every scan that gets here fails.
+              // A list with a substituted template literal type is erased
+              // only when it reads as type arguments whole, which the first
+              // try below the '<' did not (TryReadTypeArgumentList); in a
+              // JavaScript file, where nothing reads it,
+              // `new C < `${b}` > (c)` is a comparison. Either way every
+              // scan that gets here fails.
               EndsAtRejection := True;
               Exit;
             end;
@@ -11740,7 +11748,7 @@ begin
                 Exit;
               SetLength(OpenBrackets, Length(OpenBrackets) - 1);
             end;
-          gttTemplate, gttTemplateHead:
+          gttTemplateHead:
             begin
               HasTypeArgument := True;
               PreviousEndsOperand := True;
@@ -11748,15 +11756,12 @@ begin
               // closing brace only the template-tail goal lexes as such. An
               // element's is erased whole. A written list with one is erased
               // only when it reads as type arguments whole
-              // (TryReadTypeArgumentList), so `a < `x${b + 1}` > (c)`,
-              // `a < [`1` + 1] > (c)` and `a < b ? 7 : `${b}` > (c)` stay
-              // comparisons.
+              // (TryReadTypeArgumentList), so `a < `x${b + 1}` > (c)` and
+              // `a < b ? 7 : `${b}` > (c)` stay comparisons. A template
+              // without substitutions is one token, scanned as before.
               if ElementTypeArguments then
               begin
-                if TokenType = gttTemplateHead then
-                  SkipTemplateLiteral
-                else
-                  Advance;
+                SkipTemplateLiteral;
                 Continue;
               end;
               // The first try above did not read the list as types.

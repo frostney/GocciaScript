@@ -129,10 +129,11 @@ describe("comparisons with templates and calls", () => {
     expect(a < `${tag`x`}` > (c)).toBe(false);
   });
 
-  test("a template without substitutions in an expression keeps the comparison reading", () => {
-    // prettier-ignore
-    expect(a < [`1` + 1] > (c)).toBe(true);
+  test("a template without substitutions is scanned as before", () => {
+    const read = { read: () => "ready" };
+
     expect(identity<`plain`>(9)).toBe(9);
+    expect(identity<{ read(): `ready` }>(read)).toBe(read);
   });
 
   test("an operator after a template keeps the comparison reading", () => {
