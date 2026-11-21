@@ -1068,6 +1068,10 @@ begin
   Aborted := g2aNone;
   Json := '';
   Err := '';
+  { the tests import as the file did: its resolver (import map, node_modules, providers) and their checks }
+  SetHostResolver(FResolver);
+  SetModuleContentCheck(FModuleContentCheck);
+  SetProviderGraphCheck(FProviderGraph);
   try
     Result := RunTestSuites(Json, Err);
     case AbortKind of
@@ -1086,6 +1090,9 @@ begin
     end;
     if Aborted <> g2aNone then Result := False;
   finally
+    SetHostResolver(nil);
+    SetModuleContentCheck(nil);
+    SetProviderGraphCheck(nil);
     LimitsDisarm;
   end;
 end;
