@@ -10081,8 +10081,28 @@ end;
 
 { ---------------- entry ---------------- }
 
+{ the compiling thread's engine ends: its templates' code goes, the JIT's memory back to the end of the shared
+  stubs (no other thread's engine has compiled code: only this thread compiles) }
+procedure JitEngineDone;
+{$IFDEF CPUX86_64}
+var I: Integer;
+begin
+  if (JitMarkChunk = nil) or (GetCurrentThreadId <> JitMainThread) then Exit;
+  {$IFDEF UNIX}
+  for I := 0 to High(JitLaterChunks) do fpmunmap(JitLaterChunks[I], JIT_CHUNK);
+  {$ENDIF}
+  JitLaterChunks := nil;
+  JitChunk := JitMarkChunk;
+  JitChunkUsed := JitMarkUsed;
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
 procedure VMDone;
 begin
+  JitEngineDone;
   {$IFDEF UNIX}
   if VStack <> nil then fpmunmap(VStack, STACK_MAX * SizeOf(TValue));
   {$ELSE}
@@ -10094,9 +10114,16 @@ begin
   OpenUpvals := nil; OpenCount := 0; OpenCap := 0;
   ExtraRoots := nil; ExtraRootCount := 0;
   GlobalObj := VUndefined; Pending := VUndefined; CurNewTarget := VUndefined; ConstructNT := VUndefined;
+  { the realms and the slots their Init procedures registered, and realm 0's global declarations: the thread's next
+    engine registers and declares its own }
+  Realms := nil; CurRealm := 0; RealmInit := False; MultiRealm := False;
+  RealmValSlots := nil; RealmPtrSlots := nil; RealmIntSlots := nil;
+  GLexCells := nil; GLexNames := nil; GLexConst := nil; GLexHash := nil; GLexCount := 0;
+  GVarHash := nil; GVarCount := 0;
 end;
 
 procedure VMInit;
+var OldTypeof: PTypeofAtoms;
 begin
   StackGuardInit;
   GCDescribeNative := @DescribeTemplate;
@@ -10123,6 +10150,10 @@ begin
   CurNewTarget := VUndefined;
   ConstructNT := VUndefined;   { a threadvar starts as 0, which is the number 0, not undefined }
   ArgsShapeMapped := nil; ArgsShapeUnmapped := nil;   { shapes of this engine's Object.prototype }
+  { typeof's result atoms: a previous engine's on this thread went with its heap }
+  OldTypeof := TypeofAtoms;
+  if OldTypeof <> nil then Dispose(OldTypeof);
+  TypeofAtomsInit;
   { the preludes' private names (XPrivateKeyAt): key atoms of the thread's previous engine, freed with its heap }
   PreludePrivCount := 0;
   PreludePrivAt := nil;
@@ -10229,7 +10260,30 @@ begin
   Result := Execute(0, Res);
 end;
 
+{ G2.Bytecode's FreeJitStateHook: a template's entry tables and optimizing state (its feedback, OptFb, is freed with
+  the template) }
+procedure FreeTemplateJitState(T: PFuncTemplate);
+var Info: POptInfo; Base, Opt: PPtrUInt;
+begin
+  Info := POptInfo(T^.Opt);
+  if Info = nil then
+  begin
+    if T^.JitTable <> nil then FreeMem(T^.JitTable);
+  end
+  else
+  begin
+    Base := Info^.BaseTable;
+    Opt := Info^.Table;
+    if (Opt <> nil) and (Opt <> Base) then FreeMem(Opt);
+    if Base <> nil then FreeMem(Base);
+    Dispose(Info);
+  end;
+  T^.JitTable := nil;
+  T^.Opt := nil;
+end;
+
 initialization
+  FreeJitStateHook := @FreeTemplateJitState;
   InitFastOps;
   {$IFDEF CPUX86_64}JitOn;{$ENDIF}
 {$IFDEF G2_JITSTATS}

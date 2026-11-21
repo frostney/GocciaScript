@@ -2592,7 +2592,7 @@ begin
 end;
 
 procedure HeapDone;
-var I: Integer; L, Nx: PLarge;
+var I: Integer; L, Nx: PLarge; Ints: PIntAtoms;
 begin
   for I := 0 to PageCount - 1 do begin FreeMem(Pages[I]^.Base); Dispose(Pages[I]); end;
   Pages := nil; PageCount := 0;
@@ -2617,6 +2617,10 @@ begin
     engine would take it for its null prototype's }
   LastPrimProto := 0; LastPrimShape := nil;
   UsingKey0 := nil; UsingKey1 := nil; UsingKey2 := nil;
+  { IntAtom's atoms of 0..1023, freed with the atom table above }
+  Ints := SmallIntAtoms;
+  if Ints <> nil then Dispose(Ints);
+  SmallIntAtoms := nil;
   GrayStack := nil; GrayTop := 0; RememberedList := nil; RememberedTop := 0; if TempRoots <> nil then fpmunmap(TempRoots, TEMP_ROOTS_MAX * SizeOf(TValue));
   TempRoots := nil; TempTop := 0;
   GCOldBytes := 0; GCOldBytesAtMajor := 0; GCPromotedBytes := 0; GCMinorCount := 0; GCMajorCount := 0;

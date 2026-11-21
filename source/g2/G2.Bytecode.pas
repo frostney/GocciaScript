@@ -250,6 +250,12 @@ function InsCU(I: QWord): Integer; inline;     { unsigned }
 procedure RegisterTemplate(T: PFuncTemplate);
 procedure FinishTemplate(T: PFuncTemplate);
 procedure FreeAllTemplates;
+var
+  { G2.Lazy's: frees a template's lazy stub (TFuncTemplate.Lazy), one a function never called still holds }
+  FreeLazyStubHook: procedure(P: Pointer) = nil;
+  { G2.VM's: frees what the baseline JIT and the optimizing tier made for a template (its entry tables, its
+    optimizing state); not its code, which stays in the JIT's chunks }
+  FreeJitStateHook: procedure(T: PFuncTemplate) = nil;
 { clears every cached add transition of this thread's templates (G2.Core ProtoChanged) }
 procedure ForgetAddTransitions;
 
@@ -324,6 +330,9 @@ begin
     T := AllTemplates[I];
     for J := 0 to High(T^.ICs) do if T^.ICs[J].More <> nil then FreeMem(T^.ICs[J].More);
     if T^.OptFb <> nil then FreeMem(T^.OptFb);
+    if (T^.Lazy <> nil) and Assigned(FreeLazyStubHook) then FreeLazyStubHook(T^.Lazy);
+    if (T^.JitTable <> nil) or (T^.Opt <> nil) then
+      if Assigned(FreeJitStateHook) then FreeJitStateHook(T);
     Dispose(T);
   end;
   AllTemplates := nil;

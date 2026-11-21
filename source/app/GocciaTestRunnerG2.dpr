@@ -146,19 +146,6 @@ type
     procedure Validate; override;
   end;
 
-  { a heap snapshot's restore, on a thread of its own (a fresh engine) }
-  TG2HeapVerifyThread = class(TThread)
-  private
-    FApp: TG2TestRunnerApp;
-    FContext: ^TG2FileContext;
-    FRoot: ^TG2HeapRoot;
-    FSource: UnicodeString;
-    FVerdict: TG2HeapVerdict;
-    FDetail: UnicodeString;
-  protected
-    procedure Execute; override;
-  end;
-
   { one test file on a thread of its own: a G2 engine's state is its thread's, so each file gets a fresh engine }
   TG2TestThread = class(TThread)
   private
@@ -625,19 +612,6 @@ begin
   end;
 end;
 
-procedure TG2HeapVerifyThread.Execute;
-begin
-  try
-    FVerdict := FApp.VerifyHeapRoot(FContext^, FRoot^, FSource, FDetail);
-  except
-    on E: Exception do
-    begin
-      FVerdict := g2hvFailed;
-      FDetail := 'the restoring engine raised ' + UnicodeString(E.ClassName) + ': ' + UnicodeString(E.Message);
-    end;
-  end;
-end;
-
 procedure TG2TestRunnerApp.RunTestFile(AIndex: Integer; ASource: TStringList);
 var
   FileName, FileConfigPath, AliasBaseDirectory: string;
@@ -680,7 +654,7 @@ var
 
   { --heap-snapshots: each object the source engine wrote, restored in a fresh engine of its own }
   procedure VerifyHeapRoots;
-  var I: Integer; Worker: TG2HeapVerifyThread; Ctx: TG2FileContext; Verdict_: TG2HeapVerdict;
+  var I: Integer; Ctx: TG2FileContext; Verdict_: TG2HeapVerdict;
     Detail: UnicodeString;
   begin
     Ctx := Context;
@@ -693,19 +667,15 @@ var
         Res.HeapRefusals[High(Res.HeapRefusals)] := UTF8Encode(HeapRoots[I].Refusal);
         Continue;
       end;
-      { a G2 engine's state is its thread's: each restore gets a fresh engine on a thread of its own }
-      Worker := TG2HeapVerifyThread.Create(True, FILE_THREAD_STACK);
+      { a fresh engine of its own, on this thread now that the file's engine is gone }
       try
-        Worker.FApp := Self;
-        Worker.FContext := @Ctx;
-        Worker.FRoot := @HeapRoots[I];
-        Worker.FSource := SrcText;
-        Worker.Start;
-        Worker.WaitFor;
-        Verdict_ := Worker.FVerdict;
-        Detail := Worker.FDetail;
-      finally
-        Worker.Free;
+        Verdict_ := VerifyHeapRoot(Ctx, HeapRoots[I], SrcText, Detail);
+      except
+        on E: Exception do
+        begin
+          Verdict_ := g2hvFailed;
+          Detail := 'the restoring engine raised ' + UnicodeString(E.ClassName) + ': ' + UnicodeString(E.Message);
+        end;
       end;
       case Verdict_ of
         g2hvPassed: Inc(Res.HeapPassed);

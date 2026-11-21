@@ -41,6 +41,12 @@ var
   JitLoopHead: array of Boolean;   { each PC: a back edge's target in a template the optimizing tier may compile }
   JitChunk: PByte = nil;           { executable memory, bump-allocated }
   JitChunkUsed: PtrUInt = 0;
+  { where the shared stubs end (JitBuildCallStub and the rest, built at the first compile): everything after it is
+    the code of the compiling thread's engine's templates, which JitEngineDone gives back; nil until the stubs
+    exist. JitLaterChunks: the chunks mapped since }
+  JitMarkChunk: PByte = nil;
+  JitMarkUsed: PtrUInt = 0;
+  JitLaterChunks: array of PByte;
   JitMainThread: TThreadID;        { the thread the VM unit started on: the only one that compiles }
   JitTaken: Boolean;               { JitInstr compiled the instruction (False: its code is only its exit) }
 
@@ -3862,6 +3868,11 @@ begin
     {$ENDIF}
     JitChunk := P;
     JitChunkUsed := 0;
+    if JitMarkChunk <> nil then
+    begin
+      SetLength(JitLaterChunks, Length(JitLaterChunks) + 1);
+      JitLaterChunks[High(JitLaterChunks)] := P;
+    end;
   end;
   Result := JitChunk + JitChunkUsed;
   Inc(JitChunkUsed, N);
@@ -5061,6 +5072,12 @@ begin
   if JitICGetHitCode = nil then JitBuildICGetHit;
   if JitNewStub = nil then JitBuildNewStub;
   if (JitGetterStub = nil) and (JitCallStub <> nil) then JitBuildGetterStub;
+  if (JitMarkChunk = nil) and (JitCallStub <> nil) and (JitICGetHitCode <> nil) and (JitNewStub <> nil) and
+     (JitGetterStub <> nil) then
+  begin
+    JitMarkChunk := JitChunk;
+    JitMarkUsed := JitChunkUsed;
+  end;
   if (JitCallStub = nil) or (JitGetterStub = nil) then Exit;
   JitLen := 0;
   JitFixCount := 0;

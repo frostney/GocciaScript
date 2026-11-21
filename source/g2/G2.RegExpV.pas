@@ -1121,8 +1121,23 @@ begin
   Result := True;
 end;
 
+{ the patterns this thread's engine compiled }
+procedure FreeCompiledPatterns;
+var Cache: TDictionary<UnicodeString, PCompiled>; C: PCompiled;
+begin
+  Cache := Compiled;
+  if Cache = nil then Exit;
+  for C in Cache.Values do
+  begin
+    C^.M.Free;
+    Dispose(C);
+  end;
+  Cache.Free;
+  Compiled := nil;
+end;
+
 procedure InitRegExp;
-var C, StrProto_, Getr, Setr: TValue; I, K: Integer; LName: UnicodeString;
+var C, StrProto_, Getr, Setr: TValue; I, K: Integer; LName: UnicodeString; OldLegacy: PLegacy;
   procedure Getter(const Name: UnicodeString; Fn: TNativeFn);
   var F: TValue;
   begin
@@ -1132,7 +1147,18 @@ var C, StrProto_, Getr, Setr: TValue; I, K: Integer; LName: UnicodeString;
   end;
 begin
   RegExpIdentityK := True;   { Annex B.1.2: \k without group names is the letter k }
-  if not RealmInit then Compiled := TDictionary<UnicodeString, PCompiled>.Create;
+  if not RealmInit then
+  begin
+    { the engine's first realm: what the thread's previous engine compiled and cached goes (its shapes and legacy
+      state were that engine's) }
+    FreeCompiledPatterns;
+    Compiled := TDictionary<UnicodeString, PCompiled>.Create;
+    RegExpShape := nil;
+    MatchShape := nil;
+    IntactShape := nil;
+    OldLegacy := Legacy;
+    if OldLegacy <> nil then Dispose(OldLegacy);
+  end;
   RealmVals([@RegExpProto, @StrReplaceOrig, @StrSplitOrig, @StrReplaceAllOrig, @IntactOrig, @SpeciesOrig,
     @RegExpCtorV, @JSFns]);
   RealmPtrs([@RegExpShape, @MatchShape, @IntactShape, @Legacy]);

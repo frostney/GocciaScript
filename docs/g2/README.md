@@ -288,9 +288,9 @@ again. A module root carries a hash of its source, and a restore refuses a modul
 
 `GocciaTestRunner --heap-snapshots` round-trips each distinct object `expect()` was given. After the file's tests,
 `TG2Engine.HeapSnapshotObserved` writes each one and describes it through the object model (own keys,
-descriptors, prototypes, extensibility; built-ins by name). Each written object is then restored on a thread of its
-own, in a fresh engine set up as the file's was (`TG2Engine.HeapSnapshotVerify`), written again and described
-again: different bytes or a different description fail the file. The report on stderr is GocciaTestRunner's
+descriptors, prototypes, extensibility; built-ins by name). Once the file's engine is gone, each written object is
+restored in a fresh engine on the same thread, set up as the file's was (`TG2Engine.HeapSnapshotVerify`), written
+again and described again: different bytes or a different description fail the file. The report on stderr is GocciaTestRunner's
 (`Heap snapshots: observations=N objects=N passed=N refused=N failed=N`, then each refusal reason with its count).
 Over `tests/` no round trip fails. Not yet on G2: module records restored whole
 ([ADR 0150](../adr/0150-heap-snapshots-restore-module-records-whole.md)), the codecs that refuse today, the

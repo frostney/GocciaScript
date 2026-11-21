@@ -91,6 +91,9 @@ procedure FreeLazySources;
 
 implementation
 
+uses
+  G2.Bytecode;
+
 threadvar
   AllSources: array of TLazySource;
   SourceCount: Integer;
@@ -206,4 +209,11 @@ begin
   SourceCount := 0;
 end;
 
+procedure FreeLazyStub(P: Pointer);
+begin
+  Dispose(PLazyStub(P));
+end;
+
+initialization
+  FreeLazyStubHook := @FreeLazyStub;
 end.
