@@ -1585,6 +1585,7 @@ begin
       AEngine.ModuleLoader.ExperimentalJSModuleSourceEnabled;
     ManifestLoader.WarningUnsupportedFeatures :=
       AEngine.ModuleLoader.WarningUnsupportedFeatures;
+    ManifestLoader.SuppressWarnings := AEngine.ModuleLoader.SuppressWarnings;
     ManifestLoader.StrictTypesEnabled :=
       AEngine.ModuleLoader.StrictTypesEnabled;
     ManifestLoader.EvaluateModuleBody :=
@@ -1867,6 +1868,7 @@ begin
         Isolated.LabelStatementsEnabled := AEngine.LabelStatementsEnabled;
         Isolated.ForInLoopsEnabled := AEngine.ForInLoopsEnabled;
         Isolated.StrictTypes := AEngine.StrictTypes;
+        Isolated.SuppressWarnings := AEngine.SuppressWarnings;
         { The filesystem content provider, with every read it makes checked. }
         AttachRuntime(Isolated);
         Module := Isolated.ModuleLoader.LoadModule(APath, APath);

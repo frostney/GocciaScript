@@ -622,6 +622,11 @@ var
   ConsoleExtension: TGocciaConsoleRuntimeExtension;
   Runtime: TGocciaRuntimeCore;
 begin
+  { A JSON envelope is the only thing standard output may carry, so the
+    warnings of the globals and manifest modules loaded below are muted before
+    they load. }
+  if IsJsonOutput then
+    AEngine.SuppressWarnings := True;
   { Globals modules need a content provider, but testing extensions still
     attach after globals so their imports see the injected values. }
   Runtime := AttachRuntime(AEngine);
