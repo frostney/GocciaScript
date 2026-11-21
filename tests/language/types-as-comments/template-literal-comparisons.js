@@ -16,4 +16,9 @@ describe("template comparisons in JavaScript", () => {
     // prettier-ignore
     expect(new Box < `${b}` > (0)).toBe(true);
   });
+
+  test("a constructor compared with a template without substitutions stays a comparison", () => {
+    // prettier-ignore
+    expect(new Box < `1` > (0)).toBe(true);
+  });
 });

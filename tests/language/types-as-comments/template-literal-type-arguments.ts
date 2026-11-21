@@ -78,6 +78,8 @@ describe("template literal type arguments", () => {
     expect(identity<`${typeof from}`>(4)).toBe(4);
     expect(identity<`${keyof { readonly key: unique symbol }}`>(5)).toBe(5);
     expect(identity<(from: string) => `id-${string}`>(6)).toBe(6);
+    expect(identity<[from: `id-${string}`]>(7)).toBe(7);
+    expect(identity<(from: string) => from is `id-${string}`>(8)).toBe(8);
   });
 
   test("with a type query on this", () => {
@@ -125,6 +127,12 @@ describe("comparisons with templates and calls", () => {
 
     // prettier-ignore
     expect(a < `${tag`x`}` > (c)).toBe(false);
+  });
+
+  test("a template without substitutions in an expression keeps the comparison reading", () => {
+    // prettier-ignore
+    expect(a < [`1` + 1] > (c)).toBe(true);
+    expect(identity<`plain`>(9)).toBe(9);
   });
 
   test("an operator after a template keeps the comparison reading", () => {

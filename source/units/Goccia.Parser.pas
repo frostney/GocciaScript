@@ -10898,7 +10898,7 @@ var
     Result := (AName = 'any') or (AName = 'unknown') or (AName = 'never') or
       (AName = 'number') or (AName = 'bigint') or (AName = 'boolean') or
       (AName = 'string') or (AName = 'symbol') or (AName = 'object') or
-      (AName = 'undefined');
+      (AName = 'undefined') or (AName = 'intrinsic');
   end;
 
   function PeekIsContextualKeyword(const AKeyword: string): Boolean;
@@ -11007,14 +11007,14 @@ var
           if Assigned(FLexer) then
             SavedLexer := FLexer.CreateCheckpoint;
           AdvanceType;
-          if PeekType <> gttIdentifier then
+          if not IsIdentifierBindingToken(PeekType) then
           begin
             FCurrent := SavedCurrent;
             if Assigned(FLexer) then
               FLexer.RestoreCheckpoint(SavedLexer);
           end;
         end;
-        if PeekType <> gttIdentifier then
+        if not IsIdentifierBindingToken(PeekType) then
           Exit;
         AdvanceType;
         if PeekType = gttExtends then
@@ -11066,7 +11066,7 @@ var
       SavedCurrent: Integer;
       SavedLexer: TGocciaLexerCheckpoint;
     begin
-      if PeekType = gttIdentifier then
+      if IsIdentifierNameToken(PeekType) then
       begin
         SavedCurrent := FCurrent;
         if Assigned(FLexer) then
@@ -11096,14 +11096,15 @@ var
       Asserts: Boolean;
     begin
       Asserts := PeekIsContextualKeyword(KEYWORD_ASSERTS);
-      if Asserts or (PeekType in [gttIdentifier, gttThis]) then
+      if Asserts or IsIdentifierBindingToken(PeekType) or
+         (PeekType = gttThis) then
       begin
         SavedCurrent := FCurrent;
         if Assigned(FLexer) then
           SavedLexer := FLexer.CreateCheckpoint;
         if Asserts then
           AdvanceType;
-        if PeekType in [gttIdentifier, gttThis] then
+        if IsIdentifierBindingToken(PeekType) or (PeekType = gttThis) then
         begin
           AdvanceType;
           if PeekIsContextualKeyword(KEYWORD_IS) then
@@ -11242,6 +11243,8 @@ var
                   Exit;
                 AdvanceType;
               end;
+              if not SkipTypeArgumentsSuffix('') then
+                Exit;
             end
             else if not SkipName or not SkipTypeArgumentsSuffix('') then
               Exit;
@@ -11528,14 +11531,13 @@ begin
           gttRightShift: Dec(Depth, 2);
           gttUnsignedRightShift: Dec(Depth, 3);
           gttComma:;
-          gttTemplateHead:
+          gttTemplate, gttTemplateHead:
             begin
-              // In a JavaScript file `new C < `${b}` > (c)` is a comparison.
-              if not FAllowsTypeScriptOnlySyntax then
-                Exit;
               // A list with a template literal type is erased only when it
               // reads as type arguments whole, which the first try below
-              // the '<' did not (TryReadTypeArgumentList).
+              // the '<' did not (TryReadTypeArgumentList); in a JavaScript
+              // file, where nothing reads it, `new C < `${b}` > (c)` is a
+              // comparison. Either way every scan that gets here fails.
               EndsAtRejection := True;
               Exit;
             end;
@@ -11738,7 +11740,7 @@ begin
                 Exit;
               SetLength(OpenBrackets, Length(OpenBrackets) - 1);
             end;
-          gttTemplateHead:
+          gttTemplate, gttTemplateHead:
             begin
               HasTypeArgument := True;
               PreviousEndsOperand := True;
@@ -11746,11 +11748,15 @@ begin
               // closing brace only the template-tail goal lexes as such. An
               // element's is erased whole. A written list with one is erased
               // only when it reads as type arguments whole
-              // (TryReadTypeArgumentList), so `a < `x${b + 1}` > (c)` and
-              // `a < b ? 7 : `${b}` > (c)` stay comparisons.
+              // (TryReadTypeArgumentList), so `a < `x${b + 1}` > (c)`,
+              // `a < [`1` + 1] > (c)` and `a < b ? 7 : `${b}` > (c)` stay
+              // comparisons.
               if ElementTypeArguments then
               begin
-                SkipTemplateLiteral;
+                if TokenType = gttTemplateHead then
+                  SkipTemplateLiteral
+                else
+                  Advance;
                 Continue;
               end;
               // The first try above did not read the list as types.
