@@ -273,6 +273,12 @@ function LimitRemainingMs: Int64;
   starts that much again }
 function LimitsSuspend: Int64;
 procedure LimitsResume(Ms: Int64);
+{ a test's deadline (GocciaTestRunner's --test-timeout): the run's timer set to fire Ms from now, made when the run
+  has none (LimitsDropTimer removes it again), the instruction budget left as it is; ClearTimeoutAbort ends a
+  timeout's abort, or a timer that fired before it was seen, so the run goes on }
+procedure LimitsSetDeadline(Ms: Int64);
+procedure LimitsDropTimer;
+procedure ClearTimeoutAbort;
 { where the running script is: the innermost frame of user code (a file, <stdin>, or eval, Function or ShadowRealm
   code), its source and the line and column of the instruction running; False outside any }
 function CallSiteNow(out Source: UnicodeString; out Line, Column: Integer): Boolean;
@@ -740,6 +746,47 @@ begin
   InstrCounted := False;
   InstrLeft := 0;
   JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn;
+end;
+
+procedure LimitsSetDeadline(Ms: Int64);
+begin
+  if Ms <= 0 then Ms := 1;
+  LimitTimeoutMs := Ms;
+  if LimitTimer <> nil then
+  begin
+    LimitTimer.Deadline := GetTickCount64 + QWord(Ms);
+    RTLEventSetEvent(LimitTimer.Wake);
+    Exit;
+  end;
+  JitBlocked := True;
+  LimitTimer := TLimitTimer.Create(True);
+  LimitTimer.Deadline := GetTickCount64 + QWord(Ms);
+  LimitTimer.PInterrupt := @Interrupt;
+  LimitTimer.PFrameLimit := @FrameLimit;
+  LimitTimer.Wake := RTLEventCreate;
+  LimitTimer.Start;
+end;
+
+procedure LimitsDropTimer;
+begin
+  if LimitTimer = nil then Exit;
+  LimitTimer.Terminate;
+  RTLEventSetEvent(LimitTimer.Wake);
+  LimitTimer.WaitFor;
+  RTLEventDestroy(LimitTimer.Wake);
+  LimitTimer.Free;
+  LimitTimer := nil;
+  LimitTimeoutMs := 0;
+  JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or InstrCounted;
+end;
+
+procedure ClearTimeoutAbort;
+begin
+  if (AbortKind <> 0) and (AbortKind <> 1) then Exit;
+  Interrupt := 0;
+  Aborting := False;
+  AbortKind := 0;
+  FrameLimit := FrameLimitBase;
 end;
 
 procedure LimitsArm(TimeoutMs, MaxInstructions: Int64);

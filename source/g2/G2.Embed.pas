@@ -134,6 +134,15 @@ type
       read then. Run installs them when the host has not. }
     function PrepareHost(var Err: UnicodeString): Boolean;
     function Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
+    { test mode, after Run: the file's suites (G2.HostAPI RunTestSuites) under the limits Run armed, which stay in force
+      from the file's start; Json their report, else Err why they did not finish and Aborted the limit that ended
+      them. The limits are disarmed after. }
+    function RunTests(var Json, Err: UnicodeString; var Aborted: TG2Abort): Boolean;
+    { after RunTests: a rejection still without a handler once the work the tests left has run (its text), which
+      fails the file; '' for none }
+    function LateRejection: UnicodeString;
+    { test mode: the limits Run left armed disarmed, when RunTests does not follow }
+    procedure EndTests;
     { whether the run's entry loaded a module from Path (an absolute path), not the host before it: a host shows a
       code frame of such a file only }
     function ModuleLoaded(const Path: UnicodeString): Boolean;
@@ -1035,8 +1044,52 @@ begin
     SetModuleContentCheck(nil);
     SetProviderGraphCheck(nil);
     PopRoots(1);
+    { a test file's limits cover its suites too (RunTests disarms them) }
+    if not FTestMode then LimitsDisarm;
+  end;
+end;
+
+function TG2Engine.RunTests(var Json, Err: UnicodeString; var Aborted: TG2Abort): Boolean;
+begin
+  Aborted := g2aNone;
+  Json := '';
+  Err := '';
+  try
+    Result := RunTestSuites(Json, Err);
+    case AbortKind of
+      1: Aborted := g2aTimeout;
+      2: Aborted := g2aInstructionLimit;
+      3:
+        begin
+          Aborted := g2aMemoryLimit;
+          Err := MemoryLimitMessage;
+        end;
+      4:
+        begin
+          Aborted := g2aHostAbort;
+          Err := HostAbortMessage;
+        end;
+    end;
+    if Aborted <> g2aNone then Result := False;
+  finally
     LimitsDisarm;
   end;
+end;
+
+procedure TG2Engine.EndTests;
+begin
+  LimitsDisarm;
+end;
+
+function TG2Engine.LateRejection: UnicodeString;
+var Reason: TValue;
+begin
+  Result := '';
+  Reason := VUndefined;
+  if not TakeUnhandledRejection(Reason) then Exit;
+  PushRoot(Reason);
+  Result := ThrownText(RootAt(TempTop - 1));
+  PopRoots(1);
 end;
 
 end.

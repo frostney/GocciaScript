@@ -25,6 +25,22 @@ function RunMicrotasks: Boolean;
 { 27.2.1.9 HostPromiseRejectionTracker, as a host that reports at the end of a run: the reason of the first promise
   rejected with no handler that still has none (False when every rejection was handled) }
 function TakeUnhandledRejection(var Reason: TValue): Boolean;
+{ the test runner's attribution of host work to the describe body, hook or test that left it (GocciaTestRunner's
+  per-unit accounting): RejectionMark counts the promises rejected without a handler so far, TakeRejections removes
+  those tracked since a mark and returns them (an array), FirstUnhandledOf finds the first of such a list that still
+  has no handler; with JobErrorsToHost a queued callback that throws is recorded (TakeJobErrors, an array or
+  undefined) instead of ending the run; DiscardJobs drops every queued job }
+function RejectionMark: Integer;
+function TakeRejections(From: Integer): TValue;
+function FirstUnhandledOf(List: TValue; var Reason: TValue): Boolean;
+function TakeJobErrors: TValue;
+procedure DiscardJobs;
+threadvar
+  JobErrorsToHost: Boolean;
+  { while a test file's suites are collected, a recorded job error drops the jobs behind it (the runner's own work
+    is not queued yet), and the host the pending timers too, before the next fires }
+  JobErrorsDropWork: Boolean;
+  JobErrorDropsTimers: Boolean;
 { a pending promise of this engine, and settling one from native code (G2.Atomics' waitAsync) }
 function NewPendingPromise: TValue;
 procedure ResolvePendingPromise(P, V: TValue);
@@ -214,6 +230,78 @@ begin
       Exit(True);
     end;
   end;
+end;
+
+function RejectionMark: Integer;
+begin
+  if not SameEngine(RejectedRootedGen) or not IsObject(Rejected) then Exit(0);
+  Result := ArrayLen(ObjOf(Rejected));
+end;
+
+function TakeRejections(From: Integer): TValue;
+var I, N: Integer; A: PObj;
+begin
+  A := NewArray(0, 4);
+  Result := MkPtr(A);
+  if not SameEngine(RejectedRootedGen) or not IsObject(Rejected) then Exit;
+  N := ArrayLen(ObjOf(Rejected));
+  if From < 0 then From := 0;
+  PushRoot(Result);
+  for I := From to N - 1 do ArrayPush(ObjOf(RootAt(TempTop - 1)), ObjOf(Rejected)^.Elements^.Data[I]);
+  if From < N then ObjOf(Rejected)^.Elements^.Len := From;
+  Result := RootAt(TempTop - 1);
+  PopRoots(1);
+end;
+
+function FirstUnhandledOf(List: TValue; var Reason: TValue): Boolean;
+var I: Integer; P: TValue;
+begin
+  Result := False;
+  if not IsObject(List) or (ObjOf(List)^.OKind <> okArray) then Exit;
+  for I := 0 to ArrayLen(ObjOf(List)) - 1 do
+  begin
+    P := ObjOf(List)^.Elements^.Data[I];
+    if IsObject(P) and ((ObjOf(P)^.OFlags and 1) = 0) then
+    begin
+      Reason := ObjOf(P)^.Aux1;
+      Exit(True);
+    end;
+  end;
+end;
+
+threadvar
+  JobErrors: TValue;
+  JobErrorsRootedGen: Integer;
+
+procedure RecordJobError(E: TValue);
+begin
+  if FirstInEngine(JobErrorsRootedGen) then
+  begin
+    AddRoot(@JobErrors);
+    JobErrors := VUndefined;
+  end;
+  PushRoot(E);
+  if not IsObject(JobErrors) then JobErrors := MkPtr(NewArray(0, 2));
+  ArrayPush(ObjOf(JobErrors), RootAt(TempTop - 1));
+  PopRoots(1);
+end;
+
+function TakeJobErrors: TValue;
+begin
+  Result := VUndefined;
+  if not SameEngine(JobErrorsRootedGen) then Exit;
+  Result := JobErrors;
+  JobErrors := VUndefined;
+end;
+
+procedure DiscardJobs;
+var Q: PValueArray; I: Integer;
+begin
+  if JobCount = 0 then Exit;
+  Q := VA(Jobs);
+  for I := 0 to Integer(Q^.Len) - 1 do Q^.Data[I] := VUndefined;
+  JobHead := 0;
+  JobCount := 0;
 end;
 
 procedure Settle(P: TValue; State: Integer; V: TValue);
@@ -1004,6 +1092,20 @@ begin
           Result := CallValue(A, VUndefined, nil, 0, R);
           AsyncCtx := RootAt(TempTop - 1);
           PopRoots(1);
+          { the test runner attributes it to the unit that queued it }
+          if not Result and JobErrorsToHost and not Aborting then
+          begin
+            RecordJobError(Pending);
+            Pending := VUndefined;
+            Result := True;
+            { the jobs behind it, and the timers, go with it (GocciaTestRunner's DiscardPendingHostWork) }
+            if JobErrorsDropWork then
+            begin
+              DiscardJobs;
+              JobErrorDropsTimers := True;
+              Exit(True);
+            end;
+          end;
           if not Result then Exit(False);   { reported like an uncaught exception }
         end;
     end;

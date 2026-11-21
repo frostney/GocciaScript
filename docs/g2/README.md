@@ -245,8 +245,18 @@ summary, the JSON envelope, exit codes, `--exit-on-first-failure` and coverage. 
 own with an engine in test mode (`TestMode`, `prelude/testing.js`), its suites reported by `RunTestSuites`; at most
 `--jobs` run at once, and their console output is printed only in a sequential run. What it shares with
 GocciaRunner for one file's engine (the console capture, settings, the import grant) is in
-`Goccia.CLI.G2FileEngine`. Not yet on G2: snapshots, heap snapshots, `--globals` and `--global`, the per-test and
-per-describe timeouts, and suite errors counted apart from failed tests.
+`Goccia.CLI.G2FileEngine`.
+
+Snapshots format values in `prelude/testing.js` as GocciaScript's Vitest pretty-format port does
+(`Goccia.Builtins.Testing.SnapshotFormatting`), and match them through `G2.HostAPI`'s snapshot natives over the
+engine-independent `Goccia.Builtins.Testing.Snapshots` state and the runner's `Goccia.TestRunner.SnapshotHost`
+(the `.snap` file, inline edits written back once every file has run, `-u`, CI detection). The file's `--timeout`
+covers its suites (`TG2Engine.RunTests`); `--test-timeout` runs each test body, and the work it waits for, inside
+a native (`callWithin`) under a deadline of its own, so a test that runs out fails with `TIMEOUT after Nms` and the
+next one runs. Host work is attributed as the old library does: a rejection or a throwing job a describe body, hook
+or test left fails that unit (`G2.Promise` rejection marks, recorded job errors), a failed hook gives up the timers
+and jobs it left, and work left after the last test still runs. Not yet on G2: heap snapshots, `--globals` and
+`--global`, virtual-module manifests, `--describe-timeout`, and the per-test failure lines of the console report.
 
 ## Gate
 

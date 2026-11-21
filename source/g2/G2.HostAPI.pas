@@ -12,7 +12,7 @@ unit G2.HostAPI;
 interface
 
 uses
-  SysUtils, G2.Core, Goccia.Capabilities, Goccia.ModuleResolver;
+  SysUtils, Classes, G2.Core, Goccia.Capabilities, Goccia.ModuleResolver, Goccia.Builtins.Testing.Snapshots;
 
 type
   { an audited read decision of the read policy (the engine's Audit, gckReadFile); False when the audit sink failed }
@@ -101,11 +101,19 @@ procedure HoistTestMocks(const FileName: string; const Source: UnicodeString);
   (totalTests, passed, failed, skipped, assertions, failedTests), or False and Err the error that stopped
   them }
 function RunTestSuites(var Json, Err: UnicodeString): Boolean;
+{ the snapshots of this thread's test file (GocciaScript's Goccia.Builtins.Testing.Snapshots): its host (the .snap
+  file and the inline edits) and update mode, before InstallTestingAPI; nil leaves the matchers without snapshots.
+  TestSnapshotsDone frees the file's state (its host is reference counted). }
+procedure SetTestSnapshots(const Host: IGocciaSnapshotHost; Mode: TGocciaSnapshotUpdateMode);
+procedure TestSnapshotsDone;
+threadvar
+  { --test-timeout: each test's own deadline in milliseconds (0: none), before InstallTestingAPI }
+  TestTimeoutMs: Int64;
 
 implementation
 
 uses
-  Classes, Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
+  Math, Linux, UnixType, G2.Bytecode, G2.VM, G2.Typed, G2.Modules, G2.Snapshot, G2.Promise, G2.Atomics, G2.Eval, G2.Weak,
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
@@ -145,7 +153,7 @@ threadvar
   MockModules: TStringList;
   SharedV, LoadHostModuleV, HasHostModuleV: TValue;
 
-  FireNextV: TValue;
+  FireNextV, DiscardTimersV: TValue;
   EventLoopRootedGen: Integer;
   TestApiV: TValue;
   TestApiRootedGen: Integer;
@@ -1755,8 +1763,10 @@ begin
   if FirstInEngine(EventLoopRootedGen) then
   begin
     AddRoot(@FireNextV); AddRoot(@SharedV); AddRoot(@LoadHostModuleV); AddRoot(@HasHostModuleV);
+    AddRoot(@DiscardTimersV);
   end;
   FireNextV := VUndefined;
+  DiscardTimersV := VUndefined;
   SharedV := VUndefined;
   LoadHostModuleV := VUndefined;
   HasHostModuleV := VUndefined;
@@ -1797,7 +1807,7 @@ begin
     Goccia := RootAt(TempTop - 1);
     { shared.timers.fireNext, for the event loop }
     if Result and GetV(RootAt(Base + 2), AtomOf('timers'), R) and IsObject(R) then
-      Result := GetV(R, AtomOf('fireNext'), FireNextV);
+      Result := GetV(R, AtomOf('fireNext'), FireNextV) and GetV(R, AtomOf('discard'), DiscardTimersV);
     SharedV := RootAt(Base + 2);
     if Result then Result := GetV(SharedV, AtomOf('loadHostModule'), LoadHostModuleV) and
       GetV(SharedV, AtomOf('hasHostModule'), HasHostModuleV);
@@ -1817,11 +1827,263 @@ begin
   if not Result and (Err = '') then Err := 'Goccia binding failed';
 end;
 
+threadvar
+  SnapshotState: TGocciaSnapshotState;
+
+procedure SetTestSnapshots(const Host: IGocciaSnapshotHost; Mode: TGocciaSnapshotUpdateMode);
+begin
+  FreeAndNil(SnapshotState);
+  if Host <> nil then SnapshotState := TGocciaSnapshotState.Create(Host, Mode);
+end;
+
+procedure TestSnapshotsDone;
+begin
+  FreeAndNil(SnapshotState);
+end;
+
+{ [passed, failure message] }
+function SnapshotOutcome(Passed: Boolean; const Message: string; var Res: TValue): Boolean;
+begin
+  PushRoot(MkPtr(NewArray(0, 2)));
+  ArrayPush(ObjOf(RootAt(TempTop - 1)), MkBool(Passed));
+  ArrayPush(ObjOf(RootAt(TempTop - 1)), StrFromUnicode(UTF8Decode(Message)));
+  Res := RootAt(TempTop - 1);
+  PopRoots(1);
+  Result := True;
+end;
+
+{ a snapshot state's failure (its file unreadable or malformed) as the matcher's error }
+function SnapshotFailed(const E: Exception): Boolean;
+begin
+  Result := ThrowError('Error', UnicodeString(UTF8Decode(E.Message)));
+end;
+
+{ snapshot.available() }
+function Snap_Available(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkBool(SnapshotState <> nil);
+  Result := True;
+end;
+
+{ snapshot.matchExternal(testName, hint, received, propertyMatched) }
+function Snap_MatchExternal(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Msg: string; Passed: Boolean;
+begin
+  if SnapshotState = nil then Exit(ThrowError('Error', 'toMatchSnapshot is only available when a snapshot host is installed'));
+  try
+    Passed := SnapshotState.MatchExternal(U8(ArgStr(Args, Argc, 1)), U8(ArgStr(Args, Argc, 2)),
+      U8(ArgStr(Args, Argc, 3)), (Argc >= 4) and ToBool(Args[4]), Msg);
+  except
+    on E: Exception do Exit(SnapshotFailed(E));
+  end;
+  Result := SnapshotOutcome(Passed, Msg, Res);
+end;
+
+{ snapshot.matchInline(testName, hint, received, inline, hasInline, propertyMatched, argumentIndex): the call site is
+  the user's frame that called the matcher }
+function Snap_MatchInline(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Msg: string; Passed: Boolean; Src: UnicodeString; Line, Col, ArgIndex: Integer;
+begin
+  if SnapshotState = nil then
+    Exit(ThrowError('Error', 'toMatchInlineSnapshot is only available when a snapshot host is installed'));
+  Src := '';
+  Line := 0;
+  Col := 0;
+  CallSiteNow(Src, Line, Col);
+  ArgIndex := 0;
+  if (Argc >= 7) and IsNumber(Args[7]) then ArgIndex := Trunc(NumOf(Args[7]));
+  try
+    Passed := SnapshotState.MatchInline(U8(ArgStr(Args, Argc, 1)), U8(ArgStr(Args, Argc, 2)),
+      U8(ArgStr(Args, Argc, 3)), U8(ArgStr(Args, Argc, 4)), (Argc >= 5) and ToBool(Args[5]),
+      (Argc >= 6) and ToBool(Args[6]), U8(Src), Line, Col, ArgIndex, Msg);
+  except
+    on E: Exception do Exit(SnapshotFailed(E));
+  end;
+  Result := SnapshotOutcome(Passed, Msg, Res);
+end;
+
+{ snapshot.preserve(testName): a skipped or todo test keeps its snapshots }
+function Snap_Preserve(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if SnapshotState <> nil then SnapshotState.PreserveTestSnapshots(U8(ArgStr(Args, Argc, 1)));
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ snapshot.finish(processUnchecked): the file's snapshots written and the obsolete ones handled; the errors, a list
+  of strings }
+function Snap_Finish(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Errors: TStringList; I: Integer;
+begin
+  Errors := TStringList.Create;
+  try
+    if SnapshotState <> nil then
+      try
+        SnapshotState.Finish(Errors, (Argc < 1) or ToBool(Args[1]));
+      except
+        on E: Exception do Errors.Add('Snapshot finalization failed: ' + E.Message);
+      end;
+    PushRoot(MkPtr(NewArray(0, Errors.Count)));
+    for I := 0 to Errors.Count - 1 do
+      ArrayPush(ObjOf(RootAt(TempTop - 1)), StrFromUnicode(UTF8Decode(Errors[I])));
+    Res := RootAt(TempTop - 1);
+    PopRoots(1);
+  finally
+    Errors.Free;
+  end;
+  Result := True;
+end;
+
+function RunEventLoopIn(Intervals: Boolean): Boolean; forward;
+
+{ deadline.callWithin(fn, ms): a test's body under its own deadline (--test-timeout), the work it leaves pending run
+  here too, so a wait (a fetch) counts against it; ['ok', the promise or value fn returned], ['threw', the error], or
+  ['timeout'] once the deadline ended it. A file deadline sooner than ms stays the one in force, and ends the run. }
+function Test_CallWithin(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Ms, Outer, Elapsed: Int64; NoOuter, Binding, Ok: Boolean; Start: QWord; R, E: TValue; Status: UnicodeString;
+begin
+  if (Argc < 1) or not IsCallable(Args[1]) then Exit(ThrowTypeError('callWithin needs a function'));
+  Ms := 0;
+  if (Argc >= 2) and IsNumber(Args[2]) then Ms := Trunc(NumOf(Args[2]));
+  Outer := LimitRemainingMs;
+  NoOuter := Outer = 0;
+  Binding := (Ms > 0) and (NoOuter or (Ms < Outer));
+  if Binding then LimitsSetDeadline(Ms);
+  Start := GetTickCount64;
+  R := VUndefined;
+  Ok := CallValue(Args[1], VUndefined, nil, 0, R);
+  PushRoot(R);
+  if Ok then Ok := RunEventLoopIn(False);
+  Elapsed := Int64(GetTickCount64 - Start);
+  E := VUndefined;
+  if not Ok and Binding and (AbortKind = 1) then
+  begin
+    ClearTimeoutAbort;
+    Pending := VUndefined;
+    Status := 'timeout';
+  end
+  else if not Ok then
+  begin
+    if Aborting then
+    begin
+      { another limit ended the run: it goes on unwinding }
+      PopRoots(1);
+      if Binding and NoOuter then LimitsDropTimer;
+      Exit(False);
+    end;
+    E := Pending;
+    Pending := VUndefined;
+    Status := 'threw';
+  end
+  else
+  begin
+    { a deadline that fired as the body finished is not a timeout }
+    if Binding then ClearTimeoutAbort;
+    Status := 'ok';
+  end;
+  if Binding then
+    if NoOuter then LimitsDropTimer
+    else if Outer - Elapsed > 0 then LimitsSetDeadline(Outer - Elapsed)
+    else LimitsSetDeadline(1);
+  PushRoot(E);
+  PushRoot(MkPtr(NewArray(0, 2)));
+  ArrayPush(ObjOf(RootAt(TempTop - 1)), StrFromUnicode(Status));
+  if Status = 'ok' then ArrayPush(ObjOf(RootAt(TempTop - 1)), RootAt(TempTop - 3))
+  else if Status = 'threw' then ArrayPush(ObjOf(RootAt(TempTop - 1)), RootAt(TempTop - 2));
+  Res := RootAt(TempTop - 1);
+  PopRoots(3);
+  Result := True;
+end;
+
+{ work.mark(): the rejection mark of the unit starting (G2.Promise RejectionMark) }
+function Work_Mark(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkNumber(RejectionMark);
+  Result := True;
+end;
+
+{ work.take(mark): the promises rejected without a handler since the mark, no longer tracked for the run }
+function Work_Take(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var From: Integer;
+begin
+  From := 0;
+  if (Argc >= 1) and IsNumber(Args[1]) then From := Trunc(NumOf(Args[1]));
+  Res := TakeRejections(From);
+  Result := True;
+end;
+
+{ work.unhandled(list): [true, reason] for the first promise of the list that still has no handler, else [false] }
+function Work_Unhandled(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var Reason: TValue; Found: Boolean;
+begin
+  Reason := VUndefined;
+  Found := (Argc >= 1) and FirstUnhandledOf(Args[1], Reason);
+  PushRoot(Reason);
+  PushRoot(MkPtr(NewArray(0, 2)));
+  ArrayPush(ObjOf(RootAt(TempTop - 1)), MkBool(Found));
+  if Found then ArrayPush(ObjOf(RootAt(TempTop - 1)), RootAt(TempTop - 2));
+  Res := RootAt(TempTop - 1);
+  PopRoots(2);
+  Result := True;
+end;
+
+{ work.jobErrors(): what the queued callbacks threw since the last call, an array }
+function Work_JobErrors(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := TakeJobErrors;
+  if not IsObject(Res) then Res := MkPtr(NewArray(0, 0));
+  Result := True;
+end;
+
+{ work.collected(): the suites are collected; from now on a job that throws is only recorded }
+function Work_Collected(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  JobErrorsDropWork := False;
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ work.discard(): the queued jobs dropped (what a failed unit left must not run in the next one) }
+function Work_Discard(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  DiscardJobs;
+  Res := VUndefined;
+  Result := True;
+end;
+
 function InstallTestingAPI(var Err: UnicodeString): Boolean;
 var Base: Integer;
 begin
   if FirstInEngine(TestApiRootedGen) then AddRoot(@TestApiV);
   Base := TempTop;
+  { shared.snapshot: the snapshot natives the matchers call }
+  PushRoot(MkPtr(NewPlainObject(ObjectProto, 8)));
+  DefineNative(RootAt(TempTop - 1), 'available', Snap_Available, 0);
+  DefineNative(RootAt(TempTop - 1), 'matchExternal', Snap_MatchExternal, 4);
+  DefineNative(RootAt(TempTop - 1), 'matchInline', Snap_MatchInline, 7);
+  DefineNative(RootAt(TempTop - 1), 'preserve', Snap_Preserve, 1);
+  DefineNative(RootAt(TempTop - 1), 'finish', Snap_Finish, 1);
+  DefineOwn(SharedV, AtomOf('snapshot'), RootAt(TempTop - 1), pfDefault);
+  PopRoots(1);
+  { shared.deadline: the per-test timeout and the runner's settings }
+  PushRoot(MkPtr(NewPlainObject(ObjectProto, 4)));
+  DefineNative(RootAt(TempTop - 1), 'callWithin', Test_CallWithin, 2);
+  DefineOwn(RootAt(TempTop - 1), AtomOf('testTimeoutMs'), MkNumber(TestTimeoutMs), pfDefault);
+  DefineOwn(SharedV, AtomOf('deadline'), RootAt(TempTop - 1), pfDefault);
+  PopRoots(1);
+  { shared.work: the host work each unit leaves (rejections, job errors), attributed to it }
+  PushRoot(MkPtr(NewPlainObject(ObjectProto, 8)));
+  DefineNative(RootAt(TempTop - 1), 'mark', Work_Mark, 0);
+  DefineNative(RootAt(TempTop - 1), 'take', Work_Take, 1);
+  DefineNative(RootAt(TempTop - 1), 'unhandled', Work_Unhandled, 1);
+  DefineNative(RootAt(TempTop - 1), 'jobErrors', Work_JobErrors, 0);
+  DefineNative(RootAt(TempTop - 1), 'discard', Work_Discard, 0);
+  DefineNative(RootAt(TempTop - 1), 'collected', Work_Collected, 0);
+  DefineOwn(SharedV, AtomOf('work'), RootAt(TempTop - 1), pfDefault);
+  PopRoots(1);
+  { a test file's queued callbacks that throw fail the unit that queued them, not the run }
+  JobErrorsToHost := True;
+  JobErrorsDropWork := True;
   PushRoot(GlobalObj);
   PushRoot(SharedV);
   Result := CallPrelude('<goccia:test>', TestingSrc, Base, 2, TestApiV, Err);
@@ -1896,9 +2158,16 @@ begin
       if not FetchPump(True) then Exit(False);
       Continue;
     end;
-    if not IsObject(FireNextV) or ReportDone then Exit(True);
+    if not IsObject(FireNextV) then Exit(True);
+    { a test file's job that threw took the pending timers with it }
+    if JobErrorDropsTimers then
+    begin
+      JobErrorDropsTimers := False;
+      if IsCallable(DiscardTimersV) and not CallValue(DiscardTimersV, VUndefined, nil, 0, R) then Exit(False);
+    end;
     ClearKeptObjects;
-    A[0] := MkBool(Intervals);
+    { after the test report, the work the tests left still runs: its timers, not its intervals }
+    A[0] := MkBool(Intervals and not ReportDone);
     if not CallValue(FireNextV, VUndefined, @A[0], 1, R) then Exit(False);
     if R = VTrue then Continue;
     { nothing left to run: while a FinalizationRegistry cell still waits on its target, the host collects once

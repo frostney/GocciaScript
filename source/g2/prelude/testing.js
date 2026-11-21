@@ -52,6 +52,10 @@
     return { name, parent, mode, children: [], beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
   }
   const root = newSuite('', null, 'run');
+  let collectionError = null;
+  // the host work each unit leaves (G2.HostAPI's work natives): rejections with no handler, queued jobs that threw
+  const work = shared && shared.work;
+  const describeRejections = [];
   let current = root;
   let hasOnly = false;
 
@@ -79,7 +83,19 @@
     if (mode === 'only') hasOnly = true;
     const saved = current;
     current = s;
-    try { args[1](); } finally { current = saved; }
+    // a describe callback that throws aborts collection: nothing of the file runs, and the file fails with one
+    // suite error (Vitest discards it whole)
+    const mark = work ? work.mark() : 0;
+    try { args[1](); } catch (e) {
+      if (collectionError === null) collectionError = `Describe "${fullName(s)}": ${describeThrown(e)}`;
+    } finally {
+      current = saved;
+      // what a describe body rejected belongs to no test: checked when the run starts
+      if (work) {
+        const taken = work.take(mark);
+        for (let i = 0; i < taken.length; i++) append(describeRejections, taken[i]);
+      }
+    }
   }
   function addTest(args, name, mode) {
     requireRegistration(args, name);
@@ -516,7 +532,9 @@
   }
 
   // toMatchObject: the expected shape describes a subset of the actual value's own keys
-  function partialEqual(a, b, pairs) {
+  // a snapshot's property shape: inherited keys count too (Goccia's IsSnapshotPartialDeepEqual)
+  const snapshotPartialEqual = (a, b) => partialEqual(a, b, newPairs(), true);
+  function partialEqual(a, b, pairs, inherited) {
     // what a shape cannot describe a subset of compares in full: matchers, errors, Sets, Maps and typed arrays
     // against typed arrays
     if (isAsym(a) || isAsym(b) || isError(b) || isSet(b) || isMap(b) ||
@@ -526,7 +544,8 @@
       if (a.length !== b.length) return false;
       if (seen(pairs, a, b)) return true;
       for (let i = 0; i < a.length; i++)
-        if (!partialEqual(isUndefinedHole(a, i) ? undefined : a[i], isUndefinedHole(b, i) ? undefined : b[i], pairs))
+        if (!partialEqual(isUndefinedHole(a, i) ? undefined : a[i], isUndefinedHole(b, i) ? undefined : b[i], pairs,
+          inherited))
           return false;
       return true;
     }
@@ -535,7 +554,8 @@
     if (isObject(a) && isObject(b)) {
       const keys = keysOf(b);
       if (seen(pairs, a, b)) return true;
-      for (const k of keys) if (!hasOwn.call(a, k) || !partialEqual(a[k], b[k], pairs)) return false;
+      for (const k of keys)
+        if (!(inherited ? k in a : hasOwn.call(a, k)) || !partialEqual(a[k], b[k], pairs, inherited)) return false;
       return true;
     }
     return deepEqual(a, b, false, newPairs(pairs));
@@ -630,6 +650,306 @@
   const argsEqual = (call, args) => call.length === args.length && args.every((x, i) => looseEquals(call[i], x));
   const returned = (r) => isObject(r) && r.type === 'return';
 
+  // ---------------- snapshots ----------------
+  // Vitest's pretty-format as GocciaScript's snapshot formatter writes it (Goccia.Builtins.Testing.SnapshotFormatting),
+  // over the snapshot state of the host (G2.HostAPI's snapshot natives over Goccia.Builtins.Testing.Snapshots)
+  const snapshotNatives = shared && shared.snapshot;
+  const testTimeoutMs = shared && shared.deadline ? shared.deadline.testTimeoutMs : 0;
+  const dateToISOString = global.Date.prototype.toISOString;
+  const dateGetTime = global.Date.prototype.getTime;
+  const isDateValue = brand(dateGetTime);
+  const objectToString = Object.prototype.toString;
+  const weakMapHas = global.WeakMap.prototype.has, weakSetHas = global.WeakSet.prototype.has;
+  const isWeakMap = (v) => { try { apply(weakMapHas, v, [{}]); return true; } catch { return false; } };
+  const isWeakSet = (v) => { try { apply(weakSetHas, v, [{}]); return true; } catch { return false; } };
+  const arrayBufferByteLength = getOwnPropertyDescriptor(global.ArrayBuffer.prototype, 'byteLength').get;
+  const sharedBufferByteLength = global.SharedArrayBuffer ?
+    getOwnPropertyDescriptor(global.SharedArrayBuffer.prototype, 'byteLength').get : undefined;
+  const dataViewBuffer = getOwnPropertyDescriptor(global.DataView.prototype, 'buffer').get;
+  const dataViewByteLength = getOwnPropertyDescriptor(global.DataView.prototype, 'byteLength').get;
+  const dataViewByteOffset = getOwnPropertyDescriptor(global.DataView.prototype, 'byteOffset').get;
+  const isArrayBuffer = brand(arrayBufferByteLength);
+  const isSharedBuffer = (v) => sharedBufferByteLength !== undefined && brand(sharedBufferByteLength)(v);
+  const isDataView = brand(dataViewBuffer);
+  const setValues = Set.prototype.values;
+  const regExpToString = RegExp.prototype.toString;
+  const snapshotSerializers = [];
+  const SNAPSHOT_SETTINGS = {
+    callToJSON: true, escapeRegex: true, escapeString: false, indent: '  ', maxDepth: Infinity,
+    maxWidth: Infinity, min: false, printBasicPrototype: false, printFunctionName: false, spacingInner: '\n',
+    spacingOuter: '\n',
+  };
+  const quoteString = (s, escape) => '"' + (escape ? s.replace(/["\\]/g, '\\$&') : s) + '"';
+  const escapeRegExpText = (s) => s.replace(/[$()*+.?[\\\]^{|}]/g, '\\$&');
+  function stringTag(v) {
+    try { const t = v[Symbol.toStringTag]; return typeof t === 'string' ? t : ''; } catch { return ''; }
+  }
+  // pretty-format prints a value as a Date when its string tag says so, else when it has a date value
+  function isSnapshotDate(v) {
+    const tag = stringTag(v);
+    return tag !== '' ? tag === 'Date' : isDateValue(v);
+  }
+  // the name a value prints with: a boxed primitive's type, an Intl object's, a class instance's class, its tag
+  function objectDisplayName(v) {
+    for (const [ctor, name] of [[BooleanCtor, 'Boolean'], [NumberCtor, 'Number'], [StringCtor, 'String'],
+      [BigIntCtor, 'BigInt']])
+      if (brand(ctor.prototype.valueOf)(v)) return name;
+    let tag = stringTag(v);
+    if (tag.startsWith('Intl.')) return tag.slice(5);
+    if (tag === 'Generator' || tag === 'AsyncGenerator') return 'Object';
+    if (tag.includes('Iterator')) return 'Iterator';
+    let proto;
+    try { proto = Object.getPrototypeOf(v); } catch { proto = null; }
+    if (proto !== null && proto !== Object.prototype && proto !== Array.prototype) {
+      const d = getOwnPropertyDescriptor(proto, 'constructor');
+      const ctor = d && d.value;
+      if (typeof ctor === 'function' && typeof ctor.name === 'string' && ctor.name !== '' &&
+          Function.prototype.toString.call(ctor).startsWith('class')) return ctor.name;
+    }
+    if (tag === '' && isArray(v)) return 'Array';
+    return tag === '' ? 'Object' : tag;
+  }
+  function formatNumber(n) { return Object.is(n, -0) ? '-0' : String(n); }
+
+  // the formatter's own serializers after the user's, as GocciaScript lists them (seven that never match, so a
+  // serializer counting config.plugins sees the same list)
+  const builtinSerializers = [];
+  for (let i = 0; i < 7; i++) append(builtinSerializers, { test: () => false, serialize: () => '' });
+  function formatSnapshot(value) {
+    const settings = { ...SNAPSHOT_SETTINGS, plugins: [...snapshotSerializers, ...builtinSerializers] };
+    return format(value, settings, '', 0, [], false).replace(/\r\n?/g, '\n');
+  }
+  function readSettings(base, config) {
+    const s = { ...base };
+    if (!isObject(config)) return s;
+    for (const k of ['callToJSON', 'escapeRegex', 'escapeString', 'min', 'printBasicPrototype', 'printFunctionName'])
+      if (config[k] !== undefined) s[k] = !!config[k];
+    for (const k of ['indent', 'spacingInner', 'spacingOuter'])
+      if (config[k] !== undefined) s[k] = String(config[k]);
+    for (const k of ['maxDepth', 'maxWidth']) if (typeof config[k] === 'number') s[k] = config[k];
+    if (isArray(config.plugins)) s.plugins = [...config.plugins];
+    return s;
+  }
+  function configObject(s) {
+    const colors = {};
+    for (const name of ['comment', 'content', 'prop', 'tag', 'value']) colors[name] = { open: '', close: '' };
+    return {
+      callToJSON: s.callToJSON, colors, compareKeys: undefined, escapeRegex: s.escapeRegex,
+      escapeString: s.escapeString, indent: s.indent, maxDepth: s.maxDepth, maxWidth: s.maxWidth, min: s.min,
+      plugins: [...s.plugins], printBasicPrototype: s.printBasicPrototype, printFunctionName: s.printFunctionName,
+      printShadowRoot: true, spacingInner: s.spacingInner, spacingOuter: s.spacingOuter, singleQuote: false,
+      quoteKeys: true, maxOutputLength: 1 << 27, _outputLengthPerDepth: [],
+    };
+  }
+  // a serializer whose test accepts the value prints it: serialize(value, config, indentation, depth, refs, printer)
+  // or the older print(value, print, indent, options, colors)
+  function formatWithSerializer(v, s, indentation, depth, refs) {
+    for (const plugin of s.plugins) {
+      if (!isObject(plugin)) throw new Error('Snapshot serializer must be an object');
+      if (typeof plugin.test !== 'function') throw new Error('Snapshot serializer test must be callable');
+      if (!plugin.test(v)) continue;
+      let printed;
+      if (typeof plugin.serialize === 'function') {
+        const printer = (val, config, ind, dep, rf, called) => format(val,
+          config === undefined ? s : readSettings(s, config), ind === undefined ? indentation : String(ind),
+          typeof dep === 'number' ? Math.trunc(dep) : depth, isArray(rf) ? [...rf] : refs, !!called);
+        printed = apply(plugin.serialize, plugin, [v, configObject(s), indentation, depth, [...refs], printer]);
+      } else {
+        const print = (val) => format(val, s, indentation, depth, refs, false);
+        const indent = (text) => {
+          const ind = indentation + s.indent;
+          return ind + String(text).split('\n').join('\n' + ind);
+        };
+        const options = { edgeSpacing: s.spacingOuter, min: s.min, spacing: s.spacingInner };
+        printed = apply(plugin.print, plugin, [v, print, indent, options, configObject(s).colors]);
+      }
+      if (typeof printed !== 'string') throw new TypeError('pretty-format: Plugin must return type "string"');
+      return { printed };
+    }
+    return null;
+  }
+  function formatAsymmetric(m, s, indentation, depth, refs) {
+    const spec = AsymmetricMatcher.spec(m);
+    if (['arrayContaining', 'objectContaining', 'stringContaining', 'stringMatching'].includes(spec.kind))
+      return spec.name + ' ' + format(spec.sample, s, indentation, depth, refs, false);
+    if (spec.kind === 'schemaMatching') {
+      const r = spec.validationResult;
+      if (isObject(r) && isArray(r.issues) && r.issues.length > 0)
+        return spec.name + ' ' + format(r, s, indentation, depth, refs, false);
+      return spec.name;
+    }
+    return spec.display();
+  }
+  // the items of a list as pretty-format writes them: one per line, cut at maxWidth
+  function listBody(count, item, s, indentation, closeWithComma) {
+    const next = indentation + s.indent;
+    let out = s.spacingOuter;
+    for (let i = 0; i < count; i++) {
+      out += next;
+      if (i === s.maxWidth) { out += `\u2026(${count - i})` + (closeWithComma ? '' : s.spacingOuter); break; }
+      out += item(i, next);
+      if (closeWithComma) out += i < count - 1 ? ',' + s.spacingInner : (s.min ? '' : ',');
+      else out += ',' + s.spacingInner;
+    }
+    return closeWithComma ? out + s.spacingOuter + indentation : out + indentation;
+  }
+  function formatBytes(name, view, s, indentation) {
+    if (view.length === 0) return name + ' []';
+    const signed = new Int8Array(view.buffer, view.byteOffset, view.length);
+    return name + ' [' + listBody(signed.length, (i) => String(signed[i]), s, indentation, false) + ']';
+  }
+  function format(v, s, indentation, depth, refs, calledToJSON) {
+    const fromPlugin = formatWithSerializer(v, s, indentation, depth, refs);
+    if (fromPlugin) return fromPlugin.printed;
+    if (isAsym(v)) return formatAsymmetric(v, s, indentation, depth, refs);
+    if (v === undefined) return 'undefined';
+    if (v === null) return 'null';
+    switch (typeof v) {
+      case 'boolean': return String(v);
+      case 'number': return formatNumber(v);
+      case 'bigint': return String(v) + 'n';
+      case 'string': return quoteString(v, s.escapeString);
+      case 'symbol': return String(v);
+    }
+    if (isMock(v)) return formatMockValue(v, s, indentation, depth, refs);
+    if (typeof v === 'function') return '[Function]';
+    if (brand(Symbol.prototype.valueOf)(v)) return String(apply(Symbol.prototype.valueOf, v, []));
+    if (isWeakMap(v)) return 'WeakMap {}';
+    if (isWeakSet(v)) return 'WeakSet {}';
+    if (isError(v)) {
+      const name = v.name === undefined ? 'Error' : String(v.name);
+      const message = v.message === undefined ? '' : String(v.message);
+      if (name === '') return '[' + message + ']';
+      if (message === '') return '[' + name + ']';
+      return '[' + name + ': ' + message + ']';
+    }
+    if (isRegExp(v)) {
+      const text = apply(regExpToString, v, []);
+      return s.escapeRegex ? escapeRegExpText(text) : text;
+    }
+    if (isSnapshotDate(v)) {
+      // a user valueOf takes part in the invalid-date check, as pretty-format's Number.isNaN(+value)
+      if (Number.isNaN(+v)) return 'Date { NaN }';
+      return String(apply(isDateValue(v) ? dateToISOString : v.toISOString, v, []));
+    }
+    if (refs.includes(v)) return '[Circular]';
+    const nextRefs = [...refs, v];
+    if (depth + 1 > s.maxDepth) return '[' + objectDisplayName(v) + ']';
+    if (s.callToJSON && !calledToJSON && typeof v.toJSON === 'function')
+      return format(v.toJSON(), s, indentation, depth + 1, nextRefs, true);
+    if (isArray(v)) {
+      const name = objectDisplayName(v);
+      const prefix = s.min || (!s.printBasicPrototype && name === 'Array') ? '' : name + ' ';
+      if (v.length === 0) return prefix + '[]';
+      return prefix + '[' + listBody(v.length, (i, next) => (i in v ? format(v[i], s, next, depth + 1, nextRefs,
+        false) : ''), s, indentation, true) + ']';
+    }
+    if (apply(objectToString, v, []) === '[object Arguments]') {
+      const len = Math.max(0, Math.trunc(Number(v.length)) || 0);
+      if (len === 0) return 'Arguments []';
+      return 'Arguments [' + listBody(len, (i, next) => format(v[i], s, next, depth + 1, nextRefs, false), s,
+        indentation, false) + ']';
+    }
+    if (isMap(v)) {
+      const entries = mapEntries(v);
+      if (entries.length === 0) return 'Map {}';
+      return 'Map {' + listBody(entries.length, (i, next) => format(entries[i][0], s, next, depth + 1, nextRefs,
+        false) + ' => ' + format(entries[i][1], s, next, depth + 1, nextRefs, false), s, indentation, false) + '}';
+    }
+    if (isSet(v)) {
+      const items = [...apply(setValues, v, [])];
+      if (items.length === 0) return 'Set {}';
+      return 'Set {' + listBody(items.length, (i, next) => format(items[i], s, next, depth + 1, nextRefs, false), s,
+        indentation, false) + '}';
+    }
+    const kind = typedKind(v);
+    if (kind !== undefined) {
+      const len = v.length;
+      if (kind.startsWith('Big') || kind === 'Float16Array') {
+        if (len === 0) return kind + ' {}';
+        return kind + ' {' + listBody(len, (i, next) => quoteString(String(i), s.escapeString) + ': ' +
+          format(v[i], s, next, depth + 1, nextRefs, false), s, indentation, false) + '}';
+      }
+      if (len === 0) return kind + ' []';
+      return kind + ' [' + listBody(len, (i, next) => format(v[i], s, next, depth + 1, nextRefs, false), s,
+        indentation, false) + ']';
+    }
+    if (isArrayBuffer(v)) return formatBytes('ArrayBuffer', new Uint8Array(v), s, indentation);
+    if (isDataView(v)) {
+      let len;
+      try { len = apply(dataViewByteLength, v, []); } catch { return 'DataView []'; }
+      return formatBytes('DataView', new Uint8Array(apply(dataViewBuffer, v, []), apply(dataViewByteOffset, v, []),
+        len), s, indentation);
+    }
+    return formatObjectValue(v, s, indentation, depth, nextRefs);
+  }
+  function formatObjectValue(o, s, indentation, depth, refs) {
+    const keys = keysOf(o).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const symbols = getOwnPropertySymbols(o).filter((k) => apply(propertyIsEnumerable, o, [k]));
+    const name = objectDisplayName(o);
+    const prefix = s.min || (!s.printBasicPrototype && name === 'Object') ? '' : name + ' ';
+    if (keys.length === 0 && symbols.length === 0) return prefix + '{}';
+    const all = [...keys, ...symbols];
+    return prefix + '{' + listBody(all.length, (i, next) => {
+      const k = all[i];
+      const label = typeof k === 'symbol' ? String(k) : quoteString(k, s.escapeString);
+      return label + ': ' + format(o[k], s, next, depth + 1, refs, false);
+    }, s, indentation, false) + '}';
+  }
+  function formatMockValue(fn, s, indentation, depth, refs) {
+    const name = String(fn.getMockName());
+    const suffix = name === 'mock' ? '' : ' ' + name;
+    const m = fn.mock;
+    if (m.calls.length === 0) return '[MockFunction' + suffix + ']';
+    const next = indentation + s.indent;
+    return '[MockFunction' + suffix + '] {' + s.spacingOuter + next + '"calls": ' +
+      format(m.calls, s, next, depth, refs, false) + ',' + s.spacingOuter + next + '"results": ' +
+      format(m.results, s, next, depth, refs, false) + (s.min ? '' : ',') + s.spacingOuter + indentation + '}';
+  }
+
+  // a snapshot's text: one line break before and after a multi-line value (AddSnapshotLineBreaks)
+  const addSnapshotLineBreaks = (t) => (t.includes('\n') ? '\n' + t + '\n' : t);
+  const isPropertyShape = (v) => v !== null && typeof v === 'object';
+  // the received value with the matcher's property shape put over it, for printing
+  function mergePropertyShape(actual, shape) {
+    if (isAsym(shape)) return shape;
+    if (isArray(actual) && isArray(shape)) {
+      const merged = [...actual];
+      for (let i = 0; i < shape.length; i++) if (i in shape) merged[i] = mergePropertyShape(actual[i], shape[i]);
+      return merged;
+    }
+    if (isPropertyShape(actual) && isPropertyShape(shape)) {
+      const merged = {};
+      for (const k of keysOf(actual)) merged[k] = actual[k];
+      for (const k of getOwnPropertySymbols(actual)) if (apply(propertyIsEnumerable, actual, [k])) merged[k] = actual[k];
+      for (const k of keysOf(shape)) merged[k] = mergePropertyShape(actual[k], shape[k]);
+      return merged;
+    }
+    return shape;
+  }
+  // an inline snapshot's common indentation removed, as Vitest's dedent does
+  function stripInlineIndentation(value) {
+    const text = value.replace(/\r\n?/g, '\n');
+    const lines = text.split('\n');
+    if (lines.length <= 2 || lines[0].trim() !== '' || lines[lines.length - 1].trim() !== '') return text;
+    let indentation = '';
+    for (let i = 1; i < lines.length - 1; i++)
+      if (lines[i].trim() !== '') { indentation = /^[ \t]*/.exec(lines[i])[0]; break; }
+    if (indentation === '') return text;
+    for (let i = 1; i < lines.length - 1; i++)
+      if (lines[i] !== '') {
+        if (!lines[i].startsWith(indentation)) return text;
+        lines[i] = lines[i].slice(indentation.length);
+      }
+    lines[lines.length - 1] = '';
+    return lines.join('\n');
+  }
+  let snapshotTestName = '';
+  function requireSnapshots(name) {
+    if (!snapshotNatives || !snapshotNatives.available())
+      throw new Error(`${name} is only available when a snapshot host is installed`);
+  }
+
   class Expectation {
     #actual; #not; #rejection;
     constructor(actual, negated, rejection) { this.#actual = actual; this.#not = negated; this.#rejection = rejection; }
@@ -657,6 +977,51 @@
       requireExactly(args, 1, 'toStrictEqual');
       const a = this.#actual, e = args[0];
       this.#check(strictEquals(a, e), (n) => `Expected ${show(a)}${n} to strictly equal ${show(e)}`);
+    }
+    toMatchSnapshot(...args) {
+      if (this.#not) throw new Error('toMatchSnapshot cannot be used with "not"');
+      requireSnapshots('toMatchSnapshot');
+      let properties, hasProperties = false, hint = '';
+      if (args.length > 0) {
+        if (isPropertyShape(args[0]) || args[0] === null) { properties = args[0]; hasProperties = true; }
+        else if (typeof args[0] === 'string') hint = args[0];
+      }
+      if (args.length > 1 && typeof args[0] !== 'string' && args[1]) hint = String(args[1]);
+      const actual = this.#actual;
+      if (hasProperties && !isPropertyShape(actual))
+        throw new Error('Received value must be an object when the matcher has properties');
+      const matched = !hasProperties || snapshotPartialEqual(actual, properties);
+      const received = addSnapshotLineBreaks(formatSnapshot(matched && hasProperties ?
+        mergePropertyShape(actual, properties) : actual));
+      const [ok, message] = snapshotNatives.matchExternal(snapshotTestName, hint, received, matched);
+      if (ok) passed(); else failed(message);
+    }
+    toMatchInlineSnapshot(...args) {
+      if (this.#not) throw new Error('toMatchInlineSnapshot cannot be used with "not"');
+      requireSnapshots('toMatchInlineSnapshot');
+      let properties, hasProperties = false, inline = '', hasInline = false, hint = '', argumentIndex = 0;
+      if (args.length > 0) {
+        if (isPropertyShape(args[0]) || args[0] === null) {
+          properties = args[0]; hasProperties = true; argumentIndex = 1;
+        } else if (typeof args[0] === 'string') { inline = stripInlineIndentation(args[0]); hasInline = true; }
+      }
+      if (args.length > 1) {
+        const a = args[1];
+        if (typeof args[0] === 'string' && a) hint = String(a);
+        else if (typeof a === 'string' && a !== '') {
+          inline = stripInlineIndentation(a); hasInline = true; argumentIndex = 1;
+        } else if (a) throw new Error('toMatchInlineSnapshot inline snapshot must be a string');
+      }
+      if (args.length > 2 && args[2]) hint = String(args[2]);
+      const actual = this.#actual;
+      if (hasProperties && !isPropertyShape(actual))
+        throw new Error('Received value must be an object when the matcher has properties');
+      const matched = !hasProperties || snapshotPartialEqual(actual, properties);
+      const received = addSnapshotLineBreaks(formatSnapshot(matched && hasProperties ?
+        mergePropertyShape(actual, properties) : actual));
+      const [ok, message] = snapshotNatives.matchInline(snapshotTestName, hint, received, inline, hasInline, matched,
+        argumentIndex);
+      if (ok) passed(); else failed(message);
     }
     toContainEqual(...args) {
       requireExactly(args, 1, 'toContainEqual');
@@ -976,6 +1341,10 @@
     return new Expectation(args[0], false, false);
   }
   expect.anything = () => anything();
+  expect.addSnapshotSerializer = (...args) => {
+    requireExactly(args, 1, 'expect.addSnapshotSerializer');
+    snapshotSerializers.unshift(args[0]);
+  };
   expect.any = any;
   expect.arrayContaining = (s) => arrayContaining(s, false);
   expect.objectContaining = (s) => objectContaining(s, false);
@@ -1086,7 +1455,42 @@
     for (let s = suite; s; s = s.parent) if (s.mode === 'only') return true;
     return false;
   }
-  async function runHooks(list) { for (const fn of list) await fn(); }
+  async function runHooks(list) {
+    for (const fn of list) {
+      let r;
+      // a hook that throws: what it queued goes with it, before any of it runs
+      try { r = fn(); } catch (e) { discardPendingWork(); throw e; }
+      await r;
+    }
+  }
+  const NONE = {};
+  // a test's beforeEach or afterEach hooks: every one runs, a failing one gives up what was pending (its timers and
+  // jobs), and the first failure is the result (NONE when all passed)
+  async function runEachHooks(list) {
+    let first = NONE;
+    for (const fn of list) {
+      try { await fn(); } catch (e) {
+        discardPendingWork();
+        if (first === NONE) first = e;
+      }
+    }
+    return first;
+  }
+  // what a failed unit left (its queued jobs and real timers) dropped, so none of it runs in the next one
+  function discardPendingWork() {
+    if (work) work.discard();
+    if (shared && shared.timers && shared.timers.discard) shared.timers.discard();
+  }
+  // a unit (a hook list, a test): its error, else a rejection it left unhandled, else a queued job of it that threw
+  async function runUnit(run) {
+    const mark = work ? work.mark() : 0;
+    let error = NONE;
+    try { await run(); } catch (e) { error = e; }
+    if (!work) return { error, rejection: NONE, jobError: NONE };
+    const left = work.unhandled(work.take(mark));
+    const jobErrors = work.jobErrors();
+    return { error, rejection: left[0] ? left[1] : NONE, jobError: jobErrors.length > 0 ? jobErrors[0] : NONE };
+  }
   function chainHooks(suite, kind) {
     const out = [];
     for (let s = suite; s; s = s.parent) out.unshift(...s[kind]);
@@ -1094,60 +1498,132 @@
   }
   async function runTests() {
     const result = {
-      totalTests: 0, passed: 0, failed: 0, skipped: 0, totalRunTests: 0, assertions: 0, failedTests: [],
+      totalTests: 0, passed: 0, failed: 0, skipped: 0, totalRunTests: 0, assertions: 0, suiteErrors: 0,
+      failedTests: [],
     };
+    if (collectionError !== null) {
+      result.suiteErrors = 1;
+      result.failedTests.push({ name: collectionError, error: '' });
+      return result;
+    }
+    // a failed beforeAll or afterAll is a suite error, not a failed test: it fails the file
+    const hookFailure = (kind, suite, u) => {
+      let message;
+      if (u.error !== NONE) message = 'Callback threw an exception: ' + describeThrown(u.error);
+      else if (u.rejection !== NONE) message = 'Unhandled promise rejection: ' + describeThrown(u.rejection);
+      else message = 'Callback threw an exception: ' + describeThrown(u.jobError);
+      result.suiteErrors++;
+      result.failedTests.push({ name: `Hook "${kind}" in suite "${fullName(suite)}" failed: ${message}`, error: '' });
+      discardPendingWork();
+    };
+    const unitFailed = (u) => u.error !== NONE || u.rejection !== NONE || u.jobError !== NONE;
+    // what the describe bodies and the file's top level left: suite errors, and the tests still run
+    if (work) {
+      work.collected();
+      const outside = work.jobErrors();
+      for (let i = 0; i < outside.length; i++) {
+        result.suiteErrors++;
+        result.failedTests.push({ name: 'Uncaught exception outside a test: ' + describeThrown(outside[i]), error: '' });
+      }
+      const left = work.unhandled(describeRejections);
+      if (left[0]) {
+        result.suiteErrors++;
+        result.failedTests.push({ name: 'Unhandled promise rejection outside a test: ' + describeThrown(left[1]),
+          error: '' });
+      }
+    }
     async function runSuite(suite, skipped) {
-      const skipAll = skipped || suite.mode === 'skip' || suite.mode === 'todo';
+      let skipAll = skipped || suite.mode === 'skip' || suite.mode === 'todo';
       let runnable = false;
       const items = suite.children;
-      try { if (!skipAll) await runHooks(suite.beforeAll); }
-      catch (e) {
-        result.failed++;
-        result.failedTests.push({ name: `beforeAll in ${fullName(suite) || 'root'}`, error: thrownMessage(e) });
-        return;
+      // a failed beforeAll skips the suite's tests and its descendants' tests
+      if (!skipAll) {
+        const u = await runUnit(() => runHooks(suite.beforeAll));
+        if (unitFailed(u)) { hookFailure('beforeAll', suite, u); skipAll = true; }
       }
       for (const item of items) {
         if (item.kind === 'suite') { await runSuite(item.suite, skipAll); continue; }
         result.totalTests++;
+        result.totalRunTests++;
+        const suiteName = fullName(suite);
+        snapshotTestName = suiteName !== '' ? suiteName + ' > ' + item.name : String(item.name);
         const focusedOut = hasOnly && item.mode !== 'only' && !selected(suite);
         if (skipAll || item.mode === 'skip' || item.mode === 'todo' || focusedOut || typeof item.fn !== 'function') {
           result.skipped++;
+          // a test that does not run keeps its snapshots
+          if (snapshotNatives) snapshotNatives.preserve(snapshotTestName);
           continue;
         }
         runnable = true;
-        result.totalRunTests++;
         assertionCount = 0; expectedAssertions = null; needAssertions = false;
         finishedHooks = [];
-        let error = null;
-        try {
-          await runHooks(chainHooks(suite, 'beforeEach'));
-          await item.fn();
+        let error = null, timedOut = false;
+        const testMark = work ? work.mark() : 0;
+        const body = async () => {
+          // a failed beforeEach skips the body; the timers still pending run all the same
+          const hookError = await runEachHooks(chainHooks(suite, 'beforeEach'));
+          if (hookError === NONE) await item.fn();
           // the timers the test scheduled run before it ends; one a callback threw fails it
           const timerError = shared && shared.timers ? await shared.timers.drainTest() : null;
+          if (hookError !== NONE) throw hookError;
           if (timerError !== null)
             throw new Error('Uncaught exception in a timer callback: ' + thrownMessage(timerError.error));
           if (expectedAssertions !== null && assertionCount !== expectedAssertions)
             throw new AssertionError(`Expected ${expectedAssertions} assertions, got ${assertionCount}`);
           if (needAssertions && assertionCount === 0) throw new AssertionError('Expected at least one assertion');
+        };
+        try {
+          // --test-timeout: the body and the work it waits for run under the test's own deadline
+          if (testTimeoutMs > 0) {
+            const r = shared.deadline.callWithin(body, testTimeoutMs);
+            if (r[0] === 'timeout') timedOut = true;
+            else if (r[0] === 'threw') throw r[1];
+            else await r[1];
+          } else await body();
         } catch (e) { error = e; }
-        try { await runHooks(chainHooks(suite, 'afterEach')); } catch (e) { if (!error) error = e; }
+        const afterError = await runEachHooks(chainHooks(suite, 'afterEach'));
+        if (afterError !== NONE && !error) error = afterError;
         const fins = finishedHooks; finishedHooks = null;
         for (const fn of fins) { try { await fn(); } catch (e) { if (!error) error = e; } }
+        // what the test left: a rejection with no handler, or a queued job that threw, fails it
+        let leftover = null;
+        if (work) {
+          const left = work.unhandled(work.take(testMark));
+          const jobErrors = work.jobErrors();
+          if (left[0]) leftover = 'unhandled promise rejection: ' + describeThrown(left[1]);
+          else if (jobErrors.length > 0) leftover = 'Uncaught exception in a queued job: ' + describeThrown(jobErrors[0]);
+          if (leftover !== null && !error && !timedOut) discardPendingWork();
+        }
         result.assertions += assertionCount;
-        if (error) {
+        const suiteLabel = fullName(suite);
+        const name = suiteLabel !== '' ? `Test "${item.name}" in suite "${suiteLabel}"` : `Test "${item.name}"`;
+        if (timedOut) {
           result.failed++;
-          const name = `Test "${item.name}" in suite "${fullName(suite)}"`;
+          result.failedTests.push({ name, error: `TIMEOUT after ${testTimeoutMs}ms` });
+        } else if (error) {
+          result.failed++;
           result.failedTests.push({ name, error: thrownMessage(error) });
+        } else if (leftover !== null) {
+          result.failed++;
+          result.failedTests.push({ name, error: leftover });
         } else result.passed++;
       }
-      try { if (!skipAll) await runHooks(suite.afterAll); }
-      catch (e) {
-        result.failed++;
-        result.failedTests.push({ name: `afterAll in ${fullName(suite) || 'root'}`, error: thrownMessage(e) });
+      if (!skipAll) {
+        const u = await runUnit(() => runHooks(suite.afterAll));
+        if (unitFailed(u)) hookFailure('afterAll', suite, u);
       }
       return runnable;
     }
     await runSuite(root, false);
+    // the file's snapshots written, the obsolete ones pruned or reported: each problem fails the file
+    if (snapshotNatives && snapshotNatives.available()) {
+      const errors = snapshotNatives.finish(true);
+      if (errors.length > 0) {
+        result.totalTests++;
+        result.failed++;
+        for (const e of errors) result.failedTests.push({ name: e, error: '' });
+      }
+    }
     return result;
   }
 
@@ -1160,7 +1636,8 @@
     report(done) {
       return runTests().then(
         r => done(JSON.stringify({ totalTests: r.totalTests, passed: r.passed, failed: r.failed, skipped: r.skipped,
-          totalRunTests: r.totalRunTests, assertions: r.assertions, failedTests: r.failedTests })),
+          totalRunTests: r.totalRunTests, assertions: r.assertions, suiteErrors: r.suiteErrors,
+          failedTests: r.failedTests })),
         e => done(undefined, String(e)));
     }
   };

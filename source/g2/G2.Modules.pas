@@ -1277,7 +1277,13 @@ begin
   P := EvaluateModule(M);
   case PromiseStatus(P, R) of
     1: Result := True;
-    2: begin Pending := R; Result := False; end;
+    2:
+      begin
+        { the reader gets the error thrown: the evaluation's promise is not left rejected without a handler }
+        ObjOf(P)^.OFlags := ObjOf(P)^.OFlags or 1;
+        Pending := R;
+        Result := False;
+      end;
   else
     Result := ThrowTypeError('A deferred module''s evaluation did not complete synchronously');
   end;

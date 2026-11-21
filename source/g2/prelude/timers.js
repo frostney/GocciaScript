@@ -297,6 +297,8 @@
     getTimerCount() { requireFake(); return queue.size; }
   };
   if (exposed) shared.hostModules['goccia:timers'] = () => timersModule;
-  shared.timers = { fireNext, drainTest, add, clear, count: () => queue.size };
+  // the test runner, after a unit failed: what it left on the real timers does not run (fake timers are the suite's)
+  function discard() { if (!fake) queue.clear(); }
+  shared.timers = { fireNext, drainTest, add, clear, discard, count: () => queue.size };
   if (exposed) shared.runtimeGlobals.push('setTimeout', 'setInterval', 'clearTimeout', 'clearInterval');
 })

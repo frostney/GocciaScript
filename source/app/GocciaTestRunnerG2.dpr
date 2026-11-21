@@ -44,7 +44,9 @@ uses
   Goccia.Modules.NodeResolution,
   Goccia.Modules.Resolver,
   Goccia.ScriptLoader.Input,
+  Goccia.TestRunner.SnapshotHost,
   Goccia.TextFiles,
+  Goccia.Builtins.Testing.Snapshots,
 
   G2.Core,
   G2.Embed,
@@ -95,7 +97,13 @@ type
       FCoverageLock }
     FCoverageMain: TGocciaCoverageTracker;
     FCoverageLock: TRTLCriticalSection;
+    { a snapshot write-back that failed after the files ran (the envelope's error) }
+    FFinalizationError: string;
+    { it names none of the files, so only the run's totals count it }
+    FinalizationUnattributed: Boolean;
     procedure ReportCoverage(const AFiles: TStringList);
+    function SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
+    procedure RecordSnapshotFinalizationFailure(const AMessage: string);
     function IsJsonOutput: Boolean;
     function IsCompactJsonOutput: Boolean;
     procedure RunTestFile(AIndex: Integer; ASource: TStringList);
@@ -208,6 +216,68 @@ end;
 function TG2TestRunnerApp.StdinUsage: TGocciaStdinUsage;
 begin
   Result := suStdinDefault;
+end;
+
+{ ---- snapshots ---- }
+
+{ GocciaTestRunner.dpr IsContinuousIntegration: std-env's providers, as Vitest detects CI (a set variable is on,
+  "0" and "false" included) }
+function IsContinuousIntegration: Boolean;
+const
+  PROVIDERS: array[0..52] of string = ('CI', 'CONTINUOUS_INTEGRATION',
+    'APPVEYOR', 'AWS_APP_ID', 'SYSTEM_TEAMFOUNDATIONCOLLECTIONURI', 'INPUT_AZURE_STATIC_WEB_APPS_API_TOKEN',
+    'AC_APPCIRCLE', 'bamboo_planKey', 'BITBUCKET_COMMIT', 'BITRISE_IO', 'BUDDY_WORKSPACE_ID', 'BUILDKITE', 'CIRCLECI',
+    'CIRRUS_CI', 'CF_PAGES', 'WORKERS_CI', 'K_SERVICE', 'CLOUD_RUN_JOB', 'CODEBUILD_BUILD_ARN', 'CF_BUILD_ID', 'DRONE',
+    'DRONE_BUILD_EVENT', 'DSARI', 'GITHUB_ACTIONS', 'GITLAB_CI', 'CI_MERGE_REQUEST_ID', 'GO_PIPELINE_LABEL',
+    'LAYERCI', 'JENKINS_URL', 'HUDSON_URL', 'MAGNUM', 'NETLIFY', 'NEVERCODE', 'RENDER', 'SAILCI', 'SEMAPHORE',
+    'SCREWDRIVER', 'SHIPPABLE', 'TDDIUM', 'STRIDER', 'TEAMCITY_VERSION', 'TRAVIS', 'NOW_BUILDER',
+    'APPCENTER_BUILD_ID', 'STACKBLITZ', 'STORMKIT', 'CLEAVR', 'ZEABUR', 'CODESPHERE_APP_ID', 'RAILWAY_PROJECT_ID',
+    'RAILWAY_SERVICE_ID', 'DENO_DEPLOY', 'DENO_DEPLOYMENT_ID');
+var
+  Name: string;
+begin
+  for Name in PROVIDERS do
+    if GetEnvironmentVariable(Name) <> '' then
+      Exit(True);
+  Result := GetEnvironmentVariable('FIREBASE_APP_HOSTING') <> '';
+end;
+
+{ -u writes every snapshot; in CI none is written, so a missing one fails; otherwise new ones are written }
+function TG2TestRunnerApp.SnapshotUpdateMode: TGocciaSnapshotUpdateMode;
+begin
+  if FUpdateSnapshots.Present or FUpdateSnapshotsAlias.Present then
+    Result := sumAll
+  else if IsContinuousIntegration then
+    Result := sumNone
+  else
+    Result := sumNew;
+end;
+
+{ GocciaTestRunner.dpr RecordSnapshotFinalizationFailure: the inline write-back's failure fails the file its message
+  names (the longest match, paths compared with forward slashes), and is the envelope's error }
+procedure TG2TestRunnerApp.RecordSnapshotFinalizationFailure(const AMessage: string);
+var
+  I, FileIndex: Integer;
+  Message_: string;
+begin
+  { the run's totals count it whichever file it names }
+  FFinalizationError := AMessage;
+  Message_ := StringReplace(AMessage, PathDelim, '/', [rfReplaceAll]);
+  FileIndex := -1;
+  for I := 0 to High(FResults) do
+    if Pos(StringReplace(FResults[I].FileName, PathDelim, '/', [rfReplaceAll]), Message_) > 0 then
+      if (FileIndex < 0) or (Length(FResults[I].FileName) > Length(FResults[FileIndex].FileName)) then
+        FileIndex := I;
+  if FileIndex < 0 then
+  begin
+    FinalizationUnattributed := True;
+    Exit;
+  end;
+  Inc(FResults[FileIndex].Failed);
+  Inc(FResults[FileIndex].TotalRunTests);
+  FResults[FileIndex].ErrorMessage := AMessage;
+  SetLength(FResults[FileIndex].FailedTests, Length(FResults[FileIndex].FailedTests) + 1);
+  FResults[FileIndex].FailedTests[High(FResults[FileIndex].FailedTests)] := AMessage;
 end;
 
 { ---- one file ---- }
@@ -426,6 +496,8 @@ var
   Err, Json, SrcText: UnicodeString;
   Res: TG2TestFileResult;
   Start, SuitesStart: Int64;
+  Aborted: TG2Abort;
+  Late: string;
 begin
   FileName := FResults[AIndex].FileName;
   Res := FResults[AIndex];
@@ -479,6 +551,8 @@ begin
       Engine.ModuleContentCheck := Grant.CheckContent;
       Engine.ProviderGraph := Grant.ProviderGraph;
       Engine.TestMode := True;
+      { a rejection the file's top level leaves fails the file before its tests run }
+      Engine.FailOnUnhandledRejection := True;
       { the console of a parallel run, or under --silent or a JSON report, is not printed }
       Capture.Capturing := IsJsonOutput;
       Capture.Silent := FSilent.Present or FParallel;
@@ -501,6 +575,9 @@ begin
       if EngineOptions.MaxStack.Present then
         Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
       Err := '';
+      TestTimeoutMs := FTestTimeout.ValueOr(0);
+      { the file's snapshots: its .snap file and its inline edits, flushed once every file has run }
+      SetTestSnapshots(TGocciaTestRunnerSnapshotHost.Create(FileName), SnapshotUpdateMode);
       if not (Engine.PrepareHost(Err) and InstallTestingAPI(Err)) then
         raise Exception.Create('test host setup failed: ' + UTF8Encode(Err));
       SrcText := UTF8Decode(ASource.Text);
@@ -513,16 +590,26 @@ begin
         Err := RunResult.ErrorMessage;
       Json := '';
       SuitesStart := GetNanoseconds;
+      { the file's limits (its --timeout, 30 s by default) cover its suites too }
+      if RunResult.Aborted = g2aTimeout then
+        Err := Format('file timed out after %dms', [Engine.TimeoutMs]);
       if Err = '' then
-        if not RunTestSuites(Json, Err) and (Err = '') then
+      begin
+        if not Engine.RunTests(Json, Err, Aborted) and (Err = '') then
           Err := 'the test suites did not finish';
+        if Aborted = g2aTimeout then
+          Err := Format('file timed out after %dms', [Engine.TimeoutMs]);
+      end
+      else
+        Engine.EndTests;
       Res.DurationNanoseconds := GetNanoseconds - SuitesStart;
       Res.ExecuteNanoseconds := GetNanoseconds - Start - Res.CompileNanoseconds;
       if Err <> '' then
       begin
-        { a file whose suites could not register or run is one suite error, as the old runner's }
+        { a file that threw, or whose suites did not finish, is one failed test (GocciaTestRunner MarkLoadError) }
         Res.ErrorMessage := UTF8Encode(Err);
-        Res.SuiteErrors := 1;
+        Res.Failed := 1;
+        Res.TotalRunTests := 1;
         SetLength(Res.FailedTests, 1);
         Res.FailedTests[0] := FileName + ': ' + Res.ErrorMessage;
       end
@@ -530,8 +617,22 @@ begin
       begin
         Res.ErrorMessage := 'the test report could not be read';
         Res.SuiteErrors := 1;
+      end
+      else
+      begin
+        { a rejection the work after the last test left fails the file }
+        Late := UTF8Encode(Engine.LateRejection);
+        if Late <> '' then
+        begin
+          Res.ErrorMessage := Late;
+          Inc(Res.Failed);
+          Inc(Res.TotalRunTests);
+          SetLength(Res.FailedTests, Length(Res.FailedTests) + 1);
+          Res.FailedTests[High(Res.FailedTests)] := FileName + ': ' + Late;
+        end;
       end;
     finally
+      TestSnapshotsDone;
       Engine.Free;
       { the file's coverage into the run's }
       if Assigned(FCoverageMain) and (TGocciaCoverageTracker.Instance <> FCoverageMain) then
@@ -750,8 +851,21 @@ begin
       InitCriticalSection(FCoverageLock);
     BeginCLIJSONMemoryMeasurement(Memory);
     Start := GetNanoseconds;
-    RunFiles(Files, StdinSource);
+    ResetPendingInlineSnapshots;
+    try
+      RunFiles(Files, StdinSource);
+    except
+      DiscardPendingInlineSnapshots;
+      raise;
+    end;
     StdinSource := nil;
+    { the inline snapshots every file queued, written into their sources once none of them runs any more }
+    try
+      FlushPendingInlineSnapshots;
+    except
+      on E: Exception do
+        RecordSnapshotFinalizationFailure('Snapshot finalization failed: ' + E.Message);
+    end;
     MemoryStats := FinishCLIJSONMemoryMeasurement(Memory);
     Timing := Default(TCLIJSONTiming);
     for I := 0 to High(FResults) do
@@ -844,6 +958,11 @@ begin
     Inc(Assertions, FResults[I].Assertions);
     Inc(Duration, FResults[I].DurationNanoseconds);
   end;
+  if FinalizationUnattributed then
+  begin
+    Inc(Failed);
+    Inc(RunTests);
+  end;
   if not FNoResults.Present and not IsJsonOutput then
   begin
     WriteLn('Test Results Test Files: ', Length(FResults));
@@ -871,7 +990,13 @@ begin
         WriteLn(Format('Test Results Engine Timing: Lex: (in Compile) | Parse: (in Compile) | Compile: %s | ' +
           'Execute: %s | Total: %s', [FormatDuration(ATiming.CompileTimeNanoseconds),
           FormatDuration(ATiming.ExecuteTimeNanoseconds), FormatDuration(ATiming.TotalTimeNanoseconds)]));
-      WriteLn('Test Results Failed Tests: ', JoinFailedTests(FResults));
+      if FinalizationUnattributed then
+        if JoinFailedTests(FResults) = '' then
+          WriteLn('Test Results Failed Tests: ', FFinalizationError)
+        else
+          WriteLn('Test Results Failed Tests: ', JoinFailedTests(FResults), ',', FFinalizationError)
+      else
+        WriteLn('Test Results Failed Tests: ', JoinFailedTests(FResults));
     end;
   end;
   if IsJsonOutput then
@@ -892,6 +1017,7 @@ var
   Lines: TStringList;
   I, Passed, Failed, Skipped, SuiteErrors, RunTests, Assertions: Integer;
   Duration: Int64;
+  ErrorInfo: TCLIJSONErrorInfo;
 
   procedure WriteFiles(const AName: string; ATrailingComma: Boolean);
   var
@@ -958,6 +1084,11 @@ begin
     Inc(Assertions, FResults[I].Assertions);
     Inc(Duration, FResults[I].DurationNanoseconds);
   end;
+  if FinalizationUnattributed then
+  begin
+    Inc(Failed);
+    Inc(RunTests);
+  end;
   Lines := TStringList.Create;
   try
     Lines.Add('{');
@@ -970,7 +1101,14 @@ begin
       Lines.Add('  "stderr": "",');
     end;
     Lines.Add('  ' + BuildCLIOutputJSON('') + ',');
-    Lines.Add('  "error": null,');
+    if FFinalizationError = '' then
+      Lines.Add('  "error": null,')
+    else
+    begin
+      ErrorInfo := DefaultCLIJSONErrorInfo;
+      ErrorInfo.Message := FFinalizationError;
+      Lines.Add('  "error": ' + BuildCLIErrorObjectJSON(ErrorInfo) + ',');
+    end;
     Lines.Add(Format('  "jobCount": %d,', [FJobCount]));
     Lines.Add(Format('  "totalFiles": %d,', [Length(FResults)]));
     Lines.Add(Format('  "totalTests": %d,', [RunTests]));
