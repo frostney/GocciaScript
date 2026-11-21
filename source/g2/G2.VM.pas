@@ -6025,14 +6025,45 @@ begin
   Result := '';
 end;
 
-{ the callee at PC (in register A) is not callable: a construct says it is not a constructor }
-function XThrowNotFunction(Tpl: PFuncTemplate; PC, A: Integer; IsNew: Boolean): Boolean; noinline;
-var Text: UnicodeString;
+{ the host's suggestion for a callee that is not callable, as GocciaScript words it (Goccia.Error.CallDiagnostics):
+  a member call names its receiver's type, a plain one the callee's; '' for other shapes }
+function NotCallableSuggestion(const Text: UnicodeString; Callee, This: TValue; IsNew: Boolean): UnicodeString;
+var Dot, I: Integer; Simple: Boolean;
+begin
+  Result := '';
+  if Text = '' then Exit;
+  Simple := True;
+  Dot := 0;
+  for I := 1 to Length(Text) do
+    if Text[I] = '.' then Dot := I
+    else if not ((Text[I] = '_') or (Text[I] = '$') or ((Text[I] >= 'a') and (Text[I] <= 'z')) or
+      ((Text[I] >= 'A') and (Text[I] <= 'Z')) or ((Text[I] >= '0') and (Text[I] <= '9'))) then Simple := False;
+  if not Simple then Exit;
+  if IsNew then
+  begin
+    if Dot = 0 then
+      Result := '''' + Text + ''' is of type ''' + TypeOfStr(Callee) + ''' and cannot be used with ''new''';
+    Exit;
+  end;
+  if Dot > 0 then
+    Result := '''' + Copy(Text, 1, Dot - 1) + ''' is of type ''' + TypeOfStr(This) +
+      ''' which does not have method ''' + Copy(Text, Dot + 1, MaxInt) + ''''
+  else
+    Result := '''' + Text + ''' is of type ''' + TypeOfStr(Callee) + ''' and cannot be called as a function';
+end;
+
+{ the callee at PC (in register A, its receiver in A + 1) is not callable: a construct says it is not a
+  constructor }
+function XThrowNotFunction(Tpl: PFuncTemplate; PC, A: Integer; IsNew: Boolean; Callee, This: TValue): Boolean;
+  noinline;
+var Text, Suggestion: UnicodeString;
 begin
   Text := CallSiteText(Tpl, PC);
   if Text = '' then Text := CalleeDescription(Tpl, PC, A);
+  Suggestion := NotCallableSuggestion(Text, Callee, This, IsNew);
   if IsNew then Result := ThrowTypeError(Text + ' is not a constructor')
   else Result := ThrowTypeError(Text + ' is not a function');
+  if (Suggestion <> '') and IsObject(Pending) then SetErrorHostSuggestion(Pending, Suggestion);
 end;
 
 { the function T constructed at PC has no [[Construct]] }
@@ -8865,7 +8896,7 @@ LReload:
           Fr^.PC := PC;
           if not IsCallable(VA) then
           begin
-            XThrowNotFunction(Tpl, PC - 1, A, (TOp(I and $FF) = opNew) or (TOp(I and $FF) = opNewV));
+            XThrowNotFunction(Tpl, PC - 1, A, (TOp(I and $FF) = opNew) or (TOp(I and $FF) = opNewV), VA, R[A + 1]);
             goto LThrow;
           end;
           O := ObjOf(VA);

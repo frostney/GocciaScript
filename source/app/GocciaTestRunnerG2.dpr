@@ -71,6 +71,8 @@ type
     FailedTests: array of string;
     { a file that did not load or run its suites: why (also printed on stderr) }
     ErrorMessage: string;
+    { its diagnostic was printed already (the code frame of a file that threw) }
+    Reported: Boolean;
     CompileNanoseconds, ExecuteNanoseconds: Int64;
     { its engine's and the memory manager's counters over the file }
     Memory: TCLIJSONMemoryStats;
@@ -626,7 +628,16 @@ begin
       if RunResult.Ok then
         Err := ''
       else
+      begin
         Err := RunResult.ErrorMessage;
+        { a file that threw is reported as GocciaRunner reports it: the error, its suggestion and a code frame }
+        if not IsJsonOutput and (RunResult.Aborted = g2aNone) then
+        begin
+          WriteLn(ErrOutput, FailureText(FileName, RunResult, ASource, Engine, '', nil, True, True, False,
+            Engine.TimeoutMs, EngineOptions.MaxInstructions.ValueOr(0)));
+          Res.Reported := True;
+        end;
+      end;
       Json := '';
       SuitesStart := GetNanoseconds;
       { the file's limits (its --timeout, 30 s by default) cover its suites too }
@@ -792,7 +803,7 @@ begin
   begin
     if FParallel then
       Progress(I);
-    if FResults[I].ErrorMessage <> '' then
+    if (FResults[I].ErrorMessage <> '') and not FResults[I].Reported then
       WriteLn(ErrOutput, FResults[I].ErrorMessage);
   end;
   { the files after the one that stopped the run never ran: no results row }

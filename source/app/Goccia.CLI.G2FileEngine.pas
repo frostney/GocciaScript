@@ -16,6 +16,7 @@ uses
   CLI.ConfigFile,
   CLI.Options,
   G2.Embed,
+  SandboxVirtualFileSystem,
 
   Goccia.Capabilities,
   Goccia.CapabilityAudit,
@@ -109,12 +110,25 @@ function FileMemoryStats(const AStart, AEnd: TG2MemoryStats; const AHeapStart, A
 function AggregateMemoryStats(const AStats: array of TCLIJSONMemoryStats; AParallel: Boolean;
   const AHeapStart, AHeapEnd: THeapStatus): TCLIJSONMemoryStats;
 
+{ GocciaScript's suggestion for a runtime error's message, '' for none }
+function RuntimeSuggestion(const AMessage: string): string;
+{ a failed run's report as text, as GocciaRunner prints it: the error, its suggestion, where it was thrown and a code
+  frame from the file it is in. AEngine says which files the run loaded; AWithheld names a file whose source no
+  report shows; AFrameSource: the virtual filesystem a sandbox run's modules come from (nil: the host's files);
+  AFrames: a code frame at all; ASuggestions: the host's suggestions; ATimeoutMs and AMaxInstructions: the limits
+  a spent one names }
+function FailureText(const AFileName: string; const AResult: TG2RunResult; const ASource: TStringList;
+  AEngine: TG2Engine; const AWithheld: string; const AFrameSource: TSandboxVirtualFileSystem;
+  AFrames, ASuggestions, AColor: Boolean; ATimeoutMs, AMaxInstructions: Int64): string;
+
 implementation
 
 uses
   G2.Core,
   G2.HostAPI,
+  TextSemantics,
 
+  Goccia.Error,
   Goccia.Error.Suggestions,
   Goccia.Packages.Store,
   Goccia.ScriptLoader.Globals,
@@ -613,6 +627,141 @@ begin
   Result.HeapStartFreeBytes := Int64(AHeapStart.TotalFree);
   Result.HeapEndFreeBytes := Int64(AHeapEnd.TotalFree);
   Result.HeapDeltaFreeBytes := Result.HeapEndFreeBytes - Result.HeapStartFreeBytes;
+end;
+
+{$I GocciaRunnerG2.Suggestions.inc}
+
+{ Msg is Template with each %s, %d or %x standing for any text }
+function TemplateMatches(const ATemplate, AMsg: string): Boolean;
+var
+  T, M, StarT, StarM: Integer;
+begin
+  T := 1;
+  M := 1;
+  StarT := 0;
+  StarM := 0;
+  while M <= Length(AMsg) do
+  begin
+    if (T < Length(ATemplate)) and (ATemplate[T] = '%') and (ATemplate[T + 1] in ['s', 'd', 'x']) then
+    begin
+      Inc(T, 2);
+      StarT := T;
+      StarM := M;
+    end
+    else if (T <= Length(ATemplate)) and (ATemplate[T] = AMsg[M]) then
+    begin
+      Inc(T);
+      Inc(M);
+    end
+    else if StarT > 0 then
+    begin
+      Inc(StarM);
+      M := StarM;
+      T := StarT;
+    end
+    else
+      Exit(False);
+  end;
+  while (T < Length(ATemplate)) and (ATemplate[T] = '%') and (ATemplate[T + 1] in ['s', 'd', 'x']) do
+    Inc(T, 2);
+  Result := T > Length(ATemplate);
+end;
+
+{ GocciaScript's suggestion for a runtime error's message, '' for none }
+function RuntimeSuggestion(const AMessage: string): string;
+var
+  I: Integer;
+begin
+  for I := 0 to RUNTIME_SUGGESTION_COUNT - 1 do
+    if TemplateMatches(RUNTIME_SUGGESTIONS[I, 0], AMessage) then
+      Exit(RUNTIME_SUGGESTIONS[I, 1]);
+  Result := '';
+end;
+
+{ The failed run's report as text (WriteLn prints it as GocciaRunner does). AEngine: the run's engine, which says
+  which files it loaded; AWithheld: a file whose source no report shows (the host environment's provider);
+  AFrameSource: the virtual filesystem a sandbox run's modules are read from (nil: the host's files); AFrames: a
+  code frame from the source (a sandbox child's error shows only the location); ASuggestions: the host's
+  suggestions (meant for the host, not for a sandbox child's caller). }
+function FailureText(const AFileName: string; const AResult: TG2RunResult; const ASource: TStringList;
+  AEngine: TG2Engine; const AWithheld: string; const AFrameSource: TSandboxVirtualFileSystem;
+  AFrames, ASuggestions, AColor: Boolean; ATimeoutMs, AMaxInstructions: Int64): string;
+var
+  Name, Suggestion, ErrorPath: string;
+  Source, Loaded: TStringList;
+begin
+  case AResult.Aborted of
+    g2aTimeout:
+      Exit(Format('Fatal error: file timed out after %dms', [ATimeoutMs]));
+    g2aInstructionLimit:
+      Exit(Format('Fatal error: Execution exceeded instruction limit of %d', [AMaxInstructions]));
+    g2aMemoryLimit, g2aHostAbort:
+      Exit('Fatal error: ' + UTF8Encode(AResult.ErrorText));
+  end;
+  if not AResult.ErrorIsError then
+    Exit(UTF8Encode(AResult.ErrorMessage));
+  Name := UTF8Encode(AResult.ErrorName);
+  if Name = '' then
+    Name := 'Error';
+  { a static import that did not load, located at its declaration (FormatHostErrorDiagnostic: no code frame) }
+  if AResult.ErrorResolvedPath <> '' then
+    Exit(FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText), UTF8Encode(AResult.ErrorFile),
+      AResult.ErrorLine, AResult.ErrorColumn, nil, AColor, '') +
+      '  Resolved to: ' + UTF8Encode(AResult.ErrorResolvedPath) + sLineBreak);
+  Suggestion := '';
+  if ASuggestions then
+  begin
+    Suggestion := UTF8Encode(AResult.ErrorSuggestion);
+    if Suggestion = '' then
+      Suggestion := RuntimeSuggestion(UTF8Encode(AResult.ErrorText));
+  end;
+  if AResult.ErrorLine > 0 then
+  begin
+    { the code frame from the file the error is in: an imported module's own source, never a file the entry's run
+      did not load as a module (a thrown value's stack can name any path; a module the host evaluated first, such
+      as a globals module or the host environment's provider, keeps its source) }
+    Source := nil;
+    if AFrames then
+      Source := ASource;
+    Loaded := nil;
+    ErrorPath := UTF8Encode(AResult.ErrorFile);
+    if (ErrorPath <> '') and (ErrorPath <> AFileName) and
+       (ExpandFileName(ErrorPath) <> ExpandFileName(AFileName)) then
+    begin
+      Source := nil;
+      if AFrames and ((AWithheld = '') or (ExpandFileName(ErrorPath) <> AWithheld)) and
+         AEngine.ModuleLoaded(UnicodeString(ExpandFileName(ErrorPath))) then
+      begin
+        try
+          if Assigned(AFrameSource) then
+            Loaded := CreateFileTextLines(AFrameSource.SnapshotReadAllText(ErrorPath))
+          else
+          begin
+            Loaded := TStringList.Create;
+            Loaded.LoadFromFile(ErrorPath);
+          end;
+          Source := Loaded;
+        except
+          on E: Exception do
+          begin
+            FreeAndNil(Loaded);
+            Source := nil;
+          end;
+        end;
+      end;
+    end;
+    try
+      Result := FormatErrorWithSourceContext(Name, UTF8Encode(AResult.ErrorText),
+        ErrorPath, AResult.ErrorLine, AResult.ErrorColumn,
+        Source, AColor, Suggestion);
+    finally
+      Loaded.Free;
+    end;
+  end
+  else if AResult.ErrorText <> '' then
+    Result := Name + ': ' + UTF8Encode(AResult.ErrorText)
+  else
+    Result := Name;
 end;
 
 end.
