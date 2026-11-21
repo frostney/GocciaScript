@@ -314,10 +314,6 @@ type
     // Constant time: a call is compiled with this check, and a function's top
     // level can hold thousands of locals.
     function SlotHoldsLocal(const ASlot: UInt16): Boolean;
-    // Whether a local lives in the slot and none of them has been initialized
-    // yet: the slot holds what an earlier use of it left, which the binding
-    // being initialized cannot read.
-    function SlotHoldsOnlyUninitializedLocals(const ASlot: UInt16): Boolean;
     // The local in place, without copying the record and its managed fields.
     // The pointer is valid only until the next DeclareLocal or DeclareVarLocal,
     // which can reallocate the local array.
@@ -1251,21 +1247,6 @@ function TGocciaCompilerScope.SlotHoldsLocal(const ASlot: UInt16): Boolean;
 begin
   Result := (ASlot < Length(FSlotLocalCounts)) and
     (FSlotLocalCounts[ASlot] > 0);
-end;
-
-function TGocciaCompilerScope.SlotHoldsOnlyUninitializedLocals(
-  const ASlot: UInt16): Boolean;
-var
-  I: Integer;
-begin
-  Result := False;
-  for I := 0 to FLocalCount - 1 do
-    if FLocals[I].Slot = ASlot then
-    begin
-      if FLocals[I].IsInitialized then
-        Exit(False);
-      Result := True;
-    end;
 end;
 
 function TGocciaCompilerScope.LocalAt(
