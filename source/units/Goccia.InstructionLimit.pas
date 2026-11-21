@@ -56,6 +56,15 @@ function CaptureInstructionLimitState: PGocciaInstructionLimitState; {$IFDEF FPC
 function InstructionLimitIsActive: Boolean; {$IFDEF FPC}inline;{$ENDIF}
 procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
 procedure CheckInstructionLimit;
+{ Native work that no dispatched instruction counts: adds ACount to the
+  budget (when one is active) and checks it, raising for a spent budget or a
+  requested abort. Goccia.Timeout's CheckExecutionTimeout calls it from the
+  slow path of a native loop's poll, one unit per element. }
+procedure SpendInstructions(const ACount: Int64);
+{ IncrementInstructionCounter through a captured handle: no thread-variable
+  lookup. The caller has checked InstructionLimitActive. }
+procedure IncrementInstructionCounterState(
+  const AState: PGocciaInstructionLimitState); {$IFDEF FPC}inline;{$ENDIF}
 { CheckInstructionLimit through a captured handle: no thread-variable lookup.
   Goccia.ThreadPolls keeps the handle beside the InstructionLimitActive
   flag. }
@@ -87,7 +96,8 @@ implementation
 uses
   CriticalSections,
 
-  Goccia.ThreadPolls;
+  Goccia.ThreadPolls,
+  Goccia.Timeout;
 
 threadvar
   GInstructionLimitState: TGocciaInstructionLimitState;
@@ -131,6 +141,17 @@ begin
   end;
 end;
 
+// Whether a base budget or a scope sets a ceiling: a scope of 0 only counts.
+function HasInstructionCeiling: Boolean;
+var
+  I: Integer;
+begin
+  Result := GInstructionLimitState.MaxInstructions > 0;
+  for I := 0 to GInstructionLimitState.ScopeDepth - 1 do
+    if GInstructionLimitState.ScopeLimits[I] > 0 then
+      Exit(True);
+end;
+
 // Every assignment to GInstructionLimitState.Active goes through here, so the
 // mirror that Goccia.ThreadPolls readers see cannot drift from it. Every
 // change to a budget ends here too, so it recomputes NextLimitCount.
@@ -141,6 +162,8 @@ begin
   // An armed abort keeps the poll running whether or not a budget is set.
   Armed := AActive or (GInstructionLimitState.AbortRequested <> nil);
   RecomputeNextLimitCount(@GInstructionLimitState);
+  // A budget makes native loops spend it from their timeout poll.
+  SetTimeoutBudgetArmed(AActive and HasInstructionCeiling);
   GInstructionLimitState.Active := Armed;
   GThreadPolls.InstructionLimitState := @GInstructionLimitState;
   GThreadPolls.InstructionLimitActive := Armed;
@@ -165,6 +188,8 @@ end;
 
 procedure StartInstructionLimit(const AMaxInstructions: Int64);
 begin
+  // A budget that starts or ends begins a fresh sample.
+  TakePendingNativeWork;
   GInstructionLimitState.ScopeDepth := 0;
   SetLength(GInstructionLimitState.ScopeStarts, 0);
   SetLength(GInstructionLimitState.ScopeLimits, 0);
@@ -175,6 +200,8 @@ end;
 
 procedure ClearInstructionLimit;
 begin
+  // A budget that starts or ends begins a fresh sample.
+  TakePendingNativeWork;
   GInstructionLimitState.ScopeDepth := 0;
   SetLength(GInstructionLimitState.ScopeStarts, 0);
   SetLength(GInstructionLimitState.ScopeLimits, 0);
@@ -187,6 +214,9 @@ procedure PushInstructionLimitScope(const AMaxInstructions: Int64);
 var
   Index: Integer;
 begin
+  // Native polls not yet spent belong to the scopes active until now.
+  if GInstructionLimitState.Active then
+    Inc(GInstructionLimitState.InstructionCount, TakePendingNativeWork);
   if (GInstructionLimitState.ScopeDepth = 0) and
      (GInstructionLimitState.MaxInstructions <= 0) then
     GInstructionLimitState.InstructionCount := 0;
@@ -204,6 +234,8 @@ procedure PopInstructionLimitScope;
 begin
   if GInstructionLimitState.ScopeDepth = 0 then
     Exit;
+  if GInstructionLimitState.Active then
+    Inc(GInstructionLimitState.InstructionCount, TakePendingNativeWork);
   Dec(GInstructionLimitState.ScopeDepth);
   SetLength(GInstructionLimitState.ScopeStarts,
     GInstructionLimitState.ScopeDepth);
@@ -239,6 +271,19 @@ begin
   RecomputeNextLimitCount(AState);
 end;
 
+procedure SpendInstructions(const ACount: Int64);
+var
+  State: PGocciaInstructionLimitState;
+begin
+  State := @GInstructionLimitState;
+  // Inactive: nothing counts and nothing can be spent (an armed abort keeps
+  // Active set).
+  if not State^.Active then
+    Exit;
+  Inc(State^.InstructionCount, ACount);
+  CheckInstructionLimitState(State);
+end;
+
 function CaptureInstructionLimitState: PGocciaInstructionLimitState;
 begin
   Result := @GInstructionLimitState;
@@ -253,6 +298,12 @@ procedure IncrementInstructionCounter; {$IFDEF FPC}inline;{$ENDIF}
 begin
   if GInstructionLimitState.Active then
     Inc(GInstructionLimitState.InstructionCount);
+end;
+
+procedure IncrementInstructionCounterState(
+  const AState: PGocciaInstructionLimitState);
+begin
+  Inc(AState^.InstructionCount);
 end;
 
 procedure CheckInstructionLimitState(

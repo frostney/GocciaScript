@@ -506,9 +506,8 @@ uses
   Goccia.Error,
   Goccia.Error.Messages,
   Goccia.Error.Suggestions,
-  Goccia.InstructionLimit,
   Goccia.Intrinsics.FunctionObjects,
-  Goccia.Timeout,
+  Goccia.NativeLimits,
   Goccia.Utils,
   Goccia.Values.ArrayBufferValue,
   Goccia.Values.ArrayValue,
@@ -620,9 +619,7 @@ begin
     { The same bounds the sibling walk in InstantiateClass applies. Following
       one [[Prototype]] chain cannot cycle, so these are defence in depth
       rather than the correctness argument. }
-    CheckExecutionTimeout;
-    IncrementInstructionCounter;
-    CheckInstructionLimit;
+    CheckNativeWork;
 
     Target := ImplicitSuperConstructorTarget(Current);
     if not Assigned(Target) then
@@ -1717,9 +1714,7 @@ begin
   WalkClass := Self;
   while Assigned(WalkClass) do
   begin
-    CheckExecutionTimeout;
-    IncrementInstructionCounter;
-    CheckInstructionLimit;
+    CheckNativeWork;
     NativeIntrinsicPrototype := WalkClass.NativeInstanceDefaultPrototype;
     if Assigned(NativeIntrinsicPrototype) then
     begin

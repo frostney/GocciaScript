@@ -255,7 +255,13 @@ child container holding nothing else — are not in `comments`, because the
 parser never sees them.
 
 In the expression view an element is a `JSXElement` covering the element as
-written, and the expressions in its braces are its children. Nothing the JSX
+written, and the expressions in its braces are its children. Type arguments on
+its tag, as in `<Select<Option> items={options} />`, are reported as type
+syntax is ([ADR 0172](adr/0172-goccia-ast-reports-erased-type-syntax-recorded-on-request.md)):
+a `TSTypeParameterInstantiation`, the element's first child, before the
+expressions of its attributes. With `tokens`, their tokens and comments are in
+`tokens` as the parser read them, and a comment before or inside them is in
+`comments` too. Nothing the JSX
 transformer writes is reported — not the call it turns an element into, not
 the string it escapes an attribute value into — so every node's range is text
 in `source`.

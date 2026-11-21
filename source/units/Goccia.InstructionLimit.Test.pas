@@ -11,6 +11,7 @@ uses
 
   Goccia.InstructionLimit,
   Goccia.NativeLimits,
+  Goccia.ThreadPolls,
   Goccia.TestSetup,
   Goccia.Timeout,
   Goccia.Values.ObjectValue;
@@ -25,6 +26,10 @@ type
     procedure TestEarliestBudgetTripsFirst;
     procedure TestScopeWithoutBudgetNeverTrips;
     procedure TestFreshThreadChecksNothing;
+    procedure TestNativeLoopPollsSpendTheBudget;
+    procedure TestNativeLoopPollsCostNothingWithoutABudget;
+    procedure TestCheckNativeWorkIsCountedOnce;
+    procedure TestPendingPollsSettleAcrossScopes;
   protected
     procedure BeforeEach; override;
     procedure AfterEach; override;
@@ -99,6 +104,121 @@ begin
     TestScopeWithoutBudgetNeverTrips);
   Test('A thread that never set a budget checks nothing',
     TestFreshThreadChecksNothing);
+  Test('The polls of a native loop spend the budget, one unit each',
+    TestNativeLoopPollsSpendTheBudget);
+  Test('The polls of a native loop cost nothing without a budget',
+    TestNativeLoopPollsCostNothingWithoutABudget);
+  Test('CheckNativeWork charges one unit per call, not two',
+    TestCheckNativeWorkIsCountedOnce);
+  Test('Pending native polls are settled when a scope starts or ends',
+    TestPendingPollsSettleAcrossScopes);
+end;
+
+procedure TInstructionLimitTests.TestCheckNativeWorkIsCountedOnce;
+var
+  I: Integer;
+  Raised: Boolean;
+begin
+  { 1,500 calls under a budget of 2,000: each call is one unit, so the budget
+    holds; charged twice (once by the poll's sample) it would be spent. }
+  StartInstructionLimit(2000);
+  Raised := False;
+  try
+    for I := 1 to 1500 do
+      CheckNativeWork;
+  except
+    on TGocciaInstructionLimitError do
+      Raised := True;
+  end;
+  ClearInstructionLimit;
+  Expect<Boolean>(Raised).ToBe(False);
+end;
+
+procedure TInstructionLimitTests.TestPendingPollsSettleAcrossScopes;
+var
+  I, Round: Integer;
+  Raised: Boolean;
+begin
+  { Rounds of 600 polls, each inside a nested scope: no round reaches a sample
+    of 1,024 alone, but the outer budget of 3,000 is spent after five rounds
+    because every scope's pending polls are added to it when the scope ends,
+    and the next native poll checks it, with no dispatched instruction. }
+  StartInstructionLimit(3000);
+  Raised := False;
+  try
+    for Round := 1 to 20 do
+    begin
+      PushInstructionLimitScope(1000000);
+      try
+        for I := 1 to 600 do
+          CheckExecutionTimeout;
+      finally
+        PopInstructionLimitScope;
+      end;
+    end;
+  except
+    on TGocciaInstructionLimitError do
+      Raised := True;
+  end;
+  ClearInstructionLimit;
+  Expect<Boolean>(Raised).ToBe(True);
+end;
+
+procedure TInstructionLimitTests.TestNativeLoopPollsSpendTheBudget;
+var
+  Polls: Integer;
+  Raised: Boolean;
+begin
+  { No deadline is set: the budget alone arms the poll, and a native loop's
+    CheckExecutionTimeout spends it in samples of 1024 polls (the chokepoint
+    rule in Goccia.Timeout), so a budget of 1,000 ends the loop at the first. }
+  StartInstructionLimit(1000);
+  Raised := False;
+  Polls := 0;
+  try
+    while Polls < 100000 do
+    begin
+      CheckExecutionTimeout;
+      Inc(Polls);
+    end;
+  except
+    on TGocciaInstructionLimitError do
+      Raised := True;
+  end;
+  Expect<Boolean>(Raised).ToBe(True);
+  Expect<Integer>(Polls).ToBe(1023);
+
+  { A larger budget lasts for as many samples: 1,000,000 polls fit in
+    1,000,000 units, and the next sample trips it. }
+  StartInstructionLimit(4096);
+  Raised := False;
+  Polls := 0;
+  try
+    while Polls < 100000 do
+    begin
+      CheckExecutionTimeout;
+      Inc(Polls);
+    end;
+  except
+    on TGocciaInstructionLimitError do
+      Raised := True;
+  end;
+  Expect<Boolean>(Raised).ToBe(True);
+  Expect<Integer>(Polls).ToBe(4095);
+  ClearInstructionLimit;
+  // The budget gone, so is the arming it gave the poll.
+  Expect<Boolean>(GThreadPolls.TimeoutArmed).ToBe(False);
+end;
+
+procedure TInstructionLimitTests.TestNativeLoopPollsCostNothingWithoutABudget;
+var
+  I: Integer;
+begin
+  Expect<Boolean>(GThreadPolls.TimeoutArmed).ToBe(False);
+  for I := 1 to 100000 do
+    CheckExecutionTimeout;
+  Expect<Boolean>(GThreadPolls.TimeoutArmed).ToBe(False);
+  Expect<Boolean>(GThreadPolls.InstructionLimitActive).ToBe(False);
 end;
 
 procedure TInstructionLimitTests.TestEarliestBudgetTripsFirst;
