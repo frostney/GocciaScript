@@ -87,15 +87,6 @@ function NativeStackLimit: NativeUInt;
 // The address of a local in a frame called from the caller's, which is where
 // the native stack currently ends.
 function NativeStackPosition: NativeUInt;
-// Combines what the system reports for the running thread's stack (ALow and
-// ASize, when ASystemFound) with what the RTL recorded when it started the
-// thread (ARTLLow and ARTLLength, its StackBottom and StackLength), for a
-// thread whose stack currently ends at APosition. Returns whether bounds were
-// found. NativeStackLimit uses it everywhere except on Darwin; it is exported
-// so the combination can be tested with the bounds a system reports.
-function CombineStackBounds(const ASystemFound: Boolean;
-  var ALow, ASize: NativeUInt; const ARTLLow, ARTLLength,
-  APosition: NativeUInt): Boolean;
 // The throw the checks share. It is exported only because FPC does not inline
 // a procedure into another unit when it calls one that is local to the
 // implementation section, and the two checks are small enough to be inlined
@@ -269,18 +260,73 @@ begin
 end;
 
 // The main thread's id is the process id. Asked through the system call, so
-// that it needs no libpthread either.
+// that it does not depend on the thread manager.
 function IsMainThread: Boolean;
 begin
   Result := Do_SysCall(syscall_nr_gettid) = TSysResult(FpGetPid);
 end;
 
-// Reads the mapping that holds the running frame from /proc/self/maps, and
-// so needs neither libc nor libpthread: glibc before 2.34 keeps
-// pthread_getattr_np in libpthread, which not every program links. A thread
-// stack is a mapping of its own. The main thread's grows down to RLIMIT_STACK
-// below its top, but not into the guard gap above the mapping beneath it. The
-// kernel marks it [stack]; Valgrind gives its program a main stack of its
+// glibc 2.34 and later define these in libc; earlier versions, such as the
+// one the aarch64 build links against, only in libpthread. Naming libpthread
+// links it in either case, as the cthreads unit does.
+type
+  PPthreadAttr = ^pthread_attr_t;
+
+function pthread_self: pthread_t; cdecl; external 'pthread'
+  name 'pthread_self';
+function pthread_getattr_np(AThread: pthread_t;
+  AAttr: PPthreadAttr): cint; cdecl; external 'pthread'
+  name 'pthread_getattr_np';
+function pthread_attr_getstack(AAttr: PPthreadAttr; AStackAddr: PPointer;
+  AStackSize: psize_t): cint; cdecl; external 'pthread'
+  name 'pthread_attr_getstack';
+function Pthread_attr_destroy(AAttr: PPthreadAttr): cint; cdecl;
+  external 'pthread' name 'pthread_attr_destroy';
+
+// Asks the thread library for the stack it gave the calling thread. For a
+// thread it created, glibc answers from its own record of the stack and
+// leaves the guard pages out: the lowest address is the first one above the
+// guard, and the size runs from there to the top, where the thread's static
+// TLS and its descriptor take the first bytes.
+function TryGetThreadLibraryStackBounds(out ALow, ASize: NativeUInt): Boolean;
+var
+  Attr: pthread_attr_t;
+  StackAddr: Pointer;
+  StackSize: size_t;
+begin
+  ALow := 0;
+  ASize := 0;
+  Result := False;
+  if pthread_getattr_np(pthread_self, @Attr) <> 0 then
+    Exit;
+  try
+    if (pthread_attr_getstack(@Attr, @StackAddr, @StackSize) = 0) and
+       (StackSize > 0) then
+    begin
+      ALow := NativeUInt(StackAddr);
+      ASize := NativeUInt(StackSize);
+      Result := True;
+    end;
+  finally
+    Pthread_attr_destroy(@Attr);
+  end;
+end;
+
+// Another thread's bounds come from the thread library, which knows the
+// stack it gave the thread, and not from /proc/self/maps: glibc 2.42 and
+// later install a thread's guard page inside its stack's mapping
+// (MADV_GUARD_INSTALL, Linux 6.13 and later) instead of as a mapping of its
+// own, and the kernel merges two thread stacks that lie next to each other
+// into one mapping. /proc/self/maps then cannot tell a thread's own stack from
+// a neighbour's: a 512 KiB stack mapped just below a 4 MiB one reads as
+// 4.5 MiB. glibc before 2.34 keeps pthread_getattr_np in libpthread, so every
+// Linux program that uses this unit links it.
+//
+// The main thread's bounds, and another thread's where the thread library
+// cannot give them, are read from the mapping that holds the running frame
+// in /proc/self/maps. The main thread's stack grows down to RLIMIT_STACK
+// below its top, but not into the guard gap above the mapping beneath it.
+// The kernel marks it [stack]; Valgrind gives its program a main stack of its
 // own, which is not marked and starts a few pages long.
 function TryGetSystemStackBounds(out ALow, ASize: NativeUInt): Boolean;
 var
@@ -289,6 +335,8 @@ var
   Position, MapStart, MapEnd, PreviousEnd, Size: NativeUInt;
   Limits: TRLimit;
 begin
+  if not IsMainThread and TryGetThreadLibraryStackBounds(ALow, ASize) then
+    Exit(True);
   ALow := 0;
   ASize := 0;
   Result := False;
@@ -348,74 +396,36 @@ begin
 end;
 {$IFEND}
 
-// The system's bounds where it gives them, else the RTL's. The RTL's bottom
-// is used when it is the higher one: a development build checks the stack
-// against it ({$S+}) and stops with a fatal "Stack overflow" past it, and
-// glibc can hand a thread a cached stack larger than the one the RTL was told
-// about.
-//
-// The RTL also bounds the top of the stack. It records StackBottom as the
-// stack pointer at the thread's start less StackLength, so no frame lies above
-// StackBottom + StackLength. Where the system reports more stack than the
-// thread was created with, its mapping can hold another thread's stack too:
-// on Linux 6.13 and later, glibc 2.42 and later install a thread's guard page
-// inside its stack's mapping (MADV_GUARD_INSTALL) instead of as a mapping of
-// its own, and the kernel merges two thread stacks that lie next to each
-// other into one mapping in /proc/self/maps. A 512 KiB stack mapped just
-// below a 4 MiB one reads as 4.5 MiB, and would keep the full
-// NATIVE_STACK_RESERVE free instead of a quarter of itself. Its size is then
-// taken as what lies below where the thread started, or StackLength where
-// that is more, so the reserve is never smaller than the stack the thread was
-// created with would keep.
-//
-// The top is lowered only below the system's own bottom. StackBottom can lie
-// below the real bottom of the stack by what the thread used before the RTL
-// started it (its static TLS and the first frames), so a stack whose bottom
-// is the RTL's keeps the size it had. A thread the RTL did not start records
-// a StackLength of about 1 GB, larger than any stack the system reports, so
-// its bounds are left alone, and the top is never lowered to below the
-// running frame.
-function CombineStackBounds(const ASystemFound: Boolean;
-  var ALow, ASize: NativeUInt; const ARTLLow, ARTLLength,
-  APosition: NativeUInt): Boolean;
-var
-  StackTop, RTLTop, OwnSize: NativeUInt;
-begin
-  Result := ASystemFound;
-  if (ARTLLow = 0) or (ARTLLength = 0) then
-    Exit;
-  if not Result then
-  begin
-    ALow := ARTLLow;
-    ASize := ARTLLength;
-    Exit(True);
-  end;
-  StackTop := ALow + ASize;
-  if (ARTLLow > ALow) and (ARTLLow < StackTop) then
-  begin
-    ALow := ARTLLow;
-    ASize := StackTop - ALow;
-    Exit;
-  end;
-  RTLTop := ARTLLow + ARTLLength;
-  if (RTLTop <= ALow) or (RTLTop >= StackTop) then
-    Exit;
-  OwnSize := RTLTop - ALow;
-  if OwnSize < ARTLLength then
-    OwnSize := ARTLLength;
-  if (OwnSize < ASize) and (ALow + OwnSize > APosition) then
-    ASize := OwnSize;
-end;
-
-// On Darwin the RTL's StackBottom and StackLength are not used at all: on
-// x86_64-darwin they describe the 256 KiB the compiler defaults to instead of
-// the 8 MiB main thread.
+// The system's bounds where it gives them, else the RTL's. On Darwin the
+// RTL's StackBottom and StackLength are not used at all: on x86_64-darwin they
+// describe the 256 KiB the compiler defaults to instead of the 8 MiB main
+// thread. Elsewhere the RTL's bottom is used when it is the higher one: a
+// development build checks the stack against it ({$S+}) and stops with a fatal
+// "Stack overflow" past it, and glibc can hand a thread a cached stack larger
+// than the one the RTL was told about.
 function TryGetThreadStackBounds(out ALow, ASize: NativeUInt): Boolean;
+{$IF DEFINED(FPC) AND NOT DEFINED(DARWIN) AND NOT DEFINED(LAKON)}
+var
+  RTLLow, StackTop: NativeUInt;
+{$IFEND}
 begin
   Result := TryGetSystemStackBounds(ALow, ASize);
   {$IF DEFINED(FPC) AND NOT DEFINED(DARWIN) AND NOT DEFINED(LAKON)}
-  Result := CombineStackBounds(Result, ALow, ASize, NativeUInt(StackBottom),
-    StackLength, NativeStackPosition);
+  RTLLow := NativeUInt(StackBottom);
+  if (RTLLow = 0) or (StackLength = 0) then
+    Exit;
+  if not Result then
+  begin
+    ALow := RTLLow;
+    ASize := StackLength;
+    Result := True;
+  end
+  else if (RTLLow > ALow) and (RTLLow < ALow + ASize) then
+  begin
+    StackTop := ALow + ASize;
+    ALow := RTLLow;
+    ASize := StackTop - ALow;
+  end;
   {$IFEND}
 end;
 

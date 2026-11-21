@@ -4,7 +4,9 @@ program Goccia.StackLimit.Test;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
+  {$IFDEF LINUX}BaseUnix,{$ENDIF}
   Classes,
+  SyncObjs,
   SysUtils,
 
   TestingPascalLibrary,
@@ -28,9 +30,7 @@ type
     procedure TestMainThreadHasItsStackBounds;
     procedure TestEachThreadHasItsOwnLimit;
     procedure TestSmallStackKeepsAQuarterFree;
-    procedure TestMergedMappingAboveKeepsTheThreadsSize;
-    procedure TestMergedMappingBelowKeepsTheRTLsBottom;
-    procedure TestBoundsTheRTLCannotNarrow;
+    procedure TestSmallStackBetweenOtherStacksKeepsAQuarterFree;
     procedure TestShallowEntriesAreNotChecked;
     procedure TestRecursionStopsBeforeTheStackEnds;
     procedure Check(const ACondition: Boolean; const AWhat: string;
@@ -45,6 +45,10 @@ type
   TProbeThread = class(TThread)
   private
     FRecurse: Boolean;
+    // Set, when assigned, once the thread runs; the thread then waits for
+    // Go before it looks its limit up.
+    FRunning: TEvent;
+    FGo: TEvent;
     CachedLimit: NativeUInt;
     procedure Recurse(const ADepth: Integer);
   public
@@ -58,9 +62,22 @@ type
     SystemTop: NativeUInt;
     SystemSize: NativeUInt;
     RequestedSize: SizeUInt;
-    constructor Create(const AStackSize: SizeUInt; const ARecurse: Boolean);
+    constructor Create(const AStackSize: SizeUInt; const ARecurse: Boolean;
+      const ARunning: TEvent = nil; const AGo: TEvent = nil);
     procedure Execute; override;
     function Describe: string;
+  end;
+
+  // Holds a stack of a given size until Release is set, allocating nothing,
+  // so that nothing of its own is mapped next to its stack.
+  THeldThread = class(TThread)
+  private
+    FRunning: TEvent;
+    FRelease: TEvent;
+  public
+    constructor Create(const AStackSize: SizeUInt;
+      const ARunning, ARelease: TEvent);
+    procedure Execute; override;
   end;
 
 {$IFDEF DARWIN}
@@ -72,9 +89,12 @@ function Pthread_get_stacksize_np(AThread: Pointer): NativeUInt; cdecl;
 {$ENDIF}
 
 constructor TProbeThread.Create(const AStackSize: SizeUInt;
-  const ARecurse: Boolean);
+  const ARecurse: Boolean; const ARunning: TEvent = nil;
+  const AGo: TEvent = nil);
 begin
   FRecurse := ARecurse;
+  FRunning := ARunning;
+  FGo := AGo;
   RequestedSize := AStackSize;
   inherited Create(True, AStackSize);
 end;
@@ -93,6 +113,10 @@ end;
 
 procedure TProbeThread.Execute;
 begin
+  if Assigned(FRunning) then
+    FRunning.SetEvent;
+  if Assigned(FGo) then
+    FGo.WaitFor(INFINITE);
   Limit := NativeStackLimit;
   Position := NativeStackPosition;
   {$IFDEF DARWIN}
@@ -111,6 +135,20 @@ begin
       StoppedBy := E.ClassName;
     end;
   end;
+end;
+
+constructor THeldThread.Create(const AStackSize: SizeUInt;
+  const ARunning, ARelease: TEvent);
+begin
+  FRunning := ARunning;
+  FRelease := ARelease;
+  inherited Create(True, AStackSize);
+end;
+
+procedure THeldThread.Execute;
+begin
+  FRunning.SetEvent;
+  FRelease.WaitFor(INFINITE);
 end;
 
 function TProbeThread.Describe: string;
@@ -144,12 +182,8 @@ begin
     TestEachThreadHasItsOwnLimit);
   Test('A stack smaller than four reserves keeps a quarter of it free',
     TestSmallStackKeepsAQuarterFree);
-  Test('A mapping merged with a stack above keeps the thread''s own size',
-    TestMergedMappingAboveKeepsTheThreadsSize);
-  Test('A mapping merged with a stack below keeps the RTL''s bottom',
-    TestMergedMappingBelowKeepsTheRTLsBottom);
-  Test('Bounds the RTL cannot narrow are kept',
-    TestBoundsTheRTLCannotNarrow);
+  Test('A small stack between two other threads'' stacks keeps a quarter ' +
+    'of it free', TestSmallStackBetweenOtherStacksKeepsAQuarterFree);
   Test('Native re-entries nested no deeper than the unchecked depth pass',
     TestShallowEntriesAreNotChecked);
   Test('Recursion is stopped before it reaches the end of the stack',
@@ -219,94 +253,85 @@ begin
   end;
 end;
 
-// The bounds below are those a 512 KiB thread saw on Linux with glibc 2.43,
-// whose stack mapping holds its guard page, moved to an address a 32-bit
-// target has. The RTL started the thread 4,792 bytes below the top of its
-// 516 KiB mapping, and recorded StackBottom 512 KiB below that.
+// With glibc 2.42 and later on Linux 6.13 and later, a thread's guard page is
+// inside its stack's mapping, and the kernel merges thread stacks that lie
+// next to each other into one mapping. Each thread maps a few small blocks of
+// its own when it starts, which would otherwise lie between the stacks; the
+// holes left first in the address space take them, so the probe's stack lies
+// directly below one thread's stack and directly above another's. Where the
+// stacks do not merge, the test checks the same bounds.
+procedure TStackLimitTests.TestSmallStackBetweenOtherStacksKeepsAQuarterFree;
 const
-  SMALL_MAP_LOW = NativeUInt($7A000000);
-  SMALL_MAP_SIZE = 516 * 1024;
-  SMALL_RTL_TOP = SMALL_MAP_LOW + SMALL_MAP_SIZE - 4792;
-  SMALL_RTL_LOW = SMALL_RTL_TOP - 512 * 1024;
-  SMALL_POSITION = SMALL_RTL_TOP - 680;
-
-procedure TStackLimitTests.TestMergedMappingAboveKeepsTheThreadsSize;
+  HOLE_COUNT = 8;
+  HOLE_BYTES = 64 * 1024;
+  // glibc reuses the stack of a thread that has ended for a new thread that
+  // asks for no more than it and at least a quarter of it. No earlier test
+  // asks for these sizes, so each of these threads gets a stack mapped for it.
+  PROBE_STACK_BYTES = 640 * 1024;
+  HELD_STACK_BYTES = 8 * MEBIBYTE;
 var
-  Low, Size: NativeUInt;
+  {$IFDEF LINUX}
+  Holes: array[0..HOLE_COUNT - 1] of Pointer;
+  {$ENDIF}
+  I: Integer;
+  Above, Below: THeldThread;
+  Probe: TProbeThread;
+  AboveRunning, BelowRunning, ProbeRunning, Go, Release: TEvent;
+  Room: NativeUInt;
 begin
-  // The kernel merged the mapping with a 4 MiB thread stack mapped just
-  // above it.
-  Low := SMALL_MAP_LOW;
-  Size := SMALL_MAP_SIZE + 4100 * 1024;
-  Expect<Boolean>(CombineStackBounds(True, Low, Size, SMALL_RTL_LOW,
-    512 * 1024, SMALL_POSITION)).ToBe(True);
-  Expect<Boolean>(Low = SMALL_MAP_LOW).ToBe(True);
-  // The size the thread was created with, which keeps a quarter of it free.
-  Expect<Boolean>(Size = 512 * 1024).ToBe(True);
-  Expect<Boolean>(Size < 4 * NATIVE_STACK_RESERVE).ToBe(True);
-end;
-
-procedure TStackLimitTests.TestMergedMappingBelowKeepsTheRTLsBottom;
-var
-  Low, Size: NativeUInt;
-begin
-  // The kernel merged the mapping with a 4 MiB thread stack mapped just
-  // below it.
-  Low := SMALL_MAP_LOW - 4100 * 1024;
-  Size := SMALL_MAP_SIZE + 4100 * 1024;
-  // The RTL's bottom, a little below the mapping's, is in the stack below,
-  // and is the higher bottom. It can lie below the stack's real bottom by
-  // what the thread used before the RTL started it, so the stack keeps the
-  // size up to the mapping's top and the reserve that size gives.
-  Expect<Boolean>(CombineStackBounds(True, Low, Size, SMALL_RTL_LOW,
-    512 * 1024, SMALL_POSITION)).ToBe(True);
-  Expect<Boolean>(Low = SMALL_RTL_LOW).ToBe(True);
-  Expect<Boolean>(Low + Size = SMALL_MAP_LOW + SMALL_MAP_SIZE).ToBe(True);
-end;
-
-procedure TStackLimitTests.TestBoundsTheRTLCannotNarrow;
-var
-  Low, Size: NativeUInt;
-begin
-  // A mapping of the thread's own stack, its guard page included, keeps at
-  // least the size the thread was created with.
-  Low := SMALL_MAP_LOW;
-  Size := SMALL_MAP_SIZE;
-  CombineStackBounds(True, Low, Size, SMALL_RTL_LOW, 512 * 1024,
-    SMALL_POSITION);
-  Expect<Boolean>(Low = SMALL_MAP_LOW).ToBe(True);
-  Expect<Boolean>(Size = 512 * 1024).ToBe(True);
-  // Where the thread used more before the RTL started it than its guard
-  // page, the size still does not fall below that.
-  Low := SMALL_MAP_LOW;
-  Size := SMALL_MAP_SIZE + 4100 * 1024;
-  CombineStackBounds(True, Low, Size, SMALL_RTL_LOW - 150 * 1024,
-    512 * 1024, SMALL_POSITION - 150 * 1024);
-  Expect<Boolean>(Size = 512 * 1024).ToBe(True);
-  // A thread the RTL did not start records a StackLength larger than its
-  // stack: the system's bounds stay.
-  Low := SMALL_MAP_LOW;
-  Size := 8 * MEBIBYTE;
-  CombineStackBounds(True, Low, Size, SMALL_POSITION - 1000000000,
-    1000000000, SMALL_POSITION);
-  Expect<Boolean>(Low = SMALL_MAP_LOW).ToBe(True);
-  Expect<Boolean>(Size = 8 * MEBIBYTE).ToBe(True);
-  // A top below the running frame would leave the frame out of the stack.
-  Low := SMALL_MAP_LOW;
-  Size := SMALL_MAP_SIZE + 4100 * 1024;
-  CombineStackBounds(True, Low, Size, SMALL_RTL_LOW, 512 * 1024,
-    SMALL_MAP_LOW + 600 * 1024);
-  Expect<Boolean>(Size = SMALL_MAP_SIZE + 4100 * 1024).ToBe(True);
-  // Without the system's bounds the RTL's are used as they are.
-  Low := 0;
-  Size := 0;
-  Expect<Boolean>(CombineStackBounds(False, Low, Size, SMALL_RTL_LOW,
-    512 * 1024, SMALL_POSITION)).ToBe(True);
-  Expect<Boolean>(Low = SMALL_RTL_LOW).ToBe(True);
-  Expect<Boolean>(Size = 512 * 1024).ToBe(True);
-  // Without either, none are found.
-  Expect<Boolean>(CombineStackBounds(False, Low, Size, 0, 0,
-    SMALL_POSITION)).ToBe(False);
+  {$IFDEF LINUX}
+  // Every other block is unmapped again, so each leaves a hole of its own.
+  for I := 0 to HOLE_COUNT - 1 do
+    Holes[I] := Fpmmap(nil, HOLE_BYTES, PROT_READ or PROT_WRITE,
+      MAP_PRIVATE or MAP_ANONYMOUS, -1, 0);
+  for I := 0 to HOLE_COUNT - 1 do
+    if (I mod 2 = 0) and (Holes[I] <> MAP_FAILED) then
+      Fpmunmap(Holes[I], HOLE_BYTES);
+  {$ENDIF}
+  AboveRunning := TEvent.Create(nil, True, False, '');
+  BelowRunning := TEvent.Create(nil, True, False, '');
+  ProbeRunning := TEvent.Create(nil, True, False, '');
+  Go := TEvent.Create(nil, True, False, '');
+  Release := TEvent.Create(nil, True, False, '');
+  Above := THeldThread.Create(HELD_STACK_BYTES, AboveRunning, Release);
+  Probe := TProbeThread.Create(PROBE_STACK_BYTES, False, ProbeRunning, Go);
+  Below := THeldThread.Create(HELD_STACK_BYTES, BelowRunning, Release);
+  try
+    Above.Start;
+    AboveRunning.WaitFor(INFINITE);
+    Probe.Start;
+    ProbeRunning.WaitFor(INFINITE);
+    Below.Start;
+    BelowRunning.WaitFor(INFINITE);
+    Go.SetEvent;
+    Probe.WaitFor;
+    Check(Probe.Limit <> 0, 'limit found', Probe);
+    Room := Probe.Position - Probe.Limit;
+    // More than a full reserve would leave.
+    Check(Room > PROBE_STACK_BYTES - NATIVE_STACK_RESERVE,
+      'room above 640 KiB less a full reserve', Probe);
+    {$IFNDEF MSWINDOWS}
+    Check(Room <= PROBE_STACK_BYTES div 4 * 3 + STACK_SIZE_SLACK,
+      'room within three quarters of 640 KiB', Probe);
+    {$ENDIF}
+  finally
+    Release.SetEvent;
+    Above.WaitFor;
+    Below.WaitFor;
+    Above.Free;
+    Below.Free;
+    Probe.Free;
+    AboveRunning.Free;
+    BelowRunning.Free;
+    ProbeRunning.Free;
+    Go.Free;
+    Release.Free;
+    {$IFDEF LINUX}
+    for I := 0 to HOLE_COUNT - 1 do
+      if (I mod 2 = 1) and (Holes[I] <> MAP_FAILED) then
+        Fpmunmap(Holes[I], HOLE_BYTES);
+    {$ENDIF}
+  end;
 end;
 
 procedure TStackLimitTests.TestShallowEntriesAreNotChecked;
