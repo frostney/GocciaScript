@@ -473,13 +473,15 @@ begin
   AGeneratorIterator := TGocciaIteratorValue(GeneratorValue);
   AActiveRoots.Add(AGeneratorIterator);
   YieldedValue := AGeneratorIterator.DirectNext(Done);
+  // The suspended generator no longer holds the value it yielded, and setup
+  // jobs that SettleBatch drains may collect.
+  AActiveRoots.Add(YieldedValue);
   SettleBatch;
 
   if Done or not (YieldedValue is TGocciaFunctionBase) then
     ThrowTypeError('bench generator callback must yield a function');
 
   Result := TGocciaFunctionBase(YieldedValue);
-  AActiveRoots.Add(Result);
 end;
 
 function TGocciaBenchmark.Group(const AArgs: TGocciaArgumentsCollection; const AThisValue: TGocciaValue): TGocciaValue;

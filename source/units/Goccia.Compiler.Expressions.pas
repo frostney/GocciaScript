@@ -263,6 +263,147 @@ procedure CompileExpressionWithOptionalChainJumps(
   const ADest: UInt16; var AJumps: TGocciaCompilerJumpArray;
   var AJumpCount: Integer); forward;
 
+type
+  // A branch of the expression an expression statement ends with
+  // (TGocciaCompilerScope.SetAwaitTail): what its awaits leave in the
+  // registers is cleared at its end, inside the branch, so a path that skips
+  // it pays nothing for the clear.
+  TGocciaAwaitTailBranch = record
+    Active: Boolean;
+    Mark: Integer;
+    OuterPeak: Integer;
+  end;
+
+// Starts the branch ABranch of a tail expression when AActive; ABranch, or
+// nil for none, becomes the tail expression inside it.
+function BeginAwaitTailBranch(const ACtx: TGocciaCompilationContext;
+  const AActive: Boolean; const ABranch: TObject): TGocciaAwaitTailBranch;
+begin
+  Result.Active := AActive;
+  Result.Mark := 0;
+  Result.OuterPeak := 0;
+  if not AActive then
+    Exit;
+  Result.Mark := ACtx.Scope.UnclearedAwaitCount;
+  Result.OuterPeak := ACtx.Scope.BeginRegisterRegion;
+  ACtx.Scope.SetAwaitTailNode(ABranch);
+end;
+
+// Closes the branch's register region: True, with the region's peak in
+// APeak, when an await in it has registers still to clear.
+function CloseAwaitTailBranch(const ACtx: TGocciaCompilationContext;
+  const ABranch: TGocciaAwaitTailBranch; out APeak: Integer): Boolean;
+begin
+  APeak := 0;
+  if not ABranch.Active then
+    Exit(False);
+  APeak := ACtx.Scope.EndRegisterRegion(ABranch.OuterPeak);
+  Result := ACtx.Scope.UnclearedAwaitCount <> ABranch.Mark;
+end;
+
+// AOwned, when not -1, is a register the branch's code still holds but
+// reads no more, cleared with the rest.
+procedure EmitAwaitTailClear(const ACtx: TGocciaCompilationContext;
+  const APeak: Integer; const AOwned: Integer = -1);
+begin
+  Goccia.Compiler.Statements.EmitUncountedClearDeadRegisters(ACtx, APeak,
+    ACtx.Scope.AwaitTailDiscard, AOwned);
+end;
+
+// Ends the branch where control leaves it: clears what its awaits left, and
+// AParent, or nil, is the tail expression again.
+procedure EndAwaitTailBranch(const ACtx: TGocciaCompilationContext;
+  const ABranch: TGocciaAwaitTailBranch; const AParent: TObject);
+var
+  Peak: Integer;
+begin
+  if not ABranch.Active then
+    Exit;
+  if CloseAwaitTailBranch(ACtx, ABranch, Peak) then
+  begin
+    EmitAwaitTailClear(ACtx, Peak);
+    ACtx.Scope.ForgetUnclearedAwaits(ABranch.Mark);
+  end;
+  ACtx.Scope.SetAwaitTailNode(AParent);
+end;
+
+// The end of an optional chain whose jumps AJumps go to its nullish result,
+// ANullishOp into ADest. When the chain is a tail branch (ABranch) that
+// awaited, the path that completes it clears, and so does the nullish path
+// of a jump taken after an await; a jump taken before any await reaches the
+// nullish result past that clear. AReceiver, when not -1, is the register
+// the chain's last object is in, which the caller frees after this end and
+// the clears cover. With no jump, the chain is no branch, and its awaits are
+// left to the statement.
+procedure EmitOptionalChainEnd(const ACtx: TGocciaCompilationContext;
+  const AJumps: TGocciaCompilerJumpArray; const AJumpCount: Integer;
+  const ADest: UInt16; const ANullishOp: TGocciaOpCode;
+  const ABranch: TGocciaAwaitTailBranch; const AReceiver: Integer = -1);
+var
+  Peak, EndJump, FirstAwait, I: Integer;
+  Awaited, Late: Boolean;
+begin
+  Awaited := CloseAwaitTailBranch(ACtx, ABranch, Peak);
+  if ABranch.Active then
+    ACtx.Scope.SetAwaitTailNode(nil);
+  if AJumpCount = 0 then
+    Exit;
+  FirstAwait := 0;
+  if Awaited then
+  begin
+    FirstAwait := ACtx.Scope.UnclearedAwaitCode(ABranch.Mark);
+    EmitAwaitTailClear(ACtx, Peak, AReceiver);
+  end;
+  EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
+  if Awaited then
+  begin
+    Late := False;
+    for I := 0 to AJumpCount - 1 do
+      if AJumps[I] > FirstAwait then
+      begin
+        PatchJumpTarget(ACtx, AJumps[I]);
+        Late := True;
+      end;
+    if Late then
+      EmitAwaitTailClear(ACtx, Peak, AReceiver);
+  end;
+  for I := 0 to AJumpCount - 1 do
+    if not (Awaited and (AJumps[I] > FirstAwait)) then
+      PatchJumpTarget(ACtx, AJumps[I]);
+  EmitInstruction(ACtx, EncodeABC(ANullishOp, ADest, 0, 0));
+  PatchJumpTarget(ACtx, EndJump);
+  if Awaited then
+    ACtx.Scope.ForgetUnclearedAwaits(ABranch.Mark);
+end;
+
+// EmitOptionalChainEnd for an optional call compiled outside the chain
+// compiler: its nullish jumps are AFirstJump and ASecondJump, -1 for none,
+// and its nullish result goes into AReg. AReceiver, when not -1, is a
+// register still allocated that the clears cover (the call's result register
+// when nothing reads the result).
+procedure EmitOptionalCallEnd(const ACtx: TGocciaCompilationContext;
+  const AFirstJump, ASecondJump: Integer; const AReg: UInt16;
+  const ABranch: TGocciaAwaitTailBranch; const AReceiver: Integer);
+var
+  Jumps: TGocciaCompilerJumpArray;
+  Count: Integer;
+begin
+  SetLength(Jumps, 2);
+  Count := 0;
+  if AFirstJump >= 0 then
+  begin
+    Jumps[Count] := AFirstJump;
+    Inc(Count);
+  end;
+  if ASecondJump >= 0 then
+  begin
+    Jumps[Count] := ASecondJump;
+    Inc(Count);
+  end;
+  EmitOptionalChainEnd(ACtx, Jumps, Count, AReg, OP_LOAD_UNDEFINED, ABranch,
+    AReceiver);
+end;
+
 // The storage key of the private name #AName as the class body that
 // declares it sees it. It goes into the constant pool as a bckPrivateName
 // constant (AddConstantPrivateName), never as a string, so the VM treats it
@@ -723,15 +864,83 @@ end;
 
 procedure CompileYield(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaYieldExpression; const ADest: UInt16);
+var
+  TempReg: UInt16;
+  OuterRegionPeak, RegionPeak, Slot, JumpMark, ClearedHi: Integer;
+  StraightLine: Boolean;
 begin
-  if Assigned(AExpr.Operand) then
-    ACtx.CompileExpression(AExpr.Operand, ADest)
-  else
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
   if AExpr.IsDelegate then
-    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest, 1))
+  begin
+    if Assigned(AExpr.Operand) then
+      ACtx.CompileExpression(AExpr.Operand, ADest)
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
+    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest,
+      YIELD_FLAG_DELEGATE));
+    Exit;
+  end;
+
+  // The yielded value is handed out through a temporary, so the suspended
+  // frame need not keep it (YIELD_FLAG_TEMP_OPERAND). When the result goes
+  // into a local (`const sent = yield big`), the local would otherwise hold
+  // the value for as long as the generator stays suspended, and a throw()
+  // caught inside the body would read it back instead of the binding's
+  // previous value: the resumed value reaches the local by a move.
+  if ACtx.Scope.SlotHoldsLocal(ADest) then
+    TempReg := ACtx.Scope.AllocateRegister
   else
-    EmitInstruction(ACtx, EncodeABC(OP_YIELD, ADest, ADest, 0));
+    TempReg := ADest;
+  try
+    OuterRegionPeak := ACtx.Scope.BeginRegisterRegion;
+    JumpMark := ACtx.Scope.JumpCount;
+    if Assigned(AExpr.Operand) then
+      ACtx.CompileExpression(AExpr.Operand, TempReg)
+    else
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, TempReg, 0, 0));
+    RegionPeak := ACtx.Scope.EndRegisterRegion(OuterRegionPeak);
+    // What the operand's evaluation left above the live registers (the
+    // arguments of a call, a receiver) is dead here, and the suspended frame
+    // would keep it reachable after the consumer drops the yielded value. A
+    // yield nested in the operand that every path ran has cleared its own
+    // part already, and nothing has written it since (`yield [yield [yield
+    // 0]]` would otherwise clear quadratically many).
+    StraightLine := ACtx.Scope.YieldClearedOnEveryPath(JumpMark);
+    Slot := ACtx.Scope.NextSlot;
+    while Slot < RegionPeak do
+    begin
+      if StraightLine and ACtx.Scope.YieldClearedHolds(Slot) then
+      begin
+        // Past the cleared range in one step, so nested yields scan
+        // linearly many registers, not quadratically many.
+        Slot := ACtx.Scope.YieldClearedHi;
+        Continue;
+      end;
+      if Slot <> TempReg then
+        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
+      Inc(Slot);
+    end;
+    // What is clear from here on; the operand and the resumed value go into
+    // TempReg and ADest, so neither counts.
+    ClearedHi := RegionPeak;
+    if (TempReg >= ACtx.Scope.NextSlot) and (TempReg < ClearedHi) then
+      ClearedHi := TempReg;
+    if (ADest >= ACtx.Scope.NextSlot) and (ADest < ClearedHi) then
+      ClearedHi := ADest;
+    ACtx.Scope.NoteYieldCleared(ACtx.Scope.NextSlot, ClearedHi, JumpMark,
+      ACtx.Scope.JumpCount);
+    EmitInstruction(ACtx, EncodeABC(OP_YIELD, TempReg, TempReg,
+      YIELD_FLAG_TEMP_OPERAND));
+    if TempReg <> ADest then
+    begin
+      EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, TempReg, 0));
+      // The resumed value now lives in the local; the temporary would keep a
+      // second copy of it for as long as the frame stays alive.
+      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, TempReg, 0, 0));
+    end;
+  finally
+    if TempReg <> ADest then
+      ACtx.Scope.FreeRegister;
+  end;
 end;
 
 procedure CompileLiteral(const ACtx: TGocciaCompilationContext;
@@ -2825,6 +3034,8 @@ var
   PrivateExpr: TGocciaPrivateMemberExpression;
   Immediate: Int16;
   OwnsRegB, OwnsRegC, LeftCompiled, LeftTypeKnown, RightTypeKnown: Boolean;
+  IsTail: Boolean;
+  TailBranch: TGocciaAwaitTailBranch;
 
   // Compiles AOperand as CompileOperand does, and reports whether it was a
   // expression that handed over the type of its value.
@@ -2843,36 +3054,45 @@ begin
 
   if AExpr.Operator = gttAnd then
   begin
+    IsTail := ACtx.Scope.IsAwaitTail(AExpr);
     ACtx.CompileExpression(AExpr.Left, ADest);
     BeforeJump := ACtx.Template.CodeCount;
     JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_FALSE, ADest);
     if Assigned(ACtx.NoteShortCircuitJump) then
       ACtx.NoteShortCircuitJump(ACtx.Template, BeforeJump, ACtx.Template.CodeCount);
+    TailBranch := BeginAwaitTailBranch(ACtx, IsTail, AExpr.Right);
     ACtx.CompileExpression(AExpr.Right, ADest);
+    EndAwaitTailBranch(ACtx, TailBranch, nil);
     PatchJumpTarget(ACtx, JumpIdx);
     Exit;
   end;
 
   if AExpr.Operator = gttOr then
   begin
+    IsTail := ACtx.Scope.IsAwaitTail(AExpr);
     ACtx.CompileExpression(AExpr.Left, ADest);
     BeforeJump := ACtx.Template.CodeCount;
     JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_TRUE, ADest);
     if Assigned(ACtx.NoteShortCircuitJump) then
       ACtx.NoteShortCircuitJump(ACtx.Template, BeforeJump, ACtx.Template.CodeCount);
+    TailBranch := BeginAwaitTailBranch(ACtx, IsTail, AExpr.Right);
     ACtx.CompileExpression(AExpr.Right, ADest);
+    EndAwaitTailBranch(ACtx, TailBranch, nil);
     PatchJumpTarget(ACtx, JumpIdx);
     Exit;
   end;
 
   if AExpr.Operator = gttNullishCoalescing then
   begin
+    IsTail := ACtx.Scope.IsAwaitTail(AExpr);
     ACtx.CompileExpression(AExpr.Left, ADest);
     BeforeJump := ACtx.Template.CodeCount;
     JumpIdx := EmitJumpInstruction(ACtx, OP_JUMP_IF_NOT_NULLISH, ADest);
     if Assigned(ACtx.NoteShortCircuitJump) then
       ACtx.NoteShortCircuitJump(ACtx.Template, BeforeJump, ACtx.Template.CodeCount);
+    TailBranch := BeginAwaitTailBranch(ACtx, IsTail, AExpr.Right);
     ACtx.CompileExpression(AExpr.Right, ADest);
+    EndAwaitTailBranch(ACtx, TailBranch, nil);
     PatchJumpTarget(ACtx, JumpIdx);
     Exit;
   end;
@@ -2996,9 +3216,9 @@ var
   IdentExpr: TGocciaIdentifierExpression;
   ObjReg, KeyReg: UInt16;
   PropIdx: UInt16;
-  EndJump, JumpIndex: Integer;
   NullishJumps: TGocciaCompilerJumpArray;
   NullishJumpCount: Integer;
+  TailBranch: TGocciaAwaitTailBranch;
 
   procedure EmitGlobalDeleteIdentifierResult(const AName: string);
   var
@@ -3102,6 +3322,8 @@ begin
       Exit;
     end;
 
+    TailBranch := BeginAwaitTailBranch(ACtx, ACtx.Scope.IsAwaitTail(AExpr),
+      nil);
     ObjReg := ACtx.Scope.AllocateRegister;
     NullishJumpCount := 0;
     CompileExpressionWithOptionalChainJumps(ACtx, MemberExpr.ObjectExpr,
@@ -3131,14 +3353,9 @@ begin
         EmitInstruction(ACtx, EncodeABC(OP_MOVE, ADest, ObjReg, 0));
     end;
 
-    if NullishJumpCount > 0 then
-    begin
-      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      for JumpIndex := 0 to NullishJumpCount - 1 do
-        PatchJumpTarget(ACtx, NullishJumps[JumpIndex]);
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_TRUE, ADest, 0, 0));
-      PatchJumpTarget(ACtx, EndJump);
-    end;
+    // Deleting through a nullish optional chain is true.
+    EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
+      OP_LOAD_TRUE, TailBranch, ObjReg);
 
     ACtx.Scope.FreeRegister;
   end
@@ -3230,6 +3447,7 @@ procedure CompileSequence(const ACtx: TGocciaCompilationContext;
 var
   I: Integer;
   TempReg: UInt16;
+  IsTail: Boolean;
 begin
   if AExpr.Expressions.Count = 0 then
   begin
@@ -3237,8 +3455,11 @@ begin
     Exit;
   end;
 
+  IsTail := ACtx.Scope.IsAwaitTail(AExpr);
   if AExpr.Expressions.Count = 1 then
   begin
+    if IsTail then
+      ACtx.Scope.SetAwaitTailNode(AExpr.Expressions[0]);
     ACtx.CompileExpression(AExpr.Expressions[0], ADest);
     Exit;
   end;
@@ -3248,6 +3469,10 @@ begin
     for I := 0 to AExpr.Expressions.Count - 2 do
       ACtx.CompileExpression(AExpr.Expressions[I], TempReg);
 
+    // The last expression is what a tail sequence ends with.
+    if IsTail then
+      ACtx.Scope.SetAwaitTailNode(
+        AExpr.Expressions[AExpr.Expressions.Count - 1]);
     ACtx.CompileExpression(AExpr.Expressions[AExpr.Expressions.Count - 1], ADest);
   finally
     ACtx.Scope.FreeRegister;
@@ -5631,24 +5856,27 @@ end;
 function TryCompileOptionalChainCall(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaCallExpression; const ADest: UInt16): Boolean;
 var
-  EndJump, JumpIndex: Integer;
   NullishJumps: TGocciaCompilerJumpArray;
   NullishJumpCount: Integer;
+  IsTail: Boolean;
+  TailBranch: TGocciaAwaitTailBranch;
+  Peak: Integer;
 begin
   NullishJumpCount := 0;
+  IsTail := ACtx.Scope.IsAwaitTail(AExpr);
+  TailBranch := BeginAwaitTailBranch(ACtx, IsTail, nil);
   if not CompileCallWithOptionalChainJumps(ACtx, AExpr, ADest, NullishJumps,
      NullishJumpCount) then
-    Exit(False);
-
-  if NullishJumpCount > 0 then
   begin
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-    for JumpIndex := 0 to NullishJumpCount - 1 do
-      PatchJumpTarget(ACtx, NullishJumps[JumpIndex]);
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
-    PatchJumpTarget(ACtx, EndJump);
+    // Not an optional chain: the call compiles as any other.
+    CloseAwaitTailBranch(ACtx, TailBranch, Peak);
+    if IsTail then
+      ACtx.Scope.SetAwaitTailNode(AExpr);
+    Exit(False);
   end;
 
+  EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
+    OP_LOAD_UNDEFINED, TailBranch);
   Result := True;
 end;
 
@@ -5672,10 +5900,27 @@ var
   MemberExpr: TGocciaMemberExpression;
   PropIdx: UInt16;
   UseSpread: Boolean;
-  NilJump, CallNilJump, EndJump: Integer;
+  NilJump, CallNilJump: Integer;
+  OptionalBranch: TGocciaAwaitTailBranch;
   IgnoredJumps: TGocciaCompilerJumpArray;
   IgnoredJumpCount: Integer;
   MethodTailFlag: UInt16;
+
+  // AReg, when nothing reads the call's result there, for an optional call's
+  // clears to cover; else -1. A result that goes only into the register an
+  // expression statement discards (`ready && super.m?.(await f())`) is
+  // unread too.
+  function DiscardedResultReg(const AReg: UInt16): Integer;
+  begin
+    if AReg = ADest then
+      Result := -1
+    else if not ANeedsResult or
+            ((ACtx.Scope.AwaitTailDiscard >= 0) and
+             (ADest = ACtx.Scope.AwaitTailDiscard)) then
+      Result := AReg
+    else
+      Result := -1;
+  end;
 
   // The call left its result in AReg: move it into ADest when the caller
   // needs it there, or report AReg when nobody needs the result in ADest.
@@ -5724,6 +5969,7 @@ begin
     Exit;
 
   CallNilJump := -1;
+  OptionalBranch := BeginAwaitTailBranch(ACtx, False, nil);
   IgnoredJumpCount := 0;
   // ES2026 §15.10.2: an optional call cannot be in tail position here because
   // the nullish guard runs after the call, and super() writes `this` back after
@@ -5762,6 +6008,9 @@ begin
     EmitLoadSuperPropertyByName(ACtx, BaseReg, 1, PROP_CONSTRUCTOR);
     ACtx.Scope.FreeRegister;
 
+    // An argument's await runs only when the call does (an await tail branch).
+    OptionalBranch := BeginAwaitTailBranch(ACtx,
+      AExpr.Optional and ACtx.Scope.IsAwaitTail(AExpr), nil);
     if AExpr.Optional then
       CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
 
@@ -5813,12 +6062,8 @@ begin
   end;
 
     if AExpr.Optional then
-    begin
-      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      PatchJumpTarget(ACtx, CallNilJump);
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
-      PatchJumpTarget(ACtx, EndJump);
-    end;
+      EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch,
+        DiscardedResultReg(BaseReg));
 
     SettleResult(BaseReg);
 
@@ -5848,6 +6093,9 @@ begin
       end;
     end;
 
+    // An argument's await runs only when the call does (an await tail branch).
+    OptionalBranch := BeginAwaitTailBranch(ACtx,
+      AExpr.Optional and ACtx.Scope.IsAwaitTail(AExpr), nil);
     if AExpr.Optional then
       CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
 
@@ -5872,12 +6120,8 @@ begin
     end;
 
     if AExpr.Optional then
-    begin
-      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      PatchJumpTarget(ACtx, CallNilJump);
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
-      PatchJumpTarget(ACtx, EndJump);
-    end;
+      EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch,
+        DiscardedResultReg(BaseReg));
 
     SettleResult(BaseReg);
     ACtx.Scope.FreeRegister;
@@ -5926,6 +6170,9 @@ begin
       end;
       ACtx.Scope.FreeRegister;
 
+      // An argument's await runs only when the call does (an await tail branch).
+      OptionalBranch := BeginAwaitTailBranch(ACtx,
+        AExpr.Optional and ACtx.Scope.IsAwaitTail(AExpr), nil);
       if AExpr.Optional then
         CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
 
@@ -5948,12 +6195,8 @@ begin
       end;
 
       if AExpr.Optional then
-      begin
-        EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-        PatchJumpTarget(ACtx, CallNilJump);
-        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
-        PatchJumpTarget(ACtx, EndJump);
-      end;
+        EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch,
+        DiscardedResultReg(BaseReg));
 
       SettleResult(BaseReg);
 
@@ -5967,6 +6210,10 @@ begin
 
       ACtx.CompileExpression(MemberExpr.ObjectExpr, ObjReg);
 
+      // The key's and an argument's awaits run only when the call does.
+      OptionalBranch := BeginAwaitTailBranch(ACtx,
+        (MemberExpr.Optional or AExpr.Optional) and
+        ACtx.Scope.IsAwaitTail(AExpr), nil);
       if MemberExpr.Optional then
         NilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, ObjReg)
       else
@@ -6004,15 +6251,8 @@ begin
       end;
 
       if MemberExpr.Optional or AExpr.Optional then
-      begin
-        EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-        if MemberExpr.Optional then
-          PatchJumpTarget(ACtx, NilJump);
-        if AExpr.Optional then
-          PatchJumpTarget(ACtx, CallNilJump);
-        EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
-        PatchJumpTarget(ACtx, EndJump);
-      end;
+        EmitOptionalCallEnd(ACtx, NilJump, CallNilJump, BaseReg,
+          OptionalBranch, DiscardedResultReg(BaseReg));
 
       SettleResult(BaseReg);
 
@@ -6034,6 +6274,9 @@ begin
 
     ACtx.CompileExpression(AExpr.Callee, BaseReg);
 
+    // An argument's await runs only when the call does (an await tail branch).
+    OptionalBranch := BeginAwaitTailBranch(ACtx,
+      AExpr.Optional and ACtx.Scope.IsAwaitTail(AExpr), nil);
     if AExpr.Optional then
       CallNilJump := EmitJumpInstruction(ACtx, OP_JUMP_IF_NULLISH, BaseReg);
 
@@ -6060,12 +6303,8 @@ begin
     end;
 
     if AExpr.Optional then
-    begin
-      EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-      PatchJumpTarget(ACtx, CallNilJump);
-      EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, BaseReg, 0, 0));
-      PatchJumpTarget(ACtx, EndJump);
-    end;
+      EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch,
+        DiscardedResultReg(BaseReg));
 
     if BaseReg <> ADest then
     begin
@@ -6092,10 +6331,10 @@ var
   ObjectRegisterAllocated, OwnsIdxReg: Boolean;
   Local: TGocciaCompilerLocal;
   PropIdx: UInt16;
-  EndJump, JumpIndex: Integer;
   NullishJumps: TGocciaCompilerJumpArray;
   NullishJumpCount: Integer;
   IdentExpr: TGocciaIdentifierExpression;
+  TailBranch: TGocciaAwaitTailBranch;
 begin
   if AExpr.ObjectExpr is TGocciaSuperExpression then
   begin
@@ -6166,6 +6405,7 @@ begin
   end;
 
   NullishJumpCount := 0;
+  TailBranch := BeginAwaitTailBranch(ACtx, ACtx.Scope.IsAwaitTail(AExpr), nil);
   ObjectRegisterAllocated := True;
   if TryResolveThisRegister(ACtx, AExpr.ObjectExpr, ObjReg) then
     ObjectRegisterAllocated := False;
@@ -6194,14 +6434,12 @@ begin
   else
     EmitLoadMemberProperty(ACtx, AExpr, ADest, ObjReg, 0);
 
-  if NullishJumpCount > 0 then
-  begin
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-    for JumpIndex := 0 to NullishJumpCount - 1 do
-      PatchJumpTarget(ACtx, NullishJumps[JumpIndex]);
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
-    PatchJumpTarget(ACtx, EndJump);
-  end;
+  if ObjectRegisterAllocated then
+    EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
+      OP_LOAD_UNDEFINED, TailBranch, ObjReg)
+  else
+    EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
+      OP_LOAD_UNDEFINED, TailBranch);
 
   if ObjectRegisterAllocated then
     ACtx.Scope.FreeRegister;
@@ -6517,16 +6755,26 @@ var
   ConditionBinary: TGocciaBinaryExpression;
   Immediate: Int16;
   OwnsConditionReg: Boolean;
+  IsAwaitTail: Boolean;
 
   procedure CompileBranch(const ABranch: TGocciaExpression);
+  var
+    TailBranch: TGocciaAwaitTailBranch;
   begin
     if ATail then
       CompileReturnValueTailAware(ACtx, ABranch, ADest)
     else
+    begin
+      // Each arm of a tail conditional clears what its awaits left before
+      // control leaves it.
+      TailBranch := BeginAwaitTailBranch(ACtx, IsAwaitTail, ABranch);
       ACtx.CompileExpression(ABranch, ADest);
+      EndAwaitTailBranch(ACtx, TailBranch, AExpr);
+    end;
   end;
 
 begin
+  IsAwaitTail := (not ATail) and ACtx.Scope.IsAwaitTail(AExpr);
   if AExpr.Condition is TGocciaBinaryExpression then
   begin
     ConditionBinary := TGocciaBinaryExpression(AExpr.Condition);
@@ -6546,6 +6794,8 @@ begin
       PatchJumpTarget(ACtx, ElseJump);
       CompileBranch(AExpr.Alternate);
       PatchJumpTarget(ACtx, EndJump);
+      if IsAwaitTail then
+        ACtx.Scope.SetAwaitTailNode(nil);
       Exit;
     end;
   end;
@@ -6557,6 +6807,8 @@ begin
   PatchJumpArray(ACtx, ElseJumps);
   CompileBranch(AExpr.Alternate);
   PatchJumpTarget(ACtx, EndJump);
+  if IsAwaitTail then
+    ACtx.Scope.SetAwaitTailNode(nil);
 end;
 
 procedure CompileArray(const ACtx: TGocciaCompilationContext;
@@ -8813,11 +9065,11 @@ procedure CompilePrivateMember(const ACtx: TGocciaCompilationContext;
   const AExpr: TGocciaPrivateMemberExpression; const ADest: UInt16);
 var
   ObjReg: UInt16;
-  EndJump: Integer;
   NullishJumps: TGocciaCompilerJumpArray;
   NullishJumpCount: Integer;
-  I: Integer;
+  TailBranch: TGocciaAwaitTailBranch;
 begin
+  TailBranch := BeginAwaitTailBranch(ACtx, ACtx.Scope.IsAwaitTail(AExpr), nil);
   ObjReg := ACtx.Scope.AllocateRegister;
   NullishJumpCount := 0;
   CompileExpressionWithOptionalChainJumps(ACtx, AExpr.ObjectExpr, ObjReg,
@@ -8827,15 +9079,9 @@ begin
 
   EmitLoadPropertyByName(ACtx, ADest, ObjReg,
     PrivateKey(ACtx.Scope, AExpr.PrivateName), True);
-  if NullishJumpCount > 0 then
-  begin
-    EndJump := EmitJumpInstruction(ACtx, OP_JUMP, 0);
-    for I := 0 to NullishJumpCount - 1 do
-      PatchJumpTarget(ACtx, NullishJumps[I]);
-    EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, ADest, 0, 0));
-    PatchJumpTarget(ACtx, EndJump);
-  end
-  else
+  EmitOptionalChainEnd(ACtx, NullishJumps, NullishJumpCount, ADest,
+    OP_LOAD_UNDEFINED, TailBranch, ObjReg);
+  if NullishJumpCount = 0 then
     SetLength(NullishJumps, 0);
   ACtx.Scope.FreeRegister;
 end;

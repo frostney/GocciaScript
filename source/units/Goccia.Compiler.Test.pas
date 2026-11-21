@@ -212,6 +212,9 @@ type
     procedure TestAsyncGeneratorReturnAwaitsBeforeTryCleanup;
     procedure TestOtherFunctionKindsReturnWithoutAwait;
     procedure TestForAwaitCloseAwaitsReturnResult;
+    procedure TestTailAwaitBranchClearsInsideBranch;
+    procedure TestNestedYieldsClearLinearly;
+    procedure TestYieldInitializerClearsItsTemporary;
     procedure TestAwaitUsingAwaitsDisposeResultOnce;
     procedure TestUsingDisposalDistinguishesReturnFromThrow;
     procedure TestForAwaitUsingHeadIteratesAsynchronously;
@@ -486,6 +489,12 @@ begin
     TestOtherFunctionKindsReturnWithoutAwait);
   Test('for await close awaits the return result',
     TestForAwaitCloseAwaitsReturnResult);
+  Test('a skippable await in a statement''s tail clears inside its branch',
+    TestTailAwaitBranchClearsInsideBranch);
+  Test('nested yields clear each scratch register once',
+    TestNestedYieldsClearLinearly);
+  Test('a yield initializer leaves no copy in its temporary',
+    TestYieldInitializerClearsItsTemporary);
   Test('await using awaits a dispose result once',
     TestAwaitUsingAwaitsDisposeResultOnce);
   Test('a using handler tells a generator return from a throw',
@@ -817,6 +826,189 @@ begin
     Result := FindFunctionWithOp(Candidate, AOp);
     if Assigned(Result) then
       Exit(Result);
+  end;
+end;
+
+// An expression statement that awaits clears the registers its awaits left
+// (line 0, which coverage does not count). When the await sits in a branch the
+// statement ends with (`&&`, `||`, `??`, `?:`, the part of an optional chain
+// after its `?.`), the clear is inside that branch, between the jump that
+// skips it and the jump's target, so a path that skips the await pays
+// nothing. An await in a nested arrow is that arrow's own, and an await the
+// statement always reaches still clears.
+procedure TTestCompiler.TestTailAwaitBranchClearsInsideBranch;
+
+  function ClearPCs(const ATemplate: TGocciaFunctionTemplate): TArray<Integer>;
+  var
+    PC, Count: Integer;
+  begin
+    Count := 0;
+    SetLength(Result, ATemplate.CodeCount);
+    for PC := 0 to ATemplate.CodeCount - 1 do
+      if (DecodeOp(ATemplate.GetInstruction(PC)) = Ord(OP_LOAD_UNDEFINED)) and
+         Assigned(ATemplate.DebugInfo) and
+         (ATemplate.DebugInfo.GetLineForPC(UInt32(PC)) = 0) then
+      begin
+        Result[Count] := PC;
+        Inc(Count);
+      end;
+    SetLength(Result, Count);
+  end;
+
+  procedure CheckSource(const ASource: string; const AJumpOp: TGocciaOpCode);
+  var
+    Module: TGocciaBytecodeModule;
+    Func: TGocciaFunctionTemplate;
+    PC, JumpPC, Target, Prefix: Integer;
+    Instruction: UInt32;
+    Clears: TArray<Integer>;
+  begin
+    Module := CompileSource(ASource);
+    try
+      Func := FindFunctionWithOp(Module.TopLevel, OP_AWAIT);
+      Expect<Boolean>(Assigned(Func)).ToBe(True);
+      if not Assigned(Func) then
+        Exit;
+      JumpPC := -1;
+      for PC := 0 to Func.CodeCount - 1 do
+        if DecodeOp(Func.GetInstruction(PC)) = Ord(AJumpOp) then
+        begin
+          JumpPC := PC;
+          Break;
+        end;
+      Expect<Boolean>(JumpPC >= 0).ToBe(True);
+      if JumpPC < 0 then
+        Exit;
+      Instruction := Func.GetInstruction(JumpPC);
+      Prefix := 0;
+      if (JumpPC > 0) and
+         (DecodeOp(Func.GetInstruction(JumpPC - 1)) = Ord(OP_WIDE)) then
+        Prefix := Integer(Func.GetInstruction(JumpPC - 1));
+      Target := JumpPC + 1 + DecodeJumpOffset(Instruction, UInt32(Prefix),
+        JumpOperandOf(DecodeOp(Instruction)));
+      Clears := ClearPCs(Func);
+      Expect<Boolean>(Length(Clears) > 0).ToBe(True);
+      for PC := 0 to High(Clears) do
+        Expect<Boolean>((Clears[PC] > JumpPC) and (Clears[PC] < Target))
+          .ToBe(True);
+    finally
+      Module.Free;
+    end;
+  end;
+
+  procedure CheckShape(const AStatement: string; const AJumpOp: TGocciaOpCode);
+  begin
+    CheckSource('const run = async (ready, f, a, b) => {' + LineEnding +
+      '  ' + AStatement + LineEnding + '};', AJumpOp);
+  end;
+
+var
+  Module: TGocciaBytecodeModule;
+begin
+  CheckShape('ready && await f(a, b);', OP_JUMP_IF_FALSE);
+  CheckSource('class C extends Object {' + LineEnding +
+    '  async m(f, a, b) {' + LineEnding +
+    '    super.n?.(a, await f(a, b));' + LineEnding +
+    '  }' + LineEnding + '}', OP_JUMP_IF_NULLISH);
+  CheckShape('ready || await f(a, b);', OP_JUMP_IF_TRUE);
+  CheckShape('ready ?? await f(a, b);', OP_JUMP_IF_NOT_NULLISH);
+  CheckShape('ready ? await f(a, b) : 0;', OP_JUMP_IF_FALSE);
+  CheckShape('ready ? 0 : await f(a, b);', OP_JUMP);
+  CheckShape('ready?.m(await f(a, b));', OP_JUMP_IF_NULLISH);
+  CheckShape('ready?.[await f(a, b)];', OP_JUMP_IF_NULLISH);
+  CheckShape('delete ready?.[await f(a, b)];', OP_JUMP_IF_NULLISH);
+  CheckShape('a, ready && await f(a, b);', OP_JUMP_IF_FALSE);
+  CheckShape('ready && (a ?? await f(a, b));', OP_JUMP_IF_FALSE);
+
+  // The arrow's await does not make the statement around it clear.
+  Module := CompileSource('const run = async (ready, f, a, b) => {' +
+    LineEnding + '  ready && f(async () => { await f(a, b); });' +
+    LineEnding + '};');
+  try
+    Expect<Integer>(Length(ClearPCs(Module.TopLevel.GetFunction(0))))
+      .ToBe(0);
+  finally
+    Module.Free;
+  end;
+
+  // An await the statement always reaches clears on its one path.
+  Module := CompileSource('const run = async (ready, f, a, b) => {' +
+    LineEnding + '  f(a, b, await f(a, b));' + LineEnding + '};');
+  try
+    Expect<Boolean>(
+      Length(ClearPCs(FindFunctionWithOp(Module.TopLevel, OP_AWAIT))) > 0)
+      .ToBe(True);
+  finally
+    Module.Free;
+  end;
+end;
+
+// A yield clears the registers its operand left above the live ones before it
+// suspends, and an enclosing yield does not clear them again, so yields nested
+// through array literals emit clears in proportion to their depth, also with
+// a branch at the innermost level.
+procedure TTestCompiler.TestNestedYieldsClearLinearly;
+
+  function ClearsAtDepth(const ADepth: Integer): Integer;
+  var
+    Module: TGocciaBytecodeModule;
+    Source: string;
+    I: Integer;
+  begin
+    Source := 'flag ? yield 0 : 1';
+    for I := 1 to ADepth do
+      Source := '[yield ' + Source + ']';
+    Module := CompileSource('const holder = { *g(flag) { ' + Source +
+      '; } };');
+    try
+      Result := CountOpRecursive(Module.TopLevel, OP_LOAD_UNDEFINED);
+    finally
+      Module.Free;
+    end;
+  end;
+
+var
+  Shallow, Deep: Integer;
+begin
+  Shallow := ClearsAtDepth(10);
+  Deep := ClearsAtDepth(40);
+  // Linear growth: a few clears per level, not a level's worth per level.
+  Expect<Boolean>(Deep - Shallow <= 3 * 30).ToBe(True);
+end;
+
+// A lexical binding initialized by a yield is compiled through a temporary,
+// which is cleared before the initializer runs and right after the move into
+// the binding, so the binding holds the only copy.
+procedure TTestCompiler.TestYieldInitializerClearsItsTemporary;
+var
+  Module: TGocciaBytecodeModule;
+  Func: TGocciaFunctionTemplate;
+  PC, Source: Integer;
+  Instruction, NextInstruction: UInt32;
+  Found: Boolean;
+begin
+  Module := CompileSource('const holder = { *g() { let sent = yield 0; ' +
+    'sent = null; yield 1; } };');
+  try
+    Func := FindFunctionWithOp(Module.TopLevel, OP_YIELD);
+    Expect<Boolean>(Assigned(Func)).ToBe(True);
+    if not Assigned(Func) then
+      Exit;
+    Found := False;
+    for PC := 0 to Func.CodeCount - 2 do
+    begin
+      Instruction := Func.GetInstruction(PC);
+      if DecodeOp(Instruction) <> Ord(OP_MOVE) then
+        Continue;
+      Source := DecodeB(Instruction);
+      NextInstruction := Func.GetInstruction(PC + 1);
+      if (DecodeOp(NextInstruction) = Ord(OP_LOAD_UNDEFINED)) and
+         (DecodeA(NextInstruction) = Source) then
+        Found := True;
+    end;
+    Expect<Boolean>(Found).ToBe(True);
+  finally
+    Module.Free;
   end;
 end;
 

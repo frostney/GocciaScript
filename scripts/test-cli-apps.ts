@@ -5972,6 +5972,34 @@ await section("Loader: coverage --output=json not corrupted...", async () => {
       throw new Error(`LCOV should report no unexecuted line, got:\n${operandLcov}`);
     }
 
+    console.log("Loader: line coverage of top-level awaits that a short circuit takes or skips...");
+    // The registers an awaiting top-level statement clears belong to no
+    // source line: a skipped operand's line stays unexecuted and the
+    // statement's first line is counted once.
+    const awaitCoverageSourcePath = join(tmp, "await-coverage.js");
+    writeFileSync(
+      awaitCoverageSourcePath,
+      [
+        "const yes = () => true;",
+        "const no = () => false;",
+        "yes() &&",
+        "  (await Promise.resolve(1));",
+        "no() &&",
+        "  (await Promise.resolve(1));",
+        "await null;",
+        "",
+      ].join("\n"),
+    );
+    const awaitCoverageLcovPath = join(tmp, "await-coverage.lcov");
+    await $`${RUNNER} --coverage --coverage-format=lcov --coverage-output=${awaitCoverageLcovPath} ${awaitCoverageSourcePath}`.quiet();
+    const awaitCoverageLcov = readFileSync(awaitCoverageLcovPath, "utf-8");
+    const awaitCoverageRecords = awaitCoverageLcov.split(/\r?\n/);
+    for (const expected of ["DA:3,1", "DA:4,1", "DA:5,1", "DA:6,0", "DA:7,1"]) {
+      if (!awaitCoverageRecords.includes(expected)) {
+        throw new Error(`LCOV should contain ${expected} for the awaiting statements, got:\n${awaitCoverageLcov}`);
+      }
+    }
+
     console.log("Loader: line coverage of declarations whose initializer starts on a later line...");
     // A lexical binding's TDZ hole is set when its block is entered, so the
     // declaration itself needs none; under coverage it still sets it, because
