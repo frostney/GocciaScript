@@ -576,6 +576,13 @@ begin
       Engine.ProjectRoot := DiscoverProjectRoot(FileName);
       Engine.Coverage := Assigned(FCoverageMain);
       Engine.ConfigJson := HostConfigJson(EngineOptions, FileConfig);
+      { --no-vitest-compat: the bare "vitest" specifier resolves to no shim }
+      if FNoVitestCompat.Present then
+        if Engine.ConfigJson = '{}' then
+          Engine.ConfigJson := '{"no-vitest-compat":"true"}'
+        else
+          Engine.ConfigJson := Copy(Engine.ConfigJson, 1, Length(Engine.ConfigJson) - 1) +
+            ',"no-vitest-compat":"true"}';
       Engine.Resolver := Resolver;
       Engine.ModuleContentCheck := Grant.CheckContent;
       Engine.ProviderGraph := Grant.ProviderGraph;

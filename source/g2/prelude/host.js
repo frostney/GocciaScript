@@ -74,8 +74,8 @@
     shared.hostModules['goccia:ast'] = () => ({ parse });
   }
 
-  // the test runner's vitest compatibility shim, over goccia:test and goccia:timers
-  if (testMode) shared.hostModules.vitest = () => n.vitestSource();
+  // the test runner's vitest compatibility shim, over goccia:test and goccia:timers (--no-vitest-compat: none)
+  if (testMode && !configFlag('no-vitest-compat')) shared.hostModules.vitest = () => n.vitestSource();
 
   // Performance (High Resolution Time, as GocciaScript has it): an interface script cannot construct, whose
   // prototype holds now(), timeOrigin (the epoch time the realm started at), toJSON() and the toStringTag, its

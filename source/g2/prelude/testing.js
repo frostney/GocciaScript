@@ -1694,6 +1694,9 @@
     describe, test, it: test, expect, beforeAll, afterAll, beforeEach, afterEach, onTestFinished, mock, spyOn, runTests,
   };
   for (const k of keysOf(api)) Object.defineProperty(global, k, { value: api[k], writable: true, configurable: true });
+  // the generated test262 wrappers' private aliases: a conformance test may declare its own describe or test
+  for (const [alias, fn] of [['__gocciaTest262Describe', describe], ['__gocciaTest262Test', test]])
+    Object.defineProperty(global, alias, { value: fn, writable: false, configurable: false });
   if (shared && shared.hostModules) shared.hostModules['goccia:test'] = () => api;
   return {
     report(done) {
