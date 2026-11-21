@@ -4,6 +4,8 @@ features: [Temporal, Intl.DateTimeFormat]
 ---*/
 
 const isTemporal = typeof Temporal !== "undefined";
+const hasFullICU = typeof Intl !== "undefined" &&
+  new Intl.NumberFormat("en-US").format(NaN) === "NaN";
 
 describe.runIf(isTemporal)("Temporal.PlainDate.prototype.toLocaleString", () => {
   test("locales uses CanonicalizeLocaleList error ordering", () => {
@@ -29,5 +31,19 @@ describe.runIf(isTemporal)("Temporal.PlainDate.prototype.toLocaleString", () => 
     } finally {
       delete Boolean.prototype.year;
     }
+  });
+
+  test("names the month in the iso8601 calendar", () => {
+    const result = new Temporal.PlainDate(2020, 1, 1).toLocaleString("en", {
+      calendar: "iso8601",
+      month: "long"
+    });
+
+    if (!hasFullICU) {
+      expect(typeof result).toBe("string");
+      return;
+    }
+
+    expect(result).toBe("January");
   });
 });

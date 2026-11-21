@@ -519,6 +519,10 @@ var
 begin
   AEngine.ModuleLoader.PreferBytecode :=
     ResolveFlagOption(FPreferBytecode, AFileConfig);
+  { A JSON envelope is the only thing standard output may carry, so the parse
+    warnings of imported modules are muted as the entry's are
+    (TGocciaCLISourcePipelineResult.Parse is given IsJsonOutput). }
+  AEngine.SuppressWarnings := IsJsonOutput;
   Runtime := AttachRuntime(AEngine);
   if FProfileDeterministic.Present then
     AEngine.HostEnvironment.UseDeterministicProfile;

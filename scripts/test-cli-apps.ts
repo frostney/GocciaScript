@@ -16379,6 +16379,107 @@ await section("Runner sandbox mode: every host-set ceiling reports itself as one
   }
 });
 
+await section("Loader: an imported module's parse warnings never precede a JSON envelope...", async () => {
+  const tmp = makeTmp();
+  try {
+    // JSX in a .js file adds a parse warning ("JSX syntax found in source
+    // with a non-JSX extension"). The loader prints it for an imported module
+    // on standard output, so a JSON envelope has to be protected from it the
+    // way the entry file's own warnings already are.
+    writeFileSync(join(tmp, "comp.js"), "const createElement = () => 1;\nexport const a = <div/>;\n");
+    const main = join(tmp, "main.mjs");
+    writeFileSync(main, 'import { a } from "./comp.js";\nconsole.log(typeof a);\n');
+    const entry = join(tmp, "entry.mjs");
+    writeFileSync(entry, "console.log(1);\n");
+    const source = join(tmp, "source.mjs");
+    writeFileSync(source, 'import source m from "./comp.js";\nconsole.log(typeof m);\n');
+    const test = join(tmp, "imports.test.js");
+    writeFileSync(test, 'import { a } from "./comp.js";\ntest("imports", () => { expect(a).toBe(1); });\n');
+    // Setup loads: a JavaScript modules manifest and a globals module that
+    // import the warning module before any script runs.
+    const manifest = join(tmp, "manifest.js");
+    writeFileSync(manifest, 'import { a } from "./comp.js";\nexport default { "virtual:x": { content: "export const y = 1;" } };\n');
+    const globals = join(tmp, "globals.js");
+    writeFileSync(globals, 'import { a } from "./comp.js";\nexport const g = a;\n');
+    const plainTest = join(tmp, "plain.test.js");
+    writeFileSync(plainTest, 'test("plain", () => { expect(1).toBe(1); });\n');
+    const run = (binary: string, args: string[]) => {
+      const proc = Bun.spawnSync([binary, ...args], { stdout: "pipe", stderr: "pipe" });
+      return proc.stdout.toString();
+    };
+    const warning = "Warning: JSX syntax found in source with a non-JSX extension";
+
+    // Control: a plain run prints the warning, for both import forms, so the
+    // cases below prove the mute and not an absent warning.
+    if (!run(RUNNER, [main]).includes(warning))
+      throw new Error("A plain run should print the imported module's warning");
+    if (!run(RUNNER, [source, "--experimental-js-module-source"]).includes(warning))
+      throw new Error("A plain source-phase import should print the imported module's warning");
+
+    if (!run(RUNNER, [entry, "--modules", manifest]).includes(warning))
+      throw new Error("A plain run should print the manifest's imported warning");
+    // A config file names the modules, which load through an isolated engine.
+    const configGlobals = join(tmp, "globals.config.json");
+    writeFileSync(configGlobals, JSON.stringify({ globals: "./globals.js" }));
+    const configModules = join(tmp, "modules.config.json");
+    writeFileSync(configModules, JSON.stringify({ modules: "./manifest.js" }));
+    for (const config of [configGlobals, configModules]) {
+      if (!run(RUNNER, [entry, `--config=${config}`]).includes(warning))
+        throw new Error(`A plain run with ${config} should print the imported warning`);
+    }
+    // --deny-read loads the manifest through a loader of its own.
+    if (!run(RUNNER, [entry, "--modules", manifest, "--deny-read"]).includes(warning))
+      throw new Error("A plain --deny-read run should print the manifest's imported warning");
+    if (!run(RUNNER, [entry, "--globals", globals]).includes(warning))
+      throw new Error("A plain run should print the globals module's imported warning");
+
+    // A worker thread never prints the warning, in text mode too: the loader's
+    // own guard, apart from the JSON-mode mute. One thread runs the same
+    // directory with the warnings printed, so the silence is the workers'.
+    const dir = join(tmp, "dir");
+    mkdirSync(dir);
+    for (const name of ["comp.js", "a.mjs", "b.mjs", "c.mjs"])
+      writeFileSync(join(dir, name), name === "comp.js" ? readFileSync(join(tmp, "comp.js")) : 'import { a } from "./comp.js";\n');
+    const serial = Bun.spawnSync([RUNNER, dir, "--jobs=1"], { stdout: "pipe", stderr: "pipe" });
+    if (!serial.stdout.toString().includes(warning))
+      throw new Error("A one-thread directory run should print the imported module's warning");
+    const parallel = Bun.spawnSync([RUNNER, dir, "--jobs=2"], { stdout: "pipe", stderr: "pipe" });
+    const parallelOut = parallel.stdout.toString();
+    if (!/with 2 workers/.test(parallelOut) || parallel.exitCode !== 0)
+      throw new Error(`A two-job directory run should use workers and succeed, got exit ${parallel.exitCode}:\n${parallelOut.slice(0, 400)}`);
+    if (parallelOut.includes(warning))
+      throw new Error("A worker thread should not print the imported module's warning");
+
+    const cases: [string, string, string[]][] = [
+      ["GocciaRunner --modules manifest --output=json", RUNNER, [entry, "--modules", manifest, "--output=json"]],
+      ["GocciaRunner --modules manifest --deny-read --output=json", RUNNER, [entry, "--modules", manifest, "--deny-read", "--output=json"]],
+      ["GocciaRunner config globals --output=json", RUNNER, [entry, `--config=${configGlobals}`, "--output=json"]],
+      ["GocciaRunner config modules --output=json", RUNNER, [entry, `--config=${configModules}`, "--output=json"]],
+      ["GocciaRunner --globals module --output=json", RUNNER, [entry, "--globals", globals, "--output=json"]],
+      ["GocciaTestRunner --globals module --output=json", TESTRUNNER, ["-P", plainTest, "--globals", globals, "--output=json"]],
+      ["GocciaRunner --output=json", RUNNER, [main, "--output=json"]],
+      ["GocciaRunner --output=compact-json", RUNNER, [main, "--output=compact-json"]],
+      ["GocciaRunner --output=json --jobs=2", RUNNER, [main, entry, "--output=json", "--jobs=2"]],
+      ["GocciaRunner source-phase import --output=json", RUNNER, [source, "--experimental-js-module-source", "--output=json"]],
+      ["GocciaTestRunner --output=json", TESTRUNNER, ["-P", test, "--output=json"]],
+    ];
+    for (const [label, binary, args] of cases) {
+      const stdout = run(binary, args);
+      let envelope: { ok?: boolean };
+      try {
+        envelope = JSON.parse(stdout);
+      } catch {
+        throw new Error(`${label}: stdout should be the JSON envelope alone, got:\n${stdout.slice(0, 400)}`);
+      }
+      // The fixtures run: an error envelope would also parse.
+      if (envelope.ok !== true)
+        throw new Error(`${label}: the run should succeed, got:\n${stdout.slice(0, 400)}`);
+    }
+  } finally {
+    clean(tmp);
+  }
+});
+
 await section("Loader: --output=json and --silent mute the goccia:test reporter...", async () => {
   const tmp = makeTmp();
   try {
