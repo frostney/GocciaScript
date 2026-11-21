@@ -852,7 +852,7 @@ procedure TTestCompiler.TestTailAwaitBranchClearsInsideBranch;
     SetLength(Result, Count);
   end;
 
-  procedure CheckShape(const AStatement: string; const AJumpOp: TGocciaOpCode);
+  procedure CheckSource(const ASource: string; const AJumpOp: TGocciaOpCode);
   var
     Module: TGocciaBytecodeModule;
     Func: TGocciaFunctionTemplate;
@@ -860,8 +860,7 @@ procedure TTestCompiler.TestTailAwaitBranchClearsInsideBranch;
     Instruction: UInt32;
     Clears: TArray<Integer>;
   begin
-    Module := CompileSource('const run = async (ready, f, a, b) => {' +
-      LineEnding + '  ' + AStatement + LineEnding + '};');
+    Module := CompileSource(ASource);
     try
       Func := FindFunctionWithOp(Module.TopLevel, OP_AWAIT);
       Expect<Boolean>(Assigned(Func)).ToBe(True);
@@ -894,10 +893,20 @@ procedure TTestCompiler.TestTailAwaitBranchClearsInsideBranch;
     end;
   end;
 
+  procedure CheckShape(const AStatement: string; const AJumpOp: TGocciaOpCode);
+  begin
+    CheckSource('const run = async (ready, f, a, b) => {' + LineEnding +
+      '  ' + AStatement + LineEnding + '};', AJumpOp);
+  end;
+
 var
   Module: TGocciaBytecodeModule;
 begin
   CheckShape('ready && await f(a, b);', OP_JUMP_IF_FALSE);
+  CheckSource('class C extends Object {' + LineEnding +
+    '  async m(f, a, b) {' + LineEnding +
+    '    super.n?.(a, await f(a, b));' + LineEnding +
+    '  }' + LineEnding + '}', OP_JUMP_IF_NULLISH);
   CheckShape('ready || await f(a, b);', OP_JUMP_IF_TRUE);
   CheckShape('ready ?? await f(a, b);', OP_JUMP_IF_NOT_NULLISH);
   CheckShape('ready ? await f(a, b) : 0;', OP_JUMP_IF_FALSE);
@@ -933,7 +942,8 @@ end;
 
 // A yield clears the registers its operand left above the live ones before it
 // suspends, and an enclosing yield does not clear them again, so yields nested
-// through array literals emit clears in proportion to their depth.
+// through array literals emit clears in proportion to their depth, also with
+// a branch at the innermost level.
 procedure TTestCompiler.TestNestedYieldsClearLinearly;
 
   function ClearsAtDepth(const ADepth: Integer): Integer;
@@ -942,10 +952,11 @@ procedure TTestCompiler.TestNestedYieldsClearLinearly;
     Source: string;
     I: Integer;
   begin
-    Source := '0';
+    Source := 'flag ? yield 0 : 1';
     for I := 1 to ADepth do
       Source := '[yield ' + Source + ']';
-    Module := CompileSource('const holder = { *g() { ' + Source + '; } };');
+    Module := CompileSource('const holder = { *g(flag) { ' + Source +
+      '; } };');
     try
       Result := CountOpRecursive(Module.TopLevel, OP_LOAD_UNDEFINED);
     finally

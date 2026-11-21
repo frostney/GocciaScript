@@ -171,6 +171,8 @@ type
     FJumpCount: Integer;
     FYieldClearedLo: Integer;
     FYieldClearedHi: Integer;
+    FYieldClearedJumpStart: Integer;
+    FYieldClearedJumpEnd: Integer;
     FPrivatePrefix: string;
     // Register of the class whose body this function's code is evaluating,
     // or -1 outside a class body.
@@ -314,10 +316,14 @@ type
     // has emitted: code between two equal counts runs straight through.
     procedure NoteJumpEmitted; {$IFDEF FPC}inline;{$ENDIF}
     property JumpCount: Integer read FJumpCount;
-    // The registers the last yield cleared before it suspended, [Lo, Hi): an
-    // enclosing yield whose operand emitted no jump need not clear them again,
-    // because they still hold nothing unless allocated since, which raises Lo.
-    procedure NoteYieldCleared(const ALo, AHi: Integer);
+    // The registers the last yield cleared before it suspended, [Lo, Hi),
+    // with the jump counts at the start of its operand and at its clear.
+    // They hold nothing unless allocated since, which raises Lo. An enclosing
+    // yield need not clear them again when every path to it ran that clear:
+    // no jump was emitted in its own operand outside the inner yield's
+    // (YieldClearedOnEveryPath).
+    procedure NoteYieldCleared(const ALo, AHi, AJumpStart, AJumpEnd: Integer);
+    function YieldClearedOnEveryPath(const AJumpStart: Integer): Boolean;
     function YieldClearedHolds(const ASlot: Integer): Boolean;
 
     // How many OP_AWAIT instructions this scope's code has emitted. A
@@ -725,6 +731,8 @@ begin
   FJumpCount := 0;
   FYieldClearedLo := 0;
   FYieldClearedHi := 0;
+  FYieldClearedJumpStart := -1;
+  FYieldClearedJumpEnd := -1;
   FPrivateNameCount := 0;
   FPrivateClassReg := -1;
   FDirectEvalSyntheticArgumentsSlot := -1;
@@ -1282,10 +1290,20 @@ begin
   Inc(FJumpCount);
 end;
 
-procedure TGocciaCompilerScope.NoteYieldCleared(const ALo, AHi: Integer);
+procedure TGocciaCompilerScope.NoteYieldCleared(const ALo, AHi, AJumpStart,
+  AJumpEnd: Integer);
 begin
   FYieldClearedLo := ALo;
   FYieldClearedHi := AHi;
+  FYieldClearedJumpStart := AJumpStart;
+  FYieldClearedJumpEnd := AJumpEnd;
+end;
+
+function TGocciaCompilerScope.YieldClearedOnEveryPath(
+  const AJumpStart: Integer): Boolean;
+begin
+  Result := (FYieldClearedJumpStart = AJumpStart) and
+    (FYieldClearedJumpEnd = FJumpCount);
 end;
 
 function TGocciaCompilerScope.YieldClearedHolds(const ASlot: Integer): Boolean;
