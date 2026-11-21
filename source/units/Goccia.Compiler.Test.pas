@@ -220,6 +220,7 @@ type
       const ALinked, ADiscardsCompletionValue: Boolean): TGocciaBytecodeModule;
     procedure TestModuleTopLevelStatementsClearTheirRegisters;
     procedure TestImportedModuleKeepsNoCompletionValue;
+    procedure TestModuleTopLevelAwaitBranchClearsOnce;
     procedure TestAwaitUsingAwaitsDisposeResultOnce;
     procedure TestUsingDisposalDistinguishesReturnFromThrow;
     procedure TestForAwaitUsingHeadIteratesAsynchronously;
@@ -506,6 +507,8 @@ begin
     TestModuleTopLevelStatementsClearTheirRegisters);
   Test('an imported module keeps no completion value',
     TestImportedModuleKeepsNoCompletionValue);
+  Test('a module''s top-level await branch clears its registers once',
+    TestModuleTopLevelAwaitBranchClearsOnce);
   Test('await using awaits a dispose result once',
     TestAwaitUsingAwaitsDisposeResultOnce);
   Test('a using handler tells a generator return from a throw',
@@ -1132,6 +1135,51 @@ procedure TTestCompiler.TestImportedModuleKeepsNoCompletionValue;
 begin
   Expect<Integer>(AwaitsIntoReturnRegister(False)).ToBe(1);
   Expect<Integer>(AwaitsIntoReturnRegister(True)).ToBe(0);
+end;
+
+// A top-level statement of module code clears at its end on every path, so
+// an await in a branch it ends with does not clear in that branch as well:
+// each register gets one line-0 clear, for an imported module and an entry.
+procedure TTestCompiler.TestModuleTopLevelAwaitBranchClearsOnce;
+
+  // Whether a register gets a second line-0 clear after the prologue.
+  function ClearsARegisterTwice(const ADiscards: Boolean): Boolean;
+  var
+    Module: TGocciaBytecodeModule;
+    Top: TGocciaFunctionTemplate;
+    PC: Integer;
+    Seen: array of Boolean;
+    InBody: Boolean;
+    Instruction: UInt32;
+  begin
+    Result := False;
+    Module := CompileModuleCode('globalThis.flag ? ' +
+      'await globalThis.f(globalThis.a, globalThis.b) : 0;', True, ADiscards);
+    try
+      Top := Module.TopLevel;
+      SetLength(Seen, Top.MaxRegisters + 1);
+      InBody := False;
+      for PC := 0 to Top.CodeCount - 1 do
+      begin
+        Instruction := Top.GetInstruction(PC);
+        if Top.DebugInfo.GetLineForPC(UInt32(PC)) > 0 then
+          InBody := True
+        else if InBody and
+           (DecodeOp(Instruction) = Ord(OP_LOAD_UNDEFINED)) then
+        begin
+          if Seen[DecodeA(Instruction)] then
+            Result := True;
+          Seen[DecodeA(Instruction)] := True;
+        end;
+      end;
+    finally
+      Module.Free;
+    end;
+  end;
+
+begin
+  Expect<Boolean>(ClearsARegisterTwice(True)).ToBe(False);
+  Expect<Boolean>(ClearsARegisterTwice(False)).ToBe(False);
 end;
 
 // A lexical binding initialized by a yield is compiled through a temporary,

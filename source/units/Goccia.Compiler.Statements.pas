@@ -47,8 +47,13 @@ type
     OuterSlots: TList<TPreallocatedUsingDisposeSlot>;
   end;
 
+// ABranchesClear: an await in a branch the statement ends with clears in
+// that branch (TGocciaCompilerScope.SetAwaitTail). False when the statement
+// clears at its end on every path anyway (a top-level statement of module
+// code), which would clear the same registers twice.
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
-  const AStmt: TGocciaExpressionStatement);
+  const AStmt: TGocciaExpressionStatement;
+  const ABranchesClear: Boolean = True);
 procedure CompileVariableDeclaration(const ACtx: TGocciaCompilationContext;
   const AStmt: TGocciaVariableDeclaration);
 procedure CompileFunctionDeclaration(const ACtx: TGocciaCompilationContext;
@@ -459,11 +464,14 @@ begin
 end;
 
 procedure CompileExpressionStatement(const ACtx: TGocciaCompilationContext;
-  const AStmt: TGocciaExpressionStatement);
+  const AStmt: TGocciaExpressionStatement; const ABranchesClear: Boolean);
 begin
   // The register CompileDiscardedExpression allocates first is the one the
   // value is discarded in.
-  ACtx.Scope.SetAwaitTail(AStmt.Expression, ACtx.Scope.NextSlot);
+  if ABranchesClear then
+    ACtx.Scope.SetAwaitTail(AStmt.Expression, ACtx.Scope.NextSlot)
+  else
+    ACtx.Scope.SetAwaitTail(nil, -1);
   try
     CompileDiscardedExpression(ACtx, AStmt.Expression);
   finally

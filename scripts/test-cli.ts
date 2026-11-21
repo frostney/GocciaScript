@@ -102,6 +102,27 @@ console.log("Module code releases what a top-level statement read; only an entry
         throw new Error(`Sandbox module ${name} should allocate again after dropping its value, got exit ${proc.exitCode}: ${out}`);
     }
 
+    // A script entry that imports its own file loads it as a separate module
+    // (docs/bytecode-vm.md), which keeps no completion value either: its
+    // expression statement's buffer is free for the allocation after it.
+    writeFileSync(
+      join(tmp, "self.js"),
+      [
+        "const first = !globalThis.selfImported;",
+        "globalThis.selfImported = true;",
+        'if (first) import("./self.js");',
+        `first ? 0 : new ArrayBuffer(${size});`,
+        `if (!first) { ${allocateAgain} }`,
+      ].join("\n") + "\n",
+    );
+    const selfImport = Bun.spawnSync(
+      [resolve(RUNNER), "--source-type=script", "--max-memory=10MiB", "self.js"],
+      { cwd: tmp, stdout: "pipe", stderr: "pipe" },
+    );
+    const selfOut = selfImport.stdout.toString() + selfImport.stderr.toString();
+    if (selfImport.exitCode !== 0 || !containsLine(selfOut, "again ok 6291456"))
+      throw new Error(`A script entry's import of its own file should keep no completion value, got exit ${selfImport.exitCode}: ${selfOut}`);
+
     // An imported module reports no completion value; the entry's last
     // statement value is still the run's result, from the runner and from a
     // sandbox entry alike.

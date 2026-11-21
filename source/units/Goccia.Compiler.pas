@@ -738,7 +738,8 @@ begin
   StatementOuterPeak := Ctx.Scope.BeginRegisterRegion;
 
   if AStmt is TGocciaExpressionStatement then
-    Goccia.Compiler.Statements.CompileExpressionStatement(Ctx, TGocciaExpressionStatement(AStmt))
+    Goccia.Compiler.Statements.CompileExpressionStatement(Ctx,
+      TGocciaExpressionStatement(AStmt), AStmt <> FModuleTopLevelStatement)
   else if AStmt is TGocciaVariableDeclaration then
     Goccia.Compiler.Statements.CompileVariableDeclaration(Ctx, TGocciaVariableDeclaration(AStmt))
   else if AStmt is TGocciaFunctionDeclaration then
@@ -2584,9 +2585,13 @@ begin
           AwaitMark := FCurrentScope.UnclearedAwaitCount;
           StatementOuterPeak := FCurrentScope.BeginRegisterRegion;
           // RetReg holds the program's completion value: a tail branch
-          // clears what its awaits left but keeps it.
-          FCurrentScope.SetAwaitTail(
-            TGocciaExpressionStatement(AProgram.Body[I]).Expression, -1);
+          // clears what its awaits left but keeps it. Module code clears at
+          // the statement's end on every path, so its branches do not.
+          if ModuleCode then
+            FCurrentScope.SetAwaitTail(nil, -1)
+          else
+            FCurrentScope.SetAwaitTail(
+              TGocciaExpressionStatement(AProgram.Body[I]).Expression, -1);
           try
             DoCompileExpression(
               TGocciaExpressionStatement(AProgram.Body[I]).Expression, RetReg);

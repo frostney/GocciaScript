@@ -39,6 +39,11 @@ type
       A TGocciaBytecodeModule, typed as TObject to keep the bytecode units
       out of this one. }
     CompiledModule: TObject;
+    { The engine's entry program, evaluated as a module: the one module whose
+      completion value a host reads (TGocciaEngine.Execute's result). An
+      imported module keeps none (TGocciaCompiler.DiscardsCompletionValue),
+      also when it is the entry's own file imported from a script entry. }
+    IsEntryModule: Boolean;
   end;
 
 implementation
