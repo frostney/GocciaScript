@@ -5907,13 +5907,19 @@ var
   MethodTailFlag: UInt16;
 
   // AReg, when nothing reads the call's result there, for an optional call's
-  // clears to cover; else -1.
+  // clears to cover; else -1. A result that goes only into the register an
+  // expression statement discards (`ready && super.m?.(await f())`) is
+  // unread too.
   function DiscardedResultReg(const AReg: UInt16): Integer;
   begin
-    if ANeedsResult or (AReg = ADest) then
+    if AReg = ADest then
       Result := -1
+    else if not ANeedsResult or
+            ((ACtx.Scope.AwaitTailDiscard >= 0) and
+             (ADest = ACtx.Scope.AwaitTailDiscard)) then
+      Result := AReg
     else
-      Result := AReg;
+      Result := -1;
   end;
 
   // The call left its result in AReg: move it into ADest when the caller
