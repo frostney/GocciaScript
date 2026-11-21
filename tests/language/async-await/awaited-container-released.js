@@ -182,6 +182,24 @@ describe("a value a statement awaited in a branch it took and then dropped", () 
     expect(after - baseline).toBeLessThan(SIZE / 2);
   });
 
+  test("is reclaimed after an optional super call that returns it", async () => {
+    class Base {
+      id(value) {
+        return value;
+      }
+    }
+    class Derived extends Base {
+      async run() {
+        super.id?.(await make());
+        return grownAfter();
+      }
+    }
+    const instance = new Derived();
+    const baseline = collect();
+    const after = await instance.run();
+    expect(after - baseline).toBeLessThan(SIZE / 2);
+  });
+
   test("leaves a skipped branch's statement and the next one intact", async () => {
     const run = async (ready) => {
       const seen = [];

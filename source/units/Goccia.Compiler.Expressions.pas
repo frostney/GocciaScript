@@ -378,10 +378,12 @@ end;
 
 // EmitOptionalChainEnd for an optional call compiled outside the chain
 // compiler: its nullish jumps are AFirstJump and ASecondJump, -1 for none,
-// and its nullish result goes into AReg.
+// and its nullish result goes into AReg. AReceiver, when not -1, is a
+// register still allocated that the clears cover (the call's result register
+// when nothing reads the result).
 procedure EmitOptionalCallEnd(const ACtx: TGocciaCompilationContext;
   const AFirstJump, ASecondJump: Integer; const AReg: UInt16;
-  const ABranch: TGocciaAwaitTailBranch);
+  const ABranch: TGocciaAwaitTailBranch; const AReceiver: Integer);
 var
   Jumps: TGocciaCompilerJumpArray;
   Count: Integer;
@@ -398,7 +400,8 @@ begin
     Jumps[Count] := ASecondJump;
     Inc(Count);
   end;
-  EmitOptionalChainEnd(ACtx, Jumps, Count, AReg, OP_LOAD_UNDEFINED, ABranch);
+  EmitOptionalChainEnd(ACtx, Jumps, Count, AReg, OP_LOAD_UNDEFINED, ABranch,
+    AReceiver);
 end;
 
 // The storage key of the private name #AName as the class body that
@@ -5903,6 +5906,16 @@ var
   IgnoredJumpCount: Integer;
   MethodTailFlag: UInt16;
 
+  // AReg, when nothing reads the call's result there, for an optional call's
+  // clears to cover; else -1.
+  function DiscardedResultReg(const AReg: UInt16): Integer;
+  begin
+    if ANeedsResult or (AReg = ADest) then
+      Result := -1
+    else
+      Result := AReg;
+  end;
+
   // The call left its result in AReg: move it into ADest when the caller
   // needs it there, or report AReg when nobody needs the result in ADest.
   procedure SettleResult(const AReg: UInt16);
@@ -6043,7 +6056,8 @@ begin
   end;
 
     if AExpr.Optional then
-      EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch);
+      EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch,
+        DiscardedResultReg(BaseReg));
 
     SettleResult(BaseReg);
 
@@ -6100,7 +6114,8 @@ begin
     end;
 
     if AExpr.Optional then
-      EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch);
+      EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch,
+        DiscardedResultReg(BaseReg));
 
     SettleResult(BaseReg);
     ACtx.Scope.FreeRegister;
@@ -6174,7 +6189,8 @@ begin
       end;
 
       if AExpr.Optional then
-        EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch);
+        EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch,
+        DiscardedResultReg(BaseReg));
 
       SettleResult(BaseReg);
 
@@ -6230,7 +6246,7 @@ begin
 
       if MemberExpr.Optional or AExpr.Optional then
         EmitOptionalCallEnd(ACtx, NilJump, CallNilJump, BaseReg,
-          OptionalBranch);
+          OptionalBranch, DiscardedResultReg(BaseReg));
 
       SettleResult(BaseReg);
 
@@ -6281,7 +6297,8 @@ begin
     end;
 
     if AExpr.Optional then
-      EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch);
+      EmitOptionalCallEnd(ACtx, -1, CallNilJump, BaseReg, OptionalBranch,
+        DiscardedResultReg(BaseReg));
 
     if BaseReg <> ADest then
     begin
