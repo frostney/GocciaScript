@@ -902,10 +902,20 @@ begin
     // part already, and nothing has written it since (`yield [yield [yield
     // 0]]` would otherwise clear quadratically many).
     StraightLine := ACtx.Scope.YieldClearedOnEveryPath(JumpMark);
-    for Slot := ACtx.Scope.NextSlot to RegionPeak - 1 do
-      if (Slot <> TempReg) and
-         not (StraightLine and ACtx.Scope.YieldClearedHolds(Slot)) then
+    Slot := ACtx.Scope.NextSlot;
+    while Slot < RegionPeak do
+    begin
+      if StraightLine and ACtx.Scope.YieldClearedHolds(Slot) then
+      begin
+        // Past the cleared range in one step, so nested yields scan
+        // linearly many registers, not quadratically many.
+        Slot := ACtx.Scope.YieldClearedHi;
+        Continue;
+      end;
+      if Slot <> TempReg then
         EmitInstruction(ACtx, EncodeABC(OP_LOAD_UNDEFINED, UInt16(Slot), 0, 0));
+      Inc(Slot);
+    end;
     // What is clear from here on; the operand and the resumed value go into
     // TempReg and ADest, so neither counts.
     ClearedHi := RegionPeak;

@@ -325,6 +325,7 @@ type
     procedure NoteYieldCleared(const ALo, AHi, AJumpStart, AJumpEnd: Integer);
     function YieldClearedOnEveryPath(const AJumpStart: Integer): Boolean;
     function YieldClearedHolds(const ASlot: Integer): Boolean;
+    property YieldClearedHi: Integer read FYieldClearedHi;
 
     // How many OP_AWAIT instructions this scope's code has emitted. A
     // statement that emitted one has suspended the frame, which is where a
