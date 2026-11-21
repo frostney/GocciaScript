@@ -355,23 +355,31 @@ end;
 // about.
 //
 // The RTL also bounds the top of the stack. It records StackBottom as the
-// stack pointer at the thread's start less StackLength, so the stack holds no
-// frame above StackBottom + StackLength. Where the system reports more stack
-// than the thread was created with, its mapping can hold another thread's
-// stack too: on Linux 6.13 and later, glibc 2.42 and later install a thread's
-// guard page inside its stack's mapping (MADV_GUARD_INSTALL) instead of as a
-// mapping of its own, and the kernel merges two thread stacks that lie next
-// to each other into one mapping in /proc/self/maps. A 512 KiB stack mapped
-// just below a 4 MiB one reads as 4.5 MiB, and would keep the full
-// NATIVE_STACK_RESERVE free instead of a quarter of itself. A thread the RTL
-// did not start records a StackLength of about 1 GB, larger than any stack
-// the system reports, so its top is left alone, and the top is never lowered
-// to below the running frame.
+// stack pointer at the thread's start less StackLength, so no frame lies above
+// StackBottom + StackLength. Where the system reports more stack than the
+// thread was created with, its mapping can hold another thread's stack too:
+// on Linux 6.13 and later, glibc 2.42 and later install a thread's guard page
+// inside its stack's mapping (MADV_GUARD_INSTALL) instead of as a mapping of
+// its own, and the kernel merges two thread stacks that lie next to each
+// other into one mapping in /proc/self/maps. A 512 KiB stack mapped just
+// below a 4 MiB one reads as 4.5 MiB, and would keep the full
+// NATIVE_STACK_RESERVE free instead of a quarter of itself. Its size is then
+// taken as what lies below where the thread started, or StackLength where
+// that is more, so the reserve is never smaller than the stack the thread was
+// created with would keep.
+//
+// The top is lowered only below the system's own bottom. StackBottom can lie
+// below the real bottom of the stack by what the thread used before the RTL
+// started it (its static TLS and the first frames), so a stack whose bottom
+// is the RTL's keeps the size it had. A thread the RTL did not start records
+// a StackLength of about 1 GB, larger than any stack the system reports, so
+// its bounds are left alone, and the top is never lowered to below the
+// running frame.
 function CombineStackBounds(const ASystemFound: Boolean;
   var ALow, ASize: NativeUInt; const ARTLLow, ARTLLength,
   APosition: NativeUInt): Boolean;
 var
-  StackTop, RTLTop: NativeUInt;
+  StackTop, RTLTop, OwnSize: NativeUInt;
 begin
   Result := ASystemFound;
   if (ARTLLow = 0) or (ARTLLength = 0) then
@@ -387,11 +395,16 @@ begin
   begin
     ALow := ARTLLow;
     ASize := StackTop - ALow;
+    Exit;
   end;
   RTLTop := ARTLLow + ARTLLength;
-  if (ASize > ARTLLength) and (RTLTop > APosition) and (RTLTop > ALow) and
-     (RTLTop < StackTop) then
-    ASize := RTLTop - ALow;
+  if (RTLTop <= ALow) or (RTLTop >= StackTop) then
+    Exit;
+  OwnSize := RTLTop - ALow;
+  if OwnSize < ARTLLength then
+    OwnSize := ARTLLength;
+  if (OwnSize < ASize) and (ALow + OwnSize > APosition) then
+    ASize := OwnSize;
 end;
 
 // On Darwin the RTL's StackBottom and StackLength are not used at all: on
