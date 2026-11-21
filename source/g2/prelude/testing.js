@@ -1160,7 +1160,7 @@
     report(done) {
       return runTests().then(
         r => done(JSON.stringify({ totalTests: r.totalTests, passed: r.passed, failed: r.failed, skipped: r.skipped,
-          assertions: r.assertions, failedTests: r.failedTests })),
+          totalRunTests: r.totalRunTests, assertions: r.assertions, failedTests: r.failedTests })),
         e => done(undefined, String(e)));
     }
   };

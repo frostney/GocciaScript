@@ -237,6 +237,17 @@ The child has its own heap, so a collection in it frees nothing of its caller's.
 work while a `FinalizationRegistry` cell still waits on its target, G2 collects once, so a caller's cleanup that
 came due during a nested run still runs.
 
+### GocciaTestRunner
+
+`./build.pas g2testrunner` builds `build/g2/GocciaTestRunner` from `source/app/GocciaTestRunnerG2.dpr`: the old
+runner's options, file discovery (a directory's `node_modules` is skipped), stdin and `--multifile`, the results
+summary, the JSON envelope, exit codes, `--exit-on-first-failure` and coverage. Each file runs on a thread of its
+own with an engine in test mode (`TestMode`, `prelude/testing.js`), its suites reported by `RunTestSuites`; at most
+`--jobs` run at once, and their console output is printed only in a sequential run. What it shares with
+GocciaRunner for one file's engine (the console capture, settings, the import grant) is in
+`Goccia.CLI.G2FileEngine`. Not yet on G2: snapshots, heap snapshots, `--globals` and `--global`, the per-test and
+per-describe timeouts, and suite errors counted apart from failed tests.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
