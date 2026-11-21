@@ -59,6 +59,74 @@ describe.runIf(isIntl)("Intl.DateTimeFormat.prototype.formatRangeToParts", () =>
     expect(parts.find((part) => part.type === "relatedYear" && part.source === "startRange").value).toBe("1999");
     expect(parts.find((part) => part.type === "relatedYear" && part.source === "endRange").value).toBe("1899");
   });
+
+  test("emits era parts for a numeric iso8601 range across eras", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const parts = dtf.formatRangeToParts(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    if (!hasFullICU) {
+      expect(Array.isArray(parts)).toBe(true);
+      return;
+    }
+
+    // ICU names the eras of a range that crosses them, though none was asked for.
+    expect(parts.find((part) => part.type === "era" && part.source === "startRange").value).toBe("BC");
+    expect(parts.find((part) => part.type === "era" && part.source === "endRange").value).toBe("AD");
+  });
+
+  test("emits month parts for an iso8601 range whose pattern picks another width", () => {
+    const dtf = new Intl.DateTimeFormat("zh", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "narrow",
+      timeZone: "UTC"
+    });
+    const parts = dtf.formatRangeToParts(Date.UTC(2020, 0, 1), Date.UTC(2020, 1, 1));
+
+    if (!hasFullICU) {
+      expect(Array.isArray(parts)).toBe(true);
+      return;
+    }
+
+    // ICU formats this range with abbreviated months, not the narrow ones asked for.
+    const month = (source) => parts.find((part) => part.type === "month" && part.source === source);
+    expect(month("startRange").value).toContain("1");
+    expect(month("endRange").value).toContain("2");
+  });
+
+  test("emits no era parts for an iso8601 range across eras whose fields show none", () => {
+    const dtf = new Intl.DateTimeFormat("en", {
+      calendar: "iso8601",
+      month: "numeric",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const parts = dtf.formatRangeToParts(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+
+    expect(parts.some((part) => part.type === "era")).toBe(false);
+  });
+
+  test("leaves no blank era in iso8601 range parts across eras with narrow months", () => {
+    const dtf = new Intl.DateTimeFormat("es", {
+      calendar: "iso8601",
+      year: "numeric",
+      month: "narrow",
+      day: "numeric",
+      timeZone: "UTC"
+    });
+    const parts = dtf.formatRangeToParts(Date.UTC(-100, 0, 1), Date.UTC(2000, 0, 1));
+    const formatted = parts.map((part) => part.value).join("");
+
+    // A blank era leaves its spaces behind: " 101 E 4 –  2000 E 1".
+    expect(formatted).toBe(formatted.trim());
+    expect(/\s\s/.test(formatted)).toBe(false);
+  });
 });
 
 describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRangeToParts Temporal inputs", () => {
