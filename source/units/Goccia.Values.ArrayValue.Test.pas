@@ -64,6 +64,7 @@ type
     procedure TestArrayConversionsTakeLinearWork;
     procedure TestTypedArrayConversionsTakeLinearWork;
     procedure TestOneLongStringIsNotCopied;
+    procedure TestALongStringIsCopiedOnce;
   end;
 
 procedure TTestArrayValue.SetupTests;
@@ -74,6 +75,8 @@ begin
     TestTypedArrayConversionsTakeLinearWork);
   Test('joining an array of one long string returns that string without a copy',
     TestOneLongStringIsNotCopied);
+  Test('joining a long string with something else copies it once',
+    TestALongStringIsCopiedOnce);
 end;
 
 { Runs a script that builds `a`, ALength strings of ten digits, `ta`, a
@@ -164,9 +167,10 @@ begin
   ExpectConversionLinear('`${ta}`', 11);
 end;
 
-{ A join used to hand back the one element's string itself, and still does:
-  copying it into a buffer that grows by doubling, and out again at the end,
-  would need about three times the string. }
+{ A join used to hand back the one element's string itself, and still does,
+  and a join that adds to a long string copies it once, into a result of the
+  exact length: a buffer that grew by doubling would need up to twice the
+  result, and more again to copy it out. }
 procedure TTestArrayValue.TestOneLongStringIsNotCopied;
 
   procedure ExpectShared(const AExpression: string);
@@ -185,6 +189,28 @@ begin
   ExpectShared('[s].join()');
   ExpectShared('[undefined, s, null].join("")');
   ExpectShared('`${[s]}`');
+end;
+
+procedure TTestArrayValue.TestALongStringIsCopiedOnce;
+
+  procedure ExpectOneCopy(const AExpression: string);
+  var
+    Work: TConversionWork;
+  begin
+    Work := ConversionWork(AExpression, 1);
+    Expect<Integer>(Work.ResultLength).ToBe(LONG_STRING_LENGTH + 1);
+    if Work.Bytes > (LONG_STRING_LENGTH + 1) * SizeOf(WideChar) +
+       SHARED_STRING_BYTES then
+      Fail(Format('%s asked for %d bytes for a result of %d characters',
+        [AExpression, Work.Bytes, LONG_STRING_LENGTH + 1]));
+    Expect<Boolean>(Work.Bytes <= (LONG_STRING_LENGTH + 1) * SizeOf(WideChar) +
+      SHARED_STRING_BYTES).ToBe(True);
+  end;
+
+begin
+  ExpectOneCopy('[s, ""].join()');
+  ExpectOneCopy('["", s].join()');
+  ExpectOneCopy('`${[s, "x"].join("")}`');
 end;
 
 begin

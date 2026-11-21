@@ -2026,26 +2026,30 @@ begin
       FJoinReceivers.Add(View.Obj);
       try
         // Steps 5-8: Build result string, treating undefined/null elements
-        // as empty string. The join buffer grows by doubling, so a join costs
-        // time linear in its result: appending to a string reallocates the
-        // whole string for each element and separator, which made joining a
-        // large array, and so a template literal or String() of one, take
-        // quadratic time.
+        // as empty string. The join buffer writes the result once, at its
+        // length, so a join costs time linear in its result: appending to a
+        // string reallocates the whole string for each element and separator,
+        // which made joining a large array, and so a template literal or
+        // String() of one, take quadratic time.
         Joined := TStringJoinBuffer.Create(Separator);
-        for I := 0 to View.Len - 1 do
-        begin
-          // Step 7b: If element is undefined or null, let next be ""
-          Element := View.Get(I);
-          if (Element is TGocciaUndefinedLiteralValue) or
-             (Element is TGocciaNullLiteralValue) then
-            Joined.Add('')
-          else
-            // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
-            Joined.Add(Element.ToStringLiteral.Value);
-        end;
+        try
+          for I := 0 to View.Len - 1 do
+          begin
+            // Step 7b: If element is undefined or null, let next be ""
+            Element := View.Get(I);
+            if (Element is TGocciaUndefinedLiteralValue) or
+               (Element is TGocciaNullLiteralValue) then
+              Joined.Add('')
+            else
+              // ES2026 §23.1.3.16 step 7c: Let next be ? ToString(element)
+              Joined.Add(Element.ToStringLiteral.Value);
+          end;
 
-        // Step 9: Return R
-        Result := TGocciaStringLiteralValue.Create(Joined.ToString);
+          // Step 9: Return R
+          Result := TGocciaStringLiteralValue.Create(Joined.Join);
+        finally
+          Joined.Free;
+        end;
       finally
         FJoinReceivers.Delete(FJoinReceivers.Count - 1);
       end;

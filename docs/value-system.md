@@ -455,7 +455,7 @@ Each helper creates a `TGocciaObjectValue` with `name` and `message` properties 
 - **Numeric property access** — `arr["0"]` and `arr[0]` both resolve to the first element.
 - **Shared prototype singleton** — All array instances within an engine share a single per-engine prototype, stored in a [realm slot](core-patterns.md#realm-ownership--slot-registration). Methods are registered once on this shared prototype during `InitializePrototype` (guarded by checking the realm slot) and pinned automatically by `TGocciaRealm.SetSlot`. The constructor assigns `FPrototype` from the realm slot instead of creating a per-instance prototype.
 - **Prototype methods** — `map`, `filter`, `reduce`, `forEach`, `some`, `every`, `flat`, `flatMap`, `find`, `findIndex`, `indexOf`, `lastIndexOf`, `join`, `includes`, `concat`, `push`, `pop`, `shift`, `unshift`, `sort`, `splice`, `reverse`, `fill`, `at`, `slice`, `toReversed`, `toSorted`, `toSpliced` — all operate through `ThisValue` (not `Self`) to access instance data, since the method pointers are bound to a single method host instance.
-- **`ToStringLiteral`** — Uses `TStringBuffer` for O(n) comma-separated element assembly, avoiding O(n^2) repeated string concatenation.
+- **String conversion** — An array has no `ToStringLiteral` of its own: a template literal, `String()` or `+` reaches `Array.prototype.toString` through `ToPrimitive`, and so `join`. `join`, like the typed-array `join` and `toLocaleString`, builds its result with `TStringJoinBuffer` (`StringJoin.pas`), which keeps each element's string and writes the result once at its exact length: O(n) work and no spare capacity, where repeated string concatenation took O(n^2).
 
 ## Sets
 

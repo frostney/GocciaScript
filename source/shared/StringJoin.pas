@@ -3,126 +3,139 @@ unit StringJoin;
 {$I Shared.inc}
 
 // Joins a list of strings with a separator between each two, as
-// Array.prototype.join does, in time linear in the result: the buffer grows
-// by doubling, where appending to a string reallocates it on every append.
-// A join whose only content is one string returns that string itself, as the
-// appends did, and ToString shrinks the buffer to the result instead of
-// copying it out, so a join needs about the memory the appends did.
+// Array.prototype.join does. It keeps each string, not a copy, and Join
+// writes the result once, at its exact length: the work is linear in the
+// result, where appending to a string reallocates it on every append, and the
+// memory is the result and the strings it is made of, as the appends needed
+// at their last step. A join whose only content is one string returns that
+// string itself, as the appends did.
 
 interface
 
 type
-  TStringJoinBuffer = record
+  TStringJoinBuffer = class
   private
     FSeparator: UnicodeString;
-    // The first string, kept uncopied while nothing else has been written.
-    FFirst: UnicodeString;
-    FData: UnicodeString;
-    FLength: SizeInt;
-    FCapacity: SizeInt;
+    // The non-empty strings, and the element each belongs to: the
+    // separators before a string are its element's index.
+    FTexts: array of UnicodeString;
+    FElementIndexes: array of SizeInt;
+    FTextCount: SizeInt;
     FElementCount: SizeInt;
-    procedure EnsureCapacity(const ANeeded: SizeInt);
-    procedure WriteFirst;
-    procedure Write(const AText: UnicodeString);
   public
-    class function Create(const ASeparator: UnicodeString): TStringJoinBuffer; static;
+    constructor Create(const ASeparator: UnicodeString);
     // Adds the next element's string; an empty one still takes its place
     // between two separators.
     procedure Add(const AText: UnicodeString);
-    function ToString: UnicodeString;
+    // The joined string. It releases each string as it writes it, while that
+    // string is still in the cache, so the buffer is empty afterwards.
+    function Join: UnicodeString;
     property ElementCount: SizeInt read FElementCount;
   end;
 
 implementation
 
 const
-  MINIMUM_CAPACITY = 64;
-  // Characters, so that the byte size of the buffer fits a SizeInt too.
-  MAXIMUM_CAPACITY = High(SizeInt) div (2 * SizeOf(WideChar));
+  INITIAL_TEXT_CAPACITY = 16;
+  // Characters, so that the byte size of the result fits a SizeInt too.
+  MAXIMUM_LENGTH = High(SizeInt) div (2 * SizeOf(WideChar));
 
-class function TStringJoinBuffer.Create(
-  const ASeparator: UnicodeString): TStringJoinBuffer;
+constructor TStringJoinBuffer.Create(const ASeparator: UnicodeString);
 begin
-  Result.FSeparator := ASeparator;
-  Result.FFirst := '';
-  Result.FData := '';
-  Result.FLength := 0;
-  Result.FCapacity := 0;
-  Result.FElementCount := 0;
-end;
-
-procedure TStringJoinBuffer.EnsureCapacity(const ANeeded: SizeInt);
-var
-  NewCapacity: SizeInt;
-begin
-  if ANeeded <= FCapacity then
-    Exit;
-  if ANeeded > MAXIMUM_CAPACITY then
-    System.Error(reOutOfMemory);
-  if FCapacity < MINIMUM_CAPACITY then
-    NewCapacity := MINIMUM_CAPACITY
-  else if FCapacity > MAXIMUM_CAPACITY div 2 then
-    NewCapacity := MAXIMUM_CAPACITY
-  else
-    NewCapacity := FCapacity * 2;
-  if NewCapacity < ANeeded then
-    NewCapacity := ANeeded;
-  // SetLength gives FData a block of its own, so the writes below never reach
-  // a string that ToString has handed out.
-  SetLength(FData, NewCapacity);
-  FCapacity := NewCapacity;
-end;
-
-// The kept first string goes into the buffer once something follows it.
-procedure TStringJoinBuffer.WriteFirst;
-var
-  FirstLength: SizeInt;
-begin
-  FirstLength := System.Length(FFirst);
-  EnsureCapacity(FirstLength);
-  Move(PWideChar(FFirst)^, PWideChar(FData)^, FirstLength * SizeOf(WideChar));
-  FLength := FirstLength;
-  FFirst := '';
-end;
-
-procedure TStringJoinBuffer.Write(const AText: UnicodeString);
-var
-  TextLength: SizeInt;
-begin
-  TextLength := System.Length(AText);
-  if TextLength = 0 then
-    Exit;
-  if FFirst <> '' then
-    WriteFirst;
-  if TextLength > MAXIMUM_CAPACITY - FLength then
-    System.Error(reOutOfMemory);
-  EnsureCapacity(FLength + TextLength);
-  Move(PWideChar(AText)^, (PWideChar(FData) + FLength)^,
-    TextLength * SizeOf(WideChar));
-  Inc(FLength, TextLength);
+  inherited Create;
+  FSeparator := ASeparator;
 end;
 
 procedure TStringJoinBuffer.Add(const AText: UnicodeString);
+var
+  Capacity: SizeInt;
 begin
-  if FElementCount > 0 then
-    Write(FSeparator);
-  if (FLength = 0) and (FFirst = '') then
-    FFirst := AText
-  else
-    Write(AText);
+  if AText <> '' then
+  begin
+    Capacity := System.Length(FTexts);
+    if FTextCount = Capacity then
+    begin
+      if Capacity = 0 then
+        Capacity := INITIAL_TEXT_CAPACITY
+      else
+        Capacity := Capacity * 2;
+      SetLength(FTexts, Capacity);
+      SetLength(FElementIndexes, Capacity);
+    end;
+    FTexts[FTextCount] := AText;
+    FElementIndexes[FTextCount] := FElementCount;
+    Inc(FTextCount);
+  end;
   Inc(FElementCount);
 end;
 
-function TStringJoinBuffer.ToString: UnicodeString;
+function TStringJoinBuffer.Join: UnicodeString;
+var
+  SeparatorLength, SeparatorCount, TotalLength, TextLength: SizeInt;
+  SeparatorsWritten, I: SizeInt;
+  Target: PWideChar;
 begin
-  if FLength = 0 then
-    Exit(FFirst);
-  if FCapacity <> FLength then
+  SeparatorLength := System.Length(FSeparator);
+  if (FElementCount > 1) and (SeparatorLength > 0) then
+    SeparatorCount := FElementCount - 1
+  else
+    SeparatorCount := 0;
+  if SeparatorCount = 0 then
   begin
-    SetLength(FData, FLength);
-    FCapacity := FLength;
+    if FTextCount = 0 then
+    begin
+      FElementCount := 0;
+      Exit('');
+    end;
+    if FTextCount = 1 then
+    begin
+      Result := FTexts[0];
+      FTexts[0] := '';
+      FTextCount := 0;
+      FElementCount := 0;
+      Exit;
+    end;
   end;
-  Result := FData;
+
+  if (SeparatorCount > 0) and
+     (SeparatorCount > MAXIMUM_LENGTH div SeparatorLength) then
+    System.Error(reOutOfMemory);
+  TotalLength := SeparatorCount * SeparatorLength;
+  for I := 0 to FTextCount - 1 do
+  begin
+    TextLength := System.Length(FTexts[I]);
+    if TextLength > MAXIMUM_LENGTH - TotalLength then
+      System.Error(reOutOfMemory);
+    Inc(TotalLength, TextLength);
+  end;
+
+  Result := '';
+  SetLength(Result, TotalLength);
+  Target := PWideChar(Result);
+  SeparatorsWritten := 0;
+  for I := 0 to FTextCount - 1 do
+  begin
+    if SeparatorCount > 0 then
+      while SeparatorsWritten < FElementIndexes[I] do
+      begin
+        Move(PWideChar(FSeparator)^, Target^,
+          SeparatorLength * SizeOf(WideChar));
+        Inc(Target, SeparatorLength);
+        Inc(SeparatorsWritten);
+      end;
+    TextLength := System.Length(FTexts[I]);
+    Move(PWideChar(FTexts[I])^, Target^, TextLength * SizeOf(WideChar));
+    Inc(Target, TextLength);
+    FTexts[I] := '';
+  end;
+  while SeparatorsWritten < SeparatorCount do
+  begin
+    Move(PWideChar(FSeparator)^, Target^, SeparatorLength * SizeOf(WideChar));
+    Inc(Target, SeparatorLength);
+    Inc(SeparatorsWritten);
+  end;
+  FTextCount := 0;
+  FElementCount := 0;
 end;
 
 end.

@@ -5,6 +5,7 @@ program StringJoin.Test;
 uses
   SysUtils,
 
+  AllocationCounter,
   StringJoin,
   TestingPascalLibrary;
 
@@ -19,8 +20,7 @@ type
     procedure TestLongerSeparator;
     procedure TestOneStringIsReturnedItself;
     procedure TestManyElements;
-    procedure TestLongJoinIsNotCopiedOut;
-    procedure TestAddAfterToString;
+    procedure TestResultIsAllocatedOnce;
   public
     procedure SetupTests; override;
   end;
@@ -41,10 +41,8 @@ begin
     TestOneStringIsReturnedItself);
   Test('more elements than the first part capacity join in order',
     TestManyElements);
-  Test('ToString hands out the buffer, shrunk to the result, not a copy of it',
-    TestLongJoinIsNotCopiedOut);
-  Test('ToString can be called again, and the join goes on after it',
-    TestAddAfterToString);
+  Test('Join allocates the result once, at its length',
+    TestResultIsAllocatedOnce);
 end;
 
 function JoinOf(const ASeparator: UnicodeString;
@@ -54,10 +52,14 @@ var
   I: Integer;
 begin
   Joined := TStringJoinBuffer.Create(ASeparator);
-  for I := 0 to High(AElements) do
-    Joined.Add(AElements[I]);
-  Expect<Integer>(Joined.ElementCount).ToBe(Length(AElements));
-  Result := Joined.ToString;
+  try
+    for I := 0 to High(AElements) do
+      Joined.Add(AElements[I]);
+    Expect<Integer>(Joined.ElementCount).ToBe(Length(AElements));
+    Result := Joined.Join;
+  finally
+    Joined.Free;
+  end;
 end;
 
 procedure TStringJoinTests.TestNoElementsJoinToEmpty;
@@ -97,21 +99,12 @@ end;
 
 procedure TStringJoinTests.TestOneStringIsReturnedItself;
 var
-  Text, Joined: UnicodeString;
-  Buffer: TStringJoinBuffer;
+  Text: UnicodeString;
 begin
   Text := StringOfChar('x', 1000);
-  Buffer := TStringJoinBuffer.Create(',');
-  Buffer.Add(Text);
-  Joined := Buffer.ToString;
-  Expect<Boolean>(Pointer(Joined) = Pointer(Text)).ToBe(True);
-
-  Buffer := TStringJoinBuffer.Create('');
-  Buffer.Add('');
-  Buffer.Add(Text);
-  Buffer.Add('');
-  Joined := Buffer.ToString;
-  Expect<Boolean>(Pointer(Joined) = Pointer(Text)).ToBe(True);
+  Expect<Boolean>(Pointer(JoinOf(',', [Text])) = Pointer(Text)).ToBe(True);
+  Expect<Boolean>(Pointer(JoinOf('', ['', Text, ''])) = Pointer(Text))
+    .ToBe(True);
 end;
 
 procedure TStringJoinTests.TestManyElements;
@@ -121,51 +114,50 @@ var
   I: Integer;
 begin
   Joined := TStringJoinBuffer.Create('-');
-  Expected := '';
-  for I := 0 to 999 do
-  begin
-    if I > 0 then
-      Expected := Expected + '-';
-    if I mod 3 <> 0 then
+  try
+    Expected := '';
+    for I := 0 to 999 do
     begin
-      Joined.Add(UnicodeString(IntToStr(I)));
-      Expected := Expected + UnicodeString(IntToStr(I));
-    end
-    else
-      Joined.Add('');
+      if I > 0 then
+        Expected := Expected + '-';
+      if I mod 3 <> 0 then
+      begin
+        Joined.Add(UnicodeString(IntToStr(I)));
+        Expected := Expected + UnicodeString(IntToStr(I));
+      end
+      else
+        Joined.Add('');
+    end;
+    Expect<string>(Joined.Join).ToBe(Expected);
+  finally
+    Joined.Free;
   end;
-  Expect<string>(Joined.ToString).ToBe(Expected);
 end;
 
-{ ToString hands out the buffer itself, shrunk to the result, so a second
-  call gives the same string and no copy of it exists. }
-procedure TStringJoinTests.TestLongJoinIsNotCopiedOut;
+{ The strings are kept as they are and written once, into a result of the
+  exact length: one allocation, and no spare capacity for the result to keep. }
+procedure TStringJoinTests.TestResultIsAllocatedOnce;
 var
   Joined: TStringJoinBuffer;
   Text: UnicodeString;
   I: Integer;
+  Allocations: Int64;
 begin
   Joined := TStringJoinBuffer.Create(',');
-  for I := 0 to 999 do
-    Joined.Add(UnicodeString(IntToStr(I)));
-  Text := Joined.ToString;
-  Expect<Integer>(Length(Text)).ToBe(3889);
-  Expect<Boolean>(Pointer(Joined.ToString) = Pointer(Text)).ToBe(True);
-end;
-
-procedure TStringJoinTests.TestAddAfterToString;
-var
-  Joined: TStringJoinBuffer;
-  First: UnicodeString;
-begin
-  Joined := TStringJoinBuffer.Create(',');
-  Joined.Add('a');
-  Joined.Add('b');
-  First := Joined.ToString;
-  Expect<string>(Joined.ToString).ToBe('a,b');
-  Joined.Add('c');
-  Expect<string>(Joined.ToString).ToBe('a,b,c');
-  Expect<string>(First).ToBe('a,b');
+  try
+    for I := 0 to 999 do
+      Joined.Add(UnicodeString(IntToStr(I)));
+    StartCountingAllocations;
+    try
+      Text := Joined.Join;
+    finally
+      Allocations := StopCountingAllocations;
+    end;
+    Expect<Integer>(Integer(Allocations)).ToBe(1);
+    Expect<Integer>(Length(Text)).ToBe(3889);
+  finally
+    Joined.Free;
+  end;
 end;
 
 begin
