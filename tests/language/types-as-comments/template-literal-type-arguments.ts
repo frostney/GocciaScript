@@ -62,6 +62,15 @@ describe("template literal type arguments", () => {
     expect(identity<readonly `a${string}`[]>(4)).toBe(4);
   });
 
+  test("with keyword member names, predicates and type parameter modifiers", () => {
+    expect(identity<`${keyof { default: 1 }}`>(1)).toBe(1);
+    // prettier-ignore
+    expect(identity<`${keyof { a: 1
+      b: 2 }}`>(2)).toBe(2);
+    expect(identity<(x: string) => x is `prefix-${string}`>(3)).toBe(3);
+    expect(identity< <const T extends `${string}`>() => T>(4)).toBe(4);
+  });
+
   test("as the constraint of a type parameter with a default", () => {
     expect(identity< <T extends `x${string}` = "x">() => T>(5)).toBe(5);
   });
@@ -130,6 +139,13 @@ describe("comparisons with templates and calls", () => {
     expect(zero < b ? 7 : `${b}` > (c)).toBe(7);
     // prettier-ignore
     expect(typeof (new Box < 1 + `${b}` > (c))).toBe("boolean");
+  });
+
+  test("a tag named infer keeps the comparison reading", () => {
+    const infer = () => 9;
+
+    // prettier-ignore
+    expect(typeof (a < `${infer`2`}` > (c))).toBe("boolean");
   });
 
   test("a tag that is a member named with a keyword keeps the comparison reading", () => {

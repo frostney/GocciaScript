@@ -10906,10 +10906,11 @@ var
     if not Result then
       Exit;
     AdvanceType;
+    // A member after '.' may be named with a keyword: `labels.default`.
     while PeekType = gttDot do
     begin
       AdvanceType;
-      if PeekType <> gttIdentifier then
+      if not IsIdentifierNameToken(PeekType) then
         Exit(False);
       AdvanceType;
     end;
@@ -10941,12 +10942,35 @@ var
   var
     IsFunctionType, ReadonlyModifier: Boolean;
 
+    // Type arguments after a name, `Map<K, V>`, if any.
+    function SkipTypeArgumentsSuffix: Boolean;
+    begin
+      Result := True;
+      if PeekType <> gttLess then
+        Exit;
+      Result := False;
+      AdvanceType;
+      repeat
+        if not SkipType(ADepth + 1, True) then
+          Exit;
+        if PeekType <> gttComma then
+          Break;
+        AdvanceType;
+      until False;
+      Result := CloseAngle;
+    end;
+
     // A type parameter list, `<T extends U = V, W>`, from its '<'.
     function SkipTypeParameters: Boolean;
     begin
       Result := False;
       AdvanceType;
       repeat
+        // Modifiers before the name: `const T`, `in T`, `out T`.
+        if PeekType in [gttConst, gttIn] then
+          AdvanceType;
+        if PeekIsContextualKeyword(KEYWORD_OUT) then
+          AdvanceType;
         if PeekType <> gttIdentifier then
           Exit;
         AdvanceType;
@@ -11020,6 +11044,41 @@ var
       Result := SkipType(ADepth + 1, True);
     end;
 
+    // A function type's return: a type, or a type predicate, `x is T`,
+    // `asserts x` or `asserts x is T`.
+    function SkipReturnType(const AFunctionDepth: Integer): Boolean;
+    var
+      SavedCurrent: Integer;
+      SavedLexer: TGocciaLexerCheckpoint;
+      Asserts: Boolean;
+    begin
+      Asserts := PeekIsContextualKeyword(KEYWORD_ASSERTS);
+      if Asserts or (PeekType in [gttIdentifier, gttThis]) then
+      begin
+        SavedCurrent := FCurrent;
+        if Assigned(FLexer) then
+          SavedLexer := FLexer.CreateCheckpoint;
+        if Asserts then
+          AdvanceType;
+        if PeekType in [gttIdentifier, gttThis] then
+        begin
+          AdvanceType;
+          if PeekIsContextualKeyword(KEYWORD_IS) then
+          begin
+            AdvanceType;
+            Exit(SkipType(AFunctionDepth + 1, True));
+          end;
+          if Asserts then
+            Exit(True);
+        end;
+        FCurrent := SavedCurrent;
+        if Assigned(FLexer) then
+          FLexer.RestoreCheckpoint(SavedLexer);
+        OwedGreater := 0;
+      end;
+      Result := SkipType(AFunctionDepth + 1, True);
+    end;
+
     // A function type, `(name: T, ...rest: U[]) => R`, from its '('. When
     // the parentheses do not hold a parameter list followed by '=>',
     // AIsFunctionType is False and the cursor is back at the '(', which then
@@ -11080,7 +11139,7 @@ var
       end;
       AIsFunctionType := True;
       AdvanceType;
-      Result := SkipType(AFunctionDepth + 1, True);
+      Result := SkipReturnType(AFunctionDepth);
     end;
 
   begin
@@ -11093,7 +11152,18 @@ var
       while PeekIsContextualKeyword(KEYWORD_KEYOF) or
             PeekIsContextualKeyword(KEYWORD_INFER) or
             PeekIsContextualKeyword(KEYWORD_READONLY) do
+      begin
+        // `infer` declares a type parameter, so a name follows; `infer`
+        // before anything else, as in `infer`2``, is a tag.
+        if PeekIsContextualKeyword(KEYWORD_INFER) then
+        begin
+          AdvanceType;
+          if PeekType <> gttIdentifier then
+            Exit;
+          Break;
+        end;
         AdvanceType;
+      end;
       case PeekType of
         gttTypeof:
           begin
@@ -11103,27 +11173,12 @@ var
               if not SkipImportType then
                 Exit;
             end
-            else if not SkipName then
+            else if not SkipName or not SkipTypeArgumentsSuffix then
               Exit;
           end;
         gttIdentifier:
-          begin
-            if not SkipName then
-              Exit;
-            if PeekType = gttLess then
-            begin
-              AdvanceType;
-              repeat
-                if not SkipType(ADepth + 1, True) then
-                  Exit;
-                if PeekType <> gttComma then
-                  Break;
-                AdvanceType;
-              until False;
-              if not CloseAngle then
-                Exit;
-            end;
-          end;
+          if not SkipName or not SkipTypeArgumentsSuffix then
+            Exit;
         gttString, gttNumber, gttBigInt, gttTrue, gttFalse, gttNull, gttVoid,
         gttThis:
           AdvanceType;
@@ -11141,7 +11196,7 @@ var
           end;
         // An import type, `import("./types").Key`.
         gttImport:
-          if not SkipImportType then
+          if not SkipImportType or not SkipTypeArgumentsSuffix then
             Exit;
         // A negative number, `-1`, below the list's top level, where the
         // probes' operator check reads '-' as subtraction.
@@ -11194,13 +11249,15 @@ var
             AdvanceType;
             while PeekType <> gttRightBrace do
             begin
-              if not (PeekType in [gttIdentifier, gttString, gttNumber]) then
+              if not (IsIdentifierNameToken(PeekType) or
+                      (PeekType in [gttString, gttNumber])) then
                 Exit;
               // `readonly a: T`, unless `readonly` is the member's name.
               ReadonlyModifier := PeekIsContextualKeyword(KEYWORD_READONLY);
               AdvanceType;
               if ReadonlyModifier and
-                 (PeekType in [gttIdentifier, gttString, gttNumber]) then
+                 (IsIdentifierNameToken(PeekType) or
+                  (PeekType in [gttString, gttNumber])) then
                 AdvanceType;
               if PeekType = gttQuestion then
                 AdvanceType;
@@ -11209,9 +11266,11 @@ var
               AdvanceType;
               if not SkipType(ADepth + 1, True) then
                 Exit;
+              // Members end at ';', ',' or a line break.
               if PeekType in [gttSemicolon, gttComma] then
                 AdvanceType
-              else if PeekType <> gttRightBrace then
+              else if (PeekType <> gttRightBrace) and
+                      ((OwedGreater > 0) or not HasLineTerminatorBeforePeek) then
                 Exit;
             end;
             AdvanceType;
