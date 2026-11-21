@@ -672,9 +672,12 @@ begin
       SetLength(Initializers, InitCount + 1);
       Initializers[InitCount] := Decl.Variables[J].Initializer;
       Inc(InitCount);
-      Unobservable := True;
+      // An initializer that is a yield suspends the frame with the slot still
+      // holding what an earlier block left in it (YIELD_FLAG_TEMP_OPERAND no
+      // longer writes the yielded value there), so the entry hole stays.
+      Unobservable := not (Initializers[InitCount - 1] is TGocciaYieldExpression);
       for K := 0 to InitCount - 1 do
-        if not InitializerAvoidsOwnBinding(Initializers[K],
+        if Unobservable and not InitializerAvoidsOwnBinding(Initializers[K],
            Decl.Variables[J].Name) then
         begin
           Unobservable := False;

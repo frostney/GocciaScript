@@ -84,6 +84,28 @@ describe("a value a suspended generator has yielded", () => {
     expect(iterator.next()).toEqual({ value: 2, done: false });
   });
 
+  test("does not leave a value an exited block dropped in the slot a yield initializer reuses", () => {
+    const source = {
+      *produce() {
+        {
+          const discarded = new ArrayBuffer(SIZE);
+          discarded.byteLength;
+        }
+        {
+          const sent = yield 1;
+          sent;
+        }
+      },
+    };
+    const iterator = source.produce();
+    const baseline = collect();
+    const first = iterator.next();
+    Goccia.gc();
+    const grown = Goccia.gc.bytesAllocated - baseline;
+    expect(first.value).toBe(1);
+    expect(grown).toBeLessThan(SIZE / 2);
+  });
+
   test("is intact while the consumer holds it across collections", () => {
     const source = {
       *produce() {
