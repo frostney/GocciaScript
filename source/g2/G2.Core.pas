@@ -392,8 +392,7 @@ var
 threadvar
   { G2.VM's megamorphic get cache: (shape, key) entries for sites whose inline cache is full (nil until one is) }
   MegaICTab: Pointer;
-  { no add transition is cached once a proxy is some object's prototype (its [[Set]] is the handler's) or the
-    prototypes outnumber the root shape indices (ProtoChanged would miss changes to the rest) }
+  { no add transition is cached while a proxy is some object's prototype (its [[Set]] is the handler's) }
   AddICUnsafe: Boolean;
   ObjectProto, FunctionProto, ArrayProto, StringProto, NumberProto, BooleanProto,
   ErrorProto, IteratorProto, ArrayIteratorProto, GeneratorProto, MapProto, SetProtoObj, SymbolProto: TValue;
@@ -1191,6 +1190,7 @@ end;
 
 procedure FixOpenUpvalLinks; forward;
 procedure VerifyShapesAfterMinor; forward;
+procedure RetireDeadShapes; forward;
 procedure VerifyHeap(const Phase: string); forward;
 
 function GCInMinor: Boolean;
@@ -1394,6 +1394,7 @@ begin
   if Assigned(GCWeakHook) then GCWeakHook;
   if Assigned(GCWeakRefHook) then GCWeakRefHook;
   if Assigned(GCFinalizeHook) then GCFinalizeHook;
+  RetireDeadShapes;
   SweepPages;
   RememberedTop := 0;
   GCOldBytesAtMajor := GCOldBytes;
@@ -1786,11 +1787,25 @@ type
   PRootShapeEntry = ^TRootShapeEntry;
   TRootShapeEntry = record P: TValue; S: PShape; end;
 
+const
+  { a retired shape's prototype (RetireDeadShapes): a special value no script value or prototype equals }
+  VRetiredProto = TAG_SPECIAL or $DEAD;
+  { a prototype object's Hdr.Extra: its root shape table index + 1 for the first ROOT_DIRECT, ROOT_IN_HASH past them
+    (RootHash finds those), 0 for an object that never was a prototype }
+  ROOT_DIRECT = 65534;
+  ROOT_IN_HASH = 65535;
+
 threadvar
   AllShapes: array of PShape;
   ShapeCount: Integer;
   RootShapes: array of TRootShapeEntry;
   RootShapeCount: Integer;
+  { the shapes RetireDeadShapes took out of AllShapes, freed with the heap }
+  RetiredShapes: array of PShape;
+  RetiredCount: Integer;
+  RootHash: array of Integer;
+  RootHashMask, RootHashUsed: Integer;
+  RootHashStale: Boolean;
 
 function NewShape(Parent: PShape; Proto: TValue): PShape;
 begin
@@ -1949,19 +1964,135 @@ begin
         Halt(9);
       end;
     end;
-    GCVisit(AllShapes[I]^.Proto);
+    { a minor collection keeps every shape's prototype (it moves the young ones); a major one marks a prototype
+      only through the objects whose shapes name it (ScanCell), and RetireDeadShapes lets the rest go }
+    if InMinor then GCVisit(AllShapes[I]^.Proto);
   end;
   for I := 0 to RootShapeCount - 1 do
   begin
     V := RootShapes[I].P;
     if GCVerify then CheckRoot(V, 'rootshape', I);
-    GCVisit(V);
+    if InMinor then
+    begin
+      GCVisit(V);
+      if (V <> RootShapes[I].P) and (I >= ROOT_DIRECT) then RootHashStale := True;
+    end;
     RootShapes[I].P := V;
+  end;
+end;
+
+{ after a major collection's marking: the shapes whose prototype nothing reaches are retired. No live object has
+  one (its scan would have marked the prototype) and none can get one again: ShapeAdd keeps a shape's prototype,
+  and the caches that make objects of a remembered shape (a constructor template's CtorRootShape) first compare its
+  prototype with the one asked for. The record stays allocated, because inline caches, templates and machine code
+  compare shapes by address and a freed one's address could come back as a new shape; its prototype becomes
+  VRetiredProto, which no value equals, so those comparisons fail instead of reading the freed prototype. The root
+  shape table drops the dead prototypes' entries and renumbers the survivors' indices (Hdr.Extra). }
+procedure RetireDeadShapes;
+var I, N: Integer; S: PShape; P: TValue; Unsafe: Boolean;
+begin
+  N := 0;
+  for I := 0 to ShapeCount - 1 do
+  begin
+    S := AllShapes[I];
+    P := S^.Proto;
+    if ((P shr 48) = TAG_PTR_HI) and ((PCell(PtrOf(P))^.Flags and (cfMark or cfPermanent)) = 0) then
+    begin
+      S^.Proto := VRetiredProto;
+      { the lookup hash only speeds up ShapeLookup, which rebuilds it on demand }
+      S^.HashKeys := nil; S^.HashSlots := nil; S^.HashMask := -1;
+      if RetiredCount >= Length(RetiredShapes) then SetLength(RetiredShapes, RetiredCount * 2 + 1024);
+      RetiredShapes[RetiredCount] := S;
+      Inc(RetiredCount);
+    end
+    else
+    begin
+      AllShapes[N] := S;
+      Inc(N);
+    end;
+  end;
+  ShapeCount := N;
+  N := 0;
+  Unsafe := False;
+  for I := 0 to RootShapeCount - 1 do
+  begin
+    P := RootShapes[I].P;
+    if RootShapes[I].S^.Proto = VRetiredProto then Continue;
+    RootShapes[N] := RootShapes[I];
+    if IsObject(P) then
+    begin
+      if N < ROOT_DIRECT then ObjOf(P)^.Hdr.Extra := N + 1 else ObjOf(P)^.Hdr.Extra := ROOT_IN_HASH;
+      if ObjOf(P)^.OKind = okProxy then Unsafe := True;
+    end;
+    Inc(N);
+  end;
+  RootShapeCount := N;
+  RootHashStale := True;
+  { NewRootShape's rule again: a proxy prototype's [[Set]] is its handler's. No add transition was cached while it
+    was set; the bump fails one whose fill began before this collection (it compares the epoch it read first) }
+  if AddICUnsafe and not Unsafe then
+  begin
+    AddICUnsafe := False;
+    Inc(ProtoEpoch);
+  end;
+end;
+
+{ the root shape table's entries past the first ROOT_DIRECT, and those of primitive prototypes, by prototype: open
+  addressing over RootHash (entries' indices + 1, 0 free). A minor collection that moves one of those prototypes,
+  and a major one that compacts the table, leave it stale; the next lookup rebuilds it }
+function RootHashSlot(P: TValue): Integer; inline;
+begin
+  Result := Integer(((P xor (P shr 32)) * QWord($9E3779B97F4A7C15)) shr 40) and RootHashMask;
+end;
+
+function RootHashed(I: Integer): Boolean; inline;
+begin
+  Result := (I >= ROOT_DIRECT) or not IsObject(RootShapes[I].P);
+end;
+
+procedure RootHashPut(I: Integer);
+var J: Integer;
+begin
+  J := RootHashSlot(RootShapes[I].P);
+  while RootHash[J] <> 0 do J := (J + 1) and RootHashMask;
+  RootHash[J] := I + 1;
+  Inc(RootHashUsed);
+end;
+
+procedure RootHashRebuild(Extra: Integer); noinline;
+var I, N, Need: Integer;
+begin
+  Need := Extra;
+  for I := 0 to RootShapeCount - 1 do
+    if RootHashed(I) then Inc(Need);
+  N := 64;
+  while N < Need * 2 do N := N * 2;
+  RootHash := nil;
+  SetLength(RootHash, N);   { zeroed }
+  RootHashMask := N - 1;
+  RootHashUsed := 0;
+  RootHashStale := False;
+  for I := 0 to RootShapeCount - 1 do
+    if RootHashed(I) then RootHashPut(I);
+end;
+
+function RootHashFind(P: TValue): Integer;
+var J, K: Integer;
+begin
+  if RootHashStale or (RootHash = nil) then RootHashRebuild(1);
+  J := RootHashSlot(P);
+  while True do
+  begin
+    K := RootHash[J];
+    if K = 0 then Exit(-1);
+    if RootShapes[K - 1].P = P then Exit(K - 1);
+    J := (J + 1) and RootHashMask;
   end;
 end;
 
 { cold: a prototype's first root shape (and the verifier's report) out of RootShapeFor's frame }
 function NewRootShape(Proto: TValue): PShape; noinline;
+var I: Integer;
 begin
   if GCVerify and ((Proto shr 48) = TAG_PTR_HI) and not NurseryCellOK(Proto) then
   begin
@@ -1970,11 +2101,18 @@ begin
   end;
   Result := NewShape(nil, Proto);
   if RootShapeCount >= Length(RootShapes) then SetLength(RootShapes, RootShapeCount * 2 + 256);
-  RootShapes[RootShapeCount].P := Proto;
-  RootShapes[RootShapeCount].S := Result;
+  I := RootShapeCount;
+  RootShapes[I].P := Proto;
+  RootShapes[I].S := Result;
   Inc(RootShapeCount);
-  if IsObject(Proto) and (RootShapeCount < 65535) then ObjOf(Proto)^.Hdr.Extra := RootShapeCount;
-  if IsObject(Proto) and not AddICUnsafe and ((ObjOf(Proto)^.OKind = okProxy) or (RootShapeCount >= 65535)) then
+  if IsObject(Proto) then
+    if I < ROOT_DIRECT then ObjOf(Proto)^.Hdr.Extra := I + 1 else ObjOf(Proto)^.Hdr.Extra := ROOT_IN_HASH;
+  if RootHashed(I) and not RootHashStale and (RootHash <> nil) then
+  begin
+    if (RootHashUsed + 1) * 2 > Length(RootHash) then RootHashRebuild(0)
+    else RootHashPut(I);
+  end;
+  if IsObject(Proto) and not AddICUnsafe and (ObjOf(Proto)^.OKind = okProxy) then
   begin
     AddICUnsafe := True;
     ProtoChanged;
@@ -1986,32 +2124,36 @@ threadvar
   LastPrimShape: PShape;
 
 function RootShapeFor(Proto: TValue): PShape;
-var I: Integer; R: PRootShapeEntry;
+var I: Integer; E: Word; R: PRootShapeEntry;
 begin
-  { prototypes are few; a linear scan over root shapes keyed by prototype (through a raw pointer: see
-    ShapeLookup) }
+  { an object's entry is at its Hdr.Extra - 1 (through a raw pointer: see ShapeLookup), or in RootHash; an object
+    with Extra 0 was never a prototype }
   R := Pointer(RootShapes);
   if IsObject(Proto) then
   begin
-    if ObjOf(Proto)^.Hdr.Extra <> 0 then
+    E := ObjOf(Proto)^.Hdr.Extra;
+    if E = 0 then Exit(NewRootShape(Proto));
+    if E <> ROOT_IN_HASH then
     begin
-      I := ObjOf(Proto)^.Hdr.Extra - 1;
+      I := E - 1;
       if (I < RootShapeCount) and (R[I].P = Proto) then Exit(R[I].S);
-    end
-    else if RootShapeCount < 65534 then
-      Exit(NewRootShape(Proto));   { never given one: its index would be in Extra }
+      { not where its index says (never expected): the table itself }
+      for I := 0 to RootShapeCount - 1 do
+        if R[I].P = Proto then Exit(R[I].S);
+      Exit(NewRootShape(Proto));
+    end;
   end
   else
   begin
     { null (Object.create(null), a class extending null) and the other primitives: the last one asked for }
     if (Proto = LastPrimProto) and (LastPrimShape <> nil) then Exit(LastPrimShape);
   end;
-  for I := 0 to RootShapeCount - 1 do
-    if R[I].P = Proto then
-    begin
-      if not IsObject(Proto) then begin LastPrimProto := Proto; LastPrimShape := R[I].S; end;
-      Exit(R[I].S);
-    end;
+  I := RootHashFind(Proto);
+  if I >= 0 then
+  begin
+    if not IsObject(Proto) then begin LastPrimProto := Proto; LastPrimShape := RootShapes[I].S; end;
+    Exit(RootShapes[I].S);
+  end;
   Result := NewRootShape(Proto);
   if not IsObject(Proto) then begin LastPrimProto := Proto; LastPrimShape := Result; end;
 end;
@@ -2640,9 +2782,12 @@ begin
   KeyAtoms := nil; KeyAtomCount := 0;
   for I := 0 to ShapeCount - 1 do Dispose(AllShapes[I]);
   AllShapes := nil; ShapeCount := 0;
+  for I := 0 to RetiredCount - 1 do Dispose(RetiredShapes[I]);
+  RetiredShapes := nil; RetiredCount := 0;
   if MegaICTab <> nil then FreeMem(MegaICTab);
   MegaICTab := nil;
   RootShapes := nil; RootShapeCount := 0;
+  RootHash := nil; RootHashMask := 0; RootHashUsed := 0; RootHashStale := False;
   { RootShapeFor's cache of the last primitive prototype's shape, freed with the others above: the thread's next
     engine would take it for its null prototype's }
   LastPrimProto := 0; LastPrimShape := nil;

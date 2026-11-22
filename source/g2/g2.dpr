@@ -804,6 +804,8 @@ begin
   if GetEnvironmentVariable('G2_WATCHDOG') <> '' then
     with TWatchdog.Create(True) do begin Secs := StrToInt(GetEnvironmentVariable('G2_WATCHDOG')); FreeOnTerminate := True; Start; end;
   InitIntrinsics;
+  { G2_HOST: the hidden G2Host object (G2Host.gc() collects now) for scripts/g2/regress, as test262 runs have it }
+  if GetEnvironmentVariable('G2_HOST') <> '' then InstallHostHooks;
   { test262 hosts: $262agent (G2.Agent), and a main agent that may not block (flag CanBlockIsFalse) }
   if GetEnvironmentVariable('G2_AGENT') <> '' then InitAgentHost;
   AgentCannotSuspend := GetEnvironmentVariable('G2_CANNOT_BLOCK') <> '';

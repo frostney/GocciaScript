@@ -16,7 +16,13 @@ Every heap thing is a cell with an 8-byte header: kind, flags (mark, old, rememb
   precisely and sweeps to the free lists.
 - Write barrier: storing a young pointer into an old cell remembers the old cell.
 - Roots: the value stack, frame records, registered globals and the temporary root stack natives use. Atoms
-  (interned property keys), shapes and function templates are permanent and outside the collected heap.
+  (interned property keys), shapes and function templates are outside the collected heap.
+- Prototypes: a shape names its prototype, and a minor GC keeps every shape's prototype alive. A major GC marks
+  a prototype only through what reaches it, objects through their shapes included, and retires the shapes of
+  the prototypes nothing reaches: their prototype becomes a value nothing equals, so a cache that still holds
+  one never matches, and the root shape table drops their entries. A retired shape's record stays allocated,
+  because caches and compiled code compare shapes by address. The root shape table indexes its first 65,534
+  prototypes from the object's header and hashes the rest.
 
 The collector moves young cells, so code re-reads cell pointers from a root after any allocation.
 

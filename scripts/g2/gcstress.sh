@@ -1,7 +1,8 @@
 #!/bin/bash
 # scripts/g2/gcstress.sh [KB]: every Web Tooling (digest) and JetStream bundle (and AWFY bundle, when given,
 # without --gc-verify) under a small nursery (default 256 KB) with --gc-verify; a GC rooting bug shows here long
-# before the default nursery does. Then each scripts/g2/regress/*.js under 16, 64 and 128 KB nurseries (each prints ok last).
+# before the default nursery does. Then each scripts/g2/regress/*.js under 16, 64 and 128 KB nurseries (each prints ok last;
+# G2_HOST gives them G2Host.gc()).
 #   G2_WT_DIR  the Web Tooling digest bundles; G2_JS_DIR  the JetStream bundles (jetstream-*.js);
 #   G2_AWFY_DIR  the AWFY bundles (awfy-*.js, optional); G2_BIN  the binary (default build/g2/g2)
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -21,7 +22,7 @@ regress() {
   f=$1; n=$(basename $f .js)
   for kb in 16 64 128; do
     # 1800 s: overflow-add takes ~920 s under --gc-verify at 16 KB on a loaded machine
-    r=$(G2_NURSERY_KB=$kb timeout 1800 $G2 --gc-verify $f 2>&1; echo "__rc=$?")
+    r=$(G2_HOST=1 G2_NURSERY_KB=$kb timeout 1800 $G2 --gc-verify $f 2>&1; echo "__rc=$?")
     rc=$(echo "$r" | sed -n 's/^__rc=//p'); r=$(echo "$r" | grep -av '^__rc=' | grep -av '^\s*$' | tail -1)
     # a timeout is not a failure, but it hides the sizes after it: say so, so it is rerun rather than written off
     [ "$rc" = 124 ] && { echo "TIMEOUT regress-$n ($kb KB): rerun it at 16, 64 and 128 KB"; return; }
