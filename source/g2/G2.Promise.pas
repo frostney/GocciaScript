@@ -918,61 +918,71 @@ end;
 
 { %AsyncFromSyncIteratorPrototype%.next / return / throw (NativeData 0 / 2 / 1) }
 function ASMethod(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var O, Cap, It, M, R, A: TValue; Kind: Integer;
+const
+  { the roots below the method's: the wrapper, its argument, the promise capability, the sync iterator. The
+    capability's allocation, the lookups (a getter) and the calls can move all four, so each is read from its root }
+  NRoots = 4;
+var It, M, R, A: TValue; Kind: Integer;
+
+  function Reject: Boolean;
+  begin
+    Result := RejectWithPending(RootAt(TempTop - 2), Res);
+    PopRoots(NRoots);
+  end;
+
 begin
   Kind := NativeData;
-  O := Args[0];
-  Cap := NewPromiseObj(PromiseProto);
-  PushRoot(Cap);
-  It := ObjOf(O)^.Aux1;
-  PushRoot(It);
-  A := Arg(Args, Argc, 1);
+  PushRoot(Args[0]);
+  PushRoot(Arg(Args, Argc, 1));
+  PushRoot(NewPromiseObj(PromiseProto));
+  PushRoot(ObjOf(RootAt(TempTop - 3))^.Aux1);
   case Kind of
     0:
       begin
-        if Argc >= 1 then Result := CallValue(ObjOf(O)^.Aux2, It, @A, 1, R)
-        else Result := CallValue(ObjOf(O)^.Aux2, It, nil, 0, R);
-        if not Result then begin Result := RejectWithPending(RootAt(TempTop - 2), Res); PopRoots(2); Exit; end;
+        A := RootAt(TempTop - 3);
+        if Argc >= 1 then Result := CallValue(ObjOf(RootAt(TempTop - 4))^.Aux2, RootAt(TempTop - 1), @A, 1, R)
+        else Result := CallValue(ObjOf(RootAt(TempTop - 4))^.Aux2, RootAt(TempTop - 1), nil, 0, R);
+        if not Result then Exit(Reject);
       end;
     2:
       begin
-        if not GetV(It, AtomOf('return'), M) then begin Result := RejectWithPending(RootAt(TempTop - 2), Res); PopRoots(2); Exit; end;
+        It := RootAt(TempTop - 1);
+        if not GetV(It, AtomOf('return'), M) then Exit(Reject);
+        A := RootAt(TempTop - 3);
         if IsNullish(M) then
         begin
           R := NewIterResult(A, True);
           ResolvePromise(RootAt(TempTop - 2), R);
           Res := RootAt(TempTop - 2);
-          PopRoots(2);
+          PopRoots(NRoots);
           Exit(True);
         end;
         if Argc >= 1 then Result := CallValue(M, RootAt(TempTop - 1), @A, 1, R)
         else Result := CallValue(M, RootAt(TempTop - 1), nil, 0, R);
-        if not Result then begin Result := RejectWithPending(RootAt(TempTop - 2), Res); PopRoots(2); Exit; end;
+        if not Result then Exit(Reject);
       end;
   else
     begin
-      if not GetV(It, AtomOf('throw'), M) then begin Result := RejectWithPending(RootAt(TempTop - 2), Res); PopRoots(2); Exit; end;
+      It := RootAt(TempTop - 1);
+      if not GetV(It, AtomOf('throw'), M) then Exit(Reject);
       if IsNullish(M) then
       begin
         { no throw method: close the sync iterator, then a TypeError }
-        if not IteratorCloseV(RootAt(TempTop - 1), False) then begin Result := RejectWithPending(RootAt(TempTop - 2), Res); PopRoots(2); Exit; end;
+        if not IteratorCloseV(RootAt(TempTop - 1), False) then Exit(Reject);
         ThrowTypeError('The iterator does not provide a ''throw'' method');
-        Result := RejectWithPending(RootAt(TempTop - 2), Res);
-        PopRoots(2);
-        Exit;
+        Exit(Reject);
       end;
-      if not CallValue(M, RootAt(TempTop - 1), @A, 1, R) then begin Result := RejectWithPending(RootAt(TempTop - 2), Res); PopRoots(2); Exit; end;
+      A := RootAt(TempTop - 3);
+      if not CallValue(M, RootAt(TempTop - 1), @A, 1, R) then Exit(Reject);
     end;
   end;
   if not IsObject(R) then
   begin
     ThrowIterResultNotObject(R);
-    Result := RejectWithPending(RootAt(TempTop - 2), Res);
-    PopRoots(2);
-    Exit;
+    Exit(Reject);
   end;
   Result := ASContinuation(R, RootAt(TempTop - 2), RootAt(TempTop - 1), Kind <> 2, Res);
-  PopRoots(2);
+  PopRoots(NRoots);
 end;
 
 function AsyncFromSync(It, NextM: TValue; var Res: TValue): Boolean;
