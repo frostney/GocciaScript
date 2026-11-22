@@ -10163,12 +10163,15 @@ end;
 { ---------------- entry ---------------- }
 
 { the compiling thread's engine ends: its templates' code goes, the JIT's memory back to the end of the shared
-  stubs (no other thread's engine has compiled code: only this thread compiles) }
+  stubs (no other thread's engine has compiled code: only this thread compiles), and instanceof's cache is
+  emptied before HeapDone frees the shapes its entries name }
 procedure JitEngineDone;
 {$IFDEF CPUX86_64}
 var I: Integer;
 begin
-  if (JitMarkChunk = nil) or (GetCurrentThreadId <> JitMainThread) then Exit;
+  if GetCurrentThreadId <> JitMainThread then Exit;
+  FillChar(InstOfCache, SizeOf(InstOfCache), 0);
+  if JitMarkChunk = nil then Exit;
   {$IFDEF UNIX}
   for I := 0 to High(JitLaterChunks) do fpmunmap(JitLaterChunks[I], JIT_CHUNK);
   {$ENDIF}

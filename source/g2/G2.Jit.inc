@@ -2002,7 +2002,9 @@ end;
 
 { instanceof's walks, cached by the receiver's shape and the prototype looked for (main thread only): valid while no
   prototype changed (ProtoEpoch; not when AddICUnsafe says it would not be bumped) and no collection moved or freed
-  an object (a prototype's address could be another object's after one) }
+  an object (a prototype's address could be another object's after one). JitEngineDone empties it when the
+  engine ends: the thread's next engine starts its collection counts at 0 and can put its shapes and prototypes at
+  the addresses this one's had, so only ProtoEpoch, bumped by every engine's start-up today, would tell them apart }
 type
   TInstOfEntry = record Shape: Pointer; Target: TValue; Epoch, Minor, Major: Integer; Res: Integer; end;
 var
