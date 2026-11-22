@@ -127,7 +127,7 @@ procedure SetModuleContentCheck(Check: TModuleContentCheck);
 implementation
 
 uses
-  SysUtils, Classes, Generics.Collections, G2.VM, G2.Compiler, G2.Eval, G2.Promise;
+  SysUtils, Classes, Generics.Collections, FileUtils, G2.VM, G2.Compiler, G2.Eval, G2.Promise;
 
 const
   { the test262 host's module with a source phase representation (INTERPRETING.md: "<module source>") }
@@ -598,6 +598,19 @@ begin
 end;
 
 { 16.2.1.5.1 LoadRequestedModules (synchronously, from files): the module at Path and everything it requests }
+{ whether a module the host loaded (before the entry's mark, or imported for the host) is the file at Path under
+  another name, by canonical identity (GocciaScript's loader judges ownership by it) }
+function SameFileAsHostModule(const Path: UnicodeString): Boolean;
+var R: TModRec; Canon: string;
+begin
+  Result := False;
+  Canon := CanonicalHostPath(string(Path));
+  if Canon = '' then Exit;
+  for R in Mods do
+    if (R.HostOwned or (R.Id < EntryModuleMark)) and (R.Path <> Path) and (CanonicalHostPath(string(R.Path)) = Canon) then
+      Exit(True);
+end;
+
 function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
 var Src, Err, ErrName, Resolved, Prov: UnicodeString; I: Integer; D: TModRec; V: TValue; Compiled, FromFile: Boolean;
   Modified: TDateTime;
@@ -661,7 +674,9 @@ begin
   M := TModRec.Create;
   M.Path := Path;
   M.Id := Mods.Count;
-  M.HostOwned := HostLoading;
+  { a file the host loaded already, reached under another name (a symbolic link), is the host's as well: what it
+    imports is loaded for the host, and its source stays withheld }
+  M.HostOwned := HostLoading or (FromFile and SameFileAsHostModule(Path));
   M.HasModified := FromFile;
   M.Modified := Modified;
   M.Hash := SourceHashOf(Src);
@@ -1864,7 +1879,8 @@ begin
   Result := False;
   if Mods = nil then Exit;
   M := FindModule(Path);
-  Result := (M <> nil) and (M.Id >= Mark) and not M.HostOwned;
+  { a record made before the host's module loaded under its other name: ownership by canonical identity too }
+  Result := (M <> nil) and (M.Id >= Mark) and not M.HostOwned and not SameFileAsHostModule(Path);
 end;
 
 procedure SetEntryModuleMark(Mark: Integer);
