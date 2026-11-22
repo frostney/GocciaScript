@@ -9347,14 +9347,17 @@ await section("BenchmarkRunner: results are reported under a polluted Array.prot
     const cleanupFailBench = join(tmp, "benchmark-cleanup-fail.js");
     const cleanupFailOut = join(tmp, "benchmark-cleanup-fail.json");
     writeFileSync(cleanupFailBench, microbenchModule([
-      'group("cleanup", () => {',
-      '  bench("body error wins", function* () {',
+      "const bodyErrorWins = {",
+      "  *run() {",
       "    try {",
       '      yield () => { throw new Error("body failure"); };',
       "    } finally {",
       '      throw new Error("cleanup failure");',
       "    }",
-      "  });",
+      "  },",
+      "}.run;",
+      'group("cleanup", () => {',
+      '  bench("body error wins", bodyErrorWins);',
       "});",
     ]));
     {
