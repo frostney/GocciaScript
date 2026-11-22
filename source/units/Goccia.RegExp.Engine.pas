@@ -112,8 +112,8 @@ end;
 function EscapeRegExpPattern(const APattern: string): string;
 var
   AfterBackslash: Boolean;
-  ByteLength: Integer;
   CodePoint: Cardinal;
+  CodeUnitLength: Integer;
   I: Integer;
   InClass: Boolean;
   LineTerminatorEscape: string;
@@ -124,12 +124,8 @@ begin
   I := 1;
   while I <= Length(APattern) do
   begin
-    if not TryReadCodePointAtAllowSurrogates(APattern, I, CodePoint,
-       ByteLength) then
-    begin
-      CodePoint := Ord(APattern[I]);
-      ByteLength := 1;
-    end;
+    TryReadCodePointAtAllowSurrogates(APattern, I, CodePoint,
+      CodeUnitLength);
     case CodePoint of
       $000A:
         LineTerminatorEscape := 'n';
@@ -153,7 +149,7 @@ begin
     end
     else if AfterBackslash then
     begin
-      Result := Result + Copy(APattern, I, ByteLength);
+      Result := Result + Copy(APattern, I, CodeUnitLength);
       AfterBackslash := False;
     end
     else
@@ -169,9 +165,9 @@ begin
       if (CodePoint = Ord('/')) and not InClass then
         Result := Result + '\/'
       else
-        Result := Result + Copy(APattern, I, ByteLength);
+        Result := Result + Copy(APattern, I, CodeUnitLength);
     end;
-    Inc(I, ByteLength);
+    Inc(I, CodeUnitLength);
   end;
 end;
 

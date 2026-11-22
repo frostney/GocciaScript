@@ -16,6 +16,8 @@ const cases = [
   { re: new RegExp("\\\\/"), source: "\\\\\\/", matches: ["\\/"], rejects: ["/"] },
   { re: new RegExp("\\[/]"), source: "\\[\\/]", matches: ["[/]"], rejects: ["/"] },
   { re: new RegExp("[\\]/]"), source: "[\\]/]", matches: ["]", "/"], rejects: ["\\"] },
+  { re: new RegExp("[[]/"), source: "[[]\\/", matches: ["[/"], rejects: ["/"] },
+  { re: new RegExp("[[]/", "u"), source: "[[]\\/", matches: ["[/"], rejects: ["/"] },
   { re: new RegExp("[a/]", "u"), source: "[a/]", matches: ["a", "/"], rejects: ["b"] },
   { re: new RegExp("[[a]\\/]", "v"), source: "[[a]\\/]", matches: ["a", "/"], rejects: ["\\"] },
   { re: new RegExp("\n"), source: "\\n", matches: ["\n"], rejects: ["n"] },
@@ -27,12 +29,12 @@ const cases = [
 ];
 
 describe("RegExp.prototype.source", () => {
-  cases.forEach(({ re, source, matches, rejects }) => {
-    test(`source is ${JSON.stringify(source)}`, () => {
+  cases.forEach(({ re, source, matches, rejects }, index) => {
+    test(`case ${index}: source is ${JSON.stringify(source)}`, () => {
       expect(re.source).toBe(source);
     });
 
-    test(`new RegExp(source, flags) for ${JSON.stringify(source)} matches the same strings`, () => {
+    test(`case ${index}: new RegExp(source, flags) matches the same strings`, () => {
       const copy = new RegExp(re.source, re.flags);
       expect(copy.source).toBe(re.source);
       matches.forEach((input) => {
