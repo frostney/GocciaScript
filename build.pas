@@ -523,7 +523,9 @@ begin
     Exit;
 
   WriteLn('FPC reported a stale-state error for ', ALabel,
-    '; retrying once from a clean unit directory');
+    '; retrying once from a clean unit directory. The first attempt:');
+  { what the first attempt said: a retry that fails as well shows only its own output }
+  WriteLn(AOutput);
   RemoveCompiledArtifacts(AUnitOutputDirectory);
   Result := CompileProgram(FPCArgs(ASource,
     EnsureUnitOutputDirectory(AUnitOutputDirectory)), AOutput);
@@ -728,7 +730,9 @@ begin
   Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel), AOutputText);
   if Result or not HasStaleArtifactSignature(AOutputText) then
     Exit;
-  WriteLn('FPC reported a stale-state error for ', ALabel, '; retrying once from a clean unit directory');
+  WriteLn('FPC reported a stale-state error for ', ALabel, '; retrying once from a clean unit directory. The first attempt:');
+  { what the first attempt said: a retry that fails as well shows only its own output }
+  WriteLn(AOutputText);
   RemoveCompiledArtifacts(AUnitDirectory);
   CopyG2Resources(AUnitDirectory);
   Result := CompileProgram(G2Args(ASource, AUnitDirectory, AOutput, ALabel), AOutputText);
