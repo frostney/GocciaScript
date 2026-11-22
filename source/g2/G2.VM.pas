@@ -523,7 +523,8 @@ procedure InlinedFrame(I, J: Integer; out Closure: TValue; out Tpl: PFuncTemplat
 implementation
 
 uses
-  Classes, Goccia.StackLimit, Goccia.Coverage, Goccia.Error.Messages, Goccia.Error.Suggestions;
+  {$IFDEF LINUX}Syscall, {$ENDIF}Classes, Goccia.StackLimit, Goccia.Coverage, Goccia.Error.Messages,
+  Goccia.Error.Suggestions;
 
 { ---------------- execution limits ---------------- }
 

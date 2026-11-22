@@ -27,6 +27,10 @@ const
   ccO = 0; ccB = 2; ccAE = 3; ccE = 4; ccNE = 5; ccBE = 6; ccA = 7; ccS = 8; ccP = $A; ccL = $C; ccGE = $D;
   ccLE = $E; ccG = $F;
   JIT_CHUNK = 4 * 1024 * 1024;
+  { membarrier(2) commands (linux/membarrier.h) }
+  MEMBARRIER_CMD_QUERY = 0;
+  MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE = 1 shl 5;
+  MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE = 1 shl 6;
 
 var
   JitEnabled: Integer = -1;        { -1 not read yet (G2_JIT=0 turns the JIT off), 0 off, 1 on }
@@ -48,6 +52,7 @@ var
   JitMarkUsed: PtrUInt = 0;
   JitLaterChunks: array of PByte;
   JitMainThread: TThreadID;        { the thread the VM unit started on: the only one that compiles }
+  JitSyncCore: Boolean = False;    { membarrier's SYNC_CORE registered for the process (JitOn; Linux) }
   JitTaken: Boolean;               { JitInstr compiled the instruction (False: its code is only its exit) }
 
 const
@@ -3878,6 +3883,33 @@ begin
   Inc(JitChunkUsed, N);
 end;
 
+{ CPUID: a core-serializing instruction (it discards the instructions this core fetched before it) }
+procedure JitSerializeCore; assembler; nostackframe;
+asm
+  pushq %rbx
+  xorl %eax, %eax
+  cpuid
+  popq %rbx
+end;
+
+{ the emitted code (JitBuf, JitLen bytes) to Dst, ready to run. x86 lets a core run instructions it fetched before
+  another core wrote over them until it executes a serializing instruction (Intel SDM vol. 3A, "Handling Self- and
+  Cross-Modifying Code"; AMD64 APM vol. 2, "Cross-Modifying Code"), and Linux switches between two threads of one
+  process without one (no CR3 write). A thread that
+  compiled on one core and ran the code on another could run the bytes the memory held before (a fresh chunk's
+  zeros: the prologue's first two bytes as add [rax], al, then push rsp for push r12). So every core serializes
+  before the code runs: this one through CPUID, the others through membarrier's SYNC_CORE (the ones running the
+  process's threads at once, the rest before they next return to it). Without it (not Linux, or not registered)
+  only this core does }
+procedure JitPublish(Dst: PByte);
+begin
+  Move(JitBuf[0], Dst^, JitLen);
+  JitSerializeCore;
+  {$IFDEF LINUX}
+  if JitSyncCore then Do_SysCall(syscall_nr_membarrier, MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE, 0, 0);
+  {$ENDIF}
+end;
+
 { compiles T (JitState 1, Jit and JitTable set) or marks it not compiled (2) }
 { opCall's code, shared: rbx R, r12 the frame (its PC already past the call), ecx A, edx Argc | this flag
   shl 16. A compiled bytecode callee that takes FastCall's frame is called inline: the checks, the registers past
@@ -4142,7 +4174,7 @@ begin
   JB($FF); JB($E0);                                                { jmp rax }
   P := JitAlloc(JitLen);
   if P = nil then Exit;
-  Move(JitBuf[0], P^, JitLen);
+  JitPublish(P);
   JitCallStub := P;
   JitCallStubObj := P + K;
   JitCallPost := P + L1;
@@ -4390,7 +4422,7 @@ begin
   JB($C3);
   P := JitAlloc(JitLen);
   if P = nil then Exit;
-  Move(JitBuf[0], P^, JitLen);
+  JitPublish(P);
   JitICGetHitCode := P;
   JitKeyedGetCode := P + KeyedAt;
 end;
@@ -4458,7 +4490,7 @@ begin
   JB($E9); JD(Cardinal(LAcc - (JitLen + 4)));
   P := JitAlloc(JitLen);
   if P = nil then Exit;
-  Move(JitBuf[0], P^, JitLen);
+  JitPublish(P);
   JitGetterStub := P;
 end;
 
@@ -4666,7 +4698,7 @@ begin
   JB($FF); JB($E0);                                             { jmp rax }
   P := JitAlloc(JitLen);
   if P = nil then Exit;
-  Move(JitBuf[0], P^, JitLen);
+  JitPublish(P);
   JitNewStub := P;
 end;
 
@@ -5191,7 +5223,7 @@ begin
   Code := JitAlloc(JitLen);
   if Code = nil then begin FreeMem(Table); Exit; end;
   {$IFDEF G2_JITSTATS}Inc(JitCompiles); Inc(JitCodeBytes, JitLen);{$ENDIF}
-  Move(JitBuf[0], Code^, JitLen);
+  JitPublish(Code);
   if (JitDebugFlags and 1) <> 0 then JitMapEntry(Code, JitLen, T, 'base');
   if ((JitDebugFlags and 2) <> 0) and (T^.Name <> nil) and
      (Pos(GetEnvironmentVariable('G2_JITDUMP'), UTF8Encode(StrToUnicode(T^.Name))) > 0) then
@@ -5261,8 +5293,15 @@ begin
 end;
 
 function JitOn: Boolean;
+{$IFDEF LINUX}var Cmds: TSysResult;{$ENDIF}
 begin
   JitMainThread := GetCurrentThreadId;
+  { JitPublish's barrier: registered once for the process, where the kernel has it }
+  {$IFDEF LINUX}
+  Cmds := Do_SysCall(syscall_nr_membarrier, MEMBARRIER_CMD_QUERY, 0, 0);
+  JitSyncCore := (Cmds > 0) and ((Cmds and MEMBARRIER_CMD_PRIVATE_EXPEDITED_SYNC_CORE) <> 0) and
+    (Do_SysCall(syscall_nr_membarrier, MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED_SYNC_CORE, 0, 0) = 0);
+  {$ENDIF}
   JitFsVStack := PtrInt(PtrUInt(@VStack) - JitFsBase);
   JitFsGlobalObj := PtrInt(PtrUInt(@GlobalObj) - JitFsBase);
   JitFsGLexCells := PtrInt(PtrUInt(@GLexCells) - JitFsBase);

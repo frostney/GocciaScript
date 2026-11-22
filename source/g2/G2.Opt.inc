@@ -4049,7 +4049,7 @@ begin
   end;
   Code := JitAlloc(JitLen);
   if Code = nil then Exit;
-  Move(JitBuf[0], Code^, JitLen);
+  JitPublish(Code);
   Result := Code;
   if (JitDebugFlags and 1) <> 0 then JitMapEntry(Code, JitLen, OT, 'opt');
   if OptLog and (GetEnvironmentVariable('G2_OPTDUMP') <> '') then OptDump(Code);
