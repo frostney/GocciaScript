@@ -209,10 +209,18 @@ end;
 
 { the build facts host.js reads: Goccia.version, commit, build, spec and proposal }
 function InfoJson: UnicodeString;
+
+  { not BoolToStr(B, True): the RTL fills its shared TrueBoolStrs and FalseBoolStrs on first use, unguarded, so
+    engines set up at once on two threads read an empty string or a half-grown array there }
+  function GCStressText: UnicodeString;
+  begin
+    if IsGCStressBuild then Result := 'true' else Result := 'false';
+  end;
+
 begin
   Result := '{"version":' + JsonStr(UnicodeString(GetVersion)) + ',"commit":' + JsonStr(UnicodeString(GetCommit)) +
     ',"date":' + JsonStr(UnicodeString(GetBuildDate)) + ',"os":' + JsonStr(UnicodeString(GetBuildOS)) +
-    ',"arch":' + JsonStr(UnicodeString(GetBuildArch)) + ',"gcStress":' + LowerCase(BoolToStr(IsGCStressBuild, True)) +
+    ',"arch":' + JsonStr(UnicodeString(GetBuildArch)) + ',"gcStress":' + GCStressText +
     ',"spec":' + GroupsJson(SpecFeatureGroups) + ',"proposal":' + GroupsJson(ProposalFeatureGroups) + '}';
 end;
 
@@ -2262,6 +2270,10 @@ begin
   Result := ReportErr = '';
 end;
 
+initialization
+  { SysUtils fills TrueBoolStrs and FalseBoolStrs on the first BoolToStr(B, True), without a lock: fill them here, on
+    the main thread before any engine thread starts, so every later call only reads them }
+  BoolToStr(True, True);
 finalization
   HostModulesDone;
 end.
