@@ -2569,7 +2569,7 @@ begin
   OJccGuardFb(ccNE, N, ofbProp);
   CmpBMI(jAX, 4, ckObject);
   OJccGuardFb(ccNE, N, ofbProp);
-  MovRI(jCX, QWord(PtrUInt(OPropShape[ON[N].PC])));
+  MovRI(jCX, JitPin(OPropShape[ON[N].PC]));
   CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
   OJccGuardFb(ccNE, N, ofbProp);
   if Get then
@@ -2645,12 +2645,12 @@ procedure OPropHolder(N: Integer; E: PICEntry);
 var D: Integer;
 begin
   if E^.Depth = 0 then Exit;
-  MovRI(jCX, QWord(PtrUInt(E^.Shape)));
+  MovRI(jCX, JitPin(E^.Shape));
   for D := 0 to E^.Depth - 1 do
   begin
     MovRM(jAX, jCX, PtrInt(@PShape(nil)^.Proto));
     AluRR($31, jAX, jR13, True);
-    MovRI(jCX, QWord(PtrUInt(E^.Holder[D])));
+    MovRI(jCX, JitPin(E^.Holder[D]));
     CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
     OJccGuardFb(ccNE, N, ofbProp);
   end;
@@ -2672,7 +2672,7 @@ begin
   for E := 0 to IC^.PolyCount - 1 do
   begin
     En := OICEntry(IC, E);
-    MovRI(jCX, QWord(PtrUInt(En^.Shape)));
+    MovRI(jCX, JitPin(En^.Shape));
     CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
     L := JccFwd(ccNE);
     CmpBMI(jAX, PtrInt(@PObj(nil)^.OKind), En^.Kind);
@@ -3018,14 +3018,14 @@ begin
           { the store's IC still adds the property this way (G2.Core's ProtoChanged forgets add transitions) }
           MovRI(jCX, QWord(PtrUInt(@OPropIC[ON[N].PC]^.NewShape)));
           MovRM(jCX, jCX, 0);
-          MovRI(jDX, QWord(PtrUInt(OPropNew[ON[N].PC])));
+          MovRI(jDX, JitPin(OPropNew[ON[N].PC]));
           AluRR($39, jCX, jDX, True);
           OJccGuardFb(ccNE, N, ofbProp);
         end;
         if ((ON[N].Imm and PROP_YOUNG) = 0) and ((ON[N].Imm and PROP_ADD) <> 0) then OPropInline(N);
         if (ON[N].Imm and PROP_ADD) <> 0 then
         begin
-          MovRI(jCX, QWord(PtrUInt(OPropNew[ON[N].PC])));
+          MovRI(jCX, JitPin(OPropNew[ON[N].PC]));
           MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jCX);
         end;
         if ON[N].Y >= 0 then MovRM(jCX, jSP, OScratch) else MovRM(jCX, jBX, (-1 - ON[N].Y) * 8);
@@ -3059,7 +3059,7 @@ begin
         MovFsR(JitFsNurseryTop, jCX);
         MovRI(jDX, QWord(Cardinal(L)) or (QWord(ckObject) shl 32));
         MovMR(jAX, 0, jDX);
-        MovRI(jDX, QWord(PtrUInt(OPropShape[ON[N].PC])));
+        MovRI(jDX, JitPin(OPropShape[ON[N].PC]));
         MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jDX);
         AluRR($31, jDX, jDX, False);
         MovMR(jAX, PtrInt(@PObj(nil)^.Elements), jDX);
@@ -3117,7 +3117,7 @@ begin
       begin
         MovRFs(jAX, JitFsGlobalObj);
         AluRR($31, jAX, jR13, True);
-        MovRI(jCX, QWord(PtrUInt(OPropShape[ON[N].PC])));
+        MovRI(jCX, JitPin(OPropShape[ON[N].PC]));
         CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
         OJccGuardFb(ccNE, N, ofbProp);
         D := Integer(ON[N].Imm and $FFFFFFFF);
@@ -3153,14 +3153,14 @@ begin
         if OSites[ON[N].Imm].IsNew then
         begin
           { a constructor: XFastNew's caches hold (its shape, its prototype the new object's shape's) }
-          MovRI(jCX, QWord(PtrUInt(OSites[ON[N].Imm].Tc^.CtorFnShape)));
+          MovRI(jCX, JitPin(OSites[ON[N].Imm].Tc^.CtorFnShape));
           CmpRM(jCX, jAX, PtrInt(@PObj(nil)^.Shape));
           OJccGuardFb(ccNE, N, ofbProp);
           MovzxWRM(jCX, jAX, PtrInt(@PObj(nil)^.InlineCap));
           AluRI(7, jCX, OSites[ON[N].Imm].Tc^.CtorProtoSlot, False);
           OJccGuardFb(ccBE, N, ofbProp);
           MovRM(jCX, jAX, PtrInt(@PObj(nil)^.Slots) + OSites[ON[N].Imm].Tc^.CtorProtoSlot * 8);
-          MovRI(jDX, QWord(PtrUInt(OSites[ON[N].Imm].Tc^.CtorRootShape)));
+          MovRI(jDX, JitPin(OSites[ON[N].Imm].Tc^.CtorRootShape));
           CmpRM(jCX, jDX, PtrInt(@PShape(nil)^.Proto));
           OJccGuardFb(ccNE, N, ofbProp);
           if OSites[ON[N].Imm].FiSite >= 0 then
@@ -5092,7 +5092,7 @@ end;
 
 { the region entered at PC of frame Fr's template, compiled and installed in its JitTable; False when it cannot be }
 var
-  ODblShapes: array of PShape;   { open addressing on the shape pointer (shapes live as long as the heap) }
+  ODblShapes: array of PShape;   { open addressing on the shape pointer (retired shapes leave: JitForgetRetiredShapes) }
   ODblShapeCount: Integer;
 
 function ODblShapeSlot(Sh: PShape; Mask: Integer): Integer; inline;
@@ -5147,6 +5147,39 @@ begin
   IC := @OVTpl[P]^.ICs[OCU(OIns(P))];
   for E := 0 to IC^.PolyCount - 1 do
     if ODblShapeHas(OICEntry(IC, E)^.Shape) then Exit(True);
+end;
+
+{ G2.Core's retired shapes leave what compiled code caches outside the templates: the define and private-member
+  caches start over, the double shapes drop them (their records are freed, and a new shape can take an address).
+  Only the thread that compiles has these. }
+procedure JitForgetRetiredShapes;
+var I, J, K: Integer; D: PDefCache; Old: array of PShape;
+begin
+  if GetCurrentThreadId <> JitMainThread then Exit;
+  for I := 0 to JitDefListCount - 1 do
+  begin
+    D := JitDefList[I];
+    if ((D^.Shape <> nil) and ShapeRetired(D^.Shape)) or ((D^.NewShape <> nil) and ShapeRetired(D^.NewShape)) then
+    begin
+      D^.Shape := nil;
+      D^.NewShape := nil;
+    end;
+  end;
+  for I := 0 to JitPrivListCount - 1 do
+    if (JitPrivList[I]^.Shape <> nil) and ShapeRetired(JitPrivList[I]^.Shape) then JitPrivList[I]^.Shape := nil;
+  if ODblShapeCount = 0 then Exit;
+  { the table again without them (open addressing: no entry can just be emptied) }
+  Old := Copy(ODblShapes);
+  FillChar(ODblShapes[0], Length(ODblShapes) * SizeOf(PShape), 0);
+  ODblShapeCount := 0;
+  for K := 0 to High(Old) do
+    if (Old[K] <> nil) and not ShapeRetired(Old[K]) then
+    begin
+      J := ODblShapeSlot(Old[K], High(ODblShapes));
+      while ODblShapes[J] <> nil do J := (J + 1) and High(ODblShapes);
+      ODblShapes[J] := Old[K];
+      Inc(ODblShapeCount);
+    end;
 end;
 
 { marks the shapes of property read P's cache (nothing when P is not one) }

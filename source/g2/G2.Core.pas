@@ -183,6 +183,9 @@ type
     { a child shape extends this shape's Keys and PFlags in place (shared arrays: a shape reads only its first
       Count entries, and only a dictionary's are written below its Count); the next child copies them }
     KeysLent: Boolean;
+    { baked into machine code (G2.Jit.inc JitPin): once retired, its record is kept (its prototype reads
+      VRetiredProto there), not freed }
+    Pinned: Boolean;
     Version: Cardinal;      { a dictionary's in-place adds: an inline cache that passed it records this }
     ProtoChild: array of record P: TValue; S: PShape; end;  { root shapes per prototype }
   end;
@@ -377,6 +380,16 @@ function ShapeFork(S: PShape): PShape;
 function ShapeLookup(S: PShape; Key: PStr): Integer;
 function ShapeAdd(S: PShape; Key: PStr; Flags: Byte): PShape;
 procedure ScanShapesForGC;
+{ S was retired by a major collection: its prototype died, so no object has it or can get it again }
+function ShapeRetired(S: PShape): Boolean;
+var
+  { a major collection that retired shapes calls it before their records are freed, whose addresses a new shape
+    can then take: everything that still names one forgets it (G2.VM: the templates' inline caches and constructor
+    caches, the megamorphic cache, the compiled code's define and private-member caches, the optimizing tier's
+    double shapes). Machine code's own shapes are pinned (TShape.Pinned) and never freed. The shapes the realms'
+    intrinsics have (FunctionShape, EmptyShapeForArray, RegExpShape and the like) never retire: the realms keep
+    their intrinsics. It must not allocate. }
+  GCShapeSweepHook: procedure = nil;
 function NurseryCellOK(V: TValue): Boolean;
 procedure CheckRoot(const V: TValue; const Where: string; I: Integer);
 
@@ -938,6 +951,7 @@ begin
 end;
 
 function OverCeiling(Size: SizeInt): Boolean; forward;
+function ShapesDueMajor: Boolean; forward;
 
 function AllocCell(Size: SizeInt; Kind: Byte): PCell;
 begin
@@ -968,7 +982,7 @@ begin
   begin
     CollectMinor;
     if (GCOldBytes - GCOldBytesAtMajor > Max(GCMajorFloor, GCOldBytesAtMajor * GCMajorGrowthPct div 100)) or
-       (GCStress and (GCMinorCount mod 8 = 0)) or OverCeiling(0) then
+       (GCStress and (GCMinorCount mod 8 = 0)) or OverCeiling(0) or ShapesDueMajor then
       CollectMajor;
   end;
   Result := PCell(NurseryTop);
@@ -1191,6 +1205,7 @@ end;
 procedure FixOpenUpvalLinks; forward;
 procedure VerifyShapesAfterMinor; forward;
 procedure RetireDeadShapes; forward;
+procedure ShapesNoteMajor; forward;
 procedure VerifyHeap(const Phase: string); forward;
 
 function GCInMinor: Boolean;
@@ -1395,6 +1410,7 @@ begin
   if Assigned(GCWeakRefHook) then GCWeakRefHook;
   if Assigned(GCFinalizeHook) then GCFinalizeHook;
   RetireDeadShapes;
+  ShapesNoteMajor;
   SweepPages;
   RememberedTop := 0;
   GCOldBytesAtMajor := GCOldBytes;
@@ -1807,8 +1823,46 @@ threadvar
   RootHashMask, RootHashUsed: Integer;
   RootHashStale: Boolean;
 
+threadvar
+  { shapes made since HeapInit, and that count and the shapes left at the last major collection }
+  ShapesMade, ShapesMadeAtMajor, ShapesLiveAtMajor: Int64;
+
+const
+  { shape records and their arrays live outside the collected heap, so old space alone would not start a major
+    collection however many dead prototypes' shapes pile up: a minor one also runs a major one once the shapes
+    made since the last outnumber those it left, and at least SHAPES_MAJOR_FLOOR (a doubling, as old space's) }
+  SHAPES_MAJOR_FLOOR = 65536;
+
+function ShapesDueMajor: Boolean;
+var Made, AtMajor, Live: Int64;
+begin
+  Made := ShapesMade;
+  AtMajor := ShapesMadeAtMajor;
+  Live := ShapesLiveAtMajor;
+  Result := Made - AtMajor > Max(SHAPES_MAJOR_FLOOR, Live);
+end;
+
+procedure ShapesNoteMajor;
+var N: Integer;
+begin
+  N := ShapeCount;
+  ShapesLiveAtMajor := N;
+  ShapesMadeAtMajor := ShapesMade;
+end;
+
+procedure ShapeRecFree(S: PShape); inline;
+begin
+  Dispose(S);
+end;
+
+function ShapeRetired(S: PShape): Boolean;
+begin
+  Result := S^.Proto = VRetiredProto;
+end;
+
 function NewShape(Parent: PShape; Proto: TValue): PShape;
 begin
+  Inc(ShapesMade);
   New(Result);
   FillChar(Result^, SizeOf(TShape), 0);
   Result^.Proto := Proto;
@@ -1984,13 +2038,14 @@ end;
 { after a major collection's marking: the shapes whose prototype nothing reaches are retired. No live object has
   one (its scan would have marked the prototype) and none can get one again: ShapeAdd keeps a shape's prototype,
   and the caches that make objects of a remembered shape (a constructor template's CtorRootShape) first compare its
-  prototype with the one asked for. The record stays allocated, because inline caches, templates and machine code
-  compare shapes by address and a freed one's address could come back as a new shape; its prototype becomes
-  VRetiredProto, which no value equals, so those comparisons fail instead of reading the freed prototype. The root
-  shape table drops the dead prototypes' entries and renumbers the survivors' indices (Hdr.Extra). }
+  prototype with the one asked for. Its prototype becomes VRetiredProto, which no value equals, so a comparison
+  with it fails instead of reading the freed prototype. The root shape table drops the dead prototypes' entries
+  and renumbers the survivors' indices (Hdr.Extra). Then GCShapeSweepHook clears what still names the retired
+  shapes, and their records are freed, except those machine code compares with (pinned). }
 procedure RetireDeadShapes;
-var I, N: Integer; S: PShape; P: TValue; Unsafe: Boolean;
+var I, N, First: Integer; S: PShape; P: TValue; Unsafe: Boolean;
 begin
+  First := RetiredCount;
   N := 0;
   for I := 0 to ShapeCount - 1 do
   begin
@@ -1999,8 +2054,6 @@ begin
     if ((P shr 48) = TAG_PTR_HI) and ((PCell(PtrOf(P))^.Flags and (cfMark or cfPermanent)) = 0) then
     begin
       S^.Proto := VRetiredProto;
-      { the lookup hash only speeds up ShapeLookup, which rebuilds it on demand }
-      S^.HashKeys := nil; S^.HashSlots := nil; S^.HashMask := -1;
       if RetiredCount >= Length(RetiredShapes) then SetLength(RetiredShapes, RetiredCount * 2 + 1024);
       RetiredShapes[RetiredCount] := S;
       Inc(RetiredCount);
@@ -2035,6 +2088,27 @@ begin
     AddICUnsafe := False;
     Inc(ProtoEpoch);
   end;
+  if RetiredCount = First then Exit;
+  { what still names the newly retired shapes forgets them; then their records are freed, except those machine code
+    holds (pinned), which keep only what their prototype's comparison reads }
+  if Assigned(GCShapeSweepHook) then GCShapeSweepHook;
+  N := First;
+  for I := First to RetiredCount - 1 do
+  begin
+    S := RetiredShapes[I];
+    if S^.Pinned then
+    begin
+      S^.Count := 0; S^.Keys := nil; S^.PFlags := nil;
+      S^.EdgeCount := 0; S^.Edges := nil; S^.EdgeHash := nil;
+      S^.HashKeys := nil; S^.HashSlots := nil; S^.HashMask := -1;
+      S^.ProtoChild := nil;
+      RetiredShapes[N] := S;
+      Inc(N);
+    end
+    else
+      ShapeRecFree(S);
+  end;
+  RetiredCount := N;
 end;
 
 { the root shape table's entries past the first ROOT_DIRECT, and those of primitive prototypes, by prototype: open
@@ -2780,10 +2854,11 @@ begin
   FillChar(CharAtoms, SizeOf(CharAtoms), 0);
   for I := 0 to KeyAtomCount - 1 do FreeMem(KeyAtoms[I]);
   KeyAtoms := nil; KeyAtomCount := 0;
-  for I := 0 to ShapeCount - 1 do Dispose(AllShapes[I]);
+  for I := 0 to ShapeCount - 1 do ShapeRecFree(AllShapes[I]);
   AllShapes := nil; ShapeCount := 0;
-  for I := 0 to RetiredCount - 1 do Dispose(RetiredShapes[I]);
+  for I := 0 to RetiredCount - 1 do ShapeRecFree(RetiredShapes[I]);
   RetiredShapes := nil; RetiredCount := 0;
+  ShapesMade := 0; ShapesMadeAtMajor := 0; ShapesLiveAtMajor := 0;
   if MegaICTab <> nil then FreeMem(MegaICTab);
   MegaICTab := nil;
   RootShapes := nil; RootShapeCount := 0;
@@ -2801,5 +2876,6 @@ begin
   GCOldBytes := 0; GCOldBytesAtMajor := 0; GCPromotedBytes := 0; GCMinorCount := 0; GCMajorCount := 0;
   GCAllocatedBytes := 0; GCPeakBytes := 0;
 end;
+
 
 end.

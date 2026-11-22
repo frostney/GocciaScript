@@ -4715,6 +4715,27 @@ type
   end;
   PMegaEntry = ^TMegaEntry;
 
+procedure JitForgetRetiredShapes; forward;
+
+{ G2.Core's GCShapeSweepHook: the templates' caches, the compiled code's, then the megamorphic cache's entries that
+  name a retired shape }
+procedure ForgetRetiredShapesVM;
+var I, D: Integer; E: PMegaEntry; Stale: Boolean;
+begin
+  ForgetRetiredShapes;
+  JitForgetRetiredShapes;
+  if MegaICTab = nil then Exit;
+  for I := 0 to (1 shl MEGA_BITS) - 1 do
+  begin
+    E := @PMegaEntry(MegaICTab)[I];
+    Stale := (E^.E.Shape <> nil) and ShapeRetired(E^.E.Shape);
+    { the holders up to Depth (past it, what the stack held where the entry was built) }
+    for D := 0 to Min(E^.E.Depth, IC_MAX_DEPTH) - 1 do
+      Stale := Stale or ((E^.E.Holder[D] <> nil) and ShapeRetired(E^.E.Holder[D]));
+    if Stale then FillChar(E^, SizeOf(TMegaEntry), 0);
+  end;
+end;
+
 function MegaSlot(Sh: PShape; Key: PStr): PMegaEntry; inline;
 begin
   Result := @PMegaEntry(MegaICTab)[((PtrUInt(Sh) shr 4) xor (PtrUInt(Key) shr 3) xor (PtrUInt(Key) shr 15)) and
@@ -6728,7 +6749,7 @@ end;
 { opSetProp past its cache (Execute's and FastLoop's): the store to the object or primitive in Reg^ (a register,
   read again after the store, which can collect), then the cache of an own data store or an add transition }
 function XSetPropSlow(IC: PPropIC; Reg: PValue; V: TValue; Strict: Boolean): Boolean; noinline;
-var VA, VB: TValue; O: PObj; CI: Integer;
+var VA, VB: TValue; O: PObj; CI, Majors: Integer;
 begin
   VA := Reg^;
   if not IsObject(VA) then Exit(SetVS(VA, IC^.Key, V, Strict));
@@ -6750,10 +6771,14 @@ begin
   begin
     IC^.Depth := ProtoEpoch;   { an add transition is cached only if no prototype changed meanwhile }
     VB := MkPtr(O^.Shape);
+    { a setter the store calls can collect: a major collection may retire VB (the object's prototype changed and
+      the old one died) and free it, and a new shape can take its address }
+    Majors := GCMajorCount;
     if not SetOnObjectS(VA, IC^.Key, V, Strict) then Exit(False);
     O := ObjOf(Reg^);
-    if (O^.OKind = okPlain) and (O^.Shape^.Parent = PShape(PtrOf(VB))) and (O^.Shape^.Count > 0) and
-       (O^.Shape^.Keys[O^.Shape^.Count - 1] = IC^.Key) and (IC^.Depth = ProtoEpoch) and not AddICUnsafe then
+    if (Majors = GCMajorCount) and (O^.OKind = okPlain) and (O^.Shape^.Parent = PShape(PtrOf(VB))) and
+       (O^.Shape^.Count > 0) and (O^.Shape^.Keys[O^.Shape^.Count - 1] = IC^.Key) and (IC^.Depth = ProtoEpoch) and
+       not AddICUnsafe then
     begin
       { G2.Core ProtoChanged forgets it when a prototype gains a setter or read-only property }
       IC^.Shape := PShape(PtrOf(VB));
@@ -10171,6 +10196,11 @@ var I: Integer;
 begin
   if GetCurrentThreadId <> JitMainThread then Exit;
   FillChar(InstOfCache, SizeOf(InstOfCache), 0);
+  { the define and private-member caches of the code that goes now (every template's is past the mark) }
+  for I := 0 to JitDefListCount - 1 do FreeMem(JitDefList[I]);
+  for I := 0 to JitPrivListCount - 1 do FreeMem(JitPrivList[I]);
+  JitDefList := nil; JitPrivList := nil; JitDefListCount := 0; JitPrivListCount := 0;
+  ODblShapes := nil; ODblShapeCount := 0;
   if JitMarkChunk = nil then Exit;
   {$IFDEF UNIX}
   for I := 0 to High(JitLaterChunks) do fpmunmap(JitLaterChunks[I], JIT_CHUNK);
@@ -10369,6 +10399,7 @@ end;
 
 initialization
   FreeJitStateHook := @FreeTemplateJitState;
+  GCShapeSweepHook := @ForgetRetiredShapesVM;
   InitFastOps;
   {$IFDEF CPUX86_64}JitOn;{$ENDIF}
 {$IFDEF G2_JITSTATS}

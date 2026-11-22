@@ -170,6 +170,14 @@ begin JRex(False, Dst, 0, Base); JB($0F); JB($B6); JMem(Dst, Base, Disp); end;
 procedure MovzxWRM(Dst, Base, Disp: Integer);       { movzx Dst32, word [Base + Disp] }
 begin JRex(False, Dst, 0, Base); JB($0F); JB($B7); JMem(Dst, Base, Disp); end;
 
+{ a shape's address for machine code to compare with: its record is pinned (G2.Core TShape.Pinned), so code that
+  reads its prototype through it never reads a freed record }
+function JitPin(S: Pointer): QWord;
+begin
+  if S <> nil then PShape(S)^.Pinned := True;
+  Result := QWord(PtrUInt(S));
+end;
+
 procedure MovRI(Dst: Integer; Imm: QWord);          { mov Dst, Imm (32-bit form when it zero-extends) }
 begin
   if Imm <= $FFFFFFFF then
@@ -1660,6 +1668,27 @@ type
 var
   JitDefCaches: array of PDefCache;   { the compiling template's (DeferCold's V an index here) }
   JitDefCacheCount: Integer;
+  { every define and private-member cache compiled code has, for JitForgetRetiredShapes (G2.Core retires shapes
+    and frees their records) and JitEngineDone (the code goes, so do they) }
+  JitDefList: array of PDefCache;
+  JitPrivList: array of PPrivCache;
+  JitDefListCount, JitPrivListCount: Integer;
+
+function JitNewDefCache: PDefCache;
+begin
+  Result := AllocMem(SizeOf(TDefCache));
+  if JitDefListCount >= Length(JitDefList) then SetLength(JitDefList, JitDefListCount * 2 + 64);
+  JitDefList[JitDefListCount] := Result;
+  Inc(JitDefListCount);
+end;
+
+function JitNewPrivCache: PPrivCache;
+begin
+  Result := AllocMem(SizeOf(TPrivCache));
+  if JitPrivListCount >= Length(JitPrivList) then SetLength(JitPrivList, JitPrivListCount * 2 + 64);
+  JitPrivList[JitPrivListCount] := Result;
+  Inc(JitPrivListCount);
+end;
 
 { compiled code's opDefProp past its cache (XFastDefProp), then its cache: a plain data property added by one
   transition, or written over }
@@ -3273,7 +3302,7 @@ begin
         { the site's cache (TPrivCache): the receiver's shape and the private name, an inline or an overflow slot;
           else JH_PrivC, which fills it }
         LA := Ord(Op = opGetPriv);
-        MovRI(jSI, QWord(PtrUInt(AllocMem(SizeOf(TPrivCache)))));
+        MovRI(jSI, QWord(PtrUInt(JitNewPrivCache)));
         MovRM(jAX, jBX, IfThen(LA = 1, B, A) * 8);
         AluRR($31, jAX, jR13, True);
         MovRR(jDX, jAX);
@@ -3348,7 +3377,7 @@ begin
         { the object }
         MovRI(jDX, QWord(Cardinal(64)) or (QWord(ckObject) shl 32));
         MovMR(jAX, 0, jDX);
-        MovRI(jDX, QWord(PtrUInt(EmptyShapeForArray)));
+        MovRI(jDX, JitPin(EmptyShapeForArray));
         MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jDX);
         LeaRM(jDX, jAX, 64);
         MovMR(jAX, PtrInt(@PObj(nil)^.Elements), jDX);
@@ -3589,7 +3618,7 @@ begin
         MovFsR(JitFsNurseryTop, jCX);
         MovRI(jDX, QWord(Cardinal(64 + C * 8)) or (QWord(ckObject) shl 32));
         MovMR(jAX, 0, jDX);
-        MovRI(jDX, QWord(PtrUInt(RootShapeFor(ObjectProto))));
+        MovRI(jDX, JitPin(RootShapeFor(ObjectProto)));
         MovMR(jAX, PtrInt(@PObj(nil)^.Shape), jDX);
         AluRR($31, jDX, jDX, False);
         MovMR(jAX, PtrInt(@PObj(nil)^.Elements), jDX);
@@ -3613,7 +3642,7 @@ begin
         { the site's cache (TDefCache): the receiver's shape, an inline slot, the new shape; else JH_DefPropC
           (cold), which fills it }
         if JitDefCacheCount >= Length(JitDefCaches) then SetLength(JitDefCaches, JitDefCacheCount * 2 + 16);
-        JitDefCaches[JitDefCacheCount] := AllocMem(SizeOf(TDefCache));
+        JitDefCaches[JitDefCacheCount] := JitNewDefCache;
         MovRM(jAX, jBX, A * 8);
         AluRR($31, jAX, jR13, True);
         MovRR(jDX, jAX);

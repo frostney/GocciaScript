@@ -20,9 +20,12 @@ Every heap thing is a cell with an 8-byte header: kind, flags (mark, old, rememb
 - Prototypes: a shape names its prototype, and a minor GC keeps every shape's prototype alive. A major GC marks
   a prototype only through what reaches it, objects through their shapes included, and retires the shapes of
   the prototypes nothing reaches: their prototype becomes a value nothing equals, so a cache that still holds
-  one never matches, and the root shape table drops their entries. A retired shape's record stays allocated,
-  because caches and compiled code compare shapes by address. The root shape table indexes its first 65,534
-  prototypes from the object's header and hashes the rest.
+  one never matches, and the root shape table drops their entries. Inline caches and constructor caches that
+  name a retired shape start over, as do the compiled code's define and private-member caches, and the record
+  is freed, except one that optimized code compares with (pinned). A new shape can take a freed record's
+  address, so nothing may keep a retired shape past the collection that retires it. The shapes made since the
+  last major GC count toward starting one, as old space's growth does. The root shape table indexes its first
+  65,534 prototypes from the object's header and hashes the rest.
 
 The collector moves young cells, so code re-reads cell pointers from a root after any allocation.
 

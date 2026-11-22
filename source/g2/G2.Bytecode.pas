@@ -188,8 +188,8 @@ type
       the compiler could not rule out: a parameter written, arguments escaping, or a direct eval) }
     MappedArgs: Boolean;
     ExpectedProps: Integer;
-    { new F(...)'s caches (shapes live as long as the engine): F's shape and its prototype property's slot, the
-      root shape of the last prototype, the field initializer's slot in F's shape }
+    { new F(...)'s caches (emptied when a shape they name is retired: ForgetRetiredShapes): F's shape and its
+      prototype property's slot, the root shape of the last prototype, the field initializer's slot in F's shape }
     CtorFnShape: Pointer;
     CtorProtoSlot: Integer;
     CtorRootShape: Pointer;
@@ -258,8 +258,14 @@ var
   FreeJitStateHook: procedure(T: PFuncTemplate) = nil;
 { clears every cached add transition of this thread's templates (G2.Core ProtoChanged) }
 procedure ForgetAddTransitions;
+{ forgets the retired shapes (G2.Core ShapeRetired) this thread's templates cache: an inline cache that names one
+  starts over (its receiver part or its entries), a constructor cache is emptied }
+procedure ForgetRetiredShapes;
 
 implementation
+
+uses
+  Math;
 
 function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;
 begin
@@ -319,6 +325,51 @@ begin
         T^.ICs[J].Shape := nil;
         T^.ICs[J].NewShape := nil;
       end;
+  end;
+end;
+
+procedure ForgetRetiredShapes;
+var I, J, D: Integer; T: PFuncTemplate; IC: PPropIC; Stale: Boolean;
+  function Gone(S: Pointer): Boolean; inline;
+  begin
+    Result := (S <> nil) and ShapeRetired(PShape(S));
+  end;
+  { only the holders up to Depth: an entry is built on the stack, and those past it are whatever was there }
+  function EntryGone(const E: TICEntry): Boolean;
+  var K: Integer;
+  begin
+    Result := Gone(E.Shape);
+    for K := 0 to Min(E.Depth, IC_MAX_DEPTH) - 1 do Result := Result or Gone(E.Holder[K]);
+  end;
+begin
+  for I := 0 to TemplateCount - 1 do
+  begin
+    T := AllTemplates[I];
+    if Gone(T^.CtorFnShape) then T^.CtorFnShape := nil;
+    if Gone(T^.CtorRootShape) then T^.CtorRootShape := nil;
+    if Gone(T^.FIShape) then begin T^.FIShape := nil; T^.FISlot := -1; end;
+    if Gone(T^.NoHIShape) then T^.NoHIShape := nil;
+    for J := 0 to High(T^.ICs) do
+    begin
+      IC := @T^.ICs[J];
+      Stale := Gone(IC^.Shape) or Gone(IC^.NewShape);
+      for D := 0 to Min(IC^.Depth, Length(IC^.Holder)) - 1 do Stale := Stale or Gone(IC^.Holder[D]);
+      if Stale then
+      begin
+        IC^.Shape := nil; IC^.NewShape := nil;
+        FillChar(IC^.Holder, SizeOf(IC^.Holder), 0);
+        IC^.Depth := 0; IC^.Slot := -1;
+      end;
+      if IC^.PolyCount = 0 then Continue;
+      Stale := EntryGone(IC^.Poly0);
+      for D := 1 to IC^.PolyCount - 1 do Stale := Stale or EntryGone(IC^.More^[D]);
+      if Stale then
+      begin
+        FillChar(IC^.Poly0, SizeOf(TICEntry), 0);
+        if IC^.More <> nil then FillChar(IC^.More^, SizeOf(TICEntryMore), 0);
+        IC^.PolyCount := 0; IC^.PolyNext := 0;
+      end;
+    end;
   end;
 end;
 

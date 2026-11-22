@@ -75,6 +75,34 @@ Object.defineProperty(P2, 'r', { set(x) { setterHits++; }, configurable: true })
 for (let k = 0; k < 100; k++) { const o = Object.create(P2); o.q = k; o.r = k; }
 check('setter after define', setterHits, 101);
 
+// a hot polymorphic site and a hot constructor site over classes that die round after round: their inline caches
+// and the optimizing tier's code name shapes that are retired (and their records freed) between rounds
+const callM = (o) => o.m();
+function G() { this.y = 2; }
+const makeG = () => new G();
+for (let round = 0; round < 12; round++) {
+  const objs = [];
+  for (let c = 0; c < 4; c++) {
+    const K = class { m() { return round * 10 + c; } };
+    for (let i = 0; i < 50; i++) objs.push(new K());
+  }
+  let sum = 0;
+  for (let rep = 0; rep < 40; rep++) for (const o of objs) sum += callM(o);
+  check('poly ' + round, sum, 40 * 50 * (4 * round * 10 + 6));
+  G.prototype = { round };
+  for (let i = 0; i < 400; i++) {
+    const g = makeG();
+    if (Object.getPrototypeOf(g) !== G.prototype || g.round !== round || g.y !== 2) { check('G ' + round, i, -1); break; }
+  }
+  gc();
+}
+// a prototype that is not an object: the new object's is Object.prototype (10.1.14 GetPrototypeFromConstructor)
+G.prototype = 0;
+for (let i = 0; i < 400; i++) {
+  const g = makeG();
+  if (Object.getPrototypeOf(g) !== Object.prototype || g.y !== 2) { check('G number prototype', i, -1); break; }
+}
+
 // a prototype whose instances are all gone is freed; each check runs as a job of its own (WeakRef's kept list)
 let weak;
 (() => {
