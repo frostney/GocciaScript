@@ -100,7 +100,6 @@ begin
     Result := APattern;
 end;
 
-// ES2026 §22.2.6.13.1 EscapeRegExpPattern ( pattern, flags )
 // Escapes what would stop "/" + S + "/" + flags from reading back as a
 // RegularExpressionLiteral: a "/" outside a character class and every line
 // terminator. Classes are tracked the way the literal grammar reads them ("["
@@ -109,6 +108,7 @@ end;
 // already escaped, so it gains no second backslash: "\/" stays "\/", and an
 // escaped line terminator becomes "\n", "\r", "\u2028" or "\u2029", which
 // match the same code point.
+// ES2026 §22.2.6.13.1 EscapeRegExpPattern(pattern, flags)
 function EscapeRegExpPattern(const APattern: string): string;
 var
   AfterBackslash: Boolean;
