@@ -190,3 +190,4 @@ Durable architecture and implementation decisions for GocciaScript. New ADRs use
 - [0178 — AWFY is timed warm, engines alternate their order, and interpreter-class comparators run beside QuickJS](0178-awfy-is-timed-warm-engines-alternate-and-interpreter-class-comparators-run-beside-quickjs.md)
 - [0179 — eval is an engine-only, opt-in installer, `EnableEval`, with no CLI flag and no config key](0179-eval-is-an-engine-only-opt-in-installer.md)
 - [0180 — A reviewed non-SEH routine is pinned to its own source text, not its whole file](0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)
+- [0181 — On G2 the memory limit refuses with a catchable RangeError at the next back edge or call](0181-g2-refuses-memory-at-the-next-safe-point.md)

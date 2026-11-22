@@ -890,6 +890,7 @@ begin
     Exit;
   end;
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
+  NurseryFitCeiling;
   SetActiveProfile(FProfile);
   SetConsoleSink(FOnConsole);
   SetJSModuleSources(FJSModuleSources);
@@ -1171,6 +1172,7 @@ begin
     Exit(g2hvFailed);
   end;
   if FMaxMemory > 0 then HeapCeiling := FMaxMemory else HeapCeiling := DefaultHeapCeiling;
+  NurseryFitCeiling;
   SetActiveProfile(FProfile);
   SetJSModuleSources(FJSModuleSources);
   if (FProjectRoot = '') and FHasCapabilities and not SandboxActive then FProjectRoot := DiscoverProjectRoot(FileName);

@@ -69,12 +69,17 @@ count is exact and the same on every run. The JIT stays off while a timeout, an 
 is set: compiled calls check the fixed bound and do not count instructions.
 
 The memory limit is always in force: `--max-memory`, else half of physical memory up to 8 GB (700 MB on a 32-bit
-build). A full collection runs once the old space would pass it, and one that leaves more live than the limit
-aborts the run the same way, with `Fatal error: Live heap of N bytes exceeds the memory limit of M bytes` (exit 1;
-GocciaRunner's JSON report names it `MemoryLimitError`). An explicit reservation that does not fit, such as an
-`ArrayBuffer`'s bytes, is still a catchable `RangeError`. Compiled loops poll for the abort at every back edge (one
-compare of the thread's `Interrupt`): the baseline code exits to the interpreter there, and an optimized region
-leaves at the jump with its frame state written back. `scripts/g2/limits-test.sh` checks all of this.
+build). Under a limit the nursery is no larger than the room the old space leaves below it, so the collection that
+tests the limit runs before the heap can pass it. A full collection that leaves more live than the limit refuses at
+the next back edge or call with a catchable `RangeError: Allocation failed: GC heap size exceeds the configured
+memory limit` ([ADR 0181](../adr/0181-g2-refuses-memory-at-the-next-safe-point.md)). At a call with at least 1,024
+frames on the stack it is `RangeError: Maximum call stack size exceeded` with the stack-memory suggestion. A script
+can catch it, drop what it holds and go on. Eight refusals in a row that free nothing end the run as a spent limit
+does, with `Fatal error: Live heap of N bytes exceeds the memory limit of M bytes` (exit 1; GocciaRunner's JSON report
+names it `MemoryLimitError`). An explicit reservation that does not fit, such as an `ArrayBuffer`'s bytes, is a
+`RangeError` at once. Compiled loops poll for both at every back edge (one compare of the thread's `Interrupt`): the
+baseline code exits to the interpreter there, and an optimized region leaves at the jump with its frame state
+written back. `scripts/g2/limits-test.sh` checks all of this.
 
 Whatever the frame bound, a call that native code makes (a getter, a `toString`, a sort comparator, a generator's
 `next()`) nests the interpreter on the native stack, so it is refused with a `RangeError` once that stack runs low.

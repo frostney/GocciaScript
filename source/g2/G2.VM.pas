@@ -523,7 +523,7 @@ procedure InlinedFrame(I, J: Integer; out Closure: TValue; out Tpl: PFuncTemplat
 implementation
 
 uses
-  Classes, Goccia.StackLimit, Goccia.Coverage;
+  Classes, Goccia.StackLimit, Goccia.Coverage, Goccia.Error.Messages, Goccia.Error.Suggestions;
 
 { ---------------- execution limits ---------------- }
 
@@ -544,6 +544,54 @@ threadvar
   LimitHeapBytes: Int64;
   { the host abort's message (AbortKind 4) }
   HostAbortText: UnicodeString;
+  { the memory limit's catchable refusal (ADR 0181): a full collection left the heap over HeapCeiling, and the next
+    back edge or call throws a RangeError the script can catch (MemRefusePending). MemStrikeBytes is what the last
+    refusal's collection left, MemStrikes how many refusals in a row left no less: past MEM_STRIKES_MAX the limit
+    ends the run as a spent one (AbortKind 3). A collection that ends within the limit clears both
+    (MemoryLimitClear). MemDelivering: the refusal's error is being made (its allocation does not refuse again) }
+  MemRefusePending, MemDelivering: Boolean;
+  MemStrikeBytes: Int64;
+  MemStrikes: Integer;
+
+const
+  MEM_STRIKES_MAX = 8;
+  { a refusal met at a call this deep is the call stack's: reported as a stack overflow at the call }
+  MEM_STACK_DEPTH = 1024;
+
+{ a pending refusal, thrown now as the catchable RangeError: AtCall at a call, which a deep stack makes a stack
+  overflow. False when a deadline has passed meanwhile, the timeout's abort then going first }
+function DeliverMemoryRefusal(AtCall: Boolean): Boolean; noinline;
+var E: TValue;
+begin
+  MemRefusePending := False;
+  InterLockedExchange(Interrupt, 0);
+  FrameLimit := FrameLimitBase;
+  { the timer's stores: Interrupt is set after the deadline passes, so a deadline past now set it, or is about to }
+  if (LimitTimer <> nil) and (GetTickCount64 >= LimitTimer.Deadline) then
+  begin
+    InterLockedExchange(Interrupt, 1);
+    FrameLimit := 0;
+    Exit(False);
+  end;
+  MemDelivering := True;
+  try
+    if AtCall and (FrameTop >= MEM_STACK_DEPTH) then
+    begin
+      ThrowError('RangeError', 'Maximum call stack size exceeded');
+      E := Pending;
+      SetErrorHostSuggestion(E, SSuggestStackMemoryLimitExceeded);
+    end
+    else
+    begin
+      ThrowError('RangeError', SErrorMemoryLimitExceeded);
+      E := Pending;
+      SetErrorHostSuggestion(E, SSuggestMemoryLimitExceeded);
+    end;
+  finally
+    MemDelivering := False;
+  end;
+  Result := True;
+end;
 
 procedure TLimitTimer.Execute;
 var Now: QWord;
@@ -575,6 +623,8 @@ end;
   native that catches it, such as a promise job, cannot run on) }
 procedure XAbort(Kind: Integer); noinline;
 begin
+  { a memory refusal is not an abort: the script can catch it }
+  if (Kind = 1) and MemRefusePending and (AbortKind = 0) and DeliverMemoryRefusal(False) then Exit;
   if AbortKind = 0 then AbortKind := Kind;
   Aborting := True;
   Interrupt := 1;
@@ -602,20 +652,38 @@ begin
     ' bytes';
 end;
 
-{ G2.Core's GCLimitHook: a full collection left more than HeapCeiling live. The run ends like a spent timeout,
-  at the next back edge or call, past every handler; no allocation here (the collector is finishing) }
+{ G2.Core's GCLimitHook: a full collection left more than HeapCeiling live. The next back edge or call throws a
+  catchable RangeError (DeliverMemoryRefusal), unless refusals have stopped freeing anything: then the run ends like a
+  spent timeout, past every handler. No allocation here (the collector is finishing) }
 procedure MemoryLimitHit;
-var Old: Int64;
+var Old, Ext: Int64;
 begin
+  if MemDelivering then Exit;
   if AbortKind = 0 then
   begin
     Old := GCOldBytes;
-    LimitHeapBytes := Old + HeapExternalBytes;
-    AbortKind := 3;
+    Ext := HeapExternalBytes;
+    Old := Old + Ext;
+    { one refusal at a time: the pending one has not reached a back edge or call yet }
+    if MemRefusePending then Exit;
+    if (MemStrikeBytes > 0) and (Old >= MemStrikeBytes) then Inc(MemStrikes) else MemStrikes := 0;
+    MemStrikeBytes := Old;
+    LimitHeapBytes := Old;
+    if MemStrikes < MEM_STRIKES_MAX then
+      MemRefusePending := True
+    else
+      AbortKind := 3;
   end;
   JitBlocked := True;
   InterLockedExchange(Interrupt, 1);
   FrameLimit := 0;
+end;
+
+{ G2.Core's GCLimitClearHook: a full collection ended within the limit, so the refusals freed enough }
+procedure MemoryLimitClear;
+begin
+  MemStrikeBytes := 0;
+  MemStrikes := 0;
 end;
 
 function HostAbort(const Msg: UnicodeString): Boolean;
@@ -720,15 +788,23 @@ end;
 
 { a call that found the frames full: the abort of a spent limit, else PushBytecodeFrame's RangeError }
 function XFrameOverflow: Boolean; noinline;
+var StackBytes: Int64;
 begin
   { the timer's stores in their order: the frame bound read before, Interrupt after }
   ReadBarrier;
   if Interrupt <> 0 then
   begin
+    { a memory refusal at a call: a deep stack holds what the limit refused }
+    if MemRefusePending and (AbortKind = 0) and DeliverMemoryRefusal(True) then Exit(False);
     XAbort(1);
     Exit(False);
   end;
   Result := ThrowError('RangeError', 'Maximum call stack size exceeded');
+  { the stack the frames hold, beside the heap, past the memory limit: the limit is what the recursion reached (the
+    old engine charges its stacks to it, ADR 0130) }
+  StackBytes := Int64(StackTop) * SizeOf(TValue) + Int64(FrameTop) * SizeOf(TFrame);
+  if (HeapCeiling > 0) and (StackBytes + HeapUsedBytes > HeapCeiling) then
+    SetErrorHostSuggestion(Pending, SSuggestStackMemoryLimitExceeded);
 end;
 
 procedure LimitsDisarm;
@@ -748,6 +824,10 @@ begin
   FrameLimit := FrameLimitBase;
   InstrCounted := False;
   InstrLeft := 0;
+  { a refusal the run did not reach a back edge or call for goes with it }
+  MemRefusePending := False;
+  MemStrikes := 0;
+  MemStrikeBytes := 0;
   JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn;
 end;
 
@@ -10162,6 +10242,7 @@ begin
   NativeSelf := VUndefined;
   GCRootScanner := @ScanRoots;
   GCLimitHook := @MemoryLimitHit;
+  GCLimitClearHook := @MemoryLimitClear;
   AtomLength := AtomOf('length');
   AtomPrototype := AtomOf('prototype');
   AtomConstructor := AtomOf('constructor');

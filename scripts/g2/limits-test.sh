@@ -61,24 +61,28 @@ for k in 1 2 3; do
   "$G2" --max-instructions=$((hi - 1)) "$D/sum.js" > /dev/null 2>&1 && { echo "FAIL instr-exact: $((hi - 1)) failed once, then passed"; fails=$((fails + 1)); break; }
 done
 
-# --max-memory: a full collection that leaves more live than the limit aborts the run like a spent timeout (the
-# message names the live bytes, which vary); compiled loops poll for it at their back edges
-M='Fatal error: Live heap of [0-9]* bytes exceeds the memory limit of 33554432 bytes'
+# --max-memory (ADR 0181): a full collection that leaves more live than the limit refuses at the next back edge or
+# call with a catchable RangeError; a script that refuses to free anything after eight refusals in a row ends as a
+# spent limit does (the message names the live bytes, which vary). Compiled loops poll for it at their back edges.
+R='Uncaught RangeError: Allocation failed: GC heap size exceeds the configured memory limit'
+F='Fatal error: Live heap of [0-9]* bytes exceeds the memory limit of 33554432 bytes'
 checkm() {
-  local name=$1 src=$2 got rc
+  local name=$1 want=$2 wantrc=$3 src=$4 got rc
   printf '%s\n' "$src" > "$D/$name.js"
-  got=$(timeout 20 "$G2" --max-memory=32MiB "$D/$name.js" 2>&1); rc=$?
-  if [ "$(printf '%s\n' "$got" | wc -l)" -ne 1 ] || ! printf '%s\n' "$got" | grep -qx "$M" || [ $rc -ne 1 ]; then
-    echo "FAIL $name (--max-memory=32MiB): exit $rc, output: $got (want exit 1: $M)"
+  got=$(timeout 60 "$G2" --max-memory=32MiB "$D/$name.js" 2>&1); rc=$?
+  if ! printf '%s\n' "$got" | grep -qx "$want" || [ $rc -ne "$wantrc" ]; then
+    echo "FAIL $name (--max-memory=32MiB): exit $rc, output: $got (want exit $wantrc: $want)"
     fails=$((fails + 1))
   fi
 }
 GROW='const a = []; while (true) a.push({ x: a.length });'
-checkm mem-grow "$GROW"
-checkm mem-catch "try { $GROW } catch (e) { console.log('caught'); } finally { console.log('finally'); }"
-checkm mem-promise "Promise.resolve().then(() => { $GROW }).catch(() => console.log('caught'));"
-checkm mem-native 'const a = []; let i = 0; while (true) { a.push(i); i++; }'
-checkm mem-strings 'const a = []; for (let i = 0; ; i++) a.push("s" + i);'
+checkm mem-grow "$R" 1 "$GROW"
+checkm mem-catch 'finally' 0 "try { $GROW } catch (e) { console.log('caught'); } finally { console.log('finally'); }"
+checkm mem-promise 'caught' 0 "Promise.resolve().then(() => { $GROW }).catch(() => console.log('caught'));"
+checkm mem-native "$R" 1 'const a = []; let i = 0; while (true) { a.push(i); i++; }'
+checkm mem-strings "$R" 1 'const a = []; for (let i = 0; ; i++) a.push("s" + i);'
+checkm mem-swallow "$F" 1 'const a = []; while (true) { try { while (true) a.push({ x: 1 }); } catch (e) {} }'
+checkm mem-recover 'recovered' 0 "let a = []; try { $GROW } catch (e) { a = null; } const b = []; for (let i = 0; i < 1000; i++) b.push({ i }); console.log('recovered');"
 check mem-garbage --max-memory=32MiB '1999999000000' \
   'let n = 0; for (let i = 0; i < 2e6; i++) { const o = { x: i }; n += o.x; } console.log(n);'
 check mem-reserve --max-memory=32MiB 'RangeError' \

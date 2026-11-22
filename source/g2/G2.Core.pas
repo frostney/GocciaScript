@@ -271,6 +271,12 @@ procedure GCVisit(var V: TValue); inline;
 procedure GCVisitPtr(var P: Pointer);
 procedure CollectMinor;
 procedure CollectMajor;
+{ the nursery's bound under HeapCeiling: no more than the room the old space leaves under it (at least
+  NURSERY_MIN_ROOM), so that the collection that tests the limit runs before the heap can pass it. Never below the
+  cells allocated already (IsYoung tests against the bound); a minor collection applies it to the emptied nursery }
+procedure NurseryFitCeiling;
+const
+  NURSERY_MIN_ROOM = 64 * 1024;
 var
   { Goccia.gc.maxBytes (--max-memory, goccia.json max-memory): an allocation charged against it (HeapReserve) that
     would take the heap past it collects, tests again and is refused; 0 none. One setting for every thread }
@@ -294,6 +300,9 @@ var
   { a full collection that leaves the heap and HeapExternalBytes over HeapCeiling calls it (G2.VM: the run ends at
     its next back edge or call, past every handler); it must not allocate }
   GCLimitHook: procedure = nil;
+  { a full collection that leaves them within HeapCeiling calls it (G2.VM: the script freed what a refusal asked it
+    to); it must not allocate }
+  GCLimitClearHook: procedure = nil;
 { weak references: GCWeakHook runs after marking/evacuation in every collection, before old space is swept.
   In it, GCSurvives says whether a cell lives on and updates P when the cell moved. The hook must not allocate. }
 var GCWeakHook: procedure = nil;
@@ -1205,6 +1214,24 @@ begin
   Result := (PCell(P)^.Flags and (cfMark or cfPermanent)) <> 0;
 end;
 
+procedure NurseryFitCeiling;
+var Room, Size: Int64; Lim, Top: PByte;
+begin
+  Size := NurserySize;
+  Room := Size;
+  if HeapCeiling > 0 then
+  begin
+    Room := HeapCeiling - GCOldBytes;
+    Room := Room - HeapExternalBytes;
+    if Room < NURSERY_MIN_ROOM then Room := NURSERY_MIN_ROOM;
+    if Room > Size then Room := Size;
+  end;
+  Lim := NurseryStart + Room;
+  Top := NurseryTop;
+  if Lim < Top then Lim := Top;
+  NurseryLimit := Lim;
+end;
+
 procedure CollectMinor;
 var I: Integer; C: PCell; Used: Int64;
 begin
@@ -1244,6 +1271,7 @@ begin
     FillChar(NurseryStart^, NurseryLimit - NurseryStart, $DB);
   end;
   NurseryTop := NurseryStart;
+  NurseryFitCeiling;
 end;
 
 procedure SweepPages;
@@ -1372,7 +1400,9 @@ begin
   if GCVerify then VerifyHeap('major');
   { what survived does not fit: the run ends (the nursery is empty, so the old space is the heap) }
   if (HeapCeiling > 0) and Assigned(GCLimitHook) and (GCOldBytesAtMajor + HeapExternalBytes > HeapCeiling) then
-    GCLimitHook;
+    GCLimitHook
+  else if Assigned(GCLimitClearHook) then
+    GCLimitClearHook;
 end;
 
 procedure PushRoot(V: TValue); inline;
