@@ -118,6 +118,42 @@ threadvar
     GocciaTestRunner's reporter does outside a JSON run }
   TestReporterOn: Boolean;
 
+type
+  { one benchmark's result as prelude/microbench.js measured it (Goccia.Builtins.Benchmark's TBenchmarkResult), or
+    the error that stopped it }
+  TG2BenchEntry = record
+    Suite, Name: UnicodeString;
+    { a failed benchmark's thrown value as G2.Embed describes an uncaught one (TG2RunResult's fields): its text, and
+      for an error its name, message, where it was made and the host's suggestion }
+    Failed, ErrorIsError: Boolean;
+    Error, ErrorName, ErrorText, ErrorFile, ErrorSuggestion: UnicodeString;
+    ErrorLine, ErrorColumn: Integer;
+    SummaryScope, BoxplotScope: Integer;
+    Iterations: Int64;
+    OpsPerSec, MeanMs, VariancePercentage, SetupMs, TeardownMs, MinOpsPerSec, MaxOpsPerSec: Double;
+    SampleCount: Integer;
+    MinSampleMs, P25Ms, MedianMs, P75Ms, P99Ms, P999Ms, MaxSampleMs: Double;
+  end;
+  TG2BenchEntries = array of TG2BenchEntry;
+  { the progress line of the benchmark about to be measured (its 1-based index of the total) }
+  TG2BenchProgress = procedure(const Suite, Name: UnicodeString; Index, Total: Integer);
+
+{ the benchmark API (bench, group, run, summary, boxplot) as this thread's goccia:microbench module; the measurement
+  settings from GOCCIA_BENCH_WARMUP, GOCCIA_BENCH_CALIBRATION_MS, GOCCIA_BENCH_CALIBRATION_BATCH and
+  GOCCIA_BENCH_ROUNDS, as GocciaBenchmarkRunner reads them }
+function InstallBenchmarkAPI(var Err: UnicodeString): Boolean;
+{ measures the benchmarks the file registered (after InstallBenchmarkAPI), once each when Deterministic, and runs
+  the jobs they queue: each one's result in Entries, their count and the run's duration, or False and Err the error
+  that stopped them. A run the script made itself with run() of the same kind is reused. }
+function RunBenchmarkSuites(Deterministic: Boolean; out Entries: TG2BenchEntries; out Total: Integer;
+  out DurationNanoseconds: Int64; var Err: UnicodeString): Boolean;
+
+threadvar
+  { the progress line before each benchmark (nil: none), set before InstallBenchmarkAPI }
+  BenchProgress: TG2BenchProgress;
+  { G2.Embed's description of a benchmark's thrown value (set by RunBenchmarks) }
+  BenchDescribeThrown: procedure(V: TValue; var E: TG2BenchEntry);
+
 implementation
 
 uses
@@ -125,9 +161,10 @@ uses
   Goccia.Spec.Data, Goccia.Version, Goccia.Platform, Goccia.URL.Parser, Goccia.SourcePipeline, Goccia.Vitest.MockHoist,
   Goccia.AST.Report, Goccia.FileExtensions, TextSemantics, G2.HostSemver, Goccia.DataTree,
   Goccia.YAML, Goccia.TOML, Goccia.URI, Goccia.NativeLimits, Goccia.Modules.Virtual, Goccia.Packages.Address, Goccia.Error.Suggestions,
-  G2.Fetch, G2.Sandbox;
+  G2.Fetch, G2.Sandbox, TimingUtils;
 
 {$I G2.Testing.inc}
+{$I G2.Microbench.inc}
 {$I G2.HostPrelude.inc}
 {$I G2.UrlPrelude.inc}
 {$I G2.WebPrelude.inc}
@@ -2268,6 +2305,185 @@ begin
   Json := ReportJson;
   Err := ReportErr;
   Result := ReportErr = '';
+end;
+
+{ ---- the benchmark API (prelude/microbench.js) ---- }
+
+threadvar
+  BenchApiV: TValue;
+  BenchApiRootedGen: Integer;
+  { the clock's origin: now() counts from the install, so its nanoseconds stay exact in a double }
+  BenchClockBase: Int64;
+  BenchEntries: TG2BenchEntries;
+  BenchEntryCount: Integer;
+  BenchTotal: Integer;
+  BenchDuration: Int64;
+
+{ a setting as GocciaBenchmarkRunner reads it: the variable's integer, else the default }
+function BenchEnvInt(const Name: string; Default: Integer): Integer;
+begin
+  if not TryStrToInt(GetEnvironmentVariable(Name), Result) then Result := Default;
+end;
+
+function ArgNum(Args: PValue; Argc, I: Integer): Double;
+begin
+  if (I <= Argc) and IsNumber(Args[I]) then Result := NumOf(Args[I]) else Result := 0;
+end;
+
+{ now(): nanoseconds on the monotonic clock since the API was installed }
+function Bench_Now(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  Res := MkNumber(GetNanoseconds - BenchClockBase);
+  Result := True;
+end;
+
+{ forget(): the promises the bodies left rejected without a handler, no longer tracked. A benchmark measures and does
+  not assert, so nothing would ever take them (Goccia.Builtins.Benchmark SettleBatch) }
+function Bench_Forget(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  TakeRejections(0);
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ progress(suite, name, index, total): the host's progress line }
+function Bench_Progress(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  if Assigned(BenchProgress) then
+    BenchProgress(ArgStr(Args, Argc, 1), ArgStr(Args, Argc, 2), Trunc(ArgNum(Args, Argc, 3)),
+      Trunc(ArgNum(Args, Argc, 4)));
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ entry(suite, name, summaryScope, boxplotScope, failed, thrown, iterations, opsPerSec, meanMs, variancePercentage,
+  setupMs, teardownMs, minOpsPerSec, maxOpsPerSec, sampleCount, minSampleMs, p25Ms, medianMs, p75Ms, p99Ms,
+  p999Ms, maxSampleMs): one result (for a benchmark that failed, what it threw and no numbers) }
+function Bench_Entry(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+var E: TG2BenchEntry;
+begin
+  E := Default(TG2BenchEntry);
+  E.Suite := ArgStr(Args, Argc, 1);
+  E.Name := ArgStr(Args, Argc, 2);
+  E.SummaryScope := Trunc(ArgNum(Args, Argc, 3));
+  E.BoxplotScope := Trunc(ArgNum(Args, Argc, 4));
+  E.Failed := (Argc >= 5) and (Args[5] = VTrue);
+  if E.Failed then
+  begin
+    if (Argc >= 6) and Assigned(BenchDescribeThrown) then
+      BenchDescribeThrown(Args[6], E);
+    if E.Error = '' then
+      E.Error := 'benchmark failed';
+  end
+  else
+  begin
+    E.Iterations := Trunc(ArgNum(Args, Argc, 7));
+    E.OpsPerSec := ArgNum(Args, Argc, 8);
+    E.MeanMs := ArgNum(Args, Argc, 9);
+    E.VariancePercentage := ArgNum(Args, Argc, 10);
+    E.SetupMs := ArgNum(Args, Argc, 11);
+    E.TeardownMs := ArgNum(Args, Argc, 12);
+    E.MinOpsPerSec := ArgNum(Args, Argc, 13);
+    E.MaxOpsPerSec := ArgNum(Args, Argc, 14);
+    E.SampleCount := Trunc(ArgNum(Args, Argc, 15));
+    E.MinSampleMs := ArgNum(Args, Argc, 16);
+    E.P25Ms := ArgNum(Args, Argc, 17);
+    E.MedianMs := ArgNum(Args, Argc, 18);
+    E.P75Ms := ArgNum(Args, Argc, 19);
+    E.P99Ms := ArgNum(Args, Argc, 20);
+    E.P999Ms := ArgNum(Args, Argc, 21);
+    E.MaxSampleMs := ArgNum(Args, Argc, 22);
+  end;
+  if BenchEntryCount = Length(BenchEntries) then
+    SetLength(BenchEntries, 2 * BenchEntryCount + 8);
+  BenchEntries[BenchEntryCount] := E;
+  Inc(BenchEntryCount);
+  Res := VUndefined;
+  Result := True;
+end;
+
+{ report's done(total, durationNanoseconds) or done(undefined, undefined, error) }
+function Bench_Done(Args: PValue; Argc: Integer; var Res: TValue): Boolean;
+begin
+  ReportDone := True;
+  if (Argc >= 1) and IsNumber(Args[1]) then
+  begin
+    BenchTotal := Trunc(NumOf(Args[1]));
+    BenchDuration := Trunc(ArgNum(Args, Argc, 2));
+  end
+  else
+  begin
+    ReportErr := ArgStr(Args, Argc, 3);
+    if ReportErr = '' then ReportErr := 'the benchmark run failed';
+  end;
+  Res := VUndefined;
+  Result := True;
+end;
+
+function InstallBenchmarkAPI(var Err: UnicodeString): Boolean;
+var Base, Rounds: Integer;
+begin
+  if FirstInEngine(BenchApiRootedGen) then AddRoot(@BenchApiV);
+  BenchClockBase := GetNanoseconds;
+  BenchEntries := nil;
+  BenchEntryCount := 0;
+  Rounds := BenchEnvInt('GOCCIA_BENCH_ROUNDS', 7);
+  if Rounds > 50 then Rounds := 50;
+  if Rounds < 1 then Rounds := 1;
+  Base := TempTop;
+  PushRoot(GlobalObj);
+  PushRoot(SharedV);
+  PushRoot(MkPtr(NewPlainObject(ObjectProto, 16)));
+  DefineNative(RootAt(TempTop - 1), 'now', Bench_Now, 0);
+  DefineNative(RootAt(TempTop - 1), 'collect', Host_GC, 0);
+  DefineNative(RootAt(TempTop - 1), 'forget', Bench_Forget, 0);
+  DefineNative(RootAt(TempTop - 1), 'discardJobs', Work_Discard, 0);
+  DefineNative(RootAt(TempTop - 1), 'progress', Bench_Progress, 4);
+  DefineNative(RootAt(TempTop - 1), 'entry', Bench_Entry, 22);
+  DefineOwn(RootAt(TempTop - 1), AtomOf('progressOn'), MkBool(Assigned(BenchProgress)), pfDefault);
+  DefineOwn(RootAt(TempTop - 1), AtomOf('warmup'), MkNumber(BenchEnvInt('GOCCIA_BENCH_WARMUP', 5)), pfDefault);
+  DefineOwn(RootAt(TempTop - 1), AtomOf('calibrationMs'),
+    MkNumber(BenchEnvInt('GOCCIA_BENCH_CALIBRATION_MS', 200)), pfDefault);
+  DefineOwn(RootAt(TempTop - 1), AtomOf('calibrationBatch'),
+    MkNumber(BenchEnvInt('GOCCIA_BENCH_CALIBRATION_BATCH', 5)), pfDefault);
+  DefineOwn(RootAt(TempTop - 1), AtomOf('rounds'), MkNumber(Rounds), pfDefault);
+  Result := CallPrelude('<goccia:microbench>', MicrobenchSrc, Base, 3, BenchApiV, Err);
+  PopRoots(3);
+end;
+
+function RunBenchmarkSuites(Deterministic: Boolean; out Entries: TG2BenchEntries; out Total: Integer;
+  out DurationNanoseconds: Int64; var Err: UnicodeString): Boolean;
+var A: array[0..1] of TValue; Report, R, S: TValue;
+begin
+  Entries := nil;
+  Total := 0;
+  DurationNanoseconds := 0;
+  ReportJson := ''; ReportErr := ''; ReportDone := False;
+  BenchEntryCount := 0;
+  BenchTotal := 0;
+  BenchDuration := 0;
+  if not GetV(BenchApiV, AtomOf('report'), Report) then Exit(False);
+  PushRoot(NewNativeFunction(Bench_Done, 'done', 3));
+  A[0] := MkBool(Deterministic);
+  A[1] := RootAt(TempTop - 1);
+  Result := CallValue(Report, BenchApiV, @A[0], 2, R) and RunEventLoop;
+  PopRoots(1);
+  if not Result then
+  begin
+    if ToStringV(Pending, S) and IsString(S) then Err := StrToUnicode(StrOf(S)) else Err := 'uncaught exception';
+    Pending := VUndefined;
+    Exit;
+  end;
+  if not ReportDone then
+  begin
+    Err := 'the benchmarks did not finish';
+    Exit(False);
+  end;
+  Err := ReportErr;
+  Result := ReportErr = '';
+  Entries := Copy(BenchEntries, 0, BenchEntryCount);
+  Total := BenchTotal;
+  DurationNanoseconds := BenchDuration;
 end;
 
 initialization

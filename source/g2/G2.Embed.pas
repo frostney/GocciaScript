@@ -84,6 +84,7 @@ type
     FSourceKind: TG2SourceKind;
     FConfigJson: UnicodeString;
     FTestMode: Boolean;
+    FBenchMode: Boolean;
     FHeapSnapshots: Boolean;
     FTimeoutMs, FMaxInstructions, FMaxMemory: Int64;
     FMaxFrames: Integer;
@@ -155,6 +156,12 @@ type
     function LateRejection: UnicodeString;
     { test mode: the limits Run left armed disarmed, when RunTests does not follow }
     procedure EndTests;
+    { benchmark mode, after Run: the file's benchmarks (G2.HostAPI RunBenchmarkSuites, once each when
+      Deterministic) under the limits Run armed, which stay in force from the file's start, and the profile when
+      one is recorded; their results, else Err why they did not finish and Aborted the limit that ended them. The
+      limits are disarmed after (EndTests when RunBenchmarks does not follow). }
+    function RunBenchmarks(Deterministic: Boolean; out Entries: TG2BenchEntries; out Total: Integer;
+      out DurationNanoseconds: Int64; var Err: UnicodeString; var Aborted: TG2Abort): Boolean;
     { with HeapSnapshots, after the file's tests: each distinct object expect() was given, in the order first
       given, written as a heap snapshot (G2.HeapSnapshot) and described, or why it cannot be; Observations counts
       every object given, repeats included }
@@ -189,6 +196,8 @@ type
     property ConfigJson: UnicodeString read FConfigJson write FConfigJson;
     { the test framework's host: no process exit on an uncaught error, the testing API's globals }
     property TestMode: Boolean read FTestMode write FTestMode;
+    { the benchmark runner's host: the limits Run arms stay armed for RunBenchmarks }
+    property BenchMode: Boolean read FBenchMode write FBenchMode;
     { the TestRunner's --heap-snapshots: built-ins named before the entry compiles, and expect() keeping what it
       is given for HeapSnapshotObserved (set before InstallTestingAPI and Run) }
     property HeapSnapshots: Boolean read FHeapSnapshots write SetHeapSnapshots;
@@ -1095,8 +1104,8 @@ begin
     SetModuleContentCheck(nil);
     SetProviderGraphCheck(nil);
     PopRoots(1);
-    { a test file's limits cover its suites too (RunTests disarms them) }
-    if not FTestMode then LimitsDisarm;
+    { a test or benchmark file's limits cover its suites too (RunTests and RunBenchmarks disarm them) }
+    if not FTestMode and not FBenchMode then LimitsDisarm;
   end;
 end;
 
@@ -1137,6 +1146,60 @@ end;
 procedure TG2Engine.EndTests;
 begin
   LimitsDisarm;
+end;
+
+{ G2.HostAPI BenchDescribeThrown: what a benchmark threw, as an uncaught value of a run is described }
+procedure DescribeBenchThrown(V: TValue; var E: TG2BenchEntry);
+var R: TG2RunResult;
+begin
+  R := Default(TG2RunResult);
+  R.ErrorMessage := ThrownText(V);
+  DescribeThrown(V, R);
+  E.Error := R.ErrorMessage;
+  E.ErrorIsError := R.ErrorIsError;
+  E.ErrorName := R.ErrorName;
+  E.ErrorText := R.ErrorText;
+  E.ErrorFile := R.ErrorFile;
+  E.ErrorSuggestion := R.ErrorSuggestion;
+  E.ErrorLine := R.ErrorLine;
+  E.ErrorColumn := R.ErrorColumn;
+end;
+
+function TG2Engine.RunBenchmarks(Deterministic: Boolean; out Entries: TG2BenchEntries; out Total: Integer;
+  out DurationNanoseconds: Int64; var Err: UnicodeString; var Aborted: TG2Abort): Boolean;
+begin
+  BenchDescribeThrown := @DescribeBenchThrown;
+  Aborted := g2aNone;
+  Err := '';
+  { the benchmarks import as the file did: its resolver and their checks }
+  SetHostResolver(FResolver);
+  SetModuleContentCheck(FModuleContentCheck);
+  SetProviderGraphCheck(FProviderGraph);
+  if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
+  try
+    Result := RunBenchmarkSuites(Deterministic, Entries, Total, DurationNanoseconds, Err);
+    case AbortKind of
+      1: Aborted := g2aTimeout;
+      2: Aborted := g2aInstructionLimit;
+      3:
+        begin
+          Aborted := g2aMemoryLimit;
+          Err := MemoryLimitMessage;
+        end;
+      4:
+        begin
+          Aborted := g2aHostAbort;
+          Err := HostAbortMessage;
+        end;
+    end;
+    if Aborted <> g2aNone then Result := False;
+  finally
+    ProfileStop;
+    SetHostResolver(nil);
+    SetModuleContentCheck(nil);
+    SetProviderGraphCheck(nil);
+    LimitsDisarm;
+  end;
 end;
 
 procedure TG2Engine.SetHeapSnapshots(V: Boolean);

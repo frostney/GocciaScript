@@ -17,16 +17,18 @@ type
   TBuildMode = (bmDev, bmProd);
   TBuildTarget = (btTests, btRunner, btLoaderBare, btFuzzHarness,
     btTestRunner, btTest262Runner, btTOMLComplianceRunner, btWasmTestRunner,
-    btBenchmarkRunner, btBundler, btREPL, btG2, btG2Runner, btG2TestRunner, btG2REPL);
+    btBenchmarkRunner, btBundler, btREPL, btG2, btG2Runner, btG2TestRunner, btG2REPL,
+    btG2BenchmarkRunner);
 
 const
   BUILD_TARGET_NAMES: array[TBuildTarget] of string = (
     'tests', 'runner', 'loaderbare', 'fuzzharness', 'testrunner',
     'test262runner', 'tomlcompliancerunner', 'wasmtestrunner',
-    'benchmarkrunner', 'bundler', 'repl', 'g2', 'g2runner', 'g2testrunner', 'g2repl');
+    'benchmarkrunner', 'bundler', 'repl', 'g2', 'g2runner', 'g2testrunner', 'g2repl',
+    'g2benchrunner');
 
   { G2: the JS preludes compiled into the engine, as (source in source/g2/prelude, include, constant) }
-  G2_PRELUDES: array[0..21, 0..2] of string = (
+  G2_PRELUDES: array[0..22, 0..2] of string = (
     ('builtins5.js', 'G2.Builtins5.inc', 'Builtins5Src'),
     ('disposal.js', 'G2.Disposal.inc', 'DisposalSrc'),
     ('iterhelpers.js', 'G2.IterHelpers.inc', 'IterHelpersSrc'),
@@ -34,6 +36,7 @@ const
     ('temporal.js', 'G2.Temporal.inc', 'TemporalSrc'),
     ('intl.js', 'G2.Intl.inc', 'IntlSrc'),
     ('testing.js', 'G2.Testing.inc', 'TestingSrc'),
+    ('microbench.js', 'G2.Microbench.inc', 'MicrobenchSrc'),
     ('host.js', 'G2.HostPrelude.inc', 'HostSrc'),
     ('url.js', 'G2.UrlPrelude.inc', 'UrlSrc'),
     ('web.js', 'G2.WebPrelude.inc', 'WebSrc'),
@@ -752,6 +755,13 @@ begin
   Snap := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap.bin';
   Empty := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap-empty.js';
   WriteIfChanged(Empty, 'const x = 0;' + LineEnding);
+  { the benchmark runner fails a file without benchmarks: its run measures one, as briefly as the settings allow }
+  if ATarget = 'g2benchrunner' then
+  begin
+    Empty := 'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'snap-bench.js';
+    WriteIfChanged(Empty, 'import { bench } from "goccia:microbench";' + LineEnding +
+      'bench("snapshot", () => 0);' + LineEnding);
+  end;
   Proc := TProcess.Create(nil);
   try
     Proc.Executable := AExecutable;
@@ -759,6 +769,13 @@ begin
     for K := 0 to GetEnvironmentVariableCount - 1 do
       Proc.Environment.Add(GetEnvironmentString(K));
     Proc.Environment.Add('G2_SNAPSHOT_OUT=' + Snap);
+    if ATarget = 'g2benchrunner' then
+    begin
+      Proc.Parameters.Add('--no-progress');
+      Proc.Environment.Add('GOCCIA_BENCH_WARMUP=1');
+      Proc.Environment.Add('GOCCIA_BENCH_CALIBRATION_MS=1');
+      Proc.Environment.Add('GOCCIA_BENCH_ROUNDS=1');
+    end;
     Proc.Environment.Add('G2_NO_SNAPSHOT=1');
     Proc.Options := [poWaitOnExit];
     Proc.Execute;
@@ -911,6 +928,15 @@ begin
   ForceDirectories('build' + DirectorySeparator + 'g2');
   BuildG2Program('source/app/GocciaREPLG2.dpr', 'g2repl',
     'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaREPL');
+end;
+
+{ GocciaBenchmarkRunner on G2 while the apps move to it (source/app/GocciaBenchmarkRunnerG2.dpr) }
+procedure BuildG2BenchmarkRunner;
+begin
+  CheckG2Compiler;
+  ForceDirectories('build' + DirectorySeparator + 'g2');
+  BuildG2Program('source/app/GocciaBenchmarkRunnerG2.dpr', 'g2benchrunner',
+    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaBenchmarkRunner');
 end;
 
 procedure BuildREPL;
@@ -1272,6 +1298,7 @@ begin
     btG2Runner: BuildG2Runner;
     btG2TestRunner: BuildG2TestRunner;
     btG2REPL: BuildG2REPL;
+    btG2BenchmarkRunner: BuildG2BenchmarkRunner;
   end;
 end;
 
@@ -1378,7 +1405,7 @@ begin
   if BuildTriggers.Count = 0 then
     for I := Ord(Low(TBuildTarget)) to Ord(High(TBuildTarget)) do
       { G2 needs FPC 3.3.1, which the full build's toolchain is not yet: it is built by name }
-      if not (TBuildTarget(I) in [btG2, btG2Runner, btG2TestRunner, btG2REPL]) then
+      if not (TBuildTarget(I) in [btG2, btG2Runner, btG2TestRunner, btG2REPL, btG2BenchmarkRunner]) then
         BuildTriggers.Add(BUILD_TARGET_NAMES[TBuildTarget(I)]);
 
   { Resolve and validate the complete selection before removing any cache. }

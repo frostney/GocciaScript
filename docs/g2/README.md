@@ -308,6 +308,21 @@ on a thread of its own, each input run on it as a Script (`TG2Engine.Run` again)
 for the next input. Values print by the old REPL's rules (`host.js` `replFormat`, the `g2rfREPL` result form); each
 run's Script imports are a module of their own, and a rejection an input leaves goes with it.
 
+### GocciaBenchmarkRunner
+
+`./build.pas g2benchrunner` builds `build/g2/GocciaBenchmarkRunner` from `source/app/GocciaBenchmarkRunnerG2.dpr`:
+the old runner's options, file discovery (a `helpers/` folder is skipped), stdin and `--multifile`, `--jobs`, the
+console, text, CSV and JSON reports (`Goccia.Benchmark.Reporter`, shared with the old runner), exit codes and the
+profiles (`--profile`, `--profile-deterministic`). Each file runs on a thread of its own with an engine in benchmark
+mode (`BenchMode`): the file's limits stay armed while `TG2Engine.RunBenchmarks` measures what it registered.
+`goccia:microbench` (`bench`, `group`, `run`, `summary`, `boxplot`) is `prelude/microbench.js`, which measures as
+`Goccia.Builtins.Benchmark` does: the same warm-up, calibration, rounds, interquartile outlier filter and
+percentiles, the same `GOCCIA_BENCH_*` settings, a body's promise or thenable awaited, a generator function's code
+before its first `yield` as setup and after it as teardown, and the body's error kept when the teardown throws too.
+Its clock is a native in nanoseconds; the old runner turns its collector off while it measures, where G2's nursery
+collects as the body allocates. A benchmark's error reads as an uncaught error does in GocciaRunner, with its
+location and suggestion. Not yet on G2: `.gbc` benchmark files.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
