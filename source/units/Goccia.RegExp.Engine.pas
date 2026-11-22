@@ -101,43 +101,77 @@ begin
 end;
 
 // ES2026 §22.2.6.13.1 EscapeRegExpPattern ( pattern, flags )
+// Escapes what would stop "/" + S + "/" + flags from reading back as a
+// RegularExpressionLiteral: a "/" outside a character class and every line
+// terminator. Classes are tracked the way the literal grammar reads them ("["
+// opens one, the next unescaped "]" closes it, no nesting), because a "/"
+// inside a class needs no escape there. A code point after a backslash is
+// already escaped, so it gains no second backslash: "\/" stays "\/", and an
+// escaped line terminator becomes "\n", "\r", "\u2028" or "\u2029", which
+// match the same code point.
 function EscapeRegExpPattern(const APattern: string): string;
 var
+  AfterBackslash: Boolean;
   ByteLength: Integer;
   CodePoint: Cardinal;
   I: Integer;
+  InClass: Boolean;
+  LineTerminatorEscape: string;
 begin
   Result := '';
+  AfterBackslash := False;
+  InClass := False;
   I := 1;
   while I <= Length(APattern) do
   begin
-    if TryReadCodePointAtAllowSurrogates(APattern, I, CodePoint,
+    if not TryReadCodePointAtAllowSurrogates(APattern, I, CodePoint,
        ByteLength) then
     begin
-      case CodePoint of
-        Ord('/'):
-          Result := Result + '\/';
-        $000A:
-          Result := Result + '\n';
-        $000D:
-          Result := Result + '\r';
-        $2028:
-          Result := Result + '\u2028';
-        $2029:
-          Result := Result + '\u2029';
+      CodePoint := Ord(APattern[I]);
+      ByteLength := 1;
+    end;
+    case CodePoint of
+      $000A:
+        LineTerminatorEscape := 'n';
+      $000D:
+        LineTerminatorEscape := 'r';
+      $2028:
+        LineTerminatorEscape := 'u2028';
+      $2029:
+        LineTerminatorEscape := 'u2029';
+    else
+      LineTerminatorEscape := '';
+    end;
+
+    if LineTerminatorEscape <> '' then
+    begin
+      if AfterBackslash then
+        Result := Result + LineTerminatorEscape
       else
-        Result := Result + Copy(APattern, I, ByteLength);
-      end;
-      Inc(I, ByteLength);
+        Result := Result + '\' + LineTerminatorEscape;
+      AfterBackslash := False;
+    end
+    else if AfterBackslash then
+    begin
+      Result := Result + Copy(APattern, I, ByteLength);
+      AfterBackslash := False;
     end
     else
     begin
-      if APattern[I] = '/' then
+      case CodePoint of
+        Ord('\'):
+          AfterBackslash := True;
+        Ord('['):
+          InClass := True;
+        Ord(']'):
+          InClass := False;
+      end;
+      if (CodePoint = Ord('/')) and not InClass then
         Result := Result + '\/'
       else
-        Result := Result + APattern[I];
-      Inc(I);
+        Result := Result + Copy(APattern, I, ByteLength);
     end;
+    Inc(I, ByteLength);
   end;
 end;
 
