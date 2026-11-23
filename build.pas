@@ -18,14 +18,14 @@ type
   TBuildTarget = (btTests, btRunner, btLoaderBare, btFuzzHarness,
     btTestRunner, btTest262Runner, btTOMLComplianceRunner, btWasmTestRunner,
     btBenchmarkRunner, btBundler, btREPL, btG2, btG2Runner, btG2TestRunner, btG2REPL,
-    btG2BenchmarkRunner, btG2Bundler);
+    btG2BenchmarkRunner, btG2Bundler, btG2Test262Runner);
 
 const
   BUILD_TARGET_NAMES: array[TBuildTarget] of string = (
     'tests', 'runner', 'loaderbare', 'fuzzharness', 'testrunner',
     'test262runner', 'tomlcompliancerunner', 'wasmtestrunner',
     'benchmarkrunner', 'bundler', 'repl', 'g2', 'g2runner', 'g2testrunner', 'g2repl',
-    'g2benchrunner', 'g2bundler');
+    'g2benchrunner', 'g2bundler', 'g2test262runner');
 
   { G2: the JS preludes compiled into the engine, as (source in source/g2/prelude, include, constant) }
   G2_PRELUDES: array[0..22, 0..2] of string = (
@@ -948,6 +948,15 @@ begin
     'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaBundler');
 end;
 
+{ GocciaTest262Runner on G2 while the apps move to it (source/app/GocciaTest262RunnerG2.dpr) }
+procedure BuildG2Test262Runner;
+begin
+  CheckG2Compiler;
+  ForceDirectories('build' + DirectorySeparator + 'g2');
+  BuildG2Program('source/app/GocciaTest262RunnerG2.dpr', 'g2test262runner',
+    'build' + DirectorySeparator + 'g2' + DirectorySeparator + 'GocciaTest262Runner');
+end;
+
 procedure BuildREPL;
 var
   Output: string;
@@ -1309,6 +1318,7 @@ begin
     btG2REPL: BuildG2REPL;
     btG2BenchmarkRunner: BuildG2BenchmarkRunner;
     btG2Bundler: BuildG2Bundler;
+    btG2Test262Runner: BuildG2Test262Runner;
   end;
 end;
 
@@ -1415,7 +1425,8 @@ begin
   if BuildTriggers.Count = 0 then
     for I := Ord(Low(TBuildTarget)) to Ord(High(TBuildTarget)) do
       { G2 needs FPC 3.3.1, which the full build's toolchain is not yet: it is built by name }
-      if not (TBuildTarget(I) in [btG2, btG2Runner, btG2TestRunner, btG2REPL, btG2BenchmarkRunner, btG2Bundler]) then
+      if not (TBuildTarget(I) in [btG2, btG2Runner, btG2TestRunner, btG2REPL, btG2BenchmarkRunner, btG2Bundler,
+        btG2Test262Runner]) then
         BuildTriggers.Add(BUILD_TARGET_NAMES[TBuildTarget(I)]);
 
   { Resolve and validate the complete selection before removing any cache. }

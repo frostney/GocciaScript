@@ -1,0 +1,1815 @@
+program GocciaTest262RunnerG2;
+
+{$I Goccia.inc}
+
+{ GocciaTest262Runner on G2: the old runner's command line, discovery, sharding, grading contract 4 and JSON
+  report, with each run in a forked process on G2's test262 host (G2.Test262). Linux on x86-64 only, as G2. }
+
+uses
+  {$IFDEF UNIX}cthreads, BaseUnix,{$ENDIF}
+  Classes,
+  Generics.Collections,
+  Generics.Defaults,
+  Math,
+  StrUtils,
+  SysUtils,
+
+  CLI.Options,
+  CLI.Units,
+  FileUtils,
+  TextSemantics,
+  TimingUtils,
+
+  NumericText,
+
+  Goccia.Capabilities,
+  Goccia.CLI.Options,
+  Goccia.JSON.Utils,
+  Goccia.Profiler,
+  Goccia.Profiler.Report,
+  Goccia.TextFiles,
+
+  G2.Core,
+  G2.Embed,
+  G2.Engine,
+  G2.Profile,
+  G2.Test262;
+
+const
+  { Every top-level test262 category. annexB is part of the conformance
+    target (ADR 0177), so it runs and counts like the others. }
+  DEFAULT_CATEGORIES = 'annexB,built-ins,harness,intl402,language,staging';
+  DEFAULT_JOBS = 4;
+  DEFAULT_TIMEOUT_MS = 20000;
+  DEFAULT_MAX_MEMORY_BYTES = Int64(2) * 1024 * 1024 * 1024;
+  FNV_OFFSET_BASIS = UInt32($811C9DC5);
+  FNV_PRIME = UInt32($01000193);
+  ASYNC_PASS_MARKER = 'Test262:AsyncTestComplete';
+  ASYNC_FAIL_MARKER = 'Test262:AsyncTestFailure:';
+  { The value stock harness/sta.js $DONOTEVALUATE() throws. raw negative
+    tests throw the same string literal themselves. Seeing it thrown means
+    the test body was evaluated. }
+  DONOTEVALUATE_THROWN = 'Test262: This statement should not be evaluated.';
+  WORKER_RESULT_VERSION = 1;
+  { Version of the grading contract in docs/test262.md, published as
+    run.gradingContract. Bump it whenever a grading change can move a test
+    between PASS and FAIL without an engine change, so the PR comparison
+    does not block on a baseline graded under the old contract. }
+  GRADING_CONTRACT_VERSION = 4;
+
+type
+  TTest262Outcome = (toPass, toFail, toWrapperInfra, toTimeout);
+  TTest262TestKind = (tkPositiveSync, tkPositiveAsync, tkNegativeRuntime,
+    tkNegativeParse);
+  TTest262ProfileMode = (tpmOpcodes, tpmFunctions, tpmAll);
+  { The strictness one run of a test file is evaluated in. Module code is
+    strict, so a module test's one run is a strict run. }
+  TTest262RunMode = (trmNonStrict, trmStrict);
+  TTest262RunModes = set of TTest262RunMode;
+
+  TTest262Counts = record
+    Run: Integer;
+    Passed: Integer;
+    Failed: Integer;
+    WrapperInfra: Integer;
+    Timeouts: Integer;
+  end;
+  TTest262ModeCounts = array[TTest262RunMode] of TTest262Counts;
+
+  TTest262Metadata = class
+  public
+    Flags: TStringList;
+    Includes: TStringList;
+    Features: TStringList;
+    NegativePhase: string;
+    NegativeType: string;
+    constructor Create;
+    destructor Destroy; override;
+    function HasFlag(const AName: string): Boolean;
+    function HasFeature(const AName: string): Boolean;
+    function IsNegative: Boolean;
+  end;
+
+  { One run: a test file evaluated in one mode. A file test262 requires in
+    both modes is two cases with the same Id. }
+  TTest262Case = class
+  public
+    Id: string;
+    Path: string;
+    Mode: TTest262RunMode;
+  end;
+
+  TTest262Result = record
+    Id: string;
+    Mode: TTest262RunMode;
+    Status: TTest262Outcome;
+    DurationMs: Integer;
+    Message: string;
+    Diagnostic: string;
+    ProfilePath: string;
+    ProfileMissing: Boolean;
+  end;
+
+  TTest262Options = record
+    SuiteDir: string;
+    OutputPath: string;
+    ProfileDir: string;
+    Filter: string;
+    Categories: string;
+    Jobs: Integer;
+    MaxTests: Integer;
+    TimeoutMs: Integer;
+    MaxMemoryBytes: Int64;
+    ProfileMode: TTest262ProfileMode;
+    ShardIndex: Integer;
+    ShardCount: Integer;
+    Verbose: Boolean;
+    HostEval: Boolean;
+    HostEvalDeterministic: Boolean;
+    HostEvalWarningUnsupportedFeatures: Boolean;
+    HostEvalModule: Boolean;
+  end;
+
+  TTest262App = class
+  private
+    FOptions: TTest262Options;
+    FCases: TObjectList<TTest262Case>;
+    FSelectedPaths: TStringList;
+    FResults: array of TTest262Result;
+    FTotalDiscovered: Integer;
+    FExpectedRuns: array[TTest262RunMode] of Integer;
+    FDurationNanoseconds: Int64;
+    procedure ParseArguments;
+    procedure PrintUsage;
+    procedure Discover;
+    procedure ExpandRunModes;
+    function NormalizeId(const APath: string): string;
+    function MatchesFilter(const AId: string): Boolean;
+    function ShardForTest(const AId: string): Integer;
+    function ParseTest(const ASource: string;
+      out AMetadata: TTest262Metadata): Boolean;
+    function HarnessFilePath(const AName: string): string;
+    function HarnessIncludes(const AMetadata: TTest262Metadata): TStringList;
+    function DetermineKind(
+      const AMetadata: TTest262Metadata): TTest262TestKind;
+    procedure ConfigureProfiler;
+    function ProfilePathForTest(const AId: string;
+      const AMode: TTest262RunMode): string;
+    procedure ExecuteOne(const ACase: TTest262Case;
+      out AResult: TTest262Result);
+    procedure ExecuteAll;
+    procedure PrintSummary;
+    procedure WriteReport;
+    function RunHostEval: Integer;
+    function FailureCount: Integer;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    function Run: Integer;
+  end;
+
+function RunModeName(const AMode: TTest262RunMode): string;
+begin
+  case AMode of
+    trmNonStrict: Result := 'non-strict';
+    trmStrict: Result := 'strict';
+  end;
+end;
+
+function OutcomeName(const AOutcome: TTest262Outcome): string;
+begin
+  case AOutcome of
+    toPass: Result := 'PASS';
+    toFail: Result := 'FAIL';
+    toWrapperInfra: Result := 'WRAPPER_INFRA';
+    toTimeout: Result := 'TIMEOUT';
+  end;
+end;
+
+procedure WriteWorkerString(const AStream: TStream; const AValue: string);
+var
+  ByteLength: LongInt;
+  ValueBytes: UTF8String;
+begin
+  ValueBytes := UTF8String(AValue);
+  ByteLength := Length(ValueBytes);
+  AStream.WriteBuffer(ByteLength, SizeOf(ByteLength));
+  if ByteLength > 0 then
+    AStream.WriteBuffer(ValueBytes[1], ByteLength);
+end;
+
+function ReadWorkerString(const AStream: TStream): string;
+var
+  ByteLength: LongInt;
+  ValueBytes: UTF8String;
+begin
+  AStream.ReadBuffer(ByteLength, SizeOf(ByteLength));
+  if (ByteLength < 0) or (ByteLength > AStream.Size - AStream.Position) then
+    raise EReadError.Create('Invalid worker result string length');
+  SetLength(ValueBytes, ByteLength);
+  if ByteLength > 0 then
+    AStream.ReadBuffer(ValueBytes[1], ByteLength);
+  Result := string(ValueBytes);
+end;
+
+procedure WriteWorkerResult(const APath: string;
+  const AResult: TTest262Result);
+var
+  DurationMs: LongInt;
+  Outcome: LongInt;
+  ProfileMissing: Byte;
+  Stream: TFileStream;
+  Version: LongInt;
+begin
+  Stream := TFileStream.Create(APath, fmCreate);
+  try
+    Version := WORKER_RESULT_VERSION;
+    Outcome := Ord(AResult.Status);
+    DurationMs := AResult.DurationMs;
+    ProfileMissing := Ord(AResult.ProfileMissing);
+    Stream.WriteBuffer(Version, SizeOf(Version));
+    Stream.WriteBuffer(Outcome, SizeOf(Outcome));
+    Stream.WriteBuffer(DurationMs, SizeOf(DurationMs));
+    Stream.WriteBuffer(ProfileMissing, SizeOf(ProfileMissing));
+    WriteWorkerString(Stream, AResult.Id);
+    WriteWorkerString(Stream, AResult.Message);
+    WriteWorkerString(Stream, AResult.Diagnostic);
+    WriteWorkerString(Stream, AResult.ProfilePath);
+  finally
+    Stream.Free;
+  end;
+end;
+
+procedure ReadWorkerResult(const APath: string;
+  out AResult: TTest262Result);
+var
+  DurationMs: LongInt;
+  Outcome: LongInt;
+  ProfileMissing: Byte;
+  Stream: TFileStream;
+  Version: LongInt;
+begin
+  Stream := TFileStream.Create(APath, fmOpenRead or fmShareDenyWrite);
+  try
+    Stream.ReadBuffer(Version, SizeOf(Version));
+    if Version <> WORKER_RESULT_VERSION then
+      raise EReadError.Create('Unsupported worker result version');
+    Stream.ReadBuffer(Outcome, SizeOf(Outcome));
+    if (Outcome < Ord(Low(TTest262Outcome))) or
+       (Outcome > Ord(High(TTest262Outcome))) then
+      raise EReadError.Create('Invalid worker result outcome');
+    Stream.ReadBuffer(DurationMs, SizeOf(DurationMs));
+    Stream.ReadBuffer(ProfileMissing, SizeOf(ProfileMissing));
+    AResult := Default(TTest262Result);
+    AResult.Status := TTest262Outcome(Outcome);
+    AResult.DurationMs := DurationMs;
+    AResult.ProfileMissing := ProfileMissing <> 0;
+    AResult.Id := ReadWorkerString(Stream);
+    AResult.Message := ReadWorkerString(Stream);
+    AResult.Diagnostic := ReadWorkerString(Stream);
+    AResult.ProfilePath := ReadWorkerString(Stream);
+  finally
+    Stream.Free;
+  end;
+end;
+
+function FirstLine(const AText: string): string;
+var
+  LineEnd: SizeInt;
+begin
+  LineEnd := Pos(#10, AText);
+  if LineEnd > 0 then
+    Result := Trim(Copy(AText, 1, LineEnd - 1))
+  else
+    Result := Trim(AText);
+  if Length(Result) > 200 then
+    SetLength(Result, 200);
+end;
+
+function ExtractMarkerValue(const AText, AMarker: string;
+  out AValue: string): Boolean;
+var
+  MarkerPos: SizeInt;
+  LineEnd: SizeInt;
+begin
+  MarkerPos := Pos(AMarker, AText);
+  Result := MarkerPos > 0;
+  if not Result then
+  begin
+    AValue := '';
+    Exit;
+  end;
+  AValue := Copy(AText, MarkerPos + Length(AMarker), MaxInt);
+  LineEnd := Pos(#10, AValue);
+  if LineEnd > 0 then
+    SetLength(AValue, LineEnd - 1);
+  AValue := Trim(AValue);
+end;
+
+function StripQuotesAndComma(const AValue: string): string;
+begin
+  Result := Trim(AValue);
+  if (Result <> '') and (Result[Length(Result)] = ',') then
+    Delete(Result, Length(Result), 1);
+  Result := Trim(Result);
+  if (Length(Result) >= 2) and
+     (((Result[1] = '''') and
+       (Result[Length(Result)] = '''')) or
+      ((Result[1] = '"') and (Result[Length(Result)] = '"'))) then
+    Result := Copy(Result, 2, Length(Result) - 2);
+end;
+
+procedure AddInlineList(const AList: TStrings; const AValue: string);
+var
+  DelimiterPosition: Integer;
+  Item: string;
+  ListText: string;
+begin
+  ListText := Trim(AValue);
+  if ListText = '' then
+    Exit;
+  if ListText[1] = '[' then
+  begin
+    Delete(ListText, 1, 1);
+    DelimiterPosition := Pos(']', ListText);
+    if DelimiterPosition > 0 then
+      ListText := Copy(ListText, 1, DelimiterPosition - 1);
+  end;
+  repeat
+    DelimiterPosition := Pos(',', ListText);
+    if DelimiterPosition > 0 then
+    begin
+      Item := Copy(ListText, 1, DelimiterPosition - 1);
+      Delete(ListText, 1, DelimiterPosition);
+    end
+    else
+    begin
+      Item := ListText;
+      ListText := '';
+    end;
+    Item := StripQuotesAndComma(Item);
+    if (Item <> '') and (AList.IndexOf(Item) < 0) then
+      AList.Add(Item);
+  until DelimiterPosition = 0;
+end;
+
+constructor TTest262Metadata.Create;
+begin
+  inherited Create;
+  Flags := TStringList.Create;
+  Includes := TStringList.Create;
+  Features := TStringList.Create;
+end;
+
+destructor TTest262Metadata.Destroy;
+begin
+  Features.Free;
+  Includes.Free;
+  Flags.Free;
+  inherited;
+end;
+
+function TTest262Metadata.HasFlag(const AName: string): Boolean;
+begin
+  Result := Flags.IndexOf(AName) >= 0;
+end;
+
+function TTest262Metadata.HasFeature(const AName: string): Boolean;
+begin
+  Result := Features.IndexOf(AName) >= 0;
+end;
+
+{ INTERPRETING.md, "Strict Mode" and "flags": a test runs twice, once
+  non-strict and once strict, unless a flag says otherwise. A module test
+  runs once, as module code, which is strict. A raw test runs once,
+  non-strict, exactly as written. onlyStrict and noStrict run once, in the
+  mode they name. }
+function RunModesFor(const AMetadata: TTest262Metadata): TTest262RunModes;
+begin
+  if AMetadata.HasFlag('module') then
+    Result := [trmStrict]
+  else if AMetadata.HasFlag('raw') then
+    Result := [trmNonStrict]
+  else if AMetadata.HasFlag('onlyStrict') then
+    Result := [trmStrict]
+  else if AMetadata.HasFlag('noStrict') then
+    Result := [trmNonStrict]
+  else
+    Result := [trmNonStrict, trmStrict];
+end;
+
+function TTest262Metadata.IsNegative: Boolean;
+begin
+  Result := (NegativePhase <> '') or (NegativeType <> '');
+end;
+
+constructor TTest262App.Create;
+begin
+  inherited Create;
+  FOptions := Default(TTest262Options);
+  FOptions.Categories := DEFAULT_CATEGORIES;
+  FOptions.Jobs := DEFAULT_JOBS;
+  FOptions.TimeoutMs := DEFAULT_TIMEOUT_MS;
+  FOptions.MaxMemoryBytes := DEFAULT_MAX_MEMORY_BYTES;
+  FOptions.ProfileMode := tpmAll;
+  FOptions.ShardIndex := -1;
+  FOptions.ShardCount := 0;
+  FOptions.HostEvalModule := False;
+  FCases := TObjectList<TTest262Case>.Create(True);
+  FSelectedPaths := TStringList.Create;
+end;
+
+destructor TTest262App.Destroy;
+begin
+  FSelectedPaths.Free;
+  FCases.Free;
+  inherited;
+end;
+
+procedure TTest262App.PrintUsage;
+begin
+  WriteLn('Usage: GocciaTest262Runner --suite-dir=DIR [options]');
+  WriteLn('');
+  WriteLn('Options:');
+  WriteLn('  --suite-dir=DIR              Existing test262 checkout');
+  WriteLn('  --output=FILE                JSON result report');
+  WriteLn('  --profile-dir=DIR            Per-test VM profile directory');
+  WriteLn('  --profile-mode=MODE          opcodes, functions, or all');
+  WriteLn('  --categories=LIST            Comma-separated top-level categories');
+  WriteLn('  --filter=GLOB                Test ID glob');
+  WriteLn('  --max-tests=N                Cap before sharding (0 = unlimited)');
+  WriteLn('  --jobs=N                     Concurrent native workers (default: 4)');
+  WriteLn('  --timeout=DURATION           Per-test cooperative timeout: 500ms, 20s, 2m, or plain milliseconds');
+  WriteLn('  --max-memory=BYTES           Per-test GC heap ceiling: 512MiB, 1GiB, or plain bytes');
+  WriteLn('  --shard-index=N              Zero-based shard index');
+  WriteLn('  --shard-count=N              Total shard count');
+  WriteLn('  --verbose                    Print every test result');
+  WriteLn('  --eval-host                  Execute a Test262 host probe from stdin');
+  WriteLn('  --deterministic              Stable host state for --eval-host');
+  WriteLn('  --warning-unsupported-features');
+  WriteLn('                               Parser warnings for --eval-host');
+end;
+
+procedure TTest262App.ParseArguments;
+const
+  TEST262_PROGRAM_NAME = 'GocciaTest262Runner';
+  TEST262_BOOLEAN_FLAGS: array[0..6] of string = ('--help', '--verbose',
+    '--eval-host', '--deterministic', '--warning-unsupported-features',
+    '--unsafe-function-constructor', '--unsafe-shadowrealm');
+var
+  Argument: string;
+  I: Integer;
+  Value: string;
+  Parsed: Int64;
+  ParseError: string;
+  FlagIndex: Integer;
+
+  function ArgumentValue(const AName: string): string;
+  begin
+    if StartsStr(AName + '=', Argument) then
+      Result := Copy(Argument, Length(AName) + 2, MaxInt)
+    else
+    begin
+      Inc(I);
+      if I > ParamCount then
+        raise TCLIUsageError.Create(AName + ' requires a value');
+      Result := ParamStr(I);
+    end;
+    if Result = '' then
+      raise TCLIUsageError.Create(AName + ' requires a value');
+  end;
+
+  function NonNegativeInteger(const AName, ARaw: string): Integer;
+  begin
+    if not TryStrToInt(ARaw, Result) or (Result < 0) then
+      raise TParseError.Create(AName +
+        ' requires a non-negative integer, got: ' + ARaw);
+  end;
+
+  function PositiveInteger(const AName, ARaw: string): Integer;
+  begin
+    Result := NonNegativeInteger(AName, ARaw);
+    if Result = 0 then
+      raise TParseError.Create(AName +
+        ' requires a positive integer, got: ' + ARaw);
+  end;
+
+begin
+  I := 1;
+  while I <= ParamCount do
+  begin
+    Argument := ParamStr(I);
+    RejectUnsupportedSettingArgument(Argument, TEST262_PROGRAM_NAME,
+      [grsTimeout, grsMaxMemory]);
+    for FlagIndex := Low(TEST262_BOOLEAN_FLAGS) to High(TEST262_BOOLEAN_FLAGS) do
+      if StartsStr(TEST262_BOOLEAN_FLAGS[FlagIndex] + '=', Argument) then
+        raise TCLIUsageError.CreateFmt(
+          '%s does not take a value; got "%s". Omit the flag to leave it off',
+          [TEST262_BOOLEAN_FLAGS[FlagIndex],
+           Copy(Argument, Length(TEST262_BOOLEAN_FLAGS[FlagIndex]) + 2,
+             MaxInt)]);
+    if (Argument = '--help') or (Argument = '-h') then
+    begin
+      PrintUsage;
+      Halt(0);
+    end
+    else if (Argument = '--verbose') or (Argument = '-v') then
+      FOptions.Verbose := True
+    else if Argument = '--eval-host' then
+      FOptions.HostEval := True
+    else if Argument = '--deterministic' then
+      FOptions.HostEvalDeterministic := True
+    else if Argument = '--warning-unsupported-features' then
+      FOptions.HostEvalWarningUnsupportedFeatures := True
+    else if StartsStr('--compat-', Argument) or
+        (Argument = '--unsafe-function-constructor') or
+        (Argument = '--unsafe-shadowrealm') then
+    begin
+      { Host-eval compatibility flags are already part of the Test262 profile. }
+    end
+    else if (Argument = '--source-type') or
+        StartsStr('--source-type=', Argument) then
+    begin
+      Value := ArgumentValue('--source-type');
+      if Value = 'script' then
+        FOptions.HostEvalModule := False
+      else if Value = 'module' then
+        FOptions.HostEvalModule := True
+      else
+        raise TParseError.Create('--source-type requires script or module');
+    end
+    else if (Argument = '--suite-dir') or
+        StartsStr('--suite-dir=', Argument) then
+      FOptions.SuiteDir := ExpandFileName(ArgumentValue('--suite-dir'))
+    else if (Argument = '--output') or
+        StartsStr('--output=', Argument) then
+      FOptions.OutputPath := ExpandFileName(ArgumentValue('--output'))
+    else if (Argument = '--profile-dir') or
+        StartsStr('--profile-dir=', Argument) then
+      FOptions.ProfileDir := ExpandFileName(ArgumentValue('--profile-dir'))
+    else if (Argument = '--filter') or StartsStr('--filter=', Argument) then
+      FOptions.Filter := ArgumentValue('--filter')
+    else if (Argument = '--categories') or
+        StartsStr('--categories=', Argument) then
+      FOptions.Categories := ArgumentValue('--categories')
+    else if (Argument = '--jobs') or StartsStr('--jobs=', Argument) then
+      FOptions.Jobs := PositiveInteger('--jobs', ArgumentValue('--jobs'))
+    else if (Argument = '--max-tests') or
+        StartsStr('--max-tests=', Argument) then
+      FOptions.MaxTests := NonNegativeInteger('--max-tests',
+        ArgumentValue('--max-tests'))
+    else if (Argument = '--timeout-ms') or
+        StartsStr('--timeout-ms=', Argument) then
+      raise TCLIUsageError.CreateFmt(
+        '--timeout-ms was removed in GocciaScript %s; use --timeout instead ' +
+        '(units: 20s)', [OPTIONS_REMOVED_IN_VERSION])
+    else if (Argument = '--timeout') or
+        StartsStr('--timeout=', Argument) then
+    begin
+      Value := ArgumentValue('--timeout');
+      if not TryParseDurationMilliseconds(Value, Parsed, ParseError) then
+        raise TParseError.CreateFmt('Invalid value for --timeout: %s (%s)',
+          [Value, ParseError]);
+      if Parsed <= 0 then
+        raise TParseError.Create('--timeout requires a positive duration');
+      FOptions.TimeoutMs := Integer(Parsed);
+    end
+    else if (Argument = '--max-memory') or
+        StartsStr('--max-memory=', Argument) then
+    begin
+      Value := ArgumentValue('--max-memory');
+      if not TryParseByteSize(Value, FOptions.MaxMemoryBytes, ParseError) then
+        raise TParseError.CreateFmt('Invalid value for --max-memory: %s (%s)',
+          [Value, ParseError]);
+      if FOptions.MaxMemoryBytes <= 0 then
+        raise TParseError.Create('--max-memory requires a positive size');
+    end
+    else if TryHandleCapabilityArgument(Argument, TEST262_PROGRAM_NAME,
+        []) then
+      { A deny can only narrow what the test262 profile already grants
+        (nothing); accepted for symmetry with the other binaries. }
+    else if (Argument = '--shard-index') or
+        StartsStr('--shard-index=', Argument) then
+      FOptions.ShardIndex := NonNegativeInteger('--shard-index',
+        ArgumentValue('--shard-index'))
+    else if (Argument = '--shard-count') or
+        StartsStr('--shard-count=', Argument) then
+      FOptions.ShardCount := PositiveInteger('--shard-count',
+        ArgumentValue('--shard-count'))
+    else if (Argument = '--mode') or StartsStr('--mode=', Argument) then
+      RejectRemovedExecutionModeArgument(Argument)
+    else if (Argument = '--profile-mode') or
+        StartsStr('--profile-mode=', Argument) then
+    begin
+      Value := ArgumentValue('--profile-mode');
+      if Value = 'opcodes' then
+        FOptions.ProfileMode := tpmOpcodes
+      else if Value = 'functions' then
+        FOptions.ProfileMode := tpmFunctions
+      else if Value = 'all' then
+        FOptions.ProfileMode := tpmAll
+      else
+        raise TParseError.Create(
+          '--profile-mode requires opcodes, functions, or all');
+    end
+    else
+      raise TCLIUsageError.Create('Unknown argument: ' + Argument);
+    Inc(I);
+  end;
+
+  if (FOptions.SuiteDir = '') and not FOptions.HostEval then
+    raise TCLIUsageError.Create('--suite-dir is required');
+  if not FOptions.HostEval and
+     not DirectoryExists(IncludeTrailingPathDelimiter(FOptions.SuiteDir) +
+      'test') then
+    raise TParseError.Create('test262 test directory not found under: ' +
+      FOptions.SuiteDir);
+  if (FOptions.ShardIndex >= 0) <> (FOptions.ShardCount > 0) then
+    raise TCLIUsageError.Create(
+      '--shard-index and --shard-count must be provided together');
+  if (FOptions.ShardIndex >= 0) and
+     (FOptions.ShardIndex >= FOptions.ShardCount) then
+    raise TParseError.Create('--shard-index must be less than --shard-count');
+end;
+
+function TTest262App.NormalizeId(const APath: string): string;
+var
+  Prefix: string;
+begin
+  Prefix := IncludeTrailingPathDelimiter(FOptions.SuiteDir) +
+    'test' + PathDelim;
+  Result := Copy(APath, Length(Prefix) + 1, MaxInt);
+  Result := StringReplace(Result, '\', '/', [rfReplaceAll]);
+end;
+
+function TTest262App.MatchesFilter(const AId: string): Boolean;
+  function MatchFrom(const AText, APattern: string;
+    const ATextIndex, APatternIndex: Integer): Boolean;
+  var
+    DoubleStar: Boolean;
+    NextTextIndex: Integer;
+  begin
+    if APatternIndex > Length(APattern) then
+      Exit(ATextIndex > Length(AText));
+    if APattern[APatternIndex] = '*' then
+    begin
+      DoubleStar := (APatternIndex < Length(APattern)) and
+        (APattern[APatternIndex + 1] = '*');
+      if DoubleStar then
+      begin
+        for NextTextIndex := ATextIndex to Length(AText) + 1 do
+          if MatchFrom(AText, APattern, NextTextIndex,
+              APatternIndex + 2) then
+            Exit(True);
+      end
+      else
+      begin
+        NextTextIndex := ATextIndex;
+        repeat
+          if MatchFrom(AText, APattern, NextTextIndex,
+              APatternIndex + 1) then
+            Exit(True);
+          if (NextTextIndex > Length(AText)) or
+             (AText[NextTextIndex] = '/') then
+            Break;
+          Inc(NextTextIndex);
+        until False;
+      end;
+      Exit(False);
+    end;
+    if ATextIndex > Length(AText) then
+      Exit(False);
+    if (APattern[APatternIndex] = '?') or
+       (APattern[APatternIndex] = AText[ATextIndex]) then
+      Exit(MatchFrom(AText, APattern, ATextIndex + 1,
+        APatternIndex + 1));
+    Result := False;
+  end;
+
+var
+  SeparatorIndex: Integer;
+begin
+  if FOptions.Filter = '' then
+    Exit(True);
+  if MatchFrom(AId, FOptions.Filter, 1, 1) then
+    Exit(True);
+  for SeparatorIndex := 1 to Length(AId) do
+    if (AId[SeparatorIndex] = '/') and
+       MatchFrom(AId, FOptions.Filter, SeparatorIndex + 1, 1) then
+      Exit(True);
+  Result := False;
+end;
+
+function TTest262App.ShardForTest(const AId: string): Integer;
+var
+  Hash: UInt32;
+  I: Integer;
+  Product: UInt64;
+begin
+  Hash := FNV_OFFSET_BASIS;
+  for I := 1 to Length(AId) do
+  begin
+    Hash := Hash xor Ord(AId[I]);
+    Product := UInt64(Hash) * UInt64(FNV_PRIME);
+    Hash := UInt32(Product and UInt64($FFFFFFFF));
+  end;
+  Result := Integer(Hash mod UInt32(FOptions.ShardCount));
+end;
+
+function CompareTest262Cases(
+  {$IFDEF GOCCIA_FPC_CONSTREF_COMPARERS}constref{$ELSE}const{$ENDIF} ALeft,
+  ARight: TTest262Case): Integer;
+begin
+  Result := CompareText(ALeft.Id, ARight.Id);
+end;
+
+procedure TTest262App.Discover;
+var
+  Candidate: TTest262Case;
+  Categories: TStringList;
+  CategoryDirectory: string;
+  CategoryFiles, DiscoveredFiles: TStringList;
+  I, J: Integer;
+begin
+  Categories := TStringList.Create;
+  CategoryFiles := TStringList.Create;
+  try
+    Categories.StrictDelimiter := True;
+    Categories.Delimiter := ',';
+    Categories.DelimitedText := FOptions.Categories;
+    for I := 0 to Categories.Count - 1 do
+    begin
+      CategoryDirectory := IncludeTrailingPathDelimiter(FOptions.SuiteDir) +
+        'test' + PathDelim + Trim(Categories[I]);
+      if not DirectoryExists(CategoryDirectory) then
+      begin
+        WriteLn(ErrOutput, 'Warning: category directory not found: ',
+          CategoryDirectory);
+        Continue;
+      end;
+      CategoryFiles.Clear;
+      DiscoveredFiles := FindAllFiles(CategoryDirectory, '.js');
+      try
+        CategoryFiles.AddStrings(DiscoveredFiles);
+      finally
+        DiscoveredFiles.Free;
+      end;
+      for J := 0 to CategoryFiles.Count - 1 do
+      begin
+        if EndsStr('_FIXTURE.js', CategoryFiles[J]) then
+          Continue;
+        Candidate := TTest262Case.Create;
+        Candidate.Path := ExpandFileName(CategoryFiles[J]);
+        Candidate.Id := NormalizeId(Candidate.Path);
+        if MatchesFilter(Candidate.Id) then
+          FCases.Add(Candidate)
+        else
+          Candidate.Free;
+      end;
+    end;
+    FCases.Sort(TComparer<TTest262Case>.Construct(CompareTest262Cases));
+    if (FOptions.MaxTests > 0) and
+       (FCases.Count > FOptions.MaxTests) then
+      while FCases.Count > FOptions.MaxTests do
+        FCases.Delete(FCases.Count - 1);
+    FTotalDiscovered := FCases.Count;
+    for I := FCases.Count - 1 downto 0 do
+      if (FOptions.ShardCount > 0) and
+         (ShardForTest(FCases[I].Id) <> FOptions.ShardIndex) then
+        FCases.Delete(I);
+    ExpandRunModes;
+    for I := 0 to FCases.Count - 1 do
+      FSelectedPaths.Add(FCases[I].Path);
+  finally
+    CategoryFiles.Free;
+    Categories.Free;
+  end;
+end;
+
+{ Turns each selected file into its runs, one per mode RunModesFor gives,
+  non-strict first. Sharding stays by file, so both runs of a file land in
+  the same shard. A file whose source cannot be read gets one non-strict
+  run, and ExecuteOne reports why it could not run. }
+procedure TTest262App.ExpandRunModes;
+var
+  FileCase: TTest262Case;
+  I: Integer;
+  Metadata: TTest262Metadata;
+  Mode: TTest262RunMode;
+  Modes: TTest262RunModes;
+  RunCase: TTest262Case;
+  Runs: TObjectList<TTest262Case>;
+begin
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+    FExpectedRuns[Mode] := 0;
+  Runs := TObjectList<TTest262Case>.Create(True);
+  try
+    for I := 0 to FCases.Count - 1 do
+    begin
+      FileCase := FCases[I];
+      Modes := [trmNonStrict];
+      Metadata := nil;
+      try
+        try
+          if ParseTest(ReadUTF8FileText(FileCase.Path), Metadata) then
+            Modes := RunModesFor(Metadata);
+        except
+          on Exception do
+            Modes := [trmNonStrict];
+        end;
+      finally
+        Metadata.Free;
+      end;
+      for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+        if Mode in Modes then
+        begin
+          RunCase := TTest262Case.Create;
+          RunCase.Id := FileCase.Id;
+          RunCase.Path := FileCase.Path;
+          RunCase.Mode := Mode;
+          Runs.Add(RunCase);
+          Inc(FExpectedRuns[Mode]);
+        end;
+    end;
+  except
+    Runs.Free;
+    raise;
+  end;
+  FCases.Free;
+  FCases := Runs;
+end;
+
+function TTest262App.ParseTest(const ASource: string;
+  out AMetadata: TTest262Metadata): Boolean;
+var
+  Block: string;
+  BlockStart: SizeInt;
+  ClosePosition: SizeInt;
+  ColonPosition: SizeInt;
+  CurrentKey: string;
+  HeaderLines: TStringList;
+  I: Integer;
+  Line: string;
+  OpenPosition: SizeInt;
+  TopLevel: Boolean;
+  Trimmed: string;
+  Value: string;
+begin
+  AMetadata := TTest262Metadata.Create;
+  OpenPosition := Pos('/*---', ASource);
+  ClosePosition := 0;
+  if OpenPosition > 0 then
+    ClosePosition := PosEx('---*/', ASource,
+      OpenPosition + Length('/*---'));
+  if (OpenPosition = 0) or (ClosePosition = 0) then
+    Exit(True);
+
+  BlockStart := OpenPosition + Length('/*---');
+  if Copy(ASource, BlockStart, 2) = #13#10 then
+    Inc(BlockStart, 2)
+  else if CharInSet(ASource[BlockStart], [#10, #13]) then
+    Inc(BlockStart);
+  Block := Copy(ASource, BlockStart, ClosePosition - BlockStart);
+
+  HeaderLines := TStringList.Create;
+  try
+    HeaderLines.Text := Block;
+    CurrentKey := '';
+    for I := 0 to HeaderLines.Count - 1 do
+    begin
+      Line := HeaderLines[I];
+      Trimmed := Trim(Line);
+      if (Trimmed = '') or StartsStr('#', Trimmed) then
+        Continue;
+      TopLevel := not CharInSet(Line[1], [' ', #9]);
+      if TopLevel then
+      begin
+        ColonPosition := Pos(':', Line);
+        if ColonPosition = 0 then
+        begin
+          CurrentKey := '';
+          Continue;
+        end;
+        CurrentKey := Trim(Copy(Line, 1, ColonPosition - 1));
+        Value := Trim(Copy(Line, ColonPosition + 1, MaxInt));
+        if CurrentKey = 'flags' then
+          AddInlineList(AMetadata.Flags, Value)
+        else if CurrentKey = 'includes' then
+          AddInlineList(AMetadata.Includes, Value)
+        else if CurrentKey = 'features' then
+          AddInlineList(AMetadata.Features, Value)
+        else if CurrentKey <> 'negative' then
+          CurrentKey := '';
+        Continue;
+      end;
+
+      if StartsStr('-', Trimmed) then
+      begin
+        Value := StripQuotesAndComma(Trim(Copy(Trimmed, 2, MaxInt)));
+        if CurrentKey = 'flags' then
+          AMetadata.Flags.Add(Value)
+        else if CurrentKey = 'includes' then
+          AMetadata.Includes.Add(Value)
+        else if CurrentKey = 'features' then
+          AMetadata.Features.Add(Value);
+        Continue;
+      end;
+
+      if CurrentKey = 'negative' then
+      begin
+        ColonPosition := Pos(':', Trimmed);
+        if ColonPosition > 0 then
+        begin
+          Value := StripQuotesAndComma(
+            Copy(Trimmed, ColonPosition + 1, MaxInt));
+          if Trim(Copy(Trimmed, 1, ColonPosition - 1)) = 'phase' then
+            AMetadata.NegativePhase := Value
+          else if Trim(Copy(Trimmed, 1, ColonPosition - 1)) = 'type' then
+            AMetadata.NegativeType := Value;
+        end;
+      end;
+    end;
+  finally
+    HeaderLines.Free;
+  end;
+  Result := True;
+end;
+
+{ $262.js is G2's host object (scripts/g2/harness, run from the repository root); the rest are the suite's }
+function TTest262App.HarnessFilePath(const AName: string): string;
+begin
+  if AName = '$262.js' then
+    Result := ExpandFileName('scripts' + PathDelim + 'g2' + PathDelim +
+      'harness' + PathDelim + AName)
+  else
+    Result := IncludeTrailingPathDelimiter(FOptions.SuiteDir) + 'harness' +
+      PathDelim + AName;
+end;
+
+{ The harness files a test evaluates before its own source, each as a
+  separate global Script, in the order INTERPRETING.md gives: the
+  Test262-defined bindings ($262, assert.js, sta.js), doneprintHandle.js for
+  an async test, then the test's includes in source order. Their top-level
+  declarations are global bindings, so the test sees them from Script and
+  Module code alike. A raw test evaluates none. }
+function TTest262App.HarnessIncludes(
+  const AMetadata: TTest262Metadata): TStringList;
+var
+  I: Integer;
+begin
+  Result := TStringList.Create;
+  if AMetadata.HasFlag('raw') then
+    Exit;
+  Result.Add('$262.js');
+  Result.Add('assert.js');
+  Result.Add('sta.js');
+  if AMetadata.HasFlag('async') then
+    Result.Add('doneprintHandle.js');
+  for I := 0 to AMetadata.Includes.Count - 1 do
+    if Result.IndexOf(AMetadata.Includes[I]) < 0 then
+      Result.Add(AMetadata.Includes[I]);
+end;
+
+{ INTERPRETING.md, "Strict Mode": a strict run inserts a "use strict"
+  directive, a semicolon and a newline as the initial character sequence of
+  the test file. Only the test's own Script gets it; the harness Scripts
+  evaluated before it keep their own, non-strict, source. }
+function TestSourceText(const ASource: string;
+  const AStrictMode: Boolean): string;
+begin
+  if AStrictMode then
+    Result := '"use strict";' + #10 + ASource
+  else
+    Result := ASource;
+end;
+
+function TTest262App.DetermineKind(
+  const AMetadata: TTest262Metadata): TTest262TestKind;
+begin
+  if AMetadata.IsNegative then
+  begin
+    if (AMetadata.NegativePhase = 'parse') or
+       (AMetadata.NegativePhase = 'early') or
+       (AMetadata.NegativePhase = 'resolution') then
+      Exit(tkNegativeParse);
+    Exit(tkNegativeRuntime);
+  end;
+  if AMetadata.HasFlag('async') then
+    Result := tkPositiveAsync
+  else
+    Result := tkPositiveSync;
+end;
+
+procedure TTest262App.ConfigureProfiler;
+begin
+  if FOptions.ProfileDir = '' then
+    Exit;
+  TGocciaProfiler.Initialize;
+  TGocciaProfiler.Instance.Enabled := True;
+  case FOptions.ProfileMode of
+    tpmOpcodes:
+      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes];
+    tpmFunctions:
+      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmFunctions];
+    tpmAll:
+      TGocciaProfiler.Instance.Mode := [Goccia.Profiler.pmOpcodes,
+        Goccia.Profiler.pmFunctions];
+  end;
+  ProfileStart(FOptions.ProfileMode in [tpmOpcodes, tpmAll],
+    FOptions.ProfileMode in [tpmFunctions, tpmAll]);
+end;
+
+{ A strict run's profile carries a .strict suffix, so the two runs of a
+  file keep separate profiles. scripts/run_test262_suite.ts mirrors this. }
+function TTest262App.ProfilePathForTest(const AId: string;
+  const AMode: TTest262RunMode): string;
+begin
+  Result := IncludeTrailingPathDelimiter(FOptions.ProfileDir) +
+    'per-test' + PathDelim +
+    StringReplace(AId, '/', PathDelim, [rfReplaceAll]);
+  if AMode = trmStrict then
+    Result := Result + '.strict';
+  Result := Result + '.profile.json';
+end;
+
+{ Grades a run's outcome under contract 4, as scripts/g2/run262.py does for the G2 gate. A parse, early or
+  resolution negative passes only when the test is rejected before evaluation (outcome parse) with the expected
+  constructor; a runtime negative only when evaluation throws (outcome throw) the expected constructor. A harness
+  file that failed is WRAPPER_INFRA (the test never ran). }
+procedure ClassifyResult(const AKind: TTest262TestKind;
+  const AExpectedErrorType: string; const AOutcome: TG2T262Outcome;
+  const AOutput: string; out AStatus: TTest262Outcome;
+  out AMessage, AResultDiagnostic: string);
+var
+  Actual, Kind, Name, Msg, Desc: string;
+begin
+  AMessage := '';
+  AResultDiagnostic := '';
+  Kind := string(AOutcome.Kind);
+  Name := string(AOutcome.Name);
+  Msg := string(AOutcome.Message);
+  if Name <> '' then
+    Desc := Name + ': ' + Msg
+  else
+    Desc := Msg;
+  if Kind = 'harness' then
+  begin
+    AStatus := toWrapperInfra;
+    AMessage := 'harness include ' + ExtractFileName(string(AOutcome.FileName)) +
+      ' failed: ' + FirstLine(Msg);
+    AResultDiagnostic := Copy(Msg, 1, 800);
+    Exit;
+  end;
+  AStatus := toFail;
+  if AKind = tkNegativeParse then
+  begin
+    if (Kind = 'parse') and (Name = AExpectedErrorType) then
+      AStatus := toPass
+    else if Kind = 'ok' then
+      AMessage := 'expected ' + AExpectedErrorType +
+        ' before evaluation, body executed cleanly'
+    else if (Kind = 'throw') and (Msg = DONOTEVALUATE_THROWN) then
+      AMessage := 'expected ' + AExpectedErrorType +
+        ' before evaluation, body was evaluated ($DONOTEVALUATE reached)'
+    else if Kind = 'throw' then
+    begin
+      AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, ' +
+        Name + ' was thrown as a JS value during evaluation';
+      AResultDiagnostic := Copy(Desc, 1, 300);
+    end
+    else
+    begin
+      AMessage := 'expected ' + AExpectedErrorType + ' before evaluation, got ' +
+        Kind + ' ' + Name;
+      AResultDiagnostic := Copy(Desc, 1, 300);
+    end;
+    Exit;
+  end;
+  if AKind = tkNegativeRuntime then
+  begin
+    if (Kind = 'throw') and (Name = AExpectedErrorType) then
+      AStatus := toPass
+    else if Kind = 'ok' then
+    begin
+      if AExpectedErrorType <> '' then
+        AMessage := 'expected ' + AExpectedErrorType + ', none thrown'
+      else
+        AMessage := 'expected error, none thrown';
+    end
+    else
+    begin
+      AMessage := 'expected ' + AExpectedErrorType + ', got ' + Kind + ' ' + Name;
+      AResultDiagnostic := Copy(Desc, 1, 300);
+    end;
+    Exit;
+  end;
+  if Kind <> 'ok' then
+  begin
+    if Kind = 'throw' then
+      AMessage := FirstLine(Desc)
+    else
+      AMessage := FirstLine(Kind + ' ' + Desc);
+    AResultDiagnostic := Copy(Desc, 1, 800);
+    Exit;
+  end;
+  if AKind = tkPositiveAsync then
+  begin
+    if Pos(ASYNC_PASS_MARKER, AOutput) > 0 then
+      AStatus := toPass
+    else if ExtractMarkerValue(AOutput, ASYNC_FAIL_MARKER, Actual) then
+      AMessage := Copy(Actual, 1, 200)
+    else
+      AMessage := 'async test did not call $DONE';
+    Exit;
+  end;
+  AStatus := toPass;
+end;
+
+{ One run, in the forked process ExecuteAll made for it: G2's engine, its test262 host and the harness, then the
+  test. The process ends after it, so nothing here is torn down. }
+procedure TTest262App.ExecuteOne(const ACase: TTest262Case;
+  out AResult: TTest262Result);
+var
+  HarnessNames: TStringList;
+  Harness: array of string;
+  I: Integer;
+  Kind: TTest262TestKind;
+  Metadata: TTest262Metadata;
+  Outcome: TG2T262Outcome;
+  ProfilePath: string;
+  SourceText: string;
+  StartNanoseconds: Int64;
+  StrictMode: Boolean;
+begin
+  AResult := Default(TTest262Result);
+  AResult.Id := ACase.Id;
+  AResult.Mode := ACase.Mode;
+  StartNanoseconds := GetNanoseconds;
+  Metadata := nil;
+  HarnessNames := nil;
+  ProfilePath := '';
+  try
+    try
+      SourceText := ReadUTF8FileText(ACase.Path);
+      if not ParseTest(SourceText, Metadata) then
+        raise Exception.Create('frontmatter parse failed');
+      Kind := DetermineKind(Metadata);
+      { INTERPRETING.md: every test but a raw one evaluates the harness in its realm first, each file as its own
+        non-strict global Script; a raw test runs alone, exactly as written, in non-strict mode }
+      HarnessNames := HarnessIncludes(Metadata);
+      SetLength(Harness, HarnessNames.Count);
+      for I := 0 to HarnessNames.Count - 1 do
+      begin
+        Harness[I] := HarnessFilePath(HarnessNames[I]);
+        if not FileExists(Harness[I]) then
+          raise Exception.Create('Missing harness include "' +
+            HarnessNames[I] + '": ' + Harness[I]);
+      end;
+      { the case's mode decides strictness: a strict Script run gets the "use strict" prefix; a module test's run
+        is strict as module code and keeps its source as written }
+      StrictMode := (ACase.Mode = trmStrict) and not Metadata.HasFlag('module');
+      HeapCeiling := FOptions.MaxMemoryBytes;
+      InitTest262Engine(Metadata.HasFlag('CanBlockIsFalse'));
+      if FOptions.ProfileDir <> '' then
+      begin
+        ProfilePath := ProfilePathForTest(ACase.Id, ACase.Mode);
+        ForceHostDirectories(ExtractFileDir(ProfilePath));
+        ConfigureProfiler;
+      end;
+      Outcome := RunTest262Case(Harness, ACase.Path, StrictMode,
+        Metadata.HasFlag('module'));
+      if FOptions.ProfileDir <> '' then
+        ProfileStop;
+      ClassifyResult(Kind, Metadata.NegativeType, Outcome,
+        string(Test262PrintText), AResult.Status, AResult.Message,
+        AResult.Diagnostic);
+    except
+      on E: Exception do
+      begin
+        AResult.Status := toWrapperInfra;
+        AResult.Message := E.Message;
+        AResult.Diagnostic := E.ClassName + ': ' + E.Message;
+      end;
+    end;
+  finally
+    if (ProfilePath <> '') and Assigned(TGocciaProfiler.Instance) then
+    begin
+      try
+        WriteProfileJSON(TGocciaProfiler.Instance, ProfilePath);
+      except
+        on E: Exception do
+        begin
+          AResult.Status := toWrapperInfra;
+          AResult.Message := 'profile write failed';
+          AResult.Diagnostic := E.ClassName + ': ' + E.Message;
+        end;
+      end;
+    end;
+    AResult.ProfilePath := StringReplace(ProfilePath, '\', '/',
+      [rfReplaceAll]);
+    AResult.ProfileMissing := (ProfilePath <> '') and
+      not FileExists(ProfilePath);
+    HarnessNames.Free;
+    Metadata.Free;
+    AResult.DurationMs := Round(
+      (GetNanoseconds - StartNanoseconds) / 1000000);
+  end;
+end;
+
+procedure TTest262App.ExecuteAll;
+var
+  ActiveWorkers: Integer;
+  ChildPid: TPid;
+  CompletedCount: Integer;
+  ExitCode: Integer;
+  I: Integer;
+  NextIndex: Integer;
+  ResultIndex: Integer;
+  ResultPaths: array of string;
+  Slot: Integer;
+  SlotIndices: array of Integer;
+  SlotPids: array of TPid;
+  SlotStartedNanoseconds: array of Int64;
+  SlotTimedOut: array of Boolean;
+  WaitStatus: cint;
+  WorkerMessage: string;
+  DevNull: cint;
+  StartNanoseconds: Int64;
+begin
+  SetLength(FResults, FCases.Count);
+  if FCases.Count = 0 then
+    Exit;
+  StartNanoseconds := GetNanoseconds;
+  SetLength(SlotPids, FOptions.Jobs);
+  SetLength(SlotIndices, FOptions.Jobs);
+  SetLength(SlotStartedNanoseconds, FOptions.Jobs);
+  SetLength(SlotTimedOut, FOptions.Jobs);
+  SetLength(ResultPaths, FOptions.Jobs);
+  for Slot := 0 to FOptions.Jobs - 1 do
+    ResultPaths[Slot] := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+      Format('goccia-test262-%d-%d.result', [fpGetPid, Slot]);
+  ActiveWorkers := 0;
+  CompletedCount := 0;
+  NextIndex := 0;
+  while CompletedCount < FCases.Count do
+  begin
+    while (NextIndex < FCases.Count) and
+      (ActiveWorkers < FOptions.Jobs) do
+    begin
+      Slot := 0;
+      while SlotPids[Slot] <> 0 do
+        Inc(Slot);
+      DeleteFile(ResultPaths[Slot]);
+      ResultIndex := NextIndex;
+      ChildPid := fpFork;
+      if ChildPid = 0 then
+      begin
+        { the run's own console output is not the runner's: print records into the host, the rest is dropped }
+        DevNull := fpOpen('/dev/null', O_WRONLY);
+        if DevNull >= 0 then
+        begin
+          fpDup2(DevNull, 1);
+          fpDup2(DevNull, 2);
+        end;
+        try
+          ExecuteOne(FCases[ResultIndex], FResults[ResultIndex]);
+          WriteWorkerResult(ResultPaths[Slot], FResults[ResultIndex]);
+          fpExit(0);
+        except
+          fpExit(2);
+        end;
+      end;
+      if ChildPid < 0 then
+      begin
+        FResults[ResultIndex].Id := FCases[ResultIndex].Id;
+        FResults[ResultIndex].Mode := FCases[ResultIndex].Mode;
+        FResults[ResultIndex].Status := toWrapperInfra;
+        FResults[ResultIndex].Message := 'Unable to fork Test262 worker';
+        FResults[ResultIndex].Diagnostic := FResults[ResultIndex].Message;
+        Inc(CompletedCount);
+      end
+      else
+      begin
+        SlotPids[Slot] := ChildPid;
+        SlotIndices[Slot] := ResultIndex;
+        SlotStartedNanoseconds[Slot] := GetNanoseconds;
+        SlotTimedOut[Slot] := False;
+        Inc(ActiveWorkers);
+      end;
+      Inc(NextIndex);
+    end;
+
+    ChildPid := fpWaitPid(-1, @WaitStatus, WNOHANG);
+    if ChildPid = 0 then
+    begin
+      for Slot := 0 to High(SlotPids) do
+        if (SlotPids[Slot] <> 0) and
+           (not SlotTimedOut[Slot]) and
+           (GetNanoseconds - SlotStartedNanoseconds[Slot] >
+             Int64(FOptions.TimeoutMs) * 1000000) then
+        begin
+          SlotTimedOut[Slot] := True;
+          fpKill(SlotPids[Slot], SIGKILL);
+        end;
+      Sleep(1);
+      Continue;
+    end;
+    if ChildPid < 0 then
+      Continue;
+    Slot := -1;
+    for I := 0 to High(SlotPids) do
+      if SlotPids[I] = ChildPid then
+      begin
+        Slot := I;
+        Break;
+      end;
+    if Slot < 0 then
+      Continue;
+    ResultIndex := SlotIndices[Slot];
+    WorkerMessage := '';
+    if SlotTimedOut[Slot] then
+    begin
+      FResults[ResultIndex].Id := FCases[ResultIndex].Id;
+      FResults[ResultIndex].Status := toTimeout;
+      WorkerMessage := Format('TIMEOUT after %dms', [FOptions.TimeoutMs]);
+    end
+    else if WIFEXITED(WaitStatus) then
+    begin
+      ExitCode := WEXITSTATUS(WaitStatus);
+      if (ExitCode = 0) and FileExists(ResultPaths[Slot]) then
+        try
+          ReadWorkerResult(ResultPaths[Slot], FResults[ResultIndex]);
+        except
+          on E: Exception do
+            WorkerMessage := 'Invalid worker result: ' + E.Message;
+        end
+      else
+        WorkerMessage := Format(
+          'Test262 worker exited with status %d', [ExitCode]);
+    end
+    else if WIFSIGNALED(WaitStatus) then
+      WorkerMessage := Format(
+        'Test262 worker terminated by signal %d',
+        [WTERMSIG(WaitStatus)])
+    else
+      WorkerMessage := 'Test262 worker terminated unexpectedly';
+    if WorkerMessage <> '' then
+    begin
+      FResults[ResultIndex].Id := FCases[ResultIndex].Id;
+      if not SlotTimedOut[Slot] then
+        FResults[ResultIndex].Status := toWrapperInfra;
+      FResults[ResultIndex].Message := WorkerMessage;
+      FResults[ResultIndex].Diagnostic := WorkerMessage;
+    end;
+    { The worker result file does not carry the mode; the case owns it. }
+    FResults[ResultIndex].Mode := FCases[ResultIndex].Mode;
+    DeleteFile(ResultPaths[Slot]);
+    SlotPids[Slot] := 0;
+    Dec(ActiveWorkers);
+    Inc(CompletedCount);
+    if FOptions.Verbose or
+       (CompletedCount = FCases.Count) or
+       ((CompletedCount mod 1024) = 0) then
+    begin
+      WriteLn('[', CompletedCount, '/', FCases.Count, ']');
+      Flush(Output);
+    end;
+  end;
+  for Slot := 0 to High(ResultPaths) do
+    DeleteFile(ResultPaths[Slot]);
+  FDurationNanoseconds := GetNanoseconds - StartNanoseconds;
+end;
+
+function CategoryForId(const AId: string): string;
+var
+  SeparatorPosition: SizeInt;
+begin
+  SeparatorPosition := Pos('/', AId);
+  if SeparatorPosition > 0 then
+    Result := Copy(AId, 1, SeparatorPosition - 1)
+  else
+    Result := AId;
+end;
+
+function PercentageText(const ANumerator, ADenominator: Integer): string;
+begin
+  if ADenominator = 0 then
+    Exit('0.0%');
+  Result := FormatFloat('0.0',
+    ANumerator * 100.0 / ADenominator) + '%';
+end;
+
+procedure AddOutcome(var ACounts: TTest262Counts;
+  const AOutcome: TTest262Outcome);
+begin
+  Inc(ACounts.Run);
+  case AOutcome of
+    toPass: Inc(ACounts.Passed);
+    toFail: Inc(ACounts.Failed);
+    toWrapperInfra: Inc(ACounts.WrapperInfra);
+    toTimeout: Inc(ACounts.Timeouts);
+  end;
+end;
+
+function ModeCountsFor(
+  const AResults: array of TTest262Result): TTest262ModeCounts;
+var
+  I: Integer;
+begin
+  Result := Default(TTest262ModeCounts);
+  for I := 0 to High(AResults) do
+    AddOutcome(Result[AResults[I].Mode], AResults[I].Status);
+end;
+
+function CountsTotal(const ACounts: TTest262ModeCounts): TTest262Counts;
+var
+  Mode: TTest262RunMode;
+begin
+  Result := Default(TTest262Counts);
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+  begin
+    Inc(Result.Run, ACounts[Mode].Run);
+    Inc(Result.Passed, ACounts[Mode].Passed);
+    Inc(Result.Failed, ACounts[Mode].Failed);
+    Inc(Result.WrapperInfra, ACounts[Mode].WrapperInfra);
+    Inc(Result.Timeouts, ACounts[Mode].Timeouts);
+  end;
+end;
+
+procedure TTest262App.PrintSummary;
+var
+  I: Integer;
+  Mode: TTest262RunMode;
+  ModeCounts: TTest262ModeCounts;
+  Totals: TTest262Counts;
+begin
+  ModeCounts := ModeCountsFor(FResults);
+  Totals := CountsTotal(ModeCounts);
+  WriteLn('');
+  WriteLn('test262 conformance');
+  WriteLn('  Discovered:       ', FTotalDiscovered);
+  WriteLn('  Run:              ', Length(FResults));
+  WriteLn('  Passed:           ', Totals.Passed, ' (',
+    PercentageText(Totals.Passed, Totals.Run), ')');
+  WriteLn('  Failed:           ', Totals.Failed);
+  WriteLn('  Wrapper infra:    ', Totals.WrapperInfra);
+  WriteLn('  Timeouts:         ', Totals.Timeouts);
+  WriteLn('  Duration:         ',
+    FormatFloat('0.0', FDurationNanoseconds / 1000000000), 's');
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+    WriteLn('  ', PadRight(RunModeName(Mode) + ' runs:', 18),
+      ModeCounts[Mode].Run, ', passed ', ModeCounts[Mode].Passed, ' (',
+      PercentageText(ModeCounts[Mode].Passed, ModeCounts[Mode].Run), ')');
+  for I := 0 to High(FResults) do
+    if FOptions.Verbose or (FResults[I].Status <> toPass) then
+      WriteLn('  ', OutcomeName(FResults[I].Status), ' ',
+        FResults[I].Id, ' [', RunModeName(FResults[I].Mode), ']',
+        IfThen(FResults[I].Message <> '', ': ' + FResults[I].Message, ''));
+end;
+
+function JSONString(const AValue: string): string;
+begin
+  Result := QuoteJSONString(AValue);
+end;
+
+{ byMode always lists both modes, so a consumer never has to treat a missing
+  mode as zero. }
+function ModeCountsJSON(const ACounts: TTest262ModeCounts): string;
+var
+  Mode: TTest262RunMode;
+begin
+  Result := '{';
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+  begin
+    if Mode <> Low(TTest262RunMode) then
+      Result := Result + ', ';
+    Result := Result + JSONString(RunModeName(Mode)) + ': {' +
+      '"run": ' + IntToStr(ACounts[Mode].Run) +
+      ', "passed": ' + IntToStr(ACounts[Mode].Passed) +
+      ', "failed": ' + IntToStr(ACounts[Mode].Failed) +
+      ', "wrapperInfra": ' + IntToStr(ACounts[Mode].WrapperInfra) +
+      ', "timeouts": ' + IntToStr(ACounts[Mode].Timeouts) + '}';
+  end;
+  Result := Result + '}';
+end;
+
+{ The runs ExpandRunModes planned for this report, by mode. The shard merge
+  checks the results against them, so a run that is absent from the results
+  is an error rather than a smaller report, without the merge applying the
+  flag rules itself. }
+function ExpectedRunsJSON(
+  const ACounts: array of Integer): string;
+var
+  Mode: TTest262RunMode;
+begin
+  Result := '{';
+  for Mode := Low(TTest262RunMode) to High(TTest262RunMode) do
+  begin
+    if Mode <> Low(TTest262RunMode) then
+      Result := Result + ', ';
+    Result := Result + JSONString(RunModeName(Mode)) + ': ' +
+      IntToStr(ACounts[Ord(Mode)]);
+  end;
+  Result := Result + '}';
+end;
+
+procedure BuildCategoryCounts(const AResults: array of TTest262Result;
+  const ACategories: TStrings; var ACounts: array of TTest262ModeCounts);
+var
+  CategoryIndex: Integer;
+  I: Integer;
+begin
+  for I := 0 to High(ACounts) do
+    ACounts[I] := Default(TTest262ModeCounts);
+  for I := 0 to High(AResults) do
+  begin
+    CategoryIndex := ACategories.IndexOf(CategoryForId(AResults[I].Id));
+    if CategoryIndex < 0 then
+      Continue;
+    AddOutcome(ACounts[CategoryIndex][AResults[I].Mode], AResults[I].Status);
+  end;
+end;
+
+procedure TTest262App.WriteReport;
+var
+  Categories: TStringList;
+  CategoryCounts: array of TTest262ModeCounts;
+  CategoryTotal: TTest262Counts;
+  DurationSeconds: Double;
+  I: Integer;
+  Index: Integer;
+  Lines: TStringList;
+  ModeCounts: TTest262ModeCounts;
+  ReportedCategories: TStringList;
+  Test262SHA: string;
+  Totals: TTest262Counts;
+begin
+  if FOptions.OutputPath = '' then
+    Exit;
+  ForceDirectories(ExtractFileDir(FOptions.OutputPath));
+  Categories := TStringList.Create;
+  Lines := TStringList.Create;
+  ReportedCategories := TStringList.Create;
+  try
+    Categories.StrictDelimiter := True;
+    Categories.Delimiter := ',';
+    Categories.DelimitedText := FOptions.Categories;
+    for I := 0 to Categories.Count - 1 do
+      Categories[I] := Trim(Categories[I]);
+    ModeCounts := ModeCountsFor(FResults);
+    Totals := CountsTotal(ModeCounts);
+    SetLength(CategoryCounts, Categories.Count);
+    BuildCategoryCounts(FResults, Categories, CategoryCounts);
+    DurationSeconds := FDurationNanoseconds / 1000000000;
+    // Match the merged report: list only categories that ran, by name.
+    ReportedCategories.CaseSensitive := True;
+    ReportedCategories.Sorted := True;
+    ReportedCategories.Duplicates := dupIgnore;
+    for I := 0 to Categories.Count - 1 do
+      if CountsTotal(CategoryCounts[I]).Run > 0 then
+        ReportedCategories.AddObject(Categories[I], TObject(PtrInt(I)));
+
+    Lines.Add('{');
+    Lines.Add('  "summary": {');
+    Lines.Add('    "totalDiscovered": ' + IntToStr(FTotalDiscovered) + ',');
+    Lines.Add('    "totalRun": ' + IntToStr(Length(FResults)) + ',');
+    Lines.Add('    "passed": ' +
+      IntToStr(Totals.Passed) + ',');
+    Lines.Add('    "failed": ' +
+      IntToStr(Totals.Failed) + ',');
+    Lines.Add('    "wrapperInfraFailures": ' +
+      IntToStr(Totals.WrapperInfra) + ',');
+    Lines.Add('    "timeouts": ' +
+      IntToStr(Totals.Timeouts) + ',');
+    Lines.Add('    "durationSeconds": ' +
+      Format('%.3f', [DurationSeconds], CreateInvariantFormatSettings) + ',');
+    Lines.Add('    "byMode": ' + ModeCountsJSON(ModeCounts) + ',');
+    Lines.Add('    "expectedRuns": ' + ExpectedRunsJSON(FExpectedRuns) + ',');
+    Lines.Add('    "byCategory": [');
+    for I := 0 to ReportedCategories.Count - 1 do
+    begin
+      Index := Integer(PtrInt(ReportedCategories.Objects[I]));
+      CategoryTotal := CountsTotal(CategoryCounts[Index]);
+      Lines.Add('      {');
+      Lines.Add('        "category": ' +
+        JSONString(ReportedCategories[I]) + ',');
+      Lines.Add('        "run": ' + IntToStr(CategoryTotal.Run) + ',');
+      Lines.Add('        "passed": ' + IntToStr(CategoryTotal.Passed) + ',');
+      Lines.Add('        "failed": ' + IntToStr(CategoryTotal.Failed) + ',');
+      Lines.Add('        "wrapperInfra": ' +
+        IntToStr(CategoryTotal.WrapperInfra) + ',');
+      Lines.Add('        "timeouts": ' +
+        IntToStr(CategoryTotal.Timeouts) + ',');
+      Lines.Add('        "byMode": ' +
+        ModeCountsJSON(CategoryCounts[Index]));
+      if I < ReportedCategories.Count - 1 then
+        Lines.Add('      },')
+      else
+        Lines.Add('      }');
+    end;
+    Lines.Add('    ]');
+    Lines.Add('  },');
+    Lines.Add('  "results": [');
+    for I := 0 to High(FResults) do
+    begin
+      Lines.Add('    {');
+      Lines.Add('      "id": ' + JSONString(FResults[I].Id) + ',');
+      Lines.Add('      "mode": ' + JSONString(RunModeName(FResults[I].Mode)) +
+        ',');
+      Lines.Add('      "status": ' +
+        JSONString(OutcomeName(FResults[I].Status)) + ',');
+      Lines.Add('      "durationMs": ' +
+        IntToStr(FResults[I].DurationMs) + ',');
+      Lines.Add('      "message": ' + JSONString(FResults[I].Message));
+      if FResults[I].Diagnostic <> '' then
+        Lines[Lines.Count - 1] := Lines[Lines.Count - 1] + ',';
+      if FResults[I].Diagnostic <> '' then
+        Lines.Add('      "diagnostic": ' +
+          JSONString(FResults[I].Diagnostic));
+      if FResults[I].ProfilePath <> '' then
+      begin
+        Lines[Lines.Count - 1] := Lines[Lines.Count - 1] + ',';
+        Lines.Add('      "profilePath": ' +
+          JSONString(FResults[I].ProfilePath) + ',');
+        if FResults[I].ProfileMissing then
+          Lines.Add('      "profileMissing": true')
+        else
+          Lines.Add('      "profileMissing": false');
+      end;
+      if I < High(FResults) then
+        Lines.Add('    },')
+      else
+        Lines.Add('    }');
+    end;
+    Lines.Add('  ],');
+    Lines.Add('  "run": {');
+    Lines.Add('    "suiteDir": ' + JSONString(FOptions.SuiteDir) + ',');
+    Test262SHA := GetEnvironmentVariable('TEST262_SUITE_SHA');
+    if Test262SHA = '' then
+      Lines.Add('    "test262Sha": null,')
+    else
+      Lines.Add('    "test262Sha": ' + JSONString(Test262SHA) + ',');
+    Lines.Add('    "categories": [');
+    for I := 0 to Categories.Count - 1 do
+    begin
+      if I < Categories.Count - 1 then
+        Lines.Add('      ' + JSONString(Categories[I]) + ',')
+      else
+        Lines.Add('      ' + JSONString(Categories[I]));
+    end;
+    Lines.Add('    ],');
+    Lines.Add('    "jobs": ' + IntToStr(FOptions.Jobs) + ',');
+    Lines.Add('    "timeoutMs": ' + IntToStr(FOptions.TimeoutMs) + ',');
+    Lines.Add('    "maxMemoryBytes": ' +
+      IntToStr(FOptions.MaxMemoryBytes) + ',');
+    Lines.Add('    "gradingContract": ' + IntToStr(GRADING_CONTRACT_VERSION));
+    Lines.Add('  }' + IfThen(FOptions.ShardCount > 0, ',', ''));
+    if FOptions.ShardCount > 0 then
+    begin
+      Lines.Add('  "shard": {');
+      Lines.Add('    "index": ' + IntToStr(FOptions.ShardIndex) + ',');
+      Lines.Add('    "count": ' + IntToStr(FOptions.ShardCount));
+      Lines.Add('  }');
+    end;
+    Lines.Add('}');
+    Lines.SaveToFile(FOptions.OutputPath);
+  finally
+    ReportedCategories.Free;
+    Lines.Free;
+    Categories.Free;
+  end;
+end;
+
+function TTest262App.FailureCount: Integer;
+var
+  Totals: TTest262Counts;
+begin
+  Totals := CountsTotal(ModeCountsFor(FResults));
+  Result := Totals.Run - Totals.Passed;
+end;
+
+{ --eval-host: stdin run as a Script (or with --source-type=module a module, from a temporary file in the working
+  directory, which its imports resolve against) after the $262.js harness, on the test262 host. What print printed
+  goes to stdout on every exit path, an uncaught error to stderr with exit code 1. }
+function TTest262App.RunHostEval: Integer;
+var
+  Source, Line: string;
+  ProbePath, HostPath: string;
+  Outcome: TG2T262Outcome;
+begin
+  Result := 0;
+  Source := '';
+  while not EOF(Input) do
+  begin
+    ReadLn(Input, Line);
+    Source := Source + Line + #10;
+  end;
+  HostPath := HarnessFilePath('$262.js');
+  if FOptions.HostEvalModule then
+    ProbePath := IncludeTrailingPathDelimiter(GetCurrentDir) +
+      Format('.goccia-test262-host-eval-%d.mjs', [fpGetPid])
+  else
+    ProbePath := IncludeTrailingPathDelimiter(GetTempDir(False)) +
+      Format('goccia-test262-host-eval-%d.js', [fpGetPid]);
+  with TStringList.Create do
+  try
+    Text := Source;
+    SaveToFile(ProbePath);
+  finally
+    Free;
+  end;
+  try
+    HeapCeiling := FOptions.MaxMemoryBytes;
+    InitTest262Engine(False);
+    Outcome := RunTest262Case([HostPath], ProbePath, False,
+      FOptions.HostEvalModule);
+    Write(UTF8Encode(Test262PrintText));
+    Flush(Output);
+    if Outcome.Kind <> 'ok' then
+    begin
+      if Outcome.Name <> '' then
+        WriteLn(ErrOutput, UTF8Encode(Outcome.Name + ': ' + Outcome.Message))
+      else
+        WriteLn(ErrOutput, UTF8Encode(Outcome.Kind + ': ' + Outcome.Message));
+      Result := 1;
+    end;
+  finally
+    DeleteFile(ProbePath);
+  end;
+end;
+
+function TTest262App.Run: Integer;
+begin
+  ParseArguments;
+  if FOptions.HostEval then
+    Exit(RunHostEval);
+  WriteLn('Suite:         ', FOptions.SuiteDir);
+  WriteLn('Categories:    ', FOptions.Categories);
+  WriteLn('Jobs:          ', FOptions.Jobs);
+  WriteLn('Timeout:       ', FOptions.TimeoutMs, 'ms');
+  if FOptions.ShardCount > 0 then
+    WriteLn('Shard:         ', FOptions.ShardIndex + 1, '/',
+      FOptions.ShardCount);
+  Discover;
+  WriteLn('Discovered ', FTotalDiscovered, ' test files.');
+  if FOptions.ShardCount > 0 then
+    WriteLn('Selected ', FCases.Count, ' runs for this shard.')
+  else
+    WriteLn('Selected ', FCases.Count, ' runs.');
+  ExecuteAll;
+  WriteReport;
+  PrintSummary;
+  if FailureCount > 0 then
+    Result := 1
+  else
+    Result := 0;
+end;
+
+var
+  App: TTest262App;
+  SnapshotEngine: TG2Engine;
+  SnapshotErr: UnicodeString;
+begin
+  { build.pas snapshots the compiled preludes from a run with G2_SNAPSHOT_OUT set: a host's, as the other G2 apps
+    take them }
+  if GetEnvironmentVariable('G2_SNAPSHOT_OUT') <> '' then
+  begin
+    SnapshotEngine := TG2Engine.Create;
+    SnapshotErr := '';
+    if not SnapshotEngine.PrepareHost(SnapshotErr) then
+    begin
+      WriteLn(ErrOutput, 'Error: ', UTF8Encode(SnapshotErr));
+      Halt(1);
+    end;
+    Halt(0);
+  end;
+  App := TTest262App.Create;
+  try
+    try
+      ExitCode := App.Run;
+    except
+      { ParseArguments raises TCLIUsageError for an unusable invocation (a
+        missing or unknown argument, a rejected combination), which exits 2,
+        and TParseError for an invalid value, which exits 1. Anything else is
+        a failure of the run itself, such as a report it could not write,
+        and exits 1. }
+      on E: TCLIUsageError do
+      begin
+        WriteLn(ErrOutput, 'Error: ', E.Message);
+        ExitCode := EXIT_CODE_USAGE;
+      end;
+      on E: TParseError do
+      begin
+        WriteLn(ErrOutput, 'Error: ', E.Message);
+        ExitCode := 1;
+      end;
+      on E: Exception do
+      begin
+        WriteLn(ErrOutput, 'Error: ', E.Message);
+        ExitCode := 1;
+      end;
+    end;
+  finally
+    App.Free;
+  end;
+end.

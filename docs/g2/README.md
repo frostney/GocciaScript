@@ -367,6 +367,17 @@ under its file settings. GocciaRunner on G2 runs a `.gbc` entry (`TG2Engine.RunA
 the source's package policy (a CommonJS file's companion is refused). `scripts/test-cli-aot.ts` and the Bundler
 sections of `scripts/test-cli-apps.ts` pass against the G2 runner and bundler.
 
+### GocciaTest262Runner
+
+`./build.pas g2test262runner` builds `build/g2/GocciaTest262Runner` from `source/app/GocciaTest262RunnerG2.dpr`:
+the old runner's options, discovery, sharding, run modes, JSON report and per-test profiles (`--profile-dir`), on
+G2's test262 host (`G2.Test262`, which `g2 --test262` also runs). Run it from the repository root: `$262.js` is
+`scripts/g2/harness/$262.js`. Each run is a forked process with a fresh engine, killed at `--timeout` (G2's
+test262 host has no cooperative timeout) and graded as `scripts/g2/run262.py` grades it; `--max-memory` is the
+child's heap limit. Its statuses match `run262.py`'s for every run of the suite. `--eval-host` runs stdin after
+`$262.js`, so a probe reaches the hooks as `$262`; the old runner's probes read its own `Goccia.test262` object,
+which G2 does not have (the `--eval-host` sections of `scripts/test-cli-apps.ts`).
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
