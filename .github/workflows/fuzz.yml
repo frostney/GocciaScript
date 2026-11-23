@@ -134,6 +134,10 @@ jobs:
           mkdir -p build/fuzz/out
           # AFL_SKIP_CPUFREQ/AFL_NO_AFFINITY are the standard CI
           # accommodations for shared runners.
+          # AFL_CRASH_EXITCODE=1: AFL counts only a signal as a crash, and the
+          # harness reports what the engine does not model (an escaped
+          # exception, an access violation FPC turned into one) by catching
+          # it and exiting 1, so without it no such finding reaches crashes/.
           # -t 5000: the harness's own budget is 1000ms and a harness timeout
           # is a NORMAL exit-0 outcome, so AFL's exec threshold must sit safely
           # above it — otherwise process overhead around a legitimate slow input
@@ -147,7 +151,7 @@ jobs:
           # reproducers — only the final stats summary.
           status=0
           started=${SECONDS}
-          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
+          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 AFL_CRASH_EXITCODE=1 \
           timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -t 5000 \
             -i build/fuzz/corpus \
             -o build/fuzz/out \
@@ -304,7 +308,7 @@ jobs:
           mkdir -p build/fuzz/heap-snapshot-out
           status=0
           started=${SECONDS}
-          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 \
+          AFL_SKIP_CPUFREQ=1 AFL_NO_AFFINITY=1 AFL_BENCH_UNTIL_CRASH=1 AFL_CRASH_EXITCODE=1 \
           timeout -k 60 "${FUZZ_SECONDS}" afl-fuzz -t 5000 \
             -i build/fuzz/heap-snapshot-corpus \
             -o build/fuzz/heap-snapshot-out \
