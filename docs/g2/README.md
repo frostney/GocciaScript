@@ -37,9 +37,11 @@ Largest performance gaps: generators (lazy-collections 0.67), float arithmetic o
 ## Build
 
 G2 builds with FPC 3.3.1 from fpc-toolchain (native TLS threadvars), build 3.3.1+5 (release `3.3.1-b5`) or
-later, selected by `fpc-toolchain env 3.3.1+5` or any command given in `G2_FPC_ENV`. Builds before 3.3.1+4 hang in
-the DFA pass on some units and drop the `@tpoff` relocation of a threadvar field at -O1; 3.3.1+4 drops the `%fs`
-prefix of a threadvar the peephole optimizer folds into an instruction at -O1 (patch 0123 in 3.3.1+5):
+later; CI and `scripts/g2/build.sh` use 3.3.1+6 (release `3.3.1-b6`), selected by `fpc-toolchain env 3.3.1+6` or
+any command given in `G2_FPC_ENV`. Builds before 3.3.1+4 hang in the DFA pass on some units and drop the `@tpoff`
+relocation of a threadvar field at -O1; 3.3.1+4 drops the `%fs` prefix of a threadvar the peephole optimizer folds
+into an instruction at -O1 (patch 0123 in 3.3.1+5); 3.3.1+5 can fail an incremental compile after a used unit was
+recompiled, which `build.pas` retries from a clean unit directory (patches 0124 to 0128 in 3.3.1+6):
 
 ```sh
 ./build.pas --prod g2         # build/g2/g2, with the 3.3.1 toolchain selected

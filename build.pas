@@ -890,8 +890,8 @@ var
 begin
   if not RunCommand('fpc', ['-iV'], Version) or (CompareStr(Trim(Version), '3.3.1') < 0) then
   begin
-    WriteLn('G2 needs FPC 3.3.1 from fpc-toolchain (build 3.3.1+5 or later); found ', Trim(Version));
-    WriteLn('Select it with: eval "$(fpc-toolchain env 3.3.1+5)"');
+    WriteLn('G2 needs FPC 3.3.1 from fpc-toolchain (build 3.3.1+5 or later; CI uses 3.3.1+6); found ', Trim(Version));
+    WriteLn('Select it with: eval "$(fpc-toolchain env 3.3.1+6)"');
     Halt(1);
   end;
 end;
