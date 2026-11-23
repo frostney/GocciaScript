@@ -18,6 +18,8 @@ function ParseAndCompileModule(const Source, FileName: UnicodeString; Id: Intege
 function ParseAndCompile(const Source, FileName: UnicodeString; AsExpression: Boolean; var T: PFuncTemplate;
   var Err: UnicodeString; Goal: Integer = 0): Boolean;
 procedure InitEval;
+{ every function compiled with its code now (On), as for a bytecode file, or lazily again as G2_LAZY says }
+procedure SetEagerCompile(On: Boolean); noinline;
 { sets a TGocciaParser's options from the active language profile (G2.Core) }
 procedure ApplyProfileOptions(P: TObject; Module: Boolean);
 { the CLIs' front-end options (Goccia.SourcePipeline) for the active profile and the goal }
@@ -53,7 +55,7 @@ implementation
 
 uses
   Classes, Linux, UnixType, TextSemantics, OrderedStringMap, Goccia.Modules.Phases, Goccia.Lexer, Goccia.Parser, Goccia.AST.Node, Goccia.AST.Expressions, Goccia.AST.Statements, Goccia.Error, Goccia.SourceSpan, G2.Scan,
-  G2.PreParse, G2.Lazy, G2.Snapshot, Goccia.Profiler.Compile;
+  G2.PreParse, G2.Lazy, G2.Snapshot, G2.Artifact, Goccia.Profiler.Compile;
 
 { the compile profile leaves the host's own code out (a prelude's, named like <goccia:console>) }
 procedure ExcludeHostSource(const FileName: UnicodeString);
@@ -68,10 +70,63 @@ end;
 threadvar
   LazyMode: Integer;   { G2_LAZY: 0 not read yet, 1 off (G2_LAZY=0), 2 on (the default) }
 
+threadvar
+  RoundTripMode: Integer;   { G2_ARTIFACT_ROUNDTRIP: 0 not read yet, 1 off, 2 on }
+
+{ G2_ARTIFACT_ROUNDTRIP=1 (a test mode): every Script and module compiled goes through a bytecode file (written,
+  read back and verified, G2.Artifact) before it runs, and nothing compiles lazily }
+function RoundTripOn: Boolean;
+begin
+  if RoundTripMode = 0 then
+    if GetEnvironmentVariable('G2_ARTIFACT_ROUNDTRIP') = '1' then RoundTripMode := 2 else RoundTripMode := 1;
+  Result := RoundTripMode = 2;
+end;
+
+{ T (and a module's Info) replaced by what a bytecode file of them reads back as; a failure is fatal: the test
+  mode exists to find what the format or the verifier gets wrong }
+procedure RoundTrip(var T: PFuncTemplate; var Info: TModuleInfo; const FileName: UnicodeString; Id: Integer);
+var A, B: TG2Artifact; Bytes: TBytes; Err: UnicodeString; Unr: Boolean;
+begin
+  A := Default(TG2Artifact);
+  A.SourcePath := FileName;
+  A.Profile := CurrentArtifactProfile(Info <> nil, False, Unr);
+  A.Unrestricted := Unr;
+  A.Top := T;
+  A.Info := Info;
+  A.ScriptImports := '';
+  try
+    Bytes := SaveArtifact(A);
+  except
+    on E: Exception do
+    begin
+      WriteLn(ErrOutput, 'artifact round trip: ', FileName, ': cannot write: ', E.Message);
+      Halt(70);
+    end;
+  end;
+  Err := '';
+  if not LoadArtifact(PByte(Bytes), Length(Bytes), FileName, Id, B, Err) then
+  begin
+    WriteLn(ErrOutput, 'artifact round trip: ', FileName, ': rejected: ', Err);
+    Halt(70);
+  end;
+  if Info <> nil then Info.Free;
+  T := B.Top;
+  Info := B.Info;
+end;
+
+procedure SetEagerCompile(On: Boolean);
+begin
+  if On then LazyMode := 1 else LazyMode := 0;
+end;
+
 function LazyOn: Boolean;
 begin
   if LazyMode = 0 then
-    if GetEnvironmentVariable('G2_LAZY') = '0' then LazyMode := 1 else LazyMode := 2;
+  begin
+    if (GetEnvironmentVariable('G2_LAZY') = '0') or RoundTripOn then LazyMode := 1 else LazyMode := 2;
+    { the round trip compiles everything as for a bytecode file }
+    if RoundTripOn then SetArtifactCompile(True);
+  end;
   { the pre-parser does not apply a restricted profile's early errors to the bodies it skips }
   Result := (LazyMode = 2) and not ActiveProfile.Restricted;
 end;
@@ -353,7 +408,7 @@ end;
 
 function HostCompileEntry(const Source, FileName: UnicodeString; SourceType: Integer; var T: PFuncTemplate;
   out IsModule: Boolean; var Err: UnicodeString; ReturnLast: Boolean): Boolean;
-var Prog: TGocciaProgram; Goal: TGocciaSourceType;
+var Prog: TGocciaProgram; Goal: TGocciaSourceType; NoInfo: TModuleInfo;
 begin
   Result := False;
   IsModule := False;
@@ -387,6 +442,11 @@ begin
         Exit(True);
       end;
       T := CompileProgram(Prog, FileName, ReturnLast, 1);
+      if RoundTripOn then
+      begin
+        NoInfo := nil;
+        RoundTrip(T, NoInfo, FileName, 0);
+      end;
       Result := True;
     except
       on E: Exception do
@@ -753,6 +813,7 @@ begin
       T := CompileProgram(Prog, FileName, ModuleReturnLast, 3);
       Info := LastModuleInfo;
       LastModuleInfo := nil;
+      if RoundTripOn then RoundTrip(T, Info, FileName, Id);
       Result := True;
     except
       on E: Exception do
@@ -781,7 +842,7 @@ end;
 
 function ParseAndCompile(const Source, FileName: UnicodeString; AsExpression: Boolean; var T: PFuncTemplate;
   var Err: UnicodeString; Goal: Integer): Boolean;
-var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType;
+var L: TGocciaLexer; P: TGocciaParser; Prog: TGocciaProgram; Settled: TGocciaSourceType; NoInfo: TModuleInfo;
 begin
   ExcludeHostSource(FileName);
   if (Goal = 1) and not AsExpression and LazyOn and LazyParseAndCompile(Source, FileName, T, Err, Result) then Exit;
@@ -807,6 +868,11 @@ begin
       end;
       CompileFailKind := 2;
       T := CompileProgram(Prog, FileName, AsExpression, Goal);
+      if (Goal = 1) and not AsExpression and RoundTripOn then
+      begin
+        NoInfo := nil;
+        RoundTrip(T, NoInfo, FileName, 0);
+      end;
       CompileFailKind := 0;
       Result := True;
     except
@@ -984,6 +1050,8 @@ var F: TValue;
     DefineOwn(O, SymKey(SymToStringTagW), MkPtr(AtomOf(T)), pfConfigurable);
   end;
 begin
+  { the round trip (G2_ARTIFACT_ROUNDTRIP) compiles everything as for a bytecode file }
+  SetArtifactCompile(RoundTripOn);
   LazyCompileHook := @LazyCompile;
   PreParseRegExpCheck := RegExpValidateHook;
   F := NewNativeFunction(Function_Ctor, 'Function', 1);

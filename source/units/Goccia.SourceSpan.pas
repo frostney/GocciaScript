@@ -45,6 +45,9 @@ type
     function Get: string;
     procedure SetText(const AText: string);
     procedure SetRange(const ASource: string; const AStart, ALength: Integer);
+    { a range of a shared source: that source, the range's zero-based start
+      and its length; False for text set explicitly or an empty range }
+    function GetRange(out ASource: string; out AStart, ALength: Integer): Boolean;
     function IsEmpty: Boolean;
   end;
 
@@ -313,6 +316,24 @@ begin
   FSource := ASource;
   FStart := AStart;
   FLength := ALength;
+end;
+
+function TGocciaLazySourceText.GetRange(out ASource: string; out AStart,
+  ALength: Integer): Boolean;
+begin
+  Result := FLength > 0;
+  if Result then
+  begin
+    ASource := FSource;
+    AStart := FStart;
+    ALength := FLength;
+  end
+  else
+  begin
+    ASource := '';
+    AStart := 0;
+    ALength := 0;
+  end;
 end;
 
 function TGocciaLazySourceText.IsEmpty: Boolean;

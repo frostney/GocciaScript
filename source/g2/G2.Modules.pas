@@ -14,7 +14,7 @@ unit G2.Modules;
 interface
 
 uses
-  G2.Core, G2.Bytecode;
+  G2.Core, G2.Bytecode, G2.Artifact;
 
 procedure InitModules;
 { 28.1.1 %AbstractModuleSource% of the running realm (made when asked: no module source exists yet) }
@@ -123,6 +123,21 @@ type
   TModuleContentCheck = procedure(const Path: UnicodeString; const B: RawByteString) of object;
 { this thread's module content check (nil: none) }
 procedure SetModuleContentCheck(Check: TModuleContentCheck);
+type
+  { a host's check of a bytecode module before it links (G2.Artifact): its profile against the run's; False with
+    Err the message the import fails with }
+  TArtifactCheck = function(const A: TG2Artifact; var Err: UnicodeString): Boolean of object;
+{ this thread's bytecode check (nil: every valid bytecode module is accepted) }
+procedure SetArtifactCheck(Check: TArtifactCheck);
+{ the module record a bytecode file at GbcPath loads as: its directory and name with the extension of the source
+  it was compiled from (a .js file for none), so an import of the source and one of the file share it }
+function ArtifactModulePath(const GbcPath, SourcePath: UnicodeString): UnicodeString;
+{ whether the request being resolved now is only a source phase import's (import source x): its module's source
+  text is what it needs, so a resolver takes no bytecode companion for it }
+function ResolvingSourcePhase: Boolean;
+{ an entry module given as bytecode (a .gbc entry): Bytes load as the module keyed Path (its ArtifactModulePath)
+  when RunModuleFile runs it; '' clears it }
+procedure SetProvidedArtifact(const Path: UnicodeString; const Bytes: RawByteString);
 
 implementation
 
@@ -611,8 +626,169 @@ begin
       Exit(True);
 end;
 
+threadvar
+  SourcePhaseRequest: Boolean;
+  ArtifactCheck: TArtifactCheck;
+  ProvidedArtifactPath: UnicodeString;
+  ProvidedArtifactBytes: RawByteString;
+
+function ResolvingSourcePhase: Boolean;
+begin
+  Result := SourcePhaseRequest;
+end;
+
+{ request Req of M is evaluated (an eager or deferred import, a re-export), not only a source phase import }
+function EvaluatedRequest(M: TModRec; const Req: UnicodeString): Boolean;
+var I: Integer;
+begin
+  for I := 0 to High(M.Info.EvalOrder) do
+    if M.Info.EvalOrder[I].Req = Req then Exit(True);
+  Result := False;
+end;
+
+procedure SetArtifactCheck(Check: TArtifactCheck);
+begin
+  ArtifactCheck := Check;
+end;
+
+procedure SetProvidedArtifact(const Path: UnicodeString; const Bytes: RawByteString);
+begin
+  ProvidedArtifactPath := Path;
+  ProvidedArtifactBytes := Bytes;
+end;
+
+function ArtifactModulePath(const GbcPath, SourcePath: UnicodeString): UnicodeString;
+var Ext: UnicodeString;
+begin
+  Ext := UnicodeString(ExtractFileExt(string(SourcePath)));
+  if (Ext = '') or SameText(string(Ext), '.gbc') then Ext := '.js';
+  Result := UnicodeString(ChangeFileExt(string(GbcPath), string(Ext)));
+end;
+
+function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean; forward;
+
+{ M's requests resolved against its path and loaded, each in M.Deps }
+function LinkRequests(M: TModRec): Boolean;
+var Resolved, Path: UnicodeString; I: Integer; D: TModRec;
+begin
+  Path := M.Path;
+  SetLength(M.Deps, Length(M.Info.Requests));
+  for I := 0 to High(M.Info.Requests) do
+  begin
+    { the declaration is where a host's resolution decision is made (ImportSiteNow) }
+    SitePath := Path;
+    SiteLine := 0;
+    SiteColumn := 0;
+    if I <= High(M.Info.RequestLines) then
+    begin
+      SiteLine := M.Info.RequestLines[I];
+      SiteColumn := M.Info.RequestColumns[I];
+    end;
+    SourcePhaseRequest := not EvaluatedRequest(M, M.Info.Requests[I]);
+    try
+      Resolved := ResolveRequest(M.Info.Requests[I], Path);
+    finally
+      SitePath := '';
+      SourcePhaseRequest := False;
+    end;
+    if not LoadModule(Resolved, D) then
+    begin
+      if (LoadFailPath = '') and (I <= High(M.Info.RequestLines)) and (M.Info.RequestLines[I] > 0) then
+      begin
+        LoadFailPath := Path;
+        LoadFailLine := M.Info.RequestLines[I];
+        LoadFailColumn := M.Info.RequestColumns[I];
+      end;
+      Exit(False);
+    end;
+    M.Deps[I] := D;
+  end;
+  Result := True;
+end;
+
+{ a module record keyed Key made from the bytecode file bytes B (read from From): read, verified, checked
+  against the run's profile (ArtifactCheck), then its requests loaded }
+function LoadArtifactRecord(const Key, From: UnicodeString; const B: RawByteString; var M: TModRec): Boolean;
+var A: TG2Artifact; Err: UnicodeString;
+begin
+  M := TModRec.Create;
+  M.Path := Key;
+  M.Id := Mods.Count;
+  M.HostOwned := HostLoading;
+  M.HasModified := False;
+  M.Hash := 0;
+  Mods.Add(M);
+  SetRoot(M, rError, VUndefined);
+  Err := '';
+  if LoadArtifact(PByte(B), Length(B), Key, M.Id + 1, A, Err) then
+  begin
+    if A.Info = nil then
+    begin
+      Err := 'Imported bytecode requires a linked module artifact';
+      A.Top := nil;
+    end
+    else if Assigned(ArtifactCheck) and not ArtifactCheck(A, Err) then
+    begin
+      FreeAndNil(A.Info);
+      A.Top := nil;
+    end;
+  end;
+  if A.Top = nil then
+  begin
+    M.Errored := True;
+    ThrowError('Error', 'Cannot load bytecode module ''' + From + ''': ' + Err);
+    SetRoot(M, rError, Pending);
+    Exit(False);
+  end;
+  M.Tpl := A.Top;
+  M.Info := A.Info;
+  Result := LinkRequests(M);
+end;
+
+{ a request for a bytecode file (an explicit .gbc import, or the companion a resolver preferred): the record of its
+  logical address, loaded from the file unless that record exists }
+{ the size of a host file (no file reader hook), -1 when it cannot be had }
+function HostFileSize(const Path: UnicodeString): Int64;
+var F: TFileStream;
+begin
+  Result := -1;
+  if Assigned(FileRead) or (Path = '') or not FileExists(string(Path)) then Exit;
+  try
+    F := TFileStream.Create(string(Path), fmOpenRead or fmShareDenyNone);
+    try
+      Result := F.Size;
+    finally
+      F.Free;
+    end;
+  except
+    on EStreamError do Result := -1;
+  end;
+end;
+
+function LoadArtifactModule(const GbcPath: UnicodeString; var M: TModRec): Boolean;
+var B: RawByteString; Src, Err, Key: UnicodeString;
+begin
+  B := '';
+  { an oversized file is refused before it is read }
+  if HostFileSize(GbcPath) > G2_GBC_MAX_FILE_BYTES then
+    Exit(ThrowError('Error', 'Cannot load bytecode module ''' + GbcPath + ''': ' +
+      UnicodeString(Format('bytecode file exceeds the %d byte limit', [G2_GBC_MAX_FILE_BYTES]))));
+  if not ReadModuleBytes(GbcPath, B) then Exit(ModuleReadFailed(GbcPath));
+  Err := '';
+  if not ArtifactSourcePath(PByte(B), Length(B), Src, Err) then
+    Exit(ThrowError('Error', 'Cannot load bytecode module ''' + GbcPath + ''': ' + Err));
+  Key := ArtifactModulePath(GbcPath, Src);
+  M := FindModule(Key);
+  if Assigned(M) then
+  begin
+    if M.Errored and (M.Status = msNew) then begin Pending := GetRoot(M, rError); Exit(False); end;
+    Exit(True);
+  end;
+  Result := LoadArtifactRecord(Key, GbcPath, B, M);
+end;
+
 function LoadModule(const Path: UnicodeString; var M: TModRec): Boolean;
-var Src, Err, ErrName, Resolved, Prov: UnicodeString; I: Integer; D: TModRec; V: TValue; Compiled, FromFile: Boolean;
+var Src, Err, ErrName, Prov: UnicodeString; I: Integer; V: TValue; Compiled, FromFile: Boolean;
   Modified: TDateTime;
 begin
   if (Length(Path) >= 2) and (Path[1] = #0) and (Path[2] = #1) then
@@ -628,6 +804,10 @@ begin
     if Pos(#1, Path) > 0 then Exit(ThrowError('Error', Copy(Path, 2, Pos(#1, Path) - 2)));
     Exit(ThrowError('Error', Copy(Path, 2, MaxInt)));
   end;
+  { bytecode: the provided entry, or a .gbc file }
+  if (ProvidedArtifactPath <> '') and (Path = ProvidedArtifactPath) and (FindModule(Path) = nil) then
+    Exit(LoadArtifactRecord(Path, Path, ProvidedArtifactBytes, M));
+  if SameText(ExtractFileExt(string(Path)), '.gbc') then Exit(LoadArtifactModule(Path, M));
   M := FindModule(Path);
   { a settled record whose file changed since it was read loads again (ADR 0139: a newer version, or a retry of
     one that failed): what imported it keeps it, this request and later ones get the new one }
@@ -703,36 +883,7 @@ begin
     SetRoot(M, rError, Pending);
     Exit(False);
   end;
-  SetLength(M.Deps, Length(M.Info.Requests));
-  for I := 0 to High(M.Info.Requests) do
-  begin
-    { the declaration is where a host's resolution decision is made (ImportSiteNow) }
-    SitePath := Path;
-    SiteLine := 0;
-    SiteColumn := 0;
-    if I <= High(M.Info.RequestLines) then
-    begin
-      SiteLine := M.Info.RequestLines[I];
-      SiteColumn := M.Info.RequestColumns[I];
-    end;
-    try
-      Resolved := ResolveRequest(M.Info.Requests[I], Path);
-    finally
-      SitePath := '';
-    end;
-    if not LoadModule(Resolved, D) then
-    begin
-      if (LoadFailPath = '') and (I <= High(M.Info.RequestLines)) and (M.Info.RequestLines[I] > 0) then
-      begin
-        LoadFailPath := Path;
-        LoadFailLine := M.Info.RequestLines[I];
-        LoadFailColumn := M.Info.RequestColumns[I];
-      end;
-      Exit(False);
-    end;
-    M.Deps[I] := D;
-  end;
-  Result := True;
+  Result := LinkRequests(M);
 end;
 
 function DepOf(M: TModRec; const Req: UnicodeString): TModRec;

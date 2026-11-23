@@ -10,7 +10,8 @@ unit G2.Embed;
 interface
 
 uses
-  SysUtils, Goccia.Capabilities, Goccia.CapabilityAudit, Goccia.HostEnvironment, Goccia.ModuleResolver, G2.Core, G2.HostAPI, G2.Modules, G2.VM;
+  SysUtils, Goccia.Capabilities, Goccia.CapabilityAudit, Goccia.HostEnvironment, Goccia.ModuleResolver, G2.Core, G2.HostAPI, G2.Modules, G2.VM,
+  G2.Bytecode, G2.Artifact;
 
 type
   { a console line and the method that wrote it (G2.HostAPI TConsoleSink) }
@@ -126,6 +127,15 @@ type
     FHostEnvironmentGuest: Boolean;
     { the entry's file name (Run): an audited decision made outside every script frame is the entry's }
     FRunFile: UnicodeString;
+    { RunArtifact's entry: the bytecode file's bytes, run instead of compiling Run's source }
+    FArtifactEntry: Boolean;
+    FArtifactBytes: RawByteString;
+    { G2.Modules' TArtifactCheck: a bytecode module's profile against this engine's settings }
+    function CheckArtifact(const A: TG2Artifact; var Err: UnicodeString): Boolean;
+    { the artifact entry loaded: a Script's template in T, or a Module provided under its logical address
+      (EntryKey); False with R's error fields set }
+    function LoadEntryArtifact(const FileName: string; var T: PFuncTemplate; var EntryKey: UnicodeString;
+      var R: TG2RunResult): Boolean;
     function NextRandom(Realm: Integer; out D: Double): Boolean;
     function AuditRead(Allow: Boolean; const Subject, Reason: string): Boolean;
     function HostReady(var Err: UnicodeString): Boolean;
@@ -147,6 +157,15 @@ type
       read then. Run installs them when the host has not. }
     function PrepareHost(var Err: UnicodeString): Boolean;
     function Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
+    { Run for a bytecode file (a .gbc entry, G2.Artifact): its recorded goal unless SourceKind names one (a
+      conflicting one is an error), its profile checked against the settings before anything of it runs, a
+      Module's imports linked as a source module's }
+    function RunArtifact(const FileName: string; const Bytes: RawByteString): TG2RunResult;
+    { the Bundler's compile: Source compiled as Run would compile it (SourceKind, Profile, JSModuleSources), every
+      function with its code, and written as a bytecode file (G2.Artifact) without running anything. False with
+      R's error fields set for source that does not compile or a template the format cannot hold }
+    function CompileArtifact(const FileName: string; const Source: UnicodeString; out Bytes: TBytes;
+      var R: TG2RunResult): Boolean;
     { test mode, after Run: the file's suites (G2.HostAPI RunTestSuites) under the limits Run armed, which stay in force
       from the file's start; Json their report, else Err why they did not finish and Aborted the limit that ended
       them. The limits are disarmed after. }
@@ -285,9 +304,9 @@ function DiscoverProjectRoot(const EntryFileName: string): string;
 implementation
 
 uses
-  Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Bytecode, G2.Engine, G2.Eval,
+  Math, TimingUtils, BigInteger, Goccia.Temporal.TimeZone, G2.Engine, G2.Eval,
   G2.Promise, G2.Builtins, G2.BigIntV, G2.ObjModel, G2.FFI, G2.Fetch, G2.Compiler, G2.Sandbox, G2.Profile, Goccia.Profiler.Compile,
-  G2.HeapSnapshot;
+  G2.HeapSnapshot, Goccia.Bytecode.Profile;
 
 threadvar
   { the built-in JSON.stringify, taken when the host is installed: a script that replaces it does not change a
@@ -885,13 +904,172 @@ begin
   Result := HostReady(Err) and G2.HostAPI.DefineModuleManifestVirtualModules(Path, Err);
 end;
 
+function TG2Engine.CompileArtifact(const FileName: string; const Source: UnicodeString; out Bytes: TBytes;
+  var R: TG2RunResult): Boolean;
+var Kind: Integer; T: PFuncTemplate; IsModule, Unr: Boolean; Err, ErrName: UnicodeString; A: TG2Artifact;
+begin
+  Result := False;
+  Bytes := nil;
+  R := Default(TG2RunResult);
+  SetActiveProfile(FProfile);
+  case FSourceKind of
+    g2skScript: Kind := 1;
+    g2skModule: Kind := 2;
+  else
+    if LowerCase(ExtractFileExt(FileName)) = '.mjs' then Kind := 2 else Kind := 0;
+  end;
+  A := Default(TG2Artifact);
+  T := nil;
+  Err := '';
+  SetEagerCompile(True);
+  SetArtifactCompile(True);
+  try
+    { a Script keeps its completion value, so a runner can report it whatever its options }
+    if not HostCompileEntry(Source, UnicodeString(FileName), Kind, T, IsModule, Err, True) and not IsModule then
+    begin
+      R.ErrorName := ParseErrorName;
+      R.ErrorLine := ParseErrorLine;
+      R.ErrorColumn := ParseErrorColumn;
+      R.ErrorSuggestion := ParseErrorSuggestion;
+      R.ErrorText := Err;
+      R.ErrorMessage := Err;
+      R.ErrorIsError := True;
+      R.ErrorFile := UnicodeString(FileName);
+      Exit;
+    end;
+    if IsModule then
+    begin
+      ModuleReturnLast := True;
+      try
+        if not ParseAndCompileModule(Source, UnicodeString(FileName), 0, T, A.Info, Err, ErrName) then
+        begin
+          R.ErrorName := ErrName;
+          R.ErrorLine := ParseErrorLine;
+          R.ErrorColumn := ParseErrorColumn;
+          R.ErrorSuggestion := ParseErrorSuggestion;
+          R.ErrorText := Err;
+          R.ErrorMessage := Err;
+          R.ErrorIsError := True;
+          R.ErrorFile := UnicodeString(FileName);
+          Exit;
+        end;
+      finally
+        ModuleReturnLast := False;
+      end;
+    end
+    else A.ScriptImports := ScriptImportSource;
+    R.Compiled := True;
+    R.IsModule := IsModule;
+    A.SourcePath := UnicodeString(FileName);
+    A.Profile := CurrentArtifactProfile(IsModule, FJSModuleSources, Unr);
+    A.Unrestricted := Unr;
+    A.Top := T;
+    try
+      Bytes := SaveArtifact(A);
+      Result := True;
+    except
+      on E: Exception do
+      begin
+        R.ErrorName := 'Error';
+        R.ErrorText := UnicodeString(E.Message);
+        R.ErrorMessage := R.ErrorText;
+        R.ErrorIsError := True;
+        R.ErrorFile := UnicodeString(FileName);
+      end;
+    end;
+  finally
+    SetEagerCompile(False);
+    SetArtifactCompile(False);
+    A.Info.Free;
+  end;
+end;
+
+function TG2Engine.CheckArtifact(const A: TG2Artifact; var Err: UnicodeString): Boolean;
+var P: TGocciaCompileProfile; Unr: Boolean;
+begin
+  SetActiveProfile(FProfile);
+  P := CurrentArtifactProfile(A.Profile.SourceType = bstModule, FJSModuleSources, Unr);
+  Result := P.Matches(A.Profile) and (Unr = A.Unrestricted);
+  if not Result then Err := 'Bytecode compile profile does not match the engine';
+end;
+
+function TG2Engine.LoadEntryArtifact(const FileName: string; var T: PFuncTemplate; var EntryKey: UnicodeString;
+  var R: TG2RunResult): Boolean;
+var Src, Err: UnicodeString; A: TG2Artifact;
+  procedure Failed(const Msg: UnicodeString);
+  begin
+    R.ErrorName := 'Error';
+    R.ErrorText := Msg;
+    R.ErrorMessage := Msg;
+    R.ErrorIsError := True;
+    R.ErrorFile := UnicodeString(FileName);
+  end;
+begin
+  Result := False;
+  Err := '';
+  if not ArtifactSourcePath(PByte(FArtifactBytes), Length(FArtifactBytes), Src, Err) then
+  begin
+    Failed(Err);
+    Exit;
+  end;
+  EntryKey := ArtifactModulePath(UnicodeString(ExpandFileName(FileName)), Src);
+  { the goal: the recorded one, unless the host names one }
+  if PByte(FArtifactBytes) = nil then Exit;
+  if not LoadArtifact(PByte(FArtifactBytes), Length(FArtifactBytes), EntryKey, 0, A, Err) then
+  begin
+    Failed(Err);
+    Exit;
+  end;
+  if ((FSourceKind = g2skScript) and (A.Profile.SourceType <> bstScript)) or
+     ((FSourceKind = g2skModule) and (A.Profile.SourceType <> bstModule)) then
+  begin
+    A.Info.Free;
+    Failed('Bytecode compile profile does not match the requested source type');
+    Exit;
+  end;
+  if not CheckArtifact(A, Err) then
+  begin
+    A.Info.Free;
+    Failed(Err);
+    Exit;
+  end;
+  R.IsModule := A.Info <> nil;
+  if R.IsModule then
+  begin
+    { the module loads again under its record (G2.Modules LoadArtifactRecord, with its own module id); this
+      read only settled the goal and the checks }
+    A.Info.Free;
+    SetProvidedArtifact(EntryKey, FArtifactBytes);
+  end
+  else
+  begin
+    T := A.Top;
+    ScriptImportSource := A.ScriptImports;
+  end;
+  Result := True;
+end;
+
+function TG2Engine.RunArtifact(const FileName: string; const Bytes: RawByteString): TG2RunResult;
+begin
+  FArtifactEntry := True;
+  FArtifactBytes := Bytes;
+  try
+    Result := Run(FileName, '');
+  finally
+    FArtifactEntry := False;
+    FArtifactBytes := '';
+    SetProvidedArtifact('', '');
+  end;
+end;
+
 function TG2Engine.Run(const FileName: string; const Source: UnicodeString): TG2RunResult;
 var Kind, Phase, I, FailLine, FailColumn, ParseLine, ParseColumn: Integer; T: PFuncTemplate;
-  Err, FailPath, ParsePath, ParseName, ParseSuggestion: UnicodeString;
+  Err, FailPath, ParsePath, ParseName, ParseSuggestion, EntryKey: UnicodeString;
   S, Thrown, Completion, Imports: TValue; Start: Int64;
   Compiled: Boolean;
 begin
   Result := Default(TG2RunResult);
+  EntryKey := UnicodeString(ExpandFileName(FileName));
   Err := '';
   if not PrepareHost(Err) then
   begin
@@ -916,6 +1094,7 @@ begin
   SetHostResolver(FResolver);
   SetModuleContentCheck(FModuleContentCheck);
   SetProviderGraphCheck(FProviderGraph);
+  SetArtifactCheck(CheckArtifact);
   ClearLoadFailure;
   TakeResolveCandidate;
   { the JavaScript host environment, before the entry: a provider that does not load fails the run with its error }
@@ -939,6 +1118,7 @@ begin
     Pending := VUndefined;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
+    SetArtifactCheck(nil);
     SetProviderGraphCheck(nil);
     Exit;
   end;
@@ -956,8 +1136,23 @@ begin
   Start := GetNanoseconds;
   { an opcode or compile profile compiles the entry as it would be compiled to keep its value, whatever the report's
     form, so the code it counts does not depend on --output or --print }
-  Compiled := HostCompileEntry(Source, UnicodeString(FileName), Kind, T, Result.IsModule, Err,
-    (FResultForm <> g2rfNone) or FProfileOpcodes or (TGocciaCompileProfiler.Instance <> nil));
+  if FArtifactEntry then
+  begin
+    ScriptImportSource := '';
+    Compiled := LoadEntryArtifact(FileName, T, EntryKey, Result);
+    Result.CompileNanoseconds := GetNanoseconds - Start;
+    if not Compiled then
+    begin
+      SetHostResolver(nil);
+      SetModuleContentCheck(nil);
+      SetArtifactCheck(nil);
+      SetProviderGraphCheck(nil);
+      Exit;
+    end;
+  end
+  else
+    Compiled := HostCompileEntry(Source, UnicodeString(FileName), Kind, T, Result.IsModule, Err,
+      (FResultForm <> g2rfNone) or FProfileOpcodes or (TGocciaCompileProfiler.Instance <> nil));
   Result.CompileNanoseconds := GetNanoseconds - Start;
   if not Compiled then
   begin
@@ -989,9 +1184,10 @@ begin
     begin
       Phase := 0;
       { the entry's source as given (stdin has no file to read), compiled to keep its last value when reported }
-      SetProvidedSource(UnicodeString(ExpandFileName(FileName)), Source);
+      if not FArtifactEntry then SetProvidedSource(EntryKey, Source)
+      else SetProvidedSource(EntryKey, '');
       SetEntryCompletionWanted((FResultForm <> g2rfNone) or FProfileOpcodes or (TGocciaCompileProfiler.Instance <> nil));
-      Result.Ok := RunModuleFile(UnicodeString(ExpandFileName(FileName)), Phase) and RunEventLoop;
+      Result.Ok := RunModuleFile(EntryKey, Phase) and RunEventLoop;
       Completion := EntryCompletion;
       PopRoots(1);
       PushRoot(Completion);
@@ -1004,12 +1200,12 @@ begin
       { an explicit Script's imports: their graph linked and evaluated first, then bound as its globals }
       if ScriptImportSource <> '' then
       begin
-        Result.Ok := StartScriptImports(UnicodeString(ExpandFileName(FileName)), ScriptImportSource, Imports);
+        Result.Ok := StartScriptImports(EntryKey, ScriptImportSource, Imports);
         if Result.Ok then
         begin
           PushRoot(Imports);
           if PromiseStatus(Imports, Completion) = 0 then Result.Ok := RunEventLoop;
-          Result.Ok := Result.Ok and FinishScriptImports(UnicodeString(ExpandFileName(FileName)), RootAt(TempTop - 1));
+          Result.Ok := Result.Ok and FinishScriptImports(EntryKey, RootAt(TempTop - 1));
           PopRoots(1);
         end;
         Completion := VUndefined;
@@ -1102,6 +1298,7 @@ begin
     SetProvidedSource('', '');
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
+    SetArtifactCheck(nil);
     SetProviderGraphCheck(nil);
     PopRoots(1);
     { a test or benchmark file's limits cover its suites too (RunTests and RunBenchmarks disarm them) }
@@ -1117,6 +1314,7 @@ begin
   { the tests import as the file did: its resolver (import map, node_modules, providers) and their checks }
   SetHostResolver(FResolver);
   SetModuleContentCheck(FModuleContentCheck);
+  SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
   try
     Result := RunTestSuites(Json, Err);
@@ -1138,6 +1336,7 @@ begin
   finally
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
+    SetArtifactCheck(nil);
     SetProviderGraphCheck(nil);
     LimitsDisarm;
   end;
@@ -1174,6 +1373,7 @@ begin
   { the benchmarks import as the file did: its resolver and their checks }
   SetHostResolver(FResolver);
   SetModuleContentCheck(FModuleContentCheck);
+  SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
   if FProfileOpcodes or FProfileFunctions then ProfileStart(FProfileOpcodes, FProfileFunctions);
   try
@@ -1197,6 +1397,7 @@ begin
     ProfileStop;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
+    SetArtifactCheck(nil);
     SetProviderGraphCheck(nil);
     LimitsDisarm;
   end;
@@ -1242,6 +1443,7 @@ begin
   SetReadPolicy(FHasCapabilities and not SandboxActive, FCapabilities, FProjectRoot, AuditRead);
   SetHostResolver(FResolver);
   SetModuleContentCheck(FModuleContentCheck);
+  SetArtifactCheck(CheckArtifact);
   SetProviderGraphCheck(FProviderGraph);
   Base := TempTop;
   try
@@ -1281,6 +1483,7 @@ begin
     Pending := VUndefined;
     SetHostResolver(nil);
     SetModuleContentCheck(nil);
+    SetArtifactCheck(nil);
     SetProviderGraphCheck(nil);
   end;
 end;

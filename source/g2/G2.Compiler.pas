@@ -69,6 +69,14 @@ type
     function IsEager(const R: UnicodeString): Boolean;
   end;
 
+{ N tagged template site numbers for code read from a bytecode file (G2.Artifact): the first of them, or -1 when
+  the numbers would not fit an instruction's C operand }
+function ReserveTemplateSites(N: Integer): Integer; noinline;
+{ code compiled for a bytecode file (On): it names no global lexical binding by its index in this engine's table
+  (opGetGLex, opSetGLex), whose numbering another engine does not share; such a binding is found by name at run
+  time (opGetGlobal, opSetGlobal) }
+procedure SetArtifactCompile(On: Boolean); noinline;
+
 { a ModuleRequest Record as a string: the specifier, then #1 and its type attribute when it has one }
 function ModuleRequestKey(const Spec, AType: UnicodeString): UnicodeString;
 
@@ -253,6 +261,28 @@ procedure PatternNames(P: TGocciaDestructuringPattern; L: TStringList); forward;
 function CompilingModuleIdOf: Integer; noinline;
 begin
   Result := CompilingModuleId;
+end;
+
+threadvar
+  ArtifactCompile: Boolean;
+
+procedure SetArtifactCompile(On: Boolean);
+begin
+  ArtifactCompile := On;
+end;
+
+{ GLexFind for the code being compiled: none for a bytecode file's (SetArtifactCompile) }
+function GLexIndex(Key: PStr): Integer; noinline;
+begin
+  if ArtifactCompile then Exit(-1);
+  Result := GLexFind(Key);
+end;
+
+function ReserveTemplateSites(N: Integer): Integer;
+begin
+  if (N < 0) or (Int64(TemplateSiteNext) + N > $7FFFFF) then Exit(-1);
+  Result := TemplateSiteNext;
+  Inc(TemplateSiteNext, N);
 end;
 
 { the same for EvalStrictPrefix (CompileFunction's plain load of it got the absolute relocation too) }
@@ -1572,7 +1602,7 @@ begin
   if N = 'undefined' then begin Emit(Ins(opLoadUndef, Dest, 0, 0)); Exit; end;
   if N = 'NaN' then begin LoadNumber(NaN, Dest); Exit; end;
   if N = 'Infinity' then begin LoadNumber(Infinity, Dest); Exit; end;
-  U := GLexFind(AtomOf(N));
+  U := GLexIndex(AtomOf(N));
   if U >= 0 then begin Emit(Ins(opGetGLex, Dest, 0, U)); Exit; end;
   Emit(Ins(opGetGlobal, Dest, 0, NewIC(N)));
 end;
@@ -1638,7 +1668,7 @@ function TCompiler.IsGlobalRef(const N: UnicodeString): Boolean;
 var R: Integer;
 begin
   Result := not ResolveLocal(FS, N, R) and (ResolveUpval(FS, N) < 0) and not ((Goal = 3) and (ModImportSlot(N) >= 0)) and
-    not ((N = 'arguments') and ArgumentsBound) and (GLexFind(AtomOf(N)) < 0) and
+    not ((N = 'arguments') and ArgumentsBound) and (GLexIndex(AtomOf(N)) < 0) and
     ((WithCount = 0) or (WithsFor(N, WithIdxScratch) = 0));
 end;
 
@@ -1718,7 +1748,7 @@ begin
       Exit;
     end;
   end;
-  U := GLexFind(AtomOf(N));
+  U := GLexIndex(AtomOf(N));
   if U >= 0 then begin Emit(Ins(opSetGLex, Src, 0, U)); Exit; end;
   Emit(Ins(opSetGlobal, Src, 0, NewIC(N)));
 end;
