@@ -860,9 +860,14 @@ begin
     ExportedNames(M, Seen, Names);
     O := NewObject(RootShapeFor(VNull), 0, okModuleNS);
     PushRoot(MkPtr(O));
-    DefineOwn(RootAt(Base), SymKey(SymToStringTagW), StrFromUnicode('Module'), 0);
+    { the tag string made before the object is read from its root (whatever order the arguments take) }
+    PushRoot(StrFromUnicode('Module'));
+    DefineOwn(RootAt(Base), SymKey(SymToStringTagW), RootAt(Base + 1), 0);
+    PopRoots(1);
     PushRoot(MkPtr(NewArray(0, 8)));
+    { the namespace may be old by now (the allocations since it was made can promote it): the store's barrier }
     ObjOf(RootAt(Base))^.Aux1 := RootAt(Base + 1);
+    WriteBarrier(@ObjOf(RootAt(Base))^.Hdr, RootAt(Base + 1));
     ObjOf(RootAt(Base))^.OFlags := ObjOf(RootAt(Base))^.OFlags or 8;   { not extensible }
     ObjOf(RootAt(Base))^.Shape := ShapeFork(ObjOf(RootAt(Base))^.Shape);   { its own shape: no inline cache shares it }
     SetRoot(M, rNS, RootAt(Base));
@@ -894,7 +899,9 @@ begin
   PushRoot(GetNamespace(M));
   O := NewObject(RootShapeFor(VNull), 0, okModuleNS);
   PushRoot(MkPtr(O));
-  DefineOwn(RootAt(Base + 1), SymKey(SymToStringTagW), StrFromUnicode('Deferred Module'), 0);
+  PushRoot(StrFromUnicode('Deferred Module'));
+  DefineOwn(RootAt(Base + 1), SymKey(SymToStringTagW), RootAt(Base + 2), 0);
+  PopRoots(1);
   PushRoot(MkPtr(NewArray(0, 8)));
   E := ObjOf(ObjOf(RootAt(Base))^.Aux1)^.Elements;
   I := 0;
@@ -911,6 +918,7 @@ begin
   end;
   O := ObjOf(RootAt(Base + 1));
   O^.Aux1 := RootAt(Base + 2);
+  WriteBarrier(@O^.Hdr, O^.Aux1);
   O^.Aux2 := MkInt(M.Id);
   O^.OFlags := O^.OFlags or 8 or 16;
   O^.Shape := ShapeFork(O^.Shape);
