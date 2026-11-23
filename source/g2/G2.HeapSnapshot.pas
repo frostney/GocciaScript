@@ -838,6 +838,109 @@ var R: TSnapReader; Base, NB, NR, NT, NC, I, J, K, N, Ix, RootNo, Cnt: Integer; 
     Result := PValueArray(PtrOf(RootAt(Base)))^.Data[Id];
   end;
 
+  { what each restored object's kind keeps in Aux1, Aux2 and its elements (G2.Core's okXxx notes), which the
+    engine reads without checking: a wrapper's primitive, a bound function's callable target and [this, args...],
+    a closure's home object and closed upvalues (at least as many as its template has), an array's elements and, past them,
+    its length }
+  procedure CheckKinds;
+  var I, J: Integer; O: PObj; A: PValueArray; D: Double; Ok: Boolean;
+  begin
+    for I := 0 to NC - 1 do
+    begin
+      if not IsObject(TableAt(I)) then Continue;
+      O := ObjOf(TableAt(I));
+      case O^.OKind of
+        okBoolean: Ok := (O^.Aux1 = VTrue) or (O^.Aux1 = VFalse);
+        okNumber: Ok := IsNumber(O^.Aux1);
+        okStringObj: Ok := IsString(O^.Aux1);
+        okSymbolObj: Ok := KindOf(O^.Aux1) = ckSymbol;
+        okBound:
+          Ok := IsCallable(O^.Aux1) and (KindOf(O^.Aux2) = ckValueArray) and
+            (PValueArray(PtrOf(O^.Aux2))^.Len >= 1);
+        okFunction:
+          begin
+            { a template without upvalues gets no array (undefined) }
+            Ok := (O^.Aux1 = VUndefined) or IsObject(O^.Aux1);
+            if Ok and (KindOf(O^.Aux2) <> ckValueArray) then
+              Ok := (O^.Aux2 = VUndefined) and (Length(PFuncTemplate(O^.Native)^.Upvals) = 0)
+            else if Ok then
+            begin
+              A := PValueArray(PtrOf(O^.Aux2));
+              Ok := A^.Len >= Length(PFuncTemplate(O^.Native)^.Upvals);
+              for J := 0 to Integer(A^.Len) - 1 do
+                if Ok and (KindOf(A^.Data[J]) <> ckUpval) then Ok := False;
+            end;
+          end;
+        okArray:
+          begin
+            Ok := O^.Elements <> nil;
+            if Ok and ((O^.OFlags and ofBigLen) <> 0) then
+            begin
+              Ok := IsNumber(O^.Aux2);
+              if Ok then
+              begin
+                if IsInt(O^.Aux2) then D := IntOf(O^.Aux2) else D := DoubleOf(O^.Aux2);
+                Ok := (D = Int(D)) and (D >= O^.Elements^.Len) and (D <= 4294967295.0);
+              end;
+            end;
+          end;
+      else
+        Ok := True;
+      end;
+      if not Ok then raise ERefused.Create('the snapshot is malformed');
+    end;
+  end;
+
+  { 10.1.2.1 OrdinarySetPrototypeOf step 8 keeps an ordinary object's prototype chain from coming back to itself,
+    and [[Get]], [[HasProperty]] and instanceof walk it to its end. A snapshot's prototypes are references to any
+    of its objects, so a chain among them that loops is refused (a built-in's chain ends in built-ins). Each object
+    is walked once: 1 while on the current walk, 2 once its chain is known to end }
+  procedure CheckProtoChains;
+  var Ix: TDictionary<Pointer, Integer>; State: array of Byte; I, J, P, Mode: Integer; V: TValue;
+    { the next object on J's chain: its prototype (Mode 0) or a bound function's target (Mode 1, where a loop would
+      run BoundChainArgs forever) }
+    function Next(J: Integer): TValue;
+    begin
+      if Mode = 0 then Exit(ObjOf(TableAt(J))^.Shape^.Proto);
+      if ObjOf(TableAt(J))^.OKind = okBound then Exit(ObjOf(TableAt(J))^.Aux1);
+      Result := VUndefined;
+    end;
+  begin
+    Ix := TDictionary<Pointer, Integer>.Create;
+    try
+      for I := 0 to NC - 1 do
+        if IsObject(TableAt(I)) then Ix.Add(PtrOf(TableAt(I)), I);
+      for Mode := 0 to 1 do
+      begin
+        SetLength(State, 0);
+        SetLength(State, NC);
+        for I := 0 to NC - 1 do
+        begin
+          if (State[I] <> 0) or not IsObject(TableAt(I)) then Continue;
+          J := I;
+          while True do
+          begin
+            State[J] := 1;
+            V := Next(J);
+            if not IsObject(V) or not Ix.TryGetValue(PtrOf(V), P) or (State[P] = 2) then Break;
+            if State[P] = 1 then raise ERefused.Create('the snapshot is malformed: a prototype or bound chain loops');
+            J := P;
+          end;
+          J := I;
+          while State[J] = 1 do
+          begin
+            State[J] := 2;
+            V := Next(J);
+            if not IsObject(V) or not Ix.TryGetValue(PtrOf(V), P) then Break;
+            J := P;
+          end;
+        end;
+      end;
+    finally
+      Ix.Free;
+    end;
+  end;
+
   function ReadValue: TValue;
   var Tag: Byte; X: Integer;
   begin
@@ -846,7 +949,17 @@ var R: TSnapReader; Base, NB, NR, NT, NC, I, J, K, N, Ix, RootNo, Cnt: Integer; 
       vtRaw:
         begin
           Result := R.U64;
-          if (Result shr 48) = TAG_PTR_HI then raise ERefused.Create('the snapshot is malformed');
+          { only a value the engine makes: a pointer is a vtCell, a special one of the five constants, an integer
+            an Int32, a NaN the canonical one (every routine that reads a value relies on these; ToString, for
+            one, recurses forever on an unknown special) }
+          case Result shr 48 of
+            TAG_INT_HI: if (Result and $0000FFFF00000000) <> 0 then raise ERefused.Create('the snapshot is malformed');
+            TAG_SPECIAL_HI: if Result > VHole then raise ERefused.Create('the snapshot is malformed');
+            TAG_PTR_HI..$FFFF: raise ERefused.Create('the snapshot is malformed');
+          else
+            if ((Result and $7FF0000000000000) = $7FF0000000000000) and ((Result and $000FFFFFFFFFFFFF) <> 0) and
+               (Result <> CANON_NAN) then raise ERefused.Create('the snapshot is malformed');
+          end;
         end;
       vtCell:
         begin
@@ -1158,6 +1271,8 @@ begin
             end;
         end;
       end;
+      CheckKinds;
+      CheckProtoChains;
       R.Pos := RootPos;
       Root := ReadValue;
       if R.Pos <> Length(Data) then raise ERefused.Create('the snapshot is malformed');

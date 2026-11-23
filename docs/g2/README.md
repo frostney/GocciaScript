@@ -298,6 +298,9 @@ tables, buffers, promises, proxies, generators, module namespaces, iterators) an
 snapshot, named after GocciaScript's classes (`no snapshot codec for TGocciaMapValue`). Module records are not
 written: the closures carry the module bindings they use, so a restored engine that imports a module evaluates it
 again. A module root carries a hash of its source, and a restore refuses a module whose file now holds other code.
+The reader checks what it reads, so a damaged or hostile file is refused rather than restored: a raw value must be
+one the engine makes (an Int32, one of the five special constants, a Number with only the canonical NaN), and the
+prototype chains among the restored objects must end, as `OrdinarySetPrototypeOf` keeps them.
 
 `GocciaTestRunner --heap-snapshots` round-trips each distinct object `expect()` was given. After the file's tests,
 `TG2Engine.HeapSnapshotObserved` writes each one and describes it through the object model (own keys,
