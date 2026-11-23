@@ -1637,7 +1637,13 @@
     year: ["last year", "this year", "next year"]
   };
   function rtfNumberFormat(s) {
-    if (s.nf === undefined) s.nf = initNumberFormat(removeUnicodeExtension(s.locale), { numberingSystem: s.numberingSystem });
+    // 18.5.2 PartitionRelativeTimePattern step 6: the options object is OrdinaryObjectCreate(null), so a property of
+    // Object.prototype is never read as one of its options
+    if (s.nf === undefined) {
+      var o = rec();
+      o.numberingSystem = s.numberingSystem;
+      s.nf = initNumberFormat(removeUnicodeExtension(s.locale), o);
+    }
     return s.nf;
   }
   // the parts of value in unit: [type, value, unit] triples (unit set on the number's parts)
@@ -1959,8 +1965,9 @@
     if (unit === "microseconds") return s.units.nanoseconds.style === "fractional";
     return false;
   }
+  // PartitionDurationFormatPattern: nfOpts is OrdinaryObjectCreate(null)
   function durationNF(s, opts) {
-    var o = {};
+    var o = rec();
     for (var k in opts) cdp(o, k, opts[k]);
     return initNumberFormat(s.locale, o);
   }
