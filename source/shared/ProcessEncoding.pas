@@ -161,11 +161,13 @@ type
 const
   ICONV_FAILED = TIconv(-1);
   UTF16_NATIVE = {$IFDEF ENDIAN_LITTLE}'UTF-16LE'{$ELSE}'UTF-16BE'{$ENDIF};
+  { macOS keeps iconv in libiconv, not libc (cwstring, which this unit replaced, linked it with $linklib) }
+  ICONV_LIBRARY = {$IFDEF DARWIN}'iconv'{$ELSE}'c'{$ENDIF};
 
-function iconv_open(ATo, AFrom: PAnsiChar): TIconv; cdecl; external 'c' name 'iconv_open';
+function iconv_open(ATo, AFrom: PAnsiChar): TIconv; cdecl; external ICONV_LIBRARY name 'iconv_open';
 function Iconv(ACd: TIconv; AIn: PPAnsiChar; AInLeft: psize_t; AOut: PPAnsiChar; AOutLeft: psize_t): size_t;
-  cdecl; external 'c' name 'iconv';
-function iconv_close(ACd: TIconv): cint; cdecl; external 'c' name 'iconv_close';
+  cdecl; external ICONV_LIBRARY name 'iconv';
+function iconv_close(ACd: TIconv): cint; cdecl; external ICONV_LIBRARY name 'iconv_close';
 
 { iconv's name for a code page ('' when unixcp does not know it) }
 function IconvName(const ACodePage: TSystemCodePage): RawByteString;
