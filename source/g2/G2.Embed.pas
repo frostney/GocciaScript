@@ -91,6 +91,7 @@ type
     FMaxFrames: Integer;
     FHostReady: Boolean;
     FExposeTimers: Boolean;
+    FBare: Boolean;
     FResultForm: TG2ResultForm;
     FOnConsole: TG2ConsoleEvent;
     FResolver: TModuleResolver;
@@ -223,6 +224,10 @@ type
     { setTimeout and the other timer globals, and goccia:timers (True by default); without them the timer queue
       still serves the host's own users (AbortSignal.timeout) }
     property ExposeTimers: Boolean read FExposeTimers write FExposeTimers;
+    { GocciaScriptLoaderBare's engine, the core without a runtime: the global object of G2.HostAPI's bare host
+      (print, Goccia, no console or web APIs) and no module content provider, so an import that finds its file fails
+      with ERR_MODULE_LOADING_UNSUPPORTED }
+    property Bare: Boolean read FBare write FBare;
     { report the entry's completion value (TG2RunResult.ResultText) }
     property ResultForm: TG2ResultForm read FResultForm write FResultForm;
     { console lines go here instead of to stdout (nil: stdout) }
@@ -768,6 +773,7 @@ end;
 destructor TG2Engine.Destroy;
 begin
   SetReadPolicy(False, TGocciaCapabilities.None, '', nil);
+  SetModuleLoadingUnsupported(False);
   CompileCoverage := False;
   CoverageOn := False;
   AuditHook := nil;
@@ -837,7 +843,8 @@ begin
   { fetch() judges destinations by the capability set (none without one) }
   if FHasCapabilities then SetFetchPolicy(FCapabilities, FFetchMaxResponseBytes)
   else SetFetchPolicy(TGocciaCapabilities.None, FFetchMaxResponseBytes);
-  Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err, FExposeTimers);
+  SetModuleLoadingUnsupported(FBare);
+  Result := InstallHostGlobals(FProfile.ShadowRealm, FTestMode, FConfigJson, Err, FExposeTimers, FBare);
   if Result and FHasCapabilities and FCapabilities.Grants(gcFFI) then Result := InstallFFI(FCapabilities, Err);
   FHostReady := Result;
   if not Result then Exit;

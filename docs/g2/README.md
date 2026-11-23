@@ -389,6 +389,22 @@ child's heap limit. Its statuses match `run262.py`'s for every run of the suite.
 `$262.js`, so a probe reaches the hooks as `$262`; the old runner's probes read its own `Goccia.test262` object,
 which G2 does not have (the `--eval-host` sections of `scripts/test-cli-apps.ts`).
 
+### GocciaScriptLoaderBare
+
+`./build.pas g2loaderbare` builds `build/g2/GocciaScriptLoaderBare` from `source/app/GocciaScriptLoaderBareG2.dpr`:
+the old loader's command line (compatibility flags, `--source-type`, `--source-name`, `--print`, the limits and
+`--profile`) over an engine with `TG2Engine.Bare` set. Its global object is the old loader's: the core built-ins,
+`DOMException`, `atob`, `btoa`, `PermissionDenied`, `print` and `Goccia` (without `semver`), and no `console`,
+`performance`, timers, web APIs or `goccia:` modules. It has no module content provider: an import resolves as
+GocciaScript's default resolver resolves it and, once it finds its file, fails with `Error: Cannot load module: no
+module content provider is configured` (`code` `ERR_MODULE_LOADING_UNSUPPORTED`). Without `--max-stack` the frame
+bound is G2's own, not the old loader's 10,000, since a bound keeps the JIT off. Against it, the Bare Loader sections
+of `scripts/test-cli-apps.ts`, `test-cli.ts`, `test-cli-permissions.ts` and `test-cli-intl-taint.ts` pass except
+three. G2 has no proper tail calls, so 100,000 nested strict tail calls under `--max-stack=1000` overflow. The two
+memory-budget sections test the old collector's allocation gate: G2 refuses at the next safe point
+([ADR 0181](../adr/0181-g2-refuses-memory-at-the-next-safe-point.md)), and `new Array(100000000)` allocates
+nothing on G2.
+
 ### GocciaFuzzHarness
 
 `./build.pas g2fuzzharness` builds `build/g2/GocciaFuzzHarness` from `source/app/GocciaFuzzHarnessG2.dpr`, the old

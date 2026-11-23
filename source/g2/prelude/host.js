@@ -13,11 +13,17 @@
 
   // the conformance host's extras the CLIs do not have: print, eval, and the Annex B escape and unescape, which
   // GocciaScript leaves out (docs/language.md, Annex B)
-  delete G.print;
+  if (!shared.bare) delete G.print;
   delete G.eval;
   delete G.escape;
   delete G.unescape;
   if (!shadowRealm) delete G.ShadowRealm;
+  // GocciaScriptLoaderBare: the core engine without a runtime keeps print and none of the runtime's globals (the
+  // conformance host's console, performance and queueMicrotask, and web.js's encoders and structuredClone)
+  if (shared.bare) {
+    for (const k of ['console', 'performance', 'queueMicrotask', 'TextEncoder', 'TextDecoder', 'structuredClone'])
+      delete G[k];
+  }
 
   // a read-only, enumerable, non-configurable data property (the Pascal engines' DefineProperty with [pfEnumerable])
   function fixed(o, k, v) { defineProperty(o, k, { value: v, writable: false, enumerable: true, configurable: false }); }

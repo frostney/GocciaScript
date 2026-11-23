@@ -123,6 +123,10 @@ type
   TModuleContentCheck = procedure(const Path: UnicodeString; const B: RawByteString) of object;
 { this thread's module content check (nil: none) }
 procedure SetModuleContentCheck(Check: TModuleContentCheck);
+{ an engine without a module content provider (GocciaScriptLoaderBare): an import that resolves to a file fails
+  with Error 'Cannot load module: no module content provider is configured' and code
+  ERR_MODULE_LOADING_UNSUPPORTED, as GocciaScript's engine without one fails it (docs/errors.md); no path on it }
+procedure SetModuleLoadingUnsupported(Value: Boolean);
 type
   { a host's check of a bytecode module before it links (G2.Artifact): its profile against the run's; False with
     Err the message the import fails with }
@@ -142,7 +146,8 @@ procedure SetProvidedArtifact(const Path: UnicodeString; const Bytes: RawByteStr
 implementation
 
 uses
-  SysUtils, Classes, Generics.Collections, FileUtils, G2.VM, G2.Compiler, G2.Eval, G2.Promise;
+  SysUtils, Classes, Generics.Collections, FileUtils, Goccia.Error.Messages, Goccia.Error.Suggestions, G2.VM,
+  G2.Compiler, G2.Eval, G2.Promise;
 
 const
   { the test262 host's module with a source phase representation (INTERPRETING.md: "<module source>") }
@@ -290,9 +295,30 @@ threadvar
   { the last module read failed its content check, whose error is pending }
   ContentRefused: Boolean;
 
+threadvar
+  LoadingUnsupported: Boolean;
+
 procedure SetModuleContentCheck(Check: TModuleContentCheck);
 begin
   ContentCheck := Check;
+end;
+
+procedure SetModuleLoadingUnsupported(Value: Boolean);
+begin
+  LoadingUnsupported := Value;
+end;
+
+{ SetModuleLoadingUnsupported's refusal, pending }
+procedure RefuseModuleLoading;
+var E: TValue;
+begin
+  ThrowError('Error', SErrorModuleLoadingUnsupported);
+  E := Pending;
+  PushRoot(E);
+  DefineOwn(E, AtomOf('code'), StrFromUnicode('ERR_MODULE_LOADING_UNSUPPORTED'), pfHidden);
+  SetErrorHostSuggestion(E, SSuggestConfigureModuleContentProvider);
+  Pending := RootAt(TempTop - 1);
+  PopRoots(1);
 end;
 
 { a module file's bytes, through the host's content check }
@@ -300,6 +326,13 @@ function ReadModuleBytes(const Path: UnicodeString; var B: RawByteString): Boole
 begin
   ContentRefused := False;
   Result := ReadFileBytes(Path, B);
+  if Result and LoadingUnsupported then
+  begin
+    B := '';
+    RefuseModuleLoading;
+    ContentRefused := True;
+    Exit(False);
+  end;
   if not Result or not Assigned(ContentCheck) then Exit;
   try
     ContentCheck(Path, B);

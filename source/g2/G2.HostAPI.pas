@@ -36,9 +36,11 @@ function GuestReadAllowed(const Path: UnicodeString; var Err: UnicodeString): Bo
 function TakeHostError: TValue;
 
 { the host's globals on this thread's realm (after EngineInit): the const Goccia, and the conformance host's
-  extras removed; TestMode lists the test runner's globals in Goccia.runtimeGlobals }
+  extras removed; TestMode lists the test runner's globals in Goccia.runtimeGlobals. Bare: GocciaScriptLoaderBare's
+  surface, the core engine without a runtime (Goccia, DOMException, atob, btoa, PermissionDenied and the conformance
+  host's print; no console, performance, timers, web APIs or host modules) }
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
-  var Err: UnicodeString; ExposeTimers: Boolean = True): Boolean;
+  var Err: UnicodeString; ExposeTimers: Boolean = True; Bare: Boolean = False): Boolean;
 { the heap limit when none is given: half the physical memory, at most 8 GB (700 MB on a 32-bit build) }
 function DefaultHeapCeiling: Int64;
 
@@ -1849,7 +1851,7 @@ begin
 end;
 
 function InstallHostGlobals(ShadowRealm, TestMode: Boolean; const ConfigJson: UnicodeString;
-  var Err: UnicodeString; ExposeTimers: Boolean): Boolean;
+  var Err: UnicodeString; ExposeTimers: Boolean; Bare: Boolean): Boolean;
 var Goccia, R: TValue; Base: Integer; T: PFuncTemplate;
 begin
   if HeapCeiling <= 0 then HeapCeiling := DefaultHeapCeiling;
@@ -1879,6 +1881,29 @@ begin
   PushRoot(StrFromUnicode(ConfigJson));
   { (G, n, shared), then host.js's (G, n, shared, infoJson, testMode, shadowRealm, configJson), in the order the
     CLIs' runtime extensions install (Goccia.runtimeGlobals lists their names in it) }
+  if Bare then
+  begin
+    { host.js trims the global object to the bare surface (shared.bare) }
+    DefineOwn(RootAt(Base + 2), AtomOf('bare'), VTrue, pfDefault);
+    Result := CallPrelude('<goccia:modules>', ModulesSrc, Base, 3, R, Err) and
+      CallPrelude('<goccia:web>', WebSrc, Base, 3, R, Err) and
+      CallPrelude('<goccia:host>', HostSrc, Base, 7, Goccia, Err);
+    { import resolution and import.meta as the CLIs have them; no host modules (goccia:*) and no timers }
+    if Result then
+    begin
+      SharedV := RootAt(Base + 2);
+      ImportMetaInitHook := @HostInitImportMeta;
+      SetHostResolveHook(@HostResolveSpec);
+    end;
+    PopRoots(TempTop - Base);
+    if not Result then Exit;
+    PushRoot(Goccia);
+    DefineOwn(GlobalObj, AtomOf('Goccia'), Goccia, pfHidden);
+    PopRoots(1);
+    Result := ParseAndCompile('const Goccia = globalThis.Goccia;', '<goccia:host>', False, T, Err, 1) and RunScript(T);
+    if not Result and (Err = '') then Err := 'Goccia binding failed';
+    Exit;
+  end;
   Result := CallPrelude('<goccia:modules>', ModulesSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:console>', ConsoleSrc, Base, 3, R, Err) and
     CallPrelude('<goccia:url>', UrlSrc, Base, 3, R, Err) and CallPrelude('<goccia:web>', WebSrc, Base, 3, R, Err) and
