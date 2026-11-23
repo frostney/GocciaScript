@@ -621,9 +621,15 @@ begin
   end;
   if (P^.OKind = okTypedArray) and CanonicalNumericNonIndex(Key) then Exit(True);
   if (P^.OKind = okArray) and (Key = AtomLength) then Exit(ArrayDefineLength(O, D, Ok));
+  { the current descriptor can allocate (a function's prototype made on first use): D's values, copies of the
+    caller's, are read again from roots after it }
+  PushRoot(D.Value); PushRoot(D.Get); PushRoot(D.Set_);
   PushRoot(O);
-  if not GetOwnPropertyV(O, Key, Cur, Found) then begin PopRoots(1); Exit(False); end;
+  if not GetOwnPropertyV(O, Key, Cur, Found) then begin PopRoots(4); Exit(False); end;
   O := RootAt(TempTop - 1);
+  D.Value := RootAt(TempTop - 4); D.Get := RootAt(TempTop - 3); D.Set_ := RootAt(TempTop - 2);
+  PopRoots(4);
+  PushRoot(O);
   P := ObjOf(O);
   Ext := (P^.OFlags and 8) = 0;
   if (P^.OKind = okArray) and IndexFromString(Key, Idx) and not Found and ((P^.OFlags and ofLenReadOnly) <> 0) and
