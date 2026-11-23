@@ -81,6 +81,14 @@ names it `MemoryLimitError`). An explicit reservation that does not fit, such as
 baseline code exits to the interpreter there, and an optimized region leaves at the jump with its frame state
 written back. `scripts/g2/limits-test.sh` checks all of this.
 
+A built-in whose loop runs as often as the script says (an array-like's `length` up to 2^53 - 1, a `split` or a
+spread) polls the same `Interrupt` each step (`PollInterrupt`), since it takes no back edge or call and may allocate
+nothing the memory limit counts: `Array.prototype.join.call({ length: 2 ** 53 - 1 })` ends at the deadline instead
+of running on. Strings that `join`, `JSON.stringify`, `padStart`, `padEnd` and `repeat` build stop at V8's
+length bound, 536,870,888 code units, with `RangeError: Invalid string length`. The timer thread is joined by
+waiting for it to finish before `TThread.WaitFor`, which on the main thread polls in 100 ms steps: without that
+every bounded run took at least 100 ms.
+
 Whatever the frame bound, a call that native code makes (a getter, a `toString`, a sort comparator, a generator's
 `next()`) nests the interpreter on the native stack, so it is refused with a `RangeError` once that stack runs low.
 

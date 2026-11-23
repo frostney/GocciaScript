@@ -101,6 +101,7 @@ end;
 function HasIdx(O: TValue; K: Int64; var Has: Boolean): Boolean;
 var E: PValueArray;
 begin
+  if not PollInterrupt then Exit(False);
   if FastArr(O) then
   begin
     E := ObjOf(O)^.Elements;
@@ -114,6 +115,7 @@ end;
 function GetIdx(O: TValue; K: Int64; var V: TValue): Boolean;
 var E: PValueArray;
 begin
+  if not PollInterrupt then Exit(False);
   if FastArr(O) then
   begin
     E := ObjOf(O)^.Elements;
@@ -128,6 +130,7 @@ end;
 function SetIdx(O: TValue; K: Int64; V: TValue): Boolean;
 var E: PValueArray;
 begin
+  if not PollInterrupt then Exit(False);
   if FastArr(O) then
   begin
     E := ObjOf(O)^.Elements;
@@ -144,6 +147,7 @@ end;
 function CreateIdx(A: TValue; K: Int64; V: TValue): Boolean;
 var E: PValueArray; D: TPropDesc;
 begin
+  if not PollInterrupt then Exit(False);
   if FastArr(A) and ((ObjOf(A)^.OFlags and 8) = 0) then
   begin
     E := ObjOf(A)^.Elements;
@@ -178,6 +182,7 @@ end;
 function DelIdx(O: TValue; K: Int64): Boolean;
 var E: PValueArray;
 begin
+  if not PollInterrupt then Exit(False);
   if FastArr(O) then
   begin
     E := ObjOf(O)^.Elements;
@@ -1096,7 +1101,7 @@ begin
   begin
     if FastArr(Args[0]) and (K < ObjOf(Args[0])^.Elements^.Len) then
       ValueArrayStore(ObjOf(Args[0])^.Elements, K, Arg(Args, Argc, 1))
-    else if not SetVS(Args[0], IdxKey(K), Arg(Args, Argc, 1), True) then Exit(False);
+    else if not SetIdx(Args[0], K, Arg(Args, Argc, 1)) then Exit(False);
     Inc(K);
   end;
   Res := Args[0];
@@ -1300,8 +1305,10 @@ end;
   19.5.1), with a cycle joined as the empty string }
 function JoinVia(Args: TArgs; Argc: Integer; var Res: TValue; Locale: Boolean): Boolean;
 var Len, K: Int64; Sep, SV, V, F: TValue; B: UnicodeString; Used: Integer; LA: array[0..1] of TValue; Base: Integer;
-  procedure Add(S: PStr);
+  function Add(S: PStr): Boolean;
   begin
+    if Int64(Used) + S^.Len > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
+    Result := True;
     if Used + S^.Len > Length(B) then SetLength(B, Max(Length(B) * 2, Used + S^.Len + 16));
     if S^.Len > 0 then Move(StrChars(S)[0], B[Used + 1], S^.Len * SizeOf(WideChar));
     Inc(Used, S^.Len);
@@ -1322,7 +1329,7 @@ begin
   Result := False;
   while K < Len do
   begin
-    if K > 0 then Add(StrOf(RootAt(Base)));
+    if (K > 0) and not Add(StrOf(RootAt(Base))) then Break;
     if not GetIdx(Args[0], K, V) then Break;
     if not IsNullish(V) then
     begin
@@ -1338,7 +1345,7 @@ begin
         if not CallValue(F, V, @LA[0], 2, V) then Break;
       end;
       if not ToStringV(V, SV) then Break;
-      Add(StrOf(SV));
+      if not Add(StrOf(SV)) then Break;
     end;
     Inc(K);
   end;

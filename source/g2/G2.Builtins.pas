@@ -1847,7 +1847,7 @@ begin
   N := Trunc(D);
   L := S^.Len;
   if (N = 0) or (L = 0) then begin Res := MkPtr(AtomOf('')); Exit(True); end;
-  if L * N > 536870888 then Exit(ThrowError('RangeError', 'Invalid string length'));
+  if L * N > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
   SetLength(U, L * N);
   for I := 0 to N - 1 do Move(StrChars(S)[0], U[I * L + 1], L * SizeOf(WideChar));
   Res := StrFromUnicode(U);
@@ -1855,7 +1855,7 @@ begin
 end;
 
 function StrProto_Pad(Args: TArgs; Argc: Integer; var Res: TValue; AtStart: Boolean): Boolean;
-var S, F: PStr; N: Int64; T, Fill, P: UnicodeString;
+var S, F: PStr; N, I: Int64; T, Fill, P: UnicodeString;
 begin
   if not ThisStr(Args, S) then Exit(False);
   if not IntArg(Args, Argc, 1, 0, N) then Exit(False);
@@ -1867,9 +1867,10 @@ begin
   else Fill := ' ';
   T := StrToUnicode(StrOf(Args[0]));
   if (N <= Length(T)) or (Fill = '') then begin Res := Args[0]; Exit(True); end;
-  P := '';
-  while Length(P) < N - Length(T) do P := P + Fill;
+  if N > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
+  { the filler repeated and truncated to N - Length(T) code units }
   SetLength(P, N - Length(T));
+  for I := 0 to Length(P) - 1 do P[I + 1] := Fill[I mod Length(Fill) + 1];
   if AtStart then Res := StrFromUnicode(P + T) else Res := StrFromUnicode(T + P);
   Result := True;
 end;
@@ -1913,6 +1914,7 @@ begin
     for I := 0 to S^.Len - 1 do
     begin
       if ArrayLen(ObjOf(RootAt(TempTop - 2))) >= Lim then Break;
+      if not PollInterrupt then begin PopRoots(2); Exit(False); end;
       Part := SubString(StrOf(Args[0]), I, 1);
       ArrayPush(ObjOf(RootAt(TempTop - 2)), Part);
     end;
@@ -1924,6 +1926,7 @@ begin
     begin
       P := FindIn(StrOf(Args[0]), StrOf(RootAt(TempTop - 1)), Start);
       if P < 0 then Break;
+      if not PollInterrupt then begin PopRoots(2); Exit(False); end;
       Part := SubString(StrOf(Args[0]), Start, P - Start);
       ArrayPush(ObjOf(RootAt(TempTop - 2)), Part);
       if ArrayLen(ObjOf(RootAt(TempTop - 2))) >= Lim then

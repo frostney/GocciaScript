@@ -463,7 +463,7 @@ begin
       V := ObjOf(RootAt(Base))^.Elements^.Data[K];
       if V = VHole then V := VUndefined;
     end
-    else if not GetElemV(RootAt(Base), IdxVal(K), V) then begin PopRoots(3); Exit; end;
+    else if not PollInterrupt or not GetElemV(RootAt(Base), IdxVal(K), V) then begin PopRoots(3); Exit; end;
     if not TAStoreValue(RootAt(Base + 2), K, V) then begin PopRoots(3); Exit; end;
   end;
   T := RootAt(Base + 2);

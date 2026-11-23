@@ -420,6 +420,7 @@ begin
       I := 0;
       while I < Len do
       begin
+        if not PollInterrupt then begin PopRoots(4); Exit(False); end;
         K := IntAtom(I);
         if I <= High(Elems) then Sub := Elems[I] else Sub := nil;
         if not Internalize(RootAt(TempTop - 2), K, RootAt(TempTop - 3), Sub, RecVals, NewEl) then begin PopRoots(4); Exit(False); end;
@@ -590,6 +591,14 @@ end;
 
 function SerializeProp(var O: TJOut; Key: PStr; Holder: TValue; var Skip: Boolean): Boolean; forward;
 
+{ before each element or member: the text so far within MAX_STRING_LENGTH (the buffer is a UnicodeString, which the
+  memory limit does not count) and no limit spent (an array's length is the script's, up to 2^53 - 1) }
+function OutOk(var O: TJOut): Boolean;
+begin
+  if O.Len > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'));
+  Result := PollInterrupt;
+end;
+
 function InStack(var O: TJOut; V: TValue): Boolean;
 var A: PObj; I: Integer;
 begin
@@ -627,6 +636,7 @@ begin
   Any := False;
   for I := 0 to N - 1 do
   begin
+    if not OutOk(O) then begin PopRoots(2); Exit(False); end;
     if O.HasPropList then K := O.PropList[I]
     else K := Atomize(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
     Mark := O.Len;
@@ -667,6 +677,7 @@ begin
   I := 0;
   while I < Len do
   begin
+    if not OutOk(O) then begin PopRoots(1); Exit(False); end;
     if I > 0 then PutC(O, ',');
     if O.Gap <> '' then NewLine(O);
     if not SerializeProp(O, IntAtom(I), RootAt(TempTop - 1), Skip) then begin PopRoots(1); Exit(False); end;
@@ -781,6 +792,7 @@ begin
       I := 0;
       while I < Len do
       begin
+        if not PollInterrupt then begin PopRoots(N); Exit(False); end;
         if not GetV(RootAt(TempTop - 2), IntAtom(I), V) then begin PopRoots(N); Exit(False); end;
         K := nil;
         if IsString(V) then K := Atomize(StrOf(V))
@@ -838,6 +850,7 @@ begin
   if not SerializeProp(O, AtomOf(''), RootAt(TempTop - 1), Skip) then begin PopRoots(N); Exit(False); end;
   PopRoots(N);
   if Skip then Res := VUndefined
+  else if O.Len > MAX_STRING_LENGTH then Exit(ThrowError('RangeError', 'Invalid string length'))
   else Res := StrFromUnicode(Copy(O.Buf, 1, O.Len));
   Result := True;
 end;

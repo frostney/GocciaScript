@@ -803,6 +803,7 @@ begin
         I := 0;
         while I < Len do
         begin
+          if not PollInterrupt then begin PopRoots(3); Exit(False); end;
           if not GetV(RootAt(TempTop - 2), AtomOf(UnicodeString(IntToStr(I))), V) then begin PopRoots(3); Exit(False); end;
           if not IsString(V) and not (IsPtr(V) and (PCell(PtrOf(V))^.Kind = ckSymbol)) then
           begin PopRoots(3); Exit(ThrowTypeError('proxy ownKeys trap result contains a value that is neither string nor symbol')); end;

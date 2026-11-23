@@ -312,6 +312,14 @@ function InjectGlobalBinding(const Name: UnicodeString; V: TValue): Boolean;
 { native code that saw Interrupt set (a long scan polling it): the run's abort, as a call or back edge would take it
   (False, the uncatchable error pending) }
 function AbortInterrupted: Boolean;
+{ a native loop whose trip count the script controls (a length up to 2^53 - 1): the poll of a spent limit, as a back
+  edge polls it. True to go on, False with the abort (or the memory refusal) pending. The loop allocates nothing the
+  memory limit counts (a UnicodeString, index atoms) or nothing at all, so without it neither the deadline nor the
+  memory limit ends the run }
+function PollInterrupt: Boolean; inline;
+const
+  { the longest string a native builder makes (V8's String::kMaxLength): longer is RangeError 'Invalid string length' }
+  MAX_STRING_LENGTH = 536870888;
 function BindGlobalImport(Key: PStr; Cell: TValue): Boolean;
 function GLexIsConst(I: Integer): Boolean;
 { 7.2.4 IsConstructor }
@@ -645,6 +653,11 @@ begin
   Result := False;
 end;
 
+function PollInterrupt: Boolean;
+begin
+  Result := (Interrupt = 0) or AbortInterrupted;
+end;
+
 function MemoryLimitMessage: UnicodeString;
 var Bytes: Int64;
 begin
@@ -808,17 +821,23 @@ begin
     SetErrorHostSuggestion(Pending, SSuggestStackMemoryLimitExceeded);
 end;
 
+{ the timer thread stopped and freed. TThread.WaitFor on the main thread polls CheckSynchronize in 100 ms steps
+  until the thread has finished, and nothing wakes it sooner: waiting for Finished first makes the join immediate,
+  where WaitFor alone cost every bounded run 100 ms }
+procedure StopLimitTimer;
+begin
+  LimitTimer.Terminate;
+  RTLEventSetEvent(LimitTimer.Wake);
+  while not LimitTimer.Finished do ThreadSwitch;
+  LimitTimer.WaitFor;
+  RTLEventDestroy(LimitTimer.Wake);
+  LimitTimer.Free;
+  LimitTimer := nil;
+end;
+
 procedure LimitsDisarm;
 begin
-  if LimitTimer <> nil then
-  begin
-    LimitTimer.Terminate;
-    RTLEventSetEvent(LimitTimer.Wake);
-    LimitTimer.WaitFor;
-    RTLEventDestroy(LimitTimer.Wake);
-    LimitTimer.Free;
-    LimitTimer := nil;
-  end;
+  if LimitTimer <> nil then StopLimitTimer;
   Interrupt := 0;
   Aborting := False;
   AbortKind := 0;
@@ -854,12 +873,7 @@ end;
 procedure LimitsDropTimer;
 begin
   if LimitTimer = nil then Exit;
-  LimitTimer.Terminate;
-  RTLEventSetEvent(LimitTimer.Wake);
-  LimitTimer.WaitFor;
-  RTLEventDestroy(LimitTimer.Wake);
-  LimitTimer.Free;
-  LimitTimer := nil;
+  StopLimitTimer;
   LimitTimeoutMs := 0;
   JitBlocked := (FrameLimitBase <> FRAME_MAX) or CoverageOn or ProfileOn or InstrCounted;
 end;
@@ -5356,6 +5370,7 @@ begin
     begin
       E := ObjOf(RootAt(TempTop - 1))^.Elements;
       if (E = nil) or (I >= Integer(E^.Len)) then Break;
+      if not PollInterrupt then begin PopRoots(2); Exit(False); end;
       V := E^.Data[I];
       if (V = VHole) and not GetElemV(RootAt(TempTop - 1), MkInt(I), V) then begin PopRoots(2); Exit(False); end;
       ArrayPush(ObjOf(RootAt(TempTop - 2)), V);
@@ -5375,6 +5390,7 @@ begin
       if (Ord(StrChars(StrOf(RootAt(TempTop - 1)))[I]) >= $D800) and (Ord(StrChars(StrOf(RootAt(TempTop - 1)))[I]) <= $DBFF) and
          (I + 1 < StrOf(RootAt(TempTop - 1))^.Len) and (Ord(StrChars(StrOf(RootAt(TempTop - 1)))[I + 1]) >= $DC00) and
          (Ord(StrChars(StrOf(RootAt(TempTop - 1)))[I + 1]) <= $DFFF) then N := 2;
+      if not PollInterrupt then begin PopRoots(2); Exit(False); end;
       V := SubString(StrOf(RootAt(TempTop - 1)), I, N);
       ArrayPush(ObjOf(RootAt(TempTop - 2)), V);
       Inc(I, N);
@@ -5388,6 +5404,7 @@ begin
   PushRoot(It); PushRoot(V);
   while True do
   begin
+    if not PollInterrupt then begin PopRoots(3); Exit(False); end;
     if not IteratorStepRec(RootAt(TempTop - 2), RootAt(TempTop - 1), V, Done) then begin PopRoots(3); Exit(False); end;
     if Done then Break;
     ArrayPush(ObjOf(RootAt(TempTop - 3)), V);
