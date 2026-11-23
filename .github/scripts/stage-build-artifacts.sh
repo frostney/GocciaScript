@@ -37,6 +37,8 @@ fi
 
 for src in "${entrypoints[@]}"; do
   name="$(basename "${src%.dpr}")"
+  # The G2 apps build only through build.pas; g2.yml builds and tests them.
+  case "$name" in *G2) continue ;; esac
   copied_binary=0
 
   for candidate in "$build_dir/$name" "$build_dir/$name.exe"; do
