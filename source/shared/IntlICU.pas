@@ -75,6 +75,9 @@ function TryICUGetDisplayName(const ALocale, ACode: string;
   ADisplayType: TIntlDisplayNameType; AStyle: TIntlDisplayNameStyle;
   out AName: string): Boolean;
 
+{ the ISO 4217 codes the host ICU knows, current and historic }
+function TryICUGetCurrencyCodes(out ACodes: IntlTypes.TStringArray): Boolean;
+
 function TryICUCreateBreakIterator(const ALocale: string;
   AGranularity: TIntlSegmenterGranularity; const AText: string;
   out AIterator: TIntlBreakIterator): Boolean;
@@ -314,6 +317,12 @@ function TryICUGetDisplayName(const ALocale, ACode: string;
   out AName: string): Boolean;
 begin
   AName := '';
+  Result := False;
+end;
+
+function TryICUGetCurrencyCodes(out ACodes: IntlTypes.TStringArray): Boolean;
+begin
+  SetLength(ACodes, 0);
   Result := False;
 end;
 
@@ -588,6 +597,8 @@ type
   TUlocGetDisplayCountry = function(const ALocaleId: PAnsiChar; const AInLocaleId: PAnsiChar;
     AResult: PUChar; AMaxResultSize: LongInt;
     var AStatus: TICUErrorCode): LongInt; cdecl;
+  TUcurrOpenISOCurrencies = function(ACurrencyType: LongWord;
+    var AStatus: TICUErrorCode): Pointer; cdecl;
   TUcurrGetName = function(const ACurrency: PUChar; const ALocale: PAnsiChar;
     ANameStyle: LongInt; AIsChoiceFormat: PByteBool; ALength: PLongInt;
     var AStatus: TICUErrorCode): PUChar; cdecl;
@@ -804,6 +815,7 @@ type
     UlocGetDisplayScript: TUlocGetDisplayScript;
     UlocGetDisplayCountry: TUlocGetDisplayCountry;
     UcurrGetName: TUcurrGetName;
+    UcurrOpenISOCurrencies: TUcurrOpenISOCurrencies;
     UcolOpen: TUcolOpen;
     UcolClose: TUcolClose;
     UcolStrcoll: TUcolStrcoll;
@@ -1031,6 +1043,9 @@ begin
   S := ResolveSymbol(AHandle, 'ucurr_getName');
   if not Assigned(S) then Exit;
   F.UcurrGetName := TUcurrGetName(S);
+  // optional: Intl.supportedValuesOf("currency") adds the codes it lists
+  S := ResolveSymbol(AHandle, 'ucurr_openISOCurrencies');
+  if Assigned(S) then F.UcurrOpenISOCurrencies := TUcurrOpenISOCurrencies(S);
 
   S := ResolveSymbol(AHandle, 'ucol_open');
   if not Assigned(S) then Exit;
@@ -1276,12 +1291,18 @@ begin
   Result := True;
 end;
 
+{ IntlLoadAttempted is set only once IntlFunctions is complete, behind a
+  write barrier: a thread that sees it without taking the lock reads the whole
+  table. Set first, a second worker thread found it while the first was still
+  loading, and went on without ICU or with functions not yet assigned. }
 function EnsureLoaded: Boolean;
 var
   Handle: TLibHandle;
+  Succeeded: Boolean;
 begin
   if IntlLoadAttempted then
   begin
+    ReadBarrier;
     Result := IntlLoadSucceeded;
     Exit;
   end;
@@ -1289,9 +1310,12 @@ begin
   try
     if not IntlLoadAttempted then
     begin
-      IntlLoadAttempted := True;
+      Succeeded := False;
       if TryGetICULibraryHandle(Handle) then
-        IntlLoadSucceeded := TryLoadIntlFunctions(Handle);
+        Succeeded := TryLoadIntlFunctions(Handle);
+      IntlLoadSucceeded := Succeeded;
+      WriteBarrier;
+      IntlLoadAttempted := True;
     end;
     Result := IntlLoadSucceeded;
   finally
@@ -3458,13 +3482,62 @@ begin
     Result := Result + '-u-' + AKey + '-' + AValue;
 end;
 
+var
+  { 0 not yet known, 1 yes, 2 no }
+  ISOCalendarNamesState: Integer = 0;
+
+{ ICU 78's iso8601 calendar (as Ubuntu 26.04 ships it) has no month or era
+  names: MMMM, MMM, LLLL and G format as empty strings, in a single date and in
+  a range. Where they are missing, the ISO 8601 calendar, the proleptic
+  Gregorian one, is formatted with the Gregorian calendar's data, as ICU 74
+  formats it. }
+function ISOCalendarHasNames: Boolean;
+const
+  UDAT_MONTHS = 1;
+  PATTERN: UnicodeString = 'y';
+var
+  Status: TICUErrorCode;
+  Formatter: Pointer;
+  LocaleBytes: TBytes;
+begin
+  { ICU not loaded yet: asked again once it is }
+  if not (Assigned(IntlFunctions.UdatOpen) and Assigned(IntlFunctions.UdatClose)) then
+    Exit(True);
+  if ISOCalendarNamesState = 0 then
+  begin
+    ISOCalendarNamesState := 1;
+    if Assigned(IntlFunctions.UdatCountSymbols) and
+       TryEncodeASCIIBytes('en-u-ca-iso8601', LocaleBytes) then
+    begin
+      Status := ICU_SUCCESS;
+      Formatter := IntlFunctions.UdatOpen(UDAT_PATTERN, UDAT_PATTERN,
+        BytePointer(LocaleBytes), nil, -1, PWideChar(PATTERN), Length(PATTERN),
+        Status);
+      if ICUSucceeded(Status) and Assigned(Formatter) and
+         (IntlFunctions.UdatCountSymbols(Formatter, UDAT_MONTHS) = 0) then
+        ISOCalendarNamesState := 2;
+      if Assigned(Formatter) then
+        IntlFunctions.UdatClose(Formatter);
+    end;
+  end;
+  Result := ISOCalendarNamesState = 1;
+end;
+
 function ApplyDateTimeLocaleOptions(const ALocale: string;
   const AOptions: TIntlDateTimeFormatOptions): string;
+var
+  Lower: string;
+  At: Integer;
 begin
   Result := ALocale;
   Result := ApplyUnicodeLocaleKeyword(Result, 'ca', AOptions.Calendar);
   Result := ApplyUnicodeLocaleKeyword(Result, 'nu', AOptions.NumberingSystem);
   Result := ApplyUnicodeLocaleKeyword(Result, 'hc', AOptions.HourCycle);
+  Lower := LowerCase(Result);
+  At := Pos('-ca-iso8601', Lower);
+  if (At > 0) and ((At + 11 > Length(Lower)) or (Lower[At + 11] = '-')) and
+     not ISOCalendarHasNames then
+    Result := ApplyUnicodeLocaleKeyword(Result, 'ca', 'gregory');
 end;
 
 function TryICUGetBestDateTimePattern(const ALocale, ASkeleton: string;
@@ -4697,6 +4770,24 @@ begin
   else
     Result := UBRK_CHARACTER;
   end;
+end;
+
+function TryICUGetCurrencyCodes(out ACodes: IntlTypes.TStringArray): Boolean;
+const
+  UCURR_ALL = $7FFFFFFF;
+var
+  Status: TICUErrorCode;
+  Enumeration: Pointer;
+begin
+  SetLength(ACodes, 0);
+  Result := False;
+  if not EnsureLoaded or not Assigned(IntlFunctions.UcurrOpenISOCurrencies) then
+    Exit;
+  Status := ICU_SUCCESS;
+  Enumeration := IntlFunctions.UcurrOpenISOCurrencies(UCURR_ALL, Status);
+  if not ICUSucceeded(Status) or not Assigned(Enumeration) then
+    Exit;
+  Result := TryICUEnumerationToArray(Enumeration, ACodes);
 end;
 
 function TryICUCreateBreakIterator(const ALocale: string;

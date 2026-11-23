@@ -372,6 +372,21 @@
     return collationsList;
   }
   var timeZonesList = null;
+  // the currencies Intl.DisplayNames names (AvailableCurrencies): CURRENCIES and the codes the host ICU adds, such
+  // as ICU 78's XCG
+  var currenciesList = null;
+  function availableCurrencies() {
+    if (currenciesList === null) {
+      var list = listCopy(CURRENCIES), icu = intlOp(18);
+      if (icu !== undefined)
+        for (var i = 0; i < icu.length; i++) {
+          var code = asciiUpper(icu[i]);
+          if (intlOp(16, "en", code, "currency", "long") !== undefined) append(list, code);
+        }
+      currenciesList = list;
+    }
+    return currenciesList;
+  }
   function availableTimeZones() {
     if (timeZonesList === null) { timeZonesList = intlOp(17); listSort(timeZonesList); }
     return timeZonesList;
@@ -381,7 +396,7 @@
     var list;
     if (key === "calendar") list = CALENDARS;
     else if (key === "collation") list = availableCollations();
-    else if (key === "currency") list = CURRENCIES;
+    else if (key === "currency") list = availableCurrencies();
     else if (key === "numberingSystem") list = NUMBERING_SYSTEMS;
     else if (key === "timeZone") list = availableTimeZones();
     else if (key === "unit") list = UNITS;

@@ -481,6 +481,8 @@ begin
            DisplayStyle(SArg(Args, Argc, 5)), S) and (S <> '') then Res := UStr(S);
       end;
     17: Res := StrArray(IntlTypes.TStringArray(GetAvailablePrimaryTimeZoneIdentifiers));
+    18:
+      if TryICUGetCurrencyCodes(A) then Res := StrArray(A);
     20: FormatNumberOp(Args, Argc, Res);
     21:
       if (Argc >= 6) and ToBool(Args[6]) then

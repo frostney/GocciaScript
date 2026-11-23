@@ -50,6 +50,20 @@ describe.runIf(isIntl)("Intl.supportedValuesOf", () => {
     expect(result.length > 0).toBe(true);
   });
 
+  test("lists exactly the currencies Intl.DisplayNames names", () => {
+    const currencies = new Set(Intl.supportedValuesOf("currency"));
+    const names = new Intl.DisplayNames("en", { type: "currency", fallback: "none" });
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    for (const a of letters) {
+      for (const b of letters) {
+        for (const c of letters) {
+          const code = a + b + c;
+          expect([code, currencies.has(code)]).toEqual([code, typeof names.of(code) === "string"]);
+        }
+      }
+    }
+  });
+
   test("returns an array for 'numberingSystem'", () => {
     const result = Intl.supportedValuesOf("numberingSystem");
     expect(Array.isArray(result)).toBe(true);
