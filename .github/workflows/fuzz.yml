@@ -27,7 +27,7 @@ permissions:
 env:
   FUZZ_SECONDS: ${{ github.event.inputs.fuzz-seconds || '900' }}
   # The frostney/fpc-toolchain build, as in ci.yml.
-  FPC_VERSION: "3.2.4-rc2-b1"
+  FPC_VERSION: "3.3.1-b6"
 
 jobs:
   # ── Coverage-guided fuzzing ──────────────────────────────────────────
@@ -550,8 +550,8 @@ jobs:
         run: |
           fpc_version=$(fpc -iV)
           case "$fpc_version" in
-            3.2.2|3.2.4) ;;
-            *) echo "::warning::scripts/valgrind/fpc-rtl.supp was checked against FPC 3.2.2's and 3.2.4's IndexByte and IndexWord; this job runs FPC $fpc_version" ;;
+            3.2.2|3.2.4|3.3.1) ;;
+            *) echo "::warning::scripts/valgrind/fpc-rtl.supp was checked against FPC 3.2.2's, 3.2.4's and 3.3.1's IndexByte and IndexWord; this job runs FPC $fpc_version" ;;
           esac
           shards=$(nproc)
           # The runner's own file discovery and native per-file times.

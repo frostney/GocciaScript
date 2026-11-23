@@ -12,10 +12,12 @@ permissions:
   contents: read
 
 env:
-  # The frostney/fpc-toolchain release every job installs, pinned to one build.
-  # pr.yml, fuzz.yml, gc-stress.yml and timezone-data-bump.yml name the same
-  # one; moving to another build (3.2.4 final) changes this line in each.
-  FPC_VERSION: "3.2.4-rc2-b1"
+  # The frostney/fpc-toolchain release every job installs, pinned to one build:
+  # FPC 3.3.1, which G2 (source/g2) needs. pr.yml, g2.yml, fuzz.yml,
+  # gc-stress.yml and timezone-data-bump.yml name the same one; moving to
+  # another build changes this line in each, and the Win32 SafeSEH manifest
+  # (config/win32-safeseh) is audited again for it.
+  FPC_VERSION: "3.3.1-b6"
 
 jobs:
   # A newer push to main cancels the CI run of any older main commit as a whole,
@@ -168,7 +170,8 @@ jobs:
     # Only the Darwin targets need a macOS runner, the scarcest kind this
     # workflow uses; the Linux and Windows targets cross-compile on Linux.
     # frostney/fpc-toolchain ships every target here for its runner's host;
-    # x86_64-darwin runs the x86_64 macOS compiler under Rosetta 2.
+    # its Apple Silicon build compiles x86_64-darwin with its own x86_64
+    # cross compiler.
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false

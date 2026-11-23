@@ -54,8 +54,8 @@ the first binary compiles the preludes and writes their bytecode, the second emb
 optimized (`-O4`); `--prod` strips the binary and a dev build keeps line information, in its own unit cache.
 On Linux x86-64 it fails when `scripts/g2/tlsscan.py` finds a native-TLS miscompile (a threadvar address with
 an absolute relocation), the bugs 3.3.1+4 and 3.3.1+5 fix; it stays as a guard against a toolchain that regresses, and is
-skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) leaves `g2` out
-until CI's toolchain is FPC 3.3.1.
+skipped when python3 or binutils is missing. The full build (`./build.pas` without targets) leaves `g2` out,
+so it still builds with FPC 3.2.
 
 ### Execution limits
 

@@ -1,10 +1,7 @@
 name: G2
 
 # The G2 engine (source/g2, docs/g2/README.md) and the apps built on it, on
-# Linux x86-64, the only platform G2 runs on so far. G2 needs FPC 3.3.1 from
-# frostney/fpc-toolchain; the rest of CI stays on its 3.2.4 build until the old
-# runtime is removed, since the Win32 SafeSEH manifest
-# (config/win32-safeseh/fpc-3.2.4.manifest) names that build's objects.
+# Linux x86-64, the only platform G2 runs on so far.
 #
 # Each job builds the targets it runs, so the three run side by side. The JS
 # suite and test262 are checked against scripts/g2/known-failures: a run fails
@@ -26,8 +23,9 @@ permissions:
   contents: read
 
 env:
-  # The 3.3.1 build G2 is gated on (scripts/g2/build.sh selects the same one).
-  FPC_G2_VERSION: "3.3.1-b6"
+  # The frostney/fpc-toolchain build, as in ci.yml (scripts/g2/build.sh
+  # selects the same one).
+  FPC_VERSION: "3.3.1-b6"
 
 jobs:
   suite:
@@ -45,7 +43,7 @@ jobs:
       - name: Install FPC
         uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
         with:
-          version: ${{ env.FPC_G2_VERSION }}
+          version: ${{ env.FPC_VERSION }}
 
       - name: Build GocciaTestRunner on G2
         run: ./build.pas --prod g2testrunner
@@ -96,7 +94,7 @@ jobs:
       - name: Install FPC
         uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
         with:
-          version: ${{ env.FPC_G2_VERSION }}
+          version: ${{ env.FPC_VERSION }}
 
       - name: Build GocciaTest262Runner on G2
         run: ./build.pas --prod g2test262runner
@@ -159,7 +157,7 @@ jobs:
       - name: Install FPC
         uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
         with:
-          version: ${{ env.FPC_G2_VERSION }}
+          version: ${{ env.FPC_VERSION }}
 
       - name: Build G2, GocciaRunner, GocciaBundler and GocciaFuzzHarness on G2
         run: ./build.pas --prod g2 g2runner g2bundler g2fuzzharness

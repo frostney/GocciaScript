@@ -21,7 +21,10 @@ def main():
         parser.error("--jobs must be positive")
 
     root = Path.cwd()
-    entrypoints = sorted(root.glob("source/app/*.dpr"))
+    # The G2 apps (*G2.dpr) embed their compiled preludes and build only
+    # through build.pas; g2.yml builds and tests them.
+    entrypoints = sorted(path for path in root.glob("source/app/*.dpr")
+                         if not path.stem.endswith("G2"))
     tests = sorted(
         path
         for tree in ("source/units", "source/shared", "source/app")

@@ -36,8 +36,8 @@ the sources and pinned toolchain objects must remain available for checking.
 
 ## Reviewed registrations
 
-The manifest records the exact `-iW` version (`3.2.4-rc2+1`) and complete object
-SHA-256 values from the `3.2.4-rc2-b1` toolchain release. It covers supported
+The manifest records the exact `-iW` version (`3.3.1+6`) and complete object
+SHA-256 values from the `3.3.1-b6` toolchain release. It covers supported
 linked units that register handlers as well as the objects defining them.
 The map supplies their final addresses; it is not the completeness proof.
 
@@ -86,7 +86,7 @@ removed, they fail naming the routine and file. Then:
    ```
 
 3. Copy the reported line for the routine you reviewed into
-   `config/win32-safeseh/fpc-3.2.4.manifest`.
+   `config/win32-safeseh/fpc-3.3.1.manifest`.
 
 These per-routine digests are manifest format 2, whose first line is
 `FPC-SAFESEH 2` ([ADR 0180](../adr/0180-reviewed-non-seh-routines-are-pinned-to-their-own-source.md)).
@@ -121,7 +121,7 @@ request CI, so an edited pinned routine fails there before the Win32 build.
 
 ## Re-auditing a toolchain update
 
-The reviewed inputs are recorded in [`config/win32-safeseh/fpc-3.2.4.manifest`](../../config/win32-safeseh/fpc-3.2.4.manifest). A toolchain bump requires a new audit, not merely replacing hashes. Inspect the
+The reviewed inputs are recorded in [`config/win32-safeseh/fpc-3.3.1.manifest`](../../config/win32-safeseh/fpc-3.3.1.manifest). A toolchain bump requires a new audit, not merely replacing hashes. Inspect the
 new RTL object code and relocations for frame installation, handler replacement,
 and restoration, including registrations through ordinary pointer stores.
 Reconcile every handler symbol with the live linker maps of all executables,

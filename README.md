@@ -345,21 +345,22 @@ embedded data otherwise.
 ### Build from source
 
 Building needs the [FreePascal](https://www.freepascal.org/) compiler (`fpc`),
-version 3.2.2 or 3.2.4. The package managers install 3.2.2:
+version 3.2.2, 3.2.4 or 3.3.1; the G2 engine ([docs/g2](docs/g2/README.md))
+needs 3.3.1. The package managers install 3.2.2:
 
 - macOS: `brew install fpc`
 - Ubuntu/Debian: `sudo apt-get install fpc`
 - Windows: `choco install freepascal`
 
-CI is pinned to the FPC 3.2.4 build `3.2.4-rc2-b1` from
+CI is pinned to the FPC 3.3.1 build `3.3.1-b6` from
 [fpc-toolchain](https://github.com/frostney/fpc-toolchain). To build with the
 same compiler on Linux or macOS, install it next to any other FPC and put it
 first on `PATH` (Windows: see its README):
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/frostney/fpc-toolchain/main/scripts/install.sh
-sh install.sh 3.2.4-rc2-b1
-eval "$(~/.local/share/fpc-toolchains/bin/fpc-toolchain env 3.2.4)"
+sh install.sh 3.3.1-b6
+eval "$(~/.local/share/fpc-toolchains/bin/fpc-toolchain env 3.3.1)"
 ```
 
 ```bash

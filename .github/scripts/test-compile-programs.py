@@ -46,7 +46,7 @@ class CompileProgramsTest(unittest.TestCase):
             "source/units/Unit.Test.pas", "source/shared/Shared.Test.pas",
             "source/app/cli/CLI.Test.pas", "source/app/compliance/Compliance.dpr",
         ]
-        for name in self.sources:
+        for name in self.sources + ["source/app/FirstG2.dpr"]:
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("program Fixture; begin end.\n")
