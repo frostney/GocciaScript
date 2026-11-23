@@ -302,7 +302,7 @@ begin JB($F2); JRex(False, X, 0, R); JB($0F); JB($2A); JModRR(X, R); end;
 var
   JitFsVStack, JitFsNurseryStart, JitFsNurseryLimit, JitFsNurseryTop, JitFsArrayIterNext, JitFsGlobalObj, JitFsGLexCells: PtrInt;   { threadvar offsets from fs }
   JitFsFrames, JitFsFrameTop, JitFsStackTop, JitFsJitDepth, JitFsJitDepthMax, JitFsStackFloor: PtrInt;
-  JitFsCurNewTarget, JitFsNativeData, JitFsNativeSelf, JitFsMegaICTab, JitFsInterrupt: PtrInt;
+  JitFsCurNewTarget, JitFsNativeData, JitFsNativeSelf, JitFsMegaICTab, JitFsInterrupt, JitFsGCEpoch: PtrInt;
 
 function JitFsBase: PtrUInt; assembler; nostackframe;
 asm
@@ -814,6 +814,13 @@ begin
     CF := @Frames[FrameTop - 1];
     StackTop := CF^.Base + CF^.Tpl^.MaxRegs;
   end;
+end;
+
+{ the stub's native call collected: VStack[Lo .. Top) (the caller's registers past the call's arguments, which the
+  collection did not scan) undefined }
+procedure XJitClearDead(Lo, Top: Integer);
+begin
+  if Top > Lo then FillQWord(VStack[Lo], Top - Lo, VUndefined);
 end;
 
 { compiled code's call (opCall A, Argc arguments, ThisFlag its this-is-undefined bit) of a compiled bytecode
@@ -4131,23 +4138,20 @@ begin
   L1 := JccFwd(ccE);
   MovRI(jCX, VUndefined); MovMR(jR13, 8, jCX);
   PatchHere(L1);
-  { [rsp + 8] the StackTop to restore, [rsp] the result (undefined): rsp stays 16-byte aligned }
+  { [rsp + 24] the StackTop to restore, [rsp + 16] the collection count, [rsp + 8] the arguments' end (StackTop
+    while it runs), [rsp] the result (undefined): rsp stays 16-byte aligned }
   Mov32RFs(jCX, JitFsStackTop);
   JB($51);                                                         { push rcx }
-  MovRI(jDX, VUndefined);
-  JB($52);                                                         { push rdx }
+  Mov32RFs(jCX, JitFsGCEpoch);
+  JB($51);                                                         { push rcx }
   MovsxdRM(jCX, jR12, PtrInt(@PFrame(nil)^.Base));
   AluRR($01, jCX, jR15, True);
   JB($41); JB($0F); JB($B7); JB($D6);                              { movzx edx, r14w: Argc }
   AluRR($01, jCX, jDX, True);
   AluRI(0, jCX, 2, True);
-  { StackTop: the arguments' end, never below what it was. (The interpreter's XFastNative lowers it there and
-    clears the caller's registers past it when the call collected, ClearDeadAfterNative; lowered here without
-    that, a collection in the native skipped them, and the stale pointers they kept were scanned again once a
-    frame pushed StackTop back over them.) }
-  Mov32RFs(jDX, JitFsStackTop);
-  AluRR($39, jCX, jDX, False);                                     { cmp ecx, edx }
-  JRex(False, jCX, 0, jDX); JB($0F); JB($4C); JModRR(jCX, jDX);    { cmovl ecx, edx }
+  JB($51);                                                         { push rcx }
+  MovRI(jDX, VUndefined);
+  JB($52);                                                         { push rdx }
   Mov32FsR(JitFsStackTop, jCX);
   Mov32RM(jCX, jAX, PtrInt(@PObj(nil)^.Pad));
   AluRI(4, jCX, $FFFFFF, False);
@@ -4160,8 +4164,22 @@ begin
   MovRR(jDX, jSP);                                                 { the result }
   JRex(False, 0, 0, jR11); JB($FF); JB($D0 or (jR11 and 7));   { call r11 }
   JB($59);                                                         { pop rcx: the result }
-  JB($5A);                                                         { pop rdx: the StackTop }
-  Mov32FsR(JitFsStackTop, jDX);
+  JB($5A);                                                         { pop rdx: the arguments' end }
+  JB($5E);                                                         { pop rsi: the collection count }
+  JB($5F);                                                         { pop rdi: the StackTop }
+  Mov32FsR(JitFsStackTop, jDI);
+  { the call collected: the caller's registers past the arguments, which it skipped, cleared (as the
+    interpreter's XFastNative does, ClearDeadAfterNative): what they kept is stale, and a frame that raises
+    StackTop over them again would scan it }
+  Mov32RFs(jR8, JitFsGCEpoch);
+  AluRR($39, jR8, jSI, False);                                     { cmp r8d, esi }
+  L1 := JccFwd(ccE);
+  JB($50); JB($51);                                                { push rax; push rcx }
+  JRex(False, jSI, 0, jDI); JB($8B); JModRR(jSI, jDI);             { mov esi, edi: the StackTop }
+  JRex(False, jDI, 0, jDX); JB($8B); JModRR(jDI, jDX);             { mov edi, edx: the arguments' end }
+  CallAbs(@XJitClearDead);
+  JB($59); JB($58);                                                { pop rcx; pop rax }
+  PatchHere(L1);
   MovRI(jDX, VUndefined);
   MovFsR(JitFsCurNewTarget, jDX);
   JB($84); JB($C0);                                                { test al, al }
@@ -5358,6 +5376,7 @@ begin
   JitFsNativeSelf := PtrInt(PtrUInt(@NativeSelf) - JitFsBase);
   JitFsMegaICTab := PtrInt(PtrUInt(@MegaICTab) - JitFsBase);
   JitFsInterrupt := PtrInt(PtrUInt(@Interrupt) - JitFsBase);
+  JitFsGCEpoch := PtrInt(PtrUInt(@GCEpoch) - JitFsBase);
   { the code's fs-relative loads take a signed 32-bit displacement }
   if (Abs(JitFsVStack) > $7FFFFFF0) or (Abs(JitFsNurseryStart) > $7FFFFFF0) or (Abs(JitFsNurseryLimit) > $7FFFFFF0) or
      (Abs(JitFsNurseryTop) > $7FFFFFF0) or (Abs(JitFsArrayIterNext) > $7FFFFFF0) or (Abs(JitFsFrames) > $7FFFFFF0) or (Abs(JitFsFrameTop) > $7FFFFFF0) or
@@ -5365,7 +5384,7 @@ begin
      (Abs(JitFsJitDepthMax) > $7FFFFFF0) or (Abs(JitFsStackFloor) > $7FFFFFF0) or (Abs(JitFsGlobalObj) > $7FFFFFF0) or
      (Abs(JitFsGLexCells) > $7FFFFFF0) or (Abs(JitFsCurNewTarget) > $7FFFFFF0) or
      (Abs(JitFsNativeData) > $7FFFFFF0) or (Abs(JitFsNativeSelf) > $7FFFFFF0) or (Abs(JitFsMegaICTab) > $7FFFFFF0) or
-     (Abs(JitFsInterrupt) > $7FFFFFF0) then
+     (Abs(JitFsInterrupt) > $7FFFFFF0) or (Abs(JitFsGCEpoch) > $7FFFFFF0) then
     JitEnabled := 0;
   if JitEnabled < 0 then
     if GetEnvironmentVariable('G2_JIT') = '0' then JitEnabled := 0 else JitEnabled := 1;   { on unless G2_JIT=0 }
