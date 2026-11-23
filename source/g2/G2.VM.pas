@@ -6876,6 +6876,12 @@ begin
   if Result then Dst^ := V;
 end;
 
+{ a bytecode file's instruction whose operand is not the kind it requires (the checks below and JH_DefField) }
+function XBadOperand: Boolean; noinline;
+begin
+  Result := ThrowTypeError('Invalid bytecode: an instruction''s operand is not the kind it requires');
+end;
+
 {$I G2.Jit.inc}
 
 procedure JitTakeThread;
@@ -6886,12 +6892,9 @@ end;
 { ---- a bytecode file's code (G2.Artifact; TFuncTemplate.Loaded): the instructions that trust a register's kind
   check it there, since the file can put anything in a register. The compiler's code always passes, so its
   templates skip the checks (FastLoop hands these instructions to Execute for a loaded template, the baseline JIT
-  exits to the interpreter for them, the optimizing tier leaves such templates alone). ---- }
-
-function XBadOperand: Boolean; noinline;
-begin
-  Result := ThrowTypeError('Invalid bytecode: an instruction''s operand is not the kind it requires');
-end;
+  exits to the interpreter for them, the optimizing tier leaves such templates alone). opDefField is the exception:
+  every tier checks its receiver is an object (FastLoop and the baseline JIT inline, their slow path in JH_DefField,
+  the optimizing tier's receiver guard), so a class's field initializers keep the fast tiers. ---- }
 
 { a dense array (no length past its elements) }
 function OpdArray(V: TValue): Boolean;
@@ -7220,8 +7223,9 @@ LSetPropSlow:
         end;
       opDefField:
         begin
-          { a class field's cached add transition (an extensible object with the cached shape) }
-          if Fr^.Tpl^.Loaded then goto LBail;
+          { a class field's cached add transition (an extensible object with the cached shape); a bytecode file's
+            receiver may be no object (Execute's TypeError) }
+          if Fr^.Tpl^.Loaded and not IsObject(R[A]) then goto LBail;
           O := ObjOf(R[A]);
           IC := @ICs[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if (O^.Shape <> IC^.Shape) or (IC^.NewShape = nil) or (IC^.Slot >= O^.InlineCap) or

@@ -2006,6 +2006,8 @@ var R: PValue; A: Integer; IC: PPropIC; Key: PStr; O: PObj; V, VB: TValue;
 begin
   R := @VStack[Fr^.Base];
   A := (I shr 8) and $FFFF;
+  { a bytecode file's receiver may be no object (the inline path's checks send that here) }
+  if Fr^.Tpl^.Loaded and not IsObject(R[A]) then Exit(XBadOperand);
   if TOp(I and $FF) = opDefField then
   begin
     IC := @Fr^.Tpl^.ICs[I shr 40];
@@ -2608,7 +2610,7 @@ begin
     interpreter, which checks it }
   if T^.Loaded and (Op in [opArrPush, opArrHole, opArrSpread, opCallV, opNewV, opSuperCallV, opObjSpread,
     opCopyDataProps, opDefProp, opDefPropC, opDefMethod, opDefMethodC, opDefGetter, opDefSetter, opDefGetterC,
-    opDefSetterC, opDefField, opDefFieldC, opSetProtoLit, opSetFnName, opSetHome, opClassSetup, opClassField,
+    opDefSetterC, opDefFieldC, opSetProtoLit, opSetFnName, opSetHome, opClassSetup, opClassField,
     opSuperCallUp, opGetPriv, opSetPriv, opDefPrivField, opAddPriv, opPrivIn, opModGet, opMakeModCell]) then
   begin
     JmpExit(PC);

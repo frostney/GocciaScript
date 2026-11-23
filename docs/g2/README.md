@@ -337,9 +337,14 @@ depth at each instruction, the prologue and direct eval descriptions. It refuses
 emits, and makes every suspension keep all its registers. What the code cannot show, a register holding the
 array, object, closure, private name or module cell table an instruction trusts it to hold, is checked at run
 time in code read from a file (`TFuncTemplate.Loaded`): `Execute` checks it, FastLoop and the baseline JIT hand
-those instructions to `Execute`, and the optimizing tier leaves such templates alone. The compiler's own code
-keeps its fast paths. `G2_ARTIFACT_SCRAMBLE=<seed>` (tests only) rewrites register operands after reading, so
-code that passes the verifier puts the wrong kinds in registers.
+those instructions to `Execute`, and the optimizing tier leaves such templates alone. A class field's definition
+(`opDefField`) is checked in every tier instead: FastLoop and the baseline JIT test that the receiver is an object
+inline (the JIT's slow path in `JH_DefField`), and the optimizing tier's receiver guard deoptimizes, so field
+initializers keep the fast tiers and the inliner. The compiler's own code keeps its fast paths.
+`G2_ARTIFACT_SCRAMBLE=<seed>` (tests only) rewrites register operands after reading, so code that passes the
+verifier puts the wrong kinds in registers. `scripts/g2/artifact-tamper-tests.py` points a field definition's
+receiver at a value that turns from an object into a number once the code is hot in each tier, and expects the
+TypeError.
 
 Code for a file names no global lexical binding by its index in the compiling engine's table: another engine
 numbers them differently, so such a binding is found by name at run time. `G2.Modules` loads a `.gbc` file as
@@ -379,8 +384,8 @@ with a 256 KB nursery and `--gc-verify`, the scripts in `scripts/g2/regress` (a 
 through `g2 --test` twice: plain, and with a 16 KB nursery (`G2_NURSERY_KB`) and `--gc-verify`. It reports
 a file whose totals differ, or whose stressed run crashes, as `BAD`. A stressed run past 600 s is reported as
 `TIMEOUT`, not a failure: the deep-chain tests under `tests/built-ins/Goccia/gc` verify a large heap at
-every collection. `scripts/g2/artifact-roundtrip-tests.py` (see [Bytecode files](#bytecode-files)) runs
-with the gate. The digest bundles print `DIGEST n:hash` of each workload's result; `scripts/g2/digests.txt`
+every collection. `scripts/g2/artifact-roundtrip-tests.py` and `scripts/g2/artifact-tamper-tests.py` (see
+[Bytecode files](#bytecode-files)) run with the gate. The digest bundles print `DIGEST n:hash` of each workload's result; `scripts/g2/digests.txt`
 holds the expected lines.
 
 ## Changes to Goccia's front end

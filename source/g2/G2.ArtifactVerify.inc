@@ -10,10 +10,11 @@
   kept), and a direct eval's caller description is parsed and bounded here. }
 
 const
-  { the instructions that trust a register's kind (G2.VM's Opd* checks) }
+  { the instructions that trust a register's kind and are checked only in Execute (G2.VM's Opd* checks; opDefField
+    is checked in every tier) }
   KIND_TRUSTING_OPS = [opArrPush, opArrHole, opArrSpread, opCallV, opNewV, opSuperCallV, opObjSpread, opCopyDataProps,
     opDefProp, opDefPropC, opDefMethod, opDefMethodC, opDefGetter, opDefSetter, opDefGetterC, opDefSetterC,
-    opDefField, opDefFieldC, opSetProtoLit, opSetFnName, opSetHome, opClassSetup, opClassField, opSuperCallUp,
+    opDefFieldC, opSetProtoLit, opSetFnName, opSetHome, opClassSetup, opClassField, opSuperCallUp,
     opGetPriv, opSetPriv, opDefPrivField, opAddPriv, opPrivIn, opModGet, opMakeModCell];
   { an object literal's inline slots (the compiler asks for at most 60) }
   MAX_NEWOBJ_HINT = 64;
