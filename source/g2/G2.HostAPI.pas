@@ -1361,6 +1361,7 @@ end;
 function HostResolveSpec(const Spec, Referrer: UnicodeString; var Resolved: UnicodeString): Integer;
 var Ref: string; Resolver: TModuleResolver; Candidate: UnicodeString; Guard: Boolean; Policy: TReadPolicy;
   SavedGuard: TModuleResolverProbeGuard; Canonical: string; Denial: TReadDenial; Literal: Boolean;
+  SavedPrefer: Boolean;
 begin
   { the import() being resolved: its specifier computed or not (the first resolution takes it) }
   Literal := not ImportComputed;
@@ -1398,11 +1399,18 @@ begin
     Resolver.ProbeGuard := Policy.Probe;
   end;
   try
+    SavedPrefer := Resolver.PreferBytecodeCompanions;
+    if ResolvingSourcePhase then Resolver.PreferBytecodeCompanions := False;
     try
       Resolved := UTF8Decode(Resolver.Resolve(UTF8Encode(Spec), Ref));
     finally
       if Guard then Resolver.ProbeGuard := SavedGuard;
+      Resolver.PreferBytecodeCompanions := SavedPrefer;
     end;
+    { a .gbc companion (--prefer-bytecode) is held to its source's package policy: a CommonJS file's companion is
+      refused as the file would be }
+    if SameText(ExtractFileExt(UTF8Encode(Resolved)), '.gbc') and (Resolver.LastCompanionSourcePath <> '') then
+      Resolver.ValidateCompanionSourcePath(Resolver.LastCompanionSourcePath);
     if Guard and not IsVirtualModuleURI(Resolved) and not IsHostModuleKey(Resolved) and
        not (Assigned(ProviderGraph) and ProviderGraph(UTF8Encode(Resolved), Ref, Resolver.LastPackageDirectory) and
          not Policy.Caps.DeniesPath(gcRead, CanonicalCapabilityPath(UTF8Encode(Resolved)))) then

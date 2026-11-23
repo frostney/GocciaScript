@@ -13,7 +13,7 @@ program GocciaRunnerG2;
   (Goccia.Packages.Install); provider imports resolve through the shared
   resolver, granted, audited and checked against their pins here.
 
-  Not yet on G2: bytecode files (--prefer-bytecode). }
+  Bytecode files are G2's own (G2.Artifact, from GocciaBundler on G2). }
 
 {$I Goccia.inc}
 
@@ -68,6 +68,7 @@ uses
   Goccia.SourcePipeline,
   Goccia.Terminal.Colors,
 
+  G2.Artifact,
   G2.Core,
   G2.Embed,
   G2.HostAPI,
@@ -193,6 +194,8 @@ type
     procedure ExecuteWithPaths(const APaths: TStringList); override;
     procedure AfterExecute; override;
     procedure WriteRunSourceMap(const AFileName: string; const ASource: TStringList);
+    { an entry's source lines; none for a bytecode file, whose bytes the run reads (ReadBytecodeFile) }
+    function LoadEntrySource(const AFileName: string): TStringList;
     procedure RunFileList(const AFiles: TStringList);
   end;
 
@@ -223,7 +226,7 @@ begin
   begin
     Start := GetNanoseconds;
     try
-      FSource := FApp.SourceRegistry.Load(FFileName);
+      FSource := FApp.LoadEntrySource(FFileName);
       FOwnsSource := True;
     except
       on E: Exception do
@@ -872,6 +875,24 @@ end;
 
 { --host-environment's module, else a config's "host-environment" (against that config's directory): the path,
   or '' for none. The command line's names a file from the working directory. }
+{ a bytecode file's bytes, at most the format's limit (G2.Artifact checks them) }
+function ReadBytecodeFile(const AFileName: string): RawByteString;
+var
+  Stream: TFileStream;
+begin
+  Result := '';
+  Stream := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
+  try
+    if Stream.Size > G2_GBC_MAX_FILE_BYTES then
+      raise Exception.CreateFmt('Bytecode file %s exceeds the %d byte limit', [AFileName, G2_GBC_MAX_FILE_BYTES]);
+    SetLength(Result, Stream.Size);
+    if Stream.Size > 0 then
+      Stream.ReadBuffer(Result[1], Stream.Size);
+  finally
+    Stream.Free;
+  end;
+end;
+
 { --source-map: the JSX transform's map of the file (GocciaRunner's WriteSourceMapIfEnabled), beside it as
   <file>.map or at the path given; nothing for a file the transform leaves alone }
 procedure TG2RunnerApp.WriteRunSourceMap(const AFileName: string; const ASource: TStringList);
@@ -978,6 +999,9 @@ begin
     Resolver.ProviderGrant := Grant.GrantProvider;
     Resolver.ProviderAudit := Grant.AuditProvider;
     Resolver.ProviderCachedOnly := ResolveFlagOption(EngineOptions.CachedOnly, FileConfig);
+    { --prefer-bytecode (or the config key): an import of a source file takes its .gbc companion when there is
+      one (docs/bytecode-loading.md) }
+    Resolver.PreferBytecodeCompanions := ResolveFlagOption(FPreferBytecode, FileConfig);
     if EngineOptions.Aliases.FromCommandLine or (RootConfigPath = '') then
       AliasBaseDirectory := GetCurrentDir
     else
@@ -1111,7 +1135,11 @@ begin
       end;
       if FSourceMap.Present then
         WriteRunSourceMap(AFileName, ASource);
-      RunResult := Engine.Run(AFileName, UTF8Decode(ASource.Text));
+      { a bytecode file (GocciaBundler's output) runs from its bytes }
+      if SameText(ExtractFileExt(AFileName), EXT_GBC) then
+        RunResult := Engine.RunArtifact(AFileName, ReadBytecodeFile(AFileName))
+      else
+        RunResult := Engine.Run(AFileName, UTF8Decode(ASource.Text));
       if IsJsonOutput then
       begin
         Report := Default(TG2FileReport);
@@ -1214,11 +1242,23 @@ begin
     raise ErrorClass.Create(ErrorMessage);
 end;
 
+function TG2RunnerApp.LoadEntrySource(const AFileName: string): TStringList;
+begin
+  if SameText(ExtractFileExt(AFileName), EXT_GBC) then
+  begin
+    if not FileExists(AFileName) then
+      raise Exception.Create('File not found: ' + AFileName);
+    Result := TStringList.Create;
+  end
+  else
+    Result := SourceRegistry.Load(AFileName);
+end;
+
 procedure TG2RunnerApp.RunFile(const AFileName: string);
 var
   Source: TStringList;
 begin
-  Source := SourceRegistry.Load(AFileName);
+  Source := LoadEntrySource(AFileName);
   try
     RunOnWorker(AFileName, Source);
   finally
@@ -1549,6 +1589,9 @@ begin
   ApplySettings(ARun.Engine, ResolveFileSettings(EngineOptions, EmptyConfig, ARun.EntryPath,
     Verdict.AcceptedUnsafe));
   ARun.Engine.ConfigJson := HostConfigJson(EngineOptions, EmptyConfig);
+  { --prefer-bytecode: the sandbox's imports take .gbc companions in its virtual filesystem too }
+  if Assigned(ARun.Engine.Resolver) then
+    ARun.Engine.Resolver.PreferBytecodeCompanions := ResolveFlagOption(FPreferBytecode, EmptyConfig);
   if EngineOptions.MaxStack.Present then
     ARun.Engine.MaxFrames := Integer(EngineOptions.MaxStack.Value);
   if FSilent.Present then

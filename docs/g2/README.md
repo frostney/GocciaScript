@@ -323,6 +323,40 @@ Its clock is a native in nanoseconds; the old runner turns its collector off whi
 collects as the body allocates. A benchmark's error reads as an uncaught error does in GocciaRunner, with its
 location and suggestion. Not yet on G2: `.gbc` benchmark files.
 
+### Bytecode files
+
+G2 has its own `.gbc` format (`G2.Artifact`), read as untrusted input as the old engine's is
+([Bytecode VM, Binary Format](../bytecode-vm.md#binary-format)). The header carries format version 200, so
+each engine refuses the other's files, the runtime tag `goccia-g2`, a fingerprint of the instruction set
+(a build with other opcodes refuses the file), the source path and the compile profile (the old wire fields
+and G2's unrestricted flag). The body holds the module record or a Script's imports, the source text once,
+and every function compiled eagerly. Constants carry explicit kinds, so a file cannot forge a pointer. The
+reader bounds every length and count (64 MiB, 256 nested functions). The verifier (`G2.ArtifactVerify.inc`)
+checks every operand of every instruction, the jump targets, a terminator at the end, the exception handler
+depth at each instruction, the prologue and direct eval descriptions. It refuses instructions the compiler never
+emits, and makes every suspension keep all its registers.
+
+Code for a file names no global lexical binding by its index in the compiling engine's table: another engine
+numbers them differently, so such a binding is found by name at run time. `G2.Modules` loads a `.gbc` file as
+the module record of its logical address: the file's name with the recorded source extension. An import of
+the source and an import of the file then share one record. A file with another profile, or with a goal
+other than an explicit `--source-type`, is refused before anything in it runs, never replaced by the source.
+A source phase import takes no companion.
+
+`G2_ARTIFACT_ROUNDTRIP=1` writes, reads and verifies every compiled Script and module before it runs;
+`scripts/g2/artifact-roundtrip-tests.py` runs `tests/` with and without it and reports any file whose totals
+differ or whose round trip is refused.
+
+### GocciaBundler
+
+`./build.pas g2bundler` builds `build/g2/GocciaBundler` from `source/app/GocciaBundlerG2.dpr`: the old Bundler's
+options, configs, output plan and collision checks, stdin, `--multifile`, `--jobs` and `--source-map` (the JSX
+transform's map). Each file compiles on a thread of its own with a fresh engine (`TG2Engine.CompileArtifact`),
+under its file settings. GocciaRunner on G2 runs a `.gbc` entry (`TG2Engine.RunArtifact`) and, with
+`--prefer-bytecode` or the config key, takes a `.gbc` companion for an import in host and sandbox mode, held to
+the source's package policy (a CommonJS file's companion is refused). `scripts/test-cli-aot.ts` and the Bundler
+sections of `scripts/test-cli-apps.ts` pass against the G2 runner and bundler.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
@@ -340,7 +374,8 @@ with a 256 KB nursery and `--gc-verify`, the scripts in `scripts/g2/regress` (a 
 through `g2 --test` twice: plain, and with a 16 KB nursery (`G2_NURSERY_KB`) and `--gc-verify`. It reports
 a file whose totals differ, or whose stressed run crashes, as `BAD`. A stressed run past 600 s is reported as
 `TIMEOUT`, not a failure: the deep-chain tests under `tests/built-ins/Goccia/gc` verify a large heap at
-every collection. The digest bundles print `DIGEST n:hash` of each workload's result; `scripts/g2/digests.txt`
+every collection. `scripts/g2/artifact-roundtrip-tests.py` (see [Bytecode files](#bytecode-files)) runs
+with the gate. The digest bundles print `DIGEST n:hash` of each workload's result; `scripts/g2/digests.txt`
 holds the expected lines.
 
 ## Changes to Goccia's front end
