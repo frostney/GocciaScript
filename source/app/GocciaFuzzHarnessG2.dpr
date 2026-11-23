@@ -26,8 +26,19 @@ program GocciaFuzzHarnessG2;
   either reports module-denied. Without capabilities G2 also refuses fetch()
   and leaves FFI out.
 
+  With --grammar the input is not source text but the choices of a program
+  generator (Goccia.Fuzz.Generator): every input is a program that parses,
+  and it prints the same lines in every run, so the harness also compares
+  the two runs. When both end as the program does (completed, or an
+  uncaught throw) and neither reached the frame limit, a difference in what
+  they printed or in how they ended is a finding: the JIT computed
+  something the interpreter did not.
+
   Usage:
     GocciaFuzzHarness <file>          # AFL++ / manual reproduction
+    GocciaFuzzHarness --grammar <f>   # <f>'s bytes choose a program
+    GocciaFuzzHarness --grammar --print-program <f>
+                                      # print the program <f> chooses
     GocciaFuzzHarness -               # read stdin
     GocciaFuzzHarness --verbose <f>   # print each run's outcome
     GocciaFuzzHarness --heap-snapshot <file>
@@ -55,6 +66,7 @@ uses
   TextEncoding,
 
   Goccia.CLI.Stdin,
+  Goccia.Fuzz.Generator,
   Goccia.ModuleResolver,
 
   G2.Core,
@@ -181,7 +193,7 @@ type
   );
 
   { What a run's console writes is dropped: the fuzzer reads only the exit
-    status, and printing costs time. }
+    status, and printing costs time. A grammar run keeps it, to compare. }
   TFuzzConsole = class
   public
     procedure Discard(const AMethod, ALine: UnicodeString);
@@ -215,6 +227,8 @@ type
 var
   GVerbose: Boolean = False;
   GConsole: TFuzzConsole;
+  { a grammar run's console lines (nil: dropped) }
+  GCapture: TStringList;
   GResolver: TFuzzDeniedResolver;
   { the first path a run's import asked for, refused ('' none) }
   GDeniedPath: UnicodeString;
@@ -231,6 +245,8 @@ var
 
 procedure TFuzzConsole.Discard(const AMethod, ALine: UnicodeString);
 begin
+  if Assigned(GCapture) then
+    GCapture.Add(UTF8Encode(AMethod + ' ' + ALine));
 end;
 
 function TFuzzDeniedResolver.Resolve(const AModulePath,
@@ -726,6 +742,8 @@ begin
     ' [--verbose] --heap-snapshot <file>');
   WriteLn(ErrOutput, '       ', FUZZ_PROGRAM_NAME,
     ' --write-heap-snapshot-seeds <dir>');
+  WriteLn(ErrOutput, '       ', FUZZ_PROGRAM_NAME,
+    ' [--verbose] --grammar [--print-program] <file>|-');
   WriteLn(ErrOutput);
   WriteLn(ErrOutput, 'Runs one input on G2 under its limits, then with ' +
     'the JIT on, each on an engine of its own.');
@@ -760,18 +778,148 @@ begin
     Report(AExecutor, AOutcome, Detail);
 end;
 
+{ RunExecutor, with the run's detail. True when it faulted. }
+function RunGrammarExecutor(const ASource: UnicodeString;
+  const AFileName: string; ABounded: Boolean; const AExecutor: string;
+  out AOutcome: TFuzzOutcome; out ADetail: string): Boolean;
+var
+  Trace: string;
+begin
+  Trace := '';
+  ADetail := '';
+  try
+    AOutcome := RunOnce(ASource, AFileName, ABounded, AExecutor, ADetail);
+  except
+    on E: Exception do
+    begin
+      AOutcome := foUnexpected;
+      ADetail := E.ClassName + ': ' + E.Message;
+      Trace := CaptureBackTrace;
+    end;
+  end;
+  Result := AOutcome = foUnexpected;
+  if Result then
+    ReportFault('the ' + AExecutor + ' run', ADetail, Trace)
+  else
+    Report(AExecutor, AOutcome, ADetail);
+end;
+
+{ ---- grammar runs ---- }
+
+const
+  FRAME_LIMIT_MESSAGE = 'Maximum call stack size exceeded';
+
+{ A run that reached the frame limit: the interpreter run's limit is
+  FUZZ_MAX_FRAMES and the JIT run's the engine's own, so where recursion
+  stops differs by design. }
+function ReachedFrameLimit(const ALines: TStringList;
+  const ADetail: string): Boolean;
+var
+  I: Integer;
+begin
+  if Pos(FRAME_LIMIT_MESSAGE, ADetail) > 0 then
+    Exit(True);
+  for I := 0 to ALines.Count - 1 do
+    if Pos(FRAME_LIMIT_MESSAGE, ALines[I]) > 0 then
+      Exit(True);
+  Result := False;
+end;
+
+{ Compares the two runs of a generated program: '' when they agree or are
+  not comparable, else what differs. }
+function CompareRuns(AFirst, ASecond: TFuzzOutcome;
+  const AFirstDetail, ASecondDetail: string;
+  const AFirstLines, ASecondLines: TStringList): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  if not (AFirst in [foCompleted, foScriptThrow]) or
+    not (ASecond in [foCompleted, foScriptThrow]) then
+    Exit;
+  if ReachedFrameLimit(AFirstLines, AFirstDetail) or
+    ReachedFrameLimit(ASecondLines, ASecondDetail) then
+    Exit;
+  for I := 0 to AFirstLines.Count - 1 do
+  begin
+    if I >= ASecondLines.Count then
+      Exit(Format('line %d: the bytecode run printed %s, the jit run ' +
+        'nothing more', [I + 1, AFirstLines[I]]));
+    if AFirstLines[I] <> ASecondLines[I] then
+      Exit(Format('line %d: the bytecode run printed %s, the jit run %s',
+        [I + 1, AFirstLines[I], ASecondLines[I]]));
+  end;
+  if ASecondLines.Count > AFirstLines.Count then
+    Exit(Format('line %d: the jit run printed %s, the bytecode run ' +
+      'nothing more', [AFirstLines.Count + 1,
+      ASecondLines[AFirstLines.Count]]));
+  if AFirst <> ASecond then
+    Exit(Format('the bytecode run ended %s (%s), the jit run %s (%s)',
+      [OutcomeName(AFirst), AFirstDetail, OutcomeName(ASecond),
+      ASecondDetail]));
+  if (AFirst = foScriptThrow) and (AFirstDetail <> ASecondDetail) then
+    Exit(Format('the bytecode run threw %s, the jit run %s',
+      [AFirstDetail, ASecondDetail]));
+end;
+
+{ Runs the program AData chooses in both executors and compares them.
+  The exit code: 0, or 1 for a fault or a difference. }
+function RunGrammar(const AData: TBytes; const ARunName: string): Integer;
+var
+  Source: UnicodeString;
+  BytecodeLines, JitLines: TStringList;
+  BytecodeOutcome, JitOutcome: TFuzzOutcome;
+  BytecodeDetail, JitDetail, Difference: string;
+begin
+  Source := GenerateFuzzProgram(AData);
+  BytecodeLines := TStringList.Create;
+  JitLines := TStringList.Create;
+  try
+    GCapture := BytecodeLines;
+    try
+      if RunGrammarExecutor(Source, ARunName, True, 'bytecode',
+        BytecodeOutcome, BytecodeDetail) then
+        Exit(1);
+      GCapture := JitLines;
+      if RunGrammarExecutor(Source, ARunName, False, 'jit', JitOutcome,
+        JitDetail) then
+        Exit(1);
+    finally
+      GCapture := nil;
+    end;
+    Difference := CompareRuns(BytecodeOutcome, JitOutcome, BytecodeDetail,
+      JitDetail, BytecodeLines, JitLines);
+    if Difference <> '' then
+    begin
+      WriteLn(ErrOutput, Format('%s: the runs differ: %s',
+        [FUZZ_PROGRAM_NAME, Difference]));
+      Exit(1);
+    end;
+    if GVerbose then
+      WriteLn(ErrOutput, Format('[grammar] %d lines; %s',
+        [BytecodeLines.Count, 'the runs agree or are not comparable']));
+    Result := EXIT_OK;
+  finally
+    JitLines.Free;
+    BytecodeLines.Free;
+  end;
+end;
+
 procedure RunHarness;
 var
   I: Integer;
   Arg, FileName, RunName, Detail, Trace, SeedDirectory: string;
   Source: UnicodeString;
   Outcome: TFuzzOutcome;
-  SelfTestFault, HeapSnapshot: Boolean;
+  SelfTestFault, HeapSnapshot, Grammar, PrintProgram, Readable: Boolean;
   Written: Integer;
+  Bytes: TBytes;
 begin
   FileName := '';
   SelfTestFault := False;
   HeapSnapshot := False;
+  Grammar := False;
+  PrintProgram := False;
   SeedDirectory := '';
   I := 1;
   while I <= ParamCount do
@@ -783,6 +931,10 @@ begin
       SelfTestFault := True
     else if Arg = '--heap-snapshot' then
       HeapSnapshot := True
+    else if Arg = '--grammar' then
+      Grammar := True
+    else if Arg = '--print-program' then
+      PrintProgram := True
     else if Arg = '--write-heap-snapshot-seeds' then
     begin
       if I < ParamCount then
@@ -862,6 +1014,28 @@ begin
   begin
     PrintUsage;
     ExitCode := EXIT_USAGE;
+    Exit;
+  end;
+
+  if Grammar then
+  begin
+    if (FileName = '') or (FileName = '-') then
+      Readable := ReadBoundedStdin(Bytes, Detail)
+    else
+      Readable := ReadBoundedFile(FileName, Bytes, Detail);
+    if not Readable then
+    begin
+      Report('grammar', foInputRejected, Detail);
+      ExitCode := EXIT_OK;
+      Exit;
+    end;
+    if PrintProgram then
+    begin
+      Write(UTF8Encode(GenerateFuzzProgram(Bytes)));
+      ExitCode := EXIT_OK;
+      Exit;
+    end;
+    ExitCode := RunGrammar(Bytes, ExpandFileName('grammar.js'));
     Exit;
   end;
 

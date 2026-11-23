@@ -432,6 +432,22 @@ integrity levels, closures, accessors and bound functions, errors and wrappers).
 wrote them: a built-in's fingerprint holds its native code's address, so another build refuses them. The CLI
 sections of `scripts/test-cli-apps.ts` for the fuzz harness pass against it.
 
+`--grammar FILE` reads FILE's bytes as the choices of a program generator (`source/app/Goccia.Fuzz.Generator.pas`):
+each byte picks the next statement, expression or binding, so every input is a program that parses, and a mutated
+input is a program mutated at the level of its syntax. When the bytes run out every further choice is the first,
+which is always the smallest (a block ends, an expression is a literal), so a zero byte removes or simplifies what
+it chose. The programs read no clock or random numbers, every loop runs a constant number of times, and each
+function is called hot (up to 2,500 times, past the optimizing tier's threshold) with arguments whose types can
+change late in the loop. Bindings carry the type their value was made with, so expressions use them as numbers,
+strings, arrays, objects, BigInts, functions or class instances; a wrong guess is a TypeError the program catches.
+Each program prints its results through a renderer of its own rather than the console's formatting, and the harness
+compares the `[bytecode]` run's lines with the `[jit]` run's: when both end as the program does (completed, or an
+uncaught throw) and neither reached the frame limit, which differs between the runs by design, a difference in a
+line or in how they ended exits 1. `--print-program` prints the program instead of running it.
+`scripts/g2/grammar-fuzz.py HARNESS CASES` runs a campaign of random inputs without AFL, reports how the runs ended,
+and keeps each finding's input, program and report after reducing the input by truncating it and zeroing runs of
+bytes.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
