@@ -1,0 +1,4 @@
+# GocciaTest262Runner on G2 at the pinned suite (scripts/test262-suite-sha.txt): the runs that do not pass.
+# scripts/g2/check-known-failures.py fails a run with any other run not passing. Format: MODE ID.
+# the test predates the current FunctionDeclarationInstantiation; tc39/test262#5112 corrects it
+non-strict annexB/language/function-code/block-decl-func-skip-arguments.js

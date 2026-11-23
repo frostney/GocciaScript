@@ -471,6 +471,14 @@ every collection. `scripts/g2/artifact-roundtrip-tests.py` and `scripts/g2/artif
 [Bytecode files](#bytecode-files)) run with the gate. The digest bundles print `DIGEST n:hash` of each workload's result; `scripts/g2/digests.txt`
 holds the expected lines.
 
+`.github/workflows/g2.yml` runs part of this in CI on every pull request and on pushes to `main` and `feat/g2-**`,
+with FPC `3.3.1-b6` on Linux x86-64; the rest of CI stays on its FPC 3.2.4 build until the old runtime is removed.
+Its three jobs build what they run: GocciaTestRunner over `tests/` with `--heap-snapshots`, GocciaTest262Runner over
+the pinned test262, and the limits test, both bytecode-file tests and a 1,000-case grammar fuzz campaign.
+`scripts/g2/check-known-failures.py` holds the suite and test262 to `scripts/g2/known-failures`: a failure not on the
+list fails the job, and a listed one that now passes is reported, so the lists only shrink. The digests, GC stress
+and the benchmarks stay with the local gate, which needs the bundles under `G2_WT_DIR` and `G2_JS_DIR`.
+
 ## Changes to Goccia's front end
 
 G2 parses with `source/units`. This branch changes it in three ways, each checked against Goccia's tests and

@@ -1,0 +1,190 @@
+name: G2
+
+# The G2 engine (source/g2, docs/g2/README.md) and the apps built on it, on
+# Linux x86-64, the only platform G2 runs on so far. G2 needs FPC 3.3.1 from
+# frostney/fpc-toolchain; the rest of CI stays on its 3.2.4 build until the old
+# runtime is removed, since the Win32 SafeSEH manifest
+# (config/win32-safeseh/fpc-3.2.4.manifest) names that build's objects.
+#
+# Each job builds the targets it runs, so the three run side by side. The JS
+# suite and test262 are checked against scripts/g2/known-failures: a run fails
+# on a failure not on its list, and reports a listed one that now passes.
+
+on:
+  push:
+    branches:
+      - main
+      - 'feat/g2-**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: g2-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The 3.3.1 build G2 is gated on (scripts/g2/build.sh selects the same one).
+  FPC_G2_VERSION: "3.3.1-b6"
+
+jobs:
+  suite:
+    name: JavaScript suite on G2
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_G2_VERSION }}
+
+      - name: Build GocciaTestRunner on G2
+        run: ./build.pas --prod g2testrunner
+
+      - name: Build FFI fixture library
+        run: ./fixtures/ffi/build.sh
+
+      - name: Run all JavaScript tests, round-tripping what they observe through heap snapshots
+        # The run exits nonzero for the known failures; the next step decides.
+        run: |
+          status=0
+          build/g2/GocciaTestRunner -P tests --heap-snapshots --silent --no-progress \
+            --output=g2-test-results.json 2> g2-heap-snapshots.log || status=$?
+          echo "GocciaTestRunner exit status: $status"
+          grep -E '^Heap snapshots:' g2-heap-snapshots.log
+          if grep -q '^Heap snapshot failure' g2-heap-snapshots.log; then
+            grep '^Heap snapshot failure' g2-heap-snapshots.log | head -20
+            echo "::error::A value the suite observed did not round-trip through a heap snapshot"
+            exit 1
+          fi
+
+      - name: Check against the known failures
+        run: python3 scripts/g2/check-known-failures.py suite g2-test-results.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: g2-test-results
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            g2-test-results.json
+            g2-heap-snapshots.log
+
+  test262:
+    name: test262 on G2
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_G2_VERSION }}
+
+      - name: Build GocciaTest262Runner on G2
+        run: ./build.pas --prod g2test262runner
+
+      - name: Read test262 pin
+        id: test262-pin
+        run: |
+          sha="$(tr -d '[:space:]' < scripts/test262-suite-sha.txt)"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid test262 pin in scripts/test262-suite-sha.txt"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout test262 suite
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: tc39/test262
+          ref: ${{ steps.test262-pin.outputs.sha }}
+          path: test262-suite
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run test262
+        # --jobs=4: the runner's four vCPUs. --timeout=20s, as ci.yml's
+        # test262 job: the deadline is wall-clock and four workers fill the
+        # runner. TZ=UTC: the expected results were recorded in UTC.
+        env:
+          TZ: UTC
+        run: |
+          status=0
+          build/g2/GocciaTest262Runner --suite-dir=test262-suite --jobs=4 --timeout=20s \
+            --output=g2-test262-results.json || status=$?
+          echo "GocciaTest262Runner exit status: $status"
+
+      - name: Check against the known failures
+        run: python3 scripts/g2/check-known-failures.py test262 g2-test262-results.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: g2-test262-results
+          if-no-files-found: ignore
+          retention-days: 7
+          path: g2-test262-results.json
+
+  engine:
+    name: Limits, bytecode files and generated programs on G2
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Install FPC
+        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
+        with:
+          version: ${{ env.FPC_G2_VERSION }}
+
+      - name: Build G2, GocciaRunner, GocciaBundler and GocciaFuzzHarness on G2
+        run: ./build.pas --prod g2 g2runner g2bundler g2fuzzharness
+
+      - name: Execution limits
+        run: bash scripts/g2/limits-test.sh build/g2/g2
+
+      - name: Bytecode files round-trip every test file
+        run: python3 scripts/g2/artifact-roundtrip-tests.py build/g2/g2 4 tests
+
+      - name: Tampered bytecode files fail in every tier
+        run: python3 scripts/g2/artifact-tamper-tests.py build/g2/GocciaBundler build/g2/GocciaRunner
+
+      - name: Generated programs agree between the interpreter and the JIT
+        # A short campaign on a seed of its own per run; a finding's input,
+        # program and report are uploaded.
+        run: |
+          python3 scripts/g2/grammar-fuzz.py build/g2/GocciaFuzzHarness 1000 --jobs 4 \
+            --seed "${GITHUB_RUN_ID}" --findings g2-grammar-findings
+
+      - name: Upload grammar fuzz findings
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: g2-grammar-findings
+          if-no-files-found: ignore
+          retention-days: 30
+          path: g2-grammar-findings/
