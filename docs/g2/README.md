@@ -389,6 +389,26 @@ child's heap limit. Its statuses match `run262.py`'s for every run of the suite.
 `$262.js`, so a probe reaches the hooks as `$262`; the old runner's probes read its own `Goccia.test262` object,
 which G2 does not have (the `--eval-host` sections of `scripts/test-cli-apps.ts`).
 
+### GocciaFuzzHarness
+
+`./build.pas g2fuzzharness` builds `build/g2/GocciaFuzzHarness` from `source/app/GocciaFuzzHarnessG2.dpr`, the old
+harness's contract on G2: exit 0 for every outcome the engine models (completed, script-throw, parse-error,
+timeout, instruction-limit, memory-limit, module-denied, input-rejected, snapshot-refused) and exit 1 with a
+backtrace for anything else. Each input runs twice, on a fresh engine with the fuzz profile (the compatibility
+flags on). `[bytecode]` runs under a 1 s timeout, 5,000,000 instructions, 256 frames and a 256 MB heap, which keeps
+the JIT off. `[jit]` runs with only the heap limit, so the JIT compiles hot code (`G2_JIT_HOT` lowers its
+threshold), and a watchdog thread ends the process with exit 0 after 1 s, since compiled code does not poll a
+deadline. Module loading is denied by a resolver that refuses every specifier and a file-read hook that refuses
+every read, so neither a static nor a dynamic import reaches the host filesystem. Inputs over 1 MB are rejected
+before they are read, from a file or from stdin (`-`).
+
+`--heap-snapshot FILE` restores FILE as a heap snapshot and exercises what it holds: calls each function three
+ways, walks descriptors and prototypes, and stringifies the root. `--write-heap-snapshot-seeds DIR` writes the
+eight seeds (primitives, sparse arrays, shared and cyclic graphs, symbols and built-ins, descriptors and
+integrity levels, closures, accessors and bound functions, errors and wrappers). Seeds belong to the build that
+wrote them: a built-in's fingerprint holds its native code's address, so another build refuses them. The CLI
+sections of `scripts/test-cli-apps.ts` for the fuzz harness pass against it.
+
 ## Gate
 
 Every change is gated on test262 with no newly failing (id, mode) pair, the 18 Web Tooling digests, and,
