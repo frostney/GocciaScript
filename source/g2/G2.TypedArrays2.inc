@@ -574,11 +574,17 @@ begin
 end;
 
 { the receiver's Len values into a new array at root Base, stable merge-sorted (scratch at Base + 1) }
-function TASortValues(O: TValue; Len: Int64; Base: Integer): Boolean;
+{ O points at the typed array's argument slot (a root): reading an element can allocate (a BigInt), so the array
+  is read through it each time, and the element before the array it goes into (the capacity is there: no growth) }
+function TASortValues(O: PValue; Len: Int64; Base: Integer): Boolean;
 var K, N, W, I, L, M, R_, J: Int64; Less: Boolean; V, T: TValue; Src: PValueArray;
 begin
   TempRoots[Base] := MkPtr(NewArray(0, Max(Len, 1)));
-  for K := 0 to Len - 1 do ArrayPush(ObjOf(RootAt(Base)), TAGetV(O, K));
+  for K := 0 to Len - 1 do
+  begin
+    V := TAGetV(O^, K);
+    ArrayPush(ObjOf(RootAt(Base)), V);
+  end;
   N := ObjOf(RootAt(Base))^.Elements^.Len;
   TempRoots[Base + 1] := MkPtr(NewArray(N, N));
   W := 1;
@@ -631,7 +637,7 @@ begin
     TempRoots[Base + 3] := T;
   end
   else TempRoots[Base + 3] := Args[0];
-  if TASortValues(Args[0], Len, Base + 1) then
+  if TASortValues(@Args[0], Len, Base + 1) then
   begin
     for K := 0 to Len - 1 do
       StoreElem(ObjOf(RootAt(Base + 3)), K, ObjOf(RootAt(Base + 1))^.Elements^.Data[K]);
