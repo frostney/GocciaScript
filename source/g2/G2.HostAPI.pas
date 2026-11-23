@@ -2291,10 +2291,13 @@ var A: array[0..0] of TValue; Report, R, S: TValue;
 begin
   ReportJson := ''; ReportErr := ''; ReportDone := False;
   if not GetV(TestApiV, AtomOf('report'), Report) then Exit(False);
+  { report is read again from its root after the done function's allocation (a collection moves it) }
+  PushRoot(Report);
   PushRoot(NewNativeFunction(Test_Done, 'done', 2));
   A[0] := RootAt(TempTop - 1);
+  Report := RootAt(TempTop - 2);
   Result := CallValue(Report, TestApiV, @A[0], 1, R) and RunEventLoopIn(True);
-  PopRoots(1);
+  PopRoots(2);
   if not Result then
   begin
     if ToStringV(Pending, S) and IsString(S) then Err := StrToUnicode(StrOf(S)) else Err := 'uncaught exception';
