@@ -216,6 +216,7 @@ var
   OT: PFuncTemplate;
   OInfo: POptInfo;
   ORegs: Integer;                    { the template's MaxRegs }
+  OCover: Boolean;                   { OEmit: StackTop covers the inlined callees' registers (OCoverNeeded) }
   OLive: array of QWord;             { live registers before each instruction: OLiveW words per PC }
   OLiveW: Integer;
   OTplLive: array of QWord;          { the same in the template's own code (the baseline's), per its PC }
@@ -2698,6 +2699,8 @@ type
 
 function OInlDesc(S: Integer): POInlDesc; forward;
 
+procedure ORaiseTop; forward;
+
 { node N's code }
 procedure OCode(N: Integer);
 var L, CC, LH, KH: Integer; D: Int64; IC: PPropIC;
@@ -3397,6 +3400,8 @@ begin
           cleared }
         JitNative[ON[N].PC + 1] := JitLen;
         if OVFrame[ON[N].PC] >= 0 then Mov64MI(jR12, PtrInt(@PFrame(nil)^.Inl), 0);
+        { a call it made returned StackTop to the frame's: the inlined callees' registers covered again }
+        ORaiseTop;
       end;
     onLoadKTag:
       begin
@@ -3798,6 +3803,47 @@ begin
   WriteLn(ErrOutput, 'opt dump ', Name, ' ', JitLen);
 end;
 
+{ a region whose inlined callees' registers pass its frame's (ORegs past the template's MaxRegs): a collection scans
+  VStack only up to StackTop, which the frame's MaxRegs sets, so the region's entry covers its registers too; those
+  StackTop did not cover become undefined (what dead frames left there is no value). Returns from the region's
+  embedded calls set StackTop back to the frame's; ORaiseTop raises it again after each embed. }
+procedure XOptCoverRegs(Fr: PFrame; N: Integer);
+var Top, I: Integer;
+begin
+  Top := Fr^.Base + N;
+  if Top > STACK_MAX then Top := STACK_MAX;
+  for I := StackTop to Top - 1 do VStack[I] := VUndefined;
+  if StackTop < Top then StackTop := Top;
+end;
+
+{ whether the region covers its inlined callees' registers (ORegs past the template's MaxRegs): only when a
+  collection can come while one of them runs, in the baseline's code of an instruction embedded in an inlined
+  callee. A collection comes in no other code of the region (its inline allocation exits when the nursery is full),
+  and an embedded instruction of the frame's own code runs with the inlined callees' registers dead. }
+function OCoverNeeded: Boolean;
+var N: Integer;
+begin
+  Result := False;
+  if ORegs <= OT^.MaxRegs then Exit;
+  for N := 0 to ONCount - 1 do
+    if (ON[N].Op = onEmbed) and (OVFrame[Integer(ON[N].Imm)] >= 0) then Exit(True);
+end;
+
+{ StackTop at least the frame's Base + ORegs (the region's registers: every value in them a live one, scanned
+  since the entry); ecx and edx clobbered }
+procedure ORaiseTop;
+var L: Integer;
+begin
+  if not OCover then Exit;
+  Mov32RM(jCX, jR12, PtrInt(@PFrame(nil)^.Base));
+  AluRI(0, jCX, ORegs, False);                                      { add ecx, ORegs }
+  Mov32RFs(jDX, JitFsStackTop);
+  AluRR($39, jDX, jCX, False);                                      { cmp edx, ecx }
+  L := JccFwd(ccGE);
+  Mov32FsR(JitFsStackTop, jCX);
+  PatchHere(L);
+end;
+
 { the region's code; nil when it cannot be made }
 function OEmit: Pointer;
 var K, J, B, Epi, RestEpi, ThrowL, G, F: Integer; Labels: array of Integer; GuardAt, ExitAt, FbAt: array of Integer;
@@ -3824,6 +3870,40 @@ begin
   { the entry: r15 saved, the spill frame }
   JB($41); JB($57);                                       { push r15 }
   AluRI(5, jSP, OFrame, True);
+  { the inlined callees' registers past the frame's covered by StackTop (XOptCoverRegs) }
+  OCover := OCoverNeeded;
+  if OCover then
+  begin
+    Mov32RM(jCX, jR12, PtrInt(@PFrame(nil)^.Base));
+    AluRI(0, jCX, ORegs, False);
+    Mov32RFs(jDX, JitFsStackTop);
+    AluRR($39, jDX, jCX, False);
+    L1 := JccFwd(ccGE);
+    L3 := -1;
+    if ORegs - OT^.MaxRegs <= 64 then
+    begin
+      { the usual entry, StackTop where the frame's push left it (Base + MaxRegs) and the registers inside
+        STACK_MAX: undefined stored into them here, a store each (XOptCoverRegs did the same through a call
+        and a loop on every call of the function) }
+      AluRI(7, jCX, STACK_MAX, False);                              { cmp ecx, STACK_MAX }
+      L2 := JccFwd(ccG);
+      Mov32RM(jAX, jR12, PtrInt(@PFrame(nil)^.Base));
+      AluRI(0, jAX, OT^.MaxRegs, False);
+      AluRR($39, jDX, jAX, False);                                  { cmp edx, Base + MaxRegs }
+      L4 := JccFwd(ccNE);
+      MovRI(jAX, VUndefined);
+      for J := OT^.MaxRegs to ORegs - 1 do MovMR(jBX, J * SizeOf(TValue), jAX);
+      Mov32FsR(JitFsStackTop, jCX);
+      L3 := JmpFwd;
+      PatchHere(L2);
+      PatchHere(L4);
+    end;
+    MovRR(jDI, jR12);
+    MovRI(jSI, Cardinal(ORegs));
+    CallAbs(@XOptCoverRegs);
+    if L3 >= 0 then PatchHere(L3);
+    PatchHere(L1);
+  end;
   for K := 0 to OOrderCount - 1 do
   begin
     B := OOrder[K];
