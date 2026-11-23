@@ -334,7 +334,12 @@ and every function compiled eagerly. Constants carry explicit kinds, so a file c
 reader bounds every length and count (64 MiB, 256 nested functions). The verifier (`G2.ArtifactVerify.inc`)
 checks every operand of every instruction, the jump targets, a terminator at the end, the exception handler
 depth at each instruction, the prologue and direct eval descriptions. It refuses instructions the compiler never
-emits, and makes every suspension keep all its registers.
+emits, and makes every suspension keep all its registers. What the code cannot show, a register holding the
+array, object, closure, private name or module cell table an instruction trusts it to hold, is checked at run
+time in code read from a file (`TFuncTemplate.Loaded`): `Execute` checks it, FastLoop and the baseline JIT hand
+those instructions to `Execute`, and the optimizing tier leaves such templates alone. The compiler's own code
+keeps its fast paths. `G2_ARTIFACT_SCRAMBLE=<seed>` (tests only) rewrites register operands after reading, so
+code that passes the verifier puts the wrong kinds in registers.
 
 Code for a file names no global lexical binding by its index in the compiling engine's table: another engine
 numbers them differently, so such a binding is found by name at run time. `G2.Modules` loads a `.gbc` file as

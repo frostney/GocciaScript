@@ -2604,6 +2604,17 @@ begin
   B := (I shr 24) and $FFFF;
   C := Integer(SarInt64(Int64(I), 40));
   CU := I shr 40;
+  { a bytecode file's code (TFuncTemplate.Loaded): an instruction that trusts a register's kind runs in the
+    interpreter, which checks it }
+  if T^.Loaded and (Op in [opArrPush, opArrHole, opArrSpread, opCallV, opNewV, opSuperCallV, opObjSpread,
+    opCopyDataProps, opDefProp, opDefPropC, opDefMethod, opDefMethodC, opDefGetter, opDefSetter, opDefGetterC,
+    opDefSetterC, opDefField, opDefFieldC, opSetProtoLit, opSetFnName, opSetHome, opClassSetup, opClassField,
+    opSuperCallUp, opGetPriv, opSetPriv, opDefPrivField, opAddPriv, opPrivIn, opModGet, opMakeModCell]) then
+  begin
+    JmpExit(PC);
+    JitTaken := False;
+    Exit;
+  end;
   case Op of
     opNop: ;
     opMov:
@@ -5176,7 +5187,7 @@ begin
   for PC := 0 to T^.CodeLen - 1 do JitExitOf[PC] := -1;
   Table := GetMem(T^.CodeLen * SizeOf(PtrUInt));
   Info := nil;
-  if (OptEnabled = 1) and T^.NoHandlers and OptCapturesOk(T) and not T^.IsAsync and
+  if (OptEnabled = 1) and T^.NoHandlers and not T^.Trusting and OptCapturesOk(T) and not T^.IsAsync and
      (T^.ArgsReg < 0) and (T^.RestReg < 0) and not T^.TopLevel and OptPromising(T) then
   begin
     New(Info);

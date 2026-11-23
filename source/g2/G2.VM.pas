@@ -6883,6 +6883,88 @@ begin
   {$IFDEF CPUX86_64}JitMainThread := GetCurrentThreadId;{$ENDIF}
 end;
 
+{ ---- a bytecode file's code (G2.Artifact; TFuncTemplate.Loaded): the instructions that trust a register's kind
+  check it there, since the file can put anything in a register. The compiler's code always passes, so its
+  templates skip the checks (FastLoop hands these instructions to Execute for a loaded template, the baseline JIT
+  exits to the interpreter for them, the optimizing tier leaves such templates alone). ---- }
+
+function XBadOperand: Boolean; noinline;
+begin
+  Result := ThrowTypeError('Invalid bytecode: an instruction''s operand is not the kind it requires');
+end;
+
+{ a dense array (no length past its elements) }
+function OpdArray(V: TValue): Boolean;
+begin
+  Result := IsObject(V) and (ObjOf(V)^.OKind = okArray) and ((ObjOf(V)^.OFlags and ofBigLen) = 0);
+end;
+
+{ an array ArrayPush can append to: dense, with elements, extensible }
+function OpdPushArray(V: TValue): Boolean;
+begin
+  Result := OpdArray(V) and (ObjOf(V)^.Elements <> nil) and ((ObjOf(V)^.OFlags and 8) = 0);
+end;
+
+{ a bytecode closure (its Aux1 is its home object) }
+function OpdClosure(V: TValue): Boolean;
+begin
+  Result := IsObject(V) and (ObjOf(V)^.OKind = okFunction);
+end;
+
+{ a class constructor's closure not yet set up (opClassSetup adds its prototype property) }
+function OpdClassCtor(V: TValue): Boolean;
+begin
+  Result := OpdClosure(V) and PFuncTemplate(ObjOf(V)^.Native)^.IsClassCtor and
+    (ShapeLookup(ObjOf(V)^.Shape, AtomPrototype) < 0);
+end;
+
+{ a private name (a key atom) }
+function OpdPrivKey(V: TValue): Boolean;
+begin
+  Result := IsString(V) and ((PStr(PtrOf(V))^.Hdr.Extra and kfPrivate) <> 0);
+end;
+
+{ a module's cell table with a cell C }
+function OpdModCells(V: TValue; C: Integer): Boolean;
+begin
+  Result := OpdArray(V) and (ObjOf(V)^.Elements <> nil) and (C >= 0) and (C < Integer(ObjOf(V)^.Elements^.Len));
+end;
+
+{ an object a literal's or a class's raw define (AddProperty, DefineOwn) may write Key on as
+  [[DefineOwnProperty]] would: an ordinary object, function or array that is extensible, with no non-configurable
+  property Key }
+function OpdDefineTarget(V: TValue; Key: PStr): Boolean;
+var O: PObj; CI: Integer;
+begin
+  Result := False;
+  if not IsObject(V) then Exit;
+  O := ObjOf(V);
+  if not (O^.OKind in [okPlain, okFunction, okArray]) or ((O^.OFlags and 8) <> 0) then Exit;
+  CI := ShapeLookup(O^.Shape, Key);
+  Result := (CI < 0) or ((O^.Shape^.PFlags[CI] and pfConfigurable) <> 0);
+end;
+
+{ an object literal's __proto__: what [[SetPrototypeOf]] would do (an extensible ordinary object, no cycle) }
+function OpdLiteralProto(Target, Proto: TValue): Boolean;
+var O: PObj; P: TValue; N: Integer;
+begin
+  Result := False;
+  if not IsObject(Target) then Exit;
+  O := ObjOf(Target);
+  if (O^.OKind <> okPlain) or ((O^.OFlags and 8) <> 0) then Exit;
+  P := Proto;
+  N := 0;
+  while IsObject(P) do
+  begin
+    if ObjOf(P) = O then Exit;
+    if ObjOf(P)^.OKind = okProxy then Break;
+    Inc(N);
+    if N > 100000 then Exit;
+    P := ObjOf(P)^.Shape^.Proto;
+  end;
+  Result := True;
+end;
+
 function FastLoop(Code: PQWord; PC: Integer; R, K: PValue; ICs: PPropIC; Fr: PFrame; StopFrame: Integer): Integer;
 label LBail, LGetProp, LSetPropSlow;
 var
@@ -7086,7 +7168,12 @@ LGetProp:
           goto LBail;
         end;
       opClosure: XFastClosure(Fr, R, A, PCardinal(PByte(IP) - 4)^ shr 8);
-      opDefProp: XFastDefProp(R[A], PStr(PtrOf(K[PCardinal(PByte(IP) - 4)^ shr 8])), R[PWord(PByte(IP) - 5)^]);
+      opDefProp:
+        begin
+          { a bytecode file's code: Execute checks the receiver }
+          if Fr^.Tpl^.Loaded then goto LBail;
+          XFastDefProp(R[A], PStr(PtrOf(K[PCardinal(PByte(IP) - 4)^ shr 8])), R[PWord(PByte(IP) - 5)^]);
+        end;
       opNewObj:
         begin
           { an object literal's object, as Execute (a collection here is safe: no local holds a cell across
@@ -7134,6 +7221,7 @@ LSetPropSlow:
       opDefField:
         begin
           { a class field's cached add transition (an extensible object with the cached shape) }
+          if Fr^.Tpl^.Loaded then goto LBail;
           O := ObjOf(R[A]);
           IC := @ICs[(PCardinal(PByte(IP) - 4)^ shr 8)];
           if (O^.Shape <> IC^.Shape) or (IC^.NewShape = nil) or (IC^.Slot >= O^.InlineCap) or
@@ -7682,6 +7770,7 @@ LSetPropSlow:
       opSuperCall, opSuperCallV:
         begin
           { 13.3.7.1 SuperCall with a bytecode parent (XFastSuper): its frame pushed as Kind 5, or Execute's }
+          if (TOp(PByte(IP)[-8]) = opSuperCallV) and Fr^.Tpl^.Loaded then goto LBail;
           Fr^.PC := Integer((PtrUInt(IP) - PtrUInt(Code)) shr 3);
           J := XFastSuper(A, PWord(PByte(IP) - 5)^, PCardinal(PByte(IP) - 4)^ shr 8, TOp(PByte(IP)[-8]) = opSuperCallV);
           if J = 0 then goto LBail;
@@ -8375,17 +8464,20 @@ LReload:
       opGetPriv:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not (OpdPrivKey(R[I shr 40])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           if not PrivateGet(R[(I shr 24) and $FFFF], PStr(PtrOf(R[I shr 40])), V) then goto LThrow;
           R[A] := V;
         end;
       opSetPriv:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not (OpdPrivKey(R[I shr 40])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           if not PrivateSet(R[A], PStr(PtrOf(R[I shr 40])), R[(I shr 24) and $FFFF]) then goto LThrow;
         end;
       opDefPrivField, opAddPriv:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not (OpdPrivKey(R[I shr 40])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           Key := PStr(PtrOf(R[I shr 40]));
           if not IsObject(R[A]) then begin ThrowTypeError('Cannot add a private element to a primitive'); goto LThrow; end;
           if ShapeLookup(ObjOf(R[A])^.Shape, Key) >= 0 then
@@ -8414,6 +8506,7 @@ LReload:
         end;
       opPrivIn:
         begin
+          if Tpl^.Loaded and not (OpdPrivKey(R[I shr 40])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           VB := R[(I shr 24) and $FFFF];
           if not IsObject(VB) then
           begin
@@ -8427,6 +8520,7 @@ LReload:
       opDefField, opDefFieldC:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not (IsObject(R[A])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           if TOp(I and $FF) = opDefField then
           begin
             { a field's CreateDataPropertyOrThrow ignores the prototype chain: an object with the cached shape
@@ -8460,6 +8554,7 @@ LReload:
         end;
       opSetHome:
         begin
+          if Tpl^.Loaded and not (OpdClosure(R[A])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           ObjOf(R[A])^.Aux1 := R[(I shr 24) and $FFFF];
           WriteBarrier(@ObjOf(R[A])^.Hdr, R[(I shr 24) and $FFFF]);
         end;
@@ -9066,6 +9161,7 @@ LReload:
           if (TOp(I and $FF) = opCallV) or (TOp(I and $FF) = opNewV) then
           begin
             { spread call: arguments array in R[A+2] -> registers }
+            if Tpl^.Loaded and not OpdArray(R[A + 2]) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
             O := ObjOf(R[A + 2]);
             Argc := ArrayLen(O);
             if Fr^.Base + A + 2 + Argc + 4 >= STACK_MAX then
@@ -9206,6 +9302,7 @@ LReload:
         begin
           if TOp(I and $FF) = opSuperCallV then
           begin
+            if Tpl^.Loaded and not OpdArray(R[A + 2]) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
             O := ObjOf(R[A + 2]);
             Argc := ArrayLen(O);
             { the arguments go to the registers past R[A + 1]: as many as the value stack holds (opCallV's check) }
@@ -9311,16 +9408,22 @@ LReload:
             for J := 0 to B - 1 do O^.Elements^.Data[J] := R[C + J];
           R[A] := MkPtr(O);
         end;
-      opArrPush: ArrayPush(ObjOf(R[A]), R[(I shr 24) and $FFFF]);
-      opArrHole: ArrayPush(ObjOf(R[A]), VHole);
+      opArrPush, opArrHole:
+        begin
+          if Tpl^.Loaded and not OpdPushArray(R[A]) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
+          if TOp(I and $FF) = opArrPush then ArrayPush(ObjOf(R[A]), R[(I shr 24) and $FFFF])
+          else ArrayPush(ObjOf(R[A]), VHole);
+        end;
       opArrSpread:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not OpdPushArray(R[A]) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           if not SpreadIntoArray(R[A], R[(I shr 24) and $FFFF]) then goto LThrow;
         end;
       opObjSpread, opCopyDataProps:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not (((I shr 40) = 0) or OpdArray(R[(I shr 40) - 1])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           if (I shr 40) <> 0 then
           begin
             { an object rest: the keys in the array R[C - 1] excluded }
@@ -9368,11 +9471,13 @@ LReload:
         end;
       opMakeModCell:
         begin
+          if Tpl^.Loaded and not (OpdModCells(R[(I shr 24) and $FFFF], I shr 40)) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           V := FindOrOpenUpval(Fr^.Base + A);
           ValueArrayStore(ObjOf(R[(I shr 24) and $FFFF])^.Elements, I shr 40, V);
         end;
       opModGet:
         begin
+          if Tpl^.Loaded and not (OpdModCells(R[(I shr 24) and $FFFF], I shr 40)) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           V := ObjOf(R[(I shr 24) and $FFFF])^.Elements^.Data[I shr 40];
           if IsPtr(V) then
           begin
@@ -9414,11 +9519,13 @@ LReload:
       opSetProtoLit:
         begin
           V := R[(I shr 24) and $FFFF];
+          if Tpl^.Loaded and (IsObject(V) or (V = VNull)) and not OpdLiteralProto(R[A], V) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           if IsObject(V) or (V = VNull) then SetProto(ObjOf(R[A]), V);
         end;
       opDefProp:
         begin
           Key := PStr(PtrOf(K[I shr 40]));
+          if Tpl^.Loaded and not OpdDefineTarget(R[A], Key) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           O := ObjOf(R[A]);
           V := R[(I shr 24) and $FFFF];
           CI := ShapeLookup(O^.Shape, Key);
@@ -9429,6 +9536,7 @@ LReload:
       opDefPropC:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not IsObject(R[A]) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           VB := R[(I shr 24) and $FFFF];
           if IsInt(VB) and (ObjOf(R[A])^.OKind = okArray) then
           begin
@@ -9436,12 +9544,15 @@ LReload:
             Continue;
           end;
           if not ToPropKey(VB, Key) then goto LThrow;
+          if Tpl^.Loaded and not OpdDefineTarget(R[A], Key) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           DefineOwn(R[A], Key, R[I shr 40], pfDefault);
         end;
       opDefMethod:
         begin
           Key := PStr(PtrOf(K[I shr 40]));
           V := R[(I shr 24) and $FFFF];
+          { a method closure, or a tagged template's raw strings array (an array has no Aux1 of its own) }
+          if Tpl^.Loaded and not (OpdDefineTarget(R[A], Key) and (OpdClosure(V) or OpdArray(V))) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           ObjOf(V)^.Aux1 := R[A];
           WriteBarrier(@ObjOf(V)^.Hdr, R[A]);
           DefineOwn(R[A], Key, V, pfHidden);
@@ -9452,6 +9563,7 @@ LReload:
           B := (I shr 24) and $FFFF;
           Bool := (B and $8000) <> 0;
           B := B and $7FFF;
+          if Tpl^.Loaded and not (OpdDefineTarget(R[A], Key) and OpdClosure(R[B])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           V := R[B];
           ObjOf(V)^.Aux1 := R[A];
           WriteBarrier(@ObjOf(V)^.Hdr, R[A]);
@@ -9502,6 +9614,7 @@ LReload:
       opClassSetup:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not (OpdClassCtor(R[A])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           { R[A] constructor closure, R[B] parent (C = 1 when derived) }
           VB := R[(I shr 24) and $FFFF];
           if (I shr 40) = 1 then
@@ -9536,6 +9649,7 @@ LReload:
         end;
       opClassField:
         begin
+          if Tpl^.Loaded and not (OpdClosure(R[A]) and OpdClosure(R[(I shr 24) and $FFFF])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           V := R[(I shr 24) and $FFFF];
           ObjOf(V)^.Aux1 := ObjOf(R[A])^.Aux1;
           DefineOwn(R[A], AtomFieldInit, V, 0);
@@ -9698,6 +9812,7 @@ LReload:
       opSuperCallUp:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not (IsObject(R[A])) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           Argc := (I shr 24) and $FFFF;
           VA := ObjOf(R[A])^.Shape^.Proto;
           if not IsConstructorV(VA) then begin ThrowTypeError('Super constructor is not a constructor'); goto LThrow; end;
@@ -9908,6 +10023,7 @@ LReload:
       opSetFnName:
         begin
           Fr^.PC := PC;
+          if Tpl^.Loaded and not (OpdDefineTarget(R[A], AtomName)) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           if not ToPropKey(R[(I shr 24) and $FFFF], Key) then goto LThrow;
           case I shr 40 of
             1: SetFnNameFromKey(R[A], Key, 'get');
@@ -10099,9 +10215,11 @@ LReload:
         begin
           Fr^.PC := PC;
           V := R[(I shr 24) and $FFFF];
+          if Tpl^.Loaded and not (IsObject(R[A]) and OpdClosure(V)) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           ObjOf(V)^.Aux1 := R[A];
           WriteBarrier(@ObjOf(V)^.Hdr, R[A]);
           if not ToPropKey(R[I shr 40], Key) then goto LThrow;
+          if Tpl^.Loaded and not OpdDefineTarget(R[A], Key) then begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           { DefineMethodProperty: DefinePropertyOrThrow fails on a non-configurable own property (a class's prototype) }
           CI := ShapeLookup(ObjOf(R[A])^.Shape, Key);
           if (CI >= 0) and ((ObjOf(R[A])^.Shape^.PFlags[CI] and pfConfigurable) = 0) then
@@ -10115,6 +10233,8 @@ LReload:
         begin
           Fr^.PC := PC;
           if not ToPropKey(R[I shr 40], Key) then goto LThrow;
+          if Tpl^.Loaded and not (OpdDefineTarget(R[A], Key) and OpdClosure(R[((I shr 24) and $FFFF) and $7FFF])) then
+            begin Fr^.PC := PC; XBadOperand; goto LThrow; end;
           CI := ShapeLookup(ObjOf(R[A])^.Shape, Key);
           if (CI >= 0) and ((ObjOf(R[A])^.Shape^.PFlags[CI] and pfConfigurable) = 0) then
           begin

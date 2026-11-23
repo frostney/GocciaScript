@@ -4674,6 +4674,8 @@ begin
       if (InsOp(T^.Code[Q]) = opRet) and (InsA(T^.Code[Q]) <> 0) then Exit;
   end
   else if T^.IsClassCtor then Exit;
+  { a bytecode file's code with instructions that trust a register's kind: those run checked, in the interpreter }
+  if T^.Trusting or ((T^.FieldInit <> nil) and T^.FieldInit^.Trusting) then Exit;
   for Q := 0 to T^.CodeLen - 1 do
     if not OInlOk(InsOp(T^.Code[Q])) then Exit;
   Result := True;

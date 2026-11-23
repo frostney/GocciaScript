@@ -772,8 +772,45 @@ begin
   for I := 0 to High(A.Info.IndirectExports) do Slot(A.Info.IndirectExports[I].Slot);
 end;
 
+var
+  ScrambleSeed: Int64 = -1;   { G2_ARTIFACT_SCRAMBLE: -1 not read yet, 0 off }
+
+{ G2_ARTIFACT_SCRAMBLE=<seed> (a test of the checks, never for real files): before verifying, about one
+  instruction in eight of every template gets its A, B or C replaced by another register of the template, so the
+  code passes the verifier while registers hold kinds the instructions do not expect }
+procedure Scramble(T: PFuncTemplate);
+var I, Field, V: Integer; Ins_: QWord; Op: TOp;
+  function Rnd(N: Integer): Integer;
+  begin
+    {$PUSH}{$OVERFLOWCHECKS OFF}{$RANGECHECKS OFF}
+    ScrambleSeed := ScrambleSeed * 6364136223846793005 + 1442695040888963407;
+    {$POP}
+    Result := Integer((QWord(ScrambleSeed) shr 33) mod QWord(N));
+  end;
+begin
+  if T^.MaxRegs > 0 then
+    for I := 0 to T^.CodeLen - 1 do
+      if Rnd(8) = 0 then
+      begin
+        Ins_ := T^.Code[I];
+        Op := InsOp(Ins_);
+        if Op in [opJmp, opJT, opJF, opJNullish, opJNotNullish, opJUndef, opJNotUndef, opJNLt, opJNLe, opJNGt, opJNGe,
+          opJNSEq, opJSEq, opIterNext, opIterUnpack, opAsyncIterReturn, opTry, opTemplateObj] then Continue;
+        V := Rnd(T^.MaxRegs);
+        Field := Rnd(3);
+        case Field of
+          0: T^.Code[I] := Ins(Op, V, InsB(Ins_), InsCU(Ins_));
+          1: T^.Code[I] := Ins(Op, InsA(Ins_), V, InsCU(Ins_));
+        else T^.Code[I] := Ins(Op, InsA(Ins_), InsB(Ins_), V);
+        end;
+      end;
+  for I := 0 to High(T^.Children) do Scramble(T^.Children[I]);
+end;
+
 procedure VerifyArtifact(const A: TG2Artifact);
 begin
+  if ScrambleSeed < 0 then ScrambleSeed := StrToInt64Def(GetEnvironmentVariable('G2_ARTIFACT_SCRAMBLE'), 0);
+  if ScrambleSeed > 0 then Scramble(A.Top);
   VerifyModuleInfo(A);
   VerifyTree(A.Top, nil, True);
 end;

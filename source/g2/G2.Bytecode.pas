@@ -236,6 +236,11 @@ type
                            function profile's index + 1 }
     ProfSuspends: Byte;  { G2.Profile's: 0 not seen yet, 1 the code has an opGenStart (a call only creates the
                            generator or async state, its resumptions run the body), 2 not }
+    { read from a bytecode file (G2.Artifact): its instructions that trust a register's kind check it (G2.VM's
+      Opd* checks in Execute); FastLoop and the baseline JIT hand them to Execute, the optimizing tier leaves the
+      template alone when it has one (Trusting) }
+    Loaded: Boolean;
+    Trusting: Boolean;
   end;
 
 function Ins(Op: TOp; A, B: Integer; C: Integer): QWord; inline;

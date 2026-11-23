@@ -10,6 +10,11 @@
   kept), and a direct eval's caller description is parsed and bounded here. }
 
 const
+  { the instructions that trust a register's kind (G2.VM's Opd* checks) }
+  KIND_TRUSTING_OPS = [opArrPush, opArrHole, opArrSpread, opCallV, opNewV, opSuperCallV, opObjSpread, opCopyDataProps,
+    opDefProp, opDefPropC, opDefMethod, opDefMethodC, opDefGetter, opDefSetter, opDefGetterC, opDefSetterC,
+    opDefField, opDefFieldC, opSetProtoLit, opSetFnName, opSetHome, opClassSetup, opClassField, opSuperCallUp,
+    opGetPriv, opSetPriv, opDefPrivField, opAddPriv, opPrivIn, opModGet, opMakeModCell];
   { an object literal's inline slots (the compiler asks for at most 60) }
   MAX_NEWOBJ_HINT = 64;
   { a handler PC is packed with its kind into an int32 at a suspension (PC or Kind shl 28) }
@@ -157,6 +162,8 @@ begin
     Reject(T, -1, 'class constructor that is an arrow, a generator or async');
   if T^.IsAsync and not T^.IsGenerator and ((T^.AsyncReg < 0) or (T^.AsyncReg >= T^.MaxRegs)) then
     Reject(T, -1, 'async function without its promise register');
+  T^.Loaded := True;
+  T^.Trusting := False;
   N := 0;
   DeclSeen := False;
   for PC := 0 to T^.CodeLen - 1 do
@@ -338,6 +345,7 @@ begin
       Inc(N);
       if not T^.IsGenerator then Bad('generator start outside a generator');
     end;
+    if Op in KIND_TRUSTING_OPS then T^.Trusting := True;
     { a suspension keeps every register (its live count, a compiler proof, becomes 0: all of them) }
     if Op in [opYield, opAwait, opYieldStar, opYieldStarAsync, opGenStart] then
       T^.Code[PC] := Ins(Op, A, B, 0);
