@@ -9208,6 +9208,11 @@ LReload:
           begin
             O := ObjOf(R[A + 2]);
             Argc := ArrayLen(O);
+            { the arguments go to the registers past R[A + 1]: as many as the value stack holds (opCallV's check) }
+            if Fr^.Base + A + 2 + Argc + 4 >= STACK_MAX then
+            begin
+              Fr^.PC := PC; ThrowError('RangeError', 'Maximum call stack size exceeded'); goto LThrow;
+            end;
             for J := 0 to Argc - 1 do
             begin
               V := O^.Elements^.Data[J];
