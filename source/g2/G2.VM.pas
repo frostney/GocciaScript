@@ -523,7 +523,7 @@ procedure InlinedFrame(I, J: Integer; out Closure: TValue; out Tpl: PFuncTemplat
 implementation
 
 uses
-  {$IFDEF LINUX}Syscall, {$ENDIF}Classes, Goccia.StackLimit, Goccia.Coverage, Goccia.Error.Messages,
+  {$IFDEF LINUX}Syscall, {$ENDIF}Classes, NumericText, Goccia.StackLimit, Goccia.Coverage, Goccia.Error.Messages,
   Goccia.Error.Suggestions;
 
 { ---------------- execution limits ---------------- }
@@ -2738,7 +2738,9 @@ begin
   C := StrChars(Key)[0];
   if not ((C = '-') or ((C >= '0') and (C <= '9')) or (C = 'I') or (C = 'N')) then Exit;
   if StrToUnicode(Key) = '-0' then Exit(True);
-  Result := StrToUnicode(StrOf(NumberToStr(PrimitiveToNumber(MkPtr(Key))))) = StrToUnicode(Key);
+  { CanonicalNumericIndexString: ToString(ToNumber(Key)) = Key, through a Pascal string: nothing here allocates
+    on the heap, so the callers' object pointers stay valid across it }
+  Result := UnicodeString(NumericText.NumberToString(PrimitiveToNumber(MkPtr(Key)))) = StrToUnicode(Key);
 end;
 
 function TAStoreValue(O: TValue; Idx: Int64; V: TValue): Boolean;
