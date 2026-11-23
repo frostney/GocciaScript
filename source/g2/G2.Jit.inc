@@ -4141,7 +4141,14 @@ begin
   JB($41); JB($0F); JB($B7); JB($D6);                              { movzx edx, r14w: Argc }
   AluRR($01, jCX, jDX, True);
   AluRI(0, jCX, 2, True);
-  Mov32FsR(JitFsStackTop, jCX);                                    { Base + A + 2 + Argc }
+  { StackTop: the arguments' end, never below what it was. (The interpreter's XFastNative lowers it there and
+    clears the caller's registers past it when the call collected, ClearDeadAfterNative; lowered here without
+    that, a collection in the native skipped them, and the stale pointers they kept were scanned again once a
+    frame pushed StackTop back over them.) }
+  Mov32RFs(jDX, JitFsStackTop);
+  AluRR($39, jCX, jDX, False);                                     { cmp ecx, edx }
+  JRex(False, jCX, 0, jDX); JB($0F); JB($4C); JModRR(jCX, jDX);    { cmovl ecx, edx }
+  Mov32FsR(JitFsStackTop, jCX);
   Mov32RM(jCX, jAX, PtrInt(@PObj(nil)^.Pad));
   AluRI(4, jCX, $FFFFFF, False);
   Mov32FsR(JitFsNativeData, jCX);
