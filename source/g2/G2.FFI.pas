@@ -1741,9 +1741,12 @@ end;
 { ---------------- install / teardown ---------------- }
 
 procedure DefineTag(O: TValue; const Tag: UnicodeString);
+var S: TValue;
 begin
   PushRoot(O);
-  DefineOwn(RootAt(TempTop - 1), SymKey(SymToStringTagW), StrFromUnicode(Tag), pfConfigurable);
+  { the string first: the object is read from its root after the allocation, whatever order the arguments take }
+  S := StrFromUnicode(Tag);
+  DefineOwn(RootAt(TempTop - 1), SymKey(SymToStringTagW), S, pfConfigurable);
   PopRoots(1);
 end;
 

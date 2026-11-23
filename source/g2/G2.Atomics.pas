@@ -594,13 +594,16 @@ begin
   Result := True;
 end;
 
+{ Obj is read again from a root after each allocation (a new realm's prototype is young and moves) }
 procedure Getter(Obj: TValue; const Name: UnicodeString; Fn: TNativeFn);
-var G: TValue;
+var A: TValue; K: PStr;
 begin
-  G := NewNativeFunction(Fn, 'get ' + Name, 0);
-  PushRoot(G);
-  DefineOwn(Obj, AtomOf(Name), MkPtr(NewAccessor(RootAt(TempTop - 1), VUndefined)), pfAccessor or pfConfigurable);
-  PopRoots(1);
+  PushRoot(Obj);
+  PushRoot(NewNativeFunction(Fn, 'get ' + Name, 0));
+  A := MkPtr(NewAccessor(RootAt(TempTop - 1), VUndefined));
+  K := AtomOf(Name);
+  DefineOwn(RootAt(TempTop - 2), K, A, pfAccessor or pfConfigurable);
+  PopRoots(2);
 end;
 
 procedure InitAtomics;
