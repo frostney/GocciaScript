@@ -41,7 +41,10 @@ jobs:
   # harness still sweeps the seeds and replays findings; the two builds come
   # from the same source with the same checks (-Ct -Cr -Sa).
   fuzz:
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04's afl++ (4.09c) still has afl-as, which scripts/afl/as
+    # hands FPC's assembly to; AFL++ removed it in 4.30c, and ubuntu-latest
+    # (26.04) ships 5.03c.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -218,7 +221,10 @@ jobs:
   # and a reader refuses another build's, so the harness writes its own
   # seeds rather than taking them from the repository.
   fuzz-heap-snapshot:
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04's afl++ (4.09c) still has afl-as, which scripts/afl/as
+    # hands FPC's assembly to; AFL++ removed it in 4.30c, and ubuntu-latest
+    # (26.04) ships 5.03c.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -521,8 +527,15 @@ jobs:
         run: |
           # HEAPTRC halt-on-error would abort mid-suite; capture and inspect
           # the summary instead so a leak reports alongside the test results.
-          ./build/GocciaTestRunnerHeaptrc -P tests 2> build/heaptrc.log
+          # log= writes it to a file of heaptrc's own: FPC 3.3.1's heaptrc
+          # leaves its report unflushed when stderr is a regular file, so a
+          # 2> redirect captures nothing.
+          HEAPTRC="log=build/heaptrc.log" ./build/GocciaTestRunnerHeaptrc -P tests
           tail -20 build/heaptrc.log
+          if ! grep -qE '^[0-9]+ unfreed memory blocks' build/heaptrc.log; then
+            echo "::error::heaptrc wrote no summary"
+            exit 1
+          fi
           if grep -qE '[1-9][0-9]* unfreed memory blocks' build/heaptrc.log; then
             echo "::error::heaptrc reported unfreed blocks"
             exit 1
@@ -611,7 +624,8 @@ jobs:
             build/compiled/targets/gcstress-memcheck
           fpc @config.cfg -gh -gl -FUbuild/compiled/targets/gcstress-heaptrc \
             -obuild/GCStressHeaptrc source/units/Goccia.GCStress.Test.pas
-          ./build/GCStressHeaptrc 2> build/gc-stress-heaptrc.log
+          # log=: see "Run suite under heaptrc".
+          HEAPTRC="log=build/gc-stress-heaptrc.log" ./build/GCStressHeaptrc
           tail -5 build/gc-stress-heaptrc.log
           if ! grep -qE '^0 unfreed memory blocks' build/gc-stress-heaptrc.log; then
             echo "::error::heaptrc reported unfreed blocks after the GC stress test"

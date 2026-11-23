@@ -339,8 +339,9 @@ TEST262_PATH=../test262 bun run scripts/build-fuzz-corpus.ts
 ### Fuzzing locally
 
 AFL++ needs a coverage-instrumented harness, and FPC has no AFL compiler, so
-the instrumentation comes from the assembler. On x86-64 Linux with AFL++
-installed (`afl++` on Debian and Ubuntu):
+the instrumentation comes from the assembler. On x86-64 Linux with an AFL++
+older than 4.30c installed, which still has `afl-as` (Ubuntu 24.04's `afl++`
+is 4.09c; CI's fuzz jobs run there for this):
 
 ```bash
 mkdir -p build/compiled/targets/fuzzharness-afl
