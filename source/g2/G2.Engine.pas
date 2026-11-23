@@ -16,8 +16,12 @@ interface
 uses
   SysUtils, Classes, Math, G2.Core, G2.Bytecode, G2.VM;
 
-{ builds this thread's engine: heap, VM, builtins and the JS preludes }
-procedure EngineInit(NurseryBytes: SizeInt = 8 * 1024 * 1024);
+var
+  { the nursery an engine gets when its host names none (TG2Engine, EngineInit without one): a host's GC stress
+    setting (g2 --test with G2_NURSERY_KB) }
+  EngineNurseryBytes: SizeInt = 8 * 1024 * 1024;
+{ builds this thread's engine: heap, VM, builtins and the JS preludes; NurseryBytes 0 EngineNurseryBytes }
+procedure EngineInit(NurseryBytes: SizeInt = 0);
 { a realm's intrinsics and global object (the builtins' Init procedures, after HeapInit and VMInit) }
 procedure InitIntrinsics;
 { frees this thread's engine; values, templates and closures from it are invalid afterwards }
@@ -38,6 +42,7 @@ begin
   { JS arithmetic produces NaN and Infinity instead of trapping; the masks are per thread, and a new thread
     starts with the exceptions enabled }
   SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision]);
+  if NurseryBytes <= 0 then NurseryBytes := EngineNurseryBytes;
   HeapInit(NurseryBytes);
   VMInit;
   InitIntrinsics;

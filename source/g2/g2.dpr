@@ -734,6 +734,9 @@ begin
   SrcText := DecodeSource(Raw);
   Raw := '';
   T1 := GetTickCount64;
+  { G2_NURSERY_KB: GC stress for a test file's engine too (scripts/g2/gcstress-tests.py) }
+  if GetEnvironmentVariable('G2_NURSERY_KB') <> '' then
+    EngineNurseryBytes := StrToInt(GetEnvironmentVariable('G2_NURSERY_KB')) * 1024;
   if TestMode then RunTestFile(FileName, SrcText);
   { the functions the pre-parse finds eligible are compiled on their first call (G2.Lazy); G2_LAZY=0 compiles
     everything now }

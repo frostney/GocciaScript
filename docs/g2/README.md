@@ -335,8 +335,13 @@ G2_QJS=/path/to/qjs G2_WT_DIR=... G2_JS_DIR=... scripts/g2/wallclock.sh build/g2
 ```
 
 `gate.sh` writes `build/g2/gate/NEW.json` and compares it with `BASE.json`; `gcstress.sh` runs every bundle
-with a 256 KB nursery and `--gc-verify`. The digest bundles print `DIGEST n:hash` of each workload's result;
-`scripts/g2/digests.txt` holds the expected lines.
+with a 256 KB nursery and `--gc-verify`, the scripts in `scripts/g2/regress` (a first line
+`// g2-flags: ...` adds flags), and `scripts/g2/gcstress-tests.py`. That script runs every file under `tests/`
+through `g2 --test` twice: plain, and with a 16 KB nursery (`G2_NURSERY_KB`) and `--gc-verify`. It reports
+a file whose totals differ, or whose stressed run crashes, as `BAD`. A stressed run past 600 s is reported as
+`TIMEOUT`, not a failure: the deep-chain tests under `tests/built-ins/Goccia/gc` verify a large heap at
+every collection. The digest bundles print `DIGEST n:hash` of each workload's result; `scripts/g2/digests.txt`
+holds the expected lines.
 
 ## Changes to Goccia's front end
 
