@@ -42,6 +42,12 @@ check getter --timeout=200 "$T" 'try { JSON.stringify({ get x() { for (;;) {} } 
 printf '%s\n' 'const f = () => Promise.resolve().then(f); f();' > "$D/race.js"
 race=$(seq 1 200 | xargs -P 16 -I{} sh -c "timeout 20 \"$G2\" --timeout=50 \"$D/race.js\" > /dev/null 2>&1; echo \$?" | grep -cv '^1$')
 [ "$race" -eq 0 ] || { echo "FAIL timeout-race: $race of 200 runs did not abort"; fails=$((fails + 1)); }
+# BigInt work whose time grows faster than its operands stops at the deadline: multiplication, division and radix
+# conversion of a value of a few million bits, and parsing a long digit string
+check big-square --timeout=200 "$T" 'let b = 3n; for (;;) b = b * b + 1n;'
+check big-divide --timeout=200 "$T" 'const b = 3n ** 3000000n; for (;;) b / (b >> 4000000n);'
+check big-string --timeout=200 "$T" 'String(7n ** 3000000n);'
+check big-parse --timeout=200 "$T" 'BigInt("7".repeat(3000000));'
 check under-timeout --timeout=5000 '499999500000' 'let s = 0; for (let i = 0; i < 1e6; i++) s += i; console.log(s);'
 
 I='Fatal error: Execution exceeded instruction limit of 1000'

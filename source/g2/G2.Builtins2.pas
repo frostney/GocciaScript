@@ -141,7 +141,8 @@ begin
   else Radix := 10;
   Res := StrFromUnicode(BigToString(RootAt(TempTop - 1), Radix));
   PopRoots(1);
-  Result := True;
+  { the conversion stops at a spent limit (TBigInteger's abort check) }
+  Result := PollInterrupt;
 end;
 
 { 21.2.3.4 valueOf, 21.2.3.2 toLocaleString }
@@ -155,7 +156,7 @@ var B: TValue;
 begin
   if not ThisBig(Args[0], B) then Exit(False);
   Res := StrFromUnicode(BigToString(B, 10));
-  Result := True;
+  Result := PollInterrupt;
 end;
 
 { ---------------- ArrayBuffer ---------------- }

@@ -320,6 +320,8 @@ function PollInterrupt: Boolean; inline;
 const
   { the longest string a native builder makes (V8's String::kMaxLength): longer is RangeError 'Invalid string length' }
   MAX_STRING_LENGTH = 536870888;
+  { the most bits a BigInt has (V8's BigInt::kMaxLengthBits): more is RangeError 'Maximum BigInt size exceeded' }
+  MAX_BIGINT_BITS = 1 shl 30;
 function BindGlobalImport(Key: PStr; Cell: TValue): Boolean;
 function GLexIsConst(I: Integer): Boolean;
 { 7.2.4 IsConstructor }
@@ -2716,6 +2718,9 @@ begin
     if D >= Radix then Exit;
     R := R.Multiply(TBigInteger.FromInt64(Radix)).Add(TBigInteger.FromInt64(D));
     Inc(I);
+    { each digit costs the length of the value so far: a long string stops at a spent limit, False as for no
+      literal, and the caller polls before it reads False as one }
+    if ((I and 255) = 0) and (Interrupt <> 0) then Exit;
   end;
   if Neg then R := R.Negate;
   B := BigToValue(R);
@@ -2736,7 +2741,10 @@ begin
   if IsString(V) then
   begin
     if not StringToBigIntV(StrToUnicode(StrOf(V)), B) then
+    begin
+      if not PollInterrupt then Exit(False);
       Exit(ThrowError('SyntaxError', 'Cannot convert ' + StrToUnicode(StrOf(V)) + ' to a BigInt'));
+    end;
     Exit(True);
   end;
   if IsNumber(V) then Exit(ThrowTypeError('Cannot convert a Number to a BigInt'));
@@ -3321,7 +3329,8 @@ begin
   end;
   if IsPtr(V) and (PCell(PtrOf(V))^.Kind = ckSymbol) then
     Exit(ThrowTypeError('Cannot convert a Symbol value to a string'));
-  if IsBigInt(V) then begin Res := StrFromUnicode(BigToString(V)); Exit(True); end;
+  { the conversion stops at a spent limit (TBigInteger's abort check) }
+  if IsBigInt(V) then begin Res := StrFromUnicode(BigToString(V)); Exit(PollInterrupt); end;
   if not ToPrimitiveV(V, True, P) then Exit(False);
   Result := ToStringV(P, Res);
 end;
@@ -3389,7 +3398,11 @@ var B: TValue;
 begin
   PushRoot(Big);
   Result := True;
-  if not StringToBigIntV(StrToUnicode(StrOf(S)), B) then Res := False
+  if not StringToBigIntV(StrToUnicode(StrOf(S)), B) then
+  begin
+    Res := False;
+    Result := PollInterrupt;
+  end
   else Res := BigEquals(RootAt(TempTop - 1), B);
   PopRoots(1);
 end;
@@ -5174,6 +5187,72 @@ begin
   Result := True;
 end;
 
+{ TBigInteger's abort check: a limit is spent (the deadline, the instruction budget, the memory ceiling, a host's
+  abort), so the operation can stop; BigArith then polls and aborts }
+function BigAbortCheck: Boolean;
+begin
+  Result := Interrupt <> 0;
+end;
+
+function BigTooLarge: Boolean;
+begin
+  Result := ThrowError('RangeError', 'Maximum BigInt size exceeded');
+end;
+
+{ X shifted left by Count bits (right when Left is False), Count any BigInt: a negative count shifts the other way
+  (6.1.6.2.9 BigInt::leftShift, 6.1.6.2.10 BigInt::signedRightShift). A count past MAX_BIGINT_BITS shifts every bit
+  out to the right (0, or -1 for a negative X) and to the left makes a BigInt too large, without a count that only
+  fits in Int64 truncated to the 32 bits TBigInteger's shifts take }
+function BigShift(const X, Count: TBigInteger; Left: Boolean; var Z: TBigInteger): Boolean;
+var N: Int64;
+begin
+  Result := True;
+  if Count.IsNegative then Left := not Left;
+  if X.IsZero or Count.IsZero then begin Z := X; Exit; end;
+  if Count.BitLength > 40 then N := Int64(MAX_BIGINT_BITS) + 1 else N := Abs(Count.ToInt64);
+  if Left then
+  begin
+    if Int64(X.BitLength) + N > MAX_BIGINT_BITS then Exit(BigTooLarge);
+    Z := X.ShiftLeft(Integer(N));
+  end
+  else if N >= X.BitLength then
+  begin
+    if X.IsNegative then Z := TBigInteger.NegativeOne else Z := TBigInteger.Zero;
+  end
+  else
+    Z := X.ShiftRight(Integer(N));
+end;
+
+{ 6.1.6.2.3 BigInt::exponentiate of a non-negative exponent: a base of 0, 1 or -1 has its answer at once, any other
+  base past MAX_BIGINT_BITS bits of result is too large }
+function BigPower(const X, Y: TBigInteger; var Z: TBigInteger): Boolean;
+var M: TBigInteger;
+begin
+  Result := True;
+  if Y.IsZero then begin Z := TBigInteger.One; Exit; end;
+  if X.IsZero or X.IsOne then begin Z := X; Exit; end;
+  if X.IsMinusOne then
+  begin
+    if Y.GetBit(0) then Z := X else Z := TBigInteger.One;
+    Exit;
+  end;
+  { |X| >= 2: the result has at least (X.BitLength - 1) * Y + 1 bits }
+  if (Y.BitLength > 31) or ((Int64(X.BitLength) - 1) * Y.ToInt64 + 1 > MAX_BIGINT_BITS) then Exit(BigTooLarge);
+  M := X.AbsValue;
+  if M.Subtract(TBigInteger.One).BitwiseAnd(M).IsZero then
+  begin
+    { a power of two, 2^k: the result is 2^(k * Y), a shift, where repeated squaring takes time quadratic in it }
+    Z := TBigInteger.One.ShiftLeft(Integer((Int64(X.BitLength) - 1) * Y.ToInt64));
+    if X.IsNegative and Y.GetBit(0) then Z := Z.Negate;
+    Exit;
+  end;
+  Z := X.Power(Y);
+  if Z.BitLength > MAX_BIGINT_BITS then Exit(BigTooLarge);
+end;
+
+{ The BigInt arithmetic of 6.1.6.2. Multiplication, division and exponentiation take time that grows faster than
+  their operands, so TBigInteger asks the engine's limits as they go (BigAbortCheck): a run past its deadline stops
+  inside one, and its unfinished result is never stored }
 function BigArith(Op: TOp; A, B: TValue; var Res: TValue): Boolean;
 var X, Y, Z: TBigInteger;
 begin
@@ -5181,23 +5260,30 @@ begin
   X := ValueToBig(A); Y := ValueToBig(B);
   case Op of
     opSub: Z := X.Subtract(Y);
-    opMul: Z := X.Multiply(Y);
+    opMul:
+      begin
+        { the product has at least X.BitLength + Y.BitLength - 1 bits }
+        if not X.IsZero and not Y.IsZero and (Int64(X.BitLength) + Y.BitLength - 1 > MAX_BIGINT_BITS) then
+          Exit(BigTooLarge);
+        Z := X.Multiply(Y);
+      end;
     opDiv: begin if Y.IsZero then Exit(ThrowError('RangeError', 'Division by zero')); Z := X.Divide(Y); end;
     opMod: begin if Y.IsZero then Exit(ThrowError('RangeError', 'Division by zero')); Z := X.Modulo(Y); end;
     opPow:
       begin
         { 6.1.6.2.3 BigInt::exponentiate: a negative exponent is a RangeError }
         if Y.IsNegative then Exit(ThrowError('RangeError', 'Exponent must be non-negative'));
-        Z := X.Power(Y);
+        if not BigPower(X, Y, Z) then Exit(False);
       end;
     opBitAnd: Z := X.BitwiseAnd(Y);
     opBitOr: Z := X.BitwiseOr(Y);
     opBitXor: Z := X.BitwiseXor(Y);
-    opShl: Z := X.ShiftLeft(Y.ToInt64);
-    opShr: Z := X.ShiftRight(Y.ToInt64);
+    opShl: if not BigShift(X, Y, True, Z) then Exit(False);
+    opShr: if not BigShift(X, Y, False, Z) then Exit(False);
   else
     Exit(ThrowTypeError('BigInts have no unsigned right shift, use >> instead'));
   end;
+  if not PollInterrupt then Exit(False);
   Res := BigToValue(Z);
   Result := True;
 end;
@@ -5278,12 +5364,12 @@ begin
       PushRoot(PA); PushRoot(PB);
       if IsString(PA) then
       begin
-        if not StringToBigIntV(StrToUnicode(StrOf(PA)), V) then begin PopRoots(2); Res := 2; Exit(True); end;
+        if not StringToBigIntV(StrToUnicode(StrOf(PA)), V) then begin PopRoots(2); Res := 2; Exit(PollInterrupt); end;
         C := BigCompare(V, RootAt(TempTop - 1));
       end
       else
       begin
-        if not StringToBigIntV(StrToUnicode(StrOf(PB)), V) then begin PopRoots(2); Res := 2; Exit(True); end;
+        if not StringToBigIntV(StrToUnicode(StrOf(PB)), V) then begin PopRoots(2); Res := 2; Exit(PollInterrupt); end;
         C := BigCompare(RootAt(TempTop - 2), V);
       end;
       PopRoots(2);
@@ -10552,6 +10638,7 @@ begin
 end;
 
 initialization
+  BigIntegerAbortCheck := @BigAbortCheck;
   FreeJitStateHook := @FreeTemplateJitState;
   GCShapeSweepHook := @ForgetRetiredShapesVM;
   InitFastOps;

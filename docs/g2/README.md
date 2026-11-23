@@ -89,6 +89,13 @@ length bound, 536,870,888 code units, with `RangeError: Invalid string length`. 
 waiting for it to finish before `TThread.WaitFor`, which on the main thread polls in 100 ms steps: without that
 every bounded run took at least 100 ms.
 
+BigInt multiplication, division, exponentiation, radix conversion and parsing take time that grows faster than
+their operands, so `TBigInteger` asks the engine through `BigIntegerAbortCheck` as it goes: a spent limit stops the
+operation, and its caller polls and aborts before the unfinished value is used. A BigInt has at most 2^30 bits
+(V8's bound); a product, power or left shift past it is `RangeError: Maximum BigInt size exceeded`, decided from the
+operands' sizes before any work. A shift count of any size is exact: past the bound, a right shift leaves 0 or -1
+and a left shift of a nonzero value is that RangeError. A power of two raised to a power is a shift.
+
 Whatever the frame bound, a call that native code makes (a getter, a `toString`, a sort comparator, a generator's
 `next()`) nests the interpreter on the native stack, so it is refused with a `RangeError` once that stack runs low.
 
