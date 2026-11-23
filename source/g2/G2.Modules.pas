@@ -1083,7 +1083,8 @@ begin
 end;
 
 { GatherAsynchronousTransitiveDependencies: the modules with top-level await a deferred module's evaluation will
-  need, gathered depth first and stopping at each }
+  need, gathered depth first and stopping at each. Only the requests evaluation follows (EvalOrder): a source
+  phase import loads its module and never evaluates it (Source Phase Imports) }
 procedure GatherAsyncDeps(M: TModRec; Seen, Res: TList<TModRec>);
 var I: Integer;
 begin
@@ -1096,7 +1097,7 @@ begin
     if Res.IndexOf(M) < 0 then Res.Add(M);
     Exit;
   end;
-  for I := 0 to High(M.Deps) do GatherAsyncDeps(M.Deps[I], Seen, Res);
+  for I := 0 to High(M.Info.EvalOrder) do GatherAsyncDeps(DepOf(M, M.Info.EvalOrder[I].Req), Seen, Res);
 end;
 
 function AsyncDepsOf(M: TModRec): TList<TModRec>;
@@ -1122,8 +1123,9 @@ begin
   if SCCEvaluated(M) then Exit;
   if M.Status in [msEvaluating, msEvaluatingAsync] then Exit(False);
   if M.Info.HasTLA then Exit(False);
-  for I := 0 to High(M.Deps) do
-    if not ReadyForSync(M.Deps[I], Seen) then Exit(False);
+  { the requests evaluation follows: a source phase import's module is never evaluated }
+  for I := 0 to High(M.Info.EvalOrder) do
+    if not ReadyForSync(DepOf(M, M.Info.EvalOrder[I].Req), Seen) then Exit(False);
 end;
 
 { ExecuteModule of a module without top-level await: its function run to the end }
