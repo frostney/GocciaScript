@@ -4405,11 +4405,21 @@ begin
     StackTop := SavedTop;
     Exit;
   end;
+  { the arguments go to the value stack first, rooted: the prototype's lookup, the new object and the field
+    initializer allocate (and can run code), and Args may be an unrooted buffer or a heap array's elements
+    (Reflect.construct's list), which a collection moves }
+  SavedTop := StackTop;
+  ArgBase := StackTop;
+  if ArgBase + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
+  VStack[ArgBase] := VUndefined;
+  if Args <> nil then Move(Args^, VStack[ArgBase + 1], Argc * SizeOf(TValue));
+  StackTop := ArgBase + Argc + 1;
   PushRoot(F); PushRoot(NewTarget);
-  if not PrototypeForConstruct(NewTarget, Proto) then begin PopRoots(2); Exit(False); end;
+  if not PrototypeForConstruct(NewTarget, Proto) then begin PopRoots(2); StackTop := SavedTop; Exit(False); end;
   if not IsObject(Proto) and not DefaultConstructProto(RootAt(TempTop - 2), RootAt(TempTop - 1), Proto) then
   begin
     PopRoots(2);
+    StackTop := SavedTop;
     Exit(False);
   end;
   PushRoot(Proto);
@@ -4419,15 +4429,11 @@ begin
   if Assigned(T^.FieldInit) and not T^.IsDerived then
   begin
     PushRoot(F); PushRoot(NewTarget); PushRoot(MkPtr(ThisO));
-    if not RunFieldInit(F, MkPtr(ThisO)) then begin PopRoots(3); Exit(False); end;
+    if not RunFieldInit(F, MkPtr(ThisO)) then begin PopRoots(3); StackTop := SavedTop; Exit(False); end;
     ThisO := ObjOf(RootAt(TempTop - 1)); NewTarget := RootAt(TempTop - 2); F := RootAt(TempTop - 3);
     PopRoots(3);
   end;
-  SavedTop := StackTop;
-  ArgBase := StackTop;
   VStack[ArgBase] := MkPtr(ThisO);
-  if Args <> nil then Move(Args^, VStack[ArgBase + 1], Argc * SizeOf(TValue));
-  StackTop := ArgBase + Argc + 1;
   if ReentryTooDeep or
      not PushBytecodeFrame(ObjOf(F), VStack[ArgBase], @VStack[ArgBase + 1], Argc, ArgBase, 1, NewTarget) then
   begin
