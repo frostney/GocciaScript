@@ -969,6 +969,9 @@ begin
       CollectMajor;
     end;
     Result := AllocOld(Size, Kind);
+    { born old: the stores that fill it (a rest parameter's or an arguments array's elements, copied without a
+      write barrier as into a young cell) may put young values in it, so it starts remembered }
+    if (Kind = ckValueArray) or (Kind = ckObject) then Remember(Result);
     Inc(GCAllocatedBytes, Result^.Size);
     if HeapUsedBytes > GCPeakBytes then GCPeakBytes := HeapUsedBytes;
     { a cell the full collection could not make room for: the limit is spent (the run ends at its next back edge
