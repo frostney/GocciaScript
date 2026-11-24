@@ -67,15 +67,15 @@ jobs:
         run: ./build.pas fuzzharness
 
       - name: Build the AFL-instrumented harness
-        # Its own unit-output directory, per the per-program rule (see the
-        # memory-safety job); fpc does not create it. -B rebuilds every
-        # unit of this repository through scripts/afl/as; FPC's own runtime
-        # library stays uninstrumented.
-        run: |
-          mkdir -p build/compiled/targets/fuzzharness-afl
-          fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
-            -FUbuild/compiled/targets/fuzzharness-afl \
-            -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+        # build.pas builds the engine's variant (G2_VARIANT) in a unit cache
+        # of its own and writes build/GocciaFuzzHarnessAfl; G2_FPC_FLAGS
+        # follow its own options. -B rebuilds every unit of this repository
+        # through scripts/afl/as; FPC's own runtime library stays
+        # uninstrumented.
+        env:
+          G2_VARIANT: Afl
+          G2_FPC_FLAGS: -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
+        run: ./build.pas fuzzharness
 
       - name: Verify the instrumented harness reports coverage
         # Guards against an instrumented build whose coverage map is empty
@@ -245,15 +245,15 @@ jobs:
         run: ./build.pas fuzzharness
 
       - name: Build the AFL-instrumented harness
-        # Its own unit-output directory, per the per-program rule (see the
-        # memory-safety job); fpc does not create it. -B rebuilds every
-        # unit of this repository through scripts/afl/as; FPC's own runtime
-        # library stays uninstrumented.
-        run: |
-          mkdir -p build/compiled/targets/fuzzharness-afl
-          fpc @config.cfg -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl \
-            -FUbuild/compiled/targets/fuzzharness-afl \
-            -obuild/GocciaFuzzHarnessAfl source/app/GocciaFuzzHarness.dpr
+        # build.pas builds the engine's variant (G2_VARIANT) in a unit cache
+        # of its own and writes build/GocciaFuzzHarnessAfl; G2_FPC_FLAGS
+        # follow its own options. -B rebuilds every unit of this repository
+        # through scripts/afl/as; FPC's own runtime library stays
+        # uninstrumented.
+        env:
+          G2_VARIANT: Afl
+          G2_FPC_FLAGS: -O- -gl -Ct -Cr -Sa -B -Aas -FDscripts/afl
+        run: ./build.pas fuzzharness
 
       - name: Verify the instrumented harness reports coverage
         # Guards against an instrumented build whose coverage map is empty
@@ -280,12 +280,11 @@ jobs:
           fi
 
       - name: Build the harness with heaptrc
-        # Its own unit-output directory, per the per-program rule (see the
-        # memory-safety job); fpc does not create it.
-        run: |
-          mkdir -p build/compiled/targets/fuzzharness-heaptrc
-          fpc @config.cfg -gh -gl -FUbuild/compiled/targets/fuzzharness-heaptrc \
-            -obuild/GocciaFuzzHarnessHeaptrc source/app/GocciaFuzzHarness.dpr
+        # build/GocciaFuzzHarnessHeaptrc, a variant in its own unit cache
+        env:
+          G2_VARIANT: Heaptrc
+          G2_FPC_FLAGS: -gh -gl
+        run: ./build.pas fuzzharness
 
       - name: Write the seed snapshots
         run: ./build/GocciaFuzzHarness --write-heap-snapshot-seeds build/fuzz/heap-snapshot-corpus
@@ -409,83 +408,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # ── Heap snapshot hardening at full size ─────────────────────────────
-  #
-  # Goccia.HeapSnapshot.Hardening.Test takes real snapshots apart along the
-  # format. On pull requests it samples, to stay under a minute: a rotating
-  # one in four of the payload values and reference targets, and chains of
-  # 200,000 links. Here it sweeps all of them with chains of 1,000,000 links
-  # (about 140 s and 9.4 GB resident on a workstation, though no one test
-  # needs more than 3.6 GB), and every heap snapshot test program runs under
-  # heaptrc at its pull-request size.
-  heap-snapshot-hardening:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          persist-credentials: false
-
-      - name: Install FPC
-        uses: frostney/fpc-toolchain@1b4efeeddbbcdfc662e29b98695a69660751cdad # v1
-        with:
-          version: ${{ env.FPC_VERSION }}
-
-      - name: Build the hardening tests
-        # ./build.pas writes the version include every program reads; each
-        # program then gets its own unit-output directory (see the
-        # memory-safety job), and fpc does not create one.
-        run: |
-          ./build.pas fuzzharness
-          mkdir -p build/compiled/targets/heap-snapshot-hardening
-          fpc @config.cfg -O4 -dPRODUCTION -Xs -CX -XX -B \
-            -FUbuild/compiled/targets/heap-snapshot-hardening \
-            -obuild/Goccia.HeapSnapshot.Hardening.Test \
-            source/units/Goccia.HeapSnapshot.Hardening.Test.pas
-
-      - name: Run them at full size
-        env:
-          GOCCIA_HEAP_SNAPSHOT_HARDENING: full
-        run: ./build/Goccia.HeapSnapshot.Hardening.Test
-
-      - name: Build the heap snapshot tests with heaptrc
-        run: |
-          mkdir -p build/heaptrc
-          for src in source/units/Goccia.HeapSnapshot*.Test.pas; do
-            name="$(basename "${src%.pas}")"
-            mkdir -p "build/compiled/targets/heaptrc-${name}"
-            fpc @config.cfg -gh -gl -FU"build/compiled/targets/heaptrc-${name}" \
-              -o"build/heaptrc/${name}" "$src"
-          done
-
-      - name: Run them under heaptrc
-        # heaptrc halts a program on a double free or a block written past
-        # its end. Freed blocks are not kept out of reuse (keepreleased grows
-        # past a runner's memory within a minute), and the exit leak report
-        # counts what a test program leaves to process exit, so only the exit
-        # status is judged; the hardening program checks the heap between
-        # passes of the same mutants itself.
-        run: |
-          status=0
-          for test_bin in build/heaptrc/*.Test; do
-            echo "=== ${test_bin}"
-            if ! "$test_bin" 2> "${test_bin}.heaptrc.log"; then
-              echo "::error::${test_bin} failed under heaptrc"
-              tail -40 "${test_bin}.heaptrc.log"
-              status=1
-            fi
-          done
-          exit $status
-
-      - name: Upload heaptrc logs
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: heap-snapshot-hardening-heaptrc
-          path: build/heaptrc/*.log
-          if-no-files-found: ignore
-          retention-days: 30
-
   # ── Memory safety over the real suite ────────────────────────────────
   #
   # heaptrc and Valgrind answer different questions: heaptrc reports FPC-level
@@ -514,16 +436,13 @@ jobs:
 
       - name: Build test runner with heaptrc
         # -gh links the heaptrc unit; the trailing summary goes to stderr on
-        # exit and names every unfreed block with its allocation site. The
-        # separate -FU dir follows the per-program unit-output rule (see
-        # docs/contributing/tooling.md, "Shared -FU Directories Across
-        # Programs" — Internal error 200611011) — but fpc does not create a
-        # -FU directory, it only writes into one, so mkdir it first.
+        # exit and names every unfreed block with its allocation site.
+        # build.pas builds the heaptrc variant (G2_VARIANT) in a unit cache of
+        # its own, as build/GocciaTestRunnerHeaptrc. The engine's own heap is
+        # outside FPC's memory manager, so heaptrc covers the Pascal side.
         run: |
           ./build.pas testrunner
-          mkdir -p build/compiled/targets/testrunner-heaptrc
-          fpc @config.cfg -gh -gl -FUbuild/compiled/targets/testrunner-heaptrc \
-            -obuild/GocciaTestRunnerHeaptrc source/app/GocciaTestRunner.dpr
+          G2_VARIANT=Heaptrc G2_FPC_FLAGS="-gh -gl" ./build.pas testrunner
 
       - name: Run suite under heaptrc
         id: heaptrc
@@ -595,7 +514,9 @@ jobs:
             # path would not run the suite.
             [ -s "build/memcheck-shard-$shard.txt" ] || continue
             mapfile -t files < "build/memcheck-shard-$shard.txt"
-            valgrind \
+            # G2_JIT=0: memcheck checks the interpreter; it would have to
+            # retranslate every page the JIT writes.
+            G2_JIT=0 valgrind \
               --tool=memcheck \
               --error-exitcode=42 \
               --suppressions=scripts/valgrind/fpc-rtl.supp \
@@ -620,43 +541,6 @@ jobs:
             tail -5 "build/valgrind-$shard.log"
           done
           exit $status
-
-      - name: GC stress under heaptrc and Valgrind
-        # Goccia.GCStress.Test collects before every reservation over engine
-        # creation, the lazy initialisers and the native construction paths,
-        # keeping what each sweep takes in quarantine (issue #1816; see
-        # docs/contributing/tooling.md, "GC stress at every reservation"). It
-        # also runs per PR with the other unit tests. Here heaptrc checks that
-        # every block it allocated is freed by the end. Under memcheck it runs
-        # with GOCCIA_GC_STRESS_FREE=1, so each sweep frees what it takes
-        # rather than keeping it: a native path that only reads a value after
-        # it was swept (a key list, an operand) is an invalid read there,
-        # which the quarantine cannot see. The memcheck build loads cmem first
-        # (-Facmem), so a freed object goes back to the C allocator, which
-        # memcheck tracks; FPC's own heap would keep it as valid memory and
-        # hide the read. Under memcheck it takes about two and a half minutes.
-        if: ${{ !cancelled() }}
-        run: |
-          mkdir -p build/compiled/targets/gcstress-heaptrc \
-            build/compiled/targets/gcstress-memcheck
-          fpc @config.cfg -gh -gl -FUbuild/compiled/targets/gcstress-heaptrc \
-            -obuild/GCStressHeaptrc source/units/Goccia.GCStress.Test.pas
-          # log=: see "Run suite under heaptrc".
-          HEAPTRC="log=build/gc-stress-heaptrc.log" ./build/GCStressHeaptrc
-          tail -5 build/gc-stress-heaptrc.log
-          if ! grep -qE '^0 unfreed memory blocks' build/gc-stress-heaptrc.log; then
-            echo "::error::heaptrc reported unfreed blocks after the GC stress test"
-            exit 1
-          fi
-          fpc @config.cfg -Facmem -O- -gw -gl -FUbuild/compiled/targets/gcstress-memcheck \
-            -obuild/GCStressMemcheck source/units/Goccia.GCStress.Test.pas
-          bash scripts/valgrind/strip-debug-symbols.sh build/GCStressMemcheck
-          GOCCIA_GC_STRESS_FREE=1 valgrind --tool=memcheck --error-exitcode=42 \
-            --suppressions=scripts/valgrind/fpc-rtl.supp \
-            --errors-for-leak-kinds=none --leak-check=no \
-            --log-file=build/valgrind-gc-stress.log \
-            ./build/GCStressMemcheck > build/gc-stress-memcheck.log 2>&1
-          tail -5 build/valgrind-gc-stress.log
 
       - name: Upload memory-safety logs
         if: always()

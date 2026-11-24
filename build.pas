@@ -924,48 +924,55 @@ end;
 { Builds ASource as a G2 program: the preludes generated, stage 1 compiled, its compiled preludes snapshot, and
   the program compiled again when the snapshot changed. A cross build (G2CrossBuild) makes the snapshot with a
   host build of the program (build/g2/host), then compiles the target once with it. }
+{ G2_VARIANT names a variant build of a program, such as fuzz.yml's AFL-instrumented or heaptrc harness: it goes
+  to AOutput followed by the name (build/GocciaFuzzHarnessAfl) and compiles in a unit cache of its own, since FPC
+  does not recompile a unit for new options; G2_FPC_FLAGS carries its compiler options }
 procedure BuildG2Program(const ASource, ATarget, AOutput: string);
 var
-  UnitDir, Output, HostOutput, TargetOutput: string;
+  UnitDir, Output, HostOutput, TargetOutput, Variant, Program_: string;
 begin
+  Variant := GetEnvironmentVariable('G2_VARIANT');
+  Program_ := AOutput + Variant;
   WriteLn('');
-  WriteLn('Building ', AOutput, ' (G2)...');
+  WriteLn('Building ', Program_, ' (G2)...');
   GenerateG2Preludes;
   EnsureG2Snapshot(ATarget);
   { its own unit cache per mode: G2 builds incrementally (no -B), and FPC does not recompile a unit for new options }
   UnitDir := TargetUnitOutputDirectory(ATarget);
   if BuildMode <> bmProd then
     UnitDir := UnitDir + '-dev';
+  if Variant <> '' then
+    UnitDir := UnitDir + '-' + LowerCase(Variant);
   if G2CrossBuild then
   begin
     ForceDirectories('build' + DirectorySeparator + 'g2' + DirectorySeparator + 'host');
     HostOutput := G2Executable('build' + DirectorySeparator + 'g2' + DirectorySeparator + 'host' +
-      DirectorySeparator + ExtractFileName(AOutput), True);
+      DirectorySeparator + ExtractFileName(Program_), True);
     if not CompileG2Program(ASource, UnitDir + '-host', HostOutput, ATarget, Output, True) then
       PrintBuildFailureAndExit(Output, HostOutput + ' build failed');
     SnapshotG2Preludes(HostOutput, ATarget);
     { the target's own unit cache: units compiled for another platform }
     UnitDir := UnitDir + '-' + LowerCase(GetEnvironmentVariable('FPC_TARGET_CPU')) + '-' +
       LowerCase(GetEnvironmentVariable('FPC_TARGET_OS'));
-    TargetOutput := G2Executable(AOutput, False);
+    TargetOutput := G2Executable(Program_, False);
     if not CompileG2Program(ASource, UnitDir, TargetOutput, ATarget, Output) then
       PrintBuildFailureAndExit(Output, TargetOutput + ' build failed');
     WriteLn(TargetOutput, ' built successfully');
     Exit;
   end;
-  if not CompileG2Program(ASource, UnitDir, AOutput, ATarget, Output) then
-    PrintBuildFailureAndExit(Output, AOutput + ' build failed');
+  if not CompileG2Program(ASource, UnitDir, Program_, ATarget, Output) then
+    PrintBuildFailureAndExit(Output, Program_ + ' build failed');
   CheckG2ThreadVarRelocations(UnitDir);
-  if SnapshotG2Preludes(AOutput, ATarget) then
+  if SnapshotG2Preludes(Program_, ATarget) then
   begin
     WriteLn('Prelude snapshot changed: compiling again with it');
     DeleteFile(UnitDir + DirectorySeparator + 'G2.Snapshot.ppu');
     DeleteFile(UnitDir + DirectorySeparator + 'G2.Snapshot.o');
-    if not CompileG2Program(ASource, UnitDir, AOutput, ATarget, Output) then
-      PrintBuildFailureAndExit(Output, AOutput + ' build failed');
+    if not CompileG2Program(ASource, UnitDir, Program_, ATarget, Output) then
+      PrintBuildFailureAndExit(Output, Program_ + ' build failed');
     CheckG2ThreadVarRelocations(UnitDir);
   end;
-  WriteLn(AOutput, ' built successfully');
+  WriteLn(Program_, ' built successfully');
 end;
 
 { native-TLS threadvars and the code generator fixes G2 needs are in fpc-toolchain's 3.3.1 builds }
