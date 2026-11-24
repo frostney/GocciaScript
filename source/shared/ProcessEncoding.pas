@@ -161,8 +161,13 @@ type
 const
   ICONV_FAILED = TIconv(-1);
   UTF16_NATIVE = {$IFDEF ENDIAN_LITTLE}'UTF-16LE'{$ELSE}'UTF-16BE'{$ENDIF};
-  { macOS keeps iconv in libiconv, not libc (cwstring, which this unit replaced, linked it with $linklib) }
+  { macOS keeps iconv in libiconv, not libc; naming it here does not make FPC link it there, so the $linklib
+    below does, as in cwstring, which this unit replaced }
   ICONV_LIBRARY = {$IFDEF DARWIN}'iconv'{$ELSE}'c'{$ENDIF};
+
+{$IFDEF DARWIN}
+  {$LINKLIB iconv}
+{$ENDIF}
 
 function iconv_open(ATo, AFrom: PAnsiChar): TIconv; cdecl; external ICONV_LIBRARY name 'iconv_open';
 function Iconv(ACd: TIconv; AIn: PPAnsiChar; AInLeft: psize_t; AOut: PPAnsiChar; AOutLeft: psize_t): size_t;
