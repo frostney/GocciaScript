@@ -4745,6 +4745,10 @@ begin
           except
             on E: Exception do
             begin
+              { The list is freed by the evaluation's finally below, which
+                a failure here never reaches: an import that does not
+                resolve, link or evaluate, or a stop. }
+              FreeAndNil(EntryRequestedModules);
               FModuleLoader.EndEvaluatingModulePath(EntryModule.Path);
               EntryModuleEvaluationStarted := False;
               FModuleLoader.FailEntryModule(EntryModule, E);

@@ -27,7 +27,9 @@ program Goccia.DefinePropertyOwnership.Test;
   every second N reaches each such point. Against the engine before ADR 0184
   every leaking range was two blocks wide or more. A memory manager wrapped
   around the default one tracks the blocks the worker allocates; any that are
-  still allocated once the worker's runtime has shut down leaked. }
+  still allocated once the worker's runtime has shut down leaked. The same
+  check runs an entry whose import does not resolve: a failure while the
+  entry's imports are evaluated frees what that evaluation set up. }
 
 {$I Goccia.inc}
 
@@ -84,6 +86,9 @@ const
     '  made.push(f, C, s, Object.fromEntries([["k" + i, i]]));' + LineEnding +
     '}' + LineEnding +
     'export const n = made.length;';
+  SCRIPT_UNRESOLVED_IMPORT =
+    'import { x } from "./missing.js";' + LineEnding +
+    'export const n = x;';
   { Every second allocation: see the header. }
   SWEEP_STRIDE = 2;
 
@@ -167,6 +172,7 @@ type
   private
     FAbortAtBlock: Int64;
     FInScript: Boolean;
+    FScript: string;
   protected
     procedure Execute; override;
   public
@@ -175,7 +181,8 @@ type
     { Anything else that ended the trial: a failure of the test itself. }
     Unexpected: Boolean;
     BlocksSeen: Int64;
-    constructor Create(const AAbortAtBlock: Int64; const AInScript: Boolean);
+    constructor Create(const AAbortAtBlock: Int64; const AInScript: Boolean;
+      const AScript: string = SCRIPT_DEFINITIONS);
   end;
 
   TEmbedderAbortTests = class(TTestSuite)
@@ -185,6 +192,7 @@ type
     procedure TestControlRunLeavesNothing;
     procedure TestAbortAnywhereInTheBuildLeavesNothing;
     procedure TestAbortAnywhereInAScriptLeavesNothing;
+    procedure TestUnresolvedImportLeavesNothing;
   public
     procedure SetupTests; override;
   end;
@@ -1114,10 +1122,11 @@ end;
 { TAbortAtRun }
 
 constructor TAbortAtRun.Create(const AAbortAtBlock: Int64;
-  const AInScript: Boolean);
+  const AInScript: Boolean; const AScript: string);
 begin
   FAbortAtBlock := AAbortAtBlock;
   FInScript := AInScript;
+  FScript := AScript;
   inherited Create(True);
 end;
 
@@ -1135,7 +1144,7 @@ begin
     Runtime := nil;
     try
       try
-        Source.Text := SCRIPT_DEFINITIONS;
+        Source.Text := FScript;
         // As a host that arms before it builds the engine. The count starts
         // where the phase the trial stops in starts: the build, or the run.
         Handle := CaptureAbortHandle;
@@ -1184,12 +1193,14 @@ begin
     TestAbortAnywhereInTheBuildLeavesNothing);
   Test('an abort anywhere in a script leaves no block behind',
     TestAbortAnywhereInAScriptLeavesNothing);
+  Test('a run whose import does not resolve leaves no block behind',
+    TestUnresolvedImportLeavesNothing);
 end;
 
 function RunOnce(const AAbortAtBlock: Int64; const AInScript: Boolean;
-  out ARun: TAbortAtRun): Int64;
+  out ARun: TAbortAtRun; const AScript: string = SCRIPT_DEFINITIONS): Int64;
 begin
-  ARun := TAbortAtRun.Create(AAbortAtBlock, AInScript);
+  ARun := TAbortAtRun.Create(AAbortAtBlock, AInScript, AScript);
   StartTracking;
   ARun.Start;
   // WaitFor on the main thread checks for synchronized calls every 100 ms
@@ -1299,6 +1310,26 @@ begin
   Expect<Boolean>(Aborted > Trials div 2).ToBe(True);
   Expect<Integer>(LeakingTrials).ToBe(0);
   Expect<Int64>(LeakedBlocks).ToBe(0);
+end;
+
+{ A failure while the entry module's imports are evaluated (here one that
+  does not resolve; a stop there takes the same path) frees what the entry's
+  evaluation set up for them. Nothing aborts this run. }
+procedure TEmbedderAbortTests.TestUnresolvedImportLeavesNothing;
+var
+  Run: TAbortAtRun;
+  Leaked: Int64;
+begin
+  RunOnce(0, True, Run, SCRIPT_UNRESOLVED_IMPORT);
+  Run.Free;
+  Leaked := RunOnce(0, True, Run, SCRIPT_UNRESOLVED_IMPORT);
+  try
+    Expect<Boolean>(Run.Completed).ToBe(False);
+    Expect<Boolean>(Run.Unexpected).ToBe(True);
+    Expect<Int64>(Leaked).ToBe(0);
+  finally
+    Run.Free;
+  end;
 end;
 
 begin
