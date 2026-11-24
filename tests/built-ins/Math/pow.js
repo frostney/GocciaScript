@@ -115,6 +115,17 @@ describe("Math.pow precision", () => {
     expect(Math.pow(5, -3)).toBe(0.008);
   });
 
+  test("returns the correctly rounded 1 / x for exponent -1", () => {
+    for (const x of [4.615, 7.943, 0.499, 966.7920963510852, -7390256613.693091, 5e-324]) {
+      expect(Object.is(Math.pow(x, -1), 1 / x)).toBe(true);
+    }
+    expect(Math.pow(0.499, -1)).toBe(2.004008016032064);
+    expect(Math.pow(NaN, -1)).toBeNaN();
+    expect(Object.is(Math.pow(-Infinity, -1), -0)).toBe(true);
+    expect(Math.pow(-0, -1)).toBe(-Infinity);
+    expect(Math.pow(0, -1)).toBe(Infinity);
+  });
+
   test("keeps the sign of a negative base for large integral exponents", () => {
     expect(Math.pow(-2, 2 ** 31)).toBe(Infinity);
     expect(Math.pow(-3, 2 ** 31 + 1)).toBe(-Infinity);

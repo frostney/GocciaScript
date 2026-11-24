@@ -213,3 +213,48 @@ describe("exponentiation with a negative base", () => {
     expect(power(-2, -3)).toBe(-0.125);
   });
 });
+
+describe("exponentiation with exponent -1", () => {
+  // Each base is one where pow's general path misses the correctly rounded
+  // reciprocal by one ULP; Node 24 on x86-64 Linux misses 0.499 too.
+  const reciprocals = [
+    [4.615, 0.21668472372697725],
+    [7.943, 0.12589701624071511],
+    [0.499, 2.004008016032064],
+    [966.7920963510852, 0.0010343485468843297],
+    [-7390256613.693091, -1.35313298613629e-10],
+    [-6.850193229586685e-63, -1.4598128351779884e62],
+  ];
+
+  test.each(reciprocals)("%s ** -1 is %s, the correctly rounded 1 / x", (x, expected) => {
+    expect(1 / x).toBe(expected);
+    expect(power(x, -1)).toBe(expected);
+    expect(boxed(x, -1)).toBe(expected);
+  });
+
+  test("constant operands fold to the correctly rounded reciprocal", () => {
+    expect(4.615 ** -1).toBe(0.21668472372697725);
+    expect(0.499 ** -1).toBe(2.004008016032064);
+    expect((-7390256613.693091) ** -1).toBe(-1.35313298613629e-10);
+  });
+
+  test("a reciprocal past the range overflows or turns subnormal", () => {
+    expect(power(5e-324, -1)).toBe(Infinity);
+    expect(power(-5e-324, -1)).toBe(-Infinity);
+    expect(power(Number.MAX_VALUE, -1)).toBe(5.562684646268003e-309);
+    expect(power(1e308, -1)).toBe(1e-308);
+  });
+
+  test("special values follow Number::exponentiate", () => {
+    expect(power(NaN, -1)).toBeNaN();
+    expect(power(Infinity, -1)).toBe(0);
+    expect(Object.is(power(Infinity, -1), 0)).toBe(true);
+    expect(Object.is(power(-Infinity, -1), -0)).toBe(true);
+    expect(power(0, -1)).toBe(Infinity);
+    expect(power(-0, -1)).toBe(-Infinity);
+    expect(power(1, -1)).toBe(1);
+    expect(power(-1, -1)).toBe(-1);
+    expect(power(2, -1)).toBe(0.5);
+    expect(power(-4, -1)).toBe(-0.25);
+  });
+});

@@ -701,12 +701,16 @@ begin
     Exit(CanonicalNaN);
 
   // ES2026 §6.1.6.1.3 step 13: implementation-approximated exponentiation.
-  // x * x and the square root are correctly rounded, and V8 answers these
-  // two exponents with them too.
+  // x * x, the square root and 1 / x are each one correctly rounded IEEE 754
+  // operation; V8 answers 2 and 0.5 with the first two. FinitePower is within
+  // 0.54 ULP, which for exponent -1 misses the correctly rounded 1 / x for
+  // about one base in a thousand.
   if AExponent = 2.0 then
     Exit(ABase * ABase);
   if AExponent = 0.5 then
     Exit(Sqrt(ABase));
+  if AExponent = -1.0 then
+    Exit(1.0 / ABase);
   Result := FinitePower(ABase, AExponent);
 end;
 
