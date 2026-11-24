@@ -108,7 +108,7 @@ implementation
 
 uses
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
-  {$IF DEFINED(LINUX) AND NOT DEFINED(LAKON)}BaseUnix, Syscall, UnixType,{$IFEND}
+  {$IF DEFINED(LINUX) AND NOT DEFINED(LAKON)}BaseUnix, Syscall, UnixType, dl,{$IFEND}
 
   Goccia.Error.Messages,
   Goccia.Values.ErrorHelper;
@@ -266,6 +266,60 @@ begin
   Result := Do_SysCall(syscall_nr_gettid) = TSysResult(FpGetPid);
 end;
 
+type
+  TPthreadSelf = function: Pointer; cdecl;
+  TPthreadGetattrNp = function(AThread, AAttr: Pointer): cint; cdecl;
+  TPthreadAttrGetstack = function(AAttr: Pointer; out AStackAddr: Pointer;
+    out AStackSize: size_t): cint; cdecl;
+  TPthreadAttrDestroy = function(AAttr: Pointer): cint; cdecl;
+
+// A thread other than the main one, from glibc's record of the stack it
+// allocated: the lowest address above the guard and the size up to the top.
+// /proc/self/maps cannot tell: glibc 2.42 and later install a thread's guard
+// pages inside its stack mapping (MADV_GUARD_INSTALL), so the stacks of
+// neighbouring threads merge into one mapping there, and the RTL's
+// StackBottom (the stack pointer at thread start less the requested size)
+// lies below the real bottom by the static TLS glibc keeps at the top of the
+// stack, which FPC 3.3.1's native threadvars make about 500 KiB, more than
+// the reserve. Looked up rather than imported: glibc before 2.34 keeps
+// pthread_getattr_np in libpthread, which a program without threads may not
+// load, and that program has no thread but the main one.
+function TryGetPthreadStackBounds(out ALow, ASize: NativeUInt): Boolean;
+var
+  CurrentThread: TPthreadSelf;
+  GetAttr: TPthreadGetattrNp;
+  GetStack: TPthreadAttrGetstack;
+  DestroyAttr: TPthreadAttrDestroy;
+  // pthread_attr_t is 56 bytes on x86-64 and 64 on AArch64 glibc
+  Attr: array[0..255] of Byte;
+  StackAddr: Pointer;
+  StackSize: size_t;
+begin
+  ALow := 0;
+  ASize := 0;
+  Result := False;
+  CurrentThread := TPthreadSelf(dlsym(RTLD_DEFAULT, 'pthread_self'));
+  GetAttr := TPthreadGetattrNp(dlsym(RTLD_DEFAULT, 'pthread_getattr_np'));
+  GetStack := TPthreadAttrGetstack(dlsym(RTLD_DEFAULT,
+    'pthread_attr_getstack'));
+  DestroyAttr := TPthreadAttrDestroy(dlsym(RTLD_DEFAULT,
+    'pthread_attr_destroy'));
+  if not (Assigned(CurrentThread) and Assigned(GetAttr) and Assigned(GetStack) and
+     Assigned(DestroyAttr)) then
+    Exit;
+  if GetAttr(CurrentThread(), @Attr[0]) <> 0 then
+    Exit;
+  try
+    if GetStack(@Attr[0], StackAddr, StackSize) <> 0 then
+      Exit;
+    ALow := NativeUInt(StackAddr);
+    ASize := NativeUInt(StackSize);
+    Result := (ALow <> 0) and (ASize > 0);
+  finally
+    DestroyAttr(@Attr[0]);
+  end;
+end;
+
 // Reads the mapping that holds the running frame from /proc/self/maps, and
 // so needs neither libc nor libpthread: glibc before 2.34 keeps
 // pthread_getattr_np in libpthread, which not every program links. A thread
@@ -283,6 +337,8 @@ begin
   ALow := 0;
   ASize := 0;
   Result := False;
+  if not IsMainThread and TryGetPthreadStackBounds(ALow, ASize) then
+    Exit(True);
   Position := NativeStackPosition;
   AssignFile(Maps, '/proc/self/maps');
   {$I-}
