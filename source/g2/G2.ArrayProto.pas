@@ -974,7 +974,7 @@ end;
 
 { 23.1.3.31 splice }
 function AP_Splice(Args: TArgs; Argc: Integer; var Res: TValue): Boolean;
-var Len, Start, Skip, ItemCount: Int64; K: SizeInt; D: Double; Has: Boolean; V, A: TValue; Base, I: Integer; E: PValueArray;
+var Len, Start, Skip, ItemCount: Int64; K: Int64; KI: SizeInt; D: Double; Has: Boolean; V, A: TValue; Base, I: Integer; E: PValueArray;
 begin
   if not ToObj(Args) then Exit(False);
   if not LengthOfArrayLike(Args[0], Len) then Exit(False);
@@ -1007,14 +1007,16 @@ begin
       Move(E^.Data[Start + Skip], E^.Data[Start + ItemCount], (Len - Start - Skip) * SizeOf(TValue));
     E^.Len := Len - Skip + ItemCount;
     for I := 0 to ItemCount - 1 do ValueArrayStore(E, Start + I, Args[3 + I]);
-    for K := E^.Len to Len - 1 do E^.Data[K] := VUndefined;   { the vacated tail: no stale references }
+    for KI := E^.Len to Len - 1 do E^.Data[KI] := VUndefined;   { the vacated tail: no stale references }
     Res := RootAt(TempTop - 1);
     PopRoots(1);
     Exit(True);
   end;
   Base := TempTop;
   PushRoot(A);
-  for K := 0 to Skip - 1 do
+  { (a while loop: K counts to Skip, an Int64 a 32-bit target's for counter cannot hold) }
+  K := 0;
+  while K < Skip do
   begin
     if not HasIdx(Args[0], Start + K, Has) then begin PopRoots(1); Exit(False); end;
     if Has then
@@ -1022,6 +1024,7 @@ begin
       if not GetIdx(Args[0], Start + K, V) then begin PopRoots(1); Exit(False); end;
       if not CreateIdx(RootAt(Base), K, V) then begin PopRoots(1); Exit(False); end;
     end;
+    Inc(K);
   end;
   if not SetLen(RootAt(Base), Skip) then begin PopRoots(1); Exit(False); end;
   if ItemCount < Skip then

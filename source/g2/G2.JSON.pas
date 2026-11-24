@@ -393,7 +393,7 @@ threadvar
 { the JSON.parse source text access proposal's InternalizeJSONProperty(holder, name, reviver, parseRecord) }
 function Internalize(Holder: TValue; Name: PStr; Reviver: TValue; Rec: TJRec; RecVals: Integer;
   var Res: TValue): Boolean;
-var Val, Ctx, NewEl: TValue; IsArr: Boolean; Len: Int64; I: SizeInt; Keys: TValue; K: PStr; N, X: Integer;
+var Val, Ctx, NewEl: TValue; IsArr: Boolean; Len: Int64; I: Int64; KI: Integer; Keys: TValue; K: PStr; N, X: Integer;
   Elems, Ents: array of TJRec; EKeys: array of UnicodeString; Sub: TJRec; CA: array[0..2] of TValue;
   KS: UnicodeString;
 begin
@@ -437,9 +437,9 @@ begin
       if not EnumerableKeys(RootAt(TempTop - 2), Keys) then begin PopRoots(4); Exit(False); end;
       PushRoot(Keys);
       N := ArrayLen(ObjOf(Keys));
-      for I := 0 to N - 1 do
+      for KI := 0 to N - 1 do
       begin
-        K := Atomize(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[I]));
+        K := Atomize(StrOf(ObjOf(RootAt(TempTop - 1))^.Elements^.Data[KI]));
         Sub := nil;
         if EKeys <> nil then
         begin
