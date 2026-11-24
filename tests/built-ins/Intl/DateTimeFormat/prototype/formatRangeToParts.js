@@ -195,7 +195,8 @@ describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRangeT
 
     expect(parts.some((part) => part.type === "weekday" && part.source === "startRange")).toBe(true);
     expect(parts.some((part) => part.type === "weekday" && part.source === "endRange")).toBe(true);
-    expect(parts.find((part) => part.type === "year" && part.source === "startRange").value).toBe("-271821");
+    // FormatDateTimePattern (ECMA-402 11.5.4) formats a year <= 0 as 1 - year: -271821 is 271822 BC
+    expect(parts.find((part) => part.type === "year" && part.source === "startRange").value).toBe("271822");
     expect(parts.find((part) => part.type === "year" && part.source === "endRange").value).toBe("275760");
   });
 
@@ -239,7 +240,8 @@ describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRangeT
 
     expect(formatted).toContain("BC");
     expect(formatted).toContain("AD");
-    expect(formatted).toContain("-271821");
+    // FormatDateTimePattern (ECMA-402 11.5.4) formats a year <= 0 as 1 - year: -271821 is 271822 BC
+    expect(formatted).toContain("271822");
     expect(formatted).toContain("275760");
     expect(formatted).toContain("19");
     expect(formatted).toContain("13");

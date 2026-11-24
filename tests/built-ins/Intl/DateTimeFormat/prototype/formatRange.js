@@ -191,7 +191,8 @@ describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRange 
       return;
     }
 
-    expect(result).toContain("-271821");
+    // FormatDateTimePattern (ECMA-402 11.5.4) formats a year <= 0 as 1 - year: -271821 is 271822 BC
+    expect(result).toContain("271822");
     expect(result).toContain("19");
     expect(result).toContain("275760");
     expect(result).toContain("13");
@@ -234,7 +235,8 @@ describe.runIf(isIntl && isTemporal)("Intl.DateTimeFormat.prototype.formatRange 
 
     expect(result).toContain("BC");
     expect(result).toContain("AD");
-    expect(result).toContain("-271821");
+    // FormatDateTimePattern (ECMA-402 11.5.4) formats a year <= 0 as 1 - year: -271821 is 271822 BC
+    expect(result).toContain("271822");
     expect(result).toContain("275760");
     expect(result).toContain("19");
     expect(result).toContain("13");

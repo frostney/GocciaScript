@@ -381,17 +381,29 @@
     return collationsList;
   }
   var timeZonesList = null;
-  // the currencies Intl.DisplayNames names (AvailableCurrencies): CURRENCIES and the codes the host ICU adds, such
-  // as ICU 78's XCG
+  // the currencies Intl.DisplayNames names (AvailableCurrencies): CURRENCIES, the codes the host ICU adds and names,
+  // and those of RECENT_CURRENCY_NAMES_EN
   var currenciesList = null;
+  // CLDR's English names of the newest ISO 4217 currencies, which the data of older ICUs (ICU 74) does not name; an
+  // ICU that names them still wins
+  var RECENT_CURRENCY_NAMES_EN = rec();
+  RECENT_CURRENCY_NAMES_EN.XCG = "Caribbean guilder";
+  RECENT_CURRENCY_NAMES_EN.ZWG = "Zimbabwean Gold";
+  // the display name of a currency code (upper case) in a locale, or undefined
+  function currencyDisplayName(locale, code, style) {
+    var name = intlOp(16, locale, code, "currency", style);
+    if (name === undefined && (locale === "en" || locale.slice(0, 3) === "en-")) name = RECENT_CURRENCY_NAMES_EN[code];
+    return name;
+  }
   function availableCurrencies() {
     if (currenciesList === null) {
       var list = listCopy(CURRENCIES), icu = intlOp(18);
       if (icu !== undefined)
         for (var i = 0; i < icu.length; i++) {
           var code = asciiUpper(icu[i]);
-          if (intlOp(16, "en", code, "currency", "long") !== undefined) append(list, code);
+          if (currencyDisplayName("en", code, "long") !== undefined) append(list, code);
         }
+      for (var rc in RECENT_CURRENCY_NAMES_EN) append(list, rc);
       currenciesList = list;
     }
     return currenciesList;
@@ -1391,15 +1403,80 @@
     r.ms = temporal.ms(x); r.format = f; r.plain = k !== "Instant";
     return r;
   }
+  // The numeric month of the chinese and dangi calendars. FormatDateTimePattern (ECMA-402 11.5.4) formats a "numeric"
+  // month with no minimum digits and a "2-digit" one with two, and its month is the calendar's (ToLocalTime, 11.5.11),
+  // which Temporal computes too. ICU's month part can differ from both: CLDR 44's r-MM-dd pads a numeric month
+  // ("06bis"), and ICU 78 puts some leap months elsewhere than Temporal does. So the number comes from Temporal's month
+  // code (M06L: the leap sixth month) and the leap marker ("6bis" in English) from ICU: from that month, or from a
+  // known leap month when ICU does not count the month as one.
+  function lunisolarMonthWidth(s, h) {
+    if (temporal === undefined || s.calendar !== "chinese" && s.calendar !== "dangi") return undefined;
+    var w = h.format.month;
+    return w === "numeric" || w === "2-digit" ? w : undefined;
+  }
+  // a month part as [before, ASCII digits, after], or null when it has no one run of them
+  function splitMonthPart(v) {
+    var a = 0, b;
+    while (a < v.length && !isDigits(v[a])) a++;
+    for (b = a; b < v.length && isDigits(v[b]); b++);
+    if (a === b) return null;
+    for (var i = b; i < v.length; i++) if (isDigits(v[i])) return null;
+    return [v.slice(0, a), v.slice(a, b), v.slice(b)];
+  }
+  // the leap marker around a numeric leap month in this formatter's locale, from 2023's leap month M02L
+  function lunisolarLeapMarker(s, opts) {
+    var o = listCopy(opts), p;
+    o[4] = "UTC";
+    p = intlOp(30, dtfLocale(s), o, 1679486400000, true);
+    if (p !== undefined)
+      for (var i = 0; i < p.length; i++) {
+        var m = p[i][0] === "month" ? splitMonthPart(p[i][1]) : null;
+        if (m !== null && m[0] + m[2] !== "") return [m[0], m[2]];
+      }
+    return ["", "bis"];
+  }
+  function lunisolarMonth(s, opts, width, tz, ms, value) {
+    var m = splitMonthPart(value), mc;
+    if (m === null) return value;
+    try { mc = temporal.monthCode(s.calendar, tz, ms); } catch (e) { return value; }
+    var n = Num(mc.slice(1, 3)), leap = mc.length > 3, num = width === "2-digit" && n < 10 ? "0" + n : "" + n;
+    if (leap === (m[0] + m[2] !== "")) return m[0] + num + m[2];
+    if (!leap) return num;
+    var mk = lunisolarLeapMarker(s, opts);
+    return mk[0] + num + mk[1];
+  }
+  // p: the parts of one value (start === end) or of a range, whose "endRange" parts are end's
+  function fixLunisolarMonths(s, opts, h, p, start, end) {
+    var width = lunisolarMonthWidth(s, h);
+    if (width === undefined) return p;
+    var tz = h.plain ? "UTC" : s.timeZone;
+    for (var i = 0; i < p.length; i++)
+      if (p[i][0] === "month") p[i][1] = lunisolarMonth(s, opts, width, tz, p[i][2] === "endRange" ? end : start, p[i][1]);
+    return p;
+  }
+  function joinParts(p) {
+    var r = "";
+    for (var i = 0; i < p.length; i++) r += p[i][1];
+    return r;
+  }
+  // the string of a HandleDateTimeValue record, or undefined when ICU cannot format it
+  function formatValue(s, h, opts) {
+    if (lunisolarMonthWidth(s, h) !== undefined) {
+      var p = intlOp(30, dtfLocale(s), opts, h.ms, true);
+      if (p !== undefined) return joinParts(fixLunisolarMonths(s, opts, h, p, h.ms, h.ms));
+    }
+    return intlOp(30, dtfLocale(s), opts, h.ms, false);
+  }
   function FormatDateTime(s, x) {
     var h = HandleDateTimeValue(s, x);
-    var r = intlOp(30, dtfLocale(s), h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain), h.ms, false);
+    var r = formatValue(s, h, h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain));
     return r === undefined ? new Date(h.ms).toString() : r;
   }
   function FormatDateTimeToParts(s, x) {
-    var h = HandleDateTimeValue(s, x);
-    var p = intlOp(30, dtfLocale(s), h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain), h.ms, true);
+    var h = HandleDateTimeValue(s, x), opts = h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain);
+    var p = intlOp(30, dtfLocale(s), opts, h.ms, true);
     if (p === undefined) p = [["literal", FormatDateTime(s, x)]];
+    else fixLunisolarMonths(s, opts, h, p, h.ms, h.ms);
     return partsToArray(p, false);
   }
   function thisDateTimeFormat(o, method) {
@@ -1433,13 +1510,19 @@
   function rangeOpts(s, h) { return h.format === s.format && !h.plain ? dtfOpts(s) : optsFor(s, h.format, h.plain); }
   method(DateTimeFormatProto, "formatRange", { formatRange(startDate, endDate) {
     var s = slotsOf(this, "DateTimeFormat", "Intl.DateTimeFormat.prototype.formatRange");
-    var h = dtRange(s, startDate, endDate), r = intlOp(31, dtfLocale(s), rangeOpts(s, h[0]), h[0].ms, h[1].ms, false);
+    var h = dtRange(s, startDate, endDate), opts = rangeOpts(s, h[0]), p;
+    if (lunisolarMonthWidth(s, h[0]) !== undefined) {
+      p = intlOp(31, dtfLocale(s), opts, h[0].ms, h[1].ms, true);
+      if (p !== undefined) return joinParts(fixLunisolarMonths(s, opts, h[0], p, h[0].ms, h[1].ms));
+    }
+    var r = intlOp(31, dtfLocale(s), opts, h[0].ms, h[1].ms, false);
     return r === undefined ? "" + h[0].ms + " \u2013 " + h[1].ms : r;
   } }.formatRange);
   method(DateTimeFormatProto, "formatRangeToParts", { formatRangeToParts(startDate, endDate) {
     var s = slotsOf(this, "DateTimeFormat", "Intl.DateTimeFormat.prototype.formatRangeToParts");
-    var h = dtRange(s, startDate, endDate), p = intlOp(31, dtfLocale(s), rangeOpts(s, h[0]), h[0].ms, h[1].ms, true);
+    var h = dtRange(s, startDate, endDate), opts = rangeOpts(s, h[0]), p = intlOp(31, dtfLocale(s), opts, h[0].ms, h[1].ms, true);
     if (p === undefined) p = [["literal", "" + h[0].ms, "startRange"], ["literal", " \u2013 ", "shared"], ["literal", "" + h[1].ms, "endRange"]];
+    else fixLunisolarMonths(s, opts, h[0], p, h[0].ms, h[1].ms);
     return partsToArray(p, true);
   } }.formatRangeToParts);
   method(DateTimeFormatProto, "resolvedOptions", { resolvedOptions() {
@@ -1493,8 +1576,10 @@
       var s = CreateDateTimeFormat(locales, options, "any", "all", tz);
       var cal = temporal.calendar(this);
       if (cal !== "iso8601" && cal !== s.calendar) throw rangeError("calendar " + cal + " does not match the formatter's " + s.calendar);
-      var r = intlOp(30, dtfLocale(s), optsFor(s, s.tInstant, false), temporal.ms(this), false);
-      return r === undefined ? "" + temporal.ms(this) : r;
+      var h = rec();
+      h.ms = temporal.ms(this); h.format = s.tInstant; h.plain = false;
+      var r = formatValue(s, h, optsFor(s, s.tInstant, false));
+      return r === undefined ? "" + h.ms : r;
     } }.toLocaleString);
   }
 
@@ -1780,7 +1865,7 @@
     var s = slotsOf(this, "DisplayNames", "Intl.DisplayNames.prototype.of");
     code = ToString(code);
     code = CanonicalCodeForDisplayNames(s.type, code);
-    var name = intlOp(16, s.locale, code, s.type, s.style);
+    var name = s.type === "currency" ? currencyDisplayName(s.locale, code, s.style) : intlOp(16, s.locale, code, s.type, s.style);
     if (name !== undefined) return name;
     return s.fallback === "code" ? code : undefined;
   } }.of);
