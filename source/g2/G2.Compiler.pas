@@ -441,6 +441,10 @@ type
     IsEvalOuter: Boolean;   { goal 4: the stand-in for a direct eval's caller, its bindings the caller's }
     CplP1: Integer;         { 1 + the register of the script's completion value (eval code, ReturnLast), 0 none }
     CplSkip: Boolean;       { the next expression statement is EvalStrictPrefix's directive }
+    { module code: after each top-level statement the registers above the bindings are cleared, so a value a
+      statement read into a temporary and the program then dropped is not kept by the module's frame (which lives
+      on while it awaits, and its registers past later statements' are never written again) }
+    ClearTemps: Boolean;
     ParamAwait: Boolean;    { compiling an arrow's parameters in a class static block: ArrowParameters[+Await] }
     ParamTDZ: TStringList;  { while parameter initializers compile: the parameters not yet initialized }
     IsLazyOuter: Boolean;   { the stand-in for a lazily compiled function's enclosing code (CompileLazyFunction) }
@@ -2003,6 +2007,7 @@ begin
   F := TFuncState.Create;
   F.Parent := Outer;
   F.Tpl := T;
+  F.ClearTemps := (Name = '<module>') and (Outer = nil);
   F.IsArrow := IsArrow;
   F.HomeReg := -1; F.NewTargetReg := -1;
   F.NoArguments := NoArgs;
@@ -3284,7 +3289,12 @@ var I: Integer;
 begin
   for I := 0 to L.Count - 1 do
     if L[I] is TGocciaUsingDeclaration then begin CompileUsingList(L, nil, True); Exit; end;
-  for I := 0 to L.Count - 1 do Stmt(L[I]);
+  for I := 0 to L.Count - 1 do
+  begin
+    Stmt(L[I]);
+    if FS.ClearTemps and (FS.Tpl^.MaxRegs > FS.FreeReg) then
+      Emit(Ins(opClose, FS.FreeReg, FS.Tpl^.MaxRegs, 0));
+  end;
 end;
 
 procedure TCompiler.StmtList(L: TObjectList<TGocciaASTNode>);

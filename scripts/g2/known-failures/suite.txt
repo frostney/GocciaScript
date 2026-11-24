@@ -24,7 +24,6 @@
 # exited frame. G2 still keeps it in registers an exited block, a module's top level, a for-await body or a
 # promise callback left, until the frame ends.
 2 tests/language/async-await/awaited-container-released.js
-3 tests/language/modules/top-level-dropped-value-released.js
 5 tests/language/pattern-matching/matched-value-released.js
 # FPC 3.3.1-b6 at -O4 copies an array[0..0] field before a scan loop and indexes the copy, so the join
 # stack's cycle check reads the stack (fpc-toolchain patch 0129 fixes it; drop this with 3.3.1-b7)
