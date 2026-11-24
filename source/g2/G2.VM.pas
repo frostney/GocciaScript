@@ -4318,6 +4318,9 @@ begin
     okProxy: Result := ProxyCall(F, This, Args, Argc, Res);
     okNative:
       begin
+        { a native that calls a native that calls it again (join of an array nested 10,000 deep: join, ToString,
+          toString, join) recurses on the native stack, which ends before the value stack does }
+        if NativeStackLow then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
         SavedTop := StackTop;
         Base := StackTop;
         if Base + Argc + 2 >= STACK_MAX then Exit(ThrowError('RangeError', 'Maximum call stack size exceeded'));
